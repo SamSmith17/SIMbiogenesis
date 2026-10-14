@@ -93,14 +93,11 @@ var settings: Dictionary = DEFAULT_SETTINGS.duplicate()
 # ---------------------------------------------------------------------------
 
 static func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/microclimate_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("microclimate", lat, lon)
 
 
 static func save_path_for_scene(scene_key: String) -> String:
-	var tag := scene_key.get_file().get_basename() if scene_key.contains("/") else scene_key
-	if tag.is_empty():
-		tag = "unknown_scene"
-	return "user://maps/microclimate_scene_%s.json" % tag
+	return WorldPaths.scene_file("microclimate", scene_key)
 
 
 static func load_from(path: String) -> MicroclimateProfile:

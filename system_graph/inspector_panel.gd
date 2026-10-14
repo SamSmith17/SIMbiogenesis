@@ -392,6 +392,11 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Max PV Voltage (V)", specs.get("max_voc", 150.0),       "specs/max_voc",         0, 1000,  1.0)
 			_num_field("Charge Current (A)", specs.get("max_charge_amps", 30.0),"specs/max_charge_amps", 0,  500,  1.0)
 			_num_field("Max PV Power (W)",   specs.get("max_pv_watts", 2400.0), "specs/max_pv_watts",    0, 50000, 10.0)
+			if specs.has("mppt_min_v") or specs.has("mppt_max_v"):
+				_num_field("MPPT window min (V)", specs.get("mppt_min_v", 0.0), "specs/mppt_min_v", 0, 1000, 1.0)
+				_num_field("MPPT window max (V)", specs.get("mppt_max_v", 0.0), "specs/mppt_max_v", 0, 1000, 1.0)
+				_num_field("Start-up voltage (V)", specs.get("startup_v", 0.0), "specs/startup_v", 0, 1000, 1.0)
+			_build_pv_window_section(item)
 			if bool(specs.get("destroyed", false)):
 				_section("Fault")
 				_readonly_field("Status", "DESTROYED - %s" % str(specs.get("destroyed_reason", "Over-voltage")))
@@ -1248,6 +1253,36 @@ func _advanced_section(section_id: String, title: String, hint: String = "") -> 
 	row.add_child(btn)
 	_form_vbox.add_child(_wrap_margin(row, 8, 2))
 	return expanded
+
+
+## The PV string feeding this controller checked at the design extremes
+## (PvElectrical.string_window_report): cold-morning Voc vs the limit, hot-noon
+## Vmp vs the MPPT floor, Vmp vs the ceiling, Voc vs the start-up voltage.
+func _build_pv_window_section(item: Dictionary) -> void:
+	if _model == null:
+		return
+	var rep := PvElectrical.string_window_report(_model, str(item.get("id", "")),
+			GraphNesting.flat_connections(_model))
+	if rep.is_empty():
+		return
+	_section("PV string check")
+	_readonly_field("Voc cold / STC", "%.0f V @ %.0f °C / %.0f V" % [
+			float(rep.get("voc_cold", 0.0)), float(rep.get("cold_c", 0.0)),
+			float(rep.get("voc_stc", 0.0))])
+	_readonly_field("Vmp STC / hot", "%.0f V / %.0f V @ %.0f °C cell" % [
+			float(rep.get("vmp_stc", 0.0)), float(rep.get("vmp_hot", 0.0)),
+			float(rep.get("hot_cell_c", 0.0))])
+	var mmin := float(rep.get("mppt_min_v", 0.0))
+	var mmax := float(rep.get("mppt_max_v", 0.0))
+	if mmin > 0.0 or mmax > 0.0:
+		_readonly_field("MPPT window", "%.0f–%.0f V" % [mmin, mmax])
+	_readonly_field("Voc headroom", "%.0f V under %.0f V" % [
+			float(rep.get("margin_v", 0.0)), float(rep.get("max_voc", 0.0))])
+	if bool(rep.get("ok", true)):
+		_hint_label("✓ The string stays inside this controller's limits from a %.0f °C morning to a hot noon." % float(rep.get("cold_c", 0.0)))
+	else:
+		for msg in rep.get("issues", []) as Array:
+			_hint_label("⚠ " + str(msg))
 
 
 func _hint_label(text: String) -> void:
@@ -3415,6 +3450,10 @@ func _build_population_section(specs: Dictionary) -> void:
 	if not on:
 		_hint_label("Tag props or buildings as Restroom / Kitchen / Sleeping / Water Point (prop editor or Building Builder) so people have places to go.")
 		return
+	if not NpcDisplayPrefs.npcs_enabled():
+		_readonly_field("Roster", "paused — NPCs switched off")
+		_hint_label("Settings → NPC → \"Simulate & draw NPCs\" is off: the people are frozen and hidden, and this habitat bills its headcount at the classic constant rate. Switch it back on to resume them.")
+		return
 	var view := _find_owner_graph_view()
 	var summ: Dictionary = view.call("npc_population_summary", _item_id) if view != null else {}
 	if summ.is_empty():
@@ -3668,9 +3707,14 @@ func _build_siphon_hydro_section(specs: Dictionary) -> void:
 		_num_field("Turbine η (0=auto)", specs.get("turbine_efficiency", 0.0),
 				"specs/turbine_efficiency", 0.0, 0.95, 0.01)
 	else:
-		# Siphon: orifice-limited barrel + hydraulic efficiency.
-		_num_field("Barrel length (m)", specs.get("barrel_length_m", 20.0),
+		# Siphon: a dip tube into the pond, a draft pipe down the hill
+		# (SiphonTurbinePhysics). The Hydro Lab is the place to tune it.
+		_num_field("Dip tube length (m)", specs.get("dip_tube_length_m", 1.0),
+				"specs/dip_tube_length_m", 0.1, 30.0, 0.05)
+		_num_field("Draft pipe length (m)", specs.get("barrel_length_m", 20.0),
 				"specs/barrel_length_m", 1.0, 500.0, 0.5)
+		_num_field("Runner Ø (mm, 0 = dip tube)", specs.get("runner_diameter_mm", 0.0),
+				"specs/runner_diameter_mm", 0.0, 600.0, 1.0)
 		_num_field("Hydraulic η", specs.get("hydraulic_efficiency", 0.6),
 				"specs/hydraulic_efficiency", 0.1, 1.0, 0.01)
 	_num_field("Max power (W, 0=uncapped)", specs.get("max_power_w", 0.0),
@@ -4379,6 +4423,13 @@ func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bo
 ## the unit a micro-hydro siter reads off a rain gauge; HydroSupply converts.
 func _build_stream_intake_section(item: Dictionary, specs: Dictionary) -> void:
 	_section("Stream / spring")
+	# Standing in a mapped / drawn stream: that stream supplies it, and the
+	# authored spring numbers below are not used.
+	var wf_name := str(specs.get("water_feature_name", ""))
+	if not wf_name.is_empty():
+		_readonly_field("Fed by", "%s  (%.1f ha catchment)" % [wf_name,
+			float(specs.get("water_feature_area_m2", 0.0)) / 10000.0])
+		_hint_label("This intake stands in a stream on the map, so its supply is that stream's own flow — base flow plus rain on its real catchment. Move it off the stream to use the spring settings below.")
 	# Its ground elevation IS the gross head, so show it here rather than making
 	# the player go and hunt for it.
 	var elev := float(item.get("elevation_m", NAN))
@@ -4513,6 +4564,34 @@ func _build_scene_link_section(item: Dictionary) -> void:
 	elif bind == "solar":
 		status = "OSM solar array linked"
 	_readonly_field("Status", status)
+	# A solar array with no 3D rack yet: place one (a pv_array sized to this
+	# array, bound to it; its facing becomes the array's tilt / azimuth).
+	if bound_id.is_empty() and str(specs.get("compound_kind", "")) == "array":
+		var place_btn := Button.new()
+		place_btn.text = "Place array in 3D"
+		place_btn.tooltip_text = "Place a ground-mount rack of these panels in the world; turning it changes the array's azimuth"
+		place_btn.focus_mode = Control.FOCUS_NONE
+		var arr_id := str(item.get("id", ""))
+		place_btn.pressed.connect(func() -> void:
+			var gv2 := _find_owner_graph_view()
+			if gv2 != null and gv2.has_method("place_array_in_world"):
+				gv2.call("place_array_in_world", arr_id)
+		)
+		_form_vbox.add_child(place_btn)
+	# Graph → 3D: look at the twin (the 3D → graph direction is the prop
+	# editor's "Open node in graph").
+	if not bound_id.is_empty() or GraphSiteLayout.has_site_coords(item):
+		var loc_btn := Button.new()
+		loc_btn.text = "Locate in 3D"
+		loc_btn.tooltip_text = "Close the graph and look at this node's place in the world"
+		loc_btn.focus_mode = Control.FOCUS_NONE
+		var loc_id := str(item.get("id", ""))
+		loc_btn.pressed.connect(func() -> void:
+			var gv := _find_owner_graph_view()
+			if gv != null and gv.has_method("locate_item_in_world"):
+				gv.call("locate_item_in_world", loc_id)
+		)
+		_form_vbox.add_child(loc_btn)
 
 	# Show/hide this node's 3D twin (works even when the prop is hidden, since you
 	# can't click an invisible prop in the world to un-hide it). Only when embodied.

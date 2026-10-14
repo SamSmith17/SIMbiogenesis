@@ -27,6 +27,8 @@ func _initialize() -> void:
 	_test_eight_inch_orifice()
 	_test_lab_dt_no_flood()
 	_test_start_break_follow_module()
+	_test_siphon_turbine_physics()
+	_test_siphon_geometry()
 	if _failures == 0:
 		print("SIPHON HYDRAULICS SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -80,11 +82,24 @@ func _test_flow_and_power() -> void:
 			20.0, 0.012, true, 0.0, 0.6, 0.7)
 	_check("uncapped power positive", float(uncapped.get("power_w", 0.0)) > 1.0,
 			"P=%.1f" % float(uncapped.get("power_w", 0.0)))
-	_check("uncapped tracks η·PE",
+	# Electrical = η_t·η_g · ρgQ·h_t where h_t is the head the RUNNER sees
+	# (gross less the dip / draft / exit losses) — not η·(gross PE). The old
+	# culvert model had no losses, so the two were equal; a siphon's are real.
+	var q_u := float(uncapped.get("q_m3s", 0.0))
+	var h_t_u := float(uncapped.get("turbine_head_m", 0.0))
+	_check("uncapped tracks η·ρgQ·h_turbine",
 			absf(float(uncapped.get("power_w", 0.0))
-				- float(uncapped.get("pe_w", 0.0)) * 0.6 * 0.7) < 1.0,
-			"P=%.1f pe=%.1f" % [float(uncapped.get("power_w", 0.0)),
-				float(uncapped.get("pe_w", 0.0))])
+				- 1000.0 * 9.80665 * q_u * h_t_u * 0.6 * 0.7) < 1.0,
+			"P=%.1f q=%.4f h_t=%.2f" % [float(uncapped.get("power_w", 0.0)), q_u, h_t_u])
+	_check("turbine head is gross less losses",
+			absf(float(uncapped.get("head_m", 0.0)) - float(uncapped.get("head_loss_m", 0.0)) - h_t_u) < 1e-3)
+	# An 8-inch runner on an 8-inch draft tube with a free discharge throws
+	# about half the head out of the exit as a jet (v_e ≈ 0.7·√(2g·h_t)) —
+	# which is exactly why real draft tubes diffuse. Pin the band, not "small".
+	_check("losses are a real fraction of a 9 m head on 20 m of 8-inch pipe",
+			float(uncapped.get("head_loss_m", 0.0)) > 0.2 * float(uncapped.get("head_m", 0.0))
+			and float(uncapped.get("head_loss_m", 0.0)) < 0.7 * float(uncapped.get("head_m", 0.0)),
+			"loss=%.2f gross=%.2f" % [float(uncapped.get("head_loss_m", 0.0)), float(uncapped.get("head_m", 0.0))])
 	var r := SiphonHydraulics.simulate(100.40, 100.0, 100.15, 91.0, 0.15, 0.20,
 			20.0, 0.012, true, 250.0, 0.6, 0.7)
 	_check("power positive", float(r.get("power_w", 0.0)) > 1.0,
@@ -501,8 +516,34 @@ func _test_powerspout_model() -> void:
 		ModelCatalog.turbine_node_for("powerspout_plt") == "Pelton Wheel, 24 Spoon")
 	_check("powerspout declares its X spin axis",
 		ModelCatalog.spin_axis_for("powerspout_plt") == "x")
-	_check("siphon turbine keeps the default (+Z) axis",
-		ModelCatalog.spin_axis_for("hydroturbine").is_empty())
+	# The siphon unit's propeller is "Node15", normal = model +Z (measured
+	# with glb_dump_diag); unnamed, the size heuristic picked a motor BOLT.
+	_check("siphon turbine names its propeller node",
+		ModelCatalog.turbine_node_for("hydroturbine") == "Node15")
+	_check("siphon turbine declares its Z spin axis",
+		ModelCatalog.spin_axis_for("hydroturbine") == "z")
+	# The AliExpress micro Pelton: vertical shaft, a modelled nozzle fitting,
+	# and the exporter's scale figures stripped at instantiate.
+	_check("micro pelton is a hydro turbine", ModelCatalog.is_hydro_turbine("ali_pelton"))
+	_check("micro pelton names its runner node", ModelCatalog.turbine_node_for("ali_pelton") == "Node6")
+	_check("micro pelton spins about Y (vertical shaft)", ModelCatalog.spin_axis_for("ali_pelton") == "y")
+	_check("micro pelton names its nozzle fitting",
+		ModelCatalog.nozzle_node_for("ali_pelton").begins_with("fitting, 0_25MNPT"))
+	_check("micro pelton strips the SketchUp scale figures",
+		ModelCatalog.strip_nodes_for("ali_pelton").has("Sree")
+			and ModelCatalog.strip_nodes_for("ali_pelton").has("Pelton"))
+	_check("powerspout has no modelled nozzle (procedural)", ModelCatalog.nozzle_node_for("powerspout_plt").is_empty())
+	var mp := HydroSource.kind_meta("micro_pelton")
+	_check("micro_pelton kind wears ali_pelton + nozzle model, PCD 0.168",
+		str(mp.get("model_id", "")) == "ali_pelton" and bool(mp.get("uses_nozzle_model", false))
+			and absf(float(mp.get("runner_pcd_m", 0.0)) - 0.168) < 1e-6)
+	_check("micro_pelton has a shipped preset",
+		not ComponentPresets.preset_with_turbine_kind("micro_pelton").is_empty())
+	var mp_ports := ConnectionPortDefs.default_ports_for_model("ali_pelton")
+	var mp_inlet := ConnectionPortDefs.find_port_for_handle(mp_ports, "res_in_0")
+	_check("micro pelton inlet port sits on the fitting at the pitch radius",
+		not mp_inlet.is_empty() and absf(float(mp_inlet.get("z", 0.0)) - 0.084) < 1e-6
+			and absf(float(mp_inlet.get("x", 0.0)) - 0.130) < 1e-6)
 	# Every turbine kind names the 3D model it wears.
 	for k: String in HydroSource.KINDS.keys():
 		var mid := str((HydroSource.KINDS[k] as Dictionary).get("model_id", ""))
@@ -623,3 +664,183 @@ func _test_powerspout_spin() -> void:
 
 	tree.root.remove_child(host)
 	host.free()
+
+
+## SiphonTurbinePhysics — a siphon with a runner in it. Pins what the old
+## culvert model could not say: the exit drop buys power until SUCTION, not
+## geometry, is the limit; the crest lift is capped by atmosphere; the dip
+## tube's mouth is the break level; and the prime mode decides where the pond
+## must reach.
+func _test_siphon_turbine_physics() -> void:
+	var base := {
+		"pond_level_m": 100.0, "crest_m": 100.3, "dip_mouth_m": 99.0,
+		"outlet_m": 97.0, "dip_d_m": 0.152, "draft_d_m": 0.203, "draft_len_m": 12.0,
+		"eta_t": 0.6, "eta_g": 0.7, "primed_prev": true, "prime_mode": "overflow",
+	}
+	var r := SiphonTurbinePhysics.solve(base)
+	_check("primed siphon flows", float(r.get("q_lps", 0.0)) > 1.0, "Q=%.2f" % float(r.get("q_lps", 0.0)))
+	_check("gross head is pond minus exit", absf(float(r.get("head_m", 0.0)) - 3.0) < 1e-6)
+	_check("energy balance closes: gross = losses + turbine head",
+			absf(float(r.get("head_m", 0.0)) - float(r.get("head_loss_m", 0.0)) - float(r.get("turbine_head_m", 0.0))) < 1e-3)
+	_check("runner law: Q = Cq·A·√(2g·h_t)",
+			absf(float(r.get("q_m3s", 0.0)) - SiphonTurbinePhysics.CQ_RUNNER * PI * 0.25 * 0.152 * 0.152
+				* sqrt(2.0 * 9.80665 * float(r.get("turbine_head_m", 0.0)))) < 1e-4)
+	_check("lift is crest above the surface", absf(float(r.get("lift_m", 0.0)) - 0.3) < 1e-6)
+	_check("crest pressure is below atmosphere by the lift and the dip losses",
+			float(r.get("crest_abs_m", 99.0)) < SiphonTurbinePhysics.atm_head_m(0.0) - 0.3
+			and float(r.get("crest_abs_m", 0.0)) > 8.0)
+	_check("rpm from the tip-speed ratio", float(r.get("rpm", 0.0)) > 200.0 and float(r.get("rpm", 0.0)) < 3000.0,
+			"rpm=%.0f" % float(r.get("rpm", 0.0)))
+	_check("not cavitating on a 3 m draft", not bool(r.get("cavitating", true)))
+	# Lower the exit: power rises monotonically until the runner outlet hits
+	# the cavitation limit, then it plateaus and the extra draft is reported
+	# as wasted.
+	var last_w := 0.0
+	var rose := true
+	var capped_at := -1.0
+	var wasted_at_cap := 0.0
+	for i in range(1, 25):
+		var pp := base.duplicate()
+		pp["outlet_m"] = 100.3 - float(i) * 0.5   # 0.5 m steps of exit drop below the runner
+		var rr := SiphonTurbinePhysics.solve(pp)
+		var w := float(rr.get("power_w", 0.0))
+		if bool(rr.get("cavitating", false)):
+			if capped_at < 0.0:
+				capped_at = float(i) * 0.5
+				wasted_at_cap = float(rr.get("draft_excess_m", 0.0))
+			# At the cap the output no longer grows with the drop (within 1 %).
+			if w > last_w * 1.01 + 0.5:
+				rose = false
+		else:
+			if w < last_w - 0.01:
+				rose = false
+		last_w = w
+	_check("power rises with exit drop until the suction limit", rose)
+	_check("cavitation limit lands within the ~7-10 m band below the runner",
+			capped_at > 6.0 and capped_at < 10.5, "capped at %.1f m" % capped_at)
+	_check("wasted draft reported once past the limit", wasted_at_cap > 0.0 and wasted_at_cap < 0.6,
+			"excess=%.2f" % wasted_at_cap)
+	var deep := base.duplicate()
+	deep["outlet_m"] = 100.3 - 12.0
+	var dr := SiphonTurbinePhysics.solve(deep)
+	_check("a 12 m draft wastes several metres", float(dr.get("draft_excess_m", 0.0)) > 2.0
+			and float(dr.get("useful_draft_m", 0.0)) + float(dr.get("draft_excess_m", 0.0)) > 11.99,
+			"excess=%.2f useful=%.2f" % [float(dr.get("draft_excess_m", 0.0)), float(dr.get("useful_draft_m", 0.0))])
+	# Siphon lift: a crest 9 m over the pond (with the exit still below the
+	# surface) is past what atmosphere can hold — no flow, prime kept.
+	var high := base.duplicate()
+	high["crest_m"] = 109.0
+	high["dip_mouth_m"] = 99.0
+	var hr := SiphonTurbinePhysics.solve(high)
+	_check("9 m of lift exceeds the siphon limit", str(hr.get("regime", "")) == "lift_exceeded")
+	_check("lift-exceeded siphon moves no water", float(hr.get("q_lps", 1.0)) < 1e-6)
+	# Prime modes: overflow needs the crest, a pump only needs the mouth under.
+	var dry_ov := base.duplicate()
+	dry_ov["primed_prev"] = false
+	dry_ov["pond_level_m"] = 100.0   # under the 100.3 crest
+	_check("overflow prime waits for the crest", not bool(SiphonTurbinePhysics.solve(dry_ov).get("primed", true)))
+	var dry_pump := dry_ov.duplicate()
+	dry_pump["prime_mode"] = "pump"
+	_check("pump prime runs with the mouth submerged", bool(SiphonTurbinePhysics.solve(dry_pump).get("primed", false)))
+	_check("prime level reported per mode",
+			absf(float(SiphonTurbinePhysics.solve(dry_ov).get("prime_level_m", 0.0)) - 100.3) < 1e-6
+			and float(SiphonTurbinePhysics.solve(dry_pump).get("prime_level_m", 0.0)) < 99.2)
+	# The dip tube's mouth is the break: longer tube, lower break.
+	var long_dip := base.duplicate()
+	long_dip["dip_mouth_m"] = 98.0
+	long_dip["pond_level_m"] = 98.5
+	_check("a longer dip tube keeps the siphon running lower", bool(SiphonTurbinePhysics.solve(long_dip).get("primed", false)))
+	var short_dip := long_dip.duplicate()
+	short_dip["dip_mouth_m"] = 99.0
+	_check("the shorter tube breaks at the same level", not bool(SiphonTurbinePhysics.solve(short_dip).get("primed", true)))
+	# The cap must be CONTINUOUS at inception even when the runner sits below
+	# the crest (a legacy siphon's prime level above its module): the inlet
+	# pressure is taken at the runner, so no datum step enters the cap.
+	var low_runner := base.duplicate()
+	low_runner["runner_elev_m"] = 100.05
+	var prev_w := -1.0
+	var worst_step := 0.0
+	var crossed := false
+	for i in range(1, 220):
+		var pp2 := low_runner.duplicate()
+		pp2["outlet_m"] = 100.05 - float(i) * 0.05
+		var rr2 := SiphonTurbinePhysics.solve(pp2)
+		var w2 := float(rr2.get("power_w", 0.0))
+		if prev_w > 0.0 and bool(rr2.get("cavitating", false)):
+			crossed = true
+			worst_step = maxf(worst_step, absf(w2 - prev_w) / prev_w)
+		prev_w = w2
+	_check("cavitation cap is continuous at inception with the runner below the crest (worst step %.1f%%)" % (worst_step * 100.0),
+			crossed and worst_step < 0.03)
+	# Atmosphere at altitude: 2000 m takes ~2 m off the suction budget.
+	_check("atmospheric head falls with altitude",
+			SiphonTurbinePhysics.atm_head_m(2000.0) < SiphonTurbinePhysics.atm_head_m(0.0) - 1.8)
+	# The spec-level resolver: dip_tube_length_m places the break, overflow
+	# primes at the turbine, pump a half-bore over the mouth.
+	var specs := {"module_elev_m": 50.0, "dip_tube_length_m": 1.5, "intake_diameter_mm": 152.0}
+	var lv := SiphonHydraulics.resolve_siphon_levels(specs, 50.0)
+	_check("dip tube length sets the break", absf(float(lv.get("siphon_break_m", 0.0)) - 48.5) < 1e-6)
+	_check("overflow primes at the turbine", absf(float(lv.get("siphon_start_m", 0.0)) - 50.0) < 1e-6)
+	specs["siphon_prime_mode"] = "pump"
+	lv = SiphonHydraulics.resolve_siphon_levels(specs, 50.0)
+	_check("pump primes a half-bore over the mouth", absf(float(lv.get("siphon_start_m", 0.0)) - 48.576) < 1e-3,
+			"start=%.3f" % float(lv.get("siphon_start_m", 0.0)))
+
+
+## SiphonGeometry on a synthetic machine: a riser (vertical pipe), a leg
+## (horizontal pipe along +X with the runner near its +X end), a flat runner
+## disc, and a box that is not pipe-like. The intake fitting must be the
+## leg's end NEAREST the runner, with the leg's bore, and the riser must be
+## the tall pipe — in the model-root frame, through a scaled intermediate
+## node (the GLB's inch→metre node), with nothing read from global_transform.
+func _test_siphon_geometry() -> void:
+	var root := Node3D.new()
+	root.name = "ModelRoot"
+	var inst := Node3D.new()
+	inst.scale = Vector3.ONE * 0.5   # the baked unit node
+	root.add_child(inst)
+	var mk := func(name: String, size: Vector3, at: Vector3) -> MeshInstance3D:
+		var mi := MeshInstance3D.new()
+		mi.name = name
+		var bm := BoxMesh.new()
+		bm.size = size
+		mi.mesh = bm
+		mi.position = at
+		inst.add_child(mi)
+		return mi
+	# In the instance's (half-scale) units: leg 4 long along X, bore 0.6.
+	var leg: MeshInstance3D = mk.call("leg", Vector3(4.0, 0.6, 0.6), Vector3(0.0, 0.0, 0.0))
+	var riser: MeshInstance3D = mk.call("riser", Vector3(0.6, 3.0, 0.6), Vector3(-2.5, 1.5, 0.0))
+	var runner: MeshInstance3D = mk.call("Node15", Vector3(0.1, 0.5, 0.5), Vector3(1.5, 0.0, 0.0))
+	mk.call("plate", Vector3(3.0, 0.05, 2.0), Vector3(0.0, -0.6, 0.0))
+	var meshes := SiphonGeometry.housing_meshes(root, runner)
+	_check("geometry: housing = every mesh but the runner", meshes.size() == 3, str(meshes.size()))
+	var rc := SiphonGeometry.runner_centre(root, runner)
+	_check("geometry: runner centre carried through the scaled node", rc.is_equal_approx(Vector3(0.75, 0.0, 0.0)), str(rc))
+	var axis := SiphonGeometry.runner_axis_local("", root, runner)
+	_check("geometry: measured axis = the disc's thin extent (X)", absf(absf(axis.x) - 1.0) < 1e-4, str(axis))
+	var legs := SiphonGeometry.pipe_legs(root, meshes, axis, rc)
+	_check("geometry: riser + leg found, the plate ignored", legs.has("riser") and legs.has("leg"))
+	if legs.has("riser"):
+		var rb: AABB = legs["riser"]
+		_check("geometry: the riser is the tall pipe", absf(rb.size.y - 1.5) < 1e-4 and absf(rb.get_center().x + 1.25) < 1e-4, str(rb))
+	var fit := SiphonGeometry.intake_fitting(root, meshes, axis, rc)
+	_check("geometry: a fitting was measured", not fit.is_empty())
+	if not fit.is_empty():
+		var pos: Vector3 = fit["pos"]
+		_check("geometry: the fitting is the leg end NEAREST the runner (+X end, model-root units)",
+				pos.is_equal_approx(Vector3(1.0, 0.0, 0.0)), str(pos))
+		_check("geometry: the fitting points outward along the leg", (fit["dir"] as Vector3).is_equal_approx(Vector3.RIGHT), str(fit["dir"]))
+		_check("geometry: the bore is the leg's (0.3 m)", absf(float(fit["radius"]) - 0.15) < 1e-4, str(fit["radius"]))
+	# Move the runner to the -X end: the fitting follows it.
+	runner.position = Vector3(-1.5, 0.0, 0.0)
+	var fit2 := SiphonGeometry.intake_fitting(root, meshes, axis, SiphonGeometry.runner_centre(root, runner))
+	_check("geometry: the fitting follows the runner to the other end",
+			not fit2.is_empty() and (fit2["pos"] as Vector3).is_equal_approx(Vector3(-1.0, 0.0, 0.0)), str(fit2.get("pos", "")))
+	# Convenience path: by runner name.
+	var fit3 := SiphonGeometry.fitting_for_model_root(root, "", "Node15")
+	_check("geometry: fitting_for_model_root resolves the runner by name",
+			not fit3.is_empty() and (fit3["pos"] as Vector3).is_equal_approx(Vector3(-1.0, 0.0, 0.0)))
+	var nothing := SiphonGeometry.fitting_for_model_root(root, "", "nonexistent")
+	_check("geometry: an unresolvable runner still measures (nearest leg to the origin)", not nothing.is_empty())
+	root.free()

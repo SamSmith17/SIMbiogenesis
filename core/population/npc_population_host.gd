@@ -101,6 +101,10 @@ var _crowd_prev: Dictionary = {}   # id -> {pos: Vector2, h: float}
 var _carry_group_of: Dictionary = {}
 var _now := 0.0
 var _focus_id: String = ""         # agent the crosshair is on (nametag shown)
+## People the UI is pointing at (the FUCK YES beacon): kept in the hero pool —
+## a real figure under the highlight — until the time (msec) runs out.
+var _spotlight: Dictionary = {}
+
 ## Props currently riding someone's hands (Site Projects carry): prop_id ->
 ## {xf: the original global transform, for the preempted-carry restore}.
 ## Node-transform only — the RECORD never moves here (the move is the chore's
@@ -120,6 +124,10 @@ var _crew_marker_accum := 0.0
 ## that view is open and restored on exit. MAX_RIGGED is deliberately NOT
 ## scaled — twelve skinned bodies is the budget whatever the viewpoint.
 var _range_scale := 1.0
+var _was_paused := false
+## Hero-pool caps at 300x+ and 1000x+ (festival scale only; see hero_budget).
+const HERO_MAX_BRISK := 24
+const HERO_MAX_FAST := 12
 
 
 func set_view_range_scale(scale: float) -> void:
@@ -151,7 +159,17 @@ func _process(delta: float) -> void:
 
 func _process_avatars(delta: float) -> void:
 	_now += delta
-	var dots: Array = _bridge.agent_dots()
+	# A pause (or un-pause) must reach EVERY figure this frame: distant ones
+	# are otherwise posed only every FAR_POSE_INTERVAL_S and kept walking for
+	# up to a quarter second after the clock stopped.
+	var paused_now := SimFxRate.is_paused(_main)
+	if paused_now != _was_paused:
+		_was_paused = paused_now
+		for k in _far_accum:
+			_far_accum[k] = FAR_POSE_INTERVAL_S
+	# Full-tier only when the bridge can say so: the light crowd is drawn by
+	# CrowdRenderer straight from the cohorts and never needs a dot here.
+	var dots: Array = _bridge.agent_dots_full() if _bridge.has_method("agent_dots_full") 		else _bridge.agent_dots()
 	var seen: Dictionary = {}
 	var near: Array = []   # [dist, agent_id] candidates for the rigged body
 	var carried: Dictionary = {}   # prop_id -> Array of carrier agent ids
@@ -171,18 +189,39 @@ func _process_avatars(delta: float) -> void:
 		for aid1 in (carried[cp1] as Array):
 			carry_group_of[str(aid1)] = (carried[cp1] as Array).size()
 	_carry_group_of = carry_group_of
+	var prev_heroes := _hero_ids
 	var heroes := _pick_heroes(dots, eye)
+	# With a crowd renderer, a hero past the cull distance is drawn by IT
+	# rather than vanishing (it used to pop out at 220 m and back in again).
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
+		var cull := CULL_DIST_M * _range_scale
+		for dot_c in dots:
+			var dc: Dictionary = dot_c
+			var cid := str(dc.get("id", ""))
+			if heroes.has(cid) and not bool(dc.get("possessed", false)) \
+					and ((dc.get("pos", Vector2.ZERO) as Vector2) - eye).length() > cull:
+				heroes.erase(cid)
+	# A hero joining or leaving hands over to the crowd renderer IN THE SAME
+	# FRAME: a periodic push alone left a leaver invisible (and a joiner drawn
+	# twice) for up to HERO_PUSH_S — the "people pop out of nowhere".
+	var hero_changed := prev_heroes.size() != heroes.size()
+	if not hero_changed:
+		for hid in heroes:
+			if not prev_heroes.has(hid):
+				hero_changed = true
+				break
 	# Who carries an ambient readout this frame: the nearest few inside the
 	# fade radius (plus the focus, always). Measured in 3D from the camera,
 	# not in XZ: from the settlement view's block height the camp directly
 	# below used to read as "0 m away" and stacked a wall of tags.
 	var eye3 := _viewer_pos3()
 	var ambient_ids := _pick_ambient(dots, heroes, eye3)
-	var crowd_entries: Array = []
+	var overflow: Array = []   # full-tier dots past the hero budget (crowd figures)
 	var push_crowd := false
+	var crowd_moved := false
 	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
 		_hero_push_accum += delta
-		push_crowd = _hero_push_accum >= HERO_PUSH_S
+		push_crowd = _hero_push_accum >= HERO_PUSH_S or hero_changed
 	var now_h := float(_main.call("get_absolute_hours")) if _main != null and _main.has_method("get_absolute_hours") else 0.0
 	for dot_v in dots:
 		if not (dot_v is Dictionary):
@@ -196,36 +235,62 @@ func _process_avatars(delta: float) -> void:
 		if str(dot.get("tier", "")) == "light":
 			continue
 		seen[aid] = true
+		if not NpcStandIns.is_empty() and NpcStandIns.has(aid):
+			# A build site's actor is this person right now (NpcStandIns).
+			var avs: NpcAvatar = _avatars.get(aid)
+			if avs != null and avs.visible:
+				avs.visible = false
+				avs.set_process(false)
+			_last_pos[aid] = dot.get("pos", Vector2.ZERO)
+			if not heroes.has(aid):
+				overflow.append(dot.merged({"stood_in": true}))
+			continue
 		if not heroes.has(aid):
 			# Beyond the hero budget: no NpcAvatar work at all this frame; the
 			# crowd renderer draws them from their last two tick positions.
 			var av0: NpcAvatar = _avatars.get(aid)
+			var sp0: Vector2 = dot.get("pos", Vector2.ZERO)
 			if av0 != null and av0.visible:
+				# Handing OUT: the crowd figure starts where the avatar stood
+				# and glides on to the sim position over a quarter second.
+				var ap := av0.global_position
+				var ts_h := absf(float(_main.get("time_scale"))) if _main != null and "time_scale" in _main else 0.0
+				_crowd_prev[aid] = {"pos": sp0, "h": now_h + maxf(0.25 * ts_h, 1e-5),
+					"from": Vector2(ap.x, ap.z), "from_h": now_h, "seen_h": now_h}
 				av0.visible = false
 				av0.set_process(false)
-			var sp0: Vector2 = dot.get("pos", Vector2.ZERO)
 			var pv: Dictionary = _crowd_prev.get(aid, {})
-			if pv.is_empty() or (sp0 - (pv["pos"] as Vector2)).length() > 0.001 or now_h - float(pv["h"]) > 1.0:
-				_crowd_prev[aid] = {"pos": sp0, "h": now_h, "from": pv.get("pos", sp0) if not pv.is_empty() else sp0,
-					"from_h": float(pv.get("h", now_h)) if not pv.is_empty() else now_h}
-			if push_crowd:
-				var rec: Dictionary = _crowd_prev[aid]
-				crowd_entries.append({"id": aid, "prev": rec.get("from", sp0), "next": sp0,
-					"t0": float(rec.get("from_h", now_h)), "t1": float(rec.get("h", now_h)),
-					"pose": _crowd_pose_for(dot), "yaw": float(dot.get("face_yaw", 0.0)),
-					"color": dot.get("color", Color.WHITE), "morale": float(dot.get("morale", 0.7))})
+			if pv.is_empty():
+				_crowd_prev[aid] = {"pos": sp0, "h": now_h, "from": sp0, "from_h": now_h, "seen_h": now_h}
+			elif (sp0 - (pv["pos"] as Vector2)).length() > 0.001:
+				# A new tick position: glide ON to it from where the figure is
+				# drawn NOW, over one tick spacing. (The segment used to END at
+				# now — the figure arrived the instant it was pushed and stood
+				# until the next tick, so a turning circle stepped at 5 Hz.)
+				var drawn := _crowd_seg_at(pv, now_h)
+				var step_h := clampf(now_h - float(pv.get("seen_h", now_h)), 1e-6, 0.25)
+				_crowd_prev[aid] = {"pos": sp0, "h": now_h + step_h, "from": drawn, "from_h": now_h,
+					"seen_h": now_h}
+				crowd_moved = true
+			overflow.append(dot)
 			_last_pos[aid] = sp0
 			continue
 		var av: NpcAvatar = _avatars.get(aid)
+		var fresh := false
 		if av == null:
 			av = NpcAvatar.new()
 			av.setup(aid, dot.get("color", Color.WHITE) as Color, str(dot.get("name", "")))
 			add_child(av)
 			_avatars[aid] = av
+			fresh = true
+		if fresh or not av.visible:
+			_hand_in(av, aid, dot)
 		av.status_text = str(dot.get("status", ""))
 		av.morale_label = str(dot.get("morale_label", ""))
 		av.set_display_name(str(dot.get("name", "")))
 		av.set_morale(float(dot.get("morale", 0.0)))
+		av.set_mood(float(dot.get("morale", 0.0)), float(dot.get("peak_since", NAN)),
+			float(dot.get("peak_buzz", 0.0)), int(dot.get("peak_fed", 0)))
 		av.set_morale_trend(_morale_trend_of(aid, float(dot.get("morale", 0.0))))
 		av.set_task_text(_task_text_of(dot))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
@@ -277,8 +342,27 @@ func _process_avatars(delta: float) -> void:
 			_pose_avatar(av, aid, dot, delta)
 		av.set_tag_visible(aid == _focus_id)
 	_apply_rig_budget(near)
-	if push_crowd:
+	# Pushed the frame anyone's tick position moved (their new glide starts
+	# now), on a hero change, and every HERO_PUSH_S regardless.
+	if push_crowd or (crowd_moved and _crowd_renderer != null and is_instance_valid(_crowd_renderer)):
 		_hero_push_accum = 0.0
+		var crowd_entries: Array = []
+		for dot in overflow:
+			var aid := str(dot.get("id", ""))
+			var sp0: Vector2 = dot.get("pos", Vector2.ZERO)
+			var rec: Dictionary = _crowd_prev.get(aid, {})
+			crowd_entries.append({"id": aid, "prev": rec.get("from", sp0), "next": rec.get("pos", sp0),
+				"t0": float(rec.get("from_h", now_h)), "t1": float(rec.get("h", now_h)),
+				# A full-tier dot's face_yaw is the AVATAR's (forward -Z); the
+				# crowd figure faces +Z — half a turn apart (as _hand_in's
+				# + PI). Unconverted, every standing overflow figure faced
+				# backwards (a circle walked facing out of its own lane).
+				"pose": _crowd_pose_for(dot), "yaw": float(dot.get("face_yaw", 0.0)) + PI,
+				"elev": float(dot.get("elev", 0.0)),
+				"peak_since": float(dot.get("peak_since", NAN)),
+				"peak_buzz": float(dot.get("peak_buzz", 0.0)),
+				"color": dot.get("color", Color.WHITE), "morale": float(dot.get("morale", 0.7)),
+				"hidden": bool(dot.get("stood_in", false))})
 		_crowd_renderer.call("set_full_people", crowd_entries, now_h)
 	_follow_carried_props(carried)
 	_crew_marker_accum += delta
@@ -297,6 +381,12 @@ func _process_avatars(delta: float) -> void:
 		if not seen.has(aid):
 			var av2: NpcAvatar = _avatars[aid]
 			if is_instance_valid(av2):
+				# Still on site but gone to the light tier (their camp switched):
+				# the crowd figure eases in from where this body stood instead
+				# of appearing a tick ahead of it.
+				if av2.visible and _crowd_renderer != null and is_instance_valid(_crowd_renderer) \
+						and _crowd_renderer.has_method("ease_from"):
+					_crowd_renderer.call("ease_from", aid, av2.global_position)
 				av2.queue_free()
 			_avatars.erase(aid)
 			_last_pos.erase(aid)
@@ -584,7 +674,7 @@ func set_focus_agent(agent_id: String) -> void:
 ## the tags used to stack into an unreadable wall.
 const AMBIENT_STATUS_DIST_M := 34.0
 const AMBIENT_FULL_DIST_M := 12.0
-const AMBIENT_MAX_TAGS := 10
+const AMBIENT_MAX_TAGS := 20
 
 ## Morale history for the trend tick: agent_id -> [[abs_h, morale], …],
 ## sampled every TREND_SAMPLE_H sim-hours, kept ~TREND_WINDOW_H deep.
@@ -648,6 +738,7 @@ static func _task_text_of(dot: Dictionary) -> String:
 			"art": text = "looking at art"
 			"quiet": text = "resting"
 			"workshop_social": text = "socialising"
+			NpcSocial.ACTIVITY: text = "wandering" if str(dot.get("venue_pose", "")) != "talk" else "chatting"
 			_: text = ""
 	if text.is_empty():
 		# Idle is a real state, not missing data — a blank tag reads as a bug.
@@ -769,7 +860,9 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 	var prev: Vector2 = _last_pos.get(aid, sim_pos)
 	_last_pos[aid] = sim_pos
-	var gy := _ground_y(aid, sim_pos)
+	# The DJ stands ON the stage deck, `elev` m above the ground.
+	var elev := float(dot.get("elev", 0.0))
+	var gy := _ground_y(aid, sim_pos) + elev
 	var target := Vector3(sim_pos.x, gy, sim_pos.y)
 	var cur := av.global_position
 	if bool(dot.get("possessed", false)):
@@ -939,19 +1032,21 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	# sank into) the hill for the whole glide: the "paths through the air".
 	# The per-agent cache only re-queries when the body moved 0.35 m.
 	if cur != Vector3.ZERO and Vector2(next.x, next.z).distance_to(sim_pos) > GROUND_MOVE_EPS_M:
-		next.y = _ground_y(aid + "|draw", Vector2(next.x, next.z))
+		next.y = _ground_y(aid + "|draw", Vector2(next.x, next.z)) + elev
 	av.apply_pose(next, yaw, {
 		"dt": delta,
 		"paused": scale <= 0.0,
 		"apparent_speed_mps": apparent,
-		# time_scale is sim-HOURS per real second; x3600 gives sim seconds per
-		# real second, i.e. the multiplier the world is running at.
-		"time_mult": absf(scale) * 3600.0,
+		# Loop playback (work, dance, clap…) follows the SAME cosmetic curve
+		# as the crowd shader and the fire: sqrt of the clock's multiple,
+		# capped at FX_CAP_NPC — time-lapsed, never 1:1 at festival speeds.
+		"time_mult": SimFxRate.target_rate(absf(scale), SimFxRate.FX_CAP_NPC),
 		"anim_map": dot.get("anim_map", {}),
 		"in_transit": in_transit,
 		"activity": str(dot.get("activity", "")),
 		"space_type": str(dot.get("space_type", "")),
 		"venue_pose": venue_pose,
+		"peaking": not is_nan(float(dot.get("peak_since", NAN))),
 		"morale": float(dot.get("morale", 1.0)),
 		"dwell_left_s": _dwell_left_s(dot),
 		"teleported": teleported,
@@ -990,10 +1085,48 @@ func set_crowd_renderer(cr: Node) -> void:
 	_crowd_renderer = cr
 
 
+## Full-detail figures when the light-tier crowd is switched off (~6.6 ms
+## for 64 measured on Walton).
+const HERO_MAX_NO_CROWD := 64
+
+
 func hero_budget() -> int:
 	var q := int(_main.get("graphics_quality")) if _main != null and _main.get("graphics_quality") != null \
 		else RenderProfile.QUALITY_HIGH
-	return int(RenderProfile.npc_profile(q).get("hero_max", 40))
+	var budget := int(RenderProfile.npc_profile(q).get("hero_max", 40))
+	# Light-tier figures switched off (Settings -> NPCs): the full-detail
+	# figures are most of what is drawn, so draw more of them.
+	if not NpcDisplayPrefs.light_crowd():
+		budget = maxi(budget, HERO_MAX_NO_CROWD)
+	# The player's own number (Settings -> NPCs -> Full-detail figures) wins.
+	if NpcDisplayPrefs.full_figures() > 0:
+		budget = NpcDisplayPrefs.full_figures()
+	# At festival scale and festival speeds a full NpcAvatar (measured 6.6 ms
+	# for 64 on Walton) is a blur anyway: shrink the hero pool as the clock
+	# speeds up. Only with a light crowd present, so a single-camp map keeps
+	# every body at any speed — and only while "Lighter at high speed" is on.
+	if NpcDisplayPrefs.speed_shed() and _main != null and "time_scale" in _main and _bridge != null \
+			and _bridge.has_method("light_cohorts") and not (_bridge.call("light_cohorts") as Dictionary).is_empty():
+		var mult := absf(float(_main.get("time_scale"))) * 3600.0
+		# A player's own number sheds in proportion (the caps are written
+		# against the HIGH tier's 40).
+		var own := NpcDisplayPrefs.full_figures() > 0
+		if mult >= 1000.0:
+			budget = mini(budget, maxi(HERO_MAX_FAST, budget * HERO_MAX_FAST / 40) if own else HERO_MAX_FAST)
+		elif mult >= 300.0:
+			budget = mini(budget, maxi(HERO_MAX_BRISK, budget * HERO_MAX_BRISK / 40) if own else HERO_MAX_BRISK)
+	return budget
+
+
+## Where a hand-off segment ({from, from_h, pos, h}) is at sim hour `t`.
+static func _crowd_seg_at(seg: Dictionary, t: float) -> Vector2:
+	var a: Vector2 = seg.get("from", seg.get("pos", Vector2.ZERO))
+	var b: Vector2 = seg.get("pos", a)
+	var t0 := float(seg.get("from_h", t))
+	var t1 := float(seg.get("h", t))
+	if t1 - t0 <= 1e-9:
+		return b
+	return a.lerp(b, clampf((t - t0) / (t1 - t0), 0.0, 1.0))
 
 
 ## Which full-tier ids keep an NpcAvatar this frame: everyone when the roster
@@ -1016,7 +1149,8 @@ func _pick_heroes(dots: Array, eye: Vector2) -> Dictionary:
 	for d in full:
 		var dd: Dictionary = d
 		var aid := str(dd.get("id", ""))
-		if bool(dd.get("possessed", false)) or aid == _focus_id:
+		if bool(dd.get("possessed", false)) or aid == _focus_id \
+				or Time.get_ticks_msec() < int(_spotlight.get(aid, 0)):
 			out[aid] = true
 			continue
 		var dist := ((dd.get("pos", Vector2.ZERO) as Vector2) - eye).length()
@@ -1035,22 +1169,90 @@ func _pick_heroes(dots: Array, eye: Vector2) -> Dictionary:
 	return out
 
 
-## A crowd pose code for a full-tier dot (the cohort's own vocabulary).
+## Handing IN (a person becomes a hero, or comes back into view): the avatar
+## starts exactly where the crowd renderer was drawing them, facing the same
+## way, with no glide state — not at the stale spot it was last shown at (it
+## used to slide across from there, or snap) and not one tick ahead.
+func _hand_in(av: NpcAvatar, aid: String, dot: Dictionary) -> void:
+	_interp.erase(aid)
+	_anchor_pos.erase(aid)
+	_arrive_wait.erase(aid)
+	_far_accum.erase(aid)
+	_last_pos[aid] = dot.get("pos", Vector2.ZERO)
+	if _crowd_renderer == null or not is_instance_valid(_crowd_renderer) or not av.is_inside_tree():
+		return
+	var p: Variant = _crowd_renderer.call("last_drawn_position", aid) \
+		if _crowd_renderer.has_method("last_drawn_position") else _crowd_renderer.call("drawn_position", aid)
+	if p is Vector3:
+		av.global_position = p
+		# Crowd yaw faces (sin, cos); the avatar's forward is -Z.
+		av.rotation.y = float(_crowd_renderer.call("drawn_yaw", aid)) + PI
+
+
+## Keep this person a full figure (in the hero pool) for `seconds` — the
+## beacon's target must be a real, unique body.
+func spotlight(agent_id: String, seconds: float) -> void:
+	_spotlight[agent_id] = Time.get_ticks_msec() + int(seconds * 1000.0)
+
+
+## Where this person's body is DRAWN right now: their avatar (a hero), else
+## the crowd renderer's figure, else null (not on screen / unknown).
+func drawn_position(agent_id: String) -> Variant:
+	var av: NpcAvatar = _avatars.get(agent_id)
+	if av != null and is_instance_valid(av) and av.visible and av.is_visible_in_tree():
+		return av.global_position
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer) and _crowd_renderer.has_method("drawn_position"):
+		return _crowd_renderer.call("drawn_position", agent_id)
+	return null
+
+
+## A crowd pose code for a full-tier dot (the cohort's own vocabulary). A
+## peaker on their feet at a venue or a hang dances the peak samba (the same
+## rule as NpcPoseMachine and CrowdCohort.pose_code).
 static func _crowd_pose_for(dot: Dictionary) -> int:
+	var p := _crowd_pose_base(dot)
+	if not is_nan(float(dot.get("peak_since", NAN))) and int(dot.get("state", -1)) != NpcAgent.State.TRAVELING:
+		var act := str(dot.get("activity", ""))
+		if (act == "enrichment" or act == NpcSocial.ACTIVITY) and p in [CrowdCohort.POSE_STAND,
+				CrowdCohort.POSE_TALK, CrowdCohort.POSE_DANCE, CrowdCohort.POSE_RAVE, CrowdCohort.POSE_SWAY]:
+			return CrowdCohort.POSE_PEAK
+	return p
+
+
+static func _crowd_pose_base(dot: Dictionary) -> int:
 	if int(dot.get("state", -1)) == NpcAgent.State.TRAVELING:
 		return CrowdCohort.POSE_WALK
 	var act := str(dot.get("activity", ""))
 	if act == "sleep":
 		return CrowdCohort.POSE_LIE
-	if act in ["eat", "bathroom", "rest", "hunger"]:
-		return CrowdCohort.POSE_SIT
+	if act in ["eat", "rest", "hunger"]:
+		return CrowdCohort.POSE_CROSS        # a meal on the ground
+	if act in ["bathroom", "bladder"]:
+		return CrowdCohort.POSE_SIT          # the portapotty is a seat
 	if act == "chore" or act == "work" or not str(dot.get("work_pose", "")).is_empty():
 		return CrowdCohort.POSE_WORK
+	if act == NpcAgent.PERFORM_ACTIVITY:
+		match str(dot.get("venue_pose", "")):
+			VenueCrowd.POSE_FIREFLOW: return CrowdCohort.POSE_FIREFLOW
+			VenueCrowd.POSE_KNEEL: return CrowdCohort.POSE_KNEEL
+			VenueCrowd.POSE_REDIRECT: return CrowdCohort.POSE_REDIRECT
+		return CrowdCohort.POSE_DJ
+	if act == NpcSocial.ACTIVITY:
+		match str(dot.get("venue_pose", "")):
+			VenueCrowd.POSE_SIT: return CrowdCohort.POSE_CROSS
+			VenueCrowd.POSE_LOUNGE: return CrowdCohort.POSE_LOUNGE
+			VenueCrowd.POSE_LIE: return CrowdCohort.POSE_LIE
+			VenueCrowd.POSE_STAND, "": return CrowdCohort.POSE_STAND
+		return CrowdCohort.POSE_TALK
 	if act == "enrichment" or act == "social":
 		match str(dot.get("venue_pose", "")):
-			VenueCrowd.POSE_SIT: return CrowdCohort.POSE_SIT
-			VenueCrowd.POSE_LIE: return CrowdCohort.POSE_LIE
+			VenueCrowd.POSE_SIT: return CrowdCohort.POSE_CROSS
+			VenueCrowd.POSE_LIE, VenueCrowd.POSE_LOUNGE: return CrowdCohort.POSE_LOUNGE
+			VenueCrowd.POSE_GAZE: return CrowdCohort.POSE_GAZE
 			VenueCrowd.POSE_RAVE: return CrowdCohort.POSE_RAVE
+			VenueCrowd.POSE_CHEER: return CrowdCohort.POSE_CHEER
+			VenueCrowd.POSE_TALK: return CrowdCohort.POSE_TALK
+			VenueCrowd.POSE_SWAY: return CrowdCohort.POSE_SWAY
 			VenueCrowd.POSE_STAND, VenueCrowd.POSE_CLAP, VenueCrowd.POSE_WALK: return CrowdCohort.POSE_STAND
 		return CrowdCohort.POSE_DANCE
 	return CrowdCohort.POSE_STAND

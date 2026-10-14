@@ -62,7 +62,9 @@ void fragment() {
 	vec2 dir = normalize(v_flow.xz + vec2(1e-5, 0.0));
 	float spd = clamp(v_flow.y, 0.05, 1.0);
 	float t = TIME;
-	vec2 uv = VERTEX.xz;
+	// WORLD xz: VERTEX in fragment() is VIEW space, so ripples used to swim with
+	// the camera instead of riding the water.
+	vec2 uv = v_world_pos.xz;
 
 	// Coordinate scrolled downstream; ripples travel along the flow, speed ∝ slope.
 	vec2 scroll = dir * (t * flow_speed * flow_speed_scale * (0.4 + spd));

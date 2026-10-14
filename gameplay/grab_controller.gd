@@ -349,7 +349,12 @@ func _is_relocatable_marker(o: Variant) -> bool:
 func _within_grab_distance_node(node: Node3D) -> bool:
 	if _camera == null or node == null or not is_instance_valid(node):
 		return false
-	return _camera.global_position.distance_to(node.global_position) <= MAX_GRAB_DISTANCE
+	# A marker may set its own reach (a draft outlet sits down the hill, well
+	# past the 60 m a placed light is grabbed from).
+	var reach := MAX_GRAB_DISTANCE
+	if node.has_method("grab_distance_m"):
+		reach = maxf(float(node.call("grab_distance_m")), MAX_GRAB_DISTANCE)
+	return _camera.global_position.distance_to(node.global_position) <= reach
 
 
 func _start_marker_move(marker: Node3D) -> void:

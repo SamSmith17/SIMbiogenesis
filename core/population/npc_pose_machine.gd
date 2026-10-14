@@ -90,6 +90,10 @@ var _carrying := false
 ## machine's purity contract means any per-agent or per-job variation has to
 ## arrive through step() rather than be drawn inside it.
 var _work_pose := ""
+## PEAK EXPERIENCE: this person is at FUCK YES!!! (an INPUT, from the dot's
+## `peak_since`). Standing at a venue or a hang, they break into the peak
+## dance instead of whatever the venue would have them do.
+var _peaking := false
 var _walk_variant: String = ""
 ## The pose currently occupied. Getting OUT of something is a property of what
 ## you are in, not of where you are going next — and by the time an abort runs,
@@ -204,13 +208,15 @@ func step(dt: float, inp: Dictionary) -> void:
 	_carrying = bool(inp.get("carrying", false))
 	_work_pose = str(inp.get("work_pose", ""))
 	var venue_pose := str(inp.get("venue_pose", ""))
+	var peaking := bool(inp.get("peaking", false))
 	_update_mood(float(inp.get("morale", 1.0)))
 	_playback_rate = maxf(float(inp.get("playback_rate", 1.0)), 0.05)
 
 	# A venue pose change (the front row stands up when the pile lands) is a
 	# change of activity as far as the figure is concerned.
 	var activity_changed := activity != _activity or space_type != _space_type \
-		or venue_pose != _venue_pose
+		or venue_pose != _venue_pose or peaking != _peaking
+	_peaking = peaking
 	_activity = activity
 	_space_type = space_type
 	_venue_pose = venue_pose
@@ -321,6 +327,19 @@ func _walk_clip() -> String:
 
 ## What this person does once they have arrived and settled.
 func _pose_clip() -> String:
+	var base := _base_pose_clip()
+	# FUCK YES!!!: anyone peaking on their feet at a venue or a hang dances
+	# the peak dance (the DJ keeps the decks; sitters and sleepers stay put,
+	# and a shared cheer still throws the arms up).
+	if _peaking and (_activity == "enrichment" or _activity == NpcSocial.ACTIVITY) \
+			and base != NpcRig.CLIP_SIT and base != NpcRig.CLIP_SLEEP and base != NpcRig.CLIP_CLAP_SIT \
+			and not NpcRig.GROUND_CLIPS.has(base) \
+			and _venue_pose != VenueCrowd.POSE_CHEER:
+		return NpcRig.CLIP_PEAK_DANCE if _has(NpcRig.CLIP_PEAK_DANCE) else NpcRig.CLIP_DANCE
+	return base
+
+
+func _base_pose_clip() -> String:
 	# A player-authored choice wins over the built-in default, provided the clip
 	# is actually installed — an override naming a missing clip must degrade to
 	# the default rather than freezing the figure on nothing.
@@ -332,9 +351,33 @@ func _pose_clip() -> String:
 	match _activity:
 		"sleep":
 			return NpcRig.CLIP_SLEEP
-		"bladder", "hunger":
-			# Seated: the bathroom visit and the meal both happen sitting down.
-			# "bladder" had no entry at all before, so it rendered as standing.
+		"perform":
+			# A burn role, or the DJ at the decks (the stick figure plays its
+			# "dj" flavour).
+			match _venue_pose:
+				VenueCrowd.POSE_FIREFLOW:
+					return NpcRig.CLIP_FIREFLOW
+				VenueCrowd.POSE_KNEEL:
+					return NpcRig.CLIP_KNEEL
+				VenueCrowd.POSE_REDIRECT:
+					return NpcRig.CLIP_REDIRECT
+			return NpcRig.CLIP_DANCE
+		"mingle":
+			# A comfort stint sits or lies in the shade / by the fire / in the
+			# tent; an ordinary chat or a wander stands.
+			match _venue_pose:
+				VenueCrowd.POSE_SIT:
+					return NpcRig.CLIP_SIT_CROSS
+				VenueCrowd.POSE_LOUNGE:
+					return NpcRig.CLIP_LOUNGE
+				VenueCrowd.POSE_LIE:
+					return NpcRig.CLIP_SLEEP
+		"hunger":
+			# A meal on the ground, cross-legged (a chair-height sit read as an
+			# invisible chair).
+			return NpcRig.CLIP_SIT_CROSS
+		"bladder":
+			# The portapotty IS a seat.
 			return NpcRig.CLIP_SIT
 		"chore":
 			# WHICH work, not just "work". NpcWorkPose.HAUL_HOLD subsumes the
@@ -351,15 +394,26 @@ func _pose_clip() -> String:
 			# The venue's hint for this slot wins over the per-type default:
 			# the same effigy seats its front row and stands its back rows.
 			match _venue_pose:
-				VenueCrowd.POSE_LIE:
-					return NpcRig.CLIP_SLEEP
+				VenueCrowd.POSE_LIE, VenueCrowd.POSE_LOUNGE:
+					# Nobody lies flat at a venue: propped up on the arms.
+					return NpcRig.CLIP_LOUNGE
 				VenueCrowd.POSE_SIT:
-					return NpcRig.CLIP_SIT
+					return NpcRig.CLIP_SIT_CROSS
+				VenueCrowd.POSE_GAZE:
+					return NpcRig.CLIP_GAZE
 				VenueCrowd.POSE_CLAP:
 					return NpcRig.CLIP_CLAP if _has(NpcRig.CLIP_CLAP) else _idle_clip()
-				VenueCrowd.POSE_DANCE, VenueCrowd.POSE_RAVE:
+				VenueCrowd.POSE_DANCE, VenueCrowd.POSE_RAVE, VenueCrowd.POSE_CHEER, VenueCrowd.POSE_SWAY:
+					# Cheering: the rigged body has no arms-up clip, so it
+					# dances; the stick figure throws its arms up (flavour).
+					# The SWAY is the same clip on the rigged body and a light
+					# on-the-spot dance on the stick figure (flavour "sway").
 					return NpcRig.CLIP_DANCE
-				VenueCrowd.POSE_STAND, VenueCrowd.POSE_WALK:
+				VenueCrowd.POSE_STAND, VenueCrowd.POSE_WALK, VenueCrowd.POSE_TALK:
+					# Talking is standing: the stick figure's idle takes turns
+					# gesturing (flavour "talk"). Without this a fire circle's
+					# talkers fell through to the per-type DANCE below while
+					# the light tier drew the same people talking.
 					return _idle_clip()
 			match _space_type:
 				"effigy":
@@ -374,7 +428,7 @@ func _pose_clip() -> String:
 				"workshop_social":
 					return NpcRig.CLIP_CLAP
 				"quiet", "temple":
-					return NpcRig.CLIP_SIT
+					return NpcRig.CLIP_SIT_CROSS
 				"stage":
 					return NpcRig.CLIP_DANCE
 				"center_camp", "art":
@@ -390,7 +444,7 @@ func _transitions_for(pose: String) -> Array:
 	match pose:
 		NpcRig.CLIP_SLEEP:
 			return [NpcRig.CLIP_SLEEP_ENTER, NpcRig.CLIP_SLEEP_EXIT]
-		NpcRig.CLIP_SIT, NpcRig.CLIP_CLAP_SIT:
+		NpcRig.CLIP_SIT, NpcRig.CLIP_CLAP_SIT, NpcRig.CLIP_SIT_CROSS, NpcRig.CLIP_LOUNGE, NpcRig.CLIP_KNEEL:
 			return [NpcRig.CLIP_SIT_ENTER, NpcRig.CLIP_SIT_EXIT]
 	# Work gets a squaring-up and a straightening-up. The EXIT is the one that
 	# pays: without it a worker snaps out of a deep stoop directly into a
@@ -409,6 +463,17 @@ func _transitions_for(pose: String) -> Array:
 static func _clip_file_for(clip: String) -> String:
 	if clip == NpcRig.CLIP_SIT_ENTER:
 		return NpcRig.CLIP_SIT_EXIT
+	# The peak dance is LOGICAL too until the Samba export is installed: the
+	# stick figure draws its own samba, the rigged body plays the plain dance.
+	if clip == NpcRig.CLIP_PEAK_DANCE and not NpcRig.has_clip(NpcRig.CLIP_PEAK_DANCE):
+		return NpcRig.CLIP_DANCE
+	# The ground poses and the burn roles: the rigged body's nearest clip.
+	if NpcRig.GROUND_CLIPS.has(clip):
+		return NpcRig.CLIP_SIT
+	if clip == NpcRig.CLIP_REDIRECT or clip == NpcRig.CLIP_GAZE:
+		return NpcRig.CLIP_IDLE
+	if clip == NpcRig.CLIP_FIREFLOW:
+		return NpcRig.CLIP_DANCE
 	if clip == NpcRig.CLIP_CARRY:
 		return NpcRig.CLIP_WALK
 	if clip == NpcRig.CLIP_CARRY_IDLE:

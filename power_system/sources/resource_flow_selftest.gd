@@ -19,6 +19,9 @@ var _checks: int = 0
 
 
 func _initialize() -> void:
+	# A player's saved testing switches (user://pop_testing.cfg — "ideal
+	# supply" never starves a habitat) must not leak into the starvation pins.
+	PopTestPrefs.reset_defaults()
 	_test_step_level()
 	_test_reversible_timeline()
 	_test_timeline_high_speed_lod()
@@ -40,6 +43,9 @@ func _initialize() -> void:
 	_test_allow_negative_deficit_supply()
 	_test_rain_catchment_pbi_gate()
 	_test_rain_catchment_full_tank_stops()
+	_test_pond_budget_stage_rain_spill()
+	_test_site_balance()
+	_test_pv_array_and_projection()
 	_test_jit_tank_transfer()
 	_test_processor_power_gating()
 	_test_ac_power_wire_bidirectional()
@@ -63,6 +69,7 @@ func _initialize() -> void:
 	_test_lab_sim_inflow_realtime_paused()
 	_test_spec_driven_hydro()
 	_test_stream_intake_supply()
+	_test_penstock_wins_inlet_and_no_phantom_power()
 	_test_penstock_conn_authority()
 	_test_no_head_zero_flow()
 	_test_isru_catalog_kinds()
@@ -857,6 +864,154 @@ func _test_rain_catchment_full_tank_stops() -> void:
 		"qty=%.3f" % float(specs.get("overflow_qty", 0.0)))
 
 
+## A pond's own budget (Mt Vernon): its level reads off the basin's stage
+## curve (one authority with the 3D water), rain falls on its open surface
+## with no catchment node, and what it cannot hold SPILLS to its outlet —
+## measured, never silently dropped.
+func _test_pond_budget_stage_rain_spill() -> void:
+	# A basin that is 10 m² at the bottom metre and 40 m² above it.
+	var curve := [[0.0, -80.0], [10000.0, -79.0], [50000.0, -78.0]]
+	_check("stage curve: level for stock interpolates",
+		absf(ResourceFlowEngineScript.stage_level_for_stock(curve, 30000.0) - (-78.5)) < 1e-6)
+	_check("stage curve: open area is dV/dh",
+		absf(ResourceFlowEngineScript.stage_area_at_level(curve, -78.4) - 40.0) < 1e-6,
+		"area=%.2f" % ResourceFlowEngineScript.stage_area_at_level(curve, -78.4))
+	var model = GraphModelScript.new()
+	model.add_item({"id": "pond", "type": "resource", "specs": {
+		"name": "Pond", "resource_kind": "water", "pond_storage": true,
+		"fill_mode": "auto", "capacity_qty": 50000.0, "capacity_unit": "L",
+		"level": 0.6, "stock_l": 30000.0, "floor_m": -80.0, "rim_m": -78.0,
+		"stage_curve": curve, "spill_outlet_id": "spill",
+	}})
+	model.add_item({"id": "spill", "type": "resource", "specs": {
+		"name": "Spillway", "resource_kind": "water", "outlet_sink": true,
+		"unlimited_capacity": true, "capacity_qty": 1.0e12, "level": 0.0, "cumulative_l": 0.0,
+	}})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.rain_rate_override_mmh = 10.0
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var sp: Dictionary = model.get_item("pond").get("specs", {}) as Dictionary
+	# 10 mm/h on 40 m² = 400 L/h of rain straight on the pond.
+	_check("rain on the pond surface with no catchment node",
+		absf(float(sp.get("stock_l", 0.0)) - 30400.0) < 2.0,
+		"stock=%.1f" % float(sp.get("stock_l", 0.0)))
+	_check("pond budget books the surface rain",
+		absf(float(sp.get("budget_rain_lph", 0.0)) - 400.0) < 2.0,
+		"rain=%.1f" % float(sp.get("budget_rain_lph", 0.0)))
+	_check("pond level_m comes from the stage curve, not linear floor→rim",
+		absf(float(sp.get("level_m", 0.0)) - ResourceFlowEngineScript.stage_level_for_stock(curve, float(sp.get("stock_l", 0.0)))) < 1e-4,
+		"level_m=%.4f" % float(sp.get("level_m", 0.0)))
+	# Nearly full: the next hour's rain mostly spills to the outlet.
+	var model2 = GraphModelScript.new()
+	model2.add_item({"id": "pond", "type": "resource", "specs": {
+		"name": "Pond", "resource_kind": "water", "pond_storage": true,
+		"fill_mode": "auto", "capacity_qty": 50000.0, "capacity_unit": "L",
+		"level": 0.999, "stock_l": 49950.0, "floor_m": -80.0, "rim_m": -78.0,
+		"stage_curve": curve, "spill_outlet_id": "spill",
+	}})
+	model2.add_item({"id": "spill", "type": "resource", "specs": {
+		"name": "Spillway", "resource_kind": "water", "outlet_sink": true,
+		"unlimited_capacity": true, "capacity_qty": 1.0e12, "level": 0.0, "cumulative_l": 0.0,
+	}})
+	var engine2 = ResourceFlowEngineScript.new()
+	engine2.setup(model2, null)
+	engine2.rain_rate_override_mmh = 10.0
+	engine2.simulate_step_for_test(0.0, 0.0)
+	engine2.simulate_step_for_test(1.0, 1.0)
+	model = model2
+	var sp3: Dictionary = model.get_item("pond").get("specs", {}) as Dictionary
+	var sink: Dictionary = model.get_item("spill").get("specs", {}) as Dictionary
+	_check("a full pond holds at its ceiling",
+		float(sp3.get("level", 0.0)) <= 1.0 + 1e-6 and float(sp3.get("level", 0.0)) > 0.998,
+		"level=%.5f" % float(sp3.get("level", 0.0)))
+	_check("the surplus is booked as spill",
+		absf(float(sp3.get("budget_spill_lph", 0.0)) - 350.0) < 5.0,
+		"spill=%.1f" % float(sp3.get("budget_spill_lph", 0.0)))
+	_check("the spill reaches the pond's outlet",
+		absf(float(sink.get("cumulative_l", 0.0)) - 350.0) < 5.0,
+		"cum=%.1f" % float(sink.get("cumulative_l", 0.0)))
+
+
+## SiteBalance (the dashboard's SITE BALANCE card) over a Mt Vernon-shaped
+## fixture: generators by name, make vs use, the battery's time left, the pond's
+## inflow breakdown and its time to full.
+func _test_site_balance() -> void:
+	var items := [
+		{"id": "ps", "type": "processor", "specs": {"name": "PowerSpout", "role": "siphon_hydro",
+			"current_output_kw": 0.288, "live_q_lps": 1.5, "live_regime": "spec"}},
+		{"id": "sy", "type": "processor", "specs": {"name": "Siphon", "role": "siphon_hydro",
+			"current_output_kw": 0.0, "live_regime": "broken"}},
+		{"id": "pond", "type": "resource", "specs": {"name": "Pond", "pond_storage": true,
+			"capacity_qty": 2000000.0, "stock_l": 1500000.0, "level_m": -79.0,
+			"budget_rain_lph": 6000.0, "budget_stream_lph": 175000.0, "budget_spill_lph": 0.0,
+			"inflow_rate": 181000.0, "outflow_rate": 0.0}},
+	]
+	var b := SiteBalance.compute(items, {"solar_kw": 0.0, "graph_dc_kw": 0.288,
+		"load_kw": 0.6, "stored_kwh": 1.0, "cap_kwh": 5.12, "floor_pct": 10.0})
+	var e: Dictionary = b["energy"]
+	_check("site balance: hydro summed by generator", absf(float(e["hydro_kw"]) - 0.288) < 1e-6)
+	_check("site balance: net = make − use", absf(float(e["net_kw"]) - (0.288 - 0.6)) < 1e-6)
+	_check("site balance: a load bigger than generation is flagged", bool(e["load_uncovered"]))
+	# (1.0 − 0.512 kWh above the floor) / 0.312 kW
+	_check("site balance: battery hours to the floor",
+		absf(float(e["hours_to_empty"]) - (1.0 - 0.512) / 0.312) < 1e-4, "%.4f" % float(e["hours_to_empty"]))
+	var p: Dictionary = (b["ponds"] as Array)[0]
+	_check("site balance: pond time to full from its net inflow",
+		absf(float(p["hours_to_full"]) - 500000.0 / 181000.0) < 1e-4)
+	var e2: Dictionary = SiteBalance.compute(items, {"graph_dc_kw": 0.0, "load_kw": 0.0})["energy"]
+	_check("site balance: hydro not reaching the bank is called out",
+		absf(float(e2["unwired_kw"]) - 0.288) < 1e-6)
+	var any_warn := false
+	for r_v in SiteBalance.lines(b):
+		if str((r_v as Dictionary).get("tone", "")) == "warn":
+			any_warn = true
+	_check("site balance: the uncovered load reads as a warning line", any_warn)
+
+
+## Placed PV array: its facing IS the plane of array (yaw 0 faces south,
+## turning it 90° faces east), the inverse round-trips, the layout centres
+## on the origin; and SiteProjection runs SolarUI's battery + low-SOC
+## hysteresis forward over fixture inputs.
+func _test_pv_array_and_projection() -> void:
+	var o0 := PvArrayBuilder.orientation_for(0.0, 35.0)
+	_check("pv array: yaw 0 faces due south", absf(float(o0["azimuth_deg"]) - 180.0) < 1e-3,
+		"az=%.3f" % float(o0["azimuth_deg"]))
+	var o90 := PvArrayBuilder.orientation_for(90.0, 35.0)
+	_check("pv array: yaw +90 faces east", absf(float(o90["azimuth_deg"]) - 90.0) < 1e-3,
+		"az=%.3f" % float(o90["azimuth_deg"]))
+	_check("pv array: tilt carried", absf(float(o0["tilt_deg"]) - 35.0) < 1e-6)
+	for az in [0.0, 45.0, 135.0, 200.0, 315.0]:
+		var back := PvArrayBuilder.orientation_for(PvArrayBuilder.yaw_for_azimuth(az), 20.0)
+		_check("pv array: yaw_for_azimuth(%.0f) round-trips" % az,
+			absf(fposmod(float(back["azimuth_deg"]) - az + 180.0, 360.0) - 180.0) < 1e-3)
+	var lay := PvArrayBuilder.layout({"count": 9})
+	var cx := 0.0
+	for p_v in lay:
+		cx += float((p_v as Dictionary)["x"])
+	_check("pv array: 9 modules laid out, centred", lay.size() == 9 and absf(cx) < 1e-4,
+		"n=%d cx=%.4f" % [lay.size(), cx])
+	# Projection: 1 kW solar for 12 h then dark, 0.5 kW demand, 10 kWh bank at 50 %.
+	var fn := func(abs_h: float) -> Dictionary:
+		var hod := fposmod(abs_h, 24.0)
+		return {"solar_kw": 1.0 if hod < 12.0 else 0.0, "aux_kw": 0.0, "load_kw": 0.5}
+	var p := SiteProjection.project(0.0, 48.0, 1.0, fn, 10.0, 5.0, 1.0, 1.0, 10.0, 20.0)
+	_check("projection: daytime surplus charges (+0.5 kW × 12 h)", absf(float(p["soc_max"]) - 10.0) < 1e-6,
+		"max=%.3f" % float(p["soc_max"]))
+	_check("projection: solar energy integrates", absf(float(p["solar_kwh"]) - 24.0) < 1e-6)
+	_check("projection: a sustainable site never sheds AC", float(p["ac_off_h"]) < 1e-6)
+	var fn_dark := func(_abs_h: float) -> Dictionary:
+		return {"solar_kw": 0.0, "aux_kw": 0.288, "load_kw": 0.6}
+	var p2 := SiteProjection.project(0.0, 24.0, 1.0, fn_dark, 5.12, 1.0, 1.0, 1.0, 10.0, 20.0)
+	_check("projection: a 600 W load on 288 W of hydro sheds AC", float(p2["ac_off_h"]) > 0.0
+		and float(p2["first_ac_off_h"]) < 24.0, "off=%.1f h" % float(p2["ac_off_h"]))
+	_check("projection: the floor holds", float(p2["soc_min"]) >= 0.512 - 1e-6,
+		"min=%.3f" % float(p2["soc_min"]))
+	_check("projection: it cycles back up while shed (hydro charges the bank)",
+		float(p2["soc_max"]) >= 1.0 - 1e-6 and float(p2["served_kwh"]) > 0.0)
+
+
 func _test_jit_tank_transfer() -> void:
 	var model = GraphModelScript.new()
 	model.add_item({
@@ -1564,6 +1719,39 @@ func _test_dc_power_wiring_trace() -> void:
 	_check("dc generator through a controller counted",
 		absf(kw3 - 1.8) < 0.001, "kw=%.3f" % kw3)
 
+	# A turbine wired to the controller's BATTERY terminal (the bank bus — the
+	# Mt Vernon PowerSpout + siphon wiring): the batteries share that terminal,
+	# so the generation reaches them. This dead-ended before, and the battery
+	# never charged from hydro.
+	var model3b = GraphModelScript.new()
+	model3b.add_item({"id": "gen", "type": "processor", "specs": {
+		"energy_source": "", "current_output_kw": 0.288,
+		"outputs": [{"kind": "water", "rate": 0.0}, {"kind": "dc_electricity", "rate": 0.288}],
+	}})
+	model3b.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Ctrl"}})
+	model3b.add_item({"id": "batt", "type": "battery", "specs": {"name": "Battery", "kwh": 2.56}})
+	model3b.add_connection({"id": "b1", "polarity": "positive",
+		"source_item_id": "gen", "source_handle_id": "res_out_1_pos",
+		"target_item_id": "ctrl", "target_handle_id": "batteryPositive"})
+	model3b.add_connection({"id": "b2", "polarity": "negative",
+		"source_item_id": "gen", "source_handle_id": "res_out_1_neg",
+		"target_item_id": "ctrl", "target_handle_id": "batteryNegative"})
+	model3b.add_connection({"id": "b3", "polarity": "positive",
+		"source_item_id": "batt", "source_handle_id": "positive",
+		"target_item_id": "ctrl", "target_handle_id": "batteryPositive"})
+	model3b.add_connection({"id": "b4", "polarity": "negative",
+		"source_item_id": "batt", "source_handle_id": "negative",
+		"target_item_id": "ctrl", "target_handle_id": "batteryNegative"})
+	var kw3b := DcPowerWiringScript.sum_graph_dc_generation_kw(model3b)
+	_check("dc generator on a controller's battery terminal reaches the bank",
+		absf(kw3b - 0.288) < 0.001, "kw=%.3f" % kw3b)
+	# Same wiring with no battery on that terminal: still nothing to charge.
+	model3b.remove_connection("b3")
+	model3b.remove_connection("b4")
+	var kw3c := DcPowerWiringScript.sum_graph_dc_generation_kw(model3b)
+	_check("controller battery terminal with no bank counts nothing",
+		kw3c < 0.001, "kw=%.3f" % kw3c)
+
 	# One-hop through a dc_electricity-kind DC bus/combiner tank (fan-out —
 	# continues from the tank's other port).
 	var model4 = GraphModelScript.new()
@@ -2035,6 +2223,86 @@ func _test_stream_intake_supply() -> void:
 	var spring_sp2: Dictionary = (model.get_item("spring").get("specs", {}) as Dictionary)
 	_check("stream intake: the intake flags the Lab override",
 			bool(spring_sp2.get("supply_override", false)))
+
+
+## Mt Vernon regression: a stray tank wired into the SAME inlet as the routed
+## penstock (an empty 100 L tank carrying a copied pond level) used to win the
+## inlet, run the pond-drawdown path against the fake level, and report the
+## nozzle's full power while 0 L moved. The penstock must decide, and a turbine
+## fed only by an empty tank must make nothing.
+func _test_penstock_wins_inlet_and_no_phantom_power() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({"id": "stray", "type": "resource", "elevation_m": 0.0, "specs": {
+		"name": "Potable Water Supply", "resource_kind": "water",
+		"capacity_qty": 100.0, "level": 0.0, "stock_l": 0.0,
+		"level_m": 30.0, "rim_m": 31.0, "floor_m": 26.0, "allow_negative": false,
+	}})
+	model.add_item({"id": "spring", "type": "resource", "elevation_m": 30.0, "specs": {
+		"name": "Stream Intake", "resource_kind": "water", "stream_source": true,
+		"unlimited_capacity": true, "capacity_qty": 1000.0, "level": 1.0,
+		"base_flow_lps": 3.0, "rain_lps_per_tenth_in_h": 0.0,
+		# Stale pond fields copied onto an intake must not make it a reservoir.
+		"level_m": 30.0, "rim_m": 31.0, "floor_m": 26.0,
+	}})
+	model.add_item({"id": "ps", "type": "processor", "elevation_m": 10.0, "specs": {
+		"name": "Micro Pelton", "role": "siphon_hydro", "turbine_kind": "micro_pelton",
+		"penstock_length_m": 90.0, "penstock_diameter_mm": 46.9,
+		"pipe_roughness_mm": 0.0015, "generator_efficiency": 0.85,
+		"nozzle_count": 1, "nozzle_diameter_mm": 8.5,
+		"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+		"outputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"},
+			{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"}],
+	}})
+	# The stray wire comes FIRST (it was first in the save).
+	model.add_connection({"id": "c_stray", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "stray", "source_handle_id": "output",
+		"target_item_id": "ps", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "c_pen", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "spring", "source_handle_id": "output",
+		"target_item_id": "ps", "target_handle_id": "res_in_0",
+		"conduit_type": "poly_penstock",
+		"conduit_style": {"route_mode": "contour", "pipe_size_in": 2.0},
+		"route_length_m": 90.0, "invert_in_m": 30.0, "invert_out_m": 10.0})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var sp: Dictionary = model.get_item("ps").get("specs", {}) as Dictionary
+	_check("penstock beats a stray tank on the same inlet (stream path)",
+			str(sp.get("live_regime", "")) == "spec", "regime=%s" % str(sp.get("live_regime", "")))
+	var w_out := 0.0
+	for od_v: Variant in (sp.get("outputs", []) as Array):
+		if str((od_v as Dictionary).get("kind", "")) == "water":
+			w_out = float((od_v as Dictionary).get("rate", 0.0))
+	_check("penstock-fed turbine moves real water while it makes power",
+			float(sp.get("current_output_kw", 0.0)) > 0.0 and w_out > 0.0,
+			"kw=%.4f water=%.1f L/h" % [float(sp.get("current_output_kw", 0.0)), w_out])
+
+	# The empty tank alone: a level says "primed", but there is no water.
+	model.remove_connection("c_pen")
+	var sp_s: Dictionary = (model.get_item("ps").get("specs", {}) as Dictionary).duplicate(true)
+	sp_s["turbine_kind"] = "siphon"
+	sp_s["intake_diameter_mm"] = 203.0
+	sp_s["outlet_diameter_mm"] = 203.0
+	sp_s["barrel_length_m"] = 20.0
+	sp_s["dip_tube_length_m"] = 1.5
+	sp_s["module_elev_m"] = 30.5
+	sp_s["outlet_invert_m"] = 20.0
+	sp_s["siphon_primed"] = true
+	model.update_item("ps", {"specs": sp_s})
+	var st: Dictionary = (model.get_item("stray").get("specs", {}) as Dictionary).duplicate(true)
+	st["pond_storage"] = true
+	model.update_item("stray", {"specs": st})
+	engine.simulate_step_for_test(2.0, 1.0)
+	var sp2: Dictionary = model.get_item("ps").get("specs", {}) as Dictionary
+	_check("a turbine fed by an EMPTY tank makes no power (no phantom watts)",
+			float(sp2.get("current_output_kw", 0.0)) < 1e-6,
+			"kw=%.4f regime=%s" % [float(sp2.get("current_output_kw", 0.0)), str(sp2.get("live_regime", ""))])
+	var dc_rate := 0.0
+	for od_v2: Variant in (sp2.get("outputs", []) as Array):
+		if str((od_v2 as Dictionary).get("kind", "")) == "dc_electricity":
+			dc_rate = float((od_v2 as Dictionary).get("rate", 0.0))
+	_check("its DC output port carries nothing either", dc_rate < 1e-6, "dc=%.4f" % dc_rate)
 
 
 func _test_spec_driven_hydro() -> void:

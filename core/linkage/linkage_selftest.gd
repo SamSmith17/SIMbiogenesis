@@ -36,8 +36,17 @@ func _initialize() -> void:
 	_test_solar_handoff()
 	_test_modal_script_compiles()
 	_test_shipped_presets()
+	_test_lossless_presets()
+	_test_parity_fixtures()
+	_test_part_key_selectors()
+	_test_part_keys_parity()
+	_test_builder_part_state()
+	_test_beam_holes_parity()
 	_test_hardware_config_roundtrip()
 	_test_bom()
+	_test_bom_copies()
+	_test_fold_sequence()
+	_test_floor_parity()
 	_test_drill_plan()
 	_test_fab_graph()
 	_test_build_guide()
@@ -1084,6 +1093,698 @@ func _test_shipped_presets() -> void:
 	_check((dframe["beams"] as Array).size() > 0, "the default preset solves")
 	_check(LinkageGeometry.solar_panels(dframe, dp).size() > 0,
 		"the default preset carries panels")
+
+
+# ---------------------------------------------------------------------------
+# LinkageLab parity A0 — lossless config + the shipped JS presets
+# (LINKAGE_PARITY.md; fixtures from tools/linkage_parity_dump.mjs)
+# ---------------------------------------------------------------------------
+
+const PARITY_DIR := "res://core/linkage/testdata/parity/"
+const LL_PRESETS := ["ll_constellation", "ll_starshade_2x3_folding_panels",
+	"ll_starshade_hex", "ll_starshade_v1_soak_2026", "ll_stellarator"]
+
+
+func _read_json(path: String):
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return null
+	return JSON.parse_string(f.get_as_text())
+
+
+## Every leaf of `src` must come back from `out` with the same value (numbers
+## within 1e-9, ints == floats). Appends "path: why" strings to `diffs`.
+func _superset_diffs(src, out, path: String, diffs: Array) -> void:
+	if diffs.size() >= 12:
+		return
+	if src is Dictionary:
+		if not (out is Dictionary):
+			diffs.append("%s: dict became %s" % [path, type_string(typeof(out))])
+			return
+		for k in src:
+			if not (out as Dictionary).has(k):
+				diffs.append("%s.%s: dropped" % [path, k])
+				continue
+			_superset_diffs(src[k], out[k], "%s.%s" % [path, k], diffs)
+		return
+	if src is Array:
+		if not (out is Array) or (src as Array).size() != (out as Array).size():
+			diffs.append("%s: array changed" % path)
+			return
+		for i in (src as Array).size():
+			_superset_diffs(src[i], out[i], "%s[%d]" % [path, i], diffs)
+		return
+	if (src is float or src is int) and (out is float or out is int):
+		if absf(float(src) - float(out)) > 1e-9 * maxf(1.0, absf(float(src))):
+			diffs.append("%s: %s -> %s" % [path, str(src), str(out)])
+		return
+	if typeof(src) != typeof(out) or src != out:
+		diffs.append("%s: %s -> %s" % [path, str(src), str(out)])
+
+
+## A web design opened in the game and saved again must lose nothing: build
+## steps, coverings, floor, shade cloth, the radial array, camera, newer
+## panel/cost keys all ride `LinkageParams.extra` until a port models them.
+## A3: the BOM of a radial array is one structure's set x the visible copies
+## (`bom.js:countStructureCopies`), and an arch tunnel array likewise.
+func _test_bom_copies() -> void:
+	var raw = _read_json("res://core/linkage/presets/ll_constellation.json")
+	_check(raw is Dictionary, "constellation preset readable")
+	if not (raw is Dictionary):
+		return
+	var p := LinkageParams.new()
+	p.from_config(raw)
+	var bom := LinkageBom.compute(p)
+	var cp: Dictionary = bom["copies"]
+	var pl := LinkageRadialArray.deployed_plan(p)
+	_check(int(cp["radial"]) == int(pl["visible_count"]) and int(cp["total"]) == int(cp["radial"]),
+		"radial copies == the plan's visible copies (%s)" % str(cp))
+	var k := int(cp["total"])
+	_check(k > 1, "constellation holds several structures")
+	var one: Dictionary = bom["per_structure"]
+	var q := p.duplicate_params()
+	LinkageRadialArray.set_config(q, {"enabled": false})
+	var single := LinkageBom.compute(q)
+	_check(int((single["copies"] as Dictionary)["total"]) == 1, "array off = 1 structure")
+	for key in ["h_beams", "v_beams", "brackets", "bolts_total", "washers_v", "panels"]:
+		_check(int((one["counts"] as Dictionary)[key]) == int((single["counts"] as Dictionary)[key]),
+			"per-structure %s == the single structure's" % key)
+		_check(int((bom["counts"] as Dictionary)[key]) == k * int((single["counts"] as Dictionary)[key]),
+			"total %s == %d x one" % [key, k])
+	_feq(float(bom["total_cost"]), k * float(single["total_cost"]), 1e-6, "total cost == k x one")
+	_feq(float((bom["mass"] as Dictionary)["total_kg"]), k * float((single["mass"] as Dictionary)["total_kg"]), 1e-6,
+		"total mass == k x one")
+	var item0: Dictionary = (bom["structure_items"] as Array)[0]
+	var item1: Dictionary = (single["structure_items"] as Array)[0]
+	_check(int(item0["qty"]) == k * int(item1["qty"]) and is_equal_approx(float(item0["unit_cost"]), float(item1["unit_cost"])),
+		"line items scale qty, keep unit price")
+	_check(float((bom["dims"] as Dictionary).get("pattern_diameter_in", 0.0)) > float((bom["dims"] as Dictionary)["diameter_in"]),
+		"the pattern is wider than one structure")
+	# Hiding one more slot drops exactly one structure's worth.
+	var h := p.duplicate_params()
+	var cfg := LinkageRadialArray.config(h)
+	var hidden: Array = (cfg["hiddenSlots"] as Array).duplicate()
+	for sl in pl["slots"]:
+		if not hidden.has(int(sl["slot"])):
+			hidden.append(int(sl["slot"]))
+			break
+	cfg["hiddenSlots"] = hidden
+	LinkageRadialArray.set_config(h, cfg)
+	_check(int((LinkageBom.compute(h)["copies"] as Dictionary)["total"]) == k - 1, "hiding a slot drops a copy")
+	# Shipping: one folded bundle per copy, each one structure's mass.
+	var spec := LinkageStructureBuilder.packed_spec_for(p)
+	var spec1 := LinkageStructureBuilder.packed_spec_for(q)
+	_check(int(spec.get("count", 1)) == k and int(spec1.get("count", 1)) == 1,
+		"packed spec ships %d bundles (single: %d)" % [int(spec.get("count", 1)), int(spec1.get("count", 1))])
+	_feq(float(spec["mass_kg"]), float(spec1["mass_kg"]), 1e-6, "each bundle weighs one structure")
+	# Solar handoff: every copy's panels.
+	var b1 := LinkageStructureBuilder.new()
+	root.add_child(b1)
+	b1.set_params(q)
+	var bk := LinkageStructureBuilder.new()
+	root.add_child(bk)
+	bk.set_params(p)
+	var s1 := b1.deployed_panel_summary()
+	var sk := bk.deployed_panel_summary()
+	_check(int(s1["count"]) > 0 and int(sk["count"]) == k * int(s1["count"]),
+		"the solar handoff counts every copy's panels (%d = %d x %d)" % [int(sk["count"]), k, int(s1["count"])])
+	_feq(float(sk["watts"]), k * float(s1["watts"]), 1e-3, "and their watts")
+	b1.queue_free()
+	bk.queue_free()
+	# Arch tunnel copies: beams scale, panels counted from one segment.
+	var a := _default_params()
+	a.orientation = "vertical"
+	a.solar_panels["enabled"] = true
+	var a1 := LinkageBom.compute(a)
+	var a3p := a.duplicate_params()
+	a3p.array_count = 3
+	var a3 := LinkageBom.compute(a3p)
+	_check(int((a3["copies"] as Dictionary)["linear"]) == 3, "arch array_count 3 = 3 structures")
+	_check(int((a3["per_structure"]["counts"] as Dictionary)["panels"]) == int((a1["counts"] as Dictionary)["panels"]),
+		"arch: one structure's panels == the single arch's (%d vs %d)" % [
+			int((a3["per_structure"]["counts"] as Dictionary)["panels"]), int((a1["counts"] as Dictionary)["panels"])])
+	_check(int((a3["counts"] as Dictionary)["h_beams"]) == 3 * int((a1["counts"] as Dictionary)["h_beams"]),
+		"arch: beams x 3")
+
+
+## A3: the sequential fold (fold-sequence.js) — copy j of K at master
+## progress p folds to clamp(p*K - j, 0, 1); the builder draws each copy at
+## its own angle with at most three solves.
+func _test_fold_sequence() -> void:
+	_feq(LinkageFoldSequence.copy_progress(0.5, 0, 4), 1.0, 1e-9, "p .5: copy 0 done")
+	_feq(LinkageFoldSequence.copy_progress(0.5, 1, 4), 1.0, 1e-9, "p .5: copy 1 done")
+	_feq(LinkageFoldSequence.copy_progress(0.5, 2, 4), 0.0, 1e-9, "p .5: copy 2 not started")
+	_feq(LinkageFoldSequence.copy_progress(0.6, 2, 4), 0.4, 1e-6, "p .6: copy 2 at 40 %")
+	_feq(LinkageFoldSequence.master_progress(1.0, 1.0, 1.0), 1.0, 1e-9, "empty range = done")
+	var pl := {"slots": [{"slot": 0, "is_center": true}, {"slot": 1, "is_center": false, "ring_index": 0},
+		{"slot": 2, "is_center": false, "ring_index": 1, "hidden": true}, {"slot": 3, "is_center": false, "ring_index": 2}]}
+	var order := LinkageFoldSequence.deploy_order(pl)
+	_check(order.size() == 3 and int(order[0]["slot"]) == 0 and str(order[0]["label"]) == "Center"
+		and int(order[2]["slot"]) == 3 and str(order[2]["label"]) == "Copy 3",
+		"deploy order: centre first, ring by slot, hidden skipped (%s)" % str(order))
+	var sch := LinkageFoldSequence.schedule(1.5, 1.0, 2.0, order, true)
+	_check(bool(sch["sequential"]) and int(sch["k"]) == 3, "schedule is sequential over 3 copies")
+	_feq(float(sch["copies"][0]["angle"]), 2.0, 1e-9, "copy 0 deployed at p .5")
+	_feq(float(sch["copies"][1]["angle"]), 1.5, 1e-9, "copy 1 half way")
+	_feq(float(sch["copies"][2]["angle"]), 1.0, 1e-9, "copy 2 folded")
+	_check((sch["distinct_angles"] as Array).size() == 3 and int(sch["active_index"]) == 1,
+		"three distinct angles, copy 1 moving")
+	var flat := LinkageFoldSequence.schedule(1.5, 1.0, 2.0, order, false)
+	_check(not bool(flat["sequential"]) and (flat["distinct_angles"] as Array).size() == 1,
+		"off: every copy at the master angle")
+
+	var raw = _read_json("res://core/linkage/presets/ll_constellation.json")
+	if not (raw is Dictionary):
+		_check(false, "constellation preset readable")
+		return
+	var p := LinkageParams.new()
+	p.from_config(raw)
+	_check(LinkageFoldSequence.for_params(p, p.fold_angle).is_empty(), "preset: sequential off")
+	LinkageFoldSequence.set_sequential(p, true)
+	_check(LinkageFoldSequence.is_sequential(p) and bool((p.to_config()["mode"] as Dictionary)["sequentialFold"]),
+		"sequentialFold rides mode in the config")
+	var r := LinkageFoldSequence.sweep_range(p)
+	var mn := float(r["min"])
+	var mx := float(r["max"])
+	_check(mx > mn, "sweep range")
+	var k := (LinkageFoldSequence.deploy_order(LinkageRadialArray.deployed_plan(p))).size()
+	var master := mn + (mx - mn) * (1.5 / float(k))   # copy 0 done, copy 1 half way
+	var b := LinkageStructureBuilder.new()
+	root.add_child(b)
+	p.fold_angle = master
+	b.set_params(p)
+	var sc := b.fold_schedule()
+	_check(not sc.is_empty() and (sc["distinct_angles"] as Array).size() == 3,
+		"builder: three poses mid-sequence (%s)" % str(sc.get("distinct_angles", [])))
+	var fr := b.last_frame()
+	var q := p.duplicate_params()
+	LinkageRadialArray.set_config(q, {"enabled": false})
+	var n1 := (LinkageSolver.solve(q, mx)["beams"] as Array).size()
+	_check((fr["beams"] as Array).size() == k * n1, "every copy keeps its beams (%d = %d x %d)" % [
+		(fr["beams"] as Array).size(), k, n1])
+	# Copy 0 matches a single structure solved deployed, copy k-1 one solved folded
+	# (beam lengths are rigid-transform invariant; compare the first beam's span).
+	var c0: Dictionary = (fr["beams"] as Array)[0]
+	var cl: Dictionary = (fr["beams"] as Array)[(k - 1) * n1]
+	var s_dep := _beam_span_xz(LinkageSolver.solve(q, mx)["beams"])
+	var s_fold := _beam_span_xz(LinkageSolver.solve(q, mn)["beams"])
+	var spans := _copy_spans(fr["beams"], n1, k)
+	_feq(float(spans[0]), s_dep, 1e-3, "copy 0 is deployed (span %.2f vs %.2f)" % [float(spans[0]), s_dep])
+	_feq(float(spans[k - 1]), s_fold, 1e-3, "the last copy is folded (span %.2f vs %.2f)" % [float(spans[k - 1]), s_fold])
+	_check(c0.has("array_index") and cl.has("array_index"), "copies tagged")
+	# Fully deployed master: every copy deployed, one pose.
+	b.set_fold_angle(mx)
+	_check((b.fold_schedule()["distinct_angles"] as Array).size() == 1, "deployed: one pose")
+	b.queue_free()
+
+
+## The XZ diameter of one copy's beams (rigid-transform invariant).
+func _beam_span_xz(beams: Array) -> float:
+	var pts: Array = []
+	for bm in beams:
+		pts.append(bm["p1"])
+		pts.append(bm["p2"])
+	var m := 0.0
+	for i in pts.size():
+		for j in range(i + 1, pts.size()):
+			var a: Vector3 = pts[i]
+			var c: Vector3 = pts[j]
+			m = maxf(m, Vector2(a.x - c.x, a.z - c.z).length())
+	return m
+
+
+func _copy_spans(beams: Array, n1: int, k: int) -> Array:
+	var out: Array = []
+	for j in k:
+		out.append(_beam_span_xz(beams.slice(j * n1, (j + 1) * n1)))
+	return out
+
+
+## A4: the raised floor (floor-geometry.js) — every floor beam, the deck's
+## corners, area and plan outline, the seating readout and the BOM rows ==
+## the JS dump. Compared relative to the first floor beam's p1 (JS recentres
+## the ring; the deck and floor beams are the base copy in both).
+func _test_floor_parity() -> void:
+	var tested := 0
+	for id in LL_PRESETS:
+		var fx = _read_json("res://core/linkage/testdata/parity/%s.json" % str(id).trim_prefix("ll_"))
+		if not (fx is Dictionary) or not (fx.get("a4") is Dictionary):
+			continue
+		var jf = (fx["a4"] as Dictionary).get("floor")
+		if not (jf is Dictionary) or (jf["beams"] as Array).is_empty():
+			continue
+		var p := LinkageParams.new()
+		p.from_config(_read_json("res://core/linkage/presets/%s.json" % id))
+		var fold := deg_to_rad(float(fx["deployedDeg"]))
+		var frame := LinkageSolver.solve(p, fold)
+		var gb := LinkageFloor.floor_beams(frame["beams"], p, fold)
+		_check(gb.size() == (jf["beams"] as Array).size(), "%s floor beams %d == JS %d" % [id, gb.size(), (jf["beams"] as Array).size()])
+		if gb.size() != (jf["beams"] as Array).size():
+			continue
+		tested += 1
+		var ja: Array = jf["beams"][0]["p1"]
+		var j_anchor := Vector3(ja[0], ja[1], ja[2])
+		var g_anchor: Vector3 = gb[0]["p1"]
+		var worst := 0.0
+		var keys_ok := true
+		for i in gb.size():
+			var jb: Dictionary = jf["beams"][i]
+			var g: Dictionary = gb[i]
+			for e in ["p1", "p2"]:
+				var jv := Vector3(jb[e][0], jb[e][1], jb[e][2]) - j_anchor
+				worst = maxf(worst, ((g[e] as Vector3) - g_anchor).distance_to(jv))
+			if LinkagePartKeys.part_key(g, "beam") != str(jb["key"]) or not is_equal_approx(float(g["w"]), float(jb["w"])):
+				keys_ok = false
+		_check(worst < 2e-3, "%s floor beam ends == JS (worst %.5f in)" % [id, worst])
+		_check(keys_ok, "%s floor beam keys + sections == JS" % id)
+		var all_beams: Array = (frame["beams"] as Array).duplicate()
+		all_beams.append_array(gb)
+		var deck := LinkageFloor.deck(all_beams, p)
+		var jd = jf.get("deck")
+		_check(not deck.is_empty() == (jd is Dictionary), "%s deck present as in JS" % id)
+		if deck.is_empty() or not (jd is Dictionary):
+			continue
+		_check(LinkagePartKeys.part_key(deck, "wall") == str(jd["key"]), "%s deck key %s" % [id, str(jd["key"])])
+		var jc: Array = jd["corners3D"]
+		_check((deck["corners"] as Array).size() == jc.size(), "%s deck has %d corners" % [id, jc.size()])
+		var dw := 0.0
+		for i in mini(jc.size(), (deck["corners"] as Array).size()):
+			var jv2 := Vector3(float(jc[i]["x"]), float(jc[i]["y"]), float(jc[i]["z"])) - j_anchor
+			dw = maxf(dw, ((deck["corners"][i] as Vector3) - g_anchor).distance_to(jv2))
+		_check(dw < 2e-3, "%s deck corners == JS (worst %.5f in)" % [id, dw])
+		_feq(float(deck["area_in2"]), float(jd["areaIn2"]), 0.11, "%s deck area" % id)
+		var c2w := 0.0
+		for i in mini((jd["corners2D"] as Array).size(), (deck["corners_2d"] as Array).size()):
+			var j2 := Vector2(float(jd["corners2D"][i]["s"]), float(jd["corners2D"][i]["t"]))
+			c2w = maxf(c2w, (deck["corners_2d"][i] as Vector2).distance_to(j2))
+		_check(c2w < 2e-3, "%s deck plan outline == JS (worst %.5f)" % [id, c2w])
+		var seat := LinkageFloor.seating(all_beams, gb, p.modules)
+		var js_seat: Dictionary = jf["seating"]
+		for pat in ["A", "B"]:
+			if js_seat.get(pat) is Dictionary:
+				_feq(float(seat[pat]["gap_in"]), float(js_seat[pat]["gapIn"]), 2e-3, "%s seating %s gap" % [id, pat])
+		var bom := LinkageFloor.bom_contribution(p)
+		_check(int(bom["reciprocal"]) == int(jf["bom"]["reciprocalQty"]) and int(bom["radial"]) == int(jf["bom"]["radialQty"]),
+			"%s floor BOM quantities == JS" % id)
+		var full := LinkageBom.compute(p)
+		var per: Dictionary = full["per_structure"]
+		var floor_rows: Array = (per["structure_items"] as Array).filter(func(it): return str(it["key"]).begins_with("floor_"))
+		_check(floor_rows.size() == (jf["bom"]["structureItems"] as Array).size()
+			and int((per["counts"] as Dictionary)["floor_rcp"]) == int(jf["bom"]["reciprocalQty"])
+			and float((per["mass"] as Dictionary)["floor_kg"]) > 0.0,
+			"%s the BOM prices the floor beams (%d rows, %.1f kg)" % [id, floor_rows.size(), float((per["mass"] as Dictionary)["floor_kg"])])
+	_check(tested >= 2, "floor parity ran on %d presets" % tested)
+	# The builder draws the floor beams and the deck under the keys part_data
+	# names them, and a part state hides the deck.
+	for id in ["ll_starshade_hex", "ll_constellation"]:
+		var q := LinkageParams.new()
+		q.from_config(_read_json("res://core/linkage/presets/%s.json" % id))
+		q.fold_angle = LinkageKinematics.optimal_closed_angle(q)
+		var b := LinkageStructureBuilder.new()
+		root.add_child(b)
+		b.set_params(q)
+		var drawn := {}
+		for k in b.part_keys():
+			drawn[k] = true
+		var data := LinkagePartKeys.part_data(q, q.fold_angle)
+		var want: Array = []
+		for rec in LinkagePartKeys.collect_parts(data):
+			var k2: String = rec["key"]
+			if k2.begins_with("beam:floor-") or k2.begins_with("wall:"):
+				want.append(k2)
+		var missing: Array = want.filter(func(k): return not drawn.has(k))
+		_check(not want.is_empty() and missing.is_empty(),
+			"%s builder draws every floor beam + deck (%d, missing %s)" % [id, want.size(), str(missing.slice(0, 3))])
+		var walls: Array = b.last_walls()
+		var decks: Array = walls.filter(func(w): return str(w.get("band", "")) == "floor")
+		var copies := int(LinkageBom.structure_copies(q)["radial"])
+		_check(decks.size() == copies, "%s one deck per copy (%d)" % [id, decks.size()])
+		var cover := b.get_node_or_null("Coverings")
+		_check(cover != null and cover.get_child_count() == walls.size(),
+			"%s every covering drawn (%d meshes, %d records)" % [id, cover.get_child_count() if cover != null else 0, walls.size()])
+		var dk := LinkagePartKeys.part_key(decks[0], "wall")
+		b.set_part_state(dk, {"visible": false})
+		var hidden := 0
+		for c in cover.get_children():
+			if not (c as MeshInstance3D).visible:
+				hidden += 1
+		_check(hidden == 1, "%s hiding %s hides one deck" % [id, dk])
+		b.queue_free()
+
+
+func _test_lossless_presets() -> void:
+	for id in LL_PRESETS:
+		var raw = _read_json("res://core/linkage/presets/%s.json" % id)
+		_check(raw is Dictionary, "%s parses" % id)
+		if not (raw is Dictionary):
+			continue
+		var src: Dictionary = raw
+		var p := LinkageParams.new()
+		p.from_config(src)
+		var out := p.to_config()
+		var diffs: Array = []
+		_superset_diffs(src, out, id, diffs)
+		_check(diffs.is_empty(), "%s round-trips losslessly: %s" % [id, str(diffs)])
+		# Twice is the same as once (no drift through the extra/typed merge).
+		var q := LinkageParams.new()
+		q.from_config(out)
+		_check(_deep_eq(q.to_config(), out), "%s round-trips twice" % id)
+		_check(p.design_name == str(src.get("name", "")), "%s keeps its name" % id)
+		_check(str(out.get("designName", "")) == p.design_name, "%s emits designName" % id)
+		_check(_deep_eq(p.duplicate_params().to_config(), out),
+			"%s duplicate_params keeps extra" % id)
+		var frame := LinkageSolver.solve(p, p.fold_angle)
+		_check((frame["beams"] as Array).size() > 0, "%s solves" % id)
+
+	# Typed fields own their keys: an edit wins over the source value.
+	var cfg = _read_json("res://core/linkage/presets/ll_stellarator.json")
+	_check(cfg is Dictionary, "stellarator preset readable")
+	if cfg is Dictionary:
+		var p2 := LinkageParams.new()
+		p2.from_config(cfg)
+		p2.modules = 9
+		var o2 := p2.to_config()
+		_check(int((o2["structure"] as Dictionary)["modules"]) == 9, "typed edit wins over source")
+		_check(o2.has("buildSteps") and o2.has("coverings") and o2.has("shadeCloth"),
+			"unmodelled sections still present after an edit")
+		_check(((o2["mode"] as Dictionary).get("radialArray", {}) as Dictionary).has("hiddenSlots"),
+			"mode.radialArray survives beside the typed mode keys")
+		# The returned config is a copy: editing it cannot reach `extra`.
+		((o2["buildSteps"] as Dictionary)["steps"] as Array).clear()
+		_check(((p2.to_config()["buildSteps"] as Dictionary)["steps"] as Array).size() > 0,
+			"to_config deep-copies extra")
+
+	# Export snapshots are dropped; legacy flat configs carry no extra.
+	var exp := {"structure": {"modules": 6}, "geometrySnapshot": {"x": 1},
+		"summary": {"w": 2}, "handoff": {}, "futureKey": {"a": 1}}
+	var pe := LinkageParams.new()
+	pe.from_config(exp)
+	var oe := pe.to_config()
+	_check(not oe.has("geometrySnapshot") and not oe.has("summary") and not oe.has("handoff"),
+		"derived export keys are not kept")
+	_check(oe.has("futureKey") and int((oe["futureKey"] as Dictionary)["a"]) == 1,
+		"an unknown future key survives")
+	var pl := LinkageParams.new()
+	pl.from_config({"modules": 6, "hLengthFt": 9.0, "someLegacyKey": 3})
+	_check(pl.extra.is_empty() and not pl.to_config().has("someLegacyKey"),
+		"legacy flat configs keep no extra")
+
+
+## The JS reference fixtures exist, are tied to one LinkageLab commit, and
+## describe the same designs the game ships. Deeper pins (part keys, steps,
+## holes, radial, coverings) land with each port phase.
+func _test_parity_fixtures() -> void:
+	var sha := ""
+	for id in LL_PRESETS:
+		var fname: String = (id as String).trim_prefix("ll_")
+		var fx = _read_json(PARITY_DIR + fname + ".json")
+		_check(fx is Dictionary, "parity fixture %s exists" % fname)
+		if not (fx is Dictionary):
+			continue
+		var d: Dictionary = fx
+		var this_sha := str((d.get("linkagelab", {}) as Dictionary).get("sha", ""))
+		_check(this_sha.length() == 40, "%s records the LinkageLab sha" % fname)
+		if sha.is_empty():
+			sha = this_sha
+		_check(this_sha == sha, "%s from the same LinkageLab commit" % fname)
+		var pr = _read_json("res://core/linkage/presets/%s.json" % id)
+		if not (pr is Dictionary):
+			continue
+		var src: Dictionary = (pr as Dictionary).get("linkagelabSource", {})
+		_check(str(src.get("sha", "")) == this_sha, "%s preset and fixture share a commit" % fname)
+		var p := LinkageParams.new()
+		p.from_config(pr)
+		_feq(rad_to_deg(p.fold_angle), float(d["savedFoldDeg"]), 1e-3,
+			"%s fold angle matches the JS state" % fname)
+		# The JS build steps are generated at the closed-angle scan's pose.
+		_feq(rad_to_deg(LinkageKinematics.optimal_closed_angle(p)), float(d["deployedDeg"]), 0.5,
+			"%s closed angle matches JS" % fname)
+		var gen: Array = d.get("generatedSteps", [])
+		_check(gen.size() > 0, "%s has generated steps" % fname)
+		var keys: Array = ((d["deployed"] as Dictionary)["parts"] as Dictionary)["keys"]
+		_check(keys.size() > 0 and str(keys[0]).begins_with("beam:"), "%s has part keys" % fname)
+
+
+## Per-part state on the builder (A1): every drawn part has its web key, a
+## part can be hidden or offset by key, and the state survives a fold.
+func _test_builder_part_state() -> void:
+	var builder := LinkageStructureBuilder.new()
+	root.add_child(builder)
+	var p := _default_params()
+	p.show_bolts = true
+	builder.set_params(p)
+	var keys := builder.part_keys()
+	var seen := {}
+	var dup := false
+	for k in keys:
+		if seen.has(k):
+			dup = true
+		seen[k] = true
+	_check(keys.size() > 0 and not dup, "builder part keys unique (%d)" % keys.size())
+	# Same keys the collector gives for the same solve (beams + brackets).
+	var frame := builder.last_frame()
+	var b0 := LinkagePartKeys.part_key((frame["beams"] as Array)[0], "beam")
+	_check(builder.instance_of(b0) == {"mm": "Beams", "index": 0}, "beam 0 found by key")
+	var washers_mm := builder.get_node_or_null("Washers") as MultiMeshInstance3D
+	var n_w := (frame.get("washers", []) as Array).size()
+	_check(n_w > 0 and washers_mm != null and washers_mm.multimesh.instance_count == n_w,
+		"washers drawn with the bolts (%d)" % n_w)
+	var wk := LinkagePartKeys.part_key((frame["washers"] as Array)[0], "washer") if n_w > 0 else ""
+	_check(not wk.is_empty() and builder.instance_of(wk).get("mm", "") == "Washers", "washer found by key")
+	var bolt_key := LinkagePartKeys.part_key((frame["bolts"] as Array)[0], "bolt")
+	_check(builder.instance_of(bolt_key).get("mm", "") == "Bolts", "bolt found by key")
+
+	# State composition (the transform write itself is not readable headless).
+	var t := Transform3D(Basis().scaled(Vector3(2, 3, 4)), Vector3(1, 2, 3))
+	var hidden := LinkageStructureBuilder._apply_part_state_to(t, {"visible": false})
+	_check(hidden.basis.get_scale().length() < 1e-6 and hidden.origin == t.origin, "hidden = zero scale in place")
+	var moved := LinkageStructureBuilder._apply_part_state_to(t,
+		{"visible": true, "offset": Transform3D(Basis(), Vector3(0, 1, 0))})
+	_v3eq(moved.origin, Vector3(1, 3, 3), 1e-6, "offset translates the seated part")
+	_check(moved.basis.is_equal_approx(t.basis), "offset keeps the part's basis")
+	_check(LinkageStructureBuilder._apply_part_state_to(t, {}) == t, "no state = seated")
+
+	builder.set_part_state(b0, {"visible": false})
+	_check(not bool(builder.part_state(b0).get("visible", true)), "state stored by key")
+	builder.set_fold_angle(deg_to_rad(110.0))
+	_check(not bool(builder.part_state(b0).get("visible", true)), "state survives a fold")
+	_check(builder.instance_of(b0).get("mm", "") == "Beams", "keys stable across a fold")
+	builder.set_part_state(b0, {})
+	_check(builder.part_state(b0).is_empty(), "empty state reseats")
+	builder.set_part_states({b0: {"visible": false}, bolt_key: {"visible": false}})
+	builder.clear_part_states()
+	_check(builder.part_state(bolt_key).is_empty(), "clear_part_states")
+	builder.queue_free()
+
+
+## Bolt holes per beam (getBeamBoltIntersections) and the reciprocal support
+## bolts' geometry, both == JS at the deployed pose (LINKAGE_PARITY.md A2).
+func _test_beam_holes_parity() -> void:
+	for id in LL_PRESETS:
+		var fname: String = (id as String).trim_prefix("ll_")
+		var fx = _read_json(PARITY_DIR + fname + ".json")
+		var pr = _read_json("res://core/linkage/presets/%s.json" % id)
+		if not (fx is Dictionary) or not (pr is Dictionary):
+			continue
+		var p := LinkageParams.new()
+		p.from_config(pr)
+		var fold := deg_to_rad(float((fx as Dictionary)["deployedDeg"]))
+		var data := LinkagePartKeys.part_data(p, fold, false)
+		var drill := LinkageBeamHoles.drill_solve(p, fold)
+		var by_key := {}
+		for b in data["beams"]:
+			by_key[LinkagePartKeys.part_key(b, "beam")] = b
+		var bad: Array = []
+		var compared := 0
+		var holes_total := 0
+		for entry in (fx as Dictionary)["holes"]:
+			var key := str(entry["key"])
+			if key.begins_with("beam:floor-"):
+				continue   # floor beams: A4
+			if not by_key.has(key):
+				bad.append("%s: no such beam" % key)
+				continue
+			var mine := LinkageBeamHoles.intersections(by_key[key], drill["bolts"])
+			var theirs: Array = entry["holes"]
+			compared += 1
+			holes_total += theirs.size()
+			if mine.size() != theirs.size():
+				bad.append("%s: %d holes vs %d" % [key, mine.size(), theirs.size()])
+				continue
+			for i in theirs.size():
+				var a: Dictionary = mine[i]
+				var t: Dictionary = theirs[i]
+				# 1/32 in along the beam: a crossing of two nearly collinear
+				# reciprocal beams is ill-conditioned, and float32 beam endpoints
+				# move it ~0.02 in (stellarator s4 x s9). The generator merges
+				# holes at 1/16 in, so this cannot change a drilled pattern.
+				if str(a["through"]) != str(t["through"]) \
+						or absf(float(a["pos_l"]) - float(t["posL"])) > 1.0 / 32.0 \
+						or absf(float(a["pos_w"]) - float(t["posW"])) > 2e-3 \
+						or absf(float(a["pos_t"]) - float(t["posT"])) > 2e-3 \
+						or absf(float(a["radius"]) - float(t["radius"])) > 1e-4:
+					bad.append("%s hole %d: %s vs %s" % [key, i, str(a), str(t)])
+					break
+		_check(bad.is_empty() and compared > 0,
+			"%s holes == JS (%d beams, %d holes): %s" % [fname, compared, holes_total, str(bad.slice(0, 4))])
+
+		# Reciprocal support bolts: same keys, same places. JS recentres the
+		# ring on the origin (shiftGeometryXZ) and the game does not, so
+		# positions compare after the shift that maps beam 0's p1 onto JS's.
+		# A radial array's first copy is also rotated into its slot: keys only.
+		var radial := bool((((pr as Dictionary).get("mode", {}) as Dictionary).get("radialArray", {}) as Dictionary).get("enabled", false))
+		var an: Array = (fx as Dictionary)["anchor"]
+		var shift := Vector3(an[0], an[1], an[2]) - ((data["beams"] as Array)[0]["p1"] as Vector3)
+		var mine_rcp := {}
+		for b in drill["bolts"]:
+			var bt := str(b["bolt_type"])
+			if bt == "rcp-ring" or bt == "rcp-cross":
+				mine_rcp[LinkagePartKeys.part_key(b, "bolt")] = b
+		var rcp_bad: Array = []
+		var js_rcp: Array = []
+		for e in (fx as Dictionary).get("rcpBolts", []):
+			js_rcp.append(e)
+		for e in js_rcp:
+			var k := str(e["key"])
+			if not mine_rcp.has(k):
+				rcp_bad.append(k + " missing")
+				continue
+			var c: Array = e["center"]
+			if not radial and ((mine_rcp[k]["center"] as Vector3) + shift).distance_to(Vector3(c[0], c[1], c[2])) > 1.0 / 32.0:
+				rcp_bad.append("%s at %s vs %s" % [k, str(mine_rcp[k]["center"]), str(c)])
+		_check(rcp_bad.is_empty() and mine_rcp.size() == js_rcp.size(),
+			"%s rcp bolts == JS (%d): %s" % [fname, js_rcp.size(), str(rcp_bad.slice(0, 4))])
+
+
+## Part keys a later parity phase will produce; listed so a gap stays visible.
+## Remove a prefix here when its port lands.
+## Keys not compared yet (every A4 part is compared since the coverings port).
+const PARITY_NOT_YET := {}
+
+
+static func _parity_excluded(key: String, radial: bool) -> bool:
+	for prefix in PARITY_NOT_YET:
+		if key.begins_with(prefix):
+			return true
+	return false
+
+
+static func _count_keys(keys: Array) -> Dictionary:
+	var out := {}
+	for k in keys:
+		out[k] = int(out.get(k, 0)) + 1
+	return out
+
+
+## Multiset difference report: "missing" are JS keys the game lacks, "extra"
+## the reverse.
+static func _key_diff(js: Array, game: Array) -> Dictionary:
+	var a := _count_keys(js)
+	var b := _count_keys(game)
+	var missing: Array = []
+	var extra: Array = []
+	for k in a:
+		for i in maxi(0, int(a[k]) - int(b.get(k, 0))):
+			missing.append(k)
+	for k in b:
+		for i in maxi(0, int(b[k]) - int(a.get(k, 0))):
+			extra.append(k)
+	missing.sort()
+	extra.sort()
+	return {"missing": missing, "extra": extra}
+
+
+## Every part the web app keys at the deployed pose must exist in the game
+## with the same key, and nothing else (LINKAGE_PARITY.md A1). Also the
+## joint keys, which tie a simple bolt to the hardware placement replacing it.
+func _test_part_keys_parity() -> void:
+	for id in LL_PRESETS:
+		var fname: String = (id as String).trim_prefix("ll_")
+		var fx = _read_json(PARITY_DIR + fname + ".json")
+		var pr = _read_json("res://core/linkage/presets/%s.json" % id)
+		if not (fx is Dictionary) or not (pr is Dictionary):
+			_check(false, "%s fixture + preset readable" % fname)
+			continue
+		var p := LinkageParams.new()
+		p.from_config(pr)
+		var radial := bool((((pr as Dictionary).get("mode", {}) as Dictionary).get("radialArray", {}) as Dictionary).get("enabled", false))
+		var dep: Dictionary = (fx as Dictionary)["deployed"]
+		var js_keys: Array = []
+		var js_joints: Array = []
+		var all_keys: Array = (dep["parts"] as Dictionary)["keys"]
+		var all_joints: Array = (dep["parts"] as Dictionary)["joints"]
+		for i in all_keys.size():
+			if _parity_excluded(str(all_keys[i]), radial):
+				continue
+			js_keys.append(str(all_keys[i]))
+			if all_joints[i] != null:
+				js_joints.append(str(all_joints[i]))
+		var data := LinkagePartKeys.part_data(p, deg_to_rad(float((fx as Dictionary)["deployedDeg"])))
+		var game_keys: Array = []
+		var game_joints: Array = []
+		for rec in LinkagePartKeys.collect_parts(data):
+			game_keys.append(rec["key"])
+			var jk := LinkagePartKeys.joint_key(rec["obj"], rec["kind"])
+			if not jk.is_empty():
+				game_joints.append(jk)
+		var d := _key_diff(js_keys, game_keys)
+		_check((d["missing"] as Array).is_empty() and (d["extra"] as Array).is_empty(),
+			"%s part keys == JS (%d): missing %s extra %s" % [fname, js_keys.size(),
+				str((d["missing"] as Array).slice(0, 8)), str((d["extra"] as Array).slice(0, 8))])
+		var dj := _key_diff(js_joints, game_joints)
+		_check((dj["missing"] as Array).is_empty() and (dj["extra"] as Array).is_empty(),
+			"%s joint keys == JS: missing %s extra %s" % [fname,
+				str((dj["missing"] as Array).slice(0, 6)), str((dj["extra"] as Array).slice(0, 6))])
+
+
+## The selector algebra, on hand-built parts (no fixture needed).
+func _test_part_key_selectors() -> void:
+	var beam := {"stack_type": "vertical", "module_index": 2, "stack_id": 2, "pattern_id": "B", "layer_index": 1}
+	_check(LinkagePartKeys.part_key(beam, "beam") == "beam:vertical:a0:m2:s2:B:L1", "beam key format")
+	_check(LinkagePartKeys.part_kind(beam) == "beam", "beam kind detected")
+	var bolt := {"bolt_type": "vstack", "bolt_sub_type": "inner", "module_index": 0, "ring": "top", "role": "inner", "cap": true}
+	_check(LinkagePartKeys.part_key(bolt, "bolt") == "bolt:vstack:a0:m0:top:inner:cap", "cap bolt key")
+	_check(LinkagePartKeys.joint_key(bolt, "bolt") == "joint:a0:m0:top:inner:cap", "bolt joint key")
+	var br := {"pos": Vector3.ZERO, "hole_distance": 1.5, "module_index": 0, "is_bottom": false, "pivot_role": "inner", "cap": true}
+	_check(LinkagePartKeys.joint_key(br, "bracket") == "joint:a0:m0:top:inner:cap",
+		"a bracket and its bolt share the joint")
+	var pl := {"assembly_id": "innerVBeam", "module_index": 0, "ring": "top", "cap": true}
+	_check(LinkagePartKeys.joint_key(pl, "placement") == "joint:a0:m0:top:inner:cap",
+		"the placement replacing them shares it too")
+	# Selectors exactly as LinkageLab saves them (JSON numbers are floats).
+	_check(LinkagePartKeys.match_selector(beam, {"kind": "beam", "stackType": "vertical", "layerIndex": 1.0}), "float selector matches int field")
+	_check(not LinkagePartKeys.match_selector(beam, {"kind": "beam", "layerIndex": 0.0}), "wrong layer refused")
+	_check(LinkagePartKeys.match_selector(beam, {"kind": "beam", "moduleIndex": {"min": 1, "max": 3}}), "range selector")
+	_check(LinkagePartKeys.match_selector(beam, {"kind": "beam", "moduleIndex": [5.0, 2.0]}), "array selector")
+	_check(LinkagePartKeys.match_selector(beam, {"kind": "*", "patternId": "*"}), "wildcards")
+	_check(LinkagePartKeys.match_selector(bolt, {"kind": "joint", "moduleIndex": 0, "ring": "top", "role": "inner", "cap": true}), "joint selector on a bolt")
+	_check(LinkagePartKeys.match_selector(pl, {"kind": "joint", "ring": "top", "cap": true}), "joint selector on a placement")
+	_check(not LinkagePartKeys.match_selector(pl, {"kind": "joint", "cap": false}), "joint selector cap mismatch")
+	_check(LinkagePartKeys.match_selector(beam, {"key": "beam:vertical:a0:m2:s2:B:L1"}), "key selector")
+	var exact := LinkagePartKeys.selector_for_part(bolt, "bolt")
+	_check(LinkagePartKeys.match_selector(bolt, exact), "exact selector matches its part")
+	_check(not LinkagePartKeys.match_selector(bolt.merged({"ring": "bottom"}, true), exact), "exact selector is exact")
+	var grp := LinkagePartKeys.group_selector_for_part(beam, "beam")
+	_check(LinkagePartKeys.match_selector(beam.merged({"layer_index": 0}, true), grp), "group selector spans layers")
+	_check(LinkagePartKeys.selector_label({"kind": "beam", "stackType": "vertical", "moduleIndex": 2}) == "V-beam · module 3",
+		"selector label: %s" % LinkagePartKeys.selector_label({"kind": "beam", "stackType": "vertical", "moduleIndex": 2}))
+	_check(LinkagePartKeys.describe_part(bolt, "bolt") == "V-stack bolt (top inner) (cap), module 1",
+		"describe: %s" % LinkagePartKeys.describe_part(bolt, "bolt"))
+	# Resolution over a real solve.
+	var p := _default_params()
+	p.show_bolts = true
+	var data := LinkagePartKeys.part_data(p, p.fold_angle)
+	var res := LinkagePartKeys.resolve_targets(data, [{"kind": "beam", "stackType": "horizontal-top", "moduleIndex": 3}])
+	_check((res["beams"] as Array).size() == p.h_stack_count, "resolve: one module's top stack (%d)" % (res["beams"] as Array).size())
+	var b := LinkagePartKeys.parts_bounds(res["items"])
+	_check(not b.is_empty() and float(b["radius"]) > 1.0, "bounds of resolved parts")
+	var keys := {}
+	var dup := false
+	for rec in LinkagePartKeys.collect_parts(data):
+		if keys.has(rec["key"]):
+			dup = true
+		keys[rec["key"]] = true
+	_check(not dup, "every part key unique on the default design")
 
 
 # ---------------------------------------------------------------------------

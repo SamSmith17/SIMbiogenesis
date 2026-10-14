@@ -175,11 +175,47 @@ func _process(delta: float) -> void:
 	if _poll <= 0.0:
 		_poll = 0.5
 		_update_lit()
+	_update_sound()
 	var fx := str(fields.get("effect", "solid"))
 	if fx != "solid" and _lit and _light_node != null:
-		_light_node.light_color = LedEffects.color_at(fields, 0, 1, fx_now(), _base_color)
+		_light_node.light_color = LedEffects.color_at(fields, 0, 1, effect_time(), _base_color)
 		if _bulb_mat != null and _bulb.visible:
 			_bulb_mat.emission = _light_node.light_color
+
+
+# --- sound reactive (StageBeat) ----------------------------------------------
+## The brightness multiplier the music gives this light right now (1 = none),
+## and the music itself ({} = silence or not reactive). Movers read both.
+var sound_level := 1.0
+var _sound_beat: Dictionary = {}
+var _sounding := false
+
+
+func _update_sound() -> void:
+	if not (_lit and bool(fields.get("sound_reactive", false))) or _light_node == null:
+		_sound_beat = {}
+		if _sounding:
+			_sounding = false
+			sound_level = 1.0
+			_apply_fields()
+		return
+	_sound_beat = StageBeat.at(global_position, false)
+	var mode := str(fields.get("sound_mode", "pulse"))
+	sound_level = 1.0 if mode == "beat" else \
+		StageBeat.light_level(_sound_beat, float(fields.get("sound_depth", 0.8)))
+	_sounding = true
+	var e := float(fields.get("energy", 1.0))
+	_light_node.light_energy = e * sound_level
+	if _bulb_mat != null:
+		_bulb_mat.emission_energy_multiplier = 3.0 * e * sound_level
+
+
+## The effect clock: the shared light clock, or — sound reactive in a "beat"
+## mode, with music in earshot — one that moves with the music's tempo.
+func effect_time() -> float:
+	if not _sound_beat.is_empty() and str(fields.get("sound_mode", "pulse")) != "pulse":
+		return StageBeat.light_time(_sound_beat)
+	return fx_now()
 
 
 func _update_lit() -> void:
@@ -194,11 +230,11 @@ func _update_lit() -> void:
 ## The shared effect clock (PlacedLightClock) — every J light reads the same
 ## one, so copies chase and sweep in step.
 func fx_now() -> float:
-	return PlacedLightClock.now(_main, bool(fields.get("fx_pause_with_sim", false)))
+	return PlacedLightClock.now(_main)
 
 
 func _sim_paused() -> bool:
-	return _main != null and "time_scale" in _main and absf(float(_main.get("time_scale"))) < 1e-9
+	return SimFxRate.is_paused(_main)
 
 
 func _sync_gizmo() -> void:

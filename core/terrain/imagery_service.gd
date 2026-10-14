@@ -36,6 +36,11 @@ const RETRY_BACKOFF := 3.0
 const MAX_RETRIES := 4
 
 var _http: HTTPRequest = null
+## Attribution per layer tag for the mosaic that tag last received (the
+## sources its tiles actually came from — see ImagerySources).
+var _attrib_by_tag: Dictionary = {}
+## BC7 compression tasks in flight (key → WorkerThreadPool task id).
+var _hq_tasks: Dictionary = {}
 var _busy: bool = false
 var _job: Dictionary = {}
 ## Pending jobs (base + detail layers serialise through the single HTTPRequest).
@@ -57,7 +62,18 @@ func _ensure_http() -> void:
 
 
 func attribution() -> String:
-	return ATTRIBUTION
+	var extra: Array = []
+	for a in _attrib_by_tag.values():
+		if str(a) != ATTRIBUTION and not extra.has(a):
+			extra.append(a)
+	if extra.is_empty():
+		return ATTRIBUTION
+	return ATTRIBUTION + " · " + " · ".join(PackedStringArray(extra))
+
+
+## Attribution for one layer ("hyper", "site", …): the sources its tiles came from.
+func attribution_for(tag: String) -> String:
+	return str(_attrib_by_tag.get(tag, ATTRIBUTION))
 
 
 ## Fetch (or load from cache) draped imagery for the square of side
@@ -66,12 +82,22 @@ func attribution() -> String:
 ## `max_zoom` caps the zoom pick (raise it for a small high-res centre patch).
 ## Multiple requests serialise through one HTTPRequest, so base + detail can be
 ## fired together without colliding.
+##
+## `sources` is a per-tile fallback chain of ImagerySources ids (empty = plain
+## ESRI, byte-identical to before): each tile is taken from the first source
+## that holds it. `hq` compresses the GPU copy to BC7 on a worker thread
+## instead of DXT1 — for the sharpest layer, where DXT1's two-colour 4×4
+## blocks read as pixelation at walking height.
 func request_imagery(lat: float, lon: float, half_extent_m: float,
 		target_px: int = 2048, tag: String = "base", max_zoom: int = 17,
-		force_refetch: bool = false) -> void:
+		force_refetch: bool = false, sources: Array = [], hq: bool = false) -> void:
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
+	var chain: Array = sources.duplicate() if not sources.is_empty() else ImagerySources.default_chain()
 	var key := _cache_key(lat, lon, half_extent_m, z)
+	var ck := ImagerySources.chain_key(chain)
+	if not ck.is_empty():
+		key += "_" + ck
 	var cache_path := "%s/%s.png" % [CACHE_DIR, key]
 	if not force_refetch and TerrainCacheSettings.cache_enabled():
 		var img := Image.new()
@@ -86,7 +112,11 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 				loaded = true
 		if loaded:
 			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
-			imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
+			_attrib_by_tag[tag] = ImagerySources.attribution_for(_cached_sources(key, chain))
+			if hq:
+				_emit_hq_async(key, img, tag)
+			else:
+				imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
 			return
 	print("ImageryService: '%s' layer not cached — fetching z%d tiles …" % [tag, z])
 
@@ -111,6 +141,10 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 		"idx": 0,
 		"img": stitched,
 		"retries": 0,
+		"chain": chain,
+		"src_i": 0,
+		"used": {},
+		"hq": hq,
 	})
 	_start_next()
 
@@ -128,7 +162,9 @@ func _fire_tile() -> void:
 	_ensure_http()
 	var tiles: Array = _job["tiles"]
 	var t: Vector2i = tiles[int(_job["idx"])]
-	var url := TILE_URL % [int(_job["z"]), t.y, t.x]
+	var chain: Array = _job.get("chain", ImagerySources.default_chain())
+	var src := str(chain[clampi(int(_job.get("src_i", 0)), 0, chain.size() - 1)])
+	var url := ImagerySources.tile_url(src, int(_job["z"]), t.x, t.y)
 	var err := _http.request(url)
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
@@ -139,24 +175,44 @@ func _on_request_completed(result: int, response_code: int,
 	if _job.is_empty():
 		return
 	if result != HTTPRequest.RESULT_SUCCESS:
+		if _next_source():
+			return
 		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
 		return
 	if response_code == 429 or response_code >= 500:
 		var retries := int(_job.get("retries", 0)) + 1
 		_job["retries"] = retries
 		if retries > MAX_RETRIES:
+			if _next_source():
+				return
 			_fail("rate limited (HTTP %d) after %d retries" % [response_code, MAX_RETRIES])
 			return
 		_after(RETRY_BACKOFF * float(retries), _fire_tile)
 		return
 	if response_code != 200:
+		if _next_source():
+			return
 		_fail("fetch failed (result %d, HTTP %d)" % [result, response_code])
 		return
 	var tile_img := Image.new()
-	# ESRI World Imagery serves JPEG; fall back to PNG just in case.
+	# ESRI World Imagery serves JPEG; ArcGIS image caches mix JPEG and PNG.
 	if tile_img.load_jpg_from_buffer(body) != OK and tile_img.load_png_from_buffer(body) != OK:
+		if _next_source():
+			return
 		_fail("tile decode failed")
 		return
+	# A source that does not hold this tile (an empty cache tile, ESRI's
+	# placeholder): try the next one in the chain. The LAST source's tile is
+	# kept whatever it holds — the whole-mosaic placeholder test in _finish
+	# still rejects a layer that is nothing but placeholders.
+	var chain: Array = _job.get("chain", ImagerySources.default_chain())
+	if int(_job.get("src_i", 0)) < chain.size() - 1 and ImagerySources.is_blank_tile(tile_img):
+		if _next_source():
+			return
+	var used: Dictionary = _job.get("used", {})
+	var src_id := str(chain[clampi(int(_job.get("src_i", 0)), 0, chain.size() - 1)])
+	used[src_id] = int(used.get(src_id, 0)) + 1
+	_job["used"] = used
 	if tile_img.get_format() != Image.FORMAT_RGB8:
 		tile_img.convert(Image.FORMAT_RGB8)
 	var tiles: Array = _job["tiles"]
@@ -169,11 +225,24 @@ func _on_request_completed(result: int, response_code: int,
 
 	_job["idx"] = idx + 1
 	_job["retries"] = 0
+	_job["src_i"] = 0
 	imagery_progress.emit(idx + 1, tiles.size())
 	if idx + 1 < tiles.size():
 		_after(TILE_DELAY, _fire_tile)
 	else:
 		_finish()
+
+
+## Move the current tile on to the next source in the chain; false at the end.
+func _next_source() -> bool:
+	var chain: Array = _job.get("chain", [])
+	var i := int(_job.get("src_i", 0)) + 1
+	if i >= chain.size():
+		return false
+	_job["src_i"] = i
+	_job["retries"] = 0
+	_after(TILE_DELAY, _fire_tile)
+	return true
 
 
 func _after(delay: float, cb: Callable) -> void:
@@ -211,12 +280,69 @@ func _finish() -> void:
 
 	var key := str(_job["key"])
 	var tag := str(_job.get("tag", "base"))
+	var used: Dictionary = _job.get("used", {})
+	var hq := bool(_job.get("hq", false))
 	if TerrainCacheSettings.cache_enabled():
 		region.save_png("%s/%s.png" % [CACHE_DIR, key])
+		if used.size() > 1 or (used.size() == 1 and not used.has("esri")):
+			_save_sources_sidecar(key, used)
+	var used_ids: Array = used.keys()
+	_attrib_by_tag[tag] = ImagerySources.attribution_for(used_ids if not used_ids.is_empty() else ["esri"])
+	if used.size() > 1 or (used.size() == 1 and not used.has("esri")):
+		print("ImageryService: '%s' layer tiles by source %s" % [tag, JSON.stringify(used)])
 	_busy = false
 	_job = {}
-	imagery_ready.emit(key, _make_drape_texture(region), tag)
+	if hq:
+		_emit_hq_async(key, region, tag)
+	else:
+		imagery_ready.emit(key, _make_drape_texture(region), tag)
 	_start_next()
+
+
+## BC7 the GPU copy on a worker thread (about 4 s for a 5k² drape — too long
+## for the main thread), then emit on the main thread. Falls back to DXT1 if
+## BC7 is unavailable on this platform.
+func _emit_hq_async(key: String, img: Image, tag: String) -> void:
+	var work := img.duplicate() as Image
+	var task := func() -> void:
+		if not work.has_mipmaps():
+			work.generate_mipmaps()
+		if work.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
+			work.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
+		_emit_hq_done.call_deferred(key, work, tag)
+	_hq_tasks[key] = WorkerThreadPool.add_task(task, false, "imagery_bc7_%s" % tag)
+
+
+func _emit_hq_done(key: String, img: Image, tag: String) -> void:
+	# Every WorkerThreadPool task must be waited on; an un-waited one crashed
+	# the engine on quit (0xC0000005). The task is at its last line here.
+	if _hq_tasks.has(key):
+		WorkerThreadPool.wait_for_task_completion(int(_hq_tasks[key]))
+		_hq_tasks.erase(key)
+	imagery_ready.emit(key, ImageTexture.create_from_image(img), tag)
+
+
+func _exit_tree() -> void:
+	for id in _hq_tasks.values():
+		WorkerThreadPool.wait_for_task_completion(int(id))
+	_hq_tasks.clear()
+
+
+## The sources a cached mosaic was stitched from (a JSON sidecar beside the
+## PNG); a plain-ESRI cache has none.
+func _cached_sources(key: String, chain: Array) -> Array:
+	var p := "%s/%s.sources.json" % [CACHE_DIR, key]
+	if FileAccess.file_exists(p):
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(p))
+		if parsed is Dictionary and not (parsed as Dictionary).is_empty():
+			return (parsed as Dictionary).keys()
+	return ["esri"] if ImagerySources.chain_key(chain).is_empty() else [str(chain[0])]
+
+
+func _save_sources_sidecar(key: String, used: Dictionary) -> void:
+	var f := FileAccess.open("%s/%s.sources.json" % [CACHE_DIR, key], FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(used))
 
 
 ## Pixel rect inside a tile mosaic covering `bbox` exactly (no centre shift).

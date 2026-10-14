@@ -42,7 +42,7 @@ func _camp(n: int, morale: float, bands: Array, blocked: Dictionary, departures:
 func _test_compute() -> void:
 	var empty := FestivalVibe.compute([])
 	_check("no camps: zero people, score 0, Fuck This band", int(empty["people"]) == 0
-		and float(empty["score"]) == 0.0 and str(empty["label"]) == "Fuck This")
+		and float(empty["score"]) == 0.0 and str(empty["label"]) == NpcMorale.label(0.0))
 	var a := _camp(100, 0.9, [100, 0, 0, 0, 0, 0], {})
 	var b := _camp(20, 0.3, [0, 0, 0, 20, 0, 0], {"thirst": 12, "hygiene": 20}, 3, 0.4)
 	var v := FestivalVibe.compute([a, b], 7)
@@ -72,7 +72,7 @@ func _test_headline() -> void:
 	var v := FestivalVibe.compute([_camp(40, 0.74, [0, 40, 0, 0, 0, 0], {"bladder": 5})], 38)
 	var h := FestivalVibe.headline(v, 0.05)
 	_check("headline carries band, score, arrow and the reasons",
-		h.begins_with("VIBE ● Pretty Good 0.74 ▲") and h.contains("5 blocked on bladder") and h.contains("38 queueing"), h)
+		h.begins_with("VIBE ● %s 0.74 ▲" % NpcMorale.label(0.74)) and h.contains("5 blocked on bladder") and h.contains("38 queueing"), h)
 	_check("flat trend has no arrow", not FestivalVibe.headline(v, 0.0).contains("▲")
 		and not FestivalVibe.headline(v, 0.0).contains("▼"))
 

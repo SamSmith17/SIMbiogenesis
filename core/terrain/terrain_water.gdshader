@@ -38,7 +38,7 @@ void vertex() {
 void fragment() {
 	soi_clip_fragment(v_world_pos);
 	float t = TIME * wave_speed * flow_churn;
-	vec3 n_world = wave_normal(VERTEX.xz, t);
+	vec3 n_world = wave_normal(v_world_pos.xz, t);  // world xz (VERTEX is view space here)
 	NORMAL = normalize((VIEW_MATRIX * vec4(n_world, 0.0)).xyz);
 
 	float ndv = clamp(dot(NORMAL, VIEW), 0.0, 1.0);

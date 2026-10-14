@@ -18,6 +18,9 @@ extends RefCounted
 ##                      cap is real
 ##   circle_t0   abs hours the circle dance began (NAN otherwise)
 ##   label       String
+##   peak        bool   a stage set's closer (its last VenueCrowd.PEAK_H):
+##                      arms go up
+##   cheer       bool   an effigy's last minutes before it comes down
 ##
 ## Pure: a stage reads its programme; an effigy reads the FIRE RECORD the
 ## caller hands in (the bridge looks it up on the tagged prop). Nothing here
@@ -42,6 +45,9 @@ static func resolve(space: Dictionary, hour: float, abs_h: float, fire_rec: Dict
 		pull = STAGE_SET_PULL
 	st["pull"] = pull
 	st["event"] = pull >= EVENT_THRESHOLD
+	st["peak"] = stype == "stage" and bool(st.get("programmed", false)) and bool(st.get("active", false)) \
+		and float(st.get("ends_h", -1.0)) >= 0.0 and float(st.get("ends_h", -1.0)) <= VenueCrowd.PEAK_H
+	st["cheer"] = false
 	st["phase"] = -1
 	st["phase_name"] = ""
 	st["circle_t0"] = NAN
@@ -57,6 +63,19 @@ static func _effigy(space: Dictionary, abs_h: float, fire_rec: Dictionary) -> Di
 		"ends_h": float(ph["ends_in_h"]), "programmed": false,
 		"circle_t0": float(ph["circle_t0"]), "label": "",
 		"safe_r": float(ph.get("safe_r", VenueCrowd.EFFIGY_SAFE_R_M)),
+		# Lit, no flame yet (FireTimeline pre-roll): already the burn's crowd.
+		"preroll": bool(ph.get("preroll", false)),
+		"flame_in_h": float(ph.get("flame_in_h", 0.0)),
+		"cheer": bool(ph.get("cheer", false)),
+		"peak": false,
+		# The burn sequence (VenueCrowd.effigy_phase): gather / flow /
+		# sandmen / burn, whether the fire perimeter holds, and the burn's
+		# identity (turnout and roles are keyed on it).
+		"stage": str(ph.get("stage", "")),
+		"stage_ends_in_h": float(ph.get("stage_ends_in_h", -1.0)),
+		"perimeter": bool(ph.get("perimeter", false)),
+		"flow_t0": float(ph.get("flow_t0", NAN)),
+		"burn_key": str(ph.get("burn_key", "")),
 	}
 	match int(ph["phase"]):
 		VenueCrowd.EffigyPhase.BURNING:
@@ -64,7 +83,15 @@ static func _effigy(space: Dictionary, abs_h: float, fire_rec: Dictionary) -> Di
 			out["pull"] = EFFIGY_BURN_PULL
 			out["event"] = true
 			out["programmed"] = true
-			out["label"] = "The burn"
+			match str(ph.get("stage", "")):
+				VenueCrowd.STAGE_GATHER:
+					out["label"] = "Gathering for the burn"
+				VenueCrowd.STAGE_FLOW:
+					out["label"] = "Fire flow"
+				VenueCrowd.STAGE_SANDMEN:
+					out["label"] = "Sandmen to the line"
+				_:
+					out["label"] = "The burn"
 		VenueCrowd.EffigyPhase.CIRCLING:
 			out["draw"] = 1.0
 			out["pull"] = EFFIGY_BURN_PULL
@@ -73,9 +100,13 @@ static func _effigy(space: Dictionary, abs_h: float, fire_rec: Dictionary) -> Di
 			out["label"] = "Circling the fire"
 		VenueCrowd.EffigyPhase.AFTER:
 			out["draw"] = maxf(base, EFFIGY_AFTER_DRAW)
+			out["pull"] = VenueCrowd.EFFIGY_IDLE_PULL
 			out["label"] = "Embers"
 		_:
-			pass
+			# Unlit: a standing attraction at all hours (VenueCrowd).
+			out["draw"] = maxf(base, VenueCrowd.EFFIGY_IDLE_DRAW)
+			out["pull"] = VenueCrowd.EFFIGY_IDLE_PULL
+			out["label"] = "The effigy"
 	return out
 
 

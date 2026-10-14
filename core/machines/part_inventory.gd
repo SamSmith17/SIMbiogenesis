@@ -22,7 +22,7 @@ static func create_empty() -> PartInventory:
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/inventory_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("inventory", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:

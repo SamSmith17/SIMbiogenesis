@@ -20,7 +20,7 @@ static func defaults() -> Dictionary:
 		# and are not style keys. Height/width are EXACT (mesh AABB-normalized
 		# after build) — a 14 m tree is 14 m, painted or auto-scattered.
 		"pine_albedo_tint": Color(1.0, 1.0, 1.0),
-		"pine_highlight_tint": Color(0.10, 0.20, 0.07),
+		"pine_highlight_tint": Color(0.24, 0.38, 0.14),
 		"pine_height_m": 17.0,
 		"pine_crown_width_m": 7.0,
 		"pine_trunk_diameter_cm": 45.0,
@@ -57,7 +57,10 @@ static func defaults() -> Dictionary:
 		"pine_whorl_band_h": 0.62,
 		"pine_cone_sharpness": 0.42,
 		"pine_canopy_roundness": 0.52,
-		"deciduous_albedo_tint": Color(0.0435791, 0.19921875, 0.075193405),
+		# Untinted (white) like every other family. This used to be a dark green
+		# that the leaf shader multiplied onto leaves ALREADY painted green —
+		# see VegetationCardFactory.tint_multiplier.
+		"deciduous_albedo_tint": Color(1.0, 1.0, 1.0),
 		"deciduous_highlight_tint": Color(0.42, 0.52, 0.16),
 		"deciduous_height_m": 14.0,
 		"deciduous_crown_width_m": 11.0,
@@ -84,7 +87,11 @@ static func defaults() -> Dictionary:
 		"deciduous_leaf_aspect": 1.5,
 		"deciduous_leaf_gap": 0.08,
 		"deciduous_leaf_lump": 0.39,
-		"deciduous_shadow_proxy_enabled": true,
+		# OFF by default: the proxy is a near-black card layer (colour_fade
+		# 0.04) whose only job is casting crown shadows, and vegetation shadows
+		# are off by default — so all it ever did was poke black card tops out
+		# of every deciduous crown (and bake them into the impostor atlas).
+		"deciduous_shadow_proxy_enabled": false,
 		"deciduous_shadow_proxy_scale": 1.06,
 		"deciduous_shadow_proxy_visibility": 0.04,
 		# Camera-based full-detail range for tree families (Overhaul v2 LOD:
@@ -209,7 +216,7 @@ static func defaults() -> Dictionary:
 
 
 static func map_path(lat: float, lon: float) -> String:
-	return "user://maps/vegetation_style_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("vegetation_style", lat, lon)
 
 
 ## Phase 2: resolution + persistence live in VegStyleStore (layered v2 schema,

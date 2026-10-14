@@ -14,6 +14,11 @@ extends RefCounted
 ## delegate-helper convention (ARCHITECTURE.md debt #2).
 
 const PERSIST_INTERVAL_H := 0.5   # snapshot into specs.pop_state at most 2x/sim-hour
+## At most this many habitats persist in one tick. Every camp started on the
+## same tick, so without a budget ~35 camps snapshotted, JSON-encoded and
+## deep-copied their specs in ONE frame every 0.5 sim-h — every 4 s at 450x.
+## Each camp's interval is also jittered (0.75..1.25x) so they drift apart.
+const PERSIST_PER_TICK := 4
 
 var _engines: Dictionary = {}          # item_id -> NpcPopulationEngine
 ## The LIGHT tier (festival scale): one CrowdCohort per camp that is not in
@@ -52,6 +57,7 @@ var _nav_grid: NpcNavGrid = null
 var _nav_query: NpcNavQuery = null
 var _nav_fp := ""
 var _nav_queries_this_tick := 0
+var _nav_keyed_misses_this_tick := 0
 var _model_item_cache: Dictionary = {}   # item_id -> item (for nav anchors)
 var _nav_rev := 0            # bumped by callers when geometry moves
 ## Desire lines (Tier 3e): where feet actually wear paths in.
@@ -68,9 +74,22 @@ const DESIRE_TEX_INTERVAL_S := 0.5
 ## Cold A* queries allowed per tick. Cache hits are unlimited — a site has ~10
 ## tagged spaces, so after the first day almost every trip is a hit.
 const MAX_QUERIES_PER_TICK := 2
+## A* searches for KEYED (space-pair) routes per tick. These used to bypass the
+## budget entirely, so a crowd of hundreds warming the cache — or the burn
+## crowd all moving at once — ran unbounded searches in one frame. A refused
+## miss walks the straight-line fallback (round any fire) and the next tick
+## tries again; hits are free.
+const MAX_KEYED_MISSES_PER_TICK := 24
 ## Terrain sampling is the expensive part of the bake, and on scenes with no
 ## TerrainLoader every sample is a raycast. Keep the slice conservative.
 const NAV_CELLS_PER_TICK := 1200
+## The nav bake is TIME-budgeted, per tick AND per rendered frame
+## (service_frame). A fixed 1200 cells per 2 Hz tick baked a festival-sized
+## 640k-cell grid in ~4.4 minutes — the whole time people walked straight
+## lines through tents — and still landed as one lump per tick.
+const NAV_BAKE_CHUNK := 150
+const NAV_TICK_BUDGET_US := 2000
+const NAV_FRAME_BUDGET_US := 1500
 ## Region centre/extent are snapped to this before hashing, so a space moving
 ## a few centimetres does not throw away a finished bake.
 const NAV_REGION_SNAP_M := 5.0
@@ -85,6 +104,15 @@ const SURFACE_MIN_CLEARANCE_M := 1.6
 var _venue_states: Dictionary = {}
 var _venue_fronts: Dictionary = {}
 var _event_active := false
+## The burn on now (its identity for turnout — VenueCrowd.attends), "" = none.
+var _burn_key := ""
+## Burn roles per effigy space: {key, performers: [ids], sandmen: {id: {post,
+## face, state ("post" | "redirect"), since}}, handled: {id: abs_h}}.
+var _burns: Dictionary = {}
+## A sandman holds a redirect this long (sim hours) before kneeling again.
+const REDIRECT_HOLD_H := 0.012
+## A person turned back is not chased again for this long.
+const REDIRECT_COOLDOWN_H := 0.03
 ## sid -> "phase|active" last tick, so a phase change wakes the people there.
 var _venue_phase_keys: Dictionary = {}
 var _event_was := false
@@ -107,7 +135,81 @@ var _last_region: Dictionary = {}
 ## status_line()'s string building. At 24 agents and 60 fps that is ~1,440
 ## dictionaries and ~2,900 transient strings per second, all discarded.
 var _dots_cache: Array = []
+## prop_id -> {node: instance id, size: {height_m, footprint_r_m}} (unlit effigies)
+var _effigy_sizes: Dictionary = {}
+var _persist_budget := PERSIST_PER_TICK
+## Light camps waiting for their slice of a frame (see _drain_light_queue).
+## Ticking ~37 camps in the one tick frame was the 15-18 ms crowd_sim spike.
+var _light_queue: Array = []
+var _light_queued: Dictionary = {}
+var _light_ctx: Dictionary = {}
+var _defer_light := false
+const LIGHT_FRAME_BUDGET_US := 2500
+## Set by the view each tick: is a desire-line overlay (Site Plan or 3D) on?
+var desire_texture_wanted := false
+## Camp beds per home point, keyed by the same prop/camp revision the sleep
+## spots use: _home_beds rebuilt every camp's shelters and scanned every placed
+## prop for EVERY light camp on EVERY tick (camps x shelters).
+var _home_beds_cache: Dictionary = {}
+var _home_beds_rev := -1
 var _dots_cache_valid := false
+var _dots_full: Array = []
+var _dots_full_valid := false
+var _dots_full_gen := -1
+## Weather comfort (NpcComfort): this tick's pulls, whether hard rain is on
+## (its onset wakes the site), and the shade / warmth spot lists the tiers'
+## `comfort_spot` reads — rebuilt when props, camps or lit pits change.
+var _comfort: Dictionary = {}
+## Harness / testing: when non-empty, used INSTEAD of the weather's pulls
+## ({heat, cold, rain, night}).
+var comfort_override: Dictionary = {}
+var _rain_on := false
+var _comfort_rev := -1
+var _comfort_built_h := -INF
+var _shade_spots: Array = []            # {pos, yaw, size}
+var _warm_spots: Array = []             # {pos, r}
+var _shade_grid: Dictionary = {}
+var _warm_grid: Dictionary = {}
+const COMFORT_REACH_M := 220.0
+const COMFORT_CHOICES := 4
+const COMFORT_CELL_M := 100.0
+const COMFORT_REFRESH_H := 1.0
+## Rain this hard (as a pull share) counts as "it is pouring" for the wake.
+const RAIN_WAKE_PULL := 0.25
+## Firepits: prop id -> lit (FirepitBuilder.lit_for, the same rule the visual uses).
+var _firepit_lit: Dictionary = {}
+var _firepit_pos: Dictionary = {}
+## A pit that is not burning draws a fraction of a fire circle's crowd. Every
+## BURNING fire circle pulls by its heat (NpcComfort.fire_warmth x this; never
+## an EVENT — that stays the burn's).
+const UNLIT_PIT_DRAW := 0.35
+const FIRE_HEAT_PULL := 0.8
+## Fire circle id -> "lit|music" last tick (a change re-poses its crowd).
+var _fire_keys: Dictionary = {}
+## Prop geometry per prop id: {node, poly, r, centre, deck} (deck measured
+## lazily, stages only). Re-measured when the prop is rebuilt (new node).
+var _prop_geom: Dictionary = {}
+var _prop_nodes: Dictionary = {}
+var _prop_nodes_h := NAN
+## DJs: stage space id -> {id, key, cast_h}. One person per set, cast DJ_LEAD_H
+## before it starts; re-cast at most every DJ_RECAST_H (so a DJ who left the
+## decks for the toilet is not dragged back mid-visit).
+var _djs: Dictionary = {}
+const DJ_LEAD_H := 0.25
+const DJ_RECAST_H := 0.5
+## PEAK EXPERIENCE (FUCK YES!): the field (who is peaking — the authority
+## for both tiers), its score file, the last step's time, and the burst
+## accumulator for the settlement log (one line per PEAK_LOG_H, not per onset).
+var peaks := PeakField.new()
+var _peak_path := ""
+var _peak_loaded := false
+var _peak_prev_h := NAN
+var _peak_save_due_ms := 0
+var _peak_log_n := 0
+var _peak_log_venue: Dictionary = {}
+var _peak_log_h := -INF
+const PEAK_SAVE_DEBOUNCE_MS := 4000
+const PEAK_LOG_H := 0.25
 ## Display prefs are statics with no signal (see NpcDisplayPrefs.generation);
 ## color_for_agent reads colors_enabled(), so a mid-session tint toggle has to
 ## invalidate the cache or it keeps serving the old colors.
@@ -121,7 +223,11 @@ func tick(model, flow_engine, main: Node) -> void:
 		return
 	if not main.has_method("get_absolute_hours"):
 		return
+	# The ambient path SPREADS the light camps over the following frames
+	# (service_frame); tick_at called directly (the challenge bake) does not.
+	_defer_light = true
 	tick_at(model, flow_engine, main, float(main.call("get_absolute_hours")))
+	_defer_light = false
 
 
 ## Same step at an EXPLICIT timestamp — the challenge bake engine advances the
@@ -130,6 +236,16 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	if model == null or flow_engine == null or main == null:
 		return
 	_last_abs_h = abs_h
+	_persist_budget = PERSIST_PER_TICK
+	# Camps left over from the last round are ticked NOW: a light camp may lag
+	# by a frame or two, never by a whole round. A direct tick_at (the
+	# challenge bake, on its own cursor) drops the queue instead — those camps
+	# are about to be ticked synchronously at the bake's time.
+	if _defer_light:
+		_drain_light_queue(-1)
+	else:
+		_light_queue.clear()
+		_light_queued.clear()
 	# Agent state is about to move, so last frame's dot payload is stale.
 	_invalidate_dots()
 	# Kept so the Routines panel can persist an edited schedule without being
@@ -144,9 +260,16 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		registry.ignore_capacity = PopTestPrefs.ignore_capacity()
 		registry.refresh_positions(func(space: Dictionary) -> Variant:
 			return registry.resolve_position(space, main))
+	PerfMonitor.begin("npc_venues")
+	_service_firepits(main)
 	_resolve_venues(main, registry, abs_h, hour_of_day)
+	_service_djs(main, registry, abs_h, hour_of_day)
+	_service_burn_roles(main, registry, abs_h)
+	PerfMonitor.end("npc_venues")
 	_resolve_sleep_spots(main, registry)
+	_service_comfort(main, registry, abs_h, hour_of_day)
 	_nav_queries_this_tick = 0
+	_nav_keyed_misses_this_tick = 0
 	var region := _population_region(main, registry)
 	_last_region = region
 	_service_nav(main, registry, region)
@@ -169,7 +292,13 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		habitats.append(d0)
 		camps.append({"id": str(d0.get("id", "")), "home": _home_pos(specs0, main),
 			"count": clampi(int(float(specs0.get("occupants", 10.0))), 1, 5000)})
-	_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h)
+	var ts_mult := 0.0
+	if main != null and "time_scale" in main and NpcDisplayPrefs.speed_shed():
+		ts_mult = absf(float(main.get("time_scale"))) * 3600.0
+	# Settings -> NPCs -> "Simulated in full" (0 = the default budget).
+	var max_full := NpcDisplayPrefs.full_sim() if NpcDisplayPrefs.full_sim() > 0 else CrowdFocus.MAX_FULL_PEOPLE
+	_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h,
+		max_full, ts_mult)
 
 	for item in habitats:
 		var d: Dictionary = item
@@ -178,7 +307,13 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		seen[iid] = true
 		_model_item_cache[iid] = d
 		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT:
-			_tick_light(iid, specs, main, flow_engine, model, registry, abs_h, hour_of_day)
+			if _defer_light:
+				if not _light_queued.has(iid):
+					_light_queued[iid] = true
+					_light_queue.append(iid)
+				_light_ctx = {"main": main, "flow": flow_engine, "model": model, "registry": registry}
+			else:
+				_tick_light(iid, specs, main, flow_engine, model, registry, abs_h, hour_of_day)
 			continue
 		var engine := _ensure_engine(iid, specs, main)
 		# Last flow tick's verdict drives this tick's blocked activities.
@@ -208,9 +343,23 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			"venue_front_of": func(sid: String) -> Dictionary:
 				return _venue_fronts.get(sid, {}),
 			"event_active": _event_active,
+			"burn_key": _burn_key,
+			# SOCIAL blocks (NpcSocial): the camp's conversation circles hang
+			# off its home point and its seed — the SAME two the light tier
+			# reads off the cohort, so both tiers pick the same circles.
+			"camp_home": _home_pos(specs, main),
+			"camp_seed": iid,
+			"time_mult": absf(float(main.get("time_scale"))) * 3600.0 if "time_scale" in main else 0.0,
 			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
 			"bed_spot_of": func(sid: String, k: int) -> Dictionary:
 				return _bed_spot(sid, k),
+			# Weather comfort (NpcComfort): this hour's pulls, the shade /
+			# warmth spot finder, and a person's own bed in this camp.
+			"comfort": _comfort,
+			"comfort_spot": func(kind: String, from: Vector2, aid: String) -> Dictionary:
+				return _comfort_spot(kind, from, aid),
+			"home_bed_of": func(aid: String) -> Variant:
+				return _home_bed_of(main, _home_pos(specs, main), aid),
 			# Fire perimeters a straight-line walk must go round.
 			"no_go": _no_go_circles(),
 			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
@@ -247,7 +396,9 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		var store := _ensure_project_store(iid, specs)
 		store.sync(engine.chore_board)
 		_push_build_progress(store, engine.chore_board, main)
+		PerfMonitor.begin("npc_persist")
 		_maybe_persist(model, iid, engine, abs_h)
+		PerfMonitor.end("npc_persist")
 
 	# Habitats that stopped being pop-driven (toggle off / deleted) fall back
 	# to the classic constant-rate model.
@@ -268,11 +419,186 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			_tiers.erase(iid)
 			_last_persist_h.erase(iid)
 			_last_persist_blob.erase(iid)
+	PerfMonitor.begin("npc_peaks")
+	_service_peaks(main, registry, abs_h)
+	PerfMonitor.end("npc_peaks")
+
+
+# ---------------------------------------------------------------------------
+# Peak experience (FUCK YES!)
+# ---------------------------------------------------------------------------
+
+## Run the PeakField over everyone on site (both tiers, one neighbourhood
+## count), push each person's verdict back to their tier (the glow, the
+## label) and lift peakers' morale; count onsets into the saved score.
+func _service_peaks(main: Node, registry: SpaceRegistry, abs_h: float) -> void:
+	if not _peak_loaded:
+		_peak_loaded = true
+		_peak_path = _peak_score_path(main)
+		peaks.load_from(_peak_path)
+	var chunks: Array = []
+	for iid in _cohorts:
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		var ch := (_cohorts[iid] as CrowdCohort).peak_inputs(abs_h)
+		ch["cohort"] = _cohorts[iid]
+		chunks.append(ch)
+	for iid in _engines:
+		chunks.append((_engines[iid] as NpcPopulationEngine).peak_inputs())
+	if chunks.is_empty():
+		return
+	var boost: Dictionary = {}
+	var labels: Dictionary = {}
+	if registry != null:
+		for sid in _venue_states:
+			var rec := registry.find_by_id(str(sid))
+			var stype := str(rec.get("space_type", ""))
+			boost[sid] = NpcPeak.venue_boost(stype, _venue_states[sid])
+			var lbl := str(rec.get("label", ""))
+			labels[sid] = lbl.trim_prefix(FestivalSeedLayout.LABEL_PREFIX) if not lbl.is_empty() \
+				else SpaceTypes.label(stype)
+	var before := peaks.total
+	peaks.contagion = PopTestPrefs.peak_contagion()
+	peaks.step(abs_h, chunks, boost, labels)
+	var dt := 0.0 if is_nan(_peak_prev_h) else clampf(abs_h - _peak_prev_h, 0.0, 1.0)
+	_peak_prev_h = abs_h
+	for ch in chunks:
+		var c: Dictionary = ch
+		var ids: PackedStringArray = c["ids"]
+		if c.has("cohort"):
+			var co: CrowdCohort = c["cohort"]
+			var idx: PackedInt32Array = c["idx"]
+			for k in ids.size():
+				var since := peaks.since_of(ids[k])
+				co.set_peak(idx[k], since)
+				co.set_buzz(idx[k], peaks.buzz_of(ids[k]), peaks.fed_by(ids[k]))
+				if not is_nan(since) and dt > 0.0:
+					co.lift_morale(idx[k], dt)
+		else:
+			var refs: Array = c["agents"]
+			for k in ids.size():
+				var a: NpcAgent = refs[k]
+				a.peak_since = peaks.since_of(ids[k])
+				a.peak_buzz = peaks.buzz_of(ids[k])
+				a.peak_fed = peaks.fed_by(ids[k])
+				if not is_nan(a.peak_since) and dt > 0.0:
+					a.morale = NpcPeak.lift(a.morale, dt)
+	var onsets := peaks.total - before
+	if onsets > 0:
+		_invalidate_dots()
+		_peak_log_n += onsets
+		for e in peaks.peek_recent(onsets):
+			var v := str((e as Dictionary).get("venue", ""))
+			_peak_log_venue[v] = int(_peak_log_venue.get(v, 0)) + 1
+	if _peak_log_n > 0 and abs_h - _peak_log_h >= PEAK_LOG_H:
+		_flush_peak_log(abs_h)
+	if peaks.take_changed():
+		_peak_save_due_ms = Time.get_ticks_msec() + PEAK_SAVE_DEBOUNCE_MS
+	if _peak_save_due_ms > 0 and Time.get_ticks_msec() >= _peak_save_due_ms:
+		_peak_save_due_ms = 0
+		peaks.save(_peak_path)
+
+
+func _flush_peak_log(abs_h: float) -> void:
+	var top := ""
+	var top_n := 0
+	for v in _peak_log_venue:
+		if int(_peak_log_venue[v]) > top_n and not str(v).is_empty():
+			top_n = int(_peak_log_venue[v])
+			top = str(v)
+	var text := "%d %s hit %s%s" % [_peak_log_n, "person" if _peak_log_n == 1 else "people", NpcPeak.LABEL,
+		(" at " + top) if not top.is_empty() else ""]
+	settlement_log().add("peak", text, abs_h, SettlementLog.INFO, "",
+		{"title": "Peak Experience", "detail": text})
+	_peak_log_n = 0
+	_peak_log_venue = {}
+	_peak_log_h = abs_h
+
+
+## user://maps/peak_experience_<lat>_<lon>.json on a generated map (the
+## coordinate token every per-map file uses), else keyed by the scene.
+func _peak_score_path(main: Node) -> String:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader != null and loader.get("_lat") != null:
+		return WorldPaths.site_file("peak_experience", float(loader.get("_lat")), float(loader.get("_lon")))
+	if main != null and not str(main.scene_file_path).is_empty():
+		return WorldPaths.scene_file("peak_experience", str(main.scene_file_path))
+	return ""
+
+
+## {total, today, now, best} for the score chip and the HUD.
+func peak_score() -> Dictionary:
+	return {"total": peaks.total, "today": peaks.today(_last_abs_h),
+		"now": peaks.peaking_count(), "best": peaks.best}
+
+
+func peaking_count() -> int:
+	return peaks.peaking_count()
+
+
+## Onsets after serial `after`, NOT consumed (the ground ripples), and the
+## latest serial — {serial, events}.
+func peak_events_since(after: int) -> Dictionary:
+	return {"serial": peaks.serial, "events": peaks.events_since(after)}
+
+
+## How many people are more than `frac` of the way to a peak right now.
+func peak_building(frac: float = 0.5) -> int:
+	var n := 0
+	for id in peaks.charge:
+		if peaks.buzz_of(str(id)) >= frac:
+			n += 1
+	return n
+
+
+## Onsets since the last call (the toast drains these).
+func take_peak_events() -> Array:
+	return peaks.take_events()
+
+
+func is_peaking(agent_id: String) -> bool:
+	return peaks.is_peaking(agent_id)
 
 
 # ---------------------------------------------------------------------------
 # Light tier (festival scale)
 # ---------------------------------------------------------------------------
+
+## Tick queued light camps until `budget_us` is spent (-1 = all of them).
+## Each camp is ticked to the clock AS IT IS NOW — the light tier is
+## event-driven, so ticking camp A this frame and camp B the next is exact;
+## demand lands on the flow engine for its next step either way. Returns how
+## many camps were ticked.
+func _drain_light_queue(budget_us: int) -> int:
+	if _light_queue.is_empty() or _light_ctx.is_empty():
+		return 0
+	var main: Node = _light_ctx.get("main")
+	var model = _light_ctx.get("model")
+	if main == null or not is_instance_valid(main) or model == null \
+			or not main.has_method("get_absolute_hours"):
+		_light_queue.clear()
+		_light_queued.clear()
+		return 0
+	var t0 := Time.get_ticks_usec()
+	var n := 0
+	while not _light_queue.is_empty():
+		if budget_us >= 0 and n > 0 and Time.get_ticks_usec() - t0 >= budget_us:
+			break
+		var iid := str(_light_queue.pop_front())
+		_light_queued.erase(iid)
+		var item: Dictionary = model.get_item(iid)
+		if item.is_empty() or str(_tiers.get(iid, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		var abs_h := float(main.call("get_absolute_hours"))
+		if abs_h < _last_abs_h:
+			abs_h = _last_abs_h
+		_tick_light(iid, item.get("specs", {}) as Dictionary, main, _light_ctx.get("flow"),
+			model, _light_ctx.get("registry"), abs_h, fposmod(abs_h, 24.0))
+		n += 1
+	if n > 0:
+		_dots_cache_valid = false
+	return n
+
 
 ## Where the player (camera) is, for the focus policy. Set by the view each
 ## ambient tick; a site that fits the full budget never reads it.
@@ -330,17 +656,23 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		"venue_front_of": func(sid: String) -> Dictionary:
 			return _venue_fronts.get(sid, {}),
 		"event_active": _event_active,
+		"burn_key": _burn_key,
 		# The light tier follows the same routes as the full one.
 		"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
 				to_key: String, lane_seed: int) -> Variant:
 			return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed),
 		"no_go": _no_go_circles(),
+		"comfort": _comfort,
+		"comfort_spot": func(kind: String, from: Vector2, aid: String) -> Dictionary:
+			return _comfort_spot(kind, from, aid),
 	}
 	# Home beds: the shelters of the camp this habitat stands in.
 	var beds := _home_beds(main, cohort.home)
 	if beds.size() > 0 and beds != cohort.home_slots:
 		cohort.home_slots = beds
+	PerfMonitor.begin("crowd_sim")
 	var demand: Dictionary = cohort.tick(abs_h, ctx)
+	PerfMonitor.end("crowd_sim")
 	flow_engine.set_habitat_demand(iid, demand)
 	# What was consumed AT bound venues (a portapotty bank, a water station)
 	# lands on those tanks, not on this camp's habitat.
@@ -350,13 +682,22 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 			for kind in flows[item_id]:
 				flow_engine.add_external_flow(str(item_id), str(kind), float(flows[item_id][kind]))
 	_light_work_h[iid] = float(_light_work_h.get(iid, 0.0)) + cohort.take_work_hours()
+	PerfMonitor.begin("npc_persist")
 	_maybe_persist_light(model, iid, cohort, abs_h)
+	PerfMonitor.end("npc_persist")
 
 
 func _ensure_cohort(iid: String, specs: Dictionary, main: Node, registry: SpaceRegistry) -> CrowdCohort:
 	var count := clampi(int(float(specs.get("occupants", 10.0))), 1, 5000)
 	var cohort: CrowdCohort = _cohorts.get(iid)
 	if cohort != null and int(_configured_count.get(iid, -1)) == count:
+		return cohort
+	if cohort != null and int(_configured_count.get(iid, -1)) > 0:
+		# The headcount moved (the festival population slider): resize IN
+		# PLACE — a rebuild respawned the whole camp at home.
+		cohort.resize(count, registry)
+		_configured_count[iid] = count
+		_invalidate_dots()
 		return cohort
 	var home := _home_pos(specs, main)
 	if _engines.has(iid):
@@ -417,10 +758,8 @@ func _ensure_cohort(iid: String, specs: Dictionary, main: Node, registry: SpaceR
 
 ## The light tier's compact snapshot rides the same specs.pop_state key.
 func _maybe_persist_light(model, iid: String, cohort: CrowdCohort, abs_h: float) -> void:
-	var last := float(_last_persist_h.get(iid, -INF))
-	if absf(abs_h - last) < PERSIST_INTERVAL_H:
+	if not _persist_due(iid, abs_h):
 		return
-	_last_persist_h[iid] = abs_h
 	var snap := cohort.snapshot(abs_h)
 	var blob := JSON.stringify(snap)
 	if str(_last_persist_blob.get(iid, "")) == blob:
@@ -482,6 +821,33 @@ func _ensure_project_store(iid: String, specs: Dictionary) -> SiteProjectStore:
 		store.deserialize(saved as Array)
 	_project_stores[iid] = store
 	return store
+
+
+## A linkage build project as a LinkageBuildSite (labour mode) reads it:
+## {found, state, progress 0..1 (labour-weighted, SiteProject.rollup),
+## present: [{id, pos: Vector2, color}] — the people DOING one of the
+## project's chores within `radius_m` of `center`}. Read-only.
+func linkage_build_status(iid: String, project_id: String, center: Vector2, radius_m: float) -> Dictionary:
+	var store := project_store_for(iid)
+	var project: Dictionary = store.find(project_id) if store != null else {}
+	if project.is_empty():
+		return {"found": false}
+	var board := chore_board_for(iid)
+	var roll: Dictionary = SiteProject.rollup(project, board) if board != null else {}
+	var chores := {}
+	for t in project.get("tasks", []):
+		chores[str((t as Dictionary).get("chore_id", ""))] = true
+	var present: Array = []
+	var engine: NpcPopulationEngine = _engines.get(iid)
+	if engine != null:
+		for a in engine.agents:
+			var ag: NpcAgent = a
+			if ag.state == NpcAgent.State.DOING and chores.has(ag.chore_id) \
+					and ag.pos.distance_to(center) <= radius_m:
+				present.append({"id": ag.id, "pos": ag.pos,
+					"color": NpcPopulationEngine.color_for_agent(ag.id)})
+	return {"found": true, "state": str(project.get("state", "")),
+		"progress": float(roll.get("progress", 0.0)), "present": present}
 
 
 func project_store_for(iid: String) -> SiteProjectStore:
@@ -756,6 +1122,11 @@ func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
 		var builder := _linkage_builder_for(main, str(project.get("prop_id", "")))
 		if builder == null:
 			continue
+		# A labour-mode build site (per-worker timeline) stages the parts itself.
+		var site: Node = builder.get_parent().get_node_or_null("LinkageBuildSite") \
+			if builder.get_parent() != null else null
+		if site != null and site.has_method("owns_visuals") and bool(site.call("owns_visuals")):
+			continue
 		if str(project.get("state", "")) != "active":
 			# Cancelled or finished mid-teardown. set_ghost_alpha swaps in
 			# DUPLICATED materials and only alpha >= 0.999 restores the shared
@@ -809,6 +1180,38 @@ func _linkage_builder_for(main: Node, prop_id: String) -> Node:
 	return null
 
 
+## {full, light}: how many people each tier is simulating right now — the
+## cheap count for HUDs. (agent_dots() builds a ~25-key dict per person; the
+## festival panel used to build all of them twice a second just to count.)
+func population_counts() -> Dictionary:
+	var full := 0
+	var light := 0
+	for iid in _engines:
+		full += (_engines[iid] as NpcPopulationEngine).agents.size()
+	for iid in _cohorts:
+		light += (_cohorts[iid] as CrowdCohort).alive_count()
+	return {"full": full, "light": light}
+
+
+## The FULL-tier dots only — what the 3D host draws avatars for. The host
+## used to read agent_dots() and skip every light entry, so ~700 light-tier
+## dicts (name, status, morale colour, facing…) were built every tick and
+## thrown away; they are now built only when the Site Plan / a card asks.
+func agent_dots_full() -> Array:
+	var gen := NpcDisplayPrefs.generation()
+	if _dots_full_valid and gen == _dots_full_gen:
+		return _dots_full
+	var out: Array = []
+	PerfMonitor.begin("npc_dots")
+	for iid in _engines:
+		out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
+	PerfMonitor.end("npc_dots")
+	_dots_full = out
+	_dots_full_valid = true
+	_dots_full_gen = gen
+	return out
+
+
 ## Site Plan dot payload across all engines (Phase 4 renderer input).
 func agent_dots() -> Array:
 	var gen := NpcDisplayPrefs.generation()
@@ -834,6 +1237,7 @@ func agent_dots() -> Array:
 ## dot would say: a sim step, a roster rebuild, a snapshot restore.
 func _invalidate_dots() -> void:
 	_dots_cache_valid = false
+	_dots_full_valid = false
 
 
 ## Where this person's current chore happens, as world XZ — or null when they
@@ -948,15 +1352,35 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 								TerrainSurfaceQuery.ground_height_at(main, x, z)))
 			if _nav_query == null:
 				_nav_query = NpcNavQuery.new()
-		if _nav_grid != null and not _nav_grid.is_ready():
-			PerfMonitor.begin("npc_nav_bake")
-			if _nav_grid.bake_step(NAV_CELLS_PER_TICK):
-				_nav_query.setup(_nav_grid)
-				# A fresh grid forgets the fire perimeters: stamp them again.
-				for sid in _fire_stamps.keys():
-					var fs: Dictionary = _fire_stamps[sid]
-					_stamp_fire(fs.get("centre", Vector2.ZERO), float(fs.get("r", 0.0)))
-			PerfMonitor.end("npc_nav_bake")
+		_bake_nav_for(NAV_TICK_BUDGET_US)
+
+
+## Per rendered frame (SystemGraphView._process): keep a nav bake moving in
+## small time-boxed slices between ticks.
+func service_frame() -> int:
+	_bake_nav_for(NAV_FRAME_BUDGET_US)
+	PerfMonitor.begin("crowd_sim")
+	var n := _drain_light_queue(LIGHT_FRAME_BUDGET_US)
+	PerfMonitor.end("crowd_sim")
+	return n
+
+
+func _bake_nav_for(budget_us: int) -> void:
+	if _nav_grid == null or _nav_grid.is_ready() or _nav_query == null:
+		return
+	PerfMonitor.begin("npc_nav_bake")
+	var t0 := Time.get_ticks_usec()
+	while true:
+		if _nav_grid.bake_step(NAV_BAKE_CHUNK):
+			_nav_query.setup(_nav_grid)
+			# A fresh grid forgets the fire perimeters: stamp them again.
+			for sid in _fire_stamps.keys():
+				var fs: Dictionary = _fire_stamps[sid]
+				_stamp_fire(fs.get("centre", Vector2.ZERO), float(fs.get("r", 0.0)))
+			break
+		if Time.get_ticks_usec() - t0 >= budget_us:
+			break
+	PerfMonitor.end("npc_nav_bake")
 
 
 # --- desire lines --------------------------------------------------------------
@@ -981,7 +1405,11 @@ func _service_desire(abs_h: float, region: Dictionary) -> void:
 			for _i in mini(day - _desire_day, 14):
 				_desire.roll_day()
 		_desire_day = day
-	_refresh_desire_texture()
+	# The heat raster is a GDScript loop over up to 256^2 cells (a set_pixel
+	# and a log each): build it only while a desire overlay is on. The map
+	# itself keeps accumulating — the walking metrics read it.
+	if desire_texture_wanted:
+		_refresh_desire_texture()
 
 
 ## Rebuild the heat texture at most twice a second, and only when the map has
@@ -1185,7 +1613,15 @@ func _bed_spot(sid: String, k: int) -> Dictionary:
 	var beds: Array = _sleep_spots.get(sid, [])
 	if beds.is_empty():
 		return {}
-	return beds[maxi(k, 0) % beds.size()]
+	var kk := maxi(k, 0)
+	var bed: Dictionary = beds[kk % beds.size()]
+	var round_n := kk / beds.size()
+	if round_n == 0:
+		return bed
+	# More sleepers than beds: they PILE IN beside the bed's owner, inside the
+	# same shelter (a short step across its long axis), not on the ground.
+	var yaw := float(bed.get("yaw", 0.0))
+	return {"pos": (bed["pos"] as Vector2) + SpaceRegistry.pile_offset(round_n, yaw), "yaw": yaw}
 
 
 ## The expanded beds of the camp standing at `home` (the light tier's home
@@ -1195,6 +1631,20 @@ func _home_beds(main: Node, home: Vector2) -> PackedVector2Array:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader == null or not loader.has_method("camp_area_at") or not loader.has_method("camp_shelters_in_polygon"):
 		return out
+	var rev := _prop_revision(main) * 7919 + _camp_revision(main) * 31
+	if rev != _home_beds_rev:
+		_home_beds_rev = rev
+		_home_beds_cache = {}
+	var hkey := "%.2f,%.2f" % [home.x, home.y]
+	if _home_beds_cache.has(hkey):
+		return _home_beds_cache[hkey]
+	out = _home_beds_uncached(loader, home)
+	_home_beds_cache[hkey] = out
+	return out
+
+
+func _home_beds_uncached(loader: Node, home: Vector2) -> PackedVector2Array:
+	var out := PackedVector2Array()
 	var cid := str(loader.call("camp_area_at", home))
 	if cid.is_empty():
 		return out
@@ -1215,18 +1665,23 @@ func _home_beds(main: Node, home: Vector2) -> PackedVector2Array:
 func _apply_fire_perimeter(sid: String, centre: Vector2, st: Dictionary) -> void:
 	var phase := int(st.get("phase", -1))
 	var r := 0.0
-	if phase == VenueCrowd.EffigyPhase.BURNING or phase == VenueCrowd.EffigyPhase.CIRCLING \
-			or phase == VenueCrowd.EffigyPhase.AFTER:
+	# The perimeter holds from the SANDMEN stage (the fire-flow performers
+	# dance inside it before that), through the flame and the circle dance;
+	# the embers keep the pile's own.
+	if bool(st.get("perimeter", false)) or phase == VenueCrowd.EffigyPhase.AFTER:
 		r = float(st.get("safe_r", 0.0))
 	var prev: Dictionary = _fire_stamps.get(sid, {})
 	if absf(float(prev.get("r", 0.0)) - r) < 0.01 and prev.get("centre", Vector2.INF) == centre:
 		return
 	if _nav_grid != null and _nav_grid.is_ready():
 		if not prev.is_empty() and float(prev.get("r", 0.0)) > 0.0:
-			_nav_grid.clear_flags_in_circle(prev.get("centre", centre), float(prev["r"]), NpcNavGrid.F_BLOCKED)
+			_nav_grid.clear_flags_in_circle(prev.get("centre", centre), float(prev["r"]), NpcNavGrid.F_FIRE)
 		_stamp_fire(centre, r)
 		if _nav_query != null:
-			_nav_query.setup(_nav_grid)   # routes through the old ground are stale
+			# Only routes through the old or new circle are stale. The cache
+			# fingerprint does not see flag stamps, so drop them by geometry.
+			var reach := maxf(r, float(prev.get("r", 0.0)))
+			_nav_query.invalidate_near(centre, reach + 1.0)
 	if r > 0.0:
 		_fire_stamps[sid] = {"centre": centre, "r": r}
 	else:
@@ -1244,7 +1699,7 @@ func _no_go_circles() -> Array:
 func _stamp_fire(centre: Vector2, r: float) -> void:
 	if r <= 0.0 or _nav_grid == null or not _nav_grid.is_ready():
 		return
-	_nav_grid.clear_flags_in_circle(centre, r, 0, NpcNavGrid.F_BLOCKED)
+	_nav_grid.clear_flags_in_circle(centre, r, 0, NpcNavGrid.F_FIRE)
 
 
 ## Walkable surfaces ABOVE the ground at a point — deck levels, upper floors.
@@ -1302,10 +1757,15 @@ func _plan_path(from_xz: Vector2, to_xz: Vector2, from_key: String,
 	if not cached and _nav_queries_this_tick >= MAX_QUERIES_PER_TICK:
 		return null
 	PerfMonitor.begin("npc_pathfind")
+	_nav_query.allow_miss = _nav_keyed_misses_this_tick < MAX_KEYED_MISSES_PER_TICK
+	var misses0 := int(_nav_query.stats().get("misses", 0))
 	var path := _nav_query.path_between_spaces(from_key, to_key, from_xz, to_xz, lane_seed)
+	_nav_query.allow_miss = true
 	PerfMonitor.end("npc_pathfind")
 	if not cached:
 		_nav_queries_this_tick += 1
+	elif int(_nav_query.stats().get("misses", 0)) > misses0:
+		_nav_keyed_misses_this_tick += 1
 	return path if path.size() > 0 else null
 
 
@@ -1352,6 +1812,9 @@ func _sample_weather(main: Node, hour_of_day: float) -> Dictionary:
 		"temp_c": float(ws.call("temperature_c", month, day, hour_of_day)),
 		"wind_ms": float(ws.call("sample", "wind_speed_10m", month, day, hour_of_day)),
 		"rain_mmh": float(ws.call("sample", "precipitation", month, day, hour_of_day)),
+		# Global horizontal irradiance — how SUNNY it is (NpcComfort's heat
+		# pull wants shade on a hot sunny day, not a hot overcast one).
+		"ghi_wm2": float(ws.call("sample", "shortwave_radiation", month, day, hour_of_day)),
 	}
 	# Extreme-weather air quality. NpcWeatherGate reads `aqi` and it is the one
 	# driver that follows people indoors, so smoke can stop work in a way rain
@@ -1672,6 +2135,30 @@ func habitat_ids() -> Array:
 	return _engines.keys()
 
 
+## Every simulated habitat's summary, both tiers (the Fun Meter's fallback
+## when the map has no festival camps for SystemGraphView.festival_vibe()).
+func vibe_summaries() -> Array:
+	var out: Array = []
+	var seen := {}
+	for iid in _engines.keys() + _cohorts.keys():
+		if seen.has(iid):
+			continue
+		seen[iid] = true
+		# A light camp's engine is PARKED (its roster is stale): read the
+		# tier that is actually simulating it.
+		var light := str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT
+		var s: Dictionary = {}
+		if light and _cohorts.has(iid):
+			s = (_cohorts[iid] as CrowdCohort).summary()
+		elif _engines.has(iid):
+			s = (_engines[iid] as NpcPopulationEngine).summary()
+		elif _cohorts.has(iid):
+			s = (_cohorts[iid] as CrowdCohort).summary()
+		if not s.is_empty():
+			out.append(s)
+	return out
+
+
 ## Last sampled weather (Routines panel readout).
 func current_weather() -> Dictionary:
 	return _weather_cache
@@ -1760,9 +2247,11 @@ func _resolve_venues(main: Node, registry: SpaceRegistry, abs_h: float, hour: fl
 	_venue_states = {}
 	_venue_fronts = {}
 	_event_active = false
+	_burn_key = ""
 	if registry == null:
 		return
 	var changed: Array = []
+	var evac: Array = []
 	var camps := Vector2.ZERO
 	var n_camps := 0
 	for rec in registry.spaces_of_type("sleep"):
@@ -1782,36 +2271,79 @@ func _resolve_venues(main: Node, registry: SpaceRegistry, abs_h: float, hour: fl
 				if str(tgt.get("kind", "")) == "prop":
 					var prop := PlacedPropService.get_prop_record(main, str(tgt.get("prop_id", "")))
 					var burn: Variant = prop.get("burn", {})
-					if burn is Dictionary:
+					if burn is Dictionary and FireTimeline.is_record(burn):
 						fire_rec = burn
+					else:
+						# Never lit: hand over its SIZE so the idle crowd
+						# already stands outside the radius a burn would need.
+						fire_rec = _effigy_size(main, str(tgt.get("prop_id", "")))
 			var st := NpcVenueState.resolve(space, hour, abs_h, fire_rec)
 			_venue_states[sid] = st
 			if bool(st.get("event", false)):
 				_event_active = true
-			var key := "%d|%s" % [int(st.get("phase", -1)),
-				str(bool(st.get("active", true)) and bool(st.get("programmed", false)))]
+				if str(stype) == "effigy" and _burn_key.is_empty():
+					_burn_key = str(st.get("burn_key", ""))
+			# Shared moments (the effigy's last minutes, a set's closer) are
+			# folded into the key so the crowd's poses update when they begin.
+			var key := "%d|%s|%s|%s" % [int(st.get("phase", -1)),
+				str(bool(st.get("active", true)) and bool(st.get("programmed", false))),
+				str(bool(st.get("cheer", false))), str(bool(st.get("peak", false)))]
 			if _venue_phase_keys.has(sid) and str(_venue_phase_keys[sid]) != key:
 				changed.append(sid)
+				# The effigy was just LIT (its pre-roll began): clear the fall
+				# zone of everyone who is not part of its crowd, right now.
+				if str(stype) == "effigy" and int(st.get("phase", -1)) == VenueCrowd.EffigyPhase.BURNING \
+						and int(str(_venue_phase_keys[sid]).get_slice("|", 0)) != VenueCrowd.EffigyPhase.BURNING:
+					var ec0: Variant = registry.cached_position(sid)
+					if ec0 is Vector2:
+						evac.append({"centre": ec0, "r": float(st.get("safe_r", 0.0)), "sid": sid})
 			_venue_phase_keys[sid] = key
 			if str(stype) == "effigy":
 				var ec: Variant = registry.cached_position(sid)
 				if ec is Vector2:
 					_apply_fire_perimeter(sid, ec, st)
-			if str(stype) == "stage":
-				var centre: Variant = registry.cached_position(sid)
-				if centre is Vector2:
-					var facing := float(space.get("facing_deg", -1.0))
-					var fwd := Vector2(0.0, 1.0)
-					if facing >= 0.0:
-						# Compass degrees, CelestialClock convention: north −Z, east +X.
-						fwd = Vector2(sin(deg_to_rad(facing)), -cos(deg_to_rad(facing)))
-					elif n_camps > 0:
-						fwd = VenueCrowd.stage_facing(centre, camps)
-					var tgt2: Dictionary = space.get("target", {})
-					var poly := PackedVector2Array()
-					if str(tgt2.get("kind", "")) == "area":
-						poly = SpaceRegistry.poly_points(tgt2.get("poly", []) as Array)
-					_venue_fronts[sid] = {"front": VenueCrowd.stage_front(centre, poly, fwd), "fwd": fwd}
+			# A fire circle's HEAT draws people while it burns — the colder
+			# (and the darker) the more. A firepit tagged as one draws a crowd
+			# only while it burns; any other fire circle counts as lit.
+			if str(stype) == "fire_circle":
+				var tgt3: Dictionary = space.get("target", {})
+				var pid3 := str(tgt3.get("prop_id", "")) if str(tgt3.get("kind", "")) == "prop" else ""
+				var lit3 := true
+				if _firepit_lit.has(pid3):
+					lit3 = bool(_firepit_lit[pid3])
+					st["lit"] = lit3
+					if not lit3:
+						st["draw"] = float(st.get("draw", 0.5)) * UNLIT_PIT_DRAW
+						st["label"] = "Cold firepit"
+					else:
+						st["label"] = "Firepit"
+				if lit3:
+					st["pull"] = float(st.get("pull", 0.0)) \
+						+ float(_comfort.get("warmth", 0.0)) * FIRE_HEAT_PULL
+			# Crowd geometry for EVERY venue: its layout (round or facing one
+			# way), footprint radius, and — directional — the front edge and
+			# the way it faces. Stages default to directional.
+			var centre: Variant = registry.cached_position(sid)
+			if centre is Vector2 and str(stype) != "effigy":
+				var lay := VenueCrowd.layout_of(str(stype), str(space.get("layout", "")))
+				var geo := _space_geom(main, space, centre)
+				var entry := {"layout": lay, "r": float(geo.get("r", 0.0)),
+					"gap": float(space.get("crowd_gap_m", -1.0))}
+				if lay == SpaceRegistry.LAYOUT_DIRECTIONAL:
+					entry["fwd"] = _venue_fwd(space, centre, camps, n_camps)
+					entry["front"] = VenueCrowd.stage_front(geo.get("centre", centre),
+						geo.get("poly", PackedVector2Array()), entry["fwd"])
+				_venue_fronts[sid] = entry
+	_stamp_fire_music(registry, changed)
+	for e in evac:
+		var ed: Dictionary = e
+		for iid in _engines:
+			(_engines[iid] as NpcPopulationEngine).evacuate_from(ed["centre"], float(ed["r"]), registry)
+		for iid in _cohorts:
+			(_cohorts[iid] as CrowdCohort).evacuate_from(ed["centre"], float(ed["r"]),
+				str(ed["sid"]), abs_h, registry)
+	if not evac.is_empty():
+		_invalidate_dots()
 	# A phase change re-seats the LIGHT tier now (the full tier re-seats
 	# every step on its own).
 	for sid in changed:
@@ -1823,6 +2355,731 @@ func _resolve_venues(main: Node, registry: SpaceRegistry, abs_h: float, hour: fl
 		for iid in _cohorts:
 			(_cohorts[iid] as CrowdCohort).wake_for_event(abs_h)
 	_event_was = _event_active
+
+
+## Fire circles within earshot of a PLAYING stage (its speakers: the front
+## edge of a directional stage, else its centre) get `music_near` — most of
+## the ring sways to it (VenueCrowd.venue_pose). Any other venue playing its
+## own track (StageMusic) counts too. A change in a fire's lit / music state
+## re-poses its light-tier crowd now (`changed`).
+func _stamp_fire_music(registry: SpaceRegistry, changed: Array) -> void:
+	var sources: Array = []
+	for sid in _venue_states:
+		var rec := registry.find_by_id(str(sid))
+		var stype := str(rec.get("space_type", ""))
+		if stype == "fire_circle" or stype == "effigy" or rec.is_empty():
+			continue
+		var st: Dictionary = _venue_states[sid]
+		var playing := false
+		if stype == "stage":
+			playing = StageMusic.should_play("stage", st)
+		elif not str(rec.get("music", "")).is_empty():
+			playing = StageMusic.should_play(stype, st)
+		if not playing:
+			continue
+		var fr: Dictionary = _venue_fronts.get(sid, {})
+		var at: Variant = fr.get("front", registry.cached_position(str(sid)))
+		if at is Vector2:
+			sources.append(at)
+	for item in registry.spaces_of_type("fire_circle"):
+		var sid2 := str((item as Dictionary).get("id", ""))
+		if not _venue_states.has(sid2):
+			continue
+		var st2: Dictionary = _venue_states[sid2]
+		var pos: Variant = registry.cached_position(sid2)
+		var music := VenueCrowd.fire_lit(st2) and pos is Vector2 and VenueCrowd.music_reaches(pos, sources)
+		st2["music_near"] = music
+		var key := "%s|%s" % [str(VenueCrowd.fire_lit(st2)), str(music)]
+		if _fire_keys.has(sid2) and str(_fire_keys[sid2]) != key and not changed.has(sid2):
+			changed.append(sid2)
+		_fire_keys[sid2] = key
+
+
+## The way a venue FACES (the direction its speakers point), as an XZ unit
+## vector: `facing_deg` when set, else toward the mean of the camps, else
+## south.
+func _venue_fwd(space: Dictionary, centre: Vector2, camps: Vector2, n_camps: int) -> Vector2:
+	var facing := float(space.get("facing_deg", -1.0))
+	if facing >= 0.0:
+		return VenueCrowd.fwd_from_deg(facing)
+	if n_camps > 0:
+		return VenueCrowd.stage_facing(centre, camps)
+	return Vector2(0.0, 1.0)
+
+
+## A space's footprint: {poly (XZ), r (its half-size), centre (the
+## footprint's middle — a prop's origin need not be)} from a prop's live
+## pick AABB or an area's outline; {} for anything else.
+func _space_geom(main: Node, space: Dictionary, centre: Vector2) -> Dictionary:
+	var tgt: Dictionary = space.get("target", {})
+	match str(tgt.get("kind", "")):
+		"prop":
+			return _prop_geometry(main, str(tgt.get("prop_id", "")))
+		"area":
+			var poly := SpaceRegistry.poly_points(tgt.get("poly", []) as Array)
+			var r := 0.0
+			for v in poly:
+				r = maxf(r, (v - centre).length())
+			return {"poly": poly, "r": r, "centre": centre}
+	return {}
+
+
+func _prop_node(main: Node, prop_id: String) -> PlacedProp:
+	if prop_id.is_empty() or main == null:
+		return null
+	# One sweep of the props per tick, not one per question.
+	if _prop_nodes_h != _last_abs_h:
+		_prop_nodes_h = _last_abs_h
+		_prop_nodes = {}
+		var terrain := main.get_node_or_null("Terrain")
+		var root := terrain.get_node_or_null("PlacedProps") if terrain != null else null
+		if root == null:
+			root = main.find_child("PlacedProps", true, false)
+		if root != null:
+			for child in root.get_children():
+				if child is PlacedProp:
+					_prop_nodes[str((child as PlacedProp).prop_id)] = child
+	var n: Variant = _prop_nodes.get(prop_id)
+	return n as PlacedProp if n != null and is_instance_valid(n) else null
+
+
+## {poly, r, centre, node} for a placed prop, from its live pick AABB —
+## cached per prop NODE (a rebuild mints a new node and re-measures).
+func _prop_geometry(main: Node, prop_id: String) -> Dictionary:
+	var node := _prop_node(main, prop_id)
+	if node == null:
+		return {}
+	var cached: Dictionary = _prop_geom.get(prop_id, {})
+	if int(cached.get("node", 0)) == node.get_instance_id():
+		return cached
+	var bb: AABB = node.get_world_pick_aabb()
+	if bb.size.length_squared() < 0.01:
+		return {}
+	var poly := PackedVector2Array([Vector2(bb.position.x, bb.position.z),
+		Vector2(bb.end.x, bb.position.z), Vector2(bb.end.x, bb.end.z), Vector2(bb.position.x, bb.end.z)])
+	var c := bb.get_center()
+	var geo := {"node": node.get_instance_id(), "poly": poly,
+		"r": maxf(bb.size.x, bb.size.z) * 0.5, "centre": Vector2(c.x, c.z), "deck": NAN}
+	_prop_geom[prop_id] = geo
+	return geo
+
+
+## How high a performer stands on a prop (a stage's deck), in metres above
+## the prop's base: the LOWEST upward-facing surface over the footprint's
+## middle that is clear of the ground, taking the top of that deck (a slab's
+## underside and top are both horizontal). -1 when nothing qualifies (a flat
+## prop, or a roof-only structure). Measured once per prop node; meshes whose
+## bounds miss the middle are skipped before their faces are read.
+func _deck_height(main: Node, prop_id: String) -> float:
+	var geo := _prop_geometry(main, prop_id)
+	if geo.is_empty():
+		return -1.0
+	if not is_nan(float(geo.get("deck", NAN))):
+		return float(geo["deck"])
+	var node := _prop_node(main, prop_id)
+	var deck := -1.0
+	if node != null:
+		var c: Vector2 = geo["centre"]
+		for probe in [c, c + Vector2(0.6, 0.0), c - Vector2(0.6, 0.0), c + Vector2(0.0, 0.6), c - Vector2(0.0, 0.6)]:
+			deck = _deck_at(node, probe)
+			if deck >= 0.0:
+				break
+	geo["deck"] = deck
+	return deck
+
+
+static func _deck_at(node: PlacedProp, p: Vector2) -> float:
+	var model := node.get_node_or_null("ModelRoot") as Node3D
+	if model == null:
+		return -1.0
+	var base_y := node.global_position.y
+	var hits: Array = []
+	for n in model.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var xf := mi.global_transform
+		var wb: AABB = xf * mi.mesh.get_aabb()
+		if p.x < wb.position.x or p.x > wb.end.x or p.y < wb.position.z or p.y > wb.end.z:
+			continue
+		var faces := mi.mesh.get_faces()
+		for t in range(0, faces.size() - 2, 3):
+			var a: Vector3 = xf * faces[t]
+			var b: Vector3 = xf * faces[t + 1]
+			var cc: Vector3 = xf * faces[t + 2]
+			var nrm := (b - a).cross(cc - a)
+			var ln := nrm.length()
+			if ln < 1e-9 or absf(nrm.y) / ln < 0.85:
+				continue
+			if not Geometry2D.point_is_inside_triangle(p, Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(cc.x, cc.z)):
+				continue
+			var y := a.y - (nrm.x * (p.x - a.x) + nrm.z * (p.y - a.z)) / nrm.y
+			var h := y - base_y
+			if h > 0.25 and h < 2.6:
+				hits.append(h)
+	if hits.is_empty():
+		return -1.0
+	hits.sort()
+	var low := float(hits[0])
+	var top := low
+	for h in hits:
+		if float(h) <= low + 0.35:
+			top = maxf(top, float(h))
+	return top
+
+
+# --- firepits, weather comfort, DJs ------------------------------------------
+
+## Which placed firepits are burning right now (FirepitBuilder.lit_for — the
+## rule FirepitFire draws by), so a cold pit draws no crowd and a lit one
+## warms people on a cold night.
+func _service_firepits(main: Node) -> void:
+	_firepit_lit = {}
+	_firepit_pos = {}
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader == null or not loader.has_method("placed_prop_records"):
+		return
+	var env := {}
+	for r in loader.call("placed_prop_records"):
+		var rec: Dictionary = r
+		if str(rec.get("model_id", "")) != FirepitBuilder.MODEL_ID or bool(rec.get("packed", false)):
+			continue
+		if env.is_empty():
+			env = FirepitBuilder.env_now(main)
+		var pid := str(rec.get("id", ""))
+		_firepit_lit[pid] = FirepitBuilder.lit_for(rec, env)
+		_firepit_pos[pid] = Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+
+
+## This hour's comfort pulls, the spot lists (when anything pulls), and the
+## onset of hard rain, which sends everyone on ordinary leisure looking for
+## cover NOW rather than at the end of their stint.
+func _service_comfort(main: Node, registry: SpaceRegistry, abs_h: float, hour: float) -> void:
+	_comfort = comfort_override.duplicate() if not comfort_override.is_empty() \
+		else NpcComfort.pulls(_sample_weather(main, hour), hour)
+	var rain_on := float(_comfort.get("rain", 0.0)) >= RAIN_WAKE_PULL
+	if rain_on and not _rain_on:
+		for iid in _engines:
+			(_engines[iid] as NpcPopulationEngine).wake_for_weather()
+		for iid in _cohorts:
+			(_cohorts[iid] as CrowdCohort).wake_for_weather(abs_h, _event_active)
+	_rain_on = rain_on
+	if NpcComfort.is_calm(_comfort):
+		return
+	var lit_n := 0
+	for pid in _firepit_lit:
+		if bool(_firepit_lit[pid]):
+			lit_n += 1
+	var rev := _prop_revision(main) * 7919 + _camp_revision(main) * 31 \
+		+ (registry.spaces.size() if registry != null else 0) * 131 + lit_n * 1000003
+	if rev == _comfort_rev and absf(abs_h - _comfort_built_h) < COMFORT_REFRESH_H:
+		return
+	_comfort_rev = rev
+	_comfort_built_h = abs_h
+	_build_comfort_spots(main, registry)
+
+
+func _build_comfort_spots(main: Node, registry: SpaceRegistry) -> void:
+	_shade_spots = []
+	_warm_spots = []
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader != null and loader.has_method("shade_footprints"):
+		_shade_spots = loader.call("shade_footprints")
+	if registry != null:
+		for item in registry.spaces_of_type("shade"):
+			var space: Dictionary = item
+			var c: Variant = registry.cached_position(str(space.get("id", "")))
+			if not (c is Vector2):
+				continue
+			var geo := _space_geom(main, space, c)
+			var r := maxf(float(geo.get("r", 1.5)), 1.5)
+			_shade_spots.append({"pos": geo.get("centre", c), "yaw": 0.0, "size": Vector3(r * 2.0, 2.5, r * 2.0)})
+		# Fire circles that are not firepits are fires too.
+		for item in registry.spaces_of_type("fire_circle"):
+			var space2: Dictionary = item
+			var tgt: Dictionary = space2.get("target", {})
+			if str(tgt.get("kind", "")) == "prop" and _firepit_lit.has(str(tgt.get("prop_id", ""))):
+				continue
+			var c2: Variant = registry.cached_position(str(space2.get("id", "")))
+			if c2 is Vector2:
+				var geo2 := _space_geom(main, space2, c2)
+				_warm_spots.append({"pos": c2, "r": maxf(float(geo2.get("r", 0.0)) + 1.5, 3.0)})
+	for pid in _firepit_lit:
+		if bool(_firepit_lit[pid]):
+			_warm_spots.append({"pos": _firepit_pos[pid], "r": FirepitBuilder.RING_R_M})
+	_shade_grid = _grid_of(_shade_spots)
+	_warm_grid = _grid_of(_warm_spots)
+
+
+static func _grid_of(spots: Array) -> Dictionary:
+	var g := {}
+	for k in spots.size():
+		var p: Vector2 = (spots[k] as Dictionary)["pos"]
+		var key := Vector2i(int(floor(p.x / COMFORT_CELL_M)), int(floor(p.y / COMFORT_CELL_M)))
+		var arr: Array = g.get(key, [])
+		arr.append(k)
+		g[key] = arr
+	return g
+
+
+## A comfort spot for this person ({pos, face} or {} when there is none in
+## reach): one of the COMFORT_CHOICES nearest spots of that kind to their
+## camp, picked by their FRIEND GROUP's hash so friends go to the same one,
+## then a seat in it (under the shade, or round the fire).
+func _comfort_spot(kind: String, from: Vector2, agent_id: String) -> Dictionary:
+	var warm := kind == NpcComfort.KIND_WARM
+	var spots: Array = _warm_spots if warm else _shade_spots
+	var grid: Dictionary = _warm_grid if warm else _shade_grid
+	if spots.is_empty():
+		return {}
+	var cx := int(floor(from.x / COMFORT_CELL_M))
+	var cz := int(floor(from.y / COMFORT_CELL_M))
+	var span := int(ceil(COMFORT_REACH_M / COMFORT_CELL_M))
+	var near: Array = []
+	for dx in range(-span, span + 1):
+		for dz in range(-span, span + 1):
+			for k in grid.get(Vector2i(cx + dx, cz + dz), []):
+				var p: Vector2 = (spots[int(k)] as Dictionary)["pos"]
+				var d := p.distance_to(from)
+				if d <= COMFORT_REACH_M:
+					near.append([d, int(k)])
+	if near.is_empty():
+		return {}
+	near.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	var n := mini(near.size(), COMFORT_CHOICES)
+	var pick := int(NpcHash.unit01(NpcFriends.key_of(agent_id), "cmfspot") * float(n)) % n
+	var spot: Dictionary = spots[int(near[pick][1])]
+	if warm:
+		return NpcComfort.seat_around(spot["pos"], float(spot.get("r", 2.0)), agent_id)
+	return NpcComfort.seat_under(spot, agent_id)
+
+
+## This person's own bed in the camp at `home` (sheltering / warming up in
+## the tent), or null.
+func _home_bed_of(main: Node, home: Vector2, agent_id: String) -> Variant:
+	var beds := _home_beds(main, home)
+	if beds.is_empty():
+		return null
+	var cut := agent_id.rfind("_npc_")
+	var idx := int(agent_id.substr(cut + 5)) if cut > 0 and agent_id.substr(cut + 5).is_valid_int() else absi(hash(agent_id))
+	return beds[idx % beds.size()]
+
+
+## Cast a DJ for every stage with a set on (or starting within DJ_LEAD_H):
+## one person per set, deterministic (the lowest hash of the set's key over
+## everyone on site), walked to the middle of the stage and stood on its
+## deck facing the way the speakers point. Re-cast at most every DJ_RECAST_H
+## if they wandered off (a toilet run) — never dragged back mid-visit.
+func _service_djs(main: Node, registry: SpaceRegistry, abs_h: float, hour: float) -> void:
+	if registry == null:
+		_djs = {}
+		return
+	var live: Dictionary = {}
+	for item in registry.spaces_of_type("stage"):
+		var space: Dictionary = item
+		var sid := str(space.get("id", ""))
+		var set_now := _set_window(space, hour, abs_h)
+		if set_now.is_empty():
+			continue
+		var centre: Variant = registry.cached_position(sid)
+		if not (centre is Vector2):
+			continue
+		live[sid] = true
+		var geo := _space_geom(main, space, centre)
+		var mid: Vector2 = geo.get("centre", centre)
+		var fr: Dictionary = _venue_fronts.get(sid, {})
+		var fwd: Vector2 = fr.get("fwd", _venue_fwd(space, centre, Vector2.ZERO, 0))
+		var deck := float(space.get("perform_h_m", -1.0))
+		if deck < 0.0:
+			var tgt: Dictionary = space.get("target", {})
+			deck = _deck_height(main, str(tgt.get("prop_id", ""))) if str(tgt.get("kind", "")) == "prop" else 0.0
+		var spot := VenueCrowd.perform_spot(mid, fwd, maxf(deck, 0.0))
+		spot["sid"] = sid
+		spot["label"] = str(space.get("label", "")) if not str(space.get("label", "")).is_empty() \
+			else SpaceTypes.label("stage")
+		var key := "%s|%.2f" % [sid, float(set_now["start_abs"])]
+		var d: Dictionary = _djs.get(sid, {})
+		if str(d.get("key", "")) != key or not _agent_alive(str(d.get("id", ""))):
+			var who := _pick_dj(key)
+			if who.is_empty():
+				continue
+			# A new set (or the clock jumped): the last set's DJ steps down.
+			var prev := str(d.get("id", ""))
+			if not prev.is_empty() and prev != who:
+				_end_dj(prev, abs_h)
+			d = {"id": who, "key": key, "cast_h": -INF}
+			_djs[sid] = d
+		var aid := str(d["id"])
+		if _is_performing(aid):
+			continue
+		# The cooldown is ONLY for a DJ who stepped off for a need (a drink,
+		# the toilet) — they finish it first. Anything else that took them
+		# off the decks (a >6 h catch-up re-planning the camp, the camp
+		# switching tier, a nap) puts them straight back on.
+		if _dj_on_a_need(aid) and abs_h - float(d["cast_h"]) < DJ_RECAST_H:
+			continue
+		if _cast_dj(aid, spot, float(set_now["until_abs"]), abs_h, registry):
+			d["cast_h"] = abs_h
+	for sid in _djs.keys():
+		if not live.has(sid):
+			_end_dj(str((_djs[sid] as Dictionary).get("id", "")), abs_h)
+			_djs.erase(sid)
+
+
+# ---------------------------------------------------------------------------
+# The burn's ROLES: the fire-flow performers and the sandmen
+# ---------------------------------------------------------------------------
+
+## Every tick of a burn (VenueCrowd's stages): cast the FIRE FLOW performers
+## for the flow stage and stand them down after it; from the sandmen stage
+## kneel the SANDMEN round the line and, when anyone crosses it, send the
+## nearest one over to turn them back (REDIRECT_HOLD_H), then back to post.
+## Everything ends when the burn leaves BURNING (the circle dance: everyone,
+## sandmen included, goes round the fire).
+func _service_burn_roles(main: Node, registry: SpaceRegistry, abs_h: float) -> void:
+	if registry == null:
+		return
+	var live := {}
+	for item in registry.spaces_of_type("effigy"):
+		var space: Dictionary = item
+		var sid := str(space.get("id", ""))
+		var st: Dictionary = _venue_states.get(sid, {})
+		var centre: Variant = registry.cached_position(sid)
+		if int(st.get("phase", -1)) != VenueCrowd.EffigyPhase.BURNING or not (centre is Vector2):
+			continue
+		live[sid] = true
+		var key := str(st.get("burn_key", ""))
+		var b: Dictionary = _burns.get(sid, {})
+		if str(b.get("key", "")) != key:
+			_end_burn_roles(b, abs_h)
+			b = {"key": key, "performers": [], "sandmen": {}, "handled": {}}
+			_burns[sid] = b
+		var stage := str(st.get("stage", ""))
+		var safe_r := float(st.get("safe_r", VenueCrowd.EFFIGY_SAFE_R_M))
+		var c: Vector2 = centre
+		# --- fire flow ---------------------------------------------------
+		var perf: Array = b["performers"]
+		if stage == VenueCrowd.STAGE_FLOW:
+			if perf.is_empty():
+				var near := _people_near(c, safe_r + 40.0, {})
+				var n := mini(VenueCrowd.flow_count(near.size()), near.size())
+				near.sort_custom(func(x, y): return NpcHash.unit01(str(x), key + "flow") < NpcHash.unit01(str(y), key + "flow"))
+				var t0 := float(st.get("flow_t0", abs_h))
+				var until := abs_h + maxf(float(st.get("stage_ends_in_h", 0.1)), 0.01)
+				for k in n:
+					var aid := str(near[k])
+					var orbit := VenueCrowd.flow_orbit(c, safe_r, k, n, t0)
+					var p := VenueCrowd.orbit_point(orbit, abs_h)
+					if _cast_dj(aid, {"pos": p, "face": p + VenueCrowd.ccw_tangent(c, p) * 10.0,
+							"role": "flow", "orbit": orbit, "sid": sid}, until, abs_h, registry):
+						perf.append(aid)
+		elif not perf.is_empty():
+			for aid in perf:
+				_end_dj(str(aid), abs_h)
+			b["performers"] = []
+		# --- sandmen -------------------------------------------------------
+		if stage != VenueCrowd.STAGE_SANDMEN and stage != VenueCrowd.STAGE_BURN:
+			continue
+		var sand: Dictionary = b["sandmen"]
+		if sand.is_empty():
+			var n2 := VenueCrowd.sandman_count(safe_r)
+			var near2 := _people_near(c, safe_r + 40.0, {})
+			# The nearest of the gathered take the posts (stable by hash).
+			near2.sort_custom(func(x, y): return NpcHash.unit01(str(x), key + "sand") < NpcHash.unit01(str(y), key + "sand"))
+			for k in mini(n2, near2.size()):
+				var aid2 := str(near2[k])
+				var post := VenueCrowd.sandman_post(c, safe_r, k, n2)
+				if _cast_dj(aid2, {"pos": post["pos"], "face": post["face"], "role": "sandman", "sid": sid},
+						abs_h + 24.0, abs_h, registry):
+					sand[aid2] = {"post": post["pos"], "face": post["face"], "state": "post", "since": abs_h}
+		# Back to post after a redirect.
+		for aid3 in sand:
+			var sd: Dictionary = sand[aid3]
+			if str(sd["state"]) == "redirect" and abs_h - float(sd["since"]) >= REDIRECT_HOLD_H:
+				if _cast_dj(str(aid3), {"pos": sd["post"], "face": sd["face"], "role": "sandman", "sid": sid},
+						abs_h + 24.0, abs_h, registry):
+					sd["state"] = "post"
+					sd["since"] = abs_h
+		if not bool(st.get("perimeter", false)):
+			continue
+		# Anyone across the line: the nearest kneeling sandman goes to them.
+		var handled: Dictionary = b["handled"]
+		for who in _people_inside(c, safe_r - VenueCrowd.BREACH_INSET_M):
+			var wid := str(who[0])
+			if sand.has(wid) or abs_h - float(handled.get(wid, -INF)) < REDIRECT_COOLDOWN_H:
+				continue
+			var wp: Vector2 = who[1]
+			var best := ""
+			var best_d := INF
+			for aid4 in sand:
+				var sd2: Dictionary = sand[aid4]
+				if str(sd2["state"]) != "post":
+					continue
+				var dd := (sd2["post"] as Vector2).distance_to(wp)
+				if dd < best_d:
+					best_d = dd
+					best = str(aid4)
+			handled[wid] = abs_h
+			var o := _tier_owner(wid)
+			if o is CrowdCohort:
+				(o as CrowdCohort).redirect_out(wid, c, safe_r, abs_h, registry)
+			elif o is NpcPopulationEngine:
+				(o as NpcPopulationEngine).redirect_out(wid, c, safe_r, registry)
+			_burn_redirects += 1
+			if best.is_empty():
+				continue
+			# The sandman steps up beside them, between them and the fire,
+			# and turns them round (arm out toward the crowd).
+			var out_dir := (wp - c).normalized() if (wp - c).length() > 0.01 else Vector2(1, 0)
+			var stand := c + out_dir * maxf(wp.distance_to(c) - 0.6, 1.0)
+			if _cast_dj(best, {"pos": stand, "face": c + out_dir * (safe_r + 20.0), "role": "redirect", "sid": sid},
+					abs_h + 24.0, abs_h, registry):
+				var sd3: Dictionary = sand[best]
+				sd3["state"] = "redirect"
+				sd3["since"] = abs_h
+		_invalidate_dots()
+	for sid in _burns.keys():
+		if not live.has(sid):
+			_end_burn_roles(_burns[sid], abs_h)
+			_burns.erase(sid)
+
+
+## How many people sandmen have turned back (harness / diagnostics).
+var _burn_redirects := 0
+
+func burn_redirects() -> int:
+	return _burn_redirects
+
+
+func _end_burn_roles(b: Dictionary, abs_h: float) -> void:
+	for aid in b.get("performers", []):
+		_end_dj(str(aid), abs_h)
+	for aid in (b.get("sandmen", {}) as Dictionary):
+		_end_dj(str(aid), abs_h)
+
+
+## {sid: {stage, performers: [ids], sandmen: [ids]}} — the burn roles now
+## (the fire-prop effect, the harness).
+func burn_roles() -> Dictionary:
+	var out := {}
+	for sid in _burns:
+		var b: Dictionary = _burns[sid]
+		out[sid] = {"performers": (b.get("performers", []) as Array).duplicate(),
+			"sandmen": (b.get("sandmen", {}) as Dictionary).keys(),
+			"stage": str((_venue_states.get(sid, {}) as Dictionary).get("stage", ""))}
+	return out
+
+
+## Everyone on site within `r` of `c` who is free to take a role (not
+## performing already, not asleep): ids.
+func _people_near(c: Vector2, r: float, exclude: Dictionary) -> Array:
+	var out: Array = []
+	var t := _last_abs_h
+	for iid in _cohorts:
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		var co: CrowdCohort = _cohorts[iid]
+		for i in co.count():
+			if co.alive[i] != 1 or co.act[i] == CrowdCohort.A_PERFORM or co.act[i] == CrowdCohort.A_SLEEP \
+					or exclude.has(co.ids[i]):
+				continue
+			if co.pos_at(i, t).distance_to(c) <= r:
+				out.append(co.ids[i])
+	for iid in _engines:
+		for a in (_engines[iid] as NpcPopulationEngine).agents:
+			var ag: NpcAgent = a
+			if ag.controlled_by_peer != 0 or ag.activity == NpcAgent.PERFORM_ACTIVITY \
+					or ag.activity == "sleep" or exclude.has(ag.id):
+				continue
+			if ag.pos.distance_to(c) <= r:
+				out.append(ag.id)
+	return out
+
+
+## Everyone (not performing) closer than `r` to `c`: [[id, pos]].
+func _people_inside(c: Vector2, r: float) -> Array:
+	var out: Array = []
+	var t := _last_abs_h
+	for iid in _cohorts:
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		var co: CrowdCohort = _cohorts[iid]
+		for i in co.count():
+			if co.alive[i] != 1 or co.act[i] == CrowdCohort.A_PERFORM or co.act[i] == CrowdCohort.A_SLEEP:
+				continue
+			var p := co.pos_at(i, t)
+			if p.distance_to(c) < r:
+				out.append([co.ids[i], p])
+	for iid in _engines:
+		for a in (_engines[iid] as NpcPopulationEngine).agents:
+			var ag: NpcAgent = a
+			if ag.activity == NpcAgent.PERFORM_ACTIVITY or ag.activity == "sleep":
+				continue
+			if ag.pos.distance_to(c) < r:
+				out.append([ag.id, ag.pos])
+	return out
+
+
+func _end_dj(agent_id: String, abs_h: float) -> void:
+	var o := _tier_owner(agent_id)
+	if o is CrowdCohort:
+		(o as CrowdCohort).end_perform(agent_id, abs_h)
+	elif o is NpcPopulationEngine:
+		(o as NpcPopulationEngine).end_perform(agent_id)
+
+
+## The set a stage is playing now or starting within DJ_LEAD_H:
+## {start_abs, until_abs} in absolute hours, {} when nothing is on.
+static func _set_window(space: Dictionary, hour: float, abs_h: float) -> Dictionary:
+	for s in space.get("program", []):
+		if not (s is Dictionary):
+			continue
+		var slot: Dictionary = s
+		var a := float(slot.get("start_h", 0.0))
+		var b := float(slot.get("end_h", 0.0))
+		var dur := fposmod(b - a, 24.0)
+		if dur <= 0.0:
+			dur = 24.0
+		if FestivalProgram.slot_covers(slot, hour):
+			var since := fposmod(hour - a, 24.0)
+			return {"start_abs": abs_h - since, "until_abs": abs_h - since + dur}
+		var wait := fposmod(a - fposmod(hour, 24.0), 24.0)
+		if wait <= DJ_LEAD_H:
+			return {"start_abs": abs_h + wait, "until_abs": abs_h + wait + dur}
+	return {}
+
+
+## Everyone on site, by the set's key: the lowest hash wins, skipping anyone
+## already DJing another stage.
+func _pick_dj(key: String) -> String:
+	var busy := {}
+	for sid in _djs:
+		busy[str((_djs[sid] as Dictionary).get("id", ""))] = true
+	var best := ""
+	var best_u := INF
+	for iid in _cohorts:
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		var c: CrowdCohort = _cohorts[iid]
+		for i in c.count():
+			if c.alive[i] != 1 or busy.has(c.ids[i]):
+				continue
+			var u := NpcHash.unit01(c.ids[i], key)
+			if u < best_u:
+				best_u = u
+				best = c.ids[i]
+	for iid in _engines:
+		for a in (_engines[iid] as NpcPopulationEngine).agents:
+			var ag: NpcAgent = a
+			if ag.controlled_by_peer != 0 or busy.has(ag.id):
+				continue
+			var u2 := NpcHash.unit01(ag.id, key)
+			if u2 < best_u:
+				best_u = u2
+				best = ag.id
+	return best
+
+
+func _tier_owner(agent_id: String) -> Object:
+	for iid in _engines:
+		if (_engines[iid] as NpcPopulationEngine).find_agent(agent_id) != null:
+			return _engines[iid]
+	for iid in _cohorts:
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT \
+				and (_cohorts[iid] as CrowdCohort).agent_index(agent_id) >= 0:
+			return _cohorts[iid]
+	return null
+
+
+## Is this person walking to, queueing for or doing a NEED (eat, drink, the
+## toilet, a wash)?
+func _dj_on_a_need(agent_id: String) -> bool:
+	var o := _tier_owner(agent_id)
+	if o is CrowdCohort:
+		return (o as CrowdCohort).on_a_need(agent_id)
+	if o is NpcPopulationEngine:
+		var a := (o as NpcPopulationEngine).find_agent(agent_id)
+		return a != null and a.activity in ["hunger", "thirst", "bladder", "hygiene"] \
+			and a.state != NpcAgent.State.IDLE
+	return false
+
+
+func _agent_alive(agent_id: String) -> bool:
+	if agent_id.is_empty():
+		return false
+	var o := _tier_owner(agent_id)
+	if o is CrowdCohort:
+		var i := (o as CrowdCohort).agent_index(agent_id)
+		return i >= 0 and (o as CrowdCohort).alive[i] == 1
+	return o != null
+
+
+func _is_performing(agent_id: String) -> bool:
+	var o := _tier_owner(agent_id)
+	if o is CrowdCohort:
+		return (o as CrowdCohort).is_performing(agent_id)
+	if o is NpcPopulationEngine:
+		return (o as NpcPopulationEngine).is_performing(agent_id)
+	return false
+
+
+func _cast_dj(agent_id: String, spot: Dictionary, until_abs: float, abs_h: float,
+		registry: SpaceRegistry) -> bool:
+	var o := _tier_owner(agent_id)
+	if o is CrowdCohort:
+		var ctx := {"registry": registry, "no_go": _no_go_circles(),
+			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
+					to_key: String, lane_seed: int) -> Variant:
+				return _plan_path(from_xz, to_xz, from_key, to_key, lane_seed)}
+		var ok := (o as CrowdCohort).perform(agent_id, spot, until_abs, abs_h, ctx)
+		if ok:
+			_invalidate_dots()
+		return ok
+	if o is NpcPopulationEngine:
+		return (o as NpcPopulationEngine).perform(agent_id, spot, until_abs)
+	return false
+
+
+## The deck height a DJ stands on for this prop (measured from its model;
+## -1 when nothing qualifies) — the space tag row shows it as the auto value.
+func stage_deck_m(main: Node, prop_id: String) -> float:
+	return _deck_height(main, prop_id)
+
+
+## Who is DJing which stage right now: {stage space id: agent id}.
+func djs() -> Dictionary:
+	var out := {}
+	for sid in _djs:
+		out[sid] = str((_djs[sid] as Dictionary).get("id", ""))
+	return out
+
+
+## This tick's weather comfort pulls (NpcComfort.pulls).
+func comfort_pulls() -> Dictionary:
+	return _comfort
+
+
+## {height_m, footprint_r_m} of an unlit effigy prop, from its live pick
+## AABB — cached per prop node (a rebuild mints a new node and re-measures).
+func _effigy_size(main: Node, prop_id: String) -> Dictionary:
+	if prop_id.is_empty():
+		return {}
+	var root := main.find_child("PlacedProps", true, false) if main != null else null
+	if root == null:
+		return {}
+	var cached: Dictionary = _effigy_sizes.get(prop_id, {})
+	for child in root.get_children():
+		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
+			if int(cached.get("node", 0)) == child.get_instance_id():
+				return cached["size"]
+			var bb: AABB = (child as PlacedProp).get_world_pick_aabb()
+			var size := {}
+			if bb.size.length_squared() > 0.01:
+				size = {"height_m": bb.size.y,
+					"footprint_r_m": maxf(bb.size.x, bb.size.z) * 0.5}
+			_effigy_sizes[prop_id] = {"node": child.get_instance_id(), "size": size}
+			return size
+	return {}
 
 
 ## The registry agents will read this map (loader-owned or scene fallback) —
@@ -1854,6 +3111,12 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	var count := clampi(int(float(specs.get("occupants", 10.0))), 1, 200)
 	var engine: NpcPopulationEngine = _engines.get(iid)
 	if engine != null and int(_configured_count.get(iid, -1)) == count:
+		return engine
+	if engine != null and int(_configured_count.get(iid, -1)) > 0:
+		# The headcount moved: resize IN PLACE (see _ensure_cohort).
+		engine.resize(count, iid, _home_pos(specs, main), _find_registry(main))
+		_configured_count[iid] = count
+		_invalidate_dots()
 		return engine
 	if _parked.has(iid):
 		# Promotion from the light tier: the parked engine (board, labour,
@@ -1964,7 +3227,7 @@ static func _need_text(need: String) -> String:
 		"hunger": return "no food"
 		"sleep": return "nowhere to sleep"
 		"bladder": return "no sanitation"
-	return "Fuck This"
+	return NpcMorale.label(0.0)
 
 
 ## THE LABOUR MERGE: a machine waiting on hands gets a real chore, at the
@@ -2319,11 +3582,59 @@ func _home_pos(specs: Dictionary, main: Node) -> Vector2:
 ## Change-gated snapshot into specs.pop_state (survives save/load via the
 ## graph's normal serialize path). Interval + identical-blob gates keep the
 ## 0.75 s autosave debounce from storming.
-func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: float) -> void:
+## Is this habitat's snapshot due — its jittered interval elapsed AND a slot
+## left in this tick's persist budget? A habitat with no entry (never saved,
+## or cleared by a project edit to force a save) is due at once.
+func _persist_due(iid: String, abs_h: float) -> bool:
 	var last := float(_last_persist_h.get(iid, -INF))
-	if absf(abs_h - last) < PERSIST_INTERVAL_H:
-		return
+	var gap := PERSIST_INTERVAL_H * (0.75 + 0.5 * NpcHash.unit01(iid, "persist"))
+	if absf(abs_h - last) < gap:
+		return false
+	if _persist_budget <= 0:
+		return false
+	_persist_budget -= 1
 	_last_persist_h[iid] = abs_h
+	return true
+
+
+## World save / exit: write EVERY habitat's snapshot into the graph now, past
+## the ≤2×/sim-hour interval and the per-tick budget, and the peak score past
+## its debounce. Without it a save could lose up to half a sim-hour of every
+## person's needs and morale, and the last few seconds of FUCK YES onsets.
+## Whichever tier a camp is in is the one that persists (a light camp's full
+## engine is PARKED and stale).
+func persist_all_now(model) -> void:
+	if model == null:
+		return
+	var saved_budget := _persist_budget
+	_persist_budget = 1 << 20
+	for iid in _engines.keys():
+		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT and _cohorts.has(iid):
+			continue
+		_last_persist_h.erase(iid)
+		_maybe_persist(model, str(iid), _engines[iid], _last_abs_h)
+	for iid2 in _cohorts.keys():
+		if str(_tiers.get(iid2, CrowdFocus.TIER_FULL)) != CrowdFocus.TIER_LIGHT:
+			continue
+		_last_persist_h.erase(iid2)
+		_maybe_persist_light(model, str(iid2), _cohorts[iid2], _last_abs_h)
+	_persist_budget = saved_budget
+	flush_peak_score()
+
+
+## Write the peak score (and who is mid-peak) now. Unconditional: the live
+## charge moves every tick without flagging a change.
+func flush_peak_score() -> void:
+	if not _peak_loaded or _peak_path.is_empty():
+		return
+	_peak_save_due_ms = 0
+	peaks.take_changed()
+	peaks.save(_peak_path)
+
+
+func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: float) -> void:
+	if not _persist_due(iid, abs_h):
+		return
 	var snap := engine.snapshot(abs_h)
 	var store: SiteProjectStore = _project_stores.get(iid)
 	var proj_blob: Array = store.serialize() if store != null else []

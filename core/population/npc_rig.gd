@@ -33,6 +33,32 @@ const CLIP_SLEEP := "sleep"
 const CLIP_WORK := "work"
 const CLIP_SIT := "sit"
 const CLIP_DANCE := "dance"
+## PEAK EXPERIENCE: the dance someone breaks into at FUCK YES!!! — a samba,
+## distinct at any distance from the stage's rave. The Mixamo export comes
+## off a different rig (`mixamorig:` bones, not this pack's `mixamorig1:`), so
+## it is RETARGETED like the idle (RETARGET_SOURCES). Without the file the
+## pose machine falls back to the plain dance; the stick figure and the crowd
+## shader draw their own samba either way.
+const CLIP_PEAK_DANCE := "peak_dance"
+## GROUND poses and the burn's roles — LOGICAL clips (no Mixamo file): the
+## stick figure draws each one procedurally, the rigged body plays the nearest
+## clip it has (NpcPoseMachine._clip_file_for), and mo-cap spice may take over.
+##   sit_cross   cross-legged on the ground (meals, venues — the chair sit is
+##               the portapotty's)
+##   sit_lounge  legs out, propped back on straight arms, torso and head UP
+##   kneel       a sandman at the burn's line
+##   redirect    a sandman turning someone back (arm out toward the crowd)
+##   fire_flow   a fire-flow performer spinning poi
+##   gaze        standing, looking up at the effigy
+const CLIP_SIT_CROSS := "sit_cross"
+const CLIP_LOUNGE := "sit_lounge"
+const CLIP_KNEEL := "kneel"
+const CLIP_REDIRECT := "redirect"
+const CLIP_FIREFLOW := "fire_flow"
+const CLIP_GAZE := "gaze"
+const LOGICAL_CLIPS: Array = [CLIP_SIT_CROSS, CLIP_LOUNGE, CLIP_KNEEL, CLIP_REDIRECT, CLIP_FIREFLOW, CLIP_GAZE]
+## The ground poses (sat or knelt on the ground — the sit transitions apply).
+const GROUND_CLIPS: Array = [CLIP_SIT_CROSS, CLIP_LOUNGE, CLIP_KNEEL]
 
 ## Locomotion ends. One-shots: a walk that starts and stops instead of snapping
 ## into a gait is most of what makes a figure look like it decided to go.
@@ -130,6 +156,30 @@ const SOURCES := {
 	# "Walking With Box.fbx": [CLIP_CARRY, true, "", ROLE_CARRY],
 	# "Idle With Box.fbx": [CLIP_CARRY_IDLE, true, "", ROLE_CARRY],
 }
+
+## Clips from OTHER Mixamo rigs (`mixamorig_` bone prefix after import):
+## file (under DIR) -> [clip name, loops]. Retargeted by prefix, bind-ratio
+## checked, hip track rescaled to this pack's standing height, horizontal
+## root motion flattened (`_retarget_extra`).
+const RETARGET_SOURCES := {
+	"Samba Dancing.fbx": [CLIP_PEAK_DANCE, true],
+}
+
+## MO-CAP SPICE clips for the stick figure (NpcMocapSpice / NpcStickMocap):
+## every FBX in MOCAP_DIR/<moment>/ is a candidate for that moment. File
+## names are free — drop the closest
+## clip you can find into the right folder and re-import. Clip names are
+## "mc_<moment>__<file basename>". Any Mixamo rig
+## (Y Bot "Without Skin" exports use `mixamorig:` bones) is retargeted onto
+## this pack's skeleton by `_retarget_extra`.
+const MOCAP_DIR := DIR + "mocap/"
+## Base-pack clips that serve a moment until the folder has its own.
+const MOMENT_DEFAULTS := {
+	"peak": [CLIP_PEAK_DANCE],
+	"dance": [CLIP_DANCE],
+	"cheer": [CLIP_CLAP],
+}
+static var _moment_clips: Dictionary = {}   # moment -> Array[String]
 
 ## Mixamo's own take name, identical in every file.
 const TAKE_NAME := "mixamo_com"
@@ -367,6 +417,20 @@ static func _ensure_loaded() -> void:
 		_offset_curves[clip_name] = _build_offset_curve(
 			_pending_curves[clip_name] as Animation, String(clip_name))
 	_pending_curves.clear()
+
+	for file in RETARGET_SOURCES.keys():
+		var rspec: Array = RETARGET_SOURCES[file]
+		var ranim := _retarget_extra(DIR + String(file), bones)
+		if ranim == null:
+			continue
+		var rname := String(rspec[0])
+		ranim.loop_mode = Animation.LOOP_LINEAR if bool(rspec[1]) else Animation.LOOP_NONE
+		_measurements[rname] = {"role": ROLE_CYCLIC, "measured_role": ROLE_CYCLIC, "retargeted": true}
+		_clip_len[rname] = ranim.length
+		_clip_cycle_m[rname] = 0.0
+		_lib.add_animation(rname, ranim)
+
+	_load_moment_clips(bones)
 
 	var idle := _retarget_idle(bones)
 	if idle != null:
@@ -655,6 +719,12 @@ static func catalog() -> Dictionary:
 	return out
 
 
+## Is this clip installed in the rig's library? (Cheap; per-frame safe.)
+static func has_clip(clip: String) -> bool:
+	_ensure_loaded()
+	return _lib != null and _lib.has_animation(clip)
+
+
 static func clip_length(clip: String) -> float:
 	_ensure_loaded()
 	return float(_clip_len.get(clip, 0.0))
@@ -692,7 +762,8 @@ static func walk_variant_for(agent_id: String) -> String:
 		return CLIP_WALK
 	return String(avail[NpcHash.pick(agent_id, "gait", avail.size())])
 
-static func _extract(path: String) -> Animation:
+static func _extract(path: String, any_take: bool = false) -> Animation:
+	_last_source_hips_y = 0.0
 	if not ResourceLoader.exists(path):
 		return null
 	var packed := load(path) as PackedScene
@@ -701,10 +772,13 @@ static func _extract(path: String) -> Animation:
 	var root := packed.instantiate()
 	var ap := find_anim_player(root)
 	var out: Animation = null
+	var first: Animation = null
 	if ap != null:
 		for lib_name in ap.get_animation_library_list():
 			var lib := ap.get_animation_library(lib_name)
 			for a in lib.get_animation_list():
+				if first == null and String(a) != "RESET":
+					first = lib.get_animation(a)
 				if String(a) == TAKE_NAME:
 					# Duplicate: the imported Animation is a shared resource and
 					# flattening it in place would mutate every other user.
@@ -712,8 +786,23 @@ static func _extract(path: String) -> Animation:
 					break
 			if out != null:
 				break
+	if out == null and any_take and first != null:
+		# Not a Mixamo take name (another exporter): the file's first clip.
+		out = first.duplicate(true) as Animation
+	# The SOURCE rig's standing hip height (its rest pose), in the units its
+	# hip track is keyed in — what _retarget_extra rescales by.
+	var skel := find_skeleton(root)
+	if skel != null:
+		for i in skel.get_bone_count():
+			if skel.get_bone_name(i).to_lower().ends_with("hips"):
+				_last_source_hips_y = skel.get_bone_global_rest(i).origin.y
+				break
 	root.free()
 	return out
+
+
+## Hip height of the last `_extract`ed file's skeleton at rest (0 = unknown).
+static var _last_source_hips_y := 0.0
 
 
 ## Horizontal distance the hips cover across the clip, before flattening.
@@ -816,6 +905,106 @@ static func _retarget_idle(bones: Dictionary) -> Animation:
 	_rebase_hip_height(anim, _native_stand_hips_y)
 	anim.loop_mode = Animation.LOOP_LINEAR
 	return anim
+
+
+## A clip from another Mixamo rig: rewrite the `mixamorig_` prefix onto this
+## pack's `mixamorig1_`, refuse it if too few tracks bind (Godot drops
+## unbound tracks silently — a bad retarget is a T-pose, not an error), then
+## put its hips on this pack's scale: the source rig's hip track is in ITS
+## units, so the whole track is scaled by native standing height / the clip's
+## first-frame hip height (a dance starts standing), which keeps the clip's
+## own bounce in proportion, and the horizontal travel is pinned in place.
+static func _retarget_extra(path: String, bones: Dictionary) -> Animation:
+	var anim := _extract(path, true)
+	if anim == null:
+		return null
+	var source_hips := _last_source_hips_y
+	var bound := 0
+	var total := 0
+	for t in range(anim.get_track_count()):
+		var p := String(anim.track_get_path(t))
+		if p.contains("mixamorig_"):
+			p = p.replace("mixamorig_", "mixamorig1_")
+			anim.track_set_path(t, NodePath(p))
+		if not p.contains("mixamorig1_"):
+			continue
+		total += 1
+		var colon := p.rfind(":")
+		if colon >= 0 and bones.has(p.substr(colon + 1)):
+			bound += 1
+	if total == 0 or float(bound) / float(total) < MIN_RETARGET_BIND:
+		push_warning("NpcRig: %s retarget bound only %d/%d tracks — rejected" % [path.get_file(), bound, total])
+		return null
+	var ht := _hip_position_track(anim)
+	if ht >= 0 and anim.track_get_key_count(ht) > 0 and _native_stand_hips_y > 0.0:
+		# Scale by the source rig's REST hip height when its skeleton says;
+		# the first frame only as a fallback — a clip that starts seated or
+		# crouched would otherwise be blown up several times over.
+		var first: Vector3 = anim.track_get_key_value(ht, 0)
+		var ref := source_hips if source_hips > 0.001 else first.y
+		if ref > 0.001:
+			var k := _native_stand_hips_y / ref
+			for i in range(anim.track_get_key_count(ht)):
+				var v: Vector3 = anim.track_get_key_value(ht, i)
+				anim.track_set_key_value(ht, i, v * k)
+	_flatten_root_motion(anim)
+	return anim
+
+
+## Scan MOCAP_DIR/<moment>/ for clips (see MOCAP_DIR). A clip that fails to
+## bind is skipped with a warning; a moment with none falls back to
+## MOMENT_DEFAULTS that are installed.
+static func _load_moment_clips(bones: Dictionary) -> void:
+	_moment_clips = {}
+	for moment in NpcMocapSpice.MOMENT_NAMES:
+		var list: Array = []
+		var dir_path: String = MOCAP_DIR + str(moment) + "/"
+		var d := DirAccess.open(dir_path)
+		if d != null:
+			var files := PackedStringArray()
+			for f in d.get_files():
+				# Exported builds list "X.fbx.import" / ".remap" — the source
+				# name is what load() wants either way.
+				var src := str(f).trim_suffix(".import").trim_suffix(".remap")
+				if src.get_extension().to_lower() in ["fbx", "glb", "gltf"] and not files.has(src):
+					files.append(src)
+			files.sort()
+			for src in files:
+				var anim := _retarget_extra(dir_path + src, bones)
+				if anim == null:
+					continue
+				# NOT "mocap/peak/x": AnimationPlayer reads "a/b" as library
+				# "a", animation "b", and the clip silently never resolves.
+				var name := "mc_%s__%s" % [moment, src.get_basename().validate_node_name().replace(":", "_")]
+				var spec: Dictionary = NpcMocapSpice.MOMENTS.get(str(moment), {})
+				anim.loop_mode = Animation.LOOP_LINEAR if bool(spec.get("loop", false)) \
+					else Animation.LOOP_NONE
+				if str(moment) == "sit":
+					# Seated clips sit on a chair Mixamo does not draw: put the
+					# hips at the ground-sitting height the stick figure uses.
+					_ground_offsets[name] = float(TARGET_HIPS_Y[CLIP_SIT]) - _hip_rest_y(anim)
+				_lib.add_animation(name, anim)
+				_clip_len[name] = anim.length
+				_measurements[name] = {"role": ROLE_CYCLIC, "measured_role": ROLE_CYCLIC, "mocap_moment": moment}
+				list.append(name)
+		if list.is_empty():
+			for c in MOMENT_DEFAULTS.get(moment, []):
+				if _lib.has_animation(str(c)):
+					list.append(str(c))
+		_moment_clips[moment] = list
+
+
+## The pack's standing hip height (metres) — the stick figure scales a clip's
+## body height by HIP_Y / this.
+static func native_hips_y() -> float:
+	_ensure_loaded()
+	return _native_stand_hips_y if _native_stand_hips_y > 0.01 else 0.87
+
+
+## The clips a mo-cap moment can play (NpcMocapSpice), [] when none.
+static func moment_clips(moment: String) -> Array:
+	_ensure_loaded()
+	return _moment_clips.get(moment, [])
 
 
 ## Shift a clip's hip-position track so its resting height becomes

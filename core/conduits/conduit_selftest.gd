@@ -45,6 +45,7 @@ func _initialize() -> void:
 	_test_contour_router()
 	_test_contour_dispatch()
 	_test_size_driven_tube_radius()
+	_test_penstock_spec_and_design()
 	if _failures == 0:
 		print("CONDUIT SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -832,6 +833,21 @@ func _test_ux_visibility_and_materials() -> void:
 			"direct_intake": true, "visible_3d": true, "conduit_type": "garden_hose"}, false))
 	_check("is_direct_intake_connection flag",
 		ConduitKinds.is_direct_intake_connection({"direct_intake": true}))
+	# The turbine KIND decides, not the preset: every hydro preset marks its
+	# water input direct_intake, but only the SIPHON drinks through a dip tube.
+	# A wire into a PowerSpout stamped "direct" never became its penstock
+	# (found by the harness matrix's penstock auto-restyle check, 2026-10-12).
+	var dm := GraphModel.new()
+	for k in ["siphon", "powerspout_pelton"]:
+		dm.add_item({"id": "t_" + k, "type": "processor", "x": 0.0, "y": 0.0,
+			"specs": {"role": "siphon_hydro", "turbine_kind": k,
+				"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}]}})
+	_check("a wire into a SIPHON's water input is a direct intake",
+		ConduitKinds.is_direct_intake_connection({"source_item_id": "p", "source_handle_id": "output",
+			"target_item_id": "t_siphon", "target_handle_id": "res_in_0"}, dm))
+	_check("a wire into a PowerSpout's water input is NOT (it is the penstock)",
+		not ConduitKinds.is_direct_intake_connection({"source_item_id": "p", "source_handle_id": "output",
+			"target_item_id": "t_powerspout_pelton", "target_handle_id": "res_in_0"}, dm))
 	# Flow glow: quiet by default for all kinds; global / force opts in.
 	_check("flow conceptual quiet default",
 		not ConduitKinds.resolve_flow_glow({}, "conceptual_flow", false))
@@ -1528,6 +1544,163 @@ func _test_poly_penstock_kind() -> void:
 	_check("bend radius 1.5in ~1.21m", absf(r_bend - 1.2065) < 0.005, "%.4f" % r_bend)
 	_check("size in display name",
 		ConduitKinds.display_name_with_size("poly_penstock").contains("1"))
+
+
+## The player's own pipe: SDR per run (bore, rating, bend radius from the PPI
+## tables), the plan-view fillet so coiled pipe never turns a corner, the
+## route report (tightest bend, high points, siphon rise) and the design
+## checks — pinned to hand-computed numbers for 2" SDR 11.5 HDPE.
+func _test_penstock_spec_and_design() -> void:
+	var st := {"pipe_size_in": 2.0, "pipe_sdr": 11.5}
+	# ID = 2.375" × (1 − 2/11.5) = 2.375 × 0.82609 = 1.9620" = 49.83 mm.
+	var id_m := ConduitKinds.inner_diameter_for("poly_penstock", st)
+	_check("SDR 11.5 2in ID ~49.83mm", absf(id_m * 1000.0 - 49.83) < 0.05, "%.2f" % (id_m * 1000.0))
+	_check("no styled SDR → stock SDR 9 (unchanged)",
+		is_equal_approx(ConduitKinds.pipe_sdr("poly_penstock", {"pipe_size_in": 2.0}), 9.0))
+	# PR = 2·1000/(11.5−1) = 190.5 psi; SDR 9 → 250 (the kind's burst_pressure_psi).
+	_check("SDR 11.5 rating ~190 psi", absf(ConduitKinds.pressure_rating_psi("poly_penstock", st) - 190.48) < 0.1)
+	_check("SDR 9 rating 250 psi", is_equal_approx(ConduitKinds.pressure_rating_psi("poly_penstock", {"pipe_size_in": 2.0}), 250.0))
+	# Wall = OD/SDR = 60.325 mm / 11.5 = 5.246 mm.
+	_check("SDR 11.5 2in wall ~5.25mm", absf(ConduitKinds.wall_thickness_m("poly_penstock", st) * 1000.0 - 5.246) < 0.01)
+	# PPI ch.7: DR 11–13.5 → 25×OD = 25 × 60.325 mm = 1.508 m; SDR 9 → 20× = 1.2065 m;
+	# SDR 17 → 27× = 1.629 m. (Without a styled SDR the kind's 25× stays — pinned above.)
+	_check("bend r SDR 11.5 2in ~1.508m", absf(ConduitKinds.contour_bend_radius_m("poly_penstock", st) - 1.508) < 0.005)
+	_check("bend r SDR 9 2in 20x ~1.2065m",
+		absf(ConduitKinds.contour_bend_radius_m("poly_penstock", {"pipe_size_in": 2.0, "pipe_sdr": 9.0}) - 1.2065) < 0.005)
+	_check("bend r SDR 17 2in 27x ~1.629m",
+		absf(ConduitKinds.contour_bend_radius_m("poly_penstock", {"pipe_size_in": 2.0, "pipe_sdr": 17.0}) - 1.6288) < 0.005)
+	# Plan fillet: a 90° corner on flat ground. The sharpest plan radius of the
+	# routed run must be the pipe's radius (not a 1 m-step corner), the run
+	# shorter than the two legs (the arc cuts the corner), ends pinned.
+	var flat := func(_p: Vector3) -> float: return 0.0
+	var corner: Array = [Vector3(0, 0.05, 0), Vector3(30, 0.05, 0), Vector3(30, 0.05, 30)]
+	var r_fil := ContourRouter.route_polyline(corner, flat, 1.5)
+	var rep := ContourRouter.route_report(r_fil)
+	_check("fillet: tightest plan radius ≈ pipe radius", absf(float(rep["min_bend_r_m"]) - 1.5) < 0.12,
+		"%.3f" % float(rep["min_bend_r_m"]))
+	_check("fillet: run stays ~60 m (legs shortened, arc added)",
+		absf(float(rep["length_m"]) - 60.0) < 1.5, "%.2f" % float(rep["length_m"]))
+	# The corner point (a player's pin / a stream vertex) is ON the pipe.
+	var on_pin := false
+	for q in r_fil:
+		if Vector2(q.x, q.z).distance_to(Vector2(30.0, 30.0)) < 0.01 or Vector2(q.x, q.z).distance_to(Vector2(30.0, 0.0)) < 0.01:
+			on_pin = true
+	_check("fillet: the corner point stays on the pipe (apex arc)", on_pin)
+	_check("fillet: ends pinned", r_fil[0].is_equal_approx(corner[0]) and r_fil[r_fil.size() - 1].is_equal_approx(corner[2]))
+	var r_sharp := ContourRouter.route_polyline(corner, flat, 0.0)
+	_check("no radius → corner kept sharp", float(ContourRouter.route_report(r_sharp)["min_bend_r_m"]) < 1.0)
+	# Legs too short for the radius: the arc shrinks to fit and reads as a tight bend.
+	var tight: Array = [Vector3(0, 0.05, 0), Vector3(4, 0.05, 0), Vector3(4, 0.05, 4)]
+	var r_t := ContourRouter.route_polyline(tight, flat, 3.5)
+	var rt := float(ContourRouter.route_report(r_t)["min_bend_r_m"])
+	_check("short legs: fillet shrinks, reported as tight", rt < 3.5 and rt > 1.5, "%.3f" % rt)
+	# The seated port approaches (fittings) are outside the bend report.
+	var elbow_at_port: Array = [Vector3(0, 0.05, 0), Vector3(1.0, 0.05, 0), Vector3(1.0, 0.05, 20)]
+	var r_e := ContourRouter.route_polyline(elbow_at_port, flat, 1.5)
+	_check("a corner inside the port approach is not a reported bend",
+		not is_finite(float(ContourRouter.route_report(r_e)["min_bend_r_m"])))
+	# Straight run: no bend at all.
+	var r_s := ContourRouter.route_polyline([Vector3(0, 0.05, 0), Vector3(40, 0.05, 0)], flat, 1.5)
+	_check("straight run reports no bend", not is_finite(float(ContourRouter.route_report(r_s)["min_bend_r_m"])))
+	# Route report over a crest: one high point, siphon rise above the intake.
+	var hump := PackedVector3Array()
+	for i in 41:
+		var x := float(i)
+		var y := 2.0 * exp(-pow((x - 20.0) / 5.0, 2.0))  # 2 m bump at x=20
+		hump.append(Vector3(x, y, 0.0))
+	var hr := ContourRouter.route_report(hump)
+	_check("report: one high point on a hump", int(hr["high_points"]) == 1, str(hr["high_points"]))
+	_check("report: rise above the intake ~2m", absf(float(hr["rise_above_intake_m"]) - 2.0) < 0.05)
+	var slope := PackedVector3Array()
+	for i in 41:
+		slope.append(Vector3(float(i), 20.0 - 0.5 * float(i), 0.0))
+	var sr := ContourRouter.route_report(slope)
+	_check("report: a falling run has no high point and no rise",
+		int(sr["high_points"]) == 0 and float(sr["rise_above_intake_m"]) < 1e-6)
+	# Design checks, 2" SDR 11.5 at 4 L/s on 45 m gross, 105 m run, 350 ft on hand:
+	#   A = π/4 × 0.04983² = 1.9503e-3 m² → v = 0.004 / A = 2.051 m/s
+	#   wave speed a = 1/√(1000 × (1/2.2e9 + 0.04983/(1e9 × 0.005246))) = 317 m/s
+	#   surge = 317 × 2.051 / 9.80665 = 66.3 m
+	_check("velocity 4 L/s in 49.83 mm ~2.05 m/s", absf(PenstockDesign.velocity_ms(4.0, 0.04983) - 2.051) < 0.01)
+	var a := PenstockDesign.wave_speed_ms(0.04983, 0.005246)
+	_check("HDPE wave speed ~317 m/s", absf(a - 317.0) < 3.0, "%.1f" % a)
+	_check("Joukowsky surge ~66 m", absf(PenstockDesign.surge_head_m(2.051, 317.0) - 66.3) < 0.5)
+	_check("190 psi ≈ 134 m of head", absf(PenstockDesign.psi_to_head_m(190.48) - 133.9) < 0.3)
+	var cks := PenstockDesign.checks({
+		"q_lps": 4.0, "gross_head_m": 45.0, "head_loss_m": 3.0, "id_m": 0.04983,
+		"od_m": 0.060325, "sdr": 11.5, "wall_m": 0.005246, "length_m": 104.8,
+		"stock_m": 350.0 * 0.3048, "rating_psi": 190.48, "min_bend_r_m": 1.508,
+		"route_min_bend_r_m": 2.4, "high_points": 0, "rise_above_intake_m": 0.0,
+	})
+	var by_key := {}
+	for c in cks:
+		by_key[str((c as Dictionary)["key"])] = c
+	_check("checks: all eight present", by_key.has("velocity") and by_key.has("friction") and by_key.has("static")
+		and by_key.has("surge") and by_key.has("bend") and by_key.has("air") and by_key.has("stock"), str(by_key.keys()))
+	_check("checks: 2 m/s ok", str((by_key["velocity"] as Dictionary)["level"]) == "ok")
+	_check("checks: 3 m of 45 m = 6.7 % ok", str((by_key["friction"] as Dictionary)["level"]) == "ok")
+	_check("checks: 45 m static under 134 m rating", str((by_key["static"] as Dictionary)["level"]) == "ok")
+	_check("checks: 45 + 66 m surge under the rating", str((by_key["surge"] as Dictionary)["level"]) == "ok")
+	_check("checks: 2.4 m bend ≥ 1.508 ok", str((by_key["bend"] as Dictionary)["level"]) == "ok")
+	_check("checks: 105 m run fits 350 ft", str((by_key["stock"] as Dictionary)["level"]) == "ok"
+		and str((by_key["stock"] as Dictionary)["text"]).contains("spare"))
+	_check("checks: worst level ok", PenstockDesign.worst_level(cks) == "ok")
+	# Now the same pipe at 400 ft of run on 350 ft of stock, a 1.0 m bend and a high point.
+	var bad := PenstockDesign.checks({
+		"q_lps": 8.0, "gross_head_m": 120.0, "head_loss_m": 30.0, "id_m": 0.04983,
+		"od_m": 0.060325, "sdr": 11.5, "wall_m": 0.005246, "length_m": 400.0 * 0.3048,
+		"stock_m": 350.0 * 0.3048, "rating_psi": 190.48, "min_bend_r_m": 1.508,
+		"route_min_bend_r_m": 1.0, "high_points": 2, "rise_above_intake_m": 9.5,
+	})
+	var bk := {}
+	for c2 in bad:
+		bk[str((c2 as Dictionary)["key"])] = c2
+	_check("bad: 4.1 m/s fails velocity", str((bk["velocity"] as Dictionary)["level"]) != "ok")
+	_check("bad: 25 % friction fails", str((bk["friction"] as Dictionary)["level"]) == "fail")
+	_check("bad: surge over the rating", str((bk["surge"] as Dictionary)["level"]) != "ok")
+	_check("bad: 1.0 m bend too tight", str((bk["bend"] as Dictionary)["level"]) == "warn")
+	_check("bad: two high points warn", str((bk["air"] as Dictionary)["level"]) == "warn")
+	_check("bad: 9.5 m siphon lift fails", str((bk["siphon"] as Dictionary)["level"]) == "fail")
+	_check("bad: short of stock", str((bk["stock"] as Dictionary)["level"]) == "fail"
+		and str((bk["stock"] as Dictionary)["text"]).contains("SHORT"))
+	_check("bad: worst level fail", PenstockDesign.worst_level(bad) == "fail")
+	var txt := PenstockDesign.summary_text("T", ["a", "b"], bad)
+	_check("summary text carries every check", txt.contains("[FAIL]") and txt.contains("SHORT") and txt.begins_with("T"))
+	# Closure time (Michaud): 118 m run, 0.49 m/s, a = 317 → 2L/a = 0.744 s;
+	# 10 s close → ΔH = 2·118·0.49/(9.80665·10) = 1.179 m; a 0.5 s close is
+	# faster than 2L/a → the full Joukowsky 15.8 m.
+	_check("critical time 2L/a ~0.744 s", absf(PenstockDesign.critical_time_s(118.0, 317.0) - 0.7445) < 0.002)
+	_check("Michaud 10 s close ~1.18 m", absf(PenstockDesign.surge_head_closure_m(0.49, 317.0, 118.0, 10.0) - 1.179) < 0.01)
+	_check("a close faster than 2L/a is the instant stop",
+		absf(PenstockDesign.surge_head_closure_m(0.49, 317.0, 118.0, 0.5) - PenstockDesign.surge_head_m(0.49, 317.0)) < 1e-6)
+	var slow := PenstockDesign.checks({"q_lps": 4.0, "gross_head_m": 45.0, "id_m": 0.04983, "wall_m": 0.005246,
+		"rating_psi": 190.48, "length_m": 118.0, "close_s": 10.0})
+	var surge_txt := ""
+	for c3 in slow:
+		if str((c3 as Dictionary)["key"]) == "surge":
+			surge_txt = str((c3 as Dictionary)["text"])
+	_check("surge check names the closure time and the instant-stop figure",
+		surge_txt.contains("over 10 s") and surge_txt.contains("instant stop would be +66 m"), surge_txt)
+	# Intake works at 1 L/s through 49.83 mm: screen 0.001/(0.3·0.5) = 0.00667 m²
+	# (8.2 cm square); settling 2·0.001/0.03 = 0.0667 m² → 0.129 × 0.516 m, depth
+	# floored at 0.3 m; v_pipe 0.513 m/s → Gordon S = 1.7·0.513·√0.04983 = 0.195 m.
+	var iw := PenstockDesign.intake_works(1.0, 0.04983)
+	_check("screen side ~8.2 cm", absf(float(iw["screen_side_m"]) - 0.0816) < 0.001, "%.4f" % float(iw["screen_side_m"]))
+	_check("settling box ~0.52 × 0.13 m", absf(float(iw["settle_len_m"]) - 0.516) < 0.005
+		and absf(float(iw["settle_w_m"]) - 0.129) < 0.002)
+	_check("settling depth floored at 0.3 m", is_equal_approx(float(iw["settle_depth_m"]), 0.3))
+	_check("Gordon submergence ~0.195 m", absf(float(iw["submergence_m"]) - 0.1947) < 0.002, "%.4f" % float(iw["submergence_m"]))
+	_check("settling velocity interpolates the table", absf(PenstockDesign.settling_velocity_ms(0.4) - 0.04) < 1e-6
+		and absf(PenstockDesign.settling_velocity_ms(5.0) - 0.1) < 1e-6)
+	# Firm flow: driest month Aug (index 7), wettest Jan; 5 months under a 1 L/s jet.
+	var sup := [1.6, 1.5, 1.3, 1.1, 0.9, 0.8, 0.7, 0.6, 0.8, 1.0, 1.3, 1.5]
+	var kw := [0.3, 0.3, 0.3, 0.3, 0.25, 0.2, 0.18, 0.15, 0.2, 0.28, 0.3, 0.3]
+	var ff := PenstockDesign.firm_flow(sup, kw, 1.0)
+	_check("firm flow: driest Aug 0.6 L/s / 150 W", int(ff["min_month"]) == 7 and is_equal_approx(float(ff["min_lps"]), 0.6)
+		and is_equal_approx(float(ff["min_kw"]), 0.15))
+	_check("firm flow: wettest Jan", int(ff["max_month"]) == 0)
+	_check("firm flow: 5 months below a 1 L/s jet", int(ff["limited_months"]) == 5, str(ff["limited_months"]))
+	_check("firm flow: 11 entries → {}", PenstockDesign.firm_flow([1.0], kw).is_empty())
 
 
 ## Synthetic hill for contour routing tests: smooth ridge at x=30, plus a sharp

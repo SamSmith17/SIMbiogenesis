@@ -334,7 +334,12 @@ static func _placed_has_starshade(main: Node, terrain_loader: Node) -> bool:
 
 static func _scene_has_starshade(main: Node) -> bool:
 	for node: Node in main.find_children("*", "", true, false):
-		if node == null:
+		# Only 3D content is a StarShade STRUCTURE. The loader always creates
+		# UI nodes named "StarShadeEditLayer" / "StarShadeEditModal", and the
+		# name match used to seed an 18-panel StarShade system into the graph
+		# of EVERY generated map whose graph was empty — a new world was
+		# never actually empty.
+		if not (node is Node3D):
 			continue
 		var nm := str(node.name).to_lower()
 		for kw: String in _SCENE_KEYWORDS:

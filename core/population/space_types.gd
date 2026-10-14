@@ -18,7 +18,7 @@ const TYPES: Array = [
 	"restroom", "kitchen", "sleep", "water_point", "shower",
 	"fire_circle", "movement", "quiet", "workshop_social",
 	"stage", "temple", "center_camp", "art", "vendor", "medical",
-	"effigy",
+	"effigy", "shade",
 ]
 
 ## Enrichment spaces: where people go once their needs are met and they have
@@ -50,7 +50,7 @@ const OUTDOOR_TYPES: Array = ["fire_circle", "stage", "art", "center_camp", "eff
 
 ## Venues whose crowd has CHOREOGRAPHY (VenueCrowd): slots that depend on
 ## the venue's live state and move with it.
-const LIVE_VENUE_TYPES: Array = ["effigy", "stage"]
+const LIVE_VENUE_TYPES: Array = ["effigy", "stage", "fire_circle"]
 
 const LABELS: Dictionary = {
 	"restroom": "Restroom",
@@ -69,7 +69,13 @@ const LABELS: Dictionary = {
 	"vendor": "Food Vendor",
 	"medical": "Medical",
 	"effigy": "Effigy",
+	"shade": "Shade / Shelter",
 }
+
+## Not a venue and not a need: SHADE is where people go to get out of the
+## midday sun or a downpour (NpcComfort). Camp shade structures, tarps and
+## StarShades count on their own; tagging a prop or an area adds one.
+const COMFORT_TYPES: Array = ["shade"]
 
 ## Need id -> the space type that satisfies it. Enrichment is satisfied by ANY
 ## ENRICHMENT_TYPES space, so it maps to the most iconic one for labelling and
@@ -132,6 +138,7 @@ const COLORS: Dictionary = {
 	"vendor": Color(0.95, 0.55, 0.40),
 	"medical": Color(0.95, 0.35, 0.35),
 	"effigy": Color(1.0, 0.45, 0.15),
+	"shade": Color(0.55, 0.78, 0.62),
 }
 
 ## Short glyph for map markers / crosshair prompts.
@@ -152,6 +159,7 @@ const ICONS: Dictionary = {
 	"vendor": "FOOD",
 	"medical": "MED",
 	"effigy": "BURN",
+	"shade": "SHADE",
 }
 
 

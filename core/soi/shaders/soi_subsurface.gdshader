@@ -30,7 +30,10 @@ uniform float glass_opacity = 1.0;
 /// instead of the water-cycle diagram (soil gradient + percolation veins +
 /// aquifer). The plan wants "solid earth under the terrain", not a poster.
 uniform float plain_soil = 0.0;
-uniform vec3 plain_soil_color : source_color = vec3(0.62, 0.52, 0.38);
+/// The terrain's near-field ground maps (TerrainBuilder) — the soil's grain.
+uniform sampler2D soil_tex : source_color, filter_linear_mipmap, repeat_enable, hint_default_white;
+uniform sampler2D soil_nrm : filter_linear_mipmap, repeat_enable, hint_normal;
+uniform float use_soil_tex = 0.0;
 
 varying vec3 v_world_pos;
 varying float v_terrain_y;
@@ -40,9 +43,7 @@ void vertex() {
 	v_terrain_y = UV2.x;
 }
 
-float hash2(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
+#include "res://core/soi/shaders/soi_strata.gdshaderinc"
 
 void fragment() {
 	if (soi_clip_enabled < 0.5) {
@@ -91,61 +92,13 @@ void fragment() {
 		RIM_TINT = 0.7;
 	} else {
 		// ---- Below ground: opaque earth cross-section (terrarium cutaway) ----
-		float depth = surface_y - v_world_pos.y;
-		if (plain_soil > 0.5) {
-			// Site Plan: solid ground-tan bowl. Mild depth shading + grain so
-			// it still reads as earth, not plastic; same emission path as the
-			// diagram so the bowl stays visible at night.
-			float pgrain = hash2(floor(v_world_pos.xy * 6.0) + floor(v_world_pos.zy * 4.0));
-			vec3 pcol = plain_soil_color * (1.0 - 0.25 * clamp(depth / 60.0, 0.0, 1.0));
-			pcol = mix(pcol, pcol * 0.90, pgrain * 0.35);
-			ALBEDO = vec3(0.0);
-			EMISSION = pcol;
-			ROUGHNESS = 1.0;
-			METALLIC = 0.0;
-			SPECULAR = 0.0;
-			ALPHA = 1.0;
-		} else {
-		// The water-cycle-diagram look: soil darkening steadily with depth,
-		// animated percolation veins trickling down from the surface, and a
-		// saturated groundwater band below the water table.
-		vec3 soil_near = vec3(0.34, 0.235, 0.135);
-		vec3 soil_far  = vec3(0.20, 0.125, 0.070);
-		float n = hash2(floor(v_world_pos.xz * 3.0)) * 0.55
-				+ hash2(floor(v_world_pos.xz * 0.35)) * 0.45;
-		// Mild grain so the cut face reads as dirt, not a flat plastic fill.
-		float grain = hash2(floor(v_world_pos.xy * 8.0) + floor(v_world_pos.zy * 5.0));
-		vec3 col = mix(soil_near, soil_far, clamp(depth / 20.0, 0.0, 1.0));
-		col = mix(col, col * 1.12, n);
-		col = mix(col, col * 0.88, grain * 0.35);
-		// Keep darkening past the first 20 m so a deep scoop reads as one
-		// continuous gradient rather than plateauing at soil_far.
-		col *= 1.0 - 0.35 * clamp((depth - 20.0) / 120.0, 0.0, 1.0);
-
-		// Percolation: a FEW bold channels meandering gently downward (the
-		// water-cycle diagram draws maybe three, not a marble texture — the
-		// first attempt used tight wiggles and read as squiggly veining).
-		// Low-frequency warp = gentle meander; sin(y − TIME) trickles the
-		// bright dashes DOWNWARD.
-		vec2 wxz = v_world_pos.xz
-				+ vec2(sin(v_world_pos.y * 0.045 + v_world_pos.z * 0.020),
-						cos(v_world_pos.y * 0.038 + v_world_pos.x * 0.017)) * 9.0;
-		float band = 1.0 - abs(fract(wxz.x * 0.045 + wxz.y * 0.012) - 0.5) * 2.0;
-		float vein = smoothstep(0.93, 0.99, band);
-		// Thin the network: most cells carry no channel.
-		vein *= step(0.35, hash2(floor(wxz * vec2(0.045, 0.008))));
-		float trickle = 0.70 + 0.30 * sin(v_world_pos.y * 0.9 + TIME * 1.2);
-
-		// Groundwater: soil saturates into the solid aquifer wedge below the
-		// water table — rich blue, deepening toward the bottom of the scoop.
-		float sat = smoothstep(soi_water_table_m, soi_water_table_m + 8.0, depth);
-		vec3 aquifer = mix(vec3(0.10, 0.28, 0.52), vec3(0.045, 0.13, 0.28),
-				clamp(depth / 130.0, 0.0, 1.0));
-		col = mix(col, aquifer, sat);
-		// Channels fade in just under the surface and hand off to the aquifer.
-		float vein_a = vein * trickle * (1.0 - sat) * smoothstep(0.5, 3.0, depth);
-		col = mix(col, vec3(0.30, 0.60, 0.95), clamp(vein_a, 0.0, 0.85));
-
+		// The PNW soil profile (soi_strata.gdshaderinc). Face coordinates on
+		// the sphere: arc length round the vertical axis, world height. Site
+		// Plan's rim (`plain_soil`) keeps the profile but no flowing channels.
+		vec2 rel = v_world_pos.xz - soi_center_radius.xz;
+		vec2 face = vec2(atan(rel.y, rel.x) * soi_center_radius.w, v_world_pos.y);
+		vec3 col = soi_soil(face, surface_y, soi_center_radius, TIME, soil_tex, soil_nrm,
+				use_soil_tex, plain_soil > 0.5 ? 0.0 : 1.0);
 		// Self-lit poster colors: the cross-section is a DIAGRAM, and letting
 		// the scene light it washed the authored palette out twice over —
 		// first a glossy aquifer mirrored the sky, then even fully matte the
@@ -159,6 +112,5 @@ void fragment() {
 		METALLIC = 0.0;
 		SPECULAR = 0.0;
 		ALPHA = 1.0;
-		}
 	}
 }

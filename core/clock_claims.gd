@@ -117,6 +117,17 @@ func value_or(key: String, base: Variant) -> Variant:
 	return base
 
 
+## Owner of the top-most claim that defines `key`, or "" when none does — the
+## claim value_or() would read. Lets UI say WHO is holding the clock ("paused
+## by CSV playback") instead of a Play button that silently does nothing.
+func owner_of(key: String) -> String:
+	for i in range(_claims.size() - 1, -1, -1):
+		var vals: Dictionary = _claims[i].get("values", {}) as Dictionary
+		if vals.has(key):
+			return str(_claims[i].get("owner", ""))
+	return ""
+
+
 ## Owners currently holding a claim, bottom to top. Diagnostics only.
 func owners() -> Array[String]:
 	var out: Array[String] = []

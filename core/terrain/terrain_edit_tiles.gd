@@ -374,6 +374,154 @@ func _surface_height(x: float, z: float, height_fn: Callable) -> float:
 	return float(height_fn.call(x, z)) + sample_delta(x, z)
 
 
+## Mesh arrays AND collider heightmap for one tile from ONE pass over the
+## surface: an (e+2)² height grid (one-sample border for the normals) instead of
+## the five `height_fn` calls per vertex `build_tile_arrays` + `build_tile_heightmap`
+## make between them. Same output, ~5x fewer base-height evaluations — what keeps
+## a hundred carved channel tiles from stalling a load.
+## Returns { "arrays": Array, "heightmap": PackedFloat32Array }.
+func build_tile_mesh_data(key: Vector2i, height_fn: Callable, center_elev: float,
+		uv_scale: float, uv_origin: float) -> Dictionary:
+	var e := _samples_per_edge()
+	var g := e + 2
+	var gi0 := key.x * tile_cells
+	var gj0 := key.y * tile_cells
+	var h := PackedFloat32Array()
+	h.resize(g * g)
+	for bj in g:
+		var z := float(gj0 + bj - 1) * cell_m
+		for bi in g:
+			var x := float(gi0 + bi - 1) * cell_m
+			h[bj * g + bi] = float(height_fn.call(x, z)) + sample_delta(x, z)
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var normals := PackedVector3Array()
+	var hm := PackedFloat32Array()
+	verts.resize(e * e)
+	uvs.resize(e * e)
+	normals.resize(e * e)
+	hm.resize(e * e)
+	for lj in e:
+		var z2 := float(gj0 + lj) * cell_m
+		for li in e:
+			var x2 := float(gi0 + li) * cell_m
+			var b := (lj + 1) * g + (li + 1)
+			var hy := h[b] - center_elev
+			var idx := lj * e + li
+			verts[idx] = Vector3(x2, hy, z2)
+			hm[idx] = hy
+			uvs[idx] = Vector2(x2 * uv_scale + uv_origin, z2 * uv_scale + uv_origin)
+			normals[idx] = Vector3(h[b - 1] - h[b + 1], 2.0 * cell_m, h[b - g] - h[b + g]).normalized()
+	# Each quad splits along the diagonal whose two corners are CLOSEST in
+	# height, so a crease (a carved channel, a road cut, a ridge) that runs
+	# diagonally across the grid follows quad diagonals instead of zig-zagging
+	# through them — the fixed split drew every diagonal channel as a sawtooth.
+	var indices := PackedInt32Array()
+	indices.resize((e - 1) * (e - 1) * 6)
+	var ii := 0
+	for r in e - 1:
+		for c in e - 1:
+			var i := r * e + c
+			var b00 := (r + 1) * g + (c + 1)
+			var d_main := absf(h[b00] - h[b00 + g + 1])     # i ↔ i+e+1
+			var d_anti := absf(h[b00 + 1] - h[b00 + g])     # i+1 ↔ i+e
+			if d_main < d_anti:
+				indices[ii] = i
+				indices[ii + 1] = i + 1
+				indices[ii + 2] = i + e + 1
+				indices[ii + 3] = i
+				indices[ii + 4] = i + e + 1
+				indices[ii + 5] = i + e
+			else:
+				indices[ii] = i
+				indices[ii + 1] = i + 1
+				indices[ii + 2] = i + e
+				indices[ii + 3] = i + 1
+				indices[ii + 4] = i + e + 1
+				indices[ii + 5] = i + e
+			ii += 6
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	return {"arrays": arrays, "heightmap": hm}
+
+
+# ---------------------------------------------------------------------------
+# Layer composition (the delta STACK: procedural channels + player sculpt)
+# ---------------------------------------------------------------------------
+
+## A deep copy (tiles only — no dirty set, no undo session) for a worker
+## thread to sample while the main thread keeps editing the original.
+func clone() -> TerrainEditTiles:
+	var t := TerrainEditTiles.new()
+	t.cell_m = cell_m
+	t.tile_cells = tile_cells
+	for k in _tiles.keys():
+		t._tiles[k] = (_tiles[k] as PackedFloat32Array).duplicate()
+	return t
+
+
+func has_tile(key: Vector2i) -> bool:
+	return _tiles.has(key)
+
+
+## The raw corner-delta array of a tile (empty when absent). Read-only use.
+func tile_data(key: Vector2i) -> PackedFloat32Array:
+	return _tiles.get(key, PackedFloat32Array())
+
+
+## Replace one tile's whole delta array (dirty-marked; an all-zero or empty
+## array removes the tile). Used by the channel carver to install a tile it
+## rasterised off the main thread.
+func set_tile_data(key: Vector2i, arr: PackedFloat32Array, eps: float = 1e-4) -> void:
+	_snapshot_tile(key)
+	var keep := false
+	if arr.size() == _tile_array_size():
+		for v in arr:
+			if absf(v) > eps:
+				keep = true
+				break
+	if keep:
+		_tiles[key] = arr
+	else:
+		_tiles.erase(key)
+	_dirty[key] = true
+
+
+## Recompute `keys` of THIS store as the per-sample SUM of `layers` (each a
+## TerrainEditTiles on the same grid). A key every layer lacks (or that sums to
+## ~0) is removed. Every recomputed key is marked dirty, so a HeightField bound
+## to this store re-meshes exactly what changed. Layers must share cell_m /
+## tile_cells with this store.
+func compose_from(layers: Array, keys: Array, eps: float = 1e-4) -> void:
+	var n := _tile_array_size()
+	for key_v in keys:
+		var key: Vector2i = key_v
+		var sum := PackedFloat32Array()
+		var any := false
+		for layer_v in layers:
+			var layer := layer_v as TerrainEditTiles
+			if layer == null or not layer._tiles.has(key):
+				continue
+			var src: PackedFloat32Array = layer._tiles[key]
+			if not any:
+				sum = src.duplicate()
+				any = true
+			else:
+				for i in n:
+					sum[i] += src[i]
+		if any:
+			set_tile_data(key, sum, eps)
+		elif _tiles.has(key):
+			_tiles.erase(key)
+			_dirty[key] = true
+		else:
+			_dirty[key] = true
+
+
 # ---------------------------------------------------------------------------
 # Persistence (binary — replaces the 65k-float JSON array format)
 # ---------------------------------------------------------------------------

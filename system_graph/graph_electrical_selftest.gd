@@ -16,6 +16,7 @@ func _initialize() -> void:
 	fails += _test_controller_reset()
 	fails += _test_array_topology()
 	fails += _test_array_wire_and_voc()
+	fails += _test_string_window()
 	fails += _test_controller_ranking()
 	fails += _test_voc_across_supernode()
 	fails += _test_short_circuit_direct()
@@ -32,7 +33,7 @@ func _initialize() -> void:
 	fails += _test_starshade_batt_port_net_merge()
 	fails += _test_packed_gate()
 	if fails == 0:
-		print("GRAPH ELECTRICAL SELFTEST PASS  (23 checks)")
+		print("GRAPH ELECTRICAL SELFTEST PASS  (24 checks)")
 	else:
 		print("GRAPH ELECTRICAL SELFTEST FAIL  (%d failed)" % fails)
 	quit()
@@ -908,3 +909,60 @@ func _dc_wire(model: GraphModel, src: String, src_handle: String,
 	model.add_connection({"scope_id": "root", "polarity": pol,
 		"source_item_id": src, "source_handle_id": src_handle,
 		"target_item_id": tgt, "target_handle_id": tgt_handle})
+
+## Mount Vernon's real string: 9 × JA Solar 380 W (Voc 41.62, Vmp 34.77,
+## Voc −0.272 %/°C, Pmax −0.35 %/°C) as a 9S array on an EG4 6000XP
+## (480 V max, MPPT 120–385 V, start-up 100 V). Hand numbers:
+##   Voc STC 374.6 V; cold (−10 °C) 374.6 × (1 + 0.00272 × 35) = 410.2 V;
+##   hot cell 40 + 25 × 1.25 = 71.25 °C; Vmp hot 312.9 × (1 − 0.0040 × 46.25)
+##   = 255.0 V. All inside the window → ok. Then a 13S string trips the cold
+##   limit and a 3S string the MPPT floor.
+func _test_string_window() -> int:
+	var fails := 0
+	for case_v: Array in [[9, true, ""], [13, false, "limit"], [3, false, "MPPT floor"]]:
+		var n: int = int(case_v[0])
+		var model: GraphModel = GraphModelScript.new()
+		var topo := {"series": n, "parallel": 1, "fitted": n}
+		var equiv := SolarArrayIntelligence.build_array_equiv_specs(
+				n, 380.0, 41.62, 34.77, 10.93, 11.47, topo)
+		var sp: Dictionary = {"compound_kind": "array", "array_panel_units": n,
+				"voc_temp_coeff_pct": -0.272, "pmax_temp_coeff_pct": -0.35}
+		for k in equiv.keys():
+			sp[k] = equiv[k]
+		model.add_item({"id": "arr", "type": "compound", "x": 0.0, "y": 0.0,
+				"width": 200.0, "height": 140.0, "scope_id": "root", "specs": sp})
+		_add_controller(model, "ctrl", 480.0)
+		var cs: Dictionary = (model.get_item("ctrl").get("specs", {}) as Dictionary).duplicate()
+		cs["mppt_min_v"] = 120.0
+		cs["mppt_max_v"] = 385.0
+		cs["startup_v"] = 100.0
+		model.update_item("ctrl", {"specs": cs})
+		SolarArrayIntelligence.wire_array_to_controller(model, "arr", "ctrl", "root")
+		var rep := PvElectrical.string_window_report(model, "ctrl",
+				GraphNesting.flat_connections(model))
+		if rep.is_empty():
+			push_error("string window: empty report for %dS" % n)
+			fails += 1
+			continue
+		if bool(rep.get("ok", false)) != bool(case_v[1]):
+			push_error("string window %dS ok=%s want %s: %s" % [n, str(rep.get("ok")), str(case_v[1]), str(rep.get("issues"))])
+			fails += 1
+		var want_issue := str(case_v[2])
+		if not want_issue.is_empty() and not str(rep.get("issues", [])).contains(want_issue):
+			push_error("string window %dS: expected an issue naming '%s', got %s" % [n, want_issue, str(rep.get("issues"))])
+			fails += 1
+		if n == 9:
+			if absf(float(rep.get("voc_cold", 0.0)) - 410.2) > 0.6:
+				push_error("9S cold Voc %.2f want 410.2" % float(rep.get("voc_cold", 0.0)))
+				fails += 1
+			if absf(float(rep.get("vmp_hot", 0.0)) - 255.0) > 0.8:
+				push_error("9S hot Vmp %.2f want 255.0" % float(rep.get("vmp_hot", 0.0)))
+				fails += 1
+			# The per-panel coefficient reaches the live Voc too (0.272 not 0.3).
+			var live := PvElectrical.max_string_voc_for_controller(model, "ctrl", "root", -10.0)
+			if absf(live - 410.2) > 0.6:
+				push_error("9S live cold Voc %.2f want 410.2 (panel coefficient)" % live)
+				fails += 1
+	if fails == 0:
+		print("  string window (9S ok, 13S over limit, 3S under MPPT floor): OK")
+	return fails

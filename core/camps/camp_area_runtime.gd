@@ -102,13 +102,15 @@ func rebuild_area(area: Dictionary, ctx: Dictionary, keep_items: bool = false) -
 		# them) and which footprints are solid (people walk round them).
 		var shelters: Array = []
 		var solids: Array = []
+		var shades: Array = []
 		for cls in classes.keys():
 			_build_class_batches(node, str(cls), classes[cls])
 			if keep_items:
 				items.append_array(classes[cls])
 			var sleeps := int(CampStyles.SHELTER_SLEEPS.get(str(cls), 0))
 			var solid := bool(CampStyles.SOLID_CLASSES.get(str(cls), false))
-			if sleeps <= 0 and not solid:
+			var shade := bool(CampStyles.SHADE_CLASSES.get(str(cls), false))
+			if sleeps <= 0 and not solid and not shade:
 				continue
 			for it in classes[cls]:
 				var d: Dictionary = it
@@ -120,8 +122,11 @@ func rebuild_area(area: Dictionary, ctx: Dictionary, keep_items: bool = false) -
 					shelters.append(entry)
 				if solid:
 					solids.append(entry)
+				if shade:
+					shades.append(entry)
 		node.set_meta("shelters", shelters)
 		node.set_meta("solids", solids)
+		node.set_meta("shades", shades)
 		if keep_items:
 			node.set_meta("items", items)
 	_queue_glow_refresh()
@@ -168,6 +173,16 @@ func all_shelters() -> Array:
 	for child in get_children():
 		if String(child.name).begins_with("Area_"):
 			out.append_array(child.get_meta("shelters", []))
+	return out
+
+
+## Every camp's shade structures (canopies, tarps, shade arrays):
+## [{pos, yaw, size, cls}].
+func all_shades() -> Array:
+	var out: Array = []
+	for child in get_children():
+		if String(child.name).begins_with("Area_"):
+			out.append_array(child.get_meta("shades", []))
 	return out
 
 

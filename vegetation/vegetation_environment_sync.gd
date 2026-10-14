@@ -134,7 +134,10 @@ func register_mesh_instance(mi: MeshInstance3D, species: String = "") -> void:
 
 
 func apply_species_tints(species: String, albedo: Color, highlight: Color) -> void:
-	var av := Vector3(albedo.r, albedo.g, albedo.b)
+	# The picked colour → the shader's multiplier (see
+	# VegetationCardFactory.tint_multiplier: passing it raw squared the colour).
+	var av := VegetationCardFactory.tint_multiplier(albedo,
+			VegetationCardFactory.reference_top(species))
 	var hv := Vector3(highlight.r, highlight.g, highlight.b)
 	var i := 0
 	while i < _materials.size():
@@ -145,7 +148,9 @@ func apply_species_tints(species: String, albedo: Color, highlight: Color) -> vo
 			_material_deciduousness.erase(sm)
 			continue
 		if str(_material_species.get(sm, "")) == species:
-			sm.set_shader_parameter("albedo_tint", av)
+			# A photocard carries its exposure match as a per-material factor.
+			var extra: Vector3 = sm.get_meta(VegetationCardFactory.TINT_EXTRA_META, Vector3.ONE)
+			sm.set_shader_parameter("albedo_tint", av * extra)
 			sm.set_shader_parameter("highlight_tint", hv)
 		i += 1
 

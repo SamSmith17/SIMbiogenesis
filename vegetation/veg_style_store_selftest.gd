@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_test_variant_meshes_differ()
 	_test_fresh_start_ignores_legacy()
 	_test_stale_version_ignored()
+	_test_black_tint_dropped()
 	_test_layer_sparse()
 	_test_reset_invalidation()
 	_cleanup_files()
@@ -247,6 +248,37 @@ func _test_stale_version_ignored() -> void:
 	var flat := VegStyleStore.flat_merged(T_LAT, T_LON)
 	_check("stale-version store is ignored",
 		"deciduous_height_m" not in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+
+
+func _test_black_tint_dropped() -> void:
+	# Mount Vernon's map style carried pine albedo_tint [0,0,0,1]: a tint
+	# MULTIPLIES the needle colour, so every pine rendered solid black. A
+	# near-black tint is dropped on read; real tints and non-tint keys stay.
+	_cleanup_files()
+	var f := FileAccess.open(VegStyleStore.global_v2_path(), FileAccess.WRITE)
+	f.store_string(JSON.stringify({"veg_style_version": VegStyleStore.VERSION,
+		"global": {"mix_albedo_tint": [1.0, 1.0, 1.0, 1.0]},
+		"family": {"pine": {"albedo_tint": [0.0, 0.0, 0.0, 1.0], "height_m": 21.0},
+				"deciduous": {"albedo_tint": [0.8, 0.9, 0.7, 1.0]}},
+		"species": {}}))
+	f.close()
+	VegStyleStore.invalidate_cache()
+	var flat := VegStyleStore.flat_merged(T_LAT, T_LON)
+	_check("black pine tint dropped",
+		"pine_albedo_tint" not in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+	_check("pine's other edits survive",
+		"pine_height_m" in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+	_check("a real tint survives",
+		"deciduous_albedo_tint" in (flat[VegStyleStore.KEY_USER_FAMILY] as Array))
+	_check("is_black_tint ignores non-tint keys",
+		not VegStyleStore.is_black_tint("bark_roughness", Color.BLACK))
+	# The old deciduous default (a dark green the leaf shader multiplied onto
+	# leaves already painted green) was saved verbatim as a "species" edit by
+	# earlier builds — dropped as stale, while a near neighbour survives.
+	_check("legacy dark deciduous default tint dropped",
+		VegStyleStore.is_black_tint("albedo_tint", VegStyleStore.LEGACY_DECIDUOUS_DEFAULT_TINT))
+	_check("a picked green tint is not mistaken for the legacy default",
+		not VegStyleStore.is_black_tint("albedo_tint", Color(0.10, 0.30, 0.12)))
 
 
 func _test_layer_sparse() -> void:

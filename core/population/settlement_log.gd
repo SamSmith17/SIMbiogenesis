@@ -36,6 +36,7 @@ const KIND_ICONS: Dictionary = {
 	"departed": "👋", "lost": "🕯", "collapse_warning": "⚠",
 	"collapsed": "🏚", "deserted": "🏜", "skill_earned": "🎓",
 	"duty_sub": "🔁", "duty_cover": "🔁", "oncall_page": "📟",
+	"peak": "✦",
 }
 
 static func icon_for(kind: String) -> String:

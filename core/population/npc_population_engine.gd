@@ -36,6 +36,7 @@ signal skill_earned(agent_id: String, display_name: String, tag: String)
 
 ## Separation is skipped above this tick length — see _separate.
 const SEPARATION_MAX_DT_H := 0.1
+const SEPARATION_MAX_TIME_MULT := 120.0
 ## Cap on how far one tick of crowding may move anyone.
 const MAX_PUSH_M := 0.25
 ## How much of a travelling agent's push is redirected sideways rather than
@@ -56,6 +57,9 @@ const COLLAPSE_WARN_RISK := 0.5
 const CATCHUP_MORALE_DRIFT := 0.12
 
 var agents: Array = []            # of NpcAgent
+## The ctx of the last tick (routes, registry) for casts made between ticks
+## (the DJ). Never persisted.
+var _last_ctx: Dictionary = {}
 var chore_board: NpcChoreBoard = null
 ## Who worked how much, per sim-day. Rides the snapshot, so it survives
 ## save/load — unlike NpcAgent's walking ledger, which does not.
@@ -110,6 +114,50 @@ func configure(count: int, seed_key: String, home: Vector2) -> void:
 		chore_board = NpcChoreBoard.create_empty()
 	if routine == null:
 		routine = NpcRoutine.default_day()
+
+
+## Change the roster size IN PLACE (the festival population slider): everyone
+## already here keeps their state. Growing mints new people with configure()'s
+## id scheme, reusing the lowest free indices; shrinking removes the
+## highest-numbered people and releases their claims.
+func resize(count: int, seed_key: String, home: Vector2, registry: SpaceRegistry = null) -> void:
+	count = clampi(count, 1, 200)
+	if count == agents.size():
+		return
+	if count < agents.size():
+		var keep: Array = []
+		var drop: Array = []
+		var order := agents.duplicate()
+		order.sort_custom(func(a, b) -> bool:
+			return _index_of_id((a as NpcAgent).id) < _index_of_id((b as NpcAgent).id))
+		for i in order.size():
+			if i < count:
+				keep.append(order[i])
+			else:
+				drop.append(order[i])
+		var ctx := {"registry": registry, "board": chore_board}
+		for a in drop:
+			(a as NpcAgent).release_claims(ctx)
+		agents = keep
+	else:
+		var used := {}
+		for a in agents:
+			used[(a as NpcAgent).id] = true
+		var k := 0
+		while agents.size() < count:
+			var aid := "%s_npc_%d" % [seed_key, k]
+			if not used.has(aid):
+				var ang := TAU * float(k) / float(count)
+				var spawn := home + Vector2(cos(ang), sin(ang)) * SPAWN_RING_M * (0.5 + 0.5 * float(k % 3))
+				agents.append(NpcAgent.make(aid, spawn))
+			k += 1
+	_initial_roster = agents.size()
+	_validate_assignments()
+
+
+static func _index_of_id(aid: String) -> int:
+	var cut := aid.rfind("_npc_")
+	return int(aid.substr(cut + 5)) if cut >= 0 else 0
 
 
 ## Start this community over: a fresh roster at full morale, no departure
@@ -168,13 +216,18 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 		return {}
 	var dt := abs_hours - _last_abs_h
 	if dt < 0.0:
-		# Backward scrub: freeze — read-only elsewhere, no phantom demand.
+		# Backward scrub: freeze — read-only elsewhere, no phantom demand —
+		# with every pending time moved back with the clock (CrowdCohort
+		# ._rebase_times), so an activity does not run on until the old clock.
+		for a in agents:
+			(a as NpcAgent).rebase_time(dt)
 		_last_abs_h = abs_hours
 		return {}
 	if dt == 0.0:
 		return _sum_demand(_make_ctx(ctx_in))
 	_max_dt = maxf(_max_dt, dt)
 	var ctx := _make_ctx(ctx_in)
+	_last_ctx = ctx
 	if dt > CATCHUP_JUMP_H:
 		_catchups += 1
 		_catch_up(abs_hours, dt, ctx)
@@ -509,8 +562,23 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"venue_state_of": ctx_in.get("venue_state_of", Callable()),
 		"venue_front_of": ctx_in.get("venue_front_of", Callable()),
 		"event_active": bool(ctx_in.get("event_active", false)),
+		# The burn's identity — turnout (VenueCrowd.attends) is keyed on it.
+		"burn_key": str(ctx_in.get("burn_key", "")),
+		# The clock's speed as a multiple of realtime (0 = unknown): gates
+		# cosmetic work (separation) at festival speeds.
+		"time_mult": float(ctx_in.get("time_mult", 0.0)),
+		# SOCIAL blocks: the camp's home + seed for its conversation circles
+		# (NpcSocial). Forwarded here or agents fall back to their own pos.
+		"camp_home": ctx_in.get("camp_home", null),
+		"camp_seed": str(ctx_in.get("camp_seed", "")),
 		"bed_spot_of": ctx_in.get("bed_spot_of", Callable()),
 		"no_go": ctx_in.get("no_go", []),
+		# Weather comfort (NpcComfort): this hour's pulls, the shade / warmth
+		# spot finder, and a person's own bed for sheltering in it. Forwarded
+		# here or the full tier never takes cover while the light tier does.
+		"comfort": ctx_in.get("comfort", {}),
+		"comfort_spot": ctx_in.get("comfort_spot", Callable()),
+		"home_bed_of": ctx_in.get("home_bed_of", Callable()),
 		"routine": routine,
 		"trace": ctx_in.get("trace", Callable()),
 		"hour_of_day": float(ctx_in.get("hour_of_day", 12.0)),
@@ -577,7 +645,9 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 	# Above this the agents teleport (one tick covers the whole remaining
 	# distance), so their exact position is already an approximation and
 	# nudging it is noise on top of noise.
-	if dt > SEPARATION_MAX_DT_H or agents.size() < 2:
+	# Also off at festival speeds: the nudges are cosmetic, O(n^2), and at
+	# 120x+ a person crosses several personal spaces per frame anyway.
+	if dt > SEPARATION_MAX_DT_H or agents.size() < 2 			or float(ctx.get("time_mult", 0.0)) >= SEPARATION_MAX_TIME_MULT:
 		return
 	var walkable: Callable = ctx.get("walkable", Callable())
 	var gap := SpaceRegistry.PERSONAL_SPACE_M
@@ -588,9 +658,20 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 	var push: Array[Vector2] = []
 	push.resize(agents.size())
 	push.fill(Vector2.ZERO)
+	# Sleepers are exempt both ways: people pile into a tent to sleep, and a
+	# push applied every tick walked them out of it onto the ground.
+	var asleep: Array[bool] = []
+	asleep.resize(agents.size())
 	for i in range(agents.size()):
+		var ag: NpcAgent = agents[i]
+		asleep[i] = ag.state == NpcAgent.State.DOING and ag.activity == "sleep"
+	for i in range(agents.size()):
+		if asleep[i]:
+			continue
 		var a: NpcAgent = agents[i]
 		for j in range(i + 1, agents.size()):
+			if asleep[j]:
+				continue
 			var b: NpcAgent = agents[j]
 			var d := b.pos - a.pos
 			var dist := d.length()
@@ -639,6 +720,80 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 
 
 ## Sum of every agent's current consumption rates.
+## Walk everyone inside a fire perimeter out of it (NpcAgent.evacuate_from).
+## Cast `agent_id` as a stage's DJ (NpcAgent.begin_perform). Uses the last
+## tick's context (routes, registry). False when they are not on this roster.
+func perform(agent_id: String, spot: Dictionary, until_h: float) -> bool:
+	var a := find_agent(agent_id)
+	if a == null or a.controlled_by_peer != 0:
+		return false
+	a.begin_perform(spot, until_h, _last_ctx)
+	return true
+
+
+## A sandman turns this person back at a burn's line (NpcAgent.redirect_out).
+func redirect_out(agent_id: String, centre: Vector2, r: float, registry: SpaceRegistry) -> bool:
+	var a := find_agent(agent_id)
+	if a == null:
+		return false
+	return a.redirect_out(centre, r, {"registry": registry, "board": chore_board})
+
+
+## The burn role this person plays ("" = none).
+func role_of(agent_id: String) -> String:
+	var a := find_agent(agent_id)
+	return a.perform_role if a != null and a.activity == NpcAgent.PERFORM_ACTIVITY else ""
+
+
+## End this person's set now (the bridge cast a new DJ for the stage).
+func end_perform(agent_id: String) -> void:
+	var a := find_agent(agent_id)
+	if a == null or a.activity != NpcAgent.PERFORM_ACTIVITY:
+		return
+	a._finish(_last_ctx, false)
+
+
+## PEAK EXPERIENCE inputs (see CrowdCohort.peak_inputs); `agents` maps back.
+func peak_inputs() -> Dictionary:
+	var ids := PackedStringArray()
+	var pos := PackedVector2Array()
+	var vib := PackedByteArray()
+	var sid := PackedStringArray()
+	var refs: Array = []
+	for a in agents:
+		var ag: NpcAgent = a
+		ids.append(ag.id)
+		pos.append(ag.pos)
+		vib.append(1 if ag.vibing() else 0)
+		sid.append(ag.target_space_id)
+		refs.append(ag)
+	return {"ids": ids, "pos": pos, "vib": vib, "sid": sid, "agents": refs}
+
+
+func is_performing(agent_id: String) -> bool:
+	var a := find_agent(agent_id)
+	return a != null and a.activity == NpcAgent.PERFORM_ACTIVITY \
+		and (a.state == NpcAgent.State.TRAVELING or a.state == NpcAgent.State.DOING)
+
+
+## Hard rain began: people on ordinary leisure re-decide now (NpcComfort).
+func wake_for_weather() -> int:
+	var n := 0
+	for a in agents:
+		if (a as NpcAgent).wake_for_weather(_last_ctx):
+			n += 1
+	return n
+
+
+func evacuate_from(centre: Vector2, r: float, registry: SpaceRegistry) -> int:
+	var ctx := {"registry": registry, "board": chore_board}
+	var n := 0
+	for a in agents:
+		if (a as NpcAgent).evacuate_from(centre, r, ctx):
+			n += 1
+	return n
+
+
 func _sum_demand(ctx: Dictionary) -> Dictionary:
 	var out: Dictionary = {}
 	for a in agents:
@@ -845,7 +1000,7 @@ func agent_dots() -> Array:
 			"color": color_for_agent(a.id),
 			"morale": a.morale,
 			"morale_color": NpcMorale.color(a.morale),
-			"morale_label": NpcMorale.label(a.morale),
+			"morale_label": NpcPeak.LABEL if not is_nan(a.peak_since) else NpcMorale.label(a.morale),
 			"activity": a.activity,
 			"state": a.state,
 			# Which enrichment space they went to, so the 3D layer can tell a
@@ -883,6 +1038,11 @@ func agent_dots() -> Array:
 			# the BED's yaw, fixed — no anchor projection and, critically, no
 			# idle drift (drift on a lying figure reads as the sleeper slowly
 			# rotating in place; at high time scale, as a head-shake).
+			# The DJ stands ON the deck: metres above the ground.
+			"elev": a.elev(),
+			"peak_since": a.peak_since,
+			"peak_buzz": a.peak_buzz, "peak_fed": a.peak_fed,
+			"comfort": a._comfort,
 			"face_yaw": a.lie_yaw \
 				if (not is_nan(a.lie_yaw) and a.state == NpcAgent.State.DOING
 					and a.activity == "sleep") \

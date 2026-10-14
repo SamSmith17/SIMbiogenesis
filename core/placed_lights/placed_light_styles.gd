@@ -173,6 +173,8 @@ static func defaults(kind: String) -> Dictionary:
 		"fx_gap": 3.0,
 		"fx_saturation": 1.0,
 		"fx_direction": 1.0,
+		# Retired: every light now pauses with the sim (PlacedLightClock is the
+		# SimFxRate lights track). Kept so old files and styles still load.
 		"fx_pause_with_sim": false,
 		# Draw the lamp itself. Off for omni/spot — the scene shows only the
 		# light, and the IK sphere only while J is open; on for strings (the
@@ -180,6 +182,13 @@ static func defaults(kind: String) -> Dictionary:
 		"show_body": kind == "string" or kind == "mover",
 		# Rated draw for "Add to graph" (0 = estimate from energy).
 		"watts": 0.0,
+		# SOUND REACTIVE: pump to the nearest playing stage's music (StageBeat).
+		# pulse = brightness kicks on every beat (rolls faster through a
+		# build, flashes on the drop, dims in a breakdown); beat = the effect
+		# (chase, rainbow, sweep) moves with the music's tempo; both.
+		"sound_reactive": false,
+		"sound_mode": "pulse",
+		"sound_depth": 0.8,
 	}
 	match kind:
 		"spot":

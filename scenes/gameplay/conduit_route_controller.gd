@@ -234,6 +234,23 @@ func _try_begin_plug_from_port() -> bool:
 	var hit := ConduitPlugLogic.nearest_port_along_ray(origin, dir, ports, PLUG_PICK_PERP_M)
 	if hit.is_empty():
 		return false
+	# The prop under the crosshair owns a plain click (GrabController opens its
+	# editor / drags it). A PowerSpout is 0.6 m long with four ports, so aiming
+	# ANYWHERE on it landed within the pick radius of one and the turbine could
+	# never be clicked. A port on the aimed prop only starts a plug when the aim
+	# is precise; a port behind another prop never does.
+	var wp0: Vector3 = hit.get("world_pos", Vector3.INF)
+	var prop_hit := _center_prop_hit()
+	if not prop_hit.is_empty():
+		var prop_d := float(prop_hit.get("dist", INF))
+		var along := (wp0 - origin).dot(dir.normalized())
+		var same_prop := _port_belongs_to_prop(hit, prop_hit.get("prop") as Node)
+		if not same_prop and along > prop_d - 0.3:
+			return false
+		if same_prop:
+			var perp := (wp0 - origin - dir.normalized() * along).length()
+			if perp > PORT_PRECISE_PICK_M:
+				return false
 	var existing := _conn_on_port(hit)
 	if not existing.is_empty():
 		var wp: Vector3 = hit.get("world_pos", Vector3.INF)
@@ -241,6 +258,64 @@ func _try_begin_plug_from_port() -> bool:
 		return true
 	begin_plug(hit)
 	return true
+
+
+## Precise-aim radius for a port ON the prop under the crosshair (the loose
+## PLUG_PICK_PERP_M still applies to ports with no prop behind them).
+const PORT_PRECISE_PICK_M := 0.15
+## A conduit pick within this of a prop's surface (or beyond it) is the prop.
+## Same rule as InteractionFocus.CONDUIT_PROP_CLEARANCE_M.
+const PROP_CLEARANCE_M := 0.6
+
+
+## The placed prop (or any Interactable) under the screen centre:
+## {prop, dist, point} or {}. One physics ray.
+func _center_prop_hit() -> Dictionary:
+	if _camera == null or _player == null:
+		return {}
+	var vp := get_viewport()
+	if vp == null:
+		return {}
+	var center := vp.get_visible_rect().size * 0.5
+	var origin := _camera.project_ray_origin(center)
+	var dir := _camera.project_ray_normal(center)
+	var space := _player.get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * 200.0)
+	if _player is CollisionObject3D:
+		query.exclude = [(_player as CollisionObject3D).get_rid()]
+	var res := space.intersect_ray(query)
+	if res.is_empty():
+		return {}
+	var node: Node = res.get("collider") as Node
+	while node != null and not (node is Interactable):
+		node = node.get_parent()
+	if node == null:
+		return {}
+	return {"prop": node, "dist": origin.distance_to(res["position"] as Vector3),
+		"point": res["position"]}
+
+
+func _port_belongs_to_prop(port_hit: Dictionary, prop: Node) -> bool:
+	if prop == null or _manager == null:
+		return false
+	var model: GraphModel = _manager.get_graph_model()
+	if model == null:
+		return false
+	var item := model.get_item(str(port_hit.get("item_id", "")))
+	var pid := str((item.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+	return not pid.is_empty() and prop is PlacedProp and str(prop.get("prop_id")) == pid
+
+
+## True when a conduit pick point sits at or behind the prop under the
+## crosshair (every run ends at a port on its prop, so its last samples always
+## pass within the pick radius of the prop body).
+func _conduit_pick_occluded(origin: Vector3, pick_pt: Vector3) -> bool:
+	if not is_finite(pick_pt.x):
+		return false
+	var prop_hit := _center_prop_hit()
+	if prop_hit.is_empty():
+		return false
+	return origin.distance_to(pick_pt) > float(prop_hit["dist"]) - PROP_CLEARANCE_M
 
 
 ## The connection already wired to a port hit's (item, handle), or {}.
@@ -337,8 +412,24 @@ func _commit_penstock_to_new_intake(world_pos: Vector3) -> bool:
 		return false
 	var src_item := str(_plug_src.get("item_id", ""))
 	var src_handle := str((_plug_src.get("port", {}) as Dictionary).get("handle_id", ""))
-	var conn_id := str(sgv.call("create_penstock_intake_at", world_pos, src_item,
-			src_handle, _style_ov))
+	# A plug pulled OFF a stream intake's own port used to mint a second intake
+	# wired to the first (its port also prefers poly_penstock).
+	if _ensure_manager() != null:
+		var model: GraphModel = _manager.get_graph_model()
+		if model != null and ResourceFlowEngine.is_stream_intake(model.get_item(src_item)):
+			_toast("Drag from the TURBINE's penstock port to move the intake")
+			return false
+	# The drop point decides the source: a pond on the graph, a stream (within
+	# 8 m of its line) or bare ground (a spring) — the same resolver the Lab
+	# and the toolbar use, so a plug dropped in a creek taps the creek.
+	var source: Dictionary = sgv.call("resolve_hydro_source_at", Vector2(world_pos.x, world_pos.z)) \
+		if sgv.has_method("resolve_hydro_source_at") else {"kind": "spring", "world_pos": world_pos}
+	if str(source.get("kind", "")) == "spring":
+		source["world_pos"] = world_pos
+	var opts: Dictionary = _style_ov.duplicate(true)
+	opts["handle_id"] = src_handle
+	var conn_id := str(sgv.call("route_penstock_to_source", src_item, source, opts)) \
+		if sgv.has_method("route_penstock_to_source") else ""
 	return not conn_id.is_empty()
 
 
@@ -560,6 +651,13 @@ func _input(event: InputEvent) -> void:
 	# (center-ray picks still hit the wire and were eating every modal click).
 	if CursorController.has_blocking_modal():
 		return
+	# Nothing STARTS here unless the crosshair owns the mouse: with the prop
+	# editor's tool overlay up (free cursor) the screen centre still pointed at
+	# the turbine, so every click on the dock's buttons and gizmo was taken by
+	# a centre-ray port pick and never reached them. A route already in
+	# progress keeps its release / Esc handling.
+	if not _active and not CursorController.should_capture_look():
+		return
 	# Start a plug-pull (aim at a port) or drag-reroute (aim at a conduit).
 	if event is InputEventMouseButton:
 		var mb0 := event as InputEventMouseButton
@@ -754,6 +852,15 @@ func _resolve_hang_drag_pick(screen_pos: Vector2) -> Dictionary:
 		origin = _camera.project_ray_origin(screen_pos)
 		dir = _camera.project_ray_normal(screen_pos)
 	var hit: Dictionary = _manager.pick_conduit(origin, dir, 0.55)
+	if not str(hit.get("conn_id", "")).is_empty() \
+			and _conduit_pick_occluded(origin, hit.get("point", Vector3.INF) as Vector3):
+		hit = {}
+	# The END of a draft pipe is its OutletEndMarker's (GrabController moves
+	# the outlet); a drag there must not insert a waypoint.
+	if not str(hit.get("conn_id", "")).is_empty() and _manager.has_method("is_outlet_terminal_pick") \
+			and bool(_manager.call("is_outlet_terminal_pick", str(hit.get("conn_id", "")),
+				hit.get("point", Vector3.INF) as Vector3)):
+		return {}
 	if cid.is_empty():
 		cid = str(hit.get("conn_id", ""))
 	# Prefer a pin under the crosshair even when wire focus is empty/stale.

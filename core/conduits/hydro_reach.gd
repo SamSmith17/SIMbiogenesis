@@ -42,6 +42,14 @@ var outlet_invert_m: float = NAN
 var max_power_w: float = 0.0
 var hydraulic_efficiency: float = 0.6
 var generator_efficiency: float = 0.7
+## Siphon-turbine geometry beyond the two levels (SiphonTurbinePhysics):
+## how the pipe is primed, the runner bore (0 = the dip tube's), the site's
+## elevation for atmospheric pressure, the draft tube's roughness.
+var prime_mode: String = "overflow"
+var runner_d_m: float = 0.0
+var site_elev_m: float = 0.0
+var draft_eps_m: float = SiphonTurbinePhysics.EPS_HDPE_M
+var module_elev_m: float = NAN
 
 # --- Generalized turbine conveyance ------------------------------------------
 ## "siphon" (orifice/weir over a barrel — the original path) or "penstock" (a
@@ -97,15 +105,30 @@ var last: Dictionary = {}
 
 ## Prismatic pond geometry + current volume.
 func set_pond(floor_m: float, rim_m: float, capacity_l: float, stock_l: float) -> void:
+	stage_curve = []
 	pond_floor_m = floor_m
 	pond_rim_m = rim_m
 	pond_capacity_l = maxf(capacity_l, 0.0)
 	pond_stock_l = clampf(stock_l, 0.0, pond_capacity_l if pond_capacity_l > 0.0 else stock_l)
 
 
-## Set the pond by water-surface elevation (back-computes stock prismatically).
+## The basin's stage–storage curve ([[stock_l, level_m], ...]). With one set,
+## level ↔ stock follow the real basin shape instead of a prism — the prism
+## put Mt Vernon's dead pool 0.67 m too high, so the siphon stalled at −79.02
+## while its dip mouth was at −79.69. Cleared by every set_pond().
+var stage_curve: Array = []
+
+func set_stage_curve(curve: Array) -> void:
+	stage_curve = curve if curve.size() >= 2 else []
+
+
+## Set the pond by water-surface elevation (back-computes stock).
 func set_pond_level(level_m: float) -> void:
 	if is_nan(pond_floor_m) or is_nan(pond_rim_m) or pond_capacity_l <= 0.0:
+		return
+	if not stage_curve.is_empty():
+		pond_stock_l = clampf(PondBathymetry.stage_stock_for_level(stage_curve, level_m),
+				0.0, pond_capacity_l)
 		return
 	pond_stock_l = clampf(_frac_at_level(level_m), 0.0, 1.0) * pond_capacity_l
 
@@ -131,6 +154,12 @@ func configure_siphon(specs: Dictionary) -> void:
 	siphon_break_m = break_m
 	outlet_invert_m = float(specs.get("outlet_invert_m", NAN))
 	primed = bool(specs.get("siphon_primed", primed))
+	prime_mode = str(specs.get("siphon_prime_mode", "overflow"))
+	runner_d_m = maxf(float(specs.get("runner_diameter_mm", 0.0)) / 1000.0, 0.0)
+	site_elev_m = float(specs.get("site_elevation_m", 0.0))
+	draft_eps_m = maxf(float(specs.get("draft_roughness_mm",
+			SiphonTurbinePhysics.EPS_HDPE_M * 1000.0)) / 1000.0, 0.0)
+	module_elev_m = float(levels.get("module_elev_m", NAN))
 
 	# Generalized turbine kind → conveyance. Absent key ("siphon") keeps every
 	# existing save byte-identical to the original siphon path. NOTE: do NOT fall
@@ -173,6 +202,8 @@ func configure_siphon(specs: Dictionary) -> void:
 func pond_level_m() -> float:
 	if is_nan(pond_floor_m) or is_nan(pond_rim_m):
 		return NAN
+	if not stage_curve.is_empty():
+		return PondBathymetry.stage_level_for_stock(stage_curve, pond_stock_l)
 	var span := maxf(pond_rim_m - pond_floor_m, 0.001)
 	var frac := 0.0
 	if pond_capacity_l > 1e-6:
@@ -190,11 +221,33 @@ func evaluate(level_override: float = NAN) -> Dictionary:
 	var level := level_override if not is_nan(level_override) else pond_level_m()
 	if conveyance == "penstock":
 		return _penstock_evaluate(level)
-	var r := SiphonHydraulics.simulate(level, siphon_break_m, siphon_start_m,
-		outlet_invert_m, intake_diameter_m, outlet_diameter_m,
-		barrel_length_m, manning_n, primed, max_power_w,
-		hydraulic_efficiency, generator_efficiency,
-		siphon_start_m, siphon_break_m)
+	# A siphon with a runner in it (SiphonTurbinePhysics): the crest is the
+	# prime level, the dip mouth the break level, the runner sits at the
+	# turbine (the crest when the module elevation is unknown).
+	var crest := siphon_start_m
+	if prime_mode == "pump" and not is_nan(module_elev_m):
+		crest = module_elev_m
+	var r := SiphonTurbinePhysics.solve({
+		"pond_level_m": level,
+		"crest_m": crest,
+		"dip_mouth_m": siphon_break_m,
+		"outlet_m": outlet_invert_m,
+		"dip_d_m": intake_diameter_m,
+		"draft_d_m": outlet_diameter_m,
+		"draft_len_m": barrel_length_m,
+		"draft_eps_m": draft_eps_m,
+		"runner_d_m": runner_d_m,
+		"runner_elev_m": module_elev_m if not is_nan(module_elev_m) else crest,
+		"eta_t": hydraulic_efficiency,
+		"eta_g": generator_efficiency,
+		"max_power_w": max_power_w,
+		"primed_prev": primed,
+		"prime_mode": prime_mode,
+		"site_elev_m": site_elev_m,
+	})
+	# Compat: the reach's prime latch reads these two keys back.
+	r["siphon_start_m"] = siphon_start_m
+	r["siphon_break_m"] = siphon_break_m
 	var eff := effective_break_level_m()
 	if not is_nan(level) and not is_nan(eff) and level <= eff:
 		# Below minimum submergence — air enters the intake, prime is lost.
@@ -214,8 +267,10 @@ func evaluate(level_override: float = NAN) -> Dictionary:
 	# its own numbers so consumers never branch on conveyance).
 	r["conveyance"] = "siphon"
 	r["q_capacity_lps"] = float(r.get("q_lps", 0.0))
-	r["head_loss_m"] = 0.0
-	r["net_head_m"] = float(r.get("head_m", 0.0))
+	# Net head = the head the RUNNER sees (gross − dip − draft − exit losses).
+	r["net_head_m"] = float(r.get("turbine_head_m", 0.0))
+	if not r.has("head_loss_m"):
+		r["head_loss_m"] = 0.0
 	return r
 
 
@@ -492,4 +547,6 @@ func _stock_above_break() -> float:
 			or pond_capacity_l <= 0.0:
 		return pond_stock_l
 	var break_stock := _frac_at_level(eff) * pond_capacity_l
+	if not stage_curve.is_empty():
+		break_stock = PondBathymetry.stage_stock_for_level(stage_curve, eff)
 	return maxf(pond_stock_l - break_stock, 0.0)

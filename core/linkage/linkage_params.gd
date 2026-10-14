@@ -12,6 +12,16 @@ extends RefCounted
 ## `to_config()` / `from_config()` round-trip the web app's v30 config JSON
 ## (see `config-persistence.js:getConfigSnapshot`), so designs exported from
 ## the LinkageLab web app load directly and vice versa.
+##
+## The round trip is LOSSLESS for keys this port does not model yet. Any key
+## a v30 config carries that the typed fields below do not emit (build steps,
+## coverings, floor, shade cloth, the radial array, IBC totes, the camera
+## pose, newer cost and panel keys, ...) is kept in `extra` and written back
+## by `to_config()`. Without it, opening a web design in the game and saving
+## it again silently deleted everything the port had not caught up with.
+## Typed fields always win over `extra`, so a port that starts modelling a key
+## takes it over by simply emitting it. `DERIVED_EXPORT_KEYS` are export
+## snapshots (stale the moment anything is edited) and are dropped.
 
 # --- Structure ---
 var modules: int = 8
@@ -104,6 +114,23 @@ var washers: Dictionary = default_washers()
 ## Parametric hardware stacks per joint. Stored in the web app's own camelCase
 ## shape — see LinkageHardware's class docstring for why.
 var hardware_assemblies: Dictionary = LinkageHardware.default_assemblies()
+
+## Design name: `name` in the web app's preset files, `designName` in some
+## exports. Emitted as both when set.
+var design_name: String = ""
+
+## Every v30 key the typed fields do not model, as the same nested shape the
+## config used. See the class docstring.
+var extra: Dictionary = {}
+
+## Top-level keys a web EXPORT adds on top of the persistent config
+## (`getConfigSnapshot(includeMetadata)` + `project-export.js`). Derived from
+## the design, regenerated on export, and large (`geometrySnapshot` alone is
+## ~220 KB on the Constellation preset), so they are never kept in `extra`.
+const DERIVED_EXPORT_KEYS := [
+	"timestamp", "geometrySnapshot", "hardwareAssemblyDebug", "appVersion",
+	"exportType", "summary", "schemaVersion", "updatedAt", "handoff", "circuit",
+]
 
 const INCHES_PER_FOOT := 12.0
 const INCHES_PER_METER := 39.37007874015748
@@ -219,6 +246,21 @@ static func default_washers() -> Dictionary:
 		"h_thickness": 0.0,     # 0 = auto-synced with h_stack_gap
 		"h_auto": true,
 	}
+
+
+## The design's build guide (`buildSteps`), normalized (LinkageBuildSteps). It
+## lives in `extra` so it round-trips byte-for-byte with LinkageLab.
+func get_build_steps() -> Dictionary:
+	return LinkageBuildSteps.normalize(extra.get("buildSteps"))
+
+
+## Store a build guide; an empty one removes the key (as the web app does).
+func set_build_steps(bs: Dictionary) -> void:
+	var ser = LinkageBuildSteps.serialize(bs)
+	if ser == null:
+		extra.erase("buildSteps")
+	else:
+		extra["buildSteps"] = ser
 
 
 func duplicate_params() -> LinkageParams:
@@ -386,9 +428,16 @@ func apply_auto_bolt_lengths() -> void:
 ## a derived block there would bust that cache on every fold tick.
 ## `LinkageBom.to_json()` writes `summary` for exports that want it.
 func to_config() -> Dictionary:
+	var out := _typed_config()
+	_merge_extra(out, extra)
+	return out
+
+
+## The typed fields only, as a v30 config (no `extra`).
+func _typed_config() -> Dictionary:
 	var sp: Dictionary = solar_panels
 	var sb: Dictionary = support_beams
-	return {
+	var out := {
 		"structure": {
 			"modules": modules,
 			"beamLengths": {"horizontal": h_length_ft, "vertical": v_length_ft},
@@ -419,7 +468,6 @@ func to_config() -> Dictionary:
 				"wallThickness": bracket_wall_thickness,
 				"innerWidth": bracket_inner_width,
 				"holeDiameter": bracket_hole_diameter,
-				"zRotation": 0.0,
 			},
 			"bracketDimensions": {
 				"width": bracket_width,
@@ -551,6 +599,37 @@ func to_config() -> Dictionary:
 		"cameraState": {"structureRotation": structure_rotation},
 		"version": "v30",
 	}
+	if not design_name.is_empty():
+		out["name"] = design_name
+		out["designName"] = design_name
+	return out
+
+
+## Copy `extra` into `out` wherever the typed output has no value. Nested
+## dictionaries merge; anything else the typed output already holds wins.
+## Deep copies, so a caller editing the returned config cannot reach `extra`.
+static func _merge_extra(out: Dictionary, ext: Dictionary) -> void:
+	for k in ext:
+		var v = ext[k]
+		if not out.has(k):
+			out[k] = v.duplicate(true) if (v is Dictionary or v is Array) else v
+		elif out[k] is Dictionary and v is Dictionary:
+			_merge_extra(out[k], v)
+
+
+## The keys of `src` that `typed` does not carry, recursively (the inverse of
+## `_merge_extra`). Containers are deep-copied out of the parsed config.
+static func _unknown_keys(src: Dictionary, typed: Dictionary) -> Dictionary:
+	var ext := {}
+	for k in src:
+		var v = src[k]
+		if not typed.has(k):
+			ext[k] = v.duplicate(true) if (v is Dictionary or v is Array) else v
+		elif typed[k] is Dictionary and v is Dictionary:
+			var sub := _unknown_keys(v, typed[k])
+			if not sub.is_empty():
+				ext[k] = sub
+	return ext
 
 
 func _panel_section_to_config(sec: Dictionary) -> Dictionary:
@@ -580,9 +659,19 @@ func _panel_section_to_config(sec: Dictionary) -> Dictionary:
 func from_config(cfg: Dictionary) -> void:
 	if cfg.is_empty():
 		return
+	design_name = str(cfg.get("designName", cfg.get("name", "")))
+	if design_name == "<null>":
+		design_name = ""
 	if cfg.has("structure"):
 		_apply_v30(cfg)
+		var src := cfg.duplicate(false)
+		for k in DERIVED_EXPORT_KEYS:
+			src.erase(k)
+		extra = _unknown_keys(src, _typed_config())
 	else:
+		# Legacy flat keys are all CONSUMED into the v30 fields; carrying the
+		# leftovers would emit flat keys beside the v30 structure.
+		extra = {}
 		_apply_legacy_flat(cfg)
 
 

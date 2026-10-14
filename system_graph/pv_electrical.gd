@@ -5,10 +5,132 @@ extends RefCounted
 ## per branch, cold-temperature Voc boost). Used for over-voltage controller faults.
 
 const VOC_TEMP_COEFF := 0.003  # /°C — Voc rises ~0.3%/°C below STC (25°C)
+## Vmp falls faster than Voc with heat. P = V·I, so dP/P = dV/V + dI/I: the
+## Vmp coefficient is the Pmax coefficient minus the (small, positive) Imp
+## one, ~+0.05 %/°C for crystalline silicon. Used when a panel gives Pmax but
+## no Vmp coefficient; 0.40 %/°C is the fallback with neither.
+const VMP_TEMP_COEFF := 0.0040
+const IMP_TEMP_COEFF := 0.0005
+## Design temperatures for the string window check (not the live weather):
+## a cold clear morning sets the highest Voc, a hot noon the lowest Vmp. Cell
+## temperature on the hot day uses the NOCT model at 1000 W/m²:
+## T_cell = T_amb + (NOCT − 20) × 1000 / 800, NOCT 45 °C (SolarUI's model).
+const DESIGN_COLD_C := -10.0
+const DESIGN_HOT_AMBIENT_C := 40.0
+const NOCT_C := 45.0
 
 
-static func temp_adjusted_voc(voc_stc: float, ambient_c: float) -> float:
-	return voc_stc * (1.0 + VOC_TEMP_COEFF * (25.0 - ambient_c))
+## `coeff_per_c` is the fractional Voc change per °C (positive number; Voc
+## RISES as it gets colder). Panels that publish their own coefficient pass it
+## through voc_coeff_for.
+static func temp_adjusted_voc(voc_stc: float, ambient_c: float,
+		coeff_per_c: float = VOC_TEMP_COEFF) -> float:
+	return voc_stc * (1.0 + coeff_per_c * (25.0 - ambient_c))
+
+
+## The item's own Voc temperature coefficient (`voc_temp_coeff_pct`, the data
+## sheet's %/°C, e.g. -0.272), else the generic 0.3 %/°C.
+static func voc_coeff_for(item: Dictionary) -> float:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	var pct := float(sp.get("voc_temp_coeff_pct", 0.0))
+	if is_finite(pct) and absf(pct) > 1e-4:
+		return absf(pct) / 100.0
+	return VOC_TEMP_COEFF
+
+
+static func vmp_coeff_for(item: Dictionary) -> float:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	var vpct := float(sp.get("vmp_temp_coeff_pct", 0.0))
+	if is_finite(vpct) and absf(vpct) > 1e-4:
+		return absf(vpct) / 100.0
+	var ppct := float(sp.get("pmax_temp_coeff_pct", 0.0))
+	if is_finite(ppct) and absf(ppct) > 1e-4:
+		return absf(ppct) / 100.0 + IMP_TEMP_COEFF
+	return VMP_TEMP_COEFF
+
+
+## One unit's Vmp at STC (a panel's own; an array compound's string Vmp).
+static func unit_vmp(item: Dictionary) -> float:
+	var ty := str(item.get("type", ""))
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	if bool(sp.get("packed_3d", false)):
+		return 0.0
+	if ty == "panel":
+		return float(sp.get("vmp", 0.0))
+	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
+		return float(sp.get("array_equiv_vmp", 0.0))
+	return 0.0
+
+
+## The PV string as an MPPT controller sees it, at the design extremes:
+## coldest Voc (must stay under max_voc — the fault check uses the live
+## temperature; this is the design margin), Voc at the cold start (must reach
+## startup_v), hot-noon Vmp (must stay above mppt_min_v or the tracker falls
+## out of its window and output collapses) and STC Vmp (above mppt_max_v the
+## tracker clips). Empty when the controller has no PV wired.
+static func string_window_report(model: GraphModel, controller_id: String,
+		flat_conns: Array, cold_c: float = DESIGN_COLD_C,
+		hot_ambient_c: float = DESIGN_HOT_AMBIENT_C) -> Dictionary:
+	if model == null:
+		return {}
+	var ctrl := model.get_item(controller_id)
+	if ctrl.is_empty():
+		return {}
+	var sources := pv_sources_for_controller_flat(model, controller_id, flat_conns)
+	if sources.is_empty():
+		return {}
+	var hot_cell := hot_ambient_c + (NOCT_C - 20.0) * 1000.0 / 800.0
+	var voc_cold := 0.0
+	var voc_stc := 0.0
+	var vmp_stc_min := INF
+	var vmp_stc_max := 0.0
+	var vmp_hot := INF
+	for comp in connected_components(sources, flat_conns, true):
+		var c_voc := 0.0
+		var s_voc := 0.0
+		var s_vmp := 0.0
+		var h_vmp := 0.0
+		for nid_v in comp as Array:
+			var it := model.get_item(str(nid_v))
+			if it.is_empty():
+				continue
+			var voc := unit_voc(it)
+			var vmp := unit_vmp(it)
+			c_voc += temp_adjusted_voc(voc, cold_c, voc_coeff_for(it))
+			s_voc += voc
+			s_vmp += vmp
+			h_vmp += vmp * (1.0 - vmp_coeff_for(it) * (hot_cell - 25.0))
+		if s_voc <= 0.0:
+			continue
+		voc_cold = maxf(voc_cold, c_voc)
+		voc_stc = maxf(voc_stc, s_voc)
+		vmp_stc_min = minf(vmp_stc_min, s_vmp)
+		vmp_stc_max = maxf(vmp_stc_max, s_vmp)
+		vmp_hot = minf(vmp_hot, h_vmp)
+	if voc_stc <= 0.0:
+		return {}
+	var sp: Dictionary = ctrl.get("specs", {}) as Dictionary
+	var max_voc := float(sp.get("max_voc", 150.0))
+	var m_min := float(sp.get("mppt_min_v", 0.0))
+	var m_max := float(sp.get("mppt_max_v", 0.0))
+	var start_v := float(sp.get("startup_v", 0.0))
+	var issues: Array = []
+	if voc_cold > max_voc:
+		issues.append("cold-morning Voc %.0f V exceeds the %.0f V limit at %.0f °C" % [voc_cold, max_voc, cold_c])
+	if start_v > 0.0 and voc_stc < start_v:
+		issues.append("string Voc %.0f V never reaches the %.0f V start-up voltage" % [voc_stc, start_v])
+	if m_min > 0.0 and vmp_hot < m_min:
+		issues.append("hot-noon Vmp %.0f V falls below the %.0f V MPPT floor" % [vmp_hot, m_min])
+	if m_max > 0.0 and vmp_stc_max > m_max:
+		issues.append("Vmp %.0f V is above the %.0f V MPPT ceiling (clips)" % [vmp_stc_max, m_max])
+	return {
+		"voc_cold": voc_cold, "voc_stc": voc_stc,
+		"vmp_stc": vmp_stc_max, "vmp_stc_min": vmp_stc_min, "vmp_hot": vmp_hot,
+		"hot_cell_c": hot_cell, "cold_c": cold_c,
+		"max_voc": max_voc, "mppt_min_v": m_min, "mppt_max_v": m_max, "startup_v": start_v,
+		"margin_v": max_voc - voc_cold,
+		"ok": issues.is_empty(), "issues": issues,
+	}
 
 
 ## Only DC PV strings contribute open-circuit voltage. Wind/hydro turbines are
@@ -115,7 +237,7 @@ static func component_string_voc(comp: Array, model: GraphModel, ambient_c: floa
 		var it := model.get_item(str(nid_v))
 		if it.is_empty():
 			continue
-		total += temp_adjusted_voc(unit_voc(it), ambient_c)
+		total += temp_adjusted_voc(unit_voc(it), ambient_c, voc_coeff_for(it))
 	return total
 
 

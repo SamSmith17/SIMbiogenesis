@@ -22,6 +22,10 @@ shader_type spatial;
 // a bluish sheen over every camp seen at a low angle through haze.
 render_mode unshaded, cull_disabled, shadows_disabled, blend_add, depth_draw_never, fog_disabled;
 
+// Cosmetic clock (SimFxRate): advances with the sim, time-lapsed and
+// capped, frozen dead while paused. Replaces TIME, which never stops.
+global uniform float fx_time_lights;
+
 // 0 by day -> markers are nearly black and invisible. Raised at night so EMISSION
 // blooms through the WorldEnvironment glow into colourful points of light.
 uniform float glow_intensity = 0.0;
@@ -61,7 +65,7 @@ void vertex() {
 	POSITION = PROJECTION_MATRIX * vec4(view_pos, 1.0);
 	
 	// A gentle shimmer (bulbs, wind in string lights), not a strobe.
-	float t = TIME * 1.5 + float(INSTANCE_ID) * 2.1;
+	float t = fx_time_lights * 1.5 + float(INSTANCE_ID) * 2.1;
 	v_twinkle = mix(twinkle_floor, 1.0, (sin(t) + sin(t * 1.7 + 1.2)) * 0.25 + 0.5);
 }
 

@@ -59,48 +59,27 @@ static func simulate(
 	if is_nan(invert) or is_nan(crown) or is_nan(outlet_invert_m):
 		out["regime"] = "unset"
 		return out
-	if crown < invert:
-		var tmp := crown
-		crown = invert
-		invert = tmp
-	var primed := primed_prev
-	if pond_level_m >= crown:
-		primed = true
-	if pond_level_m < invert:
-		primed = false
-	out["primed"] = primed
-	out["siphon_start_m"] = crown
-	out["siphon_break_m"] = invert
-	if not primed:
-		out["regime"] = "broken" if primed_prev else "dry"
-		return out
-	var head := pond_level_m - outlet_invert_m
-	out["head_m"] = maxf(head, 0.0)
-	if head <= 1e-4:
-		out["regime"] = "no_head"
-		return out
-	var d_orifice := minf(maxf(intake_diameter_m, 0.05), maxf(outlet_diameter_m, 0.05))
-	var cul := CulvertHydraulics.stage_discharge(
-		pond_level_m, invert, outlet_invert_m,
-		d_orifice, maxf(barrel_length_m, 0.5), manning_n)
-	var q_m3s := float(cul.get("q_m3s", 0.0))
-	out["q_m3s"] = q_m3s
-	out["q_lps"] = q_m3s * 1000.0
-	out["q_lph"] = q_m3s * 1000.0 * 3600.0
-	out["regime"] = "siphon_%s" % str(cul.get("regime", "flow"))
-	var pe_w := WATER_DENSITY * G * q_m3s * maxf(head, 0.0)
-	out["pe_w"] = pe_w
-	var eta := clampf(hydraulic_efficiency, 0.05, 1.0) \
-			* clampf(generator_efficiency, 0.05, 1.0)
-	var power_w := pe_w * eta
-	if max_power_w > 1e-6:
-		power_w = minf(power_w, max_power_w)
-	out["power_w"] = power_w
-	out["power_kw"] = power_w / 1000.0
-	# Rotor ∝ available hydraulic PE (and thus Q·H), not the nameplate clamp.
-	var omega := omega_from_pe_w(pe_w)
-	out["omega"] = omega
-	out["rpm"] = omega * 60.0 / TAU
+	# The physics is SiphonTurbinePhysics (a siphon with a runner in it, two
+	# atmospheric limits) — this positional entry point maps the legacy names:
+	# crown / start = the siphon CREST (overflow prime level), invert / break =
+	# the dip-tube MOUTH, the "barrel" = the draft tube. `manning_n` is no
+	# longer a physics input (a full siphon is a pressure pipe, not an open
+	# culvert); it is accepted and ignored so every caller still compiles.
+	var r := SiphonTurbinePhysics.solve({
+		"pond_level_m": pond_level_m,
+		"crest_m": crown,
+		"dip_mouth_m": invert,
+		"outlet_m": outlet_invert_m,
+		"dip_d_m": intake_diameter_m,
+		"draft_d_m": outlet_diameter_m,
+		"draft_len_m": barrel_length_m,
+		"eta_t": hydraulic_efficiency,
+		"eta_g": generator_efficiency,
+		"max_power_w": max_power_w,
+		"primed_prev": primed_prev,
+	})
+	for k in r:
+		out[k] = r[k]
 	return out
 
 
@@ -163,6 +142,17 @@ static func resolve_siphon_levels(specs: Dictionary,
 			break_off = abs_break - migrate_datum
 		if is_nan(start_off) and not is_nan(abs_start):
 			start_off = abs_start - migrate_datum
+	# The siphon's OWN geometry wins over stored offsets: the dip tube hangs
+	# `dip_tube_length_m` below the turbine (its mouth is the break level), and
+	# an overflow-primed siphon primes at its crest = the turbine (offset 0);
+	# a pump-primed one primes once the mouth is a bore under water.
+	var dip_len := float(specs.get("dip_tube_length_m", NAN))
+	if not is_nan(dip_len) and dip_len > 0.0:
+		break_off = -dip_len
+		if str(specs.get("siphon_prime_mode", "overflow")) == "pump":
+			start_off = break_off + maxf(0.5 * d_in, 0.02)
+		else:
+			start_off = 0.0
 	if is_nan(break_off):
 		break_off = DEFAULT_BREAK_OFFSET_M
 	if is_nan(start_off):
@@ -186,7 +176,7 @@ static func resolve_siphon_levels(specs: Dictionary,
 			"siphon_break_offset_m": break_off,
 		}
 	if start_off <= break_off:
-		start_off = break_off + d_in
+		start_off = break_off + maxf(0.5 * d_in, 0.02)
 	return {
 		"module_elev_m": module,
 		"siphon_start_m": module + start_off,

@@ -207,7 +207,7 @@ func _test_photocard_hook() -> void:
 	# 10 m is worse); the photocard rides the FAR tier only.
 	var near := VegetationCardFactory.mesh_for_canopy_lod("maple", {},
 		VegetationCardFactory.CanopyLodTier.NEAR)
-	_check("canopy NEAR stays procedural (3 surfaces)", near.get_surface_count() == 3,
+	_check("canopy NEAR stays procedural (2 surfaces)", near.get_surface_count() == 2,
 		"got %d" % near.get_surface_count())
 	var far := VegetationCardFactory.mesh_for_canopy_lod("maple", {},
 		VegetationCardFactory.CanopyLodTier.FAR)

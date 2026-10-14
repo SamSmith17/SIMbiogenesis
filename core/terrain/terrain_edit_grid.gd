@@ -87,7 +87,7 @@ func apply_detail_to(base: PackedFloat32Array, target_res: int, extent_m: float)
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/terrain_edit_%s_%s.json" % [_coord_token(lat), _coord_token(lon)]
+	return WorldPaths.site_file("terrain_edit", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:
@@ -132,6 +132,6 @@ func load_for_map(lat: float, lon: float) -> bool:
 	return delta.size() == res * res
 
 
+## Kept for old callers; CoordToken is the one definition.
 static func _coord_token(v: float) -> String:
-	var s := "%.4f" % absf(v)
-	return ("n" if v < 0.0 else "") + s.replace(".", "p")
+	return CoordToken.token(v)

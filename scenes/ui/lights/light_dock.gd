@@ -43,6 +43,10 @@ const TOOLS := [
 const ALL := ["omni", "spot", "string", "mover"]
 const POINTS := ["omni", "spot", "mover"]
 
+## Sound reactive modes (PlacedLightStyles `sound_mode`).
+const SOUND_MODES := ["pulse", "beat", "both"]
+const SOUND_MODE_LABELS := ["Pumps on the beat", "Effect moves with the beat", "Both"]
+
 ## Inspector rows. kinds: which light kinds show the row (a row shows only when
 ## EVERY selected kind has it).
 const FIELDS := [
@@ -88,7 +92,9 @@ const FIELDS := [
 	{"key": "fx_gap", "label": "Chase gap", "type": "float", "min": 2.0, "max": 12.0, "step": 1.0, "kinds": ["string"], "section": "Effect"},
 	{"key": "fx_saturation", "label": "Saturation", "type": "float", "min": 0.0, "max": 1.0, "step": 0.01, "kinds": ALL, "section": "Effect"},
 	{"key": "fx_direction", "label": "Reverse", "type": "direction", "kinds": ["string"], "section": "Effect"},
-	{"key": "fx_pause_with_sim", "label": "Pause w/ sim", "type": "bool", "kinds": ALL, "section": "Effect"},
+	{"key": "sound_reactive", "label": "Sound reactive (nearest stage's music)", "type": "bool", "kinds": ALL, "section": "Sound"},
+	{"key": "sound_mode", "label": "Reacts", "type": "enum", "options": SOUND_MODES, "option_labels": SOUND_MODE_LABELS, "kinds": ALL, "section": "Sound"},
+	{"key": "sound_depth", "label": "Depth", "type": "float", "min": 0.0, "max": 1.0, "step": 0.05, "kinds": ALL, "section": "Sound"},
 ]
 
 var _main: Node = null

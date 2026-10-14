@@ -31,6 +31,7 @@ const OVERLAY_NAME := "edit_toolbar"
 ## documents. The path always works.
 const ToolbarStateScript := preload("res://scenes/ui/toolbar/toolbar_state.gd")
 const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller.gd")
+const WaterToolScript := preload("res://scenes/ui/toolbar/water_tool_controller.gd")
 
 const HIGHLIGHT_COLOR := Color(0.35, 0.85, 1.0, 0.45)
 const SHAPE_LABELS := {
@@ -48,6 +49,9 @@ const SHAPE_TIPS := {
 
 var _state: ToolbarStateScript = ToolbarStateScript.new()
 var _gesture: GestureScript = GestureScript.new()
+## The WATER section's tools live in their own controller (pin dragging,
+## tracing, span modes); this file only delegates to it.
+var _water_tools: WaterToolScript = WaterToolScript.new()
 var _loader: Node = null
 var _active := false
 
@@ -146,6 +150,7 @@ func _ready() -> void:
 	_camp_apply_timer.wait_time = 0.2
 	_camp_apply_timer.timeout.connect(_apply_camp_select_params)
 	add_child(_camp_apply_timer)
+	_water_tools.setup(self)
 	_build_ui()
 
 
@@ -218,6 +223,7 @@ func _enter_mode() -> void:
 func _exit_mode() -> void:
 	if not _active:
 		return
+	_water_tools.deactivate()
 	_cancel_stroke()
 	_clear_picked_camp()
 	_end_water_modulate()
@@ -237,6 +243,8 @@ func _exit_mode() -> void:
 
 ## Esc (via CursorController's overlay fallback): peel one layer per press.
 func _escape_step() -> void:
+	if _is_water_section() and _water_tools.escape():
+		return
 	if _stroking:
 		_cancel_stroke()
 		_set_status("Stroke ended")
@@ -321,6 +329,7 @@ func _build_ui() -> void:
 	_build_strip_section("VEGETATION", "veg")
 	_build_strip_section("CAMPS", "camps")
 	_build_strip_section("PLACEMENT", "placement")
+	_build_strip_section("WATER", "water")
 
 	# Top options bar.
 	_options = PanelContainer.new()
@@ -414,6 +423,10 @@ func _set_active_tool(id: String) -> void:
 	_clear_picked_camp()
 	_clear_picked_place()
 	_gesture.set_mode(_state.shape_for(id))
+	if _water_tools.is_water_tool(id):
+		_water_tools.activate(id)
+	else:
+		_water_tools.deactivate()
 	# Sculpting leaves painted plants hanging in the air, and this toolbar makes
 	# terrain->veg a one-click move, so re-snap them on the way in (the legacy
 	# veg dock does the same on every open).
@@ -475,6 +488,8 @@ func _rebuild_options_bar() -> void:
 		_build_camp_rows()
 	elif String(def.get("section", "")) == "placement":
 		_build_placement_rows()
+	elif String(def.get("section", "")) == "water":
+		_water_tools.build_rows(_options_box)
 	# Shape picker — only when the tool actually offers a choice.
 	var shapes: Array = def.get("shapes", [])
 	if shapes.size() > 1:
@@ -560,6 +575,9 @@ func _make_param_handler(key: String) -> Callable:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not _active:
+		return
+	if _is_water_section() and _water_tools.handle_input(event):
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and (event as InputEventKey).pressed:
 		var key := event as InputEventKey
@@ -647,6 +665,11 @@ func _pointer_over_ui() -> bool:
 	if _options != null and _options.get_global_rect().has_point(mouse):
 		return true
 	return false
+
+
+## The WATER section (streams) — distinct from _is_water_tool (Rain/Drain/Pond).
+func _is_water_section() -> bool:
+	return String(_state.tool_def(_state.active_tool).get("section", "")) == "water"
 
 
 func _is_water_tool() -> bool:
@@ -1027,6 +1050,10 @@ func _gesture_click(world: Vector2) -> void:
 func _process(delta: float) -> void:
 	if not _active:
 		return
+	if _is_water_section():
+		_water_tools.process(delta)
+		_update_height_readout()
+		return
 	var mouse := get_viewport().get_mouse_position() if get_viewport() != null else Vector2.ZERO
 	var busy := _stroking or _water_modulating or _gesture.is_dragging()
 	if not busy and mouse.is_equal_approx(_last_pointer_px):
@@ -1098,6 +1125,9 @@ func _queue_overlay_redraw() -> void:
 
 func _draw_overlay() -> void:
 	if not _active or _overlay == null:
+		return
+	if _is_water_section():
+		_water_tools.draw(_overlay)
 		return
 	var col := _tool_color()
 	# Two-click gesture line (Ramp / Measure).
@@ -1242,6 +1272,10 @@ func _free_brush_ring() -> void:
 func _do_undo() -> void:
 	if _loader == null:
 		return
+	if _is_water_section():
+		_set_status("Undid last water edit — re-carving…" if _water_tools.undo() else "Nothing to undo")
+		_update_undo_button()
+		return
 	if _is_veg_tool():
 		if _loader.has_method("undo_vegetation") and bool(_loader.call("undo_vegetation")):
 			_picked_plant = {}
@@ -1274,7 +1308,9 @@ func _update_undo_button() -> void:
 	if _undo_btn == null or _loader == null:
 		return
 	var can := false
-	if _is_veg_tool():
+	if _is_water_section():
+		can = _water_tools.can_undo()
+	elif _is_veg_tool():
 		can = _loader.has_method("can_undo_vegetation") 			and bool(_loader.call("can_undo_vegetation"))
 	elif _is_camp_tool():
 		can = _loader.has_method("can_undo_camps") and bool(_loader.call("can_undo_camps"))

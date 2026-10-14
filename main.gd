@@ -278,6 +278,19 @@ func clock_is_owned() -> bool :
 	return not clock.clock_owner().is_empty()
 
 
+## Owner of the claim that is HOLDING the clock still (a time_scale claim of
+## 0), or "" when time is free to run. The timeline shows it, because Play and
+## the speed buttons write the user's base scale and a 0 claim above it makes
+## them silently do nothing.
+func clock_hold_owner() -> String :
+	var owner : String = clock.claims.owner_of( "time_scale" )
+	if owner.is_empty() :
+		return ""
+	if float( clock.claims.value_or( "time_scale", 1.0 ) ) > 0.0 :
+		return ""
+	return owner
+
+
 ## `analemma_mode` lives here, not on the clock, and its setter has side
 ## effects — so the claim stack carries the value and Main applies it. Absent
 ## from every live claim means "whatever the user last chose", which is what
@@ -725,6 +738,8 @@ var _mc_state : Dictionary = {}
 ## DaylightModel.sky_light from the last environment update — lights the
 ## ground fog's droplets (GroundFogLayer.update_from).
 var _fog_sky_light : float = 1.0
+## Last value pushed to the `npc_night` global shader uniform (glow sticks).
+var _npc_night_pushed : float = -1.0
 
 const CLOUDS_SPEED_BASE : float = 2.0
 const CIRRUS_SPEED_BASE : float = 1.0
@@ -809,6 +824,8 @@ const LINKAGE_LAB_MODAL_SCRIPT := preload( "res://scenes/ui/linkage_lab_modal.gd
 var linkage_build_guide_ui : Control = null
 const LINKAGE_BUILD_GUIDE_SCRIPT := preload( "res://scenes/ui/linkage_build_guide_modal.gd" )
 var linkage_hardware_ui : Control = null
+var npc_anim_editor_ui : Control = null
+const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
 const SCAD_STORE_MODAL_SCRIPT := preload( "res://scenes/ui/scad_store_modal.gd" )
@@ -952,6 +969,29 @@ func _try_apply_pending_resume() -> void :
 	if not _apply_save_snapshot( data ) :
 		push_warning( "Save/Load: pending resume could not be applied." )
 		show_toast( "Could not resume your save — data was invalid or incompatible.", ToastUI.Level.ERROR )
+		return
+	# A world's resume also re-mounts the vehicle and reopens festival mode —
+	# both need the built world, so this waits for the load itself.
+	WorldSession.restore_extras( self, data )
+	# Player._ready DEFERS _init_first_person_camera, which zeroes the camera
+	# rotation after this resume already set it (every resume came back
+	# looking at the horizon). Queued after it, this puts the saved view back.
+	call_deferred( "_reapply_resume_view", data )
+
+
+func _reapply_resume_view( data: Dictionary ) -> void :
+	if not is_instance_valid( player ) :
+		return
+	var pd : Variant = data.get( "player", {} )
+	if not ( pd is Dictionary ) or bool( ( pd as Dictionary ).get( "is_fpv_drone_mode", false ) ) :
+		return
+	var pdict : Dictionary = pd
+	var cam_arm : Node3D = player.get_node_or_null( "CameraArm" )
+	if cam_arm != null and pdict.has( "camera_arm_rotation" ) and not cam_arm.top_level :
+		cam_arm.rotation = SaveSerialization.dict_to_vec3( pdict.get( "camera_arm_rotation", {} ) )
+	var cam3d : Camera3D = player.get_node_or_null( "CameraArm/Camera3D" ) as Camera3D
+	if cam3d != null and pdict.has( "camera_rotation" ) :
+		cam3d.rotation = SaveSerialization.dict_to_vec3( pdict.get( "camera_rotation", {} ) )
 
 
 func _consume_save_payload( data: Dictionary ) -> bool :
@@ -1327,12 +1367,27 @@ func _on_delete_slot( slot_index: int ) -> void :
 func request_autosave() -> void :
 	if Engine.is_editor_hint() :
 		return
+	# Inside a world the autosave IS the world save (snapshot + flush; asset
+	# vendoring is left to explicit saves and exit — it parses the graph).
+	if WorldPaths.has_active_world() :
+		if not WorldSession.save_now( self, false, true ) :
+			show_toast( "Autosave failed — check disk space.", ToastUI.Level.WARN )
+		return
 	var sg : SaveGameService = _save_game_service()
 	if sg == null :
 		return
 	if not sg.save_autosave( build_save_snapshot() ) :
 		push_warning( "Save/Load: autosave failed to write." )
 		show_toast( "Autosave failed — check disk space.", ToastUI.Level.WARN )
+
+
+## Closing the window saves the running world (always-live worlds: the
+## snapshot is the only part not already on disk). Notifications are
+## delivered before the quit completes.
+func _notification( what: int ) -> void :
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and not Engine.is_editor_hint() :
+		if WorldPaths.has_active_world() :
+			WorldSession.save_now( self, true, false )
 
 
 func build_save_snapshot() -> Dictionary :
@@ -1457,7 +1512,11 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 		mcc.apply_save_state( mcc_d )
 	var sg_d: Variant = data.get( "system_graph", {} )
 	var sg_view : Node = ServiceLocator.graph()
-	if sg_view != null and sg_d is Dictionary and sg_view.has_method( "apply_save_state" ) :
+	# A WORLD snapshot carries no graph — the world's own graph file (always
+	# newer) is loaded by the graph view as on any map boot. Applying an empty
+	# dict here would latch "a game save owns the graph" and skip that load.
+	if sg_view != null and sg_d is Dictionary and not ( sg_d as Dictionary ).is_empty() \
+			and sg_view.has_method( "apply_save_state" ) :
 		sg_view.apply_save_state( sg_d, {"from_game_save": true} )
 	var soi_d: Variant = data.get( "soi", {} )
 	var soi_svc := get_node_or_null( "/root/SoiService" )
@@ -2623,6 +2682,9 @@ func _process( delta: float ) -> void :
 	_update_hazard_vfx( delta )
 	_update_ground_fog( delta )
 	if not Engine.is_editor_hint() :
+		# The cosmetic clocks (fire / crowd / lights) — advanced once per frame
+		# and pushed as global shader uniforms. Frozen while paused.
+		SimFxRate.tick( self )
 		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
 		# integrates (battery/energy stay frozen).
@@ -2997,6 +3059,11 @@ func _update_environment() -> void :
 	var sky_light : float = DaylightModel.sky_light( sun_height, twilight_length )
 	_fog_sky_light = sky_light
 	var night_amount : float = DaylightModel.night_amount( sun_height, twilight_length )
+	# The crowd's glow sticks (crowd_figure / crowd_card / NpcSimpleFigure)
+	# light up on the same curve the sky darkens on.
+	if absf( night_amount - _npc_night_pushed ) > 0.004 :
+		_npc_night_pushed = night_amount
+		RenderingServer.global_shader_parameter_set( "npc_night", night_amount )
 	
 	# Vegetation's "the direct beam is gone" signal (kills the canopy's fake sun
 	# highlights, darkens the albedo) follows the beam itself — 0 above ~5°, 1
@@ -3109,6 +3176,7 @@ func _update_environment() -> void :
 		ambient *= lerpf( 1.0, 0.04 if eclipse_total else 0.18, eclipse_obs )
 	environment.environment.ambient_light_energy = ambient
 	_vegetation_ambient_energy = ambient
+	_push_veg_sky_fill( sky_light )
 
 	_update_glow( night_amount )
 
@@ -3280,6 +3348,21 @@ func get_vegetation_night_factor() -> float :
 func get_vegetation_sun_direction() -> Vector3 :
 	return _vegetation_sun_direction
 
+
+## Shade fill for foliage (veg_lighting.gdshaderinc `veg_sky_fill`): the sky
+## dome's light on leaves the sun does not reach, restored only for the share of
+## the ambient the player has turned off (0 at the default multiplier of 1).
+## Without it a crown of crossed cards - mostly in its own shadow - printed
+## black under a low ambient while the self-lit SoI soil beside it read crisp.
+const VEG_SHADE_FILL : float = 0.16
+var _veg_sky_fill_pushed : float = -1.0
+
+func _push_veg_sky_fill( sky_light : float ) -> void :
+	var fill := VEG_SHADE_FILL * clampf( sky_light, 0.0, 1.0 ) 			* ( 1.0 - clampf( ambient_energy_mult, 0.0, 1.0 ) )
+	if absf( fill - _veg_sky_fill_pushed ) < 0.002 :
+		return
+	_veg_sky_fill_pushed = fill
+	RenderingServer.global_shader_parameter_set( "veg_sky_fill", fill )
 
 func get_vegetation_ambient_energy() -> float :
 	return _vegetation_ambient_energy
@@ -4078,6 +4161,43 @@ func _setup_toast_ui() -> void :
 		var vibe_chip : Control = load( "res://scenes/ui/festival_vibe_chip.gd" ).new()
 		vibe_chip.name = "FestivalVibeChip"
 		ui_layer.add_child( vibe_chip )
+	# Peak Experience score (FUCK YES! onsets) under the vibe chip, and its
+	# toast — both read the population bridge, both quiet with nobody about.
+	if ui_layer.get_node_or_null( "PeakScoreChip" ) == null :
+		var peak_chip : Control = load( "res://scenes/ui/peak_score_chip.gd" ).new()
+		peak_chip.name = "PeakScoreChip"
+		ui_layer.add_child( peak_chip )
+	if get_node_or_null( "PeakToast" ) == null :
+		var peak_toast : CanvasLayer = load( "res://scenes/ui/peak_toast.gd" ).new()
+		peak_toast.name = "PeakToast"
+		add_child( peak_toast )
+	# ...and the green rings each onset sends out across the ground (how far
+	# that peak's contagion reaches).
+	if get_node_or_null( "PeakRippleFx" ) == null :
+		var ripples : Node3D = load( "res://core/population/peak_ripple_fx.gd" ).new()
+		ripples.name = "PeakRippleFx"
+		add_child( ripples )
+	# Venue music: a stage's track from its speakers while its set is on
+	# (StageMusic; positional, falls off with distance).
+	if get_node_or_null( "StageMusic" ) == null :
+		var music : Node3D = load( "res://core/population/stage_music.gd" ).new()
+		music.name = "StageMusic"
+		add_child( music )
+	# Where a FUCK YES!!! happened: a beacon over the person each toast names.
+	if get_node_or_null( "PeakBeacon" ) == null :
+		var beacon : Node3D = load( "res://core/population/peak_beacon.gd" ).new()
+		beacon.name = "PeakBeacon"
+		add_child( beacon )
+	# Fire Flow: flaming poi on each performer while the burn's flow is on.
+	if get_node_or_null( "FirePropFx" ) == null :
+		var poi : Node3D = load( "res://core/population/fire_prop_fx.gd" ).new()
+		poi.name = "FirePropFx"
+		add_child( poi )
+	# The Fun Meter: the crowd's overall vibe as a needle gauge (draggable).
+	if ui_layer.get_node_or_null( "FunMeter" ) == null :
+		var fun : Control = load( "res://scenes/ui/fun_meter.gd" ).new()
+		fun.name = "FunMeter"
+		ui_layer.add_child( fun )
 
 
 ## Returns the ProjectionCanvas, instancing it under UILayer on maps that don't
@@ -4410,6 +4530,39 @@ func open_linkage_hardware_editor( p: LinkageParams ) -> Control :
 	if linkage_hardware_ui.has_method( "open" ) :
 		linkage_hardware_ui.call( "open", p )
 	return linkage_hardware_ui
+
+
+## NPC animation editor (fabrication swarm B3): pose + keyframe the stick
+## figure with a tool in hand. Its own layer above the Lab and the hardware
+## editor (it can be opened from either). Lazy, every map.
+func _setup_npc_anim_editor_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "NpcAnimEditorLayer" )
+	if existing_layer != null :
+		npc_anim_editor_ui = existing_layer.get_node_or_null( "NpcAnimEditor" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "NpcAnimEditorLayer"
+	layer.layer = UITheme.LAYER_MODAL + 2
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "NpcAnimEditor"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( NPC_ANIM_EDITOR_SCRIPT )
+	layer.add_child( ui )
+	npc_anim_editor_ui = ui
+
+
+## Open the NPC animation editor on a clip id ("" = the first clip).
+func open_npc_anim_editor( clip_id: String = "" ) -> Control :
+	if not is_instance_valid( npc_anim_editor_ui ) :
+		_setup_npc_anim_editor_ui()
+	if not is_instance_valid( npc_anim_editor_ui ) :
+		return null
+	npc_anim_editor_ui.call( "open", clip_id )
+	return npc_anim_editor_ui
 
 
 ## Parametric Hardware Store — full-screen OpenSCAD part store (lazy, every map).

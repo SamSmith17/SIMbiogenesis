@@ -248,7 +248,7 @@ func _apply_look() -> void:
 
 
 func _push_energy() -> void:
-	var e := float(fields.get("energy", 2.5))
+	var e := float(fields.get("energy", 2.5)) * sound_level
 	if _bulb_mat != null:
 		# HDR enough that a 6 cm bulb still blooms into a point from across a
 		# field (the WorldEnvironment glow carries it).
@@ -265,7 +265,7 @@ func _push_energy() -> void:
 func _push_light_colors() -> void:
 	var base := PlacedLightPower.parse_color(str(fields.get("color", "ffd18c")))
 	for k in _omnis.size():
-		_omnis[k].light_color = LedEffects.color_at(fields, _omni_idx[k], bulb_count, fx_time(), base)
+		_omnis[k].light_color = LedEffects.color_at(fields, _omni_idx[k], bulb_count, _effect_t(), base)
 
 
 func _process(delta: float) -> void:
@@ -273,9 +273,10 @@ func _process(delta: float) -> void:
 	if _poll <= 0.0:
 		_poll = 0.5
 		_update_lit()
+	_update_sound()
 	if str(fields.get("effect", "solid")) == "solid" or not _lit:
 		return
-	var t := fx_time()
+	var t := _effect_t()
 	for mat in [_bulb_mat, _rope_mat]:
 		if mat != null:
 			(mat as ShaderMaterial).set_shader_parameter("fx_time", t)
@@ -295,7 +296,39 @@ func _update_lit() -> void:
 ## The shared effect clock (PlacedLightClock): every string and fixture reads
 ## the same one, so duplicated strings chase in step.
 func fx_time() -> float:
-	return PlacedLightClock.now(_main, bool(fields.get("fx_pause_with_sim", false)))
+	return PlacedLightClock.now(_main)
+
+
+# --- sound reactive (StageBeat) ----------------------------------------------
+## Brightness from the music (1 = none) and the music itself ({} = silence or
+## not reactive). Heard at the middle of the string.
+var sound_level := 1.0
+var _sound_beat: Dictionary = {}
+var _sounding := false
+
+
+func _update_sound() -> void:
+	if not (_lit and bool(fields.get("sound_reactive", false))):
+		_sound_beat = {}
+		if _sounding:
+			_sounding = false
+			sound_level = 1.0
+			_push_energy()
+		return
+	var ear := samples[samples.size() / 2] if not samples.is_empty() else global_position
+	_sound_beat = StageBeat.at(ear, false)
+	var mode := str(fields.get("sound_mode", "pulse"))
+	sound_level = 1.0 if mode == "beat" else \
+		StageBeat.light_level(_sound_beat, float(fields.get("sound_depth", 0.8)))
+	_sounding = true
+	_push_energy()
+
+
+## The effect clock, moving with the music in a "beat" sound mode.
+func _effect_t() -> float:
+	if not _sound_beat.is_empty() and str(fields.get("sound_mode", "pulse")) != "pulse":
+		return StageBeat.light_time(_sound_beat)
+	return fx_time()
 
 
 func is_continuous() -> bool:

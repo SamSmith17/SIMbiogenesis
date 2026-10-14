@@ -1439,6 +1439,25 @@ func _test_pelton_supply() -> void:
 	# with the jet and nothing leaves — the zero of the relation.
 	_check("pelton bucket: exit speed vanishes at x = 0.5",
 		PeltonPhysics.bucket_exit_speed_ms(VJ, 0.5) < 1e-9)
+	# 9. The vector form behind the close-up's exit sheets. A 180° bucket is the
+	#    scalar relation exactly (no sideways component); the real ~165° bucket
+	#    throws a sideways share and leaves faster than the ideal.
+	for xr: float in [0.0, PeltonPhysics.SPEED_RATIO_OPT, 0.5, 0.8]:
+		var e180 := PeltonPhysics.bucket_exit_velocity(VJ, xr, 180.0)
+		_check("pelton bucket vector @180° x=%.2f: axial 0, |tangential| == scalar" % xr,
+			absf(float(e180["axial"])) < 1e-9
+			and absf(absf(float(e180["tangential"])) - PeltonPhysics.bucket_exit_speed_ms(VJ, xr)) < 1e-6)
+	var e165 := PeltonPhysics.bucket_exit_velocity(VJ, PeltonPhysics.SPEED_RATIO_OPT)
+	var w_rel := VJ * (1.0 - PeltonPhysics.SPEED_RATIO_OPT)
+	_check("pelton bucket @165°: axial share is w·sin15°",
+		absf(float(e165["axial"]) - w_rel * sin(deg_to_rad(15.0))) < 1e-6,
+		"%.3f m/s" % float(e165["axial"]))
+	_check("pelton bucket @165°: matched load leaves slightly BACKWARD, slow",
+		float(e165["tangential"]) < 0.0 and float(e165["speed"]) < VJ * 0.2
+			and float(e165["speed"]) > PeltonPhysics.bucket_exit_speed_ms(VJ, PeltonPhysics.SPEED_RATIO_OPT))
+	var e_stall := PeltonPhysics.bucket_exit_velocity(VJ, 0.0)
+	_check("pelton bucket @165°: a stalled bucket throws the jet back at ~full speed",
+		float(e_stall["tangential"]) < -VJ * 0.9 and absf(float(e_stall["speed"]) - VJ) < 1e-6)
 
 
 ## Stream/spring hydrology: HydroSupply's rain coupling and storm recession.

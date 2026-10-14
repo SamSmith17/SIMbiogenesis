@@ -72,7 +72,15 @@ const ACTIVITIES: Dictionary = {
 	# Enrichment resolves to whichever enrichment space wins the social/
 	# distance score — the space type is chosen per visit, not fixed here.
 	"enrichment": {"space": "fire_circle", "duration_h": 1.0, "consumes": {}},
+	# A SOCIAL block's stint (NpcSocial): a conversation circle in camp or a
+	# wander. Consumes nothing and is NOT a need; its length is NpcSocial's.
+	NpcSocial.ACTIVITY: {"space": "", "duration_h": 0.5, "consumes": {}},
+	# The DJ's set: cast by the bridge (begin_perform), ends with the set.
+	"perform": {"space": "", "duration_h": 1.0, "consumes": {}},
 }
+
+## The DJ activity (NpcPopulationBridge casts one person per live stage).
+const PERFORM_ACTIVITY := "perform"
 
 ## The work activity is not need-driven — it comes off the chore board.
 const CHORE_ACTIVITY := "chore"
@@ -91,6 +99,13 @@ const SLEEP_START_H := 21.0        # eligible to head to bed from 21:00
 const SLEEP_END_H := 6.0           # wake target (plus per-agent jitter)
 const SLEEP_RECOVER_PER_H := 1.0 / 8.0
 const URGENT := 0.95               # a need this high interrupts the current plan
+const PERFORM_URGENT := 0.995      # ...and this high takes the DJ off the decks
+## During a burn, someone in its TURNOUT (VenueCrowd.attends) only goes to bed
+## exhausted — they stay up for it. Never wakes a sleeper.
+const STAY_UP_BAR := 0.99
+## ...and puts off a meal until hunger is pressing (thirst and the bladder
+## still come first): nobody leaves a burn to cook dinner.
+const BURN_HUNGER_BAR := 0.85
 const RETRY_BACKOFF_H := 0.25      # blocked (no space / starved) -> retry after
 const QUORUM_WAIT_H := 0.5         # give a crew chore this long to gather hands
 ## Floor on the need level that pulls someone off SOLO work. Crew work at
@@ -136,6 +151,37 @@ var _venue_event := false
 ## if the event venue wins) rather than every step -- re-picking the same
 ## venue every step would be a finish/claim livelock.
 var _event_checked := false
+## The routine block (day x 24 + start hour) whose activity this person last
+## served — a festival day serves meal / bathroom / wash blocks once.
+var _routine_mark: float = -1.0
+## The live-venue phase this person's current seat was chosen for (-99 =
+## none); a traveller re-targets when the venue moves past it.
+var _venue_phase_seen := -99
+## The current SOCIAL stint is a wander (look at the view), not a circle.
+var _wandering := false
+## The current mingle stint is a COMFORT stint (NpcComfort kind: shade /
+## warm / shelter; "" = an ordinary social one), and whether it is in this
+## person's own bed. Transient, cleared in _finish.
+var _comfort := ""
+var _comfort_bed := false
+## DJ: metres the deck stands above the ground, and when the set ends.
+## Transient (the bridge re-casts after a load).
+var perform_elev := 0.0
+var _perform_until := 0.0
+## A burn ROLE ("dj", "flow", "sandman", "redirect") and, for a fire-flow
+## performer, the moving lane (VenueCrowd.orbit_point). Transient.
+var perform_role := ""
+var _orbit: Dictionary = {}
+## Turned back at a burn's line: hold this spot (no live-venue re-seat) until
+## the effigy's phase moves on.
+var _redirect_hold := -1
+## PEAK EXPERIENCE start (abs hours), NAN when not peaking — written by the
+## bridge's PeakField each tick, the authority. Transient.
+var peak_since := NAN
+## How close to a peak (0..1, NpcPeak buzz) and how many peakers nearby are
+## feeding it — PeakField's, pushed each tick. Transient, display only.
+var peak_buzz := 0.0
+var peak_fed := 0
 var target_pos: Vector2 = Vector2.ZERO
 ## Where this person LOOKS while standing still: the work site, the far end of
 ## a relay line, or the centre of the space they came to. `agent_dots()` turns
@@ -234,11 +280,53 @@ const NAME_POOL: Array = [
 
 ## Name + a numeric suffix only when the pool wraps, so a big roster stays
 ## unique and readable.
+## The pool is NAME_POOL plus the player's own names (Settings → NPC →
+## Names, NpcDisplayPrefs.custom_names) — adding names re-deals everyone's,
+## since a name is a hash into the pool.
 static func name_for(agent_id: String) -> String:
-	var h := absi(hash(agent_id))
-	var base := str(NAME_POOL[h % NAME_POOL.size()])
-	var wrap := (h / NAME_POOL.size()) % 97
-	return base if wrap == 0 else "%s %d" % [base, wrap + 1]
+	# Just the name ("Spark", not "Spark 25"); the id stays the unique key
+	# everywhere. A camp ("<seed>_npc_<i>") walks the pool with a stride
+	# coprime to its size from a per-camp start, so nobody in one camp shares
+	# a name until the camp outgrows the pool; other camps may repeat names,
+	# the way a real crowd does.
+	var pool := name_pool()
+	var n := pool.size()
+	var cut := agent_id.rfind("_npc_")
+	if cut >= 0 and agent_id.substr(cut + 5).is_valid_int():
+		var idx := int(agent_id.substr(cut + 5))
+		var stride := 17
+		while _gcd(stride, n) != 1:
+			stride += 2
+		return str(pool[posmod(absi(hash(agent_id.substr(0, cut))) + idx * stride, n)])
+	return str(pool[absi(hash(agent_id)) % n])
+
+
+static func _gcd(a: int, b: int) -> int:
+	while b != 0:
+		var t := a % b
+		a = b
+		b = t
+	return a
+
+
+static var _name_pool: Array = []
+static var _name_pool_gen := -1
+
+
+## NAME_POOL + the custom names not already in it (cached per prefs change).
+static func name_pool() -> Array:
+	var gen := NpcDisplayPrefs.generation()
+	if gen != _name_pool_gen or _name_pool.is_empty():
+		_name_pool_gen = gen
+		_name_pool = NAME_POOL.duplicate()
+		var have := {}
+		for n in NAME_POOL:
+			have[str(n).to_lower()] = true
+		for n in NpcDisplayPrefs.custom_names():
+			if not have.has(n.to_lower()):
+				have[n.to_lower()] = true
+				_name_pool.append(n)
+	return _name_pool
 
 
 static func make(agent_id: String, spawn: Vector2) -> NpcAgent:
@@ -469,7 +557,7 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		# re-issued sleep with no cooldown — 6-12 lie-down/get-up cycles per
 		# agent per night. _decay clamps needs at 0, so a bottomed-out need is
 		# safe to sleep through.
-		if _hour(ctx) >= _wake_hour() and _hour(ctx) < SLEEP_START_H:
+		if _hour(ctx) >= _wake_hour(ctx) and _hour(ctx) < night_from_h(_sleep_start(ctx)):
 			_satisfy("sleep")
 			_finish(ctx, true)
 		return {}
@@ -477,9 +565,17 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		_update_live_venue(abs_hours, ctx)
 		if state != State.DOING:
 			return {}   # re-seated by a WALK: the trip's step takes over
+	if activity == PERFORM_ACTIVITY and not _orbit.is_empty():
+		# A fire-flow performer: round the lane with it, facing along it.
+		var o_pos := VenueCrowd.orbit_point(_orbit, abs_hours)
+		pos = o_pos
+		target_pos = o_pos
+		var tang := VenueCrowd.ccw_tangent(_orbit.get("centre", o_pos), o_pos)
+		face_anchor = o_pos + tang * 10.0
 	# The effigy was lit while this person was somewhere else: look round
 	# ONCE, and leave for it if its pull wins.
-	if activity == "enrichment" and bool(ctx.get("event_active", false)) \
+	if (activity == "enrichment" or activity == NpcSocial.ACTIVITY) \
+			and bool(ctx.get("event_active", false)) \
 			and not _venue_event and not _event_checked:
 		_event_checked = true
 		var win := _venue_pick(ctx)
@@ -496,7 +592,10 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		return billed
 	# Interrupt for a different, desperate need.
 	var urgent := _most_urgent()
-	if not urgent.is_empty() and urgent != activity and float(needs.get(urgent, 0.0)) >= URGENT:
+	# The DJ plays the set through: only a need at its very top takes them
+	# off the decks (CrowdCohort uses the same bar).
+	var bar := PERFORM_URGENT if activity == PERFORM_ACTIVITY else URGENT
+	if not urgent.is_empty() and urgent != activity and float(needs.get(urgent, 0.0)) >= bar:
 		var billed_part := _scaled(consumes, doing_h, dt_hours)
 		_finish(ctx, false)
 		return billed_part
@@ -577,6 +676,12 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 
 
 func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictionary:
+	# Walking to the effigy when it is lit (or its phase moves on): the seat
+	# picked at departure belongs to the OLD phase. Re-target once per phase
+	# change so the walker heads for their ring seat instead of finishing the
+	# trip to a stale spot first.
+	if activity == "enrichment" and target_space_type == "effigy":
+		_retarget_effigy(abs_hours, ctx)
 	var travel_h := _remaining_travel_hours()
 	if travel_h >= dt_hours:
 		_walk(dt_hours, ctx)
@@ -644,6 +749,21 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 		activity_ends_h = INF   # ends when the work is done, not on a clock
 		return _step_chore(abs_hours, abs_hours - arrive_abs, ctx)
 	var dur := float((ACTIVITIES.get(activity, {}) as Dictionary).get("duration_h", 0.25))
+	if activity == PERFORM_ACTIVITY:
+		# The DJ plays until the set ends — no routine block cuts it short.
+		dur = 0.0
+		activity_ends_h = maxf(_perform_until, arrive_abs + 1.0 / 60.0)
+	if activity == NpcSocial.ACTIVITY:
+		# A stint's length is NpcSocial's hash (both tiers agree on it) —
+		# or NpcComfort's for a comfort stint.
+		dur = 0.0
+		activity_ends_h = arrive_abs + (NpcComfort.stint_h(id, arrive_abs) if not _comfort.is_empty() \
+			else NpcSocial.stint_h(id, arrive_abs, _wandering))
+		var r0: NpcRoutine = ctx.get("routine")
+		if r0 != null and not routine_kind.is_empty():
+			var left0 := r0.hours_left_in_block(_hour(ctx), routine_offset_h, _rkey(r0, ctx))
+			if left0 > 0.0:
+				activity_ends_h = minf(activity_ends_h, abs_hours + left0)
 	if dur > 0.0:
 		activity_ends_h = arrive_abs + dur * rng.randf_range(0.85, 1.25)
 		# Never run past the end of the scheduled block that asked for this.
@@ -651,7 +771,7 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 		# actually reclaim the person afterwards.
 		var routine: NpcRoutine = ctx.get("routine")
 		if routine != null and not routine_kind.is_empty():
-			var left := routine.hours_left_in_block(_hour(ctx), routine_offset_h)
+			var left := routine.hours_left_in_block(_hour(ctx), routine_offset_h, _rkey(routine, ctx))
 			if left > 0.0:
 				activity_ends_h = minf(activity_ends_h, abs_hours + left)
 		# A programmed set ends when the programme ends: nobody stands at a
@@ -665,7 +785,7 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 		# value left over from the previous activity made the lie-down snap.
 		# Cross-midnight-safe via fposmod; deliberately NOT clamped to
 		# hours_left_in_block (a night is one session, not a routine visit).
-		activity_ends_h = abs_hours + fposmod(_wake_hour() - _hour(ctx), 24.0)
+		activity_ends_h = abs_hours + fposmod(_wake_hour(ctx) - _hour(ctx), 24.0)
 		return {}
 	var consumes: Dictionary = _consumes_for(activity, ctx)
 	var starved: Dictionary = ctx.get("starved", {})
@@ -789,12 +909,40 @@ func trim_trail(now_h: float) -> void:
 ## straight-line behaviour rather than refusing to move.
 func _request_path(ctx: Dictionary, dest: Vector2, from_key: String, to_key: String) -> void:
 	_clear_path()
+	# Never walk to a goal inside a fire perimeter (a bed in a tent next to the
+	# effigy): the nearest spot outside it instead (NpcNav.outside).
+	# A burn role (a sandman's post) is the exception: it is inside the line.
+	var safe := dest if not perform_role.is_empty() else NpcNav.outside(dest, ctx.get("no_go", []))
+	if safe != dest:
+		if target_pos == dest:
+			target_pos = safe
+		dest = safe
 	var planner: Callable = ctx.get("plan_path", Callable())
 	if not planner.is_valid():
 		return
 	var p: Variant = planner.call(pos, dest, from_key, to_key, hash(id))
+	# A space-pair route that starts farther away than the goal is not this
+	# trip's (a re-seat at the venue already reached got the camp->venue
+	# route and walked back across the fire) — CrowdCohort._go does the same.
+	if p is PackedVector2Array and (p as PackedVector2Array).size() > 0 \
+			and (p as PackedVector2Array)[0].distance_to(pos) > pos.distance_to(dest):
+		p = null
 	if p is PackedVector2Array and (p as PackedVector2Array).size() > 0:
-		path = p
+		var pv: PackedVector2Array = (p as PackedVector2Array).duplicate()
+		# A space-pair route is SHARED (cached for the first walker's goal):
+		# the legs joining it to THIS person's start and goal go round any
+		# fire, never across it (CrowdCohort._go does the same).
+		var circles: Array = ctx.get("no_go", [])
+		if not circles.is_empty():
+			var det_end := NpcNav.detour(pv[pv.size() - 1], dest, circles)
+			if det_end.size() > 0:
+				pv.append_array(det_end)
+			var det_start := NpcNav.detour(pos, pv[0], circles)
+			if det_start.size() > 1:
+				det_start.remove_at(det_start.size() - 1)
+				det_start.append_array(pv)
+				pv = det_start
+		path = pv
 		path_idx = 0
 		return
 	# No route (grid baking, or the query budget spent): a straight line —
@@ -849,7 +997,17 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 	# selection preferring the NEAREST match, everyone pooled at the restroom.
 	var routine: NpcRoutine = ctx.get("routine")
 	if routine != null:
-		var kind := str(routine.block_at(_hour(ctx), routine_offset_h).get("kind", NpcRoutine.FREE))
+		var blk := routine.block_at(_hour(ctx), routine_offset_h, _rkey(routine, ctx))
+		var kind := str(blk.get("kind", NpcRoutine.FREE))
+		if _attending_burn(ctx):
+			# The burn outranks the routine (critical needs came first).
+			kind = NpcRoutine.ENRICHMENT
+		# A festival day serves a meal / bathroom / wash block ONCE; the rest
+		# of the block is leisure (NpcRoutine.serves_once — CrowdCohort does
+		# the same off its routine_mark).
+		var mark: float = floor((abs_hours - _hour(ctx)) / 24.0) * 24.0 + float(blk.get("start_h", -1.0))
+		if NpcRoutine.ONCE_KINDS.has(kind) and absf(_routine_mark - mark) < 1e-6 and routine.serves_once():
+			kind = NpcRoutine.SOCIAL
 		var scheduled := NpcRoutine.activity_for(kind)
 		# Mirror _pick's slept-enough guard: the SLEEP block runs to ~08:00
 		# while people wake 6.0-7.5, and re-issuing sleep with the need near 0
@@ -858,6 +1016,21 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 		# idle near the beds: the camp wakes gradually.
 		if scheduled == "sleep" and float(needs.get("sleep", 0.0)) < 0.25:
 			scheduled = ""
+		# A festival morning: up before the SLEEP block ends, they go and do
+		# something social rather than idle by their beds (CrowdCohort._decide
+		# makes the same switch).
+		if kind == NpcRoutine.SLEEP and routine.serves_once() \
+				and not NpcRoutine.in_sleep_window(_hour(ctx), _sleep_start(ctx), _wake_hour(ctx)):
+			kind = NpcRoutine.SOCIAL
+			scheduled = ""
+		# Weather as an attractor on LEISURE (NpcComfort) — the same hashed
+		# response and spots CrowdCohort._decide uses. Never during an EVENT.
+		if NpcComfort.LEISURE_KINDS.has(kind) and not bool(ctx.get("event_active", false)):
+			var cm := NpcComfort.respond(id, abs_hours, ctx.get("comfort", {}), kind)
+			if not cm.is_empty():
+				routine_kind = kind
+				if _begin_comfort(cm, abs_hours, ctx):
+					return
 		# Nobody leaves at the bell: each person lingers a little into a new
 		# block (deterministic per person, day and block), so a camp trickles
 		# to dinner instead of arriving as one column.
@@ -871,9 +1044,18 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 				if state != State.IDLE:
 					return
 			scheduled = ""
+		# Festival leisure: always something social (NpcSocial) — the same
+		# hashed choice and spots the light tier makes in CrowdCohort.
+		if kind == NpcRoutine.SOCIAL:
+			routine_kind = kind
+			_begin_social(abs_hours, ctx)
+			if state != State.IDLE:
+				return
 		if not scheduled.is_empty() and abs_hours >= float(retry_at.get(scheduled, 0.0)):
 			routine_kind = kind
 			_begin_need(scheduled, abs_hours, ctx)
+			if state != State.IDLE:
+				_routine_mark = mark
 			return
 		if kind == NpcRoutine.WORK:
 			routine_kind = kind
@@ -904,8 +1086,19 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	var space_type := str((ACTIVITIES[need] as Dictionary).get("space", ""))
 	# Assignment-aware: my own assigned space (a bed with my name on it) wins
 	# outright; someone else's stays theirs while they are on the roster.
-	var space := registry.nearest_space_by(space_type, pos, pos_of, true, id,
-		ctx.get("agent_live", Callable()))
+	# Bed is HOME: a sleeper looks for the sleep space nearest their own camp
+	# (not nearest wherever the evening left them — that put people to bed in
+	# the neighbours' camp), and a crowd already asleep there is no reason to
+	# go elsewhere: sleepers pile up.
+	var from := pos
+	var spread := true
+	if need == "sleep":
+		spread = false
+		var ch: Variant = ctx.get("camp_home", null)
+		if ch is Vector2:
+			from = ch
+	var space := registry.nearest_space_by(space_type, from, pos_of, true, id,
+		ctx.get("agent_live", Callable()), spread)
 	if space.is_empty():
 		if ideal:
 			_begin_virtual_need(need)
@@ -1022,11 +1215,22 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 	# A LIVE venue (effigy, stage with a set on) seats people by choreography
 	# — the ring round the fire, the fan in front of the speakers — rather
 	# than the registry's packing spiral.
+	var extra2 := _venue_extra(sid2, best_type, ctx)
 	var live := VenueCrowd.venue_spot(best_type, best_pos, _venue_slot, st2,
-		float(ctx.get("abs_hours", 0.0)), _venue_seed(), _venue_extra(sid2, best_type, ctx))
-	target_pos = live if live != Vector2.INF else _standing_spot(registry, sid2, best_pos, ctx)
-	venue_pose = VenueCrowd.venue_pose(best_type, _venue_slot, st2, _venue_seed())
+		float(ctx.get("abs_hours", 0.0)), _venue_seed(), extra2)
 	face_anchor = best_pos
+	if live != Vector2.INF:
+		target_pos = live
+	else:
+		# An ordinary venue: the friend group's own cluster round it (the
+		# same spot CrowdCohort._go_to_venue gives this person).
+		var gs := VenueCrowd.group_spot(best_type, best_pos,
+			float(extra2.get("r", 0.0)) + VenueCrowd.round_gap(best_type, extra2), id,
+			registry.cluster_index_for(sid2, id))
+		target_pos = gs["pos"]
+		face_anchor = gs["face"]
+	venue_pose = VenueCrowd.venue_pose(best_type, _venue_slot, st2, _venue_seed())
+	_venue_phase_seen = int(st2.get("phase", -1))
 	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if SpaceTypes.OUTDOOR_TYPES.has(best_type) \
 			else NpcWeatherGate.EXPOSURE_SHELTERED
 	# A programmed set (or a fire's phase) ends when IT says, not when the
@@ -1062,7 +1266,8 @@ func _venue_pick(ctx: Dictionary) -> Dictionary:
 				"occupants": registry.occupant_count(sid),
 				"capacity": int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))})
 	if _taste.is_empty():
-		_taste = NpcVenueChoice.taste_for(id)
+		# Friends go out together: the GROUP's taste (NpcFriends).
+		_taste = NpcVenueChoice.taste_for(NpcFriends.key_of(id))
 	return NpcVenueChoice.pick(_taste, pos, candidates)
 
 
@@ -1078,9 +1283,7 @@ func _venue_state(space: Dictionary, ctx: Dictionary) -> Dictionary:
 
 
 ## Stage geometry from the bridge ({front, fwd}); {} for everything else.
-func _venue_extra(sid: String, stype: String, ctx: Dictionary) -> Dictionary:
-	if stype != "stage":
-		return {}
+func _venue_extra(sid: String, _stype: String, ctx: Dictionary) -> Dictionary:
 	var f: Callable = ctx.get("venue_front_of", Callable())
 	if f.is_valid():
 		var v: Variant = f.call(sid)
@@ -1113,11 +1316,32 @@ func _update_live_venue(abs_hours: float, ctx: Dictionary) -> void:
 	var st := _venue_state(space, ctx)
 	if _venue_slot < 0:
 		_venue_slot = registry.slot_index_for(target_space_id, id)
+	if _redirect_hold >= 0:
+		# Turned back at the line: watch from here until the phase moves on.
+		if int(st.get("phase", -1)) == _redirect_hold:
+			return
+		_redirect_hold = -1
 	var spot := VenueCrowd.venue_spot(target_space_type, centre, _venue_slot, st, abs_hours,
 		_venue_seed(), _venue_extra(target_space_id, target_space_type, ctx))
+	if spot != Vector2.INF and target_space_type != "effigy":
+		# Another venue's crowd (a stage fan) never spills into a burning
+		# effigy's fall zone: the seat moves to just outside it.
+		spot = NpcNav.outside(spot, ctx.get("no_go", []))
 	if spot != Vector2.INF:
 		target_pos = spot
-		if pos.distance_to(spot) > RESEAT_WALK_M:
+		# Round a burning fire — or the effigy's closing circle — the seat
+		# MOVES: someone already at their ring's radius goes round with it.
+		# Walking after it never arrives (the seat moves on while they walk,
+		# and a walk skips the end-of-visit check) — measured, the fire's
+		# dancers never went to bed; on the effigy circle, with a big full
+		# tier (long substeps) the seat outran its walkers every step and they
+		# chased it, facing in across the ring instead of along it. Late
+		# arrivals off the ring still walk to it. (The light tier: S_CIRCLE
+		# people on the ring keep circling — CrowdCohort._circle_step.)
+		var ring_tol := 1.0 if target_space_type == "fire_circle" else 1.5
+		var on_ring := VenueCrowd.is_circling(target_space_type, st) \
+			and absf(pos.distance_to(centre) - spot.distance_to(centre)) <= ring_tol
+		if not on_ring and pos.distance_to(spot) > RESEAT_WALK_M:
 			# A phase change moved the seat across the venue (ring -> lane):
 			# WALK there along a routed path — a teleport glides the body
 			# straight through the fire. The claim and activity are kept;
@@ -1127,11 +1351,258 @@ func _update_live_venue(abs_hours: float, ctx: Dictionary) -> void:
 			return
 		pos = spot
 	venue_pose = VenueCrowd.venue_pose(target_space_type, _venue_slot, st, _venue_seed())
+	_venue_phase_seen = int(st.get("phase", -1))
 	_venue_label = str(st.get("label", ""))
 	face_anchor = centre
+	if VenueCrowd.is_circling(target_space_type, st) and spot != Vector2.INF:
+		# Walking/dancing ROUND the fire: face the way the circle goes (the
+		# light tier faces along its arc), not in at the centre.
+		face_anchor = spot + VenueCrowd.ccw_tangent(centre, spot) * 10.0
 	_venue_event = bool(st.get("event", false))
 	if _venue_event and float(st.get("ends_h", -1.0)) > 0.0:
 		activity_ends_h = maxf(activity_ends_h, abs_hours + float(st["ends_h"]))
+
+
+## A traveller bound for the effigy: if its phase moved on since the seat was
+## chosen (lit mid-trip), head for the new seat now.
+func _retarget_effigy(abs_hours: float, ctx: Dictionary) -> void:
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null or target_space_id.is_empty():
+		return
+	var space := registry.find_by_id(target_space_id)
+	if space.is_empty():
+		return
+	var st := _venue_state(space, ctx)
+	var ph := int(st.get("phase", -1))
+	if ph == _venue_phase_seen:
+		return
+	_venue_phase_seen = ph
+	var centre: Variant = registry.cached_position(target_space_id)
+	if not (centre is Vector2):
+		return
+	if _venue_slot < 0:
+		_venue_slot = registry.slot_index_for(target_space_id, id)
+	var spot := VenueCrowd.venue_spot(target_space_type, centre, _venue_slot, st, abs_hours,
+		_venue_seed(), _venue_extra(target_space_id, target_space_type, ctx))
+	if spot == Vector2.INF or spot.distance_to(target_pos) <= RESEAT_WALK_M:
+		return
+	target_pos = spot
+	venue_pose = VenueCrowd.venue_pose(target_space_type, _venue_slot, st, _venue_seed())
+	_venue_event = bool(st.get("event", false))
+	if _venue_event and float(st.get("ends_h", -1.0)) > 0.0:
+		_enrichment_cap_h = float(st["ends_h"])
+	_request_path(ctx, spot, at_space_id, target_space_id)
+
+
+## A SOCIAL block (NpcSocial): a venue WITHOUT the enrichment gate, a stint in
+## one of the camp's conversation circles, or a wander across the site. The
+## choice and the spots are hashes of (id, camp, hour) — CrowdCohort makes the
+## identical choice for the same person, so the tiers agree.
+func _begin_social(abs_hours: float, ctx: Dictionary) -> void:
+	var pick := NpcSocial.choice(id, abs_hours)
+	if pick == "venue":
+		_begin_enrichment(abs_hours, ctx)
+		if state != State.IDLE:
+			return
+	var home_v: Variant = ctx.get("camp_home", null)
+	var home: Vector2 = home_v if home_v is Vector2 else pos
+	var seed_key := str(ctx.get("camp_seed", ""))
+	if seed_key.is_empty():
+		# Ids are "<seed>_npc_<i>" in both tiers; recover the camp's seed.
+		var cut := id.rfind("_npc_")
+		seed_key = id.substr(0, cut) if cut > 0 else id
+	_wandering = pick == "wander"
+	var spot := NpcSocial.wander_spot(id, home, abs_hours) if _wandering \
+		else NpcSocial.mingle_spot(id, seed_key, home, abs_hours)
+	activity = NpcSocial.ACTIVITY
+	target_space_id = ""
+	target_space_type = ""
+	target_pos = spot["pos"]
+	face_anchor = spot["face"]
+	venue_pose = "" if _wandering else "talk"
+	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR
+	_request_path(ctx, target_pos, at_space_id, "")
+	state = State.TRAVELING
+
+
+## A comfort stint (NpcComfort): a shade / warmth spot from the bridge, or
+## this person's own bed (a share of the rain; warmth with no fire about).
+## Mirrors CrowdCohort._begin_comfort — same response, spot and length.
+func _begin_comfort(kind: String, abs_hours: float, ctx: Dictionary) -> bool:
+	var home_v: Variant = ctx.get("camp_home", null)
+	var home: Vector2 = home_v if home_v is Vector2 else pos
+	var at_bed := kind == NpcComfort.KIND_SHELTER and NpcComfort.shelters_at_bed(id, abs_hours)
+	var spot: Dictionary = {}
+	if not at_bed:
+		var f: Callable = ctx.get("comfort_spot", Callable())
+		if f.is_valid():
+			spot = f.call(kind, home, id)
+		if spot.is_empty():
+			if kind == NpcComfort.KIND_SHADE:
+				return false
+			at_bed = true
+	var dest := home
+	var face := home
+	if at_bed:
+		var bf: Callable = ctx.get("home_bed_of", Callable())
+		var b: Variant = bf.call(id) if bf.is_valid() else null
+		dest = b if b is Vector2 else home + Vector2(cos(face_phase), sin(face_phase)) * 3.0
+	else:
+		dest = spot["pos"]
+		face = spot["face"]
+	var heat := float((ctx.get("comfort", {}) as Dictionary).get("heat", 0.0))
+	activity = NpcSocial.ACTIVITY
+	_comfort = kind
+	_comfort_bed = at_bed
+	_wandering = false
+	target_space_id = ""
+	target_space_type = ""
+	target_pos = dest
+	face_anchor = face
+	venue_pose = NpcComfort.pose_for(kind, id, heat, at_bed)
+	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED if kind != NpcComfort.KIND_WARM or at_bed \
+		else NpcWeatherGate.EXPOSURE_OUTDOOR
+	_request_path(ctx, target_pos, at_space_id, "")
+	state = State.TRAVELING
+	return true
+
+
+## The clock moved back `d` hours (a scrub): move this person's pending
+## times with it — state untouched (NpcPopulationEngine.tick).
+func rebase_time(d: float) -> void:
+	if activity_ends_h > 0.0:
+		activity_ends_h += d
+	if not is_nan(pickup_wait_h):
+		pickup_wait_h += d
+	for k in retry_at:
+		retry_at[k] = float(retry_at[k]) + d
+
+
+## Hard rain just began: leave an ordinary chat / dawdle / non-choreographed
+## venue now so the next decision can take cover (CrowdCohort.wake_for_weather).
+func wake_for_weather(ctx: Dictionary) -> bool:
+	if state != State.DOING or controlled_by_peer != 0:
+		return false
+	var leisure := (activity == NpcSocial.ACTIVITY and _comfort.is_empty()) \
+		or (activity == "enrichment" and VenueCrowd.rain_clears(target_space_type,
+			bool(ctx.get("event_active", false))))
+	if not leisure:
+		return false
+	_finish(ctx, false)
+	return true
+
+
+## Cast as a stage's DJ: walk to the middle of the stage and play until
+## `until_h`, `spot.elev` m up on the deck, facing `spot.face`.
+func begin_perform(spot: Dictionary, until_h: float, ctx: Dictionary) -> void:
+	if controlled_by_peer != 0:
+		return
+	_finish(ctx, false)
+	activity = PERFORM_ACTIVITY
+	routine_kind = ""
+	target_space_id = ""
+	target_space_type = ""
+	target_pos = spot.get("pos", pos)
+	face_anchor = spot.get("face", target_pos + Vector2(0.0, 1.0))
+	perform_role = str(spot.get("role", "dj"))
+	match perform_role:
+		"flow":
+			venue_pose = VenueCrowd.POSE_FIREFLOW
+		"sandman":
+			venue_pose = VenueCrowd.POSE_KNEEL
+		"redirect":
+			venue_pose = VenueCrowd.POSE_REDIRECT
+		_:
+			venue_pose = VenueCrowd.POSE_DJ
+	_orbit = spot.get("orbit", {})
+	perform_elev = float(spot.get("elev", 0.0))
+	_perform_until = until_h
+	_venue_label = str(spot.get("label", ""))
+	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
+	_request_path(ctx, target_pos, at_space_id, "")
+	state = State.TRAVELING
+
+
+## Social, needs met, nothing blocked, morale up (NpcPeak) — the same test
+## CrowdCohort._vibing makes.
+func vibing() -> bool:
+	if state != State.DOING:
+		return false
+	if activity == NpcSocial.ACTIVITY:
+		if _comfort_bed or _comfort == NpcComfort.KIND_SHELTER:
+			return false
+	elif activity != "enrichment" and activity != PERFORM_ACTIVITY:
+		return false
+	if morale < NpcPeak.ELIGIBLE_MORALE:
+		return false
+	return NpcPeak.needs_met(needs, blocked)
+
+
+## Metres above the ground this person's FEET are (the DJ on the deck).
+func elev() -> float:
+	return perform_elev if activity == PERFORM_ACTIVITY and state == State.DOING else 0.0
+
+
+## Part of a burn's turnout right now (VenueCrowd.attends)?
+func _attending_burn(ctx: Dictionary) -> bool:
+	return bool(ctx.get("event_active", false)) \
+		and VenueCrowd.attends(id, str(ctx.get("burn_key", "")))
+
+
+## Turned back at a burn's line by a sandman (the bridge's call): walk
+## straight out past it, away from the fire. Someone bound for the burn
+## watches from there until the phase moves on; anyone else stands at the line
+## a moment and then carries on with their day.
+func redirect_out(centre: Vector2, r: float, ctx: Dictionary) -> bool:
+	if controlled_by_peer != 0 or activity == PERFORM_ACTIVITY or activity == "sleep":
+		return false
+	var d := pos - centre
+	if d.length() < 0.01:
+		d = Vector2(cos(NpcHash.unit01(id, "redir") * TAU), sin(NpcHash.unit01(id, "redir") * TAU))
+	var dest := centre + d.normalized() * (r + 1.2)
+	if activity == "enrichment" and target_space_type == "effigy":
+		var space: Dictionary = (ctx.get("registry") as SpaceRegistry).find_by_id(target_space_id) \
+			if ctx.get("registry") != null else {}
+		_redirect_hold = int(_venue_state(space, ctx).get("phase", -1)) if not space.is_empty() else -1
+		target_pos = dest
+		face_anchor = centre
+		_clear_path()
+		state = State.TRAVELING
+		return true
+	_finish(ctx, false)
+	activity = NpcSocial.ACTIVITY
+	_wandering = true
+	target_pos = dest
+	face_anchor = centre
+	venue_pose = ""
+	_clear_path()
+	state = State.TRAVELING
+	return true
+
+
+## Walk out of a fire perimeter (the bridge calls this for anyone standing
+## inside a burning effigy's safe radius who is not AT the effigy — those
+## re-seat themselves). True when they were moved.
+func evacuate_from(centre: Vector2, r: float, ctx: Dictionary) -> bool:
+	if controlled_by_peer != 0 or pos.distance_to(centre) >= r:
+		return false
+	# Sleepers too: nobody spends the burn in a tent inside the fall zone.
+	if target_space_type == "effigy":
+		return false
+	var d := pos - centre
+	if d.length() < 0.01:
+		d = Vector2(cos(NpcHash.unit01(id, "evac") * TAU), sin(NpcHash.unit01(id, "evac") * TAU))
+	var dest := centre + d.normalized() * (r + 2.0)
+	_finish(ctx, false)
+	# Stand at the perimeter and watch for a stint, then decide as usual.
+	activity = NpcSocial.ACTIVITY
+	_wandering = true
+	target_pos = dest
+	face_anchor = centre
+	venue_pose = ""
+	_clear_path()   # a straight radial walk: the nav marks the circle blocked
+	state = State.TRAVELING
+	return true
 
 
 func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
@@ -1212,12 +1683,19 @@ func _pick(ctx: Dictionary) -> String:
 	for n in CRITICAL_NEEDS:
 		var v := float(needs.get(n, 0.0))
 		if n == "sleep":
-			var in_window := NpcRoutine.in_sleep_window(_hour(ctx), _sleep_start(ctx), SLEEP_END_H)
-			if not in_window and v < float(THRESHOLD["sleep"]):
+			var in_window := NpcRoutine.in_sleep_window(_hour(ctx), _sleep_start(ctx), _wake_base(ctx))
+			var r_bar: NpcRoutine = ctx.get("routine")
+			var early_bar := r_bar.early_bed_bar(float(THRESHOLD["sleep"])) if r_bar != null \
+				else float(THRESHOLD["sleep"])
+			# In a burn's turnout: stay up for it (CrowdCohort._decide too).
+			var up := _attending_burn(ctx)
+			if up:
+				early_bar = STAY_UP_BAR
+			if not in_window and v < early_bar:
 				continue
-			if in_window and v < 0.25:
+			if in_window and v < (STAY_UP_BAR if up else 0.25):
 				continue  # slept enough — don't go straight back to bed
-		elif v < float(THRESHOLD[n]):
+		elif v < (BURN_HUNGER_BAR if n == "hunger" and _attending_burn(ctx) else float(THRESHOLD[n])):
 			continue
 		if v > best_score:
 			best_score = v
@@ -1283,7 +1761,10 @@ func _most_urgent() -> String:
 
 
 func _satisfy(need: String) -> void:
-	if need.is_empty():
+	if need == NpcSocial.ACTIVITY:
+		needs["enrichment"] = NpcSocial.relieved_enrichment(float(needs.get("enrichment", 0.0)))
+		return
+	if need.is_empty() or not needs.has(need):
 		return
 	needs[need] = rng.randf_range(0.0, 0.08)
 	_clear_blocked(need)
@@ -1308,6 +1789,15 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	_venue_label = ""
 	_venue_event = false
 	_event_checked = false
+	_venue_phase_seen = -99
+	_wandering = false
+	_comfort = ""
+	_comfort_bed = false
+	perform_elev = 0.0
+	_perform_until = 0.0
+	perform_role = ""
+	_orbit = {}
+	_redirect_hold = -1
 	# Remember the space we finished at: the next trip starts there, which is
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id
@@ -1409,20 +1899,49 @@ func _my_skills(ctx: Dictionary) -> Dictionary:
 	return sk.tags_of(id) if sk != null else {}
 
 
-func _wake_hour() -> float:
-	# Per-agent jittered wake time, stable within a day (rng is day-seeded).
-	return SLEEP_END_H + (float(hash(id) % 97) / 97.0) * 1.5
+func _wake_hour(ctx: Dictionary = {}) -> float:
+	# Per-agent jittered wake time off the ROUTINE's wake base (NpcRoutine
+	# .wake_base_h — 06:00 for the default day, 07:30 for a festival).
+	return _wake_base(ctx) + (float(hash(id) % 97) / 97.0) * 1.5
+
+
+func _wake_base(ctx: Dictionary) -> float:
+	var r: NpcRoutine = ctx.get("routine")
+	return fposmod(r.wake_base_h(SLEEP_END_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_END_H
+
+
+## How far this person's whole day sits from the routine as written: the
+## phase offset plus their personal shift (NpcRoutine.day_shift). The sleep
+## window and the wake hour move WITH it, or a person shifted an hour later
+## wakes inside their own SLEEP block (the tiers then disagree on what to do).
+func _personal_shift(r: NpcRoutine, ctx: Dictionary) -> float:
+	return routine_offset_h + NpcRoutine.day_shift(
+		r.night_key(id, float(ctx.get("abs_hours", 0.0)), routine_offset_h))
 
 
 func _hour(ctx: Dictionary) -> float:
 	return fposmod(float(ctx.get("hour_of_day", 12.0)), 24.0)
 
 
+## This person's routine day (NpcRoutine.personal_blocks): the same key the
+## light tier computes, so both tiers live the same personal schedule.
+func _rkey(r: NpcRoutine, ctx: Dictionary) -> String:
+	return r.day_key(id, float(ctx.get("abs_hours", 0.0)), routine_offset_h)
+
+
 ## When the sleep need may send this person to bed: the routine's SLEEP
 ## block start when it has one, else SLEEP_START_H.
+## When "night" begins for the instant-daytime-nap rule: SLEEP_START_H, or
+## this person's own (shifted) sleep start when that falls earlier in the
+## evening — a bedtime of 20:30 is a night, not a nap that ends at once.
+## (A routine whose sleep starts after midnight keeps SLEEP_START_H.)
+static func night_from_h(sleep_start: float) -> float:
+	return sleep_start if sleep_start > 12.0 and sleep_start < SLEEP_START_H else SLEEP_START_H
+
+
 func _sleep_start(ctx: Dictionary) -> float:
 	var r: NpcRoutine = ctx.get("routine")
-	return r.sleep_start_h(SLEEP_START_H) if r != null else SLEEP_START_H
+	return fposmod(r.sleep_start_h(SLEEP_START_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_START_H
 
 
 # --- readouts ---------------------------------------------------------------
@@ -1435,6 +1954,12 @@ func status_line() -> String:
 				return "asleep"
 			if activity == CHORE_ACTIVITY:
 				return "working"
+			if activity == PERFORM_ACTIVITY:
+				return "DJing" + ((" (%s)" % _venue_label) if not _venue_label.is_empty() else "")
+			if activity == NpcSocial.ACTIVITY:
+				if not _comfort.is_empty():
+					return NpcComfort.status_for(_comfort, _comfort_bed)
+				return "taking in the view" if _wandering else "chatting with camp-mates"
 			if activity == "enrichment":
 				if target_space_type == "effigy":
 					match venue_pose:
@@ -1452,6 +1977,14 @@ func status_line() -> String:
 		State.TRAVELING:
 			if activity == CHORE_ACTIVITY:
 				return "carrying a load" if chore_leg == 1 else "heading to work"
+			if activity == PERFORM_ACTIVITY:
+				return "heading to the decks"
+			if activity == NpcSocial.ACTIVITY:
+				match _comfort:
+					NpcComfort.KIND_SHADE: return "heading for shade"
+					NpcComfort.KIND_WARM: return "heading in to warm up" if _comfort_bed else "heading to the fire"
+					NpcComfort.KIND_SHELTER: return "running for cover"
+				return "wandering" if _wandering else "joining friends"
 			var dest := target_space_type if not target_space_type.is_empty() \
 					else _space_of(activity)
 			return "heading to %s" % SpaceTypes.label(dest)

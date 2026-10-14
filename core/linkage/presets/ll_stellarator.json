@@ -1,0 +1,3641 @@
+{
+	"structure": {
+		"modules": 4,
+		"beamLengths": {
+			"horizontal": 8,
+			"vertical": 4
+		},
+		"pivotPercent": 41.4,
+		"stackCounts": {
+			"horizontal": 2,
+			"vertical": 3
+		},
+		"beamDimensions": {
+			"horizontalWidth": 2.5,
+			"horizontalThickness": 1.5,
+			"verticalWidth": 0.75,
+			"verticalThickness": 2.5,
+			"verticalInnerWidth": 1.5,
+			"verticalInnerThickness": 2.5,
+			"verticalOuterWidth": 0.75,
+			"verticalOuterThickness": 2.5,
+			"verticalDimensionsLinked": false
+		},
+		"offsets": {
+			"top": 1.25,
+			"bottom": 10.25,
+			"vertEnd": 1,
+			"hStackGap": 0.1,
+			"vStackGap": 0.45
+		},
+		"bracketDimensions": {
+			"width": 2.17,
+			"depth": 1.6,
+			"height": 3.82,
+			"wallThickness": 0.18,
+			"innerWidth": 1.8,
+			"holeDistance": 2.69
+		},
+		"brackets": {
+			"width": 2.17,
+			"depth": 1.6,
+			"height": 3.82,
+			"wallThickness": 0.18,
+			"innerWidth": 1.8,
+			"holeDiameter": 0.3125,
+			"zRotation": 0
+		},
+		"bolts": {
+			"diameter": 0.5,
+			"vStackLength": 4.9,
+			"hStackLength": 3,
+			"vStackAuto": false,
+			"hStackAuto": false,
+			"hPivotBoltLength": 3,
+			"hPivotBoltAuto": false
+		},
+		"washers": {
+			"vEnabled": true,
+			"vID": 0.5,
+			"vOD": 1.5,
+			"vThickness": 0.45,
+			"vAuto": false,
+			"hEnabled": true,
+			"hID": 0.5,
+			"hOD": 1.5,
+			"hThickness": 0.1,
+			"hAuto": false
+		},
+		"hobermanAngle": 0,
+		"pivotAngle": 0,
+		"vStackReverse": true
+	},
+	"mode": {
+		"type": "cylinder",
+		"flipVertical": false,
+		"rotation": 0,
+		"useFixedBeams": false,
+		"capUprights": true,
+		"arrayCount": 1,
+		"sequentialFold": false,
+		"radialArray": {
+			"enabled": false,
+			"count": 6,
+			"center": false,
+			"rotateCopies": true,
+			"radiusAuto": true,
+			"radius": 145,
+			"spacing": 0,
+			"startAngle": 0,
+			"spin": -60,
+			"heightOffset": 0,
+			"hiddenSlots": [
+				3
+			]
+		}
+	},
+	"hardwareAssemblies": {
+		"activeId": "innerVBeam",
+		"explode": 0,
+		"snap": true,
+		"assemblies": {
+			"outerVBeam": {
+				"id": "outerVBeam",
+				"label": "Outer V-Beam Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 8,
+					"distMul": 2
+				},
+				"mirror": {
+					"from": "right",
+					"to": "left"
+				},
+				"parts": [
+					{
+						"id": "bracket",
+						"type": "bracket",
+						"label": "U-Bracket (Unistrut Trolley)",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 4,
+						"cost": 5,
+						"params": {
+							"useGlb": true,
+							"height": 3.77,
+							"width": 2.15,
+							"depth": 1.57,
+							"wallThickness": 0.12,
+							"holeDiameter": 0.41,
+							"bottomLip": 1.01,
+							"sideHoleFromTop": 1.1875,
+							"cutoffHeight": 0,
+							"glbScaleMul": 1,
+							"glbRotX": 0,
+							"glbRotY": 90,
+							"glbRotZ": 0,
+							"posX": 0,
+							"posY": 0,
+							"posZ": 0
+						},
+						"presetId": "asm-rkg43",
+						"bomKey": "asm-rkg43"
+					},
+					{
+						"id": "r-beam",
+						"type": "beam",
+						"label": "Outer V-Beam",
+						"axis": "right",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 96,
+							"holeOffset": 1.5,
+							"holeDiameter": 0.31496062992125984,
+							"rotDeg": 90,
+							"syncStructure": true,
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-ebmrje",
+						"bomKey": "asm-ebmrje",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bushing",
+						"type": "bushing",
+						"label": "Bushing 5/16\"ID 5/8\"OD 1.25\"",
+						"axis": "right",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.85,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 0.625,
+							"length": 1.25,
+							"flangeOd": 0,
+							"flangeThickness": 0
+						},
+						"flipAxis": false,
+						"presetId": "asm-uv0kcd",
+						"bomKey": "asm-uv0kcd",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-lock",
+						"type": "lockWasher",
+						"label": "5/16\" Split Lock Washer",
+						"axis": "right",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.06,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 0.5,
+							"thickness": 0.078,
+							"style": "split"
+						},
+						"flipAxis": false,
+						"presetId": "asm-i80w7b",
+						"bomKey": "asm-i80w7b",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bolt",
+						"type": "bolt",
+						"label": "Outer V-Beam Bolt (8x60mm button)",
+						"axis": "right",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.55,
+						"crossOffset": 0,
+						"params": {
+							"diameter": 0.315,
+							"length": 2.3622,
+							"threadLength": 0.9449,
+							"headType": "button",
+							"headDia": 0.5118,
+							"headHeight": 0.1969,
+							"driveSize": 0.1575,
+							"metric": "M8x1.25"
+						},
+						"flipAxis": true,
+						"presetId": "asm-gf6qto",
+						"bomKey": "asm-gf6qto",
+						"gapBefore": 0
+					},
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-5zfevj",
+						"bomKey": "asm-5zfevj",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-5zfevj",
+						"bomKey": "asm-5zfevj",
+						"gapBefore": 0
+					},
+					{
+						"id": "outerVBeam-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.08,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"flipAxis": true,
+						"presetId": "asm-6u778p",
+						"bomKey": "asm-6u778p",
+						"sharedKey": "hBeamGapWasher",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-bolt",
+						"type": "bolt",
+						"label": "H-Pivot Bolt 1/2\"x3\" Hex",
+						"axis": "down",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.75,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": "",
+							"headAtInsert": true
+						},
+						"presetId": "asm-396fj2",
+						"bomKey": "asm-396fj2",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-outer-washer",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "down",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.08,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 1.5,
+							"thickness": 0.0625
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-nut",
+						"type": "nut",
+						"label": "1/2\"-13 Rivet Nut",
+						"axis": "down",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.4,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.5,
+							"od": 0.6692913385826772,
+							"length": 0.5,
+							"flangeOd": 0.7086614173228346,
+							"flangeThickness": 0.03937007874015748,
+							"style": "rivet",
+							"thread": "1/2-13"
+						},
+						"flipAxis": false,
+						"presetId": "asm-gv0hrp",
+						"bomKey": "asm-gv0hrp",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical",
+				"mirrorPairs": [
+					{
+						"from": "right",
+						"to": "left"
+					}
+				]
+			},
+			"innerVBeam": {
+				"id": "innerVBeam",
+				"label": "Inner V-Beam Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 8,
+					"distMul": 2
+				},
+				"parts": [
+					{
+						"id": "r-beam",
+						"type": "beam",
+						"label": "Inner V-Beam",
+						"axis": "right",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 96,
+							"holeOffset": 1.5,
+							"holeDiameter": 0.31496062992125984,
+							"holeAlign": "center",
+							"rotDeg": 90,
+							"syncStructure": true,
+							"color": 9136404
+						},
+						"presetId": "asm-66y71j",
+						"bomKey": "asm-66y71j",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-washer",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "right",
+						"seq": 3,
+						"qty": 3,
+						"perModule": 2,
+						"cost": 0.08,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.32,
+							"od": 1.5,
+							"thickness": 0.05
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"presetManual": false,
+						"link": "",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-lock",
+						"type": "lockWasher",
+						"label": "5/16\" Split Lock Washer",
+						"axis": "right",
+						"seq": 5,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.06,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.3125,
+							"od": 0.5,
+							"thickness": 0.078,
+							"style": "split"
+						},
+						"flipAxis": false,
+						"presetId": "asm-i80w7b",
+						"bomKey": "asm-i80w7b",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bolt",
+						"type": "bolt",
+						"label": "Inner V-Beam Bolt (8x60mm button)",
+						"axis": "right",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.55,
+						"crossOffset": 0.08,
+						"flipAxis": true,
+						"params": {
+							"diameter": 0.315,
+							"length": 2.3622,
+							"threadLength": 0.9449,
+							"headType": "button",
+							"headDia": 0.5118,
+							"headHeight": 0.1969,
+							"driveSize": 0.1575,
+							"metric": "M8x1.25"
+						},
+						"presetId": "asm-qnxbqm",
+						"bomKey": "asm-qnxbqm",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1781475545528-7",
+						"type": "bracket",
+						"label": "U-Bracket (Unistrut Trolley)",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 5,
+						"params": {
+							"useGlb": true,
+							"height": 3.77,
+							"width": 2.15,
+							"depth": 1.57,
+							"wallThickness": 0.12,
+							"holeDiameter": 0.41,
+							"bottomLip": 1.01,
+							"sideHoleFromTop": 1.1875,
+							"cutoffHeight": 0,
+							"glbScaleMul": 1,
+							"glbRotX": 0,
+							"glbRotY": 90,
+							"glbRotZ": 0,
+							"posX": 0,
+							"posY": 0,
+							"posZ": 0
+						},
+						"presetId": "bracket-unistrut-trolley",
+						"presetManual": false,
+						"bomKey": "bracket-unistrut-trolley",
+						"link": ""
+					},
+					{
+						"id": "part-1781475697861-680",
+						"type": "bushing",
+						"label": "Bushing",
+						"axis": "left",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"id": 0.3125,
+							"od": 0.625,
+							"length": 1.5,
+							"flangeOd": 0,
+							"flangeThickness": 0
+						},
+						"presetId": "asm-94b7vk",
+						"crossOffset": 0.08,
+						"flipAxis": false,
+						"bomKey": "asm-94b7vk",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1781475961112-843",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "right",
+						"seq": 1,
+						"qty": 3,
+						"perModule": 2,
+						"cost": 0.08,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.32,
+							"od": 1.5,
+							"thickness": 0.05
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"presetManual": false,
+						"link": "",
+						"gapBefore": 0
+					},
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-4crnjx",
+						"bomKey": "asm-4crnjx",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-4crnjx",
+						"bomKey": "asm-4crnjx",
+						"gapBefore": 0
+					},
+					{
+						"id": "innerVBeam-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790297258455-971",
+						"type": "bolt",
+						"label": "Bolt",
+						"axis": "down",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": ""
+						},
+						"presetId": "asm-bwd6cx",
+						"crossOffset": 0,
+						"flipAxis": true,
+						"bomKey": "asm-bwd6cx",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical"
+			},
+			"hCenter": {
+				"id": "hCenter",
+				"label": "H-Beam Center Linkage Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 38,
+					"distMul": 2.2
+				},
+				"parts": [
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "center"
+						},
+						"presetId": "asm-j7xowz",
+						"bomKey": "asm-j7xowz",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "center"
+						},
+						"presetId": "asm-j7xowz",
+						"bomKey": "asm-j7xowz",
+						"gapBefore": 0
+					},
+					{
+						"id": "hCenter-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790296920789-712",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790296979426-79",
+						"type": "bolt",
+						"label": "Bolt",
+						"axis": "up",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": ""
+						},
+						"presetId": "asm-bwd6c2",
+						"crossOffset": 0,
+						"flipAxis": true,
+						"bomKey": "asm-bwd6c2",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical",
+				"mirrorPairs": []
+			},
+			"vCenter": {
+				"id": "vCenter",
+				"label": "V-Beam Center Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 14,
+					"distMul": 1.9
+				},
+				"parts": [],
+				"sandwichPlane": "horizontal",
+				"mirrorPairs": []
+			}
+		},
+		"stackModelV2": true,
+		"mirrorDefaultsV2": true,
+		"stackModelV3": true
+	},
+	"buildSteps": {
+		"version": 1,
+		"steps": [
+			{
+				"id": "step-muhlt9vz-1-h5bx",
+				"kind": "cut",
+				"title": "Cut 8 × reciprocal beam to 49.25 in",
+				"notes": "8 pieces of 2.5 in × 1.5 in stock, 49.25 in long (from 96 in stock, 46.75 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9vz-2-qzv5",
+				"kind": "cut",
+				"title": "Cut 5 × V-beam / cap V-beam to 48 in",
+				"notes": "5 pieces of 1.5 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 1
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 1
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9vz-3-opq6",
+				"kind": "cut",
+				"title": "Cut 10 × V-beam / cap V-beam to 48 in",
+				"notes": "10 pieces of 0.75 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 2
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 2
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9vz-4-0jqo",
+				"kind": "cut",
+				"title": "Cut 4 × radial support beam to 24 in",
+				"notes": "4 pieces of 1.5 in × 2.5 in stock, 24 in long (from 96 in stock, 72 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w0-5-xf5w",
+				"kind": "drill",
+				"title": "Drill 10 × V-beam / cap V-beam (3 holes)",
+				"notes": "Holes from the left end: 1.13 in, 24.13 in, 47.13 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 2
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 2
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w0-6-u5oy",
+				"kind": "drill",
+				"title": "Drill 6 × bottom H-beam (3 holes)",
+				"notes": "Holes from the left end: 10.25 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 1,
+						"stackId": 2,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 2,
+						"stackId": 4,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 3,
+						"stackId": 6,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 1,
+						"stackId": 2,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 2,
+						"stackId": 4,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 3,
+						"stackId": 6,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-7-2yav",
+				"kind": "drill",
+				"title": "Drill 6 × top H-beam (4 holes)",
+				"notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 1,
+						"stackId": 3,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 2,
+						"stackId": 5,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 3,
+						"stackId": 7,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 1,
+						"stackId": 3,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 2,
+						"stackId": 5,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 3,
+						"stackId": 7,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-8-ctd6",
+				"kind": "drill",
+				"title": "Drill 4 × reciprocal beam (3 holes)",
+				"notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal",
+						"layerIndex": 0,
+						"patternId": "A"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-9-vbmn",
+				"kind": "drill",
+				"title": "Drill 4 × reciprocal beam (3 holes)",
+				"notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal",
+						"layerIndex": 0,
+						"patternId": "B"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-10-xhs8",
+				"kind": "drill",
+				"title": "Drill 3 × V-beam (2 holes)",
+				"notes": "Holes from the left end: 1.13 in, 24.13 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 0,
+						"stackId": 0,
+						"patternId": "A",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 1,
+						"stackId": 1,
+						"patternId": "A",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 2,
+						"stackId": 2,
+						"patternId": "A",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-11-d5fi",
+				"kind": "drill",
+				"title": "Drill 3 × radial support beam (1 hole)",
+				"notes": "Holes from the left end: 20.69 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam",
+						"moduleIndex": 0,
+						"stackId": 0,
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "support-beam",
+						"moduleIndex": 1,
+						"stackId": 1,
+						"layerIndex": 0,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "support-beam",
+						"moduleIndex": 2,
+						"stackId": 2,
+						"layerIndex": 0,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-12-h76q",
+				"kind": "drill",
+				"title": "Drill 2 × cap V-beam / V-beam (3 holes)",
+				"notes": "Holes from the left end: 1.13 in, 24.13 in, 47.13 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"layerIndex": 1
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 3,
+						"stackId": 3,
+						"patternId": "A",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-13-e26j",
+				"kind": "drill",
+				"title": "Drill 1 × bottom H-beam (3 holes)",
+				"notes": "Holes from the left end: 10.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 0,
+						"stackId": 0,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-14-k20m",
+				"kind": "drill",
+				"title": "Drill 1 × bottom H-beam (3 holes)",
+				"notes": "Holes from the left end: 10.25 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 0,
+						"stackId": 0,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-15-hbdz",
+				"kind": "drill",
+				"title": "Drill 1 × top H-beam (4 holes)",
+				"notes": "Holes from the left end: 10.44 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 0,
+						"stackId": 1,
+						"patternId": "A",
+						"layerIndex": 0,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-16-rkad",
+				"kind": "drill",
+				"title": "Drill 1 × top H-beam (4 holes)",
+				"notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 0,
+						"stackId": 1,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-17-ubth",
+				"kind": "drill",
+				"title": "Drill 1 × radial support beam (2 holes)",
+				"notes": "Holes from the left end: 0.44 in, 20.69 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam",
+						"moduleIndex": 3,
+						"stackId": 3,
+						"layerIndex": 0,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w1-18-n5u2",
+				"kind": "place",
+				"title": "Module 1: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-muhlt9w1-19-29ek",
+				"kind": "place",
+				"title": "Module 2: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-muhlt9w1-20-igtl",
+				"kind": "place",
+				"title": "Module 3: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-muhlt9w1-21-g423",
+				"kind": "place",
+				"title": "Module 4: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-muhlt9w1-22-hxzx",
+				"kind": "place",
+				"title": "Module 1: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-muhlt9w1-23-0np6",
+				"kind": "place",
+				"title": "Module 2: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-muhlt9w1-24-vc6k",
+				"kind": "place",
+				"title": "Module 3: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-muhlt9w1-25-w9lb",
+				"kind": "place",
+				"title": "Module 4: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-muhlt9w2-26-eqyk",
+				"kind": "fasten",
+				"title": "Module 1: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-27-4xsv",
+				"kind": "fasten",
+				"title": "Module 2: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-28-u355",
+				"kind": "fasten",
+				"title": "Module 3: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-29-g34r",
+				"kind": "fasten",
+				"title": "Module 4: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-30-rrpx",
+				"kind": "place",
+				"title": "Module 1: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-muhlt9w2-31-mstj",
+				"kind": "place",
+				"title": "Module 2: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-muhlt9w2-32-wf24",
+				"kind": "place",
+				"title": "Module 3: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-muhlt9w2-33-byj0",
+				"kind": "place",
+				"title": "Module 4: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-muhlt9w2-34-npjd",
+				"kind": "place",
+				"title": "Module 1: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-muhlt9w2-35-fv8j",
+				"kind": "place",
+				"title": "Module 2: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-muhlt9w2-36-4s2v",
+				"kind": "place",
+				"title": "Module 3: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-muhlt9w2-37-kizc",
+				"kind": "place",
+				"title": "Module 4: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-muhlt9w2-38-1fb4",
+				"kind": "fasten",
+				"title": "Module 1: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-39-6u7o",
+				"kind": "fasten",
+				"title": "Module 2: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-40-o5l7",
+				"kind": "fasten",
+				"title": "Module 3: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-41-i5gv",
+				"kind": "fasten",
+				"title": "Module 4: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-muhlt9w2-42-y9ex",
+				"kind": "place",
+				"title": "Module 1: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-muhlt9w2-43-j8r6",
+				"kind": "place",
+				"title": "Module 2: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 1
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-muhlt9w2-44-3dlo",
+				"kind": "place",
+				"title": "Module 3: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 2
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-muhlt9w2-45-2q0c",
+				"kind": "place",
+				"title": "Module 4: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 3
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-muhlt9w2-46-s2ps",
+				"kind": "fasten",
+				"title": "Module 1: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 0,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 4400,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-muhlt9w3-47-f9xv",
+				"kind": "fasten",
+				"title": "Module 2: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 1,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-muhlt9w3-48-3fua",
+				"kind": "fasten",
+				"title": "Module 3: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 2,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-muhlt9w3-49-6xv1",
+				"kind": "fasten",
+				"title": "Module 4: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 3,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-muhlt9w3-50-hes4",
+				"kind": "fasten",
+				"title": "Module 1: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-muhlt9w3-51-dkq4",
+				"kind": "fasten",
+				"title": "Module 2: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-muhlt9w3-52-j02b",
+				"kind": "fasten",
+				"title": "Module 3: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-muhlt9w3-53-ee9e",
+				"kind": "fasten",
+				"title": "Module 4: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-muhlt9w3-54-wijo",
+				"kind": "place",
+				"title": "Lift the top assembly onto the V modules",
+				"notes": "With helpers on each side, lift the assembled top ring and lower the brackets onto the V-beam ends.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top"
+					},
+					{
+						"kind": "placement",
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975
+				},
+				"transitionMs": 800,
+				"durationMs": 3500,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": "parked",
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w3-55-savk",
+				"kind": "fasten",
+				"title": "Module 1: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-muhlt9w3-56-yt4i",
+				"kind": "fasten",
+				"title": "Module 2: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-muhlt9w3-57-x2np",
+				"kind": "fasten",
+				"title": "Module 3: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-muhlt9w3-58-rm45",
+				"kind": "fasten",
+				"title": "Module 4: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 74.97499999999975,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-muhlt9w3-59-a7vw",
+				"kind": "view",
+				"title": "Deploy the structure",
+				"notes": "Open the scissor ring to its deployed angle before adding the roof.",
+				"stage": "assembly",
+				"targets": [],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 160.49999999999946
+				},
+				"transitionMs": 2500,
+				"durationMs": 800,
+				"op": {},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w3-60-svxn",
+				"kind": "place",
+				"title": "Install radial support beams",
+				"notes": "Lay the radial support beams across the top ring.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 160.49999999999946
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w3-61-kjwx",
+				"kind": "place",
+				"title": "Install reciprocal beams",
+				"notes": "Weave the reciprocal beams over/under each other and onto the ring anchors.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 160.49999999999946
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w3-62-j9wn",
+				"kind": "fasten",
+				"title": "Bolt the reciprocal beams",
+				"notes": "Through-bolt each crossing and anchor.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": [
+							"rcp-ring",
+							"rcp-cross"
+						]
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 160.49999999999946,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2500,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-muhlt9w3-63-9e13",
+				"kind": "place",
+				"title": "Mount the solar panels",
+				"notes": "Lift each panel onto the support beams in order and clamp it down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "panel"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 160.49999999999946
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"approach": "above",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": true
+				},
+				"groupId": null
+			}
+		],
+		"settings": {
+			"repeatMode": "skip",
+			"fastFactor": 4
+		}
+	},
+	"foldAngle": 160.49999999999946,
+	"animationStopAngle": 160.49999999999946,
+	"minFoldAngle": null,
+	"radialVisibleAngle": 90,
+	"rcpVisibleAngle": 90,
+	"panelsVisibleAngle": null,
+	"ibc": {
+		"enabled": false,
+		"count": 2,
+		"stackGapIn": 0,
+		"verticalOffsetAIn": 0,
+		"verticalOffsetBIn": 0,
+		"rotationYDeg": 22.5,
+		"scale": 39.37007874015748
+	},
+	"coverings": {
+		"enabled": true,
+		"lowerLean": "inward",
+		"lowerTiltDeg": 0,
+		"upperLean": "outward",
+		"upperTiltDeg": 0,
+		"splitHeightIn": 48,
+		"bottomIn": 0,
+		"bottomMode": "ground",
+		"topClearanceIn": 1,
+		"edgeGapIn": 0.25,
+		"mount": "outside",
+		"sheet": {
+			"widthIn": 48,
+			"lengthIn": 96,
+			"thicknessIn": 0.5,
+			"orientation": "auto",
+			"align": "center",
+			"kerfIn": 0.125
+		},
+		"fabric": {
+			"rollWidthIn": 60,
+			"hemIn": 1,
+			"seamIn": 0.5,
+			"stretchPct": 2,
+			"grommetSpacingIn": 12
+		},
+		"table": {
+			"depthIn": 24,
+			"thicknessIn": 0.75,
+			"slideIn": 0,
+			"heightOffsetIn": 0
+		},
+		"spans": [
+			{
+				"lower": "plywood",
+				"upper": "none",
+				"table": false
+			},
+			{
+				"lower": "none",
+				"upper": "plywood",
+				"table": false
+			},
+			{
+				"lower": "plywood",
+				"upper": "none",
+				"table": false
+			},
+			{
+				"lower": "plywood",
+				"upper": "none",
+				"table": false
+			}
+		],
+		"visibility": {
+			"walls": true,
+			"fabric": true,
+			"tables": true
+		},
+		"showDimensions": false
+	},
+	"floor": {
+		"enabled": false,
+		"beams": {
+			"radialEnabled": false,
+			"length": 120,
+			"width": 1.5,
+			"thickness": 3.5,
+			"offsetH": -46.5,
+			"offsetV": 0,
+			"offsetT": 0,
+			"parallelEnabled": true,
+			"parallelLength": 96,
+			"parallelWidth": 2.5,
+			"parallelThickness": 1.5,
+			"parallelSwingAngle": 0,
+			"seat": "leg",
+			"parallelOffsetV": 0,
+			"parallelVOffset": 0,
+			"anchorDist": 20,
+			"anchorSideIn": 0,
+			"rcpEndOffset": 0
+		},
+		"deck": {
+			"enabled": true,
+			"thicknessIn": 0.75,
+			"insetIn": 0.5
+		},
+		"visibility": {
+			"beams": true,
+			"deck": true
+		}
+	},
+	"shadeCloth": {
+		"enabled": false,
+		"widthMode": "auto",
+		"widthIn": 120,
+		"widthTrimIn": 0,
+		"lengthMode": "auto",
+		"lengthIn": 240,
+		"centerOverlapIn": 12,
+		"overhangIn": 6,
+		"rotationDeg": 0,
+		"staggerIn": 0,
+		"liftIn": 2,
+		"color": "#6f8f86",
+		"opacity": 0.75,
+		"visible": true
+	},
+	"panels": {
+		"enabled": true,
+		"topPanels": {
+			"enabled": true,
+			"size": {
+				"width": 33.2,
+				"length": 94.2,
+				"thickness": 0.9
+			},
+			"electrical": {
+				"ratedWatts": 350,
+				"voc": 50.2,
+				"vmp": 45.6,
+				"isc": 8,
+				"imp": 8.58,
+				"weight": 22.5
+			},
+			"padding": {
+				"x": 0,
+				"y": 0
+			},
+			"grid": {
+				"rows": 1,
+				"cols": 3
+			},
+			"lift": 0.3,
+			"presetId": null,
+			"formFactor": "folding",
+			"foldCount": 4,
+			"foldDeploy": 1,
+			"folded": {
+				"length": 23.9,
+				"width": 33.2,
+				"thickness": 3.5
+			}
+		},
+		"sidePanels": {
+			"enabled": false,
+			"size": {
+				"width": 48,
+				"length": 96,
+				"thickness": 0.5
+			},
+			"electrical": {
+				"ratedWatts": 180,
+				"voc": 49.5,
+				"vmp": 41.5,
+				"isc": 10.2,
+				"imp": 9.65,
+				"weight": 45
+			},
+			"padding": {
+				"x": 0,
+				"y": -0.5
+			},
+			"grid": {
+				"rows": 1,
+				"cols": 1
+			},
+			"presetId": null,
+			"formFactor": "framed",
+			"foldCount": 4,
+			"foldDeploy": 1,
+			"folded": {
+				"length": 25.25,
+				"width": 21.25,
+				"thickness": 2.5
+			}
+		},
+		"layoutMode": "rectangular",
+		"gridRotation": 0,
+		"positioning": {
+			"lift": -3,
+			"slide": 37,
+			"separation": -4.5
+		},
+		"radial": {
+			"count": 4,
+			"offset": 48,
+			"rotation": -22.5,
+			"lateralOffset": 82,
+			"pinwheelAngle": 0
+		},
+		"spiral": {
+			"armCount": 3,
+			"secondaryEnabled": true,
+			"secondaryRadialOffset": 0,
+			"secondaryLateralOffset": -33,
+			"secondaryPinwheel": -2,
+			"secondaryRotation": 2,
+			"armRadialStep": 0,
+			"armLateralStep": -33,
+			"armPinwheelStep": 0,
+			"armRotationStep": 0
+		},
+		"enabledFaces": [
+			false,
+			false,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true
+		]
+	},
+	"supportBeams": {
+		"enabled": true,
+		"showRadial": true,
+		"length": 24,
+		"width": 1.5,
+		"thickness": 2.5,
+		"rotation": 0,
+		"offsetH": 0,
+		"offsetV": -8.5,
+		"foldAngle": 0,
+		"parallelEnabled": true,
+		"parallelLength": 48,
+		"parallelWidth": 2.5,
+		"parallelThickness": 1.5,
+		"parallelFoldAngle": 0,
+		"parallelSwingAngle": 80.2,
+		"parallelOverlap": 62.5,
+		"parallelInset": -9,
+		"parallelVOffset": -1.66,
+		"parallelOffsetV": -3,
+		"anchorDist": 11,
+		"rcpKinematicMode": false,
+		"rcpPivotHole": 0,
+		"rcpPivotT": 1,
+		"rcpEndOffset": 1.25,
+		"rcpActiveHole": 1
+	},
+	"costs": {
+		"hBeam": 2.642857142857143,
+		"vBeam": 0.8809523809523809,
+		"bolt": 1.5,
+		"boltVInner": 1.25,
+		"boltVOuter": 1,
+		"boltH": 1.25,
+		"boltHPivot": 1.25,
+		"washerV": 0.5,
+		"washerH": 0.5,
+		"bracket": 5.38,
+		"solarPanel": 365,
+		"plywoodSheet": 45,
+		"fabricYard": 8,
+		"grommet": 0.25,
+		"shadeCloth": 60,
+		"autoLumber": true,
+		"refBeam": {
+			"width": 3.5,
+			"thickness": 1.5,
+			"length": 8,
+			"price": 3.7
+		}
+	},
+	"visibility": {
+		"brackets": true,
+		"bolts": true,
+		"hardwareFullDetail": false,
+		"solarPanels": true,
+		"ibc": false,
+		"coverings": true
+	},
+	"cameraState": {
+		"yaw": 24.865000000000006,
+		"pitch": -5.962499999999981,
+		"dist": 261.1982547705464,
+		"panX": -92,
+		"panY": 8,
+		"structureRotation": 0
+	},
+	"version": "v30",
+	"name": "Stellarator",
+	"linkagelabSource": {
+		"file": "Stellarator.json",
+		"sha": "e11e875ed415dbd87badc4b5ed928c80d6508cbb"
+	}
+}

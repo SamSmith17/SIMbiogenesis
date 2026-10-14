@@ -85,12 +85,14 @@ func _draw() -> void:
 		var screen := PackedVector2Array()
 		for p: Vector2 in pts:
 			screen.append(_to_screen(p, plot, x_max, y_max))
+		var current := bool(cd.get("current", false))
 		if screen.size() >= 2:
-			draw_polyline(screen, col, 1.6, true)
+			draw_polyline(screen, col, 2.8 if current else 1.6, true)
 		draw_line(Vector2(plot.position.x + 6.0, legend_y),
-				Vector2(plot.position.x + 20.0, legend_y), col, 2.4)
+				Vector2(plot.position.x + 20.0, legend_y), col, 3.6 if current else 2.4)
 		draw_string(fnt, Vector2(plot.position.x + 24.0, legend_y + 3.5),
-				str(cd.get("label", "")), HORIZONTAL_ALIGNMENT_LEFT, -1, 9, C_TEXT)
+				str(cd.get("label", "")) + (" ◂ yours" if current else ""),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 9, C_TEXT if not current else Color(1.0, 0.95, 0.85))
 		legend_y += 12.0
 	# Operating-point marker: "you are here".
 	if is_finite(_marker.x):

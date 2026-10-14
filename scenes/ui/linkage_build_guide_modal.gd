@@ -204,9 +204,11 @@ func _rebuild_body() -> void:
 	_add_bom_card()
 	_add_mass_card()
 	_add_cut_list()
+	_add_coverings_card()
 	_add_drill_templates()
 	_add_bracket_card()
 	_add_assembly_card()
+	_add_sequence_card()
 	_add_crew_card()
 	_add_actuator_card()
 	_add_electrical_card()
@@ -358,6 +360,9 @@ func _fill_bom_tree() -> void:
 	var power: Array = _bom.get("power_items", [])
 	if not power.is_empty():
 		_bom_section(root, "POWER", power)
+	var enclosure: Array = _bom.get("enclosure_items", [])
+	if not enclosure.is_empty():
+		_bom_section(root, "ENCLOSURE", enclosure)
 	_update_totals()
 
 
@@ -392,10 +397,17 @@ func _bom_section(root: TreeItem, title: String, items: Array) -> void:
 ## table-driven price (assembly hardware carries its own per-part cost).
 func _cost_key_for(line_key: String) -> String:
 	match line_key:
-		"h_beam", "support_radial":
+		"h_beam", "support_radial", "floor_radial":
 			return "h_beam"
-		"v_beam", "v_beam_inner", "v_beam_outer", "support_rcp":
+		"v_beam", "v_beam_inner", "v_beam_outer", "support_rcp", "floor_reciprocal":
 			return "v_beam"
+		# Enclosure prices live in the config's costs block (web camelCase).
+		"plywood_sheet":
+			return "x:plywoodSheet"
+		"fabric_yard":
+			return "x:fabricYard"
+		"grommet":
+			return "x:grommet"
 		"bracket":
 			return "bracket"
 		"bolt_v", "bolt_v_inner", "bolt_v_center", "support_bolt", "support_through":
@@ -412,6 +424,8 @@ func _cost_key_for(line_key: String) -> String:
 			return "washer_h"
 		"solar_panel":
 			return "solar_panel"
+	if line_key.begins_with("shade_cloth"):
+		return "x:shadeCloth"
 	return ""
 
 
@@ -426,6 +440,11 @@ func _on_bom_price_edited() -> void:
 	if value < 0.0:
 		value = 0.0
 	var key := str((meta as Dictionary)["cost_key"])
+	if key.begins_with("x:"):
+		LinkageCoveringPlan.set_price(params, key.substr(2), value)
+		_bom = LinkageBom.compute(params)
+		_fill_bom_tree()
+		return
 	# Auto lumber pricing derives beam prices by volume, so a manual edit only
 	# sticks once the player takes the wheel — say so rather than silently
 	# discarding the number they just typed.
@@ -443,8 +462,15 @@ func _update_totals() -> void:
 	var lumber := ""
 	if not bool(params.costs["auto_lumber"]):
 		lumber = "  [color=#%s](manual lumber pricing)[/color]" % C_TEXT_M.to_html(false)
-	_totals_lbl.text = ("Structure [b]$%s[/b] · Power [b]$%s[/b] · "
-		+ "Total [b][color=#%s]$%s[/color][/b] · %s%s") % [
+	var enc := ""
+	if float(_bom.get("enclosure_cost", 0.0)) > 0.0:
+		enc = "Enclosure [b]$%s[/b] · " % String.num(float(_bom["enclosure_cost"]), 2)
+	var copies: Dictionary = _bom.get("copies", {})
+	var k_txt := ""
+	if int(copies.get("total", 1)) > 1:
+		k_txt = "  [color=#%s](%s)[/color]" % [C_TEXT_M.to_html(false), str(copies.get("label", ""))]
+	_totals_lbl.text = ("Structure [b]$%s[/b] · Power [b]$%s[/b] · " + enc
+		+ "Total [b][color=#%s]$%s[/color][/b] · %s%s" + k_txt) % [
 			String.num(float(_bom.get("structure_cost", 0.0)), 2),
 			String.num(float(_bom.get("power_cost", 0.0)), 2),
 			UITheme.C_AMBER.to_html(false),
@@ -488,6 +514,106 @@ func _add_cut_list() -> void:
 		_kv_row(box, "Reciprocal supports", "%d x %s" % [int(c["support_rcp"]),
 			LinkageBom.format_beam_spec(float(sb["parallel_length"]) / 12.0,
 				float(sb["parallel_width"]), float(sb["parallel_thickness"]))])
+	var fb: Dictionary = LinkageFloor.config(params)["beams"]
+	if int(c.get("floor_radial", 0)) > 0:
+		_kv_row(box, "Floor radial beams", "%d x %s" % [int(c["floor_radial"]),
+			LinkageBom.format_beam_spec(float(fb["length"]) / 12.0, float(fb["width"]), float(fb["thickness"]))])
+	if int(c.get("floor_rcp", 0)) > 0:
+		_kv_row(box, "Floor beams", "%d x %s" % [int(c["floor_rcp"]),
+			LinkageBom.format_beam_spec(float(fb["parallelLength"]) / 12.0,
+				float(fb["parallelWidth"]), float(fb["parallelThickness"]))])
+
+
+## Coverings, the floor deck and shade tarps (A4): the cut plan per piece,
+## the shop totals, and the cut files (one full-scale SVG per wall / table /
+## the deck, a pattern per fabric band, the tarp layout).
+func _add_coverings_card() -> void:
+	var plan: Dictionary = _bom.get("covering_plan", {})
+	var enc := LinkageEnclosure.deployed(params)
+	var shade: Dictionary = enc["shade"]
+	var entries := LinkageCoveringPlan.entries(plan)
+	if entries.is_empty() and (shade.get("shapes", []) as Array).is_empty():
+		return
+	var box := _card("Coverings & Cut Files")
+	var copies := int((_bom.get("copies", {}) as Dictionary).get("total", 1))
+	if copies > 1:
+		var note := Label.new()
+		note.text = "Per structure — the design holds %d, so cut every piece %d times." % [copies, copies]
+		note.add_theme_color_override("font_color", C_TEXT_M)
+		note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		box.add_child(note)
+	for e in entries:
+		var shape: Dictionary = e["shape"]
+		var label := str(shape.get("label", "Covering"))
+		if e.has("pattern"):
+			var pat: Dictionary = e["pattern"]
+			_kv_row(box, label, "%d panel%s · %s yd · %d grommets" % [int(pat["panel_count"]),
+				"" if int(pat["panel_count"]) == 1 else "s", str(pat["fabric_yards"]), int(pat["grommet_count"])])
+		else:
+			var nest: Dictionary = e["nest"]
+			_kv_row(box, label, "%s × %s · %d sheet%s (%s), %d%% used · %d seam%s" % [
+				LinkageCoveringPlan.fmt_in(float(shape.get("width_bottom_in", shape.get("across_in", 0.0)))),
+				LinkageCoveringPlan.fmt_in(float(shape.get("slant_height_in", 0.0))),
+				int(nest["sheet_count"]), "" if int(nest["sheet_count"]) == 1 else "s", str(nest["orientation"]),
+				int(roundf(float(nest["utilization"]) * 100.0)), int(nest["seam_count"]),
+				"" if int(nest["seam_count"]) == 1 else "s"])
+	if not (shade.get("shapes", []) as Array).is_empty():
+		var sizes: PackedStringArray = []
+		for sz in shade.get("sizes", []):
+			sizes.append("%d × %s × %s" % [int(sz["qty"]), LinkageCoveringPlan.fmt_in(float(sz["width_in"])),
+				LinkageCoveringPlan.fmt_in(float(sz["length_in"]))])
+		_kv_row(box, "Shade tarps", "%s · %s%% of the roof covered" % [", ".join(sizes), str(shade["coverage_pct"])])
+	var t: Dictionary = plan.get("totals", {})
+	if not t.is_empty() and int(t.get("sheets", 0)) > 0:
+		_kv_row(box, "Plywood", "%d sheets · %d cut pieces · %s ft of battens · %d%% used" % [int(t["sheets"]),
+			int(t["cut_pieces"]), String.num(float(t["batten_linear_in"]) / 12.0, 1), int(roundf(float(t["utilization"]) * 100.0))])
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	box.add_child(row)
+	var status := Label.new()
+	status.add_theme_color_override("font_color", C_TEXT_M)
+	status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var export_btn := _bar_btn("📐 Export cut files (SVG)", func() -> void:
+		var dir := export_cut_files()
+		status.text = "Wrote %s" % ProjectSettings.globalize_path(dir) if not dir.is_empty() else "Nothing to export.")
+	export_btn.tooltip_text = "One full-scale SVG per wall, table and the floor deck (1 unit = 1 inch), a pattern per fabric band, and the tarp layout."
+	row.add_child(export_btn)
+	var open_btn := _bar_btn("Open folder", func() -> void:
+		OS.shell_open(ProjectSettings.globalize_path(_cut_dir())))
+	row.add_child(open_btn)
+	box.add_child(status)
+
+
+func _cut_dir() -> String:
+	return "%s/%s_cut_files" % [EXPORT_DIR, _design_name.validate_filename()]
+
+
+## Write every cut file for the design; returns the folder ("" = nothing).
+func export_cut_files() -> String:
+	var plan: Dictionary = _bom.get("covering_plan", {})
+	var entries := LinkageCoveringPlan.entries(plan)
+	var shade: Dictionary = LinkageEnclosure.deployed(params)["shade"]
+	if entries.is_empty() and (shade.get("shapes", []) as Array).is_empty():
+		return ""
+	var dir := _cut_dir()
+	DirAccess.make_dir_recursive_absolute(dir)
+	var prefix := _design_name.validate_filename().to_lower().replace(" ", "_")
+	for e in entries:
+		_write_text("%s/%s" % [dir, LinkageCoveringPlan.entry_filename(e, prefix)], LinkageCoveringPlan.entry_svg(e, params))
+	if not (shade.get("shapes", []) as Array).is_empty():
+		_write_text("%s/%s-shade-tarps.svg" % [dir, prefix], LinkageSvgCutFile.shade_layout_svg(shade))
+	return dir
+
+
+static func _write_text(path: String, text: String) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		push_warning("Cut file export failed: %s" % path)
+		return
+	f.store_string(text)
+	f.close()
 
 
 func _add_drill_templates() -> void:
@@ -568,6 +694,50 @@ func _add_assembly_card() -> void:
 				qty_txt += "  (%d per module)" % per
 			_kv_row(box, "   %d. %s  [%s]" % [n, str(s["label"]), str(s["axis"])],
 				qty_txt, C_TEXT_S)
+
+
+## The build sequence (LinkageLab build steps): the design's saved sequence,
+## else the generated shop order. A run of identical steps is one line "x N".
+## Played in the Lab's 🎬 Steps dock; a crew rehearses it in the world.
+func _add_sequence_card() -> void:
+	var bs := params.get_build_steps()
+	var steps: Array = bs.get("steps", [])
+	var generated := steps.is_empty()
+	if generated:
+		steps = LinkageBuildSteps.generate_for(params)
+	if steps.is_empty():
+		return
+	var box := _card("Build Sequence")
+	var reps := LinkageBuildSteps.representative_steps(steps)
+	var intro := Label.new()
+	intro.text = "%d steps (%d shown — identical repeats folded)%s. Play them in the Lab's 🎬 Steps." % [
+		steps.size(), reps.size(), " · generated from the design" if generated else " · saved with the design"]
+	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	intro.add_theme_color_override("font_color", C_TEXT_M)
+	intro.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(intro)
+	var n := 0
+	for r in reps:
+		n += 1
+		var st: Dictionary = r["step"]
+		var meta: Dictionary = LinkageBuildSteps.STEP_KIND_META.get(str(st.get("kind", "view")), {})
+		var count := int(r["count"])
+		var head := Label.new()
+		head.text = "%d. %s %s%s" % [n, str(meta.get("icon", "")), str(st.get("title", "")),
+			("   × %d" % count) if count > 1 else ""]
+		head.add_theme_color_override("font_color", C_TEXT)
+		head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		box.add_child(head)
+		var notes := str(st.get("notes", ""))
+		if not notes.is_empty():
+			var nl := Label.new()
+			nl.text = "     " + notes
+			nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			nl.add_theme_color_override("font_color", C_TEXT_S)
+			nl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			box.add_child(nl)
+	var tl := LinkageBuildTimeline.plan(params, [] if generated else steps, 9)
+	_kv_row(box, "A crew of 9 (rehearsal plan)", LinkageBuildTimeline.summary(tl), C_TEXT_S)
 
 
 func _add_crew_card() -> void:

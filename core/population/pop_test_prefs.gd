@@ -26,6 +26,14 @@ extends RefCounted
 ## accessor read ON for the SESSION without touching the saved flags, so
 ## leaving festival mode hands the player's own testing prefs back exactly.
 ## It is deliberately not persisted — it belongs to the mode, not the file.
+##
+## FESTIVAL POPULATION TARGET (`festival_target_people`, 0 = natural): how
+## many people the festival's camps hold in TOTAL. It is a performance knob as
+## much as a taste (a machine that cannot draw 800 people at 350x can draw
+## 400), so it is global, not per site. The camps' own headcounts are the
+## NATURAL split and are never rewritten — the graph sync scales them to the
+## target (FestivalSeedLayout.scale_headcounts), so turning it back to 0
+## restores every camp exactly.
 
 const CFG_PATH := "user://pop_testing.cfg"
 const SECTION := "testing"
@@ -40,6 +48,15 @@ static var _mute_alarms := false
 static var _provision_preset := DEFAULT_PRESET
 static var _generation := 0
 static var _easy_override := false
+static var _festival_target := 0
+const MAX_FESTIVAL_TARGET := 5000
+## PEAK EXPERIENCE contagion (`peak_contagion`, 1 = as shipped): how strongly
+## one person's FUCK YES!!! raises the odds of the people round them. 0 = no
+## spread (every peak is its own spark), up to MAX_PEAK_CONTAGION (= NpcPeak.CONTAGION_MULT_MAX).
+## Global like the population target — a taste about the festival, not a
+## property of a site.
+static var _peak_contagion := 1.0
+const MAX_PEAK_CONTAGION := 4.0
 
 
 static func ensure_loaded() -> void:
@@ -58,6 +75,10 @@ static func load_from(path: String) -> bool:
 	_no_departures = bool(cfg.get_value(SECTION, "no_departures", _no_departures))
 	_mute_alarms = bool(cfg.get_value(SECTION, "mute_alarms", _mute_alarms))
 	_provision_preset = str(cfg.get_value(SECTION, "provision_preset", _provision_preset))
+	_festival_target = clampi(int(cfg.get_value(SECTION, "festival_target_people", _festival_target)),
+		0, MAX_FESTIVAL_TARGET)
+	_peak_contagion = clampf(float(cfg.get_value(SECTION, "peak_contagion", _peak_contagion)),
+		0.0, MAX_PEAK_CONTAGION)
 	if not CampProvisioning.PRESETS.has(_provision_preset):
 		_provision_preset = DEFAULT_PRESET
 	_generation += 1
@@ -76,6 +97,8 @@ static func save_to(path: String) -> void:
 	cfg.set_value(SECTION, "no_departures", _no_departures)
 	cfg.set_value(SECTION, "mute_alarms", _mute_alarms)
 	cfg.set_value(SECTION, "provision_preset", _provision_preset)
+	cfg.set_value(SECTION, "festival_target_people", _festival_target)
+	cfg.set_value(SECTION, "peak_contagion", _peak_contagion)
 	cfg.save(path)
 
 
@@ -160,6 +183,30 @@ static func set_provision_preset(id: String) -> void:
 	_generation += 1
 
 
+## Total festival population the camps are scaled to (0 = natural headcounts).
+static func festival_target_people() -> int:
+	ensure_loaded()
+	return _festival_target
+
+
+static func set_festival_target_people(n: int) -> void:
+	ensure_loaded()
+	_festival_target = clampi(n, 0, MAX_FESTIVAL_TARGET)
+	_generation += 1
+
+
+## How contagious FUCK YES!!! is (1 = as shipped, 0 = no spread).
+static func peak_contagion() -> float:
+	ensure_loaded()
+	return _peak_contagion
+
+
+static func set_peak_contagion(v: float) -> void:
+	ensure_loaded()
+	_peak_contagion = clampf(v, 0.0, MAX_PEAK_CONTAGION)
+	_generation += 1
+
+
 ## True when any guardrail is off — the HUD shows a "testing" tag then.
 static func any_active() -> bool:
 	ensure_loaded()
@@ -175,4 +222,6 @@ static func reset_defaults() -> void:
 	_mute_alarms = false
 	_provision_preset = DEFAULT_PRESET
 	_easy_override = false
+	_festival_target = 0
+	_peak_contagion = 1.0
 	_generation += 1

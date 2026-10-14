@@ -4,6 +4,11 @@ extends SceneTree
 ## LinkageParams so only in-scope fields ship). Re-run when the web configs
 ## change:
 ##   Godot.exe.exe --headless --path . --script tools/convert_linkage_presets.gd
+##
+## The LinkageLab `main` presets (`presets/ll_*.json`) are NOT made here: they
+## come from `node tools/linkage_parity_dump.mjs`, which reads them from the
+## same git ref as the parity fixtures (LINKAGE_PARITY.md). Since LinkageParams
+## became lossless this tool also keeps every source key it does not model.
 
 const SOURCE_DIR := "C:/Users/notsa/Documents/GitHub/LinkageLab/configs/"
 const DEST_DIR := "res://core/linkage/presets/"

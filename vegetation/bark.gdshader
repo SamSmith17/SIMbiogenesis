@@ -2,6 +2,7 @@
 shader_type spatial;
 render_mode cull_disabled;
 
+#include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://vegetation/veg_growth.gdshaderinc"
 
@@ -61,14 +62,15 @@ void fragment() {
 	}
 	float base_ao = mix(1.0, 0.72, UV.y * bark_ao_strength);
 	albedo *= base_ao;
+	// (No manual back-face flip — see veg_lighting.gdshaderinc.)
 	if (!FRONT_FACING) {
-		NORMAL = -NORMAL;
-		albedo *= 0.35;
+		albedo *= VEG_BACK_FACE;
 	}
+	vec3 wn = veg_world_normal(NORMAL, INV_VIEW_MATRIX);
 	float bark_rough = roughness_value;
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
-		float up = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
+		float up = clamp(wn.y * 0.5 + 0.5, 0.0, 1.0);
 		float top = 1.0 - UV.y;
 		float snow_mask = clamp((snow_amount * 0.3 + depth_t * 0.75) * (0.2 + 0.8 * up) * mix(0.4, 1.0, top), 0.0, 1.0);
 		albedo = mix(albedo, snow_color, snow_mask);
@@ -76,6 +78,8 @@ void fragment() {
 	}
 	albedo *= 1.0 - night_factor * night_darkness;
 	ALBEDO = albedo;
+	EMISSION = albedo * veg_fill_amount() * (1.0 - night_factor);
 	ROUGHNESS = bark_rough;
 	METALLIC = 0.0;
+	SPECULAR = 0.2;
 }

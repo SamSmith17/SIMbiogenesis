@@ -25,6 +25,10 @@ static func import_from_path(source_path: String, label: String = "") -> Diction
 		"target_height_m": ModelCatalog.DEFAULT_TARGET_HEIGHT_M,
 		"mesh_scale": 1.0,
 		"preserve_scale": false,
+		# Recorded at import so the UI can say why the materials look the way
+		# they do; the fix itself runs on every load (ImportMaterialFixer).
+		"source_app": ImportMaterialFixer.source_app(ImportMaterialFixer.read_gltf_json(dest)),
+		"material_fix": ImportMaterialFixer.MODE_AUTO,
 	}
 	ModelCatalog.register_user(entry)
 	return entry

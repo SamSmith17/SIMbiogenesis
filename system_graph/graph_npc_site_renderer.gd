@@ -56,8 +56,14 @@ func project(world_xz: Vector2) -> Variant:
 	var svc = c.soi_preview_service
 	if c._phys_camera_projection_active() and svc != null \
 			and is_instance_valid(svc) and svc.has_method("world_to_canvas"):
-		return svc.call("world_to_canvas",
-				Vector3(world_xz.x, center3.y, world_xz.y))
+		# On the GROUND, not at the SoI centre's height: the lens is a
+		# perspective camera, so a point on a slope 10 m below the centre
+		# projected at the centre's height lands metres off its 3D spot.
+		var y := center3.y
+		var soi: Node = c._cached_autoload("/root/SoiService")
+		if soi != null and soi.has_method("ground_y_at"):
+			y = c._ring_ground_y(soi, world_xz.x, world_xz.y)
+		return svc.call("world_to_canvas", Vector3(world_xz.x, y, world_xz.y))
 	return c.size * 0.5 + (c.get_view_pan() as Vector2) \
 			+ GraphSiteLayout.world_xz_to_site(world_xz, center3) \
 			* GraphSiteLayout.px_per_m(c.get_view_zoom())

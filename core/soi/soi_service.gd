@@ -21,11 +21,18 @@ var _root: Node3D = null
 var _marker: Node3D = null
 var _preview: Node3D = null
 var _subsurface: Node3D = null
+var _section_cap: SoiSectionCap = null
+## Shared rim sun (SoiRimSun) — one disc for both globes, ref-counted by owner.
+var _rim_sun: SoiRimSun = null
+var _rim_sun_owners: Dictionary = {}
 var _panel: Control = null
 var _snowglobe: Node = null
 var _snowglobe_hud: CanvasLayer = null
 var edit_mode := false
 var snowglobe_active := false
+## Set when the globe was opened over the system graph (which had to close so
+## the root viewport renders 3D again); the graph reopens when the globe exits.
+var _return_to_graph_after_globe := false
 ## Graph-editor live SoI backdrop (SubViewport) — owns clip/subsurface when
 ## snowglobe modal is not open.
 var graph_preview_active := false
@@ -69,6 +76,49 @@ func _process(delta: float) -> void:
 		_save_acc += delta
 		if _save_acc >= _SAVE_DEBOUNCE_S:
 			_flush_pending_save()
+	if not _rim_sun_owners.is_empty() and _rim_sun != null and is_instance_valid(_rim_sun):
+		var tree := get_tree()
+		var main := tree.current_scene if tree != null else null
+		var sun := main.get("sun") as DirectionalLight3D if main != null else null
+		_rim_sun.update_from(world_center(), _config.radius_m, sun)
+
+
+## Vegetation look for the SoI views (veg_lighting.gdshaderinc globals):
+## a self-lit fill so crowns read at preview distance under a very low world
+## ambient, and no eye-level distance haze. Ref-counted by owner
+## ("graph_preview", "snowglobe"); first person is back to 0 / 1 when none hold
+## it (the graph's root viewport renders no 3D meanwhile, and the full-screen
+## globe IS the view).
+const PREVIEW_VEG_FILL := 0.28
+var _veg_look_owners: Dictionary = {}
+
+
+func set_preview_vegetation_look(owner: String, on: bool) -> void:
+	if on:
+		_veg_look_owners[owner] = true
+	else:
+		_veg_look_owners.erase(owner)
+	var active := not _veg_look_owners.is_empty()
+	RenderingServer.global_shader_parameter_set("veg_fill", PREVIEW_VEG_FILL if active else 0.0)
+	RenderingServer.global_shader_parameter_set("veg_haze_mul", 0.0 if active else 1.0)
+
+
+## Show the emblem's rim sun for `owner` ("snowglobe" / "graph_globe"). It is a
+## world node, so whichever camera renders the SoI (the full-screen globe or the
+## graph's preview SubViewport) draws it; it follows the real sun every frame.
+func acquire_rim_sun(owner: String) -> void:
+	_rim_sun_owners[owner] = true
+	if (_rim_sun == null or not is_instance_valid(_rim_sun)) and is_instance_valid(_root):
+		_rim_sun = SoiRimSun.new()
+		_root.add_child(_rim_sun)
+	_sync_process()
+
+
+func release_rim_sun(owner: String) -> void:
+	_rim_sun_owners.erase(owner)
+	if _rim_sun_owners.is_empty() and _rim_sun != null and is_instance_valid(_rim_sun):
+		_rim_sun.visible = false
+	_sync_process()
 
 
 ## Hide AutoVegetation / Vegetation while SoI views are active (perf). Safe to
@@ -152,6 +202,8 @@ func unbind_terrain() -> void:
 	_marker = null
 	_preview = null
 	_subsurface = null
+	_section_cap = null
+	_rim_sun = null
 
 
 func refresh_footing() -> void:
@@ -250,7 +302,8 @@ func cancel_placement_mode() -> void:
 
 
 func _sync_process() -> void:
-	set_process(_placement_mode or snowglobe_active or graph_preview_active or _save_pending)
+	set_process(_placement_mode or snowglobe_active or graph_preview_active or _save_pending \
+			or not _rim_sun_owners.is_empty())
 
 
 ## Enable/disable SoI clip + glass shell for the graph SubViewport backdrop.
@@ -343,6 +396,17 @@ func open_from_marker() -> void:
 func enter_snowglobe() -> void:
 	if snowglobe_active or _loader == null:
 		return
+	# The globe renders through the ROOT viewport, which the graph runs with
+	# disable_3d while it is open — entered over the graph it drew nothing.
+	# Close the graph first (its close path also tears down the graph preview's
+	# clip latch synchronously) and bring it back when the globe exits.
+	_return_to_graph_after_globe = false
+	var graph := ServiceLocator.graph()
+	var graph_open := graph != null and is_instance_valid(graph) \
+			and (graph as CanvasItem).visible
+	if graph_open and graph.has_method("close_graph_view"):
+		graph.call("close_graph_view")
+		_return_to_graph_after_globe = true
 	if _panel != null and _panel.has_method("close_panel"):
 		_panel.close_panel()
 	# Hide the preview sphere so it doesn't Z-fight with the snowglobe glass dome.
@@ -366,6 +430,7 @@ func enter_snowglobe() -> void:
 	_ensure_snowglobe_hud()
 	if _snowglobe_hud != null and _snowglobe_hud.has_method("show_hud"):
 		_snowglobe_hud.call("show_hud")
+	set_preview_vegetation_look("snowglobe", true)
 	snowglobe_active_changed.emit(true)
 
 
@@ -408,7 +473,15 @@ func _finalize_snowglobe_exit() -> void:
 		_reset_hero_tree_visibility()
 	if _snowglobe_hud != null and _snowglobe_hud.has_method("hide_hud"):
 		_snowglobe_hud.call("hide_hud")
+	set_preview_vegetation_look("snowglobe", false)
 	snowglobe_active_changed.emit(false)
+	if _return_to_graph_after_globe:
+		_return_to_graph_after_globe = false
+		var graph := ServiceLocator.graph()
+		if graph != null and is_instance_valid(graph) and graph.has_method("open_graph_view"):
+			# Deferred: the snowglobe's own exit (camera pop, modal release)
+			# is still unwinding on this stack.
+			graph.call_deferred("open_graph_view")
 
 
 func set_clip_enabled(on: bool) -> void:
@@ -435,6 +508,37 @@ func set_section_cutaway(on: bool, plane_origin: Vector3 = Vector3.ZERO,
 			Vector4(plane_origin.x, plane_origin.y, plane_origin.z, 1.0 if on else 0.0))
 	RenderingServer.global_shader_parameter_set(
 			"soi_section_normal", Vector4(n.x, n.y, n.z, 0.0))
+	_sync_section_cap(on, plane_origin, n)
+
+
+## Fill the cut with solid strata (SoiSectionCap) whenever a section is open —
+## without it the cutaway left the plane open and the sky showed through the
+## ground. Only for the graph's preview (Elevation CT / Hydro Lab); the
+## full-screen globe has no cutaway.
+func _sync_section_cap(on: bool, plane_origin: Vector3, n: Vector3) -> void:
+	if _section_cap == null or not is_instance_valid(_section_cap):
+		return
+	if not on or snowglobe_active or not graph_preview_active:
+		_section_cap.visible = false
+		return
+	_section_cap.sync_cut(world_center(), _config.radius_m, plane_origin, n,
+			Callable(self, "ground_y_at"))
+
+
+## Top-edge lip of the cut cap (metres) — scaled by the section's zoom so no
+## sliver of sky shows between the cap and the terrain mesh at deep zoom.
+func set_section_cap_lip(lip_m: float) -> void:
+	if _section_cap != null and is_instance_valid(_section_cap):
+		_section_cap.set_lip(lip_m)
+
+
+func set_section_cap_reveal(t: float) -> void:
+	if _section_cap != null and is_instance_valid(_section_cap):
+		_section_cap.set_reveal(t)
+
+
+func section_cap_node() -> Node3D:
+	return _section_cap
 
 
 func collect_save_state() -> Dictionary:
@@ -450,23 +554,30 @@ func apply_save_state(data: Dictionary) -> void:
 	soi_changed.emit()
 
 
+## Declared in project.godot [shader_globals] → already registered. (The
+## old guard used global_shader_parameter_get_list, which is editor-only and
+## returns [] in a running game, so every add errored on boot.)
+static func _global_declared(name: String) -> bool:
+	return ProjectSettings.has_setting("shader_globals/" + name)
+
+
 func _register_shader_globals() -> void:
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_center_radius"):
+	if not _global_declared("soi_center_radius"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_center_radius", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4.ZERO)
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_clip_enabled"):
+	if not _global_declared("soi_clip_enabled"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_clip_enabled", RenderingServer.GLOBAL_VAR_TYPE_FLOAT, 0.0)
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_ground_y"):
+	if not _global_declared("soi_ground_y"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_ground_y", RenderingServer.GLOBAL_VAR_TYPE_FLOAT, 0.0)
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_water_table_m"):
+	if not _global_declared("soi_water_table_m"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_water_table_m", RenderingServer.GLOBAL_VAR_TYPE_FLOAT, 15.0)
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_section_plane"):
+	if not _global_declared("soi_section_plane"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_section_plane", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4.ZERO)
-	if not RenderingServer.global_shader_parameter_get_list().has("soi_section_normal"):
+	if not _global_declared("soi_section_normal"):
 		RenderingServer.global_shader_parameter_add(
 			"soi_section_normal", RenderingServer.GLOBAL_VAR_TYPE_VEC4,
 			Vector4(0.0, 0.0, 1.0, 0.0))
@@ -508,6 +619,9 @@ func _ensure_world_nodes() -> void:
 	_subsurface.name = "SoiSubsurface"
 	_subsurface.visible = false
 	_root.add_child(_subsurface)
+	_section_cap = SoiSectionCap.new()
+	_section_cap.name = "SoiSectionCap"
+	_root.add_child(_section_cap)
 	refresh_footing()
 
 

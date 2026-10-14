@@ -16,8 +16,7 @@ const DEFAULT_ORBIT_MULT := 2.2
 const MIN_ORBIT_MULT := 0.35
 const MAX_ORBIT_MULT := 4.5
 const ZOOM_STEP := 0.06
-## Elevation CT ortho zoom (Shift+wheel) — larger than freeform orbit step.
-const SECTION_ZOOM_STEP := 0.14
+
 const ZOOM_SMOOTH := 10.0
 const MIN_ORBIT_DIST_M := 8.0
 const MIN_VIEWPORT_PX := 64
@@ -39,6 +38,18 @@ const MAX_SECTION_VIEWPORT_PX := 1280
 # ~0.5× (blurry) just under the crop threshold and snap sharp above it (the "zoom
 # jump"). Equal caps keep render density ~1× on both sides of the switch.
 const MAX_DISC_CONTAINER_PX := 2048.0
+## The Site Plan's air outside the SoI clip (overridden by the canvas's bg).
+const PLAN_BACKDROP_COLOR := Color(0.055, 0.075, 0.11, 1.0)
+## Site Plan / Elevation / Hydro Lab are PERSPECTIVE cameras now (the Globe's
+## kind), placed so px/m on their focus plane — the ground under the view
+## centre, or the cut face — equals the 2D mapping's scale exactly. At rest
+## that plane maps linearly, so every 2D overlay stays registered, while the
+## image gains real depth. No ortho floors: the frame height may go to
+## MIN_FRAME_H_M and the camera simply comes closer (near plane follows).
+const PLAN_FOV_DEG := 35.0
+const SECTION_FOV_DEG := 30.0
+const MIN_FRAME_H_M := 0.02
+const LENS_SHADOW_CLAIM := "graph_lens_shadow"
 ## Hydro Lab CT ortho floor — shared with the Lab's 2D overlay so the two cannot
 ## clamp differently. See GraphSiteLayout.LAB_MIN_ORTHO_H_M for the why.
 const LAB_MIN_ORTHO_H_M := GraphSiteLayout.LAB_MIN_ORTHO_H_M
@@ -81,19 +92,57 @@ var _top_down: bool = false
 var _top_down_cropped: bool = false
 ## Elevation: camera looks along a cross-section of the snowglobe.
 var _section_mode: bool = false
+## Globe lens: the full snowglobe INSIDE the graph — a perspective orbit across
+## the whole canvas, glass dome on, rim sun, opaque sky. The graph's Snowglobe
+## chip used to start the full-screen SoiSnowglobeCamera, which renders through
+## the ROOT viewport — the one the open graph runs with disable_3d — so it drew
+## nothing. This lens is rendered by the same SubViewport as Plan/Section.
+var _globe: bool = false
+## First Globe entry per graph session frames like the full-screen globe
+## (sphere snug in frame, sun in view); later entries keep the orbit.
+var _globe_framed: bool = false
+var _globe_claims_held: bool = false
+const GLOBE_MIN_ORBIT_MULT := 0.05
+const GLOBE_FIT_FRACTION := 0.86
+const GLOBE_PITCH := 0.26
+const GLOBE_FOV := 68.0
+const GLOBE_RIM_SUN_OWNER := "graph_globe"
+const GLOBE_SHADOW_CLAIM := "graph_globe_shadow"
+
+## Lens transitions (SoiStagePose): switching Plan / Section / Globe / bubble
+## flies the camera between the two poses instead of cutting — Plan → Section
+## swings from overhead through a 3D view to side-on. The view brackets every
+## lens change with begin_lens_transition() / end_lens_transition().
+const LENS_TWEEN_MS := 560
+## Captures while flying: ≤30 Hz, MSAA off, one in flight.
+const LENS_TWEEN_FRAME_MS := 33
+var _cam_look: Vector3 = Vector3.ZERO
+var _lens_pending_from: Dictionary = {}
+var _tween_active: bool = false
+var _tween_t0_ms: int = 0
+var _tween_from: Dictionary = {}
+var _tween_to: Dictionary = {}
+var _tween_bulge: float = 0.0
+var _tween_mask_from: Dictionary = {}
+var _tween_mask_to: Dictionary = {}
+var _tween_last_frame_ms: int = 0
+## Section sweep: entering Elevation the cut plane slices INTO the globe from
+## its rim to the slice depth while the camera flies (the solid strata cap
+## grows with it); leaving, it slides back out. "in" | "out" | "".
+var _tween_sweep: String = ""
 var _section_heading: float = 0.0
 ## CT slice depth along the cross-axis (−R…+R metres from SoI centre).
 var _section_offset_m: float = 0.0
-## Ortho zoom into the cut face (1 = fit SoI diameter; higher = closer).
-var _section_zoom: float = 1.0
-const MIN_SECTION_ZOOM := 1.0
-const MAX_SECTION_ZOOM := 16.0
+
 ## Physical-view orbit state (Site/Elevation). At (0,0) the camera keeps its
 ## exact default pose (top-down / side-on) so nothing changes until the user
 ## tilts; once orbited, this service becomes the projection authority for the
 ## 2D chips + wires so they track the tilt.
 var _phys_yaw: float = 0.0
 var _phys_pitch: float = 0.0
+## Height (m) of the view at its focus plane — what the ortho size used to be.
+var _frame_h_m: float = 10.0
+var _lens_shadow_held := false
 var _clip_owned: bool = false
 var _layout_dirty: bool = true
 var _camera_dirty: bool = true
@@ -106,6 +155,24 @@ var _saved_shadows: int = -1
 ## frame was this view's main cost (and the deciduous-shader "pulse"). Flip via
 ## set_preview_live() if a live-lit preview is ever wanted.
 var _preview_live: bool = false
+## Clock-driven capture state (see _clock_refresh_due).
+const CLOCK_SCRUB_HZ := 10.0
+const CLOCK_SCRUB_HZ_HEAVY := 6.0
+const CLOCK_PLAY_HZ := 4.0
+const CLOCK_PLAY_HZ_HEAVY := 2.0
+## Re-capture once the sun has moved this far (a visible shadow/colour shift)…
+const CLOCK_SUN_STEP_DEG := 0.35
+## …or this many sim-hours passed (night: the sun is under the floor but the
+## moon, sky and weather still move)…
+const CLOCK_HOURS_STEP := 0.25
+## …or at least this often while the clock runs (clouds, hazards).
+const CLOCK_IDLE_MS := 5000
+var _clock_render_abs_h: float = NAN
+var _clock_render_sun: Vector3 = Vector3.ZERO
+var _clock_render_ms: int = 0
+var _render_in_flight: bool = false
+## Captures that actually drew (frame_post_draw acks). Harness-facing.
+var frames_rendered: int = 0
 ## Optional Control that owns the SubViewportContainer (Siphon Lab CT slot).
 ## When set, layout fills this host instead of the graph SoI disc.
 var _embed_host: Control = null
@@ -113,14 +180,22 @@ var _embed_host: Control = null
 var _lab_along_m: float = NAN
 var _lab_elev_m: float = NAN
 var _lab_ortho_h_m: float = NAN
-var _section_env: Environment = null
-## Per-camera environment for the top-down Site Plan: a constant COLOR ambient
-## floor so the plan is readable at night while the (boosted) moon still
-## shades it — the ambient casts no shadows, the moon does, so moonshadows
-## survive. Only this camera sees it; the first-person world is untouched.
-var _topdown_env: Environment = null
+## The active lens's camera Environment (see _apply_section_environment) and
+## which lens family it was built for. Site Plan: a constant COLOR ambient floor
+## so the plan is readable at night while the (boosted) moon still shades it —
+## the ambient casts no shadows, the moon does, so moonshadows survive.
+## Section / orbit: the world's own ambient by day, handing over to a night
+## floor after dark. Only this camera sees it; the first-person world is untouched.
+var _lens_env: Environment = null
+var _lens_env_key: String = ""
 const TOPDOWN_AMBIENT_COLOR := Color(0.58, 0.64, 0.78)
 const TOPDOWN_AMBIENT_ENERGY := 0.55
+const NIGHT_FLOOR_COLOR := Color(0.55, 0.62, 0.78)
+const SECTION_NIGHT_FLOOR_ENERGY := 0.5
+## How much of the floor the section keeps by day (1 = full night floor).
+const SECTION_DAY_FLOOR := 0.75
+const ORBIT_NIGHT_FLOOR_ENERGY := 0.30
+const ORBIT_DAY_FLOOR := 0.5
 ## Moon light-energy multiplier while the top-down plan is live (applied via
 ## main.moon_light_boost — main's _update_moon rewrites the light every pass,
 ## so the multiplier must live inside that computation). Restored on exit.
@@ -243,6 +318,9 @@ func set_active(on: bool) -> void:
 		# already pays layout + world bind); the first capture is ≥3 soft-boot
 		# frames later, so culling state settles well before anything renders.
 		call_deferred("_apply_prop_tuning_deferred")
+	var soi_v := _soi()
+	if soi_v != null and soi_v.has_method("set_preview_vegetation_look"):
+		soi_v.call("set_preview_vegetation_look", "graph_preview", on)
 	if on:
 		_ensure_nodes()
 		_connect_canvas_camera_signals()
@@ -269,8 +347,15 @@ func set_active(on: bool) -> void:
 			_apply_hydroturbine_section_clip(true)
 			_ensure_section_soil_visible()
 	else:
-		_section_env = null
-		_topdown_env = null
+		_lens_env = null
+		_lens_env_key = ""
+		_globe_framed = false
+		if _tween_active:
+			_tween_active = false
+			_tween_sweep = ""
+			if _canvas != null and is_instance_valid(_canvas):
+				_canvas.modulate.a = 1.0
+		_sync_globe_world_effects(false)
 		_soft_boot_frames = 0
 		_first_frame_pending = false
 		set_process(false)
@@ -281,6 +366,7 @@ func set_active(on: bool) -> void:
 		_restore_lite_camera()
 		if _viewport != null:
 			_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_sync_lens_shadow_claim()
 	if _canvas != null and is_instance_valid(_canvas):
 		# Reveal is deferred to the first RENDERED frame (_on_first_preview_frame)
 		# — flipping soi_live_preview now would punch the SoI hole over a
@@ -348,7 +434,10 @@ func apply_orbit_delta(relative: Vector2) -> void:
 	_pitch = clampf(_pitch - relative.y * PITCH_SENS, PITCH_MIN, PITCH_MAX)
 	_camera_dirty = true
 	_update_camera()
+	_sync_globe_glass()
 	_request_viewport_refresh()
+	if _globe:
+		_notify_canvas_redraw()
 
 
 func _notify_canvas_redraw() -> void:
@@ -370,11 +459,14 @@ func is_projection_authority() -> bool:
 	# the camera's default top-down pose matches it, so the handover is seamless.
 	if _first_frame_pending:
 		return false
+	# Mid lens transition the camera is between poses; overlays are faded out.
+	if _tween_active:
+		return false
 	if _viewport == null or _viewport.size.x <= 1 or _viewport.size.y <= 1:
 		return false
 	if _container == null or not is_instance_valid(_container):
 		return false
-	if not (_top_down or _section_mode):
+	if not (_top_down or _section_mode or _globe):
 		return false
 	if _embed_host != null and is_instance_valid(_embed_host):
 		return true
@@ -383,6 +475,251 @@ func is_projection_authority() -> bool:
 
 func is_section_mode() -> bool:
 	return _section_mode and active
+
+
+func is_globe() -> bool:
+	return _globe and active
+
+
+func is_lens_tweening() -> bool:
+	return _tween_active
+
+
+func _lens_name() -> String:
+	if _globe:
+		return "globe"
+	if _section_mode:
+		return "section"
+	if _top_down:
+		return "plan"
+	return "bubble"
+
+
+## The visible preview circle in canvas pixels (the Globe has none: a circle
+## big enough to cover the canvas, so a tween can open / close it).
+func _current_mask_canvas() -> Dictionary:
+	if _canvas == null or not is_instance_valid(_canvas):
+		return {}
+	if _globe or _section_mode or _top_down:
+		# Every lens fills the canvas now; a covering circle lets a flight
+		# open or close the freeform bubble's disc into the full window.
+		return {"c": _canvas.size * 0.5, "r": _canvas.size.length() * 0.6}
+	var disc := _read_disc()
+	return {
+		"c": disc.get("origin", _canvas.size * 0.5) as Vector2,
+		"r": maxf(float(disc.get("radius_px", 1.0)), 1.0),
+	}
+
+
+## Snapshot where the camera is before the view switches lens.
+func begin_lens_transition() -> void:
+	_lens_pending_from = {}
+	if not active or _first_frame_pending or _camera == null or not is_instance_valid(_camera):
+		return
+	if _embed_host != null and is_instance_valid(_embed_host):
+		return
+	if _soft_boot_frames > 0:
+		return
+	_lens_pending_from = {
+		"pose": SoiStagePose.from_camera(_camera, _cam_look),
+		"mask": _current_mask_canvas(),
+		"lens": _lens_name(),
+	}
+
+
+## After the switch: fly from the snapshot to the new lens's pose.
+func end_lens_transition() -> void:
+	var from := _lens_pending_from
+	_lens_pending_from = {}
+	if from.is_empty() or not active or _camera == null:
+		return
+	if _embed_host != null and is_instance_valid(_embed_host):
+		return
+	if str(from.get("lens", "")) == _lens_name():
+		return
+	# Make sure the destination pose + mask are current before reading them.
+	_sync_layout()
+	_update_camera()
+	_tween_from = from["pose"] as Dictionary
+	_tween_to = SoiStagePose.from_camera(_camera, _cam_look)
+	_tween_mask_from = from["mask"] as Dictionary
+	_tween_mask_to = _current_mask_canvas()
+	var both_ortho := float(_tween_from["ortho_w"]) >= 0.999 and float(_tween_to["ortho_w"]) >= 0.999
+	_tween_bulge = 0.8 if both_ortho else 0.0
+	# A flight interrupted mid-sweep: drop its half-cut plane now.
+	if _tween_active and not _tween_sweep.is_empty() and not _section_mode:
+		_clear_section_cutaway()
+	var from_lens := str(from.get("lens", ""))
+	_tween_sweep = "in" if _section_mode and from_lens != "section" \
+			else ("out" if from_lens == "section" and not _section_mode else "")
+	_tween_active = true
+	_tween_t0_ms = Time.get_ticks_msec()
+	_tween_last_frame_ms = 0
+	_process_tween()
+
+
+func _process_tween() -> void:
+	var soi := _soi()
+	var r := float(soi.call("radius_m")) if soi != null and soi.has_method("radius_m") else 150.0
+	var t := clampf(float(Time.get_ticks_msec() - _tween_t0_ms) / float(LENS_TWEEN_MS), 0.0, 1.0)
+	var e := SoiStagePose.ease_t(t)
+	SoiStagePose.apply(_camera, SoiStagePose.lerp_pose(_tween_from, _tween_to, e, _tween_bulge), r)
+	# Fly in a canvas-sized frame with the mask circle morphing between lenses.
+	if _canvas != null and is_instance_valid(_canvas) and _container != null:
+		_container.material = _disc_material
+		_container.position = _canvas.position
+		_container.size = _canvas.size
+		if _viewport != null:
+			# (Size follows the container — SubViewportContainer.stretch.)
+			_viewport.msaa_3d = Viewport.MSAA_DISABLED
+		var mc0: Vector2 = _tween_mask_from.get("c", _canvas.size * 0.5) as Vector2
+		var mc1: Vector2 = _tween_mask_to.get("c", _canvas.size * 0.5) as Vector2
+		var mr0 := float(_tween_mask_from.get("r", 1.0))
+		var mr1 := float(_tween_mask_to.get("r", 1.0))
+		_set_disc_mask(true, mc0.lerp(mc1, e), exp(lerpf(log(mr0), log(mr1), e)), _container.size)
+		# The 2D overlay belongs to a lens's resting pose: fade it out while
+		# flying and back in as the camera lands.
+		var fade := 1.0 - smoothstep(0.0, 0.3, t) if t < 0.5 else smoothstep(0.7, 1.0, t)
+		_canvas.modulate.a = fade
+	if not _tween_sweep.is_empty():
+		_push_sweep_cutaway(e, r)
+	var now := Time.get_ticks_msec()
+	if t >= 1.0:
+		_finish_tween()
+		return
+	if now - _tween_last_frame_ms >= LENS_TWEEN_FRAME_MS and not _render_in_flight:
+		_tween_last_frame_ms = now
+		_request_viewport_refresh()
+
+
+## The cut plane at sweep progress `e`: from the rim (+R, nothing cut — the
+## camera side is +cross) to the slice depth, or back out.
+func _push_sweep_cutaway(e: float, r: float) -> void:
+	var soi := _soi()
+	if soi == null or not soi.has_method("set_section_cutaway") or not _clip_owned:
+		return
+	if bool(soi.get("snowglobe_active")):
+		return
+	var c: Vector3 = soi.call("world_center") as Vector3
+	var h := _section_heading
+	var cross := Vector3(-sin(h), 0.0, cos(h))
+	var k := e if _tween_sweep == "in" else 1.0 - e
+	var d := lerpf(r, _section_offset_m, k)
+	soi.call("set_section_cutaway", true, c + cross * d, cross)
+
+
+func _finish_tween() -> void:
+	_tween_active = false
+	# Land the cut where the lens wants it — also when a flight was
+	# interrupted by another lens switch part-way through a sweep.
+	if _section_mode:
+		_push_section_cutaway()
+	elif not _tween_sweep.is_empty():
+		_clear_section_cutaway()
+	_tween_sweep = ""
+	if _canvas != null and is_instance_valid(_canvas):
+		_canvas.modulate.a = 1.0
+		if _canvas.has_method("begin_soi_reveal"):
+			_canvas.call("begin_soi_reveal")
+		_canvas.queue_redraw()
+	# The ordinary path re-lays-out and snaps the camera to the exact pose.
+	_layout_dirty = true
+	_camera_dirty = true
+	_apply_viewport_msaa()
+
+
+## Globe lens on/off. Mutually exclusive with Site Plan (top-down) and the
+## Elevation section; the freeform bubble is "none of the three".
+func set_globe(on: bool) -> void:
+	if _globe == on:
+		return
+	_globe = on
+	if on:
+		if _top_down:
+			_top_down = false
+		if _section_mode:
+			_section_mode = false
+			_clear_section_cutaway()
+			_apply_hydroturbine_section_clip(false)
+		if not _globe_framed:
+			_frame_globe()
+	_apply_preview_shell_visuals()
+	_sync_moon_boost()
+	_apply_viewport_msaa()
+	_sync_globe_world_effects(on and active)
+	_sync_lens_shadow_claim()
+	if _viewport != null:
+		_viewport.transparent_bg = not _globe
+	_apply_section_environment()
+	_layout_dirty = true
+	_camera_dirty = true
+	_update_camera()
+	_request_viewport_refresh()
+	_notify_canvas_redraw()
+
+
+## Open composition shared with the full-screen globe (SoiOrbitMath): sphere
+## snug in the frame, near side-on, the sun in view.
+func _frame_globe() -> void:
+	_globe_framed = true
+	var frame := Vector2(1280.0, 720.0)
+	if _canvas != null and is_instance_valid(_canvas):
+		frame = _canvas.size
+	_orbit_mult = SoiOrbitMath.fit_orbit_mult(GLOBE_FOV, frame, GLOBE_FIT_FRACTION,
+			GLOBE_MIN_ORBIT_MULT, MAX_ORBIT_MULT, DEFAULT_ORBIT_MULT)
+	_orbit_mult_target = _orbit_mult
+	_pitch = GLOBE_PITCH
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	_yaw = SoiOrbitMath.sun_facing_yaw(main.get("sun") as DirectionalLight3D if main != null else null,
+			DEFAULT_ORBIT_YAW)
+
+
+## Re-fit the Globe (double-click on empty sky).
+func refit_globe() -> void:
+	if not _globe:
+		return
+	_frame_globe()
+	_camera_dirty = true
+	_update_camera()
+	_request_viewport_refresh()
+	_notify_canvas_redraw()
+
+
+## World effects the Globe lens owns while it is on: the rim sun (shared with
+## the full-screen globe via SoiService) and long shadows — the sun's shadow
+## range is tuned for first person, so at globe distance buildings lost their
+## shadows. A camera-LESS camera claim: value_or() falls through to whatever
+## camera is below it, so this only lengthens the shadows. Idempotent.
+func _sync_globe_world_effects(on: bool) -> void:
+	if on == _globe_claims_held:
+		return
+	_globe_claims_held = on
+	var soi := _soi()
+	if soi != null:
+		if on and soi.has_method("acquire_rim_sun"):
+			soi.call("acquire_rim_sun", GLOBE_RIM_SUN_OWNER)
+		elif not on and soi.has_method("release_rim_sun"):
+			soi.call("release_rim_sun", GLOBE_RIM_SUN_OWNER)
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return
+	if on and main.has_method("push_camera_claim"):
+		var r := float(soi.call("radius_m")) if soi != null and soi.has_method("radius_m") else 150.0
+		main.call("push_camera_claim", GLOBE_SHADOW_CLAIM, {"shadow_max_distance": r * 6.0})
+	elif not on and main.has_method("pop_camera_claim"):
+		main.call("pop_camera_claim", GLOBE_SHADOW_CLAIM)
+
+
+## Glass fades out toward the horizon (no Fresnel bullseye over the sky) and in
+## as the view rises — the full-screen globe's rule (SoiOrbitMath).
+func _sync_globe_glass() -> void:
+	if not _globe:
+		return
+	var soi := _soi()
+	if soi != null and soi.has_method("set_snowglobe_glass_opacity"):
+		soi.call("set_snowglobe_glass_opacity", SoiOrbitMath.glass_opacity_for_pitch(_pitch))
 
 
 ## Project a world position to canvas-local pixels. Returns Vector2 or null.
@@ -476,10 +813,28 @@ func canvas_to_site_ground(canvas_pos: Vector2) -> Variant:
 	if soi == null or not soi.has_method("world_center"):
 		return null
 	var c: Vector3 = soi.call("world_center") as Vector3
-	var hit: Variant = canvas_to_world_on_plane(canvas_pos, c, Vector3.UP)
+	# Perspective: a plane at the centre's height is off by the parallax of
+	# the ground's relief — use the plane through the focus first, then walk
+	# the ray onto the real ground.
+	var plane_y := _cam_look.y if _top_down else c.y
+	var hit: Variant = canvas_to_world_on_plane(canvas_pos, Vector3(c.x, plane_y, c.z), Vector3.UP)
 	if not (hit is Vector3):
 		return null
 	var h: Vector3 = hit as Vector3
+	var ray: Variant = canvas_ray(canvas_pos)
+	if ray is Dictionary and soi.has_method("ground_y_at"):
+		var ro: Vector3 = (ray as Dictionary).get("origin", Vector3.ZERO)
+		var rn: Vector3 = (ray as Dictionary).get("normal", Vector3.FORWARD)
+		var t := (h - ro).length()
+		for _i in 6:
+			var p := ro + rn * t
+			var gy := float(soi.call("ground_y_at", p.x, p.z))
+			if not is_finite(gy) or absf(rn.y) < 1e-4:
+				break
+			t += (p.y - gy) / -rn.y
+		var g := ro + rn * t
+		if is_finite(g.x):
+			h = g
 	return Vector2(h.x - c.x, h.z - c.z)
 
 
@@ -533,19 +888,13 @@ func reset_phys_orbit() -> void:
 
 
 func apply_zoom_step(zoom_in: bool) -> void:
-	if not active or _top_down:
-		return
-	if _section_mode:
-		# Ortho size zoom into the cut face (not freeform orbit mult).
-		var factor := 1.0 + SECTION_ZOOM_STEP if zoom_in else 1.0 - SECTION_ZOOM_STEP
-		_section_zoom = clampf(_section_zoom * factor, MIN_SECTION_ZOOM, MAX_SECTION_ZOOM)
-		_camera_dirty = true
-		_update_camera()
-		_request_viewport_refresh()
-		_notify_canvas_redraw()
+	# Site Plan and the section zoom with the canvas (GraphElevFrame) — the
+	# old separate section ortho zoom was overwritten by the anchors anyway.
+	if not active or _top_down or _section_mode:
 		return
 	var factor2 := 1.0 - ZOOM_STEP if zoom_in else 1.0 + ZOOM_STEP
-	_orbit_mult_target = clampf(_orbit_mult_target * factor2, MIN_ORBIT_MULT, MAX_ORBIT_MULT)
+	var min_mult := GLOBE_MIN_ORBIT_MULT if _globe else MIN_ORBIT_MULT
+	_orbit_mult_target = clampf(_orbit_mult_target * factor2, min_mult, MAX_ORBIT_MULT)
 	_camera_dirty = true
 	_request_viewport_refresh()
 
@@ -570,14 +919,9 @@ func get_section_offset() -> float:
 	return _section_offset_m
 
 
-func get_section_zoom() -> float:
-	return _section_zoom
-
-
-## Reset CT section: offset 0, zoom fit, pitch locked, optional heading.
+## Reset CT section: offset 0, pitch locked, optional heading.
 func reset_section(heading_rad: float = NAN) -> void:
 	_section_offset_m = 0.0
-	_section_zoom = 1.0
 	_phys_pitch = 0.0
 	if not is_nan(heading_rad):
 		_section_heading = fposmod(heading_rad, TAU)
@@ -595,12 +939,14 @@ func set_top_down(on: bool) -> void:
 	if on and _section_mode:
 		_section_mode = false
 		_clear_section_cutaway()
+	if on and _globe:
+		set_globe(false)
 	_apply_preview_shell_visuals()
 	_sync_moon_boost()
 	_apply_viewport_msaa()
 	if _camera != null:
-		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if (on or _section_mode) \
-				else Camera3D.PROJECTION_PERSPECTIVE
+		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_sync_lens_shadow_claim()
 	_layout_dirty = true
 	_camera_dirty = true
 	_update_camera()
@@ -613,14 +959,14 @@ func set_section_mode(on: bool) -> void:
 	if on:
 		_top_down = false
 		_phys_pitch = 0.0
-	else:
-		_section_env = null
+		if _globe:
+			set_globe(false)
 	_apply_preview_shell_visuals()
 	_apply_viewport_msaa()
 	_apply_section_environment()
 	if _camera != null:
-		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if (_section_mode or _top_down) \
-				else Camera3D.PROJECTION_PERSPECTIVE
+		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_sync_lens_shadow_claim()
 	_layout_dirty = true
 	_camera_dirty = true
 	_update_camera()
@@ -684,12 +1030,92 @@ func set_section_heading(heading_rad: float) -> void:
 		_request_viewport_refresh()
 
 
+## Clock-driven capture policy. The preview holds a still frame between
+## captures (re-rendering the shared World3D every frame was this view's main
+## cost and an AMD TDR trigger on G open), so time has to ASK for a frame:
+##   - scrubbing (clock paused, playhead moved): capture promptly, capped;
+##   - playing: capture once the sun has visibly moved (or every few seconds,
+##     for clouds/weather), capped lower;
+##   - paused and idle: nothing.
+## One capture in flight at a time, never during soft boot or while hidden.
+## Replaces the Site Plan's private 5 s timer and covers every lens + the
+## Hydro Lab CT (whose host graph _process returns early).
+func _clock_refresh_due() -> bool:
+	if _render_in_flight or _soft_boot_frames > 0:
+		return false
+	if _container == null or not _container.visible:
+		return false
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("get_absolute_hours"):
+		return false
+	var abs_h := float(main.call("get_absolute_hours"))
+	if is_nan(_clock_render_abs_h):
+		return false
+	var dh := absf(abs_h - _clock_render_abs_h)
+	if dh < 1e-7:
+		return false
+	var now_ms := Time.get_ticks_msec()
+	var since_ms := now_ms - _clock_render_ms
+	var heavy := _section_mode or _top_down_cropped \
+			or (_embed_host != null and is_instance_valid(_embed_host)) \
+			or (_viewport != null and maxi(_viewport.size.x, _viewport.size.y) > 1500)
+	var ts := float(main.get("time_scale")) if main.get("time_scale") != null else 0.0
+	if ts <= 0.0:
+		# Scrub (or a jump while paused): show it promptly.
+		var scrub_hz := CLOCK_SCRUB_HZ_HEAVY if heavy else CLOCK_SCRUB_HZ
+		return since_ms >= int(1000.0 / scrub_hz)
+	var play_hz := CLOCK_PLAY_HZ_HEAVY if heavy else CLOCK_PLAY_HZ
+	if since_ms < int(1000.0 / play_hz):
+		return false
+	if since_ms >= CLOCK_IDLE_MS:
+		return true
+	var sun_dir := _sun_dir()
+	if sun_dir == Vector3.ZERO or _clock_render_sun == Vector3.ZERO:
+		return true
+	var ang := rad_to_deg(sun_dir.angle_to(_clock_render_sun))
+	return ang >= CLOCK_SUN_STEP_DEG or dh >= CLOCK_HOURS_STEP
+
+
+func _sun_dir() -> Vector3:
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return Vector3.ZERO
+	var sun := main.get("sun") as DirectionalLight3D
+	if sun == null or not is_instance_valid(sun):
+		return Vector3.ZERO
+	return sun.global_transform.basis.z.normalized()
+
+
+func _note_clock_capture() -> void:
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main != null and main.has_method("get_absolute_hours"):
+		_clock_render_abs_h = float(main.call("get_absolute_hours"))
+	_clock_render_sun = _sun_dir()
+	_clock_render_ms = Time.get_ticks_msec()
+
+
+func _on_capture_drawn() -> void:
+	_render_in_flight = false
+	frames_rendered += 1
+
+
 func _request_viewport_refresh() -> void:
 	if _viewport == null or not active:
 		return
 	if _soft_boot_frames > 0:
 		return
-	# Dirty-driven: one frame now; _process re-arms on orbit/layout/time scrub.
+	# Every capture renders with the world's CURRENT sky/fog/ambient — the
+	# lens environment is a shallow copy re-synced here, never a frozen one.
+	_sync_lens_env()
+	_sync_section_backdrop()
+	_note_clock_capture()
+	if not _render_in_flight:
+		_render_in_flight = true
+		RenderingServer.frame_post_draw.connect(_on_capture_drawn, CONNECT_ONE_SHOT)
+	# Dirty-driven: one frame now; _process re-arms on orbit/layout/clock.
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	# First real capture just got scheduled — reveal the disc only once this
 	# frame has actually drawn (see _first_frame_pending).
@@ -757,6 +1183,7 @@ func _apply_preview_shell_visuals() -> void:
 		soi.call("set_graph_preview_glass_enabled", not _top_down and not _section_mode)
 	if soi.has_method("set_graph_preview_plain_soil"):
 		soi.call("set_graph_preview_plain_soil", _top_down)
+	_sync_globe_glass()
 	_apply_viewport_background()
 
 
@@ -780,7 +1207,9 @@ func _apply_viewport_background() -> void:
 		return
 	# transparent_bg skips Environment sky clear — fine for terrain-fill Site
 	# Plan, wrong for Elevation where the upper disc is empty air.
-	_viewport.transparent_bg = not _section_mode
+	# Section + Globe need an opaque clear so the Environment sky fills empty
+	# air; other modes keep transparency so the graph shows at soft edges.
+	_viewport.transparent_bg = not _globe
 	_bind_world()
 	# Mode changed — re-resolve which per-camera environment applies.
 	_apply_section_environment()
@@ -802,6 +1231,9 @@ func _process(delta: float) -> void:
 	# Re-bind if the root World3D wasn't ready at activate time.
 	if _viewport != null and _viewport.world_3d == null:
 		_bind_world()
+	if _tween_active:
+		_process_tween()
+		return
 	# Smooth freeform zoom toward target.
 	if not _top_down and not _section_mode \
 			and not is_equal_approx(_orbit_mult, _orbit_mult_target):
@@ -822,24 +1254,26 @@ func _process(delta: float) -> void:
 				_request_viewport_refresh()
 		else:
 			_request_viewport_refresh()
-		# Elev/Siphon CT: keep 2D pond/DEM overlays on the live camera frustum.
-		if _section_mode:
+		# Elev/Siphon CT: keep 2D pond/DEM overlays on the live camera frustum;
+		# Globe: keep the pins on their anchors while the zoom eases.
+		if _section_mode or _globe:
 			_notify_canvas_redraw()
 	elif _soft_boot_frames > 0:
 		_soft_boot_frames -= 1
 		if _soft_boot_frames == 0:
 			_request_viewport_refresh()
 	elif _preview_live:
-		# Idle throttle: soft refresh so sky/time scrub still updates. OFF by
-		# default (see _preview_live) — this idle re-render of the whole shared
-		# World3D was the elevation view's dominant cost. Cropped high-zoom path
-		# refreshes slower — giant world into a small viewport is still expensive.
+		# Tutorial tier: a steady idle re-render regardless of the clock. Cropped
+		# high-zoom path refreshes slower — giant world into a small viewport is
+		# still expensive.
 		_refresh_acc += delta
 		var hz := IDLE_REFRESH_HZ_CROPPED if _top_down_cropped or _section_mode \
 				else IDLE_REFRESH_HZ
 		if _refresh_acc >= 1.0 / hz:
 			_refresh_acc = 0.0
 			_request_viewport_refresh()
+	elif _clock_refresh_due():
+		_request_viewport_refresh()
 
 
 ## Toggle live-lit preview (sun/sky updates while idle). Default off: the preview
@@ -876,7 +1310,11 @@ func _ensure_nodes() -> void:
 	_viewport.own_world_3d = false
 	_viewport.transparent_bg = true
 	_viewport.handle_input_locally = false
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	# Born DISABLED: activation (soft boot) and set_embed_visible choose the
+	# mode once the layout has sized it. Born WHEN_VISIBLE, a graph reopened
+	# after a close rendered the fresh 2×2 placeholder for a dozen frames —
+	# 200 "Too many mipmaps" / null scene-buffer errors per reopen (Mt Vernon).
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_viewport.msaa_3d = Viewport.MSAA_2X
 	_container.add_child(_viewport)
 	_apply_viewport_msaa()
@@ -887,6 +1325,8 @@ func _ensure_nodes() -> void:
 	_camera.fov = 70.0
 	_camera.near = 0.5
 	_camera.far = 8000.0
+	# First-person-only furniture (POI name tags) stays out of the lenses.
+	_camera.cull_mask = _camera.cull_mask & ~PoiRuntime.LABEL_RENDER_LAYER
 	_viewport.add_child(_camera)
 
 
@@ -901,66 +1341,220 @@ func _bind_world() -> void:
 		_viewport.world_3d = root_vp.world_3d
 	# Section mode needs an opaque clear so Environment sky fills empty air;
 	# other modes keep transparency so the graph canvas shows at soft edges.
-	_viewport.transparent_bg = not _section_mode
+	# Section + Globe need an opaque clear so the Environment sky fills empty
+	# air; other modes keep transparency so the graph shows at soft edges.
+	_viewport.transparent_bg = not _globe
 	_apply_section_environment()
 
 
-## Preview-local Environment clone: no fog/glow on the CT camera.
-## Shared-world god rays are gated in main.gd while section preview is active
-## (do not mutate WorldEnvironment every frame — that fought main + TDRd GPUs).
+## Per-lens camera Environment. Each lens owns ONE environment, built as a
+## SHALLOW duplicate of the world's — so the Sky resource (and with it every
+## sky-shader parameter main.gd animates) is SHARED and stays live — and then
+## re-synced from the world on every capture (_sync_lens_env), so fog, ambient,
+## tonemap and glow follow the clock too. The old deep duplicate(true) froze the
+## sky colour, fog and ambient at the moment the lens opened, which is why the
+## preview only caught up with a time change after G was closed and reopened.
+## The shared world's environment is never written (mutating WorldEnvironment
+## every frame fought main.gd and TDR'd GPUs).
 func _apply_section_environment() -> void:
 	if _camera == null:
 		return
-	var tree := get_tree()
-	if tree == null:
-		return
-	var main := tree.current_scene
-	if main == null:
-		return
-	var src_env: Environment = null
-	var we := main.get_node_or_null("WorldEnvironment") as WorldEnvironment
-	if we != null and we.environment != null:
-		src_env = we.environment
-	elif main.get("environment") is WorldEnvironment:
-		var we2: WorldEnvironment = main.get("environment") as WorldEnvironment
-		if we2 != null:
-			src_env = we2.environment
+	var src_env := _world_env()
 	if src_env == null:
 		return
-	if not _section_mode:
-		_section_env = null
-		if _top_down:
+	var lens := _env_lens()
+	if lens != _lens_env_key or _lens_env == null:
+		_lens_env = src_env.duplicate(false) as Environment
+		_lens_env_key = lens
+	_sync_lens_env()
+	_camera.environment = _lens_env
+
+
+func _world_env() -> Environment:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var main := tree.current_scene
+	if main == null:
+		return null
+	var we := main.get_node_or_null("WorldEnvironment") as WorldEnvironment
+	if we != null and we.environment != null:
+		return we.environment
+	if main.get("environment") is WorldEnvironment:
+		var we2: WorldEnvironment = main.get("environment") as WorldEnvironment
+		if we2 != null:
+			return we2.environment
+	return null
+
+
+## "plan" | "section" | "orbit" — the environment family for the active lens.
+func _env_lens() -> String:
+	if _section_mode:
+		return "section"
+	if _top_down:
+		return "plan"
+	return "orbit"
+
+
+## Copy the time-varying fields main.gd writes into the world environment
+## (_update_environment / _update_glow / _apply_tonemap_settings / the hazard
+## applier), then lay this lens's overrides on top. Plain property copies —
+## cheap enough to run on every capture.
+func _sync_lens_env() -> void:
+	var src := _world_env()
+	var env := _lens_env
+	if src == null or env == null:
+		return
+	env.sky = src.sky
+	env.background_mode = src.background_mode
+	env.background_energy_multiplier = src.background_energy_multiplier
+	env.fog_enabled = src.fog_enabled
+	env.fog_light_color = src.fog_light_color
+	env.fog_light_energy = src.fog_light_energy
+	env.fog_sun_scatter = src.fog_sun_scatter
+	env.fog_density = src.fog_density
+	env.fog_aerial_perspective = src.fog_aerial_perspective
+	env.fog_depth_end = src.fog_depth_end
+	env.fog_sky_affect = src.fog_sky_affect
+	env.fog_height_density = src.fog_height_density
+	env.ambient_light_source = src.ambient_light_source
+	env.ambient_light_color = src.ambient_light_color
+	env.ambient_light_energy = src.ambient_light_energy
+	env.ambient_light_sky_contribution = src.ambient_light_sky_contribution
+	env.tonemap_mode = src.tonemap_mode
+	env.tonemap_exposure = src.tonemap_exposure
+	env.tonemap_white = src.tonemap_white
+	env.glow_enabled = src.glow_enabled
+	env.glow_intensity = src.glow_intensity
+	env.glow_hdr_threshold = src.glow_hdr_threshold
+	# Volumetric fog in a preview capture is pure cost (and in a 60 m ortho
+	# render, wrong); plain fog stays so weather/hazards still read.
+	env.volumetric_fog_enabled = false
+	var night := _night_amount()
+	match _lens_env_key:
+		"plan":
 			# Site Plan night floor: a shadowless COLOR ambient lifts the whole
 			# disc to readable at night while staying dimmer than day, and the
 			# boosted moon (see _sync_moon_boost) keeps casting real shadows on
-			# top of it — so night reads as night, with moonshadows. Per-camera
-			# only; the shared world's environment is never touched.
-			if _topdown_env == null:
-				_topdown_env = src_env.duplicate(true) as Environment
-				var env := _topdown_env
-				env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-				env.ambient_light_color = TOPDOWN_AMBIENT_COLOR
-				env.ambient_light_energy = TOPDOWN_AMBIENT_ENERGY
-				# Volumetric fog in a 60 m ortho render is pure cost; plain fog
-				# stays so weather/hazards still read on the plan.
-				env.volumetric_fog_enabled = false
-			_camera.environment = _topdown_env
-			return
-		_topdown_env = null
-		_camera.environment = src_env
+			# top of it — so night reads as night, with moonshadows.
+			env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+			env.ambient_light_color = TOPDOWN_AMBIENT_COLOR
+			env.ambient_light_energy = TOPDOWN_AMBIENT_ENERGY
+		"section":
+			# The CT is a diagram: no fog veil, no bloom, no SSR on the cut.
+			env.fog_enabled = false
+			env.glow_enabled = false
+			env.glow_intensity = 0.0
+			env.ssr_enabled = false
+			if env.tonemap_mode == Environment.TONE_MAPPER_LINEAR:
+				env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+			# The CT is a diagram: keep a fill-light floor BY DAY too. Side-on,
+			# the landscape behind the cut is mostly slopes facing away from
+			# the sun, and with a low world ambient (players run it as low as
+			# 0.05) they rendered pitch black over the section's sky.
+			_apply_night_floor(env, src, maxf(night, SECTION_DAY_FLOOR), SECTION_NIGHT_FLOOR_ENERGY)
+		_:
+			# The bubble / Globe is a diorama: a gentle fill by day too, so
+			# shadowed roofs and canopy don't print as black blobs at low
+			# world ambient; full floor after dark.
+			_apply_night_floor(env, src, maxf(night, ORBIT_DAY_FLOOR), ORBIT_NIGHT_FLOOR_ENERGY)
+
+
+## Readable-at-night floor that REPLACED the Elevation noon lock (which froze
+## the clock and snapped it to midday). Godot mixes ambient_light_color with the
+## sky by ambient_light_sky_contribution, so fading the contribution toward 0 as
+## the night deepens hands the ambient over to the floor colour continuously —
+## daytime is the world's own look, untouched. Only this camera sees it.
+func _apply_night_floor(env: Environment, src: Environment, night: float,
+		floor_energy: float) -> void:
+	if night <= 0.001:
 		return
-	if _section_env == null:
-		_section_env = src_env.duplicate(true) as Environment
-		var env := _section_env
-		env.volumetric_fog_enabled = false
-		env.volumetric_fog_density = 0.0
-		env.fog_enabled = false
-		env.glow_enabled = false
-		env.glow_intensity = 0.0
-		env.ssr_enabled = false
-		if env.tonemap_mode == Environment.TONE_MAPPER_LINEAR:
-			env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	_camera.environment = _section_env
+	if env.ambient_light_source == Environment.AMBIENT_SOURCE_DISABLED \
+			or env.ambient_light_source == Environment.AMBIENT_SOURCE_BG:
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_color = NIGHT_FLOOR_COLOR
+	env.ambient_light_sky_contribution = src.ambient_light_sky_contribution * (1.0 - night)
+	env.ambient_light_energy = lerpf(src.ambient_light_energy,
+			maxf(src.ambient_light_energy, floor_energy), night)
+
+
+## Section sky backdrop (graph_soi_preview_disc.gdshader): the section renders
+## with a transparent clear and the disc shader paints the empty air with a
+## poster sky. Colours follow the DaylightModel curve the world uses — deep
+## blue by day, a warm horizon through twilight, navy at night — so playing or
+## scrubbing time recolours the CT like everything else.
+const SECTION_SKY_DAY_TOP := Color(0.30, 0.52, 0.84)
+const SECTION_SKY_DAY_HORIZON := Color(0.76, 0.86, 0.95)
+const SECTION_SKY_NIGHT_TOP := Color(0.012, 0.02, 0.05)
+const SECTION_SKY_NIGHT_HORIZON := Color(0.05, 0.07, 0.13)
+const SECTION_SKY_DUSK_HORIZON := Color(0.96, 0.56, 0.30)
+
+
+func _sync_section_backdrop() -> void:
+	var mat := _disc_material
+	if mat == null or _container == null or _container.material != mat:
+		return
+	if not _section_mode:
+		if _top_down and (_embed_host == null or not is_instance_valid(_embed_host)):
+			_sync_plan_backdrop()
+		else:
+			mat.set_shader_parameter("backdrop_on", 0.0)
+		return
+	var sun_dir := _sun_dir()
+	var sin_alt := clampf(sun_dir.y, -1.0, 1.0) if sun_dir != Vector3.ZERO else 0.5
+	var day := smoothstep(0.0, 1.0, DaylightModel.sky_light(sin_alt))
+	var top := SECTION_SKY_NIGHT_TOP.lerp(SECTION_SKY_DAY_TOP, day)
+	var hor := SECTION_SKY_NIGHT_HORIZON.lerp(SECTION_SKY_DAY_HORIZON, day)
+	# Warm band while the sun is near the horizon (on either side of it).
+	var warm := DaylightModel.twilight_palette(sin_alt) \
+			* (1.0 - smoothstep(0.0, 0.22, absf(sin_alt)))
+	hor = hor.lerp(SECTION_SKY_DUSK_HORIZON, clampf(warm, 0.0, 1.0) * 0.75)
+	mat.set_shader_parameter("backdrop_on", 1.0)
+	mat.set_shader_parameter("backdrop_top", top)
+	mat.set_shader_parameter("backdrop_horizon", hor)
+	# Horizon line = the SoI ground level, through the section camera.
+	var hy := 0.6
+	var soi := _soi()
+	if soi != null and _camera != null and _viewport != null and soi.has_method("world_center"):
+		var c: Vector3 = soi.call("world_center") as Vector3
+		var look := _camera.global_position - _camera.global_transform.basis.z * 10.0
+		var px := _camera.unproject_position(Vector3(look.x, c.y, look.z))
+		if _viewport.size.y > 0:
+			hy = clampf(px.y / float(_viewport.size.y), 0.0, 1.0)
+	mat.set_shader_parameter("backdrop_horizon_y", hy)
+
+
+## Site Plan backdrop: the viewport is transparent outside the SoI sphere's
+## clip, and the container now covers the canvas, so the air round the plan is
+## painted the canvas colour by the same backdrop block the section uses (a
+## flat colour: every band the same, the horizon at the top).
+func _sync_plan_backdrop() -> void:
+	var mat := _disc_material
+	if mat == null:
+		return
+	var bg := PLAN_BACKDROP_COLOR
+	if _canvas != null and is_instance_valid(_canvas) and _canvas.get("C_CANVAS_BG") is Color:
+		var c: Color = _canvas.get("C_CANVAS_BG")
+		bg = Color(c.r, c.g, c.b, 1.0)
+	mat.set_shader_parameter("backdrop_on", 1.0)
+	mat.set_shader_parameter("backdrop_top", bg)
+	mat.set_shader_parameter("backdrop_horizon", bg)
+	mat.set_shader_parameter("backdrop_ground", bg)
+	mat.set_shader_parameter("backdrop_ground_deep", bg)
+	mat.set_shader_parameter("backdrop_horizon_y", 0.02)
+
+
+## 0 by day → 1 in full night, on the same DaylightModel curve the world uses.
+func _night_amount() -> float:
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return 0.0
+	var sun := main.get("sun") as DirectionalLight3D
+	if sun == null or not is_instance_valid(sun):
+		return 0.0
+	var sin_alt := clampf(sun.global_transform.basis.z.normalized().y, -1.0, 1.0)
+	return clampf(DaylightModel.night_amount(sin_alt), 0.0, 1.0)
 
 
 func _apply_soi_visuals(on: bool) -> void:
@@ -1006,6 +1600,13 @@ func _layout_changed() -> bool:
 		return ek != _last_layout_key
 	if _canvas == null or not is_instance_valid(_canvas):
 		return false
+	return _canvas_layout_key() != _last_layout_key
+
+
+## The canvas-driven layout signature: _sync_layout stores it, _layout_changed
+## compares against it. ONE function so the two can never format it differently
+## (a mismatch re-lays-out — and re-renders the shared world — every frame).
+func _canvas_layout_key() -> String:
 	var disc := _read_disc()
 	var elev_along := 0.0
 	var elev_elev := 0.0
@@ -1016,7 +1617,7 @@ func _layout_changed() -> bool:
 		elev_elev = float(_canvas.call("get_elev_anchor_elev_m"))
 	if _canvas.has_method("get_view_zoom"):
 		canvas_zoom = float(_canvas.call("get_view_zoom"))
-	var key := "%s|%s|%.4f|%.2f|%.2f|%s|%s|%.3f|%.2f|%.2f|%.3f|%.2f|%.2f" % [
+	var key := "%s|%s|%.4f|%.2f|%.2f|%s|%s%s|%.3f|%.2f|%.3f|%.2f|%.2f" % [
 		str(_canvas.position),
 		str(_canvas.size),
 		float(disc.get("radius_px", 0.0)),
@@ -1024,14 +1625,14 @@ func _layout_changed() -> bool:
 		float((disc.get("origin", Vector2.ZERO) as Vector2).y),
 		str(_top_down),
 		str(_section_mode),
+		"G" if _globe else "",
 		_section_heading,
 		_section_offset_m,
-		_section_zoom,
 		canvas_zoom,
 		elev_along,
 		elev_elev,
 	]
-	return key != _last_layout_key
+	return key
 
 
 func _read_disc() -> Dictionary:
@@ -1061,6 +1662,7 @@ func _set_disc_mask(pixel_mode: bool, center_px: Vector2 = Vector2.ZERO,
 	var mat := _container.material as ShaderMaterial
 	if mat == null:
 		return
+	mat.set_shader_parameter("use_mask", 1)
 	mat.set_shader_parameter("use_pixel_disc", 1 if pixel_mode else 0)
 	mat.set_shader_parameter("disc_center_px", center_px)
 	mat.set_shader_parameter("disc_radius_px", radius_px)
@@ -1099,7 +1701,11 @@ func _sync_layout() -> void:
 	# different snowglobe UI when nested in the Lab card).
 	if _embed_host != null and is_instance_valid(_embed_host):
 		_top_down_cropped = true
-		_container.material = null
+		# The disc material without its mask: the Lab CT is a rectangle, but it
+		# still wants the section's time-of-day sky backdrop.
+		_container.material = _disc_material
+		if _disc_material != null:
+			_disc_material.set_shader_parameter("use_mask", 0)
 		_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_container.position = Vector2.ZERO
 		_container.size = _embed_host.size
@@ -1108,10 +1714,77 @@ func _sync_layout() -> void:
 			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
 		_apply_viewport_msaa()
 		_apply_section_environment()
-		_last_layout_key = "embed|%s|%s|%s" % [
-			str(_embed_host.size), str(_section_mode), str(_lab_ortho_h_m)]
+		# The SAME format _layout_changed compares against — the two used to
+		# differ, so the Lab re-laid-out, re-posed and re-captured every frame.
+		_last_layout_key = "embed|%s|%s|%.3f|%.2f|%.2f|%.2f" % [
+			str(_embed_host.size), str(_section_mode), _section_heading,
+			_lab_along_m if not is_nan(_lab_along_m) else 0.0,
+			_lab_elev_m if not is_nan(_lab_elev_m) else 0.0,
+			_lab_ortho_h_m if not is_nan(_lab_ortho_h_m) else 0.0]
 		return
 	if _canvas == null or not is_instance_valid(_canvas):
+		return
+	if _globe:
+		# Globe: the whole canvas, no disc mask — the sphere floats in its own
+		# sky, like the full-screen globe.
+		_top_down_cropped = false
+		_container.material = null
+		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_container.position = _canvas.position
+		_container.size = _canvas.size
+		if _viewport != null:
+			_viewport.size = _aspect_clamped_viewport_size(_container.size,
+					float(MAX_SECTION_VIEWPORT_PX))
+		_apply_viewport_msaa()
+		_last_layout_key = _canvas_layout_key()
+		return
+	if _section_mode:
+		# Elevation section: the WHOLE canvas, no disc mask. The circular lens
+		# added nothing conceptually here — the cut is a side-on drawing, and
+		# the circle only hid the panel's corners — so the section is a full
+		# window like the Hydro Lab embed: the cut sphere with the poster sky
+		# painted around it by the disc material (`use_mask` 0 keeps the
+		# backdrop, drops the circle). The 3D clip to the SoI sphere is
+		# unchanged; what the circle used to cover is sky, not world.
+		# `_top_down_cropped` stays true so the camera looks at the point under
+		# the canvas centre (the metre anchor) exactly as the crop branch did,
+		# and `_want_crop` agrees so a wheel notch never re-lays-out.
+		_top_down_cropped = true
+		_container.material = _disc_material
+		if _disc_material != null:
+			_disc_material.set_shader_parameter("use_mask", 0)
+		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_container.position = _canvas.position
+		_container.size = _canvas.size
+		if _viewport != null:
+			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		_apply_viewport_msaa()
+		_apply_section_environment()
+		_last_layout_key = _canvas_layout_key()
+		return
+	if _top_down:
+		# Site Plan: the WHOLE canvas, no disc mask (2026-10-12). The plan is a
+		# map; the circle only hid the panel's corners, and its crop / no-crop
+		# hysteresis re-laid-out the viewport (new size, mask mode, camera
+		# frame) exactly at the zoom where the disc outgrew the window — the
+		# "zoom jumps" the player hit while placing the outlet. The 3D clip to
+		# the SoI sphere is unchanged: outside it the viewport is transparent
+		# and the disc material paints the canvas colour (`_sync_plan_backdrop`).
+		# `_top_down_cropped` stays true so the camera frames the point under
+		# the canvas centre at 4 px/m × zoom, as the crop branch always did,
+		# and `_want_crop` agrees so a wheel notch never re-lays-out.
+		_top_down_cropped = true
+		_container.material = _disc_material
+		if _disc_material != null:
+			_disc_material.set_shader_parameter("use_mask", 0)
+		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_container.position = _canvas.position
+		_container.size = _canvas.size
+		if _viewport != null:
+			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		_apply_viewport_msaa()
+		_sync_plan_backdrop()
+		_last_layout_key = _canvas_layout_key()
 		return
 	# Restore free anchors + disc mask when leaving embed.
 	if _disc_material != null and _container.material != _disc_material:
@@ -1163,20 +1836,7 @@ func _sync_layout() -> void:
 					float(MIN_VIEWPORT_PX), vp_cap)))
 			_viewport.size = Vector2i(res, res)
 	_apply_viewport_msaa()
-	var elev_along := 0.0
-	var elev_elev := 0.0
-	var canvas_zoom := 1.0
-	if _canvas.has_method("get_elev_anchor_along_m"):
-		elev_along = float(_canvas.call("get_elev_anchor_along_m"))
-	if _canvas.has_method("get_elev_anchor_elev_m"):
-		elev_elev = float(_canvas.call("get_elev_anchor_elev_m"))
-	if _canvas.has_method("get_view_zoom"):
-		canvas_zoom = float(_canvas.call("get_view_zoom"))
-	_last_layout_key = "%s|%s|%.4f|%.2f|%.2f|%s|%s|%.3f|%.2f|%.2f|%.3f|%.2f|%.2f" % [
-		str(_canvas.position), str(_canvas.size), r_px, origin.x, origin.y,
-		str(_top_down), str(_section_mode), _section_heading,
-		_section_offset_m, _section_zoom, canvas_zoom, elev_along, elev_elev,
-	]
+	_last_layout_key = _canvas_layout_key()
 
 
 ## Crop decision with one-directional hysteresis: crossing UP happens at the
@@ -1187,6 +1847,11 @@ func _sync_layout() -> void:
 func _want_crop(place_d: float) -> bool:
 	if not (_top_down or _section_mode):
 		return false
+	# The section AND the plan always fill the canvas (see _sync_layout) —
+	# reporting anything else would make sync_camera_now force a re-layout
+	# per notch.
+	if (_section_mode or _top_down) and (_embed_host == null or not is_instance_valid(_embed_host)):
+		return true
 	if _top_down_cropped:
 		return place_d > MAX_DISC_CONTAINER_PX * 0.9
 	return place_d > MAX_DISC_CONTAINER_PX
@@ -1240,20 +1905,14 @@ func _update_camera() -> void:
 		_update_section_camera(center, r)
 		return
 	if _top_down:
-		_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+		_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+		_camera.fov = PLAN_FOV_DEG
 		# Explicit basis: +X east, cam-up = north (−Z), look down (−Y).
 		var basis := Basis(
 			Vector3(1.0, 0.0, 0.0),
 			Vector3(0.0, 0.0, -1.0),
 			Vector3(0.0, 1.0, 0.0)
 		)
-		# Keep the ortho camera CLOSE to the ground. Ortho scale is set by
-		# _camera.size (below), independent of distance, so a low camera doesn't
-		# change framing — but it keeps small graph-twin props (generic_box/tank,
-		# ~1-2 m radius) inside PropRenderTuning's ~200 m distance cull. A far camera
-		# (the old r*0.45, and r*2.5 when orbited) culled the twins while large
-		# cull-exempt props (rack/buildings) stayed, so only the latter showed.
-		var height := clampf(r * 0.45, 20.0, PREVIEW_TOPDOWN_HEIGHT_MAX_M)
 		var look := center
 		if _top_down_cropped and _canvas != null and is_instance_valid(_canvas):
 			# Lock ortho frustum to the canvas window at 4 px/m × zoom so 2D
@@ -1266,23 +1925,25 @@ func _update_camera() -> void:
 			var origin: Vector2 = disc.get("origin", Vector2.ZERO)
 			var site_at_center := (_canvas.size * 0.5 - origin) / s
 			look = center + Vector3(site_at_center.x, 0.0, site_at_center.y)
-			_camera.size = maxf(_canvas.size.y / s, 0.5)
+			_frame_h_m = maxf(_canvas.size.y / s, MIN_FRAME_H_M)
 		else:
 			# Fit the full SoI diameter into the square disc viewport.
-			_camera.size = maxf(r * 2.0, 10.0)
+			_frame_h_m = maxf(r * 2.0, 10.0)
+		# The focus plane is the GROUND under the view centre (not the SoI
+		# centre's height), so the matched scale holds where you are looking and
+		# a hilltop is never behind the camera (the old ortho camera sat at most
+		# 60 m above the centre and clipped higher ground).
+		look.y = _ground_y_or(look.x, look.z, center.y)
+		var dist := _matched_distance(_frame_h_m, PLAN_FOV_DEG)
+		_cam_look = look
 		if is_phys_orbited():
-			_apply_topdown_orbit(look, r, height)
+			_apply_topdown_orbit(look, dist)
 		else:
-			_camera.global_transform = Transform3D(basis, look + Vector3(0.0, height, 0.0))
-		_camera.near = 0.5
-		# Far/near derived from the ACTUAL camera→look distance so a tilted orbit (a
-		# far camera, see _apply_topdown_orbit) doesn't slice the ground into an
-		# ellipse. Ortho depth is linear, so a generous far has no precision cost.
-		var cam_dist := _camera.global_position.distance_to(look)
-		_camera.far = maxf(cam_dist + r * 4.0, 3000.0)
+			_camera.global_transform = Transform3D(basis, look + Vector3(0.0, dist, 0.0))
+		_set_near_far(dist, r)
 		return
 	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
-	var dist := maxf(r * _orbit_mult, MIN_ORBIT_DIST_M)
+	var dist := maxf(r * _orbit_mult, 1.0 if _globe else MIN_ORBIT_DIST_M)
 	var offset := Vector3(
 		cos(_yaw) * cos(_pitch),
 		sin(_pitch),
@@ -1290,23 +1951,24 @@ func _update_camera() -> void:
 	) * dist
 	_camera.global_position = center + offset
 	_camera.look_at(center, Vector3.UP)
-	_camera.far = maxf(dist + r * 4.0, 2000.0)
+	_cam_look = center
+	if _globe:
+		_camera.fov = GLOBE_FOV
+		# Near tracks zoom so a close-in globe doesn't clip the disc (the
+		# full-screen globe's rule); far reaches the horizon behind it.
+		_camera.near = clampf(dist * 0.02, 0.05, 0.5)
+		_camera.far = maxf(8000.0, dist * 8.0 + r * 4.0)
+	else:
+		_camera.far = maxf(dist + r * 4.0, 2000.0)
 
 
-## Orbit the top-down ortho camera around the look target. Ortho size is kept
-## (set by the caller) so 2D px/m stays locked; only the pose tilts/rotates.
-func _apply_topdown_orbit(look: Vector3, r: float, _height: float) -> void:
+## Orbit the top-down camera around the focus at the matched distance (the
+## Globe's orbit, pitched from straight down): the focus keeps its scale, the
+## rest of the plan foreshortens like a real oblique view.
+func _apply_topdown_orbit(look: Vector3, dist: float) -> void:
 	var elev := PI * 0.5 - _phys_pitch  # 90° = straight down (pitch 0)
 	var yaw := _phys_yaw
 	var dir := Vector3(cos(elev) * sin(yaw), sin(elev), cos(elev) * cos(yaw))
-	# Pull the camera back as the view tilts toward the horizon so the near/far
-	# planes never slice the ground (a close camera at a low angle + wide view
-	# clips both the near foreground and far edge → the "ellipse" clip). Ortho
-	# projection is distance-independent (framing = _camera.size), and prop culling
-	# is lifted while the preview is up (PropRenderTuning.preview_active), so a far
-	# camera costs nothing and doesn't hide twins. `1/tan(elev)` is the ground
-	# distance the ortho half-window spans at this tilt.
-	var dist := clampf(r / maxf(tan(elev), 0.12), r * 2.0, r * 10.0)
 	_camera.global_position = look + dir * dist
 	var up := Vector3.UP
 	if elev > deg_to_rad(80.0):
@@ -1319,7 +1981,8 @@ func _apply_topdown_orbit(look: Vector3, r: float, _height: float) -> void:
 ## Camera sits on the cross-axis looking through the cut plane (CT offset).
 ## Pitch is locked side-on; zoom is ortho size.
 func _update_section_camera(center: Vector3, r: float) -> void:
-	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_camera.fov = SECTION_FOV_DEG
 	_phys_pitch = 0.0
 	var h := _section_heading
 	var along := Vector3(cos(h), 0.0, sin(h))
@@ -1331,49 +1994,51 @@ func _update_section_camera(center: Vector3, r: float) -> void:
 	if cam_x.dot(along) < 0.0:
 		cam_x = -cam_x
 	var cam_y := cam_z.cross(cam_x).normalized()
-	var zoom := clampf(_section_zoom, MIN_SECTION_ZOOM, MAX_SECTION_ZOOM)
-	var ortho_h := maxf(r * 2.0 / zoom, 2.0)
+	var ortho_h := maxf(r * 2.0, 2.0)
 	# Hydro Lab embed owns framing via set_lab_section_frame (prefer over Elev
 	# canvas anchors — those belong to the parked freeform canvas).
 	var used_anchors := false
 	var lab_frame := _embed_host != null and is_instance_valid(_embed_host) \
 			and not is_nan(_lab_along_m) and not is_nan(_lab_elev_m) \
-			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= LAB_MIN_ORTHO_H_M
+			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= MIN_FRAME_H_M
 	if lab_frame:
 		look = Vector3(
 			center.x + along.x * _lab_along_m + cross.x * _section_offset_m,
 			_lab_elev_m,
 			center.z + along.z * _lab_along_m + cross.z * _section_offset_m)
-		ortho_h = maxf(_lab_ortho_h_m, LAB_MIN_ORTHO_H_M)
+		ortho_h = maxf(_lab_ortho_h_m, MIN_FRAME_H_M)
 		used_anchors = true
 	elif _canvas != null and is_instance_valid(_canvas) \
-			and _canvas.has_method("get_elev_anchor_along_m") \
+			and _canvas.has_method("get_elev_frame") \
 			and (not _canvas.has_method("has_elev_anchor") \
 			or bool(_canvas.call("has_elev_anchor"))):
-		var canvas_zoom := 1.0
-		if _canvas.has_method("get_view_zoom"):
-			canvas_zoom = maxf(float(_canvas.call("get_view_zoom")), 0.0001)
-		var s := SOI_PX_PER_M * canvas_zoom
-		var along_m := float(_canvas.call("get_elev_anchor_along_m"))
-		var elev_m := float(_canvas.call("get_elev_anchor_elev_m")) \
-				if _canvas.has_method("get_elev_anchor_elev_m") else center.y
+		# ONE frame (GraphElevFrame) for the 2D overlay, the disc mask and this
+		# camera: look at the section point that sits under the CONTAINER's
+		# centre. In crop mode the container is the canvas, so that is the
+		# anchor; in disc mode the container is centred on the projected SoI
+		# centre, so it is the SoI centre on the slice. The old code always
+		# looked at the anchor while the disc container sat at the canvas
+		# centre — the sphere slid inside its mask on every pan/zoom.
+		var frame: Dictionary = _canvas.call("get_elev_frame") as Dictionary
+		var cont_ok := _container != null and is_instance_valid(_container) \
+				and _container.size.y > 1.0
+		var cont_center := (_container.position + _container.size * 0.5 - _canvas.position) \
+				if cont_ok else _canvas.size * 0.5
+		var m := GraphElevFrame.to_metres(frame, cont_center)
 		look = Vector3(
-			center.x + along.x * along_m + cross.x * _section_offset_m,
-			elev_m,
-			center.z + along.z * along_m + cross.z * _section_offset_m)
-		# Frustum matches the SubViewportContainer (disc or full canvas), not
-		# always canvas.h — otherwise non-crop disc stretches vs 2D px/m.
-		var cont_h := _container.size.y if (_container != null and is_instance_valid(_container) \
-				and _container.size.y > 1.0) else _canvas.size.y
-		ortho_h = maxf(cont_h / maxf(s, 0.0001), 2.0)
+			center.x + along.x * m.x + cross.x * _section_offset_m,
+			m.y,
+			center.z + along.z * m.x + cross.z * _section_offset_m)
+		var cont_h := _container.size.y if cont_ok else _canvas.size.y
+		ortho_h = GraphElevFrame.ortho_height_m(frame, cont_h)
 		used_anchors = true
 	elif not is_nan(_lab_along_m) and not is_nan(_lab_elev_m) \
-			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= LAB_MIN_ORTHO_H_M:
+			and not is_nan(_lab_ortho_h_m) and _lab_ortho_h_m >= MIN_FRAME_H_M:
 		look = Vector3(
 			center.x + along.x * _lab_along_m + cross.x * _section_offset_m,
 			_lab_elev_m,
 			center.z + along.z * _lab_along_m + cross.z * _section_offset_m)
-		ortho_h = maxf(_lab_ortho_h_m, LAB_MIN_ORTHO_H_M)
+		ortho_h = maxf(_lab_ortho_h_m, MIN_FRAME_H_M)
 	elif _top_down_cropped and _canvas != null and is_instance_valid(_canvas) \
 			and not used_anchors:
 		# Legacy Site-Plan-style crop framing (no elev anchors).
@@ -1388,14 +2053,60 @@ func _update_section_camera(center: Vector3, r: float) -> void:
 		look = center + along * along_m2 + cross * _section_offset_m
 		var cont_h2 := _container.size.y if (_container != null and is_instance_valid(_container) \
 				and _container.size.y > 1.0) else _canvas.size.y
-		ortho_h = maxf(cont_h2 / s2, 2.0)
-	_camera.size = ortho_h
-	var dist := maxf(r * 1.15, 20.0)
+		ortho_h = maxf(cont_h2 / s2, MIN_FRAME_H_M)
+	# Perspective, square-on to the cut: at this distance the cut face maps at
+	# exactly the 2D scale (GraphElevFrame stays exact on the plane), while
+	# the ground behind it recedes with real depth. The camera sits in the
+	# discarded half (+cross), so nothing between it and the cut renders.
+	_frame_h_m = maxf(ortho_h, MIN_FRAME_H_M)
+	var dist := _matched_distance(_frame_h_m, SECTION_FOV_DEG)
 	var basis := Basis(cam_x, cam_y, cam_z)
 	_camera.global_transform = Transform3D(basis, look + cross * dist)
-	_camera.near = 0.5
-	_camera.far = maxf(dist + r * 3.0, 500.0)
+	_cam_look = look
+	_set_near_far(dist, r)
 	_push_section_cutaway()
+
+
+## Camera distance at which a `frame_h_m`-tall window at the focus fills the
+## viewport height with a `fov_deg` vertical FOV.
+static func _matched_distance(frame_h_m: float, fov_deg: float) -> float:
+	return maxf(frame_h_m, MIN_FRAME_H_M) * 0.5 / tan(deg_to_rad(fov_deg) * 0.5)
+
+
+func _set_near_far(dist: float, r: float) -> void:
+	_camera.near = clampf(dist * 0.02, 0.002, 0.5)
+	_camera.far = maxf(dist * 6.0 + r * 4.0, 3000.0)
+
+
+## Ground height at world xz from SoiService (the edit-aware terrain), else
+## `fallback` — keeps the plan's focus on the ground actually drawn.
+func _ground_y_or(x: float, z: float, fallback: float) -> float:
+	var soi := _soi()
+	if soi != null and soi.has_method("ground_y_at"):
+		var y := float(soi.call("ground_y_at", x, z))
+		if is_finite(y):
+			return y
+	return fallback
+
+
+## Long shadows for the perspective plan / section: the sun's shadow range is
+## tuned for first person, and these cameras now sit hundreds of metres out.
+## A camera-LESS claim (falls through to the camera below), like the Globe's.
+func _sync_lens_shadow_claim() -> void:
+	var want := active and (_top_down or _section_mode) and not _globe
+	if want == _lens_shadow_held:
+		return
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return
+	_lens_shadow_held = want
+	if want and main.has_method("push_camera_claim"):
+		var soi := _soi()
+		var r := float(soi.call("radius_m")) if soi != null and soi.has_method("radius_m") else 150.0
+		main.call("push_camera_claim", LENS_SHADOW_CLAIM, {"shadow_max_distance": r * 6.0})
+	elif not want and main.has_method("pop_camera_claim"):
+		main.call("pop_camera_claim", LENS_SHADOW_CLAIM)
 
 
 func _push_section_cutaway() -> void:
@@ -1411,6 +2122,10 @@ func _push_section_cutaway() -> void:
 	var h := _section_heading
 	var cross := Vector3(-sin(h), 0.0, cos(h))
 	var origin := c + cross * _section_offset_m
+	# The cut-face cap's top-edge lip scales with the zoom (~1.5 px) so no sky
+	# sliver opens between it and the terrain mesh at Hydro Lab depth.
+	if soi.has_method("set_section_cap_lip") and _camera != null:
+		soi.call("set_section_cap_lip", clampf(_frame_h_m * 0.004, 0.002, 1.5))
 	# Normal toward camera (+cross) → camera-side half discarded.
 	soi.call("set_section_cutaway", true, origin, cross)
 

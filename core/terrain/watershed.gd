@@ -674,8 +674,13 @@ static func _argsort_desc(heights: PackedFloat32Array, n: int) -> PackedInt32Arr
 ## target drop — a real terrain feature, not a bug).
 ## Returns `{points: PackedVector2Array (world XZ, len ≥ 1, first = start),
 ## final_elev, total_drop_m, reached_target: bool}`.
+## `veto(x, z) -> bool` (optional) rejects candidate steps — a culvert traced
+## from a siphon on a pond's bank must not walk INTO the pond's own basin,
+## whose carved bed is the steepest descent in sight and whose local minimum
+## is the pond bottom (the "culvert ends in the middle of the pond" bug).
 static func trace_downhill(start_xz: Vector2, height_at: Callable,
-		target_drop_m: float = 9.0, step_m: float = 4.0, max_steps: int = 60) -> Dictionary:
+		target_drop_m: float = 9.0, step_m: float = 4.0, max_steps: int = 60,
+		veto: Callable = Callable()) -> Dictionary:
 	var pts := PackedVector2Array([start_xz])
 	var cur := start_xz
 	var cur_h := float(height_at.call(cur.x, cur.y))
@@ -690,6 +695,8 @@ static func trace_downhill(start_xz: Vector2, height_at: Callable,
 		for k in 8:
 			var dir := Vector2(float(_D8_DC[k]), float(_D8_DR[k])).normalized()
 			var cand := cur + dir * step_m
+			if veto.is_valid() and bool(veto.call(cand.x, cand.y)):
+				continue
 			var h := float(height_at.call(cand.x, cand.y))
 			if h < best_h:
 				best_h = h

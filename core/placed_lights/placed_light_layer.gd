@@ -34,7 +34,7 @@ static func create_empty() -> PlacedLightLayer:
 
 ## `key` is either "scene_<basename>" (built-in maps) or "<lat>_<lon>" tokens.
 static func path_for_key(key: String) -> String:
-	return "user://maps/placed_lights_%s.json" % key
+	return WorldPaths.keyed_file("placed_lights", key, "json")
 
 
 static func legacy_path_for_scene(scene_path: String) -> String:

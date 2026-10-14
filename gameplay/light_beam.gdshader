@@ -17,6 +17,10 @@ shader_type spatial;
 // `min_width_rad` of view angle (like the camp cards' constant apparent size).
 render_mode unshaded, cull_disabled, blend_add, depth_draw_never, shadows_disabled, fog_disabled;
 
+// Cosmetic clock (SimFxRate): advances with the sim, time-lapsed and
+// capped, frozen dead while paused. Replaces TIME, which never stops.
+global uniform float fx_time_lights;
+
 uniform vec3 beam_color : source_color = vec3(1.0);
 uniform float intensity = 1.0;
 uniform float haze = 0.5;
@@ -59,7 +63,7 @@ void fragment() {
 	// bright square with a black centre where every beam ends.
 	float along = pow(max(1.0 - v_along, 0.0), falloff);
 	// Slow drifting haze grain (world-space, so it does not crawl with the beam).
-	float grain = mix(1.0, 0.6 + 0.8 * hash31(floor(v_world * 0.7 + vec3(TIME * 0.15))), shimmer);
+	float grain = mix(1.0, 0.6 + 0.8 * hash31(floor(v_world * 0.7 + vec3(fx_time_lights * 0.15))), shimmer);
 	vec3 c = beam_color * intensity * haze * night * core * along * grain;
 	ALBEDO = clamp(c, vec3(0.0), vec3(64.0));
 }

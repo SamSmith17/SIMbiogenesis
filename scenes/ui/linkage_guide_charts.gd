@@ -211,6 +211,7 @@ const MASS_ROWS := [
 	["bolts_kg", "Bolts"],
 	["washers_kg", "Washers"],
 	["support_kg", "Support beams"],
+	["floor_kg", "Floor beams"],
 	["hardware_kg", "Assembly hardware"],
 	["panels_kg", "Solar panels"],
 ]
@@ -222,6 +223,7 @@ const MASS_COLORS := [
 	Color(0.612, 0.639, 0.686),
 	Color(0.769, 0.788, 0.816),
 	Color(0.404, 0.310, 0.180),
+	Color(0.62, 0.47, 0.26),      # floor beams
 	Color(0.133, 0.827, 0.933),   # hardware — primary
 	Color(0.961, 0.620, 0.043),   # panels — amber
 ]

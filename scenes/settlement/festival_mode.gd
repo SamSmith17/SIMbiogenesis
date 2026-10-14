@@ -107,6 +107,9 @@ func open(main: Node) -> void:
 	if NpcDisplayPrefs.crowd_draw() == NpcDisplayPrefs.CROWD_NONE:
 		NpcDisplayPrefs.set_crowd_draw(NpcDisplayPrefs.CROWD_ALL)
 		_note("Crowd drawing was off (Settings → NPCs) — turned on.")
+	if not NpcDisplayPrefs.npcs_enabled():
+		NpcDisplayPrefs.set_npcs_enabled(true)
+		_note("NPCs were switched off (Settings → NPC) — turned back on.")
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader != null and loader.has_method("populate_camp_areas"):
 		_assign_unassigned_lots(loader)
@@ -190,6 +193,15 @@ func clear_seeded() -> void:
 			if str((rec as Dictionary).get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
 				if reg.remove_space(str((rec as Dictionary)["id"])):
 					removed += 1
+				continue
+			# The evening set festival mode gave a player's own stage.
+			var prog: Array = (rec as Dictionary).get("program", [])
+			var kept: Array = []
+			for s in prog:
+				if not str((s as Dictionary).get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
+					kept.append(s)
+			if kept.size() != prog.size():
+				reg.set_space_fields(str((rec as Dictionary)["id"]), {"program": kept})
 		_save_registry(main, loader, reg)
 	_seeded_space_ids.clear()
 	if loader != null:
@@ -209,6 +221,21 @@ func clear_seeded() -> void:
 				model.remove_item(iid)
 	_note("Cleared %d seeded venues and every festival headcount." % removed)
 	close()
+
+
+## The festival's total population (PopTestPrefs, 0 = the camps' natural
+## headcounts). Saved globally — it is a performance knob. The camps' own
+## headcounts are never rewritten: the graph sync scales them, and the
+## population bridge resizes each roster IN PLACE on its next tick.
+func set_target_people(n: int) -> void:
+	PopTestPrefs.set_festival_target_people(n)
+	PopTestPrefs.save()
+	var loader := TerrainSurfaceQuery.find_terrain_loader(_main) if _main != null else null
+	if loader != null and loader.has_method("apply_festival_population_target"):
+		var r: Dictionary = loader.call("apply_festival_population_target")
+		_note("Population %s: %d people (natural %d)." % [
+			"target" if n > 0 else "back to natural", int(r.get("people", 0)), int(r.get("natural", 0))])
+	_refresh_status()
 
 
 ## The two clock jumps the HUD offers — a festival is an EVENING thing (the
@@ -346,6 +373,20 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 		if not present.has(t):
 			present.append(t)
 	var missing := FestivalSeedLayout.missing_types(present)
+	# A stage the player tagged with NO programme gets the festival's evening
+	# set, so it has a crowd and a DJ when the sun goes down. The slot is
+	# labelled with the prefix, so Clear takes it off again.
+	var programmed := 0
+	for rec0 in reg.spaces:
+		var r0: Dictionary = rec0
+		if str(r0.get("space_type", "")) == "stage" and (r0.get("program", []) as Array).is_empty():
+			var slot: Dictionary = FestivalSeedLayout.STAGE_SET.duplicate()
+			slot["label"] = FestivalSeedLayout.LABEL_PREFIX + "evening set"
+			reg.set_space_fields(str(r0.get("id", "")), {"program": [slot]})
+			programmed += 1
+	if programmed > 0:
+		_save_registry(main, loader, reg)
+		_note("Gave %d stage(s) the 20:00–02:00 evening set." % programmed)
 	# Enrichment is what the evening IS; a site with no venue of any kind
 	# gets the three. (fire circles need firewood wired in; stages do not.)
 	var has_venue := false
@@ -356,7 +397,28 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 		for t in ["stage", "center_camp", "temple"]:
 			if not missing.has(t):
 				missing.append(t)
-	if missing.is_empty():
+	# Art is the afternoon: the SOCIAL blocks' venue visits and wanders need
+	# somewhere to go by day. Seeded whenever none is tagged — on a site that
+	# already has its stage, temple and center camp too.
+	if not present.has("art") and not missing.has("art"):
+		missing.append("art")
+	# Where the already-tagged beds and kitchens stand (per-camp types are
+	# seeded for every camp whose outline holds none — FestivalSeedLayout
+	# .needs_seeding).
+	var existing: Array = []
+	for rec_e in reg.spaces:
+		var re: Dictionary = rec_e
+		var te := str(re.get("space_type", ""))
+		if FestivalSeedLayout.PER_CAMP_TYPES.has(te):
+			existing.append({"type": te, "pos": reg.resolve_position(re, main)})
+	var camp_short := false
+	for c_e in camps:
+		for te2 in FestivalSeedLayout.PER_CAMP_TYPES:
+			if FestivalSeedLayout.needs_seeding({"type": te2, "camp_id": str((c_e as Dictionary).get("id", "")),
+					"poly": FestivalSeedLayout.poly_to_array((c_e as Dictionary).get("poly", PackedVector2Array()))},
+					missing, existing):
+				camp_short = true
+	if missing.is_empty() and not camp_short:
 		_note("Your tagged spaces cover every need — nothing seeded.")
 		return
 	var free_fn := Callable()
@@ -369,7 +431,7 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 	var added := 0
 	for v in plan:
 		var vd: Dictionary = v
-		if not missing.has(str(vd["type"])):
+		if not FestivalSeedLayout.needs_seeding(vd, missing, existing):
 			continue
 		if labels.has(str(vd["label"])):
 			continue
@@ -384,7 +446,8 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 		added += 1
 	if added > 0:
 		_save_registry(main, loader, reg)
-		_note("Seeded %d venues (%s)." % [added, ", ".join(PackedStringArray(missing))])
+		_note("Seeded %d venues (%s)." % [added, ", ".join(PackedStringArray(missing))
+			if not missing.is_empty() else "beds and kitchens for the camps that had none"])
 
 
 ## The burn structure: with no effigy tagged, the BURNABLE placed prop
@@ -461,13 +524,15 @@ func _refresh_status() -> void:
 		out["camps"] = camps.size()
 	if sgv.has_method("npc_population_bridge"):
 		var bridge: Variant = sgv.call("npc_population_bridge")
-		if bridge != null and bridge.has_method("agent_dots"):
-			for d in bridge.call("agent_dots"):
-				out["people"] = int(out["people"]) + 1
-				if str((d as Dictionary).get("tier", "")) == CrowdFocus.TIER_LIGHT:
-					out["light"] = int(out["light"]) + 1
-				else:
-					out["full"] = int(out["full"]) + 1
+		if bridge != null and bridge.has_method("population_counts"):
+			var pc: Dictionary = bridge.call("population_counts")
+			out["full"] = int(pc.get("full", 0))
+			out["light"] = int(pc.get("light", 0))
+			out["people"] = int(out["full"]) + int(out["light"])
+	out["target"] = PopTestPrefs.festival_target_people()
+	var loader0 := TerrainSurfaceQuery.find_terrain_loader(_main)
+	if loader0 != null and loader0.has_method("camp_population_summary"):
+		out["natural"] = int((loader0.call("camp_population_summary") as Dictionary).get("natural", 0))
 	if int(out["camps"]) == 0 and int(out["people"]) > 0:
 		# Fallback habitats are not compounds; count them as camps.
 		var model: Variant = sgv.get("model")

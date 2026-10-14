@@ -62,6 +62,26 @@ static func advance_path(pos: Vector2, path: PackedVector2Array, idx: int,
 ## favours. Returns [] when the line is clear (or an endpoint is inside, which
 ## is a seat problem, not a walking one). Used only where the A* grid is not
 ## available: the grid blocks the circle itself.
+## `p`, or — when it lies inside a no-go circle (a burning effigy's
+## perimeter) — the nearest point `margin` outside it. Every walk goal goes
+## through this, so a bed, seat or kitchen slot inside the fall zone becomes a
+## spot just outside it for as long as the fire burns.
+static func outside(p: Vector2, circles: Array, margin: float = 1.5) -> Vector2:
+	var q := p
+	for c in circles:
+		var cd: Dictionary = c
+		var centre: Vector2 = cd.get("centre", Vector2.INF)
+		var r := float(cd.get("r", 0.0))
+		if r <= 0.0 or centre == Vector2.INF:
+			continue
+		var d := q - centre
+		if d.length() >= r:
+			continue
+		var dir := d.normalized() if d.length() > 1e-4 else Vector2(1.0, 0.0)
+		q = centre + dir * (r + margin)
+	return q
+
+
 static func detour(a: Vector2, b: Vector2, circles: Array, margin: float = 1.5) -> PackedVector2Array:
 	var ab := b - a
 	var len2 := ab.length_squared()

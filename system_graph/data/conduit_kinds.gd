@@ -592,9 +592,36 @@ static func pipe_kit_sizes_in(type_id: String) -> Array:
 ## (ASTM D3035 / F714 OD convention — same OD as steel IPS so fittings interchange).
 const _IPS_OD_IN: Dictionary = {1.0: 1.315, 1.25: 1.660, 1.5: 1.900, 2.0: 2.375}
 
-## Dimension ratio for the poly penstock stock: PE4710 SDR-9 (≈250 psi pressure
-## class) — the class micro-hydro suppliers (e.g. PowerSpout) spec for penstock.
+## Dimension ratio for the poly penstock stock when the style names none:
+## PE4710 SDR-9 (≈250 psi pressure class) — the class micro-hydro suppliers
+## (e.g. PowerSpout) spec for penstock. The player's own coil is usually
+## something else (SDR 11 / 11.5 are the common hardware-store ratings), so
+## `conduit_style.pipe_sdr` overrides it per run: wall = OD/SDR drives the bore,
+## the pressure rating AND the cold-bend radius.
 const _POLY_PENSTOCK_SDR := 9.0
+## Stock dimension ratios offered in the Hydro Lab (ASTM D3035 series).
+const PENSTOCK_SDR_OPTIONS: Array = [7.3, 9.0, 11.0, 11.5, 13.5, 17.0]
+## PE4710 hydrostatic design stress at 73 °F (psi): PR = 2·HDS/(SDR − 1)
+## (PPI Handbook ch. 6 — gives the familiar 250 psi for SDR 9, 200 for SDR 11).
+const PE4710_HDS_PSI := 1000.0
+
+
+## The styled dimension ratio (SDR) of a sized kind, else the stock default.
+static func pipe_sdr(type_id: String, style: Dictionary = {}) -> float:
+	var v := float(style.get("pipe_sdr", 0.0))
+	if v >= 5.0 and v <= 41.0:
+		return v
+	return _POLY_PENSTOCK_SDR
+
+
+## Wall thickness (m) = OD / SDR.
+static func wall_thickness_m(type_id: String, style: Dictionary = {}) -> float:
+	return outer_diameter_m(type_id, style) / pipe_sdr(type_id, style)
+
+
+## Working pressure rating (psi) of the styled poly run (PE4710 at 73 °F).
+static func pressure_rating_psi(type_id: String, style: Dictionary = {}) -> float:
+	return 2.0 * PE4710_HDS_PSI / maxf(pipe_sdr(type_id, style) - 1.0, 0.5)
 
 
 ## Hydraulic inner diameter honoring the styled nominal size. SDR pipe walls
@@ -607,7 +634,7 @@ static func inner_diameter_for(type_id: String, style: Dictionary = {}) -> float
 		var sz := pipe_size_in(type_id, style)
 		if sz >= 0.05 and _IPS_OD_IN.has(sz):
 			var od_in := float(_IPS_OD_IN[sz])
-			return od_in * (1.0 - 2.0 / _POLY_PENSTOCK_SDR) * 0.0254
+			return od_in * (1.0 - 2.0 / pipe_sdr(type_id, style)) * 0.0254
 	return float(meta.get("inner_diameter_m", 0.0))
 
 
@@ -621,9 +648,25 @@ static func outer_diameter_m(type_id: String, style: Dictionary = {}) -> float:
 	return 2.0 * float(meta.get("radius_m", 0.01))
 
 
-## Minimum bend radius (m) for a contour-routed kind: bend_radius_od_mult × OD.
+## Minimum long-term cold-bend radius multiplier by dimension ratio — PPI
+## Handbook of PE Pipe, ch. 7, Table 1: DR ≤ 9 → 20×OD, DR 11–13.5 → 25×OD,
+## DR 17–21 → 27×OD, DR > 21 → 30×OD. A thinner wall kinks sooner.
+static func bend_radius_mult_for_sdr(sdr: float) -> float:
+	if sdr <= 9.0:
+		return 20.0
+	if sdr <= 13.5:
+		return 25.0
+	if sdr <= 21.0:
+		return 27.0
+	return 30.0
+
+
+## Minimum bend radius (m) for a contour-routed kind. With a styled SDR the PPI
+## table decides; otherwise the kind's own `bend_radius_od_mult` (unchanged).
 static func contour_bend_radius_m(type_id: String, style: Dictionary = {}) -> float:
 	var mult := clampf(float(type_meta(type_id).get("bend_radius_od_mult", 25.0)), 2.0, 60.0)
+	if style.has("pipe_sdr"):
+		mult = bend_radius_mult_for_sdr(pipe_sdr(type_id, style))
 	return maxf(mult * outer_diameter_m(type_id, style), 0.25)
 
 
@@ -1009,6 +1052,14 @@ static func is_direct_intake_connection(conn: Dictionary, model: Object = null) 
 		if item.is_empty():
 			continue
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		# Only a turbine that drinks through its own dip tube (the siphon) has a
+		# direct intake. Every hydro preset carries direct_intake on its water
+		# input, so without this a wire drawn into a PowerSpout / Pelton was
+		# stamped a no-pipe intake and never became its penstock (the auto-
+		# restyle skips direct intakes) — the turbine KIND decides, not the preset.
+		if str(specs.get("role", "")) == "siphon_hydro" \
+				and bool(HydroSource.kind_meta(str(specs.get("turbine_kind", "siphon"))).get("has_penstock", false)):
+			continue
 		var inputs: Array = specs.get("inputs", []) as Array
 		# res_in_N → inputs[N]
 		if hid.begins_with("res_in_"):

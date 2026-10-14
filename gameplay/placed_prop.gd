@@ -99,6 +99,11 @@ func has_burned_geometry() -> bool:
 
 func setup_collision() -> void:
 	if _body != null:
+		# Rename before the deferred free, or the replacement added this same
+		# frame is auto-renamed and get_node("PropBody") finds the dying one.
+		_body.name = "PropBody_freed"
+		_body.collision_layer = 0
+		_body.collision_mask = 0
 		_body.queue_free()
 		_body = null
 	var model := get_node_or_null("ModelRoot") as Node3D

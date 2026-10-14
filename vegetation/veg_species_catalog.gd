@@ -318,7 +318,7 @@ static func settings_with_variant(species: String, settings: Dictionary,
 	# defaults(), so its presence means an explicit user/global choice — only
 	# fill from SPECS when unset.
 	if named_variant and spec.has("bark") and not out.has("bark_albedo_tint"):
-		out["bark_albedo_tint"] = spec["bark"]
+		out["bark_albedo_tint"] = VegetationCardFactory.bark_paint_color(spec["bark"])
 	return out
 
 

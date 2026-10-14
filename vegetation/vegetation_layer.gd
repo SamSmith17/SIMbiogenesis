@@ -424,7 +424,7 @@ func remaining_bulk_capacity() -> int:
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/vegetation_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("vegetation", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:

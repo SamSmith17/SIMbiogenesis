@@ -22,7 +22,7 @@ extends SceneTree
 ## an inch-unit, Z-up import (node scaled 0.0254 and turned -90 deg about X), so
 ## the mesh's LOCAL Y is horizontal and its local sizes are 39x its real ones.
 
-const EXPECTED_CHECKS := 69
+const EXPECTED_CHECKS := 78
 
 var _failures := 0
 var _checks := 0
@@ -125,6 +125,7 @@ func _at(h: float, delta: float = 0.1) -> Dictionary:
 
 func _run_checks() -> void:
 	_test_timeline_maths()
+	_test_preroll()
 	_test_estimate()
 	var world := FireNode._mesh_world_aabb(_mesh)
 	_fire.set_process(false)  # drive the clock by hand from here: deterministic
@@ -246,6 +247,38 @@ func _test_timeline_maths() -> void:
 	_check("a duration cannot be edited below its floor", float(rec["bonfire_h"]) == FireTimeline.MIN_BONFIRE_H)
 	FireTimeline.reset_to_auto(rec)
 	_check("reset puts the estimate back", is_equal_approx(float(rec["bonfire_h"]), 6.0))
+
+
+## The PRE-ROLL (ignition -> first flame): no flame inside the window, the burn
+## clock starts at the first flame, old records (no key) start at once, and a
+## burn called off in the pre-roll never catches.
+func _test_preroll() -> void:
+	var rec := FireTimeline.make(100.0, {"climb_h": 0.5, "bonfire_h": 1.0, "ember_h": 0.5,
+		"preroll_h": 0.25})
+	var st := FireTimeline.state_at(rec, 100.1)
+	_check("pre-roll: no phase yet, flagged", int(st["phase"]) == FireTimeline.Phase.NONE
+		and bool(st["preroll"]))
+	_check("pre-roll: flames in 0.15 h", absf(float(st["flame_in_h"]) - 0.15) < 1e-6)
+	_check("pre-roll: no flame inside the window", not FireTimeline.has_flame(rec, 100.2)
+		and FireTimeline.has_flame(rec, 100.3))
+	_check("pre-roll: the burn clock starts at the first flame",
+		absf(FireTimeline.burn_hours(rec, 100.5) - 0.25) < 1e-6)
+	_check("pre-roll: the collapse moves back by the pre-roll",
+		int(FireTimeline.state_at(rec, 100.74)["phase"]) == FireTimeline.Phase.BURNING
+		and int(FireTimeline.state_at(rec, 100.76)["phase"]) != FireTimeline.Phase.BURNING)
+	_check("pre-roll: counted in the whole life", absf(FireTimeline.total_h(rec)
+		- (0.25 + 0.5 + FireTimeline.COLLAPSE_H + 1.0 + 0.5)) < 1e-6)
+	var legacy := FireTimeline.make(100.0, {"climb_h": 0.5, "bonfire_h": 1.0, "ember_h": 0.5})
+	legacy.erase("preroll_h")
+	_check("a record with no pre-roll key burns at once (old saves)",
+		int(FireTimeline.state_at(legacy, 100.01)["phase"]) == FireTimeline.Phase.BURNING)
+	var off := rec.duplicate(true)
+	FireTimeline.put_out(off, 100.1)
+	_check("called off in the pre-roll: never catches, no ceremony",
+		not FireTimeline.has_flame(off, 100.5) and not bool(FireTimeline.state_at(off, 100.2)["preroll"]))
+	FireTimeline.set_duration(rec, "preroll_h", 0.0)
+	FireTimeline.reset_to_auto(rec)
+	_check("Auto restores the pre-roll", absf(FireTimeline.preroll_h(rec) - 0.25) < 1e-6)
 
 
 func _test_estimate() -> void:

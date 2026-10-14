@@ -1,7 +1,10 @@
 class_name NpcMorale
 extends RefCounted
 
-## Morale model for simulated people — the "Fuck Yes" → "Fuck This" scale.
+## Morale model for simulated people — the scale, worst to best:
+##   FUCK THIS!!! · Fuck You · Fuck Me · Fuck It · Fuck Maybe · Fuck It!
+## and above the top band the PEAK EXPERIENCE state, FUCK YES!!! (NpcPeak —
+## not a morale band: it is reached together, not alone).
 ## Pure static math (no scene, no state) so the agent sim, the inspector, the
 ## Site Plan and the crosshair all read the same numbers, and so the whole
 ## thing is trivially selftestable.
@@ -17,12 +20,12 @@ extends RefCounted
 
 ## Band floors, highest first. Index 0 = best.
 const BANDS: Array = [
-	{"min": 0.85, "label": "Fuck Yes", "color": Color(0.35, 0.86, 0.52)},
-	{"min": 0.70, "label": "Pretty Good", "color": Color(0.58, 0.84, 0.44)},
-	{"min": 0.50, "label": "Coping", "color": Color(0.90, 0.82, 0.38)},
-	{"min": 0.30, "label": "Over It", "color": Color(0.94, 0.62, 0.30)},
-	{"min": 0.12, "label": "Done With This", "color": Color(0.93, 0.40, 0.30)},
-	{"min": 0.00, "label": "Fuck This", "color": Color(0.85, 0.22, 0.28)},
+	{"min": 0.85, "label": "Fuck It!", "color": Color(0.35, 0.86, 0.52)},
+	{"min": 0.70, "label": "Fuck Maybe", "color": Color(0.58, 0.84, 0.44)},
+	{"min": 0.50, "label": "Fuck It", "color": Color(0.90, 0.82, 0.38)},
+	{"min": 0.30, "label": "Fuck Me", "color": Color(0.94, 0.62, 0.30)},
+	{"min": 0.12, "label": "Fuck You", "color": Color(0.93, 0.40, 0.30)},
+	{"min": 0.00, "label": "FUCK THIS!!!", "color": Color(0.85, 0.22, 0.28)},
 ]
 
 ## Needs that damage morale when unmet. Hygiene and enrichment are comfort

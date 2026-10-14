@@ -20,6 +20,8 @@ extends RefCounted
 const LABEL_PREFIX := "Festival · "
 const MIN_HEADCOUNT := 2
 const MAX_HEADCOUNT := 500
+## Floor per camp when a population target scales headcounts down.
+const MIN_SCALED_HEADCOUNT := 2
 ## The camp kitchen is the camp outline shrunk about its interior point, so
 ## the sleep area and the kitchen are DIFFERENT area targets (the registry
 ## matches area targets by polygon).
@@ -35,8 +37,15 @@ const PEOPLE_PER_SHOWER_BANK := 150
 ## Half-sizes (m) of the shared venues' square footprints.
 const HALF_SIZE := {
 	"restroom": 6.0, "water_point": 5.0, "shower": 6.0,
-	"stage": 25.0, "center_camp": 20.0, "temple": 18.0,
+	"stage": 25.0, "center_camp": 20.0, "temple": 18.0, "art": 6.0,
 }
+## Art pieces: daytime destinations for the SOCIAL blocks' wanders and venue
+## visits (a festival with only a stage, a temple and center camp gave the
+## afternoon three places to be). One per this many people, at least 3.
+const PEOPLE_PER_ART := 150
+const MIN_ART := 3
+const MAX_ART := 8
+const ART_DRAW := 0.55
 ## The three programmed/open venues and their pull (NpcVenueChoice draw).
 const STAGE_DRAW := 1.0
 const CENTER_DRAW := 0.7
@@ -204,6 +213,9 @@ static func shared_venue_specs(people: int) -> Array:
 			"cap": SpaceRegistry.CAPACITY_AUTO, "fields": {"draw": CENTER_DRAW}},
 		{"type": "temple", "count": 1, "half": float(HALF_SIZE["temple"]),
 			"cap": SpaceRegistry.CAPACITY_AUTO, "fields": {"draw": TEMPLE_DRAW}},
+		{"type": "art", "count": clampi(int(ceil(float(n) / float(PEOPLE_PER_ART))), MIN_ART, MAX_ART),
+			"half": float(HALF_SIZE["art"]), "cap": SpaceRegistry.CAPACITY_AUTO,
+			"fields": {"draw": ART_DRAW}},
 	]
 
 
@@ -277,11 +289,52 @@ static func _shared_label(type: String, i: int, count: int) -> String:
 	var names := {
 		"restroom": "Portapotties", "water_point": "Water station", "shower": "Showers",
 		"stage": "Bass stage", "center_camp": "Center camp", "temple": "Temple",
+		"art": "Art piece",
 	}
 	var base: String = str(names.get(type, SpaceTypes.label(type)))
 	if count <= 1:
 		return base
 	return "%s %s" % [base, char(65 + (i % 26))]
+
+
+## Scale camp headcounts so they sum to `target` (largest remainder, so the
+## total lands EXACTLY on target), keeping every camp's share of the natural
+## split and at least MIN_SCALED_HEADCOUNT each. `target <= 0` = unchanged.
+## When the floor alone exceeds the target the floors win (a camp is never
+## emptied by the slider — clear its headcount to make it scenery).
+static func scale_headcounts(counts: Array, target: int) -> Array:
+	var out: Array = counts.duplicate()
+	if target <= 0 or counts.is_empty():
+		return out
+	var total := 0
+	for c in counts:
+		total += maxi(int(c), 0)
+	if total <= 0:
+		return out
+	var floor_n := MIN_SCALED_HEADCOUNT
+	var budget := maxi(target - floor_n * counts.size(), 0)
+	var spare := 0
+	for c in counts:
+		spare += maxi(int(c) - floor_n, 0)
+	var rems: Array = []
+	var given := 0
+	for i in counts.size():
+		var share := float(maxi(int(counts[i]) - floor_n, 0)) / float(maxi(spare, 1)) * float(budget)
+		if spare <= 0:
+			share = float(budget) / float(counts.size())
+		var whole := int(floor(share))
+		out[i] = floor_n + whole
+		given += whole
+		rems.append([share - float(whole), i])
+	rems.sort_custom(func(a, b) -> bool:
+		if absf(float(a[0]) - float(b[0])) > 1e-9:
+			return float(a[0]) > float(b[0])
+		return int(a[1]) < int(b[1]))
+	var left := budget - given
+	for k in mini(left, rems.size()):
+		var idx := int(rems[k][1])
+		out[idx] = int(out[idx]) + 1
+	return out
 
 
 ## The space types a festival needs tagged before anyone can act on a need
@@ -295,3 +348,28 @@ static func missing_types(present: Array) -> Array:
 		if not present.has(t):
 			out.append(t)
 	return out
+
+
+## Types every CAMP needs its own of: a camp's beds and its kitchen are
+## where ITS people go, so one tagged shiftpod elsewhere on the site must not
+## stop the other camps getting theirs (it did: a single capacity-1 bed sent
+## a whole festival to sleep round one pod).
+const PER_CAMP_TYPES: Array = ["sleep", "kitchen"]
+
+
+## Should this plan entry be seeded? A shared type only when the site has
+## none; a per-camp type whenever THIS camp's outline holds none of it.
+## `existing` = [{type, pos: Vector2}] for the spaces already tagged.
+static func needs_seeding(entry: Dictionary, missing: Array, existing: Array) -> bool:
+	var t := str(entry.get("type", ""))
+	if not PER_CAMP_TYPES.has(t) or str(entry.get("camp_id", "")).is_empty():
+		return missing.has(t)
+	var poly := SpaceRegistry.poly_points(entry.get("poly", []) as Array)
+	if poly.size() < 3:
+		return missing.has(t)
+	for e in existing:
+		var ed: Dictionary = e
+		if str(ed.get("type", "")) == t and ed.get("pos") is Vector2 \
+				and Geometry2D.is_point_in_polygon(ed["pos"] as Vector2, poly):
+			return false
+	return true

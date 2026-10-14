@@ -48,7 +48,7 @@ static func create_empty() -> FestivalPlacementLayer:
 
 
 static func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/festival_placement_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("festival_placement", lat, lon)
 
 
 func save_to(path: String) -> bool:

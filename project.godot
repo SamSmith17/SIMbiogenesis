@@ -74,7 +74,7 @@ filesystem/other_file_extensions="mp4,webm,mkv,avi,mov,m4v"
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/CameraServerExtension/plugin.cfg", "res://addons/spacemouse_editor/plugin.cfg")
+enabled=PackedStringArray("res://addons/CameraServerExtension/plugin.cfg", "res://addons/spacemouse_editor/plugin.cfg", "res://addons/sketchup_import_fix/plugin.cfg")
 
 [filesystem]
 
@@ -351,6 +351,11 @@ toggle_window_wall={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194342,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
+toggle_third_person={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194336,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
 drone_view={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194306,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
@@ -398,6 +403,54 @@ anti_aliasing/quality/use_taa=true
 
 [shader_globals]
 
+veg_fill={
+"type": "float",
+"value": 0.0
+}
+veg_haze_mul={
+"type": "float",
+"value": 1.0
+}
+veg_sky_fill={
+"type": "float",
+"value": 0.0
+}
+veg_saturation={
+"type": "float",
+"value": 1.1
+}
+music_pos0={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+music_beat0={
+"type": "vec4",
+"value": Vector4(0, 99, 0, 0)
+}
+music_pos1={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+music_beat1={
+"type": "vec4",
+"value": Vector4(0, 99, 0, 0)
+}
+music_pos2={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+music_beat2={
+"type": "vec4",
+"value": Vector4(0, 99, 0, 0)
+}
+music_pos3={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}
+music_beat3={
+"type": "vec4",
+"value": Vector4(0, 99, 0, 0)
+}
 soi_center_radius={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
@@ -421,4 +474,20 @@ soi_section_plane={
 soi_section_normal={
 "type": "vec4",
 "value": Vector4(0, 0, 1, 0)
+}
+fx_time_npc={
+"type": "float",
+"value": 0.0
+}
+fx_time_fire={
+"type": "float",
+"value": 0.0
+}
+fx_time_lights={
+"type": "float",
+"value": 0.0
+}
+npc_night={
+"type": "float",
+"value": 0.0
 }

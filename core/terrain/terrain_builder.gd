@@ -385,20 +385,46 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 
 
 ## Bind the default CC0 near-field ground textures (albedo/normal/roughness) onto a
+## The near-field ground maps as [albedo, normal] (either may be null when the
+## files are absent). Shared with the SoI soil cutaway (soi_strata) so the cut
+## earth has the same grain as the ground the player walks on.
+static func near_detail_maps() -> Array:
+	_ensure_near_detail_loaded()
+	return [_near_detail_albedo, _near_detail_normal]
+
+
+static func _ensure_near_detail_loaded() -> void:
+	if _near_detail_loaded:
+		return
+	_near_detail_loaded = true
+	if ResourceLoader.exists(NEAR_DETAIL_ALBEDO_PATH):
+		_near_detail_albedo = load(NEAR_DETAIL_ALBEDO_PATH) as Texture2D
+	if ResourceLoader.exists(NEAR_DETAIL_NORMAL_PATH):
+		_near_detail_normal = load(NEAR_DETAIL_NORMAL_PATH) as Texture2D
+	if ResourceLoader.exists(NEAR_DETAIL_ROUGH_PATH):
+		_near_detail_rough = load(NEAR_DETAIL_ROUGH_PATH) as Texture2D
+
+
+## Bind the near-field maps as a soil material's grain (`soil_tex`, `soil_nrm`,
+## `use_soil_tex`). No maps → procedural grain inside the shader.
+static func apply_soil_textures(sm: ShaderMaterial) -> void:
+	if sm == null:
+		return
+	var maps := near_detail_maps()
+	var have := maps[0] != null and maps[1] != null
+	if have:
+		sm.set_shader_parameter("soil_tex", maps[0])
+		sm.set_shader_parameter("soil_nrm", maps[1])
+	sm.set_shader_parameter("use_soil_tex", 1.0 if have else 0.0)
+
+
 ## terrain ShaderMaterial and enable the textured near-field path. If the files are
 ## absent (e.g. slimmed export), leaves use_detail_textures=false so the shader's
 ## procedural detail path takes over. Loaded once and cached across materials.
 static func apply_near_detail_textures(sm: ShaderMaterial) -> void:
 	if sm == null:
 		return
-	if not _near_detail_loaded:
-		_near_detail_loaded = true
-		if ResourceLoader.exists(NEAR_DETAIL_ALBEDO_PATH):
-			_near_detail_albedo = load(NEAR_DETAIL_ALBEDO_PATH) as Texture2D
-		if ResourceLoader.exists(NEAR_DETAIL_NORMAL_PATH):
-			_near_detail_normal = load(NEAR_DETAIL_NORMAL_PATH) as Texture2D
-		if ResourceLoader.exists(NEAR_DETAIL_ROUGH_PATH):
-			_near_detail_rough = load(NEAR_DETAIL_ROUGH_PATH) as Texture2D
+	_ensure_near_detail_loaded()
 	var have := _near_detail_albedo != null and _near_detail_normal != null
 	if not have:
 		return
@@ -500,6 +526,31 @@ static func build_terrain_node(elev: PackedFloat32Array, res: int, extent_m: flo
 
 
 ## UV-space feather width from metres on the detail patch edge.
+## GDScript MIRROR of terrain_detail.gdshader / building_roof.gdshader
+## `equirect_to_mercator_uv` (the v half): Mercator v of a lat-linear uv.y
+## inside a drape's [lat_n, lat_s], computed RELATIVE to the bbox centre with
+## the Taylor series of ∫ sec φ dφ so float32 never subtracts two ~0.97s
+## (that cancellation stepped every sharp drape into 1–2 m blocks). Edit the
+## shaders and this together; the selftest checks it against the exact form.
+static func mercator_v_relative(uv_y: float, lat_n_deg: float, lat_s_deg: float) -> float:
+	var lat_n := deg_to_rad(clampf(lat_n_deg, -85.05112878, 85.05112878))
+	var lat_s := deg_to_rad(clampf(lat_s_deg, -85.05112878, 85.05112878))
+	var span := lat_s - lat_n
+	var phi0 := 0.5 * (lat_n + lat_s)
+	var sec0 := 1.0 / cos(phi0)
+	var tan0 := tan(phi0)
+	var m_n := _merc_rel(-0.5 * span, sec0, tan0)
+	var m_s := _merc_rel(0.5 * span, sec0, tan0)
+	var m := _merc_rel(span * (uv_y - 0.5), sec0, tan0)
+	var denom := m_n - m_s
+	return (m_n - m) / denom if absf(denom) > 1e-12 else uv_y
+
+
+static func _merc_rel(d: float, sec0: float, tan0: float) -> float:
+	return sec0 * d * (1.0 + 0.5 * tan0 * d + (sec0 * sec0 + tan0 * tan0) * d * d / 6.0
+		+ tan0 * (5.0 * sec0 * sec0 + tan0 * tan0) * d * d * d / 24.0)
+
+
 static func feather_uv_from_metres(feather_m: float, detail_extent_m: float) -> float:
 	if detail_extent_m <= 0.0:
 		return 0.06

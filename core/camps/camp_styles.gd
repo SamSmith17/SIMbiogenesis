@@ -31,6 +31,9 @@ const SHELTER_SLEEPS := {
 ## footprint). Tents and pods are enterable — people sleep in them — and
 ## shade is walked under, so only the vehicles block.
 const SOLID_CLASSES := {"rv": true, "van": true, "car": true}
+## Structures people take SHADE (and cover from rain) under — NpcComfort's
+## midday shade and a downpour's tarp.
+const SHADE_CLASSES := {"shade_structure": true, "ez_up": true, "tarp": true, "shade_array": true}
 
 const CLASS_SIZE := {
 	"rv": Vector3(8.5, 3.0, 2.6),

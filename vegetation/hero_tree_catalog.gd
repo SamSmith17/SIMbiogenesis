@@ -151,12 +151,23 @@ static func preset_for_osm_tree_tags(tags: Dictionary) -> String:
 	return ""
 
 
-## Zero emission on imported hero GLB materials so trees don't bloom at night.
+## Zero emission on imported hero GLB materials so trees don't bloom at night,
+## and make their foliage/bark matte (see _strip_mesh_emission).
 static func strip_night_glow(root: Node) -> void:
 	if root == null:
 		return
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		_strip_mesh_emission(node as MeshInstance3D)
+
+
+## Hero GLBs come from asset stores with export quirks: night-glow emission,
+## and foliage authored METALLIC (free_tree_1.glb's leaves import at 0.54).
+## A metallic leaf keeps under half its diffuse and lives on reflections, so
+## under a low ambient / sky contribution — and from the Globe camera, with
+## nothing to reflect — every hero printed as a solid black blob. Leaves and
+## bark are dielectric and matte: metallic 0, roughness ≥ 0.75, specular 0.25.
+## The fixed copy is cached per source material, so N heroes share one.
+static var _matte_cache: Dictionary = {}
 
 
 static func _strip_mesh_emission(mi: MeshInstance3D) -> void:
@@ -167,10 +178,20 @@ static func _strip_mesh_emission(mi: MeshInstance3D) -> void:
 		if mat == null or not (mat is StandardMaterial3D):
 			continue
 		var std := mat as StandardMaterial3D
-		if not std.emission_enabled and std.emission_energy_multiplier <= 0.001:
+		var glows := std.emission_enabled or std.emission_energy_multiplier > 0.001
+		var shiny := std.metallic > 0.02 or std.roughness < 0.75
+		if not glows and not shiny:
 			continue
-		var dup := std.duplicate() as StandardMaterial3D
-		dup.emission_enabled = false
-		dup.emission = Color.BLACK
-		dup.emission_energy_multiplier = 0.0
+		var key := std.get_instance_id()
+		var dup: StandardMaterial3D = _matte_cache.get(key)
+		if dup == null:
+			dup = std.duplicate() as StandardMaterial3D
+			dup.emission_enabled = false
+			dup.emission = Color.BLACK
+			dup.emission_energy_multiplier = 0.0
+			dup.metallic = 0.0
+			dup.metallic_texture = null
+			dup.roughness = maxf(std.roughness, 0.75)
+			dup.metallic_specular = 0.25
+			_matte_cache[key] = dup
 		mi.set_surface_override_material(si, dup)

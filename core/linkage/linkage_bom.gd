@@ -20,6 +20,15 @@ extends RefCounted
 ## the same number. Expect roughly 6% lighter figures than the web app; lb is a
 ## display conversion only.
 ##
+## [b]Copies.[/b] With a radial array and/or an arch tunnel array on, the
+## design holds several identical structures (`bom.js:countStructureCopies`):
+## everything is first computed for ONE structure (`per_structure`), then every
+## count, cost and mass at the top level is that set times `copies.total`
+## (unit prices unchanged). Panels come from assembled geometry, so the one
+## structure's share is the base group (the solved frame carries every arch
+## tunnel copy's panels). With one structure the result is exactly the old
+## shape plus the `copies` / `per_structure` keys.
+##
 ## Counts are derived analytically from the parameters, exactly as the web app
 ## does, NOT by walking the solved frame — the solver only emits bolt geometry
 ## when "show bolts" is on, while the hardware exists regardless. The selftest
@@ -48,11 +57,92 @@ const BOLT_FRACTIONS := {
 ## on where the fold slider happens to sit — a BOM that changed while you
 ## animated the structure would be worse than useless.
 static func compute(p: LinkageParams) -> Dictionary:
+	var copies := structure_copies(p)
+	var one := _compute_one(p, int(copies["linear"]))
+	one["copies"] = copies
+	var k := int(copies["total"])
+	if k <= 1:
+		one["per_structure"] = _per_structure_view(one)
+		return one
+	var out := one.duplicate()
+	out["per_structure"] = _per_structure_view(one)
+	out["counts"] = _scale_numbers(one["counts"], k)
+	out["structure_items"] = _scale_items(one["structure_items"], k)
+	out["power_items"] = _scale_items(one["power_items"], k)
+	out["enclosure_items"] = _scale_items(one["enclosure_items"], k)
+	out["structure_cost"] = float(one["structure_cost"]) * k
+	out["power_cost"] = float(one["power_cost"]) * k
+	out["enclosure_cost"] = float(one["enclosure_cost"]) * k
+	out["total_cost"] = float(one["total_cost"]) * k
+	out["mass"] = _scale_numbers(one["mass"], k)
+	var pw: Dictionary = (one["power"] as Dictionary).duplicate()
+	for key in ["panel_count", "watts_total", "kw"]:
+		pw[key] = pw[key] * k
+	out["power"] = pw
+	var rpl := LinkageRadialArray.deployed_plan(p)
+	if not rpl.is_empty():
+		# The whole pattern's footprint: the farthest part of any copy.
+		var dims: Dictionary = (one["dims"] as Dictionary).duplicate()
+		dims["pattern_diameter_in"] = 2.0 * (float(dims["diameter_in"]) / 2.0 + float(rpl["radius"]))
+		dims["pattern_diameter_ft"] = float(dims["pattern_diameter_in"]) / INCHES_PER_FOOT
+		out["dims"] = dims
+	return out
+
+
+## How many structures the design holds: visible radial copies x arch tunnel
+## segments (`bom.js:countStructureCopies`).
+static func structure_copies(p: LinkageParams) -> Dictionary:
+	var pl := LinkageRadialArray.deployed_plan(p)
+	var radial := maxi(1, int(pl.get("visible_count", 1))) if not pl.is_empty() else 1
+	var linear := p.array_count if p.orientation == "vertical" and p.array_count > 1 else 1
+	var total := radial * linear
+	return {"radial": radial, "linear": linear, "total": total,
+		"label": "1 structure" if total == 1 else "%d structures" % total}
+
+
+static func _per_structure_view(one: Dictionary) -> Dictionary:
+	return {"counts": one["counts"], "structure_items": one["structure_items"],
+		"power_items": one["power_items"], "enclosure_items": one["enclosure_items"],
+		"structure_cost": one["structure_cost"], "power_cost": one["power_cost"],
+		"enclosure_cost": one["enclosure_cost"], "total_cost": one["total_cost"], "mass": one["mass"]}
+
+
+## Every int/float scaled by k (bools and strings untouched) — `scaleNumbers`.
+static func _scale_numbers(d: Dictionary, k: int) -> Dictionary:
+	var out := {}
+	for key in d:
+		var v = d[key]
+		if v is int:
+			out[key] = v * k
+		elif v is float:
+			out[key] = v * float(k)
+		else:
+			out[key] = v
+	return out
+
+
+## Line items with qty / totals scaled by k (unit prices unchanged) — `scaleItems`.
+static func _scale_items(items: Array, k: int) -> Array:
+	var out: Array = []
+	for it in items:
+		var d: Dictionary = (it as Dictionary).duplicate()
+		d["qty"] = int(d["qty"]) * k
+		d["total_cost"] = float(d["total_cost"]) * k
+		d["total_mass_kg"] = float(d["total_mass_kg"]) * k
+		out.append(d)
+	return out
+
+
+## One structure's bill of materials. `linear` = arch tunnel copies the solved
+## frame carries; its panels are divided back down to one structure's share.
+static func _compute_one(p: LinkageParams, linear: int) -> Dictionary:
 	var warnings: PackedStringArray = []
 	var closed := LinkageKinematics.optimal_closed_angle(p)
 	var frame := LinkageSolver.solve(p, closed)
 	var supports := LinkageGeometry.support_beams(frame, p, closed)
 	var panels := LinkageGeometry.solar_panels(frame, p) if bool(p.solar_panels["enabled"]) else []
+	if linear > 1 and panels.size() >= linear:
+		panels = panels.slice(0, panels.size() / linear)
 
 	var counts := _counts(p, warnings)
 	counts["panels"] = panels.size()
@@ -60,7 +150,7 @@ static func compute(p: LinkageParams) -> Dictionary:
 	var structure_items: Array = []
 	var mass := {
 		"h_beams_kg": 0.0, "v_beams_kg": 0.0, "brackets_kg": 0.0,
-		"bolts_kg": 0.0, "washers_kg": 0.0, "support_kg": 0.0,
+		"bolts_kg": 0.0, "washers_kg": 0.0, "support_kg": 0.0, "floor_kg": 0.0,
 		"hardware_kg": 0.0, "structure_kg": 0.0, "panels_kg": 0.0, "total_kg": 0.0,
 	}
 
@@ -88,6 +178,14 @@ static func compute(p: LinkageParams) -> Dictionary:
 				% [supports.size(), want]
 				+ "count assumes every module carries its full set.")
 
+	# Raised floor beams (A4, floor-geometry.js computeFloorBomContribution).
+	var floor_bom := LinkageFloor.bom_contribution(p)
+	for item in floor_bom["items"]:
+		structure_items.append(item)
+	mass["floor_kg"] = float(floor_bom["mass_kg"])
+	counts["floor_radial"] = int(floor_bom["radial"])
+	counts["floor_rcp"] = int(floor_bom["reciprocal"])
+
 	var hw_items := assembly_hardware_items(p)
 	var hw_pieces := 0
 	for item in hw_items:
@@ -98,7 +196,7 @@ static func compute(p: LinkageParams) -> Dictionary:
 
 	mass["structure_kg"] = mass["h_beams_kg"] + mass["v_beams_kg"] \
 		+ mass["brackets_kg"] + mass["bolts_kg"] + mass["washers_kg"] \
-		+ mass["support_kg"] + mass["hardware_kg"]
+		+ mass["support_kg"] + mass["floor_kg"] + mass["hardware_kg"]
 
 	var power_items: Array = []
 	var power := _power_summary(p, panels)
@@ -119,14 +217,23 @@ static func compute(p: LinkageParams) -> Dictionary:
 	var power_cost := 0.0
 	for item in power_items:
 		power_cost += float(item["total_cost"])
+	# ENCLOSURE (A4): plywood sheets / fabric / grommets from the cut plan,
+	# plus the shade tarps (bom.js enclosureItems). Priced, not weighed —
+	# the web's weights leave them out too.
+	var enclosure := LinkageEnclosure.bom(p)
+	var enclosure_items: Array = enclosure["items"]
+	var enclosure_cost := float(enclosure["cost"])
 
 	return {
 		"counts": counts,
 		"structure_items": structure_items,
 		"power_items": power_items,
+		"enclosure_items": enclosure_items,
 		"structure_cost": structure_cost,
 		"power_cost": power_cost,
-		"total_cost": structure_cost + power_cost,
+		"enclosure_cost": enclosure_cost,
+		"total_cost": structure_cost + power_cost + enclosure_cost,
+		"covering_plan": enclosure["plan"],
 		"mass": mass,
 		"dims": _dims(p, frame),
 		"actuator": actuator_stroke(p),
@@ -724,7 +831,8 @@ static func fab_counts(bom: Dictionary, stats: Dictionary = {}) -> Dictionary:
 	var out := {
 		"module_count": int(c.get("modules", 0)),
 		"beam_count": int(c.get("h_beams", 0)) + int(c.get("v_beams", 0))
-			+ int(c.get("support_radial", 0)) + int(c.get("support_rcp", 0)),
+			+ int(c.get("support_radial", 0)) + int(c.get("support_rcp", 0))
+			+ int(c.get("floor_radial", 0)) + int(c.get("floor_rcp", 0)),
 		"bracket_count": int(c.get("brackets", 0)),
 		"bolt_count": int(c.get("bolts_total", 0)),
 		"bom_bolt_count": int(c.get("bolts_total", 0))
@@ -805,6 +913,14 @@ static func to_csv(bom: Dictionary, metric: bool = true) -> String:
 			rows.append(_csv_item_row(item, metric))
 		rows.append(["", "", "", "Power Subtotal:",
 			"$%s" % String.num(float(bom.get("power_cost", 0.0)), 2), ""])
+	var enclosure_items: Array = bom.get("enclosure_items", [])
+	if not enclosure_items.is_empty():
+		rows.append([])
+		rows.append(["ENCLOSURE", "", "", "", "", ""])
+		for item in enclosure_items:
+			rows.append(_csv_item_row(item, metric))
+		rows.append(["", "", "", "Enclosure Subtotal:",
+			"$%s" % String.num(float(bom.get("enclosure_cost", 0.0)), 2), ""])
 	rows.append([])
 	rows.append(["", "", "", "ESTIMATED TOTAL:",
 		"$%s" % String.num(float(bom.get("total_cost", 0.0)), 2), ""])
@@ -814,7 +930,7 @@ static func to_csv(bom: Dictionary, metric: bool = true) -> String:
 	rows.append(["WEIGHT BREAKDOWN", "", "", "", "", ""])
 	for pair in [["Horizontal Beams", "h_beams_kg"], ["Vertical Beams", "v_beams_kg"],
 			["Brackets", "brackets_kg"], ["Bolts", "bolts_kg"], ["Washers", "washers_kg"],
-			["Support beams & hardware", "support_kg"],
+			["Support beams & hardware", "support_kg"], ["Floor beams", "floor_kg"],
 			["Assembly hardware", "hardware_kg"], ["Solar Panels", "panels_kg"]]:
 		var kg := float(mass.get(pair[1], 0.0))
 		if kg > 0.0:

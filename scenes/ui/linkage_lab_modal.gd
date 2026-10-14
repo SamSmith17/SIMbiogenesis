@@ -155,6 +155,13 @@ var _fab_cache_key := ""
 var _crew_btn: Button = null
 var _crew_status: Label = null
 var _radial_vis: Dictionary = {}
+## Radial array controls (A3, `mode.radialArray`).
+var _ra: Dictionary = {}
+## Enclosure controls (A4): raised floor, coverings, shade tarps.
+var _fl: Dictionary = {}
+var _cv: Dictionary = {}
+var _sh: Dictionary = {}
+var _span_rows: Array = []
 var _rcp_vis: Dictionary = {}
 var _panels_vis: Dictionary = {}
 
@@ -179,6 +186,9 @@ var _faces_grid: GridContainer = null
 # Right panel stats.
 var _stat_vals: Dictionary = {}
 var _anim_status_lbl: Label = null
+## The build-steps dock under the 3D view (A5).
+const STEPS_PANEL_SCRIPT := preload("res://scenes/ui/linkage_steps_panel.gd")
+var _steps_panel: PanelContainer = null
 
 # Save/load overlays + file dialogs.
 var _save_overlay: Control = null
@@ -273,6 +283,8 @@ func close() -> void:
 		return
 	_active = false
 	_anim_playing = false
+	if _steps_panel != null:
+		_steps_panel.call("close")
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
@@ -545,6 +557,9 @@ func _build_topbar() -> Control:
 	bar.add_child(_btn_apply_prop)
 	bar.add_child(_vsep())
 
+	var btn_steps := _topbar_btn("🎬 Steps", "Build steps — play the fabrication + assembly sequence, edit it, save it with the design")
+	btn_steps.pressed.connect(toggle_steps)
+	bar.add_child(btn_steps)
 	var btn_guide := _topbar_btn("📋", "Build guide — BOM, cut list, drill templates, assembly sequence")
 	btn_guide.pressed.connect(_on_build_guide_pressed)
 	bar.add_child(btn_guide)
@@ -769,6 +784,10 @@ func _build_sidebar() -> Control:
 
 	_build_support_beams_group(side)
 	_build_solar_panels_group(side)
+	_build_radial_group(side)
+	_build_floor_group(side)
+	_build_coverings_group(side)
+	_build_shade_group(side)
 
 	# Animation / visibility settings.
 	var anim := _group(side, "Animation Settings", true)
@@ -816,6 +835,425 @@ func _build_support_beams_group(side: Control) -> void:
 	_sb["par_v_offset"] = _labeled_spin(g, "A/B Vertical Offset (in)", -12.0, 12.0, 0.01, -1.66)
 	_sb["par_offset_v"] = _labeled_spin(g, "RCP Height Offset (in)", -12.0, 12.0, 0.01, 4.5)
 	_sb["rcp_end_offset"] = _labeled_spin(g, "RCP End Overhang (in)", 0.0, 48.0, 0.1, 0.0)
+
+
+# --- Radial Array group (LinkageRadialArray, A3) ---
+
+func _build_radial_group(side: Control) -> void:
+	var g := _group(side, "Radial Array", true)
+	var hint := Label.new()
+	hint.text = "Copies of the whole structure round a centre: a honeycomb of rings, or arches sweeping a bent tunnel."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_color_override("font_color", C_TEXT_M)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	g.add_child(hint)
+	_ra["enabled"] = _check(g, "Enable Radial Array", false)
+	_ra["count"] = _labeled_spin(g, "Copies Round The Ring", 1.0, 12.0, 1.0, 6.0)
+	_ra["center"] = _check(g, "Keep A Copy At The Centre", true)
+	_ra["rotateCopies"] = _check(g, "Rotate Each Copy With The Ring", true)
+	_ra["radiusAuto"] = _check(g, "Auto Ring Radius (copies touch)", true)
+	_ra["radius"] = _labeled_spin(g, "Ring Radius (in)", 0.0, 2000.0, 0.5, 0.0)
+	_ra["spacing"] = _labeled_spin(g, "Extra Spacing (in)", -120.0, 480.0, 0.1, 0.0)
+	_ra["startAngle"] = _labeled_spin(g, "Start Angle (°)", -180.0, 180.0, 0.5, 0.0)
+	_ra["spin"] = _labeled_spin(g, "Spin Each Copy (°)", -180.0, 180.0, 0.5, 0.0)
+	_ra["heightOffset"] = _labeled_spin(g, "Ring Height Offset (in)", -240.0, 240.0, 0.5, 0.0)
+	_ra["sequential"] = _check(g, "Fold Copies One At A Time", false)
+	var hl := Label.new()
+	hl.text = "Hidden copies (slot numbers, e.g. 3, 5)"
+	hl.add_theme_color_override("font_color", C_TEXT_S)
+	hl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	g.add_child(hl)
+	var le := LineEdit.new()
+	le.placeholder_text = "none"
+	le.text_submitted.connect(func(_t: String) -> void: _on_param_changed())
+	le.focus_exited.connect(func() -> void: _on_param_changed())
+	g.add_child(le)
+	_ra["hiddenSlots"] = le
+	_ra["readout"] = Label.new()
+	(_ra["readout"] as Label).add_theme_color_override("font_color", C_TEXT_M)
+	(_ra["readout"] as Label).add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	(_ra["readout"] as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	g.add_child(_ra["readout"])
+
+
+func _read_radial_params() -> void:
+	if _ra.is_empty():
+		return
+	var hidden: Array = []
+	for bit in (_ra["hiddenSlots"] as LineEdit).text.replace(";", ",").split(",", false):
+		var t := bit.strip_edges()
+		if t.is_valid_int() and int(t) >= 0 and not hidden.has(int(t)):
+			hidden.append(int(t))
+	LinkageRadialArray.set_config(params, {
+		"enabled": (_ra["enabled"] as CheckBox).button_pressed,
+		"count": int((_ra["count"] as SpinBox).value),
+		"center": (_ra["center"] as CheckBox).button_pressed,
+		"rotateCopies": (_ra["rotateCopies"] as CheckBox).button_pressed,
+		"radiusAuto": (_ra["radiusAuto"] as CheckBox).button_pressed,
+		"radius": (_ra["radius"] as SpinBox).value,
+		"spacing": (_ra["spacing"] as SpinBox).value,
+		"startAngle": (_ra["startAngle"] as SpinBox).value,
+		"spin": (_ra["spin"] as SpinBox).value,
+		"heightOffset": (_ra["heightOffset"] as SpinBox).value,
+		"hiddenSlots": hidden})
+	LinkageFoldSequence.set_sequential(params, (_ra["sequential"] as CheckBox).button_pressed)
+
+
+func _sync_radial_controls() -> void:
+	if _ra.is_empty():
+		return
+	var c := LinkageRadialArray.config(params)
+	(_ra["enabled"] as CheckBox).button_pressed = bool(c["enabled"])
+	(_ra["count"] as SpinBox).value = int(c["count"])
+	(_ra["center"] as CheckBox).button_pressed = bool(c["center"])
+	(_ra["rotateCopies"] as CheckBox).button_pressed = bool(c["rotateCopies"])
+	(_ra["radiusAuto"] as CheckBox).button_pressed = bool(c["radiusAuto"])
+	(_ra["radius"] as SpinBox).value = float(c["radius"])
+	(_ra["spacing"] as SpinBox).value = float(c["spacing"])
+	(_ra["startAngle"] as SpinBox).value = float(c["startAngle"])
+	(_ra["spin"] as SpinBox).value = float(c["spin"])
+	(_ra["heightOffset"] as SpinBox).value = float(c["heightOffset"])
+	var hs: PackedStringArray = []
+	for v in c["hiddenSlots"]:
+		hs.append(str(int(v)))
+	(_ra["hiddenSlots"] as LineEdit).text = ", ".join(hs)
+	(_ra["sequential"] as CheckBox).button_pressed = LinkageFoldSequence.is_sequential(params)
+	_update_radial_readout()
+
+
+func _update_radial_readout() -> void:
+	if _ra.is_empty():
+		return
+	var pl := LinkageRadialArray.deployed_plan(params)
+	var lbl := _ra["readout"] as Label
+	if pl.is_empty():
+		lbl.text = "Off — a single structure."
+		return
+	lbl.text = "%d copies drawn (%d planned, slots 0–%d) · ring radius %s · pattern across %s" % [
+		int(pl["visible_count"]), (pl["slots"] as Array).size(), (pl["slots"] as Array).size() - 1,
+		_fmt_len(float(pl["radius"])),
+		_fmt_len(2.0 * float((_builder.last_frame() if _builder != null else {}).get("max_rad", 0.0)))]
+	var sc: Dictionary = _builder.fold_schedule() if _builder != null else {}
+	if not sc.is_empty():
+		var moving := int(sc["active_index"])
+		lbl.text += "\nFolding one at a time: %s %s" % [
+			str((sc["copies"] as Array)[moving]["label"]) if moving >= 0 else "—",
+			"moving" if moving >= 0 and float(sc["copies"][moving]["progress"]) > 0.0
+				and float(sc["copies"][moving]["progress"]) < 1.0 else "(at rest)"]
+
+
+# --- Enclosure groups (A4): raised floor, coverings, shade tarps ---
+
+func _hint(parent: Control, text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.add_theme_color_override("font_color", C_TEXT_M)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	parent.add_child(l)
+
+
+## A labelled dropdown whose items carry ids: items = [[id, label], ...].
+func _choice(parent: Control, label: String, items: Array) -> OptionButton:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	parent.add_child(row)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.focus_mode = Control.FOCUS_NONE
+	opt.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	for i in items.size():
+		opt.add_item(str(items[i][1]))
+		opt.set_item_metadata(i, items[i][0])
+	opt.item_selected.connect(func(_i: int) -> void: _on_param_changed())
+	row.add_child(opt)
+	return opt
+
+
+static func _choice_id(opt: OptionButton) -> String:
+	return str(opt.get_item_metadata(opt.selected)) if opt.selected >= 0 else ""
+
+
+static func _choice_set(opt: OptionButton, id: String) -> void:
+	for i in opt.item_count:
+		if str(opt.get_item_metadata(i)) == id:
+			opt.select(i)
+			return
+
+
+func _build_floor_group(side: Control) -> void:
+	var g := _group(side, "Raised Floor", true)
+	_hint(g, "Reciprocal floor beams on the bottom ring and a plywood deck on top (cylinder mode).")
+	_fl["enabled"] = _check(g, "Enable Raised Floor", false)
+	_fl["parallelEnabled"] = _check(g, "Reciprocal Floor Beams", true)
+	_fl["parallelLength"] = _labeled_spin(g, "Floor Beam Length (in)", 1.0, 2400.0, 0.5, 96.0)
+	_fl["parallelWidth"] = _labeled_spin(g, "Floor Beam Width (in)", 0.25, 48.0, 0.125, 2.5)
+	_fl["parallelThickness"] = _labeled_spin(g, "Floor Beam Thickness (in)", 0.25, 48.0, 0.125, 1.5)
+	_fl["parallelSwingAngle"] = _labeled_spin(g, "Swing Angle (°)", -360.0, 360.0, 0.5, 0.0)
+	_fl["anchorDist"] = _labeled_spin(g, "Anchor Along Leg (in)", -1200.0, 1200.0, 0.25, 20.0)
+	_fl["parallelOffsetV"] = _labeled_spin(g, "Vertical Shift (in)", -1200.0, 1200.0, 0.125, 0.0)
+	_fl["seat"] = _choice(g, "Seat", [["leg", "On each scissor leg"], ["ringTop", "On the ring's top face"]])
+	_fl["radialEnabled"] = _check(g, "Radial Floor Beams", false)
+	_fl["deck"] = _check(g, "Plywood Deck", true)
+	_fl["deckThickness"] = _labeled_spin(g, "Deck Thickness (in)", 0.125, 6.0, 0.0625, 0.75)
+	_fl["deckInset"] = _labeled_spin(g, "Deck Inset (in)", -100.0, 100.0, 0.125, 0.5)
+	_fl["showBeams"] = _check(g, "Show Floor Beams", true)
+	_fl["showDeck"] = _check(g, "Show Deck", true)
+
+
+func _build_coverings_group(side: Control) -> void:
+	var g := _group(side, "Coverings (Walls / Tables / Fabric)", true)
+	_hint(g, "Plywood or fabric between the uprights, in a lower and an upper band, with optional tables (cylinder mode).")
+	_cv["enabled"] = _check(g, "Enable Coverings", false)
+	var leans := [["inward", "Follow inward beams"], ["outward", "Follow outward beams"], ["vertical", "Vertical"], ["custom", "Custom tilt"]]
+	_cv["lowerLean"] = _choice(g, "Lower Band Lean", leans)
+	_cv["upperLean"] = _choice(g, "Upper Band Lean", leans)
+	_cv["splitHeightIn"] = _labeled_spin(g, "Split Height (in)", -1200.0, 1200.0, 0.25, 48.0)
+	_cv["bottomIn"] = _labeled_spin(g, "Bottom (in)", -1200.0, 1200.0, 0.25, 0.0)
+	_cv["bottomMode"] = _choice(g, "Bottom From", [["ground", "The ground"], ["floor", "The floor deck"]])
+	_cv["mount"] = _choice(g, "Mount", [["outside", "Outside the beams"], ["centerline", "On the centreline"], ["inside", "Inside the beams"]])
+	_cv["sheet"] = _choice(g, "Sheet Stock", [["4x8", "4 × 8 ft"], ["5x5", "5 × 5 ft"], ["4x10", "4 × 10 ft"]])
+	_cv["sheetThickness"] = _labeled_spin(g, "Sheet Thickness (in)", 0.125, 3.0, 0.0625, 0.5)
+	_cv["tableDepth"] = _labeled_spin(g, "Table Depth (in)", 1.0, 240.0, 0.5, 24.0)
+	var all_row := HBoxContainer.new()
+	all_row.add_theme_constant_override("separation", 4)
+	g.add_child(all_row)
+	var all_lbl := Label.new()
+	all_lbl.text = "Every span:"
+	all_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	all_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	all_row.add_child(all_lbl)
+	for pair in [["Plywood", "plywood"], ["Fabric", "fabric"], ["Clear", "none"]]:
+		var b := Button.new()
+		b.text = pair[0]
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		UITheme.style_button(b)
+		var kind: String = pair[1]
+		b.pressed.connect(func() -> void: _set_all_spans(kind))
+		all_row.add_child(b)
+	_cv["spans_box"] = VBoxContainer.new()
+	g.add_child(_cv["spans_box"])
+	_cv["readout"] = Label.new()
+	(_cv["readout"] as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	(_cv["readout"] as Label).add_theme_color_override("font_color", C_TEXT_M)
+	(_cv["readout"] as Label).add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	g.add_child(_cv["readout"])
+
+
+func _build_shade_group(side: Control) -> void:
+	var g := _group(side, "Roof Shade Tarps", true)
+	_hint(g, "One tarp per module, laid from the outer pivots toward the centre, overlapping in the middle.")
+	_sh["enabled"] = _check(g, "Enable Shade Tarps", false)
+	_sh["widthMode"] = _choice(g, "Width", [["auto", "Outer pivot distance"], ["custom", "Custom"]])
+	_sh["widthIn"] = _labeled_spin(g, "Custom Width (in)", 1.0, 2400.0, 0.5, 120.0)
+	_sh["widthTrimIn"] = _labeled_spin(g, "Width Trim (in)", -1200.0, 1200.0, 0.25, 0.0)
+	_sh["lengthMode"] = _choice(g, "Length", [["auto", "Edge to centre + overlap"], ["custom", "Custom"]])
+	_sh["lengthIn"] = _labeled_spin(g, "Custom Length (in)", 1.0, 2400.0, 0.5, 240.0)
+	_sh["centerOverlapIn"] = _labeled_spin(g, "Centre Overlap (in)", -1200.0, 1200.0, 0.5, 12.0)
+	_sh["overhangIn"] = _labeled_spin(g, "Overhang (in)", -1200.0, 1200.0, 0.5, 6.0)
+	_sh["rotationDeg"] = _labeled_spin(g, "Rotate Array (°)", -360.0, 360.0, 0.5, 0.0)
+	_sh["staggerIn"] = _labeled_spin(g, "Lift Every Second (in)", -1200.0, 1200.0, 0.25, 0.0)
+	_sh["liftIn"] = _labeled_spin(g, "Lift (in)", -1200.0, 1200.0, 0.25, 2.0)
+	var sw: Array = []
+	for d in LinkageShadeCloth.SWATCHES:
+		sw.append([d["color"], d["name"]])
+	_sh["color"] = _choice(g, "Colour", sw)
+	_sh["opacity"] = _labeled_spin(g, "Opacity", 0.05, 1.0, 0.05, 0.75)
+	_sh["readout"] = Label.new()
+	(_sh["readout"] as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	(_sh["readout"] as Label).add_theme_color_override("font_color", C_TEXT_M)
+	(_sh["readout"] as Label).add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	g.add_child(_sh["readout"])
+
+
+## One row per span: lower / upper cover + a table.
+func _rebuild_span_rows(n: int) -> void:
+	var box := _cv.get("spans_box") as VBoxContainer
+	if box == null:
+		return
+	if _span_rows.size() == n:
+		return
+	for c in box.get_children():
+		c.queue_free()
+	_span_rows.clear()
+	var covers := [["none", "—"], ["plywood", "Plywood"], ["fabric", "Fabric"]]
+	for i in n:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		box.add_child(row)
+		var lbl := Label.new()
+		lbl.text = "Span %d" % (i + 1)
+		lbl.custom_minimum_size.x = 52
+		lbl.add_theme_color_override("font_color", C_TEXT_S)
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		row.add_child(lbl)
+		var lower := OptionButton.new()
+		var upper := OptionButton.new()
+		for opt in [lower, upper]:
+			opt.focus_mode = Control.FOCUS_NONE
+			opt.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			for j in covers.size():
+				opt.add_item(str(covers[j][1]))
+				opt.set_item_metadata(j, covers[j][0])
+			opt.item_selected.connect(func(_k: int) -> void: _on_param_changed())
+			row.add_child(opt)
+		lower.tooltip_text = "Lower band"
+		upper.tooltip_text = "Upper band"
+		var table := CheckBox.new()
+		table.text = "Table"
+		table.focus_mode = Control.FOCUS_NONE
+		table.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		table.toggled.connect(func(_p: bool) -> void: _on_param_changed())
+		row.add_child(table)
+		_span_rows.append({"lower": lower, "upper": upper, "table": table})
+
+
+func _set_all_spans(kind: String) -> void:
+	if not (_cv["enabled"] as CheckBox).button_pressed:
+		(_cv["enabled"] as CheckBox).set_pressed_no_signal(true)
+	for r in _span_rows:
+		_choice_set(r["lower"], kind)
+		_choice_set(r["upper"], "none" if kind == "none" else kind)
+	_on_param_changed()
+
+
+## Write the controls into the config, over the normalised current values
+## so keys the UI does not show survive. A design that never had a feature
+## and leaves it at its defaults gets no key written.
+func _read_enclosure_params() -> void:
+	if _fl.is_empty():
+		return
+	var fl := LinkageFloor.config(params)
+	fl["enabled"] = (_fl["enabled"] as CheckBox).button_pressed
+	var fb: Dictionary = fl["beams"]
+	fb["parallelEnabled"] = (_fl["parallelEnabled"] as CheckBox).button_pressed
+	for k in ["parallelLength", "parallelWidth", "parallelThickness", "parallelSwingAngle", "anchorDist", "parallelOffsetV"]:
+		fb[k] = (_fl[k] as SpinBox).value
+	fb["seat"] = _choice_id(_fl["seat"])
+	fb["radialEnabled"] = (_fl["radialEnabled"] as CheckBox).button_pressed
+	fl["deck"]["enabled"] = (_fl["deck"] as CheckBox).button_pressed
+	fl["deck"]["thicknessIn"] = (_fl["deckThickness"] as SpinBox).value
+	fl["deck"]["insetIn"] = (_fl["deckInset"] as SpinBox).value
+	fl["visibility"] = {"beams": (_fl["showBeams"] as CheckBox).button_pressed, "deck": (_fl["showDeck"] as CheckBox).button_pressed}
+	_store_feature("floor", fl, LinkageFloor.normalize(null), func(c): LinkageFloor.set_config(params, c))
+
+	var cv := LinkageCoverings.config(params)
+	cv["enabled"] = (_cv["enabled"] as CheckBox).button_pressed
+	for k in ["lowerLean", "upperLean", "bottomMode", "mount"]:
+		cv[k] = _choice_id(_cv[k])
+	cv["splitHeightIn"] = (_cv["splitHeightIn"] as SpinBox).value
+	cv["bottomIn"] = (_cv["bottomIn"] as SpinBox).value
+	var preset: Dictionary = LinkageCoverings.SHEET_PRESETS.get(_choice_id(_cv["sheet"]), {})
+	if not preset.is_empty():
+		cv["sheet"]["widthIn"] = float(preset["widthIn"])
+		cv["sheet"]["lengthIn"] = float(preset["lengthIn"])
+	cv["sheet"]["thicknessIn"] = (_cv["sheetThickness"] as SpinBox).value
+	cv["table"]["depthIn"] = (_cv["tableDepth"] as SpinBox).value
+	var spans: Array = []
+	for r in _span_rows:
+		spans.append({"lower": _choice_id(r["lower"]), "upper": _choice_id(r["upper"]),
+			"table": (r["table"] as CheckBox).button_pressed})
+	if not spans.is_empty():
+		cv["spans"] = spans
+	_store_feature("coverings", cv, LinkageCoverings.normalize(null, params.modules), func(c): LinkageCoverings.set_config(params, c))
+
+	var sh := LinkageShadeCloth.config(params)
+	sh["enabled"] = (_sh["enabled"] as CheckBox).button_pressed
+	sh["widthMode"] = _choice_id(_sh["widthMode"])
+	sh["lengthMode"] = _choice_id(_sh["lengthMode"])
+	for k in ["widthIn", "widthTrimIn", "lengthIn", "centerOverlapIn", "overhangIn", "rotationDeg", "staggerIn", "liftIn", "opacity"]:
+		sh[k] = (_sh[k] as SpinBox).value
+	sh["color"] = _choice_id(_sh["color"])
+	_store_feature("shadeCloth", sh, LinkageShadeCloth.normalize(null), func(c): LinkageShadeCloth.set_config(params, c))
+
+
+func _store_feature(key: String, cfg: Dictionary, defaults: Dictionary, setter: Callable) -> void:
+	if not params.extra.has(key) and JSON.stringify(cfg) == JSON.stringify(defaults):
+		return
+	setter.call(cfg)
+
+
+func _sync_enclosure_controls() -> void:
+	if _fl.is_empty():
+		return
+	var fl := LinkageFloor.config(params)
+	var fb: Dictionary = fl["beams"]
+	(_fl["enabled"] as CheckBox).button_pressed = bool(fl["enabled"])
+	(_fl["parallelEnabled"] as CheckBox).button_pressed = bool(fb["parallelEnabled"])
+	for k in ["parallelLength", "parallelWidth", "parallelThickness", "parallelSwingAngle", "anchorDist", "parallelOffsetV"]:
+		(_fl[k] as SpinBox).value = float(fb[k])
+	_choice_set(_fl["seat"], str(fb["seat"]))
+	(_fl["radialEnabled"] as CheckBox).button_pressed = bool(fb["radialEnabled"])
+	(_fl["deck"] as CheckBox).button_pressed = bool(fl["deck"]["enabled"])
+	(_fl["deckThickness"] as SpinBox).value = float(fl["deck"]["thicknessIn"])
+	(_fl["deckInset"] as SpinBox).value = float(fl["deck"]["insetIn"])
+	(_fl["showBeams"] as CheckBox).button_pressed = bool(fl["visibility"]["beams"])
+	(_fl["showDeck"] as CheckBox).button_pressed = bool(fl["visibility"]["deck"])
+
+	var cv := LinkageCoverings.config(params)
+	(_cv["enabled"] as CheckBox).button_pressed = bool(cv["enabled"])
+	for k in ["lowerLean", "upperLean", "bottomMode", "mount"]:
+		_choice_set(_cv[k], str(cv[k]))
+	(_cv["splitHeightIn"] as SpinBox).value = float(cv["splitHeightIn"])
+	(_cv["bottomIn"] as SpinBox).value = float(cv["bottomIn"])
+	var sheet_id := "4x8"
+	for pid in LinkageCoverings.SHEET_PRESETS:
+		var ps: Dictionary = LinkageCoverings.SHEET_PRESETS[pid]
+		if is_equal_approx(float(ps["widthIn"]), float(cv["sheet"]["widthIn"])) and is_equal_approx(float(ps["lengthIn"]), float(cv["sheet"]["lengthIn"])):
+			sheet_id = pid
+	_choice_set(_cv["sheet"], sheet_id)
+	(_cv["sheetThickness"] as SpinBox).value = float(cv["sheet"]["thicknessIn"])
+	(_cv["tableDepth"] as SpinBox).value = float(cv["table"]["depthIn"])
+	_rebuild_span_rows(params.modules)
+	for i in _span_rows.size():
+		var sp: Dictionary = cv["spans"][i] if i < (cv["spans"] as Array).size() else LinkageCoverings.default_span()
+		_choice_set(_span_rows[i]["lower"], str(sp["lower"]))
+		_choice_set(_span_rows[i]["upper"], str(sp["upper"]))
+		(_span_rows[i]["table"] as CheckBox).set_pressed_no_signal(bool(sp["table"]))
+
+	var sh := LinkageShadeCloth.config(params)
+	(_sh["enabled"] as CheckBox).button_pressed = bool(sh["enabled"])
+	_choice_set(_sh["widthMode"], str(sh["widthMode"]))
+	_choice_set(_sh["lengthMode"], str(sh["lengthMode"]))
+	for k in ["widthIn", "widthTrimIn", "lengthIn", "centerOverlapIn", "overhangIn", "rotationDeg", "staggerIn", "liftIn", "opacity"]:
+		(_sh[k] as SpinBox).value = float(sh[k])
+	_choice_set(_sh["color"], str(sh["color"]))
+	_update_enclosure_readout()
+
+
+func _update_enclosure_readout() -> void:
+	if _cv.is_empty() or _builder == null:
+		return
+	var walls: Array = _builder.last_walls()
+	var n_wall := 0
+	var n_fab := 0
+	var n_table := 0
+	var n_tarp := 0
+	for w in walls:
+		match str(w.get("kind", "")):
+			"wall":
+				if str(w.get("band", "")) != "floor":
+					n_wall += 1
+			"fabric":
+				n_fab += 1
+			"table":
+				n_table += 1
+			"shade":
+				n_tarp += 1
+	var cv := LinkageCoverings.config(params)
+	if params.orientation == "vertical" and (bool(cv["enabled"]) or bool(LinkageShadeCloth.config(params)["enabled"])):
+		(_cv["readout"] as Label).text = "Coverings and tarps are cylinder-mode only."
+	else:
+		(_cv["readout"] as Label).text = "%d plywood wall%s · %d fabric band%s · %d table%s drawn" % [
+			n_wall, "" if n_wall == 1 else "s", n_fab, "" if n_fab == 1 else "s", n_table, "" if n_table == 1 else "s"]
+	(_sh["readout"] as Label).text = "%d tarp%s drawn" % [n_tarp, "" if n_tarp == 1 else "s"]
 
 
 # --- Solar Panels group (full layout system) ---
@@ -1239,7 +1677,16 @@ func _build_center() -> Control:
 	_viewport.own_world_3d = true
 	vp_container.add_child(_viewport)
 	_build_studio_world()
-	return vp_container
+	var col := VBoxContainer.new()
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 6)
+	col.add_child(vp_container)
+	_steps_panel = STEPS_PANEL_SCRIPT.new()
+	_steps_panel.name = "StepsPanel"
+	_steps_panel.call("bind", self)
+	col.add_child(_steps_panel)
+	return col
 
 
 func _build_studio_world() -> void:
@@ -1604,8 +2051,8 @@ func _on_save_confirm() -> void:
 	if design_name.is_empty():
 		return
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(USER_DESIGN_DIR))
+	params.design_name = design_name
 	var cfg := params.to_config()
-	cfg["name"] = design_name
 	var fname := design_name.validate_filename() + ".json"
 	var f := FileAccess.open(USER_DESIGN_DIR + fname, FileAccess.WRITE)
 	if f != null:
@@ -1775,6 +2222,8 @@ func _set_fold_angle(angle_rad: float) -> void:
 	_fold_spin.value = _fold_slider.value
 	_suppress = false
 	_update_stats()
+	if _builder != null and not _builder.fold_schedule().is_empty():
+		_update_radial_readout()
 
 
 func _on_struct_rot_changed(v: float) -> void:
@@ -1818,6 +2267,8 @@ func _sel_meta_f(opt: OptionButton, fallback: float) -> float:
 func _read_params() -> void:
 	params.show_brackets = _brackets_chk.button_pressed
 	params.show_bolts = _bolts_chk.button_pressed
+	_read_radial_params()
+	_read_enclosure_params()
 	params.orientation = "vertical" if _orientation_opt.selected == 1 else "horizontal"
 	params.arch_cap_uprights = _cap_chk.button_pressed
 	params.use_fixed_beams = _fixed_chk.button_pressed
@@ -1998,6 +2449,8 @@ func _sync_controls() -> void:
 	_stop_spin.value = params.animation_stop_angle if params.animation_stop_angle >= 0.0 \
 		else rad_to_deg(_builder.closed_angle() if _builder != null else deg_to_rad(135.0))
 	_brackets_chk.button_pressed = params.show_brackets
+	_sync_radial_controls()
+	_sync_enclosure_controls()
 	_bolts_chk.button_pressed = params.show_bolts
 	_orientation_opt.select(1 if params.orientation == "vertical" else 0)
 	_cap_chk.button_pressed = params.arch_cap_uprights
@@ -2190,6 +2643,21 @@ func _apply_params(fit_camera: bool) -> void:
 		_fit_camera()
 	_update_ortho_cams()
 	_update_stats()
+	_update_radial_readout()
+	_update_enclosure_readout()
+	if _steps_panel != null:
+		_steps_panel.call("on_params_changed")
+
+
+## Show / hide the build-steps dock (playback seats every part on exit).
+func toggle_steps() -> void:
+	if _steps_panel != null:
+		_anim_playing = false
+		_steps_panel.call("toggle")
+
+
+func steps_panel() -> PanelContainer:
+	return _steps_panel
 
 
 func _fit_camera() -> void:
@@ -2417,7 +2885,7 @@ func _on_queue_crew_build() -> void:
 				overrides[tid] = {"effect": {"op": "set_build_phase",
 					"prop_id": crate_id, "phase": tid}}
 	var target := {"kind": "prop", "id": crate_id}
-	var project_id := str(bridge.call("create_site_project", iid,
+	var project_id: String = str(bridge.call("create_site_project", iid,
 		SiteProject.KIND_LINKAGE_BUILD, "Build: %s" % _design_label(),
 		crate_id, _crate_site(scene, crate_id),
 		NpcCrewPlan.chore_specs(tasks, sched, overrides),
@@ -2432,6 +2900,11 @@ func _on_queue_crew_build() -> void:
 	if project_id.is_empty():
 		_crew_status.text = "Chore board is full — clear some chores first."
 		return
+	# The structure goes up as the crew's labour does: the per-worker build
+	# timeline stages it, and the people working it are drawn on their lanes.
+	PlacedPropService.update_prop_record(scene, crate_id, {LinkageBuildSite.RECORD_KEY: {
+		"mode": "labour", "iid": iid, "project_id": project_id,
+		"crew_n": mini(roster, LinkageBuildSite.MAX_LABOUR_LANES)}}, true)
 	var eta_txt := "%.1f h of crew time" % (float(sched["makespan_s"]) / 3600.0) \
 		if bool(sched["feasible"]) else "raise waits for a bigger crew"
 	# No auto-jump: close the Lab and offer a Watch chip (opens the settlement
@@ -2461,6 +2934,5 @@ func _crate_site(scene: Node, crate_id: String) -> Vector2:
 
 
 func _design_label() -> String:
-	var n := str(params.to_config().get("designName", "")) \
-		if params != null else ""
+	var n := params.design_name if params != null else ""
 	return n if not n.is_empty() else "Linkage structure"

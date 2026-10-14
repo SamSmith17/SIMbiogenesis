@@ -22,6 +22,8 @@ const BRACKET_COLOR := Color(0.62, 0.64, 0.67)
 const BOLT_COLOR := Color(0.35, 0.36, 0.38)
 const PANEL_FRAME_COLOR := Color(0.12, 0.12, 0.14)
 const PANEL_CELL_COLOR := Color(25.0 / 255.0, 50.0 / 255.0, 120.0 / 255.0)
+const PLYWOOD_COLOR := Color(0.80, 0.66, 0.47)
+const FABRIC_COLOR := Color(0.86, 0.84, 0.76)
 
 ## ModelCatalog procedural id (world placement via PlacedPropService).
 const MODEL_ID := "linkage_structure"
@@ -41,10 +43,39 @@ var _bolt_mm: MultiMeshInstance3D
 var _bolt_head_mm: MultiMeshInstance3D
 var _panel_mm: MultiMeshInstance3D
 var _support_mm: MultiMeshInstance3D
+var _washer_mm: MultiMeshInstance3D
+## Raised-floor beams (LinkageFloor, A4): their own MultiMesh so support stats
+## and the support reveal stay what they were.
+var _floor_mm: MultiMeshInstance3D
+## Coverings (the floor deck now; walls / tables / tarps later): one keyed
+## MeshInstance3D each under "Coverings", so a build step can hide or move one.
+var _cover_root: Node3D
+var _wall_nodes: Dictionary = {}
+var _plywood_mat: StandardMaterial3D
+var _fabric_mat: StandardMaterial3D
+var _shade_mat: StandardMaterial3D
+var _shade_key := ""
+
+## Per-part render state for build steps (LINKAGE_PARITY.md A1), keyed by
+## LinkagePartKeys part keys: {visible: bool, offset: Transform3D}. `offset`
+## is in the builder's local metres and is applied on the LEFT of the part's
+## seated transform. Empty = every part seated and shown (the normal state).
+var _part_state: Dictionary = {}
+## mm name -> PackedStringArray of part keys, one per instance, rebuilt on
+## every (re)allocation. Bolt heads use the bolt's key (two per bolt).
+var _instance_keys: Dictionary = {}
+## Part key -> joint key (LinkagePartKeys.joint_key) for joint hardware:
+## brackets, bolts, washers. A build timeline that keys hardware by joint
+## (the web app's detailed placements vs this builder's simple brackets)
+## reaches these through it.
+var _joint_of: Dictionary = {}
 
 var _last_frame: Dictionary = {}
 var _last_support: Array = []
 var _last_panels: Array = []
+var _last_floor: Array = []
+var _last_walls: Array = []
+var _last_schedule: Dictionary = {}
 var _fold_angle := -1.0
 var _closed_angle_cache := NAN
 var _closed_angle_key := ""
@@ -86,6 +117,8 @@ func _ensure_materials() -> void:
 	_bracket_mat = StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, BRACKET_COLOR, true)
 	_bolt_mat = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, BOLT_COLOR, true)
 	_panel_mat = StructureMaterials.make(StructureMaterials.Kind.PANEL, PANEL_CELL_COLOR, true)
+	_plywood_mat = (StructureMaterials.make(StructureMaterials.Kind.WOOD, PLYWOOD_COLOR, true) as StandardMaterial3D).duplicate()
+	_plywood_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 
 ## Factory for world placement (ModelCatalog procedural branch): builds a
@@ -119,8 +152,9 @@ func rebuild() -> void:
 	_free_multimeshes()
 	_fold_angle = clampf(params.fold_angle, LinkageKinematics.MIN_FOLD_ANGLE, LinkageKinematics.MAX_FOLD_ANGLE)
 	var frame := LinkageSolver.solve(params, _fold_angle)
-	_last_frame = frame
 	_compute_extras(frame)
+	frame = _apply_radial(frame)
+	_last_frame = frame
 	_allocate_from_frame(frame)
 	_write_frame_transforms(frame)
 	if collision_mesh_enabled:
@@ -136,28 +170,120 @@ func set_fold_angle(angle_rad: float) -> void:
 	_fold_angle = clamped
 	params.fold_angle = clamped
 	var frame := LinkageSolver.solve(params, clamped)
-	_last_frame = frame
 	_compute_extras(frame)
+	frame = _apply_radial(frame)
+	_last_frame = frame
 	if _beam_mm == null or _count_mismatch(frame):
 		_free_multimeshes()
 		_allocate_from_frame(frame)
 	_write_frame_transforms(frame)
 
 
+## The radial array (LinkageRadialArray, A3): every part of the single
+## structure — frame beams / brackets / bolts / washers, supports, panels —
+## copied into each visible slot of the plan measured on the DEPLOYED pose,
+## so the copies fold in place. A frame unchanged when the array is off.
+func _apply_radial(frame: Dictionary) -> Dictionary:
+	var pl := LinkageRadialArray.deployed_plan(params)
+	if pl.is_empty():
+		return frame
+	var geo := {"beams": frame.get("beams", []),
+		"brackets": frame.get("brackets", []), "bolts": frame.get("bolts", []),
+		"washers": frame.get("washers", []), "supports": _last_support, "panels": _last_panels,
+		"floor": _last_floor, "walls": _last_walls}
+	# Sequential fold (LinkageFoldSequence): each copy at its own angle, one
+	# solve per distinct angle.
+	var sched := LinkageFoldSequence.for_params(params, _fold_angle)
+	var slot_geo := {}
+	if not sched.is_empty():
+		var by_angle := {}
+		for c in sched["copies"]:
+			var a := float(c["angle"])
+			if absf(a - _fold_angle) < 1e-9:
+				continue
+			var key := "%.9f" % a
+			if not by_angle.has(key):
+				by_angle[key] = _geo_at(a)
+			slot_geo[int(c["slot"])] = by_angle[key]
+	_last_schedule = sched
+	var res := LinkageRadialArray.apply(pl, geo, slot_geo)
+	var g: Dictionary = res["geo"]
+	var out := frame.duplicate()
+	for k in ["beams", "brackets", "bolts", "washers"]:
+		out[k] = g[k]
+	out["max_rad"] = float((res["plan"] as Dictionary).get("max_rad", frame.get("max_rad", 0.0)))
+	out["radial"] = res["plan"]
+	_last_support = g["supports"]
+	_last_panels = g["panels"]
+	_last_floor = g["floor"]
+	_last_walls = g["walls"]
+	return out
+
+
+## One structure's parts at `angle` (a sequential-fold copy's own pose).
+func _geo_at(angle: float) -> Dictionary:
+	var fr := LinkageSolver.solve(params, angle)
+	var fl := LinkageFloor.floor_beams(fr.get("beams", []), params, angle)
+	var sup := LinkageGeometry.support_beams(fr, params, angle)
+	return {"beams": fr.get("beams", []), "brackets": fr.get("brackets", []),
+		"bolts": fr.get("bolts", []), "washers": fr.get("washers", []),
+		"supports": sup,
+		"panels": LinkageGeometry.solar_panels(fr, params) if _panels_visible_at(angle) else [],
+		"floor": fl, "walls": _walls_for(fr.get("beams", []), sup, fl)}
+
+
+## The sequential-fold schedule of the current pose ({} when the copies fold
+## together).
+func fold_schedule() -> Dictionary:
+	return _last_schedule
+
+
 ## Support beams (visibility-gated by fold angle) + solar panels for a frame.
 func _compute_extras(frame: Dictionary) -> void:
 	_last_support = LinkageGeometry.support_beams(frame, params, _fold_angle)
+	_last_floor = LinkageFloor.floor_beams(frame.get("beams", []), params, _fold_angle)
+	_last_walls = _walls_for(frame.get("beams", []), _last_support, _last_floor)
 	_last_panels = LinkageGeometry.solar_panels(frame, params) if _panels_visible() else []
+
+
+## Covering records for one structure (A4, LinkageEnclosure): the walls /
+## fabric / tables, the floor deck and the shade tarps.
+func _walls_for(beams: Array, supports: Array, floor_beams: Array) -> Array:
+	if not _encloses():
+		return []
+	return LinkageEnclosure.compute(beams + supports + floor_beams, params)["walls"]
+
+
+## Whether any enclosure feature is on (skips the work for a bare frame).
+func _encloses() -> bool:
+	var ext := params.extra
+	for k in ["floor", "coverings", "shadeCloth"]:
+		var d = ext.get(k)
+		if d is Dictionary and bool((d as Dictionary).get("enabled", false)):
+			return true
+	return false
+
+
+func last_floor_beams() -> Array:
+	return _last_floor
+
+
+func last_walls() -> Array:
+	return _last_walls
 
 
 ## Panel visibility gate — port of the buildLinkageGeometry rule: user angle
 ## when set, else "at the closed/deploy angle" (closed − 2°).
 func _panels_visible() -> bool:
+	return _panels_visible_at(_fold_angle)
+
+
+func _panels_visible_at(angle: float) -> bool:
 	if not bool(params.solar_panels["enabled"]):
 		return false
 	var min_rad := deg_to_rad(params.panels_visible_angle) if params.panels_visible_angle >= 0.0 \
 		else closed_angle() - deg_to_rad(2.0)
-	return _fold_angle >= min_rad
+	return angle >= min_rad
 
 
 func get_fold_angle() -> float:
@@ -249,7 +375,8 @@ static func packed_spec_for(p: LinkageParams) -> Dictionary:
 	# frame (they are visibility-gated away at stow angles).
 	var closed: float = LinkageKinematics.optimal_closed_angle(p)
 	var deployed: Dictionary = LinkageSolver.solve(p, closed)
-	for sb in LinkageGeometry.support_beams(deployed, p, closed):
+	for sb in LinkageGeometry.support_beams(deployed, p, closed) \
+			+ LinkageFloor.floor_beams(deployed.get("beams", []), p, closed):
 		wood_in3 += float(sb["w"]) * float(sb["t"]) \
 			* (sb["p1"] as Vector3).distance_to(sb["p2"] as Vector3)
 	var mass := wood_in3 * in3_to_m3 * PackedSpec.WOOD_KG_M3
@@ -267,9 +394,14 @@ static func packed_spec_for(p: LinkageParams) -> Dictionary:
 		mass += LinkageBom.bolt_mass_kg(
 			float(bolt.get("radius", p.bolt_diameter / 2.0)) * 2.0,
 			float(bolt.get("length", 3.0)))
+	# A radial array ships as one folded bundle per visible copy (each copy is
+	# the same structure; PackedSpec mass is per unit). JS packs them in an
+	# IBC column for its glTF export (pack-layout.js); the game's packer
+	# places the units itself. An arch tunnel array is already in this frame.
+	var copies := int(LinkageBom.structure_copies(p)["radial"])
 	return PackedSpec.normalize({
 		"w_m": size_m.x, "d_m": size_m.y, "h_m": size_m.z,
-		"mass_kg": mass, "form": "folded", "source": "computed",
+		"mass_kg": mass, "form": "folded", "source": "computed", "count": copies,
 	})
 
 
@@ -307,6 +439,11 @@ func deployed_panel_summary() -> Dictionary:
 		return empty
 	var deployed_frame := LinkageSolver.solve(params, closed_angle())
 	var panels := LinkageGeometry.solar_panels(deployed_frame, params)
+	# A radial array carries every copy's panels (A3, bom.js totalKwAll); the
+	# average normal then spans the pattern's real orientations.
+	var rpl := LinkageRadialArray.deployed_plan(params)
+	if not rpl.is_empty() and not panels.is_empty():
+		panels = (LinkageRadialArray.apply(rpl, {"panels": panels})["geo"] as Dictionary).get("panels", panels)
 	if panels.is_empty():
 		return empty
 	var total := LinkageGeometry.total_watts(panels)
@@ -367,9 +504,12 @@ func frame_aabb() -> AABB:
 func _free_multimeshes() -> void:
 	# free() (not queue_free) so node-name lookups and reallocation within the
 	# same frame never hit a stale queued-for-deletion sibling.
-	for mm in [_beam_mm, _bracket_mm, _bolt_mm, _bolt_head_mm, _panel_mm, _support_mm]:
+	for mm in [_beam_mm, _bracket_mm, _bolt_mm, _bolt_head_mm, _panel_mm, _support_mm, _washer_mm, _floor_mm]:
 		if mm != null and is_instance_valid(mm):
 			mm.free()
+	_washer_mm = null
+	_floor_mm = null
+	_instance_keys.clear()
 	_beam_mm = null
 	_bracket_mm = null
 	_bolt_mm = null
@@ -398,12 +538,30 @@ func _count_mismatch(frame: Dictionary) -> bool:
 		return true
 	if _support_mm != null and _support_mm.multimesh.instance_count != support_count:
 		return true
+	var floor_count := _last_floor.size()
+	if (_floor_mm == null) != (floor_count == 0):
+		return true
+	if _floor_mm != null and _floor_mm.multimesh.instance_count != floor_count:
+		return true
 	var panel_count := _last_panels.size()
 	if (_panel_mm == null) != (panel_count == 0):
 		return true
 	if _panel_mm != null and _panel_mm.multimesh.instance_count != panel_count:
 		return true
+	var washer_count := _washer_count(frame)
+	if (_washer_mm == null) != (washer_count == 0):
+		return true
+	if _washer_mm != null and _washer_mm.multimesh.instance_count != washer_count:
+		return true
 	return false
+
+
+## Washers are drawn with the bolts (the solver emits them whenever washers
+## are enabled; the BOM counted them long before they were drawn).
+func _washer_count(frame: Dictionary) -> int:
+	if not params.show_bolts:
+		return 0
+	return (frame.get("washers", []) as Array).size()
 
 
 ## Render the whole frame translucent, for the hardware editor's part view.
@@ -424,8 +582,8 @@ func set_ghost_alpha(alpha: float) -> void:
 	_ghost_alpha = alpha
 	var solid := alpha >= 0.999
 	for pair in [[_beam_mm, _wood_mat], [_panel_mm, _panel_mat],
-			[_support_mm, _wood_mat], [_bracket_mm, _bracket_mat],
-			[_bolt_mm, _bolt_mat], [_bolt_head_mm, _bolt_mat]]:
+			[_support_mm, _wood_mat], [_floor_mm, _wood_mat], [_bracket_mm, _bracket_mat],
+			[_bolt_mm, _bolt_mat], [_bolt_head_mm, _bolt_mat], [_washer_mm, _bolt_mat]]:
 		var inst := pair[0] as MultiMeshInstance3D
 		if inst == null:
 			continue
@@ -465,8 +623,8 @@ var _reveal_shown: Dictionary = {}
 
 func _progress_pairs() -> Array:
 	return [[_beam_mm, "beams"], [_bracket_mm, "brackets"],
-		[_bolt_mm, "bolts"], [_bolt_head_mm, "bolts"],
-		[_support_mm, "supports"], [_panel_mm, "panels"]]
+		[_bolt_mm, "bolts"], [_bolt_head_mm, "bolts"], [_washer_mm, "bolts"],
+		[_support_mm, "supports"], [_floor_mm, "supports"], [_panel_mm, "panels"]]
 
 
 func _apply_build_progress() -> void:
@@ -605,8 +763,19 @@ func _allocate_from_frame(frame: Dictionary) -> void:
 		_bolt_head_mm = _make_mm_instance(head, bolt_count * 2, _bolt_mat, "BoltHeads")
 	if not _last_support.is_empty():
 		_support_mm = _make_mm_instance(BoxMesh.new(), _last_support.size(), _wood_mat, "SupportBeams")
+	if not _last_floor.is_empty():
+		_floor_mm = _make_mm_instance(BoxMesh.new(), _last_floor.size(), _wood_mat, "FloorBeams")
 	if not _last_panels.is_empty():
 		_panel_mm = _make_mm_instance(BoxMesh.new(), _last_panels.size(), _panel_mat, "SolarPanels")
+	var washer_count := _washer_count(frame)
+	if washer_count > 0:
+		var disc := CylinderMesh.new()
+		disc.top_radius = 1.0
+		disc.bottom_radius = 1.0
+		disc.height = 1.0
+		disc.radial_segments = 12
+		_washer_mm = _make_mm_instance(disc, washer_count, _bolt_mat, "Washers")
+	_index_part_keys(frame)
 	# Reallocation mints fresh instances carrying the SOLID material, so a
 	# ghosted structure would silently turn opaque on the next param change.
 	if _ghost_alpha < 0.999:
@@ -663,6 +832,12 @@ static func _add_box(st: SurfaceTool, center: Vector3, size: Vector3) -> void:
 # Transform writes
 # ---------------------------------------------------------------------------
 
+## The ground offset (metres) the current frame is drawn with: solver inches
+## x 0.0254 + this = builder-local.
+func ground_offset() -> float:
+	return _ground_offset_m()
+
+
 func _ground_offset_m() -> float:
 	# Lowest corner across all beams -> local Y 0 (inches source).
 	if _last_frame.is_empty():
@@ -709,44 +884,192 @@ static func panel_transform(panel: Dictionary, ground_offset_m: float) -> Transf
 
 func _write_frame_transforms(frame: Dictionary) -> void:
 	var ground := _ground_offset_m()
+	# Per-part state is looked up only when some part has one: the ordinary
+	# fold scrub writes every instance and must not pay a key lookup each.
+	var keyed := not _part_state.is_empty()
 
 	var beams: Array = frame["beams"]
 	if _beam_mm != null:
 		var mm: MultiMesh = _beam_mm.multimesh
+		var keys: PackedStringArray = _instance_keys.get("Beams", PackedStringArray())
 		for i in range(beams.size()):
-			mm.set_instance_transform(i, beam_transform(beams[i], ground))
+			var t := beam_transform(beams[i], ground)
+			mm.set_instance_transform(i, _apply_part_state(t, keys[i]) if keyed and i < keys.size() else t)
 
 	var brackets: Array = frame["brackets"]
 	if _bracket_mm != null:
 		var mm2: MultiMesh = _bracket_mm.multimesh
+		var keys2: PackedStringArray = _instance_keys.get("Brackets", PackedStringArray())
 		for i in range(brackets.size()):
-			mm2.set_instance_transform(i, bracket_transform(brackets[i], ground))
+			var t2 := bracket_transform(brackets[i], ground)
+			mm2.set_instance_transform(i, _apply_part_state(t2, keys2[i]) if keyed and i < keys2.size() else t2)
 
 	var bolts: Array = frame["bolts"]
 	if _bolt_mm != null:
 		var mm3: MultiMesh = _bolt_mm.multimesh
 		var mm4: MultiMesh = _bolt_head_mm.multimesh
 		var ground_v := Vector3(0.0, ground, 0.0)
+		var keys3: PackedStringArray = _instance_keys.get("Bolts", PackedStringArray())
 		for i in range(bolts.size()):
 			var bo: Dictionary = bolts[i]
 			var dir: Vector3 = (bo["dir"] as Vector3).normalized()
-			mm3.set_instance_transform(i, bolt_transform(bo, ground))
 			# Hex head + nut at the two ends.
 			var head_r := float(bo["head_radius"]) * INCH_TO_M
 			var head_h := float(bo["radius"]) * 1.2 * INCH_TO_M
 			var head_basis := _cylinder_basis(dir, head_r, head_h)
-			mm4.set_instance_transform(i * 2, Transform3D(head_basis, (bo["start"] as Vector3) * INCH_TO_M + ground_v))
-			mm4.set_instance_transform(i * 2 + 1, Transform3D(head_basis, (bo["end"] as Vector3) * INCH_TO_M + ground_v))
+			var t3 := bolt_transform(bo, ground)
+			var h0 := Transform3D(head_basis, (bo["start"] as Vector3) * INCH_TO_M + ground_v)
+			var h1 := Transform3D(head_basis, (bo["end"] as Vector3) * INCH_TO_M + ground_v)
+			if keyed and i < keys3.size():
+				t3 = _apply_part_state(t3, keys3[i])
+				h0 = _apply_part_state(h0, keys3[i])
+				h1 = _apply_part_state(h1, keys3[i])
+			mm3.set_instance_transform(i, t3)
+			mm4.set_instance_transform(i * 2, h0)
+			mm4.set_instance_transform(i * 2 + 1, h1)
+
+	if _washer_mm != null:
+		var mmw: MultiMesh = _washer_mm.multimesh
+		var washers: Array = frame.get("washers", [])
+		var keysw: PackedStringArray = _instance_keys.get("Washers", PackedStringArray())
+		for i in range(mini(washers.size(), mmw.instance_count)):
+			var tw := washer_transform(washers[i], ground)
+			mmw.set_instance_transform(i, _apply_part_state(tw, keysw[i]) if keyed and i < keysw.size() else tw)
 
 	if _support_mm != null:
 		var mm5: MultiMesh = _support_mm.multimesh
+		var keys5: PackedStringArray = _instance_keys.get("SupportBeams", PackedStringArray())
 		for i in range(_last_support.size()):
-			mm5.set_instance_transform(i, beam_transform(_last_support[i], ground))
+			var t5 := beam_transform(_last_support[i], ground)
+			mm5.set_instance_transform(i, _apply_part_state(t5, keys5[i]) if keyed and i < keys5.size() else t5)
+
+	if _floor_mm != null:
+		var mmf: MultiMesh = _floor_mm.multimesh
+		var keysf: PackedStringArray = _instance_keys.get("FloorBeams", PackedStringArray())
+		for i in range(mini(_last_floor.size(), mmf.instance_count)):
+			var tf := beam_transform(_last_floor[i], ground)
+			mmf.set_instance_transform(i, _apply_part_state(tf, keysf[i]) if keyed and i < keysf.size() else tf)
+		_floor_mm.visible = bool(LinkageFloor.config(params)["visibility"]["beams"])
+
+	_sync_walls(ground)
 
 	if _panel_mm != null:
 		var mm6: MultiMesh = _panel_mm.multimesh
+		var keys6: PackedStringArray = _instance_keys.get("SolarPanels", PackedStringArray())
 		for i in range(_last_panels.size()):
-			mm6.set_instance_transform(i, panel_transform(_last_panels[i], ground))
+			var t6 := panel_transform(_last_panels[i], ground)
+			mm6.set_instance_transform(i, _apply_part_state(t6, keys6[i]) if keyed and i < keys6.size() else t6)
+
+
+## Metric instance transform for a solver washer (unit cylinder mesh): a disc
+## of the washer's OD and thickness, normal along its bolt.
+static func washer_transform(w: Dictionary, ground_offset_m: float) -> Transform3D:
+	var dir: Vector3 = (w["dir"] as Vector3).normalized()
+	var r := float(w["od"]) / 2.0 * INCH_TO_M
+	var h := maxf(float(w["thickness"]), 0.04) * INCH_TO_M
+	return Transform3D(_cylinder_basis(dir, r, h),
+		(w["center"] as Vector3) * INCH_TO_M + Vector3(0, ground_offset_m, 0))
+
+
+# ---------------------------------------------------------------------------
+# Per-part state (build steps — LINKAGE_PARITY.md A1)
+# ---------------------------------------------------------------------------
+
+## Recompute the part key of every instance. Keys come from LinkagePartKeys,
+## so they are the web app's keys for the same parts.
+func _index_part_keys(frame: Dictionary) -> void:
+	_instance_keys.clear()
+	_joint_of.clear()
+	var lists := [["Beams", frame.get("beams", []), "beam"],
+		["Brackets", frame.get("brackets", []), "bracket"],
+		["Bolts", frame.get("bolts", []), "bolt"],
+		["Washers", frame.get("washers", []) if _washer_mm != null else [], "washer"],
+		["SupportBeams", _last_support, "beam"],
+		["FloorBeams", _last_floor, "beam"],
+		["SolarPanels", _last_panels, "panel"],
+		["Walls", _last_walls, "wall"]]
+	for entry in lists:
+		var keys := PackedStringArray()
+		var idx := 0
+		for obj in entry[1]:
+			var d: Dictionary = obj
+			if entry[2] == "panel" and not d.has("index"):
+				d["index"] = idx
+			var key := LinkagePartKeys.part_key(d, entry[2])
+			keys.append(key)
+			if entry[2] in ["bracket", "bolt", "washer"]:
+				var jk := LinkagePartKeys.joint_key(d, entry[2])
+				if jk.begins_with("joint:"):
+					_joint_of[key] = jk
+			idx += 1
+		_instance_keys[entry[0]] = keys
+
+
+static func _apply_part_state_to(t: Transform3D, state: Dictionary) -> Transform3D:
+	if state.is_empty():
+		return t
+	if not bool(state.get("visible", true)):
+		return Transform3D(Basis().scaled(Vector3.ZERO), t.origin)
+	var off = state.get("offset")
+	if off is Transform3D:
+		return (off as Transform3D) * t
+	return t
+
+
+func _apply_part_state(t: Transform3D, key: String) -> Transform3D:
+	var st = _part_state.get(key)
+	return _apply_part_state_to(t, st) if st is Dictionary else t
+
+
+## Every part key this builder currently draws (beams, brackets, bolts,
+## washers, support beams, panels), in instance order.
+func part_keys() -> PackedStringArray:
+	var out := PackedStringArray()
+	for name in ["Beams", "Brackets", "Bolts", "Washers", "SupportBeams", "FloorBeams", "SolarPanels", "Walls"]:
+		out.append_array(_instance_keys.get(name, PackedStringArray()))
+	return out
+
+
+## Part key -> joint key for every joint-hardware instance drawn.
+func part_joint_keys() -> Dictionary:
+	return _joint_of
+
+
+## Where a part is drawn: {mm: MultiMeshInstance3D name, index: int}, or {}.
+func instance_of(key: String) -> Dictionary:
+	for name in _instance_keys:
+		var keys: PackedStringArray = _instance_keys[name]
+		var i := keys.find(key)
+		if i >= 0:
+			return {"mm": name, "index": i}
+	return {}
+
+
+## Show/hide/offset one part: {visible: bool, offset: Transform3D}. An empty
+## state reseats the part. Rewrites transforms at the current fold.
+func set_part_state(key: String, state: Dictionary) -> void:
+	if state.is_empty():
+		_part_state.erase(key)
+	else:
+		_part_state[key] = state.duplicate()
+	if not _last_frame.is_empty():
+		_write_frame_transforms(_last_frame)
+
+
+## Replace every part state at once (one transform pass): key -> state.
+func set_part_states(states: Dictionary) -> void:
+	_part_state = states.duplicate(true)
+	if not _last_frame.is_empty():
+		_write_frame_transforms(_last_frame)
+
+
+func clear_part_states() -> void:
+	set_part_states({})
+
+
+func part_state(key: String) -> Dictionary:
+	var st = _part_state.get(key)
+	return st if st is Dictionary else {}
 
 
 # ---------------------------------------------------------------------------
@@ -763,10 +1086,13 @@ func refresh_collision_mesh() -> void:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var beams: Array = _last_frame["beams"]
-	for b in beams + _last_support:
+	for b in beams + _last_support + _last_floor:
 		_add_corner_box(st, b["corners"], ground)
 	for panel in _last_panels:
 		_add_corner_box(st, _panel_corners(panel), ground)
+	# The deck is walked on: its slab goes in the collision mesh too.
+	for w in _last_walls:
+		_add_slab(st, w.get("slab_corners", []), ground)
 	var mesh := st.commit()
 	var mi := get_node_or_null("CollisionMesh") as MeshInstance3D
 	if mi == null:
@@ -775,6 +1101,127 @@ func refresh_collision_mesh() -> void:
 		mi.visible = false
 		add_child(mi)
 	mi.mesh = mesh
+
+
+## A covering slab (bottom ring then top ring, n + n points, inches): caps
+## fanned from the first vertex plus the side quads. Convex outlines only —
+## every covering the web builds is convex.
+static func _add_slab(st: SurfaceTool, slab: Array, ground_m: float) -> void:
+	var n := slab.size() / 2
+	if n < 3:
+		return
+	var v: Array = []
+	for c in slab:
+		v.append((c as Vector3) * INCH_TO_M + Vector3(0, ground_m, 0))
+	for i in range(1, n - 1):
+		for tri in [[0, i, i + 1], [n, n + i + 1, n + i]]:
+			for k in tri:
+				st.add_vertex(v[k])
+	for i in n:
+		var j := (i + 1) % n
+		for k in [i, j, n + j, i, n + j, n + i]:
+			st.add_vertex(v[k])
+
+
+## Draw the coverings: one MeshInstance3D per covering record, keyed like
+## the web (`wall:s<span>:<band>[:a<copy>]`), rebuilt each transform pass —
+## a covering follows the beams it sits on as the structure folds.
+func _sync_walls(ground: float) -> void:
+	if _last_walls.is_empty() and _wall_nodes.is_empty():
+		return
+	if _cover_root == null or not is_instance_valid(_cover_root):
+		_cover_root = Node3D.new()
+		_cover_root.name = "Coverings"
+		add_child(_cover_root)
+	var keys: PackedStringArray = _instance_keys.get("Walls", PackedStringArray())
+	var seen := {}
+	var vis := _wall_visibility()
+	for i in _last_walls.size():
+		var w: Dictionary = _last_walls[i]
+		var key: String = keys[i] if i < keys.size() else LinkagePartKeys.part_key(w, "wall")
+		seen[key] = true
+		var mi := _wall_nodes.get(key) as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			mi = MeshInstance3D.new()
+			mi.name = "Wall_%d" % i
+			_cover_root.add_child(mi)
+			_wall_nodes[key] = mi
+		mi.material_override = _wall_material(w)
+		var c: Vector3 = w.get("center", Vector3.ZERO)
+		mi.mesh = _slab_mesh(w.get("slab_corners", []), c)
+		var t := Transform3D(Basis(), c * INCH_TO_M + Vector3(0, ground, 0))
+		var st = _part_state.get(key)
+		var shown := bool(vis.get(_wall_vis_key(w), true))
+		if st is Dictionary and not bool((st as Dictionary).get("visible", true)):
+			shown = false
+		elif st is Dictionary and (st as Dictionary).get("offset") is Transform3D:
+			t = ((st as Dictionary)["offset"] as Transform3D) * t
+		mi.transform = t
+		mi.visible = shown
+	for k in _wall_nodes.keys():
+		if not seen.has(k):
+			var old = _wall_nodes[k]
+			if old != null and is_instance_valid(old):
+				old.free()
+			_wall_nodes.erase(k)
+
+
+## Which visibility switch governs a covering record.
+static func _wall_vis_key(w: Dictionary) -> String:
+	if str(w.get("band", "")) == "floor":
+		return "deck"
+	match str(w.get("kind", "")):
+		"fabric":
+			return "fabric"
+		"table":
+			return "tables"
+		"shade":
+			return "shade"
+	return "walls"
+
+
+func _wall_visibility() -> Dictionary:
+	var cv: Dictionary = LinkageCoverings.config(params)["visibility"]
+	return {"deck": bool(LinkageFloor.config(params)["visibility"]["deck"]),
+		"walls": bool(cv["walls"]), "fabric": bool(cv["fabric"]), "tables": bool(cv["tables"]),
+		"shade": bool(LinkageShadeCloth.config(params)["visible"])}
+
+
+## Plywood for walls, tables and the deck; canvas for fabric; the tarp's own
+## colour and opacity for shade cloth.
+func _wall_material(w: Dictionary) -> StandardMaterial3D:
+	match str(w.get("kind", "")):
+		"fabric":
+			if _fabric_mat == null:
+				_fabric_mat = (_plywood_mat.duplicate() as StandardMaterial3D)
+				_fabric_mat.albedo_color = FABRIC_COLOR
+				_fabric_mat.roughness = 0.95
+			return _fabric_mat
+		"shade":
+			var sc := LinkageShadeCloth.config(params)
+			var key := "%s:%s" % [str(sc["color"]), str(sc["opacity"])]
+			if _shade_mat == null or _shade_key != key:
+				_shade_mat = StandardMaterial3D.new()
+				_shade_mat.albedo_color = Color.html(str(sc["color"]))
+				_shade_mat.albedo_color.a = float(sc["opacity"])
+				_shade_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+				_shade_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+				_shade_mat.roughness = 0.9
+				_shade_key = key
+			return _shade_mat
+	return _plywood_mat
+
+
+## A slab mesh in metres about `center_in` (inches).
+static func _slab_mesh(slab: Array, center_in: Vector3) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var shifted: Array = []
+	for c in slab:
+		shifted.append((c as Vector3) - center_in)
+	_add_slab(st, shifted, 0.0)
+	st.generate_normals()
+	return st.commit()
 
 
 ## Solver corner order (per _make_beam): 4 corners around p1 then 4 around p2,

@@ -285,6 +285,26 @@ var _freeform_soi_bubble: bool = false
 ## Default ON — Elevation is the CT section surface.
 var _elevation_3d_section: bool = true
 var _elev_slice_row: HBoxContainer = null
+## Globe lens toolbar: SoI radius + the full-screen globe.
+var _globe_row: HBoxContainer = null
+var _globe_radius_slider: HSlider = null
+var _globe_radius_lbl: Label = null
+var _globe_radius_timer: Timer = null
+## Lens info strip (top-left of the canvas in Site Plan / Elevation / Globe):
+## the lens, its live state, its controls and whether the clock is running —
+## replacing hint strings the canvas used to draw at the disc's top edge (they
+## collided with the Sunlight / Rain / Wind pills and scrolled off at depth).
+var _lens_strip: PanelContainer = null
+var _lens_strip_icon: TextureRect = null
+var _lens_strip_title: Label = null
+var _lens_strip_state: Label = null
+var _lens_strip_clock: Label = null
+var _lens_strip_hint: Label = null
+var _lens_strip_acc: float = 1.0
+## Soil key under the strip in Elevation / Globe (GraphSoilLegend).
+var _soil_legend: GraphSoilLegend = null
+var _lens_strip_key: String = ""
+const LENS_STRIP_INTERVAL_S := 0.2
 var _elev_slice_slider: HSlider = null
 var _elev_slice_lbl: Label = null
 var _hydro_section_lbl: Label = null
@@ -315,8 +335,8 @@ const VIEW_MODE_ELEV_PORTS := 142
 const VIEW_MODE_ELEV_SCHEM_WIRES := 143
 const VIEW_MODE_ELEV_PROJ_PIPES := 144
 const VIEW_MODE_SITE_CHIPS := 145
-const VIEW_MODE_SITE_LIVE_LIGHT := 146
-const VIEW_MODE_ELEV_LIVE_LIGHT := 147
+## 146 / 147 were VIEW_MODE_SITE/ELEV_LIVE_LIGHT (the Elevation noon lock's
+## opt-out). Retired with the lock: every lens runs on the live clock now.
 const VIEW_MODE_SITE_WIRE_NONE := 148
 const VIEW_MODE_SITE_WIRE_METRO := 149
 const VIEW_MODE_SITE_WIRE_3D := 150
@@ -328,22 +348,20 @@ const VIEW_MODE_DESIRE_CHANNEL := 154
 const VIEW_MODE_DESIRE_WINDOW := 155
 const VIEW_MODE_DESIRE_3D := 156
 const VIEW_MODE_DESIRE_RESET := 158
+## Site Plan + Elevation on the Globe's WORLD PIN layer (the 3D anchors drive
+## the 2D positions; off = the legacy chip / port overlay).
+const VIEW_MODE_WORLD_PINS := 159
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
 ## One-shot toast when Elev 3D auto-enables world wires + flow glow.
 var _elev_3d_wires_toast_shown: bool = false
-## Site/Elev: freeze clock at mean solar noon so CT/plan aren't night-black.
-var _elev_noon_active: bool = false
-var _elev_saved_day_time: float = NAN
-const ELEV_CLOCK_OWNER := "graph_elevation_noon"
-## When true, Site/Elev keep the live clock (skip noon bake).
-var _site_elev_live_lighting: bool = false
-## Site Plan lighting-drift throttle: the live clock moves the sun, so the
-## dirty-driven SoI SubViewport is re-captured at this wall-clock cadence
-## while the plan is open (cheap UPDATE_ONCE, never the _preview_live path).
-const SITE_LIGHT_REFRESH_MS := 5000
-var _site_light_refresh_ms: int = 0
+## NO graph view claims or moves the clock. Elevation used to push
+## time_scale 0, snap day_time to solar noon and write the old day_time back
+## on exit (so a scrub made inside it was thrown away, and Play silently did
+## nothing). Readability at night is now a per-camera lighting floor in
+## GraphSoiPreviewService._sync_lens_env, and the preview re-renders as the
+## clock moves (its own refresh policy, driven by TimeDirector.playhead_changed).
 ## Saved conduits_3d_visible when Site Plan forces a wire mode session.
 var _site_saved_conduits_3d: Variant = null
 var _spatial_edit = null
@@ -464,6 +482,7 @@ const LIB_DRAG_THRESHOLD := 6.0
 
 func _ready() -> void:
 	ServiceLocator.provide(ServiceLocator.GRAPH, self)
+	add_to_group(WorldSession.PERSIST_GROUP)
 	focus_mode = Control.FOCUS_ALL
 	model = GraphModel.new()
 	model.changed.connect(_on_model_changed)
@@ -1030,6 +1049,14 @@ func _notification(what: int) -> void:
 			else Control.MOUSE_FILTER_IGNORE
 		)
 		if visible:
+			# The full-screen globe and the graph cannot share the root
+			# viewport (this branch just turned its 3D off) — opening the graph
+			# ends the globe. Its exit path skips its own "reopen the graph"
+			# because we are already open.
+			var soi_g := get_node_or_null("/root/SoiService")
+			if soi_g != null and bool(soi_g.get("snowglobe_active")) \
+					and soi_g.has_method("exit_snowglobe"):
+				soi_g.call("exit_snowglobe")
 			_refresh_solar_ui_ref()
 			_init_bridge()
 			if _graph_canvas != null:
@@ -1063,7 +1090,6 @@ func _notification(what: int) -> void:
 			# hanging over the landscape in first person for the rest of the
 			# session. Closing the graph ends the session too.
 			_restore_site_conduit_visibility()
-			_elev_end_noon_lock()
 		_apply_mouse_for_graph(visible)
 	elif what == NOTIFICATION_RESIZED:
 		if visible:
@@ -1133,7 +1159,7 @@ func _scene_basename(main_node: Node) -> String:
 
 
 func _graph_autosave_path() -> String:
-	return "%s/%s.graph.json" % [GRAPH_AUTOSAVE_DIR, _resolve_map_graph_key()]
+	return WorldPaths.graph_autosave_path(_resolve_map_graph_key())
 
 
 func _resolve_map_graph_key() -> String:
@@ -1271,6 +1297,18 @@ func _schedule_graph_autosave() -> void:
 		return
 	_autosave_pending = true
 	_autosave_timer.start()
+
+
+## World save / exit (WorldSession): every habitat's NPC state into the graph
+## NOW, the peak score past its debounce, then the graph file past ITS
+## debounce. Order matters — pop_state rides the graph's item specs.
+func flush_world_state() -> void:
+	if Engine.is_editor_hint():
+		return
+	if _npc_population != null and model != null:
+		_npc_population.persist_all_now(model)
+	_autosave_pending = true
+	_flush_graph_autosave()
 
 
 func _flush_graph_autosave() -> void:
@@ -1542,6 +1580,7 @@ func _build_layout() -> void:
 	add_child(gc)
 	_graph_canvas = gc
 	gc.set("resource_flow_engine", _resource_flow)
+	_build_lens_strip()
 	_init_spatial_edit()
 	# Connect canvas selection signals
 	_connect_canvas_signals(gc)
@@ -1606,6 +1645,12 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("layout_changed"):
 		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
 			gc.connect("layout_changed", _on_canvas_layout_changed)
+	if gc.has_signal("world_pin_moved"):
+		if not gc.is_connected("world_pin_moved", _on_world_pin_moved):
+			gc.connect("world_pin_moved", _on_world_pin_moved)
+	if gc.has_signal("stream_tap_requested") \
+			and not gc.is_connected("stream_tap_requested", _on_canvas_stream_tap_requested):
+		gc.connect("stream_tap_requested", _on_canvas_stream_tap_requested)
 	if gc.has_signal("resource_containers_merged"):
 		if not gc.is_connected("resource_containers_merged", _on_resource_containers_merged):
 			gc.connect("resource_containers_merged", _on_resource_containers_merged)
@@ -1629,13 +1674,57 @@ func _on_canvas_layout_changed() -> void:
 	_autosave_pending = true
 	_flush_graph_autosave()
 	if _graph_view_mode == GraphSiteLayout.VIEW_SITE \
-			or _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION:
+			or _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION \
+			or _graph_view_mode == GraphSiteLayout.VIEW_GLOBE:
 		_sync_bound_props_from_site()
-		# Site Plan: restamp ground Y after XZ moves. Elevation view lets the
-		# user drag vertically into elevation_m — do not clobber that here.
-		if _graph_view_mode == GraphSiteLayout.VIEW_SITE:
+		# Site Plan / Globe: restamp ground Y after XZ moves. Elevation view
+		# lets the user drag vertically into elevation_m — do not clobber that.
+		if _graph_view_mode != GraphSiteLayout.VIEW_ELEVATION:
 			_refresh_item_elevations()
 			_refresh_site_autoroutes()
+
+
+## A world pin was dropped in the Globe / Site Plan / Elevation. The model
+## already carries the new site (and elevation); bound props were moved live
+## and healed by `_on_canvas_layout_changed`. What needs ROUTING is the draft
+## OUTLET of a siphon: its culvert end and the physics' exit height must
+## follow the node (`move_siphon_outlet`), and on a ground drop the invert
+## sits a little under the surface where the pipe daylights.
+func _on_world_pin_moved(item_id: String, site: Vector2, elev_m: float, vertical_set: bool) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if bool(specs.get("outlet_sink", false)):
+		var sid := siphon_for_outlet_sink(item_id)
+		if not sid.is_empty():
+			var e := elev_m
+			if is_nan(e):
+				e = float(item.get("elevation_m", NAN))
+			if not vertical_set and not is_nan(e):
+				e -= 0.3
+			if not is_nan(e):
+				move_siphon_outlet(sid, site, e)
+				_show_toast("Draft outlet moved — the culvert follows it")
+			return
+	_schedule_graph_autosave()
+
+
+## The siphon whose draft pipe ends at this outlet node ("" = none).
+func siphon_for_outlet_sink(sink_id: String) -> String:
+	if model == null or sink_id.is_empty():
+		return ""
+	for conn: Dictionary in model.connections:
+		if str(conn.get("target_item_id", "")) != sink_id:
+			continue
+		var src := model.get_item(str(conn.get("source_item_id", "")))
+		if src.is_empty():
+			continue
+		if str((src.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro":
+			return str(src.get("id", ""))
+	return ""
 
 
 ## After a site-plan drag, move any bound 3D props to match site_x_m/site_z_m.
@@ -2122,7 +2211,8 @@ func _build_topbar() -> Control:
 	_soi_chip.add_theme_font_size_override("font_size", 12)
 	_soi_chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_soi_chip.text = "SoI · —"
-	_soi_chip.tooltip_text = "Sphere of Influence — Interact with the map pin (O) to open Snowglobe and resize"
+	_soi_chip.tooltip_text = ("Sphere of Influence — the Globe lens shows it here; "
+			+ "Interact with the map pin (O) for the full-screen globe and radius")
 	right_grp.add_child(_soi_chip)
 
 	var sep2 := VSeparator.new()
@@ -2130,24 +2220,40 @@ func _build_topbar() -> Control:
 	sep2.add_theme_constant_override("separation", 8)
 	right_grp.add_child(sep2)
 
-	# ── Graph view mode: Freeform / Site Plan / Elevation / Snowglobe ──
+	# ── Graph lens: Freeform / Site Plan / Elevation / Globe ──
 	# The Hydro Lab is deliberately NOT a chip: it is item-bound (opened from a
 	# hydro turbine's inspector / double-click / 3D prop menu), and a chip entry
 	# carried no item id — with no turbine on the graph it opened a useless
 	# empty full-screen view.
+	# One segmented control (icon + label per lens) in a single framed pill —
+	# reads as "pick one of four views", not four unrelated buttons.
+	var seg := PanelContainer.new()
+	var seg_sb := StyleBoxFlat.new()
+	seg_sb.bg_color = Color(0.07, 0.10, 0.18, 1.0)
+	seg_sb.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.7)
+	seg_sb.set_border_width_all(1)
+	seg_sb.set_corner_radius_all(8)
+	seg_sb.set_content_margin_all(2.0)
+	seg.add_theme_stylebox_override("panel", seg_sb)
 	_mode_chip_row = HBoxContainer.new()
-	_mode_chip_row.add_theme_constant_override("separation", 4)
+	_mode_chip_row.add_theme_constant_override("separation", 2)
 	_mode_chip_row.tooltip_text = "Graph / SoI view mode"
+	seg.add_child(_mode_chip_row)
 	for pair in [
-		["freeform", "Freeform"],
-		["site", "Site Plan"],
-		["elevation", "Elevation"],
-		["snowglobe", "Snowglobe"],
+		["freeform", "Freeform", "Freeform — the schematic graph."],
+		["site", "Site Plan", "Site Plan — the Sphere of Influence from above."],
+		["elevation", "Elevation",
+				"Elevation — a side-on cut through the Sphere of Influence "
+				+ "(Slice moves the cut; wheel zooms 2D and 3D together)."],
+		["globe", "Globe",
+				"Globe — orbit the Sphere of Influence as a snowglobe "
+				+ "(drag to orbit, wheel to zoom, double-click to re-fit)."],
 	]:
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
+		b.tooltip_text = str(pair[2]) + "\nTime keeps running in every lens — use the timeline."
 		_mode_chip_row.add_child(b)
 		_mode_chip_btns[str(pair[0])] = b
-	right_grp.add_child(_mode_chip_row)
+	right_grp.add_child(seg)
 
 	_designate_menu = _make_topbar_menu_btn("Designate ▾")
 	_designate_menu.tooltip_text = (
@@ -2170,7 +2276,7 @@ func _build_topbar() -> Control:
 		+ "SoI bubble (freeform): snowglobe behind nodes — Shift+drag orbit, Shift+scroll zoom.\n"
 		+ "Site Plan: starts top-down; Shift+drag orbits (yaw/tilt); scroll zooms 2D+3D.\n"
 		+ "Elevation CT: side-on half-cutaway; Shift+drag rotate/depth; "
-		+ "Shift+wheel zoom cut; Slice depth slider; Reset section.\n"
+		+ "wheel zooms 2D+3D together; Slice depth slider; Reset section.\n"
 		+ "Hydro Lab: hydro detail panel (module height, start/break, RPM) — SoI preview off.")
 	# The flat ~30-item popup accreted per feature; it is now grouped into
 	# per-view submenus. Every VIEW_MODE_* id is UNCHANGED (ui_compile_selftest
@@ -2183,6 +2289,7 @@ func _build_topbar() -> Control:
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
 	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
+	vmp.add_check_item("World pins in Site Plan & Elevation (3D-driven)", VIEW_MODE_WORLD_PINS)
 
 	var site_sub := PopupMenu.new()
 	site_sub.add_check_item("Radial layout (auto-yaw)", VIEW_MODE_RADIAL)
@@ -2198,7 +2305,7 @@ func _build_topbar() -> Control:
 	_add_view_mode_submenu(vmp, "Site Plan", site_sub)
 
 	var elev_sub := PopupMenu.new()
-	elev_sub.add_check_item("3D snowglobe section", VIEW_MODE_ELEV_3D)
+	elev_sub.add_check_item("3D section (CT)", VIEW_MODE_ELEV_3D)
 	elev_sub.add_separator("Overlays")
 	elev_sub.add_check_item("DEM / pond 2D overlay", VIEW_MODE_ELEV_DEM)
 	elev_sub.add_check_item("Chips (labels/bodies)", VIEW_MODE_ELEV_CHIPS)
@@ -2206,12 +2313,10 @@ func _build_topbar() -> Control:
 	elev_sub.add_check_item("Schematic 2D wires", VIEW_MODE_ELEV_SCHEM_WIRES)
 	elev_sub.add_check_item("Projected 2D pipe overlay", VIEW_MODE_ELEV_PROJ_PIPES)
 	elev_sub.add_separator()
-	elev_sub.add_check_item("Live lighting (follow sim clock)", VIEW_MODE_SITE_LIVE_LIGHT)
-	elev_sub.add_separator()
 	elev_sub.add_radio_check_item("Scale 1× (3D section locks to 1×)", VIEW_MODE_EXAG_1X)
 	elev_sub.add_radio_check_item("Scale 5× (2D-only Elev)", VIEW_MODE_EXAG_5X)
 	elev_sub.add_item("Rotate section heading +15°", VIEW_MODE_HEADING_ROTATE)
-	elev_sub.add_item("Reset section (N/S · slice 0 · zoom fit)", VIEW_MODE_RESET_SECTION)
+	elev_sub.add_item("Reset section (N/S · slice 0)", VIEW_MODE_RESET_SECTION)
 	_add_view_mode_submenu(vmp, "Elevation", elev_sub)
 
 	var people_sub := PopupMenu.new()
@@ -2232,6 +2337,7 @@ func _build_topbar() -> Control:
 	_vm_set_checked(VIEW_MODE_ELEV_SCHEM_WIRES, false)
 	_vm_set_checked(VIEW_MODE_ELEV_PROJ_PIPES, false)
 	_vm_set_checked(VIEW_MODE_SITE_PORTS, true)
+	_vm_set_checked(VIEW_MODE_WORLD_PINS, true)
 	right_grp.add_child(_view_mode_menu)
 
 	_elev_slice_row = HBoxContainer.new()
@@ -2257,6 +2363,8 @@ func _build_topbar() -> Control:
 	_elev_slice_lbl.add_theme_font_size_override("font_size", 11)
 	_elev_slice_row.add_child(_elev_slice_lbl)
 	right_grp.add_child(_elev_slice_row)
+
+	_build_globe_row(right_grp)
 
 	_hydro_section_lbl = Label.new()
 	_hydro_section_lbl.visible = false
@@ -2620,7 +2728,7 @@ func _on_view_mode_menu_id(id: int) -> void:
 		VIEW_MODE_ELEV_SCHEM_WIRES, VIEW_MODE_ELEV_PROJ_PIPES:
 			_toggle_elev_overlay(id)
 		VIEW_MODE_SNOWGLOBE:
-			_open_full_snowglobe()
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_GLOBE)
 		VIEW_MODE_NODE_CARDS:
 			if _graph_canvas != null:
 				var cur := str(_graph_canvas.get("node_display_mode"))
@@ -2663,15 +2771,11 @@ func _on_view_mode_menu_id(id: int) -> void:
 				_graph_canvas.call("queue_redraw")
 			_sync_view_mode_menu_checks()
 			_schedule_graph_autosave()
-		VIEW_MODE_SITE_LIVE_LIGHT, VIEW_MODE_ELEV_LIVE_LIGHT:
-			_site_elev_live_lighting = not _site_elev_live_lighting
-			# Elevation-only: Site Plan never claims the clock (live by design).
-			if _site_elev_live_lighting:
-				_elev_end_noon_lock()
-				_show_toast("Live lighting ON — Elevation follows the sim clock")
-			elif _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and visible:
-				_elev_begin_noon_lock()
-				_show_toast("Daytime bake ON — mean solar noon")
+		VIEW_MODE_WORLD_PINS:
+			if _graph_canvas != null:
+				_graph_canvas.set("phys_pins_mode",
+						not bool(_graph_canvas.get("phys_pins_mode")))
+				_graph_canvas.call("queue_redraw")
 			_sync_view_mode_menu_checks()
 			_schedule_graph_autosave()
 		VIEW_MODE_SITE_WIRE_3D:
@@ -2736,9 +2840,44 @@ func _make_mode_chip(mode_id: String, label: String) -> Button:
 	b.toggle_mode = true
 	b.focus_mode = Control.FOCUS_NONE
 	b.flat = false
-	_apply_topbar_btn_style(b)
+	b.icon = GraphLensIcons.icon(mode_id, 16)
+	b.add_theme_constant_override("h_separation", 6)
+	_style_lens_segment(b)
 	b.pressed.connect(func() -> void: _on_mode_chip_pressed(mode_id))
 	return b
+
+
+## One segment of the lens switcher: flat until hovered, a cyan-tinted fill
+## with cyan text + icon when it is the active lens.
+func _style_lens_segment(b: Button) -> void:
+	var sb_n := StyleBoxFlat.new()
+	sb_n.bg_color = Color(0, 0, 0, 0)
+	sb_n.set_corner_radius_all(6)
+	sb_n.content_margin_left = 9.0
+	sb_n.content_margin_right = 11.0
+	sb_n.content_margin_top = 5.0
+	sb_n.content_margin_bottom = 5.0
+	var sb_h := sb_n.duplicate() as StyleBoxFlat
+	sb_h.bg_color = Color(0.13, 0.20, 0.36, 0.9)
+	var sb_p := sb_n.duplicate() as StyleBoxFlat
+	sb_p.bg_color = Color(C_PRIMARY.r * 0.20, C_PRIMARY.g * 0.20, C_PRIMARY.b * 0.24, 1.0)
+	sb_p.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.75)
+	sb_p.set_border_width_all(1)
+	var sb_ph := sb_p.duplicate() as StyleBoxFlat
+	sb_ph.bg_color = Color(C_PRIMARY.r * 0.26, C_PRIMARY.g * 0.26, C_PRIMARY.b * 0.30, 1.0)
+	b.add_theme_stylebox_override("normal", sb_n)
+	b.add_theme_stylebox_override("hover", sb_h)
+	b.add_theme_stylebox_override("pressed", sb_p)
+	b.add_theme_stylebox_override("hover_pressed", sb_ph)
+	b.add_theme_color_override("font_color", C_TEXT_S)
+	b.add_theme_color_override("font_hover_color", C_TEXT)
+	b.add_theme_color_override("font_pressed_color", C_PRIMARY)
+	b.add_theme_color_override("font_hover_pressed_color", C_PRIMARY)
+	b.add_theme_color_override("icon_normal_color", C_TEXT_S)
+	b.add_theme_color_override("icon_hover_color", C_TEXT)
+	b.add_theme_color_override("icon_pressed_color", C_PRIMARY)
+	b.add_theme_color_override("icon_hover_pressed_color", C_PRIMARY)
+	b.add_theme_font_size_override("font_size", 13)
 
 
 func _on_mode_chip_pressed(mode_id: String) -> void:
@@ -2749,10 +2888,12 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_SITE)
 		"elevation":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_ELEVATION)
-		"snowglobe":
-			_open_full_snowglobe()
+		"globe", "snowglobe":
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_GLOBE)
 
 
+## Full-screen globe (the map pin's view). It renders through the ROOT viewport,
+## so SoiService.enter_snowglobe closes the graph first and reopens it on exit.
 func _open_full_snowglobe() -> void:
 	var soi := get_node_or_null("/root/SoiService")
 	if soi != null and soi.has_method("enter_snowglobe"):
@@ -2853,15 +2994,9 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 		# the same frame as the SoI CT SubViewport boots was TDR'ing AMD GPUs.
 		# Soft-focus remeshes only the siphon culvert (below).
 		_maybe_toast_elev_3d_wires_hint()
-	# Elevation only: bake at mean solar noon unless live lighting is on.
-	# Site Plan deliberately NEVER claims the clock — the noon freeze was why
-	# the plan read as a frozen snapshot (people stop ticking, nothing moves;
-	# PACKING_PLAN.md names this exact player report). Site lighting is live.
+	# No view claims the clock (see the note on the retired noon lock above):
+	# a frozen clock was why the plan read as a snapshot (PACKING_PLAN.md).
 	var is_phys := mode in [GraphSiteLayout.VIEW_SITE, GraphSiteLayout.VIEW_ELEVATION]
-	if mode == GraphSiteLayout.VIEW_ELEVATION and visible and not _site_elev_live_lighting:
-		_elev_begin_noon_lock()
-	else:
-		_elev_end_noon_lock()
 	if was_site and not is_phys:
 		_restore_site_conduit_visibility()
 	if _graph_canvas != null:
@@ -2878,10 +3013,11 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 	_sync_elev_slice_row()
 	_sync_site_tool_row()
 	_sync_soi_preview_for_mode()
+	_update_lens_strip(0.0, true)
 	_sync_siphon_lab_view(str(opts.get("siphon_item_id", "")))
 	_apply_layout()
 	if mode == GraphSiteLayout.VIEW_SITE or mode == GraphSiteLayout.VIEW_ELEVATION \
-			or mode == GraphSiteLayout.VIEW_SIPHON:
+			or mode == GraphSiteLayout.VIEW_SIPHON or mode == GraphSiteLayout.VIEW_GLOBE:
 		_backfill_site_from_world()
 		_refresh_item_elevations()
 		if mode == GraphSiteLayout.VIEW_SITE:
@@ -2908,58 +3044,6 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 		call_deferred("_force_soi_preview_layout_sync")
 	_schedule_graph_autosave()
 
-
-## Snap Elev CT lighting to mean solar noon; freeze time_scale until leave/hide.
-func _elev_begin_noon_lock() -> void:
-	var main := _get_scene_main_node()
-	if main == null:
-		return
-	if not _elev_noon_active:
-		_elev_saved_day_time = float(main.get("day_time"))
-		_elev_noon_active = true
-	# Claim rather than save/restore: the elevation view can be opened over CSV
-	# playback or the snowglobe, and the old _elev_saved_time_scale snapshotted
-	# THEIR temporary 0.0 and restored that. See core/clock_claims.gd.
-	if main.has_method("push_clock_claim"):
-		main.call("push_clock_claim", ELEV_CLOCK_OWNER, {"time_scale": 0.0})
-	_elev_snap_solar_noon(main)
-	call_deferred("_elev_refresh_ct_after_noon")
-
-
-func _elev_snap_solar_noon(main: Node = null) -> void:
-	if main == null:
-		main = _get_scene_main_node()
-	if main == null:
-		return
-	var clock: Variant = main.get("clock")
-	if clock != null and clock.has_method("mean_solar_time_to_clock_time"):
-		main.set("day_time", clock.call("mean_solar_time_to_clock_time", 12.0))
-	elif main.has_method("solar_time_to_clock_time"):
-		main.set("day_time", main.call("solar_time_to_clock_time", 12.0))
-	else:
-		main.set("day_time", 12.0)
-
-
-func _elev_refresh_ct_after_noon() -> void:
-	if not _elev_noon_active or not visible:
-		return
-	if _soi_preview != null and _soi_preview.has_method("force_layout_sync"):
-		_soi_preview.call("force_layout_sync")
-	elif _soi_preview != null and _soi_preview.has_method("mark_layout_dirty"):
-		_soi_preview.call("mark_layout_dirty")
-
-
-func _elev_end_noon_lock() -> void:
-	if not _elev_noon_active:
-		return
-	_elev_noon_active = false
-	var main := _get_scene_main_node()
-	if main != null:
-		if not is_nan(_elev_saved_day_time):
-			main.set("day_time", _elev_saved_day_time)
-		if main.has_method("pop_clock_claim"):
-			main.call("pop_clock_claim", ELEV_CLOCK_OWNER)
-	_elev_saved_day_time = NAN
 
 
 func _spatial_radial_yaw_deg(site_xz: Vector2, center_site: Vector2 = Vector2.ZERO) -> float:
@@ -3227,6 +3311,13 @@ func set_site_wire_mode(mode: String) -> void:
 func _apply_site_wire_mode_session() -> void:
 	if _graph_view_mode != GraphSiteLayout.VIEW_SITE or _graph_canvas == null:
 		return
+	# Only while the graph is OPEN. The saved lens is applied at map load with
+	# the graph hidden — before SimSettingsController has read its file — and
+	# the pref captured then (the default, false) was "restored" over the
+	# player's real pref when the graph closed. Showing the graph re-applies
+	# the lens, which lands here again with the real value to save.
+	if not visible:
+		return
 	var mode := str(_graph_canvas.get("site_wire_mode"))
 	var sc := get_node_or_null("/root/SimSettingsController")
 	if sc == null:
@@ -3313,7 +3404,18 @@ func _sync_soi_preview_for_mode() -> void:
 	var want_elev_3d := (
 			(_graph_view_mode == GraphSiteLayout.VIEW_ELEVATION and _elevation_3d_section)
 			or want_siphon_lab)
-	var want_preview := visible and (want_site or want_freeform_bubble or want_elev_3d)
+	var want_globe := _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
+	var want_preview := visible and (want_site or want_freeform_bubble or want_elev_3d \
+			or want_globe)
+	if _graph_canvas != null:
+		# Exaggeration locks to 1× from the REQUEST, not the first landed frame.
+		_graph_canvas.set("elev_3d_requested", want_preview and want_elev_3d \
+				and _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION)
+	# Bracket the lens switch so the preview flies between the two poses
+	# (SoiStagePose) instead of cutting. A no-op when nothing was showing,
+	# when entering the Hydro Lab embed, or when the lens is unchanged.
+	if _soi_preview != null and want_preview and _soi_preview.has_method("begin_lens_transition"):
+		_soi_preview.call("begin_lens_transition")
 	if _soi_preview != null and _soi_preview.has_method("set_embed_host"):
 		var host: Control = null
 		if want_siphon_lab and _siphon_lab_modal != null \
@@ -3330,6 +3432,8 @@ func _sync_soi_preview_for_mode() -> void:
 			_soi_preview.call("set_top_down", want_site)
 		if _soi_preview != null and _soi_preview.has_method("set_section_mode"):
 			_soi_preview.call("set_section_mode", want_elev_3d)
+		if _soi_preview != null and _soi_preview.has_method("set_globe"):
+			_soi_preview.call("set_globe", want_globe)
 		if want_elev_3d and _graph_canvas != null \
 				and _soi_preview != null and _soi_preview.has_method("set_section_heading"):
 			_soi_preview.call("set_section_heading",
@@ -3342,6 +3446,8 @@ func _sync_soi_preview_for_mode() -> void:
 				and _siphon_lab_modal.has_method("get_lab_section_frame"):
 			sync_siphon_lab_section_frame(
 					_siphon_lab_modal.call("get_lab_section_frame") as Dictionary)
+		if _soi_preview != null and _soi_preview.has_method("end_lens_transition"):
+			_soi_preview.call("end_lens_transition")
 	if _bg_rect != null and is_instance_valid(_bg_rect):
 		_bg_rect.color = Color(C_BG.r, C_BG.g, C_BG.b, 1.0)
 
@@ -3567,16 +3673,27 @@ func _stream_intake_specs(prop_id: String) -> Dictionary:
 
 
 func create_penstock_intake_at(world_pos: Vector3, turbine_id: String,
-		turbine_handle: String, style_ov: Dictionary = {}) -> String:
+		turbine_handle: String, style_ov: Dictionary = {}, opts: Dictionary = {}) -> String:
 	if model == null or turbine_id.is_empty():
 		return ""
 	var turbine := model.get_item(turbine_id)
-	if turbine.is_empty():
-		_show_toast("Penstock needs a turbine at the other end")
+	if turbine.is_empty() \
+			or str((turbine.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+		_show_toast("Penstock needs a hydro turbine at the other end")
 		return ""
 	var main := _get_scene_main_node()
 	if main == null:
 		return ""
+	# One penstock per turbine: a re-route replaces the old intake + run.
+	_remove_existing_penstock(turbine_id)
+	# Head is the intake's ground above the turbine's. Say so BEFORE routing a
+	# pipe that can only ever report "no head".
+	var t_xz := _item_world_xz(turbine)
+	if is_finite(t_xz.x):
+		var t_y := TerrainSurfaceQuery.ground_height_at(main, t_xz.x, t_xz.y)
+		var i_y := TerrainSurfaceQuery.ground_height_at(main, world_pos.x, world_pos.z)
+		if is_finite(t_y) and is_finite(i_y) and i_y <= t_y + 0.25:
+			_show_toast("Intake is not above the turbine — the penstock will have no head", 4.0)
 	var placed: Dictionary = PlacedPropService.place_model_at_xz(
 			main, StreamIntakeBuilder.MODEL_ID, world_pos.x, world_pos.z)
 	if not bool(placed.get("ok", false)):
@@ -3606,10 +3723,27 @@ func create_penstock_intake_at(world_pos: Vector3, turbine_id: String,
 		# place-intake-then-route flow ending at 0 W with nothing saying why.
 		"specs": _stream_intake_specs(prop_id),
 	})
+	var wf_id := str(opts.get("water_feature_id", ""))
+	var wf_name := str(opts.get("water_feature_name", ""))
+	if not wf_id.is_empty():
+		# BOUND to a stream (the Penstock span tool): the engine takes this
+		# stream's discharge at the intake station whatever the distance.
+		var isp: Dictionary = (model.get_item(item_id).get("specs", {}) as Dictionary).duplicate(true)
+		isp["water_feature_bind"] = wf_id
+		isp["water_feature_name"] = wf_name
+		if not wf_name.is_empty():
+			isp["name"] = "Stream Intake: %s" % wf_name
+		model.update_item(item_id, {"specs": isp})
 	PlacedPropService.update_prop_record(main, prop_id,
 			{"graph_item_id": item_id}, false)
 	var style: Dictionary = style_ov.duplicate(true)
 	style.erase("route_mode")
+	# A pinned 3D route (the stream's own line) rides the conn as locked
+	# waypoints — that is the only form ConduitManager honours.
+	var route_3d: Array = []
+	for wp: Variant in (opts.get("route_3d", []) as Array):
+		if wp is Vector3:
+			route_3d.append(ConduitKinds.waypoint_dict(wp as Vector3))
 	# add_connection() returns void and stamps a generated id when absent, so
 	# mint the id here to hand it straight to the reveal/remesh path.
 	var conn_id: String = model.generate_connection_id()
@@ -3621,14 +3755,488 @@ func create_penstock_intake_at(world_pos: Vector3, turbine_id: String,
 		"polarity": "resource", "resource_type": "water",
 		"conduit_type": "poly_penstock",
 		"conduit_style": style,
+		"route_3d": route_3d, "route_locked": not route_3d.is_empty(),
 		"visible_3d": true, "flow_glow": true,
 	})
 	reveal_penstock_conduit(conn_id)
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
-	_show_toast("Stream Intake placed — penstock routed to the turbine")
+	if wf_id.is_empty():
+		_show_toast("Stream Intake placed — penstock routed to the turbine")
+	else:
+		_show_toast("Penstock tapped from %s" % (wf_name if not wf_name.is_empty() else "the stream"))
 	return conn_id
+
+
+# ---------------------------------------------------------------------------
+# Stream → penstock (the WATER toolbar's Penstock span tool). A reach of a
+# mapped / drawn / traced stream becomes the penstock of a PowerSpout: the
+# intake stands at the reach's upstream vertex, the routed poly_penstock
+# follows the stream's own line down to the turbine, and the intake is BOUND
+# to that stream so the flow engine takes its discharge at the intake
+# station however the prop or bank moves. Mirrors what the water system does
+# with the span (mode "penstock" = no channel, no barrel: the conduit IS the
+# visual).
+# ---------------------------------------------------------------------------
+
+func _on_canvas_stream_tap_requested(feature_id: String, seg: int, turbine_id: String,
+		handle_id: String) -> void:
+	tap_stream_for_turbine(feature_id, seg, turbine_id, handle_id)
+
+
+## Make a stream reach the penstock of `turbine_id`, from a point ON that
+## stream: the Site Plan wire drop and the first-person stream rung both land
+## here. If `seg` lies inside an existing penstock / pipe run the whole run is
+## the reach (its upstream vertex is the intake, its outlet the exit); else
+## the reach runs from `seg`'s upstream vertex down to the vertex nearest the
+## turbine. The water side is marked penstock, the graph side routed + bound.
+## Returns the connection id, "" on failure (with a toast saying why).
+func tap_stream_for_turbine(feature_id: String, seg: int, turbine_id: String,
+		handle_id: String = "res_in_0", style_ov: Dictionary = {}) -> String:
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader == null or not loader.has_method("water_network") or model == null:
+		return ""
+	var wn: Node = loader.call("water_network")
+	if wn == null:
+		return ""
+	var turbine := model.get_item(turbine_id)
+	if str((turbine.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+		_show_toast("Only a hydro turbine can tap a stream")
+		return ""
+	var ep: Dictionary = wn.call("editable_points", feature_id)
+	var pts: PackedVector2Array = ep.get("points", PackedVector2Array())
+	var modes: Array = ep.get("modes", [])
+	if pts.size() < 2:
+		return ""
+	seg = clampi(seg, 0, pts.size() - 2)
+	var is_run := func(i: int) -> bool:
+		return i >= 0 and i < modes.size() and (str(modes[i]) == WaterFeatureLayer.MODE_PENSTOCK or str(modes[i]) == "pipe")
+	var intake_i := seg
+	var exit_i := -1
+	if bool(is_run.call(seg)):
+		while bool(is_run.call(intake_i - 1)):
+			intake_i -= 1
+		exit_i = seg + 1
+		while bool(is_run.call(exit_i)):
+			exit_i += 1
+	else:
+		var t_xz := _item_world_xz(turbine)
+		var best := INF
+		for i in range(intake_i + 1, pts.size()):
+			var d := pts[i].distance_to(t_xz) if is_finite(t_xz.x) else float(pts.size() - i)
+			if d < best:
+				best = d
+				exit_i = i
+	if exit_i <= intake_i:
+		_show_toast("The turbine sits upstream of that point — tap the stream above it")
+		return ""
+	wn.call("checkpoint")
+	var nid := feature_id
+	for i in range(intake_i, exit_i):
+		nid = str(wn.call("set_span_mode", nid, i, WaterFeatureLayer.MODE_PENSTOCK))
+	wn.call("commit")
+	var f: Dictionary = wn.call("feature", nid)
+	var fname := str(f.get("name", ""))
+	if fname.is_empty():
+		fname = str(f.get("kind", "stream")).capitalize()
+	var conn := create_penstock_from_stream(nid, fname, pts.slice(intake_i, exit_i + 1), turbine_id, style_ov)
+	if conn.is_empty():
+		return ""
+	# The drop named a handle; the route defaults to res_in_0 — honour the
+	# player's port when it is a different water input.
+	if not handle_id.is_empty() and handle_id != "res_in_0":
+		model.update_connection(conn, {"target_handle_id": handle_id})
+	return conn
+
+
+# ---------------------------------------------------------------------------
+# ONE water-source model for hydro turbines. A turbine draws from a SOURCE:
+#   pond   — a pond tank on the graph (level-driven: siphon / penstock from a
+#            reservoir, HydroReach draws the level down)
+#   stream — a mapped / drawn stream (flow-driven: the intake is BOUND to the
+#            feature and takes its discharge at the intake station)
+#   spring — bare ground: a tapped spring with authored base flow + rain
+# Every way of making a penstock (the 3D plug drag, the Lab's drag / auto-route
+# / From pond, the WATER toolbar's Penstock chip, a Site Plan wire drop, a
+# plain pond→turbine wire) resolves a source with resolve_hydro_source_at and
+# routes it with route_penstock_to_source. Nothing else mints intakes.
+# ---------------------------------------------------------------------------
+
+## A water wire the player drew by hand from a pond tank or a stream intake
+## into a hydro turbine's water input becomes that turbine's penstock — the
+## same contour-routed poly run every other entry makes. Without this the
+## Site Plan port drop made a bare schematic wire the physics ignored, and
+## the Lab then said "Not routed".
+func _auto_penstock_for_new_water_wires() -> void:
+	if model == null or _history_suppress:
+		return
+	for conn: Dictionary in model.connections.duplicate():
+		if str(conn.get("conduit_type", "")) == "poly_penstock":
+			continue
+		if str(conn.get("polarity", "")) != "resource" \
+				or not (ResourceKinds.normalize_kind(str(conn.get("resource_type", "water"))) in ["water", ""]):
+			continue
+		var tgt := model.get_item(str(conn.get("target_item_id", "")))
+		var src := model.get_item(str(conn.get("source_item_id", "")))
+		var turbine := tgt if str((tgt.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro" else \
+			(src if str((src.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro" else {})
+		if turbine.is_empty():
+			continue
+		var other := src if turbine == tgt else tgt
+		var osp: Dictionary = other.get("specs", {}) as Dictionary
+		var handle := str(conn.get("target_handle_id", "")) if turbine == tgt else str(conn.get("source_handle_id", ""))
+		if not handle.begins_with("res_in"):
+			continue
+		# A SIPHON drinks through its dip tube (direct intake, no pipe) — only
+		# penstock kinds get a routed run. This used to convert the bind's own
+		# pond→siphon wire into a poly penstock anchored at the tank's centroid,
+		# which is the "immovable intake node" the player saw in 3D. The KIND
+		# decides: a wire stamped direct_intake before the turbine became a
+		# penstock kind (or by an older build) is not a dip tube any more.
+		var tk := str((turbine.get("specs", {}) as Dictionary).get("turbine_kind", "siphon"))
+		if not bool(HydroSource.kind_meta(tk).get("has_penstock", false)):
+			continue
+		if bool(conn.get("direct_intake", false)):
+			model.update_connection(str(conn.get("id", "")), {"direct_intake": false})
+		if bool(osp.get("pond_storage", false)):
+			_route_penstock_from_pond(str(turbine.get("id", "")), str(other.get("id", "")), handle, {})
+		elif ResourceFlowEngine.is_stream_intake(other):
+			_remove_existing_penstock(str(turbine.get("id", "")), str(conn.get("id", "")))
+			model.update_connection(str(conn.get("id", "")), {
+				"conduit_type": "poly_penstock", "visible_3d": true, "flow_glow": true})
+			reveal_penstock_conduit(str(conn.get("id", "")))
+
+
+## Classify a world point as a water source: {kind: "pond"|"stream"|"spring", …}.
+## Pond beats stream beats bare ground; `stream_max_m` is the snap distance.
+func resolve_hydro_source_at(world_xz: Vector2, stream_max_m: float = 8.0) -> Dictionary:
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("pick_water_at_world"):
+		var w: Dictionary = loader.call("pick_water_at_world", world_xz.x, world_xz.y)
+		if bool(w.get("valid", false)):
+			var tank := _pond_tank_for_tag(str(w.get("tag", "")))
+			if not tank.is_empty():
+				return {"kind": "pond", "item_id": str(tank.get("id", "")),
+					"label": str((tank.get("specs", {}) as Dictionary).get("name", "Pond"))}
+			return {"kind": "pond_unadded", "tag": str(w.get("tag", "")), "water_idx": int(w.get("water_idx", -1))}
+	if loader != null and loader.has_method("pick_stream_at_world"):
+		var st: Dictionary = loader.call("pick_stream_at_world", world_xz.x, world_xz.y, stream_max_m)
+		if bool(st.get("valid", false)):
+			return {"kind": "stream", "feature_id": str(st.get("id", "")), "seg": int(st.get("seg", 0)),
+				"label": str(st.get("name", "")) if not str(st.get("name", "")).is_empty() else str(st.get("kind", "stream")).capitalize()}
+	var y := TerrainSurfaceQuery.ground_height_at(_get_scene_main_node(), world_xz.x, world_xz.y)
+	return {"kind": "spring", "world_pos": Vector3(world_xz.x, y if is_finite(y) else 0.0, world_xz.y), "label": "Spring"}
+
+
+## The pond tank on the graph for a picked water body's tag, or {}.
+func _pond_tank_for_tag(tag: String) -> Dictionary:
+	if model == null or tag.is_empty():
+		return {}
+	for it in model.items_of_type("resource"):
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if bool(sp.get("pond_storage", false)) and str(sp.get("osm_water_tag", "")) == tag:
+			return it
+	return {}
+
+
+## Route `turbine_id`'s penstock from `source` (resolve_hydro_source_at's
+## dict). ONE penstock per turbine: whatever it had is replaced. `opts`:
+## pipe_size_in / pipe_sdr / stock_length_m (style), handle_id (default
+## res_in_0). Returns the connection id, "" on failure (with a toast).
+func route_penstock_to_source(turbine_id: String, source: Dictionary, opts: Dictionary = {}) -> String:
+	if model == null or turbine_id.is_empty() or source.is_empty():
+		return ""
+	var turbine := model.get_item(turbine_id)
+	if str((turbine.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+		_show_toast("Only a hydro turbine takes a penstock")
+		return ""
+	var handle := str(opts.get("handle_id", "res_in_0"))
+	var style := {}
+	for k in ["pipe_size_in", "pipe_sdr", "stock_length_m"]:
+		if opts.has(k):
+			style[k] = opts[k]
+	match str(source.get("kind", "")):
+		"pond":
+			return _route_penstock_from_pond(turbine_id, str(source.get("item_id", "")), handle, style)
+		"pond_unadded":
+			_show_toast("Add that pond to the graph first (aim at it → Pond settings → Add to graph)", 4.0)
+			return ""
+		"stream":
+			return tap_stream_for_turbine(str(source.get("feature_id", "")), int(source.get("seg", 0)),
+					turbine_id, handle, style)
+		"spring":
+			return create_penstock_intake_at(source.get("world_pos", Vector3.ZERO) as Vector3,
+					turbine_id, handle, style)
+	return ""
+
+
+## A pond on the graph feeds the turbine through a contour-routed poly
+## penstock: reuse the pond→turbine water wire when there is one (the Lab's
+## old "From pond" restyle), else add it; any other penstock goes.
+func _route_penstock_from_pond(turbine_id: String, tank_id: String, handle: String,
+		style_ov: Dictionary) -> String:
+	var tank := model.get_item(tank_id)
+	if tank.is_empty() or not bool((tank.get("specs", {}) as Dictionary).get("pond_storage", false)):
+		_show_toast("That is not a pond on the graph")
+		return ""
+	var conn_id := ""
+	for conn: Dictionary in model.connections:
+		var s := str(conn.get("source_item_id", ""))
+		var t := str(conn.get("target_item_id", ""))
+		if (s == tank_id and t == turbine_id) or (s == turbine_id and t == tank_id):
+			conn_id = str(conn.get("id", ""))
+			break
+	if conn_id.is_empty():
+		conn_id = model.generate_connection_id()
+		model.add_connection({
+			"id": conn_id,
+			"source_item_id": tank_id, "source_handle_id": "output",
+			"target_item_id": turbine_id, "target_handle_id": handle,
+			"polarity": "resource", "resource_type": "water",
+			"conduit_type": "poly_penstock", "conduit_style": {},
+			"visible_3d": true, "flow_glow": true,
+		})
+	_remove_existing_penstock(turbine_id, conn_id)
+	var conn := model.get_connection(conn_id)
+	var style: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
+	for k in style_ov:
+		style[k] = style_ov[k]
+	style.erase("route_mode")
+	model.update_connection(conn_id, {
+		"conduit_type": "poly_penstock",
+		"conduit_style": style,
+		"visible_3d": true, "flow_glow": true,
+		"route_3d": [], "route_locked": false,
+	})
+	reveal_penstock_conduit(conn_id)
+	_schedule_graph_autosave()
+	_show_toast("Penstock routed from %s" % str((tank.get("specs", {}) as Dictionary).get("name", "the pond")))
+	return conn_id
+
+
+## The best uphill source for a turbine: a STREAM vertex within `max_m` that
+## stands ≥ 1 m above it (highest wins, shorter run on a tie), else the
+## highest bare ground on a ring scan (the old Lab auto-route). {} = nothing
+## higher. A creek is where the water is; the terrain scan found hilltops
+## with no flow on them.
+func find_uphill_source(turbine_id: String, max_m: float = 150.0) -> Dictionary:
+	var turbine := model.get_item(turbine_id) if model != null else {}
+	var t_xz := _item_world_xz(turbine)
+	var main := _get_scene_main_node()
+	if not is_finite(t_xz.x) or main == null:
+		return {}
+	var t_y := TerrainSurfaceQuery.ground_height_at(main, t_xz.x, t_xz.y)
+	var loader := _find_terrain_loader(main)
+	var best := {}
+	var best_y := t_y + 1.0
+	var best_d := INF
+	if loader != null and loader.has_method("water_network"):
+		var wn: Node = loader.call("water_network")
+		if wn != null:
+			for f_v in wn.call("features"):
+				var f: Dictionary = f_v
+				var fid := str(f.get("id", ""))
+				if fid.begins_with("dc_"):
+					continue
+				var pts: PackedVector2Array = f.get("points", PackedVector2Array())
+				for i in range(0, pts.size() - 1):
+					var d := pts[i].distance_to(t_xz)
+					if d > max_m:
+						continue
+					var y := TerrainSurfaceQuery.ground_height_at(main, pts[i].x, pts[i].y)
+					if y > best_y + 0.05 or (absf(y - best_y) <= 0.05 and d < best_d):
+						best_y = y
+						best_d = d
+						best = {"kind": "stream", "feature_id": fid, "seg": i,
+							"label": str(f.get("name", "")) if not str(f.get("name", "")).is_empty() else str(f.get("kind", "stream")).capitalize(),
+							"rise_m": y - t_y}
+	if not best.is_empty():
+		return best
+	for i in 48:
+		var a := TAU * float(i) / 48.0
+		for r in [30.0, 60.0, 90.0, 120.0]:
+			var wx: float = t_xz.x + cos(a) * float(r)
+			var wz: float = t_xz.y + sin(a) * float(r)
+			var gy := TerrainSurfaceQuery.ground_height_at(main, wx, wz)
+			var d2 := float(r)
+			if gy > best_y + 0.05 or (absf(gy - best_y) <= 0.05 and d2 < best_d):
+				best_y = gy
+				best_d = d2
+				best = {"kind": "spring", "world_pos": Vector3(wx, gy, wz), "label": "Spring", "rise_m": gy - t_y}
+	return best
+
+
+## What feeds this turbine now — for the Lab's source line:
+## {kind: "pond"|"stream"|"spring"|"none", label, detail}.
+func hydro_source_summary(turbine_id: String) -> Dictionary:
+	if model == null or turbine_id.is_empty():
+		return {"kind": "none", "label": "", "detail": ""}
+	var item := model.get_item(turbine_id)
+	var intake: Dictionary = {}
+	if _resource_flow != null and _resource_flow.has_method("_stream_intake_for"):
+		intake = _resource_flow.call("_stream_intake_for", item)
+	if not intake.is_empty():
+		var isp: Dictionary = intake.get("specs", {}) as Dictionary
+		var q := float(isp.get("live_supply_lps", NAN))
+		var wf := str(isp.get("water_feature_name", ""))
+		if not str(isp.get("water_feature_bind", isp.get("water_feature_id", ""))).is_empty():
+			return {"kind": "stream", "label": wf if not wf.is_empty() else "Stream",
+				"detail": ("%.2f L/s at the intake" % q) if not is_nan(q) else "measuring…"}
+		return {"kind": "spring", "label": str(isp.get("name", "Spring intake")),
+			"detail": ("%.2f L/s (base %.2f + rain)" % [q, float(isp.get("base_flow_lps", 0.0))]) if not is_nan(q) else ""}
+	var pond := resolve_siphon_pond(turbine_id)
+	if not pond.is_empty():
+		var ps: Dictionary = pond.get("specs", {}) as Dictionary
+		var lvl := float(ps.get("level_m", NAN))
+		return {"kind": "pond", "label": str(ps.get("name", "Pond")),
+			"detail": ("level %.2f m" % lvl) if not is_nan(lvl) else "stored water"}
+	return {"kind": "none", "label": "No source", "detail": "drag the intake uphill, tap a stream, or bind a pond"}
+
+
+## Hydro turbines (role siphon_hydro) on the graph, nearest `world_xz` first,
+## with their world XZ: [{item, xz, dist}].
+func hydro_turbines_near(world_xz: Vector2, max_m: float) -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for it: Dictionary in model.items_of_type("processor"):
+		if str((it.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
+			continue
+		var xz := _item_world_xz(it)
+		if not is_finite(xz.x):
+			continue
+		var d := xz.distance_to(world_xz)
+		if d <= max_m:
+			out.append({"item": it, "xz": xz, "dist": d})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["dist"]) < float(b["dist"]))
+	return out
+
+
+## Seat a PowerSpout PLT at `world_xz`: the prop, the graph node bound to it,
+## the spin binding — exactly what the penstock harness and the library's
+## "Place model" flow do. Returns the new item id, "" on failure.
+func place_powerspout_at(world_xz: Vector2) -> String:
+	var main := _get_scene_main_node()
+	if main == null or model == null:
+		return ""
+	var preset := ComponentPresets.preset_with_turbine_kind("powerspout_pelton")
+	if preset.is_empty():
+		return ""
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(
+			main, "powerspout_plt", world_xz.x, world_xz.y)
+	if not bool(placed.get("ok", false)):
+		return ""
+	var prop_id := str(placed.get("prop_id", ""))
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	specs["bound_prop_id"] = prop_id
+	specs["gross_head_m"] = 0.0  # the routed geometry is the authority
+	var item_id: String = model.generate_item_id()
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(world_xz, soi.call("world_center") as Vector3)
+	model.add_item({
+		"id": item_id, "type": "processor",
+		"x": randf_range(-90.0, 90.0), "y": randf_range(-70.0, 70.0),
+		"width": float(preset.get("width", 150.0)), "height": float(preset.get("height", 130.0)),
+		"scope_id": _active_scope_id,
+		"site_x_m": site.x, "site_z_m": site.y,
+		"elevation_m": float(placed.get("ground_y", 0.0)),
+		"is_virtual": false,
+		"specs": specs,
+	})
+	PlacedPropService.update_prop_record(main, prop_id,
+			{"graph_item_id": item_id, "kind": "siphon_hydro",
+			"turbine_node": ModelCatalog.turbine_node_for("powerspout_plt"),
+			"spin_axis": ModelCatalog.spin_axis_for("powerspout_plt")}, true)
+	return item_id
+
+
+## Turn a stream reach into a penstock. `reach_xz` = the stream's vertices
+## from the intake vertex DOWN to the exit vertex (world XZ, downstream
+## order); `turbine_id` the PowerSpout to feed. Places the intake at the
+## first vertex, routes the penstock through the reach's interior vertices
+## (so the pipe follows the creek bed, not a straight chord over the ridge),
+## binds the intake to `feature_id`, and replaces any penstock the turbine
+## already had. Returns the connection id, "" on failure.
+func create_penstock_from_stream(feature_id: String, feature_name: String,
+		reach_xz: PackedVector2Array, turbine_id: String, style_ov: Dictionary = {}) -> String:
+	if reach_xz.size() < 2 or turbine_id.is_empty():
+		return ""
+	var main := _get_scene_main_node()
+	var mgr := _get_conduit_manager()
+	var ground := func(xz: Vector2) -> float:
+		if mgr != null and mgr.has_method("ground_y_at"):
+			return float(mgr.call("ground_y_at", Vector3(xz.x, 0.0, xz.y)))
+		return TerrainSurfaceQuery.ground_height_at(main, xz.x, xz.y)
+	var head := reach_xz[0]
+	var route: Array = []
+	# Interior vertices only — the endpoints are the intake's and turbine's
+	# own port anchors. A creek meanders tighter than coil bends: keep a
+	# vertex only when it is at least 2.5 bend radii past the last kept one
+	# (so every corner has legs long enough for its arc), and never more than
+	# 24 of them — the contour router resamples every metre anyway.
+	var r_min := ConduitKinds.contour_bend_radius_m("poly_penstock", style_ov)
+	var min_leg := maxf(2.5 * r_min, 3.0)
+	var kept: Array = []
+	var last := reach_xz[0]
+	var tail := reach_xz[reach_xz.size() - 1]
+	for i in range(1, reach_xz.size() - 1):
+		var p := reach_xz[i]
+		if p.distance_to(last) < min_leg or p.distance_to(tail) < min_leg:
+			continue
+		kept.append(p)
+		last = p
+	var stride := maxi(1, int(ceilf(float(kept.size()) / 24.0)))
+	for i in range(0, kept.size(), stride):
+		var p2: Vector2 = kept[i]
+		route.append(Vector3(p2.x, float(ground.call(p2)), p2.y))
+	return create_penstock_intake_at(Vector3(head.x, float(ground.call(head)), head.y),
+			turbine_id, "res_in_0", style_ov,
+			{"route_3d": route, "water_feature_id": feature_id,
+				"water_feature_name": feature_name})
+
+
+## The turbine's existing contour penstock, its intake (when that intake is
+## a stream tap wired to nothing else) and the intake's prop — removed, so a
+## re-routed penstock REPLACES the old one. A second drag used to leave two
+## penstocks and two intakes, and the engine fed the turbine from whichever
+## connection it found first.
+func _remove_existing_penstock(turbine_id: String, keep_conn_id: String = "") -> void:
+	if model == null:
+		return
+	var doomed: Array[Dictionary] = []
+	for conn: Dictionary in model.connections:
+		if str(conn.get("id", "")) == keep_conn_id:
+			continue
+		if str(conn.get("source_item_id", "")) != turbine_id \
+				and str(conn.get("target_item_id", "")) != turbine_id:
+			continue
+		if str(conn.get("conduit_type", "")) != "poly_penstock":
+			continue
+		doomed.append(conn)
+	for old in doomed:
+		var other_id := str(old.get("source_item_id", ""))
+		if other_id == turbine_id:
+			other_id = str(old.get("target_item_id", ""))
+		model.remove_connection(str(old.get("id", "")))
+		var other := model.get_item(other_id)
+		if not ResourceFlowEngine.is_stream_intake(other):
+			continue
+		var still_wired := false
+		for conn2: Dictionary in model.connections:
+			if str(conn2.get("source_item_id", "")) == other_id \
+					or str(conn2.get("target_item_id", "")) == other_id:
+				still_wired = true
+		if still_wired:
+			continue
+		var pid := str((other.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+		model.remove_item(other_id)
+		var loader := _find_terrain_loader(_get_scene_main_node())
+		if loader != null and not pid.is_empty() and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", pid)
 
 
 ## A penstock the player just routed must RENDER, or nothing downstream works:
@@ -3801,6 +4409,11 @@ func frame_elevation_for_siphon(siphon_id: String, set_camera: bool = true) -> v
 	if item.is_empty():
 		return
 	var pond := resolve_siphon_pond(siphon_id)
+	# A stream-fed PowerSpout has no pond: its INTAKE is the far end of the
+	# section (without this the heading collapsed to 0 and the cut ran E-W
+	# through the turbine whatever direction the penstock came from).
+	if pond.is_empty() and _resource_flow != null and _resource_flow.has_method("_stream_intake_for"):
+		pond = _resource_flow.call("_stream_intake_for", item)
 	var pond_site := Vector2.ZERO
 	if not pond.is_empty() and GraphSiteLayout.has_site_coords(pond):
 		pond_site = GraphSiteLayout.site_xz(pond)
@@ -3949,8 +4562,9 @@ func _sync_view_mode_menu_checks() -> void:
 		_vm_set_checked(VIEW_MODE_SITE_CHIPS, bool(_graph_canvas.get("site_show_chips")))
 		_vm_set_disabled(VIEW_MODE_SITE_CHIPS, not site_in)
 		_vm_set_checked(VIEW_MODE_SITE_PORTS, bool(_graph_canvas.get("site_show_ports")))
+		_vm_set_checked(VIEW_MODE_WORLD_PINS, bool(_graph_canvas.get("phys_pins_mode")))
 		_vm_set_disabled(VIEW_MODE_SITE_PORTS, not site_in)
-		_vm_set_checked(VIEW_MODE_SITE_LIVE_LIGHT, _site_elev_live_lighting)
+
 		var sw := str(_graph_canvas.get("site_wire_mode"))
 		for pair in [
 			[VIEW_MODE_SITE_WIRE_3D, "prefer_3d"],
@@ -3960,7 +4574,7 @@ func _sync_view_mode_menu_checks() -> void:
 			_vm_set_checked(int(pair[0]), sw == str(pair[1]))
 			_vm_set_disabled(int(pair[0]), not site_in)
 		_sync_elev_overlay_menu_checks()
-	# Mode chip strip mirrors the active view (Snowglobe is modal, not sticky).
+	# Mode chip strip mirrors the active lens.
 	for mid in _mode_chip_btns:
 		var btn: Button = _mode_chip_btns[mid] as Button
 		if btn == null:
@@ -3973,8 +4587,8 @@ func _sync_view_mode_menu_checks() -> void:
 				on = _graph_view_mode == GraphSiteLayout.VIEW_SITE
 			"elevation":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
-			"snowglobe":
-				on = false
+			"globe":
+				on = _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
 		btn.set_pressed_no_signal(on)
 
 
@@ -4094,7 +4708,213 @@ func _sync_elev_slice_slider_from_canvas(offset_m: float) -> void:
 		_elev_slice_lbl.text = "%+.0f m" % offset_m
 
 
+func _build_lens_strip() -> void:
+	_lens_strip = PanelContainer.new()
+	_lens_strip.name = "LensStrip"
+	_lens_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lens_strip.visible = false
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(UITheme.C_BG, 0.78)
+	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.35)
+	sb.set_border_width_all(1)
+	sb.border_width_left = 3
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 12.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_top = 7.0
+	sb.content_margin_bottom = 8.0
+	_lens_strip.add_theme_stylebox_override("panel", sb)
+	var col := VBoxContainer.new()
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_theme_constant_override("separation", 2)
+	_lens_strip.add_child(col)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 8)
+	col.add_child(row)
+	_lens_strip_icon = TextureRect.new()
+	_lens_strip_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lens_strip_icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	_lens_strip_icon.modulate = C_PRIMARY
+	row.add_child(_lens_strip_icon)
+	_lens_strip_title = Label.new()
+	_lens_strip_title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	_lens_strip_title.add_theme_color_override("font_color", C_TEXT)
+	row.add_child(_lens_strip_title)
+	_lens_strip_state = Label.new()
+	_lens_strip_state.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_lens_strip_state.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(_lens_strip_state)
+	_lens_strip_clock = Label.new()
+	_lens_strip_clock.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	row.add_child(_lens_strip_clock)
+	_lens_strip_hint = Label.new()
+	_lens_strip_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_lens_strip_hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	col.add_child(_lens_strip_hint)
+	add_child(_lens_strip)
+	_soil_legend = GraphSoilLegend.new()
+	_soil_legend.name = "SoilLegend"
+	_soil_legend.visible = false
+	add_child(_soil_legend)
+
+
+## Refresh the strip (throttled; text is only written when it changes).
+func _update_lens_strip(delta: float, force: bool = false) -> void:
+	if _lens_strip == null or _graph_canvas == null:
+		return
+	_lens_strip_acc += delta
+	if not force and _lens_strip_acc < LENS_STRIP_INTERVAL_S:
+		return
+	_lens_strip_acc = 0.0
+	var mode := _graph_view_mode
+	var on := visible and mode in [GraphSiteLayout.VIEW_SITE,
+			GraphSiteLayout.VIEW_ELEVATION, GraphSiteLayout.VIEW_GLOBE]
+	_lens_strip.visible = on
+	var want_key := on and mode in [GraphSiteLayout.VIEW_ELEVATION, GraphSiteLayout.VIEW_GLOBE]
+	if _soil_legend != null:
+		_soil_legend.visible = want_key
+	if not on:
+		_lens_strip_key = ""
+		return
+	_lens_strip.position = _graph_canvas.position + Vector2(12.0, 12.0)
+	if want_key and _soil_legend != null:
+		_soil_legend.position = _lens_strip.position + Vector2(0.0, _lens_strip.size.y + 8.0)
+	var soi := get_node_or_null("/root/SoiService")
+	var r := float(soi.call("radius_m")) if soi != null and soi.has_method("radius_m") else 0.0
+	if want_key and _soil_legend != null and r > 0.0:
+		_soil_legend.set_radius(r)
+	var title := ""
+	var icon := ""
+	var state := ""
+	var hint := ""
+	match mode:
+		GraphSiteLayout.VIEW_SITE:
+			title = "Site Plan"
+			icon = "site"
+			state = "SoI %.0f m" % r
+			var wr := float(_graph_canvas.get("site_working_radius_m"))
+			if not is_nan(wr) and wr > 1.0:
+				state += " · working R %.0f m" % wr
+			if bool(_graph_canvas.get("radial_layout_mode")):
+				state += " · radial"
+			hint = "drag a pin or a prop to move it · Shift+drag to orbit · wheel to zoom"
+		GraphSiteLayout.VIEW_ELEVATION:
+			title = "Elevation"
+			icon = "elevation"
+			var heading := fposmod(rad_to_deg(float(_graph_canvas.get("elevation_heading_rad"))), 360.0)
+			var slice := float(_graph_canvas.get("elevation_section_offset_m"))
+			var three_d := bool(_graph_canvas.get("soi_live_preview"))
+			state = "heading %.0f° · slice %+.0f m" % [heading, slice]
+			# Vertical exaggeration only matters on the 2D-only section (the
+			# 3D cut is always true scale).
+			if not three_d:
+				state += " · %d× vertical" % int(round(float(_graph_canvas.get("elevation_exaggeration"))))
+			hint = "Shift+drag ↔ rotates the cut, ↕ moves the slice · wheel zooms · drag pans"
+		GraphSiteLayout.VIEW_GLOBE:
+			title = "Globe"
+			icon = "globe"
+			state = "SoI %.0f m" % r
+			hint = "drag a pin to move it · drag the sky to orbit · wheel to zoom · click a pin to inspect · double-click to re-fit"
+	var clock_txt := ""
+	var clock_col := UITheme.C_TEXT_M
+	var main := _get_scene_main_node()
+	if main != null:
+		var held := str(main.call("clock_hold_owner")) if main.has_method("clock_hold_owner") else ""
+		var ts := float(main.get("time_scale")) if main.get("time_scale") != null else 0.0
+		if not held.is_empty():
+			clock_txt = "  ●  time held"
+			clock_col = UITheme.C_AMBER
+		elif ts > 0.0:
+			var mult := ts * 3600.0
+			clock_txt = "  ●  live %s×" % (("%.0f" % mult) if mult >= 10.0 else ("%.1f" % mult))
+			clock_col = UITheme.C_GREEN
+		else:
+			clock_txt = "  ●  paused"
+			clock_col = UITheme.C_AMBER
+	var key := "%s|%s|%s|%s|%s" % [title, state, hint, clock_txt, str(clock_col)]
+	if key == _lens_strip_key:
+		return
+	_lens_strip_key = key
+	_lens_strip_icon.texture = GraphLensIcons.icon(icon, 16)
+	_lens_strip_title.text = title
+	_lens_strip_state.text = state
+	_lens_strip_clock.text = clock_txt
+	_lens_strip_clock.add_theme_color_override("font_color", clock_col)
+	_lens_strip_hint.text = hint
+	_lens_strip.reset_size()
+
+
+## Globe lens toolbar: the SoI radius (the same setting the full-screen
+## globe's dock edits) and a button into the full-screen globe. Radius edits
+## are applied on a short debounce: SoiService.set_radius_m re-meshes the soil
+## bowl against the terrain, far too heavy for every slider tick.
+func _build_globe_row(parent: Control) -> void:
+	_globe_row = HBoxContainer.new()
+	_globe_row.add_theme_constant_override("separation", 6)
+	_globe_row.visible = false
+	var cap := Label.new()
+	cap.text = "Radius"
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.add_theme_color_override("font_color", Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.85))
+	_globe_row.add_child(cap)
+	_globe_radius_slider = HSlider.new()
+	_globe_radius_slider.custom_minimum_size = Vector2(120, 22)
+	_globe_radius_slider.min_value = SoiConfig.MIN_RADIUS_M
+	_globe_radius_slider.max_value = 600.0
+	_globe_radius_slider.step = 5.0
+	_globe_radius_slider.tooltip_text = "Sphere of Influence radius (m)"
+	_globe_radius_slider.value_changed.connect(_on_globe_radius_changed)
+	_globe_row.add_child(_globe_radius_slider)
+	_globe_radius_lbl = Label.new()
+	_globe_radius_lbl.custom_minimum_size = Vector2(52, 0)
+	_globe_radius_lbl.add_theme_font_size_override("font_size", 11)
+	_globe_row.add_child(_globe_radius_lbl)
+	var full := Button.new()
+	full.text = "Full screen ⤢"
+	full.focus_mode = Control.FOCUS_NONE
+	full.tooltip_text = ("Open the globe full screen (the map pin's view). "
+			+ "The graph closes and comes back when you exit.")
+	_apply_topbar_btn_style(full)
+	full.pressed.connect(_open_full_snowglobe)
+	_globe_row.add_child(full)
+	parent.add_child(_globe_row)
+	_globe_radius_timer = Timer.new()
+	_globe_radius_timer.one_shot = true
+	_globe_radius_timer.wait_time = 0.15
+	_globe_radius_timer.timeout.connect(_apply_globe_radius)
+	add_child(_globe_radius_timer)
+
+
+func _sync_globe_row() -> void:
+	if _globe_row == null:
+		return
+	var on := _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
+	_globe_row.visible = on
+	if not on:
+		return
+	var soi := get_node_or_null("/root/SoiService")
+	var r := float(soi.call("radius_m")) if soi != null and soi.has_method("radius_m") else 150.0
+	_globe_radius_slider.max_value = maxf(600.0, r)
+	_globe_radius_slider.set_value_no_signal(r)
+	_globe_radius_lbl.text = "%.0f m" % r
+
+
+func _on_globe_radius_changed(v: float) -> void:
+	if _globe_radius_lbl != null:
+		_globe_radius_lbl.text = "%.0f m" % v
+	if _globe_radius_timer != null:
+		_globe_radius_timer.start()
+
+
+func _apply_globe_radius() -> void:
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("set_radius_m") and _globe_radius_slider != null:
+		soi.call("set_radius_m", _globe_radius_slider.value)
+
+
 func _sync_elev_slice_row() -> void:
+	_sync_globe_row()
 	if _elev_slice_row == null:
 		return
 	var on := _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
@@ -4289,6 +5109,16 @@ func sync_site_from_prop(prop_id: String) -> void:
 			continue
 		var patch := {
 			"site_x_m": site.x, "site_z_m": site.y, "elevation_m": world.y}
+		# A placed solar array's facing IS its plane of array.
+		if str(specs.get("compound_kind", "")) == "array":
+			var prec := PlacedPropService.get_prop_record(main, prop_id)
+			if str(prec.get("model_id", "")) == PvArrayBuilder.MODEL_ID:
+				var pspec := PvArrayBuilder.resolve_spec(prec.get("pv_array_spec", {}) as Dictionary)
+				var o := PvArrayBuilder.orientation_for(float(prec.get("yaw", 0.0)), float(pspec["tilt_deg"]))
+				specs["tilt_deg"] = float(o["tilt_deg"])
+				specs["azimuth_deg"] = float(o["azimuth_deg"])
+				specs["mount_style"] = str(pspec["mount_style"])
+				patch["specs"] = specs
 		# Siphon start/break track the 3D turbine via offsets → absolutes.
 		if str(specs.get("role", "")) == "siphon_hydro":
 			specs["module_elev_m"] = world.y
@@ -4344,6 +5174,7 @@ func _world_xz_for_osm_tag(main: Node, tag: String) -> Variant:
 func resolve_site_elevations_after_load() -> void:
 	if model == null:
 		return
+	reconcile_world_bindings()
 	_backfill_site_from_world()
 	_refresh_item_elevations()
 	var mgr := _get_conduit_manager()
@@ -4352,6 +5183,99 @@ func resolve_site_elevations_after_load() -> void:
 			mgr.call("invalidate_obstacle_cache")
 		if mgr.has_method("sync_all"):
 			mgr.call("sync_all")
+
+
+## Make the graph agree with the 3D world on load (3D placement is the source
+## of truth for where a bound thing stands):
+##  - a node bound to a prop takes the prop's position as its site position
+##    (Mt Vernon had a turbine 6.8 m and an intake 21 m off their props, and
+##    the next Site / Globe drag would have MOVED the props to the stale spot);
+##  - one-way bindings are repaired both ways (prop.graph_item_id <->
+##    specs.bound_prop_id);
+##  - a stream intake bound to a stream that no longer exists re-binds to the
+##    stream it actually stands in (or unbinds), and takes that stream's name.
+## Returns the number of items patched. History-suppressed: a load is not an
+## edit the player should be able to undo.
+func reconcile_world_bindings() -> int:
+	if model == null:
+		return 0
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main)
+	if main == null:
+		return 0
+	var soi := get_node_or_null("/root/SoiService")
+	var center := Vector3.ZERO
+	if soi != null and soi.has_method("world_center"):
+		center = soi.call("world_center")
+	var wn := _water_network_node()
+	# Only judge stream binds against a network that has actually resolved its
+	# streams — an empty one (still loading) would unbind every intake.
+	if wn != null:
+		var feats: Variant = wn.get("_features")
+		if not (feats is Array) or (feats as Array).is_empty():
+			wn = null
+	var was_suppress := _history_suppress
+	_history_suppress = true
+	var patched := 0
+	for item: Dictionary in model.items.duplicate():
+		var iid := str(item.get("id", ""))
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var patch := {}
+		var pid := str(specs.get("bound_prop_id", ""))
+		if not pid.is_empty():
+			var rec := PlacedPropService.get_prop_record(main, pid)
+			if not rec.is_empty():
+				var gid := str(rec.get("graph_item_id", ""))
+				if gid != iid and (gid.is_empty() or model.get_item(gid).is_empty()):
+					PlacedPropService.update_prop_record(main, pid, {"graph_item_id": iid}, false)
+				var site := GraphSiteLayout.world_xz_to_site(
+						Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))), center)
+				if not GraphSiteLayout.has_site_coords(item) \
+						or GraphSiteLayout.site_xz(item).distance_to(site) > _SITE_SYNC_EPS_M:
+					patch["site_x_m"] = site.x
+					patch["site_z_m"] = site.y
+		# Stream intake bound to a stream that is gone.
+		var bind := str(specs.get("water_feature_bind", ""))
+		if not bind.is_empty() and wn != null and wn.has_method("feature") \
+				and (wn.call("feature", bind) as Dictionary).is_empty():
+			var fid := str(specs.get("water_feature_id", ""))
+			if not fid.is_empty() and not (wn.call("feature", fid) as Dictionary).is_empty():
+				specs["water_feature_bind"] = fid
+			else:
+				specs.erase("water_feature_bind")
+			patch["specs"] = specs
+		if ResourceFlowEngine.is_stream_intake(item):
+			var fname := str(specs.get("water_feature_name", ""))
+			var nm := str(specs.get("name", ""))
+			if not fname.is_empty() and nm.begins_with("Stream Intake") \
+					and nm != "Stream Intake: %s" % fname:
+				specs["name"] = "Stream Intake: %s" % fname
+				patch["specs"] = specs
+		if not patch.is_empty():
+			model.update_item(iid, patch)
+			patched += 1
+	# Props pointing at a node that does not point back.
+	if loader != null and loader.has_method("placed_prop_records"):
+		for rec_v in (loader.call("placed_prop_records") as Array):
+			if not (rec_v is Dictionary):
+				continue
+			var rec2: Dictionary = rec_v
+			var gid2 := str(rec2.get("graph_item_id", ""))
+			if gid2.is_empty():
+				continue
+			var it2 := model.get_item(gid2)
+			if it2.is_empty():
+				continue
+			var sp2: Dictionary = (it2.get("specs", {}) as Dictionary)
+			if str(sp2.get("bound_prop_id", "")).is_empty():
+				var sp3 := sp2.duplicate(true)
+				sp3["bound_prop_id"] = str(rec2.get("id", ""))
+				model.update_item(gid2, {"specs": sp3})
+				patched += 1
+	_history_suppress = was_suppress
+	if patched > 0:
+		print("SystemGraphView: reconciled %d graph↔3D binding(s) on load" % patched)
+	return patched
 
 
 func _refresh_item_elevations() -> void:
@@ -4383,6 +5307,13 @@ func _refresh_item_elevations() -> void:
 			elev = float(center.y)
 			if soi.has_method("ground_y_at"):
 				elev = float(soi.call("ground_y_at", wxz.x, wxz.y))
+			# A draft OUTLET owns its invert: a hand-set (Lab / Elevation /
+			# pin) height at or under the ground must not be flattened back
+			# onto the surface on the next lens entry.
+			if bool(specs.get("outlet_sink", false)):
+				var saved := float(item.get("elevation_m", NAN))
+				if not is_nan(saved) and saved <= elev + 0.05:
+					continue
 		if is_nan(elev):
 			continue
 		if absf(float(item.get("elevation_m", NAN)) - elev) > 0.005 \
@@ -4452,6 +5383,12 @@ func _on_soi_preview_active_changed(on: bool) -> void:
 	var mgr: Node3D = _get_conduit_manager() if on else _conduit_manager
 	if mgr != null and is_instance_valid(mgr) and mgr.has_method("set_preview_visibility"):
 		mgr.call("set_preview_visibility", on)
+	# Buried culverts / pipes of the stream network follow the same X-ray rule.
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("water_network"):
+		var wn: Node = loader.call("water_network")
+		if wn != null and wn.has_method("set_preview_visibility"):
+			wn.call("set_preview_visibility", on)
 
 
 ## Called when the graph Control is hidden (G toggle). Ensures Lab session
@@ -5105,6 +6042,219 @@ func _find_terrain_loader(main: Node) -> Node:
 	if main == null:
 		return null
 	return main.find_child("TerrainLoader", true, false)
+
+
+# ---------------------------------------------------------------------------
+# WaterNetwork link — the flow engine asks these (host callbacks) so a stream
+# intake standing in a stream takes that stream's discharge, and streams that
+# end in a pond on the graph fill it.
+# ---------------------------------------------------------------------------
+
+var _water_loader_cache: Node = null
+
+
+func _water_network_node() -> Node:
+	if _water_loader_cache == null or not is_instance_valid(_water_loader_cache):
+		_water_loader_cache = _find_terrain_loader(_get_scene_main_node())
+	if _water_loader_cache == null or not _water_loader_cache.has_method("water_network"):
+		return null
+	return _water_loader_cache.call("water_network")
+
+
+## World XZ of a graph item: its bound prop's anchor, else its site coords.
+## The anchor resolve (prop lookup + port binding + transform) ran every
+## engine tick per stream-fed turbine; a prop that moves re-resolves within
+## a second.
+var _item_xz_cache: Dictionary = {}
+const _ITEM_XZ_TTL_MS := 1000
+
+
+func _item_world_xz(item: Dictionary) -> Vector2:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var main := _get_scene_main_node()
+	if not str(specs.get("bound_prop_id", "")).is_empty() and get_tree() != null:
+		var iid := str(item.get("id", ""))
+		var now := Time.get_ticks_msec()
+		var c: Variant = _item_xz_cache.get(iid)
+		if c is Dictionary and int((c as Dictionary).get("until", 0)) > now:
+			return (c as Dictionary).get("xz") as Vector2
+		var a := ConduitManager.anchor_global_for_item(item, get_tree(), "", main)
+		if is_finite(a.x) and is_finite(a.z):
+			_item_xz_cache[iid] = {"xz": Vector2(a.x, a.z), "until": now + _ITEM_XZ_TTL_MS}
+			return Vector2(a.x, a.z)
+	if not GraphSiteLayout.has_site_coords(item):
+		return Vector2(INF, INF)
+	var site := GraphSiteLayout.site_xz(item)
+	var c := Vector3.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		c = soi.call("world_center")
+	return Vector2(c.x + site.x, c.z + site.y)
+
+
+func water_feature_supply_for_intake(intake: Dictionary, rain_mmh: float) -> Dictionary:
+	var wn := _water_network_node()
+	if wn == null:
+		return {}
+	var p := _item_world_xz(intake)
+	if not is_finite(p.x):
+		return {}
+	# An intake the player BOUND (Penstock span tool) takes its stream at any
+	# distance; only an unbound one is matched by standing in a stream.
+	var bind := str((intake.get("specs", {}) as Dictionary).get("water_feature_bind", ""))
+	if not bind.is_empty() and wn.has_method("feature_supply_on"):
+		var on: Dictionary = wn.call("feature_supply_on", bind, p, rain_mmh)
+		if not on.is_empty():
+			return on
+	return wn.call("feature_supply_at", p, rain_mmh, 6.0)
+
+
+## {tank item id -> L/s} for every stream ending in a pond that is on the graph.
+func stream_pond_inflows(rain_mmh: float, diversions: Dictionary = {}) -> Dictionary:
+	var out := {}
+	var wn := _water_network_node()
+	if wn == null or model == null:
+		return out
+	var ends: Array = wn.call("pond_inflows", rain_mmh)
+	if ends.is_empty():
+		return out
+	for e_v in ends:
+		var e: Dictionary = (e_v as Dictionary).duplicate()
+		# Water a penstock turbine diverted out of this stream (and delivered
+		# elsewhere) never reaches the pond at its end.
+		var taken := float(diversions.get(str(e.get("feature_id", "")), 0.0))
+		if taken > 0.0:
+			e["q_lps"] = maxf(float(e.get("q_lps", 0.0)) - taken, 0.0)
+		for item in model.items_of_type("resource"):
+			var ts: Dictionary = (item as Dictionary).get("specs", {}) as Dictionary
+			var pid := str(ts.get("pond_id", ""))
+			var match_id := (not pid.is_empty() and pid == str(e.get("pond_id", ""))) \
+				or (not str(e.get("tag", "")).is_empty() and str(ts.get("osm_water_tag", "")) == str(e["tag"]))
+			if match_id:
+				var tid := str((item as Dictionary).get("id", ""))
+				out[tid] = float(out.get(tid, 0.0)) + float(e.get("q_lps", 0.0))
+				break
+	return out
+
+
+## Upstream catchment area (m²) of the mapped streams ending in each pond
+## tank: {tank_id: m2}. The engine subtracts it from a hillside watershed wired
+## to the same pond so one hillside is never counted twice.
+func stream_pond_catchment_m2() -> Dictionary:
+	var out := {}
+	var wn := _water_network_node()
+	if wn == null or model == null:
+		return out
+	for e_v in (wn.call("pond_inflows", 0.0) as Array):
+		var e: Dictionary = e_v
+		for item in model.items_of_type("resource"):
+			var ts: Dictionary = (item as Dictionary).get("specs", {}) as Dictionary
+			var pid := str(ts.get("pond_id", ""))
+			if (not pid.is_empty() and pid == str(e.get("pond_id", ""))) \
+					or (not str(e.get("tag", "")).is_empty() and str(ts.get("osm_water_tag", "")) == str(e["tag"])):
+				var tid := str((item as Dictionary).get("id", ""))
+				out[tid] = float(out.get(tid, 0.0)) + float(e.get("area_m2", 0.0))
+				break
+	return out
+
+
+## A placed `pv_array` prop ↔ its graph array. Binds the array named by the
+## record's `graph_item_id` (the inspector's "Place in 3D" on an existing
+## array), else creates one: the module count / electricals from the prop's
+## spec, wired to the only (or first) controller, tagged `pv_<prop_id>` so a
+## re-seed replaces only this array. Stamps bound_prop_id + site coords and
+## the plane of array from the prop's yaw + rack tilt. Returns the item id.
+func bind_pv_array_prop(prop_id: String) -> String:
+	var main := _get_scene_main_node()
+	if model == null or main == null or prop_id.is_empty():
+		return ""
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty() or str(rec.get("model_id", "")) != PvArrayBuilder.MODEL_ID:
+		return ""
+	var spec := PvArrayBuilder.resolve_spec(rec.get("pv_array_spec", {}) as Dictionary)
+	var o := PvArrayBuilder.orientation_for(float(rec.get("yaw", 0.0)), float(spec["tilt_deg"]))
+	var iid := str(rec.get("graph_item_id", ""))
+	var it := model.get_item(iid) if not iid.is_empty() else {}
+	if it.is_empty() or str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) != "array":
+		var ctrl_id := ""
+		for c: Dictionary in GraphNesting.walk_items(model, "root"):
+			if str(c.get("type", "")) == "controller" and not bool(c.get("is_virtual", false)) \
+					and not bool((c.get("specs", {}) as Dictionary).get("destroyed", false)):
+				ctrl_id = str(c.get("id", ""))
+				break
+		var opts := {
+			"voc": float(spec.get("voc", 41.62)), "vmp": float(spec.get("vmp", 34.77)),
+			"isc": float(spec.get("isc", 11.47)), "imp": float(spec.get("imp", 10.93)),
+			"panel_w_m": float(spec["panel_w_m"]), "panel_h_m": float(spec["panel_h_m"]),
+			"tilt_deg": float(o["tilt_deg"]), "azimuth_deg": float(o["azimuth_deg"]),
+			"mount_style": str(spec["mount_style"]), "show_picker": false,
+		}
+		if not ctrl_id.is_empty():
+			opts["controller_id"] = ctrl_id
+		iid = add_imported_solar_panels(int(spec["count"]), float(spec.get("wmp", 380.0)),
+				str(spec.get("label", "Solar Array")), "pv_%s" % prop_id, opts)
+		if iid.is_empty():
+			return ""
+		it = model.get_item(iid)
+	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	sp["bound_prop_id"] = prop_id
+	sp["model_id"] = PvArrayBuilder.MODEL_ID
+	sp["tilt_deg"] = float(o["tilt_deg"])
+	sp["azimuth_deg"] = float(o["azimuth_deg"])
+	sp["mount_style"] = str(spec["mount_style"])
+	var soi := get_node_or_null("/root/SoiService")
+	var center := Vector3.ZERO
+	if soi != null and soi.has_method("world_center"):
+		center = soi.call("world_center")
+	var site := GraphSiteLayout.world_xz_to_site(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))), center)
+	model.update_item(iid, {"specs": sp, "site_x_m": site.x, "site_z_m": site.y})
+	if str(rec.get("graph_item_id", "")) != iid:
+		PlacedPropService.update_prop_record(main, prop_id, {"graph_item_id": iid}, false)
+	_sync_solar_ui_from_graph()
+	_schedule_graph_autosave()
+	return iid
+
+
+## Graph → 3D for an array node: start placing a `pv_array` sized to this
+## array (module count, electricals, rack tilt), facing its azimuth, bound to
+## THIS node on confirm.
+func place_array_in_world(item_id: String) -> bool:
+	var it := model.get_item(item_id) if model != null else {}
+	var main := _get_scene_main_node()
+	if it.is_empty() or main == null:
+		return false
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	if str(sp.get("compound_kind", "")) != "array":
+		return false
+	var count := int(sp.get("panel_count", sp.get("array_panel_units", 9)))
+	var spec := {
+		"count": count, "cols": int(sp.get("array_series", count)) if count <= 12 else 0,
+		"tilt_deg": float(sp.get("tilt_deg", 0.0)) if float(sp.get("tilt_deg", 0.0)) > 0.0 else PvArrayBuilder.DEFAULT_TILT_DEG,
+		"panel_w_m": float(sp.get("panel_w_m", PvArrayBuilder.DEFAULT_PANEL_W_M)),
+		"panel_h_m": float(sp.get("panel_h_m", PvArrayBuilder.DEFAULT_PANEL_H_M)),
+		"mount_style": SolarArrayBuilder.MOUNT_GROUND,
+		"wmp": float(sp.get("wmp", 380.0)), "voc": float(sp.get("voc", 41.62)),
+		"vmp": float(sp.get("vmp", 34.77)), "isc": float(sp.get("isc", 11.47)),
+		"imp": float(sp.get("imp", 10.93)), "label": str(sp.get("name", "Solar Array")),
+	}
+	var r: Dictionary = PlacedPropService.begin_placement(main, PvArrayBuilder.MODEL_ID, {
+		"ok": true, "model_id": PvArrayBuilder.MODEL_ID,
+		"pv_array_spec": spec,
+		"record_extra": {"pv_array_spec": spec, "graph_item_id": item_id,
+			"yaw": PvArrayBuilder.yaw_for_azimuth(float(sp.get("azimuth_deg", 180.0)))},
+	})
+	if not bool(r.get("ok", false)):
+		_show_toast("Could not start placing the array")
+		return false
+	visible = false
+	_show_toast("Place the array — it faces %s (%.0f°); turn it with the gizmo after placing" % [
+			_compass_point(float(sp.get("azimuth_deg", 180.0))), float(sp.get("azimuth_deg", 180.0))])
+	return true
+
+
+static func _compass_point(az_deg: float) -> String:
+	const PTS := ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+	return PTS[int(round(fposmod(az_deg, 360.0) / 45.0)) % 8]
 
 
 ## Open the Inventory & Crafting panel (fabricated parts + recipe assembly).
@@ -5959,6 +7109,15 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 		"mount_style": SolarArrayBuilder.resolve_mount_style(
 			str(opts.get("mount_style", SolarArrayBuilder.MOUNT_ROOF))),
 	}
+	# A real plane (a placed array / a deployed linkage) carries its compass
+	# azimuth too; only arrays WITH one steer SolarUI's plane of array.
+	if opts.has("azimuth_deg"):
+		arr_specs["azimuth_deg"] = fposmod(float(opts.get("azimuth_deg", 180.0)), 360.0)
+	# The panel's own temperature coefficients (data sheet %/°C) — the string
+	# Voc check and the MPPT window read them over the generic 0.3 %/°C.
+	for ck: String in ["voc_temp_coeff_pct", "pmax_temp_coeff_pct", "vmp_temp_coeff_pct"]:
+		if opts.has(ck):
+			arr_specs[ck] = float(opts.get(ck, 0.0))
 	for k in equiv.keys():
 		arr_specs[k] = equiv[k]
 	# Persist footprint so inspector dim edits can re-tile panel count.
@@ -6840,6 +7999,20 @@ func lab_set_pond_level(siphon_id: String, level_m: float) -> bool:
 	return true
 
 
+## Raise the MAX FILL LEVEL of the siphon's pond to `max_y` (a dam above the
+## basin rim) through the loader, so the tank's rim and capacity follow and
+## the Lab can fill it to a crest that stands above the natural rim.
+func raise_pond_max_level_for_siphon(siphon_id: String, max_y: float) -> bool:
+	var tank := resolve_siphon_pond(siphon_id)
+	if tank.is_empty():
+		return false
+	var tag := str((tank.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if tag.is_empty() or loader == null or not loader.has_method("set_pond_max_level_by_tag"):
+		return false
+	return bool(loader.call("set_pond_max_level_by_tag", tag, max_y))
+
+
 ## True when a pond tank has usable floor/rim bathymetry for Lab/Elev framing.
 static func pond_has_usable_bathymetry(specs: Dictionary) -> bool:
 	var floor_m := float(specs.get("floor_m", NAN))
@@ -6905,11 +8078,30 @@ func prepare_siphon_lab_session(siphon_id: String) -> void:
 			if is_nan(elev):
 				elev = float(ss.get("module_elev_m", NAN))
 			SiphonHydraulics.apply_resolved_levels(ss, elev)
+			# A siphon saved before the geometry keys existed: derive the dip
+			# tube from its break level (so the break does not move) and the
+			# priming from where its prime level sat — below the module means
+			# it never needed the pond at the crest, i.e. a pumped siphon.
+			var kind_s := str(ss.get("turbine_kind", "siphon"))
+			if not bool(HydroSource.kind_meta(kind_s).get("has_penstock", false)) \
+					and is_nan(float(ss.get("dip_tube_length_m", NAN))):
+				var mod_s := float(ss.get("module_elev_m", elev))
+				var brk_s := float(ss.get("siphon_break_m", NAN))
+				var st_s := float(ss.get("siphon_start_m", NAN))
+				if not is_nan(mod_s) and not is_nan(brk_s):
+					ss["dip_tube_length_m"] = clampf(mod_s - brk_s, 0.1, 30.0)
+					if not ss.has("siphon_prime_mode"):
+						ss["siphon_prime_mode"] = "pump" if (not is_nan(st_s) and st_s < mod_s - 0.01) else "overflow"
+					ss.erase("siphon_start_offset_m")
+					ss.erase("siphon_break_offset_m")
+					SiphonHydraulics.apply_resolved_levels(ss, elev)
 			var siphon_patch := {"specs": ss}
 			if not is_nan(elev):
 				siphon_patch["elevation_m"] = elev
 			model.update_item(siphon_id, siphon_patch)
+		heal_siphon_intake_wires(siphon_id)
 		ensure_siphon_outlet_sink(siphon_id)
+		sync_siphon_outlet_invert_from_sink(siphon_id)
 		# Soft-focus culvert glow; Elevation CT (embedded) shows the 3D run.
 		focus_siphon_conduit_glow(siphon_id, false)
 		_relax_legacy_siphon_nameplate(siphon_id)
@@ -7155,35 +8347,43 @@ func bind_siphon_to_nearest_pond(siphon_id: String, silent: bool = false,
 		"visible_3d": false,
 		"direct_intake": true,
 	})
-	# Seat siphon at pond site; seed module + start/break from pond bathymetry.
-	var patch := {}
-	if GraphSiteLayout.has_site_coords(best):
-		var site := GraphSiteLayout.site_xz(best)
-		patch["site_x_m"] = site.x + 1.5
-		patch["site_z_m"] = site.y
+	# Where the turbine stands. A turbine bound to a placed prop IS where the
+	# player put it — never move its site (the old +1.5 m-from-centroid seat
+	# put the graph site in the middle of the pond, and the outlet trace then
+	# walked down the pond's own bed). A siteless graph-only turbine is seated
+	# on the pond's SHORE, a bore or two past the rim, not at the centroid.
 	var ts2: Dictionary = best.get("specs", {}) as Dictionary
+	var patch := {}
+	var specs: Dictionary = (siphon.get("specs", {}) as Dictionary).duplicate(true)
+	var prop_bound := not str(specs.get("bound_prop_id", "")).is_empty()
+	var has_site := GraphSiteLayout.has_site_coords(siphon)
+	if not prop_bound and not has_site and GraphSiteLayout.has_site_coords(best):
+		var site := GraphSiteLayout.site_xz(best)
+		var half_w := pond_half_extent_m(ts2)
+		patch["site_x_m"] = site.x + half_w + 1.5
+		patch["site_z_m"] = site.y
 	var rim := float(ts2.get("rim_m", NAN))
 	var floor_y := float(ts2.get("floor_m", NAN))
-	var level_m := float(ts2.get("level_m", NAN))
-	var specs: Dictionary = (siphon.get("specs", {}) as Dictionary).duplicate(true)
-	var mod_e := rim - 0.35 if not is_nan(rim) else float(best.get("elevation_m", 0.0))
+	# The crest: the prop's own height when there is one, else just under
+	# the rim so an overflow prime is reachable.
+	var mod_e := float(siphon.get("elevation_m", NAN)) if prop_bound else NAN
+	if is_nan(mod_e):
+		mod_e = rim - 0.35 if not is_nan(rim) else float(best.get("elevation_m", 0.0))
 	specs["module_elev_m"] = mod_e
-	var d_in := maxf(float(specs.get("intake_diameter_mm", 150.0)) / 1000.0, 0.05)
-	var break_m := mod_e
-	if not is_nan(floor_y):
-		break_m = maxf(floor_y + 0.15, mod_e - 0.4)
-	var start_m := SiphonHydraulics.crown_from_invert(break_m, d_in)
-	if not is_nan(level_m):
-		start_m = maxf(start_m, level_m - 0.05)
-	if not is_nan(rim):
-		start_m = minf(start_m, rim - 0.02)
-	# Absolutes for save compat + offsets so 3D module moves retarget levels.
-	specs["siphon_start_m"] = start_m
-	specs["siphon_break_m"] = break_m
-	specs["siphon_start_offset_m"] = start_m - mod_e
-	specs["siphon_break_offset_m"] = break_m - mod_e
-	specs["intake_crown_m"] = start_m
-	specs["intake_invert_m"] = break_m
+	# The siphon's own geometry: a dip tube reaching toward the pond floor
+	# (its mouth is the break level), primed by overflow when the pond can
+	# reach the crest, by a vacuum pump when the turbine stands above the rim.
+	if is_nan(float(specs.get("dip_tube_length_m", NAN))):
+		var dip := 1.0
+		if not is_nan(floor_y):
+			dip = clampf(mod_e - (floor_y + 0.15), 0.3, 4.0)
+		specs["dip_tube_length_m"] = dip
+	if not specs.has("siphon_prime_mode"):
+		specs["siphon_prime_mode"] = "pump" if (not is_nan(rim) and mod_e > rim - 0.02) else "overflow"
+	# Drop legacy absolute levels so the resolver derives them from the dip
+	# tube and the prime mode (it would otherwise keep the stale offsets).
+	for k in ["siphon_start_offset_m", "siphon_break_offset_m"]:
+		specs.erase(k)
 	SiphonHydraulics.apply_resolved_levels(specs, mod_e)
 	patch["elevation_m"] = mod_e
 	patch["specs"] = specs
@@ -7495,7 +8695,141 @@ func prune_orphan_pond_items(live_tags: Dictionary, force: bool = false) -> int:
 
 
 ## Create downhill ∞ outlet sink + culvert_pipe from siphon water out (idempotent).
-func ensure_siphon_outlet_sink(siphon_id: String) -> String:
+## How far a pond reaches from its centroid (m): the OSM outline's farthest
+## vertex, else half its footprint, else 3 m. The one number the bind's shore
+## seat, the outlet trace's keep-out and the in-pond outlet check all use.
+static func pond_half_extent_m(tank_specs: Dictionary) -> float:
+	var r := 0.0
+	for pt: Variant in tank_specs.get("osm_poly_site", []) as Array:
+		if pt is Array and (pt as Array).size() >= 2:
+			r = maxf(r, Vector2(float((pt as Array)[0]), float((pt as Array)[1])).length())
+	if r <= 0.0:
+		r = maxf(float(tank_specs.get("footprint_w_m", 0.0)), float(tank_specs.get("footprint_d_m", 0.0))) * 0.5
+	return maxf(r, 3.0)
+
+
+## A SIPHON drinks through its dip tube: its pond→turbine wire is a direct
+## intake, never a routed pipe. Earlier builds' auto-penstock hook converted
+## that wire into a poly penstock anchored at the tank's centroid (the
+## "immovable intake" the player saw) — put it back. Returns how many healed.
+func heal_siphon_intake_wires(siphon_id: String) -> int:
+	if model == null or siphon_id.is_empty():
+		return 0
+	var siphon := model.get_item(siphon_id)
+	if siphon.is_empty():
+		return 0
+	var kind := str((siphon.get("specs", {}) as Dictionary).get("turbine_kind", "siphon"))
+	if bool(HydroSource.kind_meta(kind).get("has_penstock", false)):
+		return 0
+	var healed := 0
+	for conn: Dictionary in model.connections.duplicate():
+		if str(conn.get("target_item_id", "")) != siphon_id:
+			continue
+		if not str(conn.get("target_handle_id", "")).begins_with("res_in"):
+			continue
+		var src := model.get_item(str(conn.get("source_item_id", "")))
+		if not bool((src.get("specs", {}) as Dictionary).get("pond_storage", false)):
+			continue
+		if str(conn.get("conduit_type", "")) != "poly_penstock" and not bool(conn.get("visible_3d", false)):
+			continue
+		model.update_connection(str(conn.get("id", "")), {
+			"conduit_type": "", "visible_3d": false, "direct_intake": true,
+			"flow_glow": false, "route_3d": [], "route_locked": false})
+		healed += 1
+	if healed > 0:
+		_show_toast("Siphon intake restored (the dip tube drinks straight from the pond)")
+		_schedule_graph_autosave()
+	return healed
+
+
+## True when an auto-minted outlet sits inside its siphon's pond basin — the
+## old downhill trace walked into the carved bed and ended at the pond bottom.
+func _siphon_outlet_in_pond(siphon_id: String, sink: Dictionary) -> bool:
+	if sink.is_empty() or not GraphSiteLayout.has_site_coords(sink):
+		return false
+	var ss: Dictionary = sink.get("specs", {}) as Dictionary
+	if not bool(ss.get("outlet_sink", false)) or not str(ss.get("bound_prop_id", "")).is_empty():
+		return false
+	var pond := resolve_siphon_pond(siphon_id)
+	if pond.is_empty() or not GraphSiteLayout.has_site_coords(pond):
+		return false
+	var ps: Dictionary = pond.get("specs", {}) as Dictionary
+	var keep_out := pond_half_extent_m(ps) + 2.0
+	var d := GraphSiteLayout.site_xz(sink).distance_to(GraphSiteLayout.site_xz(pond))
+	if d >= keep_out:
+		return false
+	var rim := float(ps.get("rim_m", NAN))
+	return is_nan(rim) or float(sink.get("elevation_m", rim)) < rim + 0.05
+
+
+## Put the siphon's outlet node at a site + height by hand (the Lab's exit
+## drag). The culvert becomes a chord again (a hand-placed exit is not on
+## the traced path); the engine re-measures the draft length from the sites.
+func move_siphon_outlet(siphon_id: String, site: Vector2, elev_m: float) -> bool:
+	if model == null or siphon_id.is_empty() or _resource_flow == null:
+		return false
+	var siphon := model.get_item(siphon_id)
+	if siphon.is_empty() or not _resource_flow.has_method("_resolve_siphon_outlet_tank"):
+		return false
+	var sink: Dictionary = _resource_flow.call("_resolve_siphon_outlet_tank", siphon)
+	if sink.is_empty():
+		return false
+	var sid := str(sink.get("id", ""))
+	model.update_item(sid, {"site_x_m": site.x, "site_z_m": site.y, "elevation_m": elev_m})
+	for conn: Dictionary in model.connections.duplicate():
+		if str(conn.get("source_item_id", "")) == siphon_id and str(conn.get("target_item_id", "")) == sid \
+				and str(conn.get("conduit_type", "")) == "culvert_pipe":
+			model.update_connection(str(conn.get("id", "")), {
+				"invert_out_m": elev_m, "route_3d": [], "route_locked": false})
+	var ss: Dictionary = (siphon.get("specs", {}) as Dictionary).duplicate(true)
+	ss["outlet_invert_m"] = elev_m
+	model.update_item(siphon_id, {"specs": ss})
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("sync_all"):
+		mgr.call("sync_all")
+	_schedule_graph_autosave()
+	return true
+
+
+## ONE exit height. The physics reads `specs.outlet_invert_m`, the culvert
+## carries `invert_out_m`, the outlet node has `elevation_m` — and saves
+## carried three different numbers. The node is where the pipe daylights in
+## the world, so it is the truth; the other two follow it.
+func sync_siphon_outlet_invert_from_sink(siphon_id: String) -> void:
+	if model == null or siphon_id.is_empty() or _resource_flow == null:
+		return
+	var siphon := model.get_item(siphon_id)
+	if siphon.is_empty() or not _resource_flow.has_method("_resolve_siphon_outlet_tank"):
+		return
+	var sink: Dictionary = _resource_flow.call("_resolve_siphon_outlet_tank", siphon)
+	if sink.is_empty():
+		return
+	var e := float(sink.get("elevation_m", NAN))
+	if is_nan(e):
+		return
+	var ss: Dictionary = (siphon.get("specs", {}) as Dictionary)
+	if absf(float(ss.get("outlet_invert_m", NAN)) - e) > 1e-3 or is_nan(float(ss.get("outlet_invert_m", NAN))):
+		var ss2 := ss.duplicate(true)
+		ss2["outlet_invert_m"] = e
+		model.update_item(siphon_id, {"specs": ss2})
+	var sid := str(sink.get("id", ""))
+	for conn: Dictionary in model.connections:
+		if str(conn.get("source_item_id", "")) == siphon_id and str(conn.get("target_item_id", "")) == sid \
+				and str(conn.get("conduit_type", "")) == "culvert_pipe":
+			if absf(float(conn.get("invert_out_m", NAN)) - e) > 1e-3 or is_nan(float(conn.get("invert_out_m", NAN))):
+				model.update_connection(str(conn.get("id", "")), {"invert_out_m": e})
+
+
+## Re-route the draft pipe: drop the auto-minted outlet and trace again,
+## `target_drop_m` of descent from the turbine (0 = the stock 9 m).
+func retrace_siphon_outlet(siphon_id: String, target_drop_m: float = 0.0) -> String:
+	if model == null or siphon_id.is_empty():
+		return ""
+	_remove_auto_outlet_sink(siphon_id)
+	return ensure_siphon_outlet_sink(siphon_id, target_drop_m if target_drop_m > 0.0 else 9.0)
+
+
+func ensure_siphon_outlet_sink(siphon_id: String, target_drop_m: float = 9.0) -> String:
 	if model == null or siphon_id.is_empty():
 		return ""
 	var siphon := model.get_item(siphon_id)
@@ -7516,7 +8850,8 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 		var existing: Dictionary = _resource_flow.call("_resolve_siphon_outlet_tank", siphon)
 		if not existing.is_empty():
 			var es: Dictionary = existing.get("specs", {}) as Dictionary
-			if bool(es.get("outlet_sink", false)) or bool(es.get("unlimited_capacity", false)):
+			if (bool(es.get("outlet_sink", false)) or bool(es.get("unlimited_capacity", false))) \
+					and not _siphon_outlet_in_pond(siphon_id, existing):
 				return str(existing.get("id", ""))
 	# Fallback scan (true idempotency): _resolve_siphon_outlet_tank only finds a
 	# sink still WIRED to a res_out port — if the player wired their own tank
@@ -7549,7 +8884,12 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 		if wired_sink_ids.size() > 1:
 			_show_toast("Merged %d duplicate culvert outlets" % (wired_sink_ids.size() - 1))
 			_schedule_graph_autosave()
-		return wired_sink_ids[0]
+		if _siphon_outlet_in_pond(siphon_id, model.get_item(wired_sink_ids[0])):
+			# Traced into the pond by an earlier build: mint a fresh one.
+			model.remove_item(wired_sink_ids[0])
+			_show_toast("Culvert outlet was in the pond — re-tracing downhill")
+		else:
+			return wired_sink_ids[0]
 	if not orphan_sink_id.is_empty():
 		var siphon_elev0 := float(siphon.get("elevation_m",
 				(siphon.get("specs", {}) as Dictionary).get("module_elev_m", 0.0)))
@@ -7582,7 +8922,7 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 	var site_z := float(siphon.get("site_z_m", 0.0))
 	var siphon_elev := float(siphon.get("elevation_m",
 			(siphon.get("specs", {}) as Dictionary).get("module_elev_m", 0.0)))
-	var sink_elev := siphon_elev - 9.0
+	var sink_elev := siphon_elev - maxf(target_drop_m, 1.0)
 	var route_3d: Array = []
 	var daylighted := false
 
@@ -7604,8 +8944,26 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 			var start_world_xz := GraphSiteLayout.site_to_world_xz(
 					GraphSiteLayout.site_xz(siphon), center)
 			var height_at := Callable(loader, "ground_height_at")
+			# Never into the pond: its carved bed is the steepest ground
+			# around and the walk used to end at the pond bottom.
+			var veto := Callable()
+			var pond_t := resolve_siphon_pond(siphon_id)
+			if not pond_t.is_empty() and GraphSiteLayout.has_site_coords(pond_t):
+				var pts2: Dictionary = pond_t.get("specs", {}) as Dictionary
+				var pond_w := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(pond_t), center)
+				var keep_out := pond_half_extent_m(pts2) + 2.0
+				var rim_v := float(pts2.get("rim_m", NAN))
+				veto = func(x: float, z: float) -> bool:
+					var inside := Vector2(x, z).distance_to(pond_w) < keep_out
+					if not inside:
+						return false
+					# Inside the footprint AND below the rim = the basin.
+					if is_nan(rim_v):
+						return true
+					return float(height_at.call(x, z)) < rim_v + 0.05
 			var trace: Dictionary = Watershed.trace_downhill(
-					start_world_xz, height_at, 9.0, 4.0, 60)
+					start_world_xz, height_at, maxf(target_drop_m, 1.0), 4.0,
+					maxi(int(ceil(maxf(target_drop_m, 1.0) / 9.0 * 60.0)), 60), veto)
 			var pts: PackedVector2Array = trace.get("points", PackedVector2Array())
 			if pts.size() > 1:
 				var end_xz: Vector2 = pts[pts.size() - 1]
@@ -7663,6 +9021,10 @@ func ensure_siphon_outlet_sink(siphon_id: String) -> String:
 		"target_handle_id": "input",
 		"waypoints": [],
 		"route_3d": route_3d,
+		# The traced waypoints are only READ when the route is locked
+		# (ConduitManager.build_control_points) — unlocked, the culvert drew
+		# a bent chord straight to the sink and the trace was decoration.
+		"route_locked": not route_3d.is_empty(),
 		"conduit_type": "culvert_pipe",
 		"invert_in_m": siphon_elev - 0.2,
 		"invert_out_m": sink_elev,
@@ -7783,6 +9145,12 @@ func sync_pond_level_from_mesh(tag: String, level_m: float, rim_m: float,
 				and not (str(item.get("type", "")) == "catchment" \
 				and str(specs.get("osm_tag", "")) == tag):
 			continue
+		# Only the pond's own storage tank and its catchments mirror the water
+		# surface. Copying level/rim/floor onto any resource that happened to
+		# carry the pond's tag is how a 100 L supply tank and a stream intake
+		# ended up "being" the pond at −79 m and drove a turbine.
+		if not bool(specs.get("pond_storage", false)) and str(item.get("type", "")) != "catchment":
+			continue
 		# Self-heal a stale tag inline — no separate healing pass needed once a
 		# tank carries a pond_id.
 		if by_id and str(specs.get("osm_water_tag", "")) != tag:
@@ -7875,6 +9243,11 @@ func push_pond_levels_to_mesh(update_mesh: bool = false) -> void:
 					lm = floor0 + clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * span0
 			if not is_nan(lm):
 				levels[tag] = lm
+				# Move this pond's own water plane now — cheap and exact (a flat
+				# plane over a fixed outline). The full rebuild below stays
+				# throttled; before this the 3D water only moved every 0.10 m.
+				if loader.has_method("set_pond_surface_level_by_tag"):
+					loader.call("set_pond_surface_level_by_tag", tag, lm)
 			continue
 		var rim := float(specs.get("rim_m", NAN))
 		var floor_y := float(specs.get("floor_m", NAN))
@@ -7924,6 +9297,12 @@ func _writeback_pond_twins_from_mesh(tag: String, info: Dictionary) -> void:
 	elif is_nan(frac) and not is_nan(rim) and not is_nan(floor_y):
 		frac = clampf((lm - floor_y) / maxf(rim - floor_y, 0.05), 0.0, 1.0)
 	var pond_id := str(info.get("pond_id", ""))
+	# The basin's stage–storage curve becomes the tank's level authority (the
+	# engine reads level_m off it), so the graph and the 3D water agree.
+	var curve: Array = []
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader != null and loader.has_method("pond_stage_curve"):
+		curve = loader.call("pond_stage_curve", tag) as Array
 	for it in model.items:
 		if not (it is Dictionary):
 			continue
@@ -7932,6 +9311,8 @@ func _writeback_pond_twins_from_mesh(tag: String, info: Dictionary) -> void:
 		var is_tank := bool(specs.get("pond_storage", false))
 		var is_surface := str(item.get("type", "")) == "catchment" \
 				and str(specs.get("catchment_kind", "")) == "pond"
+		if is_tank and curve.size() >= 2 and specs.get("stage_curve", []) != curve:
+			specs["stage_curve"] = curve
 		if not is_tank and not is_surface:
 			continue
 		var by_id := not pond_id.is_empty() and str(specs.get("pond_id", "")) == pond_id
@@ -8555,6 +9936,47 @@ func select_item_by_id(item_id: String) -> void:
 		_on_canvas_item_selected("")
 	else:
 		_on_canvas_item_selected(item_id)
+
+
+## 3D → graph: open the graph on one node (selected, inspector up, centred in
+## freeform). The prop editor's "Open node in graph" button lands here.
+func open_node_in_graph(item_id: String) -> bool:
+	if model == null or item_id.is_empty() or model.get_item(item_id).is_empty():
+		_show_toast("That prop has no node on the graph")
+		return false
+	visible = true
+	select_item_by_id(item_id)
+	if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _graph_canvas != null \
+			and _graph_canvas.has_method("focus_on_item"):
+		_graph_canvas.call("focus_on_item", item_id)
+	return true
+
+
+## Graph → 3D: close the graph and look at a node's 3D twin from the
+## settlement camera (a free look — the player is not moved).
+func locate_item_in_world(item_id: String) -> bool:
+	var it := model.get_item(item_id) if model != null else {}
+	var main := _get_scene_main_node()
+	if it.is_empty() or main == null:
+		return false
+	var pid := str((it.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+	var at := Vector2.INF
+	if not pid.is_empty():
+		var rec := PlacedPropService.get_prop_record(main, pid)
+		if not rec.is_empty():
+			at = Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	if at == Vector2.INF and GraphSiteLayout.has_site_coords(it):
+		var soi := get_node_or_null("/root/SoiService")
+		var center := Vector3.ZERO
+		if soi != null and soi.has_method("world_center"):
+			center = soi.call("world_center")
+		at = GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(it), center)
+	if at == Vector2.INF or not main.has_method("open_settlement_view"):
+		_show_toast("This node has no place in the 3D world yet")
+		return false
+	visible = false
+	main.call("open_settlement_view", at, 18.0)
+	return true
 
 
 func find_item_by_bound_prop_id(prop_id: String) -> String:
@@ -11178,10 +12600,42 @@ func npc_population_bridge() -> NpcPopulationBridge:
 	return _npc_population
 
 
+## Settings → NPC → "Simulate & draw NPCs" (NpcDisplayPrefs.npcs_enabled).
+## Off = the population is FROZEN and nothing of it is drawn: no bridge tick,
+## no per-frame crowd slices, no avatar host, no crowd renderer, and every
+## pop-driven habitat falls back to its classic constant-rate demand.
+func npcs_enabled() -> bool:
+	return NpcDisplayPrefs.npcs_enabled()
+
+
+## Edge-triggered: the one-time teardown when the switch goes off. Switching
+## back on needs nothing — the next ambient tick reinstalls the demand
+## overrides and _ensure_npc_host/_ensure_crowd_renderer rebuild the visuals.
+var _npcs_suspended := false
+
+
+func _suspend_npcs() -> void:
+	if _npcs_suspended:
+		return
+	_npcs_suspended = true
+	if _resource_flow != null and _resource_flow.has_method("clear_habitat_demand"):
+		_resource_flow.call("clear_habitat_demand")
+	_ensure_npc_host()
+	_ensure_crowd_renderer()
+	if _desire_overlay != null and is_instance_valid(_desire_overlay):
+		_desire_overlay.queue_free()
+	_desire_overlay = null
+	_festival_vibe = {}
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
 ## Aggregate roster snapshot for the dashboard's Settlement card. Routed
 ## through _npc_dot_source() so an MP guest reads the host's replicated dots
 ## exactly like the 3D avatar layer does. {} = no population running.
 func npc_dot_summary() -> Dictionary:
+	if not npcs_enabled():
+		return {}
 	var src = _npc_dot_source()
 	if src == null or not bool(src.call("active")):
 		return {}
@@ -11325,12 +12779,16 @@ func _wire_npc_providers() -> void:
 		return
 	_npc_providers_wired = true
 	_graph_canvas.set("npc_agents_provider", func() -> Array:
+		if not npcs_enabled():
+			return []
 		var src = _npc_dot_source()
 		return src.call("agent_dots") if src != null else [])
 	var main_for_spaces := _get_scene_main_node()
 	_graph_canvas.set("npc_spaces_provider", func() -> Array:
 		return _npc_population.space_markers(main_for_spaces) if _npc_population != null else [])
 	_graph_canvas.set("npc_crew_provider", func() -> Array:
+		if not npcs_enabled():
+			return []
 		return _npc_population.crew_site_markers(main_for_spaces) if _npc_population != null else [])
 	_graph_canvas.set("npc_desire_provider", func() -> Dictionary:
 		if not _desire_lines_on or _npc_population == null:
@@ -11367,7 +12825,7 @@ func _npc_dot_source():
 
 func _ensure_npc_host() -> void:
 	var source = _npc_dot_source()
-	var wants := source != null and bool(source.call("active"))
+	var wants := npcs_enabled() and source != null and bool(source.call("active"))
 	var alive := _npc_host != null and is_instance_valid(_npc_host)
 	if wants and not alive:
 		var main_node := _get_scene_main_node()
@@ -11394,8 +12852,8 @@ func _ensure_crowd_renderer() -> void:
 	# Wanted whenever anybody simulates: light camps draw through it, and so
 	# do full-tier people past the host's hero budget. Empty it costs nothing
 	# (instance_count 0, _process returns at once).
-	var wants := _npc_population != null and _npc_population.has_method("active") \
-		and bool(_npc_population.call("active"))
+	var wants := npcs_enabled() and _npc_population != null \
+		and _npc_population.has_method("active") and bool(_npc_population.call("active"))
 	var alive := _crowd_renderer != null and is_instance_valid(_crowd_renderer)
 	if wants and not alive:
 		var main_node := _get_scene_main_node()
@@ -11475,39 +12933,47 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if _npc_population == null:
 		_npc_population = NpcPopulationBridge.new()
 		_wire_npc_providers()
-	# Focus follows the player: the bridge promotes the camp the camera is in
-	# to the full engine and runs every other camp as a light crowd.
-	var focus_cam := get_viewport().get_camera_3d() if get_viewport() != null else null
-	if focus_cam != null:
-		_npc_population.set_viewer(Vector2(focus_cam.global_position.x, focus_cam.global_position.z))
-	PerfMonitor.begin("npc_population")
-	_npc_population.tick(model, _resource_flow, _get_scene_main_node())
-	PerfMonitor.end("npc_population")
-	_ensure_npc_host()
-	_ensure_crowd_renderer()
-	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
-		PerfMonitor.begin("crowd_render")
-		_crowd_renderer.sync(_npc_population.last_abs_h())
-		PerfMonitor.end("crowd_render")
-	_tick_camp_power(_npc_population.last_abs_h())
+	var npcs_on := npcs_enabled()
+	var pop_abs_h := _npc_population.last_abs_h()
+	if npcs_on:
+		_npcs_suspended = false
+		# Focus follows the player: the bridge promotes the camp the camera is
+		# in to the full engine and runs every other camp as a light crowd.
+		var focus_cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+		if focus_cam != null:
+			_npc_population.set_viewer(Vector2(focus_cam.global_position.x, focus_cam.global_position.z))
+		_npc_population.desire_texture_wanted = _desire_lines_on or _desire_3d_on
+		PerfMonitor.begin("npc_population")
+		_npc_population.tick(model, _resource_flow, _get_scene_main_node())
+		PerfMonitor.end("npc_population")
+		pop_abs_h = _npc_population.last_abs_h()
+		_ensure_npc_host()
+		_ensure_crowd_renderer()
+		if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
+			PerfMonitor.begin("crowd_render")
+			_crowd_renderer.sync(pop_abs_h)
+			PerfMonitor.end("crowd_render")
+	else:
+		# NPCs switched off: frozen, undrawn, habitats on nominal demand.
+		_suspend_npcs()
+		var mn := _get_scene_main_node()
+		if mn != null and mn.has_method("get_absolute_hours"):
+			pop_abs_h = float(mn.call("get_absolute_hours"))
+	PerfMonitor.begin("camp_power")
+	_tick_camp_power(pop_abs_h)
+	PerfMonitor.end("camp_power")
 	_ensure_feed_strip()
-	if _desire_3d_on:
+	if _desire_3d_on and npcs_on:
 		_ensure_desire_overlay()
-	_drain_npc_events()
+	if npcs_on:
+		_drain_npc_events()
 	# Dots move only on population ticks — redraw the Site Plan then (and only
 	# then; with the graph closed or in other views this costs nothing).
-	if visible and _npc_population.active() and _graph_canvas != null \
+	if npcs_on and visible and _npc_population.active() and _graph_canvas != null \
 			and _graph_view_mode == GraphSiteLayout.VIEW_SITE:
 		_graph_canvas.queue_redraw()
-	# Site Plan runs on the LIVE clock (no noon lock), so the top-down disc's
-	# lighting drifts with sim time. Re-capture the (dirty-driven) SubViewport
-	# at a low wall-clock throttle — never the expensive _preview_live path.
-	if visible and _graph_view_mode == GraphSiteLayout.VIEW_SITE \
-			and _soi_preview != null and _soi_preview.has_method("request_refresh"):
-		var now_ms := Time.get_ticks_msec()
-		if now_ms - _site_light_refresh_ms >= SITE_LIGHT_REFRESH_MS:
-			_site_light_refresh_ms = now_ms
-			_soi_preview.call("request_refresh")
+	# (The Site Plan's old 5 s lighting re-capture lives in the preview's own
+	# clock-driven refresh policy now, for every lens and the Hydro Lab.)
 	PerfMonitor.begin("flow_engine")
 	_resource_flow.call("tick", delta)
 	PerfMonitor.end("flow_engine")
@@ -11527,11 +12993,48 @@ func _process(delta: float) -> void:
 	# never flows" — its specs were a stale snapshot from the last time the
 	# graph happened to be open, not a live simulation).
 	_tick_resource_flow_ambient(delta)
+	# Between ticks: keep the NPC nav bake moving in a small time-boxed slice
+	# per frame (it used to land as one lump per 2 Hz tick, for minutes).
+	if _npc_population != null and not _mp_is_replica() and not _ambient_flow_suspended \
+			and npcs_enabled():
+		# The SAME suppress/bulk window as the ambient tick: a sliced camp
+		# persists its snapshot through model.update_item, and outside this
+		# window every one of those recorded undo history and refreshed the
+		# canvas (measured: 28 ms a frame on Walton).
+		var was_suppress := _history_suppress
+		var was_bulk := _sim_bulk_update
+		_history_suppress = true
+		_sim_bulk_update = true
+		if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
+			_sim_load_host.call("begin_bulk_sync")
+		var ticked: int = _npc_population.service_frame()
+		if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
+			_sim_load_host.call("end_bulk_sync")
+		_history_suppress = was_suppress
+		_sim_bulk_update = was_bulk
+		if ticked > 0 and _crowd_renderer != null and is_instance_valid(_crowd_renderer):
+			PerfMonitor.begin("crowd_render")
+			_crowd_renderer.sync(_npc_population.last_abs_h())
+			PerfMonitor.end("crowd_render")
 	# DC current-limit throttle must stay live with the graph closed — it caps
 	# the battery charge rate SolarUI integrates every frame.
 	_tick_dc_throttle(delta)
+	# Graph DC generation (hydro, graph-only wind, fuel generators wired into a
+	# battery) must reach SolarUI with the graph CLOSED and while the Hydro Lab
+	# owns the view — both early-return below, and the battery then never saw a
+	# watt of hydro. Runs after the ambient flow tick, so it reads this frame's
+	# freshly computed turbine output.
+	_dc_gen_sync_acc += delta
+	if _dc_gen_sync_acc >= _ENERGY_SYNC_INTERVAL:
+		_dc_gen_sync_acc = 0.0
+		PerfMonitor.begin("gv_dcsync")
+		_sync_graph_dc_generation_to_solar()
+		PerfMonitor.end("gv_dcsync")
 	if not visible:
+		if _lens_strip != null and _lens_strip.visible:
+			_lens_strip.visible = false
 		return
+	_update_lens_strip(delta)
 	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
 	# ResourceFlowEngine (above) still runs so test inflow + siphon drain work.
 	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
@@ -11581,23 +13084,15 @@ func _process(delta: float) -> void:
 	_tick_graph_solar_shading(delta)
 	PerfMonitor.end("gv_ticks")
 	_energy_sync_acc += delta
-	var _do_energy_sync := false
 	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
 		_energy_sync_acc = 0.0
-		_do_energy_sync = true
 		PerfMonitor.begin("gv_energy")
 		_sync_graph_energy_from_solar()
 		PerfMonitor.end("gv_energy")
 	PerfMonitor.begin("gv_workflow")
 	_tick_active_workflow()
 	PerfMonitor.end("gv_workflow")
-	# Runs after the resource-flow tick (not alongside the sync above) so it
-	# sees this frame's freshly recomputed DC-generator current_output_kw
-	# telemetry, not last frame's.
-	if _do_energy_sync:
-		PerfMonitor.begin("gv_dcsync")
-		_sync_graph_dc_generation_to_solar()
-		PerfMonitor.end("gv_dcsync")
+	# (Graph DC generation → SolarUI runs ambient, above the visibility gate.)
 	_closure_refresh_acc += delta
 	if _closure_refresh_acc >= _CLOSURE_REFRESH_INTERVAL:
 		_closure_refresh_acc = 0.0
@@ -11683,15 +13178,19 @@ func _input(event: InputEvent) -> void:
 			var key_focus := get_viewport().gui_get_focus_owner()
 			var in_text := key_focus is LineEdit or key_focus is TextEdit or key_focus is CodeEdit
 			if not in_text:
-				if ke.keycode == KEY_DELETE:
+				# Graph edit keys only while the graph is OPEN. This runs in
+				# _input — before every _unhandled_input — so ungated it ate
+				# Delete / Ctrl+Z / Ctrl+Y from the 3D tools (edit toolbar, Light
+				# Studio) and edited a graph nobody was looking at.
+				if visible and ke.keycode == KEY_DELETE:
 					_delete_selected()
 					get_viewport().set_input_as_handled()
 					return
-				if ke.ctrl_pressed and ke.keycode == KEY_Z:
+				if visible and ke.ctrl_pressed and ke.keycode == KEY_Z:
 					_do_undo()
 					get_viewport().set_input_as_handled()
 					return
-				if ke.ctrl_pressed and ke.keycode == KEY_Y:
+				if visible and ke.ctrl_pressed and ke.keycode == KEY_Y:
 					_do_redo()
 					get_viewport().set_input_as_handled()
 					return
@@ -11742,6 +13241,17 @@ func open_graph_view() -> void:
 	if visible:
 		return
 	_apply_graph_open_side_effects()
+	_update_make_array_quick_button()
+
+
+## Programmatic close — same side effects as the G toggle. Used by the
+## full-screen snowglobe, which renders through the ROOT viewport: while the
+## graph is open that viewport has disable_3d set (see _notification), so a
+## globe entered over the graph drew nothing at all.
+func close_graph_view() -> void:
+	if not visible:
+		return
+	_apply_graph_close_side_effects()
 	_update_make_array_quick_button()
 
 
@@ -12663,6 +14173,8 @@ func _on_model_changed(reason: String) -> void:
 		call_deferred("_populate_library_scene_devices")
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
 		call_deferred("_check_electrical_faults")
+	if reason == "add_connection" and not _history_suppress and not _sim_bulk_update:
+		call_deferred("_auto_penstock_for_new_water_wires")
 	elif not _sim_bulk_update and reason in ["add_item", "remove_item", "update_item", "reset"]:
 		# Item-level edits (battery voltage in the inspector, deletions, loads)
 		# can change bank topology without touching a connection — drop the DC
@@ -13048,10 +14560,38 @@ func _set_score_color(key: String, color: Color) -> void:
 		(_score_labels[key] as Label).add_theme_color_override("font_color", color)
 
 
+## The real controllers' limits SolarUI should enforce instead of its config
+## file defaults: summed max utilized PV power (`max_pv_watts`) and AC overload
+## (`overload_watts`) over every non-packed, non-destroyed controller that has
+## PV wired to it. Empty when no controller has PV (SolarUI keeps its own).
+func _controller_power_limits() -> Dictionary:
+	if model == null:
+		return {}
+	var pv_w := 0.0
+	var ac_w := 0.0
+	var flat := GraphNesting.flat_connections(model)
+	for it: Dictionary in GraphNesting.walk_items(model, "root"):
+		if str(it.get("type", "")) != "controller" or bool(it.get("is_virtual", false)):
+			continue
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if bool(sp.get("destroyed", false)) or bool(sp.get("packed_3d", false)):
+			continue
+		if PvElectrical.pv_sources_for_controller_flat(model, str(it.get("id", "")), flat).is_empty():
+			continue
+		pv_w += maxf(float(sp.get("max_pv_watts", 0.0)), 0.0)
+		ac_w += maxf(float(sp.get("overload_watts", 0.0)), 0.0)
+	return {"pv_w": pv_w, "ac_w": ac_w}
+
+
 func _collect_root_array_aggregate() -> Dictionary:
 	var panel_wmp: float = 0.0
 	var panel_imp: float = 0.0
 	var panel_count: int = 0
+	# Watt-weighted plane of the arrays that know their real orientation
+	# (azimuth as a unit-vector mean so 350° and 10° average to north).
+	var orient_vec := Vector2.ZERO
+	var orient_tilt_w := 0.0
+	var orient_w := 0.0
 	if model == null:
 		return {"panel_wmp": 0.0, "panel_voc_max": 0.0, "panel_imp": 0.0, "panel_count": 0, "array_config": "—"}
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):
@@ -13072,9 +14612,15 @@ func _collect_root_array_aggregate() -> Dictionary:
 			# contribute no capacity until redeployed.
 			if bool(specs.get("array_stowed", false)):
 				continue
-			panel_wmp += float(specs.get("array_equiv_wmp", 0.0))
+			var aw := float(specs.get("array_equiv_wmp", 0.0))
+			panel_wmp += aw
 			panel_imp += float(specs.get("array_equiv_imp", 0.0))
 			panel_count += int(specs.get("array_panel_units", specs.get("child_count", 0)))
+			if specs.has("azimuth_deg") and aw > 0.0:
+				var az := deg_to_rad(float(specs.get("azimuth_deg", 180.0)))
+				orient_vec += Vector2(sin(az), cos(az)) * aw
+				orient_tilt_w += float(specs.get("tilt_deg", 0.0)) * aw
+				orient_w += aw
 	# Voc is NOT additive across the whole design the way Wmp/Imp/count are —
 	# it's a per-STRING figure that depends entirely on series vs. parallel
 	# wiring. Reporting each panel's own rated Voc here (as this used to) reads
@@ -13093,7 +14639,12 @@ func _collect_root_array_aggregate() -> Dictionary:
 		for bv in PvElectrical.branch_vocs_for_controller_flat(model, cid, flat_conns, 25.0):
 			panel_voc_max = maxf(panel_voc_max, float(bv))
 	var cfg := "%d panel%s" % [panel_count, "s" if panel_count != 1 else ""] if panel_count > 0 else "—"
+	var orient := {}
+	if orient_w > 0.0:
+		orient = {"tilt_deg": orient_tilt_w / orient_w,
+			"azimuth_deg": fposmod(rad_to_deg(atan2(orient_vec.x, orient_vec.y)), 360.0)}
 	return {
+		"orientation": orient,
 		"panel_wmp": panel_wmp,
 		"panel_voc_max": panel_voc_max,
 		"panel_imp": panel_imp,
@@ -13239,14 +14790,24 @@ func _sync_solar_ui_from_graph() -> void:
 	var avg_watts := panel_wmp / float(panel_count) if panel_count > 0 else 220.0
 	var bank_soc := _average_graph_battery_soc()
 	if _solar_ui.has_method("apply_from_graph"):
-		_solar_ui.call("apply_from_graph", {
+		var payload := {
 			"panel_count": panel_count,
 			"panel_watts": avg_watts,
 			"peak_kw": panel_wmp / 1000.0,
 			"battery_kwh": float(bat.get("total_kwh", 0.0)),
 			"battery_count": int(bat.get("count", 0)),
 			"battery_soc": bank_soc,
-		})
+		}
+		var orient: Dictionary = agg.get("orientation", {}) as Dictionary
+		if not orient.is_empty():
+			payload["tilt_deg"] = float(orient["tilt_deg"])
+			payload["azimuth_deg"] = float(orient["azimuth_deg"])
+		var lim := _controller_power_limits()
+		if float(lim.get("pv_w", 0.0)) > 0.0:
+			payload["pv_limit_kw"] = float(lim["pv_w"]) / 1000.0
+		if float(lim.get("ac_w", 0.0)) > 0.0:
+			payload["ac_overload_w"] = float(lim["ac_w"])
+		_solar_ui.call("apply_from_graph", payload)
 	if _solar_ui.has_method("set_graph_has_solar"):
 		_solar_ui.call("set_graph_has_solar", panel_count > 0)
 	_sync_graph_energy_from_solar()
@@ -13358,8 +14919,9 @@ func collect_save_state() -> Dictionary:
 		"radial_layout_mode":  bool(_graph_canvas.get("radial_layout_mode")) if _graph_canvas != null else false,
 		"site_show_chips":     bool(_graph_canvas.get("site_show_chips")) if _graph_canvas != null else true,
 		"site_show_ports":     bool(_graph_canvas.get("site_show_ports")) if _graph_canvas != null else true,
+		"phys_pins_mode":      bool(_graph_canvas.get("phys_pins_mode")) if _graph_canvas != null else true,
 		"site_wire_mode":      str(_graph_canvas.get("site_wire_mode")) if _graph_canvas != null else "metro",
-		"site_elev_live_lighting": _site_elev_live_lighting,
+
 		"site_spatial":        _spatial_edit.to_prefs() if _spatial_edit != null else {},
 		"phys_cam":            _collect_phys_cam_state(),
 	}
@@ -13497,6 +15059,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_graph_canvas.set("radial_layout_mode", bool(data.get("radial_layout_mode", false)))
 		_graph_canvas.set("site_show_chips", bool(data.get("site_show_chips", true)))
 		_graph_canvas.set("site_show_ports", bool(data.get("site_show_ports", true)))
+		_graph_canvas.set("phys_pins_mode", bool(data.get("phys_pins_mode", true)))
 		var swm := str(data.get("site_wire_mode", "metro"))
 		_graph_canvas.set("site_wire_mode",
 				swm if swm in ["none", "metro", "prefer_3d"] else "metro")
@@ -13505,7 +15068,8 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 				and _graph_canvas.has_method("set_elev_view_state"):
 			_graph_canvas.call("set_elev_view_state", elev_view)
 		_graph_canvas.call("queue_redraw")
-	_site_elev_live_lighting = bool(data.get("site_elev_live_lighting", false))
+	# "site_elev_live_lighting" (the retired noon-lock opt-out) may still be in
+	# older autosaves; it is simply ignored.
 	if _spatial_edit != null:
 		var spat: Variant = data.get("site_spatial", {})
 		if spat is Dictionary:
@@ -13579,6 +15143,7 @@ const _RENEWABLES_POLL_INTERVAL := 0.25  # matches SolarBridge cadence
 var _renewables_acc: float = _RENEWABLES_POLL_INTERVAL
 const _ENERGY_SYNC_INTERVAL := 0.25
 var _energy_sync_acc: float = 0.0
+var _dc_gen_sync_acc: float = 0.0
 const _PBIS_POLL_INTERVAL := 0.25
 var _pbis_acc: float = _PBIS_POLL_INTERVAL
 ## Per-node 3D shade → specs.sunlight_factor (Phase 5). Same cadence as
@@ -16106,7 +17671,7 @@ func _refresh_camp_cards() -> void:
 		var open := CampLedger.open_kinds(model, cid)
 		var morale := -1.0
 		var present := int(specs.get("camp_headcount", 0))
-		if _npc_population != null:
+		if _npc_population != null and npcs_enabled():
 			for it in model.get_items_in_scope(str(c["scope"])):
 				var d: Dictionary = it
 				if str((d.get("specs", {}) as Dictionary).get("role", "")) != "habitat":
@@ -16149,14 +17714,21 @@ const _CAMP_POWER_PERSIST_H := 0.5
 
 
 func _site_pv_yield(abs_h: float) -> float:
-	var root := get_tree().root if get_tree() != null else null
-	var sui: Node = root.find_child("SolarUI", true, false) if root != null else null
+	# Cached: find_child is a recursive walk of the whole scene, and this runs
+	# every ambient tick.
+	if _solar_ui_cache == null or not is_instance_valid(_solar_ui_cache):
+		var root := get_tree().root if get_tree() != null else null
+		_solar_ui_cache = root.find_child("SolarUI", true, false) if root != null else null
+	var sui: Node = _solar_ui_cache
 	if sui == null or not sui.has_method("evaluate_solar_at"):
 		return 0.0
 	var peak := float(sui.get("PEAK_CAPACITY_KW")) if sui.get("PEAK_CAPACITY_KW") != null else 0.0
 	if peak <= 1e-6:
 		return 0.0
 	return maxf(float(sui.call("evaluate_solar_at", abs_h)), 0.0) / peak
+
+
+var _solar_ui_cache: Node = null
 
 
 func _tick_camp_power(abs_h: float) -> void:
@@ -16242,7 +17814,7 @@ func _refresh_festival_vibe_from(summaries: Array, queueing: int) -> void:
 
 ## The festival-wide vibe ({} when the map has no festival camps).
 func festival_vibe() -> Dictionary:
-	return _festival_vibe
+	return _festival_vibe if npcs_enabled() else {}
 
 
 # ---------------------------------------------------------------------------

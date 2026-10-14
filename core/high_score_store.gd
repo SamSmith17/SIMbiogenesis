@@ -13,7 +13,8 @@ static func map_key(lat: float, lon: float) -> String:
 
 
 static func path_for(lat: float, lon: float) -> String:
-	return "%s/%s.json" % [SCORES_DIR, map_key(lat, lon).replace(".", "p").replace("-", "m")]
+	return WorldPaths.scores_path("%s/%s.json" % [
+		SCORES_DIR, map_key(lat, lon).replace(".", "p").replace("-", "m")])
 
 
 static func load_scores(lat: float, lon: float) -> Dictionary:

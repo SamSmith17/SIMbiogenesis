@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 529
+const EXPECTED_CHECKS := 559
 
 var _fails := 0
 var _checks := 0
@@ -84,9 +84,9 @@ func _test_registry_integrity() -> void:
 		_check("tool id unique: %s" % id, not seen.has(id))
 		seen[id] = true
 		var section := String(t.get("section", ""))
-		_check("%s section is terrain|veg|camps|placement" % id,
+		_check("%s section is terrain|veg|camps|placement|water" % id,
 			section == "terrain" or section == "veg" or section == "camps"
-			or section == "placement")
+			or section == "placement" or section == "water")
 		_check("%s has a label" % id, not String(t.get("label", "")).is_empty())
 		_check("%s has a tooltip" % id, not String(t.get("tooltip", "")).is_empty())
 		var shapes: Array = t.get("shapes", [])
@@ -111,7 +111,8 @@ func _test_registry_integrity() -> void:
 		not st.tools_in_section("terrain").is_empty()
 		and not st.tools_in_section("veg").is_empty()
 		and not st.tools_in_section("camps").is_empty()
-		and not st.tools_in_section("placement").is_empty())
+		and not st.tools_in_section("placement").is_empty()
+		and not st.tools_in_section("water").is_empty())
 	_check("unknown tool id is refused", not st.set_active_tool("nope"))
 	_check("tool_def of an unknown id is empty", st.tool_def("nope").is_empty())
 

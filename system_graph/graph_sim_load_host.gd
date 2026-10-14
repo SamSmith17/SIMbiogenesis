@@ -84,12 +84,27 @@ func _sync_existing_loads() -> void:
 		if item.is_empty():
 			_remove_load(iid)
 			continue
-		var itype := str(item.get("type", ""))
-		if not LOAD_TYPES.has(itype) or bool(item.get("is_virtual", false)):
+		if not is_load_item(item):
 			_remove_load(iid)
 			continue
 		_ensure_load(iid, item)
 	_syncing = false
+
+
+## A load proxy is a CONSUMER switch. Generators (hydro turbines — processors
+## with role siphon_hydro) make power and must not get one: it stamped
+## "current_state: off" onto a running turbine and made the node look
+## scene-linked to a plain proxy node.
+static func is_load_item(item: Dictionary) -> bool:
+	if item.is_empty() or bool(item.get("is_virtual", false)):
+		return false
+	var itype := str(item.get("type", ""))
+	if not LOAD_TYPES.has(itype):
+		return false
+	if itype == "processor" \
+			and str((item.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro":
+		return false
+	return true
 
 
 func is_load_on(item_id: String) -> bool:
@@ -115,10 +130,7 @@ func _sync_all() -> void:
 		var iid: String = str(it.get("id", ""))
 		if iid.is_empty():
 			continue
-		var itype: String = str(it.get("type", ""))
-		if not LOAD_TYPES.has(itype):
-			continue
-		if bool(it.get("is_virtual", false)):
+		if not is_load_item(it):
 			continue
 		active_ids[iid] = true
 		_ensure_load(iid, it)

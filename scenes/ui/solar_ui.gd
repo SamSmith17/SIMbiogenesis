@@ -227,6 +227,9 @@ var current_aux_generation_kw : float = 0.0
 var current_graph_dc_kw : float = 0.0
 var current_load_kw : float = 0.0
 var battery_kwh_stored : float = 8.0  # Start at 50% of 16 kWh
+## Set by apply_save_state: the next graph capacity sync is initialisation (see
+## apply_from_graph) and must keep the restored kWh.
+var _soc_restored_pending := false
 var last_time : float = -1.0
 
 ## Reversible SOC render-cache. Forward sim time appends integrated samples;
@@ -4407,6 +4410,16 @@ func apply_from_graph(data: Dictionary) -> void:
 	# every graph edit — clamping SOC to [0,0] forever (can't charge or discharge).
 	var bcount := int(data.get("battery_count", 0))
 	var bank_soc := float(data.get("battery_soc", -1.0))
+	# The graph's real plane of array (placed arrays / deployed linkages) and
+	# the wired controller's limits replace the config-file values when known.
+	if data.has("tilt_deg"):
+		panel_tilt_degrees = clampf(float(data["tilt_deg"]), 0.0, 90.0)
+	if data.has("azimuth_deg"):
+		panel_azimuth_degrees = fposmod(float(data["azimuth_deg"]), 360.0)
+	if float(data.get("pv_limit_kw", 0.0)) > 0.0:
+		INVERTER_MAX_SOLAR_KW = float(data["pv_limit_kw"])
+	if float(data.get("ac_overload_w", 0.0)) > 0.0:
+		inverter_overload_watts = float(data["ac_overload_w"])
 	PANEL_COUNT = maxi(pc, 0)
 	if pw > 0.0:
 		PANEL_WATTAGE = pw
@@ -4428,11 +4441,20 @@ func apply_from_graph(data: Dictionary) -> void:
 	if bk >= 0.0 and bcount > 0:
 		capacity_changed = absf(BATTERY_CAPACITY_KWH - bk) > 0.001
 		BATTERY_CAPACITY_KWH = bk
-		if capacity_changed:
+		if capacity_changed and _soc_restored_pending:
+			# The first capacity sync after a save RESTORE is initialisation, not
+			# new hardware: SolarUI booted at the panel-config capacity, the
+			# snapshot put back the saved kWh, and the graph's bank now states
+			# the real capacity. The restored kWh is the truth — rescaling it by
+			# a mirrored fraction (measured against the boot capacity) moved a
+			# saved 5.09 kWh to 4.12 on every reload (--capture=worlds, Walton).
+			battery_kwh_stored = minf(battery_kwh_stored, BATTERY_CAPACITY_KWH)
+		elif capacity_changed:
 			if bank_soc >= 0.0:
 				battery_kwh_stored = BATTERY_CAPACITY_KWH * clampf(bank_soc, 0.0, 1.0)
 			else:
 				battery_kwh_stored = minf(battery_kwh_stored, BATTERY_CAPACITY_KWH)
+		_soc_restored_pending = false
 	if energy_timeline != null and (capacity_changed or energy_timeline.is_empty()):
 		energy_timeline.clear()
 		if main_node == null:
@@ -4647,6 +4669,7 @@ func apply_save_state(data: Dictionary) -> void:
 	if data.is_empty():
 		return
 	battery_kwh_stored = float(data.get("battery_kwh_stored", battery_kwh_stored))
+	_soc_restored_pending = data.has("battery_kwh_stored")
 	last_time = float(data.get("last_time", -1.0))
 	# Re-anchor the reversible SOC cache at the loaded battery level — the next
 	# battery tick rebuilds the timeline forward from this known state.

@@ -75,6 +75,51 @@ const CHARACTER_FBX_TRANSFORM := Transform3D(
 ## body is otherwise only ever seen externally (FPV drone view, other multiplayer
 ## clients via the fully independent RemotePlayerAvatar capsule).
 var _simple_figure : NpcSimpleFigure = null
+## The body PlayerPrefs last asked for ("" = not built yet) and the prefs
+## generation it was built at (polled in _process — the settings panel and
+## the player never hold references to each other).
+var _body_id := ""
+var _body_prefs_gen := -1
+var _cam_prefs_gen := -1
+## -1 unknown, 0 hidden, 1 shown (re-applied only on change).
+var _head_shown_state := -1
+
+# --- Third person (Settings → Player, F5) --------------------------------------
+## A GTA / RDR follow camera. The CameraArm detaches (top_level) and is placed
+## every frame behind and over the shoulder of the player; the Camera3D under
+## it keeps its OWN local maths untouched — pitch on rotation.x (the mouse),
+## shake on position — so every system that drives "the player camera" (FOV,
+## the crosshair ray, camera claims, the FPV drone borrowing it) keeps working.
+## Mouse yaw orbits the camera (_tp_yaw) instead of turning the body; walking
+## is relative to the camera and the body turns to face where it walks (or
+## where the camera looks while using a tool). Driving, the camera orbits
+## freely and swings back behind the vehicle after TP_RECENTER_AFTER_S; on
+## the EUC the mouse still steers, so the camera rides locked behind.
+const TP_PIVOT_H := 1.55
+const TP_SHOULDER_M := 0.45
+const TP_PITCH_MIN := -70.0
+const TP_PITCH_MAX := 55.0
+const TP_RECENTER_AFTER_S := 1.4
+var _tp := false
+var _tp_yaw := 0.0
+var _tp_hit_dist := INF
+var _tp_dist_smooth := 0.0
+var _tp_pivot_smooth := Vector3.INF
+var _tp_since_look := 99.0
+var _arm_rest := Transform3D(Basis(), Vector3(0.0, 1.7, 0.0))
+## The ridden vehicle's chase distance / height (PlacedVehicle riding params;
+## 0 = scene vehicle, use the walking distance plus a margin).
+var _ride_chase_m := 0.0
+var _ride_chase_h := 0.0
+
+# Body driver state (the figure's lean, landing dip, air time).
+var _fig_air_t := 0.0
+var _fig_prev_vy := 0.0
+var _fig_prev_yaw := 0.0
+var _fig_turn := 0.0
+var _fig_prev_speed := 0.0
+var _fig_accel := 0.0
+var _fig_dip := 0.0
 
 # Animation transition settings
 const WALK_SPEED_THRESHOLD := 0.5   # Speed to start walking
@@ -201,23 +246,60 @@ func _setup_grab_controller() -> void:
 			var loader := get_tree().current_scene.get_node_or_null("TerrainLoader")
 			grab.call("setup", self, camera, _interaction_focus, loader)
 
-## Build the visible body, then wire up its animation system if a rigged FBX
-## body loaded. CharacterModel is empty at scene-load time (see player.tscn) —
-## this is the one place a body ever gets added to it.
+## Build the visible body. CharacterModel is empty at scene-load time (see
+## player.tscn) — this is the one place a body ever gets added to it.
+##
+## The DEFAULT body is the hi-detail stick figure (NpcSimpleFigure with
+## `hi_detail`), driven by _update_character_animation_simple. Remy (the
+## Mixamo pack, when installed) and custom characters from
+## user://player_characters/ are opt-in choices in Settings → Player
+## (PlayerPrefs.body()); the figure stays built underneath and comes back the
+## moment the choice is cleared or a custom file fails to load.
 func _setup_character_animation() -> void:
 	if character_model == null:
 		return
 	_ensure_simple_figure()
-	if not _try_load_character_fbx():
-		return  # No asset pack: the simple figure stays as the visible body.
+	_apply_body_choice()
 
-	# Find AnimationPlayer in the character model hierarchy
-	character_anim_player = _find_animation_player_recursive(character_model)
 
-	if character_anim_player == null:
+## (Re)build the body PlayerPrefs asks for. Cheap when nothing changed.
+func _apply_body_choice() -> void:
+	_body_prefs_gen = PlayerPrefs.generation()
+	if _simple_figure != null:
+		_simple_figure.set_tint(PlayerPrefs.tint())
+	var want := PlayerPrefs.body()
+	if want == _body_id:
 		return
-	# Real rigged body loaded and has an AnimationPlayer — it wins.
-	_simple_figure.visible = false
+	_body_id = want
+	for n in [character_model.get_node_or_null("Remy"), character_model.get_node_or_null("CustomBody")]:
+		if n != null:
+			character_model.remove_child(n)
+			n.queue_free()
+	character_anim_player = null
+	anim_idle_name = ""
+	anim_walk_name = ""
+	anim_jog_name = ""
+	current_anim_state = "idle"
+	if _simple_figure != null:
+		_simple_figure.visible = true
+	var ok := false
+	if want == PlayerPrefs.BODY_REMY:
+		ok = _try_load_character_fbx() and _setup_rig_animations()
+	elif want.begins_with(PlayerPrefs.CUSTOM_PREFIX):
+		ok = _try_load_custom_body(want.substr(PlayerPrefs.CUSTOM_PREFIX.length()))
+	if ok and _simple_figure != null:
+		_simple_figure.visible = false
+	elif not ok and want != PlayerPrefs.BODY_FIGURE:
+		push_warning("Player body '%s' could not be loaded — using the detailed figure." % want)
+	_head_shown_state = -1
+
+
+## Remy's clips: the walk ships in the body file, idle and jog in their own.
+## False when the body has no AnimationPlayer (then the figure stays).
+func _setup_rig_animations() -> bool:
+	character_anim_player = _find_animation_player_recursive(character_model.get_node_or_null("Remy"))
+	if character_anim_player == null:
+		return false
 
 	# Get walk animation from the main model
 	var anims := character_anim_player.get_animation_list()
@@ -250,17 +332,202 @@ func _setup_character_animation() -> void:
 	elif not anim_walk_name.is_empty():
 		character_anim_player.play(anim_walk_name)
 		current_anim_state = "walk"
+	return true
 
 
-## The procedural stand-in body — always present under CharacterModel as the
-## base, regardless of whether the rigged FBX pack is installed.
+## The procedural body — always present under CharacterModel as the base.
+## Hi-detail (more anatomy, lean + head-look pivots) because it is the body
+## the player looks at most. Built facing +Z like every stick figure, so it is
+## turned a half-turn to face the player's forward (-Z) — the NPC avatar does
+## the same (NpcAvatar._ensure_visuals); without it the player's body walked
+## backwards.
 func _ensure_simple_figure() -> void:
 	if _simple_figure != null:
 		return
 	_simple_figure = NpcSimpleFigure.new()
 	_simple_figure.name = "SimpleFigureBody"
-	_simple_figure.setup("player", Color(0.55, 0.62, 0.78))
+	_simple_figure.hi_detail = true
+	_simple_figure.setup("player", PlayerPrefs.tint())
+	_simple_figure.rotation.y = PI
 	character_model.add_child(_simple_figure)
+
+
+## A character the player dropped into user://player_characters/ (GLB, glTF
+## or FBX — loaded at RUNTIME, no import step). Scaled to 1.75 m, stood on
+## the ground, turned to face forward (Mixamo exports face +Z). Its own clips
+## are used when they are named like idle / walk / run; otherwise, for a
+## Mixamo-rigged character, Remy's idle / walk / jog are RETARGETED onto its
+## skeleton by bone name (mixamorig:Hips == mixamorig1_Hips == Hips) — that
+## needs the Player Character pack. False when nothing usable loaded.
+func _try_load_custom_body(file: String) -> bool:
+	var path := PlayerPrefs.CUSTOM_DIR + file
+	var root := _load_runtime_scene(path)
+	if root == null:
+		return false
+	root.name = "CustomBody"
+	var holder := Node3D.new()
+	holder.name = "CustomBody"
+	root.name = "Model"
+	holder.add_child(root)
+	# Fit: measure the meshes (rest pose), scale to a person, feet on y = 0.
+	var aabb := AABB()
+	var found := false
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := node as MeshInstance3D
+		if mi.mesh == null:
+			continue
+		var box := ModelCatalog._xform_relative_to(root, mi) * mi.mesh.get_aabb()
+		aabb = box if not found else aabb.merge(box)
+		found = true
+	if not found or aabb.size.y < 1e-4:
+		holder.free()
+		return false
+	var s := 1.75 / aabb.size.y
+	root.scale = Vector3.ONE * s
+	root.position = Vector3(-aabb.get_center().x * s, -aabb.position.y * s, -aabb.get_center().z * s)
+	holder.rotation.y = PI
+	character_model.add_child(holder)
+	character_anim_player = _find_animation_player_recursive(root)
+	if character_anim_player != null and _pick_own_clips(character_anim_player):
+		return true
+	var skel := _find_skeleton_recursive(root)
+	if skel != null and _retarget_remy_clips(root, skel):
+		return true
+	# A static model (no rig we can drive) still beats nothing: it stands.
+	character_anim_player = null
+	return true
+
+
+func _load_runtime_scene(path: String) -> Node3D:
+	if not FileAccess.file_exists(path):
+		return null
+	var ext := path.get_extension().to_lower()
+	var doc: Object = null
+	var state: Object = null
+	if ext == "fbx":
+		if not ClassDB.class_exists("FBXDocument"):
+			return null
+		doc = ClassDB.instantiate("FBXDocument")
+		state = ClassDB.instantiate("FBXState")
+	else:
+		doc = GLTFDocument.new()
+		state = GLTFState.new()
+	if int(doc.call("append_from_file", ProjectSettings.globalize_path(path), state)) != OK:
+		return null
+	return doc.call("generate_scene", state) as Node3D
+
+
+## Use a character's OWN clips when they are named like idle / walk / run.
+func _pick_own_clips(ap: AnimationPlayer) -> bool:
+	for an in ap.get_animation_list():
+		var low := str(an).to_lower()
+		if anim_idle_name.is_empty() and "idle" in low:
+			anim_idle_name = an
+		elif anim_jog_name.is_empty() and ("run" in low or "jog" in low):
+			anim_jog_name = an
+		elif anim_walk_name.is_empty() and "walk" in low:
+			anim_walk_name = an
+	if anim_walk_name.is_empty() and anim_idle_name.is_empty():
+		return false
+	for an in [anim_idle_name, anim_walk_name, anim_jog_name]:
+		if not str(an).is_empty():
+			ap.get_animation(an).loop_mode = Animation.LOOP_LINEAR
+	ap.play(anim_idle_name if not anim_idle_name.is_empty() else anim_walk_name)
+	return true
+
+
+## Mixamo bone names arrive as "mixamorig:Hips", "mixamorig1_Hips",
+## "mixamorig_Hips" … — the part after the prefix is the bone.
+static func _bone_key(bone: String) -> String:
+	var b := bone
+	var i := b.rfind(":")
+	if i >= 0:
+		b = b.substr(i + 1)
+	if b.begins_with("mixamorig"):
+		var u := b.find("_")
+		if u >= 0:
+			b = b.substr(u + 1)
+	return b.to_lower()
+
+
+## Remy's idle / walk / jog onto `skel` by bone name. Rotation tracks map 1:1
+## (Mixamo characters share a rest orientation); the hips' POSITION track is
+## scaled by the two skeletons' hip heights. Godot drops unbound tracks
+## silently, so a clip that binds too few bones is refused, not played as a
+## T-pose.
+func _retarget_remy_clips(root: Node3D, skel: Skeleton3D) -> bool:
+	var target := {}
+	for bi in skel.get_bone_count():
+		target[_bone_key(skel.get_bone_name(bi))] = skel.get_bone_name(bi)
+	if not target.has("hips"):
+		return false
+	var ap := AnimationPlayer.new()
+	ap.name = "PlayerAnims"
+	root.add_child(ap)
+	ap.root_node = ap.get_path_to(root)
+	var lib := AnimationLibrary.new()
+	ap.add_animation_library("", lib)
+	var skel_path := str(root.get_path_to(skel))
+	var hips_t := skel.get_bone_rest(skel.find_bone(str(target["hips"]))).origin.y
+	for spec in [[CHARACTER_FBX_PATH, "walk"], [IDLE_ANIM_PATH, "idle"], [JOG_ANIM_PATH, "jog"]]:
+		var clip := _retarget_one(str(spec[0]), target, skel_path, hips_t)
+		if clip == null:
+			continue
+		lib.add_animation(str(spec[1]), clip)
+		match str(spec[1]):
+			"walk": anim_walk_name = "walk"
+			"idle": anim_idle_name = "idle"
+			"jog": anim_jog_name = "jog"
+	if anim_walk_name.is_empty() and anim_idle_name.is_empty():
+		ap.queue_free()
+		return false
+	character_anim_player = ap
+	ap.play(anim_idle_name if not anim_idle_name.is_empty() else anim_walk_name)
+	return true
+
+
+func _retarget_one(src_path: String, target: Dictionary, skel_path: String, hips_t: float) -> Animation:
+	if not ResourceLoader.exists(src_path):
+		return null
+	var ps := load(src_path) as PackedScene
+	if ps == null:
+		return null
+	var inst := ps.instantiate()
+	var sap := _find_animation_player_recursive(inst)
+	var sskel := _find_skeleton_recursive(inst)
+	if sap == null or sap.get_animation_list().is_empty():
+		inst.free()
+		return null
+	var src: Animation = sap.get_animation(sap.get_animation_list()[0])
+	var hips_s := 1.0
+	if sskel != null:
+		for bi in sskel.get_bone_count():
+			if _bone_key(sskel.get_bone_name(bi)) == "hips":
+				hips_s = maxf(absf(sskel.get_bone_rest(bi).origin.y), 1e-4)
+	inst.free()
+	var out := Animation.new()
+	out.length = src.length
+	out.loop_mode = Animation.LOOP_LINEAR
+	var bound := 0
+	for t in src.get_track_count():
+		var tt := src.track_get_type(t)
+		if tt != Animation.TYPE_ROTATION_3D and tt != Animation.TYPE_POSITION_3D:
+			continue
+		var key := _bone_key(str(src.track_get_path(t).get_concatenated_subnames()))
+		if not target.has(key):
+			continue
+		if tt == Animation.TYPE_POSITION_3D and key != "hips":
+			continue
+		var nt := out.add_track(tt)
+		out.track_set_path(nt, NodePath("%s:%s" % [skel_path, str(target[key])]))
+		var ratio := absf(hips_t) / hips_s
+		for k in src.track_get_key_count(t):
+			var v: Variant = src.track_get_key_value(t, k)
+			if tt == Animation.TYPE_POSITION_3D:
+				v = (v as Vector3) * ratio
+			out.track_insert_key(nt, src.track_get_key_time(t, k), v)
+		bound += 1
+	return out if bound >= 12 else null
 
 
 ## Loads and instances the rigged Mixamo body if the (gitignored, optional)
@@ -353,9 +620,14 @@ func _init_first_person_camera() -> void:
 	camera.rotation = Vector3.ZERO
 	camera.near = first_person_near_clip
 	base_camera_position = camera.position
+	if camera_arm != null:
+		_arm_rest = camera_arm.transform
 	if character_model != null:
 		character_model.visible = true
 		_set_head_visibility(false)
+	_head_shown_state = 0
+	_apply_camera_mode(PlayerPrefs.third_person())
+	_cam_prefs_gen = PlayerPrefs.generation()
 
 ## Show or hide the whole character. Used by the camera-claim stack (Main's
 ## `_apply_camera_claim`): a view that is not looking through this body's eyes
@@ -369,12 +641,14 @@ func set_body_visible(shown: bool) -> void:
 func _set_head_visibility(visible: bool) -> void:
 	if character_model == null:
 		return
-	
+	if _simple_figure != null:
+		_simple_figure.set_head_shown(visible)
+
 	# Find the skeleton and hide head-related bones/meshes
-	var remy := character_model.get_node_or_null("Remy")
+	var remy := _alt_body()
 	if remy == null:
 		return
-	
+
 	# For Mixamo characters, we can't easily hide just the head mesh
 	# since it's part of the same mesh as the body.
 	# Instead, we use a BoneAttachment approach or adjust the skeleton
@@ -385,7 +659,12 @@ func _set_head_visibility(visible: bool) -> void:
 		var head_bone_idx := skeleton.find_bone("mixamorig:Head")
 		if head_bone_idx == -1:
 			head_bone_idx = skeleton.find_bone("Head")
-		
+		if head_bone_idx == -1:
+			for bi in skeleton.get_bone_count():
+				if _bone_key(skeleton.get_bone_name(bi)) == "head":
+					head_bone_idx = bi
+					break
+
 		if head_bone_idx != -1:
 			if visible:
 				# Reset head to normal scale
@@ -410,15 +689,27 @@ func _set_character_riding_position(riding: bool) -> void:
 		return
 	
 	var remy := character_model.get_node_or_null("Remy") as Node3D
-	if remy == null:
-		return
-	
-	if riding:
-		# Raise character to stand on EUC pedals, move forward (negative Z) so EUC appears under feet
-		remy.position = Vector3(0, euc_character_height_offset, character_base_offset.z - euc_character_back_offset)
-	else:
-		# Reset to normal position
-		remy.position = Vector3(0, 0, character_base_offset.z)
+	if remy != null:
+		if riding:
+			# Raise character to stand on EUC pedals, move forward (negative Z) so EUC appears under feet
+			remy.position = Vector3(0, euc_character_height_offset, character_base_offset.z - euc_character_back_offset)
+		else:
+			# Reset to normal position
+			remy.position = Vector3(0, 0, character_base_offset.z)
+	var custom := character_model.get_node_or_null("CustomBody") as Node3D
+	if custom != null:
+		custom.position = Vector3(0, euc_character_height_offset if riding else 0.0, 0.0)
+	# (The figure's riding height is set every frame by its driver.)
+
+
+## The rigged body in use instead of the figure (Remy or a custom one), or null.
+func _alt_body() -> Node3D:
+	if character_model == null:
+		return null
+	var n := character_model.get_node_or_null("Remy") as Node3D
+	if n == null:
+		n = character_model.get_node_or_null("CustomBody") as Node3D
+	return n
 
 func _input(event: InputEvent) -> void:
 	# Tool-overlay (unified edit toolbar) RMB-hold look: track the button edge
@@ -446,6 +737,14 @@ func _input(event: InputEvent) -> void:
 	# trigger game shortcuts (equip/unequip, fire-debug, etc.).
 	var _fo := get_viewport().gui_get_focus_owner() if get_viewport() != null else null
 	if _fo is LineEdit or _fo is TextEdit:
+		return
+
+	# F5: first person <-> third-person follow camera (also Settings → Player).
+	if event.is_action_pressed("toggle_third_person") and not event.is_echo():
+		PlayerPrefs.set_camera_mode(PlayerPrefs.CAMERA_FIRST if _tp else PlayerPrefs.CAMERA_THIRD)
+		_apply_camera_mode(not _tp)
+		_cam_prefs_gen = PlayerPrefs.generation()
+		get_viewport().set_input_as_handled()
 		return
 
 	if event is InputEventKey and event.pressed:
@@ -572,8 +871,11 @@ func _physics_process(delta: float) -> void:
 				# EUC movement - forward/backward only, no strafing
 				_handle_euc_movement(input_dir, delta)
 			else:
-				# Normal walking movement
-				var direction := (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
+				# Normal walking movement — relative to the BODY in first
+				# person, to the CAMERA in third person.
+				var move_basis := Basis(Vector3.UP, _tp_yaw) if (_tp_active() and not is_riding) \
+					else transform.basis
+				var direction := (move_basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
 				
 				# Determine speed based on riding state
 				var current_speed : float
@@ -609,6 +911,11 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 	_check_void_fall_respawn()
+
+	if _tp_active():
+		_tp_since_look += delta
+		_tp_turn_body(delta)
+		_tp_probe_camera()
 
 	# Update character animation based on movement
 	_update_character_animation(delta)
@@ -668,27 +975,247 @@ func _update_character_animation_rig() -> void:
 			var jog_factor := (speed - JOG_SPEED_THRESHOLD) / 6.0
 			character_anim_player.speed_scale = lerpf(1.0, 1.5, clampf(jog_factor, 0.0, 1.0))
 
-## Same idle/walk/jog read as the rig branch above, but driven through
-## NpcSimpleFigure.pose() — jog folds into a faster walk `rate` rather than a
-## distinct pose, since the figure has no separate jog clip.
+## The detailed figure's driver: reads what the BODY is doing — standing,
+## walking, running (its own pose, not a fast walk), in the air (tuck rising,
+## reach falling), landing (a dip scaled by the fall), driving (seated at the
+## wheel, at the vehicle's seat), riding the EUC (standing on the pedals),
+## using a tool (arms forward) — and layers on what makes it read as alive:
+## leaning into speed and into turns, and the head following the camera.
 func _update_character_animation_simple(delta: float) -> void:
-	if is_riding:
-		_simple_figure.pose(NpcRig.CLIP_IDLE, 1.0, delta)
-		return
+	var dt := maxf(delta, 1e-4)
+	var hv := Vector2(velocity.x, velocity.z)
+	var speed := hv.length()
+	var yaw_step := wrapf(rotation.y - _fig_prev_yaw, -PI, PI)
+	_fig_prev_yaw = rotation.y
+	_fig_turn = lerpf(_fig_turn, yaw_step / dt, 1.0 - exp(-8.0 * dt))
+	_fig_accel = lerpf(_fig_accel, (speed - _fig_prev_speed) / dt, 1.0 - exp(-6.0 * dt))
+	_fig_prev_speed = speed
+	var grounded := is_on_floor()
+	_fig_air_t = 0.0 if grounded else _fig_air_t + dt
+	# Landing: a knee-bend dip that grows with the fall, then springs back.
+	if grounded and _fig_prev_vy < -3.0:
+		_fig_dip = clampf(-_fig_prev_vy * 0.03, 0.0, 0.22)
+	_fig_prev_vy = velocity.y
+	_fig_dip *= exp(-7.0 * dt)
+	var st := {"mode": "idle", "rate": 1.0}
+	var seat := Vector3.ZERO
+	var lean := Vector2.ZERO
+	if is_riding and not is_fpv_drone_mode:
+		if is_golf_cart_mode:
+			st["mode"] = "drive"
+			st["steer"] = clampf(_fig_turn * 0.8, -1.0, 1.0)
+			# Sit where the driver's eye is (the first-person seat offset),
+			# so a third-person view shows somebody AT the wheel.
+			if riding_camera_offset != Vector3.ZERO:
+				seat = Vector3(riding_camera_offset.x, riding_camera_offset.y + 0.55, riding_camera_offset.z)
+		else:
+			st["mode"] = "euc"
+			seat = Vector3(0.0, euc_character_height_offset, 0.0)
+			# Lean into the turn the way a rider does, harder the faster.
+			lean = Vector2(clampf(_fig_accel * 0.015, -0.12, 0.18),
+				clampf(_fig_turn * speed * 0.035, -0.4, 0.4))
+	elif not grounded and (_fig_air_t > 0.12 or velocity.y > 1.0):
+		st["mode"] = "air"
+		st["vy"] = velocity.y
+	elif speed >= JOG_SPEED_THRESHOLD:
+		st["mode"] = "run"
+		st["rate"] = lerpf(1.55, 2.1, clampf((speed - JOG_SPEED_THRESHOLD) / 7.0, 0.0, 1.0))
+		lean = Vector2(clampf(0.05 + _fig_accel * 0.02, -0.05, 0.22),
+			clampf(_fig_turn * speed * 0.012, -0.22, 0.22))
+	elif speed >= WALK_SPEED_THRESHOLD:
+		st["mode"] = "walk"
+		st["rate"] = lerpf(0.8, 1.25, clampf((speed - WALK_SPEED_THRESHOLD) / (JOG_SPEED_THRESHOLD - WALK_SPEED_THRESHOLD), 0.0, 1.0))
+		lean = Vector2(clampf(speed * 0.008 + _fig_accel * 0.012, -0.05, 0.12),
+			clampf(_fig_turn * speed * 0.015, -0.15, 0.15))
+	st["aim"] = _using_tool() and not is_riding
+	st["lean"] = lean
+	# The head follows the camera (third person; in first person it is not
+	# drawn). Pitch: camera up = head up. Yaw: toward the camera's heading,
+	# within a neck's reach.
+	if _tp_active():
+		st["look"] = Vector2(clampf(-camera.rotation.x * 0.7, -0.6, 0.6),
+			clampf(wrapf(_tp_yaw - rotation.y, -PI, PI) * 0.7, -1.0, 1.0))
+	_simple_figure.position = seat - Vector3(0.0, _fig_dip, 0.0)
+	_simple_figure.pose_player(st, dt)
 
-	var speed := Vector2(velocity.x, velocity.z).length()
-	if speed < WALK_SPEED_THRESHOLD:
-		_simple_figure.pose(NpcRig.CLIP_IDLE, 1.0, delta)
-		return
 
-	var rate := 1.0
-	if speed >= JOG_SPEED_THRESHOLD:
-		var jog_factor := (speed - JOG_SPEED_THRESHOLD) / 6.0
-		rate = lerpf(1.2, 1.8, clampf(jog_factor, 0.0, 1.0))
+func _using_tool() -> bool:
+	if tool_manager == null or not tool_manager.has_method("is_tool_equipped"):
+		return false
+	if not tool_manager.is_tool_equipped("fire_extinguisher"):
+		return false
+	return Input.is_action_pressed("use_tool") or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+
+
+# --- third person -------------------------------------------------------------
+
+func _process(delta: float) -> void:
+	# Settings → Player changed something (body, tint, camera): apply it live.
+	var gen := PlayerPrefs.generation()
+	if gen != _body_prefs_gen and character_model != null and _simple_figure != null:
+		_apply_body_choice()
+	if gen != _cam_prefs_gen:
+		_cam_prefs_gen = gen
+		if PlayerPrefs.third_person() != _tp:
+			_apply_camera_mode(PlayerPrefs.third_person())
+	# The drone borrows this camera: the arm goes home while it flies.
+	if camera_arm != null:
+		var detach := _tp_active()
+		if camera_arm.top_level != detach:
+			camera_arm.top_level = detach
+			if not detach:
+				camera_arm.transform = _arm_rest
+			_tp_pivot_smooth = Vector3.INF
+	# Head: hidden in first person (the camera is inside it), shown when the
+	# body is being looked AT (third person, or from the drone).
+	var want_head := 1 if (_tp or is_fpv_drone_mode) else 0
+	if want_head != _head_shown_state:
+		_head_shown_state = want_head
+		_set_head_visibility(want_head == 1)
+	if _tp_active():
+		_update_third_person_camera(delta)
+
+
+## Third person right now (the setting, and not handed to the FPV drone).
+func _tp_active() -> bool:
+	return _tp and not is_fpv_drone_mode and camera_arm != null
+
+
+## On the EUC the mouse still steers, so the camera rides locked behind.
+func _tp_body_follows_look() -> bool:
+	return is_riding and not is_golf_cart_mode and not use_cart_steering
+
+
+func _apply_camera_mode(third: bool) -> void:
+	var was := _tp
+	_tp = third
+	if camera == null or camera_arm == null or was == third:
+		return
+	if third:
+		_tp_yaw = rotation.y
+		_tp_pivot_smooth = Vector3.INF
+		_tp_dist_smooth = 0.0
+		_tp_hit_dist = INF
+		_tp_since_look = 99.0
+		camera.near = 0.08
+		camera.position = base_camera_position
+		camera.rotation.z = 0.0
+		camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(TP_PITCH_MIN), deg_to_rad(TP_PITCH_MAX))
 	else:
-		var walk_factor := (speed - WALK_SPEED_THRESHOLD) / (JOG_SPEED_THRESHOLD - WALK_SPEED_THRESHOLD)
-		rate = lerpf(0.8, 1.2, clampf(walk_factor, 0.0, 1.0))
-	_simple_figure.pose(NpcRig.CLIP_WALK, rate, delta)
+		camera_arm.top_level = false
+		camera_arm.transform = _arm_rest
+		camera.near = first_person_near_clip
+		# Keep looking where the camera looked (on foot — turning a vehicle
+		# under its driver would be a surprise).
+		if not is_riding:
+			rotation.y = _tp_yaw
+		elif is_golf_cart_mode and riding_camera_offset != Vector3.ZERO:
+			camera.position = base_camera_position + riding_camera_offset
+	_head_shown_state = -1
+
+
+## Where the camera wants to be, relative to the pivot: back along the look
+## direction (yaw + pitch) and out over the shoulder.
+func _tp_desired_offset() -> Vector3:
+	var yaw_basis := Basis(Vector3.UP, _tp_yaw)
+	var look := (yaw_basis * Basis(Vector3.RIGHT, camera.rotation.x)) * Vector3.FORWARD
+	var right := yaw_basis * Vector3.RIGHT
+	var shoulder := float(PlayerPrefs.tp_shoulder()) * TP_SHOULDER_M
+	if is_riding:
+		shoulder = 0.0
+	return -look * _tp_distance() + right * shoulder
+
+
+func _tp_distance() -> float:
+	var d := PlayerPrefs.tp_distance()
+	if is_riding and not is_fpv_drone_mode:
+		if _ride_chase_m > 0.0:
+			return maxf(d, _ride_chase_m)
+		return d + (2.0 if is_golf_cart_mode else 0.6)
+	return d
+
+
+func _tp_pivot_height() -> float:
+	if is_riding and not is_fpv_drone_mode:
+		return _ride_chase_h if _ride_chase_h > 0.0 else TP_PIVOT_H + 0.3
+	return TP_PIVOT_H
+
+
+## Physics frame: how far the camera can go before something is in the way
+## (a wall, a tree, the ground behind a slope). Read by the render frame.
+func _tp_probe_camera() -> void:
+	var pivot := global_position + Vector3(0.0, _tp_pivot_height(), 0.0)
+	var off := _tp_desired_offset()
+	var q := PhysicsRayQueryParameters3D.create(pivot, pivot + off * 1.05)
+	q.exclude = [get_rid()]
+	q.collide_with_areas = false
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		_tp_hit_dist = INF
+	else:
+		_tp_hit_dist = maxf(pivot.distance_to(hit["position"]) - 0.3, 0.35)
+
+
+## Body yaw in third person: on foot it turns to face where it is walking (or
+## where the camera looks while using a tool); driving, the camera swings back
+## behind the vehicle once the mouse has been left alone.
+func _tp_turn_body(delta: float) -> void:
+	if is_riding:
+		if _tp_body_follows_look():
+			_tp_yaw = lerp_angle(_tp_yaw, rotation.y, 1.0 - exp(-10.0 * delta))
+		elif PlayerPrefs.tp_recenter() and _tp_since_look > TP_RECENTER_AFTER_S \
+				and absf(cart_current_speed) > 0.5:
+			_tp_yaw = lerp_angle(_tp_yaw, rotation.y, 1.0 - exp(-1.8 * delta))
+		return
+	var target := NAN
+	if _using_tool():
+		target = _tp_yaw
+	elif Vector2(velocity.x, velocity.z).length() > 0.4:
+		target = atan2(-velocity.x, -velocity.z)
+	if not is_nan(target):
+		rotation.y = lerp_angle(rotation.y, target, 1.0 - exp(-12.0 * delta))
+
+
+func _update_third_person_camera(delta: float) -> void:
+	var origin := global_position
+	if is_physics_interpolated_and_enabled():
+		origin = get_global_transform_interpolated().origin
+	var pivot := origin + Vector3(0.0, _tp_pivot_height(), 0.0)
+	if _tp_pivot_smooth == Vector3.INF:
+		_tp_pivot_smooth = pivot
+	_tp_pivot_smooth = _tp_pivot_smooth.lerp(pivot, 1.0 - exp(-22.0 * delta))
+	var off := _tp_desired_offset()
+	var full := off.length()
+	var want := minf(full, _tp_hit_dist)
+	# In at once (never through the wall), back out gently.
+	if want < _tp_dist_smooth or _tp_dist_smooth <= 0.0:
+		_tp_dist_smooth = want
+	else:
+		_tp_dist_smooth = lerpf(_tp_dist_smooth, want, 1.0 - exp(-5.0 * delta))
+	var pos := _tp_pivot_smooth + off / maxf(full, 1e-4) * _tp_dist_smooth
+	camera_arm.global_transform = Transform3D(Basis(Vector3.UP, _tp_yaw), pos)
+
+
+## Where interaction reach is measured from (InteractionFocus): the camera in
+## first person, the player's head in third person.
+func reach_origin() -> Vector3:
+	if _tp_active():
+		return global_position + Vector3(0.0, TP_PIVOT_H, 0.0)
+	return camera.global_position if camera != null else global_position
+
+
+## Get into `vehicle` from outside the proximity path: Interact on a placed
+## vehicle under the crosshair, or a PlacedVehicle handing its rider to the
+## node that replaced it after a prop rebuild.
+func request_mount(vehicle: Node3D) -> void:
+	if is_riding or vehicle == null or not is_instance_valid(vehicle):
+		return
+	if vehicle.has_method("needs_repair") and vehicle.needs_repair():
+		return
+	if is_charging_euc:
+		_stop_charging()
+	nearby_vehicle = vehicle
+	_mount_vehicle(vehicle)
 
 ## A LineEdit/SpinBox/TextEdit with keyboard focus is TYPING, not playing —
 ## typing "12" into the toolbar's brush-radius field must not walk the player.
@@ -703,13 +1230,23 @@ func _keyboard_captured_by_ui() -> bool:
 	return f is LineEdit or f is TextEdit or f is SpinBox
 
 func _handle_mouse_look(mouse_delta: Vector2) -> void:
-	# Rotate player (yaw) on Y axis
-	rotate_y(-mouse_delta.x * mouse_sensitivity)
-	
-	# Rotate camera (pitch) on X axis, clamped
 	var y_direction := 1.0 if invert_y_axis else -1.0
-	camera.rotate_x(mouse_delta.y * mouse_sensitivity * y_direction)
-	camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(min_pitch), deg_to_rad(max_pitch))
+	_apply_look(-mouse_delta.x * mouse_sensitivity, mouse_delta.y * mouse_sensitivity * y_direction)
+
+
+## One look step. First person: yaw turns the body, pitch tilts the camera.
+## Third person: yaw orbits the camera (the body turns on its own to face
+## where it walks) — except on the EUC, where the mouse still steers.
+func _apply_look(dyaw: float, dpitch: float) -> void:
+	if _tp_active() and not _tp_body_follows_look():
+		_tp_yaw = wrapf(_tp_yaw + dyaw, -PI, PI)
+		_tp_since_look = 0.0
+	else:
+		rotate_y(dyaw)
+	camera.rotate_x(dpitch)
+	var lo := TP_PITCH_MIN if _tp_active() else min_pitch
+	var hi := TP_PITCH_MAX if _tp_active() else max_pitch
+	camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(lo), deg_to_rad(hi))
 
 func _handle_controller_look(delta: float) -> void:
 	var look_input := Input.get_vector("look_left", "look_right", "look_up", "look_down")
@@ -723,11 +1260,9 @@ func _handle_controller_look(delta: float) -> void:
 	var adjusted_magnitude := pow(remapped, 1.5)
 	look_input = look_input.normalized() * adjusted_magnitude
 	
-	rotate_y(-look_input.x * controller_sensitivity * delta)
-	
 	var y_direction := 1.0 if invert_y_axis else -1.0
-	camera.rotate_x(look_input.y * controller_sensitivity * delta * y_direction)
-	camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(min_pitch), deg_to_rad(max_pitch))
+	_apply_look(-look_input.x * controller_sensitivity * delta,
+		look_input.y * controller_sensitivity * delta * y_direction)
 
 func _capture_mouse() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -1157,6 +1692,8 @@ func _mount_vehicle(vehicle: Node3D) -> void:
 			cart_min_turn_radius = params.get("min_turn_radius", 3.0)
 			cart_max_turn_rate = params.get("max_turn_rate", 60.0)
 			is_fpv_drone_mode = params.get("is_fpv_drone", false)
+			_ride_chase_m = float(params.get("chase_m", 0.0))
+			_ride_chase_h = float(params.get("chase_h", 0.0))
 		
 		# FPV drone mode - player body stays stationary, drone handles camera
 		if is_fpv_drone_mode:
@@ -1168,9 +1705,13 @@ func _mount_vehicle(vehicle: Node3D) -> void:
 			mounted_vehicle.emit(vehicle)
 			return
 		
-		# Apply camera offset for golf cart mode
-		if is_golf_cart_mode and riding_camera_offset != Vector3.ZERO:
+		# Apply camera offset for golf cart mode (first person: the driver's eye)
+		if is_golf_cart_mode and riding_camera_offset != Vector3.ZERO and not _tp_active():
 			camera.position = base_camera_position + riding_camera_offset
+		# Third person: start the chase camera behind the vehicle.
+		if _tp_active():
+			_tp_yaw = rotation.y
+			_tp_since_look = 99.0
 		
 		# Adjust character model for EUC riding (raise up to stand on pedals)
 		if not is_golf_cart_mode:
@@ -1356,6 +1897,11 @@ func _handle_cart_movement(input_dir: Vector2, delta: float) -> void:
 	_update_camera_shake(delta, absf(cart_current_speed) > 0.5)
 
 func _update_camera_tilt(turn_input: float, delta: float) -> void:
+	# A chase camera does not roll with the rider (the BODY leans instead).
+	if _tp_active():
+		current_camera_tilt = 0.0
+		camera.rotation.z = 0.0
+		return
 	# Target tilt based on turn input (negative = tilt left when turning left)
 	var target_tilt := -turn_input * riding_max_tilt
 	
@@ -1376,7 +1922,9 @@ func _update_camera_shake(delta: float, _is_moving: bool) -> void:
 	
 	# Determine base position (with offset for golf cart)
 	var target_base : Vector3 = base_camera_position
-	if is_golf_cart_mode and riding_camera_offset != Vector3.ZERO:
+	# The seat offset is a first-person thing (the driver's eye); the chase
+	# camera places itself.
+	if is_golf_cart_mode and riding_camera_offset != Vector3.ZERO and not _tp_active():
 		target_base = base_camera_position + riding_camera_offset
 	
 	# No shake when stationary or very slow - scales smoothly from 0

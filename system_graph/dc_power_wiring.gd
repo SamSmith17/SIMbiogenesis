@@ -57,6 +57,16 @@ static func find_battery_for_dc_port(model: GraphModel, item_id: String,
 			if not found.is_empty():
 				return found
 			continue
+		# A generator landing on a controller's BATTERY terminal is on the bank
+		# bus itself (a hydro turbine's own regulator/dump load wired straight to
+		# the battery side, as a PowerSpout is). That terminal is one node: follow
+		# every other wire on it. Without this the trace dead-ended and a turbine
+		# wired that way never charged anything.
+		if ot == "controller" and other_handle in ["batteryPositive", "batteryNegative"]:
+			var found_bus := find_battery_for_dc_port(model, other_id, other_handle, visited, hops + 1, flat_conns)
+			if not found_bus.is_empty():
+				return found_bus
+			continue
 		if ot == "resource":
 			var ospecs: Dictionary = other.get("specs", {}) as Dictionary
 			if str(ospecs.get("resource_kind", "")) == "dc_electricity" and other_handle in ["positive", "negative"]:

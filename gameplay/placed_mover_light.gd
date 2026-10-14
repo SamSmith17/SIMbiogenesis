@@ -226,7 +226,8 @@ func _process(delta: float) -> void:
 	super._process(delta)
 	if _head == null:
 		return
-	var t := fx_now()
+	# Sound reactive in a beat mode: the sweep moves with the music.
+	var t := effect_time()
 	var ang := MoverProgram.angles(fields, t)
 	_yoke.rotation = Vector3(0.0, deg_to_rad(ang.x), 0.0)
 	_head.rotation = Vector3(deg_to_rad(90.0 - ang.y), 0.0, 0.0)
@@ -265,7 +266,7 @@ func _update_beam_visuals(t: float) -> void:
 	var col: Color = _light_node.light_color if _light_node != null else Color.WHITE
 	var night := lerpf(0.08, 1.0, PlacedLightPower.night_factor(_main))
 	var haze := clampf(float(fields.get("beam_haze", 0.5)), 0.0, 1.0)
-	var energy := float(fields.get("energy", 1.0))
+	var energy := float(fields.get("energy", 1.0)) * sound_level
 	if _lens_mat != null:
 		_lens_mat.emission = col
 		_lens_mat.emission_energy_multiplier = energy * 1.5 if lit else 0.0

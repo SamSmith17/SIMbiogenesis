@@ -12,6 +12,8 @@ var _prompt_ui: CanvasLayer = null
 var _loader: Node = null
 var _solar_focus_idx: int = -1
 var _water_focus_idx: int = -1
+## The stream under the crosshair (WaterNetwork feature id), "" when none.
+var _stream_focus_id: String = ""
 ## Painted camp under the crosshair ("" = none). Stamped with the physics frame
 ## it was last confirmed on, so every OTHER focus path drops it for free.
 var _camp_focus_id := ""
@@ -151,7 +153,7 @@ func _physics_process(_delta: float) -> void:
 		if light_place and next != null and not (next is PlacedLight):
 			next = null
 		if next != null:
-			var dist: float = _camera.global_position.distance_to(hit.position)
+			var dist: float = _reach_origin().distance_to(hit.position)
 			var max_dist := next.max_distance
 			if next is PlacedProp or next is PlacedLight:
 				max_dist = RAY_LENGTH
@@ -221,6 +223,13 @@ func _physics_process(_delta: float) -> void:
 				_clear_solar_focus()
 				_clear_building_focus()
 				_clear_veg_focus()
+				_clear_stream_focus()
+			elif _update_stream_focus(ground as Vector3):
+				# A creek is a 3 m-wide line inside a forest polygon that is a
+				# kilometre wide; the specific target wins.
+				_clear_solar_focus()
+				_clear_building_focus()
+				_clear_veg_focus()
 			elif _update_building_focus(ground as Vector3):
 				_clear_solar_focus()
 				_clear_water_focus()
@@ -231,17 +240,20 @@ func _physics_process(_delta: float) -> void:
 				_clear_building_focus()
 			else:
 				_clear_water_focus()
+				_clear_stream_focus()
 				_clear_veg_focus()
 				_last_graph_sync_key = ""
 		else:
 			_clear_solar_focus()
 			_clear_water_focus()
+			_clear_stream_focus()
 			_clear_building_focus()
 			_clear_veg_focus()
 			_last_graph_sync_key = ""
 	else:
 		_clear_solar_focus()
 		_clear_water_focus()
+		_clear_stream_focus()
 		_clear_building_focus()
 		_clear_veg_focus()
 		_sync_graph_from_world_focus()
@@ -319,11 +331,22 @@ func _raycast_center() -> Dictionary:
 	var dir := _camera.project_ray_normal(center)
 	var space := _player.get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * RAY_LENGTH)
-	if _player != null:
-		query.exclude = [_player]
+	# Exclude takes RIDs. In third person the ray starts behind the player
+	# and passes their shoulder, so this one matters.
+	if _player is CollisionObject3D:
+		query.exclude = [(_player as CollisionObject3D).get_rid()]
 	query.collide_with_areas = true
 	query.collide_with_bodies = true
 	return space.intersect_ray(query)
+
+
+## Where interaction REACH is measured from: the camera in first person, the
+## player's head in third person (the camera is metres behind them there, and
+## a door you are standing at must not be "too far").
+func _reach_origin() -> Vector3:
+	if _player != null and _player.has_method("reach_origin"):
+		return _player.call("reach_origin")
+	return _camera.global_position
 
 
 func _find_interactable(obj: Object) -> Interactable:
@@ -482,9 +505,29 @@ func _update_conduit_focus() -> bool:
 	var center := vp.get_visible_rect().size * 0.5
 	var origin := _camera.project_ray_origin(center)
 	var dir := _camera.project_ray_normal(center)
+	# Wires hidden in first person ("Show 3D wires" off, no lens up) are still
+	# SAMPLED, so they used to win focus invisibly — the penstock ending at a
+	# PowerSpout made the turbine itself unfocusable (every Ctrl+click opened
+	# the conduit style modal instead of the prop editor).
+	if mgr is Node3D and not (mgr as Node3D).visible:
+		return false
 	var hit: Dictionary = mgr.call("pick_conduit", origin, dir)
 	var cid := str(hit.get("conn_id", ""))
 	var hit_pt: Vector3 = hit.get("point", Vector3.ZERO) as Vector3
+	# A placed prop in FRONT of the pick wins. Every conduit ends AT a port on
+	# its prop, so the last samples always pass within the pick radius of the
+	# prop's body; the pick is only a wire pick when it lands clearly nearer
+	# the camera than the prop's surface.
+	if not cid.is_empty() and _conduit_pick_occluded_by_prop(origin, hit_pt):
+		cid = ""
+		hit = {}
+	# The END of a draft pipe belongs to its OutletEndMarker (Ctrl/Alt + aim
+	# focuses it through the ordinary ray below) — a wire focus there would
+	# turn every drag into a waypoint insert.
+	if not cid.is_empty() and mgr.has_method("is_outlet_terminal_pick") \
+			and bool(mgr.call("is_outlet_terminal_pick", cid, hit_pt)):
+		cid = ""
+		hit = {}
 	# Aiming at an existing hang IK sphere (may miss the thin wire).
 	# Never acquire NEW focus from orphan pins alone — elevated leftover spheres
 	# used to flash full gizmo sets while the camera panned across empty sky.
@@ -558,6 +601,27 @@ func _update_conduit_focus() -> bool:
 			_crosshair.set_prompt_text(
 				"Interact/click: style · %s%s" % [kind, len_txt])
 	return true
+
+
+## True when the centre physics ray hits a placed prop (or any Interactable)
+## and `pick_pt` is not clearly in front of that surface. Shared rule with
+## ConduitRouteController so focus and click agree (see
+## CONDUIT_PROP_CLEARANCE_M).
+const CONDUIT_PROP_CLEARANCE_M := 0.6
+
+
+func _conduit_pick_occluded_by_prop(origin: Vector3, pick_pt: Vector3) -> bool:
+	if not is_finite(pick_pt.x):
+		return false
+	var phys := _raycast_center()
+	if phys.is_empty() or not phys.has("collider"):
+		return false
+	var inter := _find_interactable(phys.collider as Object)
+	if inter == null:
+		return false
+	var prop_d := origin.distance_to(phys.position as Vector3)
+	var pick_d := origin.distance_to(pick_pt)
+	return pick_d > prop_d - CONDUIT_PROP_CLEARANCE_M
 
 
 func _conduit_route_controller() -> Node:
@@ -787,6 +851,32 @@ func _update_water_focus(hit_pos: Vector3) -> bool:
 		_crosshair.set_prompt_text("[%s / Click] Pond settings — %.0f m²%s" % [
 			act, float(pick.get("area_m2", 0.0)), suffix])
 	return true
+
+
+func _update_stream_focus(hit_pos: Vector3) -> bool:
+	if _loader == null or not _loader.has_method("pick_stream_at_world"):
+		return false
+	var pick: Dictionary = _loader.call("pick_stream_at_world", hit_pos.x, hit_pos.z)
+	if not bool(pick.get("valid", false)):
+		_clear_stream_focus()
+		return false
+	_stream_focus_id = str(pick.get("id", ""))
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		var nm := str(pick.get("name", ""))
+		if nm.is_empty():
+			nm = str(pick.get("kind", "stream")).capitalize()
+		_crosshair.set_prompt_text("[%s / Click] Water tools on %s%s" % [act, nm,
+			" (tapped for a penstock)" if bool(pick.get("tapped", false)) else ""])
+	return true
+
+
+func _clear_stream_focus() -> void:
+	_stream_focus_id = ""
 
 
 func _update_camp_focus(hit_pos: Vector3) -> bool:
@@ -1076,6 +1166,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		_loader.call("open_pond_editor", _water_focus_idx)
 		get_viewport().set_input_as_handled()
 		return
+	# Aimed at a stream → the WATER toolbar with it picked.
+	if not _stream_focus_id.is_empty() and _loader != null \
+			and _loader.has_method("open_water_tools_on"):
+		_loader.call("open_water_tools_on", _stream_focus_id)
+		get_viewport().set_input_as_handled()
+		return
 	# Focused OSM building → open the Building Builder modal.
 	if _loader != null and _loader.has_method("get_building_focus_idx") \
 			and _loader.has_method("open_building_builder"):
@@ -1102,6 +1198,13 @@ func _try_open_veg_area() -> bool:
 
 func _open_placed_prop_edit(prop: PlacedProp) -> void:
 	if prop == null:
+		return
+	# A driveable vehicle (PlacedVehicle): Interact gets in. A click still
+	# opens the editor (move / delete).
+	var veh := prop.get_node_or_null("PlacedVehicle")
+	if veh != null and not bool(prop.get_meta("packed", false)) \
+			and _player != null and _player.has_method("request_mount"):
+		_player.call("request_mount", veh)
 		return
 	# PACKED crate (PACKING_PLAN.md Phase 5): Interact = unpack in place.
 	# Repacking lives in the edit drawer — a crate has no other interaction,

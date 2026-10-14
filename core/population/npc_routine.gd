@@ -29,8 +29,12 @@ const ENRICHMENT := "enrichment"
 const WORK := "work"
 ## Nothing scheduled — needs and the chore board decide, as before.
 const FREE := "free"
+## Festival leisure: ALWAYS doing something social (NpcSocial) — a venue
+## without the enrichment gate, a conversation circle in camp, or a wander.
+## FREE in a festival left people standing where they had last eaten.
+const SOCIAL := "social"
 
-const KINDS: Array = [SLEEP, BATHROOM, EAT, WASH, ENRICHMENT, WORK, FREE]
+const KINDS: Array = [SLEEP, BATHROOM, EAT, WASH, ENRICHMENT, WORK, FREE, SOCIAL]
 
 const LABELS: Dictionary = {
 	SLEEP: "Sleeping",
@@ -40,6 +44,7 @@ const LABELS: Dictionary = {
 	ENRICHMENT: "Enrichment",
 	WORK: "Work / chores",
 	FREE: "Free",
+	SOCIAL: "Hanging out",
 }
 
 ## Block kind -> the NpcAgent activity it performs. WORK and FREE have no
@@ -128,18 +133,20 @@ static func default_day() -> NpcRoutine:
 ## A FESTIVAL day: late nights at the venues, late mornings in camp. The camp
 ## default above sends everyone to bed at 23:30, which empties a 20:00–02:00
 ## stage set an hour and a half in; festival camp templates stamp this one
-## instead (CampTemplates). No WORK block — the festival is the point — so
-## chores on a camp board are picked up through need/free fall-through only.
+## instead (CampTemplates). No WORK block — the festival is the point. The two
+## daytime leisure blocks are SOCIAL, not FREE: FREE only reached a venue past
+## the enrichment threshold, so from late morning to dinner the whole festival
+## stood where it had last eaten. SOCIAL always does something (NpcSocial).
 static func festival_day() -> NpcRoutine:
 	var r := NpcRoutine.new()
 	r.blocks = [
 		{"start_h": 2.5, "end_h": 9.5, "kind": SLEEP},
 		{"start_h": 9.5, "end_h": 9.5 + BATHROOM_HOURS, "kind": BATHROOM},
 		{"start_h": 9.5 + BATHROOM_HOURS, "end_h": 10.5, "kind": EAT},
-		{"start_h": 10.5, "end_h": 13.0, "kind": FREE},
+		{"start_h": 10.5, "end_h": 13.0, "kind": SOCIAL},
 		{"start_h": 13.0, "end_h": 14.0 - BATHROOM_HOURS, "kind": EAT},
 		{"start_h": 14.0 - BATHROOM_HOURS, "end_h": 14.0, "kind": BATHROOM},
-		{"start_h": 14.0, "end_h": 18.0, "kind": FREE},
+		{"start_h": 14.0, "end_h": 18.0, "kind": SOCIAL},
 		{"start_h": 18.0, "end_h": 19.0, "kind": EAT},
 		{"start_h": 19.0, "end_h": 19.0 + BATHROOM_HOURS, "kind": BATHROOM},
 		{"start_h": 19.0 + BATHROOM_HOURS, "end_h": 2.0, "kind": ENRICHMENT},
@@ -172,6 +179,54 @@ static func offset_for(agent_id: String) -> float:
 const EARLY_BED_H := 2.5
 
 
+## People wake this long before their SLEEP block ends (plus up to 1.5 h of
+## per-person jitter), so the default day (block ends 08:00) wakes at the
+## long-standing 06:00 exactly. The wake hour used to be that FIXED 06:00 for
+## everyone: a festival camp (bed 02:30, block to 09:30) slept about four hours
+## and then stood round its beds until the block ended.
+const WAKE_BEFORE_END_H := 2.0
+
+
+## Does this routine serve each meal / bathroom / wash block ONCE, handing
+## the rest of the block to SOCIAL? True for any routine with a SOCIAL block
+## (the festival day). The default day keeps re-issuing a block's activity for
+## as long as it lasts (a second meal inside the same EAT block — a
+## calibration both tiers mirror); a festival camp eats three meals a day, and
+## the tiers re-issued at different moments, which split their food bills.
+func serves_once() -> bool:
+	for b in blocks:
+		if str((b as Dictionary).get("kind", "")) == SOCIAL:
+			return true
+	return false
+
+
+## Before the sleep window opens, the sleep NEED alone sends someone to bed
+## at its ordinary threshold — and a festival-goer up since 08:00 crosses it
+## around 21:00, so half the crowd went to bed during the headline set
+## (measured: 46 % asleep 21:00-24:00). On a FESTIVAL day (serves_once) only
+## real exhaustion does it before the window; the default day is unchanged.
+const FESTIVAL_LATE_BED_BAR := 0.97
+
+
+## The sleep need's bar OUTSIDE the sleep window.
+func early_bed_bar(default_bar: float) -> float:
+	return FESTIVAL_LATE_BED_BAR if serves_once() else default_bar
+
+
+## Kinds `serves_once` applies to.
+const ONCE_KINDS: Array = [BATHROOM, EAT, WASH]
+
+
+## The base wake hour: WAKE_BEFORE_END_H before the first SLEEP block ends,
+## or `fallback` when the routine has none.
+func wake_base_h(fallback: float) -> float:
+	for b in blocks:
+		if str((b as Dictionary).get("kind", "")) == SLEEP:
+			return fposmod(float((b as Dictionary).get("end_h", fallback + WAKE_BEFORE_END_H))
+				- WAKE_BEFORE_END_H, 24.0)
+	return fallback
+
+
 ## When the sleep need's window opens: EARLY_BED_H before the first SLEEP
 ## block, or `fallback` when the routine has none.
 func sleep_start_h(fallback: float) -> float:
@@ -189,11 +244,123 @@ static func in_sleep_window(hour: float, start: float, end: float) -> bool:
 	return hour >= start and hour < end
 
 
-func block_at(hour_of_day: float, phase_offset_h: float = 0.0) -> Dictionary:
+## PERSONAL SCHEDULES. The routine is a shape, not a timetable: each person
+## lives their own version of it, different every day, so a camp does not
+## stand up, eat and queue for the toilets in the same ten minutes. On top of
+## the fixed per-person `offset_for` shift, the whole day shifts by up to
+## MAX_DAY_SHIFT_H more (a new draw every day), and a SHORT block (under
+## SHORT_BLOCK_H: the 5-minute bathroom visits) floats as a unit up to
+## MAX_FLOAT_JITTER_H inside its neighbours (FLOAT_SHARE of each, so nothing
+## reorders or vanishes). The sleep window and the wake hour move with the
+## shift (NpcAgent._personal_shift / CrowdCohort._decide). Drawn from NpcHash on "<id>|<routine day>", so both
+## tiers see the same day for the same person; the routine day rolls at
+## `roll_h()` (the middle of the night's sleep), never mid-evening.
+## ⚠ Do NOT jitter ordinary block boundaries independently: tried, it drifted
+## the two tiers' morale apart past the equivalence pin (the tiers meet block
+## boundaries at different moments — substeps vs events — the same trap as the
+## "linger" attempts in CLAUDE.md). A whole-day shift is what both tiers
+## already read identically (it is just a bigger phase offset).
+const MAX_DAY_SHIFT_H := 0.6
+const MAX_FLOAT_JITTER_H := 0.75
+const SHORT_BLOCK_H := 0.3
+const FLOAT_SHARE := 0.45
+const PERSONAL_CACHE_MAX := 8192
+var _personal: Dictionary = {}
+var _roll_h := NAN
+
+
+## The jitter key for `agent_id` at absolute sim hour `abs_h` ("" = none:
+## the shared schedule). Pass it to block_at / hours_left_in_block.
+func day_key(agent_id: String, abs_h: float, phase_offset_h: float = 0.0) -> String:
+	if agent_id.is_empty():
+		return ""
+	return "%s|%d" % [agent_id, int(floor((abs_h - phase_offset_h - roll_h()) / 24.0))]
+
+
+## The same person-day for the SLEEP WINDOW and the wake hour, rolling at
+## midday instead: a night must keep one shift from bedtime to waking, or a
+## person who just woke finds the window moved under them and goes back to
+## bed (one night = one sleep session is pinned by the selftest). The key of
+## the night that ENDS this morning, i.e. the routine day it belongs to.
+func night_key(agent_id: String, abs_h: float, phase_offset_h: float = 0.0) -> String:
+	if agent_id.is_empty():
+		return ""
+	return "%s|%d" % [agent_id, int(floor((abs_h - phase_offset_h - roll_h() + 12.0) / 24.0))]
+
+
+## Where the routine day rolls over: the middle of the longest SLEEP block
+## (05:30 on the default day, 06:00 on a festival day), else 04:00.
+func roll_h() -> float:
+	if is_nan(_roll_h):
+		_roll_h = 4.0
+		var best := -1.0
+		for b in blocks:
+			var bd: Dictionary = b
+			if str(bd.get("kind", "")) != SLEEP:
+				continue
+			var s := float(bd.get("start_h", 0.0))
+			var l := fposmod(float(bd.get("end_h", 0.0)) - s, 24.0)
+			if l > best:
+				best = l
+				_roll_h = fposmod(s + l * 0.5, 24.0)
+	return _roll_h
+
+
+## This person's blocks for the day `key` names (cached).
+func personal_blocks(key: String) -> Array:
+	if key.is_empty() or blocks.size() < 2:
+		return blocks
+	var cached: Variant = _personal.get(key, null)
+	if cached != null:
+		return cached
+	if _personal.size() >= PERSONAL_CACHE_MAX:
+		_personal.clear()
+	var n := blocks.size()
+	var len_of: Array = []
+	for b in blocks:
+		var bd: Dictionary = b
+		var l := fposmod(float(bd.get("end_h", 0.0)) - float(bd.get("start_h", 0.0)), 24.0)
+		len_of.append(24.0 if (l <= 0.0 and n == 1) else l)
+	# Each block's START moves by `shift[k]`; its end is the next block's start.
+	var shift: Array = []
+	shift.resize(n)
+	shift.fill(0.0)
+	var floated: Array = []
+	floated.resize(n)
+	floated.fill(false)
+	for k in n:
+		var prev := (k - 1 + n) % n
+		var next := (k + 1) % n
+		if float(len_of[k]) < SHORT_BLOCK_H and float(len_of[prev]) >= SHORT_BLOCK_H \
+				and float(len_of[next]) >= SHORT_BLOCK_H:
+			var reach := minf(MAX_FLOAT_JITTER_H, FLOAT_SHARE * minf(float(len_of[prev]), float(len_of[next])))
+			var s := (NpcHash.unit01(key, "float%d" % k) * 2.0 - 1.0) * reach
+			shift[k] = s
+			shift[next] = s   # the short block moves whole: its end too
+			floated[k] = true
+			floated[next] = true
+	var out: Array = []
+	for k in n:
+		var bd: Dictionary = (blocks[k] as Dictionary).duplicate()
+		bd["start_h"] = fposmod(float(bd.get("start_h", 0.0)) + float(shift[k]), 24.0)
+		bd["end_h"] = fposmod(float(bd.get("end_h", 0.0)) + float(shift[(k + 1) % n]), 24.0)
+		out.append(bd)
+	_personal[key] = out
+	return out
+
+
+## This person's extra whole-day shift for the day `key` names (0 for "").
+static func day_shift(key: String) -> float:
+	if key.is_empty():
+		return 0.0
+	return (NpcHash.unit01(key, "day") * 2.0 - 1.0) * MAX_DAY_SHIFT_H
+
+
+func block_at(hour_of_day: float, phase_offset_h: float = 0.0, key: String = "") -> Dictionary:
 	if blocks.is_empty():
 		return {}
-	var h := fposmod(hour_of_day - phase_offset_h, 24.0)
-	for b_v in blocks:
+	var h := fposmod(hour_of_day - phase_offset_h - day_shift(key), 24.0)
+	for b_v in personal_blocks(key):
 		var b: Dictionary = b_v
 		if _covers(b, h):
 			return b
@@ -202,11 +369,11 @@ func block_at(hour_of_day: float, phase_offset_h: float = 0.0) -> Dictionary:
 
 ## Sim-hours until the current block ends (0 when it is ending now). Used to
 ## cut an activity short at the block boundary so people move on.
-func hours_left_in_block(hour_of_day: float, phase_offset_h: float = 0.0) -> float:
-	var b := block_at(hour_of_day, phase_offset_h)
+func hours_left_in_block(hour_of_day: float, phase_offset_h: float = 0.0, key: String = "") -> float:
+	var b := block_at(hour_of_day, phase_offset_h, key)
 	if b.is_empty():
 		return 0.0
-	var h := fposmod(hour_of_day - phase_offset_h, 24.0)
+	var h := fposmod(hour_of_day - phase_offset_h - day_shift(key), 24.0)
 	var end_h := float(b.get("end_h", h))
 	var left := end_h - h
 	if left < 0.0:
@@ -308,7 +475,37 @@ static func from_array(arr: Array) -> NpcRoutine:
 	if r.blocks.is_empty():
 		return default_day()
 	r.sort_blocks()
+	r._migrate_legacy_festival()
 	return r
+
+
+## Camps saved before SOCIAL existed carry the old festival day verbatim (its
+## two daytime leisure blocks typed FREE), in their specs AND in the camp
+## component definitions. Recognise THAT exact shape — the late SLEEP block
+## (02:30-09:30), the 19:05-02:00 ENRICHMENT, no WORK — and retype those two
+## FREE blocks, so a reloaded festival stops standing around. A routine the
+## player authored is left alone unless it is that shape exactly.
+func _migrate_legacy_festival() -> void:
+	var sleep_ok := false
+	var enrich_ok := false
+	var free_idx: Array = []
+	for i in blocks.size():
+		var b: Dictionary = blocks[i]
+		var k := str(b["kind"])
+		var a := float(b["start_h"])
+		var e := float(b["end_h"])
+		if k == WORK or k == SOCIAL:
+			return
+		if k == SLEEP and absf(a - 2.5) < 0.01 and absf(e - 9.5) < 0.01:
+			sleep_ok = true
+		elif k == ENRICHMENT and absf(a - (19.0 + BATHROOM_HOURS)) < 0.01 and absf(e - 2.0) < 0.01:
+			enrich_ok = true
+		elif k == FREE and ((absf(a - 10.5) < 0.01 and absf(e - 13.0) < 0.01)
+				or (absf(a - 14.0) < 0.01 and absf(e - 18.0) < 0.01)):
+			free_idx.append(i)
+	if sleep_ok and enrich_ok and free_idx.size() == 2:
+		for i in free_idx:
+			blocks[i]["kind"] = SOCIAL
 
 
 ## Keep blocks in clock order. A midnight-wrapping block sorts to the front by
@@ -316,6 +513,13 @@ static func from_array(arr: Array) -> NpcRoutine:
 ## only for display and editing.
 func sort_blocks() -> void:
 	blocks.sort_custom(func(a, b): return float(a["start_h"]) < float(b["start_h"]))
+	invalidate_personal()
+
+
+## Forget the cached personal schedules (call after editing `blocks`).
+func invalidate_personal() -> void:
+	_personal.clear()
+	_roll_h = NAN
 
 
 func duplicate_routine() -> NpcRoutine:

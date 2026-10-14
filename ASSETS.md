@@ -76,6 +76,53 @@ one, so any Mixamo walk works as a substitute.
 The standing idle is **not** in this list — it is retargeted at load from
 `Player Character/Breathing Idle (no skin).fbx`.
 
+**Mo-cap SPICE for the stick figure** (`Imported Models/NPC/mocap/<moment>/`).
+The simplified (stick-figure) body is posed procedurally; now and then a
+nearby figure breaks into a real motion-captured clip for a few seconds and
+eases back (`NpcMocapSpice`, `NpcStickMocap`; Settings → NPCs → Mo-cap spice).
+Every FBX in a moment's folder is a candidate for it — **file names are
+free**, so drop in the closest clip you can find. A moment with no clip simply
+stays procedural. Export every clip from mixamo.com with:
+
+| Setting | Value |
+|---|---|
+| Format | FBX Binary (.fbx) |
+| Skin | **Without Skin** (any character — the loader converts Y Bot's `mixamorig:` bones) |
+| Frames per second | 30 |
+| Keyframe reduction | none |
+| In Place | tick it whenever the clip offers it |
+
+then re-import (open the editor, or `--headless --path . --import`).
+
+| Folder | When it plays | Suggested Mixamo clips (or the closest you can find) |
+|---|---|---|
+| `peak/` | hitting FUCK YES!!! — the punchline (loops, ~10 s) | Samba Dancing (copied in), Silly Dancing, Chicken Dance, Gangnam Style, Robot Hip Hop Dance, Twist Dance, Victory |
+| `cheer/` | a set's closer, the effigy coming down (once) | Cheering, Fist Pump, Victory, Excited, Clapping |
+| `dance/` | a dance break at a stage or a fire (loops, ~12 s) | Hip Hop Dancing (variants), Shuffling, Swing Dancing, Salsa Dancing, Thriller Part 2, Breakdance Uprock, Belly Dancing |
+| `dj/` | the DJ at the decks (loops) | a head-bob / groove idle with the hands at waist height |
+| `talk/` | a flourish in a conversation (once) | Talking, Laughing, Arguing, Agreeing, Shrugging, Thinking |
+| `idle/` | standing about (once) | Looking Around, Weight Shift, Arm Stretching, Yawn, Bored, Texting While Standing |
+| `sit/` | sitting round a cold pit / at a meal (once; set on the ground) | Sitting Laughing, Sitting Talking, Sitting Clap |
+| `wake/` | just up (once) | Arm Stretching, a standing wake-up stretch |
+| `work/` | doing a chore (loops) | Digging / Shoveling, Hammering, Lifting / Box Idle, Pick Up, Kneeling |
+| `gaze/` | standing taking in the effigy or an art piece (once) | Looking Around, Looking Up, Pointing, Thinking |
+| `fireflow/` | a Fire Flow performer circling the effigy (loops; the poi flames are drawn on top) | Spin In Place, Capoeira, Ginga, any slow arms-wide turning dance |
+
+Until a folder has clips, `peak` uses the Samba below, `dance` Arms Hip Hop
+Dance and `cheer` Standing Clap. Each folder carries a README with this list.
+
+**The peak dance** (`NpcRig.RETARGET_SOURCES`, played at FUCK YES!!!):
+
+| File | Mixamo item | Download settings |
+|---|---|---|
+| `Samba Dancing.fbx` | Samba Dancing | FBX Binary, 30 fps (any character — it is retargeted) |
+
+This export comes off a different Mixamo rig (`mixamorig:` bones rather than
+the pack's `mixamorig1:`), so it is retargeted by prefix like the idle, its
+hip track rescaled to the pack's standing height. Without it the rigged body
+plays the ordinary dance at a peak; the stick figure and the crowd draw their
+own samba either way.
+
 **Not yet sourced — the carry pair.** NPCs hauling crates (Site Projects)
 currently play the ordinary walk/idle under a chest-height box, which reads
 acceptably at silhouette distance. A real two-hand carry needs two clips that

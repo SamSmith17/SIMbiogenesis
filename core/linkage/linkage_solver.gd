@@ -12,16 +12,30 @@ extends RefCounted
 ##
 ## Beam dictionaries: { p1, p2, center: Vector3, w, t: float,
 ##   axis_x, axis_y, axis_z: Vector3, corners: Array[Vector3] (8),
-##   stack_type: String, module_index: int, stack_id: int, pattern_id: String }
+##   stack_type: String, module_index: int, stack_id: int, pattern_id: String,
+##   layer_index: int }
 ## Bracket dictionaries: { pos, bottom_pos, v_bolt_pivot: Vector3,
 ##   is_bottom: bool, beam_dir, right, bolt_dir: Vector3, basis: Basis
 ##   (x=bolt axis, y=U opening, z=beam axis), width, depth, actual_height,
 ##   hole_distance, wall_thickness, inner_width: float, module_index: int,
-##   pivot_role: String ("outer"|"inner") }
+##   pivot_role: String ("outer"|"inner"), ring: "bottom"|"top", cap: bool }
 ##   `pos` is the H-ring pivot where the simple bracket is drawn; `v_bolt_pivot`
 ##   is the V-stack corner the DETAILED hardware anchors on. See `_ring_spec`.
 ## Bolt dictionaries: { start, end, center, dir: Vector3, length, radius,
-##   head_radius: float, bolt_type, bolt_sub_type: String, module_index: int }
+##   head_radius: float, bolt_type, bolt_sub_type: String, module_index: int,
+##   ring: "bottom"|"top"|"center", role: "inner"|"outer"|"center", cap: bool }
+## Washer dictionaries (one per beam gap of a bolt, port of createWashersForBolt):
+##   { center, dir: Vector3, id, od, thickness: float, washer_type (= the bolt
+##   type), module_index, ring, role, bolt_sub_type, cap, gap_index }
+##
+## IDENTITY. `ring` / `role` / `cap` / `layer_index` / `gap_index` are the
+## semantic fields `LinkagePartKeys` turns into stable part keys (port of
+## part-keys.js), so build steps can name "module 3's top inner joint" across
+## re-solves. They are additive: no pinned value depends on them. Every bolt,
+## bracket and washer is emitted here regardless of hardware detail; the JS
+## rule that a detailed assembly REPLACES its simple bracket/bolts is applied in
+## `LinkagePartKeys.part_data`, because LinkageHwPlacement seats assemblies on
+## exactly these brackets.
 
 
 ## Solve the linkage at a fold angle. Returns the geometry frame dictionary:
@@ -54,6 +68,7 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 	var beams: Array = []
 	var brackets: Array = []
 	var bolts: Array = []
+	var washers: Array = []
 	var module_frames: Array = []
 	var cur_pos := Vector2.ZERO
 	var cur_rot := 0.0
@@ -193,18 +208,34 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 				var bolt_radius := p.bolt_diameter / 2.0
 				# H-pivot bolts (vertical, through H-stack into brackets).
 				var h_pivot_len := p.h_pivot_bolt_length if p.h_pivot_bolt_length > 0.0 else p.auto_h_pivot_bolt_length()
-				bolts.append(_make_vertical_bolt(h_pivot_bot_inner, 0.0, h_pivot_len, bolt_radius, "hpivot", "bottom"))
-				bolts.append(_make_vertical_bolt(h_pivot_bot_outer, 0.0, h_pivot_len, bolt_radius, "hpivot", "bottom"))
-				bolts.append(_make_vertical_bolt(h_pivot_top_inner, top_h, h_pivot_len, bolt_radius, "hpivot", "top"))
-				bolts.append(_make_vertical_bolt(h_pivot_top_outer, top_h, h_pivot_len, bolt_radius, "hpivot", "top"))
+				var hp_bi := _tag(_make_vertical_bolt(h_pivot_bot_inner, 0.0, h_pivot_len, bolt_radius, "hpivot", "bottom"), i, "bottom", "inner")
+				var hp_bo := _tag(_make_vertical_bolt(h_pivot_bot_outer, 0.0, h_pivot_len, bolt_radius, "hpivot", "bottom"), i, "bottom", "outer")
+				var hp_ti := _tag(_make_vertical_bolt(h_pivot_top_inner, top_h, h_pivot_len, bolt_radius, "hpivot", "top"), i, "top", "inner")
+				var hp_to := _tag(_make_vertical_bolt(h_pivot_top_outer, top_h, h_pivot_len, bolt_radius, "hpivot", "top"), i, "top", "outer")
+				bolts.append_array([hp_bi, hp_bo, hp_ti, hp_to])
+				# H-stack washers on the h-pivot bolts (solver.js:2060). The
+				# inner radial is used for both inner bolts, as in the JS.
+				if bool(p.washers["h_enabled"]) and p.h_stack_count > 1:
+					var rad_in := _radial_or_x(h_pivot_bot_inner)
+					var rad_out := _radial_or_x(h_pivot_bot_outer)
+					for pair in [[hp_bi, rad_in], [hp_bo, rad_out], [hp_ti, rad_in], [hp_to, rad_out]]:
+						washers.append_array(_washers_for_bolt(p, pair[0], p.h_stack_count, p.h_stack_gap, h_t, false, pair[1]))
 				# Vertical-module bolts (horizontal, through the V stack).
-				bolts.append(_make_axis_bolt(p_bot_inner, v_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"))
+				var vb_bi := _tag(_make_axis_bolt(p_bot_inner, v_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"), i, "bottom", "inner")
 				var bot_outer_pivot := p_bot_outer if p.v_stack_reverse else p_bot_inner
-				bolts.append(_make_axis_bolt(bot_outer_pivot, v_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"))
+				var vb_bo := _tag(_make_axis_bolt(bot_outer_pivot, v_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"), i, "bottom", "outer")
 				var top_outer_pivot := p_top_inner if p.v_stack_reverse else p_top_outer
-				bolts.append(_make_axis_bolt(top_outer_pivot, v_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"))
-				bolts.append(_make_axis_bolt(p_top_inner, v_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"))
-				bolts.append(_make_axis_bolt(center_mid, v_bolt_dir, v_bolt_length, bolt_radius, "vstack", "center", i))
+				var vb_to := _tag(_make_axis_bolt(top_outer_pivot, v_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"), i, "top", "outer")
+				var vb_ti := _tag(_make_axis_bolt(p_top_inner, v_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"), i, "top", "inner")
+				var vb_c := _tag(_make_axis_bolt(center_mid, v_bolt_dir, v_bolt_length, bolt_radius, "vstack", "center", i), i, "center", "center")
+				bolts.append_array([vb_bi, vb_bo, vb_to, vb_ti, vb_c])
+				# V-stack washers (solver.js:2101). Cap bolts get none, as in the JS.
+				if bool(p.washers["v_enabled"]) and p.v_stack_count > 1:
+					var v_widths = p.v_stack_beam_widths() \
+						if (p.needs_split_v_beam_dimensions() and not p.is_v_beam_dimensions_linked()) \
+						else p.v_beam_w
+					for vb in [vb_bi, vb_bo, vb_to, vb_ti, vb_c]:
+						washers.append_array(_washers_for_bolt(p, vb, p.v_stack_count, p.v_stack_gap, v_widths, true, stack_dir_norm))
 				# Cap-upright bolts (first module only).
 				if i == 0 and p.arch_cap_uprights:
 					var cap_bot_inner := _map_to_3d(loc["bl"], y_min, cur_pos, cur_rot)
@@ -218,11 +249,11 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 					if cap_bolt_dir.length() < 0.1:
 						var cap_avg := ((cap_a_dir + cap_b_dir) * 0.5).normalized()
 						cap_bolt_dir = _v_cross(cap_avg, Vector3.UP).normalized()
-					bolts.append(_make_axis_bolt(cap_bot_inner, cap_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"))
-					bolts.append(_make_axis_bolt(cap_bot_outer, cap_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"))
-					bolts.append(_make_axis_bolt(cap_top_outer, cap_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"))
-					bolts.append(_make_axis_bolt(cap_top_inner, cap_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"))
-					bolts.append(_make_axis_bolt(cap_center_mid, cap_bolt_dir, v_bolt_length, bolt_radius, "vstack", "center", i))
+					bolts.append(_tag(_make_axis_bolt(cap_bot_inner, cap_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"), i, "bottom", "inner", true))
+					bolts.append(_tag(_make_axis_bolt(cap_bot_outer, cap_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"), i, "bottom", "outer", true))
+					bolts.append(_tag(_make_axis_bolt(cap_top_outer, cap_bolt_dir, v_bolt_outer_length, bolt_radius, "vstack", "outer"), i, "top", "outer", true))
+					bolts.append(_tag(_make_axis_bolt(cap_top_inner, cap_bolt_dir, v_bolt_inner_length, bolt_radius, "vstack", "inner"), i, "top", "inner", true))
+					bolts.append(_tag(_make_axis_bolt(cap_center_mid, cap_bolt_dir, v_bolt_length, bolt_radius, "vstack", "center", i), i, "center", "center", true))
 
 			# Cap-upright brackets (first module only).
 			if i == 0 and p.arch_cap_uprights and p.show_brackets:
@@ -257,10 +288,10 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 				var cap_stack_dir := _v_cross(cap_a, cap_b).normalized()
 				if cap_stack_dir.length() < 0.1:
 					cap_stack_dir = _v_cross(((cap_a + cap_b) * 0.5).normalized(), Vector3.UP).normalized()
-				brackets.append(_create_bracket(p, cap_outer_bot["h_pivot"], true, cap_outer_bot["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_outer_bot["v_bolt_pivot"], "outer"))
-				brackets.append(_create_bracket(p, cap_outer_top["h_pivot"], false, cap_outer_top["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_outer_top["v_bolt_pivot"], "outer"))
-				brackets.append(_create_bracket(p, cap_inner_bot["h_pivot"], true, cap_inner_bot["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_inner_bot["v_bolt_pivot"], "inner"))
-				brackets.append(_create_bracket(p, cap_inner_top["h_pivot"], false, cap_inner_top["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_inner_top["v_bolt_pivot"], "inner"))
+				brackets.append(_create_bracket(p, cap_outer_bot["h_pivot"], true, cap_outer_bot["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_outer_bot["v_bolt_pivot"], "outer", true))
+				brackets.append(_create_bracket(p, cap_outer_top["h_pivot"], false, cap_outer_top["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_outer_top["v_bolt_pivot"], "outer", true))
+				brackets.append(_create_bracket(p, cap_inner_bot["h_pivot"], true, cap_inner_bot["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_inner_bot["v_bolt_pivot"], "inner", true))
+				brackets.append(_create_bracket(p, cap_inner_top["h_pivot"], false, cap_inner_top["beam_dir"], cap_stack_dir, i, h_stack_thick, top_h, y_min, y_max, actual_bracket_height, effective_hole_offset, cap_inner_top["v_bolt_pivot"], "inner", true))
 
 		# H-center bolts (vertical, through the H stacks at the X crossing).
 		# NOTE: outside the zHeight gate, matching the JS source exactly.
@@ -270,8 +301,13 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 			var h_center_top := _map_to_3d(h_center_2d, top_h, cur_pos, cur_rot)
 			var h_bolt_len := p.h_bolt_length if p.h_bolt_length > 0.0 else (p.h_stack_count * h_t + 1.0)
 			var bolt_radius2 := p.bolt_diameter / 2.0
-			bolts.append(_make_vertical_bolt(h_center_bot, 0.0, h_bolt_len, bolt_radius2, "hstack", "center", i))
-			bolts.append(_make_vertical_bolt(h_center_top, top_h, h_bolt_len, bolt_radius2, "hstack", "center", i))
+			var hc_b := _tag(_make_vertical_bolt(h_center_bot, 0.0, h_bolt_len, bolt_radius2, "hstack", "center", i), i, "bottom", "center")
+			var hc_t := _tag(_make_vertical_bolt(h_center_top, top_h, h_bolt_len, bolt_radius2, "hstack", "center", i), i, "top", "center")
+			bolts.append_array([hc_b, hc_t])
+			if bool(p.washers["h_enabled"]) and p.h_stack_count > 1:
+				var hc_rad := _radial_or_x(h_center_bot)
+				washers.append_array(_washers_for_bolt(p, hc_b, p.h_stack_count, p.h_stack_gap, h_t, false, hc_rad))
+				washers.append_array(_washers_for_bolt(p, hc_t, p.h_stack_count, p.h_stack_gap, h_t, false, hc_rad))
 
 		# --- Module frame record (for support beams / panels / diagnostics) ---
 		module_frames.append({
@@ -300,13 +336,13 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 
 	# --- Arch (vertical) mode: rotate the ring 90° about X and ground the feet ---
 	if p.orientation == "vertical":
-		var arch := _apply_arch_transform(p, beams, brackets, bolts, module_frames)
+		var arch := _apply_arch_transform(p, beams, brackets, bolts, module_frames, washers)
 		max_height = arch["max_height"]
 		max_rad = arch["max_rad"]
 
 	# --- Array duplication (tunnel/tube, arch only) ---
 	if p.array_count > 1 and p.orientation == "vertical":
-		_duplicate_array(p, beams, brackets, bolts, module_frames)
+		_duplicate_array(p, beams, brackets, bolts, module_frames, washers)
 
 	# --- Canonical bracket orientation frames (after all transforms) ---
 	var is_arch := p.orientation == "vertical"
@@ -317,6 +353,7 @@ static func solve(p_in: LinkageParams, fold_angle: float) -> Dictionary:
 		"beams": beams,
 		"brackets": brackets,
 		"bolts": bolts,
+		"washers": washers,
 		"max_rad": max_rad,
 		"max_height": max_height,
 		"top_h": top_h,
@@ -359,6 +396,7 @@ static func _make_beam(start: Vector3, end: Vector3, width: float, thick: float,
 		"stack_type": str(meta.get("stack_type", "unknown")),
 		"stack_id": int(meta.get("stack_id", -1)),
 		"pattern_id": str(meta.get("pattern_id", "")),
+		"layer_index": int(meta.get("layer_index", 0)),
 	}
 
 
@@ -392,6 +430,7 @@ static func _create_beam_stack(beams: Array, p1_a: Vector3, p2_a: Vector3, p1_b:
 		beams.append(_make_beam(start, end, width, thick, {
 			"module_index": module_index, "stack_type": stack_type,
 			"stack_id": stack_id, "pattern_id": "A" if is_pattern_a else "B",
+			"layer_index": i,
 		}))
 
 
@@ -474,6 +513,7 @@ static func _build_v_scissor_stack(beams: Array, p: LinkageParams, stack_beam_wi
 		beams.append(_make_beam(ext_start, ext_end, float(beam_dims["w"]), float(beam_dims["t"]), {
 			"module_index": module_index, "stack_type": stack_type,
 			"stack_id": stack_id, "pattern_id": "A" if is_a else "B",
+			"layer_index": vi,
 		}))
 
 
@@ -502,7 +542,7 @@ static func _ring_spec(is_bottom: bool, stack_reversed: bool, pivots: Dictionary
 		"v_bolt_pivot": pivots["p_top_outer"], "beam_dir": pivots["pattern_a_dir"]}
 
 
-static func _create_bracket(p: LinkageParams, pivot_pos: Vector3, is_bottom: bool, beam_dir: Vector3, v_bolt_dir: Vector3, module_index: int, h_stack_thick: float, top_h: float, _y_min: float, _y_max: float, actual_bracket_height: float, effective_hole_offset: float, v_bolt_pivot: Vector3 = Vector3.ZERO, pivot_role: String = "outer") -> Dictionary:
+static func _create_bracket(p: LinkageParams, pivot_pos: Vector3, is_bottom: bool, beam_dir: Vector3, v_bolt_dir: Vector3, module_index: int, h_stack_thick: float, top_h: float, _y_min: float, _y_max: float, actual_bracket_height: float, effective_hole_offset: float, v_bolt_pivot: Vector3 = Vector3.ZERO, pivot_role: String = "outer", cap: bool = false) -> Dictionary:
 	var bracket_bottom_y := h_stack_thick / 2.0 if is_bottom else top_h - h_stack_thick / 2.0
 	var right := _v_cross(beam_dir, Vector3.UP).normalized()
 	return {
@@ -526,6 +566,8 @@ static func _create_bracket(p: LinkageParams, pivot_pos: Vector3, is_bottom: boo
 		"bolt_dir": v_bolt_dir,
 		"is_bottom": is_bottom,
 		"module_index": module_index,
+		"ring": "bottom" if is_bottom else "top",
+		"cap": cap,
 	}
 
 
@@ -557,6 +599,76 @@ static func _make_vertical_bolt(pos: Vector3, center_y: float, length: float, ra
 		"bolt_sub_type": sub_type,
 		"module_index": module_index,
 	}
+
+
+## Stamp a bolt's build-step identity (solver.js createHorizontalBolt /
+## createHPivotBolt / the h-centre bolt literals). Returns the same dict.
+static func _tag(bolt: Dictionary, module_index: int, ring: String, role: String, cap: bool = false) -> Dictionary:
+	bolt["module_index"] = module_index
+	bolt["ring"] = ring
+	bolt["role"] = role
+	bolt["cap"] = cap
+	return bolt
+
+
+## Horizontal radial direction of a point, +X when it sits on the axis.
+static func _radial_or_x(pt: Vector3) -> Vector3:
+	var r := Vector3(pt.x, 0.0, pt.z)
+	if r.length() < 0.1:
+		return Vector3(1, 0, 0)
+	return r.normalized()
+
+
+## Port of createWashersForBolt (solver.js:1177): one washer per gap between
+## the beams a bolt clamps, FLUSH with the beam nearer the stack centre and
+## growing toward the bracket. `beam_thickness` is a float (uniform stack) or
+## the per-layer width Array of a split V stack, which places centres through
+## `v_stack_beam_center_offset` exactly as getVStackBeamCenterOffset does.
+static func _washers_for_bolt(p: LinkageParams, bolt: Dictionary, stack_count: int, stack_gap: float, beam_thickness, vertical: bool, stack_dir: Vector3) -> Array:
+	var out: Array = []
+	var washer_count := stack_count - 1
+	if washer_count <= 0:
+		return out
+	var uniform := not (beam_thickness is Array)
+	var thick := LinkageBom.washer_thickness(p, vertical)
+	var total := 0.0
+	if uniform:
+		total = stack_count * float(beam_thickness) + (stack_count - 1) * stack_gap
+	var center_of := func(i: int) -> float:
+		if uniform:
+			return -total / 2.0 + float(beam_thickness) / 2.0 + i * (float(beam_thickness) + stack_gap)
+		return p.v_stack_beam_center_offset(i, beam_thickness)
+	var width_of := func(i: int) -> float:
+		return float(beam_thickness) if uniform else float((beam_thickness as Array)[i])
+	var center_gap := (washer_count - 1) / 2.0
+	var wkey := "v" if vertical else "h"
+	for i in range(washer_count):
+		var face_i := float(center_of.call(i)) + float(width_of.call(i)) / 2.0
+		var face_next := float(center_of.call(i + 1)) - float(width_of.call(i + 1)) / 2.0
+		var pos := 0.0
+		if i < center_gap:
+			pos = face_next - thick / 2.0
+		elif i > center_gap:
+			pos = face_i + thick / 2.0
+		elif washer_count == 1:
+			pos = face_i + thick / 2.0
+		else:
+			pos = (face_i + face_next) / 2.0
+		out.append({
+			"center": (bolt["center"] as Vector3) + stack_dir * pos,
+			"dir": bolt["dir"],
+			"id": float(p.washers[wkey + "_id"]),
+			"od": float(p.washers[wkey + "_od"]),
+			"thickness": thick,
+			"washer_type": str(bolt["bolt_type"]),
+			"module_index": int(bolt.get("module_index", -1)),
+			"ring": str(bolt.get("ring", "")),
+			"role": str(bolt.get("role", "")),
+			"bolt_sub_type": str(bolt.get("bolt_sub_type", "")),
+			"cap": bool(bolt.get("cap", false)),
+			"gap_index": i,
+		})
+	return out
 
 
 ## Parametric intersection of the two H-ring crossing lines (Pattern A: bl->tr,
@@ -649,7 +761,7 @@ static func bracket_basis_for(bracket: Dictionary, is_arch: bool, flip: bool = f
 # Arch (vertical) mode transform — port of the orientation === 'vertical' block
 # ---------------------------------------------------------------------------
 
-static func _apply_arch_transform(p: LinkageParams, beams: Array, brackets: Array, bolts: Array, module_frames: Array) -> Dictionary:
+static func _apply_arch_transform(p: LinkageParams, beams: Array, brackets: Array, bolts: Array, module_frames: Array, washers: Array = []) -> Dictionary:
 	# Step 1: find the feet — outermost pivots of first and last modules
 	# (cap uprights, when present, provide the left foot).
 	var left_foot := Vector3.ZERO
@@ -774,6 +886,12 @@ static func _apply_arch_transform(p: LinkageParams, beams: Array, brackets: Arra
 		bolt["center"] = xf.call(bolt["center"])
 		bolt["dir"] = xf_dir.call(bolt["dir"])
 
+	# Washers ride their bolts. (The JS arch transform leaves washers in the
+	# cylinder frame — LINKAGE_PARITY.md; part keys do not depend on it.)
+	for w in washers:
+		w["center"] = xf.call(w["center"])
+		w["dir"] = xf_dir.call(w["dir"])
+
 	for frame in module_frames:
 		for key in ["p_bot_inner", "p_bot_outer", "p_top_inner", "p_top_outer", "top_outer_vis", "bot_outer_vis", "top_inner_vis"]:
 			frame[key] = xf.call(frame[key])
@@ -804,6 +922,8 @@ static func _apply_arch_transform(p: LinkageParams, beams: Array, brackets: Arra
 		bolt["start"] = ground.call(bolt["start"])
 		bolt["end"] = ground.call(bolt["end"])
 		bolt["center"] = ground.call(bolt["center"])
+	for w in washers:
+		w["center"] = ground.call(w["center"])
 	for frame in module_frames:
 		for key in ["p_bot_inner", "p_bot_outer", "p_top_inner", "p_top_outer", "top_outer_vis", "bot_outer_vis", "top_inner_vis"]:
 			frame[key] = ground.call(frame[key])
@@ -825,7 +945,7 @@ static func _apply_arch_transform(p: LinkageParams, beams: Array, brackets: Arra
 # Array duplication (tunnel/tube mode)
 # ---------------------------------------------------------------------------
 
-static func _duplicate_array(p: LinkageParams, beams: Array, brackets: Array, bolts: Array, module_frames: Array) -> void:
+static func _duplicate_array(p: LinkageParams, beams: Array, brackets: Array, bolts: Array, module_frames: Array, washers: Array = []) -> void:
 	var min_z := INF
 	var max_z := -INF
 	for beam in beams:
@@ -843,6 +963,8 @@ static func _duplicate_array(p: LinkageParams, beams: Array, brackets: Array, bo
 	var original_brackets := brackets.duplicate()
 	var original_bolts := bolts.duplicate()
 	var original_frames := module_frames.duplicate()
+	var original_washers := washers.duplicate()
+	washers.clear()
 	beams.clear()
 	brackets.clear()
 	bolts.clear()
@@ -878,6 +1000,11 @@ static func _duplicate_array(p: LinkageParams, beams: Array, brackets: Array, bo
 			nbo["center"] = (bolt["center"] as Vector3) + offset
 			nbo["array_index"] = i
 			bolts.append(nbo)
+		for washer in original_washers:
+			var nw: Dictionary = washer.duplicate()
+			nw["center"] = (washer["center"] as Vector3) + offset
+			nw["array_index"] = i
+			washers.append(nw)
 		for frame in original_frames:
 			var nf: Dictionary = frame.duplicate()
 			for key in ["p_bot_inner", "p_bot_outer", "p_top_inner", "p_top_outer", "top_outer_vis", "bot_outer_vis", "top_inner_vis"]:

@@ -16,7 +16,7 @@ static func defaults() -> SoiConfig:
 
 
 static func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/soi_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("soi", lat, lon)
 
 
 static func load_for_map(lat: float, lon: float) -> SoiConfig:

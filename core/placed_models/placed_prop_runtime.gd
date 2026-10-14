@@ -49,7 +49,12 @@ static func add_one(terrain: Node3D, rec: Dictionary,
 static func find_by_prop_id(main: Node, prop_id: String) -> PlacedProp:
 	if main == null or prop_id.is_empty():
 		return null
+	# Same parent rule as PlacedPropService._props_parent: under Terrain on a
+	# generated map, under Main on the built-in scenes (which have no Terrain —
+	# returning null there made every move spawn a DUPLICATE node).
 	var terrain := main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		terrain = main as Node3D
 	if terrain == null:
 		return null
 	var root := terrain.get_node_or_null("PlacedProps")
@@ -94,6 +99,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	# interior would then put crates through the walls.
 	if rec.has("container_spec"):
 		extras["container_spec"] = rec.get("container_spec", {})
+	if rec.has("pv_array_spec"):
+		extras["pv_array_spec"] = rec.get("pv_array_spec", {})
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = {}
 		if rec.has("grow_bed_spec"):
@@ -138,6 +145,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Edit grow bed (click) / Move (drag)"
 	elif model_id == MudBuildingStructureBuilder.MODEL_ID:
 		prop.prompt = "Inspect mud building · Move (drag)"
+	elif not PlacedVehicle.profile_for_model(model_id).is_empty():
+		prop.prompt = "Drive (Interact) / Edit (click)"
 	else:
 		prop.prompt = "Edit prop (click) / Move (drag)"
 	prop.add_child(model)
@@ -172,11 +181,16 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_csp_tracker(prop, rec)
 		_maybe_attach_heliostat_tracker(prop, rec)
 		_maybe_attach_siphon_spin(prop, rec)
+		_maybe_attach_siphon_dip_tube(prop, rec)
+		_maybe_attach_siphon_state_ring(prop, rec)
 		_maybe_attach_cnc_runtime(prop, rec)
 		_maybe_attach_pp_beam_extruder(prop, rec)
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
+		LinkageBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
+		_maybe_attach_firepit_fire(prop, rec)
+		_maybe_attach_vehicle(prop, model, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	# Spawn ConnectionPort markers so ConduitManager can snap conduits to tagged plugs.
@@ -386,6 +400,9 @@ static func _build_construction_prop(rec: Dictionary, build_state: Dictionary,
 	prop.set_collision_enabled(false)
 	if bool(rec.get("hidden_3d", false)):
 		prop.visible = false
+	# A crew build queued from the Lab carries a labour-mode build_run: the
+	# per-worker timeline draws it (LinkageBuildSite), not the coarse reveal.
+	LinkageBuildSite.attach(prop, rec)
 	return prop
 
 
@@ -431,6 +448,32 @@ static func _maybe_attach_stream_intake_flow(prop: PlacedProp, rec: Dictionary) 
 	prop.add_child(flow)
 
 
+## A driveable vehicle (catalog entry with a `vehicle` profile): Interact gets
+## in and drives it; it parks where you leave it.
+static func _maybe_attach_vehicle(prop: PlacedProp, model: Node3D, rec: Dictionary) -> void:
+	var pid := PlacedVehicle.profile_for_model(str(rec.get("model_id", "")))
+	if pid.is_empty() or prop.get_node_or_null("PlacedVehicle") != null:
+		return
+	var v := PlacedVehicle.new()
+	v.name = "PlacedVehicle"
+	v.setup(prop, model, rec, pid)
+	prop.add_child(v)
+
+
+## The firepit's own small fire (FirepitFire): lit at night when it is cold.
+static func _maybe_attach_firepit_fire(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != FirepitBuilder.MODEL_ID:
+		return
+	var model := prop.get_node_or_null("ModelRoot")
+	if model == null or model.get_node_or_null("FirepitFire") != null:
+		return
+	var fire := FirepitFire.new()
+	fire.name = "FirepitFire"
+	fire.configure(str(rec.get("id", "")))
+	# Under ModelRoot so it finds the ash bed it glows (and scales with it).
+	model.add_child(fire)
+
+
 static func _maybe_attach_siphon_spin(prop: PlacedProp, rec: Dictionary) -> void:
 	var kind := str(rec.get("kind", ""))
 	var model_id := str(rec.get("model_id", ""))
@@ -451,6 +494,43 @@ static func _maybe_attach_siphon_spin(prop: PlacedProp, rec: Dictionary) -> void
 	spin.configure(str(rec.get("graph_item_id", "")), node_name,
 			str(rec.get("spin_axis", ModelCatalog.spin_axis_for(model_id))))
 	prop.add_child(spin)
+
+
+## What the turbine is doing, from across the pond (gameplay/siphon_state_ring.gd):
+## an emissive state ring, a status label and air bubbles at the dip mouth.
+static func _maybe_attach_siphon_state_ring(prop: PlacedProp, rec: Dictionary) -> void:
+	var kind := str(rec.get("kind", ""))
+	var model_id := str(rec.get("model_id", ""))
+	if kind != "siphon_hydro" and not ModelCatalog.is_hydro_turbine(model_id):
+		return
+	if prop.get_node_or_null("SiphonStateRing") != null:
+		return
+	var ring := SiphonStateRing.new()
+	ring.name = "SiphonStateRing"
+	var runner_name := str(rec.get("turbine_node", ""))
+	if runner_name.is_empty():
+		runner_name = ModelCatalog.turbine_node_for(model_id)
+	ring.configure(str(rec.get("graph_item_id", "")), model_id, runner_name)
+	prop.add_child(ring)
+
+
+## The siphon's dip tube (gameplay/siphon_dip_tube.gd): the length of 6″ PVC
+## hanging from the inlet port into the pond. Siphon-kind turbines only; the
+## runtime itself hides when the graph item is a penstock kind.
+static func _maybe_attach_siphon_dip_tube(prop: PlacedProp, rec: Dictionary) -> void:
+	var kind := str(rec.get("kind", ""))
+	var model_id := str(rec.get("model_id", ""))
+	if kind != "siphon_hydro" and not ModelCatalog.is_hydro_turbine(model_id):
+		return
+	if prop.get_node_or_null("SiphonDipTube") != null:
+		return
+	var tube := SiphonDipTube.new()
+	tube.name = "SiphonDipTube"
+	var runner_name := str(rec.get("turbine_node", ""))
+	if runner_name.is_empty():
+		runner_name = ModelCatalog.turbine_node_for(model_id)
+	tube.configure(str(rec.get("graph_item_id", "")), model_id, runner_name)
+	prop.add_child(tube)
 
 
 ## Attach the dual-axis (yaw + blade spin) controller for a placed small HAWT

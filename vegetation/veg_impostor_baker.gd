@@ -26,7 +26,8 @@ signal bake_completed(key: String)
 ## v5: Overhaul v2.1 — the configurable LOD ladder: `<fam>_detail_chain` joins
 ## the bake key (a photocard-first chain bakes the atlas FROM the photocard
 ## mesh, so the chain changes the baked silhouette).
-const BAKE_VERSION := 5
+## 6: no black shadow-proxy cards, side key light, alpha-edge bleed.
+const BAKE_VERSION := 7
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3
@@ -247,15 +248,20 @@ func _bake(species: String, settings: Dictionary, key: String) -> VegImpostorSet
 	vp.world_3d = World3D.new()
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(vp)
+	# Key light from up and to the side, with a lower fill: the old bake (white
+	# ambient 0.85 + a 0.55 light AT the camera) had no form shading at all,
+	# and the impostor shows the bake unshaded — so every far crown was a flat
+	# cut-out next to the shaded near trees.
 	var env := Environment.new()
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(1, 1, 1)
-	env.ambient_light_energy = 0.85
+	env.ambient_light_color = Color(0.92, 0.96, 1.0)
+	env.ambient_light_energy = 0.5
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	vp.add_child(world_env)
 	var light := DirectionalLight3D.new()
-	light.light_energy = 0.55
+	light.light_energy = 0.95
+	light.light_color = Color(1.0, 0.97, 0.9)
 	vp.add_child(light)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -290,7 +296,16 @@ func _bake(species: String, settings: Dictionary, key: String) -> VegImpostorSet
 				cam_pos = center + Vector3(0.001, radius, 0.0)
 				up = Vector3.FORWARD
 			cam.look_at_from_position(cam_pos, center, up)
-			light.global_transform = cam.global_transform
+			# Key ~40° round from the camera and ~35° up (top view: from the
+			# south-west, high).
+			var to_cam := cam_pos - center
+			var key_dir := to_cam.rotated(Vector3.UP, deg_to_rad(40.0)).normalized()
+			if view >= YAW_FRAMES:
+				key_dir = Vector3(-0.5, 0.8, 0.35).normalized()
+			else:
+				key_dir = (key_dir + Vector3(0.0, 0.7, 0.0)).normalized()
+			light.look_at_from_position(center + key_dir * radius, center,
+					Vector3.FORWARD if absf(key_dir.y) > 0.95 else Vector3.UP)
 			await RenderingServer.frame_post_draw
 			await RenderingServer.frame_post_draw
 			var img := vp.get_texture().get_image()
@@ -302,6 +317,10 @@ func _bake(species: String, settings: Dictionary, key: String) -> VegImpostorSet
 				Vector2i(col * CELL_PX, row * CELL_PX))
 	vp.queue_free()
 
+	# Bleed opaque colour into the transparent border before the mips: the
+	# bake clears to (0,0,0,0), and averaged mips pulled every distant crown's
+	# edge toward black.
+	atlas.fix_alpha_edges()
 	atlas.generate_mipmaps()
 	var iset := VegImpostorSet.new()
 	iset.bake_version = BAKE_VERSION

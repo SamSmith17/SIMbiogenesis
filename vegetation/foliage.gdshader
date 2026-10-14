@@ -1,7 +1,11 @@
 // Foliage card shader for MultiMeshInstance3D-based vegetation scatter.
 shader_type spatial;
-render_mode cull_disabled, depth_prepass_alpha;
+// diffuse_lambert_wrap: light wraps round a leaf card the way it scatters
+// through a real crown, instead of a hard terminator that leaves half of every
+// card in flat ambient.
+render_mode cull_disabled, depth_prepass_alpha, diffuse_lambert_wrap;
 
+#include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
 #include "res://vegetation/veg_growth.gdshaderinc"
@@ -54,6 +58,15 @@ uniform vec3 sun_direction = vec3(0.0, 1.0, 0.0);
 // the moon's directional light can't make leaves glow; dim ambient still tints
 // them as moonlit. 0 = no change (previous behaviour).
 uniform float night_darkness : hint_range(0.0, 1.0) = 0.65;
+// How much SUN a card keeps where the shadow map says it is shadowed. A crown
+// of crossed alpha cards is almost entirely in its own shadow, so by the
+// shadow map a pine or a photocard is lit by ambient alone — and with a low
+// world ambient (0.05 is a real player setting) it printed near-black beside
+// sunlit leaf shells. Real foliage transmits and scatters light through the
+// crown (a shaded needle is ~30-50 % of a sunlit one, not ~0), so the sun's
+// shadow is floored here. Directional (sun/moon) only — local lights keep
+// their own attenuation.
+uniform float shadow_floor : hint_range(0.0, 1.0) = 0.45;
 // --- Seasonal phenology + snow (driven live by VegetationEnvironmentSync) ---
 // deciduousness: 0 = evergreen conifer, 1 = deciduous broadleaf (per-material).
 uniform float deciduousness : hint_range(0.0, 1.0) = 1.0;
@@ -139,6 +152,18 @@ void vertex() {
 	v_inst_pos = inst_pos;
 }
 
+// Godot's diffuse_lambert_wrap, re-stated so the sun's shadow can be floored
+// (see shadow_floor). Specular is left at 0 on purpose: a leaf card is matte.
+void light() {
+	float ndl = dot(NORMAL, LIGHT);
+	float wrap = 1.0 + ROUGHNESS;
+	float diffuse = max(0.0, (ndl + ROUGHNESS) / (wrap * wrap));
+	float att = LIGHT_IS_DIRECTIONAL ? mix(shadow_floor, 1.0, ATTENUATION) : ATTENUATION;
+	DIFFUSE_LIGHT += LIGHT_COLOR * att * diffuse / PI;
+	// Transmission (the fragment's BACKLIGHT, lit from behind the card).
+	DIFFUSE_LIGHT += LIGHT_COLOR * att * BACKLIGHT * max(0.0, -ndl) / PI;
+}
+
 void fragment() {
 	soi_clip_fragment(v_world_pos);
 	vec4 tex = texture(albedo_tex, UV);
@@ -197,24 +222,23 @@ void fragment() {
 		discard;
 	}
 
-	float face_factor = 1.0;
+	// (No manual back-face flip — see veg_lighting.gdshaderinc.)
+	float face_factor = FRONT_FACING ? 1.0 : VEG_BACK_FACE;
 	vec3 nrm = NORMAL;
-	if (!FRONT_FACING) {
-		nrm = -NORMAL;
-		face_factor = 0.30;
-	}
 	if (canopy_roundness > 0.001) {
 		vec3 to_crown = v_world_pos - v_inst_pos;
 		to_crown.y = max(to_crown.y, 0.0);
 		if (dot(to_crown, to_crown) > 1e-4) {
-			vec3 round_n = normalize(to_crown + vec3(0.0, 0.35, 0.0));
+			// The crown normal is WORLD space; NORMAL is view space.
+			vec3 round_n = normalize((VIEW_MATRIX * vec4(normalize(to_crown + vec3(0.0, 0.35, 0.0)), 0.0)).xyz);
 			float crown_t = (1.0 - UV.y) * canopy_roundness;
 			nrm = normalize(mix(nrm, round_n, crown_t));
 		}
 	}
 	NORMAL = nrm;
+	vec3 wn = veg_world_normal(nrm, INV_VIEW_MATRIX);
 
-	vec3 albedo = tex.rgb * albedo_tint * face_factor;
+	vec3 albedo = veg_saturate(tex.rgb * albedo_tint, veg_saturation) * face_factor;
 	if (fur_strength > 0.001) {
 		albedo *= 1.0 + (fur_tuft - 0.45) * 0.14 * fur_strength;
 		albedo += highlight_tint * fur_tuft * 0.06 * fur_strength * (1.0 - UV.y);
@@ -258,13 +282,14 @@ void fragment() {
 	albedo = mix(albedo, albedo * ao_tint, bottom_t * ao_strength);
 
 	vec3 lit_dir = normalize(sun_direction);
-	float sun_up = max(0.0, dot(lit_dir, NORMAL)) * (1.0 - night_factor);
+	float sun_up = max(0.0, dot(lit_dir, wn)) * (1.0 - night_factor);
 	float top_mask = 1.0 - UV.y;
 	albedo += highlight_tint * sun_up * subsurface_strength * top_mask;
 	if (translucency_strength > 0.001) {
-		vec3 view_dir = normalize(CAMERA_POSITION_WORLD - v_world_pos);
-		float back = max(0.0, dot(-lit_dir, view_dir));
-		albedo += highlight_tint * back * translucency_strength * top_mask * (1.0 - night_factor);
+		// Real transmission: BACKLIGHT is lit by the sun from BEHIND the leaf.
+		// (Added into ALBEDO it was then multiplied by N·L, which is ~0 exactly
+		// where the glow belongs, and only desaturated the front toward yellow.)
+		BACKLIGHT = highlight_tint * translucency_strength * top_mask * (1.0 - night_factor);
 	}
 
 	// Snow settling on the canopy: favours upward-facing normals and the top of
@@ -272,7 +297,7 @@ void fragment() {
 	float snow_rough = roughness_value;
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
-		float up = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
+		float up = clamp(wn.y * 0.5 + 0.5, 0.0, 1.0);
 		float top = 1.0 - UV.y;
 		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
 		float snow_mask = clamp((snow_amount * 0.35 + depth_t * 0.8) * mix(0.25, 1.0, top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
@@ -283,10 +308,13 @@ void fragment() {
 	// Darken at night so the moon's directional light can't make leaves glow.
 	albedo *= 1.0 - night_factor * night_darkness;
 
-	float haze_amount = dist_t * haze_strength * (1.0 - night_factor);
+	float haze_amount = dist_t * haze_strength * (1.0 - night_factor) * veg_haze_mul;
 	ALBEDO    = albedo * (1.0 - haze_amount) * color_fade;
-	EMISSION  = haze_color * haze_amount * color_fade;
+	EMISSION  = (haze_color * haze_amount
+			+ albedo * (1.0 - haze_amount) * veg_fill_amount() * (1.0 - night_factor)) * color_fade;
 
 	ROUGHNESS = snow_rough;
 	METALLIC  = 0.0;
+	// A leaf is matte: the default 0.5 put a grey sheen on every grazing card.
+	SPECULAR  = 0.25;
 }

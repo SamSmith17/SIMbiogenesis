@@ -58,23 +58,20 @@ static func global_v2_path() -> String:
 
 
 static func map_v2_path(lat: float, lon: float) -> String:
-	return "user://maps/vegetation_style_v3_%s_%s.json%s" % [
-		CoordToken.token(lat), CoordToken.token(lon), path_suffix]
+	return WorldPaths.site_file("vegetation_style_v3", lat, lon, "json" + path_suffix)
 
 
 ## The RETIRED v2/v1 style files for this map (kept on disk, never read; the
 ## reset tooling deletes them so "Reset site" really is fresh).
 static func legacy_style_paths(lat: float, lon: float) -> Array[String]:
 	return [
-		"user://maps/vegetation_style_v2_%s_%s.json%s" % [
-			CoordToken.token(lat), CoordToken.token(lon), path_suffix],
+		WorldPaths.site_file("vegetation_style_v2", lat, lon, "json" + path_suffix),
 		legacy_map_path(lat, lon),
 	]
 
 
 static func legacy_map_path(lat: float, lon: float) -> String:
-	return "user://maps/vegetation_style_%s_%s.json%s" % [
-		CoordToken.token(lat), CoordToken.token(lon), path_suffix]
+	return WorldPaths.site_file("vegetation_style", lat, lon, "json" + path_suffix)
 
 
 static func invalidate_cache() -> void:
@@ -368,12 +365,58 @@ static func _read_store(path: String) -> Dictionary:
 	var d: Dictionary = parsed
 	if int(d.get("veg_style_version", 0)) != VERSION:
 		return {}
-	return {
+	var store := {
 		"veg_style_version": VERSION,
 		"global": VegetationStyleConfig.from_serializable(d.get("global", {}) as Dictionary),
 		"family": _levels_from_json(d.get("family", {}) as Dictionary),
 		"species": _levels_from_json(d.get("species", {}) as Dictionary),
 	}
+	_drop_black_tints(store)
+	return store
+
+
+## A tint is a MULTIPLIER on the leaf / needle / bark colour, so pure black
+## renders the whole family as solid black silhouettes. No look wants that, and
+## at least one saved map (Mount Vernon: pine albedo_tint [0,0,0,1]) carried
+## exactly that — every pine printed black. Treat a (near-)black tint as an
+## invalid edit and fall back to the layer below it; the next save drops it.
+const BLACK_TINT_MAX := 0.02
+
+
+## The pre-2026-10 `deciduous_albedo_tint` default. Under the old tint maths it
+## was multiplied onto leaves already painted green (near-black crowns); stores
+## that persisted it verbatim were saving the default, not a choice, so it is
+## dropped too and the family falls back to untinted.
+const LEGACY_DECIDUOUS_DEFAULT_TINT := Color(0.0435791, 0.19921875, 0.075193405)
+
+
+static func is_black_tint(key: String, v: Variant) -> bool:
+	if not key.contains("tint") or not (v is Color):
+		return false
+	var c: Color = v
+	if maxf(c.r, maxf(c.g, c.b)) < BLACK_TINT_MAX:
+		return true
+	var o := LEGACY_DECIDUOUS_DEFAULT_TINT
+	return key.contains("albedo_tint") and absf(c.r - o.r) < 0.002 \
+			and absf(c.g - o.g) < 0.002 and absf(c.b - o.b) < 0.002
+
+
+static func _drop_black_tints(store: Dictionary) -> void:
+	var levels: Array = [store.get("global", {})]
+	for group in ["family", "species"]:
+		var g: Dictionary = store.get(group, {}) as Dictionary
+		for id in g:
+			levels.append(g[id])
+	for lvl in levels:
+		if not (lvl is Dictionary):
+			continue
+		var bad: Array = []
+		for k in (lvl as Dictionary):
+			if is_black_tint(str(k), lvl[k]):
+				bad.append(k)
+		for k in bad:
+			push_warning("VegStyleStore: dropped stale '%s' tint (black / the old dark default)" % str(k))
+			(lvl as Dictionary).erase(k)
 
 
 static func _write_store(path: String, store: Dictionary) -> void:

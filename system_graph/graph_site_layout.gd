@@ -25,6 +25,8 @@ const VIEW_SITE := "site"
 const VIEW_ELEVATION := "elevation"
 ## Siphon Lab — hydro detail panel (not a physical map projection).
 const VIEW_SIPHON := "siphon"
+## Globe — the SoI snowglobe as a graph lens (perspective orbit, read-only pins).
+const VIEW_GLOBE := "globe"
 
 ## Floor on the Hydro Lab cross-section's ortho height, in metres. A CAMERA limit
 ## (5 cm frames a 25 mm nozzle), not a framing preference — it lives here because

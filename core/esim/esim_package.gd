@@ -99,6 +99,7 @@ static func build(
 		"vegetation_style": (layers.get("vegetation_style", {}) as Dictionary).duplicate(true),
 		"auto_veg_edits": (layers.get("auto_veg_edits", {}) as Dictionary).duplicate(true),
 		"user_water": (layers.get("user_water", {"version": 1, "ponds": []}) as Dictionary).duplicate(true),
+		"water_features": (layers.get("water_features", {}) as Dictionary).duplicate(true),
 	}
 	pkg["summary"] = summary_of(pkg)
 	return pkg
@@ -150,6 +151,8 @@ static func summary_of(package: Dictionary) -> Dictionary:
 	var styles: Dictionary = styles_blob.get("styles", {}) as Dictionary
 	var water: Dictionary = package.get("user_water", {}) as Dictionary
 	var ponds: Array = water.get("ponds", []) as Array
+	var wf: Dictionary = package.get("water_features", {}) as Dictionary
+	var streams: Array = wf.get("streams", []) as Array
 	var real_items := 0
 	for it in items:
 		if it is Dictionary and not bool((it as Dictionary).get("esim_ghost", false)) \
@@ -163,6 +166,7 @@ static func summary_of(package: Dictionary) -> Dictionary:
 		"prop_count": props.size(),
 		"building_style_count": styles.size(),
 		"pond_count": ponds.size(),
+		"stream_count": streams.size(),
 		"latitude": float(loc.get("latitude", 0.0)),
 		"longitude": float(loc.get("longitude", 0.0)),
 		"label": str(loc.get("label", "")),

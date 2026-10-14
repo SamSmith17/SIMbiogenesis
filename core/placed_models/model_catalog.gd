@@ -84,6 +84,24 @@ static func spin_axis_for(model_id: String) -> String:
 	return str(find(model_id).get("spin_axis", ""))
 
 
+## The modelled NOZZLE node of a hydro turbine GLB ("" = none modelled; the
+## close-up then hangs a procedural nozzle off the inlet port instead).
+static func nozzle_node_for(model_id: String) -> String:
+	return str(find(model_id).get("nozzle_node", ""))
+
+
+## The nozzle node's own local axis that points down the jet ("x"|"y"|"z";
+## the sign is resolved toward the runner by whoever measures it).
+static func nozzle_axis_for(model_id: String) -> String:
+	return str(find(model_id).get("nozzle_axis", "z"))
+
+
+## Child nodes to FREE on every instantiate (exporter leftovers: scale
+## figures, camera markers). Exact names, searched recursively.
+static func strip_nodes_for(model_id: String) -> Array:
+	return find(model_id).get("strip_nodes", []) as Array
+
+
 ## Designs offered by the StarShade editor (family + path heuristic).
 static func starshade_designs() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
@@ -144,10 +162,17 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == CargoContainerBuilder.MODEL_ID:
 		var container_spec: Dictionary = extras.get("container_spec", extras) as Dictionary
 		return CargoContainerBuilder.build_node(container_spec)
+	if model_id == PvArrayBuilder.MODEL_ID:
+		var pv_spec: Dictionary = extras.get("pv_array_spec", extras) as Dictionary
+		return PvArrayBuilder.build_node(pv_spec)
 	if model_id == BedBuilder.MODEL_ID:
 		return BedBuilder.build_node(extras)
 	if model_id == StreamIntakeBuilder.MODEL_ID:
 		return StreamIntakeBuilder.build_node(extras)
+	if model_id == FirepitBuilder.MODEL_ID:
+		return FirepitBuilder.build_node(extras)
+	if VehicleModelBuilder.handles(model_id):
+		return VehicleModelBuilder.build_node(model_id)
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -158,7 +183,22 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	var ps := load_scene(model_id)
 	if ps == null:
 		return null
-	return ps.instantiate() as Node3D
+	var inst := ps.instantiate() as Node3D
+	# A vehicle's root sits AT the vehicle, as the scene instances have it
+	# (appa.tscn's own root offset is overridden there): the rider, the seat
+	# offset and the chase camera are all measured from it.
+	if inst != null and find(model_id).has("vehicle"):
+		inst.position = Vector3.ZERO
+	# Exporter leftovers (SketchUp scale figures, camera markers) are freed
+	# HERE so mesh_metrics, the foot, the pick AABB and every studio see the
+	# same machine. free() not queue_free(): callers measure synchronously.
+	if inst != null:
+		for nm in strip_nodes_for(model_id):
+			var junk := inst.find_child(str(nm), true, false)
+			if junk != null and junk != inst:
+				junk.get_parent().remove_child(junk)
+				junk.free()
+	return inst
 
 
 ## Build a gray box placeholder Node3D whose BASE sits at local y=0 (so it
@@ -380,6 +420,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "pallet_rack", "label": "Pallet Rack (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.0},
+		# Procedural ground-mount PV array (PvArrayBuilder): cols × rows modules
+		# on a tilted rack facing local +Z (south at yaw 0). Bound to a graph
+		# array node; its facing drives that array's tilt / azimuth.
+		{"id": "pv_array", "label": "Solar Array (ground mount)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 1.6},
 		# Procedural ISO shipping container (PACKING_PLAN.md Phase 1) — dims
 		# from ContainerCatalog via `container_spec.container_id` (default 20').
 		{"id": "cargo_container", "label": "Shipping Container",
@@ -391,6 +437,38 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "bed", "label": "Bed",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.75},
+		# Procedural FIREPIT: a black steel ring with a small fire that burns
+		# at night when it is cold (FirepitFire). Placing one auto-tags it as
+		# a fire circle, and while lit it is a warm spot for the crowd.
+		{"id": "firepit", "label": "Firepit",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 0.36},
+		# Driveable vehicles (category "vehicles" — the library's Vehicles
+		# tab). `vehicle` names a PlacedVehicle.PROFILES entry; Interact gets
+		# in. The first three are the scene vehicles' own art at its native
+		# scale; the buses and the van go through VehicleModelBuilder
+		# (`source_path` + `isolate` + real `length_m`), which isolates one bus
+		# out of Busses.tscn's pair and normalises the units. `flip`: the
+		# 3800's nose is at its +Z (vehicle_look_diag.gd).
+		{"id": "vehicle_euc", "label": "EUC (electric unicycle)",
+			"path": "res://Imported Models/euc/EUC.glb", "preserve_scale": true,
+			"category": "vehicles", "vehicle": "euc"},
+		{"id": "vehicle_appa", "label": "Appa (golf cart)",
+			"path": "res://Imported Models/appa.tscn", "preserve_scale": true,
+			"category": "vehicles", "vehicle": "golf_cart", "vehicle_name": "Appa"},
+		{"id": "vehicle_skid_steer", "label": "Skid steer",
+			"path": "res://Imported Models/Skid Steer.glb", "preserve_scale": true,
+			"category": "vehicles", "vehicle": "skid_steer"},
+		{"id": "vehicle_tool_bus", "label": "Tool Bus (International 3800 school bus)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "bus", "vehicle_name": "Tool Bus",
+			"source_path": "res://Imported Models/Busses.tscn",
+			"isolate": "Node/Assembly-953/International 3800 School Bus", "length_m": 11.6,
+			"flip": true},
+		{"id": "vehicle_camper_van", "label": "Camper van (GMC)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "van", "vehicle_name": "Camper Van",
+			"source_path": "res://Imported Models/GMC camper van.glb", "length_m": 5.6},
 		# Procedural stream / spring intake — minted where a player drops the
 		# uphill end of a penstock (conduits have no free endpoints, so the
 		# water source has to be a real prop + graph node).
@@ -456,11 +534,18 @@ static func _shipped_models() -> Array[Dictionary]:
 		# Spin axis = model local +Z (SiphonTurbineSpin). CT camera looks along
 		# −cross; yaw = −section_heading faces the disk into the cut. Bias 0 —
 		# Lab/Elev call _ensure_hydroturbine_section_yaw on open.
+		# Measured with glb_dump_diag: the 8″ propeller is "Node15"
+		# (Geom3D_10, a 0.207 m disc 0.085 m thick, normal = model +Z, in the
+		# horizontal leg under the vertical riser + hoverboard motor). The
+		# old "" let the size heuristic pick the SMALLEST mesh — a motor
+		# bolt — so the world prop spun a bolt and the close-up found no
+		# runner at all.
 		{"id": "hydroturbine", "label": "Siphon Hydroturbine",
 			"path": "res://Imported Models/Hydro/hydroturbine.glb",
 			"preserve_scale": true, "category": "structures",
 			"forced_yaw_deg": 0.0,
-			"turbine_node": "",
+			"turbine_node": "Node15",
+			"spin_axis": "z",
 			"hydro_turbine": true},
 		# PowerSpout PLT-class pico Pelton (turbine_kind "powerspout_pelton").
 		# SimLab/SketchUp export: the inch→metre 0.0254 is baked on the
@@ -478,6 +563,33 @@ static func _shipped_models() -> Array[Dictionary]:
 			"forced_yaw_deg": 0.0,
 			"turbine_node": "Pelton Wheel, 24 Spoon",
 			"spin_axis": "x",
+			"hydro_turbine": true},
+		# AliExpress-class micro Pelton (turbine_kind "micro_pelton"): an 8"
+		# bucket runner on a VERTICAL shaft under a 10" mounting plate, a
+		# Nema 34 stepper hung below as the generator, and a 1/4" NPT hose-barb
+		# fitting through the housing wall as the nozzle. SketchUp/SimLab export,
+		# inch->metre 0.0254 baked on "Assembly-11", so it imports at true
+		# metres (0.25 x 0.16 x 0.25). The runner is the generic "Node6"; its
+		# disc normal composes to model-local +Y (the shaft is vertical), hence
+		# spin_axis "y" (SiphonTurbineSpin would otherwise assume +Z). The
+		# nozzle is the McMaster fitting node: its local +Z runs INTO the wheel
+		# (model-local -X), measured by the close-up (ModelCatalog.nozzle_*).
+		# Measured runner radius 0.101 m; the fitting's centreline sits 0.084 m
+		# off the shaft -> PCD 0.168 m (HydroSource.KINDS.micro_pelton).
+		# strip_nodes: the export carries two flat SketchUp SCALE FIGURES
+		# ("Sree", and "Susan#1" under a node confusingly named "Pelton") plus
+		# an empty "Active View" camera marker, all metres away from the
+		# machine — they would pollute the foot / AABB and draw as cardboard
+		# people. ModelCatalog.instantiate frees them on every instantiate.
+		{"id": "ali_pelton", "label": "Micro Pelton 8\u2033 (vertical shaft)",
+			"path": "res://Imported Models/Hydro/ali_pelton.glb",
+			"preserve_scale": true, "category": "structures",
+			"forced_yaw_deg": 0.0,
+			"turbine_node": "Node6",
+			"spin_axis": "y",
+			"nozzle_node": "fitting, 0_25MNPT to 0_25 hose barb, McMaster-Carr 5346K14",
+			"nozzle_axis": "z",
+			"strip_nodes": ["Sree", "Pelton", "Active View"],
 			"hydro_turbine": true},
 		# Dual-axis point-focus solar concentrator ("dish" heliostat / solar
 		# furnace). Authored in inches baked into the "Component#1" ancestor's
@@ -607,6 +719,13 @@ static func _packed_scene_for_user(path: String) -> PackedScene:
 	if root == null:
 		return null
 	_replace_importer_meshes(root, root)
+	# SketchUp exports carry invented gloss values (ImportMaterialFixer); the
+	# catalog entry's `material_fix` (auto / off / force) decides.
+	var mode := str(_user_entry_for_path(path).get("material_fix", ImportMaterialFixer.MODE_AUTO))
+	if ImportMaterialFixer.should_fix(state.json, mode):
+		var rep := ImportMaterialFixer.fix_scene(root)
+		print("ModelCatalog: %s — SketchUp material fix on %d materials %s" % [
+			path.get_file(), int(rep.get("fixed", 0)), JSON.stringify(rep.get("profiles", {}))])
 	var ps := PackedScene.new()
 	var err := ps.pack(root)
 	root.queue_free()
@@ -614,6 +733,39 @@ static func _packed_scene_for_user(path: String) -> PackedScene:
 		return null
 	_user_packed[path] = ps
 	return ps
+
+
+static func _user_entry_for_path(path: String) -> Dictionary:
+	_ensure_user_catalog()
+	for e: Dictionary in _user_catalog:
+		if str(e.get("path", "")) == path:
+			return e
+	return {}
+
+
+## Set a user model's material-fix mode (auto / off / force), persist it and
+## drop the cached scene so the next instance rebuilds with it. Placed props
+## already in the world keep their old materials until rebuilt.
+static func set_material_fix(model_id: String, mode: String) -> void:
+	_ensure_user_catalog()
+	for i in _user_catalog.size():
+		if str(_user_catalog[i].get("id", "")) == model_id:
+			_user_catalog[i]["material_fix"] = mode
+			_user_packed.erase(str(_user_catalog[i].get("path", "")))
+			invalidate_metrics(model_id)
+			_save_user_catalog()
+			return
+
+
+## The source app recorded for a user model at import ("sketchup" or "").
+static func source_app_for(model_id: String) -> String:
+	var e := find(model_id)
+	if e.has("source_app"):
+		return str(e["source_app"])
+	var path := str(e.get("path", ""))
+	if path.is_empty() or not path.begins_with("user://"):
+		return ""
+	return ImportMaterialFixer.source_app(ImportMaterialFixer.read_gltf_json(path))
 
 
 static func _replace_importer_meshes(node: Node, root: Node) -> void:

@@ -2,6 +2,8 @@
 class_name TimelineUI
 extends Control
 
+const WORLD_PANEL_SCRIPT := preload("res://scenes/ui/world_panel.gd")
+
 ## Thin bottom-bar timeline UI.
 ## Displays: 24h day scrubber, playback controls, time, date, moon phase,
 ## sunrise/sunset, speed preset, and save/load button.
@@ -230,6 +232,15 @@ var _sunset_lbl   : Label
 var _moon_lbl     : Label
 var _play_btn     : Button
 var _speed_lbl    : Label
+var _hold_lbl     : Label
+var _hold_owner   : String = ""
+## Readable names for clock-claim owners (see main.clock_hold_owner).
+const CLOCK_HOLD_LABELS := {
+	"csv_playback": "CSV playback",
+	"challenge_bake": "challenge bake",
+	"climelapse_export": "video export",
+	"window_wall": "Window Wall",
+}
 # Info-row clusters (manually placed: NLE icons left · transport/time/date
 # centre · system icons right). Parent is a plain Control so we position them.
 var _info_row       : Control = null
@@ -285,7 +296,7 @@ func _ready() -> void:
 	_load_ui_prefs()
 
 	_map_confirm = ConfirmationDialog.new()
-	_map_confirm.dialog_text = "Autosave and return to map selection?\n\nThe current session is written to autosave first."
+	_map_confirm.dialog_text = "Save this world and return to your worlds?\n\nEverything is saved first — Play puts you back exactly here."
 	_map_confirm.ok_button_text = "Return to menu"
 	_map_confirm.confirmed.connect(_on_map_select_confirmed)
 	add_child(_map_confirm)
@@ -830,6 +841,24 @@ func _ensure_solar_ref() -> void:
 		_solar_ui = p.get_node_or_null("SolarUI")
 
 
+func _update_hold_pill() -> void:
+	if _hold_lbl == null:
+		return
+	var owner := ""
+	if _main != null and _main.has_method("clock_hold_owner"):
+		owner = str(_main.call("clock_hold_owner"))
+	if owner == _hold_owner:
+		return
+	_hold_owner = owner
+	_hold_lbl.visible = not owner.is_empty()
+	if owner.is_empty():
+		return
+	var label := str(CLOCK_HOLD_LABELS.get(owner, owner.replace("_", " ")))
+	_hold_lbl.text = "⏸ held · %s" % label
+	_hold_lbl.tooltip_text = ("The clock is paused by %s. Play and the speed buttons "
+			+ "take effect when it lets go.") % label
+
+
 func _update_display() -> void:
 	if not is_instance_valid(_main):
 		return
@@ -905,6 +934,7 @@ func _update_display() -> void:
 		_stored_scale = ts
 		_speed_idx    = _nearest_speed_idx(ts)
 	_speed_lbl.text = str(SPEED_STEPS[_speed_idx][0])
+	_update_hold_pill()
 
 	# Keep the centre cluster optically centred as the clock/date text width
 	# changes (e.g. "12:00 PM" → "9:00 AM").
@@ -1533,13 +1563,20 @@ func _update_mode_chips() -> void:
 		_data_chip.add_theme_color_override("font_color", dcol)
 
 
+## 💾 opens the WORLD panel (scenes/ui/world_panel.gd), which replaced the
+## eight anonymous save slots: name, what the world holds, save / copy / new
+## world on this map / exit to menu.
 func _on_save_load_pressed() -> void:
 	var ui_layer := get_parent()
 	if ui_layer == null:
 		return
-	var sl := ui_layer.get_node_or_null("SaveLoadUI")
-	if sl != null and sl.has_method("show_panel"):
-		sl.show_panel()
+	var wp := ui_layer.get_node_or_null("WorldPanel")
+	if wp == null:
+		wp = WORLD_PANEL_SCRIPT.new()
+		wp.name = "WorldPanel"
+		ui_layer.add_child(wp)
+	if wp.has_method("show_panel"):
+		wp.show_panel()
 
 
 func _on_map_select_pressed() -> void:
@@ -1549,6 +1586,10 @@ func _on_map_select_pressed() -> void:
 
 func _on_map_select_confirmed() -> void:
 	_release_mouse()
+	if is_instance_valid(_main) and WorldPaths.has_active_world():
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		WorldSession.exit_to_menu(_main)
+		return
 	if is_instance_valid(_main) and _main.has_method("request_autosave"):
 		_main.request_autosave()
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
@@ -2441,6 +2482,17 @@ func _build_center_cluster() -> Control:
 	_speed_lbl.add_theme_color_override("font_color", C_AMBER)
 	_speed_lbl.add_theme_font_size_override("font_size", 14)
 	spd_box.add_child(_speed_lbl)
+	# "Held" pill: shown only while a claim pins the clock at 0 (CSV playback,
+	# a challenge bake, an export…). Play/speed write the user's base scale, so
+	# without this the buttons would appear to do nothing.
+	_hold_lbl = Label.new()
+	_hold_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hold_lbl.add_theme_color_override("font_color", C_AMBER)
+	_hold_lbl.add_theme_font_size_override("font_size", 9)
+	_hold_lbl.add_theme_stylebox_override("normal", UITheme.chip_style(C_AMBER))
+	_hold_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+	_hold_lbl.visible = false
+	spd_box.add_child(_hold_lbl)
 	ctrl.add_child(spd_box)
 	transport_panel.add_child(ctrl)
 	master.add_child(transport_panel)
@@ -2480,7 +2532,7 @@ func _build_right_cluster() -> Control:
 	right.alignment             = BoxContainer.ALIGNMENT_END
 	right.add_theme_constant_override("separation", 4)
 
-	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "Save / Load — manage game save slots")
+	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "World — save, copy, start a new world on this map, exit to menu")
 	right.add_child(sl_btn)
 	_mp_chip = _mk_chip_btn("Multiplayer", _on_mp_pressed,
 		"Multiplayer — host or join a private listen-server session (avatars + shared clock)")

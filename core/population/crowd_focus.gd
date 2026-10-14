@@ -21,12 +21,29 @@ const FULL_RADIUS_M := 120.0
 const LEAVE_RADIUS_M := 160.0
 ## Sim-hours a camp must sit past the line before it converts.
 const HYSTERESIS_H := 0.02
+## The full engine is the per-substep cost (A* walks, separation, chores per
+## agent) and a full-detail avatar is a blur at speed, so a FESTIVAL-scale
+## site shrinks the full-tier budget as the clock speeds up. Sites that fit
+## MAX_FULL_PEOPLE are untouched at any speed (no conversion, as before).
+const TS_BUDGETS: Array = [[60.0, 150], [300.0, 90], [1000.0, 40], [INF, 16]]
+## The full engine's own roster cap (NpcPopulationEngine.configure clamps
+## here): a bigger camp can only ever run light.
+const MAX_FULL_CAMP := 200
+
+
+## Full-tier budget at a clock running `ts_mult` times realtime.
+static func max_full_for(ts_mult: float) -> int:
+	for b in TS_BUDGETS:
+		if ts_mult <= float(b[0]):
+			return int(b[1])
+	return 16
 
 
 ## camps: [{id, home: Vector2, count}]; prev: {id: tier}; pending: {id: since_h}
 ## (mutated — the caller keeps it between calls). Returns {id: tier}.
 static func decide(camps: Array, viewer: Vector2, watched_id: String, prev: Dictionary,
-		pending: Dictionary, abs_h: float, max_full: int = MAX_FULL_PEOPLE) -> Dictionary:
+		pending: Dictionary, abs_h: float, max_full: int = MAX_FULL_PEOPLE,
+		ts_mult: float = 0.0) -> Dictionary:
 	var out := {}
 	var total := 0
 	for c in camps:
@@ -36,6 +53,11 @@ static func decide(camps: Array, viewer: Vector2, watched_id: String, prev: Dict
 			out[str((c as Dictionary)["id"])] = TIER_FULL
 		pending.clear()
 		return out
+	if ts_mult > 0.0:
+		# The speed table is written against the default budget; a player's
+		# own budget (Settings -> NPCs) sheds by the same proportion.
+		max_full = mini(max_full, int(round(float(max_full) * float(max_full_for(ts_mult))
+			/ float(MAX_FULL_PEOPLE))))
 	# Wanted set: the watched camp first, then by distance until the budget.
 	var scored: Array = []
 	for c in camps:
@@ -56,6 +78,8 @@ static func decide(camps: Array, viewer: Vector2, watched_id: String, prev: Dict
 		if not bool(s[3]):
 			continue
 		var n := int(s[2])
+		if n > MAX_FULL_CAMP:
+			continue   # the full engine cannot hold it — light, even watched
 		if n <= budget or str(s[1]) == watched_id:
 			want_full[str(s[1])] = true
 			budget -= n

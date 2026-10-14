@@ -192,6 +192,24 @@ const KINDS := {
 		"runner_pcd_m": 0.28,
 		"model_id": "powerspout_plt",
 	},
+	# AliExpress-class micro Pelton: 8" (0.2 m) bucket runner on a vertical
+	# shaft, a Nema 34 stepper as the generator, one 1/4" NPT nozzle fitting.
+	# Nozzle-governed like the PowerSpout. The listing-class nameplate for
+	# these units is a few hundred watts; 500 W is the ceiling the stepper
+	# generator can plausibly deliver, and the head band is the low-head end
+	# of the Pelton range (Thake: Pelton down to ~3 m at pico scale).
+	"micro_pelton": {
+		"display": "Micro Pelton 8\u2033 (vertical shaft)", "eta_t": 0.60,
+		"head_band": [3.0, 60.0], "has_penstock": true, "pond_drawdown": true,
+		"max_power_w": 500.0,
+		"uses_nozzle_model": true,
+		"nozzle_count_max": 2,
+		"default_nozzle_mm": 8.0,
+		# Measured off ali_pelton.glb: the nozzle fitting's centreline passes
+		# 0.084 m from the shaft (runner tip radius 0.101 m).
+		"runner_pcd_m": 0.168,
+		"model_id": "ali_pelton",
+	},
 	"turgo": {
 		"display": "Turgo", "eta_t": 0.80,
 		"head_band": [10.0, 30.0], "has_penstock": true, "pond_drawdown": true,
@@ -258,8 +276,7 @@ static func power_kw_from_graph_specs(specs: Dictionary, month: int,
 				maxi(int(meta.get("nozzle_count_max", 2)), 1))
 		# NAN through to PeltonPhysics means unconstrained; 0.0 means dry.
 		var supply_m3s := supply_lps / 1000.0
-		var op := PeltonPhysics.operating_point_supply_limited(
-				h_gross, length, d, eps, noz_d, noz_n, supply_m3s)
+		var op := _pelton_op(h_gross, length, d, eps, noz_d, noz_n, supply_m3s)
 		q = float(op.get("q_m3s", 0.0))
 		h_net = float(op.get("h_net_m", 0.0))
 	else:
@@ -290,6 +307,29 @@ static func power_kw_from_graph_specs(specs: Dictionary, month: int,
 	return p_kw
 
 
+## One Pelton operating point per distinct input set. The flow engine asks for
+## power AND flow every tick (two 40-iteration bisections for the same
+## point), the Lab's charts ask for dozens per redraw; this memo makes the
+## second ask free. Pure: the result is a function of the seven inputs only.
+static var _pelton_memo: Dictionary = {}
+const _PELTON_MEMO_MAX := 256
+
+
+static func _pelton_op(h_gross: float, length: float, d: float, eps: float,
+		noz_d: float, noz_n: int, supply_m3s: float) -> Dictionary:
+	var key := "%.4f|%.3f|%.6f|%.8f|%.6f|%d|%s" % [h_gross, length, d, eps, noz_d, noz_n,
+		"nan" if is_nan(supply_m3s) else "%.7f" % supply_m3s]
+	var hit: Variant = _pelton_memo.get(key)
+	if hit is Dictionary:
+		return hit
+	if _pelton_memo.size() >= _PELTON_MEMO_MAX:
+		_pelton_memo.clear()
+	var op := PeltonPhysics.operating_point_supply_limited(
+			h_gross, length, d, eps, noz_d, noz_n, supply_m3s)
+	_pelton_memo[key] = op
+	return op
+
+
 ## Operating flow (L/s) for the SAME operating point power_kw_from_graph_specs
 ## prices — nozzle kinds take the PeltonPhysics delivery-meets-demand solution
 ## (supply-capped when design_flow_lps is set), design-flow kinds take
@@ -314,8 +354,7 @@ static func operating_flow_lps_from_graph_specs(specs: Dictionary, month: int,
 				maxi(int(meta.get("nozzle_count_max", 2)), 1))
 		# NAN through to PeltonPhysics means unconstrained; 0.0 means dry.
 		var supply_m3s := supply_lps / 1000.0
-		var op := PeltonPhysics.operating_point_supply_limited(
-				h_gross, length, d, eps, noz_d, noz_n, supply_m3s)
+		var op := _pelton_op(h_gross, length, d, eps, noz_d, noz_n, supply_m3s)
 		return float(op.get("q_lps", 0.0))
 	var q_lps := maxf(float(specs.get("design_flow_lps", 3.0)), 0.0) \
 			* monthly_flow_multiplier(specs, month, weather_multipliers)

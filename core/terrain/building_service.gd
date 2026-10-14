@@ -10,7 +10,15 @@ signal buildings_progress(message: String)
 
 const OVERPASS_URL := "https://overpass-api.de/api/interpreter"
 const CACHE_DIR := "user://terrain_cache/osm_vectors"
+## NOT bumped for the waterway centreline keys: a bump forces an Overpass
+## refetch for every site the player ever visited, and Overpass is often 504 —
+## the site would come back with no buildings. Caches written before the
+## centreline keys existed are read back by DERIVING the centreline from the
+## buffered ribbon (see _derive_centerline), so old sites still carve.
 const CACHE_VERSION := "v6"
+## Real OSM way ids are ~1.4e9 today; a derived (pre-osm_id cache) waterway
+## gets a stable geometric id above this so it can never collide.
+const PSEUDO_OSM_ID_BASE := 900000000000
 const ATTRIBUTION := "© OpenStreetMap contributors"
 const REQUEST_TIMEOUT := 60.0
 const MAX_RETRIES := 3
@@ -262,6 +270,17 @@ static func _ser_item(d: Dictionary) -> Dictionary:
 			item[k] = d[k]
 	if d.has("roof"):
 		item["roof"] = d["roof"]
+	# Waterway lines (v7): the centreline + width + identity the stream network
+	# carves and renders from. Before v7 these were dropped on every cached
+	# reload, so a revisited site lost its river centrelines.
+	if d.has("centerline") and d["centerline"] is PackedVector2Array:
+		var cl: Array = []
+		for p in d["centerline"] as PackedVector2Array:
+			cl.append([p.x, p.y])
+		item["centerline"] = cl
+	for k in ["half_width", "osm_id", "culvert", "covered"]:
+		if d.has(k):
+			item[k] = d[k]
 	return item
 
 
@@ -302,12 +321,58 @@ static func _deser_item(d: Dictionary, kind: String) -> Dictionary:
 		item["highway_type"] = str(d.get("highway_type", "residential"))
 	elif kind == "water":
 		item["kind"] = str(d.get("kind", "water"))
+		if not d.has("centerline") and OsmWaterParser.is_waterway_line_tags(tags):
+			var derived := _derive_centerline(pts)
+			if not derived.is_empty():
+				item["centerline"] = derived["centerline"]
+				item["half_width"] = float(derived["half_width"])
+				item["osm_id"] = _pseudo_osm_id(derived["centerline"])
+				if OsmWaterParser.is_culvert_tags(tags):
+					item["culvert"] = true
+		if d.has("centerline"):
+			var cl := PackedVector2Array()
+			for pair in d.get("centerline", []):
+				if pair is Array and (pair as Array).size() >= 2:
+					cl.append(Vector2(TerrainBuilder.variant_to_float(pair[0]),
+						TerrainBuilder.variant_to_float(pair[1])))
+			item["centerline"] = cl
+			item["half_width"] = TerrainBuilder.dict_float(d, "half_width", 5.0)
+		if d.has("osm_id"):
+			item["osm_id"] = int(d["osm_id"])
+		if d.has("culvert"):
+			item["culvert"] = bool(d["culvert"])
+		if d.has("covered"):
+			item["covered"] = bool(d["covered"])
 	elif kind == "solar":
 		item["area_m2"] = TerrainBuilder.dict_float(d, "area_m2",
 			BuildingBuilder.footprint_area_m2(pts))
 	else:
 		item["kind"] = str(d.get("kind", "landuse"))
 	return item
+
+
+## Recover a waterway's centreline from its buffered ribbon (OsmWaterParser.
+## _buffer_polyline: n left-bank points, the n right-bank points reversed, and
+## usually the first point again to close it). Centre i is the midpoint of left
+## i and its mirror on the right. {} when the ribbon is not that shape.
+static func _derive_centerline(ribbon: PackedVector2Array) -> Dictionary:
+	var m := ribbon.size()
+	if m >= 5 and ribbon[0].distance_squared_to(ribbon[m - 1]) < 1e-4:
+		m -= 1
+	if m < 4 or m % 2 != 0:
+		return {}
+	var n := m / 2
+	var cl := PackedVector2Array()
+	for i in n:
+		cl.append((ribbon[i] + ribbon[m - 1 - i]) * 0.5)
+	return {"centerline": cl, "half_width": ribbon[0].distance_to(ribbon[m - 1]) * 0.5}
+
+
+static func _pseudo_osm_id(cl: PackedVector2Array) -> int:
+	var a := cl[0]
+	var b := cl[cl.size() - 1]
+	var h := hash([roundi(a.x), roundi(a.y), roundi(b.x), roundi(b.y), cl.size()])
+	return PSEUDO_OSM_ID_BASE + (absi(h) % 100000000000)
 
 
 static func _parse_overpass(doc: Dictionary, center_lat: float, center_lon: float,

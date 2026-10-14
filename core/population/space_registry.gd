@@ -36,9 +36,30 @@ const DEFAULT_CAPACITY := 2
 const CAPACITY_AUTO := 0
 const SHARE_SPREAD_M := 12.0
 const DEFAULT_DRAW := 0.5
+## Venue crowd layouts (record key `layout`; "" = by type, VenueCrowd.layout_of).
+const LAYOUT_RING := "ring"
+const LAYOUT_DIRECTIONAL := "directional"
+const LAYOUTS: Array = ["", LAYOUT_RING, LAYOUT_DIRECTIONAL]
 
 var spaces: Array = []
 var _occupancy: Dictionary = {}  # space_id -> Array[String] agent ids (runtime only)
+## STANDING SLOTS (runtime only). A person's slot at a space is the LOWEST
+## free index when they take it, and it is theirs until they let it go —
+## never "their position in the occupancy array", which shifted everyone
+## behind a leaver one slot forward (a whole crowd shuffling at every
+## departure), and never "how many are here now", which the light tier read
+## at DECISION time: everyone who set off for the stage in the same tick got
+## the same number and walked onto the same spot — the piles round a peak.
+##   _slots:  space_id -> {agent_id: slot}
+##   _slot_at: agent_id -> space_id (one slot per person; taking a new one
+##             lets an unclaimed reservation elsewhere go)
+var _slots: Dictionary = {}
+var _slot_at: Dictionary = {}
+## FRIEND-GROUP CLUSTERS at a space (VenueCrowd.group_spot): space_id ->
+## {group_key: [cluster index, members holding a slot there]}. Lowest free
+## index again, so two groups never share a cluster spot (they used to hash
+## into 48 spots — the birthday problem stacked groups on each other).
+var _clusters: Dictionary = {}
 ## Lazy indices (rebuilt on the next lookup after any record change). With
 ## thousands of spaces the old linear find_by_id inside has_free_capacity
 ## inside nearest_space_by was O(S²) per query.
@@ -59,14 +80,11 @@ static func create_empty() -> SpaceRegistry:
 # --- persistence (PlacedPropLayer idiom) ------------------------------------
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/npc_spaces_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("npc_spaces", lat, lon)
 
 
 func save_path_for_scene(scene_key: String) -> String:
-	var tag := scene_key.get_file().get_basename() if scene_key.contains("/") else scene_key
-	if tag.is_empty():
-		tag = "unknown_scene"
-	return "user://maps/npc_spaces_scene_%s.json" % tag
+	return WorldPaths.scene_file("npc_spaces", scene_key)
 
 
 func save(lat: float, lon: float) -> void:
@@ -120,6 +138,9 @@ func deserialize(data: Dictionary) -> void:
 			continue
 		spaces.append(_normalized(rec))
 	_occupancy = {}
+	_slots = {}
+	_slot_at = {}
+	_clusters = {}
 	_pos_cache = {}
 	_invalidate()
 
@@ -131,6 +152,20 @@ static func _normalized(rec: Dictionary) -> Dictionary:
 	# A stage's facing in compass degrees (CelestialClock convention: north
 	# 0, east 90); < 0 = auto (toward the camps). Only stages read it.
 	rec["facing_deg"] = float(rec.get("facing_deg", -1.0))
+	# How a venue's crowd stands: "" = by type (a stage faces one way, every
+	# other venue is gathered round), "ring" = round it like a fire,
+	# "directional" = a cone on ONE side, facing it (speakers, a screen).
+	var lay := str(rec.get("layout", ""))
+	rec["layout"] = lay if lay in LAYOUTS else ""
+	# A performer's deck height above the ground (m), < 0 = measured from the
+	# prop's own geometry (the DJ stands ON a stage, not in it).
+	rec["perform_h_m"] = float(rec.get("perform_h_m", -1.0))
+	# How far off a venue's edge its crowd starts (m), < 0 = by type (a
+	# directional venue's fan: VenueCrowd.STAGE_FAN_GAP_M).
+	rec["crowd_gap_m"] = float(rec.get("crowd_gap_m", -1.0))
+	# A track the venue plays while its set is on (a file name in
+	# StageMusic.DIR, "" = silent).
+	rec["music"] = str(rec.get("music", ""))
 	rec["draw"] = clampf(float(rec.get("draw", DEFAULT_DRAW)), 0.0, 1.0)
 	rec["units"] = maxi(int(rec.get("units", 1)), 1)
 	rec["graph_item_id"] = str(rec.get("graph_item_id", ""))
@@ -199,13 +234,16 @@ func set_space_fields(space_id: String, patch: Dictionary) -> bool:
 		return false
 	for k in patch.keys():
 		match str(k):
-			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg":
+			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", 					"layout", "perform_h_m", "crowd_gap_m", "music":
 				rec[str(k)] = patch[k]
 	_normalized(rec)
 	return true
 
 
 # --- record CRUD ------------------------------------------------------------
+
+const _EMPTY: Array = []
+
 
 func find_by_id(space_id: String) -> Dictionary:
 	if _index_dirty:
@@ -259,6 +297,7 @@ func remove_space(space_id: String) -> bool:
 		if str((spaces[i] as Dictionary).get("id", "")) == space_id:
 			spaces.remove_at(i)
 			_occupancy.erase(space_id)
+			_forget_slots(space_id)
 			_pos_cache.erase(space_id)
 			_invalidate()
 			return true
@@ -330,10 +369,13 @@ func _targets_equal(a: Dictionary, b: Dictionary) -> bool:
 
 # --- queries ----------------------------------------------------------------
 
+## READ-ONLY by contract: the index's own array (it is rebuilt — never
+## mutated — when the registry changes, so iterating it stays safe). The
+## per-call duplicate cost one array copy per person per venue decision.
 func spaces_of_type(space_type: String) -> Array:
 	if _index_dirty:
 		_rebuild_index()
-	return (_by_type.get(space_type, []) as Array).duplicate()
+	return _by_type.get(space_type, _EMPTY) as Array
 
 
 ## Nearest space of `space_type` to `pos`, resolving world positions through
@@ -347,9 +389,11 @@ func spaces_of_type(space_type: String) -> Array:
 ## `live_check` says the owner is no longer on the roster, in which case the
 ## assignment reads as open (stale assignments self-heal, never swept).
 ## Without a live_check an assignment is treated as binding.
+## `spread` false drops the crowding charge (sleep: your camp's tents are
+## your camp's tents however many are already in them).
 func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 		require_free: bool = true, agent_id: String = "",
-		live_check: Callable = Callable()) -> Dictionary:
+		live_check: Callable = Callable(), spread: bool = true) -> Dictionary:
 	if not agent_id.is_empty():
 		var own := assigned_space_for(agent_id, space_type)
 		if not own.is_empty() \
@@ -376,7 +420,8 @@ func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 		# Share the load: every occupant already there costs SHARE_SPREAD_M
 		# of extra walk, so people draw their share of a type's spaces by
 		# distance instead of all converging on the nearest one.
-		var d := ((p as Vector2) - pos).length() + float(occupant_count(sid)) * SHARE_SPREAD_M
+		var d := ((p as Vector2) - pos).length() \
+			+ (float(occupant_count(sid)) * SHARE_SPREAD_M if spread else 0.0)
 		if d < best_d:
 			best_d = d
 			best = space
@@ -544,6 +589,7 @@ func prune_dangling(main: Node) -> int:
 	for i in range(spaces.size() - 1, -1, -1):
 		if resolve_position(spaces[i], main) == null:
 			_occupancy.erase(str((spaces[i] as Dictionary).get("id", "")))
+			_forget_slots(str((spaces[i] as Dictionary).get("id", "")))
 			spaces.remove_at(i)
 			removed += 1
 	if removed > 0:
@@ -569,11 +615,92 @@ func occupant_count(space_id: String) -> int:
 	return (_occupancy.get(space_id, []) as Array).size()
 
 
-## Where in a space's occupancy this agent sits; -1 when not an occupant.
-## Claim order IS the slot order, so the arrangement is stable for the whole
-## visit and reproducible from the same claim sequence.
+## This occupant's standing slot; -1 when not an occupant. Taken at claim
+## time (or earlier, by `reserve_slot`) as the lowest free index, and kept
+## for the whole visit: stable, reproducible from the same claim sequence,
+## and never shared.
 func slot_index_for(space_id: String, agent_id: String) -> int:
-	return (_occupancy.get(space_id, []) as Array).find(agent_id)
+	if not (_occupancy.get(space_id, []) as Array).has(agent_id):
+		return -1
+	return _take_slot(space_id, agent_id)
+
+
+## A slot held for someone on their way (the light tier picks its spot when it
+## DECIDES to go and claims on arrival). Same slot the claim then keeps.
+func reserve_slot(space_id: String, agent_id: String) -> int:
+	return _take_slot(space_id, agent_id)
+
+
+func _take_slot(space_id: String, agent_id: String) -> int:
+	var m: Dictionary = _slots.get(space_id, {})
+	if m.has(agent_id):
+		return int(m[agent_id])
+	# One slot per person: an unclaimed reservation elsewhere is let go.
+	var prev := str(_slot_at.get(agent_id, ""))
+	if not prev.is_empty() and prev != space_id \
+			and not (_occupancy.get(prev, []) as Array).has(agent_id):
+		_free_slot(prev, agent_id)
+	var used: Dictionary = {}
+	for k in m:
+		used[int(m[k])] = true
+	var s := 0
+	while used.has(s):
+		s += 1
+	m[agent_id] = s
+	_slots[space_id] = m
+	_slot_at[agent_id] = space_id
+	var gk := NpcFriends.key_of(agent_id)
+	var cm: Dictionary = _clusters.get(space_id, {})
+	if cm.has(gk):
+		(cm[gk] as Array)[1] = int((cm[gk] as Array)[1]) + 1
+	else:
+		var cused: Dictionary = {}
+		for g in cm:
+			cused[int((cm[g] as Array)[0])] = true
+		var c := 0
+		while cused.has(c):
+			c += 1
+		cm[gk] = [c, 1]
+	_clusters[space_id] = cm
+	return s
+
+
+func _free_slot(space_id: String, agent_id: String) -> void:
+	var m: Dictionary = _slots.get(space_id, {})
+	if not m.has(agent_id):
+		return
+	m.erase(agent_id)
+	if m.is_empty():
+		_slots.erase(space_id)
+	if str(_slot_at.get(agent_id, "")) == space_id:
+		_slot_at.erase(agent_id)
+	var cm: Dictionary = _clusters.get(space_id, {})
+	var gk := NpcFriends.key_of(agent_id)
+	if cm.has(gk):
+		var e: Array = cm[gk]
+		e[1] = int(e[1]) - 1
+		if int(e[1]) <= 0:
+			cm.erase(gk)
+		if cm.is_empty():
+			_clusters.erase(space_id)
+
+
+## A space went away: every slot and cluster held there goes with it.
+func _forget_slots(space_id: String) -> void:
+	var m: Dictionary = _slots.get(space_id, {})
+	for aid in m:
+		if str(_slot_at.get(aid, "")) == space_id:
+			_slot_at.erase(aid)
+	_slots.erase(space_id)
+	_clusters.erase(space_id)
+
+
+## The friend group's cluster index at a space (the group of someone holding a
+## slot there), or -1.
+func cluster_index_for(space_id: String, agent_id: String) -> int:
+	var cm: Dictionary = _clusters.get(space_id, {})
+	var e: Variant = cm.get(NpcFriends.key_of(agent_id))
+	return int((e as Array)[0]) if e is Array else -1
 
 
 ## Offset from a space's resolved centre for the person holding `slot`.
@@ -591,6 +718,18 @@ static func slot_offset_for_index(slot: int) -> Vector2:
 ## per-person shuffle (SLOT_JITTER_M) so the sunflower spiral never reads as
 ## the lattice it is.
 const SLOT_JITTER_M := 0.35
+
+
+## Where the n-th extra sleeper on one bed lies (n >= 1): alternating sides
+## across the shelter's long axis, 0.3 m a step, nudged along it — a heap of
+## people in a tent, never two on exactly one spot.
+static func pile_offset(n: int, yaw: float) -> Vector2:
+	if n <= 0:
+		return Vector2.ZERO
+	var axis := Vector2(cos(yaw), -sin(yaw))
+	var across := Vector2(sin(yaw), cos(yaw))
+	var side := 1.0 if n % 2 == 1 else -1.0
+	return across * side * 0.3 * float((n + 1) / 2) + axis * 0.12 * float(n % 3 - 1)
 
 
 func slot_offset(space_id: String, agent_id: String) -> Vector2:
@@ -615,6 +754,12 @@ func has_free_capacity(space_id: String) -> bool:
 		return false
 	if ignore_capacity:
 		return true
+	# People PILE UP to sleep: a tent or a sleep area never turns anyone away
+	# (an assigned bed is still somebody's — that is the assignment, not the
+	# capacity). A full sleep area used to send the overflow off to sleep on
+	# the ground wherever they stood.
+	if str(rec.get("space_type", "")) == "sleep":
+		return true
 	var cap := int(rec.get("capacity", DEFAULT_CAPACITY))
 	if cap <= CAPACITY_AUTO:
 		return true   # AUTO: never full, the load is shared by choice instead
@@ -635,12 +780,14 @@ func claim(space_id: String, agent_id: String) -> bool:
 		return false
 	occ.append(agent_id)
 	_occupancy[space_id] = occ
+	_take_slot(space_id, agent_id)
 	return true
 
 
 func release(space_id: String, agent_id: String) -> void:
 	var occ: Array = _occupancy.get(space_id, [])
 	occ.erase(agent_id)
+	_free_slot(space_id, agent_id)
 	if occ.is_empty():
 		_occupancy.erase(space_id)
 	else:
@@ -650,7 +797,13 @@ func release(space_id: String, agent_id: String) -> void:
 func release_all_for_agent(agent_id: String) -> void:
 	for sid in _occupancy.keys():
 		release(str(sid), agent_id)
+	var held := str(_slot_at.get(agent_id, ""))
+	if not held.is_empty():
+		_free_slot(held, agent_id)
 
 
 func clear_occupancy() -> void:
 	_occupancy = {}
+	_slots = {}
+	_slot_at = {}
+	_clusters = {}

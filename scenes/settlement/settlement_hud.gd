@@ -37,6 +37,9 @@ var _fest_panel: PanelContainer = null
 var _fest_status: Label = null
 var _fest_notes: Label = null
 var _fest_sig := "<unbuilt>"
+var _fest_pop_slider: HSlider = null
+var _fest_pop_lbl: Label = null
+var _fest_pop_timer: Timer = null
 
 
 func _ready() -> void:
@@ -64,11 +67,20 @@ func hide_hud() -> void:
 
 
 func _process(delta: float) -> void:
+	# The score line pulses green when it goes up.
+	if _peak_lbl != null and _peak_flash > 0.0:
+		_peak_flash = maxf(_peak_flash - delta * 1.8, 0.0)
+		_peak_lbl.modulate = Color(1, 1, 1).lerp(Color(0.8, 1.7, 0.9), _peak_flash)
 	_accum += delta
 	if _accum < REFRESH_S:
 		return
 	_accum = 0.0
 	_refresh()
+
+
+var _peak_lbl: Label = null
+var _peak_last := -1
+var _peak_flash := 0.0
 
 
 func _build() -> void:
@@ -89,6 +101,13 @@ func _build() -> void:
 	_vibe_lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	_vibe_lbl.visible = false
 	tl.add_child(_vibe_lbl)
+	_peak_lbl = Label.new()
+	_peak_lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	_peak_lbl.add_theme_color_override("font_color", Color(0.55, 1.0, 0.62))
+	_peak_lbl.add_theme_color_override("font_outline_color", Color(0.04, 0.2, 0.08, 0.9))
+	_peak_lbl.add_theme_constant_override("outline_size", 4)
+	_peak_lbl.visible = false
+	tl.add_child(_peak_lbl)
 	_alarm_lbl = Label.new()
 	_alarm_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_alarm_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
@@ -229,6 +248,71 @@ func _build_festival_panel() -> void:
 	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(hint)
+	# Population: the festival's total headcount — the knob for how many
+	# people this machine draws (the natural split comes from the camps'
+	# areas). Applied on release (each change resizes every roster in place).
+	var pop_row := HBoxContainer.new()
+	pop_row.add_theme_constant_override("separation", 6)
+	v.add_child(pop_row)
+	var pop_cap := Label.new()
+	pop_cap.text = "People"
+	pop_cap.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	pop_cap.add_theme_color_override("font_color", UITheme.C_TEXT)
+	pop_row.add_child(pop_cap)
+	_fest_pop_slider = HSlider.new()
+	_fest_pop_slider.min_value = 0
+	_fest_pop_slider.max_value = 2000
+	_fest_pop_slider.step = 20
+	_fest_pop_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_fest_pop_slider.custom_minimum_size.x = 150
+	_fest_pop_slider.tooltip_text = "Total festival population. 0 = natural (from the camps' painted areas). Fewer people = a faster sim at high speeds."
+	_fest_pop_slider.value = PopTestPrefs.festival_target_people()
+	pop_row.add_child(_fest_pop_slider)
+	_fest_pop_lbl = Label.new()
+	_fest_pop_lbl.custom_minimum_size.x = 64
+	_fest_pop_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_fest_pop_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
+	pop_row.add_child(_fest_pop_lbl)
+	_fest_pop_timer = Timer.new()
+	_fest_pop_timer.one_shot = true
+	_fest_pop_timer.wait_time = 0.4
+	add_child(_fest_pop_timer)
+	_fest_pop_timer.timeout.connect(func() -> void:
+		var fm0 := _festival_mode()
+		if fm0 != null:
+			fm0.call("set_target_people", int(_fest_pop_slider.value)))
+	_fest_pop_slider.value_changed.connect(func(val: float) -> void:
+		_fest_pop_lbl.text = "natural" if val <= 0.0 else str(int(val))
+		_fest_pop_timer.start())
+	_fest_pop_lbl.text = "natural" if _fest_pop_slider.value <= 0.0 else str(int(_fest_pop_slider.value))
+	# FUCK YES!!! contagion (PopTestPrefs.peak_contagion, live).
+	var cont_row := HBoxContainer.new()
+	cont_row.add_theme_constant_override("separation", 6)
+	v.add_child(cont_row)
+	var cont_cap := Label.new()
+	cont_cap.text = "Contagion"
+	cont_cap.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	cont_cap.add_theme_color_override("font_color", Color(0.55, 1.0, 0.62))
+	cont_row.add_child(cont_cap)
+	var cont := HSlider.new()
+	cont.min_value = 0.0
+	cont.max_value = PopTestPrefs.MAX_PEAK_CONTAGION
+	cont.step = 0.05
+	cont.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cont.custom_minimum_size.x = 150
+	cont.value = PopTestPrefs.peak_contagion()
+	cont.tooltip_text = "How strongly one person at FUCK YES!!! raises the odds of the people round them. 0 = no spread, 1 = as designed, 4 = wildfire."
+	cont_row.add_child(cont)
+	var cont_lbl := Label.new()
+	cont_lbl.custom_minimum_size.x = 64
+	cont_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	cont_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
+	cont_lbl.text = "off" if cont.value <= 0.001 else "%.2f×" % cont.value
+	cont_row.add_child(cont_lbl)
+	cont.value_changed.connect(func(val: float) -> void:
+		PopTestPrefs.set_peak_contagion(val)
+		cont_lbl.text = "off" if val <= 0.001 else "%.2f×" % val)
+	cont.drag_ended.connect(func(_c: bool) -> void: PopTestPrefs.save())
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	v.add_child(row)
@@ -307,6 +391,8 @@ func _refresh_festival_panel() -> void:
 		tiers = " · %d up close, %d as crowd" % [int(st.get("full", 0)), int(st.get("light", 0))]
 	_fest_status.text = "%d people in %d camps%s · %d seeded venues" % [
 		people, int(st.get("camps", 0)), tiers, int(st.get("venues", 0))]
+	if int(st.get("target", 0)) > 0 and int(st.get("natural", 0)) > 0:
+		_fest_status.text += "\nScaled from %d (natural) to %d." % [int(st["natural"]), int(st["target"])]
 	if people == 0:
 		_fest_status.text += "\nNobody yet — the sim starts on the next tick (unpause the clock if it is paused)."
 	var tail := PackedStringArray()
@@ -392,6 +478,18 @@ func _refresh() -> void:
 		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
 		var v: Dictionary = sgv.call("festival_vibe") if sgv != null and sgv.has_method("festival_vibe") else {}
 		_vibe_lbl.visible = not v.is_empty() and int(v.get("people", 0)) > 0
+		# The PEAK EXPERIENCE score: the festival's measure of success, on its
+		# own line (it does not wait for the vibe summary).
+		var br: Variant = sgv.call("npc_population_bridge") if sgv != null and sgv.has_method("npc_population_bridge") else null
+		var on: bool = br != null and br.has_method("peak_score") and bool(br.call("active"))
+		_peak_lbl.visible = on
+		if on:
+			var ps: Dictionary = br.call("peak_score")
+			var total := int(ps.get("total", 0))
+			if _peak_last >= 0 and total > _peak_last:
+				_peak_flash = 1.0
+			_peak_last = total
+			_peak_lbl.text = "✦ %d Peak Experiences  ·  %d %s now" % [total, int(ps.get("now", 0)), NpcPeak.LABEL]
 		if _vibe_lbl.visible:
 			_vibe_lbl.text = str(v.get("headline", ""))
 			_vibe_lbl.add_theme_color_override("font_color", v.get("color", UITheme.C_TEXT) as Color)

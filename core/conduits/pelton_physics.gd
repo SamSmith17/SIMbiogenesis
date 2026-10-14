@@ -203,6 +203,35 @@ static func bucket_exit_speed_ms(v_jet_ms: float, x: float) -> float:
 	return maxf(v_jet_ms, 0.0) * absf(1.0 - 2.0 * maxf(x, 0.0))
 
 
+## Bucket deflection angle. A Pelton bucket turns the relative flow through
+## about 165°, not 180°: the exit lip is cut back so the leaving water clears
+## the back of the next bucket (Thake, The Micro-Hydro Pelton Turbine Manual,
+## bucket design; textbook ideal 180° is the limit case).
+const BUCKET_DEFLECTION_DEG := 165.0
+
+
+## Absolute (ground-frame) velocity of the water leaving ONE half of a bucket
+## splitter, as {tangential, axial, speed} in m/s, for jet speed v_jet, speed
+## ratio x = u/v_jet and a bucket that turns the RELATIVE flow through
+## `deflect_deg`. Tangential is measured along the JET direction (+ = carried on
+## with the wheel, − = thrown back toward the nozzle); axial is the sideways
+## component, which the other half of the splitter mirrors. In the bucket frame
+## the water arrives at w = v_jet − u and leaves at the same speed turned
+## through the deflection; adding u back gives the ground-frame vector.
+## With deflect_deg = 180 the axial term vanishes and |tangential| reduces to
+## bucket_exit_speed_ms — that identity is pinned in source_physics_selftest.
+static func bucket_exit_velocity(v_jet_ms: float, x: float,
+		deflect_deg: float = BUCKET_DEFLECTION_DEG) -> Dictionary:
+	var v := maxf(v_jet_ms, 0.0)
+	var u := maxf(x, 0.0) * v
+	var w := v - u
+	var turn := deg_to_rad(180.0 - clampf(deflect_deg, 90.0, 180.0))
+	var tangential := u - w * cos(turn)
+	var axial := absf(w) * sin(turn)
+	return {"tangential": tangential, "axial": axial,
+		"speed": sqrt(tangential * tangential + axial * axial)}
+
+
 ## Speed ratio for a fractional electrical load. It is the GENERATOR that sets a
 ## Pelton's speed: at the matched load the runner settles at x_opt, and as the load
 ## is shed there is less torque to resist the jet so it accelerates toward runaway

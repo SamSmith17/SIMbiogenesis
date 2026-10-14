@@ -66,23 +66,17 @@ func _process(delta: float) -> void:
 		var gr_poll := GameplayRulesImpl.from_node(self)
 		_crisis_system_enabled_cached = gr_poll != null and gr_poll.is_crisis_events_enabled()
 	
-	# `events_paused` is a *visual* / GPU-savings pause. It triggers ONLY when
-	# time is sped up beyond realtime — particles for many fires get expensive,
-	# so we hide them and re-show on return to realtime.
-	# It is NOT tied to survival mode or `gameplay_mechanics_paused`: a manually
-	# triggered fire (F key) must stay visible and burn even when survival is off.
+	# `events_paused` now means only "the clock is not at realtime", which gates
+	# the RANDOM crisis roll below. It used to also hide every fire's particles
+	# and lights whenever time was sped up (a GPU saving) — but FireNode re-shows
+	# its emitters every frame while burning, so the hide only flickered and left
+	# `fire_light` dark for good. Fires now time-lapse with the sim through
+	# SimFxRate (capped) and freeze while it is paused, so nothing is hidden here.
 	var current_time_scale := REALTIME_SCALE
 	if main_node != null and is_instance_valid(main_node) and "time_scale" in main_node:
 		current_time_scale = float(main_node.time_scale)
 	var is_realtime := absf(current_time_scale - REALTIME_SCALE) < (REALTIME_SCALE * 0.01)
-	var should_pause := not is_realtime
-	
-	if should_pause and not events_paused:
-		events_paused = true
-		_pause_all_events()
-	elif not should_pause and events_paused:
-		events_paused = false
-		_resume_all_events()
+	events_paused = not is_realtime
 	
 	# Always update active events (independent of survival / random gates), so
 	# manually-triggered fires keep spreading and growing.

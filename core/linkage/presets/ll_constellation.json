@@ -1,0 +1,5053 @@
+{
+	"structure": {
+		"modules": 6,
+		"beamLengths": {
+			"horizontal": 8,
+			"vertical": 7
+		},
+		"pivotPercent": 44,
+		"stackCounts": {
+			"horizontal": 2,
+			"vertical": 3
+		},
+		"beamDimensions": {
+			"horizontalWidth": 2.5,
+			"horizontalThickness": 1.5,
+			"verticalWidth": 0.75,
+			"verticalThickness": 2.5,
+			"verticalInnerWidth": 1.5,
+			"verticalInnerThickness": 2.5,
+			"verticalOuterWidth": 0.75,
+			"verticalOuterThickness": 2.5,
+			"verticalDimensionsLinked": false
+		},
+		"offsets": {
+			"top": 1.25,
+			"bottom": 14.69,
+			"vertEnd": 1,
+			"hStackGap": 0.1,
+			"vStackGap": 0.45
+		},
+		"bracketDimensions": {
+			"width": 2.17,
+			"depth": 1.6,
+			"height": 3.82,
+			"wallThickness": 0.18,
+			"innerWidth": 1.8,
+			"holeDistance": 2.69
+		},
+		"brackets": {
+			"width": 2.17,
+			"depth": 1.6,
+			"height": 3.82,
+			"wallThickness": 0.18,
+			"innerWidth": 1.8,
+			"holeDiameter": 0.3125,
+			"zRotation": 0
+		},
+		"bolts": {
+			"diameter": 0.5,
+			"vStackLength": 4.9,
+			"hStackLength": 3,
+			"vStackAuto": false,
+			"hStackAuto": false,
+			"hPivotBoltLength": 3,
+			"hPivotBoltAuto": false
+		},
+		"washers": {
+			"vEnabled": true,
+			"vID": 0.5,
+			"vOD": 1.5,
+			"vThickness": 0.45,
+			"vAuto": false,
+			"hEnabled": true,
+			"hID": 0.5,
+			"hOD": 1.5,
+			"hThickness": 0.1,
+			"hAuto": false
+		},
+		"hobermanAngle": 0,
+		"pivotAngle": 0,
+		"vStackReverse": true
+	},
+	"mode": {
+		"type": "cylinder",
+		"flipVertical": false,
+		"rotation": 0,
+		"useFixedBeams": false,
+		"capUprights": true,
+		"arrayCount": 1,
+		"sequentialFold": false,
+		"radialArray": {
+			"enabled": true,
+			"count": 6,
+			"center": false,
+			"rotateCopies": true,
+			"radiusAuto": true,
+			"radius": 0,
+			"spacing": 0.5,
+			"startAngle": 60,
+			"spin": 0,
+			"heightOffset": 0,
+			"hiddenSlots": [
+				3
+			]
+		}
+	},
+	"hardwareAssemblies": {
+		"activeId": "innerVBeam",
+		"explode": 0,
+		"snap": true,
+		"assemblies": {
+			"outerVBeam": {
+				"id": "outerVBeam",
+				"label": "Outer V-Beam Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 8,
+					"distMul": 2
+				},
+				"mirror": {
+					"from": "right",
+					"to": "left"
+				},
+				"parts": [
+					{
+						"id": "bracket",
+						"type": "bracket",
+						"label": "U-Bracket (Unistrut Trolley)",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 4,
+						"cost": 5,
+						"params": {
+							"useGlb": true,
+							"height": 3.77,
+							"width": 2.15,
+							"depth": 1.57,
+							"wallThickness": 0.12,
+							"holeDiameter": 0.41,
+							"bottomLip": 1.01,
+							"sideHoleFromTop": 1.1875,
+							"cutoffHeight": 0,
+							"glbScaleMul": 1,
+							"glbRotX": 0,
+							"glbRotY": 90,
+							"glbRotZ": 0,
+							"posX": 0,
+							"posY": 0,
+							"posZ": 0
+						},
+						"presetId": "asm-rkg43",
+						"bomKey": "asm-rkg43"
+					},
+					{
+						"id": "r-beam",
+						"type": "beam",
+						"label": "Outer V-Beam",
+						"axis": "right",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 96,
+							"holeOffset": 1.5,
+							"holeDiameter": 0.31496062992125984,
+							"rotDeg": 90,
+							"syncStructure": true,
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-ebmrje",
+						"bomKey": "asm-ebmrje",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bushing",
+						"type": "bushing",
+						"label": "Bushing 5/16\"ID 5/8\"OD 1.25\"",
+						"axis": "right",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.85,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 0.625,
+							"length": 1.25,
+							"flangeOd": 0,
+							"flangeThickness": 0
+						},
+						"flipAxis": false,
+						"presetId": "asm-uv0kcd",
+						"bomKey": "asm-uv0kcd",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-lock",
+						"type": "lockWasher",
+						"label": "5/16\" Split Lock Washer",
+						"axis": "right",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.06,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 0.5,
+							"thickness": 0.078,
+							"style": "split"
+						},
+						"flipAxis": false,
+						"presetId": "asm-i80w7b",
+						"bomKey": "asm-i80w7b",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bolt",
+						"type": "bolt",
+						"label": "Outer V-Beam Bolt (8x60mm button)",
+						"axis": "right",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.55,
+						"crossOffset": 0,
+						"params": {
+							"diameter": 0.315,
+							"length": 2.3622,
+							"threadLength": 0.9449,
+							"headType": "button",
+							"headDia": 0.5118,
+							"headHeight": 0.1969,
+							"driveSize": 0.1575,
+							"metric": "M8x1.25"
+						},
+						"flipAxis": true,
+						"presetId": "asm-gf6qto",
+						"bomKey": "asm-gf6qto",
+						"gapBefore": 0
+					},
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-5zfevj",
+						"bomKey": "asm-5zfevj",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-5zfevj",
+						"bomKey": "asm-5zfevj",
+						"gapBefore": 0
+					},
+					{
+						"id": "outerVBeam-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.08,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"flipAxis": true,
+						"presetId": "asm-6u778p",
+						"bomKey": "asm-6u778p",
+						"sharedKey": "hBeamGapWasher",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-bolt",
+						"type": "bolt",
+						"label": "H-Pivot Bolt 1/2\"x3\" Hex",
+						"axis": "down",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.75,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": "",
+							"headAtInsert": true
+						},
+						"presetId": "asm-396fj2",
+						"bomKey": "asm-396fj2",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-outer-washer",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "down",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.08,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.3125,
+							"od": 1.5,
+							"thickness": 0.0625
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"gapBefore": 0
+					},
+					{
+						"id": "c-nut",
+						"type": "nut",
+						"label": "1/2\"-13 Rivet Nut",
+						"axis": "down",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.4,
+						"crossOffset": 0,
+						"params": {
+							"id": 0.5,
+							"od": 0.6692913385826772,
+							"length": 0.5,
+							"flangeOd": 0.7086614173228346,
+							"flangeThickness": 0.03937007874015748,
+							"style": "rivet",
+							"thread": "1/2-13"
+						},
+						"flipAxis": false,
+						"presetId": "asm-gv0hrp",
+						"bomKey": "asm-gv0hrp",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical",
+				"mirrorPairs": [
+					{
+						"from": "right",
+						"to": "left"
+					}
+				]
+			},
+			"innerVBeam": {
+				"id": "innerVBeam",
+				"label": "Inner V-Beam Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 8,
+					"distMul": 2
+				},
+				"parts": [
+					{
+						"id": "r-beam",
+						"type": "beam",
+						"label": "Inner V-Beam",
+						"axis": "right",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 96,
+							"holeOffset": 1.5,
+							"holeDiameter": 0.31496062992125984,
+							"holeAlign": "center",
+							"rotDeg": 90,
+							"syncStructure": true,
+							"color": 9136404
+						},
+						"presetId": "asm-66y71j",
+						"bomKey": "asm-66y71j",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-washer",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "right",
+						"seq": 3,
+						"qty": 3,
+						"perModule": 2,
+						"cost": 0.08,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.32,
+							"od": 1.5,
+							"thickness": 0.05
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"presetManual": false,
+						"link": "",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-lock",
+						"type": "lockWasher",
+						"label": "5/16\" Split Lock Washer",
+						"axis": "right",
+						"seq": 5,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.06,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.3125,
+							"od": 0.5,
+							"thickness": 0.078,
+							"style": "split"
+						},
+						"flipAxis": false,
+						"presetId": "asm-i80w7b",
+						"bomKey": "asm-i80w7b",
+						"gapBefore": 0
+					},
+					{
+						"id": "r-bolt",
+						"type": "bolt",
+						"label": "Inner V-Beam Bolt (8x60mm button)",
+						"axis": "right",
+						"seq": 4,
+						"qty": 1,
+						"perModule": 2,
+						"cost": 0.55,
+						"crossOffset": 0.08,
+						"flipAxis": true,
+						"params": {
+							"diameter": 0.315,
+							"length": 2.3622,
+							"threadLength": 0.9449,
+							"headType": "button",
+							"headDia": 0.5118,
+							"headHeight": 0.1969,
+							"driveSize": 0.1575,
+							"metric": "M8x1.25"
+						},
+						"presetId": "asm-qnxbqm",
+						"bomKey": "asm-qnxbqm",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1781475545528-7",
+						"type": "bracket",
+						"label": "U-Bracket (Unistrut Trolley)",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 5,
+						"params": {
+							"useGlb": true,
+							"height": 3.77,
+							"width": 2.15,
+							"depth": 1.57,
+							"wallThickness": 0.12,
+							"holeDiameter": 0.41,
+							"bottomLip": 1.01,
+							"sideHoleFromTop": 1.1875,
+							"cutoffHeight": 1,
+							"glbScaleMul": 1,
+							"glbRotX": 0,
+							"glbRotY": 90,
+							"glbRotZ": 0,
+							"posX": 0,
+							"posY": 0,
+							"posZ": 0
+						},
+						"presetId": "bracket-unistrut-trolley",
+						"presetManual": false,
+						"bomKey": "bracket-unistrut-trolley",
+						"link": ""
+					},
+					{
+						"id": "part-1781475697861-680",
+						"type": "bushing",
+						"label": "Bushing",
+						"axis": "left",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"id": 0.3125,
+							"od": 0.625,
+							"length": 1.5,
+							"flangeOd": 0,
+							"flangeThickness": 0
+						},
+						"presetId": "asm-94b7vk",
+						"crossOffset": 0.08,
+						"flipAxis": false,
+						"bomKey": "asm-94b7vk",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1781475961112-843",
+						"type": "washer",
+						"label": "Outer Washer 5/16\"ID 1.5\"OD",
+						"axis": "right",
+						"seq": 1,
+						"qty": 3,
+						"perModule": 2,
+						"cost": 0.08,
+						"crossOffset": 0.1,
+						"params": {
+							"id": 0.32,
+							"od": 1.5,
+							"thickness": 0.05
+						},
+						"flipAxis": false,
+						"presetId": "asm-emq1x6",
+						"bomKey": "asm-emq1x6",
+						"presetManual": false,
+						"link": "",
+						"gapBefore": 0
+					},
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-4crnjx",
+						"bomKey": "asm-4crnjx",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "near"
+						},
+						"presetId": "asm-4crnjx",
+						"bomKey": "asm-4crnjx",
+						"gapBefore": 0
+					},
+					{
+						"id": "innerVBeam-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790297258455-971",
+						"type": "bolt",
+						"label": "Bolt",
+						"axis": "down",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": ""
+						},
+						"presetId": "asm-bwd6cx",
+						"crossOffset": 0,
+						"flipAxis": true,
+						"bomKey": "asm-bwd6cx",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical"
+			},
+			"hCenter": {
+				"id": "hCenter",
+				"label": "H-Beam Center Linkage Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 38,
+					"distMul": 2.2
+				},
+				"parts": [
+					{
+						"id": "u-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "up",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "center"
+						},
+						"presetId": "asm-j7xowz",
+						"bomKey": "asm-j7xowz",
+						"gapBefore": 0
+					},
+					{
+						"id": "d-hbeam",
+						"type": "beam",
+						"label": "Horizontal H-Beam",
+						"axis": "down",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0,
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"width": 3.5,
+							"thickness": 1.5,
+							"length": 18,
+							"holeOffset": 9,
+							"holeDiameter": 0.5,
+							"rotDeg": 0,
+							"syncStructure": "hBeam",
+							"color": 9136404,
+							"holeAlign": "center"
+						},
+						"presetId": "asm-j7xowz",
+						"bomKey": "asm-j7xowz",
+						"gapBefore": 0
+					},
+					{
+						"id": "hCenter-hbeam-gap-washer",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "center",
+						"seq": 1,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790296920789-712",
+						"type": "washer",
+						"label": "H-Beam Gap Washer 1/2\"ID 2\"OD",
+						"axis": "up",
+						"seq": 2,
+						"qty": 1,
+						"perModule": 0,
+						"cost": 0.08,
+						"sharedKey": "hBeamGapWasher",
+						"crossOffset": 0,
+						"flipAxis": false,
+						"params": {
+							"id": 0.5,
+							"od": 2,
+							"thickness": 0.0625
+						},
+						"presetId": "asm-ouahsi",
+						"bomKey": "asm-ouahsi",
+						"gapBefore": 0
+					},
+					{
+						"id": "part-1790296979426-79",
+						"type": "bolt",
+						"label": "Bolt",
+						"axis": "up",
+						"seq": 3,
+						"qty": 1,
+						"perModule": 1,
+						"cost": 0.1,
+						"params": {
+							"diameter": 0.5,
+							"length": 3,
+							"threadLength": 1,
+							"headType": "hex",
+							"headDia": 0.75,
+							"headHeight": 0.3125,
+							"driveSize": 0,
+							"metric": ""
+						},
+						"presetId": "asm-bwd6c2",
+						"crossOffset": 0,
+						"flipAxis": true,
+						"bomKey": "asm-bwd6c2",
+						"gapBefore": 0
+					}
+				],
+				"sandwichPlane": "vertical",
+				"mirrorPairs": []
+			},
+			"vCenter": {
+				"id": "vCenter",
+				"label": "V-Beam Center Assembly",
+				"detailed": true,
+				"explodeGap": 1,
+				"detailCam": {
+					"pitchDeg": 14,
+					"distMul": 1.9
+				},
+				"parts": [],
+				"sandwichPlane": "horizontal",
+				"mirrorPairs": []
+			}
+		},
+		"stackModelV2": true,
+		"mirrorDefaultsV2": true,
+		"stackModelV3": true
+	},
+	"buildSteps": {
+		"version": 1,
+		"steps": [
+			{
+				"id": "step-mugao240-1-kj2l",
+				"kind": "cut",
+				"title": "Cut 16 × reciprocal beam to 97.25 in",
+				"notes": "16 pieces of 3.5 in × 1.5 in stock, 97.25 in long (from 120 in stock, 22.75 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao240-2-3vl3",
+				"kind": "cut",
+				"title": "Cut 27 × V-beam / cap V-beam to 94.19 in",
+				"notes": "27 pieces of 1.5 in × 3.5 in stock, 94.19 in long (from 96 in stock, 1.81 in offcut).",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical"
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"stockLengthIn": null,
+					"kerfIn": 0.125
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-3-d1tq",
+				"kind": "drill",
+				"title": "Drill 20 × V-beam / cap V-beam (3 holes)",
+				"notes": "Holes from the left end: 1.13 in, 47.19 in, 93.31 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 7,
+						"stackId": 7,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"layerIndex": 2
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-4-9ny0",
+				"kind": "drill",
+				"title": "Drill 16 × reciprocal beam (5 holes)",
+				"notes": "Holes from the left end: 1.25 in, 15.69 in, 61.19 in, 80.06 in, 93.44 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-5-kmwm",
+				"kind": "drill",
+				"title": "Drill 16 × bottom H-beam (3 holes)",
+				"notes": "Holes from the left end: 2 in, 40.19 in, 94.25 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-6-3dnp",
+				"kind": "drill",
+				"title": "Drill 16 × top H-beam (4 holes)",
+				"notes": "Holes from the left end: 2 in, 34.19 in, 40.19 in, 94.25 in. Ø 0.5 in through the thickness.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-7-ok0l",
+				"kind": "drill",
+				"title": "Drill 8 × radial support beam (2 holes)",
+				"notes": "Holes from the left end: 0.44 in, 38.69 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam"
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao243-8-ezcs",
+				"kind": "drill",
+				"title": "Drill 7 × V-beam (2 holes)",
+				"notes": "Holes from the left end: 47.19 in, 93.31 in. Ø 0.5 in through the width.",
+				"stage": "bench",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 0,
+						"stackId": 0,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 1,
+						"stackId": 1,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 2,
+						"stackId": 2,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 3,
+						"stackId": 3,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 4,
+						"stackId": 4,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 5,
+						"stackId": 5,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 6,
+						"stackId": 6,
+						"patternId": "B",
+						"layerIndex": 1,
+						"arrayIndex": 0
+					}
+				],
+				"view": null,
+				"transitionMs": 800,
+				"durationMs": 3000,
+				"op": {
+					"bitDiameterIn": 0.5,
+					"holes": "auto"
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao244-9-29ml",
+				"kind": "place",
+				"title": "Module 1: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-10-5fau",
+				"kind": "place",
+				"title": "Module 2: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-11-1rwv",
+				"kind": "place",
+				"title": "Module 3: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-12-t789",
+				"kind": "place",
+				"title": "Module 4: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-13-5r2f",
+				"kind": "place",
+				"title": "Module 5: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 4
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-14-l8cg",
+				"kind": "place",
+				"title": "Module 6: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 5
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-15-8b14",
+				"kind": "place",
+				"title": "Module 7: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 6
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-16-wihh",
+				"kind": "place",
+				"title": "Module 8: set bottom H-beams",
+				"notes": "Stack the bottom horizontal beams with their washers between layers.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-bottom",
+						"moduleIndex": 7
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-hbeams"
+			},
+			{
+				"id": "step-mugao244-17-pbix",
+				"kind": "place",
+				"title": "Module 1: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-18-c9kg",
+				"kind": "place",
+				"title": "Module 2: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-19-82d0",
+				"kind": "place",
+				"title": "Module 3: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-20-oaj1",
+				"kind": "place",
+				"title": "Module 4: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-21-f6rh",
+				"kind": "place",
+				"title": "Module 5: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-22-1091",
+				"kind": "place",
+				"title": "Module 6: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-23-f8z5",
+				"kind": "place",
+				"title": "Module 7: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-24-9gfx",
+				"kind": "place",
+				"title": "Module 8: fit the bottom brackets",
+				"notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-bottom-brackets"
+			},
+			{
+				"id": "step-mugao244-25-pltx",
+				"kind": "fasten",
+				"title": "Module 1: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-26-2feu",
+				"kind": "fasten",
+				"title": "Module 2: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-27-g41y",
+				"kind": "fasten",
+				"title": "Module 3: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-28-jqfa",
+				"kind": "fasten",
+				"title": "Module 4: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-29-cikm",
+				"kind": "fasten",
+				"title": "Module 5: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-30-lk1p",
+				"kind": "fasten",
+				"title": "Module 6: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao244-31-iajb",
+				"kind": "fasten",
+				"title": "Module 7: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-32-lssi",
+				"kind": "fasten",
+				"title": "Module 8: bolt the bottom ring pivots and brackets",
+				"notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-bottom-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-33-es8u",
+				"kind": "place",
+				"title": "Module 1: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-34-ezxd",
+				"kind": "place",
+				"title": "Module 2: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-35-j0cp",
+				"kind": "place",
+				"title": "Module 3: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-36-aigu",
+				"kind": "place",
+				"title": "Module 4: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-37-6j64",
+				"kind": "place",
+				"title": "Module 5: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 4
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-38-case",
+				"kind": "place",
+				"title": "Module 6: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 5
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-39-lh2v",
+				"kind": "place",
+				"title": "Module 7: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 6
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-40-7snv",
+				"kind": "place",
+				"title": "Module 8: set top H-beams (mirror of the bottom ring)",
+				"notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top",
+						"moduleIndex": 7
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-hbeams"
+			},
+			{
+				"id": "step-mugao245-41-cs37",
+				"kind": "place",
+				"title": "Module 1: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-42-m4gl",
+				"kind": "place",
+				"title": "Module 2: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-43-sxfq",
+				"kind": "place",
+				"title": "Module 3: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-44-m8kd",
+				"kind": "place",
+				"title": "Module 4: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-45-75du",
+				"kind": "place",
+				"title": "Module 5: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 4,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-46-1d8l",
+				"kind": "place",
+				"title": "Module 6: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 5,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-47-pbq1",
+				"kind": "place",
+				"title": "Module 7: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 6,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-48-qobd",
+				"kind": "place",
+				"title": "Module 8: fit the top brackets",
+				"notes": "Seat the top U-brackets on the top stack, opening downward.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bracket",
+						"moduleIndex": 7,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 12,
+					"parkOffset": {
+						"mode": "beside",
+						"gapIn": 24
+					},
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-top-brackets"
+			},
+			{
+				"id": "step-mugao245-49-o7zu",
+				"kind": "fasten",
+				"title": "Module 1: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-50-lbmh",
+				"kind": "fasten",
+				"title": "Module 2: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-51-okb0",
+				"kind": "fasten",
+				"title": "Module 3: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-52-afpb",
+				"kind": "fasten",
+				"title": "Module 4: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-53-9iss",
+				"kind": "fasten",
+				"title": "Module 5: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 4,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 4,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-54-nqq6",
+				"kind": "fasten",
+				"title": "Module 6: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 5,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 5,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-55-9m40",
+				"kind": "fasten",
+				"title": "Module 7: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 6,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 6,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-56-z83a",
+				"kind": "fasten",
+				"title": "Module 8: bolt the top ring pivots and brackets",
+				"notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "hstack",
+						"moduleIndex": 7,
+						"ring": "top"
+					},
+					{
+						"kind": "bolt",
+						"boltType": "hpivot",
+						"moduleIndex": 7,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"down",
+						"up"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-top-bracket-bolts"
+			},
+			{
+				"id": "step-mugao245-57-3y0u",
+				"kind": "place",
+				"title": "Module 1: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 0
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 0
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao245-58-mrju",
+				"kind": "place",
+				"title": "Module 2: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 1
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 1
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao245-59-1lkm",
+				"kind": "place",
+				"title": "Module 3: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 2
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 2
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao245-60-451u",
+				"kind": "place",
+				"title": "Module 4: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 3
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 3
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao246-61-5f8i",
+				"kind": "place",
+				"title": "Module 5: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 4
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 4
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao246-62-mt46",
+				"kind": "place",
+				"title": "Module 6: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 5
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 5
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao246-63-nzvp",
+				"kind": "place",
+				"title": "Module 7: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 6
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 6
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao246-64-mn6h",
+				"kind": "place",
+				"title": "Module 8: assemble the V module",
+				"notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "vertical",
+						"moduleIndex": 7
+					},
+					{
+						"kind": "beam",
+						"stackType": "vertical-cap",
+						"moduleIndex": 7
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "radial",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": "auto-v-modules"
+			},
+			{
+				"id": "step-mugao246-65-8j38",
+				"kind": "fasten",
+				"title": "Module 1: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 0,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 4400,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao246-66-5lbc",
+				"kind": "fasten",
+				"title": "Module 2: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 1,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao246-67-zaqr",
+				"kind": "fasten",
+				"title": "Module 3: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 2,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao247-68-kaw2",
+				"kind": "fasten",
+				"title": "Module 4: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 3,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao247-69-h854",
+				"kind": "fasten",
+				"title": "Module 5: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 4,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao247-70-yor6",
+				"kind": "fasten",
+				"title": "Module 6: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 5,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao247-71-3o18",
+				"kind": "fasten",
+				"title": "Module 7: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 6,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao247-72-wln9",
+				"kind": "fasten",
+				"title": "Module 8: bolt the V module centre pivot",
+				"notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "joint",
+						"moduleIndex": 7,
+						"ring": "center"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2600,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": true
+				},
+				"groupId": "auto-v-center-bolts"
+			},
+			{
+				"id": "step-mugao248-73-0zql",
+				"kind": "fasten",
+				"title": "Module 1: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-74-6vii",
+				"kind": "fasten",
+				"title": "Module 2: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-75-yfnq",
+				"kind": "fasten",
+				"title": "Module 3: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-76-5wv4",
+				"kind": "fasten",
+				"title": "Module 4: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-77-gmpt",
+				"kind": "fasten",
+				"title": "Module 5: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-78-ed7l",
+				"kind": "fasten",
+				"title": "Module 6: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-79-fof5",
+				"kind": "fasten",
+				"title": "Module 7: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-80-262t",
+				"kind": "fasten",
+				"title": "Module 8: attach the V module to the bottom ring",
+				"notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "bottom"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-attach-bottom"
+			},
+			{
+				"id": "step-mugao248-81-l4xo",
+				"kind": "place",
+				"title": "Lift the top assembly onto the V modules",
+				"notes": "With helpers on each side, lift the assembled top ring and lower the brackets onto the V-beam ends.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "horizontal-top"
+					},
+					{
+						"kind": "placement",
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999
+				},
+				"transitionMs": 800,
+				"durationMs": 3500,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": "parked",
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao248-82-mdeb",
+				"kind": "fasten",
+				"title": "Module 1: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 0,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 0,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 9800,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-83-dx6i",
+				"kind": "fasten",
+				"title": "Module 2: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 1,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 1,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-84-bppm",
+				"kind": "fasten",
+				"title": "Module 3: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 2,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 2,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-85-w8s4",
+				"kind": "fasten",
+				"title": "Module 4: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 3,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 3,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-86-bkr9",
+				"kind": "fasten",
+				"title": "Module 5: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 4,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 4,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-87-usmg",
+				"kind": "fasten",
+				"title": "Module 6: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 5,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 5,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-88-s2g7",
+				"kind": "fasten",
+				"title": "Module 7: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 6,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 6,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao248-89-gmsi",
+				"kind": "fasten",
+				"title": "Module 8: secure the top bracket to the V module",
+				"notes": "Insert the top pivot bolts and torque every pivot on this module.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": "vstack",
+						"moduleIndex": 7,
+						"ring": "top"
+					},
+					{
+						"kind": "placement",
+						"moduleIndex": 7,
+						"ring": "top"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.3,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 63.4549999999999,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 6200,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": [
+						"right",
+						"left"
+					],
+					"sequential": true
+				},
+				"groupId": "auto-secure-top"
+			},
+			{
+				"id": "step-mugao249-90-bqlz",
+				"kind": "view",
+				"title": "Deploy the structure",
+				"notes": "Open the scissor ring to its deployed angle before adding the roof.",
+				"stage": "assembly",
+				"targets": [],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 134.89999999999978
+				},
+				"transitionMs": 2500,
+				"durationMs": 800,
+				"op": {},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao249-91-wtjm",
+				"kind": "place",
+				"title": "Install radial support beams",
+				"notes": "Lay the radial support beams across the top ring.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 134.89999999999978
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao249-92-lqxc",
+				"kind": "place",
+				"title": "Install reciprocal beams",
+				"notes": "Weave the reciprocal beams over/under each other and onto the ring anchors.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "beam",
+						"stackType": "support-beam-reciprocal"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 134.89999999999978
+				},
+				"transitionMs": 800,
+				"durationMs": 2000,
+				"op": {
+					"approach": "above",
+					"travelIn": 24,
+					"parkOffset": null,
+					"from": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao249-93-r5h1",
+				"kind": "fasten",
+				"title": "Bolt the reciprocal beams",
+				"notes": "Through-bolt each crossing and anchor.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "bolt",
+						"boltType": [
+							"rcp-ring",
+							"rcp-cross"
+						]
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.75,
+					"dist": 120,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 134.89999999999978,
+					"frame": "targets",
+					"radial": true,
+					"padding": 1.35,
+					"detail": true
+				},
+				"transitionMs": 800,
+				"durationMs": 2500,
+				"op": {
+					"bolt": null,
+					"nut": null,
+					"turns": 3,
+					"allModules": false,
+					"axes": null,
+					"sequential": false
+				},
+				"groupId": null
+			},
+			{
+				"id": "step-mugao249-94-mkml",
+				"kind": "place",
+				"title": "Mount the solar panels",
+				"notes": "Lift each panel onto the support beams in order and clamp it down.",
+				"stage": "assembly",
+				"targets": [
+					{
+						"kind": "panel"
+					}
+				],
+				"view": {
+					"yaw": 0.6,
+					"pitch": 0.35,
+					"dist": 600,
+					"panX": 0,
+					"panY": 0,
+					"anchor": null,
+					"foldAngleDeg": 134.89999999999978
+				},
+				"transitionMs": 800,
+				"durationMs": 11600,
+				"op": {
+					"approach": "above",
+					"travelIn": 30,
+					"parkOffset": null,
+					"from": null,
+					"sequential": true
+				},
+				"groupId": null
+			}
+		],
+		"settings": {
+			"repeatMode": "skip",
+			"fastFactor": 4
+		}
+	},
+	"foldAngle": 156.49999999999957,
+	"animationStopAngle": 156.49999999999957,
+	"minFoldAngle": null,
+	"radialVisibleAngle": 90,
+	"rcpVisibleAngle": 90,
+	"panelsVisibleAngle": null,
+	"ibc": {
+		"enabled": false,
+		"count": 2,
+		"stackGapIn": 0,
+		"verticalOffsetAIn": 0,
+		"verticalOffsetBIn": 0,
+		"rotationYDeg": 22.5,
+		"scale": 39.37007874015748
+	},
+	"coverings": {
+		"enabled": true,
+		"lowerLean": "inward",
+		"lowerTiltDeg": 12,
+		"upperLean": "outward",
+		"upperTiltDeg": 1.5,
+		"splitHeightIn": 46.75,
+		"bottomIn": 0,
+		"bottomMode": "ground",
+		"topClearanceIn": 1,
+		"edgeGapIn": 0.25,
+		"mount": "centerline",
+		"sheet": {
+			"widthIn": 48,
+			"lengthIn": 96,
+			"thicknessIn": 0.5,
+			"orientation": "auto",
+			"align": "center",
+			"kerfIn": 0.125
+		},
+		"fabric": {
+			"rollWidthIn": 60,
+			"hemIn": 1,
+			"seamIn": 0.5,
+			"stretchPct": 2,
+			"grommetSpacingIn": 12
+		},
+		"table": {
+			"depthIn": 11.5,
+			"thicknessIn": 0.75,
+			"slideIn": -0.5,
+			"heightOffsetIn": 0
+		},
+		"spans": [
+			{
+				"lower": "plywood",
+				"upper": "none",
+				"table": true
+			},
+			{
+				"lower": "plywood",
+				"upper": "plywood",
+				"table": true
+			},
+			{
+				"lower": "none",
+				"upper": "none",
+				"table": false
+			},
+			{
+				"lower": "plywood",
+				"upper": "plywood",
+				"table": false
+			},
+			{
+				"lower": "none",
+				"upper": "none",
+				"table": false
+			},
+			{
+				"lower": "plywood",
+				"upper": "plywood",
+				"table": false
+			}
+		],
+		"visibility": {
+			"walls": true,
+			"fabric": true,
+			"tables": true
+		},
+		"showDimensions": false
+	},
+	"floor": {
+		"enabled": true,
+		"beams": {
+			"radialEnabled": false,
+			"length": 96,
+			"width": 2.5,
+			"thickness": 1.5,
+			"offsetH": 1.5,
+			"offsetV": 0,
+			"offsetT": 0,
+			"parallelEnabled": true,
+			"parallelLength": 80.05,
+			"parallelWidth": 2.5,
+			"parallelThickness": 1.5,
+			"parallelSwingAngle": 48,
+			"seat": "leg",
+			"parallelOffsetV": -1.5,
+			"parallelVOffset": 0,
+			"anchorDist": -21.5,
+			"anchorSideIn": 0,
+			"rcpEndOffset": -2
+		},
+		"deck": {
+			"enabled": true,
+			"thicknessIn": 0.75,
+			"insetIn": -10.5
+		},
+		"visibility": {
+			"beams": true,
+			"deck": true
+		}
+	},
+	"shadeCloth": {
+		"enabled": true,
+		"widthMode": "auto",
+		"widthIn": 120,
+		"widthTrimIn": 0,
+		"lengthMode": "auto",
+		"lengthIn": 240,
+		"centerOverlapIn": 12,
+		"overhangIn": 0,
+		"rotationDeg": 0,
+		"staggerIn": 0,
+		"liftIn": 0,
+		"color": "#000000",
+		"opacity": 1,
+		"visible": true
+	},
+	"panels": {
+		"enabled": true,
+		"topPanels": {
+			"enabled": true,
+			"size": {
+				"width": 21.26,
+				"length": 41.34,
+				"thickness": 1.5
+			},
+			"electrical": {
+				"ratedWatts": 100,
+				"voc": 21.6,
+				"vmp": 18,
+				"isc": 6.1,
+				"imp": 5.56,
+				"weight": 18
+			},
+			"padding": {
+				"x": 0,
+				"y": 1
+			},
+			"grid": {
+				"rows": 1,
+				"cols": 4
+			},
+			"lift": 0.3,
+			"presetId": null,
+			"formFactor": "flexible",
+			"foldCount": 4,
+			"foldDeploy": 1,
+			"folded": {
+				"length": 25.25,
+				"width": 21.25,
+				"thickness": 2.5
+			}
+		},
+		"sidePanels": {
+			"enabled": false,
+			"size": {
+				"width": 48,
+				"length": 96,
+				"thickness": 0.5
+			},
+			"electrical": {
+				"ratedWatts": 180,
+				"voc": 49.5,
+				"vmp": 41.5,
+				"isc": 10.2,
+				"imp": 9.65,
+				"weight": 45
+			},
+			"padding": {
+				"x": 0,
+				"y": -0.5
+			},
+			"grid": {
+				"rows": 1,
+				"cols": 1
+			},
+			"presetId": null,
+			"formFactor": "framed",
+			"foldCount": 4,
+			"foldDeploy": 1,
+			"folded": {
+				"length": 25.25,
+				"width": 21.25,
+				"thickness": 2.5
+			}
+		},
+		"layoutMode": "radial",
+		"gridRotation": 0,
+		"positioning": {
+			"lift": -3,
+			"slide": 37,
+			"separation": -4.5
+		},
+		"radial": {
+			"count": 12,
+			"offset": 56,
+			"rotation": 30,
+			"lateralOffset": 0,
+			"pinwheelAngle": 0
+		},
+		"spiral": {
+			"armCount": 3,
+			"secondaryEnabled": true,
+			"secondaryRadialOffset": -39,
+			"secondaryLateralOffset": 0,
+			"secondaryPinwheel": -2,
+			"secondaryRotation": 2,
+			"armRadialStep": -39,
+			"armLateralStep": 0,
+			"armPinwheelStep": 0,
+			"armRotationStep": 0
+		},
+		"enabledFaces": [
+			false,
+			false,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true,
+			true
+		]
+	},
+	"supportBeams": {
+		"enabled": true,
+		"showRadial": true,
+		"length": 96,
+		"width": 1.5,
+		"thickness": 2.5,
+		"rotation": 0,
+		"offsetH": 0,
+		"offsetV": -8.5,
+		"foldAngle": 0,
+		"parallelEnabled": true,
+		"parallelLength": 78,
+		"parallelWidth": 3.5,
+		"parallelThickness": 1.5,
+		"parallelFoldAngle": 0,
+		"parallelSwingAngle": 108,
+		"parallelOverlap": 62.5,
+		"parallelInset": -9,
+		"parallelVOffset": -1.66,
+		"parallelOffsetV": -3,
+		"anchorDist": 16.5,
+		"rcpKinematicMode": false,
+		"rcpPivotHole": 0,
+		"rcpPivotT": 1,
+		"rcpEndOffset": 1.25,
+		"rcpActiveHole": 1
+	},
+	"costs": {
+		"hBeam": 2.642857142857143,
+		"vBeam": 1.5416666666666667,
+		"bolt": 1.5,
+		"boltVInner": 1.25,
+		"boltVOuter": 1,
+		"boltH": 1.25,
+		"boltHPivot": 1.25,
+		"washerV": 0.5,
+		"washerH": 0.5,
+		"bracket": 5.38,
+		"solarPanel": 80,
+		"plywoodSheet": 45,
+		"fabricYard": 8,
+		"grommet": 0.25,
+		"shadeCloth": 60,
+		"autoLumber": true,
+		"refBeam": {
+			"width": 3.5,
+			"thickness": 1.5,
+			"length": 8,
+			"price": 3.7
+		}
+	},
+	"visibility": {
+		"brackets": true,
+		"bolts": true,
+		"hardwareFullDetail": false,
+		"solarPanels": true,
+		"ibc": false,
+		"coverings": true
+	},
+	"cameraState": {
+		"yaw": 19.439999999999937,
+		"pitch": -3.80261904279391,
+		"dist": 727.2835074168663,
+		"panX": 101,
+		"panY": 185,
+		"structureRotation": 0
+	},
+	"version": "v30",
+	"name": "Constellation",
+	"linkagelabSource": {
+		"file": "Constellation.json",
+		"sha": "e11e875ed415dbd87badc4b5ed928c80d6508cbb"
+	}
+}

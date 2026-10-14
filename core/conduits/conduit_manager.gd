@@ -54,6 +54,13 @@ var _parts_active: Dictionary = {}  ## conn_id -> bool (GLB fittings assembled)
 var _pipe_kit_warn: Dictionary = {}  ## conn_id -> last error (dedupe warnings)
 var _elbow_cache: Dictionary = {}  ## conn_id -> Array[{bend_deg, transform, corner, …}]
 var _discharge_vfx: Dictionary = {}  ## conn_id -> ConduitDischargeVfx (culvert outlet jet)
+## conn_id -> OutletEndMarker: the grabbable END of a draft pipe whose outlet
+## node has no prop (see gameplay/outlet_end_marker.gd). Parented to Main,
+## not to this (hidden-in-first-person) node, so it is always in reach.
+var _outlet_markers: Dictionary = {}
+## A conduit pick this close to a propless outlet's mouth is the END marker's,
+## never a waypoint insert.
+const OUTLET_END_PICK_M := 1.0
 ## Cached _any_explicit_visible() so the per-frame guard stays O(1); refreshed
 ## on every sync/enqueue pass (structure changes route through those).
 var _explicit_seen: bool = false
@@ -417,6 +424,7 @@ func _process(delta: float) -> void:
 		if _global_flow_glow or cid == _focus_id or conn.get("flow_glow") == true:
 			_tick_flow_params(cid, conn)
 		_update_discharge_vfx(delta, cid, conn)
+		_update_outlet_marker(cid, conn)
 	_perf_end("conduits_3d")
 
 
@@ -866,6 +874,292 @@ func _update_discharge_vfx(delta: float, cid: String, conn: Dictionary) -> void:
 		add_child(vfx)
 		_discharge_vfx[cid] = vfx
 	vfx.set_flow(delta, live_q, mouth, dir)
+
+
+## ---- Buried-pipe depth cue (2026-10-12) -----------------------------------
+## Conduits are x-ray by design (no depth test, so the CT bowl never hides a
+## run); in the world a buried run glowed through the hill with no sense of
+## depth. Every physical run now carries its BURIAL per vertex (UV2.x = ground
+## height above the vertex), and a run under the ground anywhere wears
+## `conduit_buried.gdshader` — faded, desaturated, dashed with depth — plus a
+## dotted GROUND TRACE draped on the surface above the buried spans, so the
+## eye reads where the pipe goes. Surface spans are unchanged. Light strings
+## and conceptual flow runs opt out (never buried / their own shader).
+const BURIAL_CUE_MIN_M := 0.1
+const BURIAL_TRACE_RADIUS_M := 0.03
+var _burial_traces: Dictionary = {}   ## conn_id -> MeshInstance3D
+var _burial_max: Dictionary = {}      ## conn_id -> max burial (m), for the harness
+static var _buried_shader: Shader = null
+
+
+func _apply_burial_cue(cid: String, inst: MeshInstance3D, type_id: String,
+		samples: PackedVector3Array, tint: Color, is_light: bool, use_flow: bool) -> void:
+	_burial_max[cid] = 0.0
+	if is_light or use_flow or inst == null or inst.mesh == null or samples.size() < 2:
+		_remove_burial_trace(cid)
+		return
+	var mesh := inst.mesh as ArrayMesh
+	if mesh == null or mesh.get_surface_count() < 1:
+		_remove_burial_trace(cid)
+		return
+	var profile := _burial_profile(samples)
+	var max_b := _apply_burial_trace(cid, type_id, samples, tint, profile)
+	if max_b < BURIAL_CUE_MIN_M:
+		# On the surface: the stock material, no trace.
+		if inst.material_override is ShaderMaterial \
+				and str(inst.get_meta("cond_mat_key", "")).begins_with("buried|"):
+			inst.material_override = ConduitKinds.make_material(type_id, tint)
+			inst.set_meta("cond_mat_key", "%s|%s" % [type_id, tint.to_html(true)])
+		_remove_burial_trace(cid)
+		return
+	# Stamp UV2.x = burial per VERTEX from the per-SAMPLE profile: the tube's
+	# rings ARE the samples and UV.y is the ring's along-fraction, so the
+	# lookup is a table read — never a ground query per vertex.
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var uv2 := PackedVector2Array()
+	uv2.resize(verts.size())
+	var last := profile.size() - 1
+	for vi in verts.size():
+		var u := uvs[vi].y if vi < uvs.size() else 0.0
+		var si := clampi(int(round(u * float(last))), 0, last)
+		uv2[vi] = Vector2(profile[si], 0.0)
+	arrays[Mesh.ARRAY_TEX_UV2] = uv2
+	var rebuilt := ArrayMesh.new()
+	rebuilt.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	for si in range(1, mesh.get_surface_count()):
+		rebuilt.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, mesh.surface_get_arrays(si))
+	inst.mesh = rebuilt
+	# The buried look.
+	var key := "buried|%s|%s" % [type_id, tint.to_html(true)]
+	if not (inst.material_override is ShaderMaterial) or str(inst.get_meta("cond_mat_key", "")) != key:
+		if _buried_shader == null:
+			_buried_shader = load("res://core/conduits/conduit_buried.gdshader") as Shader
+		var meta: Dictionary = ConduitKinds.type_meta(type_id)
+		var col: Color = meta.get("color", Color.WHITE) as Color
+		if tint.a > 0.01:
+			col = tint
+		var sm := ShaderMaterial.new()
+		sm.shader = _buried_shader
+		sm.set_shader_parameter("base_color", col)
+		sm.set_shader_parameter("roughness", float(meta.get("roughness", 0.7)))
+		sm.set_shader_parameter("metallic", float(meta.get("metallic", 0.0)))
+		sm.render_priority = 16
+		inst.material_override = sm
+		inst.set_meta("cond_mat_key", key)
+
+
+## Burial per sample (ground height above it, m; 0 on or above the surface).
+## Empty when the scene has no TerrainLoader: there the footing is a physics
+## raycast per call, and a run's worth of them stalled the soak map's graph.
+func _burial_profile(samples: PackedVector3Array) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	if _main == null or TerrainSurfaceQuery.find_terrain_loader(_main) == null:
+		return out
+	out.resize(samples.size())
+	for i in samples.size():
+		var sp := samples[i]
+		var g := ground_y_at(sp)
+		out[i] = maxf((g - sp.y) if is_finite(g) else 0.0, 0.0)
+	return out
+
+
+## Burial profile + the ground TRACE for any physical run (tube or kit
+## parts): returns the max burial (m) and records it for the harness.
+func _apply_burial_trace(cid: String, type_id: String, samples: PackedVector3Array,
+		tint: Color, profile: PackedFloat32Array = PackedFloat32Array()) -> float:
+	_burial_max[cid] = 0.0
+	if samples.size() < 2 or ConduitKinds.is_light_type(type_id):
+		_remove_burial_trace(cid)
+		return 0.0
+	var burial := profile if profile.size() == samples.size() else _burial_profile(samples)
+	if burial.size() != samples.size():
+		_remove_burial_trace(cid)
+		return 0.0
+	var max_b := 0.0
+	for i in samples.size():
+		max_b = maxf(max_b, burial[i])
+	_burial_max[cid] = max_b
+	if max_b < BURIAL_CUE_MIN_M:
+		_remove_burial_trace(cid)
+		return max_b
+	# The buried spans, lifted onto the surface, as a thin dashed tube with a
+	# normal depth test (hidden by a hill in front, drawn on the ground above
+	# the pipe).
+	var trace_pts := PackedVector3Array()
+	var on_ground := false
+	for i in samples.size():
+		var sp := samples[i]
+		if burial[i] >= BURIAL_CUE_MIN_M * 0.5:
+			var g := ground_y_at(sp)
+			trace_pts.append(Vector3(sp.x, (g if is_finite(g) else sp.y + burial[i]) + 0.06, sp.z))
+			on_ground = true
+	if not on_ground or trace_pts.size() < 2:
+		_remove_burial_trace(cid)
+		return max_b
+	var tmesh := _dotted_trace_mesh(trace_pts, BURIAL_TRACE_RADIUS_M)
+	var trace: MeshInstance3D = _burial_traces.get(cid, null)
+	if trace == null or not is_instance_valid(trace):
+		trace = MeshInstance3D.new()
+		trace.name = "Trace_%s" % cid
+		trace.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(trace)
+		_burial_traces[cid] = trace
+	trace.mesh = tmesh
+	if not (trace.material_override is StandardMaterial3D):
+		var tm := StandardMaterial3D.new()
+		tm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		tm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		tm.emission_enabled = true
+		tm.emission_energy_multiplier = 1.5
+		trace.material_override = tm
+	var meta2: Dictionary = ConduitKinds.type_meta(type_id)
+	var tcol: Color = tint if tint.a > 0.01 else (meta2.get("color", Color.WHITE) as Color)
+	(trace.material_override as StandardMaterial3D).albedo_color = tcol
+	(trace.material_override as StandardMaterial3D).emission = tcol
+	return max_b
+
+
+## A dotted line as ONE mesh surface. ConduitMeshBuilder._build_dashed_tube_mesh
+## adds a SURFACE per dash, and a long buried run (hundreds of metres on the
+## soak map) blew past Godot's 256-surface cap every frame — one add_surface
+## error per dash per rebuild, and the capture died. The dashes are merged
+## into single arrays here, and their count is capped by stretching the
+## period, so the trace stays one draw whatever the run's length.
+const TRACE_MAX_DASHES := 240
+func _dotted_trace_mesh(pts: PackedVector3Array, radius: float) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	if pts.size() < 2:
+		return mesh
+	var total := ConduitKinds.polyline_length_m(pts)
+	var dash := 0.45
+	var gap := 0.3
+	var period := dash + gap
+	if total / period > float(TRACE_MAX_DASHES):
+		var k := (total / period) / float(TRACE_MAX_DASHES)
+		dash *= k
+		gap *= k
+		period = dash + gap
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	var at := 0.0
+	while at < total - 0.01:
+		var span := ConduitMeshBuilder._slice_polyline(pts, at, minf(at + dash, total))
+		at += period
+		if span.size() < 2:
+			continue
+		var part := ConduitMeshBuilder.build_tube(span, radius, 6)
+		if part.get_surface_count() < 1:
+			continue
+		var arrs: Array = part.surface_get_arrays(0)
+		var base := verts.size()
+		verts.append_array(arrs[Mesh.ARRAY_VERTEX])
+		norms.append_array(arrs[Mesh.ARRAY_NORMAL])
+		uvs.append_array(arrs[Mesh.ARRAY_TEX_UV])
+		var pi: PackedInt32Array = arrs[Mesh.ARRAY_INDEX]
+		for i in pi.size():
+			idx.append(pi[i] + base)
+	if verts.is_empty():
+		return mesh
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = idx
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _remove_burial_trace(cid: String) -> void:
+	var t: Variant = _burial_traces.get(cid, null)
+	if t != null and is_instance_valid(t):
+		(t as Node).queue_free()
+	_burial_traces.erase(cid)
+
+
+## Max burial (m) of a run's samples from its last rebuild (0 = on the surface).
+func burial_max_for(cid: String) -> float:
+	return float(_burial_max.get(cid, 0.0))
+
+
+## The ground trace node of a buried run (null = none).
+func burial_trace_for(cid: String) -> MeshInstance3D:
+	var t: Variant = _burial_traces.get(cid, null)
+	return t if (t != null and is_instance_valid(t)) else null
+
+
+## The outlet sink this culvert ends at, when it has NO prop (so nothing else
+## in 3D can be grabbed to move it); empty otherwise.
+func _propless_outlet_sink_for(conn: Dictionary) -> Dictionary:
+	if _model == null or str(conn.get("conduit_type", "")) != "culvert_pipe":
+		return {}
+	var tgt: Dictionary = _model.get_item(str(conn.get("target_item_id", "")))
+	if tgt.is_empty():
+		return {}
+	var sp: Dictionary = tgt.get("specs", {}) as Dictionary
+	if not bool(sp.get("outlet_sink", false)) or not str(sp.get("bound_prop_id", "")).is_empty():
+		return {}
+	return tgt
+
+
+## Keep (or make) the END marker of a draft pipe at its mouth.
+func _update_outlet_marker(cid: String, conn: Dictionary) -> void:
+	var sink := _propless_outlet_sink_for(conn)
+	if sink.is_empty():
+		_remove_outlet_marker(cid)
+		return
+	var samples := get_sample_points(cid)
+	if samples.size() < 2:
+		return
+	var mouth: Vector3 = samples[samples.size() - 1]
+	var dir: Vector3 = mouth - samples[samples.size() - 2]
+	var marker: OutletEndMarker = _outlet_markers.get(cid, null)
+	if marker == null or not is_instance_valid(marker):
+		marker = OutletEndMarker.new()
+		marker.name = "OutletEnd_%s" % cid
+		marker.conn_id = cid
+		var parent: Node = _main if _main != null else get_parent()
+		if parent == null:
+			parent = self
+		parent.add_child(marker)
+		_outlet_markers[cid] = marker
+	marker.sink_id = str(sink.get("id", ""))
+	marker.siphon_id = str(conn.get("source_item_id", ""))
+	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	var od := ConduitKinds.outer_diameter_m(type_id, conn.get("conduit_style", {}) as Dictionary)
+	marker.set_mouth(mouth, dir, (od * 0.5) if od > 0.0 else 0.1)
+
+
+func _remove_outlet_marker(cid: String) -> void:
+	var marker: Variant = _outlet_markers.get(cid, null)
+	if marker != null and is_instance_valid(marker):
+		(marker as Node).queue_free()
+	_outlet_markers.erase(cid)
+
+
+## The END marker of a connection ("" / null when it has none).
+func outlet_marker_for(cid: String) -> OutletEndMarker:
+	var m: Variant = _outlet_markers.get(cid, null)
+	return m if (m != null and is_instance_valid(m)) else null
+
+
+## True when a conduit pick on `cid` lands at the pipe's END, where the END
+## marker lives: the crosshair ladder and the route controller must hand that
+## pick to the marker (a drag there is "move the outlet", not "insert a pin").
+func is_outlet_terminal_pick(cid: String, point: Vector3) -> bool:
+	if cid.is_empty() or not is_finite(point.x) or _model == null:
+		return false
+	var conn: Dictionary = _model.get_connection(cid)
+	if conn.is_empty() or _propless_outlet_sink_for(conn).is_empty():
+		return false
+	var samples := get_sample_points(cid)
+	if samples.size() < 1:
+		return false
+	return samples[samples.size() - 1].distance_to(point) <= OUTLET_END_PICK_M
 
 
 ## Resolve global anchor for a graph item.
@@ -1389,6 +1683,7 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 		tint = ConduitKinds.flow_tint_for_connection(conn)
 	# ABS DWV (etc.): assemble real straight + elbow GLB parts when the kit loads.
 	if _try_rebuild_pipe_parts(cid, conn, type_id, control, tint, severed):
+		_apply_burial_trace(cid, type_id, get_sample_points(cid), tint)
 		return
 	PipePartsAssembler.clear(self, cid)
 	CulvertAssembler.clear(self, cid)
@@ -1490,6 +1785,7 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	inst.visible = true
 	var samples: PackedVector3Array = built.get("sample_points", PackedVector3Array())
 	_sample_cache[cid] = samples
+	_apply_burial_cue(cid, inst, type_id, samples, tint, is_light, use_flow)
 	_sync_light_runtime(cid, conn, type_id, built, inst)
 	_sync_end_fittings(cid, conn, type_id, control, samples)
 	_apply_severed_state(cid, severed)
@@ -1501,6 +1797,33 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	if is_contour and control.size() >= 2:
 		_write_contour_inverts(cid, (control[0] as Vector3).y,
 				(control[control.size() - 1] as Vector3).y)
+		_write_contour_report(cid, samples)
+
+
+## Persist what the pipe would say about the route (tightest bend, high
+## points, siphon rise) — the Hydro Lab's design checks read these.
+func _write_contour_report(conn_id: String, samples: PackedVector3Array) -> void:
+	if _model == null or samples.size() < 3:
+		return
+	var conn := _model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	var rep := ContourRouter.route_report(samples)
+	var r := float(rep.get("min_bend_r_m", INF))
+	var r_store := -1.0 if not is_finite(r) else r
+	var hp := int(rep.get("high_points", 0))
+	var rise := float(rep.get("rise_above_intake_m", 0.0))
+	if absf(float(conn.get("route_min_bend_r_m", -2.0)) - r_store) < 0.01 \
+			and int(conn.get("route_high_points", -1)) == hp \
+			and absf(float(conn.get("route_rise_m", -1.0)) - rise) < 0.02:
+		return
+	_updating_model = true
+	_model.update_connection(conn_id, {
+		"route_min_bend_r_m": r_store,
+		"route_high_points": hp,
+		"route_rise_m": rise,
+	})
+	_updating_model = false
 
 
 ## Persist a contour run's endpoint elevations onto the connection
@@ -2042,6 +2365,8 @@ func _finish_parts_instance(cid: String, conn: Dictionary, type_id: String,
 
 
 func _remove_instance(conn_id: String) -> void:
+	_remove_outlet_marker(conn_id)
+	_remove_burial_trace(conn_id)
 	PipePartsAssembler.clear(self, conn_id)
 	CulvertAssembler.clear(self, conn_id)
 	_parts_active.erase(conn_id)

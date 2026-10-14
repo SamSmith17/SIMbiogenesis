@@ -112,11 +112,14 @@ var _ambient_ghi_wm2: float = 0.0
 var _ambient_cloud_frac: float = 0.0
 var _ambient_atmo: Dictionary = {}
 
-## Cached seasonal supply curve for a stream intake (12 × L/s), keyed on the
-## intake's AUTHORED params. Feeds the annual-energy estimate only; the live tick
-## uses the instantaneous supply.
-var _supply_profile: PackedFloat32Array = PackedFloat32Array()
-var _supply_profile_sig: String = ""
+## Cached seasonal supply curves, PER INTAKE: intake id -> {sig, prof}. Feeds
+## the annual-energy estimate only; the live tick uses the instantaneous
+## supply. (One engine-wide field used to thrash between two stream-fed
+## turbines and recompute 12 values + a weather lookup every tick.)
+var _supply_profiles: Dictionary = {}
+## The routed contour penstock per turbine, memoised for ONE step — five
+## separate callers used to rescan every connection each tick.
+var _penstock_conn_cache: Dictionary = {}
 
 ## conn_id -> {rate, active} cached for wire animation
 var _conn_flow: Dictionary = {}
@@ -148,6 +151,7 @@ var _conn_by_id: Dictionary = {}
 ## once per tick, replacing what used to be an O(connections) scan PER PORT
 ## LOOKUP (of which a single processor tick can do several).
 func _rebuild_conn_index() -> void:
+	_penstock_conn_cache.clear()
 	_conn_by_source.clear()
 	_conn_by_target.clear()
 	_resource_conns_by_source_item.clear()
@@ -444,6 +448,16 @@ func _read_all_tanks_at(abs_hours: float) -> void:
 		_apply_tank_sample(item, sample, tl, abs_hours)
 
 
+## Stage–storage curve helpers — thin delegators to PondBathymetry, the one
+## conversion shared with HydroReach and the 3D water.
+static func stage_level_for_stock(curve: Array, stock_l: float) -> float:
+	return PondBathymetry.stage_level_for_stock(curve, stock_l)
+
+
+static func stage_area_at_level(curve: Array, level_m: float) -> float:
+	return PondBathymetry.stage_area_at_level(curve, level_m)
+
+
 func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 		tl: ResourceTimeline = null, abs_hours: float = -1.0) -> void:
 	var orig_specs: Dictionary = item.get("specs", {}) as Dictionary
@@ -458,11 +472,21 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 			and str(specs.get("fill_mode", "auto")) != "manual":
 		var cap := maxf(float(specs.get("capacity_qty", 100.0)), 0.001)
 		specs["stock_l"] = clampf(float(specs["level"]), 0.0, 1.0) * cap
-		var rim := float(specs.get("rim_m", NAN))
-		var floor_y := float(specs.get("floor_m", NAN))
-		if not is_nan(rim) and not is_nan(floor_y):
-			var span := maxf(rim - floor_y, 0.05)
-			specs["level_m"] = floor_y + clampf(float(specs["level"]), 0.0, 1.0) * span
+		# ONE level authority: the basin's stage–storage curve (stamped by the
+		# view from the same bathymetry the 3D water uses). Linear floor→rim
+		# only when no curve is known (offline / a pond with no terrain).
+		var curve: Variant = specs.get("stage_curve", null)
+		var lvl_curve := NAN
+		if curve is Array and (curve as Array).size() >= 2:
+			lvl_curve = stage_level_for_stock(curve as Array, float(specs["stock_l"]))
+		if not is_nan(lvl_curve):
+			specs["level_m"] = lvl_curve
+		else:
+			var rim := float(specs.get("rim_m", NAN))
+			var floor_y := float(specs.get("floor_m", NAN))
+			if not is_nan(rim) and not is_nan(floor_y):
+				var span := maxf(rim - floor_y, 0.05)
+				specs["level_m"] = floor_y + clampf(float(specs["level"]), 0.0, 1.0) * span
 	var iid := str(item.get("id", ""))
 	var overflow_flip := false
 	var over := false
@@ -486,6 +510,13 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 		specs["node_state_reason"] = GraphNodeState.REASON_TANK_FULL if over else ""
 		specs["node_state_kinds"] = []
 
+	# Pond water budget for this step (inflow breakdown + spill), stamped so the
+	# inspector can say where the water came from and where it went.
+	if _pond_budget.has(str(item.get("id", ""))):
+		var b: Dictionary = _pond_budget[str(item.get("id", ""))]
+		specs["budget_rain_lph"] = float(b.get("rain", 0.0))
+		specs["budget_stream_lph"] = float(b.get("stream", 0.0))
+		specs["budget_spill_lph"] = float(b.get("spill", 0.0))
 	# Skip the model write (and the redraw/telemetry cascade it triggers) when
 	# nothing the UI actually reads has moved beyond float noise — an idle
 	# tank's level/rates are unchanged tick to tick. The sample/overflow
@@ -497,7 +528,10 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 		or absf(float(specs.get("inflow_rate", 0.0)) - float(orig_specs.get("inflow_rate", 0.0))) > EPS \
 		or absf(float(specs.get("outflow_rate", 0.0)) - float(orig_specs.get("outflow_rate", 0.0))) > EPS \
 		or bool(specs.get("overflowing", false)) != bool(orig_specs.get("overflowing", false)) \
-		or absf(float(specs.get("overflow_qty", 0.0)) - float(orig_specs.get("overflow_qty", 0.0))) > EPS
+		or absf(float(specs.get("overflow_qty", 0.0)) - float(orig_specs.get("overflow_qty", 0.0))) > EPS \
+		or absf(float(specs.get("budget_spill_lph", 0.0)) - float(orig_specs.get("budget_spill_lph", 0.0))) > 1.0 \
+		or absf(float(specs.get("budget_rain_lph", 0.0)) - float(orig_specs.get("budget_rain_lph", 0.0))) > 1.0 \
+		or absf(float(specs.get("budget_stream_lph", 0.0)) - float(orig_specs.get("budget_stream_lph", 0.0))) > 1.0
 	if value_changed:
 		_model.update_item(iid, {"specs": specs})
 	if new_state != prev_state:
@@ -538,6 +572,9 @@ func _integrate_deficit_tank(iid: String, specs: Dictionary,
 func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_rebuild_conn_index()
 	_refresh_ambient_cache()
+	_pond_budget.clear()
+	_stream_catch_m2 = {}
+	_stream_catch_valid = false
 	# Per-tank net rates (qty/hour in tank's capacity units)
 	var net_rates: Dictionary = {}
 
@@ -555,7 +592,9 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_process_culvert_stage_discharge(net_rates, dt_hours, abs_hours)
 	_process_siphon_hydro(net_rates, dt_hours, abs_hours)
 	_process_jit_transfers(net_rates, dt_hours, abs_hours)
+	_credit_stream_inflows(net_rates, dt_hours, abs_hours)
 	_apply_external_flows(net_rates, dt_hours)
+	_pond_budget_pass(net_rates, dt_hours, abs_hours)
 
 	# Integrate timelines
 	for item: Dictionary in _model.items_of_type("resource"):
@@ -597,7 +636,11 @@ func _process_pbi(item: Dictionary, _abs_hours: float) -> void:
 	var area_m2 := _soi_area_m2()
 	var total_lph: float = maxf(area_m2, 0.0) * maxf(rain_mmh, 0.0)
 	specs["live_capture_lph"] = total_lph
-	specs["display_value"] = "%.0f L/h" % total_lph if total_lph > 0.0 else "0 L/h"
+	# Say the RATE first: the volume is rain over the whole SoI, which no tank
+	# receives as such (ponds take their own surface + their streams).
+	specs["live_rain_mmh"] = rain_mmh
+	specs["display_value"] = ("%.1f mm/h · %.0f m³/h on SoI" % [rain_mmh, total_lph / 1000.0]) \
+			if total_lph > 0.0 else "dry"
 	specs["is_active"] = rain_mmh > 0.0
 	var iid := str(item.get("id", ""))
 	_model.update_item(iid, {"specs": specs})
@@ -932,6 +975,13 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 		_model.update_item(str(item.get("id", "")), {"specs": specs})
 		return
 	var area_m2: float = _catchment_area_m2(specs)
+	# A hillside catchment and a mapped stream into the same pond drain the SAME
+	# ground: the stream already carries its upstream area's runoff, so that
+	# part of the watershed must not be counted again.
+	if kind == "watershed":
+		var covered := _stream_area_into_targets(str(item.get("id", "")))
+		specs["stream_covered_m2"] = covered
+		area_m2 = maxf(area_m2 - covered, 0.0)
 	var runoff: float = float(specs.get("runoff_coeff", 0.85 if not pond_direct else 1.0))
 	var rain_mmh := _rain_rate_mmh()
 	# mm/h * m² = L/h (1 mm on 1 m² = 1 L)
@@ -1020,7 +1070,7 @@ func _apply_lab_sim_inflow_realtime(wall_dt_s: float) -> void:
 		# STREAM tap: there is no pond to fill, so the test flow is the supply
 		# itself and the answer is instantaneous. Re-evaluating here is what makes
 		# dragging the Lab's test L/s move the power NOW rather than only once the
-		# clock is unfrozen — the Lab holds the clock at noon, so without this the
+		# clock is unfrozen — with the clock frozen (paused) nothing ticks, so without this the
 		# knob looks completely inert, which is exactly how it was reported.
 		if not _stream_intake_for(item).is_empty():
 			var dt_h_stream := (wall_dt_s * LAB_PAUSE_FILL_SCALE) / 3600.0
@@ -1115,6 +1165,7 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 		_abs_hours: float) -> void:
 	if _model == null:
 		return
+	_stream_diversions.clear()
 	for item: Dictionary in _model.items:
 		if str(item.get("type", "")) != "processor":
 			continue
@@ -1231,6 +1282,9 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			pond_stock = clampf(float(tank_specs.get("level", 0.0)), 0.0, 1.0) * pond_cap
 		_reach.set_pond(float(tank_specs.get("floor_m", NAN)),
 			float(tank_specs.get("rim_m", NAN)), pond_cap, pond_stock)
+		var reach_curve: Variant = tank_specs.get("stage_curve", null)
+		if reach_curve is Array:
+			_reach.set_stage_curve(reach_curve as Array)
 		var r := _reach.evaluate(level_m)
 		# Mirror resolved start/break back onto specs (keeps modal + hydraulics synced).
 		var start_m := float(r.get("siphon_start_m", NAN))
@@ -1256,6 +1310,26 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 		var q_lph := float(r.get("q_lph", 0.0))
 		var drained_lph := _reach.drainable_lph(q_lph, maxf(dt_hours, 0.0))
 		var q_lps := drained_lph / 3600.0
+		# Watts follow the water that ACTUALLY moved. The reach reports the
+		# operating point at this level; a near-empty source (or the crossing
+		# tick into the dead pool) passes less, and an empty one passes none —
+		# without this a turbine fed by an empty tank reported full power and
+		# charged the battery with water that never existed. Paused (dt 0):
+		# honest only if the source could sustain the flow for one second.
+		var water_frac := 1.0
+		if q_lph > 1e-6:
+			if dt_hours > 1e-9:
+				water_frac = clampf(drained_lph / q_lph, 0.0, 1.0)
+			elif _reach.drainable_lph(q_lph, 1.0 / 3600.0) < q_lph * 0.999:
+				water_frac = 0.0
+				drained_lph = 0.0
+				q_lps = 0.0
+		if water_frac < 0.9999:
+			specs["live_power_w"] = float(specs.get("live_power_w", 0.0)) * water_frac
+			specs["current_output_kw"] = float(specs.get("current_output_kw", 0.0)) * water_frac
+			specs["live_q_lps"] = q_lps
+			if water_frac <= 1e-6:
+				specs["live_rpm"] = 0.0
 		# Stamp water I/O rates for port labels (L/h) — the effective moved flow.
 		var inputs: Array = specs.get("inputs", []) as Array
 		var outputs: Array = specs.get("outputs", []) as Array
@@ -1268,7 +1342,7 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			if str(od.get("kind", "")) == "water":
 				od["rate"] = drained_lph
 			elif str(od.get("kind", "")) == "dc_electricity":
-				od["rate"] = float(r.get("power_kw", 0.0))
+				od["rate"] = float(specs.get("current_output_kw", 0.0))
 		specs["inputs"] = inputs
 		specs["outputs"] = outputs
 		var new_state := GraphNodeState.IDLE
@@ -1407,12 +1481,27 @@ func _process_spec_driven_hydro(item: Dictionary, specs: Dictionary,
 		# unlimited_capacity, so a spring is never drained — which also keeps the
 		# ambient conservation assertions honest.
 		var intake := _stream_intake_for(item)
+		var tail_down := _resolve_siphon_outlet_tank(item)
 		if not intake.is_empty():
 			var isp: Dictionary = intake.get("specs", {}) as Dictionary
 			if not bool(isp.get("unlimited_capacity", false)):
 				var iid := str(intake.get("id", ""))
 				net_rates[iid] = float(net_rates.get(iid, 0.0)) - water_lph
-		_credit_outlet_sink(_resolve_siphon_outlet_tank(item), net_rates,
+			# DIVERSION: when the tailwater is delivered somewhere (a wired
+			# outlet), the water no longer runs on down the stream, so the
+			# pond that stream ends in must not also receive it. With no
+			# outlet wired the tailrace returns to the stream it came from
+			# and the stream arrives whole — mass-neutral either way.
+			var fid := str(isp.get("water_feature_id", ""))
+			if not fid.is_empty() and not tail_down.is_empty():
+				_stream_diversions[fid] = float(_stream_diversions.get(fid, 0.0)) + q_lps
+		var tail_label := ""
+		if not tail_down.is_empty():
+			tail_label = str((tail_down.get("specs", {}) as Dictionary).get("name", "outlet"))
+		elif not intake.is_empty():
+			tail_label = "back to the stream"
+		specs["live_tailrace"] = tail_label
+		_credit_outlet_sink(tail_down, net_rates,
 				water_lph, dt_hours, str(intake.get("id", "")))
 		# Glow the outlet culvert AND the penstock itself. Without the second one
 		# the pipe the player just routed never animates, which reads as "the water
@@ -1590,6 +1679,18 @@ func _resolve_siphon_inlet_tank(item: Dictionary) -> Dictionary:
 	if _model == null:
 		return {}
 	var proc_id := str(item.get("id", ""))
+	# A ROUTED penstock is the authority for what feeds a penstock turbine: a
+	# stray plain wire from some other tank into the same port (an old test
+	# tank, a hand-drawn "supply") must not out-vote the pipe the player laid.
+	# The first-wire-wins rule below picked an empty 100 L tank carrying a
+	# copied pond level over the stream intake at the head of the penstock.
+	var pk_meta := HydroSource.kind_meta(str((item.get("specs", {}) as Dictionary).get("turbine_kind", "siphon")))
+	if bool(pk_meta.get("has_penstock", false)):
+		var pconn := _penstock_conn_for(proc_id)
+		if not pconn.is_empty() and str(pconn.get("target_item_id", "")) == proc_id:
+			var psrc := _model.get_item(str(pconn.get("source_item_id", "")))
+			if not psrc.is_empty() and str(psrc.get("type", "")) == "resource":
+				return psrc
 	# Water input port → pond storage tank.
 	var tank_id := _tank_at_port(proc_id, "res_in_0", true)
 	if tank_id.is_empty():
@@ -1807,6 +1908,11 @@ func _adopt_penstock_conn(item: Dictionary, specs: Dictionary) -> bool:
 func _pond_level_of(tank: Dictionary) -> float:
 	if tank.is_empty():
 		return NAN
+	# A stream intake never has a reservoir level, even when stale pond fields
+	# were copied onto it (an intake minted off a pond carried level_m/rim_m
+	# and read as a full pond at that height).
+	if is_stream_intake(tank):
+		return NAN
 	var ts: Dictionary = tank.get("specs", {}) as Dictionary
 	var level_m := float(ts.get("level_m", NAN))
 	if not is_nan(level_m):
@@ -1882,6 +1988,16 @@ func _resolve_penstock_supply_lps(item: Dictionary, specs: Dictionary,
 	var override_on := bool(specs.get("lab_sim_inflow_enabled", false))
 	var target := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0) if override_on \
 			else HydroSupply.intake_supply_lps(isp, rain_mmh)
+	# An intake standing in a mapped / drawn stream takes THAT stream's
+	# discharge (base flow + rain on its real catchment) instead of the
+	# authored spring numbers. A dry stream still reports 0.0 — present and
+	# zero is DRY, never "unconstrained" (the supply_lps contract).
+	var wf: Dictionary = {}
+	if not override_on and _host != null and _host.has_method("water_feature_supply_for_intake"):
+		wf = _host.call("water_feature_supply_for_intake", intake, rain_mmh)
+	if not wf.is_empty():
+		target = maxf(float(wf.get("q_lps", 0.0)), 0.0)
+	var wf_id := str(wf.get("feature_id", ""))
 	var q := target
 	if not override_on:
 		# Optional storm recession. State lives in the intake's own visible spec so
@@ -1893,11 +2009,20 @@ func _resolve_penstock_supply_lps(item: Dictionary, specs: Dictionary,
 					maxf(dt_hours, 0.0), tau)
 	var prev := float(isp.get("live_supply_lps", NAN))
 	if migrated or is_nan(prev) or absf(prev - q) > 0.002 \
-			or bool(isp.get("supply_override", false)) != override_on:
+			or bool(isp.get("supply_override", false)) != override_on \
+			or str(isp.get("water_feature_id", "")) != wf_id:
 		isp["live_supply_lps"] = q
 		isp["live_rain_mmh"] = rain_mmh
 		isp["live_rain_term_lps"] = HydroSupply.rain_term_lps(isp, rain_mmh)
 		isp["supply_override"] = override_on
+		if wf_id.is_empty():
+			isp.erase("water_feature_id")
+			isp.erase("water_feature_name")
+			isp.erase("water_feature_area_m2")
+		else:
+			isp["water_feature_id"] = wf_id
+			isp["water_feature_name"] = str(wf.get("name", ""))
+			isp["water_feature_area_m2"] = float(wf.get("area_m2", 0.0))
 		_model.update_item(str(intake.get("id", "")), {"specs": isp})
 	specs["supply_lps"] = q
 	specs["penstock_source_mode"] = "stream"
@@ -1906,15 +2031,26 @@ func _resolve_penstock_supply_lps(item: Dictionary, specs: Dictionary,
 	# rainfall profile, not something to redo on every tick. The live path keeps
 	# using the instantaneous `supply_lps` above; this is a separate key precisely
 	# so the two cannot be confused (a monthly MEAN would be wrong for live rain).
-	var prof_sig := "%.4f|%.4f|%.2f" % [
+	var prof_sig := "%.4f|%.4f|%.2f|%s|%.0f" % [
 		float(isp.get("base_flow_lps", 0.0)),
 		float(isp.get("rain_lps_per_tenth_in_h", 0.0)),
-		float(isp.get("max_flow_lps", 0.0))]
-	if prof_sig != _supply_profile_sig:
-		_supply_profile_sig = prof_sig
-		_supply_profile = HydroSupply.monthly_supply_lps(isp, _monthly_rain_mmh())
-	if not _supply_profile.is_empty():
-		specs["supply_monthly_lps"] = _supply_profile
+		float(isp.get("max_flow_lps", 0.0)), wf_id, float(wf.get("area_m2", 0.0))]
+	var intake_id := str(intake.get("id", ""))
+	var cached: Dictionary = _supply_profiles.get(intake_id, {})
+	var profile: Array = cached.get("prof", [])
+	if str(cached.get("sig", "")) != prof_sig:
+		profile = []
+		if wf_id.is_empty():
+			profile = Array(HydroSupply.monthly_supply_lps(isp, _monthly_rain_mmh()))
+		else:
+			# The stream's own seasonal curve: base flow + rational-method runoff
+			# off its catchment at each month's mean rain rate.
+			for r in _monthly_rain_mmh():
+				profile.append(StreamHydraulics.discharge_lps(
+					float(wf.get("base_lps", 0.0)), float(wf.get("area_m2", 0.0)), float(r)))
+		_supply_profiles[intake_id] = {"sig": prof_sig, "prof": profile}
+	if not profile.is_empty():
+		specs["supply_monthly_lps"] = profile
 	else:
 		specs.erase("supply_monthly_lps")
 	return q
@@ -1923,6 +2059,14 @@ func _resolve_penstock_supply_lps(item: Dictionary, specs: Dictionary,
 func _penstock_conn_for(proc_id: String) -> Dictionary:
 	if _model == null or proc_id.is_empty():
 		return {}
+	if _penstock_conn_cache.has(proc_id):
+		return _penstock_conn_cache[proc_id]
+	var found := _find_penstock_conn(proc_id)
+	_penstock_conn_cache[proc_id] = found
+	return found
+
+
+func _find_penstock_conn(proc_id: String) -> Dictionary:
 	for conn: Dictionary in _model.connections:
 		if str(conn.get("source_item_id", "")) != proc_id \
 				and str(conn.get("target_item_id", "")) != proc_id:
@@ -2212,7 +2356,7 @@ func _credit_catchment_flow(item: Dictionary, net_rates: Dictionary,
 		if str(tgt_specs.get("resource_kind", "")) != want_kind:
 			continue
 		var tl: ResourceTimeline = _timelines.get(tgt_id) as ResourceTimeline
-		if not _tank_accepts_inflow(tgt_specs, tl, abs_h):
+		if not _is_pond_tank(tgt_specs) and not _tank_accepts_inflow(tgt_specs, tl, abs_h):
 			_cache_conn_flow(str(conn.get("id", "")), 0.0, want_kind)
 			continue
 		targets.append({
@@ -2226,9 +2370,15 @@ func _credit_catchment_flow(item: Dictionary, net_rates: Dictionary,
 		var tgt_specs2: Dictionary = t.get("specs", {}) as Dictionary
 		var tl2: ResourceTimeline = t.get("tl") as ResourceTimeline
 		var credit: float = share
+		if _is_pond_tank(tgt_specs2):
+			# Ponds: the spill pass caps them and routes the surplus.
+			if not bool(tgt_specs2.get("input_valve_open", true)):
+				credit = 0.0
+			elif want_kind == "water":
+				_book_pond(tgt_id2, "rain", credit)
 		# Cap to remaining headroom so catchments do not toast-overflow tanks.
 		# Use 0.999 ceiling to stay below ResourceTimeline.is_overflowing_at.
-		if not _tank_is_unlimited(tgt_specs2) and dt_hours > 0.001:
+		elif not _tank_is_unlimited(tgt_specs2) and dt_hours > 0.001:
 			var lvl: float = 0.0
 			if tl2 != null:
 				lvl = tl2.level_at(abs_h)
@@ -3007,6 +3157,40 @@ func set_habitat_demand(item_id: String, rates: Dictionary) -> void:
 ## one habitat. Applied on the next step as a rate over that step, so the mass
 ## is exact whatever the cadence. Only `resource` items take them; anything
 ## else is dropped (a kitchen processor is driven by its own inputs).
+## Streams of the WaterNetwork that end in a pond on the graph fill it: the
+## host maps each to a tank item ({tank_id -> L/s}); credited like a catchment,
+## capped to the tank's headroom.
+func _credit_stream_inflows(net_rates: Dictionary, dt_hours: float, abs_h: float) -> void:
+	if _host == null or not _host.has_method("stream_pond_inflows"):
+		return
+	var inflows: Dictionary = _host.call("stream_pond_inflows", _rain_rate_mmh(), _stream_diversions)
+	for tid in inflows.keys():
+		var tank := _model.get_item(str(tid))
+		if tank.is_empty() or str(tank.get("type", "")) != "resource":
+			continue
+		var ts: Dictionary = (tank.get("specs", {}) as Dictionary).duplicate(true)
+		_rk.migrate_resource_specs(ts)
+		if str(ts.get("resource_kind", "")) != "water":
+			continue
+		var tl: ResourceTimeline = _timelines.get(str(tid)) as ResourceTimeline
+		var lph := maxf(float(inflows[tid]), 0.0) * 3600.0
+		# A pond takes the whole stream; what it cannot hold leaves over the
+		# spillway in _pond_budget_pass (measured, never silently dropped).
+		if _is_pond_tank(ts):
+			if bool(ts.get("input_valve_open", true)) and lph > 0.0:
+				net_rates[str(tid)] = float(net_rates.get(str(tid), 0.0)) + lph
+				_book_pond(str(tid), "stream", lph)
+			continue
+		if not _tank_accepts_inflow(ts, tl, abs_h):
+			continue
+		if not _tank_is_unlimited(ts) and dt_hours > 0.001:
+			var lvl := tl.level_at(abs_h) if tl != null else float(ts.get("level", 0.0))
+			var cap := maxf(_effective_capacity_qty(ts), 0.001)
+			lph = minf(lph, maxf(0.998 - lvl, 0.0) * cap / dt_hours)
+		if lph > 0.0:
+			net_rates[str(tid)] = float(net_rates.get(str(tid), 0.0)) + lph
+
+
 func add_external_flow(item_id: String, kind: String, qty: float) -> void:
 	if item_id.is_empty() or qty == 0.0:
 		return
@@ -3016,6 +3200,96 @@ func add_external_flow(item_id: String, kind: String, qty: float) -> void:
 
 
 var _external_flows: Dictionary = {}
+## feature_id -> L/s taken out of a stream by penstock turbines whose tailwater
+## is delivered elsewhere this step (rebuilt in _process_siphon_hydro, read by
+## _credit_stream_inflows later in the same step).
+var _stream_diversions: Dictionary = {}
+## tank_id -> {rain, stream, spill} L/h for pond tanks this step.
+var _pond_budget: Dictionary = {}
+var _stream_catch_m2: Dictionary = {}
+var _stream_catch_valid := false
+
+
+static func _is_pond_tank(specs: Dictionary) -> bool:
+	return bool(specs.get("pond_storage", false)) \
+			and str(specs.get("fill_mode", "auto")) != "manual"
+
+
+func _book_pond(tid: String, key: String, lph: float) -> void:
+	var b: Dictionary = _pond_budget.get(tid, {})
+	b[key] = float(b.get(key, 0.0)) + lph
+	_pond_budget[tid] = b
+
+
+## Upstream area (m²) of mapped streams ending in a tank this catchment feeds.
+func _stream_area_into_targets(catchment_id: String) -> float:
+	if not _stream_catch_valid:
+		_stream_catch_valid = true
+		if _host != null and _host.has_method("stream_pond_catchment_m2"):
+			_stream_catch_m2 = _host.call("stream_pond_catchment_m2") as Dictionary
+	var covered := 0.0
+	for conn: Dictionary in (_resource_conns_by_source_item.get(catchment_id, []) as Array):
+		covered = maxf(covered, float(_stream_catch_m2.get(str(conn.get("target_item_id", "")), 0.0)))
+	return covered
+
+
+func _tank_has_surface_catchment(tid: String) -> bool:
+	for c: Dictionary in _model.items_of_type("catchment"):
+		if str((c.get("specs", {}) as Dictionary).get("catchment_kind", "")) != "pond":
+			continue
+		for conn: Dictionary in (_resource_conns_by_source_item.get(str(c.get("id", "")), []) as Array):
+			if str(conn.get("target_item_id", "")) == tid:
+				return true
+	return false
+
+
+## Every pond's own water budget, after all sources have credited it:
+##  - RAIN straight onto the open water (area = dV/dh off the stage curve, so
+##    it grows as the pond rises) — intrinsic, no catchment node to lose. A
+##    legacy pond-surface catchment wired to the tank still does this job.
+##  - SPILL: whatever would lift the pond past its fill ceiling leaves over the
+##    spillway this step, to `specs.spill_outlet_id` when one is set, and is
+##    reported either way. Before this the surplus vanished unseen and a pond
+##    with any base inflow simply sat pinned at its rim.
+func _pond_budget_pass(net_rates: Dictionary, dt_hours: float, abs_h: float) -> void:
+	if _model == null:
+		return
+	var rain := maxf(_rain_rate_mmh(), 0.0)
+	for item: Dictionary in _model.items_of_type("resource"):
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not _is_pond_tank(specs) or _tank_is_unlimited(specs):
+			continue
+		var tid := str(item.get("id", ""))
+		var tl: ResourceTimeline = _timelines.get(tid) as ResourceTimeline
+		if tl == null:
+			continue
+		if rain > 0.0 and bool(specs.get("input_valve_open", true)) \
+				and not _tank_has_surface_catchment(tid):
+			var area := NAN
+			var curve: Variant = specs.get("stage_curve", null)
+			if curve is Array:
+				area = stage_area_at_level(curve as Array, float(specs.get("level_m", NAN)))
+			if is_nan(area) or area <= 0.0:
+				area = maxf(float(specs.get("footprint_w_m", 0.0)), 0.0) \
+						* maxf(float(specs.get("footprint_d_m", 0.0)), 0.0)
+			var lph := area * rain  # 1 mm on 1 m² = 1 L
+			if lph > 0.0:
+				net_rates[tid] = float(net_rates.get(tid, 0.0)) + lph
+				_book_pond(tid, "rain", lph)
+		if not _pond_budget.has(tid):
+			_pond_budget[tid] = {}
+		if dt_hours <= 1e-6:
+			continue
+		var cap := maxf(_effective_capacity_qty(specs), 0.001)
+		var allowed := maxf(1.0 - tl.level_at(abs_h), 0.0) * cap / dt_hours
+		var net := float(net_rates.get(tid, 0.0))
+		if net > allowed + 1e-6:
+			var spill := net - allowed
+			net_rates[tid] = allowed
+			_book_pond(tid, "spill", spill)
+			var out_id := str(specs.get("spill_outlet_id", ""))
+			if not out_id.is_empty() and out_id != tid:
+				_credit_outlet_sink(_model.get_item(out_id), net_rates, spill, dt_hours, tid)
 ## scope_id -> bool: per-camp AC availability (CampPowerModel). Scopes not
 ## listed fall back to the global AcPowerBus.
 var _scope_ac_available: Dictionary = {}

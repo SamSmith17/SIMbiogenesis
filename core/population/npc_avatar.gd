@@ -45,6 +45,20 @@ const PICK_CENTER_Y := 1.0
 const STATUS_BAR_WIDTH := 0.46
 const STATUS_BAR_HEIGHT := 0.055
 const STATUS_BAR_Y := HEIGHT_M + 0.12   # below the nametag (HEIGHT_M + 0.28)
+## Overhead labels SHRINK as you back away — sized as the old
+## constant-screen-size labels looked at LABEL_REF_M. (fixed_size made them
+## the same size on screen at every distance: tiny next to a body up close,
+## huge next to a speck far away — read as "smaller as I approach".) Real
+## world size inside LABEL_SHRINK_FROM_M; beyond it the stack is scaled by
+## sqrt(d / LABEL_SHRINK_FROM_M), so on screen it shrinks as 1/sqrt(d) —
+## always smaller further away, never a speck (pure world size was unreadable
+## by 8 m). It scales up from the top of the head, so it never sinks into it.
+const LABEL_REF_M := 5.0
+const LABEL_SHRINK_FROM_M := 3.0
+## The anchor's height (the top of the head); the stack sits LABEL_STACK_Y
+## above it, as it always has (the bar at STATUS_BAR_Y).
+const LABEL_BASE_Y := HEIGHT_M
+const LABEL_STACK_Y := STATUS_BAR_Y - HEIGHT_M
 
 var agent_id: String = ""
 var display_name: String = ""
@@ -55,11 +69,24 @@ var morale: float = 0.0
 var _root: Node3D = null            # animated sub-root (bob/lie-down)
 var _tag: Label3D = null
 var _status_root: Node3D = null     # holds the morale bar + the task tag
+## Parent of the name tag and the status stack, at the bar's height over the
+## head: scaled as one so the lines keep their spacing at any distance.
+var _label_anchor: Node3D = null
 var _bar_fill: MeshInstance3D = null
 var _bar_fill_mat: StandardMaterial3D = null
 var _task_lbl: Label3D = null
 var _task_text := ""
 var _trend_lbl: Label3D = null
+## The mood STATE as words over the head ("Fuck Maybe", green "FUCK YES!!!")
+## — always, where the bar is optional (NpcDisplayPrefs.mood_bars).
+var _state_lbl: Label3D = null
+## How close to FUCK YES: a thin green meter under the state words, with the
+## percentage and an arrow while peakers nearby are feeding it.
+var _buzz_track: MeshInstance3D = null
+var _buzz_fill: MeshInstance3D = null
+var _buzz_lbl: Label3D = null
+const BUZZ_BAR_WIDTH := 0.30
+const BUZZ_BAR_HEIGHT := 0.022
 var _morale_trend := 0.0
 ## Overhead readout visibility has TWO drivers with different owners: the host
 ## grants AMBIENT visibility by distance (the group-monitoring read), and the
@@ -77,6 +104,13 @@ var _simple: NpcSimpleFigure = null # articulated stick figure (the other style)
 var _rig: Node3D = null             # rigged body (built lazily)
 var _rig_ap: AnimationPlayer = null
 var _rig_mat: ShaderMaterial = null
+var _mood := 0.0
+var _peak_target := 0.0
+var _peak_level := 0.0
+var _peak_flash := 0.0
+var _buzz_target := 0.0
+var _buzz := 0.0
+var _buzz_fed := 0
 var _rigged := false                # is the rigged body the active one?
 var _tint := Color(0.6, 0.65, 0.8)
 var _activity := ""
@@ -126,7 +160,18 @@ func setup(p_agent_id: String, color: Color, p_name: String = "") -> void:
 	# whether or not the (gitignored) Mixamo pack is present. Without the merge
 	# every _has() guard skips them on a fresh clone — silently, on exactly the
 	# body they were written for.
-	_machine.set_catalog(NpcWorkPose.merge_catalog(NpcRig.catalog()))
+	var cat := NpcWorkPose.merge_catalog(NpcRig.catalog())
+	# The peak dance exists for every body: the stick figure and crowd draw a
+	# samba of their own, and _clip_file_for hands the rigged body the plain
+	# dance until the Samba export is installed.
+	if not cat.has(NpcRig.CLIP_PEAK_DANCE):
+		cat[NpcRig.CLIP_PEAK_DANCE] = {"len": 2.0, "loops": true}
+	# The ground poses and burn roles are procedural on the stick figure and
+	# aliased for the rigged body: they exist for every body.
+	for lc in NpcRig.LOGICAL_CLIPS:
+		if not cat.has(str(lc)):
+			cat[str(lc)] = {"len": 2.0, "loops": true}
+	_machine.set_catalog(cat)
 	_machine.set_walk_variant(NpcRig.walk_variant_for(p_agent_id))
 	_ensure_visuals()
 	# The articulated figure owns its own material. The old fixed-primitive
@@ -149,6 +194,45 @@ func set_tint(color: Color) -> void:
 		_rig_mat.set_shader_parameter("rim_color", color)
 
 
+## PEAK EXPERIENCE + mood glow, from the dot (the host calls this each tick):
+## `peak_since` NAN = not peaking. The body glow eases in over ~0.7 s with a
+## green ignition flash, and eases out when the peak ends.
+## `buzz` (0..1) is how close to a peak they are and `fed` how many peakers
+## nearby are feeding it (NpcPeak / PeakField) — the shimmer and the meter.
+func set_mood(morale_v: float, peak_since: float, buzz: float = 0.0, fed: int = 0) -> void:
+	var want := 0.0 if is_nan(peak_since) else 1.0
+	if want > 0.5 and _peak_target < 0.5:
+		_peak_flash = 1.0
+	_peak_target = want
+	_mood = clampf(morale_v, 0.0, 1.0)
+	var b := 0.0 if want > 0.5 else clampf(buzz, 0.0, 1.0)
+	if absf(b - _buzz_target) > 0.009 or fed != _buzz_fed:
+		_buzz_target = b
+		_buzz_fed = fed
+		if _status_root != null and _status_root.visible:
+			_update_buzz_meter()
+	_push_mood()
+
+
+func _ease_mood(delta: float) -> void:
+	if absf(_peak_level - _peak_target) < 0.001 and _peak_flash <= 0.0 			and absf(_buzz - _buzz_target) < 0.002:
+		return
+	_peak_level = move_toward(_peak_level, _peak_target, delta * 1.4)
+	_buzz = move_toward(_buzz, _buzz_target, delta * 0.8)
+	_peak_flash = maxf(_peak_flash - delta * 1.6, 0.0)
+	_push_mood()
+
+
+func _push_mood() -> void:
+	if _simple != null:
+		_simple.set_mood(_mood, _peak_level, _peak_flash, _buzz)
+	if _rig_mat != null:
+		_rig_mat.set_shader_parameter("buzz", _buzz)
+		_rig_mat.set_shader_parameter("mood", _mood)
+		_rig_mat.set_shader_parameter("peak", _peak_level)
+		_rig_mat.set_shader_parameter("peak_flash", _peak_flash)
+
+
 ## Live-refresh the display name (and nametag text). `setup()` only names an
 ## avatar once at creation; a rename in the Routines panel edits the live
 ## NpcAgent, and the host calls this every tick from agent_dots() so a rename
@@ -168,13 +252,11 @@ func _build_nametag() -> void:
 	_tag.name = "NameTag"
 	_tag.text = display_name
 	_tag.font_size = 40
-	# fixed_size: constant on-screen height regardless of distance — the old
-	# fixed WORLD size (pixel_size 0.0075) filled the screen up close and
-	# shrank to unreadable pixels at range. 0.0007 ≈ a 13 px line at 720p.
-	_tag.fixed_size = true
-	_tag.pixel_size = 0.0007
+	# World-sized (see LABEL_REF_M): 0.0007 was the constant-screen size.
+	_tag.fixed_size = false
+	_tag.pixel_size = 0.0007 * LABEL_REF_M
 	_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	_tag.position = Vector3(0.0, HEIGHT_M + 0.28, 0.0)
+	_tag.position = Vector3(0.0, 0.16, 0.0)
 	_tag.modulate = Color(1, 1, 1, 0.97)
 	_tag.outline_modulate = Color(0.02, 0.04, 0.09, 0.9)
 	_tag.outline_size = 8
@@ -184,7 +266,20 @@ func _build_nametag() -> void:
 	# through every building read as x-ray noise, not information.
 	_tag.no_depth_test = true
 	_tag.visible = false  # only for the person the crosshair is on
-	add_child(_tag)
+	_ensure_label_anchor().add_child(_tag)
+
+
+func _ensure_label_anchor() -> Node3D:
+	if _label_anchor == null:
+		_label_anchor = Node3D.new()
+		_label_anchor.name = "Labels"
+		_label_anchor.position = Vector3(0.0, LABEL_BASE_Y, 0.0)
+		add_child(_label_anchor)
+		var inner := Node3D.new()
+		inner.name = "Stack"
+		inner.position = Vector3(0.0, LABEL_STACK_Y, 0.0)
+		_label_anchor.add_child(inner)
+	return _label_anchor.get_node("Stack") as Node3D
 
 
 ## Live-refresh morale (and the bar, when visible). Called every tick from
@@ -209,11 +304,11 @@ func _build_status_bar() -> void:
 	_status_root = Node3D.new()
 	_status_root.name = "StatusBar"
 	_status_root.visible = false  # ambient (near) or focus shows it
-	add_child(_status_root)
+	_ensure_label_anchor().add_child(_status_root)
 
 	# Track (the empty/background part of the bar) — static, never rescaled.
 	var track := _make_bar_quad(Color(0.07, 0.08, 0.11, 0.85))
-	track.position = Vector3(0.0, STATUS_BAR_Y, 0.0)
+	track.position = Vector3(0.0, 0.0, 0.0)
 	(track.get_surface_override_material(0) as StandardMaterial3D).render_priority = 0
 	_status_root.add_child(track)
 
@@ -221,19 +316,36 @@ func _build_status_bar() -> void:
 	# edge (see _update_status_bar: a scaled-down quad shrinks toward its own
 	# centre, so the X position is re-derived every refresh to compensate).
 	_bar_fill = _make_bar_quad(Color.WHITE)
-	_bar_fill.position = Vector3(-STATUS_BAR_WIDTH * 0.5, STATUS_BAR_Y, 0.001)
+	_bar_fill.position = Vector3(-STATUS_BAR_WIDTH * 0.5, 0.0, 0.001)
 	_bar_fill_mat = _bar_fill.get_surface_override_material(0) as StandardMaterial3D
 	_bar_fill_mat.render_priority = 1
 	_status_root.add_child(_bar_fill)
 
-	_task_lbl = _make_status_label("", 20, Vector3(0.0, STATUS_BAR_Y - 0.085, 0.0))
+	_state_lbl = _make_status_label("", 24, Vector3(0.0, 0.02, 0.002))
+	_state_lbl.outline_size = 9
+	_status_root.add_child(_state_lbl)
+	_task_lbl = _make_status_label("", 20, Vector3(0.0, -0.085, 0.0))
 	_task_lbl.modulate = Color(0.92, 0.94, 0.97, 0.92)
 	_status_root.add_child(_task_lbl)
+
+	# The FUCK YES meter (named, so the mood-bar toggle below leaves it alone).
+	_buzz_track = _make_bar_quad(Color(0.05, 0.12, 0.07, 0.8), Vector2(BUZZ_BAR_WIDTH, BUZZ_BAR_HEIGHT))
+	_buzz_track.name = "BuzzTrack"
+	_buzz_track.position = Vector3(0.0, -0.035, 0.0)
+	_status_root.add_child(_buzz_track)
+	_buzz_fill = _make_bar_quad(NpcPeak.COLOR, Vector2(BUZZ_BAR_WIDTH, BUZZ_BAR_HEIGHT))
+	_buzz_fill.name = "BuzzFill"
+	_buzz_fill.position = Vector3(0.0, -0.035, 0.001)
+	(_buzz_fill.get_surface_override_material(0) as StandardMaterial3D).render_priority = 1
+	_status_root.add_child(_buzz_fill)
+	_buzz_lbl = _make_status_label("", 17, Vector3(BUZZ_BAR_WIDTH * 0.5 + 0.06, -0.035, 0.0))
+	_buzz_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_status_root.add_child(_buzz_lbl)
 
 	# Trend tick at the bar's right end: "unhappy" and "getting worse" are
 	# different triage cases, and the bar alone cannot tell them apart.
 	_trend_lbl = _make_status_label("", 20,
-		Vector3(STATUS_BAR_WIDTH * 0.5 + 0.075, STATUS_BAR_Y, 0.0))
+		Vector3(STATUS_BAR_WIDTH * 0.5 + 0.075, 0.0, 0.0))
 	_status_root.add_child(_trend_lbl)
 
 	_update_status_bar()
@@ -259,14 +371,17 @@ func set_task_text(text: String) -> void:
 		_task_lbl.text = _task_text
 
 
-func _make_bar_quad(color: Color) -> MeshInstance3D:
+func _make_bar_quad(color: Color, size := Vector2(STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT)) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var quad := QuadMesh.new()
-	quad.size = Vector2(STATUS_BAR_WIDTH, STATUS_BAR_HEIGHT)
+	quad.size = size
 	mi.mesh = quad
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	# Keep the node scale: the fill's scale.x IS the fraction, and the label
+	# anchor's distance scale must reach the bars too.
+	mat.billboard_keep_scale = true
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.albedo_color = color
 	mi.set_surface_override_material(0, mat)
@@ -279,10 +394,10 @@ func _make_status_label(text: String, font_size: int, pos: Vector3) -> Label3D:
 	var lbl := Label3D.new()
 	lbl.text = text
 	lbl.font_size = font_size
-	# Constant screen size (see _build_nametag) — the task tag was 2 px of
-	# noise at range and a billboard-sized word up close.
-	lbl.fixed_size = true
-	lbl.pixel_size = 0.0011
+	# World-sized, as it looked at LABEL_REF_M (see LABEL_REF_M); the anchor
+	# stops it shrinking past LABEL_WORLD_UNTIL_M.
+	lbl.fixed_size = false
+	lbl.pixel_size = 0.0011 * LABEL_REF_M
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lbl.position = pos
 	lbl.modulate = Color(1, 1, 1, 0.97)
@@ -307,6 +422,24 @@ func _update_status_bar() -> void:
 		_bar_fill_mat.albedo_color = fill_col
 	if _task_lbl != null:
 		_task_lbl.text = _task_text
+	# The mood STATE in words, in its band's colour (green for a peak). With
+	# the bar on it sits above the bar; off (the default) it takes its place.
+	if _state_lbl != null:
+		var peaking := morale_label == NpcPeak.LABEL
+		_state_lbl.text = morale_label if not morale_label.is_empty() else NpcMorale.label(morale)
+		var sc := NpcPeak.COLOR if peaking else NpcMorale.color(morale)
+		sc.a = (1.0 if _focus else _ambient_alpha) * 0.97
+		_state_lbl.modulate = sc
+		_state_lbl.position.y = 0.075 if NpcDisplayPrefs.mood_bars() else 0.02
+	# The morale BAR is off by default — the body glow and the words carry
+	# mood now (NpcDisplayPrefs.mood_bars); the task tag still shows.
+	var bars := NpcDisplayPrefs.mood_bars()
+	for child in _status_root.get_children():
+		if child is MeshInstance3D and child != _buzz_track and child != _buzz_fill:
+			(child as MeshInstance3D).visible = bars
+	_update_buzz_meter()
+	if _trend_lbl != null:
+		_trend_lbl.visible = bars
 	if _trend_lbl != null:
 		if _morale_trend >= 0.03:
 			_trend_lbl.text = "▲"
@@ -318,6 +451,34 @@ func _update_status_bar() -> void:
 			_trend_lbl.text = ""
 
 
+## The FUCK YES meter: how full this person's charge is, and — the arrow —
+## whether peakers nearby are feeding it right now. Hidden while peaking (the
+## words say FUCK YES!!! then) and when there is nothing in it.
+func _update_buzz_meter() -> void:
+	if _buzz_fill == null:
+		return
+	var peaking := morale_label == NpcPeak.LABEL
+	var show := not peaking and _buzz_target >= 0.04
+	_buzz_track.visible = show
+	_buzz_fill.visible = show
+	_buzz_lbl.visible = show
+	if not show:
+		return
+	var a := (1.0 if _focus else _ambient_alpha)
+	var frac := clampf(_buzz_target, 0.0, 1.0)
+	_buzz_fill.scale.x = maxf(frac, 0.001)
+	_buzz_fill.position.x = -BUZZ_BAR_WIDTH * 0.5 * (1.0 - frac)
+	var fc := NpcPeak.COLOR
+	fc.a = a
+	(_buzz_fill.get_surface_override_material(0) as StandardMaterial3D).albedo_color = fc
+	var tc := Color(0.05, 0.12, 0.07, 0.8 * a)
+	(_buzz_track.get_surface_override_material(0) as StandardMaterial3D).albedo_color = tc
+	_buzz_lbl.text = "%d%%%s" % [int(round(frac * 100.0)), "  ↑ %d peaking near" % _buzz_fed if _buzz_fed > 0 else ""]
+	var lc := NpcPeak.COLOR if _buzz_fed > 0 else Color(0.7, 0.9, 0.74)
+	lc.a = a * 0.95
+	_buzz_lbl.modulate = lc
+
+
 ## Host-driven LOD: `true` swaps in the rigged body, `false` the primitive.
 ## A request for the rig when no assets are installed is a silent no-op, which
 ## is why the primitive figure is never discarded.
@@ -326,6 +487,10 @@ func set_detail(rigged: bool) -> void:
 	# player chose it (a style, survives installing the art), or the rig is not
 	# installed (a missing-asset condition). Only the second is a fallback.
 	var want := rigged and NpcRig.available() and not NpcDisplayPrefs.wants_simple()
+	# The STICK figure's mo-cap spice rides the same budget as the rigged
+	# body (the nearest MAX_RIGGED people): a hidden skeleton per figure.
+	if _simple != null:
+		_simple.set_mocap_allowed(rigged and NpcDisplayPrefs.wants_simple())
 	if want == _rigged:
 		return
 	if want and _rig == null:
@@ -648,6 +813,8 @@ static func _is_gait(clip: String) -> bool:
 
 
 func _process(delta: float) -> void:
+	_ease_mood(delta)
+	_follow_head(delta)
 	if _frozen:
 		return
 	if _rigged:
@@ -666,10 +833,53 @@ func _process(delta: float) -> void:
 		elif _venue_pose == VenueCrowd.POSE_RAVE:
 			# The bass stage: the same dance, thrown harder and faster.
 			flavor = "rave"
+		elif _venue_pose == VenueCrowd.POSE_SWAY:
+			# Round a fire with music drifting over: a light sway.
+			flavor = "sway"
+		elif not _moving and _venue_pose == VenueCrowd.POSE_CHEER:
+			flavor = "cheer"
+		elif not _moving and _venue_pose == VenueCrowd.POSE_DJ:
+			flavor = "dj"
+		elif not _moving and (_venue_pose == "talk" or _space_type == "center_camp"):
+			# A conversation circle (NpcSocial) or center camp: the idle body
+			# takes turns gesturing.
+			flavor = "talk"
 		_simple.set_carry_box_suppressed(_carry_prop_live)
-		_simple.pose(_machine.clip(), _speed_scale, delta, flavor)
+		# Dancing within earshot of a playing stage: on its beat (StageBeat).
+		var clip := _machine.clip()
+		var dancing := not _moving and (clip == NpcRig.CLIP_DANCE or clip == NpcRig.CLIP_PEAK_DANCE
+			or flavor == "dj" or flavor == "rave" or flavor == "sway")
+		_simple.set_beat(StageBeat.at(global_position) if dancing else {})
+		_simple.pose(clip, _speed_scale, delta, flavor)
 		return
 
+
+
+## How far the head is below where it is when standing — sitting, lounging,
+## kneeling, lying — eased, so the name and status labels FOLLOW it down
+## instead of floating where a standing head would be.
+var _head_drop := 0.0
+
+
+func _follow_head(delta: float) -> void:
+	if (_status_root == null or not _status_root.visible) and (_tag == null or not _tag.visible):
+		return
+	var drop := 0.0
+	if _rigged:
+		if _machine != null:
+			drop = 1.15 if _machine.is_lying() else (0.65 if _machine.is_seated() else 0.0)
+	elif _simple != null:
+		drop = clampf(NpcSimpleFigure.STANDING_HEAD_Y - _simple.head_height(), 0.0, 1.6)
+	_head_drop = lerpf(_head_drop, drop, minf(delta * 6.0, 1.0))
+	if _label_anchor != null:
+		_label_anchor.position.y = LABEL_BASE_Y - _head_drop
+		# Real size near; shrinking as 1/sqrt(distance) on screen beyond.
+		var s := 1.0
+		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+		if cam != null:
+			s = sqrt(maxf(cam.global_position.distance_to(_label_anchor.global_position) / LABEL_SHRINK_FROM_M, 1.0))
+		if absf(_label_anchor.scale.x - s) > 0.01:
+			_label_anchor.scale = Vector3(s, s, s)
 
 
 ## Track the ground offset for where the CURRENT clip actually is, rather than
@@ -711,6 +921,7 @@ func _build_rig() -> void:
 
 	_rig_mat = ShaderMaterial.new()
 	_rig_mat.shader = load("res://core/population/npc_silhouette.gdshader")
+	_rig_mat.set_shader_parameter("pulse_seed", NpcHash.unit01(agent_id, "pose"))
 	_rig_mat.set_shader_parameter("rim_color", _tint)
 	var mesh_inst := NpcRig.find_mesh(fig)
 	if mesh_inst != null:

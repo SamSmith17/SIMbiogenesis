@@ -25,6 +25,8 @@ var _vol_spin: SpinBox
 var _terrain_cap_lbl: Label
 var _recalc_btn: Button
 var _fill_mode_opt: OptionButton
+var _max_spin: SpinBox
+var _max_lbl: Label
 var _graph_btn: Button
 var _del_btn: Button
 var _ws_lbl: Label
@@ -174,6 +176,29 @@ func _build_ui() -> void:
 	_terrain_cap_lbl.add_theme_font_size_override("font_size", 10)
 	_terrain_cap_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	terr_row.add_child(_terrain_cap_lbl)
+	# Max fill level: a dam above the basin's natural rim. Map ponds take it
+	# too — it is the one thing a player can set on a pond they did not carve.
+	var max_row := HBoxContainer.new()
+	max_row.add_theme_constant_override("separation", 6)
+	terr_row.add_child(max_row)
+	max_row.add_child(_field_label("Max fill level (m)"))
+	_max_spin = SpinBox.new()
+	_max_spin.step = 0.05
+	_max_spin.min_value = -1000.0
+	_max_spin.max_value = 9000.0
+	_max_spin.custom_minimum_size.x = 110.0
+	_max_spin.tooltip_text = "The highest the pond may fill (world metres). Above the basin rim it is a dam: capacity grows as a wall over the footprint, inflow can raise the pond past the rim, and a siphon crest above the rim becomes reachable. Or Ctrl-aim the pond surface in 3D and drag it up."
+	_max_spin.value_changed.connect(_on_max_level_changed)
+	max_row.add_child(_max_spin)
+	var max_reset := Button.new()
+	max_reset.text = "Rim"
+	max_reset.tooltip_text = "Back to the basin's natural rim"
+	max_reset.pressed.connect(func() -> void: _on_max_level_changed(NAN))
+	max_row.add_child(max_reset)
+	_max_lbl = Label.new()
+	_max_lbl.add_theme_color_override("font_color", C_MUTED)
+	_max_lbl.add_theme_font_size_override("font_size", 10)
+	terr_row.add_child(_max_lbl)
 	_recalc_btn = Button.new()
 	_recalc_btn.text = "Recalculate"
 	_recalc_btn.tooltip_text = "Recompute Auto capacity from terrain bathymetry"
@@ -296,6 +321,14 @@ func _load_from_loader() -> bool:
 	_fill_mode_opt.select(1 if fill_mode == "manual" else 0)
 	_fill_mode_opt.disabled = not is_user
 	_level_slider.editable = is_user and fill_mode != "manual"
+	var basin_rim := float(info.get("basin_rim_m", rim))
+	var mx := float(info.get("max_level_m", NAN))
+	if _max_spin != null:
+		_max_spin.value = basin_rim if is_nan(mx) else mx
+	if _max_lbl != null:
+		_max_lbl.text = "Basin rim %.2f m — at the rim (inflow spills there)" % basin_rim if (is_nan(mx) or mx <= basin_rim + 0.005) \
+				else "Basin rim %.2f m — dammed +%.2f m (capacity +%.0f L over the footprint)" % [
+					basin_rim, mx - basin_rim, (mx - basin_rim) * float(info.get("area_m2", 0.0)) * 1000.0]
 
 	var on_graph := bool(info.get("on_graph", false))
 	_graph_btn.text = "Remove from graph" if on_graph else "Add to graph"
@@ -337,6 +370,14 @@ func _on_level_changed(v: float) -> void:
 		return
 	if _loader.has_method("set_pond_fill_level"):
 		_loader.call("set_pond_fill_level", _idx, v)
+	_load_from_loader()
+
+
+func _on_max_level_changed(v: float) -> void:
+	if _syncing or _loader == null or _idx < 0:
+		return
+	if _loader.has_method("set_pond_max_level"):
+		_loader.call("set_pond_max_level", _idx, v)
 	_load_from_loader()
 
 

@@ -34,6 +34,16 @@ var _stores_vbox: VBoxContainer = null
 var _stores_sig := "<unset>"
 var _settlement_vbox: VBoxContainer = null
 var _settlement_sig := "<unset>"
+## SITE BALANCE card (SiteBalance.lines) — rebuilt on content change only.
+var _balance_vbox: VBoxContainer = null
+var _balance_sig := "<unset>"
+## Forward outlook (SiteProjection), recomputed every PROJECTION_EVERY_MS real
+## or when the clock moved > PROJECTION_EVERY_SIM_H — 168 solar evaluations.
+const PROJECTION_EVERY_MS := 20000
+const PROJECTION_EVERY_SIM_H := 0.25
+var _proj_lines: Array = []
+var _proj_ms := -1000000
+var _proj_abs_h := -1.0e12
 var _slow_last_ms := 0
 ## Rolling strip of the latest notable settlement-log lines (own named cursor,
 ## so this never races the toast drain or the challenge bake's watcher).
@@ -74,6 +84,7 @@ func refresh(force: bool = false) -> void:
 		_slow_last_ms = now_ms
 		_refresh_stores()
 		_refresh_settlement()
+		_refresh_balance()
 
 
 func _process(delta: float) -> void:
@@ -133,6 +144,14 @@ func _build_ui() -> void:
 	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_status_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	bat_meta.add_child(_status_lbl)
+
+	add_child(_card_section("⚖ SITE BALANCE"))
+	var bal_wrap := _card_body()
+	add_child(bal_wrap)
+	var bal_body := _card_inner(bal_wrap)
+	_balance_vbox = VBoxContainer.new()
+	_balance_vbox.add_theme_constant_override("separation", 2)
+	bal_body.add_child(_balance_vbox)
 
 	add_child(_card_section("🔁 NEEDS & CLOSURE"))
 	var closure_wrap := _card_body()
@@ -507,6 +526,98 @@ static func store_rows(items: Array) -> Array:
 	for kind: String in order:
 		out.append(by_kind[kind])
 	return out
+
+
+## The whole site's energy + water balance right now (SiteBalance): each
+## generator by name, make vs use, how long the battery lasts, and each pond's
+## inflows / outflows / spill.
+func _refresh_balance() -> void:
+	if _balance_vbox == null:
+		return
+	var model: GraphModel = null
+	if _graph_view != null:
+		model = _graph_view.get("model") as GraphModel
+	var su := _solar_ui()
+	var snap := {}
+	if su != null and is_instance_valid(su):
+		snap = {
+			"solar_kw": float(su.get("current_solar_kw") if su.get("current_solar_kw") != null else 0.0),
+			"graph_dc_kw": float(su.get("current_graph_dc_kw") if su.get("current_graph_dc_kw") != null else 0.0),
+			"aux_kw": float(su.get("current_aux_generation_kw") if su.get("current_aux_generation_kw") != null else 0.0),
+			"load_kw": float(su.get("current_load_kw") if su.get("current_load_kw") != null else 0.0),
+			"stored_kwh": float(su.get("battery_kwh_stored") if su.get("battery_kwh_stored") != null else 0.0),
+			"cap_kwh": float(su.get("BATTERY_CAPACITY_KWH") if su.get("BATTERY_CAPACITY_KWH") != null else 0.0),
+			"floor_pct": float(su.get("battery_soc_shutdown_pct") if su.get("battery_soc_shutdown_pct") != null else 10.0),
+		}
+	if model != null and not snap.is_empty():
+		# What the loads WANT, not what is served (0 while AC is shed).
+		snap["demand_kw"] = GraphAcLoad.demand_watts(model) / 1000.0
+	var rows: Array = []
+	if model != null:
+		rows = SiteBalance.lines(SiteBalance.compute(GraphNesting.walk_items(model, "root"), snap))
+		rows.append_array(_projection_lines(su, snap))
+	var parts := PackedStringArray()
+	for r_v in rows:
+		parts.append("%s|%s" % [str((r_v as Dictionary).get("tone", "")), str((r_v as Dictionary).get("text", ""))])
+	var sig := "\n".join(parts)
+	if sig == _balance_sig:
+		return
+	_balance_sig = sig
+	for c in _balance_vbox.get_children():
+		_balance_vbox.remove_child(c)
+		c.free()
+	if rows.is_empty():
+		var hint := Label.new()
+		hint.text = "Add generators, a battery or a pond to see the site balance"
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		_balance_vbox.add_child(hint)
+		return
+	for r_v2 in rows:
+		var r: Dictionary = r_v2
+		var lbl := Label.new()
+		lbl.text = str(r.get("text", ""))
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		var tone := str(r.get("tone", ""))
+		lbl.add_theme_color_override("font_color", UITheme.C_WARN if tone == "warn"
+				else (UITheme.C_GREEN if tone == "ok" else UITheme.C_TEXT_S))
+		_balance_vbox.add_child(lbl)
+
+
+## The next 24 h and 7 days at today's loads and hydro, with solar from the
+## real sun + weather at each hour (SiteProjection over SolarUI's pure
+## evaluator). Cached — it is 168 evaluations.
+func _projection_lines(su: Node, snap: Dictionary) -> Array:
+	if su == null or not is_instance_valid(su) or not su.has_method("evaluate_solar_at"):
+		return []
+	var main := su.get("main_node") as Node
+	if main == null or not main.has_method("get_absolute_hours"):
+		return []
+	var now_h := float(main.call("get_absolute_hours"))
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _proj_ms < PROJECTION_EVERY_MS and absf(now_h - _proj_abs_h) < PROJECTION_EVERY_SIM_H:
+		return _proj_lines
+	_proj_ms = now_ms
+	_proj_abs_h = now_h
+	var cap := float(snap.get("cap_kwh", 0.0))
+	if cap <= 0.0:
+		_proj_lines = []
+		return _proj_lines
+	var aux := float(snap.get("graph_dc_kw", 0.0)) + float(snap.get("aux_kw", 0.0))
+	var demand := maxf(float(snap.get("demand_kw", 0.0)), float(snap.get("load_kw", 0.0)))
+	var fn := func(abs_h: float) -> Dictionary:
+		return {"solar_kw": float(su.call("evaluate_solar_at", abs_h)), "aux_kw": aux, "load_kw": demand}
+	var floor_pct := float(snap.get("floor_pct", 10.0))
+	var resume_pct := float(su.get("battery_soc_resume_pct")) if su.get("battery_soc_resume_pct") != null else 20.0
+	var out: Array = []
+	for span: float in [24.0, 168.0]:
+		var p := SiteProjection.project(now_h, span, 1.0, fn, cap,
+				float(snap.get("stored_kwh", 0.0)), 0.95, 0.95, floor_pct, resume_pct)
+		out.append(SiteProjection.summary_line(p, cap))
+	_proj_lines = out
+	return _proj_lines
 
 
 func _refresh_stores() -> void:

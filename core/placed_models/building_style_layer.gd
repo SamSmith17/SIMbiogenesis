@@ -25,8 +25,7 @@ var styles: Dictionary = {}
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/building_styles_%s_%s.json" % [
-		CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("building_styles", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:

@@ -41,7 +41,7 @@ static func create_default() -> ChoreLedger:
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/labor_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("labor", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:

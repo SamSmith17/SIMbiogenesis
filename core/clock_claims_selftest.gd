@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_test_the_snowglobe_over_csv_bug()
 	_test_exclusive()
 	_test_value_falls_through()
+	_test_owner_of()
 	_test_signal()
 	_test_clock_integration()
 	if _fails == 0:
@@ -108,6 +109,24 @@ func _test_exclusive() -> void:
 	c.release("export")
 	_check("exclusive cleared on release", c.exclusive_owner().is_empty())
 	_check("claims work again", c.claim("ui", {"time_scale": 5.0}))
+
+
+func _test_owner_of() -> void:
+	# The timeline's "held by …" pill reads this; it must name the claim whose
+	# value value_or() actually returns — falling through partial claims.
+	var c := ClockClaims.new()
+	_check("owner_of empty stack is ''", c.owner_of("time_scale").is_empty())
+	c.claim("csv_history", {"time_scale": 0.0})
+	c.claim("analemma_ui", {"analemma_mode": true})
+	_check("owner_of falls through a partial claim",
+		c.owner_of("time_scale") == "csv_history")
+	_check("owner_of reads the top claim for its key",
+		c.owner_of("analemma_mode") == "analemma_ui")
+	c.claim("video_export", {"time_scale": 0.5}, true)
+	_check("owner_of follows the top-most claim", c.owner_of("time_scale") == "video_export")
+	c.release("video_export")
+	c.release("csv_history")
+	_check("owner_of clears on release", c.owner_of("time_scale").is_empty())
 
 
 func _test_value_falls_through() -> void:

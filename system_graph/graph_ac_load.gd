@@ -44,6 +44,30 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 	return maxf(0.0, total)
 
 
+## What the wired AC loads WANT (W), independent of whether the inverter is
+## serving them right now: every reachable load the player switched on
+## (requested_state not "off"), at its rated/average draw. `compute_watts`
+## reads 0 while low-SOC protection has shed the loads, which made a battery
+## at its floor look like a site with no demand. Used by the site balance and
+## its forward projection.
+static func demand_watts(model: GraphModel) -> float:
+	if model == null:
+		return 0.0
+	var flat := GraphNesting.flat_connections(model)
+	var total := 0.0
+	for iid: String in _reachable_ac_load_ids(model, flat).keys():
+		var item: Dictionary = model.get_item(iid)
+		if item.is_empty() or bool(item.get("is_ghost", false)):
+			continue
+		var sp: Dictionary = item.get("specs", {}) as Dictionary
+		if str(sp.get("requested_state", "on")).to_lower() == "off":
+			continue
+		if bool(sp.get("packed_3d", false)):
+			continue
+		total += _rated_watts_from_specs(sp)
+	return maxf(0.0, total)
+
+
 ## True when the opt-in connector loss simulation is on (Wave 8). Per-connection
 ## override "simulate_losses" (tri-state: missing = follow global) is honored
 ## by connection_losses_watts below.

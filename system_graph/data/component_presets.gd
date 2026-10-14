@@ -8,6 +8,18 @@ const _GraphCanvas := preload("res://system_graph/graph_canvas.gd")
 
 
 ## Canonical library-spawn footprint from NODE_SIZES (Phase 4).
+## The shipped preset whose specs carry this `turbine_kind` (e.g.
+## "powerspout_pelton"), or {}. What the stream→penstock tool seats when no
+## turbine stands near the reach.
+static func preset_with_turbine_kind(turbine_kind: String) -> Dictionary:
+	for cat in CATEGORIES:
+		for p in ((cat as Dictionary).get("presets", []) as Array):
+			var sp: Dictionary = (p as Dictionary).get("specs", {}) as Dictionary
+			if str(sp.get("turbine_kind", "")) == turbine_kind:
+				return (p as Dictionary).duplicate(true)
+	return {}
+
+
 static func spawn_dimensions(preset: Dictionary) -> Vector2:
 	var t := str(preset.get("type", ""))
 	return Vector2(_GraphCanvas.default_width(t), _GraphCanvas.default_height(t))
@@ -30,6 +42,15 @@ const PANELS: Array = [
 		"type": "panel", "label": "EcoFlow 400W Rigid", "icon": "☀",
 		"width": 120.0, "height": 100.0,
 		"specs": { "name": "EcoFlow 400W Rigid",   "wmp": 400.0, "voc": 48.0, "vmp": 41.0, "isc":11.00, "imp": 9.76, "cost": 300.0 },
+	},
+	# JA Solar JAM60S20-380/MR (120 half-cell mono PERC), STC: Pmax 380 W,
+	# Vmp 34.77 V, Imp 10.93 A, Voc 41.62 V, Isc 11.47 A, Voc −0.272 %/°C,
+	# Pmax −0.35 %/°C (manufacturer data as listed by sun.store).
+	{
+		"type": "panel", "label": "JA Solar 380W", "icon": "☀",
+		"width": 120.0, "height": 100.0,
+		"specs": { "name": "JA Solar JAM60S20 380W", "wmp": 380.0, "voc": 41.62, "vmp": 34.77, "isc": 11.47, "imp": 10.93,
+			"voc_temp_coeff_pct": -0.272, "pmax_temp_coeff_pct": -0.35, "cost": 160.0 },
 	},
 	{
 		"type": "panel", "label": "REC Alpha 410W", "icon": "☀",
@@ -89,6 +110,13 @@ const BATTERIES: Array = [
 		"width": 110.0, "height": 80.0,
 		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP",  "voltage": 51.2, "ah": 200.0, "kwh":10.24, "soc": 0.80, "cost": 2600.0 },
 	},
+	# A 20.8 kWh 48 V LiFePO4 bank (the Mt Vernon site's EG4 bank): 51.2 V
+	# nominal (16S LFP) × 406.25 Ah. Model a different total by editing kwh/ah.
+	{
+		"type": "battery", "label": "EG4 48V 20.8 kWh Bank", "icon": "🔋",
+		"width": 110.0, "height": 80.0,
+		"specs": { "name": "EG4 48V 20.8 kWh LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 406.25, "kwh": 20.8, "soc": 0.80, "cost": 5200.0 },
+	},
 	{
 		"type": "battery", "label": "Server Rack 48V 100Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
@@ -139,10 +167,21 @@ const CONTROLLERS: Array = [
 		"width": 140.0, "height": 120.0,
 		"specs": { "name": "EcoFlow DELTA Pro",         "max_voc": 150.0, "max_charge_amps": 15.0, "max_pv_watts": 1600.0, "cost":3000.0 },
 	},
+	# EG4 6000XP — EG4 Electronics data sheet v1.4.4 (2025): DC input 100–480 V,
+	# startup 100 V, MPPT operating window 120–385 V (nominal 320 V), 2 MPPTs ×
+	# 17 A usable / 25 A short-circuit, 8000 W utilized PV (4000 W per MPPT),
+	# battery 48 V nominal (46.4–60 V Li), charge 125 A, discharge 140 A, 6000 W
+	# AC out, MPPT 99 %, charge/discharge 93 %, idle ~50 W on battery.
 	{
 		"type": "controller", "label": "EG4 6000XP", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "EG4 6000XP Hybrid",         "max_voc": 500.0, "max_charge_amps":120.0, "max_pv_watts": 8000.0, "cost":1450.0 },
+		"specs": { "name": "EG4 6000XP Hybrid", "max_voc": 480.0, "max_charge_amps": 125.0,
+			"max_pv_watts": 8000.0, "max_pv_watts_per_mppt": 4000.0, "mppt_count": 2,
+			"mppt_min_v": 120.0, "mppt_max_v": 385.0, "startup_v": 100.0,
+			"max_input_amps": 17.0, "max_isc_amps": 25.0,
+			"overload_watts": 6000.0, "overload_duration_s": 10.0, "overload_lockout_s": 30.0,
+			"idle_w": 50.0, "mppt_efficiency": 0.99, "charge_efficiency": 0.93,
+			"cost": 1450.0 },
 	},
 	# Solar Bootcamp trainer controllers. The PWM's 50 V ceiling takes ONE 40 Voc
 	# trainer panel but faults on any series pair; 10 A × 12 V bus = the 120 W
@@ -1232,6 +1271,12 @@ const HYDRO_TURBINES: Array = [
 			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"intake_diameter_mm": 203.0,
 			"outlet_diameter_mm": 203.0,
+			# The siphon's own geometry (SiphonTurbinePhysics): the dip tube
+			# hangs this far below the turbine (its mouth = the break level);
+			# the pond primes it by rising to the crest. The bind seeds the
+			# length from the pond's depth when a pond is near.
+			"dip_tube_length_m": 1.0,
+			"siphon_prime_mode": "overflow",
 			# Levels unset until placed / Siphon Lab (seed from pond + module elev).
 			"barrel_length_m": 20.0,
 			"manning_n": 0.012,
@@ -1312,6 +1357,36 @@ const HYDRO_TURBINES: Array = [
 				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
 			],
 			"model_id": "powerspout_plt",
+		},
+	},
+	# AliExpress-class micro Pelton (turbine_kind "micro_pelton"): the same
+	# nozzle-governed physics as the PowerSpout on a smaller vertical-shaft
+	# runner (PCD 0.168 m, 8 mm nozzle, ~500 W ceiling). Wears ali_pelton.glb.
+	{
+		"type": "processor", "label": "Micro Pelton 500W", "icon": "💦",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Micro Pelton", "role": "siphon_hydro",
+			"kind": "siphon_hydro", "turbine_kind": "micro_pelton",
+			"cost": 350.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"gross_head_m": 15.0,
+			"penstock_length_m": 60.0, "penstock_diameter_mm": 37.5,
+			"pipe_roughness_mm": 0.0015,
+			"intake_diameter_mm": 48.0, "outlet_diameter_mm": 48.0,
+			"nozzle_count": 1, "nozzle_diameter_mm": 8.0,
+			"design_flow_lps": 0.0,
+			"turbine_efficiency": 0.0, "generator_efficiency": 0.80,
+			"max_power_w": 500.0,
+			"siphon_primed": false, "live_q_lps": 0.0, "live_head_m": 0.0,
+			"live_pe_w": 0.0, "live_rpm": 0.0, "current_output_kw": 0.0,
+			"daily_note": "Vertical-shaft 8\u2033 Pelton with a stepper generator. Route a Poly Penstock uphill or tap a stream; the Turbine close-up's jet view shows where the jet lands on the cups. DC +/- → battery.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+			"model_id": "ali_pelton",
 		},
 	},
 	# Estimator-style turbines, unified onto the same processor node (Phase B of

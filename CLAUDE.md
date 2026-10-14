@@ -12,6 +12,81 @@ commit URLs or tokens).
 
 ## Validation (run before every commit)
 
+### Harness rules (user, 2026-10-12): read before running ANY windowed capture
+- **Never use the SOAK 2026 or Mars built-in scenes for harness testing** unless
+  the user explicitly asks. They are large imported meshes, not TerrainLoader
+  maps, and caused repeated harness failures (e.g. the soak-map graph-open
+  hang). Every capture runs on the user's real **Mount Vernon** (`mtvernon`) or
+  **Walton** (`walton`) WORLD. `HarnessRegistry` (`core/terrain/harness/`)
+  gives every mode a default world, and the harness refuses `--scene=<SOAK/Mars>`
+  without `--allow-builtin-scene`.
+- **Always launch through `tools/harness.ps1`.** Godot builds `user://` from
+  `APPDATA`. The launcher seeds a throwaway sandbox copy of the user data dir
+  under `%LOCALAPPDATA%\SIMbiogenesis_harness\runs\<id>\`, points `APPDATA` at it
+  for the Godot process, and hash-checks the real dir afterwards
+  (`REAL USER DATA UNCHANGED`). How it seeds:
+  - Copied: worlds, maps, saves, prefs.
+  - Hard-linked: immutable `.glb`, `.stl` and `.mp3` assets only. A Godot WRITE
+    through a hard link changes the original, so measure before adding a type.
+  - Junctioned: regenerable caches, plus `screenshots/` so PNGs land where they
+    always did.
+  - Seeding takes about 1 s. The newest 6 sandboxes are kept and older ones are
+    pruned junction-first.
+  - The harness refuses to start (exit 4) without the sandbox marker
+    `user://.harness_sandbox`, so a bare `Godot … -- --capture=x` can no longer
+    write into the player's world.
+- **The run loads the world exactly as the user left it.** `--world=<alias|id>`
+  goes through `WorldSession.launch`, so the snapshot (player pose, clock,
+  battery, panel config) is restored. `--user-map=mtvernon` now means that
+  world too.
+- **When the user reports a problem, run `-Capture look` first.** It writes
+  `look/`: the saved view with UI and without, four drone shots round the
+  player, the graph in its saved lens, and `diagnostics.json`.
+- **Changing the user's real world takes `-Persist`, and only for fixes.** Allowed
+  only with `-RunScript res://tools/fixes/<fix>.gd` (a `run(main, harness) ->
+  Dictionary` that may await; the world is saved through
+  `WorldSession.save_now`) or with `-Capture look`. The launcher first backs up
+  the world-state files and prints `tools\harness.ps1 -RestoreBackup <dir>`.
+  Test captures never persist. Dry-run a fix in the sandbox first.
+- **Every run ends with one line:** `HARNESS RESULT <mode> PASS|FAIL|TIMEOUT …`
+  plus `results.json` in the shots dir, and a real exit code: 0 pass, 1 fail,
+  3 watchdog timeout, 4 refused, 5 launcher kill (compile error, never
+  started, or hard limit), 6 real data changed.
+  - `HarnessReport` is an engine `Logger`. It counts the captures' own
+    `PASS` / `FAIL` / `FAILED` / `FAILURE(S)` tokens (case-sensitive) and fails
+    on any GDScript runtime error.
+  - Every mode has a watchdog budget; `-Timeout` overrides it.
+  - `-Capture a,b,c` runs several captures on one map load.
+
+```
+# Harness examples (PowerShell; add -Label <dir> to name the shots folder):
+tools\harness.ps1 -World mtvernon -Capture look
+tools\harness.ps1 -World walton -Capture festivalmode
+tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/<fix>.gd            # dry run
+tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/<fix>.gd -Persist   # keep it
+# Registry + report selftest (offline):
+Godot.exe.exe --headless --path . --script core/terrain/harness/harness_registry_selftest.gd
+```
+
+The windowed `--capture=` commands further down are the GODOT args the launcher
+passes. Run them as `tools\harness.ps1 -World <w> -Capture <mode> [extra args]`.
+Their `--world=` / `--user-map=<x>` parts name the default world, and
+`--user-map=mtvernon|walton` resolves to that world. The 14 commands that
+used to boot SOAK were moved to Mount Vernon or Walton on 2026-10-12. Their
+prose may still say "soak map"; read that as the world they now run on.
+`tools\harness_matrix.ps1 [-Modes a,b]` runs a list of captures back to back
+and prints a results table. `HARNESS_MATRIX.md` holds the current status of
+every mode and the open items. Two baselines apply to test captures and are
+skipped for `look` and `script`:
+- `PopTestPrefs` is reset in memory, because the author's all-off guardrails
+  break every scarcity check.
+- The sandbox's `npc_display.cfg` is set aside, because display taste skewed
+  the hero-pool and rig checks.
+
+The launcher also kills a run whose stderr shows a GDScript Parse/Compile
+Error, or whose harness never wrote `user://harness_started.json` within
+120 s (exit 5).
+
 ```
 # Godot 4.7.1-stable binary (the examples below use "Godot.exe.exe" as a
 # shorthand for whichever current binary you have on PATH):
@@ -71,6 +146,54 @@ Godot.exe.exe --headless --path . --script core/camera_claims_selftest.gd
 # prefs round-trip against a TEMP path, and the viewpoint JSON. Carries
 # EXPECTED_CHECKS (a runtime error aborts a test function while PASS prints):
 Godot.exe.exe --headless --path . --script core/windowwall/window_wall_selftest.gd
+# Points of interest / KML import (offline — core/poi/): KmlPoiParser over the
+# shipped Google Earth export of the Mount Vernon property (testdata/
+# compoundity.kml: 11 pins + 4 lines, CDATA HTML descriptions, CascadingStyle
+# + StyleMap colours, aabbggrr → #rrggbb), a MultiGeometry / Folder / polygon-
+# with-hole case, the KMZ path through a zip written to a TEMP folder,
+# PoiLayer records (stable ids, re-import REPLACES a source, file round-trip
+# against a TEMP path), the WGS84 → site-metre mapping pinned by hand against
+# GeoMath (the House pin ~7 m east / ~7 m south of the site centre), the
+# WorldPaths "poi" kind (legacy path byte-identical, dir-world path), and
+# PoiRuntime building one marker per record on a flat ground callable.
+# ⚠ Coordinates are 64-bit float Arrays, NEVER Vector3 (float32 rounds a
+# longitude by ~1 m — the whole error budget); the 1e-9° pins catch it.
+# Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/poi/poi_selftest.gd
+# Points of interest end to end (WINDOWED, needs a REAL TerrainLoader map —
+# mtvernon, where the fixture's pins fall on the actual property): imports
+# the fixture through the loader's real import path and asserts 15 markers,
+# the House pin at GeoMath's xz AND on the ground, nothing off-map, the Site
+# Plan marker list matching the 3D pins, Go landing the player beside a pin,
+# hide emptying the plan list, re-import replacing not doubling, the file on
+# disk; opens the REAL Terrain options panel and asserts the KML block's
+# title AND the whole panel sit inside the viewport (the block used to be
+# unfindable at the bottom of a column that ran off the screen, and the panel
+# itself was 84 px past the right edge) with the pin rows listed; shoots the
+# panel + a street + aerial + close-up PNG. Byte-restores the site's poi file
+# and the show_pois pref:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=poi --shots-dir=<label> --quit-after-capture
+# Maps vs worlds (offline — core/worlds/, see "MAPS vs WORLDS"): legacy-path
+# IDENTITY for every routed subsystem with no world active, the coverage
+# guard (no new "user://maps/" literal outside the MAP allow-list), dir-world
+# paths incl. a stale coordinate never landing on the world's file, the
+# sealed switch, WorldStore against a TEMP root (migration idempotent + never
+# moves a file + adopts the old autosave, duplicate legacy -> dir byte for
+# byte, rename, newest-first, trash, no resurrection), WorldAssets vendor /
+# restore / remap, the cache-token boundary (8.3252 vs 48.3252) and the
+# picker's coordinate parser + reverse-geocode label. EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/worlds/world_store_selftest.gd
+# Worlds end to end (WINDOWED, needs a world: --scratch-world copies the most
+# recent world on the map into a throwaway one, deleted on quit; --world=<name
+# or id> runs inside a real one). Builds a prop + a light, freezes the clock,
+# saves, Exits to menu, Plays the world again through WorldSession.launch and
+# diffs the whole WorldSession.fingerprint (player pos/yaw/pitch, clock,
+# graph ids + connections, per-habitat people + morale, props, lights, camps,
+# tiles, peak total, battery, festival mode), then starts a NEW world on the
+# same map and asserts it is empty (props/lights/camps/tiles/peak 0, graph =
+# PBI nodes only) while the first world's files are byte-identical:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --scratch-world --capture=worlds --quit-after-capture
 # Shared crosshair-ladder self-test (offline — SiteTargetPicker, the ONE
 # ray→target resolver used by BOTH the first-person crosshair and the
 # settlement view's mouse, so the two provably agree. Pins the ladder order,
@@ -80,6 +203,21 @@ Godot.exe.exe --headless --path . --script core/windowwall/window_wall_selftest.
 # check COUNT, because a Godot runtime error aborts the enclosing test function
 # while the suite still prints PASS — this file lost a whole function to that):
 Godot.exe.exe --headless --path . --script gameplay/site_target_picker_selftest.gd
+# Peak Experience self-test (offline — NpcPeak rules, PeakField onset /
+# contagion + the player multiplier / CHARGE (Exp(1) thresholds, feeding,
+# leak) / hold + GRACE_H / scrub-freeze / catch-up clear / score + its
+# file, both tiers' "vibing" test, NpcPeak.pack_mood round trip. Carries
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/npc_peak_selftest.gd
+# Mo-cap spice self-test (offline — NpcMocapSpice moments / chances / picks,
+# NpcStickMocap.solve_points on synthetic poses, and with the NPC pack
+# installed the seamless fade back to the procedural pose. EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/npc_mocap_selftest.gd
+# Cosmetic clock self-test (offline — SimFxRate, core/sim_fx_rate.gd: the ONE
+# rate curve fire, crowd figures and placed lights animate on — 0 when paused
+# or scrubbing back, linear below 1x, sqrt above, capped per system; the
+# integrated clock never jumps on a speed change. Carries EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/sim_fx_rate_selftest.gd
 # Clock-claim stack self-test (offline — the ordered claim stack that replaced
 # nine private `_saved_time_scale` fields; covers re-claim-does-not-stack,
 # order-independent release, exclusive refusal, partial-claim fall-through, and
@@ -191,6 +329,47 @@ Godot.exe.exe --headless --path . --script core/population/festival_vibe_selftes
 # time, so every bench median before 2026-10-06 printed 1000x low — the F3
 # HUD was right (npc_host ≈ 220 ms for 100 NpcAvatars, ~2 ms per figure):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=crowdbench --count=1000 --shots-dir=<label> --quit-after-capture
+# Festival look studio (WINDOWED, not a selftest): a lit FIREPIT, crowd
+# figures in the DJ (1 m up on a box) / cheer / rave / talk / sit poses with
+# glow sticks, and three stick figures with glow bands — at night and by day,
+# user://festival_look_{night,day}.png. The way to judge the firepit flames
+# and the glow bands; a settlement-view shot is too far out to tell:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script core/population/festival_look_diag.gd
+# Ground / burn pose studio (WINDOWED, not a selftest): the cross-legged,
+# lounging, kneeling (sandman), redirect, fire-flow, gaze, chair-sit, lying
+# and work poses on BOTH bodies (crowd shader + stick figure), side and front,
+# as one grid, user://ground_pose_grid.png. The crowd figure faces +Z and a
+# NEGATIVE limb_angle swings a limb FORWARD — this grid is the only place a
+# backwards leg shows (SIT and WORK were mirrored for months):
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script core/population/ground_pose_diag.gd
+# Placed vehicles + third person end to end (WINDOWED, SOAK scene is fine —
+# no TerrainLoader needed): places Appa, gets in through the crosshair
+# Interact path, drives, switches to third person and asserts the chase camera
+# is BEHIND, gets out (step-out distance, record saved, collision re-baked),
+# walks in third person (the body turns to the camera's heading), then the
+# tool bus, then back to first person (arm home exactly). Byte-restores
+# user://player.cfg and removes what it placed:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=walton --capture=vehicles --shots-dir=<label> --quit-after-capture
+# THE BEAT (offline + ~22 s of real audio — the headless Dummy driver
+# mixes): BeatGrid's virtual set (phrase / breakdown / build / drop timing),
+# BeatTracker on a synthetic set (tempo within 1 BPM, kicks on whole beats,
+# breakdown, the drop found AND known 3 s before it is heard, 174 not halved,
+# 92 not doubled), StageBeat lookups + extrapolation + the light levels, the
+# crowd shader / project.godot mirror constants, and a generated kick track
+# through StageMusic's REAL analysis bus. Run it --windowed for a real
+# driver's timing (128.1 BPM, the drop within 20 ms; Dummy is skewed ~0.6 %).
+# Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/population/stage_beat_selftest.gd
+# Beat look studio (WINDOWED): crowd + stick figures (rave, dance, sway, DJ)
+# mid-groove, in the run-up to a drop (hands up, the DJ's arm held up) and on
+# the drop (arms up, the jump): user://beat_look_{groove,runup,drop}.png:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script core/population/beat_look_diag.gd
+# Vehicle + player-body studio (WINDOWED, not a selftest): every catalog
+# vehicle as placement + riding build it, with a red bar on the rider's
+# FORWARD (the vehicle's front must point the same way) and its built size
+# printed; then the player's detailed figure in idle / walk / run / rising /
+# falling / drive / EUC / aim. user://vehicle_look.png + player_pose_grid.png:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script gameplay/vehicle_look_diag.gd
 # Crowd renderer studio diagnostic (WINDOWED, not a selftest): three crowd
 # figures in an empty grey studio rendered FIVE ways — plain material with
 # cull_back / cull_disabled, crowd_figure.gdshader as shipped / with culling
@@ -211,6 +390,14 @@ Godot.exe.exe --path . --windowed --resolution 640x480 --script core/population/
 # Snapshots and byte-restores camp / placement / spaces files + the graph
 # autosave; strips its cap_fest_* items and the camp compounds:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festival --shots-dir=<label> --quit-after-capture
+# Crowd POP-IN probe (WINDOWED, Walton): festival mode at 20:30, the camera
+# at street height over the stage crowd; every frame every person within 70 m
+# is checked through NpcPopulationHost.drawn_position — VANISH / APPEAR /
+# JUMP (faster than a catch-up glide) with cause (tier, hero, camp just
+# switched tier). Phase A still camera, phase B camera hops. --light=on|off
+# overrides the distant-crowd setting for the run, --ts=N the clock. Expect
+# zero events of every kind; byte-restores what festival mode touches:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=popin --ts=60 --light=off --shots-dir=<label> --quit-after-capture
 # Festival MODE data layer (offline — FestivalSeedLayout + the PopTestPrefs
 # EASY OVERRIDE): painted-camp headcounts (the assigner's own density,
 # floored/clamped, style-aware), the lot-shaped records the graph sync eats
@@ -286,7 +473,7 @@ Godot.exe.exe --headless --path . --script core/placed_lights/placed_lights_self
 # neon-flex tube, J closing the dock. Run it on --user-map=walton too: it also
 # asserts no IK sphere shows and no camp highlights with J closed and no
 # modifier held. Byte-restores the map's lights file and removes the graph load:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=lights --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=walton --capture=lights --shots-dir=<label> --quit-after-capture
 # Legacy street-following camp generator (offline — BrcCampGenerator, still what
 # auto-generate-on-load and the Shift+C dock use; CampMeshLibrary borrows its
 # mesh builders, so this must keep passing):
@@ -371,7 +558,7 @@ Godot.exe.exe --headless --path . --script core/env/daylight_model_selftest.gd
 # projected marker position vs the brightest texture blob nearby plus the 2 h
 # rotation about the pole (Polaris still, Dubhe moved ~117 px, +30° CCW) — the
 # numbers a PNG cannot prove; then the same at a southern site about the SCP:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=stars --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=stars --shots-dir=<label> --quit-after-capture
 # Dawn lighting capture (WINDOWED): parks the clock at a ladder of solar
 # altitudes (-14° … +20°, equinox, found by bisection on the clock's own sun
 # direction), shoots toward the sun's bearing and away from it at each, and
@@ -382,7 +569,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/
 # lightbulb), deep orange there and white by 20°. NOTE the ambient column is
 # the PLAYER'S ramp (ambient_energy_mult 0 reads 0 at every step); the header
 # prints their prefs. Clock and clouds restored, nothing persisted:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=dawn --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=dawn --shots-dir=<label> --quit-after-capture
 
 # Boot both maps, 120 frames each; compare errors against the known
 # pre-existing set (see Known Issues). NOTE the default main scene is the map
@@ -496,7 +683,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --c
 # user://extreme_weather.cfg. NOTE the scene renders non-deterministically
 # (TAA), so two identical runs produce different PNGs — pixel-diffing cannot
 # prove the no-op property; the selftest identity assertion is what does:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=weather --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=weather --shots-dir=<label> --quit-after-capture
 # Site Report metrics/data + UI-compile self-test (offline, deterministic):
 Godot.exe.exe --headless --path . --script core/report/site_report_selftest.gd
 # NPC population self-test (offline, deterministic — SpaceRegistry tagging/
@@ -580,6 +767,20 @@ Godot.exe.exe --headless --path . --script system_graph/graph_components_selftes
 # unregulated-PV battery overcharge, and the controller current-throttle
 # wattages 120/360/720/1200 W pinned; extend with every electrical change):
 Godot.exe.exe --headless --path . --script system_graph/graph_electrical_selftest.gd
+# SoI stage self-tests (offline — see "SoI stage" below; each carries
+# EXPECTED_CHECKS; --import first). GraphElevFrame: the ONE Elevation frame —
+# the disc sits where the SoI centre PROJECTS after pan / cursor zoom / siphon
+# framing, the section camera looks at the exact inverse at the container
+# centre, chord vs silhouette radii either side of the slice, the ortho floor at
+# ZOOM_MAX. SoiStagePose: the lens-transition maths — exact endpoints, the
+# dolly-zoom keeps the frame height, a near-ortho perspective projects within
+# half a pixel of true ortho (so the final switch is invisible), the Plan →
+# Section bulge through perspective, antipodal dirs without NaN. SoiSectionCap:
+# the cut-face strip builder — on the backed-off plane, bottoms on the chord
+# circle, tops = ground clamped to the circle, lip only on ground-limited tops:
+Godot.exe.exe --headless --path . --script system_graph/graph_elev_frame_selftest.gd
+Godot.exe.exe --headless --path . --script system_graph/soi_stage_pose_selftest.gd
+Godot.exe.exe --headless --path . --script core/soi/soi_section_cap_selftest.gd
 # Wire routing + port presentation (offline geometry — bezier control points for
 # same-edge ports (the U loop), facing ports, direction-fallback endpoints;
 # ambient-port classification; DC solid-fill/glyph styling rules; the "+ is
@@ -641,6 +842,30 @@ Godot.exe.exe --headless --path . --script core/conduits/siphon_hydraulics_selft
 # oversized-nozzle head collapse, and `no_supply` (a DRY spring, distinct from
 # `no_head` — the Lab must not tell you to move a correctly-sited turbine):
 Godot.exe.exe --headless --path . --script core/conduits/hydro_reach_selftest.gd
+# Water features (offline — core/water/: the feature layer + span edits,
+# StreamNetwork resolution (OSM overrides, kinds, culvert spans, drainage links,
+# outlets-first order), ChannelProfile (monotone bed, max-cut flags, junction
+# floor never above the ground), StreamHydraulics vs a hand-computed trapezoid
+# and the rational method, ChannelCarver (only lowers, bed under the centreline,
+# brute-force bank sample, no terraces on a 20 % reach, incremental re-runs, C1
+# toe / soft lip), the delta stack (compose = channel + player, player undo
+# isolation, one-pass mesher == reference), and the v6-cache centreline
+# derivation. Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/water/water_features_selftest.gd
+# Drainage (offline — FlowRouting: Priority-Flood+e leaves no interior sinks,
+# accumulation conserves cells, valley channel on its axis, Strahler 2 at a Y,
+# burning, trace downhill, RDP, determinism):
+Godot.exe.exe --headless --path . --script core/water/flow_routing_selftest.gd
+# Water end to end (WINDOWED, a REAL map with waterways; --time=14 dodges the
+# Mt Vernon valley fog): carve + drainage land, every bed monotone, ground ==
+# bed on carved stations, water at or below the banks, rain raises a mapped
+# stream's discharge, then the WATER toolbar driven with REAL input (Draw, pick,
+# pin drag, line-drag insert, hover + Delete, span → culvert (hidden in first
+# person, shown by the toggle, headwalls), Ctrl+Z, Trace), the flow view (beads
+# move only while the clock runs, storm raises the outflow chip) and the graph
+# link (an intake on a stream takes its flow). Byte-restores the map's
+# water_features / channel_tiles files:
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=water --time=14 --shots-dir=<label> --quit-after-capture
 # ABS DWV pipe kit (offline — kit JSON/meshes, planner 45/90 BOM; bake once with
 # pipe_kit_extractor.gd if data/*.res missing; --import first):
 Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_selftest.gd
@@ -728,7 +953,7 @@ Godot.exe.exe --headless --path . --script core/scad/scad_import.gd -- --src="<p
 # interactive Packing Lab modal, auto-packs it into the 15' and 26' trucks,
 # orbits, then loads the builtin StarShade kit into a 20' container — one PNG
 # per state for visual review. Read-only, nothing persisted:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=packing --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=packing --shots-dir=<label> --quit-after-capture
 # Hardware Detail capture (WINDOWED): opens the hardware editor through Main's
 # real entry point (so it lands on its own CanvasLayer above the HUD) and shoots
 # one PNG per state — each assembly seated on the frame, exploded, standalone,
@@ -739,13 +964,107 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/
 # placement is back on the wrong pivot. Joint placement is unreviewable from a
 # description — the port shipped anchored on the H-ring pivot, with no
 # flipStackAxis and a 90°-yawed H-centre frame, and all three RENDERED:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=hardware --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=hardware --shots-dir=<label> --quit-after-capture
 # Regenerate the hardware LAYOUT + PLACEMENT reference values from the real web
 # app (writes core/linkage/testdata/hw_placement_ref.json in place; run from the
 # repo root). Part 2 solves with showHardwareFullDetail=false + hwDetailMode=true
 # — the only combination that emits placements while leaving the beams identical
 # to linkage_reference.mjs's cyl_default, which the printed cornerSum proves:
 node tools/linkage_hw_reference.mjs ../LinkageLab
+# LinkageLab PARITY fixtures + the shipped JS presets (LINKAGE_PARITY.md): exports
+# the ref (default main) with git archive — the sibling working tree is never
+# touched — and runs a generated vitest spec in the JS repo's own environment.
+# Writes core/linkage/testdata/parity/*.json and core/linkage/presets/ll_*.json.
+# Needs `npm install` run once in ../LinkageLab:
+node tools/linkage_parity_dump.mjs ../LinkageLab main
+# LinkageLab build steps (offline — core/linkage/build/): the step model,
+# groups, staging visibility, bench planning, LinkageBeamHoles, and the
+# auto-generator pinned == the web app's Auto-generate per preset; the op
+# resolvers (LinkageBuildOps place/cut/drill/fasten timing) pinned by hand.
+# Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/linkage/build/linkage_build_steps_selftest.gd
+# LinkageLab coverings / raised floor / shade tarps (offline — A4,
+# core/linkage/coverings/ + linkage_floor.gd): every wall / fabric band /
+# table, the deck, the tarps (coverage, sizes), the cut plan (per-wall sheet
+# nests, totals) and the ENCLOSURE BOM rows pinned == the parity dump's "a4"
+# block on all five presets, plus nesting / fabric unit cases, every plan
+# entry rendering an SVG cut file, and LinkageBom's enclosure section x copies.
+# Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/linkage/coverings/linkage_coverings_selftest.gd
+# Fabrication figure layer (offline — swarm plan B1/B2): NpcLimbIk (analytic
+# two-bone IK: exact on every reachable target, middle joint toward the pole,
+# elbow bends -X / knee +X), NpcAnimClip (keyframe clips: per-joint TRACKS,
+# quaternion slerp, loop wrap, events, mirror, shipped clips load), the stick
+# figure's wrist / clip / IK / held-tool layer (palm and planted foot land on
+# target; a cleared clip or released IK leaves EXACTLY the procedural pose —
+# the mo-cap spice rule) and FabToolCatalog (every tool builds with sound
+# sockets; an attached tool's grip IS the palm). Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/population/npc_anim_selftest.gd
+# Fabrication pose studio (WINDOWED, not a selftest): every starter clip in
+# core/population/anims/ on a stick figure holding its tool by IK (saw on a
+# bench, drill, driver, wrench, a beam carried / set down / lifted), side +
+# three-quarter, prints palm-to-grip error per hand (0.000 m expected; 0.1 m =
+# out of reach). Run with APPDATA pointed at a scratch folder (user:// would
+# otherwise be the player's). Writes user://fab_pose_grid.png:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script core/population/fab_pose_diag.gd
+# NPC animation editor end to end (WINDOWED, REAL input through the viewport —
+# swarm B3): opens through Main on drill_hole in the drill context (both hands
+# on the drill's grips), starts a NEW clip, CLICKS the upper arm (joint
+# picked), DRAGS the gizmo's X ring (a key appears, the shoulder turns), CLICKS
+# the timeline halfway + K (a second key), Ctrl+S (file written), reloads and
+# byte-compares, Escape closes. Shots per state + the cut / fasten / lift
+# contexts. Saves into the sandbox and deletes what it wrote:
+tools\harness.ps1 -World mtvernon -Capture animeditor
+# Fabrication swarm timeline (offline — swarm B4, core/linkage/build/
+# linkage_build_timeline.gd): the SOAK build planned for named workers —
+# every job kind present, nothing blocked with 9 hands, deterministic, every
+# job after its dependencies and within its crew min..max, no worker in two
+# places at once, cut -> drill -> place per beam, the lift waits for a raising
+# crew, makespan >= critical path and >= work / crew, more hands never worse,
+# state_at pure (scrub back == first visit), the structure only grows, a crew
+# smaller than a quorum lifts with everyone. Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/linkage/build/linkage_build_timeline_selftest.gd
+# Fabrication swarm in the world (WINDOWED — swarm B5): places the SOAK 2026
+# design on the flattest patch near the player, starts a crew-12 rehearsal
+# (LinkageBuildSite) on a frozen clock moved by hand, and asserts nothing
+# stands at the start, the structure only grows, one job of every kind (cut /
+# drill / place / fasten / lift / deploy) has its whole crew there with that
+# job's clip and every hand on a tool within 2 cm of its grip, the site costs
+# < 8 ms a frame, a scrub back gives the same structure, the end has every
+# part seated + the ring deployed + the crew gone, and ending the rehearsal
+# hands the structure back. Wide PNG per phase + a close-up per job kind;
+# removes its prop:
+tools\harness.ps1 -World mtvernon -Capture fabswarm
+# Lab build-step player (offline — A5): LinkageStepScene frames (a cut is a
+# bench step with the saw out and every row kept at the end, drilling adds
+# holes, a place step starts its parts away from their seats, parts only
+# appear, everything stands at the end, the driver at the fastened joint, the
+# lift carries the parked ring home) and LinkageStepPlayer on a real builder
+# (structure hidden on bench steps, future parts hidden, no joint hardware
+# before its joint, the step's pose, the saw where the cut puts it, skip mode
+# plays each group once, exit seats everything). Carries EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/linkage/build/linkage_step_player_selftest.gd
+# Lab build steps end to end (WINDOWED, REAL input through the viewport):
+# opens the Lab through Main on the SOAK 2026 preset, CLICKS 🎬 Steps, a list
+# row, play and pause; per kind asserts the bench / tool / hidden-part state
+# (the drill bit on the hole it drills, 0 mm), CLICKS Save to design (the
+# sequence is in the config) and closes with every part seated. Then reopens
+# on Constellation and drives the Radial Array group (A3): the preset's array
+# in the controls, hiding a slot drops a copy, "one at a time" mid-fold shows
+# several poses, unticking Enable draws one structure. Then Hex (A4): walls,
+# tables, deck and tarps drawn, the tarp checkbox and "Every span: Fabric"
+# rebuild them, the deck step stages the deck, the guide writes the SVG cut
+# files. PNG per kind + radial_* + enclosure_*:
+tools\harness.ps1 -World mtvernon -Capture buildsteps
+# Fabrication by the CREW (WINDOWED — swarm B6): seeds a 12-person camp
+# (tanks + tagged spaces), places a packed SOAK 2026 kit, queues the crew build
+# as the Lab does (phase chores + a labour-mode build_run on the crate), runs
+# the clock and asserts: the labour-mode site owns the visuals (the bridge's
+# prefix reveal never touches the builder), the drawn build time only moves
+# forward, people DOING the project's chores on site man the lanes with their
+# own bodies hidden, the structure grows with the work, and the finished
+# project leaves it unpacked + deployed with every part seated:
+tools\harness.ps1 -World mtvernon -Capture fabcrew
 # Visual playtest capture (WINDOWED — cannot be --headless): launch a user map
 # by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
 # (+ manifest.json) to user://screenshots/<label>/ for agent/visual review:
@@ -760,7 +1079,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres
 # boot scene is the map chooser, so pass --scene) and shoots one PNG per UI
 # state — freeform/arranged/selection+inspector/compound interior/zoom
 # extremes/site plan/elevation — via the REAL view handlers, for visual review:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=graph --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=graph --shots-dir=<label> --quit-after-capture
 # Hydro Lab capture (WINDOWED): builds a pond + siphon on the graph, binds them,
 # opens the Lab's own 2D cross-section (VIEW_SIPHON, item-bound — the mode chip
 # is gone), and shoots primed/flowing → time-accelerated drain/broken →
@@ -770,8 +1089,30 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/
 # Penstock-route section + the power-curve chart (P vs head per poly size, live
 # operating-point marker) with the dock scrolled to frame them — and DUMPS the
 # per-size watts line to console (the number a PNG can't prove), then restores
-# the saved kind:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=siphon --shots-dir=<label> --quit-after-capture
+# the saved kind. Then flips it to micro_pelton (the AliExpress vertical-shaft
+# unit) and asserts the close-up SWAPPED its model, found the runner (Node6,
+# r 0.101 m, axis Y) and the GLB's own nozzle fitting, lands the jet ON the
+# pitch cylinder along -X, drives the exit sheets from
+# PeltonPhysics.bucket_exit_velocity, stands the jet's-eye camera at the
+# mouth looking down the jet, and that a 12 mm axial nudge moves the landing
+# off the splitter (shots 08-10 + a debug_summary dump):
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=siphon --shots-dir=<label> --quit-after-capture
+# GLB dump (NOT a selftest — read it BEFORE authoring a ModelCatalog entry):
+# the node tree with local transforms, every mesh's AABB / verts / material,
+# then each top-level part's GLOBAL AABB in metres. Says which node is the
+# runner, which axis its shaft is, where a nozzle fitting sits, and what the
+# exporter left in the file (SketchUp scale figures) that must be stripped.
+# ⚠ Globals only resolve on the first PROCESS frame — the SceneTree root is
+# not in-tree during _initialize (the veg-dock selftest trap):
+Godot.exe.exe --headless --path . --script core/placed_models/glb_dump_diag.gd -- --glb=<path.glb>
+# Runner look studio (WINDOWED, not a selftest): each hydro turbine's BARE
+# runner shot from the jet's eye at the pitch point, radially from outside,
+# in plan and 3/4, with a cyan rod on the jet line, red on the shaft, amber
+# on the radial. How a bucket's orientation vs the jet is judged — a Pelton
+# splitter is RADIAL with a cup each side ALONG the shaft; what reads rotated
+# a quarter turn here is modelled wrong, what reads side-on only in the Lab
+# is a landing-point bug (it was). user://runner_look_<model>_<view>.png:
+Godot.exe.exe --path . --windowed --resolution 900x900 --script core/placed_models/runner_look_diag.gd
 # Site-review (WINDOWED): load a REAL user map as-is (autosaved graph + terrain
 # artifacts), shoot world/ + graph/ (freeform + elevation) + siphon/ Lab, write
 # diagnostics.json + perf/*.json. Alias --user-map=mtvernon resolves Mount Vernon
@@ -824,7 +1165,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # window and nothing is credited outside it. Keep the test time_scale low (20
 # h/s): at 400 h/s a 4 s run advances 66 sim-days and leaves the 61-day harvest
 # window before the assertion reads it. Removes its seeded nodes afterward:
-Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=foodforest --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --world=mtvernon --capture=foodforest --quit-after-capture
 # Ambient resource-flow regression guard (WINDOWED — the harness hard no-ops
 # under --headless; no screenshots, console-only): builds a primed pond+siphon+
 # culvert-outlet, keeps SystemGraphView.visible=false the ENTIRE time (graph
@@ -832,7 +1173,7 @@ Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/m
 # outlet accumulated volume. Guards against the water/siphon/catchment
 # simulation regressing back to only running while the 2D graph screen is open
 # (system_graph_view._tick_resource_flow_ambient):
-Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=ambient --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --world=mtvernon --capture=ambient --quit-after-capture
 # NPC population end-to-end verify + Site Plan/3D capture (WINDOWED): seeds 4
 # tagged area spaces + a pop-driven habitat with supply/waste tanks on the soak
 # graph, runs the clock with the graph CLOSED and asserts ambient consumption
@@ -852,8 +1193,11 @@ Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/m
 # Note avatars are counted by TYPE, not by the host's child count: the host
 # also parents the pooled CrewSiteMarker nodes, so a child count reads high
 # whenever crew work is on the board.
+# After the reset it flips "Simulate & draw NPCs" OFF in memory and asserts
+# the roster froze, the host + crowd renderer were freed and the habitat lost
+# its demand override, then that all of it resumes when switched back on.
 # Cleans its cap_pop_* graph items off the map autosave:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=population --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=population --shots-dir=<label> --quit-after-capture
 # Settlement view capture (WINDOWED — the mode's whole risk surface is
 # invisible to every other harness): opens the view through Main's REAL entry
 # point and shoots five zoom stops (eye 1.7 / street 12 / block 60 / camp 300 /
@@ -881,7 +1225,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # map and the player's process mode. One PNG per window per state. On a
 # single-screen machine every slot lands on screen 0 as overlapping fullscreen
 # windows, which still proves creation, restoration and the maths:
-Godot.exe.exe --path . --windowed --resolution 1280x720 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=windowwall --shots-dir=<label> --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --capture=windowwall --shots-dir=<label> --quit-after-capture
 # NPC pose portraits (WINDOWED): stands ONE stick figure per work-pose family
 # in empty air against sky and shoots it NEAR (2.5 m) and FAR (13 m), printing
 # the family asked for beside the clip the pose machine actually chose — which
@@ -948,7 +1292,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # spacing between people, so "picked a neighbour" is correct and only "picked
 # nobody" fails. Ends on the ANTI-SNOWGLOBE assertions: the player camera is
 # current again, the prop-cull override is back to 0, and `time_scale` NEVER
-# MOVED — soi_snowglobe_camera freezes the clock, and this view must not:
+# MOVED — no view may freeze the clock (the snowglobe used to; see SoI stage):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=settlement --shots-dir=<label> --quit-after-capture
 # NPC animation observation on a REAL saved map (WINDOWED, READ-ONLY): unlike
 # --capture=population (which SEEDS its own spaces/tanks/habitat and would
@@ -979,6 +1323,14 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=<file.tres
 # FALSE and an unset outlet_invert_m never got its first write. Cleans its
 # cap_pen_* items + props afterward:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=penstock --shots-dir=<label> --quit-after-capture
+# Whole-site balance (WINDOWED, console-only, the player's own world, graph
+# CLOSED): every hydro turbine with DC wires reaches a battery (a controller's
+# battery terminal is the bank bus); SolarUI's graph-DC term equals the wired
+# turbines' output and the battery integrates it; a turbine making watts moves
+# water; each pond's graph level == its 3D surface and its own 3D plane follows;
+# an 8 mm/h storm books rain on each pond's surface and raises it (or it spills
+# / a siphon drains it). The Mt Vernon playtest of 2026-10-12, formalized:
+tools\harness.ps1 -World mtvernon -Capture sitebalance
 # Hydro LOAD-TIME diagnostic (WINDOWED, console-only, needs a REAL saved map with
 # hydro on it): dumps every penstock/culvert conn's visible_3d, routability, 3D
 # instance and BOTH resolved endpoint anchors at four moments — as loaded (graph
@@ -996,7 +1348,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # nearest_pond(id, silent, max_dist_m) binds the near one, refuses the far one
 # beyond the cap, and an uncapped manual Rebind ignores distance — the
 # guardrail behind auto-bind-on-placement (Phase 3):
-Godot.exe.exe --path . --windowed --resolution 640x480 -- --scene=res://scenes/maps/soak_festival_2026.tscn --capture=autobind --quit-after-capture
+Godot.exe.exe --path . --windowed --resolution 640x480 -- --world=mtvernon --capture=autobind --quit-after-capture
 # Stable pond-id guard (WINDOWED, needs a REAL TerrainLoader — generated
 # location maps only, e.g. a throwaway --map-lat=/--map-lon= test coordinate,
 # NOT the trusted built-in scenes which have no TerrainLoader): carves a pond,
@@ -1033,6 +1385,83 @@ Two playable maps, both rooted on `main.gd` (Node3D "Main"):
 Map chooser: `scenes/ui/map_select/` + `maps/map_definition.gd`
 (TRUSTED_SCENE_PATHS, legacy-path normalization for old saves).
 `main.tscn` at root is a legacy Mars variant kept for slim-export fallback.
+
+**MAPS vs WORLDS (core/worlds/, 2026-10-10).** A MAP is terrain + auto-
+generated OSM content: `terrain_cache/*`, `weather_cache/*`, the
+`user://maps/loc_<lat>_<lon>.tres` registry — shared, regenerable. A WORLD is
+a map plus everything built or simulated on it, and several worlds can stand
+on one map. The map chooser lists WORLDS (newest first, renamable, Copy,
+Delete = move to `user://worlds/_trash`) plus a NEW WORLD panel (a clicked
+location or a built-in map, a name defaulting to the location label, a
+"Re-download map data" box that refreshes only the MAP). The 8 anonymous slots
+are retired (`slot_NN.save.json` left on disk); the timeline 💾 opens
+`scenes/ui/world_panel.gd` (rename, "what this world holds", Save now, Save a
+copy as…, New world on this map, Exit to menu).
+- **`WorldPaths` is the ONE resolver** for every per-site world file
+  (`site_file(kind, lat, lon, ext)` / `scene_file` / `keyed_file` /
+  `graph_autosave_path` / `scores_path`, families in `WorldPaths.KINDS`).
+  Storage modes: none (no world active — selftests, a harness without
+  `--world`: paths BYTE-IDENTICAL to the old `user://maps/<kind>_<lat>_<lon>`
+  literals), `legacy` (a build migrated from that layout — files stay where
+  they were, nothing is moved), `dir` (`user://worlds/<id>/<kind>.<ext>`). A
+  new per-site file family MUST go through it: `world_store_selftest`'s
+  coverage guard fails on any new `"user://maps/` literal outside the MAP
+  allow-list. Static, autoload-free on purpose (layer classes load under
+  `--script`). Static caches keyed by site must key on the RESOLVED path
+  (`PlacedLightService.get_layer`, `PlacedPropService._layer_for_main`) — two
+  worlds share a site key.
+- **`WorldStore`** (records `world.json`, `snapshot.json`, `thumb.png`,
+  `assets/`), all functions take the worlds root so the selftest runs on a
+  TEMP folder. `migrate_legacy` runs once per site from the picker (recorded
+  in `user://worlds/migrated.json`, so trashing a migrated world does not
+  resurrect it) and adopts the old global `autosave.save.json` as the
+  matching world's snapshot.
+- **Always-live save model** (`WorldSession`): props, lights, camps,
+  sculpting, water, vegetation, the graph (incl. NPC `pop_state`) and the peak
+  score are written as they change; a save = `flush` (group
+  `world_persist` → `flush_world_state()`: the graph view forces every
+  habitat's `pop_state` past its ≤2×/sim-hour gate via
+  `NpcPopulationBridge.persist_all_now` + the peak score; the loader flushes
+  its debounced prop save) + the SNAPSHOT (`main.build_save_snapshot` WITHOUT
+  `system_graph` — the world's graph file is newer — plus `world_extras`: the
+  ridden vehicle, festival mode, the SolarUI panel config). It runs on the
+  180 s autosave, Save now, Exit to menu and window close. ⚠ An EMPTY
+  `system_graph` must not be applied (`_apply_save_snapshot` guards it): it
+  latches "a game save owns the graph" and skips the world's graph file.
+- ⚠ **Switching scenes SEALS WorldPaths** (`WorldSession.switch_scene`):
+  the old scene's exit-time flushes (the graph view writes its autosave in
+  `_exit_tree`) would land in the NEXT world's files, or with no world active
+  on the player's legacy build. Sealed writes go to `user://worlds/_discard`
+  (duplicates — save_now already ran); the next world activates on the new
+  scene root's `node_added`, before any `_ready`, with a 3 s fallback so a
+  session can never stay sealed. Never `clear_active()` while a world scene
+  is running for the same reason (the harness seals instead).
+- **Resume fixes found by `--capture=worlds`:** the temp load floor (an
+  infinite plane at y = 0) was never removed on a resume, so a site below
+  zero (Walton, -95 m) restored the player standing on it
+  (`_finalize_resume_actors`); `Player._ready` defers
+  `_init_first_person_camera`, which zeroed the restored pitch
+  (`main._reapply_resume_view`). `PeakField` now saves its LIVE state
+  (who is mid-peak, charge, episodes) with the score.
+  Fixed 2026-10-12: the battery jumped on every reload of a world whose graph
+  battery bank differs from `solar_panel_config.cfg`'s capacity. SolarUI boots
+  at the config capacity and the snapshot restores the saved kWh. The first
+  `apply_from_graph` then saw a "capacity change" and rescaled the battery by
+  a mirrored fraction (Walton: 5.09 → 4.12 kWh). `_soc_restored_pending` makes
+  that first sync keep the restored kWh.
+- `WorldAssets` vendors what a world references from global libraries (user
+  GLB catalog entries by `model_id`, G-code jobs by `job_id`, `music`,
+  `wall_texture`, any `user://` path string in the world's JSON, plus small
+  libraries: resource kinds, recipes, presets, camp styles, pack defs) into
+  `assets/` on full saves; `restore` before a launch puts back missing files,
+  restores a CHANGED library file beside it and remaps the world's own data to
+  it, and re-registers missing catalog entries.
+- Inside a world "Re-download map data" (Terrain options, the new-world box)
+  refetches DEM / imagery / OSM only — the world's overlays always load
+  (`_should_load_user_map_overlays`); a clean slate is a new world.
+- `StarShadeGraphSeeder._scene_has_starshade` only matches Node3D: the
+  loader's `StarShadeEditLayer` UI node used to seed an 18-panel StarShade
+  system into every empty generated-map graph.
 
 **User-created location maps (ROADMAP Pillar 1 — location→world).** One reusable
 shell scene `scenes/maps/generated_location.tscn` serves ALL user maps; it is the
@@ -1115,6 +1544,37 @@ incl. StarShade and hands off to `PlacedPropService` ghost placement or
 the styled set re-runs `_attach_buildings`. Selftest:
 `core/terrain/building_builder_selftest.gd` (148 checks).
 
+**SketchUp material fix (`core/placed_models/import_material_fixer.gd`,
+`ImportMaterialFixer`, 2026-10-13).** SketchUp has no PBR, so glTF exporters
+invent the shading terms: SimLab (generator "SimLab GLTF", the common SketchUp
+route — 41 of the repo's GLBs and the user's "Halvorsen" models) writes
+KHR_materials_pbrSpecularGlossiness specular 0.5 / glossiness 0.5 on EVERY
+material plus a metallic/roughness 0.5 fallback, and Godot converts that to
+metallic 0 / roughness 0.5 / specular 0.5 — semi-gloss brick, shingles and
+siding. The fixer recognises a SketchUp export (generator keywords, or the
+SimLab fingerprint: ≥80 % of materials spec-gloss at gloss 0.5), classifies each
+material by its NAME (`RULES`, first match wins, specific finishes above
+families — "Metal Corrugated Shiny" is painted roofing, "Textile" must not hit
+"tile") into a `PROFILES` metallic/roughness/specular class, clears the
+invented metallic/roughness maps, and turns the alpha-scissor SimLab puts on
+every material OFF where the albedo has no transparency (leaf textures keep it;
+a see-through material named after nothing becomes glass). Colours, textures
+and UVs are never touched. Two entry points, one class: the in-game loader
+(`ModelCatalog._packed_scene_for_user` — per-model `material_fix`
+auto/off/force on the catalog entry, `source_app` stamped by
+`ModelImporter.import_from_path`, prop editor Model section "Materials" row,
+`ModelCatalog.set_material_fix`) and the editor import hook
+(`addons/sketchup_import_fix/` — a `GLTFDocumentExtension._import_post`,
+project setting `simbiogenesis/import/sketchup_material_fix`). The editor hook
+only affects files Godot (re)imports. All 50 SimLab GLBs in the repo (models,
+the Mars / SOAK map scenes, StarShade, Airstream…) were reimported with it on
+2026-10-13 at the user's request. To force a reimport, TOUCH the source and run
+`--headless --import`: Godot re-checks an asset only when its mtime changes —
+deleting the `.godot/imported/*.md5` alone does nothing. The plugin is active in
+headless imports (it prints "SketchUp Import Fix: <name> — N materials").
+Selftest `core/placed_models/import_material_fixer_selftest.gd` (also pins
+ImagerySources).
+
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`
 = 500 m square, (0,0) = NW like the terrain drape; fixed constant → mesh never
@@ -1161,9 +1621,14 @@ waits for `TerrainLoader.map_load_complete` (+ the hyper drape, bounded 420 s
 for world), freezes `--time=<hour>` (default 10.0), shoots PNG sets +
 `manifest.json` to `user://screenshots/<--shots-dir>/`. **`site-review`** is the
 agent-facing composite for a saved site: `world/` + `graph/` (freeform / site
-plan / elevation) + `snowglobe/` + `siphon/` Lab + `diagnostics.json` + optional
-`--perf` → F3 HUD + `perf/*.json`. `--review-sets=world,freeform,site,elevation,snowglobe,siphon,arranged`
-(default omits site/snowglobe); `--no-mutate` skips Lab Demo drive.
+plan / elevation / globe) + `snowglobe/` + `siphon/` Lab + `diagnostics.json` + optional
+`--perf` → F3 HUD + `perf/*.json`. `--review-sets=world,freeform,site,elevation,globe,snowglobe,siphon,arranged`
+(default omits site/globe/snowglobe); `--no-mutate` skips Lab Demo drive. The
+elevation, globe and snowglobe sets print `soi-stage —` PASS/FAIL lines (disc
+vs projected SoI centre after pan + cursor zoom, the cut-face cap, no graph
+clock claim, captures while the clock runs, the Globe lens drawing, the
+Globe → Site Plan flight landing orthographic, and the full-screen globe
+entered OVER the open graph): grep them, the PNGs cannot show these.
 `--quit-after-capture` exits. F12 = manual shot. Windowed only.
 
 **Graph PV electrical + layout (system_graph/).** `PvElectrical` computes string Voc
@@ -1413,6 +1878,53 @@ pattern):**
   z19–23 globally — close-range was low-res only because the base zoom packs all
   30 km into ~2048 px. USGS NAIP (US-only, no key) and Mapbox (key) were evaluated
   as additional sources but not wired (ESRI high-zoom covers it globally, no key).
+  ⚠ "ESRI serves z19–23 globally" is FALSE in rural areas: measured at Mount
+  Vernon 2026-10-13, z20+ is the "Map data not yet available" placeholder and
+  z19 is soft (upsampled).
+- **Imagery sources + the native "site" patch (2026-10-13).**
+  `core/terrain/imagery_sources.gd` (`ImagerySources`, pure) lists tile sources:
+  `esri`, `esri_clarity` (ESRI's sharper, sometimes older capture) and REGIONAL
+  orthophotos with a coverage bbox and a capture GSD (`skagit_2021_9in`:
+  Skagit County GIS's public ArcGIS tile cache, 9-inch / 0.229 m — roof
+  panels readable at z19). `chain_for(lat, lon)` = covering regional sources
+  (finest first) → Clarity → ESRI; `request_imagery(..., sources, hq)` takes
+  each TILE from the first source that holds it (an ArcGIS cache's blank PNG,
+  a 404 or ESRI's placeholder falls through — `is_blank_tile`), records the
+  sources used (`<key>.sources.json` sidecar, `attribution_for(tag)`), and a
+  non-ESRI chain gets its own cache key (`_<source>` suffix; plain ESRI keys are
+  unchanged). ⚠ Extent boxes are not footprints: Skagit's 2013/2015 4-inch
+  services cover Mount Vernon by bbox and answer blank tiles there, and its 2021
+  3-inch flight stops at 48.357°N. Hyper now uses the chain; detail and base stay
+  plain ESRI (most recent everywhere). The new `site` layer
+  (`TerrainLoader._request_site_imagery`, fired when hyper lands) covers the
+  property at the chain's NATIVE zoom (`native_zoom`: first zoom whose pixels
+  are ≤ 1.15 × the capture's GSD), half-extent per tier
+  `QUALITY_SITE_HALF_EXTENT` [0, 400, 500, 600] m shrunk to fit
+  `SITE_TARGET_PX` 8192 (override `[terrain] site_half_extent_m`, 0 = off), and
+  is BC7-compressed on a worker thread (`hq`; DXT1 is 0.09 s for 5k² but its
+  two-colour 4×4 blocks read as pixelation at walking height, BC7 ≈ 4 s).
+  Shader: `site_*` uniforms in `terrain_detail.gdshader`, over hyper and under
+  the AI patch; every drape sampler is now `filter_linear_mipmap_anisotropic`
+  (the ground went soft and blocky at grazing angles from 1.7 m). Why the
+  Ultra tier looked worse than Medium: hyper spreads one 8192 px texture over
+  3 km there (0.37 m/px) while Medium's 1 km hyper sits at z19 (0.2 m/px).
+  Skagit's service carries no license text; it is credited as county imagery.
+  ⚠ **The real cause of "very pixelated" was the shader, not the tiles.** The
+  drape's equirect→Mercator correction computed `asinh(tan(lat))` per pixel
+  and subtracted the north edge's: two float32 values ~0.97 that differ in the
+  4th decimal over a 1 km patch, so v was quantised into 1–2 m steps and EVERY
+  hyper / site drape and photo-textured roof rendered as hard-edged ~2 m
+  blocks however sharp the photo (identical with the 0.2 m site layer on or
+  off — that is how it was found). `equirect_to_mercator_uv` in
+  terrain_detail.gdshader AND building_roof.gdshader now uses the
+  centre-relative Taylor series of ∫ sec φ dφ (to d⁴, sub-mm over 120 km);
+  `TerrainBuilder.mercator_v_relative` is its GDScript mirror, pinned against
+  the exact form in import_material_fixer_selftest. Never compute a Mercator
+  difference from absolute latitudes in a shader. The leaf-litter and snow
+  break-up also lost their per-cell hashes (`floor(world/1.7)` drew a 1.7 m
+  checkerboard) for smooth fBm. ⚠ BC7 runs on WorkerThreadPool and every task
+  must be waited on (`_hq_tasks`, `_exit_tree`): an un-waited task crashed
+  the engine on quit (0xC0000005).
 - `core/terrain/ai_imagery_service.gd` (`AiImageryService` autoload): **opt-in**
   AI "hero patch" — after the hyper drape lands, `terrain_loader._maybe_request_ai_hero()`
   crops the central ~100 m square (`AI_HERO_HALF_EXTENT_DEFAULT` 50 m) out of
@@ -1500,7 +2012,7 @@ procedural): 8 yaw + 1 top view into a 1024² 3×3 atlas + a foliage-vs-bark
 mask atlas, neutral-season materials, keyed by a STABLE content hash
 (`bake_key` — excludes drape/growth/LOD keys, INCLUDES String values so an
 archetype switch re-bakes), cached `user://veg_impostors/<key>.res`,
-BAKE_VERSION-gated (now v4). Headless/selftests never bake: `cached_set`
+BAKE_VERSION-gated (now v7). Headless/selftests never bake: `cached_set`
 misses fall back to the simplified crossed-card stand-in deterministically
 (the flat branch-card fan is deleted); windowed bakes debounce ONE rebuild
 via `_on_impostor_bake_completed`. The impostor shader is unshaded (day/night
@@ -1594,6 +2106,53 @@ holds focus (typing a brush radius used to fly the drone). The crosshair area
 focus and the paint selection now own SEPARATE highlight meshes. Selftest:
 `vegetation/veg_dock_state_selftest.gd`.
 
+**Vegetation lighting + colour contract (2026-10-10).** Trees printed black or
+flat beside the self-lit SoI soil for SEVEN stacked reasons; each fix guards a
+trap that renders plausibly:
+- **Tint is a COLOUR in the style, a MULTIPLIER in the shader.** Textures,
+  shell `leaf_color` and bark are already painted in the SPECS `top`/`bark`
+  colour, so `albedo_tint` = `VegetationCardFactory.tint_multiplier(picked,
+  painted)` (white = 1). Passing the colour raw — and the old "tint defaults
+  to spec.top" fallback, and the variant fill — squared it (maple leaf ≈
+  linear 0.0007). `deciduous_albedo_tint` default is WHITE now.
+  `VegStyleStore` drops near-black `*tint` values and the old dark deciduous
+  default (`LEGACY_DECIDUOUS_DEFAULT_TINT`) on read (`is_black_tint`).
+- **No manual back-face flip.** Godot already turns NORMAL to the camera on
+  back faces under cull_disabled (probed); flipping again lit every back face
+  from behind. Shared helpers in `vegetation/veg_lighting.gdshaderinc`
+  (`VEG_BACK_FACE`, `veg_world_normal` — NORMAL is VIEW space in fragment()).
+- **Palettes were authored as tints.** Conifer SPECS colours raised ~2.2× in
+  sRGB (needle green ≈ 5–7 % linear); bark painted through
+  `bark_paint_color` (≤1.8× for dark barks, none for birch/aspen) — the SAME
+  colour is the tint reference and the variant `bark_albedo_tint` fill, or the
+  multiplier undoes the gain.
+- **Card foliage floors the sun's shadow** (`foliage.gdshader` custom
+  `light()`, `shadow_floor` 0.45, directional only): a crossed-card crown is
+  almost entirely in its own shadow map. BACKLIGHT is real transmission now
+  (it used to be added to ALBEDO and multiplied by N·L ≈ 0).
+- **Shade fill.** Global `veg_sky_fill` (Main `_push_veg_sky_fill`) =
+  `VEG_SHADE_FILL` × DaylightModel sky_light × the share of ambient the
+  player turned OFF (0 at the default multiplier); previews raise `veg_fill`
+  and zero `veg_haze_mul` (`SoiService.set_preview_vegetation_look`).
+  Shaders read `veg_fill_amount()` = max of the two. All `veg_*` globals are
+  declared in project.godot `[shader_globals]` — never add at runtime
+  (`global_shader_parameter_get_list` is editor-only; SoiService's guard used
+  it and errored on every boot; it now asks ProjectSettings).
+- **Photocards are photographs** (overcast, ≈ sRGB 0.19): `photocard_exposure`
+  maps their mean opaque colour onto the species' painted `top` once per
+  texture, stored as material meta `TINT_EXTRA_META` so live tint pushes keep
+  it. **Hero GLBs** import with metallic leaves (free_tree_1 = 0.54);
+  `HeroTreeCatalog.strip_night_glow` also makes them matte (cached dups).
+- **The SoI shell draws LAST** (`soi_subsurface.gd` render_priority MAX):
+  vegetation is `depth_prepass_alpha` (depth in the opaque pre-pass, colour in
+  the transparent pass); the `depth_draw_always` glass sorting ahead of a tree
+  rejected its colour pass → tree-shaped BLACK holes in the Globe lens and the
+  snowglobe only. Found by hiding Main children one at a time with a forced
+  `request_refresh()` — the preview does NOT redraw on visibility changes.
+Impostors: BAKE_VERSION 7 (side key light, ambient 0.5, `fix_alpha_edges`).
+Verify with `--capture=tree` on mtvernon and a `site-review` with
+`--review-sets=world,elevation,globe,snowglobe`.
+
 **Procedural deciduous tree (space colonization).** The broadleaf skeleton is
 grown by space colonization (Runions et al. 2007, `_build_branch_skeleton` in
 vegetation_card_factory.gd): a deterministic attractor cloud fills the crown
@@ -1616,7 +2175,7 @@ pre-fit inside the authored crown width, and the clump FLOOR is the authored
 crown base (floored at 0 the canopy swallowed the trunk — bush balls).
 leaf_canopy.gdshader stamps TWO interleaved size-jittered per-cell leaf
 layers and keeps surviving leaves near-OPAQUE. **Bump
-`VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry** (now v4) or
+`VegImpostorBaker.BAKE_VERSION` on ANY change to this geometry** (now v7) or
 cached impostors serve the old silhouette forever. Verify with
 `--capture=tree` (pinned to July 15 so seasonal thinning can't fake or hide a
 shape defect) and `--capture=veg`.
@@ -1810,16 +2369,104 @@ Configurable realism uniforms (no extra texture fetches): `translucency_strength
 `canopy_roundness`, `color_variation`, `foliage_roughness`, `ao_strength`,
 `subsurface_strength`, `bark_roughness`, `bark_ao_strength`, `bark_color_jitter`.
 
-**OSM water (`core/terrain/water_builder.gd` + `osm_water_parser.gd`).** Two
-surfaces under the `Water` node: **still water** (lake/pond/reservoir/wetland/bay)
-is one flat plane per body at a low percentile of bank heights (`terrain_water.gdshader`
-+ per-lake ReflectionProbe); **flowing water** (`FLOWING_KINDS` = river/stream/canal/
-ditch/drain/riverbank) is **draped per-vertex onto the terrain** so the ribbon follows
-the downhill contour instead of floating as one flat plane (the old ~10 m "hover"
-bug). Per-vertex COLOR encodes local downhill flow (rg = −∇height dir, b = slope-scaled
-speed); `terrain_river.gdshader` scrolls ripples + foam streaks downstream, faster on
-steeper reaches. `_ground_y` cross-fades the detail↔base DEM heights within
-`DEM_SEAM_FEATHER_M` (40 m) of the hi-res patch edge so ribbons don't step at the seam.
+**OSM water (`core/terrain/water_builder.gd` + `osm_water_parser.gd`).** WaterBuilder
+now draws only STILL water (lake/pond/reservoir/wetland/bay/riverbank polygons —
+one flat plane per body at a low percentile of bank heights, `terrain_water.gdshader`
++ per-lake ReflectionProbe), draped onto the EDITED surface (`ground_delta_fn` =
+the loader's tile stack). Every waterway LINE (anything with a `centerline`) is
+drawn by the WaterNetwork below. The parser keeps a waterway that a riverbank
+polygon already covers (flagged `covered`, carved but not drawn) and tags
+`tunnel=culvert`/`covered`/negative `layer` reaches `culvert`; items carry
+`osm_id`. ⚠ The OSM cache stays **v6** on purpose — a version bump forces an
+Overpass refetch for every visited site, and Overpass 504s (the site then loads
+with NO buildings). Caches written before the waterway keys existed are read
+back by `BuildingService._derive_centerline` (centre = midpoint of the buffered
+ribbon's mirrored bank points) with a pseudo `osm_id` ≥ 9e11.
+
+**Water on the land (`core/water/` — the WaterNetwork; plan
+`~/.claude/plans/on-maps-with-significant-smooth-castle.md`).** OSM waterways +
+the player's streams are ONE system: resolved, carved into the terrain, drawn
+level in their channels, analysed for drainage, editable with waypoints, and
+wired into the graph. `WaterNetwork` is TerrainLoader's child "WaterNetwork";
+it only ever writes the procedural CHANNEL tile layer.
+- **Delta stack** (terrain_loader): `_edit_tiles` = the PLAYER layer (sculpt,
+  undo, `terrain_tiles_*.bin`), `_channel_tiles` = procedural channels (never in
+  player undo; cached as `channel_tiles_<lat>_<lon>.bin` + `.json` signatures),
+  `_composed_tiles` = their per-tile sum, which the HeightField renders (its
+  `pre_consume` hook composes whatever either layer dirtied, so every existing
+  queue/reconcile site works unchanged) and the DetailGround sink reads (now a
+  tile-KEY set, not a rect list — channels activate ~150–200 tiles).
+  `_ground_height_at` sums both layers directly. Channels are carved only inside
+  the hi-res patch (minus `ChannelCarver.PATCH_MARGIN_M`); the coarse Ground is
+  never sunk. Tile meshes now come from `TerrainEditTiles.build_tile_mesh_data`
+  (one height pass for mesh + collider, ~5× fewer base samples) and each quad
+  splits along its min-height-difference diagonal (a fixed split drew every
+  diagonal channel as a sawtooth).
+- **Model**: `WaterFeatureLayer` (`water_features_<lat>_<lon>.json`: player
+  streams in DOWNSTREAM order with per-span modes surface|culvert|pipe, sparse
+  OSM overrides keyed by way id, map settings) → `StreamNetwork.resolve` →
+  features `{id: "osm:<id>"|"ws_<n>", points, modes, section{bed_w, depth,
+  bank_slope, max_cut}, carve, base_lps, covered}`. Only a MAPPED `width` tag
+  sizes the bed (the parser's 10 m default "stream" width is a render default —
+  carving it made 7 m trenches holding 2 cm of water). Beds are sized for
+  bankfull, so base flow sits over a flat bed with its own smooth edge.
+- **Profile** (`ChannelProfile`): smoothed ground − depth, clamped under the
+  LOWER BANK (`bank_offset_m` — mapped streams run on valley sides the DEM
+  smeared), then a running MINIMUM downstream with a 0.0005 grade
+  (Priority-Flood+ε in 1-D): every bed is monotone. A cut past `max_cut` is held
+  and the station flagged `blocked` (editor paints it red). Features are
+  profiled outlets-first; a tributary is floored at the bed it joins, but never
+  lifted above its own ground (that floated the water).
+- **Carve** (`ChannelCarver`, WorkerThreadPool, pure): per-segment trapezoid
+  sweep with a C1-rounded toe (`TOE_ROUND_M`) and a soft-min lip
+  (`soft_cut`) — sharp creases alias on the 1.5 m grid; min over segments
+  (channels union); only lowers. Interior joints sweep their end-caps ONLY in
+  the outer-bend wedge — a round cap carries the downstream (lower) bed back up
+  the channel and terraced every steep reach. Incremental by per-feature
+  signature + footprint; Mt Vernon (32 waterways) carves in ~1 s.
+- **Surface** (`StreamMeshBuilder` + `stream_water.gdshader`): stations every
+  2 m × 7 across, LEVEL across each station at bed + Manning normal depth
+  (`StreamHydraulics`, Chow 1959) on carved stations, draped elsewhere; culvert
+  spans emit nothing. The shader reads the depth texture for the water column
+  (absorption, soft shoreline, lap foam only near the strip edge), two-phase
+  flow-mapped ripples, and white water only where Froude > 1 AND the water is
+  deep enough to tumble. Q = base + rational-method runoff (C 0.25) of rain at
+  the CLOCK (`WeatherService.rain_rate_mmh`) on each station's catchment — a pure
+  function of time, scrub-safe.
+- **Drainage** (`FlowRouting`, worker): burn mapped lines 4 m, Priority-Flood+ε
+  (Barnes 2014) with a binary heap, D8, accumulation in reverse pop order,
+  Strahler channels, RDP. 597² @ 5 m in ~4 s. Gives every station its catchment
+  area, the Trace tool's path, and the derived network (channels that duplicate
+  a feature are dropped — ⚠ a PackedVector2Array fetched from a Dictionary is a
+  copy-on-write value; appending to it in place silently filled nothing).
+- **Underground** (`BuriedWaterBuilder`): culvert/pipe runs follow the bed;
+  auto-size = smallest standard pipe whose Manning full-barrel capacity (n 0.012)
+  passes the 25 mm/h design discharge; SURCHARGED / shallow-cover flags in the
+  readout. Barrels use the conduit flow material (X-RAY), so `WaterBuried` is
+  hidden in first person unless "Show buried" or a graph lens is up (the graph's
+  `_on_soi_preview_active_changed` pushes `set_preview_visibility`); headwalls +
+  `ConduitDischargeVfx` outlet jets are always drawn.
+- **Flow view** (display mode "flow"): `StreamTracers` beads at each stream's
+  Manning velocity on the cosmetic clock (`SimFxRate` lights track — frozen
+  when paused), the drainage overlay, and a site-outflow chip.
+- **Editing** (toolbar WATER section → `scenes/ui/toolbar/water_tool_controller.gd`,
+  preloaded, delegated to from edit_toolbar_ui): Trace / Draw / Edit (Light-Studio
+  pin contract: press arms, drag past 6 px, release = ONE undo step; drag a line
+  to insert a waypoint, Del removes the hovered one or deletes/hides the stream,
+  Ctrl-drag moves it all) / Culvert (span modes) / View. Picking is screen-space
+  against projected waypoints. Undo = layer snapshots in the network (the carve
+  regenerates from the layer).
+- **Graph link**: the flow engine asks its host `water_feature_supply_for_intake`
+  — an intake within 6 m of a stream takes that stream's discharge (supply 0.0
+  is still DRY, the supply_lps contract) and its seasonal curve; streams ending
+  in a pond on the graph credit that tank (`stream_pond_inflows`, headroom-capped).
+- `.esim` packages carry `water_features` (not the channel tiles).
+⚠ `SystemGraphView._input` used to handle Delete / Ctrl+Z / Ctrl+Y even with the
+graph CLOSED — it runs before every `_unhandled_input`, so it ate those keys
+from the 3D tools (edit toolbar, Light Studio). They are gated on `visible` now.
+⚠ The Bash tool collapses `\\` even inside a quoted heredoc: write any script
+or spec containing backslashes with the Write tool (an earlier session's
+line-continuations ended up joined onto one line with stray tabs).
 
 **Terrain sculpting (T dock — the rebuilt terrain builder).** ONE edit substrate:
 `core/terrain/terrain_edit_tiles.gd` (`TerrainEditTiles`) — sparse per-vertex
@@ -2272,6 +2919,52 @@ own prev→next interpolation would; pose from `_crowd_pose_for`). A roster
 at or under the budget is ALL heroes with no distance test, which is what
 keeps every single-camp map byte-identical. Hidden non-hero avatars keep
 their node (invisible, no process) so promotion back is free.
+**Nobody blinks out (2026-10-08).** With "Light-tier crowd figures" OFF the
+whole CrowdRenderer used to hide — including the full-tier OVERFLOW the host
+hands it — so only the nearest hero_budget people existed, and a turning
+effigy circle read as people rotating in and out of the world (the user's
+own npc_display.cfg had light_crowd=false). Now the renderer hides only the
+LIGHT slots (shader `light_draw` + `full_base`: light slots sit below the
+full block) and draws the overflow in every mode but "Nobody". Three more
+fixes landed with it: the full block keeps a STABLE slot per person with
+`FULL_SLACK` spare (a hero-set change used to change `instance_count`, which
+clears and rewrites every light slot too — every frame while a circle turns);
+the overflow segment now glides FORWARD from the drawn position over one tick
+spacing (it used to END at the push time, so the figure arrived instantly and
+stood — 5 Hz stepping); and a light-tier `S_CIRCLE` step is drawn as its
+segment instead of a point (circlers jumped arc to arc). ⚠ After a re-layout
+every FREE slot must be written hidden — a zeroed slot is a visible figure at
+the world origin. **Knobs** (NpcDisplayPrefs, Settings → NPCs → Crowd detail,
+each 0 = Auto, with a live readout of heroes / overflow / light / fps):
+`full_figures` (hero budget), `full_sim` (CrowdFocus budget — only full-tier
+people can be heroes), `figure_dist_m` (crowd figure → dot; Auto is now the
+quality tier's `figure_dist_m`, the RenderProfile value that was never wired)
+and `speed_shed` (the 300×/1000× caps; a player's own budgets shed in
+proportion). Verify with the circle-visibility probe in `--capture=festivalmode`
+(`_fm_visibility_probe`).
+**No pops, no jumps (2026-10-09, measured with `--capture=popin`).** Hiding
+the light tier outright could never be pop-free: a camera move (a toast's
+click-to-look) switches ~60 camps' tier and whole camps appeared/vanished
+(measured 111 appear / 19 vanish per 50 s of hops). The setting is now
+"Distant crowd as dots" — OFF hides only the light tier's DOTS; its figures
+still draw inside the figure reach and DISSOLVE out over its last quarter
+(crowd_figure.gdshader `v_fade`, a 4×4 Bayer screen-door in the opaque pass).
+Every slot write goes through `CrowdRenderer._put`, which EASES: it keeps the
+last segment per person by id (`_seg_rec`, ABSOLUTE hours, survives a
+re-layout via `_seg_old`), and a new segment whose start is not where the
+figure is drawn now (a cohort event processed a tick late — a walker stood at
+the end of a leg then leapt ~17 m; a tier switch; a hand-off) starts from the
+drawn point and reaches its end no faster than `EASE_MPS` (3 m/s sim). An
+eased glide into a STANDING spot keeps the person's facing (yaw_hint +
+`YAW_FIXED` marker, mirrored in the shader and `drawn_yaw`). `drawn_position`
+reads the record (no GPU readback). Records carry `full`; a person whose camp
+just went light briefly owns BOTH slots until the host's next push — the full
+slot is hidden at once (`_light_ids`) and must not overwrite the light
+record. The host hands a new avatar in at `last_drawn_position` (slot, else
+`_gone` for 3 s) and an avatar whose person went light calls `ease_from`. The
+probe's phases: still camera at the stage crowd, then camera hops; it counts
+VANISH / APPEAR / JUMP (a move faster than a catch-up glide) per cause and
+dumps the record behind each jump.
 Verifying the renderer: the figures were "invisible" for a whole evening
 because the bench cameras looked from the crowd's CENTROID (the empty middle
 of a field with people at six spaces) toward the origin, and then read dot
@@ -2480,6 +3173,23 @@ the light tier, zero blocked after 4 sim-hours. Verify with
   `AMBIENT_MAX_TAGS` (10) nearest people carry one; measured in 3D because
   from the settlement view's block height the camp straight below read as
   0 m away in XZ and stacked a wall of "sleeping" tags.
+  The labels SHRINK with distance (2026-10-09; `NpcAvatar.LABEL_REF_M`,
+  `fixed_size = false`): they used to be constant on SCREEN, which read as
+  "smaller as I approach" (tiny beside a body up close, huge beside a speck).
+  The name tag and the status stack hang off one `Labels` anchor at the top
+  of the head (`Labels/Stack`, LABEL_STACK_Y above it) that follows the head
+  down and is scaled `sqrt(max(1, d / LABEL_SHRINK_FROM_M))` — real size
+  inside 3 m, then 1/sqrt(d) on screen: always smaller further away, never a
+  speck (pure world size was unreadable by 8 m), and it grows UP from the
+  head, never into it. Bar quads need `billboard_keep_scale` or the scale (and
+  the fill's scale.x fraction) is dropped by the billboard. Verify with a
+  three-distance shot (a NpcAvatar with set_tag_visible(true)).
+- **Two facing conventions, half a turn apart.** A FULL-tier dot's
+  `face_yaw` (NpcFacing.base_yaw) is the AVATAR's — forward −Z; the LIGHT
+  tier's and the crowd shader's are forward +Z. The host converts both ways
+  (`_hand_in` and the overflow entries add PI); an unconverted overflow figure
+  stood facing backwards — the effigy circle "walked facing out of its lane"
+  (the festival check read 0 of 55 full-tier circlers along the circle).
 - **"Paths through the air" had two sources, both fixed.** (1) The host
   sampled a hero's ground height at the SIM position while drawing the body
   along its prev→next glide; on a slope at speed the two differ by metres —
@@ -3100,6 +3810,160 @@ to metres (×0.0254) only in the mesh builder.
 - `linkage_params.gd` (`LinkageParams`, RefCounted): full parameter model; `to_config`/
   `from_config` round-trip the web app's v30 config JSON (structure/mode/foldAngle/
   panels/supportBeams/visibility) so web designs load directly and vice-versa.
+  The round trip is LOSSLESS (2026-10-12): every key the typed fields do not
+  emit (`buildSteps`, `coverings`, `floor`, `shadeCloth`, `mode.radialArray`,
+  newer panel/cost keys, the camera, …) rides `extra` and is merged back by
+  `to_config()`. Typed fields win. `DERIVED_EXPORT_KEYS` (`geometrySnapshot`,
+  `summary`, `handoff`, …) are dropped. `name`/`designName` → `design_name`.
+  A port that starts modelling a key takes it over just by emitting it.
+  Parity status, the five shipped JS presets (`presets/ll_*.json`) and the
+  fixtures: `LINKAGE_PARITY.md`.
+- **Coverings, raised floor, shade tarps (A4, LINKAGE_PARITY.md).**
+  - `LinkageEnclosure` is the ONE aggregator for `part_data`, the builder
+    and the BOM: deck, then coverings, then tarps (the web's order; the
+    walls can start on the deck, the tarps sit above the wall bands).
+  - Records are snake_case covering dicts keyed `wall:s<span>:<band>`.
+  - Floor beams are `_make_beam` records (`floor-beam*`) drawn in their own
+    `FloorBeams` MultiMesh. Coverings are keyed MeshInstance3Ds under
+    `Coverings`, staged by part state like every other part.
+  - BOM gains floor rows and an ENCLOSURE section; the Build Guide writes
+    the SVG cut files.
+  - ⚠ The project treats "type inferred from Variant" as an ERROR, and
+    `Callable.call(...)` returns Variant: `var x := some_callable.call()`
+    fails to compile, and every script that depends on that file then fails
+    with it. Call the static function directly.
+- **Radial array + sequential fold (A3, LINKAGE_PARITY.md).**
+  - `LinkageRadialArray` is the JS radial-array.js. The plan is measured on
+    the DEPLOYED pose and cached per design. `apply(plan, geo, slot_geo)`
+    copies every part list into each visible slot, IN SLOT ORDER, so part
+    keys never depend on the fold.
+  - `part_data`, `drill_solve` and the builder all apply it.
+  - `LinkageBom.compute` = one structure (`per_structure`) ×
+    `structure_copies` (radial visible × arch tunnel segments).
+  - `packed_spec_for` ships one bundle per copy (`count`).
+  - `deployed_panel_summary` counts every copy.
+  - `LinkageFoldSequence` (`mode.sequentialFold`): the fold angle becomes a
+    master progress over the copies, centre first. The builder solves once
+    per distinct angle (≤3). Arch tunnel segments still fold together.
+  - Lab: the "Radial Array" sidebar group.
+- `linkage_part_keys.gd` (`LinkagePartKeys`, port of part-keys.js): the web's
+  stable part keys (`beam:vertical:a0:m2:s2:B:L1`, `joint:a0:m0:top:inner:cap`,
+  …) and selectors, so a LinkageLab build step names the same part in the game.
+  `part_data(p, fold)` applies the web's hardware representation switch
+  (detailed assemblies replace brackets/bolts/washers) — the SOLVER keeps
+  emitting every simple bracket/bolt because LinkageHwPlacement seats on them.
+  The solver now stamps `layer_index` / `ring` / `role` / `cap` and emits
+  `washers`; `LinkageStructureBuilder.set_part_state(key, {visible, offset})`
+  hides or moves any drawn part by key (washers are drawn now too). Keys are
+  pinned == JS per preset (`_test_part_keys_parity`).
+- `core/linkage/build/` (LINKAGE_PARITY.md A2): `LinkageBuildSteps` (port of
+  build-steps.js — steps are camelCase CONFIG data in `extra["buildSteps"]`,
+  `p.get_build_steps()/set_build_steps()`; `generate_for(p)` == the web's
+  Auto-generate), `LinkageBeamHoles` (getBeamBoltIntersections + the drill
+  solve), `LinkageBuildOps` (the place/cut/drill/fasten drivers as pure
+  functions of progress — what the Lab player and the NPC build timeline both
+  read). `LinkageGeometry.reciprocal_support_bolts` ports the rcp-ring /
+  rcp-cross bolts OUTSIDE the solver's bolt list (counts/BOM/packing
+  untouched). ⚠ `ease` is a Godot builtin (two args) — a one-arg static named
+  `ease` fails to parse.
+- **Fabrication tools + the figure's hands (swarm B1/B2).** `FabToolCatalog`
+  (`core/fab_tools/`): circular saw, drill, impact driver, wrench, mallet,
+  clamp — procedural primitives in metres, each with `grip` / `grip2` / `tip`
+  sockets (Marker3D children + meta) and a spin part; a GLB + sockets JSON in
+  `user://fab_tools/<id>.*` overrides one. HAND FRAME (every grip is written in
+  it): palm centre at the origin, the handle along the hand's X, the forearm
+  leaving along +Y, the palm facing +Z. `NpcSimpleFigure` gained `Wrist0/1`
+  (+ a `ToolMount` at the palm) and ONE layered pose path: procedural → mo-cap
+  spice → `set_clip(NpcAnimClip, t, w)` → `set_hand_target(i, palm_world)` /
+  `set_foot_target(i, ankle_world)` IK — the procedural pose is saved after its
+  step and restored before the next whenever any layer ran, so layers never
+  feed the easing. `attach_tool` hangs a tool off the wrist (moves WITH the
+  hand); a tool that follows its op's path (LinkageBuildOps) is placed in the
+  world and the hands IK to its grips instead. Clips: `core/population/anims/`
+  (shipped) + `user://npc_anims/` (the player's, wins). ⚠ A pistol grip is
+  VERTICAL — its hand X runs up the grip; a socket written as if horizontal
+  wrapped the arm round the drill (`fab_pose_diag.gd` is how that showed).
+- **NPC animation editor (swarm B3, `scenes/ui/npc_anim_editor.gd`).**
+  - Opened from `Main.open_npc_anim_editor(clip_id)` (its own CanvasLayer at
+    `LAYER_MODAL + 2`, above the Lab) or Settings → NPC → "Animation editor…".
+  - The studio plays the clip in an op CONTEXT (`FabContextRig`: the
+    canonical bench / beam / post, the tool on the SAME `LinkageBuildOps`
+    timing the swarm uses), with the hands IK'd to the tool's sockets.
+  - Edits go through `NpcAnimClip`'s helpers (`set_joint_at`, `remove_at`,
+    `pose_at` / `paste_pose`, `mirror_pose`). Only the edited joint's TRACK
+    changes.
+  - The gizmo is a `LightGizmo` in local space.
+  - A free hand's orange IK ball bakes the arm solution into shoulder + elbow
+    keys.
+  - Saves to `user://npc_anims/`; "Revert" deletes the user copy.
+  - ⚠ The camera is placed from LOCAL transforms (`Basis.looking_at`): it is
+    built before the studio is in the tree. `look_at` there fails and leaves
+    the camera unplaced, so every click ray misses. The `animeditor` capture
+    is what caught it.
+- **Build timeline (swarm B4, `LinkageBuildTimeline`).** A build sequence
+  becomes a crew schedule with NAMED workers: jobs per beam at the bench (cut,
+  drill), per step (place; per panel), per JOINT (fasten), the lift from the
+  parked spot (quorum `ERECT_MIN_WORKERS`, clamped to the crew) and the deploy
+  (a view step that opens the fold). Workers walk at 1.3 m/s, carry beams to
+  the structure, hold saw/drill stations. `state_at(tl, t)` is pure: workers
+  `{pos, face, activity, clip, tool, u}`, parts `{visible, offset}`, `joints`
+  (hardware keyed by joint, for a renderer that draws it its own way) and
+  `fold_deg`. ⚠ `_resolve_parking` used to call `compute_displacement` (which
+  replays every earlier step) once per JOB — 2 s of a 2.2 s SOAK plan; it is
+  one pass over the steps now.
+- **Build site (swarm B5, `gameplay/linkage_build_site.gd`).** A placed
+  linkage prop with `build_run = {start_h, crew_n}` (the fire's
+  record-on-the-prop pattern) gets a `LinkageBuildSite`
+  (`PlacedPropRuntime` attaches it; the prop editor's Crew spin + "Rehearse
+  build" / "End rehearsal" write and clear it via
+  `LinkageBuildSite.start_rehearsal` / `clear_rehearsal`). Build time =
+  (clock − start_h) × 3600, so it follows the world clock, scrubs and
+  survives a reload; the plan is cached by design + crew. It drives the
+  builder (`set_part_states`, and `set_fold_angle` only on a > 0.05° change),
+  twelve-ish hi-detail stick figures (clip on the cosmetic NPC clock for
+  looping clips, job progress for one-shots; tools on their op path from
+  `FabContextRig` in the worker's frame, hands IK'd to the grips) and
+  benches laid out as the authored contexts. Builder joint hardware (simple
+  brackets, bolts, washers) follows its JOINT via
+  `LinkageStructureBuilder.part_joint_keys()`. While it runs,
+  `LinkageDeployRuntime.toggle_deploy` does nothing. After the last job + 90
+  s the crew disperses and every part is seated. ⚠ Set the FOLD before
+  composing part states: panels and support beams only exist past their
+  visibility angles, so states composed first miss them (the panels showed
+  before they were placed). Not yet: sawdust, the chore board driving it (B6).
+- **Lab step player (A5).** `LinkageStepScene` (pure frames) +
+  `LinkageStepPlayer` (engine + renderer, sibling of the Lab's builder) +
+  `scenes/ui/linkage_steps_panel.gd` (the 🎬 Steps dock under the 3D view:
+  list with groups as "× N", transport, scrub, speed, repeats, Follow,
+  title / notes / duration, move / duplicate / delete, Auto-generate, Save
+  to design, NPC animation…). See LINKAGE_PARITY.md "Step player". ⚠ The
+  Lab offsets its builder INSIDE the holder (turntable centring), so the
+  player copies `builder.transform` every frame; a sibling that assumed the
+  holder frame framed every step on empty ground. ⚠ Hardware the builder
+  draws its own way follows its JOINT, and only parts a step introduces
+  count. "Unreferenced" washers share joints with brackets, so they had lit
+  every joint over the empty site.
+- **The crew builds it (B6, labour mode).** The Lab's "Queue build for crew"
+  now also writes `build_run = {mode: "labour", iid, project_id, crew_n}` on
+  the kit crate, and the site attaches to the UNDER-CONSTRUCTION prop too
+  (`_build_construction_prop`). Build time = the project's labour-weighted
+  progress (`SiteProject.rollup`) mapped through the timeline's
+  cumulative-work curve (`time_for_fraction`), eased over `LABOUR_EASE_S`, so
+  the structure goes up exactly as fast as the crew's credited work. A lane
+  is drawn only while a real person is DOING one of the project's chores on
+  site (`NpcPopulationBridge.linkage_build_status`); busiest lanes first, an
+  agent keeps its lane while it stays, the lane wears its colour, and its own
+  body is hidden through the STATIC `NpcStandIns` (read by the host: avatar
+  hidden, crowd overflow slot written hidden). `owns_visuals()` makes the
+  bridge's `_push_build_progress` stand down. With no readable project (NPCs
+  off, bridge not up, project gone) the site SUSPENDS and hands the builder
+  back; a cancelled project disposes it; a done one finishes through the
+  deploy runtime's own `_settle` (fold persisted, graph array unstowed).
+  The phase chores, their effects and the board are unchanged, which is why
+  `--capture=project` (the coarse path) still passes. Not built: the
+  `work_anim` dot input (the stood-in agents are drawn by the site instead),
+  a glide from the arrival spot to the lane (an arriving worker pops onto
+  their lane), the light tier (no board chores there).
 - `linkage_kinematics.gd` (static): closed-form `calculate_joint_positions`,
   `optimal_closed_angle` (ring-closure scan), `min_fold_angle_v_overlap`. Core math
   runs in 64-bit scalars before `Vector2` conversion (Godot vectors are 32-bit).
@@ -3504,6 +4368,23 @@ Selftest: `core/packing/packing_selftest.gd` (511 checks; --import first).
 
 ## NPC population simulation (core/population/)
 
+**The master switch: Settings → NPC → "Simulate & draw NPCs"**
+(`NpcDisplayPrefs.npcs_enabled`, `npc_display.cfg` key `npcs_enabled`,
+default on) — for site analysis with none of the people's cost. Off, the
+GATE IS IN SystemGraphView, never in the bridge: the ambient tick skips
+`bridge.tick` and the per-frame `service_frame` slices, `_ensure_npc_host` /
+`_ensure_crowd_renderer` free both visual layers, `_suspend_npcs` (edge-
+triggered) clears every habitat demand override so pop-driven habitats bill
+their headcount at the classic constant rate, and `npc_dot_summary` /
+`festival_vibe` / the Site Plan dot + crew providers return empty (the fun
+meter, peak chip and habitat inspector check the pref too; StageMusic resolves
+venue programmes itself so a set still ends on time). Camp power keeps
+stepping, on the clock's hours. The roster is FROZEN, not erased — switching
+back on resumes it, a long gap through the ordinary coarse catch-up. Because
+the bridge itself is ungated, the challenge bake and every offline selftest
+are untouched. `force_npcs_for_session` (never saved) turns it back on for
+every `--capture` run; festival mode switches it on for real.
+
 Individual simulated people (10–50) driven by needs, wayfinding to
 player-tagged spaces; consumption emerges from activity and flows through the
 graph, and morale decides whether the community holds together. Design doc:
@@ -3534,7 +4415,7 @@ enrichment attempt stop someone re-evaluating whether they were thirsty.
 Agents carry a deterministic `display_name` (`NpcAgent.name_for`) +
 `status_line()`.
 
-**Morale ("Fuck Yes"→"Fuck This")** — `NpcMorale` (pure static): 6 bands;
+**Morale (worst→best: "FUCK THIS!!!" · "Fuck You" · "Fuck Me" · "Fuck It" · "Fuck Maybe" · "Fuck It!", then the peak state "FUCK YES!!!")** — `NpcMorale` (pure static): 6 bands;
 pressure from unmet CRITICAL needs is superlinear past `PAIN_THRESHOLD` 0.75
 and **2× when the need is BLOCKED** (no tagged space / starved supply) —
 broken infrastructure is what breaks a community, not busy people. Needs alone
@@ -3673,6 +4554,26 @@ routine** tab, staged in a draft until Apply and persisted to
 population keeps the authored day. Note a scheduled camp is materially more
 resilient (morale starts ~0.81 vs 0.60), which is why the harness collapse
 window had to widen 90->220 iterations.
+**Personal schedules (2026-10-09).** A routine is a shape: each person lives
+their own version, different each day (`NpcRoutine.personal_blocks` /
+`day_shift`, keyed `day_key` = "<id>|<routine day>", the day rolling at
+`roll_h()` = mid-sleep). On top of `offset_for` (±0.5 h, fixed) the whole day
+shifts by up to `MAX_DAY_SHIFT_H` (±0.6 h, new each day) and SHORT blocks
+(< `SHORT_BLOCK_H`, the 5-minute toilet visits) float as a unit up to
+`MAX_FLOAT_JITTER_H` inside their neighbours. The sleep window and wake hour
+move with the person's whole shift (`NpcAgent._personal_shift`, the cohort's
+`pshift`) using `night_key`, which rolls at MIDDAY so one night keeps one
+shift (otherwise a person who just woke finds the window moved and goes back
+to bed — the one-session-per-night pin caught it), and the
+instant-daytime-nap rule ends "day" at `NpcAgent.night_from_h(personal
+start)`, not a fixed 21:00 (a 20:30 bedtime is a night). ⚠ Measured traps:
+jittering ordinary block BOUNDARIES independently drifted the tiers' morale
+apart (the "linger" trap again) — shift whole days instead; and the light
+tier's idle dawdle (15–45 min) under-gathered by a third, which is what had
+the morale pin sitting at ~0.075 of its 0.08 — an idle light-tier person now
+re-decides the moment their enrichment need crosses its bar (exact: needs are
+lines). Waking idlers at every need crossing or block end instead re-issued
+meals (+20 % food) — enrichment only.
 
 **Area spaces (Tier 4b).** `target.kind == "area"` was always in the schema;
 what it lacked was geometry and a way to create one. `SpaceEditUI`
@@ -4155,8 +5056,11 @@ unlatched signal would strobe. Nothing beeps; nothing must be dismissed.
 claim, applies `hide_player_mesh` / `shadow_max_distance` / `prop_cull_scale_m`,
 and **restores the player camera when the stack empties** — all restore
 knowledge in one place. The six SubViewport modal previews and
-`graph_soi_preview_service` are PERMANENTLY excluded (private composited
-worlds, never claimants). Selftest: `core/camera_claims_selftest.gd`.
+`graph_soi_preview_service` are PERMANENTLY excluded as CAMERA claimants
+(private composited worlds) — the one exception is the Globe lens's
+camera-LESS `graph_globe_shadow` claim (`shadow_max_distance` only;
+`value_or` falls through to the camera below). The full-screen SoI globe is a
+real claimant (`soi_snowglobe`). Selftest: `core/camera_claims_selftest.gd`.
 
 **The mode (`scenes/settlement/`).** A real full-screen `Camera3D` on Main, NOT
 a SubViewport — the preview service carries AMD-TDR crop/clamp scar tissue and
@@ -4166,7 +5070,7 @@ culling, shadows and TAA behave exactly as in first person. **One scalar `_h`**
 **perspective throughout with no ortho toggle** (a projection switch is the
 discontinuity that makes Site Plan picking fiddly), pan speed ∝ `_h`. Three
 rules the file exists to hold, restated in its docstring: **the clock is NEVER
-claimed** (`soi_snowglobe_camera.gd` freezes the sim — do not copy that line);
+claimed** (no view does any more — the snowglobe and Elevation both used to);
 **no orders, ever** (selection is inspection + follow-cam; the levers are the
 routine editor, chore board, priorities, space tagging and site rules); **it
 borrows nothing from the 2D graph** (reading `agent_dots()` as DATA for the
@@ -4671,6 +5575,454 @@ threshold is a tuned multiplier and not "> 1").
 the same constant — old and new builds neither join nor SEE each other, and only
 the new client can print a useful message about it.
 
+## SoI stage — the graph's 3D lenses (Plan / Section / Globe)
+
+One renderer, `system_graph/graph_soi_preview_service.gd` (a SubViewport sharing
+the main World3D), draws every 3D lens of the G view: Site Plan (top-down),
+Elevation (side-on section), the freeform SoI bubble, and the
+**Globe** lens (`GraphSiteLayout.VIEW_GLOBE`, the "Globe" chip) — the snowglobe
+inside the graph: a full-canvas perspective orbit, glass dome faded by pitch,
+the shared rim sun (`SoiRimSun`, owned by SoiService and ref-counted by owner),
+read-only PINS on placed items (`graph_canvas._draw_globe_lens`), drag orbits /
+wheel zooms / click selects / double-click re-fits. The full-screen globe
+(`SoiSnowglobeCamera`, map pin) stays; it renders through the ROOT viewport,
+which the open graph runs with `disable_3d`, so `SoiService.enter_snowglobe`
+closes the graph first and reopens it on exit, and opening the graph ends the
+globe. Both globes share framing (`SoiOrbitMath`). Rules that carry it:
+
+- **No view claims the clock.** Elevation's noon lock (time_scale 0 + snap to
+  noon + write the old day_time back on exit) and the snowglobe's time_scale-0
+  claim are gone; the timeline's "⏸ held · …" pill (`main.clock_hold_owner`,
+  `ClockClaims.owner_of`) names any OTHER system that pins the clock.
+  Readability at night is a per-camera lighting floor
+  (`_sync_lens_env` / `_apply_night_floor`).
+- **The preview follows the clock** (`_clock_refresh_due`): scrub → prompt
+  captures (≤10 Hz, 6 heavy); playing → when the sun moved ≥0.35° or 0.25
+  sim-h, or every 5 s (≤4 Hz, 2 heavy); paused → nothing; one capture in flight
+  (`frame_post_draw` ack, `frames_rendered`). Lens environments are SHALLOW
+  duplicates (the Sky resource is shared, so sky-shader params stay live)
+  re-synced from the world on every capture — the old `duplicate(true)` froze
+  sky, fog and ambient until G was reopened.
+- **Elevation fills the panel (2026-10-11).** The section has NO disc mask:
+  `_sync_layout`'s section branch takes the Globe's full-canvas path with the
+  disc material kept (`use_mask` 0 — the poster sky still paints the air),
+  `_want_crop` reports true for the section so a wheel notch never re-lays-
+  out, `_current_mask_canvas` returns a covering circle so lens flights
+  morph Plan's disc open into the window, and the canvas skips its hole fill
+  / dot grid / disc reveal in Elevation. The 3D clip to the SoI sphere is
+  unchanged — what the circle used to cover is air, so
+  `graph_soi_preview_disc.gdshader` paints a ground band (`backdrop_ground*`)
+  under the horizon line outside the cut. The frame maths and the cap are
+  untouched (`site-review` elevation set: disc-vs-centre 0.00 px, cap PASS).
+- **One Elevation frame** (`GraphElevFrame`): the disc mask, its label, the
+  reveal fade, the preview container AND the section camera's look point (the
+  world point under the container centre) all derive from it. The disc used to
+  be pinned to the canvas centre while the camera followed the metre anchors,
+  so the sphere slid out of its circle on any pan or cursor zoom. The separate
+  Shift+wheel section zoom is gone (it was overwritten by the anchors anyway).
+- **The cut is solid** (`SoiSectionCap`, driven by `set_section_cutaway`): a
+  strip mesh on the cut plane, 3 cm behind it, from the ground profile down to
+  the chord circle, painted with `soi_strata.gdshaderinc` (the bowl's own
+  strata, now shared). ⚠ The section renders with a TRANSPARENT clear and the
+  disc shader paints the air with a time-of-day poster sky
+  (`_sync_section_backdrop`): an orthographic side-on camera sees the sky only
+  along the horizon, and this project's horizon sky is lit by the volumetric
+  fog the preview turns off — it rendered BLACK. The Hydro Lab embed uses the
+  same disc material with `use_mask = 0`.
+- **Every lens is a PERSPECTIVE camera (2026-10-13)**, like the Globe — the
+  orthographic Plan and Section were where the "old ortho" artifacts came
+  from (an ortho camera never reads as the world, and the ortho↔perspective
+  switch was a seam in every flight). Plan (`PLAN_FOV_DEG` 35) and Section
+  (`SECTION_FOV_DEG` 30) stand at the DISTANCE that makes px/m on the focus
+  plane equal the 2D scale (`_matched_distance`: frame_h/2 ÷ tan(fov/2),
+  `_frame_h_m` = canvas_h ÷ px_per_m, floored at `MIN_FRAME_H_M`), so at rest
+  the 2D overlays on that plane stay registered; the plan's focus is the
+  GROUND under the view centre (`_ground_y_or`). near/far follow the distance
+  (`_set_near_far`). Shadows: a camera-less `LENS_SHADOW_CLAIM` while a lens
+  is live. Off the focus plane (and whenever orbited) a 2D overlay must go
+  through the camera: Site Plan's SoI ring, radial guides, working radius,
+  array ghosts and watershed outline are DRAPED on the ground and projected
+  (`graph_canvas._site_point_canvas` / `_draw_site_ring`, ground heights
+  cached 2 s on a 0.5 m key); `GraphNpcSiteRenderer.project` (dots, spaces,
+  streams, POI markers) projects at the ground too, not the SoI centre's
+  height. Drag-pan on an orbited plan intersects both pointer rays with the
+  focus plane (`_site_pan_by_pixels`). POI name tags live on render layer
+  `PoiRuntime.LABEL_RENDER_LAYER` (1<<18), excluded from the lens camera's
+  cull mask — they are screen-size see-through first-person furniture and
+  printed as giant text over every lens. Hydro Lab fixes with it: the overlay
+  floor is `GraphSiteLayout.LAB_MIN_ORTHO_H_M` (it was 1.0 m, so deep zoom
+  unlinked overlay and camera), `_dia_px` no longer multiplies the zoom twice
+  when linked, and the embed's layout key is written in the format it is read.
+- **Lens changes fly** (`SoiStagePose`, `begin/end_lens_transition` bracketing
+  `_sync_soi_preview_for_mode`): ~0.56 s between perspective poses (the
+  dolly-zoom to a near-ortho pose below survives only for old callers), the
+  mask circle morphing, the 2D
+  overlay faded out mid-flight (`canvas.modulate`), no projection authority
+  while flying. No flight on first entry, into the Lab embed, or same lens.
+  ⚠ Camera3D refuses `fov < 1°`: set_fov errors and keeps its old value. The
+  dolly therefore used to back off for 0.2° while still drawing at about 1°,
+  and the frame shrank about 5× just before the ortho switch. The harness
+  matrix's graph run caught it as 12 `set_fov` engine errors. `SoiStagePose.apply`
+  now draws any pose under 1° as an equivalent `PROJECTION_FRUSTUM`
+  (size = near-plane height), and `from_camera` reads one back.
+- **Chrome.** The lenses are one segmented control in the top bar
+  (`_make_mode_chip` + `_style_lens_segment`) with procedural icons
+  (`GraphLensIcons` — drawn in code because the fallback font has no reliable
+  ◐/◍ glyphs). Each physical lens shows a **lens strip** at the canvas's
+  top-left (`_build_lens_strip` / `_update_lens_strip`, 5 Hz, text written only
+  on change): lens name, live state (SoI radius, working radius, heading +
+  slice, vertical exaggeration on the 2D-only section), the controls, and a
+  clock chip (live N× / paused / time held). It REPLACED the hint strings the
+  canvas drew on the disc's top edge (they sat on the Sunlight/Rain/Wind pills
+  and scrolled away at depth) — don't put per-lens hints back on the canvas.
+  Entering Elevation the cut plane SWEEPS into the globe from the rim while the
+  camera flies (`_tween_sweep`, `_push_sweep_cutaway`; leaving, it slides back
+  out), and the live section clips the 2D ground line to the disc. Lighting
+  floors: the section keeps 75 % of its floor by day, the bubble/Globe 50 % —
+  the player's world ambient can be 0.05, which printed shadowed slopes and
+  roofs black. Vegetation is NOT lifted by this (its shaders take main.gd's own
+  ambient, not the camera environment). The full-screen globe's dock is a
+  centred card above the timeline.
+- **The soil** (`core/soi/shaders/soi_strata.gdshaderinc`, `soi_soil()`, shared
+  by the bowl and the cut cap) is a Pacific-Northwest forest profile: litter /
+  humus → dark topsoil → iron-rich red-brown subsoil (mottled) → glacial till
+  with cobbles, fading darker to the globe's bottom → columnar basalt, with
+  roots, undulating horizon boundaries, and the terrain's own near-field ground
+  maps (ground049a, `TerrainBuilder.apply_soil_textures`) as grain + relief.
+  Horizon thicknesses scale with the SoI radius (`k = clamp(R/45, 1, 5)`) so a
+  humus layer still reads on a 300 m globe; the key says "depths drawn ×k".
+  The water table is a LEVEL surface at `centre − 0.70 R` (`soi_water_level`):
+  the old band sat a fixed 15 m under the LOCAL surface and flooded every
+  hillside cut. Percolation channels (`soi_channels`, one per ~120 m, each
+  forking twice) carry animated water from under the humus to a seep at the
+  table. Face coordinates: the cap uses metres along the cut, the bowl arc
+  length round the vertical axis. Colours are authored sRGB and stored linear;
+  `GraphSoilLegend.COLORS` / `BOUNDS_K` / `WATER_FRAC` MIRROR the shader — edit
+  both. UI: the collapsible **Soil profile** key under the lens strip
+  (Elevation, Globe) and the Elevation **soil probe** — hovering the cut names
+  the horizon, its depth and the distance to the water table
+  (`graph_canvas._draw_elev_soil_probe`, `GraphSoilLegend.horizon_at`).
+- `_canvas_layout_key()` is the ONE layout signature (store and compare); a
+  mismatch re-lays-out — and re-renders the shared world — every frame. (The
+  Hydro Lab embed still has two different key formats; it was left alone
+  because the Lab may depend on that continuous refresh.)
+
+## The siphon turbine is a SIPHON (2026-10-11)
+
+`core/conduits/siphon_turbine_physics.gd` (`SiphonTurbinePhysics`, pure,
+pinned in `siphon_hydraulics_selftest._test_siphon_turbine_physics`) replaced
+the culvert stage-discharge that used to stand in for the siphon kind. The
+machine: a 6″ dip tube hangs from the turbine into the pond; the turbine sits
+at the siphon's CREST on the bank; the draft pipe (the "culvert") runs from
+the runner down the hill. Rules the model carries:
+- **Head is pond surface − exit** (a closed conduit: the crest costs pressure,
+  not head). Energy balance pond → exit: H = h_dip + h_draft + v_exit²/2g +
+  h_turbine, Darcy–Weisbach + minor losses, closed by the runner law
+  Q = 0.7·A_r·√(2g·h_t) (propeller flow coefficient; Dixon & Hall). An 8″
+  runner on an 8″ free-discharge draft pipe throws ~half the head out as the
+  exit jet — real, and why draft tubes diffuse.
+- **Two atmospheric limits, both reported:** the crest (runner inlet) absolute
+  head = H_atm − lift − h_dip − v²/2g must stay above `H_ABS_MIN_M` 2 m or the
+  column lets go (`regime: lift_exceeded`, prime latched, no flow); the
+  runner outlet = H_atm − (runner − tail) + h_draft must stay above
+  H_vapour + σ·h_t (Thoma, σ 0.6). Past that: `cavitating`, h_t capped at
+  (inlet_abs − H_v)/(1+σ), and `draft_excess_m` / `useful_draft_m` (bisection
+  on the exit height to inception) say how much of the draft does nothing.
+  `atm_head_m(site_elev)` is barometric.
+- **Prime / break come from GEOMETRY now:** `dip_tube_length_m` (mouth =
+  break level) and `siphon_prime_mode` ("overflow" = the pond reaches the
+  crest, the turbine; "pump" = the mouth a half-bore under).
+  `resolve_siphon_levels` honours them over stored offsets; legacy saves with
+  only offsets are unchanged. `manning_n` is accepted and ignored.
+- **Speed:** tip-speed ratio φ 1.6 on the runner bore (`runner_diameter_mm`,
+  0 = the dip tube's), not the 5 kW rotor curve.
+Three bugs fixed with it (each measured by `--capture=siphon`'s "siphon
+verify" lines): `bind_siphon_to_nearest_pond` no longer moves a prop-bound
+turbine's site to the pond centroid (a siteless one is seated on the SHORE),
+and seeds the dip tube from the pond depth; `ensure_siphon_outlet_sink` traces
+with a VETO on the pond's basin (`Watershed.trace_downhill(..., veto)`) and
+LOCKS the traced route (unlocked, `route_3d` was never read and the culvert
+drew a chord), with `retrace_siphon_outlet(id, drop)` for "further downhill";
+`_auto_penstock_for_new_water_wires` skips `direct_intake` wires and
+non-penstock kinds — it used to turn the bind's own pond→siphon wire into a
+poly penstock anchored at the tank centroid, the "immovable intake node".
+The dip tube is drawn in the world by `gameplay/siphon_dip_tube.gd` (on the
+prop, off the inlet port via `ConduitManager.resolve_port_binding`). Lab:
+Siphon section (dip length, priming, runner Ø, draft length; prime/break
+read-only), crest / dip-mouth / draft-exit drag handles on the cut, a
+suction gauge with the limit tick, Pond level + Suction deck tiles, siphon
+insights and a siphon sensitivity line ("exit 0.5 m lower → +N W"); the
+exit spin writes through to the outlet node + culvert end.
+**Lab open HEALS a saved siphon** (`prepare_siphon_lab_session`): a legacy
+item gets `dip_tube_length_m` from its break level (the break does not move)
+and `siphon_prime_mode` "pump" when its prime sat below the module; an
+intake wire converted to a poly penstock goes back to a direct intake
+(`heal_siphon_intake_wires`); an auto outlet inside the pond's basin is
+re-traced (`_siphon_outlet_in_pond`); and the THREE exit heights a save can
+carry (specs `outlet_invert_m`, culvert `invert_out_m`, the outlet node's
+`elevation_m`) are reconciled to the node (`sync_siphon_outlet_invert_from_
+sink`) — Mt Vernon's siphon carried −89.4 / −81.6 / −82.7 and read 9.3 m of
+head on a 1.5 m drop. ⚠ The cavitation cap is on the TOTAL head across the
+runner (pressure + the dip→draft velocity-head change) at the RUNNER's
+datum; the first cut used the crest datum and the static pressure only,
+which stepped the power 29 % at inception on a 6″ dip / 8″ draft (pinned).
+**Round 2 (same day):** the Lab's draft-exit handle sits where the OUTLET
+NODE really is on the cut and drags on BOTH axes — x walks it along the
+slice (down the hill), y sets the height, never above the ground there
+(`_drag_exit` → `SystemGraphView.move_siphon_outlet(id, site, elev)`: the
+node, the culvert's far end and `outlet_invert_m` move together; the traced
+route is dropped, the engine re-measures the draft length). The test-fill
+slider reaches 200 L/s on a siphon (a 20 L/s fill could never out-draw a
+siphon pulling 70; the "Pond: inflow − draw = net" line says so) and "Fill
+pond to the prime level" primes it in one click. The close-up has a SIPHON
+MODE (`hydro_turbine_closeup.gd` `_process_siphon`): the propeller from the
+reach's rpm, the pond's waterline relative to the turbine, the water column
+in the riser/leg, the dip and draft tubes, beads riding the path at the draft
+velocity, a siphon HUD; the camera looks ACROSS the shaft and frames the
+dip tube. The GLB's propeller is "Node15" (`turbine_node`), normal +Z —
+unnamed, the size heuristic spun a motor BOLT in the world.
+⚠ **A pond cannot rise above its rim, and a crest above the rim can never
+overflow-prime.** Mt Vernon's siphon stands 1 m above its pond's rim with the
+pond 2 cm under the rim — "test inflow does nothing" was the pond spilling,
+and a 1 m dip tube's mouth sat AT the surface. "Fill pond to the prime
+level" (`_on_fill_to_prime`) therefore switches to pump priming when the
+crest is above the rim AND extends the dip tube so its mouth is half a metre
+under the rim, toasting both; the net readout says "Pond: FULL" and the
+insight names the crest/rim conflict. The harness reads the Lab's `_last_r`
+for "primed" — the engine stamps `siphon_primed` only on a clock tick and
+the harness holds the clock.
+`--capture=siphon` prefers a SIPHON-kind turbine on the map (Mt Vernon also
+has a PowerSpout), strips its own stale `cap_lab_*` seeds, and on a map
+with a pond but no siphon seeds a TEMPORARY one on that pond (no site, so
+the bind seats it on the shore; removed before quitting); the "siphon
+verify" lines cover binding, outlet, physics, Lab controls and the 3D dip
+tube. ⚠ The soak scene occasionally exits natively at scene load (log ends
+after boot, exit 0, no harness line): rerun, it is not the Lab.
+
+## Siphon round 3 (2026-10-12): world pins, the plan window, the outlet end, max fill
+
+Six player complaints after round 2, each with the trap it closed:
+- **World pins — the Globe's 3D placement is the source of truth.** The
+  Globe lens's read-only pins became ONE pin layer (`graph_canvas.gd`
+  `_draw_world_pins` / `_handle_pin_input`) that Site Plan and Elevation now
+  take whenever the live camera is the projection authority
+  (`phys_pins_mode`, View options → "World pins", default on; off = the
+  legacy chip / port / schematic-wire overlay, whose hit-tests return
+  nothing in pin mode so nothing invisible is clickable). Pins DRAG: a press
+  on a pin is a pin drag (never an orbit), empty canvas still orbits / pans /
+  zooms, click selects, double-click opens the inspector. Globe + Site Plan
+  drags MARCH the pointer's ray against `ground_y_at` (`_pin_ground_hit`: a
+  physics ray's first hit was tens of metres off in plan on a slanted Globe
+  ray — the coarse collision is sunk under the hi-res patch and the
+  snowglobe's shells have bodies); Elevation walks the pin along the slice
+  and takes the height from the section-plane hit. Release emits
+  `world_pin_moved` → `SystemGraphView._on_world_pin_moved`: an OUTLET SINK
+  routes through `move_siphon_outlet` (culvert end + invert follow, ground
+  − 0.3 on a ground drop), a bound prop through the usual Site Plan heal
+  (`_on_canvas_layout_changed` now also runs for the Globe). Locked pins
+  (pond tanks, stream intakes, scene-embodied devices) say what to move
+  instead. ⚠ The Globe's `_draw` returned before the per-draw caches were
+  cleared, so a dragged pin kept projecting its OLD anchor — the pin pass
+  clears `_conn_anchor_cache` itself. ⚠ `_refresh_item_elevations` keeps an
+  outlet sink's hand-set invert when it is at or under the ground (it used
+  to flatten every Lab / Elevation exit drag back onto the surface on the
+  next lens entry).
+- **Site Plan fills the panel** (`_sync_layout` top-down branch, `use_mask`
+  0, the air painted the canvas colour by `_sync_plan_backdrop`; `_want_crop`
+  true for the plan; the canvas skips its hole fill / dot grid / disc
+  reveal). The crop / no-crop hysteresis that re-laid-out the viewport at the
+  threshold was the "zoom jumps". **Cursor zoom on an orbited plan**: the
+  flat 2D rule assumes a straight-down camera; `_zoom_at` now remembers the
+  GROUND point under the wheel and `_hold_world_under_cursor` solves the pan
+  exactly (two probe steps, a 2×2 Jacobian — a plain `pan += error` spirals
+  on a yawed camera). site-review's site set pins container == canvas and
+  0 px drift over 40 notches; its globe + site sets drive a synthetic pin
+  drag (an outlet sink lands under the pointer, ground − 0.3, culvert
+  follows).
+- **The draft outlet's END is grabbable in 3D** (`gameplay/outlet_end_marker.gd`,
+  one per propless outlet sink, owned by `ConduitManager._update_outlet_marker`,
+  parented to Main so it shows while the x-ray pipe is hidden). GrabController's
+  relocatable-marker contract: Ctrl/Alt + aim focuses it (the crosshair's
+  conduit rung and the route controller's drag pick both hand a pick within
+  `OUTLET_END_PICK_M` 1 m of the mouth to the marker — a drag there used to
+  INSERT A WAYPOINT), LMB + drag carries it on the terrain, release commits
+  through `move_siphon_outlet`; `grab_distance_m()` lets a marker set its own
+  reach (the stock 60 m never reached down the hill). `--capture=hydroload`
+  drives a REAL Ctrl+drag (focus = the marker, the grab picks it up, the
+  outlet moves, the culvert follows, 0 waypoints added).
+- **Pond MAX FILL LEVEL** (`TerrainLoader._pond_max_levels`, tag → world Y,
+  persisted in the user_water file; MAP ponds take it too — Mt Vernon's pond
+  is OSM water with no user record). `_recompute_pond_volume_rec` sets
+  `spill_m = max(basin rim, max level)`, so Auto capacity integrates the
+  footprint up to the dam (a vertical wall until a flood-fill outline
+  lands), the graph tank's `rim_m` follows and the Lab can fill past the old
+  rim. Set it three ways: Ctrl/Alt-aim the pond SURFACE and drag up / down
+  (`gameplay/pond_level_handle.gd`: a ring at the max height over the
+  centroid, a pick slab from the water surface to the max, the drag = the
+  crosshair ray's closest point to the vertical line through it, a live
+  "+0.40 m above the basin rim · capacity +N kL" readout), the Pond settings
+  "Max fill level" row (with "Rim" to reset), or the Lab's "Fill pond to the
+  prime level", which now DAMS the pond when the crest is within 1 m above
+  the rim instead of switching to pump priming
+  (`raise_pond_max_level_for_siphon`). Map ponds also take level / stock
+  writes now (`_map_pond_rec_at_water_idx`) so the graph's level push moves
+  their water plane. `--capture=siphon` on mtvernon pins rim / capacity /
+  fill-past-rim / the handle's commit.
+- **Flowing / generating feedback** (`gameplay/siphon_state_ring.gd`, on
+  every hydro prop beside the spin): an emissive ring round the machine's
+  foot — green generating, amber primed with no power, red broken / lift
+  exceeded / cavitating, grey dry — a status label over it ("PRIMED · 70 L/s
+  · 144 W", "NOT PRIMED — pond below the crest", shrinking with distance,
+  gone past 60 m), air bubbles rising from the dip tube's mouth when the
+  siphon has BROKEN. `SiphonStateRing.state_for(specs)` is pure (pinned in
+  the siphon verify); the world pins' heads take the same colour.
+- **The dip tube** is hidden by default (`show_dip_tube`, prop editor Model
+  section + the Lab's Siphon section) and, shown, is ONE vertical cylinder
+  straight down from the GLB's measured 6″ intake fitting
+  (`core/conduits/siphon_geometry.gd`, shared with the close-up's legs) —
+  never the connection port, which sits 0.57 m away on this model.
+- **Buried pipes read as buried** (`core/conduits/conduit_buried.gdshader`,
+  `ConduitManager._apply_burial_cue`): a physical run under the ground
+  anywhere gets per-vertex burial in UV2.x, fades / desaturates / dashes
+  with depth (floor alpha 0.38 — the player must still find it) and a
+  dotted ground TRACE draped on the surface above the buried spans with a
+  normal depth test. Light strings and conceptual flow runs opt out. Kit
+  runs (the culvert kit, ABS parts) get the profile + trace but not the
+  material fade. ⚠ The trace is ONE surface (`_dotted_trace_mesh`):
+  `ConduitMeshBuilder._build_dashed_tube_mesh` adds a surface PER DASH, and
+  a long buried run on the soak map blew past Godot's 256-surface cap every
+  frame (1066 add_surface errors, then a native exit mid-capture).
+  `--capture=hydroload` dumps max burial per run and asserts the trace.
+- ⚠ **Site Plan's wire-mode session only runs while the graph is OPEN.** The
+  saved lens is applied at map load with the graph hidden, before
+  SimSettingsController has read its file, and `_apply_site_wire_mode_session`
+  captured the DEFAULT (false) as "the player's pref" and restored it over
+  the real one when the graph closed — every x-ray run vanished from first
+  person after one Site Plan visit on a save whose lens was Site.
+Verify: `siphon_hydraulics_selftest` (SiphonGeometry), site-review
+`--review-sets=site,globe` on mtvernon (pins / drag / window / zoom lines),
+`--capture=hydroload` (marker drag, burial, wires pref), `--capture=siphon`
+on mtvernon (dip tube, state ring, max fill).
+
+## The site as one system (2026-10-12 Mt Vernon playtest)
+
+The user's real site (pond, Stream 2, a micro Pelton on a penstock, a siphon
+turbine, a 48 V bank) showed turbine labels making power while the battery
+sat at its 10 % floor, and a pond that never moved. Measured with a sandboxed
+probe; each fix guards a trap that rendered plausibly:
+- **Hydro → battery had TWO stacked breaks.** `DcPowerWiring.find_battery_
+  for_dc_port` only passed a controller entered on its PV terminals; a
+  turbine on the controller's BATTERY terminal (where the bank also lands —
+  the right real-world wiring for a PowerSpout's own regulator) dead-ended.
+  It now follows every wire on that terminal. And `_sync_graph_dc_generation_
+  to_solar` ran only inside the VISIBLE energy sync, so with the graph closed
+  (or the Lab up) SolarUI's `current_graph_dc_kw` never moved; it is on the
+  ambient path now (`_dc_gen_sync_acc`, before the visibility gate).
+- **No water ⇒ no watts.** The pond-drawdown path took power from the
+  unclamped reach while the clamped drain moved 0 L; watts now scale by
+  drained ÷ evaluated flow (paused: only if the source can sustain 1 s).
+- **A routed penstock decides what feeds a penstock turbine**
+  (`_resolve_siphon_inlet_tank`), and `_pond_level_of` never treats a stream
+  intake as a reservoir — an empty 100 L tank carrying a COPIED pond level
+  out-voted the penstock. The copies came from `sync_pond_level_from_mesh`,
+  which wrote level/rim/floor onto any resource sharing the pond's tag; it is
+  restricted to pond tanks + catchments now.
+- **Stream diversion**: a penstock turbine whose tailwater is delivered to a
+  wired outlet debits that stream's discharge into its end pond
+  (`_stream_diversions` → `stream_pond_inflows(rain, diversions)`); with no
+  outlet the tailrace returns to the stream (`live_tailrace` says which).
+- **One pond level.** `TerrainLoader.pond_stage_curve(tag)` integrates the
+  basin ([[stock_l, level_m] × 24], same ground + cell size as
+  `set_pond_stock_l`), stamped on the tank as `stage_curve` by the mesh
+  writeback; `_apply_tank_sample` reads `level_m` off it, and HydroReach uses
+  it for level ↔ stock and the dead pool (`set_stage_curve`, cleared by every
+  `set_pond`). Linear floor→rim put the graph 0.55 m off the 3D water and the
+  siphon's dead pool 0.67 m above its dip mouth. Helpers are pure in
+  `PondBathymetry` (`stage_level_for_stock` / `stage_stock_for_level` /
+  `stage_area_at_level`).
+- **A pond's own budget** (`_pond_budget_pass`, after every source credits):
+  rain on the open water (area = dV/dh off the curve) is intrinsic — no
+  surface catchment needed (a wired one still does it instead); ponds take
+  whole streams and catchments uncapped, and whatever would lift them past
+  the fill ceiling SPILLS to `specs.spill_outlet_id` (booked either way).
+  `budget_rain_lph` / `budget_stream_lph` / `budget_spill_lph` are stamped
+  on the tank. A designated hillside `watershed` catchment subtracts the
+  area already drained by streams ending in the same pond
+  (`stream_pond_catchment_m2`, `stream_covered_m2`) — it double-counted.
+- **3D water moves continuously**: WaterBuilder builds every level-driven
+  pond (has `level_m` + `tag`) as its OWN `PondSurface` mesh (meta
+  `pond_tag`, `built_level_m`); `set_pond_surface_level_by_tag` translates it
+  on every pond push. The 0.10 m-throttled full rebuild remains.
+- **3D ↔ freeform**: preview-mode thumbnails of hydro turbines carry a
+  caption from `SiphonStateRing.state_for` (the 3D ring's own function) and a
+  state-coloured border; `reconcile_world_bindings()` runs first in
+  `resolve_site_elevations_after_load` (bound site xy snapped to the prop —
+  3D is the truth; one-way bindings repaired; a bind to a deleted stream
+  re-binds to the resolved one; intake names follow their stream); inspector
+  "Locate in 3D" (settlement camera, player not moved) and prop editor
+  "Open node in graph"; `GraphSimLoadHost.is_load_item` skips siphon_hydro
+  generators (the consumer proxy stamped "off" on running turbines).
+- **SITE BALANCE card** (graph dashboard, `system_graph/site_balance.gd`,
+  pure): each generator by name, make vs use, battery time to the floor or
+  to full, hydro not reaching the bank, each pond's streams / rain / draw /
+  spill and time to full, and a FORWARD PROJECTION (`SiteProjection`, pure:
+  next 24 h and 7 d with real weather through `SolarUI.evaluate_solar_at`,
+  the AC loads' demand from `GraphAcLoad.demand_watts`, SolarUI's own
+  floor/resume hysteresis; soc min/end, kWh made/used/unserved, hours with
+  AC off, first outage) — its own pure loop, NOT the challenge bake engine,
+  which owns the clock and its playback. Cached 20 s / 0.25 sim-h.
+- The Lab close-up's electrical load is the slider (100 % = matched, what a
+  battery regulator / dump load holds). It used to read output ÷ nameplate
+  whenever DC was wired, which put a battery-tied turbine near runaway.
+- `GraphSoiPreview`'s SubViewport is born UPDATE_DISABLED: born
+  WHEN_VISIBLE, every graph reopen rendered the 2×2 placeholder (200
+  renderer errors per reopen on Mt Vernon).
+- The Mt Vernon world was cleaned by `tools/fixes/mtvernon_hydro_cleanup.gd`
+  (persisted with backup): two empty supply tanks, an orphan intake + prop,
+  a pond self-loop wire, and a spillway outlet at the user's "Pond Outlet
+  Pipes" pin. The 600 W "Custom Load" is the user's placeholder.
+Verify: `resource_flow_selftest` (battery-terminal trace, stray-tank inlet,
+no phantom watts, stage curve, surface rain, spill, SiteBalance),
+`hydro_reach_selftest` (curved-basin dead pool), `--capture=sitebalance`.
+
+**The real power system + placed solar racks (2026-10-12/13).**
+- Presets from data sheets (`ComponentPresets`): **EG4 6000XP** (480 V max
+  Voc, 2 MPPTs 120–385 V, 100 V start-up, 17 A per MPPT, 8 kW PV, 6 kW AC,
+  125 A charge), **EG4 48V 20.8 kWh Bank** (51.2 V × 406.25 Ah — no single
+  EG4 SKU is 20.8 kWh; it is the user's bank), **JA Solar 380W** (Voc 41.62,
+  Vmp 34.77, Voc −0.272 %/°C, Pmax −0.35 %/°C). Mt Vernon runs them via
+  `tools/fixes/mtvernon_solar_eg4.gd` + `mtvernon_pv_coeffs.gd` (persisted).
+- The controller's limits reach SolarUI: `_controller_power_limits()` →
+  `pv_limit_kw` (max_pv_watts) and `ac_overload_w` (overload_watts) in
+  `_sync_solar_ui_from_graph`; the array aggregate also carries a watt-
+  weighted plane of array (`orientation`: tilt + azimuth) which becomes
+  SolarUI's `panel_tilt_degrees` / `panel_azimuth_degrees`. Only arrays that
+  HAVE an azimuth steer it (a real plane: a placed rack, a deployed linkage).
+- **`pv_array` prop** (`PvArrayBuilder`, Library "Solar Array (ground
+  mount)", PackedSpec dynamic): a ground-mount rack drawn by
+  `SolarArrayBuilder` + a hidden CollisionMesh. Placing one calls
+  `bind_pv_array_prop` (binds the record's `graph_item_id` array, else makes
+  a `pv_<prop_id>` array wired to the first controller) — so placing the
+  array that is already on the graph never makes a second one. Graph → 3D:
+  inspector "Place array in 3D" (`place_array_in_world`). The rack's YAW is
+  the array's azimuth (`orientation_for`: azimuth = 180 − yaw,
+  `yaw_for_azimuth` the inverse); `update_prop_record` notifies the graph on
+  x/z/yaw/y_offset/pv_array_spec and `sync_site_from_prop` re-orients. Prop
+  editor "Solar array" section: tilt + "Face the equator". The panel COUNT
+  is the graph array's (the electrical string); the rack only draws it.
+- **String design check** (`PvElectrical.string_window_report`, inspector
+  "PV string check" on a controller): cold-morning Voc (−10 °C) vs max_voc,
+  STC Voc vs `startup_v`, hot-noon Vmp (NOCT cell, 40 °C air → 71 °C) vs
+  `mppt_min_v`, STC Vmp vs `mppt_max_v`. Coefficients are PER PANEL
+  (`voc_temp_coeff_pct`, `pmax_temp_coeff_pct` / `vmp_temp_coeff_pct` on the
+  panel or array specs; `add_imported_solar_panels` takes them in `opts`),
+  also in the live over-voltage check (`component_string_voc`); without them
+  the generic 0.3 %/°C (Voc) and 0.40 %/°C (Vmp = Pmax + Imp's +0.05) apply.
+  Mt Vernon's 9S: 410 V cold (70 V headroom), 255 V hot Vmp — inside.
+Verify: `graph_electrical_selftest` (`_test_string_window`: 9S ok, 13S over
+the limit, 3S under the floor, hand numbers), `resource_flow_selftest`
+(`_test_pv_array_and_projection`).
+
 ## Stream-fed PowerSpout (the tapped-source hydro loop)
 
 The play loop: place a PowerSpout, drop a **stream intake** uphill, draw a
@@ -4733,6 +6085,20 @@ change-gated on the intake's authored params) and the annual closed form takes i
 as an optional argument. Separate key from `supply_lps` ON PURPOSE: the live tick
 must use real-time rain, never a monthly mean.
 
+**The stat deck (2026-10-11, `scenes/ui/hydro_stat_deck.gd`).** The Lab's
+headline readout is a row of big tiles under the section in CAUSAL order —
+Flow → Net head → Pressure → Jet → Speed → Power (siphon kinds: Pond level
+instead of Pressure/Jet) — each with a bar against what LIMITS it (source
+flow, gross head, the pipe's SDR rating from the design checks, the jet's
+full-head demand, runaway, nameplate), the relation under the number, a
+hover tip in words, and a flash when a value moves. Under it an INSIGHT line
+names the binding constraint (dry / no head / source-limited with the
+matching nozzle / pipe-limited / under the head band / generator-capped /
+nozzle- or flow-governed) and a SENSITIVITY line ("+1 m head → +12 W · +1 mm
+jet → …", five closed-form evaluations inside the estimate's signature gate,
+never per tick). `_refresh_stat_deck` reads `_last_r` in the SAME refresh as
+the dock rows and the strip, so the three cannot disagree; the dock's Live
+readouts went to 14 px and the power chart marks the routed pipe's curve.
 **The close-up's load slider is a what-if, and it costs watts.** The graph node
 reports the MATCHED-load output (what a dump-load or MPPT controller holds).
 `runner_efficiency(x, 1.0)` is the fraction of that delivered at the current speed
@@ -4839,6 +6205,213 @@ Driving the close-up's splash from it makes the load slider legible at a glance
 and replaced an arbitrary fraction-of-jet-speed constant. `--capture=siphon`'s two
 shots are the visual pin.
 
+**A stream reach as the penstock (2026-10-10) — WATER toolbar → Culvert
+tool → "Penstock" chip.** Click a span of any mapped / drawn / traced stream:
+from that span's upstream vertex DOWN to the nearest PowerSpout (within
+`PENSTOCK_TURBINE_REACH_M` 250 m of any downstream vertex; none → one is
+seated 3 m beside the stream's end via `SystemGraphView.place_powerspout_at`)
+the stream becomes the turbine's penstock. Water side: those spans get
+`WaterFeatureLayer.MODE_PENSTOCK` — no channel is carved, no surface strip,
+`BuriedWaterBuilder.runs` emits NO barrel (the graph's routed conduit is the
+visual; below the exit the stream carries on, the tailrace returns the
+water). Graph side (`create_penstock_from_stream` →
+`create_penstock_intake_at(..., opts)`): the intake prop stands at the reach's
+head, the `poly_penstock` carries the reach's interior vertices (≤ 24, strided)
+as LOCKED `route_3d` waypoints so the pipe follows the creek bed instead of a
+chord over the ridge, and the intake is BOUND to the feature
+(`specs.water_feature_bind`): `water_feature_supply_for_intake` asks
+`WaterNetwork.feature_supply_on(fid, p, rain)` first — the stream's discharge
+at the intake station at ANY distance — and only an unbound intake falls back
+to the 6 m `feature_supply_at` rule. Also landed with it: **one penstock per
+turbine** (`_remove_existing_penstock` — a re-route replaces the old intake +
+run; a second drag used to leave two of each and the engine fed the turbine
+from whichever it found first), a "not above the turbine" toast before a
+headless pipe is routed, a plug pulled off an INTAKE's own port no longer mints
+a second intake, `create_penstock_intake_at` refuses a non-hydro target, and
+the Hydro Lab frames a stream-fed turbine along intake → turbine
+(`frame_elevation_for_siphon` / the Lab's `_pond_context` use the stream
+intake as the far end; with no pond the heading collapsed to 0 and the cut
+ran E–W whatever direction the penstock came from). Verify: the stream-tap
+half of `--capture=penstock` (ws_1 on Mt Vernon: 25 L/s, 45 m, ~210 W).
+
+**Why the turbine could not be clicked ("a conduit modal keeps popping
+up").** Three stacked causes, all fixed 2026-10-10, each of which RENDERED
+plausibly: (1) `ConduitRouteController._input` started a plug/reroute on
+EVERY left-press whose centre ray passed within 0.45 m of any port, with no
+capture gate — a PowerSpout is 0.6 m long with four ports, so aiming anywhere
+on it hit one; with the prop editor's tool overlay up (free cursor, screen
+centre still on the turbine) every click on the dock's buttons was eaten the
+same way, and the release opened the style modal. Now: nothing STARTS there
+unless `CursorController.should_capture_look()`; a port on the prop under the
+crosshair needs precise aim (`PORT_PRECISE_PICK_M` 0.15); a port behind
+another prop never starts. (2) `InteractionFocus._update_conduit_focus` ran
+before the (Ctrl-gated) prop pick with no occlusion test, and every conduit
+ends AT a port on its prop, so its last samples always passed within the
+0.42 m pick radius of the turbine body — the turbine could never be focused
+and Ctrl+click (the documented select) opened the conduit style modal. Now a
+pick at or behind the prop under the crosshair (`CONDUIT_PROP_CLEARANCE_M`
+0.6, same rule in the route controller's `_conduit_pick_occluded`) is the
+prop's, and (3) hidden runs (wires off in first person) are never picked —
+they were still sampled and won focus invisibly. Pinned by the Ctrl+click
+half of `--capture=penstock` (REAL events through the viewport: prop focused,
+conduit focus empty, tool overlay up, no blocking modal).
+
+**Your pipe, not a stock pipe (2026-10-10) — SDR, bends, high points, stock,
+design checks.** The poly penstock used to be PE4710 SDR 9 by definition; a
+player's coil is usually SDR 11 / 11.5. `conduit_style.pipe_sdr` (Hydro Lab
+route row, `ConduitKinds.PENSTOCK_SDR_OPTIONS`) now drives three things from
+ONE number: the bore (`inner_diameter_for`, ID = OD·(1−2/SDR) — 2" SDR 11.5 =
+49.8 mm vs 46.9 for SDR 9), the working pressure (`pressure_rating_psi` =
+2·HDS/(SDR−1), PE4710 HDS 1000 psi: SDR 9 → 250, 11 → 200, 11.5 → 190 psi) and
+the minimum long-term cold-bend radius (`bend_radius_mult_for_sdr`, PPI
+Handbook ch. 7 Table 1: DR ≤ 9 → 20×OD, 11–13.5 → 25×, 17–21 → 27×, else 30×;
+a run with no styled SDR keeps the kind's 25× so every existing route is
+byte-identical). **Bends are real in plan now**: `ContourRouter.fillet_xz`
+rounds every interior joint (a pin, a stream vertex) with an arc of the pipe's
+radius whose APEX is the joint — the pin stays ON the pipe, as coil is laid
+past a stake — and a corner whose legs are too short for the radius gets the
+biggest arc that fits. ⚠ The sweep direction is chosen by which arc end is
+nearer the previous point, never by a cross-product sign: `Vector2.angle` in
+the XZ plane inverted it and the route walked the arc backwards (a 0.6 m
+"kink" and 3 m of extra run on a 90° corner). `ContourRouter.route_report`
+(on a 1 m RESAMPLE — three samples on one sub-metre arc chord read as a
+kink) stamps `route_min_bend_r_m` (plan + profile, −1 = straight),
+`route_high_points` (crests of ≥ 0.3 m prominence) and `route_rise_m` (how
+far the run climbs above the intake = a siphon leg) onto the connection via
+`ConduitManager._write_contour_report`. `core/conduits/penstock_design.gd`
+(`PenstockDesign`, pure) turns the operating point + those keys into the
+checks a real install asks: velocity ≤ 3 m/s, friction ≤ 10 % of gross,
+static head vs rating, Joukowsky surge on an instant stop (HDPE wave speed
+≈ 317 m/s for 2" SDR 11.5 — a 2 m/s stop adds ~66 m, which is why a spear
+valve closes slowly and a ball valve is never the shut-off), tightest bend vs
+the pipe, high points (air-release valves), siphon lift (≤ ~8 m), and the
+routed run vs `stock_length_m` (the Lab's "Pipe on hand (ft)"). The Lab's
+Estimate fold lists them (✓ ⚠ ✗) and **Copy design summary** puts the whole
+spec on the clipboard. Size / SDR changes restyle the LIVE run and remesh it
+(`_apply_route_style`), so the engine adopts the new bore. Pinned to
+hand-computed numbers in `conduit_selftest._test_penstock_spec_and_design`;
+end to end (2" SDR 11.5, 350 ft, through the Lab's controls) in
+`--capture=penstock`.
+Round 3 (same day): **surge for the real closure** — the Lab's "Valve closure
+(s)" (`specs.valve_close_s`, default 10 s) turns the instant-stop Joukowsky
+figure into the Michaud slow-closure line ΔH = 2·L·v/(g·t) once the closure
+is slower than 2L/a (`PenstockDesign.surge_head_closure_m` /
+`critical_time_s`; the check names both numbers — a hand-wound spear over 10 s
+on 118 m of 2" SDR 11.5 at 0.49 m/s is +1.2 m, a ball valve slammed under the
+0.74 s critical time is the full +16 m). **Intake works** fold (`intake_works`):
+screen gross area from a 0.3 m/s approach at 50 % open (ESHA §5.5), a settling
+box sized to drop 0.3 mm sand (Pelton nozzle wear) at 2× the ideal Camp area,
+L:W 4, through-flow ≤ 0.2 m/s, depth floored at 0.3 m, and the pipe mouth's
+Gordon submergence S = 1.7·v·√D — all for the jet's FULL demand at the head,
+not today's flow. **Firm flow** in the Estimate fold (`firm_flow`): the
+driest / wettest month of the intake's seasonal curve with that month's watts
+(from the annual estimate's own `monthly_kwh`), how many months run below the
+jet's demand, and the nozzle that would run unlimited all year
+(`PeltonPhysics.nozzle_d_for_supply_m` at the driest month). All three ride
+the Copy design summary. Pinned in `conduit_selftest`; rendered + asserted in
+`--capture=penstock`.
+
+**Site Plan hardening for the water → turbine pipeline (2026-10-10).**
+(1) Port dots and grabs are CAPPED on screen in Site Plan (`_draw_port_dot` /
+`_port_grab_radius`, `SITE_PORT_DOT_*` / `SITE_PORT_GRAB_*`, ~0.3 m of ground
+clamped to 3.5–7 px / 8–14 px) — the uncapped `6 × _zoom` drew every port the
+size of the node at a zoom where a PowerSpout is 12 px, so four discs hid the
+turbine and each other, and the matching `9 × _zoom` grab blocked every pick
+around a port (Elevation had the same cap already). (2) A water wire pulled
+off a hydro turbine's input and dropped ON a stream (or the cyan outlet dot now
+drawn at the end of every penstock / pipe run) emits `stream_tap_requested`
+→ `SystemGraphView.tap_stream_for_turbine(fid, seg, turbine, handle)`: inside
+an existing penstock / pipe run the WHOLE run is the reach (its upstream
+vertex the intake, its outlet the exit), otherwise the reach runs from the
+drop's vertex down to the vertex nearest the turbine; the water side is
+marked penstock and the graph side routed + bound exactly as the toolbar's
+Penstock chip does. The hovered stream highlights amber during the drag with a
+hint. (3) First person has a STREAM rung (`_update_stream_focus`, after
+still water, before buildings / veg): aimed at a creek the player used to get
+the forest polygon it runs through ("Fill forest") — Interact now opens the
+WATER toolbar on its Edit tool with the stream picked
+(`TerrainLoader.pick_stream_at_world` / `open_water_tools_on`,
+`WaterToolController.pick_feature`). All three asserted in `--capture=penstock`.
+
+**Hydro perf pass (2026-10-10).** `ResourceFlowEngine._penstock_conn_for`
+memoises per step (`_penstock_conn_cache`, cleared in `_rebuild_conn_index`;
+five callers rescanned every connection each tick); the seasonal supply
+curve is cached PER INTAKE (`_supply_profiles` — one engine-wide field
+thrashed between two stream-fed turbines); `SystemGraphView._item_world_xz`
+caches the prop-anchor resolve for 1 s; `HydroSource._pelton_op` memoises the
+40-iteration Pelton bisection by its seven inputs (power and flow asked for
+the same point every tick, the Lab's charts dozens per redraw);
+`WaterNetwork._drive_outlet_vfx` runs at 10 Hz; the WATER toolbar's `process`
+is idle-gated on pointer + camera motion like the other sections; the Lab
+samples pond inflow at 4 Hz and quantises the live supply in its estimate /
+chart signatures (at 4 decimals live rain reran 12 Pelton solves + the curve
+families at 6 Hz).
+
+**ONE water-source model (2026-10-10, the merge pass).** The five ways to
+make a penstock (3D plug drag → `create_penstock_intake_at`; Lab drag; Lab
+auto-route with its own terrain ring scan; Lab "From pond" restyling the
+pond wire in the modal; the WATER toolbar chip / Site Plan drop with their
+own reach + turbine-seating code) had three source types and no shared
+notion of "what feeds this turbine". Now `SystemGraphView` owns it:
+- `resolve_hydro_source_at(world_xz, stream_max_m=8)` → `{kind: "pond" |
+  "pond_unadded" | "stream" | "spring", …}` — a still-water body with a
+  `pond_storage` tank on the graph (matched by `osm_water_tag`), else a
+  water body not yet on the graph (toast: add it first), else a stream
+  within 8 m (`TerrainLoader.pick_stream_at_world`), else bare ground.
+- `route_penstock_to_source(turbine_id, source, opts)` — the ONE router:
+  pond → `_route_penstock_from_pond` (reuse or add the pond→turbine water
+  wire, restyle `poly_penstock`, clear pins, reveal — the Lab's old "From
+  pond" moved here); stream → `tap_stream_for_turbine` (now takes the
+  style); spring → `create_penstock_intake_at`. `opts` carries
+  `pipe_size_in` / `pipe_sdr` / `stock_length_m` / `handle_id`. ONE penstock
+  per turbine: `_remove_existing_penstock(turbine, keep_conn_id)` now
+  sweeps EVERY poly_penstock on the turbine (it used to drop only the engine's
+  current one, so a pond penstock could survive beside a stream one) and
+  frees an orphaned intake + its prop.
+- `find_uphill_source(turbine_id, max_m=150)` — a STREAM vertex ≥ 1 m
+  above the turbine (highest, shorter on a tie), else the old 48-angle terrain
+  ring scan as a spring. A creek is where the water IS; the terrain scan
+  found hilltops with no flow. The Lab's auto-route button calls it.
+- `hydro_source_summary(turbine_id)` → the Lab's "Water source & penstock"
+  section's first line (Stream: Walton Creek — 2.4 L/s at the intake / Pond:
+  … level / Spring: … / No source).
+- `_auto_penstock_for_new_water_wires` (deferred off `_on_model_changed`
+  "add_connection", skipped under history-suppress / bulk): a plain water
+  wire from a pond tank or a stream intake into a hydro turbine's `res_in_*`
+  becomes that turbine's penstock. A Site Plan / freeform port drop used to
+  make a schematic wire the physics ignored, and the Lab then said "Not
+  routed".
+  ⚠ Every hydro preset marks its water input `direct_intake`, so
+  `GraphModel.add_connection` stamped a hand-drawn wire into a PowerSpout as
+  a no-pipe dip-tube intake and the restyle skipped it. The turbine KIND now
+  decides: `ConduitKinds.is_direct_intake_connection` ignores the flag for
+  `has_penstock` kinds, and the restyle clears a stale stamp. Only the siphon
+  drinks directly. Pinned in conduit_selftest and penstock's auto-restyle
+  check (fixed 2026-10-12).
+Call sites now all go through the resolver: the route controller's
+`_commit_penstock_to_new_intake` (a plug dropped in a creek taps the creek;
+a pond, the pond), the Lab's `_commit_penstock_drag` / `_on_auto_route_uphill`
+/ `_on_route_penstock` (`_route_style_opts()` reads size / SDR / stock off
+the route row for all three), and `water_tool_controller._make_penstock_run`
+(delegates to `tap_stream_for_turbine`; the toolbar's own exit-vertex /
+span-marking copy is gone). Site Plan: a node under
+`SITE_PORTS_MIN_NODE_PX` (44 px — chips floor at `MIN_CHIP_PX` 28) draws NO ports and `_get_interactive_
+handle_infos` returns none for it — the magnifier is the thing to click
+there; before, four capped-but-still-7-px discs sat on a 12 px turbine.
+⚠ **The port cap lives in TWO files (2026-10-11).** `graph_canvas_v2.gd`
+OVERRIDES `_draw_port_dot` for its freeform billboard (pulse, hover ring,
+`6.8 × _zoom` disc) and that override used to run in Site Plan and Elevation
+too — so the base's `SITE_PORT_DOT_*` / Elevation caps were DEAD in the
+shipping canvas and the ports still grew to the node's size at high zoom
+after the cap "landed". The override now routes every `_is_physical_view()`
+call to `super()`; `--capture=graph` shoots `07c_site_plan_zoomed_ports`
+and prints the dot/grab radii against their caps (PASS/FAIL). Any new
+per-view sizing rule in the base must check that V2 does not shadow it.
+`--capture=penstock` asserts the resolver (creek → stream, 64 m off →
+spring), spring + stream routes replacing each other with the opts carried,
+`find_uphill_source`, the summary, the auto-restyle of a hand-drawn wire,
+and the tiny-node port hide.
+
 **Stream-intake VFX** (`gameplay/stream_intake_flow.gd`, attached by
 `PlacedPropRuntime._maybe_attach_stream_intake_flow` on `model_id ==
 "stream_intake"`): falling inflow plus a pool whose level rises with
@@ -4867,6 +6440,88 @@ collapses to zero — verified by `--capture=siphon`'s console dump (matched 458
 REAL `jet_velocity_ms`; it is written clean rather than reusing
 `terrain_river`/`terrain_water`, which `#include soi_clip.gdshaderinc` and can
 vanish in a studio viewport where the clip uniforms are unset.
+
+**Second Pelton + the jet's-eye close-up (2026-10-11).** The AliExpress-class
+micro Pelton (`Imported Models/Hydro/ali_pelton.glb`, the user's SketchUp
+model; catalog `ali_pelton`, kind `micro_pelton`, preset "Micro Pelton 500W")
+is an 8″ runner on a VERTICAL shaft under a 10″ plate with a Nema 34 stepper
+hung below as the generator and a 1/4″ NPT hose-barb fitting through the
+housing wall as the nozzle. Measured with `glb_dump_diag` (never assumed):
+runner `Node6`, r 0.101 m, thin axis → model-local +Y (`spin_axis: "y"` —
+SiphonTurbineSpin's +Z default would tumble it); the fitting's centreline
+runs along −X at 0.084 m off the shaft → PCD 0.168 m; the housing bottom at
+y −0.076, the stepper to y −0.156 (the foot). The export carries two FLAT
+SketchUp SCALE FIGURES ("Sree", and "Susan#1" under a node named "Pelton")
+metres from the machine: `strip_nodes` on the catalog entry, freed inside
+`ModelCatalog.instantiate` so `mesh_metrics`, the foot, the pick AABB and
+every studio see one machine. `ConnectionPortDefs.default_ports_for_model`
+has a measured branch for it (the generic hydro box puts the inlet on a face
+with no fitting). PackedSpec coverage: `ali_pelton` curated.
+- **⚠ Two frames for one axis (fixed 2026-10-11).** `spin_axis` on the
+  catalog is a MODEL-ROOT axis; the close-up rotates `_runner.transform`,
+  which lives in the runner's PARENT frame, and this GLB's top node is turned
+  −90° about X — so model-root +Y arrives in the parent frame as +Z. The
+  close-up used the catalog axis raw and the micro Pelton spun like a coin
+  on a table (axis in the disc's plane; the PowerSpout's chain has no
+  rotation, so it never showed there). `_measure_runner` now carries the
+  axis through the inverse of the parent's chain (`_runner_axis_parent`,
+  the same conversion `SiphonTurbineSpin` does via world space), measures
+  the disc's own normal (thinnest mesh extent) in that frame, warns and
+  falls back to the measured normal if the two disagree, and
+  `--capture=siphon` asserts spin axis ∥ disc normal in the parent frame.
+- **The close-up wears the kind's model.** `set_state` carries `model_id`
+  (from `HydroSource.kind_meta`) and `_rebuild_model` swaps the machine in
+  place; the runner's axis / centre / radius / thickness, the inlet port
+  height and the nozzle are re-measured. Catalog `nozzle_node` +
+  `nozzle_axis` name a MODELLED nozzle: `_measure_nozzle_base` takes the
+  fitting's authored axis, signs it toward the runner, and puts the mouth at
+  the fitting's far corner along it; with none (the PowerSpout) the
+  procedural spear nozzle hangs off the real `res_in_0` port as before. The
+  side camera orbits in a frame built from the shaft (`_orbit_frame`: world
+  UP unless the shaft IS vertical), so a vertical-shaft machine is seen in
+  plan.
+- **Nozzle placement is six numbers on the specs** (Lab "Nozzle placement",
+  nozzle kinds only; visual, never physics): `nozzle_offset_mm` (aim offset —
+  the in-plane perpendicular, height on a horizontal shaft; the old single
+  knob), `nozzle_axial_mm` (along the shaft: the splitter vs one half of the
+  bucket), `nozzle_angle_deg` (where on the rim, turned about the shaft),
+  `nozzle_tilt_in_deg` / `nozzle_tilt_out_deg`, `nozzle_standoff_mm`. All
+  applied in `_nozzle_pose` on top of the measured base; the SECOND jet is
+  the first turned half a revolution about the shaft (both drive the wheel
+  the same way — the old code mirrored it across the shaft, which would have
+  driven it backwards). The landing is `_impact_from`: the ray vs the PITCH
+  cylinder (`_pitch_radius`: the kind's PCD/2, clamped inside the tip; a
+  chord on it lands at the TANGENT point; closest approach when it misses),
+  so a tilted or off-rim jet still lands somewhere. ⚠ The first cut used the
+  TIP radius: the chord enters the tip circle well before the tangent point,
+  grazing the first bucket's outer edge, and the jet's-eye shot read as the
+  jet hitting the cups FROM THE SIDE — "the runner must be 90° off". It was
+  not: `core/placed_models/runner_look_diag.gd` (bare runner from the jet's
+  eye / radially / in plan with jet + shaft rods) showed the splitter ridge
+  radial with a cup each side along the shaft, i.e. modelled right.
+- **Jet's eye** (`set_camera_mode("jet")`): the eye just behind the mouth,
+  lifted off the jet line by a couple of nozzle radii so the rod does not fill
+  the frame, looking at a cyan LANDING RING on the cups; the modelled fitting
+  is hidden (the eye is inside it); drag nudges round the landing, wheel
+  dollies. The HUD adds where it lands ("on the splitter" / "N % to one
+  side").
+- **The water leaves the bucket by the bucket relation, as two SHEETS.**
+  `PeltonPhysics.bucket_exit_velocity(v_jet, x, deflect)` (pure; pinned):
+  the relative flow `w = v − u` turned through `BUCKET_DEFLECTION_DEG` 165°
+  (Thake — the lip is cut back so the water clears the next bucket; 180° is
+  the textbook limit) plus the bucket's own `u` → {tangential (along the jet,
+  − = thrown back), axial (sideways, ± per splitter half), speed}. At 180° it
+  IS `bucket_exit_speed_ms`; at the matched load it leaves slow, slightly
+  backward and mostly SIDEWAYS; stalled, straight back at full speed. One
+  GPUParticles sheet per splitter half per jet (spread 9°, velocity from the
+  relation), their shares weighted by how far the landing sits off the
+  splitter (`split`, from the axial offset vs the runner thickness) — the
+  axial knob visibly starves one side. "Vectors" draws the jet (cyan), the
+  bucket's u (amber) and both exits (blue) in one length scale. The old
+  back-splash is now a small mist at the strike.
+Verify with `source_physics_selftest` (the vector form), `siphon_hydraulics_
+selftest` (catalog / kind / ports / strip pins) and the micro-Pelton phase of
+`--capture=siphon`.
 
 ## Conventions
 
@@ -5033,6 +6688,728 @@ crate unpack) while a click always opens the editor.
   stow state) and selects the copy.
 Verify with `--capture=propedit` (Validation list).
 
+## The beat: dancing to the music, sound-reactive lights (2026-10-08)
+
+**One registry, `StageBeat` (`core/population/stage_beat.gd`).** Every stage
+with a set on — and every venue playing its own track — publishes its beat
+each frame from `StageMusic._publish`: {pos (the speakers), radius
+EARSHOT_M 180, bpm, beat, energy, breakdown, build, drop_pulse, until_drop,
+since_drop, running, live}. Readers ask `StageBeat.at(pos)` (nearest in
+earshot, extrapolated to NOW so a reader between publishes still lands on the
+beat). The crowd shader gets the 4 nearest to the camera as globals
+`music_pos0..3` / `music_beat0..3` (declared in project.godot
+[shader_globals]; beat wrapped mod 128 for float precision; reading a global
+back is editor-only, so `StageBeat.pushed_pos` mirrors what was sent). The
+music plays at 1× whatever the sim speed, so dancers at a stage move at the
+real tempo; it pauses with the sim.
+- **Real tracks: live analysis with LOOKAHEAD.** `StageMusic` plays a
+  second, silent, non-positional copy of the track LOOKAHEAD_S (5 s) AHEAD of
+  the audible one on its own bus (`BeatAnalysis0..3`, ANALYSIS_SLOTS 4) at
+  -80 dB with an `AudioEffectSpectrumAnalyzer` — measured: the analyzer reads
+  the signal before the bus volume, on WASAPI and the headless Dummy driver
+  alike. `BeatTracker` (pure) turns the bass band into kicks, tempo (the
+  pairwise-interval histogram gives a COARSE tempo; a least-squares line
+  through the kicks' chained beat indices gives the period and phase — the
+  histogram alone sat on 0.467 / 0.483 s for a 0.476 s beat because kick
+  times are quantised to the 60 Hz analysis frame), breakdowns (slow bass
+  under 0.35 of its peak for 1.5 s) and DROPS (the first strong kick after
+  ≥ 2 s of breakdown, snapped to the beat). Queried at the HEARD time, a drop
+  is known up to 5 s before it is heard — that is what lets the DJ raise an
+  arm in time. The audible player starts at, and is re-synced to (> 0.12 s
+  drift), analysis − 5 s. Analysis time is the track POSITION only (no
+  time-since-mix extrapolation: measured closer to the true tempo).
+- **No track: `BeatGrid`** — a virtual set per stage (tempo by hash from
+  122/124/126/128/140/174), 32-bar phrases: groove, breakdown at beat 96,
+  build from 112, the drop on the phrase. Opens mid-groove so the first drop
+  is ~30 s in. Same output keys.
+- **Dancing** (Settings → NPCs → "Dance to the beat", `NpcDisplayPrefs.
+  beat_sync`, default on): the crowd shader's `music_at` and the stick
+  figure's `set_beat` (NpcAvatar hands it `StageBeat.at` while dancing) put
+  dance / rave / sway / samba / DJ on the beat — one bounce per beat, half the
+  crowd a beat out on the sway — throw harder with the energy, raise both
+  hands through the run-up to a drop (3 in 4 dancers; `ANTICIPATE_S` 4 s,
+  mirrored in the shader as `MUSIC_ANTICIPATE_S`) and keep them up as it
+  lands with a jump. **The DJ** raises the left arm and HOLDS it through the
+  run-up, both arms in the last moment and on the drop, and jumps. Verify
+  with `beat_look_diag.gd`; the rigged Mixamo body plays its clip unsynced.
+- **Sound-reactive lights**: three style keys on every light kind
+  (`sound_reactive`, `sound_mode` pulse | beat | both, `sound_depth`), shown
+  in the J dock's "Sound" section. `StageBeat.light_level` = a kick envelope
+  on every beat (rolling to 8ths then 16ths through a build), scaled by the
+  energy (dim in a breakdown), plus a flash on the drop; "beat" mode drives
+  the effect clock from the music (`light_time`, chases and mover sweeps move
+  with the tempo). PlacedLight / PlacedMoverLight (`sound_level`,
+  `effect_time()`) and PlacedStringLight (heard at the middle of the string)
+  apply it; a light with no music in earshot is just itself.
+
+## Placed vehicles, third person, the player's body (2026-10-08)
+
+**Driveable vehicles from the library** (Unified library → **Vehicles** tab;
+catalog category `vehicles`, entries carry `vehicle: <PlacedVehicle.PROFILES
+id>`): EUC, Appa (golf cart), skid steer — the scene vehicles' own art at
+native scale — plus **Tool Bus** (the International 3800 out of
+`Busses.tscn`, the other bus in that file deliberately left out) and the GMC
+camper van, which go
+through `VehicleModelBuilder` (`source_path` + `isolate` + real `length_m`:
+keeps ONE bus of the pair, FREES every hidden node — `ModelCatalog.mesh_metrics`
+measures hidden meshes too — lays the long axis on Z, scales to metres, stands
+it on y = 0; `flip` turns a model round if its front is backwards).
+`PlacedPropRuntime._maybe_attach_vehicle` hangs a `PlacedVehicle`
+(`gameplay/placed_vehicle.gd`) under the prop; it speaks the scene vehicles'
+duck-typed API (mount / dismount / get_riding_params / range signals — it
+self-notifies the player, since `main._connect_vehicles` runs once at boot),
+so the player's riding code drives it unchanged. Rules: getting IN snaps the
+rider onto the parked vehicle facing its way (scene vehicles snap to the
+rider); the prop's collision is OFF while ridden and re-baked
+(`setup_collision`, deferred) after the rider steps out LEFT past its
+half-width — the StaticBody bakes ModelRoot's rotation into its shapes; the
+record is patched IN MEMORY every 0.5 s while driving and saved on dismount;
+a prop rebuild while ridden hands the rider to the replacement node
+(`_handover`, never during map unload); electric profiles drain with
+distance and trickle-charge parked (`charge_w`, sim time) so a flat battery is
+a wait, fuel ones show "fuel" on the dashboard. Interact on a placed vehicle
+under the crosshair drives it (`interaction_focus._open_placed_prop_edit` →
+`player.request_mount`); a click still opens the prop editor. Riding numbers
+for the original three are copied from their scripts (the skid steer's
+`model_rotation_offset = 91.145` in the scene is RADIANS ≈ 182.2°). A vehicle
+model's ROOT position is zeroed in `ModelCatalog.instantiate` (appa.tscn's
+root carries a 0.6 m offset the scene instance overrides — left in, the
+driver sat beside the cart). Verify the art faces the right way with
+`gameplay/vehicle_look_diag.gd` and the whole loop with `--capture=vehicles`
+(Validation). Two pre-existing bugs fixed on the way:
+`PlacedPropRuntime.find_by_prop_id` looked only under Terrain, so on the
+built-in scenes (props under Main) it found nothing and every
+`_reposition_scene_prop` move SPAWNED A DUPLICATE node; and
+`PlacedProp.setup_collision` queue_freed the old "PropBody" and added the new
+one the same frame, so the new one was auto-renamed and lookups by name found
+the dying body (the old one is now renamed and disabled first).
+
+**Third person (F5 `toggle_third_person`, Settings → Player).** The CameraArm
+detaches (`top_level`) and is placed every frame behind and over the shoulder;
+the Camera3D under it keeps its own LOCAL maths (pitch on rotation.x, shake on
+position), which is why the FOV, the crosshair ray, camera claims and the FPV
+drone (which borrows this camera — the arm goes home while it flies) all keep
+working untouched. Mouse yaw orbits (`_tp_yaw`); walking is camera-relative
+and the body turns to face its velocity (or the camera while using a tool);
+driving, the camera orbits and swings back behind after 1.4 s untouched; on
+the EUC the mouse still steers so the camera rides locked behind. Collision:
+a physics-frame ray pivot→camera (`_tp_probe_camera`), pulled in at once and
+eased back out. In third person the vehicle tilt / seat offset are skipped
+and interaction REACH is measured from the player's head
+(`player.reach_origin`, read by InteractionFocus). Fixed alongside: the centre
+ray's `exclude` passed the player NODE where Godot wants RIDs. PlayerPrefs
+(`core/player_prefs.gd`, `user://player.cfg`) holds camera mode, follow
+distance, shoulder, recenter, body and tint, polled by generation (the panel
+and the player never reference each other). The **player FOV slider moved**
+from Lighting to the Player tab; its storage is unchanged
+(sim_settings.cfg [camera] player_fov).
+
+**The player's body.** Default = `NpcSimpleFigure` with `hi_detail` (waist,
+pelvis + shoulder girdle, neck, jaw, hands, feet kept level, and two extra
+pivots the driver writes directly so they never fight the poses' easing: LEAN
+at the hips, NECK for head-look) driven by `_update_character_animation_simple`:
+idle / walk / RUN (its own pose, flight phase + pumping arms) / air (tuck
+rising, reach falling) / landing dip / seated at the wheel at the vehicle's
+seat / standing on the EUC / arms forward with a tool, lean into speed and
+turns, head following the camera. ⚠ The figure is built facing +Z and is
+turned PI — the player's body had been walking BACKWARDS (the NPC avatar got
+this fix long ago; the player's never did). First person hides the head and
+neck (shadow-only). Remy (asset pack) and custom characters are opt-in
+(`PlayerPrefs.body()`): `.glb/.gltf/.fbx` in `user://player_characters/` load
+at RUNTIME (GLTFDocument / FBXDocument), are scaled to 1.75 m and turned to
+face forward; their own idle/walk/run clips are used when named so, else a
+Mixamo rig borrows Remy's clips RETARGETED by bone name (`_bone_key`:
+mixamorig:Hips == mixamorig1_Hips == Hips; hips position scaled by hip height;
+a clip binding < 12 bones is refused, never played as a T-pose).
+
+**NPC names (Settings → NPC → Names).** Comma-separated names are ADDED to
+`NpcAgent.NAME_POOL` (`NpcDisplayPrefs.custom_names`, `parse_names` splits on
+, ; and new lines, dedupes case-insensitively); `NpcAgent.name_pool()` caches
+per prefs generation. Changing the list re-deals names. Names carry NO number
+("Spark", never "Spark 25" — 2026-10-09): a camp ("<seed>_npc_<i>") walks the
+pool from a per-camp start with a stride coprime to its size, so nobody in one
+camp shares a name until the camp outgrows the pool; other ids hash. The id is
+the unique key everywhere, never the name. The population and cohort
+selftests clear custom names in `_init` (`reset_custom_names_for_test`) so a
+player's friends never move a pin.
+
+## NPC festival refinement pass (2026-10-07)
+
+Plan: `~/.claude/plans/the-npc-festival-system-humble-brooks.md`. Five
+contracts landed together; each has a trap that will come back.
+
+**Cosmetic motion follows the sim clock (`SimFxRate`, core/sim_fx_rate.gd).**
+Fire flicker + particles, crowd-figure loops, LED chases / mover sweeps and
+NPC clip playback all run on ONE curve: `rate = 0` while paused or scrubbing
+backwards (`SimFxRate.is_paused` is THE pause query — five disagreeing tests
+existed), linear slow-motion below 1x, `sqrt(multiple)` above, capped per
+system (`FX_CAP_NPC` 12 == `NpcRig.MAX_PLAYBACK_RATE`, fire 6, lights 8).
+Time-lapsed on purpose but never 1:1 (the user's call: speed should READ,
+not strobe). The clocks INTEGRATE delta x rate — multiplying TIME by a new
+rate teleports every phase — and Main pushes them once per frame as global
+shader uniforms `fx_time_npc/_fire/_lights`, DECLARED in project.godot
+`[shader_globals]` (never `global_shader_parameter_add` at runtime: the list
+query is editor-only and the add errors). Shaders on it: crowd_figure,
+fire_char, fire_pile, light_beam, camp_glow. `PlacedLightClock` is now the
+lights track; `fx_pause_with_sim` is retired (key kept for old files).
+`CrisisEventManager` no longer hides fires off-realtime — that path was
+undone by FireNode the next frame and left `fire_light` dark forever.
+
+**Effigy pre-roll + perimeter.** `FireTimeline` gained `preroll_h` (ignition
+-> first flame; absent = 0, so old records are unchanged; a tagged EFFIGY
+defaults to `PREROLL_H` 0.25 via `FireNode.default_preroll_for_prop`).
+`burn_hours` counts from the first flame; `state_at` reports phase NONE +
+`preroll`/`flame_in_h` inside the window, and a record put out during the
+pre-roll is idle. `VenueCrowd.effigy_phase` maps the pre-roll to BURNING at
+the BURNING radius — that is the whole mechanism: the ring forms, the nav
+perimeter is stamped and bystanders are evacuated (`evacuate_from` in both
+tiers, a straight radial walk to `safe_r + 2`) at IGNITION, not at the first
+flame. The idle spiral now starts OUTSIDE the safe radius (it used to sit at
+0.8 of it), the idle radius IS the burning one, and an unlit effigy's size
+comes from its pick AABB (`_effigy_size`). Late arrivals re-seat
+(`CrowdCohort._begin_activity` compares the phase they left for; the full
+tier re-targets mid-walk in `_retarget_effigy`). The perimeter is its own
+nav bit `F_FIRE` (`NpcNavGrid.BLOCKING`): stamping/clearing `F_BLOCKED`
+wiped real obstacles inside the circle. Prop editor: "Pre-roll (min)".
+
+**Festival population target (`PopTestPrefs.festival_target_people`, 0 =
+natural; festival HUD slider + Settings -> NPCs).** Global, not per site — it
+is a performance knob. Camp headcounts are NEVER rewritten: the loader's
+graph sync scales the copy it hands over (`_apply_population_target` ->
+`FestivalSeedLayout.scale_headcounts`, largest remainder, floor 2), so 0
+restores everything. Rosters resize IN PLACE (`CrowdCohort.resize`,
+`NpcPopulationEngine.resize`) — survivors keep position, needs and morale.
+Stores are not re-sized (festival mode runs on ideal supply).
+
+**Festival leisure is SOCIAL, not FREE (`NpcSocial`).** FREE only reached a
+venue past the enrichment threshold (1/30 per hour, reset per visit), so
+~80 % of a festival stood where it had last eaten from 11:00 to 18:00 —
+measured. `NpcRoutine.SOCIAL` ("Hanging out") always does something, chosen
+per person per HOUR by hash: a venue without the gate, a stint in one of the
+camp's conversation circles (activity `mingle`, zero consumption, eases
+enrichment by 0.4, crowd pose `POSE_TALK` 8 / simple-figure "talk" flavour),
+or a wander 30-120 m out. Both tiers make the identical choice (ctx keys
+`camp_home`/`camp_seed` forwarded through the `_make_ctx` whitelist). Old
+saves migrate: `NpcRoutine.from_array` recognises the exact legacy festival
+shape and retypes its two FREE blocks. Also landed with it: a festival day
+serves each EAT / BATHROOM / WASH block ONCE (`serves_once`, any routine with
+a SOCIAL block) — re-issuing meals gave ~5 a day and split the tiers' food
+bills — and the WAKE hour follows the routine (`wake_base_h` = SLEEP end - 2
+h: 06:00 default, 07:30 festival; it was a fixed 06:00, so festival-goers
+slept four hours). The festival-day equivalence pin is honest and LOOSER
+(15 % / 0.15 morale, measured ~8-12 %) than the default-day 6 % / 0.08 —
+it was never pinned and was already 10 % / 0.106 apart before this pass.
+Art pieces are seeded (3-8, draw 0.55) so afternoons have destinations.
+
+**Performance at festival speeds.** The cliff at 350-450x was tick frames:
+the flow engine gates the ambient tick (0.5 s at >= 450x) and every camp,
+persist and bake landed in that one frame. Now: light camps are SLICED
+across frames (`NpcPopulationBridge._drain_light_queue`, 2.5 ms budget,
+leftovers forced at the next tick; the challenge bake's direct `tick_at`
+never defers) — ⚠ the per-frame slice MUST run inside the view's history-
+suppress / bulk window, or every persisted snapshot records undo history and
+refreshes the canvas (28 ms a frame, measured); persistence is jittered per
+camp with a per-tick budget of 4; the nav bake and the crowd height raster
+are TIME-budgeted per frame (the raster was 36 ms frames, the nav bake ~4.4
+minutes at 450x); the route cache is LRU at 4096 with per-route cached
+lanes and a keyed-miss budget; `spaces_of_type` no longer copies; beds and
+the SolarUI lookup are cached; the host reads full-tier dots only; desire
+textures build only while an overlay is on; `CrowdFocus` shrinks the full
+tier with the clock (150 / 90 / 40 / 16 at 60 / 300 / 1000 / beyond, only
+past `MAX_FULL_PEOPLE`) and the hero pool with it (24 at 300x, 12 at 1000x,
+festival scale only); separation is off at 120x+. PerfMonitor shows a 2 s
+PEAK per section (the EMA hid tick spikes), and `--capture=crowdbench`
+takes `--ts=<multiple>` and prints peaks. Walton, ~1255 people at 450x:
+frame 45.7 -> 40 ms, frame peak 138 -> 116 ms, population peak 51 -> 26 ms;
+what is left is GPU (~28 ms — the scene, not the crowd).
+
+## NPC social + weather pass (2026-10-07, after the refinement pass)
+
+Friend groups, gatherings, glow sticks, weather attractors, the firepit prop,
+the DJ and venue layouts. Every behaviour is a HASH both tiers ask
+identically, so the light/full equivalence pins still hold
+(`crowd_cohort_selftest`, `venue_crowd_selftest`).
+
+- **Friend groups (`NpcFriends`, pure).** A camp's index line ("<seed>_npc_<i>")
+  is cut into consecutive groups of 1-5 with hashed sizes. The GROUP key, not
+  the person, drives the hourly SOCIAL choice, the circle, the wander target,
+  stint lengths, the evening venue's TASTE (`taste_for(group key)`, both
+  tiers) and the comfort responses — needs stay personal. A group in a camp
+  circle holds its own F-formation (`formation_offset`); at an ordinary ROUND
+  venue `VenueCrowd.group_spot` replaces the registry's arrival-order spiral
+  (conversation types face the cluster, art/fire face the venue). Live
+  choreography (ring, fan, circle) is untouched.
+- **Shared moments.** `effigy_phase.cheer` = the last `CHEER_LEAD_H` before
+  the collapse; `NpcVenueState` stage `peak` = a set's last `PEAK_H`. Both are
+  folded into the bridge's venue phase KEY, so the light tier is re-posed by
+  `wake_at_venue` the moment they begin (the evacuation trigger compares the
+  PHASE field only — a cheer must not re-run it). Pose `cheer`
+  (crowd POSE_CHEER 9, simple-figure flavour "cheer", rigged = dance).
+- **Glow sticks.** Global uniform `npc_night` (project.godot, pushed by Main
+  from `DaylightModel.night_amount`, change-gated). One carrier rule +
+  six-colour palette keyed on `NpcHash.unit01(id, "pose")` in THREE places
+  that must agree: crowd_figure (bands picked on the REST pose by UV2 part /
+  limb fraction / height — tested PER FRAGMENT on interpolated varyings: the
+  capsules have no vertex ring inside a 7 cm band, so the first, per-vertex
+  version tagged nothing and drew no band at all), crowd_card (a far person's dot glows), and
+  `NpcSimpleFigure.glow_for` (torus rings under `npc_glow.gdshader`, an
+  instance uniform colour). Not on the rigged Mixamo body.
+- **Weather attractors (`NpcComfort`, pure).** `pulls(weather, hour)` ->
+  {heat (hot AND sunny: GHI from WeatherService `shortwave_radiation`), cold
+  (night only), rain (met classes: light < 2.5 mm/h pulls nobody; heavy
+  > 7.6 nearly everyone)}. A pull is a SHARE: each friend group draws one hash
+  per hour (`respond`). Only LEISURE blocks (SOCIAL / FREE / ENRICHMENT) and
+  never during an EVENT; the cold pulls half as hard in the evening's
+  ENRICHMENT block (a cold night must not empty the stage). The stint reuses
+  the mingle activity (`_comfort` / cohort `ckind`), so consumption is
+  untouched. Spots come from the bridge (`comfort_spot` ctx callable): shade =
+  camp `CampStyles.SHADE_CLASSES` + StarShade / EZ-up / carport / deployed
+  linkage props + "shade" spaces (`TerrainLoader.shade_footprints`); warmth =
+  LIT firepits + fire circles; one of the 4 nearest to the camp by group hash,
+  in a 100 m grid. Shelter goes to a tarp or (a share) the person's own bed
+  (`home_bed_of`, engines only — it must be in `_make_ctx`). Hard rain's
+  ONSET wakes ordinary leisure in both tiers (`wake_for_weather`). Harness /
+  testing: `bridge.comfort_override`.
+- **Firepit prop (`FirepitBuilder` + `FirepitFire`).** Procedural (primitive
+  meshes — no winding traps), category structures, PackedSpec curated.
+  Placing one auto-tags a fire circle (`PlacedPropService._auto_tag_space`).
+  `FirepitBuilder.lit_for(rec, env_now(main))` is the ONE rule the fire node
+  and the bridge both ask (`firepit_mode` auto/on/off, `firepit_below_c`
+  default 15 °C; auto = night and colder, unknown temperature counts as cold).
+  An unlit pit's fire circle draws `UNLIT_PIT_DRAW` of its crowd; a lit one
+  adds cold x `WARM_PIT_PULL` (never an EVENT). Flames/sparks/light run on the
+  FIRE cosmetic clock. Prop editor: a "Firepit" section, record-only (no
+  rebuild — the fire re-reads the live record each second).
+- **Venue layouts.** Record keys `layout` ("" by type / "ring" /
+  "directional") and `perform_h_m`, alongside `facing_deg`. ANY venue can face
+  one way: the bridge now writes `_venue_fronts` for every venue ({layout, r,
+  front, fwd}; footprint from the prop's pick AABB), both tiers' `_venue_extra`
+  read it for every type. A directional venue's crowd stands in the fan in
+  front of it whether or not a set is on; a stage turned "ring" rings outside
+  its footprint. Editor: `NpcSpaceTagRow` (now a VBox) has a venue line —
+  Crowd by type / around it / facing one way, a compass spin, "Toward me"
+  (points it at the camera), the DJ deck height (Auto = measured) — and draws
+  an amber facing arrow on the ground while open.
+- **The DJ.** `_service_djs`: for every stage with a set on or starting within
+  `DJ_LEAD_H`, one person per SET (the lowest `NpcHash(id, "<sid>|<set start>")`
+  over everyone on site) is cast via `CrowdCohort.perform` /
+  `NpcPopulationEngine.perform` -> walks to the middle of the footprint and
+  plays until the set ends, `elev` m up, facing the speakers' way. Re-cast at
+  most every `DJ_RECAST_H` (a toilet run is not interrupted). Deck height:
+  `perform_h_m`, else `_deck_height` — the lowest horizontal mesh surface over
+  the footprint's middle 0.25-2.6 m up, taking that slab's top (meshes whose
+  bounds miss are skipped). Elevation reaches the renderers as a NEGATIVE
+  `flags` in the crowd slot (`>= 1` stays hidden) and as the dot's `elev`
+  (host adds it to the ground height, including the drawn-position resample).
+  One set's DJ steps down when a new one is cast (`end_perform`).
+  Festival mode gives a player's stage with NO programme the evening set
+  (slot label prefixed, so Clear removes it). Verify with the venue part of
+  `--capture=festivalmode` (DJ on each live stage, the prop stage's DJ 0.4-2 m
+  up, the firepit lit and tagged, shade/rain/warmth shares via the override).
+
+- **No goal inside a fire perimeter (`NpcNav.outside`).** Found when the
+  Walton RINSE stage got a set: it faces the effigy 31 m away and its fan
+  spilled into the 11 m fall zone. Every walk goal in both tiers (cohort
+  `_go`, agent `_request_path`), a live venue's per-step re-seat
+  (`_update_live_venue`) and a light-tier ARRIVAL (`_begin_activity` steps out
+  first) is pushed to just outside any no-go circle; effigy seats are exempt
+  (already outside by construction). Evacuation at ignition now includes
+  SLEEPERS — a tent inside the fall zone is slept beside, outside it, until
+  the fire is out.
+- **Shared space-pair routes have private ends.** `NpcNavQuery` caches one
+  route per (from space, to space) — planned from the FIRST walker's start to
+  THEIR goal. Two traps, both fixed in both tiers: (1) a re-seat at the venue
+  you are already at (effigy ring -> circle lane) got the camp->venue route
+  and walked back to camp straight across the fire — a route whose start is
+  farther away than the goal is now discarded; (2) the joining legs (your
+  start -> route start, route end -> your seat) now go round any fire via
+  `NpcNav.detour`.
+
+## Peak Experience — "FUCK YES!" (2026-10-08)
+
+The body GLOW is how a person's good time reads; the overhead morale bar is
+hidden by default (`NpcDisplayPrefs.mood_bars`, Settings -> NPCs), glow sticks
+are WRISTBANDS only. Plan: `~/.claude/plans/the-npc-festival-system-humble-brooks.md`.
+
+- **Rules (`NpcPeak`, pure).** A person is VIBING when DOING something social
+  (a venue, the DJ set, a chat / shade / fireside hang — not sheltering, not
+  in a tent), every critical need under its threshold, nothing blocked, morale
+  >= 0.72. The onset RATE per hour is `BASE_RATE_H x mass(n) x (1 + CONTAGION
+  x contagion_mult x peakers) x venue boost`, n = other vibing people in the
+  person's 3x3 block of 6 m cells (mass 0 below 5, full at 20 — a chat circle
+  never gets there, a stage crowd does), peakers capped at 8, boosts for a live
+  set / its closer / the burn. `contagion_mult` is the player's
+  (`PopTestPrefs.peak_contagion`, 0 = no spread .. 4; Settings -> NPCs and the
+  festival HUD). The rate fills a CHARGE (`PeakField.charge`, integrated
+  exactly: dt-exact and deterministic) toward a per-person threshold drawn from
+  Exp(1) by hash per episode (`NpcPeak.threshold`) — statistically the same
+  Poisson onset as a per-tick draw, but "how close" is now a number:
+  `buzz = charge / threshold`. Charge leaks (`CHARGE_LEAK_H`) while the rate is
+  zero; `fed` records who has peakers feeding them. A peak holds while
+  vibing with >= 2 others, MIN_HOLD_H 0.05, and survives GRACE_H 0.1 of lapse
+  (walking back to the same stage between visits); it lifts morale toward 0.95.
+- **Authority: `PeakField` in the bridge**, never a tier — `_service_peaks`
+  (after the camps tick) collects `peak_inputs` (packed arrays) from light
+  cohorts and full engines, counts cells (no pair distances), pushes
+  `cohort.set_peak` / `agent.peak_since` (transient) and the morale lift back.
+  A scrub back freezes; a >6 h jump clears every peak without scoring. The
+  score `{total, by_day, best}` only grows and is saved per map,
+  `user://maps/peak_experience_<lat>_<lon>.json` (4 s debounce). ⚠ Harnesses
+  must snapshot/restore it — `--capture=festivalmode` does — or test onsets
+  land on the player's score.
+- **The glow contract.** Light tier: instance `COLOR.a` = `NpcPeak.pack_mood`:
+  not peaking = buzz in 31 steps in the integer part + morale x 0.999 in the
+  fraction (< 32); peaking = 64 + peak start in sim hours relative to the
+  renderer's time_base (62..89). crowd_figure / crowd_card unpack with the SAME
+  numbers (`a >= 48` is a peak). There is NO mood glow any more (user call,
+  2026-10-08: a "Fuck Maybe" person is a BLACK figure; the linear morale glow
+  lit half the crowd and by day read as flat green). BUZZ = a green OUTLINE
+  only, through `glow_ramp(buzz)` = smoothstep(0.35, 1, b)^3 in all three
+  shaders (nothing below ~35 %, a hint at 60 %, clearly lit at 80 %), beating
+  double-time to the peak pulse and sparkling past 0.85 — the body turns green
+  ONLY at the peak. By DAY (`npc_night` ~0) a peaker is a dark body with a
+  strong green outline and a faint fill; the solid green body is night only.
+  The light-tier figures can be switched off (`NpcDisplayPrefs.light_crowd`,
+  Settings -> NPCs): the LIGHT slots hide (the full-tier overflow still draws) and the Auto hero budget rises to
+  `HERO_MAX_NO_CROWD` 64. Peak = solid green (at night), ramped in
+  over 0.012 sim-h with an ignition flash, then a breathing pulse on ONE shared
+  phase (no per-person seed) so a peaking crowd breathes together and the
+  people catching it shimmer in time with them. Full tier:
+  `npc_silhouette.gdshader` `mood` / `buzz` / `peak` / `peak_flash`, eased by
+  `NpcAvatar.set_mood(morale, since, buzz, fed)`; over the head a thin green
+  meter + "64 %  ↑ 3 peaking near" (`_buzz_track/_buzz_fill/_buzz_lbl`, kept
+  out of the mood-bar toggle by identity).
+- **The peak dance.** A peaker on their feet at a venue or a hang (enrichment
+  / mingle, not sitting, lying, the DJ or a shared cheer) dances the SAMBA:
+  `NpcPoseMachine` input `peaking` -> `NpcRig.CLIP_PEAK_DANCE`, sourced from
+  `Imported Models/NPC/Samba Dancing.fbx` via `NpcRig.RETARGET_SOURCES` (a
+  `mixamorig:` export: prefix-retargeted, bind-ratio checked, hip track scaled
+  to the pack's standing height by the first frame — the source rig's hips
+  sit at 0.096 of its units). `_clip_file_for` hands the rigged body the plain
+  dance when the file is missing; `NpcSimpleFigure._pose_samba` (feet working,
+  hips + twist, forearms rolling at chest height) and crowd `POSE_PEAK` 11 draw
+  their own (`CrowdCohort.pose_code` / the host's `_crowd_pose_for` apply the
+  same rule).
+- **Personal space: STABLE SLOTS (`SpaceRegistry`).** A slot is the LOWEST
+  free index, taken at claim (or earlier by `reserve_slot`) and kept for the
+  visit; one per person (`_slot_at`). It replaced two bugs that piled people
+  up: the light tier used `occupant_count` at DECISION time (it claims on
+  arrival), so everyone who set off for the stage in the same tick got the
+  same slot and walked onto one spot — the "pile" round a peak; and the full
+  tier's `array.find` index shifted everyone behind a leaver. Friend groups get
+  a lowest-free CLUSTER per space (`cluster_index_for`; the hashed one of 48
+  stacked groups by the birthday problem). The stage fan packs at ~1.1 m
+  nearest neighbour (`STAGE_SEAT_M` 0.62, jitter 0.3).
+- **Crowd distance.** A venue's `crowd_gap_m` (< 0 = `STAGE_FAN_GAP_M` 1.5 m;
+  Ctrl-focus row "Crowd distance", with a green ground line where the front
+  row stands) is how far the fan's apex sits off the front edge, or a round
+  stage's ring off its footprint. The fan's bearing is `fract(k x phi)` over
+  the span — folding the golden ANGLE onto 130 deg stepped seats 7.5 deg
+  apart and drew two spiral arms.
+- **SLEEP IS EXEMPT from personal space — people pile up to sleep.** The
+  full tier's `_separate` pass skips anyone DOING sleep (both ways): two people
+  sharing a tent are closer than PERSONAL_SPACE_M and the push walked them
+  out onto the ground (it ran whenever the clock was under 120x). A sleep
+  space never refuses (`has_free_capacity` is true for type `sleep`; an
+  assigned bed is still the assignment's). Sleepers search for a sleep space
+  from `camp_home`, with NO crowding charge (`nearest_space_by(..., spread
+  = false)`) — the 12 m-per-occupant charge sent a full camp's people to bed in
+  the neighbours' camp or on bare ground. More sleepers than beds pile in beside
+  a bed's owner (`SpaceRegistry.pile_offset`, both tiers).
+- **A fire is gathered ROUND — heat draws people, they chat, and sway when a
+  stage's music carries** (2026-10-08, replacing the turning dance ring). The
+  ring of seats is unchanged (`fire_ring_slot`) but STILL: `is_circling` is
+  false for `fire_circle` (the `moving` option survives, no caller asks for
+  it). Poses (`VenueCrowd.venue_pose`): lit = `FIRE_TALK_SHARE` 60 % talk, the
+  rest sit; lit with `music_near` = `FIRE_SWAY_SHARE` 70 % `POSE_SWAY` (a
+  LIGHT dance on the spot — crowd shader `POSE_SWAY` 18, stick-figure flavour
+  "sway" / `_pose_sway`, cohort `VPOSE_SWAY` 16 APPENDED to `VPOSE_NAMES`, the
+  rigged body's dance clip), the rest talk; cold = sit / talk as before.
+  `music_near` is stamped by the bridge (`_stamp_fire_music`) when a lit fire
+  is within `MUSIC_EARSHOT_M` 180 m of a playing stage's speakers (its front
+  edge) or any venue playing its own track; a change re-poses the light tier
+  (`_fire_keys`, and `_phase_code` folds music in as +200). HEAT: every
+  burning fire circle (not only firepits) gets `pull +=
+  NpcComfort.fire_warmth(temp, night) × FIRE_HEAT_PULL` 0.8 —
+  0 above 22 °C by day, ramping to full at 4 °C, with a `FIRE_NIGHT_BASE` 0.25
+  after dark however mild; `pulls()` carries it as `warmth` (kept apart from
+  the night-only comfort `cold`, which the selftests pin). Comfort stints at a
+  warm spot now sit or TALK (was stand). Also fixed: the pose machine had no
+  `POSE_TALK` case for enrichment, so full-tier talkers round a cold pit DANCED
+  while the light tier drew them talking. Pinned in `venue_crowd_selftest`'s
+  `_test_fire_ring`. The text below is the history of the turning ring.
+- **(History) A fire was danced AROUND** (`fire_circle` is a LIVE venue type):
+  `VenueCrowd.fire_ring_slot` — rings from `round_gap` (FIRE_RING_GAP_M 1.2 m,
+  or the venue's crowd distance) off the pit, seats ~0.95 m apart, turning
+  counter-clockwise (one lap per FIRE_LAP_H 0.12 h, outer rings slower) while
+  `fire_lit(state)` (a firepit's lit state from the bridge; anything else counts
+  as lit), standing still and talking round a cold pit. Full tier: re-seated
+  every step by `_update_live_venue`; light tier: `S_CIRCLE` arcs through the
+  same `_circle_step` as the effigy (`VenueCrowd.is_circling` replaced the
+  effigy-only test; a NON-event circle ends when the visit does — the effigy's
+  circle is an event and holds people, a fire's must not). Fire dancers stay
+  wakeable for hard rain and the burn (`wake_for_weather` / `wake_for_event`
+  include them though they are "live"). Two traps, both measured by
+  `crowd_cohort_selftest`'s tier equivalence: (1) the seat MOVES, so anyone
+  already at their ring's radius JOINS / goes round with it in both tiers —
+  chasing it (the effigy late-arrival rule, the full tier's RESEAT_WALK_M walk)
+  never arrives, and a walking full-tier agent skips the end-of-visit check:
+  the fire's dancers never went to bed; (2) a light-tier fire visit gets the
+  ordinary enrichment length on arrival — the live branch of `_begin_activity`
+  returns before the duration is set, so it lasted the whole routine block
+  and people went to bed parched (sleep is never interrupted; morale 0.45 vs
+  0.90). Circle steps round a fire are FIRE_LAP_H / 16. Before this a fire circle used the
+  friend-group clusters, and once clusters were lowest-free the first group
+  stood ON the pit; clusters now start `GROUP_CLEAR_M` past `round_gap`.
+- **Peak ripples** (`core/population/peak_ripple_fx.gd` + `peak_ripple.gdshader`,
+  Main's `PeakRippleFx`): every onset sends a green ring out across the ground to
+  the contagion's reach (1.5 cells), scaled by the contagion setting. Reads the
+  bridge's NON-consuming `peak_events_since(serial)` (PeakField `_log` /
+  `serial`) — the toast drains a different list; on the NPC cosmetic clock.
+  The score chip adds "⚡ N close" (`peak_building(0.5)`). The Ctrl-focus row
+  draws a green RING at a round venue's front row (`VenueCrowd.front_ring_r`),
+  the line at a directional one.
+- **Fun Meter (`scenes/ui/fun_meter.gd`, UILayer `FunMeter`).** The crowd's
+  overall vibe as a half-dial needle gauge: the six NpcMorale bands in their
+  colours across the first `ZONE_FY` 0.86 of the arc (each band as wide as its
+  morale range), then the FUCK YES zone. `needle_for(mean, peak_share)` =
+  lerp(mean x ZONE_FY, 1, min(share / 0.25, 1)) — mood alone never reaches
+  the zone; a quarter of the crowd peaking pins it. Damped-spring needle,
+  shiver while people peak, zone pulses. Data: `festival_vibe()` else
+  FestivalVibe over the bridge's `vibe_summaries()` (tier-aware: a light
+  camp's PARKED engine is stale). Draggable, position + on/off in
+  NpcDisplayPrefs (`fun_meter`, `fun_meter_pos`).
+- **Peak beacons (`core/population/peak_beacon.gd` + `.gdshader`, Main's
+  `PeakBeacon`).** Each toast pings it with its events: a green light column
+  over the headline peaker for 9 s (width/height grow with camera distance —
+  slim up close, a tower from the settlement view), a ring at its foot, a name
+  + distance tag, and an EDGE ARROW when the spot is off-screen or behind.
+  Real time; ≤3 at once; toasts off still ping (folded to 2 s).
+  `NpcDisplayPrefs.peak_beacons`. In the settlement view the toast is
+  clickable ("click to look" -> `SettlementView.look_at_person`), and only
+  there does it take the mouse.
+- **Venue music (`StageMusic`, core/population/stage_music.gd, Main's
+  `StageMusic`).** A venue record's `music` names a file in `user://stage_audio/`
+  (the player's tracks live in user data, never the repo — licences are
+  theirs); the Ctrl-focus row's "Music" picker lists that folder and "Add
+  file…" copies one in. One AudioStreamPlayer3D per venue at the speakers
+  (the bridge's front edge, deck + 2 m, `-Z` = facing so the emission cone
+  muffles it behind the stage), inverse-distance (full inside 14 m, gone by
+  520 m) with the highs rolled off over distance. `should_play` (pure): a stage
+  while a SET is on, a fire circle while lit, other venues while open; resolves
+  the venue state itself when there is no population. Fades 2 s, restarts at a
+  set's start, loops, pauses with the sim. Loaded with
+  `AudioStreamMP3/OggVorbis/WAV.load_from_file` (no import). Volume:
+  `NpcDisplayPrefs.stage_music_volume` (Settings -> NPCs, 0 = off).
+- **Activity pass (2026-10-08, "too much standing around").** Measured with
+  a one-day pose census (light + full tier, festival_day, a typical site),
+  HEAD vs working tree — the SIM was already busier than the last commit
+  (light STAND 41 % -> 12 %, full IDLE 27 % -> 5 %); what remained was LOOK
+  and two schedule holes, both mirrored in the two tiers: (1) before the sleep
+  window opens the sleep NEED alone sent people to bed at its ordinary
+  threshold — a festival-goer up since 08:00 crosses it ~21:00, so 46 % of the
+  crowd slept through the set; a festival routine now needs exhaustion
+  (`NpcRoutine.early_bed_bar` = FESTIVAL_LATE_BED_BAR 0.97) -> 15 % asleep,
+  50-61 % dancing 21-24h; (2) awake inside a festival SLEEP block (woke 07:30,
+  block to 09:30) people dawdled by their beds — that time is now SOCIAL. Look:
+  the stick figure's idle shifts weight, glances round and fidgets (hands on
+  hips / arms crossed); talk speaks ~45 % of the time with both hands,
+  listeners nod, the circle laughs; the crowd shader's POSE_STAND and
+  POSE_TALK got the same (head tips about PIVOT_NECK); a cold firepit is a
+  hangout (half sit, half talk), not a still standing ring.
+- **Mo-cap SPICE on the stick figure (`NpcMocapSpice`, `NpcStickMocap`,
+  `NpcSimpleFigure` "mo-cap spice" block).** The user's call: the stick
+  figure's PROCEDURAL poses are the base and the fallback for everything; a
+  Mixamo clip is a punchline now and then. A hidden copy of the pack's
+  character (skinned meshes FREED: a bare Skeleton3D + a MANUAL
+  AnimationPlayer the figure advances at its own rate, capped at 3x) plays a
+  clip; `solve_points` turns joint POSITIONS into the stick joints' rotations
+  — capsules are round, so a limb is just a direction (shortest arc from the
+  arms-down rest; the T-pose rest never has to match); pelvis and head take
+  the bone's delta from its upright rest; the torso is built from the spine
+  and the shoulder line. Index 0 = the person's RIGHT (-X), the Mixamo
+  Right* bones. The figure runs its procedural pose EVERY frame, caches it
+  (Euler ROTATIONS — a basis written back re-decomposes and can swing a limb
+  the long way round), restores the cache before the next procedural step,
+  and slerps the clip pose over it by a 0.35 s weight — so fading out lands
+  EXACTLY on the procedural pose (selftested to 1e-4 rad). Moments
+  (`moment_for(clip, flavor)`): peak / cheer / wake are EVENTS (rolled on
+  entry), dance / dj / talk / idle / sit / work PERIODIC (rolled per window
+  from the second window); walking and lying never. Chance scales with
+  `NpcDisplayPrefs.mocap_spice` (0 = never, 0.5 = table). Clips: every FBX in
+  `Imported Models/NPC/mocap/<moment>/` (names free; `_retarget_extra` takes
+  any Mixamo rig, scaling the hips by the SOURCE skeleton's rest height —
+  the first frame of a seated clip would blow it up; sit clips get the
+  ground-sitting offset), else MOMENT_DEFAULTS from the base pack. Budget: the
+  host's MAX_RIGGED nearest (set_detail -> set_mocap_allowed in simple style);
+  an idle skeleton is freed after 30 s. Selftest:
+  `core/population/npc_mocap_selftest.gd`.
+- **The Mixamo peak samba on the HUMANOID body** (Body style "humanoid") is
+  the pose machine's CLIP_PEAK_DANCE; in "simple" style it reaches the stick
+  figure as mo-cap SPICE (above); the light tier draws POSE_PEAK.
+- **Selftests reset `PopTestPrefs`** (crowd_cohort / venue_crowd /
+  npc_population `_init`): a player's saved "no departures" leaked into
+  `crowd_cohort_selftest` and failed its departure checks.
+- **The scale (user's wording, worst to best):** FUCK THIS!!! · Fuck You ·
+  Fuck Me · Fuck It · Fuck Maybe · Fuck It! are the six `NpcMorale.BANDS`;
+  FUCK YES!!! (`NpcPeak.LABEL`) is the PEAK state above them, never a band.
+  Over each nearby full-tier head (`AMBIENT_MAX_TAGS` 20, overhead mode
+  permitting) the STATE shows as words in its band colour — green FUCK YES!!!
+  while peaking — with the task under it (`NpcAvatar._state_lbl`); the bar is
+  optional.
+- **Score + toast.** `PeakScoreChip` (UILayer, under the vibe chip: count-up,
+  pop, "N now / today"), the settlement HUD's green score line, and
+  `PeakToast` (own CanvasLayer at LAYER_TOAST): one toast at a time, onsets
+  MERGE into it (re-pop, hold extended but never past MAX_HOLD_S from its
+  start — a steady stream once kept one toast up forever), a new one at most
+  every 5 s; `NpcDisplayPrefs.peak_toasts`. One `SettlementLog` "peak" line per
+  quarter sim-hour of onsets.
+- **DJ re-cast rule (found here).** The 0.5 h re-cast cooldown applies ONLY
+  while the DJ is on a need; a set lost to a >6 h catch-up or a tier switch is
+  re-cast at once (`_dj_on_a_need`). The DJ's interrupt bar is
+  `NpcAgent.PERFORM_URGENT` 0.995.
+
+## The effigy burn sequence (2026-10-08)
+
+Plan: `~/.claude/plans/effigy-burn-sequence-and-poses.md`. A burn is now a
+sequence, not a switch, and the effigy is a destination at every hour.
+
+- **Stages live INSIDE the pre-roll.** `VenueCrowd.effigy_phase` adds
+  `stage` (`gather` -> `flow` -> `sandmen` -> `burn`), `stage_ends_in_h`,
+  `perimeter`, `flow_t0` and `burn_key` (`"%.4f" % ignited_h`). The pre-roll
+  splits by fraction (`GATHER_FRAC` 0.35, `FLOW_END_FRAC` 0.80), so a record
+  with any pre-roll works; an effigy's default pre-roll is
+  `FireTimeline.EFFIGY_PREROLL_H` 0.75 h. The nav perimeter (F_FIRE) is
+  stamped only while `perimeter` is true (sandmen, burn, circling) and after:
+  the fire-flow performers dance INSIDE the line.
+- **Attraction.** IDLE / AFTER: `EFFIGY_IDLE_DRAW` 0.9 + `EFFIGY_IDLE_PULL`
+  0.3 — beats an art piece at the same distance, not a quiet person's temple
+  next door (both pinned). Idle poses: gaze up / cross-legged / lounge / talk
+  / a few dancing. LIT: `VenueCrowd.attends(id, burn_key)` — a hashed share
+  `BURN_TURNOUT` 0.85 — picks the turnout; an attendee's routine block reads
+  as ENRICHMENT and their bedtime bar rises to `STAY_UP_BAR` 0.99 (they stay
+  up for the burn). **It never wakes a sleeper** — the user's rule; both
+  tiers' `_pick` take the stay-up bar only for people still awake.
+  `burn_key` reaches the agents through BOTH ctx dicts — and the engine's
+  `_make_ctx` whitelist.
+- **Roles (bridge, `_service_burn_roles`, after `_service_djs`)** reuse the
+  DJ's `perform` path with a `role`: `flow` performers (`flow_count` =
+  turnout/30, 10-20) on a moving `orbit` (`flow_orbit` at
+  `FLOW_LANE_FRAC` 0.62 x safe_r, one lap per `FLOW_LAP_H`; light tier steps
+  it as `ORBIT_STEP_H` arcs, full tier re-seats every step); `sandman` posts
+  (`sandman_count`, one per 6 m, 8-24) at safe_r - 0.6 m KNEELING facing OUT;
+  `redirect`: anyone (not a role) inside safe_r - 0.3 m is turned and walked
+  radially out (`redirect_out` in both tiers) and the nearest sandman stands
+  and gestures for `REDIRECT_HOLD_H`. `burn_roles()` / `burn_redirects()`
+  are the read API. Roles end when the phase leaves BURNING.
+- **A burn role's goal is exempt from `NpcNav.outside`** (cohort `_go` /
+  `_begin_activity` on A_PERFORM, agent `_request_path` when `perform_role`
+  is set) — otherwise every sandman's post was pushed out past the line.
+- **Fire props:** `FirePropFx` (Main child): two particle poi and a warm light
+  per performer, placed from `NpcPopulationHost.drawn_position` (either tier),
+  spun on the NPC cosmetic clock.
+- **The closing circle faces along it** (`ccw_tangent`), full tier via the
+  face anchor, light tier along its arc.
+- **Ground poses** (both bodies + rig logical clips, all aliased to the
+  rigged body's sit/idle/dance): `sit_cross` (meals, quiet venues, idle
+  effigy), `sit_lounge` (feet out, propped on straight arms — the burn's front
+  row, replacing LYING, which read as casualties), `kneel`, `redirect`,
+  `fire_flow`, `gaze`. The chair `sit` stays for the portapotty. Crowd codes
+  12-17 (`POSE_CROSS`..`POSE_GAZE`). ⚠ **Crowd shader sign convention**
+  (comment in `crowd_figure.gdshader`, measured by `ground_pose_diag.gd`):
+  the figure faces +Z; NEGATIVE `limb_angle` = forward, NEGATIVE
+  `body_tilt` = lean forward, positive `head_nod` = nod down. SIT's legs and
+  WORK's bend were mirrored (sitting with the thighs out behind, bending over
+  backwards) until this pass.
+- **Labels follow the head**: `NpcAvatar._follow_head` eases the status root
+  and the name tag down by how far the head is below standing
+  (`NpcSimpleFigure.head_height()`; the rig uses the pose machine's
+  lying/seated flags).
+- **One drawn position per person.** `CrowdRenderer.drawn_position(id)`
+  replays the shader's segment mix on the CPU; `NpcPopulationHost
+  .drawn_position(id)` = the hero avatar, else that. The FUCK YES beacon
+  follows it every frame and `spotlight`s its person into the hero pool.
+  **Hero hand-offs are same-frame now** (the pop-in): a hero set change
+  forces the crowd push (a periodic 0.2 s push alone left a leaver invisible
+  and a joiner doubled), a joiner's avatar is seeded at the renderer's drawn
+  position + yaw with its glide state cleared (`_hand_in`; it used to slide
+  in from the spot it was last shown at), a leaver's crowd figure starts at
+  the avatar and glides on, and a hero past the cull distance is handed to
+  the crowd renderer instead of vanishing.
+- Mo-cap spice moments `gaze` and `fireflow` (folders + READMEs).
+- **Found by the Walton runs, fixed with it:** (1) attendees put off a meal
+  until hunger `NpcAgent.BURN_HUNGER_BAR` 0.85 in both tiers' `_pick`
+  (thirst/bladder unchanged). (2) `VenueCrowd.rain_clears(type, event)` is
+  the ONE rain-wake rule: an UNLIT effigy's crowd takes cover (it was a live
+  venue type, so a downpour left the idle-effigy crowd sitting in it).
+  (3) **A backward scrub REBASES pending times** (`CrowdCohort._rebase_times`,
+  `NpcAgent.rebase_time`): still a freeze (no state changes), but end/next/
+  segment/need timestamps move back with the clock — left absolute, an
+  85-day rewind left 250 people mid-meal for 85 days (`ends_in` 2034 h), and
+  the burn "turnout" read 55 %. (4) Festival mode seeds the PER-CAMP types
+  (`FestivalSeedLayout.PER_CAMP_TYPES` sleep, kitchen) for every camp whose
+  outline holds none (`needs_seeding`) — before, ONE tagged capacity-1 bed
+  anywhere on the site stopped all 35 camps getting beds. (5) The idle
+  effigy's pull is 0.3 (0.45 competed with live sets at 21:00).
+Verify: `venue_crowd_selftest` (`_test_burn_sequence`), the burn half of
+`--capture=festivalmode` (flow / sandmen / turnout / tangent / beacon lock-on
+asserts, PNGs 05a/05b), and `ground_pose_diag.gd`.
+
+## Points of interest — KML pins from Google Earth (core/poi/, 2026-10-12)
+
+The player marks real places on the property in Google Earth (the hydro
+inlet, the pond outlet, the yurt clearing), exports a KML, and **Terrain
+options → Points of interest → Import KML / KMZ…** puts a pin at every
+placemark's exact coordinates so nothing has to be guessed at in the world.
+- **`KmlPoiParser`** (`core/poi/kml_poi_parser.gd`, pure — NOT the older
+  `KmlParser` in `location_picker/`, which is the regex zone parser for the
+  world map): Godot `XMLParser` over Placemarks with a Point / LineString /
+  Polygon (outer ring only; MultiGeometry splits into "name (2)" …), name,
+  description (HTML stripped), folder, and the colour the `styleUrl` resolves
+  to through a StyleMap's "normal" pair — a KML `<color>` is AABBGGRR, and a
+  Google Earth POINT carries its colour only in the icon URL (`color=1976d2`).
+  ⚠ Two traps: XMLParser hands a CDATA section's content back through
+  `get_node_name()` (`get_node_data()` errors); and coordinates are returned
+  as `[lon, lat, alt]` float Arrays — a Vector3 is float32 and puts a pin a
+  metre off. `.kmz` is read through `ZIPReader` (`doc.kml`, else the first
+  `.kml`).
+- **`PoiLayer`** — WorldPaths kind `"poi"` (one file per site:
+  `user://maps/poi_<lat>_<lon>.json`, `user://worlds/<id>/poi.json`).
+  Records keep WGS84 (a line / polygon's `lat`/`lon` is its vertex mean, the
+  label + Go point) and are converted to site metres at build time with
+  `GeoMath.lonlat_to_local_m` against the loader's `_lat`/`_lon` — the same
+  mapping OSM uses, so a pin lands where the OSM features do. The OSM
+  imagery-registration offset is deliberately NOT applied: a Google Earth pin
+  was placed against imagery, so it is already registered to the photo.
+  Re-importing a file REPLACES that `source`'s records (ids are a stable hash
+  of source + KML id + index), so an edited export moves pins, never doubles.
+- **`PoiRuntime`** (`Terrain/PointsOfInterest`): a pole + coloured head +
+  ground disc + `no_depth_test` name tag per point (found through trees and
+  from the far side of a hill is the whole point), a 0.4 m ribbon draped on
+  `_ground_height_at` every 2 m per line / polygon with a shorter pole at the
+  centroid. Rebuilt whole on `sync`; `set_shown` hides it.
+- **Loader API** (`TerrainLoader`): `_attach_pois` in the load sequence after
+  the camps; `import_kml_file(path)` (toasts added / off-map), `poi_records`,
+  `poi_markers` (Site Plan: `graph_canvas._draw_poi_site` draws a pin glyph +
+  name between the tagged spaces and the crew sites, reading the loader
+  directly like the water network), `poi_world_position`, `remove_poi`,
+  `remove_poi_source`, `clear_pois`, `show_pois` / `set_show_pois`
+  (`[terrain] show_pois` in terrain_config.cfg), `teleport_to_poi` (player a
+  step south of the pin, on the ground).
+- UI: `terrain_options_ui._build_poi_ui` — FIRST block in the panel body:
+  import button (native FileDialog), the list (colour swatch, name,
+  "(path)"/"(area)", Go, ✕; a ScrollContainer past 8 rows), Show + Clear all
+  (confirm). The list is rebuilt every time the panel opens, not only after
+  the panel's own import. ⚠ The Terrain options panel is a 260 px
+  PanelContainer anchored top-right with a FIXED design height, and its
+  column had outgrown both: the body is now in a ScrollContainer clamped to
+  the window height (`_apply_collapsed_size`), and the "Reset map / ALL veg
+  styles" pair is stacked (side by side it was 328 px and pushed the whole
+  panel 84 px off the right edge — measured with a headless min-size probe;
+  any new row wider than ~250 px does it again). Verify with
+  `core/poi/poi_selftest.gd` and `--capture=poi` on mtvernon (Validation
+  list), which asserts the panel and the block are inside the viewport.
+
 ## Known pre-existing runtime errors (not regressions)
 
 List re-verified + pruned 2026-08-11: both boot-time "Node not found" errors
@@ -5043,9 +7420,17 @@ entries were STALE and are dropped: duplicate device id `ibc_glow_lights`
 fire-extinguisher `!is_inside_tree()` (main.gd adds children before setting
 global_position), the missing `camp_scatter_bake.tres` (the only load site is
 guarded by `ResourceLoader.exists()`), and "target vector can't be zero" from
-road/camp scatter (every look_at/Basis site now guards zero-length). A clean
-boot of both built-in maps currently greps ZERO node-path/parse/script errors
-— treat any new one as a regression.
+road/camp scatter (every look_at/Basis site now guards zero-length).
+The clean-boot claim for the built-in maps no longer holds. A boot log on
+2026-10-12 showed two C++ errors:
+- "target vector can't be zero" with a backtrace into `road/road.gd:190`
+  (`curve.get_baked_length()`, i.e. Curve3D baking its up vectors over
+  coincident points of the SOAK scene's road, not a script look_at).
+- `curve.cpp` `!p_data.has("tilts")` from a Curve3D in the Mars /
+  `main.tscn` `string_lights.tscn` instance.
+
+Both belong to the built-in scenes, which are no longer harness targets.
+Neither is a script error.
 
 **`core/terrain/site_boot_selftest.gd` currently FAILS 2 of 7** — "player above
 ground gap -93.75 m" and "auto-veg generated got 0" at Mount St. Helens. It is a
@@ -5062,6 +7447,17 @@ sim-DAY — every run sampled a different population day. The harness now pins
 2026-07-15 07:00 at the start of `_run_population_verify` and the capture
 passes fully and reproducibly. If a sub-check fails now, it is a real
 regression (or someone removed the date pin).
+
+**`--capture=graph` on the SOAK scene hangs at "opening the graph" since the
+siphon round 3 (2026-10-12)** — the main thread stalls and the process grows
+past 6 GB; a bisect with the outlet marker, state ring and burial cue all
+switched off still hung, and the soak autosave opens in freeform where the
+pin / plan-window code is inert, so the cause is not yet known. It does NOT
+reproduce on a real map: the Mount Vernon site-review (freeform / site /
+elevation / globe sets) and `--capture=hydroload` pass with zero script
+errors. The user asked that the soak map no longer be used for verification
+(see "Harness rules" at the top). `--capture=graph` now defaults to the Mount
+Vernon world, and the harness refuses SOAK without `--allow-builtin-scene`.
 
 **Re-verify this list before trusting it** — it is hand-maintained and drifts.
 The former "UISP button node-path misses" entry was stale: nothing outside

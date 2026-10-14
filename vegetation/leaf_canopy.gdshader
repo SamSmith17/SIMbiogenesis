@@ -13,8 +13,11 @@
 // thinning, spring bud, winter desaturation, snow) driven live by
 // VegetationEnvironmentSync, and deciduous-profile wind from VegetationWindDriver.
 shader_type spatial;
-render_mode cull_disabled, depth_prepass_alpha;
+// diffuse_lambert_wrap: light wraps round leaves as it scatters through a real
+// crown, rather than a hard terminator leaving half the canopy in flat ambient.
+render_mode cull_disabled, depth_prepass_alpha, diffuse_lambert_wrap;
 
+#include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
 #include "res://vegetation/veg_growth.gdshaderinc"
@@ -241,17 +244,14 @@ void fragment() {
 	ALPHA = clamp(mask * 2.2, 0.0, 1.0);
 
 	// ---- Lighting normal (double-sided) ----
-	float face_factor = 1.0;
-	vec3 nrm = NORMAL;
-	if (!FRONT_FACING) {
-		nrm = -NORMAL;
-		face_factor = 0.55;
-	}
-	NORMAL = nrm;
+	// (No manual back-face flip — see veg_lighting.gdshaderinc.)
+	float face_factor = FRONT_FACING ? 1.0 : VEG_BACK_FACE;
+	vec3 wn = veg_world_normal(NORMAL, INV_VIEW_MATRIX);
 
 	// ---- Base leaf albedo ----
 	float canopy_top = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-	vec3 albedo = mix(leaf_shadow, leaf_color, mix(0.35, 1.0, v_shell_t)) * albedo_tint * face_factor;
+	vec3 albedo = veg_saturate(mix(leaf_shadow, leaf_color, mix(0.35, 1.0, v_shell_t)) * albedo_tint,
+			veg_saturation) * face_factor;
 	if (canopy_profile == 0) {
 		// Midrib / leaf-center brightening for a bit of blade shape.
 		float half_w = max(0.5 * leaf_size / leaf_aspect, 0.02);
@@ -288,19 +288,19 @@ void fragment() {
 	albedo = mix(albedo, albedo * ao_tint, (1.0 - v_shell_t) * ao_strength);
 
 	vec3 lit_dir = normalize(sun_direction);
-	float sun_up = max(0.0, dot(lit_dir, NORMAL)) * (1.0 - night_factor);
+	float sun_up = max(0.0, dot(lit_dir, wn)) * (1.0 - night_factor);
 	albedo += highlight_tint * sun_up * subsurface_strength * canopy_top;
 	if (translucency_strength > 0.001) {
-		vec3 view_dir = normalize(CAMERA_POSITION_WORLD - v_world_pos);
-		float back = max(0.0, dot(-lit_dir, view_dir));
-		albedo += highlight_tint * back * translucency_strength * canopy_top * (1.0 - night_factor);
+		// Real transmission through BACKLIGHT (lit from behind the leaf), not
+		// an ALBEDO add that N·L then zeroed exactly where it should glow.
+		BACKLIGHT = highlight_tint * translucency_strength * canopy_top * (1.0 - night_factor);
 	}
 
 	// Snow settling on the canopy: favours upward-facing normals + the crown top.
 	float snow_rough = roughness_value;
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
-		float up = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
+		float up = clamp(wn.y * 0.5 + 0.5, 0.0, 1.0);
 		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
 		float snow_mask = clamp((snow_amount * 0.35 + depth_t * 0.8) * mix(0.3, 1.0, canopy_top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
 		albedo = mix(albedo, snow_color, snow_mask);
@@ -309,9 +309,11 @@ void fragment() {
 
 	albedo *= 1.0 - night_factor * night_darkness;
 
-	float haze_amount = dist_t * haze_strength * (1.0 - night_factor);
+	float haze_amount = dist_t * haze_strength * (1.0 - night_factor) * veg_haze_mul;
 	ALBEDO = albedo * (1.0 - haze_amount);
-	EMISSION = haze_color * haze_amount;
+	EMISSION = haze_color * haze_amount
+			+ albedo * (1.0 - haze_amount) * veg_fill_amount() * (1.0 - night_factor);
 	ROUGHNESS = snow_rough;
 	METALLIC = 0.0;
+	SPECULAR = 0.25;
 }

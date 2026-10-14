@@ -20,12 +20,15 @@ class FireCluster:
 var clusters : Array[FireCluster] = []
 var _update_timer : float = 0.0
 var _flicker_time : float = 0.0
+var _fx_rate : float = 1.0
 
 func _ready() -> void:
 	pass
 
 func _process(delta: float) -> void:
-	_flicker_time += delta
+	# Cosmetic clock (SimFxRate fire track): frozen while the sim is paused.
+	_fx_rate = SimFxRate.rate(null, SimFxRate.SYS_FIRE)
+	_flicker_time += delta * _fx_rate
 	_update_timer += delta
 	
 	if _update_timer >= UPDATE_INTERVAL:
@@ -273,6 +276,10 @@ func _update_cluster_visuals(_delta: float) -> void:
 		# Update particles
 		var particles := cluster.visual_node.get_node_or_null("FlameSmoke") as GPUParticles3D
 		if particles != null:
+			particles.speed_scale = _fx_rate
+			var cl_embers := cluster.visual_node.get_node_or_null("Embers") as GPUParticles3D
+			if cl_embers != null:
+				cl_embers.speed_scale = _fx_rate
 			# Scale particle count and emission radius with cluster size
 			particles.amount = int(clampf(30 + valid_count * 1.5, 30, 80))
 			

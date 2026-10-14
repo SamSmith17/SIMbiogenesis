@@ -13,8 +13,8 @@ shader_type spatial;
 
 render_mode cull_disabled, diffuse_lambert, specular_disabled;
 
-uniform sampler2D base_tex : source_color, filter_linear_mipmap;
-uniform sampler2D detail_tex : source_color, filter_linear_mipmap;
+uniform sampler2D base_tex : source_color, filter_linear_mipmap_anisotropic;
+uniform sampler2D detail_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform bool use_base = true;
 uniform vec3 base_color : source_color = vec3(0.45, 0.42, 0.38);
 uniform float extent_ratio = 30.0;
@@ -26,17 +26,27 @@ uniform bool hide_centre_region = false;
 // "Hyper" ortho: a small central patch at much higher ESRI zoom (the same
 // texture that drapes building roofs / berms). Sharpens the core the player
 // actually walks. hyper_ratio = this mesh's span / hyper patch span.
-uniform sampler2D hyper_tex : source_color, filter_linear_mipmap;
+uniform sampler2D hyper_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform bool use_hyper = false;
 uniform float hyper_ratio = 3.0;
 uniform float hyper_feather = 0.06;
 uniform vec4 hyper_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
 uniform bool correct_hyper_mercator = false;
+// "Site" patch: the property itself at the best source's NATIVE resolution
+// (a regional orthophoto where one exists — ImagerySources — else ESRI z19),
+// BC7-compressed. Sharper than hyper, which trades resolution for reach on
+// the High/Ultra tiers. Overlaid on top of hyper, under the AI hero patch.
+uniform sampler2D site_tex : source_color, filter_linear_mipmap_anisotropic;
+uniform bool use_site = false;
+uniform float site_ratio = 10.0;
+uniform float site_feather = 0.04;
+uniform vec4 site_bbox = vec4(-1.0, 1.0, -1.0, 1.0);
+uniform bool correct_site_mercator = false;
 // "AI hero" patch: an even smaller central square around the map origin whose
 // ground has been enhanced by the Gemini image model (beats the ESRI ceiling
 // where the player spawns). Overlaid ON TOP of hyper in the same feathered way.
 // ai_ratio = this mesh's span / AI patch span.
-uniform sampler2D ai_tex : source_color, filter_linear_mipmap;
+uniform sampler2D ai_tex : source_color, filter_linear_mipmap_anisotropic;
 uniform bool use_ai = false;
 uniform float ai_ratio = 100.0;
 uniform float ai_feather = 0.08;
@@ -134,16 +144,34 @@ float _fbm(vec2 p) {
 	return s;
 }
 
+// Mercator y of (φ0 + d) minus Mercator y of φ0: the Taylor series of
+// ∫ sec φ dφ about φ0 — sec·d + ½·sec·tan·d² + ⅙·sec·(sec²+tan²)·d³ + ¹⁄₂₄·sec·tan·(5sec²+tan²)·d⁴
+// — under a millimetre across a whole 120 km drape.
+float _merc_rel(float d, float sec0, float tan0) {
+	return sec0 * d * (1.0 + 0.5 * tan0 * d + (sec0 * sec0 + tan0 * tan0) * d * d / 6.0
+		+ tan0 * (5.0 * sec0 * sec0 + tan0 * tan0) * d * d * d / 24.0);
+}
+
 // Equirectangular UV (lon/lat-linear over bbox) → Mercator UV into the drape.
+// ⚠ Must be computed RELATIVE to the bbox centre. The direct form,
+// asinh(tan(lat)) at each pixel minus at the north edge, subtracts two
+// numbers ~0.97 that differ in the 4th decimal over a 1 km patch: float32
+// rounding then quantised v into 1–2 m steps, and every hyper / site drape
+// rendered as hard-edged 2 m blocks however sharp the photo was (Mount
+// Vernon, 2026-10-13). Here every term is a small difference, so v keeps
+// full precision; the centre's sec/tan are constants per drape.
 vec2 equirect_to_mercator_uv(vec2 uv, vec4 bbox_wesn) {
-	float lat = mix(bbox_wesn.w, bbox_wesn.z, uv.y);
-	lat = clamp(lat, -85.05112878, 85.05112878);
-	float lat_n = clamp(bbox_wesn.w, -85.05112878, 85.05112878);
-	float lat_s = clamp(bbox_wesn.z, -85.05112878, 85.05112878);
-	float my = _asinh(tan(radians(lat)));
-	float my_n = _asinh(tan(radians(lat_n)));
-	float my_s = _asinh(tan(radians(lat_s)));
-	float v = (my_n - my) / max(my_n - my_s, 1e-12);
+	float lat_n = radians(clamp(bbox_wesn.w, -85.05112878, 85.05112878));
+	float lat_s = radians(clamp(bbox_wesn.z, -85.05112878, 85.05112878));
+	float span = lat_s - lat_n;
+	float phi0 = 0.5 * (lat_n + lat_s);
+	float sec0 = 1.0 / cos(phi0);
+	float tan0 = tan(phi0);
+	float m_n = _merc_rel(-0.5 * span, sec0, tan0);
+	float m_s = _merc_rel(0.5 * span, sec0, tan0);
+	float m = _merc_rel(span * (uv.y - 0.5), sec0, tan0);
+	float denom = m_n - m_s;
+	float v = abs(denom) > 1e-12 ? (m_n - m) / denom : uv.y;
 	return vec2(uv.x, v);
 }
 
@@ -178,6 +206,15 @@ void fragment() {
 				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
 			}
 		}
+		// Native-resolution site patch — layered on top of hyper.
+		if (use_site) {
+			vec2 suv = (uv - vec2(0.5)) * site_ratio + vec2(0.5);
+			if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) {
+				vec3 site = sample_drape(site_tex, suv, site_bbox, correct_site_mercator);
+				float sedge = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
+				col = mix(col, site, smoothstep(0.0, site_feather, sedge));
+			}
+		}
 		// AI hero patch (sharpest of all) — layered on top of hyper.
 		if (use_ai) {
 			vec2 auv = (uv - vec2(0.5)) * ai_ratio + vec2(0.5);
@@ -207,6 +244,15 @@ void fragment() {
 				vec3 hyper = sample_drape(hyper_tex, huv, hyper_bbox, correct_hyper_mercator);
 				float hedge = min(min(huv.x, 1.0 - huv.x), min(huv.y, 1.0 - huv.y));
 				col = mix(col, hyper, smoothstep(0.0, hyper_feather, hedge));
+			}
+		}
+		// Native-resolution site patch — layered on top of hyper.
+		if (use_site) {
+			vec2 suv = (uv - vec2(0.5)) * site_ratio + vec2(0.5);
+			if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) {
+				vec3 site = sample_drape(site_tex, suv, site_bbox, correct_site_mercator);
+				float sedge = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
+				col = mix(col, site, smoothstep(0.0, site_feather, sedge));
 			}
 		}
 		// AI hero patch (sharpest of all) — layered on top of hyper.
@@ -296,9 +342,12 @@ void fragment() {
 		if (luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0) {
 			float cover = texture(litter_tex, luv).r * litter_strength;
 			if (cover > 0.001) {
-				// Break the mask up so the drift edge isn't a smooth blob.
-				vec2 lcell = floor(v_world_pos.xz / 1.7);
-				float ln = fract(sin(dot(lcell, vec2(29.7, 83.3))) * 43758.5453);
+				// Break the mask up so the drift edge isn't a smooth blob — with
+				// SMOOTH noise. This used to be a random value per 1.7 m
+				// world-space cell (floor + hash), which printed a hard-edged
+				// checkerboard over the photo every autumn: it read exactly
+				// like huge imagery pixels (Mount Vernon, 2026-10-13).
+				float ln = _fbm(v_world_pos.xz * 0.45);
 				// Tint, don't repaint: the drape photo still has to read through
 				// a leaf layer, and a full replace turned whole hillsides flat
 				// brown.
@@ -314,8 +363,8 @@ void fragment() {
 		// Flat ground accumulates; steep faces shed. Small spatial break-up so
 		// the snow line is not a perfectly uniform sheet.
 		float slope_hold = smoothstep(snow_slope_min, snow_slope_max, clamp(v_world_normal.y, 0.0, 1.0));
-		vec2 ncell = floor(v_world_pos.xz / 12.0);
-		float n = fract(sin(dot(ncell, vec2(45.2, 17.9))) * 43758.5453) * 2.0 - 1.0;
+		// Smooth break-up (a per-12 m-cell hash drew square snow blocks).
+		float n = _fbm(v_world_pos.xz * 0.08) * 2.0 - 1.0;
 		float cover_strength = clamp(snow_amount * 0.35 + depth_t * 0.75, 0.0, 1.0);
 		float cover = clamp(cover_strength * (0.40 + 0.60 * slope_hold) + n * 0.05 * cover_strength, 0.0, 1.0);
 		// Deep packs read brighter / softer on horizontal terrain.

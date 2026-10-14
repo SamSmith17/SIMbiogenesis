@@ -351,6 +351,7 @@ func _build_ui() -> void:
 	outer.add_child(tabs)
 
 	_build_gameplay_tab(tabs)
+	_build_player_tab(tabs)
 	_build_drone_tab(tabs)
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
@@ -1378,16 +1379,7 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	ns_hint.add_theme_color_override("font_color", C_TEXT_S)
 	ns_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(ns_hint)
-	v.add_child(HSeparator.new())
-	_add_section_lbl(v, "Camera (field of view)")
-	_player_fov = _add_slider(v, "Player FOV°", 30.0, 120.0, 1.0, _on_player_fov)
-	var fov_hint := Label.new()
-	fov_hint.text = "Horizontal field of view for first-person walking. Wider = more peripheral view (and more lens distortion). Drone FOV is under the Drone tab."
-	fov_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	fov_hint.custom_minimum_size = Vector2(420, 0)
-	fov_hint.add_theme_color_override("font_color", C_TEXT_S)
-	fov_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(fov_hint)
+	# (The player's field of view moved to the Player tab.)
 
 
 func _build_stars_planets_tab(tabs: TabContainer) -> void:
@@ -2585,8 +2577,189 @@ func _refresh_window_wall_tab() -> void:
 		_window_wall_tab.call("refresh")
 
 
+## Settings → Player: your own camera and body (PlayerPrefs; the FOV stays in
+## SimSettingsController's sim_settings.cfg, only its slider lives here now).
+func _build_player_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Player")
+	_add_section_lbl(v, "Camera")
+	var view := _add_option(v, "View", ["First person", "Third person (follow)"],
+		func(idx: int) -> void:
+			PlayerPrefs.set_camera_mode(PlayerPrefs.CAMERA_THIRD if idx == 1 else PlayerPrefs.CAMERA_FIRST))
+	view.selected = 1 if PlayerPrefs.third_person() else 0
+	_add_hint(v, "F5 switches between them in play. Third person is a follow camera: the mouse orbits it, you walk the way it faces and your body turns to follow; on a vehicle it chases behind.")
+	_player_fov = _add_slider(v, "Field of view°", 30.0, 120.0, 1.0, _on_player_fov)
+	_add_hint(v, "Horizontal field of view on foot, in both views. Wider = more peripheral view (and more lens distortion). Drone FOV is under the Drone tab.")
+	var dist := _add_slider(v, "Follow distance", PlayerPrefs.TP_DISTANCE_MIN,
+		PlayerPrefs.TP_DISTANCE_MAX, 0.1, func(m: float) -> void: PlayerPrefs.set_tp_distance(m))
+	dist.set_value_no_signal(PlayerPrefs.tp_distance())
+	var shoulder := _add_option(v, "Shoulder", ["Left", "Centred", "Right"],
+		func(idx: int) -> void: PlayerPrefs.set_tp_shoulder(idx - 1))
+	shoulder.selected = PlayerPrefs.tp_shoulder() + 1
+	var recenter := _add_check(v, "Swing the camera back behind a vehicle while driving",
+		func(on: bool) -> void: PlayerPrefs.set_tp_recenter(on))
+	recenter.set_pressed_no_signal(PlayerPrefs.tp_recenter())
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Character")
+	var body_opt := OptionButton.new()
+	body_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var body_row := HBoxContainer.new()
+	body_row.add_theme_constant_override("separation", 8)
+	var bh := Label.new()
+	bh.text = "Body"
+	bh.custom_minimum_size = Vector2(110, 0)
+	bh.add_theme_color_override("font_color", C_TEXT_S)
+	body_row.add_child(bh)
+	body_row.add_child(body_opt)
+	var rescan := Button.new()
+	rescan.text = "Rescan"
+	rescan.tooltip_text = "Look for new character files"
+	UITheme.style_button(rescan)
+	body_row.add_child(rescan)
+	v.add_child(body_row)
+	var fill_bodies := func() -> void:
+		body_opt.clear()
+		var opts := PlayerPrefs.body_options()
+		var cur := PlayerPrefs.body()
+		var sel := 0
+		for i in opts.size():
+			var o: Dictionary = opts[i]
+			body_opt.add_item(str(o["label"]), i)
+			body_opt.set_item_metadata(i, str(o["id"]))
+			if str(o["id"]) == cur:
+				sel = i
+		body_opt.selected = sel
+	fill_bodies.call()
+	body_opt.item_selected.connect(func(idx: int) -> void:
+		PlayerPrefs.set_body(str(body_opt.get_item_metadata(idx))))
+	rescan.pressed.connect(fill_bodies)
+	_add_color_row(v, "Outline colour", PlayerPrefs.tint(),
+		func(c: Color) -> void: PlayerPrefs.set_tint(c))
+	var folder := Button.new()
+	folder.text = "Open characters folder…"
+	UITheme.style_button(folder)
+	folder.pressed.connect(func() -> void:
+		OS.shell_open(PlayerPrefs.ensure_custom_dir()))
+	v.add_child(folder)
+	_add_hint(v, "The default body is a detailed version of the NPCs' stick figure. To play as another character, drop a .glb, .gltf or .fbx into the characters folder and press Rescan. Its own clips are used when they are named idle / walk / run; a Mixamo-rigged character without them borrows Remy's idle, walk and jog (needs the Player Character pack). Remy appears in the list when that pack is installed.")
+
+
+## Settings -> NPCs -> Crowd detail: the LOOK vs PERFORMANCE knobs, each
+## 0 = Auto (the graphics tier's number), with a live readout of what is on
+## screen right now and the frame rate, so the player can turn a number up
+## and watch both.
+func _build_crowd_detail(v: VBoxContainer) -> void:
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Crowd detail (look vs performance)")
+	_add_budget_row(v, "Full-detail figures", NpcDisplayPrefs.FULL_FIGURES_MAX, 8,
+		NpcDisplayPrefs.full_figures(), "",
+		func(n: float) -> void: NpcDisplayPrefs.set_full_figures(int(n)),
+		"People drawn as full stick figures (or rigged bodies), nearest first. Everyone past this number is drawn as a simpler crowd figure. About 0.1 ms each. Auto = the graphics quality's number (16 / 24 / 40 / 64; 64 with the light crowd off).")
+	_add_budget_row(v, "Simulated in full", NpcDisplayPrefs.FULL_SIM_MAX, 10,
+		NpcDisplayPrefs.full_sim(), "",
+		func(n: float) -> void: NpcDisplayPrefs.set_full_sim(int(n)),
+		"People run by the full simulation (paths, chores, individual poses) — the camps nearest you first. Only these can be full-detail figures; everyone else runs in the light crowd. Costs simulation time per tick. Auto = 150.")
+	_add_budget_row(v, "Crowd figure reach", int(NpcDisplayPrefs.FIGURE_DIST_MAX), 10,
+		int(NpcDisplayPrefs.figure_dist_m()), " m",
+		func(n: float) -> void: NpcDisplayPrefs.set_figure_dist_m(n),
+		"How far crowd figures are drawn as bodies before they become dots. Cheap (GPU only). Auto = the graphics quality's distance.")
+	var shed := _add_check(v, "Lighter at high speed (fewer full figures and full simulation above 300×)",
+		func(on: bool) -> void: NpcDisplayPrefs.set_speed_shed(on))
+	shed.button_pressed = NpcDisplayPrefs.speed_shed()
+	shed.tooltip_text = "At 300× and faster a full figure is a blur: shrink both budgets (to about 60 % at 300×, 30 % at 1000×) to keep the frame rate up."
+	var live := Label.new()
+	live.add_theme_color_override("font_color", C_TEXT)
+	live.add_theme_font_size_override("font_size", 11)
+	v.add_child(live)
+	var tick := Timer.new()
+	tick.wait_time = 0.5
+	tick.autostart = true
+	live.add_child(tick)
+	var refresh := func() -> void:
+		if not live.is_visible_in_tree():
+			return
+		var main0 := get_tree().current_scene
+		var host := main0.get_node_or_null("NpcPopulationHost") if main0 != null else null
+		var cr := main0.get_node_or_null("CrowdRenderer") if main0 != null else null
+		if host == null:
+			live.text = "Now: no people simulated on this map."
+			return
+		var heroes: int = (host.get("_hero_ids") as Dictionary).size() if host.get("_hero_ids") is Dictionary else 0
+		var budget := int(host.call("hero_budget"))
+		var over := int(cr.call("full_people_drawn")) if cr != null else 0
+		var crowd := int(cr.call("people_drawn")) - over if cr != null else 0
+		live.text = "Now: %d full-detail figures (budget %d) · %d full-tier as crowd figures · %d light crowd%s · %d fps" % [
+			heroes, budget, over, maxi(crowd, 0),
+			"" if NpcDisplayPrefs.light_crowd() else " (hidden)", Engine.get_frames_per_second()]
+	tick.timeout.connect(refresh)
+	refresh.call()
+	_add_hint(v, "Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto.")
+
+
+## A 0 = Auto slider row with a value label ("Auto" or the number + suffix).
+func _add_budget_row(v: VBoxContainer, title: String, max_v: int, step: int, cur: int,
+		suffix: String, setter: Callable, tip: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var hdr := Label.new()
+	hdr.text = title
+	hdr.custom_minimum_size = Vector2(150, 0)
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(hdr)
+	var sl := HSlider.new()
+	sl.min_value = 0
+	sl.max_value = max_v
+	sl.step = step
+	sl.custom_minimum_size = Vector2(200, 0)
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sl.value = cur
+	sl.tooltip_text = tip
+	hdr.tooltip_text = tip
+	hdr.mouse_filter = Control.MOUSE_FILTER_PASS
+	row.add_child(sl)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(64, 0)
+	val.add_theme_color_override("font_color", C_TEXT)
+	val.text = "Auto" if cur <= 0 else "%d%s" % [cur, suffix]
+	row.add_child(val)
+	sl.value_changed.connect(func(n: float) -> void:
+		val.text = "Auto" if n <= 0.0 else "%d%s" % [int(n), suffix]
+		setter.call(n))
+	v.add_child(row)
+
+
+func _add_hint(parent: Control, text: String) -> Label:
+	var hint := Label.new()
+	hint.text = text
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", 10)
+	parent.add_child(hint)
+	return hint
+
+
 func _build_npc_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "NPC")
+	# The master switch: no population simulation and nothing drawn, for site
+	# analysis without the people's cost (NpcDisplayPrefs.npcs_enabled).
+	_add_section_lbl(v, "Population")
+	var npc_on_check := _add_check(v, "Simulate & draw NPCs",
+		func(on: bool) -> void: NpcDisplayPrefs.set_npcs_enabled(on))
+	npc_on_check.set_pressed_no_signal(NpcDisplayPrefs.npcs_enabled_saved())
+	npc_on_check.tooltip_text = "Off: every person is frozen and hidden, with no simulation or rendering cost. Habitats bill their authored headcount at the classic constant rate, so the graph's water/food/waste numbers still mean something. Switch back on and the community resumes where it was left (a long gap is caught up the usual way). Festival mode switches it back on."
+	_add_hint(v, "Turn off for site analysis — no NPC logic, figures, crowd, chips or alarms. The people are paused, not deleted.")
+	# The fabrication clips the build crews play (saw, drill, fasten, carry,
+	# lift) are authored here.
+	var anim_btn := Button.new()
+	anim_btn.text = "Animation editor…"
+	anim_btn.tooltip_text = "Pose and keyframe the stick figure with a tool in its hands — sawing, drilling, fastening, carrying — and save the clips the build crews play."
+	UITheme.style_button(anim_btn)
+	anim_btn.pressed.connect(func() -> void:
+		var m := get_tree().current_scene
+		if m != null and m.has_method("open_npc_anim_editor"):
+			m.call("open_npc_anim_editor", ""))
+	v.add_child(anim_btn)
 	_add_section_lbl(v, "Body style")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -2611,6 +2784,32 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(hint)
+	# Mo-cap SPICE: how often a nearby stick figure breaks into a real
+	# motion-captured clip (NpcMocapSpice), then eases back to procedural.
+	var mc_row := HBoxContainer.new()
+	mc_row.add_theme_constant_override("separation", 8)
+	var mc_lbl := Label.new()
+	mc_lbl.text = "Mo-cap spice"
+	mc_lbl.custom_minimum_size = Vector2(110, 0)
+	mc_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	mc_row.add_child(mc_lbl)
+	var mc := HSlider.new()
+	mc.min_value = 0.0
+	mc.max_value = 1.0
+	mc.step = 0.05
+	mc.custom_minimum_size = Vector2(160, 0)
+	mc.value = NpcDisplayPrefs.mocap_spice()
+	mc.tooltip_text = "Simplified style: how often a nearby stick figure breaks into a real motion-captured clip (FUCK YES, a cheer, a dance break, a story, a stretch…) before easing back. 0 = never (procedural only), middle = as designed, right = twice as often. Clips live in Imported Models/NPC/mocap/<moment>/ (see ASSETS.md); a moment with none stays procedural."
+	var mc_val := Label.new()
+	mc_val.custom_minimum_size = Vector2(60, 0)
+	mc_val.add_theme_color_override("font_color", C_TEXT_S)
+	mc_val.text = "off" if mc.value <= 0.001 else "%d %%" % int(round(mc.value * 100.0))
+	mc.value_changed.connect(func(val: float) -> void:
+		NpcDisplayPrefs.set_mocap_spice(val)
+		mc_val.text = "off" if val <= 0.001 else "%d %%" % int(round(val * 100.0)))
+	mc_row.add_child(mc)
+	mc_row.add_child(mc_val)
+	v.add_child(mc_row)
 	if not NpcRig.available():
 		var miss := Label.new()
 		miss.text = "The humanoid character pack is not installed (see ASSETS.md) — simplified is in use regardless."
@@ -2619,6 +2818,47 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 		miss.add_theme_color_override("font_color", UITheme.C_WARN)
 		miss.add_theme_font_size_override("font_size", 10)
 		v.add_child(miss)
+
+	var beat_check := _add_check(v, "Dance to the beat",
+		func(on: bool) -> void: NpcDisplayPrefs.set_beat_sync(on))
+	beat_check.set_pressed_no_signal(NpcDisplayPrefs.beat_sync())
+	_add_hint(v, "People dancing near a playing stage move on its beat, put their hands up as a drop builds and jump when it lands; the DJ holds an arm up through the run-up. A stage's own track (its Music) is analysed live; a set with no track gets a made-up one at a typical tempo. LED lights have their own \"Sound reactive\" switch in the Light Studio (J).")
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Names")
+	var names_edit := TextEdit.new()
+	names_edit.custom_minimum_size = Vector2(420, 64)
+	names_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	names_edit.placeholder_text = "Alex, Sam, River, …"
+	names_edit.text = ", ".join(NpcDisplayPrefs.custom_names())
+	v.add_child(names_edit)
+	var names_row := HBoxContainer.new()
+	names_row.add_theme_constant_override("separation", 8)
+	var names_apply := Button.new()
+	names_apply.text = "Add to the name list"
+	UITheme.style_button(names_apply)
+	var names_clear := Button.new()
+	names_clear.text = "Clear"
+	UITheme.style_button(names_clear)
+	var names_status := Label.new()
+	names_status.add_theme_color_override("font_color", C_TEXT_S)
+	names_status.add_theme_font_size_override("font_size", 10)
+	var n0 := NpcDisplayPrefs.custom_names().size()
+	names_status.text = "%d of your names in the list" % n0 if n0 > 0 else "using the built-in names"
+	names_apply.pressed.connect(func() -> void:
+		var kept := NpcDisplayPrefs.set_custom_names(NpcDisplayPrefs.parse_names(names_edit.text))
+		names_edit.text = ", ".join(kept)
+		names_status.text = "%d of your names in the list" % kept.size() if kept.size() > 0 \
+			else "using the built-in names")
+	names_clear.pressed.connect(func() -> void:
+		NpcDisplayPrefs.set_custom_names(PackedStringArray())
+		names_edit.text = ""
+		names_status.text = "using the built-in names")
+	names_row.add_child(names_apply)
+	names_row.add_child(names_clear)
+	names_row.add_child(names_status)
+	v.add_child(names_row)
+	_add_hint(v, "Comma-separated names (friends, crew…) added to the %d built-in ones; people are dealt names from the whole list, so yours turn up among everyone else. Names are dealt by a hash of each person, so changing the list re-deals names (people simulated up close pick up their new name when the site reloads)." % NpcAgent.NAME_POOL.size())
 
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Appearance")
@@ -2652,12 +2892,76 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	overhead_row.add_child(oh_opt)
 	v.add_child(overhead_row)
 	var oh_hint := Label.new()
-	oh_hint.text = "The morale bar and task tag above each head. 'Always' shows them for people within ~30 m; 'Off' keeps clean silhouettes (aiming still names people)."
+	oh_hint.text = "The task tag (and, if enabled below, the morale bar) above each head. 'Always' shows them for people within ~30 m; 'Off' keeps clean silhouettes (aiming still names people)."
 	oh_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	oh_hint.custom_minimum_size = Vector2(420, 0)
 	oh_hint.add_theme_color_override("font_color", C_TEXT_S)
 	oh_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(oh_hint)
+	var bars_check := _add_check(v, "Show mood bars over heads",
+		func(on: bool) -> void: NpcDisplayPrefs.set_mood_bars(on))
+	bars_check.button_pressed = NpcDisplayPrefs.mood_bars()
+	var peak_check := _add_check(v, "Peak Experience toasts (FUCK YES!!!)",
+		func(on: bool) -> void: NpcDisplayPrefs.set_peak_toasts(on))
+	peak_check.button_pressed = NpcDisplayPrefs.peak_toasts()
+	var beacon_check := _add_check(v, "Beacon over each FUCK YES!!! (where it happened)",
+		func(on: bool) -> void: NpcDisplayPrefs.set_peak_beacons(on))
+	beacon_check.button_pressed = NpcDisplayPrefs.peak_beacons()
+	var fun_check := _add_check(v, "Fun Meter (the crowd's overall vibe, a needle gauge)",
+		func(on: bool) -> void: NpcDisplayPrefs.set_fun_meter(on))
+	fun_check.button_pressed = NpcDisplayPrefs.fun_meter()
+	# How contagious FUCK YES!!! is: 0 = every peak is its own spark, 1 = as
+	# shipped, 4 = wildfire. Live (the field reads it every tick).
+	var cont_row := HBoxContainer.new()
+	cont_row.add_theme_constant_override("separation", 8)
+	var cont_lbl := Label.new()
+	cont_lbl.text = "FUCK YES contagion"
+	cont_lbl.custom_minimum_size = Vector2(150, 0)
+	cont_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	cont_row.add_child(cont_lbl)
+	var cont_slider := HSlider.new()
+	cont_slider.min_value = 0.0
+	cont_slider.max_value = PopTestPrefs.MAX_PEAK_CONTAGION
+	cont_slider.step = 0.05
+	cont_slider.custom_minimum_size = Vector2(160, 0)
+	cont_slider.value = PopTestPrefs.peak_contagion()
+	cont_slider.tooltip_text = "How strongly one person at FUCK YES!!! raises the odds of the people round them. 0 = no spread (every peak is its own spark), 1 = as designed, 4 = wildfire."
+	cont_row.add_child(cont_slider)
+	var cont_val := Label.new()
+	cont_val.custom_minimum_size = Vector2(60, 0)
+	cont_val.add_theme_color_override("font_color", C_TEXT_S)
+	cont_val.text = _contagion_text(cont_slider.value)
+	cont_row.add_child(cont_val)
+	cont_slider.value_changed.connect(func(val: float) -> void:
+		PopTestPrefs.set_peak_contagion(val)
+		cont_val.text = _contagion_text(val))
+	cont_slider.drag_ended.connect(func(_c: bool) -> void: PopTestPrefs.save())
+	v.add_child(cont_row)
+	# Venue music (StageMusic): a stage's track while its set is on.
+	var mus_row := HBoxContainer.new()
+	mus_row.add_theme_constant_override("separation", 8)
+	var mus_lbl := Label.new()
+	mus_lbl.text = "Stage music volume"
+	mus_lbl.custom_minimum_size = Vector2(150, 0)
+	mus_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	mus_row.add_child(mus_lbl)
+	var mus := HSlider.new()
+	mus.min_value = 0.0
+	mus.max_value = 1.0
+	mus.step = 0.05
+	mus.custom_minimum_size = Vector2(160, 0)
+	mus.value = NpcDisplayPrefs.stage_music_volume()
+	mus.tooltip_text = "Volume of the tracks venues play during their sets (set a venue's track in its Ctrl-focus row → Music). 0 = off."
+	mus.value_changed.connect(func(val: float) -> void: NpcDisplayPrefs.set_stage_music_volume(val))
+	mus_row.add_child(mus)
+	v.add_child(mus_row)
+	var glow_hint := Label.new()
+	glow_hint.text = "People glow with how good a time they are having; a crowd that is vibing with its needs met builds a CHARGE toward FUCK YES!!! — a green shimmer that grows and quickens on the body, faster with peakers nearby (the meter over their head shows it, with ↑ while someone is feeding it) — then tips into a green, pulsing glow and the samba. Every one scores a Peak Experience. Each person's state (FUCK THIS!!! … Fuck It!) shows over their head; the bars are off by default."
+	glow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	glow_hint.custom_minimum_size = Vector2(420, 0)
+	glow_hint.add_theme_color_override("font_color", C_TEXT_S)
+	glow_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(glow_hint)
 
 	# Festival scale: which people are DRAWN. The simulation runs regardless.
 	var crowd_row := HBoxContainer.new()
@@ -2688,6 +2992,11 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 		NpcDisplayPrefs.set_crowd_lod_m(v2))
 	crowd_row.add_child(cr_dist)
 	v.add_child(crowd_row)
+	var lc_check := _add_check(v, "Distant crowd as dots (the light crowd past the figure reach)",
+		func(on: bool) -> void: NpcDisplayPrefs.set_light_crowd(on))
+	lc_check.button_pressed = NpcDisplayPrefs.light_crowd()
+	lc_check.tooltip_text = "The far field of the festival crowd, drawn as dots out to 3 km. Off: no dots — the light crowd is drawn only as figures near you and dissolves out toward the edge of the Crowd figure reach. Nobody near you ever pops in or out either way."
+	_build_crowd_detail(v)
 	var cr_hint := Label.new()
 	cr_hint.text = "At festival scale the camp you are in keeps full bodies; every other camp is a light crowd drawn as figures up close and dots far away. 'Home camp only' draws just your camp; 'Nobody' hides everyone (the simulation and the Site Plan keep running)."
 	cr_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2742,6 +3051,34 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 		PopTestPrefs.save())
 	prov_row.add_child(prov_opt)
 	v.add_child(prov_row)
+	# Festival population: the total the camps are scaled to (0 = natural).
+	# A performance knob as much as a taste — fewer people, faster sim.
+	var pop_row := HBoxContainer.new()
+	pop_row.add_theme_constant_override("separation", 8)
+	var pop_lbl := Label.new()
+	pop_lbl.text = "Festival population"
+	pop_lbl.custom_minimum_size = Vector2(150, 0)
+	pop_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	pop_row.add_child(pop_lbl)
+	var pop_spin := SpinBox.new()
+	pop_spin.min_value = 0
+	pop_spin.max_value = PopTestPrefs.MAX_FESTIVAL_TARGET
+	pop_spin.step = 10
+	pop_spin.value = PopTestPrefs.festival_target_people()
+	pop_spin.tooltip_text = "Total people across every festival camp, split by each camp's painted size. 0 = natural (from the camps' areas). Applies live; rosters grow and shrink in place."
+	pop_spin.value_changed.connect(func(val: float) -> void:
+		var main0 := get_tree().current_scene
+		var fm0: Variant = main0.get("festival_mode") if main0 != null and "festival_mode" in main0 else null
+		if fm0 is Node and is_instance_valid(fm0) and (fm0 as Node).has_method("set_target_people"):
+			(fm0 as Node).call("set_target_people", int(val))
+		else:
+			PopTestPrefs.set_festival_target_people(int(val))
+			PopTestPrefs.save()
+			var ld := TerrainSurfaceQuery.find_terrain_loader(main0)
+			if ld != null and ld.has_method("apply_festival_population_target"):
+				ld.call("apply_festival_population_target"))
+	pop_row.add_child(pop_spin)
+	v.add_child(pop_row)
 
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Routines")
@@ -2775,6 +3112,10 @@ func _on_npc_colors_toggled(on: bool) -> void:
 ## Opens Routines & chores for the first active pop-driven habitat (same modal
 ## the per-habitat inspector button opens). With none active yet, this still
 ## opens the modal so its own "turn on Simulated individuals" guidance shows.
+static func _contagion_text(v: float) -> String:
+	return "off" if v <= 0.001 else "%.2f×" % v
+
+
 func _on_open_npc_routines() -> void:
 	var graph := ServiceLocator.graph()
 	if graph == null or not graph.has_method("open_npc_routines"):

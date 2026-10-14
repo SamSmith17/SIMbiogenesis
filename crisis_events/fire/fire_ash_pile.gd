@@ -198,9 +198,20 @@ func whoosh() -> void:
 
 
 func _process(delta: float) -> void:
-	_flicker += delta
-	_whoosh = maxf(0.0, _whoosh - delta / WHOOSH_SECONDS)
-	_douse_k = move_toward(_douse_k, 0.0 if _doused else 1.0, delta / DOUSE_SECONDS)
+	# Cosmetic clock (SimFxRate fire track): the flicker, the whoosh and the
+	# douse fade time-lapse with the sim and freeze while it is paused, and so
+	# do the particles (speed_scale) — embers hang in the air on pause.
+	var r := SimFxRate.rate(null, SimFxRate.SYS_FIRE)
+	var fx_dt := delta * r
+	_flicker += fx_dt
+	_whoosh = maxf(0.0, _whoosh - fx_dt / WHOOSH_SECONDS)
+	_douse_k = move_toward(_douse_k, 0.0 if _doused else 1.0, fx_dt / DOUSE_SECONDS)
+	for ps in [flames, smoke, embers]:
+		if ps != null and is_instance_valid(ps) and (ps as GPUParticles3D).speed_scale != r:
+			(ps as GPUParticles3D).speed_scale = r
+	for ps in whoosh_emitters:
+		if is_instance_valid(ps) and ps.speed_scale != r:
+			ps.speed_scale = r
 	if not _last_look.is_empty():
 		_apply_look(_last_look)
 

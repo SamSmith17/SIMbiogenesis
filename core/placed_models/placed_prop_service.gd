@@ -85,6 +85,13 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_trigger_starshade_graph_seed(main, {}, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
+	elif model_id == FirepitBuilder.MODEL_ID:
+		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == PvArrayBuilder.MODEL_ID:
+		# Bind (or create) its graph array — deferred so the record is settled.
+		var sgv_pv := _system_graph_view(main)
+		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
+			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
 	_notify_mp_props_edited()
 	return {"ok": true, "prop_id": prop_id, "x": x, "z": z, "ground_y": gy}
 
@@ -124,6 +131,12 @@ static func update_prop_record(main: Node, prop_id: String, patch: Dictionary,
 					break
 		var gy_fn := TerrainSurfaceQuery.ground_y_callable(main)
 		PlacedPropRuntime.add_one(parent, layer.find_by_id(prop_id), gy_fn)
+	# A gizmo move / turn (or an array respec) must reach the bound graph node:
+	# site position, elevation, and a solar array's plane of array.
+	for k in ["x", "z", "yaw", "y_offset", "pv_array_spec"]:
+		if patch.has(k):
+			_notify_graph_prop_moved(main, prop_id)
+			break
 	_notify_mp_props_edited()
 	return true
 
@@ -320,6 +333,13 @@ static func confirm_placement() -> bool:
 		Callable(PlacedPropService, "seed_linkage_graph").call_deferred(main, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
+	elif model_id == FirepitBuilder.MODEL_ID:
+		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == PvArrayBuilder.MODEL_ID:
+		# Bind (or create) its graph array — deferred so the record is settled.
+		var sgv_pv := _system_graph_view(main)
+		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
+			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
 	# Keep any bound graph node's site/elevation coords in sync with the 3D twin.
 	_notify_graph_prop_moved(main, prop_id)
 	# Generic post-commit hook (crew assembly queues its project here) —
@@ -337,6 +357,13 @@ static func confirm_placement() -> bool:
 ## loader's registry directly. Idempotent (the registry upserts by target);
 ## deleting the prop is cleaned by prune_dangling on the next save.
 static func _auto_tag_bed_space(main: Node, prop_id: String) -> void:
+	_auto_tag_space(main, prop_id, "sleep", 1, "Bed")
+
+
+## Tag a just-placed prop as a space of `space_type` (a bed sleeps one, a
+## firepit is a fire circle the evening gathers round).
+static func _auto_tag_space(main: Node, prop_id: String, space_type: String, capacity: int,
+		label: String) -> void:
 	var target := {"kind": "prop", "prop_id": prop_id}
 	var reg: SpaceRegistry = null
 	var sgv := main.get_node_or_null("UILayer/SystemGraphView") if main != null else null
@@ -349,7 +376,7 @@ static func _auto_tag_bed_space(main: Node, prop_id: String) -> void:
 		reg = loader.get("npc_spaces") as SpaceRegistry
 	if reg == null:
 		return
-	reg.set_space_type(target, "sleep", 1, "Bed")
+	reg.set_space_type(target, space_type, capacity, label)
 	if loader != null and loader.has_method("save_npc_spaces"):
 		loader.call("save_npc_spaces")
 	elif main != null and not str(main.scene_file_path).is_empty():
@@ -478,6 +505,9 @@ static func seed_linkage_graph(main: Node, prop_id: String) -> bool:
 	var orient: Dictionary = LinkageStructureBuilder.orientation_from_normal(n_world)
 	var opts := {
 		"tilt_deg": float(orient.get("tilt_deg", 0.0)),
+		# The azimuth used to be computed and dropped; a deployed structure's
+		# real facing now steers the plane of array like a placed rack's does.
+		"azimuth_deg": float(orient.get("azimuth_deg", 180.0)),
 		"voc": float(summary.get("voc", 0.0)),
 		"vmp": float(summary.get("vmp", 0.0)),
 		"isc": float(summary.get("isc", 0.0)),
@@ -637,6 +667,12 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 			extras["grow_bed_spec"] = rec_extra2["grow_bed_spec"]
 		elif rec_extra2.has("plant_abs_h"):
 			extras["grow_bed_spec"] = {"plant_abs_h": rec_extra2["plant_abs_h"]}
+	elif model_id == PvArrayBuilder.MODEL_ID:
+		var rec_extra_pv: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_pv.has("pv_array_spec"):
+			extras["pv_array_spec"] = rec_extra_pv["pv_array_spec"]
+		elif _placement_prep.has("pv_array_spec"):
+			extras["pv_array_spec"] = _placement_prep["pv_array_spec"]
 	elif model_id == ModelCatalog.GENERIC_BOX_ID:
 		var rec_extra4: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra4.has("box_spec"):
@@ -756,11 +792,15 @@ static func _layer_for_main(main: Node) -> PlacedPropLayer:
 			loader.set("_placed_prop_layer", map_layer)
 			return map_layer
 	var key := _layer_key(main)
-	if _scene_layers.has(key):
-		return _scene_layers[key] as PlacedPropLayer
+	# Cache by the RESOLVED file, not the scene key: two worlds on the same
+	# built-in scene share a key but not a file, and this cache is static (it
+	# survives change_scene_to_file).
+	var cache_key := WorldPaths.scene_file("placed_props", key)
+	if _scene_layers.has(cache_key):
+		return _scene_layers[cache_key] as PlacedPropLayer
 	var layer := PlacedPropLayer.create_empty()
 	layer.load_for_scene(key)
-	_scene_layers[key] = layer
+	_scene_layers[cache_key] = layer
 	return layer
 
 

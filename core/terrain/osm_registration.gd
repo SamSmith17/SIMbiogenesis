@@ -53,6 +53,10 @@ static func offset_payload(payload: Dictionary, east_m: float, north_m: float) -
 					if pv is Vector2:
 						pts.append(offset_local_m(pv, east_m, north_m))
 				d["points"] = pts
+			# Waterway centrelines ride with their ribbon — a shifted ribbon over
+			# an unshifted centreline puts the carved channel beside the river.
+			if d.has("centerline") and d["centerline"] is PackedVector2Array:
+				d["centerline"] = offset_poly(d["centerline"], east_m, north_m)
 			if d.has("pos") and d["pos"] is Vector2:
 				d["pos"] = offset_local_m(d["pos"], east_m, north_m)
 			shifted.append(d)

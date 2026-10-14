@@ -41,8 +41,16 @@ const CLIMB_COST_PER_M := 2.5
 ## this only trips on a genuinely unreachable target in a large open region.
 const MAX_EXPANSIONS := 12000
 
-## Space-pair route cache. Small: a site has ~10 tagged spaces.
-const MAX_CACHE := 128
+## Space-pair route cache. It was 128, sized for "~10 tagged spaces"; a
+## festival has ~35 camp homes and ~60 venues, i.e. thousands of pairs, and
+## first-in-first-out eviction threw away the hot routes as fast as the cold
+## ones — every person on site re-ran A* on routes that had just been found.
+## Now least-recently-USED, evicted a quarter at a time (amortised).
+const MAX_CACHE := 4096
+## Per-person lanes are quantised to this many offsets and cached per route,
+## so a trip on a cached route costs one segment check instead of ~2k
+## walkability probes along the whole polyline.
+const LANES := 6
 
 ## Per-agent lateral offset applied to a shared cached route, so sixteen
 ## people do not walk one single-pixel line — and so a desire line has a
@@ -63,7 +71,9 @@ var _heap_pri := PackedFloat32Array()
 var _heap_n := 0
 
 var _cache: Dictionary = {}
-var _cache_order: Array = []
+var _cache_use: Dictionary = {}     # key -> last-use stamp (LRU)
+var _use_clock := 0
+var _lanes: Dictionary = {}         # "key|lane" -> lane polyline (route's own end)
 var _cache_fp := ""
 var _hits := 0
 var _misses := 0
@@ -90,8 +100,36 @@ func setup(g: NpcNavGrid) -> void:
 ## Drop every cached route (grid re-baked, or geometry moved).
 func invalidate() -> void:
 	_cache.clear()
-	_cache_order.clear()
+	_cache_use.clear()
+	_lanes.clear()
 	_cache_fp = grid.fingerprint() if grid != null else ""
+
+
+## Drop only the cached routes that pass within `r` of `centre` — a fire
+## perimeter appearing (or clearing) changes those and nothing else. Flushing
+## the WHOLE cache here used to make every person on site re-run A* in the
+## same tick the burn crowd started moving.
+func invalidate_near(centre: Vector2, r: float) -> int:
+	var dropped := 0
+	var r2 := r * r
+	for key in _cache.keys():
+		var path: PackedVector2Array = _cache[key]
+		var hit := false
+		for i in range(path.size()):
+			var a := path[i]
+			var b := path[mini(i + 1, path.size() - 1)]
+			var ab := b - a
+			var t := 0.0
+			var l2 := ab.length_squared()
+			if l2 > 1e-6:
+				t = clampf((centre - a).dot(ab) / l2, 0.0, 1.0)
+			if (a + ab * t).distance_squared_to(centre) <= r2:
+				hit = true
+				break
+		if hit:
+			_drop_key(str(key))
+			dropped += 1
+	return dropped
 
 
 func is_ready() -> bool:
@@ -144,35 +182,74 @@ func path_between_spaces(from_key: String, to_key: String, from_xz: Vector2,
 		return find_path(from_xz, to_xz)
 	var key := "%s>%s" % [from_key, to_key]
 	var base: PackedVector2Array
+	_use_clock += 1
 	if _cache.has(key):
 		_hits += 1
 		base = _cache[key]
+		_cache_use[key] = _use_clock
 	else:
+		if not allow_miss:
+			return PackedVector2Array()
 		_misses += 1
 		base = find_path(from_xz, to_xz)
 		if base.is_empty():
 			return base
 		_cache_store(key, base)
-	return _lane_offset(base, lane_seed, to_xz)
+	if lane_seed == 0 or base.size() < 3:
+		var exact := base.duplicate()
+		exact[exact.size() - 1] = to_xz
+		return exact
+	var li := int(float(absi(lane_seed) % 200) / 200.0 * float(LANES))
+	var lk := "%s|%d" % [key, li]
+	var lane: PackedVector2Array
+	if _lanes.has(lk):
+		lane = _lanes[lk]
+	else:
+		lane = _lane_offset(base, ((float(li) + 0.5) / float(LANES) - 0.5) * 2.0 * LANE_JITTER_M,
+			base[base.size() - 1])
+		_lanes[lk] = lane
+	var out := lane.duplicate()
+	out[out.size() - 1] = to_xz
+	# Only the last leg is new (the destination is per trip — a slot, a bed).
+	if not _segment_clear(out[out.size() - 2], to_xz):
+		var exact2 := base.duplicate()
+		exact2[exact2.size() - 1] = to_xz
+		return exact2
+	return out
+
+
+## Was the last cached-pair query a miss we are allowed to pay for? The bridge
+## budgets A* per tick; a refused miss returns empty (straight-line fallback).
+var allow_miss := true
 
 
 func _cache_store(key: String, path: PackedVector2Array) -> void:
 	_cache[key] = path
-	_cache_order.append(key)
-	while _cache_order.size() > MAX_CACHE:
-		var oldest: String = _cache_order.pop_front()
-		_cache.erase(oldest)
+	_cache_use[key] = _use_clock
+	if _cache.size() <= MAX_CACHE:
+		return
+	# Evict the least-recently-used quarter in one go (amortised O(1)).
+	var keys := _cache_use.keys()
+	keys.sort_custom(func(a, b) -> bool: return int(_cache_use[a]) < int(_cache_use[b]))
+	for i in keys.size() / 4:
+		_drop_key(str(keys[i]))
+
+
+func _drop_key(key: String) -> void:
+	_cache.erase(key)
+	_cache_use.erase(key)
+	for li in LANES:
+		_lanes.erase("%s|%d" % [key, li])
 
 
 ## Shift a shared route sideways by a stable per-agent amount. The endpoint is
 ## never shifted — everyone still arrives at the actual space.
-func _lane_offset(path: PackedVector2Array, lane_seed: int, dest: Vector2) -> PackedVector2Array:
-	if path.size() < 2 or lane_seed == 0:
+func _lane_offset(path: PackedVector2Array, amt: float, dest: Vector2) -> PackedVector2Array:
+	if path.size() < 2 or absf(amt) < 1e-6:
 		var exact := path.duplicate()
 		if exact.size() > 0:
 			exact[exact.size() - 1] = dest
 		return exact
-	var amt := (float(absi(lane_seed) % 200) / 200.0 - 0.5) * 2.0 * LANE_JITTER_M
 	var out := PackedVector2Array()
 	out.resize(path.size())
 	for i in path.size():

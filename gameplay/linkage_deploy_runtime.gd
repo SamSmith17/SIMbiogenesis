@@ -72,6 +72,10 @@ func is_animating() -> bool:
 func toggle_deploy() -> void:
 	if _builder == null:
 		return
+	# A build rehearsal owns the fold while its crew works.
+	var site := _prop.get_node_or_null(LinkageBuildSite.NODE_NAME) as LinkageBuildSite if _prop != null else null
+	if site != null and site.is_running():
+		return
 	var closed := _builder.closed_angle()
 	var stowed := maxf(_builder.min_fold_angle(), LinkageKinematics.MIN_FOLD_ANGLE)
 	var deploying: bool

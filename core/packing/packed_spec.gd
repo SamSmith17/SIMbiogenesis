@@ -97,6 +97,13 @@ const CURATED_MODELS := {
 	# itself measures ~0.35 × 0.38 × 0.59 m — see the ModelCatalog entry).
 	"powerspout_plt": {"w_m": 0.62, "d_m": 0.42, "h_m": 0.42, "mass_kg": 20.0,
 		"form": "crate", "source": "estimated"},
+	# AliExpress micro Pelton: a 0.25 m plate + housing with a Nema 34 stepper
+	# (~5 kg on its own) hung underneath; ships boxed at ~8 kg.
+	"ali_pelton": {"w_m": 0.32, "d_m": 0.32, "h_m": 0.24, "mass_kg": 8.0,
+		"form": "crate", "source": "estimated"},
+	# Firepit: a 1.1 m steel ring, ~35 kg, ships as itself (logs not included).
+	"firepit": {"w_m": 1.12, "d_m": 1.12, "h_m": 0.38, "mass_kg": 35.0,
+		"form": "crate", "source": "estimated"},
 	# Stream intake sump: a small precast/HDPE box with a screen. Ships as one
 	# awkward-but-light unit (~0.7 × 0.5 × 0.42 m body).
 	"stream_intake": {"w_m": 0.74, "d_m": 0.56, "h_m": 0.46, "mass_kg": 28.0,
@@ -130,6 +137,10 @@ const CURATED_MODELS := {
 ## owning builder, not this table (for_model returns its catalog fallback only
 ## when no live spec is available).
 const DYNAMIC_MODELS := {
+	# A palletised module stack + racking for the default 9-module array
+	# (1.77 × 1.05 m modules, ~21 kg each, plus ~60 kg of rails and legs).
+	"pv_array": {"w_m": 1.80, "d_m": 1.10, "h_m": 0.55,
+		"mass_kg": 250.0, "form": "panel_stack", "source": "estimated"},
 	"linkage_structure": {"w_m": 2.44, "d_m": 1.22, "h_m": 0.45,
 		"mass_kg": 150.0, "form": "folded", "source": "estimated"},
 	# Real spec comes from ContainerCatalog.packed_spec_for(container_id)

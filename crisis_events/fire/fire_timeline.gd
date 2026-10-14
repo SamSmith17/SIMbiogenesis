@@ -6,6 +6,11 @@ extends RefCounted
 ## Everything a fire IS lives in one JSON-safe record (persisted on the placed
 ## prop's record under "burn", or held in memory for a scene structure):
 ##   ignited_h   abs sim hours (CelestialClock.get_absolute_hours) it was lit
+##   preroll_h   hours from ignition to the FIRST FLAME (0 = immediate). The
+##               ceremony before the burn: the effigy crowd forms its
+##               perimeter at the burning radius while nothing is alight yet
+##               (VenueCrowd treats the window as BURNING). Absent = 0, so a
+##               record written before this key existed is unchanged.
 ##   climb_h     hours from ignition to COLLAPSE (front climb, black, burn-away)
 ##   bonfire_h   hours of open flame on the pile after the collapse
 ##   ember_h     hours from the last flame to cold grey ash
@@ -35,6 +40,15 @@ const DISSOLVE_AT_COLLAPSE : float = 0.65
 const DISSOLVE_GONE : float = 1.35
 
 const MIN_CLIMB_H : float = 1.0 / 60.0
+## Default pre-roll for a PLANNED burn (a tagged effigy): 15 sim-minutes, long
+## enough for a crowd a few hundred metres out to walk in and seat in rings
+## before the first flame. Ordinary fires (crisis events) start at once.
+const PREROLL_H : float = 0.25
+## A tagged EFFIGY's ceremony pre-roll: the crowd gathers, the FIRE FLOW
+## performers dance, the sandmen take their posts — then the first flame
+## (VenueCrowd.effigy_phase's stages split it by fraction).
+const EFFIGY_PREROLL_H : float = 0.75
+const MAX_PREROLL_H : float = 6.0
 const MIN_BONFIRE_H : float = 0.05
 const MIN_EMBER_H : float = 0.05
 
@@ -70,6 +84,7 @@ static func estimate(height_m: float, footprint_r_m: float, surface_m2: float,
 		"climb_h": snappedf(clampf(climb, MIN_CLIMB_H, 3.0), 0.01),
 		"bonfire_h": snappedf(clampf(bonfire, MIN_BONFIRE_H, 48.0), 0.01),
 		"ember_h": snappedf(clampf(bonfire * EMBER_SHARE, MIN_EMBER_H, 24.0), 0.01),
+		"preroll_h": 0.0,
 		"mass_kg": snappedf(m, 1.0),
 		# The structure's size rides along: the crowd's safe perimeter is its
 		# height plus ten feet while it stands, five feet off the pile after.
@@ -88,10 +103,12 @@ static func make(ignited_h: float, est: Dictionary, auto: Dictionary = {}) -> Di
 		"climb_h": float(est.get("climb_h", 0.33)),
 		"bonfire_h": float(est.get("bonfire_h", 3.0)),
 		"ember_h": float(est.get("ember_h", 1.0)),
+		"preroll_h": clampf(float(est.get("preroll_h", 0.0)), 0.0, MAX_PREROLL_H),
 		"auto": {
 			"climb_h": float(auto.get("climb_h", 0.33)),
 			"bonfire_h": float(auto.get("bonfire_h", 3.0)),
 			"ember_h": float(auto.get("ember_h", 1.0)),
+			"preroll_h": clampf(float(auto.get("preroll_h", 0.0)), 0.0, MAX_PREROLL_H),
 			"mass_kg": float(auto.get("mass_kg", -1.0)),
 		},
 		"holds": [],
@@ -117,15 +134,35 @@ static func ember_h(rec: Dictionary) -> float:
 	return maxf(float(rec.get("ember_h", 1.0)), MIN_EMBER_H)
 
 
+static func preroll_h(rec: Dictionary) -> float:
+	return clampf(float(rec.get("preroll_h", 0.0)), 0.0, MAX_PREROLL_H)
+
+
+## Abs sim hours of the first flame (ignition + pre-roll).
+static func flame_start_h(rec: Dictionary) -> float:
+	return float(rec.get("ignited_h", INF)) + preroll_h(rec)
+
+
+## True inside the pre-roll window: lit (the ceremony has begun) but no flame.
+## A put-out record is never in pre-roll past its out hour.
+static func in_preroll(rec: Dictionary, t: float) -> bool:
+	var ig := float(rec.get("ignited_h", INF))
+	if t < ig or t >= flame_start_h(rec):
+		return false
+	var out_h := float(rec.get("out_h", -1.0))
+	return out_h < 0.0 or t < out_h
+
+
 ## Whole life, ignition to cold ash, in sim hours.
 static func total_h(rec: Dictionary) -> float:
-	return climb_h(rec) + COLLAPSE_H + bonfire_h(rec) + ember_h(rec)
+	return preroll_h(rec) + climb_h(rec) + COLLAPSE_H + bonfire_h(rec) + ember_h(rec)
 
 
-## Hours the fire has actually BURNED by `t`: elapsed since ignition minus the
-## time the extinguisher held it. An open hold ([a, -1]) runs to `t`.
+## Hours the fire has actually BURNED by `t`: elapsed since the FIRST FLAME
+## (ignition + pre-roll) minus the time the extinguisher held it. An open hold
+## ([a, -1]) runs to `t`.
 static func burn_hours(rec: Dictionary, t: float) -> float:
-	var ignited := float(rec.get("ignited_h", t))
+	var ignited := float(rec.get("ignited_h", t)) + preroll_h(rec)
 	if t <= ignited:
 		return 0.0
 	var held := 0.0
@@ -164,6 +201,8 @@ static func is_held(rec: Dictionary, t: float) -> bool:
 ##              the moment it went out, so the char stays where it reached
 ##   held       true while sprayed (the front does not advance)
 ##   burn_h     hours burned
+##   preroll    true inside the pre-roll window (phase NONE: nothing alight)
+##   flame_in_h hours to the first flame while in pre-roll, else 0
 static func state_at(rec: Dictionary, t: float) -> Dictionary:
 	var out_h := float(rec.get("out_h", -1.0))
 	var frozen := out_h >= 0.0 and t >= out_h
@@ -173,6 +212,9 @@ static func state_at(rec: Dictionary, t: float) -> Dictionary:
 		if int(st["phase"]) != Phase.NONE:
 			st["phase"] = Phase.OUT
 		st["held"] = false
+		# Called off during the pre-roll: no ceremony any more either.
+		st["preroll"] = false
+		st["flame_in_h"] = 0.0
 	return st
 
 
@@ -189,9 +231,14 @@ static func _live_state(rec: Dictionary, t: float) -> Dictionary:
 	var st := {
 		"phase": Phase.NONE, "progress": 0.0, "char_all": 0.0, "dissolve": 0.0,
 		"collapse": 0.0, "age_h": 0.0, "look": {}, "out": false, "held": false,
-		"burn_h": 0.0,
+		"burn_h": 0.0, "preroll": false, "flame_in_h": 0.0,
 	}
 	if t < ignited:
+		return st
+	var first_flame := ignited + preroll_h(rec)
+	if t < first_flame:
+		st["preroll"] = true
+		st["flame_in_h"] = first_flame - t
 		return st
 	var bh := burn_hours(rec, t)
 	st["burn_h"] = bh
@@ -278,6 +325,9 @@ static func put_out(rec: Dictionary, t: float) -> void:
 
 ## The player edited a duration: keep it above the floor.
 static func set_duration(rec: Dictionary, key: String, hours: float) -> void:
+	if key == "preroll_h":
+		rec[key] = clampf(hours, 0.0, MAX_PREROLL_H)
+		return
 	var floor_h := MIN_EMBER_H
 	if key == "climb_h":
 		floor_h = MIN_CLIMB_H
@@ -288,7 +338,7 @@ static func set_duration(rec: Dictionary, key: String, hours: float) -> void:
 
 static func reset_to_auto(rec: Dictionary) -> void:
 	var auto: Dictionary = rec.get("auto", {})
-	for k in ["climb_h", "bonfire_h", "ember_h"]:
+	for k in ["preroll_h", "climb_h", "bonfire_h", "ember_h"]:
 		if auto.has(k):
 			rec[k] = float(auto[k])
 
@@ -296,6 +346,8 @@ static func reset_to_auto(rec: Dictionary) -> void:
 static func phase_name(st: Dictionary) -> String:
 	if bool(st.get("out", false)):
 		return "out"
+	if bool(st.get("preroll", false)):
+		return "pre-roll"
 	match int(st.get("phase", Phase.NONE)):
 		Phase.BURNING: return "burning"
 		Phase.COLLAPSING: return "collapsing"

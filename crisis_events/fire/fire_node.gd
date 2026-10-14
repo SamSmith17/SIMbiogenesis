@@ -81,8 +81,10 @@ var spray_bodies : Array[Node3D] = []
 ## True if this fire was reduced by the player's extinguisher (cone damage and/or spray overlap).
 var _had_extinguisher_help : bool = false
 
-## Flicker timing (real-time)
+## Flicker timing (cosmetic clock: SimFxRate fire track)
 var _flicker_time : float = 0.0
+## Live cosmetic rate (0 while the sim is paused).
+var _fx_rate : float = 1.0
 
 ## Track last intensity for visual updates
 var _last_visual_intensity : float = 0.0
@@ -678,9 +680,12 @@ func _create_detection_area() -> void:
 func _process(delta: float) -> void:
 	if _disposed:
 		return
-	# Real-time flicker (not affected by sim speed)
-	_flicker_time += delta
 	var t := _clock_hours(delta)
+	# Cosmetic motion (flicker, particles) runs on the SimFxRate fire track:
+	# time-lapsed with the sim, capped at FX_CAP_FIRE, frozen dead while paused.
+	_fx_rate = SimFxRate.rate(_clock_node, SimFxRate.SYS_FIRE)
+	_flicker_time += delta * _fx_rate
+	_apply_particle_rate(_fx_rate)
 
 	# A placed prop's record is the authority. It can vanish (Restore, delete)
 	# and its node can be rebuilt under us (any prop edit rebuilds them all).
@@ -729,6 +734,12 @@ func _process(delta: float) -> void:
 	# Intensity is the fight: it sits at the phase's level and the spray pulls
 	# it down; at the threshold the fire is OUT, written into the timeline.
 	var target := _intensity_target(st)
+	# The ignition flare (IGNITION_REALISM_SECONDS of high-detail ignition
+	# particles) belongs to the FIRST FLAME, not the moment the record was
+	# written — after a 15-minute pre-roll the old real-time stamp had long
+	# expired and the effigy caught with no flare at all.
+	if phase == FireTimeline.Phase.BURNING and _last_phase == FireTimeline.Phase.NONE:
+		_creation_time = Time.get_ticks_msec() / 1000.0
 	if (phase != _last_phase or out != _last_out) and not being_sprayed:
 		intensity = target  # the clock jumped (scrub, load): no slow recovery
 	if out or phase == FireTimeline.Phase.NONE:
@@ -785,6 +796,16 @@ func _process(delta: float) -> void:
 	_record_flush_t += delta
 	if _record_dirty and (_record_flush_t >= RECORD_FLUSH_SECONDS or out):
 		_flush_record()
+
+
+## GPUParticles3D.speed_scale = the cosmetic rate: flames and smoke time-lapse
+## with the sim and HANG IN THE AIR while it is paused (emitting is untouched,
+## so nothing restarts). Set every frame — four property writes — because the
+## emitters are created lazily and handed to the pile at the collapse.
+func _apply_particle_rate(r: float) -> void:
+	for ps: GPUParticles3D in [flame_particles, smoke_particles, ember_particles, ignition_particles]:
+		if ps != null and is_instance_valid(ps) and ps.speed_scale != r:
+			ps.speed_scale = r
 
 
 ## The fire's sim clock: the first root child with `get_absolute_hours` (Main),
@@ -1075,7 +1096,25 @@ func _estimate_durations() -> Dictionary:
 				if rec.get("fire_plan") is Dictionary:
 					plan = rec["fire_plan"]
 	var est := FireTimeline.estimate(float(foot["height"]), maxf(r.x, r.y), _surface_area_m2, mass)
+	if burn_scope is PlacedProp:
+		est["preroll_h"] = default_preroll_for_prop(str((burn_scope as PlacedProp).prop_id))
 	return _with_plan(est, plan)
+
+
+## A tagged EFFIGY is a planned burn: it gets the ceremony pre-roll so the
+## crowd can form its perimeter before the first flame. Anything else that
+## catches fire (a crisis event, a camp) starts burning at once.
+static func default_preroll_for_prop(prop_id: String) -> float:
+	if prop_id.is_empty():
+		return 0.0
+	var loader := ServiceLocator.terrain_loader()
+	if loader == null:
+		return 0.0
+	var reg: Variant = loader.get("npc_spaces")
+	if reg == null or not reg.has_method("space_for_target"):
+		return 0.0
+	var sp: Dictionary = reg.call("space_for_target", {"kind": "prop", "prop_id": prop_id})
+	return FireTimeline.EFFIGY_PREROLL_H if str(sp.get("space_type", "")) == "effigy" else 0.0
 
 
 ## A fire lit from the estimate keeps the estimate under "auto"; the player's
@@ -1083,7 +1122,7 @@ func _estimate_durations() -> Dictionary:
 static func _with_plan(est: Dictionary, plan: Dictionary) -> Dictionary:
 	var out := est.duplicate()
 	out["auto_est"] = est.duplicate()
-	for k in ["climb_h", "bonfire_h", "ember_h"]:
+	for k in ["preroll_h", "climb_h", "bonfire_h", "ember_h"]:
 		if plan.has(k):
 			out[k] = float(plan[k])
 	return out
@@ -1115,7 +1154,9 @@ static func estimate_for_prop(prop: PlacedProp, rec: Dictionary) -> Dictionary:
 		hi = hi.max(Vector2(p.x, p.z))
 	var r := maxf(maxf((hi.x - lo.x) * 0.55, (hi.y - lo.y) * 0.55), 0.5)
 	var mass := float(PlacedPropRuntime.packed_spec_for_record(rec).get("mass_kg", -1.0))
-	return FireTimeline.estimate(h, r, _last_sampled_area_m2, mass)
+	var est := FireTimeline.estimate(h, r, _last_sampled_area_m2, mass)
+	est["preroll_h"] = default_preroll_for_prop(str(prop.prop_id))
+	return est
 
 
 ## Re-read the prop's record. False = the burn is gone (Restore / deleted).

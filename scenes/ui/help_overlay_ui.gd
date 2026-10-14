@@ -69,6 +69,7 @@ const _GROUPS := [
 		["mp_chat", "Multiplayer chat"],
 	]],
 	["Views", [
+		["toggle_third_person", "First person / third-person follow camera (Settings > Player)"],
 		["toggle_window_wall", "Window wall - the world across your monitor row (Settings > Window Wall)"],
 		["key:U", "...toggle UI while the window wall is up"],
 		["key:Ctrl+S", "...save this map's window-wall viewpoint"],

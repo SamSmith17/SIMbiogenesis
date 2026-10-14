@@ -17,7 +17,17 @@ var _legend_hovered: int = -1
 var _legend_picked: int = -1
 var _sel_lat: float = NAN
 var _sel_lng: float = NAN
+## The name a created map / world gets. ONE rule keeps it honest: it is only
+## ever set by something that names THESE coordinates — a geocode hit, a
+## reverse lookup of the current selection, or picking an existing map. Any
+## other coordinate change clears it (see _on_coords_changed_manually); it
+## used to survive "Use coords", so a new map inherited the last address.
 var _place_label: String = ""
+## Debounces reverse lookups (Nominatim allows one request per second).
+var _reverse_timer: Timer = null
+## Shown under the coordinate row: why Create is refusing, or "naming…".
+var _coord_note: Label = null
+const REVERSE_DEBOUNCE_S := 0.9
 
 var _address_field: LineEdit
 var _lat_field: LineEdit
@@ -51,20 +61,29 @@ var _maps_resolved: Array[MapDefinition] = []
 ## Parallel to `_maps_resolved`: user:// path for deletable maps, else "".
 var _maps_file_paths: Array[String] = []
 var _maps_list: VBoxContainer = null
-var _maps_selected_idx: int = -1
-var _map_row_panels: Array[PanelContainer] = []
 var _launch_status: Label = null
 var _continue_btn: Button = null
-var _load_saved_btn: Button = null
 var _start_btn: Button = null
 var _quit_btn: Button = null
 var _close_btn: Button = null
 var _confirm_btn: Button = null
-var _syncing_map_list: bool = false
-var _save_load_ui: CanvasLayer = null
+## Worlds list (launch hub): records newest first, their row panels, the pick.
+var _world_recs: Array[Dictionary] = []
+var _world_row_panels: Array[PanelContainer] = []
+var _world_sel_idx: int = -1
+## New-world panel. _nw_builtin_idx >= 0 builds on a built-in map instead of
+## the selected location.
+var _nw_host: VBoxContainer = null
+var _nw_builtin_idx: int = -1
+var _nw_builtin_btns: Array[Button] = []
+var _nw_source_lbl: Label = null
+var _nw_status_lbl: Label = null
+var _nw_warn_lbl: Label = null
+var _nw_name: LineEdit = null
+var _nw_refetch: CheckBox = null
+var _nw_start_btn: Button = null
 
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
-const SAVE_LOAD_UI_SCENE := preload("res://scenes/ui/save_load_ui.tscn")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 
 const _DEFAULT_MAP_PATHS: Array[String] = [
@@ -111,15 +130,26 @@ func _ready() -> void:
 	_build_ui()
 	_geocode.search_done.connect(_on_geocode_hits)
 	_geocode.search_failed.connect(_on_geocode_err)
+	_geocode.reverse_done.connect(_on_reverse_done)
+	_geocode.reverse_failed.connect(_on_reverse_failed)
+	_reverse_timer = Timer.new()
+	_reverse_timer.one_shot = true
+	_reverse_timer.wait_time = REVERSE_DEBOUNCE_S
+	_reverse_timer.timeout.connect(_fire_reverse_lookup)
+	add_child(_reverse_timer)
 	if is_instance_valid(G):
 		if not G.ghi_data_ready.is_connected(_refresh_panels):
 			G.ghi_data_ready.connect(_refresh_panels)
 	if _is_launch_mode():
 		visible = true
+		# Back at the hub no world is running.
+		WorldPaths.clear_active()
 		_resolve_maps()
-		_refresh_maps_list()
+		_run_legacy_migration()
+		if _nw_host != null:
+			_build_new_world_panel(_nw_host)
+		_refresh_worlds_list()
 		_refresh_panels()
-		_setup_launch_save_load_ui()
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		call_deferred("_layout_panel")
 	else:
@@ -239,6 +269,8 @@ func show_picker() -> void:
 	_sel_lat = NAN
 	_sel_lng = NAN
 	_place_label = ""
+	_cancel_reverse_lookup()
+	_show_coord_note("")
 	_geocode_hits.visible = false
 	_geocode_error.visible = false
 	if is_instance_valid(_map):
@@ -335,7 +367,7 @@ func _build_ui() -> void:
 		_style_title_label(title_l, "SIMbiogenesis")
 		title_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var sub_l := Label.new()
-		sub_l.text = "Pick a site on the energy map, open a saved world, or continue your last session."
+		sub_l.text = "Play one of your worlds, or pick a place on the energy map and start a new one."
 		sub_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		sub_l.add_theme_color_override("font_color", Color(0.392, 0.447, 0.545, 1))
 		header_text.add_child(title_l)
@@ -346,20 +378,12 @@ func _build_ui() -> void:
 		header_btns.add_theme_constant_override("separation", 8)
 		_continue_btn = Button.new()
 		_continue_btn.text = "Continue"
-		_continue_btn.tooltip_text = "Load latest autosave or newest manual slot."
+		_continue_btn.tooltip_text = "Resume your most recently played world."
 		_style_primary_button(_continue_btn)
 		_continue_btn.pressed.connect(_on_continue_pressed)
-		_load_saved_btn = Button.new()
-		_load_saved_btn.text = "Load saved"
-		_load_saved_btn.tooltip_text = "Pick a save slot (same as the disc icon in the timeline)."
-		_load_saved_btn.pressed.connect(_on_load_saved_pressed)
-		var sg := _save_game()
-		if sg == null or not sg.can_continue():
-			_continue_btn.disabled = true
 		_quit_btn = Button.new()
 		_quit_btn.text = "Quit"
 		_quit_btn.pressed.connect(_on_quit_pressed)
-		header_btns.add_child(_load_saved_btn)
 		header_btns.add_child(_continue_btn)
 		header_btns.add_child(_quit_btn)
 		header.add_child(header_btns)
@@ -428,6 +452,7 @@ func _build_ui() -> void:
 	var b_ad: Button = Button.new()
 	b_ad.text = "Search"
 	b_ad.pressed.connect(_search_addr)
+	_address_field.text_submitted.connect(func(_t: String) -> void: _search_addr())
 	arow.add_child(_address_field)
 	arow.add_child(b_ad)
 	left.add_child(arow)
@@ -460,10 +485,24 @@ func _build_ui() -> void:
 	var b_co: Button = Button.new()
 	b_co.text = "Use coords"
 	b_co.pressed.connect(_use_coords)
+	# Typed coordinates take effect on Enter or when the field loses focus —
+	# they used to be ignored unless "Use coords" was pressed, so Create built
+	# (and overwrote) the PREVIOUS site.
+	_lat_field.text_submitted.connect(func(_t: String) -> void: _use_coords())
+	_lng_field.text_submitted.connect(func(_t: String) -> void: _use_coords())
+	_lat_field.focus_exited.connect(_commit_coord_fields_if_changed)
+	_lng_field.focus_exited.connect(_commit_coord_fields_if_changed)
 	crow.add_child(_lat_field)
 	crow.add_child(_lng_field)
 	crow.add_child(b_co)
 	left.add_child(crow)
+	_coord_note = Label.new()
+	_style_muted_label(_coord_note)
+	_coord_note.add_theme_font_size_override("font_size", 11)
+	_coord_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_coord_note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_coord_note.visible = false
+	left.add_child(_coord_note)
 
 	if launch:
 		left.add_child(_make_separator())
@@ -472,7 +511,7 @@ func _build_ui() -> void:
 		var maps_panel := PanelContainer.new()
 		maps_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		maps_panel.size_flags_vertical = Control.SIZE_SHRINK_END
-		maps_panel.custom_minimum_size.y = 200.0
+		maps_panel.custom_minimum_size.y = 240.0
 		maps_panel.add_theme_stylebox_override("panel", _solar_panel_style(Color(0.06, 0.08, 0.12, 0.9)))
 		left.add_child(maps_panel)
 		var maps_inner := VBoxContainer.new()
@@ -533,6 +572,10 @@ func _build_ui() -> void:
 	rv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details_margin.add_child(rv)
 
+	if launch:
+		_nw_host = VBoxContainer.new()
+		_nw_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rv.add_child(_nw_host)
 	var details_hdr: Label = Label.new()
 	_style_section_label(details_hdr, "ZONE DETAILS")
 	details_hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -602,10 +645,10 @@ func _build_ui() -> void:
 	_close_btn.text = "Close"
 	_close_btn.pressed.connect(_close_dismiss)
 	var make: Button = Button.new()
-	make.text = "Create map here  ⊕"
-	make.tooltip_text = ("Build a playable world with real elevation, satellite imagery, "
-		+ "OSM buildings/water, and auto-vegetation. First visit: ~15–60 s depending on "
-		+ "network; repeat visits use local cache (~5–15 s).")
+	make.text = "New world here  ⊕"
+	make.tooltip_text = ("Start a NEW world on this location: real elevation, satellite imagery, "
+		+ "OSM buildings/water and auto-vegetation. Your current world is saved first. "
+		+ "First visit to a place: ~15–60 s; cached maps start in seconds.")
 	make.pressed.connect(_create_map)
 	_confirm_btn = Button.new()
 	_confirm_btn.text = "Set location  ✓"
@@ -613,11 +656,10 @@ func _build_ui() -> void:
 	_confirm_btn.pressed.connect(_confirm)
 	if launch:
 		_start_btn = Button.new()
-		_start_btn.text = "Start selected"
+		_start_btn.text = "Play selected world"
 		_style_primary_button(_start_btn)
-		_start_btn.pressed.connect(_on_start_pressed)
+		_start_btn.pressed.connect(func() -> void: _play_world(_world_sel_idx))
 		bot.add_child(_start_btn)
-		bot.add_child(make)
 		bot.add_child(import_btn)
 		_close_btn.visible = false
 		_confirm_btn.visible = false
@@ -680,7 +722,7 @@ func _on_map(lat2: float, lnn2: float) -> void:
 	_sel_lng = lnn2
 	_lat_field.text = str(snappedf(lat2, 0.0001))
 	_lng_field.text = str(snappedf(lnn2, 0.0001))
-	_place_label = ""
+	_on_coords_changed_manually()
 	_update_map_focus()
 	if is_instance_valid(_map):
 		_map.set_selection_lat_lng(lat2, lnn2)
@@ -727,12 +769,15 @@ func _on_hit_activated(i: int) -> void:
 
 func _apply_from_hit(d: Dictionary) -> void:
 	_legend_picked = -1
+	_nw_builtin_idx = -1
 	_sel_lat = float(d.get("lat", 0.0))
 	_sel_lng = float(d.get("lng", 0.0))
 	_place_label = str(d.get("label", ""))
 	_address_field.text = _place_label
 	_lat_field.text = str(_sel_lat)
 	_lng_field.text = str(_sel_lng)
+	_cancel_reverse_lookup()
+	_show_coord_note("")
 	if is_instance_valid(_map):
 		_map.set_selection_lat_lng(_sel_lat, _sel_lng)
 		_map.set_focus_zone_id(_compute_map_focus())
@@ -741,12 +786,111 @@ func _apply_from_hit(d: Dictionary) -> void:
 	_refresh_panels()
 	_try_highlight_map_for_coords(_sel_lat, _sel_lng)
 
-func _use_coords() -> void:
-	_legend_picked = -1
-	_sel_lat = str(_lat_field.text).to_float()
-	_sel_lng = str(_lng_field.text).to_float()
+## Parse the two coordinate fields. Returns {ok, lat, lng, error}. Accepts a
+## "lat, lon" pair pasted into the latitude field. `to_float()` turns garbage
+## into 0.0 (never NAN), which used to send bad input to Null Island.
+static func parse_coord_fields(lat_text: String, lng_text: String) -> Dictionary:
+	var a := lat_text.strip_edges()
+	var b := lng_text.strip_edges()
+	if b.is_empty() and a.contains(","):
+		var parts := a.split(",", false)
+		if parts.size() == 2:
+			a = parts[0].strip_edges()
+			b = parts[1].strip_edges()
+	if a.is_empty() or b.is_empty():
+		return {"ok": false, "error": "Enter both a latitude and a longitude."}
+	if not a.is_valid_float() or not b.is_valid_float():
+		return {"ok": false, "error": "Coordinates must be decimal degrees, e.g. 44.0113 and -123.5911."}
+	var lat := a.to_float()
+	var lng := b.to_float()
+	if absf(lat) > 90.0:
+		return {"ok": false, "error": "Latitude must be between -90 and 90."}
+	if absf(lng) > 180.0:
+		return {"ok": false, "error": "Longitude must be between -180 and 180."}
+	return {"ok": true, "lat": lat, "lng": lng}
+
+
+## The fields differ from the current selection by more than display rounding.
+func _coord_fields_differ() -> bool:
+	var p := parse_coord_fields(_lat_field.text, _lng_field.text)
+	if not bool(p.get("ok", false)):
+		return not (_lat_field.text.strip_edges().is_empty() and _lng_field.text.strip_edges().is_empty())
 	if is_nan(_sel_lat) or is_nan(_sel_lng):
+		return true
+	return absf(float(p["lat"]) - _sel_lat) > 0.00005 or absf(float(p["lng"]) - _sel_lng) > 0.00005
+
+
+func _commit_coord_fields_if_changed() -> void:
+	if _coord_fields_differ():
+		_use_coords()
+
+
+## Any coordinate change that did NOT come from naming those coordinates
+## (a map click, typed fields, Use coords) drops the old name and the stale
+## address text, then asks Nominatim what is actually here.
+func _on_coords_changed_manually() -> void:
+	_nw_builtin_idx = -1
+	_place_label = ""
+	if _address_field != null:
+		_address_field.text = ""
+	if _geocode_hits != null:
+		_geocode_hits.visible = false
+	if not (is_nan(_sel_lat) or is_nan(_sel_lng)):
+		_show_coord_note("Looking up the place name…")
+		if _reverse_timer != null:
+			_reverse_timer.start()
+
+
+func _cancel_reverse_lookup() -> void:
+	if _reverse_timer != null:
+		_reverse_timer.stop()
+
+
+func _fire_reverse_lookup() -> void:
+	if is_nan(_sel_lat) or is_nan(_sel_lng) or not _place_label.is_empty():
 		return
+	_geocode.reverse(_sel_lat, _sel_lng)
+
+
+func _on_reverse_done(lat: float, lng: float, label: String) -> void:
+	# Drop a stale reply: the selection moved, or something else named it.
+	if not _place_label.is_empty() or is_nan(_sel_lat) \
+			or absf(lat - _sel_lat) > 1e-6 or absf(lng - _sel_lng) > 1e-6:
+		return
+	_place_label = label
+	if _address_field != null:
+		_address_field.text = label
+	_show_coord_note("")
+	_refresh_new_world_panel()
+
+
+func _on_reverse_failed(lat: float, lng: float, _msg: String) -> void:
+	if is_nan(_sel_lat) or absf(lat - _sel_lat) > 1e-6 or absf(lng - _sel_lng) > 1e-6:
+		return
+	_show_coord_note("No place name found — the coordinates will be used as the name.")
+
+
+func _show_coord_note(text: String, is_error: bool = false) -> void:
+	if _coord_note == null:
+		return
+	_coord_note.text = text
+	_coord_note.visible = not text.is_empty()
+	_coord_note.add_theme_color_override("font_color",
+		Color(0.95, 0.5, 0.3) if is_error else _TEXT_M)
+
+
+func _use_coords() -> void:
+	var p := parse_coord_fields(_lat_field.text, _lng_field.text)
+	if not bool(p.get("ok", false)):
+		_show_coord_note(str(p.get("error", "Invalid coordinates.")), true)
+		return
+	_legend_picked = -1
+	var moved := is_nan(_sel_lat) or absf(float(p["lat"]) - _sel_lat) > 1e-7 \
+		or absf(float(p["lng"]) - _sel_lng) > 1e-7
+	_sel_lat = float(p["lat"])
+	_sel_lng = float(p["lng"])
+	if moved:
+		_on_coords_changed_manually()
 	if is_instance_valid(_map):
 		_map.set_selection_lat_lng(_sel_lat, _sel_lng)
 		_map.set_focus_zone_id(_compute_map_focus())
@@ -766,53 +910,63 @@ func _confirm() -> void:
 ## Persist a MapDefinition for the selected site and launch the generated world
 ## scene, which builds real terrain + satellite imagery from open data.
 func _create_map() -> void:
-	if is_nan(_sel_lat) or is_nan(_sel_lng):
+	# Typed-but-uncommitted coordinates win over the old selection.
+	if _nw_builtin_idx < 0 and _coord_fields_differ():
+		_use_coords()
+		if _coord_fields_differ():
+			return  # invalid input; _use_coords showed why
+	var src := _new_world_source()
+	if src.is_empty():
+		_show_coord_note("Pick a point on the map, search an address, or enter coordinates first.", true)
 		return
-	var label := _place_label if _place_label != "" else "%.4f, %.4f" % [_sel_lat, _sel_lng]
-	var md := MapDefinition.new()
-	md.scene_path = MapDefinition.GENERATED_SCENE
-	md.display_name = label
-	md.description = "User-created location map for %s.\nTerrain + imagery from open data." % label
-	md.latitude = _sel_lat
-	md.longitude = _sel_lng
-	md.load_from_cache = true
-	md.touch_last_loaded()
-	# Prefer last-built extents for this site (cache key match); else 0 = loader defaults.
-	var meta := TerrainCacheSettings.get_meta_extents(_sel_lat, _sel_lng)
-	md.half_extent_m = float(meta.get("half_extent_m", 0.0))
-	md.detail_half_extent_m = float(meta.get("detail_half_extent_m", 0.0))
-	md.osm_half_extent_m = float(meta.get("osm_half_extent_m", 0.0))
-
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
-	# Key the file by coordinates so re-creating the same spot updates in place.
-	var path := "user://maps/loc_%s_%s.tres" % [_coord_token(_sel_lat), _coord_token(_sel_lng)]
-	if ResourceSaver.save(md, path) != OK:
-		push_warning("LocationPicker: could not write %s" % path)
-
-	var world_he := md.half_extent_m
-	var detail_he := md.detail_half_extent_m
-	var osm_he := md.osm_half_extent_m
-	if not _pending_bundle_path.is_empty():
+	var map: Dictionary = src["map"]
+	if bool(src["generated"]):
+		map = _register_map_definition(map)
+	var world_name := _nw_name.text.strip_edges() if _nw_name != null else ""
+	var rec := WorldStore.create(map, world_name)
+	if bool(src["generated"]) and not _pending_bundle_path.is_empty():
 		var prep := BUNDLE_IMPORTER_SCRIPT.queue_for_new_map(
-			_pending_bundle_path, _sel_lat, _sel_lng, label)
+			_pending_bundle_path, float(map["lat"]), float(map["lon"]), str(map["label"]))
 		if not bool(prep.get("ok", false)):
 			push_warning("LocationPicker: bundle import failed: %s" % str(prep.get("error", "unknown")))
-			var ctx := get_node_or_null("/root/MapContext")
-			if ctx != null:
-				ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he, false)
-	else:
-		var ctx := get_node_or_null("/root/MapContext")
-		if ctx != null:
-			ctx.set_pending(_sel_lat, _sel_lng, label, world_he, false, detail_he, osm_he, false)
-	if _pending_starshade:
-		_queue_starshade_design()
 	_pending_bundle_path = ""
-	_pending_starshade = false
 	if _bundle_status != null:
 		_bundle_status.text = ""
-	if not _is_launch_mode():
-		hide_picker()
-	get_tree().change_scene_to_file(MapDefinition.GENERATED_SCENE)
+	var refetch := _nw_refetch != null and _nw_refetch.visible and _nw_refetch.button_pressed
+	_launch_world(rec, {"force_refetch": refetch})
+
+
+## The MAP registry: one loc_<lat>_<lon>.tres per site (label + extents), shared
+## by every world on it. Re-creating a site keeps its existing name unless this
+## selection has a real one, and never resets its extents or OSM offsets.
+func _register_map_definition(map: Dictionary) -> Dictionary:
+	var lat := float(map["lat"])
+	var lon := float(map["lon"])
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
+	var path := "user://maps/loc_%s_%s.tres" % [CoordToken.token(lat), CoordToken.token(lon)]
+	var md: MapDefinition = null
+	if ResourceLoader.exists(path):
+		md = load(path) as MapDefinition
+	if md == null:
+		md = MapDefinition.new()
+		md.scene_path = MapDefinition.GENERATED_SCENE
+		md.latitude = lat
+		md.longitude = lon
+	if not _place_label.is_empty() or md.display_name.is_empty() or md.display_name == "Map":
+		md.display_name = str(map["label"])
+	md.description = "Location map for %s.\nTerrain + imagery from open data." % md.display_name
+	md.load_from_cache = true
+	md.touch_last_loaded()
+	var meta := TerrainCacheSettings.get_meta_extents(lat, lon)
+	if md.half_extent_m <= 0.0:
+		md.half_extent_m = float(meta.get("half_extent_m", 0.0))
+	if md.detail_half_extent_m <= 0.0:
+		md.detail_half_extent_m = float(meta.get("detail_half_extent_m", 0.0))
+	if md.osm_half_extent_m <= 0.0:
+		md.osm_half_extent_m = float(meta.get("osm_half_extent_m", 0.0))
+	if ResourceSaver.save(md, path) != OK:
+		push_warning("LocationPicker: could not write %s" % path)
+	return WorldStore.map_ref_from_definition(md, path)
 
 
 func _on_add_starshade_pressed() -> void:
@@ -859,11 +1013,6 @@ func _find_main_node() -> Node:
 		return cur
 	return st.root.find_child("Main", true, false)
 
-## Filename-safe token for a coordinate, e.g. -122.3321 -> "n122p3321".
-static func _coord_token(v: float) -> String:
-	var s := "%.4f" % absf(v)
-	return ("n" if v < 0.0 else "") + s.replace(".", "p")
-
 func _refresh_legend() -> void:
 	if G == null:
 		return
@@ -875,6 +1024,7 @@ func _refresh_legend() -> void:
 		_legend_styling(bt, c, zid0, zid0 == _legend_picked)
 
 func _refresh_panels() -> void:
+	_refresh_new_world_panel()
 	if G == null:
 		return
 	_clear_sim()
@@ -1142,170 +1292,6 @@ func _sort_maps_by_recency() -> void:
 	_maps_file_paths = paths_sorted
 
 
-func _touch_map_loaded(index: int) -> void:
-	if index < 0 or index >= _maps_resolved.size():
-		return
-	var md: MapDefinition = _maps_resolved[index]
-	md.touch_last_loaded()
-	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
-	if not path.is_empty():
-		ResourceSaver.save(md, path)
-
-
-func _refresh_maps_list() -> void:
-	if _maps_list == null:
-		return
-	# Guard cache checkboxes: freeing a pressed CheckBox can emit toggled(false)
-	# and would persist load_from_cache=false → every Start force-refetches DEM.
-	_syncing_map_list = true
-	while _maps_list.get_child_count() > 0:
-		var c := _maps_list.get_child(0)
-		_disconnect_map_row_signals(c)
-		_maps_list.remove_child(c)
-		c.free()
-	_map_row_panels.clear()
-	_maps_selected_idx = -1
-	for i in _maps_resolved.size():
-		_maps_list.add_child(_make_map_row(i))
-	_syncing_map_list = false
-	if _maps_resolved.is_empty():
-		if _launch_status != null:
-			_launch_status.text = "No saved worlds yet — click the map and press Create map here."
-		return
-	if _launch_status != null:
-		_launch_status.text = ""
-	_select_map_row(0)
-
-
-func _disconnect_map_row_signals(node: Node) -> void:
-	if node == null:
-		return
-	if node is CheckBox:
-		var cb := node as CheckBox
-		var conns := cb.toggled.get_connections()
-		for c in conns:
-			cb.toggled.disconnect(c["callable"])
-	for child in node.get_children():
-		_disconnect_map_row_signals(child)
-
-
-func _make_map_row(index: int) -> PanelContainer:
-	var m: MapDefinition = _maps_resolved[index]
-	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
-	var row := PanelContainer.new()
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.mouse_filter = Control.MOUSE_FILTER_STOP
-	row.gui_input.connect(_on_map_row_gui_input.bind(index))
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.10, 0.13, 0.18, 0.92)
-	sb.set_content_margin_all(6)
-	sb.set_corner_radius_all(4)
-	row.add_theme_stylebox_override("panel", sb)
-	_map_row_panels.append(row)
-
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 8)
-	row.add_child(h)
-	var name_lbl := Label.new()
-	name_lbl.text = m.display_name
-	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_lbl.clip_text = true
-	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.add_child(name_lbl)
-
-	var cache_cb := CheckBox.new()
-	cache_cb.text = "Load from cache"
-	cache_cb.button_pressed = bool(m.load_from_cache)
-	cache_cb.tooltip_text = (
-		"Prefer cached DEM, imagery, and OSM. Uncheck for a fresh download and "
-		+ "skip placed models / building styles for this launch (files stay on disk)."
-	)
-	cache_cb.toggled.connect(_on_map_cache_toggled.bind(index))
-	h.add_child(cache_cb)
-
-	if not path.is_empty():
-		var del_btn := Button.new()
-		del_btn.text = "Delete"
-		del_btn.tooltip_text = "Remove this world from your list"
-		del_btn.pressed.connect(_on_map_delete_pressed.bind(index))
-		h.add_child(del_btn)
-	return row
-
-
-func _on_map_row_gui_input(event: InputEvent, index: int) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
-			_select_map_row(index)
-
-
-func _select_map_row(index: int) -> void:
-	if index < 0 or index >= _maps_resolved.size():
-		return
-	_maps_selected_idx = index
-	for i in _map_row_panels.size():
-		var panel: PanelContainer = _map_row_panels[i]
-		if not is_instance_valid(panel):
-			continue
-		var sb := StyleBoxFlat.new()
-		sb.set_content_margin_all(6)
-		sb.set_corner_radius_all(4)
-		if i == index:
-			sb.bg_color = Color(0.14, 0.28, 0.36, 0.95)
-			sb.set_border_width_all(1)
-			sb.border_color = _PRIMARY
-		else:
-			sb.bg_color = Color(0.10, 0.13, 0.18, 0.92)
-		panel.add_theme_stylebox_override("panel", sb)
-	_on_map_list_selected(index)
-
-
-func _on_map_cache_toggled(on: bool, index: int) -> void:
-	if _syncing_map_list:
-		return
-	if index < 0 or index >= _maps_resolved.size():
-		return
-	var m: MapDefinition = _maps_resolved[index]
-	m.load_from_cache = on
-	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
-	if not path.is_empty():
-		ResourceSaver.save(m, path)
-
-
-func _on_map_delete_pressed(index: int) -> void:
-	if index < 0 or index >= _maps_resolved.size():
-		return
-	var path := _maps_file_paths[index] if index < _maps_file_paths.size() else ""
-	if path.is_empty():
-		if _launch_status != null:
-			_launch_status.text = "Built-in maps can't be deleted."
-		return
-	var removed := false
-	var dir := DirAccess.open(_USER_MAPS_DIR)
-	if dir != null:
-		removed = dir.remove(path.get_file()) == OK
-	if not removed:
-		removed = DirAccess.remove_absolute(ProjectSettings.globalize_path(path)) == OK
-	if FileAccess.file_exists(path):
-		if _launch_status != null:
-			_launch_status.text = "Could not delete map file."
-		return
-	_resolve_maps()
-	_refresh_maps_list()
-	if _launch_status != null:
-		_launch_status.text = "Map deleted."
-
-
-func _on_map_list_selected(index: int) -> void:
-	if index < 0 or index >= _maps_resolved.size():
-		return
-	var m: MapDefinition = _maps_resolved[index]
-	if m.is_generated() and not _syncing_map_list:
-		_syncing_map_list = true
-		_apply_coords_to_picker(m.latitude, m.longitude, m.display_name)
-		_syncing_map_list = false
-
-
 func _apply_coords_to_picker(lat: float, lon: float, label: String = "") -> void:
 	_legend_picked = -1
 	_sel_lat = lat
@@ -1313,8 +1299,9 @@ func _apply_coords_to_picker(lat: float, lon: float, label: String = "") -> void
 	_place_label = label
 	_lat_field.text = str(snappedf(lat, 0.0001))
 	_lng_field.text = str(snappedf(lon, 0.0001))
-	if label != "":
-		_address_field.text = label
+	_cancel_reverse_lookup()
+	_show_coord_note("")
+	_address_field.text = label
 	if is_instance_valid(_map):
 		_map.set_selection_lat_lng(lat, lon)
 		_map.set_focus_zone_id(_compute_map_focus())
@@ -1322,209 +1309,483 @@ func _apply_coords_to_picker(lat: float, lon: float, label: String = "") -> void
 	_refresh_panels()
 
 
+## Outline the world rows whose map stands at these coordinates (a visual
+## cue only — it never changes the selection or the new-world source).
 func _try_highlight_map_for_coords(lat: float, lon: float) -> void:
-	if not _is_launch_mode() or _maps_list == null or _syncing_map_list:
+	if not _is_launch_mode() or _world_row_panels.is_empty():
 		return
-	var idx := _find_map_index_for_coords(lat, lon)
-	if idx >= 0:
-		_syncing_map_list = true
-		_select_map_row(idx)
-		_syncing_map_list = false
-
-
-func _find_map_index_for_coords(lat: float, lon: float) -> int:
-	const EPS := 0.0005
-	for i in _maps_resolved.size():
-		var m: MapDefinition = _maps_resolved[i]
-		if not m.is_generated():
+	for i in _world_recs.size():
+		if i >= _world_row_panels.size() or not is_instance_valid(_world_row_panels[i]):
 			continue
-		if absf(m.latitude - lat) <= EPS and absf(m.longitude - lon) <= EPS:
+		var map: Dictionary = _world_recs[i].get("map", {})
+		var here := WorldStore.is_generated_map(map) and absf(float(map.get("lat", 0.0)) - lat) <= 0.0005 \
+			and absf(float(map.get("lon", 0.0)) - lon) <= 0.0005
+		var sb := _world_row_style(i == _world_sel_idx)
+		if here and i != _world_sel_idx:
+			sb.set_border_width_all(1)
+			sb.border_color = Color(_PRIMARY, 0.45)
+		_world_row_panels[i].add_theme_stylebox_override("panel", sb)
+
+
+# ---------------------------------------------------------------------------
+# WORLDS — the launch hub lists worlds (a map + everything built on it), most
+# recently played first. Maps are the shared, regenerable half; a NEW world on
+# a map starts empty without touching any other world on it.
+# ---------------------------------------------------------------------------
+
+## One-time, idempotent: every site that already has a build in the old
+## one-world-per-site layout becomes a "legacy" world (nothing is moved). The
+## old global autosave becomes that world's starting snapshot when it matches.
+func _run_legacy_migration() -> void:
+	var entries: Array = []
+	for i in _maps_resolved.size():
+		entries.append({"md": _maps_resolved[i],
+			"path": _maps_file_paths[i] if i < _maps_file_paths.size() else ""})
+	var autosave := {}
+	var sg := _save_game()
+	if sg != null and sg.has_autosave():
+		autosave = sg.load_autosave()
+	var made := WorldStore.migrate_legacy(entries, autosave)
+	if not made.is_empty():
+		print("LocationPicker: migrated %d existing site(s) into worlds." % made.size())
+
+
+func _refresh_worlds_list(select_id: String = "") -> void:
+	if _maps_list == null:
+		return
+	_world_recs = WorldStore.list()
+	for c in _maps_list.get_children():
+		_maps_list.remove_child(c)
+		c.queue_free()
+	_world_row_panels.clear()
+	_world_sel_idx = -1
+	for i in _world_recs.size():
+		_maps_list.add_child(_make_world_row(i))
+	if _continue_btn != null:
+		_continue_btn.disabled = _world_recs.is_empty()
+		_continue_btn.tooltip_text = ("Resume “%s” where you left off." % WorldStore.display_name(_world_recs[0])) \
+			if not _world_recs.is_empty() else "No worlds yet."
+	if _world_recs.is_empty():
+		if _launch_status != null:
+			_launch_status.text = "No worlds yet — pick a place on the map (or a built-in map) and start a new world."
+		_refresh_new_world_panel()
+		return
+	if _launch_status != null:
+		_launch_status.text = ""
+	var idx := 0
+	if not select_id.is_empty():
+		for i in _world_recs.size():
+			if str(_world_recs[i].get("id", "")) == select_id:
+				idx = i
+	_select_world_row(idx)
+
+
+func _make_world_row(index: int) -> PanelContainer:
+	var rec: Dictionary = _world_recs[index]
+	var row := PanelContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.gui_input.connect(_on_world_row_gui_input.bind(index))
+	row.add_theme_stylebox_override("panel", _world_row_style(false))
+	_world_row_panels.append(row)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	row.add_child(h)
+	var thumb := TextureRect.new()
+	thumb.custom_minimum_size = Vector2(96, 54)
+	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tp := WorldStore.thumb_path(str(rec.get("id", "")))
+	if FileAccess.file_exists(tp):
+		var img := Image.load_from_file(tp)
+		if img != null and not img.is_empty():
+			thumb.texture = ImageTexture.create_from_image(img)
+	h.add_child(thumb)
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 1)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(v)
+	var name_lbl := Label.new()
+	name_lbl.name = "Name"
+	name_lbl.text = WorldStore.display_name(rec)
+	name_lbl.clip_text = true
+	name_lbl.add_theme_font_size_override("font_size", 15)
+	name_lbl.add_theme_color_override("font_color", _TEXT)
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(name_lbl)
+	var name_edit := LineEdit.new()
+	name_edit.name = "NameEdit"
+	name_edit.visible = false
+	name_edit.placeholder_text = _world_map_label(rec)
+	_style_line_edit(name_edit)
+	name_edit.text_submitted.connect(func(_t: String) -> void: _commit_rename(index))
+	name_edit.focus_exited.connect(func() -> void: _commit_rename(index))
+	v.add_child(name_edit)
+	var sub := Label.new()
+	sub.text = _world_subline(rec)
+	sub.clip_text = true
+	sub.add_theme_font_size_override("font_size", 11)
+	sub.add_theme_color_override("font_color", _TEXT_M)
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sub.tooltip_text = sub.text
+	v.add_child(sub)
+	var play := Button.new()
+	play.text = "Play"
+	_style_primary_button(play)
+	play.tooltip_text = "Jump back in exactly where you left off."
+	play.pressed.connect(_play_world.bind(index))
+	h.add_child(play)
+	var ren := Button.new()
+	ren.text = "Rename"
+	ren.pressed.connect(_begin_rename.bind(index))
+	h.add_child(ren)
+	var dup := Button.new()
+	dup.text = "Copy"
+	dup.tooltip_text = "Make an independent copy of this world (a checkpoint)."
+	dup.pressed.connect(_duplicate_world.bind(index))
+	h.add_child(dup)
+	var del := Button.new()
+	del.text = "Delete"
+	del.tooltip_text = "Move this world to the trash (user://worlds/_trash). The map's terrain cache is kept."
+	del.pressed.connect(_confirm_delete_world.bind(index))
+	h.add_child(del)
+	return row
+
+
+func _world_row_style(selected: bool) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.set_content_margin_all(6)
+	sb.set_corner_radius_all(4)
+	if selected:
+		sb.bg_color = Color(0.14, 0.28, 0.36, 0.95)
+		sb.set_border_width_all(1)
+		sb.border_color = _PRIMARY
+	else:
+		sb.bg_color = Color(0.10, 0.13, 0.18, 0.92)
+	return sb
+
+
+func _world_map_label(rec: Dictionary) -> String:
+	var map: Dictionary = rec.get("map", {}) if rec.get("map", {}) is Dictionary else {}
+	var label := str(map.get("label", "")).strip_edges()
+	if not label.is_empty():
+		return label
+	return WorldStore.display_name({"map": map})
+
+
+## "location · played 3 h ago · Sep 3 21:30 · 2 h 10 m · ⚡ 4,114"
+func _world_subline(rec: Dictionary) -> String:
+	var parts: Array[String] = []
+	if not str(rec.get("name", "")).strip_edges().is_empty():
+		parts.append(_world_map_label(rec))
+	var lp := float(rec.get("last_played_unix", 0.0))
+	if lp > 0.0:
+		parts.append("played " + _relative_time(lp))
+	var gt: Dictionary = rec.get("game_time", {}) if rec.get("game_time", {}) is Dictionary else {}
+	if int(gt.get("month", 0)) > 0:
+		var dt := float(gt.get("day_time", 0.0))
+		parts.append("%s %d, %d  %02d:%02d" % [_month_abbr(int(gt["month"])), int(gt.get("day", 1)),
+			int(gt.get("year", 0)), int(floor(dt)), int(fmod(dt, 1.0) * 60.0)])
+	var pt := float(rec.get("playtime_s", 0.0))
+	if pt >= 60.0:
+		parts.append("%dh %02dm played" % [int(pt / 3600.0), int(fmod(pt, 3600.0) / 60.0)])
+	var sm: Dictionary = rec.get("summary", {}) if rec.get("summary", {}) is Dictionary else {}
+	if int(sm.get("peak_total", 0)) > 0:
+		parts.append("⚡ %s" % _format_pop_count(int(sm["peak_total"])))
+	if str(rec.get("storage", "")) == WorldPaths.STORAGE_LEGACY:
+		parts.append("original build")
+	return "  ·  ".join(parts)
+
+
+static func _month_abbr(m: int) -> String:
+	const M := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	return M[clampi(m - 1, 0, 11)]
+
+
+static func _relative_time(unix: float) -> String:
+	var d := Time.get_unix_time_from_system() - unix
+	if d < 90.0:
+		return "just now"
+	if d < 3600.0:
+		return "%d min ago" % int(d / 60.0)
+	if d < 86400.0:
+		return "%d h ago" % int(d / 3600.0)
+	if d < 86400.0 * 14.0:
+		return "%d d ago" % int(d / 86400.0)
+	var dt := Time.get_datetime_dict_from_unix_time(int(unix))
+	return "%s %d, %d" % [_month_abbr(int(dt.month)), int(dt.day), int(dt.year)]
+
+
+func _on_world_row_gui_input(event: InputEvent, index: int) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			_select_world_row(index)
+			if mb.double_click:
+				_play_world(index)
+
+
+func _select_world_row(index: int) -> void:
+	if index < 0 or index >= _world_recs.size():
+		return
+	_world_sel_idx = index
+	for i in _world_row_panels.size():
+		if is_instance_valid(_world_row_panels[i]):
+			_world_row_panels[i].add_theme_stylebox_override("panel", _world_row_style(i == index))
+	# The new-world panel follows the selected world's map, so "start fresh on
+	# this map" is one click away.
+	var map: Dictionary = _world_recs[index].get("map", {})
+	if WorldStore.is_generated_map(map):
+		_nw_builtin_idx = -1
+		_apply_coords_to_picker(float(map.get("lat", 0.0)), float(map.get("lon", 0.0)), str(map.get("label", "")))
+	else:
+		_nw_builtin_idx = _builtin_index_for_scene(str(map.get("scene_path", "")))
+	_refresh_new_world_panel()
+
+
+func _play_world(index: int) -> void:
+	if index < 0 or index >= _world_recs.size():
+		return
+	_launch_world(_world_recs[index], {})
+
+
+func _launch_world(rec: Dictionary, opts: Dictionary) -> void:
+	if _pending_starshade:
+		_queue_starshade_design()
+		_pending_starshade = false
+	if not _is_launch_mode():
+		_save_running_world()
+		hide_picker()
+	var err := WorldSession.launch(rec, opts)
+	if err != OK and _launch_status != null:
+		_launch_status.text = "Could not open that world (error %d)." % err
+
+
+## In-game (overlay) the running world is saved before switching.
+func _save_running_world() -> void:
+	var main := _find_main_node()
+	if main != null and WorldPaths.has_active_world():
+		WorldSession.save_now(main, true, true)
+
+
+func _begin_rename(index: int) -> void:
+	if index < 0 or index >= _world_row_panels.size():
+		return
+	var row := _world_row_panels[index]
+	var lbl := row.find_child("Name", true, false) as Label
+	var ed := row.find_child("NameEdit", true, false) as LineEdit
+	if lbl == null or ed == null:
+		return
+	ed.text = str(_world_recs[index].get("name", ""))
+	lbl.visible = false
+	ed.visible = true
+	ed.grab_focus()
+	ed.select_all()
+
+
+func _commit_rename(index: int) -> void:
+	if index < 0 or index >= _world_row_panels.size():
+		return
+	var row := _world_row_panels[index]
+	var lbl := row.find_child("Name", true, false) as Label
+	var ed := row.find_child("NameEdit", true, false) as LineEdit
+	if ed == null or not ed.visible:
+		return
+	ed.visible = false
+	var id := str(_world_recs[index].get("id", ""))
+	WorldStore.rename(id, ed.text)
+	_world_recs[index]["name"] = ed.text.strip_edges()
+	if lbl != null:
+		lbl.text = WorldStore.display_name(_world_recs[index])
+		lbl.visible = true
+
+
+func _duplicate_world(index: int) -> void:
+	if index < 0 or index >= _world_recs.size():
+		return
+	var src: Dictionary = _world_recs[index]
+	var copy := WorldStore.duplicate_world(str(src.get("id", "")), "%s (copy)" % WorldStore.display_name(src))
+	if copy.is_empty():
+		if _launch_status != null:
+			_launch_status.text = "Could not copy that world."
+		return
+	_refresh_worlds_list(str(copy.get("id", "")))
+	if _launch_status != null:
+		_launch_status.text = "Copied — “%s” is an independent world." % WorldStore.display_name(copy)
+
+
+func _confirm_delete_world(index: int) -> void:
+	if index < 0 or index >= _world_recs.size():
+		return
+	var rec: Dictionary = _world_recs[index]
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "Delete world"
+	dlg.dialog_text = ("Move “%s” to the trash?\n\nIts files are kept in user://worlds/_trash, "
+		+ "and the map's terrain cache is not touched.") % WorldStore.display_name(rec)
+	dlg.ok_button_text = "Move to trash"
+	add_child(dlg)
+	dlg.confirmed.connect(func() -> void:
+		var ok := WorldStore.trash(str(rec.get("id", "")))
+		_refresh_worlds_list()
+		if _launch_status != null:
+			_launch_status.text = "Moved to trash." if ok else "Could not delete that world."
+		dlg.queue_free())
+	dlg.canceled.connect(dlg.queue_free)
+	dlg.popup_centered()
+
+
+func _on_continue_pressed() -> void:
+	if _world_recs.is_empty():
+		_world_recs = WorldStore.list()
+	if _world_recs.is_empty():
+		if _launch_status != null:
+			_launch_status.text = "No worlds yet."
+		return
+	_launch_world(_world_recs[0], {})
+
+
+# -- New world panel ------------------------------------------------------------
+
+func _build_new_world_panel(parent: Control) -> void:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override("panel", _solar_panel_style(Color(0.07, 0.11, 0.15, 0.95)))
+	parent.add_child(panel)
+	var m := MarginContainer.new()
+	for k in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		m.add_theme_constant_override(k, 10)
+	panel.add_child(m)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 6)
+	m.add_child(v)
+	var hdr := Label.new()
+	_style_section_label(hdr, "NEW WORLD")
+	v.add_child(hdr)
+	_nw_source_lbl = Label.new()
+	_nw_source_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nw_source_lbl.add_theme_font_size_override("font_size", 15)
+	_nw_source_lbl.add_theme_color_override("font_color", _TEXT)
+	v.add_child(_nw_source_lbl)
+	var bh := HBoxContainer.new()
+	bh.add_theme_constant_override("separation", 6)
+	v.add_child(bh)
+	var bl := Label.new()
+	bl.text = "or a built-in map:"
+	_style_muted_label(bl)
+	bh.add_child(bl)
+	_nw_builtin_btns.clear()
+	for i in _maps_resolved.size():
+		var md: MapDefinition = _maps_resolved[i]
+		if md.is_generated():
+			continue
+		var b := Button.new()
+		b.text = md.display_name
+		b.toggle_mode = true
+		b.pressed.connect(func() -> void:
+			_nw_builtin_idx = i if _nw_builtin_idx != i else -1
+			_refresh_new_world_panel())
+		b.set_meta("map_idx", i)
+		bh.add_child(b)
+		_nw_builtin_btns.append(b)
+	_nw_status_lbl = Label.new()
+	_nw_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nw_status_lbl.add_theme_font_size_override("font_size", 12)
+	_style_muted_label(_nw_status_lbl)
+	v.add_child(_nw_status_lbl)
+	_nw_name = LineEdit.new()
+	_nw_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_line_edit(_nw_name)
+	_nw_name.text_submitted.connect(func(_t: String) -> void: _create_map())
+	v.add_child(_nw_name)
+	_nw_refetch = CheckBox.new()
+	_nw_refetch.text = "Re-download map data (terrain, imagery, OSM)"
+	_nw_refetch.toggled.connect(func(_on: bool) -> void: _refresh_new_world_panel())
+	v.add_child(_nw_refetch)
+	_nw_warn_lbl = Label.new()
+	_nw_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nw_warn_lbl.add_theme_font_size_override("font_size", 11)
+	_nw_warn_lbl.add_theme_color_override("font_color", Color(0.95, 0.72, 0.35))
+	v.add_child(_nw_warn_lbl)
+	_nw_start_btn = Button.new()
+	_nw_start_btn.text = "Start new world  ⊕"
+	_style_primary_button(_nw_start_btn)
+	_nw_start_btn.tooltip_text = ("A new world starts EMPTY on this map. Existing worlds on the same "
+		+ "map are not touched.")
+	_nw_start_btn.pressed.connect(_create_map)
+	v.add_child(_nw_start_btn)
+	_refresh_new_world_panel()
+
+
+func _builtin_index_for_scene(scene_path: String) -> int:
+	var want := MapDefinition.normalize_scene_path(scene_path)
+	for i in _maps_resolved.size():
+		if not _maps_resolved[i].is_generated() \
+				and MapDefinition.normalize_scene_path(_maps_resolved[i].scene_path) == want:
 			return i
 	return -1
 
 
-func _map_row_wants_cache(index: int, md: MapDefinition) -> bool:
-	## Live checkbox state wins; default to cache-on when the row isn't built yet.
-	if index >= 0 and index < _map_row_panels.size():
-		var panel: PanelContainer = _map_row_panels[index]
-		if is_instance_valid(panel):
-			var cb := _find_cache_checkbox(panel)
-			if cb != null:
-				return cb.button_pressed
-	return bool(md.load_from_cache) if md != null else true
+## The map a new world would be built on: {map, generated, label} or {}.
+func _new_world_source() -> Dictionary:
+	if _nw_builtin_idx >= 0 and _nw_builtin_idx < _maps_resolved.size():
+		var md: MapDefinition = _maps_resolved[_nw_builtin_idx]
+		return {"map": WorldStore.map_ref_from_definition(md, ""), "generated": false, "label": md.display_name}
+	if is_nan(_sel_lat) or is_nan(_sel_lng):
+		return {}
+	var label := _place_label if not _place_label.is_empty() else "%.4f, %.4f" % [_sel_lat, _sel_lng]
+	return {"map": {"scene_path": MapDefinition.GENERATED_SCENE, "lat": _sel_lat, "lon": _sel_lng,
+		"label": label}, "generated": true, "label": label}
 
 
-func _find_cache_checkbox(node: Node) -> CheckBox:
-	if node is CheckBox:
-		var cb := node as CheckBox
-		if cb.text.findn("cache") >= 0:
-			return cb
-	for child in node.get_children():
-		var found := _find_cache_checkbox(child)
-		if found != null:
-			return found
-	return null
-
-
-func _on_start_pressed() -> void:
-	if _maps_list == null:
+func _refresh_new_world_panel() -> void:
+	if _nw_source_lbl == null:
 		return
-	var idx := _maps_selected_idx
-	if idx < 0 or idx >= _maps_resolved.size():
-		if _launch_status != null:
-			_launch_status.text = "Select a world from the list, or create one on the map."
+	for b in _nw_builtin_btns:
+		if is_instance_valid(b):
+			b.set_pressed_no_signal(int(b.get_meta("map_idx", -2)) == _nw_builtin_idx)
+	var src := _new_world_source()
+	if src.is_empty():
+		_nw_source_lbl.text = "Pick a place on the map, search an address, or enter coordinates."
+		_nw_status_lbl.text = ""
+		_nw_name.placeholder_text = "World name"
+		_nw_refetch.visible = false
+		_nw_warn_lbl.text = ""
+		_nw_start_btn.disabled = true
 		return
-	var md: MapDefinition = _maps_resolved[idx]
-	var path: String = md.scene_path.strip_edges()
-	if not MapDefinition.is_trusted_scene_path(path):
-		if _launch_status != null:
-			_launch_status.text = "Invalid map path."
-		return
-	if md.is_generated():
-		var ctx := get_node_or_null("/root/MapContext")
-		if ctx != null:
-			# Prefer cache unless the row checkbox is explicitly off. Also heal
-			# maps that were corrupted to load_from_cache=false by checkbox free.
-			var use_cache := _map_row_wants_cache(idx, md)
-			if md.load_from_cache != use_cache:
-				md.load_from_cache = use_cache
-			_touch_map_loaded(idx)
-			# Pass last-known site extents when the .tres still has 0 (= default)
-			# so TerrainLoader hits the same DEM/imagery cache keys as last visit.
-			var he := float(md.half_extent_m)
-			var dhe := float(md.detail_half_extent_m)
-			var ohe := float(md.osm_half_extent_m)
-			if he <= 0.0 or dhe <= 0.0 or ohe <= 0.0:
-				var meta := TerrainCacheSettings.get_meta_extents(md.latitude, md.longitude)
-				if he <= 0.0:
-					he = float(meta.get("half_extent_m", 0.0))
-				if dhe <= 0.0:
-					dhe = float(meta.get("detail_half_extent_m", 0.0))
-				if ohe <= 0.0:
-					ohe = float(meta.get("osm_half_extent_m", 0.0))
-				# Persist resolved extents onto the map so future Starts are stable.
-				if he > 0.0:
-					md.half_extent_m = he
-				if dhe > 0.0:
-					md.detail_half_extent_m = dhe
-				if ohe > 0.0:
-					md.osm_half_extent_m = ohe
-				var save_path := _maps_file_paths[idx] if idx < _maps_file_paths.size() else ""
-				if not save_path.is_empty():
-					ResourceSaver.save(md, save_path)
-			var force_refetch := not use_cache
-			ctx.set_pending(md.latitude, md.longitude, md.display_name, he,
-				false, dhe, ohe, force_refetch)
+	_nw_start_btn.disabled = false
+	var map: Dictionary = src["map"]
+	_nw_source_lbl.text = str(src["label"])
+	_nw_name.placeholder_text = "World name (default: %s)" % str(src["label"])
+	var others := WorldStore.worlds_on_map(map).size()
+	var bits: Array[String] = []
+	if bool(src["generated"]):
+		var lat := float(map["lat"])
+		var lon := float(map["lon"])
+		var cached := TerrainCacheSettings.has_warm_cache(lat, lon)
+		if cached:
+			var meta_path := "user://terrain_cache/extents_%s.json" % TerrainCacheSettings.coord_token(lat, lon)
+			var when := ""
+			if FileAccess.file_exists(meta_path):
+				when = " (downloaded %s)" % _relative_time(float(FileAccess.get_modified_time(meta_path)))
+			bits.append("Map data cached%s — starts in seconds." % when)
+		else:
+			bits.append("Map data not downloaded yet — the first start fetches terrain, imagery and OSM (~15–60 s).")
+		_nw_refetch.visible = cached
 	else:
-		_touch_map_loaded(idx)
-	if _pending_starshade:
-		_queue_starshade_design()
-		_pending_starshade = false
-	var path_file := MapDefinition.resolve_playable_scene_path(MapDefinition.normalize_scene_path(path))
-	var err := get_tree().change_scene_to_file(path_file)
-	if err != OK and _launch_status != null:
-		_launch_status.text = "Could not load scene (error %d)." % err
-
-
-func _setup_launch_save_load_ui() -> void:
-	if _save_load_ui != null:
-		return
-	_save_load_ui = SAVE_LOAD_UI_SCENE.instantiate() as CanvasLayer
-	_save_load_ui.name = "SaveLoadUI"
-	add_child(_save_load_ui)
-	if _save_load_ui.has_method("set_in_game_save_enabled"):
-		_save_load_ui.set_in_game_save_enabled(false)
-	if _save_load_ui.has_signal("continue_requested"):
-		_save_load_ui.continue_requested.connect(_on_continue_pressed)
-	if _save_load_ui.has_signal("load_slot_requested"):
-		_save_load_ui.load_slot_requested.connect(_on_load_slot_pressed)
-	if _save_load_ui.has_signal("save_slot_requested"):
-		_save_load_ui.save_slot_requested.connect(_on_launch_save_blocked)
-	if _save_load_ui.has_signal("delete_slot_requested"):
-		_save_load_ui.delete_slot_requested.connect(_on_launch_delete_slot)
-
-
-func _on_load_saved_pressed() -> void:
-	if _save_load_ui != null and _save_load_ui.has_method("show_panel"):
-		_save_load_ui.show_panel()
-
-
-func _on_load_slot_pressed(slot_index: int) -> void:
-	var sg := _save_game()
-	if sg == null:
-		if _launch_status != null:
-			_launch_status.text = "Save system not available."
-		return
-	var data := sg.load_manual_slot(slot_index)
-	if not _resume_from_save_payload(data, "Could not load that slot."):
-		if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
-			_save_load_ui.show_load_message("Could not load that slot.", false)
-		return
-	if _save_load_ui != null and _save_load_ui.has_method("hide_panel"):
-		_save_load_ui.hide_panel()
-
-
-func _on_launch_save_blocked(_slot_index: int) -> void:
-	if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
-		_save_load_ui.show_load_message("Start or load a world before saving.", false)
-
-
-func _on_launch_delete_slot(slot_index: int) -> void:
-	var sg := _save_game()
-	if sg == null:
-		return
-	sg.delete_manual_slot(slot_index)
-	if _save_load_ui != null and _save_load_ui.has_method("refresh_slot_list"):
-		_save_load_ui.refresh_slot_list()
-	if _continue_btn != null:
-		_continue_btn.disabled = sg == null or not sg.can_continue()
-
-
-func _resume_from_save_payload(data: Dictionary, fail_msg: String) -> bool:
-	var sg := _save_game()
-	if sg == null:
-		if _launch_status != null:
-			_launch_status.text = "Save system not available."
-		return false
-	if data.is_empty() or not sg.validate_payload(data):
-		if _launch_status != null:
-			_launch_status.text = fail_msg
-		return false
-	var want := MapDefinition.normalize_scene_path(str(data.get("scene_path", "")).strip_edges())
-	if not MapDefinition.is_trusted_scene_path(want):
-		want = MapDefinition.snapshot_scene_path(self)
-	var want_file := MapDefinition.resolve_playable_scene_path(want)
-	var payload := data.duplicate(true)
-	payload["scene_path"] = want
-	sg.set_pending_resume_payload(payload)
-	if MapDefinition.normalize_scene_path(want) == MapDefinition.GENERATED_SCENE:
-		var m: Dictionary = data.get("main", {}) as Dictionary
-		var ctx := get_node_or_null("/root/MapContext")
-		if ctx != null:
-			ctx.set_pending(float(m.get("latitude", 0.0)), float(m.get("longitude", 0.0)),
-				"", 0.0, true)
-	var err := get_tree().change_scene_to_file(want_file)
-	if err != OK:
-		sg.clear_pending_resume_payload()
-		if _launch_status != null:
-			_launch_status.text = "%s (error %d)." % [fail_msg, err]
-		return false
-	return true
-
-
-func _on_continue_pressed() -> void:
-	var sg := _save_game()
-	if sg == null:
-		if _launch_status != null:
-			_launch_status.text = "Save system not available."
-		return
-	var data := sg.load_continue_payload()
-	if not _resume_from_save_payload(data, "No valid save to continue."):
-		if _save_load_ui != null and _save_load_ui.has_method("show_load_message"):
-			_save_load_ui.show_load_message("No valid save to continue.", false)
-		return
-	if _save_load_ui != null and _save_load_ui.has_method("hide_panel"):
-		_save_load_ui.hide_panel()
+		bits.append("Built-in map.")
+		_nw_refetch.visible = false
+	if others > 0:
+		bits.append("%d world%s already on this map — a new one starts empty and leaves %s untouched." % [
+			others, "" if others == 1 else "s", "it" if others == 1 else "them"])
+	_nw_status_lbl.text = "  ".join(bits)
+	if _nw_refetch.visible and _nw_refetch.button_pressed:
+		_nw_warn_lbl.text = ("Re-downloads this map's terrain, imagery and OSM features. %s"
+			% ("Worlds already on this map will load the refreshed terrain; their builds are kept."
+				if others > 0 else ""))
+	else:
+		_nw_warn_lbl.text = ""
 
 
 func _on_quit_pressed() -> void:

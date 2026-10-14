@@ -145,6 +145,24 @@ func _test_break_floor() -> void:
 	_ok(reach.pond_level_m() >= 101.8 - 0.02, "pond never drains below air-break level")
 	_ok(not reach.primed, "ends un-primed")
 
+	# A REAL basin (narrow at the bottom, wide on top): with its stage curve the
+	# dead pool sits at the break LEVEL, not at the prismatic stock fraction —
+	# a bowl holds most of its water high up, so the prism put Mt Vernon's dead
+	# pool 0.67 m above the dip mouth and the siphon stalled early.
+	var bowl := _make_reach()
+	var curve := [[0.0, 100.0], [2000.0, 101.0], [8000.0, 102.0], [30000.0, 103.0]]
+	bowl.set_stage_curve(curve)
+	bowl.set_pond_level(102.9)
+	bowl.primed = true
+	for i in 20000:
+		bowl.step(1.0 / 3600.0, 0.0)
+	var eff := bowl.effective_break_level_m()
+	_approx(bowl.pond_level_m(), eff, 0.02, "curved basin drains to the break level itself")
+	_approx(bowl.pond_stock_l, PondBathymetry.stage_stock_for_level(curve, eff), 30.0,
+			"curved basin dead pool = curve stock at the break level")
+	bowl.set_pond(100.0, 103.0, 30000.0, 0.0)
+	_ok(bowl.stage_curve.is_empty(), "set_pond clears a previous turbine's curve")
+
 
 ## drainable_lph() is the flow engine's mass-conserving drain clamp: it must never
 ## return more than the stock above the air-break can supply in one step, so the

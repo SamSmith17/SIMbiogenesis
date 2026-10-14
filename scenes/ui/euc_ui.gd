@@ -54,6 +54,17 @@ func _update_display() -> void:
 	var current_speed_mps : float = euc_vehicle.get("current_speed_mps") if "current_speed_mps" in euc_vehicle else 0.0
 	var wh_per_mile : float = euc_vehicle.get("wh_per_mile") if "wh_per_mile" in euc_vehicle else 30.0
 	
+	# A fuel vehicle (a placed bus, van or skid steer reports no battery).
+	if battery_capacity <= 0.0:
+		battery_bar.value = 100.0
+		battery_bar.modulate = UITheme.C_INFO
+		battery_percent_label.text = "fuel"
+		battery_percent_label.add_theme_color_override("font_color", UITheme.C_INFO)
+		battery_wh_label.text = ""
+		distance_value.text = "%.1f mi" % (distance_meters / 1609.344)
+		speed_value.text = "%.0f mph" % (current_speed_mps * 2.23694)
+		range_value.text = "—"
+		return
 	# Calculate values
 	var battery_percent : float = (battery_wh / battery_capacity) * 100.0
 	var distance_miles : float = distance_meters / 1609.344  # meters to miles

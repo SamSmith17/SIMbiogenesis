@@ -7,6 +7,10 @@ shader_type spatial;
 // pattern does not stretch with the mound's non-uniform scale.
 render_mode cull_disabled, specular_disabled;
 
+// Cosmetic clock (SimFxRate): advances with the sim, time-lapsed and
+// capped, frozen dead while paused. Replaces TIME, which never stops.
+global uniform float fx_time_fire;
+
 uniform float heat = 1.0;
 uniform float ash = 0.0;
 
@@ -58,8 +62,8 @@ void fragment() {
 	// (`chunks` is centred on 0.5: 0.40 lights about three quarters of the bed,
 	// 0.63 a quarter of it — a bed of separate red coals, which is what embers are.)
 	float thr = mix(0.86, 0.40, sqrt(heat)) + rim * 0.22 * (1.0 - heat * 0.6);
-	float glow = smoothstep(thr, thr + 0.22, chunks + 0.12 * vnoise(wpos * 4.0 + vec3(0.0, TIME * 0.09, 0.0)));
-	glow *= 0.72 + 0.28 * sin(TIME * 1.4 + fine * 14.0 + wpos.x * 2.0);  // embers breathe
+	float glow = smoothstep(thr, thr + 0.22, chunks + 0.12 * vnoise(wpos * 4.0 + vec3(0.0, fx_time_fire * 0.09, 0.0)));
+	glow *= 0.72 + 0.28 * sin(fx_time_fire * 1.4 + fine * 14.0 + wpos.x * 2.0);  // embers breathe
 	vec3 ember_col = mix(vec3(0.85, 0.06, 0.008), vec3(1.0, 0.42, 0.07), heat * heat);
 	EMISSION = ember_col * glow * (0.7 + 1.5 * heat) * step(0.001, heat);
 }

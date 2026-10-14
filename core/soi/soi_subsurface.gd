@@ -6,6 +6,15 @@ extends MeshInstance3D
 func _ready() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://core/soi/shaders/soi_subsurface.gdshader")
+	TerrainBuilder.apply_soil_textures(mat)
+	# Draw the shell LAST among transparents. Vegetation is depth_prepass_alpha:
+	# its depth lands in the opaque pre-pass (so the terrain behind it is
+	# rejected) and its colour in the transparent pass. The shell sorts by its
+	# centre and writes depth (depth_draw_always), so whenever it sorted ahead of
+	# a tree it rejected that tree's colour pass too — nothing ever painted those
+	# pixels, and every such tree printed as a tree-shaped black hole in the
+	# Globe lens and the snowglobe. A container is drawn over its contents.
+	mat.render_priority = Material.RENDER_PRIORITY_MAX
 	material_override = mat
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	set_glass_enabled(true)

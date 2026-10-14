@@ -36,7 +36,7 @@ static func create_empty() -> CampAreaLayer:
 
 
 static func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/camp_areas_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("camp_areas", lat, lon)
 
 
 func save(lat: float, lon: float) -> bool:

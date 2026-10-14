@@ -13,32 +13,34 @@ const SPECS := {
 	# Tree families carry v3 REAL-WORLD dims: height_m (total, exact),
 	# crown_m (crown width, exact), trunk_cm (diameter), crown_base_pct
 	# (where the crown starts as % of height) and a shape archetype id
-	# (VegTreeArchetypes). Colors are unchanged. Non-tree families (shrub /
+	# (VegTreeArchetypes). Conifer colours were raised ~2.2x in sRGB on
+	# 2026-10-10: authored when they were TINTS, they sat at ~1-2 % linear
+	# reflectance (measured needle green is ~5-7 %) and pines printed black. Non-tree families (shrub /
 	# palm / cactus / grass / crops) keep the legacy width/height card dims.
 	"pine": {"height_m": 17.0, "crown_m": 7.0, "trunk_cm": 45.0,
 		"crown_base_pct": 8.0, "archetype": "conical",
-		"top": Color(0.05, 0.14, 0.06), "bottom": Color(0.07, 0.10, 0.04),
-		"highlight": Color(0.12, 0.24, 0.08),
+		"top": Color(0.13, 0.27, 0.12), "bottom": Color(0.11, 0.17, 0.08),
+		"highlight": Color(0.24, 0.38, 0.14),
 		"bark": Color(0.16, 0.11, 0.06)},
 	"spruce": {"height_m": 21.0, "crown_m": 6.0, "trunk_cm": 50.0,
 		"crown_base_pct": 5.0, "archetype": "conical",
-		"top": Color(0.04, 0.16, 0.08), "bottom": Color(0.06, 0.11, 0.05),
-		"highlight": Color(0.10, 0.22, 0.10),
+		"top": Color(0.10, 0.26, 0.15), "bottom": Color(0.09, 0.17, 0.09),
+		"highlight": Color(0.19, 0.35, 0.18),
 		"bark": Color(0.14, 0.10, 0.06)},
 	"cedar": {"height_m": 15.0, "crown_m": 8.5, "trunk_cm": 65.0,
 		"crown_base_pct": 10.0, "archetype": "conical",
-		"top": Color(0.08, 0.16, 0.09), "bottom": Color(0.10, 0.12, 0.06),
-		"highlight": Color(0.18, 0.28, 0.12),
+		"top": Color(0.16, 0.28, 0.14), "bottom": Color(0.15, 0.19, 0.09),
+		"highlight": Color(0.30, 0.42, 0.18),
 		"bark": Color(0.20, 0.12, 0.08)},
 	"fir": {"height_m": 23.0, "crown_m": 6.0, "trunk_cm": 55.0,
 		"crown_base_pct": 5.0, "archetype": "conical",
-		"top": Color(0.03, 0.12, 0.07), "bottom": Color(0.05, 0.09, 0.04),
-		"highlight": Color(0.09, 0.20, 0.09),
+		"top": Color(0.08, 0.23, 0.14), "bottom": Color(0.08, 0.15, 0.08),
+		"highlight": Color(0.17, 0.33, 0.17),
 		"bark": Color(0.15, 0.10, 0.05)},
 	"redwood": {"height_m": 45.0, "crown_m": 9.0, "trunk_cm": 200.0,
 		"crown_base_pct": 15.0, "archetype": "conical",
-		"top": Color(0.06, 0.18, 0.08), "bottom": Color(0.08, 0.12, 0.05),
-		"highlight": Color(0.14, 0.26, 0.10),
+		"top": Color(0.13, 0.29, 0.13), "bottom": Color(0.12, 0.19, 0.08),
+		"highlight": Color(0.25, 0.40, 0.16),
 		"bark": Color(0.28, 0.12, 0.08)},
 	"deciduous": {"height_m": 14.0, "crown_m": 11.0, "trunk_cm": 55.0,
 		"crown_base_pct": 32.0, "archetype": "round",
@@ -499,7 +501,7 @@ static func _build_bark_material_for_species(species: String, settings: Dictiona
 	if s.get(fam_bark) is Color:
 		s = s.duplicate()
 		s["bark_albedo_tint"] = s[fam_bark]
-	_apply_bark_uniforms(mat, s)
+	_apply_bark_uniforms(mat, s, bark_paint_color(spec.get("bark", Color(0.18, 0.12, 0.07))))
 	return mat
 
 
@@ -668,9 +670,9 @@ static func _deciduous_adapter_settings(spec: Dictionary, settings: Dictionary) 
 static func _pine_spec(settings: Dictionary, species: String = "pine") -> Dictionary:
 	var base: Dictionary = SPECS.get(species, SPECS["pine"]).duplicate(true)
 	var out := {
-		"top": base.get("top", Color(0.05, 0.14, 0.06)),
-		"bottom": base.get("bottom", Color(0.07, 0.10, 0.04)),
-		"highlight": base.get("highlight", Color(0.12, 0.24, 0.08)),
+		"top": base.get("top", Color(0.13, 0.27, 0.12)),
+		"bottom": base.get("bottom", Color(0.11, 0.17, 0.08)),
+		"highlight": base.get("highlight", Color(0.24, 0.38, 0.14)),
 		"bark": base.get("bark", Color(0.16, 0.11, 0.06)),
 	}
 	var height := clampf(float(settings.get("pine_height_m",
@@ -796,7 +798,7 @@ static func _build_deciduous_mesh(spec: Dictionary, settings_in: Dictionary) -> 
 		var proxy_uvs := PackedVector2Array()
 		var proxy_normals := PackedVector3Array()
 		var proxy_indices := PackedInt32Array()
-		var use_proxy := bool(settings.get("deciduous_shadow_proxy_enabled", true))
+		var use_proxy := bool(settings.get("deciduous_shadow_proxy_enabled", false))
 		if use_proxy:
 			var proxy_scale := float(settings.get("deciduous_shadow_proxy_scale", 1.06))
 			for c in clusters:
@@ -989,7 +991,7 @@ static func _apply_leaf_canopy_uniforms(mat: ShaderMaterial, species: String,
 	mat.set_shader_parameter("canopy_profile", 0)
 	mat.set_shader_parameter("leaf_color", Vector3(top.r, top.g, top.b))
 	mat.set_shader_parameter("leaf_shadow", Vector3(top.r * 0.32, top.g * 0.34, top.b * 0.30))
-	mat.set_shader_parameter("albedo_tint", Vector3(tint.r, tint.g, tint.b))
+	mat.set_shader_parameter("albedo_tint", tint_multiplier(tint, top))
 	mat.set_shader_parameter("highlight_tint", Vector3(hi.r, hi.g, hi.b))
 	mat.set_shader_parameter("wind_strength", float(settings.get("wind_strength", 0.03)))
 	mat.set_shader_parameter("sway_frequency", float(settings.get("wind_speed", 0.7)))
@@ -1976,11 +1978,25 @@ static func _build_card_mesh(card_w: float, card_h: float) -> ArrayMesh:
 	return mesh
 
 
+## The colour a bark texture is actually painted in. The SPECS bark values
+## sit at ~1-2 % linear reflectance (sRGB 0.15 brown) where real bark is
+## ~8-15 %, so a sunlit trunk printed black; dark barks get up to 1.8x in sRGB,
+## tapering to none for pale ones (birch / aspen stay white, not blown out).
+## Also the reference for tint_multiplier, so a picked bark tint equal to the
+## painted colour still means "untinted".
+const BARK_SRGB_GAIN := 1.8
+
+
+static func bark_paint_color(bark: Color) -> Color:
+	var g := lerpf(BARK_SRGB_GAIN, 1.0, clampf(bark.get_luminance() / 0.5, 0.0, 1.0))
+	return Color(minf(bark.r * g, 1.0), minf(bark.g * g, 1.0), minf(bark.b * g, 1.0), bark.a)
+
+
 static func _build_bark_texture(spec: Dictionary) -> Texture2D:
 	var size := 128
 	var img := Image.create(size, size, true, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
-	var bark: Color = spec.get("bark", Color(0.18, 0.12, 0.07))
+	var bark: Color = bark_paint_color(spec.get("bark", Color(0.18, 0.12, 0.07)))
 	var shadow := Color(0.03, 0.025, 0.02)
 	var n := FastNoiseLite.new()
 	n.seed = "bark".hash()
@@ -2115,11 +2131,16 @@ static func _apply_foliage_uniforms(mat: ShaderMaterial, species: String, settin
 		prefix = "deciduous"
 	var variant := str(settings.get("_variant_species", prefix))
 	var spec: Dictionary = SPECS.get(variant, SPECS.get(prefix, SPECS["shrub"]))
+	# Untinted = WHITE. The card texture is already painted in the species'
+	# top / bottom / highlight colours (_build_cluster_foliage_texture), and
+	# defaulting the tint to that same `top` colour applied it TWICE — in linear
+	# space a maple leaf came out ~(0.0007, 0.014, 0.0001): the far-range
+	# deciduous puffs and every pine bough rendered near-black. (The original
+	# line was `spec["top"].lerp(Color.WHITE, 0.0)` — a lerp toward white that
+	# had lost its weight.)
 	var tint: Color = settings.get("%s_albedo_tint" % variant,
 		settings.get("%s_albedo_tint" % prefix, Color.WHITE))
-	if tint == Color.WHITE:
-		tint = spec.get("top", Color.WHITE)
-	mat.set_shader_parameter("albedo_tint", Vector3(tint.r, tint.g, tint.b))
+	mat.set_shader_parameter("albedo_tint", tint_multiplier(tint, spec.get("top", Color.WHITE)))
 	var hi: Color = settings.get("%s_highlight_tint" % variant,
 		settings.get("%s_highlight_tint" % prefix, spec.get("highlight", Color(0.42, 0.52, 0.16))))
 	mat.set_shader_parameter("highlight_tint", Vector3(hi.r, hi.g, hi.b))
@@ -2210,7 +2231,8 @@ static func _wind_profile_for_species(species: String) -> float:
 	return 1.0
 
 
-static func _apply_bark_uniforms(mat: ShaderMaterial, settings: Dictionary) -> void:
+static func _apply_bark_uniforms(mat: ShaderMaterial, settings: Dictionary,
+		ref_bark: Color = Color.WHITE) -> void:
 	mat.set_shader_parameter("wind_strength", float(settings.get("wind_strength", 0.03)) * 0.3)
 	mat.set_shader_parameter("sway_frequency", float(settings.get("wind_speed", 0.7)))
 	mat.set_shader_parameter("wind_profile", 0.15)
@@ -2219,7 +2241,36 @@ static func _apply_bark_uniforms(mat: ShaderMaterial, settings: Dictionary) -> v
 	mat.set_shader_parameter("bark_color_jitter", float(settings.get("bark_color_jitter", 0.06)))
 	if settings.has("bark_albedo_tint"):
 		var c: Color = settings["bark_albedo_tint"]
-		mat.set_shader_parameter("albedo_tint", Vector3(c.r, c.g, c.b))
+		mat.set_shader_parameter("albedo_tint", tint_multiplier(c, ref_bark))
+
+
+## Style tints are COLOURS; the shaders' `albedo_tint` is a MULTIPLIER.
+##
+## A `*_albedo_tint` in the style holds the colour the player picked in Tune
+## look — and species variants are FILLED with their SPECS `top` (bark: `bark`)
+## colour (VegSpeciesCatalog.settings_with_variant). But the leaf texture, the
+## shell `leaf_color` and the bark texture are already painted in that same
+## authored colour, so passing the tint straight through applied the colour
+## TWICE: in linear space a maple leaf came out ~(0.001, 0.05, 0.001) — the
+## black far-range crowns and near-black conifers. The multiplier is the picked
+## colour ÷ the authored one (white = untinted), so the default reproduces the
+## authored colour exactly and a picked colour actually renders as that colour.
+## (Ratios are taken in sRGB; the uniform is `source_color`, and the gamma
+## curve makes linear(a)/linear(b) ≈ linear(a/b).)
+static func tint_multiplier(tint: Color, ref: Color) -> Vector3:
+	if tint.r > 0.99 and tint.g > 0.99 and tint.b > 0.99:
+		return Vector3.ONE
+	return Vector3(
+		clampf(tint.r / maxf(ref.r, 0.02), 0.25, 3.0),
+		clampf(tint.g / maxf(ref.g, 0.02), 0.25, 3.0),
+		clampf(tint.b / maxf(ref.b, 0.02), 0.25, 3.0))
+
+
+## The authored leaf colour a species' textures are painted in (the reference
+## for tint_multiplier on live tint pushes).
+static func reference_top(species: String) -> Color:
+	var spec: Dictionary = SPECS.get(species, SPECS.get(mesh_family(species), SPECS["shrub"]))
+	return spec.get("top", Color.WHITE)
 
 
 # ==================== PHASE 5: PALM / CACTUS / PHOTOCARD ====================
@@ -2473,6 +2524,60 @@ static func _build_photocard_mesh(species: String, settings: Dictionary,
 	mat.shader = FOLIAGE_SHADER
 	mat.set_shader_parameter("albedo_tex", photo)
 	_apply_foliage_uniforms(mat, family, settings)
+	# Exposure-match the photo to the species' painted colour (see
+	# photocard_exposure): multiplied onto whatever the player's tint asked for.
+	var exposure := photocard_exposure(photo, spec.get("top", Color(0.2, 0.35, 0.12)))
+	var picked: Vector3 = mat.get_shader_parameter("albedo_tint")
+	mat.set_shader_parameter("albedo_tint", picked * exposure)
+	# Live tint pushes (VegetationEnvironmentSync.apply_species_tints) keep it.
+	mat.set_meta(TINT_EXTRA_META, exposure)
 	_configure_foliage_cutout_shadow(mat)
 	mesh.surface_set_material(0, mat)
 	return mesh
+
+
+## A photocard is a PHOTOGRAPH: shot under its own (usually overcast) light,
+## its pixels average a dim grey-olive (pine.png ≈ sRGB 0.19), and the game
+## lights it a second time — so the photocard tier read as dark grey
+## silhouettes and every tree crossing the photocard distance popped darker.
+## This multiplier carries the photo's mean opaque colour onto the species'
+## painted `top` colour (half by luminance, half per channel, so the photo keeps
+## most of its own hue), making the photocard the same exposure as the
+## procedural tiers it swaps with. Measured once per texture.
+static var _photo_mean_cache: Dictionary = {}
+const TINT_EXTRA_META := &"veg_tint_extra"
+
+
+static func photocard_exposure(photo: Texture2D, top: Color) -> Vector3:
+	if photo == null:
+		return Vector3.ONE
+	var key := photo.get_instance_id()
+	var mean: Color
+	if _photo_mean_cache.has(key):
+		mean = _photo_mean_cache[key]
+	else:
+		mean = Color(-1, -1, -1)
+		var img := photo.get_image()
+		if img != null:
+			if img.is_compressed():
+				img.decompress()
+			var acc := Color(0, 0, 0, 0)
+			var n := 0
+			var step := maxi(1, img.get_width() / 96)
+			for y in range(0, img.get_height(), step):
+				for x in range(0, img.get_width(), step):
+					var c := img.get_pixel(x, y)
+					if c.a > 0.5:
+						acc += c
+						n += 1
+			if n > 0:
+				mean = acc / float(n)
+		_photo_mean_cache[key] = mean
+	if mean.r < 0.0:
+		return Vector3.ONE
+	var lum_ratio := top.get_luminance() / maxf(mean.get_luminance(), 0.02)
+	var out := Vector3.ZERO
+	for i in 3:
+		var per: float = float(top[i]) / maxf(float(mean[i]), 0.02)
+		out[i] = clampf(lerpf(lum_ratio, per, 0.5), 0.5, 3.0)
+	return out

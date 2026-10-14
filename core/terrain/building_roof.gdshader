@@ -47,15 +47,26 @@ float _asinh(float x) {
 	return log(x + sqrt(x * x + 1.0));
 }
 
+// Mercator y relative to the bbox centre (Taylor series of ∫ sec φ dφ). The
+// direct asinh(tan(lat)) difference loses ~1–2 m to float32 cancellation and
+// stepped the roof photo — see terrain_detail.gdshader, which this mirrors.
+float _merc_rel(float d, float sec0, float tan0) {
+	return sec0 * d * (1.0 + 0.5 * tan0 * d + (sec0 * sec0 + tan0 * tan0) * d * d / 6.0
+		+ tan0 * (5.0 * sec0 * sec0 + tan0 * tan0) * d * d * d / 24.0);
+}
+
 vec2 equirect_to_mercator_uv(vec2 uv, vec4 bbox_wesn) {
-	float lat = mix(bbox_wesn.w, bbox_wesn.z, uv.y);
-	lat = clamp(lat, -85.05112878, 85.05112878);
-	float lat_n = clamp(bbox_wesn.w, -85.05112878, 85.05112878);
-	float lat_s = clamp(bbox_wesn.z, -85.05112878, 85.05112878);
-	float my = _asinh(tan(radians(lat)));
-	float my_n = _asinh(tan(radians(lat_n)));
-	float my_s = _asinh(tan(radians(lat_s)));
-	float v = (my_n - my) / max(my_n - my_s, 1e-12);
+	float lat_n = radians(clamp(bbox_wesn.w, -85.05112878, 85.05112878));
+	float lat_s = radians(clamp(bbox_wesn.z, -85.05112878, 85.05112878));
+	float span = lat_s - lat_n;
+	float phi0 = 0.5 * (lat_n + lat_s);
+	float sec0 = 1.0 / cos(phi0);
+	float tan0 = tan(phi0);
+	float m_n = _merc_rel(-0.5 * span, sec0, tan0);
+	float m_s = _merc_rel(0.5 * span, sec0, tan0);
+	float m = _merc_rel(span * (uv.y - 0.5), sec0, tan0);
+	float denom = m_n - m_s;
+	float v = abs(denom) > 1e-12 ? (m_n - m) / denom : uv.y;
 	return vec2(uv.x, v);
 }
 

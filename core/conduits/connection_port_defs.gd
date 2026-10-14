@@ -93,6 +93,28 @@ static func default_ports_for_model(model_id: String, dims: Dictionary = {}) -> 
 				Vector3(0, 0.15, 1), "output", "output", "water", "",
 				DEFAULT_APPROACH_M, "poly_penstock"),
 		])
+	# AliExpress micro Pelton: ports MEASURED off the GLB in model-root metres
+	# (the generic hydro box below would put the inlet on a face that has no
+	# fitting). The penstock inlet IS the hose-barb fitting through the
+	# housing wall (+X side, 0.084 m off the shaft = the pitch radius, at the
+	# housing's mid height); tailwater falls out of the open housing bottom,
+	# clear of the stepper generator hung underneath; DC comes off that
+	# generator's flank.
+	if model_id == "ali_pelton":
+		return _normalize_ports([
+			make_port("penstock_in", "Nozzle inlet (1/4\u2033 NPT barb)",
+				Vector3(0.130, -0.0356, 0.084), Vector3(1, 0, 0), "res_in_0",
+				"input", "water", "", DEFAULT_APPROACH_M, "poly_penstock"),
+			make_port("tailrace", "Housing bottom (tailwater)",
+				Vector3(-0.07, -0.076, -0.07), Vector3(-0.4, -1, -0.4),
+				"res_out_0", "output", "water", "", DEFAULT_APPROACH_M),
+			make_port("dc_pos", "DC +",
+				Vector3(0.043, -0.12, 0.02), Vector3(1, 0, 0),
+				"res_out_1_pos", "positive", "dc_electricity", "", DEFAULT_APPROACH_M),
+			make_port("dc_neg", "DC \u2212",
+				Vector3(0.043, -0.12, -0.02), Vector3(1, 0, 0),
+				"res_out_1_neg", "negative", "dc_electricity", "", DEFAULT_APPROACH_M),
+		])
 	# Hydro turbines. Without these a placed turbine has NO ports at all until
 	# the player authors them in the Connection Ports modal, so there is nothing
 	# to attach a penstock to. Handle ids follow the preset's port order:

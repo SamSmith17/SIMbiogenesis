@@ -20,12 +20,17 @@ extends Node
 ## Sections drawn in this order; anything not listed is appended alphabetically.
 const SECTION_ORDER: Array[String] = [
 	"graph_sim", "flow_engine", "npc_population", "npc_dots", "npc_host", "crowd_sim",
-	"crowd_render", "conduits_3d", "world_env", "terrain_tick", "drone",
+	"crowd_render", "crowd_raster", "camp_power", "npc_persist", "npc_venues", "npc_peaks",
+	"conduits_3d", "world_env", "terrain_tick", "drone",
 	"prop_ticks", "canvas_draw",
 ]
 
 ## Exponential smoothing factor for the displayed averages (per frame).
 const SMOOTH := 0.10
+## PEAKS: the worst single frame per section over this window. The smoothed
+## average hides a 2 Hz sim tick entirely (a 50 ms spike every 30 frames reads
+## as a few ms), and at high time scales that spike IS the stutter.
+const PEAK_WINDOW_S := 2.0
 
 var _enabled: bool = false
 
@@ -41,6 +46,10 @@ var _calls_display: Dictionary = {}
 
 var _frame_ms_display: float = 0.0
 var _fps_display: float = 0.0
+## section -> [current-window max ms, previous-window max ms]; frame likewise.
+var _peak: Dictionary = {}
+var _frame_peak := [0.0, 0.0]
+var _peak_t := 0.0
 
 var _hud: CanvasLayer = null
 var _label: Control = null
@@ -75,10 +84,20 @@ func snapshot() -> Dictionary:
 		"enabled": _enabled,
 		"fps": _fps_display,
 		"frame_ms": _frame_ms_display,
+		"frame_ms_peak": maxf(float(_frame_peak[0]), float(_frame_peak[1])),
 		"sections_ms": sections,
+		"sections_peak_ms": _peak_snapshot(),
 		"calls": calls,
 		"render": render_snapshot(),
 	}
+
+
+func _peak_snapshot() -> Dictionary:
+	var out := {}
+	for k in _peak.keys():
+		var p: Array = _peak[k]
+		out[str(k)] = maxf(float(p[0]), float(p[1]))
+	return out
 
 
 ## Godot Performance monitors — primitives / draw calls / nodes (for budgets).
@@ -336,10 +355,20 @@ func _process(delta: float) -> void:
 	# Roll the just-finished frame's accumulators into the smoothed display set.
 	_frame_ms_display = lerp(_frame_ms_display, delta * 1000.0, SMOOTH)
 	_fps_display = lerp(_fps_display, float(Engine.get_frames_per_second()), SMOOTH)
+	_peak_t += delta
+	if _peak_t >= PEAK_WINDOW_S:
+		_peak_t = 0.0
+		_frame_peak = [0.0, float(_frame_peak[0])]
+		for k in _peak.keys():
+			_peak[k] = [0.0, float((_peak[k] as Array)[0])]
+	_frame_peak[0] = maxf(float(_frame_peak[0]), delta * 1000.0)
 	var seen: Dictionary = {}
 	for section: String in _accum.keys():
 		seen[section] = true
 		var ms: float = float(_accum[section]) / 1000.0
+		var pk: Array = _peak.get(section, [0.0, 0.0])
+		pk[0] = maxf(float(pk[0]), ms)
+		_peak[section] = pk
 		_display[section] = lerp(float(_display.get(section, ms)), ms, SMOOTH)
 		_calls_display[section] = lerp(float(_calls_display.get(section, 0.0)),
 			float(_calls.get(section, 0)), SMOOTH)
@@ -388,6 +417,8 @@ func _draw_hud() -> void:
 	# Header — overall frame budget (60 fps = 16.67 ms).
 	rows.append(["F3 · Perf", "%d fps  %s" % [int(round(_fps_display)), _fmt_ms(_frame_ms_display)],
 		_budget_color(_frame_ms_display)])
+	var fpk := maxf(float(_frame_peak[0]), float(_frame_peak[1]))
+	rows.append(["frame peak (2 s)", _fmt_ms(fpk), _budget_color(fpk)])
 
 	# Godot's built-in global monitors (render + script totals, node count).
 	var proc_ms := Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
@@ -416,7 +447,10 @@ func _draw_hud() -> void:
 			continue
 		var calls: int = int(round(float(_calls_display.get(section, 0.0))))
 		var suffix := "  ×%d" % calls if calls > 1 else ""
-		rows.append([section, _fmt_ms(ms) + suffix, _budget_color(ms * 3.0)])
+		var pka: Array = _peak.get(section, [0.0, 0.0])
+		var pkv := maxf(float(pka[0]), float(pka[1]))
+		var pk_txt := "  pk %.1f" % pkv if pkv > ms * 1.5 and pkv > 0.5 else ""
+		rows.append([section, _fmt_ms(ms) + pk_txt + suffix, _budget_color(maxf(ms * 3.0, pkv))])
 
 	rows.append(["— render —", "", Color(0.6, 0.6, 0.65)])
 	rows.append(["draw calls", str(draw_calls), Color(0.85, 0.85, 0.9)])
@@ -425,9 +459,9 @@ func _draw_hud() -> void:
 
 	# Background panel sized to content.
 	var h := line_h * rows.size() + pad * 2.0
-	c.custom_minimum_size = Vector2(300, h)
-	c.draw_rect(Rect2(Vector2.ZERO, Vector2(300, h)), Color(0.03, 0.04, 0.06, 0.82))
-	c.draw_rect(Rect2(Vector2.ZERO, Vector2(300, h)), Color(0.4, 0.5, 0.7, 0.5), false, 1.0)
+	c.custom_minimum_size = Vector2(350, h)
+	c.draw_rect(Rect2(Vector2.ZERO, Vector2(350, h)), Color(0.03, 0.04, 0.06, 0.82))
+	c.draw_rect(Rect2(Vector2.ZERO, Vector2(350, h)), Color(0.4, 0.5, 0.7, 0.5), false, 1.0)
 
 	var y := pad + line_h - 4.0
 	for row: Array in rows:
@@ -438,7 +472,7 @@ func _draw_hud() -> void:
 
 	# Second panel: F4 node histogram (counts of actively-processing scripts).
 	if not _hist_lines.is_empty():
-		var hx := 312.0
+		var hx := 362.0
 		var hw := 340.0
 		var hh := line_h * (_hist_lines.size() + 1) + pad * 2.0
 		c.draw_rect(Rect2(Vector2(hx, 0), Vector2(hw, hh)), Color(0.03, 0.04, 0.06, 0.85))

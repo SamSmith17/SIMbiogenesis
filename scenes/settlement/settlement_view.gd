@@ -10,11 +10,11 @@ extends Node3D
 ##
 ## ## Three rules this file exists to hold
 ##
-## 1. **The clock is NEVER claimed.** `soi_snowglobe_camera.gd` opens with
-##    `push_clock_claim("soi_snowglobe", {"time_scale": 0.0})` — it freezes the
-##    sim, because it is an inspector for a frozen diorama. This view's entire
-##    premise is the opposite: you are here to watch the settlement RUN. Do not
-##    copy that line.
+## 1. **The clock is NEVER claimed.** The SoI snowglobe and the graph's
+##    Elevation view used to freeze the sim (time_scale 0) as inspectors for a
+##    frozen diorama; both were changed to run live. This view's entire premise
+##    is that you are here to watch the settlement RUN — never reintroduce a
+##    clock freeze here.
 ## 2. **No orders.** Selection opens a card and can follow someone; there is no
 ##    verb anywhere in this view that tells a person what to do. The player's
 ##    levers are the routine editor, the chore board, priorities, space tagging
@@ -315,6 +315,20 @@ func _select_at(screen_pos: Vector2) -> void:
 		hit["pos"] = Vector2(p.x, p.z)
 	_selection = hit
 	selection_changed.emit(_selection)
+
+
+## Fly the camera to a person and select them (the FUCK YES!!! toast's
+## click-to-look). Falls back to `at` when they are no longer on the roster.
+func look_at_person(agent_id: String, at: Vector2) -> void:
+	if _cam == null:
+		return
+	var p := _agent_pos(agent_id)
+	if p == Vector2.INF:
+		p = at
+	_cam.look_at_xz(p)
+	if p != Vector2.INF and not agent_id.is_empty():
+		_selection = {"kind": "npc", "agent_id": agent_id, "pos": p, "detail": _agent_detail(agent_id)}
+		selection_changed.emit(_selection)
 
 
 func _agent_pos(agent_id: String) -> Vector2:

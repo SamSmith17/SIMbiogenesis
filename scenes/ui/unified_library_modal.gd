@@ -150,7 +150,7 @@ func _build_ui() -> void:
 	_tabs.tab_changed.connect(func(_i: int) -> void: _refresh_action_buttons())
 	root.add_child(_tabs)
 
-	for tab_name in ["Building", "Graph nodes", "Vegetation", "Structures"]:
+	for tab_name in ["Building", "Graph nodes", "Vegetation", "Structures", "Vehicles"]:
 		var page := VBoxContainer.new()
 		page.name = tab_name
 		page.add_theme_constant_override("separation", UITheme.SPACE_SM)
@@ -287,12 +287,22 @@ func _populate() -> void:
 	]
 	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true,
 		ModelCatalog.GENERIC_BOX_ID: true}
+	var vehicles: Array = []
 	for m in ModelCatalog.all_models():
 		var mid := str(m.get("id", ""))
 		if mid.is_empty() or seen.has(mid):
 			continue
 		seen[mid] = true
 		var cat := str(m.get("category", ""))
+		if not PlacedVehicle.profile_for_model(mid).is_empty():
+			# Driveable: its own tab. Placed like any prop; Interact drives it.
+			vehicles.append({
+				"kind": "structure",
+				"label": str(m.get("label", mid)),
+				"detail": "Place it, then walk up and Interact to drive (X gets out). Click it to move or delete.",
+				"model_id": mid,
+			})
+			continue
 		var prefix := ""
 		if cat == "nature":
 			prefix = "Nature: "
@@ -307,6 +317,7 @@ func _populate() -> void:
 			"model_id": mid,
 		})
 	_entries["Structures"] = structs
+	_entries["Vehicles"] = vehicles
 
 	_apply_filter()
 	_status.text = "Pick an item → Use selected (double-click). 3D-linked graph nodes also offer Place in world."

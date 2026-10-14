@@ -1,0 +1,9326 @@
+{
+ "preset": "Stellarator",
+ "file": "Stellarator.json",
+ "linkagelab": {
+  "sha": "e11e875ed415dbd87badc4b5ed928c80d6508cbb",
+  "ref": "main"
+ },
+ "savedFoldDeg": 160.5,
+ "foldedDeg": 5,
+ "deployedDeg": 160.5,
+ "assemblyPoseDeg": 74.975,
+ "saved": {
+  "stats": {
+   "beams": 43,
+   "baseBeams": 43,
+   "brackets": 20,
+   "bolts": 65,
+   "washers": 64,
+   "placements": 0,
+   "panels": 3,
+   "beamsByStackType": {
+    "horizontal-bottom": 8,
+    "horizontal-top": 8,
+    "vertical": 12,
+    "vertical-cap": 3,
+    "support-beam": 4,
+    "support-beam-reciprocal": 8
+   },
+   "maxRad": 102.8301,
+   "maxHeight": 52.3343
+  },
+  "parts": {
+   "count": 199,
+   "byKind": {
+    "beam": 43,
+    "bolt": 65,
+    "washer": 64,
+    "bracket": 20,
+    "panel": 3,
+    "wall": 4
+   },
+   "keys": [
+    "beam:horizontal-bottom:a0:m0:s0:A:L0",
+    "beam:horizontal-bottom:a0:m0:s0:B:L1",
+    "beam:horizontal-top:a0:m0:s1:A:L0",
+    "beam:horizontal-top:a0:m0:s1:B:L1",
+    "beam:vertical:a0:m0:s0:B:L0",
+    "beam:vertical:a0:m0:s0:A:L1",
+    "beam:vertical:a0:m0:s0:B:L2",
+    "beam:vertical-cap:a0:m0:s-1:B:L0",
+    "beam:vertical-cap:a0:m0:s-1:A:L1",
+    "beam:vertical-cap:a0:m0:s-1:B:L2",
+    "beam:horizontal-bottom:a0:m1:s2:A:L0",
+    "beam:horizontal-bottom:a0:m1:s2:B:L1",
+    "beam:horizontal-top:a0:m1:s3:A:L0",
+    "beam:horizontal-top:a0:m1:s3:B:L1",
+    "beam:vertical:a0:m1:s1:B:L0",
+    "beam:vertical:a0:m1:s1:A:L1",
+    "beam:vertical:a0:m1:s1:B:L2",
+    "beam:horizontal-bottom:a0:m2:s4:A:L0",
+    "beam:horizontal-bottom:a0:m2:s4:B:L1",
+    "beam:horizontal-top:a0:m2:s5:A:L0",
+    "beam:horizontal-top:a0:m2:s5:B:L1",
+    "beam:vertical:a0:m2:s2:B:L0",
+    "beam:vertical:a0:m2:s2:A:L1",
+    "beam:vertical:a0:m2:s2:B:L2",
+    "beam:horizontal-bottom:a0:m3:s6:A:L0",
+    "beam:horizontal-bottom:a0:m3:s6:B:L1",
+    "beam:horizontal-top:a0:m3:s7:A:L0",
+    "beam:horizontal-top:a0:m3:s7:B:L1",
+    "beam:vertical:a0:m3:s3:B:L0",
+    "beam:vertical:a0:m3:s3:A:L1",
+    "beam:vertical:a0:m3:s3:B:L2",
+    "beam:support-beam:a0:m0:s0:-:L0",
+    "beam:support-beam:a0:m1:s1:-:L0",
+    "beam:support-beam:a0:m2:s2:-:L0",
+    "beam:support-beam:a0:m3:s3:-:L0",
+    "beam:support-beam-reciprocal:a0:m0:s4:A:L0",
+    "beam:support-beam-reciprocal:a0:m0:s5:B:L0",
+    "beam:support-beam-reciprocal:a0:m1:s6:A:L0",
+    "beam:support-beam-reciprocal:a0:m1:s7:B:L0",
+    "beam:support-beam-reciprocal:a0:m2:s8:A:L0",
+    "beam:support-beam-reciprocal:a0:m2:s9:B:L0",
+    "beam:support-beam-reciprocal:a0:m3:s10:A:L0",
+    "beam:support-beam-reciprocal:a0:m3:s11:B:L0",
+    "bolt:hpivot:a0:m0:bottom:inner",
+    "bolt:hpivot:a0:m0:bottom:outer",
+    "bolt:hpivot:a0:m0:top:inner",
+    "bolt:hpivot:a0:m0:top:outer",
+    "bolt:vstack:a0:m0:bottom:inner",
+    "bolt:vstack:a0:m0:bottom:outer",
+    "bolt:vstack:a0:m0:top:outer",
+    "bolt:vstack:a0:m0:top:inner",
+    "bolt:vstack:a0:m0:center:center",
+    "bolt:vstack:a0:m0:bottom:inner:cap",
+    "bolt:vstack:a0:m0:bottom:outer:cap",
+    "bolt:vstack:a0:m0:top:outer:cap",
+    "bolt:vstack:a0:m0:top:inner:cap",
+    "bolt:vstack:a0:m0:center:center:cap",
+    "bolt:hstack:a0:m0:bottom:center",
+    "bolt:hstack:a0:m0:top:center",
+    "bolt:hpivot:a0:m1:bottom:inner",
+    "bolt:hpivot:a0:m1:bottom:outer",
+    "bolt:hpivot:a0:m1:top:inner",
+    "bolt:hpivot:a0:m1:top:outer",
+    "bolt:vstack:a0:m1:bottom:inner",
+    "bolt:vstack:a0:m1:bottom:outer",
+    "bolt:vstack:a0:m1:top:outer",
+    "bolt:vstack:a0:m1:top:inner",
+    "bolt:vstack:a0:m1:center:center",
+    "bolt:hstack:a0:m1:bottom:center",
+    "bolt:hstack:a0:m1:top:center",
+    "bolt:hpivot:a0:m2:bottom:inner",
+    "bolt:hpivot:a0:m2:bottom:outer",
+    "bolt:hpivot:a0:m2:top:inner",
+    "bolt:hpivot:a0:m2:top:outer",
+    "bolt:vstack:a0:m2:bottom:inner",
+    "bolt:vstack:a0:m2:bottom:outer",
+    "bolt:vstack:a0:m2:top:outer",
+    "bolt:vstack:a0:m2:top:inner",
+    "bolt:vstack:a0:m2:center:center",
+    "bolt:hstack:a0:m2:bottom:center",
+    "bolt:hstack:a0:m2:top:center",
+    "bolt:hpivot:a0:m3:bottom:inner",
+    "bolt:hpivot:a0:m3:bottom:outer",
+    "bolt:hpivot:a0:m3:top:inner",
+    "bolt:hpivot:a0:m3:top:outer",
+    "bolt:vstack:a0:m3:bottom:inner",
+    "bolt:vstack:a0:m3:bottom:outer",
+    "bolt:vstack:a0:m3:top:outer",
+    "bolt:vstack:a0:m3:top:inner",
+    "bolt:vstack:a0:m3:center:center",
+    "bolt:hstack:a0:m3:bottom:center",
+    "bolt:hstack:a0:m3:top:center",
+    "bolt:rcp-ring:r4:a0",
+    "bolt:rcp-ring:r5:a0",
+    "bolt:rcp-ring:r6:a0",
+    "bolt:rcp-ring:r7:a0",
+    "bolt:rcp-ring:r8:a0",
+    "bolt:rcp-ring:r9:a0",
+    "bolt:rcp-ring:r10:a0",
+    "bolt:rcp-ring:r11:a0",
+    "bolt:rcp-cross:r4-9:intersection:a0",
+    "bolt:rcp-cross:r4-11:intersection:a0",
+    "bolt:rcp-cross:r5-6:intersection:a0",
+    "bolt:rcp-cross:r5-8:intersection:a0",
+    "bolt:rcp-cross:r6-11:intersection:a0",
+    "bolt:rcp-cross:r7-8:intersection:a0",
+    "bolt:rcp-cross:r7-10:intersection:a0",
+    "bolt:rcp-cross:r9-10:intersection:a0",
+    "washer:hpivot:a0:m0:bottom:inner:g0",
+    "washer:hpivot:a0:m0:bottom:outer:g0",
+    "washer:hpivot:a0:m0:top:inner:g0",
+    "washer:hpivot:a0:m0:top:outer:g0",
+    "washer:vstack:a0:m0:bottom:inner:g0",
+    "washer:vstack:a0:m0:bottom:inner:g1",
+    "washer:vstack:a0:m0:bottom:outer:g0",
+    "washer:vstack:a0:m0:bottom:outer:g1",
+    "washer:vstack:a0:m0:top:outer:g0",
+    "washer:vstack:a0:m0:top:outer:g1",
+    "washer:vstack:a0:m0:top:inner:g0",
+    "washer:vstack:a0:m0:top:inner:g1",
+    "washer:vstack:a0:m0:center:center:g0",
+    "washer:vstack:a0:m0:center:center:g1",
+    "washer:hstack:a0:m0:bottom:center:g0",
+    "washer:hstack:a0:m0:top:center:g0",
+    "washer:hpivot:a0:m1:bottom:inner:g0",
+    "washer:hpivot:a0:m1:bottom:outer:g0",
+    "washer:hpivot:a0:m1:top:inner:g0",
+    "washer:hpivot:a0:m1:top:outer:g0",
+    "washer:vstack:a0:m1:bottom:inner:g0",
+    "washer:vstack:a0:m1:bottom:inner:g1",
+    "washer:vstack:a0:m1:bottom:outer:g0",
+    "washer:vstack:a0:m1:bottom:outer:g1",
+    "washer:vstack:a0:m1:top:outer:g0",
+    "washer:vstack:a0:m1:top:outer:g1",
+    "washer:vstack:a0:m1:top:inner:g0",
+    "washer:vstack:a0:m1:top:inner:g1",
+    "washer:vstack:a0:m1:center:center:g0",
+    "washer:vstack:a0:m1:center:center:g1",
+    "washer:hstack:a0:m1:bottom:center:g0",
+    "washer:hstack:a0:m1:top:center:g0",
+    "washer:hpivot:a0:m2:bottom:inner:g0",
+    "washer:hpivot:a0:m2:bottom:outer:g0",
+    "washer:hpivot:a0:m2:top:inner:g0",
+    "washer:hpivot:a0:m2:top:outer:g0",
+    "washer:vstack:a0:m2:bottom:inner:g0",
+    "washer:vstack:a0:m2:bottom:inner:g1",
+    "washer:vstack:a0:m2:bottom:outer:g0",
+    "washer:vstack:a0:m2:bottom:outer:g1",
+    "washer:vstack:a0:m2:top:outer:g0",
+    "washer:vstack:a0:m2:top:outer:g1",
+    "washer:vstack:a0:m2:top:inner:g0",
+    "washer:vstack:a0:m2:top:inner:g1",
+    "washer:vstack:a0:m2:center:center:g0",
+    "washer:vstack:a0:m2:center:center:g1",
+    "washer:hstack:a0:m2:bottom:center:g0",
+    "washer:hstack:a0:m2:top:center:g0",
+    "washer:hpivot:a0:m3:bottom:inner:g0",
+    "washer:hpivot:a0:m3:bottom:outer:g0",
+    "washer:hpivot:a0:m3:top:inner:g0",
+    "washer:hpivot:a0:m3:top:outer:g0",
+    "washer:vstack:a0:m3:bottom:inner:g0",
+    "washer:vstack:a0:m3:bottom:inner:g1",
+    "washer:vstack:a0:m3:bottom:outer:g0",
+    "washer:vstack:a0:m3:bottom:outer:g1",
+    "washer:vstack:a0:m3:top:outer:g0",
+    "washer:vstack:a0:m3:top:outer:g1",
+    "washer:vstack:a0:m3:top:inner:g0",
+    "washer:vstack:a0:m3:top:inner:g1",
+    "washer:vstack:a0:m3:center:center:g0",
+    "washer:vstack:a0:m3:center:center:g1",
+    "washer:hstack:a0:m3:bottom:center:g0",
+    "washer:hstack:a0:m3:top:center:g0",
+    "bracket:a0:m0:bottom:outer",
+    "bracket:a0:m0:top:outer",
+    "bracket:a0:m0:bottom:inner",
+    "bracket:a0:m0:top:inner",
+    "bracket:a0:m0:bottom:outer:cap",
+    "bracket:a0:m0:top:outer:cap",
+    "bracket:a0:m0:bottom:inner:cap",
+    "bracket:a0:m0:top:inner:cap",
+    "bracket:a0:m1:bottom:outer",
+    "bracket:a0:m1:top:outer",
+    "bracket:a0:m1:bottom:inner",
+    "bracket:a0:m1:top:inner",
+    "bracket:a0:m2:bottom:outer",
+    "bracket:a0:m2:top:outer",
+    "bracket:a0:m2:bottom:inner",
+    "bracket:a0:m2:top:inner",
+    "bracket:a0:m3:bottom:outer",
+    "bracket:a0:m3:top:outer",
+    "bracket:a0:m3:bottom:inner",
+    "bracket:a0:m3:top:inner",
+    "panel:0",
+    "panel:1",
+    "panel:2",
+    "wall:s0:lower",
+    "wall:s1:upper",
+    "wall:s2:lower",
+    "wall:s3:lower"
+   ],
+   "joints": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:bottom:inner:cap",
+    "joint:a0:m0:bottom:outer:cap",
+    "joint:a0:m0:top:outer:cap",
+    "joint:a0:m0:top:inner:cap",
+    "joint:a0:m0:center:center:cap",
+    "joint:a0:m0:bottom:center",
+    "joint:a0:m0:top:center",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:bottom:center",
+    "joint:a0:m1:top:center",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:bottom:center",
+    "joint:a0:m2:top:center",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:bottom:center",
+    "joint:a0:m3:top:center",
+    "bolt:rcp-ring:r4:a0",
+    "bolt:rcp-ring:r5:a0",
+    "bolt:rcp-ring:r6:a0",
+    "bolt:rcp-ring:r7:a0",
+    "bolt:rcp-ring:r8:a0",
+    "bolt:rcp-ring:r9:a0",
+    "bolt:rcp-ring:r10:a0",
+    "bolt:rcp-ring:r11:a0",
+    "bolt:rcp-cross:r4-9:intersection:a0",
+    "bolt:rcp-cross:r4-11:intersection:a0",
+    "bolt:rcp-cross:r5-6:intersection:a0",
+    "bolt:rcp-cross:r5-8:intersection:a0",
+    "bolt:rcp-cross:r6-11:intersection:a0",
+    "bolt:rcp-cross:r7-8:intersection:a0",
+    "bolt:rcp-cross:r7-10:intersection:a0",
+    "bolt:rcp-cross:r9-10:intersection:a0",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:bottom:center",
+    "joint:a0:m0:top:center",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:bottom:center",
+    "joint:a0:m1:top:center",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:bottom:center",
+    "joint:a0:m2:top:center",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:bottom:center",
+    "joint:a0:m3:top:center",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:bottom:outer:cap",
+    "joint:a0:m0:top:outer:cap",
+    "joint:a0:m0:bottom:inner:cap",
+    "joint:a0:m0:top:inner:cap",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:top:inner",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ]
+  }
+ },
+ "deployed": {
+  "stats": {
+   "beams": 43,
+   "baseBeams": 43,
+   "brackets": 20,
+   "bolts": 65,
+   "washers": 64,
+   "placements": 0,
+   "panels": 3,
+   "beamsByStackType": {
+    "horizontal-bottom": 8,
+    "horizontal-top": 8,
+    "vertical": 12,
+    "vertical-cap": 3,
+    "support-beam": 4,
+    "support-beam-reciprocal": 8
+   },
+   "maxRad": 102.8301,
+   "maxHeight": 52.3343
+  },
+  "parts": {
+   "count": 199,
+   "byKind": {
+    "beam": 43,
+    "bolt": 65,
+    "washer": 64,
+    "bracket": 20,
+    "panel": 3,
+    "wall": 4
+   },
+   "keys": [
+    "beam:horizontal-bottom:a0:m0:s0:A:L0",
+    "beam:horizontal-bottom:a0:m0:s0:B:L1",
+    "beam:horizontal-top:a0:m0:s1:A:L0",
+    "beam:horizontal-top:a0:m0:s1:B:L1",
+    "beam:vertical:a0:m0:s0:B:L0",
+    "beam:vertical:a0:m0:s0:A:L1",
+    "beam:vertical:a0:m0:s0:B:L2",
+    "beam:vertical-cap:a0:m0:s-1:B:L0",
+    "beam:vertical-cap:a0:m0:s-1:A:L1",
+    "beam:vertical-cap:a0:m0:s-1:B:L2",
+    "beam:horizontal-bottom:a0:m1:s2:A:L0",
+    "beam:horizontal-bottom:a0:m1:s2:B:L1",
+    "beam:horizontal-top:a0:m1:s3:A:L0",
+    "beam:horizontal-top:a0:m1:s3:B:L1",
+    "beam:vertical:a0:m1:s1:B:L0",
+    "beam:vertical:a0:m1:s1:A:L1",
+    "beam:vertical:a0:m1:s1:B:L2",
+    "beam:horizontal-bottom:a0:m2:s4:A:L0",
+    "beam:horizontal-bottom:a0:m2:s4:B:L1",
+    "beam:horizontal-top:a0:m2:s5:A:L0",
+    "beam:horizontal-top:a0:m2:s5:B:L1",
+    "beam:vertical:a0:m2:s2:B:L0",
+    "beam:vertical:a0:m2:s2:A:L1",
+    "beam:vertical:a0:m2:s2:B:L2",
+    "beam:horizontal-bottom:a0:m3:s6:A:L0",
+    "beam:horizontal-bottom:a0:m3:s6:B:L1",
+    "beam:horizontal-top:a0:m3:s7:A:L0",
+    "beam:horizontal-top:a0:m3:s7:B:L1",
+    "beam:vertical:a0:m3:s3:B:L0",
+    "beam:vertical:a0:m3:s3:A:L1",
+    "beam:vertical:a0:m3:s3:B:L2",
+    "beam:support-beam:a0:m0:s0:-:L0",
+    "beam:support-beam:a0:m1:s1:-:L0",
+    "beam:support-beam:a0:m2:s2:-:L0",
+    "beam:support-beam:a0:m3:s3:-:L0",
+    "beam:support-beam-reciprocal:a0:m0:s4:A:L0",
+    "beam:support-beam-reciprocal:a0:m0:s5:B:L0",
+    "beam:support-beam-reciprocal:a0:m1:s6:A:L0",
+    "beam:support-beam-reciprocal:a0:m1:s7:B:L0",
+    "beam:support-beam-reciprocal:a0:m2:s8:A:L0",
+    "beam:support-beam-reciprocal:a0:m2:s9:B:L0",
+    "beam:support-beam-reciprocal:a0:m3:s10:A:L0",
+    "beam:support-beam-reciprocal:a0:m3:s11:B:L0",
+    "bolt:hpivot:a0:m0:bottom:inner",
+    "bolt:hpivot:a0:m0:bottom:outer",
+    "bolt:hpivot:a0:m0:top:inner",
+    "bolt:hpivot:a0:m0:top:outer",
+    "bolt:vstack:a0:m0:bottom:inner",
+    "bolt:vstack:a0:m0:bottom:outer",
+    "bolt:vstack:a0:m0:top:outer",
+    "bolt:vstack:a0:m0:top:inner",
+    "bolt:vstack:a0:m0:center:center",
+    "bolt:vstack:a0:m0:bottom:inner:cap",
+    "bolt:vstack:a0:m0:bottom:outer:cap",
+    "bolt:vstack:a0:m0:top:outer:cap",
+    "bolt:vstack:a0:m0:top:inner:cap",
+    "bolt:vstack:a0:m0:center:center:cap",
+    "bolt:hstack:a0:m0:bottom:center",
+    "bolt:hstack:a0:m0:top:center",
+    "bolt:hpivot:a0:m1:bottom:inner",
+    "bolt:hpivot:a0:m1:bottom:outer",
+    "bolt:hpivot:a0:m1:top:inner",
+    "bolt:hpivot:a0:m1:top:outer",
+    "bolt:vstack:a0:m1:bottom:inner",
+    "bolt:vstack:a0:m1:bottom:outer",
+    "bolt:vstack:a0:m1:top:outer",
+    "bolt:vstack:a0:m1:top:inner",
+    "bolt:vstack:a0:m1:center:center",
+    "bolt:hstack:a0:m1:bottom:center",
+    "bolt:hstack:a0:m1:top:center",
+    "bolt:hpivot:a0:m2:bottom:inner",
+    "bolt:hpivot:a0:m2:bottom:outer",
+    "bolt:hpivot:a0:m2:top:inner",
+    "bolt:hpivot:a0:m2:top:outer",
+    "bolt:vstack:a0:m2:bottom:inner",
+    "bolt:vstack:a0:m2:bottom:outer",
+    "bolt:vstack:a0:m2:top:outer",
+    "bolt:vstack:a0:m2:top:inner",
+    "bolt:vstack:a0:m2:center:center",
+    "bolt:hstack:a0:m2:bottom:center",
+    "bolt:hstack:a0:m2:top:center",
+    "bolt:hpivot:a0:m3:bottom:inner",
+    "bolt:hpivot:a0:m3:bottom:outer",
+    "bolt:hpivot:a0:m3:top:inner",
+    "bolt:hpivot:a0:m3:top:outer",
+    "bolt:vstack:a0:m3:bottom:inner",
+    "bolt:vstack:a0:m3:bottom:outer",
+    "bolt:vstack:a0:m3:top:outer",
+    "bolt:vstack:a0:m3:top:inner",
+    "bolt:vstack:a0:m3:center:center",
+    "bolt:hstack:a0:m3:bottom:center",
+    "bolt:hstack:a0:m3:top:center",
+    "bolt:rcp-ring:r4:a0",
+    "bolt:rcp-ring:r5:a0",
+    "bolt:rcp-ring:r6:a0",
+    "bolt:rcp-ring:r7:a0",
+    "bolt:rcp-ring:r8:a0",
+    "bolt:rcp-ring:r9:a0",
+    "bolt:rcp-ring:r10:a0",
+    "bolt:rcp-ring:r11:a0",
+    "bolt:rcp-cross:r4-9:intersection:a0",
+    "bolt:rcp-cross:r4-11:intersection:a0",
+    "bolt:rcp-cross:r5-6:intersection:a0",
+    "bolt:rcp-cross:r5-8:intersection:a0",
+    "bolt:rcp-cross:r6-11:intersection:a0",
+    "bolt:rcp-cross:r7-8:intersection:a0",
+    "bolt:rcp-cross:r7-10:intersection:a0",
+    "bolt:rcp-cross:r9-10:intersection:a0",
+    "washer:hpivot:a0:m0:bottom:inner:g0",
+    "washer:hpivot:a0:m0:bottom:outer:g0",
+    "washer:hpivot:a0:m0:top:inner:g0",
+    "washer:hpivot:a0:m0:top:outer:g0",
+    "washer:vstack:a0:m0:bottom:inner:g0",
+    "washer:vstack:a0:m0:bottom:inner:g1",
+    "washer:vstack:a0:m0:bottom:outer:g0",
+    "washer:vstack:a0:m0:bottom:outer:g1",
+    "washer:vstack:a0:m0:top:outer:g0",
+    "washer:vstack:a0:m0:top:outer:g1",
+    "washer:vstack:a0:m0:top:inner:g0",
+    "washer:vstack:a0:m0:top:inner:g1",
+    "washer:vstack:a0:m0:center:center:g0",
+    "washer:vstack:a0:m0:center:center:g1",
+    "washer:hstack:a0:m0:bottom:center:g0",
+    "washer:hstack:a0:m0:top:center:g0",
+    "washer:hpivot:a0:m1:bottom:inner:g0",
+    "washer:hpivot:a0:m1:bottom:outer:g0",
+    "washer:hpivot:a0:m1:top:inner:g0",
+    "washer:hpivot:a0:m1:top:outer:g0",
+    "washer:vstack:a0:m1:bottom:inner:g0",
+    "washer:vstack:a0:m1:bottom:inner:g1",
+    "washer:vstack:a0:m1:bottom:outer:g0",
+    "washer:vstack:a0:m1:bottom:outer:g1",
+    "washer:vstack:a0:m1:top:outer:g0",
+    "washer:vstack:a0:m1:top:outer:g1",
+    "washer:vstack:a0:m1:top:inner:g0",
+    "washer:vstack:a0:m1:top:inner:g1",
+    "washer:vstack:a0:m1:center:center:g0",
+    "washer:vstack:a0:m1:center:center:g1",
+    "washer:hstack:a0:m1:bottom:center:g0",
+    "washer:hstack:a0:m1:top:center:g0",
+    "washer:hpivot:a0:m2:bottom:inner:g0",
+    "washer:hpivot:a0:m2:bottom:outer:g0",
+    "washer:hpivot:a0:m2:top:inner:g0",
+    "washer:hpivot:a0:m2:top:outer:g0",
+    "washer:vstack:a0:m2:bottom:inner:g0",
+    "washer:vstack:a0:m2:bottom:inner:g1",
+    "washer:vstack:a0:m2:bottom:outer:g0",
+    "washer:vstack:a0:m2:bottom:outer:g1",
+    "washer:vstack:a0:m2:top:outer:g0",
+    "washer:vstack:a0:m2:top:outer:g1",
+    "washer:vstack:a0:m2:top:inner:g0",
+    "washer:vstack:a0:m2:top:inner:g1",
+    "washer:vstack:a0:m2:center:center:g0",
+    "washer:vstack:a0:m2:center:center:g1",
+    "washer:hstack:a0:m2:bottom:center:g0",
+    "washer:hstack:a0:m2:top:center:g0",
+    "washer:hpivot:a0:m3:bottom:inner:g0",
+    "washer:hpivot:a0:m3:bottom:outer:g0",
+    "washer:hpivot:a0:m3:top:inner:g0",
+    "washer:hpivot:a0:m3:top:outer:g0",
+    "washer:vstack:a0:m3:bottom:inner:g0",
+    "washer:vstack:a0:m3:bottom:inner:g1",
+    "washer:vstack:a0:m3:bottom:outer:g0",
+    "washer:vstack:a0:m3:bottom:outer:g1",
+    "washer:vstack:a0:m3:top:outer:g0",
+    "washer:vstack:a0:m3:top:outer:g1",
+    "washer:vstack:a0:m3:top:inner:g0",
+    "washer:vstack:a0:m3:top:inner:g1",
+    "washer:vstack:a0:m3:center:center:g0",
+    "washer:vstack:a0:m3:center:center:g1",
+    "washer:hstack:a0:m3:bottom:center:g0",
+    "washer:hstack:a0:m3:top:center:g0",
+    "bracket:a0:m0:bottom:outer",
+    "bracket:a0:m0:top:outer",
+    "bracket:a0:m0:bottom:inner",
+    "bracket:a0:m0:top:inner",
+    "bracket:a0:m0:bottom:outer:cap",
+    "bracket:a0:m0:top:outer:cap",
+    "bracket:a0:m0:bottom:inner:cap",
+    "bracket:a0:m0:top:inner:cap",
+    "bracket:a0:m1:bottom:outer",
+    "bracket:a0:m1:top:outer",
+    "bracket:a0:m1:bottom:inner",
+    "bracket:a0:m1:top:inner",
+    "bracket:a0:m2:bottom:outer",
+    "bracket:a0:m2:top:outer",
+    "bracket:a0:m2:bottom:inner",
+    "bracket:a0:m2:top:inner",
+    "bracket:a0:m3:bottom:outer",
+    "bracket:a0:m3:top:outer",
+    "bracket:a0:m3:bottom:inner",
+    "bracket:a0:m3:top:inner",
+    "panel:0",
+    "panel:1",
+    "panel:2",
+    "wall:s0:lower",
+    "wall:s1:upper",
+    "wall:s2:lower",
+    "wall:s3:lower"
+   ],
+   "joints": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:bottom:inner:cap",
+    "joint:a0:m0:bottom:outer:cap",
+    "joint:a0:m0:top:outer:cap",
+    "joint:a0:m0:top:inner:cap",
+    "joint:a0:m0:center:center:cap",
+    "joint:a0:m0:bottom:center",
+    "joint:a0:m0:top:center",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:bottom:center",
+    "joint:a0:m1:top:center",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:bottom:center",
+    "joint:a0:m2:top:center",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:bottom:center",
+    "joint:a0:m3:top:center",
+    "bolt:rcp-ring:r4:a0",
+    "bolt:rcp-ring:r5:a0",
+    "bolt:rcp-ring:r6:a0",
+    "bolt:rcp-ring:r7:a0",
+    "bolt:rcp-ring:r8:a0",
+    "bolt:rcp-ring:r9:a0",
+    "bolt:rcp-ring:r10:a0",
+    "bolt:rcp-ring:r11:a0",
+    "bolt:rcp-cross:r4-9:intersection:a0",
+    "bolt:rcp-cross:r4-11:intersection:a0",
+    "bolt:rcp-cross:r5-6:intersection:a0",
+    "bolt:rcp-cross:r5-8:intersection:a0",
+    "bolt:rcp-cross:r6-11:intersection:a0",
+    "bolt:rcp-cross:r7-8:intersection:a0",
+    "bolt:rcp-cross:r7-10:intersection:a0",
+    "bolt:rcp-cross:r9-10:intersection:a0",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:center:center",
+    "joint:a0:m0:bottom:center",
+    "joint:a0:m0:top:center",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:center:center",
+    "joint:a0:m1:bottom:center",
+    "joint:a0:m1:top:center",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:center:center",
+    "joint:a0:m2:bottom:center",
+    "joint:a0:m2:top:center",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:top:inner",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:center:center",
+    "joint:a0:m3:bottom:center",
+    "joint:a0:m3:top:center",
+    "joint:a0:m0:bottom:outer",
+    "joint:a0:m0:top:outer",
+    "joint:a0:m0:bottom:inner",
+    "joint:a0:m0:top:inner",
+    "joint:a0:m0:bottom:outer:cap",
+    "joint:a0:m0:top:outer:cap",
+    "joint:a0:m0:bottom:inner:cap",
+    "joint:a0:m0:top:inner:cap",
+    "joint:a0:m1:bottom:outer",
+    "joint:a0:m1:top:outer",
+    "joint:a0:m1:bottom:inner",
+    "joint:a0:m1:top:inner",
+    "joint:a0:m2:bottom:outer",
+    "joint:a0:m2:top:outer",
+    "joint:a0:m2:bottom:inner",
+    "joint:a0:m2:top:inner",
+    "joint:a0:m3:bottom:outer",
+    "joint:a0:m3:top:outer",
+    "joint:a0:m3:bottom:inner",
+    "joint:a0:m3:top:inner",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ]
+  }
+ },
+ "radialArray": null,
+ "foldSchedule": {
+  "sequential": false
+ },
+ "coverings": {
+  "supported": true,
+  "shapes": 4,
+  "baseShapes": 4
+ },
+ "floor": null,
+ "shade": null,
+ "bench": {
+  "items": [
+   {
+    "length": 96,
+    "w": 2.5,
+    "t": 1.5,
+    "count": 16,
+    "stackTypes": [
+     "horizontal-bottom",
+     "horizontal-top"
+    ],
+    "stockLength": 96,
+    "z": 1.25
+   },
+   {
+    "length": 49.25,
+    "w": 2.5,
+    "t": 1.5,
+    "count": 8,
+    "stackTypes": [
+     "support-beam-reciprocal"
+    ],
+    "stockLength": 96,
+    "z": 9.75
+   },
+   {
+    "length": 48,
+    "w": 1.5,
+    "t": 2.5,
+    "count": 5,
+    "stackTypes": [
+     "vertical",
+     "vertical-cap"
+    ],
+    "stockLength": 96,
+    "z": 17.75
+   },
+   {
+    "length": 48,
+    "w": 0.75,
+    "t": 2.5,
+    "count": 10,
+    "stackTypes": [
+     "vertical",
+     "vertical-cap"
+    ],
+    "stockLength": 96,
+    "z": 24.875
+   },
+   {
+    "length": 24,
+    "w": 1.5,
+    "t": 2.5,
+    "count": 4,
+    "stackTypes": [
+     "support-beam"
+    ],
+    "stockLength": 96,
+    "z": 32
+   }
+  ],
+  "bounds": {
+   "min": {
+    "x": -8,
+    "y": 0,
+    "z": -8
+   },
+   "max": {
+    "x": 104,
+    "y": 10.5,
+    "z": 40.75
+   },
+   "center": {
+    "x": 48,
+    "y": 0,
+    "z": 16.375
+   },
+   "radius": 61.0749
+  }
+ },
+ "generatedSteps": [
+  {
+   "kind": "cut",
+   "title": "Cut 8 × reciprocal beam to 49.25 in",
+   "notes": "8 pieces of 2.5 in × 1.5 in stock, 49.25 in long (from 96 in stock, 46.75 in offcut).",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam-reciprocal"
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "stockLengthIn": null,
+    "kerfIn": 0.125
+   },
+   "groupId": null
+  },
+  {
+   "kind": "cut",
+   "title": "Cut 5 × V-beam / cap V-beam to 48 in",
+   "notes": "5 pieces of 1.5 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "layerIndex": 1
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 1
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "stockLengthIn": null,
+    "kerfIn": 0.125
+   },
+   "groupId": null
+  },
+  {
+   "kind": "cut",
+   "title": "Cut 10 × V-beam / cap V-beam to 48 in",
+   "notes": "10 pieces of 0.75 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "layerIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "layerIndex": 2
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 2
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "stockLengthIn": null,
+    "kerfIn": 0.125
+   },
+   "groupId": null
+  },
+  {
+   "kind": "cut",
+   "title": "Cut 4 × radial support beam to 24 in",
+   "notes": "4 pieces of 1.5 in × 2.5 in stock, 24 in long (from 96 in stock, 72 in offcut).",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam"
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "stockLengthIn": null,
+    "kerfIn": 0.125
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 8 × V-beam / cap V-beam (2 holes)",
+   "notes": "Holes from the left end: 24 in, 47 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "layerIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 0,
+     "stackId": 0,
+     "patternId": "B",
+     "layerIndex": 2,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 1,
+     "stackId": 1,
+     "patternId": "B",
+     "layerIndex": 2,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 2,
+     "stackId": 2,
+     "patternId": "B",
+     "layerIndex": 2,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 2
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 6 × bottom H-beam (3 holes)",
+   "notes": "Holes from the left end: 10.25 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 1,
+     "stackId": 2,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 2,
+     "stackId": 4,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 3,
+     "stackId": 6,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 1,
+     "stackId": 2,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 2,
+     "stackId": 4,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 3,
+     "stackId": 6,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 6 × top H-beam (4 holes)",
+   "notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 1,
+     "stackId": 3,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 2,
+     "stackId": 5,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 3,
+     "stackId": 7,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 1,
+     "stackId": 3,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 2,
+     "stackId": 5,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 3,
+     "stackId": 7,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 4 × reciprocal beam (3 holes)",
+   "notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam-reciprocal",
+     "layerIndex": 0,
+     "patternId": "A"
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 4 × reciprocal beam (3 holes)",
+   "notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam-reciprocal",
+     "layerIndex": 0,
+     "patternId": "B"
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 3 × V-beam (2 holes)",
+   "notes": "Holes from the left end: 1 in, 24 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 0,
+     "stackId": 0,
+     "patternId": "A",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 1,
+     "stackId": 1,
+     "patternId": "A",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 2,
+     "stackId": 2,
+     "patternId": "A",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 3 × radial support beam (1 hole)",
+   "notes": "Holes from the left end: 20.69 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam",
+     "moduleIndex": 0,
+     "stackId": 0,
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "support-beam",
+     "moduleIndex": 1,
+     "stackId": 1,
+     "layerIndex": 0,
+     "arrayIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "support-beam",
+     "moduleIndex": 2,
+     "stackId": 2,
+     "layerIndex": 0,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 2 × cap V-beam / V-beam (3 holes)",
+   "notes": "Holes from the left end: 1 in, 24 in, 47 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 3,
+     "stackId": 3,
+     "patternId": "B",
+     "layerIndex": 2,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 2 × cap V-beam / V-beam (3 holes)",
+   "notes": "Holes from the left end: 1 in, 24 in, 47 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "layerIndex": 1
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 3,
+     "stackId": 3,
+     "patternId": "A",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 1 × bottom H-beam (3 holes)",
+   "notes": "Holes from the left end: 10.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 0,
+     "stackId": 0,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 1 × bottom H-beam (3 holes)",
+   "notes": "Holes from the left end: 10.25 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 0,
+     "stackId": 0,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 1 × top H-beam (4 holes)",
+   "notes": "Holes from the left end: 10.44 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 0,
+     "stackId": 1,
+     "patternId": "A",
+     "layerIndex": 0,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 1 × top H-beam (4 holes)",
+   "notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 0,
+     "stackId": 1,
+     "patternId": "B",
+     "layerIndex": 1,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "drill",
+   "title": "Drill 1 × radial support beam (2 holes)",
+   "notes": "Holes from the left end: 0.44 in, 20.69 in. Ø 0.5 in through the width.",
+   "stage": "bench",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam",
+     "moduleIndex": 3,
+     "stackId": 3,
+     "layerIndex": 0,
+     "arrayIndex": 0
+    }
+   ],
+   "view": null,
+   "transitionMs": 800,
+   "durationMs": 3000,
+   "op": {
+    "bitDiameterIn": 0.5,
+    "holes": "auto"
+   },
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Module 1: set bottom H-beams",
+   "notes": "Stack the bottom horizontal beams with their washers between layers.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 0
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 2: set bottom H-beams",
+   "notes": "Stack the bottom horizontal beams with their washers between layers.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 1
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 3: set bottom H-beams",
+   "notes": "Stack the bottom horizontal beams with their washers between layers.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 2
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 4: set bottom H-beams",
+   "notes": "Stack the bottom horizontal beams with their washers between layers.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-bottom",
+     "moduleIndex": 3
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 1: fit the bottom brackets",
+   "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 2: fit the bottom brackets",
+   "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 3: fit the bottom brackets",
+   "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 4: fit the bottom brackets",
+   "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-bottom-brackets"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 1: bolt the bottom ring pivots and brackets",
+   "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-bottom-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 2: bolt the bottom ring pivots and brackets",
+   "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-bottom-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 3: bolt the bottom ring pivots and brackets",
+   "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-bottom-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 4: bolt the bottom ring pivots and brackets",
+   "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-bottom-bracket-bolts"
+  },
+  {
+   "kind": "place",
+   "title": "Module 1: set top H-beams (mirror of the bottom ring)",
+   "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 0
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 2: set top H-beams (mirror of the bottom ring)",
+   "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 1
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 3: set top H-beams (mirror of the bottom ring)",
+   "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 2
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 4: set top H-beams (mirror of the bottom ring)",
+   "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top",
+     "moduleIndex": 3
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-hbeams"
+  },
+  {
+   "kind": "place",
+   "title": "Module 1: fit the top brackets",
+   "notes": "Seat the top U-brackets on the top stack, opening downward.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 0,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 2: fit the top brackets",
+   "notes": "Seat the top U-brackets on the top stack, opening downward.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 1,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 3: fit the top brackets",
+   "notes": "Seat the top U-brackets on the top stack, opening downward.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 2,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-brackets"
+  },
+  {
+   "kind": "place",
+   "title": "Module 4: fit the top brackets",
+   "notes": "Seat the top U-brackets on the top stack, opening downward.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bracket",
+     "moduleIndex": 3,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 12,
+    "parkOffset": {
+     "mode": "beside",
+     "gapIn": 24
+    },
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-top-brackets"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 1: bolt the top ring pivots and brackets",
+   "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 0,
+     "ring": "top"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 0,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-top-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 2: bolt the top ring pivots and brackets",
+   "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 1,
+     "ring": "top"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 1,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-top-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 3: bolt the top ring pivots and brackets",
+   "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 2,
+     "ring": "top"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 2,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-top-bracket-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 4: bolt the top ring pivots and brackets",
+   "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "hstack",
+     "moduleIndex": 3,
+     "ring": "top"
+    },
+    {
+     "kind": "bolt",
+     "boltType": "hpivot",
+     "moduleIndex": 3,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 6200,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-top-bracket-bolts"
+  },
+  {
+   "kind": "place",
+   "title": "Module 1: assemble the V module",
+   "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 0
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "moduleIndex": 0
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-v-modules"
+  },
+  {
+   "kind": "place",
+   "title": "Module 2: assemble the V module",
+   "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 1
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "moduleIndex": 1
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-v-modules"
+  },
+  {
+   "kind": "place",
+   "title": "Module 3: assemble the V module",
+   "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 2
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "moduleIndex": 2
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-v-modules"
+  },
+  {
+   "kind": "place",
+   "title": "Module 4: assemble the V module",
+   "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "vertical",
+     "moduleIndex": 3
+    },
+    {
+     "kind": "beam",
+     "stackType": "vertical-cap",
+     "moduleIndex": 3
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": "auto-v-modules"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 1: bolt the V module centre pivot",
+   "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "joint",
+     "moduleIndex": 0,
+     "ring": "center"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-v-center-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 2: bolt the V module centre pivot",
+   "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "joint",
+     "moduleIndex": 1,
+     "ring": "center"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2600,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-v-center-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 3: bolt the V module centre pivot",
+   "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "joint",
+     "moduleIndex": 2,
+     "ring": "center"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2600,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-v-center-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 4: bolt the V module centre pivot",
+   "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "joint",
+     "moduleIndex": 3,
+     "ring": "center"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2600,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-v-center-bolts"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 1: attach the V module to the bottom ring",
+   "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 8000,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-attach-bottom"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 2: attach the V module to the bottom ring",
+   "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-attach-bottom"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 3: attach the V module to the bottom ring",
+   "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-attach-bottom"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 4: attach the V module to the bottom ring",
+   "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "bottom"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-attach-bottom"
+  },
+  {
+   "kind": "place",
+   "title": "Lift the top assembly onto the V modules",
+   "notes": "With helpers on each side, lift the assembled top ring and lower the brackets onto the V-beam ends.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "horizontal-top"
+    },
+    {
+     "kind": "bracket",
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "anchor": null,
+    "foldAngleDeg": 74.975
+   },
+   "transitionMs": 800,
+   "durationMs": 3500,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": "parked",
+    "sequential": false
+   },
+   "groupId": null
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 1: secure the top bracket to the V module",
+   "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 0,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 0,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 8000,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-secure-top"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 2: secure the top bracket to the V module",
+   "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 1,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 1,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-secure-top"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 3: secure the top bracket to the V module",
+   "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 2,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 2,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-secure-top"
+  },
+  {
+   "kind": "fasten",
+   "title": "Module 4: secure the top bracket to the V module",
+   "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": "vstack",
+     "moduleIndex": 3,
+     "ring": "top"
+    },
+    {
+     "kind": "placement",
+     "moduleIndex": 3,
+     "ring": "top"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.3,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 74.975,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 4400,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": true
+   },
+   "groupId": "auto-secure-top"
+  },
+  {
+   "kind": "view",
+   "title": "Deploy the structure",
+   "notes": "Open the scissor ring to its deployed angle before adding the roof.",
+   "stage": "assembly",
+   "targets": [],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 2500,
+   "durationMs": 800,
+   "op": {},
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Install radial support beams",
+   "notes": "Lay the radial support beams across the top ring.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Install reciprocal beams",
+   "notes": "Weave the reciprocal beams over/under each other and onto the ring anchors.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "beam",
+     "stackType": "support-beam-reciprocal"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "above",
+    "travelIn": 24,
+    "parkOffset": null,
+    "from": null,
+    "sequential": false
+   },
+   "groupId": null
+  },
+  {
+   "kind": "fasten",
+   "title": "Bolt the reciprocal beams",
+   "notes": "Through-bolt each crossing and anchor.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "bolt",
+     "boltType": [
+      "rcp-ring",
+      "rcp-cross"
+     ]
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.75,
+    "dist": 120,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5,
+    "frame": "targets",
+    "radial": true,
+    "padding": 1.35,
+    "detail": true
+   },
+   "transitionMs": 800,
+   "durationMs": 2500,
+   "op": {
+    "bolt": null,
+    "nut": null,
+    "turns": 3,
+    "allModules": false,
+    "axes": null,
+    "sequential": false
+   },
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Mount the solar panels",
+   "notes": "Lift each panel onto the support beams in order and clamp it down.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "panel"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 800,
+   "durationMs": 2600,
+   "op": {
+    "approach": "above",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": true
+   },
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Install the lower wall panels",
+   "notes": "Stand each plywood wall against the outside face of the uprights and screw it to the V-beams; back any seams with a batten.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "wall",
+     "band": "lower",
+     "coverType": "plywood"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 800,
+   "durationMs": 2900,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": true
+   },
+   "groupId": null
+  },
+  {
+   "kind": "place",
+   "title": "Install the upper coverings",
+   "notes": "Fit the upper plywood or fabric bands between the lower band and the top ring.",
+   "stage": "assembly",
+   "targets": [
+    {
+     "kind": "wall",
+     "band": "upper"
+    }
+   ],
+   "view": {
+    "yaw": 0.6,
+    "pitch": 0.35,
+    "dist": 600,
+    "panX": 0,
+    "panY": 0,
+    "anchor": null,
+    "foldAngleDeg": 160.5
+   },
+   "transitionMs": 800,
+   "durationMs": 2000,
+   "op": {
+    "approach": "radial",
+    "travelIn": 30,
+    "parkOffset": null,
+    "from": null,
+    "sequential": true
+   },
+   "groupId": null
+  }
+ ],
+ "savedSteps": {
+  "version": 1,
+  "steps": [
+   {
+    "kind": "cut",
+    "title": "Cut 8 × reciprocal beam to 49.25 in",
+    "notes": "8 pieces of 2.5 in × 1.5 in stock, 49.25 in long (from 96 in stock, 46.75 in offcut).",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam-reciprocal"
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "stockLengthIn": null,
+     "kerfIn": 0.125
+    },
+    "groupId": null
+   },
+   {
+    "kind": "cut",
+    "title": "Cut 5 × V-beam / cap V-beam to 48 in",
+    "notes": "5 pieces of 1.5 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "layerIndex": 1
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 1
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "stockLengthIn": null,
+     "kerfIn": 0.125
+    },
+    "groupId": null
+   },
+   {
+    "kind": "cut",
+    "title": "Cut 10 × V-beam / cap V-beam to 48 in",
+    "notes": "10 pieces of 0.75 in × 2.5 in stock, 48 in long (from 96 in stock, 48 in offcut).",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "layerIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "layerIndex": 2
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 2
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "stockLengthIn": null,
+     "kerfIn": 0.125
+    },
+    "groupId": null
+   },
+   {
+    "kind": "cut",
+    "title": "Cut 4 × radial support beam to 24 in",
+    "notes": "4 pieces of 1.5 in × 2.5 in stock, 24 in long (from 96 in stock, 72 in offcut).",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam"
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "stockLengthIn": null,
+     "kerfIn": 0.125
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 10 × V-beam / cap V-beam (3 holes)",
+    "notes": "Holes from the left end: 1.13 in, 24.13 in, 47.13 in. Ø 0.5 in through the width.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "layerIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "layerIndex": 2
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 2
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 6 × bottom H-beam (3 holes)",
+    "notes": "Holes from the left end: 10.25 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 1,
+      "stackId": 2,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 2,
+      "stackId": 4,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 3,
+      "stackId": 6,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 1,
+      "stackId": 2,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 2,
+      "stackId": 4,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 3,
+      "stackId": 6,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 6 × top H-beam (4 holes)",
+    "notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 1,
+      "stackId": 3,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 2,
+      "stackId": 5,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 3,
+      "stackId": 7,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 1,
+      "stackId": 3,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 2,
+      "stackId": 5,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 3,
+      "stackId": 7,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 4 × reciprocal beam (3 holes)",
+    "notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam-reciprocal",
+      "layerIndex": 0,
+      "patternId": "A"
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 4 × reciprocal beam (3 holes)",
+    "notes": "Holes from the left end: 1.19 in, 28.88 in, 39.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam-reciprocal",
+      "layerIndex": 0,
+      "patternId": "B"
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 3 × V-beam (2 holes)",
+    "notes": "Holes from the left end: 1.13 in, 24.13 in. Ø 0.5 in through the width.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 0,
+      "stackId": 0,
+      "patternId": "A",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 1,
+      "stackId": 1,
+      "patternId": "A",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 2,
+      "stackId": 2,
+      "patternId": "A",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 3 × radial support beam (1 hole)",
+    "notes": "Holes from the left end: 20.69 in. Ø 0.5 in through the width.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam",
+      "moduleIndex": 0,
+      "stackId": 0,
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "support-beam",
+      "moduleIndex": 1,
+      "stackId": 1,
+      "layerIndex": 0,
+      "arrayIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "support-beam",
+      "moduleIndex": 2,
+      "stackId": 2,
+      "layerIndex": 0,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 2 × cap V-beam / V-beam (3 holes)",
+    "notes": "Holes from the left end: 1.13 in, 24.13 in, 47.13 in. Ø 0.5 in through the width.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "layerIndex": 1
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 3,
+      "stackId": 3,
+      "patternId": "A",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 1 × bottom H-beam (3 holes)",
+    "notes": "Holes from the left end: 10.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 0,
+      "stackId": 0,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 1 × bottom H-beam (3 holes)",
+    "notes": "Holes from the left end: 10.25 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 0,
+      "stackId": 0,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 1 × top H-beam (4 holes)",
+    "notes": "Holes from the left end: 10.44 in, 34.44 in, 45.25 in, 94.75 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 0,
+      "stackId": 1,
+      "patternId": "A",
+      "layerIndex": 0,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 1 × top H-beam (4 holes)",
+    "notes": "Holes from the left end: 10.25 in, 34.44 in, 45.25 in, 94.56 in. Ø 0.5 in through the thickness.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 0,
+      "stackId": 1,
+      "patternId": "B",
+      "layerIndex": 1,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "drill",
+    "title": "Drill 1 × radial support beam (2 holes)",
+    "notes": "Holes from the left end: 0.44 in, 20.69 in. Ø 0.5 in through the width.",
+    "stage": "bench",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam",
+      "moduleIndex": 3,
+      "stackId": 3,
+      "layerIndex": 0,
+      "arrayIndex": 0
+     }
+    ],
+    "view": null,
+    "transitionMs": 800,
+    "durationMs": 3000,
+    "op": {
+     "bitDiameterIn": 0.5,
+     "holes": "auto"
+    },
+    "groupId": null
+   },
+   {
+    "kind": "place",
+    "title": "Module 1: set bottom H-beams",
+    "notes": "Stack the bottom horizontal beams with their washers between layers.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 0
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 2: set bottom H-beams",
+    "notes": "Stack the bottom horizontal beams with their washers between layers.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 1
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 3: set bottom H-beams",
+    "notes": "Stack the bottom horizontal beams with their washers between layers.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 2
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 4: set bottom H-beams",
+    "notes": "Stack the bottom horizontal beams with their washers between layers.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-bottom",
+      "moduleIndex": 3
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 1: fit the bottom brackets",
+    "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 2: fit the bottom brackets",
+    "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 3: fit the bottom brackets",
+    "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 4: fit the bottom brackets",
+    "notes": "Seat the U-brackets on the bottom stack with the hole aligned to the pivot.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-bottom-brackets"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 1: bolt the bottom ring pivots and brackets",
+    "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 9800,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-bottom-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 2: bolt the bottom ring pivots and brackets",
+    "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-bottom-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 3: bolt the bottom ring pivots and brackets",
+    "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-bottom-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 4: bolt the bottom ring pivots and brackets",
+    "notes": "Bolt the H-beam centre pivot, then bolt each bracket down through the bottom H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-bottom-bracket-bolts"
+   },
+   {
+    "kind": "place",
+    "title": "Module 1: set top H-beams (mirror of the bottom ring)",
+    "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 0
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 2: set top H-beams (mirror of the bottom ring)",
+    "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 1
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 3: set top H-beams (mirror of the bottom ring)",
+    "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 2
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 4: set top H-beams (mirror of the bottom ring)",
+    "notes": "Build the top ring beside the bottom ring, mirrored, with brackets facing down.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top",
+      "moduleIndex": 3
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-hbeams"
+   },
+   {
+    "kind": "place",
+    "title": "Module 1: fit the top brackets",
+    "notes": "Seat the top U-brackets on the top stack, opening downward.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 0,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 2: fit the top brackets",
+    "notes": "Seat the top U-brackets on the top stack, opening downward.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 1,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 3: fit the top brackets",
+    "notes": "Seat the top U-brackets on the top stack, opening downward.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 2,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-brackets"
+   },
+   {
+    "kind": "place",
+    "title": "Module 4: fit the top brackets",
+    "notes": "Seat the top U-brackets on the top stack, opening downward.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bracket",
+      "moduleIndex": 3,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 12,
+     "parkOffset": {
+      "mode": "beside",
+      "gapIn": 24
+     },
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-top-brackets"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 1: bolt the top ring pivots and brackets",
+    "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 0,
+      "ring": "top"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 0,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 9800,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-top-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 2: bolt the top ring pivots and brackets",
+    "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 1,
+      "ring": "top"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 1,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-top-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 3: bolt the top ring pivots and brackets",
+    "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 2,
+      "ring": "top"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 2,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-top-bracket-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 4: bolt the top ring pivots and brackets",
+    "notes": "Bolt the top H-beam centre pivot, then bolt each top bracket through the top H-beam stack.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "hstack",
+      "moduleIndex": 3,
+      "ring": "top"
+     },
+     {
+      "kind": "bolt",
+      "boltType": "hpivot",
+      "moduleIndex": 3,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "down",
+      "up"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-top-bracket-bolts"
+   },
+   {
+    "kind": "place",
+    "title": "Module 1: assemble the V module",
+    "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 0
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "moduleIndex": 0
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "radial",
+     "travelIn": 30,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-v-modules"
+   },
+   {
+    "kind": "place",
+    "title": "Module 2: assemble the V module",
+    "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 1
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "moduleIndex": 1
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "radial",
+     "travelIn": 30,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-v-modules"
+   },
+   {
+    "kind": "place",
+    "title": "Module 3: assemble the V module",
+    "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 2
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "moduleIndex": 2
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "radial",
+     "travelIn": 30,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-v-modules"
+   },
+   {
+    "kind": "place",
+    "title": "Module 4: assemble the V module",
+    "notes": "Cross the V-beams in their A/B pattern and align the pivot holes.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "vertical",
+      "moduleIndex": 3
+     },
+     {
+      "kind": "beam",
+      "stackType": "vertical-cap",
+      "moduleIndex": 3
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "radial",
+     "travelIn": 30,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": "auto-v-modules"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 1: bolt the V module centre pivot",
+    "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "joint",
+      "moduleIndex": 0,
+      "ring": "center"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 4400,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": null,
+     "sequential": true
+    },
+    "groupId": "auto-v-center-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 2: bolt the V module centre pivot",
+    "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "joint",
+      "moduleIndex": 1,
+      "ring": "center"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2600,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": null,
+     "sequential": true
+    },
+    "groupId": "auto-v-center-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 3: bolt the V module centre pivot",
+    "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "joint",
+      "moduleIndex": 2,
+      "ring": "center"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2600,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": null,
+     "sequential": true
+    },
+    "groupId": "auto-v-center-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 4: bolt the V module centre pivot",
+    "notes": "Insert the centre pivot bolt through the crossing; snug, not torqued.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "joint",
+      "moduleIndex": 3,
+      "ring": "center"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2600,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": null,
+     "sequential": true
+    },
+    "groupId": "auto-v-center-bolts"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 1: attach the V module to the bottom ring",
+    "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 9800,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-attach-bottom"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 2: attach the V module to the bottom ring",
+    "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-attach-bottom"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 3: attach the V module to the bottom ring",
+    "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-attach-bottom"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 4: attach the V module to the bottom ring",
+    "notes": "Slide the V-beam ends into the bottom brackets and insert the pivot bolts.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "bottom"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-attach-bottom"
+   },
+   {
+    "kind": "place",
+    "title": "Lift the top assembly onto the V modules",
+    "notes": "With helpers on each side, lift the assembled top ring and lower the brackets onto the V-beam ends.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "horizontal-top"
+     },
+     {
+      "kind": "placement",
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975
+    },
+    "transitionMs": 800,
+    "durationMs": 3500,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": "parked",
+     "sequential": false
+    },
+    "groupId": null
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 1: secure the top bracket to the V module",
+    "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 0,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 0,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 9800,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-secure-top"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 2: secure the top bracket to the V module",
+    "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 1,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 1,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-secure-top"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 3: secure the top bracket to the V module",
+    "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 2,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 2,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-secure-top"
+   },
+   {
+    "kind": "fasten",
+    "title": "Module 4: secure the top bracket to the V module",
+    "notes": "Insert the top pivot bolts and torque every pivot on this module.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": "vstack",
+      "moduleIndex": 3,
+      "ring": "top"
+     },
+     {
+      "kind": "placement",
+      "moduleIndex": 3,
+      "ring": "top"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.3,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 74.975,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 6200,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": [
+      "right",
+      "left"
+     ],
+     "sequential": true
+    },
+    "groupId": "auto-secure-top"
+   },
+   {
+    "kind": "view",
+    "title": "Deploy the structure",
+    "notes": "Open the scissor ring to its deployed angle before adding the roof.",
+    "stage": "assembly",
+    "targets": [],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 160.5
+    },
+    "transitionMs": 2500,
+    "durationMs": 800,
+    "op": {},
+    "groupId": null
+   },
+   {
+    "kind": "place",
+    "title": "Install radial support beams",
+    "notes": "Lay the radial support beams across the top ring.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 160.5
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": null
+   },
+   {
+    "kind": "place",
+    "title": "Install reciprocal beams",
+    "notes": "Weave the reciprocal beams over/under each other and onto the ring anchors.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "beam",
+      "stackType": "support-beam-reciprocal"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 160.5
+    },
+    "transitionMs": 800,
+    "durationMs": 2000,
+    "op": {
+     "approach": "above",
+     "travelIn": 24,
+     "parkOffset": null,
+     "from": null,
+     "sequential": false
+    },
+    "groupId": null
+   },
+   {
+    "kind": "fasten",
+    "title": "Bolt the reciprocal beams",
+    "notes": "Through-bolt each crossing and anchor.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "bolt",
+      "boltType": [
+       "rcp-ring",
+       "rcp-cross"
+      ]
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.75,
+     "dist": 120,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 160.5,
+     "frame": "targets",
+     "radial": true,
+     "padding": 1.35,
+     "detail": true
+    },
+    "transitionMs": 800,
+    "durationMs": 2500,
+    "op": {
+     "bolt": null,
+     "nut": null,
+     "turns": 3,
+     "allModules": false,
+     "axes": null,
+     "sequential": false
+    },
+    "groupId": null
+   },
+   {
+    "kind": "place",
+    "title": "Mount the solar panels",
+    "notes": "Lift each panel onto the support beams in order and clamp it down.",
+    "stage": "assembly",
+    "targets": [
+     {
+      "kind": "panel"
+     }
+    ],
+    "view": {
+     "yaw": 0.6,
+     "pitch": 0.35,
+     "dist": 600,
+     "panX": 0,
+     "panY": 0,
+     "anchor": null,
+     "foldAngleDeg": 160.5
+    },
+    "transitionMs": 800,
+    "durationMs": 2600,
+    "op": {
+     "approach": "above",
+     "travelIn": 30,
+     "parkOffset": null,
+     "from": null,
+     "sequential": true
+    },
+    "groupId": null
+   }
+  ],
+  "settings": {
+   "repeatMode": "skip",
+   "fastFactor": 4
+  }
+ },
+ "savedTargetCounts": [
+  [
+   8
+  ],
+  [
+   4,
+   1
+  ],
+  [
+   4,
+   4,
+   1,
+   1
+  ],
+  [
+   4
+  ],
+  [
+   4,
+   4,
+   1,
+   1
+  ],
+  [
+   1,
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  [
+   1,
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  [
+   4
+  ],
+  [
+   4
+  ],
+  [
+   1,
+   1,
+   1
+  ],
+  [
+   1,
+   1,
+   1
+  ],
+  [
+   1,
+   1
+  ],
+  [
+   1
+  ],
+  [
+   1
+  ],
+  [
+   1
+  ],
+  [
+   1
+  ],
+  [
+   1
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   4,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   2
+  ],
+  [
+   4,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   1,
+   2,
+   0
+  ],
+  [
+   3,
+   3
+  ],
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   0
+  ],
+  [
+   3,
+   0
+  ],
+  [
+   4
+  ],
+  [
+   3
+  ],
+  [
+   3
+  ],
+  [
+   3
+  ],
+  [
+   4,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   8,
+   0
+  ],
+  [
+   4,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [
+   2,
+   0
+  ],
+  [],
+  [
+   4
+  ],
+  [
+   8
+  ],
+  [
+   16
+  ],
+  [
+   3
+  ]
+ ],
+ "drillBolts": 65,
+ "anchor": [
+  32.6606,
+  -0.8,
+  44.5322
+ ],
+ "drillBoltList": [
+  {
+   "key": "bolt:hpivot:a0:m0:bottom:inner",
+   "center": [
+    34.3965,
+    0,
+    -34.5252
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m0:bottom:outer",
+   "center": [
+    48.7065,
+    0,
+    -48.8493
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m0:top:inner",
+   "center": [
+    34.3965,
+    49.7843,
+    -34.5252
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m0:top:outer",
+   "center": [
+    48.7065,
+    49.7843,
+    -48.8493
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:bottom:inner",
+   "center": [
+    34.3965,
+    4.24,
+    -34.5252
+   ],
+   "dir": [
+    0.7075,
+    0,
+    0.7068
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:bottom:outer",
+   "center": [
+    48.7065,
+    4.24,
+    -48.8493
+   ],
+   "dir": [
+    0.7075,
+    0,
+    0.7068
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:top:outer",
+   "center": [
+    34.3965,
+    45.5443,
+    -34.5252
+   ],
+   "dir": [
+    0.7075,
+    0,
+    0.7068
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:top:inner",
+   "center": [
+    34.3965,
+    45.5443,
+    -34.5252
+   ],
+   "dir": [
+    0.7075,
+    0,
+    0.7068
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:center:center",
+   "center": [
+    41.5515,
+    24.8921,
+    -41.6872
+   ],
+   "dir": [
+    0.7075,
+    0,
+    0.7068
+   ],
+   "length": 4.9,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:bottom:inner:cap",
+   "center": [
+    34.3965,
+    4.24,
+    34.4302
+   ],
+   "dir": [
+    -0.7075,
+    0,
+    0.7068
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:bottom:outer:cap",
+   "center": [
+    48.7065,
+    4.24,
+    48.7543
+   ],
+   "dir": [
+    -0.7075,
+    0,
+    0.7068
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:top:outer:cap",
+   "center": [
+    48.7065,
+    45.5443,
+    48.7543
+   ],
+   "dir": [
+    -0.7075,
+    0,
+    0.7068
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:top:inner:cap",
+   "center": [
+    34.3965,
+    45.5443,
+    34.4302
+   ],
+   "dir": [
+    -0.7075,
+    0,
+    0.7068
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m0:center:center:cap",
+   "center": [
+    41.5515,
+    24.8921,
+    41.5923
+   ],
+   "dir": [
+    -0.7075,
+    0,
+    0.7068
+   ],
+   "length": 4.9,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m0:bottom:center",
+   "center": [
+    40.3208,
+    0,
+    -0.0475
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m0:top:center",
+   "center": [
+    40.3208,
+    49.7843,
+    -0.0475
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m1:bottom:inner",
+   "center": [
+    -34.5589,
+    0,
+    -34.4576
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m1:bottom:outer",
+   "center": [
+    -48.897,
+    0,
+    -48.7536
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m1:top:inner",
+   "center": [
+    -34.5589,
+    49.7843,
+    -34.4576
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m1:top:outer",
+   "center": [
+    -48.897,
+    49.7843,
+    -48.7536
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m1:bottom:inner",
+   "center": [
+    -34.5589,
+    4.24,
+    -34.4576
+   ],
+   "dir": [
+    0.7061,
+    0,
+    -0.7081
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m1:bottom:outer",
+   "center": [
+    -48.897,
+    4.24,
+    -48.7536
+   ],
+   "dir": [
+    0.7061,
+    0,
+    -0.7081
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m1:top:outer",
+   "center": [
+    -34.5589,
+    45.5443,
+    -34.4576
+   ],
+   "dir": [
+    0.7061,
+    0,
+    -0.7081
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m1:top:inner",
+   "center": [
+    -34.5589,
+    45.5443,
+    -34.4576
+   ],
+   "dir": [
+    0.7061,
+    0,
+    -0.7081
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m1:center:center",
+   "center": [
+    -41.728,
+    24.8921,
+    -41.6056
+   ],
+   "dir": [
+    0.7061,
+    0,
+    -0.7081
+   ],
+   "length": 4.9,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m1:bottom:center",
+   "center": [
+    -0.087,
+    0,
+    -40.4157
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m1:top:center",
+   "center": [
+    -0.087,
+    49.7843,
+    -40.4157
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m2:bottom:inner",
+   "center": [
+    -34.4237,
+    0,
+    34.4977
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m2:bottom:outer",
+   "center": [
+    -48.7056,
+    0,
+    48.8498
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m2:top:inner",
+   "center": [
+    -34.4237,
+    49.7843,
+    34.4977
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m2:top:outer",
+   "center": [
+    -48.7056,
+    49.7843,
+    48.8498
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m2:bottom:inner",
+   "center": [
+    -34.4237,
+    4.24,
+    34.4977
+   ],
+   "dir": [
+    -0.7088,
+    0,
+    -0.7054
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m2:bottom:outer",
+   "center": [
+    -48.7056,
+    4.24,
+    48.8498
+   ],
+   "dir": [
+    -0.7088,
+    0,
+    -0.7054
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m2:top:outer",
+   "center": [
+    -34.4237,
+    45.5443,
+    34.4977
+   ],
+   "dir": [
+    -0.7088,
+    0,
+    -0.7054
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m2:top:inner",
+   "center": [
+    -34.4237,
+    45.5443,
+    34.4977
+   ],
+   "dir": [
+    -0.7088,
+    0,
+    -0.7054
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m2:center:center",
+   "center": [
+    -41.5646,
+    24.8921,
+    41.6738
+   ],
+   "dir": [
+    -0.7088,
+    0,
+    -0.7054
+   ],
+   "length": 4.9,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m2:bottom:center",
+   "center": [
+    -40.4156,
+    0,
+    0.0317
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m2:top:center",
+   "center": [
+    -40.4156,
+    49.7843,
+    0.0317
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m3:bottom:inner",
+   "center": [
+    34.5314,
+    0,
+    34.2949
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m3:bottom:outer",
+   "center": [
+    48.8975,
+    0,
+    48.5627
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m3:top:inner",
+   "center": [
+    34.5314,
+    49.7843,
+    34.2949
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hpivot:a0:m3:top:outer",
+   "center": [
+    48.8975,
+    49.7843,
+    48.5627
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m3:bottom:inner",
+   "center": [
+    34.5314,
+    4.24,
+    34.2949
+   ],
+   "dir": [
+    -0.7047,
+    0,
+    0.7095
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m3:bottom:outer",
+   "center": [
+    48.8975,
+    4.24,
+    48.5627
+   ],
+   "dir": [
+    -0.7047,
+    0,
+    0.7095
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m3:top:outer",
+   "center": [
+    34.5314,
+    45.5443,
+    34.2949
+   ],
+   "dir": [
+    -0.7047,
+    0,
+    0.7095
+   ],
+   "length": 2,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m3:top:inner",
+   "center": [
+    34.5314,
+    45.5443,
+    34.2949
+   ],
+   "dir": [
+    -0.7047,
+    0,
+    0.7095
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:vstack:a0:m3:center:center",
+   "center": [
+    41.7145,
+    24.8921,
+    41.4288
+   ],
+   "dir": [
+    -0.7047,
+    0,
+    0.7095
+   ],
+   "length": 4.9,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m3:bottom:center",
+   "center": [
+    0.0713,
+    0,
+    40.3206
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:hstack:a0:m3:top:center",
+   "center": [
+    0.0713,
+    49.7843,
+    40.3206
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r4:a0",
+   "center": [
+    38.494,
+    50.5843,
+    10.5839
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r5:a0",
+   "center": [
+    38.494,
+    48.9843,
+    -10.6789
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r6:a0",
+   "center": [
+    10.5462,
+    50.5843,
+    -38.5994
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r7:a0",
+   "center": [
+    -10.7167,
+    48.9843,
+    -38.5785
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r8:a0",
+   "center": [
+    -38.6097,
+    50.5843,
+    -10.6033
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r9:a0",
+   "center": [
+    -38.568,
+    48.9843,
+    10.6595
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r10:a0",
+   "center": [
+    -10.5654,
+    50.5843,
+    38.5251
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-ring:r11:a0",
+   "center": [
+    10.6973,
+    48.9843,
+    38.4625
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r4-9:intersection:a0",
+   "center": [
+    -0.0368,
+    49.8843,
+    10.8272
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r4-11:intersection:a0",
+   "center": [
+    10.8498,
+    49.8843,
+    10.8177
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r5-6:intersection:a0",
+   "center": [
+    10.8072,
+    49.8843,
+    -10.9127
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r5-8:intersection:a0",
+   "center": [
+    -0.0581,
+    49.8843,
+    -10.9222
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r6-11:intersection:a0",
+   "center": [
+    10.8273,
+    49.8843,
+    -0.0688
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r7-8:intersection:a0",
+   "center": [
+    -10.9233,
+    49.8843,
+    -10.8914
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r7-10:intersection:a0",
+   "center": [
+    -10.9222,
+    49.8843,
+    -0.0262
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  },
+  {
+   "key": "bolt:rcp-cross:r9-10:intersection:a0",
+   "center": [
+    -10.8807,
+    49.8843,
+    10.839
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5,
+   "radius": 0.25
+  }
+ ],
+ "effective": {
+  "hStackGap": {
+   "vStackGap": 0.45,
+   "hStackGap": 0.1,
+   "bracket": null
+  },
+  "vBoltLength": 4.9,
+  "vBoltInnerLength": 3,
+  "vBoltOuterLength": 2,
+  "hBoltLength": 3,
+  "hPivotBoltLength": 3
+ },
+ "rcpBolts": [
+  {
+   "key": "bolt:rcp-ring:r4:a0",
+   "center": [
+    38.494,
+    50.5843,
+    10.5839
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r5:a0",
+   "center": [
+    38.494,
+    48.9843,
+    -10.6789
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r6:a0",
+   "center": [
+    10.5462,
+    50.5843,
+    -38.5994
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r7:a0",
+   "center": [
+    -10.7167,
+    48.9843,
+    -38.5785
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r8:a0",
+   "center": [
+    -38.6097,
+    50.5843,
+    -10.6033
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r9:a0",
+   "center": [
+    -38.568,
+    48.9843,
+    10.6595
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r10:a0",
+   "center": [
+    -10.5654,
+    50.5843,
+    38.5251
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-ring:r11:a0",
+   "center": [
+    10.6973,
+    48.9843,
+    38.4625
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 3
+  },
+  {
+   "key": "bolt:rcp-cross:r4-9:intersection:a0",
+   "center": [
+    -0.0368,
+    49.8843,
+    10.8272
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r4-11:intersection:a0",
+   "center": [
+    10.8498,
+    49.8843,
+    10.8177
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r5-6:intersection:a0",
+   "center": [
+    10.8072,
+    49.8843,
+    -10.9127
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r5-8:intersection:a0",
+   "center": [
+    -0.0581,
+    49.8843,
+    -10.9222
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r6-11:intersection:a0",
+   "center": [
+    10.8273,
+    49.8843,
+    -0.0688
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r7-8:intersection:a0",
+   "center": [
+    -10.9233,
+    49.8843,
+    -10.8914
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r7-10:intersection:a0",
+   "center": [
+    -10.9222,
+    49.8843,
+    -0.0262
+   ],
+   "dir": [
+    0,
+    -1,
+    0
+   ],
+   "length": 5.5
+  },
+  {
+   "key": "bolt:rcp-cross:r9-10:intersection:a0",
+   "center": [
+    -10.8807,
+    49.8843,
+    10.839
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "length": 5.5
+  }
+ ],
+ "holes": [
+  {
+   "key": "beam:horizontal-bottom:a0:m0:s0:A:L0",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.5937,
+     "posW": 0.1101,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m0:s0:B:L1",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.5935,
+     "posW": -0.2207,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m0:s1:A:L0",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.5937,
+     "posW": 0.1101,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m0:s1:B:L1",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.5935,
+     "posW": -0.2207,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m0:s0:B:L0",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m0:s0:A:L1",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": -23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m0:s0:B:L2",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical-cap:a0:m0:s-1:B:L0",
+   "stackType": "vertical-cap",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": -22.9998,
+     "posW": -1.3044,
+     "posT": -0.0005,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23.0002,
+     "posW": -1.3839,
+     "posT": -0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23.0002,
+     "posW": -1.3839,
+     "posT": -0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0.0002,
+     "posW": -1.3441,
+     "posT": -0.0004,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical-cap:a0:m0:s-1:A:L1",
+   "stackType": "vertical-cap",
+   "holes": [
+    {
+     "posL": -23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": -23.0002,
+     "posW": -0.1911,
+     "posT": 0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": -0.0002,
+     "posW": -0.2309,
+     "posT": 0.0004,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical-cap:a0:m0:s-1:B:L2",
+   "stackType": "vertical-cap",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23.0002,
+     "posW": 1.7661,
+     "posT": -0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0.0002,
+     "posW": 1.8059,
+     "posT": -0.0004,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m1:s2:A:L0",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m1:s2:B:L1",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m1:s3:A:L0",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m1:s3:B:L1",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m1:s1:B:L0",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m1:s1:A:L1",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": -23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m1:s1:B:L2",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m2:s4:A:L0",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m2:s4:B:L1",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m2:s5:A:L0",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m2:s5:B:L1",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m2:s2:B:L0",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m2:s2:A:L1",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": -23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m2:s2:B:L2",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m3:s6:A:L0",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-bottom:a0:m3:s6:B:L1",
+   "stackType": "horizontal-bottom",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m3:s7:A:L0",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": -0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:horizontal-top:a0:m3:s7:B:L1",
+   "stackType": "horizontal-top",
+   "holes": [
+    {
+     "posL": 46.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -37.75,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -2.767,
+     "posW": 0,
+     "posT": 0.8,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": -13.5542,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m3:s3:B:L0",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": 23.0002,
+     "posW": -1.7661,
+     "posT": -0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0.0002,
+     "posW": -1.8059,
+     "posT": -0.0004,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": -1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m3:s3:A:L1",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": -23.0002,
+     "posW": 0.1911,
+     "posT": 0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 22.9998,
+     "posW": 0.2706,
+     "posT": 0.0005,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": -0.0002,
+     "posW": 0.2309,
+     "posT": 0.0004,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": -23,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 0,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:vertical:a0:m3:s3:B:L2",
+   "stackType": "vertical",
+   "holes": [
+    {
+     "posL": -22.9998,
+     "posW": 1.3044,
+     "posT": -0.0005,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23.0002,
+     "posW": 1.3839,
+     "posT": -0.0003,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0.0002,
+     "posW": 1.3441,
+     "posT": -0.0004,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 23,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 0,
+     "posW": 1.575,
+     "posT": 0,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam:a0:m0:s0:-:L0",
+   "stackType": "support-beam",
+   "holes": [
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam:a0:m1:s1:-:L0",
+   "stackType": "support-beam",
+   "holes": [
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam:a0:m2:s2:-:L0",
+   "stackType": "support-beam",
+   "holes": [
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam:a0:m3:s3:-:L0",
+   "stackType": "support-beam",
+   "holes": [
+    {
+     "posL": -11.5593,
+     "posW": -0.2706,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6879,
+     "posW": -0.1911,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    },
+    {
+     "posL": 8.6875,
+     "posW": 0,
+     "posT": -0.89,
+     "radius": 0.25,
+     "through": "W"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m0:s4:A:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": 0.2097,
+     "posT": 1.53,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1198,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2332,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m0:s5:B:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": -0.2097,
+     "posT": -1.73,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1411,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m1:s6:A:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": 0.2097,
+     "posT": 1.53,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1198,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m1:s7:B:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": -0.2097,
+     "posT": -1.73,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1411,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m2:s8:A:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": 0.2097,
+     "posT": 1.53,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1411,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m2:s9:B:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": -0.2097,
+     "posT": -1.73,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1198,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m3:s10:A:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": 0.2097,
+     "posT": 1.53,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1411,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2758,
+     "posW": 0,
+     "posT": 0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  },
+  {
+   "key": "beam:support-beam-reciprocal:a0:m3:s11:B:L0",
+   "stackType": "support-beam-reciprocal",
+   "holes": [
+    {
+     "posL": -23.4112,
+     "posW": -0.2097,
+     "posT": -1.73,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 4.2332,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    },
+    {
+     "posL": 15.1198,
+     "posW": 0,
+     "posT": -0.83,
+     "radius": 0.25,
+     "through": "T"
+    }
+   ]
+  }
+ ],
+ "a4": {
+  "floor": null,
+  "coverings": {
+   "supported": true,
+   "reason": null,
+   "baseShapes": [
+    {
+     "type": "covering",
+     "plane": {
+      "origin": {
+       "x": 41.633,
+       "y": 24.8921,
+       "z": -0.1292
+      },
+      "n": {
+       "x": 0.9447,
+       "y": 0.3279,
+       "z": -0.0019
+      },
+      "u": {
+       "x": -0.002,
+       "y": 0,
+       "z": -1
+      },
+      "v": {
+       "x": -0.3279,
+       "y": 0.9447,
+       "z": 0.0006
+      }
+     },
+     "corners3D": [
+      {
+       "x": 52.7109,
+       "y": 0.8139,
+       "z": 46.916
+      },
+      {
+       "x": 52.5263,
+       "y": 0.8139,
+       "z": -47.2176
+      },
+      {
+       "x": 36.5083,
+       "y": 47.0482,
+       "z": -31.1838
+      },
+      {
+       "x": 36.6301,
+       "y": 47.0482,
+       "z": 30.9452
+      }
+     ],
+     "slabCorners3D": [
+      {
+       "x": 52.4747,
+       "y": 0.732,
+       "z": 46.9165
+      },
+      {
+       "x": 52.2901,
+       "y": 0.732,
+       "z": -47.2171
+      },
+      {
+       "x": 36.2721,
+       "y": 46.9662,
+       "z": -31.1833
+      },
+      {
+       "x": 36.3939,
+       "y": 46.9662,
+       "z": 30.9457
+      },
+      {
+       "x": 52.9471,
+       "y": 0.8959,
+       "z": 46.9156
+      },
+      {
+       "x": 52.7625,
+       "y": 0.8959,
+       "z": -47.218
+      },
+      {
+       "x": 36.7444,
+       "y": 47.1302,
+       "z": -31.1843
+      },
+      {
+       "x": 36.8663,
+       "y": 47.1302,
+       "z": 30.9448
+      }
+     ],
+     "center": {
+      "x": 44.5939,
+      "y": 23.9311,
+      "z": -0.135
+     },
+     "normal": {
+      "x": 0.9447,
+      "y": 0.3279,
+      "z": -0.0019
+     },
+     "corners2D": [
+      {
+       "s": 0,
+       "t": 0
+      },
+      {
+       "s": 94.1338,
+       "t": 0
+      },
+      {
+       "s": 78.1315,
+       "t": 48.9407
+      },
+      {
+       "s": 16.0023,
+       "t": 48.9407
+      }
+     ],
+     "widthBottomIn": 94.134,
+     "widthTopIn": 62.129,
+     "slantHeightIn": 48.941,
+     "verticalHeightIn": 46.234,
+     "yBottom": 0,
+     "yTop": 46.234,
+     "tiltFromVerticalDeg": 19.14,
+     "sideTaperDeg": {
+      "left": 18.11,
+      "right": 18.11
+     },
+     "cornerAnglesDeg": [
+      71.89,
+      71.89,
+      108.11,
+      108.11
+     ],
+     "areaIn2": 3823.8,
+     "thicknessIn": 0.5,
+     "mountOffsetIn": 2.482,
+     "warnings": [],
+     "spanIndex": 0,
+     "moduleIndex": 0,
+     "band": "lower",
+     "dihedralToNextDeg": 83.79,
+     "edgeBevelDeg": 41.9,
+     "planarityErrorIn": 0,
+     "lean": "inward",
+     "label": "Span 1 · Lower",
+     "coverType": "plywood",
+     "kind": "wall",
+     "key": "wall:s0:lower"
+    },
+    {
+     "type": "covering",
+     "plane": {
+      "origin": {
+       "x": -0.0882,
+       "y": 24.8921,
+       "z": -41.6464
+      },
+      "n": {
+       "x": -0.0009,
+       "y": -0.3274,
+       "z": -0.9449
+      },
+      "u": {
+       "x": -1,
+       "y": 0,
+       "z": 0.001
+      },
+      "v": {
+       "x": -0.0003,
+       "y": 0.9449,
+       "z": -0.3274
+      }
+     },
+     "corners3D": [
+      {
+       "x": 45.8312,
+       "y": 45.684,
+       "z": -50.6739
+      },
+      {
+       "x": -46.0253,
+       "y": 45.684,
+       "z": -50.5838
+      },
+      {
+       "x": -46.3724,
+       "y": 46.684,
+       "z": -50.9299
+      },
+      {
+       "x": 46.1777,
+       "y": 46.684,
+       "z": -51.0207
+      }
+     ],
+     "slabCorners3D": [
+      {
+       "x": 45.8314,
+       "y": 45.7658,
+       "z": -50.4377
+      },
+      {
+       "x": -46.0251,
+       "y": 45.7658,
+       "z": -50.3476
+      },
+      {
+       "x": -46.3722,
+       "y": 46.7658,
+       "z": -50.6937
+      },
+      {
+       "x": 46.1779,
+       "y": 46.7658,
+       "z": -50.7844
+      },
+      {
+       "x": 45.831,
+       "y": 45.6021,
+       "z": -50.9101
+      },
+      {
+       "x": -46.0255,
+       "y": 45.6021,
+       "z": -50.82
+      },
+      {
+       "x": -46.3726,
+       "y": 46.6021,
+       "z": -51.1661
+      },
+      {
+       "x": 46.1774,
+       "y": 46.6021,
+       "z": -51.2569
+      }
+     ],
+     "center": {
+      "x": -0.0972,
+      "y": 46.184,
+      "z": -50.8021
+     },
+     "normal": {
+      "x": -0.0009,
+      "y": -0.3274,
+      "z": -0.9449
+     },
+     "corners2D": [
+      {
+       "s": 0,
+       "t": 0
+      },
+      {
+       "s": 91.8565,
+       "t": 0
+      },
+      {
+       "s": 92.2033,
+       "t": 1.0583
+      },
+      {
+       "s": -0.3468,
+       "t": 1.0583
+      }
+     ],
+     "widthBottomIn": 91.857,
+     "widthTopIn": 92.55,
+     "slantHeightIn": 1.058,
+     "verticalHeightIn": 1,
+     "yBottom": 46.234,
+     "yTop": 47.234,
+     "tiltFromVerticalDeg": -19.11,
+     "sideTaperDeg": {
+      "left": -18.14,
+      "right": -18.14
+     },
+     "cornerAnglesDeg": [
+      108.14,
+      108.14,
+      71.86,
+      71.86
+     ],
+     "areaIn2": 97.6,
+     "thicknessIn": 0.5,
+     "mountOffsetIn": 1.681,
+     "warnings": [],
+     "spanIndex": 1,
+     "moduleIndex": 1,
+     "band": "upper",
+     "dihedralToNextDeg": 83.9,
+     "edgeBevelDeg": 41.95,
+     "planarityErrorIn": 0,
+     "lean": "outward",
+     "label": "Span 2 · Upper",
+     "coverType": "plywood",
+     "kind": "wall",
+     "key": "wall:s1:upper"
+    },
+    {
+     "type": "covering",
+     "plane": {
+      "origin": {
+       "x": -41.6463,
+       "y": 24.8921,
+       "z": 0.0341
+      },
+      "n": {
+       "x": -0.9449,
+       "y": 0.3274,
+       "z": 0.0019
+      },
+      "u": {
+       "x": 0.002,
+       "y": 0,
+       "z": 1
+      },
+      "v": {
+       "x": 0.3274,
+       "y": 0.9449,
+       "z": -0.0006
+      }
+     },
+     "corners3D": [
+      {
+       "x": -52.7089,
+       "y": 0.8128,
+       "z": -47.1037
+      },
+      {
+       "x": -52.5239,
+       "y": 0.8128,
+       "z": 47.2149
+      },
+      {
+       "x": -36.5374,
+       "y": 47.0471,
+       "z": 31.1498
+      },
+      {
+       "x": -36.6595,
+       "y": 47.0471,
+       "z": -31.1014
+      }
+     ],
+     "slabCorners3D": [
+      {
+       "x": -52.4727,
+       "y": 0.731,
+       "z": -47.1042
+      },
+      {
+       "x": -52.2877,
+       "y": 0.731,
+       "z": 47.2144
+      },
+      {
+       "x": -36.3011,
+       "y": 46.9653,
+       "z": 31.1493
+      },
+      {
+       "x": -36.4232,
+       "y": 46.9653,
+       "z": -31.1018
+      },
+      {
+       "x": -52.9451,
+       "y": 0.8947,
+       "z": -47.1032
+      },
+      {
+       "x": -52.7602,
+       "y": 0.8947,
+       "z": 47.2154
+      },
+      {
+       "x": -36.7736,
+       "y": 47.129,
+       "z": 31.1502
+      },
+      {
+       "x": -36.8957,
+       "y": 47.129,
+       "z": -31.1009
+      }
+     ],
+     "center": {
+      "x": -44.6074,
+      "y": 23.93,
+      "z": 0.0399
+     },
+     "normal": {
+      "x": -0.9449,
+      "y": 0.3274,
+      "z": 0.0019
+     },
+     "corners2D": [
+      {
+       "s": 0,
+       "t": 0
+      },
+      {
+       "s": 94.3188,
+       "t": 0
+      },
+      {
+       "s": 78.285,
+       "t": 48.9304
+      },
+      {
+       "s": 16.0338,
+       "t": 48.9304
+      }
+     ],
+     "widthBottomIn": 94.319,
+     "widthTopIn": 62.251,
+     "slantHeightIn": 48.93,
+     "verticalHeightIn": 46.234,
+     "yBottom": 0,
+     "yTop": 46.234,
+     "tiltFromVerticalDeg": 19.11,
+     "sideTaperDeg": {
+      "left": 18.14,
+      "right": 18.14
+     },
+     "cornerAnglesDeg": [
+      71.86,
+      71.86,
+      108.14,
+      108.14
+     ],
+     "areaIn2": 3830.5,
+     "thicknessIn": 0.5,
+     "mountOffsetIn": 2.483,
+     "warnings": [],
+     "spanIndex": 2,
+     "moduleIndex": 2,
+     "band": "lower",
+     "dihedralToNextDeg": 83.9,
+     "edgeBevelDeg": 41.95,
+     "planarityErrorIn": 0,
+     "lean": "inward",
+     "label": "Span 3 · Lower",
+     "coverType": "plywood",
+     "kind": "wall",
+     "key": "wall:s2:lower"
+    },
+    {
+     "type": "covering",
+     "plane": {
+      "origin": {
+       "x": 0.0749,
+       "y": 24.8921,
+       "z": 41.5513
+      },
+      "n": {
+       "x": 0.0028,
+       "y": 0.3274,
+       "z": 0.9449
+      },
+      "u": {
+       "x": 1,
+       "y": 0,
+       "z": -0.0029
+      },
+      "v": {
+       "x": -0.001,
+       "y": 0.9449,
+       "z": -0.3274
+      }
+     },
+     "corners3D": [
+      {
+       "x": -47.052,
+       "y": 0.8128,
+       "z": 52.6601
+      },
+      {
+       "x": 47.2664,
+       "y": 0.8128,
+       "z": 52.3827
+      },
+      {
+       "x": 31.1856,
+       "y": 47.0471,
+       "z": 36.4118
+      },
+      {
+       "x": -31.0654,
+       "y": 47.0471,
+       "z": 36.595
+      }
+     ],
+     "slabCorners3D": [
+      {
+       "x": -47.0527,
+       "y": 0.731,
+       "z": 52.4239
+      },
+      {
+       "x": 47.2657,
+       "y": 0.731,
+       "z": 52.1464
+      },
+      {
+       "x": 31.1849,
+       "y": 46.9653,
+       "z": 36.1756
+      },
+      {
+       "x": -31.0661,
+       "y": 46.9653,
+       "z": 36.3587
+      },
+      {
+       "x": -47.0513,
+       "y": 0.8947,
+       "z": 52.8963
+      },
+      {
+       "x": 47.2671,
+       "y": 0.8947,
+       "z": 52.6189
+      },
+      {
+       "x": 31.1863,
+       "y": 47.129,
+       "z": 36.6481
+      },
+      {
+       "x": -31.0647,
+       "y": 47.129,
+       "z": 36.8312
+      }
+     ],
+     "center": {
+      "x": 0.0836,
+      "y": 23.93,
+      "z": 44.5124
+     },
+     "normal": {
+      "x": 0.0028,
+      "y": 0.3274,
+      "z": 0.9449
+     },
+     "corners2D": [
+      {
+       "s": 0,
+       "t": 0
+      },
+      {
+       "s": 94.3188,
+       "t": 0
+      },
+      {
+       "s": 78.285,
+       "t": 48.9304
+      },
+      {
+       "s": 16.0338,
+       "t": 48.9304
+      }
+     ],
+     "widthBottomIn": 94.319,
+     "widthTopIn": 62.251,
+     "slantHeightIn": 48.93,
+     "verticalHeightIn": 46.234,
+     "yBottom": 0,
+     "yTop": 46.234,
+     "tiltFromVerticalDeg": 19.11,
+     "sideTaperDeg": {
+      "left": 18.14,
+      "right": 18.14
+     },
+     "cornerAnglesDeg": [
+      71.86,
+      71.86,
+      108.14,
+      108.14
+     ],
+     "areaIn2": 3830.5,
+     "thicknessIn": 0.5,
+     "mountOffsetIn": 2.483,
+     "warnings": [],
+     "spanIndex": 3,
+     "moduleIndex": 3,
+     "band": "lower",
+     "dihedralToNextDeg": 83.79,
+     "edgeBevelDeg": 41.9,
+     "planarityErrorIn": 0,
+     "lean": "inward",
+     "label": "Span 4 · Lower",
+     "coverType": "plywood",
+     "kind": "wall",
+     "key": "wall:s3:lower"
+    }
+   ],
+   "copies": 4,
+   "totals": {
+    "plywoodWalls": 4,
+    "fabricBands": 0,
+    "tables": 0,
+    "plywoodAreaIn2": 11582.4,
+    "fabricAreaIn2": 0,
+    "tableAreaIn2": 0,
+    "spansCovered": 4
+   }
+  },
+  "shade": null,
+  "plan": {
+   "totals": {
+    "walls": 4,
+    "tables": 0,
+    "floorSheets": 0,
+    "fabricBands": 0,
+    "sheets": 7,
+    "fullSheets": 0,
+    "cutPieces": 7,
+    "plywoodAreaIn2": 11582.4,
+    "stockAreaIn2": 32256,
+    "seams": 3,
+    "battenLinearIn": 146.8,
+    "fabricYards": 0,
+    "fabricAreaIn2": 0,
+    "fabricPanels": 0,
+    "grommets": 0,
+    "warnings": 7,
+    "utilization": 0.359
+   },
+   "walls": [
+    {
+     "key": "wall:s0:lower",
+     "nest": {
+      "sheetCount": 2,
+      "seamCount": 1,
+      "seamLinearIn": 48.938,
+      "polygonAreaIn2": 3823.8,
+      "stockAreaIn2": 9216,
+      "pieces": [
+       {
+        "isFullSheet": false,
+        "areaIn2": 1911.6,
+        "poly": null
+       },
+       {
+        "isFullSheet": false,
+        "areaIn2": 1911.6,
+        "poly": null
+       }
+      ],
+      "warnings": [
+       "seam-on-taper",
+       "seam-on-taper",
+       "batten"
+      ]
+     }
+    },
+    {
+     "key": "wall:s1:upper",
+     "nest": {
+      "sheetCount": 1,
+      "seamCount": 0,
+      "seamLinearIn": 0,
+      "polygonAreaIn2": 97.6,
+      "stockAreaIn2": 4608,
+      "pieces": [
+       {
+        "isFullSheet": false,
+        "areaIn2": 98,
+        "poly": null
+       }
+      ],
+      "warnings": [
+       "sliver"
+      ]
+     }
+    },
+    {
+     "key": "wall:s2:lower",
+     "nest": {
+      "sheetCount": 2,
+      "seamCount": 1,
+      "seamLinearIn": 48.938,
+      "polygonAreaIn2": 3830.5,
+      "stockAreaIn2": 9216,
+      "pieces": [
+       {
+        "isFullSheet": false,
+        "areaIn2": 1915.4,
+        "poly": null
+       },
+       {
+        "isFullSheet": false,
+        "areaIn2": 1915.4,
+        "poly": null
+       }
+      ],
+      "warnings": [
+       "seam-on-taper",
+       "seam-on-taper",
+       "batten"
+      ]
+     }
+    },
+    {
+     "key": "wall:s3:lower",
+     "nest": {
+      "sheetCount": 2,
+      "seamCount": 1,
+      "seamLinearIn": 48.938,
+      "polygonAreaIn2": 3830.5,
+      "stockAreaIn2": 9216,
+      "pieces": [
+       {
+        "isFullSheet": false,
+        "areaIn2": 1915.4,
+        "poly": null
+       },
+       {
+        "isFullSheet": false,
+        "areaIn2": 1915.4,
+        "poly": null
+       }
+      ],
+      "warnings": [
+       "seam-on-taper",
+       "seam-on-taper",
+       "batten"
+      ]
+     }
+    }
+   ],
+   "tables": [],
+   "floor": null,
+   "fabric": [],
+   "bom": [
+    {
+     "key": "plywoodSheet",
+     "stateKey": "costPlywoodSheet",
+     "sidebarId": "nb-cost-plywood",
+     "qty": 7,
+     "item": "Plywood sheets 48\" × 96\" (4 walls)",
+     "unit": 45,
+     "total": 315
+    }
+   ]
+  }
+ }
+}

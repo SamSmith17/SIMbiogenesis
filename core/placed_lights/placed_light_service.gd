@@ -50,16 +50,22 @@ static func get_layer(main: Node) -> PlacedLightLayer:
 	if main == null:
 		return null
 	var key := map_key(main)
-	if _layer != null and key == _key:
+	# Compare the RESOLVED path, not the site key: two worlds on one site share
+	# the key, and this layer is a static that outlives the scene.
+	var path := PlacedLightLayer.path_for_key(key)
+	if _layer != null and key == _key and path == _path:
 		return _layer
 	_layer = PlacedLightLayer.create_empty()
 	_key = key
-	_path = PlacedLightLayer.path_for_key(key)
+	_path = path
+	_built_for = ""
 	selection.clear()
 	active_style.clear()
 	_undo.clear()
 	_redo.clear()
-	if not _layer.load_from(_path) and not key.begins_with("scene_"):
+	# A dir-storage world starts empty — never adopt the old shared v2 file.
+	if not _layer.load_from(_path) and not key.begins_with("scene_") \
+			and not WorldPaths.is_dir_world():
 		_adopt_shared_legacy_file(main)
 	if _layer.migrated_from > 0:
 		print("PlacedLightService: migrated lights v%d -> v%d (%s)" % [

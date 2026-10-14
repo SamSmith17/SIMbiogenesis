@@ -58,6 +58,12 @@ var _collision_check: CheckBox
 var _show3d_check: CheckBox
 var _shadow_option: OptionButton
 var _space_row: NpcSpaceTagRow
+var _firepit_section: VBoxContainer = null
+var _pv_section: VBoxContainer = null
+var _pv_tilt: SpinBox = null
+var _pv_info: Label = null
+var _firepit_mode: OptionButton = null
+var _firepit_below: SpinBox = null
 var _model_option: OptionButton
 var _packed_lbl: Label
 var _pack_btn: Button
@@ -222,6 +228,8 @@ func _build_ui() -> void:
 	_build_placement_section()
 	_build_display_section()
 	_build_fire_section()
+	_build_firepit_section()
+	_build_pv_section()
 	_model_section = _section("Model")
 	_model_btns = VBoxContainer.new()
 	_model_btns.add_theme_constant_override("separation", UITheme.SPACE_XS)
@@ -416,6 +424,143 @@ func _build_display_section() -> void:
 	box.add_child(_space_row)
 
 
+## FIREPIT (FirepitBuilder): when its small fire burns. Auto lights it at
+## night below a temperature; the crowd gathers round exactly the pits that
+## are burning (the bridge asks FirepitBuilder.lit_for, as the fire does).
+## Written to the record WITHOUT a rebuild — FirepitFire re-reads it each
+## second.
+func _build_firepit_section() -> void:
+	_firepit_section = _section("Firepit")
+	var row := _row(_firepit_section)
+	_small_label("Lit", row, 60)
+	_firepit_mode = OptionButton.new()
+	_firepit_mode.add_item("At night when cold")
+	_firepit_mode.add_item("Always")
+	_firepit_mode.add_item("Out")
+	_firepit_mode.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_firepit_mode.tooltip_text = "When the fire burns. People gather round a lit pit on a cold night."
+	_firepit_mode.item_selected.connect(_on_firepit_mode)
+	row.add_child(_firepit_mode)
+	var row2 := _row(_firepit_section)
+	_small_label("Below", row2, 60)
+	_firepit_below = SpinBox.new()
+	_firepit_below.min_value = -20.0
+	_firepit_below.max_value = 35.0
+	_firepit_below.step = 1.0
+	_firepit_below.suffix = "°C"
+	_firepit_below.tooltip_text = "At night, light it when the air is colder than this"
+	_firepit_below.value_changed.connect(_on_firepit_below)
+	row2.add_child(_firepit_below)
+	_firepit_section.get_parent().get_parent().visible = false
+
+
+func _sync_firepit() -> void:
+	if _firepit_section == null:
+		return
+	var is_pit := str(_rec.get("model_id", "")) == FirepitBuilder.MODEL_ID
+	_firepit_section.get_parent().get_parent().visible = is_pit
+	if not is_pit:
+		return
+	_firepit_mode.selected = maxi(FirepitBuilder.MODES.find(str(_rec.get("firepit_mode", FirepitBuilder.MODE_AUTO))), 0)
+	_firepit_below.set_value_no_signal(float(_rec.get("firepit_below_c", FirepitBuilder.DEFAULT_BELOW_C)))
+	_firepit_below.editable = _firepit_mode.selected == 0
+
+
+func _patch_firepit(patch: Dictionary) -> void:
+	if _syncing or _prop_id.is_empty():
+		return
+	_resolve_main()
+	PlacedPropService.update_prop_record(_main, _prop_id, patch, false)
+	for k in patch:
+		_rec[k] = patch[k]
+	_firepit_below.editable = _firepit_mode.selected == 0
+
+
+func _on_firepit_mode(i: int) -> void:
+	_patch_firepit({"firepit_mode": str(FirepitBuilder.MODES[clampi(i, 0, FirepitBuilder.MODES.size() - 1)])})
+
+
+func _on_firepit_below(v: float) -> void:
+	_patch_firepit({"firepit_below_c": v})
+
+
+## SOLAR ARRAY (PvArrayBuilder, a ground-mount rack bound to a graph array):
+## tilt here, facing by turning the rack (the gizmo's yaw ring or "Face the
+## equator"). Both drive the graph array's plane of array — and through it
+## SolarUI — via sync_site_from_prop. The panel COUNT is the graph array's
+## (the electrical string); the rack only draws it.
+func _build_pv_section() -> void:
+	_pv_section = _section("Solar array")
+	var row := _row(_pv_section)
+	_small_label("Tilt", row, 60)
+	_pv_tilt = SpinBox.new()
+	_pv_tilt.min_value = 0.0
+	_pv_tilt.max_value = 60.0
+	_pv_tilt.step = 1.0
+	_pv_tilt.suffix = "°"
+	_pv_tilt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pv_tilt.tooltip_text = "Panel tilt from flat. Latitude is a good all-year figure; steeper favours winter."
+	_pv_tilt.value_changed.connect(_on_pv_tilt)
+	row.add_child(_pv_tilt)
+	var face := Button.new()
+	face.text = "Face the equator"
+	face.tooltip_text = "Turn the rack to face due south (north in the southern hemisphere)"
+	UITheme.style_button(face)
+	face.pressed.connect(_on_pv_face_equator)
+	_pv_section.add_child(face)
+	_pv_info = Label.new()
+	_pv_info.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_pv_info.add_theme_color_override("font_color", C_TEXT_S)
+	_pv_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_pv_section.add_child(_pv_info)
+	_pv_section.get_parent().get_parent().visible = false
+
+
+func _sync_pv() -> void:
+	if _pv_section == null:
+		return
+	var is_pv := str(_rec.get("model_id", "")) == PvArrayBuilder.MODEL_ID
+	_pv_section.get_parent().get_parent().visible = is_pv
+	if not is_pv:
+		return
+	var spec := PvArrayBuilder.resolve_spec(_rec.get("pv_array_spec", {}) as Dictionary)
+	_pv_tilt.set_value_no_signal(float(spec["tilt_deg"]))
+	var o := PvArrayBuilder.orientation_for(float(_tf.get("yaw", _rec.get("yaw", 0.0))),
+			float(spec["tilt_deg"]))
+	var bound := str(_rec.get("graph_item_id", ""))
+	_pv_info.text = "%d panels · faces %.0f° (compass) at %.0f°%s" % [int(spec["count"]),
+			float(o["azimuth_deg"]), float(o["tilt_deg"]),
+			"" if bound.is_empty() else " · drives graph array " + bound]
+
+
+func _on_pv_tilt(v: float) -> void:
+	if _syncing or _prop_id.is_empty():
+		return
+	var spec := (_rec.get("pv_array_spec", {}) as Dictionary).duplicate(true)
+	spec["tilt_deg"] = v
+	_resolve_main()
+	# Rebuild THIS prop (the rack's geometry changes); the service tells the
+	# graph, which re-orients the array and SolarUI.
+	PlacedPropService.update_prop_record(_main, _prop_id, {"pv_array_spec": spec}, true)
+	_rec["pv_array_spec"] = spec
+	_sync_pv()
+
+
+func _on_pv_face_equator() -> void:
+	if _prop_id.is_empty():
+		return
+	_resolve_main()
+	var lat := 45.0
+	if _main != null and _main.get("latitude") != null:
+		lat = float(_main.get("latitude"))
+	_tf["yaw"] = PvArrayBuilder.yaw_for_azimuth(180.0 if lat >= 0.0 else 0.0)
+	_dirty_tf = true
+	_flush_transform()
+	if _spins.has("yaw"):
+		(_spins["yaw"] as SpinBox).set_value_no_signal(float(_tf["yaw"]))
+	_sync_pv()
+
+
 func _build_fire_section() -> void:
 	var box := _section("Fire")
 	_burnable_check = CheckBox.new()
@@ -432,17 +577,18 @@ func _build_fire_section() -> void:
 	_fire_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_fire_box.add_child(_fire_status)
 	var tips := {
-		"climb_h": ["Ignition → collapse", "How long the structure burns before it falls into its own fire"],
+		"preroll_h": ["Pre-roll", "From ignition to the first flame. On a tagged Effigy this is the burn's run-up: the crowd gathers, the fire flow dances, the sandmen take the line (defaults to 45 min; 0 = catches at once)"],
+		"climb_h": ["First flame → collapse", "How long the structure burns before it falls into its own fire"],
 		"bonfire_h": ["Bonfire", "Open flame on the pile after the collapse"],
 		"ember_h": ["Embers → ash", "From the last flame to cold grey ash"],
 	}
-	for key in ["climb_h", "bonfire_h", "ember_h"]:
+	for key in ["preroll_h", "climb_h", "bonfire_h", "ember_h"]:
 		var r := _row(_fire_box)
 		var l := _small_label(tips[key][0], r, 120)
 		l.tooltip_text = tips[key][1]
 		var sb := SpinBox.new()
 		sb.step = 1.0
-		sb.min_value = 1.0
+		sb.min_value = 0.0 if key == "preroll_h" else 1.0
 		sb.max_value = 48.0 * 60.0
 		sb.allow_greater = true
 		sb.suffix = " min"
@@ -517,6 +663,8 @@ func _sync_widgets() -> void:
 	_space_row.bind_prop(_loader, _prop_id)
 	_del_btn.text = "Remove OSM" if str(_rec.get("type", "")) == "osm" else "Delete"
 	_sync_fire()
+	_sync_firepit()
+	_sync_pv()
 	_syncing = false
 
 
@@ -546,17 +694,51 @@ func _rebuild_dynamic_sections() -> void:
 		_button("Stow" if deployed else "Deploy", "Fold / unfold the structure (3 s)", _model_btns, _on_linkage_toggle)
 		_button("Edit in Linkage Lab…", "The designer, bound to this structure", _model_btns, _on_edit_linkage)
 		_button("Build guide…", "BOM, cut list, drill templates, crew plan", _model_btns, _on_build_guide)
+		_build_rehearsal_row()
 		if not bool(_rec.get("packed", false)):
 			_button("Crew: break down", "Queue the crew to strip, fold and pack it", _model_btns, _on_crew_breakdown)
 		elif str(_rec.get("stowed_in", "")).is_empty() and not (_rec.get("build_state") is Dictionary):
 			_button("Crew: rebuild", "Queue the crew to raise the packed crate again", _model_btns, _on_crew_rebuild)
 	if ModelCatalog.is_hydro_turbine(mid) or str(_rec.get("kind", "")) in ["siphon_hydro", "siphon_hoverboard"]:
 		_button("Hydro Lab…", "The turbine's lab, on its graph node", _model_btns, _on_edit_siphon)
+		_build_dip_tube_toggle()
+	_build_material_fix_row(mid)
 	_button("Connection ports…", "Where pipes and wires plug into this prop", _model_btns, _on_edit_ports)
+	if not str(_rec.get("graph_item_id", "")).is_empty():
+		_button("Open node in graph", "Select this prop's node in the systems graph", _model_btns, _on_open_in_graph)
 	var spec := PlacedPropRuntime.packed_spec_for_record(_rec)
 	if not spec.is_empty() and str(_rec.get("stowed_in", "")).is_empty():
 		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "📦 Pack up",
 			"Pack into its shipping form, or deploy it", _model_btns, _on_pack_toggled)
+
+
+## User-imported models only: how SketchUp's invented gloss values are
+## handled (ImportMaterialFixer). Auto = fix when the file is a SketchUp
+## export; Off = the exporter's materials as they came; Force = fix anyway.
+## Changing it rebuilds THIS prop now; other copies pick it up on rebuild.
+func _build_material_fix_row(mid: String) -> void:
+	var entry := ModelCatalog.find(mid)
+	if not str(entry.get("path", "")).begins_with("user://"):
+		return
+	var row := _row(_model_btns)
+	_small_label("Materials", row, 60)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var modes := [ImportMaterialFixer.MODE_AUTO, ImportMaterialFixer.MODE_OFF, ImportMaterialFixer.MODE_FORCE]
+	var is_su := ModelCatalog.source_app_for(mid) == "sketchup"
+	opt.add_item("Auto (SketchUp export: fixed)" if is_su else "Auto (not a SketchUp export)")
+	opt.add_item("As exported")
+	opt.add_item("Always fix gloss")
+	opt.tooltip_text = "SketchUp has no gloss data, so its glTF exporters invent it (everything semi-glossy). Auto replaces it with real-world roughness by material name."
+	opt.selected = maxi(modes.find(str(entry.get("material_fix", ImportMaterialFixer.MODE_AUTO))), 0)
+	opt.item_selected.connect(func(i: int) -> void:
+		var m := str(modes[clampi(i, 0, modes.size() - 1)])
+		ModelCatalog.set_material_fix(mid, m)
+		_resolve_main()
+		# The mode lives on the catalog entry; writing it on the record too is
+		# what triggers this prop's rebuild (an empty patch is a no-op).
+		PlacedPropService.update_prop_record(_main, _prop_id, {"material_fix": m}, true))
+	row.add_child(opt)
 
 
 func _refresh_packed_line() -> void:
@@ -629,6 +811,7 @@ func _flush_transform() -> void:
 	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("sync_site_from_prop"):
 		sgv.call("sync_site_from_prop", _prop_id)
+	_sync_pv()
 
 
 func _find_prop_node() -> PlacedProp:
@@ -942,7 +1125,8 @@ func _sync_fire() -> void:
 	for key in _fire_spins:
 		(_fire_spins[key] as SpinBox).set_value_no_signal(round(float(durations.get(key, 0.0)) * 60.0))
 	var auto: Dictionary = burn.get("auto", {}) if not burn.is_empty() else _estimate()
-	_fire_auto_lbl.text = "Auto estimate: %s to collapse · %s bonfire · %s embers (%s of fuel)" % [
+	_fire_auto_lbl.text = "Auto estimate: %s pre-roll · %s to collapse · %s bonfire · %s embers (%s of fuel)" % [
+		FireTimeline.fmt_hours(float(auto.get("preroll_h", 0.0))),
 		FireTimeline.fmt_hours(float(auto.get("climb_h", 0.0))),
 		FireTimeline.fmt_hours(float(auto.get("bonfire_h", 0.0))),
 		FireTimeline.fmt_hours(float(auto.get("ember_h", 0.0))),
@@ -967,7 +1151,7 @@ func _fire_plan_or_estimate() -> Dictionary:
 	var est := _estimate()
 	if plan is Dictionary:
 		var out := est.duplicate()
-		for k in ["climb_h", "bonfire_h", "ember_h"]:
+		for k in ["preroll_h", "climb_h", "bonfire_h", "ember_h"]:
 			if (plan as Dictionary).has(k):
 				out[k] = float((plan as Dictionary)[k])
 		return out
@@ -990,6 +1174,18 @@ func _refresh_fire_status() -> void:
 	match name:
 		"none":
 			line = "Lit at +%s from now." % FireTimeline.fmt_hours(float(burn["ignited_h"]) - t)
+		"pre-roll":
+			var pre := float(burn.get("preroll_h", 0.0))
+			var stage := str(VenueCrowd.effigy_phase(burn, t).get("stage", ""))
+			var doing := {VenueCrowd.STAGE_GATHER: "the crowd is gathering",
+				VenueCrowd.STAGE_FLOW: "the fire flow is dancing",
+				VenueCrowd.STAGE_SANDMEN: "the sandmen are taking the line"}
+			line = "Lit — %s; flames in %s (gather %s · fire flow %s · sandmen %s)." % [
+				str(doing.get(stage, "the crowd is forming the perimeter")),
+				FireTimeline.fmt_hours(float(st["flame_in_h"])),
+				FireTimeline.fmt_hours(pre * VenueCrowd.GATHER_FRAC),
+				FireTimeline.fmt_hours(pre * (VenueCrowd.FLOW_END_FRAC - VenueCrowd.GATHER_FRAC)),
+				FireTimeline.fmt_hours(pre * (1.0 - VenueCrowd.FLOW_END_FRAC))]
 		"burning":
 			line = "Burning — %d%% up, collapse in %s%s." % [int(float(st["progress"]) * 100.0),
 				FireTimeline.fmt_hours(FireTimeline.climb_h(burn) - float(st["burn_h"])),
@@ -1150,12 +1346,96 @@ func _on_edit_linkage() -> void:
 		_main.call("open_linkage_lab_for_prop", pid)
 
 
+## "Rehearse build": a crew of N builds this structure from bare ground,
+## following the world clock (speed it up to watch it go up quickly; scrub
+## back to see it again). The record rides the prop (build_run).
+func _build_rehearsal_row() -> void:
+	var run = _rec.get(LinkageBuildSite.RECORD_KEY)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_model_btns.add_child(row)
+	var lbl := Label.new()
+	lbl.text = "Crew"
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(lbl)
+	var crew := SpinBox.new()
+	crew.min_value = 1
+	crew.max_value = 40
+	var crew_n0: int = LinkageBuildSite.DEFAULT_CREW
+	if run is Dictionary:
+		crew_n0 = int((run as Dictionary).get("crew_n", LinkageBuildSite.DEFAULT_CREW))
+	crew.value = crew_n0
+	crew.tooltip_text = "How many people build it"
+	row.add_child(crew)
+	var go := _button("Rehearse build" if not (run is Dictionary) else "Restart build",
+		"Watch a crew cut, drill, place, bolt, lift and deploy it, on the world clock", row,
+		func() -> void:
+			_resolve_main()
+			if _main != null and LinkageBuildSite.start_rehearsal(_main, _prop_id, int(crew.value)):
+				open_for_prop(_prop_id))
+	go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if run is Dictionary:
+		var line := Label.new()
+		line.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		line.add_theme_color_override("font_color", C_TEXT_S)
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_model_btns.add_child(line)
+		var tick := func() -> void:
+			_resolve_main()
+			var site := LinkageBuildSite.site_for(_main, _prop_id) if _main != null else null
+			line.text = site.progress_line() if site != null else ""
+		tick.call()
+		var timer := Timer.new()
+		timer.wait_time = 0.5
+		timer.autostart = true
+		timer.timeout.connect(tick)
+		line.add_child(timer)
+		_button("End rehearsal", "Clear the build; the structure stands as before", _model_btns,
+			func() -> void:
+				_resolve_main()
+				if _main != null:
+					LinkageBuildSite.clear_rehearsal(_main, _prop_id)
+					open_for_prop(_prop_id))
+
+
 func _on_build_guide() -> void:
 	var pid := _prop_id
 	_resolve_main()
 	if _main != null and _main.has_method("open_linkage_build_guide_for_prop"):
 		close()
 		_main.call("open_linkage_build_guide_for_prop", pid)
+
+
+## "Show dip tube": a SIPHON turbine's 6″ dip tube drawn in the world, off
+## by default (it is under water). Lives on the GRAPH item's specs
+## (`show_dip_tube`) — the Lab's Siphon section carries the same box.
+func _build_dip_tube_toggle() -> void:
+	var graph_id := str(_rec.get("graph_item_id", ""))
+	var gv := _graph()
+	if gv == null or graph_id.is_empty():
+		return
+	var model: Variant = gv.get("model")
+	if model == null or not (model as Object).has_method("get_item"):
+		return
+	var item: Dictionary = model.call("get_item", graph_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if bool(HydroSource.kind_meta(str(specs.get("turbine_kind", "siphon"))).get("has_penstock", false)):
+		return
+	var cb := CheckBox.new()
+	cb.text = "Show dip tube"
+	cb.tooltip_text = "Draw the 6″ dip tube hanging straight down from the intake fitting into the pond (off by default — it is under water)"
+	cb.set_pressed_no_signal(bool(specs.get("show_dip_tube", false)))
+	cb.toggled.connect(func(on: bool) -> void:
+		var it: Dictionary = model.call("get_item", graph_id)
+		if it.is_empty():
+			return
+		var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		sp["show_dip_tube"] = on
+		model.call("update_item", graph_id, {"specs": sp}))
+	_model_btns.add_child(cb)
 
 
 func _on_edit_siphon() -> void:
@@ -1169,6 +1449,15 @@ func _on_edit_siphon() -> void:
 		gv.call("open_siphon_lab", graph_id)
 	elif gv.has_method("_show_toast"):
 		gv.call("_show_toast", "Bind this prop to a hydro turbine graph node first")
+
+
+func _on_open_in_graph() -> void:
+	var graph_id := str(_rec.get("graph_item_id", ""))
+	var gv := _graph()
+	if gv == null or graph_id.is_empty() or not gv.has_method("open_node_in_graph"):
+		return
+	close()
+	gv.call("open_node_in_graph", graph_id)
 
 
 func _on_edit_ports() -> void:

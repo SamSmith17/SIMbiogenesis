@@ -221,6 +221,37 @@ const TOOLS: Array[Dictionary] = [
 			{"key": "headcount", "label": "People", "min": 0.0, "max": 500.0, "default": 0.0, "step": 1.0},
 		],
 	},
+	# --- WATER: streams, culverts, the drainage network (WaterNetwork) ---
+	{
+		"id": "water_trace", "section": "water", "label": "Trace",
+		"tooltip": "Click anywhere: the path water takes downhill from there becomes a stream,\nending where it joins another.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "water_draw", "section": "water", "label": "Draw",
+		"tooltip": "Click waypoints, Enter or double-click to finish.\nDrawn uphill? It is reversed so it runs downstream.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "water_edit", "section": "water", "label": "Edit",
+		"tooltip": "Click a stream (mapped, yours, or a drainage line). Drag waypoints,\ndrag the line to add one, Del removes one, Ctrl-drag moves it all.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "water_span", "section": "water", "label": "Culvert",
+		"tooltip": "Click a span between two waypoints to make it open channel,\nculvert or pipe.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "water_view", "section": "water", "label": "View",
+		"tooltip": "Water display, the drainage network, carving and re-carving.",
+		"shapes": [],
+		"params": [],
+	},
 ]
 
 ## Placement chip vocabularies. LITERAL copies of FestivalPlacementLayer's

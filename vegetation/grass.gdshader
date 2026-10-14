@@ -11,6 +11,7 @@
 shader_type spatial;
 render_mode cull_disabled;
 
+#include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/wind_vertex.gdshaderinc"
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
 
@@ -170,8 +171,11 @@ void fragment() {
 	vec3 albedo = mix(base * dist_fade + patch_col * patch_blend, patch_col, blade_fade);
 
 	// Seasonal dormancy: grass greens up in spring, yellows slightly in summer, cures to gold in autumn and browns off in winter.
+	// (Summer used to pull 65 % toward the pale summer tan, which bleached
+	// every lawn to straw for half the year; it yellows now, not bleaches.)
 	float dryness = clamp(max(winter, autumn * 0.7), 0.0, 1.0);
-	albedo = mix(albedo, summer_color, clamp(summer, 0.0, 1.0) * 0.65);
+	albedo = mix(albedo, summer_color, clamp(summer, 0.0, 1.0) * 0.32);
+	albedo = veg_saturate(albedo, veg_saturation);
 	albedo = mix(albedo, dry_color, dryness * 0.85);
 
 	// Snow burial: lying snow covers low turf; taller blades poke through.
@@ -188,6 +192,8 @@ void fragment() {
 
 	ALPHA = alpha;
 	ALBEDO = albedo;
+	EMISSION = albedo * veg_fill_amount() * (1.0 - night_factor);
 	ROUGHNESS = grass_rough;
 	METALLIC = 0.0;
+	SPECULAR = 0.25;
 }

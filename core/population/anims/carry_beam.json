@@ -1,0 +1,83 @@
+{
+	"id": "carry_beam",
+	"label": "Carry a beam",
+	"length_s": 1.05,
+	"loop": true,
+	"tool": {},
+	"ik": {
+		"hand_r": "grip",
+		"hand_l": "grip2"
+	},
+	"feet": "keyed",
+	"keys": [
+		{
+			"t": 0,
+			"ease": "linear",
+			"joints": {
+				"torso": [
+					6,
+					0,
+					0
+				],
+				"hip_r": [
+					-24,
+					0,
+					-2
+				],
+				"knee_r": [
+					8,
+					0,
+					0
+				],
+				"hip_l": [
+					18,
+					0,
+					2
+				],
+				"knee_l": [
+					30,
+					0,
+					0
+				]
+			},
+			"body": {
+				"y": 0
+			}
+		},
+		{
+			"t": 0.525,
+			"ease": "linear",
+			"joints": {
+				"torso": [
+					6,
+					0,
+					0
+				],
+				"hip_r": [
+					18,
+					0,
+					-2
+				],
+				"knee_r": [
+					30,
+					0,
+					0
+				],
+				"hip_l": [
+					-24,
+					0,
+					2
+				],
+				"knee_l": [
+					8,
+					0,
+					0
+				]
+			},
+			"body": {
+				"y": 0
+			}
+		}
+	],
+	"events": []
+}

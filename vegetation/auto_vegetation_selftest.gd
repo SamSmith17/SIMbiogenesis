@@ -466,9 +466,11 @@ func _test_card_orientation() -> void:
 
 func _test_deciduous_split_mesh() -> void:
 	var mesh := VegetationCardFactory.mesh_for_species("deciduous", {})
-	# NEAR-LOD deciduous now builds 3 surfaces: 0 = trunk/branches (bark),
-	# 1 = billboard shadow proxy (crown silhouette caster), 2 = leaf-shell canopy.
-	_check("deciduous has 3 surfaces", mesh.get_surface_count() == 3,
+	# NEAR-LOD deciduous builds 2 surfaces by default: 0 = trunk/branches
+	# (bark), last = leaf-shell canopy. The billboard shadow proxy (a near-black
+	# crown caster between them) is opt-in via deciduous_shadow_proxy_enabled
+	# — on by default it poked black card tops out of every crown.
+	_check("deciduous has 2 surfaces", mesh.get_surface_count() == 2,
 		"got %d" % mesh.get_surface_count())
 	var trunk_arrays := mesh.surface_get_arrays(0)
 	# The leaf-shell surface (last) is the VISIBLE canopy; the shadow-proxy
@@ -527,8 +529,33 @@ func _test_deciduous_split_mesh() -> void:
 	var dec_mat := VegetationCardFactory.material_for_species("deciduous", {})
 	var pine_t: Vector3 = pine_mat.get_shader_parameter("albedo_tint")
 	var dec_t: Vector3 = dec_mat.get_shader_parameter("albedo_tint")
-	_check("pine vs deciduous spec colors differ",
-		pine_t.y != dec_t.y)
+	# The species colour lives in the card TEXTURE; the default tint is white.
+	# (Defaulting the tint to the species colour applied it twice — near-black
+	# pines and far deciduous crowns.)
+	_check("default foliage tint is white (colour not applied twice)",
+		pine_t.is_equal_approx(Vector3.ONE) and dec_t.is_equal_approx(Vector3.ONE),
+		"pine %s dec %s" % [str(pine_t), str(dec_t)])
+	var pine_tex: Texture2D = pine_mat.get_shader_parameter("albedo_tex")
+	var dec_tex: Texture2D = dec_mat.get_shader_parameter("albedo_tex")
+	_check("pine vs deciduous card colours differ",
+		_avg_opaque_color(pine_tex).g != _avg_opaque_color(dec_tex).g)
+
+
+func _avg_opaque_color(tex: Texture2D) -> Color:
+	if tex == null:
+		return Color.BLACK
+	var img := tex.get_image()
+	if img == null:
+		return Color.BLACK
+	var acc := Color(0, 0, 0, 0)
+	var n := 0
+	for y in range(0, img.get_height(), 4):
+		for x in range(0, img.get_width(), 4):
+			var c := img.get_pixel(x, y)
+			if c.a > 0.5:
+				acc += c
+				n += 1
+	return acc / float(maxi(n, 1))
 
 
 func _test_exclusion_builder() -> void:

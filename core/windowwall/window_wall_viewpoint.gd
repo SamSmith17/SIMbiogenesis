@@ -18,14 +18,11 @@ var saved_at := ""
 
 
 static func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/window_wall_viewpoint_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("window_wall_viewpoint", lat, lon)
 
 
 static func save_path_for_scene(scene_key: String) -> String:
-	var tag := scene_key.get_file().get_basename() if scene_key.contains("/") else scene_key
-	if tag.is_empty():
-		tag = "unknown_scene"
-	return "user://maps/window_wall_viewpoint_scene_%s.json" % tag
+	return WorldPaths.scene_file("window_wall_viewpoint", scene_key)
 
 
 ## The file this Main's site keys to. A generated map is keyed by the loader's

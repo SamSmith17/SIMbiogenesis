@@ -332,6 +332,139 @@ static func support_beams(frame: Dictionary, p_in: LinkageParams, fold_rad: floa
 	return out
 
 
+## Reciprocal support bolts — port of generateReciprocalSupportBolts
+## (linkage-geometry.js:3426), static (non-kinematic) placement only, which is
+## what this port models for the reciprocal beams themselves.
+##
+## (1) `rcp-ring`: one vertical bolt per reciprocal beam through the top H
+## stack, at the point of any top H-beam nearest the beam's OUTER end (p1).
+## (2) `rcp-cross`: one bolt at every interior crossing of two reciprocal beams
+## in plan (XZ), on the midpoint of the two beams' points there, along the
+## cross product of their directions; crossings within 1.2 in of an earlier
+## one are dropped. Crossings only exist past `rcp_visible_angle`, as in JS.
+##
+## These are NOT solver bolts: they never enter `LinkageSolver.solve`'s
+## `bolts`, so bolt counts, the BOM and packed masses are untouched. They
+## feed part keys, hole finding and build steps (LINKAGE_PARITY.md A2).
+## `beams` is the solver beams + `support_beams()`.
+static func reciprocal_support_bolts(beams: Array, p_in: LinkageParams, fold_rad: float) -> Array:
+	var p := LinkageHardwareSpacing.effective_params(p_in)
+	var out: Array = []
+	var cfg: Dictionary = p.support_beams
+	if not bool(cfg["enabled"]) or not bool(cfg["parallel_enabled"]) or p.orientation == "vertical":
+		return out
+	var rcp: Array = beams.filter(func(b): return str(b["stack_type"]) == "support-beam-reciprocal")
+	var tops: Array = beams.filter(func(b): return str(b["stack_type"]) == "horizontal-top")
+	if rcp.is_empty() or tops.is_empty():
+		return out
+	var radius := (p.bolt_diameter if p.bolt_diameter > 0.0 else 0.375) / 2.0
+	var h_len := p.h_pivot_bolt_length if p.h_pivot_bolt_length > 0.0 else p.auto_h_pivot_bolt_length()
+	var rcp_w := float(cfg["parallel_width"]) if float(cfg["parallel_width"]) > 0.0 else 1.5
+	var rcp_t := float(cfg["parallel_thickness"]) if float(cfg["parallel_thickness"]) > 0.0 else 3.5
+	var cross_len := maxf(rcp_w, rcp_t) * 2.0 + 0.5
+
+	for b in rcp:
+		var outer: Vector3 = b["p1"]
+		var best_d2 := INF
+		var best := Vector3.ZERO
+		for h in tops:
+			var pt := _closest_on_segment(outer, h["p1"], h["p2"])
+			var d2 := pt.distance_squared_to(outer)
+			if d2 < best_d2:
+				best_d2 = d2
+				best = pt
+		if best_d2 < INF:
+			out.append(_support_bolt(best, Vector3.UP, h_len, radius, "rcp-ring", "top-ring",
+				{"rcp_stack_id": int(b["stack_id"])}))
+
+	if rad_to_deg(fold_rad) < p.rcp_visible_angle:
+		return out
+	var seen: Array = []
+	for i in rcp.size():
+		for j in range(i + 1, rcp.size()):
+			var a0: Vector3 = rcp[i]["p1"]
+			var a1: Vector3 = rcp[i]["p2"]
+			var b0: Vector3 = rcp[j]["p1"]
+			var b1: Vector3 = rcp[j]["p2"]
+			if (a1 - a0).length() < 1e-6 or (b1 - b0).length() < 1e-6:
+				continue
+			var dax := a1.x - a0.x
+			var daz := a1.z - a0.z
+			var dbx := b1.x - b0.x
+			var dbz := b1.z - b0.z
+			var cr := dax * dbz - daz * dbx
+			if absf(cr) < 1e-12:
+				continue
+			var wx := b0.x - a0.x
+			var wz := b0.z - a0.z
+			var t := (wx * dbz - wz * dbx) / cr
+			var s := (wx * daz - wz * dax) / cr
+			if t <= 0.001 or t >= 0.999 or s <= 0.001 or s >= 0.999:
+				continue
+			var center := (a0 + (a1 - a0) * t + b0 + (b1 - b0) * s) * 0.5
+			var c_dir := _rcp_cross_dir(a1 - a0, b1 - b0)
+			if c_dir.length() < 0.08:
+				continue
+			var dup := false
+			for q in seen:
+				if (q as Vector3).distance_to(center) < 1.2:
+					dup = true
+					break
+			if dup:
+				continue
+			seen.append(center)
+			out.append(_support_bolt(center, c_dir, cross_len, radius, "rcp-cross", "intersection",
+				{"rcp_stack_a": int(rcp[i]["stack_id"]), "rcp_stack_b": int(rcp[j]["stack_id"])}))
+	return out
+
+
+static func _closest_on_segment(pt: Vector3, a: Vector3, b: Vector3) -> Vector3:
+	var ab := b - a
+	var ab2 := ab.dot(ab)
+	if ab2 < 1e-20:
+		return a
+	return a + ab * clampf((pt - a).dot(ab) / ab2, 0.0, 1.0)
+
+
+## crossDirForBeams: the beams' normalized cross product. JS normalizes
+## BEFORE its "< 0.08" test (vNorm leaves only an exact zero below it), so the
+## plan-direction fallback fires only for exactly parallel beams.
+static func _rcp_cross_dir(da: Vector3, db: Vector3) -> Vector3:
+	var a := _js_norm(da)
+	var b := _js_norm(db)
+	var c := _js_norm(a.cross(b))
+	if c.length() < 0.08:
+		var ah := Vector3(a.x, 0.0, a.z)
+		var bh := Vector3(b.x, 0.0, b.z)
+		if ah.length() > 1e-4 and bh.length() > 1e-4:
+			c = _js_norm(_js_norm(ah).cross(_js_norm(bh)))
+	return c
+
+
+## math.js vNorm: a zero vector stays zero.
+static func _js_norm(v: Vector3) -> Vector3:
+	var m := v.length()
+	return Vector3.ZERO if m == 0.0 else v / m
+
+
+static func _support_bolt(center: Vector3, dir: Vector3, length: float, radius: float,
+		bolt_type: String, sub_type: String, extra: Dictionary) -> Dictionary:
+	var d := {
+		"start": center - dir * (length / 2.0),
+		"end": center + dir * (length / 2.0),
+		"center": center,
+		"dir": dir,
+		"length": length,
+		"radius": radius,
+		"head_radius": radius * 1.8,
+		"bolt_type": bolt_type,
+		"bolt_sub_type": sub_type,
+		"module_index": -1,
+	}
+	d.merge(extra)
+	return d
+
+
 ## Port of solveRadialSupportBeamPlacement.
 static func _solve_radial_placement(mf: Dictionary, cfg: Dictionary) -> Dictionary:
 	var length := float(cfg["length"])

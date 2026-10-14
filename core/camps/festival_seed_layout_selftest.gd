@@ -13,7 +13,7 @@ extends SceneTree
 ## suite still prints PASS. Run --import first.
 ##   godot --headless --path . --script core/camps/festival_seed_layout_selftest.gd
 
-const EXPECTED_CHECKS := 51
+const EXPECTED_CHECKS := 62
 
 var _failures := 0
 var _checks := 0
@@ -27,6 +27,7 @@ func _init() -> void:
 	_test_venue_plan()
 	_test_missing_types()
 	_test_easy_override()
+	_test_population_target()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
@@ -251,6 +252,19 @@ func _test_missing_types() -> void:
 		FestivalSeedLayout.missing_types(["sleep", "kitchen"]) == ["restroom", "water_point", "shower", "stage"])
 	_check("missing_types is empty when everything is tagged",
 		FestivalSeedLayout.missing_types(FestivalSeedLayout.REQUIRED_TYPES.duplicate()).is_empty())
+	# Per-camp types: one tagged bed elsewhere does not stop a camp getting its own.
+	var camp_a := {"type": "sleep", "camp_id": "a", "poly": [[0, 0], [20, 0], [20, 20], [0, 20]]}
+	var camp_b := {"type": "sleep", "camp_id": "b", "poly": [[100, 0], [120, 0], [120, 20], [100, 20]]}
+	var one_pod := [{"type": "sleep", "pos": Vector2(10, 10)}]
+	_check("a camp whose outline holds a tagged bed is left alone",
+		not FestivalSeedLayout.needs_seeding(camp_a, [], one_pod))
+	_check("every OTHER camp still gets its beds though the type is present",
+		FestivalSeedLayout.needs_seeding(camp_b, [], one_pod))
+	_check("a kitchen in the camp does not count as beds",
+		FestivalSeedLayout.needs_seeding(camp_a, [], [{"type": "kitchen", "pos": Vector2(10, 10)}]))
+	_check("a shared type is seeded only when the site has none",
+		FestivalSeedLayout.needs_seeding({"type": "restroom", "poly": []}, ["restroom"], [])
+		and not FestivalSeedLayout.needs_seeding({"type": "restroom", "poly": []}, [], []))
 
 
 func _test_easy_override() -> void:
@@ -285,3 +299,37 @@ func _test_easy_override() -> void:
 			PopTestPrefs.set_easy_override(true)
 			PopTestPrefs.reset_defaults()
 			return not PopTestPrefs.easy_override()).call())
+
+
+## The festival population target: the camps' natural split scaled to an
+## exact total, floors kept, 0 = unchanged — and the pref round-trips.
+func _test_population_target() -> void:
+	var natural := [120, 40, 300, 7, 2, 55]
+	var same := FestivalSeedLayout.scale_headcounts(natural, 0)
+	_check("target 0 leaves the natural split alone", same == natural)
+	var t400 := FestivalSeedLayout.scale_headcounts(natural, 400)
+	var sum := 0
+	var floors_ok := true
+	for v in t400:
+		sum += int(v)
+		if int(v) < FestivalSeedLayout.MIN_SCALED_HEADCOUNT:
+			floors_ok = false
+	_check("scaled to EXACTLY the target (%d)" % sum, sum == 400)
+	_check("no camp below the floor", floors_ok)
+	_check("the biggest camp stays the biggest", int(t400[2]) > int(t400[0]) and int(t400[0]) > int(t400[1]))
+	var t100 := FestivalSeedLayout.scale_headcounts(natural, 100)
+	var s100 := 0
+	for v in t100:
+		s100 += int(v)
+	_check("scaling down twice as hard still lands exactly", s100 == 100)
+	var tiny := FestivalSeedLayout.scale_headcounts(natural, 5)
+	_check("floors win when the target is below them", int(tiny[0]) == 2 and tiny.size() == natural.size())
+	var path := "user://_selftest_pop_testing.cfg"
+	PopTestPrefs.reset_defaults()
+	PopTestPrefs.set_festival_target_people(420)
+	PopTestPrefs.save_to(path)
+	PopTestPrefs.reset_defaults()
+	PopTestPrefs.load_from(path)
+	_check("the target round-trips through the prefs file", PopTestPrefs.festival_target_people() == 420)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	PopTestPrefs.reset_defaults()

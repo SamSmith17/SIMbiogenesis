@@ -67,6 +67,13 @@ const F_DOOR := 1 << 3        # punched opening (3c)
 const F_STRUCTURE := 1 << 4   # prop/building volume — where extra layers live
 const F_WATER := 1 << 5
 const F_STEEP := 1 << 6
+## A fire's no-go perimeter (an effigy burn). Its own bit so clearing it can
+## never wipe a REAL obstacle inside the circle — the perimeter used to be
+## stamped as F_BLOCKED, and clearing it unblocked the structure itself and
+## every prop standing within the old radius.
+const F_FIRE := 1 << 7
+## Anything that stops a person: the static obstacles plus a live fire.
+const BLOCKING := F_BLOCKED | F_FIRE
 
 enum Phase { IDLE, HEIGHT, SLOPE, OBSTACLES, LAYERS, DONE }
 
@@ -473,7 +480,7 @@ func slope_deg_at(ix: int, iz: int) -> float:
 func is_walkable(ix: int, iz: int, layer: int = 0) -> bool:
 	if not in_bounds(ix, iz) or not is_ready():
 		return false
-	return (int(_flags[idx(ix, iz, layer)]) & F_BLOCKED) == 0
+	return (int(_flags[idx(ix, iz, layer)]) & BLOCKING) == 0
 
 
 func is_walkable_world(world_xz: Vector2, layer: int = 0) -> bool:
@@ -519,7 +526,7 @@ func upper_surface_cells() -> int:
 	var n := 0
 	for l in range(1, layers):
 		for i in range(l * nx * nz, (l + 1) * nx * nz):
-			if (int(_flags[i]) & F_BLOCKED) == 0:
+			if (int(_flags[i]) & BLOCKING) == 0:
 				n += 1
 	return n
 
@@ -530,7 +537,7 @@ func walkable_cell_count(layer: int = 0) -> int:
 	var n := 0
 	for iz in nz:
 		for ix in nx:
-			if (int(_flags[idx(ix, iz, layer)]) & F_BLOCKED) == 0:
+			if (int(_flags[idx(ix, iz, layer)]) & BLOCKING) == 0:
 				n += 1
 	return n
 

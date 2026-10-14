@@ -45,6 +45,13 @@ const DEM_SEAM_FEATHER_M := 40.0
 const FLOW_GRADIENT_STEP_M := 7.0
 
 
+## Optional (x, z) -> metres added on top of the DEM grids while a build runs —
+## the loader binds its edit-tile stack (player sculpt + carved channels) so
+## water drapes onto the surface actually drawn, not the edit-free grids.
+## Set by the caller around a synchronous build_water_node() call only.
+static var ground_delta_fn: Callable = Callable()
+
+
 static func _is_flowing(kind: String) -> bool:
 	return kind in FLOWING_KINDS
 
@@ -63,6 +70,7 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 	var still_vtx := 0
 	var flow_vtx := 0
 	var probe_specs: Array = []
+	var own_ponds: Array = []  # [{mesh, tag, level}] level-driven ponds, one mesh each
 	for item in waters:
 		if added >= MAX_BODIES:
 			break
@@ -74,6 +82,10 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 		if BuildingBuilder.footprint_area_m2(poly) < MIN_AREA_M2:
 			continue
 		var kind := str(item.get("kind", "water"))
+		# A covered centreline (a riverbank polygon already draws this reach) or
+		# an underground culvert reach has no open surface of its own.
+		if bool(item.get("covered", false)) or bool(item.get("culvert", false)):
+			continue
 		if _is_flowing(kind):
 			var centerline: PackedVector2Array = item.get("centerline", PackedVector2Array())
 			var half_w := float(item.get("half_width", 0.0))
@@ -86,6 +98,23 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 			added += 1
 			continue
 		var level_override := TerrainBuilder.variant_to_float(item.get("level_m", NAN), NAN)
+		var pond_tag := str(item.get("tag", ""))
+		# A pond whose level the simulation drives gets its OWN mesh, so the
+		# loader can move just that plane as the water rises or falls
+		# (set_pond_surface_level_by_tag) instead of rebuilding every body.
+		if not is_nan(level_override) and not pond_tag.is_empty():
+			var own_st := SurfaceTool.new()
+			own_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+			var own := _append_water_polygon(own_st, poly, 0, elev, res,
+				extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather,
+				level_override)
+			if own.is_empty():
+				continue
+			own_ponds.append({"mesh": own_st.commit(), "tag": pond_tag, "level": level_override})
+			added += 1
+			if _wants_reflection_probe(poly, kind, bool(item.get("user", false))):
+				probe_specs.append(own["probe"])
+			continue
 		var body := _append_water_polygon(still_st, poly, still_vtx, elev, res,
 			extent_m, center_elev, detail_elev, detail_res, detail_extent_m, feather,
 			level_override)
@@ -108,6 +137,17 @@ static func build_water_node(waters: Array, elev: PackedFloat32Array, res: int,
 		mi.layers = WATER_RENDER_LAYER
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
+	for op_v in own_ponds:
+		var op: Dictionary = op_v
+		var pmi := MeshInstance3D.new()
+		pmi.name = "PondSurface"
+		pmi.mesh = op["mesh"]
+		pmi.material_override = _make_water_material()
+		pmi.layers = WATER_RENDER_LAYER
+		pmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		pmi.set_meta("pond_tag", str(op["tag"]))
+		pmi.set_meta("built_level_m", float(op["level"]))
+		root.add_child(pmi)
 	if flow_vtx > 0:
 		flow_st.generate_normals()
 		var rmi := MeshInstance3D.new()
@@ -419,17 +459,23 @@ static func _ground_y(x: float, z: float, elev: PackedFloat32Array, res: int,
 		seam_feather_m: float = DEM_SEAM_FEATHER_M) -> float:
 	var coarse_h := TerrainBuilder.height_at_world_xz(elev, res, extent_m, center_elev, x, z)
 	if detail_elev.is_empty() or detail_res <= 1 or detail_extent_m <= 0.0:
-		return coarse_h
+		return coarse_h + _ground_delta(x, z)
 	var half_d := detail_extent_m * 0.5
 	if absf(x) > half_d or absf(z) > half_d:
-		return coarse_h
+		return coarse_h + _ground_delta(x, z)
 	var detail_h := TerrainBuilder.height_at_world_xz(
 		detail_elev, detail_res, detail_extent_m, center_elev, x, z)
 	var edge_dist := half_d - maxf(absf(x), absf(z))
 	if edge_dist >= seam_feather_m:
-		return detail_h
+		return detail_h + _ground_delta(x, z)
 	var t := clampf(edge_dist / seam_feather_m, 0.0, 1.0)
-	return lerpf(coarse_h, detail_h, t)
+	return lerpf(coarse_h, detail_h, t) + _ground_delta(x, z)
+
+
+static func _ground_delta(x: float, z: float) -> float:
+	if not ground_delta_fn.is_valid():
+		return 0.0
+	return float(ground_delta_fn.call(x, z))
 
 
 static func _make_water_material() -> ShaderMaterial:

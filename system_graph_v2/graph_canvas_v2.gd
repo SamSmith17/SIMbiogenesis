@@ -21,6 +21,12 @@ func _ready() -> void:
 
 
 func _gui_input(event: InputEvent) -> void:
+	# The Globe lens — and Site Plan / Elevation on the pin layer — draw no
+	# ports or wires: none of the V2 pointer affordances apply; the base
+	# handles orbit / zoom / pin picks and drags.
+	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
+		super._gui_input(event)
+		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		_interaction.update_pointer(st.position)
@@ -64,6 +70,8 @@ func _hover_port_identity() -> String:
 
 func _draw() -> void:
 	super._draw()
+	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
+		return
 	# Reuse the per-draw visible cache (still populated by super._draw) for the
 	# V2 overlay passes below, then release it so input hit-testing recomputes.
 	_draw_cache_active = true
@@ -903,6 +911,16 @@ func _draw_battery_bank_compound_body_v2(rect: Rect2, specs: Dictionary) -> void
 
 
 func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String = "") -> void:
+	# The physical views own their port sizing: the base draws a port as a
+	# ~0.3 m fitting on the ground, CAPPED in screen space (SITE_PORT_DOT_* /
+	# the Elevation cap). This billboard override used to run for Site Plan and
+	# Elevation too, and its uncapped `6.8 × _zoom` radius is why the port discs
+	# grew to the size of the node at high zoom — four discs hid the turbine and
+	# each other — even after the base's cap had landed. Route both physical
+	# views to the base and keep the billboard for the freeform canvas only.
+	if _is_physical_view():
+		super(screen_pos, polarity, resource_kind)
+		return
 	var col := _wire_color_for_port(polarity, resource_kind)
 	var touch := _touch_input_active() or DisplayServer.is_touchscreen_available()
 	var hover_hit := false

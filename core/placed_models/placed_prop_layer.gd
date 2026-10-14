@@ -17,10 +17,7 @@ var props: Array = []
 
 
 func save_path_for_scene(scene_key: String) -> String:
-	var tag := scene_key.get_file().get_basename() if scene_key.contains("/") else scene_key
-	if tag.is_empty():
-		tag = "unknown_scene"
-	return "user://maps/placed_props_scene_%s.json" % tag
+	return WorldPaths.scene_file("placed_props", scene_key)
 
 
 func save_for_scene(scene_key: String) -> void:
@@ -46,7 +43,7 @@ func load_for_scene(scene_key: String) -> bool:
 
 
 func save_path_for_map(lat: float, lon: float) -> String:
-	return "user://maps/placed_props_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)]
+	return WorldPaths.site_file("placed_props", lat, lon)
 
 
 func save(lat: float, lon: float) -> void:

@@ -31,6 +31,12 @@ var _material: Material = null
 var _collision_layer: int = 1
 var _collision_mask: int = 0
 
+## Optional hook run before this field consumes the store's dirty set. The
+## loader binds it to its layer composition (channel + player → composed), so
+## every existing queue/reconcile call site picks up edits to EITHER layer
+## without knowing the stack exists.
+var pre_consume: Callable = Callable()
+
 var _rebuild_queue: Array = []       ## tile keys awaiting mesh/collider reconcile
 var _queued: Dictionary = {}         ## dedup set for _rebuild_queue
 
@@ -75,6 +81,7 @@ func has_edits() -> bool:
 func queue_dirty() -> void:
 	if tiles == null:
 		return
+	_run_pre_consume()
 	for key in tiles.consume_dirty():
 		if not _queued.has(key):
 			_queued[key] = true
@@ -114,6 +121,7 @@ func reconcile_dirty_now() -> void:
 func rebuild_all_now() -> void:
 	if tiles == null:
 		return
+	_run_pre_consume()
 	tiles.consume_dirty()
 	_rebuild_queue.clear()
 	_queued.clear()
@@ -126,6 +134,11 @@ func rebuild_all_now() -> void:
 			child.queue_free()
 	for key in tiles.active_tiles():
 		_reconcile_tile(key)
+
+
+func _run_pre_consume() -> void:
+	if pre_consume.is_valid():
+		pre_consume.call()
 
 
 func clear_all() -> void:
@@ -152,11 +165,13 @@ func _reconcile_tile(key: Vector2i) -> void:
 			existing.queue_free()
 		return
 
-	# center_elev = 0: base_fn already returns world-Y heights.
-	var arrays := tiles.build_tile_arrays(key, _base_fn, 0.0, _uv_scale, _uv_origin)
+	# center_elev = 0: base_fn already returns world-Y heights. One height pass
+	# feeds both the mesh and the collider.
+	var md := tiles.build_tile_mesh_data(key, _base_fn, 0.0, _uv_scale, _uv_origin)
+	var arrays: Array = md["arrays"]
 	_append_skirt(arrays)
 	var mesh := TerrainBuilder.make_array_mesh(arrays)
-	var hm_data := tiles.build_tile_heightmap(key, _base_fn, 0.0)
+	var hm_data: PackedFloat32Array = md["heightmap"]
 	var rect := tiles.tile_world_rect(key)
 	var cx := rect.position.x + rect.size.x * 0.5
 	var cz := rect.position.y + rect.size.y * 0.5

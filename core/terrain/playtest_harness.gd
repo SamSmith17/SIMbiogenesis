@@ -7,6 +7,16 @@ extends Node
 ## callback is a hard no-op so normal play, selftests, `--import` and headless
 ## boots are untouched.
 ##
+## RUN IT THROUGH tools/harness.ps1 (CLAUDE.md "Harness rules"): the launcher
+## gives Godot a throwaway SANDBOX copy of user:// and this script refuses to
+## capture without one (or --persist). Every mode is in HarnessRegistry
+## (core/terrain/harness/) with a default WORLD — Mount Vernon or Walton,
+## launched through WorldSession so the player's saved state loads — and a
+## watchdog budget; HarnessReport turns the run into one HARNESS RESULT line,
+## results.json and a real exit code. SOAK / Mars only with
+## --allow-builtin-scene. Extra args: --world=<alias|id>, --persist,
+## --run-script=<res://…gd>, --timeout=<s>, --no-world, --capture=a,b,c.
+##
 ##   Godot.exe.exe --path . --windowed -- --user-map=loc_33p3548_n115p7261.tres \
 ##       --capture=both --quit-after-capture
 ##
@@ -37,6 +47,7 @@ extends Node
 ##                              "stars" = star field: marker-vs-texture pixel error + 2 h rotation about the pole
 ##                              "lights" = J Light Studio end to end with REAL input events (see _run_lights_capture)
 ##                              "propedit" = the unified placed-prop editor + gumball + fire timeline (see _run_prop_edit_capture)
+##                              "vehicles" = placed vehicles + the third-person camera end to end (see _run_vehicle_capture)
 ##                              "dawn"  = sunrise lighting ladder: beam energy/colour + ambient per solar altitude
 ##                              "microclimate" = Walton valley-fog ladder: resolved fog per stop DUMPED + ground/drone PNGs
 ##                              through Main's real entry point: per-slot
@@ -119,6 +130,45 @@ var _map_def_path := ""
 var _boot_window_wall := false
 ## --count=N: how many people the crowd bench seeds (festival-scale baseline).
 var _bench_count := 300
+## --ts=<multiple>: the crowd bench's clock speed as a multiple of realtime
+## (450 = the timeline's 450x preset). The cliff the user hit sits between
+## 300x and 450x, so the bench must be able to sit on either side of it.
+var _bench_ts_mult := 450.0
+## --light=on|off for --capture=popin (default: the player's own setting).
+var _popin_light := ""
+## --world=<id or name>: run inside that WORLD (core/worlds/). Without it the
+## harness runs with no world active, i.e. the legacy per-site files — every
+## existing capture command keeps its old behaviour.
+var _world_arg := ""
+var _harness_world: Dictionary = {}
+## --scratch-world: run inside a throwaway COPY of the world (the --world one,
+## else the most recently played world on the launched map, else an empty
+## one), deleted on quit. Mutation-heavy captures get isolation without
+## snapshot/byte-restore, and never touch the player's build.
+var _scratch_world := false
+var _scratch_id := ""
+
+## --- Harness run contract (tools/harness.ps1) ---------------------------------
+## A capture / fix-script run writes into a SANDBOX copy of the user data dir
+## (the launcher points APPDATA at it and drops this marker). Without the
+## marker the run is refused unless --persist says "yes, my real world".
+const SANDBOX_MARKER := "user://.harness_sandbox"
+## Budget for the world to finish loading before a capture starts.
+const MAP_READY_TIMEOUT_S := 600.0
+## Modes allowed to write into the user's REAL world with --persist.
+const PERSIST_MODES := ["look", "script"]
+## --capture=a,b,c runs these in order on one map load.
+var _chain: PackedStringArray = PackedStringArray()
+var _persist := false
+var _allow_builtin := false
+var _no_world := false
+var _run_script_path := ""
+var _timeout_override := 0.0
+var _harness_on := false
+var _dispatching := false
+var _finished := false
+var _report: HarnessReport = null
+var _t0_ms := 0
 
 
 func _ready() -> void:
@@ -128,90 +178,269 @@ func _ready() -> void:
 	if args.is_empty():
 		return
 	_parse_args(args)
-	var wants_post_load := not _capture_mode.is_empty() or _assign_facades_count > 0 \
-		or _sculpt_test or _boot_window_wall
-	if not is_nan(_launch_lat) and not is_nan(_launch_lon):
+	_harness_on = not _chain.is_empty() or _assign_facades_count > 0 or _sculpt_test
+	if _harness_on:
+		_t0_ms = Time.get_ticks_msec()
+		_report = HarnessReport.new()
+		OS.add_logger(_report)
+		# Proof of life for tools/harness.ps1: a harness that failed to COMPILE
+		# never reaches this line, and the launcher kills the run instead of
+		# waiting out its hard limit in the map chooser.
+		HarnessReport.write_json("user://harness_started.json", {"pid": OS.get_process_id(),
+			"capture": ",".join(_chain), "at": Time.get_datetime_string_from_system()})
+		if not _guard_ok():
+			return
+		_apply_test_baseline()
+		_start_watchdog()
+		if not _resolve_launch_target():
+			_active = true
+			_finish.call_deferred("FAIL")
+			return
+	if not _harness_world.is_empty():
+		_active = true
+		_launch_world.call_deferred()
+	elif not is_nan(_launch_lat) and not is_nan(_launch_lon):
 		_active = true
 		_launch_map.call_deferred()
 	elif not _launch_scene.is_empty():
 		_active = true
 		_launch_scene_direct.call_deferred()
-	elif wants_post_load:
-		# No explicit map to launch: whatever scene boots (e.g. default map)
-		# gets the post-load actions (capture / facade assignment).
+	elif _boot_window_wall:
 		_active = true
-		if _capture_mode == "graph":
-			# Graph capture works on any map (incl. the default soak map,
-			# which has no TerrainLoader) — different wait path.
-			_run_graph_capture.call_deferred()
-		elif _capture_mode == "siphon":
-			_run_siphon_lab_capture.call_deferred()
-		elif _capture_mode == "site-review":
-			_run_site_review.call_deferred()
-		elif _capture_mode == "ambient":
-			_run_ambient_flow_verify.call_deferred()
-		elif _capture_mode == "population":
-			_run_population_verify.call_deferred()
-		elif _capture_mode == "project":
-			_run_project_verify.call_deferred()
-		elif _capture_mode == "settlement":
-			_run_settlement_capture.call_deferred()
-		elif _capture_mode == "labour":
-			_run_labour_capture.call_deferred()
-		elif _capture_mode == "npcpose":
-			_run_npc_pose_capture.call_deferred()
-		elif _capture_mode == "workui":
-			_run_workui_capture.call_deferred()
-		elif _capture_mode == "npc-anim":
-			_run_npc_anim_verify.call_deferred()
-		elif _capture_mode == "autobind":
-			_run_autobind_verify.call_deferred()
-		elif _capture_mode == "penstock":
-			_run_penstock_verify.call_deferred()
-		elif _capture_mode == "hydroload":
-			_run_hydro_load_verify.call_deferred()
-		elif _capture_mode == "pondid":
-			_run_pond_id_verify.call_deferred()
-		elif _capture_mode == "culvert":
-			_run_culvert_downhill_verify.call_deferred()
-		elif _capture_mode == "veg":
-			_run_veg_capture.call_deferred()
-		elif _capture_mode == "areafill":
-			_run_area_fill_verify.call_deferred()
-		elif _capture_mode == "camps":
-			_run_camp_capture.call_deferred()
-		elif _capture_mode == "vegdock":
-			_run_veg_dock_capture.call_deferred()
-		elif _capture_mode == "foodforest":
-			_run_food_forest_verify.call_deferred()
-		elif _capture_mode == "tree":
-			_run_tree_portrait_capture.call_deferred()
-		elif _capture_mode == "growth":
-			_run_growth_capture.call_deferred()
-		elif _capture_mode == "weather":
-			_run_extreme_weather_capture.call_deferred()
-		elif _capture_mode == "stars":
-			_run_star_capture.call_deferred()
-		elif _capture_mode == "lights":
-			_run_lights_capture.call_deferred()
-		elif _capture_mode == "propedit":
-			_run_prop_edit_capture.call_deferred()
-		elif _capture_mode == "dawn":
-			_run_dawn_capture.call_deferred()
-		elif _capture_mode == "microclimate":
-			_run_microclimate_capture.call_deferred()
-		elif _capture_mode == "windowwall":
-			_run_window_wall_capture.call_deferred()
-		elif _capture_mode == "crowdbench":
-			_run_crowd_bench.call_deferred()
-		elif _capture_mode == "festival":
-			_run_festival_capture.call_deferred()
-		elif _capture_mode == "festivalmode":
-			_run_festival_mode_capture.call_deferred()
-		elif _boot_window_wall:
-			_boot_window_wall_view.call_deferred()
+		_boot_window_wall_view.call_deferred()
+
+
+## The launcher's sandbox marker, or an explicit --persist. Anything else would
+## write a test run into the player's real world.
+func _guard_ok() -> bool:
+	if _persist:
+		for m in _chain:
+			if not (m in PERSIST_MODES):
+				print("PlaytestHarness: FAIL — --persist is only for --capture=look and --run-script " +
+					"(a test capture's scaffolding must never land in the real world); got '%s'" % m)
+				_active = true
+				_finish.call_deferred("FAIL", 4)
+				return false
+		print("PlaytestHarness: --persist — running on the REAL user data dir; changes are kept")
+		return true
+	if FileAccess.file_exists(SANDBOX_MARKER):
+		print("PlaytestHarness: sandbox %s" % OS.get_user_data_dir())
+		return true
+	print("PlaytestHarness: FAIL — refused: not in a harness sandbox (%s). Run it through " % OS.get_user_data_dir() +
+		"tools/harness.ps1, or pass --persist to work on the real world on purpose.")
+	_active = true
+	_finish.call_deferred("FAIL", 4)
+	return false
+
+
+## Test captures assert the SHIPPED rules, so the player's own testing
+## switches (PopTestPrefs: ideal supply, ignore capacity, no departures, mute
+## alarms, a festival population target) are reset IN MEMORY for the session
+## — nothing is saved. Measured: with the author's all-off switches the
+## population capture's starvation, collapse cascade, reset and personal-space
+## checks all failed, because none of that can happen on ideal supply.
+## look / script keep the player's real settings: they show and fix THEIR game.
+func _apply_test_baseline() -> void:
+	var only_player_modes := not _chain.is_empty()
+	for m in _chain:
+		if not (m in PERSIST_MODES):
+			only_player_modes = false
+	if only_player_modes:
+		return
+	if PopTestPrefs.any_active() or PopTestPrefs.festival_target_people() != 0:
+		print("PlaytestHarness: player's testing switches reset to shipped defaults for this run (not saved): %s, target %d" % [
+			str(PopTestPrefs.saved_flags()), PopTestPrefs.festival_target_people()])
+	PopTestPrefs.reset_defaults()
+	# NPC display taste (body style, light crowd off, hero budget, names…) is a
+	# global file the captures' assertions were calibrated without — Walton's
+	# festival hero-pool check read 15 of 79 overflow people drawn with the
+	# author's light_crowd=false. In the SANDBOX only (this is the sandbox's own
+	# copy), set it aside so every NpcDisplayPrefs value lazy-loads its default.
+	if FileAccess.file_exists(SANDBOX_MARKER) and FileAccess.file_exists(NpcDisplayPrefs.CFG_PATH):
+		var da := DirAccess.open("user://")
+		if da != null and da.rename(NpcDisplayPrefs.CFG_PATH, NpcDisplayPrefs.CFG_PATH + ".player") == OK:
+			print("PlaytestHarness: player's NPC display prefs set aside in the sandbox — shipped defaults for this run")
+
+
+## Decide WHERE the run happens. Default: the capture's registered world
+## (Mount Vernon or Walton), loaded through WorldSession so the player's saved
+## snapshot comes back exactly. Built-in SOAK / Mars only with
+## --allow-builtin-scene.
+func _resolve_launch_target() -> bool:
+	for m in _chain:
+		if not HarnessRegistry.has_mode(m):
+			print("PlaytestHarness: FAIL — unknown capture mode '%s' (known: %s)" % [m, ", ".join(HarnessRegistry.modes())])
+			return false
+	if not _launch_scene.is_empty() and HarnessRegistry.is_builtin_scene(_launch_scene) and not _allow_builtin:
+		print("PlaytestHarness: FAIL — %s is a built-in imported-mesh scene, not a harness target. " % _launch_scene +
+			"Use --world=mtvernon|walton (or add --allow-builtin-scene if asked to test it).")
+		return false
+	if _harness_world.is_empty() and not _no_world and _launch_scene.is_empty():
+		if is_nan(_launch_lat):
+			# No map named: the capture's own default world.
+			var first := _chain[0] if not _chain.is_empty() else "orbit"
+			_world_arg = str(HarnessRegistry.entry(first).get("world", "mtvernon"))
+			_resolve_world_arg()
 		else:
-			_await_and_run.call_deferred()
+			# A map was named (--user-map / --map-lat): run in the newest world on
+			# that site so the saved state loads too.
+			var on := WorldStore.worlds_on_map(_harness_map_ref())
+			if not on.is_empty():
+				_harness_world = on[0]
+				print("PlaytestHarness: using world %s (%s) on that map" % [
+					WorldStore.display_name(_harness_world), str(_harness_world.get("id", ""))])
+	if not _harness_world.is_empty():
+		var wmap: Dictionary = _harness_world.get("map", {})
+		var wscene := MapDefinition.normalize_scene_path(str(wmap.get("scene_path", "")))
+		if HarnessRegistry.is_builtin_scene(wscene) and not _allow_builtin:
+			print("PlaytestHarness: FAIL — world %s stands on built-in scene %s; add --allow-builtin-scene" % [
+				WorldStore.display_name(_harness_world), wscene])
+			return false
+		return true
+	if not is_nan(_launch_lat) or not _launch_scene.is_empty():
+		return true
+	print("PlaytestHarness: FAIL — no world or map to run on (--world=%s matched nothing)" % _world_arg)
+	return false
+
+
+func _start_watchdog() -> void:
+	var secs := _timeout_override
+	if secs <= 0.0:
+		secs = HarnessRegistry.timeout_for(_chain) if not _chain.is_empty() else HarnessRegistry.DEFAULT_TIMEOUT_S
+	print("PlaytestHarness: watchdog %.0f s" % secs)
+	# process_always + ignore_time_scale: a paused or slowed sim cannot stall it.
+	get_tree().create_timer(secs, true, false, true).timeout.connect(func() -> void:
+		if _finished:
+			return
+		print("PlaytestHarness: WATCHDOG — no result after %.0f s (phase '%s', last line: %s)" % [
+			secs, _report.phase if _report != null else "", _report.last_line if _report != null else ""])
+		_finish("TIMEOUT", 3))
+
+
+## Play the resolved world exactly as the user left it (snapshot, extents,
+## panel config) — the one launch path every capture now shares.
+func _launch_world() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	await tree.process_frame
+	var rec := _harness_launch_record()
+	if rec.is_empty():
+		print("PlaytestHarness: FAIL — could not prepare the world to launch")
+		_finish("FAIL")
+		return
+	var map: Dictionary = rec.get("map", {})
+	print("PlaytestHarness: launching world %s (%s) — %s" % [WorldStore.display_name(rec),
+		str(rec.get("id", "")), "snapshot" if not WorldStore.read_snapshot(str(rec.get("id", ""))).is_empty() else "no snapshot"])
+	if WorldStore.is_generated_map(map):
+		_launch_lat = float(map.get("lat", 0.0))
+		_launch_lon = float(map.get("lon", 0.0))
+		_launch_label = str(map.get("label", ""))
+	var err := WorldSession.launch(rec, {})
+	if err != OK:
+		print("PlaytestHarness: FAIL — WorldSession.launch returned %d" % err)
+		_finish("FAIL")
+		return
+	_dispatch()
+
+
+## Wait until the launched scene is Main, its TerrainLoader (if any) has
+## finished loading, and the world's resume extras have been applied.
+func _await_world_ready() -> bool:
+	var tree := get_tree()
+	var deadline := Time.get_ticks_msec() + int(MAP_READY_TIMEOUT_S * 1000.0)
+	var main: Node = null
+	while Time.get_ticks_msec() < deadline:
+		main = _find_main()
+		if main != null and tree.current_scene == main:
+			break
+		await tree.process_frame
+	if main == null:
+		print("PlaytestHarness: FAIL — the game scene never arrived")
+		return false
+	var loader := main.get_node_or_null("TerrainLoader")
+	if loader == null:
+		loader = main.find_child("TerrainLoader", true, false)
+	if loader != null:
+		var t0 := Time.get_ticks_msec()
+		while not bool(loader.get("load_completed")):
+			if Time.get_ticks_msec() > deadline:
+				print("PlaytestHarness: FAIL — map load did not complete in %.0f s" % MAP_READY_TIMEOUT_S)
+				return false
+			await tree.create_timer(0.25, true, false, true).timeout
+		print("PlaytestHarness: world ready (map loaded in %.1f s)" % ((Time.get_ticks_msec() - t0) / 1000.0))
+	# WorldSession / SaveSystem apply the resume extras ~30 frames after load.
+	for _i in 45:
+		await tree.process_frame
+	return true
+
+
+## Run the capture chain. Each capture keeps its own body; it no longer quits
+## the process (_maybe_quit is a no-op while dispatching) — _finish does.
+func _dispatch() -> void:
+	if _chain.is_empty():
+		if _boot_window_wall:
+			_boot_window_wall_view()
+		elif _assign_facades_count > 0 or _sculpt_test:
+			_dispatching = true
+			await _await_and_run()
+			_dispatching = false
+			_finish()
+		return
+	_dispatching = true
+	for mode in _chain:
+		var e := HarnessRegistry.entry(mode)
+		_capture_mode = mode
+		if str(e.get("kind", "")) != "scene":
+			if _report != null:
+				_report.set_phase("%s: loading the world" % mode)
+			if not await _await_world_ready():
+				break
+		if _report != null:
+			_report.set_phase(mode)
+		await call(str(e.get("fn", "")))
+	_dispatching = false
+	if _boot_window_wall:
+		_boot_window_wall_view()
+	_finish()
+
+
+## The one exit: verdict line + results.json, scratch cleanup, real exit code
+## (0 pass, 1 fail, 3 watchdog timeout, 4 refused).
+func _finish(status: String = "", code: int = -1) -> void:
+	if _finished:
+		return
+	_finished = true
+	var mode := ",".join(_chain) if not _chain.is_empty() else ("sculpt" if _sculpt_test else "facades")
+	var secs := (Time.get_ticks_msec() - _t0_ms) / 1000.0
+	var s := _report.summary(mode, secs, status) if _report != null else {"mode": mode, "status": status}
+	s["world"] = WorldStore.display_name(_harness_world) if not _harness_world.is_empty() else ""
+	s["world_id"] = str(_harness_world.get("id", ""))
+	s["user_dir"] = OS.get_user_data_dir()
+	s["persist"] = _persist
+	for e in s.get("script_errors", []):
+		print("  script error: %s" % str(e))
+	var distinct := {}
+	for e in s.get("engine_errors", []):
+		distinct[str(e)] = int(distinct.get(str(e), 0)) + 1
+	for e in distinct:
+		print("  engine error x%d: %s" % [int(distinct[e]), str(e)])
+	for f in s.get("failures", []):
+		print("  failure: %s" % str(f))
+	print(HarnessReport.result_line(s))
+	var label := _shots_label if not _shots_label.is_empty() else "harness_%s" % mode.replace(",", "+")
+	HarnessReport.write_json("%s/%s/results.json" % [SHOTS_ROOT, label], s)
+	HarnessReport.write_json("user://harness_last_result.json", s)
+	if code < 0:
+		match str(s.get("status", "")):
+			"PASS": code = 0
+			"TIMEOUT": code = 3
+			_: code = 1
+	if _report != null:
+		OS.remove_logger(_report)
+	_cleanup_scratch_world()
+	if _quit_after or code != 0 or status == "TIMEOUT":
+		get_tree().quit(code)
 
 
 func _parse_args(args: PackedStringArray) -> void:
@@ -219,6 +448,16 @@ func _parse_args(args: PackedStringArray) -> void:
 	for a in args:
 		if a.begins_with("--user-map="):
 			map_file = a.get_slice("=", 1)
+		elif a == "--persist":
+			_persist = true
+		elif a == "--allow-builtin-scene":
+			_allow_builtin = true
+		elif a == "--no-world":
+			_no_world = true
+		elif a.begins_with("--run-script="):
+			_run_script_path = a.get_slice("=", 1).strip_edges()
+		elif a.begins_with("--timeout="):
+			_timeout_override = maxf(a.get_slice("=", 1).to_float(), 0.0)
 		elif a.begins_with("--scene="):
 			_launch_scene = a.get_slice("=", 1).strip_edges()
 		elif a.begins_with("--map-lat="):
@@ -228,7 +467,14 @@ func _parse_args(args: PackedStringArray) -> void:
 		elif a.begins_with("--half-extent="):
 			_launch_half_extent = a.get_slice("=", 1).to_float()
 		elif a.begins_with("--capture="):
-			_capture_mode = a.get_slice("=", 1).strip_edges().to_lower()
+			_chain = PackedStringArray()
+			for part in a.get_slice("=", 1).to_lower().split(","):
+				if not part.strip_edges().is_empty():
+					_chain.append(part.strip_edges())
+			_capture_mode = _chain[0] if not _chain.is_empty() else ""
+			# The player's "Simulate & draw NPCs" switch must not decide a
+			# regression run — session-only, never saved.
+			NpcDisplayPrefs.force_npcs_for_session(true)
 		elif a.begins_with("--shots-dir="):
 			_shots_label = a.get_slice("=", 1).strip_edges()
 		elif a.begins_with("--time="):
@@ -254,8 +500,29 @@ func _parse_args(args: PackedStringArray) -> void:
 			_boot_window_wall = true
 		elif a.begins_with("--count="):
 			_bench_count = clampi(a.get_slice("=", 1).to_int(), 1, 20000)
+		elif a.begins_with("--ts="):
+			_bench_ts_mult = clampf(a.get_slice("=", 1).to_float(), 1.0, 20000.0)
+		elif a.begins_with("--light="):
+			_popin_light = a.get_slice("=", 1)
+		elif a.begins_with("--world="):
+			_world_arg = a.get_slice("=", 1).strip_edges()
+		elif a == "--scratch-world":
+			_scratch_world = true
+	if not _run_script_path.is_empty() and not ("script" in _chain):
+		_chain.append("script")
+		if _capture_mode.is_empty():
+			_capture_mode = "script"
 	if not map_file.is_empty():
-		_load_map_definition(map_file)
+		# A world alias given as a map (the old `--user-map=mtvernon` habit)
+		# runs in that WORLD, so the saved state loads too.
+		var alias := HarnessRegistry.canonical_alias(map_file)
+		if _world_arg.is_empty() and not _no_world and HarnessRegistry.WORLD_ALIASES.has(alias) \
+				and not HarnessRegistry.pick_world(alias, WorldStore.list()).is_empty():
+			_world_arg = alias
+		else:
+			_load_map_definition(map_file)
+	if not _world_arg.is_empty():
+		_resolve_world_arg()
 	if _perf_hud:
 		_enable_perf_monitor()
 
@@ -379,82 +646,10 @@ func _launch_map() -> void:
 	if ctx == null:
 		push_error("PlaytestHarness: MapContext autoload missing")
 		return
+	_activate_harness_world()
 	ctx.set_pending(_launch_lat, _launch_lon, _launch_label, _launch_half_extent)
 	tree.change_scene_to_file(MapDefinition.GENERATED_SCENE)
-	if _capture_mode == "graph":
-		_run_graph_capture()
-	elif _capture_mode == "siphon":
-		_run_siphon_lab_capture()
-	elif _capture_mode == "site-review":
-		_run_site_review()
-	elif _capture_mode == "ambient":
-		_run_ambient_flow_verify()
-	elif _capture_mode == "population":
-		_run_population_verify()
-	elif _capture_mode == "project":
-		_run_project_verify()
-	elif _capture_mode == "settlement":
-		_run_settlement_capture()
-	elif _capture_mode == "labour":
-		_run_labour_capture()
-	elif _capture_mode == "npcpose":
-		_run_npc_pose_capture()
-	elif _capture_mode == "workui":
-		_run_workui_capture()
-	elif _capture_mode == "npc-anim":
-		_run_npc_anim_verify()
-	elif _capture_mode == "autobind":
-		_run_autobind_verify()
-	elif _capture_mode == "penstock":
-		_run_penstock_verify()
-	elif _capture_mode == "hydroload":
-		_run_hydro_load_verify()
-	elif _capture_mode == "pondid":
-		_run_pond_id_verify()
-	elif _capture_mode == "culvert":
-		_run_culvert_downhill_verify()
-	elif _capture_mode == "veg":
-		_run_veg_capture()
-	elif _capture_mode == "areafill":
-		_run_area_fill_verify()
-	elif _capture_mode == "camps":
-		_run_camp_capture()
-	elif _capture_mode == "vegdock":
-		_run_veg_dock_capture()
-	elif _capture_mode == "foodforest":
-		_run_food_forest_verify()
-	elif _capture_mode == "tree":
-		_run_tree_portrait_capture()
-	elif _capture_mode == "growth":
-		_run_growth_capture()
-	elif _capture_mode == "packing":
-		_run_packing_capture()
-	elif _capture_mode == "hardware":
-		_run_hardware_capture()
-	elif _capture_mode == "weather":
-		_run_extreme_weather_capture()
-	elif _capture_mode == "stars":
-		_run_star_capture()
-	elif _capture_mode == "lights":
-		_run_lights_capture()
-	elif _capture_mode == "propedit":
-		_run_prop_edit_capture()
-	elif _capture_mode == "dawn":
-		_run_dawn_capture()
-	elif _capture_mode == "microclimate":
-		_run_microclimate_capture()
-	elif _capture_mode == "windowwall":
-		_run_window_wall_capture()
-	elif _capture_mode == "crowdbench":
-		_run_crowd_bench()
-	elif _capture_mode == "festival":
-		_run_festival_capture()
-	elif _capture_mode == "festivalmode":
-		_run_festival_mode_capture()
-	elif _boot_window_wall:
-		_boot_window_wall_view()
-	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
-		_await_and_run()
+	_dispatch()
 
 
 ## Direct launch of a built-in (trusted) map scene, e.g. the soak map for
@@ -469,77 +664,9 @@ func _launch_scene_direct() -> void:
 		_maybe_quit()
 		return
 	print("PlaytestHarness: launching scene %s" % _launch_scene)
+	_activate_harness_world()
 	tree.change_scene_to_file(_launch_scene)
-	if _capture_mode == "graph":
-		_run_graph_capture()
-	elif _capture_mode == "siphon":
-		_run_siphon_lab_capture()
-	elif _capture_mode == "site-review":
-		_run_site_review()
-	elif _capture_mode == "ambient":
-		_run_ambient_flow_verify()
-	elif _capture_mode == "population":
-		_run_population_verify()
-	elif _capture_mode == "project":
-		_run_project_verify()
-	elif _capture_mode == "settlement":
-		_run_settlement_capture()
-	elif _capture_mode == "labour":
-		_run_labour_capture()
-	elif _capture_mode == "npcpose":
-		_run_npc_pose_capture()
-	elif _capture_mode == "workui":
-		_run_workui_capture()
-	elif _capture_mode == "autobind":
-		_run_autobind_verify()
-	elif _capture_mode == "penstock":
-		_run_penstock_verify()
-	elif _capture_mode == "hydroload":
-		_run_hydro_load_verify()
-	elif _capture_mode == "pondid":
-		_run_pond_id_verify()
-	elif _capture_mode == "veg":
-		_run_veg_capture()
-	elif _capture_mode == "areafill":
-		_run_area_fill_verify()
-	elif _capture_mode == "camps":
-		_run_camp_capture()
-	elif _capture_mode == "vegdock":
-		_run_veg_dock_capture()
-	elif _capture_mode == "foodforest":
-		_run_food_forest_verify()
-	elif _capture_mode == "tree":
-		_run_tree_portrait_capture()
-	elif _capture_mode == "growth":
-		_run_growth_capture()
-	elif _capture_mode == "packing":
-		_run_packing_capture()
-	elif _capture_mode == "hardware":
-		_run_hardware_capture()
-	elif _capture_mode == "weather":
-		_run_extreme_weather_capture()
-	elif _capture_mode == "stars":
-		_run_star_capture()
-	elif _capture_mode == "lights":
-		_run_lights_capture()
-	elif _capture_mode == "propedit":
-		_run_prop_edit_capture()
-	elif _capture_mode == "dawn":
-		_run_dawn_capture()
-	elif _capture_mode == "microclimate":
-		_run_microclimate_capture()
-	elif _capture_mode == "windowwall":
-		_run_window_wall_capture()
-	elif _capture_mode == "crowdbench":
-		_run_crowd_bench()
-	elif _capture_mode == "festival":
-		_run_festival_capture()
-	elif _capture_mode == "festivalmode":
-		_run_festival_mode_capture()
-	elif _boot_window_wall:
-		_boot_window_wall_view()
-	elif not _capture_mode.is_empty() or _assign_facades_count > 0 or _sculpt_test:
-		_await_and_run()
+	_dispatch()
 
 
 func _await_and_run() -> void:
@@ -551,7 +678,7 @@ func _await_and_run() -> void:
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
 	print("PlaytestHarness: map loaded — settling %.0f s" % SETTLE_AFTER_LOAD_S)
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	if _assign_facades_count > 0:
 		_assign_hero_facades(loader)
 	if _sculpt_test:
@@ -963,7 +1090,7 @@ func _run_packing_capture() -> void:
 	if loader != null and not (loader.get("load_completed") == true):
 		print("PlaytestHarness: packing capture — waiting for map load")
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
@@ -1060,7 +1187,7 @@ func _run_hardware_capture() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
@@ -1402,6 +1529,7 @@ func _dump_hardware_placements(p: LinkageParams, tag: String) -> void:
 ## systems graph (G view) without a human at the keyboard. Drives the REAL
 ## SystemGraphView handlers (same code paths as clicks/keys), never a mock.
 func _run_graph_capture() -> void:
+	print("PlaytestHarness: graph capture — finding the graph view")
 	var sgv := await _find_graph_view()
 	if sgv == null:
 		push_error("PlaytestHarness: SystemGraphView not found — aborting graph capture")
@@ -1413,7 +1541,7 @@ func _run_graph_capture() -> void:
 	if loader != null and not (loader.get("load_completed") == true):
 		print("PlaytestHarness: graph capture — waiting for map load")
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 
 	# Reproducible conditions: frozen daytime clock, but CanvasLayers VISIBLE
 	# (the graph is the subject) — do not reuse _set_capture_conditions.
@@ -1430,10 +1558,12 @@ func _run_graph_capture() -> void:
 	var manifest: Array = []
 
 	# Open the graph the same way the G key does.
+	print("PlaytestHarness: graph capture — opening the graph")
 	sgv.visible = true
 	if sgv.has_method("_apply_graph_open_mode_from_sim_state"):
 		sgv.call("_apply_graph_open_mode_from_sim_state")
 	await get_tree().create_timer(1.0).timeout
+	print("PlaytestHarness: graph capture — graph open, shooting")
 	await _graph_shot(dir, "01_open_as_loaded", manifest)
 
 	# Auto-arranged freeform layout.
@@ -1481,6 +1611,46 @@ func _run_graph_capture() -> void:
 		sgv.call("_apply_graph_view_mode", "site")
 		await get_tree().create_timer(1.5).timeout
 		await _graph_shot(dir, "07_site_plan", manifest)
+		# Port handles at HIGH zoom. The V2 canvas overrides _draw_port_dot
+		# for its freeform billboard and used to run that uncapped 6.8 × zoom
+		# disc in Site Plan too, so the base's screen-space cap never applied:
+		# at a zoom where a PowerSpout is 12 px, its four ports were the size
+		# of the node. Zoom hard onto a placed item, shoot it, and print the
+		# radii the PNG cannot be trusted to show at 1280 px.
+		if canvas != null and canvas.has_method("_zoom_at"):
+			var zoom_site_saved := float(canvas.get("_zoom"))
+			var pan_site_saved: Vector2 = canvas.get("_pan")
+			var ports_saved := bool(canvas.get("site_show_ports"))
+			canvas.set("site_show_ports", true)
+			var focus_px: Vector2 = canvas.size * 0.5
+			var placed: Array = canvas.call("_visible_items") as Array
+			for it0: Variant in placed:
+				var it: Dictionary = it0
+				if GraphSiteLayout.has_site_coords(it) and str(it.get("type", "")) != "compound":
+					var tl: Vector2 = canvas.call("_item_screen_tl", it, canvas.size * 0.5)
+					var sz: Vector2 = canvas.call("_item_screen_size", it)
+					focus_px = tl + sz * 0.5
+					break
+			for _i in 14:
+				canvas.call("_zoom_at", 1.5, focus_px)
+			canvas.call("queue_redraw")
+			await get_tree().create_timer(1.0).timeout
+			var z := float(canvas.get("_zoom"))
+			var s_pxm := GraphSiteLayout.px_per_m(z)
+			var grab := float(canvas.call("_port_grab_radius"))
+			var consts: Dictionary = (canvas.get_script() as Script).get_script_constant_map()
+			var dot_max := float(consts.get("SITE_PORT_DOT_MAX_PX", 7.0))
+			var grab_max := float(consts.get("SITE_PORT_GRAB_MAX_PX", 14.0))
+			var dot := clampf(0.3 * s_pxm, float(consts.get("SITE_PORT_DOT_MIN_PX", 3.5)), dot_max)
+			var ok := grab <= grab_max + 0.01 and dot <= dot_max + 0.01
+			print("PlaytestHarness: site plan ports at zoom %.1f (%.0f px/m): dot r %.1f px (cap %.0f), grab r %.1f px (cap %.0f) %s" % [
+					z, s_pxm, dot, dot_max, grab, grab_max, "(PASS)" if ok else "(FAIL)"])
+			await _graph_shot(dir, "07c_site_plan_zoomed_ports", manifest)
+			canvas.set("_zoom", zoom_site_saved)
+			canvas.set("_pan", pan_site_saved)
+			canvas.set("site_show_ports", ports_saved)
+			canvas.call("queue_redraw")
+			await get_tree().create_timer(0.5).timeout
 		# Desire-line toggles must flip THROUGH THE REAL MENU HANDLER — the
 		# items were once wired to the wrong popup's handler, so every click
 		# was a silent no-op (worn paths could never turn on, trails never
@@ -1580,7 +1750,7 @@ func _run_culvert_downhill_verify() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var sgv := await _find_graph_view()
 	if sgv == null:
 		push_error("PlaytestHarness: SystemGraphView not found — aborting culvert verify")
@@ -1669,6 +1839,14 @@ func _run_culvert_downhill_verify() -> void:
 	_maybe_quit()
 
 
+## Every index of the loader's water list. get_pond_info answers valid=false for
+## flowing waterways, which sit MID-list on a real map, so a scan must skip
+## them rather than stop at the first one.
+func _water_count(loader: Node) -> int:
+	var wd: Variant = loader.get("_water_data")
+	return (wd as Array).size() if wd is Array else 200
+
+
 func _run_pond_id_verify() -> void:
 	var loader := await _find_terrain_loader()
 	if loader == null:
@@ -1677,7 +1855,7 @@ func _run_pond_id_verify() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var sgv := await _find_graph_view()
 	if sgv == null:
 		push_error("PlaytestHarness: SystemGraphView not found — aborting pond-id verify")
@@ -1692,23 +1870,23 @@ func _run_pond_id_verify() -> void:
 	var ok1 := bool(loader.call("designate_sculpted_pond", poly1, "Verify Pond", NAN, ""))
 	print("PlaytestHarness: pondid verify — initial designate ok=%s" % str(ok1))
 	if not ok1:
-		push_error("PlaytestHarness: pond-id verify — could not designate the test pond")
+		push_error("PlaytestHarness: pond-id verify FAIL — could not designate the test pond")
 		_maybe_quit()
 		return
 
 	var idx1 := -1
-	for i in 200:
+	for i in _water_count(loader):
 		# find_pond_idx_by_tag needs the freshly-derived tag; read it back from
 		# the record instead of re-deriving (EarthworksBuilder is static/private
 		# to the loader in spirit — just scan get_pond_info by trial index 0..N).
 		var info := loader.call("get_pond_info", i) as Dictionary
 		if not bool(info.get("valid", false)):
-			break
+			continue
 		if bool(info.get("user", false)) and str(info.get("label", "")) == "Verify Pond":
 			idx1 = i
 			break
 	if idx1 < 0:
-		push_error("PlaytestHarness: pond-id verify — designated pond not found in water data")
+		push_error("PlaytestHarness: pond-id verify FAIL — designated pond not found in water data")
 		_maybe_quit()
 		return
 	var info1 := loader.call("get_pond_info", idx1) as Dictionary
@@ -1716,7 +1894,7 @@ func _run_pond_id_verify() -> void:
 	var tag1 := str(info1.get("tag", ""))
 	print("PlaytestHarness: pondid verify — pond_id=%s tag=%s" % [pond_id1, tag1])
 	if pond_id1.is_empty():
-		push_error("PlaytestHarness: pond-id verify — no pond_id assigned")
+		push_error("PlaytestHarness: pond-id verify FAIL — no pond_id assigned")
 		_maybe_quit()
 		return
 
@@ -1740,10 +1918,10 @@ func _run_pond_id_verify() -> void:
 	# resizing/reshaping via the Pond tool again) — empty basin_tag forces a
 	# fresh auto-derived tag from the new geometry.
 	var water_count_before := 0
-	for i in 200:
+	for i in _water_count(loader):
 		var info_b := loader.call("get_pond_info", i) as Dictionary
 		if not bool(info_b.get("valid", false)):
-			break
+			continue
 		water_count_before += 1
 	var poly2 := PackedVector2Array([
 		Vector2(-9, -7), Vector2(9, -7), Vector2(9, 7), Vector2(-9, 7)])
@@ -1753,10 +1931,10 @@ func _run_pond_id_verify() -> void:
 
 	var water_count_after := 0
 	var idx2 := -1
-	for i in 200:
+	for i in _water_count(loader):
 		var info_c := loader.call("get_pond_info", i) as Dictionary
 		if not bool(info_c.get("valid", false)):
-			break
+			continue
 		water_count_after += 1
 		if str(info_c.get("pond_id", "")) == pond_id1:
 			idx2 = i
@@ -1792,6 +1970,166 @@ func _run_pond_id_verify() -> void:
 ## saved map and dumps the state of every hydro conduit BEFORE the graph has ever
 ## been opened, then again after a graph open/close — the exact sequence that
 ## "fixes" a culvert pointing at the sky and "loses" a routed penstock.
+## --capture=sitebalance — the WHOLE site as one system, on the player's own
+## world, with the graph CLOSED (how the site is actually lived in). Asserts the
+## contracts the Mt Vernon playtest found broken (2026-10-12):
+##  1. every hydro turbine with DC wires reaches a battery (a controller's
+##     battery terminal is the bank bus);
+##  2. SolarUI's graph-DC term equals the wired turbines' output with the graph
+##     closed, and the battery integrates it;
+##  3. a turbine making watts is moving water (no phantom power);
+##  4. each pond's graph level equals its 3D water surface (one stage curve),
+##     and its own 3D plane follows the level;
+##  5. under an 8 mm/h storm each pond books rain on its surface and rises
+##     (or spills / drains through a running siphon).
+## Read-only in spirit: a test capture never persists.
+func _sb_check(label: String, ok: bool) -> int:
+	if ok:
+		print("PlaytestHarness: sitebalance — OK: %s" % label)
+		return 0
+	push_error("PlaytestHarness: sitebalance — FAIL: %s" % label)
+	return 1
+
+
+func _sb_pond_planes_ok(loader: Node, model: Object) -> Array:
+	var out: Array = []  # [label, ok]
+	var root: Variant = loader.get("_water_root") if loader != null else null
+	for it: Dictionary in model.get("items"):
+		var ps: Dictionary = it.get("specs", {}) as Dictionary
+		if not bool(ps.get("pond_storage", false)):
+			continue
+		var tag := str(ps.get("osm_water_tag", ""))
+		var idx := int(loader.call("find_pond_idx_by_tag", tag)) if loader != null else -1
+		if idx < 0:
+			continue
+		var info: Dictionary = loader.call("get_pond_info", idx)
+		var g_lvl := float(ps.get("level_m", NAN))
+		var m_lvl := float(info.get("level_m", NAN))
+		out.append(["%s graph level %.3f == 3D level %.3f (±0.02 m)" % [tag, g_lvl, m_lvl],
+				absf(g_lvl - m_lvl) <= 0.02])
+		if root is Node3D and is_instance_valid(root):
+			for c in (root as Node3D).get_children():
+				if c is Node3D and str((c as Node3D).get_meta("pond_tag", "")) == tag:
+					var plane := float((c as Node3D).get_meta("built_level_m", NAN)) + (c as Node3D).position.y
+					out.append(["%s 3D water plane %.3f follows the level %.3f" % [tag, plane, m_lvl],
+							absf(plane - m_lvl) <= 0.03])
+	return out
+
+
+func _run_site_balance_verify() -> void:
+	var sgv := await _find_graph_view()
+	if sgv == null:
+		push_error("PlaytestHarness: no SystemGraphView — aborting sitebalance")
+		_maybe_quit()
+		return
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(_settle_s() + 3.0).timeout
+	var main := get_tree().current_scene
+	main.set("time_scale", 0.0)
+	sgv.set("visible", false)
+	var solar: Node = main.get_node_or_null("UILayer/SolarUI")
+	var model: Object = sgv.get("model")
+	var eng: Object = sgv.get("_resource_flow")
+	var wn: Node = sgv.call("_water_network_node") if sgv.has_method("_water_network_node") else null
+	var fails := 0
+
+	# 1. DC wiring reaches a battery.
+	var wired: Array[String] = []
+	for it: Dictionary in model.get("items"):
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if str(it.get("type", "")) != "processor" or str(sp.get("role", "")) != "siphon_hydro":
+			continue
+		var iid := str(it.get("id", ""))
+		var outs: Array = sp.get("outputs", []) as Array
+		for oi in outs.size():
+			if str((outs[oi] as Dictionary).get("kind", "")) != "dc_electricity":
+				continue
+			var handle := "res_out_%d_pos" % oi
+			var has_wire := false
+			for c: Dictionary in model.get("connections"):
+				if (str(c.get("source_item_id", "")) == iid and str(c.get("source_handle_id", "")) == handle) \
+						or (str(c.get("target_item_id", "")) == iid and str(c.get("target_handle_id", "")) == handle):
+					has_wire = true
+			if has_wire:
+				var bat := DcPowerWiring.find_battery_for_dc_port(model, iid, handle)
+				fails += _sb_check("%s (%s) DC wiring reaches a battery ('%s')" % [
+						iid, str(sp.get("name", "")), bat], not bat.is_empty())
+				if not bat.is_empty():
+					wired.append(iid)
+
+	# 4a. Graph level == 3D level, as loaded.
+	for row in _sb_pond_planes_ok(loader, model):
+		fails += _sb_check("as loaded: " + str(row[0]), bool(row[1]))
+
+	# 2 + 3. Dry, graph CLOSED, 360x for 12 s.
+	var bat0 := float(solar.get("battery_kwh_stored")) if solar != null else 0.0
+	var cap := float(solar.get("BATTERY_CAPACITY_KWH")) if solar != null else 0.0
+	main.set("time_scale", 0.1)
+	await get_tree().create_timer(12.0).timeout
+	main.set("time_scale", 0.0)
+	await get_tree().create_timer(0.5).timeout
+	var want_dc := 0.0
+	for iid in wired:
+		want_dc += float((model.call("get_item", iid).get("specs", {}) as Dictionary).get("current_output_kw", 0.0))
+	if solar != null:
+		var got_dc := float(solar.get("current_graph_dc_kw"))
+		fails += _sb_check("graph closed: SolarUI hydro/DC term %.3f kW == wired turbines %.3f kW" % [got_dc, want_dc],
+				absf(got_dc - want_dc) <= maxf(0.01, want_dc * 0.05))
+		var bat1 := float(solar.get("battery_kwh_stored"))
+		print("PlaytestHarness: sitebalance — battery %.3f → %.3f kWh (cap %.2f), load %.3f kW, solar %.3f kW" % [
+				bat0, bat1, cap, float(solar.get("current_load_kw")), float(solar.get("current_solar_kw"))])
+		if want_dc > 0.01 and bat0 < cap * 0.95:
+			fails += _sb_check("the battery integrates the generation (moved %.3f kWh)" % (bat1 - bat0),
+					absf(bat1 - bat0) > 1e-4)
+	for it: Dictionary in model.get("items"):
+		var sp2: Dictionary = it.get("specs", {}) as Dictionary
+		if str(sp2.get("role", "")) != "siphon_hydro" or float(sp2.get("live_power_w", 0.0)) <= 1.0:
+			continue
+		var in_rate := 0.0
+		var ins: Array = sp2.get("inputs", []) as Array
+		if not ins.is_empty():
+			in_rate = float((ins[0] as Dictionary).get("rate", 0.0))
+		fails += _sb_check("%s makes %.0f W and moves water (%.0f L/h, %s)" % [str(it.get("id", "")),
+				float(sp2.get("live_power_w", 0.0)), in_rate, str(sp2.get("live_regime", ""))],
+				in_rate > 1e-3 or (str(sp2.get("live_regime", "")) == "spec" and float(sp2.get("live_q_lps", 0.0)) > 0.0))
+
+	# 5. Storm: 8 mm/h for 12 s at 360x (~1.2 sim-h).
+	var before: Dictionary = {}
+	for it: Dictionary in model.get("items"):
+		if bool((it.get("specs", {}) as Dictionary).get("pond_storage", false)):
+			before[str(it.get("id", ""))] = float((it.get("specs", {}) as Dictionary).get("stock_l", 0.0))
+	if eng != null:
+		eng.set("rain_rate_override_mmh", 8.0)
+	if wn != null:
+		wn.set("rain_override_mmh", 8.0)
+	main.set("time_scale", 0.1)
+	await get_tree().create_timer(12.0).timeout
+	main.set("time_scale", 0.0)
+	await get_tree().create_timer(0.6).timeout
+	for pid: String in before.keys():
+		var ps3: Dictionary = model.call("get_item", pid).get("specs", {}) as Dictionary
+		var d_stock := float(ps3.get("stock_l", 0.0)) - float(before[pid])
+		var rain_lph := float(ps3.get("budget_rain_lph", 0.0))
+		var stream_lph := float(ps3.get("budget_stream_lph", 0.0))
+		var spill_lph := float(ps3.get("budget_spill_lph", 0.0))
+		print("PlaytestHarness: sitebalance — pond %s storm: Δstock %+.0f L, rain on surface %.0f L/h, streams %.0f L/h, spill %.0f L/h, out %.0f L/h" % [
+				pid, d_stock, rain_lph, stream_lph, spill_lph, float(ps3.get("outflow_rate", 0.0))])
+		fails += _sb_check("pond %s books rain on its own surface" % pid, rain_lph > 0.0)
+		fails += _sb_check("pond %s rises in the storm (or spills / a siphon drains it)" % pid,
+				d_stock > 0.0 or spill_lph > 0.0 or float(ps3.get("outflow_rate", 0.0)) > 0.0)
+	for row2 in _sb_pond_planes_ok(loader, model):
+		fails += _sb_check("after the storm: " + str(row2[0]), bool(row2[1]))
+	if eng != null:
+		eng.set("rain_rate_override_mmh", -1.0)
+	if wn != null:
+		wn.set("rain_override_mmh", -1.0)
+	print("PlaytestHarness: sitebalance %s" % ("PASS" if fails == 0 else "FAIL (%d)" % fails))
+	_maybe_quit()
+
+
 func _run_hydro_load_verify() -> void:
 	var sgv := await _find_graph_view()
 	if sgv == null:
@@ -1802,7 +2140,7 @@ func _run_hydro_load_verify() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S + 3.0).timeout
+	await get_tree().create_timer(_settle_s() + 3.0).timeout
 	var main := get_tree().current_scene
 	if main != null and "time_scale" in main:
 		main.time_scale = 0.0
@@ -1854,11 +2192,169 @@ func _run_hydro_load_verify() -> void:
 		await get_tree().create_timer(1.5).timeout
 		_hydro_dump(sgv, main, "BACK IN 3D (after Hydro Lab)")
 		fails += _hydro_assert_world_hidden(main, true, "back in 3D after the Lab")
+	# Buried-pipe depth cue: every physical run reports its max burial; a run
+	# under the ground anywhere carries a ground TRACE mesh.
+	var mgr_b: Node = main.find_child("ConduitManager", true, false) if main != null else null
+	if mgr_b != null and mgr_b.has_method("burial_max_for") and model != null:
+		mgr_b.call("set_global_visibility", true)
+		await get_tree().create_timer(1.5).timeout
+		var buried_runs := 0
+		var traced := 0
+		for cv in model.connections:
+			if not (cv is Dictionary):
+				continue
+			var cdict := cv as Dictionary
+			var ct := str(cdict.get("conduit_type", ""))
+			if ct != "poly_penstock" and ct != "culvert_pipe":
+				continue
+			var ccid := str(cdict.get("id", ""))
+			var mb := float(mgr_b.call("burial_max_for", ccid))
+			var tr: Node = mgr_b.call("burial_trace_for", ccid) as Node
+			print("PlaytestHarness: hydroload — %s %s max burial %.2f m · ground trace %s" % [
+					ct, ccid, mb, "yes" if tr != null else "no"])
+			if mb >= 0.1:
+				buried_runs += 1
+				if tr != null:
+					traced += 1
+		fails += _pen_check("every run buried anywhere carries a ground trace (%d of %d)" % [traced, buried_runs],
+				traced == buried_runs)
+		mgr_b.call("set_global_visibility", wires_pref)
+		await get_tree().create_timer(0.5).timeout
+	# The END marker drag wants the siphon whose draft pipe HAS an outlet node
+	# (Mt Vernon also carries a PowerSpout, which discharges at the machine).
+	var marker_turb := ""
+	var rf0: Variant = sgv.get("_resource_flow")
+	if model != null and rf0 != null and rf0.has_method("_resolve_siphon_outlet_tank"):
+		for it2 in model.items:
+			if not (it2 is Dictionary):
+				continue
+			var sp2: Dictionary = (it2 as Dictionary).get("specs", {}) as Dictionary
+			if str(sp2.get("role", "")) != "siphon_hydro":
+				continue
+			if not (rf0.call("_resolve_siphon_outlet_tank", it2) as Dictionary).is_empty():
+				marker_turb = str((it2 as Dictionary).get("id", ""))
+				break
+	if not marker_turb.is_empty():
+		fails += await _hydro_outlet_marker_drag(sgv, main, marker_turb)
+	else:
+		print("PlaytestHarness: hydroload — outlet marker drag SKIPPED (no siphon with an outlet on this map)")
 	if fails == 0:
 		print("PlaytestHarness: hydroload verify — PASS")
 	else:
 		push_error("PlaytestHarness: hydroload verify — %d CHECK(S) FAILED" % fails)
 	_maybe_quit()
+
+
+## The draft outlet's END marker (gameplay/outlet_end_marker.gd), driven with
+## REAL input: stand near the culvert mouth, Ctrl-aim it (the crosshair must
+## focus the MARKER, not the pipe), press, turn the camera past the drag
+## threshold, release — and assert the outlet node moved under the crosshair
+## with the culvert's far end and the physics' exit height following, that NO
+## waypoint was inserted, and that the marker re-seated on the rebuilt mouth.
+func _hydro_outlet_marker_drag(sgv: Node, main: Node, turb_id: String) -> int:
+	var fails := 0
+	var model: Variant = sgv.get("model")
+	var mgr: Node = sgv.call("_get_conduit_manager")
+	var player: Variant = main.get("player")
+	var cam: Camera3D = (player as Node3D).get_node_or_null("CameraArm/Camera3D") if player is Node3D else null
+	if model == null or mgr == null or cam == null or not mgr.has_method("outlet_marker_for"):
+		print("PlaytestHarness: hydroload — outlet marker drag SKIPPED (no manager / camera)")
+		return 0
+	var sink: Dictionary = {}
+	var conn_id := ""
+	var rf: Variant = sgv.get("_resource_flow")
+	if rf != null and rf.has_method("_resolve_siphon_outlet_tank"):
+		sink = rf.call("_resolve_siphon_outlet_tank", model.call("get_item", turb_id))
+	if sink.is_empty():
+		print("PlaytestHarness: hydroload — outlet marker drag SKIPPED (siphon has no outlet)")
+		return 0
+	var sid := str(sink.get("id", ""))
+	for conn: Dictionary in model.get("connections") as Array:
+		if str(conn.get("source_item_id", "")) == turb_id and str(conn.get("target_item_id", "")) == sid \
+				and str(conn.get("conduit_type", "")) == "culvert_pipe":
+			conn_id = str(conn.get("id", ""))
+	# The manager only ticks markers while it processes; give it a moment.
+	await get_tree().create_timer(1.0).timeout
+	var marker: Node3D = mgr.call("outlet_marker_for", conn_id) as Node3D
+	fails += _pen_check("the siphon's culvert carries an OutletEndMarker at its mouth", marker != null)
+	if marker == null:
+		return fails
+	var site0 := GraphSiteLayout.site_xz(sink)
+	var elev0 := float(sink.get("elevation_m", NAN))
+	var wps0 := ((model.call("get_connection", conn_id) as Dictionary).get("route_3d", []) as Array).size()
+	var mpos := marker.global_position
+	print("PlaytestHarness: hydroload — outlet marker at %s (sink site %s elev %.2f, %d waypoints)" % [
+			str(mpos), str(site0), elev0, wps0])
+	(sgv as CanvasItem).visible = false
+	await get_tree().create_timer(0.4).timeout
+	# Stand 7 m up-slope of the mouth, looking at it.
+	var stand := mpos + Vector3(5.0, 0.0, 5.0)
+	stand.y = TerrainSurfaceQuery.ground_height_at(main, stand.x, stand.z) + 0.3
+	(player as Node3D).global_position = stand
+	for _i in 4:
+		await get_tree().physics_frame
+	_aim_player_at(player as Node3D, cam, mpos)
+	CursorController.set_paused(false)
+	await get_tree().create_timer(0.4).timeout
+	var vp := main.get_viewport()
+	var centre_px := vp.get_visible_rect().size * 0.5
+	await _lc_move(vp, centre_px, true)
+	for _j in 4:
+		await get_tree().physics_frame
+	var focus: Node = (player as Node).get_node_or_null("InteractionFocus")
+	var focused: Variant = focus.call("get_focused") if focus != null else null
+	var cfid := str(focus.call("get_conduit_focus_id")) if focus != null else "?"
+	print("PlaytestHarness: hydroload — Ctrl-aim at the outlet end: focused=%s conduit_focus='%s' capture=%s" % [
+			str(focused.name) if focused is Node else "null", cfid, str(CursorController.should_capture_look())])
+	fails += _pen_check("Ctrl-aiming at the pipe's end focuses the OUTLET MARKER, not the pipe",
+			focused == marker and cfid.is_empty())
+	if focused != marker:
+		return fails
+	# Press, then turn the camera (REAL relative motion — the marker follows
+	# the crosshair's terrain hit, exactly as a hand would drag it).
+	await _lc_press(vp, centre_px, true, false, true)
+	for k in 10:
+		var mm := InputEventMouseMotion.new()
+		mm.position = centre_px
+		mm.global_position = centre_px
+		mm.relative = Vector2(-6.0, 1.5)
+		mm.ctrl_pressed = true
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		vp.push_input(mm)
+		await get_tree().physics_frame
+		await get_tree().process_frame
+	var grab: Node = (player as Node).get_node_or_null("GrabController")
+	var grabbing := grab != null and bool(grab.call("is_grabbing"))
+	var mid := marker.global_position
+	await _lc_press(vp, centre_px, false, false, true)
+	await get_tree().create_timer(1.2).timeout
+	var sink1: Dictionary = model.call("get_item", sid)
+	var site1 := GraphSiteLayout.site_xz(sink1)
+	var elev1 := float(sink1.get("elevation_m", NAN))
+	var conn1: Dictionary = model.call("get_connection", conn_id)
+	var wps1 := (conn1.get("route_3d", []) as Array).size()
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	var c: Vector3 = soi.call("world_center") as Vector3
+	var g1 := TerrainSurfaceQuery.ground_height_at(main, c.x + site1.x, c.z + site1.y)
+	var marker2: Node3D = mgr.call("outlet_marker_for", conn_id) as Node3D
+	var m2 := marker2.global_position if marker2 != null else Vector3.INF
+	print("PlaytestHarness: hydroload — outlet marker drag: grabbing=%s mid %s · sink %s → %s (%.1f m) · elev %.2f (ground %.2f) · invert_out %.2f · waypoints %d → %d · marker now %s" % [
+			str(grabbing), str(mid), str(site0), str(site1), site1.distance_to(site0), elev1, g1,
+			float(conn1.get("invert_out_m", NAN)), wps0, wps1, str(m2)])
+	fails += _pen_check("the grab controller picked the marker up (a drag, not a waypoint insert)", grabbing)
+	fails += _pen_check("the outlet node moved (%.1f m)" % site1.distance_to(site0), site1.distance_to(site0) > 0.5)
+	fails += _pen_check("…to just under the ground there (%.2f vs %.2f − 0.3)" % [elev1, g1],
+			not is_nan(elev1) and absf(elev1 - (g1 - 0.3)) < 0.12)
+	fails += _pen_check("the culvert's far end followed (invert_out %.2f)" % float(conn1.get("invert_out_m", NAN)),
+			absf(float(conn1.get("invert_out_m", NAN)) - elev1) < 1e-3)
+	fails += _pen_check("no waypoint was inserted (%d → %d)" % [wps0, wps1], wps1 <= wps0)
+	fails += _pen_check("the marker re-seated on the rebuilt mouth (%.2f m from the node)" % (
+			m2.distance_to(Vector3(c.x + site1.x, elev1, c.z + site1.y)) if is_finite(m2.x) else NAN),
+			is_finite(m2.x) and Vector2(m2.x, m2.z).distance_to(Vector2(c.x + site1.x, c.z + site1.y)) < 1.5)
+	# Put it back.
+	sgv.call("move_siphon_outlet", turb_id, site0, elev0)
+	await get_tree().create_timer(0.5).timeout
+	return fails
 
 
 ## The load-time contract, asserted BEFORE the graph has ever been opened: every
@@ -1907,7 +2403,8 @@ func _hydro_assert_anchors(sgv: Node, main: Node) -> int:
 ## and revealed only while the graph's 3D preview is on screen. Skipped outright
 ## when the preference IS on — then they are meant to be visible everywhere.
 func _hydro_assert_world_hidden(main: Node, want_hidden: bool, label: String) -> int:
-	var mgr: Node3D = main.find_child("ConduitManager", true, false) as Node3D 			if main != null else null
+	var mgr: Node3D = main.find_child("ConduitManager", true, false) as Node3D \
+			if main != null else null
 	if mgr == null or bool(mgr.get("_global_visible")):
 		return 0
 	return _pen_check("conduit runs %s %s" % [
@@ -1926,10 +2423,14 @@ func _hydro_dump(sgv: Node, main: Node, label: String) -> void:
 		# world_visible is the FIRST-PERSON gate: conduit materials are x-ray, so
 		# with wires off the runs are built but hidden until the graph's 3D
 		# preview (Site / Elevation CT / Hydro Lab) asks for them.
-		print("  manager: global_visible=%s preview_visible=%s world_visible=%s explicit_seen=%s instances=%d" % [
+		var ssc := get_tree().root.get_node_or_null("SimSettingsController")
+		print("  manager: global_visible=%s preview_visible=%s world_visible=%s explicit_seen=%s instances=%d · settings conduits_3d_visible=%s · lens=%s site_wire_mode=%s" % [
 			str(mgr.get("_global_visible")), str(mgr.get("_preview_visible")),
 			str((mgr as Node3D).visible), str(mgr.get("_explicit_seen")),
-			(mgr.get("_instances") as Dictionary).size()])
+			(mgr.get("_instances") as Dictionary).size(),
+			str(ssc.get("conduits_3d_visible")) if ssc != null else "?",
+			str(sgv.get("_graph_view_mode")),
+			str((sgv.get("_graph_canvas") as Node).get("site_wire_mode")) if sgv.get("_graph_canvas") != null else "?"])
 	for conn_v in model.connections:
 		if not (conn_v is Dictionary):
 			continue
@@ -1964,102 +2465,93 @@ func _hydro_dump(sgv: Node, main: Node, label: String) -> void:
 func _run_autobind_verify() -> void:
 	var sgv := await _find_graph_view()
 	if sgv == null:
-		push_error("PlaytestHarness: SystemGraphView not found — aborting autobind verify")
+		push_error("PlaytestHarness: SystemGraphView not found - aborting autobind verify")
 		_maybe_quit()
 		return
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
-		push_error("PlaytestHarness: graph model unavailable — aborting autobind verify")
+		push_error("PlaytestHarness: graph model unavailable - aborting autobind verify")
 		_maybe_quit()
 		return
-
-	# The soak map accumulates leftover pond/siphon test items AND connections
-	# across repeated capture runs (this test re-uses the same hardcoded ids
-	# every invocation) — clear every pond_storage tank and any prior siphon
-	# item/connections with our test ids first so the ranking pool and wiring
-	# are deterministic, not polluted by a stale wire from an earlier run.
+	# On a real map the bind prunes UNTAGGED pond tanks as orphans (only map
+	# ponds are pond_storage in play), so synthetic test ponds vanish inside the
+	# call and a "refused beyond the cap" reads PASS for the wrong reason (no
+	# pond at all). The guardrail is tested against the WORLD's own pond: a test
+	# siphon is stood 10 m from it, then 500 m away, then rebound uncapped.
 	for it in (model.items as Array).duplicate():
-		if not (it is Dictionary):
-			continue
-		var iid := str((it as Dictionary).get("id", ""))
-		if bool(((it as Dictionary).get("specs", {}) as Dictionary).get("pond_storage", false)) \
-				or iid == "cap_autobind_siphon":
-			model.remove_item(iid)
-	for conn in (model.connections as Array).duplicate():
-		if not (conn is Dictionary):
-			continue
-		var c := conn as Dictionary
-		if str(c.get("source_item_id", "")) == "cap_autobind_siphon" \
-				or str(c.get("target_item_id", "")) == "cap_autobind_siphon":
-			model.remove_connection(str(c.get("id", "")))
-
-	var g := 0.0
-	var soi := get_tree().root.get_node_or_null("SoiService")
-	if soi != null and soi.has_method("world_center"):
-		g = float((soi.call("world_center") as Vector3).y)
-
-	var near_id := "cap_autobind_near_pond"
-	var far_id := "cap_autobind_far_pond"
+		var iid0 := str((it as Dictionary).get("id", ""))
+		if iid0.begins_with("cap_autobind_"):
+			model.remove_item(iid0)
+	var pond: Dictionary = {}
+	for it in (model.items as Array):
+		var d := it as Dictionary
+		if bool((d.get("specs", {}) as Dictionary).get("pond_storage", false)) and GraphSiteLayout.has_site_coords(d):
+			pond = d
+			break
+	if pond.is_empty():
+		if _report != null:
+			_report.skip("autobind", "this world has no pond on the graph with site coordinates")
+		_maybe_quit()
+		return
+	var pond_id := str(pond.get("id", ""))
+	var pond_site := GraphSiteLayout.site_xz(pond)
+	# The world's pond keeps its own wiring: remember the connections it has so
+	# the test's bind/rebind never leaves a stray wire behind.
+	var conns_before := {}
+	for c in (model.connections as Array):
+		conns_before[str((c as Dictionary).get("id", ""))] = true
+	var g := float(pond.get("elevation_m", 0.0))
 	var siphon_id := "cap_autobind_siphon"
-	for pid in [near_id, far_id]:
-		model.add_item({
-			"id": pid, "type": "resource", "x": 0.0, "y": 0.0,
-			"width": 80.0, "height": 80.0,
-			# Site coords live on the ITEM root (GraphSiteLayout.has_site_coords),
-			# NOT nested under specs — matches _apply_site_coords_from_prop.
-			"site_x_m": (10.0 if pid == near_id else 500.0), "site_z_m": 0.0,
-			"specs": {
-				"name": "Autobind Pond", "resource_kind": "water",
-				"pond_storage": true, "fill_mode": "auto",
-				"capacity_qty": 30000.0, "capacity_unit": "L",
-				"level": 0.5, "stock_l": 15000.0,
-				"floor_m": g, "rim_m": g + 2.0, "level_m": g + 1.0,
-			},
-		})
 	model.add_item({
 		"id": siphon_id, "type": "processor", "x": 160.0, "y": 0.0,
 		"width": 150.0, "height": 130.0, "elevation_m": g + 1.0,
-		"site_x_m": 0.0, "site_z_m": 0.0,
+		"site_x_m": pond_site.x + 10.0, "site_z_m": pond_site.y,
 		"specs": {
 			"name": "Autobind Siphon", "role": "siphon_hydro", "kind": "siphon_hydro",
 			"intake_diameter_mm": 203.0, "outlet_diameter_mm": 203.0,
-			"barrel_length_m": 20.0, "manning_n": 0.012,
-			"max_power_w": 250.0, "hydraulic_efficiency": 0.6,
+			"barrel_length_m": 20.0, "max_power_w": 250.0, "hydraulic_efficiency": 0.6,
 			"generator_efficiency": 0.7,
 		},
 	})
-
-	# NEAR pond (dist=10m) within a 40m cap → should bind silently.
+	# 1. NEAR (10 m from the world's pond) within a 40 m cap: binds silently.
 	var bound_near := bool(sgv.call("bind_siphon_to_nearest_pond", siphon_id, true, 40.0))
 	# resolve_siphon_pond reads the flow engine's cached connection index, which
-	# rebuilds on tick() — but tick() wall-clock-throttles itself
-	# (_wall_tick_interval), so a single process_frame isn't enough. Wait past
-	# the throttle so a connection made THIS frame is reflected (normal in
-	# gameplay — the ambient tick catches up within a fraction of a second).
+	# rebuilds on its wall-clock-throttled tick: wait past the throttle.
 	await get_tree().create_timer(0.5).timeout
-	var pond_after_near := sgv.call("resolve_siphon_pond", siphon_id) as Dictionary
-	var bound_to_near := bound_near and str(pond_after_near.get("id", "")) == near_id
-	print("PlaytestHarness: autobind verify — near pond (10m, cap 40m): bound=%s to=%s -> %s" % [
-		str(bound_near), str(pond_after_near.get("id", "")),
-		"PASS" if bound_to_near else "FAIL"])
-
-	# Rewire siphon fresh (remove the bind) and test the FAR pond beyond the cap.
-	for conn: Dictionary in (model.connections as Array).duplicate():
-		if str(conn.get("target_item_id", "")) == siphon_id or str(conn.get("source_item_id", "")) == siphon_id:
-			model.remove_connection(str(conn.get("id", "")))
-	# Make the far pond the ONLY candidate by removing the near one.
-	model.remove_item(near_id)
+	var got := sgv.call("resolve_siphon_pond", siphon_id) as Dictionary
+	var near_ok := bound_near and str(got.get("id", "")) == pond_id
+	print("PlaytestHarness: autobind verify - near the world's pond (10 m, cap 40 m): bound=%s to=%s -> %s" % [
+		str(bound_near), str(got.get("id", "")), "PASS" if near_ok else "FAIL"])
+	# 2. FAR (500 m) with the same cap: must refuse, with the pond still there.
+	_autobind_unwire(model, siphon_id)
+	model.update_item(siphon_id, {"site_x_m": pond_site.x + 500.0, "site_z_m": pond_site.y})
 	var bound_far_capped := bool(sgv.call("bind_siphon_to_nearest_pond", siphon_id, true, 40.0))
-	print("PlaytestHarness: autobind verify — far pond (500m, cap 40m): bound=%s -> %s" % [
-		str(bound_far_capped), "PASS (correctly refused)" if not bound_far_capped else "FAIL (bound beyond cap!)"])
-
-	# Uncapped manual Rebind should succeed regardless of distance.
+	var pond_still := not (model.get_item(pond_id) as Dictionary).is_empty()
+	print("PlaytestHarness: autobind verify - 500 m away, cap 40 m: bound=%s pond present=%s -> %s" % [
+		str(bound_far_capped), str(pond_still),
+		"PASS (correctly refused)" if (not bound_far_capped and pond_still) else "FAIL"])
+	# 3. The manual uncapped Rebind ignores distance.
 	var bound_far_uncapped := bool(sgv.call("bind_siphon_to_nearest_pond", siphon_id, true))
-	print("PlaytestHarness: autobind verify — far pond, uncapped manual Rebind: bound=%s -> %s" % [
+	print("PlaytestHarness: autobind verify - 500 m away, uncapped manual Rebind: bound=%s -> %s" % [
 		str(bound_far_uncapped), "PASS" if bound_far_uncapped else "FAIL"])
-
+	# Leave the graph as it was: the test siphon and every wire it made go.
+	_autobind_unwire(model, siphon_id)
+	model.remove_item(siphon_id)
+	var stray := 0
+	for c in (model.connections as Array):
+		if not conns_before.has(str((c as Dictionary).get("id", ""))):
+			stray += 1
+	print("PlaytestHarness: autobind verify - graph left as found (%d new wires) -> %s" % [
+		stray, "PASS" if stray == 0 and pond_still else "FAIL"])
 	_maybe_quit()
+
+
+func _autobind_unwire(model: Variant, siphon_id: String) -> void:
+	for conn in (model.connections as Array).duplicate():
+		var c := conn as Dictionary
+		if str(c.get("target_item_id", "")) == siphon_id or str(c.get("source_item_id", "")) == siphon_id:
+			model.remove_connection(str(c.get("id", "")))
 
 
 func _run_ambient_flow_verify() -> void:
@@ -2073,7 +2565,7 @@ func _run_ambient_flow_verify() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
@@ -2189,7 +2681,7 @@ func _run_crowd_bench() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
 		push_error("PlaytestHarness: graph model unavailable — aborting crowd bench")
@@ -2293,7 +2785,8 @@ func _run_crowd_bench() -> void:
 	if pm != null and pm.has_method("set_enabled"):
 		pm.call("set_enabled", true)
 	if main != null and "time_scale" in main:
-		main.time_scale = 0.125
+		main.time_scale = _bench_ts_mult / 3600.0
+	print("PlaytestHarness: crowd bench — clock at %.0fx" % _bench_ts_mult)
 	# Let the roster spawn and the smoothed HUD values settle before sampling.
 	await get_tree().create_timer(6.0).timeout
 	var samples: Array = []
@@ -2328,8 +2821,22 @@ func _run_crowd_bench() -> void:
 	print("PlaytestHarness: crowd bench — fps %.0f  frame %.2f ms  process %.2f ms  render cpu %.2f / gpu %.2f ms" % [
 		med.call("fps", ""), med.call("frame_ms", ""), med.call("process_ms", "render"),
 		med.call("render_cpu_ms", "render"), med.call("render_gpu_ms", "render")])
-	for sec in ["npc_population", "npc_dots", "npc_host", "crowd_render", "flow_engine"]:
-		print("PlaytestHarness: crowd bench — section %-16s %6.2f ms" % [sec, med.call(sec, "sections_ms")])
+	# PEAKS, not just medians: the population ticks at 2-4 Hz and its whole
+	# cost lands in one frame, which a smoothed median hides completely.
+	var pk_max := func(key: String, sub: String) -> float:
+		var m := 0.0
+		for s in samples:
+			var d: Dictionary = s
+			var v := float(d.get(key, 0.0)) if sub.is_empty() else float((d.get(sub, {}) as Dictionary).get(key, 0.0))
+			m = maxf(m, v)
+		return m
+	print("PlaytestHarness: crowd bench — frame peak (worst 2 s window) %.1f ms" % pk_max.call("frame_ms_peak", ""))
+	for sec in ["npc_population", "crowd_sim", "npc_venues", "npc_persist", "npc_dots", "npc_host",
+			"crowd_render", "crowd_raster", "camp_power", "flow_engine", "npc_pathfind", "npc_nav_bake"]:
+		print("PlaytestHarness: crowd bench — section %-16s %6.2f ms  peak %6.2f ms" % [sec,
+			med.call(sec, "sections_ms"), pk_max.call(sec, "sections_peak_ms")])
+	if bridge.has_method("nav_status"):
+		print("PlaytestHarness: crowd bench — nav %s" % str(bridge.call("nav_status")))
 	# Tiers: past the focus budget most camps run as light crowds drawn by
 	# the CrowdRenderer; report what the bench actually exercised.
 	var light_people := 0
@@ -2522,7 +3029,7 @@ func _run_population_verify() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
@@ -2634,7 +3141,9 @@ func _run_population_verify() -> void:
 	reg.call("set_space_type", {"kind": "area", "poly": u_poly}, "fire_circle", 12)
 	var u_pt: Variant = SpaceRegistry.area_interior_point(u_poly)
 	var u_centroid := SpaceRegistry.polygon_centroid(u_poly)
-	var ok_concave := u_pt is Vector2 		and SpaceRegistry.polygon_contains(u_poly, u_pt as Vector2) 		and not SpaceRegistry.polygon_contains(u_poly, u_centroid)
+	var ok_concave := u_pt is Vector2 \
+		and SpaceRegistry.polygon_contains(u_poly, u_pt as Vector2) \
+		and not SpaceRegistry.polygon_contains(u_poly, u_centroid)
 	print("PlaytestHarness: population verify — concave area %s (centroid %s is outside, gathering point %s is inside)" % [
 		"PASS" if ok_concave else "FAIL", str(u_centroid.round()), str((u_pt as Vector2).round())])
 	print("PlaytestHarness: population verify — %d spaces seeded, graph CLOSED" % (sites.size() + 1))
@@ -2742,15 +3251,18 @@ func _run_population_verify() -> void:
 	# Site Plan must run on the LIVE clock: entering it used to take the
 	# elevation noon-bake claim (time_scale=0), which froze the population and
 	# made the plan read as "nothing is happening". Assert the view neither
-	# moved time_scale nor holds the noon claim.
+	# moved time_scale nor holds ANY graph clock claim (the noon lock is gone
+	# entirely; no graph lens may claim the clock).
 	var ts_before_site := float(main.time_scale) if main != null and "time_scale" in main else -1.0
 	if sgv.has_method("_apply_graph_view_mode"):
 		sgv.call("_apply_graph_view_mode", "site")
 	var noon_claim := false
 	if main != null and main.get("clock") != null:
 		var claims: Variant = main.clock.get("claims")
-		if claims != null and claims.has_method("has_claim"):
-			noon_claim = bool(claims.call("has_claim", "graph_elevation_noon"))
+		if claims != null and claims.has_method("owners"):
+			for o in claims.call("owners"):
+				if str(o).begins_with("graph_"):
+					noon_claim = true
 	var ts_after_site := float(main.time_scale) if main != null and "time_scale" in main else -1.0
 	var ok_live_clock := not noon_claim and is_equal_approx(ts_after_site, ts_before_site)
 	print("PlaytestHarness: population verify — site plan clock %s (ts %.3f -> %.3f, noon claim=%s)" % [
@@ -2900,11 +3412,13 @@ func _run_population_verify() -> void:
 		need_parts.append("%s %.0f m" % [str(k), float(per_need[k])])
 	print("PlaytestHarness: population verify — mean trip per need: %s" % [
 		", ".join(need_parts) if not need_parts.is_empty() else "(none yet)"])
-	var ok_walk := float(wsum.get("walk_distance_m", 0.0)) > 1.0 			and float(wsum.get("walk_kcal", 0.0)) > 0.0 and not per_need.is_empty()
+	var ok_walk := float(wsum.get("walk_distance_m", 0.0)) > 1.0 \
+			and float(wsum.get("walk_kcal", 0.0)) > 0.0 and not per_need.is_empty()
 	print("PlaytestHarness: population verify — walking metrics %s" % [
 		"PASS" if ok_walk else "FAIL (no distance/calorie accounting)"])
 	var planned := int(nav_info.get("hits", 0)) + int(nav_info.get("misses", 0))
-	var ok_nav := nav_ready and int(nav_info.get("cells", 0)) > 0 			and planned > 0 and with_path > 0
+	var ok_nav := nav_ready and int(nav_info.get("cells", 0)) > 0 \
+			and planned > 0 and with_path > 0
 	print("PlaytestHarness: population verify — navigation %s (%d routes planned, %d agents walking one)" % [
 		"PASS" if ok_nav else "FAIL (grid never ready, or nobody routed)",
 		planned, with_path])
@@ -2973,20 +3487,30 @@ func _run_population_verify() -> void:
 	# apart; the separation pass handles everyone in transit. The failure this
 	# guards is the one that is obvious on screen and invisible in the numbers:
 	# a whole roster stacked on one point, rendering as a single person.
+	# Sleepers are EXEMPT by design (people pile up to sleep: a shared bed,
+	# SpaceRegistry.pile_offset), so a pair both asleep is not a stack.
 	var closest_pair := INF
 	var stacked := 0
+	var stack_desc: Array = []
 	var agent_dots: Array = bridge.call("agent_dots")
 	for i in range(agent_dots.size()):
-		var pa: Vector2 = (agent_dots[i] as Dictionary).get("pos", Vector2.ZERO)
+		var da: Dictionary = agent_dots[i]
+		var pa: Vector2 = da.get("pos", Vector2.ZERO)
 		for j in range(i + 1, agent_dots.size()):
-			var pb: Vector2 = (agent_dots[j] as Dictionary).get("pos", Vector2.ZERO)
+			var db: Dictionary = agent_dots[j]
+			var pb: Vector2 = db.get("pos", Vector2.ZERO)
+			if str(da.get("activity", "")) == "sleep" and str(db.get("activity", "")) == "sleep":
+				continue
 			var dd := pa.distance_to(pb)
 			closest_pair = minf(closest_pair, dd)
 			if dd < 0.1:
 				stacked += 1
+				stack_desc.append("%s (%s, %s) + %s (%s, %s)" % [str(da.get("id", "")), str(da.get("activity", "")),
+					str(da.get("habitat", da.get("hab", ""))), str(db.get("id", "")), str(db.get("activity", "")),
+					str(db.get("habitat", db.get("hab", "")))])
 	var ok_space := stacked == 0
-	print("PlaytestHarness: population verify — personal space %s (%d people, closest pair %.2f m, %d stacked)" % [
-		"PASS" if ok_space else "FAIL", agent_dots.size(), closest_pair, stacked])
+	print("PlaytestHarness: population verify — personal space %s (%d people, closest awake pair %.2f m, %d stacked) %s" % [
+		"PASS" if ok_space else "FAIL", agent_dots.size(), closest_pair, stacked, str(stack_desc)])
 
 	# Rigged-body LOD contract: the host must hand the Mixamo figure to the
 	# nearest agents and the primitive to the rest. Proving the rig RENDERS
@@ -3271,6 +3795,54 @@ func _run_population_verify() -> void:
 		"PASS" if ok_reset else "FAIL", before_reset, after_reset,
 		float(s_reset.get("mean_morale", 0.0)), str(s_reset.get("collapsed", false))])
 
+	# Settings → NPC → "Simulate & draw NPCs" OFF (site analysis): the roster
+	# must FREEZE, the avatar host and crowd renderer must be FREED, and the
+	# habitat must drop its pop-driven demand override (classic constant rate)
+	# — then all of it must come back when switched on again. Flipped IN
+	# MEMORY only (the static, never set_npcs_enabled), so the player's
+	# npc_display.cfg is never written.
+	var ok_off := false
+	var off_note := ""
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.1
+	await get_tree().create_timer(1.5).timeout
+	NpcDisplayPrefs.force_npcs_for_session(false)
+	NpcDisplayPrefs._npcs_on = 0
+	await get_tree().create_timer(1.0).timeout
+	var off_h0 := float(bridge.call("last_abs_h"))
+	var off_dots0: Array = bridge.call("agent_dots")
+	await get_tree().create_timer(2.5).timeout
+	var off_dots1: Array = bridge.call("agent_dots")
+	var off_moved := 0
+	for i in mini(off_dots0.size(), off_dots1.size()):
+		var q0: Vector2 = (off_dots0[i] as Dictionary).get("pos", Vector2.ZERO)
+		var q1: Vector2 = (off_dots1[i] as Dictionary).get("pos", Vector2.ZERO)
+		if (q1 - q0).length() > 0.01:
+			off_moved += 1
+	var rf_off: Variant = sgv.call("resource_flow_engine")
+	var demand_off: Dictionary = rf_off.get("_habitat_demand") if rf_off != null else {}
+	var host_off: Variant = sgv.call("npc_population_host")
+	var cr_off: Variant = sgv.call("crowd_renderer")
+	var frozen := is_equal_approx(float(bridge.call("last_abs_h")), off_h0) and off_moved == 0
+	var torn := (host_off == null or not is_instance_valid(host_off)) and cr_off == null
+	var nominal := not demand_off.has(hab_id)
+	var summary_off: Dictionary = sgv.call("npc_dot_summary")
+	# ...and back on: the next ticks resume the same roster.
+	NpcDisplayPrefs._npcs_on = -1
+	NpcDisplayPrefs.force_npcs_for_session(true)
+	await get_tree().create_timer(2.5).timeout
+	var host_on: Variant = sgv.call("npc_population_host")
+	var demand_on: Dictionary = rf_off.get("_habitat_demand") if rf_off != null else {}
+	var resumed := float(bridge.call("last_abs_h")) > off_h0 + 0.01 \
+		and host_on != null and is_instance_valid(host_on) and demand_on.has(hab_id)
+	if main != null and "time_scale" in main:
+		main.time_scale = 0.0
+	ok_off = frozen and torn and nominal and summary_off.is_empty() and resumed
+	off_note = "frozen=%s (moved %d), host+renderer freed=%s, nominal demand=%s, summary empty=%s, resumed=%s" % [
+		str(frozen), off_moved, str(torn), str(nominal), str(summary_off.is_empty()), str(resumed)]
+	print("PlaytestHarness: population verify — NPCs switched off %s (%s)" % [
+		"PASS" if ok_off else "FAIL", off_note])
+
 	# Routine editing (the Routines panel's Apply button). Exercised through the
 	# same bridge calls the panel makes, plus the panel script itself, because
 	# the panel needs the CursorController autoload and so cannot be built in an
@@ -3313,7 +3885,7 @@ func _run_population_verify() -> void:
 		if not (model.get_item(str(pid)) as Dictionary).is_empty():
 			model.remove_item(str(pid))
 	print("PlaytestHarness: population verify — %s (%d shots in %s)" % [
-		"PASS" if (ok_flow and ok_move and ok_smooth and ok_chore and ok_face and ok_pose and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape) else "FAIL",
+		"PASS" if (ok_flow and ok_move and ok_smooth and ok_chore and ok_face and ok_pose and ok_starve and ok_cascade and ok_3d and ok_nav and ok_walk and ok_desire and ok_drape and ok_off) else "FAIL",
 		manifest.size(), ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
 
@@ -3332,7 +3904,7 @@ func _run_siphon_lab_capture() -> void:
 	if loader != null and not (loader.get("load_completed") == true):
 		print("PlaytestHarness: siphon capture — waiting for map load")
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 
 	var main := get_tree().current_scene
 	if main != null:
@@ -3350,16 +3922,58 @@ func _run_siphon_lab_capture() -> void:
 	# If the loaded graph already has a siphon (user maps carry their own config),
 	# use it READ-ONLY — never mutate the player's real pond/graph. Only synthesize
 	# a demo pond+siphon (soak map) when none exists.
+	# The harness's OWN seeds from an earlier run (ids `cap_lab_*`, persisted
+	# by the soak map's autosave) are not a player's siphon: strip them, and
+	# the outlet sink wired to the old siphon, so the seeded path — the one
+	# with the binding + physics asserts — actually runs.
 	var existing_siphon := ""
+	var stale: Array[String] = []
+	var hydro_list := PackedStringArray()
 	for it in model.items:
 		if not (it is Dictionary):
 			continue
-		if str(((it as Dictionary).get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro":
-			existing_siphon = str((it as Dictionary).get("id", ""))
-			break
-	if not existing_siphon.is_empty():
+		var iid := str((it as Dictionary).get("id", ""))
+		if iid.begins_with("cap_lab_"):
+			stale.append(iid)
+			continue
+		var sp0: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str(sp0.get("role", "")) == "siphon_hydro":
+			var k0 := str(sp0.get("turbine_kind", "siphon"))
+			hydro_list.append("%s (%s, %s)" % [iid, str(sp0.get("name", "")), k0])
+			# This is the SIPHON capture: a siphon-kind turbine wins over a
+			# Pelton that happens to sit earlier in the list.
+			if existing_siphon.is_empty() or k0 == "siphon":
+				if existing_siphon.is_empty() or str(((model.get_item(existing_siphon) as Dictionary).get("specs", {}) as Dictionary).get("turbine_kind", "siphon")) != "siphon":
+					existing_siphon = iid
+	if not hydro_list.is_empty():
+		print("PlaytestHarness: siphon capture — hydro turbines on the map: %s" % ", ".join(hydro_list))
+	var existing_is_siphon := not existing_siphon.is_empty() and str(
+			((model.get_item(existing_siphon) as Dictionary).get("specs", {}) as Dictionary).get("turbine_kind", "siphon")) == "siphon"
+	if existing_is_siphon:
 		await _run_siphon_lab_capture_readonly(sgv, existing_siphon)
 		return
+	# A real pond on the map? Then the seeded siphon drinks from THAT: the
+	# bind seats it on the shore and the outlet trace runs over real terrain.
+	var real_pond_id := ""
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var sp1: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if bool(sp1.get("pond_storage", false)) and not is_nan(float(sp1.get("rim_m", NAN))) \
+				and not is_nan(float(sp1.get("floor_m", NAN))) and GraphSiteLayout.has_site_coords(it as Dictionary) \
+				and not str((it as Dictionary).get("id", "")).begins_with("cap_lab_"):
+			real_pond_id = str((it as Dictionary).get("id", ""))
+			break
+	if not stale.is_empty():
+		for conn: Dictionary in model.connections.duplicate():
+			if str(conn.get("source_item_id", "")) == "cap_lab_siphon":
+				var tgt: Dictionary = model.get_item(str(conn.get("target_item_id", "")))
+				if bool((tgt.get("specs", {}) as Dictionary).get("outlet_sink", false)):
+					stale.append(str(tgt.get("id", "")))
+		for sid in stale:
+			if not model.get_item(sid).is_empty():
+				model.remove_item(sid)
+		print("PlaytestHarness: siphon capture — removed %d stale cap_lab_* seeds" % stale.size())
 
 	# Ground datum under the pond so the DEM section frames sensibly.
 	var g := 0.0
@@ -3369,7 +3983,20 @@ func _run_siphon_lab_capture() -> void:
 
 	var pond_id := "cap_lab_pond"
 	var siphon_id := "cap_lab_siphon"
-	model.add_item({
+	var demo_pond := real_pond_id.is_empty()
+	var seed_elev := g + 1.65
+	if not demo_pond:
+		pond_id = real_pond_id
+		var rp: Dictionary = (model.get_item(pond_id).get("specs", {}) as Dictionary)
+		# Just under the rim, like the bind would seat it; the pond's own
+		# level decides whether it primes.
+		seed_elev = float(rp.get("rim_m", g)) - 0.35
+		g = float(rp.get("floor_m", g))
+		print("PlaytestHarness: siphon capture — seeding a temporary siphon on the map's pond %s (%s)" % [
+				pond_id, str(rp.get("name", ""))])
+		_siphon_cleanup_ids = [siphon_id]
+	if demo_pond:
+		model.add_item({
 		"id": pond_id, "type": "resource", "x": 0.0, "y": 0.0,
 		"width": 80.0, "height": 80.0,
 		"specs": {
@@ -3378,12 +4005,13 @@ func _run_siphon_lab_capture() -> void:
 			"capacity_qty": 30000.0, "capacity_unit": "L",
 			"level": 0.85, "stock_l": 25500.0,
 			"floor_m": g, "rim_m": g + 2.0, "level_m": g + 1.7,
-			"site_x_m": 0.0, "site_z_m": 0.0,
+			"footprint_w_m": 8.0, "footprint_d_m": 8.0,
 		},
-	})
-	model.add_item({
+		"site_x_m": 0.0, "site_z_m": 0.0,
+		})
+	var siphon_item := {
 		"id": siphon_id, "type": "processor", "x": 160.0, "y": 0.0,
-		"width": 150.0, "height": 130.0, "elevation_m": g + 1.65,
+		"width": 150.0, "height": 130.0, "elevation_m": seed_elev,
 		"specs": {
 			"name": "Lab Siphon", "role": "siphon_hydro", "kind": "siphon_hydro",
 			"energy_source": "", "efficiency": 1.0,
@@ -3391,17 +4019,24 @@ func _run_siphon_lab_capture() -> void:
 			"barrel_length_m": 20.0, "manning_n": 0.012,
 			"max_power_w": 250.0, "hydraulic_efficiency": 0.6,
 			"generator_efficiency": 0.7,
-			"siphon_start_m": g + 1.65, "siphon_break_m": g + 1.2,
-			"module_elev_m": g + 1.65, "outlet_invert_m": g - 8.0,
+			# The siphon's geometry: a 1.2 m dip tube (mouth = break at
+			# g + 0.45), overflow-primed at the crest (g + 1.65).
+			"dip_tube_length_m": 1.2, "siphon_prime_mode": "overflow",
+			"module_elev_m": seed_elev, "outlet_invert_m": seed_elev - 9.65,
 			"siphon_primed": true,
-			"site_x_m": 4.0, "site_z_m": 0.0,
 			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
 			"outputs": [
 				{"kind": "water", "rate": 0.0, "unit": "L/h"},
 				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
 			],
 		},
-	})
+	}
+	if demo_pond:
+		# Seeded with a site of its own: the bind must leave it there.
+		siphon_item["site_x_m"] = 6.0
+		siphon_item["site_z_m"] = 0.0
+	# (On a real pond the item has NO site: the bind seats it on the shore.)
+	model.add_item(siphon_item)
 	if sgv.has_method("bind_siphon_to_nearest_pond"):
 		sgv.call("bind_siphon_to_nearest_pond", siphon_id)
 	if sgv.has_method("ensure_siphon_outlet_sink"):
@@ -3445,6 +4080,7 @@ func _run_siphon_lab_capture() -> void:
 	await get_tree().create_timer(1.5).timeout
 	await _graph_shot(dir, "04_lab_water_dragged_low", manifest)
 
+	await _verify_siphon_turbine(sgv, model, siphon_id, pond_id, demo_pond)
 	await _verify_view_camera_decoupled(sgv, siphon_id)
 
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
@@ -3453,7 +4089,9 @@ func _run_siphon_lab_capture() -> void:
 		f.close()
 	print("PlaytestHarness: siphon capture — %d shots in %s" % [
 		manifest.size(), ProjectSettings.globalize_path(dir)])
-	_maybe_quit()
+	# Then the Lab tour (zoom, PowerSpout charts, the two Pelton close-ups)
+	# on the fresh seed — it ends the run.
+	await _run_siphon_lab_capture_readonly(sgv, siphon_id)
 
 
 ## The zoom-decoupling contract, which no PNG can show: the freeform camera must
@@ -3521,6 +4159,17 @@ func _run_siphon_lab_capture_readonly(sgv: Node, siphon_id: String) -> void:
 		sgv.call("open_siphon_lab", siphon_id)
 	await get_tree().create_timer(2.5).timeout
 	await _graph_shot(dir, "01_lab_default_fit", manifest)
+	# The player's own siphon: the binding heals + the physics, through the
+	# same checks the seeded path runs (minus the seed-specific ones).
+	var model_ro: Variant = sgv.get("model")
+	if model_ro != null and sgv.has_method("resolve_siphon_pond"):
+		var pond_ro: Dictionary = sgv.call("resolve_siphon_pond", siphon_id)
+		var kind_ro := str(((model_ro.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary).get("turbine_kind", "siphon"))
+		if not pond_ro.is_empty() and not bool(HydroSource.kind_meta(kind_ro).get("has_penstock", false)):
+			await _verify_siphon_turbine(sgv, model_ro, siphon_id, str(pond_ro.get("id", "")), false)
+			await _verify_siphon_lab_interaction(sgv, model_ro, siphon_id, dir, manifest)
+		else:
+			print("PlaytestHarness: siphon verify — SKIPPED (no bound pond or not a siphon kind: %s)" % kind_ro)
 
 	# A couple of zoom framings via the modal's own view transform (read-only).
 	var modal: Node = sgv.get("_siphon_lab_modal")
@@ -3564,10 +4213,42 @@ func _run_siphon_lab_capture_readonly(sgv: Node, siphon_id: String) -> void:
 		if stats != null:
 			print("PlaytestHarness: siphon lab chart stats — %s" % str((stats as Label).text))
 		await _siphon_capture_closeup(modal, dir, manifest)
+		# The AliExpress micro Pelton: the close-up must swap to ITS model
+		# (vertical shaft, modelled nozzle fitting), the jet's-eye view must
+		# look down the jet at the cups, and the exit sheets must follow the
+		# bucket relation.
+		var mp_specs: Dictionary = orig_specs.duplicate(true)
+		mp_specs["turbine_kind"] = "micro_pelton"
+		model.call("update_item", siphon_id, {"specs": mp_specs})
+		if modal.has_method("_load_from_model"):
+			modal.call("_load_from_model")
+		await get_tree().create_timer(1.0).timeout
+		await _siphon_capture_micro_pelton(modal, dir, manifest)
 		model.call("update_item", siphon_id, {"specs": orig_specs})
 		if modal.has_method("_load_from_model"):
 			modal.call("_load_from_model")
 
+	# The close-up AGAIN on the siphon, after the Pelton phases ran in the
+	# same modal: its `_last` then carries the Pelton's nozzle keys, which
+	# is exactly the state that threw "Invalid access to 'riser_top'".
+	if modal != null and model != null:
+		var kind_end := str(((model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary).get("turbine_kind", "siphon"))
+		if kind_end == "siphon" and modal.has_method("_set_lab_view"):
+			# The Pelton phases restored the item's specs under the modal; a
+			# player's modal is always in step with the dropdown, so bring it
+			# back in step before reopening (the state that threw was the
+			# close-up's own `_last`, not a stale dropdown).
+			if modal.has_method("_load_from_model"):
+				modal.call("_load_from_model")
+				await get_tree().create_timer(0.5).timeout
+			modal.call("_set_lab_view", "closeup")
+			await get_tree().create_timer(1.5).timeout
+			var cu: Variant = modal.get("_closeup")
+			var ok_again := cu != null and bool((cu.call("debug_summary") as Dictionary).get("siphon_mode", false))
+			print("PlaytestHarness: siphon close-up reopened after the Pelton tour — %s" % ("PASS" if ok_again else "FAIL"))
+			await _graph_shot(dir, "11_siphon_closeup_after_pelton", manifest)
+			modal.call("_set_lab_view", "section")
+			await get_tree().create_timer(0.4).timeout
 	await _verify_view_camera_decoupled(sgv, siphon_id)
 
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
@@ -3576,6 +4257,7 @@ func _run_siphon_lab_capture_readonly(sgv: Node, siphon_id: String) -> void:
 		f.close()
 	print("PlaytestHarness: siphon capture (read-only, existing siphon %s) — %d shots in %s" % [
 		siphon_id, manifest.size(), ProjectSettings.globalize_path(dir)])
+	_siphon_cleanup(sgv)
 	_maybe_quit()
 
 
@@ -3625,6 +4307,103 @@ func _siphon_capture_closeup(modal: Node, dir: String, manifest: Array) -> void:
 	await get_tree().create_timer(0.6).timeout
 
 
+## The micro Pelton in the close-up: side view, the jet's-eye view with the
+## landing ring + velocity arrows, an axial nudge that moves the landing off
+## the splitter, and the numbers a PNG cannot show (impact point on the pitch
+## cylinder, exit vectors vs PeltonPhysics, the camera at the mouth).
+func _siphon_capture_micro_pelton(modal: Node, dir: String, manifest: Array) -> void:
+	if not modal.has_method("_set_lab_view"):
+		return
+	var fails := 0
+	if modal.has_method("set_state_for_test"):
+		modal.call("set_state_for_test", 0.9, 14.0)
+	modal.call("_set_lab_view", "closeup")
+	await get_tree().create_timer(2.0).timeout
+	var closeup: Variant = modal.get("_closeup")
+	if closeup == null or not (closeup as Object).has_method("debug_summary"):
+		print("PlaytestHarness: micro pelton close-up — SKIPPED (no close-up)")
+		return
+	modal.set("_load_frac", 1.0)
+	if modal.has_method("_push_closeup_state"):
+		modal.call("_push_closeup_state")
+	# A player's map can carry its own nozzle placement; the checks below are
+	# about the MODELLED pose, so zero it for the measurement (the modal
+	# pushes the saved one back on its next load).
+	closeup.call("set_nozzle_pose", {"offset_m": 0.0, "axial_m": 0.0, "angle_deg": 0.0,
+			"tilt_in_deg": 0.0, "tilt_out_deg": 0.0, "standoff_m": 0.0})
+	await get_tree().create_timer(2.5).timeout
+	var s0: Dictionary = closeup.call("debug_summary")
+	print("PlaytestHarness: micro pelton close-up — %s" % str(s0))
+	fails += _pen_check("close-up swapped to the micro Pelton's model", str(s0.get("model_id", "")) == "ali_pelton")
+	fails += _pen_check("micro Pelton runner resolved (Node6), radius ~0.10 m",
+			bool(s0.get("runner", false)) and absf(float(s0.get("runner_radius_m", 0.0)) - 0.101) < 0.01)
+	fails += _pen_check("micro Pelton spins about Y (vertical shaft)",
+			(s0.get("runner_axis", Vector3.ZERO) as Vector3).is_equal_approx(Vector3.UP))
+	fails += _pen_check("the GLB's own nozzle fitting was measured", bool(s0.get("modelled_nozzle", false)))
+	# The wheel is rotated in its PARENT frame, and the GLB's top node is
+	# turned -90° about X — so the catalog's model-root +Y must arrive there
+	# as the disc's normal, or the runner spins like a coin on a table (it
+	# did: axis (0,1,0) raw in a frame whose shaft is +Z).
+	var spin_p: Vector3 = s0.get("spin_axis_parent", Vector3.ZERO)
+	var disc_p: Vector3 = s0.get("disc_normal_parent", Vector3.ZERO)
+	fails += _pen_check("the runner spins about its own disc normal in the frame it is rotated in (spin %s vs disc %s)" % [
+			str(spin_p), str(disc_p)], absf(spin_p.dot(disc_p)) > 0.99)
+	var hit: Vector3 = s0.get("hit", Vector3.ZERO)
+	var centre: Vector3 = s0.get("runner_centre", Vector3.ZERO)
+	var r_hit := Vector2(hit.x - centre.x, hit.z - centre.z).length()
+	# The landing is on the PITCH circle (the kind's PCD/2 = 0.084 m, where the
+	# splitters run), at the TANGENT point — not where the chord enters the tip
+	# circle, which grazes a bucket's outer edge and read as a side-on hit.
+	fails += _pen_check("the jet lands ON the pitch circle (%.3f vs r_pitch %.3f m)" % [r_hit, float(s0.get("r_pitch_m", 0.0))],
+			absf(r_hit - float(s0.get("r_pitch_m", 0.0))) < 0.003)
+	fails += _pen_check("…at the tangent point, head-on into the cup (x %.3f m off the shaft plane)" % absf(hit.x - centre.x),
+			absf(hit.x - centre.x) < 0.012)
+	fails += _pen_check("the fitting's jet runs along -X at the pitch offset (dir %s)" % str(s0.get("dir", Vector3.ZERO)),
+			(s0.get("dir", Vector3.ZERO) as Vector3).dot(Vector3.LEFT) > 0.99)
+	var ex := PeltonPhysics.bucket_exit_velocity(14.0, PeltonPhysics.speed_ratio_for_load(1.0))
+	fails += _pen_check("exit sheets carry the bucket relation (%.2f m/s, %.2f sideways)" % [
+			float(s0.get("exit_speed_ms", 0.0)), float(s0.get("exit_axial_ms", 0.0))],
+			absf(float(s0.get("exit_speed_ms", 0.0)) - float(ex["speed"])) < 1e-3
+			and absf(float(s0.get("exit_axial_ms", 0.0)) - float(ex["axial"])) < 1e-3)
+	closeup.call("set_vectors", true)
+	await get_tree().create_timer(0.6).timeout
+	await _graph_shot(dir, "08_micro_pelton_side_vectors", manifest)
+	closeup.call("set_camera_mode", "jet")
+	await get_tree().create_timer(0.8).timeout
+	var s1: Dictionary = closeup.call("debug_summary")
+	var cam: Vector3 = s1.get("cam_pos", Vector3.ZERO)
+	var mouth: Vector3 = s1.get("mouth", Vector3.ZERO)
+	fails += _pen_check("jet's-eye camera stands just behind the nozzle mouth (%.3f m away), looking down the jet" % cam.distance_to(mouth),
+			cam.distance_to(mouth) < 0.12 and (hit - cam).normalized().dot(s1.get("dir", Vector3.ZERO) as Vector3) > 0.85)
+	await _graph_shot(dir, "09_micro_pelton_jet_eye", manifest)
+	# Nudge the jet 12 mm along the shaft: the landing leaves the splitter and
+	# the sheets split unevenly — the thing the jet's-eye view is for.
+	closeup.call("set_nozzle_pose", {"axial_m": 0.012})
+	await get_tree().create_timer(0.8).timeout
+	var s2: Dictionary = closeup.call("debug_summary")
+	# As modelled the fitting already sits a little under the mid-plane, so
+	# assert the CHANGE: 12 mm over a ~28 mm half-thickness is ~0.4 of split.
+	var d_split := float(s2.get("split", 0.0)) - float(s0.get("split", 0.0))
+	fails += _pen_check("a 12 mm axial nudge moves the landing along the splitter (split %.2f -> %.2f)" % [
+			float(s0.get("split", 0.0)), float(s2.get("split", 0.0))], d_split > 0.3)
+	await _graph_shot(dir, "10_micro_pelton_jet_eye_offset", manifest)
+	closeup.call("set_nozzle_pose", {"axial_m": 0.0})
+	closeup.call("set_camera_mode", "side")
+	closeup.call("set_vectors", false)
+	var hud: Variant = (closeup as Object).get("_hud")
+	if hud != null:
+		print("PlaytestHarness: micro pelton close-up HUD — %s" % str((hud as Label).text))
+	modal.set("_load_frac", 1.0)
+	if modal.has_method("set_state_for_test"):
+		modal.call("set_state_for_test", 0.0, 0.0)
+	modal.call("_set_lab_view", "section")
+	await get_tree().create_timer(0.6).timeout
+	if fails > 0:
+		push_error("PlaytestHarness: micro pelton close-up — %d CHECK(S) FAILED" % fails)
+	else:
+		print("PlaytestHarness: micro pelton close-up — PASS")
+
+
 func _siphon_capture_set_test_inflow(model: Variant, siphon_id: String,
 		enabled: bool, lps: float) -> void:
 	var item: Dictionary = model.call("get_item", siphon_id)
@@ -3665,7 +4444,7 @@ func _run_site_review() -> void:
 				break
 			await get_tree().process_frame
 	print("PlaytestHarness: site-review — settling %.0f s" % SETTLE_AFTER_LOAD_S)
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	await _wait_for_hyper_drape(loader)
 
 	if _perf_hud:
@@ -3716,6 +4495,8 @@ func _run_site_review() -> void:
 			await _site_review_site(sgv, root, manifest)
 		if _review_wants("elevation"):
 			await _site_review_elevation(sgv, root, manifest)
+		if _review_wants("globe"):
+			await _site_review_globe(sgv, root, manifest)
 		if _review_wants("snowglobe"):
 			await _site_review_snowglobe(sgv, root, manifest)
 		if _review_wants("siphon"):
@@ -4108,12 +4889,14 @@ func _site_review_compound_drill(sgv: Node, root: String, gdir: String,
 	var drill_bubble_ok := false
 	var child_scope := ""
 	if comp_id.is_empty():
-		print("PlaytestHarness: site-review — no drillable freeform compound")
+		# Nothing to drill on this world — say so, never report a silent false.
+		if _report != null:
+			_report.skip("site-review compound drill", "no generic compound with child_scope_id on this world")
 		_patch_site_diagnostics(root, {
-			"compound_drill_ok": false,
-			"compound_drill_with_bubble_ok": false,
+			"compound_drill_ok": null,
+			"compound_drill_with_bubble_ok": null,
 			"compound_drill_id": "",
-			"compound_drill_note": "no generic compound with child_scope_id",
+			"compound_drill_note": "SKIPPED — no generic compound with child_scope_id",
 		})
 		return
 	var item: Dictionary = model.call("get_item", comp_id) if model != null else {}
@@ -4161,8 +4944,8 @@ func _site_review_compound_drill(sgv: Node, root: String, gdir: String,
 		"compound_drill_id": comp_id,
 		"compound_drill_child_scope": child_scope,
 	})
-	print("PlaytestHarness: compound drill expand=%s zoom+bubble=%s id=%s" % [
-		drill_ok, drill_bubble_ok, comp_id])
+	print("PlaytestHarness: compound drill expand=%s zoom+bubble=%s id=%s -> %s" % [
+		drill_ok, drill_bubble_ok, comp_id, "PASS" if drill_ok and drill_bubble_ok else "FAIL"])
 
 
 ## Merge keys into an existing site-review diagnostics.json (create if missing).
@@ -4209,6 +4992,9 @@ func _site_review_site(sgv: Node, root: String, manifest: Array) -> void:
 		sgv.call("_apply_graph_view_mode", "site")
 	await get_tree().create_timer(1.5).timeout
 	await _graph_shot(gdir, "06_site_plan_as_loaded", manifest, "graph", "site", "graph/")
+	await _soi_stage_pin_mode_check(sgv, "site")
+	await _soi_stage_pin_drag(sgv, "site", gdir, "06c_site_pin_dragged", manifest)
+	await _soi_stage_site_window_checks(sgv)
 	# Slight orbit off top-down so projection / overlay drift is visible.
 	var preview: Variant = sgv.get("_soi_preview") if sgv != null else null
 	if preview != null and preview.has_method("apply_orbit_delta"):
@@ -4253,20 +5039,410 @@ func _site_review_elevation(sgv: Node, root: String, manifest: Array) -> void:
 			sgv.call("frame_elevation_for_siphon", siphon_id)
 		await get_tree().create_timer(1.5).timeout
 		await _graph_shot(gdir, "04_elevation_framed_siphon", manifest, "graph", "elevation", "graph/")
+	await _soi_stage_pin_mode_check(sgv, "elevation")
+	await _soi_stage_pin_drag(sgv, "elevation", gdir, "04b_elevation_pin_dragged", manifest)
+	await _soi_stage_elevation_checks(sgv, gdir, manifest)
 	await _dump_perf(root, "elevation", manifest)
+
+
+## SoI-stage assertions on the live Elevation CT (things no PNG can prove):
+##  - the disc mask sits where the SoI centre PROJECTS, after a pan and an
+##    off-centre cursor zoom (the "bubble slides out of its circle" bug);
+##  - the cut face is capped (SoiSectionCap visible with geometry);
+##  - the preview re-renders while the clock runs with the graph open, and no
+##    graph lens holds a clock claim (the retired noon lock).
+func _soi_stage_elevation_checks(sgv: Node, gdir: String, manifest: Array) -> void:
+	var canvas: Control = sgv.get("_graph_canvas") as Control
+	var prev: Node = sgv.get("_soi_preview") as Node
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	if canvas == null or prev == null or soi == null:
+		push_warning("PlaytestHarness: soi-stage — canvas/preview/SoiService missing; checks skipped")
+		return
+	var main := get_tree().current_scene
+	# Pan + off-centre zoom, the two moves that used to slide the sphere.
+	if canvas.has_method("_elev_pan_by_pixels"):
+		canvas.call("_elev_pan_by_pixels", Vector2(140.0, -70.0))
+	if canvas.has_method("_elev_zoom_at"):
+		canvas.call("_elev_zoom_at", 1.6, canvas.size * Vector2(0.8, 0.3))
+	canvas.queue_redraw()
+	await get_tree().create_timer(0.8).timeout
+	var disc: Dictionary = canvas.call("get_soi_disc_layout") as Dictionary
+	var c: Vector3 = soi.call("world_center") as Vector3
+	var h := float(canvas.get("elevation_heading_rad"))
+	var d := float(canvas.get("elevation_section_offset_m"))
+	var cross := Vector3(-sin(h), 0.0, cos(h))
+	var proj: Variant = prev.call("world_to_canvas", c + cross * d)
+	var origin: Vector2 = disc.get("origin", Vector2.ZERO) as Vector2
+	if proj is Vector2:
+		var err := (proj as Vector2).distance_to(origin)
+		print("PlaytestHarness: soi-stage — elevation disc vs projected SoI centre err %.2f px %s"
+				% [err, "(PASS)" if err <= 1.5 else "(FAIL)"])
+	else:
+		print("PlaytestHarness: soi-stage — elevation projection unavailable (FAIL)")
+	var cont: Control = prev.get("_container") as Control
+	if cont != null and not bool(prev.get("_top_down_cropped")):
+		var cc := cont.position + cont.size * 0.5 - canvas.position
+		print("PlaytestHarness: soi-stage — container centre vs mask centre %.2f px %s"
+				% [cc.distance_to(origin), "(PASS)" if cc.distance_to(origin) <= 1.5 else "(FAIL)"])
+	await _graph_shot(gdir, "04b_elevation_panned_zoomed", manifest, "graph", "elevation", "graph/")
+	# The raw section render (before the disc shader composites the sky
+	# backdrop): empty air must be TRANSPARENT here, or the backdrop never shows.
+	var pvp: SubViewport = prev.get("_viewport") as SubViewport
+	if pvp != null:
+		var raw := pvp.get_texture().get_image()
+		if raw != null and not raw.is_empty():
+			raw.save_png("%s/04c_elevation_preview_raw.png" % gdir)
+			var top := raw.get_pixel(raw.get_width() / 2, 4)
+			print("PlaytestHarness: soi-stage — raw section top-centre pixel %s (alpha 0 = sky backdrop shows)"
+					% str(top))
+	# The whole sphere in frame: the time-of-day sky backdrop above the hills,
+	# the strata cap below, the disc mask on the sphere's silhouette.
+	if canvas.has_method("frame_elevation_window"):
+		var rr := float(soi.call("radius_m"))
+		canvas.call("frame_elevation_window", -rr, rr, c.y - rr, c.y + rr, canvas.size, 0.04)
+	canvas.queue_redraw()
+	await get_tree().create_timer(1.2).timeout
+	await _graph_shot(gdir, "04d_elevation_whole_soi", manifest, "graph", "elevation", "graph/")
+	# The soil probe: hover readout over the cut (horizon + depth).
+	var dl: Dictionary = canvas.call("get_soi_disc_layout") as Dictionary
+	canvas.set("_elev_probe_px", (dl["origin"] as Vector2) + Vector2(-float(dl["radius_px"]) * 0.3, float(dl["radius_px"]) * 0.25))
+	canvas.queue_redraw()
+	await get_tree().create_timer(0.3).timeout
+	await _graph_shot(gdir, "04e_soil_probe", manifest, "graph", "elevation", "graph/")
+	# Cut-face cap.
+	var cap: Node3D = soi.call("section_cap_node") as Node3D if soi.has_method("section_cap_node") else null
+	var cap_ok := cap != null and cap.visible and (cap as MeshInstance3D).mesh != null
+	print("PlaytestHarness: soi-stage — cut-face cap %s" % ("present (PASS)" if cap_ok else "MISSING (FAIL)"))
+	# Live clock with the graph open.
+	var claims: Variant = main.clock.get("claims") if main != null and main.get("clock") != null else null
+	var graph_claim := ""
+	if claims != null and claims.has_method("owners"):
+		for o in claims.call("owners"):
+			if str(o).begins_with("graph_") and str(o) != "graph_globe_shadow":
+				graph_claim = str(o)
+	print("PlaytestHarness: soi-stage — graph clock claim %s" % (
+			"none (PASS)" if graph_claim.is_empty() else "'%s' (FAIL)" % graph_claim))
+	var ts0 := float(main.time_scale)
+	var f0 := int(prev.get("frames_rendered"))
+	var h0 := float(main.call("get_absolute_hours"))
+	main.time_scale = 0.2  # 720× — the sun moves ~3°/s
+	await get_tree().create_timer(2.5).timeout
+	var f1 := int(prev.get("frames_rendered"))
+	var h1 := float(main.call("get_absolute_hours"))
+	main.time_scale = ts0
+	print("PlaytestHarness: soi-stage — live clock in Elevation: %d captures, %.3f sim-h %s"
+			% [f1 - f0, h1 - h0, "(PASS)" if f1 - f0 >= 2 and h1 > h0 else "(FAIL)"])
+
+
+## The Globe lens (the snowglobe INSIDE the graph). Before this lens existed the
+## graph's Snowglobe chip started the full-screen globe on a root viewport the
+## open graph had switched to disable_3d, and nothing drew.
+func _site_review_globe(sgv: Node, root: String, manifest: Array) -> void:
+	var gdir := "%s/graph" % root
+	sgv.visible = true
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", "globe")
+	await get_tree().create_timer(2.0).timeout
+	var prev: Node = sgv.get("_soi_preview") as Node
+	var is_globe := prev != null and prev.has_method("is_globe") and bool(prev.call("is_globe"))
+	var lit := 0.0
+	var vp: SubViewport = prev.get("_viewport") as SubViewport if prev != null else null
+	if vp != null:
+		var img := vp.get_texture().get_image()
+		if img != null and not img.is_empty():
+			var n := 0
+			var hit := 0
+			for y in range(0, img.get_height(), 8):
+				for x in range(0, img.get_width(), 8):
+					n += 1
+					var px := img.get_pixel(x, y)
+					if px.a > 0.5 and (px.r + px.g + px.b) > 0.06:
+						hit += 1
+			lit = float(hit) / float(maxi(n, 1))
+	print("PlaytestHarness: soi-stage — globe lens active=%s, %.0f%% of pixels drawn %s"
+			% [str(is_globe), lit * 100.0, "(PASS)" if is_globe and lit >= 0.10 else "(FAIL)"])
+	await _graph_shot(gdir, "05_globe", manifest, "graph", "globe", "graph/")
+	if prev != null and prev.has_method("apply_orbit_delta"):
+		prev.call("apply_orbit_delta", Vector2(160.0, -40.0))
+	await get_tree().create_timer(0.8).timeout
+	await _graph_shot(gdir, "06_globe_orbited", manifest, "graph", "globe", "graph/")
+	await _soi_stage_pin_drag(sgv, "globe", gdir, "06b_globe_pin_dragged", manifest)
+	# Lens transition Globe → Site Plan: the camera FLIES (perspective mid-way)
+	# and lands orthographic, with the overlay faded back in.
+	sgv.call("_apply_graph_view_mode", "site")
+	await get_tree().create_timer(0.22).timeout
+	var cam: Camera3D = prev.get("_camera") as Camera3D if prev != null else null
+	var mid_tween := prev != null and bool(prev.call("is_lens_tweening"))
+	var mid_persp := cam != null and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+	await _graph_shot(gdir, "07_lens_transition_mid", manifest, "graph", "site", "graph/")
+	await get_tree().create_timer(0.9).timeout
+	var landed := prev != null and not bool(prev.call("is_lens_tweening"))
+	# Every lens is a perspective camera now (the Globe's kind); the plan lands
+	# at the distance that makes px/m on the ground under the view centre equal
+	# the 2D scale — checked here: the canvas centre's ground point must
+	# project back onto the canvas centre.
+	var end_persp := cam != null and cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+	var canvas: Control = sgv.get("_graph_canvas") as Control
+	var faded_back := canvas != null and is_equal_approx(canvas.modulate.a, 1.0)
+	var centre_err := INF
+	if prev != null and canvas != null and prev.has_method("canvas_to_site_ground"):
+		var site_c: Variant = prev.call("canvas_to_site_ground", canvas.size * 0.5)
+		var soi_n := get_tree().root.get_node_or_null("SoiService")
+		if site_c is Vector2 and soi_n != null:
+			var wc: Vector3 = soi_n.call("world_center")
+			var wp := Vector3(wc.x + (site_c as Vector2).x, 0.0, wc.z + (site_c as Vector2).y)
+			wp.y = float(soi_n.call("ground_y_at", wp.x, wp.z)) if soi_n.has_method("ground_y_at") else wc.y
+			var back: Variant = prev.call("world_to_canvas", wp)
+			if back is Vector2:
+				centre_err = ((back as Vector2) - canvas.size * 0.5).length()
+	print(("PlaytestHarness: soi-stage — lens tween globe→site: mid tweening=%s persp=%s, "
+			+ "landed=%s perspective=%s overlay back=%s centre round-trip %.2f px %s") % [str(mid_tween), str(mid_persp),
+			str(landed), str(end_persp), str(faded_back), centre_err,
+			"(PASS)" if mid_tween and mid_persp and landed and end_persp and faded_back and centre_err < 2.0 else "(FAIL)"])
+	await _graph_shot(gdir, "08_site_after_transition", manifest, "graph", "site", "graph/")
+	# Site Plan → Elevation: the cut plane sweeps into the globe while flying.
+	sgv.call("_apply_graph_view_mode", "elevation", {"skip_elev_siphon_focus": true})
+	await get_tree().create_timer(0.28).timeout
+	var sweeping := prev != null and bool(prev.call("is_lens_tweening")) \
+			and str(prev.get("_tween_sweep")) == "in"
+	await _graph_shot(gdir, "09_section_sweep_mid", manifest, "graph", "elevation", "graph/")
+	await get_tree().create_timer(1.0).timeout
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	var cap: Node3D = soi.call("section_cap_node") as Node3D \
+			if soi != null and soi.has_method("section_cap_node") else null
+	var cap_on := cap != null and cap.visible
+	print("PlaytestHarness: soi-stage — section sweep: mid-sweep=%s cap after=%s %s"
+			% [str(sweeping), str(cap_on), "(PASS)" if sweeping and cap_on else "(FAIL)"])
+	await _graph_shot(gdir, "10_elevation_after_sweep", manifest, "graph", "elevation", "graph/")
+	await _dump_perf(root, "globe", manifest)
+
+
+## Site Plan fills the panel (2026-10-12): the preview container IS the canvas
+## (no disc crop), and a cursor zoom keeps the world point under the cursor
+## FIXED across 20 notches in and 20 back out — the crop / no-crop re-layout
+## used to snap the view at the threshold.
+func _soi_stage_site_window_checks(sgv: Node) -> void:
+	var canvas: Control = sgv.get("_graph_canvas") as Control
+	var prev: Node = sgv.get("_soi_preview") as Node
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	if canvas == null or prev == null or soi == null:
+		return
+	await get_tree().process_frame
+	var cont: Control = prev.get("_container") as Control
+	var full := cont != null and (cont.size - canvas.size).length() < 1.5 \
+			and bool(prev.get("_top_down_cropped"))
+	print("PlaytestHarness: soi-stage — site plan window: container %s vs canvas %s, cropped=%s %s" % [
+			str(cont.size) if cont != null else "none", str(canvas.size), str(prev.get("_top_down_cropped")),
+			"(PASS)" if full else "(FAIL)"])
+	if not canvas.has_method("_zoom_at") or not prev.has_method("world_to_canvas"):
+		return
+	var c: Vector3 = soi.call("world_center") as Vector3
+	var z0 := float(canvas.get("_zoom"))
+	# A ground point a third of the way from the canvas centre to its corner.
+	var probe_px := canvas.size * Vector2(0.62, 0.38)
+	var gh0: Dictionary = canvas.call("_pin_ground_hit", probe_px) as Dictionary
+	if gh0.is_empty():
+		print("PlaytestHarness: soi-stage — site plan zoom: SKIPPED (no ground under the probe)")
+		return
+	var st0: Vector2 = gh0.get("site", Vector2.ZERO)
+	var w := Vector3(c.x + st0.x, float(gh0.get("y", c.y)), c.z + st0.y)
+	var p0v: Variant = prev.call("world_to_canvas", w)
+	if not (p0v is Vector2):
+		print("PlaytestHarness: soi-stage — site plan zoom: SKIPPED (point off screen)")
+		return
+	var p0 := p0v as Vector2
+	if p0.x < 0.0 or p0.y < 0.0 or p0.x > canvas.size.x or p0.y > canvas.size.y:
+		print("PlaytestHarness: soi-stage — site plan zoom: SKIPPED (probe projects off the canvas %s)" % str(p0))
+		return
+	var worst := 0.0
+	var cam: Camera3D = prev.get("_camera") as Camera3D
+	for i in 40:
+		canvas.call("_zoom_at", 1.08 if i < 20 else 1.0 / 1.08, p0)
+		var pv: Variant = prev.call("world_to_canvas", w)
+		if pv is Vector2:
+			worst = maxf(worst, (pv as Vector2).distance_to(p0))
+		if i == 0 or i == 19:
+			print("PlaytestHarness: soi-stage — site zoom DEBUG notch %d: p %s (p0 %s) zoom %.3f orbited=%s" % [
+					i, str(pv), str(p0), float(canvas.get("_zoom")), str(prev.call("is_phys_orbited"))])
+	await get_tree().process_frame
+	var z1 := float(canvas.get("_zoom"))
+	var ok := worst <= 2.0 and absf(z1 / z0 - 1.0) < 0.02
+	print("PlaytestHarness: soi-stage — site plan cursor zoom: worst drift %.2f px over 40 notches, zoom %.3f → %.3f %s" % [
+			worst, z0, z1, "(PASS)" if ok else "(FAIL)"])
+	canvas.set("_zoom", z0)
+	canvas.call("queue_redraw")
+
+
+## World pins (2026-10-12): Site Plan / Elevation on the Globe's pin layer —
+## the pin pass is on, one pin per placed item on screen, and NO chip rect is
+## pickable (the chip hit-test must come back empty at a pin's head).
+func _soi_stage_pin_mode_check(sgv: Node, lens: String) -> void:
+	var canvas: Control = sgv.get("_graph_canvas") as Control
+	var model: Variant = sgv.get("model")
+	if canvas == null or model == null or not canvas.has_method("_pins_mode_active"):
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var on := bool(canvas.call("_pins_mode_active"))
+	var pins: Dictionary = canvas.get("_globe_pin_px") as Dictionary
+	var placed := 0
+	for it: Variant in model.call("get_items_in_scope", "root") as Array:
+		if GraphSiteLayout.has_site_coords(it as Dictionary):
+			placed += 1
+	var chip_hits := 0
+	for iid in pins:
+		var hit: Dictionary = canvas.call("_item_at_screen", pins[iid] as Vector2) as Dictionary
+		if not hit.is_empty() and GraphSiteLayout.has_site_coords(hit):
+			chip_hits += 1
+	var ok := on and pins.size() > 0 and pins.size() <= placed and chip_hits == 0
+	print("PlaytestHarness: soi-stage — %s world pins: mode=%s pins=%d placed=%d chip hits at pins=%d %s" % [
+			lens, str(on), pins.size(), placed, chip_hits, "(PASS)" if ok else "(FAIL)"])
+
+
+## Drag a world pin with SYNTHETIC events through the canvas's own handler
+## and assert the item landed under the pointer ON THE GROUND (an outlet sink
+## a little under it, with its culvert following). Prefers an outlet sink,
+## then any unlocked unbound pin; restores the item afterward.
+func _soi_stage_pin_drag(sgv: Node, lens: String, gdir: String, shot: String, manifest: Array) -> void:
+	var canvas: Control = sgv.get("_graph_canvas") as Control
+	var model: Variant = sgv.get("model")
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	var prev_svc: Node = sgv.get("_soi_preview") as Node
+	if canvas == null or model == null or soi == null or not canvas.has_method("_handle_pin_input"):
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var pins: Dictionary = canvas.get("_globe_pin_px") as Dictionary
+	var pick := ""
+	var is_sink := false
+	for iid in pins:
+		var it: Dictionary = model.call("get_item", str(iid)) as Dictionary
+		if it.is_empty() or bool(canvas.call("_pin_locked", it)):
+			continue
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		var head: Vector2 = pins[iid]
+		if head.x < 40.0 or head.y < 40.0 or head.x > canvas.size.x - 120.0 or head.y > canvas.size.y - 80.0:
+			continue
+		# A SIPHON outlet (a culvert ends at it) is the drag this check is
+		# about; a pond's spillway outlet is an outlet sink too but has no
+		# culvert to follow.
+		if bool(sp.get("outlet_sink", false)):
+			var has_culvert := false
+			for c: Dictionary in model.get("connections"):
+				if str(c.get("target_item_id", "")) == str(iid) \
+						and str(c.get("conduit_type", "")) == "culvert_pipe":
+					has_culvert = true
+			if has_culvert:
+				pick = str(iid)
+				is_sink = true
+				break
+		if pick.is_empty() and str(sp.get("bound_prop_id", "")).is_empty():
+			pick = str(iid)
+	if pick.is_empty():
+		print("PlaytestHarness: soi-stage — %s pin drag: SKIPPED (no draggable pin on screen; %d pins)" % [lens, pins.size()])
+		return
+	var it0: Dictionary = model.call("get_item", pick) as Dictionary
+	var site0 := GraphSiteLayout.site_xz(it0)
+	var elev0 := float(it0.get("elevation_m", NAN))
+	var head0: Vector2 = pins[pick]
+	var to := head0 + Vector2(70.0, 28.0)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = head0
+	canvas.call("_gui_input", ev)
+	for k in 4:
+		var mm := InputEventMouseMotion.new()
+		mm.position = head0.lerp(to, float(k + 1) / 4.0)
+		mm.relative = (to - head0) / 4.0
+		canvas.call("_gui_input", mm)
+		await get_tree().process_frame
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = to
+	canvas.call("_gui_input", up)
+	await get_tree().create_timer(0.6).timeout
+	var it1: Dictionary = model.call("get_item", pick) as Dictionary
+	var site1 := GraphSiteLayout.site_xz(it1)
+	var elev1 := float(it1.get("elevation_m", NAN))
+	var c: Vector3 = soi.call("world_center") as Vector3
+	var g1 := float(soi.call("ground_y_at", c.x + site1.x, c.z + site1.y))
+	var moved := site1.distance_to(site0) > 0.5
+	var want_e := (g1 - 0.3) if is_sink else g1
+	var on_ground := not is_nan(elev1) and absf(elev1 - want_e) < 0.12
+	if lens == "elevation":
+		# The Elevation drag SETS the height (the pin walks the slice and
+		# takes the section-plane hit): never above the ground there.
+		on_ground = not is_nan(elev1) and elev1 <= g1 + 0.05
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var pins2: Dictionary = canvas.get("_globe_pin_px") as Dictionary
+	var head1: Vector2 = pins2.get(pick, Vector2(INF, INF))
+	var under := is_finite(head1.x) and head1.distance_to(to) < 16.0
+	var culvert_ok := true
+	var sid := ""
+	if is_sink and sgv.has_method("siphon_for_outlet_sink"):
+		sid = str(sgv.call("siphon_for_outlet_sink", pick))
+		culvert_ok = false
+		for conn: Dictionary in model.get("connections") as Array:
+			if str(conn.get("source_item_id", "")) == sid and str(conn.get("target_item_id", "")) == pick \
+					and str(conn.get("conduit_type", "")) == "culvert_pipe":
+				culvert_ok = absf(float(conn.get("invert_out_m", NAN)) - elev1) < 1e-3
+	var ok := moved and on_ground and under and culvert_ok
+	if canvas.has_method("_pin_ground_hit"):
+		var gh: Dictionary = canvas.call("_pin_ground_hit", to + Vector2(0.0, 16.0)) as Dictionary
+		var ray: Variant = prev_svc.call("canvas_ray", to + Vector2(0.0, 16.0)) if prev_svc != null else null
+		print("PlaytestHarness: soi-stage — %s pin drag DEBUG: march site %s y %.2f · item site %s · head0 %s to %s · ray %s · R %.1f" % [
+				lens, str(gh.get("site", "none")), float(gh.get("y", NAN)), str(site1), str(head0), str(to), str(ray),
+				float(canvas.call("_soi_radius_m"))])
+	print(("PlaytestHarness: soi-stage — %s pin drag (%s%s): moved %.1f m (%s) · elev %.2f vs ground %.2f%s (%s) "
+			+ "· pin head %.0f px from the pointer (%s)%s %s") % [lens, pick, " outlet sink" if is_sink else "",
+			site1.distance_to(site0), str(moved), elev1, g1, " − 0.3" if is_sink else "", str(on_ground),
+			head1.distance_to(to) if is_finite(head1.x) else -1.0, str(under),
+			(" · culvert end followed %s" % str(culvert_ok)) if is_sink else "",
+			"(PASS)" if ok else "(FAIL)"])
+	await _graph_shot(gdir, shot, manifest, "graph", lens, "graph/")
+	# Put it back.
+	if is_sink and not sid.is_empty():
+		sgv.call("move_siphon_outlet", sid, site0, elev0)
+	else:
+		var patch := {"site_x_m": site0.x, "site_z_m": site0.y}
+		if not is_nan(elev0):
+			patch["elevation_m"] = elev0
+		model.call("update_item", pick, patch)
+	await get_tree().create_timer(0.4).timeout
 
 
 func _site_review_snowglobe(sgv: Node, root: String, manifest: Array) -> void:
 	var sdir := "%s/snowglobe" % root
-	# Close graph so the full-screen snowglobe owns the frame.
-	if sgv != null:
-		sgv.visible = false
+	# Enter the full-screen globe WITH THE GRAPH OPEN — the path that used to
+	# render nothing (the graph had the root viewport on disable_3d). The globe
+	# must close the graph itself, take the camera through the claim stack and
+	# leave the clock running.
 	var soi := get_tree().root.get_node_or_null("SoiService")
 	if soi == null or not soi.has_method("enter_snowglobe"):
 		push_warning("PlaytestHarness: site-review — SoiService.enter_snowglobe missing")
 		return
+	var main := get_tree().current_scene
+	if sgv != null and sgv.has_method("open_graph_view"):
+		sgv.call("open_graph_view")
+		await get_tree().create_timer(0.5).timeout
 	soi.call("enter_snowglobe")
 	await get_tree().create_timer(1.8).timeout
+	var graph_hidden := sgv == null or not (sgv as CanvasItem).visible
+	var root3d := not get_viewport().disable_3d
+	var cam_claim := false
+	var clock_claim := false
+	if main != null:
+		var cc: Variant = main.get("camera_claims")
+		cam_claim = cc != null and bool(cc.call("has_claim", "soi_snowglobe"))
+		var kc: Variant = main.clock.get("claims") if main.get("clock") != null else null
+		clock_claim = kc != null and bool(kc.call("has_claim", "soi_snowglobe"))
+	print(("PlaytestHarness: soi-stage — globe over graph: graph hidden=%s root 3D=%s "
+			+ "camera claim=%s clock claim=%s %s") % [str(graph_hidden), str(root3d),
+			str(cam_claim), str(clock_claim),
+			"(PASS)" if graph_hidden and root3d and cam_claim and not clock_claim else "(FAIL)"])
 	await _graph_shot(sdir, "01_snowglobe_as_loaded", manifest, "snowglobe", "snowglobe", "snowglobe/")
 	# Nudge orbit if the snowglobe camera exposes a relative look helper.
 	var cam: Node = null
@@ -4284,7 +5460,13 @@ func _site_review_snowglobe(sgv: Node, root: String, manifest: Array) -> void:
 		await _graph_shot(sdir, "02_snowglobe_orbited", manifest, "snowglobe", "snowglobe", "snowglobe/")
 	if soi.has_method("exit_snowglobe"):
 		soi.call("exit_snowglobe")
-	await get_tree().create_timer(0.4).timeout
+	await get_tree().create_timer(0.6).timeout
+	var reopened := sgv == null or (sgv as CanvasItem).visible
+	var cam_left := false
+	if main != null and main.get("camera_claims") != null:
+		cam_left = bool(main.get("camera_claims").call("has_claim", "soi_snowglobe"))
+	print("PlaytestHarness: soi-stage — globe exit: graph reopened=%s camera claim released=%s %s"
+			% [str(reopened), str(not cam_left), "(PASS)" if reopened and not cam_left else "(FAIL)"])
 	await _dump_perf(root, "snowglobe", manifest)
 
 
@@ -4428,7 +5610,7 @@ func _run_extreme_weather_capture() -> void:
 		if tree.current_scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 
 	var xw := get_node_or_null("/root/ExtremeWeather")
 	if xw == null:
@@ -4664,10 +5846,392 @@ func _find_main() -> Node:
 	return null
 
 
+## The post-load settle every capture opens with. Once the dispatcher's
+## readiness gate has already waited for the load + resume extras, a short
+## settle is enough (detail drape / veg keep streaming either way).
+func _settle_s() -> float:
+	return 2.0 if _dispatching else SETTLE_AFTER_LOAD_S
+
+
+## Captures call this when they are done. While the dispatcher runs a chain it
+## is a no-op (the dispatcher moves on and _finish ends the run); outside a
+## harness run it keeps the old quit-after-capture behaviour.
 func _maybe_quit() -> void:
+	if _dispatching:
+		return
+	if _harness_on:
+		_finish()
+		return
 	if _quit_after:
 		print("PlaytestHarness: capture complete — quitting")
+		_cleanup_scratch_world()
 		get_tree().quit()
+
+
+func _exit_tree() -> void:
+	_cleanup_scratch_world()
+
+
+# ---------------------------------------------------------------------------
+# Worlds (--world / --scratch-world / --capture=worlds)
+# ---------------------------------------------------------------------------
+
+func _resolve_world_arg() -> void:
+	_harness_world = HarnessRegistry.pick_world(_world_arg, WorldStore.list())
+	if _harness_world.is_empty():
+		push_error("PlaytestHarness: --world=%s matches no world" % _world_arg)
+		return
+	if is_nan(_launch_lat) and _launch_scene.is_empty():
+		var map: Dictionary = _harness_world.get("map", {})
+		if WorldStore.is_generated_map(map):
+			_launch_lat = float(map.get("lat", 0.0))
+			_launch_lon = float(map.get("lon", 0.0))
+			_launch_half_extent = float(map.get("half_extent_m", 0.0))
+			_launch_label = str(map.get("label", ""))
+		else:
+			_launch_scene = MapDefinition.normalize_scene_path(str(map.get("scene_path", "")))
+	print("PlaytestHarness: --world resolved to %s (%s)" % [
+		WorldStore.display_name(_harness_world), str(_harness_world.get("id", ""))])
+
+
+func _harness_map_ref() -> Dictionary:
+	if not _launch_scene.is_empty() and MapDefinition.normalize_scene_path(_launch_scene) != MapDefinition.GENERATED_SCENE:
+		return {"scene_path": MapDefinition.normalize_scene_path(_launch_scene), "label": ""}
+	return {"scene_path": MapDefinition.GENERATED_SCENE, "lat": _launch_lat, "lon": _launch_lon,
+		"label": _launch_label, "half_extent_m": _launch_half_extent}
+
+
+## The record _launch_world plays: the resolved world itself, or with
+## --scratch-world a throwaway copy of it (inside the sandbox the whole user
+## dir is already throwaway, so scratch is only needed for --persist runs).
+func _harness_launch_record() -> Dictionary:
+	if not _scratch_world:
+		return _harness_world
+	WorldStore.purge_scratch()
+	var src := _harness_world
+	var rec := WorldStore.duplicate_world(str(src.get("id", "")), "__harness scratch")
+	if rec.is_empty():
+		return {}
+	rec["scratch"] = true
+	WorldStore.save_record(rec)
+	_scratch_id = str(rec.get("id", ""))
+	print("PlaytestHarness: scratch world %s — a copy of %s" % [_scratch_id, WorldStore.display_name(src)])
+	return rec
+
+
+func _activate_harness_world() -> void:
+	if _harness_world.is_empty() and not _scratch_world:
+		return
+	WorldStore.purge_scratch()
+	if not _scratch_world:
+		WorldStore.activate(_harness_world)
+		WorldAssets.restore(_harness_world)
+		return
+	var src := _harness_world
+	var map := _harness_map_ref()
+	if src.is_empty():
+		var on := WorldStore.worlds_on_map(map)
+		if not on.is_empty():
+			src = on[0]
+	var rec: Dictionary
+	if src.is_empty():
+		rec = WorldStore.create(map, "__harness scratch")
+	else:
+		rec = WorldStore.duplicate_world(str(src.get("id", "")), "__harness scratch")
+	rec["scratch"] = true
+	WorldStore.save_record(rec)
+	_scratch_id = str(rec.get("id", ""))
+	WorldStore.activate(rec)
+	WorldAssets.restore(rec)
+	print("PlaytestHarness: scratch world %s — a copy of %s" % [_scratch_id,
+		WorldStore.display_name(src) if not src.is_empty() else "nothing (empty world)"])
+
+
+## --capture=look — "see what the player sees". The world is loaded from its
+## saved snapshot (player pose, clock, view), shot exactly as it stands — the
+## game UI included — then without the HUD, from four drone points round the
+## player, and in the 2D graph's saved lens; diagnostics.json carries the
+## world summary, fingerprint, graph item counts and the placed props. Nothing
+## is changed. The first thing to run when the player reports a problem.
+func _run_look_capture() -> void:
+	var tree := get_tree()
+	var main := _find_main()
+	if main == null:
+		print("look: FAIL — no game scene")
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "look_%s" % \
+		Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_")
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var shots := 0
+	await _shoot_ui(dir, "00_player_view_ui")
+	shots += 1
+	var hidden: Array[CanvasLayer] = []
+	for child in main.get_children():
+		if child is CanvasLayer and (child as CanvasLayer).visible:
+			(child as CanvasLayer).visible = false
+			hidden.append(child)
+	await tree.process_frame
+	await _shoot_ui(dir, "01_player_view")
+	shots += 1
+	var player := main.get("player") as Node3D
+	var prev_cam := get_viewport().get_camera_3d()
+	if player != null:
+		var cam := Camera3D.new()
+		cam.name = "LookCam"
+		cam.far = 20000.0
+		main.add_child(cam)
+		cam.make_current()
+		var c := player.global_position
+		for i in 4:
+			var a := TAU * float(i) / 4.0 + player.global_rotation.y
+			cam.global_position = c + Vector3(sin(a) * 28.0, 14.0, cos(a) * 28.0)
+			cam.look_at(c + Vector3(0, 1.2, 0), Vector3.UP)
+			for _f in 3:
+				await tree.process_frame
+			await _shoot_ui(dir, "1%d_drone_%d" % [i, i])
+			shots += 1
+		cam.queue_free()
+		if prev_cam != null and is_instance_valid(prev_cam):
+			prev_cam.make_current()
+	for layer in hidden:
+		if is_instance_valid(layer):
+			layer.visible = true
+	var sgv := ServiceLocator.graph()
+	if sgv is CanvasItem:
+		(sgv as CanvasItem).visible = true
+		for _f in 20:
+			await tree.process_frame
+		await _shoot_ui(dir, "20_graph_saved_lens")
+		shots += 1
+		(sgv as CanvasItem).visible = false
+		for _f in 5:
+			await tree.process_frame
+	var diag := {
+		"world": WorldSession.active_record(),
+		"summary": WorldSession.summary(main),
+		"fingerprint": WorldSession.fingerprint(main),
+		"user_dir": OS.get_user_data_dir(),
+	}
+	var by_type := {}
+	if sgv != null and sgv.get("model") != null:
+		for it in sgv.get("model").get("items"):
+			var t := str((it as Dictionary).get("type", "?"))
+			by_type[t] = int(by_type.get(t, 0)) + 1
+	diag["graph_by_type"] = by_type
+	var props: Array = []
+	var layer := PlacedPropService._layer_for_main(main)
+	if layer != null:
+		for rec in layer.props:
+			var r: Dictionary = rec
+			props.append({"id": r.get("id", ""), "model_id": r.get("model_id", ""),
+				"pos": [r.get("x", 0.0), r.get("y", 0.0), r.get("z", 0.0)], "packed": r.get("packed", false)})
+	diag["props"] = props
+	HarnessReport.write_json("%s/diagnostics.json" % dir, diag)
+	print("look PASS — %d shots + diagnostics.json in %s" % [shots, ProjectSettings.globalize_path(dir)])
+
+
+## --run-script=<path> — a FIX the agent wrote for the player's world:
+##   extends RefCounted
+##   func run(main: Node, harness: Node) -> Dictionary   # may await
+## returning {ok: bool, ...}. Runs once the world is ready, then the world is
+## saved through the real save path. In the sandbox that is a dry run (check
+## it with --capture=look); with --persist it stays in the player's world.
+func _run_fix_script() -> void:
+	var main := _find_main()
+	if main == null:
+		print("fix-script: FAIL — no game scene")
+		return
+	var scr := load(_run_script_path) as Script
+	if scr == null:
+		print("fix-script: FAIL — could not load %s" % _run_script_path)
+		return
+	var obj: Object = scr.new()
+	if obj == null or not obj.has_method("run"):
+		print("fix-script: FAIL — %s has no run(main, harness)" % _run_script_path)
+		return
+	print("fix-script: running %s in %s" % [_run_script_path, "the REAL world (--persist)" if _persist else "the sandbox"])
+	var res: Variant = await obj.call("run", main, self)
+	print("fix-script: result %s" % JSON.stringify(res))
+	if res is Dictionary and not bool((res as Dictionary).get("ok", true)):
+		print("fix-script: FAIL — the script reported ok=false")
+		return
+	if WorldPaths.has_active_world():
+		var saved := WorldSession.save_now(main, true, true)
+		print("fix-script: world saved %s%s" % ["PASS" if saved else "FAIL",
+			" — kept in the player's world" if _persist else " (sandbox only)"])
+	else:
+		print("fix-script: no world active — nothing saved")
+
+
+func _cleanup_scratch_world() -> void:
+	if _scratch_id.is_empty():
+		return
+	# SEAL, never clear: the running scene's teardown flushes must not fall
+	# through to the player's legacy per-site files.
+	WorldPaths.seal()
+	WorldStore.remove_tree(WorldStore.world_dir(_scratch_id))
+	print("PlaytestHarness: removed scratch world %s" % _scratch_id)
+	_scratch_id = ""
+
+
+## Wait for a scene change to land and its TerrainLoader (if any) to finish.
+func _await_world_scene(prev_scene_id: int) -> Node:
+	var tree := get_tree()
+	for _i in 600:
+		await tree.process_frame
+		var cur := tree.current_scene
+		if cur != null and cur.get_instance_id() != prev_scene_id and _find_main() != null:
+			break
+	var main := _find_main()
+	if main == null:
+		return null
+	var loader := main.get_node_or_null("TerrainLoader")
+	if loader != null and not bool(loader.get("load_completed")):
+		await loader.map_load_complete
+	await tree.create_timer(_settle_s()).timeout
+	# WorldSession.restore_extras waits ~30 frames after the load.
+	for _j in 45:
+		await tree.process_frame
+	return _find_main()
+
+
+func _file_hashes(rec: Dictionary) -> Dictionary:
+	var out := {}
+	var files := WorldStore.data_files(rec)
+	for tag in files:
+		out[tag] = FileAccess.get_sha256(str(files[tag]))
+	return out
+
+
+## --capture=worlds: the save system end to end, through the REAL paths.
+## Build something, save, exit to the menu, play the world again and assert
+## the whole fingerprint (player, view, clock, graph, NPCs, props, lights,
+## battery, peak score…) came back; then start a NEW world on the same map
+## and assert it is empty while the first world's files are untouched.
+## Needs a world: run with --scratch-world (or --world=<name>).
+func _run_worlds_capture() -> void:
+	var tree := get_tree()
+	var fails := 0
+	var main := await _await_world_scene(-1)
+	if main == null or not WorldPaths.has_active_world():
+		push_error("worlds: FAIL — no world active (run with --scratch-world or --world=<name>)")
+		_maybe_quit()
+		return
+	var rec := WorldSession.active_record()
+	var id := str(rec.get("id", ""))
+	print("worlds: running in %s (%s, storage %s)" % [WorldStore.display_name(rec), id, str(rec.get("storage", ""))])
+	# 1. Make the world distinctive and FREEZE the clock so the two saves agree.
+	main.set("time_scale", 0.0)
+	main.set("day_time", 17.25)
+	var player: Node3D = main.get("player")
+	var placed := PlacedPropService.place_model(main, "ez_up", true, Vector2(5.0, 3.0))
+	var lid := ""
+	if player != null:
+		lid = PlacedLightService.add_point_light(main, "omni", player.global_position + Vector3(3.0, 2.5, 0.0), Vector3.ZERO)
+		PlacedLightService.commit(main)
+		player.rotation.y = 1.234
+		var cam := player.get_node_or_null("CameraArm/Camera3D") as Node3D
+		if cam != null:
+			cam.rotation.x = -0.3
+	for _i in 30:
+		await tree.process_frame
+	var fp1 := WorldSession.fingerprint(main)
+	print("worlds: fingerprint before = %s" % JSON.stringify(fp1))
+	if not bool(placed.get("ok", false)):
+		fails += 1
+		push_error("worlds: FAIL — could not place the test prop")
+	if lid.is_empty():
+		fails += 1
+		push_error("worlds: FAIL — could not place the test light")
+	var saved := WorldSession.save_now(main, true, true)
+	print("worlds: save_now %s" % ("PASS" if saved else "FAIL"))
+	if not saved:
+		fails += 1
+	var snap := WorldStore.read_snapshot(id)
+	if snap.is_empty() or snap.has("system_graph") or str(snap.get("world_id", "")) != id:
+		fails += 1
+		push_error("worlds: FAIL — snapshot missing, carries a graph, or lacks the world id")
+	else:
+		print("worlds: snapshot PASS (no graph inside, world id stamped)")
+	# 2. Exit to the menu, then Play the world again.
+	var prev := tree.current_scene.get_instance_id()
+	WorldSession.exit_to_menu(main)
+	for _k in 30:
+		await tree.process_frame
+	if WorldPaths.has_active_world():
+		fails += 1
+		push_error("worlds: FAIL — the menu did not clear the active world")
+	else:
+		print("worlds: exit to menu PASS")
+	var hashes := _file_hashes(WorldStore.get_world(id))
+	prev = tree.current_scene.get_instance_id() if tree.current_scene != null else -1
+	WorldSession.launch(WorldStore.get_world(id), {})
+	var main2 := await _await_world_scene(prev)
+	if main2 == null:
+		push_error("worlds: FAIL — the world did not reload")
+		_maybe_quit()
+		return
+	var fp2 := WorldSession.fingerprint(main2)
+	var diff := WorldSession.fingerprint_diff(fp1, fp2)
+	if diff.is_empty():
+		print("worlds: round trip PASS — all %d fingerprint keys restored" % fp1.size())
+	else:
+		fails += diff.size()
+		for d in diff:
+			push_error("worlds: FAIL — %s was %s, came back %s" % [d[0], str(d[1]), str(d[2])])
+	# 3. A NEW world on the same map starts empty; the first world is untouched.
+	var fresh := WorldStore.create(WorldStore.get_world(id).get("map", {}), "__harness fresh")
+	fresh["scratch"] = true
+	WorldStore.save_record(fresh)
+	WorldSession.save_now(main2, false, false)
+	hashes = _file_hashes(WorldStore.get_world(id))
+	prev = tree.current_scene.get_instance_id()
+	WorldSession.launch(fresh, {})
+	var main3 := await _await_world_scene(prev)
+	if main3 == null:
+		fails += 1
+		push_error("worlds: FAIL — the new world did not load")
+	else:
+		var fp3 := WorldSession.fingerprint(main3)
+		for k in ["count.props", "count.lights", "count.camps", "count.edited_tiles", "count.peak_total"]:
+			if int(fp3.get(k, 0)) != 0:
+				fails += 1
+				push_error("worlds: FAIL — new world is not empty: %s = %s" % [k, str(fp3.get(k))])
+		print("worlds: new world on the same map — props %d, lights %d, graph nodes %d" % [
+			int(fp3.get("count.props", 0)), int(fp3.get("count.lights", 0)), int(fp3.get("count.graph_nodes", 0))])
+		# The nodes an EMPTY world still has must all be auto-generated
+		# (SolarUI's virtual mirrors, PBI catchments) — never a user node.
+		var g3 := ServiceLocator.graph()
+		var kinds := {}
+		var user_nodes := 0
+		if g3 != null and g3.get("model") != null:
+			for it in g3.get("model").get("items"):
+				var d: Dictionary = it
+				var tag := "%s%s" % [str(d.get("type", "?")), " (virtual)" if bool(d.get("virtual", false)) \
+					or str(d.get("id", "")).begins_with("virtual_") else ""]
+				kinds[tag] = int(kinds.get(tag, 0)) + 1
+				if not tag.ends_with("(virtual)") and str(d.get("type", "")) != "pbi":
+					user_nodes += 1
+		print("worlds: new world's graph by type: %s" % JSON.stringify(kinds))
+		if user_nodes > 0:
+			push_warning("worlds: CHECK — %d non-virtual node(s) in a brand-new world (see the type list above)" % user_nodes)
+		# Seal before comparing: nothing the fresh scene writes from here on
+		# may land anywhere real (see WorldPaths.seal).
+		WorldPaths.seal()
+		var after := _file_hashes(WorldStore.get_world(id))
+		var changed: Array[String] = []
+		for tag in hashes:
+			if str(after.get(tag, "")) != str(hashes[tag]):
+				changed.append(str(tag))
+		if changed.is_empty() and after.size() == hashes.size():
+			print("worlds: original world untouched PASS (%d files)" % hashes.size())
+		else:
+			fails += 1
+			push_error("worlds: FAIL — the original world's files changed: %s" % ", ".join(changed))
+	WorldStore.remove_tree(WorldStore.world_dir(str(fresh.get("id", ""))))
+	print("worlds: %s" % ("ALL PASS" if fails == 0 else "%d FAILURE(S)" % fails))
+	_maybe_quit()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -4695,7 +6259,21 @@ func _manual_screenshot() -> void:
 ##   Godot.exe.exe --path . --windowed --resolution 1280x720 -- \
 ##     --user-map=<file.tres> --capture=npc-anim --shots-dir=<label> \
 ##     --quit-after-capture
+## This capture observes the RIGGED (Mixamo) body's clips: with the player's
+## body style on the stick figure nobody is ever rigged and every clip check
+## reads "nobody to watch". Force the humanoid style for the run and hand the
+## player's style back on every exit path.
 func _run_npc_anim_verify() -> void:
+	var prev_style := NpcDisplayPrefs.style()
+	if prev_style != NpcDisplayPrefs.STYLE_HUMANOID:
+		print("PlaytestHarness: npc-anim — body style %s → humanoid for this run" % prev_style)
+		NpcDisplayPrefs.set_style(NpcDisplayPrefs.STYLE_HUMANOID)
+	await _run_npc_anim_verify_body()
+	if NpcDisplayPrefs.style() != prev_style:
+		NpcDisplayPrefs.set_style(prev_style)
+
+
+func _run_npc_anim_verify_body() -> void:
 	# AFTER the await: on a user map the scene is still swapping when this
 	# starts, so grabbing current_scene first yields null — which silently made
 	# registry_for() return an empty registry and reported a fully tagged site
@@ -4927,7 +6505,7 @@ func _run_veg_capture() -> void:
 			waited += 2.0
 		if loader.get("_auto_veg_generated") != true:
 			print("PlaytestHarness: veg — scatter still pending after %.0f s, shooting anyway" % waited)
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 
 	var label := _shots_label if not _shots_label.is_empty() else "veg_capture"
@@ -5150,7 +6728,7 @@ func _run_area_fill_verify() -> void:
 		print("PlaytestHarness: areafill FAIL — no auto-veg scatter after %.0f s" % waited)
 		_maybe_quit()
 		return
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 
 	# Snapshot the persisted edits so the run leaves no trace.
@@ -5322,7 +6900,7 @@ func _run_camp_capture() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 
 	var path: String = CampAreaLayer.save_path_for_map(
@@ -5779,7 +7357,7 @@ func _run_veg_dock_capture() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var label := _shots_label if not _shots_label.is_empty() else "veg_dock"
 	var dir := "%s/%s" % [SHOTS_ROOT, label]
@@ -5795,7 +7373,7 @@ func _run_veg_dock_capture() -> void:
 	var style_snap := _snapshot_files([
 		VegStyleStore.global_v2_path(),
 		VegStyleStore.map_v2_path(lat, lon),
-		"user://maps/vegetation_%s_%s.json" % [CoordToken.token(lat), CoordToken.token(lon)],
+		WorldPaths.site_file("vegetation", lat, lon),
 		VegetationStyleConfig.SPECIES_DEFAULTS_PATH,
 		VegetationStyleConfig.PRESETS_PATH,
 	])
@@ -5844,6 +7422,217 @@ func _run_veg_dock_capture() -> void:
 	_maybe_quit()
 
 
+# ==================== POINTS OF INTEREST (--capture=poi) ====================
+# Imports the shipped Google Earth export of the Mount Vernon property
+# (core/poi/testdata/compoundity.kml) through the loader's REAL import path
+# and asserts what a PNG cannot: 15 markers built, the House pin standing at
+# GeoMath's xz for its coordinates and ON the ground, nothing outside the map,
+# the Site Plan marker list agreeing with the 3D markers, Go putting the
+# player beside a pin, hide emptying the plan list, and a re-import REPLACING
+# (never doubling). Shoots an aerial over the pins and a street shot at the
+# Top Culvert Inlet. Snapshots and byte-restores the site's poi file + the
+# show_pois pref, so a run never leaves the fixture pins on the player's site
+# (run it on mtvernon, where the pins fall on the actual property).
+
+func _run_poi_verify() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: poi needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(_settle_s()).timeout
+	_set_capture_conditions()
+	var label := _shots_label if not _shots_label.is_empty() else "poi"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var poi_path := PoiLayer.save_path_for_map(lat, lon)
+	var snap := _snapshot_files([poi_path])
+	var show_before := bool(loader.call("show_pois"))
+	var before_count := (loader.call("poi_records") as Array).size()
+	# ⚠ A GDScript lambda captures locals BY VALUE — the counter lives in an Array.
+	var fails := [0]
+	var check := func(name: String, ok: bool, detail: String = "") -> void:
+		print("PlaytestHarness: poi %s — %s%s" % ["PASS" if ok else "FAIL", name,
+			"" if detail.is_empty() else " (" + detail + ")"])
+		if not ok:
+			fails[0] += 1
+
+	const SRC := "compoundity.kml"
+	var fixture := "res://core/poi/testdata/" + SRC
+	var res: Dictionary = loader.call("import_kml_file", fixture)
+	check.call("import ok", bool(res.get("ok", false)), str(res.get("error", "")))
+	check.call("15 placemarks added", int(res.get("added", 0)) == 15, str(res.get("added", 0)))
+	check.call("every pin inside this map", int(res.get("off_map", 0)) == 0, str(res.get("off_map", 0)))
+	var rt: Node = loader.get("_poi_runtime")
+	check.call("runtime exists under Terrain", rt != null and rt.get_parent() != null and rt.get_parent().name == "Terrain")
+	if rt == null:
+		_restore_files(snap)
+		_maybe_quit()
+		return
+	check.call("one marker per record", int(rt.call("marker_count")) == before_count + 15,
+		"%d vs %d" % [int(rt.call("marker_count")), before_count + 15])
+
+	var house: Dictionary = {}
+	var top: Dictionary = {}
+	var line: Dictionary = {}
+	var fixture_ids: Array = []
+	for r_v in loader.call("poi_records"):
+		var r: Dictionary = r_v
+		if str(r.get("source", "")) != SRC:
+			continue
+		fixture_ids.append(str(r["id"]))
+		match str(r.get("name", "")):
+			"House":
+				house = r
+			"Top Culvert Inlet":
+				top = r
+			"Longest Possible Run From Pond":
+				line = r
+	check.call("House / Top Culvert / pond-run records present", not house.is_empty() and not top.is_empty() and not line.is_empty())
+	if house.is_empty() or top.is_empty():
+		loader.call("remove_poi_source", SRC)
+		_restore_files(snap)
+		_maybe_quit()
+		return
+	var exp := GeoMath.lonlat_to_local_m(48.3251389, -122.2468056, lat, lon)
+	var hp: Vector3 = rt.call("marker_position", str(house["id"]))
+	check.call("House pin at GeoMath's xz for its coordinates",
+		Vector2(hp.x, hp.z).distance_to(exp) < 0.05, "%s vs %s" % [str(Vector2(hp.x, hp.z)), str(exp)])
+	var gy := float(loader.call("ground_height_at", hp.x, hp.z))
+	check.call("House pin standing on the ground", absf(hp.y - gy) < 0.05, "pin y %.2f ground %.2f" % [hp.y, gy])
+	var marks: Array = loader.call("poi_markers")
+	var mk: Dictionary = {}
+	var lmk: Dictionary = {}
+	for m in marks:
+		if str(m.get("id", "")) == str(house["id"]):
+			mk = m
+		elif str(m.get("id", "")) == str(line["id"]):
+			lmk = m
+	check.call("Site Plan marker matches the 3D pin xz", not mk.is_empty()
+		and (mk["pos"] as Vector2).distance_to(Vector2(hp.x, hp.z)) < 0.01)
+	check.call("Site Plan line marker carries its 7 vertices", not lmk.is_empty()
+		and (lmk["points"] as PackedVector2Array).size() == 7, str((lmk.get("points", PackedVector2Array()) as PackedVector2Array).size()))
+	var line_node: Node = rt.get_node_or_null("Poi_" + str(line["id"]))
+	check.call("line record built a ribbon", line_node != null and line_node.get_node_or_null("Ribbon") != null)
+
+	# Go: the player lands a step beside the pin, on the ground.
+	var scene := get_tree().current_scene
+	var player: Node3D = scene.find_child("Player", true, false) if scene != null else null
+	var tp: Vector3 = rt.call("marker_position", str(top["id"]))
+	var went := bool(loader.call("teleport_to_poi", str(top["id"])))
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var pp: Vector3 = player.global_position if player != null else Vector3.INF
+	check.call("Go lands beside the Top Culvert Inlet", went and player != null
+		and Vector2(pp.x, pp.z).distance_to(Vector2(tp.x, tp.z)) < 3.5
+		and pp.y > tp.y - 1.5 and pp.y < tp.y + 4.0, "player %s pin %s" % [str(pp), str(tp)])
+	check.call("Go on an unknown id is refused", not bool(loader.call("teleport_to_poi", "poi_nope")))
+
+	# The UI: the Terrain options panel is a top-right box with NO scrolling,
+	# and the KML block was unfindable at the bottom of its long column (the
+	# user's report). Open the real panel, shoot it, and assert the block's
+	# title sits INSIDE the viewport with the import row under it.
+	var opts: Control = loader.get("_terrain_options_ui")
+	check.call("Terrain options panel exists", opts != null)
+	if opts != null and opts.has_method("toggle_expanded"):
+		# _set_capture_conditions hides every CanvasLayer under Main (the HUD),
+		# and is_visible_in_tree() does NOT see a CanvasLayer ancestor — show
+		# the panel's own layer for the shot and hide it again after.
+		var ui_layer := opts.get_parent() as CanvasLayer
+		var layer_was := ui_layer.visible if ui_layer != null else true
+		if ui_layer != null:
+			ui_layer.visible = true
+		opts.visible = true
+		if not bool(opts.get("_expanded")):
+			opts.call("toggle_expanded")
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var title: Control = opts.get("_poi_title")
+		var vp_rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+		var on_screen := title != null and title.is_visible_in_tree() \
+			and (ui_layer == null or ui_layer.visible) \
+			and vp_rect.encloses(title.get_global_rect()) \
+			and vp_rect.encloses(opts.get_global_rect())
+		check.call("KML block + its panel are on screen in Terrain options", on_screen,
+			"" if title == null else "title %s panel %s viewport %s" % [str(title.get_global_rect()), str(opts.get_global_rect()), str(vp_rect)])
+		var list: Control = opts.get("_poi_list")
+		check.call("KML pin list shows the fixture's rows after a programmatic import", list != null
+			and list.get_child_count() > 0 and list.is_visible_in_tree())
+		await _shoot_ui(dir, "00_terrain_options_kml_block")
+		opts.call("toggle_expanded")
+		if ui_layer != null:
+			ui_layer.visible = layer_was
+	else:
+		fails[0] += 2
+		print("PlaytestHarness: poi FAIL — Terrain options panel cannot be expanded")
+
+	# Shots: a street view at the Top Culvert Inlet, then an aerial over the lot.
+	var prev_cam := get_viewport().get_camera_3d()
+	var cam := Camera3D.new()
+	cam.name = "PoiCaptureCam"
+	cam.fov = 70.0
+	scene.add_child(cam)
+	cam.make_current()
+	var eye := Vector3(pp.x, pp.y + 1.6, pp.z) if pp != Vector3.INF else tp + Vector3(0, 1.7, 3.0)
+	cam.global_position = eye
+	cam.look_at(tp + Vector3(0.0, PoiRuntime.POLE_H, 0.0), Vector3.UP)
+	await get_tree().create_timer(0.8).timeout
+	await _shoot_ui(dir, "01_street_top_culvert_inlet")
+	var centroid := Vector3.ZERO
+	var n := 0
+	for id in fixture_ids:
+		var p: Vector3 = rt.call("marker_position", str(id))
+		if p != Vector3.INF:
+			centroid += p
+			n += 1
+	if n > 0:
+		centroid /= float(n)
+	cam.global_position = centroid + Vector3(0.0, 150.0, 110.0)
+	cam.look_at(centroid, Vector3.UP)
+	await get_tree().create_timer(0.8).timeout
+	await _shoot_ui(dir, "02_aerial_pins")
+	cam.global_position = hp + Vector3(6.0, 2.2, 7.0)
+	cam.look_at(hp + Vector3(0.0, 1.8, 0.0), Vector3.UP)
+	await get_tree().create_timer(0.6).timeout
+	await _shoot_ui(dir, "03_house_pin_closeup")
+
+	# Hide / show: the plan list empties with the pins, nothing is lost.
+	loader.call("set_show_pois", false)
+	var house_node: Node3D = rt.get_node_or_null("Poi_" + str(house["id"]))
+	check.call("hidden: marker invisible, plan list empty, records kept",
+		house_node != null and not house_node.visible and (loader.call("poi_markers") as Array).is_empty()
+		and (loader.call("poi_records") as Array).size() == before_count + 15)
+	loader.call("set_show_pois", true)
+	check.call("shown again", house_node != null and house_node.visible and not (loader.call("poi_markers") as Array).is_empty())
+
+	# Re-import replaces, never doubles; the file is on disk.
+	var res2: Dictionary = loader.call("import_kml_file", fixture)
+	check.call("re-import replaced 15, still 15", int(res2.get("replaced", 0)) == 15
+		and int(rt.call("marker_count")) == before_count + 15, str(res2))
+	check.call("poi file written", FileAccess.file_exists(poi_path), poi_path)
+	var reread := PoiLayer.create_empty()
+	reread.load_from(poi_path)
+	check.call("file round-trips the records", reread.count() == before_count + 15, str(reread.count()))
+
+	# Cleanup: remove the fixture source, then byte-restore the file + pref.
+	var removed := int(loader.call("remove_poi_source", SRC))
+	check.call("remove_poi_source drops 15, markers back to before", removed == 15
+		and int(rt.call("marker_count")) == before_count, "%d removed, %d markers" % [removed, int(rt.call("marker_count"))])
+	if is_instance_valid(prev_cam):
+		prev_cam.make_current()
+	cam.queue_free()
+	_restore_files(snap)
+	loader.call("set_show_pois", show_before)
+	loader.call("_attach_pois")
+	print("PlaytestHarness: poi %s — %d failure(s); poi file + show_pois restored; shots in %s"
+		% ["PASS" if fails[0] == 0 else "FAIL", fails[0], ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
 func _shoot_ui(dir: String, name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img := get_viewport().get_texture().get_image()
@@ -5867,7 +7656,7 @@ func _run_food_forest_verify() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
 		push_error("PlaytestHarness: graph model unavailable — aborting food forest verify")
@@ -6049,7 +7838,7 @@ func _run_growth_capture() -> void:
 		while loader.get("_auto_veg_generated") != true and waited < VEG_SCATTER_WAIT_MAX_S:
 			await get_tree().create_timer(2.0).timeout
 			waited += 2.0
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var main := get_tree().current_scene
 	var year0 := int(main.get("year"))
@@ -6248,7 +8037,7 @@ func _run_workui_capture() -> void:
 	var loader0: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader0 != null and not (loader0.get("load_completed") == true):
 		await loader0.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	# _set_capture_conditions hides EVERY CanvasLayer (a world capture wants a
 	# clean frame) — but the panels under review live on UILayer, so it comes
@@ -6423,7 +8212,7 @@ func _run_npc_pose_capture() -> void:
 	var loader := await _find_terrain_loader()
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var main := get_tree().get_first_node_in_group("main_scene")
 	if main != null:
@@ -6597,7 +8386,7 @@ func _run_tree_portrait_capture() -> void:
 	var loader := await _find_terrain_loader()
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	# Pin the shoot to mid-summer: portraits inherit the map's SAVED sim date,
 	# and a site saved in April renders half-bare spring-bud trees — shape
@@ -6742,7 +8531,7 @@ func _run_project_verify() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	var model: Variant = sgv.get("model")
 	if model == null:
@@ -7148,7 +8937,7 @@ func _run_settlement_capture() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	if main == null or not main.has_method("open_settlement_view"):
 		push_error("PlaytestHarness: Main has no settlement view — aborting")
@@ -7321,7 +9110,7 @@ func _run_labour_capture() -> void:
 	var loader0: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader0 != null and not (loader0.get("load_completed") == true):
 		await loader0.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	var model: Variant = sgv.get("model")
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
@@ -7505,7 +9294,7 @@ func _run_penstock_verify() -> void:
 		push_error("PlaytestHarness: penstock verify needs a TerrainLoader (--user-map=…)")
 		_maybe_quit()
 		return
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var model: Variant = sgv.get("model")
 	var main := get_tree().current_scene
 	if model == null or main == null:
@@ -7517,6 +9306,15 @@ func _run_penstock_verify() -> void:
 	var manifest: Array = []
 	var fails := 0
 
+	# The world's own stream intakes are the player's: remember them so the
+	# cleanup only ever removes what THIS run (or a killed earlier run) made.
+	_pen_keep.clear()
+	for it0 in (model.items as Array):
+		var d0 := it0 as Dictionary
+		var iid0 := str(d0.get("id", ""))
+		if not iid0.begins_with("cap_pen_") and (ResourceFlowEngine.is_stream_intake(d0) \
+				or str((d0.get("specs", {}) as Dictionary).get("model_id", "")) == "stream_intake"):
+			_pen_keep[iid0] = true
 	# Clear leftovers from a previous run so the assertions are honest.
 	_penstock_cleanup(model, main)
 
@@ -7585,15 +9383,22 @@ func _run_penstock_verify() -> void:
 	fails += _pen_check("penstock connection created", not conn_id.is_empty())
 	await get_tree().create_timer(1.2).timeout
 
-	# An intake item + prop exist at the release point.
+	# An intake item + prop exist at the release point. It is the penstock's
+	# OWN source: "the first stream intake in the graph" was the player's (Mt
+	# Vernon has two), and every later check then looked at the wrong node.
 	var intake_id := ""
-	for it in model.items:
-		if not (it is Dictionary):
-			continue
-		var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
-		if str(sp.get("model_id", "")) == "stream_intake":
-			intake_id = str((it as Dictionary).get("id", ""))
-			break
+	var pconn: Dictionary = model.call("get_connection", conn_id) if not conn_id.is_empty() else {}
+	for end_id in [str(pconn.get("source_item_id", "")), str(pconn.get("target_item_id", ""))]:
+		if end_id != turbine_id and not end_id.is_empty():
+			intake_id = end_id
+	if intake_id.is_empty():
+		for it in model.items:
+			if not (it is Dictionary):
+				continue
+			var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+			if str(sp.get("model_id", "")) == "stream_intake" and not _pen_keep.has(str((it as Dictionary).get("id", ""))):
+				intake_id = str((it as Dictionary).get("id", ""))
+				break
 	fails += _pen_check("stream intake graph node created", not intake_id.is_empty())
 	if not intake_id.is_empty():
 		var intake_item: Dictionary = model.call("get_item", intake_id)
@@ -7875,6 +9680,8 @@ func _run_penstock_verify() -> void:
 		await get_tree().create_timer(0.6).timeout
 		await _graph_shot(dir, "03_first_person", manifest)
 
+	fails += await _penstock_stream_and_click_checks(sgv, model, main, turbine_id, dir, manifest)
+
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(manifest, "\t"))
@@ -7886,6 +9693,405 @@ func _run_penstock_verify() -> void:
 	else:
 		push_error("PlaytestHarness: penstock verify — %d CHECK(S) FAILED" % fails)
 	_maybe_quit()
+
+
+## Turn the first-person camera to look at a world point (yaw on the body,
+## pitch on the camera — the player faces −Z).
+func _aim_player_at(player: Node3D, cam: Camera3D, target: Vector3) -> void:
+	var eye := cam.global_position
+	var d := target - eye
+	player.rotation.y = atan2(-d.x, -d.z)
+	var flat := Vector2(d.x, d.z).length()
+	cam.rotation.x = atan2(d.y, flat)
+
+
+## Two things a screenshot cannot show, bolted onto the penstock verify:
+## (1) With the routed penstock VISIBLE and ending at the PowerSpout, a
+##     Ctrl+click aimed at the turbine must focus and open the PROP editor —
+##     not the conduit style modal. Every wire ends at a port ON its prop, so
+##     the pick ladder used to hand the turbine's own body to its penstock,
+##     and the player could never get at the turbine ("a conduit modal keeps
+##     popping up").
+## (2) The WATER toolbar's Penstock span, driven through the same calls the
+##     tool makes: the reach from a mapped stream's upstream vertex becomes
+##     the turbine's penstock — the spans go mode "penstock" (no barrel run),
+##     ONE routed poly_penstock replaces the drop-placed one (never a second),
+##     its waypoints follow the stream, the intake is BOUND to the feature and
+##     the engine takes that stream's flow (water_feature_id stamped,
+##     penstock_source_mode "stream") whatever the 6 m rule says.
+func _penstock_stream_and_click_checks(sgv: Node, model: Variant, main: Node,
+		turbine_id: String, dir: String, manifest: Array) -> int:
+	var fails := 0
+	var loader: Node = main.find_child("TerrainLoader", true, false)
+	var player: Variant = main.get("player")
+	var cam: Camera3D = (player as Node3D).get_node_or_null("CameraArm/Camera3D") if player is Node3D else null
+	var t_item: Dictionary = model.get_item(turbine_id)
+	var prop := PlacedPropRuntime.find_by_prop_id(main,
+			str((t_item.get("specs", {}) as Dictionary).get("bound_prop_id", "")))
+	var mgr: Node = sgv.call("_get_conduit_manager")
+	if player is Node3D and cam != null and prop != null and mgr != null:
+		# close_hydro_lab() returns the G view to its Elevation lens — still
+		# OPEN, so a click would land on the graph canvas. This test is about
+		# the first-person crosshair: close the graph first.
+		(sgv as CanvasItem).visible = false
+		await get_tree().create_timer(0.4).timeout
+		# Worst case for the bug: wires drawn, so the penstock's samples exist
+		# and its end sits on the turbine body.
+		mgr.call("set_global_visibility", true)
+		var tp: Vector3 = prop.global_position + Vector3(0.0, 0.25, 0.0)
+		(player as Node3D).global_position = tp + Vector3(2.6, 0.0, 0.0)
+		for _i in 4:
+			await get_tree().physics_frame
+		_aim_player_at(player as Node3D, cam, tp)
+		CursorController.set_paused(false)
+		await get_tree().create_timer(0.4).timeout
+		var vp := main.get_viewport()
+		var centre_px := vp.get_visible_rect().size * 0.5
+		await _lc_move(vp, centre_px, true)  # Ctrl held → prop selection active
+		for _j in 4:
+			await get_tree().physics_frame
+		var focus: Node = (player as Node).get_node_or_null("InteractionFocus")
+		var focused: Variant = focus.call("get_focused") if focus != null else null
+		var cfid := str(focus.call("get_conduit_focus_id")) if focus != null else "?"
+		print("PlaytestHarness: penstock verify — aim at turbine: focused=%s conduit_focus='%s' graph=%s paused=%s overlay=%s modal=%s capture=%s mouse_mode=%d" % [
+			str(focused.name) if focused is Node else "null", cfid, str((sgv as CanvasItem).visible),
+			str(CursorController.is_paused()), str(CursorController.has_tool_overlay()),
+			str(CursorController.has_blocking_modal()), str(CursorController.should_capture_look()),
+			Input.get_mouse_mode()])
+		fails += _pen_check("aiming at the turbine focuses the PROP, not its penstock",
+				focused is PlacedProp and cfid.is_empty())
+		await _lc_press(vp, centre_px, true, false, true)
+		await _lc_press(vp, centre_px, false, false, true)
+		await get_tree().create_timer(0.5).timeout
+		var modal_up := CursorController.has_blocking_modal()
+		var editor_up := CursorController.has_tool_overlay()
+		print("PlaytestHarness: penstock verify — after Ctrl+click: tool overlay=%s blocking modal=%s" % [
+			str(editor_up), str(modal_up)])
+		fails += _pen_check("Ctrl+click on the turbine opened its prop editor", editor_up)
+		fails += _pen_check("…and NOT the conduit style modal", not modal_up)
+		await _graph_shot(dir, "06_turbine_editor_not_conduit_modal", manifest)
+		var pe: Node = main.get_node_or_null("UILayer/PlacedPropEditUI")
+		if pe != null and pe.has_method("close"):
+			pe.call("close")
+		if modal_up:
+			CursorController.pop_top_modal()
+		await get_tree().create_timer(0.3).timeout
+
+	# ---- The Penstock span tool, through the calls it makes.
+	if loader == null or not loader.has_method("water_network"):
+		return fails
+	var wn: Node = loader.call("water_network")
+	var feats: Array = wn.call("features")
+	var centre_xz := Vector2(prop.global_position.x, prop.global_position.z) if prop != null else Vector2.ZERO
+	var best: Dictionary = {}
+	var best_d := INF
+	for f_v in feats:
+		var f: Dictionary = f_v
+		var pts: PackedVector2Array = f.get("points", PackedVector2Array())
+		if pts.size() < 3 or str(f.get("id", "")).begins_with("dc_"):
+			continue
+		var d := pts[0].distance_to(centre_xz)
+		if d < best_d:
+			best_d = d
+			best = f
+	if best.is_empty():
+		print("PlaytestHarness: penstock verify — no mapped stream on this map, stream step skipped")
+		return fails
+	var fid := str(best["id"])
+	var fpts: PackedVector2Array = best["points"]
+	var water_file := str(WaterFeatureLayer.save_path_for_map(float(loader.get("_lat")), float(loader.get("_lon"))))
+	var snap := _snapshot_files([water_file])
+	# Water side (what the tool does first): every span of the reach → penstock.
+	var n_spans := fpts.size() - 1
+	wn.call("checkpoint")
+	var nid := fid
+	for i in n_spans:
+		nid = str(wn.call("set_span_mode", nid, i, WaterFeatureLayer.MODE_PENSTOCK))
+	wn.call("commit")
+	await get_tree().create_timer(0.3).timeout
+	var f_after: Dictionary = wn.call("feature", nid)
+	var all_pen := not f_after.is_empty()
+	for m in f_after.get("modes", []):
+		all_pen = all_pen and str(m) == WaterFeatureLayer.MODE_PENSTOCK
+	fails += _pen_check("stream %s: every span now mode penstock" % nid, all_pen)
+	# Graph side.
+	var conn_id := str(sgv.call("create_penstock_from_stream", nid,
+			str(best.get("name", "")), fpts, turbine_id, {}))
+	fails += _pen_check("create_penstock_from_stream routed a connection", not conn_id.is_empty())
+	await get_tree().create_timer(1.5).timeout
+	var pen_conns := 0
+	var intakes := 0
+	var conn: Dictionary = {}
+	for c in model.connections:
+		var cd: Dictionary = c
+		if str(cd.get("conduit_type", "")) == "poly_penstock" \
+				and (str(cd.get("source_item_id", "")) == turbine_id or str(cd.get("target_item_id", "")) == turbine_id):
+			pen_conns += 1
+			conn = cd
+	var intake_item: Dictionary = {}
+	for it in model.items:
+		if ResourceFlowEngine.is_stream_intake(it) and not _pen_keep.has(str((it as Dictionary).get("id", ""))):
+			intakes += 1
+			intake_item = it
+	fails += _pen_check("exactly ONE penstock on the turbine after the stream tap (was %d)" % pen_conns, pen_conns == 1)
+	fails += _pen_check("exactly ONE stream intake left (the drop-placed one was replaced; %d)" % intakes, intakes == 1)
+	fails += _pen_check("the penstock carries the stream's own line as locked waypoints",
+			bool(conn.get("route_locked", false)) and (conn.get("route_3d", []) as Array).size() >= 1)
+	var isp: Dictionary = intake_item.get("specs", {}) as Dictionary
+	fails += _pen_check("intake is BOUND to %s" % nid, str(isp.get("water_feature_bind", "")) == nid)
+	var tsp: Dictionary = model.get_item(turbine_id).get("specs", {}) as Dictionary
+	print("PlaytestHarness: penstock verify — stream tap: intake fed by '%s' (q %.3f L/s), turbine mode '%s', head %.2f m, %.1f W" % [
+		str(isp.get("water_feature_id", "")), float(isp.get("live_supply_lps", 0.0)),
+		str(tsp.get("penstock_source_mode", "")), float(tsp.get("live_head_m", 0.0)),
+		float(tsp.get("current_output_kw", 0.0)) * 1000.0])
+	fails += _pen_check("the engine takes the BOUND stream's flow (water_feature_id stamped)",
+			str(isp.get("water_feature_id", "")) == nid)
+	fails += _pen_check("turbine runs in stream mode", str(tsp.get("penstock_source_mode", "")) == "stream")
+	var runs: Array = wn.call("buried_runs", nid)
+	var pen_run := false
+	for r in runs:
+		pen_run = pen_run or str((r as Dictionary).get("mode", "")) == WaterFeatureLayer.MODE_PENSTOCK
+	fails += _pen_check("a penstock span builds NO barrel run (the conduit is the visual)", not pen_run)
+	# The pipe on the user's trailer: 2" SDR 11.5, 350 ft of it. Set through
+	# the Lab's own controls, read back off the run + the design checks.
+	if sgv.has_method("open_siphon_lab"):
+		(sgv as CanvasItem).visible = true
+		sgv.call("open_siphon_lab", turbine_id)
+		await get_tree().create_timer(1.0).timeout
+		var lab: Node = sgv.get_node_or_null("SiphonHydroModal")
+		var sdr_opt: Variant = lab.get("_route_sdr_opt") if lab != null else null
+		var size_opt: Variant = lab.get("_route_size_opt") if lab != null else null
+		var stock_spin: Variant = lab.get("_stock_spin") if lab != null else null
+		if sdr_opt is OptionButton and size_opt is OptionButton and stock_spin is SpinBox:
+			for i in (size_opt as OptionButton).item_count:
+				if is_equal_approx(float((size_opt as OptionButton).get_item_metadata(i)), 2.0):
+					(size_opt as OptionButton).select(i)
+			for i in (sdr_opt as OptionButton).item_count:
+				if is_equal_approx(float((sdr_opt as OptionButton).get_item_metadata(i)), 11.5):
+					(sdr_opt as OptionButton).select(i)
+			(stock_spin as SpinBox).value = 350.0
+			lab.call("_apply_route_style")
+			await get_tree().create_timer(2.0).timeout
+			var c2: Dictionary = {}
+			for c in model.connections:
+				if str((c as Dictionary).get("conduit_type", "")) == "poly_penstock":
+					c2 = c
+			var st: Dictionary = c2.get("conduit_style", {}) as Dictionary
+			fails += _pen_check("Lab wrote SDR 11.5 + 350 ft onto the run",
+					is_equal_approx(float(st.get("pipe_sdr", 0.0)), 11.5)
+					and absf(float(st.get("stock_length_m", 0.0)) - 106.68) < 0.05)
+			var tsp2: Dictionary = model.get_item(turbine_id).get("specs", {}) as Dictionary
+			print("PlaytestHarness: penstock verify — SDR 11.5: turbine bore %.2f mm, run %.1f m, tightest bend %.2f m (needs ≥ %.3f), high points %d, rise %.2f m" % [
+				float(tsp2.get("penstock_diameter_mm", 0.0)), float(c2.get("route_length_m", 0.0)),
+				float(c2.get("route_min_bend_r_m", -1.0)), ConduitKinds.contour_bend_radius_m("poly_penstock", st),
+				int(c2.get("route_high_points", -1)), float(c2.get("route_rise_m", 0.0))])
+			fails += _pen_check("turbine adopted the SDR 11.5 bore (49.8 mm)",
+					absf(float(tsp2.get("penstock_diameter_mm", 0.0)) - 49.83) < 0.1)
+			var r_route := float(c2.get("route_min_bend_r_m", -1.0))
+			var r_min := ConduitKinds.contour_bend_radius_m("poly_penstock", st)
+			fails += _pen_check("route report stamped on the run", r_route != -2.0 and c2.has("route_high_points"))
+			fails += _pen_check("every plan bend of the creek route is at or above the pipe's %.2f m radius" % r_min,
+					r_route < 0.0 or r_route >= r_min * 0.95)
+			var design: Variant = lab.get("_design_lbl")
+			if design is Label:
+				print("PlaytestHarness: penstock verify — design checks:\n%s" % str((design as Label).text))
+				fails += _pen_check("design checks rendered (velocity + stock lines)",
+						str((design as Label).text).contains("velocity") and str((design as Label).text).contains("on hand"))
+			var firm: Variant = lab.get("_firm_lbl")
+			var lim: Variant = lab.get("_limited_lbl")
+			var intake_lbl: Variant = lab.get("_intake_lbl")
+			if firm is Label and lim is Label and intake_lbl is Label:
+				print("PlaytestHarness: penstock verify — firm flow: %s | %s" % [str((firm as Label).text), str((lim as Label).text)])
+				print("PlaytestHarness: penstock verify — intake works:\n%s" % str((intake_lbl as Label).text))
+				fails += _pen_check("driest / wettest month rendered from the stream's seasonal curve",
+						str((firm as Label).text).contains("L/s") and str((firm as Label).text).contains("W"))
+				fails += _pen_check("intake works sized (screen + settling box + submergence)",
+						str((intake_lbl as Label).text).contains("Settling box") and str((intake_lbl as Label).text).contains("under water"))
+			if lab.has_method("_on_copy_design_summary"):
+				lab.call("_on_copy_design_summary")
+				fails += _pen_check("design summary exported", not str(lab.get("_design_summary")).is_empty())
+				fails += _pen_check("summary names the closure-time surge",
+						str(lab.get("_design_summary")).contains("closing the valve over"))
+			await _graph_shot(dir, "08_lab_design_checks", manifest)
+		else:
+			fails += _pen_check("Lab exposes SDR / size / stock controls", false)
+		if sgv.has_method("close_hydro_lab"):
+			sgv.call("close_hydro_lab")
+		# ---- Site Plan: port dots / grabs are capped on screen at any zoom
+		# (uncapped 6×zoom drew ports bigger than the turbine), and a water
+		# wire dropped on a stream taps it (the same call the canvas emits).
+		var canvas: Variant = sgv.get("_graph_canvas")
+		if canvas != null and canvas.has_method("set_view_mode"):
+			canvas.call("set_view_mode", GraphSiteLayout.VIEW_SITE)
+			await get_tree().create_timer(0.8).timeout
+			var z0: float = float(canvas.get("_zoom"))
+			canvas.set("_zoom", maxf(z0 * 40.0, 60.0))
+			var grab := float(canvas.call("_port_grab_radius"))
+			print("PlaytestHarness: penstock verify — Site Plan at zoom %.1f: port grab radius %.1f px" % [
+				float(canvas.get("_zoom")), grab])
+			# graph_canvas.gd has no class_name — SITE_PORT_GRAB_MAX_PX (14 px) by value.
+			fails += _pen_check("Site Plan port grab radius capped (%.1f ≤ 14 px)" % grab,
+					grab <= 14.01)
+			canvas.set("_zoom", z0)
+			await get_tree().create_timer(0.5).timeout
+			await _graph_shot(dir, "09_site_plan_ports", manifest)
+			if sgv.has_method("tap_stream_for_turbine"):
+				var conn3 := str(sgv.call("tap_stream_for_turbine", nid, 1, turbine_id, "res_in_0"))
+				await get_tree().create_timer(1.5).timeout
+				var n_pen := 0
+				var n_int := 0
+				# Count THIS turbine's penstocks: the map may carry the player's own
+				# pond→siphon poly_penstock elsewhere (Mt Vernon does).
+				for c in model.connections:
+					var cd3: Dictionary = c
+					if str(cd3.get("conduit_type", "")) == "poly_penstock" \
+							and (str(cd3.get("source_item_id", "")) == turbine_id or str(cd3.get("target_item_id", "")) == turbine_id):
+						n_pen += 1
+				for it in model.items:
+					if ResourceFlowEngine.is_stream_intake(it) and not _pen_keep.has(str((it as Dictionary).get("id", ""))):
+						n_int += 1
+				fails += _pen_check("Site Plan drop → tap_stream_for_turbine routed a penstock", not conn3.is_empty())
+				fails += _pen_check("…still exactly one penstock + one intake (replaced, not added) [%d/%d]" % [n_pen, n_int],
+						n_pen == 1 and n_int == 1)
+			# ---- ONE source model behind every entry: a world point resolves to
+			# pond / stream / spring and route_penstock_to_source routes it; a
+			# hand-drawn water wire into the turbine becomes the penstock too.
+			if sgv.has_method("resolve_hydro_source_at") and sgv.has_method("route_penstock_to_source"):
+				var v1 := fpts[mini(1, fpts.size() - 1)]
+				var s_stream: Dictionary = sgv.call("resolve_hydro_source_at", v1, 8.0)
+				fails += _pen_check("a point on the creek resolves as a STREAM source (%s)" % str(s_stream.get("kind", "")),
+						str(s_stream.get("kind", "")) == "stream" and str(s_stream.get("feature_id", "")) == nid)
+				var far := v1 + Vector2(45.0, 45.0)
+				var s_far: Dictionary = sgv.call("resolve_hydro_source_at", far, 8.0)
+				print("PlaytestHarness: penstock verify — resolver: creek → %s '%s'; 64 m off → %s" % [
+					str(s_stream.get("kind", "")), str(s_stream.get("label", "")), str(s_far.get("kind", ""))])
+				fails += _pen_check("a point off the creek resolves as bare ground / a pond",
+						str(s_far.get("kind", "")) in ["spring", "pond", "pond_unadded"])
+				if str(s_far.get("kind", "")) == "spring":
+					var c_spring := str(sgv.call("route_penstock_to_source", turbine_id, s_far,
+							{"pipe_size_in": 2.0, "pipe_sdr": 11.5}))
+					await get_tree().create_timer(1.5).timeout
+					var n_pen2 := 0
+					var bound_any := false
+					var spring_sdr := 0.0
+					for c in model.connections:
+						var cd4: Dictionary = c
+						if str(cd4.get("conduit_type", "")) == "poly_penstock" \
+								and (str(cd4.get("source_item_id", "")) == turbine_id or str(cd4.get("target_item_id", "")) == turbine_id):
+							n_pen2 += 1
+							spring_sdr = float((cd4.get("conduit_style", {}) as Dictionary).get("pipe_sdr", 0.0))
+					for it in model.items:
+						if ResourceFlowEngine.is_stream_intake(it) and not _pen_keep.has(str((it as Dictionary).get("id", ""))):
+							bound_any = bound_any or not str((it.get("specs", {}) as Dictionary).get("water_feature_bind", "")).is_empty()
+					fails += _pen_check("spring source → one penstock from a bare intake (not bound to a stream)",
+							not c_spring.is_empty() and n_pen2 == 1 and not bound_any)
+					fails += _pen_check("the route opts carried the pipe spec (SDR %.1f)" % spring_sdr, is_equal_approx(spring_sdr, 11.5))
+				var up: Dictionary = sgv.call("find_uphill_source", turbine_id, 150.0) \
+					if sgv.has_method("find_uphill_source") else {}
+				print("PlaytestHarness: penstock verify — find_uphill_source: %s '%s' +%.1f m" % [
+					str(up.get("kind", "")), str(up.get("label", "")), float(up.get("rise_m", 0.0))])
+				fails += _pen_check("auto-route finds SOMETHING higher (stream vertex or bare ground)", not up.is_empty())
+				var c_back := str(sgv.call("route_penstock_to_source", turbine_id, s_stream, {}))
+				await get_tree().create_timer(1.5).timeout
+				var n_pen3 := 0
+				var n_int3 := 0
+				var intake3: Dictionary = {}
+				for c in model.connections:
+					var cd5: Dictionary = c
+					if str(cd5.get("conduit_type", "")) == "poly_penstock" \
+							and (str(cd5.get("source_item_id", "")) == turbine_id or str(cd5.get("target_item_id", "")) == turbine_id):
+						n_pen3 += 1
+				for it in model.items:
+					if ResourceFlowEngine.is_stream_intake(it) and not _pen_keep.has(str((it as Dictionary).get("id", ""))):
+						n_int3 += 1
+						intake3 = it
+				fails += _pen_check("stream source → back to one BOUND intake + one penstock [%d/%d]" % [n_pen3, n_int3],
+						not c_back.is_empty() and n_pen3 == 1 and n_int3 == 1
+						and str((intake3.get("specs", {}) as Dictionary).get("water_feature_bind", "")) == nid)
+				var summ: Dictionary = sgv.call("hydro_source_summary", turbine_id) if sgv.has_method("hydro_source_summary") else {}
+				print("PlaytestHarness: penstock verify — source summary: %s" % str(summ))
+				fails += _pen_check("hydro_source_summary reports the stream", str(summ.get("kind", "")) == "stream")
+				# A plain water wire drawn by hand from the intake into the turbine
+				# (what a Site Plan port drop makes) is restyled into the penstock.
+				var iid3 := str(intake3.get("id", ""))
+				if not iid3.is_empty() and not c_back.is_empty():
+					model.remove_connection(c_back)
+					var plain_id: String = model.generate_connection_id()
+					print("PlaytestHarness: penstock verify — before the hand-drawn wire: history_suppress=%s sim_bulk=%s" % [
+						str(sgv.get("_history_suppress")), str(sgv.get("_sim_bulk_update"))])
+					model.add_connection({"id": plain_id, "scope_id": "root",
+						"source_item_id": iid3, "source_handle_id": "output",
+						"target_item_id": turbine_id, "target_handle_id": "res_in_0",
+						"polarity": "resource", "resource_type": "water"})
+					await get_tree().create_timer(0.8).timeout
+					var pc: Dictionary = model.get_connection(plain_id)
+					if str(pc.get("conduit_type", "")) != "poly_penstock" and sgv.has_method("_auto_penstock_for_new_water_wires"):
+						# Diagnose: trigger never fired, or the logic skipped the wire?
+						sgv.call("_auto_penstock_for_new_water_wires")
+						await get_tree().create_timer(0.3).timeout
+						print("PlaytestHarness: penstock verify — direct restyle call → type '%s' (trigger flags now: history_suppress=%s sim_bulk=%s)" % [
+							str(model.get_connection(plain_id).get("conduit_type", "")),
+							str(sgv.get("_history_suppress")), str(sgv.get("_sim_bulk_update"))])
+						var dbg_tsp: Dictionary = (model.get_item(turbine_id) as Dictionary).get("specs", {})
+						var dbg_isp: Dictionary = (model.get_item(iid3) as Dictionary).get("specs", {})
+						var dbg_pc: Dictionary = model.get_connection(plain_id)
+						print("PlaytestHarness: penstock verify — restyle inputs: role '%s' kind '%s' has_penstock %s · handle '%s' direct_intake %s polarity '%s' rtype '%s' · intake is_stream_intake %s pond_storage %s" % [
+							str(dbg_tsp.get("role", "")), str(dbg_tsp.get("turbine_kind", "")),
+							str(HydroSource.kind_meta(str(dbg_tsp.get("turbine_kind", "siphon"))).get("has_penstock", false)),
+							str(dbg_pc.get("target_handle_id", "")), str(dbg_pc.get("direct_intake", false)),
+							str(dbg_pc.get("polarity", "")), str(dbg_pc.get("resource_type", "")),
+							str(ResourceFlowEngine.is_stream_intake(model.get_item(iid3))), str(dbg_isp.get("pond_storage", false))])
+					var n_pen4 := 0
+					for c in model.connections:
+						var cd6: Dictionary = c
+						if str(cd6.get("conduit_type", "")) == "poly_penstock" \
+								and (str(cd6.get("source_item_id", "")) == turbine_id or str(cd6.get("target_item_id", "")) == turbine_id):
+							n_pen4 += 1
+					fails += _pen_check("a hand-drawn intake→turbine water wire became the penstock (auto-restyle) [type '%s', %d penstock(s) on the turbine, wire %s]" % [
+							str(pc.get("conduit_type", "")), n_pen4, "present" if not pc.is_empty() else "GONE"],
+							str(pc.get("conduit_type", "")) == "poly_penstock" and n_pen4 == 1)
+				# Tiny Site Plan nodes draw and offer no ports.
+				var tiny_item: Dictionary = model.get_item(turbine_id)
+				var z_big: float = float(canvas.get("_zoom"))
+				canvas.set("_zoom", 0.02)
+				var tiny_sz: Vector2 = canvas.call("_item_screen_size", tiny_item)
+				var tiny_handles: Array = canvas.call("_get_interactive_handle_infos", tiny_item, Vector2.ZERO)
+				canvas.set("_zoom", z_big)
+				print("PlaytestHarness: penstock verify — Site Plan node %.1f px wide offers %d ports" % [tiny_sz.x, tiny_handles.size()])
+				fails += _pen_check("a Site Plan node under 44 px offers no port handles", tiny_sz.x < 44.0 and tiny_handles.is_empty())
+		(sgv as CanvasItem).visible = false
+		await get_tree().create_timer(0.4).timeout
+		# ---- First person: aiming at the creek focuses the STREAM, not the
+		# forest polygon it runs through.
+		if player is Node3D and cam != null:
+			var v0 := fpts[mini(2, fpts.size() - 1)]
+			var gy0 := float(loader.call("ground_height_at", v0.x, v0.y))
+			(player as Node3D).global_position = Vector3(v0.x + 4.0, gy0 + 0.2, v0.y + 4.0)
+			for _m in 4:
+				await get_tree().physics_frame
+			_aim_player_at(player as Node3D, cam, Vector3(v0.x, gy0, v0.y))
+			var vp2 := main.get_viewport()
+			await _lc_move(vp2, vp2.get_visible_rect().size * 0.5, true)
+			for _n in 5:
+				await get_tree().physics_frame
+			var focus2: Node = (player as Node).get_node_or_null("InteractionFocus")
+			var sfid := str(focus2.get("_stream_focus_id")) if focus2 != null else ""
+			print("PlaytestHarness: penstock verify — aim at the creek: stream focus '%s'" % sfid)
+			fails += _pen_check("aiming at the creek focuses the stream (not 'Fill forest')", sfid == nid)
+	# Aerial shot of the tapped reach.
+	if cam != null:
+		var mid := fpts[fpts.size() / 2]
+		var gy := float(loader.call("ground_height_at", mid.x, mid.y))
+		(player as Node3D).global_position = Vector3(mid.x, gy + 40.0, mid.y + 30.0)
+		for _k in 3:
+			await get_tree().physics_frame
+		_aim_player_at(player as Node3D, cam, Vector3(mid.x, gy, mid.y))
+		await get_tree().create_timer(0.8).timeout
+		await _graph_shot(dir, "07_stream_as_penstock", manifest)
+	# Hand the map's water back.
+	wn.call("undo")
+	_restore_files(snap)
+	return fails
 
 
 ## The PowerSpout preset specs from the library catalog.
@@ -7908,6 +10114,9 @@ func _pen_check(label: String, ok: bool) -> int:
 
 ## Remove this capture's turbine / intake items, their props and any wires
 ## between them, so the saved site is left as it was found.
+var _pen_keep := {}
+
+
 func _penstock_cleanup(model: Variant, main: Node) -> void:
 	var doomed: Array[String] = []
 	for it in (model.items as Array).duplicate():
@@ -7915,6 +10124,8 @@ func _penstock_cleanup(model: Variant, main: Node) -> void:
 			continue
 		var iid := str((it as Dictionary).get("id", ""))
 		var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if _pen_keep.has(iid):
+			continue
 		if iid.begins_with("cap_pen_") or str(sp.get("model_id", "")) == "stream_intake":
 			doomed.append(iid)
 			var pid := str(sp.get("bound_prop_id", ""))
@@ -7955,7 +10166,7 @@ func _run_window_wall_capture() -> void:
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	var main := get_tree().current_scene
 	if main == null or not main.has_method("open_window_wall_view"):
 		push_error("PlaytestHarness: Main has no window wall view — aborting")
@@ -8011,7 +10222,8 @@ func _run_window_wall_capture() -> void:
 		# Either real fullscreen or a borderless window covering the screen —
 		# both are shipping configurations (see WindowWallPrefs.WINDOW_MODES).
 		var scr_size := DisplayServer.screen_get_size(DisplayServer.window_get_current_screen(win.get_window_id()))
-		var covers := win.mode == Window.MODE_FULLSCREEN 			or (absi(win.size.x - scr_size.x) <= 4 and absi(win.size.y - scr_size.y) <= 4)
+		var covers := win.mode == Window.MODE_FULLSCREEN \
+			or (absi(win.size.x - scr_size.x) <= 4 and absi(win.size.y - scr_size.y) <= 4)
 		check.call("window %s in tree + covers its screen" % win.name,
 			win.is_inside_tree() and covers,
 			"mode=%d size=%s screen=%s" % [win.mode, win.size, scr_size])
@@ -8223,13 +10435,21 @@ const STAR_CAP_PASS_PX := 6.0
 const STAR_CAP_VIEWS: Array[String] = ["polaris", "betelgeuse", "sirius", "vega", "zenith"]
 
 
+## The shipped star look the marker-vs-texture measurement assumes.
+const STAR_CAP_LOOK := {
+	"star_trails": 0.0, "stars_brightness": 1.0, "stars_point_size": 0.0,
+	"stars_saturation": 1.5, "stars_wash": 0.7, "stars_background_cut": 0.02,
+	"stars_contrast": 1.4, "milkyway_gain": 1.3,
+}
+
+
 func _run_star_capture() -> void:
 	var tree := get_tree()
 	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
 		if tree.current_scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 
 	var main := _find_main()
 	if main == null or not main.has_method("get_star_system"):
@@ -8258,6 +10478,13 @@ func _run_star_capture() -> void:
 	if planets != null and planets.has_method("set_all_enabled"):
 		planets.call("set_all_enabled", false)
 	var saved_clouds: Variant = main.get("clouds_cutoff")
+	# The player's star LOOK (trails, dim brightness, low saturation...) is a
+	# taste, not a registration: it smears the discs the blob search measures,
+	# so the capture runs on the shipped look and hands theirs back after.
+	var star_look := {}
+	for k in STAR_CAP_LOOK:
+		star_look[k] = ss.get(k)
+		ss.set(k, STAR_CAP_LOOK[k])
 	_star_cap_set_night(main, 2026, 1, 15, 22.0)
 
 	var prev_cam := get_viewport().get_camera_3d()
@@ -8369,6 +10596,8 @@ func _run_star_capture() -> void:
 		planets.call("apply_settings", planet_prefs)
 	if saved_clouds != null:
 		main.set("clouds_cutoff", saved_clouds)
+	for k in star_look:
+		ss.set(k, star_look[k])
 	ss.call("set_reference_stars_visible", false)
 	for child in main.get_children():
 		if child is CanvasLayer:
@@ -8581,7 +10810,7 @@ func _run_dawn_capture() -> void:
 		if tree.current_scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 
 	var main := _find_main()
 	var sun: DirectionalLight3D = main.get("sun") as DirectionalLight3D if main != null else null
@@ -8733,7 +10962,7 @@ func _run_microclimate_capture() -> void:
 		if tree.current_scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 	var main := _find_main()
 	var mc := get_node_or_null("/root/Microclimate")
 	var ws := get_node_or_null("/root/WeatherService")
@@ -8952,7 +11181,7 @@ func _run_festival_capture() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var main := get_tree().current_scene
 	var sgv := await _find_graph_view()
@@ -9003,6 +11232,16 @@ func _run_festival_capture() -> void:
 	var zone_poly := PackedVector2Array([zc + Vector2(-hw, -hd), zc + Vector2(hw, -hd),
 		zc + Vector2(hw, hd), zc + Vector2(-hw, hd)])
 	loader.call("erase_camps_in_polygon", zone_poly)
+	# The WORLD may already hold camp compounds (Walton's painted camps carry
+	# headcounts): every count below is this run's DELTA over what was there.
+	for _f0 in 4:
+		await get_tree().process_frame
+	var sgv0: Node = ServiceLocator.graph()
+	var camps_before := (sgv0.call("festival_camps") as Array).size() if sgv0 != null and sgv0.has_method("festival_camps") else 0
+	var people_before := 0
+	if sgv0 != null and sgv0.get("model") != null:
+		people_before = int(CampLedger.festival(sgv0.get("model")).get("people", 0))
+	print("PlaytestHarness: festival — world already holds %d camp compound(s), %d people" % [camps_before, people_before])
 	var road_pts := FestivalPlacementLayer.road_from_zone_spine(zone_poly, 90.0)
 	var rid := str(loader.call("add_festival_road", road_pts, {"name": "Esplanade", "width_m": 8.0}))
 	var zid := str(loader.call("add_placement_zone", zone_poly, {
@@ -9039,8 +11278,9 @@ func _run_festival_capture() -> void:
 	var camps: Array = sgv.call("festival_camps")
 	print("PlaytestHarness: festival — road %s, zone %s: %d lots, %d people, %d camp compounds" % [
 		rid, zid, lots.size(), people, camps.size()])
-	_fest_result(lots.size() >= 12 and camps.size() == lots.size() and people >= 200,
-		"placement → graph: %d lots became %d camp compounds (%d people)" % [lots.size(), camps.size(), people])
+	_fest_result(lots.size() >= 12 and camps.size() - camps_before == lots.size() and people >= 200,
+		"placement → graph: %d lots became %d new camp compounds (%d people; %d were already there)" % [
+			lots.size(), camps.size() - camps_before, people, camps_before])
 
 	# --- 2. venues + infrastructure --------------------------------------------
 	var reg: SpaceRegistry = bridge.call("registry_for", main)
@@ -9195,11 +11435,23 @@ func _run_festival_capture() -> void:
 		"blackwater from the whole festival lands on BOTH portapotty banks' bound tanks")
 	var cr: Node = sgv.call("crowd_renderer") if sgv.has_method("crowd_renderer") else null
 	var full_drawn := int(cr.call("full_people_drawn")) if cr != null and cr.has_method("full_people_drawn") else -1
-	var hero_budget := int(main.get_node_or_null("NpcPopulationHost").call("hero_budget")) 		if main.get_node_or_null("NpcPopulationHost") != null else -1
+	var hero_budget := int(main.get_node_or_null("NpcPopulationHost").call("hero_budget")) \
+		if main.get_node_or_null("NpcPopulationHost") != null else -1
 	_fest_result(light_seen > 0 and full_seen > 0,
 		"both tiers ran (peak %d light-tier, %d full-tier people)" % [light_seen, full_seen])
-	_fest_result(full_drawn >= 0 and full_drawn >= full_seen - hero_budget - 5 and full_drawn <= full_seen,
-		"the hero pool handed the full tier past its budget to the crowd renderer (%d of %d drawn as crowd, budget %d)" % [full_drawn, full_seen, hero_budget])
+	# Same-moment numbers: full_seen is the PEAK over the day, while the hero
+	# pool and the overflow describe NOW (the full tier shrinks as the clock
+	# speeds and the budget is the quality tier's — Ultra is 64). Every
+	# full-tier person who is not a hero must be drawn by the crowd renderer.
+	var full_now := 0
+	for d in (bridge.call("agent_dots") as Array):
+		if str((d as Dictionary).get("tier", "")) != "light":
+			full_now += 1
+	var host_n: Node = main.get_node_or_null("NpcPopulationHost")
+	var heroes_now := (host_n.get("_hero_ids") as Dictionary).size() if host_n != null else -1
+	_fest_result(full_drawn >= 0 and heroes_now >= 0 and full_drawn >= full_now - heroes_now - 5 and full_drawn <= full_now,
+		"the hero pool handed the full tier past its budget to the crowd renderer (%d of %d full-tier now drawn as crowd, %d heroes, budget %d; peak full tier %d)" % [
+			full_drawn, full_now, heroes_now, hero_budget, full_seen])
 	var pstates: Dictionary = sgv.call("camp_power_states") if sgv.has_method("camp_power_states") else {}
 	var soc_stamped := 0
 	for c in camps:
@@ -9213,7 +11465,9 @@ func _run_festival_capture() -> void:
 	print("PlaytestHarness: festival — ledger: %d people, water demand %.1f L/h vs supply %.1f, open kinds across camps: %s" % [
 		int(fest.get("people", 0)), float(wrow.get("demand", 0.0)), float(wrow.get("supply", 0.0)) + float(wrow.get("imports", 0.0)),
 		str(_fest_open_kinds(fest))])
-	_fest_result(int(fest.get("people", 0)) == people, "the festival ledger counts the lots' people")
+	_fest_result(int(fest.get("people", 0)) - people_before == people,
+		"the festival ledger counts the lots' people (%d over the %d already there)" % [
+			int(fest.get("people", 0)) - people_before, people_before])
 	var v_before: Dictionary = vibe_samples[vibe_samples.size() - 1] if not vibe_samples.is_empty() else {}
 	print("PlaytestHarness: festival — vibe after the day: %s" % FestivalVibe.headline(v_before, vibe.trend()))
 
@@ -9359,7 +11613,7 @@ func _run_lights_capture() -> void:
 		if tree.current_scene != null else null
 	if loader != null and not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 	var main := _find_main()
 	if main == null:
 		push_error("PlaytestHarness: no Main — aborting lights capture")
@@ -9549,7 +11803,8 @@ func _run_lights_capture() -> void:
 		var from := cam.unproject_position(before_pin)
 		await _lc_drag(vp, from, from + Vector2(0, 60))
 		var after_pin: Vector3 = PlacedLightLayer.waypoints_of(layer.find_light(sid))[1]
-		_lc_result(PlacedLightService.group_ids_of_kind(main, "string").size() == 1 			and before_pin.distance_to(after_pin) > 0.3,
+		_lc_result(PlacedLightService.group_ids_of_kind(main, "string").size() == 1 \
+			and before_pin.distance_to(after_pin) > 0.3,
 			"with the String tool active, dragging a finished pin moves it (%.2f m) and starts no new string" % 			before_pin.distance_to(after_pin), fails)
 		# Ctrl+drag a pin: the WHOLE string moves, every pin by the same offset.
 		var pts0: Array = PlacedLightLayer.waypoints_of(layer.find_light(sid))
@@ -9587,12 +11842,24 @@ func _run_lights_capture() -> void:
 		await tree.process_frame
 		dock.call("_on_field", "effect", "rainbow_chase")
 		dock.call("_on_field", "fx_speed", 8.0)
+		# The effect clock is SimFxRate's lights track: it follows the SIM
+		# clock (frozen while paused), so run the chase at 1x for this check.
+		var ts_keep := float(main.get("time_scale"))
+		main.set("time_scale", 1.0 / 3600.0)
 		await tree.process_frame
 		var t0 := node.fx_time() if node != null else 0.0
 		await _graph_shot(dir, "02_rainbow_a", [], "lights")
 		await tree.create_timer(0.25).timeout
 		await _graph_shot(dir, "03_rainbow_b", [], "lights")
 		var t1 := node.fx_time() if node != null else 0.0
+		main.set("time_scale", 0.0)
+		await tree.process_frame
+		await tree.process_frame
+		var tp0 := node.fx_time() if node != null else 0.0
+		await tree.create_timer(0.3).timeout
+		var tp1 := node.fx_time() if node != null else 0.0
+		_lc_result(absf(tp1 - tp0) < 1e-6, "the chase freezes while the sim is paused", fails)
+		main.set("time_scale", ts_keep)
 		var fields: Dictionary = node.fields if node != null else {}
 		var c0 := LedEffects.color_at(fields, 0, node.bulb_count if node != null else 1, t0, Color.WHITE)
 		var c1 := LedEffects.color_at(fields, 0, node.bulb_count if node != null else 1, t1, Color.WHITE)
@@ -9626,11 +11893,22 @@ func _run_lights_capture() -> void:
 	if movers.size() == 2:
 		var beam_node := PlacedLightRuntime.find_node(main, str(movers[0])) as PlacedMoverLight
 		var laser_node := PlacedLightRuntime.find_node(main, str(movers[1])) as PlacedMoverLight
+		# Movers run on the SimFxRate lights track: frozen while the sim is
+		# paused, so sweep at 1x for this check.
+		var ts_keep2 := float(main.get("time_scale"))
+		main.set("time_scale", 1.0 / 3600.0)
+		await tree.process_frame
 		var dir0 := beam_node.beam_direction() if beam_node != null else Vector3.ZERO
-		await tree.create_timer(1.2).timeout
-		var dir1 := beam_node.beam_direction() if beam_node != null else Vector3.ZERO
-		var swept := rad_to_deg(dir0.angle_to(dir1))
-		print("PlaytestHarness: lights — beam head swept %.1f° in 1.2 s, beam %.1f m" % [swept,
+		# The largest deviation over a window, not two samples: at the end of
+		# a swing the head is momentarily still, so a fixed pair of samples
+		# depends on where in its program the clock happens to be.
+		var swept := 0.0
+		for _k in 12:
+			await tree.create_timer(0.2).timeout
+			var dk := beam_node.beam_direction() if beam_node != null else Vector3.ZERO
+			swept = maxf(swept, rad_to_deg(dir0.angle_to(dk)))
+		main.set("time_scale", ts_keep2)
+		print("PlaytestHarness: lights — beam head swept up to %.1f° over 2.4 s, beam %.1f m" % [swept,
 			beam_node.beam_length() if beam_node != null else -1.0])
 		_lc_result(swept > 3.0, "the beam head sweeps on its program (%.1f°)" % swept, fails)
 		var beams := laser_node.find_children("Laser_*", "", true, false).size() if laser_node != null else 0
@@ -9720,7 +11998,7 @@ func _run_prop_edit_capture() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await tree.create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await tree.create_timer(_settle_s()).timeout
 	var main := _find_main()
 	if main == null:
 		_maybe_quit()
@@ -9995,6 +12273,291 @@ func _fm_result(ok: bool, label: String) -> void:
 	print("PlaytestHarness: festivalmode %s — %s" % ["PASS" if ok else "FAIL", label])
 
 
+## For `frames` frames, is every one of `ids` DRAWN (an avatar or a crowd
+## figure, via NpcPopulationHost.drawn_position) within 25 m of their sim
+## position (the glide runs a tick behind the sim; 25 m catches a figure
+## parked at the world origin)? Light-tier people only count while the light crowd is shown
+## (switched off they are simulated-but-hidden by the player's choice).
+## Returns {people, worst_frame, mean, ever_missing, reasons: {why: n}}.
+func _fm_visibility_probe(main: Node, bridge, ids: Array, frames: int) -> Dictionary:
+	var host := main.get_node_or_null("NpcPopulationHost")
+	if host == null or bridge == null:
+		return {"people": 0, "worst_frame": 0.0}
+	var want: Dictionary = {}
+	for id in ids:
+		want[str(id)] = true
+	var worst := 1.0
+	var sum := 0.0
+	var counted := 0
+	var people := 0
+	var missing_ever: Dictionary = {}
+	var reasons: Dictionary = {}
+	for f in frames:
+		await get_tree().process_frame
+		var heroes: Dictionary = host.get("_hero_ids") if host.get("_hero_ids") is Dictionary else {}
+		var n := 0
+		var ok := 0
+		for d in bridge.agent_dots():
+			var dd: Dictionary = d
+			var id := str(dd.get("id", ""))
+			if not want.has(id):
+				continue
+			var light := str(dd.get("tier", "")) == "light"
+			if light and not NpcDisplayPrefs.light_crowd():
+				continue
+			n += 1
+			var sp: Vector2 = dd.get("pos", Vector2.ZERO)
+			var p: Variant = host.call("drawn_position", id)
+			var why := ""
+			if not (p is Vector3):
+				why = "missing"
+			elif Vector2((p as Vector3).x, (p as Vector3).z).distance_to(sp) > 25.0:
+				why = "misplaced"
+			if why.is_empty():
+				ok += 1
+				continue
+			missing_ever[id] = true
+			var key := "%s %s %s" % [why, "light" if light else "full", "hero" if heroes.has(id) else "crowd"]
+			reasons[key] = int(reasons.get(key, 0)) + 1
+		if n == 0:
+			continue
+		people = maxi(people, n)
+		var frac := float(ok) / float(n)
+		worst = minf(worst, frac)
+		sum += frac
+		counted += 1
+	return {"people": people, "worst_frame": worst if counted > 0 else 0.0,
+		"mean": sum / float(counted) if counted > 0 else 0.0,
+		"ever_missing": missing_ever.size(), "reasons": reasons,
+		"heroes": (host.get("_hero_ids") as Dictionary).size() if host.get("_hero_ids") is Dictionary else -1,
+		"budget": host.call("hero_budget")}
+
+
+# --capture=popin (WINDOWED, needs a map with painted camps — Walton): opens
+# festival mode, parks the settlement view at street height over the evening
+# crowd and WATCHES: every frame, every person within POPIN_R_M of the camera
+# who was there the frame before is checked through
+# NpcPopulationHost.drawn_position. A person drawn last frame and not now is
+# a VANISH, the reverse an APPEAR, a drawn body that moves more than
+# POPIN_JUMP_M beyond honest walking in one frame a JUMP. Each event is tagged with its cause
+# (tier, hero or crowd figure, whether their camp just changed tier, whether
+# the roster itself lost/gained them) and the frame time. Phase A holds the
+# camera still; phase B jumps it the way a toast's click-to-look does.
+# --light=on|off overrides the player's light-crowd setting for the run;
+# --ts=N the clock multiple (try 60). Snapshots and byte-restores the files
+# festival mode touches.
+const POPIN_R_M := 70.0
+const POPIN_JUMP_M := 4.0
+
+
+func _run_popin_capture() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null or not loader.has_method("populate_camp_areas"):
+		push_error("PlaytestHarness: popin needs a TerrainLoader map (painted camps)")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(_settle_s()).timeout
+	_set_capture_conditions()
+	var main := get_tree().current_scene
+	var sgv := await _find_graph_view()
+	if sgv == null or not main.has_method("open_festival_mode"):
+		push_error("PlaytestHarness: popin — graph view or Main entry point unavailable")
+		_maybe_quit()
+		return
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var files := [CampAreaLayer.save_path_for_map(lat, lon), FestivalPlacementLayer.save_path_for_map(lat, lon),
+		SpaceRegistry.new().save_path_for_map(lat, lon), NpcDisplayPrefs.CFG_PATH,
+		PlacedPropLayer.new().save_path_for_map(lat, lon)]
+	var mdir := DirAccess.open("user://maps")
+	if mdir != null:
+		for fn in mdir.get_files():
+			if fn.begins_with("peak_experience_"):
+				files.append("user://maps/" + fn)
+	# In a per-world (dir) world the score lives in the world's folder.
+	var peak_world := WorldPaths.site_file("peak_experience", lat, lon)
+	if not files.has(peak_world):
+		files.append(peak_world)
+	if sgv.has_method("_graph_autosave_path"):
+		files.append(str(sgv.call("_graph_autosave_path")))
+	var snap := _snapshot_files(files)
+	if _popin_light == "on" or _popin_light == "off":
+		NpcDisplayPrefs.set_light_crowd(_popin_light == "on")
+	if "year" in main:
+		main.year = 2026
+		main.month = 7
+		main.day = 15
+	main.call("open_festival_mode")
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 15000:
+		var fm0: Variant = main.get("festival_mode")
+		if fm0 != null and bool(fm0.call("is_active")):
+			break
+		await get_tree().process_frame
+	await get_tree().create_timer(1.5).timeout
+	var bridge: Variant = sgv.call("npc_population_bridge")
+	var reg: SpaceRegistry = bridge.call("registry_for", main)
+	# The evening: a set is on, the crowd is out.
+	if "day_time" in main:
+		main.day_time = 20.5
+	var mult := _bench_ts_mult if _bench_ts_mult < 449.0 else 60.0
+	main.time_scale = mult / 3600.0
+	var focus := Vector2.ZERO
+	for rec in reg.spaces:
+		if str((rec as Dictionary).get("space_type", "")) == "stage":
+			var sp: Variant = reg.resolve_position(rec, main)
+			if sp is Vector2:
+				focus = sp
+				break
+	var sv: Variant = main.get("settlement_view")
+	var cam: Variant = sv.get("_cam") if sv != null else null
+	if cam != null:
+		cam.call("look_at_xz", focus)
+		cam.set("_h_target", 14.0)
+	print("PlaytestHarness: popin — light crowd %s, %.0fx, watching %.0f m round (%.0f, %.0f); full-figure budget %s" % [
+		"ON" if NpcDisplayPrefs.light_crowd() else "OFF", mult, POPIN_R_M, focus.x, focus.y,
+		str(main.get_node_or_null("NpcPopulationHost").call("hero_budget")) if main.get_node_or_null("NpcPopulationHost") != null else "?"])
+	await get_tree().create_timer(6.0).timeout   # let the camera settle and people arrive
+	var a := await _popin_watch(main, bridge, 40.0, [])
+	print("PlaytestHarness: popin — phase A (still camera, 40 s): %s" % str(a["summary"]))
+	for line in a["lines"]:
+		print("PlaytestHarness: popin —   %s" % line)
+	# Phase B: jump the camera between camps (a toast's click-to-look).
+	var hops: Array = []
+	var far: Array = []
+	for d in bridge.agent_dots():
+		var dp: Vector2 = (d as Dictionary).get("pos", Vector2.ZERO)
+		if dp.distance_to(focus) > 120.0:
+			far.append(dp)
+	for k in mini(4, far.size()):
+		hops.append(far[(k * 97 + 13) % far.size()])
+	if hops.size() > 0:
+		hops.append(focus)
+	if hops.is_empty():
+		hops = [focus + Vector2(150, 0), focus]
+	var b := await _popin_watch(main, bridge, 10.0 * float(hops.size()), hops)
+	print("PlaytestHarness: popin — phase B (camera hops %d, %.0f s): %s" % [hops.size(), 10.0 * hops.size(), str(b["summary"])])
+	for line in b["lines"]:
+		print("PlaytestHarness: popin —   %s" % line)
+	if main.has_method("close_festival_mode"):
+		main.call("close_festival_mode")
+	main.time_scale = 0.0
+	await get_tree().create_timer(1.0).timeout
+	_restore_files(snap)
+	_maybe_quit()
+
+
+## Watch for `secs` seconds; with `hops`, move the camera to the next hop
+## every secs / hops.size() seconds. Returns {summary: {kind/cause: n},
+## lines: [first detailed events]}.
+func _popin_watch(main: Node, bridge, secs: float, hops: Array) -> Dictionary:
+	var host := main.get_node_or_null("NpcPopulationHost")
+	var sv: Variant = main.get("settlement_view")
+	var cam: Variant = sv.get("_cam") if sv != null else null
+	var prev_drawn: Dictionary = {}     # id -> Vector3 or null
+	var prev_heroes: Dictionary = {}
+	var prev_abs := float(main.call("get_absolute_hours"))
+	var prev_tiers: Dictionary = {}
+	var tier_changed_at: Dictionary = {}  # habitat id -> msec
+	var summary: Dictionary = {}
+	var lines: Array = []
+	var frames := 0
+	var hitches := 0
+	var start := Time.get_ticks_msec()
+	var hop_i := -1
+	var last_frame := Time.get_ticks_usec()
+	while Time.get_ticks_msec() - start < int(secs * 1000.0):
+		if not hops.is_empty():
+			var want := int(float(Time.get_ticks_msec() - start) / (secs * 1000.0 / float(hops.size())))
+			if want != hop_i and want < hops.size():
+				hop_i = want
+				if cam != null:
+					cam.call("look_at_xz", hops[hop_i])
+		await get_tree().process_frame
+		frames += 1
+		var now_us := Time.get_ticks_usec()
+		var dt_ms := float(now_us - last_frame) / 1000.0
+		last_frame = now_us
+		if dt_ms > 100.0:
+			hitches += 1
+		var abs_now := float(main.call("get_absolute_hours"))
+		var sim_s := (abs_now - prev_abs) * 3600.0
+		prev_abs = abs_now
+		var tiers: Dictionary = bridge.get("_tiers") if bridge.get("_tiers") is Dictionary else {}
+		for hid in tiers:
+			if prev_tiers.has(hid) and str(prev_tiers[hid]) != str(tiers[hid]):
+				tier_changed_at[hid] = Time.get_ticks_msec()
+				summary["camp tier switch " + str(tiers[hid])] = int(summary.get("camp tier switch " + str(tiers[hid]), 0)) + 1
+		prev_tiers = tiers.duplicate()
+		var c3: Vector3 = (get_viewport().get_camera_3d() as Camera3D).global_position
+		var c2 := Vector2(c3.x, c3.z)
+		var heroes: Dictionary = host.get("_hero_ids") if host != null and host.get("_hero_ids") is Dictionary else {}
+		var drawn_now: Dictionary = {}
+		var light_on := NpcDisplayPrefs.light_crowd()
+		# How far a figure can honestly move in this frame at this clock: a
+		# catch-up glide (CrowdRenderer.EASE_MPS, faster than a walk), with
+		# margin — beyond it a move is a jump (a teleport).
+		var walk_reach := CrowdRenderer.EASE_MPS * maxf(sim_s, 0.0) * 1.3
+		for d in bridge.agent_dots():
+			var dd: Dictionary = d
+			var id := str(dd.get("id", ""))
+			var sp: Vector2 = dd.get("pos", Vector2.ZERO)
+			if sp.distance_to(c2) > POPIN_R_M:
+				continue
+			var p: Variant = host.call("drawn_position", id) if host != null else null
+			drawn_now[id] = p
+			if not prev_drawn.has(id):
+				continue
+			var was: Variant = prev_drawn[id]
+			var kind := ""
+			if was is Vector3 and p == null:
+				kind = "VANISH"
+			elif was == null and p is Vector3:
+				kind = "APPEAR"
+			elif was is Vector3 and p is Vector3 and (p as Vector3).distance_to(was) > POPIN_JUMP_M + walk_reach:
+				kind = "JUMP"
+			if kind.is_empty():
+				continue
+			var tier := str(dd.get("tier", "full"))
+			var hid := str(bridge.call("habitat_of_agent", id))
+			var recent_switch := Time.get_ticks_msec() - int(tier_changed_at.get(hid, -100000)) < 2000
+			var cause := "%s %s %s%s%s" % [kind, tier, "hero" if heroes.has(id) else "crowd",
+				" camp-just-switched-tier" if recent_switch else "", "" if light_on or tier != "light" else " (light hidden)"]
+			summary[cause] = int(summary.get(cause, 0)) + 1
+			if lines.size() < 25:
+				var cr := main.get_node_or_null("CrowdRenderer")
+				var rec: Variant = (cr.get("_seg_rec") as Dictionary).get(id, null) if cr != null else null
+				var jump_txt := ""
+				if kind == "JUMP":
+					jump_txt = " moved %.1f m (%s -> %s, sim %s, hero last %s)" % [(p as Vector3).distance_to(was),
+						str(was), str(p), str(sp), str(prev_heroes.has(id))]
+				var rec_txt := "none"
+				if rec is Dictionary:
+					var rd: Dictionary = rec
+					rec_txt = "full=%s t0-now=%.1fs t1-now=%.1fs a=%s b=%s" % [str(rd.get("full")),
+						(float(rd["t0"]) - abs_now) * 3600.0, (float(rd["t1"]) - abs_now) * 3600.0, str(rd["a"]), str(rd["b"])]
+				lines.append("%s %s '%s' state=%d act=%s pose=%s dist=%.0f m frame %.0f ms (sim %.1f s)%s; rec %s" % [
+					cause, id, str(dd.get("name", "")), int(dd.get("state", -1)), str(dd.get("activity", "")),
+					str(dd.get("venue_pose", "")), sp.distance_to(c2), dt_ms, sim_s, jump_txt, rec_txt])
+		# Roster: in range last frame, gone from the dots now.
+		for id in prev_drawn:
+			if not drawn_now.has(id) and prev_drawn[id] is Vector3:
+				var still := false
+				for d2 in bridge.agent_dots():
+					if str((d2 as Dictionary).get("id", "")) == str(id):
+						still = true
+						break
+				if not still:
+					summary["LEFT ROSTER while drawn"] = int(summary.get("LEFT ROSTER while drawn", 0)) + 1
+		prev_drawn = drawn_now
+		prev_heroes = heroes.duplicate()
+	summary["frames"] = frames
+	summary["hitch frames >100 ms"] = hitches
+	return {"summary": summary, "lines": lines}
+
+
 func _run_festival_mode_capture() -> void:
 	var loader := await _find_terrain_loader()
 	if loader == null or not loader.has_method("populate_camp_areas"):
@@ -10003,7 +12566,7 @@ func _run_festival_mode_capture() -> void:
 		return
 	if not (loader.get("load_completed") == true):
 		await loader.map_load_complete
-	await get_tree().create_timer(SETTLE_AFTER_LOAD_S).timeout
+	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var main := get_tree().current_scene
 	var sgv := await _find_graph_view()
@@ -10011,6 +12574,20 @@ func _run_festival_mode_capture() -> void:
 		push_error("PlaytestHarness: festivalmode — graph model or Main entry point unavailable")
 		_maybe_quit()
 		return
+	# The Peak Experience score is the PLAYER'S: snapshot its file and put it
+	# back afterwards (the harness's own onsets must not count).
+	var peak_files := []
+	var mdir := DirAccess.open("user://maps")
+	if mdir != null:
+		for fn in mdir.get_files():
+			if fn.begins_with("peak_experience_"):
+				peak_files.append("user://maps/" + fn)
+	# In a per-world (dir) world the score lives in the world's folder.
+	var peak_world := WorldPaths.site_file("peak_experience",
+		float(loader.get("_lat")), float(loader.get("_lon")))
+	if not peak_files.has(peak_world):
+		peak_files.append(peak_world)
+	var peak_snap := _snapshot_files(peak_files)
 	var model: Variant = sgv.get("model")
 	var label := _shots_label if not _shots_label.is_empty() else "festivalmode"
 	var dir := "%s/%s" % [SHOTS_ROOT, label]
@@ -10112,7 +12689,22 @@ func _run_festival_mode_capture() -> void:
 		reg.spaces.size(), seeded, str(prefixed_types.keys()), str(present)])
 	_fm_result(FestivalSeedLayout.missing_types(present).is_empty(), "every required space type is tagged")
 	_fm_result(seeded > 0, "the mode seeded venues (%d)" % seeded)
-	_fm_result(sleep_areas == camps.size(), "one seeded sleep area per camp (%d for %d camps)" % [sleep_areas, camps.size()])
+	# Every camp has beds: a seeded sleep area, or one the player tagged
+	# inside its outline (FestivalSeedLayout.needs_seeding).
+	var own_beds := 0
+	for c_v in camps:
+		var cpoly: PackedVector2Array = loader.call("camp_lot_polygon", str((c_v as Dictionary).get("lot_id", ""))) \
+			if loader != null and loader.has_method("camp_lot_polygon") else PackedVector2Array()
+		for rec_s in reg.spaces:
+			var rs: Dictionary = rec_s
+			if str(rs.get("space_type", "")) != "sleep" or str(rs.get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
+				continue
+			var sp_v: Variant = reg.resolve_position(rs, main)
+			if sp_v is Vector2 and cpoly.size() >= 3 and Geometry2D.is_point_in_polygon(sp_v, cpoly):
+				own_beds += 1
+				break
+	_fm_result(sleep_areas + own_beds == camps.size(),
+		"every camp has beds: %d seeded + %d already tagged inside the camp, for %d camps" % [sleep_areas, own_beds, camps.size()])
 	var stage_set := false
 	for rec in reg.spaces:
 		var rd: Dictionary = rec
@@ -10176,6 +12768,60 @@ func _run_festival_mode_capture() -> void:
 	_fm_result(seen > 0 and moved >= int(float(seen) * 0.25), "people moved over the run (%d of %d)" % [moved, seen])
 	_fm_result(float(vibe.get("blocked_share", 1.0)) <= 0.0, "nobody is blocked on a need (ideal supply)")
 	await _shoot_ui(dir, "01_festival_open")
+
+	# --- the afternoon: SOCIAL blocks, nobody standing about ------------------
+	# Before NpcSocial the festival day's FREE blocks left ~80 % of people
+	# standing where they had last eaten from late morning to dinner.
+	main.time_scale = 0.05
+	fm.call("jump_to_hour", 14.6)
+	await get_tree().create_timer(8.0).timeout
+	var idle_n := 0
+	var mingle_n := 0
+	var all_n := 0
+	for d in bridge.call("agent_dots"):
+		var dd: Dictionary = d
+		all_n += 1
+		var act0 := str(dd.get("activity", ""))
+		if act0 == NpcSocial.ACTIVITY:
+			mingle_n += 1
+		elif act0.is_empty() and int(dd.get("state", 0)) != NpcAgent.State.TRAVELING:
+			idle_n += 1
+	print("PlaytestHarness: festivalmode — afternoon (~14:40): %d of %d idle in place, %d mingling or wandering" % [
+		idle_n, all_n, mingle_n])
+	_fm_result(all_n > 0 and float(idle_n) / float(all_n) < 0.15,
+		"the afternoon is social: under 15 %% idle in place (%d of %d)" % [idle_n, all_n])
+	_fm_result(mingle_n > all_n / 10, "people chat in camp circles and wander (%d)" % mingle_n)
+
+	# --- weather as an attractor (NpcComfort), forced through the bridge's
+	# override so the run does not depend on the archive's actual weather ----
+	bridge.set("comfort_override", {"heat": 0.8, "cold": 0.0, "rain": 0.0, "night": false})
+	await get_tree().create_timer(14.0).timeout
+	var shade_n := 0
+	var shade_doing := 0
+	var cm_all := 0
+	for d in bridge.call("agent_dots"):
+		var dd: Dictionary = d
+		cm_all += 1
+		if str(dd.get("comfort", "")) == NpcComfort.KIND_SHADE:
+			shade_n += 1
+			if int(dd.get("state", 0)) == NpcAgent.State.DOING:
+				shade_doing += 1
+	print("PlaytestHarness: festivalmode — scorching afternoon (heat pull 0.8): %d of %d heading for or in the shade (%d settled)" % [
+		shade_n, cm_all, shade_doing])
+	_fm_result(cm_all > 0 and float(shade_n) / float(cm_all) > 0.15,
+		"a hot sunny afternoon draws people into the shade (%d of %d)" % [shade_n, cm_all])
+	await _shoot_ui(dir, "02b_shade")
+	bridge.set("comfort_override", {"heat": 0.0, "cold": 0.0, "rain": 0.95, "night": false})
+	await get_tree().create_timer(8.0).timeout
+	var shelter_n := 0
+	for d in bridge.call("agent_dots"):
+		if str((d as Dictionary).get("comfort", "")) == NpcComfort.KIND_SHELTER:
+			shelter_n += 1
+	print("PlaytestHarness: festivalmode — downpour (rain pull 0.95): %d of %d sheltering" % [shelter_n, cm_all])
+	_fm_result(cm_all > 0 and float(shelter_n) / float(cm_all) > 0.3,
+		"hard rain sends people under cover or into their tents (%d of %d)" % [shelter_n, cm_all])
+	await _shoot_ui(dir, "02c_rain")
+	bridge.set("comfort_override", {})
 	fm.call("jump_to_hour", 21.0)
 	await get_tree().create_timer(3.0).timeout
 	await _shoot_ui(dir, "02_evening")
@@ -10205,6 +12851,8 @@ func _run_festival_mode_capture() -> void:
 	var in_front := 0
 	var raving := 0
 	var behind_dump := 0
+	var raving_dump := 0
+	var at_dark_stage := 0
 	var sf: Vector2 = stage_front.get("front", Vector2.ZERO)
 	var sfwd: Vector2 = stage_front.get("fwd", Vector2(0.0, 1.0))
 	# The map may carry more than one stage (the player's own plus the seeded
@@ -10217,8 +12865,10 @@ func _run_festival_mode_capture() -> void:
 			continue
 		var sc: Variant = reg.cached_position(str(rd["id"]))
 		var fr: Dictionary = bridge.call("venue_front", str(rd["id"]))
-		if sc is Vector2 and not fr.is_empty():
-			stage_fronts.append({"centre": sc, "front": fr["front"], "fwd": fr["fwd"]})
+		var vs: Dictionary = bridge.call("venue_state", str(rd["id"]))
+		if sc is Vector2 and fr.has("front"):
+			stage_fronts.append({"centre": sc, "front": fr["front"], "fwd": fr["fwd"],
+				"live": bool(vs.get("active", false)) and bool(vs.get("programmed", false))})
 	for d in bridge.call("agent_dots"):
 		var dd: Dictionary = d
 		if str(dd.get("space_type", "")) != "stage" or int(dd.get("state", 0)) != NpcAgent.State.DOING:
@@ -10231,22 +12881,258 @@ func _run_festival_mode_capture() -> void:
 				best = sfr
 		var f2: Vector2 = best.get("front", sf)
 		var w2: Vector2 = best.get("fwd", sfwd)
-		if (pp - f2).dot(w2) > 0.0:
+		if not bool(best.get("live", true)):
+			pass   # a stage with no set has no fan: counted out below
+		elif (pp - f2).dot(w2) > 0.0:
 			in_front += 1
 		elif behind_dump < 6:
 			behind_dump += 1
 			print("PlaytestHarness: festivalmode — BEHIND the speakers: %s tier=%s pose=%s ahead=%.1f m, %.1f m from the stage centre, status '%s'" % [
 				str(dd.get("id", "")), str(dd.get("tier", "full")), str(dd.get("venue_pose", "")),
 				(pp - f2).dot(w2), pp.distance_to(best.get("centre", f2)), str(dd.get("status", ""))])
-		if str(dd.get("venue_pose", "")) == VenueCrowd.POSE_RAVE:
+		# Only a stage with a set ON raves; a player's own unprogrammed stage
+		# (Walton has one) is an ordinary gathering spot.
+		if not bool(best.get("live", true)):
+			at_dark_stage += 1
+		elif str(dd.get("venue_pose", "")) == VenueCrowd.POSE_RAVE:
 			raving += 1
+		elif raving_dump < 4:
+			raving_dump += 1
+			var dump := dd.duplicate()
+			dump.erase("anim_map")
+			dump.erase("trail")
+			print("PlaytestHarness: festivalmode — NOT raving at a stage: %s" % str(dump))
 	print("PlaytestHarness: festivalmode — bass stage at 21:00: %d at the stage, %d in front of the speakers, %d raving; front %s fwd %s" % [
 		at_stage, in_front, raving, str(sf), str(sfwd)])
+	# Where the evening went: per venue type (an unlit effigy is a hang-out
+	# all day, but must not empty a headline set).
+	var by_venue: Dictionary = {}
+	for d in bridge.call("agent_dots"):
+		var stv := str((d as Dictionary).get("space_type", ""))
+		if not stv.is_empty():
+			by_venue[stv] = int(by_venue.get(stv, 0)) + 1
+	print("PlaytestHarness: festivalmode — at 21:00 by venue type: %s" % str(by_venue))
 	_fm_result(at_stage >= 20, "a crowd gathers at the bass stage for the set (%d)" % at_stage)
-	_fm_result(at_stage > 0 and in_front >= int(float(at_stage) * 0.9),
-		"the crowd stands in FRONT of the speakers (%d of %d)" % [in_front, at_stage])
-	_fm_result(at_stage > 0 and raving >= int(float(at_stage) * 0.9),
-		"the crowd at a live set raves (%d of %d)" % [raving, at_stage])
+	_fm_result(at_stage > 0 and in_front >= int(float(at_stage - at_dark_stage) * 0.9),
+		"the crowd at a live set stands in FRONT of the speakers (%d of %d)" % [
+			in_front, at_stage - at_dark_stage])
+	_fm_result(at_stage > 0 and raving >= int(float(at_stage - at_dark_stage) * 0.9),
+		"the crowd at a live set raves (%d of %d; %d at a stage with no set)" % [
+			raving, at_stage - at_dark_stage, at_dark_stage])
+	# --- THE BEAT: the live set publishes one (StageMusic -> StageBeat), the
+	# crowd in front of the speakers hears it, the shader has it.
+	for _i in 3:
+		await get_tree().process_frame
+	var beat_here := StageBeat.at(Vector3(sf.x + sfwd.x * 8.0, 0.0, sf.y + sfwd.y * 8.0), false)
+	var beat_later := {}
+	if not beat_here.is_empty():
+		await get_tree().create_timer(0.5).timeout
+		beat_later = StageBeat.at(Vector3(sf.x + sfwd.x * 8.0, 0.0, sf.y + sfwd.y * 8.0), false)
+	print("PlaytestHarness: festivalmode — the beat at the bass stage: %s" % str(beat_here))
+	_fm_result(not beat_here.is_empty() and float(beat_here.get("bpm", 0.0)) > 60.0,
+		"the live set has a BEAT the crowd in front of it hears (%.0f BPM, %s)" % [
+			float(beat_here.get("bpm", 0.0)), "a track" if bool(beat_here.get("live", false)) else "virtual"])
+	_fm_result(not beat_later.is_empty() and float(beat_later["beat"]) > float(beat_here["beat"]),
+		"...and it moves on in real time (the music plays at 1x whatever the sim speed)")
+	var pushed: Vector4 = StageBeat.pushed_pos[0]
+	_fm_result(pushed.z > 0.0, "...and the crowd shader has it (music_pos0 radius %.0f)" % pushed.z)
+
+	# --- the DJ: one person per live stage, on the deck, facing the crowd ----
+	var djs: Dictionary = bridge.call("djs")
+	var live_stages := 0
+	var djs_ok := 0
+	var prop_dj_elev := -1.0
+	var dj_pos := Vector2.INF
+	var dj_by_id := {}
+	for d in bridge.call("agent_dots"):
+		dj_by_id[str((d as Dictionary).get("id", ""))] = d
+	for rec in reg.spaces:
+		var rd2: Dictionary = rec
+		if str(rd2.get("space_type", "")) != "stage":
+			continue
+		var vs2: Dictionary = bridge.call("venue_state", str(rd2["id"]))
+		if not (bool(vs2.get("active", false)) and bool(vs2.get("programmed", false))):
+			continue
+		live_stages += 1
+		var who := str(djs.get(str(rd2["id"]), ""))
+		var dd2: Dictionary = dj_by_id.get(who, {})
+		var fr2: Dictionary = bridge.call("venue_front", str(rd2["id"]))
+		var on_mark := not dd2.is_empty() and int(dd2.get("state", 0)) == NpcAgent.State.DOING \
+			and str(dd2.get("venue_pose", "")) == VenueCrowd.POSE_DJ
+		print("PlaytestHarness: festivalmode — DJ at %s '%s': %s tier=%s status '%s' elev %.2f m pos %s fwd %s" % [
+			str(rd2["id"]), str(rd2.get("label", "")), who, str(dd2.get("tier", "full")), str(dd2.get("status", "")),
+			float(dd2.get("elev", 0.0)), str(dd2.get("pos", Vector2.ZERO)), str(fr2.get("fwd", Vector2.ZERO))])
+		if on_mark:
+			djs_ok += 1
+			dj_pos = dd2.get("pos", Vector2.INF)
+			var tgt2: Dictionary = rd2.get("target", {})
+			if str(tgt2.get("kind", "")) == "prop":
+				# Expected: the record's deck height, else what the bridge
+				# measures off the model (a carport has no deck: 0 m).
+				var want := float(rd2.get("perform_h_m", -1.0))
+				if want < 0.0:
+					want = maxf(float(bridge.call("stage_deck_m", main, str(tgt2.get("prop_id", "")))), 0.0)
+				var got := float(dd2.get("elev", 0.0))
+				prop_dj_elev = maxf(prop_dj_elev, 0.0)
+				if absf(got - want) > 0.05:
+					prop_dj_elev = -99.0
+				print("PlaytestHarness: festivalmode — DJ deck at %s: %.2f m (expected %.2f)" % [str(rd2["id"]), got, want])
+	_fm_result(live_stages > 0 and djs_ok == live_stages,
+		"every live stage has its DJ at the decks (%d of %d)" % [djs_ok, live_stages])
+	if prop_dj_elev != -1.0:
+		_fm_result(prop_dj_elev >= 0.0,
+			"each prop stage's DJ stands at its deck height (set or measured)")
+	# --- PEAK EXPERIENCE: FUCK YES! spreads through the set's crowd ----------
+	var pk0: Dictionary = bridge.call("peak_score")
+	var series: Array = []
+	var morale_hist := {}
+	for k in 10:
+		await get_tree().create_timer(2.0).timeout    # ~0.1 sim-h at 180x
+		series.append(int(bridge.call("peaking_count")))
+	var pk1: Dictionary = bridge.call("peak_score")
+	var peakers: Array = []
+	var vib_n := 0
+	for d in bridge.call("agent_dots"):
+		var dd4: Dictionary = d
+		if not is_nan(float(dd4.get("peak_since", NAN))):
+			peakers.append(dd4.get("pos", Vector2.ZERO))
+		if str(dd4.get("space_type", "")) == "stage" and int(dd4.get("state", 0)) == NpcAgent.State.DOING:
+			var mb := int(floor(float(dd4.get("morale", 0.0)) * 10.0))
+			morale_hist[mb] = int(morale_hist.get(mb, 0)) + 1
+			vib_n += 1
+	var clustered := 0
+	for a_p in peakers:
+		for b_p in peakers:
+			if a_p != b_p and (a_p as Vector2).distance_to(b_p) <= 9.0:
+				clustered += 1
+				break
+	print("PlaytestHarness: festivalmode — peak experience: score %d -> %d, peaking over ~1 sim-h %s; %d peaking now, %d of them with another within 9 m; stage crowd morale tenths %s" % [
+		int(pk0.get("total", 0)), int(pk1.get("total", 0)), str(series), peakers.size(), clustered, str(morale_hist)])
+	_fm_result(int(pk1.get("total", 0)) > int(pk0.get("total", 0)), "people hit FUCK YES! at the set (score %d -> %d)" % [
+		int(pk0.get("total", 0)), int(pk1.get("total", 0))])
+	var max_pk := 0
+	for s in series:
+		max_pk = maxi(max_pk, int(s))
+	_fm_result(max_pk >= 10, "a peak spreads through the crowd (up to %d peaking at once)" % max_pk)
+	_fm_result(peakers.size() > 0 and clustered >= int(float(peakers.size()) * 0.7),
+		"peakers are together, not scattered (%d of %d within 9 m of another)" % [clustered, peakers.size()])
+	var toast: Node = main.get_node_or_null("PeakToast")
+	_fm_result(toast != null and int(toast.get("toasts_started")) > 0 and int(toast.get("shown_onsets")) > 0,
+		"the FUCK YES! toast fired (%d toasts, %d onsets shown)" % [
+			int(toast.get("toasts_started")) if toast != null else 0, int(toast.get("shown_onsets")) if toast != null else 0])
+	# The FUCK YES beacon stands on the body it names, and stays on it.
+	var beacon: Node = main.get_node_or_null("PeakBeacon")
+	var host_b: Node = sgv.call("npc_population_host") if sgv.has_method("npc_population_host") else null
+	if beacon != null and host_b != null:
+		var lb: Dictionary = {}
+		for k in 40:
+			lb = beacon.call("latest")
+			if not lb.is_empty():
+				break
+			await get_tree().create_timer(0.25).timeout
+		if lb.is_empty():
+			print("PlaytestHarness: festivalmode — no beacon was up to measure (no onset in the window)")
+		else:
+			var worst := 0.0
+			var lost := 0
+			var jump := 0.0
+			var prev_d: Variant = null
+			for k in 30:
+				await get_tree().process_frame
+				var cur: Dictionary = beacon.call("latest")
+				if cur.is_empty() or str(cur["id"]) != str(lb["id"]):
+					break
+				var dpos: Variant = host_b.call("drawn_position", str(lb["id"]))
+				if not (dpos is Vector3):
+					lost += 1
+					continue
+				var bp: Vector3 = cur["pos"]
+				worst = maxf(worst, Vector2(bp.x, bp.z).distance_to(Vector2((dpos as Vector3).x, (dpos as Vector3).z)))
+				if prev_d is Vector3:
+					jump = maxf(jump, (dpos as Vector3).distance_to(prev_d))
+				prev_d = dpos
+			print("PlaytestHarness: festivalmode — beacon on %s: worst offset from the drawn body %.2f m, %d frames unseen, biggest frame step %.2f m" % [
+				str(lb["name"]), worst, lost, jump])
+			_fm_result(worst <= 0.3 and lost == 0,
+				"the beacon stays locked on the person it names (worst %.2f m, %d frames unseen)" % [worst, lost])
+	var bar_seen := false
+	var host_n: Node = sgv.call("npc_population_host") if sgv.has_method("npc_population_host") else null
+	if host_n != null:
+		for av_n in host_n.get_children():
+			if av_n is NpcAvatar:
+				var sb := (av_n as Node).get_node_or_null("Labels/Stack/StatusBar")
+				if sb != null and (sb as Node3D).visible:
+					for ch in sb.get_children():
+						if ch is MeshInstance3D and (ch as MeshInstance3D).visible:
+							bar_seen = true
+	_fm_result(NpcDisplayPrefs.mood_bars() or not bar_seen, "no mood bars over heads by default (the glow says it)")
+	if cam != null and peakers.size() > 0:
+		# Frame where the peak IS: the peakers' centroid.
+		var pc := Vector2.ZERO
+		for p_p in peakers:
+			pc += p_p
+		pc /= float(peakers.size())
+		cam.call("look_at_xz", pc)
+		cam.set("_h_target", 22.0)
+		cam.set("_h", 22.0)
+		await get_tree().create_timer(1.0).timeout
+		await _shoot_ui(dir, "04d_peak_experience")
+		cam.set("_h_target", 300.0)
+		cam.set("_h", 300.0)
+		await get_tree().create_timer(1.0).timeout
+		await _shoot_ui(dir, "04e_peak_far")
+	var night_pushed := float(main.get("_npc_night_pushed"))
+	_fm_result(night_pushed > 0.5, "it is night for the glow sticks (npc_night %.2f)" % night_pushed)
+	if cam != null and dj_pos != Vector2.INF:
+		cam.call("look_at_xz", dj_pos)
+		cam.set("_h_target", 9.0)
+		cam.set("_h", 9.0)
+		await get_tree().create_timer(1.0).timeout
+		await _shoot_ui(dir, "04b_dj_and_glow")
+
+	# --- a firepit: placed, tagged as a fire circle, lit, warming people -----
+	var pit_at := Vector2.ZERO
+	var poly0: Variant = polys[0] if polys.size() > 0 else null
+	if poly0 != null and (poly0 as PackedVector2Array).size() > 0:
+		for v in (poly0 as PackedVector2Array):
+			pit_at += v
+		pit_at /= float((poly0 as PackedVector2Array).size())
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(main, FirepitBuilder.MODEL_ID,
+		pit_at.x, pit_at.y, {"firepit_mode": FirepitBuilder.MODE_ON})
+	var pit_id := str(placed.get("prop_id", ""))
+	_fm_result(not pit_id.is_empty(), "a firepit can be placed like any prop")
+	bridge.set("comfort_override", {"heat": 0.0, "cold": 0.8, "rain": 0.0, "night": true})
+	await get_tree().create_timer(12.0).timeout
+	var pit_sid := str(reg.space_for_target({"kind": "prop", "prop_id": pit_id}).get("id", ""))
+	var pit_state: Dictionary = bridge.call("venue_state", pit_sid) if not pit_sid.is_empty() else {}
+	var pit_node := PlacedPropRuntime.find_by_prop_id(main, pit_id)
+	var fire_node: Node = pit_node.find_child("FirepitFire", true, false) if pit_node != null else null
+	_fm_result(not pit_sid.is_empty() and str(reg.find_by_id(pit_sid).get("space_type", "")) == "fire_circle",
+		"placing a firepit tags it as a fire circle")
+	_fm_result(bool(pit_state.get("lit", false)) and fire_node != null and bool(fire_node.call("is_lit")),
+		"the firepit burns (bridge and fire agree)")
+	var warm_n := 0
+	var at_pit := 0
+	for d in bridge.call("agent_dots"):
+		var dd3: Dictionary = d
+		if str(dd3.get("comfort", "")) == NpcComfort.KIND_WARM:
+			warm_n += 1
+		if (dd3.get("pos", Vector2.INF) as Vector2).distance_to(pit_at) < 3.5 \
+				and int(dd3.get("state", 0)) == NpcAgent.State.DOING:
+			at_pit += 1
+	print("PlaytestHarness: festivalmode — cold night (pull 0.8): %d warming up, %d round the new firepit" % [warm_n, at_pit])
+	_fm_result(warm_n > 0, "a cold night draws people to warmth (%d)" % warm_n)
+	if cam != null:
+		cam.call("look_at_xz", pit_at)
+		cam.set("_h_target", 10.0)
+		cam.set("_h", 10.0)
+		await get_tree().create_timer(1.0).timeout
+		await _shoot_ui(dir, "04c_firepit")
+	bridge.set("comfort_override", {})
+	if not pit_id.is_empty() and loader.has_method("delete_prop_by_id"):
+		loader.call("delete_prop_by_id", pit_id)
+	if not pit_sid.is_empty():
+		reg.remove_space(pit_sid)
 	if cam != null and not stage_sid.is_empty():
 		# Frame the FAN (front edge + 12 m along the facing), not the stage
 		# centre — the crowd is in front of the speakers, by construction.
@@ -10270,6 +13156,116 @@ func _run_festival_mode_capture() -> void:
 		var pid := str((eff.get("target", {}) as Dictionary).get("prop_id", ""))
 		var ec: Variant = reg.cached_position(esid)
 		var ecv: Vector2 = ec if ec is Vector2 else Vector2.ZERO
+		# --- the PRE-ROLL: lit, no flame — the ring forms first ------------------
+		var pre_h := float(main.call("get_absolute_hours"))
+		loader.call("set_prop_burn_record", pid, FireTimeline.make(pre_h,
+			{"climb_h": 0.5, "bonfire_h": 1.0, "ember_h": 0.5, "mass_kg": 600.0,
+				"height_m": 8.0, "footprint_r_m": 3.0, "preroll_h": FireTimeline.EFFIGY_PREROLL_H}))
+		FireNode.sync_prop_fires(main, loader)
+		await get_tree().create_timer(4.0).timeout   # ~0.2 sim-h: the GATHER
+		var pre_rec: Dictionary = (PlacedPropService.get_prop_record(main, pid) as Dictionary).get("burn", {})
+		var pre_t := float(main.call("get_absolute_hours"))
+		var pre_es: Dictionary = bridge.call("venue_state", esid)
+		var pre_n := 0
+		var pre_min := INF
+		var pre_who: Dictionary = {}
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			var dp: Vector2 = dd.get("pos", Vector2.ZERO)
+			# Anyone STANDING still (walkers cross the edge on their way out);
+			# not a performer (the fire flow and the sandmen are inside on purpose).
+			if int(dd.get("state", 0)) != NpcAgent.State.TRAVELING and str(dd.get("activity", "")) != "perform":
+				if dp.distance_to(ecv) < pre_min:
+					pre_who = dd
+				pre_min = minf(pre_min, dp.distance_to(ecv))
+			if str(dd.get("space_type", "")) == "effigy" and int(dd.get("state", 0)) == NpcAgent.State.DOING:
+				pre_n += 1
+		var pre_r := float(pre_es.get("safe_r", 0.0))
+		print("PlaytestHarness: festivalmode — pre-roll: phase %s preroll=%s flame=%s, %d seated, nearest anyone %.1f m (perimeter %.1f)" % [
+			str(pre_es.get("phase_name", "")), str(pre_es.get("preroll", false)),
+			str(FireTimeline.has_flame(pre_rec, pre_t)), pre_n, pre_min, pre_r])
+		if pre_min < pre_r - 0.5:
+			print("PlaytestHarness: festivalmode — nearest in the pre-roll: %s tier=%s act=%s space=%s pose=%s comfort=%s status '%s'" % [
+				str(pre_who.get("id", "")), str(pre_who.get("tier", "full")), str(pre_who.get("activity", "")),
+				str(pre_who.get("space_type", "")), str(pre_who.get("venue_pose", "")),
+				str(pre_who.get("comfort", "")), str(pre_who.get("status", ""))])
+		_fm_result(bool(pre_es.get("preroll", false)) and bool(pre_es.get("event", false))
+			and not FireTimeline.has_flame(pre_rec, pre_t),
+			"the pre-roll is an EVENT with no flame yet")
+		_fm_result(pre_n >= 20, "the ring forms BEFORE the first flame (%d seated)" % pre_n)
+		_fm_result(pre_min >= pre_r - 0.5,
+			"nobody stands still inside the perimeter during the pre-roll (nearest %.1f m, perimeter %.1f)" % [pre_min, pre_r])
+		_fm_result(str(pre_es.get("stage", "")) == VenueCrowd.STAGE_GATHER,
+			"the pre-roll opens with the GATHER (stage '%s')" % str(pre_es.get("stage", "")))
+		# --- the FIRE FLOW -------------------------------------------------------
+		await get_tree().create_timer(4.5).timeout   # ~0.43 sim-h: the flow
+		var fl_es: Dictionary = bridge.call("venue_state", esid)
+		var fl_roles: Dictionary = (bridge.call("burn_roles") as Dictionary).get(esid, {})
+		var fl_ids: Array = fl_roles.get("performers", [])
+		var fl_on_lane := 0
+		var fl_lane := float(fl_es.get("safe_r", pre_r)) * VenueCrowd.FLOW_LANE_FRAC
+		var fl_dist: Array = []
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if fl_ids.has(str(dd.get("id", ""))):
+				var dl := (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv)
+				fl_dist.append(snappedf(dl, 0.1))
+				if absf(dl - fl_lane) < 2.0 and str(dd.get("venue_pose", "")) == VenueCrowd.POSE_FIREFLOW:
+					fl_on_lane += 1
+		print("PlaytestHarness: festivalmode — fire flow: stage '%s', %d performers, %d on the %.1f m lane spinning poi; distances %s" % [
+			str(fl_es.get("stage", "")), fl_ids.size(), fl_on_lane, fl_lane, str(fl_dist)])
+		_fm_result(str(fl_es.get("stage", "")) == VenueCrowd.STAGE_FLOW and fl_ids.size() >= VenueCrowd.FLOW_MIN
+			and fl_ids.size() <= VenueCrowd.FLOW_MAX,
+			"the FIRE FLOW casts %d performers (10-20)" % fl_ids.size())
+		_fm_result(fl_on_lane >= int(float(fl_ids.size()) * 0.6),
+			"the performers circle on their lane with fire props (%d of %d)" % [fl_on_lane, fl_ids.size()])
+		var poi: Node = main.get_node_or_null("FirePropFx")
+		_fm_result(poi != null and (poi.get("_ids") as Array).size() > 0,
+			"the poi flames follow the performers (%d rigs)" % ((poi.get("_ids") as Array).size() if poi != null else 0))
+		if cam != null:
+			cam.call("look_at_xz", ecv)
+			cam.set("_h_target", 30.0)
+			cam.set("_h", 30.0)
+			await get_tree().create_timer(0.6).timeout
+			await _shoot_ui(dir, "05a_fire_flow")
+		# --- the SANDMEN take the line ---------------------------------------------
+		await get_tree().create_timer(4.4).timeout   # ~0.67 sim-h: sandmen
+		var sm_es: Dictionary = bridge.call("venue_state", esid)
+		var sm_roles: Dictionary = (bridge.call("burn_roles") as Dictionary).get(esid, {})
+		var sm_ids: Array = sm_roles.get("sandmen", [])
+		var sm_r := float(sm_es.get("safe_r", pre_r))
+		var sm_at_post := 0
+		var sm_kneel := 0
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if not sm_ids.has(str(dd.get("id", ""))):
+				continue
+			var ds := (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv)
+			if absf(ds - (sm_r - VenueCrowd.SANDMAN_INSET_M)) < 1.5:
+				sm_at_post += 1
+			if str(dd.get("venue_pose", "")) == VenueCrowd.POSE_KNEEL:
+				sm_kneel += 1
+		print("PlaytestHarness: festivalmode — sandmen: stage '%s', %d cast (want %d), %d at their posts, %d kneeling; %d redirects so far" % [
+			str(sm_es.get("stage", "")), sm_ids.size(), VenueCrowd.sandman_count(sm_r), sm_at_post, sm_kneel,
+			int(bridge.call("burn_redirects"))])
+		_fm_result(str(sm_es.get("stage", "")) == VenueCrowd.STAGE_SANDMEN and sm_ids.size() >= VenueCrowd.SANDMAN_MIN,
+			"the SANDMEN take the line before the flame (%d)" % sm_ids.size())
+		_fm_result(sm_kneel >= int(float(sm_ids.size()) * 0.6),
+			"the sandmen kneel at the line, backs to the fire (%d of %d kneeling, %d at posts)" % [sm_kneel, sm_ids.size(), sm_at_post])
+		if cam != null:
+			await _shoot_ui(dir, "05b_sandmen")
+		# Pause: every cosmetic clock freezes in the same frame.
+		var ts_keep := float(main.time_scale)
+		main.time_scale = 0.0
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var fx0 := SimFxRate.now(main, SimFxRate.SYS_FIRE)
+		var fxn0 := SimFxRate.now(main, SimFxRate.SYS_NPC)
+		await get_tree().create_timer(1.0).timeout
+		_fm_result(is_equal_approx(fx0, SimFxRate.now(main, SimFxRate.SYS_FIRE))
+			and is_equal_approx(fxn0, SimFxRate.now(main, SimFxRate.SYS_NPC)),
+			"pausing freezes the fire and crowd animation clocks")
+		main.time_scale = ts_keep
 		var now_h := float(main.call("get_absolute_hours"))
 		# A half-hour climb, an hour of bonfire, half an hour of embers.
 		# An 8 m effigy on a 3 m base: the standing perimeter is 8 + 3.05 m,
@@ -10286,14 +13282,20 @@ func _run_festival_mode_capture() -> void:
 		var min_d := INF
 		var seated := 0
 		var standing := 0
+		var awake := 0
+		var heading := 0
 		for d in bridge.call("agent_dots"):
 			var dd: Dictionary = d
+			if str(dd.get("activity", "")) != "sleep":
+				awake += 1
+				if str(dd.get("space_type", "")) == "effigy":
+					heading += 1
 			if str(dd.get("space_type", "")) != "effigy" or int(dd.get("state", 0)) != NpcAgent.State.DOING:
 				continue
 			n_eff += 1
 			min_d = minf(min_d, (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv))
 			var vp := str(dd.get("venue_pose", ""))
-			if vp == VenueCrowd.POSE_SIT or vp == VenueCrowd.POSE_LIE:
+			if vp == VenueCrowd.POSE_SIT or vp == VenueCrowd.POSE_LOUNGE or vp == VenueCrowd.POSE_LIE:
 				seated += 1
 			elif vp == VenueCrowd.POSE_STAND:
 				standing += 1
@@ -10316,6 +13318,30 @@ func _run_festival_mode_capture() -> void:
 		print("PlaytestHarness: festivalmode — everyone else by activity/venue: %s" % str(by_state))
 		print("PlaytestHarness: festivalmode — distance of those NOT at the burn (m bucket: people): %s" % str(far_hist))
 		_fm_result(n_eff >= 40, "the festival gathers at the burn (%d)" % n_eff)
+		var share := float(heading) / float(maxi(awake, 1))
+		print("PlaytestHarness: festivalmode — burn turnout: %d of %d awake at or on their way to the effigy (%.0f %%; target %.0f %%), %d redirects" % [
+			heading, awake, share * 100.0, VenueCrowd.BURN_TURNOUT * 100.0, int(bridge.call("burn_redirects"))])
+		_fm_result(share >= 0.7, "the burn draws most of the site (%.0f %% of those awake)" % (share * 100.0))
+		# Who is NOT coming, and why (a meal begun before the burn? a need
+		# past the stay-up bars? the 15 % who carry on?).
+		var why_n := 0
+		var tnow_b := float(main.call("get_absolute_hours"))
+		var bkey := str(es.get("burn_key", ""))
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			var act_s := str(dd.get("activity", ""))
+			if act_s != "hunger" or why_n >= 8:
+				continue
+			why_n += 1
+			var hv := -1.0
+			var coh_w: Variant = bridge.call("cohort_for", str(bridge.call("habitat_of_agent", str(dd["id"]))))
+			if coh_w != null and str(dd.get("tier", "")) == "light":
+				var wi: int = coh_w.agent_index(str(dd["id"]))
+				hv = coh_w.needs[wi * 6 + NpcAgent.NEEDS.find("hunger")]
+			print("PlaytestHarness: festivalmode — not at the burn: %s tier=%s state=%d hunger=%.2f attends=%s hour=%.2f ends_in=%.2f status '%s'" % [
+				str(dd["id"]), str(dd.get("tier", "full")), int(dd.get("state", 0)), hv,
+				str(VenueCrowd.attends(str(dd["id"]), bkey)), fposmod(tnow_b, 24.0),
+				float(dd.get("ends_h", tnow_b)) - tnow_b, str(dd.get("status", ""))])
 		var safe_r := float(es.get("safe_r", VenueCrowd.EFFIGY_SAFE_R_M))
 		_fm_result(n_eff > 0 and min_d >= safe_r - 0.5,
 			"nobody stands inside the fire perimeter (nearest %.1f m, perimeter %.1f = height + 10 ft)" % [min_d, safe_r])
@@ -10358,17 +13384,69 @@ func _run_festival_mode_capture() -> void:
 			seen_c += 1
 			if wrapf(a1 - float(ang0[id]), -PI, PI) > 0.0:
 				ccw += 1
+		var tangent_ok := 0
+		var tangent_n := 0
+		var tangent_by: Dictionary = {}
+		for d in bridge.call("agent_dots"):
+			var dd: Dictionary = d
+			if not ang0.has(str(dd["id"])) or str(dd.get("venue_pose", "")) != VenueCrowd.POSE_WALK:
+				continue
+			var pp: Vector2 = dd.get("pos", Vector2.ZERO)
+			var tg := VenueCrowd.ccw_tangent(ecv, pp)
+			tangent_n += 1
+			var tkey := "%s/%d" % [str(dd.get("tier", "full")), int(dd.get("state", -1))]
+			var tb: Array = tangent_by.get(tkey, [0, 0])
+			tb[1] += 1
+			# A full-tier dot's face_yaw is the avatar's convention (forward
+			# -Z), half a turn from the crowd figure's (+Z).
+			var fy := float(dd.get("face_yaw", 0.0)) + (0.0 if str(dd.get("tier", "")) == "light" else PI)
+			if absf(wrapf(fy - atan2(tg.x, tg.y), -PI, PI)) < 0.6:
+				tangent_ok += 1
+				tb[0] += 1
+			tangent_by[tkey] = tb
+		print("PlaytestHarness: festivalmode — circle walkers facing along the circle: %d of %d (by tier/state ok,n: %s)" % [tangent_ok, tangent_n, str(tangent_by)])
+		_fm_result(tangent_n > 0 and tangent_ok >= int(float(tangent_n) * 0.7),
+			"the circle walks facing ALONG the circle, not in at the fire (%d of %d)" % [tangent_ok, tangent_n])
 		var pile_r := float(es.get("safe_r", 0.0))
 		var min_c := INF
+		var c_who: Dictionary = {}
+		var by_tier := {}
 		for d in bridge.call("agent_dots"):
 			var dd: Dictionary = d
 			if str(dd.get("space_type", "")) == "effigy":
-				min_c = minf(min_c, (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv))
+				var dc := (dd.get("pos", Vector2.ZERO) as Vector2).distance_to(ecv)
+				if dc < min_c:
+					c_who = dd
+				min_c = minf(min_c, dc)
+			if ang0.has(str(dd["id"])):
+				var tk := "%s/%s/%d" % [str(dd.get("tier", "full")), str(dd.get("venue_pose", "")), int(dd.get("state", 0))]
+				by_tier[tk] = int(by_tier.get(tk, 0)) + 1
+		print("PlaytestHarness: festivalmode — circlers by tier/pose/state: %s; nearest: %s tier=%s pose=%s state=%d status '%s'" % [
+			str(by_tier), str(c_who.get("id", "")), str(c_who.get("tier", "full")), str(c_who.get("venue_pose", "")),
+			int(c_who.get("state", 0)), str(c_who.get("status", ""))])
+		if min_c < pile_r - 0.5 and str(c_who.get("tier", "")) == "light":
+			var coh: Variant = bridge.call("cohort_for", str(bridge.call("habitat_of_agent", str(c_who["id"]))))
+			if coh != null:
+				var ci: int = coh.agent_index(str(c_who["id"]))
+				var tnow := float(main.call("get_absolute_hours"))
+				print("PlaytestHarness: festivalmode — that walker: a=(%.1f,%.1f) b=(%.1f,%.1f) t0=%.4f t1=%.4f now=%.4f legs=%s leg_i=%d end=%.4f vphase=%d; a->centre %.1f m, b->centre %.1f m; no_go=%s" % [
+					coh.ax[ci], coh.az[ci], coh.bx[ci], coh.bz[ci], coh.t0[ci] - tnow, coh.t1[ci] - tnow, tnow,
+					str(coh.legs[ci]), coh.leg_i[ci], coh.end_h[ci] - tnow, coh.vphase[ci],
+					Vector2(coh.ax[ci], coh.az[ci]).distance_to(ecv), Vector2(coh.bx[ci], coh.bz[ci]).distance_to(ecv),
+					str(bridge.call("_no_go_circles"))])
 		print("PlaytestHarness: festivalmode — circling: %d people moving round the fire, %d counter-clockwise; perimeter %.2f m, nearest %.1f m" % [seen_c, ccw, pile_r, min_c])
 		_fm_result(absf(pile_r - (3.0 + VenueCrowd.PERIMETER_PILE_M)) < 0.01 and min_c >= pile_r - 0.5,
 			"after the collapse the perimeter is five feet off the pile and nobody is inside it (%.2f m, nearest %.1f)" % [pile_r, min_c])
 		_fm_result(seen_c >= 20, "people circle the fire after the collapse (%d)" % seen_c)
 		_fm_result(seen_c > 0 and ccw >= int(float(seen_c) * 0.7), "the circle runs counter-clockwise (%d of %d)" % [ccw, seen_c])
+		# Does every person in the circle stay DRAWN as it turns? (The hero
+		# pool hands people between NpcAvatars and the GPU crowd as they come
+		# nearer and go round — a lost hand-off reads as people blinking out.)
+		var vis := await _fm_visibility_probe(main, bridge, ang0.keys(), 90)
+		print("PlaytestHarness: festivalmode — circle visibility: %s" % str(vis))
+		_fm_result(int(vis.get("people", 0)) > 0 and float(vis.get("worst_frame", 0.0)) >= 0.98,
+			"everyone circling is drawn every frame (worst frame %.1f %% of %d, %d people ever missing)" % [
+				float(vis.get("worst_frame", 0.0)) * 100.0, int(vis.get("people", 0)), int(vis.get("ever_missing", 0))])
 		await _shoot_ui(dir, "06_effigy_circle")
 		await get_tree().create_timer(16.0).timeout   # the 45 minutes pass
 		es = bridge.call("venue_state", esid)
@@ -10381,10 +13459,10 @@ func _run_festival_mode_capture() -> void:
 			if str(dd.get("space_type", "")) != "effigy":
 				continue
 			var vp := str(dd.get("venue_pose", ""))
-			if vp == VenueCrowd.POSE_CLAP or vp == VenueCrowd.POSE_STAND:
-				social += 1
-			elif vp == VenueCrowd.POSE_DANCE or vp == VenueCrowd.POSE_WALK:
+			if vp == VenueCrowd.POSE_WALK:
 				still_dancing += 1
+			elif vp != "":
+				social += 1
 		_fm_result(social > 0 and still_dancing == 0,
 			"afterwards people socialise round the embers like an art piece (%d, %d still circling)" % [social, still_dancing])
 		await _shoot_ui(dir, "07_effigy_after")
@@ -10429,7 +13507,8 @@ func _run_festival_mode_capture() -> void:
 		for b in beds:
 			var n_near := 0
 			for d in bridge.call("agent_dots"):
-				if str((d as Dictionary).get("activity", "")) == "sleep" 						and ((d as Dictionary).get("pos", Vector2.ZERO) as Vector2).distance_to(b) < 25.0:
+				if str((d as Dictionary).get("activity", "")) == "sleep" \
+						and ((d as Dictionary).get("pos", Vector2.ZERO) as Vector2).distance_to(b) < 25.0:
 					n_near += 1
 			if n_near > best_n:
 				best_n = n_near
@@ -10475,5 +13554,2295 @@ func _run_festival_mode_capture() -> void:
 
 	_restore_files(snap)
 	print("PlaytestHarness: festivalmode — restored the map's camp / placement / spaces files, the graph autosave and the NPC display prefs")
+	# The player's Peak Experience score: stop the bridge saving, put the file back.
+	var br_pk: Variant = sgv.call("npc_population_bridge") if sgv.has_method("npc_population_bridge") else null
+	if br_pk != null:
+		br_pk.set("_peak_path", "")
+		br_pk.set("_peak_save_due_ms", 0)
+	_restore_files(peak_snap)
 	print("PlaytestHarness: festivalmode — shots in %s" % ProjectSettings.globalize_path(dir))
+	_maybe_quit()
+
+
+# ==================== VEHICLES + THIRD PERSON (--capture=vehicles) ====================
+# Placed vehicles and the follow camera, end to end on the live player (works
+# on the SOAK scene — no TerrainLoader needed). Asserts what a PNG cannot:
+# a library vehicle gets its PlacedVehicle; Interact on it (the crosshair
+# path) gets the player IN at the vehicle with the prop's collision OFF;
+# driving moves the PROP with the rider and turns ModelRoot by the profile's
+# yaw; third person detaches the camera arm and puts the camera BEHIND the
+# vehicle; dismounting steps the rider out past the half-width, saves the
+# parked position on the record and re-bakes the collision; on foot in third
+# person the body turns to walk where the CAMERA faces; first person puts the
+# arm back exactly. Then the tool bus. player.cfg is byte-restored and every
+# seeded prop removed.
+func _run_vehicle_capture() -> void:
+	var tree := get_tree()
+	var loader := tree.current_scene.find_child("TerrainLoader", true, false) \
+		if tree.current_scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(_settle_s()).timeout
+	var main := _find_main()
+	var player: CharacterBody3D = null
+	if main != null:
+		player = main.get_node_or_null("Player") as CharacterBody3D
+	if main == null or player == null:
+		push_error("PlaytestHarness: vehicles needs Main + Player")
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "vehicles"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var fails: Array = []
+	var cfg_had := FileAccess.file_exists(PlayerPrefs.CFG_PATH)
+	var cfg_bytes := FileAccess.get_file_as_bytes(PlayerPrefs.CFG_PATH) if cfg_had else PackedByteArray()
+	var saved_scale: Variant = main.get("time_scale")
+	main.set("time_scale", 0.0)
+	main.set("day_time", 11.0)
+	CursorController.set_paused(false)
+	player.set("is_mouse_captured", true)
+	PlayerPrefs.set_camera_mode(PlayerPrefs.CAMERA_FIRST)
+	for _i in 3:
+		await tree.process_frame
+	var seeded: Array[String] = []
+	var focus := player.get_node_or_null("InteractionFocus")
+	var arm := player.get_node_or_null("CameraArm") as Node3D
+	var cam := player.get_node_or_null("CameraArm/Camera3D") as Camera3D
+	var arm_rest := arm.transform if arm != null else Transform3D()
+
+	# 1. Place Appa from the catalog, 8 m ahead.
+	var fwd := -player.global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length() > 1e-4 else Vector3.FORWARD
+	var at := player.global_position + fwd * 8.0
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(main, "vehicle_appa", at.x, at.z)
+	var pid := str(placed.get("prop_id", ""))
+	_veh_result(bool(placed.get("ok", false)) and not pid.is_empty(), "Appa is placed from the catalog", fails)
+	if not pid.is_empty():
+		seeded.append(pid)
+	for _i in 10:
+		await tree.physics_frame
+	var prop := PlacedPropRuntime.find_by_prop_id(main, pid) as Node3D
+	var veh: Node = null
+	if prop != null:
+		veh = prop.get_node_or_null("PlacedVehicle")
+	_veh_result(veh != null, "the placed prop carries a PlacedVehicle", fails)
+	if veh == null or focus == null:
+		_vehicle_capture_restore(main, loader, seeded, cfg_had, cfg_bytes, saved_scale, fails)
+		return
+
+	# 2. Interact through the crosshair path gets in.
+	focus.call("_open_placed_prop_edit", prop)
+	for _i in 3:
+		await tree.physics_frame
+	var body := prop.get_node_or_null("PropBody") as CollisionObject3D
+	_veh_result(bool(player.get("is_riding")) and player.get("current_vehicle") == veh,
+		"Interact on the vehicle gets the player in", fails)
+	_veh_result(body == null or body.collision_layer == 0, "the vehicle's collision is off while ridden", fails)
+	var dxz := Vector2(player.global_position.x - prop.global_position.x,
+		player.global_position.z - prop.global_position.z).length()
+	_veh_result(dxz < 0.1, "the rider is snapped onto the parked vehicle (%.2f m)" % dxz, fails)
+
+	# 3. Drive forward and turn (first person).
+	var start := prop.global_position
+	Input.action_press("move_forward")
+	for _i in 90:
+		await tree.physics_frame
+	Input.action_press("move_right")
+	for _i in 40:
+		await tree.physics_frame
+	Input.action_release("move_right")
+	Input.action_release("move_forward")
+	for _i in 5:
+		await tree.physics_frame
+	var moved := Vector2(prop.global_position.x - start.x, prop.global_position.z - start.z).length()
+	_veh_result(moved > 1.5, "driving moves the vehicle (%.1f m)" % moved, fails)
+	# The prop follows its rider in _process (once per RENDERED frame) while the
+	# rider moves in physics frames: measured after physics frames alone, a
+	# heavy map (several physics steps per render frame — Walton) reads a lag
+	# that is never on screen. Measure where the frame is DRAWN: frame_pre_draw
+	# comes after every _process and before rendering, with no physics step in
+	# between (process_frame fires before _process, and the next frame's physics
+	# steps — the rider still coasting — run before it).
+	await RenderingServer.frame_pre_draw
+	var follow := Vector2(player.global_position.x - prop.global_position.x,
+		player.global_position.z - prop.global_position.z).length()
+	_veh_result(follow < 0.2, "the vehicle stays under its rider (%.2f m)" % follow, fails)
+	var model := prop.get_node_or_null("ModelRoot") as Node3D
+	var want_yaw := player.rotation.y + deg_to_rad(float(PlacedVehicle.PROFILES["golf_cart"]["yaw_deg"]))
+	var yaw_err := 9.0
+	if model != null:
+		yaw_err = absf(wrapf(model.rotation.y - want_yaw, -PI, PI))
+	_veh_result(yaw_err < 0.05, "ModelRoot turns with the rider by the profile yaw (err %.3f rad)" % yaw_err, fails)
+
+	# 4. Third person while driving.
+	PlayerPrefs.set_camera_mode(PlayerPrefs.CAMERA_THIRD)
+	for _i in 30:
+		await tree.process_frame
+	var pf := -player.global_basis.z
+	var to_cam := cam.global_position - player.global_position
+	var flat := Vector2(to_cam.x, to_cam.z).length()
+	_veh_result(arm != null and arm.top_level, "third person detaches the camera arm", fails)
+	_veh_result(Vector2(to_cam.x, to_cam.z).dot(Vector2(pf.x, pf.z)) < 0.0 and flat > 3.0,
+		"the chase camera sits BEHIND the vehicle (%.1f m back)" % flat, fails)
+	await _graph_shot(dir, "01_appa_third_person", [], "vehicles")
+
+	# 5. Dismount: step out, park, re-bake.
+	var parked := prop.global_position
+	player.call("_dismount_vehicle")
+	for _i in 4:
+		await tree.physics_frame
+	var out := Vector2(player.global_position.x - parked.x, player.global_position.z - parked.z).length()
+	_veh_result(not bool(player.get("is_riding")), "X gets out", fails)
+	_veh_result(out > 0.6, "the rider steps out beside it (%.2f m)" % out, fails)
+	var rec := PlacedPropService.get_prop_record(main, pid)
+	var rec_d := Vector2(float(rec.get("x", 0.0)) - parked.x, float(rec.get("z", 0.0)) - parked.z).length()
+	_veh_result(rec_d < 0.05, "the parked position is saved on the record (%.3f m)" % rec_d, fails)
+	body = prop.get_node_or_null("PropBody") as CollisionObject3D
+	_veh_result(body != null and body.collision_layer == 1, "the collision is back after getting out", fails)
+
+	# 6. On foot in third person: turn the camera 90 deg, walk "forward" — the
+	# body turns to walk the CAMERA's way.
+	var cam_yaw := wrapf(player.rotation.y + PI * 0.5, -PI, PI)
+	player.set("_tp_yaw", cam_yaw)
+	Input.action_press("move_forward")
+	for _i in 50:
+		await tree.physics_frame
+	Input.action_release("move_forward")
+	var turn_err := absf(wrapf(player.rotation.y - cam_yaw, -PI, PI))
+	_veh_result(turn_err < 0.25, "walking turns the body toward the camera's heading (err %.2f rad)" % turn_err, fails)
+	var reach: Vector3 = player.call("reach_origin")
+	_veh_result(absf(reach.y - player.global_position.y - 1.55) < 0.05,
+		"interaction reach is measured from the head in third person", fails)
+	for _i in 10:
+		await tree.process_frame
+	await _graph_shot(dir, "02_on_foot_third_person", [], "vehicles")
+
+	# 7. The tool bus: chase camera further back, a wider step-out.
+	var at2 := player.global_position + (-player.global_basis.z) * 14.0
+	var placed2: Dictionary = PlacedPropService.place_model_at_xz(main, "vehicle_tool_bus", at2.x, at2.z)
+	var pid2 := str(placed2.get("prop_id", ""))
+	if not pid2.is_empty():
+		seeded.append(pid2)
+	for _i in 10:
+		await tree.physics_frame
+	var prop2 := PlacedPropRuntime.find_by_prop_id(main, pid2) as Node3D
+	var bus: Node = null
+	if prop2 != null:
+		bus = prop2.get_node_or_null("PlacedVehicle")
+	_veh_result(bus != null, "the tool bus is driveable", fails)
+	if bus != null:
+		player.call("request_mount", bus)
+		Input.action_press("move_forward")
+		for _i in 60:
+			await tree.physics_frame
+		Input.action_release("move_forward")
+		for _i in 30:
+			await tree.process_frame
+		var bus_cam := Vector2(cam.global_position.x - player.global_position.x,
+			cam.global_position.z - player.global_position.z).length()
+		_veh_result(bool(player.get("is_riding")) and bus_cam > 8.0,
+			"the bus's chase camera sits well back (%.1f m)" % bus_cam, fails)
+		await _graph_shot(dir, "03_tool_bus_third_person", [], "vehicles")
+		var bp := prop2.global_position
+		player.call("_dismount_vehicle")
+		for _i in 4:
+			await tree.physics_frame
+		var bout := Vector2(player.global_position.x - bp.x, player.global_position.z - bp.z).length()
+		_veh_result(bout > 1.5, "getting off the bus lands clear of it (%.2f m)" % bout, fails)
+
+	# 8. Back to first person: the arm goes home exactly.
+	PlayerPrefs.set_camera_mode(PlayerPrefs.CAMERA_FIRST)
+	for _i in 3:
+		await tree.process_frame
+	_veh_result(arm != null and not arm.top_level and arm.transform.is_equal_approx(arm_rest),
+		"first person puts the camera arm back where it was", fails)
+	_vehicle_capture_restore(main, loader, seeded, cfg_had, cfg_bytes, saved_scale, fails)
+
+
+func _vehicle_capture_restore(main: Node, loader: Node, seeded: Array[String], cfg_had: bool,
+		cfg_bytes: PackedByteArray, saved_scale: Variant, fails: Array) -> void:
+	for pid in seeded:
+		if loader != null and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", pid)
+		else:
+			var node := PlacedPropRuntime.find_by_prop_id(main, pid)
+			if node != null:
+				node.queue_free()
+			var layer := PlacedPropService._layer_for_main(main)
+			if layer != null and layer.remove_prop(pid):
+				PlacedPropService._save_layer(main, layer)
+	if cfg_had:
+		var f := FileAccess.open(PlayerPrefs.CFG_PATH, FileAccess.WRITE)
+		if f != null:
+			f.store_buffer(cfg_bytes)
+			f.close()
+	elif FileAccess.file_exists(PlayerPrefs.CFG_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(PlayerPrefs.CFG_PATH))
+	PlayerPrefs.reload_from_disk()
+	main.set("time_scale", saved_scale)
+	var verdict := "PASS" if fails.is_empty() else "FAIL"
+	var detail := "" if fails.is_empty() else " — " + ", ".join(fails)
+	print("PlaytestHarness: vehicles %s (%d failed)%s" % [verdict, fails.size(), detail])
+	_maybe_quit()
+
+
+func _veh_result(ok: bool, what: String, fails: Array) -> void:
+	print("PlaytestHarness: vehicles %s — %s" % ["PASS" if ok else "FAIL", what])
+	if not ok:
+		fails.append(what)
+
+
+# ---------------------------------------------------------------------------
+# --capture=water — carved channels + stream surfaces on a REAL map
+# ---------------------------------------------------------------------------
+
+## Loads a real TerrainLoader map, waits for the WaterNetwork to resolve and
+## carve, and asserts what a PNG cannot: every carved bed is monotone
+## downstream (except stations flagged blocked), the composed ground under the
+## centreline of a carved reach sits at the bed, the water surface sits at or
+## below the bank tops on carved stations, and the stream mesh exists. Then a
+## user stream is drawn, carved and undone, and a rain override widens the
+## water. Shoots low grazing + aerial PNGs of the longest carved reaches.
+## Snapshots and byte-restores the map's water_features / channel_tiles files.
+func _run_water_verify() -> void:
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: TerrainLoader not found — aborting water verify")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(_settle_s()).timeout
+	var wn: Node = loader.call("water_network")
+	if wn == null:
+		push_error("PlaytestHarness: WaterNetwork missing — aborting")
+		_maybe_quit()
+		return
+	var lat := float(loader.get("_lat"))
+	var lon := float(loader.get("_lon"))
+	var _tok := "%s_%s" % [CoordToken.token(lat), CoordToken.token(lon)]
+	var snap := _snapshot_files([
+		WorldPaths.site_file("water_features", lat, lon),
+		WorldPaths.site_file("channel_tiles", lat, lon, "bin"),
+		WorldPaths.site_file("channel_tiles", lat, lon, "json"),
+	])
+	var fails := 0
+	# Wait for the carve job (first visit can take a few seconds).
+	var waited := 0.0
+	while bool(wn.call("is_busy")) and waited < 120.0:
+		await get_tree().create_timer(0.5).timeout
+		waited += 0.5
+	waited = 0.0
+	while bool(wn.call("drainage_busy")) and waited < 180.0:
+		await get_tree().create_timer(0.5).timeout
+		waited += 0.5
+	var derived: Array = wn.call("derived_channels")
+	var drain: Dictionary = wn.call("drainage")
+	print("WaterVerify: drainage grid %d² (%.1f m), %d derived channels, waited %.1f s" % [
+		int(drain.get("n", 0)), float(drain.get("cell_m", 0.0)), derived.size(), waited])
+	if drain.is_empty():
+		fails += 1
+		print("WaterVerify: FAIL drainage analysis never landed")
+	var feats: Array = wn.call("features")
+	var channel: TerrainEditTiles = loader.call("channel_tile_layer")
+	print("WaterVerify: %d features, %d channel tiles, waited %.1f s" % [
+		feats.size(), channel.active_tiles().size() if channel != null else -1, waited])
+	var carved_feats: Array = []
+	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler")
+	var half := sampler.detail_half() - ChannelCarver.PATCH_MARGIN_M
+	for f_v in feats:
+		var f: Dictionary = f_v
+		var prof: Dictionary = wn.call("profile", f["id"])
+		if prof.is_empty():
+			continue
+		var bed: PackedFloat32Array = prof["bed"]
+		var blocked: PackedByteArray = prof["blocked"]
+		var nb := 0
+		for v in blocked:
+			nb += int(v)
+		var mono := _water_monotone_except_blocked(bed, blocked)
+		var inside := 0
+		var pts: PackedVector2Array = prof["points"]
+		for p in pts:
+			if maxf(absf(p.x), absf(p.y)) <= half:
+				inside += 1
+		print("WaterVerify:  %-14s %-6s %-22s len %6.0f m  stations %4d (in patch %4d)  blocked %3d  monotone %s  covered %s" % [
+			str(f["id"]), str(f["kind"]), str(f["name"]).left(22), float(prof["length_m"]),
+			pts.size(), inside, nb, str(mono), str(f.get("covered", false))])
+		if not mono:
+			fails += 1
+			print("WaterVerify: FAIL bed rises downstream on %s" % f["id"])
+		if inside > 10 and bool(f.get("carve", true)) and str(f["modes"][0]) == "surface":
+			carved_feats.append({"f": f, "prof": prof, "inside": inside})
+	# Ground at the centreline == bed, water at or below the bank tops.
+	var checked := 0
+	var bad_bed := 0
+	var bad_bank := 0
+	for cf in carved_feats:
+		var f: Dictionary = cf["f"]
+		var prof: Dictionary = cf["prof"]
+		var pts: PackedVector2Array = prof["points"]
+		var bed: PackedFloat32Array = prof["bed"]
+		var states: Array = wn.call("feature_states", f, float(wn.call("rain_mmh_now")))
+		for i in range(0, pts.size(), 7):
+			var p := pts[i]
+			if maxf(absf(p.x), absf(p.y)) > half - 5.0:
+				continue
+			if StreamNetwork.mode_at(f, (prof["s"] as PackedFloat32Array)[i], prof["varc"]) != "surface":
+				continue
+			checked += 1
+			var gy := float(loader.call("ground_height_at", p.x, p.y))
+			if absf(gy - bed[i]) > 0.35:
+				bad_bed += 1
+				var base := sampler.base_at(p.x, p.y)
+				var want := minf(0.0, bed[i] - base)
+				var got := gy - base
+				var why := "deeper channel nearby" if got < want - 0.2 else (
+					"bed above DEM (floored)" if bed[i] > base else "carve shallower than bed")
+				_water_diag[why] = int(_water_diag.get(why, 0)) + 1
+				if int(_water_diag[why]) <= 3:
+					print("WaterVerify:   %s %s @(%.0f,%.0f) base %.2f bed %.2f ground %.2f" % [
+						why, f["id"], p.x, p.y, base, bed[i], gy])
+			if i < states.size():
+				var st: Dictionary = states[i]
+				var level := bed[i] + float(st["depth_m"])
+				var tan := StreamMeshBuilder._tangent(pts, i)
+				var across := Vector2(-tan.y, tan.x)
+				var off := float(st["top_w_m"]) * 0.5 + 0.75
+				var bank := minf(
+					float(loader.call("ground_height_at", p.x + across.x * off, p.y + across.y * off)),
+					float(loader.call("ground_height_at", p.x - across.x * off, p.y - across.y * off)))
+				if level > bank + 0.05:
+					bad_bank += 1
+	print("WaterVerify: carved stations checked %d — ground≠bed %d, water over bank %d  %s" % [
+		checked, bad_bed, bad_bank, str(_water_diag)])
+	if checked > 0 and float(bad_bed) / float(checked) > 0.05:
+		fails += 1
+		print("WaterVerify: FAIL composed ground does not follow the carved bed")
+	if checked > 0 and float(bad_bank) / float(checked) > 0.10:
+		fails += 1
+		print("WaterVerify: FAIL water surface above the banks on carved reaches")
+	var terrain: Node = loader.get("_main").get_node_or_null("Terrain")
+	var streams := terrain.get_node_or_null(WaterNetwork.STREAMS_NODE) as MeshInstance3D if terrain != null else null
+	var verts := 0
+	if streams != null and streams.mesh != null and streams.mesh.get_surface_count() > 0:
+		verts = (streams.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	print("WaterVerify: stream surface mesh %s, %d verts" % [str(streams != null), verts])
+	if not carved_feats.is_empty() and verts == 0:
+		fails += 1
+		print("WaterVerify: FAIL no stream surface for carved features")
+
+	# --- shots ----------------------------------------------------------
+	_set_capture_conditions()
+	var label := _shots_label if not _shots_label.is_empty() else "water"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var cam := Camera3D.new()
+	cam.name = "PlaytestCam"
+	cam.far = 40000.0
+	get_tree().current_scene.add_child(cam)
+	cam.make_current()
+	carved_feats.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["inside"]) > int(b["inside"]))
+	var shot := 0
+	for cf in carved_feats.slice(0, 3):
+		var prof: Dictionary = cf["prof"]
+		var pts: PackedVector2Array = prof["points"]
+		var bed: PackedFloat32Array = prof["bed"]
+		# A station well inside the patch, near the middle of the in-patch run.
+		var idxs: Array = []
+		for i in pts.size():
+			if maxf(absf(pts[i].x), absf(pts[i].y)) <= half - 40.0:
+				idxs.append(i)
+		if idxs.is_empty():
+			continue
+		var i0: int = idxs[idxs.size() / 2]
+		var p := pts[i0]
+		var tan := StreamMeshBuilder._tangent(pts, i0)
+		var across := Vector2(-tan.y, tan.x)
+		var g := float(loader.call("ground_height_at", p.x, p.y))
+		var look := Vector3(p.x, bed[i0], p.y)
+		var views := [
+			# oblique from the bank, a little downstream, looking back up
+			Vector3(p.x + across.x * 10.0 + tan.x * 8.0, 0.0, p.y + across.y * 10.0 + tan.y * 8.0),
+			# along the channel from upstream, low
+			Vector3(p.x - tan.x * 22.0 + across.x * 3.0, 0.0, p.y - tan.y * 22.0 + across.y * 3.0),
+			# aerial
+			Vector3(p.x + across.x * 35.0 - tan.x * 35.0, 0.0, p.y + across.y * 35.0 - tan.y * 35.0),
+		]
+		var lifts := [6.0, 4.0, 60.0]
+		for v in views.size():
+			var cp: Vector3 = views[v]
+			# Height above the HIGHER of the camera ground and the target, so a
+			# camera on a slope never sits inside the hill it is looking across.
+			cp.y = maxf(float(loader.call("ground_height_at", cp.x, cp.z)), g) + float(lifts[v])
+			cam.look_at_from_position(cp, look, Vector3.UP)
+			await get_tree().create_timer(0.4).timeout
+			await RenderingServer.frame_post_draw
+			await RenderingServer.frame_post_draw
+			var img := get_viewport().get_texture().get_image()
+			img.save_png("%s/water_%02d_%s_v%d.png" % [dir, shot, str(cf["f"]["id"]).replace(":", "_"), v])
+			if v == 0 and streams != null and is_instance_valid(streams):
+				# Same view with the water hidden: separates terrain artefacts
+				# from water-surface artefacts.
+				streams.visible = false
+				await RenderingServer.frame_post_draw
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png("%s/water_%02d_v0_nowater.png" % [dir, shot])
+				streams.visible = true
+		shot += 1
+		print("WaterVerify: shot %s at (%.0f, %.0f) ground %.2f bed %.2f" % [
+			cf["f"]["id"], p.x, p.y, g, bed[i0]])
+
+	# --- drainage overlay from above ----------------------------------
+	wn.call("set_show_drainage", true)
+	var cpos := Vector3(0.0, float(loader.call("ground_height_at", 0.0, 0.0)) + 650.0, 420.0)
+	cam.look_at_from_position(cpos, Vector3(0.0, cpos.y - 650.0, 0.0), Vector3.UP)
+	await get_tree().create_timer(0.5).timeout
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("%s/drainage_overview.png" % dir)
+	wn.call("set_show_drainage", false)
+
+	# --- a user stream: draw, carve, undo -------------------------------
+	var lay: WaterFeatureLayer = wn.get("layer")
+	var a := Vector2(-60.0, 40.0)
+	var b := Vector2(60.0, 40.0)
+	var ga := float(loader.call("ground_height_at", a.x, a.y))
+	var gb := float(loader.call("ground_height_at", b.x, b.y))
+	if gb > ga:
+		var t := a
+		a = b
+		b = t
+	var before_tiles := channel.active_tiles().size()
+	wn.call("checkpoint")
+	var sid := lay.add_stream(PackedVector2Array([a, (a + b) * 0.5 + Vector2(0, 8), b]),
+		{"name": "Verify Brook", "kind": "stream"})
+	wn.call("commit")
+	waited = 0.0
+	await get_tree().create_timer(0.6).timeout
+	while bool(wn.call("is_busy")) and waited < 60.0:
+		await get_tree().create_timer(0.3).timeout
+		waited += 0.3
+	var mid := (a + b) * 0.5 + Vector2(0, 8)
+	var prof_u: Dictionary = wn.call("profile", sid)
+	var bed_mid := ChannelProfile.bed_at(prof_u, StreamNetwork.nearest_on_line(prof_u["points"], mid)["s"]).x \
+		if not prof_u.is_empty() else NAN
+	var g_mid := float(loader.call("ground_height_at", mid.x, mid.y))
+	print("WaterVerify: user stream %s carved: tiles %d → %d, ground %.2f bed %.2f" % [
+		sid, before_tiles, channel.active_tiles().size(), g_mid, bed_mid])
+	if prof_u.is_empty() or absf(g_mid - bed_mid) > 0.35:
+		fails += 1
+		print("WaterVerify: FAIL user stream did not carve its bed")
+	# Rain widens the water (needs the drainage areas; base flow alone if none).
+	var st_dry: Dictionary = wn.call("state_near", sid, mid)
+	wn.set("rain_override_mmh", 25.0)
+	wn.call("rebuild_surfaces")
+	var st_wet: Dictionary = wn.call("state_near", sid, mid)
+	wn.set("rain_override_mmh", -1.0)
+	print("WaterVerify: user stream Q dry %.1f L/s (w %.2f m) → 25 mm/h %.1f L/s (w %.2f m)" % [
+		float(st_dry.get("q_lps", 0.0)), float(st_dry.get("top_w_m", 0.0)),
+		float(st_wet.get("q_lps", 0.0)), float(st_wet.get("top_w_m", 0.0))])
+	# The longest OSM feature must swell in rain once it has a catchment.
+	var big: Dictionary = {}
+	for f_v in feats:
+		var prof_b: Dictionary = wn.call("profile", (f_v as Dictionary)["id"])
+		if not prof_b.is_empty() and (big.is_empty() or float(prof_b["length_m"]) > float(big["len"])):
+			big = {"f": f_v, "len": float(prof_b["length_m"])}
+	if not big.is_empty():
+		var fb: Dictionary = big["f"]
+		var dry_q := float(wn.call("station_q_lps", fb, 999999, 0.0))
+		var wet_q := float(wn.call("station_q_lps", fb, 999999, 25.0))
+		var areas: Variant = (wn.get("station_area") as Dictionary).get(fb["id"])
+		var a_end := (areas as PackedFloat32Array)[(areas as PackedFloat32Array).size() - 1] \
+			if areas is PackedFloat32Array and (areas as PackedFloat32Array).size() > 0 else 0.0
+		print("WaterVerify: %s catchment %.1f ha — Q dry %.0f L/s, 25 mm/h %.0f L/s" % [
+			fb["id"], a_end / 10000.0, dry_q, wet_q])
+		if a_end <= 0.0 or wet_q <= dry_q:
+			fails += 1
+			print("WaterVerify: FAIL rain does not raise the discharge of a mapped stream")
+	await get_tree().create_timer(0.3).timeout
+	wn.call("undo")
+	await get_tree().create_timer(0.6).timeout
+	waited = 0.0
+	while bool(wn.call("is_busy")) and waited < 60.0:
+		await get_tree().create_timer(0.3).timeout
+		waited += 0.3
+	var g_after := float(loader.call("ground_height_at", mid.x, mid.y))
+	print("WaterVerify: after undo ground at the user stream %.2f (tiles %d)" % [
+		g_after, channel.active_tiles().size()])
+	if not lay.stream(sid).is_empty() or (not prof_u.is_empty() and g_after - g_mid < 0.3):
+		fails += 1
+		print("WaterVerify: FAIL undo did not remove the user stream's channel")
+	_water_ui_finished = false
+	fails += await _water_ui_test(loader, wn, cam, dir)
+	if not _water_ui_finished:
+		fails += 1
+		print("WaterVerify: FAIL the UI test aborted before its end (runtime error?)")
+	cam.queue_free()
+	_restore_files(snap)
+	print("WaterVerify: OVERALL %s (%d failures)" % ["PASS" if fails == 0 else "FAIL", fails])
+	_maybe_quit()
+
+
+## The WATER toolbar driven with REAL input events through the viewport:
+## Draw (3 clicks + Enter), Edit (pick, drag a waypoint, drag the line to insert
+## one, hover + Delete), Span (click → culvert), Ctrl+Z, Trace (one click).
+## Returns the number of failures.
+func _water_ui_test(loader: Node, wn: Node, cam: Camera3D, dir: String) -> int:
+	var fails := 0
+	var tb: Node = loader.get("_edit_toolbar_ui")
+	if tb == null:
+		print("WaterVerify: FAIL no edit toolbar")
+		return 1
+	var lay: WaterFeatureLayer = wn.get("layer")
+	var vp := get_viewport()
+	# A clear patch of ground near the site centre, camera looking down on it.
+	var c0 := Vector2(-150.0, -120.0)
+	var g0 := float(loader.call("ground_height_at", c0.x, c0.y))
+	cam.look_at_from_position(Vector3(c0.x, g0 + 95.0, c0.y + 55.0), Vector3(c0.x, g0, c0.y), Vector3.UP)
+	await get_tree().process_frame
+	tb.call("open_with_section", "water")
+	tb.call("_set_active_tool", "water_draw")
+	await get_tree().process_frame
+	var n_before := lay.streams.size()
+	var world_pts := [c0 + Vector2(-35, -20), c0 + Vector2(0, 5), c0 + Vector2(35, 25)]
+	for wp in world_pts:
+		await _water_click(vp, cam, loader, wp)
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	vp.push_input(enter)
+	await get_tree().process_frame
+	var ok_draw := lay.streams.size() == n_before + 1
+	print("WaterVerify UI: Draw → streams %d → %d %s" % [n_before, lay.streams.size(), "OK" if ok_draw else "FAIL"])
+	if not ok_draw:
+		return fails + 1
+	var sid := str((lay.streams.back() as Dictionary)["id"])
+	await _water_wait(wn)
+	# Edit: pick the stream by clicking its line, then drag the middle waypoint.
+	tb.call("_set_active_tool", "water_edit")
+	await get_tree().process_frame
+	var pts0: PackedVector2Array = lay.stream(sid)["points"]
+	await _water_click(vp, cam, loader, (pts0[0] + pts0[1]) * 0.5)
+	var ctl: Variant = tb.get("_water_tools")
+	var picked := str(ctl.get("_picked"))
+	print("WaterVerify UI: Edit pick → %s %s" % [picked, "OK" if picked == sid else "FAIL"])
+	if picked != sid:
+		fails += 1
+	var mid_before: Vector2 = pts0[1]
+	await _water_drag(vp, cam, loader, mid_before, mid_before + Vector2(14.0, -10.0))
+	await _water_wait(wn)
+	var pts1: PackedVector2Array = lay.stream(sid)["points"]
+	var moved := pts1[1].distance_to(mid_before) if pts1.size() > 1 else 0.0
+	print("WaterVerify UI: pin drag moved %.1f m %s" % [moved, "OK" if moved > 5.0 else "FAIL"])
+	if moved <= 5.0:
+		fails += 1
+	# Drag the first span's line → inserts a waypoint.
+	# A point on the first span that hovers as LINE, not as a nearby pin.
+	var seg_mid := (pts1[0] + pts1[1]) * 0.5
+	for t in [0.5, 0.35, 0.65, 0.25, 0.75]:
+		var cand: Vector2 = pts1[0].lerp(pts1[1], t)
+		await _water_hover(vp, cam, loader, cand)
+		if str((ctl.get("_hover") as Dictionary).get("kind", "")) == "line":
+			seg_mid = cand
+			break
+	await _water_drag(vp, cam, loader, seg_mid, seg_mid + Vector2(-8.0, 9.0))
+	await _water_wait(wn)
+	var n_ins := (lay.stream(sid)["points"] as PackedVector2Array).size()
+	print("WaterVerify UI: line drag → %d points %s" % [n_ins, "OK" if n_ins == pts1.size() + 1 else "FAIL"])
+	if n_ins != pts1.size() + 1:
+		fails += 1
+	# Hover that new waypoint and press Delete.
+	var pts2: PackedVector2Array = lay.stream(sid)["points"]
+	var hover_ok := false
+	for _try in 4:
+		await _water_hover(vp, cam, loader, pts2[1])
+		var hv: Dictionary = ctl.get("_hover")
+		if str(hv.get("kind", "")) == "pin" and int(hv.get("index", -1)) == 1:
+			hover_ok = true
+			break
+	var proj: Dictionary = ctl.get("_proj")
+	var sp_pin := _water_screen(cam, loader, pts2[1])
+	var drawn: PackedVector2Array = proj.get(sid, PackedVector2Array())
+	print("WaterVerify UI:   before Delete — hover %s picked %s projected %s (pin at %s, drawn pin %s)" % [
+		str(ctl.get("_hover")), str(ctl.get("_picked")), str(proj.has(sid)), str(sp_pin),
+		str(drawn[1]) if drawn.size() > 1 else "-"])
+	if not hover_ok:
+		print("WaterVerify UI: FAIL the waypoint never reported hovered — Delete skipped")
+		fails += 1
+	else:
+		var del := InputEventKey.new()
+		del.keycode = KEY_DELETE
+		del.pressed = true
+		vp.push_input(del)
+		await get_tree().process_frame
+		await _water_wait(wn)
+	if lay.stream(sid).is_empty():
+		print("WaterVerify UI: FAIL the stream itself was deleted")
+		return fails + 1
+	var n_del := (lay.stream(sid)["points"] as PackedVector2Array).size()
+	print("WaterVerify UI: Delete waypoint → %d points %s" % [n_del, "OK" if n_del == n_ins - 1 else "FAIL"])
+	if n_del != n_ins - 1:
+		fails += 1
+	# Span: first span → culvert, then Ctrl+Z puts it back.
+	tb.call("_set_active_tool", "water_span")
+	await get_tree().process_frame
+	var pts3: PackedVector2Array = lay.stream(sid)["points"]
+	await _water_click(vp, cam, loader, (pts3[0] + pts3[1]) * 0.5)
+	await _water_wait(wn)
+	var mode0 := str((lay.stream(sid)["modes"] as Array)[0])
+	print("WaterVerify UI: Span click → %s %s" % [mode0, "OK" if mode0 == "culvert" else "FAIL"])
+	if mode0 != "culvert":
+		fails += 1
+	await _water_shot(dir, "ui_span_culvert")
+	# The culvert span is a buried barrel: hidden in first person, revealed by
+	# "Show buried", with a headwall at each mouth.
+	var runs: Array = wn.call("buried_runs", sid)
+	var broot: Node3D = loader.get("_main").get_node_or_null("Terrain/" + WaterNetwork.BURIED_NODE)
+	var mroot: Node3D = loader.get("_main").get_node_or_null("Terrain/" + WaterNetwork.MOUTHS_NODE)
+	# "Show buried" is a saved per-world setting (Mount Vernon has it ON):
+	# start from OFF so "hidden in first person" is a real test, then hand the
+	# world's own value back.
+	var lay_ref: Variant = wn.get("layer")
+	var buried_saved := bool(lay_ref.call("setting", "show_buried")) if lay_ref != null else false
+	wn.call("set_show_buried", false)
+	await get_tree().process_frame
+	var hidden_fp := broot != null and not broot.visible
+	wn.call("set_show_buried", true)
+	var shown := broot != null and broot.visible
+	await _water_shot(dir, "ui_culvert_shown")
+	wn.call("set_show_buried", buried_saved)
+	var heads := mroot.get_child_count() if mroot != null else 0
+	var run0: Dictionary = runs[0] if not runs.is_empty() else {}
+	print("WaterVerify UI: culvert runs %d (⌀%.2f m, holds %.0f L/s, carries %.0f L/s), hidden in FP %s, shown by toggle %s, mouth nodes %d" % [
+		runs.size(), float(run0.get("d", 0.0)), float(run0.get("capacity_lps", 0.0)),
+		float(run0.get("q_lps", 0.0)), str(hidden_fp), str(shown), heads])
+	if runs.is_empty() or not hidden_fp or not shown or heads < 2:
+		fails += 1
+		print("WaterVerify UI: FAIL buried culvert rendering")
+	var undo := InputEventKey.new()
+	undo.keycode = KEY_Z
+	undo.ctrl_pressed = true
+	undo.pressed = true
+	vp.push_input(undo)
+	await get_tree().process_frame
+	await _water_wait(wn)
+	var mode_u := str((lay.stream(sid)["modes"] as Array)[0])
+	print("WaterVerify UI: Ctrl+Z → %s %s" % [mode_u, "OK" if mode_u == "surface" else "FAIL"])
+	if mode_u != "surface":
+		fails += 1
+	# Trace from a point uphill of the camera target.
+	tb.call("_set_active_tool", "water_trace")
+	await get_tree().process_frame
+	var waited := 0.0
+	while (wn.call("drainage") as Dictionary).is_empty() and waited < 60.0:
+		await get_tree().create_timer(0.5).timeout
+		waited += 0.5
+	var n_t := lay.streams.size()
+	await _water_click(vp, cam, loader, c0 + Vector2(10.0, -30.0))
+	await _water_wait(wn)
+	var traced := lay.streams.size() == n_t + 1
+	var tp: PackedVector2Array = (lay.streams.back() as Dictionary)["points"] if traced else PackedVector2Array()
+	var t_drop := 0.0
+	if tp.size() >= 2:
+		t_drop = float(loader.call("ground_height_at", tp[0].x, tp[0].y)) \
+			- float(loader.call("ground_height_at", tp[tp.size() - 1].x, tp[tp.size() - 1].y))
+	print("WaterVerify UI: Trace → %d points, falls %.1f m %s" % [tp.size(), t_drop,
+		"OK" if traced and tp.size() >= 2 and t_drop >= 0.0 else "FAIL"])
+	if not traced or tp.size() < 2 or t_drop < 0.0:
+		fails += 1
+	tb.call("_set_active_tool", "water_view")
+	wn.call("set_show_drainage", true)
+	await _water_shot(dir, "ui_overview")
+	wn.call("set_show_drainage", false)
+	tb.call("_exit_mode")
+	fails += await _water_flow_view_test(loader, wn, cam, dir)
+	fails += _water_graph_link_test(loader, wn)
+	_water_ui_finished = true
+	return fails
+
+
+## An intake standing on a mapped stream takes that stream's discharge, and
+## off it, nothing.
+func _water_graph_link_test(loader: Node, wn: Node) -> int:
+	var sgv := get_tree().current_scene.find_child("SystemGraphView", true, false)
+	if sgv == null or not sgv.has_method("water_feature_supply_for_intake"):
+		print("WaterVerify GRAPH: FAIL no SystemGraphView link")
+		return 1
+	var best: Dictionary = {}
+	for f_v in wn.call("features"):
+		var prof: Dictionary = wn.call("profile", (f_v as Dictionary)["id"])
+		if not prof.is_empty() and (best.is_empty() or float(prof["length_m"]) > float(best["len"])):
+			best = {"f": f_v, "prof": prof, "len": float(prof["length_m"])}
+	if best.is_empty():
+		return 0
+	var pts: PackedVector2Array = best["prof"]["points"]
+	var p := pts[pts.size() / 2]
+	var c := Vector3.ZERO
+	var soi := get_tree().root.get_node_or_null("SoiService")
+	if soi != null and soi.has_method("world_center"):
+		c = soi.call("world_center")
+	var on_item := {"id": "cap_water_intake", "specs": {}, "site_x_m": p.x - c.x, "site_z_m": p.y - c.z}
+	var off_item := {"id": "cap_water_intake2", "specs": {}, "site_x_m": p.x - c.x + 400.0, "site_z_m": p.y - c.z + 400.0}
+	var dry: Dictionary = sgv.call("water_feature_supply_for_intake", on_item, 0.0)
+	var wet: Dictionary = sgv.call("water_feature_supply_for_intake", on_item, 20.0)
+	var off: Dictionary = sgv.call("water_feature_supply_for_intake", off_item, 20.0)
+	var pond: Dictionary = sgv.call("stream_pond_inflows", 5.0)
+	print("WaterVerify GRAPH: intake on %s → %s dry %.0f L/s, 20 mm/h %.0f L/s; 400 m off → %s; pond inflows %d" % [
+		(best["f"] as Dictionary)["id"], str(dry.get("feature_id", "-")), float(dry.get("q_lps", 0.0)),
+		float(wet.get("q_lps", 0.0)), "none" if off.is_empty() else str(off.get("feature_id")), pond.size()])
+	if dry.is_empty() or str(dry.get("feature_id", "")) != str((best["f"] as Dictionary)["id"]) \
+			or float(wet.get("q_lps", 0.0)) <= float(dry.get("q_lps", 0.0)):
+		print("WaterVerify GRAPH: FAIL")
+		return 1
+	return 0
+
+
+## Flow view: beads exist, move only while the clock runs (cosmetic clock),
+## and a storm raises the site outflow on the chip.
+func _water_flow_view_test(loader: Node, wn: Node, cam: Camera3D, dir: String) -> int:
+	var fails := 0
+	var main: Node = loader.get("_main")
+	wn.call("set_display_mode", "flow")
+	await get_tree().create_timer(0.3).timeout
+	var tr: MultiMeshInstance3D = main.get_node_or_null("Terrain/WaterTracers") as MultiMeshInstance3D
+	var n := tr.multimesh.instance_count if tr != null else 0
+	var first_live := -1
+	if tr != null:
+		for i in n:
+			if tr.multimesh.get_instance_transform(i).basis.x.length() > 0.01:
+				first_live = i
+				break
+	if tr != null:
+		var sts: Array = tr.get("_streams")
+		var cxz := Vector2(cam.global_position.x, cam.global_position.z)
+		var nearest := INF
+		for st in sts:
+			var bx: Rect2 = (st as Dictionary)["aabb"]
+			var cl := Vector2(clampf(cxz.x, bx.position.x, bx.end.x), clampf(cxz.y, bx.position.y, bx.end.y))
+			nearest = minf(nearest, cl.distance_to(cxz))
+		print("WaterVerify FLOW:   %d bead streams, nearest stream box %.0f m from the camera at %s, processing %s" % [
+			sts.size(), nearest, str(cam.global_position), str(tr.is_processing())])
+	var before := tr.multimesh.get_instance_transform(maxi(first_live, 0)).origin if n > 0 else Vector3.ZERO
+	await get_tree().create_timer(0.4).timeout
+	var still := tr.multimesh.get_instance_transform(maxi(first_live, 0)).origin if n > 0 else Vector3.ZERO
+	var old_ts: float = float(main.get("time_scale"))
+	main.set("time_scale", 60.0 / 3600.0)
+	await get_tree().create_timer(0.8).timeout
+	var after := tr.multimesh.get_instance_transform(maxi(first_live, 0)).origin if n > 0 else Vector3.ZERO
+	main.set("time_scale", old_ts)
+	var dry := float(wn.call("site_outflow_lps"))
+	wn.set("rain_override_mmh", 20.0)
+	wn.call("rebuild_surfaces")
+	var wet := float(wn.call("site_outflow_lps"))
+	var chip: Label = main.get_node_or_null("UILayer/WaterFlowChip") as Label
+	print("WaterVerify FLOW: %d beads (live #%d), paused moved %.3f m, running moved %.2f m; outflow dry %.0f L/s → 20 mm/h %.0f L/s; chip '%s'" % [
+		n, first_live, before.distance_to(still), before.distance_to(after), dry, wet,
+		chip.text.strip_edges() if chip != null else "(none)"])
+	if n == 0 or first_live < 0 or before.distance_to(still) > 0.01 or before.distance_to(after) < 0.05 \
+			or wet <= dry or chip == null or not chip.visible:
+		fails += 1
+		print("WaterVerify FLOW: FAIL")
+	await _water_shot(dir, "flow_view")
+	wn.set("rain_override_mmh", -1.0)
+	wn.call("set_display_mode", "all")
+	return fails
+
+
+func _water_screen(cam: Camera3D, loader: Node, w: Vector2) -> Vector2:
+	return cam.unproject_position(Vector3(w.x, float(loader.call("ground_height_at", w.x, w.y)) + 0.3, w.y))
+
+
+func _water_hover(vp: Viewport, cam: Camera3D, loader: Node, w: Vector2) -> void:
+	var sp := _water_screen(cam, loader, w)
+	var mm := InputEventMouseMotion.new()
+	mm.position = sp
+	mm.global_position = sp
+	vp.push_input(mm)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+func _water_click(vp: Viewport, cam: Camera3D, loader: Node, w: Vector2) -> void:
+	await _water_hover(vp, cam, loader, w)
+	var sp := _water_screen(cam, loader, w)
+	for pressed in [true, false]:
+		var b := InputEventMouseButton.new()
+		b.button_index = MOUSE_BUTTON_LEFT
+		b.pressed = pressed
+		b.position = sp
+		b.global_position = sp
+		vp.push_input(b)
+		await get_tree().process_frame
+	await get_tree().create_timer(0.4).timeout   # past the double-click window
+
+
+func _water_drag(vp: Viewport, cam: Camera3D, loader: Node, from_w: Vector2, to_w: Vector2) -> void:
+	await _water_hover(vp, cam, loader, from_w)
+	var a := _water_screen(cam, loader, from_w)
+	var b := _water_screen(cam, loader, to_w)
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = a
+	down.global_position = a
+	vp.push_input(down)
+	await get_tree().process_frame
+	for i in range(1, 9):
+		var p := a.lerp(b, float(i) / 8.0)
+		var mm := InputEventMouseMotion.new()
+		mm.position = p
+		mm.global_position = p
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		vp.push_input(mm)
+		await get_tree().process_frame
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = b
+	up.global_position = b
+	vp.push_input(up)
+	await get_tree().process_frame
+
+
+func _water_wait(wn: Node) -> void:
+	await get_tree().create_timer(0.6).timeout
+	var waited := 0.0
+	while bool(wn.call("is_busy")) and waited < 30.0:
+		await get_tree().create_timer(0.25).timeout
+		waited += 0.25
+
+
+func _water_shot(dir: String, name: String) -> void:
+	await get_tree().create_timer(0.3).timeout
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("%s/%s.png" % [dir, name])
+
+
+var _water_diag: Dictionary = {}
+var _water_ui_finished := false
+
+
+func _water_monotone_except_blocked(bed: PackedFloat32Array, blocked: PackedByteArray) -> bool:
+	for i in range(1, bed.size()):
+		if bed[i] > bed[i - 1] + 1e-3 and blocked[i] == 0 and blocked[i - 1] == 0:
+			return false
+	return true
+
+
+## Temporary siphon(s) seeded onto a PLAYER'S map for the capture — removed,
+## with the outlet sink minted for them, before the run quits.
+var _siphon_cleanup_ids: Array[String] = []
+
+
+func _siphon_cleanup(sgv: Node) -> void:
+	if _siphon_cleanup_ids.is_empty():
+		return
+	var model: Variant = sgv.get("model")
+	if model == null:
+		return
+	var remove_ids: Array[String] = []
+	for sid in _siphon_cleanup_ids:
+		remove_ids.append(sid)
+		for conn: Dictionary in (model.get("connections") as Array).duplicate():
+			if str(conn.get("source_item_id", "")) == sid:
+				var tgt: Dictionary = model.call("get_item", str(conn.get("target_item_id", "")))
+				if bool((tgt.get("specs", {}) as Dictionary).get("outlet_sink", false)):
+					remove_ids.append(str(tgt.get("id", "")))
+	for rid in remove_ids:
+		if not (model.call("get_item", rid) as Dictionary).is_empty():
+			model.call("remove_item", rid)
+	print("PlaytestHarness: siphon capture — removed the temporary siphon (%d items)" % remove_ids.size())
+	_siphon_cleanup_ids.clear()
+	if sgv.has_method("_schedule_graph_autosave"):
+		sgv.call("_schedule_graph_autosave")
+
+
+## The two things the first siphon pass could not do: move the draft exit
+## sideways (down the hill) from the Lab, and watch the turbine's close-up
+## run. Drives the Lab's OWN exit drag through its screen→section inverse,
+## asserts the outlet node, the culvert's far end and the physics' exit height
+## all moved together, restores the outlet, then opens the close-up and
+## asserts the siphon mode is up with the propeller turning and the flow
+## beads riding the path. Shoots both.
+func _verify_siphon_lab_interaction(sgv: Node, model: Variant, siphon_id: String,
+		dir: String, manifest: Array) -> void:
+	var fails := 0
+	var modal: Variant = sgv.get("_siphon_lab_modal")
+	if modal == null:
+		print("PlaytestHarness: siphon lab interaction — SKIPPED (no modal)")
+		return
+	var rf: Variant = sgv.get("_resource_flow")
+	var sink0: Dictionary = rf.call("_resolve_siphon_outlet_tank", model.call("get_item", siphon_id)) if rf != null else {}
+	if sink0.is_empty():
+		print("PlaytestHarness: siphon lab interaction — SKIPPED (no outlet)")
+		return
+	var sid := str(sink0.get("id", ""))
+	var site0 := GraphSiteLayout.site_xz(sink0)
+	var elev0 := float(sink0.get("elevation_m", 0.0))
+	# Where the handle is drawn now, then 8 m further along and 1 m lower.
+	var heading := float((modal.call("_elev_section_params") as Dictionary).get("heading", 0.0))
+	var pond_along := float(modal.call("_pond_along_m"))
+	var along0 := GraphSiteLayout.project_onto_section(site0, heading).x - pond_along
+	var along_mid := float(modal.get("_pv_along_mid"))
+	var px: Vector2 = modal.call("_pv_to_screen_centered", along0 + 8.0, elev0 - 1.0, along_mid)
+	modal.call("_drag_exit", px)
+	await get_tree().create_timer(0.6).timeout
+	var sink1: Dictionary = model.call("get_item", sid)
+	var site1 := GraphSiteLayout.site_xz(sink1)
+	var along1 := GraphSiteLayout.project_onto_section(site1, heading).x - pond_along
+	var elev1 := float(sink1.get("elevation_m", 0.0))
+	fails += _siphon_check("the Lab's exit drag walked the outlet along the cut (%.1f → %.1f m)" % [along0, along1],
+			absf(along1 - along0 - 8.0) < 0.6)
+	var ground1 := float(modal.call("_dem_elev_at", along1))
+	fails += _siphon_check("…and set its height (%.2f → %.2f m), never above the ground there (%.2f)" % [elev0, elev1, ground1],
+			elev1 < elev0 - 0.5 and (is_nan(ground1) or elev1 <= ground1 - 0.2 + 1e-3))
+	var specs1: Dictionary = (model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary
+	var conn_ok := false
+	for conn: Dictionary in model.get("connections") as Array:
+		if str(conn.get("source_item_id", "")) == siphon_id and str(conn.get("target_item_id", "")) == sid:
+			conn_ok = absf(float(conn.get("invert_out_m", NAN)) - elev1) < 1e-3 and not bool(conn.get("route_locked", false))
+	fails += _siphon_check("the culvert's far end and the physics' exit height followed (%.2f / %.2f)" % [
+			float(specs1.get("outlet_invert_m", NAN)), elev1],
+			conn_ok and absf(float(specs1.get("outlet_invert_m", NAN)) - elev1) < 1e-3)
+	await get_tree().create_timer(0.8).timeout
+	await _graph_shot(dir, "01c_outlet_dragged_downhill", manifest)
+	# Put it back.
+	sgv.call("move_siphon_outlet", siphon_id, site0, elev0)
+	await get_tree().create_timer(0.4).timeout
+	# The close-up in siphon mode — with the pond PRIMED so the flow shows
+	# (the map's pond may sit under the crest right now); level restored after.
+	var pond_t: Dictionary = sgv.call("resolve_siphon_pond", siphon_id)
+	var level_saved := float((pond_t.get("specs", {}) as Dictionary).get("level_m", NAN))
+	var specs_fill0: Dictionary = ((model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary)
+	var mode_saved := str(specs_fill0.get("siphon_prime_mode", "overflow"))
+	var dip_saved := float(specs_fill0.get("dip_tube_length_m", 1.0))
+	# The Lab's own "Fill pond to the prime level" — which switches to pump
+	# priming when the crest stands above the rim (this map's case).
+	if modal.has_method("_on_fill_to_prime"):
+		modal.call("_on_fill_to_prime")
+		await get_tree().create_timer(1.5).timeout
+		# Read the Lab's OWN evaluation: the engine stamps `siphon_primed` on
+		# its clock tick, and the harness holds the clock frozen here.
+		var sp: Dictionary = (model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary
+		var lr: Dictionary = modal.get("_last_r") as Dictionary
+		fails += _siphon_check("Fill-to-prime primed the siphon (mode %s, dip %.2f m, Lab primed %s)" % [
+				str(sp.get("siphon_prime_mode", "")), float(sp.get("dip_tube_length_m", 0.0)), str(lr.get("primed", false))],
+				bool(lr.get("primed", false)))
+	if modal.has_method("_set_lab_view"):
+		modal.call("_set_lab_view", "closeup")
+		await get_tree().create_timer(2.5).timeout
+		var closeup: Variant = modal.get("_closeup")
+		if closeup != null and (closeup as Object).has_method("debug_summary"):
+			var cs: Dictionary = closeup.call("debug_summary")
+			var flowing := bool(cs.get("flowing", false))
+			fails += _siphon_check("the close-up is in SIPHON mode (runner %s)" % str(cs.get("runner", false)),
+					bool(cs.get("siphon_mode", false)) and bool(cs.get("runner", false)))
+			fails += _siphon_check("the close-up shows the flow (flowing %s, %d beads, %.0f rpm, pond %+.2f m)" % [
+					str(flowing), int(cs.get("beads", 0)), float(cs.get("rpm", 0.0)), float(cs.get("level_rel_m", 0.0))],
+					(not flowing) or (int(cs.get("beads", 0)) > 0 and float(cs.get("rpm", 0.0)) > 1.0))
+			var hud: Variant = (closeup as Object).get("_hud")
+			if hud != null:
+				print("PlaytestHarness: siphon close-up HUD — %s" % str((hud as Label).text))
+		await _graph_shot(dir, "01b_siphon_closeup", manifest)
+		modal.call("_set_lab_view", "section")
+		await get_tree().create_timer(0.6).timeout
+	if not is_nan(level_saved) and sgv.has_method("lab_set_pond_level"):
+		sgv.call("lab_set_pond_level", siphon_id, level_saved)
+		await get_tree().create_timer(0.4).timeout
+	if modal.has_method("_commit_string"):
+		modal.call("_commit_string", "siphon_prime_mode", mode_saved)
+		modal.call("_commit_float", "dip_tube_length_m", dip_saved)
+		if modal.has_method("_load_from_model"):
+			modal.call("_load_from_model")
+	if fails > 0:
+		push_error("PlaytestHarness: siphon lab interaction — %d CHECK(S) FAILED" % fails)
+	else:
+		print("PlaytestHarness: siphon lab interaction — PASS")
+
+
+func _siphon_check(label: String, ok: bool) -> int:
+	print("PlaytestHarness: siphon verify — %s: %s" % ["OK" if ok else "FAIL", label])
+	return 0 if ok else 1
+
+
+## The siphon turbine as a SIPHON, end to end — what the PNGs cannot show.
+## (1) Binding leaves the turbine where it stands and does NOT convert its
+## direct-intake wire into a penstock (the "immovable intake node"); (2) the
+## auto outlet is traced away from the pond, never into its basin, and its
+## traced route is LOCKED so the culvert follows it; (3) the physics: primed
+## and flowing at the seeded state with the runner seeing less than the gross
+## head, a 20 m exit drop reports cavitation and no more power than the useful
+## draft gives; (4) the Lab shows the dip tube and the suction tile and the
+## dip-tube spin derives the break level.
+func _verify_siphon_turbine(sgv: Node, model: Variant, siphon_id: String,
+		pond_id: String, seeded: bool) -> void:
+	var fails := 0
+	var siphon: Dictionary = model.get_item(siphon_id)
+	var specs: Dictionary = siphon.get("specs", {}) as Dictionary
+	var pond_specs0: Dictionary = (model.get_item(pond_id).get("specs", {}) as Dictionary)
+	var level_eval := float(pond_specs0.get("level_m", NAN))
+	var mod_eval := float(siphon.get("elevation_m", specs.get("module_elev_m", NAN)))
+	if is_nan(level_eval):
+		level_eval = mod_eval + 0.05
+	# A player's pond may sit under the crest right now: evaluate at a level
+	# that would prime it, which is the physics question being asked.
+	if not seeded and not is_nan(mod_eval):
+		level_eval = maxf(level_eval, mod_eval + 0.05)
+	# (1) binding
+	var penstock_conns := 0
+	var intake_direct := false
+	for conn: Dictionary in model.connections:
+		if str(conn.get("target_item_id", "")) == siphon_id:
+			if str(conn.get("conduit_type", "")) == "poly_penstock":
+				penstock_conns += 1
+			if str(conn.get("source_item_id", "")) == pond_id and bool(conn.get("direct_intake", false)):
+				intake_direct = true
+	fails += _siphon_check("bind kept the pond→siphon wire a direct intake (no poly penstock minted)",
+			penstock_conns == 0 and intake_direct)
+	if seeded:
+		fails += _siphon_check("bind left the turbine's site where it was seeded (x %.1f)" % float(siphon.get("site_x_m", 0.0)),
+				absf(float(siphon.get("site_x_m", 0.0)) - 6.0) < 1e-3)
+	elif siphon_id.begins_with("cap_lab_") and GraphSiteLayout.has_site_coords(siphon):
+		var pond_s: Dictionary = model.get_item(pond_id)
+		var half_w := float(sgv.call("pond_half_extent_m", pond_specs0)) if sgv.has_method("pond_half_extent_m") 				else maxf(maxf(float(pond_specs0.get("footprint_w_m", 0.0)), float(pond_specs0.get("footprint_d_m", 0.0))) * 0.5, 3.0)
+		var d_shore := GraphSiteLayout.site_xz(siphon).distance_to(GraphSiteLayout.site_xz(pond_s))
+		fails += _siphon_check("bind seated the siteless turbine on the SHORE (%.1f m from the pond centre, half-width %.1f)" % [d_shore, half_w],
+				d_shore >= half_w + 1.0)
+	fails += _siphon_check("bind seeded the siphon geometry (dip %.2f m, prime %s)" % [
+			float(specs.get("dip_tube_length_m", 0.0)), str(specs.get("siphon_prime_mode", ""))],
+			float(specs.get("dip_tube_length_m", 0.0)) > 0.0 and not str(specs.get("siphon_prime_mode", "")).is_empty())
+	# (2) outlet
+	var rf: Variant = sgv.get("_resource_flow")
+	var sink: Dictionary = rf.call("_resolve_siphon_outlet_tank", siphon) if rf != null else {}
+	fails += _siphon_check("an outlet sink is wired to the siphon", not sink.is_empty())
+	if not sink.is_empty():
+		var pond: Dictionary = model.get_item(pond_id)
+		var d_pond := GraphSiteLayout.site_xz(sink).distance_to(GraphSiteLayout.site_xz(pond))
+		var keep := (float(sgv.call("pond_half_extent_m", pond_specs0)) if sgv.has_method("pond_half_extent_m") else 4.0) + 2.0
+		fails += _siphon_check("the outlet sits OUTSIDE the pond's basin (%.1f m from its centre, keep-out %.1f m)" % [d_pond, keep],
+				d_pond >= keep)
+		fails += _siphon_check("the outlet is below the turbine (%.2f vs %.2f m)" % [
+				float(sink.get("elevation_m", 0.0)), float(siphon.get("elevation_m", 0.0))],
+				float(sink.get("elevation_m", 0.0)) < float(siphon.get("elevation_m", 0.0)))
+		for conn: Dictionary in model.connections:
+			if str(conn.get("source_item_id", "")) == siphon_id and str(conn.get("target_item_id", "")) == str(sink.get("id", "")):
+				var r3: Array = conn.get("route_3d", []) as Array
+				fails += _siphon_check("the culvert's traced route (%d waypoints) is locked so the pipe follows it" % r3.size(),
+						r3.is_empty() or bool(conn.get("route_locked", false)))
+	# (3) physics through the SAME reach the engine uses
+	var eval_specs: Dictionary = specs.duplicate(true)
+	eval_specs["siphon_primed"] = true
+	var r0: Dictionary = HydroReach.evaluate_specs(level_eval, eval_specs)
+	fails += _siphon_check("primed at the seeded level: %s, Q %.1f L/s, %.0f W" % [
+			str(r0.get("regime", "")), float(r0.get("q_lps", 0.0)), float(r0.get("power_w", 0.0))],
+			bool(r0.get("primed", false)) and float(r0.get("q_lps", 0.0)) > 0.5 and float(r0.get("power_w", 0.0)) > 0.5)
+	fails += _siphon_check("the runner sees less than the gross head (%.2f of %.2f m)" % [
+			float(r0.get("turbine_head_m", 0.0)), float(r0.get("head_m", 0.0))],
+			float(r0.get("turbine_head_m", 0.0)) > 0.0 and float(r0.get("turbine_head_m", 0.0)) < float(r0.get("head_m", 0.0)))
+	fails += _siphon_check("suction reported under its limit (%.1f / %.1f m)" % [
+			float(r0.get("suction_m", 0.0)), float(r0.get("suction_max_m", 0.0))],
+			r0.has("suction_m") and float(r0.get("suction_m", 0.0)) < float(r0.get("suction_max_m", 0.0)))
+	var deep: Dictionary = eval_specs.duplicate(true)
+	deep["outlet_invert_m"] = mod_eval - 20.0
+	var rd: Dictionary = HydroReach.evaluate_specs(level_eval, deep)
+	var useful: Dictionary = eval_specs.duplicate(true)
+	useful["outlet_invert_m"] = mod_eval - float(rd.get("useful_draft_m", 7.0))
+	var ru: Dictionary = HydroReach.evaluate_specs(level_eval, useful)
+	fails += _siphon_check("a 20 m exit drop cavitates (useful draft %.1f m, %.1f m wasted)" % [
+			float(rd.get("useful_draft_m", 0.0)), float(rd.get("draft_excess_m", 0.0))],
+			bool(rd.get("cavitating", false)) and float(rd.get("draft_excess_m", 0.0)) > 1.0)
+	fails += _siphon_check("…and makes no more power than the useful draft (%.0f vs %.0f W)" % [
+			float(rd.get("power_w", 0.0)), float(ru.get("power_w", 0.0))],
+			float(rd.get("power_w", 0.0)) <= float(ru.get("power_w", 0.0)) * 1.03 + 1.0)
+	# (4) the Lab
+	var modal: Variant = sgv.get("_siphon_lab_modal")
+	if modal != null:
+		var dip_spin: Variant = (modal as Object).get("_dip_len_spin")
+		var brk_spin: Variant = (modal as Object).get("_break_spin")
+		var mod_spin: Variant = (modal as Object).get("_module_spin")
+		if dip_spin != null and brk_spin != null and mod_spin != null:
+			fails += _siphon_check("the Lab's dip-tube spin derives the break level (%.2f − %.2f = %.2f)" % [
+					float(mod_spin.value), float(dip_spin.value), float(brk_spin.value)],
+					absf(float(mod_spin.value) - float(dip_spin.value) - float(brk_spin.value)) < 0.02)
+		var deck: Variant = (modal as Object).get("_deck")
+		if deck != null:
+			var keys := PackedStringArray()
+			for t: Variant in (deck as Object).get("_tiles") as Array:
+				keys.append(str((t as Dictionary).get("key", "")))
+			fails += _siphon_check("the stat deck carries the siphon's Pond level + Suction tiles (%s)" % ", ".join(keys),
+					keys.has("level") and keys.has("suction"))
+	# The dip tube in the world: the hydroturbine prop carries the runtime.
+	var main := get_tree().current_scene
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	if not prop_id.is_empty() and main != null:
+		var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+		var tube: Node = prop.get_node_or_null("SiphonDipTube") if prop != null else null
+		fails += _siphon_check("the placed turbine carries a SiphonDipTube", tube != null)
+		if tube != null:
+			# Hidden by default; shown on the toggle; ONE vertical tube from the
+			# measured 6″ fitting (not the connection port).
+			var sp_saved: Dictionary = (model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary
+			var show_saved := bool(sp_saved.get("show_dip_tube", false))
+			var sp0 := sp_saved.duplicate(true)
+			sp0["show_dip_tube"] = false
+			model.call("update_item", siphon_id, {"specs": sp0})
+			await get_tree().create_timer(0.7).timeout
+			var ds0: Dictionary = tube.call("debug_summary")
+			fails += _siphon_check("the dip tube is HIDDEN by default (show_dip_tube off)", not bool(ds0.get("shown", true)))
+			var sp1 := sp0.duplicate(true)
+			sp1["show_dip_tube"] = true
+			model.call("update_item", siphon_id, {"specs": sp1})
+			await get_tree().create_timer(0.7).timeout
+			var ds1: Dictionary = tube.call("debug_summary")
+			var fit: Dictionary = ds1.get("fitting", {}) as Dictionary
+			var top: Vector3 = ds1.get("top", Vector3.INF)
+			var mouth: Vector3 = ds1.get("mouth", Vector3.INF)
+			var fit_pos: Vector3 = fit.get("pos", Vector3.INF)
+			fails += _siphon_check("…and SHOWN after the toggle (top %s)" % str(top), bool(ds1.get("shown", false)) and is_finite(top.x))
+			fails += _siphon_check("the tube hangs off the measured intake fitting %s (%.3f m away)" % [
+					str(fit_pos), top.distance_to(fit_pos) if is_finite(fit_pos.x) and is_finite(top.x) else NAN],
+					is_finite(fit_pos.x) and is_finite(top.x) and top.distance_to(fit_pos) < 0.05)
+			fails += _siphon_check("…straight DOWN (%.2f m, mouth under the top within 1 cm in plan)" % float(ds1.get("length_m", 0.0)),
+					is_finite(mouth.x) and Vector2(mouth.x, mouth.z).distance_to(Vector2(top.x, top.z)) < 0.01
+					and top.y - mouth.y > 0.09)
+			var binding := ConduitManager.resolve_port_binding(model.call("get_item", siphon_id), "res_in_0", main)
+			var port_pos: Vector3 = binding.get("pos", Vector3.INF)
+			if is_finite(port_pos.x):
+				print("PlaytestHarness: siphon dip tube — fitting %s vs res_in_0 port %s (%.2f m apart)" % [
+						str(fit_pos), str(port_pos), fit_pos.distance_to(port_pos)])
+			var sp2 := sp_saved.duplicate(true)
+			sp2["show_dip_tube"] = show_saved
+			model.call("update_item", siphon_id, {"specs": sp2})
+		# The state ring: a colour and a sentence for the regime the engine
+		# last stamped (SiphonStateRing.state_for is pure — pin it on the live
+		# specs and on canned regimes).
+		var ring: Node = prop.get_node_or_null("SiphonStateRing") if prop != null else null
+		fails += _siphon_check("the placed turbine carries a SiphonStateRing", ring != null)
+		if ring != null:
+			var rs: Dictionary = ring.call("debug_summary")
+			print("PlaytestHarness: siphon state ring — %s · \"%s\" · colour %s · bubbling %s" % [
+					str(rs.get("state", "")), str(rs.get("text", "")), str(rs.get("color", "")), str(rs.get("bubbling", ""))])
+			var canned := SiphonStateRing.state_for({"live_regime": "lift_exceeded", "siphon_primed": true})
+			var canned2 := SiphonStateRing.state_for({"live_regime": "siphon_flow", "siphon_primed": true, "live_q_lps": 70.0, "live_power_w": 144.0})
+			var canned3 := SiphonStateRing.state_for({"live_regime": "", "siphon_primed": false})
+			fails += _siphon_check("state ring: lift_exceeded reads as a FAULT (red), flowing as GENERATING (green), dry as idle (grey)",
+					str(canned["state"]) == "fault" and str(canned2["state"]) == "generating" and str(canned3["state"]) == "idle"
+					and SiphonStateRing.color_for("fault") == SiphonStateRing.C_FAULT)
+	# The pond's MAX FILL LEVEL (a dam above the basin rim): raising it moves
+	# the tank's rim and capacity, lets the Lab fill past the old rim, and
+	# stands a grabbable PondLevelHandle at the new height.
+	var loader: Node = main.find_child("TerrainLoader", true, false) if main != null else null
+	var tank0: Dictionary = sgv.call("resolve_siphon_pond", siphon_id) if sgv.has_method("resolve_siphon_pond") else {}
+	var ptag := str((tank0.get("specs", {}) as Dictionary).get("osm_water_tag", ""))
+	if loader != null and not ptag.is_empty() and loader.has_method("set_pond_max_level"):
+		var pidx := int(loader.call("find_pond_idx_by_tag", ptag))
+		if pidx >= 0:
+			var info0: Dictionary = loader.call("get_pond_info", pidx)
+			var basin := float(info0.get("basin_rim_m", NAN))
+			var saved_max := float(info0.get("max_level_m", NAN))
+			var level_saved := float((tank0.get("specs", {}) as Dictionary).get("level_m", NAN))
+			var rim0 := float((tank0.get("specs", {}) as Dictionary).get("rim_m", NAN))
+			var cap0 := float((tank0.get("specs", {}) as Dictionary).get("capacity_qty", 0.0))
+			# Raise RELATIVE to where the pond tops out now: a world may already
+			# carry a max fill above the basin rim (Mount Vernon does), and
+			# "basin + 0.5" would then LOWER it and shrink the capacity.
+			var top0 := basin
+			if not is_nan(saved_max):
+				top0 = maxf(top0, saved_max)
+			if not is_nan(rim0):
+				top0 = maxf(top0, rim0)
+			loader.call("set_pond_max_level", pidx, top0 + 0.5)
+			await get_tree().create_timer(0.8).timeout
+			var tank1: Dictionary = sgv.call("resolve_siphon_pond", siphon_id)
+			var rim1 := float((tank1.get("specs", {}) as Dictionary).get("rim_m", NAN))
+			var cap1 := float((tank1.get("specs", {}) as Dictionary).get("capacity_qty", 0.0))
+			fails += _siphon_check("max fill +0.5 m moved the tank's rim (%.2f → %.2f, basin %.2f, top before %.2f)" % [rim0, rim1, basin, top0],
+					absf(rim1 - (top0 + 0.5)) < 0.03)
+			fails += _siphon_check("…and grew its capacity (%.0f → %.0f L, footprint %.0f m²)" % [cap0, cap1, float(info0.get("area_m2", 0.0))],
+					cap1 > cap0 + 0.3 * float(info0.get("area_m2", 0.0)) * 1000.0 * 0.5)
+			var ok_lvl := bool(sgv.call("lab_set_pond_level", siphon_id, basin + 0.3))
+			await get_tree().create_timer(0.4).timeout
+			var tank2: Dictionary = sgv.call("resolve_siphon_pond", siphon_id)
+			var lvl2 := float((tank2.get("specs", {}) as Dictionary).get("level_m", NAN))
+			fails += _siphon_check("the Lab can now fill the pond PAST the old rim (level %.2f vs basin rim %.2f)" % [lvl2, basin],
+					ok_lvl and lvl2 > basin + 0.25)
+			var handle: Node = loader.call("pond_level_handle_for_tag", ptag) as Node
+			fails += _siphon_check("a PondLevelHandle stands at the max fill height", handle != null
+					and absf(float(handle.call("max_level_y")) - (top0 + 0.5)) < 0.03)
+			if handle != null:
+				# The marker contract end to end: begin / preview / commit.
+				handle.call("world_drag_begin")
+				var c3: Vector3 = handle.get("global_position")
+				handle.call("world_drag_preview", Vector3(c3.x, top0 + 0.9, c3.z))
+				handle.call("world_drag_commit", Vector3(c3.x, top0 + 0.9, c3.z))
+				await get_tree().create_timer(0.8).timeout
+				var tank3: Dictionary = sgv.call("resolve_siphon_pond", siphon_id)
+				var rim3 := float((tank3.get("specs", {}) as Dictionary).get("rim_m", NAN))
+				fails += _siphon_check("dragging the handle up commits a new max fill (rim %.2f, expected %.2f)" % [rim3, top0 + 0.9],
+						absf(rim3 - (top0 + 0.9)) < 0.03)
+			# Put it back.
+			loader.call("set_pond_max_level", pidx, saved_max)
+			if not is_nan(level_saved):
+				sgv.call("lab_set_pond_level", siphon_id, level_saved)
+			await get_tree().create_timer(0.5).timeout
+		else:
+			print("PlaytestHarness: siphon verify — max fill level SKIPPED (pond tag %s not on the loader)" % ptag)
+	if fails > 0:
+		push_error("PlaytestHarness: siphon verify — %d CHECK(S) FAILED" % fails)
+	else:
+		print("PlaytestHarness: siphon verify — PASS")
+
+
+## --- NPC animation editor capture (fabrication swarm B3) ---------------------
+## Drives the editor with REAL input pushed through the viewport — what a
+## player's mouse and keyboard do — because an editor whose picking, ring drag
+## or keyboard shortcuts silently miss looks perfect in a screenshot:
+##   1. opens on drill_hole through Main (its own CanvasLayer) in the drill
+##      context and checks both hands sit on the drill's grips;
+##   2. starts a NEW clip, CLICKS the right upper arm (joint picked), DRAGS
+##      the gizmo's X ring (a key appears, the shoulder turned);
+##   3. CLICKS the timeline halfway, presses K (a second key), Ctrl+S (the
+##      file is written), reloads it and compares it byte for byte;
+##   4. Escape closes it and releases the modal.
+## Shots per state. Runs in the harness sandbox (the clip it saves is the
+## sandbox's); it still deletes the clip it wrote.
+func _ae_check(label: String, ok: bool) -> int:
+	print("PlaytestHarness: animeditor — %s %s" % ["PASS" if ok else "FAIL", label])
+	return 0 if ok else 1
+
+
+func _ae_key(vp: Viewport, code: Key, ctrl: bool = false) -> void:
+	for pressed in [true, false]:
+		var ev := InputEventKey.new()
+		ev.keycode = code
+		ev.physical_keycode = code
+		ev.pressed = pressed
+		ev.ctrl_pressed = ctrl
+		vp.push_input(ev)
+		await get_tree().process_frame
+
+
+func _ae_screen(editor: Control, world: Vector3) -> Vector2:
+	var vpc := editor.get("_vpc") as SubViewportContainer
+	var cam := editor.get("_camera") as Camera3D
+	return vpc.get_global_rect().position + cam.unproject_position(world)
+
+
+func _run_animeditor_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var label := _shots_label if not _shots_label.is_empty() else "animeditor"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var manifest: Array = []
+	var fails := 0
+	if main == null or not main.has_method("open_npc_anim_editor"):
+		push_error("PlaytestHarness: animeditor — FAIL no Main.open_npc_anim_editor")
+		return
+	var ed: Control = main.call("open_npc_anim_editor", "drill_hole")
+	await get_tree().create_timer(0.8).timeout
+	fails += _ae_check("the editor opened on drill_hole", ed != null and ed.visible
+		and (ed.get("clip") as NpcAnimClip).id == "drill_hole")
+	fails += _ae_check("the drill context is up (tool + bench)", ed.get("_context") == "drill"
+		and ed.get("_tool") != null and (ed.get("_workpieces") as Node3D).get_child_count() > 0)
+	var fig := ed.get("_figure") as NpcSimpleFigure
+	var tool := ed.get("_tool") as Node3D
+	var socks: Dictionary = tool.get_meta("sockets", {})
+	var grip_err := fig.palm_global(0).origin.distance_to(tool.global_transform * (socks["grip"] as Transform3D).origin)
+	var grip2_err := fig.palm_global(1).origin.distance_to(tool.global_transform * (socks["grip2"] as Transform3D).origin)
+	fails += _ae_check("both hands on the drill's grips (%.4f / %.4f m)" % [grip_err, grip2_err],
+		grip_err < 0.005 and grip2_err < 0.005)
+	await _graph_shot(dir, "01_drill_context", manifest, "animeditor")
+	ed.call("set_playhead", 0.3)
+	await get_tree().create_timer(0.3).timeout
+	await _graph_shot(dir, "02_drill_mid_op", manifest, "animeditor")
+
+	# A new clip, edited with the mouse.
+	var vp := ed.get_viewport()
+	ed.call("_on_new")
+	await get_tree().create_timer(0.4).timeout
+	var clip := ed.get("clip") as NpcAnimClip
+	var jm := fig.joint_map()
+	var sh: Node3D = jm["shoulder_r"]
+	var el: Node3D = jm["elbow_r"]
+	var arm_mid: Vector3 = (sh.global_position + el.global_position) * 0.5
+	var p_arm := _ae_screen(ed, arm_mid)
+	var ev0 := int(ed.get("viewport_events"))
+	await _lc_click(vp, p_arm)
+	await _lc_press(vp, p_arm, false)
+	await get_tree().process_frame
+	# Separate "the click never arrived" from "the pick missed".
+	var cam := ed.get("_camera") as Camera3D
+	var local := cam.unproject_position(arm_mid)
+	var direct := str(ed.call("pick_joint", cam.project_ray_origin(local), cam.project_ray_normal(local)))
+	print("PlaytestHarness: animeditor — click at %s (local %s): %d viewport events, direct pick '%s'" % [
+		str(p_arm), str(local), int(ed.get("viewport_events")) - ev0, direct])
+	fails += _ae_check("clicking the upper arm selects shoulder_r (got '%s')" % str(ed.call("selected_joint")),
+		str(ed.call("selected_joint")) == "shoulder_r")
+	var before: Vector3 = sh.rotation
+	var gz := ed.get("_gizmo") as LightGizmo
+	await get_tree().process_frame
+	var o := gz.global_position
+	var r := LightGizmo.RING_R * gz.handle_scale()
+	var ax := gz.axis("rx")
+	var u_ax := gz.axis("y")
+	var v_ax := ax.cross(u_ax).normalized()
+	var start := o + u_ax * r
+	await _lc_move(vp, _ae_screen(ed, start))
+	await _lc_press(vp, _ae_screen(ed, start), true)
+	for k in range(1, 9):
+		var a := deg_to_rad(5.0 * k)
+		await _lc_move(vp, _ae_screen(ed, o + (u_ax * cos(a) + v_ax * sin(a)) * r))
+	await _lc_press(vp, _ae_screen(ed, o + (u_ax * cos(deg_to_rad(40.0)) + v_ax * sin(deg_to_rad(40.0))) * r), false)
+	await get_tree().create_timer(0.2).timeout
+	var turned := rad_to_deg((sh.rotation - before).length())
+	fails += _ae_check("dragging the X ring keyed shoulder_r at 0 s (keys %s)" % str(clip.key_times("shoulder_r")),
+		clip.key_times("shoulder_r").has(0.0))
+	fails += _ae_check("the shoulder turned (%.1f deg)" % turned, turned > 10.0)
+	await _graph_shot(dir, "03_ring_drag", manifest, "animeditor")
+
+	# Scrub with the timeline, key with K.
+	var tl := ed.get("_timeline") as Control
+	var rect := tl.get_global_rect()
+	var p_mid := Vector2(rect.position.x + 14.0 + (rect.size.x - 28.0) * 0.5, rect.position.y + rect.size.y * 0.5)
+	await _lc_click(vp, p_mid)
+	await _lc_press(vp, p_mid, false)
+	var ph := float(ed.call("playhead"))
+	fails += _ae_check("clicking the timeline scrubs to the middle (%.3f s)" % ph, absf(ph - clip.length_s * 0.5) < 0.05)
+	await _ae_key(vp, KEY_K)
+	fails += _ae_check("K keys the selected joint at the playhead (keys %s)" % str(clip.key_times("shoulder_r")),
+		clip.key_times("shoulder_r").size() == 2)
+	ed.set("_onion", true)
+	await get_tree().create_timer(0.3).timeout
+	await _graph_shot(dir, "04_onion_skin", manifest, "animeditor")
+	ed.set("_onion", false)
+
+	# Save with Ctrl+S, reload, compare.
+	await _ae_key(vp, KEY_S, true)
+	var path := NpcAnimClip.USER_DIR + clip.id + ".json"
+	fails += _ae_check("Ctrl+S wrote %s" % path, FileAccess.file_exists(path))
+	var want := JSON.stringify(clip.to_dict())
+	ed.call("_load_clip", clip.id)
+	var back := ed.get("clip") as NpcAnimClip
+	fails += _ae_check("the reloaded clip is identical", JSON.stringify(back.to_dict()) == want)
+	fails += _ae_check("nothing unsaved after the save", not bool(ed.call("is_dirty")))
+
+	# Other contexts render.
+	for ctx in ["cut", "fasten", "lift"]:
+		ed.call("set_context", ctx)
+		ed.call("_load_clip", str(FabContextRig.CLIP_FOR[ctx]))
+		ed.call("set_playhead", 0.4)
+		await get_tree().create_timer(0.35).timeout
+		await _graph_shot(dir, "05_context_%s" % ctx, manifest, "animeditor")
+
+	# Escape closes and hands the mouse back.
+	await _ae_key(vp, KEY_ESCAPE)
+	await get_tree().create_timer(0.2).timeout
+	fails += _ae_check("Escape closed the editor", not ed.visible)
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(manifest, "\t"))
+	if fails > 0:
+		push_error("PlaytestHarness: animeditor — %d CHECK(S) FAILED" % fails)
+	else:
+		print("PlaytestHarness: animeditor — PASS")
+
+
+# ==================== FABRICATION SWARM (--capture=fabswarm) ====================
+## A crew of 12 rehearses building the SOAK 2026 LinkageLab design from bare
+## ground on a REAL map, on a frozen clock moved by hand (the build is a pure
+## function of the clock, so this is exactly what scrubbing does). Asserts
+## what a PNG cannot:
+##   - at the start nothing stands; at the end every part is seated and the
+##     ring is deployed (the builder carries NO part states and the fold is the
+##     design's closed angle);
+##   - for one job of every kind (cut, drill, place, fasten, lift, deploy) its
+##     crew is posed there with that job's clip, and every hand on a tool is
+##     ON its grip (< 2 cm) — a hand floating off a saw reads fine in a
+##     thumbnail;
+##   - the structure only grows; scrubbing back to a moment gives the same
+##     structure as the first visit;
+##   - ending the rehearsal hands the structure back seated.
+## A wide PNG per phase plus a close-up per job kind. Removes its prop.
+func _fs_check(label: String, ok: bool, fails: Array) -> void:
+	print("PlaytestHarness: fabswarm — %s %s" % ["PASS" if ok else "FAIL", label])
+	if not ok:
+		fails.append(label)
+
+
+func _fs_hidden(b: LinkageStructureBuilder) -> int:
+	var n := 0
+	for k in b.part_keys():
+		var st := b.part_state(k)
+		if not st.is_empty() and not bool(st.get("visible", true)):
+			n += 1
+	return n
+
+
+## The flattest patch near `base` big enough for the ring and its benches
+## (the build is staged on flat ground; on a hillside the crew stands on the
+## slope while the structure stands on its footing). Scored by the spread of
+## ground heights over a 15 m disc; returns the centre, y on the ground.
+func _fs_flat_spot(main: Node, base: Vector3) -> Vector3:
+	var best := base
+	var best_score := INF
+	for ring in [22.0, 35.0, 50.0, 70.0, 95.0, 125.0]:
+		for k in 16:
+			var a := TAU * float(k) / 16.0
+			var c := base + Vector3(cos(a), 0.0, sin(a)) * float(ring)
+			var lo := INF
+			var hi := -INF
+			for r in [0.0, 5.0, 10.0, 15.0]:
+				for m in (1 if r == 0.0 else 8):
+					var b := TAU * float(m) / 8.0
+					var y := TerrainSurfaceQuery.ground_height_at(main, c.x + cos(b) * float(r), c.z + sin(b) * float(r))
+					lo = minf(lo, y)
+					hi = maxf(hi, y)
+			var score := hi - lo + float(ring) * 0.004
+			if score < best_score:
+				best_score = score
+				best = c
+	best.y = TerrainSurfaceQuery.ground_height_at(main, best.x, best.z)
+	print("PlaytestHarness: fabswarm — site %.0f m from the player, ground spread %.2f m" % [
+		Vector2(best.x - base.x, best.z - base.z).length(), best_score])
+	return best
+
+
+## A camera position never below the ground (+ clearance).
+func _fs_cam_at(main: Node, p: Vector3, clearance: float = 1.2) -> Vector3:
+	var gy := TerrainSurfaceQuery.ground_height_at(main, p.x, p.z)
+	return Vector3(p.x, maxf(p.y, gy + clearance), p.z)
+
+
+func _fs_visible(b: LinkageStructureBuilder) -> int:
+	return b.part_keys().size() - _fs_hidden(b)
+
+
+func _fs_goto(main: Node, h0: float, t: float) -> void:
+	main.call("set_absolute_hours", h0 + t / 3600.0)
+	for _i in 3:
+		await get_tree().process_frame
+
+
+## Worst palm-to-grip distance over every crew member holding a tool.
+func _fs_grip_error(site: LinkageBuildSite) -> Dictionary:
+	var worst := 0.0
+	var n := 0
+	for c in site.get("_crew"):
+		var fig: NpcSimpleFigure = c["fig"]
+		if not fig.visible:
+			continue
+		for id in c["tools"]:
+			var tool: Node3D = c["tools"][id]
+			if not tool.visible:
+				continue
+			var socks: Dictionary = tool.get_meta("sockets", {})
+			for i in 2:
+				var want = socks.get("grip" if i == 0 else "grip2")
+				if not (want is Transform3D):
+					continue
+				var err := fig.palm_global(i).origin.distance_to((tool.global_transform * (want as Transform3D)).origin)
+				worst = maxf(worst, err)
+				n += 1
+	return {"worst": worst, "hands": n}
+
+
+func _run_fabswarm_capture() -> void:
+	var tree := get_tree()
+	var loader := await _find_terrain_loader()
+	if loader == null:
+		push_error("PlaytestHarness: fabswarm needs a TerrainLoader map")
+		_maybe_quit()
+		return
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(_settle_s()).timeout
+	var main := _find_main()
+	if main == null:
+		_maybe_quit()
+		return
+	var label := _shots_label if not _shots_label.is_empty() else "fabswarm"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var fails: Array = []
+	var vp := get_viewport()
+
+	var prev_cam := vp.get_camera_3d()
+	var base := prev_cam.global_position if prev_cam != null else Vector3(0, 2, 0)
+	var fwd := -prev_cam.global_basis.z if prev_cam != null else Vector3.FORWARD
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length_squared() > 1e-6 else Vector3.FORWARD
+	var at := _fs_flat_spot(main, base)
+	fwd = Vector3(at.x - base.x, 0.0, at.z - base.z).normalized()
+	var cam := Camera3D.new()
+	cam.name = "PlaytestFabSwarmCam"
+	cam.fov = 60.0
+	main.add_child(cam)
+	var wide_pos := _fs_cam_at(main, at - fwd * 19.0 + fwd.cross(Vector3.UP) * 6.0 + Vector3(0, 9.0, 0), 6.0)
+	cam.global_position = wide_pos
+	cam.look_at(at + Vector3(0, 1.0, 0), Vector3.UP)
+	cam.make_current()
+	var saved_scale: Variant = main.get("time_scale")
+	var saved_abs: float = float(main.call("get_absolute_hours"))
+	main.set("time_scale", 0.0)
+	main.set("day_time", 11.0)
+	await tree.process_frame
+	var h0: float = float(main.call("get_absolute_hours"))
+
+	var f := FileAccess.open("res://core/linkage/presets/ll_starshade_v1_soak_2026.json", FileAccess.READ)
+	var cfg = JSON.parse_string(f.get_as_text()) if f != null else null
+	var seeded: Array[String] = []
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(main, LinkageStructureBuilder.MODEL_ID,
+		at.x, at.z, {"linkage_spec": cfg})
+	var pid := str(placed.get("prop_id", ""))
+	_fs_check("the SOAK 2026 design is placed", bool(placed.get("ok", false)) and cfg is Dictionary, fails)
+	if pid.is_empty():
+		_prop_edit_restore(main, seeded, cam, prev_cam, saved_scale, saved_abs)
+		return
+	seeded.append(pid)
+	for _i in 6:
+		await tree.process_frame
+
+	var t_plan := Time.get_ticks_msec()
+	var ok_start := LinkageBuildSite.start_rehearsal(main, pid, 12, h0)
+	var plan_ms := Time.get_ticks_msec() - t_plan
+	await tree.process_frame
+	var site := LinkageBuildSite.site_for(main, pid)
+	_fs_check("a rehearsal starts (plan %d ms)" % plan_ms, ok_start and site != null and not site.timeline().is_empty(), fails)
+	if site == null:
+		_prop_edit_restore(main, seeded, cam, prev_cam, saved_scale, saved_abs)
+		return
+	var tl := site.timeline()
+	var builder := (site.get_parent() as Node).get_node("ModelRoot") as LinkageStructureBuilder
+	var mk := float(tl["makespan"])
+	print("PlaytestHarness: fabswarm — plan: %s" % LinkageBuildTimeline.summary(tl))
+	_fs_check("the crew is 12 figures", (site.crew_figures() as Array).size() == 12, fails)
+
+	# Start: nothing stands.
+	await _fs_goto(main, h0, 1.0)
+	var keys := builder.part_keys()
+	var hidden0 := _fs_hidden(builder)
+	_fs_check("at the start almost nothing stands (%d of %d hidden)" % [hidden0, keys.size()],
+		hidden0 >= int(keys.size() * 0.9), fails)
+	await _graph_shot(dir, "00_start", [], "fabswarm")
+
+	# Wide phases: the structure only grows.
+	var last_vis := _fs_visible(builder)
+	var grows := true
+	var mid_hidden := -1
+	var fracs := [0.15, 0.35, 0.55, 0.75, 0.95]
+	for i in fracs.size():
+		await _fs_goto(main, h0, mk * float(fracs[i]))
+		var h := _fs_hidden(builder)
+		var vis := _fs_visible(builder)
+		if vis < last_vis:
+			grows = false
+		last_vis = vis
+		if i == 2:
+			mid_hidden = h
+		print("PlaytestHarness: fabswarm — %d %%: %s · fold %.1f deg · %d shown, %d staged hidden" % [int(100.0 * float(fracs[i])),
+			site.progress_line(), rad_to_deg(builder.get_fold_angle()), vis, h])
+		cam.global_position = wide_pos
+		cam.look_at(at + Vector3(0, 1.0, 0), Vector3.UP)
+		await _graph_shot(dir, "%02d_build_%d" % [i + 1, int(100.0 * float(fracs[i]))], [], "fabswarm")
+	_fs_check("the structure only grows", grows, fails)
+
+	# One job of each kind: its crew there, with its clip and tool in hand.
+	var shot_i := 10
+	for kind in ["cut", "drill", "place", "fasten", "lift", "deploy"]:
+		var job: Dictionary = {}
+		for j in tl["jobs"]:
+			if str(j["kind"]) == kind and float(j["t1"]) - float(j["t0"]) > 1.0:
+				job = j
+				break
+		if job.is_empty():
+			_fs_check("a %s job exists" % kind, false, fails)
+			continue
+		var tm := (float(job["t0"]) + float(job["t1"])) * 0.5
+		await _fs_goto(main, h0, tm)
+		var st := site.last_state()
+		var crew: Array = job["crew"]
+		var posed := 0
+		var want_clip := str(LinkageBuildTimeline.CLIP_FOR_KIND.get(kind, ""))
+		for w in st["workers"]:
+			if crew.has(w["id"]) and str(w["activity"]) == "work" and int(w["job"]) == int(job["id"]) \
+					and str(w["clip"]) == want_clip:
+				posed += 1
+		_fs_check("%s: all %d of its crew at work with %s (%d)" % [kind, crew.size(), want_clip, posed],
+			posed == crew.size(), fails)
+		var ge := _fs_grip_error(site)
+		_fs_check("%s: every hand on a tool is on its grip (worst %.4f m over %d hands)" % [kind, ge["worst"], ge["hands"]],
+			float(ge["worst"]) < 0.02, fails)
+		if kind in ["cut", "drill", "fasten"]:
+			_fs_check("%s: the tool is in hand" % kind, int(ge["hands"]) > 0, fails)
+		# Close-up on the first of its crew.
+		var fig: NpcSimpleFigure = (site.crew_figures() as Array)[int(crew[0])]
+		var fp := fig.global_position
+		var fz := fig.global_basis.z
+		var fx := fig.global_basis.x
+		var dist := 3.4 if kind in ["cut", "drill", "fasten", "place"] else 9.0
+		cam.global_position = _fs_cam_at(main, fp + fz * dist + fx * dist * 0.55 + Vector3(0, 1.7 if dist < 5.0 else 4.0, 0))
+		cam.look_at(fp + Vector3(0, 1.0, 0), Vector3.UP)
+		await _graph_shot(dir, "%02d_%s" % [shot_i, kind], [], "fabswarm")
+		shot_i += 1
+
+	# The site's own per-frame cost mid-build (state_at + the structure +
+	# twelve figures), with the clock moving so the structure re-stages.
+	var t_ms := 0.0
+	for i in 20:
+		main.call("set_absolute_hours", h0 + (mk * 0.3 + float(i) * 7.0) / 3600.0)
+		var us := Time.get_ticks_usec()
+		site.call("_update", 1.0 / 60.0)
+		t_ms += float(Time.get_ticks_usec() - us) / 1000.0
+	_fs_check("the site costs %.2f ms a frame mid-build" % (t_ms / 20.0), t_ms / 20.0 < 8.0, fails)
+
+	# Scrub back to the middle: the same structure.
+	await _fs_goto(main, h0, mk * 0.55)
+	_fs_check("scrubbing back gives the same structure (%d vs %d hidden)" % [_fs_hidden(builder), mid_hidden],
+		_fs_hidden(builder) == mid_hidden, fails)
+
+	# The end: every part seated, the ring deployed, the crew gone.
+	await _fs_goto(main, h0, mk + LinkageBuildSite.LINGER_S + 30.0)
+	var stated := 0
+	for k in builder.part_keys():
+		if not builder.part_state(k).is_empty():
+			stated += 1
+	var dep_err := absf(rad_to_deg(builder.get_fold_angle()) - float((tl["fold"] as Dictionary)["deployed_deg"]))
+	_fs_check("built: every part seated (%d still staged), deployed (%.2f deg off)" % [stated, dep_err],
+		stated == 0 and dep_err < 0.2, fails)
+	var crew_hidden := true
+	for fg in site.crew_figures():
+		if (fg as Node3D).visible:
+			crew_hidden = false
+	_fs_check("the crew disperses", crew_hidden, fails)
+	print("PlaytestHarness: fabswarm — %s" % site.progress_line())
+	cam.global_position = wide_pos
+	cam.look_at(at + Vector3(0, 1.0, 0), Vector3.UP)
+	await _graph_shot(dir, "20_built", [], "fabswarm")
+
+	# Ending the rehearsal hands the structure back.
+	await _fs_goto(main, h0, mk * 0.3)
+	LinkageBuildSite.clear_rehearsal(main, pid)
+	for _i in 3:
+		await tree.process_frame
+	var stated2 := 0
+	for k in builder.part_keys():
+		if not builder.part_state(k).is_empty():
+			stated2 += 1
+	_fs_check("ending the rehearsal seats every part (%d staged) and removes the site" % stated2,
+		stated2 == 0 and LinkageBuildSite.site_for(main, pid) == null
+		and not PlacedPropService.get_prop_record(main, pid).has(LinkageBuildSite.RECORD_KEY), fails)
+
+	_prop_edit_restore(main, seeded, cam, prev_cam, saved_scale, saved_abs)
+	if fails.is_empty():
+		print("PlaytestHarness: fabswarm — PASS")
+	else:
+		push_error("PlaytestHarness: fabswarm — %d CHECK(S) FAILED" % fails.size())
+	_maybe_quit()
+
+
+# ==================== LAB BUILD STEPS (--capture=buildsteps) ====================
+## The Linkage Lab's build-step player (LINKAGE_PARITY.md A5) driven with REAL
+## input through the viewport: opens the Lab through Main on the SOAK 2026
+## preset, CLICKS "🎬 Steps" (the dock opens, playback enters on the generated
+## sequence), CLICKS a list row (the player jumps to that step), CLICKS play
+## (time moves the op), then for one step of each kind shoots the Lab and
+## asserts what a PNG cannot:
+##   - cut / drill steps hide the structure and show the workbench;
+##   - the saw / drill / driver is where its op says (the drill's tip lands ON
+##     the hole marker it is making, within 2 mm);
+##   - a place step hides the future parts;
+## then CLICKS "Save to design" (the sequence lands in the design's config)
+## and Escape closes the Lab with every part seated.
+func _bs_check(label: String, ok: bool, fails: Array) -> void:
+	print("PlaytestHarness: buildsteps — %s %s" % ["PASS" if ok else "FAIL", label])
+	if not ok:
+		fails.append(label)
+
+
+func _bs_find_button(root: Node, text: String) -> Button:
+	for n in root.find_children("*", "Button", true, false):
+		if (n as Button).text == text and (n as Button).is_visible_in_tree():
+			return n
+	return null
+
+
+func _bs_center(c: Control) -> Vector2:
+	var r := c.get_global_rect()
+	return r.position + r.size / 2.0
+
+
+func _bs_first(steps: Array, kind: String) -> int:
+	for i in steps.size():
+		if str(steps[i]["kind"]) == kind:
+			return i
+	return -1
+
+
+func _run_buildsteps_capture() -> void:
+	var tree := get_tree()
+	var scene := tree.current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await tree.create_timer(_settle_s()).timeout
+	var main := tree.current_scene
+	var label := _shots_label if not _shots_label.is_empty() else "buildsteps"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+	var fails: Array = []
+	var f := FileAccess.open("res://core/linkage/presets/ll_starshade_v1_soak_2026.json", FileAccess.READ)
+	var cfg = JSON.parse_string(f.get_as_text()) if f != null else null
+	if main == null or not main.has_method("open_linkage_lab") or not (cfg is Dictionary):
+		push_error("PlaytestHarness: buildsteps — FAIL no Main.open_linkage_lab or preset")
+		_maybe_quit()
+		return
+	main.call("open_linkage_lab", cfg)
+	await tree.create_timer(0.6).timeout
+	var lab: Control = main.get("linkage_lab_ui")
+	_bs_check("the Lab opened", lab != null and lab.visible, fails)
+	if lab == null:
+		_maybe_quit()
+		return
+	var vp := lab.get_viewport()
+	var builder := lab.get("_builder") as LinkageStructureBuilder
+	var design_fold := builder.get_fold_angle()
+
+	# Open the dock with a real click.
+	var steps_btn := _bs_find_button(lab, "🎬 Steps")
+	_bs_check("the topbar has a Steps button", steps_btn != null, fails)
+	if steps_btn == null:
+		_maybe_quit()
+		return
+	await _lc_click(vp, _bs_center(steps_btn))
+	await tree.create_timer(0.4).timeout
+	var panel: Control = lab.call("steps_panel")
+	var player: LinkageStepPlayer = panel.call("player")
+	_bs_check("clicking Steps opens the dock and enters playback", bool(panel.call("is_open")) and player != null and player.active, fails)
+	var steps: Array = player.steps
+	print("PlaytestHarness: buildsteps — %d steps, %d shown" % [steps.size(), LinkageBuildSteps.representative_steps(steps).size()])
+
+	# Click a row: the player jumps there.
+	var list := panel.get("_list") as ItemList
+	var row := mini(5, list.item_count - 1)
+	var rect := list.get_item_rect(row)
+	await _lc_click(vp, list.get_global_rect().position + rect.position + rect.size / 2.0 - Vector2(0, list.get_v_scroll_bar().value))
+	await tree.process_frame
+	var want_i := int((panel.get("_rows") as Array)[row])
+	_bs_check("clicking row %d jumps to step %d (at %d)" % [row, want_i + 1, player.index + 1], player.index == want_i, fails)
+
+	# Click play: the op advances.
+	var play_btn := panel.get("_play_btn") as Button
+	var i0 := player.index
+	var t0 := player.t
+	await _lc_click(vp, _bs_center(play_btn))
+	await tree.create_timer(1.2).timeout
+	_bs_check("clicking play runs the sequence (step %d t %.2f -> step %d t %.2f)" % [i0 + 1, t0, player.index + 1, player.t],
+		player.playing and (player.index != i0 or player.t > t0 + 0.05), fails)
+	await _lc_click(vp, _bs_center(play_btn))
+	_bs_check("clicking again pauses", not player.playing, fails)
+
+	# One step of each kind.
+	var n_shot := 0
+	for kind in ["cut", "drill", "place", "fasten"]:
+		var i := _bs_first(steps, kind)
+		if i < 0:
+			_bs_check("SOAK has a %s step" % kind, false, fails)
+			continue
+		player.go_to(i)
+		var u := 0.45
+		if kind == "drill":
+			# Just past the first hole's plunge: that hole is drilled and the
+			# bit is at the bottom of it.
+			var ctx := player.context_for(rad_to_deg(builder.get_fold_angle()))
+			var plan := LinkageBuildOps.stage(steps[i], {"data": ctx["data"], "parts": ctx["parts"], "drill_bolts": ctx["drill_bolts"]})
+			u = (0.5 + 0.02) / float(maxi(1, (plan.get("jobs", []) as Array).size()))
+		player.scrub(u)
+		await tree.create_timer(1.6).timeout   # the camera follows
+		var fr := player.last_frame()
+		var fl := player.focus_local(fr)
+		var cam3 := lab.get("_camera") as Camera3D
+		print("PlaytestHarness: buildsteps — %s focus %s r %.2f m · camera target %s dist %.2f · camera at %s" % [kind,
+			str((lab.get("_holder") as Node3D).transform * (fl["center"] as Vector3)), float(fl["radius"]),
+			str(lab.get("_target")), float(lab.get("_dist")), str(cam3.global_position)])
+		match kind:
+			"cut":
+				_bs_check("cut: the structure is hidden, the bench and saw are out",
+					not builder.visible and player.tool_node("circular_saw") != null and player.tool_node("circular_saw").visible, fails)
+			"drill":
+				var holes: Array = fr["holes"]
+				var tool := player.tool_node("drill")
+				var ok := not holes.is_empty() and tool != null and tool.visible
+				var err := INF
+				if ok:
+					var hole_m: Vector3 = player.bench_transform(fr) * (holes[0]["pos"] as Vector3)
+					err = Vector2(tool.position.x - hole_m.x, tool.position.z - hole_m.z).length()
+				_bs_check("drill: the bit is on the hole it drills (%.4f m)" % err, ok and err < 0.002, fails)
+			"place":
+				var hidden := 0
+				for k in builder.part_keys():
+					var s := builder.part_state(k)
+					if not s.is_empty() and not bool(s.get("visible", true)):
+						hidden += 1
+				_bs_check("place: the structure shows with future parts hidden (%d)" % hidden, builder.visible and hidden > 0, fails)
+			"fasten":
+				var drv := player.tool_node("impact_driver")
+				_bs_check("fasten: the driver is out at the joint", drv != null and drv.visible, fails)
+		await _graph_shot(dir, "%02d_%s" % [n_shot, kind], [], "buildsteps")
+		n_shot += 1
+	player.go_to(steps.size() - 1)
+	player.scrub(1.0)
+	await tree.create_timer(1.6).timeout
+	await _graph_shot(dir, "%02d_last" % n_shot, [], "buildsteps")
+
+	# Save to design (a click), then Escape closes with the structure seated.
+	var save := panel.get("_save_btn") as Button
+	if save.disabled:
+		panel.call("_mark_dirty")
+	await _lc_click(vp, _bs_center(save))
+	var bs := (lab.get("params") as LinkageParams).get_build_steps()
+	_bs_check("Save to design stores the sequence (%d steps)" % (bs.get("steps", []) as Array).size(),
+		(bs.get("steps", []) as Array).size() == steps.size(), fails)
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_ESCAPE
+	ev.physical_keycode = KEY_ESCAPE
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	await tree.process_frame
+	ev = ev.duplicate()
+	ev.pressed = false
+	Input.parse_input_event(ev)
+	await tree.create_timer(0.3).timeout
+	if lab.visible:
+		lab.call("close")
+	var staged := 0
+	for k in builder.part_keys():
+		if not builder.part_state(k).is_empty():
+			staged += 1
+	_bs_check("closing the Lab seats every part (%d staged) and restores the fold (%.2f deg off)" % [staged,
+		rad_to_deg(absf(builder.get_fold_angle() - design_fold))],
+		staged == 0 and builder.visible and absf(builder.get_fold_angle() - design_fold) < 1e-3, fails)
+	await _bs_radial_checks(main, dir, fails)
+	await _bs_enclosure_checks(main, dir, fails)
+	if fails.is_empty():
+		print("PlaytestHarness: buildsteps — PASS")
+	else:
+		push_error("PlaytestHarness: buildsteps — %d CHECK(S) FAILED" % fails.size())
+	_maybe_quit()
+
+
+## The Lab's Radial Array group (A3): a radial preset loads into the
+## controls, the builder draws every copy, and editing Count / Hidden copies
+## through the controls rebuilds it.
+func _bs_radial_checks(main: Node, dir: String, fails: Array) -> void:
+	var tree := get_tree()
+	var f := FileAccess.open("res://core/linkage/presets/ll_constellation.json", FileAccess.READ)
+	var cfg = JSON.parse_string(f.get_as_text()) if f != null else null
+	if not (cfg is Dictionary):
+		_bs_check("the Constellation preset loads", false, fails)
+		return
+	main.call("open_linkage_lab", cfg)
+	await tree.create_timer(0.8).timeout
+	var lab: Control = main.get("linkage_lab_ui")
+	var ra: Dictionary = lab.get("_ra")
+	var builder := lab.get("_builder") as LinkageStructureBuilder
+	var want := LinkageRadialArray.config(lab.get("params"))
+	_bs_check("radial: the controls show the preset's array (enabled %s, count %d)" % [
+		str((ra["enabled"] as CheckBox).button_pressed), int((ra["count"] as SpinBox).value)],
+		(ra["enabled"] as CheckBox).button_pressed == bool(want["enabled"]) and bool(want["enabled"])
+		and int((ra["count"] as SpinBox).value) == int(want["count"]), fails)
+	var fr0 := builder.last_frame()
+	var copies0: int = int((fr0.get("radial", {}) as Dictionary).get("visible_count", 0))
+	var beams0 := (fr0.get("beams", []) as Array).size()
+	_bs_check("radial: the builder draws %d copies (%d beams)" % [copies0, beams0], copies0 > 1 and beams0 > 0, fails)
+	print("PlaytestHarness: buildsteps — radial readout: %s" % (ra["readout"] as Label).text)
+	await _graph_shot(dir, "radial_00_constellation", [], "buildsteps")
+	# Hide one more slot through the text field (the preset hides slot 3
+	# already): one copy fewer.
+	var le := ra["hiddenSlots"] as LineEdit
+	le.text = le.text + ", 1" if not le.text.strip_edges().is_empty() else "1"
+	le.text_submitted.emit(le.text)
+	await tree.create_timer(0.8).timeout
+	var fr1 := builder.last_frame()
+	var copies1: int = int((fr1.get("radial", {}) as Dictionary).get("visible_count", 0))
+	var beams1 := (fr1.get("beams", []) as Array).size()
+	_bs_check("radial: also hiding slot 1 drops one copy (%d -> %d, beams %d -> %d)" % [copies0, copies1, beams0, beams1],
+		copies1 == copies0 - 1 and beams1 < beams0, fails)
+	await _graph_shot(dir, "radial_01_slot1_hidden", [], "buildsteps")
+	# Fold the copies one at a time: mid-sequence some stand deployed, one
+	# moves, the rest stay folded.
+	(ra["sequential"] as CheckBox).button_pressed = true
+	await tree.create_timer(0.8).timeout
+	var prm: LinkageParams = lab.get("params")
+	var rng := LinkageFoldSequence.sweep_range(prm)
+	var k_seq := LinkageFoldSequence.deploy_order(LinkageRadialArray.deployed_plan(prm)).size()
+	lab.call("_set_fold_angle", float(rng["min"]) + (float(rng["max"]) - float(rng["min"])) * 1.5 / float(maxi(1, k_seq)))
+	await tree.create_timer(0.4).timeout
+	var sc := builder.fold_schedule()
+	_bs_check("radial: one-at-a-time folds the copies in turn (%d poses, moving %s)" % [
+		(sc.get("distinct_angles", []) as Array).size(), str(sc.get("active_index", -1))],
+		not sc.is_empty() and (sc["distinct_angles"] as Array).size() >= 2, fails)
+	print("PlaytestHarness: buildsteps — radial readout: %s" % (ra["readout"] as Label).text)
+	await _graph_shot(dir, "radial_02_sequential", [], "buildsteps")
+	(ra["sequential"] as CheckBox).button_pressed = false
+	await tree.create_timer(0.8).timeout
+	# Switch the array off through the checkbox: back to one structure.
+	(ra["enabled"] as CheckBox).button_pressed = false
+	await tree.create_timer(0.8).timeout
+	var fr2 := builder.last_frame()
+	_bs_check("radial: unticking Enable draws one structure (radial %s)" % str(fr2.has("radial")),
+		(fr2.get("radial", {}) as Dictionary).is_empty() and (fr2.get("beams", []) as Array).size() < beams1, fails)
+	lab.call("close")
+
+
+## A4 on the Hex preset (raised floor + walls / tables + shade tarps): the
+## builder draws every covering, the Lab's controls switch them, a covering
+## step stages its walls, and the guide writes the cut files.
+func _bs_enclosure_checks(main: Node, dir: String, fails: Array) -> void:
+	var tree := get_tree()
+	var cfg = _read_json_file("res://core/linkage/presets/ll_starshade_hex.json")
+	if not (cfg is Dictionary):
+		_bs_check("the Hex preset loads", false, fails)
+		return
+	main.call("open_linkage_lab", cfg)
+	await tree.create_timer(0.8).timeout
+	var lab: Control = main.get("linkage_lab_ui")
+	var builder := lab.get("_builder") as LinkageStructureBuilder
+	var walls: Array = builder.last_walls()
+	var kinds := {}
+	for w in walls:
+		kinds[str(w.get("kind", ""))] = int(kinds.get(str(w.get("kind", "")), 0)) + 1
+	var cover := builder.get_node_or_null("Coverings")
+	_bs_check("enclosure: walls, tables, the deck and tarps drawn (%s, %d meshes)" % [str(kinds), cover.get_child_count() if cover != null else 0],
+		int(kinds.get("wall", 0)) >= 2 and int(kinds.get("shade", 0)) > 0 and cover != null and cover.get_child_count() == walls.size(), fails)
+	_bs_check("enclosure: floor beams drawn (%d)" % builder.last_floor_beams().size(), not builder.last_floor_beams().is_empty(), fails)
+	await _graph_shot(dir, "enclosure_00_hex", [], "buildsteps")
+	# Tarps off through the checkbox.
+	var sh: Dictionary = lab.get("_sh")
+	(sh["enabled"] as CheckBox).button_pressed = false
+	await tree.create_timer(0.8).timeout
+	var tarps := builder.last_walls().filter(func(w): return str(w.get("kind", "")) == "shade")
+	_bs_check("enclosure: unticking the tarps removes them (%d left)" % tarps.size(), tarps.is_empty(), fails)
+	# Every span to fabric.
+	var cv: Dictionary = lab.get("_cv")
+	lab.call("_set_all_spans", "fabric")
+	await tree.create_timer(0.8).timeout
+	var fab := builder.last_walls().filter(func(w): return str(w.get("kind", "")) == "fabric")
+	_bs_check("enclosure: 'Every span: Fabric' hangs fabric bands (%d)" % fab.size(), fab.size() >= 6, fails)
+	await _graph_shot(dir, "enclosure_01_fabric", [], "buildsteps")
+	# The deck step stages the deck: hidden before, seated after.
+	var steps := LinkageBuildSteps.generate_for(lab.get("params"))
+	var deck_i := -1
+	for i in steps.size():
+		for sel in steps[i].get("targets", []):
+			if str(sel.get("kind", "")) == "wall" and str(sel.get("band", "")) == "floor":
+				deck_i = i
+	_bs_check("enclosure: the generated sequence lays the deck (step %d)" % (deck_i + 1), deck_i >= 0, fails)
+	var deck_key := ""
+	for w in builder.last_walls():
+		if str(w.get("band", "")) == "floor":
+			deck_key = LinkagePartKeys.part_key(w, "wall")
+	if deck_i >= 0 and not deck_key.is_empty():
+		var panel: Control = lab.call("steps_panel")
+		lab.call("toggle_steps")
+		await tree.create_timer(0.4).timeout
+		var player: LinkageStepPlayer = panel.call("player")
+		player.set_steps(steps)
+		player.go_to(deck_i)
+		player.scrub(0.0)
+		await tree.create_timer(0.3).timeout
+		var before := builder.part_state(deck_key)
+		var shown_before: bool = before.is_empty() or bool(before.get("visible", true))
+		player.scrub(1.0)
+		await tree.create_timer(0.3).timeout
+		var after := builder.part_state(deck_key)
+		var seated: bool = after.is_empty() or (bool(after.get("visible", true)) and not (after.get("offset") is Transform3D and not (after["offset"] as Transform3D).is_equal_approx(Transform3D.IDENTITY)))
+		_bs_check("enclosure: the deck step brings the deck in (start %s, end %s)" % [str(before), str(after)],
+			seated and (not shown_before or before.get("offset") is Transform3D), fails)
+		await _graph_shot(dir, "enclosure_02_deck_step", [], "buildsteps")
+		lab.call("toggle_steps")
+		await tree.create_timer(0.3).timeout
+	# The guide writes the cut files.
+	main.call("open_linkage_build_guide", (lab.get("params") as LinkageParams).to_config(), "harness_hex")
+	await tree.create_timer(0.8).timeout
+	var guide: Control = main.get("linkage_build_guide_ui")
+	var out_dir: String = guide.call("export_cut_files") if guide != null else ""
+	var n_svg := 0
+	if not out_dir.is_empty():
+		for f in DirAccess.get_files_at(out_dir):
+			if f.ends_with(".svg"):
+				n_svg += 1
+	_bs_check("enclosure: the guide exports %d cut files to %s" % [n_svg, out_dir], n_svg >= 6, fails)
+	await _graph_shot(dir, "enclosure_03_guide", [], "buildsteps")
+	if guide != null and guide.has_method("close"):
+		guide.call("close")
+	lab.call("close")
+
+
+func _read_json_file(path: String):
+	var f := FileAccess.open(path, FileAccess.READ)
+	return JSON.parse_string(f.get_as_text()) if f != null else null
+
+
+# ==================== FABRICATION BY THE CREW (--capture=fabcrew) ====================
+## Swarm B6: the population's chore board drives the build timeline. Seeds a
+## 12-person pop-driven habitat (tanks + tagged spaces, as --capture=project
+## does), places a packed SOAK 2026 kit, queues the crew build exactly as the
+## Lab's "Queue build for crew" does (the phase chores + the labour-mode
+## build_run record), then runs the clock and asserts what a PNG cannot:
+##   - the under-construction prop carries a labour-mode LinkageBuildSite that
+##     owns the visuals (the bridge's coarse prefix reveal stands down: the
+##     beam MultiMesh never gets a prefix count);
+##   - the drawn build time only moves forward and tracks the labour;
+##   - people DOING the project's chores on site are drawn on the timeline's
+##     lanes (their own bodies hidden as stand-ins), and nobody else is;
+##   - the structure grows as the work is credited, and when the project is
+##     done the ring is deployed, every part seated, the crew released.
+## Removes its cap_fc_* items and prop.
+func _fc_check(label: String, ok: bool, fails: Array) -> void:
+	print("PlaytestHarness: fabcrew — %s %s" % ["PASS" if ok else "FAIL", label])
+	if not ok:
+		fails.append(label)
+
+
+func _fc_site(main: Node, pid: String) -> LinkageBuildSite:
+	return LinkageBuildSite.site_for(main, pid)
+
+
+func _run_fabcrew_capture() -> void:
+	var sgv := await _find_graph_view()
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if sgv == null or loader == null:
+		push_error("PlaytestHarness: fabcrew needs a TerrainLoader map and the graph view")
+		_maybe_quit()
+		return
+	sgv.visible = false
+	if not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var model: Variant = sgv.get("model")
+	var fails: Array = []
+	var label := _shots_label if not _shots_label.is_empty() else "fabcrew"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(dir)
+
+	# --- seed: a 12-person crew camp (the project capture's) -------------------
+	var hab_id := "cap_fc_hab"
+	var ids := [hab_id, "cap_fc_water", "cap_fc_food"]
+	for iid0 in ids:
+		if not (model.get_item(str(iid0)) as Dictionary).is_empty():
+			model.remove_item(str(iid0))
+	model.add_item({"id": hab_id, "type": "processor", "x": 0.0, "y": 0.0, "width": 150.0, "height": 150.0,
+		"specs": {"name": "Build Crew", "role": "habitat", "occupants": 12, "pop_driven": true,
+			"watts": 0.0, "energy_source": "", "efficiency": 1.0,
+			"inputs": [{"kind": "water", "rate": 2.0, "unit": "L/h"}, {"kind": "food", "rate": 0.06, "unit": "kg/h"}],
+			"outputs": []}})
+	for t in [["cap_fc_water", "water", "L", 4000.0], ["cap_fc_food", "food", "kg", 200.0]]:
+		model.add_item({"id": str(t[0]), "type": "resource", "x": -200.0, "y": 220.0, "width": 90.0, "height": 100.0,
+			"specs": {"name": str(t[1]).capitalize(), "resource_kind": str(t[1]),
+				"capacity_qty": float(t[3]), "capacity_unit": str(t[2]), "level": 1.0}})
+	for c in [["cap_fc_water", hab_id, "res_in_0", "water"], ["cap_fc_food", hab_id, "res_in_1", "food"]]:
+		model.add_connection({"polarity": "resource", "resource_type": str(c[3]),
+			"source_item_id": str(c[0]), "source_handle_id": "output",
+			"target_item_id": str(c[1]), "target_handle_id": str(c[2])})
+	if "day_time" in main:
+		main.day_time = 8.0
+	main.time_scale = 0.01
+	await get_tree().create_timer(1.5).timeout
+	var bridge: Variant = sgv.get("_npc_population")
+	if bridge == null:
+		_fc_check("the population bridge runs", false, fails)
+		_maybe_quit()
+		return
+	var reg: Variant = bridge.call("registry_for", main)
+	for pair in [["sleep", Vector2(-40, -30)], ["kitchen", Vector2(-40, 30)], ["water_point", Vector2(-55, 0)],
+			["restroom", Vector2(-70, 20)], ["shower", Vector2(-70, -20)]]:
+		var cpt: Vector2 = pair[1]
+		reg.call("set_space_type", {"kind": "area", "poly": [[cpt.x - 8, cpt.y - 8], [cpt.x + 8, cpt.y - 8],
+			[cpt.x + 8, cpt.y + 8], [cpt.x - 8, cpt.y + 8]]}, str(pair[0]), 30)
+	var board: Variant = bridge.call("chore_board_for", hab_id)
+	for _w in 6:
+		if board != null:
+			break
+		await get_tree().create_timer(0.5).timeout
+		board = bridge.call("chore_board_for", hab_id)
+	if board == null:
+		_fc_check("the crew's chore board appears", false, fails)
+		_maybe_quit()
+		return
+	board.rules["night_shift"] = true
+
+	# --- the kit, and the build queued as the Lab queues it -------------------
+	var f := FileAccess.open("res://core/linkage/presets/ll_starshade_v1_soak_2026.json", FileAccess.READ)
+	var cfg = JSON.parse_string(f.get_as_text())
+	var site_xz := Vector2(25.0, 15.0)
+	var placed: Dictionary = PlacedPropService.place_model_at_xz(main, LinkageStructureBuilder.MODEL_ID,
+		site_xz.x, site_xz.y, {"linkage_spec": cfg, "packed": true})
+	var crate_id := str(placed.get("prop_id", ""))
+	_fc_check("a packed SOAK 2026 kit is placed", not crate_id.is_empty(), fails)
+	var p := LinkageParams.new()
+	p.from_config(cfg)
+	var counts := LinkageBom.fab_counts(LinkageBom.compute(p), {})
+	counts.erase("assembly_steps")
+	var tasks: Array = NpcCrewPlan.linkage_fab_tasks(counts)
+	var sched: Dictionary = NpcCrewPlan.schedule(tasks, 12)
+	var overrides := {}
+	for t2 in tasks:
+		var tid := str((t2 as Dictionary).get("id", ""))
+		match tid:
+			"erect":
+				overrides[tid] = {"effect": {"op": "unpack_prop", "prop_id": crate_id}}
+			"panels":
+				overrides[tid] = {"effect": {"op": "seed_graph", "prop_id": crate_id}}
+			_:
+				overrides[tid] = {"effect": {"op": "set_build_phase", "prop_id": crate_id, "phase": tid}}
+	PlacedPropService.update_prop_record(main, crate_id, {"build_state": {"phase": "", "ghost": 0.12}}, true)
+	var proj_id := str(bridge.call("create_site_project", hab_id, "linkage_build", "Harness crew build",
+		crate_id, site_xz, NpcCrewPlan.chore_specs(tasks, sched, overrides), {"start_h": 0.0, "end_h": 24.0},
+		{"kind": "prop", "id": crate_id}, {"crew": 12, "makespan_s": float(sched.get("makespan_s", 0.0)),
+			"fab_counts": counts}))
+	PlacedPropService.update_prop_record(main, crate_id, {LinkageBuildSite.RECORD_KEY: {
+		"mode": "labour", "iid": hab_id, "project_id": proj_id,
+		"crew_n": mini(12, LinkageBuildSite.MAX_LABOUR_LANES)}}, true)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var site := _fc_site(main, crate_id)
+	_fc_check("the build is queued and its kit carries a labour-mode build site",
+		not proj_id.is_empty() and site != null and site.is_labour(), fails)
+	if site == null:
+		_fc_finish(main, model, ids, crate_id, fails)
+		return
+	await get_tree().create_timer(0.6).timeout
+	_fc_check("the site owns the visuals (the coarse reveal stands down)", site.owns_visuals(), fails)
+
+	var cam := Camera3D.new()
+	cam.name = "PlaytestFabCrewCam"
+	scene.add_child(cam)
+	cam.make_current()
+	var gy := TerrainSurfaceQuery.ground_height_at(main, site_xz.x, site_xz.y)
+	var aim := Vector3(site_xz.x, gy + 1.0, site_xz.y)
+	cam.global_position = Vector3(site_xz.x + 13.0, gy + 7.5, site_xz.y + 14.0)
+	cam.look_at(aim, Vector3.UP)
+
+	# --- run the clock: the crew works --------------------------------------
+	main.time_scale = 0.3
+	var last_t := -1.0
+	var backwards := 0
+	var max_manned := 0
+	var stand_bad := 0
+	var prefix_seen := false
+	var vis_first := -1
+	var vis_last := -1
+	var shots := 0
+	var done := false
+	var hidden_ok := 0
+	var prev_lanes: Dictionary = {}
+	for k in 900:
+		await get_tree().create_timer(0.5).timeout
+		site = _fc_site(main, crate_id)
+		if site == null:
+			continue
+		var tnow := site.build_time()
+		if tnow < last_t - 1.0:
+			backwards += 1
+		last_t = maxf(last_t, tnow)
+		var b := (site.get_parent() as Node).get_node_or_null("ModelRoot") as LinkageStructureBuilder
+		if b != null:
+			var beams := b.get_node_or_null("Beams") as MultiMeshInstance3D
+			if beams != null and beams.multimesh != null and beams.multimesh.visible_instance_count >= 0:
+				prefix_seen = true
+			var vis := 0
+			for key in b.part_keys():
+				var st := b.part_state(key)
+				if st.is_empty() or bool(st.get("visible", true)):
+					vis += 1
+			if vis_first < 0:
+				vis_first = vis
+			vis_last = vis
+		var status: Dictionary = site.get("_status")
+		var present: Array = status.get("present", [])
+		var manned := site.manned_count()
+		max_manned = maxi(max_manned, manned)
+		# Everyone manning a lane is a stand-in; their own avatar is hidden.
+		var host: Node = sgv.get("_npc_host")
+		var lane_of: Dictionary = site.get("_lane_of")
+		for pr in present:
+			var aid := str(pr["id"])
+			if lane_of.has(aid) and not NpcStandIns.has(aid):
+				stand_bad += 1
+			# The host hides a stand-in on ITS next frame; judge only people
+			# who were already on a lane at the previous sample.
+			if lane_of.has(aid) and prev_lanes.has(aid) and host != null:
+				var avs: Dictionary = host.get("_avatars")
+				var av = avs.get(aid)
+				if av != null and is_instance_valid(av) and (av as Node3D).visible:
+					stand_bad += 1
+				else:
+					hidden_ok += 1
+		prev_lanes = lane_of.duplicate()
+		if manned > 0 and shots < 3 and k % 8 == 0:
+			var figs: Array = site.crew_figures()
+			for fg in figs:
+				if (fg as Node3D).visible:
+					var fp := (fg as Node3D).global_position
+					cam.global_position = fp + Vector3(3.5, 2.2, 3.5)
+					cam.look_at(fp + Vector3(0, 1.0, 0), Vector3.UP)
+					break
+			await _graph_shot(dir, "%02d_crew_at_work" % shots, [], "fabcrew")
+			print("PlaytestHarness: fabcrew — %s" % site.progress_line())
+			shots += 1
+			cam.global_position = Vector3(site_xz.x + 13.0, gy + 7.5, site_xz.y + 14.0)
+			cam.look_at(aim, Vector3.UP)
+		if k % 40 == 0:
+			print("PlaytestHarness: fabcrew — %s · t %.0f s · %d parts shown" % [site.progress_line(), tnow, vis_last])
+		if str(status.get("state", "")) == "done" and bool(site.get("_finished")):
+			done = true
+			break
+	main.time_scale = 0.0
+	_fc_check("the drawn build time only moves forward (%d steps back)" % backwards, backwards == 0, fails)
+	_fc_check("the bridge's prefix reveal never touched the structure", not prefix_seen, fails)
+	_fc_check("people on site man the lanes (up to %d at once)" % max_manned, max_manned > 0, fails)
+	_fc_check("everyone on a lane is a stand-in with their own body hidden (%d checks, %d bad)" % [hidden_ok, stand_bad],
+		stand_bad == 0 and hidden_ok > 0, fails)
+	_fc_check("the structure grew with the work (%d -> %d parts shown)" % [vis_first, vis_last], vis_last > vis_first, fails)
+	_fc_check("the crew finished the project", done, fails)
+	if done:
+		await get_tree().create_timer(0.5).timeout
+		site = _fc_site(main, crate_id)
+		var rec: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
+		var b2 := (site.get_parent() as Node).get_node_or_null("ModelRoot") as LinkageStructureBuilder if site != null else null
+		var staged := 0
+		if b2 != null:
+			for key in b2.part_keys():
+				if not b2.part_state(key).is_empty():
+					staged += 1
+		_fc_check("built: unpacked, deployed, every part seated (%d staged), no stand-ins" % staged,
+			not bool(rec.get("packed", true)) and bool(rec.get("linkage_deployed", false)) and staged == 0
+			and NpcStandIns.is_empty(), fails)
+		cam.global_position = Vector3(site_xz.x + 13.0, gy + 7.5, site_xz.y + 14.0)
+		cam.look_at(aim, Vector3.UP)
+		await _graph_shot(dir, "10_built", [], "fabcrew")
+	cam.queue_free()
+	_fc_finish(main, model, ids, crate_id, fails)
+
+
+func _fc_finish(main: Node, model: Variant, ids: Array, crate_id: String, fails: Array) -> void:
+	var loader: Node = main.find_child("TerrainLoader", true, false)
+	if loader != null and not crate_id.is_empty() and loader.has_method("delete_prop_by_id"):
+		loader.call("delete_prop_by_id", crate_id)
+	for iid0 in ids:
+		if not (model.get_item(str(iid0)) as Dictionary).is_empty():
+			model.remove_item(str(iid0))
+	if fails.is_empty():
+		print("PlaytestHarness: fabcrew — PASS")
+	else:
+		push_error("PlaytestHarness: fabcrew — %d CHECK(S) FAILED" % fails.size())
 	_maybe_quit()

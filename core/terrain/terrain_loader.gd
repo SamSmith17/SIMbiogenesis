@@ -68,6 +68,15 @@ const QUALITY_DETAIL_TARGET_PX := [2048, 4096, 8192, 8192]
 const QUALITY_HYPER_HALF_EXTENT := [500.0, 500.0, 1000.0, 1500.0]
 ## Hyper stitch target (px) per tier (an explicit [terrain] hyper_target_px still wins).
 const QUALITY_HYPER_TARGET_PX := [4096, 8192, 8192, 8192]
+## "Site" patch half-extent (m) per tier: the property at the best source's
+## NATIVE resolution (ImagerySources — a county orthophoto where one is
+## listed, else ESRI z19), BC7-compressed, over hyper. 0 = off. Hyper alone
+## on High/Ultra spreads one 8192 px texture over 2–3 km (0.25–0.37 m/px),
+## coarser than the source; this patch keeps the walkable core native.
+## Shrunk automatically to what fits SITE_TARGET_PX at the native zoom.
+## Override `[terrain] site_half_extent_m` (0 disables).
+const QUALITY_SITE_HALF_EXTENT := [0.0, 400.0, 500.0, 600.0]
+const SITE_TARGET_PX := 8192
 
 ## AI "hero" patch: an opt-in Gemini-enhanced ground drape over a small square
 ## centred on the map origin, overlaid on top of hyper where the player spawns.
@@ -131,6 +140,12 @@ var load_completed := false
 var auto_veg_ready := false
 var _lat := 0.0
 var _lon := 0.0
+## Points of interest (core/poi/): KML pins imported from Google Earth, one
+## layer per site through WorldPaths, drawn by a PoiRuntime under Terrain.
+var pois: PoiLayer = null
+var _pois_path := ""
+var _poi_runtime: PoiRuntime = null
+var _show_pois := true
 var _map_label := ""
 var _half_extent := HALF_EXTENT_DEFAULT
 var _detail_half_extent := DETAIL_HALF_EXTENT_DEFAULT
@@ -162,6 +177,9 @@ var _drape: Texture2D = null
 var _img_done := false
 var _detail_drape: Texture2D = null
 var _hyper_drape: Texture2D = null
+## Native-resolution site patch drape + the half-extent it was fetched at.
+var _site_drape: Texture2D = null
+var _site_half_m := 0.0
 ## Gemini-enhanced hero patch drape + its geo bbox (null until generated/cached).
 var _ai_drape: Texture2D = null
 var _ai_bbox: Dictionary = {}
@@ -268,6 +286,14 @@ var _custom_buildings_root: Node3D = null
 var _building_builder_ui: Control = null
 var _starshade_edit_ui: Control = null
 var _pond_edit_ui: Control = null
+## The player's MAX FILL LEVEL per still-water body (tag -> world Y): a dam
+## above the basin's natural rim. The spill height becomes max(basin rim,
+## this), so inflow can raise the pond past the rim, capacity grows as a
+## vertical wall over the footprint (area x extra depth) and the graph tank's
+## rim follows. Persisted in the user_water file; map ponds carry it too.
+var _pond_max_levels: Dictionary = {}
+## tag -> PondLevelHandle (the grabbable surface in the world).
+var _pond_level_handles: Dictionary = {}
 var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _building_highlight: MeshInstance3D = null
@@ -338,6 +364,15 @@ var _sculpt_highlight: MeshInstance3D = null
 ## while the DetailGround mesh/collider are SUNK beneath active tiles so cut
 ## bowls are neither occluded visually nor bridged by the coarser collider.
 var _edit_tiles: TerrainEditTiles = null
+## The DELTA STACK. `_edit_tiles` above is the PLAYER layer (sculpt tools,
+## undo, saved to terrain_tiles_*.bin). `_channel_tiles` is PROCEDURAL — the
+## waterway channels the WaterNetwork carves, regenerated from the stream
+## features and never in player undo. `_composed_tiles` = channel + player,
+## summed per touched tile; it is what the HeightField renders and the
+## DetailGround sink reads. Ground queries sum the two layers directly
+## (`_edit_tile_delta`), so they are exact even before a recompose.
+var _channel_tiles: TerrainEditTiles = null
+var _composed_tiles: TerrainEditTiles = null
 var _height_field: TerrainHeightField = null
 ## Signature of the sink currently baked into the DetailGround mesh/collider —
 ## skips the (relatively) heavy detail-patch rebuild when nothing changed.
@@ -372,6 +407,7 @@ var _phase_ok := false
 
 func _ready() -> void:
 	ServiceLocator.provide(ServiceLocator.TERRAIN_LOADER, self)
+	add_to_group(WorldSession.PERSIST_GROUP)
 	_main = get_parent()
 	# Deferred: Main is still "busy setting up children" during our _ready, so
 	# add_child() on it would fail. By the deferred call Main is fully ready.
@@ -1007,7 +1043,8 @@ func _run_load_sequence() -> void:
 		if _force_refetch:
 			n += TerrainCacheSettings.invalidate_dem(_lat, _lon)
 			n += TerrainCacheSettings.invalidate_imagery(_lat, _lon)
-		print("TerrainLoader: fresh load — cleared %d site cache file(s); skipping placed props" % n)
+		print("TerrainLoader: fresh load — cleared %d site cache file(s)%s" % [n,
+			"" if WorldPaths.has_active_world() else "; skipping placed props"])
 
 	# 1. Base DEM
 	if es != null:
@@ -1063,6 +1100,8 @@ func _run_load_sequence() -> void:
 
 	if not _from_resume:
 		_finalize_spawn_actors()
+	else:
+		_finalize_resume_actors()
 
 	TerrainCacheSettings.save_meta_extents(
 		_lat, _lon, _half_extent, _detail_half_extent, _osm_half_extent,
@@ -1181,6 +1220,7 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 	# 9. Camp generation (deterministic, optional) — before veg so spawn is early.
 	_attach_camps()
 	_attach_camp_areas()
+	_attach_pois()
 	await _settle_gpu()
 	_refresh_water_reflection_probes()
 
@@ -1851,6 +1891,8 @@ func get_pond_info(idx: int) -> Dictionary:
 		"area_m2": area,
 		"points": poly,
 		"rim_m": rim,
+		"basin_rim_m": float(rec.get("basin_rim_m", bounds.get("rim_m", rim))),
+		"max_level_m": pond_max_level_for_tag(tag),
 		"floor_m": floor_y,
 		"level_m": level,
 		"default_capacity_l": terrain_cap,
@@ -1870,6 +1912,8 @@ func get_pond_info(idx: int) -> Dictionary:
 ## `from_graph` skips the mesh→graph mirror (avoids feedback loops).
 func set_pond_fill_level(idx: int, level_m: float, from_graph: bool = false) -> bool:
 	var rec := _user_rec_at_water_idx(idx)
+	if rec.is_empty():
+		rec = _map_pond_rec_at_water_idx(idx)
 	if rec.is_empty():
 		return false
 	rec["level_m"] = level_m
@@ -1892,6 +1936,113 @@ func set_pond_fill_level(idx: int, level_m: float, from_graph: bool = false) -> 
 	if not tag.is_empty() and _pond_tag_on_graph(tag):
 		_sync_pond_graph_from_rec(rec)
 	return true
+
+
+## The player's max fill level for a pond tag (NAN = none: the basin rim).
+func pond_max_level_for_tag(tag: String) -> float:
+	if tag.is_empty() or not _pond_max_levels.has(tag):
+		return NAN
+	return float(_pond_max_levels[tag])
+
+
+## Set (or clear, with NAN / at-or-below the basin rim) the MAX FILL LEVEL of
+## the still-water body at `idx` — map ponds included: the override lives on
+## the loader, keyed by tag, and persists in the user_water file. Raises the
+## spill, recomputes Auto capacity over the footprint up to it (a vertical
+## wall above the basin — a dam), rebuilds the water, syncs the graph tank's
+## rim / capacity and re-seats the PondLevelHandle.
+func set_pond_max_level(idx: int, max_y: float) -> bool:
+	if idx < 0 or idx >= _water_data.size():
+		return false
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary):
+		return false
+	var rec: Dictionary = item
+	var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+	if poly.size() < 3 or rec.has("centerline"):
+		return false
+	var tag := str(rec.get("tag", _water_body_tag(poly)))
+	rec["tag"] = tag
+	var bounds := sample_pond_basin_elevations(poly)
+	var basin_rim := float(bounds.get("rim_m", 0.0))
+	if is_nan(max_y) or max_y <= basin_rim + 0.005:
+		_pond_max_levels.erase(tag)
+	else:
+		_pond_max_levels[tag] = max_y
+	# Auto capacity re-integrates to the new spill; a Manual capacity is the
+	# player's number and stays.
+	if str(rec.get("capacity_mode", "auto")) == "auto":
+		rec.erase("capacity_l")
+	_recompute_pond_volume_rec(rec, true)
+	_refresh_water_data()
+	_save_user_water()
+	_attach_water()
+	if _pond_tag_on_graph(tag, str(rec.get("pond_id", ""))):
+		_sync_pond_graph_from_rec(rec)
+	_refresh_pond_level_handles()
+	return true
+
+
+func set_pond_max_level_by_tag(tag: String, max_y: float) -> bool:
+	var idx := find_pond_idx_by_tag(tag)
+	if idx < 0:
+		return false
+	return set_pond_max_level(idx, max_y)
+
+
+## One PondLevelHandle per still-water body, seated at its max fill height
+## over the centroid, its pick slab spanning the water surface up to that
+## height. Called after every water rebuild.
+func _refresh_pond_level_handles() -> void:
+	if _main == null:
+		return
+	var seen := {}
+	for i in _water_data.size():
+		var item: Variant = _water_data[i]
+		if not (item is Dictionary):
+			continue
+		var rec: Dictionary = item
+		if rec.has("centerline"):
+			continue
+		if str(rec.get("kind", "water")) in WaterBuilder.FLOWING_KINDS:
+			continue
+		var poly: PackedVector2Array = rec.get("points", PackedVector2Array())
+		if poly.size() < 3:
+			continue
+		var tag := str(rec.get("tag", _water_body_tag(poly)))
+		seen[tag] = true
+		var h: Variant = _pond_level_handles.get(tag, null)
+		if h == null or not is_instance_valid(h):
+			h = PondLevelHandle.new()
+			(h as Node).name = "PondLevel_%s" % tag.validate_node_name()
+			_main.add_child(h)
+			_pond_level_handles[tag] = h
+		(h as PondLevelHandle).configure(self, i, tag)
+		var basin_rim := float(rec.get("basin_rim_m", NAN))
+		if is_nan(basin_rim):
+			basin_rim = pond_rim_height(poly)
+			rec["basin_rim_m"] = basin_rim
+		var mx := pond_max_level_for_tag(tag)
+		var top := basin_rim if is_nan(mx) else maxf(mx, basin_rim)
+		var lvl := TerrainBuilder.variant_to_float(rec.get("level_m", NAN), NAN)
+		var c := SolarArrayBuilder.centroid(poly)
+		var r2 := Rect2(poly[0], Vector2.ZERO)
+		for k in range(1, poly.size()):
+			r2 = r2.expand(poly[k])
+		(h as PondLevelHandle).set_geometry(c, r2, basin_rim, top,
+				BuildingBuilder.footprint_area_m2(poly), lvl)
+	for t in _pond_level_handles.keys():
+		if not seen.has(t):
+			var old: Variant = _pond_level_handles[t]
+			if old != null and is_instance_valid(old):
+				(old as Node).queue_free()
+			_pond_level_handles.erase(t)
+
+
+## The pond level handle for a tag (null = none).
+func pond_level_handle_for_tag(tag: String) -> PondLevelHandle:
+	var h: Variant = _pond_level_handles.get(tag, null)
+	return h if (h != null and is_instance_valid(h)) else null
 
 
 ## Set fill level by pond tag (graph → mesh twin). Returns false if no user pond.
@@ -1964,6 +2115,8 @@ func set_pond_fill_mode(idx: int, mode: String) -> bool:
 func set_pond_stock_l(idx: int, stock_l: float, from_graph: bool = false) -> bool:
 	var rec := _user_rec_at_water_idx(idx)
 	if rec.is_empty():
+		rec = _map_pond_rec_at_water_idx(idx)
+	if rec.is_empty():
 		return false
 	# Manual scrub from UI forces Manual fill; graph Auto twin keeps Auto.
 	if not from_graph:
@@ -2004,6 +2157,73 @@ func set_pond_stock_l_by_tag(tag: String, stock_l: float) -> bool:
 	if idx < 0:
 		return false
 	return set_pond_stock_l(idx, stock_l, true)
+
+
+## Stage–storage curve of a pond basin: `n` rows of [stock_l, level_m] from the
+## floor to the fill ceiling (spill − freeboard), integrated off the SAME
+## edited ground and cell size `set_pond_stock_l` inverts with — so a graph
+## tank that reads its level off this curve stands exactly where the 3D water
+## does. Before this the engine wrote a LINEAR floor→rim level and the mesh
+## push wrote the bathymetric one, ~0.5 m apart on Mt Vernon, alternating.
+## Cached per (tag, floor, ceiling, outline); [] when the pond is unknown.
+var _stage_curve_cache: Dictionary = {}
+
+func pond_stage_curve(tag: String, n: int = 24) -> Array:
+	var idx := find_pond_idx_by_tag(tag)
+	if idx < 0:
+		return []
+	var info := get_pond_info(idx)
+	if not bool(info.get("valid", false)):
+		return []
+	var poly: PackedVector2Array = info.get("points", PackedVector2Array())
+	var floor_y := float(info.get("floor_m", NAN))
+	var spill := float(info.get("rim_m", NAN))
+	if poly.size() < 3 or is_nan(floor_y) or is_nan(spill) or spill <= floor_y + 0.06:
+		return []
+	var hi := spill - PondBathymetry.FREEBOARD_DEFAULT_M
+	var key := "%s|%.3f|%.3f|%d|%.3f" % [tag, floor_y, hi, poly.size(), _basin_ground_fingerprint(poly)]
+	if _stage_curve_cache.has(key):
+		return _stage_curve_cache[key]
+	var cell := PondBathymetry.suggested_cell_m(float(info.get("area_m2", 0.0)))
+	var hfn := Callable(self, "ground_height_at")
+	var out: Array = []
+	var rows := maxi(n, 2)
+	for i in rows:
+		var lv := lerpf(floor_y, hi, float(i) / float(rows - 1))
+		out.append([PondBathymetry.volume_to_level_l(poly, hfn, lv, cell, spill), lv])
+	if _stage_curve_cache.size() > 32:
+		_stage_curve_cache.clear()
+	_stage_curve_cache[key] = out
+	return out
+
+
+## Cheap change detector for a basin's ground (a sculpt edit inside the
+## outline moves it): summed ground height at a handful of interior points.
+func _basin_ground_fingerprint(poly: PackedVector2Array) -> float:
+	var c := Vector2.ZERO
+	for p in poly:
+		c += p
+	c /= float(maxi(poly.size(), 1))
+	var acc := ground_height_at(c.x, c.y)
+	var step := maxi(poly.size() / 6, 1)
+	for i in range(0, poly.size(), step):
+		var q := c.lerp(poly[i], 0.5)
+		acc += ground_height_at(q.x, q.y)
+	return acc
+
+
+## Move ONE pond's 3D water plane to `level_m` without rebuilding the Water
+## node. Still water is a flat plane over a fixed outline, so translating it is
+## exact; WaterBuilder builds every level-driven pond as its own mesh for this.
+func set_pond_surface_level_by_tag(tag: String, level_m: float) -> bool:
+	if _water_root == null or not is_instance_valid(_water_root) or is_nan(level_m):
+		return false
+	for c in _water_root.get_children():
+		if c is Node3D and str((c as Node3D).get_meta("pond_tag", "")) == tag:
+			var built := float((c as Node3D).get_meta("built_level_m", level_m))
+			(c as Node3D).position.y = level_m - built
+			return true
+	return false
 
 
 ## Recompute Auto volume fields for a pond by tag or water-data index.
@@ -2077,6 +2297,25 @@ func _user_rec_at_water_idx(idx: int) -> Dictionary:
 		if uw is Dictionary and str((uw as Dictionary).get("tag", "")) == tag:
 			return uw
 	return {}
+
+
+## A MAP (OSM) still-water record by water-data index — the live dict shared
+## with `_osm_vectors.water`, so level / stock writes stick for the session
+## (the graph tank is what persists them). Empty for user ponds and streams.
+func _map_pond_rec_at_water_idx(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _water_data.size():
+		return {}
+	var item: Variant = _water_data[idx]
+	if not (item is Dictionary) or bool((item as Dictionary).get("user", false)):
+		return {}
+	var rec: Dictionary = item
+	if rec.has("centerline") or str(rec.get("kind", "water")) in WaterBuilder.FLOWING_KINDS:
+		return {}
+	if (rec.get("points", PackedVector2Array()) as PackedVector2Array).size() < 3:
+		return {}
+	if not rec.has("tag"):
+		rec["tag"] = _water_body_tag(rec.get("points", PackedVector2Array()))
+	return rec
 
 
 ## Open the pond settings modal for the water body at idx (Ctrl-click target).
@@ -2161,8 +2400,7 @@ func _refresh_water_data() -> void:
 
 
 func _user_water_path() -> String:
-	return "user://maps/user_water_%s_%s.json" % [
-		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+	return WorldPaths.site_file("user_water", _lat, _lon)
 
 
 func _load_part_inventory() -> void:
@@ -2221,8 +2459,7 @@ func save_chore_ledger() -> void:
 # transform + dry color, keyed by job_id so re-completion/reload never dupes.
 # ---------------------------------------------------------------------------
 func _printed_objects_path() -> String:
-	return "user://maps/printed_objects_%s_%s.json" % [
-		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+	return WorldPaths.site_file("printed_objects", _lat, _lon)
 
 
 func _load_printed_objects() -> void:
@@ -2414,6 +2651,7 @@ func reload_printed_objects() -> void:
 
 func _load_user_water() -> void:
 	_user_water_data = []
+	_pond_max_levels = {}
 	var path := _user_water_path()
 	if not FileAccess.file_exists(path):
 		return
@@ -2423,6 +2661,12 @@ func _load_user_water() -> void:
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
 	if not (parsed is Dictionary):
 		return
+	var mls: Variant = (parsed as Dictionary).get("pond_max_levels", {})
+	if mls is Dictionary:
+		for k in (mls as Dictionary):
+			var v := TerrainBuilder.variant_to_float((mls as Dictionary)[k], NAN)
+			if not is_nan(v):
+				_pond_max_levels[str(k)] = v
 	var migrated := false
 	for entry in ((parsed as Dictionary).get("ponds", []) as Array):
 		if not (entry is Dictionary):
@@ -2491,7 +2735,8 @@ func _save_user_water() -> void:
 	var f := FileAccess.open(_user_water_path(), FileAccess.WRITE)
 	if f == null:
 		return
-	f.store_string(JSON.stringify({"version": 2, "ponds": ponds}))
+	f.store_string(JSON.stringify({"version": 2, "ponds": ponds,
+			"pond_max_levels": _pond_max_levels.duplicate()}))
 
 
 func pick_water_at_world(x: float, z: float) -> Dictionary:
@@ -3477,6 +3722,15 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 		_apply_building_textures()
 		_apply_hyper_to_terrain()
 		_maybe_request_ai_hero()
+		_request_site_imagery()
+		return
+	if tag == "site":
+		_site_drape = texture
+		_log_load_mem("site img ready")
+		var svc := get_node_or_null("/root/ImageryService")
+		print("TerrainLoader: site patch ready (%.0f m square) — %s" % [_site_half_m * 2.0,
+			str(svc.call("attribution_for", "site")) if svc != null else ""])
+		_apply_site_to_terrain()
 		return
 	if tag == "detail":
 		_log_load_mem("detail img ready")
@@ -3514,6 +3768,10 @@ func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void
 func _on_imagery_failed(reason: String, tag: String) -> void:
 	if tag == "hyper":
 		push_warning("TerrainLoader: hyper roof ortho failed (%s) — roofs use detail/procedural" % reason)
+		_request_site_imagery()
+		return
+	if tag == "site":
+		push_warning("TerrainLoader: native site patch failed (%s) — hyper drape only" % reason)
 		return
 	if tag == "detail":
 		if _detail_img_retry_zoom < 0:
@@ -3573,7 +3831,69 @@ func _request_hyper_imagery() -> void:
 		return
 	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
 	img.request_imagery(_lat, _lon, _hyper_half_extent(), _hyper_target_px(),
-		"hyper", HYPER_MAX_ZOOM, bypass)
+		"hyper", HYPER_MAX_ZOOM, bypass, ImagerySources.chain_for(_lat, _lon))
+
+
+## Half-extent (m) the site patch is fetched at: the tier's (or the config
+## override), shrunk so the native zoom fits SITE_TARGET_PX. 0 = off.
+func _site_half_extent() -> float:
+	var want := float(QUALITY_SITE_HALF_EXTENT[_quality_tier()])
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) == OK and cfg.has_section_key("terrain", "site_half_extent_m"):
+		want = float(cfg.get_value("terrain", "site_half_extent_m", want))
+	if want <= 1.0:
+		return 0.0
+	var chain := ImagerySources.chain_for(_lat, _lon)
+	var z := ImagerySources.native_zoom(chain, _lat)
+	# 0.95: pick_zoom measures the bbox in tiles, and a bbox straddling tile
+	# edges costs one extra column.
+	var fit := float(SITE_TARGET_PX) * ImagerySources.metres_per_px(z, _lat) * 0.5 * 0.95
+	return minf(want, fit)
+
+
+## Queue the native-resolution site patch (after hyper, so it never delays
+## the walkable drape). BC7 on a worker thread; the layer pops in when done.
+func _request_site_imagery() -> void:
+	var img := get_node_or_null("/root/ImageryService")
+	if img == null:
+		return
+	var half := _site_half_extent()
+	if half <= 0.0:
+		return
+	var chain := ImagerySources.chain_for(_lat, _lon)
+	var z := ImagerySources.native_zoom(chain, _lat)
+	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
+	_site_half_m = half
+	print("TerrainLoader: site patch %.0f m square at z%d from %s (%.2f m/px)" % [
+		half * 2.0, z, " -> ".join(PackedStringArray(chain)),
+		ImagerySources.metres_per_px(z, _lat)])
+	img.request_imagery(_lat, _lon, half, SITE_TARGET_PX, "site", z, bypass, chain, true)
+
+
+## Stamp the site patch onto the terrain drape shaders (over hyper).
+func _apply_site_to_terrain(terrain: Node3D = null) -> void:
+	if _site_drape == null or _site_half_m <= 0.0:
+		return
+	if terrain == null and _main != null:
+		terrain = _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	var site_extent := _site_half_m * 2.0
+	var site_vec := TerrainBuilder.bbox_to_shader_vec4(GeoMath.bbox_for(_lat, _lon, _site_half_m))
+	var site_feather_uv := TerrainBuilder.feather_uv_from_metres(
+		minf(_seam_feather_m, _site_half_m * 0.15), site_extent)
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi == null or not (mi.material_override is ShaderMaterial):
+			continue
+		var sm := mi.material_override as ShaderMaterial
+		var span := _detail_extent_m() if child_name == "DetailGround" else _built_extent
+		sm.set_shader_parameter("site_tex", _site_drape)
+		sm.set_shader_parameter("use_site", true)
+		sm.set_shader_parameter("site_ratio", span / site_extent)
+		sm.set_shader_parameter("site_bbox", site_vec)
+		sm.set_shader_parameter("correct_site_mercator", true)
+		sm.set_shader_parameter("site_feather", site_feather_uv)
 
 
 func _hyper_target_px() -> int:
@@ -3667,6 +3987,7 @@ func _stamp_drape_mercator_bboxes(terrain: Node3D = null) -> void:
 		TerrainBuilder.apply_drape_bboxes(
 			mi.material_override as ShaderMaterial, base_bb, detail_bb)
 	_apply_hyper_to_terrain(terrain)
+	_apply_site_to_terrain(terrain)
 	_apply_ai_to_terrain(terrain)
 
 
@@ -4169,20 +4490,36 @@ func _attach_water() -> void:
 		old.queue_free()
 	_water_root = null
 	if not cfg.show_water or _water_data.is_empty():
+		_request_water_network_rebuild()
 		return
 	if _footing_grid.is_empty():
 		_footing_grid = _compose_terrain_grids()["footing"]
 	var detail_res := _detail_elev_cols if not _detail_surface_grid.is_empty() else 0
 	var coarse_elev := _built_grid if not _built_grid.is_empty() else _footing_grid
+	# Drape onto the EDITED surface (player sculpt + carved channels), not the
+	# edit-free grids — a pond bank or river reach that was cut used to float.
+	WaterBuilder.ground_delta_fn = Callable(self, "_edit_tile_delta")
+	# Waterway LINES (anything with a centreline) are drawn by the WaterNetwork
+	# as level surfaces in their carved channels; WaterBuilder keeps the still
+	# water (lakes, ponds, riverbank polygons).
+	var still_only: Array = []
+	for item in _water_data:
+		if item is Dictionary and (item as Dictionary).has("centerline"):
+			continue
+		still_only.append(item)
 	var node := WaterBuilder.build_water_node(
-		_water_data, coarse_elev, MESH_RES, _built_extent, _built_center_elev,
+		still_only, coarse_elev, MESH_RES, _built_extent, _built_center_elev,
 		_detail_surface_grid, detail_res, _detail_extent_m(), _seam_feather_m)
+	WaterBuilder.ground_delta_fn = Callable()
 	if node == null:
+		_request_water_network_rebuild()
 		return
 	terrain.add_child(node)
 	_water_root = node
 	print("TerrainLoader: draped %d OSM water polygons" % _water_data.size())
 	call_deferred("_refresh_water_reflection_probes")
+	_request_water_network_rebuild()
+	_refresh_pond_level_handles()
 
 
 func _refresh_water_reflection_probes() -> void:
@@ -4880,7 +5217,39 @@ func _push_camps_to_graph() -> void:
 		for l in painted:
 			(l as Dictionary)["provision"] = PopTestPrefs.provision_preset()
 		lots.append_array(painted)
+	_apply_population_target(lots)
 	graph.call_deferred("sync_camps_from_placement", lots)
+
+
+## The festival population target (PopTestPrefs, 0 = natural): scale the
+## assigned headcounts of these lot records IN THE COPY handed to the graph,
+## never in the saved layers, so the natural split is kept and 0 restores it.
+## Returns {natural, people}.
+func _apply_population_target(lots: Array) -> Dictionary:
+	var counts: Array = []
+	var holders: Array = []
+	for l in lots:
+		var ac: Dictionary = (l as Dictionary).get("assigned_camp", {})
+		if ac.is_empty() or int(ac.get("headcount", 0)) <= 0:
+			continue
+		counts.append(int(ac["headcount"]))
+		holders.append(ac)
+	var natural := 0
+	for c in counts:
+		natural += int(c)
+	var scaled := FestivalSeedLayout.scale_headcounts(counts, PopTestPrefs.festival_target_people())
+	var people := 0
+	for i in holders.size():
+		(holders[i] as Dictionary)["headcount"] = int(scaled[i])
+		people += int(scaled[i])
+	return {"natural": natural, "people": people}
+
+
+## Re-push the camps after the festival population target changed: rosters
+## resize IN PLACE on the next population tick (NpcPopulationBridge).
+func apply_festival_population_target() -> Dictionary:
+	_push_camps_to_graph()
+	return camp_population_summary()
 
 
 # --- Festival mode: populated painted camps -----------------------------------
@@ -4948,10 +5317,21 @@ func camp_population_summary() -> Dictionary:
 			if not ac.is_empty() and int(ac.get("headcount", 0)) > 0:
 				out["camps"] = int(out["camps"]) + 1
 				out["people"] = int(out["people"]) + int(ac["headcount"])
+	var lots: Array = []
+	if placement != null:
+		for l in placement.lots:
+			var ac0: Dictionary = (l as Dictionary).get("assigned_camp", {})
+			if not ac0.is_empty() and int(ac0.get("headcount", 0)) > 0:
+				lots.append({"assigned_camp": ac0.duplicate()})
 	if camp_areas != null:
 		for l in FestivalSeedLayout.camp_lots(camp_areas.areas, zones):
 			out["camps"] = int(out["camps"]) + 1
-			out["people"] = int(out["people"]) + int((l["assigned_camp"] as Dictionary)["headcount"])
+			lots.append(l)
+	# What the graph actually gets: the target-scaled total, and the natural
+	# one it came from (the HUD shows both).
+	var r := _apply_population_target(lots)
+	out["people"] = int(r["people"])
+	out["natural"] = int(r["natural"])
 	return out
 
 
@@ -4993,6 +5373,42 @@ func camp_shelters_in_polygon(poly: PackedVector2Array) -> Array:
 		var p := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
 		if Geometry2D.is_point_in_polygon(p, poly):
 			out.append({"pos": p, "yaw": deg_to_rad(float(rec.get("yaw", 0.0))), "sleeps": sleeps})
+	return out
+
+
+## Shade people can stand under (NpcComfort): every camp's canopies, tarps
+## and shade arrays, plus placed props that ARE shade — a StarShade, a
+## deployed linkage canopy, an EZ-up or carport — as {pos, yaw, size: Vector3
+## (x length, z width)}. Placed props use their live pick AABB (yaw 0).
+func shade_footprints() -> Array:
+	var out: Array = []
+	if is_instance_valid(_camp_area_runtime):
+		for s in _camp_area_runtime.all_shades():
+			var sd: Dictionary = s
+			out.append({"pos": sd["pos"], "yaw": float(sd.get("yaw", 0.0)),
+				"size": sd.get("size", Vector3(3.0, 2.5, 3.0))})
+	var terrain := _main.get_node_or_null("Terrain") if _main != null else null
+	var root := terrain.get_node_or_null("PlacedProps") if terrain != null else null
+	if root == null:
+		return out
+	for child in root.get_children():
+		if not (child is PlacedProp):
+			continue
+		var prop := child as PlacedProp
+		var mid := str(prop.model_id)
+		var shade := ModelCatalog.is_starshade_model(mid) or mid == "ez_up" or mid == "carport" \
+			or mid == LinkageStructureBuilder.MODEL_ID
+		if not shade:
+			continue
+		var rec := get_prop_record(prop.prop_id)
+		if bool(rec.get("packed", false)) or (mid == LinkageStructureBuilder.MODEL_ID \
+				and not bool(rec.get("linkage_deployed", true))):
+			continue
+		var bb: AABB = prop.get_world_pick_aabb()
+		if bb.size.x < 1.5 or bb.size.z < 1.5:
+			continue
+		var c := bb.get_center()
+		out.append({"pos": Vector2(c.x, c.z), "yaw": 0.0, "size": Vector3(bb.size.x, bb.size.y, bb.size.z)})
 	return out
 
 
@@ -5799,6 +6215,36 @@ func _finalize_spawn_actors() -> void:
 		_raycast_reseat_player()
 
 
+## A save RESUME keeps the saved position, but the temporary load floor (an
+## infinite WorldBoundary plane at y = 0, _add_temp_floor) must still go. On a
+## site whose ground lies below zero (Walton's is ~-95 m) the restored body
+## was pushed up onto that plane during the load and left standing on it at
+## y = 0 for good — every resume there came back in mid-air. Removes the
+## floor, waits for the real colliders, then puts the player back exactly
+## where they were saved, with the fall tracker reset so the move is not a fall.
+func _finalize_resume_actors() -> void:
+	if _main == null:
+		return
+	_remove_temp_floor()
+	var player := _main.get_node_or_null("Player") as Node3D
+	if player == null:
+		return
+	var saved: Variant = _main.get("player_spawn_position")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	if not is_instance_valid(player) or not (saved is Vector3):
+		return
+	var pos: Vector3 = saved
+	if bool(player.get("is_riding")):
+		return
+	player.global_position = pos + Vector3(0.0, 0.05, 0.0)
+	if player is CharacterBody3D:
+		(player as CharacterBody3D).velocity = Vector3.ZERO
+	if "fall_start_height" in player:
+		player.fall_start_height = pos.y
+		player.highest_point_during_fall = pos.y
+
+
 ## Lift the player to just above the true collision surface (topmost raycast hit),
 ## guarding against props/buildings by ignoring hits far above the DEM footing.
 func _raycast_reseat_player() -> void:
@@ -5942,7 +6388,63 @@ func _ground_height_at(x: float, z: float) -> float:
 
 
 func _edit_tile_delta(x: float, z: float) -> float:
-	return 0.0 if _edit_tiles == null else _edit_tiles.sample_delta(x, z)
+	var d := 0.0 if _edit_tiles == null else _edit_tiles.sample_delta(x, z)
+	if _channel_tiles != null:
+		d += _channel_tiles.sample_delta(x, z)
+	return d
+
+
+## Ensure the channel + composed stores exist (same grid as the player layer).
+func _ensure_tile_stack() -> void:
+	if _edit_tiles == null:
+		_edit_tiles = TerrainEditTiles.new()
+	if _channel_tiles == null:
+		_channel_tiles = TerrainEditTiles.new()
+	if _composed_tiles == null:
+		_composed_tiles = TerrainEditTiles.new()
+
+
+## Fold every tile either layer dirtied since the last call into the composed
+## store (which marks those composed tiles dirty for the HeightField). Bound as
+## the HeightField's `pre_consume`, so every queue/reconcile site stays as is.
+func _sync_composed_tiles() -> void:
+	_ensure_tile_stack()
+	var keys := {}
+	for k in _edit_tiles.consume_dirty():
+		keys[k] = true
+	for k in _channel_tiles.consume_dirty():
+		keys[k] = true
+	if keys.is_empty():
+		return
+	_composed_tiles.compose_from([_channel_tiles, _edit_tiles], keys.keys())
+
+
+## Deep copies of the player + channel layers for a worker thread (drainage
+## analysis samples the EDITED surface off the main thread).
+func tile_layers_snapshot() -> Array:
+	_ensure_tile_stack()
+	return [_edit_tiles.clone(), _channel_tiles.clone()]
+
+
+## The procedural channel layer the WaterNetwork carves into.
+func channel_tile_layer() -> TerrainEditTiles:
+	_ensure_tile_stack()
+	return _channel_tiles
+
+
+## Push freshly-carved channel tiles into the rendered terrain. Tiles under the
+## player reconcile immediately (so nobody stands over a sunk DetailGround);
+## the rest go through the HeightField's per-frame budget.
+func commit_channel_tiles(touched_keys: Array) -> void:
+	_ensure_edit_tiles()
+	if _height_field != null and is_instance_valid(_height_field):
+		_height_field.queue_dirty()
+		var player := _main.get_node_or_null("Player") as Node3D if _main != null else null
+		if player != null and _xz_in_touched_tiles(
+				Vector2(player.global_position.x, player.global_position.z), touched_keys):
+			_height_field.reconcile_dirty_now()
+	_refresh_detail_sink()
+	_reseat_actors_after_edit(touched_keys)
 
 
 ## Public: net player edit (m) at a world XZ — the dock's live cursor readout.
@@ -5989,8 +6491,7 @@ func _raycast_ground_y(x: float, z: float) -> float:
 # ---------------------------------------------------------------------------
 
 func _edit_tiles_path() -> String:
-	return "user://maps/terrain_tiles_%s_%s.bin" % [
-		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+	return WorldPaths.site_file("terrain_tiles", _lat, _lon, "bin")
 
 
 func _load_edit_tiles() -> void:
@@ -5998,6 +6499,85 @@ func _load_edit_tiles() -> void:
 	var path := _edit_tiles_path()
 	if FileAccess.file_exists(path):
 		_edit_tiles.load_from_file(path)
+	# Fresh stack for this map: the channel layer comes back from the water
+	# network's cache (so a returning site renders its channels from frame
+	# one) and is then re-carved incrementally once OSM water is known.
+	_channel_tiles = TerrainEditTiles.new()
+	_composed_tiles = TerrainEditTiles.new()
+	var wn := _water_network()
+	if wn != null:
+		wn.bind_map(_lat, _lon)
+		wn.load_cache_into(_channel_tiles)
+
+
+# ---------------------------------------------------------------------------
+# Water network (core/water/) — carved channels, streams, drainage
+# ---------------------------------------------------------------------------
+
+## The WaterNetwork child, created on first use.
+func _water_network() -> WaterNetwork:
+	var wn := get_node_or_null("WaterNetwork") as WaterNetwork
+	if wn == null:
+		wn = WaterNetwork.new()
+		wn.name = "WaterNetwork"
+		wn.loader = self
+		add_child(wn)
+	return wn
+
+
+func water_network() -> WaterNetwork:
+	return _water_network()
+
+
+## Terrain options' "show water" — the network hides its stream surfaces too.
+func water_visible() -> bool:
+	return _terrain_config().show_water
+
+
+func _request_water_network_rebuild(force: bool = false) -> void:
+	if not _built:
+		return
+	var wn := _water_network()
+	if wn != null:
+		wn.request_rebuild(force)
+
+
+## OSM water items only (the network resolves lines from their centrelines;
+## the player's ponds are not flowing water).
+func osm_water_items() -> Array:
+	return _osm_vectors.get("water", []) as Array
+
+
+## A frozen, thread-safe copy of the BASE ground (no edit tiles) — exactly
+## what `_height_field_base` / `_dem_height_without_earthworks` sample.
+func make_water_ground_sampler() -> WaterGroundSampler:
+	var s := WaterGroundSampler.new()
+	var detail := _detail_footing_grid()
+	s.coarse = _built_grid
+	s.coarse_res = MESH_RES
+	s.coarse_extent_m = _built_extent
+	s.center_elev = _built_center_elev
+	s.detail = detail
+	s.detail_cols = _detail_elev_cols
+	s.detail_rows = _detail_elev_rows
+	s.detail_extent_m = _detail_extent_m()
+	if detail.is_empty() and _detail_elev_resolved:
+		s.fallback = _compose_base_footing_grid(true)
+	s.flat_y = _spawn_ground_y
+	return s
+
+
+## A carve landed on `touched` tiles: things seated on the ground there follow
+## it down (vegetation, camps, props) and the water surfaces re-drape.
+func on_channels_carved(touched: Array) -> void:
+	if touched.is_empty():
+		return
+	_reground_vegetation()
+	if _auto_veg_generated:
+		_reground_auto_vegetation()
+	_reground_camp_areas()
+	_reground_placed_props()
+	_queue_water_redrape()
 
 
 ## One-time migration of the retired systems (coarse/detail delta grids +
@@ -6094,15 +6674,15 @@ func _detail_ground_material(terrain: Node3D) -> Material:
 func _ensure_height_field(terrain: Node3D) -> void:
 	if terrain == null:
 		return
-	if _edit_tiles == null:
-		_edit_tiles = TerrainEditTiles.new()
+	_ensure_tile_stack()
 	var hf := terrain.get_node_or_null("HeightField") as TerrainHeightField
 	if hf == null:
 		hf = TerrainHeightField.new()
 		hf.name = "HeightField"
 		terrain.add_child(hf)
 	_height_field = hf
-	hf.configure(_edit_tiles, Callable(self, "_height_field_base"),
+	hf.pre_consume = Callable(self, "_sync_composed_tiles")
+	hf.configure(_composed_tiles, Callable(self, "_height_field_base"),
 		_detail_extent_m(), _detail_ground_material(terrain))
 	hf.rebuild_all_now()
 
@@ -6118,12 +6698,13 @@ const TILE_SINK_HEADROOM_M := 60.0
 ## Signature of the active edited-tile set — the sink only depends on WHICH
 ## tiles exist, so an unchanged set skips the detail-patch rebuild.
 func _sink_signature() -> String:
-	if _edit_tiles == null:
+	if _composed_tiles == null:
 		return ""
+	_sync_composed_tiles()
 	var keys: Array = []
-	for key in _edit_tiles.active_tiles():
+	for key in _composed_tiles.active_tiles():
 		var k: Vector2i = key
-		if _edit_tiles.tile_has_edits(k):
+		if _composed_tiles.tile_has_edits(k):
 			keys.append(k)
 	keys.sort()
 	var parts := PackedStringArray()
@@ -6139,15 +6720,22 @@ func _sink_signature() -> String:
 ## samples on the union's boundary ring stay at (or follow the cut just below)
 ## the base surface, so no depression trench leaks outside the tile meshes.
 func _detail_mesh_grid_with_sink(grid: PackedFloat32Array, res: int) -> PackedFloat32Array:
-	if _edit_tiles == null or _edit_tiles.is_empty():
+	if _composed_tiles == null:
 		return grid
-	var rects: Array = []
-	for key in _edit_tiles.active_tiles():
+	_sync_composed_tiles()
+	if _composed_tiles.is_empty():
+		return grid
+	# Edited-tile membership as a key SET: carved channels can activate a
+	# hundred-odd tiles, and the old rect-list scan (every sample × 9
+	# neighbours × every rect) grew into tens of millions of tests.
+	var keyset := {}
+	for key in _composed_tiles.active_tiles():
 		var k: Vector2i = key
-		if _edit_tiles.tile_has_edits(k):
-			rects.append(_edit_tiles.tile_world_rect(k))
-	if rects.is_empty():
+		if _composed_tiles.tile_has_edits(k):
+			keyset[k] = true
+	if keyset.is_empty():
 		return grid
+	var span := float(_composed_tiles.tile_cells) * _composed_tiles.cell_m
 	var out := grid.duplicate()
 	var ext := _detail_extent_m()
 	var half := ext * 0.5
@@ -6157,25 +6745,30 @@ func _detail_mesh_grid_with_sink(grid: PackedFloat32Array, res: int) -> PackedFl
 		for c in res:
 			var x := float(c) / float(maxi(res - 1, 1)) * ext - half
 			var p := Vector2(x, z)
-			if not _in_rect_union(rects, p):
+			if not _in_tile_keyset(keyset, span, p):
 				continue
 			# Boundary-ring samples follow the local cut (delta→0 at the union
 			# edge, so the surface stays continuous with untouched terrain);
 			# fully interior samples (all 8 neighbours covered) drop the whole
 			# headroom so a coarse chord can never bridge above a hi-res cut.
-			var sink := maxf(0.0, -_edit_tiles.sample_delta(x, z))
+			var sink := maxf(0.0, -_composed_tiles.sample_delta(x, z))
 			var interior := true
 			for oz in [-1, 0, 1]:
 				for ox in [-1, 0, 1]:
 					if ox == 0 and oz == 0:
 						continue
-					if not _in_rect_union(rects, p + Vector2(float(ox) * cell, float(oz) * cell)):
+					if not _in_tile_keyset(keyset, span, p + Vector2(float(ox) * cell, float(oz) * cell)):
 						interior = false
 			if interior:
 				sink = TILE_SINK_HEADROOM_M
 			if sink > 0.0:
 				out[r * res + c] -= sink
 	return out
+
+
+## Tile-key membership of a world XZ (the tile whose rect holds the point).
+static func _in_tile_keyset(keyset: Dictionary, span: float, p: Vector2) -> bool:
+	return keyset.has(Vector2i(floori(p.x / span), floori(p.y / span)))
 
 
 static func _in_rect_union(rects: Array, p: Vector2) -> bool:
@@ -6328,6 +6921,7 @@ func _terrain_config() -> Dictionary:
 	var show_auto_vegetation := true
 	var generate_camps := true
 	var near_field_detail := true
+	var show_pois := true
 	var cache_enabled := TerrainCacheSettings.cache_enabled()
 	var camp_exclusion_r := 804.672   # 0.5 miles default
 	if FileAccess.file_exists(CONFIG_PATH):
@@ -6340,6 +6934,7 @@ func _terrain_config() -> Dictionary:
 			show_auto_vegetation = bool(cfg.get_value("terrain", "show_auto_vegetation", true))
 			generate_camps = bool(cfg.get_value("terrain", "generate_camps", true))
 			near_field_detail = bool(cfg.get_value("terrain", "near_field_detail", true))
+			show_pois = bool(cfg.get_value("terrain", "show_pois", true))
 			cache_enabled = bool(cfg.get_value("terrain", "cache_enabled", true))
 			camp_exclusion_r = float(cfg.get_value("terrain", "camp_exclusion_r", 804.672))
 	return {
@@ -6350,9 +6945,199 @@ func _terrain_config() -> Dictionary:
 		"show_auto_vegetation": show_auto_vegetation,
 		"generate_camps": generate_camps,
 		"near_field_detail": near_field_detail,
+		"show_pois": show_pois,
 		"cache_enabled": cache_enabled,
 		"camp_exclusion_r": camp_exclusion_r,
 	}
+
+
+## ---------------------------------------------------------------------------
+## Points of interest (core/poi/): pins imported from a Google Earth KML so a
+## real place on the property — a culvert inlet, the pond outlet, a clearing —
+## can be found in the world instead of guessed at. One PoiLayer per site
+## (WorldPaths kind "poi"), rendered by a PoiRuntime under Terrain, listed in
+## Terrain options with a Go button, drawn on the Site Plan.
+## ---------------------------------------------------------------------------
+
+func _attach_pois() -> void:
+	if _main == null:
+		return
+	var path := PoiLayer.save_path_for_map(_lat, _lon)
+	if pois == null or _pois_path != path:
+		pois = PoiLayer.create_empty()
+		pois.load_from(path)
+		_pois_path = path
+	_show_pois = bool(_terrain_config().get("show_pois", true))
+	_sync_pois()
+	if pois.count() > 0:
+		print("TerrainLoader._attach_pois: %d points of interest" % pois.count())
+
+
+func _ensure_poi_runtime() -> PoiRuntime:
+	if _main == null:
+		return null
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return null
+	if is_instance_valid(_poi_runtime) and _poi_runtime.get_parent() == terrain:
+		return _poi_runtime
+	var stale := terrain.get_node_or_null(PoiRuntime.NODE_NAME)
+	if stale != null:
+		terrain.remove_child(stale)
+		stale.queue_free()
+	_poi_runtime = PoiRuntime.new()
+	_poi_runtime.name = PoiRuntime.NODE_NAME
+	terrain.add_child(_poi_runtime)
+	return _poi_runtime
+
+
+func _sync_pois() -> void:
+	var rt := _ensure_poi_runtime()
+	if rt == null or pois == null:
+		return
+	rt.set_shown(_show_pois)
+	rt.sync(pois, _lat, _lon, Callable(self, "_ground_height_at"))
+
+
+func _save_pois() -> void:
+	if pois == null or _pois_path.is_empty():
+		return
+	pois.save_to(_pois_path)
+
+
+## Import a Google Earth KML / KMZ: every placemark becomes a pin (a line or
+## polygon a draped ribbon) at its real coordinates. Importing the same file
+## again REPLACES its pins. Returns {ok, added, replaced, off_map, error,
+## warnings}.
+func import_kml_file(path: String) -> Dictionary:
+	if pois == null:
+		_attach_pois()
+	if pois == null:
+		return {"ok": false, "error": "No site loaded", "added": 0, "replaced": 0, "off_map": 0, "warnings": []}
+	var parsed := KmlPoiParser.parse_file(path)
+	if not bool(parsed.get("ok", false)):
+		_toast("KML import failed: %s" % str(parsed.get("error", "")), ToastUI.Level.ERROR)
+		return {"ok": false, "error": str(parsed.get("error", "")), "added": 0, "replaced": 0, "off_map": 0, "warnings": []}
+	var res := pois.import_kml(parsed, path.get_file())
+	_save_pois()
+	_sync_pois()
+	var n := int(res.get("added", 0))
+	var off := _poi_count_off_map(path.get_file())
+	var msg := "Imported %d point%s of interest from %s" % [n, "" if n == 1 else "s", path.get_file()]
+	if off > 0:
+		msg += " — %d outside this map" % off
+	if n == 0:
+		msg = "No placemarks found in %s" % path.get_file()
+	_toast(msg, ToastUI.Level.WARN if (off > 0 or n == 0) else ToastUI.Level.OK)
+	return {"ok": true, "added": n, "replaced": int(res.get("replaced", 0)), "off_map": off,
+		"error": "", "warnings": parsed.get("warnings", [])}
+
+
+func _poi_count_off_map(source: String) -> int:
+	if pois == null:
+		return 0
+	var n := 0
+	for rec in pois.records:
+		if str(rec.get("source", "")) != source:
+			continue
+		var xz := PoiLayer.world_xz(rec, _lat, _lon)
+		if absf(xz.x) > _half_extent or absf(xz.y) > _half_extent:
+			n += 1
+	return n
+
+
+## Copies of the site's POI records (for the options list / harnesses).
+func poi_records() -> Array:
+	return pois.records.duplicate(true) if pois != null else []
+
+
+## Site Plan markers: [{id, name, kind, pos: Vector2 (site xz), color: Color,
+## points: PackedVector2Array (lines / polygons)}]. Empty while pins are hidden.
+func poi_markers() -> Array:
+	var out: Array = []
+	if pois == null or not _show_pois:
+		return out
+	for rec in pois.records:
+		var kind := str(rec.get("kind", "point"))
+		out.append({
+			"id": str(rec.get("id", "")),
+			"name": str(rec.get("name", "")),
+			"kind": kind,
+			"pos": PoiLayer.world_xz(rec, _lat, _lon),
+			"color": PoiLayer.color_of(rec),
+			"points": PoiLayer.points_world_xz(rec, _lat, _lon) if kind != "point" else PackedVector2Array(),
+		})
+	return out
+
+
+## World position of a pin's foot (on the edit-aware ground), or Vector3.INF.
+func poi_world_position(id: String) -> Vector3:
+	if pois == null:
+		return Vector3.INF
+	var rec := pois.get_record(id)
+	if rec.is_empty():
+		return Vector3.INF
+	var xz := PoiLayer.world_xz(rec, _lat, _lon)
+	return Vector3(xz.x, _ground_height_at(xz.x, xz.y), xz.y)
+
+
+func remove_poi(id: String) -> bool:
+	if pois == null or not pois.remove(id):
+		return false
+	_save_pois()
+	_sync_pois()
+	return true
+
+
+func remove_poi_source(source: String) -> int:
+	if pois == null:
+		return 0
+	var n := pois.remove_source(source)
+	if n > 0:
+		_save_pois()
+		_sync_pois()
+	return n
+
+
+func clear_pois() -> void:
+	if pois == null:
+		return
+	pois.clear()
+	_save_pois()
+	_sync_pois()
+
+
+func show_pois() -> bool:
+	return _show_pois
+
+
+func set_show_pois(on: bool) -> void:
+	_show_pois = on
+	_save_terrain_config_value("show_pois", on)
+	if is_instance_valid(_poi_runtime):
+		_poi_runtime.set_shown(on)
+
+
+## Put the player a step south of the pin, on the ground, so the pin stands
+## right in front of them. A save resume still restores the saved position.
+func teleport_to_poi(id: String) -> bool:
+	var at := poi_world_position(id)
+	if at == Vector3.INF or _main == null:
+		return false
+	var player := _main.get_node_or_null("Player")
+	if player == null:
+		return false
+	var pos := Vector3(at.x, 0.0, at.z + 2.5)
+	pos.y = _ground_height_at(pos.x, pos.z) + TerrainBuilder.PLAYER_SPAWN_CLEARANCE_M
+	player.global_position = pos
+	if player is CharacterBody3D:
+		(player as CharacterBody3D).velocity = Vector3.ZERO
+	if "fall_start_height" in player:
+		player.fall_start_height = pos.y
+		player.highest_point_during_fall = pos.y
+	var rec := pois.get_record(id)
+	_toast("At %s" % str(rec.get("name", "the pin")), ToastUI.Level.INFO)
+	return true
 
 
 func _save_terrain_config_value(key: String, value: Variant) -> void:
@@ -6660,6 +7445,13 @@ func refresh_all_cached_layers() -> void:
 ## Wipe painted vegetation sidecars + in-memory edits, then re-fetch all terrain layers live.
 func reset_site_to_fresh() -> void:
 	if not _built:
+		return
+	# Inside a WORLD this is "Re-download map data": the MAP layers (DEM,
+	# imagery, OSM) refetch and the world's own painted vegetation, props and
+	# sculpting are kept. A clean slate is a NEW world (World panel / picker).
+	if WorldPaths.has_active_world():
+		_notify_options_status("Re-downloading this map's terrain, imagery and OSM — your world is kept …", "busy")
+		refresh_all_cached_layers()
 		return
 	var n_edits := TerrainCacheSettings.invalidate_user_vegetation_edits(_lat, _lon)
 	_vegetation_layer = VegetationLayer.create_empty()
@@ -9021,6 +9813,50 @@ func _setup_edit_toolbar() -> void:
 	_edit_toolbar_ui = toolbar
 
 
+## The stream (mapped / drawn / traced, never a derived drainage line) within
+## `max_m` of a ground point: {valid, id, name, kind, dist_m, seg, tapped}.
+## The crosshair's stream rung — aimed at a creek, the player used to get the
+## forest polygon it runs through ("Fill forest") and nothing about the water.
+func pick_stream_at_world(x: float, z: float, max_m: float = 3.0) -> Dictionary:
+	var wn := water_network()
+	if wn == null:
+		return {"valid": false}
+	var p := Vector2(x, z)
+	var best := {"valid": false}
+	var best_d := max_m
+	for f_v in wn.features():
+		var f: Dictionary = f_v
+		var fid := str(f.get("id", ""))
+		if fid.begins_with("dc_"):
+			continue
+		var near := StreamNetwork.nearest_on_line(f["points"], p)
+		var d := float(near.get("dist", INF))
+		if d < best_d:
+			best_d = d
+			var tapped := false
+			for m in f.get("modes", []):
+				if str(m) == WaterFeatureLayer.MODE_PENSTOCK:
+					tapped = true
+			best = {"valid": true, "id": fid, "name": str(f.get("name", "")),
+				"kind": str(f.get("kind", "stream")), "dist_m": d,
+				"seg": int(near.get("seg", 0)), "tapped": tapped}
+	return best
+
+
+## Interact on a focused stream: the WATER toolbar on its Edit tool with this
+## stream picked (name, section, base flow, span modes, Penstock chip).
+func open_water_tools_on(feature_id: String) -> void:
+	if _edit_toolbar_ui == null or feature_id.is_empty():
+		return
+	if _edit_toolbar_ui.has_method("open_with_section"):
+		_edit_toolbar_ui.call("open_with_section", "water")
+	if _edit_toolbar_ui.has_method("_set_active_tool"):
+		_edit_toolbar_ui.call("_set_active_tool", "water_edit")
+	var wt: Variant = _edit_toolbar_ui.get("_water_tools")
+	if wt != null and wt.has_method("pick_feature"):
+		wt.call("pick_feature", feature_id)
+
+
 func _close_edit_toolbar() -> void:
 	if _edit_toolbar_ui != null and _edit_toolbar_ui.has_method("is_panel_open") \
 			and bool(_edit_toolbar_ui.call("is_panel_open")):
@@ -9086,6 +9922,7 @@ func end_terrain_tile_edit() -> void:
 	_refresh_detail_sink()
 	_save_edit_tiles()
 	_reseat_actors_after_edit(snap.keys())
+	_on_terrain_tiles_changed(snap.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -9094,9 +9931,54 @@ func end_terrain_tile_edit() -> void:
 # their own session.
 # ---------------------------------------------------------------------------
 
+## Terrain under these edit tiles changed (a committed sculpt, an undo, a
+## channel carve). Anything draped on the ground that a tile overlaps is
+## re-draped once, debounced — today that is the water surfaces; the
+## WaterNetwork also hears it so derived drainage goes stale.
+func _on_terrain_tiles_changed(keys: Array) -> void:
+	if keys.is_empty():
+		return
+	var span := TerrainEditTiles.CELL_M * float(TerrainEditTiles.TILE_CELLS)
+	var hit := false
+	for item in _water_data:
+		if not (item is Dictionary):
+			continue
+		var pts: Variant = (item as Dictionary).get("points", PackedVector2Array())
+		if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 2:
+			continue
+		var r := _poly_bounds(pts as PackedVector2Array)
+		for k: Variant in keys:
+			if not (k is Vector2i):
+				continue
+			var kv: Vector2i = k
+			if r.grow(2.0).intersects(Rect2(float(kv.x) * span, float(kv.y) * span, span, span)):
+				hit = true
+				break
+		if hit:
+			break
+	if hit:
+		_queue_water_redrape()
+	var wn := get_node_or_null("WaterNetwork")
+	if wn != null and wn.has_method("on_terrain_tiles_changed"):
+		wn.call("on_terrain_tiles_changed", keys)
+
+
+var _water_redrape_pending := false
+
+
+## Debounced `_attach_water` — a burst of commits (or a whole-feature carve)
+## re-drapes once.
+func _queue_water_redrape() -> void:
+	if _water_redrape_pending or not is_inside_tree():
+		return
+	_water_redrape_pending = true
+	get_tree().create_timer(0.35).timeout.connect(func() -> void:
+		_water_redrape_pending = false
+		_attach_water())
+
+
 func _ensure_edit_tiles() -> void:
-	if _edit_tiles == null:
-		_edit_tiles = TerrainEditTiles.new()
+	_ensure_tile_stack()
 	if _height_field == null or not is_instance_valid(_height_field):
 		var terrain := _main.get_node_or_null("Terrain") as Node3D if _main != null else null
 		if terrain != null:
@@ -9215,6 +10097,7 @@ func undo_terrain_sculpt() -> bool:
 			_refresh_detail_sink()
 			_save_edit_tiles()
 			_reseat_actors_after_edit(tile_snap.keys())
+			_on_terrain_tiles_changed(tile_snap.keys())
 		handled = true
 	if snap is Dictionary and (snap as Dictionary).has("user_water"):
 		# Water-body undo (Rain/Drain / pond — may ride the same entry as tiles
@@ -9303,8 +10186,7 @@ func _dem_height_without_earthworks(x: float, z: float) -> float:
 
 
 func _earthworks_path() -> String:
-	return "user://maps/earthworks_%s_%s.json" % [
-		TerrainEditGrid._coord_token(_lat), TerrainEditGrid._coord_token(_lon)]
+	return WorldPaths.site_file("earthworks", _lat, _lon)
 
 
 func _load_earthworks() -> void:
@@ -9678,8 +10560,16 @@ func _recompute_pond_volume_rec(rec: Dictionary, overwrite_auto: bool = true) ->
 		return
 	var bounds := sample_pond_basin_elevations(poly)
 	var floor_y := float(bounds.get("floor_m", 0.0))
-	var spill := float(bounds.get("rim_m", floor_y + 1.0))
+	var basin_rim := float(bounds.get("rim_m", floor_y + 1.0))
+	# The spill is the basin's natural rim — or the player's max fill level
+	# above it (a dam). Everything downstream (capacity, level-for-volume,
+	# the graph rim) reads `spill_m`, so the override lands everywhere at once.
+	var spill := basin_rim
+	var mx := pond_max_level_for_tag(str(rec.get("tag", _water_body_tag(poly))))
+	if not is_nan(mx) and mx > basin_rim + 0.005:
+		spill = mx
 	rec["floor_m"] = floor_y
+	rec["basin_rim_m"] = basin_rim
 	rec["spill_m"] = spill
 	var cell := PondBathymetry.suggested_cell_m(BuildingBuilder.footprint_area_m2(poly))
 	var height_at := Callable(self, "ground_height_at")
@@ -9798,7 +10688,13 @@ func _clear_selection_highlight() -> void:
 ## ---------------------------------------------------------------------------
 
 func _should_load_user_map_overlays() -> bool:
-	## Map-select "Load from cache" off → _force_refetch → clean world (no props/styles).
+	## Inside a WORLD, re-downloading the map (_force_refetch) refreshes only the
+	## MAP layers (DEM, imagery, OSM); the world's own props, styles and spaces
+	## always load — a fresh start is a NEW world, not a refetch. Without a world
+	## (a harness, a direct scene boot) the old "refetch = clean session"
+	## behaviour is kept.
+	if WorldPaths.has_active_world():
+		return true
 	return not _force_refetch
 
 
@@ -10925,6 +11821,16 @@ func _flush_prop_layer_save() -> void:
 		_placed_prop_layer.save(_lat, _lon)
 
 
+## World save / exit (WorldSession): write anything still waiting on a
+## debounce timer — a timer created on the SceneTree dies with a scene change,
+## so a pending save would otherwise be lost on "Exit to menu".
+func flush_world_state() -> void:
+	if not _built:
+		return
+	if _prop_layer_save_pending:
+		_flush_prop_layer_save()
+
+
 ## Bulk hide/show every generic placeholder twin (generic_box / generic_tank) from
 ## the 3D world — the "conceptual storage not ready for 3D" case. Returns the count
 ## affected. One save + rebuild for the whole batch.
@@ -11014,6 +11920,7 @@ func collect_esim_site_layers() -> Dictionary:
 		"vegetation_style": veg_style_blob,
 		"auto_veg_edits": auto_edits_blob,
 		"user_water": _serialize_user_water(),
+		"water_features": _water_network().layer.serialize() if _water_network() != null else {},
 	}
 
 
@@ -11078,6 +11985,16 @@ func apply_esim_site_layers(layers: Dictionary, options: Dictionary = {}) -> Dic
 		_refresh_water_data()
 		applied.append("user_water")
 
+	# Streams, OSM overrides and water settings — the carve regenerates from
+	# them, so the channel tiles never travel in the package.
+	var wf_blob: Dictionary = layers.get("water_features", {}) as Dictionary
+	if not wf_blob.is_empty() and _water_network() != null:
+		var wn := _water_network()
+		wn.layer.deserialize(wf_blob)
+		wn.save_layer()
+		wn.invalidate_cache()
+		applied.append("water_features")
+
 	if rebuild and _built:
 		if "building_styles" in applied or "placed_props" in applied:
 			_attach_buildings()
@@ -11088,8 +12005,10 @@ func apply_esim_site_layers(layers: Dictionary, options: Dictionary = {}) -> Dic
 			call_deferred("_rebuild_vegetation")
 			if _auto_veg_generated:
 				call_deferred("_full_regenerate_auto_vegetation_async")
-		if "user_water" in applied:
+		if "user_water" in applied or "water_features" in applied:
 			call_deferred("_attach_water")
+		if "water_features" in applied:
+			_request_water_network_rebuild(true)
 
 	return {"ok": true, "applied": applied}
 

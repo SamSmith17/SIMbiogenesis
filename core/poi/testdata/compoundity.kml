@@ -1,0 +1,566 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:ex="http://earth.google.com/kml/ext">
+<Document id="11uW82G6zMlLItwZnw4tMn1Nwe6Z1_TTX">
+	<ex:extension>base64;Co4BCoEBCn8KAggBEnkKdwokCiAKAwjQDxoHCNLtZRD_ASEAAAAAAADwPykAAAAAAAAAABgAEg8KCAitgO8HEP8BEKAfGAAaGgoHCP___wcQQBIICK2A7wcQ_wEYoB8gACgAIgkIARIFCP___wcqFwgBEggI____BxD_ARkAAAAAAADwPyAAEgQIARAAGgIIAA</ex:extension>
+	<name>Compoundity</name>
+	<gx:CascadingStyle kml:id="__managed_style_1489C8A2B94267236AA0_highlight">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff007cf5</color>
+				<width>6</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_1489C8A2B94267236AA0_normal">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff007cf5</color>
+				<width>4</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<StyleMap id="__managed_style_1489C8A2B94267236AA0">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_1489C8A2B94267236AA0_normal</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_1489C8A2B94267236AA0_highlight</styleUrl>
+		</Pair>
+	</StyleMap>
+	<gx:CascadingStyle kml:id="__managed_style_37CDA382454267236AA0_highlight">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ffd27619</color>
+				<width>4.5</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<StyleMap id="__managed_style_0D33AD8EA94267236AA0">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_0D33AD8EA94267236AA0_normal</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_0D33AD8EA94267236AA0_highlight</styleUrl>
+		</Pair>
+	</StyleMap>
+	<gx:CascadingStyle kml:id="__managed_style_37CDA382454267236AA0_normal">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ffd27619</color>
+				<width>3</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_2D75766CE44267236AA0_highlight">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>6</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_0D33AD8EA94267236AA0_highlight">
+		<ex:extension>base64;Eq4BGAEiqQEKpgEKT2h0dHBzOi8vZWFydGguZ29vZ2xlLmNvbS9iYWxsb29uX2NvbXBvbmVudHMvYmFzZS8xLjEuMC4wL2NhcmRfdGVtcGxhdGUua21sI21haW4SUwpPaHR0cHM6Ly9lYXJ0aC5nb29nbGUuY29tL2JhbGxvb25fY29tcG9uZW50cy9iYXNlL2N1cnJlbnQvY2FyZF90ZW1wbGF0ZS5rbWwjbWFpbhgA</ex:extension>
+		<styleUrl>https://earth.google.com/balloon_components/base/1.1.0.0/card_template.kml#main</styleUrl>
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>6</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_2D75766CE44267236AA0_normal">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>4</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<StyleMap id="__managed_style_37CDA382454267236AA0">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_37CDA382454267236AA0_normal</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_37CDA382454267236AA0_highlight</styleUrl>
+		</Pair>
+	</StyleMap>
+	<StyleMap id="__managed_style_2D75766CE44267236AA0">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_2D75766CE44267236AA0_normal</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_2D75766CE44267236AA0_highlight</styleUrl>
+		</Pair>
+	</StyleMap>
+	<gx:CascadingStyle kml:id="__managed_style_0D33AD8EA94267236AA0_normal">
+		<ex:extension>base64;Eq4BGAEiqQEKpgEKT2h0dHBzOi8vZWFydGguZ29vZ2xlLmNvbS9iYWxsb29uX2NvbXBvbmVudHMvYmFzZS8xLjEuMC4wL2NhcmRfdGVtcGxhdGUua21sI21haW4SUwpPaHR0cHM6Ly9lYXJ0aC5nb29nbGUuY29tL2JhbGxvb25fY29tcG9uZW50cy9iYXNlL2N1cnJlbnQvY2FyZF90ZW1wbGF0ZS5rbWwjbWFpbhgA</ex:extension>
+		<styleUrl>https://earth.google.com/balloon_components/base/1.1.0.0/card_template.kml#main</styleUrl>
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>4</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_0C99997DCD4267236A9F_highlight">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>6</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_0C99997DCD4267236A9F_normal">
+		<ex:extension>base64;EgIYAQ</ex:extension>
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>4</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<StyleMap id="__managed_style_0C99997DCD4267236A9F">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_0C99997DCD4267236A9F_normal</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_0C99997DCD4267236A9F_highlight</styleUrl>
+		</Pair>
+	</StyleMap>
+	<Placemark id="0E1A59DB093A6D7F9133">
+		<ex:extension>base64;Ggg6BAgBOAFAAQ</ex:extension>
+		<name>House</name>
+		<snippet></snippet>
+		<LookAt>
+			<longitude>-122.2468056</longitude>
+			<latitude>48.32513889999999</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.276700103919</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0C99997DCD4267236A9F</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2468056,48.3251389,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0E090A31613B2FCBB724">
+		<name>Seasonal Pond/Basin</name>
+		<description><![CDATA[<div>Seasonal Pond/Basin<br></div>]]></description>
+		<LookAt>
+			<longitude>-122.2462222</longitude>
+			<latitude>48.3260556</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.26357465017</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2462222,48.3260556,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="05403573CE3B2FCC59FB">
+		<name>Upper Culvert</name>
+		<description><![CDATA[<div>Upper Culvert<br></div>]]></description>
+		<LookAt>
+			<longitude>-122.2462222</longitude>
+			<latitude>48.3259444</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2651668371691</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2462222,48.32594439999999,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="07611744303B2FCCD23F">
+		<name>Lower Culvert</name>
+		<description><![CDATA[<div>Lower Culvert</div>]]></description>
+		<LookAt>
+			<longitude>-122.2465278</longitude>
+			<latitude>48.32575000000001</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2679502954428</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2465278,48.32574999999999,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="09A486F8133B2FCDDB79">
+		<name>Pond Outlet Pipes</name>
+		<LookAt>
+			<longitude>-122.2473611</longitude>
+			<latitude>48.32483329999999</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2810756989343</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0C99997DCD4267236A9F</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2473611,48.32483329999999,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="04977853323B2FD13568">
+		<name>Pond</name>
+		<LookAt>
+			<longitude>-122.2468302832613</longitude>
+			<latitude>48.32539657056557</latitude>
+			<altitude>126.1947200413871</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>200.4931413866144</range>
+			<altitudeMode>absolute</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_2D75766CE44267236AA0</styleUrl>
+		<Point>
+			<coordinates>-122.2474561730143,48.32514806829523,113.7831840051151</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0F1E04216B3B48B07724">
+		<name>Intersection of Path and Ravine</name>
+		<description><![CDATA[<div><span style="color: rgb(94, 94, 94); font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; letter-spacing: 0.1px; orphans: 2; text-align: left; text-indent: 0px; text-transform: none; widows: 2; word-spacing: 0px; white-space: pre-wrap; background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial; float: none; display: inline;"><span class="font" style="font-family:&quot;Google Sans&quot;, Roboto, Arial, sans-serif"><span class="size" style="font-size:14px">bottom path, ravine below pond outlet drainage</span></span></span><br></div>]]></description>
+		<LookAt>
+			<longitude>-122.2474722</longitude>
+			<latitude>48.3247778</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2818703487181</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2474722,48.3247778,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0566D9F88C3B48B18B6F">
+		<name>Yurt Clearing</name>
+		<LookAt>
+			<longitude>-122.2444444</longitude>
+			<latitude>48.3241389</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2910180881454</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0C99997DCD4267236A9F</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2444444,48.32413890000001,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0D1CDE0E8A3B48B25510">
+		<name>Fork in Road</name>
+		<description><![CDATA[<div>Between House and Yurt</div>]]></description>
+		<LookAt>
+			<longitude>-122.2460556</longitude>
+			<latitude>48.3244444</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2866439629965</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2460556,48.32444439999999,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="03BE00E56B3B48B32868">
+		<name>Bottom Pond/Marsh</name>
+		<description><![CDATA[<div>Lowest Practical Point for Hydro<br></div>]]></description>
+		<LookAt>
+			<longitude>-122.2471667</longitude>
+			<latitude>48.3239722</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2934048786697</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2471667,48.3239722,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0F7259C0343B48B3FF83">
+		<name>Top Culvert Inlet</name>
+		<description><![CDATA[<div>Highest Practical Point for Hydro</div>]]></description>
+		<LookAt>
+			<longitude>-122.2461667</longitude>
+			<latitude>48.3260278</latitude>
+			<altitude>0</altitude>
+			<heading>0</heading>
+			<tilt>0</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>674.2639726971275</range>
+			<altitudeMode>relativeToGround</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_0D33AD8EA94267236AA0</styleUrl>
+		<Point>
+			<extrude>1</extrude>
+			<coordinates>-122.2461667,48.3260278,0</coordinates>
+		</Point>
+	</Placemark>
+	<Placemark id="0C65E337FE3B4DB3B0AF">
+		<name>Longest Possible Run From Pond</name>
+		<LookAt>
+			<longitude>-122.2469095013586</longitude>
+			<latitude>48.32462497042279</latitude>
+			<altitude>105.6874066908775</altitude>
+			<heading>15.54879746458085</heading>
+			<tilt>38.46929082598837</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>314.5296420158048</range>
+			<altitudeMode>absolute</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_37CDA382454267236AA0</styleUrl>
+		<LineString>
+			<coordinates>
+				-122.2473532395781,48.32483902472435,0 -122.2474735347394,48.32477305141039,0 -122.2475580599543,48.32472834499296,0 -122.2475923397368,48.3245731887355,0 -122.2475646745626,48.3244198327097,0 -122.2474206926469,48.32411639079045,0 -122.2473640992298,48.32403916905662,0 
+			</coordinates>
+		</LineString>
+	</Placemark>
+	<Placemark id="0EBC1B2E543B4DB5B174">
+		<name>Longest Possible Run from Hillside</name>
+		<LookAt>
+			<longitude>-122.2462630033183</longitude>
+			<latitude>48.3260167571374</latitude>
+			<altitude>165.2328046712983</altitude>
+			<heading>15.54918279793196</heading>
+			<tilt>38.46868621327339</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>206.4553702235207</range>
+			<altitudeMode>absolute</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_2D75766CE44267236AA0</styleUrl>
+		<LineString>
+			<coordinates>
+				-122.2473462444882,48.32523350848468,0 -122.2472690873907,48.32526791226621,0 -122.2472356153529,48.32530647077802,0 -122.2471433886675,48.32530604867363,0 -122.2470865107171,48.32531689365987,0 -122.2466283311791,48.32564146353172,0 -122.2465288333117,48.32574993425099,0 -122.2462209989733,48.32594727797506,0 -122.2461658943365,48.32603144614367,0 
+			</coordinates>
+		</LineString>
+	</Placemark>
+	<Placemark id="0D157C0C334108ADBD0E">
+		<name>Existing Pond Drainage Run</name>
+		<LookAt>
+			<longitude>-122.2472289773906</longitude>
+			<latitude>48.32498780973228</latitude>
+			<altitude>113.8857941559004</altitude>
+			<heading>-5.789527813777258</heading>
+			<tilt>41.96878995524583</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>94.86505660835975</range>
+			<altitudeMode>absolute</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_37CDA382454267236AA0</styleUrl>
+		<LineString>
+			<coordinates>
+				-122.2474352102739,48.32509315925338,0 -122.247363403394,48.32484381322368,0 
+			</coordinates>
+		</LineString>
+	</Placemark>
+	<Placemark id="05D3915F644108B4AB04">
+		<name>Longest Possible Run from Hillside</name>
+		<LookAt>
+			<longitude>-122.2462630033183</longitude>
+			<latitude>48.3260167571374</latitude>
+			<altitude>165.2328046712983</altitude>
+			<heading>15.54918279793196</heading>
+			<tilt>38.46868621327339</tilt>
+			<gx:fovy>35</gx:fovy>
+			<range>206.4553702235207</range>
+			<altitudeMode>absolute</altitudeMode>
+		</LookAt>
+		<styleUrl>#__managed_style_1489C8A2B94267236AA0</styleUrl>
+		<LineString>
+			<coordinates>
+				-122.2473622222836,48.32404074306807,0 -122.2475463796352,48.32455593016114,0 -122.2473563518707,48.32508416185266,0 -122.2472988267709,48.32520527799203,0 -122.2471433886675,48.32530604867363,0 -122.2470865107171,48.32531689365987,0 -122.2466283311791,48.32564146353172,0 -122.2465288333117,48.32574993425099,0 -122.2462209989733,48.32594727797506,0 -122.2461658943365,48.32603144614367,0 
+			</coordinates>
+		</LineString>
+	</Placemark>
+</Document>
+</kml>

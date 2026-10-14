@@ -22,6 +22,17 @@ var _camps_cb: CheckBox = null
 var _exclusion_r_spin: SpinBox = null
 var _auto_veg_cb: CheckBox = null
 var _near_detail_cb: CheckBox = null
+## Points of interest (KML pins): the list, its toggle, dialogs.
+## The body scrolls: the column outgrew the 620 px it was designed for long
+## ago (measured 1500 px with the KML block), and a PanelContainer anchored
+## top-right simply grows off the bottom of the screen.
+var _scroll: ScrollContainer = null
+var _poi_list: VBoxContainer = null
+var _poi_title: Label = null
+var _poi_show_cb: CheckBox = null
+var _poi_empty_lbl: Label = null
+var _poi_dialog: FileDialog = null
+var _poi_clear_confirm: ConfirmationDialog = null
 var _auto_veg_density_spin: SpinBox = null
 var _cache_cb: CheckBox = null
 var _status_lbl: Label = null
@@ -81,19 +92,36 @@ func toggle_expanded() -> void:
 
 func _set_expanded(on: bool) -> void:
 	_expanded = on
+	if _scroll != null:
+		_scroll.visible = on
 	if _body != null:
 		_body.visible = on
 	if _toggle_btn != null:
 		_toggle_btn.text = "▾ Terrain options" if on else "▸ Terrain options"
+	if on:
+		# Pins can arrive outside this panel (a harness / another UI calling the
+		# loader's import), so the list is rebuilt every time the panel opens.
+		_refresh_poi_list()
 	_apply_collapsed_size()
 	expanded_changed.emit(on)
 
 
 func _apply_collapsed_size() -> void:
 	if _expanded:
-		offset_bottom = 620.0
+		# As tall as the content wants, but never past the bottom of the
+		# window — the scroll container carries the rest.
+		var vp_h := get_viewport_rect().size.y if is_inside_tree() else 1080.0
+		var header_h := 60.0
+		var want := header_h + (_body.get_combined_minimum_size().y if _body != null else 560.0)
+		var max_h := maxf(220.0, vp_h - offset_top - 24.0)
+		var h := minf(want, max_h)
+		offset_bottom = offset_top + h
+		if _scroll != null:
+			_scroll.custom_minimum_size = Vector2(0.0, maxf(120.0, h - header_h))
 	else:
 		offset_bottom = 52.0
+		if _scroll != null:
+			_scroll.custom_minimum_size = Vector2.ZERO
 
 
 func _build_ui() -> void:
@@ -117,10 +145,21 @@ func _build_ui() -> void:
 	_toggle_btn.pressed.connect(_on_toggle_pressed)
 	header.add_child(_toggle_btn)
 
+	_scroll = ScrollContainer.new()
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.visible = false
+	col.add_child(_scroll)
 	_body = VBoxContainer.new()
 	_body.add_theme_constant_override("separation", 6)
-	_body.visible = false
-	col.add_child(_body)
+	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.add_child(_body)
+
+	# FIRST in the body: the panel is a top-right box with no scrolling, so
+	# anything near the bottom of this long column falls off a 720p / 1080p
+	# screen (the KML import was unfindable down there).
+	_build_poi_ui(_body)
 
 	_roads_cb = _add_toggle(_body, "Flatten roads (hi-res patch)",
 		"Level highway corridors on the hi-res DEM grid", _on_roads_toggled)
@@ -269,7 +308,10 @@ func _build_ui() -> void:
 
 	# Overhaul v2: veg style resets that actually work (the old reset-site path
 	# built wrong filenames and deleted nothing).
-	var style_row := HBoxContainer.new()
+	# Stacked, not side by side: the pair is 328 px wide in a 260 px panel and
+	# was pushing the WHOLE panel 84 px past the right edge of the screen
+	# (measured by a headless min-size probe, 2026-10-12).
+	var style_row := VBoxContainer.new()
 	_body.add_child(style_row)
 	var map_style_btn := Button.new()
 	map_style_btn.text = "Reset map veg style"
@@ -299,17 +341,26 @@ func _build_ui() -> void:
 	var reset_row := HBoxContainer.new()
 	_body.add_child(reset_row)
 	var reset_btn := Button.new()
-	reset_btn.text = "Reset site (fresh load)"
+	var in_world := WorldPaths.has_active_world()
+	reset_btn.text = "Re-download map data" if in_world else "Reset site (fresh load)"
 	reset_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	reset_btn.tooltip_text = "Delete all painted vegetation and cached terrain for this site, then re-download now"
+	if in_world:
+		reset_btn.tooltip_text = ("Re-download this map's terrain, imagery and OSM now. Your world (props, "
+			+ "vegetation, sculpting, graph, people) is kept. For a clean slate start a new world on this map.")
+	else:
+		reset_btn.tooltip_text = "Delete all painted vegetation and cached terrain for this site, then re-download now"
 	reset_btn.pressed.connect(_on_reset_site_pressed)
 	reset_row.add_child(reset_btn)
 	_refresh_btns.append(reset_btn)
 
 	_reset_confirm = ConfirmationDialog.new()
-	_reset_confirm.title = "Reset site?"
-	_reset_confirm.dialog_text = "Deletes all painted vegetation and cached terrain data for this map, then re-downloads as if loading for the first time."
-	_reset_confirm.ok_button_text = "Reset now"
+	_reset_confirm.title = "Re-download map data?" if in_world else "Reset site?"
+	if in_world:
+		_reset_confirm.dialog_text = ("Re-downloads this map's terrain, imagery and OSM features. Your world is kept; "
+			+ "other worlds on this map will also load the refreshed terrain.")
+	else:
+		_reset_confirm.dialog_text = "Deletes all painted vegetation and cached terrain data for this map, then re-downloads as if loading for the first time."
+	_reset_confirm.ok_button_text = "Re-download" if in_world else "Reset now"
 	_reset_confirm.confirmed.connect(_on_reset_site_confirmed)
 	add_child(_reset_confirm)
 
@@ -319,6 +370,153 @@ func _build_ui() -> void:
 	_status_lbl.add_theme_font_size_override("font_size", 11)
 	_status_lbl.add_theme_color_override("font_color", C_MUTED)
 	_body.add_child(_status_lbl)
+
+
+## ---------------------------------------------------------------------------
+## Points of interest: Google Earth KML pins (core/poi/). Import, a show
+## toggle, the list with Go / remove per pin, clear all.
+## ---------------------------------------------------------------------------
+
+func _build_poi_ui(parent: Control) -> void:
+	var title := Label.new()
+	# The panel is 260 px wide; a longer title overflowed past the screen's
+	# right edge (the harness measured it). Clip rather than grow.
+	title.text = "Points of interest (KML pins)"
+	title.clip_text = true
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.tooltip_text = ("Import a KML / KMZ exported from Google Earth: every placemark becomes a pin "
+		+ "in the world at its real coordinates, paths and areas become ribbons on the ground.")
+	parent.add_child(title)
+	_poi_title = title
+	var row := HBoxContainer.new()
+	parent.add_child(row)
+	var imp := Button.new()
+	imp.text = "Import KML / KMZ…"
+	imp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	imp.tooltip_text = "Importing the same file again replaces its pins (move a pin in Google Earth, export, re-import)."
+	imp.pressed.connect(_on_import_kml_pressed)
+	row.add_child(imp)
+	_poi_list = VBoxContainer.new()
+	_poi_list.add_theme_constant_override("separation", 2)
+	parent.add_child(_poi_list)
+	_poi_empty_lbl = Label.new()
+	_poi_empty_lbl.text = "No pins yet — import a KML."
+	_poi_empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_poi_empty_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_poi_empty_lbl.modulate = Color(1, 1, 1, 0.6)
+	parent.add_child(_poi_empty_lbl)
+	# One row for the two small controls: the panel is 260 px wide, and the
+	# import button beside the checkbox pushed it 76 px off the screen.
+	var clear_row := HBoxContainer.new()
+	parent.add_child(clear_row)
+	_poi_show_cb = CheckBox.new()
+	_poi_show_cb.text = "Show"
+	_poi_show_cb.button_pressed = true
+	_poi_show_cb.tooltip_text = "Show the pins in the world and on the Site Plan (off keeps them saved, just hidden)"
+	_poi_show_cb.toggled.connect(func(on: bool) -> void:
+		if _loader != null and _loader.has_method("set_show_pois"):
+			_loader.call("set_show_pois", on))
+	clear_row.add_child(_poi_show_cb)
+	var clear_btn := Button.new()
+	clear_btn.text = "Clear all pins"
+	clear_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clear_btn.pressed.connect(func() -> void:
+		if _poi_clear_confirm != null:
+			_poi_clear_confirm.popup_centered())
+	clear_row.add_child(clear_btn)
+	parent.add_child(HSeparator.new())
+	_poi_clear_confirm = ConfirmationDialog.new()
+	_poi_clear_confirm.title = "Remove every point of interest?"
+	_poi_clear_confirm.dialog_text = "Removes all imported pins from this site. Import the KML again to get them back."
+	_poi_clear_confirm.ok_button_text = "Remove pins"
+	_poi_clear_confirm.confirmed.connect(func() -> void:
+		if _loader != null and _loader.has_method("clear_pois"):
+			_loader.call("clear_pois")
+		_refresh_poi_list())
+	add_child(_poi_clear_confirm)
+
+
+func _on_import_kml_pressed() -> void:
+	if _poi_dialog == null:
+		_poi_dialog = FileDialog.new()
+		_poi_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_poi_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_poi_dialog.use_native_dialog = true
+		_poi_dialog.filters = PackedStringArray(["*.kml, *.kmz ; Google Earth KML"])
+		_poi_dialog.title = "Import points of interest (KML / KMZ)"
+		_poi_dialog.file_selected.connect(_on_kml_file_selected)
+		add_child(_poi_dialog)
+	_poi_dialog.popup_centered_ratio(0.6)
+
+
+func _on_kml_file_selected(path: String) -> void:
+	if _loader == null or not _loader.has_method("import_kml_file"):
+		return
+	_loader.call("import_kml_file", path)
+	_refresh_poi_list()
+
+
+func _refresh_poi_list() -> void:
+	if _poi_list == null:
+		return
+	for ch in _poi_list.get_children():
+		_poi_list.remove_child(ch)
+		ch.queue_free()
+	var recs: Array = []
+	if _loader != null and _loader.has_method("poi_records"):
+		recs = _loader.call("poi_records")
+	if _poi_show_cb != null and _loader != null and _loader.has_method("show_pois"):
+		_poi_show_cb.set_block_signals(true)
+		_poi_show_cb.button_pressed = bool(_loader.call("show_pois"))
+		_poi_show_cb.set_block_signals(false)
+	if _poi_empty_lbl != null:
+		_poi_empty_lbl.visible = recs.is_empty()
+	var host: Control = _poi_list
+	if recs.size() > 8:
+		var scroll := ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(0, 200)
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		_poi_list.add_child(scroll)
+		var inner := VBoxContainer.new()
+		inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		inner.add_theme_constant_override("separation", 2)
+		scroll.add_child(inner)
+		host = inner
+	for rec_v in recs:
+		if not (rec_v is Dictionary):
+			continue
+		var rec: Dictionary = rec_v
+		var id := str(rec.get("id", ""))
+		var row := HBoxContainer.new()
+		host.add_child(row)
+		var swatch := ColorRect.new()
+		swatch.custom_minimum_size = Vector2(10, 10)
+		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		swatch.color = PoiLayer.color_of(rec)
+		row.add_child(swatch)
+		var kind := str(rec.get("kind", "point"))
+		var lbl := Label.new()
+		lbl.text = str(rec.get("name", "")) + ("" if kind == "point" else "  (%s)" % ("area" if kind == "polygon" else "path"))
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.clip_text = true
+		var desc := str(rec.get("desc", ""))
+		lbl.tooltip_text = desc if not desc.is_empty() else "%.6f, %.6f" % [float(rec.get("lat", 0.0)), float(rec.get("lon", 0.0))]
+		row.add_child(lbl)
+		var go := Button.new()
+		go.text = "Go"
+		go.tooltip_text = "Put the player at this pin"
+		go.pressed.connect(func() -> void:
+			if _loader != null and _loader.has_method("teleport_to_poi"):
+				_loader.call("teleport_to_poi", id))
+		row.add_child(go)
+		var del := Button.new()
+		del.text = "✕"
+		del.tooltip_text = "Remove this pin"
+		del.pressed.connect(func() -> void:
+			if _loader != null and _loader.has_method("remove_poi"):
+				_loader.call("remove_poi", id)
+			_refresh_poi_list())
+		row.add_child(del)
 
 
 func _add_toggle(parent: Control, label: String, tip: String, handler: Callable) -> CheckBox:
@@ -344,6 +542,7 @@ func _sync_from_loader() -> void:
 	if _loader == null or not _loader.has_method("get_terrain_options"):
 		return
 	var opts: Dictionary = _loader.call("get_terrain_options")
+	_refresh_poi_list()
 	_set_cb(_roads_cb, bool(opts.get("flatten_roads", false)))
 	_set_cb(_sites_cb, bool(opts.get("flatten_landuse", false)))
 	_set_cb(_buildings_cb, bool(opts.get("show_buildings", true)))

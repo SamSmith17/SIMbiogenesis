@@ -17,6 +17,11 @@ func _check(name: String, cond: bool, detail: String = "") -> void:
 
 
 func _init() -> void:
+	# The player's saved testing switches (user://pop_testing.cfg — "no
+	# departures", "ideal supply" …) must not leak into the assertions.
+	PopTestPrefs.reset_defaults()
+	# A player's own names (Settings → NPC → Names) re-deal everyone's name.
+	NpcDisplayPrefs.reset_custom_names_for_test()
 	_test_space_types()
 	_test_festival_spaces()
 	_test_identity_and_readouts()
@@ -93,6 +98,7 @@ func _init() -> void:
 	_test_desertion_and_reset()
 	_test_area_spaces()
 	_test_routine_schedule()
+	_test_personal_schedules()
 	_test_routine_behaviour()
 	_test_sleep_single_session()
 	_test_hash_distribution()
@@ -242,14 +248,36 @@ func _test_festival_spaces() -> void:
 
 
 func _test_identity_and_readouts() -> void:
-	# Names are deterministic and unique across a 50-person roster.
+	# Names are deterministic, carry no number, and are unique within a camp
+	# as large as the name pool.
 	var seen := {}
-	for i in 50:
+	var pool_n := NpcAgent.name_pool().size()
+	var numbered := 0
+	for i in pool_n:
 		var n := NpcAgent.name_for("hab_npc_%d" % i)
 		_check("name non-empty %d" % i, not n.is_empty())
+		if n.right(1).is_valid_int():
+			numbered += 1
 		seen[n] = true
-	_check("50 agents get distinct names", seen.size() == 50, "got %d" % seen.size())
+	_check("a camp of %d gets %d distinct names" % [pool_n, pool_n], seen.size() == pool_n, "got %d" % seen.size())
+	_check("names carry no number suffix", numbered == 0, "%d numbered" % numbered)
 	_check("name is stable", NpcAgent.name_for("hab_npc_3") == NpcAgent.name_for("hab_npc_3"))
+	# The player's own names (friends) join the pool.
+	var parsed := NpcDisplayPrefs.parse_names(" Alex, Sam ;sam,\nRiver , , Jo  Jo ")
+	_check("custom names: split on , ; and new lines, trimmed, deduped",
+		parsed == PackedStringArray(["Alex", "Sam", "River", "Jo Jo"]), str(parsed))
+	NpcDisplayPrefs.reset_custom_names_for_test(PackedStringArray(["Alexandria", "Bartholomew"]))
+	var dealt := 0
+	for i in 400:
+		var cn := NpcAgent.name_for("hab_npc_%d" % i)
+		if cn.begins_with("Alexandria") or cn.begins_with("Bartholomew"):
+			dealt += 1
+	_check("custom names are dealt to people (%d of 400)" % dealt, dealt > 0 and dealt < 60)
+	_check("the pool is the built-in names plus the custom ones",
+		NpcAgent.name_pool().size() == NpcAgent.NAME_POOL.size() + 2)
+	NpcDisplayPrefs.reset_custom_names_for_test()
+	_check("cleared custom names: back to the built-in pool",
+		NpcAgent.name_pool().size() == NpcAgent.NAME_POOL.size())
 
 	var a := NpcAgent.make("hab_npc_3", Vector2.ZERO)
 	_check("agent carries display_name", a.display_name == NpcAgent.name_for("hab_npc_3"))
@@ -882,8 +910,8 @@ func _test_engine_snapshot() -> void:
 
 func _test_morale_math() -> void:
 	# Bands are ordered, exhaustive, and boundary-exact.
-	_check("band 1.0 is Fuck Yes", NpcMorale.label(1.0) == "Fuck Yes")
-	_check("band 0.0 is Fuck This", NpcMorale.label(0.0) == "Fuck This")
+	_check("band 1.0 is Fuck It!", NpcMorale.label(1.0) == "Fuck It!")
+	_check("band 0.0 is FUCK THIS!!!", NpcMorale.label(0.0) == "FUCK THIS!!!")
 	_check("band boundary 0.85", NpcMorale.band(0.85) == 0 and NpcMorale.band(0.8499) == 1)
 	_check("band boundary 0.12", NpcMorale.band(0.12) == 4 and NpcMorale.band(0.1199) == 5)
 	for i in NpcMorale.BANDS.size() - 1:
@@ -4380,7 +4408,7 @@ func _test_space_tag_row() -> void:
 	_check("tag row accepts an area target", row.visible)
 
 	# Every taggable type must be offered, enrichment included.
-	_check("all space types are offered", SpaceTypes.TYPES.size() == 16,
+	_check("all space types are offered", SpaceTypes.TYPES.size() == 17,
 			"%d types" % SpaceTypes.TYPES.size())
 	for t in SpaceTypes.TYPES:
 		_check("type is valid: %s" % t, SpaceTypes.is_valid(str(t)))
@@ -4443,10 +4471,82 @@ func _test_standing_slots() -> void:
 			>= SpaceRegistry.PERSONAL_SPACE_M * 0.95)
 	_check("a non-occupant has no slot", reg.slot_index_for(sid, "zz") == -1)
 	_check("a non-occupant gets no offset", reg.slot_offset(sid, "zz") == Vector2.ZERO)
+	# Slots are KEPT for the visit: a leaver does not shuffle everyone behind
+	# them forward, and the next arrival takes the hole (the front fills).
+	reg.release(sid, "a")
+	_check("a leaver does not move anyone else's slot",
+			reg.slot_index_for(sid, "b") == 1 and reg.slot_index_for(sid, "c") == 2)
+	reg.claim(sid, "d")
+	_check("the next arrival takes the freed slot", reg.slot_index_for(sid, "d") == 0)
+	# Reserved at the DECISION (the light tier): people setting off together
+	# get different spots — the old "occupant count" handed them all the same.
+	var venue := reg.set_space_type({"kind": "prop", "prop_id": "pp_v"}, "stage", SpaceRegistry.CAPACITY_AUTO)
+	var seen := {}
+	for i in 30:
+		seen[reg.reserve_slot(venue, "rs_npc_%d" % i)] = true
+	_check("thirty people setting off together reserve thirty different spots", seen.size() == 30)
+	_check("a reservation is the slot the claim then keeps",
+			reg.claim(venue, "rs_npc_7") and reg.slot_index_for(venue, "rs_npc_7") == reg.reserve_slot(venue, "rs_npc_7"))
+	reg.reserve_slot(sid, "rs_npc_3")
+	var re := reg.reserve_slot(venue, "rs_npc_3")
+	_check("one slot per person: re-planning lets the old reservation go",
+			re == reg.reserve_slot(venue, "rs_npc_3") and not (reg._slots.get(sid, {}) as Dictionary).has("rs_npc_3"))
+	# Friend groups get DIFFERENT clusters (they used to hash into 48 spots).
+	var clusters := {}
+	var groups := 0
+	var last := ""
+	for i in 40:
+		var aid := "cg_npc_%d" % i
+		reg.reserve_slot(venue, aid)
+		var gk := NpcFriends.key_of(aid)
+		if gk != last:
+			groups += 1
+			last = gk
+			clusters[reg.cluster_index_for(venue, aid)] = true
+	_check("every friend group at a venue gets its own cluster (%d groups, %d clusters)" % [groups, clusters.size()],
+			clusters.size() == groups and groups > 3)
+	# SLEEP piles up: a sleep space never turns anyone away, and the extras
+	# share a bed's shelter rather than lying out on the ground.
+	var bed := reg.set_space_type({"kind": "prop", "prop_id": "pp_tent"}, "sleep", 2)
+	var all_in := true
+	for i in 6:
+		all_in = all_in and reg.claim(bed, "sl_npc_%d" % i)
+	_check("six people pile into a capacity-2 tent to sleep", all_in and reg.has_free_capacity(bed))
+	var piles := {}
+	var tight := true
+	for n in range(1, 6):
+		var o := SpaceRegistry.pile_offset(n, 0.7)
+		piles[o] = true
+		tight = tight and o.length() > 0.1 and o.length() < 1.0
+	_check("extra sleepers on one bed lie beside each other, within a metre", piles.size() == 5 and tight)
+	# A sleeper looks for the sleep space by their camp, and a crowd already
+	# asleep there does not send them elsewhere.
+	var near_tent := reg.set_space_type({"kind": "prop", "prop_id": "pp_near"}, "sleep", SpaceRegistry.CAPACITY_AUTO)
+	var far_tent := reg.set_space_type({"kind": "prop", "prop_id": "pp_far"}, "sleep", SpaceRegistry.CAPACITY_AUTO)
+	for i in 10:
+		reg.claim(near_tent, "nt_npc_%d" % i)
+	var where := func(space: Dictionary) -> Variant:
+		return Vector2(5, 0) if str(space.get("id", "")) == near_tent else (Vector2(40, 0) if str(space.get("id", "")) == far_tent else null)
+	_check("a crowd asleep in your camp is no reason to sleep in the next one",
+			str(reg.nearest_space_by("sleep", Vector2.ZERO, where, true, "", Callable(), false).get("id", "")) == near_tent
+			and str(reg.nearest_space_by("sleep", Vector2.ZERO, where, true, "", Callable(), true).get("id", "")) == far_tent)
 
 
 ## In-transit separation: corridors converging, routes crossing, queues.
 func _test_separation() -> void:
+	# Sleepers are left where they lie: two people sharing a tent are closer
+	# than personal space, and the push used to walk them out of it.
+	var se := NpcPopulationEngine.new()
+	se.configure(3, "sep_sleep", Vector2.ZERO)
+	for k in 3:
+		var sa: NpcAgent = se.agents[k]
+		sa.state = NpcAgent.State.DOING
+		sa.activity = "sleep" if k < 2 else "enrichment"
+		sa.pos = Vector2(0.3 * float(k), 0.0)
+	se._separate(0.001, {})
+	_check("sleepers sharing a tent are not pushed apart",
+			(se.agents[0] as NpcAgent).pos == Vector2.ZERO and (se.agents[1] as NpcAgent).pos == Vector2(0.3, 0.0))
+
 	var site := _make_test_site()
 	var engine := NpcPopulationEngine.new()
 	engine.configure(6, "test_hab", Vector2.ZERO)
@@ -4707,6 +4807,55 @@ func _test_area_spaces() -> void:
 
 
 # --- Tier 5: daily routines --------------------------------------------------
+
+## Personal schedules (NpcRoutine.personal_blocks): everyone lives their own
+## version of the routine, different each day, so a camp does not eat and
+## queue for the toilets in the same ten minutes.
+func _test_personal_schedules() -> void:
+	var r := NpcRoutine.festival_day()
+	var lunch: Array = []
+	var loo: Array = []
+	var tiled := true
+	var kept := true
+	for i in 200:
+		var key := r.day_key("cmp_npc_%d" % i, 24.0 * 740000.0 + 12.0)
+		var pb: Array = r.personal_blocks(key)
+		for k in pb.size():
+			var b: Dictionary = pb[k]
+			var nb: Dictionary = pb[(k + 1) % pb.size()]
+			if absf(fposmod(float(b["end_h"]) - float(nb["start_h"]) + 12.0, 24.0) - 12.0) > 1e-6:
+				tiled = false
+			var l0 := fposmod(float((r.blocks[k] as Dictionary)["end_h"]) - float((r.blocks[k] as Dictionary)["start_h"]), 24.0)
+			var l1 := fposmod(float(b["end_h"]) - float(b["start_h"]), 24.0)
+			if str(b["kind"]) != str((r.blocks[k] as Dictionary)["kind"]) or l1 < l0 * 0.1 or l1 > 23.0:
+				kept = false
+		lunch.append(float((pb[4] as Dictionary)["start_h"]) + NpcRoutine.day_shift(key))
+		loo.append(float((pb[5] as Dictionary)["start_h"]) + NpcRoutine.day_shift(key))
+	_check("personal blocks still tile the day", tiled)
+	_check("personal blocks keep their kinds and order (nothing shrinks to nothing)", kept)
+	var spread := func(xs: Array) -> float:
+		var m := 0.0
+		for x in xs:
+			m += float(x)
+		m /= float(xs.size())
+		var v := 0.0
+		for x in xs:
+			v += (float(x) - m) * (float(x) - m)
+		return sqrt(v / float(xs.size()))
+	_check("lunch starts spread out (sd %.2f h)" % spread.call(lunch), float(spread.call(lunch)) > 0.15)
+	_check("the after-lunch toilet visit spreads out (sd %.2f h)" % spread.call(loo), float(spread.call(loo)) > 0.15)
+	var k1 := r.day_key("cmp_npc_3", 24.0 * 740000.0 + 12.0)
+	var k2 := r.day_key("cmp_npc_3", 24.0 * 740001.0 + 12.0)
+	_check("a person's day is deterministic", r.personal_blocks(k1) == NpcRoutine.festival_day().personal_blocks(k1))
+	_check("and different the next day", r.personal_blocks(k1) != r.personal_blocks(k2)
+		and not is_equal_approx(NpcRoutine.day_shift(k1), NpcRoutine.day_shift(k2)))
+	_check("block_at reads the day shift", r.block_at(13.0 + NpcRoutine.day_shift(k1) + 0.05, 0.0, k1).get("kind") == NpcRoutine.EAT)
+	_check("no key = the shared schedule", r.personal_blocks("") == r.blocks)
+	# The routine day rolls in the middle of the night's sleep, not mid-evening.
+	_check("festival routine day rolls at 06:00 (mid-sleep)", absf(r.roll_h() - 6.0) < 1e-6)
+	_check("same routine day across midnight",
+		r.day_key("x_npc_1", 24.0 * 740000.0 + 23.5) == r.day_key("x_npc_1", 24.0 * 740001.0 + 0.5))
+
 
 func _test_routine_schedule() -> void:
 	var r := NpcRoutine.default_day()
@@ -6118,6 +6267,7 @@ func _test_sleep_single_session() -> void:
 		(item as NpcAgent).needs["sleep"] = 0.6
 	var begins: Dictionary = {}
 	var was_sleeping: Dictionary = {}
+	var sleep_log: Array = []
 	var mid_night_all_asleep := true
 	var mid_night_ends_ok := true
 	var t := 18.0
@@ -6133,6 +6283,9 @@ func _test_sleep_single_session() -> void:
 			var sleeping := a.activity == "sleep"
 			if sleeping and not bool(was_sleeping.get(a.id, false)):
 				begins[a.id] = int(begins.get(a.id, 0)) + 1
+				sleep_log.append("%s in %.2f" % [a.id, t])
+			elif not sleeping and bool(was_sleeping.get(a.id, false)):
+				sleep_log.append("%s out %.2f (sleep %.2f)" % [a.id, t, float(a.needs["sleep"])])
 			was_sleeping[a.id] = sleeping
 			if sample_mid_night:
 				if not (sleeping and a.state == NpcAgent.State.DOING):
@@ -6147,8 +6300,8 @@ func _test_sleep_single_session() -> void:
 		worst_begins = maxi(worst_begins, int(begins[aid]))
 	_check("one night is ONE sleep session per person",
 			begins.size() == engine.agents.size() and worst_begins == 1,
-			"%d of %d agents slept; worst begin-count %d (pre-fix: 6-12)"
-				% [begins.size(), engine.agents.size(), worst_begins])
+			"%d of %d agents slept; worst begin-count %d (pre-fix: 6-12) %s"
+				% [begins.size(), engine.agents.size(), worst_begins, str(sleep_log) if worst_begins != 1 else ""])
 
 
 # --- Tier 5: clip roles + pose machine ---------------------------------------

@@ -3,7 +3,11 @@ extends CanvasLayer
 ## In-Snowglobe SoI controls: labeled radius slider, area/atmosphere readout, exit.
 ## Root ignores mouse so orbit drag still works; only the dock captures input.
 
-const MODAL_HINT := "Drag to orbit · Scroll to zoom · Esc to exit"
+const MODAL_HINT := "Drag to orbit · Scroll to zoom · Esc to exit · the timeline below stays live"
+## Space kept between the dock and the timeline bar under it.
+const DOCK_TIMELINE_GAP := 12.0
+const DOCK_HEIGHT := 144.0
+const DOCK_WIDTH := 760.0
 
 var _svc: Node = null
 var _dock: PanelContainer = null
@@ -36,9 +40,28 @@ func show_hud() -> void:
 		_build_ui()
 	_active = true
 	visible = true
+	_place_above_timeline()
 	_refresh()
 	if _radius_slider != null:
 		_radius_slider.grab_focus()
+
+
+## The clock runs while the globe is up, so the timeline must stay reachable:
+## seat the dock just above it (it used to sit over the play / speed / scrub
+## controls). Falls back to the old bottom inset with no timeline.
+func _place_above_timeline() -> void:
+	if _dock == null:
+		return
+	var inset := 24.0
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	var tl := main.get_node_or_null("UILayer/TimelineUI") as Control if main != null else null
+	if tl != null and tl.visible:
+		var h := float(tl.call("get_stack_height")) if tl.has_method("get_stack_height") else tl.size.y
+		if h > 1.0:
+			inset = h + DOCK_TIMELINE_GAP
+	_dock.offset_bottom = -inset
+	_dock.offset_top = -inset - DOCK_HEIGHT
 
 
 func hide_hud() -> void:
@@ -60,9 +83,11 @@ func _build_ui() -> void:
 	# Top title chip
 	var title_wrap := PanelContainer.new()
 	title_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	title_wrap.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	title_wrap.offset_left = 24.0
-	title_wrap.offset_right = -24.0
+	# A centred chip, not a full-width bar — the full width sat on top of the
+	# weather card in the top-left corner.
+	title_wrap.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	title_wrap.offset_left = -300.0
+	title_wrap.offset_right = 300.0
 	title_wrap.offset_top = 18.0
 	title_wrap.offset_bottom = 64.0
 	var title_sb := StyleBoxFlat.new()
@@ -93,9 +118,13 @@ func _build_ui() -> void:
 	# Bottom control dock
 	_dock = PanelContainer.new()
 	_dock.mouse_filter = Control.MOUSE_FILTER_STOP
-	_dock.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_dock.offset_left = 40.0
-	_dock.offset_right = -40.0
+	# A centred card, not a full-width slab: the globe is the subject, and the
+	# old bottom-wide dock covered a third of it (and the whole timeline).
+	_dock.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_dock.offset_left = -DOCK_WIDTH * 0.5
+	_dock.offset_right = DOCK_WIDTH * 0.5
+	# Content taller than DOCK_HEIGHT grows the card UP, never into the timeline.
+	_dock.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_dock.offset_top = -168.0
 	_dock.offset_bottom = -24.0
 	var dock_sb := StyleBoxFlat.new()

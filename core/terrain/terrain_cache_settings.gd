@@ -98,12 +98,10 @@ static func invalidate_all(lat: float, lon: float) -> int:
 ## reason clearing/redrawing never fixed stale styles). It also now covers the
 ## v3 style store plus the retired v2/v1 style files.
 static func invalidate_user_vegetation_edits(lat: float, lon: float) -> int:
-	var lat_t := CoordToken.token(lat)
-	var lon_t := CoordToken.token(lon)
 	var removed := 0
 	var paths: Array[String] = [
-		"user://maps/vegetation_%s_%s.json" % [lat_t, lon_t],
-		"user://maps/auto_veg_edits_%s_%s.json" % [lat_t, lon_t],
+		WorldPaths.site_file("vegetation", lat, lon),
+		WorldPaths.site_file("auto_veg_edits", lat, lon),
 		VegStyleStore.map_v2_path(lat, lon),
 	]
 	paths.append_array(VegStyleStore.legacy_style_paths(lat, lon))
@@ -122,6 +120,27 @@ static func has_warm_cache(lat: float, lon: float) -> bool:
 	return _dir_has_token(DEM_DIR, token, "dem_") and _dir_has_token(IMG_DIR, token, "img_")
 
 
+## True when `token` ("48.3252_-122.2469") appears in `fn` as a WHOLE field —
+## bounded by "_" on the left and "_" or "." on the right. A bare substring test
+## matched a different site: the token for latitude 8.3252 is a substring of
+## 48.3252's, so refetching one site deleted the other's DEM and imagery.
+static func filename_has_token(fn: String, token: String) -> bool:
+	if token.is_empty():
+		return false
+	var from := 0
+	while true:
+		var i := fn.find(token, from)
+		if i < 0:
+			return false
+		var left_ok := i == 0 or fn[i - 1] == "_"
+		var j := i + token.length()
+		var right_ok := j >= fn.length() or fn[j] == "_" or fn[j] == "."
+		if left_ok and right_ok:
+			return true
+		from = i + 1
+	return false
+
+
 static func _dir_has_token(dir_path: String, token: String, prefix: String) -> bool:
 	if token.is_empty():
 		return false
@@ -131,7 +150,7 @@ static func _dir_has_token(dir_path: String, token: String, prefix: String) -> b
 	da.list_dir_begin()
 	var fn := da.get_next()
 	while fn != "":
-		if not da.current_is_dir() and token in fn and fn.begins_with(prefix):
+		if not da.current_is_dir() and filename_has_token(fn, token) and fn.begins_with(prefix):
 			da.list_dir_end()
 			return true
 		fn = da.get_next()
@@ -150,7 +169,7 @@ static func _delete_matching(dir_path: String, token: String, prefix: String = "
 	da.list_dir_begin()
 	var fn := da.get_next()
 	while fn != "":
-		if not da.current_is_dir() and token in fn:
+		if not da.current_is_dir() and filename_has_token(fn, token):
 			if prefix.is_empty() or fn.begins_with(prefix):
 				var path := "%s/%s" % [dir_path, fn]
 				if DirAccess.remove_absolute(ProjectSettings.globalize_path(path)) == OK:

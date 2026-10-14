@@ -9,18 +9,27 @@ extends SceneTree
 ##
 ## A Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the check COUNT is pinned.
-const EXPECTED_CHECKS := 49
+const EXPECTED_CHECKS := 74
 
 var _failures := 0
 var _checks := 0
 
 
 func _init() -> void:
+	# The player's saved testing switches (user://pop_testing.cfg — "no
+	# departures", "ideal supply" …) must not leak into the assertions.
+	PopTestPrefs.reset_defaults()
+	# A player's own names (Settings → NPC → Names) re-deal everyone's name.
+	NpcDisplayPrefs.reset_custom_names_for_test()
 	_test_configure_and_ids()
 	_test_determinism()
 	_test_mass_exact_billing()
 	_test_daily_loop()
 	_test_equivalence_with_full_engine()
+	_test_festival_day_social()
+	_test_resize_in_place()
+	_test_weather_comfort()
+	_test_dj_perform()
 	_test_queue()
 	_test_venue_billing()
 	_test_scrub_and_catchup()
@@ -229,6 +238,258 @@ func _test_equivalence_with_full_engine() -> void:
 	var r2 := _run(c2, reg_ns, 8.0, 48.0, step)
 	_check("no shower: people still eat and drink", float((r2["totals"] as Dictionary).get("food", 0.0)) > 1.0
 		and float((r2["totals"] as Dictionary).get("water", 0.0)) > 50.0)
+
+
+## The FESTIVAL day: its leisure blocks are SOCIAL (NpcSocial), not FREE. The
+## two tiers must still agree on what a camp consumes and how it feels, and
+## during the SOCIAL hours almost nobody may be standing idle — the bug was a
+## whole festival standing where it had last eaten from late morning to dinner.
+func _test_festival_day_social() -> void:
+	var days := 3.0
+	var step := 1.0 / 30.0
+	var reg_f := _site()
+	reg_f.set_space_type({"kind": "area", "poly": _square(Vector2(-70, -60), 10)}, "center_camp", 0)
+	_refresh(reg_f)
+	var e := NpcPopulationEngine.new()
+	e.configure(24, "fq", Vector2.ZERO)
+	e.routine = NpcRoutine.festival_day()
+	var pos_of := func(space: Dictionary) -> Variant:
+		return reg_f.resolve_position(space, null)
+	var tot_f := {}
+	var idle_f := 0
+	var samples_f := 0
+	var t := 8.0
+	var ctx_f := func(tt: float) -> Dictionary:
+		return {"registry": reg_f, "pos_of": pos_of, "hour_of_day": fposmod(tt, 24.0),
+			"camp_home": Vector2.ZERO, "camp_seed": "fq"}
+	e.tick(t, ctx_f.call(t))
+	while t < 8.0 + days * 24.0 - 1e-9:
+		t += step
+		var d := e.tick(t, ctx_f.call(t))
+		for k in d:
+			tot_f[k] = float(tot_f.get(k, 0.0)) + float(d[k]) * step
+		var h := fposmod(t, 24.0)
+		if (h > 11.0 and h < 12.5) or (h > 14.5 and h < 17.5):
+			for a in e.agents:
+				samples_f += 1
+				if (a as NpcAgent).state != NpcAgent.State.TRAVELING and (a as NpcAgent).activity.is_empty():
+					idle_f += 1
+	var reg_l := _site()
+	reg_l.set_space_type({"kind": "area", "poly": _square(Vector2(-70, -60), 10)}, "center_camp", 0)
+	_refresh(reg_l)
+	var c := CrowdCohort.new()
+	c.configure(24, "fq", Vector2.ZERO)
+	c.routine = NpcRoutine.festival_day()
+	var tot_l := {}
+	var idle_l := 0
+	var mingle_l := 0
+	var samples_l := 0
+	t = 8.0
+	var ctx_l := func(tt: float) -> Dictionary:
+		var cx := _ctx(reg_l, tt)
+		cx["routine"] = c.routine
+		return cx
+	c.tick(t, ctx_l.call(t))
+	while t < 8.0 + days * 24.0 - 1e-9:
+		t += step
+		var d2 := c.tick(t, ctx_l.call(t))
+		for k in d2:
+			tot_l[k] = float(tot_l.get(k, 0.0)) + float(d2[k]) * step
+		var h2 := fposmod(t, 24.0)
+		if (h2 > 11.0 and h2 < 12.5) or (h2 > 14.5 and h2 < 17.5):
+			for i in c.count():
+				samples_l += 1
+				if c.state[i] == CrowdCohort.S_DOING and c.act[i] == CrowdCohort.A_FREE:
+					idle_l += 1
+				if c.act[i] == CrowdCohort.A_MINGLE:
+					mingle_l += 1
+	# Looser than the default-day pin above, ON PURPOSE and measured: the
+	# festival day was never equivalence-pinned, and when this test first ran
+	# (with the old FREE blocks) the tiers were already 10 % / 0.106 morale
+	# apart. Serving festival meal blocks once (NpcRoutine.serves_once) and a
+	# routine-aware wake hour brought food to ~8 % and water to ~12 %; what is
+	# left is the tiers' different moments of re-deciding inside short blocks.
+	# A regression past these bounds is real; closing them is open work.
+	for kind in ["water", "food"]:
+		var f := float(tot_f.get(kind, 0.0))
+		var l := float(tot_l.get(kind, 0.0))
+		var rel := absf(f - l) / maxf(f, 1e-6)
+		_check("festival day: %s within 15 %% across tiers" % kind, rel <= 0.15,
+			"full=%.1f light=%.1f (%.1f %%)" % [f, l, rel * 100.0])
+	var mf := e.mean_morale()
+	var ml := c.mean_morale()
+	_check("festival day: morale within 0.15 across tiers", absf(mf - ml) <= 0.15,
+		"full=%.3f light=%.3f" % [mf, ml])
+	var per_day := float(tot_f.get("food", 0.0)) / (24.0 * days)
+	_check("festival day: about three meals a day (%.2f kg/person/day)" % per_day,
+		per_day > 1.2 and per_day < 2.0)
+	var share_f := float(idle_f) / maxf(float(samples_f), 1.0)
+	var share_l := float(idle_l) / maxf(float(samples_l), 1.0)
+	_check("SOCIAL hours: under 10 %% idle in the full tier", share_f < 0.10, "%.1f %%" % (share_f * 100.0))
+	_check("SOCIAL hours: under 10 %% idle in the light tier", share_l < 0.10, "%.1f %%" % (share_l * 100.0))
+	_check("SOCIAL hours: people actually mingle (light)", mingle_l > samples_l / 10,
+		"%d of %d samples" % [mingle_l, samples_l])
+	var mx := NpcSocial.mingle_spot("fq_npc_3", "fq", Vector2.ZERO, 12.2)
+	_check("a mingle seat sits on a circle near camp, facing its middle",
+		(mx["pos"] as Vector2).length() < NpcSocial.HANGOUT_R_M + 3.0
+		and (mx["pos"] as Vector2).distance_to(mx["face"]) < 3.0)
+
+
+## Weather as an attractor (NpcComfort), in BOTH tiers: a scorching sunny
+## afternoon sends a large share of a festival camp into the shade, nobody
+## goes on a mild one, and the two tiers send about the same share (they ask
+## the same hashed question of the same friend groups).
+func _test_weather_comfort() -> void:
+	var hot := func(tt: float) -> Dictionary:
+		var h := fposmod(tt, 24.0)
+		var ghi := maxf(0.0, sin((h - 6.0) / 13.0 * PI)) * 950.0 if h > 6.0 and h < 19.0 else 0.0
+		return NpcComfort.pulls({"temp_c": 39.0, "ghi_wm2": ghi, "rain_mmh": 0.0}, h)
+	var shade_at := Vector2(30.0, -20.0)
+	var spot_fn := func(kind: String, _from: Vector2, aid: String) -> Dictionary:
+		if kind != NpcComfort.KIND_SHADE:
+			return {}
+		return NpcComfort.seat_under({"pos": shade_at, "yaw": 0.0, "size": Vector3(10.0, 3.0, 10.0)}, aid)
+	var step := 1.0 / 30.0
+	# Full tier.
+	var reg_f := _site()
+	var e := NpcPopulationEngine.new()
+	e.configure(40, "hc", Vector2.ZERO)
+	e.routine = NpcRoutine.festival_day()
+	var pos_of := func(space: Dictionary) -> Variant:
+		return reg_f.resolve_position(space, null)
+	var t := 9.0
+	var ctx_f := func(tt: float) -> Dictionary:
+		return {"registry": reg_f, "pos_of": pos_of, "hour_of_day": fposmod(tt, 24.0),
+			"camp_home": Vector2.ZERO, "camp_seed": "hc", "comfort": hot.call(tt), "comfort_spot": spot_fn}
+	e.tick(t, ctx_f.call(t))
+	var shade_f := 0
+	var n_f := 0
+	while t < 17.0:
+		t += step
+		e.tick(t, ctx_f.call(t))
+		if t > 13.0 and t < 16.0:
+			for a in e.agents:
+				n_f += 1
+				if (a as NpcAgent)._comfort == NpcComfort.KIND_SHADE:
+					shade_f += 1
+	# Light tier.
+	var reg_l := _site()
+	var c := CrowdCohort.new()
+	c.configure(40, "hc", Vector2.ZERO)
+	c.routine = NpcRoutine.festival_day()
+	t = 9.0
+	var ctx_l := func(tt: float) -> Dictionary:
+		var cx := _ctx(reg_l, tt)
+		cx["routine"] = c.routine
+		cx["comfort"] = hot.call(tt)
+		cx["comfort_spot"] = spot_fn
+		return cx
+	c.tick(t, ctx_l.call(t))
+	var shade_l := 0
+	var n_l := 0
+	var under := 0
+	while t < 17.0:
+		t += step
+		c.tick(t, ctx_l.call(t))
+		if t > 13.0 and t < 16.0:
+			for i in c.count():
+				n_l += 1
+				if c.act[i] == CrowdCohort.A_MINGLE and (c.ckind[i] & 3) == 1:
+					shade_l += 1
+					if c.state[i] == CrowdCohort.S_DOING and c.pos_at(i, t).distance_to(shade_at) < 7.0:
+						under += 1
+	var sf := float(shade_f) / maxf(float(n_f), 1.0)
+	var sl := float(shade_l) / maxf(float(n_l), 1.0)
+	_check("a scorching afternoon sends many into the shade (full %.0f %%)" % (sf * 100.0), sf > 0.25)
+	_check("... and in the light tier (%.0f %%)" % (sl * 100.0), sl > 0.25)
+	_check("both tiers send about the same share (%.2f vs %.2f)" % [sf, sl], absf(sf - sl) < 0.2)
+	_check("the light tier's shade-seekers actually stand under it", under > 0)
+	var mild := NpcComfort.pulls({"temp_c": 22.0, "ghi_wm2": 900.0, "rain_mmh": 0.0}, 14.0)
+	_check("a mild sunny afternoon pulls nobody into the shade", NpcComfort.is_calm(mild))
+
+
+## The DJ (the bridge casts one per live stage): both tiers walk the cast
+## person to the decks, hold them there with the DJ pose ON the deck until
+## the set ends, then let them go.
+func _test_dj_perform() -> void:
+	var reg := _site()
+	var spot := {"pos": Vector2(20.0, 10.0), "face": Vector2(20.0, 30.0), "elev": 1.1, "sid": "s"}
+	var c := CrowdCohort.new()
+	c.configure(8, "dj", Vector2.ZERO)
+	c.routine = NpcRoutine.festival_day()
+	var t := 20.0
+	c.tick(t, _ctx(reg, t))
+	var who := c.ids[3]
+	_check("light: the cast is accepted", c.perform(who, spot, t + 1.0, t, _ctx(reg, t)))
+	_check("light: they are performing (on the way)", c.is_performing(who))
+	while t < 20.6:
+		t += 0.05
+		c.tick(t, _ctx(reg, t))
+	var i := c.agent_index(who)
+	_check("light: at the decks with the DJ pose, %.1f m up" % c.elev_of(i),
+		c.state[i] == CrowdCohort.S_DOING and c.pose_code(i) == CrowdCohort.POSE_DJ
+		and absf(c.elev_of(i) - 1.1) < 1e-4 and c.pos_at(i, t).distance_to(spot["pos"]) < 0.5)
+	while t < 21.3:
+		t += 0.05
+		c.tick(t, _ctx(reg, t))
+	_check("light: the set over, they come down", not c.is_performing(who) and c.elev_of(i) == 0.0)
+	var e := NpcPopulationEngine.new()
+	e.configure(6, "djf", Vector2.ZERO)
+	var pos_of := func(space: Dictionary) -> Variant:
+		return reg.resolve_position(space, null)
+	var ctx := func(tt: float) -> Dictionary:
+		return {"registry": reg, "pos_of": pos_of, "hour_of_day": fposmod(tt, 24.0)}
+	t = 20.0
+	e.tick(t, ctx.call(t))
+	e.tick(t + 0.05, ctx.call(t + 0.05))
+	t += 0.05
+	var aid := (e.agents[2] as NpcAgent).id
+	_check("full: the cast is accepted", e.perform(aid, spot, t + 1.0))
+	while t < 20.6:
+		t += 0.05
+		e.tick(t, ctx.call(t))
+	var a := e.find_agent(aid)
+	_check("full: on the deck DJing", a.activity == NpcAgent.PERFORM_ACTIVITY
+		and a.state == NpcAgent.State.DOING and absf(a.elev() - 1.1) < 1e-4
+		and a.venue_pose == VenueCrowd.POSE_DJ)
+	while t < 21.3:
+		t += 0.05
+		e.tick(t, ctx.call(t))
+	_check("full: the set over, they come down", a.activity != NpcAgent.PERFORM_ACTIVITY and a.elev() == 0.0)
+
+
+## The festival population slider resizes a roster IN PLACE: survivors keep
+## exactly where they are and what they feel; new people get configure()'s ids.
+func _test_resize_in_place() -> void:
+	var reg := _site()
+	var c := CrowdCohort.new()
+	c.configure(20, "rs", Vector2.ZERO)
+	_run(c, reg, 8.0, 6.0, 1.0 / 30.0)
+	var before := []
+	for i in 10:
+		before.append([c.ids[i], c.pos_at(i, 14.0), c.morale[i], c.needs[i * 6]])
+	c.resize(10, reg)
+	var same := c.count() == 10
+	for i in 10:
+		var b: Array = before[i]
+		same = same and c.ids[i] == str(b[0]) and c.pos_at(i, 14.0) == (b[1] as Vector2) 			and is_equal_approx(c.morale[i], float(b[2])) and is_equal_approx(c.needs[i * 6], float(b[3]))
+	_check("shrinking keeps the survivors exactly", same)
+	c.resize(30, reg)
+	_check("growing appends configure()'s ids", c.count() == 30 and c.ids[29] == "rs_npc_29"
+		and c.alive_count() == 30)
+	var r := _run(c, reg, 14.0, 4.0, 1.0 / 30.0)
+	_check("the grown crowd simulates (water billed)", float((r["totals"] as Dictionary).get("water", 0.0)) > 1.0)
+	var e := NpcPopulationEngine.new()
+	e.configure(12, "rs", Vector2.ZERO)
+	var keep_pos := (e.agents[3] as NpcAgent).pos
+	e.resize(6, "rs", Vector2.ZERO, reg)
+	_check("full tier shrinks to the lowest ids", e.agents.size() == 6
+		and (e.agents[3] as NpcAgent).id == "rs_npc_3" and (e.agents[3] as NpcAgent).pos == keep_pos)
+	e.resize(9, "rs", Vector2.ZERO, reg)
+	var ids := {}
+	for a in e.agents:
+		ids[(a as NpcAgent).id] = true
+	_check("full tier grows with unique ids", e.agents.size() == 9 and ids.size() == 9)
 
 
 func _test_queue() -> void:

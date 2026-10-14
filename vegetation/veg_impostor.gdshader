@@ -14,6 +14,7 @@ render_mode unshaded, cull_disabled, depth_prepass_alpha;
 // (MIT); this is a simpler yaw-ring variant written for this project.
 
 #include "res://core/soi/shaders/soi_clip.gdshaderinc"
+#include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/leaf_phenology.gdshaderinc"
 #include "res://vegetation/veg_growth.gdshaderinc"
 
@@ -205,5 +206,5 @@ void fragment() {
 	// fades continuously and full night lands where the lit near tier does.
 	float sun_up = clamp(sun_direction.y * 2.0 + 0.35, 0.0, 1.0);
 	float light_mul = mix(night_ambient_mul, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
-	ALBEDO = albedo * light_mul;
+	ALBEDO = veg_saturate(albedo, veg_saturation) * light_mul;
 }

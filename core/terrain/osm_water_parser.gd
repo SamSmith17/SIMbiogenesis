@@ -52,21 +52,27 @@ static func extract_water(nodes: Dictionary, ways_by_id: Dictionary,
 		var line := _way_to_local_poly(way, nodes, center_lat, center_lon, false)
 		if line.size() < 2:
 			continue
-		# Skip centreline ribbons when a riverbank / water-area polygon already
-		# covers this reach — otherwise the same river renders as two parallel strips
-		# at slightly different heights after terrain draping.
-		if _centerline_covered_by_water(line, out):
-			continue
+		# A riverbank / water-area polygon that already covers this reach draws
+		# the surface itself — the centreline is still KEPT (flagged `covered`)
+		# because the stream network carves its bed from it; WaterBuilder skips
+		# covered lines so the river never renders as two parallel strips.
+		var covered := _centerline_covered_by_water(line, out)
 		var half_w := _waterway_half_width(tags)
 		var ribbon := _buffer_polyline(line, half_w)
 		if ribbon.size() >= 3 and _polygon_area(ribbon) >= MIN_RING_AREA_M2:
-			out.append({
+			var item := {
 				"points": ribbon,
 				"kind": str(tags.get("waterway", "river")),
 				"tags": tags,
 				"centerline": line,
 				"half_width": half_w,
-			})
+				"osm_id": wid,
+			}
+			if covered:
+				item["covered"] = true
+			if is_culvert_tags(tags):
+				item["culvert"] = true
+			out.append(item)
 
 	return out
 
@@ -115,6 +121,24 @@ static func is_water_relation_tags(tags: Dictionary) -> bool:
 	if tags.has("water"):
 		return true
 	if tags.get("landuse", "") == "reservoir":
+		return true
+	return false
+
+
+## True for a waterway reach that runs underground: OSM maps a culvert / piped
+## reach as its own way tagged tunnel=culvert (or tunnel=yes, covered=yes, or a
+## negative layer). Rendered as no open water; the stream network makes it a
+## culvert span.
+static func is_culvert_tags(tags: Dictionary) -> bool:
+	var tunnel := str(tags.get("tunnel", "")).to_lower()
+	if tunnel in ["culvert", "yes", "flooded"]:
+		return true
+	if str(tags.get("culvert", "")).to_lower() == "yes":
+		return true
+	if str(tags.get("covered", "")).to_lower() == "yes":
+		return true
+	var layer := str(tags.get("layer", "")).strip_edges()
+	if layer.is_valid_int() and int(layer) < 0:
 		return true
 	return false
 

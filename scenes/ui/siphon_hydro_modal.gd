@@ -42,6 +42,21 @@ var _outlet_d_spin: SpinBox
 var _outlet_inv_spin: SpinBox
 var _barrel_spin: SpinBox
 var _manning_spin: SpinBox
+## Siphon geometry (SiphonTurbinePhysics): the dip tube's hang, how the pipe
+## is primed, the runner bore. Prime / break are DERIVED from these now.
+var _dip_len_spin: SpinBox
+var _show_dip_check: CheckBox
+var _runner_spin: SpinBox
+var _prime_opt: OptionButton
+## Where the draft exit and the crest handles were drawn (section px), for
+## picking; INF when off-frame.
+var _exit_px := Vector2.INF
+var _crest_px := Vector2.INF
+var _siphon_sens_sig := ""
+## The along (m, pond-relative) at the section's centre this draw — the x
+## inverse of _pv_to_screen_centered needs it (the y inverse has _pv_elev_mid).
+var _pv_along_mid := 0.0
+var _net_lbl: Label
 ## Generalized turbine controls (Phase C).
 var _kind_opt: OptionButton
 var _kind_hint_lbl: Label
@@ -57,6 +72,14 @@ var _turb_eff_spin: SpinBox
 var _nozzle_count_spin: SpinBox
 var _nozzle_d_spin: SpinBox
 var _nozzle_off_spin: SpinBox
+## The rest of the nozzle placement (close-up only, persisted per machine).
+var _nozzle_pose_spins: Array[SpinBox] = []
+## The placement row's header / hint / reset, shown with the spins.
+var _nozzle_pose_extras: Array[Control] = []
+const NOZZLE_POSE_KEYS := {
+	"nozzle_axial_mm": "axial_m", "nozzle_angle_deg": "angle_deg",
+	"nozzle_tilt_in_deg": "tilt_in_deg", "nozzle_tilt_out_deg": "tilt_out_deg",
+	"nozzle_standoff_mm": "standoff_m"}
 var _rpm_lbl: Label
 var _pe_lbl: Label
 var _elec_lbl: Label
@@ -75,9 +98,30 @@ var _warn_lbl: Label
 var _chart: Control
 var _chart_body: VBoxContainer
 var _chart_stats_lbl: Label
+## The stat deck under the section (scenes/ui/hydro_stat_deck.gd): the SAME
+## operating point as the dock's Live readouts and the status strip, drawn as
+## the causal chain flow → head → pressure → jet → speed → power.
+const _DECK_SCRIPT := preload("res://scenes/ui/hydro_stat_deck.gd")
+var _deck: Control
+## "+1 m head → +12 W · …" — recomputed inside the estimate's signature gate.
+var _sens_text := ""
+## The routed pipe's pressure rating (psi), from the design checks; NAN = unknown.
+var _last_rating_psi := NAN
 var _chart_sig: String = ""
 var _route_size_opt: OptionButton
+var _route_sdr_opt: OptionButton
+var _stock_spin: SpinBox
 var _route_status_lbl: Label
+var _source_lbl: Label
+var _design_lbl: Label
+var _design_summary := ""
+var _close_spin: SpinBox
+var _intake_lbl: Label
+var _firm_lbl: Label
+var _limited_lbl: Label
+var _firm_text := ""
+var _intake_text := ""
+var _last_sim_specs: Dictionary = {}
 ## Penstock placement mode: a glowing gizmo sits on the turbine inlet and the
 ## player DRAGS it across the section to the uphill water source. The same
 ## commit the 3D drag uses (SystemGraphView.create_penstock_intake_at), so both
@@ -136,6 +180,8 @@ var _prop_angle: float = 0.0
 var _prop_omega: float = 0.0
 var _display_level_m := NAN   # eased pond level for smooth drawing (physics untouched)
 var _inflow_lps := 0.0        # smoothed pond inflow rate (catchment + test inflow)
+var _inflow_target_lps := 0.0
+var _inflow_sample_t := 0.0
 var _last_r: Dictionary = {}
 var _ui_acc := 0.0
 var _phys_acc := 999.0
@@ -509,6 +555,17 @@ func _build_ui() -> void:
 	_closeup.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_preview_stack.add_child(_closeup)
 
+	# The stat deck: the headline readout. Big tiles in causal order with a bar
+	# against each quantity's limit, an insight line naming what caps the
+	# output, and a sensitivity line with real deltas — so the relationship
+	# between flow, nozzle, head, pressure, speed and power is READ, not
+	# inferred from six 12 px rows in a scrolling dock.
+	_deck = Control.new()
+	_deck.name = "StatDeck"
+	_deck.set_script(_DECK_SCRIPT)
+	_deck.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preview_col.add_child(_deck)
+
 	# Live status strip under the section. The same facts used to be a string
 	# PAINTED into the cross-section, where it fought the terrain for contrast and
 	# scrolled off under pan/zoom.
@@ -627,8 +684,13 @@ func _build_ui() -> void:
 			+ "its site position (you can also drag the 3D module on the cut).")
 	snap_btn.pressed.connect(_on_snap_module_to_terrain)
 	_side.add_child(snap_btn)
-	_outlet_inv_spin = _spin(_side, "Outlet invert (m)", -500.0, 5000.0, 0.01,
-			func(v: float) -> void: _commit_float("outlet_invert_m", v))
+	_outlet_inv_spin = _spin(_side, "Draft exit (m)", -500.0, 5000.0, 0.01,
+			func(v: float) -> void:
+		_commit_float("outlet_invert_m", v)
+		_push_outlet_invert(v))
+	_outlet_inv_spin.tooltip_text = ("Where the draft pipe (culvert) daylights. Lower = more head, "
+			+ "until the runner's outlet reaches vapour pressure and the extra drop is wasted. "
+			+ "Moves the outlet node and the culvert's far end with it.")
 	_intake_d_spin = _spin(_side, "Intake diameter (mm)", 25.0, 600.0, 1.0,
 			func(v: float) -> void: _commit_float("intake_diameter_mm", v))
 	_outlet_d_spin = _spin(_side, "Outlet diameter (mm)", 25.0, 800.0, 1.0,
@@ -639,21 +701,91 @@ func _build_ui() -> void:
 	# the intake invert).
 	_siphon_group = VBoxContainer.new()
 	_side.add_child(_siphon_group)
-	_section(_siphon_group, "Siphon levels")
+	_section(_siphon_group, "Siphon")
 	var levels_hint := Label.new()
 	levels_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	levels_hint.add_theme_color_override("font_color", C_MUTED)
 	levels_hint.add_theme_font_size_override("font_size", 11)
-	levels_hint.text = "Drag Prime / Break / water on the cut — spins stay in sync."
+	levels_hint.text = ("A dip tube hangs from the turbine into the pond; the draft pipe "
+			+ "runs from the runner down the hill. The pond primes the siphon by rising "
+			+ "to the crest (or a vacuum pump does), and it breaks when the surface "
+			+ "reaches the dip tube's mouth. On the cut: drag the mouth, the crest or "
+			+ "the draft exit.")
 	_siphon_group.add_child(levels_hint)
-	_start_spin = _spin(_siphon_group, "Start / prime (m)", -500.0, 5000.0, 0.01,
-			func(v: float) -> void: _commit_float("siphon_start_m", v))
-	_break_spin = _spin(_siphon_group, "Break / air (m)", -500.0, 5000.0, 0.01,
-			func(v: float) -> void: _commit_float("siphon_break_m", v))
-	_barrel_spin = _spin(_siphon_group, "Barrel length (m)", 1.0, 500.0, 0.1,
+	_dip_len_spin = _spin(_siphon_group, "Dip tube length (m)", 0.1, 30.0, 0.05,
+			func(v: float) -> void: _commit_float("dip_tube_length_m", v))
+	_dip_len_spin.tooltip_text = ("How far the 6″ dip tube hangs below the turbine. Its mouth is "
+			+ "the BREAK level — a longer tube siphons the pond lower before it sucks air.")
+	_show_dip_check = CheckBox.new()
+	_show_dip_check.text = "Show dip tube in the world"
+	_show_dip_check.focus_mode = Control.FOCUS_NONE
+	_show_dip_check.add_theme_font_size_override("font_size", 12)
+	_show_dip_check.tooltip_text = ("Draw the dip tube on the placed turbine in 3D: one vertical length "
+			+ "of 6″ PVC straight down from the machine's intake fitting. Off by default — the real "
+			+ "tube is under water. The cut and the close-up always draw it.")
+	_show_dip_check.toggled.connect(func(on: bool) -> void:
+		if _syncing:
+			return
+		_commit_bool("show_dip_tube", on))
+	_siphon_group.add_child(_show_dip_check)
+	var prime_row := HBoxContainer.new()
+	prime_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_siphon_group.add_child(prime_row)
+	var prime_lbl := Label.new()
+	prime_lbl.text = "Priming"
+	prime_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	prime_lbl.add_theme_color_override("font_color", C_TEXT)
+	prime_lbl.add_theme_font_size_override("font_size", 12)
+	prime_row.add_child(prime_lbl)
+	_prime_opt = OptionButton.new()
+	_prime_opt.focus_mode = Control.FOCUS_NONE
+	_prime_opt.add_item("Overflow at the crest")
+	_prime_opt.set_item_metadata(0, "overflow")
+	_prime_opt.add_item("Vacuum pump")
+	_prime_opt.set_item_metadata(1, "pump")
+	_prime_opt.tooltip_text = ("Overflow: the pond has to rise to the crest (the turbine) and "
+			+ "spill into the draft pipe before the siphon runs. Vacuum pump: the pipe is "
+			+ "pumped full, so it runs as soon as the dip tube's mouth is under water.")
+	_prime_opt.item_selected.connect(func(i: int) -> void:
+		if _syncing:
+			return
+		_commit_string("siphon_prime_mode", str(_prime_opt.get_item_metadata(i))))
+	prime_row.add_child(_prime_opt)
+	_runner_spin = _spin(_siphon_group, "Runner Ø (mm, 0 = dip tube)", 0.0, 600.0, 1.0,
+			func(v: float) -> void: _commit_float("runner_diameter_mm", v))
+	_runner_spin.tooltip_text = "The propeller runner's bore. Sets how much water passes at a given turbine head (Q = 0.7·A·√(2g·h))."
+	_barrel_spin = _spin(_siphon_group, "Draft pipe length (m)", 1.0, 500.0, 0.1,
 			func(v: float) -> void: _commit_float("barrel_length_m", v))
+	# Derived levels — shown, not typed: the crest and the dip mouth set them.
+	_start_spin = _spin(_siphon_group, "Primes at (m)", -500.0, 5000.0, 0.01,
+			func(v: float) -> void: _commit_float("siphon_start_m", v))
+	_start_spin.editable = false
+	_start_spin.tooltip_text = "Where the pond surface must reach for the siphon to start — the crest (overflow) or just over the dip mouth (pump)."
+	_break_spin = _spin(_siphon_group, "Breaks at (m)", -500.0, 5000.0, 0.01,
+			func(v: float) -> void: _commit_float("siphon_break_m", v))
+	_break_spin.editable = false
+	_break_spin.tooltip_text = "The dip tube's mouth: when the surface falls here the siphon sucks air and stops."
+	# The draft exit: move it by hand (a what-if on the exit height) or
+	# re-trace it further down the hill (the real move).
+	var exit_row := HBoxContainer.new()
+	exit_row.add_theme_constant_override("separation", 6)
+	_siphon_group.add_child(exit_row)
+	var trace_btn := Button.new()
+	trace_btn.text = "Trace exit 3 m lower"
+	trace_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	trace_btn.tooltip_text = "Walk the draft pipe further down the hill (steepest descent over the real terrain, never into the pond) until it has 3 m more drop."
+	trace_btn.pressed.connect(func() -> void: _on_retrace_exit(3.0))
+	exit_row.add_child(trace_btn)
+	var retrace_btn := Button.new()
+	retrace_btn.text = "Re-trace"
+	retrace_btn.tooltip_text = "Route the draft pipe downhill again from the turbine (after sculpting, or to undo a hand-set exit)."
+	retrace_btn.pressed.connect(func() -> void: _on_retrace_exit(0.0))
+	exit_row.add_child(retrace_btn)
+	# Manning n is no longer a physics input (a full siphon is a pressure
+	# pipe); the spin stays for old saves but is hidden.
 	_manning_spin = _spin(_siphon_group, "Manning n", 0.008, 0.05, 0.001,
 			func(v: float) -> void: _commit_float("manning_n", v))
+	(_manning_spin.get_parent() as Control).visible = false
 
 	# Penstock-only: pressurized pipe feeding a pelton/turgo/run-of-river runner.
 	_penstock_group = VBoxContainer.new()
@@ -682,27 +814,95 @@ func _build_ui() -> void:
 	# Visual only — it moves where the jet is DRAWN, never the physics (the jet
 	# strikes the pitch circle wherever it enters, and the head/flow do not care
 	# which chord it takes). Stored on specs so it persists per machine.
-	_nozzle_off_spin = _spin(_penstock_group, "Nozzle height offset (mm)",
-			-300.0, 300.0, 5.0, func(v: float) -> void:
+	_nozzle_pose_extras.clear()
+	var np_hdr := Label.new()
+	np_hdr.text = "Nozzle placement"
+	np_hdr.add_theme_color_override("font_color", C_ACCENT)
+	np_hdr.add_theme_font_size_override("font_size", 12)
+	_penstock_group.add_child(np_hdr)
+	_nozzle_pose_extras.append(np_hdr)
+	var np_hint := Label.new()
+	np_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	np_hint.add_theme_color_override("font_color", C_MUTED)
+	np_hint.add_theme_font_size_override("font_size", 11)
+	np_hint.text = ("Where the jet comes from and lands on the cups — the close-up's "
+			+ "Jet's eye view shows it. Picture only: the head and flow do not change.")
+	_penstock_group.add_child(np_hint)
+	_nozzle_pose_extras.append(np_hint)
+	_nozzle_off_spin = _spin(_penstock_group, "Jet aim offset (mm)",
+			-300.0, 300.0, 1.0, func(v: float) -> void:
 		_commit_float("nozzle_offset_mm", v)
-		if _closeup != null and _closeup.has_method("set_nozzle_offset_m"):
-			_closeup.call("set_nozzle_offset_m", v / 1000.0))
-	_nozzle_off_spin.tooltip_text = ("Fine-tune where the jet meets the wheel, "
-			+ "relative to the machine's penstock inlet port. 0 sits on the port.")
+		_push_nozzle_pose())
+	_nozzle_off_spin.tooltip_text = ("Slide the jet line across the wheel, toward or away from "
+			+ "the shaft (up/down on a horizontal-shaft machine). 0 = where the machine's "
+			+ "own inlet puts it; the jet should meet the cups at the pitch circle.")
+	# The rest of the nozzle placement: along the shaft (the splitter vs one
+	# side of the bucket — the jet's-eye view shows which), where on the rim
+	# the nozzle sits, two tilts off tangential, and the standoff. Visual
+	# only, like the aim offset: the physics does not care which chord the
+	# jet takes, the picture does.
+	_nozzle_pose_spins.clear()
+	for spec: Array in [
+			["Jet axial offset (mm)", "nozzle_axial_mm", -60.0, 60.0, 0.5,
+				"Shift the jet along the shaft. 0 = as the machine is modelled; the splitter is where the water divides evenly between the two halves of the bucket."],
+			["Nozzle position (°)", "nozzle_angle_deg", -180.0, 180.0, 1.0,
+				"Where on the rim the nozzle sits, turned about the shaft. The jet stays tangential."],
+			["Jet tilt, in plane (°)", "nozzle_tilt_in_deg", -30.0, 30.0, 0.5,
+				"Tilt the jet within the wheel's plane: toward (+) or away from the shaft."],
+			["Jet tilt, out of plane (°)", "nozzle_tilt_out_deg", -30.0, 30.0, 0.5,
+				"Tilt the jet along the shaft, so it crosses the splitter at an angle."],
+			["Nozzle standoff (mm)", "nozzle_standoff_mm", -40.0, 200.0, 1.0,
+				"Move the nozzle mouth back from the cups along the jet (a longer jet spreads and slows a little in air)."]]:
+		var key := str(spec[1])
+		var sb := _spin(_penstock_group, str(spec[0]), float(spec[2]), float(spec[3]), float(spec[4]),
+				func(v: float) -> void:
+			_commit_float(key, v)
+			_push_nozzle_pose())
+		sb.tooltip_text = str(spec[5])
+		sb.set_meta("spec_key", key)
+		_nozzle_pose_spins.append(sb)
+	var np_reset := Button.new()
+	np_reset.text = "Reset placement"
+	np_reset.tooltip_text = "Back to the nozzle as the machine is modelled."
+	np_reset.focus_mode = Control.FOCUS_NONE
+	np_reset.size_flags_horizontal = Control.SIZE_SHRINK_END
+	UITheme.style_button(np_reset)
+	np_reset.add_theme_font_size_override("font_size", 11)
+	np_reset.pressed.connect(_on_reset_nozzle_placement)
+	_penstock_group.add_child(np_reset)
+	_nozzle_pose_extras.append(np_reset)
 	_turb_eff_spin = _spin(_penstock_group, "Turbine η (0=auto)", 0.0, 0.95, 0.01,
 			func(v: float) -> void: _commit_float("turbine_efficiency", v))
+	# How fast the flow is shut: the spear valve is wound by hand over tens of
+	# seconds; a ball valve slams in under a second and sees the full
+	# Joukowsky rise. Drives the surge design check.
+	_close_spin = _spin(_penstock_group, "Valve closure (s)", 0.2, 120.0, 0.5,
+			func(v: float) -> void: _commit_float("valve_close_s", v))
+	_close_spin.value = 10.0
+	_close_spin.tooltip_text = ("Seconds to shut the flow at the turbine. A hand-wound spear valve: 10–30 s. "
+			+ "A ball valve: well under a second (never use one as the shut-off). "
+			+ "Below 2L/a the pipe sees the full instant-stop surge.")
 
 	# Penstock route: restyle the pond→turbine wire as a contour-routed poly
 	# penstock. ONE route, two surfaces — this is the same connection the 3D
 	# conduit controller edits, so the measured ground-following run (length,
 	# drop, styled Ø) is what drives HydroReach from then on.
-	_section(_penstock_group, "Penstock route")
+	_section(_penstock_group, "Water source & penstock")
+	# What feeds the turbine now (pond / stream / spring / nothing).
+	_source_lbl = Label.new()
+	_source_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_source_lbl.add_theme_color_override("font_color", C_TEXT)
+	_source_lbl.add_theme_font_size_override("font_size", 12)
+	_source_lbl.text = ""
+	_penstock_group.add_child(_source_lbl)
 	var route_hint := Label.new()
 	route_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	route_hint.add_theme_color_override("font_color", C_MUTED)
 	route_hint.add_theme_font_size_override("font_size", 11)
-	route_hint.text = ("Runs poly tubing along the ground from the bound pond. "
-			+ "Measured run + drop replace the typed length/head above.")
+	route_hint.text = ("A pond on the graph, a stream, or bare ground (a spring) can feed the "
+			+ "turbine. Drag the intake, auto-route, or route from the bound pond — the "
+			+ "drop point decides which; the poly run follows the ground and its measured "
+			+ "run + drop replace the typed length / head above.")
 	_penstock_group.add_child(route_hint)
 	var route_row := HBoxContainer.new()
 	route_row.add_theme_constant_override("separation", 6)
@@ -714,13 +914,29 @@ func _build_ui() -> void:
 		_route_size_opt.set_item_metadata(_route_size_opt.item_count - 1, float(sz))
 		if is_equal_approx(float(sz), 1.5):
 			_route_size_opt.select(_route_size_opt.item_count - 1)
+	_route_size_opt.item_selected.connect(func(_i: int) -> void: _apply_route_style())
 	route_row.add_child(_route_size_opt)
+	# The pipe you actually have: its dimension ratio sets the bore, the
+	# pressure rating and the cold-bend radius (PPI tables, ConduitKinds).
+	_route_sdr_opt = OptionButton.new()
+	_route_sdr_opt.focus_mode = Control.FOCUS_NONE
+	_route_sdr_opt.tooltip_text = ("Dimension ratio (OD / wall) printed on the coil. SDR 9 = 250 psi, "
+		+ "SDR 11 = 200 psi, SDR 11.5 = 190 psi, SDR 13.5 = 160 psi (PE4710). A thinner wall "
+		+ "gives a bigger bore but a lower rating and a wider minimum bend.")
+	for sdr: Variant in ConduitKinds.PENSTOCK_SDR_OPTIONS:
+		_route_sdr_opt.add_item("SDR %s" % ("%.1f" % float(sdr)).trim_suffix(".0"))
+		_route_sdr_opt.set_item_metadata(_route_sdr_opt.item_count - 1, float(sdr))
+		if is_equal_approx(float(sdr), 9.0):
+			_route_sdr_opt.select(_route_sdr_opt.item_count - 1)
+	_route_sdr_opt.item_selected.connect(func(_i: int) -> void: _apply_route_style())
+	route_row.add_child(_route_sdr_opt)
 	_penstock_btn = Button.new()
 	_penstock_btn.text = "Route penstock…"
 	_penstock_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_penstock_btn.tooltip_text = ("Drag the glowing gizmo on the turbine inlet "
-			+ "up the slope to the water source, then release. You can do the "
-			+ "same in first person by dragging off the inlet port.")
+			+ "up the slope and release: on a pond → from that pond, within 8 m of a "
+			+ "stream → that stream is tapped, on bare ground → a spring intake. The "
+			+ "same drag works in first person off the inlet port.")
 	_penstock_btn.pressed.connect(_on_toggle_penstock_mode)
 	route_row.add_child(_penstock_btn)
 	var route_btn := Button.new()
@@ -735,11 +951,30 @@ func _build_ui() -> void:
 	var uphill_btn := Button.new()
 	uphill_btn.text = "Auto-route uphill"
 	uphill_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	uphill_btn.tooltip_text = ("Scan up to ~120 m around the turbine, place a "
-			+ "Stream Intake on the highest ground found, and run the penstock "
-			+ "there. Drag its 3D pins afterwards to refine the path.")
+	uphill_btn.tooltip_text = ("Tap the highest stream vertex within 150 m that stands "
+			+ "above the turbine (a creek is where the water is); with no stream in "
+			+ "reach, the highest bare ground within 120 m becomes a spring intake.")
 	uphill_btn.pressed.connect(_on_auto_route_uphill)
 	_penstock_group.add_child(uphill_btn)
+	# Pipe on hand: the one number every real install starts from.
+	var stock_row := HBoxContainer.new()
+	stock_row.add_theme_constant_override("separation", 6)
+	_penstock_group.add_child(stock_row)
+	var stock_lbl := Label.new()
+	stock_lbl.text = "Pipe on hand (ft)"
+	stock_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stock_lbl.add_theme_color_override("font_color", C_MUTED)
+	stock_lbl.add_theme_font_size_override("font_size", 12)
+	stock_row.add_child(stock_lbl)
+	_stock_spin = SpinBox.new()
+	_stock_spin.min_value = 0.0
+	_stock_spin.max_value = 20000.0
+	_stock_spin.step = 1.0
+	_stock_spin.value = 0.0
+	_stock_spin.custom_minimum_size.x = 96.0
+	_stock_spin.tooltip_text = "Length of this coil you own, in feet (0 = not tracked). The design check compares the routed run against it."
+	_stock_spin.value_changed.connect(func(_v: float) -> void: _apply_route_style())
+	stock_row.add_child(_stock_spin)
 	_route_status_lbl = Label.new()
 	_route_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_route_status_lbl.add_theme_color_override("font_color", C_MUTED)
@@ -848,6 +1083,19 @@ func _build_ui() -> void:
 		var on := _sim_inflow_btn != null and _sim_inflow_btn.button_pressed
 		_write_sim_inflow(on, v))
 	_side.add_child(_sim_inflow_slider)
+	# What the pond is actually doing: the fill against the siphon's draw.
+	# "I can't get the level to rise" is this line being negative.
+	_net_lbl = Label.new()
+	_net_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_net_lbl.add_theme_color_override("font_color", C_MUTED)
+	_net_lbl.add_theme_font_size_override("font_size", 11)
+	_net_lbl.text = ""
+	_side.add_child(_net_lbl)
+	var fill_btn := Button.new()
+	fill_btn.text = "Fill pond to the prime level"
+	fill_btn.tooltip_text = "Set the pond's surface just over the prime level (what the Test inflow would reach eventually) so the siphon starts now."
+	fill_btn.pressed.connect(_on_fill_to_prime)
+	_side.add_child(fill_btn)
 	_sync_test_flow_labels()
 
 	_section(_side, "Live readouts")
@@ -860,12 +1108,13 @@ func _build_ui() -> void:
 	live_hint.add_theme_font_size_override("font_size", 10)
 	live_hint.text = "The machine's operating point at the matched load — the same numbers as the strip under the section. The close-up's own readout shows this scaled to whatever load you set there."
 	_side.add_child(live_hint)
-	_rpm_lbl = _ro(_side, "RPM")
-	_pe_lbl = _ro(_side, "Hydraulic PE")
-	_elec_lbl = _ro(_side, "Electrical")
-	_flow_lbl = _ro(_side, "Flow")
-	_head_lbl = _ro(_side, "Head")
-	_state_lbl = _ro(_side, "State")
+	_rpm_lbl = _ro(_side, "RPM", true)
+	_pe_lbl = _ro(_side, "Hydraulic PE", true)
+	_elec_lbl = _ro(_side, "Electrical", true)
+	_elec_lbl.add_theme_color_override("font_color", C_ACCENT)
+	_flow_lbl = _ro(_side, "Flow", true)
+	_head_lbl = _ro(_side, "Head", true)
+	_state_lbl = _ro(_side, "State", true)
 	_cum_lbl = _ro(_side, "Outlet volume")
 	_warn_lbl = Label.new()
 	_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -887,7 +1136,7 @@ func _build_ui() -> void:
 	_chart_body = _fold_section(_side, "Power curves", true)
 	_chart = Control.new()
 	_chart.set_script(_CHART_SCRIPT)
-	_chart.custom_minimum_size = Vector2(0, 168)
+	_chart.custom_minimum_size = Vector2(0, 190)
 	_chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_chart_body.add_child(_chart)
 	_chart_stats_lbl = Label.new()
@@ -896,11 +1145,32 @@ func _build_ui() -> void:
 	_chart_stats_lbl.add_theme_font_size_override("font_size", 11)
 	_chart_body.add_child(_chart_stats_lbl)
 
+	var intake_body := _fold_section(_side, "Intake works", false)
+	_intake_lbl = Label.new()
+	_intake_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_intake_lbl.add_theme_color_override("font_color", C_TEXT)
+	_intake_lbl.add_theme_font_size_override("font_size", 11)
+	_intake_lbl.text = ""
+	intake_body.add_child(_intake_lbl)
 	var est_body := _fold_section(_side, "Estimate", false)
 	_capacity_lbl = _ro(est_body, "Pipe capacity")
 	_loss_lbl = _ro(est_body, "Head loss")
 	_capfac_lbl = _ro(est_body, "Capacity factor")
 	_annual_lbl = _ro(est_body, "Annual energy")
+	# The year the nozzle actually sees.
+	_firm_lbl = _ro(est_body, "Driest / wettest month")
+	_limited_lbl = _ro(est_body, "Supply-limited")
+	_design_lbl = Label.new()
+	_design_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_design_lbl.add_theme_color_override("font_color", C_TEXT)
+	_design_lbl.add_theme_font_size_override("font_size", 11)
+	_design_lbl.text = ""
+	est_body.add_child(_design_lbl)
+	var copy_btn := Button.new()
+	copy_btn.text = "Copy design summary"
+	copy_btn.tooltip_text = "Puts the pipe spec, route, operating point, annual estimate and every design check on the clipboard as plain text."
+	copy_btn.pressed.connect(_on_copy_design_summary)
+	est_body.add_child(copy_btn)
 	_estimate_hint_lbl = Label.new()
 	_estimate_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_estimate_hint_lbl.add_theme_color_override("font_color", C_MUTED)
@@ -983,7 +1253,9 @@ func _spin(parent: Control, label: String, mn: float, mx: float, step: float,
 	return sb
 
 
-func _ro(parent: Control, label: String) -> Label:
+## Read-only key/value row. `big` = a Live-readout row: the value at 14 px
+## (the 12 px pair read as one more hint line in the dock).
+func _ro(parent: Control, label: String, big: bool = false) -> Label:
 	var row := HBoxContainer.new()
 	parent.add_child(row)
 	var k := Label.new()
@@ -995,7 +1267,7 @@ func _ro(parent: Control, label: String) -> Label:
 	var v := Label.new()
 	v.text = "—"
 	v.add_theme_color_override("font_color", C_TEXT)
-	v.add_theme_font_size_override("font_size", 12)
+	v.add_theme_font_size_override("font_size", 14 if big else 12)
 	row.add_child(v)
 	return v
 
@@ -1115,6 +1387,15 @@ func _load_from_model() -> bool:
 	_outlet_inv_spin.value = out_inv
 	_barrel_spin.value = float(specs.get("barrel_length_m", 20.0))
 	_manning_spin.value = float(specs.get("manning_n", 0.012))
+	var dip_len_l := float(specs.get("dip_tube_length_m", NAN))
+	if is_nan(dip_len_l) or dip_len_l <= 0.0:
+		dip_len_l = maxf(mod_e - break_m, 0.1)
+	if _dip_len_spin != null:
+		_dip_len_spin.value = dip_len_l
+	if _prime_opt != null:
+		_prime_opt.select(1 if str(specs.get("siphon_prime_mode", "overflow")) == "pump" else 0)
+	if _runner_spin != null:
+		_runner_spin.value = float(specs.get("runner_diameter_mm", 0.0))
 	_penstock_len_spin.value = float(specs.get("penstock_length_m", 60.0))
 	_penstock_d_spin.value = float(specs.get("penstock_diameter_mm", 63.0))
 	_roughness_spin.value = float(specs.get("pipe_roughness_mm", 0.0015))
@@ -1134,10 +1415,13 @@ func _load_from_model() -> bool:
 	if _nozzle_d_spin != null:
 		_nozzle_d_spin.value = float(specs.get("nozzle_diameter_mm",
 				float(kmeta.get("default_nozzle_mm", 10.0))))
+	if _close_spin != null:
+		_close_spin.value = float(specs.get("valve_close_s", 10.0))
 	if _nozzle_off_spin != null:
 		_nozzle_off_spin.value = float(specs.get("nozzle_offset_mm", 0.0))
-		if _closeup != null and _closeup.has_method("set_nozzle_offset_m"):
-			_closeup.call("set_nozzle_offset_m", float(_nozzle_off_spin.value) / 1000.0)
+	for sb: SpinBox in _nozzle_pose_spins:
+		sb.value = float(specs.get(str(sb.get_meta("spec_key", "")), 0.0))
+	_push_nozzle_pose()
 	_select_kind_in_dropdown(kind)
 	_apply_kind_visibility(kind)
 	if _sim_inflow_spin != null:
@@ -1200,6 +1484,15 @@ func _commit_float(key: String, v: float) -> void:
 			_syncing = true
 			_start_spin.value = start_m
 			_syncing = false
+	elif key == "dip_tube_length_m":
+		specs[key] = maxf(v, 0.1)
+		SiphonHydraulics.apply_resolved_levels(specs, module)
+		_syncing = true
+		if _start_spin != null:
+			_start_spin.value = float(specs.get("siphon_start_m", module))
+		if _break_spin != null:
+			_break_spin.value = float(specs.get("siphon_break_m", module))
+		_syncing = false
 	elif key == "module_elev_m":
 		specs["module_elev_m"] = v
 		# Keep offsets; refresh absolute start/break to follow the turbine.
@@ -1225,6 +1518,18 @@ func _commit_float(key: String, v: float) -> void:
 		canvas.call("queue_redraw")
 
 
+func _commit_bool(key: String, v: bool) -> void:
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return
+	var item := m.get_item(_item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	specs[key] = v
+	m.update_item(_item_id, {"specs": specs})
+
+
 func _commit_string(key: String, v: String) -> void:
 	var m := _model()
 	if m == null or _item_id.is_empty():
@@ -1234,6 +1539,16 @@ func _commit_string(key: String, v: String) -> void:
 		return
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 	specs[key] = v
+	if key == "siphon_prime_mode":
+		var module := float(_module_spin.value) if _module_spin != null \
+				else float(specs.get("module_elev_m", item.get("elevation_m", 0.0)))
+		SiphonHydraulics.apply_resolved_levels(specs, module)
+		_syncing = true
+		if _start_spin != null:
+			_start_spin.value = float(specs.get("siphon_start_m", module))
+		if _break_spin != null:
+			_break_spin.value = float(specs.get("siphon_break_m", module))
+		_syncing = false
 	m.update_item(_item_id, {"specs": specs})
 	_phys_acc = 999.0
 
@@ -1284,6 +1599,11 @@ func _apply_kind_visibility(kind: String) -> void:
 		(_nozzle_d_spin.get_parent() as Control).visible = penstock and nozzle
 	if _nozzle_off_spin != null and _nozzle_off_spin.get_parent() != null:
 		(_nozzle_off_spin.get_parent() as Control).visible = penstock and nozzle
+	for sb: SpinBox in _nozzle_pose_spins:
+		if sb.get_parent() != null:
+			(sb.get_parent() as Control).visible = penstock and nozzle
+	for c: Control in _nozzle_pose_extras:
+		c.visible = penstock and nozzle
 	# Power curves are a penstock story (pipe-size families); the siphon's
 	# output is orifice/weir-limited, not pipe-diameter-limited.
 	if _chart_body != null and _chart_body.get_parent() != null:
@@ -1353,38 +1673,11 @@ func _on_route_penstock() -> void:
 		_route_status_lbl.text = "No pond bound — Rebind to nearest pond first."
 		return
 	var tid := str(tank.get("id", ""))
-	var conn_id := ""
-	for conn: Dictionary in m.connections:
-		var s := str(conn.get("source_item_id", ""))
-		var t := str(conn.get("target_item_id", ""))
-		if (s == tid and t == _item_id) or (s == _item_id and t == tid):
-			conn_id = str(conn.get("id", ""))
-			break
+	var conn_id := str(_graph_view.call("route_penstock_to_source", _item_id,
+			{"kind": "pond", "item_id": tid}, _route_style_opts()))
 	if conn_id.is_empty():
-		_route_status_lbl.text = "No pond wire found — Rebind to nearest pond first."
+		_route_status_lbl.text = "Couldn't route from the pond."
 		return
-	var sel_size := 1.5
-	if _route_size_opt != null and _route_size_opt.selected >= 0:
-		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
-	var conn := m.get_connection(conn_id)
-	var style: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
-	style["pipe_size_in"] = sel_size
-	m.update_connection(conn_id, {
-		"conduit_type": "poly_penstock",
-		"conduit_style": style,
-		# A physical penstock is visible even into a direct-intake port, and a
-		# fresh route must re-derive from the terrain (drop any stale pins).
-		"visible_3d": true,
-		"flow_glow": true,
-		"route_3d": [],
-		"route_locked": false,
-	})
-	# Restyling the wire is not enough on its own: ConduitManager ignores model
-	# changes while global 3D wires are off, so without this the pipe is never
-	# built, its run length / inverts are never stamped, and the physics never
-	# adopts the route (it just reads "measuring run…" forever).
-	if _graph_view != null and _graph_view.has_method("reveal_penstock_conduit"):
-		_graph_view.call("reveal_penstock_conduit", conn_id)
 	_phys_acc = 999.0
 	_refresh_route_status(true)
 	# The run length is stamped by the rebuild, which lands a frame or two
@@ -1515,14 +1808,13 @@ func _commit_penstock_drag() -> void:
 		return
 	var center: Vector3 = soi.call("world_center") as Vector3
 	var wxz := GraphSiteLayout.site_to_world_xz(_penstock_ghost_site, center)
-	var sel_size := 1.5
-	if _route_size_opt != null and _route_size_opt.selected >= 0:
-		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
 	var conn_id := ""
-	if _graph_view.has_method("create_penstock_intake_at"):
-		conn_id = str(_graph_view.call("create_penstock_intake_at",
-				Vector3(wxz.x, _penstock_ghost_elev, wxz.y), _item_id, "res_in_0",
-				{"pipe_size_in": sel_size}))
+	if _graph_view.has_method("route_penstock_to_source"):
+		var source: Dictionary = _graph_view.call("resolve_hydro_source_at", wxz)
+		if str(source.get("kind", "")) == "spring":
+			source["world_pos"] = Vector3(wxz.x, _penstock_ghost_elev, wxz.y)
+		conn_id = str(_graph_view.call("route_penstock_to_source", _item_id, source,
+				_route_style_opts()))
 	_penstock_mode = false
 	_penstock_ghost_valid = false
 	_sync_penstock_btn()
@@ -1559,39 +1851,21 @@ func _on_auto_route_uphill() -> void:
 			or not soi.has_method("world_center"):
 		_route_status_lbl.text = "No terrain on this map — set Gross head by hand."
 		return
-	var center: Vector3 = soi.call("world_center") as Vector3
-	var t_xz := GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(item), center)
-	var t_y := float(soi.call("ground_y_at", t_xz.x, t_xz.y))
-	var best := Vector3.INF
-	var best_y := t_y + 1.0   # require at least a metre of genuine rise
-	for i in 48:
-		var a := TAU * float(i) / 48.0
-		for r in [30.0, 60.0, 90.0, 120.0]:
-			var wx: float = t_xz.x + cos(a) * float(r)
-			var wz: float = t_xz.y + sin(a) * float(r)
-			var gy := float(soi.call("ground_y_at", wx, wz))
-			# Prefer height; on a tie prefer the SHORTER run (cheaper pipe).
-			if gy > best_y + 0.05 or (gy > best_y - 0.05 and is_finite(best.x) \
-					and Vector2(wx, wz).distance_to(t_xz) \
-						< Vector2(best.x, best.z).distance_to(t_xz)):
-				best_y = gy
-				best = Vector3(wx, gy, wz)
-	if not is_finite(best.x):
-		_route_status_lbl.text = "No higher ground within 120 m — drag the gizmo further, or set Gross head by hand."
+	# A creek above the turbine beats a bare hilltop: the view scans the
+	# map's streams first, then the terrain ring (the old scan).
+	var source: Dictionary = _graph_view.call("find_uphill_source", _item_id, 150.0) \
+		if _graph_view.has_method("find_uphill_source") else {}
+	if source.is_empty():
+		_route_status_lbl.text = "Nothing higher within 150 m — drag the gizmo further, or set Gross head by hand."
 		return
-	var sel_size := 1.5
-	if _route_size_opt != null and _route_size_opt.selected >= 0:
-		sel_size = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
-	var conn_id := ""
-	if _graph_view.has_method("create_penstock_intake_at"):
-		conn_id = str(_graph_view.call("create_penstock_intake_at", best, _item_id,
-				"res_in_0", {"pipe_size_in": sel_size}))
+	var conn_id := str(_graph_view.call("route_penstock_to_source", _item_id, source, _route_style_opts()))
 	_phys_acc = 999.0
 	if conn_id.is_empty():
-		_route_status_lbl.text = "Couldn't place the intake."
+		_route_status_lbl.text = "Couldn't route the penstock."
 	else:
-		_route_status_lbl.text = "Intake placed %.1f m above the turbine." % (best_y - t_y)
-		get_tree().create_timer(0.35).timeout.connect(_refresh_route_status,
+		_route_status_lbl.text = "%s tapped %.1f m above the turbine." % [
+			str(source.get("label", "Source")), float(source.get("rise_m", 0.0))]
+		get_tree().create_timer(0.35).timeout.connect(_refresh_route_status.bind(true),
 				CONNECT_ONE_SHOT)
 	_redraw_preview()
 
@@ -1622,22 +1896,278 @@ func _refresh_route_status(force: bool = false) -> void:
 	if sig == _route_sig:
 		return
 	_route_sig = sig
+	if _source_lbl != null and _graph_view != null and _graph_view.has_method("hydro_source_summary"):
+		var src: Dictionary = _graph_view.call("hydro_source_summary", _item_id)
+		var kind_word: String = {"pond": "Pond", "stream": "Stream", "spring": "Spring", "none": ""}.get(str(src.get("kind", "")), "")
+		_source_lbl.text = ("%s: %s — %s" % [kind_word, str(src.get("label", "")), str(src.get("detail", ""))]) \
+			if not kind_word.is_empty() else "%s — %s" % [str(src.get("label", "")), str(src.get("detail", ""))]
 	if conn.is_empty():
 		_route_status_lbl.text = "Not routed — physics uses the typed length/head above."
 		return
-	var sz := ConduitKinds.pipe_size_in("poly_penstock",
-			conn.get("conduit_style", {}) as Dictionary)
+	var style: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	_sync_route_controls(style)
+	var sz := ConduitKinds.pipe_size_in("poly_penstock", style)
+	var sdr := ConduitKinds.pipe_sdr("poly_penstock", style)
 	var run := float(conn.get("route_length_m", 0.0))
 	var inv_in := float(conn.get("invert_in_m", NAN))
 	var inv_out := float(conn.get("invert_out_m", NAN))
 	var drop := absf(inv_in - inv_out) if not (is_nan(inv_in) or is_nan(inv_out)) else NAN
+	var pipe := "%s SDR %s poly (ID %.1f mm, %.0f psi)" % [PipeKit.size_label(sz),
+		("%.1f" % sdr).trim_suffix(".0"),
+		ConduitKinds.inner_diameter_for("poly_penstock", style) * 1000.0,
+		ConduitKinds.pressure_rating_psi("poly_penstock", style)]
 	if run > 0.5:
-		var txt := "Routed: %s poly · run %.0f m" % [PipeKit.size_label(sz), run]
+		var txt := "Routed: %s · run %.0f m (%.0f ft)" % [pipe, run, run / 0.3048]
 		if not is_nan(drop):
 			txt += " · drop %.1f m"  % drop
+		var stock := float(style.get("stock_length_m", 0.0))
+		if stock > 0.0:
+			txt += " · %s" % (("%.0f ft spare" % ((stock - run) / 0.3048)) if run <= stock
+				else ("SHORT by %.0f ft" % ((run - stock) / 0.3048)))
 		_route_status_lbl.text = txt
 	else:
-		_route_status_lbl.text = "Routed: %s poly (measuring run…)" % PipeKit.size_label(sz)
+		_route_status_lbl.text = "Routed: %s (measuring run…)" % pipe
+
+
+## Size / SDR / stock from the route row, as route_penstock_to_source opts.
+func _route_style_opts() -> Dictionary:
+	var o := {}
+	if _route_size_opt != null and _route_size_opt.selected >= 0:
+		o["pipe_size_in"] = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
+	if _route_sdr_opt != null and _route_sdr_opt.selected >= 0:
+		o["pipe_sdr"] = float(_route_sdr_opt.get_item_metadata(_route_sdr_opt.selected))
+	if _stock_spin != null and _stock_spin.value > 0.0:
+		o["stock_length_m"] = _stock_spin.value * 0.3048
+	return o
+
+
+## The route controls show the live run's style (size / SDR / stock) without
+## echoing back into it.
+func _sync_route_controls(style: Dictionary) -> void:
+	if _syncing:
+		return
+	_syncing = true
+	var sz := ConduitKinds.pipe_size_in("poly_penstock", style)
+	if _route_size_opt != null:
+		for i in _route_size_opt.item_count:
+			if is_equal_approx(float(_route_size_opt.get_item_metadata(i)), sz):
+				_route_size_opt.select(i)
+	var sdr := ConduitKinds.pipe_sdr("poly_penstock", style)
+	if _route_sdr_opt != null:
+		for i in _route_sdr_opt.item_count:
+			if is_equal_approx(float(_route_sdr_opt.get_item_metadata(i)), sdr):
+				_route_sdr_opt.select(i)
+	if _stock_spin != null:
+		_stock_spin.value = roundf(float(style.get("stock_length_m", 0.0)) / 0.3048)
+	_syncing = false
+
+
+## Size / SDR / stock from the controls onto the live penstock run. Size and
+## SDR change the bore and the bend radius, so the run is rebuilt (the flow
+## engine then adopts the new measured geometry); stock is data only.
+func _apply_route_style() -> void:
+	if _syncing:
+		return
+	var m := _model()
+	if m == null:
+		return
+	var conn := _penstock_conn_for_status(m)
+	if conn.is_empty():
+		return
+	var style: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
+	var before_geo := "%.3f|%.3f" % [ConduitKinds.pipe_size_in("poly_penstock", style),
+		ConduitKinds.pipe_sdr("poly_penstock", style)]
+	if _route_size_opt != null and _route_size_opt.selected >= 0:
+		style["pipe_size_in"] = float(_route_size_opt.get_item_metadata(_route_size_opt.selected))
+	if _route_sdr_opt != null and _route_sdr_opt.selected >= 0:
+		style["pipe_sdr"] = float(_route_sdr_opt.get_item_metadata(_route_sdr_opt.selected))
+	if _stock_spin != null:
+		if _stock_spin.value > 0.0:
+			style["stock_length_m"] = _stock_spin.value * 0.3048
+		else:
+			style.erase("stock_length_m")
+	m.update_connection(str(conn.get("id", "")), {"conduit_style": style})
+	var after_geo := "%.3f|%.3f" % [ConduitKinds.pipe_size_in("poly_penstock", style),
+		ConduitKinds.pipe_sdr("poly_penstock", style)]
+	if after_geo != before_geo and _graph_view != null \
+			and _graph_view.has_method("reveal_penstock_conduit"):
+		_graph_view.call("reveal_penstock_conduit", str(conn.get("id", "")))
+	_phys_acc = 999.0
+	_refresh_route_status(true)
+	get_tree().create_timer(0.35).timeout.connect(
+			_refresh_route_status.bind(true), CONNECT_ONE_SHOT)
+
+
+## The design checks (PenstockDesign) from the live operating point + the
+## routed run, and the plain-text summary the Copy button exports.
+func _refresh_design_checks(sim_specs: Dictionary) -> void:
+	if _design_lbl == null:
+		return
+	if not _kind_has_penstock():
+		_design_lbl.text = ""
+		_design_summary = ""
+		_last_rating_psi = NAN
+		return
+	var m := _model()
+	var conn: Dictionary = _penstock_conn_for_status(m) if m != null else {}
+	var style: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	var id_m := float(sim_specs.get("penstock_diameter_mm", 0.0)) / 1000.0
+	var od_m := ConduitKinds.outer_diameter_m("poly_penstock", style)
+	if conn.is_empty():
+		od_m = id_m / (1.0 - 2.0 / ConduitKinds.pipe_sdr("poly_penstock", style))
+	var sdr := ConduitKinds.pipe_sdr("poly_penstock", style)
+	var r_route := float(conn.get("route_min_bend_r_m", -1.0))
+	var d := {
+		"q_lps": float(_last_r.get("q_lps", NAN)),
+		"gross_head_m": float(_last_r.get("head_m", NAN)),
+		"head_loss_m": float(_last_r.get("head_loss_m", NAN)),
+		"id_m": id_m, "od_m": od_m, "sdr": sdr,
+		"wall_m": od_m / sdr,
+		"length_m": float(sim_specs.get("penstock_length_m", NAN)),
+		"stock_m": float(style.get("stock_length_m", NAN)) if style.has("stock_length_m") else NAN,
+		"rating_psi": ConduitKinds.pressure_rating_psi("poly_penstock", style),
+		"min_bend_r_m": ConduitKinds.contour_bend_radius_m("poly_penstock", style),
+		"bend_mult": ConduitKinds.bend_radius_mult_for_sdr(sdr),
+		"route_min_bend_r_m": r_route if r_route > 0.0 else NAN,
+		"high_points": int(conn.get("route_high_points", -1)) if not conn.is_empty() else -1,
+		"rise_above_intake_m": float(conn.get("route_rise_m", NAN)) if not conn.is_empty() else NAN,
+		"close_s": float(_close_spin.value) if _close_spin != null else NAN,
+	}
+	_last_rating_psi = float(d["rating_psi"])
+	var cks := PenstockDesign.checks(d)
+	_refresh_intake_works(sim_specs, id_m)
+	var lines: Array[String] = []
+	for c in cks:
+		var cd: Dictionary = c
+		var mark: String = str({"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}.get(str(cd.get("level", "")), "·"))
+		lines.append("%s %s" % [mark, str(cd.get("text", ""))])
+	_design_lbl.text = "\n".join(lines)
+	var worst := PenstockDesign.worst_level(cks)
+	_design_lbl.add_theme_color_override("font_color",
+		C_TEXT if worst == "ok" else (Color(0.98, 0.78, 0.35) if worst == "warn" else Color(1.0, 0.45, 0.4)))
+	# Summary text.
+	var item := m.get_item(_item_id) if m != null else {}
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var head := [
+		"Turbine: %s (%s)" % [str(specs.get("name", "")), str(specs.get("turbine_kind", ""))],
+		"Nozzle: %d × %.1f mm" % [int(sim_specs.get("nozzle_count", 1)), float(sim_specs.get("nozzle_diameter_mm", 0.0))],
+		"Pipe: %s SDR %s poly, ID %.1f mm, rated %.0f psi (%.0f m)" % [
+			PipeKit.size_label(ConduitKinds.pipe_size_in("poly_penstock", style)),
+			("%.1f" % sdr).trim_suffix(".0"), id_m * 1000.0, float(d["rating_psi"]),
+			PenstockDesign.psi_to_head_m(float(d["rating_psi"]))],
+		"Run: %.1f m (%.0f ft), gross head %.1f m, net %.1f m" % [
+			float(d["length_m"]), float(d["length_m"]) / 0.3048, float(d["gross_head_m"]),
+			float(_last_r.get("net_head_m", 0.0))],
+		"Operating point: %.2f L/s, %.0f W electrical, %.0f rpm" % [
+			float(_last_r.get("q_lps", 0.0)), float(_last_r.get("power_w", 0.0)), float(_last_r.get("rpm", 0.0))],
+		"Annual energy: %s" % (_annual_lbl.text if _annual_lbl != null else "—"),
+	]
+	var src := str(specs.get("penstock_source_mode", ""))
+	if src == "stream":
+		head.append("Supply: %.2f L/s from the stream intake" % float(sim_specs.get("supply_lps", 0.0)))
+	if not _firm_text.is_empty():
+		head.append(_firm_text)
+	if not _intake_text.is_empty():
+		head.append("Intake works: " + _intake_text.replace("\n", "; "))
+	_design_summary = PenstockDesign.summary_text("Penstock design — %s" % str(specs.get("name", "turbine")), head, cks)
+
+
+## Driest / wettest month and how many months the jet is starved, from the
+## same seasonal curve the annual estimate used. Runs inside the estimate's
+## signature gate (one extra Pelton solve for the nozzle's demand).
+func _refresh_firm_flow(est: Dictionary, supply_prof: Array, ann: Dictionary) -> void:
+	_firm_text = ""
+	if _firm_lbl == null:
+		return
+	if supply_prof.size() != 12:
+		_firm_lbl.text = "—"
+		_limited_lbl.text = "— (no seasonal supply: bind a stream intake)"
+		return
+	var monthly_kwh: Variant = ann.get("monthly_kwh", PackedFloat32Array())
+	var monthly_kw: Array = []
+	for mo in 12:
+		var days: int = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo]
+		monthly_kw.append(float(monthly_kwh[mo]) / (24.0 * days) if monthly_kwh.size() == 12 else NAN)
+	var nozzle_q := NAN
+	if _kind_uses_nozzle():
+		var meta := HydroSource.kind_meta(str(est.get("turbine_kind", est.get("kind", "pelton"))))
+		var op := PeltonPhysics.operating_point(float(est.get("gross_head_m", 0.0)),
+				float(est.get("penstock_length_m", 60.0)),
+				float(est.get("penstock_diameter_mm", 63.0)) / 1000.0,
+				float(est.get("pipe_roughness_mm", 0.0015)) / 1000.0,
+				float(est.get("nozzle_diameter_mm", float(meta.get("default_nozzle_mm", 10.0)))) / 1000.0,
+				int(est.get("nozzle_count", 1)))
+		nozzle_q = float(op.get("q_lps", NAN))
+	var ff := PenstockDesign.firm_flow(supply_prof, monthly_kw, nozzle_q)
+	if ff.is_empty():
+		_firm_lbl.text = "—"
+		return
+	var lo_name: String = PenstockDesign.MONTH_ABBR[int(ff["min_month"])]
+	var hi_name: String = PenstockDesign.MONTH_ABBR[int(ff["max_month"])]
+	_firm_lbl.text = "%s %.2f L/s → %.0f W  ·  %s %.2f L/s → %.0f W" % [
+		lo_name, float(ff["min_lps"]), float(ff["min_kw"]) * 1000.0,
+		hi_name, float(ff["max_lps"]), float(ff["max_kw"]) * 1000.0]
+	if is_nan(nozzle_q):
+		_limited_lbl.text = "n/a (no nozzle)"
+	else:
+		var n := int(ff["limited_months"])
+		var txt := "%d of 12 months below the %.2f L/s the jet takes" % [n, nozzle_q]
+		if n > 0:
+			var fit := PeltonPhysics.nozzle_d_for_supply_m(float(est.get("gross_head_m", 0.0)),
+					float(est.get("penstock_length_m", 60.0)),
+					float(est.get("penstock_diameter_mm", 63.0)) / 1000.0,
+					float(est.get("pipe_roughness_mm", 0.0015)) / 1000.0,
+					int(est.get("nozzle_count", 1)), float(ff["min_lps"]) / 1000.0)
+			if fit > 0.0:
+				txt += " — a %.1f mm jet runs unlimited all year" % (fit * 1000.0)
+		_limited_lbl.text = txt
+	_firm_text = "Firm flow: %s %.2f L/s (%.0f W); wettest %s %.2f L/s (%.0f W); %s" % [
+		lo_name, float(ff["min_lps"]), float(ff["min_kw"]) * 1000.0,
+		hi_name, float(ff["max_lps"]), float(ff["max_kw"]) * 1000.0, _limited_lbl.text]
+
+
+## Screen, settling box and submergence for the most the nozzle will take.
+func _refresh_intake_works(sim_specs: Dictionary, id_m: float) -> void:
+	_intake_text = ""
+	if _intake_lbl == null:
+		return
+	if not _kind_has_penstock() or id_m <= 0.0:
+		_intake_lbl.text = ""
+		return
+	var gross := maxf(float(_last_r.get("head_m", 0.0)), 0.0)
+	var q_design := float(_last_r.get("q_lps", 0.0))
+	if _kind_uses_nozzle() and gross > 0.05:
+		var meta := HydroSource.kind_meta(str(sim_specs.get("turbine_kind", sim_specs.get("kind", "pelton"))))
+		var op := PeltonPhysics.operating_point(gross,
+				float(sim_specs.get("penstock_length_m", 60.0)), id_m,
+				float(sim_specs.get("pipe_roughness_mm", 0.0015)) / 1000.0,
+				float(sim_specs.get("nozzle_diameter_mm", float(meta.get("default_nozzle_mm", 10.0)))) / 1000.0,
+				int(sim_specs.get("nozzle_count", 1)))
+		q_design = maxf(q_design, float(op.get("q_lps", 0.0)))
+	if q_design <= 1e-4:
+		_intake_lbl.text = "No flow yet — route the penstock to a source above the turbine."
+		return
+	var w := PenstockDesign.intake_works(q_design, id_m)
+	_intake_text = "Sized for %.2f L/s (the jet's full demand at %.1f m)\n" % [q_design, gross]
+	_intake_text += "Screen ≥ %.0f × %.0f cm gross (%.1f m/s approach, 50 %% open)\n" % [
+		float(w["screen_side_m"]) * 100.0, float(w["screen_side_m"]) * 100.0, PenstockDesign.SCREEN_V_MS]
+	_intake_text += "Settling box %.2f × %.2f m, %.2f m deep — settles %.1f mm sand, %.0f s dwell\n" % [
+		float(w["settle_len_m"]), float(w["settle_w_m"]), float(w["settle_depth_m"]),
+		float(w["grain_mm"]), float(w["settle_time_s"])]
+	_intake_text += "Pipe mouth ≥ %.2f m under water (Gordon, %.2f m/s in the pipe) — add a bell or tee and a vortex plate" % [
+		float(w["submergence_m"]), float(w["pipe_v_ms"])]
+	_intake_lbl.text = _intake_text
+
+
+func _on_copy_design_summary() -> void:
+	if _design_summary.is_empty():
+		_refresh_design_checks(_last_sim_specs)
+	if _design_summary.is_empty():
+		return
+	DisplayServer.clipboard_set(_design_summary)
+	print(_design_summary)
+	if _graph_view != null and _graph_view.has_method("_show_toast"):
+		_graph_view.call("_show_toast", "Design summary copied to the clipboard")
 
 
 ## Status looks for ANY poly_penstock on this turbine (not only contour-routed
@@ -2077,8 +2607,13 @@ func _process(delta: float) -> void:
 		else:
 			_display_level_m = lerpf(_display_level_m, lvl_target,
 					clampf(1.0 - exp(-delta / 0.35), 0.0, 1.0))
-	# Smooth the inflow rate for the runoff-into-pond depiction.
-	_inflow_lps = lerpf(_inflow_lps, _sample_pond_inflow_lps(),
+	# Smooth the inflow rate for the runoff-into-pond depiction. The sample
+	# walks every connection; 4 Hz is plenty under a 0.5 s smoothing constant.
+	_inflow_sample_t += delta
+	if _inflow_sample_t >= 0.25:
+		_inflow_sample_t = 0.0
+		_inflow_target_lps = _sample_pond_inflow_lps()
+	_inflow_lps = lerpf(_inflow_lps, _inflow_target_lps,
 			clampf(1.0 - exp(-delta / 0.5), 0.0, 1.0))
 	# Redraw the own cross-section every UI tick while open — the pond level and
 	# flow evolve continuously on the world clock, even when the rotor is parked.
@@ -2102,6 +2637,16 @@ func _pond_context() -> Dictionary:
 		return out
 	var tank: Dictionary = _graph_view.call("resolve_siphon_pond", _item_id)
 	if tank.is_empty():
+		# A stream-fed turbine has no pond; its INTAKE anchors the section
+		# (site + label), with no level — the basin block stays off.
+		var rf: Variant = _graph_view.get("_resource_flow")
+		if rf != null and rf.has_method("_stream_intake_for"):
+			var intake: Dictionary = rf.call("_stream_intake_for", _graph_view.get("model").get_item(_item_id))
+			if not intake.is_empty():
+				var isp: Dictionary = intake.get("specs", {}) as Dictionary
+				out["label"] = str(isp.get("name", "Stream intake"))
+				if GraphSiteLayout.has_site_coords(intake):
+					out["site"] = GraphSiteLayout.site_xz(intake)
 		_cached_pond = out
 		return out
 	var ts: Dictionary = tank.get("specs", {}) as Dictionary
@@ -2142,6 +2687,13 @@ func _sync_level_spins_from_model() -> void:
 		_start_spin.value = start_m
 	if _break_spin != null and absf(float(_break_spin.value) - break_m) > 1e-3:
 		_break_spin.value = break_m
+	# The draft exit follows the model too: the Lab's session prep reconciles
+	# it with the outlet node AFTER the first load, and a re-trace moves it.
+	var oi := float(specs.get("outlet_invert_m", NAN))
+	if not is_nan(oi) and _outlet_inv_spin != null and absf(float(_outlet_inv_spin.value) - oi) > 1e-3:
+		_outlet_inv_spin.value = oi
+	if _show_dip_check != null:
+		_show_dip_check.set_pressed_no_signal(bool(specs.get("show_dip_tube", false)))
 	_syncing = false
 
 
@@ -2212,9 +2764,15 @@ func _refresh_physics() -> void:
 		cum = float(_graph_view.call("siphon_outlet_cumulative_l", _item_id))
 	_cum_lbl.text = "%.0f L" % cum
 	_refresh_estimate(sim_specs)
+	if not _kind_has_penstock():
+		_sens_text = _siphon_sensitivity_text(sim_specs, level_m)
+	_last_sim_specs = sim_specs
+	_refresh_design_checks(sim_specs)
 	_refresh_warnings()
 	_refresh_route_status()
 	_refresh_status_strip()
+	_refresh_net_readout(level_m)
+	_refresh_stat_deck()
 	_push_closeup_state()
 
 
@@ -2251,6 +2809,11 @@ func _refresh_status_strip() -> void:
 				str(_last_r.get("regime", "dry")))
 	if bool(_last_r.get("supply_limited", false)):
 		parts.append("supply-limited")
+	if not _kind_has_penstock() and flowing:
+		parts.append("suction %.1f / %.1f m" % [float(_last_r.get("suction_m", 0.0)),
+				float(_last_r.get("suction_max_m", 0.0))])
+		if bool(_last_r.get("cavitating", false)):
+			parts.append("CAVITATING")
 	_status_lbl.text = " · ".join(parts)
 	_status_lbl.add_theme_color_override("font_color", C_ACCENT if flowing else C_MUTED)
 
@@ -2273,6 +2836,7 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 		_capfac_lbl.text = "—"
 		_annual_lbl.text = "—"
 		_estimate_hint_lbl.text = "Siphon drains a stored pond — annual output depends on how fast rain refills it (see Watershed). Operating point above is the live estimate."
+		_sens_text = ""
 		return
 
 	# Build a spec for the shared closed form from the live geometry + penstock edits.
@@ -2300,7 +2864,10 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 	# The LIVE supply belongs here too. Without it, dragging the Lab's test flow
 	# changed every physics number but left the estimate, the chart and the
 	# per-size stats frozen — the single loudest "nothing updates" symptom.
-	est_sig += "|%.4f|%.4f" % [prof_sum,
+	# Quantised: under live rain the engine re-stamps the supply by fractions
+	# of a mL/s every tick, and at 4 decimals that reran the annual estimate
+	# (12 Pelton solves) and the curve families at 6 Hz.
+	est_sig += "|%.1f|%.2f" % [prof_sum,
 		float(sim_specs.get("supply_lps", -1.0))]
 	est["gross_head_m"] = gross
 	# design_flow 0 means UNLIMITED for a nozzle kind (the nozzle is the flow
@@ -2346,6 +2913,8 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 		else:
 			_capfac_lbl.text = "n/a (no nameplate)"
 		_annual_lbl.text = "%.0f kWh/yr" % float(ann.get("annual_kwh", 0.0))
+		_refresh_firm_flow(est, supply_prof, ann)
+		_sens_text = _sensitivity_text(est, gross)
 		if supply_prof.size() == 12:
 			var lo := 1e30
 			var hi := -1e30
@@ -2468,8 +3037,8 @@ func _refresh_power_chart(est: Dictionary, gross: float) -> void:
 		# Supply is in the signature even though the size curves exclude it —
 		# the supply curve below depends on it, and dragging the Lab's test flow
 		# has to redraw the chart. Its absence here is why the test slider looked
-		# inert.
-		0.0 if is_nan(supply_lps) else supply_lps,
+		# inert. Snapped to 0.01 L/s so live rain does not redraw every tick.
+		0.0 if is_nan(supply_lps) else snappedf(supply_lps, 0.01),
 	]
 	if sig == _chart_sig:
 		if _chart.has_method("set_marker"):
@@ -2563,6 +3132,489 @@ func _refresh_chart_stats(base: Dictionary, gross: float) -> void:
 	if hi > 0.0 and (hi - lo) < maxf(hi * 0.02, 0.5):
 		txt += "  — pipe size makes no difference here; the source flow is the limit."
 	_chart_stats_lbl.text = txt
+
+
+# ---------------------------------------------------------------------------
+# Stat deck — the operating point as a causal chain (scenes/ui/hydro_stat_deck.gd)
+# ---------------------------------------------------------------------------
+
+const PSI_PER_M := 1.42197      ## water column: 0.433 psi per foot = 1.422 psi per metre
+const BAR_PER_M := 0.0980665    ## ρ·g per metre of water, in bar
+
+
+func _fmt_lps(q: float) -> String:
+	if q >= 100.0:
+		return "%.0f" % q
+	if q >= 10.0:
+		return "%.1f" % q
+	if q >= 0.1:
+		return "%.2f" % q
+	return "%.3f" % q
+
+
+## Watts as [value, unit] for a tile, or joined for prose.
+func _fmt_w_pair(w: float) -> Array:
+	if w >= 10000.0:
+		return ["%.1f" % (w / 1000.0), "kW"]
+	if w >= 1000.0:
+		return ["%.2f" % (w / 1000.0), "kW"]
+	if w >= 100.0:
+		return ["%.0f" % w, "W"]
+	if w >= 10.0:
+		return ["%.1f" % w, "W"]
+	return ["%.2f" % w, "W"]
+
+
+func _fmt_watts(w: float) -> String:
+	var p := _fmt_w_pair(w)
+	return "%s %s" % [p[0], p[1]]
+
+
+func _fmt_delta_w(dw: float) -> String:
+	if absf(dw) < 0.05:
+		return "no change"
+	return "%s%s" % ["+" if dw > 0.0 else "−", _fmt_watts(absf(dw))]
+
+
+## "What moves the needle": the output's response to one step on each lever,
+## from the SAME closed form the annual estimate and the power chart use. Runs
+## inside the estimate's signature gate (five evaluations per design change,
+## never per tick). A lever that reads "no change" IS the finding — at the
+## nameplate, or when the source is the limit, more head buys nothing.
+func _sensitivity_text(est: Dictionary, gross: float) -> String:
+	if gross <= 0.05:
+		return ""
+	var base := est.duplicate(true)
+	base["gross_head_m"] = gross
+	var w0 := HydroSource.power_kw_from_graph_specs(base, 6, []) * 1000.0
+	var parts := PackedStringArray()
+	var s1 := base.duplicate(true)
+	s1["gross_head_m"] = gross + 1.0
+	parts.append("+1 m head → %s" % _fmt_delta_w(
+			HydroSource.power_kw_from_graph_specs(s1, 6, []) * 1000.0 - w0))
+	if _kind_uses_nozzle():
+		var meta := HydroSource.kind_meta(_current_kind())
+		var d0 := float(base.get("nozzle_diameter_mm", float(meta.get("default_nozzle_mm", 10.0))))
+		var s2 := base.duplicate(true)
+		s2["nozzle_diameter_mm"] = d0 + 1.0
+		parts.append("+1 mm jet → %s" % _fmt_delta_w(
+				HydroSource.power_kw_from_graph_specs(s2, 6, []) * 1000.0 - w0))
+	else:
+		var q0 := float(base.get("design_flow_lps", 0.0))
+		if q0 > 0.0:
+			var s2b := base.duplicate(true)
+			s2b["design_flow_lps"] = q0 * 1.25
+			parts.append("+25%% flow → %s" % _fmt_delta_w(
+					HydroSource.power_kw_from_graph_specs(s2b, 6, []) * 1000.0 - w0))
+	if base.has("supply_lps") and float(base.get("supply_lps", -1.0)) >= 0.0:
+		var s3 := base.duplicate(true)
+		s3["supply_lps"] = float(base["supply_lps"]) + 0.5
+		parts.append("+0.5 L/s source → %s" % _fmt_delta_w(
+				HydroSource.power_kw_from_graph_specs(s3, 6, []) * 1000.0 - w0))
+	var cur_d := float(base.get("penstock_diameter_mm", 63.0))
+	var next_id := -1.0
+	for sz: Variant in ConduitKinds.pipe_kit_sizes_in("poly_penstock"):
+		var id_mm := ConduitKinds.inner_diameter_for("poly_penstock",
+				{"pipe_size_in": float(sz)}) * 1000.0
+		if id_mm > cur_d + 0.6 and (next_id < 0.0 or id_mm < next_id):
+			next_id = id_mm
+	if next_id > 0.0:
+		var s4 := base.duplicate(true)
+		s4["penstock_diameter_mm"] = next_id
+		parts.append("next pipe size → %s" % _fmt_delta_w(
+				HydroSource.power_kw_from_graph_specs(s4, 6, []) * 1000.0 - w0))
+	if parts.is_empty():
+		return ""
+	return "What moves the needle:  " + "  ·  ".join(parts)
+
+
+## Pond balance under the test fill: inflow − the siphon's draw, in L/s and
+## in cm/h of surface (prismatic: capacity over the rim−floor span).
+func _refresh_net_readout(level_m: float) -> void:
+	if _net_lbl == null:
+		return
+	if _kind_has_penstock() or _sim_inflow_btn == null:
+		_net_lbl.text = ""
+		return
+	var on := _sim_inflow_btn.button_pressed
+	var fill := float(_sim_inflow_spin.value) if (_sim_inflow_spin != null and on) else 0.0
+	var draw := float(_last_r.get("q_lps", 0.0)) if bool(_last_r.get("primed", false)) else 0.0
+	var net := fill - draw
+	var pond := _pond_context()
+	var floor_m := float(pond.get("floor_m", NAN))
+	var rim_m := float(pond.get("rim_m", NAN))
+	var rate_txt := ""
+	if not is_nan(floor_m) and not is_nan(rim_m) and rim_m > floor_m and _graph_view != null \
+			and _graph_view.has_method("resolve_siphon_pond"):
+		var tank: Dictionary = _graph_view.call("resolve_siphon_pond", _item_id)
+		var cap_l := float((tank.get("specs", {}) as Dictionary).get("capacity_qty", 0.0))
+		if cap_l > 1.0:
+			var cm_per_h := net * 3600.0 / cap_l * (rim_m - floor_m) * 100.0
+			rate_txt = " → surface %+.1f cm/h" % cm_per_h
+	var lvl_now := float(pond.get("level_m", NAN))
+	var full := not is_nan(lvl_now) and not is_nan(rim_m) and lvl_now >= rim_m - 0.05
+	if full and draw <= 0.01:
+		# The reason an inflow "does nothing": there is nowhere for it to go.
+		_net_lbl.text = "Pond: FULL at its max fill level (%.2f m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump." % rim_m
+		_net_lbl.add_theme_color_override("font_color", C_WARN)
+		return
+	if not on:
+		_net_lbl.text = "Pond: the siphon draws %.1f L/s%s. Turn on the test inflow, or fill the pond to the prime level." % [
+				draw, rate_txt] if draw > 0.01 else "Pond: still (nothing flowing)."
+	else:
+		_net_lbl.text = "Pond: inflow %.1f − siphon draw %.1f = net %+.1f L/s%s" % [fill, draw, net, rate_txt]
+		if net < -0.01 and draw > 0.01:
+			_net_lbl.text += " — the fill cannot keep up; the level falls until the siphon breaks."
+	_net_lbl.add_theme_color_override("font_color", C_WARN if (on and net < -0.01 and draw > 0.01) else C_MUTED)
+
+
+## The siphon's levers, through the same reach the readouts use: a lower exit,
+## a fatter draft pipe, a longer dip tube. Gated on a signature (three
+## evaluations, each a 48-step bisection — not per tick).
+func _siphon_sensitivity_text(sim_specs: Dictionary, level_m: float) -> String:
+	if is_nan(level_m) or not bool(_last_r.get("primed", false)):
+		return ""
+	var out_inv := float(sim_specs.get("outlet_invert_m", NAN))
+	if is_nan(out_inv):
+		return ""
+	var sig := "%.2f|%.2f|%.2f|%.1f|%.2f|%s" % [snappedf(level_m, 0.05), out_inv,
+			float(sim_specs.get("dip_tube_length_m", 0.0)), float(sim_specs.get("outlet_diameter_mm", 0.0)),
+			float(sim_specs.get("module_elev_m", 0.0)), str(sim_specs.get("siphon_prime_mode", ""))]
+	if sig == _siphon_sens_sig and not _sens_text.is_empty():
+		return _sens_text
+	_siphon_sens_sig = sig
+	var w0 := float(_last_r.get("power_w", 0.0))
+	var parts := PackedStringArray()
+	var s1 := sim_specs.duplicate(true)
+	s1["outlet_invert_m"] = out_inv - 0.5
+	var r1 := HydroReach.evaluate_specs(level_m, s1)
+	var d1 := float(r1.get("power_w", 0.0)) - w0
+	parts.append("exit 0.5 m lower → %s%s" % [_fmt_delta_w(d1),
+			" (cavitation cap)" if bool(r1.get("cavitating", false)) else ""])
+	var d_mm := float(sim_specs.get("outlet_diameter_mm", 203.0))
+	var next_mm := 254.0 if d_mm < 250.0 else (305.0 if d_mm < 300.0 else d_mm * 1.25)
+	var s2 := sim_specs.duplicate(true)
+	s2["outlet_diameter_mm"] = next_mm
+	parts.append("%.0f mm draft pipe → %s" % [next_mm,
+			_fmt_delta_w(float(HydroReach.evaluate_specs(level_m, s2).get("power_w", 0.0)) - w0)])
+	var pond := _pond_context()
+	var floor_m := float(pond.get("floor_m", NAN))
+	var rim_m := float(pond.get("rim_m", NAN))
+	var cap_l := float(pond.get("stock_l", 0.0))
+	var brk := float(_last_r.get("break_level_m", NAN))
+	if not is_nan(floor_m) and not is_nan(rim_m) and rim_m > floor_m and not is_nan(brk):
+		# Prismatic: half a metre of dip tube = that share of the basin.
+		var capacity_l := 0.0
+		if _graph_view != null and _graph_view.has_method("resolve_siphon_pond"):
+			var tank: Dictionary = _graph_view.call("resolve_siphon_pond", _item_id)
+			capacity_l = float((tank.get("specs", {}) as Dictionary).get("capacity_qty", 0.0))
+		var gain_m := minf(0.5, maxf(brk - floor_m, 0.0))
+		var litres := capacity_l * gain_m / (rim_m - floor_m)
+		if litres > 1.0:
+			parts.append("+0.5 m dip tube → siphons %.0f L more before it breaks" % litres)
+	if parts.is_empty():
+		return ""
+	return "What moves the needle:  " + "  ·  ".join(parts)
+
+
+## Write the deck from `_last_r` — the same operating point the dock rows and
+## the status strip were just written from, in the same refresh.
+func _refresh_stat_deck() -> void:
+	if _deck == null or not _deck.has_method("set_tiles"):
+		return
+	var r := _last_r
+	var kind := _current_kind()
+	var meta := HydroSource.kind_meta(kind)
+	var penstock := _kind_has_penstock()
+	var nozzle := _kind_uses_nozzle()
+	var q := float(r.get("q_lps", 0.0))
+	var gross := maxf(float(r.get("head_m", 0.0)), 0.0)
+	var loss := maxf(float(r.get("head_loss_m", 0.0)), 0.0)
+	var net := float(r.get("net_head_m", NAN))
+	if is_nan(net):
+		net = maxf(gross - loss, 0.0)
+	var supply := float(r.get("q_supply_lps", NAN))
+	var cap := float(r.get("q_capacity_lps", NAN))
+	var power := maxf(float(r.get("power_w", 0.0)), 0.0)
+	var pe := maxf(float(r.get("pe_w", 0.0)), 0.0)
+	var rpm := maxf(float(r.get("rpm", 0.0)), 0.0)
+	var primed := bool(r.get("primed", false))
+	var regime := str(r.get("regime", ""))
+	var limited := bool(r.get("supply_limited", false))
+	var flowing := q > 0.01 and (penstock or primed)
+	var idle := "muted"
+	var band: Array = meta.get("head_band", []) as Array
+	var nameplate := float(_last_sim_specs.get("max_power_w", 0.0))
+	if nameplate <= 0.0:
+		nameplate = maxf(float(meta.get("max_power_w", 0.0)), 0.0)
+	var tiles: Array = []
+
+	# 1. FLOW — what runs through the machine, against what the source gives.
+	var f_sub := ""
+	var f_frac := NAN
+	var f_bar := ""
+	var f_tone := "ok" if flowing else idle
+	if not is_nan(supply):
+		f_sub = "source runs %s L/s" % _fmt_lps(supply)
+		if supply > 1e-6:
+			f_frac = q / supply
+			f_bar = "%.0f%% of source" % (clampf(f_frac, 0.0, 1.0) * 100.0)
+		if limited:
+			f_tone = "warn"
+			f_bar = "all the source gives"
+	elif not is_nan(cap) and cap > 1e-6:
+		f_sub = "pipe can pass %s L/s" % _fmt_lps(cap)
+		f_frac = q / cap
+		f_bar = "%.0f%% of pipe" % (clampf(f_frac, 0.0, 1.0) * 100.0)
+	if regime == "no_supply":
+		f_sub = "the source is dry"
+		f_tone = "bad"
+	tiles.append({"key": "flow", "label": "Flow", "value": _fmt_lps(q), "unit": "L/s",
+		"sub": f_sub, "frac": f_frac, "bar_text": f_bar, "tone": f_tone,
+		"tip": ("Q — the water through the machine. A nozzle passes Q = n·A·v at its head; "
+			+ "the source caps it. Supply-limited means the stream, not the jet, sets Q.")})
+
+	# 2. NET HEAD — the gross drop, less what the pipe takes.
+	var h_tone := "ok" if gross > 0.05 else idle
+	var loss_pct := (loss / gross * 100.0) if gross > 0.05 else 0.0
+	if gross > 0.05 and loss / gross > 0.30:
+		h_tone = "warn"
+	if gross > 0.05 and band.size() == 2 and gross < float(band[0]) * 0.95:
+		h_tone = "warn"
+	var h_sub := "no drop to the turbine"
+	if gross > 0.05:
+		h_sub = "gross %.1f m − %.1f m friction (%.0f%%)" % [gross, loss, loss_pct]
+	if limited:
+		h_sub = "gross %.1f m · %.1f m left unconverted" % [gross,
+				maxf(float(r.get("unused_head_m", 0.0)), 0.0)]
+	tiles.append({"key": "head", "label": "Net head", "value": "%.1f" % net, "unit": "m",
+		"sub": h_sub, "frac": (net / gross) if gross > 0.05 else NAN,
+		"bar_text": ("%.0f%% reaches the jet" % (net / gross * 100.0)) if gross > 0.05 else "",
+		"tone": h_tone,
+		"tip": ("Gross head is the drop from the water surface (or intake) to the turbine. "
+			+ "Friction in the penstock (∝ v², so ∝ Q²) takes its share first; what is left is "
+			+ "the net head the jet is made from. Keep the loss under ~30 %: a fatter pipe or "
+			+ "a shorter run.")})
+
+	# 3. PRESSURE — penstock kinds: static (valve shut) vs the pipe's rating,
+	#    and what remains at the jet after friction.
+	if penstock:
+		var static_psi := gross * PSI_PER_M
+		var jet_psi := net * PSI_PER_M
+		var rating := _last_rating_psi
+		var p_tone := "ok" if gross > 0.05 else idle
+		var p_frac := NAN
+		var p_bar := ""
+		var p_sub := "static %.0f psi (%.1f bar) with the valve shut" % [static_psi, gross * BAR_PER_M]
+		if not is_nan(rating) and rating > 0.0:
+			p_frac = static_psi / rating
+			p_sub = "static %.0f psi · pipe rated %.0f psi" % [static_psi, rating]
+			p_bar = "%.0f%% of rating" % (p_frac * 100.0)
+			if p_frac > 1.0:
+				p_tone = "bad"
+			elif p_frac > 0.8:
+				p_tone = "warn"
+		tiles.append({"key": "pressure", "label": "Pressure", "value": "%.0f" % jet_psi,
+			"unit": "psi at the jet", "sub": p_sub, "frac": p_frac, "bar_text": p_bar,
+			"tone": p_tone,
+			"tip": ("Water-column pressure: 1.42 psi per metre of head (0.433 psi/ft). STATIC is "
+				+ "the shut-valve pressure the pipe must hold — compare it with the SDR rating. "
+				+ "At the jet, after friction, the pressure becomes velocity: v = 0.97·√(2g·h).")})
+
+	# 4. JET — nozzle kinds: the jet the nozzle makes, and whether the source
+	#    can keep it fed.
+	if nozzle:
+		var noz_d := maxf(float(_nozzle_d_spin.value) if _nozzle_d_spin != null
+				else float(meta.get("default_nozzle_mm", 10.0)), 0.5)
+		var noz_n := maxi(int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1, 1)
+		var v_jet := float(r.get("v_jet_ms", NAN))
+		if is_nan(v_jet):
+			v_jet = PeltonPhysics.jet_velocity_ms(net)
+		var demand_lps := PeltonPhysics.nozzle_flow_m3s(maxf(gross - loss, 0.0),
+				noz_d / 1000.0, noz_n) * 1000.0
+		var j_tone := "ok" if flowing else idle
+		var j_frac := NAN
+		var j_bar := ""
+		if demand_lps > 1e-6 and gross > 0.05:
+			j_frac = q / demand_lps
+			j_bar = "jet %.0f%% fed" % (clampf(j_frac, 0.0, 1.0) * 100.0)
+			if limited:
+				j_tone = "warn"
+			elif flowing:
+				j_bar = "jet fully fed"
+		var j_sub := "%d × %.1f mm · wants %s L/s at full head" % [noz_n, noz_d, _fmt_lps(demand_lps)]
+		tiles.append({"key": "jet", "label": "Jet", "value": "%.1f" % v_jet, "unit": "m/s",
+			"sub": j_sub, "frac": j_frac, "bar_text": j_bar, "tone": j_tone,
+			"tip": ("The nozzle turns pressure into a jet (v = 0.97·√(2g·h_net)) and its area "
+				+ "sets how much water the jet carries (Q ∝ d²·√h). A bigger jet wants more "
+				+ "water: if the source cannot supply it, the pressure at the jet collapses and "
+				+ "head is wasted — a smaller jet keeps the full pressure behind the water you have.")})
+
+	# 4b. LEVEL — siphon kinds: where the pond stands between prime and air break.
+	if not penstock:
+		var lvl := float(_pond_context().get("level_m", NAN))
+		var start := float(_start_spin.value) if _start_spin != null else NAN
+		var brk := float(_break_spin.value) if _break_spin != null else NAN
+		var l_frac := NAN
+		if not is_nan(lvl) and not is_nan(start) and not is_nan(brk) and start > brk:
+			l_frac = (lvl - brk) / (start - brk)
+		var l_tone := "ok" if primed else ("bad" if regime == "broken" else idle)
+		var l_bar := "primed" if primed else ("sucking air" if regime == "broken" else "below prime")
+		if regime == "lift_exceeded":
+			l_tone = "bad"
+			l_bar = "lift too high"
+		tiles.append({"key": "level", "label": "Pond level",
+			"value": ("%.2f" % lvl) if not is_nan(lvl) else "—", "unit": "m",
+			"sub": "primes at %.2f · breaks at %.2f (dip mouth)" % [start, brk], "frac": l_frac,
+			"bar_text": l_bar, "tone": l_tone,
+			"tip": ("A siphon runs on the pond's own surface: it starts when the surface reaches "
+				+ "the prime level (the crest, or the dip mouth with a pump) and stops when it "
+				+ "falls to the dip tube's mouth and sucks air. The gross head is the drop from "
+				+ "the surface to the draft exit — the crest's height costs pressure, not head.")})
+		# SUCTION — the runner's outlet against the cavitation limit: the
+		# tile that answers "how low is the exit worth running".
+		var suction := float(r.get("suction_m", 0.0))
+		var s_max := float(r.get("suction_max_m", 0.0))
+		var cav := bool(r.get("cavitating", false))
+		var crest_abs := float(r.get("crest_abs_m", 0.0))
+		var su_tone := idle
+		var su_frac := NAN
+		var su_bar := ""
+		var su_sub := "crest %.1f m above the pond" % float(r.get("lift_m", 0.0))
+		if flowing and s_max > 1e-6:
+			su_frac = suction / s_max
+			su_tone = "bad" if cav else ("warn" if su_frac > 0.85 else "ok")
+			su_bar = ("%.1f m of draft wasted" % float(r.get("draft_excess_m", 0.0))) if cav \
+					else "%.0f%% of the limit" % (su_frac * 100.0)
+			su_sub = "limit %.1f m · crest at %.1f m abs" % [s_max, crest_abs]
+		elif regime == "lift_exceeded":
+			su_tone = "bad"
+			su_sub = "crest %.1f m up · %.1f m abs — air comes out" % [float(r.get("lift_m", 0.0)), crest_abs]
+		tiles.append({"key": "suction", "label": "Suction", "value": "%.1f" % suction, "unit": "m at the runner",
+			"sub": su_sub, "frac": su_frac, "bar_text": su_bar, "tone": su_tone,
+			"tip": ("The draft pipe below the runner pulls its outlet under atmospheric pressure "
+				+ "by the drop less the pipe losses. Atmosphere is only ~10 m of water: once the "
+				+ "outlet reaches vapour pressure (Thoma, σ·h_t) the column separates and any "
+				+ "further exit drop is wasted. The crest side has the same limit the other way — "
+				+ "a crest more than ~7–8 m above the pond cannot hold a siphon.")})
+
+	# 5. SPEED — the runner against runaway.
+	var s_sub := "standing still"
+	var s_frac := NAN
+	var s_bar := ""
+	if nozzle and rpm > 0.5:
+		var runaway := rpm / PeltonPhysics.SPEED_RATIO_OPT
+		s_sub = "buckets at 46%% of the jet · runaway %.0f rpm" % runaway
+		s_frac = PeltonPhysics.SPEED_RATIO_OPT
+		s_bar = "matched load"
+	elif rpm > 0.5:
+		s_sub = "rotor curve at this flow"
+	tiles.append({"key": "speed", "label": "Speed", "value": "%.0f" % rpm, "unit": "rpm",
+		"sub": s_sub, "frac": s_frac, "bar_text": s_bar, "tone": "ok" if rpm > 0.5 else idle,
+		"tip": ("A Pelton runner is most efficient with the buckets moving at ~46 % of the jet "
+			+ "speed (u = 0.46·v). Shed the electrical load and it accelerates toward runaway at "
+			+ "about twice that, making nothing — the close-up's Load slider shows it. "
+			+ "rpm = 60·u / (π·PCD).")})
+
+	# 6. POWER — against the nameplate, or the hydraulic input.
+	var pw := _fmt_w_pair(power)
+	var eta := (power / pe) if pe > 1e-6 else 0.0
+	var p2_frac := NAN
+	var p2_bar := ""
+	var p2_tone := "accent" if flowing and power > 0.5 else idle
+	var p2_sub := "P = η·ρ·g·Q·h_net · η %.0f%% of %s hydraulic" % [eta * 100.0, _fmt_watts(pe)]
+	if pe <= 1e-6:
+		p2_sub = "P = η·ρ·g·Q·h_net"
+	if nameplate > 0.0:
+		p2_frac = power / nameplate
+		p2_bar = "%.0f%% of %.0f W nameplate" % [p2_frac * 100.0, nameplate]
+		if flowing and power >= nameplate * 0.98:
+			p2_tone = "warn"
+			p2_bar = "generator-capped"
+	elif pe > 1e-6:
+		p2_frac = eta
+		p2_bar = "η %.0f%%" % (eta * 100.0)
+	tiles.append({"key": "power", "label": "Power", "value": pw[0], "unit": pw[1],
+		"sub": p2_sub, "frac": p2_frac, "bar_text": p2_bar, "tone": p2_tone,
+		"tip": ("Electrical output: the hydraulic power ρ·g·Q·h_net (water × drop) times the "
+			+ "turbine and generator efficiencies, never above the generator's nameplate. More "
+			+ "net head raises BOTH the flow a nozzle passes and the energy per litre, so a nozzle "
+			+ "kind's power grows as h^1.5.")})
+	_deck.call("set_tiles", tiles)
+
+	# The insight: what limits the output RIGHT NOW, and the lever that moves it.
+	var ins := ""
+	var ins_tone := "muted"
+	if regime == "no_supply":
+		ins = "The source is dry → nothing flows → nothing turns. Raise the test flow, set a base flow on the intake, or wait for rain."
+		ins_tone = "bad"
+	elif not penstock and not primed:
+		var pump := str(_last_sim_specs.get("siphon_prime_mode", "overflow")) == "pump"
+		var lvl_now := float(_pond_context().get("level_m", NAN))
+		if regime == "broken":
+			ins = "Broken: the pond fell to the dip tube's mouth at %.2f m and the siphon sucked air. Extend the dip tube to run lower, or wait for the pond to refill to %.2f m." % [
+					float(r.get("break_level_m", float(_break_spin.value) if _break_spin != null else 0.0)),
+					float(r.get("prime_level_m", float(_start_spin.value) if _start_spin != null else 0.0))]
+			ins_tone = "bad"
+		elif regime == "no_head":
+			ins = "The draft exit is not below the pond — there is no head to drive the siphon. Trace the exit further downhill."
+			ins_tone = "bad"
+		elif pump:
+			ins = "Not primed: the dip tube's mouth is out of the water (pump priming runs as soon as it is a bore under). Extend the tube or let the pond rise."
+		else:
+			var prime_now := float(r.get("prime_level_m", float(_start_spin.value) if _start_spin != null else 0.0))
+			var rim_now := float(_pond_context().get("rim_m", NAN))
+			if not is_nan(rim_now) and prime_now > rim_now - 0.02:
+				ins = "The crest at %.2f m stands ABOVE the pond's rim at %.2f m — the pond would spill before it reached it, so an overflow prime can never happen here. Switch Priming to a vacuum pump (or lower the turbine below the rim)." % [prime_now, rim_now]
+				ins_tone = "bad"
+			else:
+				ins = "Not primed: the pond must rise to the crest at %.2f m%s to spill into the draft pipe — or switch Priming to a vacuum pump and it runs once the dip tube is under water." % [
+						prime_now, ("" if is_nan(lvl_now) else " (it is at %.2f)" % lvl_now)]
+	elif not penstock and regime == "lift_exceeded":
+		ins = "Lift too high: the crest sits %.1f m above the pond and the air there is at %.1f m absolute — the column lets go. Lower the turbine or raise the pond." % [
+				float(r.get("lift_m", 0.0)), float(r.get("crest_abs_m", 0.0))]
+		ins_tone = "bad"
+	elif not penstock and bool(r.get("cavitating", false)):
+		ins = "Suction-limited: the runner's outlet is at vapour pressure. The bottom %.1f m of the draft pipe does nothing — the useful exit is %.1f m below the runner; the rest only adds pipe." % [
+				float(r.get("draft_excess_m", 0.0)), float(r.get("useful_draft_m", 0.0))]
+		ins_tone = "warn"
+	elif penstock and gross <= 0.05:
+		ins = "No head: the turbine sits level with or above its source. Lower the turbine or tap water higher up — every metre of drop is 1.42 psi at the nozzle."
+		ins_tone = "bad"
+	elif penstock and q <= 0.01:
+		ins = "No flow reaches the turbine at this head — check the source and the penstock route."
+	elif limited:
+		var noz_d2 := float(_nozzle_d_spin.value) if _nozzle_d_spin != null else 0.0
+		var noz_n2 := int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1
+		var demand2 := PeltonPhysics.nozzle_flow_m3s(maxf(gross - loss, 0.0),
+				maxf(noz_d2, 0.5) / 1000.0, maxi(noz_n2, 1)) * 1000.0
+		ins = "Source-limited: the source runs %s L/s but the %d × %.1f mm jet could pass %s L/s — only %.1f of %.1f m head turns into jet speed." % [
+				_fmt_lps(q), maxi(noz_n2, 1), noz_d2, _fmt_lps(demand2), net, gross]
+		if _fit_nozzle_mm > 0.0:
+			ins += " A %.1f mm nozzle puts the full head behind the water you have." % _fit_nozzle_mm
+		ins_tone = "warn"
+	elif gross > 0.05 and loss / gross > 0.30:
+		ins = "Pipe-limited: friction takes %.0f%% of the head before the nozzle sees it (loss ∝ Q²). A fatter pipe or a shorter run puts more pressure at the jet." % loss_pct
+		ins_tone = "warn"
+	elif band.size() == 2 and gross > 0.05 and gross < float(band[0]) * 0.95:
+		ins = "%.1f m head is under this turbine's %.0f–%.0f m band — the jet is too slow for the buckets. Find more drop, or pick a low-head machine." % [
+				gross, float(band[0]), float(band[1])]
+		ins_tone = "warn"
+	elif nameplate > 0.0 and flowing and power >= nameplate * 0.98:
+		ins = "Generator-capped at the %.0f W nameplate: the water could give more. A smaller nozzle saves water for the dry months at the same output." % nameplate
+		ins_tone = "ok"
+	elif nozzle:
+		ins = "Nozzle-governed: more head → a faster jet (v ∝ √h) → more flow through the same jet → power ∝ h^1.5. A bigger jet buys flow until the source or the pipe runs out."
+		ins_tone = "ok"
+	elif penstock:
+		ins = "Flow-governed: P = η·ρ·g·Q·h_net — more flow or more net head, linearly. Friction grows with Q², so a fatter pipe pays off fastest at high flow."
+		ins_tone = "ok"
+	else:
+		ins = "Siphoning: %.1f m gross, the runner sees %.1f m after %.1f m of pipe and exit losses. A lower exit adds head until the suction limit (%.1f m) caps it; the pond draws down to the dip mouth." % [
+				gross, float(r.get("turbine_head_m", net)), loss, float(r.get("suction_max_m", 0.0))]
+		ins_tone = "ok"
+	_deck.call("set_insight", ins, ins_tone)
+	_deck.call("set_sensitivity", _sens_text)
 
 
 func _weather_service() -> Node:
@@ -2786,6 +3838,34 @@ func set_state_for_test(q_lps: float, v_jet_ms: float) -> void:
 	_push_closeup_state()
 
 
+## Zero every placement knob (the model's own nozzle), one commit each.
+func _on_reset_nozzle_placement() -> void:
+	_syncing = true
+	if _nozzle_off_spin != null:
+		_nozzle_off_spin.value = 0.0
+	for sb: SpinBox in _nozzle_pose_spins:
+		sb.value = 0.0
+	_syncing = false
+	_commit_float("nozzle_offset_mm", 0.0)
+	for sb: SpinBox in _nozzle_pose_spins:
+		_commit_float(str(sb.get_meta("spec_key", "")), 0.0)
+	_push_nozzle_pose()
+
+
+## Hand the close-up the whole nozzle placement off the spinboxes (mm → m).
+func _push_nozzle_pose() -> void:
+	if _closeup == null or not _closeup.has_method("set_nozzle_pose"):
+		return
+	var pose := {"offset_m": (float(_nozzle_off_spin.value) if _nozzle_off_spin != null else 0.0) / 1000.0}
+	for sb: SpinBox in _nozzle_pose_spins:
+		var key := str(sb.get_meta("spec_key", ""))
+		var ck := str(NOZZLE_POSE_KEYS.get(key, ""))
+		if ck.is_empty():
+			continue
+		pose[ck] = float(sb.value) / 1000.0 if key.ends_with("_mm") else float(sb.value)
+	_closeup.call("set_nozzle_pose", pose)
+
+
 ## Feed the close-up the live operating point. Load comes from the slider, but a
 ## turbine whose DC output is actually being consumed reports its OWN ratio —
 ## the slider is for experimenting, the real graph wins when there is one.
@@ -2794,13 +3874,38 @@ func _push_closeup_state() -> void:
 			or not _closeup.has_method("set_state"):
 		return
 	var meta := HydroSource.kind_meta(_current_kind())
-	var kw := float(_last_r.get("power_kw", 0.0))
-	var nameplate_w := maxf(float(meta.get("max_power_w", 0.0)), 0.0)
+	# The slider decides; its default (100 %) IS what a battery-charging turbine
+	# runs at — the regulator (MPPT or a diversion / dump load, which a
+	# PowerSpout needs) holds the matched point whatever the battery does. The
+	# old "output ÷ nameplate" read a 60 W operating point on a 1.6 kW machine
+	# as a 3 % load and spun the close-up toward runaway the moment the turbine
+	# was wired to the batteries.
 	var load := _load_frac
-	if _graph_dc_load_active() and nameplate_w > 0.0:
-		load = clampf(kw * 1000.0 / nameplate_w, 0.0, 1.0)
 	var op: Dictionary = _test_op if not _test_op.is_empty() else _last_r
+	var siphon_kind := not _kind_has_penstock()
+	var lvl_rel := NAN
+	if siphon_kind:
+		var lvl := float(_pond_context().get("level_m", NAN))
+		var mod_e := float(_module_spin.value) if _module_spin != null else NAN
+		if not is_nan(lvl) and not is_nan(mod_e):
+			lvl_rel = lvl - mod_e
 	_closeup.call("set_state", {
+		# The machine the kind wears — the close-up swaps its model to match.
+		"model_id": str(meta.get("model_id", "powerspout_plt")),
+		# SIPHON mode: the propeller in its pipe, the pond's surface relative
+		# to the turbine, the dip tube and the draft, the flow through them.
+		"kind": "siphon" if siphon_kind else "penstock",
+		"level_rel_m": lvl_rel,
+		"dip_len_m": float(_dip_len_spin.value) if _dip_len_spin != null else 1.0,
+		"dip_d_m": (float(_intake_d_spin.value) if _intake_d_spin != null else 152.0) / 1000.0,
+		"draft_d_m": (float(_outlet_d_spin.value) if _outlet_d_spin != null else 203.0) / 1000.0,
+		"primed": bool(op.get("primed", false)),
+		"regime": str(op.get("regime", "")),
+		"turbine_head_m": float(op.get("turbine_head_m", op.get("net_head_m", 0.0))),
+		"v_draft_ms": float(op.get("v_draft_ms", 0.0)),
+		"suction_m": float(op.get("suction_m", 0.0)),
+		"suction_max_m": float(op.get("suction_max_m", 0.0)),
+		"cavitating": bool(op.get("cavitating", false)),
 		"q_lps": float(op.get("q_lps", 0.0)),
 		"h_net_m": float(op.get("net_head_m", 0.0)),
 		"v_jet_ms": float(op.get("v_jet_ms", 0.0)),
@@ -2816,21 +3921,6 @@ func _push_closeup_state() -> void:
 	})
 
 
-## True when this turbine's DC output actually reaches a consumer, so the real
-## electrical load is meaningful rather than a disconnected machine reading zero.
-func _graph_dc_load_active() -> bool:
-	var m := _model()
-	if m == null or _item_id.is_empty():
-		return false
-	for conn: Dictionary in m.connections:
-		if str(conn.get("source_item_id", "")) != _item_id:
-			continue
-		if str(conn.get("polarity", "")) == "resource":
-			continue
-		return true
-	return false
-
-
 ## Keep the slider tracking the spin, growing its ceiling if the spin is driven
 ## past it (so a 500 L/s canal still leaves the handle somewhere meaningful).
 func _sync_flow_slider_from_spin(v: float) -> void:
@@ -2838,7 +3928,12 @@ func _sync_flow_slider_from_spin(v: float) -> void:
 		return
 	var was := _syncing
 	_syncing = true
-	_sim_inflow_slider.max_value = maxf(FLOW_SLIDER_MAX_LPS, v)
+	var ceiling := FLOW_SLIDER_MAX_LPS
+	if not _kind_has_penstock():
+		# A siphon draws tens of L/s; a 20 L/s ceiling could never out-fill
+		# it and the slider read as inert. Reach past the current draw.
+		ceiling = maxf(200.0, float(_last_r.get("q_lps", 0.0)) * 1.5)
+	_sim_inflow_slider.max_value = maxf(ceiling, v)
 	_sim_inflow_slider.value = clampf(v, 0.0, _sim_inflow_slider.max_value)
 	_syncing = was
 
@@ -3021,7 +4116,10 @@ func _on_preview_stack_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if not _grab_kind.is_empty():
-			_apply_level_drag(_grab_kind, _elev_at_screen_y(mm.position.y))
+			if _grab_kind == "exit":
+				_drag_exit(mm.position)
+			else:
+				_apply_level_drag(_grab_kind, _elev_at_screen_y(mm.position.y))
 			_view_last_mouse = mm.position
 			_preview_stack.accept_event()
 			_redraw_preview()
@@ -3097,21 +4195,38 @@ func _try_lab_spatial_input(event: InputEvent) -> bool:
 ## What the user grabbed on the CT: the thin Prime/Break lines (tight snap), else
 ## anywhere in the pond column drags the WATER level (fill/drain by hand).
 func _pick_level_grab(pos: Vector2) -> String:
+	# The draft exit is a POINT handle (it moves the outlet), picked first.
+	if _exit_px.is_finite() and pos.distance_to(_exit_px) < 11.0:
+		return "exit"
 	var elev := _elev_at_screen_y(pos.y)
 	var scale := _pv_sy * _view_zoom
 	var best := ""
 	var best_px := 8.0
 	var hit_scale := _pv_sy if _pv_linked else scale
-	if _start_spin != null:
-		var d := absf(elev - float(_start_spin.value)) * hit_scale
-		if d < best_px:
-			best_px = d
-			best = "prime"
-	if _break_spin != null:
-		var d2 := absf(elev - float(_break_spin.value)) * hit_scale
-		if d2 < best_px:
-			best_px = d2
-			best = "break"
+	if _kind_has_penstock():
+		if _start_spin != null:
+			var d := absf(elev - float(_start_spin.value)) * hit_scale
+			if d < best_px:
+				best_px = d
+				best = "prime"
+		if _break_spin != null:
+			var d2 := absf(elev - float(_break_spin.value)) * hit_scale
+			if d2 < best_px:
+				best_px = d2
+				best = "break"
+	else:
+		# Siphon: the crest (the turbine itself) and the dip tube's mouth are
+		# the two things to drag; prime / break follow from them.
+		if _module_spin != null:
+			var dc := absf(elev - float(_module_spin.value)) * hit_scale
+			if dc < best_px:
+				best_px = dc
+				best = "crest"
+		if _break_spin != null:
+			var d3 := absf(elev - float(_break_spin.value)) * hit_scale
+			if d3 < best_px:
+				best_px = d3
+				best = "break"
 	if not best.is_empty():
 		return best
 	# Not on a level line — grab the water if the cursor is in the pond's range.
@@ -3129,12 +4244,154 @@ func _apply_level_drag(kind: String, elev: float) -> void:
 		return
 	if kind == "prime" and _start_spin != null:
 		_start_spin.value = elev
-	elif kind == "break" and _break_spin != null:
-		_break_spin.value = elev
+	elif kind == "crest" and _module_spin != null:
+		_module_spin.value = elev
+	elif kind == "break":
+		if _kind_has_penstock():
+			if _break_spin != null:
+				_break_spin.value = elev
+		elif _dip_len_spin != null and _module_spin != null:
+			# Dragging the mouth = extending the dip tube.
+			_dip_len_spin.value = maxf(float(_module_spin.value) - elev, 0.1)
+	elif kind == "exit" and _outlet_inv_spin != null:
+		_outlet_inv_spin.value = elev
 	elif kind == "water" and _graph_view != null \
 			and _graph_view.has_method("lab_set_pond_level"):
 		_graph_view.call("lab_set_pond_level", _item_id, elev)
 		_pond_cache_t = 999.0
+	_phys_acc = 999.0
+
+
+## Prime the siphon now: fill the pond just over the prime level. When the
+## crest stands ABOVE the pond's rim an overflow prime can never happen (the
+## pond would spill first) — the real reason "the level won't rise" on a
+## turbine seated on the bank — so this switches Priming to a vacuum pump,
+## whose prime level is just over the dip mouth, and fills to that.
+func _on_fill_to_prime() -> void:
+	if _graph_view == null or not _graph_view.has_method("lab_set_pond_level"):
+		return
+	var prime := float(_start_spin.value) if _start_spin != null else NAN
+	if is_nan(prime):
+		return
+	var pond := _pond_context()
+	var rim := float(pond.get("rim_m", NAN))
+	# A crest a little above the rim: dam the pond (raise its max fill level)
+	# rather than switch to a pump — the overflow prime the player asked for.
+	if not is_nan(rim) and prime + 0.06 > rim - 0.02 and prime - rim <= 1.0 \
+			and _graph_view.has_method("raise_pond_max_level_for_siphon"):
+		if bool(_graph_view.call("raise_pond_max_level_for_siphon", _item_id, prime + 0.12)):
+			_pond_cache_t = 999.0
+			pond = _pond_context()
+			rim = float(pond.get("rim_m", NAN))
+			if _graph_view.has_method("_show_toast"):
+				_graph_view.call("_show_toast", "Raised the pond's max fill level to %.2f m (a dam above the basin rim) so it can reach the crest" % (prime + 0.12))
+	if not is_nan(rim) and prime + 0.06 > rim - 0.02 and _prime_opt != null 			and str(_prime_opt.get_item_metadata(_prime_opt.selected)) != "pump":
+		_syncing = true
+		_prime_opt.select(1)
+		_syncing = false
+		_commit_string("siphon_prime_mode", "pump")
+		_refresh_physics()
+		prime = float(_start_spin.value) if _start_spin != null else prime
+		if _graph_view.has_method("_show_toast"):
+			_graph_view.call("_show_toast", "The crest is above the pond's rim — switched to vacuum-pump priming")
+	# Even a pumped siphon needs its mouth a bore UNDER the surface. If the
+	# dip tube does not reach that deep into a full pond, extend it: the mouth
+	# goes to half a metre under the rim (the pond can hold no more).
+	if not is_nan(rim) and prime + 0.06 > rim - 0.02 and _dip_len_spin != null and _module_spin != null:
+		var want_mouth := rim - 0.6
+		var need_len := float(_module_spin.value) - want_mouth
+		if need_len > float(_dip_len_spin.value) + 1e-3:
+			_dip_len_spin.value = clampf(need_len, 0.1, 30.0)
+			_refresh_physics()
+			prime = float(_start_spin.value) if _start_spin != null else prime
+			if _graph_view.has_method("_show_toast"):
+				_graph_view.call("_show_toast", "Dip tube extended to %.2f m so its mouth reaches the water" % float(_dip_len_spin.value))
+	_graph_view.call("lab_set_pond_level", _item_id, prime + 0.06)
+	_pond_cache_t = 999.0
+	_phys_acc = 999.0
+
+
+## The outlet node wired to this turbine's water out, if any.
+func _outlet_sink() -> Dictionary:
+	if _graph_view == null or _item_id.is_empty():
+		return {}
+	var rf: Variant = _graph_view.get("_resource_flow")
+	if rf == null or not (rf as Object).has_method("_resolve_siphon_outlet_tank"):
+		return {}
+	return rf.call("_resolve_siphon_outlet_tank", _current_item())
+
+
+## Along (m, pond-relative) under a section x pixel — the x inverse of
+## _pv_to_screen_centered.
+func _along_at_screen_x(x: float) -> float:
+	var cx := _pv_origin.x + _pv_size.x * 0.5
+	if _pv_linked:
+		return _pv_along_mid + (x - cx) / maxf(_pv_sx, 1e-6)
+	return _pv_along_mid - _view_pan_m.x + (x - cx) / maxf(_pv_sx * _view_zoom, 1e-6)
+
+
+## Drag the draft exit on the cut: x walks it along the slice (down the hill),
+## y sets its height, never above the ground there — a culvert daylights at
+## or under the surface. Moves the outlet NODE (and the culvert's far end).
+func _drag_exit(pos: Vector2) -> void:
+	if _graph_view == null or not _graph_view.has_method("move_siphon_outlet"):
+		return
+	var along_rel := _along_at_screen_x(pos.x)
+	var elev := _elev_at_screen_y(pos.y)
+	var ground := _dem_elev_at(along_rel)
+	if not is_nan(ground):
+		elev = minf(elev, ground - 0.25)
+	var heading := float(_elev_section_params().get("heading", 0.0))
+	var cross := 0.0
+	var turbine := _current_item()
+	if GraphSiteLayout.has_site_coords(turbine):
+		cross = GraphSiteLayout.project_onto_section(GraphSiteLayout.site_xz(turbine), heading).y
+	var site := GraphSiteLayout.section_to_site(along_rel + _pond_along_m(), cross, heading)
+	_graph_view.call("move_siphon_outlet", _item_id, site, elev)
+	_syncing = true
+	if _outlet_inv_spin != null:
+		_outlet_inv_spin.value = elev
+	_syncing = false
+	_invalidate_slice_cache()
+	_phys_acc = 999.0
+
+
+## Write a hand-set draft exit through to the outlet node and the culvert's
+## far end, so the 3D pipe and the Elevation CT move with the spin.
+func _push_outlet_invert(v: float) -> void:
+	var m := _model()
+	if m == null or _graph_view == null or _item_id.is_empty():
+		return
+	var rf: Variant = _graph_view.get("_resource_flow")
+	if rf == null or not (rf as Object).has_method("_resolve_siphon_outlet_tank"):
+		return
+	var sink: Dictionary = rf.call("_resolve_siphon_outlet_tank", _current_item())
+	if sink.is_empty():
+		return
+	var sid := str(sink.get("id", ""))
+	if absf(float(sink.get("elevation_m", NAN)) - v) > 1e-3:
+		m.update_item(sid, {"elevation_m": v})
+	for conn: Dictionary in m.connections:
+		if str(conn.get("source_item_id", "")) == _item_id \
+				and str(conn.get("target_item_id", "")) == sid \
+				and str(conn.get("conduit_type", "")) == "culvert_pipe":
+			if absf(float(conn.get("invert_out_m", NAN)) - v) > 1e-3:
+				m.update_connection(str(conn.get("id", "")), {"invert_out_m": v})
+	_invalidate_slice_cache()
+
+
+## Re-route the draft pipe downhill: `extra_drop_m` more than it has now
+## (0 = the stock 9 m from the turbine).
+func _on_retrace_exit(extra_drop_m: float) -> void:
+	if _graph_view == null or not _graph_view.has_method("retrace_siphon_outlet"):
+		return
+	var target := 0.0
+	if extra_drop_m > 0.0:
+		var mod_e := float(_module_spin.value) if _module_spin != null else 0.0
+		var cur := float(_outlet_inv_spin.value) if _outlet_inv_spin != null else mod_e - 9.0
+		target = maxf(mod_e - cur, 0.0) + extra_drop_m
+	_graph_view.call("retrace_siphon_outlet", _item_id, target)
+	_load_from_model()
 	_phys_acc = 999.0
 
 
@@ -3220,8 +4477,10 @@ func _draw_preview() -> void:
 		var metrics := _lab_view_metrics()
 		along_mid = float(metrics.get("along_m_rel", along_mid))
 		_pv_elev_mid = float(metrics.get("elev_m", (lo + hi) * 0.5))
-		var ortho_w := maxf(float(metrics.get("ortho_w_m", a1 - a0)), 1.0)
-		var ortho_h := maxf(float(metrics.get("ortho_h_m", hi - lo)), 1.0)
+		# The camera's own floor, not 1 m: below a metre of frame the overlay
+		# used a different scale than the CT it is drawn over, and drifted.
+		var ortho_w := maxf(float(metrics.get("ortho_w_m", a1 - a0)), GraphSiteLayout.LAB_MIN_ORTHO_H_M)
+		var ortho_h := maxf(float(metrics.get("ortho_h_m", hi - lo)), GraphSiteLayout.LAB_MIN_ORTHO_H_M)
 		_pv_sx = size.x / ortho_w
 		_pv_sy = size.y / ortho_h
 		_pv_y_min = _pv_elev_mid - ortho_h * 0.5
@@ -3234,6 +4493,7 @@ func _draw_preview() -> void:
 		var along_span := maxf(a1 - a0, 1.0)
 		_pv_sx = size.x / along_span
 		_pv_sy = size.y / span
+	_pv_along_mid = along_mid
 
 	# Project DEM once — shared by terrain fill + bathymetry-clipped pond.
 	var ground := PackedVector2Array()
@@ -3308,8 +4568,10 @@ func _draw_preview() -> void:
 						origin, size)
 		else:
 			var in_d_m := float(_intake_d_spin.value) * 0.001 if _intake_d_spin != null else 0.2
-			_draw_turbine_module(mx, mod_base, mod_top_elev, intake_elev,
-					half_w - 0.3, along_mid, q_lps, primed, in_d_m, out_d_m, water_top)
+			# The dip tube hangs from the crest (the turbine) to its mouth (the
+			# break level) just inside the pond's edge.
+			_draw_turbine_module(mx, mod_base, mod_top_elev, break_m,
+					half_w - 0.3, along_mid, q_lps, primed, in_d_m, out_d_m, water_top, module_m)
 			var c0 := _pv_to_screen_centered(mx, mod_base - 0.35, along_mid)
 			var c1_elev := (module_m - 8.0) if is_nan(out_inv) else out_inv
 			var c1 := _pv_to_screen_centered(a1 - 0.5, c1_elev, along_mid)
@@ -3329,6 +4591,10 @@ func _draw_preview() -> void:
 
 	_draw_routed_penstock(along_mid, origin, size, q_lps, flowing)
 	_draw_penstock_gizmo(mx, module_m, along_mid, origin, size)
+	_exit_px = Vector2.INF
+	_crest_px = Vector2.INF
+	if not _kind_has_penstock():
+		_draw_siphon_gauges(mx, module_m, break_m, out_inv, a1, along_mid, origin, size)
 
 	# The source label stays painted (it names what you are looking at, in place);
 	# the numbers moved to the status strip below the section, where they have
@@ -3340,12 +4606,122 @@ func _draw_preview() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_MUTED)
 
 
+## The siphon's two pressure limits, drawn ON the cut: the crest (lift + the
+## absolute pressure there) and a suction gauge beside the draft pipe from the
+## runner down to the exit, with the cavitation limit ticked — the number the
+## Lab exists to make visible. Also the two drag handles the section offers:
+## the crest (moves the turbine) and the draft exit (moves the outlet).
+func _draw_siphon_gauges(mx: float, module_m: float, break_m: float, out_inv: float,
+		a1: float, along_mid: float, origin: Vector2, size: Vector2) -> void:
+	var fnt := ThemeDB.fallback_font
+	var r := _last_r
+	var flowing := bool(r.get("primed", false)) and float(r.get("q_lps", 0.0)) > 0.01
+	var regime := str(r.get("regime", ""))
+	var lo_y := origin.y + 14.0
+	var hi_y := origin.y + size.y - 10.0
+	# Crest handle + lift readout at the turbine.
+	var crest := _pv_to_screen_centered(mx, module_m, along_mid)
+	if crest.x > origin.x - 40.0 and crest.x < origin.x + size.x + 40.0:
+		var cy := clampf(crest.y, lo_y, hi_y)
+		_crest_px = Vector2(crest.x, cy)
+		var cc := Color(1.0, 0.85, 0.35, 0.95) if regime != "lift_exceeded" else Color(1.0, 0.45, 0.4, 1.0)
+		_preview.draw_circle(_crest_px, 5.0, cc)
+		_preview.draw_arc(_crest_px, 8.0, 0.0, TAU, 20, Color(cc.r, cc.g, cc.b, 0.45), 1.2)
+		var lift := float(r.get("lift_m", maxf(module_m - float(_pond_context().get("level_m", module_m)), 0.0)))
+		var ctxt := "crest · lift %.1f m" % lift
+		if flowing or regime == "lift_exceeded":
+			ctxt += " · %.1f m abs" % float(r.get("crest_abs_m", 0.0))
+		# Above-left of the handle; the suction gauge's text goes below-right.
+		var cw := fnt.get_string_size(ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		var cpos := _crest_px + Vector2(-cw - 10.0, -8.0)
+		cpos.x = maxf(cpos.x, origin.x + 4.0)
+		_preview.draw_string(fnt, cpos, ctxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, cc)
+	# Dip mouth label.
+	var mouth := _pv_to_screen_centered(mx, break_m, along_mid)
+	if mouth.y > lo_y and mouth.y < hi_y:
+		var mw := fnt.get_string_size("dip mouth · break", HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+		_preview.draw_string(fnt, mouth + Vector2(-mw - 10.0, 4.0), "dip mouth · break",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.55, 0.45, 0.9))
+	if is_nan(out_inv):
+		return
+	# Draft exit handle: where the OUTLET NODE really stands on the section
+	# (its site projected onto the cut), not a fixed spot at the frame's edge.
+	# Drag it sideways to walk the exit down the hill, up/down to set its
+	# height (never above the ground there).
+	var exit_along := a1 - 0.5
+	var exit_elev := out_inv
+	var sink := _outlet_sink()
+	if not sink.is_empty() and GraphSiteLayout.has_site_coords(sink):
+		var heading := float(_elev_section_params().get("heading", 0.0))
+		exit_along = GraphSiteLayout.project_onto_section(GraphSiteLayout.site_xz(sink), heading).x - _pond_along_m()
+		var se := float(sink.get("elevation_m", NAN))
+		if not is_nan(se):
+			exit_elev = se
+	var ex_raw := _pv_to_screen_centered(exit_along, exit_elev, along_mid)
+	# A 2D guide of the draft run, module → exit, so the pipe reads even where
+	# the 3D conduit is hidden or off the slice.
+	var run_from := _pv_to_screen_centered(mx, module_m - 0.3, along_mid)
+	_preview.draw_line(run_from, ex_raw, Color(0.85, 0.65, 0.25, 0.55), 2.0, true)
+	var ex := ex_raw
+	ex.x = clampf(ex.x, origin.x + 30.0, origin.x + size.x - 30.0)
+	var ex_clamped := ex.y > hi_y or ex.y < lo_y or absf(ex_raw.x - ex.x) > 0.5
+	ex.y = clampf(ex.y, lo_y, hi_y)
+	_exit_px = ex
+	var ec := Color(0.85, 0.65, 0.25, 0.95)
+	var dia := PackedVector2Array([ex + Vector2(0, -7), ex + Vector2(7, 0), ex + Vector2(0, 7), ex + Vector2(-7, 0)])
+	_preview.draw_colored_polygon(dia, ec)
+	var etxt := "draft exit %.1f m · %.0f m out%s" % [exit_elev, absf(exit_along - mx), " (off frame)" if ex_clamped else ""]
+	var ew := fnt.get_string_size(etxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+	_preview.draw_string(fnt, ex + Vector2(-ew * 0.5, 20.0), etxt,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, ec)
+	# Suction gauge: a bar from the runner down to the exit, filled to the
+	# suction the draft demands, with the cavitation limit ticked.
+	if not flowing:
+		return
+	var suction := float(r.get("suction_m", 0.0))
+	var s_max := float(r.get("suction_max_m", 0.0))
+	var useful := float(r.get("useful_draft_m", module_m - out_inv))
+	var cav := bool(r.get("cavitating", false))
+	var gx := clampf(crest.x + 26.0, origin.x + 12.0, origin.x + size.x - 60.0)
+	var top := clampf(crest.y, lo_y, hi_y)
+	var bot := clampf(_pv_to_screen_centered(mx, out_inv, along_mid).y, lo_y, hi_y)
+	if bot - top < 16.0:
+		return
+	_preview.draw_line(Vector2(gx, top), Vector2(gx, bot), Color(0.05, 0.08, 0.13, 0.85), 7.0)
+	var frac := clampf(suction / maxf(s_max, 1e-6), 0.0, 1.0)
+	var col := Color(0.94, 0.27, 0.27, 0.95) if cav else (Color(0.96, 0.62, 0.04, 0.95) if frac > 0.85 else Color(0.15, 0.9, 0.47, 0.95))
+	var draft_px := bot - top
+	var fill_px := draft_px * clampf(suction / maxf(module_m - out_inv, 1e-6), 0.0, 1.0)
+	_preview.draw_line(Vector2(gx, top), Vector2(gx, top + fill_px), col, 5.0)
+	# The limit tick: where the runner's outlet reaches vapour pressure.
+	var lim := _pv_to_screen_centered(mx, module_m - useful, along_mid).y
+	if lim > top and lim < bot:
+		_preview.draw_line(Vector2(gx - 7.0, lim), Vector2(gx + 7.0, lim), Color(1.0, 0.95, 0.85, 0.95), 2.0)
+		_preview.draw_string(fnt, Vector2(gx + 10.0, lim + 4.0), "suction limit",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1.0, 0.95, 0.85, 0.9))
+		if cav:
+			# Hatch the wasted part of the draft.
+			var yy := lim + 6.0
+			while yy < bot:
+				_preview.draw_line(Vector2(gx - 5.0, yy), Vector2(gx + 5.0, yy + 4.0), Color(0.94, 0.27, 0.27, 0.6), 1.0)
+				yy += 8.0
+	# Text at the BOTTOM of the gauge, clear of the crest label above it and
+	# of the limit tick's own label when the draft is short.
+	var ty := minf(bot + 4.0, hi_y)
+	if lim > top and lim < bot and absf(ty - (lim + 4.0)) < 14.0:
+		ty = minf(lim + 18.0, hi_y)
+	_preview.draw_string(fnt, Vector2(gx + 10.0, ty),
+			"suction %.1f / %.1f m%s" % [suction, s_max, " · CAVITATING" if cav else ""],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+
 ## True when `conn` is a contour-routed conduit on THIS turbine.
 func _is_our_contour_conn(conn: Dictionary) -> bool:
 	if conn.is_empty():
 		return false
-	if str(conn.get("source_item_id", "")) != _item_id \
-			and str(conn.get("target_item_id", "")) != _item_id:
+	# A penstock FEEDS the turbine: only a run ending at it counts (a contour
+	# run leaving it — a routed tailrace — is not its penstock).
+	if str(conn.get("target_item_id", "")) != _item_id:
 		return false
 	var tid := ConduitKinds.derive_type_for_connection(conn)
 	var rm := ConduitKinds.normalize_route_mode(
@@ -3530,7 +4906,9 @@ const _C_WATER_FILL := Color(0.26, 0.55, 0.86, 0.62)
 ## (min 3 px so a thin penstock is still legible), averaging the anisotropic
 ## along/elevation scales.
 func _dia_px(dia_m: float) -> float:
-	return maxf(dia_m * (_pv_sx + _pv_sy) * 0.5 * _view_zoom, 3.0)
+	# Linked to the CT, _pv_sx/_pv_sy already include the zoom (pipes drew
+	# zoom× too thick); the standalone section still applies it.
+	return maxf(dia_m * (_pv_sx + _pv_sy) * 0.5 * (1.0 if _pv_linked else _view_zoom), 3.0)
 
 
 ## Falling runoff streaks onto the uphill bank of the pond, animated downward with
@@ -3597,21 +4975,35 @@ func _draw_pipe_run(a: Vector2, b: Vector2, dia_m: float, water: bool) -> void:
 func _draw_turbine_module(mx: float, base_elev: float, top_elev: float,
 		intake_elev: float, intake_from_along: float, along_mid: float,
 		q_lps: float, primed: bool, in_d_m: float, out_d_m: float,
-		water_top: float) -> void:
+		water_top: float, crest_elev: float = NAN) -> void:
 	var flowing := primed and q_lps > 0.01
-	var half := maxf(_dia_px(out_d_m) * 0.5 / maxf(_pv_sx * _view_zoom, 1e-3), 0.32)
+	var half := maxf(_dia_px(out_d_m) * 0.5 / maxf(_pv_sx * (1.0 if _pv_linked else _view_zoom), 1e-3), 0.32)
 	var top_l := _pv_to_screen_centered(mx - half, top_elev, along_mid)
 	var top_r := _pv_to_screen_centered(mx + half, top_elev, along_mid)
 	var bot_l := _pv_to_screen_centered(mx - half, base_elev, along_mid)
 	var bot_r := _pv_to_screen_centered(mx + half, base_elev, along_mid)
 
-	# Intake: horizontal pipe run from the pond side into the housing wall, low,
-	# drawn at the scaled intake bore with water inside when flowing.
-	var in_a := _pv_to_screen_centered(intake_from_along, intake_elev, along_mid)
-	var in_b := _pv_to_screen_centered(mx - half * 0.4, intake_elev, along_mid)
-	_draw_pipe_run(in_a, in_b, in_d_m, flowing)
-	if flowing:
-		_draw_flow_dashes(PackedVector2Array([in_a, in_b]), q_lps)
+	# The dip tube: hangs from the crest (the turbine inlet) straight down into
+	# the pond to its mouth at `intake_elev` (the break level), then a short
+	# run over the bank into the housing. With no crest given (legacy callers)
+	# it is the old low side-intake.
+	if is_nan(crest_elev):
+		var in_a := _pv_to_screen_centered(intake_from_along, intake_elev, along_mid)
+		var in_b := _pv_to_screen_centered(mx - half * 0.4, intake_elev, along_mid)
+		_draw_pipe_run(in_a, in_b, in_d_m, flowing)
+		if flowing:
+			_draw_flow_dashes(PackedVector2Array([in_a, in_b]), q_lps)
+	else:
+		var mouth := _pv_to_screen_centered(intake_from_along, intake_elev, along_mid)
+		var knee := _pv_to_screen_centered(intake_from_along, crest_elev, along_mid)
+		var inlet := _pv_to_screen_centered(mx - half * 0.4, crest_elev, along_mid)
+		_draw_pipe_run(mouth, knee, in_d_m, flowing)
+		_draw_pipe_run(knee, inlet, in_d_m, flowing)
+		# The open mouth: a bell at the bottom of the tube.
+		var bell := _dia_px(in_d_m) * 0.6
+		_preview.draw_arc(mouth, bell, 0.0, PI, 10, _C_PIPE_WALL_DK, 2.0, true)
+		if flowing:
+			_draw_flow_dashes(PackedVector2Array([mouth, knee, inlet]), q_lps)
 
 	# Housing body (vertical pipe): light casing fill + dark outline, rounded cap.
 	var body := PackedVector2Array([top_l, top_r, bot_r, bot_l])

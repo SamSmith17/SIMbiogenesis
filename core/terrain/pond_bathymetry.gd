@@ -71,6 +71,58 @@ static func level_for_volume_l(poly: PackedVector2Array, height_at: Callable,
 	return (lo + hi) * 0.5
 
 
+## --- Stage–storage curves ---------------------------------------------------
+## A curve is [[stock_l, level_m], ...] ascending in both (TerrainLoader.
+## pond_stage_curve builds one off the basin). These three are the ONE
+## conversion the flow engine, the siphon reach and the 3D water share.
+
+## Level (m) at `stock_l`. Clamped to the curve's ends; NAN if malformed.
+static func stage_level_for_stock(curve: Array, stock_l: float) -> float:
+	return _stage_interp(curve, stock_l, 0, 1)
+
+
+## Stock (L) at `level_m`. Clamped to the curve's ends; NAN if malformed.
+static func stage_stock_for_level(curve: Array, level_m: float) -> float:
+	return _stage_interp(curve, level_m, 1, 0)
+
+
+## Open water area (m²) at `level_m`: dV/dh between the bracketing rows.
+static func stage_area_at_level(curve: Array, level_m: float) -> float:
+	if curve.size() < 2:
+		return NAN
+	for i in range(1, curve.size()):
+		var a: Variant = curve[i - 1]
+		var b: Variant = curve[i]
+		if not (a is Array) or not (b is Array) or (a as Array).size() < 2 or (b as Array).size() < 2:
+			return NAN
+		var lb := float((b as Array)[1])
+		if level_m <= lb or i == curve.size() - 1:
+			var dh := maxf(lb - float((a as Array)[1]), 1e-4)
+			return maxf(float((b as Array)[0]) - float((a as Array)[0]), 0.0) / 1000.0 / dh
+	return NAN
+
+
+static func _stage_interp(curve: Array, x: float, xi: int, yi: int) -> float:
+	if curve.size() < 2:
+		return NAN
+	var prev: Variant = curve[0]
+	if not (prev is Array) or (prev as Array).size() < 2:
+		return NAN
+	if x <= float((prev as Array)[xi]):
+		return float((prev as Array)[yi])
+	for i in range(1, curve.size()):
+		var row: Variant = curve[i]
+		if not (row is Array) or (row as Array).size() < 2:
+			return NAN
+		var x1 := float((row as Array)[xi])
+		if x <= x1:
+			var x0 := float((prev as Array)[xi])
+			var t := 0.0 if x1 - x0 <= 1e-9 else (x - x0) / (x1 - x0)
+			return lerpf(float((prev as Array)[yi]), float((row as Array)[yi]), clampf(t, 0.0, 1.0))
+		prev = row
+	return float((prev as Array)[yi])
+
+
 ## Suggested sample cell for a footprint area (finer on small selections).
 static func suggested_cell_m(area_m2: float) -> float:
 	if area_m2 < 500.0:
