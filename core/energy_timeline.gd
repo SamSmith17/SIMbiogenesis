@@ -429,6 +429,24 @@ func _fill_backward_to(target_g: int) -> void:
 	_load = pre_load + _load
 
 
+## Drop every sample after the step that holds `abs_hours` (that step and the
+## history before it stay). The cache ahead of the playhead exists only after a
+## backward scrub; it was integrated with the inputs of THAT pass, so once the
+## live inputs differ (a load switched on, a turbine stopped) it predicts a
+## battery that is no longer true. Always keeps at least one sample.
+func truncate_after(abs_hours: float) -> void:
+	if is_empty():
+		return
+	var g := maxi(_step_of(abs_hours), first_step())
+	var keep := g - _base_step + 1
+	if keep >= _soc.size():
+		return
+	_soc.resize(keep)
+	_solar.resize(keep)
+	_aux.resize(keep)
+	_load.resize(keep)
+
+
 func _trim_if_needed() -> void:
 	var over := _soc.size() - MAX_SAMPLES
 	if over <= 0:

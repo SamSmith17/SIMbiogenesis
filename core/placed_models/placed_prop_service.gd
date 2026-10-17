@@ -20,6 +20,8 @@ static var _ghost_node: Node3D = null
 static var _ghost_model_id := ""
 static var _ghost_valid := false
 static var _ghost_ground_y := 0.0
+static var _ghost_yaw_deg := 0.0
+static var _ghost_guides: MeshInstance3D = null
 
 
 static func is_placement_active() -> bool:
@@ -254,6 +256,17 @@ static func update_placement_aim(main: Node, camera: Camera3D) -> void:
 		_ghost_node.visible = false
 		return
 	var pos: Vector3 = hit["position"] as Vector3
+	# Solar racks snap into rows with the racks around them (PvGridSnap).
+	if _ghost_model_id == PvArrayBuilder.MODEL_ID:
+		var spec: Dictionary = (_placement_prep.get("record_extra", {}) as Dictionary).get("pv_array_spec", {})
+		var res := pv_snap(main, spec, pos.x, pos.z, _ghost_yaw_deg, "", _placement_graph_key(main))
+		if bool(res.get("snapped", false)):
+			pos.x = float(res["x"])
+			pos.z = float(res["z"])
+			pos.y = TerrainSurfaceQuery.ground_height_at(main, pos.x, pos.z)
+			_ghost_yaw_deg = float(res["yaw"])
+		_ghost_node.rotation.y = deg_to_rad(_ghost_yaw_deg)
+		_ghost_guides = draw_snap_guides(_ghost_guides, _ghost_node, main, res)
 	# Single source of truth for footing (Phase 4): rest the ghost foot on the
 	# ray-hit Y directly — no second ground_height_at query that could disagree.
 	var foot_y := ModelCatalog.foot_local_y(_ghost_model_id)
@@ -275,26 +288,52 @@ static func confirm_placement() -> bool:
 	var main := _placement_main
 	var model_id := _ghost_model_id
 	var gpos := _ghost_node.global_position
-	var layer := _layer_for_main(main)
-	if layer == null:
-		_clear_placement()
-		return false
 	# Commit exactly one record at the ghost's resting spot, grounded on the ray-hit
 	# Y, then spawn just that one real (colliding) prop — no full scene rebuild.
-	var prop_id := layer.add_free_prop(model_id, gpos.x, NAN, gpos.z, 0.0, 0.0, 0.0, 1.0, _ghost_ground_y)
+	var place_yaw := _ghost_yaw_deg if model_id == PvArrayBuilder.MODEL_ID else 0.0
+	var prop_id := _commit_prepped(main, model_id, _placement_prep.duplicate(true),
+			gpos.x, gpos.z, _ghost_ground_y, place_yaw, true)
+	return not prop_id.is_empty()
+
+
+## The ghost's commit without a ghost: one record at world (x, z) on the
+## ground, with the same `prep` (record extras, graph link, hooks)
+## `begin_placement` takes. The graph's lens "Place it here" goes through this,
+## so a node placed from the Globe binds exactly as one placed by hand.
+## Returns the prop id ("" when it could not be placed).
+static func place_prepped_at(main: Node, model_id: String, prep: Dictionary,
+		x: float, z: float, yaw_deg: float = 0.0) -> String:
+	if main == null or model_id.is_empty():
+		return ""
+	var gy := TerrainSurfaceQuery.ground_height_at(main, x, z)
+	return _commit_prepped(main, model_id, prep.duplicate(true), x, z, gy, yaw_deg, false)
+
+
+## Shared commit of `confirm_placement` and `place_prepped_at`. `from_ghost`
+## clears the placement state before the real node spawns (see below).
+static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
+		x: float, z: float, ground_y: float, yaw_deg: float, from_ghost: bool) -> String:
+	var layer := _layer_for_main(main)
+	if layer == null:
+		if from_ghost:
+			_clear_placement()
+		return ""
+	var prop_id := layer.add_free_prop(model_id, x, NAN, z, yaw_deg, 0.0, 0.0, 1.0, ground_y)
 	if prop_id.is_empty():
-		_clear_placement()
-		return false
-	_placement_prop_id = prop_id
+		if from_ghost:
+			_clear_placement()
+		return ""
+	if from_ghost:
+		_placement_prop_id = prop_id
 	# Merge any placement-time record extras (e.g. VAWT spin binding: kind /
 	# turbine_node / wind_specs) BEFORE the prop node is built so the runtime can
 	# attach the spin controller as it spawns.
-	var record_extra := _placement_prep.get("record_extra", {}) as Dictionary
+	var record_extra := prep.get("record_extra", {}) as Dictionary
 	if not record_extra.is_empty():
 		layer.update_prop(prop_id, record_extra.duplicate(true))
 	# Create + bind the 2D graph node for a linked generator (VAWT), stamping the
 	# resulting item id back onto the record so save/reload keeps the link.
-	var graph_link := _placement_prep.get("graph_link", {}) as Dictionary
+	var graph_link := prep.get("graph_link", {}) as Dictionary
 	if not graph_link.is_empty():
 		# Stamp XY footprint onto the graph specs from mesh metrics × scale.
 		var gl_specs: Dictionary = (graph_link.get("specs", {}) as Dictionary).duplicate(true)
@@ -312,15 +351,16 @@ static func confirm_placement() -> bool:
 	var rec := layer.find_by_id(prop_id)
 	var parent := _props_parent(main)
 	var gy_fn := TerrainSurfaceQuery.ground_y_callable(main)
-	var ibc := _placement_prep.get("ibc", {}) as Dictionary
-	var seed_prep := _placement_prep.duplicate(true)
+	var ibc := prep.get("ibc", {}) as Dictionary
+	var seed_prep := prep
 	# Clear the placement state BEFORE spawning the real node. _build_prop() checks
 	# is_placement_active()/placement_prop_id() to keep an IN-FLIGHT ghost's real
 	# record non-colliding, but by this point the placement is already committed —
 	# leaving the flags set here made the just-placed prop spawn with collision
 	# (and crosshair focus, which requires a physics hit) disabled until some
 	# unrelated later rebuild happened to reconstruct it.
-	_clear_placement()
+	if from_ghost:
+		_clear_placement()
 	var prop := PlacedPropRuntime.add_one(parent, rec, gy_fn)
 	if prop != null and not ibc.is_empty() and main.get_tree() != null:
 		BUNDLE_IMPORTER_SCRIPT.attach_ibc_to_imported_canopy(
@@ -347,7 +387,9 @@ static func confirm_placement() -> bool:
 	var on_committed: Callable = seed_prep.get("on_committed", Callable())
 	if on_committed.is_valid():
 		on_committed.call_deferred(prop_id)
-	return true
+	if not from_ghost:
+		_notify_mp_props_edited()
+	return prop_id
 
 
 ## A bed IS a sleeping spot: placing one tags it as a capacity-1 sleep space
@@ -770,6 +812,10 @@ static func _player_camera(main: Node) -> Camera3D:
 
 static func _clear_placement() -> void:
 	_destroy_ghost()
+	_ghost_yaw_deg = 0.0
+	if _ghost_guides != null and is_instance_valid(_ghost_guides):
+		_ghost_guides.queue_free()
+	_ghost_guides = null
 	_placement_active = false
 	_placement_prop_id = ""
 	_placement_main = null
@@ -918,3 +964,129 @@ static func _layer_key(main: Node) -> String:
 	if main == null:
 		return "unknown"
 	return main.scene_file_path if not main.scene_file_path.is_empty() else main.name
+
+
+
+# ---------------------------------------------------------------------------
+# Solar grid snap for placed racks (PvGridSnap)
+# ---------------------------------------------------------------------------
+
+## The array (controller) key of the graph node a placement will bind to.
+static func _placement_graph_key(main: Node) -> String:
+	var gid := str((_placement_prep.get("graph_link", {}) as Dictionary).get("existing_item_id", ""))
+	if gid.is_empty():
+		gid = str((_placement_prep.get("record_extra", {}) as Dictionary).get("graph_item_id", ""))
+	return pv_array_key(main, gid)
+
+
+## The controller a graph array feeds ("" if none / no graph).
+static func pv_array_key(main: Node, graph_item_id: String) -> String:
+	if graph_item_id.is_empty():
+		return ""
+	var sgv := _system_graph_view(main)
+	if sgv == null:
+		return ""
+	var model: Variant = sgv.get("model")
+	if not (model is GraphModel):
+		return ""
+	return str(GraphPvWiring.array_keys(model as GraphModel, "root").get(graph_item_id, ""))
+
+
+## Every placed solar rack as a PvGridSnap rect (except `exclude_id`).
+static func pv_rack_rects(main: Node, exclude_id: String = "") -> Array:
+	var out: Array = []
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return out
+	for rec in layer.props:
+		var r: Dictionary = rec
+		if str(r.get("model_id", "")) != PvArrayBuilder.MODEL_ID:
+			continue
+		var pid := str(r.get("id", ""))
+		if pid == exclude_id:
+			continue
+		out.append(PvGridSnap.rect_for_pv_spec(r.get("pv_array_spec", {}),
+			float(r.get("x", 0.0)), float(r.get("z", 0.0)), float(r.get("yaw", 0.0)),
+			pid, pv_array_key(main, str(r.get("graph_item_id", "")))))
+	return out
+
+
+## Snap a rack (spec at x, z, yaw) against the placed racks. Alt bypasses.
+static func pv_snap(main: Node, spec: Dictionary, x: float, z: float, yaw_deg: float,
+		exclude_id: String = "", key: String = "") -> Dictionary:
+	var none := {"snapped": false, "x": x, "z": z, "yaw": yaw_deg, "guides": []}
+	if not PvGridSnap.enabled() or Input.is_key_pressed(KEY_ALT):
+		return none
+	var moving := PvGridSnap.rect_for_pv_spec(spec, x, z, yaw_deg, exclude_id, key)
+	var lat := float(main.get("latitude")) if main.get("latitude") != null else NAN
+	return PvGridSnap.snap(moving, pv_rack_rects(main, exclude_id), PvGridSnap.world_opts(lat))
+
+
+## Amber guide lines on the ground for a snap result (world xz segments),
+## drawn into `mi` (made under `parent` when null). Hidden when not snapped.
+static func draw_snap_guides(mi: MeshInstance3D, parent: Node, main: Node, res: Dictionary) -> MeshInstance3D:
+	if parent == null:
+		return mi
+	if mi == null or not is_instance_valid(mi):
+		mi = MeshInstance3D.new()
+		mi.name = "PvSnapGuides"
+		mi.top_level = true
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(UITheme.C_AMBER, 0.95)
+		mat.no_depth_test = true
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mi.material_override = mat
+		mi.mesh = ImmediateMesh.new()
+		parent.add_child(mi)
+	var im := mi.mesh as ImmediateMesh
+	im.clear_surfaces()
+	var guides: Array = res.get("guides", [])
+	mi.visible = bool(res.get("snapped", false)) and not guides.is_empty()
+	if not mi.visible:
+		return mi
+	mi.global_transform = Transform3D.IDENTITY
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for g in guides:
+		var a: Vector2 = g[0]
+		var b: Vector2 = g[1]
+		var n := maxi(2, int(a.distance_to(b) / 0.5))
+		for i in n:
+			var p0 := a.lerp(b, float(i) / float(n))
+			var p1 := a.lerp(b, float(i + 1) / float(n))
+			im.surface_add_vertex(Vector3(p0.x, TerrainSurfaceQuery.ground_height_at(main, p0.x, p0.y) + 0.06, p0.y))
+			im.surface_add_vertex(Vector3(p1.x, TerrainSurfaceQuery.ground_height_at(main, p1.x, p1.y) + 0.06, p1.y))
+	im.surface_end()
+	return mi
+
+
+## "Line up this array": every rack feeding the same controller as `prop_id`
+## goes into a grid anchored on `prop_id` (which keeps its place and yaw).
+## Returns how many racks moved.
+static func line_up_pv_array(main: Node, prop_id: String) -> int:
+	var anchor_rec := get_prop_record(main, prop_id)
+	if anchor_rec.is_empty():
+		return 0
+	var key := pv_array_key(main, str(anchor_rec.get("graph_item_id", "")))
+	var anchor := PvGridSnap.rect_for_pv_spec(anchor_rec.get("pv_array_spec", {}),
+		float(anchor_rec.get("x", 0.0)), float(anchor_rec.get("z", 0.0)),
+		float(anchor_rec.get("yaw", 0.0)), prop_id, key)
+	var members: Array = []
+	for r in pv_rack_rects(main, prop_id):
+		var rd: Dictionary = r
+		if not key.is_empty() and str(rd.get("key", "")) == key:
+			members.append(rd)
+	if members.is_empty():
+		return 0
+	var lat := float(main.get("latitude")) if main.get("latitude") != null else NAN
+	var lay := PvGridSnap.grid_layout(anchor, members, PvGridSnap.world_opts(lat))
+	var moved := 0
+	for pid in lay:
+		if str(pid) == prop_id:
+			continue
+		var t: Dictionary = lay[pid]
+		update_prop_record(main, str(pid), {"x": float(t["x"]), "z": float(t["z"]),
+			"yaw": float(t["yaw"])}, true)
+		moved += 1
+	return moved

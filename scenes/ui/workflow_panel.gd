@@ -38,6 +38,7 @@ func _build_ui() -> void:
 	panel.custom_minimum_size = Vector2(520, 480)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
+	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 8)
 	panel.add_child(root)

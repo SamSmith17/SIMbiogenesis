@@ -21,6 +21,8 @@ const BELOW_FLOOR_M := 60.0
 ## capture so a daytime fog reads as bright grey.
 const SKY_EMISSION_GAIN := 0.9
 
+## 0..1 how warm/orange the sun's beam is (set by main.gd); 0 at midday.
+var sun_warmth := 0.0
 var _vol: FogVolume
 var _mat: ShaderMaterial
 var _drift := Vector3.ZERO
@@ -74,8 +76,18 @@ func update_from(st: Dictionary, cam_pos: Vector3, wind_xz: Vector2, delta: floa
 	_mat.set_shader_parameter("drift", _drift)
 	# Skylight in the droplets, independent of the player's ambient-light pref
 	# (which can be 0). Scaled so a noon fog reads bright grey, not white-out.
-	var sl := clampf(sky_light, 0.0, 1.0) * SKY_EMISSION_GAIN
-	_mat.set_shader_parameter("sky_emission", Vector3(col.r * sl, col.g * sl, col.b * sl))
+	# Fog is lit by the white sky dome. As the sun warms toward the horizon its
+	# beam is faded out of the fog (main.gd), so the emission makes up the light
+	# and the albedo is pulled toward neutral white — a slight blue-grey, never
+	# yellow.
+	# The sun's colour stays horizon-orange all night (DaylightModel holds the
+	# horizon colour below 0°), so warmth only counts while it is not night —
+	# otherwise it overrides the moonlit cool shift above.
+	var warm := sun_warmth * (1.0 - clampf(night_amount, 0.0, 1.0))
+	var sl := clampf(sky_light, 0.0, 1.0) * SKY_EMISSION_GAIN * (1.0 + 0.5 * warm)
+	var neutral := col.lerp(Color(0.86, 0.88, 0.91), clampf(warm * 1.5, 0.0, 1.0))
+	_mat.set_shader_parameter("albedo", Vector3(neutral.r, neutral.g, neutral.b))
+	_mat.set_shader_parameter("sky_emission", Vector3(neutral.r * sl, neutral.g * sl, neutral.b * sl))
 
 
 ## How far the camera sits above the fog top (negative = inside it). main.gd

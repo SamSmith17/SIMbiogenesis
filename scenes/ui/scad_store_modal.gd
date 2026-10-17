@@ -79,7 +79,8 @@ func open(_arg: String = "") -> void:
 	_populate_categories()
 	_populate_parts()
 	if _has_cursor_controller():
-		CursorController.request_modal(MODAL_NAME)
+		CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+		HudLayout.claim_modal(MODAL_NAME)
 	set_process(true)
 
 
@@ -90,6 +91,7 @@ func close() -> void:
 	visible = false
 	if _has_cursor_controller():
 		CursorController.release_modal(MODAL_NAME)
+		HudLayout.release(MODAL_NAME)
 	if _rendering:
 		# A render is in flight. Do NOT block the main thread on wait_to_finish
 		# (that froze the game for the length of a CGAL render) and do NOT free
@@ -137,6 +139,9 @@ func _build_ui() -> void:
 	# Opaque, bordered chrome matching the rest of the UI.
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style(1.0, UITheme.C_BG))
 	add_child(panel)
+	# As large as the screen allows, but above the timeline (the full-rect
+	# inset reached down over it); the HUD is hidden by the modal claim.
+	UiFit.keep_fitted(panel, Vector2(1800, 1000), UiFit.MARGIN, false)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", UITheme.SPACE_MD)
@@ -158,10 +163,7 @@ func _build_ui() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(spacer)
-	var close_btn := Button.new()
-	close_btn.text = "Close  (Esc)"
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	header.add_child(close_btn)
 	root.add_child(header)
 
@@ -312,12 +314,8 @@ func _panel_wrap(inner: Control, min_w: int = 0, expand: bool = false) -> Contro
 	return pc
 
 
-func _section_label(text: String) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	return l
+func _section_label(text: String) -> SectionHeader:
+	return SectionHeader.make(text)
 
 
 func _style_list(list: ItemList) -> void:

@@ -583,3 +583,38 @@ static func controller_throttle(ctrl_item: Dictionary, bank: Dictionary,
 		"clipped": delivered < array_w - 1.0,
 		"clip_ratio": delivered / maxf(array_w, 1.0),
 	}
+
+
+## What the DC wiring lets through when the array makes `raw_kw`: each real
+## controller passes min(its Wmp share of raw, its bus_V x amps limit), the
+## share with no controller in the way passes whole. `caps` = [{frac,
+## limit_w}] (limit_w < 0 = no limit). A pure function of raw, so the live
+## tick, the challenge bake and the cards all apply the same cap at every hour
+## (a single watt figure frozen when Run was pressed capped the whole day).
+static func delivered_for_caps(raw_kw: float, caps: Array, unrouted_frac: float) -> float:
+	var raw := maxf(raw_kw, 0.0)
+	var out := raw * clampf(unrouted_frac, 0.0, 1.0)
+	for c in caps:
+		var cd: Dictionary = c
+		var share := raw * maxf(float(cd.get("frac", 0.0)), 0.0)
+		var lim := float(cd.get("limit_w", -1.0))
+		out += minf(share, lim / 1000.0) if lim >= 0.0 else share
+	return out
+
+
+## Split what the array ACTUALLY delivered (after a full battery or any other
+## throttle downstream of the controllers) back over the controllers in
+## proportion to what each could pass. `caps_w` = each controller's capped
+## delivery; `unrouted_w` = PV reaching the bank with no controller. Returns
+## the per-controller actual watts (never above its cap).
+static func split_actual(actual_w: float, caps_w: Array, unrouted_w: float) -> Array:
+	var total := maxf(unrouted_w, 0.0)
+	for c in caps_w:
+		total += maxf(float(c), 0.0)
+	var k := 1.0
+	if total > 1e-6:
+		k = clampf(maxf(actual_w, 0.0) / total, 0.0, 1.0)
+	var out: Array = []
+	for c in caps_w:
+		out.append(maxf(float(c), 0.0) * k)
+	return out

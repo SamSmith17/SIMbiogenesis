@@ -21,6 +21,7 @@ var _water_cb: CheckBox = null
 var _camps_cb: CheckBox = null
 var _exclusion_r_spin: SpinBox = null
 var _auto_veg_cb: CheckBox = null
+var _show_veg_cb: CheckBox = null
 var _near_detail_cb: CheckBox = null
 ## Points of interest (KML pins): the list, its toggle, dialogs.
 ## The body scrolls: the column outgrew the 620 px it was designed for long
@@ -41,6 +42,11 @@ const CONFIG_PATH := "user://terrain_config.cfg"
 var _refresh_btns: Array[Button] = []
 var _reset_confirm: ConfirmationDialog = null
 var _veg_style_confirm: ConfirmationDialog = null
+## Earlier vegetation looks of this world (VegLookBackup), newest first.
+var _veg_backup_opt: OptionButton = null
+var _veg_backup_btn: Button = null
+var _veg_backup_dirs: Array = []
+var _veg_backup_confirm: ConfirmationDialog = null
 var _osm_offset_lbl: Label = null
 var _world_km_spin: SpinBox = null
 var _detail_m_spin: SpinBox = null
@@ -52,13 +58,19 @@ var _extent_apply_confirm: ConfirmationDialog = null
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	offset_left = -272.0
-	offset_top = 12.0
-	offset_right = -12.0
-	offset_bottom = 52.0
+	set_anchors_preset(Control.PRESET_TOP_LEFT)
+	size = Vector2(PANEL_W, COLLAPSED_H)
 	_build_ui()
 	_apply_collapsed_size()
+	# Placement: the HUD layout manager's top-right column (a dock or tool
+	# that claims the right edge tucks this into a pill).
+	HudLayout.register(self, "terrain_options", "top_right", {
+		"order": 0, "priority": 2, "title": "terrain options", "icon": "mountain",
+		# The real minimum width, never less than the design width: a row
+		# that outgrows 260 px must widen the slot, not hang off the screen.
+		"size": func() -> Vector2: return Vector2(maxf(PANEL_W, get_combined_minimum_size().x), _wanted_height()),
+		"compact": func() -> String: return "Terrain options",
+	})
 
 
 func bind_loader(loader: Node) -> void:
@@ -102,26 +114,31 @@ func _set_expanded(on: bool) -> void:
 		# Pins can arrive outside this panel (a harness / another UI calling the
 		# loader's import), so the list is rebuilt every time the panel opens.
 		_refresh_poi_list()
+		_refresh_veg_backups()
 	_apply_collapsed_size()
 	expanded_changed.emit(on)
 
 
+const PANEL_W := 260.0
+const COLLAPSED_H := 40.0
+const HEADER_H := 60.0
+
+
+## As tall as the content wants (expanded), but never past the HUD's usable
+## height above the timeline — the scroll container carries the rest.
+func _wanted_height() -> float:
+	if not _expanded:
+		return COLLAPSED_H
+	var want := HEADER_H + (_body.get_combined_minimum_size().y if _body != null else 560.0)
+	var max_h := maxf(220.0, HudLayout.usable_rect().size.y)
+	return minf(want, max_h)
+
+
 func _apply_collapsed_size() -> void:
-	if _expanded:
-		# As tall as the content wants, but never past the bottom of the
-		# window — the scroll container carries the rest.
-		var vp_h := get_viewport_rect().size.y if is_inside_tree() else 1080.0
-		var header_h := 60.0
-		var want := header_h + (_body.get_combined_minimum_size().y if _body != null else 560.0)
-		var max_h := maxf(220.0, vp_h - offset_top - 24.0)
-		var h := minf(want, max_h)
-		offset_bottom = offset_top + h
-		if _scroll != null:
-			_scroll.custom_minimum_size = Vector2(0.0, maxf(120.0, h - header_h))
-	else:
-		offset_bottom = 52.0
-		if _scroll != null:
-			_scroll.custom_minimum_size = Vector2.ZERO
+	var h := _wanted_height()
+	size = Vector2(PANEL_W, h)
+	if _scroll != null:
+		_scroll.custom_minimum_size = Vector2(0.0, maxf(120.0, h - HEADER_H)) if _expanded else Vector2.ZERO
 
 
 func _build_ui() -> void:
@@ -161,8 +178,8 @@ func _build_ui() -> void:
 	# screen (the KML import was unfindable down there).
 	_build_poi_ui(_body)
 
-	_roads_cb = _add_toggle(_body, "Flatten roads (hi-res patch)",
-		"Level highway corridors on the hi-res DEM grid", _on_roads_toggled)
+	_roads_cb = _add_toggle(_body, "Flatten roads",
+		"Level highway corridors on the hi-res DEM grid (the hi-res patch only)", _on_roads_toggled)
 	_sites_cb = _add_toggle(_body, "Flatten sites / parking",
 		"Level landuse polygons (parking, industrial yards)", _on_sites_toggled)
 	_buildings_cb = _add_toggle(_body, "Show OSM buildings",
@@ -202,6 +219,11 @@ func _build_ui() -> void:
 	_exclusion_r_spin.value_changed.connect(_on_exclusion_r_changed)
 	excl_row.add_child(_exclusion_r_spin)
 
+	_show_veg_cb = _add_toggle(_body, "Show vegetation",
+		"Show or hide ALL plants: painted trees and shrubs, the forest generated "
+		+ "from OSM, stumps and logs, and the moss and leaf litter on the ground. "
+		+ "Hiding keeps everything; turn it back on and it returns as it was.",
+		_on_show_veg_toggled)
 	_auto_veg_cb = _add_toggle(_body, "Auto-scatter vegetation",
 		"Fill forest/grass OSM polygons with procedural trees (OSM radius)", _on_auto_veg_toggled)
 	
@@ -241,13 +263,8 @@ func _build_ui() -> void:
 	# refresh_ai_hero()) is untouched and still reachable by hand-editing
 	# terrain_config.cfg — see LOCAL_CONFIG.md.
 
-	var align_sep := HSeparator.new()
-	_body.add_child(align_sep)
-	var align_lbl := Label.new()
-	align_lbl.text = "Align OSM to imagery"
+	var align_lbl := SectionHeader.make("Align OSM to imagery")
 	align_lbl.tooltip_text = "Slide buildings/roads/camps onto the aerial when OSM and the photo disagree (e.g. BRC year mismatch)."
-	align_lbl.add_theme_font_size_override("font_size", 12)
-	align_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
 	_body.add_child(align_lbl)
 	_osm_offset_lbl = Label.new()
 	_osm_offset_lbl.text = "Offset: 0 m E, 0 m N"
@@ -280,13 +297,7 @@ func _build_ui() -> void:
 
 	_build_extent_ui(_body)
 
-	var sep := HSeparator.new()
-	_body.add_child(sep)
-	var refresh_lbl := Label.new()
-	refresh_lbl.text = "Refresh from network"
-	refresh_lbl.add_theme_font_size_override("font_size", 12)
-	refresh_lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
-	_body.add_child(refresh_lbl)
+	_body.add_child(SectionHeader.make("Refresh from network"))
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 6)
@@ -337,6 +348,33 @@ func _build_ui() -> void:
 		if _loader != null and _loader.has_method("reset_all_veg_styles"):
 			_loader.call("reset_all_veg_styles"))
 	add_child(_veg_style_confirm)
+	# Earlier looks of THIS world (taken before a big re-style), restorable.
+	var bk_lbl := Label.new()
+	bk_lbl.text = "Earlier vegetation looks"
+	bk_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	bk_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	style_row.add_child(bk_lbl)
+	_veg_backup_opt = OptionButton.new()
+	_veg_backup_opt.fit_to_longest_item = false
+	_veg_backup_opt.clip_text = true
+	_veg_backup_opt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_veg_backup_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_veg_backup_opt.tooltip_text = "Saved before big vegetation changes to this world"
+	style_row.add_child(_veg_backup_opt)
+	_veg_backup_btn = Button.new()
+	_veg_backup_btn.text = "Restore this look"
+	_veg_backup_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_veg_backup_btn.tooltip_text = "Put back this world's styles, painted plants and area fills as they were then (today's look is saved first)"
+	_veg_backup_btn.pressed.connect(func() -> void:
+		if _veg_backup_confirm != null and _veg_backup_opt.selected >= 0:
+			_veg_backup_confirm.popup_centered())
+	style_row.add_child(_veg_backup_btn)
+	_veg_backup_confirm = ConfirmationDialog.new()
+	_veg_backup_confirm.title = "Restore an earlier vegetation look?"
+	_veg_backup_confirm.dialog_text = "This world's vegetation styles, painted plants and area fills go back to the chosen snapshot. Today's look is saved as a snapshot first, so you can come back to it."
+	_veg_backup_confirm.ok_button_text = "Restore"
+	_veg_backup_confirm.confirmed.connect(_on_restore_veg_backup)
+	add_child(_veg_backup_confirm)
 
 	var reset_row := HBoxContainer.new()
 	_body.add_child(reset_row)
@@ -456,6 +494,38 @@ func _on_kml_file_selected(path: String) -> void:
 	_refresh_poi_list()
 
 
+func _refresh_veg_backups() -> void:
+	if _veg_backup_opt == null:
+		return
+	_veg_backup_opt.clear()
+	_veg_backup_dirs.clear()
+	var list: Array = []
+	if _loader != null and _loader.has_method("veg_look_backups"):
+		list = _loader.call("veg_look_backups")
+	for b in list:
+		var d: Dictionary = b
+		var when := str(d.get("stamp", "")).replace("T", " ").replace("_", " ")
+		_veg_backup_opt.add_item("%s · %s" % [str(d.get("label", "Snapshot")), when.substr(0, 16)])
+		_veg_backup_dirs.append(str(d.get("dir", "")))
+	if list.is_empty():
+		_veg_backup_opt.add_item("None saved yet")
+		_veg_backup_opt.disabled = true
+		_veg_backup_btn.disabled = true
+	else:
+		_veg_backup_opt.disabled = false
+		_veg_backup_btn.disabled = false
+		_veg_backup_opt.select(0)
+
+
+func _on_restore_veg_backup() -> void:
+	var i := _veg_backup_opt.selected if _veg_backup_opt != null else -1
+	if i < 0 or i >= _veg_backup_dirs.size():
+		return
+	if _loader != null and _loader.has_method("restore_veg_look"):
+		_loader.call("restore_veg_look", str(_veg_backup_dirs[i]))
+	_refresh_veg_backups()
+
+
 func _refresh_poi_list() -> void:
 	if _poi_list == null:
 		return
@@ -510,8 +580,7 @@ func _refresh_poi_list() -> void:
 				_loader.call("teleport_to_poi", id))
 		row.add_child(go)
 		var del := Button.new()
-		del.text = "✕"
-		del.tooltip_text = "Remove this pin"
+		IconButton.style(del, "trash-2", "Remove this pin")
 		del.pressed.connect(func() -> void:
 			if _loader != null and _loader.has_method("remove_poi"):
 				_loader.call("remove_poi", id)
@@ -530,9 +599,14 @@ func _add_toggle(parent: Control, label: String, tip: String, handler: Callable)
 
 func _add_refresh_btn(parent: Control, label: String, tip: String, handler: Callable) -> void:
 	var btn := Button.new()
-	btn.text = "↻ %s" % label
+	btn.text = label
+	btn.icon = UiIcons.icon("refresh-cw", 14)
 	btn.tooltip_text = tip
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Two to a row in a 260 px panel: the text may ellipsize rather than
+	# widen the panel past the screen edge (the grid made it 284 px).
+	btn.clip_text = true
+	btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	btn.pressed.connect(handler)
 	parent.add_child(btn)
 	_refresh_btns.append(btn)
@@ -554,6 +628,7 @@ func _sync_from_loader() -> void:
 		_exclusion_r_spin.value = float(opts.get("camp_exclusion_r", 804.672)) / 1609.344
 		_exclusion_r_spin.set_block_signals(false)
 	_set_cb(_auto_veg_cb, bool(opts.get("show_auto_vegetation", true)))
+	_set_cb(_show_veg_cb, bool(opts.get("show_vegetation", true)))
 	if _auto_veg_density_spin != null:
 		_auto_veg_density_spin.set_block_signals(true)
 		# Show the MAP'S live density, not defaults() (which always displayed 1.0
@@ -618,13 +693,7 @@ func _add_nudge_btn(parent: Control, label: String, tip: String,
 ## always wins over terrain_config.cfg once a site has loaded once, so hand-
 ## editing the config file does nothing for a returning site.
 func _build_extent_ui(parent: Control) -> void:
-	var sep := HSeparator.new()
-	parent.add_child(sep)
-	var lbl := Label.new()
-	lbl.text = "Advanced terrain size"
-	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
-	parent.add_child(lbl)
+	parent.add_child(SectionHeader.make("Advanced terrain size"))
 	var hint := Label.new()
 	hint.text = "Reloads the map to rebuild terrain at the new size."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -867,6 +936,11 @@ func _on_camps_edit_pressed() -> void:
 	# Forward to the camp scatter UI via terrain_loader.
 	if _loader != null and _loader.has_method("toggle_camp_scatter_ui"):
 		_loader.call("toggle_camp_scatter_ui")
+
+
+func _on_show_veg_toggled(on: bool) -> void:
+	if _loader != null and _loader.has_method("set_show_vegetation"):
+		_loader.call("set_show_vegetation", on)
 
 
 func _on_auto_veg_toggled(on: bool) -> void:

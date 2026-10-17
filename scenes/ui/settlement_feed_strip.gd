@@ -52,6 +52,22 @@ func _ready() -> void:
 	_box.alignment = BoxContainer.ALIGNMENT_END
 	_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_box)
+	size = Vector2(STRIP_W, STRIP_H)
+	# Placement: the HUD's bottom-left region, above the toasts; it tucks to a
+	# one-line pill when the column under the scoreboard is short of room.
+	HudLayout.register(self, "settlement_feed", "bottom_left", {
+		"order": 10, "priority": 1, "title": "settlement feed", "icon": "users",
+		"size": func() -> Vector2: return Vector2(STRIP_W, _strip_height()),
+		"compact": func() -> String: return _status_line() if _bridge != null and _bridge.has_method("has_pop_driven") and bool(_bridge.call("has_pop_driven")) else "Settlement feed",
+	})
+
+
+const STRIP_W := 420.0
+const STRIP_H := 166.0
+
+
+func _strip_height() -> float:
+	return STRIP_H + (PEEK_LINES - MAX_LINES) * 18.0 if _peek else STRIP_H
 
 
 func bind(bridge: Variant, graph_view: CanvasItem) -> void:
@@ -101,14 +117,14 @@ func _process(delta: float) -> void:
 	if not visible:
 		if _peek:
 			_peek = false
-			offset_top = -352
+			size = Vector2(STRIP_W, _strip_height())
 		return
 	# Hover-peek: while the pointer rests on the strip, it grows to the recent
 	# history and stops fading; leaving snaps it back.
 	var peek_now := get_global_rect().has_point(get_global_mouse_position())
 	if peek_now != _peek:
 		_peek = peek_now
-		offset_top = -352 - (PEEK_LINES - MAX_LINES) * 18 if _peek else -352
+		size = Vector2(STRIP_W, _strip_height())
 		_sig = "<unbuilt>"
 	var status := _status_line() if has_pop else ""
 	var sig := "st:%s|" % status

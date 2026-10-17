@@ -31,6 +31,9 @@ const OVERLAY_SCRIPT := preload("res://scenes/settlement/space_overlay.gd")
 const DOCK_SCRIPT := preload("res://scenes/settlement/work_dock.gd")
 
 signal closed()
+## True when the last close came from drop_in (G): the player went INTO the
+## world, so whoever opened the view (the graph's "Locate") must not reopen.
+var last_close_was_drop_in := false
 signal selection_changed(sel: Dictionary)
 
 var _main: Node = null
@@ -68,6 +71,7 @@ func is_open() -> bool:
 ## `start_h` is the camera's opening height (metres over the focus): the
 ## default reads as a block; festival mode passes one that frames every camp.
 func open(main: Node, at: Vector2 = Vector2.INF, start_h: float = 60.0) -> void:
+	last_close_was_drop_in = false
 	if _active:
 		return
 	_main = main
@@ -175,6 +179,7 @@ func drop_in() -> void:
 	if body != null:
 		var gy := TerrainSurfaceQuery.ground_height_at(_main, p.x, p.y)
 		body.global_position = Vector3(p.x, gy + 1.0, p.y)
+	last_close_was_drop_in = true
 	close()
 
 

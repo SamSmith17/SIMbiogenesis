@@ -766,7 +766,7 @@ func _on_lmb_pressed() -> void:
 			return
 		_poly_points.append(pt)
 		_update_polygon_preview(true)
-		_set_status("Polygon: %d points — Enter/RMB to finish" % _poly_points.size())
+		_set_status("Polygon: %s — Enter/RMB to finish" % UiText.count(_poly_points.size(), "point"))
 		return
 	if _shape_mode == ShapeMode.LASSO:
 		_brushing = true
@@ -1621,7 +1621,7 @@ func _start_respecies() -> void:
 		var n: int = int(_loader.call("respecies_selection", _selection_poly, _scatter_params()))
 		vegetation_applied.emit()
 		_set_busy(false)
-		_set_status("Re-scattered selection — %d instances" % n)
+		_set_status("Re-scattered selection — %s" % UiText.count(n, "instance"))
 
 
 func _respecies_async() -> void:
@@ -1634,7 +1634,7 @@ func _respecies_async() -> void:
 	_set_busy(false)
 	if _progress_bar != null:
 		_progress_bar.visible = false
-	_set_status("Re-scattered selection — %d instances" % n)
+	_set_status("Re-scattered selection — %s" % UiText.count(n, "instance"))
 
 
 ## Resolve the concrete species for a single-instance drop. Mix picks one weighted
@@ -1745,7 +1745,8 @@ func _delete_picked_plant() -> void:
 ## size. The species chooses the model — a pine becomes a pine, whatever hero
 ## preset the Place tool happens to be showing.
 func _convert_picked_to_hero() -> void:
-	if _picked_plant.is_empty() or _loader == null 			or not _loader.has_method("convert_plant_to_hero_at"):
+	if _picked_plant.is_empty() or _loader == null \
+			or not _loader.has_method("convert_plant_to_hero_at"):
 		return
 	if str(_picked_plant.get("kind", "")) == "hero":
 		_set_status("Already a hero tree")

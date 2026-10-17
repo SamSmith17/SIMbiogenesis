@@ -230,6 +230,7 @@ func open(config: Dictionary = {}) -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 	_update_place_buttons()
 	_apply_params(true)
 	_sync_controls()
@@ -289,6 +290,7 @@ func close() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 
 
 func _process(delta: float) -> void:
@@ -428,22 +430,30 @@ func _panel_wrap(inner: Control) -> PanelContainer:
 # --- Topbar ---
 
 func _build_topbar() -> Control:
-	var bar := HBoxContainer.new()
+	# Groups that wrap as a whole onto a second row when the screen is too
+	# narrow for one (the bar was 1931 px on a 1920 screen and pushed the
+	# right-hand column off the edge; at UI scale 125 % it was 400 px over).
+	var bar := HFlowContainer.new()
 	bar.custom_minimum_size.y = TOPBAR_H
-	bar.add_theme_constant_override("separation", 8)
+	bar.add_theme_constant_override("h_separation", 18)
+	bar.add_theme_constant_override("v_separation", 4)
+	var g_title := _topbar_group(bar)
+	var g_fold := _topbar_group(bar)
+	var g_anim := _topbar_group(bar)
+	var g_sun := _topbar_group(bar)
+	var g_act := _topbar_group(bar)
 
 	var title := Label.new()
 	title.text = "  Linkage Lab"
 	title.add_theme_color_override("font_color", C_PRIMARY)
 	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	bar.add_child(title)
-	bar.add_child(_vsep())
+	g_title.add_child(title)
 
 	var fold_lbl := Label.new()
 	fold_lbl.text = "FOLD:"
 	fold_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	fold_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	bar.add_child(fold_lbl)
+	g_fold.add_child(fold_lbl)
 	_fold_slider = HSlider.new()
 	_fold_slider.min_value = 5.0
 	_fold_slider.max_value = 175.0
@@ -452,7 +462,7 @@ func _build_topbar() -> Control:
 	_fold_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_fold_slider.focus_mode = Control.FOCUS_NONE
 	_fold_slider.value_changed.connect(_on_fold_slider)
-	bar.add_child(_fold_slider)
+	g_fold.add_child(_fold_slider)
 	_fold_spin = SpinBox.new()
 	_fold_spin.min_value = 5.0
 	_fold_spin.max_value = 175.0
@@ -461,26 +471,25 @@ func _build_topbar() -> Control:
 	_fold_spin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_fold_spin.suffix = "°"
 	_fold_spin.value_changed.connect(_on_fold_slider)
-	bar.add_child(_fold_spin)
-	bar.add_child(_vsep())
+	g_fold.add_child(_fold_spin)
 
 	var btn_fold := _topbar_btn("FOLD", "Fold to closed position")
 	btn_fold.add_theme_color_override("font_color", Color(0.95, 0.45, 0.4))
 	btn_fold.pressed.connect(_on_fold_btn)
-	bar.add_child(btn_fold)
+	g_anim.add_child(btn_fold)
 	var btn_unfold := _topbar_btn("UNFOLD", "Unfold to open position")
 	btn_unfold.add_theme_color_override("font_color", Color(0.35, 0.85, 0.55))
 	btn_unfold.pressed.connect(_on_unfold_btn)
-	bar.add_child(btn_unfold)
+	g_anim.add_child(btn_unfold)
 	_btn_play = _topbar_btn("▶", "Play animation")
 	_btn_play.pressed.connect(_on_play_btn)
-	bar.add_child(_btn_play)
+	g_anim.add_child(_btn_play)
 	_btn_pause = _topbar_btn("⏸", "Pause animation")
 	_btn_pause.pressed.connect(_on_pause_btn)
-	bar.add_child(_btn_pause)
+	g_anim.add_child(_btn_pause)
 	var btn_rev := _topbar_btn("⟲", "Reverse direction")
 	btn_rev.pressed.connect(_on_reverse_btn)
-	bar.add_child(btn_rev)
+	g_anim.add_child(btn_rev)
 	_speed_slider = HSlider.new()
 	_speed_slider.min_value = 0.1
 	_speed_slider.max_value = 3.0
@@ -490,13 +499,13 @@ func _build_topbar() -> Control:
 	_speed_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_speed_slider.focus_mode = Control.FOCUS_NONE
 	_speed_slider.tooltip_text = "Animation speed"
-	bar.add_child(_speed_slider)
+	g_anim.add_child(_speed_slider)
 	_loop_chk = CheckBox.new()
 	_loop_chk.text = "Loop"
 	_loop_chk.focus_mode = Control.FOCUS_NONE
 	_loop_chk.tooltip_text = "Ping-pong animation"
 	_loop_chk.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	bar.add_child(_loop_chk)
+	g_anim.add_child(_loop_chk)
 	_stop_spin = SpinBox.new()
 	_stop_spin.min_value = 0.0
 	_stop_spin.max_value = 180.0
@@ -507,14 +516,13 @@ func _build_topbar() -> Control:
 	_stop_spin.value_changed.connect(func(v: float) -> void:
 		if not _suppress:
 			params.animation_stop_angle = v)
-	bar.add_child(_stop_spin)
-	bar.add_child(_vsep())
+	g_anim.add_child(_stop_spin)
 
 	var sun_lbl := Label.new()
 	sun_lbl.text = "SUN:"
 	sun_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	sun_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	bar.add_child(sun_lbl)
+	g_sun.add_child(sun_lbl)
 	_sun_slider = HSlider.new()
 	_sun_slider.min_value = 0.0
 	_sun_slider.max_value = 100.0
@@ -525,13 +533,13 @@ func _build_topbar() -> Control:
 	_sun_slider.focus_mode = Control.FOCUS_NONE
 	_sun_slider.tooltip_text = "Time of day (sunrise → sunset)"
 	_sun_slider.value_changed.connect(func(_v: float) -> void: _update_sun())
-	bar.add_child(_sun_slider)
+	g_sun.add_child(_sun_slider)
 	_sun_lbl = Label.new()
 	_sun_lbl.text = "12:00"
 	_sun_lbl.custom_minimum_size.x = 46
 	_sun_lbl.add_theme_color_override("font_color", C_TEXT)
 	_sun_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	bar.add_child(_sun_lbl)
+	g_sun.add_child(_sun_lbl)
 	_shadows_chk = CheckBox.new()
 	_shadows_chk.text = "Shadows"
 	_shadows_chk.button_pressed = true
@@ -540,53 +548,69 @@ func _build_topbar() -> Control:
 	_shadows_chk.toggled.connect(func(on: bool) -> void:
 		if _sun_light != null:
 			_sun_light.shadow_enabled = on)
-	bar.add_child(_shadows_chk)
+	g_sun.add_child(_shadows_chk)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.add_child(spacer)
 
 	_btn_place = _topbar_btn("Place in world", "Ghost-place this structure in the 3D world (live-foldable)")
 	_btn_place.add_theme_color_override("font_color", C_PRIMARY)
 	_btn_place.pressed.connect(_on_place_pressed)
-	bar.add_child(_btn_place)
+	g_act.add_child(_btn_place)
 	_btn_apply_prop = _topbar_btn("Apply to structure", "Rebuild the placed structure with this design")
 	_btn_apply_prop.add_theme_color_override("font_color", C_PRIMARY)
 	_btn_apply_prop.visible = false
 	_btn_apply_prop.pressed.connect(_on_apply_to_prop_pressed)
-	bar.add_child(_btn_apply_prop)
-	bar.add_child(_vsep())
+	g_act.add_child(_btn_apply_prop)
+	g_act.add_child(_vsep())
 
 	var btn_steps := _topbar_btn("🎬 Steps", "Build steps — play the fabrication + assembly sequence, edit it, save it with the design")
 	btn_steps.pressed.connect(toggle_steps)
-	bar.add_child(btn_steps)
+	g_act.add_child(btn_steps)
 	var btn_guide := _topbar_btn("📋", "Build guide — BOM, cut list, drill templates, assembly sequence")
 	btn_guide.pressed.connect(_on_build_guide_pressed)
-	bar.add_child(btn_guide)
+	g_act.add_child(btn_guide)
 	var btn_hw := _topbar_btn("🔩", "Hardware detail — the parts stacked at each joint")
 	btn_hw.pressed.connect(_on_hardware_detail_pressed)
-	bar.add_child(btn_hw)
+	g_act.add_child(btn_hw)
 	var btn_save := _topbar_btn("💾", "Save design (user://linkage_designs)")
 	btn_save.pressed.connect(_on_save_pressed)
-	bar.add_child(btn_save)
+	g_act.add_child(btn_save)
 	var btn_load := _topbar_btn("📂", "Load design / preset")
 	btn_load.pressed.connect(_on_load_pressed)
-	bar.add_child(btn_load)
+	g_act.add_child(btn_load)
 	var btn_export := _topbar_btn("⬇", "Export JSON file (web-app compatible)")
 	btn_export.pressed.connect(func() -> void: _export_dlg.popup_centered_ratio(0.6))
-	bar.add_child(btn_export)
+	g_act.add_child(btn_export)
 	var btn_import := _topbar_btn("⬆", "Import JSON file")
 	btn_import.pressed.connect(func() -> void: _import_dlg.popup_centered_ratio(0.6))
-	bar.add_child(btn_import)
-	_btn_units = _topbar_btn("📏 ft", "Toggle unit display (imperial/metric)")
+	g_act.add_child(btn_import)
+	_btn_units = _topbar_btn("ft", "Toggle unit display (imperial/metric)")
+	UiIcons.apply(_btn_units, "ruler")
 	_btn_units.pressed.connect(_on_units_pressed)
-	bar.add_child(_btn_units)
-	bar.add_child(_vsep())
-	var btn_close := _topbar_btn("✕", "Close (Esc)")
-	btn_close.pressed.connect(close)
-	bar.add_child(btn_close)
+	g_act.add_child(_btn_units)
+	g_act.add_child(_vsep())
+	var btn_close := IconButton.close(close)
+	g_act.add_child(btn_close)
 
+	# Icons, not emoji (several rendered as empty boxes in the default font).
+	for pair in [[_btn_play, "play"], [_btn_pause, "pause"], [btn_rev, "rotate-cw"],
+			[btn_guide, "list"], [btn_hw, "wrench"], [btn_save, "save"], [btn_load, "folder-open"],
+			[btn_export, "download"], [btn_import, "upload"]]:
+		var b: Button = pair[0]
+		b.text = ""
+		UiIcons.apply(b, str(pair[1]))
+	btn_steps.text = "Steps"
+	UiIcons.apply(btn_steps, "video")
 	return _panel_wrap(bar)
+
+
+func _topbar_group(bar: Container) -> HBoxContainer:
+	var g := HBoxContainer.new()
+	g.add_theme_constant_override("separation", 8)
+	g.custom_minimum_size.y = TOPBAR_H - 8.0
+	bar.add_child(g)
+	return g
+
+
 
 
 func _topbar_btn(text: String, tip: String) -> Button:
@@ -929,8 +953,8 @@ func _update_radial_readout() -> void:
 	if pl.is_empty():
 		lbl.text = "Off — a single structure."
 		return
-	lbl.text = "%d copies drawn (%d planned, slots 0–%d) · ring radius %s · pattern across %s" % [
-		int(pl["visible_count"]), (pl["slots"] as Array).size(), (pl["slots"] as Array).size() - 1,
+	lbl.text = "%s drawn (%d planned, slots 0–%d) · ring radius %s · pattern across %s" % [
+		UiText.count(int(pl["visible_count"]), "copy"), (pl["slots"] as Array).size(), (pl["slots"] as Array).size() - 1,
 		_fmt_len(float(pl["radius"])),
 		_fmt_len(2.0 * float((_builder.last_frame() if _builder != null else {}).get("max_rad", 0.0)))]
 	var sc: Dictionary = _builder.fold_schedule() if _builder != null else {}
@@ -1398,39 +1422,18 @@ func _group(parent: Control, title: String, collapsed: bool) -> VBoxContainer:
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _group_card_style())
 	parent.add_child(card)
-	var shell := VBoxContainer.new()
-	shell.add_theme_constant_override("separation", 2)
-	card.add_child(shell)
-
-	var head := Button.new()
-	head.text = ("▸  " if collapsed else "▾  ") + title
-	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	head.focus_mode = Control.FOCUS_NONE
-	head.add_theme_color_override("font_color", C_PRIMARY)
-	head.add_theme_color_override("font_hover_color", C_TEXT)
-	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	head.add_theme_stylebox_override("normal", _group_header_style())
-	head.add_theme_stylebox_override("hover", _group_header_style(true))
-	head.add_theme_stylebox_override("pressed", _group_header_style(true))
-	head.add_theme_stylebox_override("focus", _group_header_style())
-	shell.add_child(head)
+	var sec := Collapsible.make(title, not collapsed)
+	card.add_child(sec)
 
 	var content := VBoxContainer.new()
 	content.add_theme_constant_override("separation", 5)
-	content.visible = not collapsed
 	var pad := MarginContainer.new()
 	pad.add_theme_constant_override("margin_left", 8)
 	pad.add_theme_constant_override("margin_right", 6)
 	pad.add_theme_constant_override("margin_top", 2)
 	pad.add_theme_constant_override("margin_bottom", 6)
-	pad.visible = not collapsed
 	pad.add_child(content)
-	shell.add_child(pad)
-
-	head.pressed.connect(func() -> void:
-		pad.visible = not pad.visible
-		content.visible = pad.visible
-		head.text = ("▾  " if pad.visible else "▸  ") + title)
+	sec.body.add_child(pad)
 	return content
 
 
@@ -1444,20 +1447,6 @@ func _group_card_style() -> StyleBoxFlat:
 	sb.content_margin_right = 2.0
 	sb.content_margin_top = 2.0
 	sb.content_margin_bottom = 2.0
-	return sb
-
-
-func _group_header_style(hover: bool = false) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	var base := C_RAISED if not hover else Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.22)
-	sb.bg_color = base
-	sb.set_corner_radius_all(5)
-	sb.content_margin_left = 8.0
-	sb.content_margin_right = 8.0
-	sb.content_margin_top = 5.0
-	sb.content_margin_bottom = 5.0
-	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.0 if not hover else 0.5)
-	sb.set_border_width_all(1)
 	return sb
 
 
@@ -1811,11 +1800,7 @@ func _build_right_panel() -> Control:
 	var stats := VBoxContainer.new()
 	stats.add_theme_constant_override("separation", 2)
 	stats.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var title := Label.new()
-	title.text = "Dimensions & Structure"
-	title.add_theme_color_override("font_color", C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	stats.add_child(title)
+	stats.add_child(SectionHeader.make("Dimensions & Structure"))
 	for key in ["Height", "Diameter", "Modules", "Beams", "Support Beams",
 			"Brackets", "Bolts", "Panels", "Array Watts",
 			"Fold Angle", "Closed Angle", "Min Fold",
@@ -1863,7 +1848,16 @@ func _build_right_panel() -> Control:
 	_anim_status_lbl.add_theme_color_override("font_color", C_TEXT_M)
 	_anim_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	stats.add_child(_anim_status_lbl)
-	box.add_child(_panel_wrap(stats))
+	# The stats scroll: with the two 190 px insets above them they made the
+	# column ~820 px tall, past the bottom of a 720p screen at UI scale 125 %.
+	var stats_scroll := ScrollContainer.new()
+	stats_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	stats_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats_scroll.add_child(stats)
+	var stats_panel := _panel_wrap(stats_scroll)
+	stats_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(stats_panel)
 	return box
 
 
@@ -2132,7 +2126,7 @@ func _on_import_file(path: String) -> void:
 
 func _on_units_pressed() -> void:
 	_metric = not _metric
-	_btn_units.text = "📏 m" if _metric else "📏 ft"
+	_btn_units.text = "m" if _metric else "ft"
 	_update_stats()
 
 
@@ -2740,9 +2734,10 @@ func _update_fab_stats(s: Dictionary) -> void:
 	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
 	var beams := int(counts.get("beam_count", 0))
 	var holes := beams * NpcCrewPlan.HOLES_PER_BEAM
-	var head := "[b]🔧 Fabrication[/b] — %d beams · %d holes · %d brackets · %d bolts\n" % [
-		beams, holes, int(counts.get("bracket_count", 0)),
-		int(counts.get("bom_bolt_count", 0))]
+	var head := "[b]🔧 Fabrication[/b] — %s · %s · %s · %s\n" % [
+		UiText.count(beams, "beam"), UiText.count(holes, "hole"),
+		UiText.count(int(counts.get("bracket_count", 0)), "bracket"),
+		UiText.count(int(counts.get("bom_bolt_count", 0)), "bolt")]
 	var rows: Array = []
 	for n: int in [2, 6, 12]:
 		var r := NpcCrewPlan.schedule(tasks, n)

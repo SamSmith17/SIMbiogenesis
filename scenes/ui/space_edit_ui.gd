@@ -275,7 +275,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	_points.append(p)
-	_set_status("%d corners — click the first corner or right-click to finish." % _points.size())
+	_set_status("%s — click the first corner or right-click to finish." % UiText.count(_points.size(), "corner"))
 	_overlay.queue_redraw()
 	get_viewport().set_input_as_handled()
 

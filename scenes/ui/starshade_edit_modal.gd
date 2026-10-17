@@ -89,6 +89,7 @@ func _build_ui() -> void:
 	sb.content_margin_bottom = 14
 	_panel.add_theme_stylebox_override("panel", sb)
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)

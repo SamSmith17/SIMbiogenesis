@@ -109,6 +109,67 @@ static func fmt_hours(h: float) -> String:
 	return "%.1f d" % (h / 24.0)
 
 
+## The card as STRUCTURED rows for the dashboard's grid:
+##   {t: "kv", k, v, tone}         a key / value line
+##   {t: "alert", text, level}     warn | error — drawn as an AlertBanner
+##   {t: "sub", text}              a pond's own heading
+## tone is ok | warn | muted. `lines()` below keeps the flat text form.
+static func rows(b: Dictionary) -> Array:
+	var out: Array = []
+	var e: Dictionary = b.get("energy", {}) as Dictionary
+	if bool(e.get("loads_shed", false)):
+		out.append({"t": "alert", "level": "error",
+			"text": "AC is off — the battery is at its floor; loads are shed until it recovers"})
+	elif bool(e.get("load_uncovered", false)):
+		out.append({"t": "alert", "level": "warn",
+			"text": "Loads exceed generation — the battery empties in %s" % fmt_hours(float(e.get("hours_to_empty", INF)))})
+	if float(e.get("unwired_kw", 0.0)) > 0.005:
+		out.append({"t": "alert", "level": "warn",
+			"text": "%s of hydro is not wired to the battery" % UiText.num(float(e.get("unwired_kw", 0.0)) * 1000.0, "W")})
+	for g_v in (e.get("gens", []) as Array):
+		var g: Dictionary = g_v
+		var v := UiText.num(float(g.get("kw", 0.0)) * 1000.0, "W")
+		if str(g.get("kind", "")) == "hydro":
+			if float(g.get("q_lps", 0.0)) > 0.0:
+				v += " · %s L/s" % UiText.num(float(g.get("q_lps", 0.0)))
+			elif not str(g.get("regime", "")).is_empty():
+				v += " · %s" % str(g.get("regime", ""))
+		out.append({"t": "kv", "k": str(g.get("name", "")), "v": v,
+			"tone": "ok" if float(g.get("kw", 0.0)) > 0.001 else "muted"})
+	var net := float(e.get("net_kw", 0.0))
+	out.append({"t": "kv", "k": "Making", "v": UiText.num(float(e.get("gen_kw", 0.0)) * 1000.0, "W"), "tone": "muted"})
+	out.append({"t": "kv", "k": "Using", "v": UiText.num(float(e.get("load_kw", 0.0)) * 1000.0, "W"), "tone": "muted"})
+	out.append({"t": "kv", "k": "Net", "v": "%s%s · %s%s kWh/day" % [
+			"+" if net >= 0.0 else "", UiText.num(net * 1000.0, "W"),
+			"+" if float(e.get("daily_net_kwh", 0.0)) >= 0.0 else "", UiText.num(float(e.get("daily_net_kwh", 0.0)))],
+		"tone": "warn" if bool(e.get("load_uncovered", false)) else "ok"})
+	if not bool(e.get("loads_shed", false)) and not bool(e.get("load_uncovered", false)) and net > 1e-4:
+		out.append({"t": "kv", "k": "Battery full in", "v": fmt_hours(float(e.get("hours_to_full", INF))), "tone": "muted"})
+	for p_v in (b.get("ponds", []) as Array):
+		var p: Dictionary = p_v
+		var head := str(p.get("name", ""))
+		if not is_nan(float(p.get("level_m", NAN))):
+			head += " · %s m" % UiText.num(float(p.get("level_m", 0.0)))
+		out.append({"t": "sub", "text": head})
+		out.append({"t": "kv", "k": "In", "v": "%s m³/h (streams %s · rain %s)" % [
+				UiText.num((float(p.get("stream_lph", 0.0)) + float(p.get("rain_lph", 0.0))) / 1000.0),
+				UiText.num(float(p.get("stream_lph", 0.0)) / 1000.0), UiText.num(float(p.get("rain_lph", 0.0)) / 1000.0)],
+			"tone": "muted"})
+		out.append({"t": "kv", "k": "Out", "v": "%s m³/h · spill %s" % [
+				UiText.num(float(p.get("draw_lph", 0.0)) / 1000.0), UiText.num(float(p.get("spill_lph", 0.0)) / 1000.0)],
+			"tone": "muted"})
+		var nl := float(p.get("net_lph", 0.0))
+		if float(p.get("spill_lph", 0.0)) > 1.0:
+			out.append({"t": "alert", "level": "warn", "text": "%s is full and spilling%s" % [str(p.get("name", "")),
+					"" if not str(p.get("spill_to", "")).is_empty() else " (no outlet set: the surplus leaves unrouted)"]})
+		elif nl > 1.0:
+			out.append({"t": "kv", "k": "Rising", "v": "%s m³/h · full in %s" % [UiText.num(nl / 1000.0),
+					fmt_hours(float(p.get("hours_to_full", INF)))], "tone": "ok"})
+		elif nl < -1.0:
+			out.append({"t": "kv", "k": "Falling", "v": "%s m³/h" % UiText.num(-nl / 1000.0), "tone": "muted"})
+	return out
+
+
 ## The card's text lines: [{text, tone}] where tone is ok | warn | muted.
 static func lines(b: Dictionary) -> Array:
 	var out: Array = []

@@ -51,6 +51,8 @@ func _ready() -> void:
 	_sub.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	row.add_child(_sub)
 	add_child(_chip)
+	HudLayout.register(_chip, "peak_score", "top_center", {"order": 2, "tuckable": false,
+		"size": func() -> Vector2: return _chip.get_combined_minimum_size()})
 
 
 func _process(delta: float) -> void:
@@ -71,7 +73,12 @@ func _process(delta: float) -> void:
 		_chip.scale = Vector2(s, s)
 		_chip.modulate = Color(1.0, 1.0, 1.0).lerp(Color(0.75, 1.6, 0.85), _flash)
 	_chip.pivot_offset = _chip.size * 0.5
-	_chip.position.x = -_chip.size.x * 0.5
+	# Placed by the HUD layout manager's top-centre row (registered in _ready).
+	var h := HudLayout.get_hud()
+	if h != null:
+		h.queue_layout()
+	else:
+		_chip.position.x = -_chip.size.x * 0.5
 
 
 func _refresh() -> void:

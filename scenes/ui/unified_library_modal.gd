@@ -115,6 +115,7 @@ func _build_ui() -> void:
 	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", UITheme.SPACE_SM)

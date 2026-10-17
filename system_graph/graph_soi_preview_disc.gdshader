@@ -6,6 +6,9 @@ shader_type canvas_item;
 /// `use_mask` 0 shows the whole container (the Hydro Lab embed).
 uniform float edge_softness : hint_range(0.0, 0.08) = 0.008;
 uniform int use_mask = 1;
+// Whole-preview opacity: the bootcamp dims the live site to a backdrop behind
+// freeform cards during a run playback (modulate is ignored by this shader).
+uniform float opacity : hint_range(0.0, 1.0) = 1.0;
 uniform int use_pixel_disc = 0;
 uniform vec2 disc_center_px = vec2(0.5, 0.5);
 uniform float disc_radius_px = 1.0;
@@ -58,7 +61,7 @@ void fragment() {
 		COLOR.rgb = mix(air, COLOR.rgb, COLOR.a);
 		COLOR.a = 1.0;
 	}
-	COLOR.a *= a;
+	COLOR.a *= a * opacity;
 	if (COLOR.a < 0.01) {
 		discard;
 	}

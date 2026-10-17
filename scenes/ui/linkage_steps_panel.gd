@@ -214,7 +214,7 @@ func _build() -> void:
 	var left := VBoxContainer.new()
 	left.custom_minimum_size.x = 300
 	row.add_child(left)
-	left.add_child(_label("BUILD STEPS", UITheme.FONT_SM, UITheme.C_PRIMARY))
+	left.add_child(SectionHeader.make("Build steps"))
 	_list = ItemList.new()
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -340,7 +340,7 @@ func _build() -> void:
 	_btn(dl, "↑", "Move up", func() -> void: _move(-1))
 	_btn(dl, "↓", "Move down", func() -> void: _move(1))
 	_btn(dl, "⧉", "Duplicate", _duplicate)
-	_btn(dl, "✕", "Delete", _delete)
+	IconButton.style(_btn(dl, "", "", _delete), "trash-2", "Delete this step")
 	var act := HBoxContainer.new()
 	act.add_theme_constant_override("separation", 4)
 	right.add_child(act)
@@ -473,7 +473,7 @@ func _mark_dirty() -> void:
 func _update_status() -> void:
 	var steps: Array = _bs.get("steps", [])
 	var secs := float(LinkageBuildSteps.total_duration_ms(_bs)) / 1000.0 if not steps.is_empty() else 0.0
-	_status_lbl.text = "%d steps · %d shown · %.0f s%s" % [steps.size(),
+	_status_lbl.text = "%s · %d shown · %.0f s%s" % [UiText.count(steps.size(), "step"),
 		LinkageBuildSteps.representative_steps(steps).size(), secs, "  · unsaved" if _dirty else ""]
 	if _save_btn != null:
 		_save_btn.disabled = not _dirty

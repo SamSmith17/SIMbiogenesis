@@ -55,6 +55,13 @@ func set_prompt_text(text: String) -> void:
 		_prompt_lbl.visible = true
 
 
+## The prompt currently shown ("" when hidden).
+func get_prompt_text() -> String:
+	if _prompt_lbl == null or not _prompt_lbl.visible:
+		return ""
+	return _prompt_lbl.text
+
+
 func _draw_reticle() -> void:
 	var col := C_ACTIVE if _target_active else C_NEUTRAL
 	var c := _reticle.size * 0.5

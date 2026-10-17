@@ -136,8 +136,8 @@ func share_my_design() -> Dictionary:
 		for i in chunks.size():
 			rpc_design_chunk.rpc_id(1, transfer_id, i, chunks[i])
 		rpc_design_end.rpc_id(1, transfer_id)
-	_status("Shared design with session (%d nodes, %d props)" % [
-		int(summary.get("item_count", 0)), int(summary.get("prop_count", 0))], "ok")
+	_status("Shared design with session (%s, %s)" % [
+		UiText.count(int(summary.get("item_count", 0)), "node"), UiText.count(int(summary.get("prop_count", 0)), "prop")], "ok")
 	return {"ok": true, "transfer_id": transfer_id, "summary": summary, "chunks": chunks.size()}
 
 
@@ -179,8 +179,8 @@ func preview_package(package: Dictionary, offer_id: String = "") -> Dictionary:
 	pending_package = package.duplicate(true)
 	active_offer_id = offer_id
 	offer_changed.emit()
-	_status("Ghost preview · %d graph nodes · %d props" % [
-		int(ghost_graph.get("item_count", 0)), ghost_prop_count], "info")
+	_status("Ghost preview · %s · %s" % [
+		UiText.count(int(ghost_graph.get("item_count", 0)), "graph node"), UiText.count(ghost_prop_count, "prop")], "info")
 	return {
 		"ok": true,
 		"item_count": int(ghost_graph.get("item_count", 0)),

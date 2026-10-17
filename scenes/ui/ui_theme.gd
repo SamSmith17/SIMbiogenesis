@@ -53,9 +53,10 @@ const LAYER_TOAST        := 90
 const LAYER_LOAD_OVERLAY := 100
 
 # ---------------------------------------------------------------------------
-# Typography scale (matches the sizes already in use: 10/12/14/16/20).
+# Typography scale. XS is 11 — the size 125 call sites already used as their
+# "small" (the old 10 was below what reads at 1080p in Inter).
 # ---------------------------------------------------------------------------
-const FONT_XS := 10
+const FONT_XS := 11
 const FONT_SM := 12
 const FONT_MD := 14
 const FONT_LG := 16
@@ -68,6 +69,23 @@ const SPACE_MD := 12
 const SPACE_LG := 16
 
 const CORNER_RADIUS := 6
+
+
+## The project Theme (Inter, every stock control styled from this palette) —
+## see UiThemeBuilder. Installed on the root window at boot by `install`.
+static func build_theme() -> Theme:
+	return UiThemeBuilder.build()
+
+
+## Theme + UI scale on the root window (called once by the Services autoload).
+static func install(root: Window) -> void:
+	UiThemeBuilder.install(root)
+
+
+## Inter at a weight ("regular" | "medium" | "semibold"); tabular figures with
+## `numeric` for readouts that change while you watch them.
+static func font(weight: String = "regular", numeric: bool = false) -> Font:
+	return UiThemeBuilder.numeric_font(weight) if numeric else UiThemeBuilder.font(weight)
 
 
 ## Standard panel: dark bg, 1px border, rounded corners, content margins.

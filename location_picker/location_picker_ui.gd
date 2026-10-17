@@ -127,6 +127,7 @@ func _ready() -> void:
 	G = get_node_or_null("/root/GhiService") as GhiService
 	anchors_preset = Control.PRESET_FULL_RECT
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	add_to_group("world_list_listeners")
 	_build_ui()
 	_geocode.search_done.connect(_on_geocode_hits)
 	_geocode.search_failed.connect(_on_geocode_err)
@@ -251,6 +252,9 @@ func _anchor_full_rect(ctrl: Control, inset: float = 0.0) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED and visible:
 		call_deferred("_layout_panel")
+	elif what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
+		# Every way the picker closes, not only hide_picker().
+		HudLayout.release("location_picker")
 
 ## Keep split ratio and map aspect in sync after the panel fills the viewport.
 func _layout_panel() -> void:
@@ -265,6 +269,12 @@ func _layout_panel() -> void:
 
 func show_picker() -> void:
 	visible = true
+	if not _is_launch_mode():
+		# In a world: the HUD hides under the picker, and the picker stops
+		# above the timeline instead of drawing its footer over it.
+		HudLayout.claim_modal("location_picker")
+		if _panel != null:
+			_panel.offset_bottom = -(HudLayout.timeline_height() + 10.0)
 	_legend_picked = -1
 	_sel_lat = NAN
 	_sel_lng = NAN
@@ -300,6 +310,7 @@ func hide_picker() -> void:
 	if _is_launch_mode():
 		return
 	visible = false
+	HudLayout.release("location_picker")
 	picker_dismissed.emit()
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -384,6 +395,11 @@ func _build_ui() -> void:
 		_quit_btn = Button.new()
 		_quit_btn.text = "Quit"
 		_quit_btn.pressed.connect(_on_quit_pressed)
+		var share_btn := Button.new()
+		share_btn.text = "Share…"
+		share_btn.tooltip_text = "Export your worlds, models and settings as a zip for a friend, or install one a friend sent you."
+		share_btn.pressed.connect(func() -> void: AssetPackModal.open_export(self))
+		header_btns.add_child(share_btn)
 		header_btns.add_child(_continue_btn)
 		header_btns.add_child(_quit_btn)
 		header.add_child(header_btns)
@@ -940,33 +956,8 @@ func _create_map() -> void:
 ## by every world on it. Re-creating a site keeps its existing name unless this
 ## selection has a real one, and never resets its extents or OSM offsets.
 func _register_map_definition(map: Dictionary) -> Dictionary:
-	var lat := float(map["lat"])
-	var lon := float(map["lon"])
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
-	var path := "user://maps/loc_%s_%s.tres" % [CoordToken.token(lat), CoordToken.token(lon)]
-	var md: MapDefinition = null
-	if ResourceLoader.exists(path):
-		md = load(path) as MapDefinition
-	if md == null:
-		md = MapDefinition.new()
-		md.scene_path = MapDefinition.GENERATED_SCENE
-		md.latitude = lat
-		md.longitude = lon
-	if not _place_label.is_empty() or md.display_name.is_empty() or md.display_name == "Map":
-		md.display_name = str(map["label"])
-	md.description = "Location map for %s.\nTerrain + imagery from open data." % md.display_name
-	md.load_from_cache = true
-	md.touch_last_loaded()
-	var meta := TerrainCacheSettings.get_meta_extents(lat, lon)
-	if md.half_extent_m <= 0.0:
-		md.half_extent_m = float(meta.get("half_extent_m", 0.0))
-	if md.detail_half_extent_m <= 0.0:
-		md.detail_half_extent_m = float(meta.get("detail_half_extent_m", 0.0))
-	if md.osm_half_extent_m <= 0.0:
-		md.osm_half_extent_m = float(meta.get("osm_half_extent_m", 0.0))
-	if ResourceSaver.save(md, path) != OK:
-		push_warning("LocationPicker: could not write %s" % path)
-	return WorldStore.map_ref_from_definition(md, path)
+	return MapRegistry.ensure_generated({"lat": map["lat"], "lon": map["lon"], "label": map["label"]},
+		not _place_label.is_empty())
 
 
 func _on_add_starshade_pressed() -> void:
@@ -1041,7 +1032,7 @@ func _refresh_panels() -> void:
 func _show_welcome_panel() -> void:
 	_zone_title.text = "Planet Earth"
 	_zone_ghi.visible = true
-	_zone_ghi.text = "Stellar Basic Income: 4.167 billion kWh per day"
+	_zone_ghi.text = "Stellar Basic Income: 4.17 billion kWh per day"
 	_zone_pot.text = "Welcome, select your energy zone"
 	_zone_pot.add_theme_font_size_override("font_size", 15)
 	_zone_narr.text = WELCOME_EXPLAINER
@@ -1350,6 +1341,12 @@ func _run_legacy_migration() -> void:
 		print("LocationPicker: migrated %d existing site(s) into worlds." % made.size())
 
 
+## Called (group "world_list_listeners") when an asset pack added worlds.
+func refresh_world_list() -> void:
+	if _maps_list != null:
+		_refresh_worlds_list()
+
+
 func _refresh_worlds_list(select_id: String = "") -> void:
 	if _maps_list == null:
 		return
@@ -1409,7 +1406,7 @@ func _make_world_row(index: int) -> PanelContainer:
 	h.add_child(v)
 	var name_lbl := Label.new()
 	name_lbl.name = "Name"
-	name_lbl.text = WorldStore.display_name(rec)
+	name_lbl.text = SitePrivacy.place(WorldStore.display_name(rec))
 	name_lbl.clip_text = true
 	name_lbl.add_theme_font_size_override("font_size", 15)
 	name_lbl.add_theme_color_override("font_color", _TEXT)
@@ -1446,6 +1443,11 @@ func _make_world_row(index: int) -> PanelContainer:
 	dup.tooltip_text = "Make an independent copy of this world (a checkpoint)."
 	dup.pressed.connect(_duplicate_world.bind(index))
 	h.add_child(dup)
+	var share := Button.new()
+	share.text = "Share…"
+	share.tooltip_text = "Export this world (and what it needs) as a zip for a friend."
+	share.pressed.connect(func() -> void: AssetPackModal.open_export(self, str(rec.get("id", ""))))
+	h.add_child(share)
 	var del := Button.new()
 	del.text = "Delete"
 	del.tooltip_text = "Move this world to the trash (user://worlds/_trash). The map's terrain cache is kept."
@@ -1471,8 +1473,8 @@ func _world_map_label(rec: Dictionary) -> String:
 	var map: Dictionary = rec.get("map", {}) if rec.get("map", {}) is Dictionary else {}
 	var label := str(map.get("label", "")).strip_edges()
 	if not label.is_empty():
-		return label
-	return WorldStore.display_name({"map": map})
+		return SitePrivacy.place(label)
+	return SitePrivacy.place(WorldStore.display_name({"map": map}))
 
 
 ## "location · played 3 h ago · Sep 3 21:30 · 2 h 10 m · ⚡ 4,114"
@@ -1598,7 +1600,7 @@ func _commit_rename(index: int) -> void:
 	WorldStore.rename(id, ed.text)
 	_world_recs[index]["name"] = ed.text.strip_edges()
 	if lbl != null:
-		lbl.text = WorldStore.display_name(_world_recs[index])
+		lbl.text = SitePrivacy.place(WorldStore.display_name(_world_recs[index]))
 		lbl.visible = true
 
 
@@ -1756,7 +1758,7 @@ func _refresh_new_world_panel() -> void:
 		return
 	_nw_start_btn.disabled = false
 	var map: Dictionary = src["map"]
-	_nw_source_lbl.text = str(src["label"])
+	_nw_source_lbl.text = SitePrivacy.place(str(src["label"]))
 	_nw_name.placeholder_text = "World name (default: %s)" % str(src["label"])
 	var others := WorldStore.worlds_on_map(map).size()
 	var bits: Array[String] = []

@@ -528,7 +528,7 @@ func _update_entity_btn_text() -> void:
 	var mapper: RefCounted = _player.get_mapper()
 	if mapper != null:
 		linked = mapper.linked_role_count()
-	_entity_btn.text = "%s  ·  %d entities  ·  %d linked  ▸" % [fname, count, linked]
+	_entity_btn.text = "%s  ·  %s  ·  %d linked  ▸" % [fname, UiText.count(count, "entity"), linked]
 
 
 

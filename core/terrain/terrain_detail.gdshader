@@ -78,6 +78,14 @@ uniform float litter_extent_m = 0.0;
 uniform float litter_strength : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 litter_color : source_color = vec3(0.40, 0.25, 0.11);
 
+// Forest-floor moss (VegFloorMoss, 2026-10-15): a coverage mask fitted to the
+// forested rectangle (moss_rect = x0, z0, size m), painted moss-green in
+// patches under the trees. strength 0 = off (the default).
+uniform sampler2D moss_tex : filter_linear, repeat_disable;
+uniform vec4 moss_rect = vec4(0.0);
+uniform float moss_strength : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 moss_color : source_color = vec3(0.22, 0.34, 0.08);
+
 // -----------------------------------------------------------------------------
 // Near-field ground detail (foot-level realism).
 // The ESRI ortho drape tops out at ~0.25 m/px (z19), so it reads as soft blocks
@@ -333,6 +341,22 @@ void fragment() {
 			}
 
 			world_n = normalize(mix(world_n, detail_n, k));
+		}
+	}
+
+	// Moss first: autumn litter and snow lie on top of it.
+	if (moss_strength > 0.001 && moss_rect.z > 0.0) {
+		vec2 muv = (v_world_pos.xz - moss_rect.xy) / moss_rect.z;
+		if (muv.x >= 0.0 && muv.x <= 1.0 && muv.y >= 0.0 && muv.y <= 1.0) {
+			float cover = texture(moss_tex, muv).r * moss_strength;
+			if (cover > 0.001) {
+				float mn = _fbm(v_world_pos.xz * 0.35);
+				float mn2 = _fbm(v_world_pos.xz * 1.7 + vec2(7.3, 1.9));
+				float amt = clamp(cover * (0.35 + 0.9 * mn), 0.0, 1.0) * 0.85;
+				vec3 mc = moss_color * (0.75 + 0.5 * mn2);
+				col = mix(col, mc, amt);
+				rough = mix(rough, 1.0, amt * 0.6);
+			}
 		}
 	}
 

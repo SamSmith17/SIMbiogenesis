@@ -85,6 +85,7 @@ func _build_ui() -> void:
 	panel.custom_minimum_size = Vector2(980, 640)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
+	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 
 	var root_v := VBoxContainer.new()
 	root_v.add_theme_constant_override("separation", 8)
@@ -537,7 +538,7 @@ func _on_auto_detect() -> void:
 				opt.select(i + 1)
 				break
 	_apply_all_jogs()
-	_status_lbl.text = "Auto-detected %d axes" % found.size()
+	_status_lbl.text = "Auto-detected %s" % UiText.count(found.size(), "axis", "axes")
 
 
 func _on_save() -> void:

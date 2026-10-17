@@ -115,6 +115,7 @@ func open(clip_id: String = "") -> void:
 	_load_clip(id)
 	visible = true
 	CursorController.request_modal(MODAL_NAME, Callable(self, "request_close"))
+	HudLayout.claim_modal(MODAL_NAME)
 
 
 ## Close, asking first when there are unsaved changes.
@@ -133,6 +134,7 @@ func close() -> void:
 	if _confirm != null:
 		_confirm.visible = false
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
 
@@ -247,11 +249,7 @@ func _build_topbar() -> Control:
 	_status.add_theme_color_override("font_color", C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	bar.add_child(_status)
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.focus_mode = Control.FOCUS_NONE
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(request_close)
+	var close_btn := IconButton.close(request_close)
 	bar.add_child(close_btn)
 	return wrap
 
@@ -271,11 +269,7 @@ func _row(parent: Control, label: String, control: Control) -> void:
 
 
 func _section_label(parent: Control, text: String) -> void:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_color_override("font_color", C_PRIMARY)
-	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	parent.add_child(l)
+	parent.add_child(SectionHeader.make(text))
 
 
 func _build_sidebar() -> Control:
@@ -372,10 +366,15 @@ func _build_sidebar() -> Control:
 	_joint_box.add_child(grid)
 	for name in ["body"] + NpcAnimClip.JOINTS:
 		var b := Button.new()
-		b.text = str(name)
+		# "shoulder_r" -> "Shoulder R": the joint's id stays in the tooltip.
+		var words := str(name).split("_")
+		for i in words.size():
+			words[i] = words[i].to_upper() if words[i].length() == 1 else words[i].capitalize()
+		b.text = " ".join(words)
+		b.tooltip_text = "Select the %s joint (%s)" % [b.text.to_lower(), str(name)]
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
-		b.custom_minimum_size.x = 88
+		b.custom_minimum_size = Vector2(88, 26)
 		UITheme.style_toggle(b, false)
 		var jn: String = name
 		b.pressed.connect(func() -> void: select_joint(jn))

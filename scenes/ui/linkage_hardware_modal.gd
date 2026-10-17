@@ -299,11 +299,7 @@ func _build_topbar() -> Control:
 	reset.pressed.connect(_on_reset_assembly)
 	bar.add_child(reset)
 
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.focus_mode = Control.FOCUS_NONE
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	bar.add_child(close_btn)
 	return wrap
 
@@ -429,27 +425,11 @@ func _build_right() -> Control:
 ## worse than no sections at all.
 func _section(title: String, default_open: bool) -> VBoxContainer:
 	var open := bool(_section_open.get(title, default_open))
-	var head := Button.new()
-	head.flat = true
-	head.focus_mode = Control.FOCUS_NONE
-	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	head.text = "%s  %s" % ["▾" if open else "▸", title]
-	head.add_theme_color_override("font_color", C_PRIMARY)
-	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	_inspector_box.add_child(head)
-
-	var body := VBoxContainer.new()
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_XS)
-	body.visible = open
-	_inspector_box.add_child(body)
-
-	head.pressed.connect(func() -> void:
-		var now := not bool(_section_open.get(title, default_open))
-		_section_open[title] = now
-		body.visible = now
-		head.text = "%s  %s" % ["▾" if now else "▸", title])
-	return body
+	var sec := Collapsible.make(title, open)
+	_inspector_box.add_child(sec)
+	sec.folding_changed.connect(func(is_folded: bool) -> void:
+		_section_open[title] = not is_folded)
+	return sec.body
 
 
 ## One editable field, wired live. `flags` says what the edit costs — see the
@@ -833,7 +813,8 @@ func _rebuild_context() -> void:
 			(others[aid] as Array).append(e["transform"])
 	_ring_center = Vector3.ZERO
 	if not all.is_empty():
-		_ring_center = centre_sum / float(all.size()) 			* LinkageHwAssemblyBuilder.INCH_TO_M
+		_ring_center = centre_sum / float(all.size()) \
+				* LinkageHwAssemblyBuilder.INCH_TO_M
 
 	# The ACTIVE assembly: editable stack seated on its first joint, clones on
 	# the rest. An assembly nothing uses falls back to the standalone pose —
@@ -952,11 +933,7 @@ func _rebuild_part_list() -> void:
 	for child in _parts_box.get_children():
 		child.queue_free()
 	var asm := _active()
-	var head := Label.new()
-	head.text = str(asm.get("label", _active_id))
-	head.add_theme_color_override("font_color", C_PRIMARY)
-	head.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-	_parts_box.add_child(head)
+	_parts_box.add_child(SectionHeader.make(str(asm.get("label", _active_id))))
 
 	var bracket := LinkageHardware.bracket_part(asm)
 	if not bracket.is_empty():
@@ -1027,12 +1004,7 @@ func _add_part_row(part: Dictionary, axis: String) -> void:
 	dup.pressed.connect(func() -> void: _select(pid, 0); _duplicate_selected())
 	row.add_child(dup)
 	var del := Button.new()
-	del.text = "✕"
-	del.tooltip_text = "Delete"
-	del.flat = true
-	del.focus_mode = Control.FOCUS_NONE
-	del.custom_minimum_size.x = 18
-	del.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	IconButton.style(del, "trash-2", "Delete this part", "", 14)
 	del.pressed.connect(func() -> void: _select(pid, 0); _delete_selected())
 	row.add_child(del)
 

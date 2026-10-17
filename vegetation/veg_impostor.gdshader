@@ -206,5 +206,11 @@ void fragment() {
 	// fades continuously and full night lands where the lit near tier does.
 	float sun_up = clamp(sun_direction.y * 2.0 + 0.35, 0.0, 1.0);
 	float light_mul = mix(night_ambient_mul, mix(0.55, 1.0, sun_up), 1.0 - night_factor);
+	// The preview fill the lit tiers add as EMISSION (veg_fill, 0 in first
+	// person): without it a chunk swapping between the 3D mesh and this tier
+	// in the Globe / Elevation lenses jumped in brightness — read as trees
+	// popping. veg_fill only, never veg_sky_fill: this tier's first-person
+	// look is already tuned to the world's light.
+	light_mul += veg_fill * (1.0 - night_factor);
 	ALBEDO = veg_saturate(albedo, veg_saturation) * light_mul;
 }

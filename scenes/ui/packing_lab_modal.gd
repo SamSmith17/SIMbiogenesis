@@ -57,7 +57,7 @@ static func open_site_cargo(tree: SceneTree) -> void:
 	units.append_array(_load_custom_units(_site_token_for(tree.current_scene)))
 	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
 	tree.root.add_child(modal)
-	modal.call("open_with_units", units, "Site cargo (%d units)" % units.size(),
+	modal.call("open_with_units", units, "Site cargo (%s)" % UiText.count(units.size(), "unit"),
 		preselect)
 	modal.connect("closed", Callable(modal, "queue_free"))
 const GRID_SNAP := 0.05
@@ -142,6 +142,7 @@ func open_with_units(units: Array, source_label: String,
 	_update_delivery_ui()
 	visible = true
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 
 
 func close() -> void:
@@ -149,6 +150,7 @@ func close() -> void:
 		return
 	visible = false
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
 
@@ -445,7 +447,7 @@ func _on_deliver() -> void:
 	var sgv: Node = ServiceLocator.graph()
 	if sgv != null and sgv.has_method("_show_toast"):
 		sgv.call("_show_toast",
-			"🚚 %d crates delivered ahead of you — Interact to unpack; the crew's unload job is on the board" % n_crates)
+			"🚚 %s delivered ahead of you — Interact to unpack; the crew's unload job is on the board" % UiText.count(n_crates, "crate"))
 
 
 # ---------------------------------------------------------------------------

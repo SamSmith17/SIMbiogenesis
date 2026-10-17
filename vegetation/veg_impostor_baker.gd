@@ -27,7 +27,7 @@ signal bake_completed(key: String)
 ## the bake key (a photocard-first chain bakes the atlas FROM the photocard
 ## mesh, so the chain changes the baked silhouette).
 ## 6: no black shadow-proxy cards, side key light, alpha-edge bleed.
-const BAKE_VERSION := 7
+const BAKE_VERSION := 11
 const CACHE_DIR := "user://veg_impostors"
 const ATLAS_PX := 1024
 const GRID := 3
@@ -195,6 +195,17 @@ static func stamp_snag(mesh: Mesh, species: String, settings: Dictionary) -> voi
 	var family := VegetationCardFactory.mesh_family(species)
 	mat.set_shader_parameter("snag_trunk_radius",
 		float(settings.get("%s_trunk_diameter_cm" % family, 0.0)) / 200.0)
+	# The species' own autumn (a maple goes gold, an alder dull brown) — the
+	# impostor turns with the near tree, not with the shader's generic palette.
+	if family == "deciduous":
+		VegetationCardFactory.apply_autumn_palette(mat,
+			VegetationCardFactory.autumn_palette(species, settings))
+
+
+## True while bakes are queued or running (a debounced rebuild follows the
+## last one). Harness / check scripts wait on this before judging the far tier.
+func is_busy() -> bool:
+	return _baking or not _queue.is_empty()
 
 
 func _enqueue(species: String, settings: Dictionary) -> void:

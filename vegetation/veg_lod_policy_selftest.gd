@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_test_chain_parsing()
 	_test_chain_bands()
 	_test_chain_resolution()
+	_test_far_tier_reach()
 	if _failures == 0:
 		print("VEG LOD POLICY SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -212,3 +213,61 @@ func _test_chain_resolution() -> void:
 			{"pine_detail_chain": "photocard,impostor"})
 	_check("bake key includes the chain", k_default != k_photo,
 			"%s == %s" % [k_default, k_photo])
+
+
+## The Globe lens / snowglobe orbit up to 4.5 x the SoI radius out, and a
+## visibility range is measured to each 256 m chunk's centre: a far tier that
+## stopped at the first-person cull end (480 m on large maps) blinked whole
+## chunks in and out. The far tier now reaches KEY_FAR_TIER_END; the mesh
+## tier must NOT (it is the prim budget), and the handoff fade grows with
+## distance so one orbit zoom notch cannot jump across it.
+func _test_far_tier_reach() -> void:
+	var chain := ["mesh", "impostor"]
+	_check("far tier takes the globe reach",
+		is_equal_approx(VegLodPolicy.far_tier_end(chain, 480.0,
+			{VegLodPolicy.KEY_FAR_TIER_END: 1340.0}), 1340.0))
+	_check("far tier never shorter than the cull end",
+		is_equal_approx(VegLodPolicy.far_tier_end(chain, 1800.0,
+			{VegLodPolicy.KEY_FAR_TIER_END: 1340.0}), 1800.0))
+	_check("no reach key = the cull end",
+		is_equal_approx(VegLodPolicy.far_tier_end(chain, 480.0, {}), 480.0))
+	_check("a mesh-only chain keeps the cull end (prim budget)",
+		is_equal_approx(VegLodPolicy.far_tier_end(["mesh"], 480.0,
+			{VegLodPolicy.KEY_FAR_TIER_END: 1340.0}), 480.0))
+	_check("fade band floor", is_equal_approx(VegLodPolicy.fade_margin_for(60.0), 24.0))
+	_check("fade band grows with distance",
+		VegLodPolicy.fade_margin_for(400.0) > VegLodPolicy.fade_margin_for(150.0))
+	_check("fade band capped", VegLodPolicy.fade_margin_for(5000.0) <= VegLodPolicy.MAX_FADE_M)
+	# A real build: headless never bakes, so the far tier is the crossed-card
+	# stand-in — its range is the same band the impostor would get.
+	var root := Node3D.new()
+	var settings: Dictionary = VegetationStyleConfig.defaults()
+	settings["tree_detail_eff_m"] = 150.0
+	settings[VegLodPolicy.KEY_FAR_TIER_END] = 1340.0
+	var resolved := VegSpeciesCatalog.settings_with_variant("fir", settings,
+		VegetationCardFactory.SPECS)
+	var recs := [{"x": 10.0, "z": 10.0, "yaw": 0.0, "scale": 1.0}]
+	VegetationRuntime._build_canopy_lod_bulk_batches(root, "fir", recs,
+		func(_x: float, _z: float) -> float: return 0.0, false, resolved, 480.0)
+	var near_end := -1.0
+	var far_end := -1.0
+	var near_end_margin := -1.0
+	var far_begin_margin := -1.0
+	for c in root.get_children():
+		var mi := c as GeometryInstance3D
+		if mi == null:
+			continue
+		if mi.visibility_range_begin <= 0.0:
+			near_end = mi.visibility_range_end
+			near_end_margin = mi.visibility_range_end_margin
+		else:
+			far_end = mi.visibility_range_end
+			far_begin_margin = mi.visibility_range_begin_margin
+	_check("built mesh tier ends at the detail distance", is_equal_approx(near_end, 150.0),
+		"got %.1f" % near_end)
+	_check("built far tier reaches the globe", is_equal_approx(far_end, 1340.0),
+		"got %.1f" % far_end)
+	_check("handoff fade bands match on both sides",
+		is_equal_approx(near_end_margin, far_begin_margin) and near_end_margin > 0.0,
+		"%.1f vs %.1f" % [near_end_margin, far_begin_margin])
+	root.free()

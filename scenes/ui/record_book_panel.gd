@@ -508,6 +508,7 @@ func _build_modal() -> void:
 	sb.shadow_color = Color(0.0, 0.0, 0.0, 0.50)
 	_panel.add_theme_stylebox_override("panel", sb)
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var vbox := VBoxContainer.new()
 	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -534,15 +535,8 @@ func _build_header(parent: VBoxContainer) -> void:
 	_header_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(_header_lbl)
 
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.focus_mode = Control.FOCUS_NONE
+	var close_btn := IconButton.close(close)
 	close_btn.custom_minimum_size = Vector2(32, 32)
-	close_btn.add_theme_color_override("font_color", C_TEXT_M)
-	close_btn.add_theme_color_override("font_hover_color", C_TEXT)
-	close_btn.add_theme_font_size_override("font_size", 16)
-	close_btn.pressed.connect(close)
 	hbox.add_child(close_btn)
 
 
@@ -749,15 +743,17 @@ func open() -> void:
 	_update_header()
 	visible = true
 	set_process(_needs_background_process())
-	# Release mouse so the user can interact with the modal.
-	if CursorController.has_method("set_paused"):
-		CursorController.set_paused(true)
+	# The shared modal contract: frees the mouse, Esc closes it, and it closes
+	# when another flow pops the modal stack (it used to only pause the cursor,
+	# so it stayed open behind every modal opened after it).
+	CursorController.request_modal("record_book", Callable(self, "close"))
 	_ensure_generated_yearbook_queue()
 	_on_opened()
 
 
 func close() -> void:
 	visible = false
+	CursorController.release_modal("record_book")
 	if not _needs_background_process():
 		set_process(false)
 	_weather_gen_active = false
@@ -971,9 +967,9 @@ func _update_header() -> void:
 		stn = str(zone_svc.call("get_station_name", lat, lon))
 	var loc_str: String
 	if not stn.is_empty():
-		loc_str = "%s  (%.4f, %.4f)" % [stn, lat, lon]
+		loc_str = "%s  (%s)" % [stn, SitePrivacy.coords(lat, lon)]
 	else:
-		loc_str = "%.4f, %.4f" % [lat, lon]
+		loc_str = SitePrivacy.coords(lat, lon)
 	_header_lbl.text = "🌡 Climate Record Book — %s" % loc_str
 
 
@@ -1000,7 +996,7 @@ func _update_progress() -> void:
 		for yr in _proj_yearbook_cache.keys():
 			if int(yr) > cur_year:
 				done += 1
-		parts.append("Computing scenario… (%d/%d years)" % [done, total])
+		parts.append("Computing scenario… (%d/%s)" % [done, UiText.count(total, "year")])
 	if _weather_gen_waiting_training:
 		if WeatherService.is_fetching_training():
 			parts.append("Downloading training archive %d/%d…" % [
@@ -1009,7 +1005,7 @@ func _update_progress() -> void:
 			parts.append("Loading training archives %d/%d…" % [
 				_training_loaded_count, _training_total_count])
 		elif _gen_training_model:
-			parts.append("Training weather model from %d years…" % _training_total_count)
+			parts.append("Training weather model from %s…" % UiText.count(_training_total_count, "year"))
 	if _weather_gen_active:
 		var mo_names: Array[String] = [
 			"Jan", "Feb", "Mar", "Apr", "May", "Jun",

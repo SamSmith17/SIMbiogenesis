@@ -227,10 +227,7 @@ func _build_sidebar() -> Control:
 	v.add_child(sub)
 
 	v.add_child(_sep())
-	var tool_lbl := Label.new()
-	tool_lbl.text = "Draw"
-	tool_lbl.add_theme_font_size_override("font_size", 15)
-	v.add_child(tool_lbl)
+	v.add_child(SectionHeader.make("Draw"))
 	_tool_btns.clear()
 	for t: Array in [
 		[MudPlanCanvas.Tool.RECT, "Rectangle"],
@@ -298,10 +295,7 @@ func _build_sidebar() -> Control:
 	v.add_child(clear_doors)
 
 	v.add_child(_sep())
-	var wall_lbl := Label.new()
-	wall_lbl.text = "Walls"
-	wall_lbl.add_theme_font_size_override("font_size", 15)
-	v.add_child(wall_lbl)
+	v.add_child(SectionHeader.make("Walls"))
 	_height = _spin_row(v, "Height (mm)", 200, 4000, 2400, 50)
 	_shell_gap = _spin_row(v, "Shell gap (mm)", 20, 600, 100, 5)
 	_shell_gap.tooltip_text = "Clear space between the two perimeter shells — sine/gyroid fill lives here."
@@ -313,10 +307,7 @@ func _build_sidebar() -> Control:
 	for sb: SpinBox in [_height, _shell_gap, _thickness_base, _thickness_top, _layer]:
 		sb.value_changed.connect(func(_v: float): _schedule_rebuild())
 
-	var cam_lbl := Label.new()
-	cam_lbl.text = "Camber"
-	cam_lbl.add_theme_font_size_override("font_size", 15)
-	v.add_child(cam_lbl)
+	v.add_child(SectionHeader.make("Camber"))
 	_camber_btns.clear()
 	var cam_row := HBoxContainer.new()
 	for t: Array in [
@@ -338,10 +329,7 @@ func _build_sidebar() -> Control:
 	_set_camber(MudBuildingSpec.CamberMode.NONE)
 
 	v.add_child(_sep())
-	var fill_lbl := Label.new()
-	fill_lbl.text = "Wall fill"
-	fill_lbl.add_theme_font_size_override("font_size", 15)
-	v.add_child(fill_lbl)
+	v.add_child(SectionHeader.make("Wall fill"))
 	_fill_mode_btns.clear()
 	var fill_row := HBoxContainer.new()
 	for t: Array in [
@@ -365,10 +353,7 @@ func _build_sidebar() -> Control:
 	_fill_pitch.value_changed.connect(func(_v: float): _schedule_rebuild())
 
 	v.add_child(_sep())
-	var exp_lbl := Label.new()
-	exp_lbl.text = "GRBL export"
-	exp_lbl.add_theme_font_size_override("font_size", 15)
-	v.add_child(exp_lbl)
+	v.add_child(SectionHeader.make("GRBL export"))
 	var exp_note := Label.new()
 	exp_note.text = "E = volumetric mm³ of mud. Add pump M-codes in the prelude for your machine."
 	exp_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -784,10 +769,10 @@ func _apply_build(build: Dictionary) -> void:
 				fill_name = "sine fill"
 			MudBuildingSpec.FillMode.GYROID:
 				fill_name = "gyroid fill"
-		_est_lbl.text = "%d rooms · gap %.0f mm · %d layers · %s · %.0f m · ~%.1f L · %s" % [
-			int(_last_parse.get("island_count", 0)),
+		_est_lbl.text = "%s · gap %.0f mm · %s · %s · %.0f m · ~%.1f L · %s" % [
+			UiText.count(int(_last_parse.get("island_count", 0)), "room"),
 			_spec.shell_gap_mm,
-			int(_last_parse.get("layer_count", 0)),
+			UiText.count(int(_last_parse.get("layer_count", 0)), "layer"),
 			fill_name,
 			float(_last_parse.get("path_length_mm", 0.0)) / 1000.0,
 			float(_last_parse.get("volume_mm3", 0.0)) / 1_000_000.0,

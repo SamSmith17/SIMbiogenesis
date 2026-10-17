@@ -302,7 +302,13 @@ func _reason_of(chore: Dictionary) -> String:
 		Callable(self, "_name_for"))
 
 
-func _section(text: String) -> Label:
+func _section(text: String) -> SectionHeader:
+	return SectionHeader.make(text)
+
+
+## A heading that sits INSIDE a row (beside a button or a field) or whose text
+## changes — a plain Label, since a SectionHeader's hairline would fill the row.
+func _title_label(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", UITheme.FONT_MD)
@@ -395,6 +401,7 @@ func _build_ui() -> void:
 	_panel.offset_top = -340
 	_panel.offset_bottom = 340
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var margin := MarginContainer.new()
 	for m in ["margin_left", "margin_right"]:
@@ -427,10 +434,7 @@ func _build_ui() -> void:
 			close()
 			sgv.call("open_npc_routines", iid))
 	header.add_child(routines_btn)
-	var close_btn := Button.new()
-	UITheme.style_button(close_btn)
-	close_btn.text = "Close"
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	header.add_child(close_btn)
 
 	_tabs = TabContainer.new()
@@ -610,7 +614,7 @@ func _build_schedule_tab() -> void:
 	var wrap := VBoxContainer.new()
 	wrap.add_theme_constant_override("separation", 3)
 	tab.add_child(wrap)
-	_nd_title = _section("New duty")
+	_nd_title = _title_label("New duty")
 	wrap.add_child(_nd_title)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -666,7 +670,7 @@ func _build_schedule_tab() -> void:
 	var oc_head := HBoxContainer.new()
 	oc_head.add_theme_constant_override("separation", 8)
 	tab.add_child(oc_head)
-	oc_head.add_child(_section("On call — who answers when something breaks"))
+	oc_head.add_child(_title_label("On call — who answers when something breaks"))
 	_new_role_name = LineEdit.new()
 	_new_role_name.placeholder_text = "New role name"
 	_new_role_name.custom_minimum_size.x = 160
@@ -704,7 +708,7 @@ func _build_person_tab() -> void:
 			close()
 			sgv.call("open_npc_routines", iid))
 	head.add_child(back)
-	head.add_child(_section("Person"))
+	head.add_child(_title_label("Person"))
 	# The same pastel as this person's dot and avatar rim — the thread that
 	# ties the figure being watched to the ledger being read.
 	_person_swatch = ColorRect.new()
@@ -903,8 +907,7 @@ func _refresh_chores() -> void:
 			_refresh())
 		row.add_child(edit)
 		var del := Button.new()
-		UITheme.style_button(del)
-		del.text = "✕"
+		IconButton.style(del, "trash-2", "")
 		if badge.is_empty():
 			del.tooltip_text = "Delete this chore"
 			del.pressed.connect(func() -> void:
@@ -1170,9 +1173,7 @@ func _refresh_tasks() -> void:
 			# One-time player tasks had no way OUT — deletable only while
 			# nothing system tracks it and nobody is mid-work on it.
 			var del := Button.new()
-			UITheme.style_button(del)
-			del.text = "✕"
-			del.tooltip_text = "Delete this task"
+			IconButton.style(del, "trash-2", "Delete this task")
 			var cid := str(ch.get("id", ""))
 			del.pressed.connect(func() -> void:
 				var b := _board()
@@ -1284,9 +1285,7 @@ func _refresh_schedule() -> void:
 		ed.pressed.connect(func() -> void: _set_sel_duty(did))
 		name_cell.add_child(ed)
 		var rm := Button.new()
-		UITheme.style_button(rm)
-		rm.text = "✕"
-		rm.tooltip_text = "Remove this duty (its future slots go with it)"
+		IconButton.style(rm, "trash-2", "Remove this duty (its future slots go with it)")
 		rm.pressed.connect(func() -> void:
 			var dy := _duty()
 			if dy != null:
@@ -1693,9 +1692,7 @@ func _refresh_oncall() -> void:
 			_oncall_sig = _oncall_signature())
 		row.add_child(skill_opt)
 		var rm := Button.new()
-		UITheme.style_button(rm)
-		rm.text = "✕"
-		rm.tooltip_text = "Remove this role"
+		IconButton.style(rm, "trash-2", "Remove this role")
 		rm.pressed.connect(func() -> void:
 			var oc2 := _oncall()
 			if oc2 != null:

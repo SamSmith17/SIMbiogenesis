@@ -8,6 +8,15 @@ var _wire_renderer: GraphWireRendererV2
 
 var _legend_visible: bool = false
 var _hover_port: Dictionary = {}
+## Live context every GraphCard reads this draw (wired ports, the bank's flow).
+var _card_ctx: Dictionary = {}
+## Freeform cards use the one shared anatomy (GraphCard). Off = the legacy
+## per-type renderers (kept for A/B while the new cards bed in).
+var unified_cards: bool = true
+## Name every port beside its dot once zoomed in (Display pref "port_names").
+## Hover always names a port (the tooltip); this is for reading a whole card.
+var port_names: bool = true
+const PORT_NAME_MIN_ZOOM := 1.0
 
 # V2_NODE_SHADOW / V2_TITLE_GLOW / V2_PORT_RING, _draw_rounded_rect, and the
 # _draw_resource_flow_arrows_* helpers now live in the base graph_canvas.gd (single
@@ -35,8 +44,12 @@ func _gui_input(event: InputEvent) -> void:
 		_interaction.update_pointer(sd.position)
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		# V2 wire-pick: Ctrl+LMB selects nearest connection even when crowded by nodes.
-		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.ctrl_pressed:
+		# V2 wire-pick: Ctrl+LMB selects the nearest connection — but not over a
+		# node: Ctrl-click there adds the node to the selection (bootcamp L12
+		# tells the player to Ctrl-click the controller, whose card the PV wires
+		# cross, and the click used to select a wire instead).
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and mb.ctrl_pressed \
+				and _item_at_screen(mb.position).is_empty():
 			var conn := _connection_at_screen(mb.position)
 			if not conn.is_empty():
 				_select_connection(conn.get("id", "") as String)
@@ -49,12 +62,24 @@ func _gui_input(event: InputEvent) -> void:
 		# hovered port identity actually changes (mirrors the base _update_site_hover
 		# guard). The old _item_at_screen hover write was pure waste -- hover_item_id
 		# is never read anywhere.
+		# Path highlight: the node under the pointer (not while dragging).
+		if not _item_dragging and not _wire_dragging and mm.button_mask == 0:
+			set_path_focus(str(_item_at_screen(mm.position).get("id", "")))
 		var port := _port_at_screen(mm.position, "", "", _port_grab_radius())
 		var before := _hover_port_identity()
 		_hover_port = port
 		if _hover_port_identity() != before:
 			queue_redraw()
 	super._gui_input(event)
+
+
+func _notification(what: int) -> void:
+	super._notification(what)
+	# The pointer left the canvas: drop the port tooltip (it lingered over the
+	# graph after the pointer moved onto the timeline or a panel).
+	if what == NOTIFICATION_MOUSE_EXIT and not _hover_port.is_empty():
+		_hover_port = {}
+		queue_redraw()
 
 
 ## Stable identity of the currently-hovered port ("" when none) so motion events
@@ -69,6 +94,7 @@ func _hover_port_identity() -> String:
 
 
 func _draw() -> void:
+	_card_ctx = _build_card_ctx()
 	super._draw()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		return
@@ -78,6 +104,7 @@ func _draw() -> void:
 	_draw_v2_legend()
 	_draw_v2_connection_feedback()
 	_draw_v2_hover_port_tooltip()
+	_draw_pv_snap_guides()
 	_draw_cache_active = false
 
 
@@ -112,10 +139,11 @@ func _draw_v2_legend() -> void:
 func _draw_v2_connection_feedback() -> void:
 	if not _wire_dragging:
 		return
-	var fnt := ThemeDB.fallback_font
-	var fs := 11
+	var fnt := UITheme.font("medium")
+	var fs := UITheme.FONT_XS + 1
 	var txt := ""
 	var col := Color(0.75, 0.84, 0.95, 0.95)
+	var snap_pos := Vector2.INF
 	if not _wire_hub_drop.is_empty() and _wire_snap_valid:
 		txt = "Release on tank to add perimeter port"
 		col = Color(0.33, 0.92, 0.55, 0.95)
@@ -131,57 +159,86 @@ func _draw_v2_connection_feedback() -> void:
 	elif not _wire_snap.is_empty():
 		var item_id := _wire_snap.get("item_id", "") as String
 		var handle_id := _wire_snap.get("handle_id", "") as String
+		var target := GraphPortLabels.port_label(model.get_item(item_id) if model != null else {},
+			handle_id, str(_wire_snap.get("resource_kind", "")))
+		snap_pos = _wire_snap.get("pos", Vector2.INF) as Vector2
 		if _wire_snap_valid:
 			if _wire_snap_is_kind_override():
 				txt = ResourceKinds.mismatch_message(
 					_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
 				col = Color(0.95, 0.78, 0.35, 0.95)
 			else:
-				txt = "Release to connect: %s.%s" % [item_id, handle_id]
+				txt = "Release to connect to %s" % target
 				col = Color(0.33, 0.92, 0.55, 0.95)
 		else:
 			if _wire_src_polarity == "resource":
 				txt = ResourceKinds.mismatch_message(
 					_wire_src_resource_kind, str(_wire_snap.get("resource_kind", "")))
 			else:
-				txt = "Invalid connection: polarity mismatch on %s.%s" % [item_id, handle_id]
+				txt = "Can't connect here — %s is the wrong polarity" % target
 			col = Color(0.95, 0.45, 0.45, 0.95)
 	else:
-		txt = "Drag to a port — or drop on a tank body to add a hub port"
-	var p := _interaction.last_pointer_pos + Vector2(14.0, -10.0)
-	var hint := "Alt+drag hub port to rotate · Touch: drag ports/nodes · 2-finger pan"
-	# Background plate so the drag-hint text stays readable over busy graph content
-	# (the hover-port tooltip already does this; the drag feedback didn't).
+		txt = "Drag to a port — or drop on a tank to add a port"
+	# Touch gestures are only worth naming to someone using touch.
+	var hint := "Alt+drag a tank port to rotate it · Esc cancels"
+	if _touch_input_active():
+		hint = "Drag ports or nodes · two fingers pan"
 	var w1 := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var w2 := fnt.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1).x
-	var plate := Rect2(p - Vector2(6.0, 12.0), Vector2(maxf(w1, w2) + 12.0, 32.0))
-	draw_rect(plate, Color(0.05, 0.08, 0.16, 0.85), true)
+	var plate_sz := Vector2(maxf(w1, w2) + 16.0, float(fs) * 2.0 + 16.0)
+	var plate := Rect2(_feedback_plate_origin(_interaction.last_pointer_pos, snap_pos, plate_sz), plate_sz)
+	draw_rect(plate, Color(0.05, 0.08, 0.16, 0.9), true)
 	draw_rect(plate, Color(0.26, 0.34, 0.50, 0.7), false, 1.0)
-	draw_string(fnt, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	draw_string(fnt, p + Vector2(0.0, 14.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1, Color(0.75, 0.83, 0.95, 0.82))
+	var tp := plate.position + Vector2(8.0, float(fs) + 4.0)
+	draw_string(fnt, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+	draw_string(fnt, tp + Vector2(0.0, float(fs) + 4.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs - 1,
+		Color(0.75, 0.83, 0.95, 0.82))
+
+
+## Top-left of a hint plate near the pointer that never covers `avoid` (the
+## port the wire is about to snap to — the plate used to sit right on it) and
+## stays on the canvas.
+func _feedback_plate_origin(pointer: Vector2, avoid: Vector2, plate_sz: Vector2) -> Vector2:
+	var gap := 18.0
+	# Default: above-right of the pointer.
+	var o := pointer + Vector2(gap, -gap - plate_sz.y)
+	if avoid != Vector2.INF:
+		var d := pointer - avoid
+		# Put the plate on the far side of the pointer from the target.
+		o.x = pointer.x + gap if d.x >= 0.0 else pointer.x - gap - plate_sz.x
+		o.y = pointer.y + gap if d.y >= 0.0 else pointer.y - gap - plate_sz.y
+		if Rect2(o, plate_sz).grow(10.0).has_point(avoid):
+			o.y = avoid.y - gap - plate_sz.y if d.y < 0.0 else avoid.y + gap
+	o.x = clampf(o.x, 4.0, maxf(4.0, size.x - plate_sz.x - 4.0))
+	o.y = clampf(o.y, 4.0, maxf(4.0, size.y - plate_sz.y - 4.0))
+	return o
 
 
 func _draw_v2_hover_port_tooltip() -> void:
 	if _hover_port.is_empty():
 		return
-	var fnt := ThemeDB.fallback_font
-	var fs := 10
+	var fnt := UITheme.font("medium")
+	var fs := UITheme.FONT_XS + 1
 	var item_id := _hover_port.get("item_id", "") as String
 	var handle_id := _hover_port.get("handle_id", "") as String
-	var pol := _hover_port.get("polarity", "") as String
 	var rk := str(_hover_port.get("resource_kind", ""))
-	if item_id.is_empty() or handle_id.is_empty():
+	if item_id.is_empty() or handle_id.is_empty() or model == null:
 		return
-	var txt := "%s.%s [%s" % [item_id, handle_id, pol]
-	if not rk.is_empty():
-		txt += " · %s" % ResourceKinds.display_name(rk)
-	txt += "]"
-	var p := _interaction.last_pointer_pos + Vector2(12.0, 16.0)
+	var hover_item := model.get_item(item_id)
+	if hover_item.is_empty():
+		# The node is gone (deleted, or the graph was reloaded — a bootcamp
+		# level change): a stale hover used to read "Node · PV −" forever.
+		_hover_port = {}
+		return
+	var txt := GraphPortLabels.port_label(hover_item, handle_id, rk)
 	var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-	var rect := Rect2(p - Vector2(5.0, 11.0), Vector2(ts.x + 10.0, 16.0))
-	draw_rect(rect, Color(0.05, 0.08, 0.16, 0.9), true)
+	var sz := Vector2(ts.x + 14.0, float(fs) + 10.0)
+	var port_pos := _hover_port.get("pos", Vector2.INF) as Vector2
+	var rect := Rect2(_feedback_plate_origin(_interaction.last_pointer_pos, port_pos, sz), sz)
+	draw_rect(rect, Color(0.05, 0.08, 0.16, 0.92), true)
 	draw_rect(rect, Color(0.26, 0.34, 0.50, 0.85), false, 1.0)
-	draw_string(fnt, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.86, 0.91, 0.98, 0.97))
+	draw_string(fnt, rect.position + Vector2(7.0, float(fs) + 3.0), txt,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.86, 0.91, 0.98, 0.97))
 
 
 func _render_item(item: Dictionary) -> void:
@@ -196,6 +253,15 @@ func _render_item(item: Dictionary) -> void:
 	# Hide legacy aggregate panel card in V2; individual virtual panel nodes replace it.
 	if iid == "virtual_solar_array":
 		return
+	var itype0 := str(item.get("type", ""))
+	if unified_cards and GraphCardSpecs.handles(itype0):
+		var sp0: Dictionary = item.get("specs", {}) as Dictionary
+		# Model-thumbnail controllers and loads keep their full-bleed picture;
+		# every other type draws the card, its picture (if any) in the card's
+		# media zone.
+		if itype0 not in ["controller", "appliance", "acload"] or not _icon_replaces_frame(sp0):
+			_render_card_v2(item)
+			return
 	# Full-bleed icon/model preview (skip frame + title); keep ports + selection.
 	var specs_early: Dictionary = item.get("specs", {}) as Dictionary
 	if _icon_replaces_frame(specs_early) and str(item.get("type", "")) not in [
@@ -223,6 +289,188 @@ func _render_item(item: Dictionary) -> void:
 		_render_processor_item_v2(item)
 		return
 	super._render_item(item)
+
+
+## One shared card anatomy (GraphCard) — see GraphCardSpecs for what it says.
+func _render_card_v2(item: Dictionary) -> void:
+	var center := size * 0.5
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	var iid := str(item.get("id", ""))
+	var itype := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	# Per-item live context (the one dict is reused; these keys are per card).
+	_card_ctx["live_w"] = -1.0
+	_card_ctx["agg_soc"] = -1.0
+	if itype == "processor" or (itype == "compound" and _is_load_group_item(item)):
+		var tree := get_tree()
+		if tree != null and model != null:
+			_card_ctx["live_w"] = GraphAcLoad.sum_load_group_watts(model, item, tree, null) \
+				if itype == "compound" else GraphAcLoad.item_draw_watts(model, item, tree, _find_sim_load_host())
+	elif itype == "compound" and _compound_displays_as_battery(specs):
+		_card_ctx["agg_soc"] = _aggregate_child_battery_soc(item)
+	var spec := GraphCardSpecs.for_item(item, _card_ctx)
+	spec["selected"] = (iid == selected_item_id) or selected_item_ids.has(iid)
+	if bool(item.get("is_ghost", false)) or (not _path_items.is_empty() and not _path_items.has(iid)):
+		spec["dim"] = true
+	if bool(spec.get("hub", false)):
+		GraphCard.draw_hub(self, Rect2(tl, sz), _zoom, spec)
+		var r := GraphHubPorts.circle_radius(sz)
+		_draw_tank_overflow_glyph(specs, GraphHubPorts.circle_center(tl, sz) + Vector2(r * 0.85, -r * 0.7))
+		_draw_item_handles(item, tl, sz)
+		return
+	var res := GraphCard.draw(self, Rect2(tl, sz), _zoom, spec)
+	if res.has("action_rect"):
+		# The RESET button: _on_lmb_press handles every rect in this dict.
+		_controller_reset_rects[iid] = res["action_rect"]
+	if res.has("media_rect"):
+		_draw_card_media(item, specs, str(spec.get("media", "")), res["media_rect"] as Rect2,
+			spec.get("accent", GraphTheme.TEXT_DIM) as Color, str(spec.get("icon", "box")))
+	_draw_item_handles(item, tl, sz)
+	_draw_port_annotations(item)
+
+
+## Port names beside the dots (zoomed in) and a wire count on any port that
+## carries more than one wire. A name grows OUTWARD along its edge (left of a
+## port on the left half, right of one on the right half) and is cut at the
+## next port that way, so neighbouring names never collide; it sits just
+## outside the card, where the port band is.
+func _draw_port_annotations(item: Dictionary) -> void:
+	var iid := str(item.get("id", ""))
+	var names := port_names and _zoom >= PORT_NAME_MIN_ZOOM
+	if not names and not (_card_ctx.get("multi", {}) as Dictionary).has(iid):
+		return
+	var counts: Dictionary = _card_ctx.get("wired", {})
+	var infos := _get_interactive_handle_infos(item, size * 0.5)
+	if infos.is_empty():
+		return
+	var fnt := UITheme.font("medium")
+	var fs := clampi(int(round(9.0 * _zoom)), 8, 13)
+	var dot_r := 6.8 * _zoom
+	var plate := Color(0.03, 0.05, 0.09, 0.82)
+	for h: Dictionary in infos:
+		if bool(h.get("hub", false)):
+			continue
+		var pos: Vector2 = h["pos"]
+		var tan: Vector2 = h.get("tangent", Vector2.UP)
+		if absf(tan.y) < 0.5:
+			continue  # side ports (rare on cards): no room beside them
+		var hid := str(h.get("handle_id", ""))
+		# Which way along the edge is outward, and how far to the next port.
+		var right := pos.x >= _item_screen_tl(item, size * 0.5).x + _item_screen_size(item).x * 0.5
+		var room := 220.0 * _zoom
+		for o: Dictionary in infos:
+			var op: Vector2 = o["pos"]
+			if o == h or absf(op.y - pos.y) > 2.0:
+				continue
+			var dx := op.x - pos.x
+			if (right and dx > 0.0) or (not right and dx < 0.0):
+				room = minf(room, absf(dx) - dot_r * 2.0 - 4.0)
+		var n := int(counts.get(iid + "|" + hid, 0))
+		var mid_y := pos.y + tan.y * (dot_r * 0.4 + float(fs) * 0.55)
+		if n > 1:
+			var br := maxf(6.0, 6.5 * _zoom)
+			var bc := Vector2(pos.x + (-1.0 if right else 1.0) * (dot_r + br * 0.6), mid_y)
+			GraphFastDraw.disc(self, bc, br, Color(0.10, 0.14, 0.24, 0.96))
+			GraphFastDraw.ring(self, bc, br, Color(0.55, 0.66, 0.85, 0.9), 1.0)
+			var bfs := clampi(int(br * 1.2), 8, 13)
+			var nf := UITheme.font("semibold", true)
+			var t := str(n)
+			var tw := nf.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, bfs).x
+			draw_string(nf, Vector2(bc.x - tw * 0.5, bc.y + bfs * 0.36), t,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, bfs, Color(0.92, 0.95, 1.0))
+		if not names or room < 18.0:
+			continue
+		var label := UiText.fit(fnt, GraphPortLabels.port_name(hid, str(h.get("resource_kind", ""))),
+			fs, room - 6.0, "graph port name")
+		var lw := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var x0 := pos.x + dot_r + 2.0 if right else pos.x - dot_r - 2.0 - lw - 6.0
+		var r := Rect2(Vector2(x0, mid_y - float(fs) * 0.62), Vector2(lw + 6.0, float(fs) * 1.24))
+		GraphFastDraw.rrect(self, r, r.size.y * 0.5, plate)
+		draw_string(fnt, Vector2(r.position.x + 3.0, mid_y + float(fs) * 0.36), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.80, 0.86, 0.95, 0.95))
+
+
+## The picture in a card's media zone: the GLB thumbnail, a group's miniature,
+## a super-node's banner or the array's panel grid. A picture that is not ready
+## (thumbnail still rendering, a group too small for its miniature) leaves the
+## type icon on a quiet tile, so the card never flickers between layouts.
+func _draw_card_media(item: Dictionary, specs: Dictionary, kind: String, zone: Rect2,
+		accent: Color, icon: String) -> void:
+	var drawn := false
+	match kind:
+		"preview":
+			_draw_rounded_rect(zone, Color(0.04, 0.07, 0.12, 0.96), int(maxf(2.0, 6.0 * _zoom)),
+				Color(accent.r, accent.g, accent.b, 0.30), 1)
+			drawn = _draw_model_preview_zone(zone.grow(-maxf(1.0, 2.0 * _zoom)), specs, 1.0)
+		"miniature":
+			drawn = _draw_compound_miniature(zone, specs, item)
+		"banner":
+			drawn = _draw_compound_banner(zone, specs)
+		"array":
+			_draw_array_media(zone, specs)
+			drawn = true
+	if not drawn:
+		var px := minf(zone.size.x, zone.size.y) * 0.5
+		if px >= 10.0:
+			GraphCard._draw_icon(self, icon, zone.get_center(), px, Color(accent.r, accent.g, accent.b, 0.35))
+
+
+## The array's panels as a grid fitted into the media zone (cells keep their
+## module aspect), with the shared bus bar under them.
+func _draw_array_media(zone: Rect2, specs: Dictionary) -> void:
+	var grid := GraphArrayLayout.grid_dims(specs)
+	var cols := maxi(1, grid.x)
+	var rows := maxi(1, grid.y)
+	var units := maxi(1, int(specs.get("array_panel_units", cols * rows)))
+	var aspect := GraphArrayLayout.PANEL_W / maxf(GraphArrayLayout.PANEL_H, 1.0)
+	var gap_frac := 0.08
+	var cw := zone.size.x / (float(cols) + gap_frac * float(cols - 1))
+	var ch := cw / aspect
+	var bus_h := maxf(4.0, 5.0 * _zoom)
+	var avail_h := zone.size.y - bus_h
+	if ch * (float(rows) + gap_frac * float(rows - 1)) > avail_h:
+		ch = avail_h / (float(rows) + gap_frac * float(rows - 1))
+		cw = ch * aspect
+	var gap := cw * gap_frac
+	var gw := cw * float(cols) + gap * float(cols - 1)
+	var gh := ch * float(rows) + gap * float(rows - 1)
+	var origin := zone.position + Vector2((zone.size.x - gw) * 0.5, (avail_h - gh) * 0.5)
+	var idx := 0
+	for r in range(rows):
+		for c in range(cols):
+			if idx >= units:
+				break
+			_draw_array_panel_cell_v2(Rect2(origin + Vector2(float(c) * (cw + gap), float(r) * (ch + gap)),
+				Vector2(cw, ch)))
+			idx += 1
+	var bus_y := origin.y + gh + bus_h * 0.6
+	draw_line(Vector2(origin.x + cw * 0.15, bus_y), Vector2(origin.x + gw - cw * 0.15, bus_y),
+		Color(0.42, 0.90, 0.98, 0.55), maxf(1.5, 2.0 * _zoom))
+
+
+func _build_card_ctx() -> Dictionary:
+	# "<item>|<handle>" → how many wires land there (a key exists = wired).
+	var wired := {}
+	var multi := {}
+	var batteries := 0
+	if model != null:
+		for c in model.connections:
+			var cd: Dictionary = c
+			for side: String in ["source", "target"]:
+				var iid := str(cd.get(side + "_item_id", ""))
+				var key := "%s|%s" % [iid, cd.get(side + "_handle_id", "")]
+				var n := int(wired.get(key, 0)) + 1
+				wired[key] = n
+				if n > 1:
+					multi[iid] = true
+		for it in model.get_items_in_scope(active_scope_id):
+			if str((it as Dictionary).get("type", "")) in ["battery", "smartbattery"]:
+				batteries += 1
+	var bw := 0.0
+	if bool(live_power_hint.get("valid", false)):
+		bw = float(live_power_hint.get("battery_w", 0.0))
+	return {"wired": wired, "multi": multi, "battery_w": bw, "battery_count": batteries}
 
 
 func _render_icon_node_v2(item: Dictionary) -> void:
@@ -297,10 +545,17 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 	elif unlimited:
 		qty_str = "∞"
 	else:
-		qty_str = "%.1f" % qty
-	if not unlimited and not in_deficit and qty_str.ends_with(".0"):
-		qty_str = qty_str.substr(0, qty_str.length() - 2)
-	
+		# Three significant figures with an SI prefix, the prefix moving onto
+		# the unit line: 1473946.5 L reads "1.47" over "ML" (it printed all
+		# seven digits and a decimal, wider than the circle).
+		var nice := UiText.num(qty, unit)
+		var cut := nice.rfind(" ")
+		if cut > 0:
+			qty_str = nice.left(cut)
+			unit = nice.substr(cut + 1)
+		else:
+			qty_str = nice
+
 	var net_flow := float(specs.get("inflow_rate", 0.0)) - float(specs.get("outflow_rate", 0.0))
 	var flow_str := ""
 	if absf(net_flow) > 0.001:
@@ -319,19 +574,65 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 	var spacing := 2.0 * _zoom
 	var line_spacing := 4.0 * _zoom
 	
-	var total_h := name_fsize + line_spacing + main_fsize + spacing + unit_fsize
+	# Every line fits the circle. The name WRAPS onto two balanced lines and
+	# may shrink a little before anything is cut: "Stream Intake: Stream 2"
+	# and "Pond Outlet Pipes" were ellipsized on one line at every zoom.
+	var line_w := inner_r * 1.7
+	var name_fit := _hub_name_lines(fnt, name, name_fsize, line_w)
+	var name_lines: PackedStringArray = name_fit["lines"]
+	name_fsize = int(name_fit["size"])
+	# A name that cannot fit whole (a small circle at a far zoom) is drawn as
+	# a CAPTION beside the circle instead — ports sit on the top and bottom
+	# edges, the sides are free — and the circle keeps just the quantity.
+	var fits_inside := bool(name_fit["fits"])
+	if fits_inside:
+		# Width alone is not enough: the stack's top lines sit where the
+		# circle is narrower than line_w. Lay the stack out and test each
+		# name line against the chord at its own height.
+		var stack_h := float(name_fsize * name_lines.size()) \
+				+ spacing * float(name_lines.size() - 1) + line_spacing \
+				+ main_fsize + spacing + unit_fsize \
+				+ ((line_spacing + flow_fsize) if flow_str != "" else 0.0)
+		var y := hub_c.y - stack_h * 0.5
+		for nl in name_lines:
+			var dy := maxf(absf(y - hub_c.y), absf(y + name_fsize - hub_c.y))
+			var chord := 2.0 * sqrt(maxf(inner_r * inner_r - dy * dy, 0.0)) * 0.94
+			if fnt.get_string_size(nl, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize).x > chord:
+				fits_inside = false
+				break
+			y += name_fsize + spacing
+	if not fits_inside:
+		var cap_fs := maxi(9, int(round(11.0 * _zoom)))
+		var cap_pos := Vector2(hub_c.x + hub_r + 5.0 * _zoom,
+				hub_c.y + fnt.get_ascent(cap_fs) * 0.5 - 1.0)
+		var cap_col := Color(0.86, 0.88, 0.92, 0.92)
+		draw_string_outline(fnt, cap_pos, name, HORIZONTAL_ALIGNMENT_LEFT, -1, cap_fs, 3, Color(0.03, 0.05, 0.09, 0.9))
+		draw_string(fnt, cap_pos, name, HORIZONTAL_ALIGNMENT_LEFT, -1, cap_fs, cap_col)
+		name_lines = PackedStringArray()
+	var name_h := float(name_fsize * name_lines.size()) + spacing * float(maxi(name_lines.size() - 1, 0))
+	var total_h := (name_h + line_spacing if not name_lines.is_empty() else 0.0) \
+			+ main_fsize + spacing + unit_fsize
 	if flow_str != "":
 		total_h += line_spacing + flow_fsize
-		
+
 	var current_y := hub_c.y - total_h * 0.5
-	
-	# Draw Name
-	var ts_name := fnt.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize)
-	var pos_name := Vector2(hub_c.x - ts_name.x * 0.5, current_y + fnt.get_ascent(name_fsize))
+	qty_str = UiText.fit(fnt, qty_str, main_fsize, line_w, "resource_hub")
+	flow_str = UiText.fit(fnt, flow_str, flow_fsize, line_w, "resource_hub")
+
+	# Draw Name — each line fitted to the circle's chord at its own height
+	# (the top of the stack is where the circle is narrowest).
 	var c_name := Color(0.9, 0.9, 0.9, 0.9)
-	draw_string(fnt, pos_name, name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, c_name)
-	draw_string_outline(fnt, pos_name, name, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, maxi(1, int(round(1.0 * _zoom))), c_name)
-	current_y += name_fsize + line_spacing
+	for nl in name_lines:
+		var dy := maxf(absf(current_y - hub_c.y), absf(current_y + name_fsize - hub_c.y))
+		var chord := 2.0 * sqrt(maxf(inner_r * inner_r - dy * dy, 0.0)) * 0.94
+		var line := UiText.fit(fnt, nl, name_fsize, minf(line_w, chord), "resource_hub")
+		var ts_name := fnt.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize)
+		var pos_name := Vector2(hub_c.x - ts_name.x * 0.5, current_y + fnt.get_ascent(name_fsize))
+		draw_string(fnt, pos_name, line, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, c_name)
+		draw_string_outline(fnt, pos_name, line, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fsize, maxi(1, int(round(1.0 * _zoom))), c_name)
+		current_y += name_fsize + spacing
+	if not name_lines.is_empty():
+		current_y += line_spacing - spacing
 	
 	# Draw Qty
 	var ts_qty := fnt.get_string_size(qty_str, HORIZONTAL_ALIGNMENT_LEFT, -1, main_fsize)
@@ -364,6 +665,39 @@ func _render_resource_item_v2(item: Dictionary) -> void:
 	if is_sel:
 		draw_arc(hub_c, hub_r + 2.0, 0.0, TAU, 48,
 				Color(accent.r, accent.g, accent.b, 0.55), 2.0, true)
+
+
+## A resource hub's name as 1–2 lines that fit `width`: one line if it fits,
+## else the word break that balances two lines best, shrinking the font by up
+## to 20 % before giving up (the caller ellipsizes what still does not fit).
+## Returns {lines: PackedStringArray, size: int, fits: bool}.
+func _hub_name_lines(fnt: Font, name: String, size: int, width: float) -> Dictionary:
+	var min_size := maxi(7, int(floor(float(size) * 0.8)))
+	var words := name.split(" ", false)
+	var fs := size
+	while fs >= min_size:
+		if fnt.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= width:
+			return {"lines": PackedStringArray([name]), "size": fs, "fits": true}
+		var best := PackedStringArray()
+		var best_w := INF
+		for i in range(1, words.size()):
+			var a := " ".join(words.slice(0, i))
+			var b := " ".join(words.slice(i))
+			var w := maxf(fnt.get_string_size(a, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x,
+					fnt.get_string_size(b, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+			if w < best_w:
+				best_w = w
+				best = PackedStringArray([a, b])
+		if not best.is_empty() and best_w <= width:
+			return {"lines": best, "size": fs, "fits": true}
+		fs -= 1
+	# Nothing fits whole: two lines at the smallest size (or one long word),
+	# left for the caller to ellipsize.
+	if words.size() > 1:
+		var half := words.size() / 2
+		return {"lines": PackedStringArray([" ".join(words.slice(0, half)),
+				" ".join(words.slice(half))]), "size": min_size, "fits": false}
+	return {"lines": PackedStringArray([name]), "size": min_size, "fits": false}
 
 
 ## Fill the lower fraction of a circle (tank level) with horizontal chord clipping.
@@ -434,11 +768,7 @@ func _render_battery_item_v2(item: Dictionary) -> void:
 	var label := "%d%%" % int(round(soc * 100.0))
 	var ts := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize)
 	var tp := rect.position + Vector2((rect.size.x - ts.x) * 0.5, (rect.size.y + ts.y * 0.4) * 0.5)
-	for ox in [-1.0, 1.0, 0.0]:
-		for oy in [-1.0, 1.0, 0.0]:
-			if ox == 0.0 and oy == 0.0:
-				continue
-			draw_string(fnt, tp + Vector2(ox, oy), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.02, 0.06, 0.04, 0.85))
+	draw_string_outline(fnt, tp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, 2, Color(0.02, 0.06, 0.04, 0.85))
 	draw_string(fnt, tp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.98, 1.0, 0.95, 1.0))
 
 	# Spec column, all centered on the SOC number so the node reads as one
@@ -922,28 +1252,29 @@ func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String
 		super(screen_pos, polarity, resource_kind)
 		return
 	var col := _wire_color_for_port(polarity, resource_kind)
-	var touch := _touch_input_active() or DisplayServer.is_touchscreen_available()
+	var touch := _touch_input_active() or touchscreen_available()
 	var hover_hit := false
 	if not _hover_port.is_empty():
 		var hp := _hover_port.get("pos", Vector2(-9999.0, -9999.0)) as Vector2
 		hover_hit = hp.distance_to(screen_pos) < maxf(8.0, 9.0 * _zoom)
-	var pulse := 1.0 + (0.13 * sin(_flow_phase * 3.4)) if current_mode == "test" else 1.0
+	var pulse := 1.0 + (0.13 * sin(_flow_phase * 3.4)) if _flow_live else 1.0
 	var r := maxf(5.5, 6.8 * _zoom) * pulse
 	if touch:
 		r = maxf(r, 10.5)
 	if hover_hit:
 		r *= 1.18
 	var dc := is_dc_polarity(polarity)
-	draw_circle(screen_pos, r + (6.0 if touch else 4.0), Color(col.r, col.g, col.b, 0.18))
-	draw_circle(screen_pos, r + 1.8, Color(col.r, col.g, col.b, 0.34))
-	draw_circle(screen_pos, r, dc_port_fill(col, polarity) if dc else col)
+	# Texture discs (GraphFastDraw): five draw_circle calls were ~45 µs a port.
+	GraphFastDraw.disc(self, screen_pos, r + (6.0 if touch else 4.0), Color(col.r, col.g, col.b, 0.18))
+	GraphFastDraw.disc(self, screen_pos, r + 1.8, Color(col.r, col.g, col.b, 0.34))
+	GraphFastDraw.disc(self, screen_pos, r, dc_port_fill(col, polarity) if dc else col)
 	# DC ports: solid disc + polarity glyph. The old 56%-radius background hole
 	# left only a thin rim of colour, so at wide zoom the red + and the near-
 	# black − were nearly the same dot. Other port kinds keep the donut.
 	if not dc:
-		draw_circle(screen_pos, r * 0.56, Color(0.06, 0.09, 0.17, 0.95))
-	draw_circle(screen_pos, r + 0.4, V2_PORT_RING, false, 1.0)
+		GraphFastDraw.disc(self, screen_pos, r * 0.56, Color(0.06, 0.09, 0.17, 0.95))
+	GraphFastDraw.ring(self, screen_pos, r + 0.4, V2_PORT_RING, 1.0)
 	if dc:
 		_draw_polarity_glyph(screen_pos, r, polarity)
 	if touch:
-		draw_circle(screen_pos, r + 8.0, Color(col.r, col.g, col.b, 0.10), false, 2.0)
+		GraphFastDraw.ring(self, screen_pos, r + 8.0, Color(col.r, col.g, col.b, 0.10), 2.0)

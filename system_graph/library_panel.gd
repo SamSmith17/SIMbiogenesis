@@ -751,3 +751,142 @@ func _apply_cat_header_style(btn: Button) -> void:
 
 func _fill(ctrl: Control) -> void:
 	ctrl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
+
+# ---------------------------------------------------------------------------
+# "In the world" — world objects not on the graph yet (GraphWorldInventory)
+# ---------------------------------------------------------------------------
+
+var _world_box: VBoxContainer = null
+var _world_open := true
+var _world_sig := ""
+
+
+## `groups`: [{label, icon, rows: [{id, name, sub, add: Callable,
+## locate: Callable}]}]. Pinned at the top of the library; rebuilt only when
+## the row set changes (a blind rebuild would drop a hover mid-click).
+func populate_world_inventory(groups: Array) -> void:
+	if _categories_vbox == null:
+		return
+	var sig := ""
+	var total := 0
+	for g in groups:
+		for r in (g as Dictionary).get("rows", []):
+			sig += str((r as Dictionary).get("id", "")) + "|" + str((r as Dictionary).get("name", "")) + ";"
+			total += 1
+	sig += str(_world_open)
+	if sig == _world_sig and _world_box != null and is_instance_valid(_world_box):
+		return
+	_world_sig = sig
+	if _world_box != null and is_instance_valid(_world_box):
+		_world_box.queue_free()
+		_world_box = null
+	if total == 0:
+		return
+	var box := VBoxContainer.new()
+	box.name = "WorldInventory"
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 0)
+	_world_box = box
+	var hdr := Button.new()
+	hdr.text = "🌍  In the world, not on the graph (%d)  %s" % [total, "▼" if _world_open else "▶"]
+	hdr.tooltip_text = ("Things that exist in the 3D world but are not tracked by the graph yet — "
+		+ "lights from the Light Studio (J), placed machines and racks, OSM solar, ponds, "
+		+ "scene devices. Add puts one on the graph; ◎ shows it in the world.")
+	hdr.focus_mode = Control.FOCUS_NONE
+	hdr.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_apply_cat_header_style(hdr)
+	hdr.add_theme_color_override("font_color", UITheme.C_AMBER)
+	hdr.pressed.connect(func() -> void:
+		_world_open = not _world_open
+		_world_sig = ""
+		populate_world_inventory(groups))
+	box.add_child(hdr)
+	if _world_open:
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 2)
+		var m := MarginContainer.new()
+		for side in ["left", "right", "top", "bottom"]:
+			m.add_theme_constant_override("margin_" + side, 4)
+		m.add_child(body)
+		box.add_child(m)
+		for g in groups:
+			_world_group(body, g as Dictionary)
+	_categories_vbox.add_child(box)
+	_categories_vbox.move_child(box, 0)
+	call_deferred("_refresh_scroll_content_height")
+
+
+func _world_group(parent: VBoxContainer, g: Dictionary) -> void:
+	var rows: Array = g.get("rows", [])
+	var gh := HBoxContainer.new()
+	var gl := Label.new()
+	gl.text = "%s %s · %d" % [str(g.get("icon", "")), str(g.get("label", "")), rows.size()]
+	gl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	gl.add_theme_color_override("font_color", C_TEXT_M)
+	gl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gh.add_child(gl)
+	if rows.size() > 1:
+		var all := Button.new()
+		all.text = "Add all"
+		all.focus_mode = Control.FOCUS_NONE
+		all.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		all.tooltip_text = "Put every one of these on the graph"
+		all.pressed.connect(func() -> void:
+			for r in rows:
+				var cb: Callable = (r as Dictionary).get("add", Callable())
+				if cb.is_valid():
+					cb.call()
+			_world_sig = "")
+		gh.add_child(all)
+	parent.add_child(gh)
+	for r in rows:
+		parent.add_child(_world_row(r as Dictionary))
+
+
+func _world_row(r: Dictionary) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var col := VBoxContainer.new()
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 0)
+	var nm := Label.new()
+	nm.text = str(r.get("name", ""))
+	nm.clip_text = true
+	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nm.tooltip_text = nm.text
+	nm.mouse_filter = Control.MOUSE_FILTER_PASS
+	nm.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	nm.add_theme_color_override("font_color", C_TEXT)
+	col.add_child(nm)
+	var sub := Label.new()
+	sub.text = str(r.get("sub", ""))
+	sub.clip_text = true
+	sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	sub.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	sub.add_theme_color_override("font_color", C_TEXT_M)
+	col.add_child(sub)
+	row.add_child(col)
+	var loc: Callable = r.get("locate", Callable())
+	if loc.is_valid():
+		var lb := Button.new()
+		lb.text = "◎"
+		lb.tooltip_text = "Show it in the world (Esc comes back here)"
+		lb.focus_mode = Control.FOCUS_NONE
+		lb.custom_minimum_size = Vector2(28, 28)
+		lb.pressed.connect(func() -> void: loc.call())
+		row.add_child(lb)
+	var ab := Button.new()
+	ab.text = "Add"
+	ab.tooltip_text = "Put it on the graph"
+	ab.focus_mode = Control.FOCUS_NONE
+	ab.custom_minimum_size = Vector2(44, 28)
+	var add: Callable = r.get("add", Callable())
+	ab.pressed.connect(func() -> void:
+		if add.is_valid():
+			add.call()
+		_world_sig = "")
+	row.add_child(ab)
+	return row

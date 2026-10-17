@@ -62,8 +62,26 @@ check of the real user dir.
 | buildsteps | mtvernon | PASS (25 checks, real input; incl. the Radial Array group on Constellation and the A4 enclosure on Hex) | 78 |
 | fabcrew | mtvernon | PASS (12 checks) | 74 |
 | both | mtvernon | PASS | 50 |
+| timeline (new 2026-10-14) | mtvernon | PASS (0.00 px drift over 236 samples, 720 + 1080) | 70 |
+| graphtools (new 2026-10-14) | mtvernon | PASS (29 checks: show-only filter, world drawer, handoff, Globe Connect with real clicks, full-screen globe orbit) | 65 |
+| pvsnap (new 2026-10-14) | mtvernon | PASS (8 checks) | 51 |
+| conduits (new 2026-10-14) | mtvernon | PASS (13 checks: real-release plug, HUD = run length, live modal, tags, chain) | 52 |
+| modals (2026-10-14, strict, 720 + 1080) | mtvernon | PASS (every settings page + conduit_style + connection_ports) | 89 / 106 |
+| site-review `--review-sets=site` (2026-10-14) | mtvernon | PASS (cursor zoom drift 2.96 → 0.04 px: one held point per wheel gesture + up to 4 pan-solve passes) | 59 |
+| tour (2026-10-13, via `tools\tour.ps1 -Mode stills`) | mtvernon + walton | PASS (32 of 32 stops; 200 renderer engine errors from Bootcamp-after-Hydro-Lab, see below) | 273 + 94 |
 
-A full matrix takes about 75 minutes. A cached world loads in about 20 s.
+A full matrix takes about 75 minutes.
+
+`tour` is the feature tour (see CLAUDE.md "Feature tour"). The registry runs it
+on Mount Vernon only. `tools	our.ps1` runs one pass per world: 26 stops on
+Mount Vernon and 6 on Walton.
+
+Fixed 2026-10-13, found by the tour: the Solar Bootcamp opening after a Hydro
+Lab session flooded about 200 Vulkan renderer errors. Root cause: a lens
+applied to the CLOSED graph activated the SoI preview behind it, at a 2x2
+placeholder size; on reveal `SubViewportContainer` forced the viewport to
+`UPDATE_ALWAYS`. See CLAUDE.md "SoI stage". After the fix, Hydro Lab → Bootcamp
+and `graph,siphon` report only the 2 pre-existing JSON warnings.
 
 ## Legacy problems found and fixed while getting here
 

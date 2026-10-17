@@ -37,6 +37,40 @@ const DEFAULT_CHAIN := "mesh,impostor"
 const REPS: Array = [REP_MESH, REP_PHOTOCARD, REP_IMPOSTOR]
 
 
+## Runtime settings key (injected by TerrainLoader._auto_veg_runtime_settings,
+## never persisted): where the cheap FAR tier (impostor / photocard) stops,
+## when that is further than the style's cull end. The Globe lens and the
+## snowglobe orbit up to 4.5 x the SoI radius out, and visibility range is
+## measured to each 256 m chunk's centre, so a far tier that stopped at the
+## first-person cull end (480 m on large maps) blinked whole chunks of forest
+## in and out as the camera orbited. Unprefixed on purpose: the impostor
+## bake key only hashes family-prefixed keys, so a radius change never
+## re-bakes the atlas.
+const KEY_FAR_TIER_END := "far_tier_end_m"
+
+## Fade band at a LOD handoff, as a share of the handoff distance. A fixed
+## 24 m band is crossed by ONE wheel notch of the orbit lenses (6 % of ~400 m)
+## and so never seen as a fade; scaling it keeps the dither visible at range.
+const FADE_SHARE := 0.12
+const MIN_FADE_M := 24.0
+const MAX_FADE_M := 140.0
+
+
+static func fade_margin_for(distance_m: float) -> float:
+	return clampf(distance_m * FADE_SHARE, MIN_FADE_M, MAX_FADE_M)
+
+
+## Where a chain's LAST band ends: the far tier may reach past the cull end
+## (KEY_FAR_TIER_END) because it costs two triangles a tree; a chain that
+## ends in the full mesh keeps the cull end — that tier is the prim budget.
+static func far_tier_end(chain: Array, cull_end_m: float, settings: Dictionary) -> float:
+	if chain.is_empty() or cull_end_m <= 0.0:
+		return cull_end_m
+	if str(chain[chain.size() - 1]) == REP_MESH:
+		return cull_end_m
+	return maxf(cull_end_m, float(settings.get(KEY_FAR_TIER_END, 0.0)))
+
+
 ## Parse + validate a chain string ("mesh,photocard,impostor"). Unknown
 ## tokens are dropped, duplicates keep their first position, empty/invalid
 ## input falls back to the default chain. Always returns ≥1 entry.

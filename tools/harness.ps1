@@ -20,6 +20,10 @@
                 where they always have)
     skipped     logs, climelapses, objectdb_snapshots
 
+  -EmptyUser seeds an EMPTY user dir instead (only the marker and the shader
+  caches) — a friend who has never run the game. Use it with a "menu" capture
+  such as assetpack-import, which starts on the launch hub with no world.
+
   The harness refuses to run unless it finds the sandbox marker, or -Persist.
 
   -Persist runs on the REAL user dir (only with -RunScript or -Capture look):
@@ -32,6 +36,11 @@
   tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/my_fix.gd            (dry run)
   tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/my_fix.gd -Persist   (keeps it)
   tools\harness.ps1 -RestoreBackup <backup folder printed by a -Persist run>
+  tools\harness.ps1 -World mtvernon -Capture tour -EngineArgs "--write-movie","C:\x\tour.avi","--fixed-fps","30"
+
+  -EngineArgs go to Godot BEFORE the "--" separator (engine options such as
+  Movie Maker's --write-movie / --fixed-fps). -UserArgs (and any trailing
+  arguments) go after it, to the harness.
 #>
 [CmdletBinding()]
 param(
@@ -47,6 +56,9 @@ param(
 	[string]$RestoreBackup = "",
 	[string]$SeedOnly = "",
 	[switch]$NoHashCheck,
+	[switch]$EmptyUser,
+	[string[]]$EngineArgs = @(),
+	[string[]]$UserArgs = @(),
 	[Parameter(ValueFromRemainingArguments = $true)][string[]]$Extra
 )
 
@@ -164,6 +176,21 @@ function New-Sandbox([string]$sandRoot) {
 	return $user
 }
 
+# An EMPTY user dir — what a friend who has never run the game has. Only the
+# sandbox marker, plus the engine's shader caches junctioned (so the run does
+# not spend minutes compiling shaders; they hold no player data).
+function New-EmptySandbox([string]$sandRoot) {
+	$user = Join-Path $sandRoot $AppRel
+	New-Item -ItemType Directory -Force -Path $user | Out-Null
+	foreach ($name in @("shader_cache", "vulkan")) {
+		$src = Join-Path $RealUser $name
+		if (Test-Path -LiteralPath $src) { New-Junction (Join-Path $user $name) $src }
+	}
+	$marker = @{ created = (Get-Date).ToString("s"); real_user_dir = $RealUser; empty = $true } | ConvertTo-Json
+	Set-Content -LiteralPath (Join-Path $user ".harness_sandbox") -Value $marker -Encoding ASCII
+	return $user
+}
+
 function Backup-RealState([string]$tag) {
 	$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 	$dst = Join-Path $BackupsRoot "$stamp`_$tag"
@@ -221,13 +248,15 @@ if ($Persist) {
 } else {
 	$sandRoot = Join-Path $RunsRoot $runId
 	$t = Get-Date
-	$userDir = New-Sandbox $sandRoot
+	$userDir = if ($EmptyUser) { New-EmptySandbox $sandRoot } else { New-Sandbox $sandRoot }
 	Write-Step ("sandbox seeded in {0:N1} s: {1}" -f ((Get-Date) - $t).TotalSeconds, $userDir)
 	if (-not $NoHashCheck) { $before = Get-StateHashes $RealUser }
 }
 
 # --- Launch ------------------------------------------------------------------------
-$gArgs = @("--path", $Repo, "--windowed", "--resolution", $Resolution, "--")
+$gArgs = @("--path", $Repo, "--windowed", "--resolution", $Resolution)
+if ($EngineArgs) { $gArgs += $EngineArgs }
+$gArgs += "--"
 if ($World) { $gArgs += "--world=$World" }
 if ($Cap) { $gArgs += "--capture=$Cap" }
 if ($RunScript) { $gArgs += "--run-script=$RunScript" }
@@ -236,6 +265,7 @@ $gArgs += "--quit-after-capture"
 if ($Timeout -gt 0) { $gArgs += "--timeout=$Timeout" }
 if ($Persist) { $gArgs += "--persist" }
 if ($Extra) { $gArgs += $Extra }
+if ($UserArgs) { $gArgs += $UserArgs }
 $argLine = ($gArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join " "
 
 $logDir = if ($sandRoot) { $sandRoot } else { Join-Path $HarnessRoot "persist_logs" }

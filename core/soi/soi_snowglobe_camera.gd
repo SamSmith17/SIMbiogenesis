@@ -35,7 +35,7 @@ var _dragging := false
 var _active := false
 
 
-func enter(svc: Node, loader: Node) -> void:
+func enter(svc: Node, loader: Node, orbit: Dictionary = {}) -> void:
 	if _active:
 		return
 	_svc = svc
@@ -47,6 +47,13 @@ func enter(svc: Node, loader: Node) -> void:
 	_orbit_mult_target = _orbit_mult
 	_orbit_pitch = 0.26
 	_orbit_yaw = _sun_facing_yaw()
+	# Entered from the graph's Globe lens: continue ITS view instead of
+	# reframing from scratch (the jump between the two read as two globes).
+	if not orbit.is_empty():
+		_orbit_yaw = float(orbit.get("yaw", _orbit_yaw))
+		_orbit_pitch = float(orbit.get("pitch", _orbit_pitch))
+		_orbit_mult = clampf(float(orbit.get("mult", _orbit_mult)), MIN_ORBIT_MULT, MAX_ORBIT_MULT)
+		_orbit_mult_target = _orbit_mult
 	var tree := get_tree()
 	if tree == null:
 		return
@@ -198,3 +205,8 @@ func _update_camera_transform() -> void:
 	# Near clip tracks zoom so deep close-in SOI views don't clip the disc.
 	_camera.near = clampf(dist * 0.02, 0.05, 0.5)
 	_camera.far = maxf(8000.0, dist * 8.0 + r * 4.0)
+
+
+## The current orbit, for the graph's Globe lens on exit.
+func orbit_state() -> Dictionary:
+	return {"yaw": _orbit_yaw, "pitch": _orbit_pitch, "mult": _orbit_mult}

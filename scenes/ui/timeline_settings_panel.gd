@@ -1,8 +1,12 @@
 extends Control
 
 ## Settings modal opened from the timeline gear icon.
-## Renders as a full-screen backdrop + centred PanelContainer with a TabContainer
-## so future sections can be added without touching layout.  Each tab is a
+## A full-screen backdrop + a wide centred panel: a grouped, searchable page
+## list on the left and one page at a time on the right. The pages still live
+## in a TabContainer (its tab bar hidden) so every `_build_*_tab(tabs)` builder
+## and every caller that selects a page by `current_tab` keeps working; the
+## sidebar only drives `current_tab`. Fifteen pages used to share one tab bar
+## and seven of them hid behind the ‹ › scroll arrows. Each page is a
 ## ScrollContainer so content is never clipped by the viewport.
 
 const C_PANEL  := UITheme.C_PANEL
@@ -11,9 +15,21 @@ const C_PRIMARY := UITheme.C_PRIMARY
 const C_TEXT   := UITheme.C_TEXT
 const C_TEXT_S := UITheme.C_TEXT_S
 
-## Centred modal size — wide enough that all tab titles fit without horizontal scroll.
-const PANEL_DESIRED_SIZE := Vector2(780.0, 800.0)
-const TABS_MIN_HEIGHT := 580.0
+## Wanted modal size; UiFit shrinks it to the area above the timeline.
+const PANEL_DESIRED_SIZE := Vector2(1180.0, 880.0)
+const NAV_WIDTH := 220.0
+const PREFS_PATH := "user://ui_prefs.cfg"
+
+## The sidebar: category -> page titles, in order. A page built by a
+## `_build_*_tab` that is not listed here lands under "Other", so it can never
+## go missing from the nav.
+const CATEGORIES := [
+	["Simulation", ["Gameplay", "NPC", "Extreme Weather", "Live Mode"]],
+	["Player & controls", ["Player", "Drone", "Interface", "Keys"]],
+	["Graphics & sky", ["Lighting", "Environment", "Stars & Planets"]],
+	["Site & hardware", ["Location", "Solar", "Window Wall"]],
+	["Integrations", ["Home Assistant"]],
+]
 
 var _timeline: Control = null
 var _syncing: bool = false
@@ -156,6 +172,14 @@ var _ha_token_input: LineEdit = null
 var _ha_entities_input: TextEdit = null
 var _ha_status_lbl: Label = null
 var _center_panel: PanelContainer = null
+var _tabs: TabContainer = null
+var _nav_box: VBoxContainer = null
+var _nav_buttons: Dictionary = {}     # page title -> Button
+var _nav_headers: Dictionary = {}     # category -> Label
+var _nav_search: LineEdit = null
+var _nav_count_lbl: Label = null
+var _page_text: Dictionary = {}       # page title -> lower-case searchable text
+var _search_hits: Array = []          # page titles matching the search, nav order
 var _center_layout_pending: bool = false
 var _line_edit_sanitize_guard: bool = false
 
@@ -183,7 +207,8 @@ func _layout_center_panel() -> void:
 	_center_layout_pending = false
 	if _center_panel == null:
 		return
-	UiScreenLayout.clamped_center(_center_panel, PANEL_DESIRED_SIZE)
+	# The HUD claim is made by open()/close() under its own owner id.
+	UiFit.keep_fitted(_center_panel, PANEL_DESIRED_SIZE, UiFit.MARGIN, false)
 
 
 func bind_timeline(timeline: Control) -> void:
@@ -209,8 +234,13 @@ func open() -> void:
 	_refresh_extreme_weather_tab()
 	_refresh_window_wall_tab()
 	_request_center_layout()
+	if _tabs != null and _nav_search != null and _nav_search.text.is_empty():
+		var last := _load_last_page()
+		if not last.is_empty():
+			open_page(last)
 	visible = true
 	CursorController.request_modal("timeline_settings", Callable(self, "close"))
+	HudLayout.claim_modal("timeline_settings")
 
 
 func close() -> void:
@@ -220,6 +250,7 @@ func close() -> void:
 		SimSettingsController.persist_settings()
 	visible = false
 	CursorController.release_modal("timeline_settings")
+	HudLayout.release("timeline_settings")
 
 
 func refresh_from_controller() -> void:
@@ -332,26 +363,35 @@ func _build_ui() -> void:
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title_lbl)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.add_theme_color_override("font_color", C_TEXT_S)
-	close_btn.add_theme_font_size_override("font_size", 16)
+	IconButton.as_close(close_btn, "Close (Esc)")
 	close_btn.pressed.connect(close)
 	title_row.add_child(close_btn)
 
 	outer.add_child(HSeparator.new())
 
-	# TabContainer — one per settings section.
+	# Body: page list on the left, the page on the right.
+	var body := HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 0)
+	outer.add_child(body)
+	body.add_child(_build_nav())
+	body.add_child(VSeparator.new())
+
+	# TabContainer — one per settings section; its own tab bar is hidden and
+	# the sidebar selects the page.
 	var tabs := TabContainer.new()
-	tabs.custom_minimum_size = Vector2(0, TABS_MIN_HEIGHT)
+	_tabs = tabs
+	tabs.tabs_visible = false
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var tab_panel_sb := StyleBoxFlat.new()
 	tab_panel_sb.bg_color = C_PANEL
 	tabs.add_theme_stylebox_override("panel", tab_panel_sb)
-	outer.add_child(tabs)
+	body.add_child(tabs)
 
 	_build_gameplay_tab(tabs)
 	_build_player_tab(tabs)
+	_build_interface_tab(tabs)
 	_build_drone_tab(tabs)
 	_build_environment_tab(tabs)
 	_build_lighting_tab(tabs)
@@ -364,7 +404,304 @@ func _build_ui() -> void:
 	_build_location_tab(tabs)
 	_build_live_tab(tabs)
 	_build_keys_tab(tabs)
+	_populate_nav()
+	tabs.tab_changed.connect(_on_page_changed)
+	_on_page_changed(tabs.current_tab)
 	_request_center_layout()
+
+
+# ---------------------------------------------------------------------------
+# Sidebar: grouped page list + search
+# ---------------------------------------------------------------------------
+
+func _build_nav() -> Control:
+	var wrap := MarginContainer.new()
+	wrap.custom_minimum_size = Vector2(NAV_WIDTH, 0)
+	wrap.add_theme_constant_override("margin_left", 10)
+	wrap.add_theme_constant_override("margin_right", 8)
+	wrap.add_theme_constant_override("margin_top", 8)
+	wrap.add_theme_constant_override("margin_bottom", 8)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	wrap.add_child(col)
+	_nav_search = LineEdit.new()
+	_nav_search.placeholder_text = "Search settings…"
+	_nav_search.clear_button_enabled = true
+	_nav_search.tooltip_text = "Type to find a setting; Enter opens the first page that has it."
+	_nav_search.text_changed.connect(_on_search_changed)
+	_nav_search.text_submitted.connect(_on_search_submitted)
+	col.add_child(_nav_search)
+	_nav_count_lbl = Label.new()
+	_nav_count_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_nav_count_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_nav_count_lbl.visible = false
+	col.add_child(_nav_count_lbl)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(scroll)
+	_nav_box = VBoxContainer.new()
+	_nav_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_nav_box.add_theme_constant_override("separation", 1)
+	scroll.add_child(_nav_box)
+	return wrap
+
+
+func _populate_nav() -> void:
+	var titles: Array = []
+	for i in _tabs.get_tab_count():
+		titles.append(_tabs.get_tab_title(i))
+	var placed := {}
+	var groups: Array = []
+	for cat in CATEGORIES:
+		var pages: Array = []
+		for t in cat[1]:
+			if t in titles:
+				pages.append(t)
+				placed[t] = true
+		groups.append([cat[0], pages])
+	var other: Array = []
+	for t in titles:
+		if not placed.has(t):
+			other.append(t)
+	if not other.is_empty():
+		groups.append(["Other", other])
+	for g in groups:
+		if (g[1] as Array).is_empty():
+			continue
+		var hdr := Label.new()
+		hdr.text = str(g[0]).to_upper()
+		hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		hdr.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		if _nav_box.get_child_count() > 0:
+			var gap := Control.new()
+			gap.custom_minimum_size = Vector2(0, 6)
+			_nav_box.add_child(gap)
+			hdr.set_meta("gap", gap)
+		_nav_box.add_child(hdr)
+		_nav_headers[g[0]] = hdr
+		for t in g[1]:
+			var b := Button.new()
+			b.text = t
+			b.toggle_mode = true
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.custom_minimum_size = Vector2(0, 26)
+			b.focus_mode = Control.FOCUS_NONE
+			b.set_meta("category", g[0])
+			b.pressed.connect(open_page.bind(t))
+			_nav_box.add_child(b)
+			_nav_buttons[t] = b
+	for i in _tabs.get_tab_count():
+		var t := _tabs.get_tab_title(i)
+		_page_text[t] = (t + " " + _collect_text(_tabs.get_tab_control(i))).to_lower()
+	_style_nav()
+
+
+## Every visible word on a page (labels, buttons, check boxes, option items,
+## tooltips) — what the search box matches against.
+func _collect_text(n: Node) -> String:
+	var parts := PackedStringArray()
+	_collect_text_into(n, parts)
+	return " ".join(parts)
+
+
+func _collect_text_into(n: Node, parts: PackedStringArray) -> void:
+	if n is Label:
+		parts.append((n as Label).text)
+	elif n is Button:
+		parts.append((n as Button).text)
+	if n is Control and not (n as Control).tooltip_text.is_empty():
+		parts.append((n as Control).tooltip_text)
+	if n is OptionButton:
+		var ob := n as OptionButton
+		for i in ob.item_count:
+			parts.append(ob.get_item_text(i))
+	for c in n.get_children():
+		_collect_text_into(c, parts)
+
+
+## Opens a settings page by its title ("Solar", "Window Wall"…). False when
+## there is no such page.
+func open_page(title: String) -> bool:
+	if _tabs == null:
+		return false
+	for i in _tabs.get_tab_count():
+		if _tabs.get_tab_title(i) == title:
+			if _tabs.current_tab != i:
+				_tabs.current_tab = i
+			else:
+				_on_page_changed(i)
+			return true
+	return false
+
+
+func current_page() -> String:
+	if _tabs == null or _tabs.current_tab < 0:
+		return ""
+	return _tabs.get_tab_title(_tabs.current_tab)
+
+
+## Every page title in nav order (the modal audit walks them).
+func page_titles() -> Array:
+	var out: Array = []
+	if _nav_box == null:
+		return out
+	for c in _nav_box.get_children():
+		if c is Button:
+			out.append((c as Button).text)
+	return out
+
+
+## The nav button for a page (the modal audit checks they are all on screen).
+func nav_button(title: String) -> Button:
+	return _nav_buttons.get(title, null) as Button
+
+
+func _on_page_changed(_idx: int) -> void:
+	_style_nav()
+	var t := current_page()
+	if not t.is_empty() and (_nav_search == null or _nav_search.text.is_empty()):
+		_save_last_page(t)
+
+
+func _style_nav() -> void:
+	var cur := current_page()
+	var searching := _nav_search != null and not _nav_search.text.strip_edges().is_empty()
+	for t in _nav_buttons.keys():
+		var b := _nav_buttons[t] as Button
+		var on: bool = t == cur
+		b.set_pressed_no_signal(on)
+		var normal := _nav_style(on, false)
+		b.add_theme_stylebox_override("normal", normal)
+		b.add_theme_stylebox_override("pressed", normal)
+		b.add_theme_stylebox_override("hover", _nav_style(on, true))
+		b.add_theme_stylebox_override("hover_pressed", _nav_style(on, true))
+		b.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		var col: Color = UITheme.C_TEXT if on else UITheme.C_TEXT_S
+		if searching and not on and t in _search_hits:
+			col = UITheme.C_AMBER
+		for k in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+			b.add_theme_color_override(k, UITheme.C_TEXT if k.contains("hover") else col)
+
+
+## Flat list row; the open page gets a raised fill and a cyan bar on the left.
+func _nav_style(on: bool, hover: bool) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.content_margin_left = 12
+	sb.content_margin_right = 8
+	sb.content_margin_top = 3
+	sb.content_margin_bottom = 3
+	sb.set_corner_radius_all(4)
+	if on:
+		sb.bg_color = UITheme.C_PANEL_RAISED
+		sb.border_color = UITheme.C_PRIMARY
+		sb.border_width_left = 3
+	elif hover:
+		sb.bg_color = Color(UITheme.C_PANEL_RAISED, 0.6)
+	else:
+		sb.bg_color = Color(0, 0, 0, 0)
+	return sb
+
+
+func _on_search_changed(q: String) -> void:
+	q = q.strip_edges().to_lower()
+	_search_hits.clear()
+	var words := q.split(" ", false)
+	for c in _nav_box.get_children():
+		if not (c is Button):
+			continue
+		var t := (c as Button).text
+		var ok := true
+		for w in words:
+			if not str(_page_text.get(t, "")).contains(w):
+				ok = false
+				break
+		(c as Button).visible = ok
+		if ok and not q.is_empty():
+			_search_hits.append(t)
+	# A category header shows while any of its pages does.
+	for cat in _nav_headers.keys():
+		var any := false
+		for t in _nav_buttons.keys():
+			var b := _nav_buttons[t] as Button
+			if str(b.get_meta("category", "")) == cat and b.visible:
+				any = true
+				break
+		var hdr := _nav_headers[cat] as Label
+		hdr.visible = any
+		if hdr.has_meta("gap"):
+			(hdr.get_meta("gap") as Control).visible = any
+	_nav_count_lbl.visible = not q.is_empty()
+	if _search_hits.is_empty():
+		_nav_count_lbl.text = "No page matches"
+	else:
+		_nav_count_lbl.text = "%s match" % UiText.count(_search_hits.size(), "page")
+	if not q.is_empty() and not _search_hits.is_empty() and not (current_page() in _search_hits):
+		open_page(str(_search_hits[0]))
+	_style_nav()
+	if not q.is_empty():
+		_reveal_match(words)
+
+
+func _on_search_submitted(q: String) -> void:
+	if _search_hits.is_empty():
+		return
+	open_page(str(_search_hits[0]))
+	_reveal_match(q.strip_edges().to_lower().split(" ", false))
+
+
+## Scrolls the open page to the first control whose text matches and flashes it.
+func _reveal_match(words: PackedStringArray) -> void:
+	if _tabs == null or words.is_empty():
+		return
+	var page := _tabs.get_tab_control(_tabs.current_tab)
+	if not (page is ScrollContainer):
+		return
+	var hit := _first_match(page, words)
+	if hit == null:
+		return
+	(page as ScrollContainer).ensure_control_visible(hit)
+	hit.modulate = Color(1.6, 1.4, 0.7)
+	var tw := hit.create_tween()
+	tw.tween_property(hit, "modulate", Color.WHITE, 0.9)
+
+
+func _first_match(n: Node, words: PackedStringArray) -> Control:
+	var txt := ""
+	if n is Label:
+		txt = (n as Label).text
+	elif n is Button:
+		txt = (n as Button).text
+	if not txt.is_empty() and (n as Control).is_visible_in_tree():
+		var low := txt.to_lower()
+		var ok := true
+		for w in words:
+			if not low.contains(w):
+				ok = false
+				break
+		if ok:
+			return n as Control
+	for c in n.get_children():
+		var r := _first_match(c, words)
+		if r != null:
+			return r
+	return null
+
+
+func _load_last_page() -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_PATH) != OK:
+		return ""
+	return str(cfg.get_value("settings", "page", ""))
+
+
+func _save_last_page(t: String) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(PREFS_PATH)
+	if str(cfg.get_value("settings", "page", "")) == t:
+		return
+	cfg.set_value("settings", "page", t)
+	cfg.save(PREFS_PATH)
 
 
 ## Returns the inner VBoxContainer for a new tab called `title`.
@@ -1081,6 +1418,15 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	v.add_child(loss_hint)
 	_conduits_3d_visible = _add_check(v, "Show 3D wires (world)", _on_conduits_3d_visible)
 	_conduit_flow_glow = _add_check(v, "Flow glow on 3D wires", _on_conduit_flow_glow)
+	var len_chk := _add_check(v, "Show run lengths on 3D wires", func(on: bool) -> void:
+		RunLengthLabels.set_enabled(on)
+		var mn := SimSettingsController.main_node if is_instance_valid(SimSettingsController) else null
+		var mgr := mn.get_node_or_null("ConduitManager") if mn != null else null
+		if mgr != null:
+			mgr.set_process(true))
+	len_chk.set_pressed_no_signal(RunLengthLabels.enabled())
+	len_chk.tooltip_text = ("A length tag over every 3D run (metres and feet, and the kind) — for "
+		+ "mapping out how much cord or pipe a site needs. Shows wherever the runs do.")
 	var flow_hint := Label.new()
 	flow_hint.text = "3D wires are off by default (timeline chip: “3D wires”). Flow glow adds a marching pulse; leave off for a quieter look. Aim a wire → Interact for style, drag to pin a route."
 	flow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1173,6 +1519,44 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	hint.custom_minimum_size = Vector2(420, 0)
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(hint)
+
+
+## Interface: the UI scale (UiThemeBuilder). Auto boosts small windows, where
+## the 1920×1080 canvas otherwise shrinks every word.
+func _build_interface_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Interface")
+	_add_section_lbl(v, "Text and panel size")
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var hdr := Label.new()
+	hdr.text = "UI scale"
+	hdr.custom_minimum_size = Vector2(110, 0)
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(hdr)
+	var opt := OptionButton.new()
+	opt.fit_to_longest_item = false
+	opt.custom_minimum_size = Vector2(220, 0)
+	var cur := UiThemeBuilder.scale_pref()
+	var auto_now := UiThemeBuilder.auto_scale(float(DisplayServer.window_get_size().y))
+	for i in UiThemeBuilder.SCALE_CHOICES.size():
+		var f := float(UiThemeBuilder.SCALE_CHOICES[i])
+		var label := "%d %%" % int(round(f * 100.0))
+		if f <= 0.0:
+			label = "Auto (%d %% here)" % int(round(auto_now * 100.0))
+		opt.add_item(label, i)
+		if is_equal_approx(f, cur):
+			opt.select(i)
+	opt.item_selected.connect(func(idx: int) -> void:
+		UiThemeBuilder.set_scale_pref(float(UiThemeBuilder.SCALE_CHOICES[idx])))
+	row.add_child(opt)
+	v.add_child(row)
+	var hint := Label.new()
+	hint.text = "Auto keeps text readable on small windows (larger at 720p, normal at 1080p and up). The layout always fits the screen; a larger scale tucks more of the HUD into pills."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	v.add_child(hint)
 
 
@@ -1486,11 +1870,13 @@ func _build_live_tab(tabs: TabContainer) -> void:
 # ---------------------------------------------------------------------------
 
 func _add_section_lbl(parent: Control, text: String) -> void:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_color_override("font_color", C_PRIMARY)
-	lbl.add_theme_font_size_override("font_size", 12)
-	parent.add_child(lbl)
+	# "Title  (aside)" puts the aside in the header's right-hand note.
+	var cut := text.find("  (")
+	if cut > 0 and text.ends_with(")"):
+		parent.add_child(SectionHeader.make(text.substr(0, cut), "",
+			text.substr(cut + 3, text.length() - cut - 4)))
+	else:
+		parent.add_child(SectionHeader.make(text))
 
 
 func _add_slider(parent: Control, label: String, min_v: float, max_v: float,
@@ -2688,8 +3074,8 @@ func _build_crowd_detail(v: VBoxContainer) -> void:
 		var budget := int(host.call("hero_budget"))
 		var over := int(cr.call("full_people_drawn")) if cr != null else 0
 		var crowd := int(cr.call("people_drawn")) - over if cr != null else 0
-		live.text = "Now: %d full-detail figures (budget %d) · %d full-tier as crowd figures · %d light crowd%s · %d fps" % [
-			heroes, budget, over, maxi(crowd, 0),
+		live.text = "Now: %s (budget %d) · %s · %d light crowd%s · %d fps" % [
+			UiText.count(heroes, "full-detail figure"), budget, UiText.count(over, "full-tier as crowd figure"), maxi(crowd, 0),
 			"" if NpcDisplayPrefs.light_crowd() else " (hidden)", Engine.get_frames_per_second()]
 	tick.timeout.connect(refresh)
 	refresh.call()

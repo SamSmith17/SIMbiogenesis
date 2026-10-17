@@ -111,9 +111,7 @@ func _build_ui() -> void:
 	_meta_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(_meta_lbl)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.tooltip_text = "Close (Esc)"
-	close_btn.custom_minimum_size = Vector2(30, 26)
+	IconButton.as_close(close_btn, "Close (Esc)")
 	close_btn.pressed.connect(close)
 	header.add_child(close_btn)
 

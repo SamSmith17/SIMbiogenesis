@@ -493,9 +493,7 @@ func _build_ui() -> void:
 	_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(_title_lbl)
 	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.tooltip_text = "Back to Elevation"
-	close_btn.custom_minimum_size = Vector2(32, 28)
+	IconButton.as_close(close_btn, "Back to Elevation")
 	close_btn.pressed.connect(close)
 	header.add_child(close_btn)
 
@@ -538,6 +536,9 @@ func _build_ui() -> void:
 	_preview_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_preview_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_preview_stack.mouse_filter = Control.MOUSE_FILTER_STOP
+	# The section's overlay (penstock, pins) is drawn in metres and runs past
+	# the preview's edge at depth — it used to draw over the Lab's own title.
+	_preview_stack.clip_contents = true
 	_preview_stack.gui_input.connect(_on_preview_stack_input)
 	_preview_col.add_child(_preview_stack)
 
@@ -801,8 +802,10 @@ func _build_ui() -> void:
 			func(v: float) -> void: _commit_float("penstock_length_m", v))
 	_penstock_d_spin = _spin(_penstock_group, "Penstock Ø (mm)", 20.0, 2000.0, 1.0,
 			func(v: float) -> void: _commit_float("penstock_diameter_mm", v))
-	_roughness_spin = _spin(_penstock_group, "Roughness ε (mm)", 0.0005, 1.0, 0.0005,
-			func(v: float) -> void: _commit_float("pipe_roughness_mm", v))
+	# Shown in µm (HDPE is 1.5 µm — "0.0015 mm" read as a raw number); the
+	# spec stays in mm.
+	_roughness_spin = _spin(_penstock_group, "Roughness ε (µm)", 0.5, 1000.0, 0.5,
+			func(v: float) -> void: _commit_float("pipe_roughness_mm", v / 1000.0))
 	_design_flow_spin = _spin(_penstock_group, "Design flow (L/s)", 0.1, 5000.0, 0.1,
 			func(v: float) -> void: _commit_float("design_flow_lps", v))
 	# Nozzle-governed kinds (PowerSpout Pelton): flow is jet velocity × nozzle
@@ -815,10 +818,7 @@ func _build_ui() -> void:
 	# strikes the pitch circle wherever it enters, and the head/flow do not care
 	# which chord it takes). Stored on specs so it persists per machine.
 	_nozzle_pose_extras.clear()
-	var np_hdr := Label.new()
-	np_hdr.text = "Nozzle placement"
-	np_hdr.add_theme_color_override("font_color", C_ACCENT)
-	np_hdr.add_theme_font_size_override("font_size", 12)
+	var np_hdr := SectionHeader.make("Nozzle placement")
 	_penstock_group.add_child(np_hdr)
 	_nozzle_pose_extras.append(np_hdr)
 	var np_hint := Label.new()
@@ -1192,38 +1192,17 @@ func _build_ui() -> void:
 
 
 func _section(parent: Control, title: String) -> void:
-	var lbl := Label.new()
-	lbl.text = title
-	lbl.add_theme_color_override("font_color", C_ACCENT)
-	lbl.add_theme_font_size_override("font_size", 12)
-	parent.add_child(lbl)
+	parent.add_child(SectionHeader.make(title))
 
 
 ## Collapsible dock block — returns the body VBox to parent controls into.
+## Its parent is the Collapsible, so hiding `body.get_parent()` hides the
+## whole block (the Power curves card relies on that).
 func _fold_section(parent: Control, title: String, open: bool = false) -> VBoxContainer:
-	var wrap := VBoxContainer.new()
-	wrap.add_theme_constant_override("separation", 4)
-	wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	parent.add_child(wrap)
-	var btn := Button.new()
-	btn.toggle_mode = true
-	btn.button_pressed = open
-	btn.flat = true
-	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.add_theme_color_override("font_color", C_ACCENT)
-	btn.add_theme_font_size_override("font_size", 12)
-	btn.text = ("%s %s" % ["▾" if open else "▸", title])
-	wrap.add_child(btn)
-	var body := VBoxContainer.new()
-	body.add_theme_constant_override("separation", 4)
-	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	body.visible = open
-	wrap.add_child(body)
-	btn.toggled.connect(func(on: bool) -> void:
-		body.visible = on
-		btn.text = ("%s %s" % ["▾" if on else "▸", title]))
-	return body
+	var sec := Collapsible.make(title, open)
+	parent.add_child(sec)
+	sec.body.add_theme_constant_override("separation", 4)
+	return sec.body
 
 
 func _spin(parent: Control, label: String, mn: float, mx: float, step: float,
@@ -1398,7 +1377,7 @@ func _load_from_model() -> bool:
 		_runner_spin.value = float(specs.get("runner_diameter_mm", 0.0))
 	_penstock_len_spin.value = float(specs.get("penstock_length_m", 60.0))
 	_penstock_d_spin.value = float(specs.get("penstock_diameter_mm", 63.0))
-	_roughness_spin.value = float(specs.get("pipe_roughness_mm", 0.0015))
+	_roughness_spin.value = float(specs.get("pipe_roughness_mm", 0.0015)) * 1000.0
 	_design_flow_spin.value = float(specs.get("design_flow_lps", 5.0))
 	_turb_eff_spin.value = float(specs.get("turbine_efficiency", 0.0))
 	# A model reload means a different turbine / fresh state — never leave the
@@ -2848,7 +2827,7 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 		_current_kind(), snappedf(gross, 0.05),
 		float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0,
 		float(_penstock_d_spin.value) if _penstock_d_spin != null else 63.0,
-		float(_roughness_spin.value) if _roughness_spin != null else 0.0015,
+		float(_roughness_spin.value) / 1000.0 if _roughness_spin != null else 0.0015,
 		float(_turb_eff_spin.value) if _turb_eff_spin != null else 0.0,
 		float(_design_flow_spin.value) if _design_flow_spin != null else 0.0,
 		int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
@@ -2883,7 +2862,7 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 	est["penstock_length_m"] = float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0
 	est["penstock_diameter_mm"] = float(_penstock_d_spin.value) if _penstock_d_spin != null else 63.0
 	if _roughness_spin != null:
-		est["pipe_roughness_mm"] = float(_roughness_spin.value)
+		est["pipe_roughness_mm"] = float(_roughness_spin.value) / 1000.0
 	if _turb_eff_spin != null and float(_turb_eff_spin.value) > 0.0:
 		est["turbine_efficiency"] = float(_turb_eff_spin.value)
 	# The annual closed form is 12 power evaluations and nothing about it is live
@@ -2974,7 +2953,7 @@ func _refresh_warnings() -> void:
 					and supply > 1e-6 and unused > 0.05:
 				var d_fit := PeltonPhysics.nozzle_d_for_supply_m(gross,
 						float(_penstock_len_spin.value) if _penstock_len_spin != null else 60.0,
-						d, maxf(float(_roughness_spin.value) if _roughness_spin != null else 0.0015, 0.0) / 1000.0,
+						d, maxf(float(_roughness_spin.value) / 1000.0 if _roughness_spin != null else 0.0015, 0.0) / 1000.0,
 						int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
 						supply / 1000.0)
 				if d_fit > 0.0:
@@ -3355,15 +3334,15 @@ func _refresh_stat_deck() -> void:
 	var f_bar := ""
 	var f_tone := "ok" if flowing else idle
 	if not is_nan(supply):
-		f_sub = "source runs %s L/s" % _fmt_lps(supply)
+		f_sub = "%s L/s at the source" % _fmt_lps(supply)
 		if supply > 1e-6:
 			f_frac = q / supply
 			f_bar = "%.0f%% of source" % (clampf(f_frac, 0.0, 1.0) * 100.0)
 		if limited:
 			f_tone = "warn"
-			f_bar = "all the source gives"
+			f_bar = "all the source"
 	elif not is_nan(cap) and cap > 1e-6:
-		f_sub = "pipe can pass %s L/s" % _fmt_lps(cap)
+		f_sub = "%s L/s pipe can pass" % _fmt_lps(cap)
 		f_frac = q / cap
 		f_bar = "%.0f%% of pipe" % (clampf(f_frac, 0.0, 1.0) * 100.0)
 	if regime == "no_supply":
@@ -3383,13 +3362,13 @@ func _refresh_stat_deck() -> void:
 		h_tone = "warn"
 	var h_sub := "no drop to the turbine"
 	if gross > 0.05:
-		h_sub = "gross %.1f m − %.1f m friction (%.0f%%)" % [gross, loss, loss_pct]
+		h_sub = "%.1f m gross − %.1f m friction" % [gross, loss]
 	if limited:
-		h_sub = "gross %.1f m · %.1f m left unconverted" % [gross,
+		h_sub = "%.1f m gross · %.1f m unused" % [gross,
 				maxf(float(r.get("unused_head_m", 0.0)), 0.0)]
 	tiles.append({"key": "head", "label": "Net head", "value": "%.1f" % net, "unit": "m",
 		"sub": h_sub, "frac": (net / gross) if gross > 0.05 else NAN,
-		"bar_text": ("%.0f%% reaches the jet" % (net / gross * 100.0)) if gross > 0.05 else "",
+		"bar_text": ("%.0f%% reaches jet" % (net / gross * 100.0)) if gross > 0.05 else "",
 		"tone": h_tone,
 		"tip": ("Gross head is the drop from the water surface (or intake) to the turbine. "
 			+ "Friction in the penstock (∝ v², so ∝ Q²) takes its share first; what is left is "
@@ -3405,17 +3384,17 @@ func _refresh_stat_deck() -> void:
 		var p_tone := "ok" if gross > 0.05 else idle
 		var p_frac := NAN
 		var p_bar := ""
-		var p_sub := "static %.0f psi (%.1f bar) with the valve shut" % [static_psi, gross * BAR_PER_M]
+		var p_sub := "%.0f psi static (%.1f bar), valve shut" % [static_psi, gross * BAR_PER_M]
 		if not is_nan(rating) and rating > 0.0:
 			p_frac = static_psi / rating
-			p_sub = "static %.0f psi · pipe rated %.0f psi" % [static_psi, rating]
+			p_sub = "%.0f psi static · pipe rated %.0f" % [static_psi, rating]
 			p_bar = "%.0f%% of rating" % (p_frac * 100.0)
 			if p_frac > 1.0:
 				p_tone = "bad"
 			elif p_frac > 0.8:
 				p_tone = "warn"
 		tiles.append({"key": "pressure", "label": "Pressure", "value": "%.0f" % jet_psi,
-			"unit": "psi at the jet", "sub": p_sub, "frac": p_frac, "bar_text": p_bar,
+			"unit": "psi at jet", "sub": p_sub, "frac": p_frac, "bar_text": p_bar,
 			"tone": p_tone,
 			"tip": ("Water-column pressure: 1.42 psi per metre of head (0.433 psi/ft). STATIC is "
 				+ "the shut-valve pressure the pipe must hold — compare it with the SDR rating. "
@@ -3437,12 +3416,12 @@ func _refresh_stat_deck() -> void:
 		var j_bar := ""
 		if demand_lps > 1e-6 and gross > 0.05:
 			j_frac = q / demand_lps
-			j_bar = "jet %.0f%% fed" % (clampf(j_frac, 0.0, 1.0) * 100.0)
+			j_bar = "%.0f%% fed" % (clampf(j_frac, 0.0, 1.0) * 100.0)
 			if limited:
 				j_tone = "warn"
 			elif flowing:
-				j_bar = "jet fully fed"
-		var j_sub := "%d × %.1f mm · wants %s L/s at full head" % [noz_n, noz_d, _fmt_lps(demand_lps)]
+				j_bar = "fully fed"
+		var j_sub := "%s L/s wanted · %d × %.1f mm" % [_fmt_lps(demand_lps), noz_n, noz_d]
 		tiles.append({"key": "jet", "label": "Jet", "value": "%.1f" % v_jet, "unit": "m/s",
 			"sub": j_sub, "frac": j_frac, "bar_text": j_bar, "tone": j_tone,
 			"tip": ("The nozzle turns pressure into a jet (v = 0.97·√(2g·h_net)) and its area "
@@ -3465,7 +3444,7 @@ func _refresh_stat_deck() -> void:
 			l_bar = "lift too high"
 		tiles.append({"key": "level", "label": "Pond level",
 			"value": ("%.2f" % lvl) if not is_nan(lvl) else "—", "unit": "m",
-			"sub": "primes at %.2f · breaks at %.2f (dip mouth)" % [start, brk], "frac": l_frac,
+			"sub": "primes %.2f · breaks %.2f m" % [start, brk], "frac": l_frac,
 			"bar_text": l_bar, "tone": l_tone,
 			"tip": ("A siphon runs on the pond's own surface: it starts when the surface reaches "
 				+ "the prime level (the crest, or the dip mouth with a pump) and stops when it "
@@ -3480,17 +3459,17 @@ func _refresh_stat_deck() -> void:
 		var su_tone := idle
 		var su_frac := NAN
 		var su_bar := ""
-		var su_sub := "crest %.1f m above the pond" % float(r.get("lift_m", 0.0))
+		var su_sub := "%.1f m crest above the pond" % float(r.get("lift_m", 0.0))
 		if flowing and s_max > 1e-6:
 			su_frac = suction / s_max
 			su_tone = "bad" if cav else ("warn" if su_frac > 0.85 else "ok")
-			su_bar = ("%.1f m of draft wasted" % float(r.get("draft_excess_m", 0.0))) if cav \
-					else "%.0f%% of the limit" % (su_frac * 100.0)
-			su_sub = "limit %.1f m · crest at %.1f m abs" % [s_max, crest_abs]
+			su_bar = ("%.1f m wasted" % float(r.get("draft_excess_m", 0.0))) if cav \
+					else "%.0f%% of limit" % (su_frac * 100.0)
+			su_sub = "%.1f m limit · crest %.1f m abs" % [s_max, crest_abs]
 		elif regime == "lift_exceeded":
 			su_tone = "bad"
-			su_sub = "crest %.1f m up · %.1f m abs — air comes out" % [float(r.get("lift_m", 0.0)), crest_abs]
-		tiles.append({"key": "suction", "label": "Suction", "value": "%.1f" % suction, "unit": "m at the runner",
+			su_sub = "%.1f m lift · %.1f m abs: air comes out" % [float(r.get("lift_m", 0.0)), crest_abs]
+		tiles.append({"key": "suction", "label": "Suction at runner", "value": "%.1f" % suction, "unit": "m",
 			"sub": su_sub, "frac": su_frac, "bar_text": su_bar, "tone": su_tone,
 			"tip": ("The draft pipe below the runner pulls its outlet under atmospheric pressure "
 				+ "by the drop less the pipe losses. Atmosphere is only ~10 m of water: once the "
@@ -3504,7 +3483,7 @@ func _refresh_stat_deck() -> void:
 	var s_bar := ""
 	if nozzle and rpm > 0.5:
 		var runaway := rpm / PeltonPhysics.SPEED_RATIO_OPT
-		s_sub = "buckets at 46%% of the jet · runaway %.0f rpm" % runaway
+		s_sub = "%.0f rpm at runaway" % runaway
 		s_frac = PeltonPhysics.SPEED_RATIO_OPT
 		s_bar = "matched load"
 	elif rpm > 0.5:
@@ -3522,12 +3501,12 @@ func _refresh_stat_deck() -> void:
 	var p2_frac := NAN
 	var p2_bar := ""
 	var p2_tone := "accent" if flowing and power > 0.5 else idle
-	var p2_sub := "P = η·ρ·g·Q·h_net · η %.0f%% of %s hydraulic" % [eta * 100.0, _fmt_watts(pe)]
+	var p2_sub := "%s in the water · η %.0f%%" % [_fmt_watts(pe), eta * 100.0]
 	if pe <= 1e-6:
-		p2_sub = "P = η·ρ·g·Q·h_net"
+		p2_sub = "no water power yet"
 	if nameplate > 0.0:
 		p2_frac = power / nameplate
-		p2_bar = "%.0f%% of %.0f W nameplate" % [p2_frac * 100.0, nameplate]
+		p2_bar = "%.0f%% of %s" % [p2_frac * 100.0, _fmt_watts(nameplate)]
 		if flowing and power >= nameplate * 0.98:
 			p2_tone = "warn"
 			p2_bar = "generator-capped"
@@ -3594,7 +3573,10 @@ func _refresh_stat_deck() -> void:
 			ins += " A %.1f mm nozzle puts the full head behind the water you have." % _fit_nozzle_mm
 		ins_tone = "warn"
 	elif gross > 0.05 and loss / gross > 0.30:
-		ins = "Pipe-limited: friction takes %.0f%% of the head before the nozzle sees it (loss ∝ Q²). A fatter pipe or a shorter run puts more pressure at the jet." % loss_pct
+		if nozzle:
+			ins = "Pipe-limited: friction takes %.0f%% of the head before the nozzle sees it (loss ∝ Q²). A fatter pipe or a shorter run puts more pressure at the jet." % loss_pct
+		else:
+			ins = "Pipe-limited: friction in the dip tube and draft pipe takes %.0f%% of the head before the runner sees it (loss ∝ Q²). A fatter or shorter pipe leaves more for the runner." % loss_pct
 		ins_tone = "warn"
 	elif band.size() == 2 and gross > 0.05 and gross < float(band[0]) * 0.95:
 		ins = "%.1f m head is under this turbine's %.0f–%.0f m band — the jet is too slow for the buckets. Find more drop, or pick a low-head machine." % [
@@ -4285,7 +4267,8 @@ func _on_fill_to_prime() -> void:
 			rim = float(pond.get("rim_m", NAN))
 			if _graph_view.has_method("_show_toast"):
 				_graph_view.call("_show_toast", "Raised the pond's max fill level to %.2f m (a dam above the basin rim) so it can reach the crest" % (prime + 0.12))
-	if not is_nan(rim) and prime + 0.06 > rim - 0.02 and _prime_opt != null 			and str(_prime_opt.get_item_metadata(_prime_opt.selected)) != "pump":
+	if not is_nan(rim) and prime + 0.06 > rim - 0.02 and _prime_opt != null \
+			and str(_prime_opt.get_item_metadata(_prime_opt.selected)) != "pump":
 		_syncing = true
 		_prime_opt.select(1)
 		_syncing = false

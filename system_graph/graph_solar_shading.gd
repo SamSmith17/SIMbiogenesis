@@ -91,3 +91,111 @@ static func shade_factor_for_item(item: Dictionary, main: Node, soi_center: Vect
 	return shade_factor_at(origin, sun_dir, func(from: Vector3, to: Vector3) -> Dictionary:
 		return physics_intersect(space, from, to, exclude)
 	)
+
+
+# ---------------------------------------------------------------------------
+# Array-level shade: one model for the panel cards AND the delivered power.
+#
+# A shaded panel makes less; nothing it loses moves to its neighbours. So the
+# shade is applied ONCE, to SolarUI's array output: the array factor is the
+# Wmp-weighted mean of the per-panel factors (each panel's own bypass diodes
+# drop it out of the string rather than dragging the whole string down — the
+# usual first-order model of partial shade). The panel cards then split what
+# the array made by EFFECTIVE Wmp (wmp × factor), so they sum to it.
+#
+# A receiver is {wmp, group, pos, s}: its Wmp, the index of the controller cap
+# it feeds (SolarUI _graph_dc_caps; -1 = unrouted), its world sample origin
+# and the live factor the shading tick stamped. Unplaced PV is simply not a
+# receiver — it counts as unshaded through `total_wmp`.
+# ---------------------------------------------------------------------------
+
+## Distinct sample origins ray-cast per instant for the batch render; beyond
+## this the remaining receivers keep their live factor (a year bake is ~14k
+## samples, so the ray count is what has to stay bounded).
+const MAX_BAKE_ORIGINS := 48
+## Origins closer than this share one ray (panels in one row).
+const ORIGIN_MERGE_M := 0.5
+
+
+## Array shade from per-receiver factors (parallel to `receivers`).
+## Returns {factor, total_wmp, loss, loss_by_group} — `loss` in Wmp.
+static func array_shade(receivers: Array, factors: Array, total_wmp: float) -> Dictionary:
+	var t := maxf(total_wmp, 0.0)
+	var loss := 0.0
+	var by: Dictionary = {}
+	for i in receivers.size():
+		var r: Dictionary = receivers[i] as Dictionary
+		var f := clampf(float(factors[i]) if i < factors.size() else 1.0, 0.0, 1.0)
+		var l := maxf(float(r.get("wmp", 0.0)), 0.0) * (1.0 - f)
+		if l <= 0.0:
+			continue
+		var g := int(r.get("group", -1))
+		by[g] = float(by.get(g, 0.0)) + l
+		loss += l
+	loss = minf(loss, t)
+	return {
+		"factor": (t - loss) / t if t > 0.0 else 1.0,
+		"total_wmp": t,
+		"loss": loss,
+		"loss_by_group": by,
+	}
+
+
+## Array shade from the live factors the shading tick stamped (receiver "s").
+static func live_shade(receivers: Array, total_wmp: float) -> Dictionary:
+	var f: Array = []
+	for r in receivers:
+		f.append(float((r as Dictionary).get("s", 1.0)))
+	return array_shade(receivers, f, total_wmp)
+
+
+## Per-controller caps re-shared for a shaded array. The caps' fracs are plain
+## Wmp shares of the UNSHADED array; the raw output they multiply already
+## carries the array factor, so each share becomes (frac·T − loss_g)/(T − loss)
+## — a controller whose panels are in shade is offered less, one in the sun
+## exactly its panels' output. The fracs still sum to one.
+static func shaded_caps(caps: Array, unrouted_frac: float, shade: Dictionary) -> Dictionary:
+	var t := float(shade.get("total_wmp", 0.0))
+	var loss := float(shade.get("loss", 0.0))
+	var eff := t - loss
+	if shade.is_empty() or t <= 0.0 or loss <= 1e-9 or eff <= 1e-9:
+		return {"caps": caps, "unrouted_frac": unrouted_frac}
+	var by: Dictionary = shade.get("loss_by_group", {}) as Dictionary
+	var out: Array = []
+	for i in caps.size():
+		var c: Dictionary = (caps[i] as Dictionary).duplicate()
+		c["frac"] = maxf(float(c.get("frac", 0.0)) * t - float(by.get(i, 0.0)), 0.0) / eff
+		out.append(c)
+	var u := maxf(unrouted_frac * t - float(by.get(-1, 0.0)), 0.0) / eff
+	return {"caps": out, "unrouted_frac": clampf(u, 0.0, 1.0)}
+
+
+## Factors for every receiver at one sun direction (the batch render's path).
+## Origins within ORIGIN_MERGE_M share a ray; past MAX_BAKE_ORIGINS distinct
+## origins the rest keep their live "s". `intersect_fn(from, to)` as in
+## shade_factor_at.
+static func factors_at(receivers: Array, sun_dir: Vector3, intersect_fn: Callable) -> Array:
+	var out: Array = []
+	if sun_dir.y <= HORIZON_Y:
+		for _r in receivers:
+			out.append(CLEAR)
+		return out
+	var memo: Dictionary = {}
+	for r in receivers:
+		var rd: Dictionary = r as Dictionary
+		var p: Variant = rd.get("pos", null)
+		if not (p is Vector3):
+			out.append(float(rd.get("s", 1.0)))
+			continue
+		var pos: Vector3 = p
+		var key := Vector3i((pos / ORIGIN_MERGE_M).round())
+		if memo.has(key):
+			out.append(float(memo[key]))
+			continue
+		if memo.size() >= MAX_BAKE_ORIGINS:
+			out.append(float(rd.get("s", 1.0)))
+			continue
+		var f := shade_factor_at(pos, sun_dir, intersect_fn)
+		memo[key] = f
+		out.append(f)
+	return out

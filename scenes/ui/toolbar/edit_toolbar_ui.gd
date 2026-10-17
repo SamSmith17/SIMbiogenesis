@@ -60,7 +60,7 @@ var _overlay: Control = null
 var _strip: PanelContainer = null
 var _strip_box: VBoxContainer = null
 var _options: PanelContainer = null
-var _options_box: HBoxContainer = null
+var _options_box: HFlowContainer = null
 var _shape_row: HBoxContainer = null
 var _tool_lbl: Label = null
 var _status: Label = null
@@ -215,6 +215,7 @@ func _enter_mode() -> void:
 	move_to_front()
 	_set_active_tool(_state.active_tool)
 	_update_undo_button()
+	_sync_hud_claim.call_deferred()
 	if _loader != null and _loader.has_method("begin_sculpt_session"):
 		_loader.call("begin_sculpt_session")
 	CursorController.request_tool_overlay(OVERLAY_NAME, Callable(self, "_escape_step"))
@@ -233,6 +234,7 @@ func _exit_mode() -> void:
 	_active = false
 	visible = false
 	set_process(false)
+	HudLayout.release("edit_toolbar")
 	_free_brush_ring()
 	if _loader != null and _loader.has_method("end_sculpt_session"):
 		_loader.call("end_sculpt_session")
@@ -311,7 +313,7 @@ func _build_ui() -> void:
 	# CENTER_LEFT preset reads as "starts at the middle", never centred.
 	_strip.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_strip.offset_left = 8.0
-	_strip.offset_right = 92.0
+	_strip.offset_right = 104.0
 	_strip.offset_top = 52.0
 	add_child(_strip)
 	_strip_box = VBoxContainer.new()
@@ -321,7 +323,7 @@ func _build_ui() -> void:
 	# short window. Session-only on purpose: a collapsed state remembered across
 	# launches reads as "my tools disappeared".
 	_collapse_btn = Button.new()
-	_collapse_btn.custom_minimum_size = Vector2(72, 22)
+	_collapse_btn.custom_minimum_size = Vector2(84, 22)
 	_collapse_btn.focus_mode = Control.FOCUS_NONE
 	_collapse_btn.pressed.connect(_toggle_collapsed)
 	_strip_box.add_child(_collapse_btn)
@@ -337,29 +339,66 @@ func _build_ui() -> void:
 	_options.add_theme_stylebox_override("panel", UITheme.panel_style(0.92))
 	_options.mouse_filter = Control.MOUSE_FILTER_STOP
 	_options.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_options.offset_left = 104.0
-	_options.offset_right = -12.0
+	# Full width across the top; the strip hangs below it (_sync_hud_claim).
+	_options.offset_left = 8.0
+	_options.offset_right = -8.0
 	_options.offset_top = 8.0
 	add_child(_options)
-	_options_box = HBoxContainer.new()
-	_options_box.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	# A FLOW container: a tool with many options wraps onto a second row
+	# instead of running off the right edge (it used to be 2500 px wide).
+	_options_box = HFlowContainer.new()
+	_options_box.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+	_options_box.add_theme_constant_override("v_separation", 4)
 	_options.add_child(_options_box)
+	_options.resized.connect(_sync_hud_claim)
+	_strip.resized.connect(_sync_hud_claim)
+
+
+## The strip is an accordion: every section's header is a button, and only
+## the ACTIVE section lists its tools — five sections of tools stacked whole
+## ran down past the timeline and covered the scoreboard.
+## One Lucide glyph per tool, so the strip reads at a glance and a collapsed
+## (icon-only) strip still says which tool is which.
+const TOOL_ICONS := {
+	"raise": "chevron-up", "lower": "chevron-down", "smooth": "waves",
+	"level": "minus", "ramp": "trending-up", "pond": "droplet",
+	"rain": "cloud-rain", "drain": "download", "measure": "ruler",
+	"veg_paint": "sprout", "veg_place": "trees", "veg_clear": "eraser",
+	"veg_select": "mouse-pointer-2",
+	"camp_paint": "tent", "camp_erase": "eraser", "camp_subdivide": "layout-grid",
+	"camp_select": "pencil",
+	"fest_road": "route", "fest_zone": "square-dashed", "fest_lots": "layout-grid",
+	"fest_assign": "users", "fest_edit": "pencil",
+	"water_trace": "target", "water_draw": "pencil", "water_edit": "move",
+	"water_span": "link", "water_view": "eye",
+}
+
+var _section_headers: Dictionary = {}   # section -> Button
+var _section_tools: Dictionary = {}     # section -> Array[Button]
 
 
 func _build_strip_section(title: String, section: String) -> void:
-	var hdr := Label.new()
-	hdr.text = title
+	var hdr := Button.new()
+	hdr.text = title.capitalize()
+	hdr.flat = true
+	hdr.focus_mode = Control.FOCUS_NONE
+	hdr.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	hdr.custom_minimum_size = Vector2(84, 22)
 	hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hdr.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hdr.tooltip_text = "%s tools" % title.capitalize()
+	hdr.pressed.connect(open_with_section.bind(section))
 	_strip_box.add_child(hdr)
 	_strip_body.append(hdr)
+	_section_headers[section] = hdr
+	_section_tools[section] = []
 	for t in _state.tools_in_section(section):
 		var id := String(t["id"])
 		var btn := Button.new()
 		btn.text = String(t["label"])
 		btn.tooltip_text = String(t["tooltip"])
-		btn.custom_minimum_size = Vector2(72, 28)
+		btn.custom_minimum_size = Vector2(84, 28)
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		btn.icon = UiIcons.icon(String(TOOL_ICONS.get(id, "circle-help")), 14)
 		btn.focus_mode = Control.FOCUS_NONE
 		if ToolbarStateScript.PENDING_TOOLS.has(id):
 			btn.disabled = true
@@ -369,6 +408,7 @@ func _build_strip_section(title: String, section: String) -> void:
 		_strip_box.add_child(btn)
 		_strip_body.append(btn)
 		_tool_buttons[id] = btn
+		(_section_tools[section] as Array).append(btn)
 	_restyle_tool_buttons()
 	_refresh_collapse_button()
 
@@ -382,12 +422,40 @@ func _style_toggle(btn: Button, on: bool) -> void:
 func _restyle_tool_buttons() -> void:
 	for id in _tool_buttons.keys():
 		_style_toggle(_tool_buttons[id], String(id) == _state.active_tool)
+	_refresh_strip_sections()
+
+
+func _refresh_strip_sections() -> void:
+	var active := String(_state.tool_def(_state.active_tool).get("section", ""))
+	for sec in _section_headers:
+		var hdr: Button = _section_headers[sec]
+		var open: bool = sec == active
+		hdr.visible = not _collapsed
+		hdr.icon = UiIcons.icon("chevron-down" if open else "chevron-right", 12)
+		hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY if open else UITheme.C_TEXT_S)
+		hdr.add_theme_color_override("font_hover_color", UITheme.C_TEXT)
+		for b in _section_tools.get(sec, []):
+			(b as Control).visible = open and not _collapsed
+	if _strip != null:
+		_strip.reset_size()
+
+
+## Tell the HUD what the toolbar covers (the strip down the left, the options
+## bar across the top) so every HUD panel moves clear or tucks into a pill.
+func _sync_hud_claim() -> void:
+	if not _active or _strip == null or _options == null:
+		return
+	var top := _options.get_global_rect().end.y + 6.0
+	_strip.offset_top = top
+	var m := HudLayoutCore.MARGIN
+	HudLayout.claim("edit_toolbar", {
+		"inset": {"left": _strip.get_global_rect().end.x + 6.0 - m, "top": top - m},
+		"tuck": ["top_left", "top_right"]})
 
 
 func _toggle_collapsed() -> void:
 	_collapsed = not _collapsed
-	for c in _strip_body:
-		c.visible = not _collapsed
+	_refresh_strip_sections()
 	_refresh_collapse_button()
 	# Without this the panel keeps the hidden children's footprint.
 	_strip.reset_size()
@@ -396,7 +464,9 @@ func _toggle_collapsed() -> void:
 func _refresh_collapse_button() -> void:
 	if _collapse_btn == null:
 		return
-	_collapse_btn.text = "Tools >" if _collapsed else "Tools v"
+	_collapse_btn.text = "Tools"
+	_collapse_btn.icon = UiIcons.icon("chevron-right" if _collapsed else "chevron-down", 12)
+	_collapse_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_collapse_btn.tooltip_text = "Show the tool strip" if _collapsed \
 		else "Collapse the tool strip"
 	UITheme.style_toggle(_collapse_btn, false, UITheme.FONT_XS)
@@ -431,7 +501,8 @@ func _set_active_tool(id: String) -> void:
 	# terrain->veg a one-click move, so re-snap them on the way in (the legacy
 	# veg dock does the same on every open).
 	var section := String(_state.tool_def(id).get("section", ""))
-	if section == "veg" and _last_section != "veg" and _loader != null 			and _loader.has_method("reground_all_vegetation"):
+	if section == "veg" and _last_section != "veg" and _loader != null \
+			and _loader.has_method("reground_all_vegetation"):
 		_loader.call("reground_all_vegetation")
 	# Same for camps: a sculpted pad leaves the tents on the old surface.
 	if (section == "camps" or section == "placement") and _last_section == "terrain" \
@@ -477,10 +548,10 @@ func _rebuild_options_bar() -> void:
 	_options_box.add_child(_tool_lbl)
 	for spec in _state.option_specs():
 		var key := String(spec["key"])
-		var pair := SliderSpinRow.add(_options_box, String(spec["label"]),
+		var pair := SliderSpinRow.add_param(_options_box, String(spec["label"]),
 			float(spec["min"]), float(spec["max"]), float(spec["value"]),
-			_make_param_handler(key), Callable(self, "_style_row_label"),
-			0, 110, 62, float(spec["step"]))
+			float(spec["step"]), String(spec.get("unit", "")),
+			_make_param_handler(key), float(spec.get("auto_below", NAN)))
 		_param_rows[key] = pair
 	if String(def.get("section", "")) == "veg":
 		_build_species_row()
@@ -516,7 +587,7 @@ func _rebuild_options_bar() -> void:
 	var hint := PanelContainer.new()
 	hint.add_theme_stylebox_override("panel", UITheme.chip_style(UITheme.C_LAVENDER))
 	var hint_lbl := Label.new()
-	hint_lbl.text = "RMB look - WASD move - [ ] size - Esc close"
+	hint_lbl.text = "RMB look · WASD move · [ ] size · Esc close"
 	hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	hint_lbl.add_theme_color_override("font_color", UITheme.C_LAVENDER.lightened(0.35))
 	hint.add_child(hint_lbl)
@@ -542,10 +613,7 @@ func _rebuild_options_bar() -> void:
 	_options_box.add_child(_undo_btn)
 	_update_undo_button()
 	var exit_btn := Button.new()
-	exit_btn.text = "✕"
-	exit_btn.tooltip_text = "Close the toolbar (Esc)"
-	exit_btn.focus_mode = Control.FOCUS_NONE
-	UITheme.style_button(exit_btn)
+	IconButton.as_close(exit_btn, "Close the toolbar (Esc)")
 	exit_btn.pressed.connect(_exit_mode)
 	_options_box.add_child(exit_btn)
 
@@ -732,9 +800,9 @@ func _on_lmb_pressed() -> void:
 			_lock_selection(_gesture.finish_polygon())
 		GestureScript.POLY_POINT:
 			if _gesture.mode == "path":
-				_set_status("Road: %d points — Enter to finish" % _gesture.poly_points().size())
+				_set_status("Road: %s — Enter to finish" % UiText.count(_gesture.poly_points().size(), "point"))
 			else:
-				_set_status("Polygon: %d points — Enter to close" % _gesture.poly_points().size())
+				_set_status("Polygon: %s — Enter to close" % UiText.count(_gesture.poly_points().size(), "point"))
 	_queue_overlay_redraw()
 
 
@@ -1311,7 +1379,8 @@ func _update_undo_button() -> void:
 	if _is_water_section():
 		can = _water_tools.can_undo()
 	elif _is_veg_tool():
-		can = _loader.has_method("can_undo_vegetation") 			and bool(_loader.call("can_undo_vegetation"))
+		can = _loader.has_method("can_undo_vegetation") \
+				and bool(_loader.call("can_undo_vegetation"))
 	elif _is_camp_tool():
 		can = _loader.has_method("can_undo_camps") and bool(_loader.call("can_undo_camps"))
 	elif _is_placement_tool():
@@ -1380,6 +1449,15 @@ func _build_species_row() -> void:
 	_subspecies_opt.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_subspecies_opt.item_selected.connect(_on_subspecies_selected)
 	_species_row.add_child(_subspecies_opt)
+	# The species look editor. It used to be reachable only from the legacy
+	# Shift+V dock and the library, so plain V offered no way to tune a tree.
+	var tune := Button.new()
+	tune.text = "Tune look…"
+	tune.tooltip_text = "Preview this species and edit its size, shape, colour and foliage"
+	tune.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(tune)
+	tune.pressed.connect(_open_veg_tune_look)
+	_species_row.add_child(tune)
 	_restyle_family_buttons()
 	_refresh_subspecies()
 
@@ -1404,9 +1482,20 @@ func _refresh_subspecies() -> void:
 		return
 	_subspecies_opt.clear()
 	if _state.is_mix_family():
-		_subspecies_opt.add_item("— mix —")
-		_subspecies_opt.disabled = true
+		# The Mix family paints a whole mix (VegMix): this map's own mix, or a
+		# preset / saved mix. Tune look… edits and previews it.
+		_subspecies_opt.disabled = false
 		_state.set_veg_species("")
+		var choices: Array = [["map", "This map's mix"]]
+		choices.append_array(VegMix.choices())
+		var sel := 0
+		for i in choices.size():
+			var c: Array = choices[i]
+			_subspecies_opt.add_item(str(c[1]))
+			_subspecies_opt.set_item_metadata(i, "mix:" + str(c[0]))
+			if str(c[0]) == _state.veg_mix_id:
+				sel = i
+		_subspecies_opt.select(sel)
 		return
 	_subspecies_opt.disabled = false
 	var ids: Array = VegSpeciesCatalog.subspecies_for_family(_state.veg_family)
@@ -1427,6 +1516,10 @@ func _on_subspecies_selected(idx: int) -> void:
 	if _subspecies_opt == null or _subspecies_opt.disabled:
 		return
 	var sid := str(_subspecies_opt.get_item_metadata(idx))
+	if sid.begins_with("mix:"):
+		_state.veg_mix_id = sid.substr(4)
+		_queue_save_prefs()
+		return
 	if sid.is_empty() or not VegSpeciesCatalog.is_paintable(sid):
 		return
 	_state.set_veg_species(sid)
@@ -1442,11 +1535,15 @@ func _effective_spacing() -> float:
 
 func _scatter_params() -> Dictionary:
 	var scales: Vector2 = VegetationStyleConfig.scales_from_size_var(_state.size_var_fraction())
+	var brush_scale := clampf(_state.get_param("scale", 1.0), 0.1, 5.0)
 	var params := {
 		"preset": _state.veg_preset_index(),
 		"spacing_m": _effective_spacing(),
-		"scale_min": scales.x,
-		"scale_max": scales.y,
+		"scale_min": scales.x * brush_scale,
+		"scale_max": scales.y * brush_scale,
+		"density": _state.get_param("density", 1.0),
+		"size_var": _state.size_var_fraction(),
+		"scale": brush_scale,
 		"seed": VEG_SEED,
 		"mix_pine": float(MIX_WEIGHTS["pine"]),
 		"mix_deciduous": float(MIX_WEIGHTS["deciduous"]),
@@ -1457,7 +1554,56 @@ func _scatter_params() -> Dictionary:
 	}
 	if not _state.is_mix_family() and VegSpeciesCatalog.is_paintable(_state.veg_species):
 		params["species"] = _state.veg_species
+	if _state.is_mix_family():
+		params["mix"] = _active_mix()
 	return params
+
+
+## The paint brush as the Tune-look modal sees it.
+func get_veg_brush() -> Dictionary:
+	return {
+		"density": _state.get_tool_param_value("veg_paint", "density"),
+		"size_var": clampf(_state.get_tool_param_value("veg_paint", "size_var") / 100.0, 0.0, 0.5),
+		"scale": _state.get_tool_param_value("veg_paint", "scale"),
+		"mix_id": _state.veg_mix_id,
+		"family": _state.veg_family,
+	}
+
+
+## The Tune-look modal hands its brush back: density, size variation, plant
+## scale, and either a mix ("mix_id") or a species.
+func set_veg_brush(b: Dictionary) -> void:
+	if b.has("density"):
+		_state.set_tool_param("veg_paint", "density", float(b["density"]))
+	if b.has("size_var"):
+		_state.set_tool_param("veg_paint", "size_var", float(b["size_var"]) * 100.0)
+	if b.has("scale"):
+		_state.set_tool_param("veg_paint", "scale", float(b["scale"]))
+	if b.has("mix_id"):
+		_state.set_veg_family("mix")
+		_state.veg_mix_id = str(b["mix_id"])
+	elif b.has("species"):
+		var sid := str(b["species"])
+		var fam := VegSpeciesCatalog.mesh_family(sid)
+		for f in ToolbarStateScript.VEG_FAMILIES:
+			if String(f["id"]) == fam:
+				_state.set_veg_family(fam)
+				break
+		_state.set_veg_species(sid)
+	_queue_save_prefs()
+	if visible and _is_veg_tool():
+		_rebuild_options_bar()
+
+
+## The mix the Mix family paints: this map's own, or the chosen preset.
+func _active_mix() -> Dictionary:
+	if _state.veg_mix_id != "map":
+		var m := VegMix.preset(_state.veg_mix_id)
+		if not m.is_empty():
+			return m
+	if _loader != null and _loader.has_method("get_paint_mix"):
+		return _loader.call("get_paint_mix")
+	return VegMix.preset("mixed_woodland")
 
 
 func _species_label() -> String:
@@ -1562,12 +1708,15 @@ func _resolve_single_species() -> String:
 		return _state.veg_species
 	if not _state.is_mix_family():
 		return _state.veg_family
+	# One plant from the mix: its canopy pick at a random draw (the patch noise
+	# needs a position, but a single click is a single tree — the plain
+	# weights are the honest answer).
 	var rng := RandomNumberGenerator.new()
 	rng.seed = VEG_SEED ^ int(Time.get_ticks_usec())
-	return VegetationPaint.pick_species(_state.veg_preset_index(),
-		float(MIX_WEIGHTS["pine"]), float(MIX_WEIGHTS["deciduous"]),
-		float(MIX_WEIGHTS["shrub"]), rng,
-		float(MIX_WEIGHTS["grass_lawn"]), float(MIX_WEIGHTS["grass_field"]))
+	var mix := VegMix.normalized(_active_mix())
+	mix["patchiness"] = 0.0
+	var sid := VegMix.pick_tree(mix, 0.0, 0.0, rng.randf())
+	return sid if not sid.is_empty() else "deciduous"
 
 
 func _place_single_plant_at(p: Vector3) -> void:
@@ -1696,7 +1845,7 @@ func _camp_totals() -> String:
 	if _loader == null or not _loader.has_method("camp_areas_summary"):
 		return ""
 	var s: Dictionary = _loader.call("camp_areas_summary")
-	return "%d camps, %d structures" % [int(s.get("areas", 0)), int(s.get("structures", 0))]
+	return "%s, %s" % [UiText.count(int(s.get("areas", 0)), "camp"), UiText.count(int(s.get("structures", 0)), "structure")]
 
 
 func _push_camp_undo() -> void:
@@ -1843,7 +1992,7 @@ func _apply_camp_region(poly: PackedVector2Array) -> void:
 		if ids.is_empty():
 			_set_status("Zone too small for one plot — draw it larger or shrink the plot size")
 		else:
-			_set_status("Zone split into %d plots — %s" % [ids.size(), _camp_totals()])
+			_set_status("Zone split into %s — %s" % [UiText.count(ids.size(), "plot"), _camp_totals()])
 	else:
 		_commit_camp_polygon(poly)
 	_update_undo_button()
@@ -1867,8 +2016,8 @@ func _commit_camp_polygon(poly: PackedVector2Array) -> void:
 		_set_status("%s: nothing fits (too small, too steep, or on a road/building)"
 			% str(info.get("name", "Camp")))
 	else:
-		_set_status("%s — %d structures, %s, %.0f m2" % [str(info.get("name", "Camp")),
-			int(info.get("structures", 0)), CampStyles.label(str(info.get("style", ""))),
+		_set_status("%s — %s, %s, %.0f m2" % [str(info.get("name", "Camp")),
+			UiText.count(int(info.get("structures", 0)), "structure"), CampStyles.label(str(info.get("style", ""))),
 			float(info.get("area_m2", 0.0))])
 
 
@@ -1909,8 +2058,8 @@ func _report_picked_camp() -> void:
 	var info := _picked_camp_info()
 	if info.is_empty():
 		return
-	_set_status("%s — %d structures, %s, heading %.0f%s" % [str(info.get("name", "")),
-		int(info.get("structures", 0)), CampStyles.label(str(info.get("style", ""))),
+	_set_status("%s — %s, %s, heading %.0f%s" % [str(info.get("name", "")),
+		UiText.count(int(info.get("structures", 0)), "structure"), CampStyles.label(str(info.get("style", ""))),
 		float(info.get("heading_deg", 0.0)),
 		" (auto)" if bool(info.get("heading_auto", false)) else ""])
 
@@ -1990,6 +2139,22 @@ func _delete_picked_camp() -> void:
 	_set_status("Deleted %s — %s" % [gone, _camp_totals()])
 
 
+## Open the vegetation Tune-look modal on the species the toolbar is painting
+## (the family's generic id when no subspecies is picked; Mix opens on the
+## deciduous family, the dominant tree in the default mix).
+func _open_veg_tune_look() -> void:
+	if _loader == null or not _loader.has_method("open_vegetation_preview_editor"):
+		return
+	if _state.is_mix_family():
+		# The mix editor (Tune look → Mixed woodland), on the mix the brush paints.
+		_loader.call("open_vegetation_preview_editor", int(VegetationPaint.Preset.MIX), "")
+		return
+	var sp := _state.veg_species
+	if sp.is_empty() or not VegSpeciesCatalog.is_paintable(sp):
+		sp = _state.veg_family
+	_loader.call("open_vegetation_preview_editor", -1, sp)
+
+
 func _open_camp_tune_look() -> void:
 	if _loader == null or not _loader.has_method("open_camp_style_modal"):
 		return
@@ -2060,8 +2225,9 @@ func _place_summary_text(zone_id: String = "") -> String:
 	var s: Dictionary = _loader.call("placement_summary", zone_id)
 	if s.is_empty():
 		return ""
-	var txt := "%d roads · %d zones · %d lots · ~%d people" % [
-		int(s.get("roads", 0)), int(s.get("zones", 0)), int(s.get("lots", 0)), int(s.get("people", 0))]
+	var txt := "%s · %s · %s · ~%s" % [
+		UiText.count(int(s.get("roads", 0)), "road"), UiText.count(int(s.get("zones", 0)), "zone"),
+		UiText.count(int(s.get("lots", 0)), "lot"), UiText.count(int(s.get("people", 0)), "person")]
 	if int(s.get("roster", 0)) > 0:
 		txt += " · roster %d/%d placed" % [int(s.get("roster", 0)) - int(s.get("unplaced", 0)),
 			int(s.get("roster", 0))]
@@ -2077,10 +2243,10 @@ func _zone_readout(zone_id: String) -> String:
 	var st: Dictionary = info.get("stats", {})
 	if st.is_empty():
 		return "%s — %.0f m², not cut yet" % [str(info.get("name", "Zone")), float(info.get("area_m2", 0.0))]
-	return "%s — usable %.0f / %.0f m² · %d lots · %.0f–%.0f m² (max/min %.2f, Gini %.2f) · ~%d people" % [
+	return "%s — usable %.0f / %.0f m² · %s · %.0f–%.0f m² (max/min %.2f, Gini %.2f) · ~%s" % [
 		str(info.get("name", "Zone")), float(st.get("usable_m2", 0.0)), float(st.get("raw_m2", 0.0)),
-		int(st.get("lots", 0)), float(st.get("usable_min", 0.0)), float(st.get("usable_max", 0.0)),
-		float(st.get("ratio_max_min", 0.0)), float(st.get("gini", 0.0)), int(st.get("capacity_people", 0))]
+		UiText.count(int(st.get("lots", 0)), "lot"), float(st.get("usable_min", 0.0)), float(st.get("usable_max", 0.0)),
+		float(st.get("ratio_max_min", 0.0)), float(st.get("gini", 0.0)), UiText.count(int(st.get("capacity_people", 0)), "person")]
 
 
 # --- Options bar rows -------------------------------------------------------
@@ -2446,13 +2612,13 @@ func _report_picked_place() -> void:
 			var ac: Dictionary = info.get("assigned_camp", {})
 			var who := "unassigned"
 			if not ac.is_empty():
-				who = "%s · %s · %d people" % [str(ac.get("name", "")),
-					CampStyles.label(str(ac.get("style", ""))), int(ac.get("headcount", 0))]
-			_set_status("%s (%s) — usable %.0f of %.0f m² · front %.0f m · slope %.1f° · fairness %.2f · %d structures · %s%s" % [
+				who = "%s · %s · %s" % [str(ac.get("name", "")),
+					CampStyles.label(str(ac.get("style", ""))), UiText.count(int(ac.get("headcount", 0)), "person")]
+			_set_status("%s (%s) — usable %.0f of %.0f m² · front %.0f m · slope %.1f° · fairness %.2f · %s · %s%s" % [
 				str(info.get("name", "Lot")), str(info.get("size_class", "")),
 				float(info.get("usable_m2", 0.0)), float(info.get("raw_m2", 0.0)),
 				float(info.get("frontage_m", 0.0)), float(info.get("mean_slope_deg", 0.0)),
-				float(info.get("fairness", 0.0)), int(info.get("structures", 0)), who,
+				float(info.get("fairness", 0.0)), UiText.count(int(info.get("structures", 0)), "structure"), who,
 				" · LOCKED" if bool(info.get("locked", false)) else ""])
 
 
@@ -2646,7 +2812,7 @@ func _cut_all_zones() -> void:
 		return
 	_push_place_undo()
 	var r: Dictionary = _loader.call("subdivide_all_placement_zones")
-	_set_status("Cut %d zones into %d lots" % [int(r.get("zones", 0)), int(r.get("lots", 0))])
+	_set_status("Cut %s into %s" % [UiText.count(int(r.get("zones", 0)), "zone"), UiText.count(int(r.get("lots", 0)), "lot")])
 	_refresh_place_readout()
 	_queue_overlay_redraw()
 
@@ -2730,7 +2896,7 @@ func _auto_assign() -> void:
 	_push_place_undo()
 	var res: Dictionary = _loader.call("assign_placement", "")
 	var unplaced: Array = res.get("unplaced", [])
-	_set_status("Auto-assigned — %d camps unplaced%s" % [unplaced.size(),
+	_set_status("Auto-assigned — %s unplaced%s" % [UiText.count(unplaced.size(), "camp"),
 		"" if unplaced.is_empty() else ": " + str(res.get("warnings", [""])[0])])
 	_refresh_roster_options()
 	_refresh_place_readout()
@@ -2750,7 +2916,7 @@ func _clear_assignments() -> void:
 		if not ac.is_empty() and not bool(ac.get("manual", false)):
 			_loader.call("clear_lot_assignment", str((l as Dictionary)["lot_id"]))
 			n += 1
-	_set_status("Cleared %d automatic assignments" % n)
+	_set_status("Cleared %s" % UiText.count(n, "automatic assignment"))
 	_refresh_roster_options()
 	_refresh_place_readout()
 	_queue_overlay_redraw()

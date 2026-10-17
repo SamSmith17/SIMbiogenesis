@@ -8,6 +8,9 @@ const VISIBILITY_BEGIN := 0.0
 ## local trees — Godot visibility_range is distance to AABB *center*, not per tree.
 const VISIBILITY_END := 1200.0
 const GRASS_VISIBILITY_END := 600.0
+## Forest-floor plants (sword fern, blackberry): knee-high, thousands of them
+## under a canopy — past a couple of hundred metres they are sub-pixel.
+const UNDERSTORY_VISIBILITY_END := 220.0
 const CHUNK_SIZE_M := 256.0
 
 
@@ -47,6 +50,31 @@ static func stamp_growth_pivot(mesh: Mesh, override: Material, foot_y: float) ->
 			(m as ShaderMaterial).set_shader_parameter("growth_pivot_y", foot_y)
 
 
+## Style key: seeded mesh variants per tree species (1 = one mesh per species,
+## the pre-2026-10-15 look). DEFAULT_TREE_VARIANTS is what an untouched style
+## draws.
+const KEY_TREE_VARIANTS := "tree_variants"
+const DEFAULT_TREE_VARIANTS := 3
+## Runtime-only: a batch built for one variant ("v1") — names its nodes.
+const KEY_BATCH_SUFFIX := "_batch_suffix"
+
+
+## Which of `n` variants a tree record draws, from its position alone.
+static func variant_index(d: Dictionary, n: int) -> int:
+	if n <= 1:
+		return 0
+	var x := float(d.get("x", 0.0))
+	var z := float(d.get("z", 0.0))
+	var hh := sin(x * 12.9898 + z * 78.233 + 51.0 * 37.719) * 43758.5453
+	return clampi(int((hh - floor(hh)) * float(n)), 0, n - 1)
+
+
+## The species segment of a batch node name: "fir" or "fir_v1".
+static func _batch_species_tag(species: String, settings: Dictionary) -> String:
+	var suf := str(settings.get(KEY_BATCH_SUFFIX, ""))
+	return species if suf.is_empty() else "%s_%s" % [species, suf]
+
+
 ## Dither-fade band on every visibility-range edge. Godot's DEFAULT fade mode
 ## is DISABLED — a hard binary on/off, which is why whole 256 m chunks of
 ## forest used to pop in and out at the LOD boundary. FADE_SELF dither-fades
@@ -59,12 +87,14 @@ const LOD_FADE_MARGIN_M := 24.0
 ## NEVER sweep visibility_range over live nodes at runtime — mass-mutating it
 ## hard-crashed the AMD Vulkan driver (see vegetation_shadow_policy.gd).
 static func apply_visibility_range(mi: GeometryInstance3D, begin_m: float, end_m: float,
-		margin_m: float = LOD_FADE_MARGIN_M) -> void:
+		margin_m: float = LOD_FADE_MARGIN_M, end_margin_m: float = -1.0) -> void:
 	mi.visibility_range_begin = begin_m
 	mi.visibility_range_end = end_m
 	# A margin on a disabled edge (0.0 = no limit) would re-enable it.
+	# end_margin_m < 0 = the same band as the begin edge.
+	var end_margin := end_margin_m if end_margin_m >= 0.0 else margin_m
 	mi.visibility_range_begin_margin = margin_m if begin_m > 0.0 else 0.0
-	mi.visibility_range_end_margin = margin_m if end_m > 0.0 else 0.0
+	mi.visibility_range_end_margin = end_margin if end_m > 0.0 else 0.0
 	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
@@ -132,6 +162,30 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, chunk_x: int = 0, chunk_z: int = 0) -> void:
+	# Instance variants (2026-10-15): a stand of one species used to be ONE
+	# mesh repeated, rotated and scaled. Each tree now draws one of
+	# `tree_variants` seeded meshes, picked by its POSITION (so a tree keeps
+	# its look when its neighbours change). The index rides a family-prefixed
+	# key no style layer sets — the impostor bake key hashes family keys, so
+	# each variant bakes its own silhouette.
+	var n_var := clampi(int(round(float(settings.get(KEY_TREE_VARIANTS, DEFAULT_TREE_VARIANTS)))), 1, 4)
+	if n_var > 1 and not settings.has(KEY_BATCH_SUFFIX):
+		var fam := VegSpeciesCatalog.mesh_family(species)
+		var groups: Array = []
+		for _k in n_var:
+			groups.append([])
+		for item in records:
+			if item is Dictionary:
+				(groups[variant_index(item as Dictionary, n_var)] as Array).append(item)
+		for k in n_var:
+			if (groups[k] as Array).is_empty():
+				continue
+			var sk := settings.duplicate()
+			sk["%s_variant_index" % fam] = k
+			sk[KEY_BATCH_SUFFIX] = "v%d" % k
+			_build_canopy_lod_bulk_batches(root, species, groups[k], ground_y_at,
+				align_to_surface, sk, visibility_end_m, chunk_x, chunk_z)
+		return
 	# Overhaul v2.1: the per-species LOD LADDER — the player orders the
 	# representations (mesh / photocard / impostor) and may disable any; the
 	# default chain "mesh,impostor" reproduces the shipped two-band model
@@ -145,19 +199,25 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 		settings.get("tree_detail_distance_m", 220.0))), 40.0, 4000.0)
 	var photo_m := clampf(float(settings.get("tree_photocard_distance_m", 700.0)),
 		60.0, 8000.0)
-	var bands := VegLodPolicy.chain_bands(chain, detail_m, photo_m, visibility_end_m)
+	var far_end := VegLodPolicy.far_tier_end(chain, visibility_end_m, settings)
+	var bands := VegLodPolicy.chain_bands(chain, detail_m, photo_m, far_end)
 	for band_v in bands:
 		var band: Dictionary = band_v
 		var rep := str(band["rep"])
 		var b_begin := float(band["begin_m"])
 		var b_end := float(band["end_m"])
-		var range_begin := maxf(b_begin - LOD_FADE_MARGIN_M, 0.0) if b_begin > 0.0 else -1.0
+		# The handoff fade grows with distance (VegLodPolicy.fade_margin_for):
+		# both sides of one boundary must use the same band, so a band's
+		# begin edge uses its own begin distance and its end edge its end.
+		var begin_fade := VegLodPolicy.fade_margin_for(b_begin)
+		var range_begin := maxf(b_begin - begin_fade, 0.0) if b_begin > 0.0 else -1.0
+		var margins := Vector2(begin_fade, VegLodPolicy.fade_margin_for(b_end))
 		match rep:
 			VegLodPolicy.REP_MESH:
 				_build_canopy_single_batch(root, species, records, ground_y_at,
 					align_to_surface, settings, b_end,
 					VegetationCardFactory.CanopyLodTier.NEAR,
-					chunk_x, chunk_z, range_begin)
+					chunk_x, chunk_z, range_begin, null, "", margins)
 			VegLodPolicy.REP_PHOTOCARD:
 				var photo_mesh := VegetationCardFactory.photocard_mesh(species, settings)
 				if photo_mesh != null:
@@ -165,13 +225,13 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 						align_to_surface, settings, b_end,
 						VegetationCardFactory.CanopyLodTier.FAR,
 						chunk_x, chunk_z, range_begin,
-						photo_mesh, "photo")
+						photo_mesh, "photo", margins)
 			VegLodPolicy.REP_IMPOSTOR:
 				var iset := VegImpostorBaker.cached_set(species, settings)
 				if iset != null and iset.is_usable():
 					_build_impostor_batch(root, species, records, ground_y_at,
 						align_to_surface, settings, b_end, iset,
-						chunk_x, chunk_z, range_begin)
+						chunk_x, chunk_z, range_begin, margins)
 				else:
 					# Bake pending (or permanently headless): crossed-card
 					# stand-in, deterministic — the completed bake debounces
@@ -180,7 +240,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 					_build_canopy_single_batch(root, species, records, ground_y_at,
 						align_to_surface, settings, b_end,
 						VegetationCardFactory.CanopyLodTier.FAR,
-						chunk_x, chunk_z, range_begin)
+						chunk_x, chunk_z, range_begin, null, "", margins)
 
 
 ## OUTER-ring impostor batch: one camera-facing baked quad per tree (2 tris vs
@@ -192,7 +252,7 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, iset: VegImpostorSet,
 		chunk_x: int = 0, chunk_z: int = 0,
-		range_begin: float = -1.0) -> void:
+		range_begin: float = -1.0, margins: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	var mesh := VegImpostorBaker.quad_mesh_for(iset)
 	VegImpostorBaker.stamp_snag(mesh, species, settings)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
@@ -225,7 +285,7 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_imp_%d_%d" % [species, chunk_x, chunk_z]
+	mi.name = "Bulk_%s_imp_%d_%d" % [_batch_species_tag(species, settings), chunk_x, chunk_z]
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
@@ -234,7 +294,8 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 	# A 2-tri billboard casts a plank shadow — never cast from impostors.
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	apply_visibility_range(mi,
-		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m)
+		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
+		margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
 	root.add_child(mi)
 	var tree := Engine.get_main_loop()
 	if tree is SceneTree:
@@ -248,7 +309,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 		visibility_end_m: float, tier: VegetationCardFactory.CanopyLodTier,
 		chunk_x: int = 0, chunk_z: int = 0,
 		range_begin: float = -1.0, mesh_override: ArrayMesh = null,
-		name_tag: String = "") -> void:
+		name_tag: String = "", margins: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	var mesh := mesh_override if mesh_override != null \
 			else VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
@@ -282,9 +343,10 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_%d_%d_%d" % [species, tier, chunk_x, chunk_z] \
+	var sp_tag := _batch_species_tag(species, settings)
+	mi.name = "Bulk_%s_%d_%d_%d" % [sp_tag, tier, chunk_x, chunk_z] \
 			if name_tag.is_empty() \
-			else "Bulk_%s_%s_%d_%d" % [species, name_tag, chunk_x, chunk_z]
+			else "Bulk_%s_%s_%d_%d" % [sp_tag, name_tag, chunk_x, chunk_z]
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
@@ -292,7 +354,8 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	mi.material_override = null
 	VegetationShadowPolicy.apply(mi, species)
 	apply_visibility_range(mi,
-		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m)
+		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
+		margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
 	root.add_child(mi)
 	var tree := Engine.get_main_loop()
 	if tree is SceneTree:
@@ -332,8 +395,14 @@ static func rebuild(terrain: Node3D, layer: VegetationLayer,
 	AutoVegetationRuntime.reregister_existing(terrain)
 
 
+## Detach BEFORE freeing: a queue_freed batch stays in the tree until the end
+## of the frame, so the rebuild's new "Bulk_<species>_…" nodes collided with
+## it and were auto-renamed "@MultiMeshInstance3D@…" — which broke everything
+## that finds a batch by its name (chunk_of_batch_node for incremental chunk
+## rebuilds, leaf-fall, the harness checks).
 static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
+		root.remove_child(child)
 		child.queue_free()
 
 
@@ -411,6 +480,8 @@ static func _visibility_end_for_species(species: String) -> float:
 	var fam := VegSpeciesCatalog.mesh_family(species)
 	if fam in VegetationLayer.GRASS_SPECIES or fam.begins_with("grass_"):
 		return GRASS_VISIBILITY_END
+	if species in VegSpeciesCatalog.UNDERSTORY_IDS:
+		return UNDERSTORY_VISIBILITY_END
 	return VISIBILITY_END
 
 

@@ -214,6 +214,11 @@ static func state_for(specs: Dictionary) -> Dictionary:
 	var has_penstock := bool(HydroSource.kind_meta(str(specs.get("turbine_kind", "siphon"))).get("has_penstock", false))
 	var state := "idle"
 	var text := ""
+	if bool(specs.get(HydroSource.SPEC_OFF, false)):
+		# Shut off by the player (double-click in the graph): the valve is
+		# closed, so no water moves and nothing is made, whatever the pond does.
+		return {"state": "off", "text": "OFF — double-click in the graph to start",
+			"regime": regime}
 	if regime in ["lift_exceeded", "cavitating", "broken", "siphon_broken"]:
 		state = "fault"
 		match regime:

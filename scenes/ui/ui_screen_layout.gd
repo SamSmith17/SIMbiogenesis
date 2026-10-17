@@ -89,9 +89,12 @@ static func clamped_corner_card(panel: Control, desired: Vector2,
 static func clamped_center(panel: Control, desired: Vector2) -> void:
 	if panel == null:
 		return
+	# Centred in the area ABOVE the timeline (the live bar height): centred on
+	# the whole window, a tall panel sat on the timeline at 720p.
 	var screen := _viewport_size(panel)
-	var w := minf(desired.x, screen.x * 0.92)
-	var h := minf(desired.y, screen.y * 0.88)
+	var tl := HudLayout.timeline_height()
+	var w := minf(desired.x, screen.x - UiFit.MARGIN * 2.0)
+	var h := minf(desired.y, maxf(screen.y - tl - UiFit.MARGIN * 2.0, 120.0))
 	panel.set_anchors_preset(Control.PRESET_CENTER)
 	panel.anchor_left = 0.5
 	panel.anchor_top = 0.5
@@ -99,8 +102,8 @@ static func clamped_center(panel: Control, desired: Vector2) -> void:
 	panel.anchor_bottom = 0.5
 	panel.offset_left = -w * 0.5
 	panel.offset_right = w * 0.5
-	panel.offset_top = -h * 0.5
-	panel.offset_bottom = h * 0.5
+	panel.offset_top = -h * 0.5 - tl * 0.5
+	panel.offset_bottom = h * 0.5 - tl * 0.5
 	panel.custom_minimum_size = Vector2(w, h)
 
 

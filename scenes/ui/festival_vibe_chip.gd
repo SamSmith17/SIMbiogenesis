@@ -27,6 +27,8 @@ func _ready() -> void:
 	_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_chip.add_child(_lbl)
 	add_child(_chip)
+	HudLayout.register(_chip, "festival_vibe", "top_center", {"order": 1, "tuckable": false,
+		"size": func() -> Vector2: return _chip.get_combined_minimum_size()})
 
 
 func _process(delta: float) -> void:
@@ -54,4 +56,9 @@ func _refresh() -> void:
 		_lbl.add_theme_color_override("font_color", v.get("color", UITheme.C_TEXT) as Color)
 		_chip.reset_size()
 	_chip.visible = true
-	_chip.position.x = -_chip.size.x * 0.5
+	# Placed by the HUD layout manager's top-centre row (registered in _ready).
+	var h := HudLayout.get_hud()
+	if h != null:
+		h.queue_layout()
+	else:
+		_chip.position.x = -_chip.size.x * 0.5

@@ -269,7 +269,7 @@ static func packed_contents_label(rec: Dictionary, main: Node = null) -> String:
 	if rec.get("linkage_spec") is Dictionary:
 		var p := LinkageParams.new()
 		p.from_config(rec.get("linkage_spec") as Dictionary)
-		var txt := "Folded structure — %d modules" % p.modules
+		var txt := "Folded structure — %s" % UiText.count(p.modules, "module")
 		if bool((p.solar_panels as Dictionary).get("enabled", false)):
 			txt += " + solar panels"
 		return txt

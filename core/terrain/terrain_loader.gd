@@ -396,6 +396,14 @@ var _manual_veg_pending := false
 ## a burst of bake completions triggers ONE veg rebuild.
 var _impostor_baker: VegImpostorBaker = null
 var _impostor_rebuild_pending := false
+## Far-tier reach the current veg build was made with (_impostor_reach_m).
+var _impostor_reach_built_m := 0.0
+var _impostor_reach_rebuild_pending := false
+## Globe lens / snowglobe orbit cap (graph_soi_preview_service + 
+## soi_snowglobe_camera MAX_ORBIT_MULT) and the 256 m chunk half-diagonal.
+const IMPOSTOR_GLOBE_ORBIT_MULT := 4.5
+const IMPOSTOR_CHUNK_HALF_DIAG_M := 182.0
+const IMPOSTOR_REACH_MAX_M := 8000.0
 
 ## True while _run_load_sequence() owns the pipeline (callbacks must not kick off
 ## parallel fetches or GPU-heavy side effects).
@@ -426,6 +434,11 @@ func _process(delta: float) -> void:
 	if _reposition_prop != null:
 		_tick_prop_reposition(delta)
 	PerfMonitor.begin("terrain_tick")
+	if _veg_hidden:
+		_veg_hide_poll -= delta
+		if _veg_hide_poll <= 0.0:
+			_veg_hide_poll = 0.5
+			_apply_vegetation_visibility()
 	_push_growth_year()
 	_apply_water_flow(delta)
 	PerfMonitor.end("terrain_tick")
@@ -454,6 +467,14 @@ func _process(delta: float) -> void:
 		_push_snow_to_mesh(mi, snow, depth_m)
 		if litter_due:
 			_push_litter_to_mesh(mi, litter)
+		# A drape swap replaces the material: re-push the moss when it lost it.
+		if not _floor_moss.is_empty():
+			var msm := mi.material_override as ShaderMaterial
+			# An unset uniform reads back null (float(null) is a runtime error).
+			var moss_now: Variant = msm.get_shader_parameter("moss_strength") \
+					if msm != null else null
+			if msm != null and (moss_now == null or float(moss_now) != _floor_moss_effective()):
+				_push_floor_moss()
 	_apply_snow_to_buildings(terrain, snow, depth_m)
 
 
@@ -516,7 +537,7 @@ func _push_litter_to_mesh(mi: MeshInstance3D, strength: float) -> void:
 		return
 	sm.set_shader_parameter("litter_tex", _litter_tex)
 	sm.set_shader_parameter("litter_extent_m", _litter_extent_m)
-	sm.set_shader_parameter("litter_strength", strength)
+	sm.set_shader_parameter("litter_strength", 0.0 if _veg_hidden else strength)
 
 
 ## Rasterise the deciduous instances into the ground litter mask. Called once
@@ -1029,6 +1050,7 @@ func _run_load_sequence() -> void:
 	# player's saved setting.
 	TerrainBuilder.near_detail_enabled = bool(
 		_terrain_config().get("near_field_detail", true))
+	_veg_hidden = not bool(_terrain_config().get("show_vegetation", true))
 	if _load_progress != null:
 		_load_progress.configure_for_extents(_half_extent, _detail_half_extent)
 	var es := get_node_or_null("/root/ElevationService")
@@ -1508,7 +1530,7 @@ func _apply_solar_arrays() -> void:
 	var kw := float(total) * float(panel_spec["panel_watts"]) / 1000.0
 	print("TerrainLoader: built %d OSM solar array(s), %d panel(s) (%.2f kW) — aim the crosshair at one and press Interact to add it to the system graph" % [
 		_solar_arrays.size(), total, kw])
-	_notify_options_status("Found %d OSM solar array(s) — look at one and press Interact to add it" % _solar_arrays.size(), "info")
+	_notify_options_status("Found %s — look at one and press Interact to add it" % UiText.count(_solar_arrays.size(), "OSM solar array"), "info")
 	# Re-apply the accumulated total for any arrays the player added before a rebuild.
 	_refresh_added_solar_total()
 
@@ -3232,7 +3254,7 @@ func prune_orphan_ponds_from_graph(force: bool = false) -> int:
 		live[t] = true
 	var n: int = int(graph.call("prune_orphan_pond_items", live, force))
 	if n > 0:
-		_notify_options_status("Removed %d stale pond graph node(s)" % n, "ok")
+		_notify_options_status("Removed %s" % UiText.count(n, "stale pond graph node"), "ok")
 	return n
 
 
@@ -3290,8 +3312,8 @@ func add_veg_area_plant_to_graph(idx: int) -> bool:
 	var ok: bool = bool(graph.call("add_imported_plant", payload))
 	if ok:
 		if payload.has("food"):
-			_notify_options_status("Added food forest: %d trees, %.0f kg/yr → system graph"
-				% [int(food.get("trees", 0)), float(food.get("kg_per_year", 0.0))], "ok")
+			_notify_options_status("Added food forest: %s, %.0f kg/yr → system graph"
+				% [UiText.count(int(food.get("trees", 0)), "tree"), float(food.get("kg_per_year", 0.0))], "ok")
 			print("TerrainLoader: added food forest '%s' — %d trees, %.0f kg/yr (%.0f kcal/yr), harvest doy %d–%d" % [
 				tag, int(food.get("trees", 0)), float(food.get("kg_per_year", 0.0)),
 				float(food.get("kcal_per_year", 0.0)),
@@ -3528,7 +3550,7 @@ func add_solar_array_to_graph(idx: int, opts: Dictionary = {}) -> bool:
 	if idx == _solar_focus_idx:
 		_clear_solar_highlight()
 	var kw := float(count) * watts / 1000.0
-	_notify_options_status("Added solar array: %d panels, %.2f kW → system graph" % [count, kw], "ok")
+	_notify_options_status("Added solar array: %s, %.2f kW → system graph" % [UiText.count(count, "panel"), kw], "ok")
 	print("TerrainLoader: added OSM solar array '%s' (%d panels, %.2f kW) to the system graph" % [tag, count, kw])
 	return true
 
@@ -3571,7 +3593,7 @@ func add_all_soi_solar_arrays_to_graph() -> int:
 		}):
 			n += 1
 	if n > 0:
-		_notify_options_status("Added %d OSM solar array(s) inside SoI → system graph" % n, "ok")
+		_notify_options_status("Added %s inside the SoI to the system graph" % UiText.count(n, "OSM solar array"), "ok")
 	return n
 
 
@@ -6919,6 +6941,7 @@ func _terrain_config() -> Dictionary:
 	var show_buildings := true
 	var show_water := true
 	var show_auto_vegetation := true
+	var show_vegetation := true
 	var generate_camps := true
 	var near_field_detail := true
 	var show_pois := true
@@ -6932,6 +6955,7 @@ func _terrain_config() -> Dictionary:
 			show_buildings = bool(cfg.get_value("terrain", "show_buildings", true))
 			show_water = bool(cfg.get_value("terrain", "show_water", true))
 			show_auto_vegetation = bool(cfg.get_value("terrain", "show_auto_vegetation", true))
+			show_vegetation = bool(cfg.get_value("terrain", "show_vegetation", true))
 			generate_camps = bool(cfg.get_value("terrain", "generate_camps", true))
 			near_field_detail = bool(cfg.get_value("terrain", "near_field_detail", true))
 			show_pois = bool(cfg.get_value("terrain", "show_pois", true))
@@ -6943,6 +6967,7 @@ func _terrain_config() -> Dictionary:
 		"show_buildings": show_buildings,
 		"show_water": show_water,
 		"show_auto_vegetation": show_auto_vegetation,
+		"show_vegetation": show_vegetation,
 		"generate_camps": generate_camps,
 		"near_field_detail": near_field_detail,
 		"show_pois": show_pois,
@@ -7227,7 +7252,7 @@ func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m
 	# placement, placed props — rebuilds consistently the first time.
 	var n_edits := TerrainCacheSettings.invalidate_user_vegetation_edits(_lat, _lon)
 	_notify_options_status(
-		"Extents changed — reloading map to rebuild the terrain (cleared %d user veg file(s)) …" % n_edits,
+		"Extents changed — reloading map to rebuild the terrain (cleared %s) …" % UiText.count(n_edits, "user veg file"),
 		"busy")
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx == null or get_tree() == null:
@@ -7461,7 +7486,7 @@ func reset_site_to_fresh() -> void:
 	_clear_auto_vegetation()
 	_auto_veg_generated = false
 	_auto_veg_data = {}
-	_notify_options_status("Resetting site — cleared %d user veg file(s) …" % n_edits, "busy")
+	_notify_options_status("Resetting site — cleared %s …" % UiText.count(n_edits, "user veg file"), "busy")
 	refresh_all_cached_layers()
 
 
@@ -8037,8 +8062,176 @@ func _rebuild_vegetation() -> void:
 	var terrain := _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
+	var settings := _auto_veg_runtime_settings()
+	if not _auto_veg_generated:
+		_note_impostor_reach_built()
 	VegetationRuntime.rebuild(terrain, _vegetation_layer, Callable(self, "_ground_height_at"),
-		false, _auto_veg_runtime_settings())
+		false, settings)
+	_rebuild_deadwood(settings)
+	_apply_vegetation_visibility()
+
+
+## Stumps and fallen logs among the standing trees (VegDeadwood). Derived from
+## the painted AND generated records, so it runs after either layer rebuilds;
+## off unless the style sets deadwood_per_100_trees.
+func _rebuild_deadwood(settings: Dictionary = {}) -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	if settings.is_empty():
+		settings = _auto_veg_runtime_settings()
+	var bulks: Array = []
+	if _vegetation_layer != null:
+		bulks.append(_vegetation_layer.bulk)
+	if _auto_veg_layer != null and _terrain_config().show_auto_vegetation:
+		bulks.append(_auto_veg_layer.bulk)
+	_rebuild_floor_moss(settings, bulks)
+	if not VegDeadwood.enabled(settings):
+		VegDeadwood.clear(terrain)
+		return
+	VegDeadwood.rebuild(terrain, bulks, Callable(self, "_ground_height_at"), settings,
+		veg_point_excluded_callable())
+
+
+## Forest-floor moss (VegFloorMoss): rebuild the mask with the vegetation and
+## push it onto the terrain materials (the per-tick push keeps it on a
+## material that was swapped when imagery landed).
+var _floor_moss: Dictionary = {}
+var _floor_moss_strength := 0.0
+var _floor_moss_color := VegFloorMoss.DEFAULT_COLOR
+
+
+func _rebuild_floor_moss(settings: Dictionary, bulks: Array) -> void:
+	_floor_moss_strength = VegFloorMoss.strength(settings)
+	var c: Variant = settings.get(VegFloorMoss.KEY_COLOR, VegFloorMoss.DEFAULT_COLOR)
+	_floor_moss_color = c if c is Color else VegFloorMoss.DEFAULT_COLOR
+	_floor_moss = VegFloorMoss.build(bulks) if _floor_moss_strength > 0.0 else {}
+	_push_floor_moss()
+
+
+func _push_floor_moss() -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	for node_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(node_name) as MeshInstance3D
+		if mi == null:
+			continue
+		var sm := mi.material_override as ShaderMaterial
+		if sm == null or sm.shader == null:
+			continue
+		if not sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+			continue
+		if _floor_moss.is_empty():
+			sm.set_shader_parameter("moss_strength", 0.0)
+			continue
+		sm.set_shader_parameter("moss_tex", _floor_moss["tex"])
+		sm.set_shader_parameter("moss_rect", _floor_moss["rect"])
+		sm.set_shader_parameter("moss_strength", _floor_moss_effective())
+		sm.set_shader_parameter("moss_color", _floor_moss_color)
+
+
+func _floor_moss_effective() -> float:
+	return 0.0 if _veg_hidden else _floor_moss_strength
+
+
+## Terrain options -> "Show vegetation": hides EVERY plant layer (painted,
+## OSM-generated, hero trees, stumps and logs, falling leaves) and the ground
+## moss / leaf litter they paint. Visibility only: nothing is deleted or
+## regenerated, so switching it back on is instant. The tick re-applies it
+## while hidden, because the auto-veg rebuild replaces its root node.
+var _veg_hidden := false
+var _veg_hide_poll := 0.0
+const VEG_ROOT_NAMES: Array[String] = ["Vegetation", "AutoVegetation",
+	VegDeadwood.ROOT_NAME, "VegLeafFall"]
+
+
+func show_vegetation() -> bool:
+	return not _veg_hidden
+
+
+func set_show_vegetation(on: bool) -> void:
+	_save_terrain_config_value("show_vegetation", on)
+	_veg_hidden = not on
+	_litter_pushed = -1.0
+	_apply_vegetation_visibility()
+	_push_floor_moss()
+	_refresh_lens_after_veg_rebuild()
+
+
+func _apply_vegetation_visibility() -> void:
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	for nm in VEG_ROOT_NAMES:
+		var n := terrain.get_node_or_null(nm) as Node3D
+		if n != null and n.visible == _veg_hidden:
+			n.visible = not _veg_hidden
+	# Plants the player placed as MODELS (a tree, a stump, hanging vines from
+	# the model library) are props, not vegetation records — hide those too.
+	# Only nodes hidden HERE are shown again (a prop can be hidden for its
+	# own reasons).
+	for holder in [terrain.get_node_or_null("PlacedProps"), _main]:
+		if holder == null:
+			continue
+		for ch in (holder as Node).get_children():
+			if not (ch is PlacedProp):
+				continue
+			var pp := ch as PlacedProp
+			if _veg_hidden:
+				if pp.visible and prop_is_plant(pp.model_id):
+					pp.visible = false
+					pp.set_meta(&"veg_hidden", true)
+			elif pp.has_meta(&"veg_hidden"):
+				pp.visible = true
+				pp.remove_meta(&"veg_hidden")
+
+
+## Words that make a placed model a plant for "Show vegetation" (its catalog
+## category, label or id, whole words; plurals too).
+const PLANT_WORDS: Array[String] = ["tree", "cedar", "maple", "fir", "pine", "spruce",
+	"hemlock", "alder", "oak", "birch", "aspen", "willow", "stump", "log", "vine", "vines",
+	"ivy", "fern", "shrub", "bush", "hedge", "plant", "palm", "cactus", "flower", "grass",
+	"moss", "bamboo", "leaf", "leaves", "foliage", "vegetation", "trees", "plants"]
+static var _plant_cache := {}
+
+
+static func prop_is_plant(model_id: String) -> bool:
+	if _plant_cache.has(model_id):
+		return bool(_plant_cache[model_id])
+	var e := ModelCatalog.find(model_id)
+	var text := "%s %s %s" % [str(e.get("category", "")), str(e.get("label", "")), model_id]
+	var hit := false
+	var rx := RegEx.create_from_string("[a-z]+")
+	for m in rx.search_all(text.to_lower()):
+		var w := m.get_string()
+		if w in PLANT_WORDS or w.trim_suffix("s") in PLANT_WORDS:
+			hit = true
+			break
+	_plant_cache[model_id] = hit
+	return hit
+
+
+## Roads / buildings / water as a point test (Vector2 site metres -> bool) for
+## anything scattered off the standing vegetation (deadwood, understory) that
+## must not land on a road. Built FRESH each call: the camp tool's cached index
+## can predate the OSM load and would then exclude nothing.
+func veg_point_excluded_callable() -> Callable:
+	var roads: Array = (_osm_vectors.get("roads", []) as Array).duplicate()
+	roads.append_array(get_festival_roads())
+	var idx := VegExclusionBuilder.build_index(
+		VegExclusionBuilder.build_all(_buildings_data, roads, _water_data,
+			1.5, 1.0, 1.0, true, true),
+		maxf(_osm_half_extent, 500.0))
+	# A lambda, not Callable(idx, ...): a Callable does not keep a RefCounted
+	# alive, the captured variable does.
+	return func(p: Vector2) -> bool: return idx.is_excluded(p)
 
 
 
@@ -8097,6 +8290,29 @@ func _rebuild_all_vegetation() -> void:
 	if _auto_veg_generated:
 		_rebuild_auto_vegetation_async()
 	_ensure_leaf_fall()
+	_refresh_lens_after_veg_rebuild()
+
+
+## The graph's 3D lenses capture ON DEMAND and do not notice node changes, so
+## a capture taken while the veg batches were being freed and rebuilt kept
+## whole species missing until the next orbit — another source of "trees
+## popping" in the Globe. Re-capture a moment after a rebuild lands.
+func _refresh_lens_after_veg_rebuild() -> void:
+	if not is_inside_tree():
+		return
+	var t := get_tree().create_timer(0.25)
+	t.timeout.connect(func() -> void:
+		if _auto_rebuild_active:
+			return
+		var sgv: Node = ServiceLocator.graph()
+		if sgv == null or not is_instance_valid(sgv) or not (sgv is CanvasItem):
+			return
+		if not (sgv as CanvasItem).is_visible_in_tree():
+			return
+		var pv: Variant = sgv.get("_soi_preview")
+		if pv is Node and is_instance_valid(pv) and (pv as Node).has_method("request_refresh"):
+			(pv as Node).call("request_refresh")
+	, CONNECT_ONE_SHOT)
 
 
 ## Phase 6: the falling-leaf emitter host. One node per map, created after the
@@ -8170,10 +8386,45 @@ func _on_impostor_bake_completed(_key: String) -> void:
 
 
 ## Overhaul v2: tree LOD is camera-distance based, so moving the SoI pin no
-## longer changes which trees are detailed — nothing to re-ring. Kept as a
-## no-op because the SoiService callback registration predates map load.
+## longer changes which trees are detailed. What the SoI RADIUS does decide is
+## how far the impostor tier must reach for the Globe lens / snowglobe to see
+## the whole sphere (`_impostor_reach_m`); ranges are build-time only, so a
+## radius change that moves that reach debounces ONE rebuild.
+## The impostor reach the forest was last FULLY built with.
+func _note_impostor_reach_built() -> void:
+	_impostor_reach_built_m = _impostor_reach_m()
+
+
 func _on_soi_changed_for_veg() -> void:
-	pass
+	if not _built or _impostor_reach_rebuild_pending:
+		return
+	var want := _impostor_reach_m()
+	if absf(want - _impostor_reach_built_m) < 25.0:
+		return
+	_impostor_reach_rebuild_pending = true
+	var t := get_tree().create_timer(1.0)
+	t.timeout.connect(func() -> void:
+		_impostor_reach_rebuild_pending = false
+		if _built and absf(_impostor_reach_m() - _impostor_reach_built_m) >= 25.0:
+			_rebuild_all_vegetation()
+	, CONNECT_ONE_SHOT)
+
+
+## How far the far (impostor / photocard) tree tier must draw so the Globe lens
+## and the full-screen snowglobe never cut whole 256 m chunks out of the
+## sphere. Visibility range is measured from the camera to each CHUNK'S AABB
+## centre, the orbit camera stands up to MAX_ORBIT_MULT x R from the SoI
+## centre, the sphere's far rim is another R beyond that, and a tree can sit a
+## chunk half-diagonal nearer than its chunk centre. Measured on Mount Vernon
+## (R 200 m, large map): the plain 480 m cull end lost the back third of the
+## globe and blocks blinked in and out as the camera orbited.
+func _impostor_reach_m() -> float:
+	var r := SoiConfig.DEFAULT_RADIUS_M
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("radius_m"):
+		r = float(soi.call("radius_m"))
+	return clampf(r * (IMPOSTOR_GLOBE_ORBIT_MULT + 1.0) + IMPOSTOR_CHUNK_HALF_DIAG_M
+		+ 40.0, 0.0, IMPOSTOR_REACH_MAX_M)
 
 
 func _reground_vegetation() -> void:
@@ -8554,6 +8805,13 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	var budget := int(s.get("tree_near_budget", 1500))
 	s["tree_detail_eff_m"] = VegLodPolicy.effective_detail_distance(
 		VegLodPolicy.chunk_tree_counts(bulks), requested, budget)
+	# Far tier reach for the Globe lens / snowglobe (see _impostor_reach_m).
+	# Never SHORTER than the style's own cull end.
+	# Only the FULL rebuilds record the reach as built (see
+	# _note_impostor_reach_built): a painted-only or chunk rebuild must not
+	# make the SoI-radius debounce skip the generated forest.
+	s[VegLodPolicy.KEY_FAR_TIER_END] = maxf(_impostor_reach_m(),
+		float(s.get("auto_visibility_end_m", 0.0)))
 	return s
 
 
@@ -9038,6 +9296,7 @@ func _rebuild_auto_vegetation() -> void:
 		_auto_rebuild_dirty = true
 		return
 	var settings := _auto_veg_runtime_settings()
+	_note_impostor_reach_built()
 	var exclusions := _auto_veg_exclusions()
 	AutoVegetationRuntime.rebuild(terrain, _auto_veg_layer,
 		Callable(self, "_ground_height_at"), settings, exclusions)
@@ -9060,10 +9319,14 @@ func _rebuild_auto_vegetation_async() -> void:
 		return
 	_auto_rebuild_active = true
 	var settings := _auto_veg_runtime_settings()
+	_note_impostor_reach_built()
 	var exclusions := _auto_veg_exclusions()
 	await AutoVegetationRuntime.rebuild_async(terrain, _auto_veg_layer,
 		Callable(self, "_ground_height_at"), settings, exclusions)
 	_auto_rebuild_active = false
+	_apply_vegetation_visibility()
+	_rebuild_deadwood(settings)
+	_refresh_lens_after_veg_rebuild()
 
 	if _auto_rebuild_dirty:
 		_auto_rebuild_dirty = false
@@ -9155,6 +9418,47 @@ func reset_map_veg_style() -> void:
 	VegetationCardFactory.clear_foot_cache()
 	call_deferred("_rebuild_all_vegetation")
 	_toast("Map vegetation style reset", ToastUI.Level.INFO)
+
+
+## --- Vegetation look backups (VegLookBackup) ---------------------------------
+
+## Snapshot this world's vegetation look (style store, painted plants, area
+## edits). Returns the snapshot folder, "" on failure.
+func snapshot_veg_look(label: String) -> String:
+	if _vegetation_layer != null:
+		_vegetation_layer.save(_lat, _lon)
+	return VegLookBackup.snapshot(_lat, _lon, label)
+
+
+## [{dir, label, stamp, unix}] newest first.
+func veg_look_backups() -> Array:
+	return VegLookBackup.list(_lat, _lon)
+
+
+## Put an earlier look back and rebuild everything from it. The look as it
+## stands is snapshotted first ("Before restore"), so a restore is undoable.
+func restore_veg_look(dir: String) -> bool:
+	snapshot_veg_look("Before restore")
+	if not VegLookBackup.restore(_lat, _lon, dir):
+		_toast("Could not restore that vegetation look", ToastUI.Level.WARN)
+		return false
+	VegStyleStore.invalidate_cache()
+	_veg_style = VegetationStyleConfig.load_merged(_lat, _lon)
+	if _vegetation_layer != null:
+		_vegetation_layer.bulk = {}
+		_vegetation_layer.hero = []
+		_vegetation_layer.settings = {}
+		_vegetation_layer.ensure_species_keys()
+		_vegetation_layer.load_for_map(_lat, _lon)
+	if _auto_veg_edits != null:
+		_auto_veg_edits = AutoVegetationEdits.create_empty()
+		_auto_veg_edits.load_for_map(_lat, _lon)
+	VegetationCardFactory.clear_foot_cache()
+	if _auto_veg_generated:
+		call_deferred("_full_regenerate_auto_vegetation")
+	call_deferred("_rebuild_all_vegetation")
+	_toast("Vegetation look restored", ToastUI.Level.INFO)
+	return true
 
 
 ## Nukes the GLOBAL veg style store too (every map falls back to shipped
@@ -9387,6 +9691,8 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 	_vegetation_layer.ensure_species_keys()
 	if VegetationPaint.polygon_area(poly) < 4.0:
 		return 0
+	if params.get("mix") is Dictionary and not (params["mix"] as Dictionary).is_empty():
+		return _populate_mix(poly, params["mix"] as Dictionary, params)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(params.get("seed", 1337)) ^ int(_lat * 10000.0) ^ int(_lon * 10000.0)
 	var preset: int = int(params.get("preset", VegetationPaint.Preset.SHRUB))
@@ -9451,6 +9757,101 @@ func populate_vegetation(poly: PackedVector2Array, params: Dictionary) -> int:
 		_vegetation_layer.save(_lat, _lon)
 		_rebuild_vegetation()
 	return added
+
+
+## Paint a MIX (VegMix): the same scatter the Tune-look preview runs, so what
+## was previewed is what lands — canopy, young trees, understory — and the
+## mix's site look (floor moss, trunk moss, deadwood) is raised on the map to
+## the mix's values (never lowered: another mix painted earlier keeps its).
+func _populate_mix(poly: PackedVector2Array, mix_in: Dictionary, params: Dictionary) -> int:
+	var mix := VegMix.normalized(mix_in)
+	var cap := mini(_vegetation_layer.remaining_bulk_capacity(), VegMix.MAX_SCATTER)
+	if cap <= 0:
+		return 0
+	var c := VegetationPaint.polygon_aabb(poly)
+	var seed := int(params.get("seed", 1337)) ^ int(_lat * 10000.0) ^ int(_lon * 10000.0) \
+		^ int(c.position.x * 13.0) ^ int(c.position.y * 7.0)
+	var items := VegMix.scatter(poly, mix, seed, {
+		"density": float(params.get("density", 1.0)),
+		"size_var": float(params.get("size_var", 0.25)),
+		"scale": float(params.get("scale", 1.0)),
+		"cap": cap,
+		"existing": _vegetation_layer.all_placement_points(),
+	})
+	var plant_young := bool(params.get("plant_young", false))
+	var growth_st := _growth_style()
+	var growth_now := float(growth_st[VegetationGrowth.KEY_NOW])
+	var added := 0
+	for it in items:
+		var d: Dictionary = it
+		var sid := str(d["species"])
+		if not _vegetation_layer.ensure_species_key(sid) and not _vegetation_layer.bulk.has(sid):
+			continue
+		if _vegetation_layer.add_bulk(sid, float(d["x"]), float(d["z"]), float(d["yaw"]),
+				float(d["scale"])):
+			added += 1
+			var rec: Dictionary = (_vegetation_layer.bulk[sid] as Array).back()
+			if plant_young:
+				VegetationGrowth.stamp_young(rec, growth_now)
+			else:
+				VegetationGrowth.stamp_established(rec, sid, growth_st, growth_now)
+	if added > 0:
+		_vegetation_layer.save(_lat, _lon)
+		var raise := {}
+		var extras := VegMix.style_extras(mix)
+		for k in extras:
+			if float(extras[k]) > float(_veg_style.get(k, 0.0)) + 0.001:
+				raise[k] = extras[k]
+		if not raise.is_empty():
+			set_vegetation_style(raise, false, true)
+		else:
+			_rebuild_vegetation()
+	return added
+
+
+## The V toolbar's paint brush (density / size_var / scale / mix), for the
+## Tune-look modal to preview and hand back.
+func get_veg_brush() -> Dictionary:
+	if _edit_toolbar_ui != null and _edit_toolbar_ui.has_method("get_veg_brush"):
+		return _edit_toolbar_ui.call("get_veg_brush")
+	return {}
+
+
+func set_veg_brush(b: Dictionary) -> void:
+	if _edit_toolbar_ui != null and _edit_toolbar_ui.has_method("set_veg_brush"):
+		_edit_toolbar_ui.call("set_veg_brush", b)
+
+
+## The map's own mix (style `paint_mix`); without one, the legacy mix weights
+## (mix_pine / mix_deciduous / local_mix) as a mix, shrubs as understory.
+func get_paint_mix() -> Dictionary:
+	var m: Variant = _veg_style.get(VegMix.KEY_STYLE, {})
+	if m is Dictionary and not (m as Dictionary).is_empty():
+		return VegMix.normalized(m as Dictionary)
+	var w := BiomePalette.mix_weights_from_style(_veg_style)
+	var shrub := float(w.get("shrub", 0.0))
+	w.erase("shrub")
+	if w.is_empty():
+		return VegMix.preset("mixed_woodland")
+	var mix := VegMix.normalized({"label": "This map's mix", "trees": w})
+	if shrub > 0.0:
+		mix["understory"] = {"shrub": shrub * 2.0}
+	return mix
+
+
+## Save the map's mix. With `apply_site_look` its floor moss / trunk moss /
+## deadwood are written as the map's values too (the Tune-look Apply).
+func set_paint_mix(mix: Dictionary, apply_site_look: bool = true) -> void:
+	var m := VegMix.normalized(mix)
+	var patch := {VegMix.KEY_STYLE: m}
+	if apply_site_look:
+		patch.merge(VegMix.style_extras(m), true)
+	# The generated forest's "Mixed (local blend)" follows the same canopy.
+	patch["local_mix"] = m["trees"]
+	patch["mix_pine"] = 0.0
+	patch["mix_deciduous"] = 0.0
+	patch["mix_shrub"] = 0.0
+	set_vegetation_style(patch, true, true)
 
 
 ## Drop a SINGLE bulk instance of `species` at (x, z) — the paint dock's
@@ -9545,7 +9946,7 @@ func respecies_selection_async(poly: PackedVector2Array, params: Dictionary) -> 
 	await get_tree().process_frame
 	vegetation_operation_progress.emit("Scattering new vegetation…", 0.5)
 	var added := populate_vegetation(poly, scatter_params)
-	vegetation_operation_progress.emit("Done — %d instances" % added, 1.0)
+	vegetation_operation_progress.emit("Done — %s" % UiText.count(added, "instance"), 1.0)
 	return added
 
 
@@ -12224,7 +12625,7 @@ func _begin_load_ui() -> void:
 	var ui_layer := _main.get_node_or_null("UILayer") if _main != null else null
 	var host: Node = ui_layer if ui_layer != null else self
 	host.add_child(_load_overlay)
-	var title := "Loading %s" % _map_label if not _map_label.is_empty() else "Loading map"
+	var title := "Loading %s" % SitePrivacy.place(_map_label, "map") if not _map_label.is_empty() else "Loading map"
 	_load_overlay.setup(title)
 	_load_overlay.dismissed.connect(_on_load_overlay_dismissed)
 	if _load_fast_path:

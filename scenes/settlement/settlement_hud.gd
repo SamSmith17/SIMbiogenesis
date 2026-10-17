@@ -55,15 +55,21 @@ func bind(view: SettlementView, bridge: Variant) -> void:
 		_view.selection_changed.connect(_on_selection)
 
 
+const STATUS_W := 360.0
+
+
 func show_hud() -> void:
 	visible = true
 	set_process(true)
+	# The first-person HUD steps aside into pills while the view is up.
+	HudLayout.claim("settlement_view", {"tuck": ["top_left", "top_right", "bottom_left"]})
 	_refresh()
 
 
 func hide_hud() -> void:
 	visible = false
 	set_process(false)
+	HudLayout.release("settlement_view")
 
 
 func _process(delta: float) -> void:
@@ -85,12 +91,20 @@ var _peak_flash := 0.0
 
 func _build() -> void:
 	# Top-left: where you are on the scale, and what is wrong.
+	# On a translucent panel (the text used to sit straight on the 3D scene —
+	# and on the Power Scoreboard), placed by the HUD layout manager.
+	var tl_panel := PanelContainer.new()
+	tl_panel.name = "SettlementStatus"
+	tl_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.82))
+	tl_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tl_panel.custom_minimum_size = Vector2(STATUS_W, 0)
+	add_child(tl_panel)
 	var tl := VBoxContainer.new()
-	tl.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	tl.offset_left = 16
-	tl.offset_top = 120
 	tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(tl)
+	tl.add_theme_constant_override("separation", 3)
+	tl_panel.add_child(tl)
+	HudLayout.register(tl_panel, "settlement_status", "top_left", {"order": 20, "priority": 9, "tuckable": false,
+		"size": func() -> Vector2: return Vector2(STATUS_W, tl_panel.get_combined_minimum_size().y)})
 	_scale_lbl = Label.new()
 	_scale_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_scale_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
@@ -112,7 +126,7 @@ func _build() -> void:
 	_alarm_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_alarm_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 	_alarm_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_alarm_lbl.custom_minimum_size = Vector2(280, 0)
+	_alarm_lbl.custom_minimum_size = Vector2(STATUS_W - 24.0, 0)
 	tl.add_child(_alarm_lbl)
 	_speed_lbl = Label.new()
 	_speed_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -120,6 +134,8 @@ func _build() -> void:
 	tl.add_child(_speed_lbl)
 	var keys := Label.new()
 	keys.text = "Wheel zoom · drag pan · right-drag orbit · F follow · G drop in · Esc leave"
+	keys.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	keys.custom_minimum_size = Vector2(STATUS_W - 24.0, 0)
 	keys.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	keys.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	tl.add_child(keys)
@@ -136,13 +152,13 @@ func _build() -> void:
 	# was fast-forwarding".
 	var feed_panel := PanelContainer.new()
 	feed_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.82))
-	feed_panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
-	feed_panel.offset_left = 16
-	feed_panel.offset_top = -260
-	feed_panel.offset_right = 430
-	feed_panel.offset_bottom = -110
 	feed_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	feed_panel.clip_contents = true
 	add_child(feed_panel)
+	HudLayout.register(feed_panel, "settlement_log", "bottom_left", {"order": 5, "priority": 2,
+		"title": "settlement log", "icon": "list",
+		"size": func() -> Vector2: return Vector2(414, 150),
+		"compact": func() -> String: return "Settlement log"})
 	_feed_box = VBoxContainer.new()
 	_feed_box.add_theme_constant_override("separation", 1)
 	feed_panel.add_child(_feed_box)
@@ -150,12 +166,11 @@ func _build() -> void:
 	# Right: the selection card. Inspection only — there is no order verb here.
 	_card = PanelContainer.new()
 	_card.add_theme_stylebox_override("panel", UITheme.panel_style())
-	_card.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_card.offset_left = -320
-	_card.offset_right = -16
-	_card.offset_top = 120
+	_card.custom_minimum_size = Vector2(304, 0)
 	_card.visible = false
 	add_child(_card)
+	HudLayout.register(_card, "settlement_card", "top_right", {"order": 20, "priority": 8, "tuckable": false,
+		"size": func() -> Vector2: return Vector2(304, _card.get_combined_minimum_size().y)})
 	var cv := VBoxContainer.new()
 	_card.add_child(cv)
 	_card_title = Label.new()
@@ -223,12 +238,11 @@ func _build() -> void:
 func _build_festival_panel() -> void:
 	_fest_panel = PanelContainer.new()
 	_fest_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.86))
-	_fest_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_fest_panel.offset_left = 16
-	_fest_panel.offset_top = 300
-	_fest_panel.offset_right = 356
+	_fest_panel.custom_minimum_size = Vector2(STATUS_W, 0)
 	_fest_panel.visible = false
 	add_child(_fest_panel)
+	HudLayout.register(_fest_panel, "festival_panel", "top_left", {"order": 30, "priority": 7, "tuckable": false,
+		"size": func() -> Vector2: return Vector2(STATUS_W, _fest_panel.get_combined_minimum_size().y)})
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
 	_fest_panel.add_child(v)
@@ -389,8 +403,9 @@ func _refresh_festival_panel() -> void:
 	var tiers := ""
 	if int(st.get("light", 0)) > 0:
 		tiers = " · %d up close, %d as crowd" % [int(st.get("full", 0)), int(st.get("light", 0))]
-	_fest_status.text = "%d people in %d camps%s · %d seeded venues" % [
-		people, int(st.get("camps", 0)), tiers, int(st.get("venues", 0))]
+	_fest_status.text = "%s in %s%s · %s" % [
+		UiText.count(people, "person"), UiText.count(int(st.get("camps", 0)), "camp"), tiers,
+		UiText.count(int(st.get("venues", 0)), "seeded venue")]
 	if int(st.get("target", 0)) > 0 and int(st.get("natural", 0)) > 0:
 		_fest_status.text += "\nScaled from %d (natural) to %d." % [int(st["natural"]), int(st["target"])]
 	if people == 0:
@@ -489,7 +504,7 @@ func _refresh() -> void:
 			if _peak_last >= 0 and total > _peak_last:
 				_peak_flash = 1.0
 			_peak_last = total
-			_peak_lbl.text = "✦ %d Peak Experiences  ·  %d %s now" % [total, int(ps.get("now", 0)), NpcPeak.LABEL]
+			_peak_lbl.text = "✦ %s  ·  %d %s now" % [UiText.count(total, "Peak Experience"), int(ps.get("now", 0)), NpcPeak.LABEL]
 		if _vibe_lbl.visible:
 			_vibe_lbl.text = str(v.get("headline", ""))
 			_vibe_lbl.add_theme_color_override("font_color", v.get("color", UITheme.C_TEXT) as Color)

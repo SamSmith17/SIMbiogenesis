@@ -1317,6 +1317,42 @@
       "share_alike": true,
       "source": "https://github.com/Stellarium/stellarium/tree/master/skycultures/modern",
       "status": "verified"
+    },
+    {
+      "id": "font-inter",
+      "name": "Inter 4.1",
+      "category": "font",
+      "author": "Rasmus Andersson and the Inter Project Authors",
+      "source": "https://github.com/rsms/inter",
+      "license": "OFL-1.1",
+      "license_file": "OFL-1.1.txt",
+      "local_path": "assets/fonts/inter/",
+      "role": "UI typeface",
+      "attribution_required": false,
+      "share_alike": true,
+      "commercial_ok": true,
+      "added": "2026-10-13",
+      "modifications": "none",
+      "notes": "Regular, Medium, SemiBold static TTFs from the v4.1 release (extras/ttf).",
+      "status": "verified"
+    },
+    {
+      "id": "icons-lucide",
+      "name": "Lucide icons (lucide-static 0.460.0)",
+      "category": "texture",
+      "author": "Lucide Contributors (portions Cole Bemis / Feather)",
+      "source": "https://lucide.dev",
+      "license": "ISC",
+      "license_file": "ISC-lucide.txt",
+      "local_path": "assets/ui/icons/",
+      "role": "UI icons",
+      "attribution_required": true,
+      "share_alike": false,
+      "commercial_ok": true,
+      "added": "2026-10-13",
+      "modifications": "stroke colour set to white at load for tinting; compiled into scenes/ui/ui_icon_data.gd",
+      "notes": "Keep the ISC notice with the icons.",
+      "status": "verified"
     }
   ],
   "field_guide": {

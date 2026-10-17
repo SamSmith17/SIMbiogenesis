@@ -35,7 +35,8 @@ const ALIAS_SYNONYMS := {
 	"walton_or": "walton", "walton-or": "walton", "pataha": "walton",
 }
 
-## kind "scene" = the classic orbit/street/hero sets driven by _await_and_run.
+## kind "scene" = the classic orbit/street/hero sets driven by _await_and_run;
+## kind "menu" = no world is launched, the capture starts on the launch hub.
 const CAPTURES := {
 	"look":         {"fn": "_run_look_capture",            "world": "mtvernon", "timeout_s": 600.0},
 	"script":       {"fn": "_run_fix_script",              "world": "mtvernon", "timeout_s": 900.0},
@@ -88,6 +89,17 @@ const CAPTURES := {
 	"festival":     {"fn": "_run_festival_capture",        "world": "walton",   "timeout_s": 1500.0},
 	"festivalmode": {"fn": "_run_festival_mode_capture",   "world": "walton",   "timeout_s": 1800.0},
 	"popin":        {"fn": "_run_popin_capture",           "world": "walton",   "timeout_s": 900.0},
+	"tour":         {"fn": "_run_tour_capture",            "world": "mtvernon", "timeout_s": 2400.0},
+	"modals":       {"fn": "_run_modals_capture",          "world": "mtvernon", "timeout_s": 600.0},
+	"bootcamp":     {"fn": "_run_bootcamp_capture",        "world": "mtvernon", "timeout_s": 900.0},
+	"timeline":     {"fn": "_run_timeline_capture",        "world": "mtvernon", "timeout_s": 600.0},
+	"assetpack":    {"fn": "_run_assetpack_capture",       "world": "mtvernon", "timeout_s": 1200.0},
+	# kind "menu": runs on the launch hub with no world loaded (the "friend"
+	# who has nothing yet — tools\harness.ps1 -EmptyUser); `world` is unused.
+	"assetpack-import": {"fn": "_run_assetpack_import_capture", "world": "mtvernon", "timeout_s": 1500.0, "kind": "menu"},
+	"graphtools":   {"fn": "_run_graph_tools_capture",     "world": "mtvernon", "timeout_s": 600.0},
+	"pvsnap":       {"fn": "_run_pv_snap_capture",         "world": "mtvernon", "timeout_s": 600.0},
+	"conduits":     {"fn": "_run_conduits_capture",        "world": "mtvernon", "timeout_s": 600.0},
 }
 
 

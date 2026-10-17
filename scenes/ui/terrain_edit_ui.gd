@@ -614,7 +614,7 @@ func _on_lmb_pressed() -> void:
 				_finish_polygon()
 			else:
 				_poly_points.append(world)
-				_set_status("Polygon: %d points — Enter/RMB to lock" % _poly_points.size())
+				_set_status("Polygon: %s — Enter/RMB to lock" % UiText.count(_poly_points.size(), "point"))
 
 
 func _on_lmb_released() -> void:

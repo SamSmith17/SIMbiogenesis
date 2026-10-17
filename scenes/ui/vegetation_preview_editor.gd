@@ -24,8 +24,8 @@ const MIX_KEYS: Array[String] = ["mix_pine", "mix_deciduous", "mix_shrub"]
 const MIX_LABELS: Array[String] = ["Pine %", "Deciduous %", "Shrub %"]
 ## Named sub-species toggles added into style["local_mix"] for the mixed blend.
 const LOCAL_MIX_CANDIDATES: Array[String] = [
-	"spruce", "cedar", "fir", "redwood",
-	"maple", "aspen", "birch", "apple",
+	"spruce", "cedar", "fir", "redwood", "hemlock",
+	"maple", "alder", "aspen", "birch", "apple",
 	"cactus", "joshua_tree",
 	"corn", "wheat", "lettuce",
 ]
@@ -130,10 +130,10 @@ const SLIDER_TIPS := {
 	"deciduous_trunk_taper": "How much the trunk narrows toward the top (1 = cylinder)",
 	"deciduous_growth_years": "Years a sapling takes to reach full size",
 	"deciduous_vertical_offset_m": "Sink (-) or raise (+) every tree relative to the ground",
-	"deciduous_cluster_count": "Number of foliage clumps (more = finer, costlier canopy)",
-	"deciduous_leaf_shell_count": "Foliage shell layers per clump (depth of the canopy volume)",
-	"deciduous_leaf_density": "Leaves per clump surface — overrides the Foliage macro when set",
-	"deciduous_leaf_size": "Individual leaf size within its cell",
+	"deciduous_cluster_count": "How much of the foliage bunches on the twig ends (leaf sprays) / number of foliage clumps (leaf shells)",
+	"deciduous_leaf_shell_count": "Leaf layers in the crown: more = a fuller, costlier canopy",
+	"deciduous_leaf_density": "How much leaf the crown carries — overrides the Foliage macro when set",
+	"deciduous_leaf_size": "Leaf spray size (leaf sprays) / leaf size within its cell (leaf shells)",
 	"deciduous_leaf_aspect": "Leaf length ÷ width (1 = round, 3 = willow blade)",
 	"deciduous_leaf_gap": "Fraction of missing leaves — overrides the Foliage macro when set",
 	"deciduous_leaf_lump": "Clump surface bumpiness",
@@ -144,14 +144,14 @@ const SLIDER_TIPS := {
 	"pine_crown_base_pct": "Bare trunk below the first boughs, as % of height",
 	"pine_variant_seed": "Deterministic shape variant (0-9)",
 	"pine_branchiness": "Sparse open whorls (0) → dense bough stack (1)",
-	"pine_crookedness": "Reserved: trunk lean/character (subtle on conifers)",
+	"pine_crookedness": "Trunk lean and branch irregularity",
 	"pine_droop": "Bough droop (spruce skirts)",
-	"pine_foliage_density": "Needle fill: airy (0) → solid (1)",
-	"pine_whorl_count": "Bough whorls stacked up the trunk — overrides Branchiness when set",
-	"pine_bough_scale": "Bough size multiplier",
-	"pine_whorl_spacing": "Vertical spacing curve of the whorls",
-	"pine_whorl_jitter": "Random per-whorl wobble",
-	"pine_whorl_variation": "Per-whorl colour/shape variation (shader)",
+	"pine_foliage_density": "Needle fill: airy narrow sprays (0) → full wide sprays (1)",
+	"pine_whorl_count": "Branch tiers up the trunk — overrides Branchiness when set",
+	"pine_bough_scale": "Branch length multiplier",
+	"pine_whorl_spacing": "Spacing between branch tiers (more = farther apart)",
+	"pine_whorl_jitter": "Random branch length and angle wobble",
+	"pine_whorl_variation": "How irregularly branches are spaced round the trunk",
 	"pine_trunk_taper": "How much the trunk narrows toward the top",
 	"pine_fur_strength": "Needle fuzz intensity near the camera",
 	"pine_fur_cells": "Needle fuzz density",
@@ -159,6 +159,7 @@ const SLIDER_TIPS := {
 	"pine_fur_gap": "Gaps in the needle fuzz",
 	"pine_growth_years": "Years a sapling takes to reach full size",
 	"tree_detail_distance_m": "Distance where full 3D trees hand off to baked impostors",
+	"tree_variants": "How many different trees are grown per species (1-4). Each is its own draw batch: fewer = faster, more = a less repetitive stand",
 	"translucency_strength": "Sunlight glowing through leaves from behind",
 	"canopy_roundness": "Fake ambient occlusion rounding of the canopy",
 	"color_variation": "Per-tree colour differences across a forest",
@@ -192,6 +193,9 @@ const SHADER_SLIDERS := [
 	# Distance (m) where full 3D trees hand off to baked impostors (Overhaul v2
 	# LOD; a per-quality-tier budget may shrink the effective range on dense maps).
 	{"key": "tree_detail_distance_m", "label": "Tree detail dist (m)", "min": 60.0, "max": 600.0},
+	# Distinct trees grown per species (each a batch of its own): 1 = every
+	# maple identical and cheapest, 3 = the default mix, 4 = most varied.
+	{"key": "tree_variants", "label": "Tree variants", "min": 1.0, "max": 4.0},
 	# End of the photocard band when the LOD ladder runs mesh → photocard →
 	# impostor (only meaningful for 3-step ladders; see the "LOD" dropdown).
 	{"key": "tree_photocard_distance_m", "label": "Photocard dist (m)", "min": 100.0, "max": 2000.0},
@@ -265,6 +269,15 @@ var _density_spin: SpinBox = null
 var _diameter_slider: HSlider = null
 var _diameter_spin: SpinBox = null
 var _size_var := 0.25
+## The brush's plant scale (V toolbar "Plant scale"), previewed and pushed back.
+var _plant_scale := 1.0
+var _plant_scale_slider: HSlider = null
+var _plant_scale_spin: SpinBox = null
+## The Mixed-woodland page edits a VegMix (the SAME dict the Mix brush paints).
+var _mix: Dictionary = {}
+var _mix_choice_opt: OptionButton = null
+var _mix_name_edit: LineEdit = null
+var _mix_stats: Label = null
 var _size_var_slider: HSlider = null
 var _size_var_spin: SpinBox = null
 var _shader_sliders: Dictionary = {}
@@ -314,7 +327,11 @@ func open(initial_preset: int = -1, species_id: String = "") -> void:
 	_load_from_loader()
 	if initial_preset >= 0:
 		_set_species_from_preset(initial_preset)
-	if _dock != null and _dock.has_method("get_paint_species"):
+	# The legacy dock's brush is only the DEFAULT: a caller that names a
+	# preset or a species (the Fill drawer, the V toolbar, the library) gets
+	# that one. The dock defaults to Shrub, so taking it unconditionally opened
+	# every wood's Tune look on shrubs.
+	elif species_id.is_empty() and _dock != null and _dock.has_method("get_paint_species"):
 		var dock_sp := str(_dock.call("get_paint_species"))
 		if VegSpeciesCatalog.is_paintable(dock_sp):
 			_species = dock_sp
@@ -326,6 +343,18 @@ func open(initial_preset: int = -1, species_id: String = "") -> void:
 		_last_species = species_id
 	if _dock != null and _dock.has_method("get_size_var"):
 		_size_var = float(_dock.call("get_size_var"))
+	# The V toolbar is the brush the player paints with: its density, size
+	# variation and plant scale are what the preview must show.
+	if _loader != null and _loader.has_method("get_veg_brush"):
+		var brush: Dictionary = _loader.call("get_veg_brush")
+		if not brush.is_empty():
+			_density = float(brush.get("density", _density))
+			_size_var = float(brush.get("size_var", _size_var))
+			_plant_scale = float(brush.get("scale", _plant_scale))
+	_load_mix()
+	# A forest mix needs a stand to judge: a 10 m patch shows one tree.
+	if _species == "mix" and _patch_diameter < 30.0:
+		_patch_diameter = 35.0
 	_sync_species_dropdown()
 	_refresh_subspecies_dropdown()
 	_rebuild_species_section()
@@ -428,6 +457,7 @@ func _build_ui() -> void:
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.add_theme_stylebox_override("panel", _panel_style())
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 12)
@@ -446,9 +476,7 @@ func _build_ui() -> void:
 	preview_col.custom_minimum_size = Vector2(500, 0)
 	root_row.add_child(preview_col)
 
-	var preview_hdr := Label.new()
-	_style_section(preview_hdr, "Preview patch")
-	preview_col.add_child(preview_hdr)
+	preview_col.add_child(SectionHeader.make("Preview patch"))
 
 	var vp_container := SubViewportContainer.new()
 	vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -513,7 +541,7 @@ func _build_ui() -> void:
 			_queue_rebuild())
 	_density_slider = dens.get("slider")
 	_density_spin = dens.get("spin")
-	var dia := _labeled_slider(sidebar, "Patch Ø m", 4.0, 24.0, _patch_diameter,
+	var dia := _labeled_slider(sidebar, "Patch Ø m", 4.0, 60.0, _patch_diameter,
 		func(v: float) -> void:
 			_patch_diameter = v
 			_update_ground_and_camera()
@@ -526,6 +554,12 @@ func _build_ui() -> void:
 			_queue_rebuild(), 1.0)
 	_size_var_slider = svar.get("slider")
 	_size_var_spin = svar.get("spin")
+	var psc := _labeled_slider(sidebar, "Plant scale", 0.25, 3.0, _plant_scale,
+		func(v: float) -> void:
+			_plant_scale = v
+			_queue_rebuild(), 0.05)
+	_plant_scale_slider = psc.get("slider")
+	_plant_scale_spin = psc.get("spin")
 
 	_species_section = VBoxContainer.new()
 	_species_section.add_theme_constant_override("separation", 4)
@@ -786,9 +820,7 @@ func _rebuild_species_section() -> void:
 	var specs: Array = SPECIES_SHAPE_SLIDERS.get(fam, [])
 	if specs.is_empty():
 		return
-	var hdr := Label.new()
-	_style_section(hdr, VegSpeciesCatalog.label_for(_species))
-	_species_section.add_child(hdr)
+	_species_section.add_child(SectionHeader.make(VegSpeciesCatalog.label_for(_species)))
 	if _is_named_variant():
 		_ensure_species_baseline()
 		var scope_hint := Label.new()
@@ -830,6 +862,10 @@ func _rebuild_species_section() -> void:
 			_refresh_apply_state()
 			_queue_rebuild())
 		arch_row.add_child(arch_opt)
+		if fam == "deciduous":
+			_build_leaf_builder_row()
+		else:
+			_build_branch_builder_row()
 		_build_lod_chain_row(fam)
 	# Sliders display the RESOLVED value for the active species — selecting
 	# Birch shows Birch's real dims (SPECS variant / species override), not the
@@ -846,11 +882,18 @@ func _rebuild_species_section() -> void:
 		if not grouped.has(sect):
 			grouped[sect] = []
 		(grouped[sect] as Array).append(sd)
+	var hidden := builder_hidden_keys(fam, _values)
 	for sect in SECTION_ORDER:
 		if not grouped.has(sect):
 			continue
+		var visible_specs: Array = []
+		for spec_v in grouped[sect]:
+			if str((spec_v as Dictionary)["key"]) not in hidden:
+				visible_specs.append(spec_v)
+		if visible_specs.is_empty():
+			continue
 		var body := _add_collapsible_section(_species_section, str(sect))
-		for spec2 in grouped[sect]:
+		for spec2 in visible_specs:
 			var sd2: Dictionary = spec2
 			var key := str(sd2["key"])
 			var start := float(resolved.get(key, _values.get(key, 0.0)))
@@ -860,19 +903,257 @@ func _rebuild_species_section() -> void:
 				float(sd2["max"]), start)
 
 
+## Broadleaf foliage: leaf sprays on the twigs (each species' own leaves) or
+## the older leaf-shell crowns. Family-wide — it is how every broadleaf is
+## built, not a per-species look.
+func _build_leaf_builder_row() -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_species_section.add_child(row)
+	var lbl := Label.new()
+	_style_section(lbl, "Leaves")
+	lbl.custom_minimum_size = Vector2(44, 0)
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.tooltip_text = "Leaf sprays: twigs carrying each species' own leaves, with " \
+		+ "gaps and visible limbs. Leaf shells: the older rounded leaf crowns. " \
+		+ "Applies to every broadleaf species."
+	opt.add_item("Leaf sprays (by species)", 0)
+	opt.set_item_metadata(0, "sprays")
+	opt.add_item("Leaf shells (older)", 1)
+	opt.set_item_metadata(1, "shells")
+	var key := VegetationCardFactory.KEY_LEAF_BUILDER
+	opt.select(1 if str(_values.get(key, "sprays")) == "shells" else 0)
+	opt.item_selected.connect(func(idx: int) -> void:
+		_values[key] = str(opt.get_item_metadata(idx))
+		_refresh_apply_state()
+		# The slider set depends on the builder (shells-only sliders hide).
+		_rebuild_species_section.call_deferred()
+		_queue_rebuild())
+	row.add_child(opt)
+
+
+## Conifers: needle sprays (each species' own habit) or the older whorl
+## cards. Family-wide, like Leaves.
+func _build_branch_builder_row() -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_species_section.add_child(row)
+	var lbl := Label.new()
+	_style_section(lbl, "Branches")
+	lbl.custom_minimum_size = Vector2(44, 0)
+	row.add_child(lbl)
+	var opt := OptionButton.new()
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.tooltip_text = "Needle sprays: a real trunk with each species' branches and " \
+		+ "foliage. Whorl cards: the older stacked cards (the only look the fur " \
+		+ "sliders change). Applies to every conifer species."
+	opt.add_item("Needle sprays (by species)", 0)
+	opt.set_item_metadata(0, "spray")
+	opt.add_item("Whorl cards (older)", 1)
+	opt.set_item_metadata(1, "whorl")
+	opt.select(1 if str(_values.get("pine_builder", "spray")) == "whorl" else 0)
+	opt.item_selected.connect(func(idx: int) -> void:
+		_values["pine_builder"] = str(opt.get_item_metadata(idx))
+		_refresh_apply_state()
+		_rebuild_species_section.call_deferred()
+		_queue_rebuild())
+	row.add_child(opt)
+
+
+## Shape sliders the family's CURRENT builder does not read — hidden so every
+## slider on the page changes the tree. Leaf sprays ignore the leaf-shell
+## look (leaf shape, gaps, lump, shadow proxy); needle sprays ignore the
+## whorl cards' fur. Pure, so the liveness selftest can use it.
+static func builder_hidden_keys(fam: String, values: Dictionary) -> Array:
+	match fam:
+		"deciduous":
+			if str(values.get(VegetationCardFactory.KEY_LEAF_BUILDER, "sprays")) != "shells":
+				return ["deciduous_leaf_aspect", "deciduous_leaf_gap", "deciduous_leaf_lump",
+					"deciduous_shadow_proxy_visibility"]
+		"pine":
+			if str(values.get("pine_builder", "spray")) != "whorl":
+				return ["pine_fur_strength", "pine_fur_cells", "pine_fur_tuft_size",
+					"pine_fur_gap"]
+	return []
+
+
 ## Mixed-woodland ratio sliders. Per-species SHAPE (canopy size, etc.) is edited
 ## on each species' own Type page; here the player tunes only the blend.
+## The Mixed-woodland page: a VegMix — the same dict the V toolbar's Mix brush
+## paints, scattered by the same VegMix.scatter in the preview. Presets
+## (PNW lowland forest …) load a whole forest recipe; every slider edits it.
 func _build_mix_section() -> void:
-	var hdr := Label.new()
-	_style_section(hdr, "Mixed woodland blend")
-	_species_section.add_child(hdr)
+	_species_section.add_child(SectionHeader.make("Forest mix"))
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 4)
+	_species_section.add_child(prow)
+	_mix_choice_opt = OptionButton.new()
+	_mix_choice_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_mix_choice_opt.fit_to_longest_item = false
+	_mix_choice_opt.clip_text = true
+	_mix_choice_opt.add_item("— load a preset —")
+	_mix_choice_opt.set_item_metadata(0, "")
+	var i := 1
+	for c in VegMix.choices():
+		_mix_choice_opt.add_item(str(c[1]))
+		_mix_choice_opt.set_item_metadata(i, str(c[0]))
+		i += 1
+	_mix_choice_opt.item_selected.connect(func(idx: int) -> void:
+		var id := str(_mix_choice_opt.get_item_metadata(idx))
+		if id.is_empty():
+			return
+		var m := VegMix.preset(id)
+		if not m.is_empty():
+			_mix = m
+			_rebuild_species_section()
+			_queue_rebuild())
+	prow.add_child(_mix_choice_opt)
+	var srow := HBoxContainer.new()
+	srow.add_theme_constant_override("separation", 4)
+	_species_section.add_child(srow)
+	_mix_name_edit = LineEdit.new()
+	_mix_name_edit.placeholder_text = "Save this mix as…"
+	_mix_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	srow.add_child(_mix_name_edit)
+	var save := Button.new()
+	save.text = "Save"
+	save.tooltip_text = "Keep this mix in your library (every map's mix list)"
+	save.pressed.connect(func() -> void:
+		var nm := _mix_name_edit.text.strip_edges()
+		if nm.is_empty():
+			return
+		VegMix.save_user_mix(nm, _mix)
+		_mix_name_edit.text = ""
+		_refresh_apply_state("Saved mix \"%s\"" % nm)
+		_rebuild_species_section())
+	srow.add_child(save)
+	_mix_stats = Label.new()
+	_mix_stats.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_mix_stats.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_mix_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_species_section.add_child(_mix_stats)
+
+	# Canopy.
+	_species_section.add_child(SectionHeader.make("Canopy trees", "", "share of the stand"))
+	var trees: Dictionary = _mix.get("trees", {})
+	var ids := trees.keys()
+	ids.sort()
+	for sid in ids:
+		_mix_weight_row(str(sid), "trees", 0.0, 1.0, 0.01)
+	var add_row := HBoxContainer.new()
+	_species_section.add_child(add_row)
+	var add_opt := OptionButton.new()
+	add_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_opt.add_item("+ Add a tree…")
+	add_opt.set_item_metadata(0, "")
+	var k := 1
+	var cands: Array = VegSpeciesCatalog.CONIFER_IDS.duplicate()
+	cands.append_array(VegSpeciesCatalog.DECIDUOUS_IDS)
+	for sid in cands:
+		if trees.has(sid):
+			continue
+		add_opt.add_item(VegSpeciesCatalog.label_for(str(sid)))
+		add_opt.set_item_metadata(k, str(sid))
+		k += 1
+	add_opt.item_selected.connect(func(idx: int) -> void:
+		var sid := str(add_opt.get_item_metadata(idx))
+		if sid.is_empty():
+			return
+		(_mix["trees"] as Dictionary)[sid] = 0.15
+		_rebuild_species_section()
+		_queue_rebuild())
+	add_row.add_child(add_opt)
+
+	# Understory.
+	_species_section.add_child(SectionHeader.make("Understory", "", "plants per tree"))
+	for sid in VegSpeciesCatalog.UNDERSTORY_IDS + ["shrub"]:
+		_mix_weight_row(str(sid), "understory", 0.0, 4.0, 0.05)
+
+	# Stand.
+	_species_section.add_child(SectionHeader.make("Stand"))
+	_mix_value_row("spacing_m", "Tree spacing m", 2.5, 16.0, 0.1,
+		"Canopy spacing at brush density 1 (density divides it)")
+	_mix_value_row("patchiness", "Patchiness", 0.0, 1.0, 0.01,
+		"0 = species mixed evenly · 1 = each species in its own patches")
+	_mix_value_row("patch_m", "Patch size m", 10.0, 150.0, 1.0,
+		"How big a single-species patch grows")
+	_mix_value_row("young_share", "Young trees", 0.0, 0.7, 0.01,
+		"Share of new growth (35–70 % size) among the old")
+
+	# Site look.
+	_species_section.add_child(SectionHeader.make("Forest floor & bark", "", "the whole map"))
+	_mix_value_row("floor_moss", "Floor moss", 0.0, 1.0, 0.01,
+		"Moss on the ground under the trees")
+	_mix_value_row("bark_moss", "Trunk moss", 0.0, 1.0, 0.01,
+		"Moss on trunks and limbs (bigleaf maple most, pine least)")
+	_mix_value_row("deadwood", "Stumps & logs", 0.0, 20.0, 0.5,
+		"Pieces of deadwood per 100 trees (Terrain: deadwood models)")
+	var hint := Label.new()
+	hint.text = "The preview is the brush: Mix in the V toolbar paints exactly this. " \
+		+ "Edit each tree's shape on its own Type page."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 11)
+	_species_section.add_child(hint)
+
+
+## One species weight in the mix (`group` = trees / understory), with remove.
+func _mix_weight_row(sid: String, group: String, lo: float, hi: float, step: float) -> void:
+	var g: Dictionary = _mix.get(group, {})
+	var pair := _labeled_slider(_species_section, VegSpeciesCatalog.label_for(sid), lo, hi,
+		float(g.get(sid, 0.0)),
+		func(v: float) -> void:
+			var gg: Dictionary = _mix.get(group, {})
+			if v <= 0.0001 and group == "understory":
+				gg.erase(sid)
+			else:
+				gg[sid] = v
+			_mix[group] = gg
+			_queue_rebuild(), step)
+	var row: HBoxContainer = pair.get("row")
+	if group == "trees" and row != null:
+		var rm := IconButton.make("x", "Remove %s from the mix" % VegSpeciesCatalog.label_for(sid),
+			func() -> void:
+				(_mix["trees"] as Dictionary).erase(sid)
+				_rebuild_species_section()
+				_queue_rebuild())
+		row.add_child(rm)
+
+
+func _mix_value_row(key: String, label: String, lo: float, hi: float, step: float,
+		tip: String) -> void:
+	var pair := _labeled_slider(_species_section, label, lo, hi, float(_mix.get(key, 0.0)),
+		func(v: float) -> void:
+			_mix[key] = v
+			_queue_rebuild(), step)
+	var row: HBoxContainer = pair.get("row")
+	if row != null:
+		row.tooltip_text = tip
+		row.mouse_filter = Control.MOUSE_FILTER_PASS
+
+
+## The map's mix (or the V toolbar's chosen preset) into `_mix`.
+func _load_mix() -> void:
+	_mix = {}
+	if _loader != null and _loader.has_method("get_veg_brush"):
+		var b: Dictionary = _loader.call("get_veg_brush")
+		var mid := str(b.get("mix_id", "map"))
+		if mid != "map":
+			_mix = VegMix.preset(mid)
+	if _mix.is_empty() and _loader != null and _loader.has_method("get_paint_mix"):
+		_mix = _loader.call("get_paint_mix")
+	if _mix.is_empty():
+		_mix = VegMix.preset("pnw_lowland")
+
+
+func _legacy_build_mix_section() -> void:
+	_species_section.add_child(SectionHeader.make("Mixed woodland blend"))
 	for i in MIX_KEYS.size():
 		var key := MIX_KEYS[i]
 		_keyed_slider(_species_section, key, MIX_LABELS[i], 0.0, 1.0,
 			float(_values.get(key, 0.0)))
-	var local_hdr := Label.new()
-	_style_section(local_hdr, "Local-mix species")
-	_species_section.add_child(local_hdr)
+	_species_section.add_child(SectionHeader.make("Local-mix species"))
 	var local_hint := Label.new()
 	local_hint.text = "Include named sub-types / crops in the mixed blend."
 	local_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1151,27 +1432,17 @@ static func slider_section(key: String) -> String:
 	return SECTION_SIZE
 
 
-## Header button + body container. The header shows a caret and toggles the body.
+## A Collapsible section; returns its body. The open state is remembered per
+## title in `_section_open`.
 func _add_collapsible_section(parent: Control, title: String) -> VBoxContainer:
 	var open := bool(_section_open.get(title,
 		not SECTIONS_COLLAPSED_BY_DEFAULT.has(title)))
-	var body := VBoxContainer.new()
-	body.add_theme_constant_override("separation", 2)
-	var head := Button.new()
-	head.toggle_mode = true
-	head.button_pressed = open
-	head.focus_mode = Control.FOCUS_NONE
-	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	head.text = ("▾ " if open else "▸ ") + title
-	head.toggled.connect(func(on: bool) -> void:
-		_section_open[title] = on
-		body.visible = on
-		head.text = ("▾ " if on else "▸ ") + title)
-	parent.add_child(head)
-	parent.add_child(body)
-	body.visible = open
-	return body
+	var sec := Collapsible.make(title, open)
+	sec.body.add_theme_constant_override("separation", 2)
+	sec.folding_changed.connect(func(is_folded: bool) -> void:
+		_section_open[title] = not is_folded)
+	parent.add_child(sec)
+	return sec.body
 
 
 ## Forest age profile (veg overhaul Phase 9). The maturity-age sliders above say
@@ -1179,9 +1450,7 @@ func _add_collapsible_section(parent: Control, title: String) -> VBoxContainer:
 ## stand starts — the difference between dropping a mature forest and dropping a
 ## clear-cut that grows back while you watch.
 func _build_forest_age_section(sidebar: VBoxContainer) -> void:
-	var hdr := Label.new()
-	_style_section(hdr, "Forest age")
-	sidebar.add_child(hdr)
+	sidebar.add_child(SectionHeader.make("Forest age"))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	sidebar.add_child(row)
@@ -1220,9 +1489,7 @@ func _on_forest_age_selected(idx: int) -> void:
 
 
 func _build_osm_section(sidebar: VBoxContainer) -> void:
-	var hdr := Label.new()
-	_style_section(hdr, "OSM → tree type")
-	sidebar.add_child(hdr)
+	sidebar.add_child(SectionHeader.make("OSM → tree type"))
 	var hint := Label.new()
 	hint.text = "Which shader type fills each OpenStreetMap area."
 	hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
@@ -1588,7 +1855,7 @@ func _rebuild_preview() -> void:
 	if fam in VegetationLayer.GRASS_SPECIES:
 		_build_grass_preview(spots, settings)
 	elif _species == "mix":
-		_build_mix_preview(spots, settings)
+		_build_vegmix_preview(settings)
 	else:
 		_build_species_cards(_species, spots, settings)
 
@@ -1612,6 +1879,62 @@ func _build_mix_preview(spots: Array, settings: Dictionary) -> void:
 	for sp in by_species:
 		if not (by_species[sp] as Array).is_empty():
 			_build_species_cards(str(sp), by_species[sp], settings)
+
+
+## The Mixed-woodland preview: VegMix.scatter over the patch — the brush's own
+## scatter — drawn per species AND per instance variant (the meshes the world
+## draws), with the mix's deadwood, trunk moss and a moss tint on the floor.
+func _build_vegmix_preview(settings: Dictionary) -> void:
+	var poly := VegetationPaint.circle_polygon(Vector2.ZERO, _patch_diameter * 0.5, 40)
+	var items := VegMix.scatter(poly, _mix, PREVIEW_SEED, {"density": _density,
+		"size_var": _size_var, "scale": _plant_scale, "cap": 900})
+	var n_var := clampi(int(round(float(settings.get(VegetationRuntime.KEY_TREE_VARIANTS,
+		VegetationRuntime.DEFAULT_TREE_VARIANTS)))), 1, 4)
+	var groups := {}
+	var bulk := {}
+	var n_trees := 0
+	var n_under := 0
+	for it in items:
+		var d: Dictionary = it
+		var sid := str(d["species"])
+		var fam := VegSpeciesCatalog.mesh_family(sid)
+		var is_tree := fam == "pine" or fam == "deciduous"
+		var k := VegetationRuntime.variant_index(d, n_var) if is_tree else 0
+		var key := "%s|%d" % [sid, k]
+		if not groups.has(key):
+			groups[key] = {"species": sid, "fam": fam, "k": k, "tree": is_tree, "recs": []}
+		(groups[key]["recs"] as Array).append(d)
+		if is_tree:
+			n_trees += 1
+			if not bulk.has(sid):
+				bulk[sid] = []
+			(bulk[sid] as Array).append(d)
+		else:
+			n_under += 1
+	var s := settings.duplicate()
+	s["bark_moss"] = float(_mix.get("bark_moss", 0.0))
+	for key in groups:
+		var g: Dictionary = groups[key]
+		var sk := s
+		if bool(g["tree"]):
+			sk = s.duplicate()
+			sk["%s_variant_index" % str(g["fam"])] = int(g["k"])
+		_build_species_cards(str(g["species"]), g["recs"], sk)
+	var dw := s.duplicate()
+	dw[VegDeadwood.KEY_DENSITY] = float(_mix.get("deadwood", 0.0))
+	if _loader != null and _loader.has_method("get_vegetation_style"):
+		var st: Dictionary = _loader.call("get_vegetation_style")
+		dw[VegDeadwood.KEY_MODELS] = st.get(VegDeadwood.KEY_MODELS, "")
+	VegDeadwood.rebuild(_veg_root, [bulk], func(_x: float, _z: float) -> float: return 0.0, dw)
+	if _ground != null and _ground.material_override is StandardMaterial3D:
+		var gm := _ground.material_override as StandardMaterial3D
+		gm.albedo_color = Color(0.22, 0.28, 0.18).lerp(VegFloorMoss.DEFAULT_COLOR * 0.75,
+			clampf(float(_mix.get("floor_moss", 0.0)), 0.0, 1.0) * 0.8)
+	if _mix_stats != null:
+		var area_ha := PI * pow(_patch_diameter * 0.5, 2.0) / 10000.0
+		_mix_stats.text = "Preview: %s and %s on %.2f ha (≈ %d trees / ha)" % [
+			UiText.count(n_trees, "tree"), UiText.count(n_under, "understory plant"),
+			area_ha, int(round(float(n_trees) / maxf(area_ha, 0.0001)))]
 
 
 func _build_card_preview(spots: Array, settings: Dictionary) -> void:
@@ -1745,8 +2068,11 @@ func _load_from_state(shape: Dictionary, style: Dictionary) -> void:
 			continue
 		if typeof(style[k]) in [TYPE_FLOAT, TYPE_INT, TYPE_BOOL]:
 			_values[k] = style[k]
-		elif str(k).ends_with("_archetype") and style[k] is String:
-			# v3 shape archetype (string enum) rides the value model too.
+		elif (str(k).ends_with("_archetype")
+				or k == VegetationCardFactory.KEY_LEAF_BUILDER or k == "pine_builder") \
+				and style[k] is String:
+			# v3 shape archetype + the leaf builder (string enums) ride the
+			# value model too.
 			_values[k] = style[k]
 	for k in shape:
 		_values[k] = shape[k]
@@ -1830,6 +2156,8 @@ func _sync_top_sliders() -> void:
 	SliderSpinRowScript.set_values({"slider": _diameter_slider, "spin": _diameter_spin}, _patch_diameter)
 	if _size_var_slider != null:
 		SliderSpinRowScript.set_values({"slider": _size_var_slider, "spin": _size_var_spin}, _size_var * 100.0)
+	if _plant_scale_slider != null:
+		SliderSpinRowScript.set_values({"slider": _plant_scale_slider, "spin": _plant_scale_spin}, _plant_scale)
 	for key in _shader_sliders:
 		if _values.has(key):
 			SliderSpinRowScript.set_values(_shader_sliders[key], float(_values[key]))
@@ -1845,6 +2173,8 @@ func _shape_dict() -> Dictionary:
 	# v3 archetype enums (dropdown, not a slider).
 	shape_keys.append("deciduous_archetype")
 	shape_keys.append("pine_archetype")
+	shape_keys.append(VegetationCardFactory.KEY_LEAF_BUILDER)
+	shape_keys.append("pine_builder")
 	for k in shape_keys:
 		if _values.has(k):
 			out[k] = _values[k]
@@ -1946,6 +2276,9 @@ func _apply_to_map() -> void:
 			_loader.call("set_vegetation_settings", shape, true, true)
 		if _loader.has_method("set_vegetation_style"):
 			_loader.call("set_vegetation_style", style, true, true)
+	if _species == "mix" and _loader.has_method("set_paint_mix"):
+		_loader.call("set_paint_mix", _mix, true)
+	_push_brush(true)
 	if _dock != null and _dock.has_method("set_paint_density"):
 		_dock.call("set_paint_density", _density)
 	if _dock != null and _dock.has_method("set_size_var"):
@@ -1983,6 +2316,7 @@ func _apply_to_map() -> void:
 ## Push the current look to the paint brush only — future painted trees carry it
 ## as a per-instance override; the map's existing trees are untouched.
 func _apply_to_brush() -> void:
+	_push_brush()
 	if _dock != null and _dock.has_method("set_brush_style"):
 		_dock.call("set_brush_style", _brush_card())
 	if _dock != null and _dock.has_method("set_paint_density"):
@@ -1992,6 +2326,25 @@ func _apply_to_brush() -> void:
 	if _dock != null and _dock.has_method("set_paint_species") and _species != "mix":
 		_dock.call("set_paint_species", _species)
 	close()
+
+
+## Hand density / size variation / plant scale (and, on the mix page, the
+## mix) to the V toolbar's brush — the brush paints what was previewed.
+## `mix_saved`: the map's mix was just saved (Apply to map), so the brush
+## switches to it. Otherwise the brush keeps the mix it already had — sending
+## "map" there threw a chosen preset away for the map's OLD mix.
+func _push_brush(mix_saved: bool = false) -> void:
+	if _loader == null or not _loader.has_method("set_veg_brush"):
+		return
+	var b := {"density": _density, "size_var": _size_var, "scale": _plant_scale}
+	if _species == "mix":
+		var cur := "map"
+		if not mix_saved and _loader.has_method("get_veg_brush"):
+			cur = str((_loader.call("get_veg_brush") as Dictionary).get("mix_id", "map"))
+		b["mix_id"] = cur
+	elif VegSpeciesCatalog.is_paintable(_species):
+		b["species"] = _species
+	_loader.call("set_veg_brush", b)
 
 
 ## Footer line + Apply emphasis. With no pending edits the Apply button is a

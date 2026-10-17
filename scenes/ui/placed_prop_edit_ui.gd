@@ -31,6 +31,8 @@ const _SHADOW_MODES := ["", "all", "off"]
 
 var _loader: Node = null
 var _main: Node = null
+var _pv_snap_chk: CheckBox = null
+var _pv_guides: MeshInstance3D = null
 var _prop_id: String = ""
 var _rec: Dictionary = {}
 var _active := false
@@ -96,7 +98,7 @@ func _ready() -> void:
 	offset_left = -DOCK_W - 10.0
 	offset_right = -10.0
 	offset_top = 10.0
-	offset_bottom = -(UiScreenLayout.timeline_stack_height() + 10.0)
+	offset_bottom = -(HudLayout.timeline_height() + 10.0)
 	_build_ui()
 	set_process(false)
 
@@ -135,6 +137,7 @@ func open_for_prop(prop_id: String) -> void:
 		set_process(true)
 		CursorController.request_tool_overlay(OVERLAY_NAME, Callable(self, "_escape_step"))
 		_ensure_gizmo()
+		HudLayout.claim_right_dock("prop_editor", self, DOCK_W)
 	_update_gizmo()
 	_hint("Drag the arrows to move, the rings to turn. Shift snaps. Esc closes.")
 
@@ -148,6 +151,7 @@ func close() -> void:
 	_active = false
 	visible = false
 	set_process(false)
+	HudLayout.release("prop_editor")
 	_prop_id = ""
 	_rec = {}
 	CursorController.release_tool_overlay(OVERLAY_NAME)
@@ -195,25 +199,11 @@ func _build_ui() -> void:
 	margin.add_child(outer)
 
 	# Header
-	var head := HBoxContainer.new()
-	outer.add_child(head)
-	var titles := VBoxContainer.new()
-	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(titles)
-	_title_lbl = Label.new()
-	_title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	_title_lbl.add_theme_color_override("font_color", C_TEXT)
-	titles.add_child(_title_lbl)
-	_sub_lbl = Label.new()
-	_sub_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	_sub_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	titles.add_child(_sub_lbl)
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.tooltip_text = "Close (Esc)"
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(close)
-	head.add_child(close_btn)
+	var head := DockShell.header("", "", close)
+	outer.add_child(head["row"])
+	_title_lbl = head["title"]
+	_sub_lbl = head["subtitle"]
+	_sub_lbl.visible = true
 
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -272,12 +262,25 @@ func _section(title: String) -> VBoxContainer:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	m.add_child(box)
-	var lbl := Label.new()
-	lbl.text = title.to_upper()
-	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	box.add_child(lbl)
+	box.add_child(SectionHeader.make(title, String(SECTION_ICONS.get(title, ""))))
 	return box
+
+
+const SECTION_ICONS := {
+	"Placement": "move", "Display": "eye", "Fire": "flame", "Firepit": "flame",
+	"Solar array": "sun", "Model": "box",
+}
+
+
+## A label + value grid: one column of labels, one of values, so every value
+## box in a section starts at the same x whatever its label says.
+func _grid(parent: Control, columns: int = 4) -> GridContainer:
+	var g := GridContainer.new()
+	g.columns = columns
+	g.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+	g.add_theme_constant_override("v_separation", UITheme.SPACE_XS)
+	parent.add_child(g)
+	return g
 
 
 func _row(parent: Control) -> HBoxContainer:
@@ -353,28 +356,23 @@ func _build_placement_section() -> void:
 		UITheme.style_button(b)
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	var pos := _row(box)
-	_small_label("X", pos, 14)
-	_spin("x", 0.05, -1.0e6, 1.0e6, " m", pos)
-	_small_label("Z", pos, 14)
-	_spin("z", 0.05, -1.0e6, 1.0e6, " m", pos)
-	var lift := _row(box)
-	_small_label("Lift", lift, 28)
-	_spin("y_offset", 0.05, -50.0, 200.0, " m", lift).tooltip_text = "Height above the ground under the prop"
-	_small_label("Scale", lift, 36)
-	_spin("scale", 0.05, 0.05, 50.0, "×", lift)
-	var rot := _row(box)
-	_small_label("Yaw", rot, 28)
-	_spin("yaw", 1.0, -360.0, 360.0, "°", rot)
-	_small_label("Pitch", rot, 34)
-	_spin("pitch", 1.0, -90.0, 90.0, "°", rot)
-	var rot2 := _row(box)
-	_small_label("Roll", rot2, 28)
-	_spin("roll", 1.0, -180.0, 180.0, "°", rot2)
-	_small_label("", rot2, 34)
-	var filler := Control.new()
-	filler.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rot2.add_child(filler)
+	# Even columns: X / Lift / Yaw / Roll down the left, Z / Scale / Pitch on
+	# the right, every value box aligned.
+	var grid := _grid(box)
+	_small_label("X", grid)
+	_spin("x", 0.05, -1.0e6, 1.0e6, " m", grid)
+	_small_label("Z", grid)
+	_spin("z", 0.05, -1.0e6, 1.0e6, " m", grid)
+	_small_label("Lift", grid)
+	_spin("y_offset", 0.05, -50.0, 200.0, " m", grid).tooltip_text = "Height above the ground under the prop"
+	_small_label("Scale", grid)
+	_spin("scale", 0.05, 0.05, 50.0, "×", grid)
+	_small_label("Yaw", grid)
+	_spin("yaw", 1.0, -360.0, 360.0, "°", grid)
+	_small_label("Pitch", grid)
+	_spin("pitch", 1.0, -90.0, 90.0, "°", grid)
+	_small_label("Roll", grid)
+	_spin("roll", 1.0, -180.0, 180.0, "°", grid)
 	var quick := _row(box)
 	_button("Level", "Pitch and roll back to zero", quick, func() -> void:
 		_tf["pitch"] = 0.0
@@ -420,6 +418,7 @@ func _build_display_section() -> void:
 	_model_option.item_selected.connect(_on_model_changed)
 	model_row.add_child(_model_option)
 	_space_row = NpcSpaceTagRow.new()
+	_space_row.form_label_w = 60.0
 	_space_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(_space_row)
 
@@ -513,7 +512,62 @@ func _build_pv_section() -> void:
 	_pv_info.add_theme_color_override("font_color", C_TEXT_S)
 	_pv_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_pv_section.add_child(_pv_info)
+	# Grid snap (PvGridSnap): racks line up edge to edge and in rows at the
+	# no-shade pitch. Player prefs, shared with the placement ghost.
+	var prefs := PvGridSnap.prefs()
+	_pv_snap_chk = CheckBox.new()
+	_pv_snap_chk.text = "Snap into rows"
+	_pv_snap_chk.button_pressed = bool(prefs["enabled"])
+	_pv_snap_chk.tooltip_text = ("Moving or placing a rack lines it up with the racks near it — "
+		+ "edge to edge in a row, or one row behind at a pitch that does not shade it "
+		+ "at the winter solstice. Racks of the same array snap first. Hold Alt to move freely.")
+	_pv_snap_chk.toggled.connect(func(on: bool) -> void: PvGridSnap.set_pref("enabled", on))
+	_pv_section.add_child(_pv_snap_chk)
+	var row2 := _row(_pv_section)
+	_small_label("Gap", row2, 60)
+	var gap := SpinBox.new()
+	gap.min_value = 0.0
+	gap.max_value = 2.0
+	gap.step = 0.01
+	gap.suffix = "m"
+	gap.value = float(prefs["gap_m"])
+	gap.tooltip_text = "Space left between racks side by side"
+	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	gap.value_changed.connect(func(v: float) -> void: PvGridSnap.set_pref("gap_m", v))
+	row2.add_child(gap)
+	var row3 := _row(_pv_section)
+	_small_label("Row pitch", row3, 60)
+	var pitch := SpinBox.new()
+	pitch.min_value = 0.0
+	pitch.max_value = 30.0
+	pitch.step = 0.1
+	pitch.suffix = "m"
+	pitch.allow_lesser = false
+	pitch.value = maxf(float(prefs["row_pitch_m"]), 0.0)
+	pitch.tooltip_text = "Centre-to-centre distance between rows. 0 = Auto (no winter shading at this latitude)."
+	pitch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pitch.value_changed.connect(func(v: float) -> void:
+		PvGridSnap.set_pref("row_pitch_m", v if v > 0.0 else -1.0))
+	row3.add_child(pitch)
+	var line_up := Button.new()
+	line_up.text = "Line up this array"
+	line_up.tooltip_text = ("Put every rack that feeds the same controller into a grid anchored on "
+		+ "this one (rows behind it at the row pitch)")
+	UITheme.style_button(line_up)
+	line_up.pressed.connect(_on_pv_line_up)
+	_pv_section.add_child(line_up)
 	_pv_section.get_parent().get_parent().visible = false
+
+
+func _on_pv_line_up() -> void:
+	if _prop_id.is_empty():
+		return
+	_resolve_main()
+	var n := PlacedPropService.line_up_pv_array(_main, _prop_id)
+	if n == 0:
+		_hint("No other rack feeds this rack's controller")
+	else:
+		_hint("Lined up %s with this one" % UiText.count(n, "rack"))
 
 
 func _sync_pv() -> void:
@@ -528,7 +582,7 @@ func _sync_pv() -> void:
 	var o := PvArrayBuilder.orientation_for(float(_tf.get("yaw", _rec.get("yaw", 0.0))),
 			float(spec["tilt_deg"]))
 	var bound := str(_rec.get("graph_item_id", ""))
-	_pv_info.text = "%d panels · faces %.0f° (compass) at %.0f°%s" % [int(spec["count"]),
+	_pv_info.text = "%s · faces %.0f° (compass) at %.0f°%s" % [UiText.count(int(spec["count"]), "panel"),
 			float(o["azimuth_deg"]), float(o["tilt_deg"]),
 			"" if bound.is_empty() else " · drives graph array " + bound]
 
@@ -606,7 +660,8 @@ func _build_fire_section() -> void:
 	_fire_box.add_child(_fire_auto_lbl)
 	var acts := _row(_fire_box)
 	_fire_reset_btn = _button("Auto", "Back to the estimate from the structure's size and mass", acts, _on_fire_reset)
-	_fire_ignite_btn = _button("🔥 Ignite", "Light it now, at the clock's current time", acts, _on_fire_ignite)
+	_fire_ignite_btn = _button("Ignite", "Light it now, at the clock's current time", acts, _on_fire_ignite)
+	_fire_ignite_btn.icon = UiIcons.icon("flame", 14)
 	_fire_out_btn = _button("Put out", "Out, at the clock's current time (the char stays)", acts, _on_fire_put_out)
 	_fire_restore_btn = _button("Restore", "Forget the fire: the structure as it was", acts, _on_fire_restore)
 
@@ -645,10 +700,18 @@ func _sync_widgets() -> void:
 	var mid := str(_rec.get("model_id", ""))
 	var entry := ModelCatalog.find(mid)
 	_title_lbl.text = str(entry.get("label", mid)) if not entry.is_empty() else mid
-	var kind := "OSM replacement" if str(_rec.get("type", "")) == "osm" else "Placed prop"
+	# Human words on screen; the internal id is in the tooltip for bug reports.
+	var parts: PackedStringArray = ["Replaces an OSM building" if str(_rec.get("type", "")) == "osm" else "Placed"]
+	var cat := str(entry.get("category", ""))
+	if not cat.is_empty():
+		parts.append(UiText.from_id(cat).to_lower())
 	if bool(_rec.get("packed", false)):
-		kind += " · packed"
-	_sub_lbl.text = "%s · %s" % [kind, _prop_id]
+		parts.append("packed")
+	if not str(_rec.get("graph_item_id", "")).is_empty():
+		parts.append("on the graph")
+	_sub_lbl.text = " · ".join(parts)
+	_sub_lbl.tooltip_text = "Prop id %s" % _prop_id
+	_sub_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	for key in _spins:
 		(_spins[key] as SpinBox).set_value_no_signal(float(_tf.get(key, 0.0)))
 	_collision_check.set_pressed_no_signal(bool(_rec.get("collision_enabled", true)))
@@ -708,8 +771,9 @@ func _rebuild_dynamic_sections() -> void:
 		_button("Open node in graph", "Select this prop's node in the systems graph", _model_btns, _on_open_in_graph)
 	var spec := PlacedPropRuntime.packed_spec_for_record(_rec)
 	if not spec.is_empty() and str(_rec.get("stowed_in", "")).is_empty():
-		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "📦 Pack up",
+		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "Pack up",
 			"Pack into its shipping form, or deploy it", _model_btns, _on_pack_toggled)
+		_pack_btn.icon = UiIcons.icon("package", 14)
 
 
 ## User-imported models only: how SketchUp's invented gloss values are
@@ -748,11 +812,11 @@ func _refresh_packed_line() -> void:
 		return
 	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
 	if bool(_rec.get("packed", false)):
-		_packed_lbl.text = "📦 Contains: %s · %s%s" % [
+		_packed_lbl.text = "Contains %s · %s%s" % [
 			PlacedPropRuntime.packed_contents_label(_rec, get_tree().current_scene),
 			PackedSpec.format_mass(packed), est]
 	else:
-		_packed_lbl.text = "📦 Packs to %s · %s%s" % [
+		_packed_lbl.text = "Packs to %s · %s%s" % [
 			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
 
 
@@ -1014,8 +1078,20 @@ func _update_gizmo_drag(r: Dictionary) -> void:
 	_tf["x"] = float(tf0["x"]) + delta.x
 	_tf["z"] = float(tf0["z"]) + delta.z
 	_tf["y_offset"] = float(tf0["y_offset"]) + delta.y
+	var row_hint := ""
+	if str(_rec.get("model_id", "")) == PvArrayBuilder.MODEL_ID and not snap:
+		_resolve_main()
+		var res := PlacedPropService.pv_snap(_main, _rec.get("pv_array_spec", {}),
+			float(_tf["x"]), float(_tf["z"]), float(_tf["yaw"]), _prop_id,
+			PlacedPropService.pv_array_key(_main, str(_rec.get("graph_item_id", ""))))
+		if bool(res.get("snapped", false)):
+			_tf["x"] = float(res["x"])
+			_tf["z"] = float(res["z"])
+			_tf["yaw"] = float(res["yaw"])
+			row_hint = "  · snapped %s" % ("into the row" if str(res.get("kind", "")) == "row" else "a row " + str(res.get("kind", "")))
+		_pv_guides = PlacedPropService.draw_snap_guides(_pv_guides, _main, _main, res)
 	_push_transform(false)
-	_hint("Move %.2f m  (Shift snaps to %.2f m)" % [delta.length(), SNAP_M])
+	_hint("Move %.2f m  (Shift snaps to %.2f m · Alt moves freely)%s" % [delta.length(), SNAP_M, row_hint])
 
 
 func _end_drag(commit: bool) -> void:
@@ -1027,6 +1103,8 @@ func _end_drag(commit: bool) -> void:
 	var prop := _find_prop_node()
 	if prop != null and prop.has_method("set_move_highlight"):
 		prop.call("set_move_highlight", false)
+	if _pv_guides != null and is_instance_valid(_pv_guides):
+		_pv_guides.visible = false
 	if commit:
 		_flush_transform()
 	else:
@@ -1523,7 +1601,7 @@ func _on_crew_breakdown() -> void:
 			sgv.call("_show_toast", "Chore board is full — clear some chores first")
 		return
 	if sgv.has_method("notify_crew_queued"):
-		sgv.call("notify_crew_queued", site, "👷 Breakdown queued — %d phases" % rows.size())
+		sgv.call("notify_crew_queued", site, "👷 Breakdown queued — %s" % UiText.count(rows.size(), "phase"))
 
 
 func _on_crew_rebuild() -> void:

@@ -404,6 +404,10 @@ func enter_snowglobe() -> void:
 	var graph := ServiceLocator.graph()
 	var graph_open := graph != null and is_instance_valid(graph) \
 			and (graph as CanvasItem).visible
+	# Entered from the Globe lens: open on the lens's own view (no jump).
+	var orbit: Dictionary = {}
+	if graph_open and graph.has_method("globe_orbit_state"):
+		orbit = graph.call("globe_orbit_state")
 	if graph_open and graph.has_method("close_graph_view"):
 		graph.call("close_graph_view")
 		_return_to_graph_after_globe = true
@@ -416,7 +420,7 @@ func enter_snowglobe() -> void:
 		_snowglobe = SoiSnowglobeScript.new()
 		_snowglobe.name = "SoiSnowglobeCamera"
 		add_child(_snowglobe)
-	_snowglobe.enter(self, _loader)
+	_snowglobe.enter(self, _loader, orbit)
 	snowglobe_active = true
 	_sync_process()
 	set_clip_enabled(true)
@@ -482,6 +486,10 @@ func _finalize_snowglobe_exit() -> void:
 			# Deferred: the snowglobe's own exit (camera pop, modal release)
 			# is still unwinding on this stack.
 			graph.call_deferred("open_graph_view")
+			# ...and the Globe lens takes the view the player orbited to.
+			if _snowglobe != null and _snowglobe.has_method("orbit_state") \
+					and graph.has_method("apply_globe_orbit_state"):
+				graph.call_deferred("apply_globe_orbit_state", _snowglobe.call("orbit_state"))
 
 
 func set_clip_enabled(on: bool) -> void:

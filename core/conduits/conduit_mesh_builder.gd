@@ -340,14 +340,23 @@ static func _build_dashed_tube_mesh(samples: PackedVector3Array, radius: float,
 		return _build_tube_mesh(samples, radius, radial_segments)
 	var period := dash_m + gap_m
 	var at := 0.0
+	# Every dash into ONE surface: a surface per dash passed Godot's
+	# 256-surface cap on any run longer than ~256 periods (a 190 m conceptual
+	# run drawn from the Globe printed 197 add_surface errors).
+	var st := SurfaceTool.new()
+	var any := false
 	while at < total - 0.01:
 		var dash_end := minf(at + dash_m, total)
 		var span := _slice_polyline(samples, at, dash_end)
 		if span.size() >= 2:
-			_append_tube_surface(mesh, span, radius, radial_segments)
+			var part := _build_tube_mesh(span, radius, radial_segments)
+			for si: int in part.get_surface_count():
+				st.append_from(part, si, Transform3D.IDENTITY)
+				any = true
 		at += period
-	if mesh.get_surface_count() == 0:
+	if not any:
 		return _build_tube_mesh(samples, radius, radial_segments)
+	st.commit(mesh)
 	return mesh
 
 
@@ -383,14 +392,6 @@ static func _slice_polyline(samples: PackedVector3Array, d0: float,
 			break
 		walked = s1
 	return out
-
-
-static func _append_tube_surface(mesh: ArrayMesh, path: PackedVector3Array,
-		radius: float, radial_segments: int) -> void:
-	var part := _build_tube_mesh(path, radius, radial_segments)
-	for si: int in part.get_surface_count():
-		var arrs := part.surface_get_arrays(si)
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrs)
 
 
 ## Public tube over an arbitrary world-space path (used for elbow-collar sleeves

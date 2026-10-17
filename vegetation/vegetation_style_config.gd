@@ -67,6 +67,14 @@ static func defaults() -> Dictionary:
 		"deciduous_trunk_diameter_cm": 55.0,
 		"deciduous_crown_base_pct": 32.0,
 		"deciduous_archetype": "round",
+		# "sprays" = leaf sprays on the twigs (VegBroadleafBuilder, 2026-10-15);
+		# "shells" = the older lumpy leaf-shell crowns.
+		"deciduous_leaf_builder": "sprays",
+		# "spray" = needle sprays (VegConiferBuilder); "whorl" = the older
+		# whorl cards (the only builder the fur sliders apply to).
+		"pine_builder": "spray",
+		# Distinct trees per species (VegetationRuntime.KEY_TREE_VARIANTS).
+		"tree_variants": 3,
 		"deciduous_variant_seed": 0.0,
 		"deciduous_branchiness": 0.55,
 		"deciduous_crookedness": 0.45,

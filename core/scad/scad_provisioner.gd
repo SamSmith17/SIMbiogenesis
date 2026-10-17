@@ -226,20 +226,10 @@ func _extract_zip(archive_path: String, dest_dir: String) -> bool:
 
 ## An archive entry path is safe when it is relative and contains no parent-dir
 ## (`..`) segment and no absolute/drive root — the two ways a crafted zip walks
-## out of the extraction directory. Static so scad_selftest can exercise it offline.
+## out of the extraction directory. Static so scad_selftest can exercise it
+## offline; the rule itself is SafeZip's, shared with asset packs.
 static func _entry_path_is_safe(entry: String) -> bool:
-	if entry.is_empty():
-		return false
-	# Absolute POSIX path or Windows drive/UNC root.
-	if entry.begins_with("/") or entry.begins_with("\\"):
-		return false
-	if entry.length() >= 2 and entry[1] == ":":
-		return false
-	var norm := entry.replace("\\", "/")
-	for seg in norm.split("/", false):
-		if seg == "..":
-			return false
-	return true
+	return SafeZip.entry_is_safe(entry)
 
 
 # ---------------------------------------------------------------------------

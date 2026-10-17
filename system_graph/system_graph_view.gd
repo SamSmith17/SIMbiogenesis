@@ -97,6 +97,18 @@ var _mode := "build"   # "build" | "test"
 var _solar_ui: Control = null
 var _graph_dashboard: GraphDashboardPanel = null
 var _view_menu: MenuButton = null
+## Show ▾ — show-only views by domain (GraphDomainFilter). Hides nodes and
+## wires without removing them; saved with the graph.
+var _show_menu: MenuButton = null
+var _domain_shown: Dictionary = {}
+var _domain_unwired := true
+const SHOW_ALL := 400
+const SHOW_POWER := 401
+const SHOW_WATER := 402
+const SHOW_FOOD := 403
+const SHOW_FUEL := 404
+const SHOW_DOMAIN_BASE := 410   # + index into GraphDomainFilter.DOMAINS
+const SHOW_UNWIRED := 430
 const VIEW_LEGEND := 100
 const VIEW_HISTORY := 101
 const VIEW_HINTS := 102
@@ -108,6 +120,21 @@ const WIRE_STYLE_ROUNDED := 301
 const WIRE_STYLE_METRO := 302
 const WIRE_STYLE_APPLY_ALL := 303
 var _wire_style_menu: MenuButton = null
+var _share_menu: MenuButton = null
+var _topbar_review_btn: Button = null
+var _topbar_challenge_btn: Button = null
+var _topbar_bootcamp_btn: Button = null
+## Measured top-bar fit: 0 = everything labelled; higher levels drop labels to
+## icons (lens chips, then the menus, then the rest) until the bar fits.
+var _topbar_level := 0
+var _topbar_bar: Control = null
+var _topbar_hbox: HBoxContainer = null
+var _topbar_fit_queued := false
+## The lens's own controls (Designate, Slice, Globe radius, Hydro Lab, Site
+## Plan's Radial / Array / R) live in ONE row of the lens strip on the canvas,
+## not in the top bar: the bar then has the same clusters and the same labels
+## in every lens (Site Plan's tool row used to push every label off the bar).
+var _lens_slot: HBoxContainer = null
 
 ## When true, PBI (Planetary Basic Income) nodes are pinned to a fixed
 ## screen-space bar along the top of the canvas instead of floating in graph
@@ -215,8 +242,15 @@ const COMBINE_SERIES := 4
 const COMBINE_PARALLEL := 5
 const COMBINE_CTRL_PICKER := 8
 const COMBINE_EXPLODE := 7
+const COMBINE_GRID := 9
+const LAYOUT_PV_SNAP := 950
 const LAYOUT_ARRANGE := 6
 const LAYOUT_PLACEHOLDER := 9
+const LAYOUT_TIDY := 10
+const LAYOUT_LIVE := 11
+const LAYOUT_PIN := 12
+const LAYOUT_UNPIN := 13
+const LAYOUT_SETTINGS := 14
 var _ctrl_picker_dialog: AcceptDialog = null
 var _ctrl_picker_list: ItemList = null
 var _ctrl_picker_array_id: String = ""
@@ -351,6 +385,7 @@ const VIEW_MODE_DESIRE_RESET := 158
 ## Site Plan + Elevation on the Globe's WORLD PIN layer (the 3D anchors drive
 ## the 2D positions; off = the legacy chip / port overlay).
 const VIEW_MODE_WORLD_PINS := 159
+const VIEW_MODE_DISPLAY_SETTINGS := 190
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -435,6 +470,14 @@ var _checking_voltage: bool = false
 var _dc_analysis: Dictionary = {}
 var _dc_flat_conns: Array = []
 var _dc_throttle_acc: float = 0.0
+## SolarUI.sim_tick_serial at the last card sync (see _tick_dc_throttle).
+var _dc_sync_serial: int = -1
+## PV source id → {w: watts it is actually delivering (its share of its
+## controller's delivered power), curtail: why it is held back ("" /
+## battery_full / battery_topping / held_back / clipping)}, written by
+## _dc_throttle_pass and read by
+## _sync_graph_energy_from_solar so the panel cards sum to the controller.
+var _pv_live_w: Dictionary = {}
 ## Latches so the non-destructive advisories fire once per occurrence rather
 ## than on every fault pass / throttle tick.
 var _pv_reverse_notified: bool = false
@@ -1048,6 +1091,15 @@ func _notification(what: int) -> void:
 			Control.MOUSE_FILTER_STOP if visible
 			else Control.MOUSE_FILTER_IGNORE
 		)
+		# The graph covers the screen with its own dashboard: the first-person
+		# HUD hides under it (the scoreboard used to keep drawing beneath).
+		# Toasts stay (they are how the graph reports), clear of its sidebars.
+		if visible:
+			HudLayout.claim("system_graph", {
+				"inset": {"left": SIDEBAR_L_W, "right": SIDEBAR_R_W, "top": 56.0},
+				"hide": ["top_left", "top_right", "top_center", "center_prompt"]})
+		else:
+			HudLayout.release("system_graph")
 		if visible:
 			# The full-screen globe and the graph cannot share the root
 			# viewport (this branch just turned its 3D off) — opening the graph
@@ -1357,6 +1409,9 @@ func begin_tutorial_sandbox() -> bool:
 	_autosave_suspended = true
 	if _bridge != null and _bridge.has_method("set_enabled"):
 		_bridge.call("set_enabled", false)
+	# The player's selection must not follow them in: the inspector kept
+	# showing their real EG4 controller over the level's battery.
+	select_item_by_id("")
 	tutorial_clear_graph()
 	return true
 
@@ -1400,6 +1455,9 @@ func end_tutorial_sandbox() -> void:
 	_sandbox_pre_state = {}
 	if _bridge != null and _bridge.has_method("set_enabled"):
 		_bridge.call("set_enabled", true)
+	# …and the sandbox's selection must not follow them out (the inspector kept
+	# a tutorial battery that does not exist in the real graph).
+	select_item_by_id("")
 	if not pre.is_empty():
 		apply_save_state(pre)
 	_autosave_suspended = false
@@ -1412,9 +1470,58 @@ func is_sandbox_active() -> bool:
 
 ## Reset the canvas to an empty graph (sandbox only — levels re-seed on top).
 func tutorial_clear_graph() -> void:
-	apply_save_state({"graph": {"items": [], "connections": [], "scopes": {},
-		"definitions": {}}}, {"sandbox": true})
+	# Keep the player's camera: an empty save state restored pan 0 / zoom 1, so
+	# the view jumped on every level change (tutorial_frame_if_needed re-frames
+	# only when the next level would not fit).
+	var keep := {}
+	if _graph_canvas != null:
+		var pan := _graph_canvas.get("_pan") as Vector2
+		keep = {"canvas_pan_x": pan.x, "canvas_pan_y": pan.y,
+			"canvas_zoom": float(_graph_canvas.get("_zoom"))}
+	var state := {"graph": {"items": [], "connections": [], "scopes": {}, "definitions": {}}}
+	state.merge(keep)
+	apply_save_state(state, {"sandbox": true})
 	_dc_analysis = {}
+
+
+## Bootcamp level change: keep the camera where the player had it, and frame
+## the level only when its content (where Tidy is taking it, if Tidy is
+## running) would fall outside the canvas — under the level card included.
+## Never zooms in past 1× to do it.
+func tutorial_frame_if_needed() -> void:
+	if _graph_canvas == null or model == null:
+		return
+	var c := _graph_canvas as Control
+	if c.size.x < 32.0 or c.size.y < 32.0:
+		return
+	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
+	if items.is_empty():
+		return
+	var target: Dictionary = _layout_driver.animation_target() if _layout_driver != null else {}
+	if not target.is_empty():
+		var moved: Array = []
+		for it in items:
+			var d: Dictionary = (it as Dictionary).duplicate()
+			var to: Variant = target.get(str(d.get("id", "")))
+			if to is Vector2:
+				d["x"] = (to as Vector2).x
+				d["y"] = (to as Vector2).y
+			moved.append(d)
+		items = moved
+	var b := GraphLayout.content_bounds(items)
+	var zoom := float(c.get("_zoom"))
+	var pan := c.get("_pan") as Vector2
+	var shown := Rect2(c.size * 0.5 + pan + b.position * zoom, b.size * zoom)
+	# The level card sits over the top of the canvas.
+	var view := Rect2(Vector2(16.0, 110.0), c.size - Vector2(32.0, 126.0))
+	if view.encloses(shown):
+		return
+	var fit: Dictionary = GraphLayout.compute_fit_view(b, Vector2(c.size.x, c.size.y - 110.0))
+	var z := minf(float(fit.get("zoom", 1.0)), 1.0)
+	c.set("_zoom", clampf(z, GraphLayout.ZOOM_MIN, GraphLayout.ZOOM_MAX))
+	# Centre the content in the area under the card.
+	c.set("_pan", -b.get_center() * z + Vector2(0.0, 55.0))
+	c.queue_redraw()
 
 
 ## Spawn one level's seed items (+ optional pre-wires) into the sandbox graph.
@@ -1492,6 +1599,15 @@ func clear_tutorial_palette() -> void:
 func refresh_library_gating() -> void:
 	if _lib_panel != null and _lib_panel.has_method("refresh_gating"):
 		_lib_panel.call("refresh_gating")
+
+
+## Drop every education card: the one on screen, the ones queued behind it and
+## a fault card still waiting out its blast delay. Called on every bootcamp
+## level change and on exit, so nothing from one level opens over the next.
+func tutorial_reset_cards() -> void:
+	_cancel_pending_fault_card()
+	if _fault_card_modal != null and is_instance_valid(_fault_card_modal):
+		_fault_card_modal.dismiss_all()
 
 
 ## Present a tutorial brief/debrief through the shared fault-card modal.
@@ -1579,6 +1695,8 @@ func _build_layout() -> void:
 	gc.set_script(_CANVAS_SCRIPT)
 	add_child(gc)
 	_graph_canvas = gc
+	_apply_display_prefs()
+	_apply_pv_snap_prefs()
 	gc.set("resource_flow_engine", _resource_flow)
 	_build_lens_strip()
 	_init_spatial_edit()
@@ -1624,6 +1742,18 @@ func _build_layout() -> void:
 
 
 func _connect_canvas_signals(gc: Node) -> void:
+	if gc.has_signal("world_connect_requested") \
+			and not gc.is_connected("world_connect_requested", _on_world_connect_requested):
+		gc.connect("world_connect_requested", _on_world_connect_requested)
+	if gc.has_signal("connect_tool_cancelled") \
+			and not gc.is_connected("connect_tool_cancelled", _on_connect_tool_cancelled):
+		gc.connect("connect_tool_cancelled", _on_connect_tool_cancelled)
+	if gc.has_signal("world_route_edited") \
+			and not gc.is_connected("world_route_edited", _on_world_route_edited):
+		gc.connect("world_route_edited", _on_world_route_edited)
+	if gc.has_signal("world_place_requested") \
+			and not gc.is_connected("world_place_requested", _on_world_place_requested):
+		gc.connect("world_place_requested", _on_world_place_requested)
 	if gc.has_signal("item_selected"):
 		if not gc.is_connected("item_selected", _on_canvas_item_selected):
 			gc.connect("item_selected", _on_canvas_item_selected)
@@ -1645,6 +1775,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("layout_changed"):
 		if not gc.is_connected("layout_changed", _on_canvas_layout_changed):
 			gc.connect("layout_changed", _on_canvas_layout_changed)
+	if gc.has_signal("items_moved"):
+		if not gc.is_connected("items_moved", _on_canvas_items_moved):
+			gc.connect("items_moved", _on_canvas_items_moved)
 	if gc.has_signal("world_pin_moved"):
 		if not gc.is_connected("world_pin_moved", _on_world_pin_moved):
 			gc.connect("world_pin_moved", _on_world_pin_moved)
@@ -1668,6 +1801,15 @@ func _connect_canvas_signals(gc: Node) -> void:
 				_on_elevation_section_offset_changed):
 			gc.connect("elevation_section_offset_changed",
 					_on_elevation_section_offset_changed)
+
+
+## One undo step per freeform drag (history snapshots the model AFTER a change,
+## so pushing on release makes Ctrl+Z put the nodes back where they started).
+func _on_canvas_items_moved(_item_ids: Array) -> void:
+	if _history_suppress:
+		return
+	_push_history()
+	_update_undo_redo_btns()
 
 
 func _on_canvas_layout_changed() -> void:
@@ -1930,7 +2072,7 @@ func hide_all_placeholder_twins(hidden: bool) -> void:
 	if loader == null or not loader.has_method("set_placeholder_twins_hidden"):
 		return
 	var n := int(loader.call("set_placeholder_twins_hidden", hidden))
-	_show_toast(("Hid %d placeholder twin(s)" if hidden else "Showed %d placeholder twin(s)") % n)
+	_show_toast(("Hid %s" if hidden else "Showed %s") % UiText.count(n, "placeholder twin"))
 	if _graph_canvas != null:
 		_graph_canvas.queue_redraw()
 
@@ -2118,11 +2260,15 @@ func _build_topbar() -> Control:
 	hbox.add_theme_constant_override("separation", 5)
 	margin.add_child(hbox)
 
-	# ── LEFT: edit controls ────────────────────────────────────────────────
+	# ── LEFT: Edit · Structure · Play clusters ────────────────────────────
 	var left_grp := HBoxContainer.new()
-	left_grp.add_theme_constant_override("separation", 4)
+	left_grp.add_theme_constant_override("separation", 6)
 	left_grp.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	hbox.add_child(left_grp)
+	var edit_row := _topbar_cluster(left_grp, "Edit", "Undo, redo, reset the graph, review the system")
+	var struct_row := _topbar_cluster(left_grp, "Structure",
+		"Group nodes, lay the graph out, open and close super-nodes")
+	var play_row := _topbar_cluster(left_grp, "Play", "Challenges and the Solar Bootcamp")
 
 	_undo_btn = _make_topbar_btn("↶")
 	_redo_btn = _make_topbar_btn("↷")
@@ -2141,14 +2287,25 @@ func _build_topbar() -> Control:
 	var bootcamp_btn := _make_topbar_btn("🎓")
 	bootcamp_btn.tooltip_text = "Solar Bootcamp — learn the graph from the battery up"
 	bootcamp_btn.pressed.connect(_on_bootcamp_pressed)
-	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn, challenge_btn, bootcamp_btn]:
-		left_grp.add_child(b)
+	for b: Button in [_undo_btn, _redo_btn, reset_btn, sysrev_btn]:
+		edit_row.add_child(b)
+	for b: Button in [challenge_btn, bootcamp_btn]:
+		play_row.add_child(b)
+	_undo_btn.text = ""
+	UiIcons.apply(_undo_btn, "undo-2")
+	_redo_btn.text = ""
+	UiIcons.apply(_redo_btn, "redo-2")
+	# Labelled (they were a bare ◎ and 🎓); the fit folds them to their icons.
+	challenge_btn.text = "Challenges"
+	UiIcons.apply(challenge_btn, "target")
+	bootcamp_btn.text = "Bootcamp"
+	UiIcons.apply(bootcamp_btn, "graduation-cap")
+	_topbar_challenge_btn = challenge_btn
+	_topbar_bootcamp_btn = bootcamp_btn
+	sysrev_btn.text = "Review"
+	UiIcons.apply(sysrev_btn, "zap")
+	_topbar_review_btn = sysrev_btn
 	_update_undo_redo_btns()
-
-	var sep1 := VSeparator.new()
-	sep1.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
-	sep1.add_theme_constant_override("separation", 8)
-	left_grp.add_child(sep1)
 
 	# Combine ▾ — grouping / compound / wiring (layout lives in Layout ▾).
 	_combine_menu = _make_topbar_menu_btn("Combine ▾")
@@ -2164,18 +2321,38 @@ func _build_topbar() -> Control:
 	cp.add_item("Wire panels in Series", COMBINE_SERIES)
 	cp.add_item("Wire panels in Parallel", COMBINE_PARALLEL)
 	cp.add_item("Pick controller for array…", COMBINE_CTRL_PICKER)
+	cp.add_item("Arrange array as grid", COMBINE_GRID)
+	cp.set_item_tooltip(cp.get_item_index(COMBINE_GRID),
+		"Line the selected panels (or every panel feeding the selected controller) up "
+		+ "as a grid: one row per series string. Alt-drag a panel to move it without snapping.")
 	cp.id_pressed.connect(_on_combine_menu_id)
-	left_grp.add_child(_combine_menu)
+	struct_row.add_child(_combine_menu)
 
 	_layout_menu = _make_topbar_menu_btn("Layout ▾")
 	_layout_menu.tooltip_text = (
-			"Auto-arrange the active scope (and nested super-nodes) · "
-			+ "spawn a gray-box 3D placeholder for the selection")
+			"Tidy the graph (force-directed, top-to-bottom flow) · Live layout · "
+			+ "pin nodes · layout settings")
 	var lp := _layout_menu.get_popup()
-	lp.add_item("Arrange layout", LAYOUT_ARRANGE)
+	lp.add_item("Tidy layout", LAYOUT_TIDY)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_TIDY),
+		"Space every node out with no overlaps: sources on top, loads at the bottom (one undo step)")
+	lp.add_check_item("Live layout", LAYOUT_LIVE)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_LIVE),
+		"Keep the layout running: drag a node and the rest re-space around it")
+	lp.add_separator()
+	lp.add_item("Pin selected", LAYOUT_PIN)
+	lp.add_item("Unpin selected", LAYOUT_UNPIN)
+	lp.add_item("Layout settings…", LAYOUT_SETTINGS)
+	lp.add_check_item("Snap solar panels into grids", LAYOUT_PV_SNAP)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_PV_SNAP),
+		"Dragging a panel lines it up edge to edge with the panels around it (its own array first); "
+		+ "Tidy keeps each array as one grid, one row per series string. Alt drags freely.")
+	lp.set_item_checked(lp.get_item_index(LAYOUT_PV_SNAP), PvGridSnap.enabled())
+	lp.add_separator()
+	lp.add_item("Only remove overlaps", LAYOUT_ARRANGE)
 	lp.add_item("Spawn 3D placeholder", LAYOUT_PLACEHOLDER)
 	lp.id_pressed.connect(_on_layout_menu_id)
-	left_grp.add_child(_layout_menu)
+	struct_row.add_child(_layout_menu)
 
 	_enter_btn = _make_topbar_btn("▸ Expand")
 	_back_btn  = _make_topbar_btn("◂ Collapse")
@@ -2183,11 +2360,8 @@ func _build_topbar() -> Control:
 	_back_btn.tooltip_text = "Collapse back to the parent super-node (Esc)"
 	_enter_btn.pressed.connect(_on_enter_selected_compound)
 	_back_btn.pressed.connect(_on_back_scope_pressed)
-	var sep_nav := VSeparator.new()
-	sep_nav.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
-	left_grp.add_child(sep_nav)
-	left_grp.add_child(_enter_btn)
-	left_grp.add_child(_back_btn)
+	struct_row.add_child(_enter_btn)
+	struct_row.add_child(_back_btn)
 	_update_special_group_buttons()
 
 	# ── CENTER: flexible fill ──────────────────────────────────────────────
@@ -2215,10 +2389,10 @@ func _build_topbar() -> Control:
 			+ "Interact with the map pin (O) for the full-screen globe and radius")
 	right_grp.add_child(_soi_chip)
 
-	var sep2 := VSeparator.new()
-	sep2.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
-	sep2.add_theme_constant_override("separation", 8)
-	right_grp.add_child(sep2)
+	var lens_row := _topbar_cluster(right_grp, "Lens",
+		"Freeform, Site Plan, Elevation, Globe — the same graph four ways")
+	var display_row := _topbar_cluster(right_grp, "Display",
+		"How the graph is drawn, wire style, extras, sharing")
 
 	# ── Graph lens: Freeform / Site Plan / Elevation / Globe ──
 	# The Hydro Lab is deliberately NOT a chip: it is item-bound (opened from a
@@ -2253,7 +2427,7 @@ func _build_topbar() -> Control:
 		b.tooltip_text = str(pair[2]) + "\nTime keeps running in every lens — use the timeline."
 		_mode_chip_row.add_child(b)
 		_mode_chip_btns[str(pair[0])] = b
-	right_grp.add_child(seg)
+	lens_row.add_child(seg)
 
 	_designate_menu = _make_topbar_menu_btn("Designate ▾")
 	_designate_menu.tooltip_text = (
@@ -2265,7 +2439,8 @@ func _build_topbar() -> Control:
 	dp.add_radio_check_item("Crop (field)", DESIGNATE_CROP)
 	dp.id_pressed.connect(_on_designate_menu_id)
 	dp.set_item_checked(dp.get_item_index(DESIGNATE_OFF), true)
-	right_grp.add_child(_designate_menu)
+	_designate_menu.visible = false
+	_lens_slot.add_child(_designate_menu)
 
 	# Mode SWITCHING lives only in the chip strip above — this menu holds the
 	# per-view extras (duplicating the modes here made three different ways to
@@ -2286,6 +2461,8 @@ func _build_topbar() -> Control:
 	# which search the root + submenus for the popup holding an id.
 	var vmp := _view_mode_menu.get_popup()
 	_view_mode_subpopups.clear()
+	vmp.add_item("Display settings…", VIEW_MODE_DISPLAY_SETTINGS)
+	vmp.add_separator()
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
 	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
@@ -2338,7 +2515,7 @@ func _build_topbar() -> Control:
 	_vm_set_checked(VIEW_MODE_ELEV_PROJ_PIPES, false)
 	_vm_set_checked(VIEW_MODE_SITE_PORTS, true)
 	_vm_set_checked(VIEW_MODE_WORLD_PINS, true)
-	right_grp.add_child(_view_mode_menu)
+	display_row.add_child(_view_mode_menu)
 
 	_elev_slice_row = HBoxContainer.new()
 	_elev_slice_row.add_theme_constant_override("separation", 6)
@@ -2362,9 +2539,9 @@ func _build_topbar() -> Control:
 	_elev_slice_lbl.custom_minimum_size = Vector2(44, 0)
 	_elev_slice_lbl.add_theme_font_size_override("font_size", 11)
 	_elev_slice_row.add_child(_elev_slice_lbl)
-	right_grp.add_child(_elev_slice_row)
+	_lens_slot.add_child(_elev_slice_row)
 
-	_build_globe_row(right_grp)
+	_build_globe_row(_lens_slot)
 
 	_hydro_section_lbl = Label.new()
 	_hydro_section_lbl.visible = false
@@ -2374,7 +2551,7 @@ func _build_topbar() -> Control:
 	_hydro_section_lbl.tooltip_text = (
 			"Hydro Section: live stage-discharge ΣQ and PE/generation from "
 			+ "pond level + culvert inverts (Elevation view)")
-	right_grp.add_child(_hydro_section_lbl)
+	_lens_slot.add_child(_hydro_section_lbl)
 
 	_elev_hydro_lab_btn = Button.new()
 	_elev_hydro_lab_btn.text = "Hydro Lab…"
@@ -2385,7 +2562,7 @@ func _build_topbar() -> Control:
 			+ "(Elevation stays the primary hydro CT).")
 	_apply_topbar_btn_style(_elev_hydro_lab_btn)
 	_elev_hydro_lab_btn.pressed.connect(_on_elev_open_hydro_lab_pressed)
-	right_grp.add_child(_elev_hydro_lab_btn)
+	_lens_slot.add_child(_elev_hydro_lab_btn)
 
 	# Site Plan camp tools — Radial / Array / working radius (visible dock).
 	_site_tool_row = HBoxContainer.new()
@@ -2436,12 +2613,7 @@ func _build_topbar() -> Control:
 	_site_radius_lbl.custom_minimum_size = Vector2(40, 0)
 	_site_radius_lbl.add_theme_font_size_override("font_size", 11)
 	_site_tool_row.add_child(_site_radius_lbl)
-	right_grp.add_child(_site_tool_row)
-
-	var sep3 := VSeparator.new()
-	sep3.add_theme_color_override("color", Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.38))
-	sep3.add_theme_constant_override("separation", 8)
-	right_grp.add_child(sep3)
+	_lens_slot.add_child(_site_tool_row)
 
 	# ── Wire style ▾ — global override (Bezier / Rounded / Metro) + Apply to all ─
 	_wire_style_menu = _make_topbar_menu_btn("Wire ▾")
@@ -2456,7 +2628,7 @@ func _build_topbar() -> Control:
 	wsp.add_separator()
 	wsp.add_item("Apply to all connections", WIRE_STYLE_APPLY_ALL)
 	wsp.id_pressed.connect(_on_wire_style_menu_id)
-	right_grp.add_child(_wire_style_menu)
+	display_row.add_child(_wire_style_menu)
 	_sync_wire_style_menu_checks()
 
 	# View ▾ — Legend / History / Hints consolidated (was three buttons).
@@ -2471,7 +2643,28 @@ func _build_topbar() -> Control:
 	vp.add_separator()
 	vp.add_item("Hints & shortcuts", VIEW_HINTS)
 	vp.id_pressed.connect(_on_view_menu_id)
-	right_grp.add_child(_view_menu)
+	display_row.add_child(_view_menu)
+
+	_show_menu = _make_topbar_menu_btn("Show ▾")
+	var showp := _show_menu.get_popup()
+	showp.hide_on_checkable_item_selection = false
+	showp.add_radio_check_item("Everything", SHOW_ALL)
+	showp.add_radio_check_item("Power only", SHOW_POWER)
+	showp.add_radio_check_item("Water only", SHOW_WATER)
+	showp.add_radio_check_item("Food & waste only", SHOW_FOOD)
+	showp.add_radio_check_item("Fuel & heat only", SHOW_FUEL)
+	showp.add_separator("Custom")
+	for i in GraphDomainFilter.DOMAINS.size():
+		var d: String = GraphDomainFilter.DOMAINS[i]
+		showp.add_check_item(str(GraphDomainFilter.LABELS[d]), SHOW_DOMAIN_BASE + i)
+	showp.add_separator()
+	showp.add_check_item("Include nodes with no wire of that kind", SHOW_UNWIRED)
+	showp.set_item_tooltip(showp.get_item_index(SHOW_UNWIRED),
+		"Off: a node shows only if it has a wire of the shown kind.\n"
+		+ "On: having a port of that kind is enough (a battery you just dropped stays visible).")
+	showp.id_pressed.connect(_on_show_menu_id)
+	display_row.add_child(_show_menu)
+	_sync_show_menu()
 
 	_osm_solar_btn = _make_topbar_btn("☀ Add OSM Solar")
 	_osm_solar_btn.tooltip_text = (
@@ -2480,37 +2673,78 @@ func _build_topbar() -> Control:
 	_osm_solar_btn.visible = false
 	_osm_solar_btn.pressed.connect(_on_add_soi_osm_solar_pressed)
 	right_grp.add_child(_osm_solar_btn)
+	right_grp.move_child(_osm_solar_btn, 0)
 
-	var graph_menu := _make_topbar_menu_btn("Graph ▾")
-	graph_menu.tooltip_text = (
-			"Per-map autosave · Export / import graph JSON to share layouts "
-			+ "between sites. Game saves (full world) stay in SaveLoadUI.")
-	var gp := graph_menu.get_popup()
-	gp.add_item("Export graph…", 1)
-	gp.add_item("Import graph…", 2)
-	gp.add_separator()
-	gp.add_item("Reset this map’s graph", 3)
-	gp.id_pressed.connect(_on_graph_menu_id)
-	right_grp.add_child(graph_menu)
+	# Share ▾ — graph JSON and the portable .esim site package in ONE menu
+	# (they were two neighbouring menus, "Graph ▾" and "Site ▾", that did the
+	# same kind of thing). Graph ids < 10, site ids ≥ 10, routed as before.
+	_share_menu = _make_topbar_menu_btn("Share ▾")
+	_share_menu.tooltip_text = (
+			"Export / import the graph (per-map autosave stays automatic) or a "
+			+ "portable .esim site package (graph + SoI + props + styles); preview "
+			+ "a friend's design as a ghost, then apply or discard. Game saves "
+			+ "(the whole world) live in the World panel.")
+	var shp := _share_menu.get_popup()
+	shp.add_separator("Graph")
+	shp.add_item("Export graph…", 1)
+	shp.add_item("Import graph…", 2)
+	shp.add_item("Reset this map’s graph", 3)
+	shp.add_separator("Site package")
+	shp.add_item("Export site (.esim)…", 10)
+	shp.add_item("Import site (.esim)…", 11)
+	shp.add_item("Preview site as ghost…", 12)
+	shp.add_item("Clear ghost preview", 13)
+	shp.add_item("Apply ghost graph (replace mine)", 14)
+	shp.add_separator("Share code")
+	shp.add_item("Copy share code (graph + SoI)", 15)
+	shp.add_item("Paste share code…", 16)
+	shp.id_pressed.connect(func(id: int) -> void:
+		if id < 10:
+			_on_graph_menu_id(id)
+		else:
+			_on_site_menu_id(id))
+	display_row.add_child(_share_menu)
 
-	var site_menu := _make_topbar_menu_btn("Site ▾")
-	site_menu.tooltip_text = (
-			"Share a portable .esim site package (graph + SoI + props + styles). "
-			+ "Preview a friend’s design as a ghost overlay, then apply or discard.")
-	var sp := site_menu.get_popup()
-	sp.add_item("Export site (.esim)…", 10)
-	sp.add_item("Import site (.esim)…", 11)
-	sp.add_separator()
-	sp.add_item("Preview site as ghost…", 12)
-	sp.add_item("Clear ghost preview", 13)
-	sp.add_item("Apply ghost graph (replace mine)", 14)
-	sp.add_separator()
-	sp.add_item("Copy share code (graph + SoI)", 15)
-	sp.add_item("Paste share code…", 16)
-	sp.id_pressed.connect(_on_site_menu_id)
-	right_grp.add_child(site_menu)
-
+	_setup_topbar_fit(bar, hbox)
 	return bar
+
+
+## A captioned cluster of top-bar controls: a quiet frame with the cluster's
+## name in small caps above its buttons. Returns the row to fill.
+func _topbar_cluster(parent: Control, title: String, tip: String) -> HBoxContainer:
+	var pc := PanelContainer.new()
+	pc.name = "Cluster" + title
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.072, 0.098, 0.165, 1.0)
+	sb.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.30)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 4.0
+	sb.content_margin_right = 4.0
+	sb.content_margin_top = 0.0
+	sb.content_margin_bottom = 3.0
+	pc.add_theme_stylebox_override("panel", sb)
+	pc.tooltip_text = tip
+	pc.mouse_filter = Control.MOUSE_FILTER_PASS
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 0)
+	pc.add_child(v)
+	var cap := Label.new()
+	cap.text = title.to_upper()
+	cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cap.add_theme_font_override("font", UITheme.font("semibold"))
+	cap.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	cap.add_theme_color_override("font_color", Color(C_TEXT_M.r, C_TEXT_M.g, C_TEXT_M.b, 0.75))
+	cap.add_theme_constant_override("line_spacing", 0)
+	v.add_child(cap)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	v.add_child(row)
+	parent.add_child(pc)
+	return row
+
+
 
 
 func _on_view_menu_id(id: int) -> void:
@@ -2588,14 +2822,14 @@ func _sync_wire_style_menu_checks() -> void:
 	wsp.set_item_checked(wsp.get_item_index(WIRE_STYLE_ROUNDED), ov == "orthogonal")
 	wsp.set_item_checked(wsp.get_item_index(WIRE_STYLE_METRO), ov == "metro")
 	if ov.is_empty():
-		_wire_style_menu.text = "Wire ▾"
+		_topbar_set_text(_wire_style_menu, "Wire ▾")
 	else:
 		var lbl := "Bezier"
 		if ov == "orthogonal":
 			lbl = "Rounded"
 		elif ov == "metro":
 			lbl = "Metro"
-		_wire_style_menu.text = "Wire: %s ▾" % lbl
+		_topbar_set_text(_wire_style_menu, "Wire: %s ▾" % lbl)
 
 
 # ── Physical-view (Site/Elevation) orbit camera persistence ──────────────────
@@ -2625,6 +2859,123 @@ func _make_topbar_btn(label: String) -> Button:
 	b.focus_mode = Control.FOCUS_NONE
 	_apply_topbar_btn_style(b)
 	return b
+
+
+## Every label the fit may drop, with the icon that stands in for it:
+## [control, icon, level at which its label goes].
+func _topbar_compactables() -> Array:
+	var out: Array = []
+	for mode_id in _mode_chip_btns:
+		out.append([_mode_chip_btns[mode_id], "", 1])
+	out.append([_combine_menu, "plug", 2])
+	out.append([_layout_menu, "move", 2])
+	out.append([_designate_menu, "target", 2])
+	out.append([_view_mode_menu, "sliders-horizontal", 2])
+	out.append([_wire_style_menu, "workflow", 2])
+	out.append([_view_menu, "eye", 2])
+	out.append([_show_menu, "layers", 2])
+	out.append([_share_menu, "external-link", 2])
+	out.append([_topbar_challenge_btn, "target", 2])
+	out.append([_topbar_bootcamp_btn, "graduation-cap", 2])
+	out.append([_topbar_review_btn, "zap", 3])
+	out.append([_enter_btn, "chevron-right", 3])
+	out.append([_back_btn, "chevron-left", 3])
+	return out
+
+
+func _setup_topbar_fit(bar: Control, hbox: HBoxContainer) -> void:
+	_topbar_bar = bar
+	_topbar_hbox = hbox
+	for e in _topbar_compactables():
+		var c: Button = e[0]
+		if c == null:
+			continue
+		c.set_meta("full_text", c.text)
+		if not str(e[1]).is_empty():
+			UiIcons.apply(c, str(e[1]))
+	bar.resized.connect(_queue_topbar_fit)
+	hbox.minimum_size_changed.connect(_queue_topbar_fit)
+	_queue_topbar_fit()
+
+
+## Set a top-bar control's label through the fit: the full text is kept, and
+## shown only while the bar is roomy enough for it.
+func _topbar_set_text(c: Button, txt: String) -> void:
+	if c == null:
+		return
+	c.set_meta("full_text", txt)
+	if int(c.get_meta("compact_at", 99)) > _topbar_level:
+		c.text = txt
+
+
+func _queue_topbar_fit() -> void:
+	if _topbar_fit_queued:
+		return
+	_topbar_fit_queued = true
+	call_deferred("_fit_topbar")
+
+
+## The graph bar overflowed the screen in Site Plan (its tool row, slice and
+## globe rows join the right group) and at UI scale 125 %: labels go, least
+## needed first, until the measured row fits. Change-gated on the level.
+func _fit_topbar() -> void:
+	_topbar_fit_queued = false
+	if _topbar_bar == null or _topbar_hbox == null or _topbar_bar.size.x <= 1.0:
+		return
+	var avail := _topbar_bar.size.x - 16.0
+	# MEASURED, not tried: what each level saves is the width of the labels
+	# it drops (+ the icon gap, + the SoI chip at level 3). Setting every
+	# button's text once per trial level on every pass crashed the engine in
+	# Button.set_text; the buttons are now written only when the level moves.
+	var saves := [0.0, 0.0, 0.0, 0.0]
+	for e in _topbar_compactables():
+		var c: Button = e[0]
+		if c == null or not is_instance_valid(c) or not c.is_visible_in_tree():
+			continue
+		var full := str(c.get_meta("full_text", c.text))
+		if full.is_empty():
+			continue
+		var f := c.get_theme_font("font")
+		var w := 0.0
+		if f != null:
+			w = f.get_string_size(full, HORIZONTAL_ALIGNMENT_LEFT, -1, c.get_theme_font_size("font_size")).x
+		if c.icon != null:
+			w += float(c.get_theme_constant("h_separation"))
+		for l in range(int(e[2]), 4):
+			saves[l] = float(saves[l]) + w
+	if _soi_chip != null and is_instance_valid(_soi_chip):
+		saves[3] = float(saves[3]) + _soi_chip.get_combined_minimum_size().x
+	var full_w := _topbar_hbox.get_combined_minimum_size().x + float(saves[_topbar_level])
+	var lvl := 0
+	while lvl < 3 and full_w - float(saves[lvl]) > avail:
+		lvl += 1
+	if lvl == _topbar_level:
+		return
+	_topbar_level = lvl
+	_apply_topbar_level(_topbar_level)
+	if _soi_chip != null and is_instance_valid(_soi_chip):
+		_soi_chip.visible = _topbar_level < 3
+
+
+func _apply_topbar_level(lvl: int) -> void:
+	for e in _topbar_compactables():
+		var c: Button = e[0]
+		if c == null or not is_instance_valid(c):
+			continue
+		var at := int(e[2])
+		c.set_meta("compact_at", at)
+		var full := str(c.get_meta("full_text", c.text))
+		var want := "" if lvl >= at else full
+		if c.text != want:
+			c.text = want
+		# The label lives on in the tooltip while it is hidden.
+		var base := str(c.get_meta("base_tip", c.tooltip_text))
+		c.set_meta("base_tip", base)
+		var tip := base
+		if lvl >= at and not full.is_empty():
+			tip = full.trim_suffix(" ▾") + (" — " + base if not base.is_empty() else "")
+		if c.tooltip_text != tip:
+			c.tooltip_text = tip
 
 
 ## Topbar dropdown (MenuButton shares Button's stylebox slots).
@@ -2705,6 +3056,9 @@ func _desire_channel_label() -> String:
 
 
 func _on_view_mode_menu_id(id: int) -> void:
+	if id == VIEW_MODE_DISPLAY_SETTINGS:
+		_open_display_settings()
+		return
 	match id:
 		VIEW_MODE_FREEFORM:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
@@ -2925,11 +3279,11 @@ func _set_site_designate_mode(mode: String) -> void:
 		dp.set_item_checked(dp.get_item_index(DESIGNATE_CROP), mode == "crop")
 		match mode:
 			"catchment":
-				_designate_menu.text = "Designate · Roof ▾"
+				_topbar_set_text(_designate_menu, "Designate · Roof ▾")
 			"crop":
-				_designate_menu.text = "Designate · Crop ▾"
+				_topbar_set_text(_designate_menu, "Designate · Crop ▾")
 			_:
-				_designate_menu.text = "Designate ▾"
+				_topbar_set_text(_designate_menu, "Designate ▾")
 
 
 func _on_site_background_clicked(screen_pos: Vector2) -> void:
@@ -3200,6 +3554,8 @@ func _sync_site_tool_row() -> void:
 					bool(_graph_canvas.get("radial_layout_mode")))
 	if _elev_hydro_lab_btn != null:
 		_elev_hydro_lab_btn.visible = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
+	if _designate_menu != null:
+		_designate_menu.visible = on
 
 
 func _on_site_radial_toggled(pressed: bool) -> void:
@@ -4752,6 +5108,13 @@ func _build_lens_strip() -> void:
 	_lens_strip_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_lens_strip_hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	col.add_child(_lens_strip_hint)
+	# The lens's own controls (filled by _build_topbar). The strip ignores the
+	# mouse so the canvas under it stays live; these controls take it.
+	_lens_slot = HBoxContainer.new()
+	_lens_slot.name = "LensControls"
+	_lens_slot.add_theme_constant_override("separation", 6)
+	_lens_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(_lens_slot)
 	add_child(_lens_strip)
 	_soil_legend = GraphSoilLegend.new()
 	_soil_legend.name = "SoilLegend"
@@ -4879,6 +5242,7 @@ func _build_globe_row(parent: Control) -> void:
 	full.pressed.connect(_open_full_snowglobe)
 	_globe_row.add_child(full)
 	parent.add_child(_globe_row)
+	_build_connect_btn(parent)
 	_globe_radius_timer = Timer.new()
 	_globe_radius_timer.one_shot = true
 	_globe_radius_timer.wait_time = 0.15
@@ -4887,6 +5251,7 @@ func _build_globe_row(parent: Control) -> void:
 
 
 func _sync_globe_row() -> void:
+	_sync_connect_btn()
 	if _globe_row == null:
 		return
 	var on := _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
@@ -4958,7 +5323,7 @@ func _reset_elevation_section() -> void:
 
 func _seed_site_from_freeform() -> void:
 	var n := _auto_seed_site_unplaced()
-	_show_toast("Seeded site coords for %d nodes" % n)
+	_show_toast("Seeded site coords for %s" % UiText.count(n, "node"))
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
 	_schedule_graph_autosave()
@@ -5368,7 +5733,8 @@ func _ensure_soi_preview() -> void:
 	# Site CT soil bowl), so with world wires off they are hidden in first
 	# person and shown only while this preview is up — one signal covers both
 	# the mode switches and the graph-close teardown path.
-	if _soi_preview.has_signal("preview_active_changed") 			and not _soi_preview.is_connected(
+	if _soi_preview.has_signal("preview_active_changed") \
+			and not _soi_preview.is_connected(
 				"preview_active_changed", _on_soi_preview_active_changed):
 		_soi_preview.connect("preview_active_changed", _on_soi_preview_active_changed)
 	# Hand the canvas a reference so it can use the preview camera as the
@@ -5382,6 +5748,8 @@ func _on_soi_preview_active_changed(on: bool) -> void:
 	# runs on graph close / exit, where minting one would be pointless at best.
 	var mgr: Node3D = _get_conduit_manager() if on else _conduit_manager
 	if mgr != null and is_instance_valid(mgr) and mgr.has_method("set_preview_visibility"):
+		if mgr.has_method("set_preview_domain_filter"):
+			mgr.call("set_preview_domain_filter", _domain_shown)
 		mgr.call("set_preview_visibility", on)
 	# Buried culverts / pipes of the stream network follow the same X-ray rule.
 	var loader := _find_terrain_loader(_get_scene_main_node())
@@ -5562,22 +5930,13 @@ func _build_score_section(title: String, rows: Array,
 	section.add_theme_constant_override("separation", 0)
 
 	# Section header
-	var hdr_bg := PanelContainer.new()
-	var hdr_sb := StyleBoxFlat.new()
-	hdr_sb.bg_color     = C_PANEL
-	hdr_sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.25)
-	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
-	hdr_sb.content_margin_left   = 12.0
-	hdr_sb.content_margin_right  = 12.0
-	hdr_sb.content_margin_top    = 8.0
-	hdr_sb.content_margin_bottom = 8.0
-	hdr_bg.add_theme_stylebox_override("panel", hdr_sb)
-	var hdr_lbl := Label.new()
-	hdr_lbl.text = title
-	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
-	hdr_lbl.add_theme_font_size_override("font_size", 11)
-	hdr_bg.add_child(hdr_lbl)
-	section.add_child(hdr_bg)
+	var hdr_m := MarginContainer.new()
+	hdr_m.add_theme_constant_override("margin_left", 12)
+	hdr_m.add_theme_constant_override("margin_right", 12)
+	hdr_m.add_theme_constant_override("margin_top", 6)
+	hdr_m.add_theme_constant_override("margin_bottom", 2)
+	hdr_m.add_child(SectionHeader.make(title))
+	section.add_child(hdr_m)
 
 	# Rows
 	var rows_vbox := VBoxContainer.new()
@@ -5726,6 +6085,9 @@ func _build_right_sidebar() -> Control:
 	if _inspector_panel != null and _inspector_panel.has_method("set_siphon_lab_callback"):
 		_inspector_panel.call("set_siphon_lab_callback",
 			Callable(self, "open_siphon_lab"))
+	if _inspector_panel != null and _inspector_panel.has_method("set_hydro_off_callback"):
+		_inspector_panel.call("set_hydro_off_callback",
+			Callable(self, "set_hydro_turbine_off"))
 	if _inspector_panel != null and _inspector_panel.has_method("set_place_site_twin_callback"):
 		_inspector_panel.call("set_place_site_twin_callback",
 			Callable(self, "place_site_twin"))
@@ -5905,7 +6267,8 @@ func _on_lib_custom_component_created(preset: Dictionary) -> void:
 ##
 ## `existing_item_id` (inspector "Place in 3D"): bind the already-on-canvas node
 ## instead of minting a duplicate unconnected twin.
-func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String = "") -> void:
+func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String = "",
+		at_world: Vector3 = Vector3.INF) -> void:
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	var ptype_early := str(preset.get("type", "wind"))
 	var model_id_early := str(specs.get("model_id", ""))
@@ -6014,6 +6377,17 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 		"graph_link": graph_link,
 		"record_extra": record_extra,
 	}
+	# `at_world` (the lens "Place it here"): commit straight at that ground
+	# point through the ghost's own commit — the graph stays open.
+	if is_finite(at_world.x):
+		var pid := PlacedPropService.place_prepped_at(main, model_id, prep, at_world.x, at_world.z)
+		if pid.is_empty():
+			_show_toast("Could not place it there")
+			return
+		var mgr_p := _get_conduit_manager()
+		if mgr_p != null and mgr_p.has_method("sync_all"):
+			mgr_p.call("sync_all")
+		return
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id, prep)
 	if not bool(r.get("ok", false)):
 		_show_toast("Could not start placement")
@@ -6736,7 +7110,7 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
-	call_deferred("_populate_library_scene_devices")
+	_queue_world_inventory()
 	if (_graph_view_mode == GraphSiteLayout.VIEW_SITE \
 			or _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION) \
 			and _graph_canvas != null:
@@ -7936,6 +8310,11 @@ var _lab_return_mode: String = ""
 
 ## Close the Hydro Lab and return to the mode the player opened it from.
 func close_hydro_lab() -> void:
+	# Only when the Lab is open. Called otherwise it used to switch the lens of
+	# a graph that might not even be open (falling back to Elevation), which
+	# activated the 3D preview behind a hidden graph.
+	if _graph_view_mode != GraphSiteLayout.VIEW_SIPHON:
+		return
 	var back := _lab_return_mode
 	_lab_return_mode = ""
 	if back.is_empty() or back == GraphSiteLayout.VIEW_SIPHON:
@@ -8533,7 +8912,7 @@ func heal_duplicate_null_bathymetry_ponds() -> int:
 		_flush_graph_autosave()
 		if _graph_canvas != null:
 			_graph_canvas.call("queue_redraw")
-		_show_toast("Removed %d null-bathymetry pond duplicate(s)" % n)
+		_show_toast("Removed %s" % UiText.count(n, "null-bathymetry pond duplicate"))
 	return n
 
 
@@ -8690,7 +9069,7 @@ func prune_orphan_pond_items(live_tags: Dictionary, force: bool = false) -> int:
 		_flush_graph_autosave()
 		if _graph_canvas != null:
 			_graph_canvas.call("queue_redraw")
-		_show_toast("Removed %d stale pond graph item(s)" % n)
+		_show_toast("Removed %s" % UiText.count(n, "stale pond graph item"))
 	return n
 
 
@@ -9939,16 +10318,121 @@ func select_item_by_id(item_id: String) -> void:
 
 
 ## 3D → graph: open the graph on one node (selected, inspector up, centred in
-## freeform). The prop editor's "Open node in graph" button lands here.
+## the CURRENT lens). The prop editor's "Open node in graph" button lands here.
+## Opens through open_graph_view so the pause / survival side effects run (it
+## used to set `visible` directly and left them out).
 func open_node_in_graph(item_id: String) -> bool:
 	if model == null or item_id.is_empty() or model.get_item(item_id).is_empty():
 		_show_toast("That prop has no node on the graph")
 		return false
-	visible = true
+	open_graph_view()
 	select_item_by_id(item_id)
-	if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _graph_canvas != null \
-			and _graph_canvas.has_method("focus_on_item"):
-		_graph_canvas.call("focus_on_item", item_id)
+	_frame_item_in_lens(item_id)
+	return true
+
+
+## Centre a node in whatever lens is up: the card in freeform, its pin in
+## Site Plan (the Globe keeps its orbit; the node is selected and lit).
+func _frame_item_in_lens(item_id: String) -> void:
+	if _graph_canvas == null:
+		return
+	if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM:
+		if _graph_canvas.has_method("focus_on_item"):
+			_graph_canvas.call("focus_on_item", item_id)
+		return
+	if _graph_view_mode == GraphSiteLayout.VIEW_SITE:
+		var at := _item_world_xz_for_handoff(model.get_item(item_id))
+		if at != Vector2.INF and _graph_canvas.has_method("center_site_on"):
+			_graph_canvas.call("center_site_on", at)
+
+
+## Where a node stands in the world (bound prop, else its site coords), or
+## Vector2.INF when it has no place yet.
+func _item_world_xz_for_handoff(it: Dictionary) -> Vector2:
+	if it.is_empty():
+		return Vector2.INF
+	var main := _get_scene_main_node()
+	var pid := str((it.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
+	if not pid.is_empty() and main != null:
+		var rec := PlacedPropService.get_prop_record(main, pid)
+		if not rec.is_empty():
+			return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	if GraphSiteLayout.has_site_coords(it):
+		var soi := get_node_or_null("/root/SoiService")
+		var center := Vector3.ZERO
+		if soi != null and soi.has_method("world_center"):
+			center = soi.call("world_center")
+		return GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(it), center)
+	return Vector2.INF
+
+
+## What the graph was showing when it handed off to the world, so coming back
+## lands on the same node in the same lens.
+var _return_ticket: Dictionary = {}
+
+
+## Graph → world look: close the graph (its side effects included) and look
+## at `at` from the settlement camera. Esc in that view brings the graph back
+## on `item_id`; G there drops the player in and the graph stays closed.
+func look_at_world_xz(at: Vector2, item_id: String = "") -> bool:
+	var main := _get_scene_main_node()
+	if main == null or at == Vector2.INF or not main.has_method("open_settlement_view"):
+		return false
+	_return_ticket = {"item_id": item_id, "lens": _graph_view_mode}
+	close_graph_view()
+	var sv: Variant = main.call("open_settlement_view", at, 18.0)
+	if sv is Node and (sv as Node).has_signal("closed"):
+		var cb := Callable(self, "_on_world_look_closed").bind(sv)
+		if not (sv as Node).is_connected("closed", cb):
+			(sv as Node).connect("closed", cb, CONNECT_ONE_SHOT)
+	return true
+
+
+func _on_world_look_closed(sv: Node) -> void:
+	var ticket := _return_ticket
+	_return_ticket = {}
+	if ticket.is_empty() or (is_instance_valid(sv) and bool(sv.get("last_close_was_drop_in"))):
+		return
+	call_deferred("_return_to_graph", ticket)
+
+
+func _return_to_graph(ticket: Dictionary) -> void:
+	open_graph_view()
+	var lens := str(ticket.get("lens", ""))
+	if not lens.is_empty() and lens != _graph_view_mode:
+		_apply_graph_view_mode(lens)
+	var iid := str(ticket.get("item_id", ""))
+	if not iid.is_empty() and model != null and not model.get_item(iid).is_empty():
+		select_item_by_id(iid)
+		_frame_item_in_lens(iid)
+
+
+## Graph → first person: stand the player beside a node and close the graph.
+## G brings the graph back on the same node (the return ticket).
+func walk_to_item(item_id: String) -> bool:
+	var it := model.get_item(item_id) if model != null else {}
+	var at := _item_world_xz_for_handoff(it)
+	var main := _get_scene_main_node()
+	if at == Vector2.INF or main == null:
+		_show_toast("This node has no place in the 3D world yet")
+		return false
+	var player := main.get_node_or_null("Player") as Node3D
+	if player == null:
+		return false
+	var pos := Vector3(at.x, 0.0, at.y + 2.5)
+	pos.y = TerrainSurfaceQuery.ground_height_at(main, pos.x, pos.z) + 1.0
+	player.global_position = pos
+	if player is CharacterBody3D:
+		(player as CharacterBody3D).velocity = Vector3.ZERO
+	if "fall_start_height" in player:
+		player.set("fall_start_height", pos.y)
+		player.set("highest_point_during_fall", pos.y)
+	# Face the node.
+	var dir := Vector2(at.x - pos.x, at.y - pos.z)
+	if dir.length() > 0.01:
+		player.rotation.y = atan2(-dir.x, -dir.y)
+	_return_ticket = {"item_id": item_id, "lens": _graph_view_mode, "walk": true}
+	close_graph_view()
 	return true
 
 
@@ -9974,9 +10458,7 @@ func locate_item_in_world(item_id: String) -> bool:
 	if at == Vector2.INF or not main.has_method("open_settlement_view"):
 		_show_toast("This node has no place in the 3D world yet")
 		return false
-	visible = false
-	main.call("open_settlement_view", at, 18.0)
-	return true
+	return look_at_world_xz(at, item_id)
 
 
 func find_item_by_bound_prop_id(prop_id: String) -> String:
@@ -10095,10 +10577,53 @@ func _on_canvas_item_double_tapped(item_id: String) -> void:
 		return
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	if str(specs.get("role", "")) == "siphon_hydro":
-		open_siphon_lab(item_id)
+		# Double-click switches a turbine off / on. The Hydro Lab is the
+		# inspector's "Open Hydro Lab…" button.
+		set_hydro_turbine_off(item_id, not bool(specs.get(HydroSource.SPEC_OFF, false)))
 		return
 	if _mode == "test" and item.has("device_path"):
 		_try_toggle_device(item)
+
+
+## Switch a hydro turbine (siphon_hydro processor) off or back on. Off closes
+## its valve: ResourceFlowEngine skips it (no water, no watts), and the
+## telemetry is zeroed HERE too so a paused clock does not keep showing the last
+## forward tick's power; the battery's DC term is re-synced at once.
+func set_hydro_turbine_off(item_id: String, off: bool, toast: bool = true) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if str(specs.get("role", "")) != "siphon_hydro":
+		return
+	if bool(specs.get(HydroSource.SPEC_OFF, false)) == off:
+		return
+	if off:
+		specs[HydroSource.SPEC_OFF] = true
+		for k in ["live_q_lps", "current_output_kw", "live_power_w", "live_rpm", "live_pe_w"]:
+			specs[k] = 0.0
+		specs["node_state"] = GraphNodeState.IDLE
+		specs["node_state_reason"] = "Switched off — double-click to start"
+	else:
+		specs.erase(HydroSource.SPEC_OFF)
+		specs["node_state"] = ""
+		specs["node_state_reason"] = ""
+	model.update_item(item_id, {"specs": specs})
+	if not off and _resource_flow != null \
+			and _resource_flow.has_method("_refresh_hydro_telemetry_readonly"):
+		# Clock paused: show what it makes now rather than 0 W until it runs.
+		_resource_flow.call("_refresh_hydro_telemetry_readonly")
+	_sync_graph_dc_generation_to_solar()
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+	if toast:
+		var tname := str(item.get("name", item.get("label", ""))).strip_edges()
+		if tname.is_empty():
+			tname = "Turbine"
+		_show_toast(("%s switched off — double-click to start it" % tname) if off
+			else ("%s running" % tname))
 
 
 func _on_canvas_items_multi_selected(item_ids: Array) -> void:
@@ -10313,9 +10838,9 @@ func _export_esim_to_path(path: String) -> void:
 	_ESIM_PACKAGE_SCRIPT.save_to_path(
 		pkg, "%s/%s" % [_ESIM_PACKAGE_SCRIPT.LIBRARY_DIR, lib_name])
 	var summary: Dictionary = pkg.get("summary", {}) as Dictionary
-	_show_toast("💾  Site exported · %d nodes · %d props" % [
-		int(summary.get("item_count", 0)),
-		int(summary.get("prop_count", 0)),
+	_show_toast("💾  Site exported · %s · %s" % [
+		UiText.count(int(summary.get("item_count", 0)), "node"),
+		UiText.count(int(summary.get("prop_count", 0)), "prop"),
 	])
 
 
@@ -10332,12 +10857,12 @@ func _report_esim_result(result: Dictionary, mode: String) -> void:
 		_show_toast("⚠  %s" % str(w), 3.5)
 	var summary: Dictionary = result.get("summary", {}) as Dictionary
 	if mode == "ghost":
-		_show_toast("👻  Ghost preview · %d foreign nodes" % int(result.get(
-			"item_count", summary.get("item_count", 0))))
+		_show_toast("👻  Ghost preview · %s" % UiText.count(int(result.get(
+			"item_count", summary.get("item_count", 0))), "foreign node"))
 	else:
-		_show_toast("📂  Site imported · %d nodes · %d props" % [
-			int(summary.get("item_count", 0)),
-			int(summary.get("prop_count", 0)),
+		_show_toast("📂  Site imported · %s · %s" % [
+			UiText.count(int(summary.get("item_count", 0)), "node"),
+			UiText.count(int(summary.get("prop_count", 0)), "prop"),
 		])
 	_refresh_osm_solar_btn()
 	if _graph_canvas != null:
@@ -10601,7 +11126,7 @@ func _on_add_soi_osm_solar_pressed() -> void:
 	if n <= 0:
 		_show_toast("No pending OSM solar arrays inside SoI")
 	else:
-		_show_toast("☀  Added %d OSM solar array(s)" % n)
+		_show_toast("☀  Added %s" % UiText.count(n, "OSM solar array"))
 
 
 func _refresh_osm_solar_btn() -> void:
@@ -10690,7 +11215,7 @@ func _group_load_items(candidate_ids: Array[String]) -> void:
 	_group_selected_items(false, "load_group", "Load Group (%d)" % candidate_ids.size(), {
 		"max_watts": total_max,
 		"avg_watts": total_avg,
-		"summary":   "%.0f W combined · %d loads" % [total_avg, candidate_ids.size()],
+		"summary":   "%.0f W combined · %s" % [total_avg, UiText.count(candidate_ids.size(), "load")],
 	})
 
 
@@ -10819,12 +11344,309 @@ func _on_combine_menu_id(id: int) -> void:
 		COMBINE_SERIES:      _on_series_wiring_pressed()
 		COMBINE_PARALLEL:    _on_parallel_wiring_pressed()
 		COMBINE_CTRL_PICKER: _on_pick_controller_for_array_pressed()
+		COMBINE_GRID:        arrange_array_as_grid()
 
 
 func _on_layout_menu_id(id: int) -> void:
 	match id:
 		LAYOUT_ARRANGE:     _on_arrange_graph_pressed()
 		LAYOUT_PLACEHOLDER: _on_spawn_3d_placeholder_pressed()
+		LAYOUT_TIDY:        tidy_layout(true)
+		LAYOUT_LIVE:        set_live_layout(not _layout_live)
+		LAYOUT_PIN:         _pin_selection(true)
+		LAYOUT_UNPIN:       _pin_selection(false)
+		LAYOUT_SETTINGS:    _open_layout_settings()
+		LAYOUT_PV_SNAP:
+			var on := not PvGridSnap.enabled()
+			PvGridSnap.set_pref("enabled", on)
+			_apply_pv_snap_prefs()
+			var lpp := _layout_menu.get_popup()
+			lpp.set_item_checked(lpp.get_item_index(LAYOUT_PV_SNAP), on)
+			_show_toast("Solar grid snap %s" % ("on" if on else "off"))
+
+
+# ---------------------------------------------------------------------------
+# Force-directed freeform layout (GraphForceLayout via GraphLayoutDriver)
+# ---------------------------------------------------------------------------
+
+var _layout_driver: GraphLayoutDriver = null
+var _layout_live := false
+var _layout_settings_popup: PopupPanel = null
+
+
+func _ensure_layout_driver() -> GraphLayoutDriver:
+	if _layout_driver == null:
+		_layout_driver = GraphLayoutDriver.new()
+		_layout_driver.port_side = Callable(self, "_layout_port_side")
+		_layout_driver.set_params(_load_layout_params())
+	_layout_driver.model = model
+	_layout_driver.canvas = _graph_canvas
+	return _layout_driver
+
+
+## Vertical position of a port on its card (0 top … 1 bottom): what tells the
+## layout which way a wire flows. Hub ports (tanks) report their angle.
+func _layout_port_side(item: Dictionary, handle_id: String) -> float:
+	if _graph_canvas == null:
+		return NAN
+	for h in _graph_canvas.call("_resolved_handles", item):
+		var hd: Dictionary = h
+		if str(hd.get("id", "")) != handle_id:
+			continue
+		if hd.has("ry"):
+			return float(hd["ry"])
+		if hd.has("angle_rad"):
+			return 0.5 + 0.5 * sin(float(hd["angle_rad"]))
+		if hd.has("y"):
+			return float(hd["y"]) / maxf(1.0, float(item.get("height", 90.0)))
+	return NAN
+
+
+## Layout ▾ → Tidy: settle the active scope with the force layout and glide
+## every node there. One undo step, committed when the glide lands.
+func tidy_layout(animate: bool = true, quiet: bool = false) -> bool:
+	# Freeform x/y only — valid whatever lens is up (the bootcamp seeds a level
+	# before the view has switched from the saved lens).
+	if model == null:
+		return false
+	var ok := _ensure_layout_driver().tidy(_active_scope_id, animate)
+	if not ok and not quiet:
+		_show_toast("Nothing to tidy — add a second node", 1.6)
+	return ok
+
+
+func set_live_layout(on: bool) -> void:
+	_layout_live = on
+	_ensure_layout_driver().set_live(on)
+	if _layout_menu != null:
+		var lp := _layout_menu.get_popup()
+		var idx := lp.get_item_index(LAYOUT_LIVE)
+		if idx >= 0:
+			lp.set_item_checked(idx, on)
+	_schedule_graph_autosave()
+
+
+func _pin_selection(on: bool) -> void:
+	if model == null or _selected_item_ids.is_empty():
+		_show_toast("Select the nodes to %s first" % ("pin" if on else "unpin"), 1.6)
+		return
+	_ensure_layout_driver().set_pinned(_selected_item_ids.duplicate(), on)
+	_show_toast("%s %s" % ["Pinned" if on else "Unpinned",
+		UiText.count(_selected_item_ids.size(), "node")], 1.4)
+
+
+## Per frame while the graph is open: the Tidy glide and Live stepping. A
+## finished layout change is ONE undo step and one autosave.
+func _tick_layout(delta: float) -> void:
+	if _layout_driver == null or model == null:
+		return
+	var freeform := _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM
+	if _layout_driver.process(delta, _active_scope_id, freeform):
+		_push_history()
+		_update_undo_redo_btns()
+		_schedule_graph_autosave()
+
+
+const _LAYOUT_PREF_KEYS := ["spacing", "link_length", "flow_strength", "gravity", "keep_rows"]
+
+
+func _load_layout_params() -> Dictionary:
+	var p := GraphForceLayout.default_params()
+	var cfg := ConfigFile.new()
+	if cfg.load(_UI_PREFS_CFG) == OK:
+		for k in _LAYOUT_PREF_KEYS:
+			if cfg.has_section_key("graph_layout", k):
+				p[k] = cfg.get_value("graph_layout", k)
+	return p
+
+
+func _save_layout_params(p: Dictionary) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	for k in _LAYOUT_PREF_KEYS:
+		cfg.set_value("graph_layout", k, p.get(k))
+	cfg.save(_UI_PREFS_CFG)
+
+
+# ---------------------------------------------------------------------------
+# Display settings (View options ▾ → Display settings…) — how the freeform
+# canvas draws: card style, flow when paused, wire value pills, the SoI ring,
+# the legend. A taste about the game, so global (ui_prefs.cfg [graph_display]).
+# ---------------------------------------------------------------------------
+
+const _DISPLAY_PREFS := {
+	"unified_cards": true,
+	"path_highlight": true,
+	"flow_when_paused": true,
+	"wire_value_labels": true,
+	"wire_bundling": true,
+	"port_names": true,
+	"freeform_soi_ring": false,
+}
+var _display_settings_popup: PopupPanel = null
+
+
+func _display_pref(key: String) -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(_UI_PREFS_CFG) == OK and cfg.has_section_key("graph_display", key):
+		return bool(cfg.get_value("graph_display", key))
+	return bool(_DISPLAY_PREFS.get(key, false))
+
+
+func _set_display_pref(key: String, on: bool) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	cfg.set_value("graph_display", key, on)
+	cfg.save(_UI_PREFS_CFG)
+	_apply_display_prefs()
+
+
+func _apply_display_prefs() -> void:
+	if _graph_canvas == null:
+		return
+	for key in _DISPLAY_PREFS:
+		if str(key) in _graph_canvas:
+			_graph_canvas.set(str(key), _display_pref(str(key)))
+	_graph_canvas.call("queue_redraw")
+
+
+func _open_display_settings() -> void:
+	if _display_settings_popup != null and is_instance_valid(_display_settings_popup):
+		_display_settings_popup.queue_free()
+	var pop := PopupPanel.new()
+	pop.name = "DisplaySettings"
+	pop.add_theme_stylebox_override("panel", UITheme.panel_style())
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(320.0, 0.0)
+	box.add_theme_constant_override("separation", 6)
+	pop.add_child(box)
+	box.add_child(SectionHeader.make("Cards", "layers"))
+	_display_check(box, "unified_cards", "One card style for every node",
+		"Name, live number, status line — the same layout on every card")
+	_display_check(box, "path_highlight", "Highlight a node's path on hover",
+		"Hovering a node keeps what feeds it and what it feeds lit, and dims the rest")
+	box.add_child(SectionHeader.make("Wires", "route"))
+	_display_check(box, "flow_when_paused", "Animate flow while paused",
+		"Wires keep showing which way power flows when the clock is stopped")
+	_display_check(box, "wire_value_labels", "Values on wires",
+		"Watts and volts on each live wire (zoomed in)")
+	_display_check(box, "wire_bundling", "Bundle wires that share a port",
+		"Several wires on one terminal leave it together and fan out, instead of a knot")
+	_display_check(box, "port_names", "Name the ports when zoomed in",
+		"Each port's name beside its dot from 100 % zoom (hover always names it)")
+	box.add_child(SectionHeader.make("Background", "eye"))
+	_display_check(box, "freeform_soi_ring", "Sphere-of-influence ring",
+		"The SoI reference ring behind the freeform graph")
+	var legend := CheckBox.new()
+	legend.text = "Wire colour legend"
+	legend.button_pressed = bool(_graph_canvas.call("is_legend_visible")) \
+		if _graph_canvas != null and _graph_canvas.has_method("is_legend_visible") else false
+	legend.toggled.connect(func(on: bool) -> void:
+		if _graph_canvas != null and _graph_canvas.has_method("set_legend_visible"):
+			_graph_canvas.call("set_legend_visible", on))
+	box.add_child(legend)
+	add_child(pop)
+	_display_settings_popup = pop
+	var anchor := _view_mode_menu.get_global_rect() if _view_mode_menu != null \
+		else Rect2(Vector2(600, 60), Vector2.ZERO)
+	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(340, 10)))
+
+
+func _display_check(box: VBoxContainer, key: String, text: String, tip: String) -> void:
+	var cb := CheckBox.new()
+	cb.text = text
+	cb.tooltip_text = tip
+	cb.button_pressed = _display_pref(key)
+	cb.toggled.connect(func(on: bool) -> void: _set_display_pref(key, on))
+	box.add_child(cb)
+
+
+## Layout ▾ → Layout settings…: the force layout's knobs, applied live
+## (Live layout re-spaces as a slider moves; otherwise press Tidy).
+func _open_layout_settings() -> void:
+	var drv := _ensure_layout_driver()
+	if _layout_settings_popup != null and is_instance_valid(_layout_settings_popup):
+		_layout_settings_popup.queue_free()
+	var pop := PopupPanel.new()
+	pop.name = "LayoutSettings"
+	pop.add_theme_stylebox_override("panel", UITheme.panel_style())
+	var box := VBoxContainer.new()
+	box.custom_minimum_size = Vector2(320.0, 0.0)
+	box.add_theme_constant_override("separation", 6)
+	pop.add_child(box)
+	box.add_child(SectionHeader.make("Layout", "layout-grid", "Tidy and Live layout"))
+	var rows := [
+		["spacing", "Spacing", 16.0, 160.0, 2.0, " px", "Smallest gap between two cards"],
+		["link_length", "Wire length", 30.0, 320.0, 5.0, " px", "Gap between wired cards"],
+		["flow_strength", "Flow direction", 0.0, 1.0, 0.05, "", "0 = organic web · 1 = strict top-to-bottom layers"],
+		["gravity", "Gravity", 0.0, 0.2, 0.005, "", "How hard the graph pulls toward its middle"],
+	]
+	for r in rows:
+		var key := str(r[0])
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.text = str(r[1])
+		lbl.tooltip_text = str(r[6])
+		lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+		lbl.custom_minimum_size.x = 110.0
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		row.add_child(lbl)
+		var sl := HSlider.new()
+		sl.min_value = float(r[2])
+		sl.max_value = float(r[3])
+		sl.step = float(r[4])
+		sl.value = float(drv.params.get(key, sl.min_value))
+		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sl.tooltip_text = str(r[6])
+		row.add_child(sl)
+		var val := Label.new()
+		val.custom_minimum_size.x = 56.0
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		val.add_theme_font_override("font", UITheme.font("regular", true))
+		val.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		var unit := str(r[5])
+		var fmt := func(v: float) -> String:
+			return ("%d%s" % [int(round(v)), unit]) if unit != "" else ("%.2f" % v)
+		val.text = fmt.call(sl.value)
+		row.add_child(val)
+		sl.value_changed.connect(func(v: float) -> void:
+			val.text = fmt.call(v)
+			var p := drv.params.duplicate()
+			p[key] = v
+			drv.set_params(p)
+			_save_layout_params(p))
+		box.add_child(row)
+	var rows_cb := CheckBox.new()
+	rows_cb.text = "Keep each layer on one line"
+	rows_cb.button_pressed = bool(drv.params.get("keep_rows", true))
+	rows_cb.toggled.connect(func(on: bool) -> void:
+		var p := drv.params.duplicate()
+		p["keep_rows"] = on
+		drv.set_params(p)
+		_save_layout_params(p))
+	box.add_child(rows_cb)
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_END
+	var reset := Button.new()
+	reset.text = "Reset"
+	UITheme.style_button(reset)
+	reset.pressed.connect(func() -> void:
+		var p := GraphForceLayout.default_params()
+		drv.set_params(p)
+		_save_layout_params(p)
+		pop.hide()
+		_open_layout_settings())
+	btns.add_child(reset)
+	var tidy := Button.new()
+	tidy.text = "Tidy now"
+	UITheme.style_button(tidy)
+	tidy.pressed.connect(func() -> void: tidy_layout(true))
+	btns.add_child(tidy)
+	box.add_child(btns)
+	add_child(pop)
+	_layout_settings_popup = pop
+	var anchor := _layout_menu.get_global_rect() if _layout_menu != null else Rect2(Vector2(200, 60), Vector2.ZERO)
+	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(340, 10)))
 
 
 ## Enable/disable Combine ▾ / Layout ▾ items from the current selection.
@@ -11496,7 +12318,7 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 			if not has_ac_in:
 				handle_defs.append({"id": "input", "polarity": "load", "direction": "in", "rx": 0.5, "ry": 0.0})
 				side_in_count = maxi(side_in_count, 1)
-			specs["summary"] = str(specs.get("summary", "%d loads" % candidates.size()))
+			specs["summary"] = str(specs.get("summary", UiText.count(candidates.size(), "load")))
 		model.update_item(compound_id, {
 			"handles": handle_defs,
 			"specs": specs,
@@ -11512,9 +12334,9 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 	_on_canvas_item_selected(compound_id)
 	_update_special_group_buttons()
 	if compound_kind == "array":
-		_show_toast("Solar array: %d panels tiled · single +/- bus" % candidates.size())
+		_show_toast("Solar array: %s tiled · single +/- bus" % UiText.count(candidates.size(), "panel"))
 	else:
-		_show_toast("Grouped %d nodes" % candidates.size())
+		_show_toast("Grouped %s" % UiText.count(candidates.size(), "node"))
 	return compound_id
 
 
@@ -11824,9 +12646,9 @@ func _build_review_modal() -> Control:
 				["Panels capturing", "%s (%d)" % [
 						SolarEnergyBudget.format_kw(float(budget.get("panel_kw", 0.0))),
 						int(budget.get("panel_count", 0))], Color(0.27, 0.9, 0.42)],
-				["Grow-bed chemical", "%s (%d beds)" % [
+				["Grow-bed chemical", "%s (%s)" % [
 						SolarEnergyBudget.format_kw(float(budget.get("plant_chem_kw", 0.0))),
-						int(budget.get("plant_count", 0))], C_GREEN if int(budget.get("plant_count", 0)) > 0 else C_TEXT_S],
+						UiText.count(int(budget.get("plant_count", 0)), "bed")], C_GREEN if int(budget.get("plant_count", 0)) > 0 else C_TEXT_S],
 				["Site capture efficiency", "%.2f%%" % eff_pct,
 					Color(0.27, 0.9, 0.42) if eff_pct > 1.0 else C_AMBER if eff_pct > 0.01 else C_TEXT_S],
 			]
@@ -11897,11 +12719,7 @@ func _rv_title_bar(overlay: Control) -> Control:
 	hbox.add_child(title)
 
 	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.add_theme_color_override("font_color",       C_TEXT_S)
-	close_btn.add_theme_color_override("font_hover_color", C_TEXT)
-	close_btn.add_theme_font_size_override("font_size", 14)
+	IconButton.as_close(close_btn, "Close System Review")
 	close_btn.pressed.connect(func():
 		if is_instance_valid(overlay):
 			overlay.queue_free()
@@ -11914,28 +12732,25 @@ func _rv_title_bar(overlay: Control) -> Control:
 
 ## Builds one data section for the review modal.
 ## rows: Array of [label_str, value_str, Color]
+## The review modal's section title: the kit's SectionHeader, inset to line
+## up with the 16 px row margins below it.
+func _rv_section_header(title: String) -> Control:
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_left", 16)
+	m.add_theme_constant_override("margin_right", 16)
+	m.add_theme_constant_override("margin_top", 6)
+	m.add_theme_constant_override("margin_bottom", 2)
+	m.add_child(SectionHeader.make(title))
+	return m
+
+
 func _rv_section(title: String, rows: Array) -> Control:
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 0)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	# Section header
-	var hdr_sb := StyleBoxFlat.new()
-	hdr_sb.bg_color             = C_PANEL
-	hdr_sb.border_color         = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.2)
-	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
-	hdr_sb.content_margin_left   = 16.0
-	hdr_sb.content_margin_right  = 16.0
-	hdr_sb.content_margin_top    = 7.0
-	hdr_sb.content_margin_bottom = 7.0
-	var hdr := PanelContainer.new()
-	hdr.add_theme_stylebox_override("panel", hdr_sb)
-	var hdr_lbl := Label.new()
-	hdr_lbl.text = title
-	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
-	hdr_lbl.add_theme_font_size_override("font_size", 11)
-	hdr.add_child(hdr_lbl)
-	vbox.add_child(hdr)
+	vbox.add_child(_rv_section_header(title))
 
 	for row: Array in rows:
 		var row_sb := StyleBoxFlat.new()
@@ -11999,7 +12814,7 @@ func _rv_hints_section(panel_wmp: float, ctrl_max_watts: float,
 			if days < 0.5:
 				hints.append(["⚠", "Battery (%.1f kWh) covers only %.1fh of load — consider expanding." % [bat_kwh, days * 24.0], C_AMBER])
 			elif days < 1.5:
-				hints.append(["💡", "Battery covers %.1f day(s) of load — adequate for short outages." % days, C_TEXT_S])
+				hints.append(["💡", "Battery covers %s of load — adequate for short outages." % UiText.count(snappedf(days, 0.1), "day"), C_TEXT_S])
 			else:
 				hints.append(["✔", "Battery autonomy is %.1f days — good resilience." % days, Color(0.27, 0.9, 0.42)])
 
@@ -12052,22 +12867,7 @@ func _rv_hints_section(panel_wmp: float, ctrl_max_watts: float,
 	vbox.add_theme_constant_override("separation", 0)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	var hdr_sb := StyleBoxFlat.new()
-	hdr_sb.bg_color             = C_PANEL
-	hdr_sb.border_color         = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.2)
-	hdr_sb.set_border_width(SIDE_BOTTOM, 1)
-	hdr_sb.content_margin_left   = 16.0
-	hdr_sb.content_margin_right  = 16.0
-	hdr_sb.content_margin_top    = 7.0
-	hdr_sb.content_margin_bottom = 7.0
-	var hdr := PanelContainer.new()
-	hdr.add_theme_stylebox_override("panel", hdr_sb)
-	var hdr_lbl := Label.new()
-	hdr_lbl.text = "💡  OPTIMIZATION HINTS"
-	hdr_lbl.add_theme_color_override("font_color", C_PRIMARY)
-	hdr_lbl.add_theme_font_size_override("font_size", 11)
-	hdr.add_child(hdr_lbl)
-	vbox.add_child(hdr)
+	vbox.add_child(_rv_section_header("💡  OPTIMIZATION HINTS"))
 
 	for hint: Array in hints:
 		var row_sb := StyleBoxFlat.new()
@@ -12577,12 +13377,43 @@ func open_npc_routines(item_id: String) -> void:
 ## MUST be turned back off on every run-exit path: the service documents the
 ## live re-render as the view's dominant cost.
 func set_live_world_preview(on: bool) -> void:
+	if _graph_canvas != null:
+		# The wires animate through the playback even though it holds the clock.
+		_graph_canvas.set("flow_playback", on)
 	if _soi_preview == null:
 		return
-	if on and _soi_preview.has_method("set_active"):
-		_soi_preview.call("set_active", true)
+	var container: Variant = _soi_preview.get("_container")
+	if on:
+		# Remember whether the 3D bubble was up before the run: turning live on
+		# also ACTIVATES it, and it used to stay up behind the debrief and every
+		# later level — a whole 3D globe behind a circuit diagram.
+		if _live_preview_restore < 0:
+			_live_preview_restore = 1 if bool(_soi_preview.get("active")) else 0
+		if _soi_preview.has_method("set_active"):
+			_soi_preview.call("set_active", true)
+		# In freeform the world is a backdrop to the cards, not the subject.
+		if _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM:
+			_set_preview_opacity(container, LIVE_PREVIEW_BACKDROP_ALPHA)
 	if _soi_preview.has_method("set_preview_live"):
 		_soi_preview.call("set_preview_live", on)
+	if not on and _live_preview_restore >= 0:
+		if _live_preview_restore == 0 and _soi_preview.has_method("set_active"):
+			_soi_preview.call("set_active", false)
+		_set_preview_opacity(container, 1.0)
+		_live_preview_restore = -1
+
+
+## The preview container draws through the disc shader, which ignores
+## `modulate` — the opacity is a shader uniform.
+func _set_preview_opacity(container: Variant, a: float) -> void:
+	if container is CanvasItem and (container as CanvasItem).material is ShaderMaterial:
+		((container as CanvasItem).material as ShaderMaterial).set_shader_parameter("opacity", a)
+
+
+## Opacity of the live 3D site behind freeform cards during a baked-run playback.
+const LIVE_PREVIEW_BACKDROP_ALPHA := 0.35
+## -1 = no live preview borrowed; 0/1 = the bubble's active state before it was.
+var _live_preview_restore: int = -1
 
 
 ## ChallengeBakeEngine handshake: while suspended, the engine steps the flow
@@ -12915,6 +13746,9 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	# the ambient tick would either rewind tank specs mid-bake (frozen clock →
 	# scrub-read) or double-step them during playback.
 	if _ambient_flow_suspended:
+		# (The cards still follow what plays back: _process runs the DC
+		# throttle display-only while suspended — the charge cap belongs to
+		# the bake.)
 		return
 	# The engine coalesces on its own 0.25 s / 0.5 s accumulator, so on most frames
 	# tick() just accumulates and early-returns. Only pay the bulk-sync + history-
@@ -13017,8 +13851,10 @@ func _process(delta: float) -> void:
 			_crowd_renderer.sync(_npc_population.last_abs_h())
 			PerfMonitor.end("crowd_render")
 	# DC current-limit throttle must stay live with the graph closed — it caps
-	# the battery charge rate SolarUI integrates every frame.
-	_tick_dc_throttle(delta)
+	# the battery charge rate SolarUI integrates every frame. During a challenge
+	# bake / playback it runs DISPLAY-ONLY: the cards follow what plays back,
+	# but the battery's charge cap belongs to the bake.
+	_tick_dc_throttle(delta, _ambient_flow_suspended)
 	# Graph DC generation (hydro, graph-only wind, fuel generators wired into a
 	# battery) must reach SolarUI with the graph CLOSED and while the Hydro Lab
 	# owns the view — both early-return below, and the battery then never saw a
@@ -13035,6 +13871,7 @@ func _process(delta: float) -> void:
 			_lens_strip.visible = false
 		return
 	_update_lens_strip(delta)
+	_tick_layout(delta)
 	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
 	# ResourceFlowEngine (above) still runs so test inflow + siphon drain work.
 	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
@@ -13083,12 +13920,7 @@ func _process(delta: float) -> void:
 	_tick_graph_pbis(delta)
 	_tick_graph_solar_shading(delta)
 	PerfMonitor.end("gv_ticks")
-	_energy_sync_acc += delta
-	if _energy_sync_acc >= _ENERGY_SYNC_INTERVAL:
-		_energy_sync_acc = 0.0
-		PerfMonitor.begin("gv_energy")
-		_sync_graph_energy_from_solar()
-		PerfMonitor.end("gv_energy")
+	# (Panel / battery cards follow SolarUI's tick from _tick_dc_throttle, above.)
 	PerfMonitor.begin("gv_workflow")
 	_tick_active_workflow()
 	PerfMonitor.end("gv_workflow")
@@ -13182,6 +14014,12 @@ func _input(event: InputEvent) -> void:
 				# _input — before every _unhandled_input — so ungated it ate
 				# Delete / Ctrl+Z / Ctrl+Y from the 3D tools (edit toolbar, Light
 				# Studio) and edited a graph nobody was looking at.
+				# C: the Globe / Site Plan connect tool.
+				if visible and ke.keycode == KEY_C and not ke.ctrl_pressed and not ke.meta_pressed \
+						and _connect_tool_lens():
+					set_connect_tool(not _connect_tool_on)
+					get_viewport().set_input_as_handled()
+					return
 				if visible and ke.keycode == KEY_DELETE:
 					_delete_selected()
 					get_viewport().set_input_as_handled()
@@ -13232,6 +14070,11 @@ func _input(event: InputEvent) -> void:
 		_apply_graph_close_side_effects()
 	else:
 		_apply_graph_open_side_effects()
+		# Back from "Walk to it": land on the node the player walked to.
+		if bool(_return_ticket.get("walk", false)):
+			var ticket := _return_ticket
+			_return_ticket = {}
+			call_deferred("_return_to_graph", ticket)
 	_update_make_array_quick_button()
 	get_viewport().set_input_as_handled()
 
@@ -13257,6 +14100,7 @@ func close_graph_view() -> void:
 
 func _apply_graph_open_side_effects() -> void:
 	visible = true
+	_queue_world_inventory()
 	_apply_graph_open_mode_from_sim_state()
 	# Pause survival mechanics while graph is open
 	var m := _get_scene_main_node()
@@ -13478,7 +14322,10 @@ func _start_conduit_route(conn_id: String) -> void:
 	if ctrl == null or not ctrl.has_method("begin_route"):
 		_show_toast("Conduit route controller not ready.")
 		return
-	visible = false
+	# Close through the proper path (pause side effects) and come back to this
+	# wire when the route is committed or cancelled.
+	_return_ticket = {"conn_id": conn_id, "lens": _graph_view_mode}
+	close_graph_view()
 	_apply_mouse_for_graph(false)
 	var route: Array = conn.get("route_3d", []) as Array
 	ctrl.call("begin_route", conn_id, anchor_a, anchor_b, type_id, route)
@@ -13502,6 +14349,13 @@ func _clear_conduit_route(conn_id: String) -> void:
 
 func _on_conduit_route_finished(_conn_id: String) -> void:
 	_schedule_graph_autosave()
+	# "Route in 3D" was started from the graph: come back to it on this wire.
+	if str(_return_ticket.get("conn_id", "")) == _conn_id and not visible:
+		var lens := str(_return_ticket.get("lens", ""))
+		_return_ticket = {}
+		open_graph_view()
+		if not lens.is_empty() and lens != _graph_view_mode:
+			_apply_graph_view_mode(lens)
 	if model != null and _inspector_panel != null \
 			and _inspector_panel.has_method("inspect_connection"):
 		var conn := model.get_connection(_conn_id)
@@ -13533,8 +14387,7 @@ func _refresh_solar_ui_ref() -> void:
 		var scene := get_tree().current_scene
 		if scene:
 			_solar_ui = scene.get_node_or_null("UILayer/SolarUI") as Control
-	_populate_library_scene_devices()
-	_populate_library_graph_linkables()
+	_queue_world_inventory()
 
 
 func _scene_device_path_on_graph(path_str: String) -> bool:
@@ -13567,17 +14420,13 @@ func _is_graph_proxy_consumer(consumer: Node) -> bool:
 	return str(consumer.name).begins_with("SimLoad_")
 
 
-## Build the "In Model" library shelf: scene power_consumers not yet on the graph.
-func _populate_library_scene_devices() -> void:
-	if _lib_panel == null:
-		return
-	if not _lib_panel.has_method("populate_in_model") and not _lib_panel.has_method("populate_scene_devices"):
-		return
+## Scene power_consumers not yet on the graph, as spawnable presets.
+func _scene_device_presets() -> Array:
 	if not is_instance_valid(_solar_ui):
-		return
+		return []
 	var tree := _solar_ui.get_tree()
 	if tree == null:
-		return
+		return []
 	var consumers: Array[Node] = tree.get_nodes_in_group("power_consumers")
 	consumers.sort_custom(func(a: Node, b: Node) -> bool:
 		return str(a.get_path()) < str(b.get_path())
@@ -13626,20 +14475,16 @@ func _populate_library_scene_devices() -> void:
 				"in_model":          true,
 			},
 		})
-	if _lib_panel.has_method("populate_in_model"):
-		_lib_panel.call("populate_in_model", presets)
-	else:
-		_lib_panel.call("populate_scene_devices", presets)
+	return presets
 
 
-func _populate_library_graph_linkables() -> void:
-	if _lib_panel == null or not _lib_panel.has_method("populate_graph_linkables"):
-		return
+## Scene energy sources / graph-linkable nodes not yet on the graph.
+func _graph_linkable_presets() -> Array:
 	if not is_instance_valid(_solar_ui):
-		return
+		return []
 	var tree := _solar_ui.get_tree()
 	if tree == null:
-		return
+		return []
 	var seen: Dictionary = {}
 	var presets: Array = []
 	for group_name: String in ["graph_linkable", "energy_sources"]:
@@ -13647,7 +14492,7 @@ func _populate_library_graph_linkables() -> void:
 			if node == null or not is_instance_valid(node):
 				continue
 			var path_str: String = str(node.get_path())
-			if seen.has(path_str):
+			if seen.has(path_str) or _scene_device_path_on_graph(path_str):
 				continue
 			seen[path_str] = true
 			var nm: String = str(node.name)
@@ -13677,8 +14522,7 @@ func _populate_library_graph_linkables() -> void:
 					"scene_device_path": path_str,
 				},
 			})
-	if not presets.is_empty():
-		_lib_panel.call("populate_graph_linkables", presets)
+	return presets
 
 
 func _load_graph_ui_prefs() -> void:
@@ -14148,6 +14992,8 @@ func _other_ui_needs_free_mouse() -> bool:
 # ---------------------------------------------------------------------------
 
 func _on_model_changed(reason: String) -> void:
+	if reason != "update_item":
+		_queue_world_inventory()
 	if _sim_bulk_update:
 		# Defer — a sim tick can call update_item dozens of times; coalesce into
 		# one redraw + one telemetry refresh via _flush_sim_bulk_update().
@@ -14170,7 +15016,10 @@ func _on_model_changed(reason: String) -> void:
 			_auto_seed_site_unplaced()
 		_sync_solar_ui_from_graph()
 		_sync_graph_controller_ac_fault()
-		call_deferred("_populate_library_scene_devices")
+		_queue_world_inventory()
+	if _layout_driver != null and not _sim_bulk_update \
+			and reason in ["add_item", "remove_item", "add_connection", "remove_connection", "reset"]:
+		_layout_driver.mark_dirty()
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
 		call_deferred("_check_electrical_faults")
 	if reason == "add_connection" and not _history_suppress and not _sim_bulk_update:
@@ -14225,7 +15074,7 @@ func _flush_sim_bulk_update(force_telemetry: bool = true) -> void:
 			_sync_graph_controller_ac_fault()
 			_pending_telemetry_refresh = false
 	if force_telemetry and _pending_library_populate:
-		call_deferred("_populate_library_scene_devices")
+		_queue_world_inventory()
 		_pending_library_populate = false
 
 
@@ -14594,6 +15443,18 @@ func _collect_root_array_aggregate() -> Dictionary:
 	var orient_w := 0.0
 	if model == null:
 		return {"panel_wmp": 0.0, "panel_voc_max": 0.0, "panel_imp": 0.0, "panel_count": 0, "array_config": "—"}
+	# Bootcamp sandbox: a panel makes power only once BOTH its terminals are
+	# wired. The free-play graph counts every panel on the canvas (an array is
+	# a capacity figure there), which in the bootcamp read "Making 281 W ·
+	# CHARGING · full in 2 h" before a single wire existed — the opposite of
+	# what level 2 onward teaches.
+	var wired_only := _sandbox_active
+	var wired_ports := {}
+	if wired_only:
+		for c in GraphNesting.flat_connections(model):
+			var cd: Dictionary = c
+			wired_ports["%s|%s" % [cd.get("source_item_id", ""), cd.get("source_handle_id", "")]] = true
+			wired_ports["%s|%s" % [cd.get("target_item_id", ""), cd.get("target_handle_id", "")]] = true
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
 			continue
@@ -14603,6 +15464,10 @@ func _collect_root_array_aggregate() -> Dictionary:
 		# rule as stowed linkage arrays below.
 		if bool(specs.get("packed_3d", false)):
 			continue
+		if wired_only and itype == "panel":
+			var pid := str(item.get("id", ""))
+			if not (wired_ports.has(pid + "|positive") and wired_ports.has(pid + "|negative")):
+				continue
 		if itype == "panel":
 			panel_wmp += float(specs.get("wmp", 0.0))
 			panel_imp += float(specs.get("imp", 0.0))
@@ -14717,10 +15582,25 @@ func _sync_graph_energy_from_solar() -> void:
 		var graph_dc_kw := maxf(0.0, float(_solar_ui.get("current_graph_dc_kw") if _solar_ui.get("current_graph_dc_kw") != null else 0.0))
 		_graph_canvas.set("live_power_hint", {
 			"battery_w": (solar_kw + aux_kw + graph_dc_kw - load_kw) * 1000.0,
+			"solar_w": solar_kw * 1000.0,
+			"load_w": load_kw * 1000.0,
 			"valid": true,
 		})
 
+	# Bootcamp sandbox: only panels with both terminals wired make power (the
+	# same rule as _collect_root_array_aggregate) — the share used to be
+	# spread over every panel on the canvas, so an unwired one read "93 W".
+	var wired_ports := {}
+	if _sandbox_active:
+		for c in GraphNesting.flat_connections(model):
+			var cd: Dictionary = c
+			wired_ports["%s|%s" % [cd.get("source_item_id", ""), cd.get("source_handle_id", "")]] = true
+			wired_ports["%s|%s" % [cd.get("target_item_id", ""), cd.get("target_handle_id", "")]] = true
 	var panel_items: Array[Dictionary] = []
+	# Wmp × the panel's shade factor: SolarUI's output already carries the
+	# array's shade (set_graph_pv_shade), so splitting it by EFFECTIVE Wmp is
+	# what makes a shaded panel's card read less while the cards still sum to
+	# what the array delivered.
 	var total_wmp := 0.0
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
@@ -14728,29 +15608,63 @@ func _sync_graph_energy_from_solar() -> void:
 		if str(item.get("type", "")) != "panel":
 			continue
 		panel_items.append(item)
-		total_wmp += float((item.get("specs", {}) as Dictionary).get("wmp", 0.0))
+		if _sandbox_active:
+			var pid0 := str(item.get("id", ""))
+			if not (wired_ports.has(pid0 + "|positive") and wired_ports.has(pid0 + "|negative")):
+				continue
+		total_wmp += float((item.get("specs", {}) as Dictionary).get("wmp", 0.0)) * _pv_sun_factor(item)
 
 	if not panel_items.is_empty():
+		# A panel feeding a real controller reads its share of what that
+		# controller actually delivered (_pv_live_w); the rest share whatever
+		# of SolarUI's total is left, by Wmp — so the panels always sum to the
+		# delivered PV, which is what the dashboard calls "Making".
+		var raw_kw := maxf(0.0, float(_solar_ui.get("_raw_solar_kw") if _solar_ui.get("_raw_solar_kw") != null else solar_kw))
+		var mapped_kw := 0.0
+		var free_wmp := 0.0
+		for item: Dictionary in panel_items:
+			var pid1 := str(item.get("id", ""))
+			if _sandbox_active and not (wired_ports.has(pid1 + "|positive") and wired_ports.has(pid1 + "|negative")):
+				continue
+			if _pv_live_w.has(pid1):
+				mapped_kw += float((_pv_live_w[pid1] as Dictionary).get("w", 0.0)) / 1000.0
+			else:
+				free_wmp += float((item.get("specs", {}) as Dictionary).get("wmp", 0.0)) * _pv_sun_factor(item)
+		var free_kw := maxf(solar_kw - mapped_kw, 0.0)
 		var per_kw := solar_kw / float(panel_items.size()) if total_wmp <= 0.0 else 0.0
 		for item: Dictionary in panel_items:
 			var iid: String = str(item.get("id", ""))
 			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			var sun_f := _pv_sun_factor(item)
+			var wmp_p := float(specs.get("wmp", 0.0)) * sun_f
 			var share := per_kw
+			var offered := per_kw
+			var curtail := ""
 			if total_wmp > 0.0:
-				share = solar_kw * float(specs.get("wmp", 0.0)) / total_wmp
-			# Per-node shade / availability (default 1.0 ambient). Phase 5 writes
-			# 3D site shade into specs.sunlight_factor; SolarUI's own battery math
-			# stays unmodulated (panel authority = modulate graph share only).
-			var had_sun_f: bool = specs.has("sunlight_factor")
-			var sun_f: float = 1.0
-			if had_sun_f:
-				sun_f = clampf(float(specs.get("sunlight_factor", 1.0)), 0.0, 1.2)
-			share *= sun_f
-			if had_sun_f \
-					and absf(float(specs.get("current_output_kw", 0.0)) - share) < 0.0005:
+				offered = raw_kw * wmp_p / total_wmp
+				if _pv_live_w.has(iid):
+					var lv: Dictionary = _pv_live_w[iid]
+					share = float(lv.get("w", 0.0)) / 1000.0
+					curtail = str(lv.get("curtail", ""))
+				else:
+					share = free_kw * wmp_p / free_wmp if free_wmp > 0.0 else 0.0
+					if share < offered - 0.001:
+						curtail = "battery_full" if bank_soc >= 0.995 else ("battery_topping" if bank_soc >= 0.95 else "held_back")
+			if _sandbox_active and not (wired_ports.has(iid + "|positive")
+					and wired_ports.has(iid + "|negative")):
+				share = 0.0
+				offered = 0.0
+				curtail = ""
+			# Shade is already in both numbers: SolarUI scales the array by it and
+			# the shares above split by shaded Wmp (one model, so the cards sum
+			# to the controller and to "Making").
+			if absf(float(specs.get("current_output_kw", 0.0)) - share) < 0.0005 \
+					and absf(float(specs.get("pv_offered_kw", -1.0)) - offered) < 0.0005 \
+					and str(specs.get("pv_curtail", "")) == curtail:
 				continue
 			specs["current_output_kw"] = share
-			specs["sunlight_factor"] = sun_f
+			specs["pv_offered_kw"] = offered
+			specs["pv_curtail"] = curtail
 			model.update_item(iid, {"specs": specs})
 
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):
@@ -14892,6 +15806,9 @@ func collect_save_state() -> Dictionary:
 		"canvas_zoom":         zoom,
 		"view_mode":           _graph_view_mode,
 		"freeform_soi_bubble": _freeform_soi_bubble,
+		"layout_live": _layout_live,
+		"view_filter": GraphDomainFilter.to_array(_domain_shown),
+		"view_filter_unwired": _domain_unwired,
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
 		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
@@ -15083,6 +16000,10 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	if pcam is Dictionary:
 		_apply_phys_cam_state(pcam as Dictionary)
 	_freeform_soi_bubble = bool(data.get("freeform_soi_bubble", false))
+	if data.has("layout_live") and bool(data.get("layout_live", false)) != _layout_live:
+		set_live_layout(bool(data.get("layout_live", false)))
+	set_domain_filter(GraphDomainFilter.from_array(data.get("view_filter", [])),
+		bool(data.get("view_filter_unwired", true)))
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
 	_sync_elev_slice_row()
 	_sync_site_tool_row()
@@ -15142,7 +16063,6 @@ func _hspacer() -> Control:
 const _RENEWABLES_POLL_INTERVAL := 0.25  # matches SolarBridge cadence
 var _renewables_acc: float = _RENEWABLES_POLL_INTERVAL
 const _ENERGY_SYNC_INTERVAL := 0.25
-var _energy_sync_acc: float = 0.0
 var _dc_gen_sync_acc: float = 0.0
 const _PBIS_POLL_INTERVAL := 0.25
 var _pbis_acc: float = _PBIS_POLL_INTERVAL
@@ -15239,27 +16159,65 @@ const _DC_THROTTLE_INTERVAL := 0.25
 ## levels 3–7 (120 W / 360 W / 720 W / 1200 W all emerge from this math).
 ## Runs ambient (graph open or closed); telemetry writes are change-gated and
 ## wrapped in history/bulk suppression so they never pollute undo or autosave.
-func _tick_dc_throttle(delta: float) -> void:
+func _tick_dc_throttle(delta: float, display_only: bool = false) -> void:
 	if model == null:
 		return
 	_dc_throttle_acc += delta
-	if _dc_throttle_acc < _DC_THROTTLE_INTERVAL:
+	# With the graph on screen, follow SolarUI's own 10 Hz tick: every card on a
+	# frame then reads the same instant (a 24 h playback moves the sun an hour
+	# every quarter second, so a 0.25 s cadence put the panels, the controller
+	# and the battery on different hours).
+	var serial := -1
+	if visible and is_instance_valid(_solar_ui):
+		var sv: Variant = _solar_ui.get("sim_tick_serial")
+		if sv != null:
+			serial = int(sv)
+	if _dc_throttle_acc < _DC_THROTTLE_INTERVAL and (serial < 0 or serial == _dc_sync_serial):
 		return
 	_dc_throttle_acc = 0.0
+	_dc_sync_serial = serial
+	_dc_throttle_pass(display_only)
+	if visible:
+		var was_suppress := _history_suppress
+		var was_bulk := _sim_bulk_update
+		_history_suppress = true
+		_sim_bulk_update = true
+		_sync_graph_energy_from_solar()
+		_history_suppress = was_suppress
+		_sim_bulk_update = was_bulk
+
+
+## One pass of the controller model. Per real controller: OFFERED = its Wmp
+## share of what the array could make right now (SolarUI _raw_solar_kw), CAP =
+## that share limited to bus_V × max_charge_amps (clipping), DELIVERED = what
+## actually went in — SolarUI's current_solar_kw (after a full battery has
+## throttled the array back) split over the controllers in proportion to their
+## caps. The panel cards are then written from DELIVERED (_pv_live_w), so the
+## panels sum to the controller, the controller's delivered + aux − load is the
+## battery's flow, and the dashboard's "Making" is the same current_solar_kw.
+func _dc_throttle_pass(display_only: bool) -> void:
 	if _dc_analysis.is_empty():
 		# Fresh load — _check_electrical_faults hasn't run yet (it refreshes the
 		# cache on wiring changes). Build the topology once here.
 		_dc_flat_conns = GraphNesting.flat_connections(model)
 		_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
 	var raw_kw := 0.0
+	var actual_kw := 0.0
+	var soc := 0.0
 	if is_instance_valid(_solar_ui):
 		var raw_v: Variant = _solar_ui.get("_raw_solar_kw")
 		if raw_v != null:
 			raw_kw = maxf(float(raw_v), 0.0)
+		var act_v: Variant = _solar_ui.get("current_solar_kw")
+		if act_v != null:
+			actual_kw = maxf(float(act_v), 0.0)
+		if _solar_ui.has_method("get_battery_percent"):
+			soc = clampf(float(_solar_ui.call("get_battery_percent")) / 100.0, 0.0, 1.0)
 	# Eligible = real controllers wired to both a PV source and a battery bank.
 	var entries: Array = []
 	var total_wmp := 0.0
 	var routed_wmp := 0.0
+	var shade_items: Array = []
 	for item in GraphNesting.walk_items(model, "root"):
 		if not (item is Dictionary):
 			continue
@@ -15268,6 +16226,8 @@ func _tick_dc_throttle(delta: float) -> void:
 			continue
 		if PvElectrical.is_pv_source_item(it):
 			total_wmp += _pv_item_wmp(it)
+			if not _sandbox_active and _pv_is_shade_receiver(it) and _pv_item_wmp(it) > 0.0:
+				shade_items.append(it)
 			continue
 		if str(it.get("type", "")) != "controller":
 			continue
@@ -15293,45 +16253,161 @@ func _tick_dc_throttle(delta: float) -> void:
 		routed_wmp += wmp
 		entries.append({"item": it, "bank": bank, "wmp": wmp,
 			"sources": sources.duplicate()})
+	# A controller that stopped being a PV route (array unwired or removed, no
+	# bank, crated) passes nothing: its card must not keep the last delivered
+	# watts it had while it was one.
+	var routed_ctrl := {}
+	for e_r in entries:
+		routed_ctrl[str(((e_r as Dictionary).get("item", {}) as Dictionary).get("id", ""))] = true
+	for c_it in model.items_of_type("controller"):
+		var cd_it: Dictionary = c_it
+		var csp: Dictionary = cd_it.get("specs", {}) as Dictionary
+		if routed_ctrl.has(str(cd_it.get("id", ""))) \
+				or (float(csp.get("dc_delivered_w", 0.0)) <= 0.0 and float(csp.get("dc_array_w", 0.0)) <= 0.0):
+			continue
+		var csp2 := csp.duplicate(false)
+		csp2["dc_delivered_w"] = 0.0
+		csp2["dc_array_w"] = 0.0
+		csp2["dc_cap_w"] = 0.0
+		csp2["dc_curtail"] = ""
+		csp2["dc_clipped"] = false
+		var ws0 := _history_suppress
+		var wb0 := _sim_bulk_update
+		_history_suppress = true
+		_sim_bulk_update = true
+		model.update_item(str(cd_it.get("id", "")), {"specs": csp2})
+		_history_suppress = ws0
+		_sim_bulk_update = wb0
+	# Placed panels' shade (one model: SolarUI scales the array output by it
+	# and re-splits the controllers' shares; the cards below split by the same
+	# effective Wmp, so panels, controllers and "Making" agree).
+	var src_group := {}
+	for gi in entries.size():
+		for sid in ((entries[gi] as Dictionary).get("sources", []) as Array):
+			src_group[str(sid)] = gi
+	var receivers: Array = []
+	var sun_of := {}
+	if not shade_items.is_empty():
+		var smain := _get_scene_main_node()
+		var center := Vector3.ZERO
+		var soi := get_node_or_null("/root/SoiService")
+		if soi != null and soi.has_method("world_center"):
+			center = soi.call("world_center") as Vector3
+		for sit in shade_items:
+			var sd: Dictionary = sit
+			var sid2 := str(sd.get("id", ""))
+			var sf := _pv_sun_factor(sd)
+			sun_of[sid2] = sf
+			receivers.append({"id": sid2, "wmp": _pv_item_wmp(sd),
+				"group": int(src_group.get(sid2, -1)),
+				"pos": _pv_shade_origin(sd, smain, center), "s": sf})
+	if not display_only and is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_pv_shade"):
+		_solar_ui.call("set_graph_pv_shade", receivers, total_wmp)
 	if entries.is_empty() or total_wmp <= 0.0:
+		_pv_live_w = {}
 		_publish_live_circuits([])
-		if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
+		if not display_only and is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
 			_solar_ui.call("set_graph_dc_limit_w", -1.0)
 		return
+	var unrouted_frac := maxf(1.0 - routed_wmp / total_wmp, 0.0)
+	# Each controller's share of what the SHADED array makes right now.
+	var plain_caps: Array = []
+	for e0 in entries:
+		plain_caps.append({"frac": float((e0 as Dictionary).get("wmp", 0.0)) / total_wmp})
+	var eff := GraphSolarShading.shaded_caps(plain_caps, unrouted_frac,
+		GraphSolarShading.live_shade(receivers, total_wmp))
+	var eff_caps: Array = eff["caps"] as Array
+	var eff_unrouted := float(eff["unrouted_frac"])
+	var caps_for_solar: Array = []
+	var caps_w: Array = []
+	var throttles: Array = []
+	for e in entries:
+		var ed: Dictionary = e
+		var it2: Dictionary = ed.get("item", {}) as Dictionary
+		var frac := float(ed.get("wmp", 0.0)) / total_wmp
+		var share_w := raw_kw * 1000.0 * float((eff_caps[caps_for_solar.size()] as Dictionary).get("frac", frac))
+		var th := {"delivered_w": 0.0, "bus_voltage": 0.0, "limit_w": 0.0, "clipped": false}
+		if not bool((it2.get("specs", {}) as Dictionary).get("destroyed", false)):
+			th = GraphDcElectrical.controller_throttle(
+				it2, ed.get("bank", {}) as Dictionary, share_w)
+		var lim := float(th.get("limit_w", 0.0))
+		caps_for_solar.append({"frac": frac, "limit_w": lim if is_finite(lim) else -1.0})
+		caps_w.append(float(th.get("delivered_w", 0.0)))
+		th["offered_w"] = share_w
+		throttles.append(th)
+	var actual := GraphDcElectrical.split_actual(actual_kw * 1000.0, caps_w,
+		raw_kw * 1000.0 * eff_unrouted)
 	var was_suppress := _history_suppress
 	var was_bulk := _sim_bulk_update
 	_history_suppress = true
 	_sim_bulk_update = true
-	var delivered_total_w := 0.0
-	for e in entries:
-		var it2: Dictionary = (e as Dictionary).get("item", {}) as Dictionary
-		var share_w := raw_kw * 1000.0 * float((e as Dictionary).get("wmp", 0.0)) / total_wmp
-		var sp: Dictionary = (it2.get("specs", {}) as Dictionary).duplicate(false)
-		var th := {"delivered_w": 0.0, "bus_voltage": 0.0, "limit_w": 0.0, "clipped": false}
-		if not bool(sp.get("destroyed", false)):
-			th = GraphDcElectrical.controller_throttle(
-				it2, (e as Dictionary).get("bank", {}) as Dictionary, share_w)
-			delivered_total_w += float(th.get("delivered_w", 0.0))
-		var limit_w: float = float(th.get("limit_w", 0.0))
+	var live_w := {}
+	for i in entries.size():
+		var ed2: Dictionary = entries[i]
+		var it3: Dictionary = ed2.get("item", {}) as Dictionary
+		var th2: Dictionary = throttles[i]
+		var cap_w := float(caps_w[i])
+		var got_w := float(actual[i])
+		var offered_w := float(th2.get("offered_w", 0.0))
+		# Why the controller is passing less than it could: a full battery takes
+		# nothing more, so the array is backed off to what the loads use.
+		var curtail := ""
+		if got_w < cap_w - 1.0:
+			if soc >= 0.995:
+				curtail = "battery_full"
+			elif soc >= 0.95:
+				curtail = "battery_topping"
+			else:
+				curtail = "held_back"
+		var limit_w: float = float(th2.get("limit_w", 0.0))
 		if not is_finite(limit_w):
 			limit_w = 0.0  # no current limit modeled → no cap to display
-		if absf(float(sp.get("dc_delivered_w", -1.0)) - float(th.get("delivered_w", 0.0))) >= 1.0 \
-				or bool(sp.get("dc_clipped", false)) != bool(th.get("clipped", false)) \
-				or absf(float(sp.get("dc_bus_v", -1.0)) - float(th.get("bus_voltage", 0.0))) >= 0.5:
-			sp["dc_delivered_w"] = float(th.get("delivered_w", 0.0))
-			sp["dc_bus_v"] = float(th.get("bus_voltage", 0.0))
+		# Split by EFFECTIVE Wmp: a shaded panel's card reads what it makes.
+		var eff_w := {}
+		var wmp_c := 0.0
+		for sid0 in (ed2.get("sources", []) as Array):
+			var ew := _pv_item_wmp(model.get_item(str(sid0))) * float(sun_of.get(str(sid0), 1.0))
+			eff_w[str(sid0)] = ew
+			wmp_c += ew
+		wmp_c = maxf(wmp_c, 1e-6)
+		for sid in (ed2.get("sources", []) as Array):
+			live_w[str(sid)] = {"w": got_w * float(eff_w.get(str(sid), 0.0)) / wmp_c,
+				"curtail": "clipping" if curtail.is_empty() and bool(th2.get("clipped", false)) else curtail}
+		var sp: Dictionary = (it3.get("specs", {}) as Dictionary).duplicate(false)
+		if absf(float(sp.get("dc_delivered_w", -1.0)) - got_w) >= 1.0 \
+				or absf(float(sp.get("dc_cap_w", -1.0)) - cap_w) >= 1.0 \
+				or str(sp.get("dc_curtail", "")) != curtail \
+				or bool(sp.get("dc_clipped", false)) != bool(th2.get("clipped", false)) \
+				or absf(float(sp.get("dc_bus_v", -1.0)) - float(th2.get("bus_voltage", 0.0))) >= 0.5 \
+				or absf(float(sp.get("dc_array_w", -1.0)) - offered_w) >= 2.0:
+			# What the array OFFERS this controller — the card draws delivered
+			# against it, so a clipped or curtailed share is visible as a number.
+			sp["dc_array_w"] = offered_w
+			sp["dc_cap_w"] = cap_w
+			sp["dc_delivered_w"] = got_w
+			sp["dc_curtail"] = curtail
+			sp["dc_bus_v"] = float(th2.get("bus_voltage", 0.0))
 			sp["dc_limit_w"] = limit_w
-			sp["dc_clipped"] = bool(th.get("clipped", false))
-			model.update_item(str(it2.get("id", "")), {"specs": sp})
+			sp["dc_clipped"] = bool(th2.get("clipped", false))
+			model.update_item(str(it3.get("id", "")), {"specs": sp})
 	_history_suppress = was_suppress
 	_sim_bulk_update = was_bulk
+	_pv_live_w = live_w
 	_publish_live_circuits(entries)
-	_check_bank_advice(entries)
-	# PV wattage not routed through any eligible controller passes uncapped —
-	# freeplay arrays mirrored via the virtual chain keep working untouched.
-	var unrouted_w: float = raw_kw * 1000.0 * maxf(1.0 - routed_wmp / total_wmp, 0.0)
-	if is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_dc_limit_w"):
-		_solar_ui.call("set_graph_dc_limit_w", delivered_total_w + unrouted_w)
+	if not display_only:
+		_check_bank_advice(entries)
+	# PV not routed through any eligible controller passes uncapped — freeplay
+	# arrays mirrored via the virtual chain keep working untouched. The caps go
+	# over as a FUNCTION of the raw output so SolarUI's live tick and the
+	# challenge bake apply them at every hour, not at the hour Run was pressed.
+	if not display_only and is_instance_valid(_solar_ui):
+		if _solar_ui.has_method("set_graph_dc_caps"):
+			_solar_ui.call("set_graph_dc_caps", caps_for_solar, unrouted_frac)
+		elif _solar_ui.has_method("set_graph_dc_limit_w"):
+			var total_cap := 0.0
+			for c in caps_w:
+				total_cap += float(c)
+			_solar_ui.call("set_graph_dc_limit_w", total_cap + raw_kw * 1000.0 * unrouted_frac)
 
 
 ## Non-destructive coaching: a bank paralleled where series would move twice
@@ -15420,7 +16496,37 @@ static func _pv_item_wmp(item: Dictionary) -> float:
 	return float(sp.get("wmp", 0.0))
 
 
-const _CspTroughSource := preload("res://power_system/sources/csp_trough_source.gd")
+## The shade factor a PV source is under (GraphSolarShading, stamped by
+## _tick_graph_solar_shading). 1 for anything the tick does not ray-cast, and
+## always 1 in the bootcamp sandbox, whose panels are not in this world.
+func _pv_sun_factor(item: Dictionary) -> float:
+	if _sandbox_active or not _pv_is_shade_receiver(item):
+		return 1.0
+	return clampf(float((item.get("specs", {}) as Dictionary).get("sunlight_factor", 1.0)), 0.0, 1.0)
+
+
+func _pv_is_shade_receiver(item: Dictionary) -> bool:
+	return GraphSolarShading.is_receiver_type(str(item.get("type", ""))) \
+		and GraphSiteLayout.has_site_coords(item)
+
+
+## World sample origin of a placed PV source, cached on its site + elevation
+## (the ground query is not free and the throttle pass runs at 10 Hz).
+var _pv_shade_origin_cache: Dictionary = {}
+
+func _pv_shade_origin(item: Dictionary, main: Node, center: Vector3) -> Vector3:
+	var iid := str(item.get("id", ""))
+	var key := "%.2f|%.2f|%s|%.1f|%.1f" % [float(item.get("site_x_m", 0.0)),
+		float(item.get("site_z_m", 0.0)), str(item.get("elevation_m", "")), center.x, center.z]
+	var hit: Dictionary = _pv_shade_origin_cache.get(iid, {}) as Dictionary
+	if str(hit.get("k", "")) == key:
+		return hit["pos"] as Vector3
+	var pos := GraphSolarShading.sample_origin(item, main, center)
+	_pv_shade_origin_cache[iid] = {"k": key, "pos": pos}
+	return pos
+
+
+const _CspTroughSource :=preload("res://power_system/sources/csp_trough_source.gd")
 const _CSP_POLL_INTERVAL := 0.25
 var _csp_acc: float = _CSP_POLL_INTERVAL
 
@@ -15883,7 +16989,7 @@ func start_cnc_cut_preset(item_id: String, preset_id: String) -> Dictionary:
 		return {"ok": false, "error": "no inventory"}
 	var need := maxi(int(preset.get("consume_qty", 1)), 1)
 	if inv.count_beam_feedstock() < need:
-		return {"ok": false, "error": "need %d recycled plastic beam(s) in inventory" % need}
+		return {"ok": false, "error": "need %s in inventory" % UiText.count(need, "recycled plastic beam")}
 	var consumed_id := inv.consume_beam_feedstock(need)
 	if consumed_id.is_empty():
 		return {"ok": false, "error": "could not debit beam feedstock"}
@@ -16421,10 +17527,10 @@ func _cancel_conduit_routing_for_modal() -> void:
 		route_ui.call("hide_route")
 
 
+## The style modal writes LIVE (every 0.15 s while a slider moves) and
+## force-remeshes the one wire itself; a full sync_all here on every write
+## rebuilt every run on the map at slider rate.
 func _on_conduit_style_applied(_conn_id: String) -> void:
-	var mgr := _get_conduit_manager()
-	if mgr != null and mgr.has_method("sync_all"):
-		mgr.call("sync_all")
 	_schedule_graph_autosave()
 
 
@@ -16638,6 +17744,12 @@ func _tick_graph_solar_shading(delta: float) -> void:
 	if _shade_acc < _SHADE_POLL_INTERVAL:
 		return
 	_shade_acc = 0.0
+	# The bootcamp's panels are a schematic exercise, not objects in this
+	# world: ray-casting them against the player's site put level 8's array in
+	# a tree's shadow (factor 0.2), and the panel cards read a fifth of what
+	# the controller delivered.
+	if _sandbox_active:
+		return
 
 	var main := _get_scene_main_node()
 	if main == null or not main.is_inside_tree():
@@ -17247,7 +18359,11 @@ func _layout_compound_scopes(scope_id: String) -> void:
 		else:
 			var conns: Array = model.get_connections_in_scope(str(sid)) \
 				if model.has_method("get_connections_in_scope") else []
-			patches = GraphLayout.relax_forces(items, conns)
+			# The same force layout as Tidy: rect-aware, no overlaps, flow
+			# top to bottom (the old relax_forces pushed point charges and
+			# left the overlaps to a final pass).
+			patches = GraphForceLayout.tidy(items, conns, Callable(self, "_layout_port_side"),
+				_ensure_layout_driver().params)
 		for iid_v in patches.keys():
 			var pos: Vector2 = patches[iid_v] as Vector2
 			model.update_item(str(iid_v), {"x": pos.x, "y": pos.y})
@@ -17257,6 +18373,14 @@ func _fit_canvas_to_content() -> void:
 	if _graph_canvas == null or model == null:
 		return
 	var items: Array = GraphLayout.filter_layout_items(model.get_items_in_scope(_active_scope_id))
+	var shown: Dictionary = _graph_canvas.call("domain_visible_ids") \
+		if _graph_canvas.has_method("domain_visible_ids") else {}
+	if not shown.is_empty():
+		var kept: Array = []
+		for it in items:
+			if shown.has(str((it as Dictionary).get("id", ""))):
+				kept.append(it)
+		items = kept
 	if items.is_empty():
 		return
 	var c := _graph_canvas as Control
@@ -17330,11 +18454,13 @@ func _wire_selected_panels(series: bool) -> void:
 		GraphPvWiring.wire_series(model, ids, ctrl_id, _active_scope_id)
 	else:
 		GraphPvWiring.wire_parallel(model, ids, ctrl_id, _active_scope_id)
+	# Then line the array up: one row per series string.
+	_layout_panel_grid(ids)
 	_history_suppress = false
 	_push_history()
 	call_deferred("_check_electrical_faults")
-	_show_toast("Wired %d panel(s) %s → controller" % [
-		ids.size(), "in series" if series else "in parallel"])
+	_show_toast("Wired %s %s → controller" % [
+		UiText.count(ids.size(), "panel"), "in series" if series else "in parallel"])
 	_update_special_group_buttons()
 func _ensure_pbi_nodes() -> void:
 	if model == null:
@@ -17929,3 +19055,457 @@ func _restock_tank(tank_id: String, capacity: float, level: float) -> void:
 func _mark_dirty_for_autosave() -> void:
 	if has_method("_schedule_graph_autosave"):
 		call("_schedule_graph_autosave")
+
+
+
+# ---------------------------------------------------------------------------
+# Show ▾ — show-only views (GraphDomainFilter)
+# ---------------------------------------------------------------------------
+
+## Show only the given domains ({} = everything). Nothing is removed from the
+## graph; hidden nodes and wires can be neither seen nor clicked.
+func set_domain_filter(shown: Dictionary, include_unwired: bool = _domain_unwired) -> void:
+	_domain_shown = {} if GraphDomainFilter.is_all(shown) else shown.duplicate()
+	_domain_unwired = include_unwired
+	if _graph_canvas != null and _graph_canvas.has_method("set_domain_filter"):
+		_graph_canvas.call("set_domain_filter", _domain_shown, _domain_unwired)
+		# A hidden node must not stay selected (Delete would take it).
+		if not _domain_shown.is_empty():
+			var ids: Dictionary = _graph_canvas.call("domain_visible_ids")
+			var sel: Array = _graph_canvas.get("selected_item_ids")
+			for iid in sel:
+				if not ids.has(str(iid)):
+					_graph_canvas.call("_select_item", "")
+					break
+	if _layout_driver != null:
+		_layout_driver.mark_dirty()
+	if _conduit_manager != null and is_instance_valid(_conduit_manager) \
+			and _conduit_manager.has_method("set_preview_domain_filter"):
+		_conduit_manager.call("set_preview_domain_filter", _domain_shown)
+	_sync_show_menu()
+
+
+func get_domain_filter() -> Dictionary:
+	return _domain_shown.duplicate()
+
+
+func _on_show_menu_id(id: int) -> void:
+	match id:
+		SHOW_ALL:
+			set_domain_filter({})
+		SHOW_POWER:
+			set_domain_filter(GraphDomainFilter.preset("power"))
+		SHOW_WATER:
+			set_domain_filter(GraphDomainFilter.preset("water"))
+		SHOW_FOOD:
+			set_domain_filter(GraphDomainFilter.preset("food"))
+		SHOW_FUEL:
+			set_domain_filter(GraphDomainFilter.preset("fuel"))
+		SHOW_UNWIRED:
+			set_domain_filter(_domain_shown, not _domain_unwired)
+		_:
+			var i := id - SHOW_DOMAIN_BASE
+			if i < 0 or i >= GraphDomainFilter.DOMAINS.size():
+				return
+			var d: String = GraphDomainFilter.DOMAINS[i]
+			var cur := _domain_shown.duplicate()
+			if cur.is_empty():
+				# From "everything", ticking one kind off means "all but it".
+				for k in GraphDomainFilter.DOMAINS:
+					cur[k] = true
+			if cur.get(d, false):
+				cur.erase(d)
+			else:
+				cur[d] = true
+			if cur.is_empty():
+				return   # never hide every kind; untick the last one = no-op
+			set_domain_filter(cur)
+	_queue_autosave_if_any()
+
+
+func _queue_autosave_if_any() -> void:
+	_schedule_graph_autosave()
+
+
+func _sync_show_menu() -> void:
+	if _show_menu == null:
+		return
+	var pop := _show_menu.get_popup()
+	var all := _domain_shown.is_empty()
+	var presets := {SHOW_ALL: {}, SHOW_POWER: GraphDomainFilter.preset("power"),
+		SHOW_WATER: GraphDomainFilter.preset("water"), SHOW_FOOD: GraphDomainFilter.preset("food"),
+		SHOW_FUEL: GraphDomainFilter.preset("fuel")}
+	for pid in presets:
+		var want: Dictionary = presets[pid]
+		var on := (all and want.is_empty()) or (not all and want == _domain_shown)
+		pop.set_item_checked(pop.get_item_index(pid), on)
+	for i in GraphDomainFilter.DOMAINS.size():
+		var d: String = GraphDomainFilter.DOMAINS[i]
+		pop.set_item_checked(pop.get_item_index(SHOW_DOMAIN_BASE + i), all or _domain_shown.get(d, false))
+	pop.set_item_checked(pop.get_item_index(SHOW_UNWIRED), _domain_unwired)
+	var label := "Show ▾" if all else "Show: %s ▾" % GraphDomainFilter.describe(_domain_shown)
+	_show_menu.set_meta("full_text", label)
+	if _topbar_level < 2:
+		_show_menu.text = label
+	var hidden := 0
+	if not all and _graph_canvas != null and _graph_canvas.has_method("domain_hidden_count"):
+		hidden = int(_graph_canvas.call("domain_hidden_count"))
+	_show_menu.tooltip_text = ("Show only some kinds of node and wire — hides them without removing anything."
+		if all else "Showing %s · %s hidden here. Pick Everything to show all again." % [
+			GraphDomainFilter.describe(_domain_shown), UiText.count(hidden, "node")])
+	_show_menu.add_theme_color_override("font_color", C_TEXT if all else UITheme.C_AMBER)
+	_queue_topbar_fit()
+	_sync_filter_chip(hidden)
+
+
+## While a show-only view is on, an amber chip on the canvas says so (the Show
+## menu folds to an icon on a narrow bar); clicking it shows everything again.
+var _filter_chip: Button = null
+
+
+func _sync_filter_chip(hidden: int) -> void:
+	if _graph_canvas == null:
+		return
+	var on := not _domain_shown.is_empty()
+	if _filter_chip == null or not is_instance_valid(_filter_chip):
+		if not on:
+			return
+		_filter_chip = Button.new()
+		_filter_chip.name = "FilterChip"
+		_filter_chip.focus_mode = Control.FOCUS_NONE
+		_filter_chip.add_theme_stylebox_override("normal", UITheme.chip_style(UITheme.C_AMBER))
+		_filter_chip.add_theme_stylebox_override("hover", UITheme.chip_style(UITheme.C_AMBER))
+		_filter_chip.add_theme_color_override("font_color", UITheme.C_AMBER)
+		_filter_chip.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		_filter_chip.tooltip_text = "Click to show everything again"
+		_filter_chip.pressed.connect(func() -> void:
+			set_domain_filter({})
+			_schedule_graph_autosave())
+		(_graph_canvas as Control).add_child(_filter_chip)
+		_filter_chip.position = Vector2(12, 12)
+	_filter_chip.visible = on
+	if on:
+		_filter_chip.text = "Showing %s · %s hidden  ✕" % [
+			GraphDomainFilter.describe(_domain_shown), UiText.count(hidden, "node")]
+
+
+
+# ---------------------------------------------------------------------------
+# Library: "In the world, not on the graph" (GraphWorldInventory)
+# ---------------------------------------------------------------------------
+
+var _world_inv_pending := false
+var _world_inv_listening := false
+
+
+## Rebuild the library's world drawer soon (debounced 0.5 s; only while the
+## graph is open — opening it queues one).
+func _queue_world_inventory() -> void:
+	if not _world_inv_listening:
+		_world_inv_listening = true
+		PlacedLightService.add_listener(Callable(self, "_queue_world_inventory"))
+	if _world_inv_pending or not is_inside_tree():
+		return
+	_world_inv_pending = true
+	get_tree().create_timer(0.5).timeout.connect(func() -> void:
+		_world_inv_pending = false
+		if visible:
+			_populate_world_inventory())
+
+
+func _populate_world_inventory() -> void:
+	if _lib_panel == null or not _lib_panel.has_method("populate_world_inventory"):
+		return
+	var rows := GraphWorldInventory.collect(self)
+	for r in rows:
+		var d: Dictionary = r
+		var p: Vector3 = d.get("pos", Vector3.INF)
+		if p != Vector3.INF and is_finite(p.x):
+			var at := Vector2(p.x, p.z)
+			d["locate"] = func() -> void: look_at_world_xz(at)
+		var add: Callable = d.get("add", Callable())
+		d["add"] = func() -> void:
+			var ok: Variant = add.call() if add.is_valid() else false
+			if ok == false:
+				_show_toast("Could not add %s to the graph" % str(d.get("name", "it")))
+			else:
+				_show_toast("Added %s to the graph" % str(d.get("name", "it")))
+			_queue_world_inventory()
+	_lib_panel.call("populate_world_inventory", GraphWorldInventory.grouped(rows))
+
+
+## Scene power consumers + scene energy sources not on the graph, as world
+## rows whose Add spawns the node beside the view centre (the old "In Model" /
+## "Scene Objects" shelves, now one drawer — and Scene Objects finally skips
+## what is already on the graph).
+func _world_inventory_scene_presets() -> Array:
+	var out: Array = []
+	for pair in [["Scene devices", _scene_device_presets()], ["Scene energy sources", _graph_linkable_presets()]]:
+		for p in pair[1]:
+			var preset: Dictionary = p
+			var path := str((preset.get("specs", {}) as Dictionary).get("scene_device_path", ""))
+			var pos := Vector3.INF
+			var n := get_node_or_null(path)
+			if n is Node3D:
+				pos = (n as Node3D).global_position
+			out.append({"group": pair[0], "id": "scene:" + path, "name": str(preset.get("label", "")),
+				"sub": str(preset.get("type", "")), "pos": pos,
+				"add": func() -> bool:
+					_spawn_at_canvas_center(preset)
+					return true})
+	return out
+
+
+
+# ---------------------------------------------------------------------------
+# Solar grid: line an array's panels up (PvGridSnap / GraphPvWiring)
+# ---------------------------------------------------------------------------
+
+## Selected panels, or — with a controller selected — every panel feeding it.
+func _grid_panel_ids() -> Array:
+	var ids: Array = _panel_selection_ids()
+	if ids.is_empty() and _selected_item_ids.size() == 1:
+		var it := model.get_item(_selected_item_ids[0])
+		if str(it.get("type", "")) == "controller":
+			for sid in PvElectrical.pv_sources_for_controller(model, str(it.get("id", "")), _active_scope_id):
+				if str(model.get_item(str(sid)).get("type", "")) == "panel":
+					ids.append(str(sid))
+	return ids
+
+
+func _layout_panel_grid(ids: Array) -> void:
+	var rows := GraphPvWiring.string_rows(model, ids, _active_scope_id)
+	var all_single := true
+	for r in rows:
+		if (r as Array).size() > 1:
+			all_single = false
+	if all_single:
+		# Parallel panels (strings of one): one row, left to right.
+		var flat: Array = []
+		for r in rows:
+			flat.append_array(r as Array)
+		flat.sort_custom(func(a, b) -> bool:
+			return float(model.get_item(str(a)).get("x", 0.0)) < float(model.get_item(str(b)).get("x", 0.0)))
+		rows = [flat]
+	var gap := 24.0
+	if _graph_canvas != null:
+		gap = float(_graph_canvas.get("pv_snap_gap_px"))
+	GraphPvWiring.layout_panels_grid(model, rows, gap, gap + 4.0)
+
+
+## Combine ▾ → "Arrange array as grid" (one undo step).
+func arrange_array_as_grid() -> bool:
+	if model == null:
+		return false
+	var ids := _grid_panel_ids()
+	if ids.size() < 2:
+		_show_toast("Select 2+ panels, or the controller they feed")
+		return false
+	_history_suppress = true
+	_layout_panel_grid(ids)
+	_history_suppress = false
+	_push_history()
+	_schedule_graph_autosave()
+	_show_toast("Lined up %s as a grid" % UiText.count(ids.size(), "panel"))
+	return true
+
+
+
+## Push the PV grid-snap prefs onto the canvas (freeform drag + Tidy blocks).
+func _apply_pv_snap_prefs() -> void:
+	if _graph_canvas == null:
+		return
+	var p := PvGridSnap.prefs()
+	_graph_canvas.set("pv_snap_enabled", bool(p["enabled"]))
+	_graph_canvas.set("pv_snap_gap_px", float(p["graph_gap_px"]))
+	if _layout_driver != null:
+		_layout_driver.mark_dirty()
+
+
+# ---------------------------------------------------------------------------
+# Connect tool (Globe / Site Plan): draw a 3D run between two nodes
+# ---------------------------------------------------------------------------
+
+var _connect_btn: Button = null
+var _connect_tool_on := false
+
+
+func _build_connect_btn(parent: Control) -> void:
+	_connect_btn = Button.new()
+	_connect_btn.text = "Connect (C)"
+	_connect_btn.toggle_mode = true
+	_connect_btn.focus_mode = Control.FOCUS_NONE
+	_connect_btn.tooltip_text = ("Draw a 3D run between two nodes: click a node, click the ground for "
+		+ "bends, click the other node. The run is routed over the terrain and measured — "
+		+ "the same run first-person plugging makes. RMB takes a bend back · Esc cancels.")
+	_apply_topbar_btn_style(_connect_btn)
+	UiIcons.apply(_connect_btn, "plug")
+	_connect_btn.visible = false
+	_connect_btn.toggled.connect(func(on: bool) -> void:
+		if on != _connect_tool_on:
+			set_connect_tool(on))
+	parent.add_child(_connect_btn)
+
+
+func _connect_tool_lens() -> bool:
+	return _graph_view_mode == GraphSiteLayout.VIEW_GLOBE \
+		or _graph_view_mode == GraphSiteLayout.VIEW_SITE
+
+
+func _sync_connect_btn() -> void:
+	if _connect_btn == null:
+		return
+	var lens_ok := _connect_tool_lens()
+	_connect_btn.visible = lens_ok
+	if not lens_ok and _connect_tool_on:
+		set_connect_tool(false)
+
+
+## Turn the connect tool on/off (C, or the lens strip button).
+func set_connect_tool(on: bool) -> void:
+	if on and not _connect_tool_lens():
+		return
+	_connect_tool_on = on
+	if _graph_canvas != null and _graph_canvas.has_method("set_connect_tool"):
+		_graph_canvas.call("set_connect_tool", on)
+	if _connect_btn != null:
+		_connect_btn.set_pressed_no_signal(on)
+	if on:
+		_show_toast("Connect: click a node, then the ground for bends, then the other node")
+
+
+func _on_connect_tool_cancelled() -> void:
+	_connect_tool_on = false
+	if _connect_btn != null:
+		_connect_btn.set_pressed_no_signal(false)
+
+
+## A run drawn in the Globe / Site Plan: the connection (same fields a canvas
+## wire drag makes), its kind from the resource default, shown in 3D, the
+## clicked bends LOCKED as its route, then built — measured like any run.
+## Returns the new connection id ("" when refused).
+func _on_world_connect_requested(src_item: String, src_handle: String, dst_item: String,
+		dst_handle: String, waypoints: Array) -> String:
+	if model == null:
+		return ""
+	var src := model.get_item(src_item)
+	var dst := model.get_item(dst_item)
+	for it in [src, dst]:
+		if not model.item_has_3d_anchor(it):
+			_show_toast("%s has no place in the 3D world yet — place it first (inspector → Place in 3D)" % [
+				GraphPortLabels.node_name(it)])
+			return ""
+	var sh: Dictionary = _graph_canvas.call("_handle_dict", src, src_handle) if _graph_canvas != null else {}
+	var pol := str(sh.get("polarity", ""))
+	var kind := ResourceKinds.normalize_kind(str(sh.get("resource_kind", "")))
+	var conn := {
+		"scope_id": _active_scope_id,
+		"polarity": pol,
+		"resource_type": kind if pol == "resource" else "",
+		"source_item_id": src_item, "source_handle_id": src_handle,
+		"target_item_id": dst_item, "target_handle_id": dst_handle,
+		"waypoints": [], "route_3d": [], "conduit_type": "", "route_length_m": 0.0,
+		"line_style": model.last_line_style, "curve_tension": 1.0, "corner_radius": 28.0,
+		"voltage_mismatch": false, "type_mismatch": false,
+	}
+	# ONE undo step for the whole run (add + route + measured length): the
+	# add alone would snapshot a run with no route, and undoing a later bend
+	# edit would then drop the route entirely.
+	var was_suppress := _history_suppress
+	_history_suppress = true
+	model.add_connection(conn)
+	var cid := str(conn.get("id", ""))
+	var route: Array = []
+	for w in waypoints:
+		if w is Vector3:
+			route.append({"x": (w as Vector3).x, "y": (w as Vector3).y, "z": (w as Vector3).z})
+	var patch := {"conduit_type": ConduitKinds.derive_type_for_connection(model.get_connection(cid)),
+		"visible_3d": true}
+	if not route.is_empty():
+		patch["route_3d"] = route
+		patch["route_locked"] = true
+	model.update_connection(cid, patch)
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("force_remesh"):
+		mgr.call("force_remesh", cid)
+	_history_suppress = was_suppress
+	_push_history()
+	_update_undo_redo_btns()
+	# What the suppressed add would have run: a water wire into a turbine
+	# still becomes its penstock, and a live session still hears the edit.
+	call_deferred("_auto_penstock_for_new_water_wires")
+	if MultiplayerSession != null and MultiplayerSession.has_method("is_active") \
+			and MultiplayerSession.is_active() and MultiplayerSession.has_method("notify_graph_edited"):
+		MultiplayerSession.notify_graph_edited("add_connection")
+	var len_m := float(model.get_connection(cid).get("route_length_m", 0.0))
+	_show_toast("Connected %s → %s%s" % [GraphPortLabels.node_name(src), GraphPortLabels.node_name(dst),
+		(" · " + ConduitLength.describe(len_m, str(patch["conduit_type"]))) if len_m > 0.0 else ""])
+	_schedule_graph_autosave()
+	return cid
+
+
+## A run's bends edited in the Globe / Site Plan (a waypoint dragged over the
+## ground, inserted by dragging the line, or removed by double-click): the
+## route is locked as drawn, the run rebuilt and re-measured, and the whole
+## edit is ONE undo step (history is a snapshot after the change).
+func _on_world_route_edited(conn_id: String, route: Array) -> void:
+	if model == null or model.get_connection(conn_id).is_empty():
+		return
+	var was := _history_suppress
+	_history_suppress = true
+	model.update_connection(conn_id, {"route_3d": route, "route_locked": not route.is_empty()})
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("force_remesh"):
+		mgr.call("force_remesh", conn_id)
+	_history_suppress = was
+	_push_history()
+	_update_undo_redo_btns()
+	_schedule_graph_autosave()
+	if MultiplayerSession != null and MultiplayerSession.has_method("is_active") \
+			and MultiplayerSession.is_active() and MultiplayerSession.has_method("notify_graph_edited"):
+		MultiplayerSession.notify_graph_edited("update_connection")
+	var conn := model.get_connection(conn_id)
+	if _graph_canvas != null and str(_graph_canvas.get("selected_connection_id")) == conn_id \
+			and _inspector_panel != null and _inspector_panel.has_method("inspect_connection"):
+		_inspector_panel.call("inspect_connection", conn, model)
+	var len_m := float(conn.get("route_length_m", 0.0))
+	if len_m > 0.0:
+		_show_toast("Run re-routed · " + ConduitLength.describe(len_m,
+			ConduitKinds.derive_type_for_connection(conn)), 2.0)
+
+
+## The lens's "Place it here" for a node with no 3D twin: its model (a grey
+## box when it has none) is placed at that ground point through the same
+## commit the 3D ghost uses, and bound to this node — no duplicate is made.
+func _on_world_place_requested(item_id: String, world: Vector3) -> void:
+	if model == null:
+		return
+	var it := model.get_item(item_id)
+	if it.is_empty() or model.item_has_3d_anchor(it):
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var preset := {
+		"type": str(it.get("type", "")),
+		"label": GraphPortLabels.node_name(it),
+		"icon": "📍",
+		"width": float(it.get("width", 124.0)),
+		"height": float(it.get("height", 112.0)),
+		"specs": specs,
+	}
+	_on_lib_place_model_requested(preset, item_id, world)
+	_schedule_graph_autosave()
+
+
+## The Globe lens's orbit (SoiService hands it to the full-screen globe and
+## back) — {} when the Globe lens is not up.
+func globe_orbit_state() -> Dictionary:
+	if _soi_preview == null or not is_instance_valid(_soi_preview) \
+			or not _soi_preview.has_method("globe_orbit_state"):
+		return {}
+	return _soi_preview.call("globe_orbit_state")
+
+
+func apply_globe_orbit_state(d: Dictionary) -> void:
+	if _soi_preview != null and is_instance_valid(_soi_preview) \
+			and _soi_preview.has_method("apply_globe_orbit_state"):
+		_soi_preview.call("apply_globe_orbit_state", d)

@@ -126,28 +126,32 @@ func set_collapsed(on: bool) -> void:
 	call_deferred("refresh_position")
 
 
-## Re-anchor above the Solar UI on the left side.
+## Hand placement to the HUD layout manager (top-left region, above the
+## Power Scoreboard). It used to anchor itself here AND push SolarUI's offsets
+## by hand — which also forced SolarUI back to a 610 px height after every
+## timeline change, fighting SolarUI's own collapse.
+var _hud_registered := false
+
 func refresh_position() -> void:
-	anchor_left = 0.0
-	anchor_right = 0.0
-	anchor_top = 0.0
-	anchor_bottom = 0.0
-	grow_horizontal = Control.GROW_DIRECTION_END
-	grow_vertical = Control.GROW_DIRECTION_END
-	
-	var w := 380.0 # Exactly matches SolarUI width
-	offset_left = 12.0
-	offset_right = offset_left + w
-	offset_top = 10.0
-	var h := get_combined_minimum_size().y
-	offset_bottom = offset_top + h
-	
-	# Push SolarUI down just below the weather card
-	_ensure_solar_ref()
-	if is_instance_valid(_solar_ui):
-		_solar_ui.offset_top = offset_bottom + 10.0
-		# Preserve its height of 610.0 from its original layout (default top 10, bottom 620)
-		_solar_ui.offset_bottom = _solar_ui.offset_top + 610.0
+	set_anchors_preset(Control.PRESET_TOP_LEFT, true)
+	size = Vector2(380.0, get_combined_minimum_size().y)
+	if not _hud_registered:
+		_hud_registered = true
+		HudLayout.register(self, "weather", "top_left", {
+			"order": 0, "priority": 5, "title": "weather", "icon": "cloud",
+			"size": func() -> Vector2: return Vector2(380.0, get_combined_minimum_size().y),
+			"compact": _compact_text,
+		})
+	var h := HudLayout.get_hud()
+	if h != null:
+		h.queue_layout()
+
+
+## One line for the tucked pill: "56°F · Clear".
+func _compact_text() -> String:
+	var t := _temp_lbl.text if _temp_lbl != null else ""
+	var src := _source_chip.text if _source_chip != null else ""
+	return ("%s · %s" % [t, src.strip_edges()]) if not src.is_empty() else t
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ extends SceneTree
 const HPY := VegetationGrowth.HOURS_PER_YEAR
 ## A Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the check COUNT is pinned too.
-const EXPECTED_CHECKS := 109
+const EXPECTED_CHECKS := 115
 
 var _failures: int = 0
 var _checks: int = 0
@@ -557,22 +557,79 @@ func _test_settings_with_variant_non_clobber() -> void:
 		"spruce", player, VegetationCardFactory.SPECS)
 	# SPECS spruce 21 × (user 25 / family default 17); 6 × (10 / 7).
 	_check("variant scales by the USER height ratio",
-		_approx(float(merged.get("pine_height_m", 0.0)), 21.0 * 25.0 / 17.0, 1e-3),
+		_approx(float(merged.get("pine_height_m", 0.0)), float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["height_m"]) * 25.0 / 17.0, 1e-3),
 		"got %s" % str(merged.get("pine_height_m")))
 	_check("variant scales by the USER crown ratio",
-		_approx(float(merged.get("pine_crown_width_m", 0.0)), 6.0 * 10.0 / 7.0, 1e-3),
+		_approx(float(merged.get("pine_crown_width_m", 0.0)), float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["crown_m"]) * 10.0 / 7.0, 1e-3),
 		"got %s" % str(merged.get("pine_crown_width_m")))
 	_check("variant stamps species id",
 		str(merged.get("_variant_species", "")) == "spruce")
 	var bare := VegSpeciesCatalog.settings_with_variant(
 		"spruce", {"pine_height_m": 25.0}, VegetationCardFactory.SPECS)
 	_check("no provenance -> SPECS wins",
-		_approx(float(bare.get("pine_height_m", 0.0)), 21.0, 1e-6),
+		_approx(float(bare.get("pine_height_m", 0.0)), float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["height_m"]), 1e-6),
 		"got %s" % str(bare.get("pine_height_m")))
 	var empty := VegSpeciesCatalog.settings_with_variant(
 		"fir", {}, VegetationCardFactory.SPECS)
 	_check("variant fills missing height from SPECS",
 		float(empty.get("pine_height_m", 0.0)) > 0.0)
+	# IDEMPOTENT (2026-10-15): the world resolves a batch's settings and the
+	# mesh builder resolves them again, while Tune look resolves once. A second
+	# resolution must be a no-op, or a family-wide size edit is ratio-scaled
+	# twice in the world ("what I see is not what I get").
+	var tuned := {"pine_height_m": 25.0, "pine_trunk_diameter_cm": 75.0,
+		"pine_crown_base_pct": 11.0,
+		VegStyleStore.KEY_USER_FAMILY: ["pine_height_m", "pine_trunk_diameter_cm",
+			"pine_crown_base_pct"],
+		VegStyleStore.KEY_SPECIES_OVERRIDES: {"douglas_fir": {"droop": 0.5}}}
+	var once := VegSpeciesCatalog.settings_with_variant("douglas_fir", tuned,
+		VegetationCardFactory.SPECS)
+	var twice := VegSpeciesCatalog.settings_with_variant("douglas_fir", once,
+		VegetationCardFactory.SPECS)
+	var bad := ""
+	for k in ["pine_height_m", "pine_trunk_diameter_cm", "pine_crown_base_pct",
+			"pine_crown_width_m", "pine_droop"]:
+		if not _approx(float(once.get(k, -1.0)), float(twice.get(k, -2.0)), 1e-6):
+			bad += " %s %s->%s" % [k, once.get(k), twice.get(k)]
+	_check("resolving twice == resolving once", bad.is_empty(), bad)
+	_check("the species override survives a second resolution",
+		_approx(float(twice.get("pine_droop", 0.0)), 0.5, 1e-6))
+	# Re-resolving a douglas_fir dict as another species starts from the
+	# ORIGINAL style, not from Douglas-fir's numbers.
+	var as_spruce := VegSpeciesCatalog.settings_with_variant("spruce", once,
+		VegetationCardFactory.SPECS)
+	var spruce_direct := VegSpeciesCatalog.settings_with_variant("spruce", tuned,
+		VegetationCardFactory.SPECS)
+	_check("re-resolving as another species == resolving it directly",
+		_approx(float(as_spruce.get("pine_height_m", 0.0)),
+			float(spruce_direct.get("pine_height_m", 1.0)), 1e-6)
+		and _approx(float(as_spruce.get("pine_trunk_diameter_cm", 0.0)),
+			float(spruce_direct.get("pine_trunk_diameter_cm", 1.0)), 1e-6)
+		and as_spruce.has("pine_droop") == spruce_direct.has("pine_droop"),
+		"%s vs %s" % [as_spruce.get("pine_height_m"), spruce_direct.get("pine_height_m")])
+	_check("the source dict is not mutated",
+		not tuned.has(VegSpeciesCatalog.KEY_RESOLVE_RAW)
+		and _approx(float(tuned["pine_height_m"]), 25.0, 1e-9))
+	# The mesh a batch builds from its PRE-resolved settings is the mesh the
+	# Tune-look preview builds from the raw style.
+	for sid in ["douglas_fir", "maple"]:
+		VegAssetCache.clear()
+		var raw_style := tuned.duplicate(true)
+		raw_style["deciduous_height_m"] = 18.0
+		raw_style[VegStyleStore.KEY_USER_FAMILY] = (tuned[VegStyleStore.KEY_USER_FAMILY]
+			as Array) + ["deciduous_height_m"]
+		var m_preview := VegetationCardFactory.mesh_for_canopy_lod(sid, raw_style,
+			VegetationCardFactory.CanopyLodTier.NEAR)
+		VegAssetCache.clear()
+		var pre := VegSpeciesCatalog.settings_with_variant(sid, raw_style,
+			VegetationCardFactory.SPECS)
+		var m_world := VegetationCardFactory.mesh_for_canopy_lod(sid, pre,
+			VegetationCardFactory.CanopyLodTier.NEAR)
+		_check("%s: world mesh (pre-resolved) == preview mesh" % sid,
+			m_preview != null and m_world != null
+			and m_preview.get_aabb().size.is_equal_approx(m_world.get_aabb().size),
+			"%s vs %s" % [m_preview.get_aabb().size if m_preview else null,
+				m_world.get_aabb().size if m_world else null])
 
 
 func _test_size_var_scales() -> void:

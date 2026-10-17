@@ -110,6 +110,7 @@ var _tool_btns: Dictionary = {}
 var _undo_btn: Button = null
 var _redo_btn: Button = null
 var _night_btn: Button = null
+var _collapse_btn: Button = null
 var _space_btn: Button = null
 var _hint: Label = null
 var _preset_row: HBoxContainer = null
@@ -183,6 +184,10 @@ func open() -> void:
 	_ensure_world_nodes()
 	_set_tool(_tool)
 	_on_model_changed()
+	if not _collapsed:
+		HudLayout.claim_right_dock("light_studio", _panel, DOCK_W)
+	else:
+		HudLayout.claim_right_dock("light_studio", null, DOCK_W)
 
 
 func close() -> void:
@@ -197,6 +202,7 @@ func close() -> void:
 	_active = false
 	visible = false
 	set_process(false)
+	HudLayout.release("light_studio")
 	PlacedLightService.set_studio_open(false)
 	PlacedLightService.remove_listener(_on_model_changed)
 	PlacedLightService.set_selection(_main, [])
@@ -254,7 +260,7 @@ func _build_ui() -> void:
 	_panel.offset_left = -DOCK_W - 10.0
 	_panel.offset_right = -10.0
 	_panel.offset_top = 10.0
-	_panel.offset_bottom = -180.0   # clear the timeline bar
+	_panel.offset_bottom = -(HudLayout.timeline_height() + 10.0)   # clear the timeline bar
 	add_child(_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
@@ -265,18 +271,15 @@ func _build_ui() -> void:
 	margin.add_child(outer)
 
 	# Header.
-	var head := HBoxContainer.new()
-	outer.add_child(head)
-	var title := Label.new()
-	title.text = "Light Studio"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	title.add_theme_color_override("font_color", UITheme.C_GOLD)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(title)
-	_night_btn = _small_btn(head, "☾ Night", "Preview at 22:00 (restores the time when toggled off or on close)",
+	_night_btn = _small_btn(outer, "Night", "Preview at 22:00 (restores the time when toggled off or on close)",
 		func() -> void: _set_night(_night_saved == null))
-	_small_btn(head, "▾", "Collapse / expand the dock", _toggle_collapse)
-	_small_btn(head, "✕", "Close (J)", close)
+	_night_btn.icon = UiIcons.icon("moon", 14)
+	outer.remove_child(_night_btn)
+	_collapse_btn = IconButton.make("chevron-up", "Collapse / expand the dock", _toggle_collapse)
+	var head := DockShell.header("Light Studio", "", close, [_night_btn, _collapse_btn])
+	(head["close"] as Button).tooltip_text = "Close (J)"
+	(head["title"] as Label).add_theme_color_override("font_color", UITheme.C_GOLD)
+	outer.add_child(head["row"])
 
 	_body = VBoxContainer.new()
 	_body.add_theme_constant_override("separation", UITheme.SPACE_SM)
@@ -294,6 +297,7 @@ func _build_ui() -> void:
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size.y = 28.0  # a comfortable hit target
 		var tid: String = t["id"]
 		b.pressed.connect(func() -> void: _set_tool(tid))
 		tools.add_child(b)
@@ -340,24 +344,10 @@ func _section(parent: Control, title: String) -> VBoxContainer:
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", UITheme.card_style())
 	parent.add_child(card)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 4)
-	card.add_child(v)
-	var hdr := Button.new()
-	hdr.text = "▾ " + title
-	hdr.flat = true
-	hdr.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	hdr.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-	hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	hdr.focus_mode = Control.FOCUS_NONE
-	v.add_child(hdr)
-	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 3)
-	v.add_child(content)
-	hdr.pressed.connect(func() -> void:
-		content.visible = not content.visible
-		hdr.text = ("▾ " if content.visible else "▸ ") + title)
-	return content
+	var sec := Collapsible.make(title, true)
+	sec.body.add_theme_constant_override("separation", 3)
+	card.add_child(sec)
+	return sec.body
 
 
 func _small_btn(parent: Control, text: String, tip: String, cb: Callable) -> Button:
@@ -384,12 +374,14 @@ func _label(parent: Control, text: String, color: Color = UITheme.C_TEXT_S, fsiz
 func _toggle_collapse() -> void:
 	_collapsed = not _collapsed
 	_body.visible = not _collapsed
-	_panel.offset_bottom = -180.0 if not _collapsed else 0.0
+	if _collapse_btn != null:
+		_collapse_btn.icon = UiIcons.icon("chevron-down" if _collapsed else "chevron-up", 16)
 	if _collapsed:
 		_panel.anchor_bottom = 0.0
 		_panel.offset_bottom = 54.0
 	else:
 		_panel.anchor_bottom = 1.0
+		_panel.offset_bottom = -(HudLayout.timeline_height() + 10.0)
 
 
 func _set_tool(tid: String) -> void:
@@ -546,7 +538,7 @@ func _rebuild_styles() -> void:
 	var kinds := _selection_kinds()
 	var ids := layer.styles.keys()
 	ids.sort_custom(func(a, b) -> bool:
-		return str(layer.styles[a].get("name", "")) < str(layer.styles[b].get("name", "")))
+		return str(layer.styles[a].get("name", "")).naturalnocasecmp_to(str(layer.styles[b].get("name", ""))) < 0)
 	if ids.is_empty():
 		_label(_styles_box, "Place a light to start a style.", UITheme.C_TEXT_M, UITheme.FONT_XS)
 	for sid in ids:
@@ -563,12 +555,19 @@ func _rebuild_styles() -> void:
 		row.add_child(sw)
 		var active := str(PlacedLightService.active_style.get(kind, "")) == str(sid)
 		var name_btn := Button.new()
-		name_btn.text = "%s%s · %s (%d)" % ["● " if active else "", str(st.get("name", "Style")),
-			kind, layer.style_usage(str(sid))]
-		name_btn.tooltip_text = "Click: select every light using this style\nDouble-click: rename"
+		# The name ellipsizes; what kind and how many uses sit beside it in a
+		# muted note that never gets cut ("Default omni (copy) · omni (1)" was
+		# clipped mid-word). The active style reads in the primary colour.
+		var uses := layer.style_usage(str(sid))
+		name_btn.text = str(st.get("name", "Style"))
+		name_btn.tooltip_text = "%s — %s, %s\nClick: select every light using this style\nDouble-click: rename" % [
+			name_btn.text, kind, UiText.count(uses, "light")]
 		name_btn.flat = true
 		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		name_btn.clip_text = true
+		name_btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		name_btn.custom_minimum_size.x = 40.0
+		if active:
+			name_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 		name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_btn.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		name_btn.focus_mode = Control.FOCUS_NONE
@@ -580,16 +579,22 @@ func _rebuild_styles() -> void:
 			PlacedLightService.active_style[kind] = s_id
 			PlacedLightService.set_selection(_main, layer.lights_with_style(s_id)))
 		row.add_child(name_btn)
+		var note := Label.new()
+		note.text = "%s · %d" % [kind, uses]
+		note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		note.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(note)
 		var apply := _small_btn(row, "Apply", "Give the selected %s lights this style" % kind, func() -> void:
 			PlacedLightService.checkpoint(_main)
 			PlacedLightService.apply_style(_main, PlacedLightService.selection.duplicate(), s_id)
 			PlacedLightService.commit(_main))
 		apply.disabled = not kind in kinds
-		_small_btn(row, "✕", "Delete style (its lights keep their look)", func() -> void:
+		IconButton.style(_small_btn(row, "", "", func() -> void:
 			PlacedLightService.checkpoint(_main)
 			layer.remove_style(s_id)
 			PlacedLightService.rebuild_all(_main)
-			PlacedLightService.commit(_main))
+			PlacedLightService.commit(_main)), "trash-2", "Delete style (its lights keep their look)", "", 14)
 	if PlacedLightService.selection.size() >= 1:
 		_small_btn(_styles_box, "+ New style from selection",
 			"Save the first selected light's look as a new style and apply it to the selection",
@@ -668,10 +673,10 @@ func _rebuild_groups() -> void:
 				g["hidden"] = not bool(g.get("hidden", false))
 				PlacedLightService.refresh_ids(_main, layer.group_members(g_id))
 				PlacedLightService.commit(_main))
-		_small_btn(row, "✕", "Delete the group (keeps its lights)", func() -> void:
+		IconButton.style(_small_btn(row, "", "", func() -> void:
 			PlacedLightService.checkpoint(_main)
 			layer.remove_group(g_id)
-			PlacedLightService.commit(_main))
+			PlacedLightService.commit(_main)), "trash-2", "Delete the group (keeps its lights)", "", 14)
 	if not PlacedLightService.selection.is_empty():
 		_small_btn(_groups_box, "+ Group selection", "Make a named group from the selected lights", func() -> void:
 			PlacedLightService.checkpoint(_main)

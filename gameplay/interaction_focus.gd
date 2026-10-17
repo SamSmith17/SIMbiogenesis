@@ -114,14 +114,18 @@ func _physics_process(_delta: float) -> void:
 		if _focused != null:
 			_focused.on_focus_exit(_player)
 			_focused = null
-		_clear_solar_focus()
-		_clear_water_focus()
-		_clear_building_focus()
-		_clear_veg_focus()
-		_update_ui()
+		_clear_other_focus_keep_prompt()
 		_sync_graph_from_conduit_focus()
 		return
 	_clear_conduit_focus()
+	# A port under the crosshair (no modifier held): say what it is and that a
+	# drag connects from it — plugging was undiscoverable with no prompt.
+	if not light_place and not ModifierKeys.selecting() and _update_port_prompt():
+		if _focused != null:
+			_focused.on_focus_exit(_player)
+			_focused = null
+		_clear_other_focus_keep_prompt()
+		return
 	# Props / OSM buildings / solar still require Ctrl or Alt (too easy to highlight).
 	if not _should_update_focus():
 		_clear_focus()
@@ -482,6 +486,58 @@ func _clear_focus() -> void:
 	_last_graph_sync_key = ""
 
 
+## Drop the solar / water / building / veg highlights while keeping the
+## crosshair prompt a conduit or port pick just wrote: the building and veg
+## clears (and _update_ui with nothing focused) blank the prompt, which hid
+## both prompts in the frame they were written.
+func _clear_other_focus_keep_prompt() -> void:
+	var keep := ""
+	if _crosshair != null and _crosshair.has_method("get_prompt_text"):
+		keep = str(_crosshair.call("get_prompt_text"))
+	_clear_solar_focus()
+	_clear_water_focus()
+	_clear_building_focus()
+	_clear_veg_focus()
+	if _crosshair != null and not keep.is_empty():
+		if _crosshair.has_method("set_target_active"):
+			_crosshair.set_target_active(true)
+		if _crosshair.has_method("set_prompt_text"):
+			_crosshair.set_prompt_text(keep)
+
+
+var _port_prompt_ms := 0
+var _port_prompt_hit: Dictionary = {}
+
+
+## "PowerSpout · DC + · drag to connect · 1 wire" on the crosshair when a
+## plain click would start a plug (ConduitRouteController.port_under_crosshair).
+func _update_port_prompt() -> bool:
+	var crc := _conduit_route_controller()
+	if crc == null or not crc.has_method("port_under_crosshair"):
+		return false
+	# gather_world_ports walks every item: ask at ~8 Hz, not every frame.
+	var now := Time.get_ticks_msec()
+	if now - _port_prompt_ms >= 120:
+		_port_prompt_ms = now
+		_port_prompt_hit = crc.call("port_under_crosshair")
+	var hit: Dictionary = _port_prompt_hit
+	if hit.is_empty():
+		return false
+	var mgr := _conduit_manager()
+	var model: GraphModel = mgr.call("get_graph_model") if mgr != null and mgr.has_method("get_graph_model") else null
+	var item: Dictionary = model.get_item(str(hit.get("item_id", ""))) if model != null else {}
+	var port: Dictionary = hit.get("port", {}) as Dictionary
+	var name_ := GraphPortLabels.port_label(item, str(port.get("handle_id", "")), str(port.get("resource_kind", "")))
+	var n := int(crc.call("wires_on_port", hit)) if crc.has_method("wires_on_port") else 0
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text("%s · %s%s" % [name_,
+			"drag to reroute its wire" if n > 0 else "drag to connect",
+			(" · " + UiText.count(n, "wire")) if n > 0 else " · Shift+release keeps chaining"])
+	return true
+
+
 func get_conduit_focus_id() -> String:
 	return _conduit_focus_id
 
@@ -812,13 +868,13 @@ func _update_solar_focus(hit_pos: Vector3) -> bool:
 		_crosshair.set_target_active(true)
 	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
 		if bool(info.get("added", false)):
-			_crosshair.set_prompt_text("Solar array added (%d panels)" % int(info.get("panel_count", 0)))
+			_crosshair.set_prompt_text("Solar array added (%s)" % UiText.count(int(info.get("panel_count", 0)), "panel"))
 		else:
 			var act := "Interact"
 			if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 				act = _prompt_ui.get_action_label("interact")
-			_crosshair.set_prompt_text("[%s / Click] Add solar array to graph — %d panels, %.1f kW" % [
-				act, int(info.get("panel_count", 0)), float(info.get("capacity_kw", 0.0))])
+			_crosshair.set_prompt_text("[%s / Click] Add solar array to graph — %s, %.1f kW" % [
+				act, UiText.count(int(info.get("panel_count", 0)), "panel"), float(info.get("capacity_kw", 0.0))])
 	return true
 
 

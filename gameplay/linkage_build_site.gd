@@ -283,8 +283,8 @@ func progress_line() -> String:
 	if t >= mk:
 		return "Built in %s by a crew of %d" % [_fmt_s(mk), int(_tl["crew"])]
 	var done := int(_last_state.get("jobs_done", 0))
-	return "Building · %d %% · crew %d · %s left · %d / %d jobs" % [int(100.0 * t / maxf(mk, 1.0)),
-		int(_tl["crew"]), _fmt_s(mk - t), done, (_tl["jobs"] as Array).size()]
+	return "Building · %d %% · crew %d · %s left · %d / %s" % [int(100.0 * t / maxf(mk, 1.0)),
+		int(_tl["crew"]), _fmt_s(mk - t), done, UiText.count((_tl["jobs"] as Array).size(), "job")]
 
 
 static func _fmt_s(s: float) -> String:
@@ -414,7 +414,7 @@ func _apply_structure(st: Dictionary) -> void:
 
 func _apply_crew(st: Dictionary, delta: float) -> void:
 	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
-	var far := cam != null and cam.global_position.distance_to(global_position) > CULL_M + float(_tl["radius_m"])
+	var far := cam != null and cam.global_position.distance_to(global_position) > CULL_M + float(_tl.get("reach_m", _tl["radius_m"]))
 	var rate := SimFxRate.rate(_main, SimFxRate.SYS_NPC) if _main != null else 1.0
 	var ws: Array = st["workers"]
 	var manned := _man_lanes(ws) if _labour else {}
@@ -592,7 +592,7 @@ func _poll_status() -> void:
 		return
 	var c3 := global_transform.origin if is_inside_tree() else Vector3.ZERO
 	_status = bridge.call("linkage_build_status", str(_run.get("iid", "")), str(_run.get("project_id", "")),
-		Vector2(c3.x, c3.z), float(_tl.get("radius_m", 6.0)) + SITE_MARGIN_M + BENCH_REACH_M)
+		Vector2(c3.x, c3.z), float(_tl.get("reach_m", _tl.get("radius_m", 6.0))) + SITE_MARGIN_M + BENCH_REACH_M)
 	if not bool(_status.get("found", false)):
 		return
 	var state := str(_status.get("state", ""))

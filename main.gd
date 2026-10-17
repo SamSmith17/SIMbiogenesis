@@ -885,6 +885,12 @@ func _ready() -> void :
 	# (independent of save games). Default scene coords stand until first set.
 	_load_location_prefs()
 
+	# The HUD layout manager: every always-on panel registers a region with it
+	# and tools claim screen space, so nothing overlaps (scenes/ui/hud/).
+	var hud := HudLayout.new()
+	hud.name = "HudLayout"
+	add_child( hud )
+
 	_setup_toast_ui()
 	_setup_help_overlay_ui()
 	_setup_unified_library_ui()
@@ -2045,6 +2051,17 @@ func _apply_advanced_rendering_toggles() -> void :
 		if is_instance_valid( sun ) :
 			sun.light_volumetric_fog_energy = 0.0 if soi_ct else 1.0
 	if ground_fog_on :
+		# A low sun is ~2000-3500 K; its beam scattering through a thick fog
+		# volume tints the whole valley mustard yellow. Fog droplets scatter all
+		# colours alike, so fade the beam's share of the fog as it warms and let
+		# the (white) skylight emission carry the look. Full sun at noon, so
+		# daytime fog and god rays are unchanged.
+		if is_instance_valid( sun ) :
+			var sc : Color = sun.light_color
+			var warmth := clampf( 1.0 - sc.b / maxf( sc.r, 0.001 ), 0.0, 1.0 )
+			sun.light_volumetric_fog_energy *= lerpf( 1.0, 0.15, clampf( warmth * 1.6, 0.0, 1.0 ) )
+			if _ground_fog != null and is_instance_valid( _ground_fog ) :
+				_ground_fog.sun_warmth = warmth
 		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
 		if cam != null :
 			_fit_volumetric_length_to_ground_fog( cam.global_position.y )
@@ -3358,7 +3375,8 @@ const VEG_SHADE_FILL : float = 0.16
 var _veg_sky_fill_pushed : float = -1.0
 
 func _push_veg_sky_fill( sky_light : float ) -> void :
-	var fill := VEG_SHADE_FILL * clampf( sky_light, 0.0, 1.0 ) 			* ( 1.0 - clampf( ambient_energy_mult, 0.0, 1.0 ) )
+	var fill := VEG_SHADE_FILL * clampf( sky_light, 0.0, 1.0 ) \
+			* ( 1.0 - clampf( ambient_energy_mult, 0.0, 1.0 ) )
 	if absf( fill - _veg_sky_fill_pushed ) < 0.002 :
 		return
 	_veg_sky_fill_pushed = fill

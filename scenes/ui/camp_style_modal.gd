@@ -213,11 +213,7 @@ func _build_ui() -> void:
 	_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	side.add_child(_warn_lbl)
 
-	var save_hdr := Label.new()
-	save_hdr.text = "Save changes to…"
-	save_hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	save_hdr.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	side.add_child(save_hdr)
+	side.add_child(SectionHeader.make("Save changes to…"))
 	_save_row = HBoxContainer.new()
 	_save_row.add_theme_constant_override("separation", 6)
 	side.add_child(_save_row)
@@ -543,7 +539,7 @@ func _rebuild_rows() -> void:
 	_slider("Size spread", 0.0, 2.0, float(res["scale_var"]), 0.05, _setter("scale_var"),
 		"How much sizes vary from one element to the next (1 = as shipped)")
 
-	_section("Household mix  (0 = not in this style)")
+	_section("Household mix", "0 = not in this style")
 	var mix: Dictionary = res["templates"]
 	var ids: Array = CampStyles.TEMPLATES.keys()
 	ids.sort_custom(func(a: String, b: String) -> bool:
@@ -717,12 +713,8 @@ func _class_label(cls: String) -> String:
 	return cls.replace("_", " ").capitalize()
 
 
-func _section(text: String) -> void:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	l.add_theme_color_override("font_color", UITheme.C_LAVENDER.lightened(0.3))
-	_rows_box.add_child(l)
+func _section(text: String, note: String = "") -> void:
+	_rows_box.add_child(SectionHeader.make(text, "", note))
 
 
 func _note(text: String) -> void:
@@ -800,11 +792,12 @@ func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 		CampStyleStore.apply(_draft)
 		_queue_rebuild())
 	head.add_child(mode)
-	_button(head, "✕", "Remove this model from every camp style", func() -> void:
+	var rm_btn := _button(head, "", "Remove this model from every camp style", func() -> void:
 		CampStyleStore.remove_model(_draft, class_id)
 		if _delta.has("templates"):
 			(_delta["templates"] as Dictionary).erase(CampStyles.MODEL_TEMPLATE_PREFIX + class_id)
 		_rebuild_all())
+	IconButton.style(rm_btn, "trash-2", "Remove this model from every camp style")
 	var tid := CampStyles.MODEL_TEMPLATE_PREFIX + class_id
 	var pair := SliderSpinRow.add(v, "Share", 0.0, 8.0, float(mix.get(tid, 0.0)), _mix_setter(tid),
 		Callable(self, "_style_row_label"), 60, 140, 62, 0.25)
@@ -917,8 +910,9 @@ func _rebuild_preview() -> void:
 	var area_m2 := maxf(CampAreaLayer.record_area(area), 1.0)
 	var cost := CampStyleStore.layout_cost(counts, tris, area_m2)
 	var resolved := _resolved()
-	_stats_lbl.text = "%d structures in %d households on %.2f ha  ·  plot %.1f × %.1f m  ·  ~%s tris/ha up close" % [
-		int(stats.get("structures", 0)), int(stats.get("households", 0)), area_m2 / 10000.0,
+	_stats_lbl.text = "%s in %s on %.2f ha  ·  plot %.1f × %.1f m  ·  ~%s tris/ha up close" % [
+		UiText.count(int(stats.get("structures", 0)), "structure"),
+		UiText.count(int(stats.get("households", 0)), "household"), area_m2 / 10000.0,
 		float(resolved["cell_u"]), float(resolved["cell_v"]),
 		CampStyleStore._k(int(cost["tris_per_ha"]))]
 	var warnings: Array = cost["warnings"]

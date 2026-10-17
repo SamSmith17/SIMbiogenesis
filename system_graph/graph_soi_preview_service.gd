@@ -232,12 +232,60 @@ func setup(host: Control, canvas: Control) -> void:
 ## Hydro Lab's turbine close-up takes over the same rect, and leaving this
 ## rendering underneath it costs a full 3D pass for pixels nobody sees.
 func set_embed_visible(on: bool) -> void:
+	_embed_shown = on
 	if _container == null or not is_instance_valid(_container):
 		return
 	_container.visible = on
 	if _viewport != null and is_instance_valid(_viewport):
 		_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE \
 				if on else SubViewport.UPDATE_DISABLED
+
+
+## What set_embed_visible last chose for the Lab embed.
+var _embed_shown := true
+
+
+## Godot's SubViewportContainer switches its child viewport to UPDATE_ALWAYS
+## whenever the container becomes visible in the tree (and to DISABLED when it
+## stops being), overriding the mode this service picked. That bypassed the
+## soft boot whenever the preview was ACTIVATED while the graph was hidden — a
+## lens applied to a closed graph (the saved lens at map load, or the Hydro
+## Lab's return-to-Elevation run with the graph shut): the container stretches
+## the viewport from a 0-size canvas to a 2×2 placeholder, and the reveal then
+## rendered that every frame — ~200 "Too many mipmaps" / null scene-buffer /
+## zero-dispatch errors the moment the graph opened (found by the feature tour:
+## Hydro Lab, then the Solar Bootcamp). Re-assert this service's mode after the
+## engine's. `visibility_changed` is emitted on the container's
+## NOTIFICATION_VISIBILITY_CHANGED from CanvasItem's (base-class) half of the
+## notification, BEFORE SubViewportContainer's half sets the mode — so the
+## handler is connected DEFERRED (it then runs after the engine's write and
+## before the frame renders).
+func _on_container_visibility_changed() -> void:
+	if _viewport == null or not is_instance_valid(_viewport) \
+			or _container == null or not is_instance_valid(_container):
+		return
+	if not _container.is_visible_in_tree():
+		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		return
+	if _embed_host != null and is_instance_valid(_embed_host):
+		_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE \
+				if _embed_shown else SubViewport.UPDATE_DISABLED
+		return
+	# Dirty-driven as always: _process lays out and schedules the capture.
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	if not active:
+		return
+	_layout_dirty = true
+	_camera_dirty = true
+	if _viewport_too_small():
+		# Sized while hidden: let the revealed canvas lay out before a capture.
+		_soft_boot_frames = maxi(_soft_boot_frames, SOFT_BOOT_FRAMES)
+
+
+## A viewport still at a hidden canvas's placeholder size — rendering it makes
+## the half/quarter-res effect passes zero-sized.
+func _viewport_too_small() -> bool:
+	return _viewport.size.x < MIN_VIEWPORT_PX or _viewport.size.y < MIN_VIEWPORT_PX
 
 
 func set_embed_host(host: Control) -> void:
@@ -1107,6 +1155,12 @@ func _request_viewport_refresh() -> void:
 		return
 	if _soft_boot_frames > 0:
 		return
+	if _viewport_too_small():
+		# Laid out from a hidden (0-size) canvas: re-lay out next frame instead
+		# (while still hidden, the reveal handler re-arms it).
+		if _container != null and is_instance_valid(_container) and _container.is_visible_in_tree():
+			_layout_dirty = true
+		return
 	# Every capture renders with the world's CURRENT sky/fog/ambient — the
 	# lens environment is a shallow copy re-synced here, never a frozen one.
 	_sync_lens_env()
@@ -1297,6 +1351,9 @@ func _ensure_nodes() -> void:
 	_disc_material = ShaderMaterial.new()
 	_disc_material.shader = load("res://system_graph/graph_soi_preview_disc.gdshader")
 	_container.material = _disc_material
+	# DEFERRED: the signal fires from CanvasItem's half of the notification,
+	# BEFORE SubViewportContainer's half sets the mode (base class first).
+	_container.visibility_changed.connect(_on_container_visibility_changed, CONNECT_DEFERRED)
 	# Insert under the graph canvas so nodes/wires draw on top.
 	var insert_at := 1
 	if _canvas != null and is_instance_valid(_canvas):
@@ -2141,3 +2198,25 @@ func _soi() -> Node:
 	if tree == null:
 		return null
 	return tree.root.get_node_or_null("SoiService")
+
+
+## The Globe lens's orbit, so the full-screen globe opens on the same view
+## and hands it back on exit ({} when the Globe lens is not on).
+func globe_orbit_state() -> Dictionary:
+	if not _globe:
+		return {}
+	return {"yaw": _yaw, "pitch": _pitch, "mult": _orbit_mult}
+
+
+func apply_globe_orbit_state(d: Dictionary) -> void:
+	if d.is_empty():
+		return
+	_yaw = float(d.get("yaw", _yaw))
+	_pitch = float(d.get("pitch", _pitch))
+	_orbit_mult = clampf(float(d.get("mult", _orbit_mult)), GLOBE_MIN_ORBIT_MULT, MAX_ORBIT_MULT)
+	_orbit_mult_target = _orbit_mult
+	_globe_framed = true
+	_camera_dirty = true
+	_update_camera()
+	_request_viewport_refresh()
+	_notify_canvas_redraw()

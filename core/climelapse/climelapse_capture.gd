@@ -231,8 +231,8 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 	_restore_world(main, cc, prev_scale, prev_analemma)
 
 	if _cancel:
-		_finish(false, output_mp4, "Export cancelled — %d partial frame(s) left at %s (cleared by the next export)"
-			% [manifest.size(), frames_dir])
+		_finish(false, output_mp4, "Export cancelled — %s left at %s (cleared by the next export)"
+			% [UiText.count(manifest.size(), "partial frame"), frames_dir])
 		return
 	if manifest.is_empty():
 		_finish(false, output_mp4, "No frames captured.")
@@ -247,7 +247,7 @@ func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: fl
 
 	if bool(enc.get("ok", false)):
 		_cleanup_frames(frames_dir)
-		_finish(true, output_mp4, "Saved %s (%d frames @ %d fps)" % [output_mp4, manifest.size(), fps])
+		_finish(true, output_mp4, "Saved %s (%s @ %d fps)" % [output_mp4, UiText.count(manifest.size(), "frame"), fps])
 	else:
 		var msg := str(enc.get("reason", "encode failed"))
 		msg += "\nPNG frames kept at: %s" % frames_dir

@@ -74,6 +74,9 @@ func toggle() -> void:
 func open() -> void:
 	visible = true
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	# A right dock: the HUD's right column tucks beside it (Terrain options sat
+	# under its top), and its bottom follows the live timeline height.
+	HudLayout.claim_right_dock(MODAL_NAME, _root, PANEL_W)
 	_load_settings()
 	_start_from_current()
 	_rebuild_lists()
@@ -88,6 +91,7 @@ func close() -> void:
 	if mc != null:
 		mc.call("clear_preview")
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 
 
 func _process(delta: float) -> void:
@@ -159,14 +163,6 @@ func _build() -> void:
 	outer.add_theme_constant_override("separation", 6)
 	_root.add_child(outer)
 
-	var head := HBoxContainer.new()
-	outer.add_child(head)
-	var title := Label.new()
-	title.text = "🌫  Microclimate"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(title)
 	_enable_chk = CheckBox.new()
 	_enable_chk.text = "On"
 	_enable_chk.button_pressed = true
@@ -175,12 +171,8 @@ func _build() -> void:
 		var mc := _mc()
 		if mc != null:
 			mc.call("set_enabled", on))
-	head.add_child(_enable_chk)
-	var x := Button.new()
-	x.text = "✕"
-	UITheme.style_button(x)
-	x.pressed.connect(close)
-	head.add_child(x)
+	var head := DockShell.header("Microclimate", "", close, [_enable_chk])
+	outer.add_child(head["row"])
 
 	_site_lbl = _small("", UITheme.C_TEXT_M)
 	outer.add_child(_site_lbl)
@@ -302,11 +294,7 @@ func _build() -> void:
 # --- small widget helpers ----------------------------------------------------
 
 func _section(text: String) -> Control:
-	var l := Label.new()
-	l.text = text.to_upper()
-	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	l.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	return l
+	return SectionHeader.make(text)
 
 
 func _small(text: String, col: Color) -> Label:
@@ -786,7 +774,7 @@ func _count_rule_nights(rule_id: String) -> String:
 		if int(months[m]) > best:
 			best = int(months[m])
 			top = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][int(m)]
-	return "%d nights/yr%s" % [nights.size(), (" · most in " + top) if not top.is_empty() else ""]
+	return "%s/yr%s" % [UiText.count(nights.size(), "night"), (" · most in " + top) if not top.is_empty() else ""]
 
 
 func _obs_row(p: MicroclimateProfile, i: int) -> Control:

@@ -1479,9 +1479,9 @@ func _update_bom(node: Node3D) -> void:
 	if _bom_lbl == null:
 		return
 	var b: Dictionary = node.get_meta("bom", {}) if node.has_meta("bom") else {}
-	_bom_lbl.text = "%d uprights   %d beams\n%d 2x4 joists   %d plywood sheets" % [
-		int(b.get("uprights", 0)), int(b.get("beams", 0)),
-		int(b.get("lumber", 0)), int(b.get("plywood", 0))]
+	_bom_lbl.text = "%s   %s\n%s   %s" % [
+		UiText.count(int(b.get("uprights", 0)), "upright"), UiText.count(int(b.get("beams", 0)), "beam"),
+		UiText.count(int(b.get("lumber", 0)), "2x4 joist"), UiText.count(int(b.get("plywood", 0)), "plywood sheet")]
 
 
 func _on_place() -> void:

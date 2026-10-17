@@ -11,12 +11,12 @@ extends Control
 const MODAL_NAME := "graph_fault_card"
 const PANEL_SIZE := Vector2(520.0, 340.0)
 
-## TEMPORARY dev authoring aid: cards that carry an `override_key` grow an
-## ✎ button that swaps the labels for editors; "Save as default" persists the
-## text via EducationCardOverrides, which then presents as the default from
-## that point on. Flip this off (and delete the editor block) once the copy is
-## finalized and folded back into code.
-const TEXT_EDITING_ENABLED := true
+## Dev authoring aid: cards that carry an `override_key` grow an ✎ button that
+## swaps the labels for editors; "Save as default" persists the text via
+## EducationCardOverrides, which then presents as the default from that point
+## on. OPT-IN with `--card-editor` on the command line (after `--`): it used to
+## be on for every player, a pencil on every tutorial card.
+static var TEXT_EDITING_ENABLED: bool = "--card-editor" in OS.get_cmdline_user_args()
 
 var _backdrop: ColorRect = null
 var _panel: PanelContainer = null
@@ -65,6 +65,20 @@ func close() -> void:
 
 func is_showing() -> bool:
 	return _showing
+
+
+## Drop every card still waiting behind the one on screen. A level change or
+## leaving the bootcamp must call this: a fault card queued behind level 1's
+## debrief used to pop up over level 2 and eat its first wire drag.
+func clear_queue() -> void:
+	_queue.clear()
+
+
+## Close the card on screen AND everything queued behind it.
+func dismiss_all() -> void:
+	_queue.clear()
+	if _showing:
+		close()
 
 
 func _present(card: Dictionary) -> void:

@@ -252,6 +252,11 @@ func _build_stack() -> void:
 	_stack.anchor_bottom = 1.0
 	_stack.grow_horizontal = Control.GROW_DIRECTION_END
 	_stack.custom_minimum_size = Vector2(TOAST_WIDTH, 0.0)
+	# Placement: the HUD layout manager's bottom-left region, stacked up from
+	# just above the timeline and never under the scoreboard (the manager
+	# replaced the live probing of SolarUI's edge below).
+	HudLayout.register(_stack, "toasts", "bottom_left", {"order": 0, "tuckable": false,
+		"size": func() -> Vector2: return Vector2(TOAST_WIDTH, _stack.get_combined_minimum_size().y)})
 	_apply_stack_clearance(UiScreenLayout.timeline_stack_height())
 	add_child(_stack)
 
@@ -288,6 +293,9 @@ func _refresh_timeline_clearance() -> void:
 func _apply_stack_clearance(timeline_h: float) -> void:
 	if _stack == null:
 		return
+	if HudLayout.get_hud() != null:
+		HudLayout.get_hud().queue_layout()
+		return
 	var clearance := maxf(timeline_h, UiScreenLayout.timeline_stack_height()) + ABOVE_TIMELINE_GAP
 	# Anchored to the left rail; the bottom still respects the timeline so a
 	# tall stack never slides under it. The TOP tracks the scoreboard's live
@@ -306,6 +314,9 @@ var _solar_ui: Node = null
 
 func _refresh_stack_top() -> void:
 	if _stack == null:
+		return
+	if HudLayout.get_hud() != null:
+		HudLayout.get_hud().queue_layout()
 		return
 	var vh := get_viewport().get_visible_rect().size.y
 	var top := 0.66 * vh
@@ -538,7 +549,9 @@ func _level_icon(level: Level) -> String:
 			return "ℹ"
 
 
-func _fade_and_remove(entry: PanelContainer) -> void:
+## Untyped on purpose: a timer can fire after the toast was freed, and a
+## typed parameter errors on the freed object before the check below runs.
+func _fade_and_remove(entry) -> void:
 	if not is_instance_valid(entry):
 		return
 	var tw := create_tween()
@@ -546,7 +559,7 @@ func _fade_and_remove(entry: PanelContainer) -> void:
 	tw.tween_callback(_remove_entry.bind(entry))
 
 
-func _remove_entry(entry: PanelContainer) -> void:
+func _remove_entry(entry) -> void:
 	if not is_instance_valid(entry):
 		return
 	_entries.erase(entry)

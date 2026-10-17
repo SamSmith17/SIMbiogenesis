@@ -829,6 +829,29 @@ func _test_timecode() -> void:
 	var solar_kwh := et.integrate_channel(1000.0, 1002.0, "solar")
 	_check("timeline: channel integral (kWh)", _approx(solar_kwh, 3.9, 4.1), "got %.3f" % solar_kwh)
 
+	# Stale cached future: scrub back to the midpoint, cut there, and replay
+	# with a 3 kW load on. The history before the cut is kept; the battery now
+	# DISCHARGES from the midpoint instead of replaying the old charge curve
+	# (the "deficit but the battery never drops" report, Mt Vernon 2026-10-15).
+	var mid_before := et.soc_at(1001.0)
+	et.truncate_after(1001.0)
+	_check("timeline: truncate keeps history up to the cut",
+		absf(et.end_abs_hours() - 1001.0) < et.step_hours + 1e-6
+			and absf(et.soc_at(1001.0) - mid_before) < 1e-4,
+		"end %.4f soc %.3f vs %.3f" % [et.end_abs_hours(), et.soc_at(1001.0), mid_before])
+	_check("timeline: truncate keeps the start", absf(et.soc_at(1000.0) - soc_start) < 1e-4)
+	t = 1001.0
+	while t < 1002.0 - 1e-9:
+		t += et.step_hours
+		et.record_step(t, 2.0, 0.0, 3.0)   # net −1 kW now
+	_check("timeline: replay after truncate follows the new inputs",
+		et.soc_at(1002.0) < mid_before - 0.9,
+		"mid %.3f end %.3f" % [mid_before, et.soc_at(1002.0)])
+	var et_one := EnergyTimeline.new()
+	et_one.init_anchor(50.0, 4.0)
+	et_one.truncate_after(10.0)   # before the start: still one sample
+	_check("timeline: truncate never empties the cache", et_one.count() == 1)
+
 	# Measured (live-mirror) samples: stored verbatim, readable on rewind.
 	var em := EnergyTimeline.new()
 	em.step_hours = 1.0 / 60.0

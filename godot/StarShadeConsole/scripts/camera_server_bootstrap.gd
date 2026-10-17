@@ -31,7 +31,7 @@ func rescan_feeds() -> Dictionary:
 	if feed_names.is_empty():
 		last_status_message = "No camera feeds detected. Start OBS Virtual Camera, then refresh."
 	else:
-		last_status_message = "Detected %d feed(s): %s" % [feed_names.size(), ", ".join(feed_names)]
+		last_status_message = "Detected %s: %s" % [UiText.count(feed_names.size(), "feed"), ", ".join(feed_names)]
 
 	_emit_rescan_result()
 	return _result_dictionary()
@@ -73,7 +73,7 @@ func _on_camera_feeds_updated() -> void:
 	if feed_names.is_empty():
 		last_status_message = "No camera feeds detected. Start OBS Virtual Camera, then refresh."
 	else:
-		last_status_message = "Detected %d feed(s): %s" % [feed_names.size(), ", ".join(feed_names)]
+		last_status_message = "Detected %s: %s" % [UiText.count(feed_names.size(), "feed"), ", ".join(feed_names)]
 	feeds_rescan_completed.emit(feed_names.size(), feed_names, last_status_message)
 
 func _collect_feed_names() -> PackedStringArray:

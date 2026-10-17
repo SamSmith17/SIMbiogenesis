@@ -64,10 +64,12 @@ func open() -> void:
 	_refresh_cards()
 	_set_picker_visible(true)
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 
 
 func close() -> void:
 	_set_picker_visible(false)
+	HudLayout.release(MODAL_NAME)
 	if _result_backdrop == null or not _result_backdrop.visible:
 		CursorController.release_modal(MODAL_NAME)
 
@@ -80,6 +82,7 @@ func show_result(challenge_id: String, won: bool, payload: Dictionary) -> void:
 	_result_panel.visible = true
 	visible = true
 	CursorController.request_modal("challenge_result", Callable(self, "close_result"))
+	HudLayout.claim_modal("challenge_result")
 
 
 func close_result() -> void:
@@ -90,6 +93,7 @@ func close_result() -> void:
 	if _backdrop == null or not _backdrop.visible:
 		visible = false
 	CursorController.release_modal("challenge_result")
+	HudLayout.release("challenge_result")
 
 
 func refresh_active_label() -> void:
@@ -149,11 +153,7 @@ func _build_ui() -> void:
 	_header_lbl.add_theme_color_override("font_color", C_PRIMARY)
 	_header_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	title_row.add_child(_header_lbl)
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.tooltip_text = "Close"
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	title_row.add_child(close_btn)
 
 	_active_lbl = Label.new()
@@ -284,7 +284,7 @@ func _make_card(def: ChallengeDef, lat_lon: Dictionary, active_id: String) -> Pa
 			float(lat_lon.get("lon", 0.0)),
 			def.id)
 	var best_lbl := Label.new()
-	best_lbl.text = "Best: %.0f" % best if best > 0.01 else "Best: —"
+	best_lbl.text = ("Best: %s" % UiText.thousands(int(round(best)))) if best > 0.01 else "Best: —"
 	best_lbl.add_theme_color_override("font_color", C_TEXT_M)
 	best_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	head.add_child(best_lbl)
@@ -297,9 +297,9 @@ func _make_card(def: ChallengeDef, lat_lon: Dictionary, active_id: String) -> Pa
 	col.add_child(desc)
 
 	var meta := Label.new()
-	var meta_txt := "%s · %d occupant(s) · %s" % [
+	var meta_txt := "%s · %s · %s" % [
 			_format_duration(def.resolved_duration_hours()),
-			def.occupants,
+			UiText.count(def.occupants, "occupant"),
 			_win_hint(def),
 	]
 	if def.is_prebake():
@@ -430,10 +430,8 @@ func _lat_lon() -> Dictionary:
 
 
 static func _format_duration(hours: float) -> String:
-	if hours >= 168.0 - 0.1 and int(hours) % 168 == 0:
-		return "%d days" % int(hours / 24.0)
 	if hours >= 24.0 and int(hours) % 24 == 0:
-		return "%d days" % int(hours / 24.0)
+		return UiText.count(int(hours / 24.0), "day")
 	return "%.0f h" % hours
 
 

@@ -26,7 +26,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Soft brush: raise terrain (hold LMB)",
 		"shapes": ["brush"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
 			{"key": "strength", "label": "Strength", "min": 0.1, "max": 25.0, "default": 6.0, "step": 0.1},
 			{"key": "hardness", "label": "Hardness", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01},
 		],
@@ -36,7 +36,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Soft brush: lower terrain (hold LMB)",
 		"shapes": ["brush"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
 			{"key": "strength", "label": "Strength", "min": 0.1, "max": 25.0, "default": 6.0, "step": 0.1},
 			{"key": "hardness", "label": "Hardness", "min": 0.0, "max": 1.0, "default": 0.5, "step": 0.01},
 		],
@@ -46,7 +46,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Soft brush: relax bumps and steps toward the local average",
 		"shapes": ["brush"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 100.0, "default": 16.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 100.0, "default": 16.0, "step": 0.5},
 			{"key": "strength", "label": "Strength", "min": 0.1, "max": 25.0, "default": 8.0, "step": 0.1},
 			{"key": "hardness", "label": "Hardness", "min": 0.0, "max": 1.0, "default": 0.35, "step": 0.01},
 		],
@@ -56,7 +56,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Brush: pull terrain toward the height under the first click.\nShapes: level a whole drawn region to one flat pad",
 		"shapes": ["brush", "rect", "circle", "lasso", "polygon"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 100.0, "default": 12.0, "step": 0.5},
 			{"key": "strength", "label": "Strength", "min": 0.1, "max": 25.0, "default": 10.0, "step": 0.1},
 			{"key": "hardness", "label": "Hardness", "min": 0.0, "max": 1.0, "default": 0.6, "step": 0.01},
 		],
@@ -66,7 +66,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Click the start, then the end — grades a straight ramp between them",
 		"shapes": [],
 		"params": [
-			{"key": "width_m", "label": "Width m", "min": 1.0, "max": 60.0, "default": 12.0, "step": 0.5},
+			{"key": "width_m", "label": "Width", "unit": "m", "min": 1.0, "max": 60.0, "default": 12.0, "step": 0.5},
 		],
 	},
 	{
@@ -74,7 +74,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw an outline, carve a basin and seed a puddle",
 		"shapes": ["lasso", "circle", "rect", "polygon"],
 		"params": [
-			{"key": "depth_m", "label": "Dig depth m", "min": 0.1, "max": 8.0, "default": 1.2, "step": 0.1},
+			{"key": "depth_m", "label": "Dig depth", "unit": "m", "min": 0.1, "max": 8.0, "default": 1.2, "step": 0.1},
 		],
 	},
 	{
@@ -82,7 +82,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw an area over a depression, then hold LMB to raise its water",
 		"shapes": ["circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "rate_mps", "label": "Rate m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
+			{"key": "rate_mps", "label": "Rate", "unit": "m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
 		],
 	},
 	{
@@ -90,7 +90,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw an area over water, then hold LMB to drain it",
 		"shapes": ["circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "rate_mps", "label": "Rate m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
+			{"key": "rate_mps", "label": "Rate", "unit": "m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
 		],
 	},
 	{
@@ -104,9 +104,12 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Scatter plants of the active type (hold LMB, or drag a shape to fill it).\nA single click drops ONE plant.",
 		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 40.0, "default": 4.0, "step": 0.5},
-			{"key": "density", "label": "Dens", "min": 0.25, "max": 3.0, "default": 1.0, "step": 0.05},
-			{"key": "size_var", "label": "Size var %", "min": 0.0, "max": 50.0, "default": 25.0, "step": 1.0},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 40.0, "default": 4.0, "step": 0.5},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.25, "max": 3.0, "default": 1.0, "step": 0.05},
+			{"key": "size_var", "label": "Size variation", "unit": "%", "min": 0.0, "max": 50.0, "default": 25.0, "step": 1.0},
+			# Multiplies every painted plant's size (on top of the variation):
+			# paint a stand of young trees, or old-growth giants.
+			{"key": "scale", "label": "Plant scale", "unit": "×", "min": 0.25, "max": 3.0, "default": 1.0, "step": 0.05},
 		],
 	},
 	{
@@ -114,7 +117,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Place ONE hero tree (full 3D model) where you click",
 		"shapes": [],
 		"params": [
-			{"key": "hero_scale", "label": "Scale", "min": 0.3, "max": 3.0, "default": 1.0, "step": 0.05},
+			{"key": "hero_scale", "label": "Scale", "unit": "×", "min": 0.3, "max": 3.0, "default": 1.0, "step": 0.05},
 		],
 	},
 	{
@@ -122,7 +125,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Erase painted plants under the brush / inside a dragged shape",
 		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 1.0, "max": 40.0, "default": 6.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 1.0, "max": 40.0, "default": 6.0, "step": 0.5},
 		],
 	},
 	{
@@ -136,11 +139,11 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Paint a camp: tents, shade and vehicles fill the area you brush or draw.\nPainting over a camp of the same style grows it; nothing already standing moves.",
 		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 3.0, "max": 60.0, "default": 12.0, "step": 0.5},
-			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
-			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
-			{"key": "align_jitter_deg", "label": "Align +/-", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
-			{"key": "light_density", "label": "Lights", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 3.0, "max": 60.0, "default": 12.0, "step": 0.5},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "heading_deg", "label": "Heading", "unit": "°", "auto_below": 0.0, "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "align_jitter_deg", "label": "Alignment ±", "unit": "°", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
+			{"key": "light_density", "label": "Lights", "unit": "×", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
 		],
 	},
 	{
@@ -148,7 +151,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Remove camp ground under the brush / inside a drawn shape.\nCutting a camp in two leaves two camps.",
 		"shapes": ["brush", "circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "radius_m", "label": "Size m", "min": 3.0, "max": 60.0, "default": 10.0, "step": 0.5},
+			{"key": "radius_m", "label": "Size", "unit": "m", "min": 3.0, "max": 60.0, "default": 10.0, "step": 0.5},
 		],
 	},
 	{
@@ -156,11 +159,11 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw a zone: it is split into camp plots with access lanes between them.\nEach plot becomes its own camp you can restyle or delete.",
 		"shapes": ["rect", "lasso", "polygon"],
 		"params": [
-			{"key": "plot_w_m", "label": "Plot W m", "min": 8.0, "max": 80.0, "default": 30.0, "step": 1.0},
-			{"key": "plot_d_m", "label": "Plot D m", "min": 8.0, "max": 80.0, "default": 22.0, "step": 1.0},
-			{"key": "lane_w_m", "label": "Lane m", "min": 0.0, "max": 15.0, "default": 6.0, "step": 0.5},
-			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
-			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "plot_w_m", "label": "Plot width", "unit": "m", "min": 8.0, "max": 80.0, "default": 30.0, "step": 1.0},
+			{"key": "plot_d_m", "label": "Plot depth", "unit": "m", "min": 8.0, "max": 80.0, "default": 22.0, "step": 1.0},
+			{"key": "lane_w_m", "label": "Lane", "unit": "m", "min": 0.0, "max": 15.0, "default": 6.0, "step": 0.5},
+			{"key": "heading_deg", "label": "Heading", "unit": "°", "auto_below": 0.0, "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
 		],
 	},
 	{
@@ -168,10 +171,10 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Click a camp to edit it: style, density, heading, name. Del deletes it.",
 		"shapes": [],
 		"params": [
-			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
-			{"key": "heading_deg", "label": "Heading (-1 auto)", "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
-			{"key": "align_jitter_deg", "label": "Align +/-", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
-			{"key": "light_density", "label": "Lights", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "heading_deg", "label": "Heading", "unit": "°", "auto_below": 0.0, "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
+			{"key": "align_jitter_deg", "label": "Alignment ±", "unit": "°", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
+			{"key": "light_density", "label": "Lights", "unit": "×", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},
 		],
 	},
 	# --- PLACEMENT: festival roads, theme-camp zones, fair lots, assignment ---
@@ -180,7 +183,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw a festival road: click each bend, Enter to finish.\nZones front onto roads; lots are cut along them.",
 		"shapes": ["path"],
 		"params": [
-			{"key": "width_m", "label": "Width m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
+			{"key": "width_m", "label": "Width", "unit": "m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
 			{"key": "flatten", "label": "Flatten", "min": 0.0, "max": 1.0, "default": 0.0, "step": 1.0},
 		],
 	},
@@ -189,15 +192,15 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Draw a theme-camp allocation zone. It fronts the nearest festival road\nand is cut into lots of equal USABLE area (slope and obstacles count).",
 		"shapes": ["rect", "lasso", "polygon"],
 		"params": [
-			{"key": "target_n", "label": "Lots (0=by area)", "min": 0.0, "max": 200.0, "default": 0.0, "step": 1.0},
-			{"key": "target_m2", "label": "m² per lot", "min": 100.0, "max": 5000.0, "default": 600.0, "step": 25.0},
-			{"key": "depth_m", "label": "Depth m", "min": 8.0, "max": 80.0, "default": 25.0, "step": 1.0},
-			{"key": "lane_w_m", "label": "Lane m", "min": 0.0, "max": 12.0, "default": 5.0, "step": 0.5},
-			{"key": "lots_per_lane", "label": "Lots/lane", "min": 0.0, "max": 12.0, "default": 4.0, "step": 1.0},
-			{"key": "front_min_m", "label": "Front min", "min": 4.0, "max": 60.0, "default": 12.0, "step": 1.0},
-			{"key": "front_max_m", "label": "Front max", "min": 10.0, "max": 150.0, "default": 45.0, "step": 1.0},
-			{"key": "slope_limit_deg", "label": "Slope ≤°", "min": 3.0, "max": 30.0, "default": 10.0, "step": 0.5},
-			{"key": "density", "label": "Dens", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			{"key": "target_n", "label": "Lots", "auto_below": 0.5, "min": 0.0, "max": 200.0, "default": 0.0, "step": 1.0},
+			{"key": "target_m2", "label": "Area per lot", "unit": "m²", "min": 100.0, "max": 5000.0, "default": 600.0, "step": 25.0},
+			{"key": "depth_m", "label": "Depth", "unit": "m", "min": 8.0, "max": 80.0, "default": 25.0, "step": 1.0},
+			{"key": "lane_w_m", "label": "Lane", "unit": "m", "min": 0.0, "max": 12.0, "default": 5.0, "step": 0.5},
+			{"key": "lots_per_lane", "label": "Lots per lane", "min": 0.0, "max": 12.0, "default": 4.0, "step": 1.0},
+			{"key": "front_min_m", "label": "Frontage min", "unit": "m", "min": 4.0, "max": 60.0, "default": 12.0, "step": 1.0},
+			{"key": "front_max_m", "label": "Frontage max", "unit": "m", "min": 10.0, "max": 150.0, "default": 45.0, "step": 1.0},
+			{"key": "slope_limit_deg", "label": "Max slope", "unit": "°", "min": 3.0, "max": 30.0, "default": 10.0, "step": 0.5},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
 		],
 	},
 	{
@@ -217,7 +220,7 @@ const TOOLS: Array[Dictionary] = [
 		"tooltip": "Click a road, zone or lot to edit it. Del deletes a road or zone.",
 		"shapes": [],
 		"params": [
-			{"key": "width_m", "label": "Width m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
+			{"key": "width_m", "label": "Width", "unit": "m", "min": 3.0, "max": 20.0, "default": 8.0, "step": 0.5},
 			{"key": "headcount", "label": "People", "min": 0.0, "max": 500.0, "default": 0.0, "step": 1.0},
 		],
 	},
@@ -266,7 +269,7 @@ const PLACEMENT_FEATURES: Array[String] = ["power", "water", "quiet", "loud", "s
 ## still match the enum.
 const VEG_FAMILIES: Array[Dictionary] = [
 	{"id": "pine", "label": "Pine", "preset": 0},
-	{"id": "deciduous", "label": "Decid", "preset": 1},
+	{"id": "deciduous", "label": "Broadleaf", "preset": 1},
 	{"id": "shrub", "label": "Shrub", "preset": 2},
 	{"id": "mix", "label": "Mix", "preset": 3},
 	{"id": "grass_lawn", "label": "Lawn", "preset": 4},
@@ -303,6 +306,9 @@ var _shapes: Dictionary = {}
 var veg_family: String = "shrub"
 var veg_species: String = "shrub"
 var hero_preset: String = "pine_1"
+## The Mix family's mix: "map" = this map's own mix (TerrainLoader.get_paint_mix),
+## else a VegMix preset / saved-mix id.
+var veg_mix_id: String = "map"
 ## Camp brush identity, shared by every camp tool for the same reason.
 var camp_style: String = "mixed"
 ## Placement identity, shared by the placement tools: the styles a new zone
@@ -550,6 +556,8 @@ func option_specs(tool_id: String = "") -> Array[Dictionary]:
 			"max": float(pd["max"]),
 			"step": float(pd["step"]),
 			"value": float(vals.get(pd["key"], pd["default"])),
+			"unit": String(pd.get("unit", "")),
+			"auto_below": float(pd.get("auto_below", NAN)),
 		})
 	return out
 
@@ -585,6 +593,7 @@ func to_config(cfg: ConfigFile) -> void:
 	cfg.set_value("toolbar", "veg_family", veg_family)
 	cfg.set_value("toolbar", "veg_species", veg_species)
 	cfg.set_value("toolbar", "hero_preset", hero_preset)
+	cfg.set_value("toolbar", "veg_mix_id", veg_mix_id)
 	cfg.set_value("toolbar", "camp_style", camp_style)
 	cfg.set_value("toolbar", "placement_styles", placement_styles.duplicate())
 	cfg.set_value("toolbar", "placement_features", placement_features.duplicate())
@@ -612,6 +621,7 @@ func from_config(cfg: ConfigFile) -> void:
 		veg_family = fam
 		veg_species = String(cfg.get_value("toolbar", "veg_species", veg_species))
 	hero_preset = String(cfg.get_value("toolbar", "hero_preset", hero_preset))
+	veg_mix_id = String(cfg.get_value("toolbar", "veg_mix_id", veg_mix_id))
 	set_camp_style(String(cfg.get_value("toolbar", "camp_style", camp_style)))
 	var ps: Variant = cfg.get_value("toolbar", "placement_styles", placement_styles)
 	if ps is Array:

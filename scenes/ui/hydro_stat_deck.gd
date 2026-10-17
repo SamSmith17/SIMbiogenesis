@@ -31,7 +31,7 @@ const TONES := {
 	"muted": Color(0.392, 0.447, 0.545, 1.0),
 }
 
-const TILE_H := 78.0
+const TILE_H := 84.0
 const GAP := 14.0          ## tile gap — the arrow lives in it
 const INSIGHT_H := 17.0
 const SENS_H := 15.0
@@ -84,22 +84,18 @@ func _tone(name: String) -> Color:
 	return TONES.get(name, TONES["muted"]) as Color
 
 
-## Trim `text` with an ellipsis to fit `px` at `font_px` — a sub line must
-## never run into the next tile on a narrow Lab.
-static func _fit(fnt: Font, text: String, px: float, font_px: int) -> String:
-	if fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_px).x <= px:
-		return text
-	var t := text
-	while t.length() > 1:
-		t = t.substr(0, t.length() - 1)
-		if fnt.get_string_size(t + "…", HORIZONTAL_ALIGNMENT_LEFT, -1, font_px).x <= px:
-			return t.strip_edges() + "…"
-	return "…"
+## Fit `text` into `px` at `font_px` with an ellipsis; a cut is reported to
+## the UI audit (UiText.fit) so a caption that no longer fits shows up as a
+## number in the tour, not as a clipped word in a screenshot.
+static func _fit(fnt: Font, text: String, px: float, font_px: int, where: String = "hydro_deck") -> String:
+	return UiText.fit(fnt, text, font_px, px, where)
 
 
 func _draw() -> void:
 	_tile_rects.clear()
-	var fnt := ThemeDB.fallback_font
+	var f_text := UITheme.font("regular")
+	var f_label := UITheme.font("semibold")
+	var f_value := UITheme.font("semibold", true)
 	var n := _tiles.size()
 	var now := Time.get_ticks_msec()
 	var any_flash := false
@@ -137,30 +133,42 @@ func _draw() -> void:
 			draw_rect(Rect2(rect.position + Vector2(1.0, 8.0), Vector2(3.0, TILE_H - 16.0)),
 					Color(tone.r, tone.g, tone.b, 0.85), true)
 			var tx := rect.position.x + 11.0
-			var inner_w := tile_w - 16.0
-			# Label (small caps feel: upper-case, letter-spaced by hand).
-			draw_string(fnt, Vector2(tx, rect.position.y + 15.0),
-					_fit(fnt, str(td.get("label", "")).to_upper(), inner_w, 10),
+			var inner_w := tile_w - 18.0
+			# Row 1: LABEL on the left, the bar's verdict on the right. They
+			# share a row so the relation line below gets the whole width —
+			# the verdict used to sit on the relation line and overprint it.
+			var label := str(td.get("label", "")).to_upper()
+			var label_w := minf(f_label.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x,
+					inner_w * 0.55)
+			var ly := rect.position.y + 15.0
+			draw_string(f_label, Vector2(tx, ly), _fit(f_label, label, inner_w * 0.55, 10),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, C_LABEL)
-			# Value + unit on one baseline.
+			var bt := str(td.get("bar_text", ""))
+			var bt_room := inner_w - label_w - 10.0
+			if not bt.is_empty() and bt_room >= 36.0:
+				var bt_fit := _fit(f_text, bt, bt_room, 10)
+				var btw := f_text.get_string_size(bt_fit, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x
+				draw_string(f_text, Vector2(tx + inner_w - btw, ly), bt_fit,
+						HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(tone.r, tone.g, tone.b, 0.95))
+			# Row 2: value + unit on one baseline.
 			var value := str(td.get("value", "—"))
 			var unit := str(td.get("unit", ""))
-			var vy := rect.position.y + 15.0 + float(value_px) + 4.0
+			var vy := ly + float(value_px) + 5.0
 			var vcol := C_VALUE if str(td.get("tone", "")) != "muted" else C_LABEL
-			draw_string(fnt, Vector2(tx, vy), value, HORIZONTAL_ALIGNMENT_LEFT,
+			draw_string(f_value, Vector2(tx, vy), value, HORIZONTAL_ALIGNMENT_LEFT,
 					-1, value_px, vcol)
-			var vw := fnt.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, value_px).x
+			var vw := f_value.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, value_px).x
 			if not unit.is_empty():
-				draw_string(fnt, Vector2(tx + vw + 5.0, vy),
-						_fit(fnt, unit, maxf(inner_w - vw - 5.0, 8.0), 11),
+				draw_string(f_text, Vector2(tx + vw + 5.0, vy),
+						_fit(f_text, unit, maxf(inner_w - vw - 5.0, 8.0), 11),
 						HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_SUB)
-			# Relation line.
-			draw_string(fnt, Vector2(tx, vy + 13.0), _fit(fnt, str(td.get("sub", "")), inner_w, 10),
+			# Row 3: the relation, full width.
+			draw_string(f_text, Vector2(tx, vy + 15.0), _fit(f_text, str(td.get("sub", "")), inner_w, 10),
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 10, C_SUB)
-			# Bar against the limit.
+			# Row 4: the bar against the limit.
 			var frac_v: Variant = td.get("frac", NAN)
 			var frac := float(frac_v) if (frac_v is float or frac_v is int) else NAN
-			var by := rect.end.y - 9.0
+			var by := rect.end.y - 10.0
 			var bw := inner_w
 			draw_rect(Rect2(Vector2(tx, by), Vector2(bw, 4.0)), C_TRACK, true)
 			if not is_nan(frac):
@@ -171,12 +179,6 @@ func _draw() -> void:
 					# Over the limit — spill a red cap past the end.
 					draw_rect(Rect2(Vector2(tx + bw - 3.0, by - 1.0), Vector2(3.0, 6.0)),
 							_tone("bad"), true)
-			var bt := str(td.get("bar_text", ""))
-			if not bt.is_empty():
-				var btw := fnt.get_string_size(bt, HORIZONTAL_ALIGNMENT_LEFT, -1, 9).x
-				draw_string(fnt, Vector2(tx + bw - btw, by - 3.0), bt,
-						HORIZONTAL_ALIGNMENT_LEFT, -1, 9,
-						Color(tone.r, tone.g, tone.b, 0.95))
 			# Arrow into the next tile: the chain is the point.
 			if i < n - 1:
 				var ax := rect.end.x + GAP * 0.5
@@ -189,12 +191,12 @@ func _draw() -> void:
 	if not _insight.is_empty():
 		var icol := _tone(_insight_tone)
 		draw_circle(Vector2(5.0, iy + 7.0), 3.0, icol)
-		draw_string(fnt, Vector2(14.0, iy + 12.0), _fit(fnt, _insight, maxf(size.x - 16.0, 8.0), 11),
+		draw_string(f_text, Vector2(14.0, iy + 12.0), _fit(f_text, _insight, maxf(size.x - 16.0, 8.0), 11),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
 				C_VALUE if _insight_tone == "ok" or _insight_tone == "accent" else icol)
 	if not _sens.is_empty():
-		draw_string(fnt, Vector2(14.0, iy + INSIGHT_H + 12.0),
-				_fit(fnt, _sens, maxf(size.x - 16.0, 8.0), 10),
+		draw_string(f_text, Vector2(14.0, iy + INSIGHT_H + 12.0),
+				_fit(f_text, _sens, maxf(size.x - 16.0, 8.0), 10),
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 10, C_SUB)
 	if any_flash:
 		queue_redraw()

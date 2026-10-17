@@ -46,6 +46,7 @@ func _build_ui() -> void:
 	panel.custom_minimum_size = Vector2(720, 560)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
+	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 
 	var root_v := VBoxContainer.new()
 	root_v.add_theme_constant_override("separation", 10)
@@ -212,8 +213,8 @@ func _build_recipe_card(recipe: Dictionary, inv: PartInventory) -> Control:
 			total_s += float((ph as Dictionary).get("work_s", 0.0))
 			max_crew = maxi(max_crew, int((ph as Dictionary).get("max_workers", 1)))
 		var lab_line := Label.new()
-		lab_line.text = "👷 ~%.1f person-h · crew up to %d · %d phases" % [
-			total_s / 3600.0, max_crew, phases.size()]
+		lab_line.text = "👷 ~%.1f person-h · crew up to %d · %s" % [
+			total_s / 3600.0, max_crew, UiText.count(phases.size(), "phase")]
 		lab_line.add_theme_font_size_override("font_size", 11)
 		lab_line.modulate = Color(0.7, 0.75, 0.82)
 		v.add_child(lab_line)

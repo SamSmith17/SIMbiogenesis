@@ -24,6 +24,30 @@ uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
 uniform float night_darkness : hint_range(0.0, 1.0) = 0.72;
 
 varying vec3 v_inst_pos;
+// Trunk moss (2026-10-15): the style's bark_moss x the species' affinity.
+// A green pelt climbing from the ground to moss_height_m, patchy, heaviest on
+// up-facing limb tops. MODEL space (pre-growth), so it rides the tree as it
+// grows and sways. 0 = no moss (the default — every existing look unchanged).
+uniform float moss_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float moss_height_m = 6.0;
+uniform vec3 moss_color : source_color = vec3(0.30, 0.42, 0.10);
+varying vec3 v_model_pos;
+varying vec3 v_model_n;
+
+float bark_hash3(vec3 p) {
+	return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+float bark_vnoise(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = mix(bark_hash3(i), bark_hash3(i + vec3(1.0, 0.0, 0.0)), f.x);
+	float b = mix(bark_hash3(i + vec3(0.0, 1.0, 0.0)), bark_hash3(i + vec3(1.0, 1.0, 0.0)), f.x);
+	float c = mix(bark_hash3(i + vec3(0.0, 0.0, 1.0)), bark_hash3(i + vec3(1.0, 0.0, 1.0)), f.x);
+	float d = mix(bark_hash3(i + vec3(0.0, 1.0, 1.0)), bark_hash3(i + vec3(1.0, 1.0, 1.0)), f.x);
+	return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
+}
 
 // Stem radius (m) of the mature tree. Vertices inside it scale with GIRTH (a
 // young stem is thin, an old one thick); branches further out scale with the
@@ -32,6 +56,8 @@ uniform float growth_trunk_radius = 0.0;
 
 void vertex() {
 	vec3 inst_pos = MODEL_MATRIX[3].xyz;
+	v_model_pos = VERTEX;
+	v_model_n = NORMAL;
 	float top_mask = 1.0 - UV.y;
 	// Growth first, in model space, so wind bends the tree at its current size.
 	float g_gen;
@@ -68,6 +94,17 @@ void fragment() {
 	}
 	vec3 wn = veg_world_normal(NORMAL, INV_VIEW_MATRIX);
 	float bark_rough = roughness_value;
+	if (moss_amount > 0.001) {
+		// Smooth 3D value noise (8 hashed corners, trilinear), two octaves.
+		vec3 mp = v_model_pos * vec3(1.6, 0.8, 1.6);
+		float blot = bark_vnoise(mp) * 0.65 + bark_vnoise(mp * 2.7 + vec3(3.1)) * 0.35;
+		float climb = 1.0 - smoothstep(moss_height_m * 0.45, max(moss_height_m, 0.5), v_model_pos.y);
+		float up = clamp(normalize(v_model_n).y, 0.0, 1.0);
+		float m = moss_amount * clamp(climb * 0.85 + up * 0.5, 0.0, 1.0);
+		m *= smoothstep(0.25, 0.65, blot + moss_amount * 0.35);
+		albedo = mix(albedo, moss_color * (0.7 + 0.5 * blot), clamp(m, 0.0, 1.0));
+		bark_rough = mix(bark_rough, 1.0, m);
+	}
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		float up = clamp(wn.y * 0.5 + 0.5, 0.0, 1.0);

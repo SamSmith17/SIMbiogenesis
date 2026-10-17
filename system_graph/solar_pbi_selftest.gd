@@ -42,11 +42,14 @@ func _initialize() -> void:
 	fails += _test_engine_plant_no_radiant_wire_needed()
 	fails += _test_shade_occluded_lt_one()
 	fails += _test_shade_clear_is_one()
+	fails += _test_array_shade_one_model()
+	fails += _test_shaded_caps_resplit()
+	fails += _test_shade_factors_at_bake()
 	fails += _test_energy_budget_efficiency()
 	fails += _test_energy_budget_format_kw()
 	fails += _test_radiant_glow_scales_with_flux()
 	if fails == 0:
-		print("SOLAR PBI SELFTEST PASS  (25 checks)")
+		print("SOLAR PBI SELFTEST PASS  (29 checks)")
 		quit(0)
 	else:
 		print("SOLAR PBI SELFTEST FAIL  (%d failed)" % fails)
@@ -363,8 +366,10 @@ func _test_plant_has_handles() -> int:
 	return 0
 
 
-## Panel share contract: current_output_kw = wmp_share × sunlight_factor
-## (default factor 1.0). SolarUI battery math is intentionally NOT scaled.
+## Panel share contract: a panel's card splits the array's (already shaded)
+## output by wmp × sunlight_factor (default factor 1.0). The SAME factor scales
+## SolarUI's array output (GraphSolarShading.array_shade) — see
+## _test_array_shade_one_model.
 func _test_panel_sunlight_factor_math() -> int:
 	var share := 2.0  # kW
 	var f_default := PlantGrowthScript.sunlight_factor_from_specs({})
@@ -591,5 +596,110 @@ func _test_radiant_glow_scales_with_flux() -> int:
 		return 1
 	if strong <= trickle:
 		push_error("strong flux glow should exceed trickle")
+		return 1
+	return 0
+
+
+## One shade model: the array factor is the Wmp-weighted mean of the panels'
+## factors, and splitting the shaded output by EFFECTIVE Wmp gives each panel
+## exactly its own shaded output — so the cards sum to what the battery got.
+func _test_array_shade_one_model() -> int:
+	# Four 400 W panels, one under a tree (0.2), plus a 1 kW unplaced array.
+	var rec := [
+		{"wmp": 400.0, "group": 0, "s": 1.0},
+		{"wmp": 400.0, "group": 0, "s": 0.2},
+		{"wmp": 400.0, "group": 0, "s": 1.0},
+		{"wmp": 400.0, "group": -1, "s": 1.0},
+	]
+	var total := 2600.0
+	var sh: Dictionary = GraphSolarShadingScript.live_shade(rec, total)
+	var want_f := (2600.0 - 320.0) / 2600.0
+	if absf(float(sh["factor"]) - want_f) > 1e-6:
+		push_error("array shade factor expected %.4f got %.4f" % [want_f, float(sh["factor"])])
+		return 1
+	# Unshaded the array would make 2.6 kW; the panel cards split the shaded
+	# output by effective Wmp and must sum to it, the shaded one reading 1/5.
+	var made := 2.6 * float(sh["factor"])
+	var eff_total := total - float(sh["loss"])
+	var sum := 0.0
+	for r in rec:
+		sum += made * float(r["wmp"]) * float(r["s"]) / eff_total
+	sum += made * 1000.0 / eff_total
+	if absf(sum - made) > 1e-6:
+		push_error("cards should sum to the array's output %.4f got %.4f" % [made, sum])
+		return 1
+	var shaded_card := made * 400.0 * 0.2 / eff_total
+	if absf(shaded_card - 0.08) > 1e-6:
+		push_error("shaded 400 W panel should read 80 W got %.1f W" % (shaded_card * 1000.0))
+		return 1
+	# No receivers = no shade (the bootcamp sandbox).
+	var none: Dictionary = GraphSolarShadingScript.live_shade([], total)
+	if absf(float(none["factor"]) - 1.0) > 1e-9:
+		push_error("no receivers must leave the array unshaded")
+		return 1
+	return 0
+
+
+## The controllers' shares are re-split by the shade: a controller whose
+## panels are shaded is offered less, the fracs still sum to one, and a cap
+## sees its own panels' output (not a Wmp share of the whole shaded array).
+func _test_shaded_caps_resplit() -> int:
+	# Controller 0: 1000 W, all shaded (0.2); controller 1: 1000 W in the sun.
+	var rec := [
+		{"wmp": 1000.0, "group": 0, "s": 0.2},
+		{"wmp": 1000.0, "group": 1, "s": 1.0},
+	]
+	var sh: Dictionary = GraphSolarShadingScript.live_shade(rec, 2000.0)
+	var caps := [{"frac": 0.5, "limit_w": -1.0}, {"frac": 0.5, "limit_w": 500.0}]
+	var adj: Dictionary = GraphSolarShadingScript.shaded_caps(caps, 0.0, sh)
+	var c: Array = adj["caps"]
+	var f0 := float((c[0] as Dictionary)["frac"])
+	var f1 := float((c[1] as Dictionary)["frac"])
+	if absf(f0 + f1 + float(adj["unrouted_frac"]) - 1.0) > 1e-6:
+		push_error("re-split fracs must sum to 1 got %.4f" % (f0 + f1))
+		return 1
+	# Raw (shaded) = 1.2 kW: controller 0 is offered 0.2 kW, controller 1 1 kW
+	# (capped to 0.5). Delivered = 0.7 kW.
+	var raw := 2.0 * float(sh["factor"])
+	if absf(raw * f0 - 0.2) > 1e-6 or absf(raw * f1 - 1.0) > 1e-6:
+		push_error("shares expected 0.2 / 1.0 kW got %.3f / %.3f" % [raw * f0, raw * f1])
+		return 1
+	var got := GraphDcElectrical.delivered_for_caps(raw, c, float(adj["unrouted_frac"]))
+	if absf(got - 0.7) > 1e-6:
+		push_error("delivered expected 0.7 kW got %.3f" % got)
+		return 1
+	# Unshaded: the caps come back unchanged.
+	var clear: Dictionary = GraphSolarShadingScript.shaded_caps(caps, 0.0,
+		GraphSolarShadingScript.live_shade([{"wmp": 1000.0, "group": 0, "s": 1.0}], 2000.0))
+	if not is_same(clear["caps"], caps):
+		push_error("an unshaded array must not touch the caps")
+		return 1
+	return 0
+
+
+## The batch render casts its own rays per instant: one ray per merged
+## origin, none at night, and an unplaced receiver keeps its live factor.
+func _test_shade_factors_at_bake() -> int:
+	var rays := [0]
+	var hit_fn := func(a: Vector3, _b: Vector3) -> Dictionary:
+		rays[0] += 1
+		return {"position": a} if a.x < 5.0 else {}
+	var rec := [
+		{"wmp": 400.0, "pos": Vector3(0, 1.5, 0), "s": 1.0},
+		{"wmp": 400.0, "pos": Vector3(0.1, 1.5, 0.1), "s": 1.0},
+		{"wmp": 400.0, "pos": Vector3(10, 1.5, 0), "s": 0.2},
+		{"wmp": 400.0, "s": 0.5},
+	]
+	var day := GraphSolarShadingScript.factors_at(rec, Vector3(0.3, 0.8, 0.2).normalized(), hit_fn)
+	if absf(float(day[0]) - 0.2) > 1e-6 or absf(float(day[1]) - 0.2) > 1e-6 \
+			or absf(float(day[2]) - 1.0) > 1e-6 or absf(float(day[3]) - 0.5) > 1e-6:
+		push_error("bake factors wrong: %s" % [day])
+		return 1
+	if int(rays[0]) != 2:
+		push_error("adjacent origins should share a ray: %d rays" % int(rays[0]))
+		return 1
+	var night := GraphSolarShadingScript.factors_at(rec, Vector3(0.3, -0.2, 0.2), hit_fn)
+	if int(rays[0]) != 2 or absf(float(night[0]) - 1.0) > 1e-6:
+		push_error("no rays and no shade with the sun down")
 		return 1
 	return 0

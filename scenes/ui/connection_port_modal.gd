@@ -8,6 +8,8 @@ extends Control
 signal ports_saved(model_id: String, prop_id: String)
 
 const MODAL_NAME := "connection_ports"
+## The same option lists (and labels) as the conduit style modal.
+const OPTS := preload("res://scenes/ui/conduit_style_options.gd")
 const ORBIT_SENS := 0.005
 const ZOOM_MIN := 0.4
 const ZOOM_MAX := 12.0
@@ -199,6 +201,7 @@ func _build_ui() -> void:
 	panel.custom_minimum_size = Vector2(1040, 680)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
+	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 
 	var root_v := VBoxContainer.new()
 	root_v.add_theme_constant_override("separation", 8)
@@ -279,21 +282,12 @@ func _build_ui() -> void:
 	type_row.add_theme_constant_override("separation", 8)
 	_io_settings_box.add_child(type_row)
 	var type_lbl := Label.new()
-	type_lbl.text = "Conduit type"
+	type_lbl.text = OPTS.LABEL_TYPE
 	type_lbl.custom_minimum_size.x = 90
 	type_row.add_child(type_lbl)
 	_wire_type_opt = OptionButton.new()
 	_wire_type_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_wire_type_opt.add_item("Conceptual", 0)
-	_wire_type_opt.set_item_metadata(0, "conceptual_flow")
-	var ti := 1
-	for tid: Variant in ConduitKinds.all_types():
-		var id := str(tid)
-		if id == "conceptual_flow":
-			continue
-		_wire_type_opt.add_item(ConduitKinds.display_name(id), ti)
-		_wire_type_opt.set_item_metadata(ti, id)
-		ti += 1
+	OPTS.fill_types(_wire_type_opt, "")
 	_wire_type_opt.item_selected.connect(_on_selected_type_changed)
 	type_row.add_child(_wire_type_opt)
 
@@ -302,14 +296,12 @@ func _build_ui() -> void:
 	_io_settings_box.add_child(size_row)
 	_pipe_size_row = size_row
 	var size_lbl := Label.new()
-	size_lbl.text = "Pipe size"
+	size_lbl.text = OPTS.LABEL_SIZE
 	size_lbl.custom_minimum_size.x = 90
 	size_row.add_child(size_lbl)
 	_pipe_size_opt = OptionButton.new()
 	_pipe_size_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for sz: float in PipeKit.SCH40_SIZES_IN:
-		_pipe_size_opt.add_item(PipeKit.size_label(sz))
-		_pipe_size_opt.set_item_metadata(_pipe_size_opt.item_count - 1, sz)
+	OPTS.fill_sizes(_pipe_size_opt, "")
 	_pipe_size_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
 	size_row.add_child(_pipe_size_opt)
 
@@ -317,15 +309,12 @@ func _build_ui() -> void:
 	rm_row.add_theme_constant_override("separation", 8)
 	_io_settings_box.add_child(rm_row)
 	var rm_lbl := Label.new()
-	rm_lbl.text = "Route mode"
+	rm_lbl.text = OPTS.LABEL_ROUTE
 	rm_lbl.custom_minimum_size.x = 90
 	rm_row.add_child(rm_lbl)
 	_route_mode_opt = OptionButton.new()
 	_route_mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for rm: String in ["", "pipes", "ortho", "direct", "catenary"]:
-		var lab := "Default" if rm.is_empty() else rm.capitalize()
-		_route_mode_opt.add_item(lab)
-		_route_mode_opt.set_item_metadata(_route_mode_opt.item_count - 1, rm)
+	OPTS.fill_route_modes(_route_mode_opt)
 	_route_mode_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
 	rm_row.add_child(_route_mode_opt)
 
@@ -333,14 +322,12 @@ func _build_ui() -> void:
 	fs_row.add_theme_constant_override("separation", 8)
 	_io_settings_box.add_child(fs_row)
 	var fs_lbl := Label.new()
-	fs_lbl.text = "Fitting °"
+	fs_lbl.text = OPTS.LABEL_FITTING
 	fs_lbl.custom_minimum_size.x = 90
 	fs_row.add_child(fs_lbl)
 	_fitting_step_opt = OptionButton.new()
 	_fitting_step_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for fs: float in [0.0, 30.0, 45.0, 60.0, 90.0]:
-		_fitting_step_opt.add_item("Auto" if fs < 0.5 else "%d°" % int(fs))
-		_fitting_step_opt.set_item_metadata(_fitting_step_opt.item_count - 1, fs)
+	OPTS.fill_fittings(_fitting_step_opt)
 	_fitting_step_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
 	fs_row.add_child(_fitting_step_opt)
 
@@ -677,10 +664,11 @@ func _sync_io_controls_from_selection() -> void:
 				best_d = d
 				best_i = i
 		_fitting_step_opt.select(best_i)
-	var kit := ConduitKinds.uses_pipe_kit(type_id)
+	var kit := ConduitKinds.uses_pipe_kit(type_id) or ConduitKinds.has_size_options(type_id)
 	if _pipe_size_row != null:
 		_pipe_size_row.visible = kit
 	if kit and _pipe_size_opt != null:
+		OPTS.fill_sizes(_pipe_size_opt, type_id)
 		var sz := ConduitKinds.pipe_size_in(type_id, style)
 		for i: int in _pipe_size_opt.item_count:
 			if absf(float(_pipe_size_opt.get_item_metadata(i)) - sz) < 0.01:
@@ -709,7 +697,10 @@ func _on_selected_type_changed(idx: int) -> void:
 	_preview_type_id = str(_wire_type_opt.get_item_metadata(idx))
 	_write_selected_type_pref()
 	if _pipe_size_row != null:
-		_pipe_size_row.visible = ConduitKinds.uses_pipe_kit(_preview_type_id)
+		_pipe_size_row.visible = ConduitKinds.has_size_options(_preview_type_id) \
+			or ConduitKinds.uses_pipe_kit(_preview_type_id)
+		if _pipe_size_row.visible:
+			OPTS.fill_sizes(_pipe_size_opt, _preview_type_id)
 	_write_selected_style_prefs()
 	_rebuild_wire_previews()
 
@@ -743,7 +734,8 @@ func _write_selected_style_prefs() -> void:
 			style.erase("fitting_step_deg")
 		else:
 			style["fitting_step_deg"] = fs
-	if ConduitKinds.uses_pipe_kit(_preview_type_id) and _pipe_size_opt != null:
+	if (ConduitKinds.uses_pipe_kit(_preview_type_id) or ConduitKinds.has_size_options(_preview_type_id)) \
+			and _pipe_size_opt != null and _pipe_size_opt.item_count > 0:
 		style["pipe_size_in"] = float(_pipe_size_opt.get_item_metadata(_pipe_size_opt.selected))
 	else:
 		style.erase("pipe_size_in")
@@ -829,7 +821,7 @@ func _apply_selected_to_connections() -> void:
 		n += 1
 	_write_selected_type_pref()
 	_rebuild_wire_previews()
-	_status_lbl.text = "Updated %d connection(s)" % n
+	_status_lbl.text = "Updated %s" % UiText.count(n, "connection")
 
 
 func _first_conn_for_handle(handle_id: String) -> Dictionary:
@@ -1450,5 +1442,5 @@ func _on_save() -> void:
 								bindings[hid] = str((p as Dictionary).get("id", ""))
 					specs["port_bindings"] = bindings
 					mdl.update_item(_item_id, {"specs": specs})
-	_status_lbl.text = "Saved %d binding(s)" % _ports.size() if ok else "Nothing to save"
+	_status_lbl.text = "Saved %s" % UiText.count(_ports.size(), "binding") if ok else "Nothing to save"
 	ports_saved.emit(_model_id, _prop_id)

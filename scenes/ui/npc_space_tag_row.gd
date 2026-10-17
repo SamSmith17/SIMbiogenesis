@@ -31,6 +31,10 @@ const C_ARROW := Color(1.0, 0.72, 0.2, 0.9)
 signal space_changed(space_type: String)
 
 var _loader: Node = null
+## Set before the row enters the tree to sit in a label/value form: the label
+## gets this width (matching the form's other labels) and the type picker
+## fills the rest. 0 = the compact inline look.
+var form_label_w := 0.0
 var _target: Dictionary = {}
 var _line1: HBoxContainer
 var _option: OptionButton
@@ -122,6 +126,10 @@ func _build() -> void:
 	lbl.text = "NPC space"
 	lbl.add_theme_color_override("font_color", C_TEXT)
 	lbl.add_theme_font_size_override("font_size", 11)
+	if form_label_w > 0.0:
+		lbl.custom_minimum_size.x = form_label_w
+		lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_line1.add_child(lbl)
 
 	_option = OptionButton.new()
@@ -131,6 +139,10 @@ func _build() -> void:
 		_option.add_item(SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
 	_option.add_theme_color_override("font_color", C_TEXT)
 	_option.item_selected.connect(_on_type_selected)
+	if form_label_w > 0.0:
+		_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_option.fit_to_longest_item = false
+		_option.clip_text = true
 	_line1.add_child(_option)
 
 	_capacity = SpinBox.new()

@@ -63,6 +63,9 @@ static func clear(terrain: Node3D) -> void:
 		return
 	var root := terrain.get_node_or_null(ROOT_NAME)
 	if root != null:
+		# Detached first: a dying root left in the tree would be the one the
+		# next rebuild's get_node_or_null(ROOT_NAME) finds and builds into.
+		terrain.remove_child(root)
 		root.queue_free()
 
 
@@ -233,6 +236,7 @@ static func _resolve_species(slot: String) -> String:
 
 static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
+		root.remove_child(child)   # see VegetationRuntime._clear_children
 		child.queue_free()
 
 

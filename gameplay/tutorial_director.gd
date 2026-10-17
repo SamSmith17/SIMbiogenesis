@@ -5,7 +5,7 @@ extends Node
 ## see begin/end_tutorial_sandbox); this node owns FLOW: which level is
 ## active, goal evaluation, briefs/debriefs, unlock grants, the HUD.
 ##
-## States: INACTIVE → (enter sandbox) BRIEF → BUILD → DEBRIEF → next level…
+## States: INACTIVE → (enter sandbox) BRIEF → BUILD → CELEBRATE → DEBRIEF → next…
 ## Run-levels (def.is_run_level(), curriculum 8+) are skipped until the bake
 ## engine phase lands.
 
@@ -13,7 +13,21 @@ const _HUD_SCRIPT := preload("res://scenes/ui/tutorial_hud.gd")
 const _UI_SFX := preload("res://core/ui_sfx.gd")
 const EVAL_INTERVAL_S := 0.5
 
-enum State { INACTIVE, BRIEF, BUILD, DEBRIEF }
+## CELEBRATE sits between BUILD and DEBRIEF: the goal is met and the finished
+## circuit runs, flashing, for a moment before the debrief arrives. Appended so
+## DEBRIEF keeps its value (3) — the bootcamp harness reads it.
+enum State { INACTIVE, BRIEF, BUILD, DEBRIEF, CELEBRATE }
+
+## Seconds the finished circuit plays before the debrief. The goal is checked
+## every EVAL_INTERVAL_S, so without this the debrief covered the circuit less
+## than a second after the last wire — in 11 of 12 levels the player never saw
+## their working system. Fault levels wait for the blast instead.
+const CELEBRATE_S := 2.5
+const CELEBRATE_FAULT_S := 3.2
+## Run-levels start the day at this state of charge unless the level says
+## otherwise. Each run used to start wherever the previous one ended — full —
+## so "charge banked" was zero and level 10 scored 0 %.
+const DEFAULT_RUN_START_SOC := 0.3
 
 var _gv: Control = null
 var _hud: Control = null
@@ -27,6 +41,10 @@ var _run_engine: ChallengeBakeEngine = null
 ## battery inside the sandbox; none of it may leak to the player's world.
 var _pre_clock_abs := NAN
 var _pre_battery_kwh := NAN
+var _celebrate_t := 0.0
+## The last run's verdict line; the HUD keeps showing it until the next run
+## (the 0.5 s goal check used to overwrite it with "Press ▶ Run").
+var _last_verdict := ""
 
 
 func bind_graph_view(gv: Control) -> void:
@@ -106,6 +124,7 @@ func exit_tutorial() -> void:
 	if _hud != null:
 		_hud.call("hide_hud")
 	if _gv != null:
+		_gv.call("tutorial_reset_cards")
 		_gv.call("clear_tutorial_palette")
 		_gv.call("end_tutorial_sandbox")
 	# Hand the world back exactly as we found it.
@@ -136,11 +155,21 @@ func _load_level(def: TutorialLevelDef) -> void:
 	_level = def
 	_faults_seen.clear()
 	_eval_acc = 0.0
+	_celebrate_t = 0.0
+	_last_verdict = ""
+	# Nothing from the previous level may survive into this one: a card queued
+	# behind the last debrief used to open over this level's brief and block
+	# the first wire drag.
+	_gv.call("tutorial_reset_cards")
 	if _run_engine != null and _run_engine.is_active():
 		_run_engine.abort()  # a parked breakpoint never outlives its level
 	if not def.carry_graph:
 		_gv.call("tutorial_clear_graph")
 		_gv.call("tutorial_seed_level", def.seed, def.seed_wires)
+		# Seeds are authored as rough positions; pre-wired ones (3S2P, the
+		# series bank) used to run their wires straight through the
+		# controller card. Tidy them with the force layout.
+		_gv.call("tidy_layout", true, true)
 		# The seed just replaced whatever the persisted carry snapshot held;
 		# clearing keeps "snapshot exists" == "sandbox content is resumable"
 		# (the debounced save re-captures this level as the player edits).
@@ -150,6 +179,10 @@ func _load_level(def: TutorialLevelDef) -> void:
 	# curriculum metadata but not enforced. Clearing (rather than skipping)
 	# also lifts any filter a previous session left behind.
 	_gv.call("clear_tutorial_palette")
+	# The camera carries over between levels; re-frame only when this level's
+	# content (a fresh seed, or the graph carried from the last level) would
+	# not be on screen.
+	_gv.call("tutorial_frame_if_needed")
 	if _hud != null:
 		_hud.call("show_level", def.index, def.title, _objective_line(def),
 			def.is_run_level())
@@ -191,7 +224,6 @@ func _show_brief() -> void:
 		"body": _level.brief_bbcode,
 		"override_key": "tutorial:%s:brief" % _level.id,
 		"actions": [
-			{"label": "↺ Start Over", "callback": Callable(self, "_on_start_over")},
 			{"label": "Let's go", "callback": Callable(self, "_on_brief_done")},
 		],
 	})
@@ -202,12 +234,9 @@ func _on_brief_done() -> void:
 		_state = State.BUILD
 
 
-## TEMPORARY testing affordance (per playtest request): jump back to level 1
-## without hunting for a way to un-stick a resumed-blank carry_graph level.
-## Remove this action once the resume-persistence fix above is confirmed —
-## it bypasses no unlock gating (allowed_presets still gates each level's
-## Library while it's active), but it IS a one-click, no-confirmation reset of
-## curriculum progress that has no place in a shipped build.
+## "Replay from level 1" on the FINAL debrief: resets curriculum progress and
+## starts again. It used to sit on every brief as "↺ Start Over" — a one-click,
+## no-confirmation wipe of the player's progress next to "Let's go".
 func _on_start_over() -> void:
 	if _gv == null:
 		return
@@ -226,6 +255,11 @@ func _on_fault_observed(reason: String, _item_id: String) -> void:
 
 
 func _process(delta: float) -> void:
+	if _state == State.CELEBRATE:
+		_celebrate_t -= delta
+		if _celebrate_t <= 0.0:
+			_complete_level()
+		return
 	if _state != State.BUILD and _state != State.BRIEF:
 		return
 	# While a run is baking / playing back, the engine narrates progress.
@@ -244,9 +278,32 @@ func _process(delta: float) -> void:
 	var ctx := TutorialGoals.build_ctx(model, _faults_seen)
 	var res := TutorialGoals.evaluate(_level.goal, ctx)
 	if _hud != null:
-		_hud.call("set_progress", str(res.get("progress", "")))
+		var line := str(res.get("progress", ""))
+		if _level.is_run_level() and not _last_verdict.is_empty():
+			line = _last_verdict
+		_hud.call("set_progress", line)
 	if bool(res.get("met", false)) and _state == State.BUILD:
-		_complete_level()
+		_begin_celebrate(str(res.get("progress", "")))
+
+
+## The goal is met: let the finished circuit run for a moment — every node
+## flashes, the HUD line turns into a tick — before the debrief. A fault level
+## (the explosion IS the win) waits out the blast instead, and its own fault
+## card is dropped: the debrief explains the same mistake.
+func _begin_celebrate(progress: String) -> void:
+	_state = State.CELEBRATE
+	var fault_level := str(_level.goal.get("kind", "")) == "fault_observed"
+	_celebrate_t = CELEBRATE_FAULT_S if fault_level else CELEBRATE_S
+	if fault_level:
+		_gv.call("tutorial_reset_cards")
+	if _hud != null:
+		_hud.call("set_progress", "✓ " + (progress if not progress.is_empty() else "Done"))
+	if not fault_level:
+		var canvas: Variant = _gv.get("_graph_canvas")
+		var model: GraphModel = _gv.get("model")
+		if canvas != null and model != null and canvas.has_method("flash_item"):
+			for it in model.get_items_in_scope("root"):
+				canvas.call("flash_item", str((it as Dictionary).get("id", "")))
 
 
 # ---- Run-levels (▶ Run 24 h → bake → playback → verdict) -------------------
@@ -282,6 +339,8 @@ func _on_run_requested() -> void:
 		"fail_on_starvation": false,
 		"require_no_starvation": false,
 	})
+	_last_verdict = ""
+	_apply_run_start_soc(su)
 	var start_abs := float(m.call("get_absolute_hours"))
 	if _run_engine.start(m, _gv, su, def, start_abs):
 		_begin_run_presentation()
@@ -316,6 +375,25 @@ func _end_run_presentation() -> void:
 		su.call("set_clear_sky_override", false)
 
 
+## Put every battery in the sandbox at the level's starting state of charge
+## (`run.start_soc`, default DEFAULT_RUN_START_SOC) so each run starts the same
+## morning with room to bank charge. A retry restores this through the engine's
+## own snapshot, so the same day replays from the same SOC.
+func _apply_run_start_soc(su: Node) -> void:
+	var soc := clampf(float(_level.run.get("start_soc", DEFAULT_RUN_START_SOC)), 0.0, 1.0)
+	var model: GraphModel = _gv.get("model")
+	if model != null:
+		for it in GraphNesting.walk_items(model, "root"):
+			var d: Dictionary = it
+			if str(d.get("type", "")) in ["battery", "smartbattery"]:
+				var sp: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)
+				sp["soc"] = soc
+				model.update_item(str(d.get("id", "")), {"specs": sp})
+	if su != null and su.has_method("reanchor_live_battery") \
+			and su.has_method("get_battery_capacity_kwh"):
+		su.call("reanchor_live_battery", float(su.call("get_battery_capacity_kwh")) * soc)
+
+
 func _ensure_run_engine() -> void:
 	if _run_engine != null and is_instance_valid(_run_engine):
 		return
@@ -336,10 +414,11 @@ func _ensure_run_engine() -> void:
 
 func _on_run_retry_ready(abs_h: float, reason: String, _attempts_n: int) -> void:
 	_end_run_presentation()
+	_last_verdict = "Failed %.1f h in — fix it, then ▶ Run again" % \
+		maxf(abs_h - float(_run_engine.get("_start_abs")), 0.0)
 	if _hud != null:
 		_hud.call("set_run_busy", false)
-		_hud.call("set_progress", "Failed %.1f h in — fix it, then ▶ Run again" %
-			maxf(abs_h - float(_run_engine.get("_start_abs")), 0.0))
+		_hud.call("set_progress", _last_verdict)
 	_gv.call("show_tutorial_card", {
 		"title": "Power failure",
 		"body": ("The system went dark: [b]%s[/b]\n\nThe timeline is parked at the " +
@@ -356,8 +435,9 @@ func _on_run_succeeded(bake_result: Dictionary) -> void:
 	if _level == null:
 		return
 	var verdict := TutorialGoals.evaluate_run(_level.goal, bake_result)
+	_last_verdict = str(verdict.get("progress", ""))
 	if _hud != null:
-		_hud.call("set_progress", str(verdict.get("progress", "")))
+		_hud.call("set_progress", _last_verdict)
 	if bool(verdict.get("met", false)):
 		_complete_level({
 			"useful_utilization_pct": float(bake_result.get("useful_utilization_pct", 0.0)),
@@ -367,6 +447,7 @@ func _on_run_succeeded(bake_result: Dictionary) -> void:
 		# Clean run but under the utilization bar: explain, invite another run.
 		_gv.call("show_tutorial_card", {
 			"title": "Survived — now optimize",
+			"placement": "corner",
 			"title_color": UITheme.C_AMBER,
 			"body": ("The day completed, but only [b]%.0f%%[/b] of the available sun " +
 				"did useful work (loads served + charge banked). Target: [b]%.0f%%[/b].\n\n" +
@@ -392,6 +473,8 @@ func _complete_level(stats: Dictionary = {}) -> void:
 	var actions: Array = []
 	if next_def != null:
 		actions.append({"label": "Next level", "callback": Callable(self, "_on_next_level")})
+	else:
+		actions.append({"label": "Replay from level 1", "callback": Callable(self, "_on_start_over")})
 	actions.append({"label": "Exit bootcamp", "callback": Callable(self, "exit_tutorial")})
 	# Name what was earned. ProgressStore.grant() is a silent static write, so
 	# without this the player is told "level complete" and never learns which
@@ -414,6 +497,8 @@ func _complete_level(stats: Dictionary = {}) -> void:
 		"body_suffix": suffix,
 		"override_key": "tutorial:%s:debrief" % _level.id,
 		"actions": actions,
+		# Docked to the side so the finished circuit stays in view.
+		"placement": "corner",
 	})
 
 
@@ -461,6 +546,10 @@ func _celebrate_unlocks(earned: Array, delay_s: float = 0.0) -> void:
 		return
 	if sfx != null:
 		sfx.call("play_ui", _UI_SFX.FANFARE)
+	# The debrief's "★ Unlocked:" line names every unlock. The "+1 UP" chips
+	# that used to follow stacked over the canvas and outlived the level.
+	if is_active():
+		return
 	if m == null or not m.has_method("show_part_up"):
 		return
 	# Stagger so several unlocks read as a run of rewards, not one clump.

@@ -678,9 +678,9 @@ func _recompute_estimate() -> void:
 	var time_txt := ("~%.0f min" % (t * 60.0)) if t < 1.0 else ("~%.1f h" % t)
 	var mat_txt := ("~%.0f g" % (vol * 0.001 * 0.95)) if (_caps != null \
 			and not _caps.print_persist) else ("~%.1f L" % (vol / 1_000_000.0))
-	_status.text = "%s • %d tris • %s • %d layers\n%s material • %s print (sim)" % [
+	_status.text = "%s • %d tris • %s • %s\n%s material • %s print (sim)" % [
 		_mesh_path.get_file(), int(_parse.get("triangles", 0)), mode_txt,
-		int(_parse.get("layer_count", 1)), mat_txt, time_txt]
+		UiText.count(int(_parse.get("layer_count", 1)), "layer"), mat_txt, time_txt]
 	_sync_layer_slider()
 
 

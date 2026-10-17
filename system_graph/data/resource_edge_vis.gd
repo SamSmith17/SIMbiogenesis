@@ -203,7 +203,10 @@ static func _draw_arrow_at(canvas: CanvasItem, p: Vector2, p2: Vector2,
 	var a := p + dir * len
 	var b := p - dir * len * 0.55 + side * wid
 	var c := p - dir * len * 0.55 - side * wid
-	canvas.draw_colored_polygon(PackedVector2Array([a, b, c]),
-			Color(1.0, 1.0, 1.0, FLOW_ARROW_ALPHA * (0.7 + gscale * 0.3)))
-	canvas.draw_colored_polygon(PackedVector2Array([p + dir * (len * 0.70), b, c]),
-			Color(col.r, col.g, col.b, 0.60 + gscale * 0.25))
+	# draw_primitive: a triangle as-is (draw_colored_polygon triangulates every
+	# call, and a busy graph draws hundreds of these a frame).
+	canvas.draw_primitive(PackedVector2Array([a, b, c]),
+			PackedColorArray([Color(1.0, 1.0, 1.0, FLOW_ARROW_ALPHA * (0.7 + gscale * 0.3))]),
+			PackedVector2Array())
+	canvas.draw_primitive(PackedVector2Array([p + dir * (len * 0.70), b, c]),
+			PackedColorArray([Color(col.r, col.g, col.b, 0.60 + gscale * 0.25)]), PackedVector2Array())

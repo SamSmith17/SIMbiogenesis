@@ -44,6 +44,12 @@ const KEYBOARD_LABELS := {
 }
 
 func _ready() -> void:
+	# Placement: centred below the crosshair but always above the timeline —
+	# at 720p its old fixed offset put it ON the bar.
+	var cc := get_node_or_null("CenterContainer") as Control
+	if cc != null:
+		HudLayout.register(cc, "interaction_prompt", "center_prompt", {"tuckable": false, "ignore_layer": true,
+			"size": func() -> Vector2: return Vector2(maxf(cc.get_combined_minimum_size().x, 289.0), maxf(cc.get_combined_minimum_size().y, 54.0))})
 	visible = false
 	panel.modulate.a = 0.0
 

@@ -177,6 +177,40 @@ func set_preview_visibility(on: bool) -> void:
 		return
 	_preview_visible = on
 	_refresh_world_visibility()
+	_apply_preview_domain_filter()
+
+
+## The graph's show-only view (GraphDomainFilter) also hides the 3D runs of
+## the kinds it hides — but only while a graph lens is drawing them; the
+## first-person world is never filtered. {} = show every run.
+var _preview_domain_shown: Dictionary = {}
+var _domain_hidden_ids: Dictionary = {}
+var _domain_filter_acc := 0.0
+
+
+func set_preview_domain_filter(shown: Dictionary) -> void:
+	_preview_domain_shown = shown.duplicate()
+	_apply_preview_domain_filter()
+
+
+func _apply_preview_domain_filter() -> void:
+	var filtering := _preview_visible and not GraphDomainFilter.is_all(_preview_domain_shown)
+	for cid in _instances.keys():
+		var inst := _instances[cid] as MeshInstance3D
+		if inst == null or not is_instance_valid(inst):
+			_domain_hidden_ids.erase(cid)
+			continue
+		var hide := false
+		if filtering and _model != null:
+			var conn := _model.get_connection(str(cid))
+			if not conn.is_empty():
+				hide = not _preview_domain_shown.get(GraphDomainFilter.conn_domain(conn), false)
+		if hide and inst.visible:
+			inst.visible = false
+			_domain_hidden_ids[cid] = true
+		elif not hide and _domain_hidden_ids.has(cid):
+			inst.visible = true
+			_domain_hidden_ids.erase(cid)
 
 
 ## Conduit materials are deliberately X-RAY (StandardMaterial3D.no_depth_test in
@@ -376,6 +410,28 @@ func reset_all_autoroutes() -> int:
 
 
 func _process(delta: float) -> void:
+	# The run-length tag switch flipped: rebuild every run once so each tag
+	# is set (or cleared) by the same pass that measures the run.
+	if _run_labels_gen != RunLengthLabels.generation:
+		_run_labels_gen = RunLengthLabels.generation
+		if not RunLengthLabels.enabled():
+			_run_labels_node().clear_all()
+		elif _model != null:
+			# Only the runs already drawn: a full sync_all re-reads the 3D-wires
+			# pref and would also build every hidden run.
+			for cid in _instances.keys().duplicate():
+				var c := _model.get_connection(str(cid))
+				if not c.is_empty():
+					_last_anchors.erase(str(cid))
+					_last_cheap.erase(str(cid))
+					_rebuild_if_dirty(c, true)
+	# A show-only view hides runs in the lenses; a run rebuilt since (new
+	# MeshInstance) is caught here, twice a second.
+	if _preview_visible and not _preview_domain_shown.is_empty():
+		_domain_filter_acc += delta
+		if _domain_filter_acc >= 0.5:
+			_domain_filter_acc = 0.0
+			_apply_preview_domain_filter()
 	# With wires off, the focused conn AND explicitly-visible conns still tick.
 	if _model == null \
 			or (not _global_visible and _focus_id.is_empty() and not _explicit_seen):
@@ -1688,51 +1744,14 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	PipePartsAssembler.clear(self, cid)
 	CulvertAssembler.clear(self, cid)
 	_parts_active.erase(cid)
-	# Pipes / rigid runs are already elbowed — do not re-drape samples.
-	var ground_fn := Callable()
-	var rm := ConduitKinds.normalize_route_mode(
-		str(style_ov.get("route_mode", ConduitKinds.type_meta(type_id).get("route_mode", ""))))
-	var is_pipes := rm == "pipes" or ConduitKinds.is_pipes_type(type_id)
-	# Merge route-mode sag behaviour (taut = straight, catenary = overhead hang)
-	# under any explicit conduit_style so the tube samples match the routing.
-	var mesh_style: Dictionary = style_ov.duplicate(true)
-	var rm_ov := ConduitKinds.mesh_style_override(rm)
-	for msk: String in rm_ov.keys():
-		if not mesh_style.has(msk):
-			mesh_style[msk] = rm_ov[msk]
-	# Draw the tube at its STYLED nominal size. The mesh builder reads radius_m
-	# straight off the kind meta, so without this every poly penstock rendered
-	# at the kind's single fallback radius and a 2" run looked identical to a
-	# 1" one — the diameter is the main thing the player is tuning.
-	if not mesh_style.has("radius_m"):
-		var od := ConduitKinds.outer_diameter_m(type_id, style_ov)
-		if od > 0.0 and ConduitKinds.has_size_options(type_id):
-			mesh_style["radius_m"] = od * 0.5
-	# Hang-edit with locked mid pins: span-wise catenary (not whole-run ground-snake).
-	# Still pass terrain so sag that hits the ground rests on it (no under-mesh).
-	var hang_sag := ConduitKinds.conn_uses_hang_sag(conn)
-	if hang_sag:
-		var hang_ov := ConduitKinds.mesh_style_override("catenary")
-		for hk: String in hang_ov.keys():
-			mesh_style[hk] = hang_ov[hk]
-		mesh_style["terrain_clamp"] = true
-		ground_fn = Callable(self, "ground_y_at")
-	var no_drape := rm == "taut" or rm == "catenary" or hang_sag
-	if not is_pipes and not hang_sag and not no_drape \
-			and (ConduitKinds.is_ground_drape_type(type_id) \
-			or bool(style_ov.get("ground_drape", false))):
-		ground_fn = Callable(self, "ground_y_at")
-	elif not is_pipes and not hang_sag and ConduitKinds.supports_hang_edit(type_id) \
-			and rm != "taut":
-		# Patio / hang-edit catenary: free sag in air, clamp where it meets terrain.
-		mesh_style["terrain_clamp"] = true
-		ground_fn = Callable(self, "ground_y_at")
-	var is_light: bool = ConduitKinds.is_light_type(type_id)
-	# Contour routes carry ~1 m control spacing already — default per-span
-	# tessellation on 160 spans would be thousands of ring segments.
-	var is_contour := rm == "contour"
-	var segs := 8 if is_pipes \
-			else (2 if is_contour else ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN)
+	var bp := mesh_build_params(conn, type_id, style_ov)
+	var ground_fn: Callable = bp["ground_fn"]
+	var rm: String = bp["rm"]
+	var is_pipes: bool = bp["is_pipes"]
+	var mesh_style: Dictionary = bp["mesh_style"]
+	var is_light: bool = bp["is_light"]
+	var is_contour: bool = bp["is_contour"]
+	var segs: int = bp["segs"]
 	var built: Dictionary
 	if is_light:
 		built = ConduitMeshBuilder.build_light_string(control, type_id, segs, ground_fn, mesh_style)
@@ -1791,6 +1810,9 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	_apply_severed_state(cid, severed)
 	var arc: float = float(built.get("arc_length_m", 0.0))
 	_write_length_back(cid, arc)
+	# Light strings carry no sample_points: tag them on their control polyline.
+	_run_labels_node().set_run(cid, samples if samples.size() >= 2 else _control_signature(control),
+		arc, type_id)
 	# Contour (penstock) runs also persist their endpoint elevations — the
 	# intake/outlet inverts the flow engine feeds HydroReach (same keys culvert
 	# conns already carry, same semantics).
@@ -2362,9 +2384,16 @@ func _finish_parts_instance(cid: String, conn: Dictionary, type_id: String,
 				(c as GeometryInstance3D).transparency = FOCUS_DIM if dimmed else 0.0
 	var arc := ConduitKinds.polyline_length_m(cl)
 	_write_length_back(cid, arc)
+	var cl_pts := PackedVector3Array()
+	for cp in cl:
+		if cp is Vector3:
+			cl_pts.append(cp)
+	_run_labels_node().set_run(cid, cl_pts, arc, type_id)
 
 
 func _remove_instance(conn_id: String) -> void:
+	if _run_labels != null and is_instance_valid(_run_labels):
+		_run_labels.clear_run(conn_id)
 	_remove_outlet_marker(conn_id)
 	_remove_burial_trace(conn_id)
 	PipePartsAssembler.clear(self, conn_id)
@@ -2439,3 +2468,146 @@ func _migrate_dense_unlocked_routes() -> void:
 			"route_locked": false,
 		})
 	_updating_model = false
+
+
+## How a run of this kind and style is tessellated: the merged mesh style
+## (route-mode sag, styled bore), which ground callable it drapes on and how
+## finely it samples. ONE function for the built run and for every length
+## readout (measure_route), so the HUD's number while routing is the number the
+## committed run stamps as route_length_m.
+func mesh_build_params(conn: Dictionary, type_id: String, style_ov: Dictionary) -> Dictionary:
+	# Pipes / rigid runs are already elbowed — do not re-drape samples.
+	var ground_fn := Callable()
+	var rm := ConduitKinds.normalize_route_mode(
+		str(style_ov.get("route_mode", ConduitKinds.type_meta(type_id).get("route_mode", ""))))
+	var is_pipes := rm == "pipes" or ConduitKinds.is_pipes_type(type_id)
+	# Merge route-mode sag behaviour (taut = straight, catenary = overhead hang)
+	# under any explicit conduit_style so the tube samples match the routing.
+	var mesh_style: Dictionary = style_ov.duplicate(true)
+	var rm_ov := ConduitKinds.mesh_style_override(rm)
+	for msk: String in rm_ov.keys():
+		if not mesh_style.has(msk):
+			mesh_style[msk] = rm_ov[msk]
+	# Draw the tube at its STYLED nominal size. The mesh builder reads radius_m
+	# straight off the kind meta, so without this every poly penstock rendered
+	# at the kind's single fallback radius and a 2" run looked identical to a
+	# 1" one — the diameter is the main thing the player is tuning.
+	if not mesh_style.has("radius_m"):
+		var od := ConduitKinds.outer_diameter_m(type_id, style_ov)
+		if od > 0.0 and ConduitKinds.has_size_options(type_id):
+			mesh_style["radius_m"] = od * 0.5
+	# Hang-edit with locked mid pins: span-wise catenary (not whole-run ground-snake).
+	# Still pass terrain so sag that hits the ground rests on it (no under-mesh).
+	var hang_sag := ConduitKinds.conn_uses_hang_sag(conn)
+	if hang_sag:
+		var hang_ov := ConduitKinds.mesh_style_override("catenary")
+		for hk: String in hang_ov.keys():
+			mesh_style[hk] = hang_ov[hk]
+		mesh_style["terrain_clamp"] = true
+		ground_fn = Callable(self, "ground_y_at")
+	var no_drape := rm == "taut" or rm == "catenary" or hang_sag
+	if not is_pipes and not hang_sag and not no_drape \
+			and (ConduitKinds.is_ground_drape_type(type_id) \
+			or bool(style_ov.get("ground_drape", false))):
+		ground_fn = Callable(self, "ground_y_at")
+	elif not is_pipes and not hang_sag and ConduitKinds.supports_hang_edit(type_id) \
+			and rm != "taut":
+		# Patio / hang-edit catenary: free sag in air, clamp where it meets terrain.
+		mesh_style["terrain_clamp"] = true
+		ground_fn = Callable(self, "ground_y_at")
+	var is_light: bool = ConduitKinds.is_light_type(type_id)
+	# Contour routes carry ~1 m control spacing already — default per-span
+	# tessellation on 160 spans would be thousands of ring segments.
+	var is_contour := rm == "contour"
+	var segs := 8 if is_pipes \
+			else (2 if is_contour else ConduitMeshBuilder.DEFAULT_SEGMENTS_PER_SPAN)
+	return {"ground_fn": ground_fn, "rm": rm, "is_pipes": is_pipes, "mesh_style": mesh_style,
+		"is_light": is_light, "is_contour": is_contour, "segs": segs}
+
+
+## The true run length (m) a run through `control` would have — sag, drape and
+## sampling included — measured exactly as the built run is (mesh_build_params
+## + the same mesh builder). Kit runs (assembled straight + elbow parts) are
+## their centreline. `conn` may be a real connection or a draft carrying
+## conduit_style / route flags.
+func measure_route(conn: Dictionary, control: Array, type_id: String = "") -> float:
+	if control.size() < 2:
+		return 0.0
+	if type_id.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
+	var style_ov: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	if ConduitKinds.uses_pipe_kit(type_id) or ConduitKinds.uses_culvert_kit(type_id):
+		var pts := PackedVector3Array()
+		for p in control:
+			if p is Vector3:
+				pts.append(p)
+		return ConduitKinds.polyline_length_m(pts)
+	var bp := mesh_build_params(conn, type_id, style_ov)
+	var built: Dictionary
+	if bool(bp["is_light"]):
+		built = ConduitMeshBuilder.build_light_string(control, type_id, int(bp["segs"]),
+			bp["ground_fn"], bp["mesh_style"])
+	else:
+		built = ConduitMeshBuilder.build(control, type_id, int(bp["segs"]),
+			bp["ground_fn"], bp["mesh_style"])
+	return float(built.get("arc_length_m", 0.0))
+
+
+## A copy of a run's visuals (tube + fittings + assembled kit parts) with world
+## transforms baked, for previews. Null when the run has no visuals (hidden by
+## the 3D-wires pref and never revealed, or not 3D-routable).
+func run_visual_copy(conn_id: String) -> Node3D:
+	var root := Node3D.new()
+	var n := 0
+	var inst: MeshInstance3D = _instances.get(conn_id, null)
+	if inst != null and is_instance_valid(inst) and inst.mesh != null:
+		var c := inst.duplicate() as MeshInstance3D
+		c.transform = inst.global_transform if inst.is_inside_tree() else inst.transform
+		c.visible = true
+		c.visibility_range_end = 0.0
+		c.transparency = 0.0
+		root.add_child(c)
+		n += 1
+	for f in _fittings.get(conn_id, []):
+		if f is MeshInstance3D and is_instance_valid(f):
+			var fc := (f as MeshInstance3D).duplicate() as MeshInstance3D
+			fc.transform = (f as MeshInstance3D).global_transform if (f as Node3D).is_inside_tree() else (f as Node3D).transform
+			fc.visible = true
+			root.add_child(fc)
+			n += 1
+	for host in get_children():
+		if host is Node3D and str(host.name).ends_with("_" + conn_id) and host != inst \
+				and not (host is MeshInstance3D):
+			var hc := (host as Node3D).duplicate() as Node3D
+			hc.transform = (host as Node3D).global_transform
+			hc.visible = true
+			root.add_child(hc)
+			n += 1
+	if n == 0:
+		root.free()
+		return null
+	return root
+
+
+# ---------------------------------------------------------------------------
+# Run-length tags (RunLengthLabels)
+# ---------------------------------------------------------------------------
+
+var _run_labels: RunLengthLabels = null
+var _run_labels_gen := -1
+
+
+func _run_labels_node() -> RunLengthLabels:
+	if _run_labels == null or not is_instance_valid(_run_labels):
+		_run_labels = RunLengthLabels.new()
+		_run_labels.name = "RunLengthLabels"
+		add_child(_run_labels)
+		_run_labels_gen = RunLengthLabels.generation
+	return _run_labels
+
+
+## The tag over one run, or null (harness + tools).
+func run_length_tag(conn_id: String) -> Label3D:
+	if _run_labels == null or not is_instance_valid(_run_labels):
+		return null
+	return _run_labels.tag_for(conn_id)

@@ -37,6 +37,14 @@ var _settlement_sig := "<unset>"
 ## SITE BALANCE card (SiteBalance.lines) — rebuilt on content change only.
 var _balance_vbox: VBoxContainer = null
 var _balance_sig := "<unset>"
+## Row structure of the balance card (types + keys) and the value nodes built
+## for it, so a tick that only changes numbers updates labels in place.
+var _balance_shape := "<unset>"
+var _balance_values: Array = []
+## SolarUI.sim_tick_serial last shown — LIVE POWER and the balance follow
+## SolarUI's own tick, the same one the graph cards sync on, so "Making" is
+## the figure the panel and controller cards show on that frame.
+var _solar_serial := -1
 ## Forward outlook (SiteProjection), recomputed every PROJECTION_EVERY_MS real
 ## or when the clock moved > PROJECTION_EVERY_SIM_H — 168 solar evaluations.
 const PROJECTION_EVERY_MS := 20000
@@ -91,6 +99,16 @@ func _process(delta: float) -> void:
 	_refresh_acc += delta
 	if _refresh_acc >= REFRESH_INTERVAL:
 		refresh(true)
+	if not is_visible_in_tree():
+		return
+	var su := _solar_ui()
+	if su == null or not is_instance_valid(su):
+		return
+	var sv: Variant = su.get("sim_tick_serial")
+	if sv != null and int(sv) != _solar_serial:
+		_solar_serial = int(sv)
+		_refresh_power()
+		_refresh_balance()
 
 
 func _build_ui() -> void:
@@ -229,24 +247,16 @@ func _build_ui() -> void:
 	stores_body.add_child(_stores_vbox)
 
 
-func _card_section(title: String) -> PanelContainer:
-	var hdr := PanelContainer.new()
-	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(UITheme.C_PANEL.r * 0.85, UITheme.C_PANEL.g * 0.85, UITheme.C_PANEL.b * 0.85, 1.0)
-	sb.border_color = Color(UITheme.C_PRIMARY.r, UITheme.C_PRIMARY.g, UITheme.C_PRIMARY.b, 0.22)
-	sb.set_border_width(SIDE_BOTTOM, 1)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 7
-	sb.content_margin_bottom = 7
-	hdr.add_theme_stylebox_override("panel", sb)
-	var lbl := Label.new()
-	lbl.text = title.to_upper()
-	lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	lbl.add_theme_font_size_override("font_size", 10)
-	hdr.add_child(lbl)
-	return hdr
+## A card's title: the kit's SectionHeader, inset to the card body's margins.
+func _card_section(title: String) -> MarginContainer:
+	var m := MarginContainer.new()
+	m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	m.add_theme_constant_override("margin_left", 12)
+	m.add_theme_constant_override("margin_right", 12)
+	m.add_theme_constant_override("margin_top", 6)
+	m.add_theme_constant_override("margin_bottom", 0)
+	m.add_child(SectionHeader.make(title))
+	return m
 
 
 func _card_body() -> MarginContainer:
@@ -410,13 +420,18 @@ func _refresh_power() -> void:
 	_net_lbl.modulate.a = alpha
 
 
+func _sandboxed() -> bool:
+	return _graph_view != null and _graph_view.has_method("is_sandbox_active") \
+		and bool(_graph_view.call("is_sandbox_active"))
+
+
 func _refresh_closure() -> void:
 	var m: Dictionary = {}
 	if _graph_view != null and _graph_view.has_method("compute_closure_metrics"):
 		m = _graph_view.call("compute_closure_metrics") as Dictionary
 
 	var score := float(m.get("score", 0.0))
-	_score_lbl.text = ("%.0f" % score) if score > 0.01 else "—"
+	_score_lbl.text = UiText.thousands(int(round(score))) if score > 0.01 else "—"
 
 	var lat := 0.0
 	var lon := 0.0
@@ -426,7 +441,10 @@ func _refresh_closure() -> void:
 			lat = float(main.get("latitude")) if main.get("latitude") != null else 0.0
 			lon = float(main.get("longitude")) if main.get("longitude") != null else 0.0
 	var best := _HIGH_SCORE_SCRIPT.best_score(lat, lon, "")
-	_best_lbl.text = "Best: %.0f" % best if best > 0.01 else "Best: —"
+	_best_lbl.text = ("Best: %s" % UiText.thousands(int(round(best)))) if best > 0.01 else "Best: —"
+	if _sandboxed():
+		# The site's record has nothing to do with a bootcamp bench circuit.
+		_best_lbl.text = "Bootcamp sandbox"
 
 	var channels: Dictionary = m.get("channels", {}) as Dictionary
 	var now_msec := Time.get_ticks_msec()
@@ -554,15 +572,55 @@ func _refresh_balance() -> void:
 		snap["demand_kw"] = GraphAcLoad.demand_watts(model) / 1000.0
 	var rows: Array = []
 	if model != null:
-		rows = SiteBalance.lines(SiteBalance.compute(GraphNesting.walk_items(model, "root"), snap))
-		rows.append_array(_projection_lines(su, snap))
+		rows = SiteBalance.rows(SiteBalance.compute(GraphNesting.walk_items(model, "root"), snap))
+		# The forward projection runs the REAL site's loads and weather — in
+		# the bootcamp sandbox it described a world the player is not in.
+		var proj := [] if _sandboxed() else _projection_lines(su, snap)
+		if not proj.is_empty():
+			rows.append({"t": "sub", "text": "Ahead (today's loads, real weather)"})
+		for pl_v in proj:
+			# "Next 1 d: make … · use … · battery low …" → key "Next 1 d", value the rest.
+			var pl: Dictionary = pl_v
+			var txt := str(pl.get("text", ""))
+			var colon := txt.find(":")
+			var key := txt.left(colon) if colon > 0 else ""
+			key = {"Next 1 d": "Next 24 hours", "Next 7 d": "Next 7 days"}.get(key, key)
+			rows.append({"t": "note", "k": key,
+				"v": txt.substr(colon + 1).strip_edges() if colon > 0 else txt, "tone": str(pl.get("tone", "muted"))})
 	var parts := PackedStringArray()
 	for r_v in rows:
-		parts.append("%s|%s" % [str((r_v as Dictionary).get("tone", "")), str((r_v as Dictionary).get("text", ""))])
+		parts.append(JSON.stringify(r_v))
 	var sig := "\n".join(parts)
 	if sig == _balance_sig:
 		return
 	_balance_sig = sig
+	var shape_parts := PackedStringArray()
+	for r_v3 in rows:
+		var r3: Dictionary = r_v3
+		var t3 := str(r3.get("t", "kv"))
+		if t3 == "kv" or t3 == "note":
+			shape_parts.append(t3 + "|" + str(r3.get("k", "")))
+		else:
+			shape_parts.append(t3 + "|" + str(r3.get("level", "")) + "|" + str(r3.get("text", "")))
+	var shape := "\n".join(shape_parts)
+	if shape == _balance_shape and _balance_values.size() == rows.size():
+		# Same rows, new numbers — update in place (this runs every SolarUI tick).
+		for i in rows.size():
+			var rr: Dictionary = rows[i]
+			var node: Variant = _balance_values[i]
+			if node == null or not is_instance_valid(node):
+				continue
+			var tn := str(rr.get("tone", ""))
+			var tc := UITheme.C_WARN if tn == "warn" else (UITheme.C_GREEN if tn == "ok" else UITheme.C_TEXT)
+			if node is KVRow:
+				(node as KVRow).set_value(str(rr.get("v", "")))
+				(node as KVRow).set_tone(tc if tn != "muted" else UITheme.C_TEXT)
+			elif node is Label:
+				(node as Label).text = str(rr.get("v", ""))
+				(node as Label).add_theme_color_override("font_color", UITheme.C_WARN if tn == "warn" else UITheme.C_TEXT)
+		return
+	_balance_shape = shape
+	_balance_values.clear()
 	for c in _balance_vbox.get_children():
 		_balance_vbox.remove_child(c)
 		c.free()
@@ -574,16 +632,49 @@ func _refresh_balance() -> void:
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		_balance_vbox.add_child(hint)
 		return
+	# A grid, not a paragraph: key / value rows, critical state as a banner,
+	# each pond under its own small heading, the look-ahead as wrapped notes.
 	for r_v2 in rows:
 		var r: Dictionary = r_v2
-		var lbl := Label.new()
-		lbl.text = str(r.get("text", ""))
-		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		var tone := str(r.get("tone", ""))
-		lbl.add_theme_color_override("font_color", UITheme.C_WARN if tone == "warn"
-				else (UITheme.C_GREEN if tone == "ok" else UITheme.C_TEXT_S))
-		_balance_vbox.add_child(lbl)
+		var tone_col := UITheme.C_WARN if tone == "warn" else (UITheme.C_GREEN if tone == "ok" else UITheme.C_TEXT)
+		match str(r.get("t", "kv")):
+			"alert":
+				var ban := AlertBanner.new()
+				ban.show_alert(AlertBanner.ERROR if str(r.get("level", "")) == "error" else AlertBanner.WARN,
+					str(r.get("text", "")))
+				_balance_vbox.add_child(ban)
+				_balance_values.append(null)
+			"sub":
+				var sub := Label.new()
+				sub.text = str(r.get("text", ""))
+				sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				sub.add_theme_font_override("font", UITheme.font("semibold"))
+				sub.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+				sub.add_theme_color_override("font_color", UITheme.C_TEXT)
+				_balance_vbox.add_child(sub)
+				_balance_values.append(null)
+			"note":
+				var box := VBoxContainer.new()
+				box.add_theme_constant_override("separation", 0)
+				var k := Label.new()
+				k.text = str(r.get("k", ""))
+				k.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+				k.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+				box.add_child(k)
+				var v := Label.new()
+				v.text = str(r.get("v", ""))
+				v.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				v.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+				v.add_theme_color_override("font_color", UITheme.C_WARN if tone == "warn" else UITheme.C_TEXT)
+				box.add_child(v)
+				_balance_vbox.add_child(box)
+				_balance_values.append(v)
+			_:
+				var row := KVRow.make(str(r.get("k", "")), str(r.get("v", "")))
+				row.set_tone(tone_col if tone != "muted" else UITheme.C_TEXT)
+				_balance_vbox.add_child(row)
+				_balance_values.append(row)
 
 
 ## The next 24 h and 7 days at today's loads and hydro, with solar from the
@@ -671,8 +762,8 @@ func _refresh_stores() -> void:
 		# row per tank (this is what replaced the old first-item-wins single
 		# row — a camp with a cistern AND rain barrels should read as both).
 		var subtotal := Label.new()
-		subtotal.text = "%s — %d tanks · %s / %s %s" % [
-			ResourceKinds.display_name(str(row_data["kind"])), tanks.size(),
+		subtotal.text = "%s — %s · %s / %s %s" % [
+			ResourceKinds.display_name(str(row_data["kind"])), UiText.count(tanks.size(), "tank"),
 			_fmt_qty(float(row_data["stock"])), _fmt_qty(float(row_data["cap"])),
 			str(row_data["unit"])]
 		subtotal.add_theme_font_size_override("font_size", UITheme.FONT_XS)

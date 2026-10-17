@@ -337,7 +337,7 @@ func _handle_key(key: InputEventKey) -> bool:
 			return true
 		if key.keycode == KEY_BACKSPACE and not _draw_pts.is_empty():
 			_draw_pts.remove_at(_draw_pts.size() - 1)
-			_status("Draw: %d points" % _draw_pts.size())
+			_status("Draw: %s" % UiText.count(_draw_pts.size(), "point"))
 			return true
 	if tool == "water_edit" and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
 		if str(_hover.get("kind", "")) == "pin" and str(_hover.get("id", "")) == _picked:
@@ -364,7 +364,7 @@ func _on_press(mb: InputEventMouseButton) -> void:
 			if _cursor_world is Vector3:
 				var c: Vector3 = _cursor_world
 				_draw_pts.append(Vector2(c.x, c.z))
-				_status("Draw: %d points — Enter or double-click to finish, Backspace drops one" % _draw_pts.size())
+				_status("Draw: %s — Enter or double-click to finish, Backspace drops one" % UiText.count(_draw_pts.size(), "point"))
 		"water_span":
 			if str(_hover.get("kind", "")) == "line" and not str(_hover["id"]).begins_with("dc_") \
 					and _span_mode == WaterFeatureLayer.MODE_PENSTOCK:
@@ -442,8 +442,8 @@ func _make_penstock_run(id: String, seg: int) -> void:
 	if ld != null and ld.has_method("ground_height_at"):
 		drop = float(ld.call("ground_height_at", pts[seg].x, pts[seg].y)) \
 			- float(ld.call("ground_height_at", pts[exit_i].x, pts[exit_i].y))
-	_status("%s → penstock: %d spans, %.0f m of head%s. Open the Hydro Lab on the turbine to see it run." % [
-		fname, exit_i - seg, maxf(drop, 0.0), " — PowerSpout seated at the stream's end" if seated else ""])
+	_status("%s → penstock: %s, %.0f m of head%s. Open the Hydro Lab on the turbine to see it run." % [
+		fname, UiText.count(exit_i - seg, "span"), maxf(drop, 0.0), " — PowerSpout seated at the stream's end" if seated else ""])
 
 
 ## Select a stream from outside (the crosshair's Interact on a creek).
@@ -712,7 +712,7 @@ func _flush_patch() -> void:
 # Options rows
 # ---------------------------------------------------------------------------
 
-func build_rows(box: HBoxContainer) -> void:
+func build_rows(box: Container) -> void:
 	_rows = {}
 	var wn := network()
 	if wn == null:
@@ -744,7 +744,7 @@ func build_rows(box: HBoxContainer) -> void:
 			_build_edit_rows(box, wn)
 
 
-func _build_edit_rows(box: HBoxContainer, wn: Node) -> void:
+func _build_edit_rows(box: Container, wn: Node) -> void:
 	if _picked.is_empty():
 		var l := Label.new()
 		l.text = "Click a stream · drag waypoints · drag a line to add one · Del removes"
@@ -767,16 +767,15 @@ func _build_edit_rows(box: HBoxContainer, wn: Node) -> void:
 		_kind_chips(box, str(f.get("kind", "stream")), func(k: String) -> void:
 			_queue_patch({"kind": k}))
 	var sec: Dictionary = f.get("section", {})
-	for spec in [["bed_w", "Bed m", 0.3, 40.0, 0.1], ["depth", "Depth m", 0.1, 5.0, 0.05],
-			["bank_slope", "Bank 1:", 0.5, 6.0, 0.1]]:
+	for spec in [["bed_w", "Bed width", 0.3, 40.0, 0.1, "m"], ["depth", "Depth", 0.1, 5.0, 0.05, "m"],
+			["bank_slope", "Bank slope 1:", 0.5, 6.0, 0.1, ""]]:
 		var key: String = spec[0]
-		var pair := SliderSpinRow.add(box, String(spec[1]), float(spec[2]), float(spec[3]),
-			float(sec.get(key, 1.0)), func(v: float) -> void: _queue_patch({"section": {key: v}}),
-			Callable(ui, "_style_row_label"), 0, 70, 54, float(spec[4]))
+		var pair := SliderSpinRow.add_param(box, String(spec[1]), float(spec[2]), float(spec[3]),
+			float(sec.get(key, 1.0)), float(spec[4]), String(spec[5]),
+			func(v: float) -> void: _queue_patch({"section": {key: v}}))
 		_rows[key] = pair
-	SliderSpinRow.add(box, "Base L/s", 0.0, 20000.0, float(f.get("base_lps", 25.0)),
-		func(v: float) -> void: _queue_patch({"base_lps": v}),
-		Callable(ui, "_style_row_label"), 0, 70, 64, 1.0)
+	SliderSpinRow.add_param(box, "Base flow", 0.0, 20000.0, float(f.get("base_lps", 25.0)), 1.0, "L/s",
+		func(v: float) -> void: _queue_patch({"base_lps": v}), NAN, 92, 76)
 	var carve := CheckBox.new()
 	carve.text = "Carve"
 	carve.button_pressed = bool(f.get("carve", true))
@@ -790,7 +789,7 @@ func _build_edit_rows(box: HBoxContainer, wn: Node) -> void:
 		"Hide this mapped waterway" if src == "osm" else "Delete this stream").pressed.connect(_action.bind("delete"))
 
 
-func _build_view_rows(box: HBoxContainer, wn: Node) -> void:
+func _build_view_rows(box: Container, wn: Node) -> void:
 	var lay: WaterFeatureLayer = wn.get("layer")
 	var cur := str(lay.setting("display_mode"))
 	for m in [["off", "Off"], ["osm", "Mapped"], ["all", "All streams"], ["flow", "Flow view"]]:
@@ -806,9 +805,8 @@ func _build_view_rows(box: HBoxContainer, wn: Node) -> void:
 	dr.focus_mode = Control.FOCUS_NONE
 	dr.toggled.connect(func(on: bool) -> void: wn.call("set_show_drainage", on))
 	box.add_child(dr)
-	SliderSpinRow.add(box, "Min ha", 0.1, 100.0, float(lay.setting("min_catchment_ha")),
-		func(v: float) -> void: wn.call("set_min_catchment_ha", v),
-		Callable(ui, "_style_row_label"), 0, 80, 56, 0.1)
+	SliderSpinRow.add_param(box, "Min catchment", 0.1, 100.0, float(lay.setting("min_catchment_ha")),
+		0.1, "ha", func(v: float) -> void: wn.call("set_min_catchment_ha", v))
 	var cv := CheckBox.new()
 	cv.text = "Carve channels"
 	cv.tooltip_text = "Cut mapped and drawn streams into the hi-res terrain"
@@ -830,13 +828,13 @@ func _build_view_rows(box: HBoxContainer, wn: Node) -> void:
 			_status("Re-carving every channel…"))
 
 
-func _kind_chips(box: HBoxContainer, current: String, on_pick: Callable) -> void:
+func _kind_chips(box: Container, current: String, on_pick: Callable) -> void:
 	for k in KIND_CHOICES:
 		var b := _chip(box, String(k).capitalize(), k == current, "Kind: %s (sets the default cross-section)" % k)
 		b.pressed.connect(func() -> void: on_pick.call(k))
 
 
-func _chip(box: HBoxContainer, text: String, on: bool, tip: String) -> Button:
+func _chip(box: Container, text: String, on: bool, tip: String) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.tooltip_text = tip

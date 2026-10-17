@@ -171,16 +171,13 @@ func _build_ui() -> void:
 			close())
 	add_child(dim)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
-
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(720, 700)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	center.add_child(panel)
+	add_child(panel)
+	# Above the timeline and inside the screen at any size (a 720 x 700 panel
+	# centred on the window sat on the timeline at 720p); the tabs scroll.
+	UiFit.keep_fitted(panel, Vector2(720, 700))
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 10)
@@ -193,10 +190,7 @@ func _build_ui() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 18)
 	title_row.add_child(title)
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	title_row.add_child(close_btn)
 
 	var hint := Label.new()
@@ -439,10 +433,7 @@ func _build_ui() -> void:
 	build_row.add_child(_builder_lbl)
 
 	# Host security (Phase 6)
-	var sec_hdr := Label.new()
-	sec_hdr.text = "Host security (optional)"
-	sec_hdr.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	root.add_child(sec_hdr)
+	root.add_child(SectionHeader.make("Host security", "", "optional"))
 	var pw_row := HBoxContainer.new()
 	pw_row.add_theme_constant_override("separation", 8)
 	root.add_child(pw_row)
@@ -603,9 +594,7 @@ func _build_ui() -> void:
 	peers_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	peers_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	cols.add_child(peers_col)
-	var peers_hdr := Label.new()
-	peers_hdr.text = "In session"
-	peers_col.add_child(peers_hdr)
+	peers_col.add_child(SectionHeader.make("In session"))
 	var peers_scroll := ScrollContainer.new()
 	peers_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	peers_scroll.custom_minimum_size.y = 120
@@ -618,9 +607,7 @@ func _build_ui() -> void:
 	lan_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lan_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	cols.add_child(lan_col)
-	var lan_hdr := Label.new()
-	lan_hdr.text = "LAN hosts"
-	lan_col.add_child(lan_hdr)
+	lan_col.add_child(SectionHeader.make("LAN hosts"))
 	var lan_scroll := ScrollContainer.new()
 	lan_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	lan_scroll.custom_minimum_size.y = 120
@@ -631,10 +618,7 @@ func _build_ui() -> void:
 
 	root = design_box
 	# Design collaboration
-	var design_hdr := Label.new()
-	design_hdr.text = "Design collaboration"
-	design_hdr.add_theme_font_size_override("font_size", 15)
-	root.add_child(design_hdr)
+	root.add_child(SectionHeader.make("Design collaboration"))
 
 	var design_row := HBoxContainer.new()
 	design_row.add_theme_constant_override("separation", 8)
@@ -685,10 +669,7 @@ func _build_ui() -> void:
 		_sync_from_session())
 	merge_row.add_child(discard_btn)
 
-	var offers_hdr := Label.new()
-	offers_hdr.text = "Incoming design offers"
-	offers_hdr.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	root.add_child(offers_hdr)
+	root.add_child(SectionHeader.make("Incoming design offers"))
 	var offers_scroll := ScrollContainer.new()
 	offers_scroll.custom_minimum_size.y = 90
 	root.add_child(offers_scroll)
@@ -763,8 +744,8 @@ func _sync_from_session() -> void:
 	_live_sync_btn.disabled = not active
 	_live_sync_btn.set_pressed_no_signal(MultiplayerSession.is_live_design_sync())
 	if MultiplayerSession.design != null and not str(MultiplayerSession.design.get("active_offer_id")).is_empty():
-		_preview_lbl.text = "Ghost preview active · %d prop ghosts" % int(
-			MultiplayerSession.design.get("ghost_prop_count"))
+		_preview_lbl.text = "Ghost preview active · %s" % UiText.count(int(
+			MultiplayerSession.design.get("ghost_prop_count")), "prop ghost")
 		_preview_lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 	else:
 		_preview_lbl.text = "No ghost preview"
@@ -1240,10 +1221,10 @@ func _refresh_offers() -> void:
 		var summary: Dictionary = e.get("summary", {}) as Dictionary
 		var lbl := Label.new()
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.text = "%s · %d nodes · %d props" % [
+		lbl.text = "%s · %s · %s" % [
 			str(e.get("from_name", "Peer")),
-			int(summary.get("item_count", 0)),
-			int(summary.get("prop_count", 0)),
+			UiText.count(int(summary.get("item_count", 0)), "node"),
+			UiText.count(int(summary.get("prop_count", 0)), "prop"),
 		]
 		row.add_child(lbl)
 		var tid := str(e.get("id", ""))
@@ -1253,7 +1234,7 @@ func _refresh_offers() -> void:
 		prev.pressed.connect(_on_preview_offer.bind(tid))
 		row.add_child(prev)
 		var dismiss := Button.new()
-		dismiss.text = "✕"
+		IconButton.style(dismiss, "x", "Dismiss this design offer")
 		dismiss.pressed.connect(func() -> void:
 			MultiplayerSession.dismiss_design_offer(tid)
 			_refresh_offers())

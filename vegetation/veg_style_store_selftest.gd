@@ -153,9 +153,9 @@ func _test_variant_precedence() -> void:
 	var flat := VegStyleStore.flat_merged(T_LAT, T_LON)
 	var spruce := VegSpeciesCatalog.settings_with_variant("spruce", flat, specs)
 	var fir := VegSpeciesCatalog.settings_with_variant("fir", flat, specs)
-	_check("spruce gets SPECS height", is_equal_approx(float(spruce["pine_height_m"]), 21.0),
+	_check("spruce gets SPECS height", is_equal_approx(float(spruce["pine_height_m"]), float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["height_m"])),
 		"got %s" % str(spruce["pine_height_m"]))
-	_check("fir gets SPECS height", is_equal_approx(float(fir["pine_height_m"]), 23.0))
+	_check("fir gets SPECS height", is_equal_approx(float(fir["pine_height_m"]), float((VegetationCardFactory.SPECS["fir"] as Dictionary)["height_m"])))
 	_check("spruce != fir", not is_equal_approx(
 		float(spruce["pine_height_m"]), float(fir["pine_height_m"])))
 	var birch := VegSpeciesCatalog.settings_with_variant("birch", flat, specs)
@@ -163,9 +163,10 @@ func _test_variant_precedence() -> void:
 		birch.has("bark_albedo_tint") and (birch["bark_albedo_tint"] as Color).r > 0.8)
 	var maple := VegSpeciesCatalog.settings_with_variant("maple", flat, specs)
 	_check("maple SPECS highlight applies",
-		(maple["deciduous_highlight_tint"] as Color).is_equal_approx(Color(0.55, 0.35, 0.10)))
+		(maple["deciduous_highlight_tint"] as Color).is_equal_approx(
+			VegetationCardFactory.SPECS["maple"]["highlight"]))
 	_check("maple SPECS albedo replaces family default",
-		(maple["deciduous_albedo_tint"] as Color).is_equal_approx(Color(0.20, 0.40, 0.10)))
+		(maple["deciduous_albedo_tint"] as Color).is_equal_approx(VegetationCardFactory.SPECS["maple"]["top"]))
 	# 2) Generic family species keeps the flat/default values.
 	var pine := VegSpeciesCatalog.settings_with_variant("pine", flat, specs)
 	_check("generic pine keeps family default", is_equal_approx(float(pine["pine_height_m"]), 17.0))
@@ -175,11 +176,11 @@ func _test_variant_precedence() -> void:
 	VegetationStyleConfig.save_global({"pine_height_m": 25.5})
 	flat = VegStyleStore.flat_merged(T_LAT, T_LON)
 	spruce = VegSpeciesCatalog.settings_with_variant("spruce", flat, specs)
-	var want := 21.0 * (25.5 / 17.0)  # SPECS spruce × user/default ratio
+	var want := float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["height_m"]) * (25.5 / 17.0)  # SPECS spruce × user/default ratio
 	_check("user family edit scales SPECS dims",
 		absf(float(spruce["pine_height_m"]) - want) < 0.01,
 		"got %.3f want %.3f" % [float(spruce["pine_height_m"]), want])
-	_check("un-edited dim still from SPECS", is_equal_approx(float(spruce["pine_crown_width_m"]), 6.0))
+	_check("un-edited dim still from SPECS", is_equal_approx(float(spruce["pine_crown_width_m"]), float((VegetationCardFactory.SPECS["spruce"] as Dictionary)["crown_m"])))
 	var fir2 := VegSpeciesCatalog.settings_with_variant("fir", flat, specs)
 	_check("variants stay distinct under a family edit",
 		absf(float(spruce["pine_height_m"]) - float(fir2["pine_height_m"])) > 0.05)
@@ -189,7 +190,7 @@ func _test_variant_precedence() -> void:
 	spruce = VegSpeciesCatalog.settings_with_variant("spruce", flat, specs)
 	_check("species override beats family edit", is_equal_approx(float(spruce["pine_height_m"]), 9.0))
 	var cedar := VegSpeciesCatalog.settings_with_variant("cedar", flat, specs)
-	var cedar_want := 15.0 * (25.5 / 17.0)
+	var cedar_want := float((VegetationCardFactory.SPECS["cedar"] as Dictionary)["height_m"]) * (25.5 / 17.0)
 	_check("cedar unaffected by spruce override (scaled SPECS)",
 		absf(float(cedar["pine_height_m"]) - cedar_want) < 0.01,
 		"got %.3f want %.3f" % [float(cedar["pine_height_m"]), cedar_want])

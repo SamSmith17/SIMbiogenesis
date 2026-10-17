@@ -1064,6 +1064,8 @@ func _apply_lab_sim_inflow_realtime(wall_dt_s: float) -> void:
 			continue
 		if not bool(specs.get("lab_sim_inflow_enabled", false)):
 			continue
+		if bool(specs.get(HydroSource.SPEC_OFF, false)):
+			continue  # switched off: the forward tick keeps it idle
 		var sim_lps := maxf(float(specs.get("lab_sim_inflow_lps", 0.0)), 0.0)
 		if sim_lps <= 1e-9:
 			continue
@@ -1173,6 +1175,9 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 		if str(specs.get("role", "")) != "siphon_hydro":
 			continue
 		var proc_id := str(item.get("id", ""))
+		if bool(specs.get(HydroSource.SPEC_OFF, false)):
+			_idle_switched_off_turbine(item, specs, proc_id)
+			continue
 		var tank := _resolve_siphon_inlet_tank(item)
 		var kind_meta := HydroSource.kind_meta(str(specs.get("turbine_kind", "siphon")))
 		# A ROUTED penstock is the authority for its own geometry regardless of
@@ -1593,6 +1598,8 @@ func _refresh_hydro_telemetry_readonly() -> void:
 		# Streaming kinds (pond_drawdown false) run spec-driven — no pond level
 		# to rewind, telemetry is a function of the calendar month only.
 		var i_specs: Dictionary = item.get("specs", {}) as Dictionary
+		if bool(i_specs.get(HydroSource.SPEC_OFF, false)):
+			continue  # switched off: stays at 0 W whatever the pond did
 		if not bool(HydroSource.kind_meta(
 				str(i_specs.get("turbine_kind", "siphon"))).get("pond_drawdown", true)):
 			continue
@@ -3647,6 +3654,37 @@ func _has_ac_power_wire(item_id: String) -> bool:
 ## The manual/automation run switch: requested_state wins, else legacy
 ## current_state; unset → OFF. Default-off means a processor runs only when the
 ## user (double-click) or an automation switches it on.
+## A hydro turbine the player switched off (specs.hydro_off — double-click in
+## the graph): the valve is shut, so it draws no water, diverts no stream and
+## makes no power. Its telemetry is zeroed so the battery trace, the DC sum to
+## SolarUI, the cards and the 3D ring all read 0 W; the prime is kept (a closed
+## valve holds the column). Written only when something changed.
+func _idle_switched_off_turbine(item: Dictionary, specs: Dictionary, proc_id: String) -> void:
+	var before := item.get("specs", {}) as Dictionary
+	for k in ["live_q_lps", "current_output_kw", "live_power_w", "live_rpm", "live_pe_w"]:
+		specs[k] = 0.0
+	# The port rates are what the tank integrator moves and the DC trace reads:
+	# a stale rate from the last running tick would keep water flowing.
+	var changed := false
+	for key in ["inputs", "outputs"]:
+		var ports: Array = specs.get(key, []) as Array
+		for i in ports.size():
+			var pd: Variant = ports[i]
+			if pd is Dictionary and absf(float((pd as Dictionary).get("rate", 0.0))) > 1e-9:
+				(pd as Dictionary)["rate"] = 0.0
+				changed = true
+	_write_node_state(proc_id, specs, GraphNodeState.IDLE,
+		"Switched off — double-click to start", [])
+	if str(specs.get("node_state", "")) != str(before.get("node_state", "")) \
+			or str(specs.get("node_state_reason", "")) != str(before.get("node_state_reason", "")):
+		changed = true
+	for k in ["live_q_lps", "current_output_kw", "live_power_w", "live_rpm"]:
+		if absf(float(before.get(k, 0.0))) > 1e-9:
+			changed = true
+	if changed:
+		_model.update_item(proc_id, {"specs": specs})
+
+
 func _processor_switched_on(specs: Dictionary) -> bool:
 	# Packed 3D twin (PACKING_PLAN.md Phase 5): a machine in its shipping
 	# crate cannot run, whatever the switch says. One gate here covers every

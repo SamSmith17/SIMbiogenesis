@@ -81,6 +81,11 @@ uniform vec3 autumn_warm : source_color = vec3(0.96, 0.78, 0.12);   // yellow
 uniform vec3 autumn_orange : source_color = vec3(0.93, 0.45, 0.06); // orange
 uniform vec3 autumn_hot : source_color = vec3(0.80, 0.13, 0.04);    // red
 uniform vec3 bud_color : source_color = vec3(0.55, 0.78, 0.24);
+// Broadleaf leaf SPRAYS (VegBroadleafBuilder): the vertex COLOR carries what a
+// card's UV.y used to stand in for — r = depth into the crown (0 = outer
+// leaves), g = height fraction of the tree (wind), b = a per-spray seed (leaf
+// fall). Off for every card / conifer material, so they are unchanged.
+uniform bool spray_mode = false;
 
 varying float v_view_dist;
 varying vec3 v_world_pos;
@@ -115,7 +120,7 @@ float pine_fur_tuft(vec2 uv, vec3 inst_pos) {
 }
 
 void vertex() {
-	float top_mask = 1.0 - UV.y;
+	float top_mask = spray_mode ? COLOR.g : 1.0 - UV.y;
 	vec3 inst_pos = MODEL_MATRIX[3].xyz;
 	// Growth first, in model space (height + crown width from the plant's age).
 	float g_gen;
@@ -214,6 +219,12 @@ void fragment() {
 	// the camera moved.
 	float leaf_inst_seed = hash21(floor(v_inst_pos.xz * 0.5) + 0.5);
 	vec2 leaf_key = floor(UV * 13.0) + vec2(leaf_inst_seed * 19.3, leaf_inst_seed * 7.7);
+	if (spray_mode) {
+		// Per spray, and per leaf-sized cell of it: a crown thins spray by
+		// spray, not the same leaf of every spray at once.
+		leaf_key = floor(UV * vec2(7.0, 3.0)) + vec2(COLOR.b * 211.0 + leaf_inst_seed * 19.3,
+			COLOR.b * 57.0 + leaf_inst_seed * 7.7);
+	}
 	if (veg_leaf_fallen(leaf_key, leaf_coverage, deciduousness)) {
 		discard;
 	}
@@ -231,7 +242,7 @@ void fragment() {
 		if (dot(to_crown, to_crown) > 1e-4) {
 			// The crown normal is WORLD space; NORMAL is view space.
 			vec3 round_n = normalize((VIEW_MATRIX * vec4(normalize(to_crown + vec3(0.0, 0.35, 0.0)), 0.0)).xyz);
-			float crown_t = (1.0 - UV.y) * canopy_roundness;
+			float crown_t = (spray_mode ? 1.0 - COLOR.r : 1.0 - UV.y) * canopy_roundness;
 			nrm = normalize(mix(nrm, round_n, crown_t));
 		}
 	}
@@ -278,12 +289,13 @@ void fragment() {
 		}
 	}
 
-	float bottom_t = UV.y;
+	// Card: darker toward its foot. Spray: darker deep inside the crown.
+	float bottom_t = spray_mode ? COLOR.r : UV.y;
 	albedo = mix(albedo, albedo * ao_tint, bottom_t * ao_strength);
 
 	vec3 lit_dir = normalize(sun_direction);
 	float sun_up = max(0.0, dot(lit_dir, wn)) * (1.0 - night_factor);
-	float top_mask = 1.0 - UV.y;
+	float top_mask = spray_mode ? 1.0 - COLOR.r : 1.0 - UV.y;
 	albedo += highlight_tint * sun_up * subsurface_strength * top_mask;
 	if (translucency_strength > 0.001) {
 		// Real transmission: BACKLIGHT is lit by the sun from BEHIND the leaf.
@@ -298,7 +310,7 @@ void fragment() {
 	if (snow_amount > 0.001 || snow_depth_m > 0.001) {
 		float depth_t = clamp(snow_depth_m / 1.5, 0.0, 1.0);
 		float up = clamp(wn.y * 0.5 + 0.5, 0.0, 1.0);
-		float top = 1.0 - UV.y;
+		float top = spray_mode ? 1.0 - COLOR.r : 1.0 - UV.y;
 		float hold = mix(0.6, 1.0, 1.0 - deciduousness);
 		float snow_mask = clamp((snow_amount * 0.35 + depth_t * 0.8) * mix(0.25, 1.0, top) * (0.35 + 0.65 * up) * hold, 0.0, 1.0);
 		albedo = mix(albedo, snow_color, snow_mask);

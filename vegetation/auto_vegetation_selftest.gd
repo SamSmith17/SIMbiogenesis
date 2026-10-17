@@ -1558,11 +1558,11 @@ func _test_preview_parity() -> void:
 	var rb := preview_mesh.get_aabb()
 	_check("parity: identical AABB", ra.size.is_equal_approx(rb.size),
 		"render %s vs preview %s" % [str(ra.size), str(rb.size)])
-	# maple SPECS height 16 × family ratio (user 19 / default 14) = 21.71 —
+	# maple SPECS height × family ratio (user 19 / default 14) —
 	# proves the store edits actually resolved rather than both paths agreeing
 	# on stale defaults.
 	_check("parity: the store edits actually resolved",
-		absf(ra.size.y - 16.0 * 19.0 / 14.0) < 0.05,
+		absf(ra.size.y - float((VegetationCardFactory.SPECS["maple"] as Dictionary)["height_m"]) * 19.0 / 14.0) < 0.05,
 		"got %.2f" % ra.size.y)
 	editor.free()
 	for p in [VegStyleStore.global_v2_path(), VegStyleStore.map_v2_path(0.0, 0.0)]:

@@ -79,36 +79,28 @@ func _process(delta: float) -> void:
 func _build() -> void:
 	_panel = PanelContainer.new()
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.9))
-	_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_panel.offset_left = -(WIDTH + 16)
-	_panel.offset_right = -16
-	_panel.offset_top = 330
+	_panel.custom_minimum_size = Vector2(WIDTH, 0)
+	# Top-right column of the HUD layout, under the selection card.
+	HudLayout.register(_panel, "work_dock", "top_right", {"order": 30, "priority": 7, "tuckable": false,
+		"size": func() -> Vector2: return Vector2(WIDTH, _panel.get_combined_minimum_size().y)})
 	add_child(_panel)
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	_panel.add_child(col)
 
-	var head := HBoxContainer.new()
-	col.add_child(head)
-	_title = Label.new()
-	_title.text = "🔨 Work"
-	_title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(_title)
-	_toggle = Button.new()
-	UITheme.style_button(_toggle)
-	_toggle.text = "▾"
-	_toggle.tooltip_text = "Collapse"
+	_toggle = IconButton.make("chevron-up", "Collapse")
 	_toggle.pressed.connect(func() -> void:
 		_collapsed = not _collapsed
-		_toggle.text = "▸" if _collapsed else "▾"
+		_toggle.icon = UiIcons.icon("chevron-down" if _collapsed else "chevron-up", 16)
 		_toggle.tooltip_text = "Expand" if _collapsed else "Collapse"
 		_rows_scroll.visible = not _collapsed
 		_summary.visible = not _collapsed
 		if _today_lbl != null:
 			_today_lbl.visible = not _collapsed)
-	head.add_child(_toggle)
+	var head := DockShell.header("Work", "", Callable(), [_toggle])
+	col.add_child(head["row"])
+	_title = head["title"]
 
 	_summary = Label.new()
 	_summary.add_theme_font_size_override("font_size", UITheme.FONT_XS)

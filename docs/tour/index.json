@@ -1,0 +1,1050 @@
+{
+  "version": 1,
+  "stops": {
+    "arrival": {
+      "id": "arrival",
+      "title": "Any place on Earth",
+      "chapter": "World",
+      "summary": "Real terrain, aerial imagery and OpenStreetMap buildings for the site you pick.",
+      "how": [
+        "Pick or create a world in the launch hub",
+        "Walk with WASD, look with the mouse"
+      ],
+      "action": "",
+      "button": "Play → pick a world",
+      "key": "",
+      "open_hints": [
+        "Click Play → pick a world"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every world stands on a real map: an elevation model, aerial imagery draped at up to native county resolution, and the buildings, roads, water and forests from OpenStreetMap. The sun, sky and weather follow the site's real latitude, date and archived weather.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "arrival.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "drone_view": {
+      "id": "drone_view",
+      "title": "Survey drone",
+      "chapter": "World",
+      "summary": "Take off from where you stand and fly the site.",
+      "how": [
+        "Press Tab to take off from your current view",
+        "WASD to fly, Space / Ctrl to climb and descend, Tab or X to land"
+      ],
+      "action": "drone_view",
+      "button": "",
+      "key": "Tab",
+      "open_hints": [
+        "Press Tab"
+      ],
+      "world": "mtvernon",
+      "blurb": "The drone lifts off from the player's own camera, so the view starts exactly where you were looking. It is the quickest way to read a site's layout before building on it.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "drone_view.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "third_person": {
+      "id": "third_person",
+      "title": "Third person",
+      "chapter": "World",
+      "summary": "A follow camera over the shoulder, with a body that walks, runs and drives.",
+      "how": [
+        "Press F5 to switch between first and third person",
+        "Settings → Player for distance, shoulder and body"
+      ],
+      "action": "toggle_third_person",
+      "button": "",
+      "key": "F5",
+      "open_hints": [
+        "Press F5"
+      ],
+      "world": "mtvernon",
+      "blurb": "Third person keeps every tool working: the crosshair, interaction and vehicles all read the same camera. The player's figure is posed procedurally for walking, running, jumping, driving and using tools.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "third_person.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "day_night": {
+      "id": "day_night",
+      "title": "Time, sun and sky",
+      "chapter": "World",
+      "summary": "Scrub the clock: the real sun path, sunsets and twilight for the site's date.",
+      "how": [
+        "Drag the timeline at the bottom of the screen",
+        "Space plays and pauses; the speed buttons run time faster"
+      ],
+      "action": "",
+      "button": "the timeline",
+      "key": "",
+      "open_hints": [
+        "Click the timeline"
+      ],
+      "world": "mtvernon",
+      "blurb": "The clock is reversible: sun, moon, sky, weather and even the battery scrub backwards along exactly the curve they followed forwards. The sunlight, skylight and colour all come from one daylight model, so a sunrise fades in instead of switching on.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "day_night.jpg",
+      "image_run": "2026-10-13T19:55:21",
+      "image_commit": "27831f5"
+    },
+    "night_sky": {
+      "id": "night_sky",
+      "title": "The real night sky",
+      "chapter": "World",
+      "summary": "Stars, planets and the moon where they really are for this site and date.",
+      "how": [
+        "Scrub the timeline to night",
+        "Press Home to show the reference-star markers",
+        "The ∞ speed preset turns on analemma mode (stars through daylight)"
+      ],
+      "action": "toggle_star_calibration",
+      "button": "",
+      "key": "Home",
+      "open_hints": [
+        "Press Home"
+      ],
+      "world": "mtvernon",
+      "blurb": "The star field is a registered Stellarium map turned by the computed sidereal time for the site's latitude, so constellations rise and set where they do outside. Planets, the moon's phase, an optional zodiac overlay and analemma planet paths all come from the same astronomy code.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "night_sky.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "weather": {
+      "id": "weather",
+      "title": "Weather and extreme events",
+      "chapter": "World",
+      "summary": "Archived and forecast weather drive the sky; smoke, dust and heat can be simulated.",
+      "how": [
+        "Weather follows Open-Meteo automatically (the 🌤 / 🌎 indicator)",
+        "Settings ⚙ → Extreme Weather → Preview a hazard",
+        "🌫 on the timeline calibrates local fog and wind"
+      ],
+      "action": "",
+      "button": "⚙ → Extreme Weather",
+      "key": "",
+      "open_hints": [
+        "Click ⚙ → Extreme Weather"
+      ],
+      "world": "mtvernon",
+      "blurb": "Clouds, wind, temperature and rain come from the real hourly record for the site, so solar output and the look of the day match what happened. Wildfire smoke, dust storms, damaging wind and heatwaves are resolved from alert and air-quality data — and can be previewed on demand.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "weather.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "location_picker": {
+      "id": "location_picker",
+      "title": "Choose a location",
+      "chapter": "World",
+      "summary": "A world map with solar resource data — click anywhere to build a site there.",
+      "how": [
+        "Press L for the location picker",
+        "Click the map, search an address or type coordinates",
+        "\"Create map here\" builds a new world on that spot"
+      ],
+      "action": "toggle_location_picker",
+      "button": "",
+      "key": "L",
+      "open_hints": [
+        "Press L"
+      ],
+      "world": "mtvernon",
+      "blurb": "The picker shows the NASA POWER solar-irradiance grid over a world map. Any coordinate becomes a playable map: elevation, imagery and OSM content are fetched and cached for it, and the world's sun and weather follow it.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "location_picker.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "terrain_sculpt": {
+      "id": "terrain_sculpt",
+      "title": "Terrain sculpting",
+      "chapter": "Build",
+      "summary": "Raise, lower, smooth, level pads, cut ramps and dig ponds at 1.5 m resolution.",
+      "how": [
+        "Press T for the edit toolbar's terrain tools",
+        "Pick Raise / Lower / Smooth / Level / Ramp / Pond on the left strip",
+        "Each tool keeps its own radius, strength and shape"
+      ],
+      "action": "terrain_edit",
+      "button": "",
+      "key": "T",
+      "open_hints": [
+        "Press T"
+      ],
+      "world": "mtvernon",
+      "blurb": "Edits are sparse height tiles over the real DEM, drawn as their own hi-res meshes with colliders, with region-scoped undo. The toolbar is a tool overlay, not a modal: you keep walking and looking while you sculpt.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "terrain_sculpt.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "vegetation": {
+      "id": "vegetation",
+      "title": "Forests, seasons and growth",
+      "chapter": "Build",
+      "summary": "OSM forests become real trees that change with the seasons; paint your own.",
+      "how": [
+        "Press V for the vegetation tools (Paint / Place / Clear / Select)",
+        "Tune look… edits a species with a live preview",
+        "Aim at a forest area and Interact to fill it with a chosen species"
+      ],
+      "action": "vegetation_edit",
+      "button": "",
+      "key": "V",
+      "open_hints": [
+        "Press V"
+      ],
+      "world": "mtvernon",
+      "blurb": "Mapped woods, tree rows and hedges are scattered with species picked for the site's climate. Trees leaf out, colour and drop their leaves with the real latitude and date, grow on a calendar-driven life cycle, and fade to baked impostors in the distance.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "vegetation.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "camps": {
+      "id": "camps",
+      "title": "Painted camps",
+      "chapter": "Build",
+      "summary": "Paint where people camp and the area fills with tents, shade and vehicles.",
+      "how": [
+        "Press C for the camp tools",
+        "Camp: brush, rectangle, lasso or polygon; Erase; Plots; Edit",
+        "Tune look… authors a camp style and its layouts"
+      ],
+      "action": "camp_scatter",
+      "button": "",
+      "key": "C",
+      "open_hints": [
+        "Press C"
+      ],
+      "world": "mtvernon",
+      "blurb": "Camps are households on a world-anchored lattice — an RV with its awning and car, tents round a canopy — kept clear of buildings, roads, water and steep ground. Painting a camp bigger adds households without moving any already standing.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "camps.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "water": {
+      "id": "water",
+      "title": "Streams and drainage",
+      "chapter": "Build",
+      "summary": "Mapped streams carved into the land, with real flow, drainage and culverts.",
+      "how": [
+        "Open the edit toolbar (T) and pick the WATER section",
+        "Trace / Draw / Edit / Culvert / View tools",
+        "View → flow shows the water moving at its Manning velocity"
+      ],
+      "action": "terrain_edit",
+      "button": "WATER section",
+      "key": "T",
+      "open_hints": [
+        "Press T",
+        "Click WATER section"
+      ],
+      "world": "mtvernon",
+      "blurb": "OSM waterways and the player's own streams are one network: carved into the terrain, drawn level in their channels, sized by real hydraulics, and fed by rain on their catchments at the clock's time. A stream can feed a turbine's penstock or a pond on the systems graph.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "water.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "prop_editor": {
+      "id": "prop_editor",
+      "title": "Placed things and the prop editor",
+      "chapter": "Build",
+      "summary": "Place real equipment from the library and move it with a gumball.",
+      "how": [
+        "Press U for the library and place a model",
+        "Click a placed thing to open its editor: move / rotate gizmo, fire, model tools",
+        "M toggles placed-props mode"
+      ],
+      "action": "toggle_library",
+      "button": "",
+      "key": "U",
+      "open_hints": [
+        "Press U"
+      ],
+      "world": "mtvernon",
+      "blurb": "Turbines, shade structures, tanks, vehicles and imported models are placed in the world and bound to their nodes on the systems graph. One editor handles every placed thing: a world/local gumball, duplicate and delete, and the model's own tools.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "prop_editor.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "building_builder": {
+      "id": "building_builder",
+      "title": "Building builder",
+      "chapter": "Build",
+      "summary": "Restyle any OSM building: roof shape and pitch, walls, doors, windows, facades.",
+      "how": [
+        "Aim at a building and press B (or Interact)",
+        "Click the preview walls to place doors and windows",
+        "The Library tab swaps the building for a placed model"
+      ],
+      "action": "building_builder",
+      "button": "",
+      "key": "B",
+      "open_hints": [
+        "Press B"
+      ],
+      "world": "mtvernon",
+      "blurb": "OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Each building can be restyled in a studio preview and the change is saved per site.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "building_builder.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "light_studio": {
+      "id": "light_studio",
+      "title": "Light Studio",
+      "chapter": "Build",
+      "summary": "Place lamps, spots, string lights, neon and moving heads; animate them.",
+      "how": [
+        "Press J for the Light Studio dock",
+        "Omni / Spot / String tools; drag the gumball to move",
+        "Linked styles restyle every light that shares them"
+      ],
+      "action": "place_light",
+      "button": "",
+      "key": "J",
+      "open_hints": [
+        "Press J"
+      ],
+      "world": "walton",
+      "blurb": "Lights are placed on surfaces, strung between pins or hung as moving fixtures with programmed sweeps. Strings run LED chases on the GPU in step with real lights, and any light can react to the music at a stage.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "light_studio.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "vehicles": {
+      "id": "vehicles",
+      "title": "Vehicles",
+      "chapter": "Build",
+      "summary": "Place a golf cart, EUC, skid steer, camper van or tool bus — and drive it.",
+      "how": [
+        "Library (U) → Vehicles tab → place one",
+        "Aim at it and Interact to get in; X to get out",
+        "F5 for the chase camera"
+      ],
+      "action": "interact",
+      "button": "Library → Vehicles",
+      "key": "O",
+      "open_hints": [
+        "Press O",
+        "Click Library → Vehicles"
+      ],
+      "world": "walton",
+      "blurb": "Placed vehicles use the same riding code as the scene vehicles, with a real collision footprint, a chase camera in third person, and an electric battery that drains with distance and trickle-charges while parked.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "vehicles.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "scad_store": {
+      "id": "scad_store",
+      "title": "Parametric hardware store",
+      "chapter": "Build",
+      "summary": "Customise OpenSCAD parts, render them to STL and place them in the world.",
+      "how": [
+        "Press H for the store",
+        "Pick a part, adjust its parameters, render, place"
+      ],
+      "action": "toggle_scad_store",
+      "button": "",
+      "key": "H",
+      "open_hints": [
+        "Press H"
+      ],
+      "world": "mtvernon",
+      "blurb": "A catalogue of licence-checked OpenSCAD designs with their Customizer parameters exposed as controls. Parts render through headless OpenSCAD to STL meshes that can be placed like any other model.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "scad_store.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "graph_freeform": {
+      "id": "graph_freeform",
+      "title": "The systems graph",
+      "chapter": "Systems",
+      "summary": "Every panel, battery, tank, turbine and habitat as nodes, with power and water flowing.",
+      "how": [
+        "Press G to open the graph",
+        "Drag parts from the library on the left; wire ports together",
+        "Click a node for its inspector; Ctrl+G groups into a super-node"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "The graph is the core game surface: a schematic of the resource flows on the site. Solar strings are checked against the controller's voltage window, batteries form real series/parallel banks, water moves through tanks, ponds and turbines, and it all keeps simulating with the graph closed.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "graph_freeform.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "site_plan": {
+      "id": "site_plan",
+      "title": "Site Plan lens",
+      "chapter": "Systems",
+      "summary": "The same graph laid out on the real site, seen through a live 3D camera.",
+      "how": [
+        "In the graph (G), click the Site Plan lens chip",
+        "Drag empty canvas to orbit, wheel to zoom; drag a pin to move the thing in 3D"
+      ],
+      "action": "system_graph_toggle",
+      "button": "Site Plan lens",
+      "key": "G",
+      "open_hints": [
+        "Press G",
+        "Click Site Plan lens"
+      ],
+      "world": "mtvernon",
+      "blurb": "Site Plan puts every placed item where it stands in the world, as pins over a live render of the site within its Sphere of Influence. Moving a pin moves the real object, and wires, streams, tagged spaces and people are drawn on the ground.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "site_plan.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "elevation": {
+      "id": "elevation",
+      "title": "Elevation lens",
+      "chapter": "Systems",
+      "summary": "A cut through the ground: heads, pipes, ponds and the soil profile in section.",
+      "how": [
+        "In the graph (G), click the Elevation lens chip",
+        "Hover the cut face to read the soil horizon and the water table"
+      ],
+      "action": "system_graph_toggle",
+      "button": "Elevation lens",
+      "key": "G",
+      "open_hints": [
+        "Press G",
+        "Click Elevation lens"
+      ],
+      "world": "mtvernon",
+      "blurb": "Elevation slices the Sphere of Influence like a cutaway: the terrain profile, buried pipes and every item at its true height, over a solid cut face painted with a Pacific-Northwest soil profile down to the water table. It is where hydro head is read and designed.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "elevation.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "globe": {
+      "id": "globe",
+      "title": "Globe lens",
+      "chapter": "Systems",
+      "summary": "The Sphere of Influence as a snowglobe you orbit inside the graph.",
+      "how": [
+        "In the graph (G), click the Globe lens chip",
+        "Drag to orbit, wheel to zoom, double-click to re-fit"
+      ],
+      "action": "system_graph_toggle",
+      "button": "Globe lens",
+      "key": "G",
+      "open_hints": [
+        "Press G",
+        "Click Globe lens"
+      ],
+      "world": "mtvernon",
+      "blurb": "The Globe lens frames the site's Sphere of Influence — the area the community draws its resources from — as a glass globe with the real sun on its rim and the strata of the ground below. Pins on it are the same items as in every other lens.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "globe.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "snowglobe": {
+      "id": "snowglobe",
+      "title": "Full-screen globe",
+      "chapter": "Systems",
+      "summary": "Step out to the whole site as a globe, full screen, with the clock still running.",
+      "how": [
+        "Interact with the SoI marker in the world, or",
+        "the full-globe button on the graph's Globe lens; Esc to return"
+      ],
+      "action": "",
+      "button": "SoI marker / full globe",
+      "key": "",
+      "open_hints": [
+        "Click SoI marker / full globe"
+      ],
+      "world": "mtvernon",
+      "blurb": "The full-screen globe renders the real world inside the Sphere of Influence from outside it. No view freezes the clock, so clouds, people and the sun keep moving while you look.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "snowglobe.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "hydro_lab": {
+      "id": "hydro_lab",
+      "title": "Hydro Lab",
+      "chapter": "Systems",
+      "summary": "Design a micro-hydro turbine on its real penstock: head, flow, jet, speed, watts.",
+      "how": [
+        "In the graph, double-click a hydro turbine (or Inspector → Open Hydro Lab)",
+        "Drag the intake, nozzle and outlet on the cross-section; dial a test flow"
+      ],
+      "action": "",
+      "button": "Inspector → Open Hydro Lab",
+      "key": "",
+      "open_hints": [
+        "Click Inspector → Open Hydro Lab"
+      ],
+      "world": "mtvernon",
+      "blurb": "The Lab draws the turbine's water path in section over the real ground — pond or stream intake, routed penstock or siphon, the runner and the outlet — and solves it with the same physics the world runs: Darcy–Weisbach losses, Pelton jet and bucket relations, siphon crest limits and cavitation.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "hydro_lab.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "site_report": {
+      "id": "site_report",
+      "title": "Site Report",
+      "chapter": "Systems",
+      "summary": "A month-by-month year of sun, wind, rain, temperature and your system's output.",
+      "how": [
+        "Press K, or 📊 on the timeline"
+      ],
+      "action": "toggle_site_report",
+      "button": "📊",
+      "key": "K",
+      "open_hints": [
+        "Press K",
+        "Click 📊"
+      ],
+      "world": "mtvernon",
+      "blurb": "The report runs a representative year of the site's real weather through the current graph: solar resource and PV yield, a windrose, rainfall, temperature bands, hydro potential, and what it would take to pack the site into a truck.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "site_report.jpg",
+      "image_run": "2026-10-15T12:26:16",
+      "image_commit": "27831f5"
+    },
+    "bootcamp": {
+      "id": "bootcamp",
+      "title": "Solar Bootcamp",
+      "chapter": "Systems",
+      "summary": "Twelve short levels that teach DC electrics by letting you blow things up.",
+      "how": [
+        "In the graph (G), click 🎓 Bootcamp",
+        "Each level runs in a sandbox — your real graph is put back on exit"
+      ],
+      "action": "",
+      "button": "🎓 Bootcamp",
+      "key": "",
+      "open_hints": [
+        "Click 🎓 Bootcamp"
+      ],
+      "world": "mtvernon",
+      "blurb": "The tutorial starts with a short circuit and works up through overcharging, PWM vs MPPT limits, series/parallel banks, string sizing and 24-hour runs. Goals are judged on the circuit itself, and run levels on a pre-baked day.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "bootcamp.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "challenges": {
+      "id": "challenges",
+      "title": "Challenges",
+      "chapter": "Systems",
+      "summary": "Keep the lights on through a real day, month or year — computed in seconds.",
+      "how": [
+        "Click 🎯 on the timeline and pick a challenge",
+        "A pre-baked run plays back; retry replays the same days against your edits"
+      ],
+      "action": "",
+      "button": "🎯",
+      "key": "",
+      "open_hints": [
+        "Click 🎯"
+      ],
+      "world": "mtvernon",
+      "blurb": "Pre-baked challenges simulate the whole span — energy, water and people — before you watch it, then play it back to the moment it failed. Fix the system and retry the same segment to see whether it holds.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "challenges.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "festival_mode": {
+      "id": "festival_mode",
+      "title": "Festival mode",
+      "chapter": "People",
+      "summary": "One button: every painted camp gets people, venues are seeded, and the crowd comes alive.",
+      "how": [
+        "Click the Festival chip on the timeline",
+        "The settlement view opens over the camps; Evening / Morning jump the clock",
+        "Leave keeps the camps; Clear seeded removes the venues it added"
+      ],
+      "action": "",
+      "button": "Festival",
+      "key": "",
+      "open_hints": [
+        "Click Festival"
+      ],
+      "world": "walton",
+      "blurb": "Festival mode runs the crowd simulation on easy supplies: hundreds of people with needs, friend groups and tastes, living a festival day between their camps, kitchens, portapotties, the bass stage and the temple. Nearby people are full agents; the distant crowd is simulated as events and drawn on the GPU.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "festival_mode.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "settlement_view": {
+      "id": "settlement_view",
+      "title": "Settlement view",
+      "chapter": "People",
+      "summary": "Watch the community work: one camera from eye level up to the whole site.",
+      "how": [
+        "Click the Settlement chip on the timeline",
+        "Wheel zooms from ground to site, drag pans, click a person to follow them",
+        "The work dock edits priorities and chores without leaving the view"
+      ],
+      "action": "",
+      "button": "Settlement",
+      "key": "",
+      "open_hints": [
+        "Click Settlement"
+      ],
+      "world": "walton",
+      "blurb": "The second play mode: you shape the conditions — spaces, routines, chores, site rules — then watch. There are no orders; people decide for themselves from their needs, morale and the work on the board, and the camera never stops the clock.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "settlement_view.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "effigy_burn": {
+      "id": "effigy_burn",
+      "title": "The burn",
+      "chapter": "People",
+      "summary": "Light the effigy: the crowd gathers in rings, the fire climbs, it falls, they circle.",
+      "how": [
+        "Click a burnable structure → prop editor → Fire → 🔥 Ignite",
+        "Planned climb, bonfire and ember durations can be set before lighting"
+      ],
+      "action": "",
+      "button": "Prop editor → Fire",
+      "key": "",
+      "open_hints": [
+        "Click Prop editor → Fire"
+      ],
+      "world": "walton",
+      "blurb": "A fire is a pure function of the clock: it climbs the structure's real surface, collapses into a pile that burns down to embers, and scrubs backwards. At an effigy the crowd forms rings outside a perimeter of height plus ten feet, sandmen hold the line, fire dancers perform, and after the fall everyone circles counter-clockwise.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "effigy_burn.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "npc_anim_editor": {
+      "id": "npc_anim_editor",
+      "title": "NPC animation editor",
+      "chapter": "People",
+      "summary": "Key-frame how people saw, drill, lift and carry — with the tool in their hands.",
+      "how": [
+        "Settings ⚙ → NPC → Animation editor…",
+        "Click a joint, drag the gizmo ring, K adds a key, Ctrl+S saves"
+      ],
+      "action": "",
+      "button": "⚙ → NPC → Animation editor…",
+      "key": "",
+      "open_hints": [
+        "Click ⚙ → NPC → Animation editor…"
+      ],
+      "world": "walton",
+      "blurb": "Fabrication clips are authored on the same stick figure the crews use, in the context of the real job — a saw on its bench, a drill at the hole — with the hands held to the tool's grips by IK. Saved clips are picked up by the build crews at once.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "npc_anim_editor.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "linkage_lab": {
+      "id": "linkage_lab",
+      "title": "Linkage Lab",
+      "chapter": "Labs",
+      "summary": "Design folding scissor-linkage structures — shade, domes, arches — and fold them.",
+      "how": [
+        "Press N for the Linkage Lab",
+        "Fold / Unfold animates the mechanism; 📋 opens the build guide and BOM",
+        "Place in world puts the live, foldable structure on the site"
+      ],
+      "action": "toggle_linkage_lab",
+      "button": "",
+      "key": "N",
+      "open_hints": [
+        "Press N"
+      ],
+      "world": "mtvernon",
+      "blurb": "A native port of the LinkageLab designer: compound scissor mechanisms solved in closed form, with solar panels, hardware assemblies, coverings and a full bill of materials, cut list and drill templates. A placed structure folds and deploys in the world and its panels join the solar graph.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "linkage_lab.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "packing_lab": {
+      "id": "packing_lab",
+      "title": "Packing Lab",
+      "chapter": "Labs",
+      "summary": "Will the whole site fit in the truck? Auto-pack it into real vehicle interiors.",
+      "how": [
+        "Press Q for the Packing Lab (or Site Report → packing card)",
+        "Pick a truck, trailer or container; Auto-pack, or place boxes by hand",
+        "🚚 Deliver kit drops the packed crates on the site"
+      ],
+      "action": "toggle_packing_lab",
+      "button": "",
+      "key": "Q",
+      "open_hints": [
+        "Press Q"
+      ],
+      "world": "mtvernon",
+      "blurb": "Everything on the site has a packed shipping size and mass. The Lab packs the site's cargo into U-Haul, trailer and ISO container interiors with door apertures and payload limits, and reports the load's centre of mass.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "packing_lab.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "multiplayer": {
+      "id": "multiplayer",
+      "title": "Play together",
+      "chapter": "Labs",
+      "summary": "Host or join a shared world; Discord sign-in, chat and live design sync.",
+      "how": [
+        "Click the Multiplayer chip on the timeline",
+        "Host to get a join code, or paste one to join; Enter opens chat"
+      ],
+      "action": "",
+      "button": "Multiplayer",
+      "key": "",
+      "open_hints": [
+        "Click Multiplayer"
+      ],
+      "world": "mtvernon",
+      "blurb": "A listen server with no servers of ours: the host's world, clock and simulation are authoritative, guests see the people and the graph streamed live, can possess an NPC, and a Discord community file handles identity, discovery and an optional chat mirror.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "multiplayer.jpg",
+      "image_run": "2026-10-13T19:53:27",
+      "image_commit": "27831f5"
+    },
+    "planets": {
+      "id": "planets",
+      "title": "Planets",
+      "chapter": "World",
+      "summary": "Mercury to Saturn where they really are tonight, with name tags.",
+      "how": [
+        "Scrub the timeline to night",
+        "Settings → Planets: name tags (off / when you look at one / always), colours, sizes"
+      ],
+      "action": "",
+      "button": "Settings → Planets",
+      "key": "",
+      "open_hints": [
+        "Click Settings → Planets"
+      ],
+      "world": "mtvernon",
+      "blurb": "Each planet's position is solved from its orbital elements (JPL's Keplerian set) for the clock's own instant and drawn into the sky shader as a point of light. Name tags can follow the view or stay on, and the same solve draws the planets' paths in analemma mode.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "planets.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "moon_phases": {
+      "id": "moon_phases",
+      "title": "Moon phases",
+      "chapter": "World",
+      "summary": "The real moon: where it stands and how much of it is lit, for any date.",
+      "how": [
+        "Scrub the timeline across a month",
+        "Settings → Sky: moon size and phase offset"
+      ],
+      "action": "",
+      "button": "the timeline",
+      "key": "",
+      "open_hints": [
+        "Click the timeline"
+      ],
+      "world": "mtvernon",
+      "blurb": "The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon, so crescents, quarters and the full moon rise, transit and set on the dates and at the bearings they do outside.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "moon_phases.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "analemma": {
+      "id": "analemma",
+      "title": "Analemma mode",
+      "chapter": "World",
+      "summary": "A day per frame at solar noon: the sun's figure-eight, a year of leaves, the planets and the moon.",
+      "how": [
+        "Click the timeline's faster button past the top speed to the ∞ preset",
+        "Space plays; ∞×2 steps two days a frame",
+        "Settings → Sky: solar or lunar analemma, sun / moon / planet paths, stars through daylight"
+      ],
+      "action": "",
+      "button": "∞ on the timeline speed control",
+      "key": "",
+      "open_hints": [
+        "Click ∞ on the timeline speed control"
+      ],
+      "world": "mtvernon",
+      "blurb": "The ∞ preset steps the calendar one day per frame to the site's mean solar noon, so the sun traces the analemma for the real latitude while years go by and the forest runs through its seasons — leaf-out, autumn colour and leaf drop — at the same pace. The stars stay visible through daylight, the planets' paths are sampled at the same instants (Mercury and Venus loop round the sun's figure-eight), and the lunar mode catches the moon at each transit to draw its own analemma.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "analemma.jpg",
+      "image_run": "2026-10-14T20:26:09",
+      "image_commit": "27831f5"
+    },
+    "mud_printer": {
+      "id": "mud_printer",
+      "title": "Mud printer",
+      "chapter": "Build",
+      "summary": "A gantry printer for mud and clay: design a building, slice it, and watch it print.",
+      "how": [
+        "Press U for the library → Tools → Mud Printer, and place it",
+        "Aim at the printer + Interact: the 3D print setup",
+        "Design building… draws rooms, walls and doorways; Print starts the job, Export GRBL writes the G-code"
+      ],
+      "action": "toggle_library",
+      "button": "",
+      "key": "U",
+      "open_hints": [
+        "Press U"
+      ],
+      "world": "mtvernon",
+      "blurb": "Additive machines are placed in the world and bound to a node on the systems graph. The print setup previews a part on the bed with its toolpath layer by layer; the building designer turns a floor plan into cambered, infilled walls and exports volumetric GRBL G-code. A started print rises bead by bead in the world on the sim clock — scrub the timeline and it builds or un-builds — and dries from wet to dry colour in place.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "mud_printer.jpg",
+      "image_run": "2026-10-14T20:21:33",
+      "image_commit": "27831f5"
+    },
+    "pallet_rack": {
+      "id": "pallet_rack",
+      "title": "Pallet rack builder",
+      "chapter": "Build",
+      "summary": "Design warehouse racking — bays, levels, stepped and U layouts — and place it.",
+      "how": [
+        "Press the pallet-rack key, or Library → Structures → Pallet Rack",
+        "Change bays, columns, levels and beams; click parts in the preview to edit them",
+        "Place in world; click a placed rack → Edit rack… to change it in place"
+      ],
+      "action": "toggle_pallet_rack",
+      "button": "",
+      "key": "P",
+      "open_hints": [
+        "Press P"
+      ],
+      "world": "mtvernon",
+      "blurb": "A parametric racking designer with real upright, beam and decking sizes. Layouts can be stepped or U-shaped, single parts can be picked and changed in the preview, and the finished rack is placed as one prop with collision, a packed shipping size and an NPC space tag.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "pallet_rack.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "graph_tools": {
+      "id": "graph_tools",
+      "title": "Graph tools: Tidy and show-only views",
+      "chapter": "Systems",
+      "summary": "Lay the graph out in one click, then show only the power, or only the water.",
+      "how": [
+        "Press G, then Layout ▾ → Tidy (Live keeps it laid out as you edit)",
+        "Show ▾ → Power / Water / Food & waste / Fuel & heat, or tick your own",
+        "Library → In the world: what is built but not on the graph yet"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "Tidy is a force layout whose direction comes from the ports — inputs on top, outputs below — so sources settle above controllers above storage above loads, solar arrays move as one block, and pinned nodes stay put. Show-only views hide every node and wire outside the chosen kinds of flow without removing anything, and the library's In the world drawer lists what is placed on the site but not yet on the graph.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "graph_tools.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "conduit_routing": {
+      "id": "conduit_routing",
+      "title": "3D wire and pipe routing",
+      "chapter": "Systems",
+      "summary": "Pull a cord or a pipe off a device's port and plug it in — measured as you go.",
+      "how": [
+        "Aim at a device's port, press and drag to the other device, release",
+        "Shift+release keeps chaining from the device you plugged into",
+        "Click a run to restyle it live: kind, size, colour — Revert puts it back"
+      ],
+      "action": "",
+      "button": "a device's port (press and drag)",
+      "key": "",
+      "open_hints": [
+        "Click a device's port (press and drag)"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every wire, hose, penstock and culvert on the graph can be a real run in the world, drawn from port to port over the ground and bent round obstacles. The HUD measures the run as it is pulled with the same rule the committed run uses, run-length tags show metres and feet, and the style modal edits the live run with the I²R loss and a stock-length fit in its header.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "conduit_routing.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "wind_turbines": {
+      "id": "wind_turbines",
+      "title": "Wind turbines",
+      "chapter": "Systems",
+      "summary": "HAWTs and VAWTs that spin and yaw on the site's real wind and feed the graph.",
+      "how": [
+        "Press U for the library → Wind, and place a turbine",
+        "G shows its node: live wind at hub height and output",
+        "Click a placed turbine to move it or swap its model"
+      ],
+      "action": "toggle_library",
+      "button": "",
+      "key": "U",
+      "open_hints": [
+        "Press U"
+      ],
+      "world": "mtvernon",
+      "blurb": "Turbine output is P = ½ρAC_p·v³ under the Betz limit, with air density from altitude and temperature and the 10 m wind sheared to hub height. The wind is the site's archived or forecast weather for the clock's hour, the same wind the trees and the dust blow in, and the rotors spin and yaw to it.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "wind_turbines.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "csp_heliostats": {
+      "id": "csp_heliostats",
+      "title": "Concentrated solar: troughs and heliostats",
+      "chapter": "Systems",
+      "summary": "Mirrors that track the real sun and boil water into steam on the graph.",
+      "how": [
+        "Press U for the library → Solar Concentrators, and place one",
+        "G shows its node: tracking angle, DNI, thermal output, water in → steam out",
+        "Scrub the timeline: the trough tilts and the heliostat turns with the sun"
+      ],
+      "action": "toggle_library",
+      "button": "",
+      "key": "U",
+      "open_hints": [
+        "Press U"
+      ],
+      "world": "mtvernon",
+      "blurb": "A parabolic trough tilts on a single east–west axis to follow the sun's altitude; a dual-axis heliostat points its whole dish at the sun. Both use the real sun position and the clear-sky or measured direct irradiance, and on the graph they turn water into steam at the rate their optics and receiver allow. The focal line glows with the live concentrated flux.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "csp_heliostats.jpg",
+      "image_run": "2026-10-14T20:08:36",
+      "image_commit": "27831f5"
+    },
+    "starshade_crew": {
+      "id": "starshade_crew",
+      "title": "StarShade: built by the crew",
+      "chapter": "People",
+      "summary": "Twelve people cut, drill, carry, bolt, lift and deploy a StarShade from its real parts.",
+      "how": [
+        "Place a StarShade (Linkage Lab → Place in world)",
+        "Click it → Crew → Rehearse build, or queue the build for the camp's crew",
+        "Scrub the timeline: the build runs forwards and backwards with the clock"
+      ],
+      "action": "",
+      "button": "Rehearse build (prop editor)",
+      "key": "",
+      "open_hints": [
+        "Click Rehearse build (prop editor)"
+      ],
+      "world": "mtvernon",
+      "blurb": "The build plan comes from the structure's own bill of materials: every beam is cut and drilled at a bench, carried to its seat and placed, every joint fastened, then a raising crew lifts the ring and the fold deploys. Named workers walk between jobs with the tool for each in hand, the structure only grows, and the whole build is a pure function of the clock — scrub it back and it comes apart again. Queued for a camp, the real crew builds it as fast as their credited work allows.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "starshade_crew.jpg",
+      "image_run": "2026-10-14T20:27:56",
+      "image_commit": "27831f5"
+    }
+  },
+  "last_run": {
+    "label": "tour_privacy_sr",
+    "generated": "2026-10-15T12:26:16",
+    "git_commit": "27831f5",
+    "passed": 1,
+    "total": 1,
+    "video_secs": null
+  }
+}

@@ -60,9 +60,14 @@ func _ready() -> void:
 func _place() -> void:
 	set_anchors_preset(Control.PRESET_TOP_LEFT)
 	var p := NpcDisplayPrefs.fun_meter_pos()
-	var vp := get_viewport_rect().size if is_inside_tree() else Vector2(1280, 720)
 	if p.x < 0.0:
-		p = Vector2(vp.x - W - 16.0, 64.0)
+		# Never dragged: the HUD layout manager's top-right column places it.
+		HudLayout.register(self, "fun_meter", "top_right", {
+			"order": 10, "priority": 6, "tuckable": false, "title": "fun meter", "icon": "gauge",
+			"size": func() -> Vector2: return Vector2(W, H),
+			"compact": func() -> String: return "Fun meter",
+		})
+		return
 	position = _clamped(p)
 
 
@@ -212,7 +217,10 @@ func _gui_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		_dragging = mb.pressed
 		_drag_off = mb.position
-		if not mb.pressed:
+		if mb.pressed:
+			# Dragging takes it out of the automatic layout for good.
+			HudLayout.unregister("fun_meter")
+		else:
 			NpcDisplayPrefs.set_fun_meter_pos(position)
 		accept_event()
 	elif event is InputEventMouseMotion and _dragging:

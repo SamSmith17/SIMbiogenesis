@@ -2278,6 +2278,31 @@ func _test_penstock_wins_inlet_and_no_phantom_power() -> void:
 			float(sp.get("current_output_kw", 0.0)) > 0.0 and w_out > 0.0,
 			"kw=%.4f water=%.1f L/h" % [float(sp.get("current_output_kw", 0.0)), w_out])
 
+	# Switched off (double-click in the graph): no watts, no water, every port
+	# at rest; switched back on, it runs again from the next tick.
+	var sp_off: Dictionary = sp.duplicate(true)
+	sp_off[HydroSource.SPEC_OFF] = true
+	model.update_item("ps", {"specs": sp_off})
+	engine.simulate_step_for_test(1.3, 0.3)
+	var so: Dictionary = model.get_item("ps").get("specs", {}) as Dictionary
+	var off_port_sum := 0.0
+	for key in ["inputs", "outputs"]:
+		for od_off: Variant in (so.get(key, []) as Array):
+			off_port_sum += absf(float((od_off as Dictionary).get("rate", 0.0)))
+	_check("a switched-off turbine makes nothing and moves no water",
+			float(so.get("current_output_kw", 0.0)) < 1e-9 and float(so.get("live_q_lps", 0.0)) < 1e-9
+				and off_port_sum < 1e-9 and str(so.get("node_state", "")) == GraphNodeState.IDLE,
+			"kw=%.4f q=%.3f ports=%.3f state=%s" % [float(so.get("current_output_kw", 0.0)),
+				float(so.get("live_q_lps", 0.0)), off_port_sum, str(so.get("node_state", ""))])
+	_check("...and is not counted as DC generation",
+			DcPowerWiring.sum_graph_dc_generation_kw(model) < 1e-9)
+	var sp_on: Dictionary = so.duplicate(true)
+	sp_on.erase(HydroSource.SPEC_OFF)
+	model.update_item("ps", {"specs": sp_on})
+	engine.simulate_step_for_test(1.6, 0.3)
+	_check("switched back on, it makes power again",
+			float((model.get_item("ps").get("specs", {}) as Dictionary).get("current_output_kw", 0.0)) > 0.0)
+
 	# The empty tank alone: a level says "primed", but there is no water.
 	model.remove_connection("c_pen")
 	var sp_s: Dictionary = (model.get_item("ps").get("specs", {}) as Dictionary).duplicate(true)

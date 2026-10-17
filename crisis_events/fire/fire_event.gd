@@ -500,12 +500,12 @@ func get_status_description() -> String:
 				if biggest_fire == null or fire.intensity > biggest_fire.intensity:
 					biggest_fire = fire
 
-		var status := "🔥 FIRE: %d node(s)" % fire_count
+		var status := "🔥 FIRE: %s" % UiText.count(fire_count, "node")
 		if biggest_fire != null:
-			status += " — %s · tier %d · %d pieces" % [
+			status += " — %s · tier %d · %s" % [
 				biggest_fire.get_state_text(),
 				biggest_fire.growth_tier,
-				biggest_fire.burning_meshes.size(),
+				UiText.count(biggest_fire.burning_meshes.size(), "piece"),
 			]
 			if not biggest_fire.burn_rec.is_empty():
 				var time_left := FireTimeline.climb_h(biggest_fire.burn_rec) - float(

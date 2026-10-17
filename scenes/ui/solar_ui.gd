@@ -236,6 +236,11 @@ var last_time : float = -1.0
 ## scrubbing backward reads SOC back from the cache (the battery "uncharges").
 ## See core/energy_timeline.gd.
 var energy_timeline := EnergyTimeline.new()
+## Clock position of the previous _update_battery (forward-vs-backward test).
+var _battery_last_abs_h: float = -INF
+## How far live net power may drift from the cached sample before the cached
+## future is thrown away and re-integrated (kW).
+const BATTERY_CACHE_DIVERGE_KW: float = 0.05
 var _power_available : bool = true
 var _ac_shutdown_reason : String = ""
 var _last_energy_day : int = -1
@@ -311,6 +316,27 @@ var _graph_controller_destroyed: bool = false
 ## Delivered-power cap (W) from graph DC wiring; −1 = no cap. See
 ## set_graph_dc_limit_w / SystemGraphView._tick_dc_throttle.
 var _graph_dc_limit_w: float = -1.0
+## Per-controller caps from the graph's DC wiring, as a FUNCTION of the array's
+## raw output (set_graph_dc_caps): [{frac, limit_w}] + the unrouted share. The
+## delivered PV is sum(min(frac*raw, limit)) + unrouted*raw at ANY instant, so
+## the live tick, the challenge bake and the controller cards all apply one
+## rule. (A single watt figure frozen at the bake's first tick capped a whole
+## day at whatever the sun was doing when Run was pressed.)
+var _graph_dc_caps: Array = []
+var _graph_dc_unrouted_frac: float = 1.0
+var _graph_dc_caps_active: bool = false
+## Per-panel geometric shade of the graph's site-placed PV
+## (set_graph_pv_shade, GraphSolarShading): [{wmp, group, pos, s}] + the whole
+## array's Wmp. The array output is scaled by the Wmp-weighted factor and the
+## caps' shares re-split by it, live and in the batch render alike, so a shaded
+## panel lowers what the battery gets — not just its own card.
+var _pv_shade_receivers: Array = []
+var _pv_shade_total_wmp: float = 0.0
+## Array shade from the live factors (GraphSolarShading.array_shade); {} = none.
+var _pv_shade_live: Dictionary = {}
+## Counts SolarUI's 10 Hz sim ticks — the graph view syncs its cards when it
+## moves, so every readout on a frame comes from the same tick.
+var sim_tick_serial: int = 0
 ## Challenge playback: battery reads the baked _sim_series at the playhead.
 var _playback_series_active: bool = false
 ## Tutorial runs: force a cloudless day (see _weather_at_abs).
@@ -1229,11 +1255,7 @@ func _generate_simulated_weather_data() -> void:
 	var day_time_val: float = main_node.day_time if "day_time" in main_node else 12.0
 	
 	# Solar radiation follows sun position (rough approximation)
-	var sun_height := 0.0
-	if "sun" in main_node:
-		var sun: DirectionalLight3D = main_node.get("sun") as DirectionalLight3D
-		if sun:
-			sun_height = sun.global_transform.basis.z.normalized().y
+	var sun_height := _sun_direction().y
 	
 	# Base clear-sky radiation from sun height
 	var base_radiation := maxf(0, sun_height * 1100.0)  # Up to ~1100 W/m² at zenith
@@ -1896,6 +1918,7 @@ func _process(delta: float) -> void:
 		if not _open_meteo_active and not _weather_live_mode:
 			_generate_simulated_weather_data()
 		_calculate_solar_power()
+		_apply_graph_pv_shade()
 		_poll_aux_generation()
 		_apply_soc_protection_before_load()
 		_calculate_load_power()
@@ -1905,6 +1928,7 @@ func _process(delta: float) -> void:
 		# raise delivery back above the wiring's real cap.
 		_apply_graph_dc_limit()
 		_update_battery(sim_step)
+		sim_tick_serial += 1
 
 	if _ui_accumulator >= _UI_UPDATE_INTERVAL:
 		_ui_accumulator -= _UI_UPDATE_INTERVAL
@@ -2398,14 +2422,18 @@ func _apply_battery_full_throttle() -> void:
 	var battery_percent_val : float = (battery_kwh_stored / BATTERY_CAPACITY_KWH) * 100.0
 	
 	# When battery is nearly full (>95%), throttle solar to match load
-	if battery_percent_val >= 95.0 and _raw_solar_kw > current_load_kw:
+	# What the array must cover once the battery takes nothing: the load less
+	# any other generation already feeding the bus.
+	var need_kw : float = maxf(current_load_kw - current_aux_generation_kw - current_graph_dc_kw, 0.0)
+	if battery_percent_val >= 95.0 and _raw_solar_kw > need_kw:
 		# Gradually increase throttling as battery fills
 		var throttle_factor : float = (battery_percent_val - 95.0) / 5.0  # 0 at 95%, 1 at 100%
 		throttle_factor = clampf(throttle_factor, 0.0, 1.0)
-		
-		# Blend between full solar and load-matched solar
-		var throttled_solar : float = current_load_kw + 0.1  # Slight excess to top off
-		current_solar_kw = lerpf(_raw_solar_kw, throttled_solar, throttle_factor)
+		# Blend between full solar and load-matched solar. The top-off margin
+		# tapers to nothing at 100 %: a constant +0.1 kW read as "charging
+		# 100 W" on a full battery while the SOC clamp threw it away.
+		var top_off : float = 0.1 * (1.0 - throttle_factor)
+		current_solar_kw = lerpf(_raw_solar_kw, need_kw + top_off, throttle_factor)
 		current_solar_kw = maxf(current_solar_kw, 0.0)
 
 ## Set the weather type (affects cloud cover simulation)
@@ -2682,6 +2710,28 @@ func set_cloud_cover_from_history(cover: float) -> void:
 		weather = new_weather
 		_update_weather_button()
 
+## The direction TO the sun, from the clock. Main only re-aims the sun
+## DirectionalLight while the 3D world is drawn (it skips that work while the
+## graph is open), so reading the light froze solar output at whatever it was
+## when the graph opened — the sun "stopped" while the clock ran on. The clock's
+## direction is the one the light is aimed from (main._update_sun), so this is
+## the same value whenever the light IS current. ZERO when there is no sun.
+func _sun_direction() -> Vector3:
+	if main_node == null:
+		return Vector3.ZERO
+	var clock_obj: Variant = main_node.get("clock")
+	if clock_obj is Object and (clock_obj as Object).has_method("get_sun_direction"):
+		var d: Vector3 = (clock_obj as Object).call("get_sun_direction")
+		if d.length() > 0.001:
+			return d.normalized()
+	if not "sun" in main_node:
+		return Vector3.ZERO
+	var sun := main_node.get("sun") as DirectionalLight3D
+	if sun == null or not is_instance_valid(sun):
+		return Vector3.ZERO
+	return sun.global_transform.basis.z.normalized()
+
+
 func _calculate_solar_power() -> void:
 	if PANEL_COUNT <= 0 or PEAK_CAPACITY_KW <= 0.0:
 		current_solar_kw = 0.0
@@ -2698,18 +2748,11 @@ func _calculate_solar_power() -> void:
 		_calculate_solar_power_enhanced()
 		return
 
-	if main_node == null or not "sun" in main_node:
+	var sun_direction : Vector3 = _sun_direction()
+	if sun_direction == Vector3.ZERO:
 		current_solar_kw = 0.0
 		_raw_solar_kw = 0.0
 		return
-	
-	var sun : DirectionalLight3D = main_node.get("sun") as DirectionalLight3D
-	if sun == null:
-		current_solar_kw = 0.0
-		_raw_solar_kw = 0.0
-		return
-	
-	var sun_direction : Vector3 = sun.global_transform.basis.z.normalized()
 	var sun_elevation_rad : float = asin(sun_direction.y)
 	var sun_elevation_deg : float = rad_to_deg(sun_elevation_rad)
 	
@@ -2834,8 +2877,10 @@ func _calculate_solar_power_enhanced() -> void:
 		_simulated_solar_radiation, cloud_cover, _estimate_ambient_temp(), live_aod)
 
 	# --- 3D shadow raycast (optional, ~0.1 ms per call) ---
-	# _get_shadow_factor returns a binary 0/1, so scaling kW is exact.
-	if _shadow_raycast_enabled:
+	# _get_shadow_factor returns a binary 0/1, so scaling kW is exact. The
+	# graph's per-panel shade supersedes this one-point test when it is on
+	# (_apply_graph_pv_shade) — both would count the same tree twice.
+	if _shadow_raycast_enabled and not is_graph_pv_shade_active():
 		var sun_el_rad : float = deg_to_rad(sun_el_deg)
 		var sun_az_rad : float = deg_to_rad(sun_az_deg)
 		var sun_dir_3d := Vector3(
@@ -3293,9 +3338,12 @@ func reanchor_live_battery(soc_kwh: float) -> void:
 ## denominator: what the sky offered, ignoring the graph DC current cap.
 func evaluate_potential_solar_at(abs_hours: float) -> float:
 	var saved := _graph_dc_limit_w
+	var saved_caps := _graph_dc_caps_active
 	_graph_dc_limit_w = -1.0
+	_graph_dc_caps_active = false
 	var kw := evaluate_solar_at(abs_hours)
 	_graph_dc_limit_w = saved
+	_graph_dc_caps_active = saved_caps
 	return kw
 
 
@@ -3345,11 +3393,18 @@ func evaluate_solar_at(abs_hours: float) -> float:
 	var kw := _compute_solar_kw(el, az, bool(wx["has_real"]), float(wx["ghi"]),
 		float(wx["cloud"]), float(wx["temp"]),
 		float(wx.get("aod", SolarIrradiance.AOD_BASELINE)))
-	# Mirror the live graph DC current-limit cap (held constant across a render,
-	# like aux — v1 shortcut) so the baked series matches what the wiring allows.
-	if _graph_dc_limit_w >= 0.0:
-		kw = minf(kw, _graph_dc_limit_w / 1000.0)
-	return kw
+	# The placed panels' shade at THIS instant's sun (each rendered hour casts
+	# its own shadows), then the graph DC wiring's caps on that raw output —
+	# the same two rules the live tick applies, so the baked series is what
+	# the site and the wiring allow at every hour of the day.
+	var shade := {}
+	if is_graph_pv_shade_active():
+		var el_r := deg_to_rad(el)
+		var az_r := deg_to_rad(az)
+		shade = _graph_pv_shade_at(Vector3(cos(el_r) * sin(az_r), sin(el_r),
+			-cos(el_r) * cos(az_r)))
+		kw *= clampf(float(shade.get("factor", 1.0)), 0.0, 1.0)
+	return graph_dc_delivered_kw(kw, shade)
 
 
 ## Weather inputs at an arbitrary instant: {ghi, cloud, temp, has_real}.
@@ -3608,6 +3663,7 @@ func _update_battery(_delta: float) -> void:
 		var ps := _sim_series.sample_at(abs_h)
 		battery_kwh_stored = clampf(float(ps.get("soc_kwh", battery_kwh_stored)),
 			0.0, BATTERY_CAPACITY_KWH)
+		_apply_playback_readouts(abs_h, ps)
 		var pb_pct : float = (battery_kwh_stored / BATTERY_CAPACITY_KWH) * 100.0
 		_apply_soc_hysteresis(pb_pct)
 		_sync_power_available(pb_pct)
@@ -3623,7 +3679,24 @@ func _update_battery(_delta: float) -> void:
 	elif abs_h < energy_timeline.start_abs_hours():
 		# Scrubbed before the cache start — extend backward (best-effort).
 		energy_timeline.seek(abs_h)
-	# else: playhead is within the cache — pure reversible read, no integration.
+	elif abs_h > _battery_last_abs_h + 1e-6 \
+			and _battery_last_abs_h >= energy_timeline.start_abs_hours():
+		# Moving FORWARD through samples cached on an earlier pass (the clock was
+		# scrubbed or restored backward). They replay that pass's battery, so a
+		# load switched on since then never reached the SOC: the readout said
+		# "deficit" while the battery sat at 100 %. When the live inputs differ,
+		# the cache ahead is stale — cut it at the previous tick and integrate
+		# this step from what is happening now. Unchanged inputs keep replaying.
+		var cached := energy_timeline.sample_at(abs_h)
+		var cached_net := float(cached.get("solar_kw", 0.0)) + float(cached.get("aux_kw", 0.0)) \
+			- float(cached.get("load_kw", 0.0))
+		var live_net := current_solar_kw + aux_total - current_load_kw
+		if absf(cached_net - live_net) > BATTERY_CACHE_DIVERGE_KW:
+			var cut_at := _battery_last_abs_h if abs_h - _battery_last_abs_h <= 1.0 else abs_h
+			energy_timeline.truncate_after(cut_at)
+			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw)
+	# else: paused or moving back inside the cache — pure reversible read.
+	_battery_last_abs_h = abs_h
 	battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
 	# Scoreboard/24h-history are derived read-only views over the timeline —
 	# they don't need to recompute at the same 10 Hz cadence as the actual SOC
@@ -3634,6 +3707,24 @@ func _update_battery(_delta: float) -> void:
 	var battery_percent_val : float = (battery_kwh_stored / BATTERY_CAPACITY_KWH) * 100.0
 	_apply_soc_hysteresis(battery_percent_val)
 	_sync_power_available(battery_percent_val)
+
+## During challenge playback every readout comes from the BAKED run at the
+## playhead, not from the live tick: the live path computes the sun its own way
+## and throttles against a battery the bake does not have, so the panel cards,
+## the controller, the battery and the dashboard each told a different story.
+## Raw = what the sky offered then (uncapped); solar = what the bake delivered,
+## less whatever a full battery could not take (the series clamps SOC at full
+## but keeps the generated figure — that energy was thrown away, not stored).
+func _apply_playback_readouts(abs_h: float, ps: Dictionary) -> void:
+	var solar := maxf(float(ps.get("solar_kw", 0.0)), 0.0)
+	var aux := maxf(float(ps.get("aux_kw", 0.0)), 0.0)
+	var load := maxf(float(ps.get("load_kw", 0.0)), 0.0)
+	_raw_solar_kw = maxf(evaluate_potential_solar_at(abs_h), solar)
+	if battery_kwh_stored >= BATTERY_CAPACITY_KWH - 1e-3 and solar + aux > load:
+		solar = maxf(load - aux, 0.0)
+	current_solar_kw = solar
+	current_load_kw = load
+
 
 ## Inverter overload protection — call every frame with real-time delta.
 ## Trips AC output off when load exceeds inverter_overload_watts for
@@ -3717,7 +3808,7 @@ func _update_display() -> void:
 	battery_bar.value = battery_percent_val
 	var battery_linked = _source_link_icon("battery_soc", _ha_battery_soc_override >= 0.0)
 	if _soc_protect_active or _inverter_lockout_remaining > 0.0:
-		battery_percent.text = "AC OFF  %.0f%%%s" % [battery_percent_val, battery_linked]
+		battery_percent.text = "%.0f%%%s" % [battery_percent_val, battery_linked]
 		battery_percent.add_theme_color_override("font_color", UITheme.C_ERROR)
 		battery_percent.tooltip_text = _ac_shutdown_reason_label()
 	else:
@@ -3754,9 +3845,9 @@ func _update_display() -> void:
 			if _is_csv_linked_role("daily_solar"):
 				csv_indicators.append("📊")
 			if csv_indicators.size() > 0:
-				title_label.text = "⚡ Power Scoreboard 📂 CSV [%s]" % "".join(csv_indicators)
+				title_label.text = "⚡ Power · CSV playback %s" % "".join(csv_indicators)
 			else:
-				title_label.text = "⚡ Power Scoreboard 📂 CSV"
+				title_label.text = "⚡ Power · CSV playback"
 			title_label.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
 		elif is_in_live_mode():
 			# In live mode at realtime - show live indicator
@@ -3771,13 +3862,13 @@ func _update_display() -> void:
 				ha_indicators.append("📊")
 			
 			if ha_indicators.size() > 0:
-				title_label.text = "⚡ Power Scoreboard 📡 LIVE [%s]" % "".join(ha_indicators)
+				title_label.text = "⚡ Power · Live %s" % "".join(ha_indicators)
 			else:
-				title_label.text = "⚡ Power Scoreboard 📡 LIVE"
+				title_label.text = "⚡ Power · Live"
 			title_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
 		elif is_simulating_from_live():
 			# Simulating forward from live data
-			title_label.text = "⚡ Power Scoreboard ⏩ SIM"
+			title_label.text = "⚡ Power · Simulating ahead"
 			title_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
 		else:
 			# Normal simulation mode
@@ -3792,10 +3883,11 @@ func _update_display() -> void:
 				ha_indicators.append("📊")
 			
 			if _soc_protect_active or _inverter_lockout_remaining > 0.0:
-				title_label.text = "⚠ AC SHUTDOWN — %s" % _ac_shutdown_reason_label()
-				title_label.add_theme_color_override("font_color", Color(1.0, 0.38, 0.28, 1.0))
+				# The banner in the body says it; the title stays the title.
+				title_label.text = "⚡ Power Scoreboard"
+				title_label.remove_theme_color_override("font_color")
 			elif ha_indicators.size() > 0:
-				title_label.text = "⚡ Power Scoreboard [HA: %s]" % "".join(ha_indicators)
+				title_label.text = "⚡ Power · Home Assistant %s" % "".join(ha_indicators)
 				title_label.remove_theme_color_override("font_color")
 			else:
 				title_label.text = "⚡ Power Scoreboard"
@@ -3853,7 +3945,7 @@ func _update_display() -> void:
 	# Load power (show 📡 live HA or 📂 CSV playback when linked)
 	var load_linked = _source_link_icon("load", _ha_load_override >= 0.0)
 	if not is_ac_output_enabled():
-		load_value.text = "SHED  0.00 kW%s" % load_linked
+		load_value.text = "Shed%s" % load_linked
 		load_value.add_theme_color_override("font_color", Color(1.0, 0.28, 0.22, 1.0))
 		load_value.tooltip_text = _ac_shutdown_reason_label()
 	else:
@@ -3880,24 +3972,33 @@ func _update_display() -> void:
 	var weather_icon : String = _get_weather_icon()
 	
 	if battery_percent_val >= 99.9:
-		status_label.text = "⚡ FULL %s" % weather_icon
+		status_label.text = "Full %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3, 1.0))
 	elif battery_percent_val >= 95.0 and _raw_solar_kw > current_solar_kw + 0.5:
 		# Solar is being throttled because battery is nearly full
-		status_label.text = "⚡ THROTTLED %s" % weather_icon
+		status_label.text = "Full — solar throttled %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(0.3, 0.9, 0.7, 1.0))
 	elif battery_percent_val <= MIN_BATTERY_PERCENT:
-		status_label.text = "⚠ LOW BATTERY %s" % weather_icon
+		status_label.text = "Low battery %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3, 1.0))
 	elif net_power > 0.1:
-		status_label.text = "☀ CHARGING %s" % weather_icon
+		status_label.text = "Charging %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2, 1.0))
 	elif net_power < -0.01:
-		status_label.text = "🔋 DISCHARGING %s" % weather_icon
+		status_label.text = "Discharging %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 1.0))
 	else:
-		status_label.text = "— IDLE %s" % weather_icon
+		status_label.text = "Idle %s" % weather_icon
 		status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 1.0))
+	# Critical state in ONE place, one look (AlertBanner): AC off first, then
+	# a battery at its floor.
+	if _alert != null:
+		if _soc_protect_active or _inverter_lockout_remaining > 0.0:
+			_alert.show_alert(AlertBanner.ERROR, "AC is off — %s" % _ac_shutdown_reason_label())
+		elif battery_percent_val <= MIN_BATTERY_PERCENT:
+			_alert.show_alert(AlertBanner.WARN, "Battery low — %.0f%% left" % battery_percent_val)
+		else:
+			_alert.clear()
 	
 	# Update rain display periodically
 	_update_rain_display()
@@ -4005,16 +4106,99 @@ func set_graph_controller_destroyed(active: bool) -> void:
 ## with no player-built controller+bank chain — behavior unchanged).
 func set_graph_dc_limit_w(watts: float) -> void:
 	_graph_dc_limit_w = watts
+	_graph_dc_caps_active = false
 
 
+## Per-controller form of the cap: `caps` = [{frac, limit_w}] — each real
+## controller's share of the array (by Wmp) and its bus_V x max_charge_amps
+## limit (< 0 = none); `unrouted_frac` = the share reaching the battery with no
+## controller in the way (passes uncapped). Empty caps = no cap.
+func set_graph_dc_caps(caps: Array, unrouted_frac: float) -> void:
+	_graph_dc_caps = caps.duplicate(true)
+	_graph_dc_unrouted_frac = clampf(unrouted_frac, 0.0, 1.0)
+	_graph_dc_caps_active = not caps.is_empty()
+	_graph_dc_limit_w = -1.0
+
+
+## Per-panel shade of the graph's PV (SystemGraphView._dc_throttle_pass).
+## `receivers` = [{wmp, group, pos, s}] for the site-placed panels (group =
+## index into the caps last set, -1 = unrouted), `total_wmp` = the whole
+## array's Wmp, placed or not. Empty receivers = no shade (the bootcamp
+## sandbox, a graph with no placed panels).
+func set_graph_pv_shade(receivers: Array, total_wmp: float) -> void:
+	_pv_shade_receivers = receivers.duplicate(true)
+	_pv_shade_total_wmp = maxf(total_wmp, 0.0)
+	if _pv_shade_receivers.is_empty() or _pv_shade_total_wmp <= 0.0:
+		_pv_shade_live = {}
+	else:
+		_pv_shade_live = GraphSolarShading.live_shade(_pv_shade_receivers, _pv_shade_total_wmp)
+
+
+func is_graph_pv_shade_active() -> bool:
+	return not _pv_shade_receivers.is_empty() and _pv_shade_total_wmp > 0.0
+
+
+## The live array shade factor (1 = unshaded).
+func graph_pv_shade_factor() -> float:
+	return float(_pv_shade_live.get("factor", 1.0))
+
+
+## Array shade at a sun direction, by ray-casting each placed panel against the
+## world (the batch render: every rendered hour gets its own shadows).
+func _graph_pv_shade_at(sun_dir: Vector3) -> Dictionary:
+	if not is_graph_pv_shade_active():
+		return {}
+	var space: PhysicsDirectSpaceState3D = null
+	if is_inside_tree():
+		var vp := get_viewport()
+		if vp != null and vp.get_world_3d() != null:
+			space = vp.get_world_3d().direct_space_state
+	if space == null:
+		return _pv_shade_live
+	var factors := GraphSolarShading.factors_at(_pv_shade_receivers, sun_dir,
+		func(from: Vector3, to: Vector3) -> Dictionary:
+			return GraphSolarShading.physics_intersect(space, from, to))
+	return GraphSolarShading.array_shade(_pv_shade_receivers, factors, _pv_shade_total_wmp)
+
+
+## Live tick: the array output carries the panels' shade (a measured HA
+## reading already does).
+func _apply_graph_pv_shade() -> void:
+	if _ha_solar_override >= 0.0 or _pv_shade_live.is_empty():
+		return
+	var f := clampf(graph_pv_shade_factor(), 0.0, 1.0)
+	if f >= 0.9999:
+		return
+	_raw_solar_kw *= f
+	current_solar_kw *= f
+
+
+## What the DC wiring lets through when the array makes `raw_kw`. `shade` is
+## the array shade that raw already carries (null = the live one): it re-splits
+## the controllers' shares so each is offered its own panels' output.
+func graph_dc_delivered_kw(raw_kw: float, shade: Variant = null) -> float:
+	var raw := maxf(raw_kw, 0.0)
+	if _graph_dc_caps_active:
+		var sh: Dictionary = _pv_shade_live if shade == null else shade as Dictionary
+		var adj := GraphSolarShading.shaded_caps(_graph_dc_caps, _graph_dc_unrouted_frac, sh)
+		return GraphDcElectrical.delivered_for_caps(raw, adj["caps"] as Array,
+			float(adj["unrouted_frac"]))
+	if _graph_dc_limit_w >= 0.0:
+		return minf(raw, _graph_dc_limit_w / 1000.0)
+	return raw
+
+
+## The effective cap in watts at the current raw output (-1 = none).
 func get_graph_dc_limit_w() -> float:
+	if _graph_dc_caps_active:
+		return graph_dc_delivered_kw(_raw_solar_kw) * 1000.0
 	return _graph_dc_limit_w
 
 
 func _apply_graph_dc_limit() -> void:
-	if _graph_dc_limit_w < 0.0:
+	if not _graph_dc_caps_active and _graph_dc_limit_w < 0.0:
 		return
-	current_solar_kw = minf(current_solar_kw, maxf(_graph_dc_limit_w, 0.0) / 1000.0)
+	current_solar_kw = minf(current_solar_kw, graph_dc_delivered_kw(_raw_solar_kw))
 
 
 func is_soc_protect_active() -> bool:
@@ -4364,6 +4548,8 @@ var _expanded : bool = false
 var _graph_has_solar : bool = false
 var _collapse_btn : Button = null
 var _body : VBoxContainer = null
+## The scoreboard's critical-state banner (AC off, battery at its floor).
+var _alert: AlertBanner = null
 var _expanded_height : float = 610.0
 
 func _load_panel_settings() -> void:
@@ -4564,7 +4750,17 @@ func _setup_collapse() -> void:
 		n.reparent(_body)
 	vbox.add_child(_body)
 	_body.visible = _expanded
+	_alert = AlertBanner.new()
+	_body.add_child(_alert)
+	_body.move_child(_alert, 0)
 	_apply_collapsed_size()
+	# Placement belongs to the HUD layout manager (top-left, under the
+	# weather card); it tucks this into a pill when a tool needs the space.
+	HudLayout.register(self, "scoreboard", "top_left", {
+		"order": 10, "priority": 3, "title": "power scoreboard", "icon": "zap",
+		"size": func() -> Vector2: return Vector2(maxf(size.x, 380.0), _expanded_height if _expanded else COLLAPSED_BAR_HEIGHT),
+		"compact": _hud_compact_text,
+	})
 	# Hidden until the graph reports at least one solar panel.
 	visible = _graph_has_solar
 
@@ -4588,6 +4784,13 @@ func _update_collapse_btn_text() -> void:
 	var title := title_label.text if title_label != null else "⚡ POWER SCOREBOARD"
 	_collapse_btn.text = ("▾ " if _expanded else "▸ ") + title
 	_collapse_btn.tooltip_text = "Click to collapse or expand the power panel"
+
+## The tucked pill's one line: net power, battery, and AC state when it is off.
+func _hud_compact_text() -> String:
+	var net := current_solar_kw + current_aux_generation_kw + current_graph_dc_kw - current_load_kw
+	var line := "%s%s · %s" % ["+" if net >= 0.0 else "", UiText.num(net * 1000.0, "W"), UiText.pct(get_battery_percent() / 100.0)]
+	return line + ("" if _power_available else " · AC off")
+
 
 func _apply_collapsed_size() -> void:
 	var h := _expanded_height if _expanded else COLLAPSED_BAR_HEIGHT

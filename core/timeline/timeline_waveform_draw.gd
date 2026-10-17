@@ -31,7 +31,10 @@ static func draw_envelope(canvas : Control, rect : Rect2, bins : PackedFloat32Ar
 		var h := clampf(float(bins[i]) * scale, 0.0, 1.0) * inner.size.y
 		pts.append(Vector2(x, inner.end.y - h))
 	pts.append(Vector2(inner.end.x, inner.end.y))
-	canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.45))
+	# An all-zero window (a full battery taking no sun) is a flat line — a
+	# zero-area polygon the renderer refuses to triangulate.
+	if _has_area(pts, inner.end.y):
+		canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.45))
 	for i in n - 1:
 		var x0 := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
 		var x1 := inner.position.x + (float(i + 1) / float(maxi(n - 1, 1))) * inner.size.x
@@ -57,7 +60,8 @@ static func draw_line_fill(canvas : Control, rect : Rect2, bins : PackedFloat32A
 		var y := inner.end.y - clampf(norm, 0.0, 1.0) * inner.size.y
 		pts.append(Vector2(x, y))
 	pts.append(Vector2(inner.end.x, inner.end.y))
-	canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.35))
+	if _has_area(pts, inner.end.y):
+		canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.35))
 	for i in n - 1:
 		var x0 := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
 		var x1 := inner.position.x + (float(i + 1) / float(maxi(n - 1, 1))) * inner.size.x
@@ -77,3 +81,11 @@ static func vmax_for_bins(bins : PackedFloat32Array, channel : String, capacity_
 			for v in bins:
 				peak = maxf(peak, float(v))
 			return maxf(peak * 1.15, 0.5)
+
+
+## True when any point of a baseline-closed outline rises off the baseline.
+static func _has_area(pts: PackedVector2Array, base_y: float) -> bool:
+	for p in pts:
+		if base_y - p.y > 0.25:
+			return true
+	return false

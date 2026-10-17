@@ -322,8 +322,9 @@ func _build_ui() -> void:
 	# Left: studio viewport.
 	_vp_container = SubViewportContainer.new()
 	_vp_container.stretch = true
-	_vp_container.custom_minimum_size = Vector2(590, 550)
+	_vp_container.custom_minimum_size = Vector2(420, 360)
 	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_vp_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
 	_vp_container.gui_input.connect(_on_preview_input)
 	hbox.add_child(_vp_container)
@@ -340,7 +341,7 @@ func _build_ui() -> void:
 
 	# Right: tabs — parametric customization + the structure library.
 	_tabs = TabContainer.new()
-	_tabs.custom_minimum_size = Vector2(340, 550)
+	_tabs.custom_minimum_size = Vector2(340, 360)
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tabs.tab_changed.connect(_on_tab_changed)
 	hbox.add_child(_tabs)
@@ -519,6 +520,9 @@ func _build_ui() -> void:
 	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
 	close_btn.pressed.connect(close)
 	btn_row.add_child(close_btn)
+	# Above the timeline and inside the screen at any size (a fixed 980 x 620
+	# centred on the window sat on the timeline at 720p).
+	UiFit.keep_fitted(_panel, Vector2(980, 620))
 
 
 func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
@@ -937,7 +941,7 @@ func _refresh_reference() -> void:
 	if near.is_empty():
 		_ref_status.text = "No street photos within 150 m of this building."
 		return
-	_ref_status.text = "%d street photo(s) nearby — click: wall color, right-click: roof color" % mini(near.size(), 6)
+	_ref_status.text = "%s nearby — click: wall color, right-click: roof color" % UiText.count(mini(near.size(), 6), "street photo")
 	for i in mini(near.size(), 6):
 		var photo: Dictionary = near[i]
 		var id := str(photo.get("id", ""))

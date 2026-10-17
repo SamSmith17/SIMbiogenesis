@@ -22,9 +22,15 @@ func _initialize() -> void:
 	fails += _test_dc_port_styling()
 	fails += _test_dc_terminal_side_convention()
 	fails += _test_circuit_gating()
+	fails += _test_bundle_six_into_one_port()
+	fails += _test_bundle_single_wire_untouched()
+	fails += _test_bundle_skip_and_both_ends()
+	fails += _test_bundle_deterministic_ties()
+	fails += _test_bundle_spread_capped()
+	fails += _test_bundle_canvas_pref_off()
 	_canvas.free()
 	if fails == 0:
-		print("GRAPH WIRE ROUTING SELFTEST PASS  (7 checks)")
+		print("GRAPH WIRE ROUTING SELFTEST PASS  (13 checks)")
 		quit(0)
 	else:
 		print("GRAPH WIRE ROUTING SELFTEST FAIL  (%d failed)" % fails)
@@ -237,5 +243,150 @@ func _test_dc_port_styling() -> int:
 			+ absf(pos_fill.b - neg_fill.b)
 	if sep < 0.3:
 		push_error("DC+ and DC− fills are too close to tell apart (%.2f)" % sep)
+		return 1
+	return 0
+
+
+# --- Parallel-wire bundling (GraphWireBundles) -------------------------------
+
+## Six panel leads (the bootcamp 3S2P's string ends, say) landing on ONE
+## controller PV + port on its top edge. Before bundling all six left the same
+## pixel and read as a knot.
+func _six_into_one() -> Array:
+	var wires: Array = []
+	var port := Vector2(500.0, 400.0)
+	for i: int in 6:
+		# Panels in a row above, deliberately listed out of x order.
+		var x := [700.0, 300.0, 520.0, 160.0, 860.0, 420.0][i] as float
+		wires.append({"id": "c%d" % i, "src_key": "p%d|negative" % i, "tgt_key": "ctrl|pvPositive",
+			"src_pos": Vector2(x, 120.0), "tgt_pos": port,
+			"src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP})
+	return wires
+
+
+func _test_bundle_six_into_one_port() -> int:
+	var wires := _six_into_one()
+	var plan: Dictionary = GraphWireBundles.plan(wires, 1.0)
+	var teeth: Array = []
+	var trunk := Vector2.INF
+	for w: Dictionary in wires:
+		var b: Dictionary = plan.get(w["id"], {})
+		if not b.has("tgt") or b.has("src"):
+			push_error("bundle: %s should be bundled at the controller end only, got %s" % [w["id"], str(b.keys())])
+			return 1
+		var e: Dictionary = b["tgt"]
+		if trunk == Vector2.INF:
+			trunk = e["trunk"]
+		elif not (e["trunk"] as Vector2).is_equal_approx(trunk):
+			push_error("bundle: the six wires must share ONE trunk")
+			return 1
+		# The trunk and teeth go OUT of the port (up, the port faces up).
+		if (e["trunk"] as Vector2).y >= 400.0 or (e["tooth"] as Vector2).y >= (e["trunk"] as Vector2).y:
+			push_error("bundle: comb must leave along the port's outward normal, got %s" % str(e))
+			return 1
+		teeth.append([(w["src_pos"] as Vector2).x, (e["tooth"] as Vector2).x])
+	# Lanes are ordered like the far ends: no two lanes cross in the fan.
+	teeth.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
+	var lane := GraphWireBundles.lane_px(6, 1.0)
+	for i: int in range(1, teeth.size()):
+		var gap := float(teeth[i][1]) - float(teeth[i - 1][1])
+		if absf(gap - lane) > 0.01:
+			push_error("bundle: lanes must be evenly spaced in far-end order (gap %.2f vs %.2f)" % [gap, lane])
+			return 1
+	# Centred on the port.
+	var mid := (float(teeth[0][1]) + float(teeth[5][1])) * 0.5
+	if absf(mid - 500.0) > 0.01:
+		push_error("bundle: comb should be centred on the port, centre %.2f" % mid)
+		return 1
+	return 0
+
+
+func _test_bundle_single_wire_untouched() -> int:
+	var plan: Dictionary = GraphWireBundles.plan([{"id": "a", "src_key": "p|negative",
+		"tgt_key": "c|pvNegative", "src_pos": Vector2(0, 0), "tgt_pos": Vector2(0, 300),
+		"src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP}], 1.0)
+	if not plan.is_empty():
+		push_error("bundle: a port with one wire must not get a comb, got %s" % str(plan))
+		return 1
+	return 0
+
+
+## Hub ports (round tanks) spread their own wires; a wire bundled at BOTH ends
+## (a parallel jumper between two shared terminals) gets two combs.
+func _test_bundle_skip_and_both_ends() -> int:
+	var wires := [
+		{"id": "a", "src_key": "b1|positive", "tgt_key": "b2|positive", "src_pos": Vector2(0, 0),
+			"tgt_pos": Vector2(300, 0), "src_tan": Vector2.UP, "tgt_tan": Vector2.UP},
+		{"id": "b", "src_key": "b1|positive", "tgt_key": "b2|positive", "src_pos": Vector2(0, 0),
+			"tgt_pos": Vector2(300, 0), "src_tan": Vector2.UP, "tgt_tan": Vector2.UP},
+		{"id": "h1", "src_key": "tank|res_out_0", "tgt_key": "m1|res_in_0", "src_pos": Vector2(0, 500),
+			"tgt_pos": Vector2(100, 700), "src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP, "src_skip": true},
+		{"id": "h2", "src_key": "tank|res_out_0", "tgt_key": "m2|res_in_0", "src_pos": Vector2(0, 500),
+			"tgt_pos": Vector2(-100, 700), "src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP, "src_skip": true},
+	]
+	var plan: Dictionary = GraphWireBundles.plan(wires, 1.0)
+	for id: String in ["a", "b"]:
+		var b: Dictionary = plan.get(id, {})
+		if not (b.has("src") and b.has("tgt")):
+			push_error("bundle: jumper %s should be combed at both ends, got %s" % [id, str(b)])
+			return 1
+	if plan.has("h1") or plan.has("h2"):
+		push_error("bundle: hub-port ends (skip) must never be combed")
+		return 1
+	return 0
+
+
+## Two wires whose far ends coincide: the lane order falls back to the id, so
+## the same model always draws the same comb.
+func _test_bundle_deterministic_ties() -> int:
+	var w := [
+		{"id": "zz", "src_key": "x|o", "tgt_key": "y|i", "src_pos": Vector2(0, 0), "tgt_pos": Vector2(0, 200),
+			"src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP},
+		{"id": "aa", "src_key": "x|o", "tgt_key": "z|i", "src_pos": Vector2(0, 0), "tgt_pos": Vector2(0, 200),
+			"src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP},
+	]
+	var p1: Dictionary = GraphWireBundles.plan(w, 1.0)
+	var w2 := [w[1], w[0]]
+	var p2: Dictionary = GraphWireBundles.plan(w2, 1.0)
+	for id: String in ["aa", "zz"]:
+		var t1: Vector2 = (p1[id]["src"] as Dictionary)["tooth"]
+		var t2: Vector2 = (p2[id]["src"] as Dictionary)["tooth"]
+		if not t1.is_equal_approx(t2):
+			push_error("bundle: lane of %s depends on input order (%s vs %s)" % [id, str(t1), str(t2)])
+			return 1
+	if int(p1["aa"]["src"]["index"]) != 0:
+		push_error("bundle: ties should break on the connection id")
+		return 1
+	return 0
+
+
+## Thirty wires on one terminal: the comb still fits MAX_SPREAD_PX.
+func _test_bundle_spread_capped() -> int:
+	var wires: Array = []
+	for i: int in 30:
+		wires.append({"id": "w%02d" % i, "src_key": "s%d|o" % i, "tgt_key": "bus|in",
+			"src_pos": Vector2(float(i) * 40.0, 0.0), "tgt_pos": Vector2(600, 500),
+			"src_tan": Vector2.DOWN, "tgt_tan": Vector2.UP})
+	for z: float in [0.5, 1.0, 2.0]:
+		var plan: Dictionary = GraphWireBundles.plan(wires, z)
+		var lo := INF
+		var hi := -INF
+		for w: Dictionary in wires:
+			var x: float = ((plan[w["id"]]["tgt"] as Dictionary)["tooth"] as Vector2).x
+			lo = minf(lo, x)
+			hi = maxf(hi, x)
+		if hi - lo > GraphWireBundles.MAX_SPREAD_PX * z + 0.01:
+			push_error("bundle: comb %.1f px wide at zoom %.1f exceeds the cap" % [hi - lo, z])
+			return 1
+	return 0
+
+
+## The Display pref switches the comb off on the canvas.
+func _test_bundle_canvas_pref_off() -> int:
+	_canvas.set("wire_bundling", false)
+	var plan: Dictionary = _canvas.call("_build_bundle_plan", [{}, {}], Vector2.ZERO)
+	_canvas.set("wire_bundling", true)
+	if not plan.is_empty():
+		push_error("bundle: wire_bundling = false must give an empty plan")
 		return 1
 	return 0

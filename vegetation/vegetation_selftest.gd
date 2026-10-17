@@ -84,10 +84,22 @@ func _test_square_grid_fill() -> void:
 		defs, VegetationCardFactory.CanopyLodTier.NEAR)
 	var far := VegetationCardFactory.mesh_for_deciduous_lod(
 		defs, VegetationCardFactory.CanopyLodTier.FAR)
-	_check("deciduous near lod mesh", near != null and near.get_surface_count() == 3)
+	# 2026-10-15: the NEAR broadleaf is bark + leaf SPRAYS (VegBroadleafBuilder,
+	# the foliage shader in spray_mode); the leaf shells remain behind
+	# deciduous_leaf_builder = "shells", with their optional shadow proxy.
+	_check("deciduous near lod mesh", near != null and near.get_surface_count() == 2)
 	_check("deciduous far lod mesh", far != null and far.get_surface_count() == 2)
-	var proxy_mat := near.surface_get_material(1) as ShaderMaterial
-	var leaf_surf_mat := near.surface_get_material(2) as ShaderMaterial
+	var spray_mat := near.surface_get_material(1) as ShaderMaterial
+	_check("deciduous leaf sprays", spray_mat != null and spray_mat.shader != null
+		and bool(spray_mat.get_shader_parameter("spray_mode")))
+	var shell_defs := defs.duplicate()
+	shell_defs[VegetationCardFactory.KEY_LEAF_BUILDER] = "shells"
+	shell_defs["deciduous_shadow_proxy_enabled"] = true
+	var shells := VegetationCardFactory.mesh_for_deciduous_lod(
+		shell_defs, VegetationCardFactory.CanopyLodTier.NEAR)
+	_check("deciduous shells mesh", shells != null and shells.get_surface_count() == 3)
+	var proxy_mat := shells.surface_get_material(1) as ShaderMaterial
+	var leaf_surf_mat := shells.surface_get_material(2) as ShaderMaterial
 	_check("deciduous shadow proxy", proxy_mat != null
 		and float(proxy_mat.get_shader_parameter("color_fade")) < 0.15)
 	_check("deciduous leaf overlay", leaf_surf_mat != null and leaf_surf_mat.shader != null)
@@ -99,8 +111,19 @@ func _test_square_grid_fill() -> void:
 	_check("pine far lod mesh", pine_far != null and pine_far.get_surface_count() == 2)
 	var pine_near_mat := pine_near.surface_get_material(1) as ShaderMaterial
 	var pine_far_mat := pine_far.surface_get_material(1) as ShaderMaterial
-	_check("pine near fur", pine_near_mat != null
-		and float(pine_near_mat.get_shader_parameter("fur_strength")) > 0.2)
+	# Conifers are trunk + needle sprays now (VegConiferBuilder): no fur, a
+	# spray texture; the old whorl cards (fur) stay behind pine_builder "whorl".
+	_check("pine near sprays", pine_near_mat != null
+		and float(pine_near_mat.get_shader_parameter("fur_strength")) < 0.01
+		and pine_near_mat.get_shader_parameter("albedo_tex") is Texture2D)
+	var whorl_defs := defs.duplicate()
+	whorl_defs["pine_builder"] = "whorl"
+	var pine_whorl := VegetationCardFactory.mesh_for_pine_lod(
+		whorl_defs, VegetationCardFactory.CanopyLodTier.NEAR)
+	var whorl_mat := pine_whorl.surface_get_material(pine_whorl.get_surface_count() - 1) \
+		as ShaderMaterial
+	_check("pine whorl near fur", whorl_mat != null
+		and float(whorl_mat.get_shader_parameter("fur_strength")) > 0.2)
 	_check("pine far plain", pine_far_mat != null
 		and float(pine_far_mat.get_shader_parameter("fur_strength")) < 0.01)
 	var leaf_mat := VegetationCardFactory.leaf_canopy_material_for_species("deciduous", defs)
@@ -222,7 +245,7 @@ func _test_style_defaults_and_materials() -> void:
 	for k in ["translucency_strength", "canopy_roundness", "color_variation",
 			"foliage_roughness", "ao_strength", "bark_roughness",
 			"bark_ao_strength", "bark_color_jitter",
-			"pine_whorl_count", "deciduous_cluster_count", "deciduous_branch_count"]:
+			"pine_whorl_count", "deciduous_cluster_count"]:
 		_check("style default %s" % k, defs.has(k))
 	var settings := defs.duplicate(true)
 	settings["pine_whorl_count"] = 10

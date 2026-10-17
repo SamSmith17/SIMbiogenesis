@@ -179,7 +179,7 @@ func _build_topbar() -> Control:
 	bar.add_child(_unit_btn)
 	bar.add_child(_bar_btn("📊 Export CSV", _on_export_csv))
 	bar.add_child(_bar_btn("💾 Export JSON", _on_export_json))
-	bar.add_child(_bar_btn("✕", close))
+	bar.add_child(IconButton.close(close))
 	return wrap
 
 
@@ -229,11 +229,7 @@ func _card(title: String) -> VBoxContainer:
 	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	margin.add_child(box)
 	if title != "":
-		var lbl := Label.new()
-		lbl.text = title
-		lbl.add_theme_color_override("font_color", C_PRIMARY)
-		lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-		box.add_child(lbl)
+		box.add_child(SectionHeader.make(title))
 	return box
 
 
@@ -547,8 +543,8 @@ func _add_coverings_card() -> void:
 		var label := str(shape.get("label", "Covering"))
 		if e.has("pattern"):
 			var pat: Dictionary = e["pattern"]
-			_kv_row(box, label, "%d panel%s · %s yd · %d grommets" % [int(pat["panel_count"]),
-				"" if int(pat["panel_count"]) == 1 else "s", str(pat["fabric_yards"]), int(pat["grommet_count"])])
+			_kv_row(box, label, "%d panel%s · %s yd · %s" % [int(pat["panel_count"]),
+				"" if int(pat["panel_count"]) == 1 else "s", str(pat["fabric_yards"]), UiText.count(int(pat["grommet_count"]), "grommet")])
 		else:
 			var nest: Dictionary = e["nest"]
 			_kv_row(box, label, "%s × %s · %d sheet%s (%s), %d%% used · %d seam%s" % [
@@ -565,8 +561,8 @@ func _add_coverings_card() -> void:
 		_kv_row(box, "Shade tarps", "%s · %s%% of the roof covered" % [", ".join(sizes), str(shade["coverage_pct"])])
 	var t: Dictionary = plan.get("totals", {})
 	if not t.is_empty() and int(t.get("sheets", 0)) > 0:
-		_kv_row(box, "Plywood", "%d sheets · %d cut pieces · %s ft of battens · %d%% used" % [int(t["sheets"]),
-			int(t["cut_pieces"]), String.num(float(t["batten_linear_in"]) / 12.0, 1), int(roundf(float(t["utilization"]) * 100.0))])
+		_kv_row(box, "Plywood", "%s · %s · %s ft of battens · %d%% used" % [UiText.count(int(t["sheets"]), "sheet"),
+			UiText.count(int(t["cut_pieces"]), "cut piece"), String.num(float(t["batten_linear_in"]) / 12.0, 1), int(roundf(float(t["utilization"]) * 100.0))])
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	box.add_child(row)
@@ -679,8 +675,8 @@ func _add_assembly_card() -> void:
 	for entry in steps:
 		var e := entry as Dictionary
 		var head := Label.new()
-		head.text = "%s  (%d pieces per module)" % [str(e["label"]),
-			int(e["per_module_pieces"])]
+		head.text = "%s  (%s per module)" % [str(e["label"]),
+			UiText.count(int(e["per_module_pieces"]), "piece")]
 		head.add_theme_color_override("font_color", C_TEXT)
 		head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		box.add_child(head)
@@ -698,7 +694,7 @@ func _add_assembly_card() -> void:
 
 ## The build sequence (LinkageLab build steps): the design's saved sequence,
 ## else the generated shop order. A run of identical steps is one line "x N".
-## Played in the Lab's 🎬 Steps dock; a crew rehearses it in the world.
+## Played in the Lab's Steps dock; a crew rehearses it in the world.
 func _add_sequence_card() -> void:
 	var bs := params.get_build_steps()
 	var steps: Array = bs.get("steps", [])
@@ -710,8 +706,8 @@ func _add_sequence_card() -> void:
 	var box := _card("Build Sequence")
 	var reps := LinkageBuildSteps.representative_steps(steps)
 	var intro := Label.new()
-	intro.text = "%d steps (%d shown — identical repeats folded)%s. Play them in the Lab's 🎬 Steps." % [
-		steps.size(), reps.size(), " · generated from the design" if generated else " · saved with the design"]
+	intro.text = "%s (%d shown — identical repeats folded)%s. Play them in the Lab's Steps dock." % [
+		UiText.count(steps.size(), "step"), reps.size(), " · generated from the design" if generated else " · saved with the design"]
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.add_theme_color_override("font_color", C_TEXT_M)
 	intro.add_theme_font_size_override("font_size", UITheme.FONT_XS)

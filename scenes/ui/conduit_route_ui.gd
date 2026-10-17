@@ -61,12 +61,36 @@ func show_route(type_id: String, waypoint_count: int, length_m: float, aim_valid
 	show_route_ex(type_id, waypoint_count, length_m, aim_valid, false)
 
 
+## `mode`: "plug" (pulling a cord off a port — release on a port connects),
+## "route" (pinning waypoints for a wire from the graph) or "drag" (moving a
+## pin of an existing run). The length is the run's TRUE length (sag and drape
+## included) with the stock length that covers it.
+func show_route_mode(type_id: String, waypoint_count: int, length_m: float,
+		aim_valid: bool, mode: String) -> void:
+	visible = true
+	var name_: String = ConduitKinds.display_name(type_id)
+	_info.text = "%s  ·  %s" % [name_, ConduitLength.describe(length_m, type_id)]
+	match mode:
+		"plug":
+			_title.text = "Connect — drag to a port"
+			_hint.text = ("Release on a highlighted port to connect · release on open ground cancels "
+				+ "· RMB / Esc cancel · Shift+release keeps chaining from the new port"
+				+ ("" if aim_valid else " · (aim at the ground)"))
+		"drag":
+			_title.text = "Hang / Reroute"
+			_hint.text = "Drag the pin · Shift locks to an axis · release commits · double-click a pin removes it · Esc cancel"
+		_:
+			_title.text = "Route 3D Conduit"
+			_hint.text = "LMB drops a pin (%s) · RMB undoes · Enter commits · Esc cancels%s" % [
+				UiText.count(waypoint_count, "pin"), "" if aim_valid else " · (aim at the ground)"]
+
+
 func show_route_ex(type_id: String, waypoint_count: int, length_m: float,
 		aim_valid: bool, drag_mode: bool) -> void:
 	visible = true
 	var name_: String = ConduitKinds.display_name(type_id)
 	var aim_txt := "aim: ready" if aim_valid else "aim: no hit"
-	_info.text = "%s  ·  %d waypoint(s)  ·  %.2f m  ·  %s" % [name_, waypoint_count, length_m, aim_txt]
+	_info.text = "%s  ·  %s  ·  %.2f m  ·  %s" % [name_, UiText.count(waypoint_count, "waypoint"), length_m, aim_txt]
 	if drag_mode:
 		_title.text = "Hang / Reroute Conduit"
 		_hint.text = "Drag pin to move · release commits · double-click pin removes · Esc cancel"

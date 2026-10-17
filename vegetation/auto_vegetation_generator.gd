@@ -54,7 +54,9 @@ const KIND_SCATTER_PRIORITY := {
 const NOMINAL_CARD_H := {
 	"deciduous": 6.0, "broadleaf": 6.0, "palm": 9.0,
 	"conifer": 3.2, "pine": 3.2, "taiga": 3.2,
-	"spruce": 3.6, "cedar": 3.4, "fir": 3.8, "redwood": 6.0,
+	"spruce": 3.6, "cedar": 3.4, "fir": 3.8, "redwood": 6.0, "hemlock": 3.6,
+	"alder": 5.0, "oak": 4.5, "sword_fern": 0.9, "blackberry": 1.2, "douglas_fir": 4.0,
+	"bracken": 1.1, "salal": 0.9,
 	"chestnut": 6.5, "maple": 6.0, "cottonwood": 7.0, "aspen": 5.5,
 	"birch": 5.0, "beech": 6.0, "apple": 4.0, "pear": 4.2,
 	"orange": 3.5, "avocado": 5.0,

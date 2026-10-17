@@ -66,6 +66,15 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/<fix>.gd         
 tools\harness.ps1 -World mtvernon -RunScript res://tools/fixes/<fix>.gd -Persist   # keep it
 # Registry + report selftest (offline):
 Godot.exe.exe --headless --path . --script core/terrain/harness/harness_registry_selftest.gd
+# Feature tour (see "Feature tour" below) — stop metadata selftest (offline,
+# check count = 19 + 10 per stop) and the tour itself:
+Godot.exe.exe --headless --path . --script core/tour/tour_selftest.gd
+# Site address redaction for harness shots (offline, SitePrivacy):
+Godot.exe.exe --headless --path . --script core/site_privacy_selftest.gd
+tools\tour.ps1 -Mode stills            # all stops, both worlds -> screenshots + manifest
+tools\tour.ps1 -Mode stills -Resolution 1280x720 -Audit strict   # the small-screen UI gate
+tools\harness.ps1 -World mtvernon -Capture modals -UserArgs @("--window-size=1280x720")  # every modal audited
+python tools/tour_docs.py              # -> docs/tour/*.jpg, docs/FEATURES.md, README gallery
 ```
 
 The windowed `--capture=` commands further down are the GODOT args the launcher
@@ -184,6 +193,25 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # picker's coordinate parser + reverse-geocode label. EXPECTED_CHECKS;
 # --import first:
 Godot.exe.exe --headless --path . --script core/worlds/world_store_selftest.gd
+# Asset packs (offline — core/sharing/, see "Asset packs"): TEMP sender /
+# friend / project roots. No secret reaches a pack (sentinels searched in every
+# DECOMPRESSED entry), no code even inside an art folder, the reader refuses a
+# whole pack for one unsafe entry (zip-slip, absolute, .gd, .tres / raw .cfg as
+# user data, unlisted, missing part, newer format), a round trip lands as NEW
+# worlds in DIR layout (a legacy world too) byte-identical, map cache matched
+# at each cache's own coordinate precision, keep-both libraries, opt-in +
+# backed-up settings, the prefs codec keeps ints ints, damaged files reported,
+# multi-part split. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/sharing/asset_pack_selftest.gd
+# Asset packs end to end (WINDOWED, sandbox): exports the running world + its
+# map data + presets/music through the REAL Share modal, installs it again by
+# emitting the window's files_dropped, asserts every data file byte-identical,
+# then PLAYS the imported copy and diffs its fingerprint (props, lights, camps,
+# tiles, graph ids + wires). --pack-out=<path> keeps the pack:
+tools\harness.ps1 -World mtvernon -Capture assetpack
+# The friend's side: an EMPTY user folder (-EmptyUser), the pack dropped on the
+# launch hub ("menu" capture kind: no world is launched), installed, played:
+tools\harness.ps1 -EmptyUser -Capture assetpack-import -UserArgs @("--import=<pack>")
 # Worlds end to end (WINDOWED, needs a world: --scratch-world copies the most
 # recent world on the map into a throwaway one, deleted on quit; --world=<name
 # or id> runs inside a real one). Builds a prop + a light, freezes the clock,
@@ -241,6 +269,17 @@ Godot.exe.exe --headless --path . --script core/input_map_selftest.gd
 # Catches parse/identifier/preload/autoload errors, NOT node-path misses or
 # layout — those still need the windowed --capture harnesses:
 Godot.exe.exe --headless --path . --script scenes/ui/ui_compile_selftest.gd
+# HUD layout solver (offline — HudLayoutCore, see "UI foundation"): no two
+# placed panels overlap, everything stays above the timeline and clear of a
+# claim's insets, claims tuck / hide their regions, an overflowing column
+# tucks its LOWEST-priority panels first, an untuckable bottom-left panel
+# (the ride dashboard) tucks the top-left column rather than spilling onto
+# the timeline, the bottom region stacks upward. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script scenes/ui/hud/hud_layout_selftest.gd
+# Player-facing text helpers (offline — UiText: plurals incl. irregulars,
+# counts, SI-prefixed numbers with units, durations, percentages, id →
+# display name, fit-with-ellipsis). EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script scenes/ui/ui_text_selftest.gd
 # Unified edit toolbar data layer (offline — scenes/ui/toolbar/): the tool
 # registry, PER-TOOL parameter isolation (the whole reason the toolbar exists —
 # the legacy T dock kept ONE global radius/strength/hardness, so tuning Smooth
@@ -642,6 +681,31 @@ Godot.exe.exe --headless --path . --script vegetation/veg_dock_state_selftest.gd
 # keep the requested range, dense maps shrink until the worst-case near-set
 # fits the tier budget, 60 m floor, grass/shrub never counted; --import first):
 Godot.exe.exe --headless --path . --script vegetation/veg_lod_policy_selftest.gd
+# PNW forest pass (offline — VegDeadwood plan / log seating / log mesh, the
+# PNW species building real meshes, the conifer whorl layout honouring crown
+# base + droop, the VegConiferBuilder (every species above ground, sprays,
+# variants differ), VegMix scatter (weights, understory, determinism, cap),
+# floor moss, the broadleaf sprays (exact height, no leaf under the crown
+# base, a leaf form per species, species habit + the family shift, per-
+# species autumn, coverage-preserving cutout mips + colour bleed, shells
+# still selectable, variants, oak registered), and the VegLookBackup
+# snapshot/restore round trip against a
+# coordinate nobody plays, deleted afterwards). EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script vegetation/veg_deadwood_selftest.gd
+# Globe tree reach + the forest look (sandbox, applies the Mt Vernon PNW v2
+# fix first): species portraits (3 variants each), the Tune-look mix page,
+# the painted forest in October and July, the deadwood, and the Globe lens at
+# 3 zooms x 3 yaws; FAILs if any far-tier tree batch inside the SoI sphere is
+# past its visibility range from the lens camera:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pnw_forest_shots.gd -Label <dir>
+# Broadleaf rebuild (sandbox, applies the Mt Vernon broadleaf fix first):
+# portraits of every broadleaf (3 variants, July + October), maple close-ups
+# from eye level / underneath / in the crown, the painted stand July +
+# October, the Tune-look maple page; FAILs unless "Show vegetation" off hides
+# every plant root, the plant props and the floor moss, and on brings them back:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/broadleaf_shots.gd -Label <dir>
+# In-game "Restore an earlier vegetation look" round trip (sandbox):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/veg_look_restore_check.gd
 # Extreme weather (offline — core/weather/): hazard catalog + VTEC mapping, the
 # HazardState algebra (blank() is the IDENTITY element, combine() commutative,
 # worst-wins optics / multiplying energy), Koschmieder + IMPROVE visibility
@@ -761,6 +825,49 @@ Godot.exe.exe --headless --path . --script system_graph/hydro_migration_selftest
 # updates-all with per-instance battery SOC preserved, external-wire survival on
 # re-stamp, Make Unique detach, v6->v7 definitions round-trip; --import first):
 Godot.exe.exe --headless --path . --script system_graph/graph_components_selftest.gd
+# Freeform force layout (offline — GraphForceLayout: edge direction from the
+# port sides, cycle-safe layers, the bootcamp 3S2P graph laid out panels above
+# controller above battery with no overlap and the panels on ONE row, Live ==
+# Tidy, pinned nodes never move, a stacked start separates, a 120-node tidy in
+# under 8 s). Carries EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script system_graph/graph_force_layout_selftest.gd
+# Unified graph cards (offline — GraphCardSpecs per type: panel live/peak +
+# "Not wired", battery SOC/flow/time-to, controller delivered vs offered +
+# clipping, load ON/OFF + waiting for AC, destroyed → alert + RESET):
+Godot.exe.exe --headless --path . --script system_graph/graph_card_specs_selftest.gd
+# Solar Bootcamp played by the harness (WINDOWED, REAL drags port to port on
+# every level, the run levels run, L12 Ctrl-click + Ctrl+G). FAILs on any
+# wire that had to be added through the model (= something ate the drag),
+# a level that does not complete (L11 may stop at its verdict — the audit
+# adds no loads), a stale card, overlapping cards after load. Shoots each
+# level brief / seed / mid-drag / after / debrief / CLEAN (debrief closed),
+# writes bootcamp_audit.json. --bootcamp-from=N starts at a level:
+tools\harness.ps1 -World mtvernon -Capture bootcamp -UserArgs @("--window-size=1920x1080")
+# Graph show-only views (offline — GraphDomainFilter: wire / port domains,
+# Power hides the pond + tanks + hose wires and keeps the inverter, a habitat
+# with AC + water shows under both, the unwired-node rule, compounds by their
+# descendants, save round trip). EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script system_graph/graph_domain_filter_selftest.gd
+# Solar grid snap (offline — PvGridSnap: edge to edge with the gap, the yaw
+# lock, the no-shade row pitch pinned to 4.213 m at 48.3°N / 30° tilt, own
+# array beats a nearer foreign rack, grid_layout, GraphPvWiring's 9S×2P string
+# grid). EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/placed_models/pv_grid_snap_selftest.gd
+# Timeline info row must not move while the clock runs (24 h in 7-min steps +
+# a lunar month; FAILs on > 0.5 px drift or a right-cluster refold):
+tools\harness.ps1 -World mtvernon -Capture timeline -UserArgs @("--window-size=1280x720")
+# Graph tools: show-only filter, the "In the world" library drawer (2 J
+# lights), Locate in 3D / Esc back / Walk to it, the Globe Connect tool with
+# REAL clicks (pin, bend, pin -> a 3D run, bend locked, measured) and the
+# full-screen globe continuing + handing back the lens orbit:
+tools\harness.ps1 -World mtvernon -Capture graphtools -UserArgs @("--window-size=1920x1080")
+# Solar grid snap in 3D (racks edge to edge, the no-shade pitch, Line up this
+# array) and on the graph (Arrange as grid, drag snap, Tidy keeps the block):
+tools\harness.ps1 -World mtvernon -Capture pvsnap -UserArgs @("--window-size=1920x1080")
+# 3D connectors: plug-drag with a REAL release (HUD length == committed
+# route_length_m within 1 %), the LIVE style modal (no Apply, real-run
+# preview, Revert), run-length tags, the Shift chain port:
+tools\harness.ps1 -World mtvernon -Capture conduits -UserArgs @("--window-size=1920x1080")
 # Graph electrical self-test (offline — string Voc, controller ranking, Voc across
 # a super-node boundary; DC side: battery-bank bus topology (4S/2S2P/mismatch),
 # short-circuit detection (direct + closed series loop, parallel banks clean),
@@ -1331,6 +1438,12 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # an 8 mm/h storm books rain on each pond's surface and raises it (or it spills
 # / a siphon drains it). The Mt Vernon playtest of 2026-10-12, formalized:
 tools\harness.ps1 -World mtvernon -Capture sitebalance
+# Energy balance (sandbox, edits the graph in memory): a load switched on
+# inside a scrubbed-back hour drains the battery, solar follows the sun with
+# the graph OPEN, double-clicking a turbine switches it off (0 W, SolarUI's
+# hydro term drops, no Hydro Lab) and on again. Prints the graph's readouts
+# beside SolarUI's:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/energy_balance_probe.gd
 # Hydro LOAD-TIME diagnostic (WINDOWED, console-only, needs a REAL saved map with
 # hydro on it): dumps every penstock/culvert conn's visible_3d, routability, 3D
 # instance and BOTH resolved endpoint anchors at four moments — as loaded (graph
@@ -1376,6 +1489,383 @@ Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
 `git checkout`, delete TMPs). Don't `git stash` around headless runs — the
 ignored `.godot` class cache goes stale. If the Godot editor is open during
 file operations, it can resurrect deleted/modified scenes from memory on save.
+
+## Feature tour (core/tour/ — the show-people-what-it-does harness)
+
+A recordable visual tour of every mode: a title card per feature (chapter,
+name, one line, and the REAL key read from the InputMap), a short demo, one
+clean hero screenshot, and `docs/FEATURES.md` + the README gallery generated
+from the same metadata. **A new player-facing feature gets a tour stop.**
+- **One stop = one file**, `core/tour/stops/NN_<id>.gd` extending `TourStop`
+  (metadata in `_init`: id, title, chapter World/Build/Systems/People/Labs,
+  summary, how[], action and/or button, world mtvernon|walton, budget_s,
+  hour, optional, blurb; hooks `setup` / `run` / `teardown`, all may await).
+  `TourCatalog` finds stops by scanning the folder in file order — copy
+  `stops/_template.gd`, no other file changes. Keep chapters contiguous in
+  the numbering (the selftest checks it).
+- **`TourContext`** is the stop's toolkit: wait (× pace), hold(actions),
+  caption, hero() (captions + nested CanvasLayers hidden for the grab, PNG +
+  1280 px JPG), shot, a tour camera on Main's camera-claim stack (place / fly
+  / orbit), set_hour / scrub / run_clock / hour_for_sun, press(action) via
+  the action's real key, open_graph(lens) / graph_orbit / graph_select,
+  open_festival / settle_cam / space_xz, prop_records / nearest,
+  require(ok, what). ⚠ Stops reach game classes through `ctx.klass("Name")`
+  and autoloads through `ctx.autoload("Name")`, NEVER by bare identifier:
+  the selftest loads every stop under `--script`, where an autoload name
+  does not compile (the headless trap).
+- **`TourDirector`** (launched by `--capture=tour`, registry entry `tour`):
+  opening card → per stop: baseline (player back at the tour's start
+  transform, first person, no lab / graph / globe / festival / forced
+  weather, clock at real time, the stop's hour) → title card → setup + run
+  raced against the budget (a script error or an overrun cancels it and the
+  tour moves on) → teardown → one `tour PASS|FAIL <id>` line → closing card.
+  Budgets and offsets run on the frames' own delta, so under Movie Maker they
+  are in VIDEO seconds. Hides `UILayer/InteractionPromptUI` for the run.
+  Writes `tour_manifest.json` (per stop: metadata, resolved key, status,
+  failures, shots, start/end frame and seconds).
+- **`tools\tour.ps1 -Mode stills|live|record`** groups the chosen stops by
+  world, runs one sandboxed harness pass per world (`-EngineArgs` /
+  `-UserArgs` were added to harness.ps1 for this), and merges the manifests in
+  FILE order. `record` adds `--write-movie <w>.avi --fixed-fps 30` (Movie
+  Maker: fixed timestep + game audio, smooth however slowly it renders), then
+  ffmpeg cuts one clip per stop, reassembles them in tour order as
+  `tour.mp4` and writes `chapters.txt`. `live` = slow pace for OBS.
+  Output under `screenshots\<label>\`; `screenshots\tour_latest.txt` names
+  the last run.
+- **`tools/tour_docs.py`** (stdlib): merges the run into
+  `docs/tour/index.json` (a partial run refreshes only its stops; a FAILED
+  stop keeps its previous image; deleted stops are pruned), copies the hero
+  JPGs to `docs/tour/<id>.jpg`, writes `docs/FEATURES.md` and rewrites only
+  the README block between `<!-- TOUR:BEGIN -->` / `<!-- TOUR:END -->`. The
+  full-video link comes from `docs/tour/video.json` (edited by hand after
+  uploading; nothing is uploaded).
+- Iterate on one stop: `tools\tour.ps1 -Mode stills -Stops <id>`.
+- **The site's address never reaches a screenshot** (`SitePrivacy`,
+  `core/site_privacy.gd`).
+  - A world's place label is the reverse-geocoded street address. These
+    printed it: the loading screen ("Loading <address>"), the Site Report
+    header, coordinates and footnote, the world panel, the world list and
+    the record book.
+  - Each now goes through `SitePrivacy.place()` / `coords()`. The harness
+    switches those to "this site" / "location hidden" for EVERY run;
+    `--show-location` opts out for a private debug run. Only display text
+    changes, never saved data.
+  - `TourContext.hero` then walks the visible text and FAILS the stop if the
+    real label's identifying pieces (parts with a digit, the first two
+    parts) or the coordinates at 3 dp are on screen.
+  - A new UI that prints the site label or lat/lon must use those two
+    helpers. Selftest: `core/site_privacy_selftest.gd`.
+- `HarnessInput` (`core/terrain/harness/harness_input.gd`) is the shared
+  real-input toolkit the tour uses (mouse press/move/click/drag, key, action
+  press through its bound event, action/event labels, find_button); the
+  older captures still carry their own `_lc_*` / `_ae_*` / `_bs_*` copies.
+
+## UI foundation — theme, font, icons, text, HUD layout, audit (2026-10-13)
+
+Plan: `~/.claude/plans/i-want-you-create-mutable-sonnet.md` (UI polish +
+UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
+1080p primary / 720p usable + a UI scale).
+- **`UiAudit`** (`core/terrain/harness/ui_audit.gd`, pure over the live
+  tree) finds overhang, clipped, owner-vs-owner panel overlap, text-on-text
+  overlap, hard truncation, tiny hit targets and raw text ("(s)", ids,
+  3-decimal numbers). Modal layers (≥ 50) are exempt from overlap. The tour
+  runs it at every hero shot (`-Audit report|strict|off`), writes
+  `stops/<id>/ui_audit.json` (with the HUD manager's own `hud` snapshot +
+  per-panel `debug`), and `python tools/ui_audit_report.py <run> --compare
+  <baseline>` tabulates it. Baselines: `screenshots/ui_base_1080`,
+  `ui_base_720`. Canvas-drawn text reports truncation through
+  `UiText.fit(...)` → `UiAudit.note_canvas_truncation`.
+- **Theme**: `UiThemeBuilder` (`scenes/ui/ui_theme_builder.gd`) builds ONE
+  Theme from UITheme's palette (buttons, fields, popups, tooltips, tabs,
+  lists, slim scrollbars, sliders, dialogs) and `install(root)` merges it
+  into `ThemeDB.get_default_theme()` + sets `ThemeDB.fallback_font` —
+  ⚠ a theme set on the root does NOT reach Controls under a CanvasLayer
+  (propagation stops at non-Control parents), which is every HUD here.
+  Installed from `CursorController._ready`. Font: Inter (OFL,
+  `assets/fonts/inter/`), `UITheme.font(weight, numeric)`; the numeric
+  variant turns on tabular figures so changing readouts do not jitter.
+  `FONT_XS` is 11. The `style_*` helpers still work as overrides.
+- **UI scale**: `user://ui_prefs.cfg [ui] scale` (`UiThemeBuilder
+  .scale_pref/set_scale_pref`, `SCALE_CHOICES`, Auto = 1.0 at ≥ 1000 px
+  tall, 1.25 at 720), `--ui-scale=` on the CLI; drives the root window's
+  `content_scale_factor`. Stretch mode is `canvas_items` at 1920×1080, so
+  the LOGICAL layout is ~1920×1080 at every window size — 720p only shrinks
+  the text, which is what the scale corrects.
+- **Icons**: Lucide (ISC, `assets/ui/icons/*.svg`, `.gdignore`d) compiled by
+  `tools/ui_icons_build.py` into `scenes/ui/ui_icon_data.gd`;
+  `UiIcons.icon(name, px, stroke)` → a cached white `DPITexture` (crisp at
+  any scale, tint with modulate / icon colour), `UiIcons.apply(btn, name,
+  tip)`. Add an icon: drop the SVG in, re-run the tool.
+- **`UiText`** (pure): `plural` / `count` ("1 day", "3 days"; irregulars),
+  `num(x, unit, sig)` (SI prefixes for W/Wh/J/V/A/Hz/g/Pa; litres only
+  from 10 kL), `thousands`, `duration`, `pct`, `sentence`, `from_id`,
+  `fit`. Never write "(s)" or a raw id to a player again.
+- **`HudLayout`** (`scenes/ui/hud/hud_layout.gd`, Main child created in
+  `_ready`, `ServiceLocator` key `hud_layout`; pure solver
+  `HudLayoutCore`) places the first-person HUD. A panel REGISTERS
+  (`HudLayout.register(node, id, region, {order, priority, tuckable, title,
+  icon, size: Callable, compact: Callable, place: Callable, ignore_layer})`,
+  queued if the manager is not up yet) into top_left / top_right /
+  top_center / bottom_left / center_prompt; the manager stacks each region
+  inside the screen and above the timeline (`get_stack_height`, live) and
+  writes position AND size. A tool or mode CLAIMS
+  (`HudLayout.claim(owner, {inset: {left, top, right, bottom}, tuck: [...],
+  hide: [... | "*"]})`, `release(owner)`, nested like the camera / clock
+  claims; helpers `claim_right_dock(owner, dock, w)` and
+  `claim_modal(owner)`): insets push every region clear of the tool, tucked
+  panels become pill Buttons (compact text, refreshed 2×/s; click = peek
+  until the pointer has been away 1.5 s). Registered today: weather card,
+  scoreboard, terrain options, Fun Meter (until dragged), hazard / vibe /
+  peak chips, toasts, settlement feed, interaction prompt, the settlement
+  view's status / festival / log / card panels, the work dock, the ride
+  dashboard. Claims: graph (hides the HUD), edit toolbar (insets + tucks),
+  Light Studio + prop editor (right dock), settlement view (tucks), Site
+  Report + in-game location picker (`claim_modal`). Rules that carry it:
+  - A panel's own visibility writes are its INTENT; while it is tucked or
+    hidden the manager puts it back — ⚠ DEFERRED (`_revert_suppressed`):
+    `visibility_changed` fires BEFORE the change propagates to children,
+    so re-hiding inside the handler left every child's "visible in tree"
+    cache set and the scoreboard's body drew on under the graph.
+  - A panel on a hidden CanvasLayer frees its slot and is not written
+    (it reappears in place) — unless a claim would hide or tuck it anyway,
+    then it is hidden now. Ancestor layers' `visibility_changed` requeue the
+    layout; a 0.5 s poll is the backstop. The node is PROCESS_MODE_ALWAYS.
+  - An untuckable bottom-left panel outranks the top-left column: the
+    column tucks (lowest priority first) until it fits.
+  - A dragged Fun Meter unregisters (its saved position wins).
+- **Timeline info row** (`timeline_ui._layout_info_clusters`): measured —
+  the centre (clock / transport / date / sun-moon) sits centred when it
+  fits and slides into the gap between the side clusters when not; the
+  right cluster folds its least-used buttons (`_right_fold_items`, fold
+  order) into a "⋯" MenuButton, change-gated on the fold COUNT (it runs as
+  the clock text changes; hiding a hovered button per frame would flicker).
+  Width changes of the centre / chips requeue it.
+- The edit toolbar's options bar is an `HFlowContainer` (it wraps instead of
+  running off the right edge), its strip is an accordion of sections, and
+  `_sync_hud_claim` keeps the strip under the bar.
+- **Graph top bar** (`SystemGraphView._fit_topbar`): labels drop to icons in
+  levels (lens chips → menus → the rest + the SoI chip) when the measured
+  row would overflow. The level is chosen from MEASURED label widths and the
+  buttons are written only when the level changes — ⚠ the first version set
+  every button's text once per TRIAL level on every pass and crashed the
+  engine (signal 11 in Button.set_text, twice, at graph open / the Globe
+  stop). Dynamic labels (Wire: Metro, Designate · Roof) go through
+  `_topbar_set_text` so a compact bar is not re-expanded. "Graph ▾" + "Site
+  ▾" merged into "Share ▾" (graph ids < 10, site ids ≥ 10). The inspector
+  form tames every row after building (`_tame_form_widths`: row labels
+  ellipsize with a hover tooltip, free labels wrap, option buttons stop
+  fitting their longest item) — one wide row used to stretch the whole form
+  20 px past the sidebar.
+- **Kit** (`scenes/ui/kit/`, class_names — `--import` after adding one):
+  `KVRow` (key / value, both ellipsize, value tooltip, `make_with` for a
+  control), `AlertBanner` (THE look for critical state: icon + status
+  colour fill + left bar, `show_alert(level, text)` change-gated, `clear`),
+  `ModalFrame` (backdrop, title/subtitle, one close button, scroll body,
+  footer PRIMARY/SECONDARY/DESTRUCTIVE, CursorController modal +
+  `HudLayout.claim_modal`, sized above the timeline), `SectionHeader`
+  (small caps + hairline + note). In use: the dashboard's Site Balance
+  (`SiteBalance.rows` — structured, `lines()` kept for the selftest) and
+  the SolarUI scoreboard's AC-off / low-battery banner.
+  - **Added 2026-10-14:**
+    - **`IconButton`:** `make(icon, tip, cb)`, `style(btn, …)`, plus
+      `close(cb)` / `as_close(btn)`, which is THE close button. It has a
+      Lucide "x", a hover face and a 28 px minimum hit target. Before this
+      the close button was written four ways in 29 files.
+    - **`Collapsible`:** a `FoldableContainer` that you fill through `.body`.
+      Its look lives in `UiThemeBuilder`: a quiet title row, a Lucide
+      chevron, semibold text. Persist its state from `folding_changed`.
+    - **`DockShell.header(title, subtitle, on_close, extras)`:** the header
+      row of the right-hand docks (prop editor, Light Studio, microclimate,
+      work dock). Its title and subtitle ellipsize.
+  - **Adopted everywhere a clean swap existed:** the close buttons, the
+    row-delete "✕" (now `trash-2` or `x` with a tooltip), every panel's
+    section-title helper (Settings' ~45 titles, inspector, dashboard, Hydro
+    Lab dock, Linkage Lab / guide / hardware, work planner, routines, SCAD
+    store, help, multiplayer) and the hand-rolled "▸/▾" toggles (Linkage Lab
+    groups, hardware modal, veg Tune look, camp scatter, Hydro Lab folds,
+    Light Studio sections).
+  - **The inspector's "Advanced" sections are a `Collapsible` HEADER only.**
+    Their fields are built lazily straight after it, and toggling rebuilds
+    the form.
+  - **Deliberately NOT converted:**
+    - Panel-level collapse / tuck toggles (Terrain options, weather card,
+      scoreboard), because `HudLayout` sizes those panels.
+    - The edit toolbar's strip accordion, which follows the active tool.
+    - Footer text buttons ("Close" beside "Try again").
+  - **No `Pill` class:** `HudLayout` owns the one pill and `UITheme.chip_style`
+    the chips.
+  - **No `StatTile`:** the Hydro Lab deck is its only user.
+  - **Panels registered with `HudLayout` report their REAL minimum width**
+    through the `size` callable (`maxf(design_w, get_combined_minimum_size().x)`).
+    Terrain options declared a fixed 260 px while its content needed 284, so
+    it hung 12 px off the right edge. `--capture=poi` caught it; that capture
+    now turns pins ON for its own checks, since the player's `show_pois` pref
+    may hide them.
+- **Modals (`UiFit`, `scenes/ui/kit/ui_fit.gd`).** Every modal panel sits
+  in the area ABOVE the timeline and never larger than it:
+  `UiFit.keep_fitted(panel, want)` (re-fits on resize / show / content
+  growth, and claims the HUD while visible unless `claim_hud` false) or
+  `UiFit.adopt(panel)` for an existing modal (reads the intended size off
+  the panel, lifts it out of a CenterContainer). `UiScreenLayout.
+  clamped_center` follows the same rule. `UiFit.tame_widths(root)` is the
+  shared form of the inspector's width pass. A new modal: register with
+  `CursorController.request_modal(name, close)` WITH the close callable
+  (without it Esc and every other flow that pops the stack leave it open —
+  the Record Book and the SCAD store stayed up behind every later modal),
+  and `HudLayout.claim_modal(name)` / `release` beside the cursor calls.
+  The content must scroll: fitting cannot shrink a container below its
+  children's minimum (the Lab's right column was 820 px of fixed insets +
+  stats).
+- **Edit toolbar options (T / V / C, 2026-10-14).**
+  - Parameter specs carry a human `label`, a `unit` (the SpinBox suffix) and
+    an optional `auto_below`. A value under `auto_below` reads "Heading ·
+    auto". Never put the unit or "(-1 auto)" in the label again.
+  - `SliderSpinRow.add_param` is the compact row. Its slider is FIXED width:
+    an expanding slider fills a flow row and spreads the parameters apart.
+  - Strip tools carry Lucide icons (`TOOL_ICONS`).
+  - The options box is an `HFlowContainer`, so a section's row builders must
+    take `Container`. The water controller typed `HBoxContainer` and silently
+    built NO rows for every water tool until `--capture=water` showed four
+    script errors.
+- **`--capture=modals`** (`ModalAudit`, `core/terrain/harness/
+  modal_audit.gd`): opens all 19 reachable modals through their real entry
+  points, audits, shoots `<id>.png`, closes; prints one `modalaudit <id>:`
+  line each (incl. "hud up: …" for a modal that left HUD panels showing)
+  and writes `modal_audit.json`. `--modal-audit=strict` turns audit errors
+  into FAILs. `tools\harness.ps1 -World mtvernon -Capture modals -UserArgs
+  @("--window-size=1280x720")` checks the small screen (any capture honours
+  `--window-size`). 0 errors at 1536×864 and 1920×1080 on 2026-10-13.
+- **Harness window size.** project.godot opens MAXIMIZED, which overrides
+  `--resolution`: every "720p" capture was really shot at the monitor's
+  size. `tour.ps1` passes `--window-size=WxH` and the harness resizes the
+  window (`_apply_window_resolution`; the tour or `--exact-resolution`
+  only — older captures post raw window coordinates). `HarnessInput` now
+  posts mouse events in viewport coordinates (`push_input(ev, true)`).
+- `tour.ps1` reports a CRASHED pass: a native crash exits negative and used
+  to read as success with that world's stops silently missing; now exit
+  5 / a FAIL line naming the stops that never reported.
+- The settlement's "Nobody can reach a X" alarm latches ONCE per need for
+  the site (`_alarm_habs`), not once per camp.
+- **Copy sweep (2026-10-14).** 87 player-facing counts in 42 files go through
+  `UiText.count(n, "<singular>")`. Prints, selftests and dev readouts (fps,
+  ms, tris) were left alone. The JS-parity notes in `core/linkage/build` and
+  `coverings` were left alone too, because the parity fixtures diff them.
+  Irregular plurals take the third argument (`count(n, "axis", "axes")`).
+  A new `"%d nodes"` in a toast or label is a regression.
+- **Resource hub names** (`graph_canvas_v2._hub_name_lines`): one line if it
+  fits; else two balanced lines at a word break, shrinking up to 20 %; each
+  line is tested against the circle's CHORD at its own height. Anything that
+  still fails becomes a CAPTION beside the circle. Ports are on the top and
+  bottom edges, so the sides are free. The circle then keeps just the
+  quantity. The tour at 720 strict is at 0 findings across all 32 stops.
+
+## Graph tools, solar grids, settings, 3D routing (2026-10-14, later)
+
+Plan: `~/.claude/plans/pasted-content-id-aeda-ok-good-composed-umbrella.md`.
+Each piece has its own harness gate (Validation list).
+- **Timeline clock** (`timeline_ui._pin_label_widths`): the clock, sunrise /
+  sunset and moon labels use tabular figures AND are pinned to their widest
+  possible text. The unpinned proportional clock re-centred the whole centre
+  cluster every sim minute (measured 24 px of jitter). `--capture=timeline`.
+- **Settings modal** (`timeline_settings_panel.gd`): 1180×880 via `UiFit`, a
+  grouped searchable sidebar (`CATEGORIES`; a page missing from it lands under
+  "Other"), the TabContainer kept with its tab bar hidden so every
+  `_build_*_tab(tabs)` and `current_tab` caller still works; `open_page(title)`,
+  `page_titles()`, last page in `ui_prefs.cfg [settings] page`. The modal
+  audit walks every page and FAILs if a nav entry is off screen at 720p.
+- **Show-only views** (`GraphDomainFilter`, pure): Show ▾ in the DISPLAY
+  cluster (Everything / Power / Water / Food & waste / Fuel & heat / custom
+  ticks / "include nodes with no wire of that kind"), an amber canvas chip
+  while on, saved with the graph (`view_filter`). Hooked ONLY in the canvas's
+  `_compute_visible_items/_connections` (draw + every hit-test), the layout
+  driver (Tidy/Live lay out what is shown) and ConduitManager
+  (`set_preview_domain_filter`: runs of hidden kinds hide in the LENSES only,
+  never first person). A hidden node is deselected. Ambient sun/wind ports
+  never decide a node's domain.
+- **"In the world, not on the graph"** (`GraphWorldInventory`, library drawer
+  pinned on top): J lights, placed models with a library preset (by
+  `model_id`), pv_array racks, Linkage structures, OSM solar in the SoI,
+  ponds, scene devices / energy sources — each row Add (the SAME function the
+  world path uses) and ◎ Locate. Replaced the "In Model" / "Scene Objects"
+  shelves (the latter never skipped what was already on the graph).
+- **Graph ↔ world handoff**: `locate_item_in_world`, `open_node_in_graph`,
+  "Route in 3D" go through `open/close_graph_view` (they set `visible`
+  directly and left gameplay paused). Return ticket: Esc in the settlement
+  view after Locate comes back to the graph on the same node and lens (G
+  there drops in — `SettlementView.last_close_was_drop_in`); finishing a
+  Route in 3D reopens the graph; inspector **Walk to it** stands the player
+  beside the node, and G comes back to it. The full-screen globe opens on the
+  Globe lens's orbit and hands it back (`globe_orbit_state` /
+  `apply_globe_orbit_state`, `SoiSnowglobeCamera.enter(..., orbit)`).
+- **Solar grid snap** (`PvGridSnap`, pure; prefs `ui_prefs.cfg [pv_snap]`):
+  edge to edge in the row (gap), or a row behind at the no-winter-shade pitch
+  (`h_top / tan(90° − |lat| − 23.44°)`, floored at 10°), yaw locks within 12°,
+  own array (same controller) first; Alt drags free. 3D: the placement ghost
+  (`PlacedPropService.update_placement_aim`, the ghost's yaw is now placed)
+  and the prop editor gumball, amber guide lines, "Line up this array"
+  (`line_up_pv_array`). Graph: panel / array-card drag
+  (`_pv_snap_delta`), Combine ▾ "Arrange array as grid" and Series/Parallel
+  lay one row per series string (`GraphPvWiring.string_rows /
+  layout_panels_grid`); Tidy moves an array as ONE block laid out as that grid
+  (`GraphLayoutDriver.pv_groups / _collapse_groups`), Live keeps array panels
+  still. Layout ▾ "Snap solar panels into grids" toggles both.
+- **Conduit style modal is LIVE** (`conduit_style_modal.gd`): every control
+  writes to the wire (0.15 s debounce, history suppressed, ONE undo entry on
+  close), Revert restores the wire as opened, Done/Esc keeps. The preview is a
+  copy of the REAL run (`ConduitManager.run_visual_copy`) framed on its bounds
+  with ghost end boxes and a translucent path highlight for hairline runs; a
+  run not drawn in 3D falls back to a material sample. The header measures the
+  run (`ConduitLength`: m + ft, stock fit — "fits a 100 ft cord", sticks,
+  coils — straight line, rise/fall, live I²R loss). Dropdowns come from
+  `conduit_style_options.gd`, shared with the connection-port modal.
+  ⚠ `_on_conduit_style_applied` no longer runs `sync_all` (live writes would
+  rebuild every run at slider rate).
+- **One length rule**: `ConduitManager.mesh_build_params` is THE tessellation
+  rule for a run and `measure_route` uses it, so the routing HUD shows the
+  committed `route_length_m` (with a snapped plug it measures the exact spec
+  the release creates — the drag ghost path read ~3 % short). Inspector
+  "Length" is read-only once routed. Run-length tags (`RunLengthLabels`,
+  Settings → Gameplay "Show run lengths on 3D wires") at each run's arc
+  midpoint; the toggle re-measures only the runs already drawn (a `sync_all`
+  re-reads the 3D-wires pref and would clear them).
+- **Routing**: the Globe / Site Plan **Connect (C)** tool (canvas
+  `_handle_connect_tool_input`; pin → ground bends → pin, a port menu when
+  several fit; the view makes the connection with `visible_3d`, the bends as a
+  LOCKED `route_3d`, kind from the resource default). First person: a port
+  prompt on the crosshair (`ConduitRouteController.port_under_crosshair`, the
+  click's own rule, 8 Hz) and Shift+release chaining from the device just
+  plugged into (`_next_free_port`). The HUD names the mode (plug / route / drag).
+- ⚠ `ConduitMeshBuilder._build_dashed_tube_mesh` added a surface PER DASH and
+  hit Godot's 256-surface cap on runs over ~256 dash periods (197 errors on a
+  190 m run from the Globe); all dashes now go into one SurfaceTool surface.
+- **Editing runs in the lens** (Globe + pin-mode Site Plan;
+  `graph_canvas._draw_lens_runs` / `_handle_run_edit_input`, view
+  `_on_world_route_edited`). Every built run is projected from
+  ConduitManager's sample cache. Each run gets a pill: its value plus
+  `ConduitLength.format(route_length_m)`. The Elevation projection pills
+  carry the length too (`_wire_pill_text`). Clicking a run's line selects it.
+  The selected run's LOCKED `route_3d` points are handles:
+  - drag one over the ground (`_pin_ground_hit`, +0.3 m);
+  - press the line and drag to insert a bend (an auto-routed run becomes
+    locked);
+  - double-click a handle to remove it (an empty route unlocks).
+
+  Each gesture emits ONE `world_route_edited` on release. The view writes
+  the route under `_history_suppress`, calls `force_remesh` (which
+  re-measures) and pushes ONE history snapshot. The connect tool's own
+  run is one snapshot too now; before, the add pushed a route-less
+  snapshot.
+- **"Place it here"** (`_ct_offer_place`). With Connect on, clicking the pin
+  of a node with no 3D twin offers "Place it here". So does clicking the
+  ground while such a node is selected (it may have no pin at all). The
+  view's `_on_world_place_requested` places it through
+  `_on_lib_place_model_requested(..., at_world)` →
+  `PlacedPropService.place_prepped_at`. That is the ghost's own commit,
+  split out of `confirm_placement` as `_commit_prepped`; a grey box is
+  placed when there is no model. The node is bound and the run carries on
+  from it. Pond / stream / PBI nodes are refused with the reason.
+  `--capture=graphtools` drives all of it with real clicks.
+- Not built: clickable legend toggles.
 
 ## Maps and scene shell
 
@@ -1462,6 +1952,64 @@ copy as…, New world on this map, Exit to menu).
 - `StarShadeGraphSeeder._scene_has_starshade` only matches Node3D: the
   loader's `StarShadeEditLayer` UI node used to seed an 18-panel StarShade
   system into every empty generated-map graph.
+
+**Asset packs — Share… (core/sharing/ + scenes/ui/asset_pack_modal.gd,
+2026-10-15).** The GitHub repo has no large art. **Share…** (launch hub
+header, each world row, the in-game 💾 panel) exports one `.simpack.zip`.
+Installing one (Share → Install a pack, or drop the zip on the window from
+any screen, via `CursorController._on_files_dropped`) puts a friend's game in
+the same state. Plan: `~/.claude/plans/the-github-version-of-starry-lighthouse.md`.
+- **Sections** (`AssetPackFormat`):
+  - `worlds/<id>/…` — DIR layout. `data_files` → tags, as `duplicate_world`
+    does, so a legacy world travels like a new one. Includes the snapshot,
+    thumb, `assets/` and the map's `extents_*.json`.
+  - `mapcache/terrain_cache|weather_cache/…` — on by default. Matched by
+    `AssetPackCatalog.file_names_site` at each name's OWN precision: the AI
+    patch is 5 dp, climate is 2 dp, and 8.3252 is not 48.3252.
+  - `library/…` — the content groups (`LIBRARY_GROUPS`).
+  - `settings/*.cfgjson` — off by default (`AssetPackPrefs.SHAREABLE`).
+  - `project/…` — the gitignored art (`ART_DIRS` / `ART_FILES` /
+    `ART_ROOT_GLOBS`) WITH its `.import` sidecars, which keeps `uid://`
+    stable. Only offered when `running_from_source()`.
+  - `simpack.json` (the manifest, in part 1) plus `simpack.hashes.json` at
+    the end of every part.
+- **Hard rules, enforced by BOTH writer and reader** (`entry_allowed`):
+  - Secrets never travel: `SECRET_FILES` / `SECRET_DIRS`.
+  - Code never travels: `CODE_EXTENSIONS`.
+  - A `.tres` / `.tscn` never travels as user data. The map's
+    `loc_*.tres` is rebuilt from `world.json`'s map dict by
+    `MapRegistry.ensure_generated`, which the location picker now uses too.
+  - A `.cfg` travels as `.cfgjson`: primitive values only, with ints tagged
+    so they come back as ints, and absolute paths dropped. An untrusted
+    `.cfg` would otherwise go through the Variant parser.
+  - Every zip entry goes through `SafeZip`, which `ScadProvisioner` shares.
+- ⚠ **Godot's ZIPPacker has no zip64.** A 5 GB write closed `OK` and read
+  back as nothing (measured on 4.7.1). The writer bins entries IN ORDER into
+  parts ≤ `PART_MAX_BYTES` (3.5 GB) before writing anything. The reader
+  finds every part from any one of them (`base_part`). A single file bigger
+  than a part is refused.
+- **Install never costs the friend anything** (`AssetPackInstaller`):
+  - Every world is a NEW id. A clashing name gets " (from <creator>)".
+  - The map cache adds only what is missing.
+  - A differing folder-library file is written beside theirs as
+    `__from_<creator>`. A root single-file preset library keeps theirs:
+    the world's own `assets/` copy comes back through `WorldAssets.restore`
+    keep-both.
+  - The model catalog is MERGED by id.
+  - Settings are backed up to `user://pack_backups/<stamp>/`.
+  - Art is skipped when the same size is already there.
+- `extract()` is file work on a worker thread (`AssetPackJob`, always
+  waited on). `finish()` does registry, restore and catalog work on the main
+  thread.
+- **Art:** after writing, `start_reimport` runs `--headless --path <project>
+  --import` as a separate process, polled. Then `restart_game` sets
+  `OS.set_restart_on_exit` with the same args, minus the editor's debugger
+  hand-off, and quits.
+- Export first `save_now`s the running world and `WorldAssets.collect`s
+  every ticked world. "Tick what my worlds need" maps props' `model_id`
+  through `ModelCatalog._shipped_models` to art groups, plus camps → Camp
+  components. A map group pulls in its scene's dependency closure. NPC and
+  Player are always included.
 
 **User-created location maps (ROADMAP Pillar 1 — location→world).** One reusable
 shell scene `scenes/maps/generated_location.tscn` serves ALL user maps; it is the
@@ -2335,6 +2883,241 @@ which is why `in_window`/`window_days` exist rather than a `start <= doy <= end`
 test. Maturity gates yield: nothing below half apparent size, ramping to full —
 a freshly planted fill must not read as a working orchard. Verify with
 `--capture=foodforest` (above) + `vegetation/veg_food_selftest.gd`.
+
+**Pacific Northwest forest pass (2026-10-15).** Built from the player's
+Mount Vernon reference photos (second-growth Douglas-fir / cedar / hemlock,
+bigleaf maple and red alder turning gold, sword fern and blackberry, logging
+stumps and mossy logs). Four pieces, each reusable on any map:
+- **The Globe lens no longer drops whole chunks of trees.** Visibility range
+  is measured to each 256 m chunk's AABB CENTRE, and the far (impostor /
+  photocard) tier used to stop at the first-person cull end (480 m on large
+  maps) while the Globe / snowglobe orbit up to 4.5 x the SoI radius out: the
+  back of the sphere blinked in and out by chunk as the camera orbited. The
+  far tier now ends at `VegLodPolicy.KEY_FAR_TIER_END` (`far_tier_end_m`,
+  runtime-only, = R x 5.5 + chunk half-diagonal, from
+  `TerrainLoader._impostor_reach_m`); a mesh-only chain keeps the cull end
+  (that tier is the prim budget). An SoI radius change that moves the reach
+  debounces one rebuild (`_on_soi_changed_for_veg`). The key is UNPREFIXED on
+  purpose: the impostor bake key hashes family-prefixed keys only, so a
+  radius change never re-bakes. The mesh/impostor handoff fade scales with
+  distance (`VegLodPolicy.fade_margin_for`, 12 %, 24-140 m — one orbit zoom
+  notch used to cross the fixed 24 m band), the impostor adds the lens
+  `veg_fill` (the swap was a brightness jump in the lenses), and the lens
+  re-captures 0.25 s after a veg rebuild (`_refresh_lens_after_veg_rebuild`;
+  on-demand captures kept a mid-rebuild frame with species missing).
+  ⚠ **A rebuild must DETACH old batches before queue_free**
+  (`VegetationRuntime._clear_children`, `AutoVegetationRuntime`): a dying
+  "Bulk_fir_…" left in the tree made the new one `@MultiMeshInstance3D@…`,
+  which silently broke every lookup by batch name (`chunk_of_batch_node`
+  for incremental chunk rebuilds, leaf fall, harness checks), and a dying
+  AutoVegetation root was the one the next rebuild found and built into.
+- **Species** `hemlock` (pine builder, drooping), `alder` (pale bark),
+  `sword_fern` (the PALM builder with `fern: true` in SPECS — three upright /
+  arching frond rings, no trunk, a full-width pinnae texture) and
+  `blackberry` (shrub). Understory draws to
+  `VegetationRuntime.UNDERSTORY_VISIBILITY_END` (220 m) and sits under the
+  Shrub button (`VegSpeciesCatalog.UNDERSTORY_IDS`). The conifer whorl layout
+  now honours `crown_base_pct` (above 20 %) and `droop` (above 0.12); every
+  shipped SPECS conifer is below both, so the default layout is
+  byte-identical (selftest-pinned); BAKE_VERSION 8. ⚠ A map's own pine-family
+  droop edit outranks a species' SPECS droop — set droop per species.
+- **Deadwood** (`VegDeadwood`, `vegetation/veg_deadwood.gd`): stumps (the
+  player's imported GLBs, `deadwood_stump_models`, a COMMA STRING — the
+  style store reads any JSON array of 3+ as a Color) and procedural mossy
+  logs (`deadwood_log.gdshader`), derived from the standing tree records by
+  a position hash, nothing stored; `deadwood_per_100_trees` (0 = off, the
+  default), `deadwood_log_share`, `deadwood_visibility_m`. Logs lie between
+  the ground under their ends and turn across a slope too steep to follow.
+  A flat-painted stump model (no albedo texture — SketchUp paint) is drawn
+  with `deadwood_stump.gdshader`; a textured one keeps its bark plus the
+  `deadwood_moss.gdshader` overlay. Both find "up" from screen derivatives
+  (imported stumps are often double-sided / inside out). Off roads and
+  buildings via `TerrainLoader.veg_point_excluded_callable()` (built fresh —
+  the camp tool's cached index can predate the OSM load; returned as a
+  LAMBDA, since a Callable does not keep a RefCounted alive).
+- **Look backups** (`VegLookBackup`): snapshot / list / restore of one
+  world's style store + painted plants + area edits under
+  `user://veg_look_backups/<hash of the resolved style path>/<stamp>/`; a
+  restore deletes files that did not exist at snapshot time and snapshots
+  "Before restore" first. Terrain options → "Earlier vegetation looks" →
+  Restore this look (`TerrainLoader.snapshot_veg_look / veg_look_backups /
+  restore_veg_look`). A fix that re-styles a world snapshots first.
+- **Tune look is reachable from V now** (the unified toolbar's species row,
+  opening on the painted species); it used to exist only on Shift+V and the
+  Library. The modal took the legacy dock's brush (Shrub) over a caller's
+  preset — a named preset or species now wins.
+- Mount Vernon was converted by `tools/fixes/mtvernon_pnw_forest.gd`
+  (persisted 2026-10-15; generic pine / spruce / redwood / deciduous records
+  re-speciesed in patches, ferns round the trees, blackberry at thin-canopy
+  edges, gold-orange autumn, the regional `local_mix` for when auto
+  vegetation is switched on). Idempotent. Not done: understory for the
+  GENERATED forest (the generator scatters no ferns; deadwood does read the
+  auto records when auto vegetation is on).
+
+**PNW pass, part 2 — the tree builder and the mix (2026-10-15).**
+- **Conifers are built as a trunk plus foliage SPRAYS** (`VegConiferBuilder`,
+  `vegetation/veg_conifer_builder.gd`), not whorls of cards. One `FORMS`
+  entry per species says how it grows: crown profile and bulge, branch tilt
+  at base and top, sag, upturned tips, branch spacing / per tier / whorled,
+  spray width and cross ribbon, hanging pendants (cedar), bare lower limbs,
+  gaps, a nodding leader (hemlock), trunk flare and fluting, needle
+  texture. `spray_texture` paints the spray image per species (filled
+  feather lobes + a needle fringe — 1 px needles vanish at any distance).
+  Everything is clamped above the ground (`GROUND_CLEAR_M`; pendants and
+  ribbon vertices too — cedar and hemlock skirts went under the soil).
+  `VegetationCardFactory._build_pine_mesh` routes to it unless the style
+  says `pine_builder: "whorl"` (the old builder, kept for that).
+- **Real species, real sizes.** SPECS now carry PNW heights / crowns /
+  trunks / colours: `douglas_fir` is its own species (42 m, corky bark);
+  `fir` is the TRUE fir; plus cedar 35 m stringy, hemlock 32 m flaky with a
+  nodding leader, spruce, pine plated, redwood, bigleaf maple 24 m vase,
+  alder 22 m smooth; understory `bracken` (fern) and `salal` (shrub) join
+  sword fern and blackberry.
+- **Every tree species draws 3 seeded variants** (`tree_variants`, default
+  3). `VegetationRuntime` splits each species' records by a position hash
+  into variant batches (`<fam>_variant_index`, batch suffix `vK`); the
+  seed folds the index in, so a stand never repeats one tree. Cost: up to
+  3x the tree batches.
+- **Bark** has styles (`bark_style` in SPECS: corky / stringy / flaky /
+  plated / smooth, "" = the old texture) and **trunk moss**
+  (`bark.gdshader` `moss_amount` / `moss_height_m`, 3-D value noise climbing
+  from the ground on up-facing bark; amount = style `bark_moss` x the
+  species' `moss_affinity` — maple 1.0, so maples go green, firs barely).
+  ⚠ The bark reads the variant species from the INCOMING settings
+  (`_variant_species`): `settings_with_variant("pine")` resets it.
+- **Floor moss** (`VegFloorMoss`): a 2 m-texel mask of the canopy's
+  footprint (max 1024 px) pushed to `terrain_detail.gdshader`
+  (`moss_tex` / `moss_rect` / `moss_strength` / `moss_color`), blended
+  under the leaf litter. Style `forest_floor_moss` (0 = off).
+- **`VegMix`** (`vegetation/veg_mix.gd`) is ONE scatter for the brush and
+  the preview: a mix = canopy weights + understory per tree + stand
+  (spacing, patchiness via patch noise, patch size, share of young trees)
+  + site extras (floor moss, trunk moss, deadwood). Presets `pnw_lowland`,
+  `pnw_cedar_bottom`, `pnw_maple_alder`, `pnw_second_growth_fir`,
+  `mixed_woodland`; saved mixes in `user://veg_mixes.json`. A map's own
+  mix is style `paint_mix` (`TerrainLoader.get_paint_mix` /
+  `set_paint_mix`, which also writes `local_mix` so the generated forest
+  follows the canopy). Painting a mix (`populate_vegetation` with
+  `params.mix` -> `_populate_mix`) runs the same `VegMix.scatter` the
+  preview runs and RAISES (never lowers) the map's site extras.
+- **V toolbar:** a **Plant scale** parameter (0.25-3x, multiplies on top
+  of size variation) and, on the Mix family, a dropdown of "This map's
+  mix" + presets + saved mixes (`veg_mix_id`, saved in toolbar prefs).
+  Tune look... on the Mix family opens the mix page.
+- **Tune look -> Mixed woodland** is the mix editor: load a preset / save
+  as, canopy sliders (+ add a tree / remove), understory per tree, stand,
+  and forest floor & bark. The preview is `VegMix.scatter` with the
+  brush's density / size variation / plant scale (pulled from the toolbar),
+  deadwood drawn, and a moss tint on the ground; a stats line gives trees
+  / understory / trees per ha. Apply to map = `set_paint_mix`.
+- BAKE_VERSION 9.
+- Mount Vernon: `tools/fixes/mtvernon_pnw_forest_v2.gd` (persisted
+  2026-10-15, snapshot "Before PNW v2 (tree builder)") removed the saved
+  family dims (global and map) that ratio-scaled the new species (a 166 cm
+  pine-family trunk made a 3.3 m spruce trunk), the map's per-species dims
+  from the first pass, re-speciesed painted `fir` as `douglas_fir`, added
+  salal + bracken, and set the PNW lowland mix as the map's mix. The GLOBAL
+  edits touch every map; only the harness backup restores those.
+
+**PNW pass, part 3 — broadleaf leaf sprays + Show vegetation (2026-10-15).**
+- **Broadleaf crowns are leaf SPRAYS on the twigs** (`VegBroadleafBuilder`,
+  `vegetation/veg_broadleaf_builder.gd`), not the lumpy leaf-shell
+  ellipsoids ("blobby"). `_build_branch_skeleton` exports its whole node
+  soup (`out_nodes`: pos / parent / depth / pipe-model `tipw` / y0 / y1 /
+  env_r); `build_sprays` hangs one textured quad per spray along the outer
+  twigs (weight by `tipw` vs the form's `shell`, scaffold limbs stay bare),
+  fans the rest on the twig ends (`clump`), and sets each card a little OFF
+  its twig so the volume between the skeleton's few-metre-apart twigs fills.
+  No leaf below the authored crown base − 0.4 m. Count = crown shell area ×
+  3 cards deep × `fill` × density (quality tier's leaf-shell count / 4 ×
+  the foliage macro), 120..1800 sprays, ~1.7k–4.4k tris a tree.
+  `deciduous_leaf_builder` "shells" (Tune look → Leaves) brings the old
+  crowns back.
+- **Per species** (`VegBroadleafBuilder.FORMS`): the leaf outline the
+  texture draws (bigleaf maple's five-lobed palms, alder's toothed ovals,
+  birch's small triangles, aspen rounds, cottonwood deltoids, Garry oak
+  lobes, beech ellipses, chestnut lances, walnut / acacia compound leaves),
+  real leaf size, spray length, how far leaves reach inward, how flat they
+  face the sky, twig droop (birch hangs), clumping, silver undersides,
+  gloss. `leaf_texture` draws one twig with side twiglets and the leaves to
+  scale (256×160).
+- ⚠ **Cutout textures need `VegBroadleafBuilder.finalize_cutout`** (also
+  used by the conifer sprays now): transparent texels take the leaves' mean
+  colour (Godot's mipmaps averaged in black — dark crown edges, and a
+  near-black autumn maple at distance) and each mip's alpha is scaled to
+  keep the level-0 coverage above the cut (Castano 2010). Without it small
+  leaves average under the shader's 0.35-0.4 cut and a crown thins to bare
+  wire as it moves away — what the first sprays looked like.
+- **Foliage shader `spray_mode`** (opt-in, every other material unchanged):
+  vertex COLOR.r = depth into the crown (AO + highlight), .g = height
+  fraction (wind), .b = per-spray seed (leaf-fall key, so sprays drop
+  unevenly instead of the same leaf of every card).
+- **Species carry their own habit in SPECS**: `branchiness`, `crookedness`,
+  `droop`, `foliage_density` (`_species_macro`: a family-wide edit SHIFTS
+  the species value by its distance from the default, a per-species
+  override wins), `bark_style`, and `autumn` = [warm, orange, hot]
+  (`autumn_palette`: species override > SPECS > the style's own autumn_*;
+  applied to the sprays, the shells and the impostors via `stamp_snag`).
+  Real PNW numbers for maple (22 m, 17 m round crown, gold), red alder
+  (dull green-brown autumn), black cottonwood (32 m), birch, aspen, beech,
+  chestnut, walnut, apple, pear, olive. New species **`oak`** (Oregon
+  white / Garry oak) in SPECS, the catalog JSON, MESH_FAMILY,
+  DECIDUOUS_IDS, LABELS, growth slots and NOMINAL_CARD_H.
+- Tune look: **Leaves** row (sprays / shells) and **Tree variants** (1-4,
+  `tree_variants`, default 3, each variant its own batch — lower = cheaper).
+  BAKE_VERSION 11 (10 here, 11 with the slider wiring below).
+- **Terrain options → Show vegetation** (`TerrainLoader.set_show_vegetation`,
+  `[terrain] show_vegetation`): hides the Vegetation / AutoVegetation /
+  Deadwood / VegLeafFall roots, zeroes the floor moss and leaf litter, and
+  hides placed props that are plants (`prop_is_plant`: catalog category /
+  label / id whole words — tree, cedar, stump, vine, fern …; only props it
+  hid are shown again). Visibility only: nothing is deleted or regenerated.
+  The tick re-applies it every 0.5 s while hidden (an auto-veg rebuild makes
+  a fresh root).
+- Mount Vernon: `tools/fixes/mtvernon_broadleaf_v3.gd` (persisted
+  2026-10-15, snapshot "Before broadleaf rebuild") removed the GLOBAL
+  family/generic-species deciduous macros (branchiness 0.35, crookedness
+  0.41, droop 0.14, foliage 0.72 — tuned for the shells; they would now
+  shift every species off its habit). Offline probe:
+  `tools/checks/broadleaf_probe.gd` (tris / size / ms per species + each
+  leaf texture to user://broadleaf_probe/).
+
+**Tune look = the world (2026-10-15, "what I see is not what I get").**
+- ⚠ **The world resolved a species TWICE.** `VegetationRuntime._build_bulk_batch`
+  (and the auto runtime) call `settings_with_variant`, then
+  `mesh_for_canopy_lod` resolves again; Tune look resolved once. A family
+  edit is a RATIO over the family default, so it was applied squared in the
+  world: a 75 cm Pine-family trunk drew a Douglas-fir 400 cm thick in the
+  world against 183 cm in the preview, and crown base compounded into its
+  80 % clamp. `settings_with_variant` is now IDEMPOTENT: every key it
+  rewrites goes through `put`, which records the replaced value under
+  `KEY_RESOLVE_RAW` (`RESOLVE_ABSENT` = the key was missing); a dict that
+  carries that record is restored first. Resolving twice == once, and
+  re-resolving a Douglas-fir dict as spruce == resolving spruce from the
+  style (pinned in `vegetation_growth_selftest`, plus "world mesh
+  (pre-resolved) == preview mesh" for a conifer and a maple).
+- **54 slider/species pairs did nothing.** The spray builders (the default
+  for both families) never read the whorl-card / leaf-shell sliders. Wired
+  now, each NEUTRAL at its default: conifers — Whorls (branch tiers against
+  what branchiness derives, `whorl_default`), Whorl gap, Bough size (branch
+  length), Jitter, Variation (azimuth irregularity), Crookedness (trunk lean
+  + irregularity), Foliage (spray width), Trunk taper, Roundness; broadleaf —
+  Leaf size (spray size), Clumps (twig-end bunching), Leaf density (only when
+  the player set it, against the Foliage macro's derived value), Leaf layers,
+  Roundness and AO on the spray material. `foliage.gdshader` spray mode
+  takes roundness off crown depth (COLOR.r).
+- Sliders the CURRENT builder ignores are hidden
+  (`vegetation_preview_editor.builder_hidden_keys`): pine fur unless
+  Branches = Whorl cards, leaf aspect / gap / lump / shadow proxy unless
+  Leaves = shells. Conifers gained a **Branches** row (`pine_builder`
+  "spray" / "whorl", default "spray" in `VegetationStyleConfig`); changing
+  either builder rebuilds the slider list.
+- Checks: `tools/checks/tune_look_slider_probe.gd` (offline: every shown
+  shape + shader slider at min vs max must change the mesh or a material
+  uniform, per species — 0 dead), and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tune_look_world_parity.gd`
+  (the editor's own `_merged_settings` mesh against the meshes the world's
+  near batches carry, per species).
 
 **Vegetation paint + live preview (`scenes/ui/vegetation_edit_ui.gd`,
 `scenes/ui/vegetation_preview_editor.gd`).** V toggles the bottom paint dock
@@ -3706,6 +4489,21 @@ over the buffer (`_recompute_scoreboard_from_timeline`); the 24h graph
 the synthetic-weather fallback is seeded by absolute time (`_det_unit`), never
 `randf()`, so replays reconstruct exactly. On load, `energy_timeline.clear()`
 re-anchors at the loaded SOC.
+⚠ **A cached FUTURE is a prediction, not history** (fixed 2026-10-15, Mt
+Vernon: "2.5 kW load, SolarUI says deficit, the battery never leaves 100 %").
+After any backward move of the clock (timeline scrub, a tutorial / Lab clock
+restore, a date jump) the buffer holds samples ahead of the playhead, and
+moving forward inside them used to be a pure read — so a load switched on
+since then never reached the SOC until the playhead passed the end of the
+cache (up to 14 days), while Net (live inputs) read a deficit.
+`_update_battery` now compares the cached sample's net against the live net
+when moving forward inside the cache; past `BATTERY_CACHE_DIVERGE_KW` it
+`truncate_after`s at the previous tick and integrates live from there.
+Backward reads are untouched. Also: SolarUI reads the sun from
+`clock.get_sun_direction()` (`_sun_direction`), not the DirectionalLight —
+Main stops re-aiming the light while the graph hides the 3D world, which
+froze solar output for as long as the graph was open.
+Verify: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/energy_balance_probe.gd`.
 
 **UI.** `timeline_ui.gd` replaces the 24h slider with a custom-drawn multi-day
 absolute-time track (`_draw_track`/`_on_track_input`, ±~3.5 days, dead-zone
@@ -3911,6 +4709,15 @@ to metres (×0.0254) only in the mesh builder.
   `fold_deg`. ⚠ `_resolve_parking` used to call `compute_displacement` (which
   replays every earlier step) once per JOB — 2 s of a 2.2 s SOAK plan; it is
   one pass over the steps now.
+  ⚠ The solver chains the modules from module 0 AT the origin, so the origin
+  is a point on the ring's EDGE, the frame's `max_rad` is measured from there
+  (≈ the diameter), and the ring's middle MOVES as it folds. The plan measures
+  circles, benches and "outside" from `ring_footprint` (the parts' middle +
+  radius) instead: each assembly job carries the ring it is worked round
+  (`job["ring"]`: the half-folded pose before the deploy, the open ring after,
+  `ring_union` of both for the deploy itself). Centred on the origin, the
+  deploy and lift circles stood off to one side of the structure (pinned by
+  `_test_ring_centre`).
 - **Build site (swarm B5, `gameplay/linkage_build_site.gd`).** A placed
   linkage prop with `build_run = {start_h, crew_n}` (the fire's
   record-on-the-prop pattern) gets a `LinkageBuildSite`
@@ -5227,6 +6034,154 @@ discarded an unapplied routine or animation edit; and the project panel
 reported failures by mutating a `LineEdit`'s placeholder, invisible the moment
 anyone types.
 
+## Graph view UI pass (2026-10-14) — freeform cards, flow, force layout
+
+Plan: `~/.claude/plans/yesterday-we-did-a-graceful-candy.md`. Found by
+playing the bootcamp through `--capture=bootcamp` (the regression gate).
+- **Force layout** (`GraphForceLayout`, pure; `GraphLayoutDriver` runs it on
+  the live canvas). Layout ▾ → **Tidy** (animated, ONE undo step), **Live**
+  (keeps running; a dragged node is pinned while held; edits reheat), Pin /
+  Unpin (`specs.layout_pinned`, lock glyph), **Layout settings…** (Spacing,
+  Wire length, Flow direction, Gravity, "Keep each layer on one line";
+  `ui_prefs.cfg [graph_layout]`; Live rides the save state as `layout_live`).
+  Flow direction comes from the PORT SIDES (inputs top, outputs bottom), so
+  sources settle above controllers above storage above loads; components with
+  no directed wire keep an organic web. Manual stays the default; bootcamp
+  seeds auto-Tidy. Positions are written straight onto the live item dicts
+  while animating (update_item would fire the view's cascade per node per
+  frame); the settle commits one history entry + autosave. Round tanks /
+  catchments get a layout box widened by their caption (`scope_items`).
+  "Arrange" is now "Only remove overlaps".
+- **One card anatomy** (`GraphCard` draw + LOD, `GraphCardSpecs` per type,
+  `GraphTheme` tokens) for panel / battery / controller / load: header (icon,
+  name, chip), hero number, sub line, bar (+ ghost band for a clipped
+  controller), footer, centred alert + RESET. Other types keep their old
+  renderers. Display settings (View options → "Display settings…",
+  `ui_prefs.cfg [graph_display]`): unified cards, hover path highlight, flow
+  when paused, wire value pills, the freeform SoI ring (default OFF).
+- **Flow** animates whenever flow is active and the clock runs OR a run plays
+  back OR "flow when paused" is on. Wire pills (UiText.num) skip any spot that
+  would collide with a card or another pill; a PV wire carries its STRING's
+  watts (`_panel_string_w`), not the site total.
+- **Selection:** Ctrl-click and Shift-click toggle; ⚠ `_begin_item_press`
+  must not re-select when the press lands inside an existing multi-selection
+  (it collapsed every Ctrl-click selection — L12 could not be completed), and
+  V2's Ctrl+LMB wire pick only fires with no item under the pointer.
+- **Bootcamp:** fault cards queue cleared on level load/exit
+  (`GraphFaultCardModal.clear_queue/dismiss_all`); a ~2.5 s CELEBRATE state
+  before the debrief, which docks to a corner; run levels start at 30 % SOC
+  (`DEFAULT_RUN_START_SOC`); a missed run shows a verdict; unwired panels
+  count 0 W in the sandbox; the real-world projection / best score are hidden
+  while sandboxed; the live globe dims to a backdrop during a run (shader
+  `opacity`, container modulate does nothing to it); a newly wired AC load
+  defaults ON; the card text editor needs `--card-editor`. The DC throttle
+  runs display-only while the ambient flow is suspended (bake / playback) so
+  the controller card follows the playback without touching SolarUI's cap.
+- Freeform drags push ONE history entry on release (`items_moved`).
+- `--capture=graph` now really shoots freeform (`01b_freeform`), Tidy
+  (`02b_freeform_tidied`) and prints `graph tidy: N item(s), M overlapping
+  pair(s) PASS|FAIL`.
+- **One energy story per frame.** Panel cards, the controller card, the
+  battery card and the dashboard's "Making" all derive from SolarUI's
+  `current_solar_kw` on the SAME SolarUI tick (`sim_tick_serial`; the view's
+  `_tick_dc_throttle` and the dashboard both sync when it moves).
+  - Per controller, `_dc_throttle_pass` writes OFFERED (`dc_array_w`, its
+    Wmp share of `_raw_solar_kw`), CAP (`dc_cap_w`, V × A) and DELIVERED
+    (`dc_delivered_w`). Delivered is `current_solar_kw` split over the caps
+    (`GraphDcElectrical.split_actual`). It also writes `dc_curtail`
+    (battery_full / battery_topping / held_back) as the reason.
+  - Panels get their controller's delivered share (`_pv_live_w`) plus
+    `pv_offered_kw` / `pv_curtail`, so they sum to it.
+  - The caps reach SolarUI as a FUNCTION of raw (`set_graph_dc_caps`,
+    `GraphDcElectrical.delivered_for_caps`), for the live tick and the bake
+    alike. A single watt figure frozen when Run was pressed used to cap the
+    whole baked day: level 10 read 17 % of the sun used, now 57 %.
+  - In playback, `SolarUI._apply_playback_readouts` takes solar / load / raw
+    from the BAKED series at the playhead.
+  - The battery-full taper no longer keeps a constant +0.1 kW "top-off", which
+    read as "▲ 100 W" on a full battery. It is aux-aware.
+  - World shade (`_tick_graph_solar_shading`) skips the tutorial sandbox.
+    Level 8's panels were ray-cast into a Mount Vernon tree's shadow and read
+    0.2× of the controller.
+  - `--capture=bootcamp` FAILs on a settled shot whose readouts disagree.
+    Those shots are c_running / d_playback / f_after / h_clean / g_verdict;
+    the check covers panels vs Making, controller vs Making, dashboard vs
+    Making, and a full battery reading as charging.
+  - **Shade is one model (2026-10-14):** a placed panel's `sunlight_factor`
+    lowers what the ARRAY makes; nothing is redistributed to sunlit panels.
+    - The throttle pass pushes the placed panels to
+      `SolarUI.set_graph_pv_shade(receivers, total_wmp)`. Each receiver is
+      `{wmp, group = controller cap index, pos, s}`.
+    - SolarUI scales the live output by the Wmp-weighted factor
+      (`_apply_graph_pv_shade`).
+    - `graph_dc_delivered_kw` re-splits each controller's share by its own
+      panels' shade (`GraphSolarShading.shaded_caps`).
+    - `evaluate_solar_at` ray-casts every rendered instant
+      (`factors_at`, ≤ 48 merged origins).
+    - The cards split by effective Wmp (wmp × factor), so they still sum.
+    - The old one-point `_shadow_raycast_enabled` test is skipped while
+      graph shade is on. The sandbox pushes no receivers.
+    - Verify with `tools\harness.ps1 -World mtvernon -RunScript
+      res://tools/checks/pv_shade_consistency.gd`. It runs in the sandbox:
+      four placed panels, one in a shadow.
+    - A controller that stops being a PV route now zeroes its `dc_*`
+      watts. It used to show its last delivered figure forever.
+    - Only `panel` items are receivers: Mount Vernon's own array is one
+      `compound` and is not shaded.
+- **Wire bundling** (`GraphWireBundles`, pure; pinned in
+  `graph_wire_routing_selftest`): wires sharing a port leave it as one short
+  trunk, then fan into evenly spaced lanes ordered by where their far ends
+  sit (no crossings in the fan); the curve starts at the lane's tooth. Plan
+  built per draw in `_draw_connections` (`_bundle_plan`) and reused by the
+  wire hit test, so a click lands on the wire you see. Bezier style, freeform
+  only; hub (round tank) ends skip it. Display pref `wire_bundling`.
+- **Every freeform card is a GraphCard** now: wind, hydro (`hydro` and
+  `siphon_hydro` machines — footer = `SiphonStateRing.state_for`, the 3D
+  ring's own words), machines (CSP, habitat, generic), tanks, groups (array,
+  battery bank, load group, camp, generic / component). `spec.media` reserves
+  a picture zone (`GraphCard.media_split`) the canvas fills in
+  `_draw_card_media` (GLB thumbnail, group miniature, banner, panel grid).
+  Tanks draw round (`GraphCard.draw_hub`) so hub ports stay on the rim.
+  Model-thumbnail controllers / loads keep their full-bleed picture.
+- Ports: names beside the dots from zoom 1.0 (Display pref `port_names`,
+  `_draw_port_annotations`; names grow outward along the edge, cut at the
+  next port) and a wire-count badge on any port with ≥ 2 wires.
+- Bootcamp keeps the camera across levels (`tutorial_clear_graph` passes the
+  pan / zoom through); `tutorial_frame_if_needed` re-frames only when the
+  level's content (Tidy's target) would fall outside the canvas, never past 1×.
+- **Top bar = captioned clusters** EDIT / STRUCTURE / PLAY / LENS / DISPLAY
+  (`_topbar_cluster`), identical in every lens. The lens-only controls
+  (Designate, Slice, Globe radius, Hydro Lab, Radial / Array / R) moved into
+  a row of the lens strip on the canvas (`_lens_slot`, built in
+  `_build_lens_strip`); Site Plan's tool row used to push every label off the
+  bar. Challenges / Bootcamp are labelled (fold to icons in the fit).
+- **Draw cost (measured 2026-10-14, `tools/bench/graph_draw_bench.gd`, a
+  dry-run `-RunScript`: 60 nodes / 76 wires in the bootcamp sandbox).** On
+  this build one `draw_circle` costs ~9 µs, an outline circle ~13 µs and one
+  `draw_style_box` of an anti-aliased rounded StyleBoxFlat ~16 µs (both are
+  re-tessellated every call), against 0.1 µs for `draw_line` and 1–2 µs for
+  `draw_string`; `get_string_size` is 0.15 µs (the engine caches shaped
+  text). A port dot was five circles and a card six style boxes → ~14 ms a
+  draw. `GraphFastDraw` (cached anti-aliased white textures: `disc`, `ring`,
+  `rrect`, `rrect_border`, two-tone `rrect_box`) replaces them in GraphCard,
+  the port dots and the wire pills; never put `draw_circle` /
+  `draw_style_box` back in a per-node or per-port path. Also: one
+  `draw_polyline` per bezier stroke, curve sampled once per wire; per-draw
+  caches for resolved handles, wired ports and handle info (`_handles_cache`,
+  `_wired_cache`, `_hinfo_cache` — valid while `_draw_cache_active`; the
+  handle-info dict is SHARED, copy before mutating); `draw_primitive` for
+  flow arrows. ⚠ PerfMonitor's `gv_draw` (the F3 figure) is a PER-FRAME
+  average and the canvas draws every few frames, so it reads ~3× low while
+  flow animates; the bench prints both. Now: one draw ~7 ms (was ~14),
+  `gv_draw` < 1 ms per frame. The 20 Hz cadence now runs only while a wire
+  actually animates (`_flowing_drawn`); "animate flow when paused" had made
+  it permanent.
+- ⚠ `HarnessInput.mouse_move` warps the real cursor with
+  `vp.get_final_transform() * pos`: `Input.warp_mouse` takes WINDOW pixels,
+  and warping to the logical point put the cursor 1.2× off at 1280×720 (UI
+  scale 1.25); the OS's own motion event then dragged every hover and wire
+  drag there. That alone failed the 720 bootcamp (58 failures → 0).
+
 ## Solar Bootcamp tutorial + pre-baked challenges
 
 **DC electrical layer (`system_graph/graph_dc_electrical.gd`, sibling of
@@ -5702,6 +6657,25 @@ globe. Both globes share framing (`SoiOrbitMath`). Rules that carry it:
   (Elevation, Globe) and the Elevation **soil probe** — hovering the cut names
   the horizon, its depth and the distance to the water table
   (`graph_canvas._draw_elev_soil_probe`, `GraphSoilLegend.horizon_at`).
+- ⚠ **`SubViewportContainer` owns its child viewport's update mode.** On
+  `NOTIFICATION_ENTER_TREE` / `VISIBILITY_CHANGED` the engine sets
+  `UPDATE_ALWAYS` (visible in tree) or `UPDATE_DISABLED`, overriding whatever
+  the script chose. `graph_soi_preview_service` re-asserts its own mode in
+  `_on_container_visibility_changed`.
+  - The handler is connected **CONNECT_DEFERRED**. The `visibility_changed`
+    signal is emitted from CanvasItem's base-class half of the notification,
+    before SubViewportContainer's half writes the mode, so a direct handler
+    is overwritten.
+  - `_request_viewport_refresh` refuses a viewport under `MIN_VIEWPORT_PX`.
+  - What this fixed: a lens applied to the CLOSED graph activated the preview
+    behind it. The viewport was then stretched from a 0-size canvas to 2×2,
+    and on reveal it rendered every frame, about 200 "Too many mipmaps" /
+    zero-dispatch errors (Hydro Lab → Bootcamp; also the saved lens at map
+    load).
+  - `close_hydro_lab()` is now a no-op unless the Lab is open. It used to fall
+    back to switching a closed graph to Elevation.
+  - Any other preview built on a `SubViewportContainer` that sets
+    `render_target_update_mode` itself has the same trap.
 - `_canvas_layout_key()` is the ONE layout signature (store and compare); a
   mismatch re-lays-out — and re-renders the shared world — every frame. (The
   Hydro Lab embed still has two different key formats; it was left alone
@@ -5980,7 +6954,16 @@ probe; each fix guards a trap that rendered plausibly:
 - The Mt Vernon world was cleaned by `tools/fixes/mtvernon_hydro_cleanup.gd`
   (persisted with backup): two empty supply tanks, an orphan intake + prop,
   a pond self-loop wire, and a spillway outlet at the user's "Pond Outlet
-  Pipes" pin. The 600 W "Custom Load" is the user's placeholder.
+  Pipes" pin. The "Custom Load" is the user's placeholder (2500 W
+  `avg_watts` as of 2026-10-15).
+- **Double-click a turbine to switch it off / on** (2026-10-15;
+  `SystemGraphView.set_hydro_turbine_off`, inspector "Running" box,
+  `specs.hydro_off` = `HydroSource.SPEC_OFF`). Off = valve shut: the engine
+  skips it at the top of `_process_siphon_hydro` (`_idle_switched_off_turbine`
+  zeroes telemetry AND every port rate — a stale rate keeps water moving),
+  and the Lab-pause fill and scrub-back refresh skip it too. The card chip
+  reads OFF, `SiphonStateRing.state_for` returns state "off". The Hydro Lab
+  moved to the inspector's "Open Hydro Lab…" (double-click used to open it).
 Verify: `resource_flow_selftest` (battery-terminal trace, stray-tank inlet,
 no phantom watts, stage curve, surface rain, spill, SiteBalance),
 `hydro_reach_selftest` (curved-basin dead pool), `--capture=sitebalance`.
@@ -6099,6 +7082,13 @@ jet → …", five closed-form evaluations inside the estimate's signature gate,
 never per tick). `_refresh_stat_deck` reads `_last_r` in the SAME refresh as
 the dock rows and the strip, so the three cannot disagree; the dock's Live
 readouts went to 14 px and the power chart marks the routed pipe's curve.
+A tile is four rows that never share a line (2026-10-14): LABEL left with
+the bar's verdict right, the value + unit (Inter tabular figures), the
+relation at full width, the bar. The verdict used to sit right-aligned on
+the relation line and overprinted it. Captions lead with their number
+("40.9 m gross − 1.7 m friction") and every fit goes through `UiText.fit`,
+so a caption that stops fitting shows up as `canvas_truncated` in the tour
+audit. Roughness is shown in µm in the Lab (the spec stays in mm).
 **The close-up's load slider is a what-if, and it costs watts.** The graph node
 reports the MATCHED-load output (what a dump-load or MPPT controller holds).
 `runner_efficiency(x, 1.0)` is the fraction of that delivered at the current speed

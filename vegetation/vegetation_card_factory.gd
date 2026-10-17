@@ -17,76 +17,139 @@ const SPECS := {
 	# 2026-10-10: authored when they were TINTS, they sat at ~1-2 % linear
 	# reflectance (measured needle green is ~5-7 %) and pines printed black. Non-tree families (shrub /
 	# palm / cactus / grass / crops) keep the legacy width/height card dims.
-	"pine": {"height_m": 17.0, "crown_m": 7.0, "trunk_cm": 45.0,
+	# Conifers (2026-10-15): mature second-growth sizes (Burns & Honkala 1990,
+	# Silvics of North America) and measured needle colours; bark_style picks
+	# the bark pattern, moss_affinity how much of the style's bark_moss it
+	# wears. Generic pine = lodgepole / ponderosa: open, high crown, plated bark.
+	"pine": {"height_m": 24.0, "crown_m": 8.0, "trunk_cm": 50.0,
+		"crown_base_pct": 35.0, "archetype": "conical",
+		"top": Color(0.15, 0.28, 0.12), "bottom": Color(0.11, 0.18, 0.08),
+		"highlight": Color(0.28, 0.40, 0.15),
+		"bark": Color(0.34, 0.20, 0.11), "bark_style": "plated", "moss_affinity": 0.1},
+	"spruce": {"height_m": 34.0, "crown_m": 9.0, "trunk_cm": 90.0,
+		"crown_base_pct": 6.0, "archetype": "conical",
+		"top": Color(0.10, 0.24, 0.18), "bottom": Color(0.07, 0.16, 0.11),
+		"highlight": Color(0.20, 0.36, 0.24),
+		"bark": Color(0.30, 0.25, 0.20), "bark_style": "flaky", "moss_affinity": 0.3},
+	# Western red cedar: drooping lacy sprays, flared fluted base, stringy bark.
+	"cedar": {"height_m": 35.0, "crown_m": 12.0, "trunk_cm": 140.0,
+		"crown_base_pct": 5.0, "archetype": "conical",
+		"top": Color(0.17, 0.31, 0.12), "bottom": Color(0.11, 0.20, 0.08),
+		"highlight": Color(0.34, 0.45, 0.17),
+		"bark": Color(0.40, 0.22, 0.15), "bark_style": "stringy", "moss_affinity": 0.45},
+	# True fir (grand / silver / subalpine): a dense narrow spire, smooth
+	# blistered grey bark, blue-green needles.
+	"fir": {"height_m": 30.0, "crown_m": 6.5, "trunk_cm": 60.0,
 		"crown_base_pct": 8.0, "archetype": "conical",
-		"top": Color(0.13, 0.27, 0.12), "bottom": Color(0.11, 0.17, 0.08),
-		"highlight": Color(0.24, 0.38, 0.14),
-		"bark": Color(0.16, 0.11, 0.06)},
-	"spruce": {"height_m": 21.0, "crown_m": 6.0, "trunk_cm": 50.0,
-		"crown_base_pct": 5.0, "archetype": "conical",
-		"top": Color(0.10, 0.26, 0.15), "bottom": Color(0.09, 0.17, 0.09),
-		"highlight": Color(0.19, 0.35, 0.18),
-		"bark": Color(0.14, 0.10, 0.06)},
-	"cedar": {"height_m": 15.0, "crown_m": 8.5, "trunk_cm": 65.0,
-		"crown_base_pct": 10.0, "archetype": "conical",
-		"top": Color(0.16, 0.28, 0.14), "bottom": Color(0.15, 0.19, 0.09),
-		"highlight": Color(0.30, 0.42, 0.18),
-		"bark": Color(0.20, 0.12, 0.08)},
-	"fir": {"height_m": 23.0, "crown_m": 6.0, "trunk_cm": 55.0,
-		"crown_base_pct": 5.0, "archetype": "conical",
-		"top": Color(0.08, 0.23, 0.14), "bottom": Color(0.08, 0.15, 0.08),
-		"highlight": Color(0.17, 0.33, 0.17),
-		"bark": Color(0.15, 0.10, 0.05)},
-	"redwood": {"height_m": 45.0, "crown_m": 9.0, "trunk_cm": 200.0,
-		"crown_base_pct": 15.0, "archetype": "conical",
+		"top": Color(0.08, 0.22, 0.16), "bottom": Color(0.06, 0.14, 0.10),
+		"highlight": Color(0.18, 0.34, 0.22),
+		"bark": Color(0.34, 0.32, 0.30), "bark_style": "smooth", "moss_affinity": 0.3},
+	# Douglas-fir: the tall one of the PNW lowland forest — long clear bole in
+	# a stand, down-swept lower boughs, thick corky furrowed bark.
+	"douglas_fir": {"height_m": 42.0, "crown_m": 10.0, "trunk_cm": 110.0,
+		"crown_base_pct": 32.0, "archetype": "conical",
+		"top": Color(0.10, 0.22, 0.10), "bottom": Color(0.07, 0.14, 0.07),
+		"highlight": Color(0.24, 0.36, 0.14),
+		"bark": Color(0.26, 0.18, 0.12), "bark_style": "corky", "moss_affinity": 0.35},
+	# Western hemlock: nodding leader, drooping feathery sprays, flaky bark.
+	# `droop` is the conifer builder's bough hang (0.12 = neutral).
+	"hemlock": {"height_m": 32.0, "crown_m": 9.0, "trunk_cm": 80.0,
+		"crown_base_pct": 14.0, "archetype": "conical", "droop": 0.62,
+		"top": Color(0.09, 0.23, 0.14), "bottom": Color(0.06, 0.15, 0.09),
+		"highlight": Color(0.18, 0.34, 0.18),
+		"bark": Color(0.32, 0.21, 0.15), "bark_style": "flaky", "moss_affinity": 0.55},
+	"redwood": {"height_m": 60.0, "crown_m": 11.0, "trunk_cm": 250.0,
+		"crown_base_pct": 30.0, "archetype": "conical",
 		"top": Color(0.13, 0.29, 0.13), "bottom": Color(0.12, 0.19, 0.08),
 		"highlight": Color(0.25, 0.40, 0.16),
-		"bark": Color(0.28, 0.12, 0.08)},
+		"bark": Color(0.42, 0.20, 0.12), "bark_style": "stringy", "moss_affinity": 0.2},
 	"deciduous": {"height_m": 14.0, "crown_m": 11.0, "trunk_cm": 55.0,
 		"crown_base_pct": 32.0, "archetype": "round",
 		"top": Color(0.18, 0.38, 0.10), "bottom": Color(0.24, 0.16, 0.06),
 		"highlight": Color(0.42, 0.52, 0.16),
 		"bark": Color(0.18, 0.12, 0.07)},
-	"chestnut": {"height_m": 20.0, "crown_m": 16.0, "trunk_cm": 85.0,
-		"crown_base_pct": 30.0, "archetype": "spreading",
-		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.22, 0.14, 0.05),
+	# Sweet chestnut: a massive spreading crown on a short bole, spiral-
+	# furrowed bark, long toothed leaves; autumn yellow to brown.
+	"chestnut": {"height_m": 25.0, "crown_m": 18.0, "trunk_cm": 100.0,
+		"crown_base_pct": 28.0, "archetype": "spreading",
+		"branchiness": 0.6, "crookedness": 0.55, "droop": 0.15, "foliage_density": 0.75,
+		"top": Color(0.16, 0.34, 0.09), "bottom": Color(0.20, 0.15, 0.06),
 		"highlight": Color(0.38, 0.48, 0.14),
-		"bark": Color(0.22, 0.14, 0.08)},
-	"maple": {"height_m": 16.0, "crown_m": 12.0, "trunk_cm": 60.0,
-		"crown_base_pct": 32.0, "archetype": "round",
-		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.28, 0.18, 0.06),
-		"highlight": Color(0.55, 0.35, 0.10),
-		"bark": Color(0.20, 0.14, 0.08)},
-	"cottonwood": {"height_m": 24.0, "crown_m": 14.0, "trunk_cm": 95.0,
-		"crown_base_pct": 35.0, "archetype": "vase",
-		"top": Color(0.22, 0.42, 0.12), "bottom": Color(0.26, 0.20, 0.08),
+		"bark": Color(0.36, 0.30, 0.24), "bark_style": "plated",
+		"autumn": [Color(0.88, 0.74, 0.25), Color(0.75, 0.55, 0.18), Color(0.55, 0.38, 0.14)]},
+	# Bigleaf maple (Acer macrophyllum, Burns & Honkala 1990): 15-30 m, a
+	# broad crown of heavy ascending limbs, often several stems; leaves
+	# 15-30 cm across, the largest of any maple; grey-brown ridged bark
+	# furred with moss and licorice fern; turns yellow to gold.
+	"maple": {"height_m": 22.0, "crown_m": 17.0, "trunk_cm": 85.0,
+		"crown_base_pct": 20.0, "archetype": "round",
+		"branchiness": 0.55, "crookedness": 0.62, "droop": 0.22, "foliage_density": 0.75,
+		"top": Color(0.20, 0.38, 0.10), "bottom": Color(0.16, 0.24, 0.07),
+		"highlight": Color(0.48, 0.52, 0.16),
+		"bark": Color(0.34, 0.30, 0.24), "bark_style": "plated", "moss_affinity": 1.0,
+		"autumn": [Color(0.94, 0.80, 0.24), Color(0.88, 0.64, 0.18), Color(0.62, 0.42, 0.16)]},
+	# Red alder: the pale-barked pioneer broadleaf of every PNW clearing and
+	# creek. 12-24 m, a narrow rounded crown on a straight stem, smooth grey
+	# bark blotched white with lichen, dark toothed oval leaves that drop
+	# green-brown with little autumn colour.
+	"alder": {"height_m": 20.0, "crown_m": 9.0, "trunk_cm": 40.0,
+		"crown_base_pct": 42.0, "archetype": "round",
+		"branchiness": 0.45, "crookedness": 0.25, "droop": 0.1, "foliage_density": 0.6,
+		"top": Color(0.14, 0.30, 0.09), "bottom": Color(0.12, 0.20, 0.07),
+		"highlight": Color(0.32, 0.42, 0.14),
+		"bark": Color(0.62, 0.62, 0.58), "bark_style": "smooth", "moss_affinity": 0.6,
+		"autumn": [Color(0.55, 0.52, 0.22), Color(0.48, 0.40, 0.18), Color(0.38, 0.29, 0.14)]},
+	# Black cottonwood: the tallest broadleaf of the PNW (30-45 m), heavy
+	# ascending limbs, a ragged open top, deeply furrowed grey bark, glossy
+	# leaves silver beneath; clear yellow in autumn.
+	"cottonwood": {"height_m": 32.0, "crown_m": 14.0, "trunk_cm": 110.0,
+		"crown_base_pct": 40.0, "archetype": "vase",
+		"branchiness": 0.4, "crookedness": 0.55, "droop": 0.1, "foliage_density": 0.6,
+		"top": Color(0.20, 0.38, 0.11), "bottom": Color(0.22, 0.26, 0.10),
 		"highlight": Color(0.45, 0.55, 0.18),
-		"bark": Color(0.24, 0.20, 0.14)},
-	"aspen": {"height_m": 15.0, "crown_m": 5.0, "trunk_cm": 25.0,
-		"crown_base_pct": 45.0, "archetype": "columnar",
-		"top": Color(0.25, 0.45, 0.12), "bottom": Color(0.30, 0.22, 0.08),
+		"bark": Color(0.44, 0.42, 0.38), "bark_style": "corky",
+		"autumn": [Color(0.95, 0.86, 0.30), Color(0.90, 0.72, 0.22), Color(0.70, 0.55, 0.20)]},
+	# Quaking aspen: a short narrow crown high on a pale, smooth trunk; round
+	# trembling leaves; famously golden in autumn.
+	"aspen": {"height_m": 18.0, "crown_m": 6.0, "trunk_cm": 30.0,
+		"crown_base_pct": 50.0, "archetype": "columnar",
+		"branchiness": 0.4, "crookedness": 0.3, "droop": 0.15, "foliage_density": 0.55,
+		"top": Color(0.24, 0.44, 0.12), "bottom": Color(0.26, 0.30, 0.10),
 		"highlight": Color(0.55, 0.62, 0.20),
-		"bark": Color(0.85, 0.88, 0.82)},
-	"birch": {"height_m": 14.0, "crown_m": 6.0, "trunk_cm": 28.0,
-		"crown_base_pct": 42.0, "archetype": "columnar",
-		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.24, 0.18, 0.07),
+		"bark": Color(0.80, 0.83, 0.74), "bark_style": "smooth",
+		"autumn": [Color(0.99, 0.86, 0.20), Color(0.97, 0.70, 0.12), Color(0.90, 0.45, 0.10)]},
+	# Birch (paper / silver): a narrow oval crown, slender twigs that hang,
+	# small toothed triangular leaves, white bark; bright yellow in autumn.
+	"birch": {"height_m": 18.0, "crown_m": 7.0, "trunk_cm": 30.0,
+		"crown_base_pct": 38.0, "archetype": "columnar",
+		"branchiness": 0.65, "crookedness": 0.35, "droop": 0.65, "foliage_density": 0.55,
+		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.20, 0.26, 0.09),
 		"highlight": Color(0.40, 0.52, 0.18),
-		"bark": Color(0.92, 0.92, 0.90)},
-	"beech": {"height_m": 19.0, "crown_m": 14.0, "trunk_cm": 75.0,
-		"crown_base_pct": 30.0, "archetype": "spreading",
-		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
+		"bark": Color(0.92, 0.92, 0.90), "bark_style": "smooth",
+		"autumn": [Color(0.98, 0.86, 0.25), Color(0.95, 0.75, 0.18), Color(0.85, 0.60, 0.15)]},
+	# Beech: a broad dense dome of flat leaf layers, smooth elephant-grey
+	# bark; copper-bronze in autumn (the dead leaves hang on all winter).
+	"beech": {"height_m": 25.0, "crown_m": 16.0, "trunk_cm": 80.0,
+		"crown_base_pct": 25.0, "archetype": "spreading",
+		"branchiness": 0.7, "crookedness": 0.35, "droop": 0.2, "foliage_density": 0.85,
+		"top": Color(0.15, 0.36, 0.10), "bottom": Color(0.14, 0.22, 0.07),
 		"highlight": Color(0.38, 0.50, 0.15),
-		"bark": Color(0.35, 0.30, 0.22)},
+		"bark": Color(0.55, 0.54, 0.50), "bark_style": "smooth",
+		"autumn": [Color(0.85, 0.62, 0.22), Color(0.78, 0.45, 0.15), Color(0.62, 0.30, 0.12)]},
 	"apple": {"height_m": 6.0, "crown_m": 6.5, "trunk_cm": 35.0,
 		"crown_base_pct": 25.0, "archetype": "round",
-		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.28, 0.16, 0.06),
+		"branchiness": 0.6, "crookedness": 0.75, "droop": 0.25, "foliage_density": 0.7,
+		"top": Color(0.22, 0.42, 0.10), "bottom": Color(0.20, 0.24, 0.08),
 		"highlight": Color(0.55, 0.25, 0.18),
-		"bark": Color(0.22, 0.14, 0.08)},
-	"pear": {"height_m": 8.0, "crown_m": 5.5, "trunk_cm": 32.0,
+		"bark": Color(0.30, 0.24, 0.18), "bark_style": "flaky",
+		"autumn": [Color(0.92, 0.80, 0.25), Color(0.85, 0.55, 0.18), Color(0.70, 0.30, 0.12)]},
+	"pear": {"height_m": 9.0, "crown_m": 5.5, "trunk_cm": 32.0,
 		"crown_base_pct": 22.0, "archetype": "vase",
-		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.26, 0.15, 0.05),
+		"branchiness": 0.55, "crookedness": 0.4, "droop": 0.1, "foliage_density": 0.7,
+		"top": Color(0.20, 0.40, 0.10), "bottom": Color(0.18, 0.22, 0.07),
 		"highlight": Color(0.50, 0.55, 0.18),
-		"bark": Color(0.20, 0.13, 0.07)},
+		"bark": Color(0.26, 0.20, 0.14), "bark_style": "plated",
+		"autumn": [Color(0.92, 0.62, 0.18), Color(0.85, 0.32, 0.12), Color(0.65, 0.12, 0.10)]},
 	"orange": {"height_m": 5.0, "crown_m": 4.5, "trunk_cm": 25.0,
 		"crown_base_pct": 25.0, "archetype": "round",
 		"top": Color(0.12, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.06),
@@ -100,6 +163,15 @@ const SPECS := {
 	"shrub": {"width": 1.4, "height": 1.15,
 		"top": Color(0.12, 0.24, 0.08), "bottom": Color(0.16, 0.14, 0.06),
 		"highlight": Color(0.28, 0.38, 0.14)},
+	# Himalayan blackberry thicket: arching canes in a dense mound, dark
+	# glossy leaves with a red cast on the canes.
+	# Salal: the waist-high glossy evergreen carpet under coast conifers.
+	"salal": {"width": 1.8, "height": 1.0,
+		"top": Color(0.08, 0.22, 0.08), "bottom": Color(0.06, 0.13, 0.05),
+		"highlight": Color(0.20, 0.34, 0.12)},
+	"blackberry": {"width": 2.6, "height": 1.5,
+		"top": Color(0.10, 0.24, 0.08), "bottom": Color(0.14, 0.11, 0.06),
+		"highlight": Color(0.30, 0.20, 0.12)},
 	"cactus": {"width": 0.55, "height": 1.80,
 		"top": Color(0.18, 0.38, 0.16), "bottom": Color(0.14, 0.28, 0.12),
 		"highlight": Color(0.30, 0.48, 0.22)},
@@ -155,6 +227,17 @@ const SPECS := {
 		"top": Color(0.16, 0.32, 0.12), "bottom": Color(0.12, 0.24, 0.09),
 		"highlight": Color(0.42, 0.50, 0.20),
 		"bark": Color(0.40, 0.30, 0.20)},
+	# Western sword fern: a palm-builder rosette with no trunk (`fern` turns
+	# the two frond rings into an upright arching clump). width = clump span.
+	# Bracken: tall, bright, triangular fronds that brown off in autumn.
+	"bracken": {"width": 2.0, "height": 0.08, "trunk_w": 0.03, "fern": true,
+		"top": Color(0.20, 0.40, 0.12), "bottom": Color(0.14, 0.28, 0.08),
+		"highlight": Color(0.38, 0.52, 0.18),
+		"bark": Color(0.30, 0.22, 0.12)},
+	"sword_fern": {"width": 1.5, "height": 0.06, "trunk_w": 0.03, "fern": true,
+		"top": Color(0.09, 0.27, 0.09), "bottom": Color(0.07, 0.18, 0.06),
+		"highlight": Color(0.20, 0.40, 0.14),
+		"bark": Color(0.18, 0.14, 0.08)},
 	"fan_palm": {"width": 4.5, "height": 8.0, "trunk_w": 0.45,
 		"top": Color(0.15, 0.35, 0.13), "bottom": Color(0.11, 0.26, 0.09),
 		"highlight": Color(0.38, 0.52, 0.20),
@@ -166,17 +249,29 @@ const SPECS := {
 	"prickly_pear": {"width": 1.6, "height": 1.2,
 		"top": Color(0.19, 0.38, 0.16), "bottom": Color(0.14, 0.28, 0.12),
 		"highlight": Color(0.36, 0.52, 0.24)},
-	# --- Phase 5: tropical / food broadleaf variants (deciduous builder) ---
-	"walnut": {"height_m": 18.0, "crown_m": 14.0, "trunk_cm": 80.0,
-		"crown_base_pct": 32.0, "archetype": "spreading",
-		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.22, 0.16, 0.06),
+	"walnut": {"height_m": 22.0, "crown_m": 18.0, "trunk_cm": 80.0,
+		"crown_base_pct": 30.0, "archetype": "spreading",
+		"branchiness": 0.4, "crookedness": 0.5, "droop": 0.15, "foliage_density": 0.55,
+		"top": Color(0.17, 0.36, 0.10), "bottom": Color(0.18, 0.22, 0.07),
 		"highlight": Color(0.40, 0.50, 0.16),
-		"bark": Color(0.24, 0.18, 0.12)},
-	"olive": {"height_m": 6.0, "crown_m": 6.0, "trunk_cm": 50.0,
+		"bark": Color(0.26, 0.22, 0.18), "bark_style": "corky",
+		"autumn": [Color(0.92, 0.82, 0.30), Color(0.80, 0.66, 0.22), Color(0.55, 0.45, 0.18)]},
+	# Oregon white oak (Garry oak, Quercus garryana): the oak of PNW prairie
+	# edges — 15-25 m, a broad rounded crown of crooked heavy limbs, deeply
+	# lobed leathery leaves, grey checkered bark; turns brown in autumn.
+	"oak": {"height_m": 18.0, "crown_m": 14.0, "trunk_cm": 80.0,
+		"crown_base_pct": 25.0, "archetype": "spreading",
+		"branchiness": 0.55, "crookedness": 0.85, "droop": 0.1, "foliage_density": 0.7,
+		"top": Color(0.16, 0.32, 0.11), "bottom": Color(0.14, 0.20, 0.08),
+		"highlight": Color(0.36, 0.46, 0.15),
+		"bark": Color(0.48, 0.46, 0.42), "bark_style": "plated", "moss_affinity": 0.7,
+		"autumn": [Color(0.70, 0.55, 0.25), Color(0.60, 0.40, 0.17), Color(0.46, 0.28, 0.12)]},
+	"olive": {"height_m": 7.0, "crown_m": 6.5, "trunk_cm": 50.0,
 		"crown_base_pct": 26.0, "archetype": "round",
-		"top": Color(0.28, 0.38, 0.22), "bottom": Color(0.22, 0.28, 0.16),
-		"highlight": Color(0.55, 0.60, 0.38),
-		"bark": Color(0.32, 0.28, 0.22)},
+		"branchiness": 0.55, "crookedness": 0.9, "droop": 0.25, "foliage_density": 0.65,
+		"top": Color(0.30, 0.38, 0.24), "bottom": Color(0.26, 0.30, 0.20),
+		"highlight": Color(0.58, 0.62, 0.42),
+		"bark": Color(0.40, 0.37, 0.32), "bark_style": "plated"},
 	"mango": {"height_m": 12.0, "crown_m": 10.0, "trunk_cm": 55.0,
 		"crown_base_pct": 28.0, "archetype": "round",
 		"top": Color(0.10, 0.30, 0.09), "bottom": Color(0.14, 0.20, 0.07),
@@ -198,6 +293,23 @@ const SPECS := {
 		"highlight": Color(0.48, 0.54, 0.20),
 		"bark": Color(0.26, 0.20, 0.14)},
 }
+
+
+## Material-settings key: this pine-family foliage material is for the spray
+## conifer (value = VegConiferBuilder needle style).
+const KEY_CONIFER_SPRAY := "_conifer_spray"
+## Material-settings key: this deciduous foliage material is for the leaf
+## sprays (value = the species whose VegBroadleafBuilder form draws them).
+const KEY_LEAF_SPRAY := "_leaf_spray"
+## Style key: "sprays" (default, VegBroadleafBuilder) or "shells" (the old
+## lumpy leaf-shell ellipsoids).
+const KEY_LEAF_BUILDER := "deciduous_leaf_builder"
+## The four character macros a species may carry in SPECS. A named species
+## takes its own value; a family-wide edit SHIFTS it by the same amount
+## (as the ratio rule does for the dims), so "make every broadleaf
+## droopier" still works without turning a birch into an oak.
+const SPECIES_MACROS: Array[String] = ["branchiness", "crookedness", "droop",
+	"foliage_density"]
 
 
 ## Canopy LOD tiers — deciduous: NEAR = leaf shells, FAR = billboards.
@@ -452,7 +564,11 @@ static func _build_material_for_species(species: String, settings: Dictionary) -
 			spec = _grass_field_spec(s, species)
 	var mat := ShaderMaterial.new()
 	mat.shader = FOLIAGE_SHADER
-	if family == "deciduous":
+	if family == "deciduous" and s.has(KEY_LEAF_SPRAY):
+		var lsp := str(s[KEY_LEAF_SPRAY])
+		mat.set_shader_parameter("albedo_tex", VegBroadleafBuilder.leaf_texture(
+			spec, VegBroadleafBuilder.form_for(lsp), absi(lsp.hash()) % 100000))
+	elif family == "deciduous":
 		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, "deciduous"))
 	elif family == "palm":
 		mat.set_shader_parameter("albedo_tex", _build_palm_frond_texture(spec))
@@ -460,9 +576,37 @@ static func _build_material_for_species(species: String, settings: Dictionary) -
 		mat.set_shader_parameter("albedo_tex", _build_cactus_texture(spec, species))
 	elif family.begins_with("grass_"):
 		mat.set_shader_parameter("albedo_tex", _build_grass_blade_texture(spec))
+	elif family == "pine" and s.has(KEY_CONIFER_SPRAY):
+		mat.set_shader_parameter("albedo_tex", VegConiferBuilder.spray_texture(
+			spec, str(s[KEY_CONIFER_SPRAY]), int(s.get("_conifer_seed", 0))))
 	else:
 		mat.set_shader_parameter("albedo_tex", _build_cluster_foliage_texture(spec, family))
 	_apply_foliage_uniforms(mat, family, s)
+	if family == "deciduous":
+		apply_autumn_palette(mat, autumn_palette(str(s.get("_variant_species", species)), s))
+	if family == "deciduous" and s.has(KEY_LEAF_SPRAY):
+		# Leaf sprays: shading, wind and leaf fall key on the vertex COLOR the
+		# builder writes (depth in the crown / height / per-spray seed), not on
+		# a card's UV.y; the crown-volume normal is already in the geometry.
+		mat.set_shader_parameter("spray_mode", true)
+		mat.set_shader_parameter("canopy_roundness",
+			clampf(float(s.get("canopy_roundness", 0.4)), 0.0, 1.0) * 0.5)
+		mat.set_shader_parameter("trunk_uv_cutoff", 0.0)
+		mat.set_shader_parameter("lean_amount", 0.0)
+		# Sprays read deeper in the crown than cards: 1.4x the slider (the
+		# default 0.35 -> 0.49), so the slider still moves it both ways.
+		mat.set_shader_parameter("ao_strength",
+			clampf(float(s.get("ao_strength", 0.35)) * 1.4, 0.0, 1.0))
+	if family == "pine" and s.has(KEY_CONIFER_SPRAY):
+		# Sprays are real geometry: none of the whorl-card tricks (the fur
+		# blobs, the per-tier spin, the cone-arc alpha) apply, and the sprays'
+		# normals already shape the crown's lighting.
+		mat.set_shader_parameter("fur_strength", 0.0)
+		mat.set_shader_parameter("whorl_variation_strength", 0.0)
+		mat.set_shader_parameter("cone_sharpness", 0.0)
+		mat.set_shader_parameter("canopy_roundness",
+			clampf(float(s.get("canopy_roundness", 0.4)), 0.0, 1.0) * 0.45)
+		mat.set_shader_parameter("trunk_uv_cutoff", 0.0)
 	_configure_foliage_cutout_shadow(mat)
 	return mat
 
@@ -486,9 +630,22 @@ static func _build_bark_material_for_species(species: String, settings: Dictiona
 			spec = _pine_spec(s, species)
 		_:
 			spec = SPECS.get(species, SPECS.get(family, SPECS["shrub"]))
+	# Paint the bark in the VARIANT's own colour and pattern (cedar's stringy
+	# red, alder's pale lichen) — it used to be the family's one texture tinted.
+	var vs := str(settings.get("_variant_species", species))
+	if SPECS.has(vs) and (SPECS[vs] as Dictionary).has("bark"):
+		spec = (spec as Dictionary).duplicate()
+		spec["bark"] = SPECS[vs]["bark"]
+		spec["bark_style"] = (SPECS[vs] as Dictionary).get("bark_style", "")
 	var mat := ShaderMaterial.new()
 	mat.shader = BARK_SHADER
 	mat.set_shader_parameter("albedo_tex", _build_bark_texture(spec))
+	# Trunk moss: the style's `bark_moss` (0..1) x the species' affinity
+	# (bigleaf maple wears a pelt, pine almost none).
+	var moss := clampf(float(s.get("bark_moss", 0.0))
+		* float((SPECS.get(vs, {}) as Dictionary).get("moss_affinity", 0.3)), 0.0, 1.0)
+	mat.set_shader_parameter("moss_amount", moss)
+	mat.set_shader_parameter("moss_height_m", float(s.get("bark_moss_height_m", 6.0)))
 	# Mature stem radius (cm diameter → m radius): the growth shader scales
 	# vertices inside it by GIRTH and the branches beyond it by crown width.
 	if family == "deciduous" or family == "pine":
@@ -599,13 +756,17 @@ static func _deciduous_spec(settings: Dictionary, species: String = "deciduous")
 	out["crown_base"] = crown_base
 	out["archetype"] = archetype
 	var sc := VegTreeArchetypes.builder_params(archetype,
-		float(settings.get("deciduous_branchiness", 0.55)),
-		float(settings.get("deciduous_crookedness", 0.45)),
-		float(settings.get("deciduous_droop", 0.15)),
-		int(round(float(settings.get("deciduous_variant_seed", 0)))))
+		_species_macro(settings, species, base, "branchiness", 0.55),
+		_species_macro(settings, species, base, "crookedness", 0.45),
+		_species_macro(settings, species, base, "droop", 0.15),
+		(int(round(float(settings.get("deciduous_variant_seed", 0))))
+			+ 3 * int(settings.get("deciduous_variant_index", 0))) % 10)
 	out.merge(sc, true)
-	var fol := VegTreeArchetypes.foliage_params(
-		float(settings.get("deciduous_foliage_density", 0.65)))
+	var fol_d := _species_macro(settings, species, base, "foliage_density", 0.65)
+	out["foliage_density"] = fol_d
+	out["species"] = species
+	out["variant_index"] = int(settings.get("deciduous_variant_index", 0))
+	var fol := VegTreeArchetypes.foliage_params(fol_d)
 	out["leaf_density"] = _derived_or_user(settings, "deciduous_leaf_density",
 		float(fol["leaf_density"]))
 	out["leaf_gap"] = _derived_or_user(settings, "deciduous_leaf_gap",
@@ -625,6 +786,23 @@ static func _deciduous_spec(settings: Dictionary, species: String = "deciduous")
 	# small residual from clump overhang / the radial growth fence.
 	out["width"] = crown_w
 	return out
+
+
+## One character macro for a deciduous species: the species' own SPECS value
+## shifted by however far the family-wide value sits from its default, unless
+## the player set a per-species override (then that, as is).
+static func _species_macro(settings: Dictionary, species: String, base: Dictionary,
+		macro: String, fallback: float) -> float:
+	var key := "deciduous_%s" % macro
+	var fam := float(settings.get(key, fallback))
+	if species == "deciduous" or not base.has(macro):
+		return fam
+	var overs: Variant = settings.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
+	if overs is Dictionary and (overs as Dictionary).get(species) is Dictionary \
+			and ((overs as Dictionary)[species] as Dictionary).has(macro):
+		return fam
+	var d0 := float(VegetationStyleConfig.defaults().get(key, fallback))
+	return clampf(float(base[macro]) + (fam - d0), 0.0, 1.0)
 
 
 ## Internal-settings adapter: injects the archetype/macro-derived values into
@@ -695,6 +873,31 @@ static func _pine_spec(settings: Dictionary, species: String = "pine") -> Dictio
 	out["whorl_count"] = _derived_or_user(settings, "pine_whorl_count",
 		round(lerpf(5.0, 12.0, b)))
 	out["bough_scale"] = _derived_or_user(settings, "pine_bough_scale", 1.0)
+	# Crown base (% of height where the boughs start) and bough droop. The
+	# whorl layout ignored both until 2026-10-15; the defaults (every SPECS
+	# conifer under 20 %, droop 0.12) reproduce the old layout exactly.
+	out["crown_base"] = clampf(float(settings.get("pine_crown_base_pct",
+		base.get("crown_base_pct", 8.0))), 0.0, 80.0) / 100.0
+	out["droop"] = _derived_or_user(settings, "pine_droop",
+		float(base.get("droop", 0.12)))
+	out["species"] = species
+	out["branchiness"] = b
+	# The Tune-look sliders the spray builder reads (2026-10-15: they used to
+	# reach only the whorl-card builder and did nothing to a spray conifer).
+	# Each is NEUTRAL at its default, so an untouched style is the form.
+	out["whorl_default"] = round(lerpf(5.0, 12.0, b))
+	out["whorl_spacing"] = float(settings.get("pine_whorl_spacing", 1.0))
+	out["whorl_jitter"] = float(settings.get("pine_whorl_jitter", 0.08))
+	out["whorl_variation"] = float(settings.get("pine_whorl_variation", 0.32))
+	out["crookedness"] = float(settings.get("pine_crookedness", 0.2))
+	out["foliage_density"] = float(settings.get("pine_foliage_density", 0.6))
+	out["trunk_taper"] = float(settings.get("pine_trunk_taper", 0.38))
+	# The conifer builder's jitter seed: species + the style's variant seed
+	# (VegetationRuntime steps it per instance variant, so a stand mixes 3
+	# different trees of each species).
+	out["seed"] = absi(species.hash()) % 100000 \
+		+ int(round(float(settings.get("pine_variant_seed", 0.0)) * 7919.0)) \
+		+ 104729 * int(settings.get("pine_variant_index", 0))
 	return out
 
 
@@ -785,12 +988,17 @@ static func _build_deciduous_mesh(spec: Dictionary, settings_in: Dictionary) -> 
 	# from the NEAR mesh, so a disagreeing silhouette would pop at the LOD
 	# boundary. (The old flat branch-card fan is GONE — it was the "weird thin
 	# curving branches" the billboard tier showed at every distance.)
+	var height_m := float(spec.get("height_m", trunk_h + crown_h))
+	var crown_m := float(spec.get("crown_m", crown_w))
+	var use_sprays := is_near_lod \
+		and str(settings_in.get(KEY_LEAF_BUILDER, "sprays")) != "shells"
+	if use_sprays:
+		return _build_deciduous_spray_mesh(spec, settings, trunk_verts, trunk_uvs,
+			trunk_normals, trunk_indices)
 	var tips := _build_branch_skeleton(trunk_verts, trunk_uvs, trunk_normals,
 		trunk_indices, trunk_w, trunk_h, crown_w, crown_h, settings, is_near_lod)
 	var clusters := _clusters_from_tips(tips, crown_w, crown_h, trunk_h, settings)
 
-	var height_m := float(spec.get("height_m", trunk_h + crown_h))
-	var crown_m := float(spec.get("crown_m", crown_w))
 	var mesh := ArrayMesh.new()
 
 	if is_near_lod:
@@ -868,6 +1076,105 @@ static func _build_deciduous_mesh(spec: Dictionary, settings_in: Dictionary) -> 
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, canopy_arr)
 	mesh.surface_set_material(1, material_for_species("deciduous", settings))
 	return mesh
+
+
+## The NEAR broadleaf (2026-10-15): trunk + space-colonization limbs with
+## leaf SPRAYS on the outer twigs (VegBroadleafBuilder) instead of the leaf
+## shells. The skeleton's reach is pulled in by the spray length so the
+## leaves, not the twig tips, land on the authored crown width.
+static func _build_deciduous_spray_mesh(spec: Dictionary, settings: Dictionary,
+		trunk_verts: PackedVector3Array, trunk_uvs: PackedVector2Array,
+		trunk_normals: PackedVector3Array, trunk_indices: PackedInt32Array) -> ArrayMesh:
+	var trunk_w := float(spec["trunk_w"])
+	var trunk_h := float(spec["trunk_h"])
+	var crown_w := float(spec["width"])
+	var crown_h := float(spec["height"])
+	var species := str(spec.get("species", "deciduous"))
+	var form := VegBroadleafBuilder.form_for(species).duplicate()
+	# Tune-look sliders on the leaf sprays (each neutral at its default):
+	# Leaf size scales the spray (its leaves with it), Clumps how much of the
+	# leaf bunches on the twig ends.
+	form["spray_m"] = float(form["spray_m"]) \
+		* clampf(float(settings.get("deciduous_leaf_size", 0.95)) / 0.95, 0.3, 1.3)
+	form["clump"] = clampf(float(form["clump"])
+		* float(settings.get("deciduous_cluster_count", 12.0)) / 12.0, 0.0, 0.95)
+	var spray_l := VegBroadleafBuilder.spray_length(form, crown_w)
+	var s := settings.duplicate()
+	s["deciduous_branch_reach"] = clampf(1.0 - spray_l * 0.3 / maxf(crown_w * 0.5, 0.5),
+		0.8, 1.0)
+	var nodes := {}
+	_build_branch_skeleton(trunk_verts, trunk_uvs, trunk_normals, trunk_indices,
+		trunk_w, trunk_h, crown_w, crown_h, s, true, nodes)
+	# Quality tier (its leaf-shell count, 3 / 4 / 6) and the foliage macro
+	# scale how much leaf the crown carries.
+	# (The adapter already folded the foliage macro's shell_delta into the
+	# shell count — take it back out so the macro counts once.)
+	var shells := float(settings.get("deciduous_leaf_shell_count", 4.0)) \
+			- float(spec.get("shell_delta", 0))
+	var density := clampf(shells / 4.0, 0.6, 1.6) * lerpf(0.7, 1.3, float(spec.get("foliage_density", 0.65)))
+	# Leaf density, when the player set it, scales the leaf count against the
+	# value the Foliage macro would have derived.
+	if _user_set(settings, "deciduous_leaf_density"):
+		var derived := float(VegTreeArchetypes.foliage_params(
+			float(spec.get("foliage_density", 0.65)))["leaf_density"])
+		density *= clampf(float(settings.get("deciduous_leaf_density", derived))
+			/ maxf(derived, 1.0), 0.3, 3.0)
+	var seed := absi(species.hash()) % 100000 + 7919 * int(spec.get("variant_index", 0)) \
+		+ int(spec.get("sc_seed", 0)) * 131
+	var fol := VegBroadleafBuilder.build_sprays(nodes, form, crown_w, density, seed)
+	var norm_arrays: Array = [trunk_verts, fol[0]]
+	_normalize_tree_surfaces(norm_arrays, float(spec.get("height_m", trunk_h + crown_h)),
+		float(spec.get("crown_m", crown_w)))
+	var mesh := ArrayMesh.new()
+	var t_arr: Array = []
+	t_arr.resize(Mesh.ARRAY_MAX)
+	t_arr[Mesh.ARRAY_VERTEX] = norm_arrays[0]
+	t_arr[Mesh.ARRAY_TEX_UV] = trunk_uvs
+	t_arr[Mesh.ARRAY_NORMAL] = trunk_normals
+	t_arr[Mesh.ARRAY_INDEX] = trunk_indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, t_arr)
+	mesh.surface_set_material(0, bark_material_for_species("deciduous", settings))
+	if (fol[0] as PackedVector3Array).size() > 0:
+		var f_arr: Array = []
+		f_arr.resize(Mesh.ARRAY_MAX)
+		f_arr[Mesh.ARRAY_VERTEX] = norm_arrays[1]
+		f_arr[Mesh.ARRAY_TEX_UV] = fol[1]
+		f_arr[Mesh.ARRAY_NORMAL] = fol[2]
+		f_arr[Mesh.ARRAY_COLOR] = fol[3]
+		f_arr[Mesh.ARRAY_INDEX] = fol[4]
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, f_arr)
+		var mat_settings := settings.duplicate(true)
+		mat_settings[KEY_LEAF_SPRAY] = species
+		mesh.surface_set_material(1, material_for_species("deciduous", mat_settings))
+	return mesh
+
+
+## Autumn colours for a species as [warm, orange, hot] (VegetationCardFactory
+## SPECS "autumn"), else the style's own three, else empty (shader default).
+## A per-species override in the style wins over SPECS.
+static func autumn_palette(species: String, settings: Dictionary) -> Array:
+	var overs: Variant = settings.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
+	if overs is Dictionary and (overs as Dictionary).get(species) is Dictionary:
+		var o: Dictionary = (overs as Dictionary)[species]
+		if o.get("autumn_warm") is Color and o.get("autumn_orange") is Color \
+				and o.get("autumn_hot") is Color:
+			return [o["autumn_warm"], o["autumn_orange"], o["autumn_hot"]]
+	var spec: Dictionary = SPECS.get(species, {})
+	if spec.get("autumn") is Array and (spec["autumn"] as Array).size() == 3:
+		return (spec["autumn"] as Array).duplicate()
+	if settings.get("autumn_warm") is Color and settings.get("autumn_orange") is Color \
+			and settings.get("autumn_hot") is Color:
+		return [settings["autumn_warm"], settings["autumn_orange"], settings["autumn_hot"]]
+	return []
+
+
+static func apply_autumn_palette(mat: ShaderMaterial, palette: Array) -> void:
+	if mat == null or palette.size() != 3:
+		return
+	var names := ["autumn_warm", "autumn_orange", "autumn_hot"]
+	for i in 3:
+		var c: Color = palette[i]
+		mat.set_shader_parameter(names[i], Vector3(c.r, c.g, c.b))
 
 
 ## Nested lumpy ellipsoid shells wrapping the crown. Each vertex stores the
@@ -975,6 +1282,8 @@ static func leaf_canopy_material_for_species(species: String, settings: Dictiona
 	var mat := ShaderMaterial.new()
 	mat.shader = LEAF_CANOPY_SHADER
 	_apply_leaf_canopy_uniforms(mat, species, spec, settings)
+	apply_autumn_palette(mat, autumn_palette(str(settings.get("_variant_species", species)),
+		settings))
 	_configure_cutout_shadow(mat, 0.35)
 	return mat
 
@@ -1195,7 +1504,7 @@ const _BRANCH_SEED := 0x2f9a37
 static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2Array,
 		normals: PackedVector3Array, indices: PackedInt32Array,
 		trunk_w: float, trunk_h: float, crown_w: float, crown_h: float,
-		settings: Dictionary, emit: bool = true) -> Array:
+		settings: Dictionary, emit: bool = true, out_nodes: Dictionary = {}) -> Array:
 	var detail := clampf(float(settings.get("deciduous_branch_levels", 3.0)), 1.0, 5.0)
 	var primaries := clampi(int(round(float(settings.get("deciduous_branch_count", 5)))), 2, 12)
 	var max_children := clampi(int(round(float(settings.get("deciduous_branch_split", 3)))), 2, 4)
@@ -1394,6 +1703,15 @@ static func _build_branch_skeleton(verts: PackedVector3Array, uvs: PackedVector2
 		if n_parent[i] >= 0:
 			tipw[n_parent[i]] += tipw[i]
 	tips.reverse()  # creation order, so downstream stride-sampling spans the crown
+	# The whole skeleton for the leaf sprays (VegBroadleafBuilder hangs leaves
+	# on the outer twigs, which needs every segment, not just the tips).
+	out_nodes["pos"] = n_pos
+	out_nodes["parent"] = n_parent
+	out_nodes["depth"] = n_depth
+	out_nodes["tipw"] = tipw
+	out_nodes["y0"] = y0
+	out_nodes["y1"] = y1
+	out_nodes["env_r"] = env_r
 	if not emit:
 		return tips
 	# Thickness slider shapes the taper exponent (chunky limbs vs wispy twigs)
@@ -1788,14 +2106,20 @@ static func _pine_cluster_layout(card_w: float, card_h: float,
 	var v_spacing := maxf(float(settings.get("pine_whorl_spacing", 1.0)), 0.45)
 	var jitter := float(settings.get("pine_whorl_jitter", 0.08))
 	var y_curve := 1.0 / v_spacing
+	# The lowest whorl sits at 20 % of the height unless the crown base asks
+	# for a longer clear bole (a stand-grown Douglas-fir); droop past the
+	# generic 0.12 hangs each bough card lower and longer (hemlock / cedar).
+	var lo := maxf(0.20, float(settings.get("_pine_crown_base", 0.0)))
+	var hang := clampf((float(settings.get("_pine_droop", 0.12)) - 0.12) / 0.88, 0.0, 1.0)
 	var out: Array = []
 	for i in tiers:
 		var t := float(i) / maxf(float(tiers - 1), 1.0)
 		var fi := float(i)
 		var y_norm := pow(t, y_curve)
-		var y := card_h * lerpf(0.20, 0.94, y_norm)
-		var w := card_w * lerpf(1.08, 0.28, t) * bough_scale
-		var h := card_h * lerpf(0.32, 0.12, t) * bough_scale
+		var y := card_h * lerpf(lo, 0.94, y_norm)
+		var w := card_w * lerpf(1.08, 0.28, t) * bough_scale * (1.0 - 0.12 * hang)
+		var h := card_h * lerpf(0.32, 0.12, t) * bough_scale * (1.0 + 0.7 * hang)
+		y -= h * 0.2 * hang
 		var wobble := 1.0 + sin(fi * 2.41) * 0.06 * jitter
 		var yaw := fi * TAU / 6.0 + sin(fi * 2.1) * 0.45 * jitter
 		out.append({
@@ -1830,6 +2154,11 @@ static func _shrub_cluster_layout(card_w: float, card_h: float,
 
 
 static func _build_pine_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
+	# 2026-10-15: every conifer is a real trunk + per-species needle sprays
+	# (VegConiferBuilder). `pine_builder: "whorl"` keeps the old crossed-card
+	# whorl stack reachable (a lighter look, or to compare).
+	if str(settings.get("pine_builder", "spray")) != "whorl":
+		return _build_conifer_spray_mesh(spec, settings)
 	var card_w := float(spec["width"])
 	var card_h := float(spec["height"])
 	var trunk_w := float(spec.get("trunk_w", 0.24))
@@ -1851,6 +2180,8 @@ static func _build_pine_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMes
 		lay_settings["pine_whorl_count"] = float(spec["whorl_count"])
 	if spec.has("bough_scale"):
 		lay_settings["pine_bough_scale"] = float(spec["bough_scale"])
+	lay_settings["_pine_crown_base"] = float(spec.get("crown_base", 0.0))
+	lay_settings["_pine_droop"] = float(spec.get("droop", 0.12))
 	var foliage_verts := PackedVector3Array()
 	var foliage_uvs := PackedVector2Array()
 	var foliage_normals := PackedVector3Array()
@@ -1890,6 +2221,41 @@ static func _build_pine_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMes
 		mat_settings["pine_fur_strength"] = float(settings.get("pine_fur_strength", 0.38))
 	else:
 		mat_settings["pine_fur_strength"] = 0.0
+	mesh.surface_set_material(1, material_for_species("pine", mat_settings))
+	return mesh
+
+
+## The real-geometry conifer (VegConiferBuilder): trunk tube + needle sprays,
+## exact-size normalized like every tree, bark + spray materials of THIS species.
+static func _build_conifer_spray_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMesh:
+	var species := str(spec.get("species", settings.get("_variant_species", "pine")))
+	var form := VegConiferBuilder.form_for(species)
+	var built := VegConiferBuilder.build(spec, form, int(spec.get("seed", 0)))
+	var trunk: Array = built["trunk"]
+	var fol: Array = built["foliage"]
+	var norm_arrays: Array = [trunk[0], fol[0]]
+	_normalize_tree_surfaces(norm_arrays, float(spec.get("height_m", 17.0)),
+		float(spec.get("crown_m", 7.0)))
+	var mesh := ArrayMesh.new()
+	var t_arr: Array = []
+	t_arr.resize(Mesh.ARRAY_MAX)
+	t_arr[Mesh.ARRAY_VERTEX] = norm_arrays[0]
+	t_arr[Mesh.ARRAY_TEX_UV] = trunk[1]
+	t_arr[Mesh.ARRAY_NORMAL] = trunk[2]
+	t_arr[Mesh.ARRAY_INDEX] = trunk[3]
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, t_arr)
+	mesh.surface_set_material(0, bark_material_for_species("pine", settings))
+	var f_arr: Array = []
+	f_arr.resize(Mesh.ARRAY_MAX)
+	f_arr[Mesh.ARRAY_VERTEX] = norm_arrays[1]
+	f_arr[Mesh.ARRAY_TEX_UV] = fol[1]
+	f_arr[Mesh.ARRAY_NORMAL] = fol[2]
+	f_arr[Mesh.ARRAY_INDEX] = fol[3]
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, f_arr)
+	var mat_settings := settings.duplicate(true)
+	mat_settings["pine_fur_strength"] = 0.0
+	mat_settings[KEY_CONIFER_SPRAY] = str(form["needle"])
+	mat_settings["_conifer_seed"] = int(spec.get("seed", 0))
 	mesh.surface_set_material(1, material_for_species("pine", mat_settings))
 	return mesh
 
@@ -2007,6 +2373,40 @@ static func _build_bark_texture(spec: Dictionary) -> Texture2D:
 	n_ridge.seed = "bark_ridge".hash()
 	n_ridge.frequency = 0.05
 	var half := float(size) * 0.5
+	# Bark pattern per species (SPECS bark_style). "" is the original texture.
+	#   corky   — Douglas-fir: deep, wide, dark furrows between thick ridges
+	#   stringy — cedar / redwood: fine vertical fibres, little contrast
+	#   flaky   — hemlock / spruce: small scaly patches
+	#   plated  — pine: broad plates split by dark cracks, warm crests
+	#   smooth  — alder / maple / true fir: smooth with pale lichen mottling
+	var style := str(spec.get("bark_style", ""))
+	var rx := 5.5
+	var ry := 0.7
+	var depth := 0.30
+	var lichen := 0.0
+	match style:
+		"corky":
+			rx = 3.2
+			ry = 0.45
+			depth = 0.55
+		"stringy":
+			rx = 15.0
+			ry = 0.22
+			depth = 0.22
+		"flaky":
+			rx = 4.5
+			ry = 2.2
+			depth = 0.34
+		"plated":
+			rx = 2.4
+			ry = 1.1
+			depth = 0.48
+		"smooth":
+			rx = 1.2
+			ry = 1.2
+			depth = 0.08
+			lichen = 0.55
+	var lichen_col := Color(0.62, 0.64, 0.56)
 	for y in size:
 		for x in size:
 			var nx := absf((float(x) - half) / half)
@@ -2015,12 +2415,17 @@ static func _build_bark_texture(spec: Dictionary) -> Texture2D:
 				continue
 			var ncol := (n.get_noise_2d(float(x), float(y)) + 1.0) * 0.5
 			# Ridges: high x-frequency, low y-frequency = vertical furrows.
-			var ridge := (n_ridge.get_noise_2d(float(x) * 5.5, float(y) * 0.7) + 1.0) * 0.5
+			var ridge := (n_ridge.get_noise_2d(float(x) * rx, float(y) * ry) + 1.0) * 0.5
 			var furrow := smoothstep(0.30, 0.62, ridge)
+			if style == "plated":
+				# Cracks: thin dark lines where the ridge field crosses a level.
+				furrow = 1.0 - (1.0 - smoothstep(0.0, 0.06, absf(ridge - 0.5))) * 0.9
 			# Gentler vertical gradient than the old v*0.4 (which crushed the
 			# lower trunk to near-black) + a faint warm lift on ridge crests.
-			var c := bark.lerp(shadow, v * 0.16 + ncol * 0.12 + (1.0 - furrow) * 0.30)
+			var c := bark.lerp(shadow, v * 0.16 + ncol * 0.12 + (1.0 - furrow) * depth)
 			c = c.lerp(Color(bark.r * 1.35, bark.g * 1.28, bark.b * 1.15), furrow * 0.22)
+			if lichen > 0.0:
+				c = c.lerp(lichen_col, smoothstep(0.6, 0.8, ncol) * lichen)
 			c.a = 1.0 if nx < 0.18 else smoothstep(0.22, 0.18, nx)
 			if c.a > 0.05:
 				img.set_pixel(x, y, c)
@@ -2354,6 +2759,22 @@ static func _build_palm_mesh(spec: Dictionary, settings: Dictionary) -> ArrayMes
 	var crown := Vector3(0.0, trunk_h, 0.0)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = species.hash()
+	if bool((SPECS.get(species, {}) as Dictionary).get("fern", false)):
+		# Fern rosette: no trunk to speak of, so the drooping lower ring would
+		# go into the ground. An upright inner ring and an arching outer one,
+		# narrower fronds (a sword fern's pinnae make a slim blade).
+		var fl := spread * 0.56
+		var fw := fl * 0.32
+		var rings := [[62.0, 80.0, 0.8], [36.0, 56.0, 0.95], [12.0, 30.0, 1.0]]
+		for ring in rings.size():
+			var rg: Array = rings[ring]
+			for i in 9:
+				var az := TAU * (float(i) + float(ring) / 3.0) / 9.0 + rng.randf_range(-0.2, 0.2)
+				var pitch := deg_to_rad(rng.randf_range(float(rg[0]), float(rg[1])))
+				var dir := Vector3(cos(az) * cos(pitch), sin(pitch), sin(az) * cos(pitch))
+				_add_frond_quad(fv, fu, fn, fi, crown, dir,
+					fl * float(rg[2]) * rng.randf_range(0.85, 1.1), fw * 0.55, fw)
+		frond_n = 0
 	# Upper arcing ring + a lower drooping ring — the two-tier crown that
 	# makes a palm silhouette read at a glance.
 	for i in frond_n:
@@ -2424,10 +2845,17 @@ static func _build_palm_frond_texture(spec: Dictionary) -> Texture2D:
 	var top: Color = spec["top"]
 	var bottom: Color = spec["bottom"]
 	var highlight: Color = spec["highlight"]
+	# A fern frond fills its card: pinnae from edge to edge, tightly packed,
+	# tapering to a point (a palm frond is a slim rachis in a wide card).
+	var fern := bool(spec.get("fern", false))
+	var reach := 0.96 if fern else 0.46
+	var taper := 0.86 if fern else 0.30
+	var freq := 46.0 if fern else 30.0
+	var gap := -0.6 if fern else -0.15
 	for y in h:
 		var v := float(y) / float(h)
 		# Frond narrows toward the tip.
-		var half_w := (0.46 - v * 0.30) * 0.5
+		var half_w := (reach - v * taper) * 0.5
 		for x in w:
 			var u := (float(x) + 0.5) / float(w) - 0.5
 			var au := absf(u)
@@ -2441,8 +2869,8 @@ static func _build_palm_frond_texture(spec: Dictionary) -> Texture2D:
 				continue
 			# Leaflets: stripes angled away from the rachis; the sin gap makes
 			# the serration. Leaflet phase follows distance along the frond.
-			var leaflet := sin((v * 30.0 + au * 26.0) * PI)
-			if leaflet < -0.15:
+			var leaflet := sin((v * freq + au * 26.0) * PI)
+			if leaflet < gap:
 				continue
 			var lit := bottom.lerp(top, clampf(v * 1.2, 0.0, 1.0))
 			lit = lit.lerp(highlight, clampf(leaflet, 0.0, 1.0) * 0.35)

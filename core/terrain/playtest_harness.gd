@@ -147,6 +147,16 @@ var _harness_world: Dictionary = {}
 ## snapshot/byte-restore, and never touch the player's build.
 var _scratch_world := false
 var _scratch_id := ""
+## --tour-* (the feature tour, --capture=tour): which stops, how fast, cards.
+var _tour_stops: PackedStringArray = PackedStringArray()
+var _tour_chapters: PackedStringArray = PackedStringArray()
+var _tour_world := ""
+var _tour_pace := 1.0
+var _tour_optional := false
+var _tour_cards := true
+var _tour_movie_fps := 0
+var _tour_intro_count := 0
+var _tour_audit := "report"
 
 ## --- Harness run contract (tools/harness.ps1) ---------------------------------
 ## A capture / fix-script run writes into a SANDBOX copy of the user data dir
@@ -171,6 +181,44 @@ var _report: HarnessReport = null
 var _t0_ms := 0
 
 
+## project.godot opens the window MAXIMIZED (window/size/mode = 3), which
+## overrides the engine's `--resolution WxH`: every "720p" capture was really
+## shot at the monitor's size. A harness run gets exactly the size it asked for.
+##
+## Only for the tour (its clicks go through HarnessInput, which posts in
+## viewport coordinates) or with `--exact-resolution`: the older captures post
+## raw window coordinates of their own and were written against the maximized
+## window.
+func _apply_window_resolution() -> void:
+	if not ("tour" in _chain or "--exact-resolution" in OS.get_cmdline_user_args()):
+		var has_size := false
+		for a in OS.get_cmdline_user_args():
+			has_size = has_size or a.begins_with("--window-size=")
+		if not has_size:
+			return
+	var spec := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--window-size="):
+			spec = a.get_slice("=", 1)
+	if spec.is_empty():
+		var eargs := OS.get_cmdline_args()
+		var i := eargs.find("--resolution")
+		if i >= 0 and i + 1 < eargs.size():
+			spec = String(eargs[i + 1])
+	var parts := spec.split("x")
+	if parts.size() != 2:
+		return
+	var want := Vector2i(parts[0].to_int(), parts[1].to_int())
+	if want.x < 320 or want.y < 240:
+		return
+	var win := get_window()
+	if win.mode != Window.MODE_WINDOWED:
+		win.mode = Window.MODE_WINDOWED
+	win.size = want
+	win.move_to_center()
+	print("harness: window %dx%d" % [want.x, want.y])
+
+
 func _ready() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
@@ -179,6 +227,10 @@ func _ready() -> void:
 		return
 	_parse_args(args)
 	_harness_on = not _chain.is_empty() or _assign_facades_count > 0 or _sculpt_test
+	# Harness shots end up in docs / the README: never print the site's real
+	# address or coordinates on screen (the loading screen, Site Report, world
+	# panel). --show-location keeps them for a private debugging run.
+	SitePrivacy.redact = _harness_on and not ("--show-location" in args)
 	if _harness_on:
 		_t0_ms = Time.get_ticks_msec()
 		_report = HarnessReport.new()
@@ -190,6 +242,7 @@ func _ready() -> void:
 			"capture": ",".join(_chain), "at": Time.get_datetime_string_from_system()})
 		if not _guard_ok():
 			return
+		_apply_window_resolution()
 		_apply_test_baseline()
 		_start_watchdog()
 		if not _resolve_launch_target():
@@ -208,6 +261,9 @@ func _ready() -> void:
 	elif _boot_window_wall:
 		_active = true
 		_boot_window_wall_view.call_deferred()
+	elif _menu_chain():
+		_active = true
+		_dispatch.call_deferred()
 
 
 ## The launcher's sandbox marker, or an explicit --persist. Anything else would
@@ -266,11 +322,23 @@ func _apply_test_baseline() -> void:
 ## (Mount Vernon or Walton), loaded through WorldSession so the player's saved
 ## snapshot comes back exactly. Built-in SOAK / Mars only with
 ## --allow-builtin-scene.
+## Every capture in the chain runs on the launch hub (kind "menu").
+func _menu_chain() -> bool:
+	if _chain.is_empty():
+		return false
+	for m in _chain:
+		if str(HarnessRegistry.entry(m).get("kind", "")) != "menu":
+			return false
+	return true
+
+
 func _resolve_launch_target() -> bool:
 	for m in _chain:
 		if not HarnessRegistry.has_mode(m):
 			print("PlaytestHarness: FAIL — unknown capture mode '%s' (known: %s)" % [m, ", ".join(HarnessRegistry.modes())])
 			return false
+	if _menu_chain():
+		return true
 	if not _launch_scene.is_empty() and HarnessRegistry.is_builtin_scene(_launch_scene) and not _allow_builtin:
 		print("PlaytestHarness: FAIL — %s is a built-in imported-mesh scene, not a harness target. " % _launch_scene +
 			"Use --world=mtvernon|walton (or add --allow-builtin-scene if asked to test it).")
@@ -391,7 +459,7 @@ func _dispatch() -> void:
 	for mode in _chain:
 		var e := HarnessRegistry.entry(mode)
 		_capture_mode = mode
-		if str(e.get("kind", "")) != "scene":
+		if str(e.get("kind", "")) != "scene" and str(e.get("kind", "")) != "menu":
 			if _report != null:
 				_report.set_phase("%s: loading the world" % mode)
 			if not await _await_world_ready():
@@ -441,6 +509,14 @@ func _finish(status: String = "", code: int = -1) -> void:
 	_cleanup_scratch_world()
 	if _quit_after or code != 0 or status == "TIMEOUT":
 		get_tree().quit(code)
+
+
+func _csv_arg(a: String) -> PackedStringArray:
+	var out: PackedStringArray = PackedStringArray()
+	for part in a.get_slice("=", 1).split(","):
+		if not part.strip_edges().is_empty():
+			out.append(part.strip_edges().to_lower())
+	return out
 
 
 func _parse_args(args: PackedStringArray) -> void:
@@ -508,6 +584,25 @@ func _parse_args(args: PackedStringArray) -> void:
 			_world_arg = a.get_slice("=", 1).strip_edges()
 		elif a == "--scratch-world":
 			_scratch_world = true
+		elif a.begins_with("--tour-stops="):
+			_tour_stops = _csv_arg(a)
+		elif a.begins_with("--tour-chapters="):
+			_tour_chapters = _csv_arg(a)
+		elif a.begins_with("--tour-world="):
+			_tour_world = HarnessRegistry.canonical_alias(a.get_slice("=", 1))
+		elif a.begins_with("--tour-pace="):
+			var pv := a.get_slice("=", 1).strip_edges().to_lower()
+			_tour_pace = {"fast": 0.55, "normal": 1.0, "slow": 1.6}.get(pv, clampf(pv.to_float(), 0.2, 4.0)) if not pv.is_empty() else 1.0
+		elif a == "--tour-include-optional":
+			_tour_optional = true
+		elif a == "--tour-no-cards":
+			_tour_cards = false
+		elif a.begins_with("--tour-movie-fps="):
+			_tour_movie_fps = a.get_slice("=", 1).to_int()
+		elif a.begins_with("--tour-audit="):
+			_tour_audit = a.get_slice("=", 1).strip_edges().to_lower()
+		elif a.begins_with("--tour-intro-count="):
+			_tour_intro_count = a.get_slice("=", 1).to_int()
 	if not _run_script_path.is_empty() and not ("script" in _chain):
 		_chain.append("script")
 		if _capture_mode.is_empty():
@@ -1528,6 +1623,27 @@ func _dump_hardware_placements(p: LinkageParams, tag: String) -> void:
 ## One PNG per graph-view UI state so an agent can visually review the 2D
 ## systems graph (G view) without a human at the keyboard. Drives the REAL
 ## SystemGraphView handlers (same code paths as clicks/keys), never a mock.
+## After Tidy: every root card's rect and any pair that overlaps — a PNG
+## cannot say whether an overlap is in the layout data or only in the drawing.
+func _graph_tidy_report(sgv: Node) -> void:
+	var drv: Variant = sgv.get("_layout_driver")
+	if drv == null:
+		return
+	var items: Array = (drv as Object).call("scope_items", "root")
+	var bad := 0
+	for i in items.size():
+		var a: Dictionary = items[i]
+		var ra := Rect2(float(a.get("x", 0.0)), float(a.get("y", 0.0)), float(a.get("width", 0.0)), float(a.get("height", 0.0)))
+		print("graph tidy item %s %s @ %s" % [str(a.get("id", "")), str(a.get("type", "")), str(ra)])
+		for j in range(i + 1, items.size()):
+			var b: Dictionary = items[j]
+			var rb := Rect2(float(b.get("x", 0.0)), float(b.get("y", 0.0)), float(b.get("width", 0.0)), float(b.get("height", 0.0)))
+			if ra.intersects(rb):
+				bad += 1
+				print("graph tidy OVERLAP %s / %s" % [str(a.get("id", "")), str(b.get("id", ""))])
+	print("graph tidy: %d layout item(s), %d overlapping pair(s) %s" % [items.size(), bad, "PASS" if bad == 0 else "FAIL"])
+
+
 func _run_graph_capture() -> void:
 	print("PlaytestHarness: graph capture — finding the graph view")
 	var sgv := await _find_graph_view()
@@ -1566,11 +1682,27 @@ func _run_graph_capture() -> void:
 	print("PlaytestHarness: graph capture — graph open, shooting")
 	await _graph_shot(dir, "01_open_as_loaded", manifest)
 
+	# Every shot until the Site Plan step is FREEFORM. The graph reopens in
+	# its saved lens, which on the player's world is usually Site Plan, so
+	# "02_freeform_arranged" and the shots after it were Site Plan for months.
+	if sgv.has_method("_apply_graph_view_mode"):
+		sgv.call("_apply_graph_view_mode", "freeform")
+		await get_tree().create_timer(1.0).timeout
+		await _graph_shot(dir, "01b_freeform", manifest)
+
 	# Auto-arranged freeform layout.
 	if sgv.has_method("_apply_graph_auto_layout"):
 		sgv.call("_apply_graph_auto_layout", true)
 		await get_tree().create_timer(0.5).timeout
 		await _graph_shot(dir, "02_freeform_arranged", manifest)
+	# The force layout (Layout ▾ → Tidy), settled without the glide, on the
+	# player's own graph (sandbox only — test captures never persist).
+	if sgv.has_method("tidy_layout") and bool(sgv.call("tidy_layout", false, true)):
+		if sgv.has_method("_fit_canvas_to_content"):
+			sgv.call("_fit_canvas_to_content")
+		await get_tree().create_timer(0.6).timeout
+		await _graph_shot(dir, "02b_freeform_tidied", manifest)
+		_graph_tidy_report(sgv)
 
 	var canvas: Node = sgv.get("_graph_canvas")
 	var model: Variant = sgv.get("model")
@@ -5853,6 +5985,155 @@ func _settle_s() -> float:
 	return 2.0 if _dispatching else SETTLE_AFTER_LOAD_S
 
 
+# ==================== FEATURE TOUR (--capture=tour) ====================
+# A short visual demo of every mode (core/tour/, one stop per file), with
+# title cards, one clean hero screenshot per stop and tour_manifest.json.
+# tools/tour.ps1 wraps it (stills / live / record) and tools/tour_docs.py
+# turns a run into docs/FEATURES.md + the README gallery. The tour runs on the
+# world it was launched in; --tour-world picks the stops for that world.
+
+func _run_tour_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var label := _shots_label if not _shots_label.is_empty() else "tour"
+	var director := TourDirector.new()
+	director.name = "TourDirector"
+	director.shots_dir = "%s/%s" % [SHOTS_ROOT, label]
+	director.stop_ids = _tour_stops
+	director.chapters = _tour_chapters
+	var w := _tour_world
+	if w.is_empty() and not _world_arg.is_empty():
+		w = HarnessRegistry.canonical_alias(_world_arg)
+	director.world_alias = w if HarnessRegistry.WORLD_ALIASES.has(w) else ""
+	director.world_label = SitePrivacy.place(WorldStore.display_name(_harness_world)) if not _harness_world.is_empty() else ""
+	director.include_optional = _tour_optional
+	director.pace = _tour_pace
+	director.cards_on = _tour_cards
+	director.movie_fps_hint = _tour_movie_fps
+	director.intro_count = _tour_intro_count
+	director.audit_mode = _tour_audit if _tour_audit in ["off", "report", "strict"] else "report"
+	director.report = _report
+	add_child(director)
+	var manifest: Dictionary = await director.run()
+	director.queue_free()
+	print("PlaytestHarness: tour %s — %d of %d stop(s) passed" % [
+		"PASS" if int(manifest.get("passed", 0)) == int(manifest.get("total", 0)) else "FAIL",
+		int(manifest.get("passed", 0)), int(manifest.get("total", 0))])
+	_maybe_quit()
+
+
+## `--capture=modals`: every reachable modal opened, audited, shot and closed
+## (ModalAudit). `--modal-audit=strict` turns audit errors into FAILs. Pass
+## `--window-size=WxH` (harness.ps1 -UserArgs) to check a small screen.
+## --capture=bootcamp: play all twelve Solar Bootcamp levels with real input
+## (BootcampAudit). --bootcamp-audit=strict turns UiAudit errors into FAILs.
+func _run_bootcamp_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	if main != null:
+		if "day_time" in main:
+			main.day_time = 12.0
+	var label := _shots_label if not _shots_label.is_empty() else "bootcamp"
+	var audit := BootcampAudit.new()
+	audit.name = "BootcampAudit"
+	audit.main = main
+	audit.shots_dir = "%s/%s" % [SHOTS_ROOT, label]
+	audit.strict = "--bootcamp-audit=strict" in OS.get_cmdline_user_args()
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--bootcamp-from="):
+			audit.start_level = int(a.get_slice("=", 1))
+	add_child(audit)
+	var res: Dictionary = await audit.run()
+	audit.queue_free()
+	var ok := int(res.get("failures", 0)) == 0
+	print("PlaytestHarness: bootcamp %s — %d/%d levels, %d real drags, %d fallbacks, %d failure(s)" % [
+		"PASS" if ok else "FAIL", int(res.get("completed", 0)), (res.get("levels", []) as Array).size(),
+		int(res.get("drags", 0)), int(res.get("fallbacks", 0)), int(res.get("failures", 0))])
+	_maybe_quit()
+
+
+func _run_modals_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var label := _shots_label if not _shots_label.is_empty() else "modals"
+	var audit := ModalAudit.new()
+	audit.name = "ModalAudit"
+	audit.main = main
+	audit.shots_dir = "%s/%s" % [SHOTS_ROOT, label]
+	audit.strict = "--modal-audit=strict" in OS.get_cmdline_user_args()
+	add_child(audit)
+	var res: Dictionary = await audit.run()
+	audit.queue_free()
+	print("PlaytestHarness: modals — %d audit error(s) across %d modals at %s" % [
+		int(res.get("errors", 0)), (res.get("modals", {}) as Dictionary).size(), str(res.get("viewport", []))])
+	_maybe_quit()
+
+
+## `--capture=timeline`: the info row must stay still while the clock runs
+## (TimelineStabilityProbe). Pass `--window-size=WxH` to check a small screen.
+func _run_timeline_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var probe: Node = load("res://core/terrain/harness/timeline_stability_probe.gd").new()
+	probe.name = "TimelineProbe"
+	probe.set("main", main)
+	add_child(probe)
+	var res: Dictionary = await probe.call("run")
+	probe.queue_free()
+	print("PlaytestHarness: timeline %s — %d failure(s)" % [
+		"PASS" if int(res.get("failures", 1)) == 0 else "FAIL", int(res.get("failures", 1))])
+	_maybe_quit()
+
+
+## `--capture=graphtools`: show-only views, the "In the world" library drawer
+## and the graph <-> world handoff (GraphToolsProbe).
+func _run_graph_tools_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var probe: Node = load("res://core/terrain/harness/graph_tools_probe.gd").new()
+	probe.name = "GraphToolsProbe"
+	probe.set("main", main)
+	probe.set("shots_dir", "%s/%s" % [SHOTS_ROOT, _shots_label if not _shots_label.is_empty() else "graphtools"])
+	add_child(probe)
+	var res: Dictionary = await probe.call("run")
+	probe.queue_free()
+	print("PlaytestHarness: graphtools %s — %d failure(s)" % [
+		"PASS" if int(res.get("failures", 1)) == 0 else "FAIL", int(res.get("failures", 1))])
+	_maybe_quit()
+
+
+## `--capture=pvsnap`: solar grid snap in 3D and on the graph (PvSnapProbe).
+func _run_pv_snap_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var probe: Node = load("res://core/terrain/harness/pv_snap_probe.gd").new()
+	probe.name = "PvSnapProbe"
+	probe.set("main", main)
+	probe.set("shots_dir", "%s/%s" % [SHOTS_ROOT, _shots_label if not _shots_label.is_empty() else "pvsnap"])
+	add_child(probe)
+	var res: Dictionary = await probe.call("run")
+	probe.queue_free()
+	print("PlaytestHarness: pvsnap %s — %d failure(s)" % [
+		"PASS" if int(res.get("failures", 1)) == 0 else "FAIL", int(res.get("failures", 1))])
+	_maybe_quit()
+
+
+## `--capture=conduits`: plug-drag length, the live style modal, run-length
+## tags and chaining (ConduitProbe).
+func _run_conduits_capture() -> void:
+	await get_tree().create_timer(_settle_s()).timeout
+	var main := get_tree().current_scene
+	var probe: Node = load("res://core/terrain/harness/conduit_probe.gd").new()
+	probe.name = "ConduitProbe"
+	probe.set("main", main)
+	probe.set("shots_dir", "%s/%s" % [SHOTS_ROOT, _shots_label if not _shots_label.is_empty() else "conduits"])
+	add_child(probe)
+	var res: Dictionary = await probe.call("run")
+	probe.queue_free()
+	print("PlaytestHarness: conduits %s — %d failure(s)" % [
+		"PASS" if int(res.get("failures", 1)) == 0 else "FAIL", int(res.get("failures", 1))])
+	_maybe_quit()
+
+
 ## Captures call this when they are done. While the dispatcher runs a chain it
 ## is a no-op (the dispatcher moves on and _finish ends the run); outside a
 ## harness run it keeps the old quit-after-capture behaviour.
@@ -7452,6 +7733,11 @@ func _run_poi_verify() -> void:
 	var poi_path := PoiLayer.save_path_for_map(lat, lon)
 	var snap := _snapshot_files([poi_path])
 	var show_before := bool(loader.call("show_pois"))
+	# The pins must be SHOWN for the marker checks: poi_markers() is empty
+	# while they are hidden, and the player's own pref may hide them (the
+	# author's terrain_config.cfg had show_pois=false — two checks failed on
+	# the setting, not the code). Restored with show_before at the end.
+	loader.call("set_show_pois", true)
 	var before_count := (loader.call("poi_records") as Array).size()
 	# ⚠ A GDScript lambda captures locals BY VALUE — the counter lives in an Array.
 	var fails := [0]
@@ -7631,6 +7917,265 @@ func _run_poi_verify() -> void:
 	print("PlaytestHarness: poi %s — %d failure(s); poi file + show_pois restored; shots in %s"
 		% ["PASS" if fails[0] == 0 else "FAIL", fails[0], ProjectSettings.globalize_path(dir)])
 	_maybe_quit()
+
+
+## --capture=assetpack: Share end to end through the REAL modal. Exports the
+## running world (+ its map data, presets and music — no art, no model
+## library, to keep the pack small) via AssetPackModal, installs it again by
+## emitting the window's files_dropped (the drag-and-drop path), then plays
+## the imported copy through WorldSession.launch and diffs its fingerprint
+## against the original's: props, lights, camps, tiles, graph ids and wires.
+## `--import=<pack>` skips the export and installs that pack into this
+## world's sandbox instead; `--pack-out=<path>` keeps the exported pack there
+## (for the fresh-machine side, --capture=assetpack-import).
+func _run_assetpack_capture() -> void:
+	var tree := get_tree()
+	var fails := 0
+	var label := _shots_label if not _shots_label.is_empty() else "assetpack"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var main := await _await_world_scene(-1)
+	var import_path := ""
+	var pack_out := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--import="):
+			import_path = a.trim_prefix("--import=")
+		elif a.begins_with("--pack-out="):
+			pack_out = a.trim_prefix("--pack-out=")
+	if main == null:
+		push_error("assetpack: FAIL — no world scene")
+		_maybe_quit()
+		return
+	main.set("time_scale", 0.0)
+	var src_id := WorldSession.active_id()
+	var fp1 := WorldSession.fingerprint(main)
+	var pack := import_path
+	if pack.is_empty():
+		if src_id.is_empty():
+			push_error("assetpack: FAIL — no world active (run with --world=<name>)")
+			_maybe_quit()
+			return
+		var m := AssetPackModal.open_export(main, src_id)
+		await _assetpack_idle(m)
+		await _shoot_ui(dir, "01_export_tab")
+		var cat: AssetPackCatalog = m.get("_catalog")
+		if cat == null or cat.items_in(AssetPackFormat.SEC_WORLDS).is_empty():
+			fails += 1
+			push_error("assetpack: FAIL — the export tab listed no worlds")
+		else:
+			print("assetpack: export tab PASS — %d items, %d worlds" % [cat.items.size(),
+				cat.items_in(AssetPackFormat.SEC_WORLDS).size()])
+			var sel: Dictionary = m.get("_sel")
+			for it in cat.items:
+				var iid := str(it["id"])
+				sel[iid] = (iid == "world:" + src_id) or iid.begins_with("mapcache:") \
+					or iid == "lib:presets" or iid == "lib:music"
+			m.call("_refresh_checks")
+			m.call("_refresh_totals")
+			await _shoot_ui(dir, "02_export_selection")
+			pack = pack_out if not pack_out.is_empty() else "user://__assetpack_capture/harness%s" % AssetPackFormat.EXT
+			var t0 := Time.get_ticks_msec()
+			m.call("_start_export", pack)
+			await _assetpack_idle(m)
+			await _shoot_ui(dir, "03_export_done")
+			var ok := FileAccess.file_exists(pack) and int(m.get("_view")) == AssetPackModal.View.DONE
+			if not ok:
+				fails += 1
+			print("assetpack: export %s — %s in %.1f s" % ["PASS" if ok else "FAIL",
+				AssetPackFormat.human_size(FileAccess.get_size(pack)), (Time.get_ticks_msec() - t0) / 1000.0])
+		(m.get("_frame") as ModalFrame).close()
+		for _i in 10:
+			await tree.process_frame
+	var before := {}
+	for w in WorldStore.list(WorldPaths.WORLDS_DIR, true):
+		before[str(w["id"])] = true
+	# Install by DROPPING the pack on the window (CursorController's handler).
+	tree.root.files_dropped.emit(PackedStringArray([ProjectSettings.globalize_path(pack)]))
+	var im: Node = null
+	for _j in 60:
+		await tree.process_frame
+		im = tree.current_scene.get_node_or_null(AssetPackModal.NODE_NAME)
+		if im != null:
+			break
+	if im == null:
+		fails += 1
+		push_error("assetpack: FAIL — dropping the pack did not open the Install tab")
+		_maybe_quit()
+		return
+	await _assetpack_idle(im)
+	var info: Dictionary = im.get("_info")
+	print("assetpack: drop opens install preview %s — %s" % ["PASS" if bool(info.get("ok", false)) else "FAIL",
+		str(info.get("error", "ok"))])
+	if not bool(info.get("ok", false)):
+		fails += 1
+	await _shoot_ui(dir, "04_import_preview")
+	im.call("_on_install_pressed")
+	await _assetpack_idle(im)
+	await _shoot_ui(dir, "05_import_done")
+	var new_recs: Array = []
+	for w2 in WorldStore.list(WorldPaths.WORLDS_DIR, true):
+		if not before.has(str(w2["id"])):
+			new_recs.append(w2)
+	if new_recs.is_empty():
+		fails += 1
+		push_error("assetpack: FAIL — no new world after install")
+		_maybe_quit()
+		return
+	print("assetpack: install PASS — %s added (%s)" % [UiText.count(new_recs.size(), "world"),
+		", ".join(PackedStringArray(new_recs.map(func(r): return WorldStore.display_name(r))))])
+	var target: Dictionary = new_recs[0]
+	if not src_id.is_empty() and import_path.is_empty():
+		for r2 in new_recs:
+			if str((r2 as Dictionary).get("imported_from", {}).get("id", "")) == src_id:
+				target = r2
+		var a := WorldStore.data_files(WorldStore.get_world(src_id))
+		var b := WorldStore.data_files(target)
+		var same := 0
+		var differ: Array[String] = []
+		for tag in a:
+			if b.has(tag) and FileAccess.get_sha256(str(a[tag])) == FileAccess.get_sha256(str(b[tag])):
+				same += 1
+			else:
+				differ.append(str(tag))
+		if differ.is_empty():
+			print("assetpack: world data PASS — %d files byte-identical" % same)
+		else:
+			fails += differ.size()
+			push_error("assetpack: FAIL — data files differ or missing: %s" % ", ".join(PackedStringArray(differ)))
+	(im.get("_frame") as ModalFrame).close()
+	for _k in 10:
+		await tree.process_frame
+	var prev := tree.current_scene.get_instance_id()
+	var err := WorldSession.launch(WorldStore.get_world(str(target["id"])), {})
+	var main2: Node = null
+	if err == OK:
+		main2 = await _await_world_scene(prev)
+	if main2 == null:
+		fails += 1
+		push_error("assetpack: FAIL — the imported world did not open (error %d)" % err)
+	elif import_path.is_empty():
+		var fp2 := WorldSession.fingerprint(main2)
+		var bad: Array = []
+		for d in WorldSession.fingerprint_diff(fp1, fp2):
+			var k := str(d[0])
+			if k.begins_with("count.") or k.ends_with(".ids") or k == "graph.connections":
+				bad.append(d)
+		if bad.is_empty():
+			print("assetpack: imported world plays PASS — props, lights, camps, tiles and graph match")
+		else:
+			fails += bad.size()
+			for d2 in bad:
+				push_error("assetpack: FAIL — %s was %s, imported copy has %s" % [d2[0], str(d2[1]), str(d2[2])])
+		await _shoot_ui(dir, "06_imported_world")
+	else:
+		print("assetpack: imported world plays PASS — %s" % WorldStore.display_name(target))
+		await _shoot_ui(dir, "06_imported_world")
+	if import_path.is_empty() and pack_out.is_empty():
+		for pth in [pack, AssetPackFormat.part_path(pack, 2)]:
+			if FileAccess.file_exists(pth):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(pth))
+	print("PlaytestHarness: assetpack %s — %d failure(s); shots in %s"
+		% ["PASS" if fails == 0 else "FAIL", fails, ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## --capture=assetpack-import --import=<pack>: the friend's side, on the
+## launch hub of an EMPTY user folder (tools\harness.ps1 -EmptyUser). Drops
+## the pack on the window, installs it with the modal's defaults, checks the
+## worlds appear in the hub's list, then plays the first one and waits for
+## its map to finish loading.
+func _run_assetpack_import_capture() -> void:
+	var tree := get_tree()
+	var fails := 0
+	var label := _shots_label if not _shots_label.is_empty() else "assetpack_import"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var pack := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--import="):
+			pack = a.trim_prefix("--import=")
+	if pack.is_empty() or not FileAccess.file_exists(pack):
+		push_error("assetpack-import: FAIL — give --import=<path to a .simpack.zip> (got '%s')" % pack)
+		_maybe_quit()
+		return
+	for _i in 120:
+		await tree.process_frame
+	var had := WorldStore.list(WorldPaths.WORLDS_DIR, true).size()
+	print("assetpack-import: starting with %s on this machine" % UiText.count(had, "world"))
+	await _shoot_ui(dir, "01_launch_hub")
+	tree.root.files_dropped.emit(PackedStringArray([pack]))
+	var im: Node = null
+	for _j in 60:
+		await tree.process_frame
+		im = tree.current_scene.get_node_or_null(AssetPackModal.NODE_NAME) if tree.current_scene != null else null
+		if im != null:
+			break
+	if im == null:
+		push_error("assetpack-import: FAIL — dropping the pack did not open the Install tab")
+		_maybe_quit()
+		return
+	await _assetpack_idle(im)
+	var info: Dictionary = im.get("_info")
+	if not bool(info.get("ok", false)):
+		fails += 1
+		push_error("assetpack-import: FAIL — %s" % str(info.get("error", "")))
+	await _shoot_ui(dir, "02_import_preview")
+	var t0 := Time.get_ticks_msec()
+	im.call("_on_install_pressed")
+	await _assetpack_idle(im)
+	await _shoot_ui(dir, "03_import_done")
+	var recs := WorldStore.list(WorldPaths.WORLDS_DIR, true)
+	var added := recs.size() - had
+	print("assetpack-import: install %s — %s in %.1f s" % ["PASS" if added > 0 else "FAIL",
+		UiText.count(added, "world"), (Time.get_ticks_msec() - t0) / 1000.0])
+	if added <= 0:
+		fails += 1
+		_maybe_quit()
+		return
+	var target: Dictionary = {}
+	for r in recs:
+		if (r as Dictionary).has("imported_from"):
+			target = r
+			break
+	var map: Dictionary = target.get("map", {})
+	if WorldStore.is_generated_map(map):
+		var def_ok := ResourceLoader.exists(str(map.get("map_def_path", "")))
+		print("assetpack-import: map registry entry %s" % ("PASS" if def_ok else "FAIL"))
+		if not def_ok:
+			fails += 1
+	(im.get("_frame") as ModalFrame).close()
+	for _k in 10:
+		await tree.process_frame
+	var prev := tree.current_scene.get_instance_id() if tree.current_scene != null else -1
+	var err := WorldSession.launch(target, {})
+	var main2: Node = null
+	if err == OK:
+		main2 = await _await_world_scene(prev)
+	if main2 == null:
+		fails += 1
+		push_error("assetpack-import: FAIL — %s did not open (error %d)" % [WorldStore.display_name(target), err])
+	else:
+		var sm := WorldSession.summary(main2)
+		print("assetpack-import: plays PASS — %s: %d props, %d graph nodes" % [WorldStore.display_name(target),
+			int(sm.get("props", 0)), int(sm.get("graph_nodes", 0))])
+		await _shoot_ui(dir, "04_imported_world")
+	print("PlaytestHarness: assetpack-import %s — %d failure(s); shots in %s"
+		% ["PASS" if fails == 0 else "FAIL", fails, ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
+## Wait until the modal's pack job is idle (and its result handled).
+func _assetpack_idle(m: Node) -> void:
+	var tree := get_tree()
+	for _i in 3:
+		await tree.process_frame
+	for _j in 36000:
+		var job: Variant = m.get("_job")
+		if job == null or not (job as AssetPackJob).running():
+			break
+		await tree.process_frame
+	for _k in 6:
+		await tree.process_frame
 
 
 func _shoot_ui(dir: String, name: String) -> void:
@@ -8017,6 +8562,8 @@ func _run_growth_capture() -> void:
 
 const TREE_PORTRAIT_SPECIES: Array = [
 	"deciduous", "birch", "maple", "beech", "chestnut", "aspen", "pine",
+	"douglas_fir", "cedar", "hemlock", "spruce", "fir", "redwood", "alder",
+	"sword_fern", "bracken", "salal", "blackberry",
 ]
 
 
@@ -8430,7 +8977,12 @@ func _run_tree_portrait_capture() -> void:
 				["far", VegetationCardFactory.CanopyLodTier.FAR]]:
 			var tier_name := str(tier_spec[0])
 			var tier: int = tier_spec[1]
-			var mesh := VegetationCardFactory.mesh_for_canopy_lod(sid, style, tier)
+			var fam := VegSpeciesCatalog.mesh_family(sid)
+			var is_tree := fam == "pine" or fam == "deciduous"
+			if not is_tree and tier_name == "far":
+				continue
+			var mesh := VegetationCardFactory.mesh_for_canopy_lod(sid, style, tier) \
+				if is_tree else VegetationCardFactory.mesh_for_species(sid, style)
 			if mesh == null:
 				continue
 			var mi := MeshInstance3D.new()
@@ -8462,6 +9014,29 @@ func _run_tree_portrait_capture() -> void:
 			print("PlaytestHarness: tree — %-10s %-4s %d surf, %5d tris, %.2f m tall, foot y %.3f"
 				% [sid, tier_name, mesh.get_surface_count(), tris, aabb.size.y, aabb.position.y])
 			mi.queue_free()
+			# The three seeded variants of a tree species side by side
+			# (VegetationRuntime draws one per tree, picked by position).
+			if is_tree and tier_name == "near":
+				var row: Array = []
+				for k in 3:
+					var sk := style.duplicate()
+					sk["%s_variant_index" % fam] = k
+					var vm := VegetationCardFactory.mesh_for_canopy_lod(sid, sk, tier)
+					var vmi := MeshInstance3D.new()
+					vmi.mesh = vm
+					vmi.position = base + Vector3((float(k) - 1.0) * w * 1.05, 0.0, 0.0)
+					root.add_child(vmi)
+					row.append(vmi)
+				var vd := maxf(h, w * 3.3) * 1.05
+				cam.position = base + Vector3(0.0, h * 0.42, vd)
+				cam.look_at(base + Vector3(0.0, h * 0.48, 0.0), Vector3.UP)
+				await RenderingServer.frame_post_draw
+				await get_tree().create_timer(0.15).timeout
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png(
+					"%s/%s_variants.png" % [dir, sid])
+				for vmi in row:
+					(vmi as Node).queue_free()
 	var f := FileAccess.open("%s/manifest.json" % dir, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(manifest, "	"))
@@ -8675,7 +9250,8 @@ func _run_project_verify() -> void:
 			if bool((d as Dictionary).get("carrying", false)):
 				saw_carrying = true
 		var slow_rec: Dictionary = PlacedPropService.get_prop_record(main, crate_id)
-		if Vector2(float(slow_rec.get("x", 0.0)), float(slow_rec.get("z", 0.0))) 				.distance_to(stage_pt) < 1.5:
+		if Vector2(float(slow_rec.get("x", 0.0)), float(slow_rec.get("z", 0.0))) \
+				.distance_to(stage_pt) < 1.5:
 			crate_moved = true   # completed before the flag was seen — done
 			break
 	if main != null and "time_scale" in main:
@@ -11805,7 +12381,8 @@ func _run_lights_capture() -> void:
 		var after_pin: Vector3 = PlacedLightLayer.waypoints_of(layer.find_light(sid))[1]
 		_lc_result(PlacedLightService.group_ids_of_kind(main, "string").size() == 1 \
 			and before_pin.distance_to(after_pin) > 0.3,
-			"with the String tool active, dragging a finished pin moves it (%.2f m) and starts no new string" % 			before_pin.distance_to(after_pin), fails)
+			"with the String tool active, dragging a finished pin moves it (%.2f m) and starts no new string" % \
+					before_pin.distance_to(after_pin), fails)
 		# Ctrl+drag a pin: the WHOLE string moves, every pin by the same offset.
 		var pts0: Array = PlacedLightLayer.waypoints_of(layer.find_light(sid))
 		var grab2 := cam.unproject_position(pts0[2])
@@ -11849,7 +12426,10 @@ func _run_lights_capture() -> void:
 		await tree.process_frame
 		var t0 := node.fx_time() if node != null else 0.0
 		await _graph_shot(dir, "02_rainbow_a", [], "lights")
-		await tree.create_timer(0.25).timeout
+		# 0.4 s, not 0.25: the two screenshot grabs stall a frame each and the
+		# effect clock integrates (capped) frame deltas, so a 0.25 s wait read
+		# 0.145 s of chase on a slow frame and failed a 0.15 bound.
+		await tree.create_timer(0.4).timeout
 		await _graph_shot(dir, "03_rainbow_b", [], "lights")
 		var t1 := node.fx_time() if node != null else 0.0
 		main.set("time_scale", 0.0)
@@ -11865,7 +12445,7 @@ func _run_lights_capture() -> void:
 		var c1 := LedEffects.color_at(fields, 0, node.bulb_count if node != null else 1, t1, Color.WHITE)
 		var moved := (t1 - t0) * 8.0
 		print("PlaytestHarness: lights — chase clock %.3f -> %.3f s (%.2f bulbs moved)" % [t0, t1, moved])
-		_lc_result(t1 - t0 > 0.15 and not c0.is_equal_approx(c1), "the rainbow chase runs (bulb 0 changed colour)", fails)
+		_lc_result(t1 - t0 > 0.1 and not c0.is_equal_approx(c1), "the rainbow chase runs (bulb 0 changed colour)", fails)
 		# 6. Add to graph (load only), idempotent.
 		var ok := PlacedLightService.add_to_graph(main, sid)
 		PlacedLightService.add_to_graph(main, sid)
@@ -14608,7 +15188,8 @@ func _verify_siphon_turbine(sgv: Node, model: Variant, siphon_id: String,
 				absf(float(siphon.get("site_x_m", 0.0)) - 6.0) < 1e-3)
 	elif siphon_id.begins_with("cap_lab_") and GraphSiteLayout.has_site_coords(siphon):
 		var pond_s: Dictionary = model.get_item(pond_id)
-		var half_w := float(sgv.call("pond_half_extent_m", pond_specs0)) if sgv.has_method("pond_half_extent_m") 				else maxf(maxf(float(pond_specs0.get("footprint_w_m", 0.0)), float(pond_specs0.get("footprint_d_m", 0.0))) * 0.5, 3.0)
+		var half_w := float(sgv.call("pond_half_extent_m", pond_specs0)) if sgv.has_method("pond_half_extent_m") \
+				else maxf(maxf(float(pond_specs0.get("footprint_w_m", 0.0)), float(pond_specs0.get("footprint_d_m", 0.0))) * 0.5, 3.0)
 		var d_shore := GraphSiteLayout.site_xz(siphon).distance_to(GraphSiteLayout.site_xz(pond_s))
 		fails += _siphon_check("bind seated the siteless turbine on the SHORE (%.1f m from the pond centre, half-width %.1f)" % [d_shore, half_w],
 				d_shore >= half_w + 1.0)
@@ -15250,7 +15831,7 @@ func _run_fabswarm_capture() -> void:
 # ==================== LAB BUILD STEPS (--capture=buildsteps) ====================
 ## The Linkage Lab's build-step player (LINKAGE_PARITY.md A5) driven with REAL
 ## input through the viewport: opens the Lab through Main on the SOAK 2026
-## preset, CLICKS "🎬 Steps" (the dock opens, playback enters on the generated
+## preset, CLICKS "Steps" (the dock opens, playback enters on the generated
 ## sequence), CLICKS a list row (the player jumps to that step), CLICKS play
 ## (time moves the op), then for one step of each kind shoots the Lab and
 ## asserts what a PNG cannot:
@@ -15315,7 +15896,7 @@ func _run_buildsteps_capture() -> void:
 	var design_fold := builder.get_fold_angle()
 
 	# Open the dock with a real click.
-	var steps_btn := _bs_find_button(lab, "🎬 Steps")
+	var steps_btn := _bs_find_button(lab, "Steps")
 	_bs_check("the topbar has a Steps button", steps_btn != null, fails)
 	if steps_btn == null:
 		_maybe_quit()

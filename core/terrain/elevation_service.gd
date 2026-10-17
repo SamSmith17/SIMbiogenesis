@@ -306,6 +306,17 @@ func _start_next() -> void:
 					print("ElevationService: '%s' DEM served from legacy cache (%s) — promoting" % [
 						tag, legacy_path.get_file()])
 					_save_cache(key, cached["grid"], int(cached["cols"]), int(cached["rows"]))
+		if cached.is_empty() and source == "openmeteo":
+			# No key on this machine, but a DEM of the same footprint from a
+			# BETTER source is on disk (an asset pack from someone with an
+			# OpenTopography key, or a key that has since been removed): use
+			# it rather than refetch a coarser grid — the world then looks the
+			# same as it did for whoever built it.
+			var better := find_usable_cached_dem(lat, lon, tag, half_extent_m)
+			if not better.is_empty():
+				print("ElevationService: '%s' DEM served from another source's cache — no download" % tag)
+				_save_cache(key, better["grid"], int(better["cols"]), int(better["rows"]))
+				cached = better
 		if not cached.is_empty():
 			print("ElevationService: '%s' DEM served from cache (%s) — no download" % [tag, key])
 			elevation_ready.emit.call_deferred(key,

@@ -1,5 +1,42 @@
 # Local asset pack (not in Git)
 
+## Share with a friend (in game, no folder copying)
+
+**Share…** in the launch hub's header (or on a world's row, or **Share…** in
+the in-game 💾 world panel) exports a single `.simpack.zip`:
+
+- **Worlds.** Each world comes with its map data: elevation, aerial imagery,
+  OSM and weather. That way it looks identical and loads offline.
+- **Your content.** Imported models, stage music, presets and looks,
+  animations, designs, G-code jobs.
+- **Settings.** Off unless you tick them.
+- **Game art.** The gitignored folders below. These can only be shared when
+  you run the game from its project folder.
+
+Untick anything you don't want to send. A pack over 3.5 GB is saved as
+numbered parts (`x.simpack.002.zip`, …); send all of them.
+
+API keys, Home Assistant, Discord and multiplayer sign-ins, your home
+location, downloaded tools, caches and logs are **never** included.
+
+Your friend clones the repo, opens it in Godot, and runs it. Then they do one
+of these:
+- press **Share… → Install a pack**;
+- drop the zip onto the game window.
+
+They see who made the pack and what is in it. Every world arrives as a **new**
+world, and nothing of theirs is overwritten:
+- a library file that differs is saved beside theirs;
+- settings are opt-in and backed up first.
+
+If the pack has game art, Godot imports it in the background and then offers
+to restart the game.
+
+Code: `core/sharing/` (format, catalog, writer, reader, installer) and
+`scenes/ui/asset_pack_modal.gd`.
+
+The manual way below still works.
+
 This repo tracks **code, UI, and small shared data**. Bespoke map art (SOAK Festival, Mars aerial, player mesh, Starshade FBX trees) lives in a **local asset pack** beside `project.godot`. Git ignores those paths so clones stay small.
 
 ## Quick start (full maps on your machine)

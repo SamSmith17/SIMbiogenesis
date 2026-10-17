@@ -249,6 +249,11 @@ var _center_time_cluster : Control = null
 var _center_transport_cluster : Control = null
 var _center_speed_cluster : Control = null
 var _right_cluster  : Control = null
+## Right-cluster buttons that fold into the ⋯ menu when the row is too
+## narrow, in fold order (least used first): {btn, label}.
+var _right_fold_items: Array = []
+var _right_overflow: MenuButton = null
+var _right_folded := -1
 const INFO_ROW_EDGE_PAD : float = 8.0
 const CENTER_CLUSTER_GAP : float = 18.0
 var _scrubber_updating : bool = false   # prevents feedback loop
@@ -2009,7 +2014,7 @@ func _on_clim_path_add_pressed() -> void:
 		return
 	if bool(tl.call("add_climelapse_path_waypoint")):
 		var n := int(tl.call("get_climelapse_path_count")) if tl.has_method("get_climelapse_path_count") else 0
-		_notify("Drone path: %d waypoint(s)." % n, 1)
+		_notify("Drone path: %s." % UiText.count(n, "waypoint"), 1)
 
 
 func _on_clim_path_clear_pressed() -> void:
@@ -2397,8 +2402,28 @@ func _build_info_row(parent: VBoxContainer) -> void:
 	_info_row.add_child(_center_time_cluster)
 	_right_cluster = _build_right_cluster()
 	_info_row.add_child(_right_cluster)
+	# A label whose text changes width (sunset time, moon phase, the
+	# multiplayer status, "3D wires ●") re-runs the measured layout.
+	for c: Control in [_left_cluster, _center_time_cluster, _mp_chip, _conduits_chip]:
+		if c != null:
+			c.minimum_size_changed.connect(_queue_info_layout)
 
 	call_deferred("_layout_info_clusters")
+
+
+var _info_layout_queued := false
+
+
+func _queue_info_layout() -> void:
+	if _info_layout_queued:
+		return
+	_info_layout_queued = true
+	call_deferred("_run_queued_info_layout")
+
+
+func _run_queued_info_layout() -> void:
+	_info_layout_queued = false
+	_layout_info_clusters()
 
 
 func _layout_info_clusters() -> void:
@@ -2409,18 +2434,107 @@ func _layout_info_clusters() -> void:
 	if row_w <= 1.0:
 		return
 	var usable_h := maxf(1.0, row_h - INFO_ROW_BOTTOM_PAD)
+	# Fold the right cluster's least-used buttons into the ⋯ menu until the
+	# centre cluster fits BETWEEN the side clusters (it used to be centred on
+	# the row regardless, so the date spinboxes and the sunset / moon readout
+	# drew straight over the Multiplayer / 3D wires / Projects chips).
+	_fold_right_cluster(row_w)
 	for c: Control in [_left_cluster, _center_time_cluster, _right_cluster]:
 		if c == null:
 			continue
 		var cs: Vector2 = c.get_combined_minimum_size()
+		if c == _right_cluster:
+			cs.x = _right_cluster_width()
 		c.size = cs
 		c.position.y = maxf(0.0, (usable_h - cs.y) * 0.5)
+	var lo := INFO_ROW_EDGE_PAD
+	var hi := row_w - INFO_ROW_EDGE_PAD
 	if _left_cluster != null:
 		_left_cluster.position.x = INFO_ROW_EDGE_PAD
+		lo = _left_cluster.position.x + _left_cluster.size.x + CENTER_CLUSTER_GAP
 	if _right_cluster != null:
 		_right_cluster.position.x = row_w - _right_cluster.size.x - INFO_ROW_EDGE_PAD
+		hi = _right_cluster.position.x - CENTER_CLUSTER_GAP
 	if _center_time_cluster != null:
-		_center_time_cluster.position.x = (row_w - _center_time_cluster.size.x) * 0.5
+		var cw := _center_time_cluster.size.x
+		var x := (row_w - cw) * 0.5
+		# Centred when it can be, otherwise slid into the gap between the
+		# clusters; only if even the gap is too narrow does it hug the left.
+		x = minf(x, hi - cw)
+		x = maxf(x, lo)
+		_center_time_cluster.position.x = x
+
+
+## The right cluster's width from its VISIBLE children — the container's own
+## cached minimum size lags a frame behind a visibility change.
+func _right_cluster_width() -> float:
+	if _right_cluster == null:
+		return 0.0
+	var sep := float(_right_cluster.get_theme_constant("separation"))
+	var w := 0.0
+	var n := 0
+	for ch in _right_cluster.get_children():
+		var c := ch as Control
+		if c == null or not c.visible:
+			continue
+		w += c.get_combined_minimum_size().x
+		n += 1
+	return w + sep * maxf(n - 1, 0)
+
+
+## Folds buttons in fold order (least used first) while the three clusters
+## do not fit the row. Widths are measured off every button whether shown or
+## not, so the decision needs no visibility churn; visibility and the menu are
+## rewritten only when the fold COUNT changes (this runs as the clock text
+## changes, and hiding a hovered button every frame would flicker it).
+## Folded buttons live on in the ⋯ menu with the same action.
+func _fold_right_cluster(row_w: float) -> void:
+	if _right_cluster == null or _right_overflow == null:
+		return
+	var sep := float(_right_cluster.get_theme_constant("separation"))
+	var folded_set := {}
+	for it in _right_fold_items:
+		folded_set[it["btn"]] = true
+	var right_w := 0.0
+	var n := 0
+	for ch in _right_cluster.get_children():
+		var c := ch as Control
+		if c == null or c == _right_overflow:
+			continue
+		right_w += c.get_combined_minimum_size().x
+		n += 1
+	right_w += sep * maxf(n - 1, 0)
+	var left_w := _left_cluster.get_combined_minimum_size().x if _left_cluster != null else 0.0
+	var center_w := _center_time_cluster.get_combined_minimum_size().x if _center_time_cluster != null else 0.0
+	var fixed := INFO_ROW_EDGE_PAD * 2.0 + left_w + center_w + CENTER_CLUSTER_GAP * 2.0
+	var over_w := _right_overflow.get_combined_minimum_size().x + sep
+	var count := 0
+	while count < _right_fold_items.size():
+		var w := right_w + (over_w if count > 0 else 0.0)
+		if fixed + w <= row_w:
+			break
+		right_w -= (_right_fold_items[count]["btn"] as Control).get_combined_minimum_size().x + sep
+		count += 1
+	if count == _right_folded:
+		return
+	_right_folded = count
+	var pop := _right_overflow.get_popup()
+	pop.clear()
+	for i in _right_fold_items.size():
+		var fold := i < count
+		(_right_fold_items[i]["btn"] as Control).visible = not fold
+		if fold:
+			pop.add_item(str(_right_fold_items[i]["label"]), i)
+	_right_overflow.visible = count > 0
+	_right_overflow.tooltip_text = "More — %s" % UiText.count(count, "tool")
+
+
+func _on_right_overflow_id(id: int) -> void:
+	if id < 0 or id >= _right_fold_items.size():
+		return
+	var btn := _right_fold_items[id]["btn"] as Button
+	if btn != null:
+		btn.pressed.emit()
 
 
 func _build_center_cluster() -> Control:
@@ -2442,6 +2556,11 @@ func _build_center_cluster() -> Control:
 	_time_lbl.tooltip_text = "Local time at the playhead. Drag the track above to scrub."
 	_time_lbl.add_theme_color_override("font_color", C_PRIMARY)
 	_time_lbl.add_theme_font_size_override("font_size", 22)
+	# Tabular figures + a width pinned to the widest possible reading: the
+	# clock text changes every sim minute, and an unpinned proportional label
+	# re-centred the whole cluster on every tick, jittering the transport,
+	# date and sun/moon controls beside it (_pin_label_widths).
+	_time_lbl.add_theme_font_override("font", UITheme.font("regular", true))
 	master.add_child(_time_lbl)
 	
 	# [3] Transport Controls + Speed
@@ -2521,8 +2640,57 @@ func _build_center_cluster() -> Control:
 	_moon_lbl = _mk_astro_label("🌕 Full", C_LAVENDER, "Moon phase")
 	astro_right.add_child(_moon_lbl)
 	master.add_child(astro_right)
+	for l: Label in [_sunrise_lbl, _sunset_lbl, _moon_lbl]:
+		l.add_theme_font_override("font", UITheme.font("regular", true))
+	_pin_label_widths()
+	master.theme_changed.connect(_pin_label_widths)
 	
 	return master
+
+
+## Every label in the centre cluster whose text changes as the clock runs is
+## pinned to the width of its WIDEST possible text, so the cluster's minimum
+## width — and with it the centring and the right cluster's fold count — is
+## constant. Tabular figures alone are not enough: "9:05 AM" and "12:05 PM"
+## differ by a digit, and AM / PM differ in width.
+const _CLOCK_SAMPLES := ["12:00 AM", "12:00 PM", "10:00 AM", "10:00 PM", "88:88 AM", "88:88 PM"]
+const _MOON_SAMPLES := ["New", "Waxing", "First", "Full", "Waning", "Last", "Third"]
+
+
+func _pin_label_widths() -> void:
+	_pin_label_width(_time_lbl, _CLOCK_SAMPLES)
+	var astro: Array = []
+	for t in _CLOCK_SAMPLES:
+		astro.append("🌅 %s" % t)
+		astro.append("🌇 %s" % t)
+	_pin_label_width(_sunrise_lbl, astro)
+	_pin_label_width(_sunset_lbl, astro)
+	var moon: Array = []
+	for e in MOON_EMOJIS:
+		for n in _MOON_SAMPLES:
+			moon.append("%s %s" % [e, n])
+	_pin_label_width(_moon_lbl, moon)
+
+
+static func widest_text_px(lbl: Label, samples: Array) -> float:
+	if lbl == null:
+		return 0.0
+	var f: Font = lbl.get_theme_font("font")
+	var fs: int = lbl.get_theme_font_size("font_size")
+	if f == null:
+		return 0.0
+	var w := 0.0
+	for t in samples:
+		w = maxf(w, f.get_string_size(str(t), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+	return ceilf(w) + 2.0
+
+
+func _pin_label_width(lbl: Label, samples: Array) -> void:
+	if lbl == null:
+		return
+	var w := widest_text_px(lbl, samples)
+	if w > 0.0 and absf(lbl.custom_minimum_size.x - w) > 0.5:
+		lbl.custom_minimum_size.x = w
 
 
 ## RIGHT — system icons (save / settings / shading / import shortcut / …).
@@ -2549,7 +2717,7 @@ func _build_right_cluster() -> Control:
 	_festival_chip = _mk_chip_btn("Festival", _on_festival_chip_pressed,
 		"Festival mode — populate every painted camp, assume the camps stocked (no starving, no queues, no leaving), and watch the crowd from the settlement view")
 	right.add_child(_festival_chip)
-	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — clouds, sun/moon, stars & planets, location")
+	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — simulation, player, graphics & sky, site, integrations")
 	right.add_child(gear_btn)
 	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")
 	right.add_child(_shading_btn)
@@ -2572,6 +2740,32 @@ func _build_right_cluster() -> Control:
 	right.add_child(challenge_btn)
 	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Map select — return to the map chooser")
 	right.add_child(map_btn)
+
+	_right_overflow = MenuButton.new()
+	_right_overflow.text = "⋯"
+	_right_overflow.flat = false
+	_right_overflow.focus_mode = Control.FOCUS_NONE
+	_right_overflow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_right_overflow.custom_minimum_size = Vector2(38, 38)
+	_right_overflow.add_theme_font_size_override("font_size", 18)
+	_right_overflow.visible = false
+	_right_overflow.get_popup().id_pressed.connect(_on_right_overflow_id)
+	right.add_child(_right_overflow)
+
+	# Fold order: least-used first. Save, Settings and the Library never fold.
+	_right_fold_items.clear()
+	for pair in [[csv_btn, "Open datastream CSV"], [_linkagelab_btn, "Import LinkageLab bundle"],
+			[_shading_btn, "Solar shading"], [mc_btn, "Microclimate"],
+			[record_btn, "Climate Record Book"], [challenge_btn, "Challenges"],
+			[report_btn, "Site Report"], [map_btn, "Map select"],
+			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
+			[_festival_chip, "Festival mode"], [_settlement_chip, "Settlement view"],
+			[_projects_chip, "Site Projects"]]:
+		var b: Button = pair[0]
+		var lbl := str(pair[1])
+		if b.text.length() <= 2:
+			lbl = "%s  %s" % [b.text, lbl]
+		_right_fold_items.append({"btn": b, "label": lbl})
 
 	return right
 

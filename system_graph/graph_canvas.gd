@@ -343,6 +343,16 @@ const RESIZE_HIT_PAD := 14.0
 # ---------------------------------------------------------------------------
 var _item_dragging:       bool    = false
 var _item_drag_duplicated: bool    = false
+## Modifiers of the last mouse-button event. Read from the EVENT, not the key
+## table: Input.is_key_pressed misses a modifier carried only by the click (and
+## goes stale when a release is lost to Alt+Tab).
+var _press_ctrl: bool = false
+var _press_shift: bool = false
+## Ctrl-click toggles a node in/out of the selection. The decision waits for
+## the release — Ctrl-DRAG still duplicates — so the press remembers whether
+## the node was already selected.
+var _item_press_toggle: bool = false
+var _item_press_was_selected: bool = false
 var _item_drag_id:        String  = ""
 var _item_drag_start_px:  Vector2 = Vector2.ZERO
 var _item_drag_start_pos: Vector2 = Vector2.ZERO
@@ -467,10 +477,24 @@ signal compound_open_requested(item_id: String)
 ## Zoom-out past a floor while inside a sub-canvas — pop up to the parent scope.
 signal scope_pop_requested()
 signal layout_changed()
+## A freeform drag moved nodes (emitted once, on release). The view records ONE
+## undo step for it — drags were the only common edit Ctrl+Z could not undo.
+signal items_moved(item_ids: Array)
 ## A world pin was dropped (Globe / Site Plan / Elevation pin drag). `vertical_set`
 ## = the drag set the height by hand (Elevation); otherwise the pin sits on the
 ## ground and the view may bury an outlet invert under it.
 signal world_pin_moved(item_id: String, site: Vector2, elev_m: float, vertical_set: bool)
+## Connect tool (Globe / Site Plan pins): a run from one node's port to
+## another's, through ground waypoints (world points). The view makes the
+## connection and routes it in 3D.
+signal world_connect_requested(src_item: String, src_handle: String, dst_item: String,
+		dst_handle: String, waypoints: Array)
+signal connect_tool_cancelled()
+## A 3D run's bends edited in the Globe / pin-mode Site Plan: `route` is the
+## new `route_3d` (dicts {x, y, z}); the view locks it, rebuilds, re-measures.
+signal world_route_edited(conn_id: String, route: Array)
+## "Place it here" for a node with no 3D twin (world = the ground point).
+signal world_place_requested(item_id: String, world: Vector3)
 signal resource_containers_merged(target_id: String, absorbed_id: String, kind: String)
 signal controller_reset_pressed(item_id: String)
 ## SoI live preview camera — Shift+drag orbit, Shift+wheel zoom.
@@ -619,6 +643,45 @@ func _ready() -> void:
 ## Live simulation time-scale multiplier — 1.0 = real-time, >1 = fast-forward.
 ## Stored each tick so wire renderers can scale chase dot count/speed.
 var _sim_flow_mult: float = 1.0
+## Animate wire flow while the clock is paused or held (Display pref, default
+## on). Flow used to animate only in "test" mode, i.e. while time_scale > 0 —
+## so a paused graph never showed which way anything flowed, and the bootcamp's
+## 24 h playback (which holds the clock at 0 while it scrubs the baked day)
+## played back with every wire frozen. Paused flow runs at a calm fixed pace.
+var flow_when_paused: bool = true
+## Draw the SoI reference ring behind freeform cards (Display pref, default off).
+var freeform_soi_ring: bool = false
+## Watts/volts pills on live wires (Display pref, default on).
+var wire_value_labels: bool = true
+## Hover a freeform node: what feeds it and what it feeds stay lit, the rest
+## dims (Display pref "path_highlight", default on). Item / connection id sets;
+## empty = no focus.
+var path_highlight: bool = true
+var _path_focus_src := ""
+var _path_items: Dictionary = {}
+var _path_conns: Dictionary = {}
+## Wire value pills placed this draw (collision list — see _draw_flow_label).
+var _label_rects: Array[Rect2] = []
+## Several wires on one port fan out of a short shared trunk (GraphWireBundles,
+## Display pref "wire_bundling", default on). The plan is rebuilt every draw
+## and kept for the hit test, so a click lands on the wire you see.
+var wire_bundling: bool = true
+var _bundle_plan: Dictionary = {}
+## True when the last draw animated at least one wire. Only then does tick()
+## hold the 20 Hz cadence: "animate flow when paused" made flow_live true all
+## the time, so a graph with nothing flowing redrew 20× a second for nothing.
+var _flowing_drawn := false
+## Per-draw caches (valid while _draw_cache_active): each card asked for its
+## resolved handles and scanned EVERY wire for its wired ports, several times
+## a card — O(items × wires) per draw.
+var _handles_cache: Dictionary = {}
+var _hinfo_cache: Dictionary = {}
+var _wired_cache: Dictionary = {}
+var _wired_cache_ready := false
+static var _touchscreen := -1
+## True while a pre-baked run plays back (the tutorial / challenge engines).
+var flow_playback: bool = false
+var _flow_live: bool = false
 
 func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 	_refresh_ac_shed_state()
@@ -629,14 +692,19 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 			flow_mult = 0.0
 		else:
 			flow_mult = clampf(sim_time_scale / REALTIME_SCALE_REF, 0.15, 80.0)
+	var clock_running := flow_mult > 0.0
+	if flow_mult <= 0.0 and (flow_when_paused or flow_playback):
+		flow_mult = 1.0
+	_flow_live = current_mode == "test" or flow_when_paused or flow_playback
 	_sim_flow_mult = flow_mult
 	_high_speed_lod = flow_mult >= HIGH_SPEED_FLOW_MULT
-	if current_mode == "test" and (flow_mult > 0.0 or _ac_shed_active):
+	if _flow_live and (flow_mult > 0.0 or _ac_shed_active):
 		var vis_speed := 2.5 * clampf(pow(maxf(flow_mult, 0.2), 0.45), 0.15, 5.0)
 		if _ac_shed_active and flow_mult <= 0.0:
 			vis_speed = 6.0
 		_flow_phase = fmod(_flow_phase + delta * vis_speed, TAU)
-		_needs_continuous_redraw = true
+		if _flowing_drawn or _ac_shed_active:
+			_needs_continuous_redraw = true
 	# Automation flash pulse decay
 	if not _item_flash.is_empty():
 		for fid: Variant in _item_flash.keys():
@@ -666,7 +734,7 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 	if fx_hot:
 		# An explosion at the normal 20 fps cadence reads as a slideshow.
 		interval = 0.0
-	elif current_mode == "test" or _needs_continuous_redraw or fx_alive:
+	elif (_flow_live and _flowing_drawn) or _needs_continuous_redraw or fx_alive:
 		interval = REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else REDRAW_INTERVAL
 	elif _alert_nodes_present:
 		interval = ALERT_REDRAW_INTERVAL
@@ -674,14 +742,14 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 	# running, hold the ~20 Hz cadence so the render-side dot interpolation
 	# actually animates between 2-4 Hz population ticks. Paused
 	# (flow_mult == 0) the lerp saturates and this driver stands down.
-	if view_mode == GraphSiteLayout.VIEW_SITE and flow_mult != 0.0 \
+	if view_mode == GraphSiteLayout.VIEW_SITE and clock_running \
 			and _npc_site_renderer != null \
 			and bool(_npc_site_renderer.call("has_motion")):
 		interval = minf(interval, REDRAW_INTERVAL)
 	if _redraw_accum >= interval:
 		_redraw_accum = 0.0
 		queue_redraw()
-		if current_mode != "test" and not fx_alive:
+		if not _flow_live and not fx_alive:
 			_needs_continuous_redraw = false
 
 
@@ -1174,6 +1242,12 @@ func _gui_input(event: InputEvent) -> void:
 
 	# World pins (Site Plan / Elevation on the pin layer): a pin under the
 	# pointer wins over the 3D prop pick and every chip path.
+	if _pins_mode_active() and _handle_connect_tool_input(event):
+		accept_event()
+		return
+	if _pins_mode_active() and _handle_run_edit_input(event):
+		accept_event()
+		return
 	if _pins_mode_active() and _handle_pin_input(event):
 		accept_event()
 		return
@@ -1188,7 +1262,9 @@ func _gui_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if not DisplayServer.is_touchscreen_available() and _touch_input_active():
+		_press_ctrl = mb.ctrl_pressed or mb.meta_pressed
+		_press_shift = mb.shift_pressed
+		if not touchscreen_available() and _touch_input_active():
 			_clear_touch_state()
 		# Pan start (MMB or RMB)
 		var is_pan := mb.pressed and (
@@ -1281,21 +1357,56 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 
 
+## A wheel gesture holds ONE ground point under the cursor. Re-picking it
+## from the screen on every notch let each notch's solver residual (a tenth
+## of a pixel, always the same way) become the next notch's target, and over
+## 20 notches the ground slid ~3 px. The point is reused while the cursor
+## stays put, the gesture is recent and the point still projects under the
+## cursor (a pan or orbit in between re-picks it).
+const ZOOM_HOLD_STICKY_MS := 700
+const ZOOM_HOLD_SAME_PX := 1.0
+var _zoom_hold_w := Vector3.INF
+var _zoom_hold_screen := Vector2.INF
+var _zoom_hold_msec := 0
+
+
+func _zoom_hold_point(screen_pos: Vector2) -> Vector3:
+	var now := Time.get_ticks_msec()
+	if is_finite(_zoom_hold_w.x) and now - _zoom_hold_msec <= ZOOM_HOLD_STICKY_MS \
+			and screen_pos.distance_to(_zoom_hold_screen) <= ZOOM_HOLD_SAME_PX:
+		var pv: Variant = soi_preview_service.call("world_to_canvas", _zoom_hold_w)
+		if pv is Vector2 and (pv as Vector2).distance_to(screen_pos) <= ZOOM_HOLD_SAME_PX * 1.5:
+			_zoom_hold_msec = now
+			return _zoom_hold_w
+	_zoom_hold_w = Vector3.INF
+	var gh := _pin_ground_hit(screen_pos)
+	if gh.is_empty():
+		return Vector3.INF
+	var c0 := _soi_world_center()
+	var st: Vector2 = gh.get("site", Vector2.ZERO)
+	_zoom_hold_w = Vector3(c0.x + st.x, float(gh.get("y", c0.y)), c0.z + st.y)
+	_zoom_hold_screen = screen_pos
+	_zoom_hold_msec = now
+	return _zoom_hold_w
+
+
 ## Put `w` (a world point) back under `screen_pos` by moving the pan, with
 ## the live camera as the projection authority. The pan is in canvas px of
 ## site east / south; an ORBITED plan projects a pan step through its yaw and
-## tilt, so a plain `pan += error` step spirals. The response is linear for
-## an orthographic camera, so it is measured once (two probe steps) and
-## inverted exactly; a second pass mops up float noise.
+## tilt, so a plain `pan += error` step spirals. The plan camera is a
+## PERSPECTIVE camera focused on the ground under the view centre, so the
+## response is not linear (the focus height follows the terrain): Newton
+## steps on a two-probe Jacobian, until the point is within a twentieth of a
+## pixel (one step leaves up to ~0.4 px on a slope).
 func _hold_world_under_cursor(w: Vector3, screen_pos: Vector2) -> void:
 	if soi_preview_service == null or not is_instance_valid(soi_preview_service):
 		return
-	for _pass in 2:
+	for _pass in 4:
 		var pv: Variant = soi_preview_service.call("world_to_canvas", w)
 		if not (pv is Vector2):
 			return
 		var err := screen_pos - (pv as Vector2)
-		if err.length() < 0.25:
+		if err.length() < 0.05:
 			return
 		var pan0 := _pan
 		const D := 24.0
@@ -1336,7 +1447,7 @@ func _should_ignore_emulated_mouse(event: InputEvent) -> bool:
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			return false
 	# On non-touch devices, stale touch-emulation state would block all mouse input.
-	if not DisplayServer.is_touchscreen_available():
+	if not touchscreen_available():
 		_clear_touch_state()
 		return false
 	# Block all emulated mouse traffic during touch — some panels emit RMB/MMB
@@ -1556,7 +1667,7 @@ func _on_pointer_release(screen_pos: Vector2) -> void:
 
 
 func _effective_drag_threshold() -> float:
-	if _touch_input_active() or DisplayServer.is_touchscreen_available():
+	if _touch_input_active() or touchscreen_available():
 		return TOUCH_DRAG_THRESHOLD
 	return DRAG_THRESHOLD
 
@@ -1604,11 +1715,7 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 			and soi_preview_service.has_method("world_to_canvas")
 	var hold_w := Vector3.INF
 	if cam_site:
-		var gh := _pin_ground_hit(screen_pos)
-		if not gh.is_empty():
-			var c0 := _soi_world_center()
-			var st: Vector2 = gh.get("site", Vector2.ZERO)
-			hold_w = Vector3(c0.x + st.x, float(gh.get("y", c0.y)), c0.z + st.y)
+		hold_w = _zoom_hold_point(screen_pos)
 	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
 	if is_equal_approx(_zoom, old_zoom):
 		return
@@ -1940,6 +2047,75 @@ func _visible_items() -> Array:
 	return _compute_visible_items()
 
 
+## Show-only view (GraphDomainFilter): the domains shown, empty = everything.
+## Set by the view's "Show ▾" menu and saved with the graph.
+var domain_filter: Dictionary = {}
+## With a filter: also show nodes that merely HAVE a port in a shown domain.
+var domain_include_unwired := true
+var _domain_cache: Dictionary = {}
+var _domain_cache_frame := -1
+
+
+func set_domain_filter(shown: Dictionary, include_unwired: bool = domain_include_unwired) -> void:
+	domain_filter = shown.duplicate()
+	domain_include_unwired = include_unwired
+	_domain_cache.clear()
+	if _path_focus_src != "":
+		var src := _path_focus_src
+		_path_focus_src = ""
+		set_path_focus(src)
+	queue_redraw()
+
+
+func domain_filter_active() -> bool:
+	return not GraphDomainFilter.is_all(domain_filter)
+
+
+## Ids of the active scope's items the show-only filter keeps; {} when no
+## filter is on (= every item). The layout driver lays out only these.
+func domain_visible_ids() -> Dictionary:
+	if not domain_filter_active():
+		return {}
+	var ids := {}
+	for it: Dictionary in _compute_visible_items():
+		ids[str(it.get("id", ""))] = true
+	return ids
+
+
+## How many items of the current scope the filter is hiding.
+func domain_hidden_count() -> int:
+	if model == null or not domain_filter_active():
+		return 0
+	var saved := domain_filter
+	domain_filter = {}
+	var all_n := _compute_visible_items().size()
+	domain_filter = saved
+	return maxi(0, all_n - _compute_visible_items().size())
+
+
+## The port domains of an item; a compound adds every descendant's ports.
+## Cached per frame (the filter runs inside every visible-items pass).
+func _item_domains(item: Dictionary) -> Dictionary:
+	var f := Engine.get_process_frames()
+	if f != _domain_cache_frame:
+		_domain_cache.clear()
+		_domain_cache_frame = f
+	var iid := str(item.get("id", ""))
+	if _domain_cache.has(iid):
+		return _domain_cache[iid]
+	var out := GraphDomainFilter.handles_domains(_resolved_handles(item))
+	if str(item.get("type", "")) == "compound" and model != null:
+		var child_scope := str(item.get("child_scope_id", ""))
+		if child_scope.is_empty():
+			child_scope = "scope_%s" % iid
+		for ch in GraphNesting.walk_items(model, child_scope):
+			var cd: Dictionary = ch
+			for d in GraphDomainFilter.handles_domains(GraphPortService.resolved_handles(cd, HANDLES)).keys():
+				out[d] = true
+	_domain_cache[iid] = out
+	return out
+
+
 func _compute_visible_items() -> Array:
 	if model == null:
 		return []
@@ -1959,6 +2135,12 @@ func _compute_visible_items() -> Array:
 				continue
 			filtered.append(it)
 		items = filtered
+	if domain_filter_active():
+		var scope_conns: Array = model.connections
+		if model.has_method("get_connections_in_scope"):
+			scope_conns = model.get_connections_in_scope(active_scope_id)
+		items = GraphDomainFilter.filter_items(items, scope_conns, domain_filter,
+			_item_domains, domain_include_unwired)
 	# Site Plan draws only what is actually ON the site. Unplaced items used to
 	# sit in a bottom tray; that bar is gone — anything still missing site
 	# coords is auto-seeded by the view (on entry AND on add_item), so this
@@ -1981,12 +2163,19 @@ func _visible_connections() -> Array:
 func _compute_visible_connections() -> Array:
 	if model == null:
 		return []
-	if model.has_method("get_connections_in_scope"):
-		return model.get_connections_in_scope(active_scope_id)
 	var out: Array = []
-	for conn: Dictionary in model.connections:
-		if _scope_of_conn(conn) == active_scope_id:
-			out.append(conn)
+	if model.has_method("get_connections_in_scope"):
+		out = model.get_connections_in_scope(active_scope_id)
+	else:
+		for conn: Dictionary in model.connections:
+			if _scope_of_conn(conn) == active_scope_id:
+				out.append(conn)
+	if domain_filter_active():
+		var ids := {}
+		var vis: Array = _cached_visible_items if _draw_cache_active else _compute_visible_items()
+		for it: Dictionary in vis:
+			ids[str(it.get("id", ""))] = true
+		out = GraphDomainFilter.filter_connections(out, domain_filter, ids)
 	return out
 
 
@@ -2204,7 +2393,7 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	var hit := _item_at_screen(screen_pos)
-	var touch_rules := _touch_input_active() or DisplayServer.is_touchscreen_available()
+	var touch_rules := _touch_input_active() or touchscreen_available()
 
 	# On touch, the node body interior wins over nearby port grab rings so
 	# small load nodes remain draggable without accidentally starting wires.
@@ -2366,7 +2555,10 @@ func _end_hub_port_drag() -> void:
 
 func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 	var hit_id: String = hit.get("id", "") as String
-	if Input.is_key_pressed(KEY_SHIFT):
+	_item_press_toggle = _press_ctrl or Input.is_key_pressed(KEY_CTRL) \
+			or Input.is_key_pressed(KEY_META)
+	_item_press_was_selected = selected_item_ids.has(hit_id)
+	if _press_shift or Input.is_key_pressed(KEY_SHIFT):
 		if selected_item_ids.has(hit_id):
 			selected_item_ids.erase(hit_id)
 		else:
@@ -2387,7 +2579,10 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 	_item_drag_start_map.clear()
 	_item_drag_start_elev.clear()
 	if not selected_item_ids.has(hit_id):
-		selected_item_ids.clear()
+		# Ctrl adds to the selection (a Ctrl-drag then duplicates them all);
+		# a plain press starts a fresh selection.
+		if not _item_press_toggle:
+			selected_item_ids.clear()
 		selected_item_ids.append(hit_id)
 	_item_drag_ids = selected_item_ids.duplicate()
 	for iid: String in _item_drag_ids:
@@ -2419,7 +2614,13 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 			if e0 is Dictionary:
 				_item_drag_cursor_elev_start = e0 as Dictionary
 	_touch_interaction = "item"
-	_select_item(hit_id)
+	# A press inside a multi-selection (or a Ctrl-press growing one) keeps it:
+	# _select_item collapses the selection to this one node, which used to
+	# undo every Ctrl-click and every multi-node drag on the press.
+	if selected_item_ids.size() <= 1:
+		_select_item(hit_id)
+	else:
+		queue_redraw()
 
 
 func _touch_point_in_item_body(screen_pos: Vector2, item: Dictionary) -> bool:
@@ -2489,19 +2690,43 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		var drag_id := _item_drag_id
 		var drag_ids := _item_drag_ids.duplicate()
 		if not moved:
-			if selected_item_ids.size() <= 1 and not drag_id.is_empty():
+			if _item_press_toggle and not drag_id.is_empty():
+				# Ctrl-click: toggle this node, keep the rest.
+				if _item_press_was_selected:
+					selected_item_ids.erase(drag_id)
+				elif not selected_item_ids.has(drag_id):
+					selected_item_ids.append(drag_id)
+				if selected_item_ids.size() == 1:
+					_select_item(selected_item_ids[0])
+				elif selected_item_ids.is_empty():
+					_select_item("")
+				else:
+					selected_item_id = ""
+					selected_connection_id = ""
+					items_multi_selected.emit(selected_item_ids.duplicate())
+					queue_redraw()
+			elif selected_item_ids.size() <= 1 and not drag_id.is_empty():
 				if _touch_input_active():
 					_try_emit_touch_double_tap(screen_pos, drag_id)
 				else:
 					_select_item(drag_id)
+			elif not drag_id.is_empty():
+				# A plain click (no drag) on one node of a multi-selection
+				# narrows the selection to it — the press kept the group so a
+				# drag could move them all.
+				_select_item(drag_id)
 		else:
 			if drag_ids.size() == 1 and not drag_id.is_empty():
 				_try_merge_resource_containers_on_drop(drag_id, screen_pos)
 			layout_changed.emit()
+			if view_mode == GraphSiteLayout.VIEW_FREEFORM and not drag_ids.is_empty():
+				items_moved.emit(drag_ids)
 		_item_dragging = false
 		_item_drag_id  = ""
 		_item_drag_ids.clear()
 		_item_drag_start_map.clear()
+		_pv_snap_guides = []
+		_pv_snap_keys_for = ""
 		return
 
 	if _marquee_selecting:
@@ -2563,7 +2788,8 @@ func _on_item_drag_move(screen_pos: Vector2) -> void:
 		var drag_it := model.get_item(_item_drag_id)
 		if _is_watershed_item(drag_it):
 			return
-	if not _item_drag_duplicated and (Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)):
+	if not _item_drag_duplicated and (_item_press_toggle or Input.is_key_pressed(KEY_CTRL) \
+			or Input.is_key_pressed(KEY_META)):
 		var delta_px := screen_pos - _item_drag_start_px
 		if delta_px.length() >= _effective_drag_threshold():
 			_item_drag_duplicated = true
@@ -2577,11 +2803,79 @@ func _on_item_drag_move(screen_pos: Vector2) -> void:
 		_on_elevation_item_drag_move(screen_pos, delta_px)
 		return
 	var delta_gr  := delta_px / _zoom
+	delta_gr = _pv_snap_delta(delta_gr)
 	for iid: String in _item_drag_ids:
 		var start_pos: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
 		var new_pos := start_pos + delta_gr
 		model.update_item(iid, {"x": new_pos.x, "y": new_pos.y})
 	queue_redraw()
+
+
+## Solar grid snap on the freeform canvas (PvGridSnap, the same rule the 3D
+## racks use): dragging a panel or an array card lines it up edge to edge with
+## the panels around it, its own array's panels first. Alt drags free. The
+## whole dragged group moves by the same correction.
+var pv_snap_enabled := true
+var pv_snap_gap_px := 24.0
+var pv_snap_radius_px := 28.0
+var _pv_snap_keys: Dictionary = {}
+var _pv_snap_keys_for := ""
+var _pv_snap_guides: Array = []
+
+
+static func _is_pv_card(it: Dictionary) -> bool:
+	var t := str(it.get("type", ""))
+	return t == "panel" or (t == "compound" \
+		and str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array")
+
+
+func _pv_snap_delta(delta_gr: Vector2) -> Vector2:
+	_pv_snap_guides = []
+	if not pv_snap_enabled or Input.is_key_pressed(KEY_ALT):
+		return delta_gr
+	var it := model.get_item(_item_drag_id)
+	if it.is_empty() or not _is_pv_card(it):
+		return delta_gr
+	if _pv_snap_keys_for != _item_drag_id:
+		_pv_snap_keys_for = _item_drag_id
+		_pv_snap_keys = GraphPvWiring.array_keys(model, active_scope_id)
+	var start: Vector2 = _item_drag_start_map.get(_item_drag_id, Vector2.ZERO) as Vector2
+	var w := float(it.get("width", 120.0))
+	var h := float(it.get("height", 90.0))
+	var pos := start + delta_gr
+	var moving := {"id": _item_drag_id, "key": str(_pv_snap_keys.get(_item_drag_id, "")),
+		"x": pos.x + w * 0.5, "z": pos.y + h * 0.5, "yaw": 0.0, "w": w, "d": h}
+	var dragged := {}
+	for iid in _item_drag_ids:
+		dragged[str(iid)] = true
+	var nbs: Array = []
+	for other in _visible_items():
+		var od: Dictionary = other
+		var oid := str(od.get("id", ""))
+		if dragged.has(oid) or not _is_pv_card(od):
+			continue
+		var ow := float(od.get("width", 120.0))
+		var oh := float(od.get("height", 90.0))
+		nbs.append({"id": oid, "key": str(_pv_snap_keys.get(oid, "")),
+			"x": float(od.get("x", 0.0)) + ow * 0.5, "z": float(od.get("y", 0.0)) + oh * 0.5,
+			"yaw": 0.0, "w": ow, "d": oh})
+	var res := PvGridSnap.snap(moving, nbs, {"radius": pv_snap_radius_px / maxf(_zoom, 0.05),
+		"gap": pv_snap_gap_px, "row_pitch": -1.0})
+	if not bool(res.get("snapped", false)):
+		return delta_gr
+	_pv_snap_guides = res.get("guides", [])
+	return Vector2(float(res["x"]) - w * 0.5, float(res["z"]) - h * 0.5) - start
+
+
+## Amber guide lines while a panel is snapped (graph space -> screen).
+func _draw_pv_snap_guides() -> void:
+	if _pv_snap_guides.is_empty() or not _item_dragging:
+		return
+	var center := size * 0.5
+	for g in _pv_snap_guides:
+		var a := _graph_to_screen(g[0] as Vector2, center)
+		var b := _graph_to_screen(g[1] as Vector2, center)
+		draw_dashed_line(a, b, Color(UITheme.C_AMBER, 0.9), 1.5, 6.0)
 
 
 func _soi_radius_m() -> float:
@@ -3056,7 +3350,7 @@ func _port_grab_radius() -> float:
 		var s2 := GraphSiteLayout.px_per_m(_zoom)
 		return clampf(0.45 * s2, SITE_PORT_GRAB_MIN_PX, SITE_PORT_GRAB_MAX_PX)
 	var base := maxf(10.0, 9.0 * _zoom)
-	if _touch_input_active() or DisplayServer.is_touchscreen_available():
+	if _touch_input_active() or touchscreen_available():
 		return maxf(base, TOUCH_PORT_GRAB_MIN)
 	return base
 
@@ -3069,7 +3363,7 @@ func _wire_snap_radius() -> float:
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
 		return _port_grab_radius() + 4.0
 	var base := maxf(SNAP_RADIUS_PX, _port_grab_radius() + 6.0)
-	if _touch_input_active() or DisplayServer.is_touchscreen_available():
+	if _touch_input_active() or touchscreen_available():
 		return maxf(base, TOUCH_SNAP_RADIUS_MIN)
 	return base
 
@@ -3296,7 +3590,22 @@ func _resolved_handles(item: Dictionary) -> Array:
 			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array" \
 			and (item.get("handles", []) as Array).is_empty():
 		return GraphArrayLayout.default_handles()
+	if _draw_cache_active:
+		var iid := str(item.get("id", ""))
+		var hit: Variant = _handles_cache.get(iid)
+		if hit != null:
+			return hit
+		var hs := GraphPortService.resolved_handles(item, HANDLES)
+		_handles_cache[iid] = hs
+		return hs
 	return GraphPortService.resolved_handles(item, HANDLES)
+
+
+## Is a touchscreen present (an OS query — asked once, not per port dot).
+static func touchscreen_available() -> bool:
+	if _touchscreen < 0:
+		_touchscreen = 1 if DisplayServer.is_touchscreen_available() else 0
+	return _touchscreen == 1
 
 
 func _handle_dict(item: Dictionary, handle_id: String) -> Dictionary:
@@ -4037,9 +4346,15 @@ func _estimate_connection_flow(
 	if sid == "virtual_solar_array" or tid == "virtual_solar_array" or st == "panel" or tt == "panel":
 		var producing: bool = solar_w > WIRE_DEAD_W and dc_circuit_live(
 			live_power_hint, sid, tid, sid == "virtual_solar_array" or tid == "virtual_solar_array")
-		var w_pv: float = maxf(solar_w, 5.0)
+		# Each PV wire carries ITS string's power (the panels linked to it in
+		# series), not the site's whole solar output: six parallel wires used
+		# to all read "707 W", the controller's total.
+		var string_w := -1.0
+		if st == "panel" or tt == "panel":
+			string_w = _panel_string_w(sid if st == "panel" else tid)
+		var w_pv: float = maxf(string_w if string_w >= 0.0 else solar_w, 5.0)
 		if w_pv < 20.0:
-			w_pv = 5.0 + solar_w * 0.15
+			w_pv = 5.0 + w_pv * 0.15
 		if not producing:
 			w_pv = 0.0
 		return {"watts": w_pv, "reverse": false, "active": producing,
@@ -4099,6 +4414,112 @@ func _estimate_connection_flow(
 	return {"watts": w2, "reverse": false, "active": (solar_w + load_w) > WIRE_DEAD_W * 4.0}
 
 
+## Live watts of the series string a panel belongs to (panels joined panel to
+## panel), cached per draw. -1 when the panel has no live output reading.
+var _string_w_cache: Dictionary = {}
+
+func _panel_string_w(panel_id: String) -> float:
+	if _string_w_cache.has(panel_id):
+		return float(_string_w_cache[panel_id])
+	if model == null:
+		return -1.0
+	var seen := {panel_id: true}
+	var queue: Array = [panel_id]
+	var total := 0.0
+	var any := false
+	while not queue.is_empty():
+		var pid := str(queue.pop_back())
+		var it := model.get_item(pid)
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if sp.has("current_output_kw"):
+			any = true
+			total += maxf(0.0, float(sp.get("current_output_kw", 0.0)) * 1000.0)
+		for c in model.connections:
+			var cd: Dictionary = c
+			var other := ""
+			if str(cd.get("source_item_id", "")) == pid:
+				other = str(cd.get("target_item_id", ""))
+			elif str(cd.get("target_item_id", "")) == pid:
+				other = str(cd.get("source_item_id", ""))
+			if other.is_empty() or seen.has(other):
+				continue
+			if str(model.get_item(other).get("type", "")) != "panel":
+				continue
+			seen[other] = true
+			queue.append(other)
+	var w := total if any else -1.0
+	for k in seen:
+		_string_w_cache[k] = w
+	return w
+
+
+## Set the hovered node for the path highlight ("" clears). Upstream = follow
+## wires against the flow (into a card's top inputs), downstream = with it;
+## same-edge wires (a series string, a battery bank) count both ways so the
+## whole string lights with any of its panels.
+func set_path_focus(item_id: String) -> void:
+	if not path_highlight or view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		item_id = ""
+	if item_id == _path_focus_src:
+		return
+	_path_focus_src = item_id
+	_path_items = {}
+	_path_conns = {}
+	if item_id.is_empty() or model == null:
+		queue_redraw()
+		return
+	var fwd := {}
+	var back := {}
+	for c in _compute_visible_connections():
+		var cd: Dictionary = c
+		var a := str(cd.get("source_item_id", ""))
+		var b := str(cd.get("target_item_id", ""))
+		var cid := str(cd.get("id", ""))
+		var dir := GraphForceLayout.edge_direction(
+			_handle_ry(model.get_item(a), str(cd.get("source_handle_id", ""))),
+			_handle_ry(model.get_item(b), str(cd.get("target_handle_id", ""))))
+		var pairs: Array = []
+		if dir > 0:
+			pairs = [[a, b]]
+		elif dir < 0:
+			pairs = [[b, a]]
+		else:
+			pairs = [[a, b], [b, a]]
+		for pr in pairs:
+			if not fwd.has(pr[0]):
+				fwd[pr[0]] = []
+			(fwd[pr[0]] as Array).append([pr[1], cid])
+			if not back.has(pr[1]):
+				back[pr[1]] = []
+			(back[pr[1]] as Array).append([pr[0], cid])
+	for graph in [fwd, back]:
+		var stack: Array = [item_id]
+		var seen := {item_id: true}
+		while not stack.is_empty():
+			var cur := str(stack.pop_back())
+			_path_items[cur] = true
+			for step in (graph.get(cur, []) as Array):
+				_path_conns[str(step[1])] = true
+				var nxt := str(step[0])
+				if not seen.has(nxt):
+					seen[nxt] = true
+					stack.append(nxt)
+	queue_redraw()
+
+
+func _handle_ry(item: Dictionary, handle_id: String) -> float:
+	if item.is_empty():
+		return NAN
+	for h in _resolved_handles(item):
+		var hd: Dictionary = h
+		if str(hd.get("id", "")) == handle_id:
+			if hd.has("ry"):
+				return float(hd["ry"])
+			if hd.has("angle_rad"):
+				return 0.5 + 0.5 * sin(float(hd["angle_rad"]))
+	return NAN
+
+
 func _processor_is_active(item: Dictionary) -> bool:
 	return _load_item_is_active(item)
 
@@ -4123,8 +4544,63 @@ func _draw_connections() -> void:
 			or _zoom > WIRE_LOD_ZOOM_HIGH \
 			or (view_mode == GraphSiteLayout.VIEW_ELEVATION and visible.size() > 24) \
 			or _high_speed_lod
+	_bundle_plan = _build_bundle_plan(visible, center)
+	_flowing_drawn = false
 	for conn: Dictionary in visible:
 		_render_connection(conn, center, solar_w, load_w)
+
+
+## GraphWireBundles input for the visible wires (bezier style, freeform only —
+## Site Plan / Elevation route on the map; metro / orthogonal route their own
+## way; round hub ports already spread their wires round the circle).
+func _build_bundle_plan(visible: Array, center: Vector2) -> Dictionary:
+	if not wire_bundling or _is_physical_view() or view_mode == GraphSiteLayout.VIEW_GLOBE \
+			or visible.size() < 2:
+		return {}
+	var per_key := {}
+	var wires: Array = []
+	for conn: Dictionary in visible:
+		var style := _effective_line_style(conn)
+		if style == "metro" or style == "orthogonal":
+			continue
+		var sk := GraphWireBundles.endpoint_key(str(conn.get("source_item_id", "")),
+			str(conn.get("source_handle_id", "")))
+		var tk := GraphWireBundles.endpoint_key(str(conn.get("target_item_id", "")),
+			str(conn.get("target_handle_id", "")))
+		per_key[sk] = int(per_key.get(sk, 0)) + 1
+		per_key[tk] = int(per_key.get(tk, 0)) + 1
+		wires.append({"conn": conn, "sk": sk, "tk": tk})
+	var input: Array = []
+	for w: Dictionary in wires:
+		if int(per_key[w["sk"]]) < 2 and int(per_key[w["tk"]]) < 2:
+			continue
+		var conn: Dictionary = w["conn"]
+		var sid := str(conn.get("source_item_id", ""))
+		var tid := str(conn.get("target_item_id", ""))
+		var pol := str(conn.get("polarity", "positive"))
+		var src := _get_handle_info(sid, str(conn.get("source_handle_id", "")), center, tid, pol)
+		var tgt := _get_handle_info(tid, str(conn.get("target_handle_id", "")), center, sid, pol)
+		if src.is_empty() or tgt.is_empty():
+			continue
+		input.append({
+			"id": str(conn.get("id", "")), "src_key": w["sk"], "tgt_key": w["tk"],
+			"src_pos": src["pos"], "tgt_pos": tgt["pos"],
+			"src_tan": src.get("tangent", Vector2.DOWN), "tgt_tan": tgt.get("tangent", Vector2.UP),
+			"src_skip": GraphHubPorts.is_hub_type(str(model.get_item(sid).get("type", ""))),
+			"tgt_skip": GraphHubPorts.is_hub_type(str(model.get_item(tid).get("type", ""))),
+		})
+	if input.is_empty():
+		return {}
+	return GraphWireBundles.plan(input, _zoom)
+
+
+## Port → trunk → fan tooth in the wire's own look (the dark under-stroke and
+## the coloured core), so the comb reads as part of the wire.
+func _draw_bundle_stub(end: Dictionary, col: Color, width: float) -> void:
+	var pts := GraphWireBundles.stub_points(end)
+	var w := maxf(2.0, width)
+	draw_polyline(pts, Color(0.01, 0.01, 0.03, 0.32), w + 2.4, true)
+	draw_polyline(pts, Color(col.r, col.g, col.b, maxf(0.72, col.a * 0.9)), w, true)
 
 
 ## Segment count for a bezier stroke of `base` reference segments (tuned for
@@ -4155,9 +4631,9 @@ func _render_connection(
 				or (not t_it.is_empty() and not GraphSiteLayout.has_site_coords(t_it)):
 			return
 	var src := _get_handle_info(
-		sid, conn.get("source_handle_id", "") as String, center, tid, pol)
+		sid, conn.get("source_handle_id", "") as String, center, tid, pol).duplicate()
 	var tgt := _get_handle_info(
-		tid, conn.get("target_handle_id", "") as String, center, sid, pol)
+		tid, conn.get("target_handle_id", "") as String, center, sid, pol).duplicate()
 	if src.is_empty() or tgt.is_empty():
 		return
 
@@ -4187,6 +4663,8 @@ func _render_connection(
 		base_col = Color(0.16, 0.13, 0.11, 0.9)
 		flow_active = false
 	var col: Color = C_SELECTED_BORDER if is_sel else base_col
+	if not _path_conns.is_empty() and not _path_conns.has(str(conn.get("id", ""))):
+		col = Color(col.r, col.g, col.b, col.a * 0.18)
 	if wire_shed:
 		flow_active = false
 		var flash: float = 0.62 + 0.38 * abs(sin(_flow_phase * 7.5))
@@ -4211,8 +4689,11 @@ func _render_connection(
 		var gscale_w  := _wire_glow_scale_from_watts(flow_watts)
 		width = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4) * _zoom
 
-	# In Test mode wires animate if power is actually flowing; Build mode is always static
-	var flowing: bool = (current_mode == "test") and flow_active
+	# Wires animate while power actually flows — clock running, or paused with
+	# the "flow when paused" pref, or during a baked-run playback.
+	var flowing: bool = _flow_live and flow_active
+	if flowing:
+		_flowing_drawn = true
 
 	var tgt_tang_out := (tgt.get("tangent", Vector2.RIGHT) as Vector2)
 	var wps: Array = _waypoints_screen(conn, center)
@@ -4276,6 +4757,15 @@ func _render_connection(
 		conn = conn.duplicate()
 		conn["_draw_corner_px"] = _conn_corner_radius_px(conn, link_len)
 	var sankey_scale = bool(conn.get("sankey_scale", true))
+	# Parallel-wire comb: a bundled end starts its curve at its fan tooth.
+	var bundle: Dictionary = _bundle_plan.get(str(conn.get("id", "")), {}) as Dictionary
+	if not bundle.is_empty() and style != "metro" and style != "orthogonal":
+		if bundle.has("src"):
+			_draw_bundle_stub(bundle["src"], col, width)
+			src_pos = (bundle["src"] as Dictionary)["tooth"]
+		if bundle.has("tgt"):
+			_draw_bundle_stub(bundle["tgt"], col, width)
+			tgt_pos = (bundle["tgt"] as Dictionary)["tooth"]
 
 	if is_resource_wire:
 		# Radiant (sunlight) links are always dashed/glowing regardless of
@@ -4393,8 +4883,14 @@ func _render_connection(
 			[src_t, tgt_tang_out],
 			col, width, flowing, flow_watts, reverse, curve_t)
 	if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
+		# Anchor the pill ON the drawn curve (a bezier's midpoint is not the
+		# chord's — on a looping wire the pill used to float in empty space).
+		var anchor := Vector2.INF
+		if style != "metro" and style != "orthogonal" and wps.is_empty():
+			var bc := _wire_bezier_controls(src_pos, src_t, tgt_pos, tgt_tang_out, curve_t)
+			anchor = src_pos.bezier_interpolate(bc["c1"], bc["c2"], tgt_pos, 0.5)
 		_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col,
-			float(flow_est.get("volts", 0.0)))
+			float(flow_est.get("volts", 0.0)), anchor)
 	_draw_connection_waypoint_handles(conn, center)
 
 
@@ -4402,51 +4898,80 @@ func _render_connection(
 const WIRE_LABEL_MIN_ZOOM := 0.8
 const WIRE_LABEL_FONT_PX := 10.0   # graph-space design size (× _zoom on draw)
 
-## Small readout pill at the wire midpoint: "512 W" / "1.20 kW" for electrical,
-## "6.3 L/h" for typed resources.
-func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
-		value: float, is_resource: bool, kind: String, wire_col: Color,
-		volts: float = 0.0) -> void:
-	var txt: String
+## A wire's value text: "512 W · 48 V" electrical, "6.3 L/h" a typed
+## resource, "" when nothing flows.
+func _wire_value_text(value: float, is_resource: bool, kind: String, volts: float = 0.0) -> String:
 	if is_resource:
 		if value <= ResourceEdgeVis.FLOW_DEAD_RATE:
-			return
+			return ""
 		if kind == "sunlight" or kind == "wind":
 			# Instantaneous SoI flux (kW), not a per-hour accumulation like
 			# rain — omit the "/h" so the readout stays dimensionally honest.
-			txt = ("%.2f MW" % (value / 1000.0)) if value >= 1000.0 else ("%.1f kW" % value)
-		else:
-			txt = "%.1f %s/h" % [value, ResourceKinds.default_unit(kind)]
-	else:
-		if value < WIRE_DEAD_W:
-			return
-		txt = ("%.2f kW" % (value / 1000.0)) if value >= 1000.0 else ("%d W" % int(round(value)))
-		# Volts alongside watts: on a DC wire the voltage is the thing that
-		# changes with series/parallel wiring, and it is what decides whether a
-		# controller or battery can accept the string at all.
-		if volts > 0.5:
-			txt += "  ·  %.0f V" % volts
+			return UiText.num(value * 1000.0, "W")
+		return "%s/h" % UiText.num(value, ResourceKinds.default_unit(kind))
+	if value < WIRE_DEAD_W:
+		return ""
+	var txt := UiText.num(value, "W")
+	# Volts alongside watts: on a DC wire the voltage is the thing that
+	# changes with series/parallel wiring, and it is what decides whether a
+	# controller or battery can accept the string at all.
+	if volts > 0.5:
+		txt += " · " + UiText.num(volts, "V")
+	return txt
 
-	# Midpoint of the middle segment of the (src + waypoints + tgt) polyline —
-	# robust for bezier and orthogonal styles without resampling the curve.
-	var pts: Array = [src_pos] + wps + [tgt_pos]
-	@warning_ignore("integer_division")
-	var mid_seg: int = (pts.size() - 1) / 2
-	var mid: Vector2 = ((pts[mid_seg] as Vector2) + (pts[mini(mid_seg + 1, pts.size() - 1)] as Vector2)) * 0.5
 
-	var fnt := ThemeDB.fallback_font
-	var fs := maxi(6, int(round(WIRE_LABEL_FONT_PX * _zoom)))
+## The value text plus a built run's measured length (lens pills): a run that
+## carries nothing right now still says how long it is.
+func _wire_pill_text(value: float, is_resource: bool, kind: String, volts: float,
+		length_m: float) -> String:
+	var txt := _wire_value_text(value, is_resource, kind, volts)
+	if length_m > 0.0:
+		txt += (" · " if not txt.is_empty() else "") + ConduitLength.format(length_m)
+	return txt
+
+
+## Small readout pill at the wire midpoint: "512 W" / "1.20 kW" for electrical,
+## "6.3 L/h" for typed resources; `length_m` > 0 appends the run's length.
+func _draw_flow_label(src_pos: Vector2, tgt_pos: Vector2, wps: Array,
+		value: float, is_resource: bool, kind: String, wire_col: Color,
+		volts: float = 0.0, anchor: Vector2 = Vector2.INF, length_m: float = 0.0) -> void:
+	if not wire_value_labels:
+		return
+	var txt := _wire_pill_text(value, is_resource, kind, volts, length_m)
+	if txt.is_empty():
+		return
+
+	var mid := anchor
+	if mid == Vector2.INF:
+		# Midpoint of the middle segment of the (src + waypoints + tgt)
+		# polyline — robust for orthogonal / metro styles.
+		var pts: Array = [src_pos] + wps + [tgt_pos]
+		@warning_ignore("integer_division")
+		var mid_seg: int = (pts.size() - 1) / 2
+		mid = ((pts[mid_seg] as Vector2) + (pts[mini(mid_seg + 1, pts.size() - 1)] as Vector2)) * 0.5
+
+	var fnt := UITheme.font("medium", true)
+	var fs := maxi(7, int(round(WIRE_LABEL_FONT_PX * _zoom)))
 	var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-	var pad := 3.0 * _zoom
-	var rect := Rect2(mid - ts * 0.5 - Vector2(pad, pad),
-			ts + Vector2(pad * 2.0, pad * 2.0))
-	draw_rect(rect, Color(0.04, 0.06, 0.11, 0.85), true)
-	draw_rect(rect, Color(wire_col.r, wire_col.g, wire_col.b, 0.45), false, maxf(0.8, 1.0 * _zoom))
+	var pad := Vector2(5.0, 2.5) * _zoom
+	var rect := Rect2(mid - ts * 0.5 - pad, ts + pad * 2.0)
+	# Never stack pills on each other or on a card: six parallel wires into
+	# one port used to pile six pills into an unreadable block. A pill that
+	# would collide is dropped — the wire still shows its flow.
+	for r: Rect2 in _label_rects:
+		if r.intersects(rect):
+			return
+	for it: Dictionary in _visible_items():
+		if _item_hit_rect(it).intersects(rect.grow(-1.0)):
+			return
+	_label_rects.append(rect)
+	GraphCard._sb(self, rect, Color(0.04, 0.06, 0.11, 0.9), int(rect.size.y * 0.5),
+		Color(wire_col.r, wire_col.g, wire_col.b, 0.55), 1)
 	var txt_col := Color(
-		lerpf(wire_col.r, 1.0, 0.35),
-		lerpf(wire_col.g, 1.0, 0.35),
-		lerpf(wire_col.b, 1.0, 0.35), 0.96)
-	draw_string(fnt, Vector2(rect.position.x + pad, rect.end.y - pad - fs * 0.18),
+		lerpf(wire_col.r, 1.0, 0.45),
+		lerpf(wire_col.g, 1.0, 0.45),
+		lerpf(wire_col.b, 1.0, 0.45), 0.97)
+	draw_string(fnt, Vector2(rect.position.x + pad.x, rect.get_center().y + fs * 0.36),
 		txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, txt_col)
 
 
@@ -4616,17 +5141,21 @@ func _draw_wire_bezier(from: Vector2, from_tang: Vector2,
 	var c2: Vector2 = ctrl["c2"]
 	var gscale := _wire_glow_scale_from_watts(flow_watts)
 	var body_w := maxf(2.2, width + 0.6 + gscale * 1.3)
-
-	# Base depth stroke
-	_draw_bezier_stroke(from, c1, c2, to, 30, Color(0.01, 0.01, 0.03, 0.32), body_w + 2.4)
-	# Colored glow
-	var glow_alpha := (0.12 + 0.20 * gscale) if flow_active else 0.08
-	_draw_bezier_stroke(from, c1, c2, to, 30, Color(col.r, col.g, col.b, glow_alpha), body_w + 3.0 + 3.2 * gscale)
-	# Main stroke
-	var core := Color(lerpf(col.r, 1.0, 0.20 * gscale), lerpf(col.g, 1.0, 0.18 * gscale), lerpf(col.b, 1.0, 0.12 * gscale), 0.72 + 0.26 * gscale)
-	_draw_bezier_stroke(from, c1, c2, to, 34, core, body_w)
-	# Hot inner line
-	_draw_bezier_stroke(from, c1, c2, to, 34, Color(1.0, 1.0, 1.0, 0.18 + 0.28 * gscale), maxf(1.0, body_w * 0.24))
+	# One sampling of the curve for all four strokes (each used to re-sample
+	# it), with the segment count following the wire's on-screen length.
+	var approx_len := from.distance_to(c1) + c1.distance_to(c2) + c2.distance_to(to)
+	var pts := _bezier_points(from, c1, c2, to, _adaptive_segments(approx_len, 34))
+	if pts.size() >= 2:
+		# Base depth stroke
+		draw_polyline(pts, Color(0.01, 0.01, 0.03, 0.32), body_w + 2.4)
+		# Colored glow
+		var glow_alpha := (0.12 + 0.20 * gscale) if flow_active else 0.08
+		draw_polyline(pts, Color(col.r, col.g, col.b, glow_alpha), body_w + 3.0 + 3.2 * gscale)
+		# Main stroke
+		var core := Color(lerpf(col.r, 1.0, 0.20 * gscale), lerpf(col.g, 1.0, 0.18 * gscale), lerpf(col.b, 1.0, 0.12 * gscale), 0.72 + 0.26 * gscale)
+		draw_polyline(pts, core, body_w)
+		# Hot inner line
+		draw_polyline(pts, Color(1.0, 1.0, 1.0, 0.18 + 0.28 * gscale), maxf(1.0, body_w * 0.24))
 
 	if flow_active:
 		# Number of arrows scales with power (1–6) so high-wattage wires feel more alive
@@ -5174,14 +5703,29 @@ func _sample_wire_path(points: Array, end_tangents: Array, t_global: float,
 ## Solid polyline along cubic bezier
 func _draw_bezier_stroke(
 		from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, segments: int, col: Color, line_w: float) -> void:
-	var prev: Vector2  = from
+	var pts := _bezier_points(from, c1, c2, to, segments)
+	if pts.size() >= 2:
+		draw_polyline(pts, col, line_w)
+
+
+## The curve as a polyline (sub-pixel steps dropped). One draw_polyline per
+## stroke instead of a draw_line per segment: a freeform wire is four strokes,
+## and 76 wires at ~32 segments each was ~10 000 draw calls a frame.
+func _bezier_points(from: Vector2, c1: Vector2, c2: Vector2, to: Vector2, segments: int) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	pts.resize(segments + 1)
+	pts[0] = from
+	var n := 1
+	var prev := from
 	for i in range(1, segments + 1):
-		var t:   float  = float(i) / float(segments)
-		var p:  Vector2 = from.bezier_interpolate(c1, c2, to, t)
-		if prev.distance_squared_to(p) < 0.1:
+		var p: Vector2 = from.bezier_interpolate(c1, c2, to, float(i) / float(segments))
+		if prev.distance_squared_to(p) < 0.1 and i < segments:
 			continue
-		draw_line(prev, p, col, line_w)
+		pts[n] = p
+		n += 1
 		prev = p
+	pts.resize(n)
+	return pts
 
 
 ## Dashed variant of `_draw_bezier_stroke` — walks cumulative screen-space
@@ -5253,21 +5797,24 @@ func _controller_handle_candidates(handle_id: String, peer_type: String,
 	var out: Array = [_normalize_handle_id(handle_id)]
 	if handle_id.is_empty():
 		return out
-	var pos_keys := ["positive", "pv-positive", "pv_positive"]
-	var neg_keys := ["negative", "pv-negative", "pv_negative"]
-	var bat_pos_keys := pos_keys + ["battery-positive", "battery_positive"]
-	var bat_neg_keys := neg_keys + ["battery-negative", "battery_negative"]
 	if _is_battery_type(peer_type):
-		if handle_id in bat_pos_keys or conn_polarity == "positive":
+		if handle_id in _CTRL_BAT_POS_KEYS or conn_polarity == "positive":
 			out.append("batteryPositive")
-		if handle_id in bat_neg_keys or conn_polarity == "negative":
+		if handle_id in _CTRL_BAT_NEG_KEYS or conn_polarity == "negative":
 			out.append("batteryNegative")
 	elif _is_generator_type(peer_type):
-		if handle_id in pos_keys or conn_polarity == "positive":
+		if handle_id in _CTRL_POS_KEYS or conn_polarity == "positive":
 			out.append("pvPositive")
-		if handle_id in neg_keys or conn_polarity == "negative":
+		if handle_id in _CTRL_NEG_KEYS or conn_polarity == "negative":
 			out.append("pvNegative")
 	return out
+
+
+# Built once (they were four fresh arrays per wire end per draw).
+const _CTRL_POS_KEYS := ["positive", "pv-positive", "pv_positive"]
+const _CTRL_NEG_KEYS := ["negative", "pv-negative", "pv_negative"]
+const _CTRL_BAT_POS_KEYS := ["positive", "pv-positive", "pv_positive", "battery-positive", "battery_positive"]
+const _CTRL_BAT_NEG_KEYS := ["negative", "pv-negative", "pv_negative", "battery-negative", "battery_negative"]
 
 
 func _lookup_handle_fraction(item: Dictionary, handle_id: String) -> Dictionary:
@@ -5309,6 +5856,22 @@ func _get_handle_info(item_id: String, handle_id: String,
 		conn_polarity: String = "") -> Dictionary:
 	if model == null or item_id.is_empty() or handle_id.is_empty():
 		return {}
+	# Per draw, each wire end is resolved once and shared by the bundle plan,
+	# the wire draw and the labels. The dict is SHARED: a caller that adjusts
+	# pos/tangent (hub ends, physical views in _render_connection) copies first.
+	if _draw_cache_active:
+		var key := "%s|%s|%s|%s" % [item_id, handle_id, peer_item_id, conn_polarity]
+		var hit: Variant = _hinfo_cache.get(key)
+		if hit == null:
+			hit = _get_handle_info_uncached(item_id, handle_id, center, peer_item_id, conn_polarity)
+			_hinfo_cache[key] = hit
+		return hit
+	return _get_handle_info_uncached(item_id, handle_id, center, peer_item_id, conn_polarity)
+
+
+func _get_handle_info_uncached(item_id: String, handle_id: String,
+		center: Vector2, peer_item_id: String = "",
+		conn_polarity: String = "") -> Dictionary:
 	var item := model.get_item(item_id)
 	if item.is_empty():
 		return {}
@@ -5518,6 +6081,21 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 		var style: String = _effective_line_style(conn)
 		var curve_t := _conn_curve_tension(conn)
 		var hit := false
+		# Bundled ends: the curve starts at the fan tooth, as drawn; the comb
+		# itself is picked as its own short polyline.
+		var bundle: Dictionary = _bundle_plan.get(str(conn.get("id", "")), {}) as Dictionary
+		if not bundle.is_empty() and style != "metro" and style != "orthogonal":
+			for side: String in ["src", "tgt"]:
+				if not bundle.has(side):
+					continue
+				var stub := GraphWireBundles.stub_points(bundle[side])
+				for i: int in range(stub.size() - 1):
+					if _point_segment_distance(screen_pos, stub[i], stub[i + 1]) < PICK_DIST * 0.6:
+						hit = true
+				if side == "src":
+					from = (bundle[side] as Dictionary)["tooth"]
+				else:
+					to = (bundle[side] as Dictionary)["tooth"]
 		if style == "orthogonal":
 			var poly := _connection_polyline_screen(conn, center, true)
 			for i: int in range(poly.size() - 1):
@@ -5871,6 +6449,7 @@ func _draw_world_pins() -> void:
 	var fnt := ThemeDB.fallback_font
 	var labels: Array = []
 	var drag_anchor := Vector2.INF
+	_draw_lens_runs()   # under the pins; their pills go on after the pins
 	for item: Dictionary in _cached_visible_items:
 		if not GraphSiteLayout.has_site_coords(item):
 			continue
@@ -5917,6 +6496,8 @@ func _draw_world_pins() -> void:
 			labels.append([head, text, col])
 	if not was_cached:
 		_draw_cache_active = false
+	_draw_lens_run_pills()
+	_draw_connect_tool()
 	for l in labels:
 		var at: Vector2 = l[0]
 		var text: String = l[1]
@@ -6203,6 +6784,12 @@ func _handle_globe_input(event: InputEvent) -> void:
 	if event is InputEventMagnifyGesture:
 		soi_preview_zoom.emit((event as InputEventMagnifyGesture).factor > 1.0)
 		return
+	# The connect tool owns LMB / RMB / keys while it is on.
+	if _handle_connect_tool_input(event):
+		return
+	# A selected run's bend handles, then pins, then a press on a run's line.
+	if _handle_run_edit_input(event):
+		return
 	# Pins first: a press on a pin is a pin drag, never an orbit.
 	if _handle_pin_input(event):
 		return
@@ -6243,6 +6830,8 @@ var _elev_probe_px: Vector2 = Vector2(-1e6, -1e6)
 
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_MOUSE_EXIT and not _path_focus_src.is_empty():
+		set_path_focus("")
 	if what == NOTIFICATION_MOUSE_EXIT and _elev_probe_px.x > -1e5:
 		_elev_probe_px = Vector2(-1e6, -1e6)
 		if view_mode == GraphSiteLayout.VIEW_ELEVATION:
@@ -6353,6 +6942,16 @@ func _draw() -> void:
 	_cached_visible_connections = _compute_visible_connections()
 	_twin_hidden_cache.clear()
 	_conn_anchor_cache.clear()
+	_handles_cache.clear()
+	_hinfo_cache.clear()
+	_wired_cache.clear()
+	_wired_cache_ready = false
+	_label_rects.clear()
+	_string_w_cache.clear()
+	if not _path_focus_src.is_empty() and model != null and model.get_item(_path_focus_src).is_empty():
+		_path_focus_src = ""
+		_path_items = {}
+		_path_conns = {}
 	_draw_cache_active = true
 	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
 	if soi_live_preview:
@@ -6374,9 +6973,16 @@ func _draw() -> void:
 			if not GraphSiteLayout.has_site_coords(item):
 				_render_item(item)
 	elif model != null and _visible_items().size() > 0:
+		if pm != null:
+			pm.begin("gv_wires")
 		_draw_connections()
+		if pm != null:
+			pm.end("gv_wires")
+			pm.begin("gv_cards")
 		for item: Dictionary in _visible_items():
 			_render_item(item)
+		if pm != null:
+			pm.end("gv_cards")
 		for item: Dictionary in _visible_items():
 			_draw_item_overlays(item)
 		for item2: Dictionary in _visible_items():
@@ -6481,12 +7087,29 @@ func _draw_pbi_bar() -> void:
 	if pbis.is_empty():
 		return
 
-	var fnt := ThemeDB.fallback_font
-	var pw := 138.0
-	var ph := 30.0
-	var gap := 12.0
-	var total := pbis.size() * pw + (pbis.size() - 1) * gap
-	var x0 := maxf(10.0, (size.x - total) * 0.5)
+	# Pills are sized from their own measured text (a fixed 138 × 30 put the
+	# value line ON the bottom border and clipped longer names), two clear lines
+	# inside a rounded body.
+	var f_title := UITheme.font("semibold")
+	var f_value := UITheme.font("regular", true)
+	const PILL_PAD := 10.0
+	const TITLE_PX := 12
+	const VALUE_PX := 11
+	var ph := 38.0
+	var gap := 10.0
+	var widths: Array = []
+	var total := 0.0
+	for item0 in pbis:
+		var sp0: Dictionary = (item0 as Dictionary).get("specs", {}) as Dictionary
+		var t0 := "%s %s" % [str(_PBI_GLYPHS.get(str(sp0.get("resource_kind", "")), "◆")),
+			str(sp0.get("name", (item0 as Dictionary).get("id", "")))]
+		var w0 := maxf(f_title.get_string_size(t0, HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_PX).x,
+			f_value.get_string_size(str(sp0.get("display_value", "")), HORIZONTAL_ALIGNMENT_LEFT, -1, VALUE_PX).x)
+		var pw0 := clampf(w0 + PILL_PAD * 2.0, 112.0, 230.0)
+		widths.append(pw0)
+		total += pw0
+	total += (pbis.size() - 1) * gap
+	var x := maxf(10.0, (size.x - total) * 0.5)
 	var y := 8.0
 	for i in pbis.size():
 		var item: Dictionary = pbis[i]
@@ -6495,29 +7118,38 @@ func _draw_pbi_bar() -> void:
 		var kind := str(specs.get("resource_kind", ""))
 		var col := _wire_color_for_port("resource", kind)
 		var is_active := bool(specs.get("active", true))
-		var r := Rect2(Vector2(x0 + i * (pw + gap), y), Vector2(pw, ph))
+		var pw: float = widths[i]
+		var r := Rect2(Vector2(x, y), Vector2(pw, ph))
+		x += pw + gap
 		var is_sel := (iid == selected_item_id)
 
 		# Body
-		var body_a := 0.20 if is_active else 0.10
-		draw_rect(r, Color(col.r, col.g, col.b, body_a), true)
-		draw_rect(r, Color(col.r, col.g, col.b, 0.95 if is_active else 0.5),
-			false, 2.0 if is_sel else 1.4)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(col.r, col.g, col.b, 0.18 if is_active else 0.08)
+		sb.border_color = Color(col.r, col.g, col.b, 0.95 if is_active else 0.5)
+		sb.set_border_width_all(2 if is_sel else 1)
+		sb.set_corner_radius_all(8)
+		draw_style_box(sb, r)
 		if is_sel:
-			draw_rect(r.grow(2.0), Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.9),
-				false, 1.6)
+			var ring := StyleBoxFlat.new()
+			ring.draw_center = false
+			ring.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.9)
+			ring.set_border_width_all(2)
+			ring.set_corner_radius_all(10)
+			draw_style_box(ring, r.grow(3.0))
 
-		# Label: glyph + name + value
+		# Two lines: glyph + name, then the value — both inside the border.
 		var glyph := str(_PBI_GLYPHS.get(kind, "◆"))
-		var title := str(specs.get("name", iid))
+		var title := UiText.fit(f_title, "%s %s" % [glyph, str(specs.get("name", iid))],
+			TITLE_PX, pw - PILL_PAD * 2.0, "pbi_pill")
 		var value := str(specs.get("display_value", ""))
-		draw_string(fnt, r.position + Vector2(8.0, ph * 0.5 + 5.0),
-			"%s %s" % [glyph, title], HORIZONTAL_ALIGNMENT_LEFT,
-			pw - 14.0, 12, C_TEXT)
+		draw_string(f_title, r.position + Vector2(PILL_PAD, 16.0), title,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_PX, C_TEXT)
 		if not value.is_empty():
-			draw_string(fnt, r.position + Vector2(8.0, ph - 4.0),
-				value, HORIZONTAL_ALIGNMENT_LEFT, pw - 14.0, 9,
-				Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.7))
+			draw_string(f_value, r.position + Vector2(PILL_PAD, 31.0),
+				UiText.fit(f_value, value, VALUE_PX, pw - PILL_PAD * 2.0, "pbi_pill"),
+				HORIZONTAL_ALIGNMENT_LEFT, -1, VALUE_PX,
+				Color(C_TEXT.r, C_TEXT.g, C_TEXT.b, 0.72))
 
 		# Output port tab (points DOWN into the canvas) + connectable dot.
 		var tab_c := Vector2(r.position.x + pw * 0.5, r.end.y)
@@ -6643,6 +7275,16 @@ func _draw_item_overlays(item: Dictionary) -> void:
 			draw_string(fnt, tl + Vector2(3.0 * _zoom, float(fs) + 2.0 * _zoom),
 				"⚙", HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
 				Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.85))
+
+	# Pinned for the force layout (Layout ▾ → Pin selected): a small lock on
+	# the top-right corner, so a node that will not move says why.
+	if bool(specs.get("layout_pinned", false)) and view_mode == GraphSiteLayout.VIEW_FREEFORM:
+		var px := clampi(int(round(12.0 * _zoom)), 9, 22)
+		var tex := UiIcons.icon("lock", px)
+		if tex != null:
+			var at := tl + Vector2(sz.x - float(px) - 3.0 * _zoom, -float(px) * 0.5)
+			draw_circle(at + Vector2(px, px) * 0.5, float(px) * 0.72, Color(0.05, 0.08, 0.16, 0.92))
+			draw_texture_rect(tex, Rect2(at, Vector2(px, px)), false, Color(0.95, 0.78, 0.35, 1.0))
 
 	if _item_flash.has(iid):
 		var t := clampf(float(_item_flash[iid]) / ITEM_FLASH_SECONDS, 0.0, 1.0)
@@ -6793,14 +7435,9 @@ func _render_item(item: Dictionary) -> void:
 			_draw_item_handles(item, tl, sz)
 		return
 
-	if itype in ["battery", "smartbattery", "resource"]:
-		var level: float = clampf(float(specs.get("soc", specs.get("level", 0.0))), 0.0, 1.0)
-		var do_balloon := itype != "resource" or bool(specs.get("scale_with_fill", true))
-		if do_balloon:
-			var scale_factor = 1.0 + (level * 0.15)
-			sz = sz_orig * scale_factor
-			tl = tl_orig - (sz - sz_orig) * 0.5
-		
+	# Storage used to SWELL up to 15 % with its fill level: the drawn card then
+	# no longer matched its layout rect or hit rect, neighbours overlapped it,
+	# and a layout could not keep cards apart. The fill shows inside the card.
 	var rect    := Rect2(tl, sz)
 
 	if itype in ["battery", "smartbattery", "resource"]:
@@ -6809,21 +7446,26 @@ func _render_item(item: Dictionary) -> void:
 		if itype == "resource" and bool(specs.get("unlimited_capacity", false)):
 			pass
 		else:
+			# Near-full is a CAPACITY notice (more input will spill or be
+			# curtailed), not a fault: one calm overflow-amber ripple. It was
+			# three RED rings — the colour of a destroyed node — on a full,
+			# perfectly healthy battery.
 			var alert_threshold = float(specs.get("alert_threshold_pct", 95.0)) / 100.0
 			if level >= alert_threshold:
-				var wave_count = 3
-				for w in wave_count:
-					var wave_phase = fmod(_flow_phase * 1.5 + float(w) / wave_count, 1.0)
-					var wave_expand = maxf(5.0, 30.0 * _zoom) * wave_phase
-					var wave_rect = rect.grow(wave_expand)
-					var alpha = (1.0 - wave_phase) * 0.6
-					draw_rect(wave_rect, Color(1.0, 0.2, 0.2, alpha), false, 2.0 * _zoom)
+				var wave_phase := fmod(_flow_phase * 0.8, 1.0)
+				var wave_rect := rect.grow(maxf(3.0, 14.0 * _zoom) * wave_phase)
+				var oc := GraphNodeState.C_OVERFLOW
+				draw_rect(wave_rect, Color(oc.r, oc.g, oc.b, (1.0 - wave_phase) * 0.45), false,
+					maxf(1.0, 1.5 * _zoom))
 
 	# Blocked-family vibration (behind frame). RUNNING / alert outline halos are
 	# drawn in the overlay pass so they stay rounded and consistent across V1/V2.
 	var node_state := str(specs.get("node_state", ""))
 	if GraphNodeState.is_blocked_family(node_state):
-		var offset = Vector2(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0)) * _zoom
+		# A slow deterministic shake: it used to re-roll randf on every redraw,
+		# a nervous buzz that never settled.
+		var ph := _flow_phase * TAU * 2.0 + float(absi(hash(iid)) % 97)
+		var offset = Vector2(sin(ph * 3.1), cos(ph * 2.3)) * 1.5 * _zoom
 		tl += offset
 		rect.position += offset
 		_draw_rounded_state_highlight(rect.grow(maxf(2.5, 3.0 * _zoom)),
@@ -7619,7 +8261,7 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	var child_count: int = int(specs.get("child_count", 0))
 	var port_in: int = int(specs.get("port_in_count", 0))
 	var port_out: int = int(specs.get("port_out_count", 0))
-	draw_string(fnt, Vector2(x, y), "%d nodes inside" % child_count,
+	draw_string(fnt, Vector2(x, y), "%s inside" % UiText.count(child_count, "node"),
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, C_TEXT)
 	y += fsize + 3.0
 	draw_string(fnt, Vector2(x, y), "In %d  Out %d" % [port_in, port_out],
@@ -8092,6 +8734,16 @@ func _wired_handle_ids(item_id: String) -> Dictionary:
 	var used: Dictionary = {}
 	if model == null:
 		return used
+	if _draw_cache_active:
+		if not _wired_cache_ready:
+			_wired_cache_ready = true
+			for c: Dictionary in _visible_connections():
+				for side: String in ["source", "target"]:
+					var iid := str(c.get(side + "_item_id", ""))
+					if not _wired_cache.has(iid):
+						_wired_cache[iid] = {}
+					(_wired_cache[iid] as Dictionary)[c.get(side + "_handle_id", "")] = true
+		return _wired_cache.get(item_id, used)
 	for conn: Dictionary in _visible_connections():
 		if conn.get("source_item_id", "") == item_id:
 			used[conn.get("source_handle_id", "")] = true
@@ -8199,7 +8851,7 @@ func _draw_array_compound_handles(tl: Vector2, sz: Vector2) -> void:
 # (both versions run), unlike the other draw methods whose base copies were dead and
 # have been consolidated. Kept separate on purpose; edit the elevation path here.
 func _draw_port_dot(screen_pos: Vector2, polarity: String, resource_kind: String = "") -> void:
-	var touch := _touch_input_active() or DisplayServer.is_touchscreen_available()
+	var touch := _touch_input_active() or touchscreen_available()
 	var r   := maxf(5.0, 6.0 * _zoom)
 	# Elevation CT: hard screen-space cap — uncapped 6×zoom becomes billboards
 	# that drown the pond when zoomed in.
@@ -8440,7 +9092,11 @@ func _draw_soi_background() -> void:
 
 	# Freeform: the ring is a reference marker, independently scalable via
 	# Shift+scroll (soi_ring_scale). The old decorative terrain squiggle was a
-	# placeholder superseded by the Elevation view — removed.
+	# placeholder superseded by the Elevation view — removed. Off by default
+	# (Display → Background): around a circuit diagram it meant nothing and
+	# changed size from level to level.
+	if view_mode == GraphSiteLayout.VIEW_FREEFORM and not freeform_soi_ring:
+		return
 	var rr := r_px * (soi_ring_scale if view_mode == GraphSiteLayout.VIEW_FREEFORM else 1.0)
 	var ring_col2 := Color(0.25, 0.65, 0.95, 0.45)
 	draw_circle(origin, rr, Color(0.05, 0.1, 0.15, 0.2))
@@ -9467,8 +10123,12 @@ func _try_draw_elev_conduit_projection(conn: Dictionary, col: Color, width: floa
 	if screen.size() < 2:
 		return false
 	_draw_polyline_stroke(screen, col, minf(width, ELEV_WIRE_MAX_PX))
-	if flowing and rate > 0.01 and _zoom >= WIRE_LABEL_MIN_ZOOM and not res_kind.is_empty():
-		_draw_flow_label(screen[0], screen[screen.size() - 1], [], rate, true, res_kind, col)
+	# The pill carries the run's measured length too, flowing or not.
+	var run_len := float(conn.get("route_length_m", 0.0))
+	var show_rate := flowing and rate > 0.01 and not res_kind.is_empty()
+	if _zoom >= WIRE_LABEL_MIN_ZOOM and (show_rate or run_len > 0.0):
+		_draw_flow_label(screen[0], screen[screen.size() - 1], [], rate if show_rate else 0.0,
+			true, res_kind, col, 0.0, _polyline_mid(screen), run_len)
 	return true
 
 
@@ -10248,12 +10908,9 @@ func _draw_outlined_string(fnt: Font, center_baseline: Vector2, text: String,
 		fsize: int, fill: Color, outline: Color) -> void:
 	var ts := fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fsize)
 	var origin := center_baseline - Vector2(ts.x * 0.5, 0.0)
-	var o := maxf(1.0, 1.4 * _zoom)
-	for d: Vector2 in [
-		Vector2(-o, 0), Vector2(o, 0), Vector2(0, -o), Vector2(0, o),
-		Vector2(-o, -o), Vector2(o, -o), Vector2(-o, o), Vector2(o, o),
-	]:
-		draw_string(fnt, origin + d, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, outline)
+	# One outline pass (it was the string drawn eight times at offsets).
+	var o := maxi(2, int(round(2.8 * _zoom)))
+	draw_string_outline(fnt, origin, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, o, outline)
 	draw_string(fnt, origin, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, fill)
 
 
@@ -10380,3 +11037,664 @@ func _draw_wind_pbi_body(center: Vector2, outer_r: float, is_active: bool,
 	draw_arc(center, outer_r * 0.96, 0.0, TAU, 48, Color(1, 1, 1, 0.18), maxf(1.0, 1.5 * _zoom))
 	_draw_pbi_labels(center, outer_r * 0.70, title, pbi_val,
 			Color(1, 1, 1, 1.0), Color(0.95, 0.98, 1.0, 0.95))
+
+
+# ---------------------------------------------------------------------------
+# Connect tool — draw a 3D run between two nodes from the Globe / Site Plan
+# ---------------------------------------------------------------------------
+## Click a pin (its port: auto when only one fits, else a short menu), click
+## ground to drop waypoints, click the other pin to connect. RMB takes back
+## the last waypoint (or the start); Esc cancels. The view makes the
+## connection, locks the waypoints as its route and builds the run — the same
+## run first-person plugging makes, so its length is measured the same way.
+
+var connect_tool_active := false
+var _ct_src_item := ""
+var _ct_src_handle := ""
+var _ct_waypoints: Array = []     ## world Vector3
+var _ct_cursor_world := Vector3.INF
+var _ct_menu: PopupMenu = null
+
+
+func set_connect_tool(on: bool) -> void:
+	connect_tool_active = on
+	_ct_reset()
+	queue_redraw()
+
+
+func _ct_reset() -> void:
+	_ct_src_item = ""
+	_ct_src_handle = ""
+	_ct_waypoints = []
+	_ct_cursor_world = Vector3.INF
+
+
+## Ports a connection could use on `item` (ambient sun / wind ports left out).
+## With `src_handle`, only those that can take a wire from it.
+func _ct_ports(item: Dictionary, src_item: Dictionary = {}, src_handle: String = "") -> Array:
+	var out: Array = []
+	var sh: Dictionary = {}
+	if not src_item.is_empty():
+		sh = _handle_dict(src_item, src_handle)
+	for h in _resolved_handles(item):
+		var hd: Dictionary = h
+		var kind := str(hd.get("resource_kind", ""))
+		if kind == "sunlight" or kind == "wind":
+			continue
+		if not sh.is_empty():
+			if not _polarity_compatible(str(sh.get("polarity", "")), str(hd.get("polarity", "")),
+					str(sh.get("resource_kind", "")), kind):
+				continue
+		out.append(hd)
+	return out
+
+
+func _ct_world_of(item: Dictionary) -> Vector3:
+	return _phys_item_world_center(item)
+
+
+func _handle_connect_tool_input(event: InputEvent) -> bool:
+	if not connect_tool_active or model == null:
+		return false
+	if event is InputEventKey and event.pressed and not event.echo:
+		var ke := event as InputEventKey
+		if ke.keycode == KEY_ESCAPE:
+			if _ct_src_item.is_empty():
+				set_connect_tool(false)
+				connect_tool_cancelled.emit()
+			else:
+				_ct_reset()
+				queue_redraw()
+			return true
+		return false
+	if event is InputEventMouseMotion:
+		if not _ct_src_item.is_empty():
+			var hit := _pin_ground_hit((event as InputEventMouseMotion).position)
+			if not hit.is_empty():
+				var c := _soi_world_center()
+				var site: Vector2 = hit["site"]
+				_ct_cursor_world = Vector3(c.x + site.x, float(hit["y"]), c.z + site.y)
+			queue_redraw()
+		# Hover still lights pins; never start an orbit drag here.
+		var hid := _globe_pin_at((event as InputEventMouseMotion).position)
+		if hid != _globe_hover_id:
+			_globe_hover_id = hid
+			queue_redraw()
+		return false
+	if not (event is InputEventMouseButton):
+		return false
+	var mb := event as InputEventMouseButton
+	if not mb.pressed:
+		return mb.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT]
+	if mb.button_index == MOUSE_BUTTON_RIGHT:
+		if not _ct_waypoints.is_empty():
+			_ct_waypoints.pop_back()
+		elif not _ct_src_item.is_empty():
+			_ct_reset()
+		queue_redraw()
+		return true
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	var pin := _globe_pin_at(mb.position)
+	if _ct_src_item.is_empty():
+		if pin.is_empty():
+			# A selected node with no 3D twin yet (often one with no site at
+			# all, so it has no pin): offer to put it HERE and start from it.
+			var sel_it := model.get_item(selected_item_id) if not selected_item_id.is_empty() else {}
+			if not sel_it.is_empty() and not model.item_has_3d_anchor(sel_it):
+				var gh := _pin_ground_hit(mb.position)
+				if not gh.is_empty():
+					var cg := _soi_world_center()
+					var sg: Vector2 = gh["site"]
+					_ct_offer_place(selected_item_id, Vector3(cg.x + sg.x, float(gh["y"]), cg.z + sg.y),
+							mb.position, true)
+			return true   # nothing to start from — swallow, don't orbit-select
+		if not model.item_has_3d_anchor(model.get_item(pin)):
+			_ct_offer_place(pin, _ct_world_of(model.get_item(pin)), mb.position, true)
+			return true
+		_ct_pick_source(pin, mb.position)
+		return true
+	if not pin.is_empty() and pin != _ct_src_item:
+		if not model.item_has_3d_anchor(model.get_item(pin)):
+			_ct_offer_place(pin, _ct_world_of(model.get_item(pin)), mb.position, false)
+			return true
+		_ct_pick_target(pin, mb.position)
+		return true
+	# Ground: a waypoint.
+	var hit2 := _pin_ground_hit(mb.position)
+	if not hit2.is_empty():
+		var c2 := _soi_world_center()
+		var site2: Vector2 = hit2["site"]
+		_ct_waypoints.append(Vector3(c2.x + site2.x, float(hit2["y"]) + 0.3, c2.z + site2.y))
+		queue_redraw()
+	return true
+
+
+func _ct_pick_source(pin: String, at: Vector2) -> void:
+	var ports := _ct_ports(model.get_item(pin))
+	if ports.is_empty():
+		_ct_flash("That node has no port a wire can start from")
+		return
+	if ports.size() == 1:
+		_ct_set_source(pin, str((ports[0] as Dictionary).get("id", "")))
+	else:
+		_ct_choose(pin, ports, at, true)
+
+
+func _ct_pick_target(pin: String, at: Vector2) -> void:
+	var src_it := model.get_item(_ct_src_item)
+	var tports := _ct_ports(model.get_item(pin), src_it, _ct_src_handle)
+	if tports.is_empty():
+		_ct_flash("No port on %s takes this wire" % GraphPortLabels.node_name(model.get_item(pin)))
+		return
+	if tports.size() == 1:
+		_ct_commit(pin, str((tports[0] as Dictionary).get("id", "")))
+	else:
+		_ct_choose(pin, tports, at, false)
+
+
+## An end with no 3D twin can't anchor a run. Instead of refusing, offer to
+## place its model (a grey box when it has none) at `world` — the view does it
+## through the same commit the 3D ghost uses — and carry on from there.
+func _ct_offer_place(item_id: String, world: Vector3, at: Vector2, as_source: bool) -> void:
+	var it := model.get_item(item_id)
+	if it.is_empty() or not is_finite(world.x):
+		return
+	if str(it.get("type", "")) == "pbi" or _pin_locked(it):
+		_ct_flash("%s has no place of its own in 3D — it follows its %s" % [
+			GraphPortLabels.node_name(it), _pin_lock_reason(it)])
+		return
+	var menu := _ct_menu_reset()
+	menu.add_separator("%s has no place in 3D yet" % GraphPortLabels.node_name(it))
+	menu.add_item("Place it here", 0)
+	menu.add_item("Cancel", 1)
+	menu.id_pressed.connect(func(i: int) -> void:
+		if i != 0:
+			return
+		world_place_requested.emit(item_id, world)
+		# The menu is still emitting; carry on once it has closed.
+		_ct_after_place.call_deferred(item_id, at, as_source))
+	_ct_menu_popup(menu, at)
+
+
+func _ct_after_place(item_id: String, at: Vector2, as_source: bool) -> void:
+	if not connect_tool_active or model == null:
+		return
+	if not model.item_has_3d_anchor(model.get_item(item_id)):
+		_ct_flash("Could not place %s there" % GraphPortLabels.node_name(model.get_item(item_id)))
+		return
+	if as_source:
+		_ct_pick_source(item_id, at)
+	elif not _ct_src_item.is_empty():
+		_ct_pick_target(item_id, at)
+	queue_redraw()
+
+
+func _ct_menu_reset() -> PopupMenu:
+	if _ct_menu == null or not is_instance_valid(_ct_menu):
+		_ct_menu = PopupMenu.new()
+		add_child(_ct_menu)
+	for c in _ct_menu.id_pressed.get_connections():
+		_ct_menu.id_pressed.disconnect(c["callable"])
+	_ct_menu.clear()
+	return _ct_menu
+
+
+func _ct_menu_popup(menu: PopupMenu, at: Vector2) -> void:
+	menu.position = Vector2i(get_screen_transform() * at)
+	menu.reset_size()
+	menu.popup()
+
+
+func _ct_set_source(item_id: String, handle_id: String) -> void:
+	_ct_src_item = item_id
+	_ct_src_handle = handle_id
+	_ct_waypoints = []
+	queue_redraw()
+
+
+func _ct_commit(dst_item: String, dst_handle: String) -> void:
+	world_connect_requested.emit(_ct_src_item, _ct_src_handle, dst_item, dst_handle, _ct_waypoints.duplicate())
+	_ct_reset()
+	queue_redraw()
+
+
+## Several ports fit: a short menu at the pointer, named like the port labels.
+func _ct_choose(item_id: String, ports: Array, at: Vector2, as_source: bool) -> void:
+	_ct_menu_reset()
+	var it := model.get_item(item_id)
+	_ct_menu.add_separator(("Start from" if as_source else "Connect to") + " — " + GraphPortLabels.node_name(it))
+	var ids: Array = []
+	for i in ports.size():
+		var hd: Dictionary = ports[i]
+		var hid := str(hd.get("id", ""))
+		_ct_menu.add_item(GraphPortLabels.port_name(hid, str(hd.get("resource_kind", ""))), i)
+		ids.append(hid)
+	_ct_menu.id_pressed.connect(func(i: int) -> void:
+		if i < 0 or i >= ids.size():
+			return
+		if as_source:
+			_ct_set_source(item_id, str(ids[i]))
+		else:
+			_ct_commit(item_id, str(ids[i])))
+	_ct_menu_popup(_ct_menu, at)
+
+
+var _ct_flash_text := ""
+var _ct_flash_until := 0
+
+
+func _ct_flash(text: String) -> void:
+	_ct_flash_text = text
+	_ct_flash_until = Time.get_ticks_msec() + 2500
+	queue_redraw()
+
+
+## The run being drawn: source pin → waypoints → the pointer, projected
+## through the live camera, with the straight-line length so far.
+func _draw_connect_tool() -> void:
+	if not connect_tool_active or soi_preview_service == null:
+		return
+	var fnt := ThemeDB.fallback_font
+	var hint := "Connect: click a node to start"
+	if not _ct_src_item.is_empty():
+		var pts: Array = [_ct_world_of(model.get_item(_ct_src_item))]
+		pts.append_array(_ct_waypoints)
+		if is_finite(_ct_cursor_world.x):
+			pts.append(_ct_cursor_world)
+		var total := 0.0
+		var prev2 := Vector2.INF
+		for i in pts.size():
+			var w: Vector3 = pts[i]
+			if i > 0:
+				total += (pts[i - 1] as Vector3).distance_to(w)
+			var pr: Variant = soi_preview_service.call("world_to_canvas", w)
+			if not (pr is Vector2):
+				prev2 = Vector2.INF
+				continue
+			var p2 := pr as Vector2
+			if prev2 != Vector2.INF:
+				draw_dashed_line(prev2, p2, Color(UITheme.C_AMBER, 0.95), 2.0, 8.0, true)
+			if i > 0 and i < pts.size() - (1 if is_finite(_ct_cursor_world.x) else 0):
+				draw_circle(p2, 4.0, UITheme.C_AMBER)
+			prev2 = p2
+		var src_it := model.get_item(_ct_src_item)
+		hint = "From %s · %s — click ground for a bend, the other node to connect (RMB back · Esc)" % [
+			GraphPortLabels.port_label(src_it, _ct_src_handle), ConduitLength.format(total)]
+	var hw := fnt.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	var box := Rect2(Vector2((size.x - hw) * 0.5 - 10.0, size.y - 46.0), Vector2(hw + 20.0, 26.0))
+	draw_rect(box, Color(0.03, 0.06, 0.11, 0.9))
+	draw_rect(box, Color(UITheme.C_AMBER, 0.7), false, 1.0)
+	draw_string(fnt, box.position + Vector2(10.0, 18.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.95, 0.92, 0.8))
+	if Time.get_ticks_msec() < _ct_flash_until:
+		var fw := fnt.get_string_size(_ct_flash_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		var fb := Rect2(Vector2((size.x - fw) * 0.5 - 10.0, size.y - 78.0), Vector2(fw + 20.0, 26.0))
+		draw_rect(fb, Color(0.25, 0.08, 0.05, 0.92))
+		draw_string(fnt, fb.position + Vector2(10.0, 18.0), _ct_flash_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13,
+			Color(1.0, 0.82, 0.72))
+
+
+# ---------------------------------------------------------------------------
+# Lens runs — the 3D runs in the Globe / pin-mode Site Plan: value + length
+# pills, click to select, and the selected run's bends as handles
+# ---------------------------------------------------------------------------
+## A selected run's `route_3d` points draw as handles. Drag one over the
+## ground to move it; press on the run's line and drag to insert a bend there;
+## double-click a handle to remove it. Each gesture is ONE `world_route_edited`
+## on release (one undo step); the view locks the route, rebuilds the run and
+## re-measures it. While dragging, the edited path draws as a dashed preview
+## with its straight-line length. Elevation keeps its own projection.
+
+const RUN_PICK_PX := 7.0
+const RUN_HANDLE_R := 5.5
+const RUN_HANDLE_HIT := 11.0
+const RUN_MAX_PROJ := 64
+const RUN_BEND_LIFT_M := 0.3
+
+## Projected run polylines this draw (conn id -> PackedVector2Array).
+var _run_px: Dictionary = {}
+## The selected run's handles this draw (index -> Vector2; INF off screen).
+var _run_handle_px: Array = []
+## Pills queued by the run pass, drawn after the pins (so they can avoid them).
+var _run_pills: Array = []
+var _rw_conn := ""
+var _rw_idx := -1
+var _rw_route: Array = []
+var _rw_press := Vector2.ZERO
+var _rw_moved := false
+var _rw_insert := false
+var _run_mgr: Node = null
+
+
+func _run_edit_lens() -> bool:
+	return _pins_mode_active() and view_mode != GraphSiteLayout.VIEW_ELEVATION
+
+
+func _lens_conduit_mgr() -> Node:
+	if _run_mgr != null and is_instance_valid(_run_mgr):
+		return _run_mgr
+	_run_mgr = null
+	var pv := get_parent()
+	while pv != null:
+		if pv.has_method("_get_conduit_manager"):
+			_run_mgr = pv.call("_get_conduit_manager") as Node
+			break
+		pv = pv.get_parent()
+	if _run_mgr == null:
+		var main := _cached_scene_main()
+		if main != null:
+			_run_mgr = main.get_node_or_null("ConduitManager")
+	return _run_mgr
+
+
+static func _route_entry_world(e: Variant) -> Vector3:
+	if e is Vector3:
+		return e as Vector3
+	if e is Dictionary:
+		var d := e as Dictionary
+		if d.has("x") and d.has("z"):
+			return Vector3(float(d["x"]), float(d.get("y", 0.0)), float(d["z"]))
+	return Vector3.INF
+
+
+## The bends the player can edit: the locked route, else none (an auto-routed
+## run's shape belongs to the router until a bend is added).
+func _run_route(conn: Dictionary) -> Array:
+	if not bool(conn.get("route_locked", false)):
+		return []
+	return (conn.get("route_3d", []) as Array).duplicate(true)
+
+
+static func _polyline_mid(pts: PackedVector2Array) -> Vector2:
+	if pts.is_empty():
+		return Vector2.INF
+	var total := 0.0
+	for i in range(1, pts.size()):
+		total += pts[i - 1].distance_to(pts[i])
+	var half := total * 0.5
+	var acc := 0.0
+	for i in range(1, pts.size()):
+		var d := pts[i - 1].distance_to(pts[i])
+		if acc + d >= half and d > 0.0:
+			return pts[i - 1].lerp(pts[i], (half - acc) / d)
+		acc += d
+	return pts[pts.size() - 1]
+
+
+static func _polyline_dist(pts: PackedVector2Array, p: Vector2) -> float:
+	var best := INF
+	for i in range(1, pts.size()):
+		var q := Geometry2D.get_closest_point_to_segment(p, pts[i - 1], pts[i])
+		best = minf(best, q.distance_to(p))
+	return best
+
+
+func _proj(w: Vector3) -> Vector2:
+	if not is_finite(w.x):
+		return Vector2.INF
+	var pr: Variant = soi_preview_service.call("world_to_canvas", w)
+	return pr as Vector2 if pr is Vector2 else Vector2.INF
+
+
+## Lines + handles + queued pills for every built run (before the pins).
+func _draw_lens_runs() -> void:
+	_run_px.clear()
+	_run_handle_px = []
+	_run_pills = []
+	if model == null or not _run_edit_lens():
+		return
+	var mgr := _lens_conduit_mgr()
+	if mgr == null or not mgr.has_method("get_sample_points"):
+		return
+	var solar_w := _solar_array_output_w() + _renewable_output_w()
+	var load_w := _sum_all_load_w()
+	for conn: Dictionary in _compute_visible_connections():
+		var cid := str(conn.get("id", ""))
+		var samples: PackedVector3Array = mgr.call("get_sample_points", cid) as PackedVector3Array
+		if samples.size() < 2:
+			continue
+		@warning_ignore("integer_division")
+		var step := maxi(1, samples.size() / RUN_MAX_PROJ)
+		var px := PackedVector2Array()
+		var i := 0
+		while i < samples.size():
+			var p := _proj(samples[i])
+			if is_finite(p.x):
+				px.append(p)
+			if i == samples.size() - 1:
+				break
+			i = mini(i + step, samples.size() - 1)
+		if px.size() < 2:
+			continue
+		_run_px[cid] = px
+		var sel := cid == selected_connection_id
+		var editing := cid == _rw_conn and _rw_moved
+		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var is_res := str(conn.get("polarity", "")) == "resource"
+		var kind := ResourceKinds.normalize_kind(str(est.get("resource_kind", conn.get("resource_type", ""))))
+		var col := ResourceKinds.wire_color(kind) if is_res else _wire_color_for_connection(conn, str(conn.get("polarity", "")))
+		if sel:
+			draw_polyline(px, Color(1.0, 1.0, 1.0, 0.35), 6.0, true)
+			draw_polyline(px, Color(C_SELECTED_BORDER, 0.95), 2.0, true)
+		var len_m := float(conn.get("route_length_m", 0.0))
+		if editing:
+			# The edited path: run ends + the working bends, straight segments.
+			var ctrl: Array = [samples[0]]
+			for e in _rw_route:
+				ctrl.append(_route_entry_world(e))
+			ctrl.append(samples[samples.size() - 1])
+			var prev := Vector2.INF
+			len_m = 0.0
+			for k in ctrl.size():
+				var w: Vector3 = ctrl[k]
+				if k > 0:
+					len_m += (ctrl[k - 1] as Vector3).distance_to(w)
+				var p2 := _proj(w)
+				if is_finite(p2.x) and is_finite(prev.x):
+					draw_dashed_line(prev, p2, Color(UITheme.C_AMBER, 0.95), 2.0, 8.0, true)
+				prev = p2
+		if sel or editing:
+			var route: Array = _rw_route if editing else _run_route(conn)
+			for k in route.size():
+				var hp := _proj(_route_entry_world(route[k]))
+				_run_handle_px.append(hp)
+				if not is_finite(hp.x):
+					continue
+				var hot := editing and k == _rw_idx
+				draw_circle(hp, RUN_HANDLE_R + 2.0, Color(0.02, 0.04, 0.08, 0.85))
+				draw_circle(hp, RUN_HANDLE_R * (1.3 if hot else 1.0),
+						UITheme.C_AMBER if hot else Color(1.0, 1.0, 1.0, 0.95))
+				draw_circle(hp, RUN_HANDLE_R * 0.4, Color(0.06, 0.09, 0.17, 0.9))
+		if not wire_value_labels:
+			continue
+		var value := float(est.get("rate", est.get("watts", 0.0))) if is_res else float(est.get("watts", 0.0))
+		if not (_flow_live and bool(est.get("active", true))):
+			value = 0.0
+		var txt := _wire_pill_text(value, is_res, kind, float(est.get("volts", 0.0)), len_m)
+		if editing:
+			txt = "~ " + ConduitLength.format(len_m)
+		if not txt.is_empty():
+			_run_pills.append([_polyline_mid(px), txt, col, sel or editing])
+
+
+## The queued run pills, after the pins: never on a pin head or another pill
+## (a selected / edited run's pill always draws).
+func _draw_lens_run_pills() -> void:
+	if _run_pills.is_empty():
+		return
+	var fnt := UITheme.font("medium", true)
+	var fs := 11
+	var placed: Array = []
+	# Selected first so it wins the space.
+	_run_pills.sort_custom(func(a: Array, b: Array) -> bool: return bool(a[3]) and not bool(b[3]))
+	for pl: Array in _run_pills:
+		var mid: Vector2 = pl[0]
+		var txt: String = pl[1]
+		var col: Color = pl[2]
+		var must := bool(pl[3])
+		var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var pad := Vector2(6.0, 3.0)
+		var rect := Rect2(mid - ts * 0.5 - pad, ts + pad * 2.0)
+		if not must:
+			var hit := false
+			for r: Rect2 in placed:
+				if r.intersects(rect):
+					hit = true
+					break
+			if not hit:
+				for hp in _globe_pin_px.values():
+					if rect.grow(GLOBE_PIN_R + 2.0).has_point(hp as Vector2):
+						hit = true
+						break
+			if hit:
+				continue
+		placed.append(rect)
+		GraphCard._sb(self, rect, Color(0.04, 0.06, 0.11, 0.9), int(rect.size.y * 0.5),
+			Color(col.r, col.g, col.b, 0.85 if must else 0.55), 1)
+		draw_string(fnt, Vector2(rect.position.x + pad.x, rect.get_center().y + fs * 0.36),
+			txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs,
+			Color(lerpf(col.r, 1.0, 0.45), lerpf(col.g, 1.0, 0.45), lerpf(col.b, 1.0, 0.45), 0.97))
+
+
+func _run_handle_at(pos: Vector2) -> int:
+	var best := -1
+	var best_d := RUN_HANDLE_HIT
+	for k in _run_handle_px.size():
+		var hp: Vector2 = _run_handle_px[k]
+		if not is_finite(hp.x):
+			continue
+		var d := hp.distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = k
+	return best
+
+
+## The run whose drawn line passes under the pointer (selected run first).
+func _run_at(pos: Vector2) -> String:
+	if _run_px.has(selected_connection_id) \
+			and _polyline_dist(_run_px[selected_connection_id] as PackedVector2Array, pos) <= RUN_PICK_PX:
+		return selected_connection_id
+	var best := ""
+	var best_d := RUN_PICK_PX
+	for cid in _run_px:
+		var d := _polyline_dist(_run_px[cid] as PackedVector2Array, pos)
+		if d <= best_d:
+			best_d = d
+			best = str(cid)
+	return best
+
+
+## Where a bend pressed onto the line at `pos` goes in `route`: the segment of
+## run start → bends → run end nearest the pointer on screen.
+func _run_insert_index(cid: String, route: Array, pos: Vector2) -> int:
+	var px: PackedVector2Array = _run_px.get(cid, PackedVector2Array()) as PackedVector2Array
+	if px.size() < 2:
+		return route.size()
+	var ctrl: Array = [px[0]]
+	for e in route:
+		ctrl.append(_proj(_route_entry_world(e)))
+	ctrl.append(px[px.size() - 1])
+	var best := route.size()
+	var best_d := INF
+	for k in range(1, ctrl.size()):
+		var a: Vector2 = ctrl[k - 1]
+		var b: Vector2 = ctrl[k]
+		if not is_finite(a.x) or not is_finite(b.x):
+			continue
+		var d := Geometry2D.get_closest_point_to_segment(pos, a, b).distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = k - 1
+	return best
+
+
+func _rw_reset() -> void:
+	_rw_conn = ""
+	_rw_idx = -1
+	_rw_route = []
+	_rw_moved = false
+	_rw_insert = false
+
+
+## Run picking + bend editing in the Globe / pin-mode Site Plan. Runs before
+## the pin layer (handles win over a pin behind them) but yields to a pin
+## for a press on the line. Returns true when consumed.
+func _handle_run_edit_input(event: InputEvent) -> bool:
+	if model == null or connect_tool_active or not _run_edit_lens():
+		return false
+	if event is InputEventKey and event.pressed and (event as InputEventKey).keycode == KEY_ESCAPE \
+			and not _rw_conn.is_empty():
+		_rw_reset()
+		queue_redraw()
+		return true
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if mb.pressed:
+			var hi := _run_handle_at(mb.position)
+			if hi >= 0 and not selected_connection_id.is_empty():
+				var route := _run_route(model.get_connection(selected_connection_id))
+				if mb.double_click:
+					if hi < route.size():
+						route.remove_at(hi)
+						var cid0 := selected_connection_id
+						_rw_reset()
+						world_route_edited.emit(cid0, route)
+					queue_redraw()
+					return true
+				_rw_conn = selected_connection_id
+				_rw_route = route
+				_rw_idx = hi
+				_rw_insert = false
+				_rw_press = mb.position
+				_rw_moved = false
+				return true
+			if not _globe_pin_at(mb.position).is_empty():
+				return false
+			var cid := _run_at(mb.position)
+			if cid.is_empty():
+				return false
+			if cid != selected_connection_id:
+				_select_connection(cid)
+			var conn := model.get_connection(cid)
+			_rw_conn = cid
+			_rw_route = _run_route(conn)
+			_rw_idx = _run_insert_index(cid, _rw_route, mb.position)
+			_rw_insert = true
+			_rw_press = mb.position
+			_rw_moved = false
+			queue_redraw()
+			return true
+		if _rw_conn.is_empty():
+			return false
+		var cid2 := _rw_conn
+		var moved := _rw_moved
+		var route2 := _rw_route.duplicate(true)
+		_rw_reset()
+		if moved:
+			world_route_edited.emit(cid2, route2)
+		queue_redraw()
+		return true
+	if event is InputEventMouseMotion:
+		if _rw_conn.is_empty():
+			return false
+		var mm := event as InputEventMouseMotion
+		if _rw_moved or mm.position.distance_to(_rw_press) > 3.0:
+			var hit := _pin_ground_hit(mm.position)
+			if not hit.is_empty():
+				var c := _soi_world_center()
+				var site := GraphSiteLayout.clamp_to_soi(hit["site"] as Vector2, _soi_radius_m())
+				var entry := {"x": c.x + site.x, "y": float(hit["y"]) + RUN_BEND_LIFT_M,
+					"z": c.z + site.y}
+				if _rw_insert:
+					_rw_idx = clampi(_rw_idx, 0, _rw_route.size())
+					_rw_route.insert(_rw_idx, entry)
+					_rw_insert = false
+				else:
+					_rw_route[_rw_idx] = entry
+				_rw_moved = true
+		queue_redraw()
+		return true
+	return false

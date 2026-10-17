@@ -46,6 +46,7 @@ func _initialize() -> void:
 	_test_contour_dispatch()
 	_test_size_driven_tube_radius()
 	_test_penstock_spec_and_design()
+	_test_conduit_length()
 	if _failures == 0:
 		print("CONDUIT SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -1821,3 +1822,21 @@ func _test_size_driven_tube_radius() -> void:
 		var ty := thin_mesh.get_aabb().size.y
 		var fy := fat_mesh.get_aabb().size.y
 		_check("styled radius reaches the mesh (%.4f vs %.4f)" % [ty, fy], fy > ty * 1.5)
+
+
+## ConduitLength (the readout) + RunLengthLabels' arc midpoint.
+func _test_conduit_length() -> void:
+	# 23 m = 75.46 ft of cord: the 100 ft cord covers it with 24.5 ft spare.
+	var f := ConduitLength.stock_fit(23.0, "extension_cord")
+	_check("length: 23 m cord fits a 100 ft cord", int(f.get("stock_ft", 0)) == 100 \
+			and absf(float(f.get("spare_ft", 0.0)) - 24.54) < 0.05, str(f))
+	# 40 m = 131.2 ft of hose: two 100 ft hoses.
+	var h := ConduitLength.stock_fit(40.0, "garden_hose")
+	_check("length: 40 m hose needs 2 × 100 ft", int(h.get("count", 0)) == 2 and int(h.get("stock_ft", 0)) == 100, str(h))
+	# 7 m = 22.97 ft of PVC: three 10 ft sticks.
+	var pv := ConduitLength.stock_fit(7.0, "pvc_pipe")
+	_check("length: 7 m PVC is 3 sticks", str(pv.get("kind", "")) == "sticks" and int(pv.get("count", 0)) == 3, str(pv))
+	_check("length: Ethernet past 100 m is flagged", not bool(ConduitLength.stock_fit(110.0, "ethernet").get("ok", true)))
+	_check("length: format", ConduitLength.format(23.4) == "23.4 m · 76.8 ft", ConduitLength.format(23.4))
+	var mid := RunLengthLabels.midpoint(PackedVector3Array([Vector3.ZERO, Vector3(10, 0, 0), Vector3(10, 0, 10)]))
+	_check("length: label sits at the arc midpoint", mid.distance_to(Vector3(10, 0, 0)) < 0.001, str(mid))

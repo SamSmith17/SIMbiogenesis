@@ -107,3 +107,121 @@ static func nearest_controller_id(model: GraphModel, panel_ids: Array,
 			best_d = d
 			best = str(it.get("id", ""))
 	return best
+
+
+
+## Which array (controller) each PV source in `scope_id` feeds: id -> the
+## controller's id. Panels feeding the same controller are one array — the
+## freeform snap prefers lining a panel up with its own array.
+static func array_keys(model: GraphModel, scope_id: String = "root") -> Dictionary:
+	var out := {}
+	if model == null:
+		return out
+	for it in model.get_items_in_scope(scope_id):
+		var d: Dictionary = it
+		if str(d.get("type", "")) != "controller":
+			continue
+		var cid := str(d.get("id", ""))
+		for sid in PvElectrical.pv_sources_for_controller(model, cid, scope_id):
+			if not out.has(str(sid)):
+				out[str(sid)] = cid
+	return out
+
+
+## The panels split into their SERIES strings, each in chain order (end to
+## end along its series links), strings ordered by where they sit (top first).
+## Panels with no series link are strings of one.
+static func string_rows(model: GraphModel, panel_ids: Array, scope_id: String = "root") -> Array:
+	var conns: Array = model.get_connections_in_scope(scope_id)
+	var comps: Array = PvElectrical.connected_components(panel_ids, conns, true)
+	var rows: Array = []
+	for comp in comps:
+		rows.append(_chain_order(model, comp as Array, conns))
+	rows.sort_custom(func(a: Array, b: Array) -> bool:
+		return _mean_y(model, a) < _mean_y(model, b))
+	return rows
+
+
+static func _mean_y(model: GraphModel, ids: Array) -> float:
+	var t := 0.0
+	for i in ids:
+		t += float(model.get_item(str(i)).get("y", 0.0))
+	return t / maxf(float(ids.size()), 1.0)
+
+
+static func _chain_order(model: GraphModel, comp: Array, conns: Array) -> Array:
+	if comp.size() <= 2:
+		var c := comp.duplicate()
+		c.sort_custom(func(a, b) -> bool:
+			return float(model.get_item(str(a)).get("x", 0.0)) < float(model.get_item(str(b)).get("x", 0.0)))
+		return c
+	var inset := {}
+	for i in comp:
+		inset[str(i)] = true
+	var adj := {}
+	for i in comp:
+		adj[str(i)] = []
+	for c in conns:
+		var cd: Dictionary = c
+		var a := str(cd.get("source_item_id", ""))
+		var b := str(cd.get("target_item_id", ""))
+		if inset.has(a) and inset.has(b) and a != b:
+			(adj[a] as Array).append(b)
+			(adj[b] as Array).append(a)
+	# Start at an end of the chain (one neighbour), else the leftmost panel.
+	var start := ""
+	for i in comp:
+		if (adj[str(i)] as Array).size() == 1:
+			if start.is_empty() or float(model.get_item(str(i)).get("x", 0.0)) \
+					< float(model.get_item(start).get("x", 0.0)):
+				start = str(i)
+	if start.is_empty():
+		start = str(comp[0])
+	var out: Array = [start]
+	var seen := {start: true}
+	var cur := start
+	while out.size() < comp.size():
+		var nxt := ""
+		for n in adj[cur]:
+			if not seen.has(str(n)):
+				nxt = str(n)
+				break
+		if nxt.is_empty():
+			break
+		out.append(nxt)
+		seen[nxt] = true
+		cur = nxt
+	for i in comp:
+		if not seen.has(str(i)):
+			out.append(str(i))
+	return out
+
+
+## Lay panels out as a clean grid: each entry of `rows` is one row (a series
+## string in chain order), rows stacked downward. The grid keeps the top-left
+## of the panels' current bounding box, so the array does not jump away.
+static func layout_panels_grid(model: GraphModel, rows: Array, gap_x: float = 24.0,
+		gap_y: float = 28.0) -> void:
+	var min_x := INF
+	var min_y := INF
+	for r in rows:
+		for pid in r:
+			var it := model.get_item(str(pid))
+			if it.is_empty():
+				continue
+			min_x = minf(min_x, float(it.get("x", 0.0)))
+			min_y = minf(min_y, float(it.get("y", 0.0)))
+	if min_x == INF:
+		return
+	var y := min_y
+	for r in rows:
+		var x := min_x
+		var row_h := 0.0
+		for pid in r:
+			var it := model.get_item(str(pid))
+			if it.is_empty():
+				continue
+			model.update_item(str(pid), {"x": x, "y": y})
+			x += float(it.get("width", 120.0)) + gap_x
+			row_h = maxf(row_h, float(it.get("height", 90.0)))
+		y += row_h + gap_y

@@ -324,8 +324,29 @@ origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
 
 ## Fonts
 
-- _(none recorded yet — add each font's license here; many "free" fonts are still
-  OFL or have embedding restrictions)_
+- **Inter 4.1** — the UI typeface (Regular, Medium, SemiBold); tabular figures
+  for numeric readouts
+  - Author: Rasmus Andersson and the Inter Project Authors
+  - Source: https://github.com/rsms/inter (release v4.1)
+  - License: OFL-1.1  ·  Added: 2026-10-13
+  - Attribution required: no (keep the license with the font)  ·  Share-alike: font only  ·  Commercial OK: yes
+  - Notes: unmodified `extras/ttf` files in `assets/fonts/inter/`, license in
+    `assets/fonts/inter/OFL.txt` and `credits/licenses/OFL-1.1.txt`.
+  - Status: verified
+
+## UI icons
+
+- **Lucide icons (lucide-static 0.460.0)** — line icons for buttons and labels,
+  replacing emoji used as icons
+  - Author: Lucide Contributors (portions Cole Bemis / Feather, MIT)
+  - Source: https://lucide.dev — npm `lucide-static@0.460.0`
+  - License: ISC  ·  Added: 2026-10-13
+  - Attribution required: yes (keep the license notice)  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: source SVGs in `assets/ui/icons/` (not imported — `.gdignore`),
+    compiled to `scenes/ui/ui_icon_data.gd` by `tools/ui_icons_build.py`
+    (path data only; strokes recoloured white at load for tinting). License in
+    `assets/ui/icons/LICENSE.txt` and `credits/licenses/ISC-lucide.txt`.
+  - Status: verified
 
 ---
 

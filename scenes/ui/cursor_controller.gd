@@ -38,8 +38,25 @@ func _ready() -> void:
 	var tree := get_tree()
 	if tree != null:
 		tree.scene_changed.connect(_on_scene_changed)
+		# The project Theme (Inter, styled stock controls) and the UI scale,
+		# on the root window once, before any scene's UI exists — this is the
+		# first UI autoload, so the launch hub is themed as well as Main.
+		UITheme.install(tree.root)
+		# A friend's asset pack dropped onto the window opens the Share modal
+		# on it, from any screen.
+		tree.root.files_dropped.connect(_on_files_dropped)
 	# Apply capture on boot — set_paused(false) is a no-op when already unpaused.
 	call_deferred("_apply_capture")
+
+
+func _on_files_dropped(files: PackedStringArray) -> void:
+	for f in files:
+		if AssetPackReader.looks_like_pack(f):
+			# Loaded by path: the modal is UI that depends on this autoload.
+			var modal: Script = load("res://scenes/ui/asset_pack_modal.gd")
+			if modal != null:
+				modal.call("open_import", self, f)
+			return
 
 
 func _on_scene_changed() -> void:

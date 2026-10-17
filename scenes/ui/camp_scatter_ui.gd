@@ -320,22 +320,12 @@ func _build_ui() -> void:
 			if _loader != null and _loader.has_method("set_camp_exclusion_r"):
 				_loader.call("set_camp_exclusion_r", _exclusion_r))
 
-	var adv_btn := Button.new()
-	adv_btn.text = "▸ Advanced"
-	adv_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	adv_btn.add_theme_stylebox_override("hover", _secondary_btn_style())
-	adv_btn.add_theme_color_override("font_color", Color(0.75, 0.70, 0.58, 1.0))
-	adv_btn.pressed.connect(func() -> void:
-		_advanced_open = not _advanced_open
-		if _advanced_box != null:
-			_advanced_box.visible = _advanced_open
-		adv_btn.text = ("▾ Advanced" if _advanced_open else "▸ Advanced"))
-	col.add_child(adv_btn)
-
-	_advanced_box = VBoxContainer.new()
-	_advanced_box.visible = false
+	var adv_sec := Collapsible.make("Advanced", _advanced_open)
+	adv_sec.folding_changed.connect(func(is_folded: bool) -> void:
+		_advanced_open = not is_folded)
+	col.add_child(adv_sec)
+	_advanced_box = adv_sec.body
 	_advanced_box.add_theme_constant_override("separation", 4)
-	col.add_child(_advanced_box)
 	var adv_grid := GridContainer.new()
 	adv_grid.columns = 2
 	adv_grid.add_theme_constant_override("h_separation", 12)
@@ -507,7 +497,7 @@ func _handle_mouse_btn(mb: InputEventMouseButton) -> void:
 				else:
 					_poly_points.append(hit)
 					_brush_poly = _poly_points.duplicate()
-					_set_status("Polygon: %d points — Enter/RMB to finish" % _poly_points.size())
+					_set_status("Polygon: %s — Enter/RMB to finish" % UiText.count(_poly_points.size(), "point"))
 				_poly_draw.queue_redraw()
 
 
@@ -695,7 +685,7 @@ func _generate() -> void:
 	var n: int = int(_loader.call("generate_camps_in_polygon", poly, params))
 	_set_busy(false)
 	if n > 0:
-		_set_status("Generated %d camp structures · adjust seed/params and regenerate anytime" % n)
+		_set_status("Generated %s · adjust seed/params and regenerate anytime" % UiText.count(n, "camp structure"))
 	else:
 		_set_status("No structures placed — area may be outside road network, or no roads loaded")
 

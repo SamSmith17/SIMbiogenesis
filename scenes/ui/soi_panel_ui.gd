@@ -66,6 +66,7 @@ func _build_ui() -> void:
 	_panel = PanelContainer.new()
 	_panel.custom_minimum_size = Vector2(420, 0)
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 	_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_panel.offset_left = -210
 	_panel.offset_right = 210

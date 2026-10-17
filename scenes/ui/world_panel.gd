@@ -83,6 +83,7 @@ func _build() -> void:
 	panel.custom_minimum_size = Vector2(560, 0)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
+	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 	var m := MarginContainer.new()
 	for k in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		m.add_theme_constant_override(k, 16)
@@ -136,6 +137,8 @@ func _build() -> void:
 		"Freeze a checkpoint: an independent copy of this world. You keep playing this one."))
 	_world_btns.append(_btn(row1, "New world on this map…", _on_new_world_pressed,
 		"Save this world, then start a fresh, empty world on the same map."))
+	_world_btns.append(_btn(row1, "Share…", _on_share_pressed,
+		"Save this world, then export it (and what it needs) as a zip for a friend."))
 	_copy_row = HBoxContainer.new()
 	_copy_row.add_theme_constant_override("separation", 8)
 	_copy_row.visible = false
@@ -166,6 +169,12 @@ func _build() -> void:
 	v.add_child(_status)
 
 
+func _on_share_pressed() -> void:
+	var id := WorldSession.active_id()
+	hide_panel()
+	AssetPackModal.open_export(self, id)
+
+
 func _btn(parent: Control, text: String, cb: Callable, tip: String) -> Button:
 	var b := Button.new()
 	b.text = text
@@ -191,11 +200,11 @@ func _refresh() -> void:
 		_sub_lbl.text = "This session was opened directly, so it is not tied to a world yet."
 	else:
 		_name_edit.text = str(rec.get("name", ""))
-		_name_edit.placeholder_text = WorldStore.display_name({"map": rec.get("map", {})})
+		_name_edit.placeholder_text = SitePrivacy.place(WorldStore.display_name({"map": rec.get("map", {})}))
 		var bits: Array[String] = []
 		var map: Dictionary = rec.get("map", {})
-		bits.append(str(map.get("label", "")) if not str(map.get("label", "")).is_empty() \
-			else WorldStore.display_name({"map": map}))
+		bits.append(SitePrivacy.place(str(map.get("label", "")) if not str(map.get("label", "")).is_empty() \
+			else WorldStore.display_name({"map": map})))
 		var saved := float(rec.get("last_saved_unix", 0.0))
 		if saved > 0.0:
 			var dt := Time.get_datetime_dict_from_unix_time(int(saved + _utc_offset_s()))
@@ -238,7 +247,7 @@ func _refresh_holds() -> void:
 	rows.append(["Placed things", str(int(sm.get("props", 0)))])
 	rows.append(["Lights", str(int(sm.get("lights", 0)))])
 	rows.append(["Camps", str(int(sm.get("camps", 0)))])
-	rows.append(["Systems graph", "%d nodes" % int(sm.get("graph_nodes", 0))])
+	rows.append(["Systems graph", UiText.count(int(sm.get("graph_nodes", 0)), "node")])
 	rows.append(["People", str(int(sm.get("people", 0)))])
 	rows.append(["Peak experiences", str(int(sm.get("peak_total", 0)))])
 	if _main != null and _main.has_method("festival_mode_active") and bool(_main.call("festival_mode_active")):

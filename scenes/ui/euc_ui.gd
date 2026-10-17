@@ -16,6 +16,13 @@ var euc_vehicle : Node3D = null
 
 func _ready() -> void:
 	visible = false
+	# The ride dashboard sits at the very bottom of the left edge, above the
+	# timeline; toasts and the alarm feed stack over it. This layer shows and
+	# hides itself, which frees or takes the slot.
+	var panel := get_node_or_null("Panel") as Control
+	if panel != null:
+		HudLayout.register(panel, "vehicle_dash", "bottom_left", {
+			"order": -10, "tuckable": false, "title": "ride dashboard"})
 
 func _process(_delta: float) -> void:
 	if not visible or euc_vehicle == null or not is_instance_valid(euc_vehicle):

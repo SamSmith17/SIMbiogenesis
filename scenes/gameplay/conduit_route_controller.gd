@@ -220,20 +220,35 @@ func _plug_type_for_port(port: Dictionary) -> String:
 ## instead — starting a fresh plug there minted a second, default-styled
 ## connection and read as "the port system overrules my conduit styles".
 func _try_begin_plug_from_port() -> bool:
+	var hit := port_under_crosshair()
+	if hit.is_empty():
+		return false
+	var existing := _conn_on_port(hit)
+	if not existing.is_empty():
+		var wp: Vector3 = hit.get("world_pos", Vector3.INF)
+		begin_drag_reroute(str(existing.get("id", "")), wp, 0)
+		return true
+	begin_plug(hit)
+	return true
+
+
+## The port a plain click would plug from right now ({} if none) — the ONE
+## rule the crosshair prompt (InteractionFocus) and the click share.
+func port_under_crosshair() -> Dictionary:
 	if _ensure_manager() == null or _camera == null:
-		return false
+		return {}
 	if not _manager.has_method("gather_world_ports"):
-		return false
+		return {}
 	var vp := get_viewport()
 	if vp == null:
-		return false
+		return {}
 	var center := vp.get_visible_rect().size * 0.5
 	var origin := _camera.project_ray_origin(center)
 	var dir := _camera.project_ray_normal(center)
 	var ports: Array = _manager.call("gather_world_ports")
 	var hit := ConduitPlugLogic.nearest_port_along_ray(origin, dir, ports, PLUG_PICK_PERP_M)
 	if hit.is_empty():
-		return false
+		return {}
 	# The prop under the crosshair owns a plain click (GrabController opens its
 	# editor / drags it). A PowerSpout is 0.6 m long with four ports, so aiming
 	# ANYWHERE on it landed within the pick radius of one and the turbine could
@@ -246,18 +261,29 @@ func _try_begin_plug_from_port() -> bool:
 		var along := (wp0 - origin).dot(dir.normalized())
 		var same_prop := _port_belongs_to_prop(hit, prop_hit.get("prop") as Node)
 		if not same_prop and along > prop_d - 0.3:
-			return false
+			return {}
 		if same_prop:
 			var perp := (wp0 - origin - dir.normalized() * along).length()
 			if perp > PORT_PRECISE_PICK_M:
-				return false
-	var existing := _conn_on_port(hit)
-	if not existing.is_empty():
-		var wp: Vector3 = hit.get("world_pos", Vector3.INF)
-		begin_drag_reroute(str(existing.get("id", "")), wp, 0)
-		return true
-	begin_plug(hit)
-	return true
+				return {}
+	return hit
+
+
+## Wires already on a port (the crosshair prompt counts them).
+func wires_on_port(port_hit: Dictionary) -> int:
+	if _manager == null:
+		return 0
+	var model: GraphModel = _manager.get_graph_model()
+	if model == null:
+		return 0
+	var iid := str(port_hit.get("item_id", ""))
+	var handle := str((port_hit.get("port", {}) as Dictionary).get("handle_id", ""))
+	var n := 0
+	for conn: Dictionary in model.connections:
+		if (str(conn.get("source_item_id", "")) == iid and str(conn.get("source_handle_id", "")) == handle) \
+				or (str(conn.get("target_item_id", "")) == iid and str(conn.get("target_handle_id", "")) == handle):
+			n += 1
+	return n
 
 
 ## Precise-aim radius for a port ON the prop under the crosshair (the loose
@@ -398,7 +424,54 @@ func _commit_plug() -> void:
 	var spec := ConduitPlugLogic.build_connection_spec(_plug_src, _plug_target, _type_id, [])
 	if _manager.has_method("create_plug_connection"):
 		_manager.call("create_plug_connection", spec)
+	# Daisy chain: Shift+release keeps going from the device just connected —
+	# a free port on it that can take the same kind of wire (a power strip,
+	# a string of lights). Laying out a distribution run is then one drag per
+	# hop instead of aim-press-drag every time.
+	var chain_from := _plug_target.duplicate()
+	var src_hit := _plug_src.duplicate()
 	_cancel_plug()
+	if Input.is_key_pressed(KEY_SHIFT):
+		var nxt := _next_free_port(chain_from, src_hit)
+		if not nxt.is_empty():
+			begin_plug(nxt)
+		else:
+			_toast("No free port on that device to keep chaining from")
+
+
+## A free port on the item `target_hit` belongs to — not `target_hit` itself,
+## no wire on it yet, compatible with the port the last run started from —
+## nearest to where the last run landed. {} when there is none.
+func _next_free_port(target_hit: Dictionary, src_hit: Dictionary) -> Dictionary:
+	if _manager == null or target_hit.is_empty():
+		return {}
+	var iid := str(target_hit.get("item_id", ""))
+	var used := str((target_hit.get("port", {}) as Dictionary).get("handle_id", ""))
+	var at: Vector3 = target_hit.get("world_pos", Vector3.ZERO)
+	var best: Dictionary = {}
+	var best_d := INF
+	for ph in _manager.call("gather_world_ports"):
+		var h: Dictionary = ph
+		if str(h.get("item_id", "")) != iid:
+			continue
+		if str((h.get("port", {}) as Dictionary).get("handle_id", "")) == used:
+			continue
+		if not _conn_on_port(h).is_empty():
+			continue
+		# The port the chain continues from faces the OTHER way from the one
+		# just plugged into (an outlet on the strip the cord came into), so it
+		# must be compatible with that port, not with the original source.
+		if not ConduitPlugLogic.ports_compatible(target_hit, h):
+			continue
+		var ka := str((src_hit.get("port", {}) as Dictionary).get("resource_kind", ""))
+		var kb := str((h.get("port", {}) as Dictionary).get("resource_kind", ""))
+		if not ka.is_empty() and not kb.is_empty() and ka != kb:
+			continue
+		var d := at.distance_to(h.get("world_pos", at) as Vector3)
+		if d < best_d:
+			best_d = d
+			best = h
+	return best
 
 
 ## Drop the far end of a penstock in open terrain: mint a Stream Intake there
@@ -1349,18 +1422,71 @@ func _open_style_modal(conn_id: String) -> void:
 		gv.call("open_conduit_style_modal", conn_id)
 
 
+## The run's TRUE length while routing (sag / drape / sampling included),
+## measured by the manager's own rule — the number the run stamps as
+## route_length_m on commit. Cached on the control points (a mesh-builder pass
+## is not free and the HUD refreshes at 10 Hz).
+var _hud_len_sig := PackedVector3Array()
+var _hud_len_m := 0.0
+var last_hud_length_m := 0.0
+
+
+func _measured_length(control: Array) -> float:
+	var sig := PackedVector3Array()
+	for p: Variant in control:
+		if p is Vector3:
+			sig.append(p as Vector3)
+	if sig == _hud_len_sig:
+		return _hud_len_m
+	_hud_len_sig = sig
+	var conn: Dictionary = {}
+	if _manager != null and not _conn_id.is_empty() and _manager.get("_model") != null:
+		conn = (_manager.get("_model") as GraphModel).get_connection(_conn_id).duplicate()
+	conn["conduit_style"] = _style_ov
+	if _manager != null and _manager.has_method("measure_route"):
+		_hud_len_m = float(_manager.call("measure_route", conn, control, _type_id))
+	else:
+		_hud_len_m = ConduitKinds.polyline_length_m(sig)
+	return _hud_len_m
+
+
+## While a plug is snapped to a port, the run the release will BUILD: the
+## connection spec the commit makes, through the manager's own control points
+## (approach stubs, seating, routing) — the drag ghost takes a simpler path and
+## read ~3 % short of the committed run.
+func _snapped_plug_length() -> float:
+	if not _plug_mode or _plug_target.is_empty() or _manager == null \
+			or not _manager.has_method("build_control_points"):
+		return -1.0
+	var key := "%s|%s|%s" % [str(_plug_target.get("item_id", "")),
+		str((_plug_target.get("port", {}) as Dictionary).get("handle_id", "")), _type_id]
+	if key == _snap_len_key:
+		return _snap_len_m
+	var spec := ConduitPlugLogic.build_connection_spec(_plug_src, _plug_target, _type_id, [])
+	var control: Array = _manager.call("build_control_points", spec)
+	_snap_len_key = key
+	_snap_len_m = float(_manager.call("measure_route", spec, control, _type_id)) if control.size() >= 2 else -1.0
+	return _snap_len_m
+
+
+var _snap_len_key := ""
+var _snap_len_m := -1.0
+
+
 func _update_ui() -> void:
 	if _ui == null:
 		return
 	var len_m := 0.0
+	var snapped_len := _snapped_plug_length()
 	var control := _control_points_for_preview()
-	if control.size() >= 2:
-		var packed := PackedVector3Array()
-		for p: Variant in control:
-			if p is Vector3:
-				packed.append(p as Vector3)
-		len_m = ConduitKinds.polyline_length_m(packed)
-	if _ui.has_method("show_route_ex"):
+	if snapped_len >= 0.0:
+		len_m = snapped_len
+	elif control.size() >= 2:
+		_snap_len_key = ""
+		len_m = _measured_length(control)
+	last_hud_length_m = len_m
+	var mode := "plug" if _plug_mode else ("drag" if _drag_mode else "route")
+	if _ui.has_method("show_route_mode"):
+		_ui.call("show_route_mode", _type_id, _waypoints.size(), len_m, _ghost_valid, mode)
+	elif _ui.has_method("show_route_ex"):
 		_ui.call("show_route_ex", _type_id, _waypoints.size(), len_m, _ghost_valid, _drag_mode)
-	elif _ui.has_method("show_route"):
-		_ui.call("show_route", _type_id, _waypoints.size(), len_m, _ghost_valid)

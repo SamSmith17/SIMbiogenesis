@@ -118,6 +118,7 @@ func _build_ui() -> void:
 	_panel.offset_top = -330
 	_panel.offset_bottom = 330
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
@@ -144,11 +145,7 @@ func _build_ui() -> void:
 	plan_btn.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
 	plan_btn.pressed.connect(func() -> void: _open_work_modal("open_work_planner"))
 	head.add_child(plan_btn)
-	var close_btn := Button.new()
-	UITheme.style_button(close_btn)
-	close_btn.text = "✕"
-	close_btn.tooltip_text = "Close (Esc)"
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	head.add_child(close_btn)
 
 	vb.add_child(_new_project_row())
@@ -488,8 +485,8 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 		plan_txt = "planned %.1f h with %d crew · " % [
 			float(plan.get("makespan_s", 0.0)) / 3600.0, int(plan.get("crew", 0))]
 	var elapsed := maxf(_now_h() - float(project.get("created_h", 0.0)), 0.0)
-	meta.text = "%s%d/%d phases done · %.1f h since queued" % [
-		plan_txt, int(roll.get("done", 0)), int(roll.get("total", 0)), elapsed]
+	meta.text = "%s%d/%s done · %.1f h since queued" % [
+		plan_txt, int(roll.get("done", 0)), UiText.count(int(roll.get("total", 0)), "phase"), elapsed]
 	meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	meta.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(meta)

@@ -41,6 +41,8 @@ func _ready() -> void:
 	_lbl.add_theme_color_override("font_color", Color(1.0, 0.82, 0.55))
 	_chip.add_child(_lbl)
 	add_child(_chip)
+	HudLayout.register(_chip, "hazard", "top_center", {"order": 0, "tuckable": false,
+		"size": func() -> Vector2: return _chip.get_combined_minimum_size()})
 	var xw := get_node_or_null("/root/ExtremeWeather")
 	if xw != null:
 		if xw.has_signal("hazard_began"):
@@ -89,7 +91,12 @@ func _refresh() -> void:
 
 func _center_chip() -> void:
 	# Anchored at top-center; shift the chip so its own middle sits there.
-	_chip.position.x = -_chip.size.x * 0.5
+	# Placed by the HUD layout manager's top-centre row (registered in _ready).
+	var h := HudLayout.get_hud()
+	if h != null:
+		h.queue_layout()
+	else:
+		_chip.position.x = -_chip.size.x * 0.5
 
 
 static func _sev_word(sev: float) -> String:

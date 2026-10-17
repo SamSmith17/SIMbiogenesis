@@ -17,6 +17,10 @@ extends EnergySource
 ## driven by the world clock's month.
 
 ## Density of fresh water, kg/m³ — standard hydropower convention.
+## Spec key on a hydro turbine (siphon_hydro processor): true = switched off by
+## the player — no water drawn, no power made (ResourceFlowEngine).
+const SPEC_OFF := "hydro_off"
+
 const WATER_DENSITY: float = 1000.0
 
 ## Standard gravity, m/s².

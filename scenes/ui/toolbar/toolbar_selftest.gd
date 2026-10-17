@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 559
+const EXPECTED_CHECKS := 566
 
 var _fails := 0
 var _checks := 0
@@ -377,6 +377,8 @@ func _test_config_round_trip() -> void:
 	st.set_veg_family("pine")
 	st.set_veg_species("spruce")
 	st.hero_preset = "oak_2"
+	st.set_param("scale", 1.8)
+	st.veg_mix_id = "pnw_lowland"
 	st.set_active_tool("lower")
 	st.set_param("strength", 3.25)
 
@@ -394,6 +396,11 @@ func _test_config_round_trip() -> void:
 	_check("veg family survives", st2.veg_family == "pine")
 	_check("veg species survives", st2.veg_species == "spruce")
 	_check("hero preset survives", st2.hero_preset == "oak_2")
+	_check("plant scale survives",
+		absf(st2.params_for("veg_paint")["scale"] - 1.8) < 1e-4)
+	_check("mix choice survives", st2.veg_mix_id == "pnw_lowland")
+	_check("plant scale defaults to 1",
+		absf(StateScript.new().get_tool_param_value("veg_paint", "scale") - 1.0) < 1e-4)
 	_check("untouched tools keep their defaults",
 		absf(st2.params_for("smooth")["radius_m"] - 16.0) < 1e-4)
 

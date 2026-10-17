@@ -165,7 +165,11 @@ func _ensure_load(iid: String, item: Dictionary) -> void:
 	if not autos.is_empty():
 		target_on = false
 	else:
-		var req_s: String = str(specs.get("requested_state", specs.get("current_state", "off"))).to_lower()
+		# A load that never had a state (freshly placed) is ON — the same
+		# default GraphAcLoad.demand_watts and the challenge bake use. This
+		# said "off", so a newly wired appliance drew in the bake and the
+		# demand sum while its own card read "○ OFF · 0 W" (bootcamp L9).
+		var req_s: String = str(specs.get("requested_state", specs.get("current_state", "on"))).to_lower()
 		target_on = (req_s == "on")
 
 	# Read as Variant and validate BEFORE the typed assignment: assigning a

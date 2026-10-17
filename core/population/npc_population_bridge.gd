@@ -642,7 +642,8 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 	var cohort := _ensure_cohort(iid, specs, main, registry)
 	cohort.set_starved(specs.get("starved_kinds", []) as Array)
 	var parked: NpcPopulationEngine = _parked.get(iid)
-	cohort.has_work = parked != null and parked.chore_board != null 		and not parked.chore_board.chores.is_empty()
+	cohort.has_work = parked != null and parked.chore_board != null \
+			and not parked.chore_board.chores.is_empty()
 	var ctx := {
 		"registry": registry,
 		"hour_of_day": hour_of_day,
@@ -1283,7 +1284,8 @@ func space_markers(main: Node) -> Array:
 			"capacity": maxi(int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY)), 1),
 			# Area spaces carry their outline so Site Plan can show the REGION
 			# rather than a marker floating at its interior point.
-			"poly": SpaceRegistry.poly_points(target.get("poly", []) as Array) 				if str(target.get("kind", "")) == "area" else PackedVector2Array(),
+			"poly": SpaceRegistry.poly_points(target.get("poly", []) as Array) \
+					if str(target.get("kind", "")) == "area" else PackedVector2Array(),
 		})
 	return out
 
@@ -3147,7 +3149,8 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	# specs.pop_routine and survives independently of the roster snapshot, so
 	# resetting the population keeps the schedule the player wrote.
 	var routine_arr: Array = specs.get("pop_routine", []) as Array
-	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() 		else NpcRoutine.default_day()
+	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() \
+			else NpcRoutine.default_day()
 	engine.anim_overrides = (specs.get("pop_anim_map", {}) as Dictionary).duplicate()
 	# Also config rather than simulation state: an absent key normalizes to
 	# STRIKE, which is exactly the behaviour that shipped, so every existing
@@ -3500,6 +3503,8 @@ func log_since(consumer: String) -> Array:
 ## every RETRY_BACKOFF_H, so an alarm on the raw flag would post the same line
 ## several times an hour. ALARM_H of standing failure is the signal.
 const ALARM_H := 0.5
+## need -> {habitat id: true} for every habitat whose need alarm is standing.
+var _alarm_habs: Dictionary = {}
 
 func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> void:
 	if PopTestPrefs.mute_alarms():
@@ -3514,8 +3519,24 @@ func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> 
 			if h > worst:
 				worst = h
 				who = ag.display_name
-		var key := "need_unmet|%s|%s" % [iid, str(need)]
+		# ONE alarm per need for the whole site: a festival of 35 camps used to
+		# post "Nobody can reach a Restroom" 35 times. Each habitat's standing
+		# failure is tracked in _alarm_habs; the line goes up with the first and
+		# clears with the last.
+		var key := "need_unmet|site|%s" % str(need)
+		var habs: Dictionary = _alarm_habs.get(str(need), {})
+		_alarm_habs[str(need)] = habs
+		# A habitat that went away (camp deleted, festival cleared, population
+		# reset) never ticks again to erase itself: drop it here, or the site
+		# alarm could never clear.
+		for gone in habs.keys():
+			if not _engines.has(gone):
+				habs.erase(gone)
 		if worst >= ALARM_H:
+			habs[iid] = true
+		elif worst <= 0.0:
+			habs.erase(iid)
+		if worst >= ALARM_H and not lg.is_latched(key):
 			var space := SpaceTypes.label(str(NpcAgent.space_of(str(need))))
 			var line := "Nobody can reach a %s — work is backing up" % space
 			# `who` (worst affected) used to be computed and thrown away; naming
@@ -3534,7 +3555,7 @@ func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> 
 			if not who.is_empty():
 				line += " (%s has waited longest)" % who
 			lg.latch(key, line, abs_h, SettlementLog.ALERT, str(need))
-		elif worst <= 0.0:
+		elif habs.is_empty():
 			lg.clear_latch(key, "", abs_h, str(need))
 
 

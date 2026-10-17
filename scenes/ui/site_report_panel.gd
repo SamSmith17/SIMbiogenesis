@@ -135,6 +135,10 @@ func _build_modal() -> void:
 	_build_cards(_cards_vbox)
 	_build_footnote(_cards_vbox)
 	_build_progress_overlay(body)
+	# Above the timeline and inside the screen at any size (it was a fixed
+	# 1160 x 740 centred on the whole window); long header text shortens.
+	UiFit.tame_widths(_panel)
+	UiFit.keep_fitted(_panel, Vector2(1160, 740))
 
 
 func _build_header(parent: VBoxContainer) -> void:
@@ -175,15 +179,8 @@ func _build_header(parent: VBoxContainer) -> void:
 	refresh_btn.pressed.connect(_on_recompute_pressed)
 	hbox.add_child(refresh_btn)
 
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.focus_mode = Control.FOCUS_NONE
+	var close_btn := IconButton.close(close)
 	close_btn.custom_minimum_size = Vector2(32, 32)
-	close_btn.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	close_btn.add_theme_color_override("font_hover_color", UITheme.C_TEXT)
-	close_btn.add_theme_font_size_override("font_size", 16)
-	close_btn.pressed.connect(close)
 	hbox.add_child(close_btn)
 
 
@@ -372,6 +369,7 @@ func open() -> void:
 	visible = true
 	move_to_front()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 	_begin(false)
 
 
@@ -383,6 +381,7 @@ func close() -> void:
 		_builder.cancel()
 		_building = false
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 
 
 func is_open() -> bool:
@@ -524,16 +523,16 @@ func _populate() -> void:
 
 	# PV.
 	if d.pv_peak_kw > 0.0:
-		_pv_stat.text = "[b]%.0f[/b] kWh/yr  ·  [b]%.1f[/b] kWp (%d panels)  ·  capacity factor [b]%.1f%%[/b]  ·  tilt %.0f° az %.0f°" % [
-			d.pv_annual_kwh, d.pv_peak_kw, d.pv_panel_count,
+		_pv_stat.text = "[b]%.0f[/b] kWh/yr  ·  [b]%.1f[/b] kWp (%s)  ·  capacity factor [b]%.1f%%[/b]  ·  tilt %.0f° az %.0f°" % [
+			d.pv_annual_kwh, d.pv_peak_kw, UiText.count(d.pv_panel_count, "panel"),
 			d.pv_capacity_factor * 100.0, d.pv_panel_tilt_deg, d.pv_panel_azimuth_deg]
 	else:
 		_pv_stat.text = "[color=#8090a8]No PV panels in the current graph — add panels to see production potential.[/color]"
 
 	# Wind.
 	if d.wind_turbine_count > 0:
-		_wind_stat.text = "[b]%.0f[/b] kWh/yr  ·  %d turbine(s), [b]%.1f[/b] kW rated  ·  capacity factor [b]%.1f%%[/b]  ·  mean wind [b]%.1f[/b] m/s" % [
-			d.wind_annual_kwh, d.wind_turbine_count, d.wind_rated_kw,
+		_wind_stat.text = "[b]%.0f[/b] kWh/yr  ·  %s, [b]%.1f[/b] kW rated  ·  capacity factor [b]%.1f%%[/b]  ·  mean wind [b]%.1f[/b] m/s" % [
+			d.wind_annual_kwh, UiText.count(d.wind_turbine_count, "turbine"), d.wind_rated_kw,
 			d.wind_capacity_factor * 100.0, d.wind_mean_speed_ms]
 	else:
 		_wind_stat.text = "[color=#8090a8]No wind turbines in the graph — mean site wind [b]%.1f[/b] m/s. Add a turbine to estimate yield.[/color]" % d.wind_mean_speed_ms
@@ -549,12 +548,12 @@ func _populate() -> void:
 	# Hydro card visibility.
 	_hydro_card.visible = d.hydro_count > 0
 	if d.hydro_count > 0:
-		_hydro_stat.text = "[b]%.0f[/b] kWh/yr  ·  %d hydro unit(s)  (precipitation-scaled seasonal flow)" % [
-			d.hydro_annual_kwh, d.hydro_count]
+		_hydro_stat.text = "[b]%.0f[/b] kWh/yr  ·  %s  (precipitation-scaled seasonal flow)" % [
+			d.hydro_annual_kwh, UiText.count(d.hydro_count, "hydro unit")]
 
-	_footnote_lbl.text = ("Representative year %d for %.4f, %.4f. PV uses the graph's global tilt/azimuth "
+	_footnote_lbl.text = ("Representative year %d for %s. PV uses the graph's global tilt/azimuth "
 		+ "and ignores 3D terrain shading (live-only). Hover any chart for month detail. "
-		+ "Multi-year / climate-scenario reports are a future extension.") % [d.year, d.latitude, d.longitude]
+		+ "Multi-year / climate-scenario reports are a future extension.") % [d.year, SitePrivacy.coords(d.latitude, d.longitude)]
 
 	for cv in [_solar_canvas, _pv_canvas, _wind_rose_canvas, _wind_canvas,
 			_precip_canvas, _temp_canvas, _hydro_canvas]:
@@ -766,7 +765,7 @@ func _open_packing_lab() -> void:
 			break
 	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
 	get_tree().root.add_child(modal)
-	modal.call("open_with_units", units, "Site cargo (%d units)" % units.size(),
+	modal.call("open_with_units", units, "Site cargo (%s)" % UiText.count(units.size(), "unit"),
 		preselect)
 	modal.connect("closed", Callable(modal, "queue_free"))
 
@@ -811,8 +810,8 @@ func _update_header(main: Node, lat: float, lon: float) -> void:
 	if _header_lbl == null:
 		return
 	var label := _site_label(main)
-	_header_lbl.text = "📊 Site Report — %s" % label
-	_sub_lbl.text = "%.4f, %.4f" % [lat, lon]
+	_header_lbl.text = "📊 Site Report — %s" % SitePrivacy.place(label)
+	_sub_lbl.text = SitePrivacy.coords(lat, lon)
 
 
 func _show_message(msg: String) -> void:

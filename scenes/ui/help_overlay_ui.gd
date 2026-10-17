@@ -136,6 +136,7 @@ func open() -> void:
 	visible = true
 	UiScreenLayout.clamped_center(_panel, Vector2(560.0, 620.0))
 	CursorController.request_modal("help_overlay", Callable(self, "close"))
+	HudLayout.claim_modal("help_overlay")
 
 
 func close() -> void:
@@ -143,6 +144,7 @@ func close() -> void:
 		return
 	visible = false
 	CursorController.release_modal("help_overlay")
+	HudLayout.release("help_overlay")
 
 
 func _build_ui() -> void:
@@ -180,12 +182,7 @@ func _build_ui() -> void:
 	title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	title_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	title_row.add_child(title_lbl)
-	var close_btn := Button.new()
-	close_btn.text = "✕"
-	close_btn.flat = true
-	close_btn.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	close_btn.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	title_row.add_child(close_btn)
 
 	outer.add_child(HSeparator.new())
@@ -205,11 +202,7 @@ func _rebuild_rows() -> void:
 	for child in _rows_container.get_children():
 		child.queue_free()
 
-	var tips_lbl := Label.new()
-	tips_lbl.text = "TIPS"
-	tips_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	tips_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	_rows_container.add_child(tips_lbl)
+	_rows_container.add_child(SectionHeader.make("Tips"))
 	for tip in _TIPS:
 		var tip_lbl := Label.new()
 		tip_lbl.text = "• %s" % tip
@@ -222,11 +215,7 @@ func _rebuild_rows() -> void:
 	for group in _GROUPS:
 		var group_name: String = group[0]
 		var actions: Array = group[1]
-		var section_lbl := Label.new()
-		section_lbl.text = group_name.to_upper()
-		section_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-		section_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-		_rows_container.add_child(section_lbl)
+		_rows_container.add_child(SectionHeader.make(group_name))
 		for entry in actions:
 			_rows_container.add_child(_make_row(entry[0], entry[1]))
 

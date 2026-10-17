@@ -74,6 +74,8 @@ var _edit_ports_cb: Callable = Callable()
 var _preview_refresh_cb: Callable = Callable()
 var _controller_reset_cb: Callable = Callable()
 var _siphon_lab_cb: Callable = Callable()
+## SystemGraphView.set_hydro_turbine_off(item_id, off) — the "Running" box.
+var _hydro_off_cb: Callable = Callable()
 ## Resyncs a processor's dangling/ghost I/O tank containers after a direct
 ## in-place port edit (add/remove/kind change) — SystemGraphView-injected.
 var _ghost_sync_cb: Callable = Callable()
@@ -165,6 +167,55 @@ func _build_shell() -> void:
 	_form_vbox.size_flags_vertical   = Control.SIZE_SHRINK_BEGIN
 	_form_vbox.add_theme_constant_override("separation", 0)
 	scroll.add_child(_form_vbox)
+	# Nothing in the form may be wider than the sidebar: with horizontal
+	# scrolling off, ONE row whose minimum width overflows stretches the whole
+	# form, and every value column was cut off at the right edge.
+	_form_vbox.child_entered_tree.connect(func(_n: Node) -> void: _queue_tame_widths())
+
+
+var _tame_queued := false
+
+
+func _queue_tame_widths() -> void:
+	if _tame_queued:
+		return
+	_tame_queued = true
+	call_deferred("_tame_form_widths")
+
+
+## Makes every text-bearing control in the form shrinkable: a label in a row
+## ellipsizes (its full text in the tooltip), a free-standing label wraps,
+## option buttons stop sizing to their longest item, buttons clip. Idempotent.
+func _tame_form_widths() -> void:
+	_tame_queued = false
+	if _form_vbox == null:
+		return
+	for n in _form_vbox.find_children("*", "Control", true, false):
+		if n is Label:
+			var l := n as Label
+			if l.autowrap_mode != TextServer.AUTOWRAP_OFF or l.has_meta("tamed"):
+				continue
+			l.set_meta("tamed", true)
+			if l.get_parent() is HBoxContainer:
+				l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				if l.tooltip_text.is_empty():
+					# Read at hover time, so a live value never shows stale text.
+					l.mouse_filter = Control.MOUSE_FILTER_PASS
+					l.mouse_entered.connect(func() -> void: l.tooltip_text = l.text)
+			else:
+				l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		elif n is OptionButton:
+			var o := n as OptionButton
+			o.fit_to_longest_item = false
+			o.clip_text = true
+			o.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		elif n is Button:
+			var b := n as Button
+			if not b.clip_text and b.autowrap_mode == TextServer.AUTOWRAP_OFF:
+				b.clip_text = true
+				b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				if b.tooltip_text.is_empty():
+					b.tooltip_text = b.text
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +298,10 @@ func set_place_model_callback(cb: Callable) -> void:
 
 func set_siphon_lab_callback(cb: Callable) -> void:
 	_siphon_lab_cb = cb
+
+
+func set_hydro_off_callback(cb: Callable) -> void:
+	_hydro_off_cb = cb
 
 
 func set_place_site_twin_callback(cb: Callable) -> void:
@@ -717,13 +772,13 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	elif is_res:
 		_section("Conduit Info")
 		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
-		_num_field("Length (m)",       float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
+		_length_field(conn)
 		_num_field("Max Pressure (PSI)", float(conn.get("max_pressure",     150.0)), "max_pressure",         0,  5000, 1.0)
 		_build_connection_loss_section(conn, false)
 	else:
 		_section("Wire Info")
 		_num_field("Gauge (AWG)",    float(conn.get("wire_gauge",   12.0)), "wire_gauge",       0, 40, 1.0)
-		_num_field("Length (m)",     float(conn.get("estimated_length",  1.0)), "estimated_length", 0, 9999, 0.1)
+		_length_field(conn)
 		_num_field("Max Amps",       float(conn.get("wire_amps",     20.0)), "wire_amps",         0,  500, 1.0)
 		_build_connection_loss_section(conn, true)
 
@@ -978,7 +1033,7 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 					status = "Hidden by global (timeline: 3D wires)"
 			elif bool(conn.get("route_locked", false)):
 				var pins: Array = conn.get("route_3d", []) as Array
-				status = "Locked (%d pin(s))" % pins.size()
+				status = "Locked (%s)" % UiText.count(pins.size(), "pin")
 			else:
 				var tid := ConduitKinds.derive_type_for_connection(conn)
 				status = "Auto pipes" if ConduitKinds.is_pipes_type(tid) \
@@ -1027,7 +1082,7 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 	_form_vbox.add_child(phys_row)
 	_build_tri_state_opt(conn, "flow_glow", "Flow glow", "Conceptual always glows; physical follows global unless forced")
 	var len_m: float = float(conn.get("route_length_m", conn.get("estimated_length", 0.0)))
-	_readonly_field("Run length (m)", "%.2f" % len_m if len_m > 0.001 else "-")
+	_readonly_field("Run length", ConduitLength.describe(len_m, type_id) if len_m > 0.001 else "-")
 	var segs := ConduitKinds.segment_count_for_length(type_id, len_m)
 	var max_seg: float = float(ConduitKinds.type_meta(type_id).get("max_segment_m", 0.0))
 	if max_seg > 0.01 and segs > 1:
@@ -1065,11 +1120,7 @@ func _build_connection_3d_route_section(conn: Dictionary) -> void:
 
 ## Culvert stage-discharge authoring + live Q at the linked pond level.
 func _build_culvert_hydraulics_section(conn: Dictionary, type_id: String) -> void:
-	var hdr := Label.new()
-	hdr.text = "Culvert hydrology"
-	hdr.add_theme_color_override("font_color", C_PRIMARY)
-	hdr.add_theme_font_size_override("font_size", 12)
-	_form_vbox.add_child(hdr)
+	_form_vbox.add_child(_wrap_margin(_section_header("Culvert hydrology"), 12, 4))
 	var meta := ConduitKinds.type_meta(type_id)
 	var size_in := float(conn.get("pipe_size_in", meta.get("default_pipe_size_in", 8.0)))
 	_num_field("Pipe size (in)", size_in, "pipe_size_in", 4.0, 24.0, 1.0)
@@ -1209,49 +1260,32 @@ func _clear_form() -> void:
 # ---------------------------------------------------------------------------
 
 func _section(title: String) -> void:
-	var pc := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color              = Color(C_PANEL.r * 0.85, C_PANEL.g * 0.85, C_PANEL.b * 0.85, 1.0)
-	sb.set_border_width(SIDE_BOTTOM, 1)
-	sb.border_color          = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.25)
-	sb.content_margin_left   = 12.0
-	sb.content_margin_right  = 12.0
-	sb.content_margin_top    =  7.0
-	sb.content_margin_bottom =  7.0
-	pc.add_theme_stylebox_override("panel", sb)
-	pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_form_vbox.add_child(_wrap_margin(_section_header(title), 12, 4))
 
-	var lbl := Label.new()
-	lbl.text = title.to_upper()
-	lbl.add_theme_color_override("font_color", C_PRIMARY)
-	lbl.add_theme_font_size_override("font_size", 10)
-	pc.add_child(lbl)
-	_form_vbox.add_child(pc)
+
+## The kit's SectionHeader, exempted from _tame_form_widths: its title sits in
+## an HBox without EXPAND, and an ellipsizing label there shrinks to "…".
+func _section_header(title: String) -> SectionHeader:
+	var hdr := SectionHeader.make(title)
+	for c in hdr.get_children():
+		if c is Label:
+			(c as Label).set_meta("tamed", true)
+	return hdr
 
 
 ## Collapsible Advanced header. Returns true when the body should be built.
+## The body is built LAZILY by the caller straight into _form_vbox after this
+## header (expensive HA rows only exist while open), so the kit Collapsible is
+## used as the header alone: folding it records the flag and rebuilds the form.
 func _advanced_section(section_id: String, title: String, hint: String = "") -> bool:
 	var expanded: bool = bool(_advanced_expanded.get(section_id, false))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var btn := Button.new()
-	btn.text = "%s  %s" % ["▼" if expanded else "▶", title]
-	btn.flat = true
-	btn.focus_mode = Control.FOCUS_NONE
-	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	btn.add_theme_color_override("font_color", C_TEXT_S)
-	btn.add_theme_font_size_override("font_size", 10)
-	if not hint.is_empty():
-		btn.tooltip_text = hint
-	btn.pressed.connect(func() -> void:
-		_advanced_expanded[section_id] = not expanded
-		_rebuild_current_item()
+	var sec := Collapsible.make(title, expanded, hint)
+	sec.folding_changed.connect(func(is_folded: bool) -> void:
+		_advanced_expanded[section_id] = not is_folded
+		# Deferred: the rebuild frees this header while it is emitting.
+		call_deferred("_rebuild_current_item")
 	)
-	row.add_child(btn)
-	_form_vbox.add_child(_wrap_margin(row, 8, 2))
+	_form_vbox.add_child(_wrap_margin(sec, 8, 2))
 	return expanded
 
 
@@ -1791,11 +1825,8 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 
 	var expanded: bool = bool(_auto_expanded.get(auto_id, false))
 	var expand_btn := Button.new()
-	expand_btn.text = "▼" if expanded else "▶"
-	expand_btn.flat = true
-	expand_btn.focus_mode = Control.FOCUS_NONE
-	expand_btn.custom_minimum_size = Vector2(18, 0)
-	expand_btn.add_theme_color_override("font_color", C_TEXT_S)
+	IconButton.style(expand_btn, "chevron-down" if expanded else "chevron-right",
+			"Collapse" if expanded else "Expand")
 	expand_btn.pressed.connect(func() -> void:
 		_auto_expanded[auto_id] = not expanded
 		_rebuild_current_item()
@@ -1812,12 +1843,7 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 	hdr.add_child(alias_lbl)
 
 	var del_btn := Button.new()
-	del_btn.text = "×"
-	del_btn.flat = true
-	del_btn.focus_mode = Control.FOCUS_NONE
-	del_btn.tooltip_text = "Delete automation"
-	del_btn.add_theme_color_override("font_color", C_TEXT_S)
-	del_btn.custom_minimum_size = Vector2(18, 0)
+	IconButton.style(del_btn, "trash-2", "Delete automation")
 	del_btn.pressed.connect(_on_auto_delete.bind(index))
 	hdr.add_child(del_btn)
 
@@ -1969,11 +1995,7 @@ func _build_auto_subitem_row(parent: VBoxContainer, kind: String,
 	top.add_child(kind_opt)
 
 	var rm := Button.new()
-	rm.text = "×"
-	rm.flat = true
-	rm.focus_mode = Control.FOCUS_NONE
-	rm.custom_minimum_size = Vector2(18, 0)
-	rm.add_theme_color_override("font_color", C_TEXT_S)
+	IconButton.style(rm, "x", "Remove this row")
 	rm.pressed.connect(_on_auto_sub_remove.bind(auto_index, kind, sub_index))
 	top.add_child(rm)
 	vbox.add_child(top)
@@ -2544,7 +2566,7 @@ func _on_template_picked(tpl_idx: int) -> void:
 		_auto_expanded[spec["id"]] = false
 	_commit_autos(autos)
 	_rebuild_current_item()
-	_toast("Added %d automation(s)" % (tpl.get("specs", []) as Array).size())
+	_toast("Added %s" % UiText.count((tpl.get("specs", []) as Array).size(), "automation"))
 
 
 func _on_add_custom_automation() -> void:
@@ -3061,7 +3083,7 @@ func _summarize_auto(aut: Dictionary) -> String:
 		then_s = "(no action)"
 	var txt := "When %s  →  %s" % [when_s, then_s]
 	if not conds.is_empty():
-		txt += "\nIf: %d condition(s)" % conds.size()
+		txt += "\nIf: %s" % UiText.count(conds.size(), "condition")
 	return txt
 
 
@@ -3471,7 +3493,7 @@ func _build_population_section(specs: Dictionary) -> void:
 			var doors := int(nav.get("doors", 0))
 			_readonly_field("Wayfinding", "ready — %d m grid%s" % [
 					int(float(nav.get("cell_m", 0.0)) * 100.0) / 100,
-					("  ·  %d doorways" % doors) if doors > 0 else ""])
+					("  ·  %s" % UiText.count(doors, "doorway")) if doors > 0 else ""])
 	var here := int(summ.get("count", 0))
 	var started := int(summ.get("initial_count", here))
 	var gone := int(summ.get("departures", 0))
@@ -3669,6 +3691,19 @@ func _build_siphon_hydro_section(specs: Dictionary) -> void:
 		if _siphon_lab_cb.is_valid() and not _item_id.is_empty():
 			_siphon_lab_cb.call(_item_id))
 	_form_vbox.add_child(lab_btn)
+	var run_row := _row_container()
+	var run_hbox: HBoxContainer = run_row.get_child(0)
+	run_hbox.add_child(_key_label("Running"))
+	var run_cb := CheckBox.new()
+	run_cb.button_pressed = not bool(specs.get(HydroSource.SPEC_OFF, false))
+	run_cb.tooltip_text = "Untick to close the turbine's valve: no water, no power. Double-clicking the node does the same."
+	run_cb.size_flags_horizontal = Control.SIZE_SHRINK_END
+	run_cb.toggled.connect(func(on: bool) -> void:
+		if _updating_form or _item_id.is_empty() or not _hydro_off_cb.is_valid():
+			return
+		_hydro_off_cb.call(_item_id, not on))
+	run_hbox.add_child(run_cb)
+	_form_vbox.add_child(run_row)
 	var kind := str(specs.get("turbine_kind", "siphon"))
 	_turbine_kind_field("Turbine kind", kind, "specs/turbine_kind")
 	var has_penstock := bool(HydroSource.kind_meta(kind).get("has_penstock", false))
@@ -3874,7 +3909,7 @@ func _build_cnc_cut_presets(item_id: String) -> void:
 	_section("Cut presets (beam → strut)")
 	var inv := _part_inventory()
 	var beams := inv.count_beam_feedstock() if inv != null else 0
-	_readonly_field("Beam stock", "%d recycled plastic beam(s)" % beams)
+	_readonly_field("Beam stock", UiText.count(beams, "recycled plastic beam"))
 	var note := Label.new()
 	note.text = "Mills rounded ends + bolt holes. Alternate path to printing struts on the trash printer."
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3904,7 +3939,7 @@ func _build_cnc_cut_presets(item_id: String) -> void:
 			var bs_n := inv.count("dome_strut_b")
 			if as_n + bs_n > 0:
 				var conv := Button.new()
-				conv.text = "↩ Reclaim %d strut(s) as beam stock" % (as_n + bs_n)
+				conv.text = "↩ Reclaim %s as beam stock" % UiText.count(as_n + bs_n, "strut")
 				conv.tooltip_text = "If these came from the beam extruder (not the trash printer), convert them back to CNC feedstock."
 				conv.focus_mode = Control.FOCUS_NONE
 				conv.pressed.connect(func():
@@ -3951,7 +3986,7 @@ func _reclaim_struts_as_beams(inv: PartInventory) -> void:
 	var loader := main.find_child("TerrainLoader", true, false) if main != null else null
 	if loader != null and loader.has_method("save_part_inventory"):
 		loader.call("save_part_inventory")
-	_toast("Reclaimed %d beam(s) for CNC cutting" % n)
+	_toast("Reclaimed %s for CNC cutting" % UiText.count(n, "beam"))
 
 
 func _part_inventory() -> PartInventory:
@@ -4320,8 +4355,7 @@ func _build_io_row(specs: Dictionary, arr_name: String, idx: int, batch_mode: bo
 	header.add_child(title_lbl)
 	
 	var del_btn := Button.new()
-	del_btn.text = "X"
-	del_btn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+	IconButton.style(del_btn, "trash-2", "Delete this port")
 	del_btn.pressed.connect(func():
 		arr.remove_at(idx)
 		_commit_field("specs", specs)
@@ -4581,17 +4615,34 @@ func _build_scene_link_section(item: Dictionary) -> void:
 	# Graph → 3D: look at the twin (the 3D → graph direction is the prop
 	# editor's "Open node in graph").
 	if not bound_id.is_empty() or GraphSiteLayout.has_site_coords(item):
+		var loc_row := HBoxContainer.new()
+		loc_row.add_theme_constant_override("separation", 6)
 		var loc_btn := Button.new()
 		loc_btn.text = "Locate in 3D"
-		loc_btn.tooltip_text = "Close the graph and look at this node's place in the world"
+		loc_btn.tooltip_text = ("Close the graph and look at this node's place in the world.\n"
+			+ "Esc there comes back to the graph on this node.")
 		loc_btn.focus_mode = Control.FOCUS_NONE
+		loc_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var loc_id := str(item.get("id", ""))
 		loc_btn.pressed.connect(func() -> void:
 			var gv := _find_owner_graph_view()
 			if gv != null and gv.has_method("locate_item_in_world"):
 				gv.call("locate_item_in_world", loc_id)
 		)
-		_form_vbox.add_child(loc_btn)
+		loc_row.add_child(loc_btn)
+		var walk_btn := Button.new()
+		walk_btn.text = "Walk to it"
+		walk_btn.tooltip_text = ("Stand beside this node in first person (closes the graph).\n"
+			+ "G comes back to the graph on this node.")
+		walk_btn.focus_mode = Control.FOCUS_NONE
+		walk_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		walk_btn.pressed.connect(func() -> void:
+			var gv := _find_owner_graph_view()
+			if gv != null and gv.has_method("walk_to_item"):
+				gv.call("walk_to_item", loc_id)
+		)
+		loc_row.add_child(walk_btn)
+		_form_vbox.add_child(loc_row)
 
 	# Show/hide this node's 3D twin (works even when the prop is hidden, since you
 	# can't click an invisible prop in the world to un-hide it). Only when embodied.
@@ -4968,7 +5019,7 @@ func _on_ha_links_save(item_id: String, edits: Dictionary, itype: String) -> voi
 		_toast("Saved. Missing required: %s" % ", ".join(psa))
 	if _ha_linker != null and _ha_linker.has_method("refresh_subscriptions"):
 		_ha_linker.call("refresh_subscriptions")
-	var note: String = "Linked %d sensor(s)" % links.size()
+	var note: String = "Linked %s" % UiText.count(links.size(), "sensor")
 	if _ha_linker != null and _ha_linker.has_method("is_live"):
 		var live_ok: bool = bool(_ha_linker.call("is_live"))
 		note += "; HA %s" % ("connected" if live_ok else "offline")
@@ -5256,8 +5307,8 @@ func _ensure_calibrator() -> void:
 func _on_calibrator_progress(remaining_s: float, samples: int,
 		current_w: float, avg_w: float, peak_w: float) -> void:
 	if _cal_remaining_lbl != null:
-		_cal_remaining_lbl.text = "Time remaining: %s   (%d samples)" % [
-			_format_duration(remaining_s), samples
+		_cal_remaining_lbl.text = "Time remaining: %s   (%s)" % [
+			_format_duration(remaining_s), UiText.count(samples, "sample")
 		]
 	if _cal_live_lbl != null:
 		_cal_live_lbl.text = "Live: %.1f W" % current_w
@@ -5679,10 +5730,7 @@ func _build_exposed_ports_editor(item: Dictionary) -> void:
 			_notify_boundary_edit(compound_id))
 		hbox.add_child(face_opt)
 		var rm := Button.new()
-		rm.text = "✕"
-		rm.focus_mode = Control.FOCUS_NONE
-		rm.flat = true
-		rm.add_theme_color_override("font_color", C_AMBER)
+		IconButton.style(rm, "x", "Remove from the boundary (drops its boundary wire)")
 		rm.pressed.connect(func():
 			_remove_exposed_port(compound_id, hid))
 		hbox.add_child(rm)
@@ -5922,7 +5970,7 @@ func _retile_array_from_dims(item: Dictionary, dims: Dictionary) -> void:
 		float(equiv.get("array_equiv_imp", 0.0)),
 	]
 	_model.update_item(item_id, {"specs": sp})
-	_toast("Retiled array: %d panels @ %.0f W" % [count, float(spec["panel_watts"])])
+	_toast("Retiled array: %s @ %.0f W" % [UiText.count(count, "panel"), float(spec["panel_watts"])])
 	_rebuild_current_item()
 
 
@@ -6054,7 +6102,7 @@ func _apply_panel_template_to_array(compound_item: Dictionary, template: Diction
 			float(csp.get("array_equiv_imp", 0.0)),
 		]
 		_model.update_item(comp_id, {"specs": csp})
-	_toast("Applied panel template to %d panel(s)" % panel_ids.size())
+	_toast("Applied panel template to %s" % UiText.count(panel_ids.size(), "panel"))
 	_rebuild_current_item()
 
 
@@ -6164,9 +6212,9 @@ func _build_provision_row(specs: Dictionary) -> void:
 	prow.add_child(btn)
 	_form_vbox.add_child(prow)
 	var req := CampProvisioning.requirements(n)
-	_readonly_field("Needs (%d people)" % n, "%.0f L water · %.1f kg food per day · %d restroom slots · %d kitchen seats · %d showers" % [
-		float(req["water_l_day"]), float(req["food_kg_day"]), int(req["restroom_slots"]),
-		int(req["kitchen_seats"]), int(req["shower_slots"])])
+	_readonly_field("Needs (%s)" % UiText.count(n, "person"), "%.0f L water · %.1f kg food per day · %s · %s · %s" % [
+		float(req["water_l_day"]), float(req["food_kg_day"]), UiText.count(int(req["restroom_slots"]), "restroom slot"),
+		UiText.count(int(req["kitchen_seats"]), "kitchen seat"), UiText.count(int(req["shower_slots"]), "shower")])
 	var imp: Dictionary = specs.get("ideal_import_rates", {})
 	var exp: Dictionary = specs.get("ideal_export_rates", {})
 	if not imp.is_empty() or not exp.is_empty():
@@ -6177,3 +6225,15 @@ func _build_provision_row(specs: Dictionary) -> void:
 			bits.append("%s %.2f/h out" % [str(k), float(exp[k])])
 		_readonly_field("Ideal supply", " · ".join(bits))
 		_hint_label("Ideal supply is ON (Settings → NPC → Testing): shortfalls are met as if by a perfect supplier; these are the rates it would have to deliver.")
+
+
+
+## A wire's length: once it is routed in 3D the run MEASURES it (sag, drape
+## and all — every rebuild stamps route_length_m), so the field is a readout;
+## only an unrouted, conceptual wire takes a typed length.
+func _length_field(conn: Dictionary) -> void:
+	var routed := float(conn.get("route_length_m", 0.0)) > 0.001
+	if routed:
+		_readonly_field("Length", ConduitLength.format(float(conn.get("route_length_m", 0.0))) + "  (measured)")
+		return
+	_num_field("Length (m)", float(conn.get("estimated_length", 1.0)), "estimated_length", 0, 9999, 0.1)

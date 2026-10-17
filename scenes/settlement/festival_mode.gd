@@ -115,7 +115,8 @@ func open(main: Node) -> void:
 		_assign_unassigned_lots(loader)
 		var pop: Dictionary = loader.call("populate_camp_areas")
 		if int(pop.get("changed", 0)) > 0:
-			_note("Populated %d painted camps (%d people)." % [int(pop["changed"]), int(pop["people"])])
+			_note("Populated %s (%s)." % [UiText.count(int(pop["changed"]), "painted camp"),
+				UiText.count(int(pop["people"]), "person", "people")])
 		var summary: Dictionary = loader.call("camp_population_summary")
 		if int(summary.get("camps", 0)) == 0:
 			_seed_demo_zone(loader, main)
@@ -219,7 +220,7 @@ func clear_seeded() -> void:
 			var iid := str((it as Dictionary).get("id", ""))
 			if iid.begins_with(FALLBACK_ITEM_PREFIX):
 				model.remove_item(iid)
-	_note("Cleared %d seeded venues and every festival headcount." % removed)
+	_note("Cleared %s and every festival headcount." % UiText.count(removed, "seeded venue"))
 	close()
 
 
@@ -264,7 +265,7 @@ func _assign_unassigned_lots(loader: Node) -> void:
 			if bool(loader.call("update_lot_camp", str(lot["lot_id"]), {})):
 				n += 1
 	if n > 0:
-		_note("Assigned default camps to %d empty lots." % n)
+		_note("Assigned default camps to %s." % UiText.count(n, "empty lot"))
 
 
 ## No camps anywhere: a road + zone next to the player, cut into lots and
@@ -386,7 +387,7 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 			programmed += 1
 	if programmed > 0:
 		_save_registry(main, loader, reg)
-		_note("Gave %d stage(s) the 20:00–02:00 evening set." % programmed)
+		_note("Gave %s the 20:00–02:00 evening set." % UiText.count(programmed, "stage"))
 	# Enrichment is what the evening IS; a site with no venue of any kind
 	# gets the three. (fire circles need firewood wired in; stages do not.)
 	var has_venue := false
@@ -446,7 +447,7 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 		added += 1
 	if added > 0:
 		_save_registry(main, loader, reg)
-		_note("Seeded %d venues (%s)." % [added, ", ".join(PackedStringArray(missing))
+		_note("Seeded %s (%s)." % [UiText.count(added, "venue"), ", ".join(PackedStringArray(missing))
 			if not missing.is_empty() else "beds and kitchens for the camps that had none"])
 
 

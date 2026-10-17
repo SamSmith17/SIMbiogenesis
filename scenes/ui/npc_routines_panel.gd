@@ -181,6 +181,7 @@ func _build_ui() -> void:
 	_panel.offset_top = -330
 	_panel.offset_bottom = 330
 	add_child(_panel)
+	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 14)
@@ -228,10 +229,7 @@ func _build_ui() -> void:
 			close()
 			sgv.call("open_site_projects"))
 	header.add_child(projects_btn)
-	var close_btn := Button.new()
-	UITheme.style_button(close_btn)
-	close_btn.text = "Close"
-	close_btn.pressed.connect(close)
+	var close_btn := IconButton.close(close)
 	header.add_child(close_btn)
 
 	_walk_lbl = Label.new()
@@ -300,12 +298,8 @@ func _build_ui() -> void:
 	_build_routine_tab(routine_tab)
 
 
-func _section_label(text: String) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-	l.add_theme_color_override("font_color", C_TEXT)
-	return l
+func _section_label(text: String) -> SectionHeader:
+	return SectionHeader.make(text)
 
 
 func _legend_chip(text: String, col: Color) -> HBoxContainer:
@@ -922,7 +916,8 @@ func _refresh_chores() -> void:
 		var db := int((b as Dictionary).get("done_day", -1)) == day
 		if da != db:
 			return db
-		return int((a as Dictionary).get("priority", 0)) 			< int((b as Dictionary).get("priority", 0)))
+		return int((a as Dictionary).get("priority", 0)) \
+				< int((b as Dictionary).get("priority", 0)))
 	for c in ordered:
 		var chore: Dictionary = c
 		var row := HBoxContainer.new()
@@ -1028,7 +1023,8 @@ Paused" if held else "", ("
 		meta.custom_minimum_size.x = 106
 		meta.mouse_filter = Control.MOUSE_FILTER_PASS
 		if gated:
-			meta.tooltip_text = "Too %s to work outside right now" % 				NpcWeatherGate.describe(weather).to_lower()
+			meta.tooltip_text = "Too %s to work outside right now" % \
+					NpcWeatherGate.describe(weather).to_lower()
 		row.add_child(meta)
 
 		# A chore with no target happens wherever the worker is standing, which
@@ -1106,8 +1102,7 @@ Paused" if held else "", ("
 		row.add_child(hold)
 
 		var del := Button.new()
-		UITheme.style_button(del)
-		del.text = "✕"
+		IconButton.style(del, "trash-2", "")
 		if badge.is_empty():
 			del.tooltip_text = "Delete this chore"
 			del.pressed.connect(func() -> void:
@@ -1401,9 +1396,7 @@ func _routine_row(idx: int) -> HBoxContainer:
 	row.add_child(dur)
 
 	var del := Button.new()
-	UITheme.style_button(del)
-	del.text = "X"
-	del.tooltip_text = "Remove this block"
+	IconButton.style(del, "x", "Remove this block")
 	del.pressed.connect(func() -> void:
 		_draft.remove_at(idx)
 		_mark_routine_dirty()
@@ -1462,8 +1455,8 @@ func _update_routine_status() -> void:
 	var gap_h := (1.0 - float(covered) / float(24 * 12)) * 24.0
 	var visits := r.toilet_visits_per_day()
 	var parts: PackedStringArray = PackedStringArray()
-	parts.append("%d bathroom visits, %.0f L flush water per person per day" % [
-		visits, r.water_per_visit_l() * float(visits)])
+	parts.append("%s, %.0f L flush water per person per day" % [
+		UiText.count(visits, "bathroom visit"), r.water_per_visit_l() * float(visits)])
 	parts.append("sleep %.1f h, work %.1f h" % [
 		r.hours_of(NpcRoutine.SLEEP), r.hours_of(NpcRoutine.WORK)])
 	var col := UITheme.C_OK
