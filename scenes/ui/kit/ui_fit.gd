@@ -68,7 +68,15 @@ static func keep_fitted(panel: Control, want: Vector2, margin: float = MARGIN,
 	var refit := func() -> void: _refit.call_deferred(panel)
 	panel.visibility_changed.connect(refit)
 	panel.minimum_size_changed.connect(refit)
-	panel.tree_exiting.connect(func() -> void: HudLayout.release(_claim_owner(panel)))
+	panel.tree_exiting.connect(func() -> void:
+		HudLayout.release(_claim_owner(panel))
+		# `refit` captures the panel and hangs off the VIEWPORT, which outlives
+		# it: every later window resize (and the resize at shutdown) called it
+		# on a freed panel — the "Lambda capture at index 0 was freed" errors
+		# the harness counted after a modal was freed. Unhook it here.
+		var vp_out := panel.get_viewport()
+		if vp_out != null and vp_out.size_changed.is_connected(refit):
+			vp_out.size_changed.disconnect(refit))
 	panel.tree_entered.connect(func() -> void:
 		var vp := panel.get_viewport()
 		if vp != null and not vp.size_changed.is_connected(refit):
