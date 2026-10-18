@@ -1006,8 +1006,8 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 		# of the block is leisure (NpcRoutine.serves_once — CrowdCohort does
 		# the same off its routine_mark).
 		var mark: float = floor((abs_hours - _hour(ctx)) / 24.0) * 24.0 + float(blk.get("start_h", -1.0))
-		if NpcRoutine.ONCE_KINDS.has(kind) and absf(_routine_mark - mark) < 1e-6 and routine.serves_once():
-			kind = NpcRoutine.SOCIAL
+		if NpcRoutine.ONCE_KINDS.has(kind) and absf(_routine_mark - mark) < 1e-6 and routine.meals_once():
+			kind = routine.leisure_kind()
 		var scheduled := NpcRoutine.activity_for(kind)
 		# Mirror _pick's slept-enough guard: the SLEEP block runs to ~08:00
 		# while people wake 6.0-7.5, and re-issuing sleep with the need near 0

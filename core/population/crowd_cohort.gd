@@ -740,8 +740,8 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 	# A festival day serves a meal / bathroom / wash block ONCE; the rest of
 	# the block is leisure (NpcRoutine.serves_once, mirrored in NpcAgent).
 	if r != null and NpcRoutine.ONCE_KINDS.has(kind) and absf(routine_mark[i] - mark) < 1e-6 \
-			and r.serves_once():
-		kind = NpcRoutine.SOCIAL
+			and r.meals_once():
+		kind = r.leisure_kind()
 	# A festival morning: awake before the SLEEP block ends, people get up
 	# and DO something (a chat, a stroll, a venue) instead of standing by
 	# their beds until 09:30 (measured: 9-16 % of the crowd idle 06-12h).
@@ -796,21 +796,27 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 			if wants_venue and _go_to_venue(i, t, ctx, hour, left):
 				return
 	# Nothing to do: dawdle where we are — but not past the moment the urge
-	# to gather crosses its bar. The full tier re-plans EVERY substep while
-	# idle and goes to the fire right then; a fixed 15-45 min dawdle here had
-	# the light tier gathering a third less (the morale gap the equivalence
-	# pin sat right at). Needs are lines between events, so the crossing is
-	# exact. (Only enrichment: waking at every need or block end re-issued
-	# meals and cost ~20 % more food than the full tier.)
+	# to gather, or a CRITICAL need, crosses its bar. The full tier re-plans
+	# EVERY substep while idle and goes right then; a fixed 15-45 min dawdle
+	# here had the light tier gathering a third less (the morale gap the
+	# equivalence pin sat right at). Needs are lines between events, so the
+	# crossing is exact. Waking at a need crossing used to cost ~20 % more
+	# food than the full tier — while EAT blocks re-issued meals; with a
+	# block served ONCE (NpcRoutine.meals_once) the need crossing IS when the
+	# full tier eats again, and not waking for it left the light tier 8 %
+	# under. Block ENDS still do not wake anyone.
 	act[i] = A_FREE
 	state[i] = S_DOING
 	var until := t + FREE_MIN_H + _rand(i) * (FREE_MAX_H - FREE_MIN_H)
-	var ke := NpcAgent.NEEDS.find("enrichment")
-	var ve := needs[i * 6 + ke]
-	var te := float(NpcAgent.THRESHOLD["enrichment"])
-	var re := _need_rate(i, ke)
-	if re > 1e-9 and ve < te:
-		until = minf(until, t + (te - ve) / re + 1e-4)
+	for wake_need: String in ["enrichment", "hunger", "thirst", "bladder"]:
+		var kn := NpcAgent.NEEDS.find(wake_need)
+		if kn < 0:
+			continue
+		var vn := needs[i * 6 + kn]
+		var tn := float(NpcAgent.THRESHOLD[wake_need])
+		var rn := _need_rate(i, kn)
+		if rn > 1e-9 and vn < tn:
+			until = minf(until, t + (tn - vn) / rn + 1e-4)
 	end_h[i] = maxf(until, t + 1e-4)
 	next_h[i] = end_h[i]
 

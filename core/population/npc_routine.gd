@@ -200,6 +200,22 @@ func serves_once() -> bool:
 	return false
 
 
+## Every routine serves a meal / bathroom / wash block ONCE (a second meal
+## inside one EAT block had the full tier eating ~2.5 kg/person/day against
+## the preset's 1.5 - measured in the festival refinement notes). Kept apart
+## from serves_once(): that one also carries the FESTIVAL day's late-bed and
+## up-early rules, which the default day must not take. What the rest of the
+## block becomes is the routine's own leisure kind: leisure_kind().
+func meals_once() -> bool:
+	return true
+
+
+## The leisure the rest of a once-served block turns into: SOCIAL on a
+## festival day (always something to do), FREE on the default day.
+func leisure_kind() -> String:
+	return SOCIAL if serves_once() else FREE
+
+
 ## Before the sleep window opens, the sleep NEED alone sends someone to bed
 ## at its ordinary threshold — and a festival-goer up since 08:00 crosses it
 ## around 21:00, so half the crowd went to bed during the headline set

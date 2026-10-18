@@ -19017,6 +19017,9 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			model.update_item(cid, {"specs": cspecs})
 			_sync_camp_habitat(cid, n, centre)
 			if changed:
+				# The stores were sized for the OLD headcount (the population
+				# target slider, a re-cut lot): resize them with the people.
+				_sync_camp_stores(cid, n, str(cspecs.get("camp_provision", PopTestPrefs.provision_preset())))
 				out["updated"] = int(out["updated"]) + 1
 			continue
 		var preset := str(lot.get("provision", PopTestPrefs.provision_preset()))
@@ -19063,6 +19066,37 @@ func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2) -> void:
 		patched["site_z_m"] = centre.y
 		model.update_item(str(d.get("id", "")), {"specs": patched})
 		return
+
+
+## Resize a camp compound's supply + waste tanks to `n` people on its
+## provisioning preset (CampProvisioning.supply - the same numbers
+## CampTemplates.definition stamps). A tank keeps its FILL FRACTION
+## (`level` is 0..1), so a half-empty store stays half empty rather than
+## topping up for free. Returns how many tanks changed.
+func _sync_camp_stores(comp_id: String, n: int, preset: String) -> int:
+	var comp: Dictionary = model.get_item(comp_id)
+	var scope := str(comp.get("child_scope_id", ""))
+	if scope.is_empty():
+		return 0
+	var sup := CampProvisioning.supply(n, preset)
+	var changed := 0
+	for it in model.get_items_in_scope(scope):
+		var d: Dictionary = it
+		if str(d.get("type", "")) != "resource":
+			continue
+		var specs: Dictionary = d.get("specs", {})
+		var kind := str(specs.get("resource_kind", ""))
+		if not sup.has(kind):
+			continue
+		var cap := float((sup[kind] as Dictionary).get("capacity", 0.0))
+		if cap <= 0.0 or absf(float(specs.get("capacity_qty", -1.0)) - cap) < 0.01:
+			continue
+		var patched: Dictionary = specs.duplicate(true)
+		patched["capacity_qty"] = cap
+		patched["capacity"] = "%.0f %s" % [cap, str(specs.get("capacity_unit", (sup[kind] as Dictionary).get("unit", "")))]
+		model.update_item(str(d.get("id", "")), {"specs": patched})
+		changed += 1
+	return changed
 
 
 ## Every festival camp compound: [{id, lot_id, name, headcount, scope}].
