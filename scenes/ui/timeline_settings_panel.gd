@@ -20,6 +20,17 @@ const PANEL_DESIRED_SIZE := Vector2(1180.0, 880.0)
 const NAV_WIDTH := 220.0
 const PREFS_PATH := "user://ui_prefs.cfg"
 
+## The pages the LAUNCH HUB shows (`hub_mode`, no world running): every one
+## reads and writes files, not Main. The Lighting page is built in its
+## graphics-preset form there (quality tier, performance, terrain detail,
+## shadows); the sky / sun / fog fine-tuning needs a lit world.
+const HUB_PAGES := ["Lighting", "Interface", "Player", "NPC", "Stars & Planets", "Window Wall"]
+
+## Set BEFORE the node enters the tree (the hub creates it by script): only
+## HUB_PAGES are built, the sliders read SimSettingsController.hub_snapshot()
+## and every apply_* the hub cannot do live is stored for sim_settings.cfg.
+var hub_mode: bool = false
+
 ## The sidebar: category -> page titles, in order. A page built by a
 ## `_build_*_tab` that is not listed here lands under "Other", so it can never
 ## go missing from the nav.
@@ -257,6 +268,10 @@ func refresh_from_controller() -> void:
 	if not is_instance_valid(SimSettingsController):
 		return
 	var snap: Dictionary = SimSettingsController.get_state_snapshot()
+	if snap.is_empty() and hub_mode:
+		# No Main at the hub: the saved values are the state.
+		_refresh_hub(SimSettingsController.hub_snapshot())
+		return
 	if snap.is_empty():
 		return
 	_syncing = true
@@ -313,6 +328,24 @@ func refresh_from_controller() -> void:
 	_refresh_labels()
 
 
+## The hub's pages from the saved files (SimSettingsController.hub_snapshot):
+## only the controls those pages carry, every write guarded by _syncing.
+func _refresh_hub(snap: Dictionary) -> void:
+	_syncing = true
+	if _shadow_quality:
+		_shadow_quality.value = float(snap.get("shadow_quality", 2))
+	if _shadow_opacity:
+		_shadow_opacity.value = float(snap.get("shadow_opacity", 1.0))
+	if _graphics_quality:
+		_graphics_quality.selected = clampi(int(snap.get("graphics_quality", 2)), 0, 3)
+	_sync_terrain_quality()
+	if _player_fov:
+		_player_fov.value = float(snap.get("player_fov", 50.0))
+	_sync_stars_planets_from_snapshot(snap)
+	_syncing = false
+	_refresh_labels()
+
+
 # ---------------------------------------------------------------------------
 # UI construction
 # ---------------------------------------------------------------------------
@@ -357,7 +390,7 @@ func _build_ui() -> void:
 	var title_row := HBoxContainer.new()
 	tbm.add_child(title_row)
 	var title_lbl := Label.new()
-	title_lbl.text = "⚙  Simulation Settings"
+	title_lbl.text = "⚙  Settings" if hub_mode else "⚙  Simulation Settings"
 	title_lbl.add_theme_color_override("font_color", C_TEXT)
 	title_lbl.add_theme_font_size_override("font_size", 16)
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -389,21 +422,30 @@ func _build_ui() -> void:
 	tabs.add_theme_stylebox_override("panel", tab_panel_sb)
 	body.add_child(tabs)
 
-	_build_gameplay_tab(tabs)
-	_build_player_tab(tabs)
-	_build_interface_tab(tabs)
-	_build_drone_tab(tabs)
-	_build_environment_tab(tabs)
-	_build_lighting_tab(tabs)
-	_build_npc_tab(tabs)
-	_build_window_wall_tab(tabs)
-	_build_extreme_weather_tab(tabs)
-	_build_stars_planets_tab(tabs)
-	_build_solar_tab(tabs)
-	_build_ha_tab(tabs)
-	_build_location_tab(tabs)
-	_build_live_tab(tabs)
-	_build_keys_tab(tabs)
+	if hub_mode:
+		# Only the pages that need no Main (HUB_PAGES), in the sidebar's order.
+		_build_lighting_tab(tabs)
+		_build_player_tab(tabs)
+		_build_interface_tab(tabs)
+		_build_npc_tab(tabs)
+		_build_window_wall_tab(tabs)
+		_build_stars_planets_tab(tabs)
+	else:
+		_build_gameplay_tab(tabs)
+		_build_player_tab(tabs)
+		_build_interface_tab(tabs)
+		_build_drone_tab(tabs)
+		_build_environment_tab(tabs)
+		_build_lighting_tab(tabs)
+		_build_npc_tab(tabs)
+		_build_window_wall_tab(tabs)
+		_build_extreme_weather_tab(tabs)
+		_build_stars_planets_tab(tabs)
+		_build_solar_tab(tabs)
+		_build_ha_tab(tabs)
+		_build_location_tab(tabs)
+		_build_live_tab(tabs)
+		_build_keys_tab(tabs)
 	_populate_nav()
 	tabs.tab_changed.connect(_on_page_changed)
 	_on_page_changed(tabs.current_tab)
@@ -1680,6 +1722,13 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	v.add_child(tq_hint)
 	_sync_terrain_quality()
 	v.add_child(HSeparator.new())
+	if hub_mode:
+		# The graphics-preset form: what can be set with no world lit.
+		_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
+		_shadow_opacity     = _add_slider(v, "Shadow darkness", 0.0, 1.0, 0.05, _on_shadow_opacity)
+		_shadow_quality_lbl = _add_status_label(v, "Shadow Quality: High")
+		_add_hint(v, "Sun, moon, ambient, glow, fog, tonemapping and the night sky are tuned inside a world (Settings ⚙ on the timeline), where you can see them.")
+		return
 	_sun_energy         = _add_slider(v, "Sun energy",     0.0, 3.0, 0.05, _on_sun_energy)
 	_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
 	_shadow_opacity     = _add_slider(v, "Shadow darkness", 0.0, 1.0, 0.05, _on_shadow_opacity)
@@ -2398,7 +2447,7 @@ func _build_prop_perf_section(v: Control) -> void:
 	if main != null and main.has_method("get_render_scale_3d"):
 		_render_scale.value = float(main.call("get_render_scale_3d")) * 100.0
 	else:
-		_render_scale.value = 100.0
+		_render_scale.value = RenderProfile.load_render_scale(1.0) * 100.0
 	_prop_draw_dist.value = PropRenderTuning.base_distance_m
 	_prop_shadows.button_pressed = PropRenderTuning.shadows_enabled
 	_prop_shadow_detail.selected = clampi(PropRenderTuning.shadow_detail, 0, 3)
@@ -2417,6 +2466,9 @@ func _on_render_scale(pct: float) -> void:
 	var main: Node = SimSettingsController.main_node
 	if main != null and main.has_method("set_render_scale_3d"):
 		main.call("set_render_scale_3d", clampf(pct / 100.0, 0.5, 1.0))
+	elif main == null:
+		# The hub: the file Main reads at boot (_load_render_scale_pref).
+		RenderProfile.save_render_scale(clampf(pct / 100.0, 0.5, 1.0))
 
 func _on_prop_draw_dist(val: float) -> void:
 	if _syncing: return
@@ -2447,6 +2499,13 @@ func _on_terrain_quality(v: float) -> void:
 	var loader := _find_terrain_loader()
 	if loader != null and loader.has_method("set_terrain_quality"):
 		loader.call("set_terrain_quality", tier)
+	elif hub_mode:
+		# No loader at the hub: the global tier the next map reads
+		# (the same key _sync_terrain_quality falls back to).
+		var cfg := ConfigFile.new()
+		cfg.load("user://terrain_config.cfg")
+		cfg.set_value("terrain", "quality_tier", tier)
+		cfg.save("user://terrain_config.cfg")
 
 ## Locate the active generated-map TerrainLoader (built-in maps have none).
 func _find_terrain_loader() -> Node:

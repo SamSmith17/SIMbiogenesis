@@ -299,16 +299,40 @@ func apply_settings(settings: Dictionary) -> void:
 			set(key, settings[key])
 
 func save_prefs() -> void:
+	store_settings(get_settings())
+
+
+## Write a patch of setting values into the prefs file WITHOUT a live
+## PlanetSystem — the launch hub's Settings pages, where no world runs. The
+## next world's _load_prefs reads them. Keys are the get_settings() names.
+static func store_settings(patch: Dictionary) -> void:
 	var cfg := ConfigFile.new()
-	var s := get_settings()
-	for key in s:
-		var v: Variant = s[key]
+	cfg.load(PREFS_PATH)
+	for key in patch:
+		var v: Variant = patch[key]
 		if v is Color:
 			var c: Color = v
 			cfg.set_value("planets", key, [c.r, c.g, c.b, c.a])
 		else:
 			cfg.set_value("planets", key, v)
 	cfg.save(PREFS_PATH)
+
+
+## The saved prefs as a get_settings()-shaped dict (colours as Color); {}
+## when nothing was ever saved. What the hub's page shows.
+static func saved_settings() -> Dictionary:
+	var out := {}
+	var cfg := ConfigFile.new()
+	if cfg.load(PREFS_PATH) != OK or not cfg.has_section("planets"):
+		return out
+	for key in cfg.get_section_keys("planets"):
+		var v: Variant = cfg.get_value("planets", key)
+		if v is Array and (v as Array).size() >= 3:
+			var a: Array = v
+			out[key] = Color(float(a[0]), float(a[1]), float(a[2]), float(a[3]) if a.size() >= 4 else 1.0)
+		else:
+			out[key] = v
+	return out
 
 func _load_prefs() -> void:
 	var cfg := ConfigFile.new()

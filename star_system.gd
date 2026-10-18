@@ -575,6 +575,49 @@ func _migrate_config(config: ConfigFile) -> void:
 	config.set_value("stars", "calibration_version", CALIBRATION_VERSION)
 	config.save(CONFIG_PATH)
 
+## Setting name (apply_settings / get_settings) -> key in the [stars] section.
+const SETTING_CFG_KEYS := {
+	"stars_brightness": "brightness", "stars_twinkle": "twinkle",
+	"stars_horizon_fade": "horizon_fade", "stars_glow": "glow",
+	"stars_contrast": "contrast", "stars_background_cut": "background_cut",
+	"star_trails": "trails", "star_trail_length": "trail_length",
+	"lock_camera_to_sky": "lock_camera_to_sky", "stars_point_size": "point_size",
+	"stars_saturation": "saturation", "stars_wash": "wash",
+	"milkyway_gain": "milkyway_gain", "milkyway_saturation": "milkyway_saturation",
+	"milkyway_tint": "milkyway_tint", "texture_quality": "texture_quality",
+	"zodiac_mode": "zodiac_mode", "zodiac_opacity": "zodiac_opacity",
+	"zodiac_show_lines": "zodiac_lines", "zodiac_show_labels": "zodiac_labels",
+	"zodiac_show_ophiuchus": "zodiac_ophiuchus", "zodiac_show_ecliptic": "zodiac_ecliptic",
+}
+
+
+## Write a patch of look settings into the calibration file WITHOUT a live
+## StarSystem — the launch hub's Settings → Stars page, where no world runs.
+## The next world's _load_calibration reads them. Unknown keys are ignored.
+static func store_settings(patch: Dictionary) -> void:
+	var config := ConfigFile.new()
+	config.load(CONFIG_PATH)
+	config.set_value("stars", "calibration_version", CALIBRATION_VERSION)
+	for key in patch:
+		if SETTING_CFG_KEYS.has(key):
+			config.set_value("stars", SETTING_CFG_KEYS[key], patch[key])
+	config.save(CONFIG_PATH)
+
+
+## The saved look as a get_settings()-shaped dict (only keys the file holds),
+## plus the texture-quality availability the page's option needs.
+static func saved_settings() -> Dictionary:
+	var out := {"texture_quality_high_available": has_high_quality_texture()}
+	var config := ConfigFile.new()
+	if config.load(CONFIG_PATH) != OK:
+		return out
+	for key in SETTING_CFG_KEYS:
+		var ck: String = SETTING_CFG_KEYS[key]
+		if config.has_section_key("stars", ck):
+			out[key] = config.get_value("stars", ck)
+	return out
+
+
 func save_calibration() -> void:
 	var config := ConfigFile.new()
 	config.load(CONFIG_PATH)

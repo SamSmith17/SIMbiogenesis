@@ -212,6 +212,17 @@ tools\harness.ps1 -World mtvernon -Capture assetpack
 # The friend's side: an EMPTY user folder (-EmptyUser), the pack dropped on the
 # launch hub ("menu" capture kind: no world is launched), installed, played:
 tools\harness.ps1 -EmptyUser -Capture assetpack-import -UserArgs @("--import=<pack>")
+# Settings from the LAUNCH HUB ("menu" kind, no world): a REAL click on the
+# header gear opens the settings modal in hub_mode — exactly
+# TimelineSettingsPanel.HUB_PAGES (Lighting as the graphics-preset page,
+# Interface, Player, NPC, Stars & Planets, Window Wall), every nav entry on
+# screen, UiAudit per page (0 errors at 1080 and 720), a graphics-quality +
+# star-brightness change with NO Main landing in sim_settings.cfg /
+# star_calibration.cfg (SimSettingsController's hub store, restored after),
+# Esc closing it. ⚠ The hub's own Esc handler quit the game while a modal
+# was up until this capture caught it:
+tools\harness.ps1 -Capture hubsettings
+tools\harness.ps1 -Capture hubsettings -UserArgs @("--window-size=1280x720")
 # Worlds end to end (WINDOWED, needs a world: --scratch-world copies the most
 # recent world on the map into a throwaway one, deleted on quit; --world=<name
 # or id> runs inside a real one). Builds a prop + a light, freezes the clock,

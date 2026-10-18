@@ -40,12 +40,18 @@ func refresh() -> void:
 	_rebuilding = false
 
 
+## The running world's Main, or null at the launch hub (the hub scene is a
+## Control with no player and no window-wall view; treating it as Main would
+## save a "viewpoint" for the menu).
 func _main() -> Node:
 	if is_instance_valid(SimSettingsController):
 		var m: Variant = SimSettingsController.get("main_node")
 		if m is Node:
 			return m
-	return get_tree().current_scene
+	var scene := get_tree().current_scene
+	if scene != null and scene.has_method("open_window_wall_view"):
+		return scene
+	return null
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +68,7 @@ func _build() -> void:
 		# The Enter button follows the switch live; it used to stay greyed
 		# out until the panel was closed and reopened.
 		if _enter_btn != null and is_instance_valid(_enter_btn):
-			_enter_btn.disabled = not on)
+			_enter_btn.disabled = (not on) or _main() == null)
 	en.tooltip_text = "Off by default. When on, F11 or the button below renders the world across your monitor row."
 	_hint("Renders the world across a row of physical monitors so they read as windows out of the bus: ONE eye point, one off-axis frustum per monitor, straight lines stay straight across the bezels. The game window itself becomes one of the monitors; the others open as extra fullscreen windows.")
 
@@ -151,6 +157,9 @@ func _build() -> void:
 	set_btn.tooltip_text = "Where you stand and face right now becomes the bus's parking spot for this map."
 	UITheme.style_button(set_btn)
 	set_btn.pressed.connect(_on_set_viewpoint)
+	if _main() == null:
+		set_btn.disabled = true
+		set_btn.tooltip_text = "Open a world first: the viewpoint is where the player stands in it."
 	vp_row.add_child(set_btn)
 	var clr_btn := Button.new()
 	clr_btn.text = "Clear"
@@ -169,6 +178,9 @@ func _build() -> void:
 	UITheme.style_button(enter)
 	enter.disabled = not WindowWallPrefs.enabled()
 	enter.tooltip_text = "Tick 'Enable window wall mode' above first." if enter.disabled else "Close settings and open the view (F11 does the same)."
+	if _main() == null:
+		enter.disabled = true
+		enter.tooltip_text = "Open a world first; F11 there opens the view."
 	enter.pressed.connect(_on_enter)
 	add_child(enter)
 	_enter_btn = enter

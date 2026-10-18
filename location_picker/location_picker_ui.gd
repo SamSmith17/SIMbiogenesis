@@ -63,6 +63,9 @@ var _maps_file_paths: Array[String] = []
 var _maps_list: VBoxContainer = null
 var _launch_status: Label = null
 var _continue_btn: Button = null
+## The hub's settings modal (timeline_settings_panel in hub_mode), made on
+## the first press of the gear.
+var _settings_panel: Control = null
 var _start_btn: Button = null
 var _quit_btn: Button = null
 var _close_btn: Button = null
@@ -159,6 +162,38 @@ func _ready() -> void:
 
 func _is_launch_mode() -> bool:
 	return launch_mode == LaunchMode.LAUNCH
+
+
+## The gear on the hub header: the settings modal with only the pages that
+## need no Main (TimelineSettingsPanel.HUB_PAGES). Parented to the hub scene's
+## root so it draws over this whole panel.
+func _open_hub_settings() -> void:
+	if _settings_panel == null or not is_instance_valid(_settings_panel):
+		var script := load("res://scenes/ui/timeline_settings_panel.gd") as Script
+		if script == null:
+			return
+		var p := Control.new()
+		p.name = "HubSettingsPanel"
+		p.set_script(script)
+		p.set("hub_mode", true)
+		UiScreenLayout.pin_fullscreen(p)
+		# On a MODAL CanvasLayer like every other modal: drawn over the hub
+		# whatever is added later, and the UI audit knows the hub text under
+		# the backdrop is covered on purpose.
+		var layer := CanvasLayer.new()
+		layer.name = "HubSettingsLayer"
+		layer.layer = UITheme.LAYER_MODAL
+		var host: Node = get_tree().current_scene if get_tree().current_scene != null else self
+		host.add_child(layer)
+		layer.add_child(p)
+		_settings_panel = p
+	if _settings_panel.has_method("open"):
+		_settings_panel.call("open")
+
+
+## The hub's settings modal, if it was ever opened (the harness reads it).
+func hub_settings_panel() -> Control:
+	return _settings_panel
 
 func _solar_panel_style(bg: Color = Color(0.08, 0.1, 0.14, 0.92), bordered: bool = true) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -317,6 +352,11 @@ func _unhandled_input(e: InputEvent) -> void:
 	if not visible or not (e is InputEventKey) or not (e as InputEventKey).pressed:
 		return
 	if (e as InputEventKey).keycode == KEY_ESCAPE:
+		# A modal over the hub (Settings, Share…) takes Esc first: this
+		# handler runs before the autoloads', so without the guard Esc on the
+		# settings modal QUIT the game.
+		if CursorController.has_blocking_modal():
+			return
 		if _is_launch_mode():
 			_on_quit_pressed()
 		else:
@@ -400,6 +440,13 @@ func _build_ui() -> void:
 		share_btn.tooltip_text = "Export your worlds, models and settings as a zip for a friend, or install one a friend sent you."
 		share_btn.pressed.connect(func() -> void: AssetPackModal.open_export(self))
 		header_btns.add_child(share_btn)
+		# Settings with no world running: graphics presets, UI scale, the
+		# player, NPC display, the stars' look, the window wall.
+		var gear := IconButton.make("settings", "Settings — graphics, interface, player, NPCs, stars, window wall",
+			_open_hub_settings, "", 18)
+		gear.name = "HubSettingsButton"
+		gear.custom_minimum_size = Vector2(32, 32)
+		header_btns.add_child(gear)
 		header_btns.add_child(_continue_btn)
 		header_btns.add_child(_quit_btn)
 		header.add_child(header_btns)

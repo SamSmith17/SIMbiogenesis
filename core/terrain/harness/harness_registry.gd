@@ -97,6 +97,8 @@ const CAPTURES := {
 	# kind "menu": runs on the launch hub with no world loaded (the "friend"
 	# who has nothing yet — tools\harness.ps1 -EmptyUser); `world` is unused.
 	"assetpack-import": {"fn": "_run_assetpack_import_capture", "world": "mtvernon", "timeout_s": 1500.0, "kind": "menu"},
+	# Settings from the launch hub (the gear): the Main-free pages audited.
+	"hubsettings":  {"fn": "_run_hub_settings_capture",    "world": "mtvernon", "timeout_s": 300.0, "kind": "menu"},
 	"graphtools":   {"fn": "_run_graph_tools_capture",     "world": "mtvernon", "timeout_s": 600.0},
 	"pvsnap":       {"fn": "_run_pv_snap_capture",         "world": "mtvernon", "timeout_s": 600.0},
 	"conduits":     {"fn": "_run_conduits_capture",        "world": "mtvernon", "timeout_s": 600.0},

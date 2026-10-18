@@ -48,6 +48,42 @@ var _live_sync_counter: float = 0.0
 var _loc_updating: bool = false
 var _solar_ui: Control = null
 var _drone_settings: Dictionary = {}
+## Settings changed at the LAUNCH HUB (no Main): every apply_* above a world
+## writes to Main, so with none running the value would be lost. The hub's
+## pages store theirs here as "section|key" -> value and persist_settings()
+## writes them into sim_settings.cfg, where the next world's Main reads them
+## (_load_persisted_settings). Stars and planets go straight to their own
+## files (StarSystem.store_settings / PlanetSystem.store_settings).
+var _hub_pending: Dictionary = {}
+
+
+## No world is running: the hub's settings pages are open.
+func is_hub() -> bool:
+	return _valid_main() == null
+
+
+func _hub_store(section: String, key: String, value: Variant) -> void:
+	_hub_pending["%s|%s" % [section, key]] = value
+
+
+## What the hub's pages show when there is no Main to read: the saved values
+## (plus anything stored this session), keyed like get_state_snapshot().
+func hub_snapshot() -> Dictionary:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS_CFG)
+	var snap := {
+		"graphics_quality": int(cfg.get_value("rendering", "graphics_quality", 2)),
+		"shadow_quality": int(cfg.get_value("rendering", "shadow_quality", 2)),
+		"shadow_opacity": float(cfg.get_value("rendering_adv", "shadow_opacity", 1.0)),
+		"player_fov": float(cfg.get_value("camera", "player_fov", 50.0)),
+	}
+	for k in _hub_pending:
+		var parts := str(k).split("|")
+		if parts.size() == 2:
+			snap[parts[1]] = _hub_pending[k]
+	snap.merge(StarSystem.saved_settings())
+	snap.merge(PlanetSystem.saved_settings())
+	return snap
 
 
 func _ready() -> void:
@@ -353,16 +389,23 @@ func apply_shadow_quality(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_shadow_quality_level"):
 		main.call("set_shadow_quality_level", int(value))
+	elif main == null:
+		_hub_store("rendering", "shadow_quality", int(value))
 
 func apply_shadow_opacity(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_shadow_opacity"):
 		main.call("set_shadow_opacity", value)
+	elif main == null:
+		_hub_store("rendering_adv", "shadow_opacity", value)
 
 
 func apply_graphics_quality(value: float) -> void:
-	if main_node != null and main_node.has_method("set_graphics_quality_level"):
-		main_node.set_graphics_quality_level(int(value))
+	var main := _valid_main()
+	if main != null and main.has_method("set_graphics_quality_level"):
+		main.set_graphics_quality_level(int(value))
+	elif main == null:
+		_hub_store("rendering", "graphics_quality", int(value))
 
 
 func apply_moon_energy(value: float) -> void:
@@ -604,6 +647,8 @@ func apply_player_fov(value: float) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_player_fov"):
 		main.call("set_player_fov", value)
+	elif main == null:
+		_hub_store("camera", "player_fov", value)
 
 
 func apply_drone_fov(value: float) -> void:
@@ -658,9 +703,13 @@ func _load_drone_settings_from_disk() -> void:
 
 func apply_star_setting(key: String, value: Variant) -> void:
 	var star := _star_system()
-	if star == null:
-		return
 	var patch := {key: value}
+	if star == null:
+		# At the hub: straight into star_calibration.cfg, read by the next
+		# world's StarSystem.
+		if is_hub():
+			StarSystem.store_settings(patch)
+		return
 	if star.has_method("apply_settings"):
 		star.call("apply_settings", patch)
 
@@ -680,9 +729,11 @@ func reset_star_texture() -> void:
 
 func apply_planet_setting(key: String, value: Variant) -> void:
 	var planet := _planet_system()
-	if planet == null:
-		return
 	var patch := {key: value}
+	if planet == null:
+		if is_hub():
+			PlanetSystem.store_settings(patch)
+		return
 	if planet.has_method("apply_settings"):
 		planet.call("apply_settings", patch)
 
@@ -691,6 +742,11 @@ func set_all_planets_enabled(on: bool) -> void:
 	var planet := _planet_system()
 	if planet != null and planet.has_method("set_all_enabled"):
 		planet.call("set_all_enabled", on)
+	elif planet == null and is_hub():
+		var patch := {}
+		for pname in PlanetSystem.PLANET_NAMES:
+			patch["%s_enabled" % pname] = on
+		PlanetSystem.store_settings(patch)
 
 
 func save_star_calibration() -> void:
@@ -910,6 +966,12 @@ func persist_settings() -> void:
 	cfg.load(SETTINGS_CFG)
 	_persist_drone_to_cfg(cfg)
 	if main_node == null:
+		# The hub's pages: whatever was changed with no world running.
+		for k in _hub_pending:
+			var parts := str(k).split("|")
+			if parts.size() == 2:
+				cfg.set_value(parts[0], parts[1], _hub_pending[k])
+		_hub_pending.clear()
 		cfg.save(SETTINGS_CFG)
 		return
 	cfg.set_value("rendering", "clouds_cutoff", float(main_node.get("clouds_cutoff")))

@@ -8224,6 +8224,172 @@ func _run_assetpack_import_capture() -> void:
 	_maybe_quit()
 
 
+## --capture=hubsettings (kind "menu"): Settings from the LAUNCH HUB. Presses
+## the header gear with a REAL click, asserts the modal opened on exactly the
+## Main-free pages (TimelineSettingsPanel.HUB_PAGES) with every nav entry on
+## screen, runs UiAudit on each page (shot per page), proves a change made
+## with no world running lands in the files the next world reads (graphics
+## quality + a star slider, restored afterwards), then closes it with Esc.
+## Honours --window-size, so the 720 form is the small-screen gate.
+func _run_hub_settings_capture() -> void:
+	var tree := get_tree()
+	var fails := 0
+	var label := _shots_label if not _shots_label.is_empty() else "hubsettings"
+	var dir := "%s/%s" % [SHOTS_ROOT, label]
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	for _i in 90:
+		await tree.process_frame
+	var scene := tree.current_scene
+	var hub: Node = scene if scene != null and scene.has_method("hub_settings_panel") else null
+	if hub == null and scene != null:
+		for n in scene.find_children("*", "Control", true, false):
+			if n.has_method("hub_settings_panel"):
+				hub = n
+				break
+	if hub == null:
+		push_error("hubsettings: FAIL — the launch hub (LocationPickerUI in launch mode) is not the current scene")
+		_maybe_quit()
+		return
+	await _shoot_ui(dir, "01_hub")
+	var gear := hub.find_child("HubSettingsButton", true, false) as Button
+	if gear == null:
+		push_error("hubsettings: FAIL — no gear button on the hub header")
+		_maybe_quit()
+		return
+	var vp := get_viewport()
+	await HarnessInput.click(vp, HarnessInput.center_of(gear))
+	for _j in 12:
+		await tree.process_frame
+	var panel: Control = hub.call("hub_settings_panel")
+	var opened := panel != null and panel.visible and CursorController.has_blocking_modal()
+	print("hubsettings: gear click opens the settings modal %s" % ("PASS" if opened else "FAIL"))
+	if not opened:
+		fails += 1
+		if panel == null:
+			_maybe_quit()
+			return
+		panel.call("open")
+		for _k in 6:
+			await tree.process_frame
+	await _shoot_ui(dir, "02_settings_open")
+	# Exactly the Main-free pages, every one listed on screen.
+	var titles: Array = panel.call("page_titles")
+	var want: Array = panel.get("HUB_PAGES")
+	var same := titles.size() == want.size()
+	for t in want:
+		if not (t in titles):
+			same = false
+	print("hubsettings: pages shown = %s %s (want %s)" % [str(titles), "PASS" if same else "FAIL", str(want)])
+	if not same:
+		fails += 1
+	var vis := vp.get_visible_rect()
+	var hidden := PackedStringArray()
+	for t in titles:
+		var b := panel.call("nav_button", t) as Button
+		if b == null or not vis.encloses(b.get_global_rect()):
+			hidden.append(str(t))
+	print("hubsettings: every page listed on screen %s%s" % ["PASS" if hidden.is_empty() else "FAIL",
+		"" if hidden.is_empty() else " — off screen: " + ", ".join(hidden)])
+	if not hidden.is_empty():
+		fails += 1
+	# Audit every page.
+	var audit_errors := 0
+	var per_page := {}
+	for t in titles:
+		panel.call("open_page", t)
+		for _m in 6:
+			await tree.process_frame
+		var res := UiAudit.run(tree.root.get_viewport())
+		var errs := int(res.get("errors", 0))
+		audit_errors += errs
+		per_page[str(t)] = {"errors": errs, "warnings": int(res.get("warnings", 0)), "counts": res.get("counts", {})}
+		print("hubsettings: page %s — %s" % [str(t), UiAudit.summary_line(res)])
+		for f in (res.get("findings", []) as Array):
+			var fd: Dictionary = f
+			if fd.get("severity", "") == "error":
+				print("    %s %s %s" % [fd.get("kind", ""), str(fd.get("path", "")).get_file(), str(fd.get("rect", []))])
+		await _shoot_ui(dir, "page_%s" % str(t).to_lower().replace(" ", "_").replace("&", "and"))
+	print("hubsettings: UI audit %s — %d error(s) over %d pages" % ["PASS" if audit_errors == 0 else "FAIL",
+		audit_errors, titles.size()])
+	if audit_errors > 0:
+		fails += 1
+	# A change made here must reach the files the next world reads. Graphics
+	# quality goes through SimSettingsController's hub store (sim_settings.cfg
+	# on close); a star slider straight into star_calibration.cfg.
+	var ssc := get_node_or_null("/root/SimSettingsController")
+	var cfg0 := ConfigFile.new()
+	cfg0.load("user://sim_settings.cfg")
+	var had_gq := cfg0.has_section_key("rendering", "graphics_quality")
+	var gq0 := int(cfg0.get_value("rendering", "graphics_quality", 2))
+	var gq_new := (gq0 + 1) % 4
+	panel.call("open_page", "Lighting")
+	for _n in 4:
+		await tree.process_frame
+	var gq_opt := panel.get("_graphics_quality") as OptionButton
+	if gq_opt != null:
+		gq_opt.select(gq_new)
+		gq_opt.item_selected.emit(gq_new)
+	var star0 := StarSystem.saved_settings()
+	var sb0 := float(star0.get("stars_brightness", 1.0))
+	var sb_new := sb0 + 0.25 if sb0 < 2.5 else sb0 - 0.25
+	panel.call("open_page", "Stars & Planets")
+	for _o in 4:
+		await tree.process_frame
+	var sb_slider := panel.get("_stars_brightness") as HSlider
+	if sb_slider != null:
+		sb_slider.value = sb_new
+	# Esc closes it (CursorController pops the modal through its close
+	# callable). The pointer leaves the gear first, as a player's would —
+	# its tooltip is an embedded popup window that sits in the input path.
+	await HarnessInput.mouse_move(vp, vis.size * 0.5)
+	for _q in 3:
+		await tree.process_frame
+	await HarnessInput.press_action("ui_cancel")
+	for _p in 8:
+		await tree.process_frame
+	var closed := not panel.visible and not CursorController.has_blocking_modal()
+	var fo := vp.gui_get_focus_owner()
+	print("hubsettings: Esc closes the modal %s%s" % ["PASS" if closed else "FAIL",
+		"" if closed else " (visible %s, modal %s, focus %s)" % [str(panel.visible),
+		str(CursorController.has_blocking_modal()), str(fo.get_path()) if fo != null else "none"]])
+	if not closed:
+		fails += 1
+		panel.call("close")
+	var cfg1 := ConfigFile.new()
+	cfg1.load("user://sim_settings.cfg")
+	var gq1 := int(cfg1.get_value("rendering", "graphics_quality", -1))
+	var star1 := StarSystem.saved_settings()
+	var sb1 := float(star1.get("stars_brightness", -1.0))
+	var landed := gq1 == gq_new and absf(sb1 - sb_new) < 1e-4 and ssc != null and bool(ssc.call("is_hub"))
+	print("hubsettings: changes with no world running land in the files %s (graphics_quality %d -> %d in sim_settings.cfg, stars brightness %.2f -> %.2f in star_calibration.cfg)"
+		% ["PASS" if landed else "FAIL", gq0, gq1, sb0, sb1])
+	if not landed:
+		fails += 1
+	# Put both back (this is a sandbox, but the capture leaves no trace).
+	if ssc != null:
+		if had_gq:
+			ssc.call("apply_graphics_quality", gq0)
+		ssc.call("persist_settings")
+		if not had_gq:
+			var cfg2 := ConfigFile.new()
+			cfg2.load("user://sim_settings.cfg")
+			cfg2.erase_section_key("rendering", "graphics_quality")
+			cfg2.save("user://sim_settings.cfg")
+	if star0.has("stars_brightness"):
+		StarSystem.store_settings({"stars_brightness": sb0})
+	else:
+		var scfg := ConfigFile.new()
+		if scfg.load(StarSystem.CONFIG_PATH) == OK and scfg.has_section_key("stars", "brightness"):
+			scfg.erase_section_key("stars", "brightness")
+			scfg.save(StarSystem.CONFIG_PATH)
+	await _shoot_ui(dir, "03_hub_after")
+	HarnessReport.write_json("%s/hub_settings_audit.json" % dir, {"pages": per_page, "errors": audit_errors,
+		"viewport": [int(vis.size.x), int(vis.size.y)], "fails": fails})
+	print("PlaytestHarness: hubsettings %s — %d failure(s); shots in %s"
+		% ["PASS" if fails == 0 else "FAIL", fails, ProjectSettings.globalize_path(dir)])
+	_maybe_quit()
+
+
 ## Wait until the modal's pack job is idle (and its result handled).
 func _assetpack_idle(m: Node) -> void:
 	var tree := get_tree()
