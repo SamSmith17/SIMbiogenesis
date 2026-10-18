@@ -90,7 +90,7 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **Space** | Pause / resume sim | `sim_pause_toggle` |
 | **O** | Interact | Also bound to `vegetation_area_edit` — interactables win; bare ground veg tune is fallback |
 | **X** | Dismount / stop charge | |
-| **C** | Charge EUC **and** Camp scatter dock | `charge` + `camp_scatter`. Known unresolved conflict — see [Key conflicts](#key-conflicts--gotchas) |
+| **C** | Charge EUC (at a charging station) / CAMPS section of the edit toolbar | `charge` + `camp_scatter`; the legacy camp scatter dock is **Shift+C** (`camp_scatter_legacy`). Both handlers are event-driven, so whichever consumes the event wins — see [Key conflicts](#key-conflicts--gotchas) |
 | **R** | Repair shorted EUC | |
 | **1 / 0** | Equip / unequip tool | |
 | **G** | System graph | Core gameplay surface |
@@ -130,7 +130,7 @@ two actions that is not listed in its `ALLOWED_OVERLAPS` (resolved) or
 | **Shift** = Sprint + drone ascend | Resolved. Mode-exclusive — `sprint` is polled only in `player.gd`, `drone_ascend` only in `fpv_drone.gd`, and the two are never active together |
 | **Enter** = `mp_chat` + `ui_accept` | Resolved. Chat is handled in `_unhandled_input`, so a focused Control takes Enter as `ui_accept` first |
 | **P** = Light menu + pallet rack | Resolved. `govee_lights.gd` only claims **P** while you are in range of a light and consumes it; elsewhere **P** opens the pallet rack |
-| **C** = Charge + Camp dock | ⚠️ **Known, unresolved.** At a charging station **C** does BOTH: the camp dock consumes the event, but `charge` is read by *polling* in `player.gd:1017`, and polling ignores `set_input_as_handled()`. Fix = make `charge` event-driven |
+| **C** = Charge + CAMPS toolbar section | Resolved. `charge` is event-driven now (`scenes/gameplay/player.gd` `_unhandled_input`, `event.is_action_pressed("charge")`), so a consumed event reaches one handler only. The legacy camp scatter dock moved to **Shift+C** |
 | README / Wave walkthrough | Some keys (**M** location, Berm/Hill/Swale) are outdated vs current UI. Note **M** is now Placed Props edit |
 
 **Resolved since the last pass:** `toggle_camera` (**V**) was deleted — it had
@@ -423,7 +423,7 @@ Requires street density / BRC-like OSM; elsewhere use manual selection + Generat
 | Linkage structure | **N** design → Place in world; Interact deploy/stow; click → Linkage Lab | ✅ |
 | Pallet rack | **P** (collides) or Library; Interact to re-edit | ⚠️ key conflict |
 | CNC / mud / trash printers | Interact → Print modal (STL, place, start) | ✅ |
-| Placed Props panel | Upload GLB, Place mode, OSM replace | ⚠️ no default hotkey |
+| Placed Props panel | Upload GLB, Place mode, OSM replace | **M** (`placed_props_edit`) |
 | Geodesic / mud designers | Library / machine flows | ✅ |
 
 ---
@@ -656,13 +656,12 @@ Traffic has to accumulate — give it a few sim-hours at speed before the patter
 |------|--------|-------|
 | Freehand watershed paint / SoI heatmap | ❌ | Pond Preview/Designate + Site Plan/Elev outline shipped |
 | Berm / Hill / Swale dock tools | ❌ | Walkthrough outdated; not in **T** UI |
-| Climelapse keyframe bake button | ❌ | Handler unwired; MP4 export works |
-| Placed-props hotkey | ❌ | Action unbound |
+| Climelapse keyframe bake | ✅ | Folded into 🎬 (`start_climelapse_export`); the separate bake button and its handler were removed on purpose |
 | **P** key overload | ⚠️ | Warp / pallet / light-menu labels conflict |
 | NDVI vegetation from Sentinel | ❌ | Deferred (no JP2) |
 | Full ISRU catalog / PBI vision | ⚠️ | Partial vs SYSTEMS_GRAPH_VISION |
 | SSAO/SSIL etc. | ⚠️ | Depends on renderer; see UX notes |
-| ToolManager under Player | ❌ | Known missing runtime error |
+| ToolManager under Player | ✅ | `get_node_or_null` + self-heal; no boot error |
 | NPC stairs / upper floors | ⚠️ | Nav supports layers; nothing GENERATES stairs or upper floors yet |
 | Tagging a 3D printer as a space | ❌ | Print Setup modal has no tag row yet (it is keyed by graph item, not prop) |
 
