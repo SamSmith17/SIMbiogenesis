@@ -27,8 +27,8 @@ check of the real user dir.
 | dawn | mtvernon | PASS | 71 |
 | weather | mtvernon | PASS | 76 |
 | windowwall | mtvernon | PASS (37 checks) | 60 |
-| population | mtvernon | PASS (22 checks) | 369 |
-| lights | walton | PASS (23 checks) | 66 |
+| population | mtvernon | PASS (22 checks, 0 engine errors) | 384 |
+| lights | walton | PASS (23 checks) | 67 |
 | vehicles | walton | PASS (21 checks) | 58 |
 | worlds | walton | PASS | 106 |
 | poi | mtvernon | PASS (20 checks) | 52 |
@@ -48,13 +48,13 @@ check of the real user dir.
 | areafill | mtvernon | PASS | 57 |
 | veg | mtvernon | PASS | 74 |
 | growth | mtvernon | PASS | 84 |
-| water | mtvernon | PASS | 96 |
-| penstock | mtvernon | PASS | 105 |
+| water | mtvernon | PASS | 144 |
+| penstock | mtvernon | FAIL (the 2 Stream 2 checks green; adoption regression, see Open items) | 87 |
 | project | mtvernon | PASS | 96 |
-| microclimate | walton | PASS (61 engine errors, see below) | 99 |
+| microclimate | walton | PASS (0 engine errors) | 109 |
 | popin | walton | PASS (report only, see below) | 153 |
 | crowdbench | walton | PASS (bench numbers) | 79 |
-| festival | walton | PASS | 408 |
+| festival | walton | FAIL 4 (world-driven: the saved festival, see Open items) | 563 |
 | festivalmode | walton | PASS (77 checks) | 238 |
 | site-review | mtvernon | PASS (compound drill SKIPPED: no compound) | 83 |
 | animeditor | mtvernon | PASS (13 checks, real input) | 57 |
@@ -179,36 +179,95 @@ scissor + MSAA off −19.2 (14 ms, 60 fps); SSIL / sun shadow / volumetric fog
 near-tier Douglas-firs and maples cost 2–3 ms each; the 106 shrubs by the
 camera cost 9 ms (overdraw of overlapping alpha cards).
 
+- 2026-10-18 (Push 2, NEXT_PASS_PLAN.md — bug fixes, one commit each):
+  - `population` on Mount Vernon 22/22 (was 19/22). The personal-space
+    stack was two things: `SpaceRegistry.slot_jitter` was a ±0.35 m SQUARE
+    (0.49 m to a corner) over slots 0.855 m apart, so two neighbours could
+    stand 0.03 m apart by construction; and the engine's separation pass
+    was OFF outright above 120× / 0.1 h ticks, so two people left stacked
+    by a coarse catch-up never spread. Jitter is a 0.2 m disc now and
+    stationary pairs separate at any speed (travellers keep the gates).
+    The marker check counts the capture's own seeded ids (the world's
+    extra tagged space made it read "7 of 6"); `space_markers` records
+    carry `id`.
+  - `lights` on Walton PASS 23/23 (was 2 FAILs + the run stopping there).
+    The Walton snapshot carries `festival_mode: true`; the resume reopens
+    the settlement view (a CursorController modal) and `InputGuard.blocked`
+    swallowed J. The capture now starts from the tour's first-person
+    baseline (`_first_person_baseline`), prints the blocker when J fails,
+    frames its studio over an open patch of ground (`_lc_open_ground`: the
+    saved view had a spot click landing on a 4 m-high surface), clears the
+    laser fan's selection before the tube pins and keeps those pins inside
+    the patch.
+  - `microclimate` on Walton PASS with **0 engine errors** (the 61 "Lambda
+    capture at index 0 was freed" did not reproduce at cfbcf64 + Push 2;
+    two runs). Left as a watch item below.
+  - Possession releases a claimed chore (`NpcPopulationEngine
+    .set_controller`, routed through the bridge from `MultiplayerSession`);
+    pinned in `npc_population_selftest` (claim released, body left where the
+    human has it, re-claimed when handed back).
+  - `penstock` on Mount Vernon the two Stream 2 checks PASS (14 other checks red — pre-existing, see Open items). The fillet check reads the new
+    `route_short_leg_m` the run stamps (`ContourRouter.short_leg_report`): a
+    bend tighter than the pipe is pin-limited, not a routing fault, when a
+    leg is shorter than the fillet needs. `pick_stream_at_world` reaches to
+    the channel's bank tops (a ray from eye height into a carved trench
+    lands on the bank, up to ~3.5 m off the centreline), and the capture
+    dumps the whole crosshair ladder at its aim point.
+  - Festival calibration: every routine serves a meal / bathroom / wash
+    block ONCE (`NpcRoutine.meals_once`; the rest of the block is the
+    routine's own leisure kind) in both tiers, and the light tier's dawdle
+    now ends at a critical-need crossing as well as the enrichment one —
+    without it the cohort pin read 7.8 % (full 127 kg vs light 117 kg of
+    food over 3 days); back under 6 %. `sync_camps_from_placement` rescales
+    a camp's stores with its headcount (`_sync_camp_stores`, fill fraction
+    kept). `--capture=festival` on Walton: FAIL 4 count checks, world-driven (below).
+  - Vegetation in the lenses at night: `VegetationEnvironmentSync
+    .night_override` — the lens hands the canopy a lifted night factor
+    (`LENS_VEG_NIGHT_LIFT` 0.65 × the lens night) while it is the only 3D
+    on screen, cleared on close; no shader change. site-review globe set at
+    22:00 on Mount Vernon: PASS 4/4, the canopy reads as dark green, not black (no before/after pair shot).
+  - A player-drawn or edited stream clears the vegetation in its channel
+    (`WaterNetwork._clear_vegetation_on_changed_channels`, bank top to bank
+    top + 1 m, painted layer + a persisted auto-veg clear patch; only after
+    a `commit()`, never a load-time carve). `--capture=water` on Mount
+    Vernon PASS.
+  - A catchment wired straight into a turbine is BLOCKED with
+    `GraphNodeState.REASON_CATCHMENT_DIRECT` ("Needs a pond" on the chip,
+    an education card); `resource_flow_selftest` 345 checks.
+  - FEATURE_CHEAT_SHEET.md: the C-key poll, the climelapse bake button,
+    the placed-props hotkey and the ToolManager rows corrected (doc only).
+
 ## Open items (not fixed)
 
-- **`lights` on Walton FAILS its first two checks at HEAD `646f533`**
-  (2026-10-18, before and after the perf pass — A/B'd by reverting the
-  working tree): "J opens the Light Studio dock" and "the dock runs in the
-  tool-overlay tier". The J key posted through `Input.parse_input_event`
-  no longer opens the dock on the Walton world as saved now; the 23-check
-  pass is from 2026-10-12. World- or pref-driven; not investigated.
-- **`population` on Mount Vernon: "space markers FAIL (7 of 6 resolved)"**
-  (2026-10-18, identical at HEAD): the world now carries one more tagged
-  space than the capture seeds, and the "3D avatars" verdict is derived
-  from that count, so it reads FAIL with it. World-driven.
-
-- **`population` personal-space check FAILS on Mount Vernon** (2026-10-12,
-  deterministic): two awake, idle agents of the seeded `cap_pop_hab` camp
-  (`npc_2`, `npc_7`) stand 0.09 m apart at the sample.
-  - The check now skips pairs that are both asleep (sleepers pile up on
-    purpose) and prints the stacked pair. Both agents here are idle, so the
-    exemption does not apply.
-  - Not caused by the Linkage work in the same session (no population code
-    on that path changed). Likely two idle people given the same standing
-    spot (`SpaceRegistry` slots, or the idle-at-camp fallback) — investigate
-    there.
-
-- **`microclimate` on Walton logs 61 × "Lambda capture at index 0 was freed".**
-  - They start right after a placed-prop rebuild, and some signal keeps calling
-    a lambda whose captured local was freed.
-  - The lambda is invoked from C++, so there is no GDScript backtrace. The
-    report now appends one whenever an error does carry it.
-  - Not a capture failure.
+- **`penstock` on Mount Vernon: the turbine no longer adopts its routed
+  penstock** (2026-10-18, 14 checks: "turbine adopted the measured run",
+  "the styled 2in SDR-9 bore", "produces from the routed head", "intake
+  resolved a live supply", "turbine flows water" …). The run is measured
+  and stamped (97.7 m, inverts 36.20 → 3.37) but the turbine's specs stay
+  at the typed 100 m / 37.5 mm, outlet invert NAN, 0 W, and the stream
+  intake's live supply reads 0 while the Lab's own test flow still makes
+  power. A/B'd by reverting Push 2's conduit_manager / resource_flow_engine
+  / terrain_loader edits: identical at HEAD, so it came in with 646f533 or
+  cfbcf64 (both touched the engine's connection index and sim writes) or
+  with the world. The last green record is 2026-10-13. Not investigated
+  past the A/B.
+- **`festival` on Walton FAILS 4 count checks** (2026-10-18): the world is
+  saved mid-festival — 40 camp compounds / 1053 people already on the
+  graph, so "24 lots became 11 new camp compounds" (13 of the capture's
+  fresh lot ids collide with compounds already there), "the ledger counts
+  the lots' people (129 over the 1053)", the water figure divides the
+  whole site's draw by the capture's 316 people (144 L/person/day), and
+  the vibe starts from the saved crowd. World-driven. Either clear the
+  saved festival on Walton (Festival → Leave, Clear seeded, save) or give
+  the capture the lights capture's `_first_person_baseline` plus its own
+  lot ids.
+- **`microclimate` on Walton: the 61 "Lambda capture at index 0 was
+  freed" did not reproduce** on 2026-10-18 (two runs, 0 engine errors).
+  The population capture logged 2 of them at exit; the one freed-capture
+  pattern found — UiFit's `refit` lambda left on the viewport's
+  `size_changed` after its panel was freed — is fixed (c8c2f42). Watch
+  item: if they return, `HarnessReport` appends the GDScript backtrace
+  when the error carries one.
 - **`popin` on Walton** reports one hero JUMP (40 m, during a 131 ms frame) and
   61 of 529 frames over 100 ms at 60×.
   - The capture only reports and asserts nothing.
