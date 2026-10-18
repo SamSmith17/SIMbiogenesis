@@ -209,10 +209,15 @@ of per-domain pills; the soil key was left as a key, it filters nothing),
 slider on the camp Edit tool (writes the record key and re-syncs the graph),
 #4 Shift+H for the WATER section (`water_edit`), #8 the popin capture
 asserts (zero vanish / appear, ≤ 2 jumps), #9 Site Report "📷 PNG", #10
-Watch on the graph's camp card. NOT done, for a follow-up session: #5
-settings from the launch hub (every settings page must first tolerate no
-Main, and a hub capture has to prove it), #6 the key-rebind page, #7 the
-ambient audio bed.
+Watch on the graph's camp card. **2026-10-18, later:** #5 settings from the
+launch hub (the gear; `hub_mode` builds only `HUB_PAGES`, every one
+Main-free, proven by `--capture=hubsettings` at 1080 + 720), #6 the
+Controls page (`core/input_overrides.gd`, `user://input_overrides.cfg`,
+applied in CursorController._ready; the F1 overlay, the prompt and the tour
+cards show the rebound key), #7 the ambient bed (`core/audio/`, procedural
+or `user://ambient/` files, one volume beside the stage music; no tour stop
+— it has no pixels — `tools/checks/ambient_bed_probe.gd` is its gate).
+Push 3 is complete.
 
 Small, self-contained, each already has the data it needs.
 

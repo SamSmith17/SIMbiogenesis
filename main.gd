@@ -4230,6 +4230,13 @@ func _setup_toast_ui() -> void :
 		var music : Node3D = load( "res://core/population/stage_music.gd" ).new()
 		music.name = "StageMusic"
 		add_child( music )
+	# The first-person ambient bed: wind, rain, the nearest stream and
+	# birdsong from the weather, the water network and the forest round the
+	# listener (AmbientBed; silent when paused or away from first person).
+	if get_node_or_null( "AmbientBed" ) == null :
+		var bed : Node = load( "res://core/audio/ambient_bed.gd" ).new()
+		bed.name = "AmbientBed"
+		add_child( bed )
 	# Where a FUCK YES!!! happened: a beacon over the person each toast names.
 	if get_node_or_null( "PeakBeacon" ) == null :
 		var beacon : Node3D = load( "res://core/population/peak_beacon.gd" ).new()

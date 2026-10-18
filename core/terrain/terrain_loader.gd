@@ -8282,6 +8282,47 @@ func veg_point_excluded_callable() -> Callable:
 	return func(p: Vector2) -> bool: return idx.is_excluded(p)
 
 
+## How many TREES (pine / deciduous families — never grass, shrubs or
+## crops) stand within `radius_m` of a site point, over the painted layer,
+## the generated forest (when it is shown) and the hero GLBs. The ambient
+## bed's birdsong reads it (AmbientMix.forest_density); a bounding-box test
+## first, so a 30 m query over a 20 000-record forest is one cheap pass.
+func forest_trees_within(x: float, z: float, radius_m: float) -> int:
+	var r2 := radius_m * radius_m
+	var n := 0
+	var bulks: Array = []
+	if _vegetation_layer != null:
+		bulks.append(_vegetation_layer.bulk)
+	if _auto_veg_layer != null and _terrain_config().show_auto_vegetation:
+		bulks.append(_auto_veg_layer.bulk)
+	for b in bulks:
+		for species in (b as Dictionary):
+			if not VegSpeciesCatalog.is_tree_family(str(species)):
+				continue
+			var recs: Variant = (b as Dictionary)[species]
+			if not (recs is Array):
+				continue
+			for rec in (recs as Array):
+				if not (rec is Dictionary):
+					continue
+				var dx := float((rec as Dictionary).get("x", 0.0)) - x
+				if dx > radius_m or dx < -radius_m:
+					continue
+				var dz := float((rec as Dictionary).get("z", 0.0)) - z
+				if dz > radius_m or dz < -radius_m:
+					continue
+				if dx * dx + dz * dz <= r2:
+					n += 1
+	if _vegetation_layer != null:
+		for h in _vegetation_layer.hero:
+			if h is Dictionary:
+				var dx := float((h as Dictionary).get("x", 0.0)) - x
+				var dz := float((h as Dictionary).get("z", 0.0)) - z
+				if dx * dx + dz * dz <= r2:
+					n += 1
+	return n
+
+
 
 func push_vegetation_undo(label: String = "") -> void:
 	if _vegetation_layer == null:

@@ -390,6 +390,23 @@ Godot.exe.exe --headless --path . --script core/population/festival_vibe_selftes
 # time, so every bench median before 2026-10-06 printed 1000x low — the F3
 # HUD was right (npc_host ≈ 220 ms for 100 NpcAvatars, ~2 ms per figure):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=crowdbench --count=1000 --shots-dir=<label> --quit-after-capture
+# First-person ambient bed (offline — AmbientMix, the ONE mix rule the
+# AmbientBed node follows, + AmbientSynth's procedural loops): wind / rain /
+# stream / birds each monotonic, bounded, continuous in its input (Beaufort
+# wind, the met rain classes, Manning velocity × distance, DaylightModel ×
+# forest with the rain + wind hush and the midday hush), the gates (night,
+# bare field, paused, away from first person, volume 0) silencing exactly
+# what they should, the master scaling every layer, the loops SEAMLESS
+# (join step ≤ the largest step inside), bounded, told apart by brightness
+# and deterministic, a chirp short and silent at both ends. EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/audio/ambient_mix_selftest.gd
+# The bed on a REAL world (sandbox, read-only): Main made it, the live
+# inputs come off the weather / sun / forest count / nearest stream, forced
+# inputs drive the players (gain → volume_db, playing, calls on the chirp
+# players), a paused clock and the open graph silence it, the Settings
+# volume at 0 silences it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ambient_bed_probe.gd
 # Festival look studio (WINDOWED, not a selftest): a lit FIREPIT, crowd
 # figures in the DJ (1 m up on a box) / cheer / rave / talk / sit poses with
 # glow sticks, and three stick figures with glow bands — at night and by day,
@@ -1558,6 +1575,38 @@ Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
 `git checkout`, delete TMPs). Don't `git stash` around headless runs — the
 ignored `.godot` class cache goes stale. If the Godot editor is open during
 file operations, it can resurrect deleted/modified scenes from memory on save.
+
+## First-person ambient bed (core/audio/, 2026-10-18)
+
+The world used to be near-silent on foot. `AmbientBed` (a Main child made
+in `_ready` beside StageMusic) plays four non-positional layers under ONE
+pure rule, `AmbientMix.levels(inputs)`: **wind** from WeatherService's wind
+speed (Beaufort: nothing under 1 m/s, full by 14), **rain** from
+`rain_rate_mmh` through the met classes NpcComfort uses (light < 2.5 mm/h,
+moderate to 7.6, heavy beyond), the nearest **stream**'s Manning velocity
+(`WaterNetwork.nearest_flow` — ONE station's hydraulics, full within 6 m,
+gone by 60) and **birdsong** gated by `DaylightModel.sky_light` (none at
+night, the chorus from civil dawn, quieter under a high sun) × the forest
+round the listener (`TerrainLoader.forest_trees_within`, trees only — a
+bbox pass over both layers' records, every 2 s) and hushed by rain and
+wind. The master is `NpcDisplayPrefs.ambient_volume` (Settings → NPCs,
+beside the stage music), ZERO while `SimFxRate.is_paused` (a frozen world
+is silent, like the fire and the lights) and away from first person (the
+graph hides the world; a camera claim — settlement view, globe, window
+wall — swaps the camera; the drone borrows the player's and still hears
+the wind). Gains ease with `AmbientMix.smooth` (0.6 s); wind rides two
+slow sines as gusts; birds are single calls on a Poisson clock over
+one-shot players (deterministic hashes of the gust clock, never randf).
+- **No shipped audio.** Each layer plays the player's own
+  `user://ambient/<wind|rain|stream|birds>.{mp3,ogg,wav}` when one exists,
+  else `AmbientSynth`'s procedural loop made once at load: filtered noise
+  (wind dark, rain bright with drops, the stream mid-band with a two-tone
+  bubbling) cross-faded tail-into-head so the loop point is SEAMLESS (the
+  selftest pins the join step), chirps as 2–4 sine sweeps.
+- Probes read `inputs()` / `levels()` / `gains()` / `debug_line()` and
+  force the rule through `override_inputs`.
+- **No tour stop**: the tour is hero stills and the bed has no pixels.
+  `tools/checks/ambient_bed_probe.gd` is its gate instead (Validation list).
 
 ## Feature tour (core/tour/ — the show-people-what-it-does harness)
 

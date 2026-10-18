@@ -3608,6 +3608,25 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	mus.value_changed.connect(func(val: float) -> void: NpcDisplayPrefs.set_stage_music_volume(val))
 	mus_row.add_child(mus)
 	v.add_child(mus_row)
+	# The first-person ambient bed (AmbientBed): wind, rain, the nearest
+	# stream, birdsong — procedural, or the player's own files.
+	var amb_row := HBoxContainer.new()
+	amb_row.add_theme_constant_override("separation", 8)
+	var amb_lbl := Label.new()
+	amb_lbl.text = "Ambient sound volume"
+	amb_lbl.custom_minimum_size = Vector2(150, 0)
+	amb_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	amb_row.add_child(amb_lbl)
+	var amb := HSlider.new()
+	amb.min_value = 0.0
+	amb.max_value = 1.0
+	amb.step = 0.05
+	amb.custom_minimum_size = Vector2(160, 0)
+	amb.value = NpcDisplayPrefs.ambient_volume()
+	amb.tooltip_text = "The first-person sound bed: wind with the weather's wind speed, rain with the rain rate, the nearest stream's rush, birdsong by daylight in the forest. Silent while the clock is paused and away from first person. Drop your own wind / rain / stream / birds .mp3, .ogg or .wav into user://ambient/ to replace the built-in sounds. 0 = off."
+	amb.value_changed.connect(func(val: float) -> void: NpcDisplayPrefs.set_ambient_volume(val))
+	amb_row.add_child(amb)
+	v.add_child(amb_row)
 	var glow_hint := Label.new()
 	glow_hint.text = "People glow with how good a time they are having; a crowd that is vibing with its needs met builds a CHARGE toward FUCK YES!!! — a green shimmer that grows and quickens on the body, faster with peakers nearby (the meter over their head shows it, with ↑ while someone is feeding it) — then tips into a green, pulsing glow and the samba. Every one scores a Peak Experience. Each person's state (FUCK THIS!!! … Fuck It!) shows over their head; the bars are off by default."
 	glow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

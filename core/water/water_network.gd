@@ -751,6 +751,41 @@ func feature_supply_at(p: Vector2, rain_mmh: float, max_dist: float = 6.0) -> Di
 		"base_lps": float(f2.get("base_lps", 0.0))}
 
 
+## The nearest stream to a point and how fast it runs there: {feature_id,
+## name, dist_m, velocity_ms, q_lps, depth_m}, or {} when no feature lies
+## within `max_dist`. One station's hydraulics, not the whole feature's — the
+## ambient bed asks every second from wherever the listener stands.
+func nearest_flow(p: Vector2, max_dist: float, rain_mmh: float = -1.0) -> Dictionary:
+	var best := max_dist
+	var best_f: Dictionary = {}
+	var best_s := 0.0
+	for f_v in _features:
+		var f: Dictionary = f_v
+		var pts: PackedVector2Array = f.get("points", PackedVector2Array())
+		if pts.size() < 2:
+			continue
+		var near := StreamNetwork.nearest_on_line(pts, p)
+		if float(near["dist"]) < best:
+			best = float(near["dist"])
+			best_f = f
+			best_s = float(near["s"])
+	if best_f.is_empty():
+		return {}
+	var prof: Dictionary = _profiles.get(best_f["id"], {})
+	var rain := rain_mmh if rain_mmh >= 0.0 else rain_mmh_now()
+	var i := ChannelProfile.station_index(prof, best_s) if not prof.is_empty() else 0
+	var q := station_q_lps(best_f, i, rain)
+	var sec: Dictionary = best_f.get("section", {})
+	var slope := 0.002
+	var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+	var bed: PackedFloat32Array = prof.get("bed", PackedFloat32Array())
+	if s.size() > 1 and bed.size() == s.size():
+		slope = ChannelProfile._slope(s, bed, clampi(i, 0, s.size() - 1))
+	var st := StreamHydraulics.state(q, float(sec.get("bed_w", 2.0)), float(sec.get("bank_slope", 1.5)), slope)
+	return {"feature_id": best_f["id"], "name": str(best_f.get("name", "")), "dist_m": best,
+		"velocity_ms": float(st.get("velocity_ms", 0.0)), "q_lps": q, "depth_m": float(st.get("depth_m", 0.0))}
+
+
 ## Discharge of ONE named feature at the station nearest `p` — for an intake
 ## the player BOUND to a stream (the Penstock span tool). No distance cap: a
 ## carved bank or a nudged prop must not silently unbind the tap. {} when the
