@@ -24,6 +24,16 @@ var _bark_materials: Array[ShaderMaterial] = []
 
 var _accum := 0.0
 var _night_factor := 0.0
+## NAN = none. A 3D lens sets the night factor the vegetation should render
+## with while it is the only thing rendering (see _poll_main).
+var night_override := NAN
+
+
+func set_night_override(v: float) -> void:
+	if is_nan(v) and is_nan(night_override):
+		return
+	night_override = v
+	_force_push = true
 var _ambient_energy := VegetationRuntime.DAY_AMBIENT_REF
 var _sun_direction := Vector3.UP
 # Seasonal state (lerped toward targets so scrubbing/analemma doesn't pop).
@@ -220,6 +230,14 @@ func _poll_main() -> void:
 		return
 	if main.has_method("get_vegetation_night_factor"):
 		_night_factor = float(main.call("get_vegetation_night_factor"))
+	# A graph lens (Globe / bubble / section) renders with a readable-at-night
+	# ambient FLOOR the veg shaders never see: they take their night from
+	# this signal and multiply every fill by (1 - night), so a canopy printed
+	# black in the Globe at night over a lit floor. While a lens is live it
+	# hands over a lifted night factor (graph_soi_preview_service
+	# ._sync_lens_env); first person never sets it. No shader change.
+	if not is_nan(night_override):
+		_night_factor = night_override
 	if main.has_method("get_vegetation_ambient_energy"):
 		_ambient_energy = float(main.call("get_vegetation_ambient_energy"))
 	if main.has_method("get_vegetation_sun_direction"):

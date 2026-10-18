@@ -352,10 +352,28 @@ func _on_soi_changed() -> void:
 		_request_viewport_refresh()
 
 
+## How much of the vegetation's night darkening a live lens takes back
+## (0 = the first-person look, 1 = full daylight canopy at midnight). Paired
+## with the lens ambient floors so trees and ground read on one scale.
+const LENS_VEG_NIGHT_LIFT := 0.65
+
+
+## Main's own vegetation night signal (DaylightModel.vegetation_night).
+func _vegetation_world_night() -> float:
+	var main: Node = get_tree().current_scene if get_tree() != null else null
+	if main != null and main.has_method("get_vegetation_night_factor"):
+		return float(main.call("get_vegetation_night_factor"))
+	return 0.0
+
+
 func set_active(on: bool) -> void:
 	if active == on:
 		return
 	active = on
+	if not on:
+		var veg_sync: Node = get_tree().root.get_node_or_null("VegetationEnvironmentSync") if get_tree() != null else null
+		if veg_sync != null and veg_sync.has_method("set_night_override"):
+			veg_sync.call("set_night_override", NAN)
 	# Lift prop distance-culling while the disc is up so the far/tilted preview
 	# camera can't cull small graph-twin props; restore normal culling on close.
 	# (First-person 3D isn't rendering while the graph is open, so this is free.)
@@ -1488,6 +1506,15 @@ func _sync_lens_env() -> void:
 	# render, wrong); plain fog stays so weather/hazards still read.
 	env.volumetric_fog_enabled = false
 	var night := _night_amount()
+	# The vegetation shaders darken by their own night signal and scale
+	# every fill by (1 - night); the lens's ambient floor never reaches them,
+	# so a canopy printed black over a readable globe at night. Hand them a
+	# LIFTED night for as long as the lens is the only 3D on screen
+	# (cleared in set_active(false)); by day it is the world's own value.
+	var veg_sync: Node = get_tree().root.get_node_or_null("VegetationEnvironmentSync")
+	if veg_sync != null and veg_sync.has_method("set_night_override"):
+		var world_night := _vegetation_world_night()
+		veg_sync.call("set_night_override", world_night * (1.0 - LENS_VEG_NIGHT_LIFT * night))
 	match _lens_env_key:
 		"plan":
 			# Site Plan night floor: a shadowless COLOR ambient lifts the whole
