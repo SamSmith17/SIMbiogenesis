@@ -5996,6 +5996,55 @@ func _settle_s() -> float:
 	return 2.0 if _dispatching else SETTLE_AFTER_LOAD_S
 
 
+## Put the world back in FIRST PERSON before a capture that drives the
+## first-person input path (the TourDirector's baseline, for one capture).
+##
+## A world is loaded exactly as the player left it, and WorldSession
+## .restore_extras reopens festival mode a beat after the load — which opens
+## the settlement view, a CursorController MODAL. Every shortcut behind
+## InputGuard.blocked (J, the toolbar keys …) is then swallowed, and a
+## capture that presses J reads "the dock never opened" on a world saved
+## mid-festival (Walton, 2026-10-18). Waits out the resume's own delay first
+## so the mode cannot reopen under the capture.
+func _first_person_baseline(main: Node) -> void:
+	if main == null:
+		return
+	var tree := get_tree()
+	for _i in 36:
+		await tree.process_frame
+	var graph: Variant = main.get_node_or_null("UILayer/SystemGraphView")
+	if graph != null:
+		if graph.has_method("close_hydro_lab"):
+			graph.call("close_hydro_lab")
+		if bool(graph.get("visible")) and graph.has_method("close_graph_view"):
+			graph.call("close_graph_view")
+	var soi: Variant = tree.root.get_node_or_null("SoiService")
+	if soi != null and bool(soi.get("snowglobe_active")) and soi.has_method("exit_snowglobe"):
+		soi.call("exit_snowglobe")
+	if main.has_method("close_festival_mode"):
+		main.call("close_festival_mode")
+	var sv: Variant = main.get("settlement_view")
+	if sv != null and is_instance_valid(sv) and sv.has_method("is_open") and bool(sv.call("is_open")):
+		sv.call("close")
+	var cc: Variant = tree.root.get_node_or_null("CursorController")
+	for _i in 3:
+		await tree.process_frame
+	if cc != null and cc.has_method("has_blocking_modal") and bool(cc.call("has_blocking_modal")):
+		print("PlaytestHarness: baseline — a modal is still up after the reset: %s" % str(cc.get("_modal_stack")))
+
+
+## One line naming whatever would swallow a global shortcut right now.
+func _input_blocker_desc(main: Node) -> String:
+	var vp := get_viewport()
+	var fo: Control = vp.gui_get_focus_owner() if vp != null else null
+	var cc: Variant = get_tree().root.get_node_or_null("CursorController")
+	return "focus=%s modals=%s overlay=%s festival=%s" % [
+		str(fo.get_path()) if fo != null else "none",
+		str(cc.get("_modal_stack")) if cc != null else "?",
+		str(cc.get("_tool_overlay")) if cc != null else "?",
+		str(main.call("festival_mode_active")) if main != null and main.has_method("festival_mode_active") else "?"]
+
+
 # ==================== FEATURE TOUR (--capture=tour) ====================
 # A short visual demo of every mode (core/tour/, one stop per file), with
 # title cards, one clean hero screenshot per stop and tour_manifest.json.
@@ -12188,6 +12237,57 @@ func _lc_drag(vp: Viewport, a: Vector2, b: Vector2, ctrl: bool = false, shift: b
 	await _lc_press(vp, b, false, false, ctrl, shift)
 
 
+## The nearest point to `want` (same ring scan outward) where the Light
+## Studio's own surface pick (ConduitSurfaceAim.pick_ray, straight down) lands
+## on level ground within 0.4 m of the terrain at the point AND 6 m round it,
+## with no placed prop within 12 m and no painted camp under it. Falls back
+## to `want` and says so.
+func _lc_open_ground(main: Node, want: Vector3, fwd: Vector3) -> Vector3:
+	var loader: Node = TerrainSurfaceQuery.find_terrain_loader(main)
+	var props: Array = loader.call("placed_prop_records") if loader != null and loader.has_method("placed_prop_records") else []
+	var side := Vector3(-fwd.z, 0.0, fwd.x)
+	var cands: Array = [Vector2(want.x, want.z)]
+	for r in [20.0, 35.0, 50.0, 70.0, 95.0, 125.0, 160.0]:
+		for k in 12:
+			var a := TAU * float(k) / 12.0
+			cands.append(Vector2(want.x, want.z) + Vector2(cos(a), sin(a)) * r)
+	for c in cands:
+		var cx: float = (c as Vector2).x
+		var cz: float = (c as Vector2).y
+		var ok := true
+		for off: Vector3 in [Vector3.ZERO, fwd * 6.0, -fwd * 6.0, side * 6.0, -side * 6.0]:
+			var px := cx + off.x
+			var pz := cz + off.z
+			var gy := TerrainSurfaceQuery.ground_height_at(main, px, pz)
+			var o := Vector3(px, gy + 40.0, pz)
+			var hit: Dictionary = ConduitSurfaceAim.pick_ray(main, o, Vector3.DOWN, [], o)
+			if not bool(hit.get("valid", false)):
+				ok = false
+				break
+			var hp: Vector3 = hit.get("position", Vector3.ZERO)
+			var hn: Vector3 = hit.get("normal", Vector3.UP)
+			if absf(hp.y - gy) > 0.4 or hn.y < 0.9:
+				ok = false
+				break
+		if not ok:
+			continue
+		if loader != null and loader.has_method("camp_area_at") 				and not str(loader.call("camp_area_at", Vector2(cx, cz))).is_empty():
+			continue
+		for rec in props:
+			var rd := rec as Dictionary
+			if Vector2(float(rd.get("x", 0.0)), float(rd.get("z", 0.0))).distance_to(Vector2(cx, cz)) < 12.0:
+				ok = false
+				break
+		if not ok:
+			continue
+		var out := Vector3(cx, TerrainSurfaceQuery.ground_height_at(main, cx, cz), cz)
+		print("PlaytestHarness: lights — studio over open ground at (%.1f, %.1f), %.0f m from the saved view" % [
+			cx, cz, Vector2(cx, cz).distance_to(Vector2(want.x, want.z))])
+		return out
+	print("PlaytestHarness: lights — no open ground found within 160 m; using the saved view")
+	return want
+
+
 func _lc_result(ok: bool, what: String, fails: Array) -> void:
 	print("PlaytestHarness: lights %s — %s" % ["PASS" if ok else "FAIL", what])
 	if not ok:
@@ -12211,6 +12311,9 @@ func _run_lights_capture() -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var fails: Array = []
 	var vp := get_viewport()
+	# J is a first-person shortcut: a world saved mid-festival resumes INTO the
+	# settlement view (a modal) and the key never reaches Main.
+	await _first_person_baseline(main)
 
 	# The map's OWN lights first: with the Studio closed and no modifier held,
 	# no IK sphere may show (only the light itself), and nothing — lights or
@@ -12286,6 +12389,12 @@ func _run_lights_capture() -> void:
 	fwd = fwd.normalized() if fwd.length_squared() > 1e-6 else Vector3.FORWARD
 	var focus := base + fwd * 14.0
 	focus.y = TerrainSurfaceQuery.ground_height_at(main, focus.x, focus.z)
+	# The clicks below are SCREEN points: they land on whatever the saved view
+	# holds. A world saved beside a camp put the spot click on a tent roof
+	# (hung 7 m up, not 3) and the string pins on structures. Shoot the
+	# studio over an OPEN patch of ground instead — the nearest one to where
+	# the player stands whose surface pick is the terrain all round.
+	focus = _lc_open_ground(main, focus, fwd)
 	var cam := Camera3D.new()
 	cam.name = "PlaytestLightsCam"
 	cam.fov = 60.0
@@ -12308,6 +12417,8 @@ func _run_lights_capture() -> void:
 	Input.parse_input_event(jr)
 	await tree.process_frame
 	var dock := PlacedLightService.find_dock(main)
+	if dock == null or not bool(dock.call("is_panel_open")):
+		print("PlaytestHarness: lights — J did not open the dock; %s" % _input_blocker_desc(main))
 	_lc_result(dock != null and bool(dock.call("is_panel_open")), "J opens the Light Studio dock", fails)
 	_lc_result(CursorController.has_tool_overlay() and not CursorController.has_blocking_modal(),
 		"the dock runs in the tool-overlay tier, not as a modal", fails)
@@ -12504,18 +12615,35 @@ func _run_lights_capture() -> void:
 		_lc_result(swept > 3.0, "the beam head sweeps on its program (%.1f°)" % swept, fails)
 		var beams := laser_node.find_children("Laser_*", "", true, false).size() if laser_node != null else 0
 		_lc_result(beams == 7, "the green laser fan draws 7 beams (%d)" % beams, fails)
+	# Drop the laser fan's selection first: its gumball is still up, and a
+	# string click inside the gumball's rings is a gizmo grab, not a pin
+	# (every tool grabs what is under the pointer first). A player would
+	# click away or press Esc; the capture clears the selection.
+	PlacedLightService.set_selection(main, [])
+	await tree.process_frame
 	dock.call("_set_tool", "string")
 	PlacedLightService.style_for_preset(main, "string", "neon_flex")
-	var tube_pins := [center + Vector2(-150, 140), center + Vector2(0, 160), center + Vector2(150, 140)]
+	var strings_before := PlacedLightService.group_ids_of_kind(main, "string").size()
+	# Pins INSIDE the open patch the studio was framed on (the first pin used
+	# to sit at the bottom of the screen, ~10 m nearer than the patch, where a
+	# stump or a tree swallowed the click and a 2-pin string could not finish).
+	var tube_pins := [center + Vector2(-110, -150), center + Vector2(40, -175), center + Vector2(190, -150)]
 	for p in tube_pins:
 		await _lc_click(vp, p)
 	await tree.create_timer(0.1).timeout
 	await _lc_click(vp, tube_pins[2], true)
 	var tube_ok := false
+	var tube_desc: Array = []
 	for x in PlacedLightService.group_ids_of_kind(main, "string"):
 		var tn := PlacedLightRuntime.find_node(main, str(x)) as PlacedStringLight
+		var st_id := str(layer.find_light(str(x)).get("style_id", ""))
+		tube_desc.append("%s style=%s continuous=%s" % [str(x), st_id,
+			str(tn.is_continuous()) if tn != null else "no node"])
 		if tn != null and tn.is_continuous():
 			tube_ok = true
+	print("PlaytestHarness: lights — strings %d -> %d after the tube pins (in progress: %d): %s" % [
+		strings_before, PlacedLightService.group_ids_of_kind(main, "string").size(),
+		(dock.get("_string_pts") as Array).size(), str(tube_desc)])
 	_lc_result(tube_ok, "the LED neon flex preset draws a continuous tube", fails)
 	PlacedLightService.set_selection(main, [])
 	cam.global_position = focus - fwd * 22.0 + Vector3(0, 1.7, 0)
