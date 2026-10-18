@@ -10526,8 +10526,16 @@ func _penstock_stream_and_click_checks(sgv: Node, model: Variant, main: Node,
 			var r_route := float(c2.get("route_min_bend_r_m", -1.0))
 			var r_min := ConduitKinds.contour_bend_radius_m("poly_penstock", st)
 			fails += _pen_check("route report stamped on the run", r_route != -2.0 and c2.has("route_high_points"))
-			fails += _pen_check("every plan bend of the creek route is at or above the pipe's %.2f m radius" % r_min,
-					r_route < 0.0 or r_route >= r_min * 0.95)
+			# A bend tighter than the pipe is only a routing fault when the pins
+			# could take the arc: fillet_xz fits the biggest arc a short leg
+			# allows, and a hand-drawn creek (Stream 2 on Mount Vernon) has legs
+			# shorter than the 1.5 m radius. The run says which.
+			var short_leg := float(c2.get("route_short_leg_m", -1.0))
+			if short_leg > 0.0:
+				print("PlaytestHarness: penstock verify — tightest bend %.2f m is pin-limited: a %.2f m leg cannot take the %.2f m fillet" % [
+					r_route, short_leg, r_min])
+			fails += _pen_check("every plan bend of the creek route is at or above the pipe's %.2f m radius, or pin-limited by a short leg" % r_min,
+					r_route < 0.0 or r_route >= r_min * 0.95 or short_leg > 0.0)
 			var design: Variant = lab.get("_design_lbl")
 			if design is Label:
 				print("PlaytestHarness: penstock verify — design checks:\n%s" % str((design as Label).text))
@@ -10713,6 +10721,28 @@ func _penstock_stream_and_click_checks(sgv: Node, model: Variant, main: Node,
 			var focus2: Node = (player as Node).get_node_or_null("InteractionFocus")
 			var sfid := str(focus2.get("_stream_focus_id")) if focus2 != null else ""
 			print("PlaytestHarness: penstock verify — aim at the creek: stream focus '%s'" % sfid)
+			# The whole crosshair ladder at this aim, so a miss says WHICH rung
+			# won and how far the ground point under the crosshair sits from
+			# the creek's centreline (the pick reach is the channel's own).
+			if focus2 != null and loader.has_method("terrain_pick_ray"):
+				var gp: Variant = loader.call("terrain_pick_ray", vp2.get_visible_rect().size * 0.5)
+				var ladder := "ground=%s" % str(gp)
+				if gp is Vector3:
+					var g3 := gp as Vector3
+					var sp: Dictionary = loader.call("pick_stream_at_world", g3.x, g3.z)
+					ladder += " · stream pick: %s (%.2f m off %s)" % [str(sp.get("valid", false)),
+						float(sp.get("dist_m", -1.0)), str(sp.get("id", ""))]
+					if loader.has_method("pick_water_at_world"):
+						ladder += " · water: %s" % str((loader.call("pick_water_at_world", g3.x, g3.z) as Dictionary).get("valid", false))
+					if loader.has_method("pick_camp_at_world"):
+						ladder += " · camp: %s" % str((loader.call("pick_camp_at_world", g3.x, g3.z) as Dictionary).get("valid", false))
+					ladder += " · centreline %.2f m from the aim point" % Vector2(g3.x, g3.z).distance_to(v0)
+				var fo: Variant = focus2.get("_focused")
+				ladder += " · focused=%s solar=%d water=%d camp='%s' conduit='%s' npc='%s'" % [
+					str(fo.name) if fo is Node else "null", int(focus2.get("_solar_focus_idx")),
+					int(focus2.get("_water_focus_idx")), str(focus2.get("_camp_focus_id")),
+					str(focus2.get("_conduit_focus_id")), str(focus2.get("_npc_focus_id"))]
+				print("PlaytestHarness: penstock verify — crosshair ladder: %s" % ladder)
 			fails += _pen_check("aiming at the creek focuses the stream (not 'Fill forest')", sfid == nid)
 	# Aerial shot of the tapped reach.
 	if cam != null:

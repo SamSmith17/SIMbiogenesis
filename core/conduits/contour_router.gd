@@ -231,6 +231,41 @@ static func resample(pts: PackedVector3Array, spacing_m: float) -> PackedVector3
 ## excluding the ends), high_point_pos (Array of Vector3),
 ## rise_above_intake_m (how far the run climbs above its FIRST point — a
 ## siphon leg), length_m}. The intake is taken as the first point.
+## Which pinned corners could NOT take the full cold-bend fillet because a
+## leg beside them is too short (fillet_xz fits the biggest arc that fits —
+## FILLET_MAX_LEG_FRAC of the shorter leg). The route then carries a bend
+## tighter than the pipe's radius BY THE PLAYER'S OWN PINS, not by a routing
+## fault: a hand-drawn creek with 2 m legs cannot take a 1.5 m arc. Returns
+## {short_leg_m: the shortest limiting leg (-1.0 when every corner fits),
+## corners: how many were limited}. Pure; `pins` is the pre-fillet polyline.
+static func short_leg_report(pins: Array, r_m: float) -> Dictionary:
+	var rep := {"short_leg_m": -1.0, "corners": 0}
+	if r_m <= 0.01 or pins.size() < 3:
+		return rep
+	var shortest := INF
+	for i in range(1, pins.size() - 1):
+		var p: Vector3 = pins[i]
+		var prev: Vector3 = pins[i - 1]
+		var next: Vector3 = pins[i + 1]
+		var u := Vector2(p.x, p.z) - Vector2(prev.x, prev.z)
+		var v := Vector2(next.x, next.z) - Vector2(p.x, p.z)
+		var lu := u.length()
+		var lv := v.length()
+		if lu < 1e-4 or lv < 1e-4:
+			continue
+		var turn := acos(clampf(u.dot(v) / (lu * lv), -1.0, 1.0))
+		if turn < deg_to_rad(BEND_TURN_MIN_DEG) or turn > deg_to_rad(170.0):
+			continue
+		var want_half := r_m * sin(turn * 0.5)
+		var leg := minf(lu, lv)
+		if FILLET_MAX_LEG_FRAC * leg < want_half:
+			rep["corners"] = int(rep["corners"]) + 1
+			shortest = minf(shortest, leg)
+	if is_finite(shortest):
+		rep["short_leg_m"] = shortest
+	return rep
+
+
 static func route_report(raw: PackedVector3Array) -> Dictionary:
 	var rep := {"min_bend_r_m": INF, "high_points": 0, "high_point_pos": [],
 		"rise_above_intake_m": 0.0, "length_m": polyline_length_m(raw)}

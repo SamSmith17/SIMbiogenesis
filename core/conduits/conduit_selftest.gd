@@ -1707,6 +1707,18 @@ func _test_penstock_spec_and_design() -> void:
 	_check("firm flow: 5 months below a 1 L/s jet", int(ff["limited_months"]) == 5, str(ff["limited_months"]))
 	_check("firm flow: 11 entries → {}", PenstockDesign.firm_flow([1.0], kw).is_empty())
 
+	# Short-leg report: a right-angle corner on 20 m legs takes a 1.5 m
+	# fillet; the same corner on a 2 m leg cannot (0.45 × 2 < 1.5 × sin 45°),
+	# and the report names the leg. A straight run has no corners.
+	var long_pins: Array = [Vector3(0, 0, 0), Vector3(20, 0, 0), Vector3(20, 0, 20)]
+	var short_pins: Array = [Vector3(0, 0, 0), Vector3(20, 0, 0), Vector3(20, 0, 2), Vector3(40, 0, 2)]
+	var rep_long := ContourRouter.short_leg_report(long_pins, 1.5)
+	var rep_short := ContourRouter.short_leg_report(short_pins, 1.5)
+	_check("short-leg report: long legs take the fillet", float(rep_long["short_leg_m"]) < 0.0 and int(rep_long["corners"]) == 0)
+	_check("short-leg report: a 2 m leg limits both of its corners",
+		is_equal_approx(float(rep_short["short_leg_m"]), 2.0) and int(rep_short["corners"]) == 2, str(rep_short))
+	_check("short-leg report: straight run", float(ContourRouter.short_leg_report([Vector3.ZERO, Vector3(5, 0, 0), Vector3(10, 0, 0)], 1.5)["short_leg_m"]) < 0.0)
+
 
 ## Synthetic hill for contour routing tests: smooth ridge at x=30, plus a sharp
 ## V-notch gully at x=70 that a pipe with a real bend radius must bridge.

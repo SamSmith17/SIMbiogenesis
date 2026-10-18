@@ -10252,21 +10252,31 @@ func _setup_edit_toolbar() -> void:
 ## `max_m` of a ground point: {valid, id, name, kind, dist_m, seg, tapped}.
 ## The crosshair's stream rung — aimed at a creek, the player used to get the
 ## forest polygon it runs through ("Fill forest") and nothing about the water.
+## `max_m` is the floor of the pick reach: a CARVED stream reaches to its
+## bank tops (half the bed + the bank's run + 1 m), because the crosshair's
+## ground point on a creek is the BANK — a ray from eye height into a 0.7 m
+## trench lands on the slope, up to ~3.5 m off the centreline on a 3.5 m
+## stream — and a click on the bank is a click on the creek. With a flat
+## 3 m reach the stream rung lost to the forest polygon round it
+## (Mount Vernon's Stream 2, --capture=penstock).
 func pick_stream_at_world(x: float, z: float, max_m: float = 3.0) -> Dictionary:
 	var wn := water_network()
 	if wn == null:
 		return {"valid": false}
 	var p := Vector2(x, z)
 	var best := {"valid": false}
-	var best_d := max_m
+	var best_d := INF
 	for f_v in wn.features():
 		var f: Dictionary = f_v
 		var fid := str(f.get("id", ""))
 		if fid.begins_with("dc_"):
 			continue
+		var sec: Dictionary = f.get("section", {}) if f.get("section", {}) is Dictionary else {}
+		var reach := maxf(max_m, 0.5 * float(sec.get("bed_w", 0.0))
+				+ float(sec.get("bank_slope", 0.0)) * float(sec.get("depth", 0.0)) + 1.0)
 		var near := StreamNetwork.nearest_on_line(f["points"], p)
 		var d := float(near.get("dist", INF))
-		if d < best_d:
+		if d < reach and d < best_d:
 			best_d = d
 			var tapped := false
 			for m in f.get("modes", []):

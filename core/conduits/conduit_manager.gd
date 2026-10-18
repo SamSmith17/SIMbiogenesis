@@ -1846,12 +1846,13 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	if is_contour and control.size() >= 2:
 		_write_contour_inverts(cid, (control[0] as Vector3).y,
 				(control[control.size() - 1] as Vector3).y)
-		_write_contour_report(cid, samples)
+		_write_contour_report(cid, samples, control, type_id)
 
 
 ## Persist what the pipe would say about the route (tightest bend, high
 ## points, siphon rise) — the Hydro Lab's design checks read these.
-func _write_contour_report(conn_id: String, samples: PackedVector3Array) -> void:
+func _write_contour_report(conn_id: String, samples: PackedVector3Array,
+		control: Array = [], type_id: String = "") -> void:
 	if _model == null or samples.size() < 3:
 		return
 	var conn := _model.get_connection(conn_id)
@@ -1862,15 +1863,23 @@ func _write_contour_report(conn_id: String, samples: PackedVector3Array) -> void
 	var r_store := -1.0 if not is_finite(r) else r
 	var hp := int(rep.get("high_points", 0))
 	var rise := float(rep.get("rise_above_intake_m", 0.0))
-	if absf(float(conn.get("route_min_bend_r_m", -2.0)) - r_store) < 0.01 \
-			and int(conn.get("route_high_points", -1)) == hp \
-			and absf(float(conn.get("route_rise_m", -1.0)) - rise) < 0.02:
+	# Which of the player's own pins could not take the full fillet: the
+	# design check reads the tightest bend against the pipe, and this says
+	# whether that bend is the pins' doing (a 2 m leg on a hand-drawn creek)
+	# rather than the router's.
+	var short_leg := -1.0
+	if not control.is_empty() and not type_id.is_empty():
+		var r_min := ConduitKinds.contour_bend_radius_m(type_id,
+				conn.get("conduit_style", {}) as Dictionary)
+		short_leg = float(ContourRouter.short_leg_report(control, r_min).get("short_leg_m", -1.0))
+	if absf(float(conn.get("route_min_bend_r_m", -2.0)) - r_store) < 0.01 			and int(conn.get("route_high_points", -1)) == hp 			and absf(float(conn.get("route_rise_m", -1.0)) - rise) < 0.02 			and absf(float(conn.get("route_short_leg_m", -2.0)) - short_leg) < 0.01:
 		return
 	_updating_model = true
 	_model.update_connection(conn_id, {
 		"route_min_bend_r_m": r_store,
 		"route_high_points": hp,
 		"route_rise_m": rise,
+		"route_short_leg_m": short_leg,
 	})
 	_updating_model = false
 
