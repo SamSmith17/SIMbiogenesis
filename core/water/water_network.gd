@@ -298,6 +298,89 @@ func _start_rebuild(force: bool) -> void:
 		box["result"] = ChannelCarver.run(job), false, "WaterNetwork carve")
 
 
+## Set by commit(): the next carve result clears vegetation on the channels
+## a player edit changed (never a load-time carve).
+var _clear_veg_after_carve := false
+
+## Half-width of the ground a channel takes beyond its bank top: the bank's
+## soft lip plus the strip the carver rounds (ChannelCarver.TOE_ROUND_M-ish).
+const VEG_CLEAR_MARGIN_M := 1.0
+
+
+## A player-drawn (or edited) stream now cuts through the forest: a tree
+## standing in the new channel used to stay, rooted in mid-air over the bed.
+## Every feature whose carve signature moved since the previous result gets
+## the vegetation inside its channel footprint (bank top to bank top, plus a
+## margin) cleared the way a Level pad clears it — the painted layer's records
+## removed and a persisted clear patch on the auto-vegetation edits, so the
+## forest never grows back into the water on the next scatter.
+func _clear_vegetation_on_changed_channels(prev_sigs: Dictionary) -> void:
+	if loader == null or not loader.has_method("clear_vegetation_in_polygon"):
+		return
+	for f_v in _features:
+		var f: Dictionary = f_v
+		var fid := str(f.get("id", ""))
+		if not bool(f.get("carve", true)):
+			continue
+		if prev_sigs.has(fid) and int(prev_sigs[fid]) == int(_sigs.get(fid, -1)):
+			continue   # unchanged by this edit
+		var pts: PackedVector2Array = f.get("points", PackedVector2Array())
+		if pts.size() < 2:
+			continue
+		var sec: Dictionary = f.get("section", {})
+		var half := 0.5 * float(sec.get("bed_w", 3.5)) 				+ float(sec.get("bank_slope", 2.5)) * float(sec.get("depth", 0.7)) + VEG_CLEAR_MARGIN_M
+		var poly := channel_footprint_polygon(pts, half)
+		if poly.size() < 3:
+			continue
+		# The painted layer's clear rebuilds the whole vegetation set, so only
+		# pay it when a painted plant actually stands in the channel; the
+		# auto-vegetation clear is a persisted patch (cheap) and always lands,
+		# so the next scatter keeps out of the water too.
+		var painted := int(loader.call("count_manual_bulk_in_polygon", poly)) 				if loader.has_method("count_manual_bulk_in_polygon") else 1
+		if painted > 0:
+			loader.call("clear_vegetation_in_polygon", poly)
+		var auto_n := 0
+		if loader.has_method("clear_auto_vegetation_in_polygon"):
+			auto_n = int(loader.call("clear_auto_vegetation_in_polygon", poly))
+		print("WaterNetwork: cleared vegetation along %s (%.1f m half-width, %d points): %d painted, %d auto" % [
+			fid, half, pts.size(), painted, auto_n])
+
+
+## The ground a channel occupies: the centreline offset `half` m to each side
+## (mitred at the joints, capped so a hairpin cannot throw a vertex out), the
+## left bank forward and the right bank back, as one closed outline. Pure.
+static func channel_footprint_polygon(pts: PackedVector2Array, half: float) -> PackedVector2Array:
+	var n := pts.size()
+	var out := PackedVector2Array()
+	if n < 2 or half <= 0.0:
+		return out
+	var left := PackedVector2Array()
+	var right := PackedVector2Array()
+	for i in n:
+		var d_in := (pts[i] - pts[i - 1]).normalized() if i > 0 else Vector2.ZERO
+		var d_out := (pts[i + 1] - pts[i]).normalized() if i < n - 1 else Vector2.ZERO
+		var d := d_in + d_out
+		if d.length_squared() < 1e-9:
+			d = d_in if d_in.length_squared() > 0.0 else d_out
+		if d.length_squared() < 1e-9:
+			continue
+		d = d.normalized()
+		var nrm := Vector2(-d.y, d.x)
+		# Mitre: widen at a bend so the offset stays `half` off BOTH legs, but
+		# never past 2 × half (a hairpin's mitre runs to infinity).
+		var m := 1.0
+		if i > 0 and i < n - 1:
+			var cos_half := nrm.dot(Vector2(-d_in.y, d_in.x))
+			m = clampf(1.0 / maxf(cos_half, 0.5), 1.0, 2.0)
+		left.append(pts[i] + nrm * half * m)
+		right.append(pts[i] - nrm * half * m)
+	for p in left:
+		out.append(p)
+	for i in range(right.size() - 1, -1, -1):
+		out.append(right[i])
+	return out
+
+
 ## Cheap fingerprint of the ground the sampler sees (a few samples): the
 ## detail DEM landing changes this, so the carve follows a better DEM.
 static func _grid_probe(s: WaterGroundSampler) -> Array:
@@ -312,8 +395,12 @@ func _apply_job_result(res: Dictionary) -> void:
 		return
 	_profiles = res.get("profiles", {})
 	_links = res.get("links", {})
+	var prev_sigs: Dictionary = _sigs
 	_sigs = res.get("sigs", {})
 	_footprints = res.get("footprints", {})
+	if _clear_veg_after_carve:
+		_clear_veg_after_carve = false
+		_clear_vegetation_on_changed_channels(prev_sigs)
 	var touched: Array = res.get("touched", [])
 	print("WaterNetwork: %d features, %d channel tiles re-carved (%d ms)" % [
 		_features.size(), touched.size(), Time.get_ticks_msec() - _task_started_ms])
@@ -1306,6 +1393,10 @@ func checkpoint() -> void:
 ## Persist + re-carve after an edit made between checkpoint() and here.
 func commit() -> void:
 	save_layer()
+	# A player edit: once the carve lands, the channels it dug get their
+	# vegetation cleared (see _apply_job_result). Load-time carves do not —
+	# the forest on a saved map must not change because a cache missed.
+	_clear_veg_after_carve = true
 	request_rebuild()
 
 
