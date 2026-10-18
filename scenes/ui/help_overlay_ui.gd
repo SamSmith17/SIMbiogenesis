@@ -256,7 +256,9 @@ func _make_key_chip(text: String) -> PanelContainer:
 
 func _keyboard_label(action: String) -> String:
 	var curated: Dictionary = _PROMPT_SCRIPT.KEYBOARD_LABELS
-	if curated.has(action):
+	# A key the player rebound (Settings → Controls) wins over the curated
+	# text: the InputMap is what the game fires.
+	if curated.has(action) and not InputOverrides.is_overridden(action):
 		return curated[action]
 	if not InputMap.has_action(action):
 		return "—"

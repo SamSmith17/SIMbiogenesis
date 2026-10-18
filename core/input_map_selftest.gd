@@ -111,6 +111,7 @@ func _initialize() -> void:
 	_test_keyboard_coverage(actions)
 	_test_no_key_collisions(actions)
 	_test_whitelist_is_live(actions)
+	_test_override_format(actions)
 
 	if _fails == 0:
 		print("INPUT MAP SELFTEST PASS  (%d checks, %d actions)" % [_checks, actions.size()])
@@ -268,6 +269,114 @@ func _test_whitelist_is_live(actions: Dictionary) -> void:
 					continue
 				_check("whitelisted action '%s' still exists" % name,
 					actions.has(name) or name.begins_with("ui_"))
+
+
+## The player's rebinding file (core/input_overrides.gd, Settings →
+## Controls): the text format round-trips, a malformed line is dropped rather
+## than applied as something else, the file round-trips through a TEMP path,
+## applying an override replaces an action's key / mouse events and keeps its
+## joypad ones, ↺ restores project.godot's events exactly, "none" unbinds,
+## and the project-action parser agrees with this file's own. Loaded by path:
+## the selftest must not depend on the global class cache.
+func _test_override_format(actions: Dictionary) -> void:
+	var io: Variant = load("res://core/input_overrides.gd")
+	_check("InputOverrides loads", io != null)
+	if io == null:
+		return
+	# Encoding.
+	var k := InputEventKey.new()
+	k.physical_keycode = KEY_G
+	k.ctrl_pressed = true
+	k.shift_pressed = true
+	_check("a key with modifiers encodes", io.encode(k) == "key %d ctrl shift" % int(KEY_G),
+		"got '%s'" % io.encode(k))
+	var back: Variant = io.decode(io.encode(k))
+	_check("…and decodes back to the same physical key + modifiers",
+		back is InputEventKey and (back as InputEventKey).physical_keycode == KEY_G
+		and (back as InputEventKey).ctrl_pressed and (back as InputEventKey).shift_pressed
+		and not (back as InputEventKey).alt_pressed and (back as InputEventKey).keycode == KEY_NONE)
+	var m := InputEventMouseButton.new()
+	m.button_index = MOUSE_BUTTON_XBUTTON1
+	_check("a mouse side button encodes as 'mouse 8'", io.encode(m) == "mouse 8", "got '%s'" % io.encode(m))
+	var mb: Variant = io.decode("mouse 8")
+	_check("…and decodes", mb is InputEventMouseButton and (mb as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON1)
+	var lmb := InputEventMouseButton.new()
+	lmb.button_index = MOUSE_BUTTON_LEFT
+	_check("the left and right mouse buttons are never a binding",
+		io.encode(lmb) == "" and io.decode("mouse 1") == null and io.decode("mouse 2") == null)
+	for bad in ["key", "key abc", "key 71 hyper", "key 0", "key 16777281", "mouse", "mouse x", "pedal 3", ""]:
+		_check("malformed '%s' decodes to null" % bad, io.decode(bad) == null)
+	_check("'none' is valid (unbound) but decodes to null", io.is_valid("none") and io.decode("none") == null)
+	_check("a Godot 3 keycode is refused (outside KEY_CODE_MASK)", io.decode("key 16777241") == null)
+	# File round trip on a TEMP path.
+	var path := "user://input_overrides_selftest_%d.cfg" % Time.get_ticks_usec()
+	var written := {"toggle_help": "key %d" % int(KEY_F6), "interact": "mouse 4", "junk_action": "key 71 ctrl"}
+	_check("write() returns OK", io.write(written, path) == OK)
+	var cfg := ConfigFile.new()
+	cfg.load(path)
+	cfg.set_value("bindings", "broken_action", "key banana")
+	cfg.save(path)
+	var read: Dictionary = io.read(path)
+	_check("read() returns every well-formed entry and drops the malformed one",
+		read.size() == 3 and read.get("toggle_help", "") == "key %d" % int(KEY_F6)
+		and read.get("interact", "") == "mouse 4" and not read.has("broken_action"),
+		"got %s" % str(read))
+	_check("the file carries its format version", int(cfg.get_value("meta", "version", 0)) == 1)
+	# Apply on the live InputMap: toggle_help (a project action with a key
+	# binding) gets F6; a joypad event added first survives; the default
+	# comes back exactly.
+	var action := "toggle_help"
+	_check("the sample action exists in the project", actions.has(action))
+	if actions.has(action):
+		var pad := InputEventJoypadButton.new()
+		pad.button_index = JOY_BUTTON_BACK
+		InputMap.action_add_event(action, pad)
+		var n: int = io.apply(read)
+		_check("apply() counts the actions the InputMap has (not the junk one)", n == 2, "applied %d" % n)
+		var evs := InputMap.action_get_events(action)
+		var keys := 0
+		var f6 := false
+		var pads := 0
+		for ev in evs:
+			if ev is InputEventKey:
+				keys += 1
+				f6 = f6 or (ev as InputEventKey).physical_keycode == KEY_F6
+			elif ev is InputEventJoypadButton:
+				pads += 1
+		_check("the override replaced the key events with F6 and kept the joypad event",
+			keys == 1 and f6 and pads == 1, "keys %d f6 %s pads %d" % [keys, str(f6), pads])
+		# Against an action the file above did NOT touch (interact's key is
+		# gone by now — it was overridden to a mouse button).
+		var other := "move_forward"
+		var other_key: InputEvent = null
+		for oev in (actions.get(other, []) as Array):
+			if oev is InputEventKey:
+				other_key = oev
+				break
+		_check("conflicts() names another action on the same key",
+			other_key != null and other in Array(io.conflicts(action, io.decode(io.encode(other_key)))))
+		io.restore_default(action)
+		io.restore_default("interact")
+		var want: Array = io.default_events(action)
+		var got := InputMap.action_get_events(action)
+		var same := want.size() == got.size()
+		for i in mini(want.size(), got.size()):
+			same = same and io.signature(want[i]) == io.signature(got[i]) \
+				and (want[i] as InputEvent).get_class() == (got[i] as InputEvent).get_class()
+		_check("restore_default() puts project.godot's events back, joypad included",
+			same and got.size() == (actions[action] as Array).size(), "want %d got %d" % [want.size(), got.size()])
+		_check("'none' unbinds the keyboard", io.apply_one(action, "none")
+			and InputMap.action_get_events(action).size() == (actions[action] as Array).size() - 1)
+		io.restore_default(action)
+	# The parser the UI uses agrees with this file's own.
+	var theirs: Dictionary = io.project_actions()
+	var mine := actions.keys()
+	mine.sort()
+	var ours := theirs.keys()
+	ours.sort()
+	_check("InputOverrides.project_actions() lists exactly the project's actions", mine == ours,
+		"%d vs %d" % [mine.size(), ours.size()])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
 func _key_signature(k: InputEventKey) -> String:

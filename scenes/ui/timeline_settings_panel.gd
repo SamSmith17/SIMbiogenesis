@@ -24,7 +24,7 @@ const PREFS_PATH := "user://ui_prefs.cfg"
 ## reads and writes files, not Main. The Lighting page is built in its
 ## graphics-preset form there (quality tier, performance, terrain detail,
 ## shadows); the sky / sun / fog fine-tuning needs a lit world.
-const HUB_PAGES := ["Lighting", "Interface", "Player", "NPC", "Stars & Planets", "Window Wall"]
+const HUB_PAGES := ["Lighting", "Interface", "Player", "Controls", "NPC", "Stars & Planets", "Window Wall"]
 
 ## Set BEFORE the node enters the tree (the hub creates it by script): only
 ## HUB_PAGES are built, the sliders read SimSettingsController.hub_snapshot()
@@ -36,7 +36,7 @@ var hub_mode: bool = false
 ## go missing from the nav.
 const CATEGORIES := [
 	["Simulation", ["Gameplay", "NPC", "Extreme Weather", "Live Mode"]],
-	["Player & controls", ["Player", "Drone", "Interface", "Keys"]],
+	["Player & controls", ["Player", "Controls", "Drone", "Interface", "Keys"]],
 	["Graphics & sky", ["Lighting", "Environment", "Stars & Planets"]],
 	["Site & hardware", ["Location", "Solar", "Window Wall"]],
 	["Integrations", ["Home Assistant"]],
@@ -426,6 +426,7 @@ func _build_ui() -> void:
 		# Only the pages that need no Main (HUB_PAGES), in the sidebar's order.
 		_build_lighting_tab(tabs)
 		_build_player_tab(tabs)
+		_build_controls_tab(tabs)
 		_build_interface_tab(tabs)
 		_build_npc_tab(tabs)
 		_build_window_wall_tab(tabs)
@@ -433,6 +434,7 @@ func _build_ui() -> void:
 	else:
 		_build_gameplay_tab(tabs)
 		_build_player_tab(tabs)
+		_build_controls_tab(tabs)
 		_build_interface_tab(tabs)
 		_build_drone_tab(tabs)
 		_build_environment_tab(tabs)
@@ -3020,6 +3022,212 @@ func _build_window_wall_tab(tabs: TabContainer) -> void:
 func _refresh_window_wall_tab() -> void:
 	if _window_wall_tab != null and is_instance_valid(_window_wall_tab):
 		_window_wall_tab.call("refresh")
+
+
+## ---------------------------------------------------------------------------
+## Settings → Controls: every project.godot [input] action with its key,
+## click-to-capture rebinding, ↺ per row. The data layer is InputOverrides
+## (user://input_overrides.cfg, applied in CursorController._ready); the
+## rows' descriptions and groups are the F1 help overlay's own table, so the
+## two never disagree about what a key does. Actions with no InputMap handler
+## of the player's (ui_*) are left out.
+## ---------------------------------------------------------------------------
+var _ctl_rows: Dictionary = {}        # action -> {btn, reset, lbl}
+var _ctl_capture := ""                # the action waiting for a key press
+var _ctl_status: Label = null
+var _ctl_conflicts: Label = null
+
+
+func _build_controls_tab(tabs: TabContainer) -> void:
+	var v := _make_tab(tabs, "Controls")
+	_add_section_lbl(v, "Key bindings")
+	_add_hint(v, "Click a key to change it, then press the new key (or a mouse side button; Esc cancels). Keys are remembered by position, so they stay put on any keyboard layout. ↺ puts a key back to the default. The F1 help, the on-screen prompts and the tour show whatever you choose.")
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 8)
+	_ctl_status = Label.new()
+	_ctl_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ctl_status.add_theme_color_override("font_color", C_TEXT_S)
+	_ctl_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_ctl_status.text = ""
+	top.add_child(_ctl_status)
+	var reset_all := Button.new()
+	reset_all.text = "Reset all to defaults"
+	reset_all.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(reset_all)
+	reset_all.pressed.connect(func() -> void:
+		InputOverrides.clear_all()
+		_ctl_status.text = "Every key is back to its default."
+		_ctl_refresh_rows())
+	top.add_child(reset_all)
+	v.add_child(top)
+	_ctl_conflicts = Label.new()
+	_ctl_conflicts.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ctl_conflicts.custom_minimum_size = Vector2(420, 0)
+	_ctl_conflicts.add_theme_color_override("font_color", UITheme.C_WARN)
+	_ctl_conflicts.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_ctl_conflicts.visible = false
+	v.add_child(_ctl_conflicts)
+	# The help overlay's groups and descriptions; then whatever project
+	# action it does not list.
+	var listed := {}
+	var groups: Array = []
+	var help_script := load("res://scenes/ui/help_overlay_ui.gd") as Script
+	if help_script != null:
+		groups = help_script.get_script_constant_map().get("_GROUPS", [])
+	var project := InputOverrides.project_actions()
+	for g in groups:
+		var rows: Array = []
+		for entry in (g[1] as Array):
+			var action := str(entry[0])
+			if action.begins_with("key:") or action.begins_with("ui_") or listed.has(action):
+				continue
+			if not project.has(action):
+				continue
+			listed[action] = true
+			rows.append([action, str(entry[1])])
+		if rows.is_empty():
+			continue
+		v.add_child(HSeparator.new())
+		_add_section_lbl(v, str(g[0]))
+		for r in rows:
+			_ctl_add_row(v, r[0], r[1])
+	var rest: Array = []
+	for action in project.keys():
+		var a := str(action)
+		if not listed.has(a) and not a.begins_with("ui_"):
+			rest.append(a)
+	rest.sort()
+	if not rest.is_empty():
+		v.add_child(HSeparator.new())
+		_add_section_lbl(v, "Other")
+		for a in rest:
+			_ctl_add_row(v, a, UiText.from_id(a))
+	_ctl_refresh_rows()
+
+
+func _ctl_add_row(parent: Control, action: String, description: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = description
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbl.tooltip_text = action
+	lbl.add_theme_color_override("font_color", C_TEXT)
+	row.add_child(lbl)
+	var btn := Button.new()
+	btn.custom_minimum_size = Vector2(150, 26)
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.set_meta("action", action)
+	UITheme.style_button(btn)
+	btn.pressed.connect(_ctl_begin_capture.bind(action))
+	row.add_child(btn)
+	var reset := IconButton.make("undo-2", "Back to the default key", _ctl_reset.bind(action))
+	reset.focus_mode = Control.FOCUS_NONE
+	reset.custom_minimum_size = Vector2(26, 26)
+	row.add_child(reset)
+	parent.add_child(row)
+	_ctl_rows[action] = {"btn": btn, "reset": reset, "lbl": lbl}
+
+
+## Every row's key chip from the LIVE InputMap (what the game actually fires).
+func _ctl_refresh_rows() -> void:
+	for action in _ctl_rows:
+		var r: Dictionary = _ctl_rows[action]
+		var btn := r["btn"] as Button
+		var reset := r["reset"] as Button
+		var over := InputOverrides.is_overridden(str(action))
+		if _ctl_capture == str(action):
+			btn.text = "Press a key…"
+			btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+		else:
+			var label := HarnessInput.action_label(str(action))
+			btn.text = label if not label.is_empty() else "—"
+			if over:
+				btn.add_theme_color_override("font_color", UITheme.C_WARN)
+			else:
+				btn.remove_theme_color_override("font_color")
+		btn.tooltip_text = ("Changed from the default — ↺ restores it" if over else "Click, then press the new key")
+		# The ↺ keeps its slot so the chips line up; it only shows when
+		# there is something to undo.
+		reset.modulate.a = 1.0 if over else 0.0
+		reset.disabled = not over
+		reset.mouse_filter = Control.MOUSE_FILTER_STOP if over else Control.MOUSE_FILTER_IGNORE
+
+
+func _ctl_begin_capture(action: String) -> void:
+	_ctl_capture = action
+	_ctl_status.text = "Press the new key for \"%s\" — Esc cancels." % (_ctl_rows[action]["lbl"] as Label).text
+	_ctl_conflicts.visible = false
+	_ctl_refresh_rows()
+
+
+func _ctl_reset(action: String) -> void:
+	InputOverrides.clear_binding(action)
+	_ctl_status.text = "%s is back to %s." % [(_ctl_rows[action]["lbl"] as Label).text, HarnessInput.action_label(action)]
+	_ctl_conflicts.visible = false
+	_ctl_refresh_rows()
+
+
+## Bind `action` to `ev` (the capture's result, or a harness's). The one
+## path every rebind takes: the file, the InputMap, the rows, the warning.
+func rebind(action: String, ev: InputEvent) -> bool:
+	if not _ctl_rows.has(action):
+		return false
+	var clash := InputOverrides.conflicts(action, ev)
+	if not InputOverrides.set_binding(action, ev):
+		_ctl_status.text = "That key cannot be bound."
+		return false
+	_ctl_capture = ""
+	_ctl_status.text = "%s is now %s." % [(_ctl_rows[action]["lbl"] as Label).text, HarnessInput.action_label(action)]
+	if clash.is_empty():
+		_ctl_conflicts.visible = false
+	else:
+		var names := PackedStringArray()
+		for c in clash:
+			names.append((_ctl_rows[c]["lbl"] as Label).text if _ctl_rows.has(c) else UiText.from_id(c))
+		_ctl_conflicts.text = "⚠ %s also fires: %s. Both will respond to that key." % [
+			HarnessInput.event_label(ev), ", ".join(names)]
+		_ctl_conflicts.visible = true
+	_ctl_refresh_rows()
+	return true
+
+
+## The capture: the next key (or mouse side button) goes to the row that
+## asked. Runs before every _unhandled_input, so Esc here cancels the capture
+## instead of closing the panel.
+func _input(event: InputEvent) -> void:
+	if _ctl_capture.is_empty() or not visible:
+		return
+	if event is InputEventKey:
+		var k := event as InputEventKey
+		if not k.pressed or k.echo:
+			return
+		var code := k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
+		if code == KEY_ESCAPE:
+			_ctl_capture = ""
+			_ctl_status.text = "Unchanged."
+			_ctl_refresh_rows()
+			get_viewport().set_input_as_handled()
+			return
+		if code in [KEY_CTRL, KEY_SHIFT, KEY_ALT, KEY_META, KEY_NONE]:
+			return
+		var ev := InputEventKey.new()
+		ev.physical_keycode = code
+		ev.ctrl_pressed = k.ctrl_pressed
+		ev.shift_pressed = k.shift_pressed
+		ev.alt_pressed = k.alt_pressed
+		ev.meta_pressed = k.meta_pressed
+		rebind(_ctl_capture, ev)
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		var m := event as InputEventMouseButton
+		if not m.pressed or int(m.button_index) < InputOverrides.MOUSE_MIN_BUTTON:
+			return
+		var ev := InputEventMouseButton.new()
+		ev.button_index = m.button_index
+		rebind(_ctl_capture, ev)
+		get_viewport().set_input_as_handled()
 
 
 ## Settings → Player: your own camera and body (PlayerPrefs; the FOV stays in

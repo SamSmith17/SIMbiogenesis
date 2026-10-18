@@ -67,7 +67,7 @@ check of the real user dir.
 | pvsnap (new 2026-10-14) | mtvernon | PASS (8 checks) | 51 |
 | conduits (new 2026-10-14) | mtvernon | PASS (13 checks: real-release plug, HUD = run length, live modal, tags, chain) | 52 |
 | modals (2026-10-14, strict, 720 + 1080) | mtvernon | PASS (every settings page + conduit_style + connection_ports) | 89 / 106 |
-| hubsettings (new 2026-10-18, 1080 + 720) | launch hub (menu kind) | PASS (7 checks: gear click, HUB_PAGES only, nav on screen, UiAudit 0 errors over 6 pages, no-Main changes land in the files, Esc closes) | 15 |
+| hubsettings (new 2026-10-18, 1080 + 720) | launch hub (menu kind) | PASS (10 checks: gear click, HUB_PAGES only, nav on screen, UiAudit 0 errors over 7 pages, a real F6 press rebinds the help key + ↺ restores it, no-Main changes land in the files, Esc closes) | 16 |
 | site-review `--review-sets=site` (2026-10-14) | mtvernon | PASS (cursor zoom drift 2.96 → 0.04 px: one held point per wheel gesture + up to 4 pan-solve passes) | 59 |
 | tour (2026-10-13, via `tools\tour.ps1 -Mode stills`) | mtvernon + walton | PASS (32 of 32 stops; 200 renderer engine errors from Bootcamp-after-Hydro-Lab, see below) | 273 + 94 |
 

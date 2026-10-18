@@ -62,6 +62,11 @@ func _input(event: InputEvent) -> void:
 func get_action_label(action: String) -> String:
 	if _using_controller:
 		return CONTROLLER_LABELS.get(action, action.to_upper())
+	# A rebound key (Settings → Controls) shows the key the game now fires.
+	if InputOverrides.is_overridden(action):
+		var live := HarnessInput.action_label(action)
+		if not live.is_empty():
+			return live
 	return KEYBOARD_LABELS.get(action, action.to_upper())
 
 func show_prompt(action_key: String, action_text: String) -> void:

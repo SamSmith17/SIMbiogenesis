@@ -8338,6 +8338,80 @@ func _run_hub_settings_capture() -> void:
 	var sb_slider := panel.get("_stars_brightness") as HSlider
 	if sb_slider != null:
 		sb_slider.value = sb_new
+	# Settings → Controls (Push 3 item 6): a REAL click on the help row's key
+	# chip, then a REAL F6 press through the input pipeline rebinds it — the
+	# InputMap, the file, the tour's label (HarnessInput.action_label) and
+	# the F1 overlay's label (which prefers curated text unless the key was
+	# rebound) all read F6; ↺ (a real click) puts the default back and
+	# empties the file.
+	panel.call("open_page", "Controls")
+	for _r in 4:
+		await tree.process_frame
+	var rows: Dictionary = panel.get("_ctl_rows")
+	var help_action := "toggle_help"
+	var chip := (rows.get(help_action, {}) as Dictionary).get("btn", null) as Button
+	var reset_btn := (rows.get(help_action, {}) as Dictionary).get("reset", null) as Button
+	var label0 := HarnessInput.action_label(help_action)
+	var help_ui: Variant = load("res://scenes/ui/help_overlay_ui.gd").new()
+	var overlay0 := str(help_ui.call("_keyboard_label", help_action))
+	var rebound := false
+	var restored := false
+	if chip != null and reset_btn != null:
+		var sc := panel.get("_tabs") as TabContainer
+		# The row may sit below the fold of the page's ScrollContainer.
+		var scroll := chip.get_parent()
+		while scroll != null and not (scroll is ScrollContainer):
+			scroll = scroll.get_parent()
+		if scroll != null:
+			(scroll as ScrollContainer).ensure_control_visible(chip)
+			for _s in 3:
+				await tree.process_frame
+		await HarnessInput.click(vp, HarnessInput.center_of(chip))
+		for _t in 3:
+			await tree.process_frame
+		var capturing := str(panel.get("_ctl_capture")) == help_action
+		print("hubsettings: clicking a key chip arms the capture %s" % ("PASS" if capturing else "FAIL"))
+		if not capturing:
+			fails += 1
+		var f6 := InputEventKey.new()
+		f6.physical_keycode = KEY_F6
+		f6.keycode = KEY_F6
+		f6.pressed = true
+		Input.parse_input_event(f6)
+		await tree.process_frame
+		var f6_up := f6.duplicate() as InputEventKey
+		f6_up.pressed = false
+		Input.parse_input_event(f6_up)
+		for _u in 3:
+			await tree.process_frame
+		var label1 := HarnessInput.action_label(help_action)
+		var saved1: Dictionary = InputOverrides.read()
+		var overlay1 := str(help_ui.call("_keyboard_label", help_action))
+		var map_f6 := false
+		for ev in InputMap.action_get_events(help_action):
+			if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_F6:
+				map_f6 = true
+		rebound = map_f6 and label1 == "F6" and overlay1 == "F6" and saved1.get(help_action, "") == "key %d" % int(KEY_F6)
+		print("hubsettings: a real F6 press rebinds the help key %s (InputMap F6 %s, tour label '%s' -> '%s', F1 overlay '%s' -> '%s', file '%s')"
+			% ["PASS" if rebound else "FAIL", str(map_f6), label0, label1, overlay0, overlay1, str(saved1.get(help_action, ""))])
+		if not rebound:
+			fails += 1
+		await _shoot_ui(dir, "04_controls_rebound")
+		await HarnessInput.click(vp, HarnessInput.center_of(reset_btn))
+		for _w in 3:
+			await tree.process_frame
+		var label2 := HarnessInput.action_label(help_action)
+		var saved2: Dictionary = InputOverrides.read()
+		restored = label2 == label0 and not saved2.has(help_action) and not InputOverrides.is_overridden(help_action)
+		print("hubsettings: the row's reset puts the default back and clears the file %s ('%s', file has it: %s)"
+			% ["PASS" if restored else "FAIL", label2, str(saved2.has(help_action))])
+		if not restored:
+			fails += 1
+	else:
+		fails += 1
+		print("hubsettings: Controls page row for %s FAIL — not built" % help_action)
+	if help_ui is Node:
+		(help_ui as Node).free()
 	# Esc closes it (CursorController pops the modal through its close
 	# callable). The pointer leaves the gear first, as a player's would —
 	# its tooltip is an embedded popup window that sits in the input path.

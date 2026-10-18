@@ -45,6 +45,11 @@ func _ready() -> void:
 		# A friend's asset pack dropped onto the window opens the Share modal
 		# on it, from any screen.
 		tree.root.files_dropped.connect(_on_files_dropped)
+	# The player's key bindings (Settings → Controls) over the project's
+	# InputMap, before any scene reads a key.
+	var rebound := InputOverrides.apply_saved()
+	if rebound > 0:
+		print("CursorController: %s applied from %s" % [UiText.count(rebound, "key binding"), InputOverrides.PATH])
 	# Apply capture on boot — set_paused(false) is a no-op when already unpaused.
 	call_deferred("_apply_capture")
 

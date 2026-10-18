@@ -220,7 +220,11 @@ tools\harness.ps1 -EmptyUser -Capture assetpack-import -UserArgs @("--import=<pa
 # star-brightness change with NO Main landing in sim_settings.cfg /
 # star_calibration.cfg (SimSettingsController's hub store, restored after),
 # Esc closing it. ⚠ The hub's own Esc handler quit the game while a modal
-# was up until this capture caught it:
+# was up until this capture caught it. Also the Controls page end to end:
+# a REAL click on the help row's key chip + a REAL F6 press rebinds it (the
+# InputMap, the file, HarnessInput.action_label = the tour's title cards,
+# and the F1 overlay's label all read F6), ↺ restores F1 and empties the
+# file:
 tools\harness.ps1 -Capture hubsettings
 tools\harness.ps1 -Capture hubsettings -UserArgs @("--window-size=1280x720")
 # Worlds end to end (WINDOWED, needs a world: --scratch-world copies the most
@@ -269,7 +273,14 @@ Godot.exe.exe --headless --path . --script core/clock_claims_selftest.gd
 # ALLOWED_OVERLAPS with the file:line that disambiguates them), on an action
 # with no events at all (a dead action orphans every handler keyed to it), and
 # on a key event bound via `keycode` instead of `physical_keycode` (which drifts
-# on AZERTY/Dvorak). Run it after ANY project.godot [input] edit:
+# on AZERTY/Dvorak). Also pins the player's REBINDING file
+# (core/input_overrides.gd, Settings → Controls, user://input_overrides.cfg:
+# `action = "key <physical> [ctrl] [shift] [alt] [meta]" | "mouse <n>" |
+# "none"`): encode/decode round trips, malformed lines dropped not applied,
+# a TEMP-path file round trip, apply replacing key + mouse events while the
+# joypad event stays, ↺ restoring project.godot's events exactly, and the
+# parser agreeing with this file's own. Run it after ANY project.godot
+# [input] edit:
 Godot.exe.exe --headless --path . --script core/input_map_selftest.gd
 # UI compile smoke + duck-typing contract guard (offline — sweeps scenes/ui/,
 # crisis_events/ and location_picker/; these scripts mostly have NO class_name,
