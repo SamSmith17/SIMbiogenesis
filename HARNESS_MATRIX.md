@@ -49,7 +49,7 @@ check of the real user dir.
 | veg | mtvernon | PASS | 74 |
 | growth | mtvernon | PASS | 84 |
 | water | mtvernon | PASS | 144 |
-| penstock | mtvernon | FAIL (the 2 Stream 2 checks green; adoption regression, see Open items) | 87 |
+| penstock | mtvernon | PASS (66 checks) | 90 |
 | project | mtvernon | PASS | 96 |
 | microclimate | walton | PASS (0 engine errors) | 109 |
 | popin | walton | PASS (report only, see below) | 153 |
@@ -239,22 +239,23 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
 
 ## Open items (not fixed)
 
-- **`penstock` on Mount Vernon: the turbine no longer adopts its routed
-  penstock** (2026-10-18, 14 checks: "turbine adopted the measured run",
-  "the styled 2in SDR-9 bore", "produces from the routed head", "intake
-  resolved a live supply", "turbine flows water" …). The run is measured
-  and stamped (97.7 m, inverts 36.20 → 3.37) but the turbine's specs stay
-  at the typed 100 m / 37.5 mm, outlet invert NAN, 0 W, and the stream
-  intake's live supply reads 0 while the Lab's own test flow still makes
-  power. A/B'd by reverting Push 2's conduit_manager / resource_flow_engine
-  / terrain_loader edits: identical at HEAD. A second A/B with every
-  tracked file at 646f533 (the sim pre-render commit, BEFORE the perf
-  commit cfbcf64) fails the same 14 checks, so the perf pass did not bring
-  it in: it came with 646f533 (the sim-write bracket / connection-index
-  work) or with the world as saved since. The last green record is
-  2026-10-13. Not investigated past the two A/Bs — the first suspect is
-  `_adopt_penstock_conn` running inside a bracket or cache that no longer
-  sees the rebuilt run's stamps.
+- **`penstock` on Mount Vernon: RESOLVED 2026-10-18 (world data + a
+  capture that leaned on it).** The "turbine never adopts its routed run"
+  reds were the saved world's CLOCK: Mount Vernon is saved paused
+  (`time_scale` 0 at 01:40), the snapshot restores it, and the flow engine
+  only simulates when sim time advances (`ResourceFlowEngine.tick`,
+  `dt_hours > 0`) — so nothing was ever stepped, adopted or supplied.
+  The capture owns its clock now (10:00 at 60×). Three more reds behind
+  it were the world too: the crosshair phase found the SoI MARKER, which
+  stands at the site centre where the capture seated the turbine (seated
+  8 m off now); the stream phase took the nearest creek's first vertex
+  and marked the whole way — Lake Creek, 1.3 km with its head end 112 m
+  below the way up, which zeroed the jet and emptied the Lab's intake /
+  surge texts (it now taps the stream vertex with the most head above the
+  turbine, exit ≤ 300 m, in either point order, and dumps the map's
+  streams when none qualifies); and the "64 m off the creek" point sat
+  inside another reach of the same meandering creek (scanned outward now
+  until no stream picks). 66 checks, every phase covered.
 - **`festival` on Walton FAILS 4 count checks** (2026-10-18): the world is
   saved mid-festival — 40 camp compounds / 1053 people already on the
   graph, so "24 lots became 11 new camp compounds" (13 of the capture's

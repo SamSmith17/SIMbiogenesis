@@ -9953,6 +9953,18 @@ func _run_penstock_verify() -> void:
 			_pen_keep[iid0] = true
 	# Clear leftovers from a previous run so the assertions are honest.
 	_penstock_cleanup(model, main)
+	# This capture asserts LIVE results — the turbine adopting its routed run,
+	# the intake's supply, water flowing — and the flow engine only simulates
+	# when sim time advances (ResourceFlowEngine.tick: dt_hours > 0). The
+	# world loads with whatever clock the player left: Mount Vernon was saved
+	# PAUSED at 01:40 (time_scale 0), which read as "the turbine never adopts
+	# its penstock" (14 checks, 2026-10-18). Own the clock: a daytime hour at
+	# 60x, well under the high-speed tick regime.
+	if "day_time" in main:
+		main.set("day_time", 10.0)
+	if "time_scale" in main:
+		main.set("time_scale", 1.0 / 60.0)
+		print("PlaytestHarness: penstock verify — clock set to 10:00 at 60x (the saved world's clock is not relied on)")
 
 	var soi := get_tree().root.get_node_or_null("SoiService")
 	if soi == null or not soi.has_method("world_center"):
@@ -9974,6 +9986,11 @@ func _run_penstock_verify() -> void:
 			if gy > best_y:
 				best_y = gy
 				best_xz = Vector2(wx, wz)
+	# Seat the turbine a few metres OFF the SoI centre: the site's own SoI
+	# marker stands exactly there, and the crosshair phase below found the
+	# marker in front of the turbine ("aiming at the turbine focuses the
+	# PROP" read SoiMarker on the Mount Vernon world).
+	center = center + Vector3(8.0, 0.0, 8.0)
 	var turbine_y := TerrainSurfaceQuery.ground_height_at(main, center.x, center.z)
 	print("PlaytestHarness: penstock verify — turbine ground %.2f m, best uphill %.2f m (%.0f m away)" % [
 		turbine_y, best_y, Vector2(center.x, center.z).distance_to(best_xz)])
@@ -10419,37 +10436,84 @@ func _penstock_stream_and_click_checks(sgv: Node, model: Variant, main: Node,
 	var wn: Node = loader.call("water_network")
 	var feats: Array = wn.call("features")
 	var centre_xz := Vector2(prop.global_position.x, prop.global_position.z) if prop != null else Vector2.ZERO
+	var centre_y := TerrainSurfaceQuery.ground_height_at(main, centre_xz.x, centre_xz.y)
+	# The reach to tap, chosen the way the tool's own find_uphill_source does:
+	# a stream VERTEX with real head above the turbine (within 400 m), down to
+	# the vertex nearest the turbine (within 150 m), most drop wins. The old
+	# rule took the nearest creek's FIRST vertex and marked the whole creek: on
+	# this world that is Lake Creek, 1.3 km of OSM waterway whose head end
+	# sits 112 m BELOW the way up — the jet took 0 L/s and every Lab text
+	# downstream of it read empty.
 	var best: Dictionary = {}
-	var best_d := INF
+	var best_drop := 1.0
+	var best_i0 := -1
+	var best_i1 := -1
+	var offer: Array = []
 	for f_v in feats:
 		var f: Dictionary = f_v
 		var pts: PackedVector2Array = f.get("points", PackedVector2Array())
 		if pts.size() < 3 or str(f.get("id", "")).begins_with("dc_"):
 			continue
-		var d := pts[0].distance_to(centre_xz)
-		if d < best_d:
-			best_d = d
-			best = f
+		# Exit = the vertex nearest the turbine.
+		var i1 := -1
+		var d1 := 300.0
+		var d_any := INF
+		var y_max := -INF
+		for k in pts.size():
+			d_any = minf(d_any, pts[k].distance_to(centre_xz))
+			y_max = maxf(y_max, TerrainSurfaceQuery.ground_height_at(main, pts[k].x, pts[k].y))
+		offer.append("%s '%s' %d pts, nearest %.0f m, highest vertex %+.1f m vs the turbine" % [
+			str(f.get("id", "")), str(f.get("name", "")), pts.size(), d_any, y_max - centre_y])
+		for k in pts.size():
+			var dk := pts[k].distance_to(centre_xz)
+			if dk < d1:
+				d1 = dk
+				i1 = k
+		if i1 < 1:
+			continue
+		var y1 := TerrainSurfaceQuery.ground_height_at(main, pts[i1].x, pts[i1].y)
+		# Either side of the exit: an OSM way may be digitised mouth-first
+		# (Lake Creek here climbs 112 m along its point order), so the head
+		# vertex can sit at a HIGHER index than the exit. The reach is sliced
+		# and ordered head → exit below.
+		for k in pts.size():
+			if k == i1 or pts[k].distance_to(centre_xz) > 600.0:
+				continue
+			var yk := TerrainSurfaceQuery.ground_height_at(main, pts[k].x, pts[k].y)
+			var drop := yk - maxf(y1, centre_y)
+			if drop > best_drop:
+				best_drop = drop
+				best = f
+				best_i0 = k
+				best_i1 = i1
 	if best.is_empty():
-		print("PlaytestHarness: penstock verify — no mapped stream on this map, stream step skipped")
+		print("PlaytestHarness: penstock verify — no mapped stream with head above the turbine within reach (exit ≤ 300 m, head ≤ 600 m), stream step skipped. Streams on the map: %s" % str(offer))
 		return fails
 	var fid := str(best["id"])
-	var fpts: PackedVector2Array = best["points"]
+	var all_pts: PackedVector2Array = best["points"]
+	var lo := mini(best_i0, best_i1)
+	var hi := maxi(best_i0, best_i1)
+	var fpts := all_pts.slice(lo, hi + 1)
+	if best_i0 > best_i1:
+		fpts.reverse()
+	print("PlaytestHarness: penstock verify — tapping %s '%s' vertices %d → %d of %d (%.1f m of drop, %d points%s)" % [
+		fid, str(best.get("name", "")), best_i0, best_i1, all_pts.size(), best_drop, fpts.size(),
+		", the way's points run uphill" if best_i0 > best_i1 else ""])
 	var water_file := str(WaterFeatureLayer.save_path_for_map(float(loader.get("_lat")), float(loader.get("_lon"))))
 	var snap := _snapshot_files([water_file])
-	# Water side (what the tool does first): every span of the reach → penstock.
-	var n_spans := fpts.size() - 1
+	# Water side (what the tool does first): every span of the REACH → penstock.
 	wn.call("checkpoint")
 	var nid := fid
-	for i in n_spans:
+	for i in range(lo, hi):
 		nid = str(wn.call("set_span_mode", nid, i, WaterFeatureLayer.MODE_PENSTOCK))
 	wn.call("commit")
 	await get_tree().create_timer(0.3).timeout
 	var f_after: Dictionary = wn.call("feature", nid)
 	var all_pen := not f_after.is_empty()
-	for m in f_after.get("modes", []):
-		all_pen = all_pen and str(m) == WaterFeatureLayer.MODE_PENSTOCK
-	fails += _pen_check("stream %s: every span now mode penstock" % nid, all_pen)
+	var modes_after: Array = f_after.get("modes", [])
+	for i in range(lo, hi):
+		all_pen = all_pen and i < modes_after.size() and str(modes_after[i]) == WaterFeatureLayer.MODE_PENSTOCK
+	fails += _pen_check("stream %s: every span of the reach now mode penstock" % nid, all_pen)
 	# Graph side.
 	var conn_id := str(sgv.call("create_penstock_from_stream", nid,
 			str(best.get("name", "")), fpts, turbine_id, {}))
@@ -10605,10 +10669,19 @@ func _penstock_stream_and_click_checks(sgv: Node, model: Variant, main: Node,
 				var s_stream: Dictionary = sgv.call("resolve_hydro_source_at", v1, 8.0)
 				fails += _pen_check("a point on the creek resolves as a STREAM source (%s)" % str(s_stream.get("kind", "")),
 						str(s_stream.get("kind", "")) == "stream" and str(s_stream.get("feature_id", "")) == nid)
+				# A point AWAY from every stream: walk outward from the creek
+				# until the stream pick (which reaches to each channel's own
+				# banks) finds nothing — on this world a fixed 64 m offset
+				# landed within another reach of the same meandering creek.
 				var far := v1 + Vector2(45.0, 45.0)
+				for k in range(1, 9):
+					var cand := v1 + Vector2(45.0, 45.0) * float(k)
+					if not bool((loader.call("pick_stream_at_world", cand.x, cand.y) as Dictionary).get("valid", false)):
+						far = cand
+						break
 				var s_far: Dictionary = sgv.call("resolve_hydro_source_at", far, 8.0)
-				print("PlaytestHarness: penstock verify — resolver: creek → %s '%s'; 64 m off → %s" % [
-					str(s_stream.get("kind", "")), str(s_stream.get("label", "")), str(s_far.get("kind", ""))])
+				print("PlaytestHarness: penstock verify — resolver: creek → %s '%s'; %.0f m off → %s" % [
+					str(s_stream.get("kind", "")), str(s_stream.get("label", "")), far.distance_to(v1), str(s_far.get("kind", ""))])
 				fails += _pen_check("a point off the creek resolves as bare ground / a pond",
 						str(s_far.get("kind", "")) in ["spring", "pond", "pond_unadded"])
 				if str(s_far.get("kind", "")) == "spring":
