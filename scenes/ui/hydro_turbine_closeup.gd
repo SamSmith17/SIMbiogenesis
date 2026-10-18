@@ -1332,11 +1332,20 @@ func _update_siphon_water(delta: float, flowing: bool, q_lps: float) -> void:
 		riser_top = Vector3(rcn.x, rb.end.y, rcn.z)
 		riser_bot = Vector3(rcn.x, rb.position.y, rcn.z)
 		riser_r = maxf(rb.size.x, rb.size.z) * 0.5
-	# The dip tube hangs from the intake end; the draft tube leaves under the
-	# riser. Both clamped so the studio stays framed.
-	var mouth := leg_a + Vector3.DOWN * minf(dip_len, 1.1)
+	# The dip tube hangs from the 90° elbow's open end at the far end of the
+	# leg (the same SiphonGeometry measurement the world's SiphonDipTube
+	# makes), falling back to the leg's intake end on a model with no elbow;
+	# the draft tube leaves under the riser. Both clamped so the studio stays
+	# framed.
+	var elbow := SiphonGeometry.elbow_outlet(_model_root, _housing_meshes, axis, rc) 			if _model_root != null else {}
+	var dip_top := leg_a + Vector3.DOWN * (leg_r * 0.2)
+	var elbow_corner := Vector3.INF
+	if not elbow.is_empty():
+		dip_top = elbow["pos"] as Vector3
+		elbow_corner = Vector3(dip_top.x, leg_a.y, dip_top.z)
+	var mouth := dip_top + Vector3.DOWN * minf(dip_len, 1.1)
 	var draft_end := riser_bot + Vector3.DOWN * 0.9
-	_s_seat_tube(_s_dip, leg_a + Vector3.DOWN * (leg_r * 0.2), mouth, dip_d * 0.5)
+	_s_seat_tube(_s_dip, dip_top + Vector3.UP * 0.01, mouth, dip_d * 0.5)
 	_s_seat_tube(_s_draft, riser_bot, draft_end, draft_d * 0.5)
 	# Water: primed = every pipe full; otherwise the column stands at the
 	# pond's level inside the dip tube and leg (what a dry siphon looks like).
@@ -1347,7 +1356,7 @@ func _update_siphon_water(delta: float, flowing: bool, q_lps: float) -> void:
 	else:
 		var wl := level_rel if not is_nan(level_rel) else mouth.y
 		# The dip tube fills to the pond level; the leg only if the level reaches it.
-		var top_y := clampf(wl, mouth.y, leg_a.y)
+		var top_y := clampf(wl, mouth.y, dip_top.y)
 		if top_y > mouth.y + 0.005:
 			_s_seat_tube(_s_column, Vector3(mouth.x, mouth.y, mouth.z), Vector3(mouth.x, top_y, mouth.z), dip_d * 0.46)
 		else:
@@ -1364,9 +1373,12 @@ func _update_siphon_water(delta: float, flowing: bool, q_lps: float) -> void:
 		wm.albedo_color = Color(0.25, 0.55, 0.90, 0.35 if primed else 0.28)
 	else:
 		_s_waterline.visible = false
-	# Flow: beads riding mouth → up the dip tube → along the leg through the
-	# runner → up the riser (the crest) → down the draft tube.
-	_s_path = PackedVector3Array([mouth, leg_a + Vector3.DOWN * (leg_r * 0.2), leg_a, leg_b, riser_top, riser_top, riser_bot, draft_end])
+	# Flow: beads riding mouth → up the dip tube → round the elbow → along the
+	# leg through the runner → up the riser (the crest) → down the draft tube.
+	if is_finite(elbow_corner.x):
+		_s_path = PackedVector3Array([mouth, dip_top, elbow_corner, leg_a, leg_b, riser_top, riser_top, riser_bot, draft_end])
+	else:
+		_s_path = PackedVector3Array([mouth, dip_top, leg_a, leg_b, riser_top, riser_top, riser_bot, draft_end])
 	var v := clampf(float(_state.get("v_draft_ms", 0.0)), 0.0, 12.0)
 	var speed := minf(v * 0.25, S_FLOW_MAX_MPS)
 	if flowing and speed > 1e-3:

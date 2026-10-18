@@ -1,20 +1,25 @@
 class_name SiphonDipTube
 extends Node3D
 
-## The siphon turbine's DIP TUBE, in the world: ONE length of 6″ PVC dropping
-## STRAIGHT DOWN from the machine's intake fitting into the pond, as long as
-## the graph item's `dip_tube_length_m` says. Its mouth is the siphon's break
-## level, so it is the one part of the machine the player tunes by eye
-## against the water.
+## The siphon turbine's DIP TUBE, in the world: ONE straight length of 6″
+## PVC pushed into the open side of the 90° ELBOW on the machine's intake and
+## hanging STRAIGHT DOWN into the pond. Its TOP never moves — it is the
+## elbow's open end (`SiphonGeometry.dip_anchor_for_model_root`, the same
+## measurement the Lab's close-up makes) — and its MOUTH is the siphon's
+## break level (`SiphonHydraulics.resolve_siphon_levels`: the turbine's
+## elevation minus `dip_tube_length_m`), so changing the length only moves
+## the bottom, and what the player sees against the water IS the level the
+## physics breaks at. The straight pipe's drawn length therefore differs from
+## the spec by the elbow's drop under the turbine's datum (~0.18 m on the
+## shipped GLB); a length too short to reach past the elbow draws a stub.
 ##
 ## HIDDEN BY DEFAULT (`specs.show_dip_tube`, the prop editor's and the Lab's
 ## "Show dip tube" toggle): the real tube is under water and the model does
-## not carry one, so a permanently drawn tube read as clutter. When shown it
-## hangs off the measured 6″ FITTING (`SiphonGeometry.intake_fitting`: the
-## open end of the runner's leg, the same measurement the Lab's close-up
-## makes), never off the `res_in_0` connection PORT — the port is where the
-## 3D wire plugs in and the first cut hung an elbowed tube off it, which put
-## the tube beside the machine instead of under its inlet.
+## not carry one, so a permanently drawn tube read as clutter. Two wrong
+## anchors preceded this one: the `res_in_0` connection PORT (the port is
+## where the 3D wire plugs in — the tube stood beside the machine) and the
+## leg's end NEAREST the runner (`intake_fitting` — under the riser, 0.7 m
+## from the elbow, still the fallback for a model with no elbow).
 ##
 ## Attached by PlacedPropRuntime next to SiphonTurbineSpin for siphon-kind
 ## turbines. Polls the graph item on a 0.5 s cadence and rebuilds only when
@@ -37,6 +42,8 @@ var _last_key := ""
 var _last_top_w: Vector3 = Vector3.INF
 var _last_mouth_w: Vector3 = Vector3.INF
 var _last_len: float = 0.0
+## The physics break level (world Y) the mouth was drawn at.
+var _last_break_y: float = NAN
 var _shown: bool = false
 
 
@@ -83,13 +90,14 @@ func _model_root() -> Node3D:
 	return mr if mr != null else (p as Node3D)
 
 
-## The intake fitting in WORLD space, measured off the model (model-root
-## frame carried through the root's global transform). Empty = no leg found.
+## The dip anchor in WORLD space — the elbow's open end (`elbow` true), else
+## the leg's intake fitting — measured off the model (model-root frame
+## carried through the root's global transform). Empty = nothing measurable.
 func fitting_world() -> Dictionary:
 	var root := _model_root()
 	if root == null:
 		return {}
-	var fit := SiphonGeometry.fitting_for_model_root(root, model_id, runner_node_name)
+	var fit := SiphonGeometry.dip_anchor_for_model_root(root, model_id, runner_node_name)
 	if fit.is_empty():
 		return {}
 	var gt := root.global_transform
@@ -97,6 +105,7 @@ func fitting_world() -> Dictionary:
 		"pos": gt * (fit["pos"] as Vector3),
 		"dir": (gt.basis * (fit["dir"] as Vector3)).normalized(),
 		"radius": float(fit.get("radius", 0.076)) * gt.basis.get_scale().x,
+		"elbow": bool(fit.get("elbow", false)),
 	}
 
 
@@ -107,6 +116,7 @@ func debug_summary() -> Dictionary:
 		"top": _last_top_w,
 		"mouth": _last_mouth_w,
 		"length_m": _last_len,
+		"break_y": _last_break_y,
 		"fitting": fitting_world(),
 	}
 
@@ -154,15 +164,21 @@ func _refresh() -> void:
 			return
 		fit = {"pos": root.global_position, "dir": Vector3.DOWN, "radius": bore * 0.5}
 	var top_w: Vector3 = fit["pos"]
-	var key := "%.3f|%.3f|%.2f|%.2f|%.2f" % [dip_len, bore, top_w.x, top_w.y, top_w.z]
+	# The mouth sits at the PHYSICS break level — the turbine's datum minus
+	# the spec length — so the drawn tube and the level the siphon breaks at
+	# are one thing; the top stays on the elbow whatever the length. Without
+	# a datum (no elevation on the item) the spec length hangs from the top.
+	var break_y := break_m if not is_nan(break_m) else top_w.y - dip_len
+	var drawn_len := maxf(top_w.y - break_y, 0.05)
+	var key := "%.3f|%.3f|%.2f|%.2f|%.2f|%.3f" % [dip_len, bore, top_w.x, top_w.y, top_w.z, drawn_len]
 	if key == _last_key and _shown:
 		return
 	_last_key = key
 	_ensure_meshes()
 	var inv := global_transform.affine_inverse()
-	# ONE vertical cylinder from the fitting straight down. The tube starts a
-	# hair inside the fitting so the joint reads as plumbing, not a gap.
-	var mouth_w := top_w + Vector3.DOWN * dip_len
+	# ONE vertical cylinder from the elbow's open end straight down. The tube
+	# starts a hair inside the fitting so the joint reads as plumbing, not a gap.
+	var mouth_w := top_w + Vector3.DOWN * drawn_len
 	var top_l := inv * (top_w + Vector3.UP * 0.01)
 	var mouth_l := inv * mouth_w
 	_place_cylinder(_tube, top_l, mouth_l, bore)
@@ -173,7 +189,8 @@ func _refresh() -> void:
 	_shown = true
 	_last_top_w = top_w
 	_last_mouth_w = mouth_w
-	_last_len = dip_len
+	_last_len = drawn_len
+	_last_break_y = break_y
 
 
 func _ensure_meshes() -> void:

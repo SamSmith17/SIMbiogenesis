@@ -22,7 +22,7 @@ check of the real user dir.
 | ambient | mtvernon | PASS | 56 |
 | foodforest | mtvernon | PASS | 62 |
 | graph | mtvernon | PASS | 63 |
-| siphon | mtvernon | FAIL 1 (2026-10-18, world-driven physics check, see Open items; the Lab checks pass) | 87 |
+| siphon | mtvernon | PASS (2026-10-18: dip tube on the 90° elbow, cavitation check on a steep draft) | 87 |
 | stars | mtvernon | PASS | 56 |
 | dawn | mtvernon | PASS | 71 |
 | weather | mtvernon | PASS | 76 |
@@ -278,13 +278,18 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
   cap present); `siphon`'s Hydro Lab checks (the embed shares the
   container: stat deck, dip tube, state ring, close-up) all pass. No "Can't
   change the size" line in any run since.
-- **`siphon` on Mount Vernon FAILS one physics check (2026-10-18, world-
-  driven, pre-existing):** "a 20 m exit drop cavitates (useful draft
-  20.0 m, 0.0 m wasted)" — identical on the committed tree without the
-  lens change, so it is the saved siphon's geometry against
-  `SiphonTurbinePhysics` (the 20 m drop no longer reaches inception at
-  this site's atmospheric head / dip), not code touched here. The matrix
-  row's PASS dates from the 2026-10-12 world. Not investigated.
+- **`siphon` on Mount Vernon: RESOLVED 2026-10-18 (the check's premise +
+  the dip tube's anchor).** "A 20 m exit drop cavitates" failed because the
+  saved siphon runs 503 m of 8″ pipe to its outlet: a 20 m deeper exit is
+  17 m of friction and the runner outlet never reaches suction — the
+  physics is right (suction = drop − friction). The hypothetical now takes
+  the exit down a pipe no longer than twice the drop (cavitates, 1.3 m
+  wasted) and a second check pins that the world's long pipe does not. With
+  it, the dip tube hangs from the 90° ELBOW's open end
+  (`SiphonGeometry.elbow_outlet`, found by shape; `Geom3D_22` on the GLB)
+  instead of the leg's end under the riser, its mouth AT the physics break
+  level; the capture asserts the anchor is the elbow, facing down, and that
+  +0.5 m of tube leaves the top in place and drops the mouth 0.5 m. PASS.
 - **`penstock` on Mount Vernon: RESOLVED 2026-10-18 (world data + a
   capture that leaned on it).** The "turbine never adopts its routed run"
   reds were the saved world's CLOCK: Mount Vernon is saved paused

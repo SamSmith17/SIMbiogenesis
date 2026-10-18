@@ -7015,9 +7015,13 @@ Six player complaints after round 2, each with the trap it closed:
   the siphon verify); the world pins' heads take the same colour.
 - **The dip tube** is hidden by default (`show_dip_tube`, prop editor Model
   section + the Lab's Siphon section) and, shown, is ONE vertical cylinder
-  straight down from the GLB's measured 6″ intake fitting
-  (`core/conduits/siphon_geometry.gd`, shared with the close-up's legs) —
-  never the connection port, which sits 0.57 m away on this model.
+  whose TOP is the open end of the 6″ 90° PVC ELBOW on the intake side
+  (`SiphonGeometry.elbow_outlet` / `dip_anchor_for_model_root`, shared with
+  the close-up; on the shipped GLB the elbow is `Geom3D_22` at the far end
+  of the leg, turned down) and whose MOUTH is the physics break level
+  (turbine datum − `dip_tube_length_m`), so the length only moves the
+  bottom (2026-10-18; the first cut hung it off the leg's end under the
+  riser, 0.7 m from the elbow, and before that off the connection port).
 - **Buried pipes read as buried** (`core/conduits/conduit_buried.gdshader`,
   `ConduitManager._apply_burial_cue`): a physical run under the ground
   anywhere gets per-vertex burial in UV2.x, fades / desaturates / dashes

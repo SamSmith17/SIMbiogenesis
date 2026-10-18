@@ -843,4 +843,40 @@ func _test_siphon_geometry() -> void:
 			not fit3.is_empty() and (fit3["pos"] as Vector3).is_equal_approx(Vector3(-1.0, 0.0, 0.0)))
 	var nothing := SiphonGeometry.fitting_for_model_root(root, "", "nonexistent")
 	_check("geometry: an unresolvable runner still measures (nearest leg to the origin)", not nothing.is_empty())
+	# No elbow on this machine yet: the dip anchor is the leg's fitting.
+	runner.position = Vector3(1.5, 0.0, 0.0)
+	var anchor0 := SiphonGeometry.dip_anchor_for_model_root(root, "", "Node15")
+	_check("geometry: with no elbow the dip anchor is the leg's intake fitting",
+			not anchor0.is_empty() and not bool(anchor0.get("elbow", true))
+			and (anchor0["pos"] as Vector3).is_equal_approx(Vector3(1.0, 0.0, 0.0)), str(anchor0))
+	# A 90° ELBOW on the intake side: a box with equal extents along the leg
+	# and vertically (its two legs, 1.4 each in half-scale units) and the
+	# pipe's OD across (0.6), sitting on the leg's line past the runner's end
+	# and reaching further DOWN than up — the open end faces down, its
+	# centreline one bore-radius in from the elbow's far face.
+	var elbow: MeshInstance3D = mk.call("elbow", Vector3(1.4, 1.4, 0.6), Vector3(2.7, -0.4, 0.0))
+	meshes = SiphonGeometry.housing_meshes(root, runner)
+	var eo := SiphonGeometry.elbow_outlet(root, meshes, axis, rc)
+	_check("geometry: the elbow is found", not eo.is_empty())
+	if not eo.is_empty():
+		# Model-root units (half the instance's): far face x = (2.7 + 0.7) / 2
+		# = 1.7, bore radius 0.15 → axis x 1.55; bottom y = (-0.4 - 0.7) / 2.
+		_check("geometry: the elbow's open end is its bottom face on the far leg's axis",
+				(eo["pos"] as Vector3).is_equal_approx(Vector3(1.55, -0.55, 0.0)), str(eo["pos"]))
+		_check("geometry: …facing DOWN", (eo["dir"] as Vector3).is_equal_approx(Vector3.DOWN))
+		_check("geometry: …with the pipe's bore", absf(float(eo["radius"]) - 0.15) < 1e-4, str(eo["radius"]))
+	var anchor1 := SiphonGeometry.dip_anchor_for_model_root(root, "", "Node15")
+	_check("geometry: the dip anchor is the elbow's open end once there is one",
+			not anchor1.is_empty() and bool(anchor1.get("elbow", false))
+			and (anchor1["pos"] as Vector3).is_equal_approx(Vector3(1.55, -0.55, 0.0)), str(anchor1))
+	# An elbow turned UP (reaching further above the leg than below) opens up.
+	elbow.position = Vector3(2.7, 0.4, 0.0)
+	var eo_up := SiphonGeometry.elbow_outlet(root, meshes, axis, rc)
+	_check("geometry: an elbow reaching further up opens UP (top face)",
+			not eo_up.is_empty() and (eo_up["dir"] as Vector3).is_equal_approx(Vector3.UP)
+			and (eo_up["pos"] as Vector3).is_equal_approx(Vector3(1.55, 0.55, 0.0)), str(eo_up.get("pos", "")))
+	# The riser (a tall pipe, not equal-legged) is never mistaken for it.
+	elbow.free()
+	meshes = SiphonGeometry.housing_meshes(root, runner)
+	_check("geometry: no elbow without an equal-legged box on the leg", SiphonGeometry.elbow_outlet(root, meshes, axis, rc).is_empty())
 	root.free()

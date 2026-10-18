@@ -15492,15 +15492,38 @@ func _verify_siphon_turbine(sgv: Node, model: Variant, siphon_id: String,
 	fails += _siphon_check("suction reported under its limit (%.1f / %.1f m)" % [
 			float(r0.get("suction_m", 0.0)), float(r0.get("suction_max_m", 0.0))],
 			r0.has("suction_m") and float(r0.get("suction_m", 0.0)) < float(r0.get("suction_max_m", 0.0)))
+	# The cavitation lesson needs a STEEP draft: suction at the runner outlet
+	# is the exit drop less the draft pipe's friction, and on a long gentle
+	# run the friction wins — the saved Mount Vernon siphon runs 503 m of 8″
+	# pipe to its outlet (3.3 m of drop), where a 20 m deeper exit is still
+	# 17 m of friction and no cavitation, correctly. So the hypothetical
+	# takes the exit 20 m down a pipe no longer than twice that drop (the
+	# world's own length when it is already short), the way "run the draft
+	# pipe lower and watch" means it. Both the deep and the useful-draft
+	# evaluations use the same pipe so their powers compare.
+	var deep_len := minf(float(eval_specs.get("barrel_length_m", 20.0)), 40.0)
 	var deep: Dictionary = eval_specs.duplicate(true)
 	deep["outlet_invert_m"] = mod_eval - 20.0
+	deep["barrel_length_m"] = deep_len
 	var rd: Dictionary = HydroReach.evaluate_specs(level_eval, deep)
 	var useful: Dictionary = eval_specs.duplicate(true)
 	useful["outlet_invert_m"] = mod_eval - float(rd.get("useful_draft_m", 7.0))
+	useful["barrel_length_m"] = deep_len
 	var ru: Dictionary = HydroReach.evaluate_specs(level_eval, useful)
-	fails += _siphon_check("a 20 m exit drop cavitates (useful draft %.1f m, %.1f m wasted)" % [
-			float(rd.get("useful_draft_m", 0.0)), float(rd.get("draft_excess_m", 0.0))],
+	fails += _siphon_check("a 20 m exit drop down a %.0f m draft pipe cavitates (useful draft %.1f m, %.1f m wasted)" % [
+			deep_len, float(rd.get("useful_draft_m", 0.0)), float(rd.get("draft_excess_m", 0.0))],
 			bool(rd.get("cavitating", false)) and float(rd.get("draft_excess_m", 0.0)) > 1.0)
+	# And the world's own run, as saved: a long pipe's friction protects the
+	# runner — the same 20 m drop must NOT cavitate once the pipe is over
+	# ten times the drop (friction ∝ length, suction = drop − friction).
+	var world_len := float(eval_specs.get("barrel_length_m", 20.0))
+	if world_len > 200.0:
+		var deep_world: Dictionary = eval_specs.duplicate(true)
+		deep_world["outlet_invert_m"] = mod_eval - 20.0
+		var rw: Dictionary = HydroReach.evaluate_specs(level_eval, deep_world)
+		fails += _siphon_check("…and the same drop down the world's %.0f m pipe does not (friction %.1f m of the 20 m)" % [
+				world_len, float(rw.get("h_loss_draft_m", 0.0))],
+				not bool(rw.get("cavitating", false)) and float(rw.get("h_loss_draft_m", 0.0)) > 5.0)
 	fails += _siphon_check("…and makes no more power than the useful draft (%.0f vs %.0f W)" % [
 			float(rd.get("power_w", 0.0)), float(ru.get("power_w", 0.0))],
 			float(rd.get("power_w", 0.0)) <= float(ru.get("power_w", 0.0)) * 1.03 + 1.0)
@@ -15529,8 +15552,10 @@ func _verify_siphon_turbine(sgv: Node, model: Variant, siphon_id: String,
 		var tube: Node = prop.get_node_or_null("SiphonDipTube") if prop != null else null
 		fails += _siphon_check("the placed turbine carries a SiphonDipTube", tube != null)
 		if tube != null:
-			# Hidden by default; shown on the toggle; ONE vertical tube from the
-			# measured 6″ fitting (not the connection port).
+			# Hidden by default; shown on the toggle; ONE vertical tube whose
+			# TOP is the 90° elbow's open end (the dip anchor — not the
+			# connection port, not the leg's end under the riser) and whose
+			# MOUTH is the physics break level.
 			var sp_saved: Dictionary = (model.call("get_item", siphon_id) as Dictionary).get("specs", {}) as Dictionary
 			var show_saved := bool(sp_saved.get("show_dip_tube", false))
 			var sp0 := sp_saved.duplicate(true)
@@ -15549,12 +15574,29 @@ func _verify_siphon_turbine(sgv: Node, model: Variant, siphon_id: String,
 			var mouth: Vector3 = ds1.get("mouth", Vector3.INF)
 			var fit_pos: Vector3 = fit.get("pos", Vector3.INF)
 			fails += _siphon_check("…and SHOWN after the toggle (top %s)" % str(top), bool(ds1.get("shown", false)) and is_finite(top.x))
-			fails += _siphon_check("the tube hangs off the measured intake fitting %s (%.3f m away)" % [
+			fails += _siphon_check("the tube's top sits on the measured dip anchor %s (%.3f m away)" % [
 					str(fit_pos), top.distance_to(fit_pos) if is_finite(fit_pos.x) and is_finite(top.x) else NAN],
 					is_finite(fit_pos.x) and is_finite(top.x) and top.distance_to(fit_pos) < 0.05)
+			fails += _siphon_check("…which is the 90° ELBOW's open end on this model, facing down",
+					bool(fit.get("elbow", false)) and (fit.get("dir", Vector3.ZERO) as Vector3).is_equal_approx(Vector3.DOWN))
 			fails += _siphon_check("…straight DOWN (%.2f m, mouth under the top within 1 cm in plan)" % float(ds1.get("length_m", 0.0)),
 					is_finite(mouth.x) and Vector2(mouth.x, mouth.z).distance_to(Vector2(top.x, top.z)) < 0.01
 					and top.y - mouth.y > 0.09)
+			var lv1 := SiphonHydraulics.resolve_siphon_levels(sp1, float((model.call("get_item", siphon_id) as Dictionary).get("elevation_m", NAN)))
+			var brk1 := float(lv1.get("siphon_break_m", NAN))
+			fails += _siphon_check("the mouth is AT the physics break level (%.2f vs %.2f m)" % [mouth.y, brk1],
+					is_finite(brk1) and absf(mouth.y - brk1) < 0.02)
+			# Lengthen the tube: the top stays on the elbow, only the mouth drops.
+			var sp1b := sp1.duplicate(true)
+			sp1b["dip_tube_length_m"] = float(sp1.get("dip_tube_length_m", 1.5)) + 0.5
+			model.call("update_item", siphon_id, {"specs": sp1b})
+			await get_tree().create_timer(0.7).timeout
+			var ds2: Dictionary = tube.call("debug_summary")
+			var top2: Vector3 = ds2.get("top", Vector3.INF)
+			var mouth2: Vector3 = ds2.get("mouth", Vector3.INF)
+			fails += _siphon_check("+0.5 m of tube: the top did not move (%.3f m) and the mouth dropped 0.5 m (%.2f)" % [
+					top2.distance_to(top) if is_finite(top2.x) else NAN, (mouth.y - mouth2.y) if is_finite(mouth2.x) else NAN],
+					is_finite(top2.x) and top2.distance_to(top) < 0.005 and is_finite(mouth2.x) and absf((mouth.y - mouth2.y) - 0.5) < 0.02)
 			var binding := ConduitManager.resolve_port_binding(model.call("get_item", siphon_id), "res_in_0", main)
 			var port_pos: Vector3 = binding.get("pos", Vector3.INF)
 			if is_finite(port_pos.x):
