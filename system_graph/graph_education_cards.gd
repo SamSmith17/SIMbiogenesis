@@ -197,6 +197,20 @@ static func card_for_fault(reason: String, params: Dictionary = {}) -> Dictionar
 
 static func _card_for_fault_raw(reason: String, params: Dictionary = {}) -> Dictionary:
 	match reason:
+		GraphNodeState.REASON_CATCHMENT_DIRECT:
+			return {
+				"title": "A catchment cannot feed a turbine",
+				"body": ("A rain catchment is a RATE — so many litres an hour of runoff "
+						+ "off a roof or a hillside — with no water surface of its own. "
+						+ "A turbine needs HEAD: a stored body of water standing above "
+						+ "the runner (a pond, a tank, a stream intake up the hill) so "
+						+ "there is a level to draw down and a column to prime.
+
+"
+						+ "Wire the catchment into Pond storage (or a tank), then wire "
+						+ "that into the turbine's water in. The pond's level, not the "
+						+ "rain rate, is what drives the power."),
+			}
 		GraphNodeState.REASON_SHORT_CIRCUIT:
 			return {
 				"title": "Short circuit!",

@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_test_allow_negative_deficit_supply()
 	_test_rain_catchment_pbi_gate()
 	_test_rain_catchment_full_tank_stops()
+	_test_catchment_direct_to_turbine()
 	_test_pond_budget_stage_rain_spill()
 	_test_site_balance()
 	_test_pv_array_and_projection()
@@ -2555,6 +2556,53 @@ func _test_penstock_wins_inlet_and_no_phantom_power() -> void:
 		if str((od_v2 as Dictionary).get("kind", "")) == "dc_electricity":
 			dc_rate = float((od_v2 as Dictionary).get("rate", 0.0))
 	_check("its DC output port carries nothing either", dc_rate < 1e-6, "dc=%.4f" % dc_rate)
+
+
+## A rain catchment wired straight into a siphon's water-in (Push 2 #9): the
+## turbine must say WHY it makes nothing — BLOCKED with its own reason code,
+## which the chip names and an education card explains — rather than idling
+## with a free-text reason nothing surfaced.
+func _test_catchment_direct_to_turbine() -> void:
+	var model = GraphModelScript.new()
+	model.add_item({
+		"id": "cat", "type": "catchment", "x": -200.0, "y": 0.0,
+		"width": 90.0, "height": 100.0,
+		"specs": {"name": "Roof", "catchment_kind": "rain", "area_m2": 50.0,
+			"outputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}]},
+	})
+	model.add_item({
+		"id": "sip", "type": "processor", "x": 0.0, "y": 0.0,
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Siphon", "role": "siphon_hydro", "turbine_kind": "siphon",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+		},
+	})
+	model.add_connection({
+		"polarity": "resource", "resource_type": "water",
+		"source_item_id": "cat", "source_handle_id": "output",
+		"target_item_id": "sip", "target_handle_id": "res_in_0",
+	})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var sp: Dictionary = (model.get_item("sip").get("specs", {}) as Dictionary)
+	_check("catchment → turbine: BLOCKED", str(sp.get("node_state", "")) == GraphNodeState.BLOCKED,
+			str(sp.get("node_state", "")))
+	_check("catchment → turbine: its own reason code",
+			str(sp.get("node_state_reason", "")) == GraphNodeState.REASON_CATCHMENT_DIRECT,
+			str(sp.get("node_state_reason", "")))
+	_check("catchment → turbine: makes nothing", float(sp.get("current_output_kw", 0.0)) < 1e-9)
+	_check("catchment → turbine: the chip names it",
+			GraphNodeState.chip_text(GraphNodeState.BLOCKED, GraphNodeState.REASON_CATCHMENT_DIRECT, ["water"]) == "Needs a pond")
+	var card: Dictionary = GraphEducationCards.card_for_fault(GraphNodeState.REASON_CATCHMENT_DIRECT)
+	_check("catchment → turbine: an education card explains it",
+			not card.is_empty() and str(card.get("body", "")).contains("Pond storage"))
 
 
 func _test_spec_driven_hydro() -> void:

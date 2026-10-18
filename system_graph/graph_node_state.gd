@@ -35,6 +35,10 @@ const REASON_REVERSE_POLARITY := "reverse_polarity"
 ## Advisory only — the system runs, just badly (e.g. a bank paralleled where
 ## series would double delivery). Never destroys anything.
 const REASON_SUBOPTIMAL_BANK := "suboptimal_bank"
+## A rain catchment wired straight into a turbine's water-in: a catchment is
+## a RATE (L/h of runoff) with no water surface, so the turbine has no head
+## and no prime to compute and sits idle. The water has to be stored first.
+const REASON_CATCHMENT_DIRECT := "catchment_direct"
 
 const C_RUNNING := Color(0.27, 0.90, 0.42)
 const C_ALERT := Color(0.92, 0.30, 0.28)
@@ -130,6 +134,8 @@ static func chip_text(state: String, reason: String = "", kinds: Array = []) -> 
 					return "%s full" % kind_name if not kind_name.is_empty() else "Output full"
 				REASON_OUTPUT_UNWIRED:
 					return "Unwired"
+				REASON_CATCHMENT_DIRECT:
+					return "Needs a pond"
 				_:
 					return "Blocked"
 	return ""

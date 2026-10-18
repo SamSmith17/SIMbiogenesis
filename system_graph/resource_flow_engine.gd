@@ -1329,10 +1329,15 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 			# with no water level for the head/prime math. The player has to store
 			# the runoff in a pond first. Give that specific guidance instead of
 			# the generic "wire pond storage" when a catchment is what's wired.
-			var idle_reason := "Wire pond storage → water in"
 			if _siphon_water_in_is_catchment(proc_id):
-				idle_reason = "Catchment can't feed a turbine directly — wire Catchment → Pond storage → turbine"
-			_write_node_state(proc_id, specs, GraphNodeState.IDLE, idle_reason, [])
+				# A real wiring mistake, not an unprovisioned node: BLOCKED with
+				# its own reason code, so the chip, the inspector and the
+				# education card (GraphEducationCards.card_for_fault) can name
+				# it. It used to idle with a free-text reason nobody surfaced.
+				_write_node_state(proc_id, specs, GraphNodeState.BLOCKED,
+						GraphNodeState.REASON_CATCHMENT_DIRECT, ["water"])
+			else:
+				_write_node_state(proc_id, specs, GraphNodeState.IDLE, "Wire pond storage → water in", [])
 			if was_q > 1e-6 or was_kw > 1e-6 or was_primed \
 					or str(specs.get("node_state", "")) != str(
 						(item.get("specs", {}) as Dictionary).get("node_state", "")):
