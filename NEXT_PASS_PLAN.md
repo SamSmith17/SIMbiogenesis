@@ -103,13 +103,15 @@ topology cached on (struct_rev, user_rev) — 7 ms a call on Walton — and the
 nav grid reusing its baked heights across prop / camp / space changes
 (`NpcNavGrid.begin_bake_reusing`, selftested). NOT done: #1 stream tracers
 (0 ms in first person — flow view only), #6 conduit tick (0.25 ms), #14 the
-small items, #15 the SoI stretch cap — CONFIRMED real by the engine itself
-(the graphtools run logs "Can't change the size of a SubViewport with a
-SubViewportContainer parent that has stretch enabled" from
-graph_soi_preview_service.gd:1910): every lens renders at the container's
-full size and MAX_VIEWPORT_PX / MAX_SECTION_VIEWPORT_PX are dead. Fix with
-`stretch_shrink` (integer) or `stretch = false` + a TextureRect; measure
-with gpu_toggle_bench's method on an open Globe.
+small items. #15 the SoI stretch cap: DONE 2026-10-18 — confirmed real by
+the engine itself (the graphtools run logged "Can't change the size of a
+SubViewport with a SubViewportContainer parent that has stretch enabled"
+from graph_soi_preview_service.gd:1910); the cap now drives
+`stretch_shrink` (`GraphSoiPreview.shrink_for`). Measured with
+`tools/bench/lens_gpu_bench.gd` (an open Site Plan / Elevation / Globe,
+gpu_toggle_bench's sampling): at 1080p the 1240×858 canvas is under both
+caps, so ÷1 and no change (Globe 9.9 ms a render); the cap bites above
+1280 / 2048 px, where ÷2 renders the Globe in 6.4 ms. See HARNESS_MATRIX.
 
 Ranked by expected ms saved per line changed. Each is a change-gate or a
 cache; none changes what the sim computes, so the flow-step hash is the pin.
@@ -130,7 +132,7 @@ cache; none changes what the sim computes, so the flow-step hash is the pin.
 | 12 | `scenes/ui/solar_ui.gd:3862, 2090–2107, 3897–3910` | `get_nodes_in_group("energy_sources")` at 10 Hz; two long-path lookups and a root-children walk when TimeUI is absent (no negative cache); theme overrides on a hidden panel | Cache the group list (invalidate on tree change), remember TimeUI is missing, gate display writes on visibility | `energy_balance_probe`, `--capture=sitebalance` |
 | 13 | `system_graph_view.gd:15866, 15906, 18033`; `resource_flow_engine.gd:3742` | `duplicate(true)` BEFORE the change gate at 10 Hz with the graph open; `_processor_has_power` deep-copies specs to read one key | Compare first, duplicate only when writing; shallow copy in `_processor_has_power` after confirming `migrate_processor_specs` only touches top-level keys | `flow_step_bench` hash unchanged; `resource_flow_selftest` |
 | 14 | `scenes/ui/fun_meter.gd:96, 136`; `core/population/peak_beacon.gd:157`; `vegetation/camp_light_pool.gd:104`; `graph_soi_preview_service.gd:1650` | A StyleBoxFlat allocated per draw; arrows redrawn with no beacons; settled lights rewritten; a layout-key string built per frame | Cache the stylebox and redraw only while the needle moves; redraw once on transition to empty; skip settled writes; compare raw values | festivalmode / lights captures |
-| 15 | `system_graph/graph_soi_preview_service.gd:1349 vs 1771–1894` | `_container.stretch = true` while `_viewport.size` is written by hand → `SubViewportContainer` resizes the viewport to the container every frame and `MAX_VIEWPORT_PX` / `MAX_SECTION_VIEWPORT_PX` are probably dead | MEASURE first (print `_viewport.size` on a 1920×1080 Globe); if confirmed, drive the cap through `stretch_shrink` or turn `stretch` off and position the texture rect | `site-review --review-sets=site,elevation,globe` (disc 0.00 px, cap PASS) |
+| 15 | `system_graph/graph_soi_preview_service.gd` `_sync_layout` | DONE 2026-10-18: `_container.stretch = true` while `_viewport.size` was written by hand — the engine refused every write, so the caps were dead | The cap drives `stretch_shrink` (`shrink_for`, integer divisor, aspect kept); `tools/bench/lens_gpu_bench.gd` measures it | `site-review --review-sets=site,elevation,globe,snowglobe` 15/15 (disc 0.00 px, cap PASS), `siphon`'s Lab checks pass (its one FAIL is a pre-existing physics check, see HARNESS_MATRIX), lens bench ÷1 at 1080p / Globe ÷2 9.9 → 6.4 ms |
 
 Also from the August perf tiers that were never built (measure with the F3
 HUD on Walton before choosing): distance-culled static prop colliders

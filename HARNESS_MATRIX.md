@@ -22,7 +22,7 @@ check of the real user dir.
 | ambient | mtvernon | PASS | 56 |
 | foodforest | mtvernon | PASS | 62 |
 | graph | mtvernon | PASS | 63 |
-| siphon | mtvernon | PASS | 115 |
+| siphon | mtvernon | FAIL 1 (2026-10-18, world-driven physics check, see Open items; the Lab checks pass) | 87 |
 | stars | mtvernon | PASS | 56 |
 | dawn | mtvernon | PASS | 71 |
 | weather | mtvernon | PASS | 76 |
@@ -63,7 +63,7 @@ check of the real user dir.
 | fabcrew | mtvernon | PASS (12 checks) | 74 |
 | both | mtvernon | PASS | 50 |
 | timeline (new 2026-10-14) | mtvernon | PASS (0.00 px drift over 236 samples, 720 + 1080) | 70 |
-| graphtools (new 2026-10-14) | mtvernon | PASS (29 checks: show-only filter, world drawer, handoff, Globe Connect with real clicks, full-screen globe orbit) | 65 |
+| graphtools (new 2026-10-14) | mtvernon | PASS (45 checks at 1920×1080, 2026-10-18: show-only filter, world drawer, handoff, Globe Connect with real clicks + run edit + Place it here, full-screen globe orbit) | 74 |
 | pvsnap (new 2026-10-14) | mtvernon | PASS (8 checks) | 51 |
 | conduits (new 2026-10-14) | mtvernon | PASS (13 checks: real-release plug, HUD = run length, live modal, tags, chain) | 52 |
 | modals (2026-10-14, strict, 720 + 1080) | mtvernon | PASS (every settings page + conduit_style + connection_ports) | 89 / 106 |
@@ -239,23 +239,52 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
 
 ## Open items (not fixed)
 
-- **`graphtools` on Mount Vernon FAILS the Globe Connect run (3 checks:
-  "clicking the other pin makes one connection", "the run is shown in 3D
-  with its bend locked", "the run is built and measured")** (2026-10-18).
-  The source pin and the ground bend register; the click on the target pin
-  adds no connection. Identical at HEAD 712d7ed, at cfbcf64 (before Push 2)
-  and with the Push 3 working tree, so it came with 646f533 or the world
-  as saved since; last green record 2026-10-14 (29 checks). First suspect:
-  the pair the probe picks (first two pins with compatible ports) is now a
-  pair the view refuses — e.g. a catchment into a turbine, BLOCKED since
-  db298fb — in which case the probe should skip refused pairs; else the
-  target-pin click path in `_handle_connect_tool_input`. Not investigated.
-- The same run logs `Can't change the size of a SubViewport with a
-  SubViewportContainer parent that has stretch enabled` from
-  `graph_soi_preview_service.gd:1910`: the lens viewport caps
-  (`MAX_VIEWPORT_PX`, `MAX_SECTION_VIEWPORT_PX`) are dead — every lens
-  renders at the container's full size (NEXT_PASS_PLAN.md Push 1 #15).
-
+- **`graphtools` on Mount Vernon: RESOLVED 2026-10-18 (world-driven pair,
+  probe fixed).** The probe's "first two pins with compatible ports" had
+  become the Pond Storage tank into the PowerSpout's water intake. The
+  click path was fine — the wire was ADDED — and then the view's deferred
+  `_auto_penstock_for_new_water_wires` did what it is for: a water wire
+  from a pond into a penstock-kind turbine becomes that turbine's penstock
+  (`_route_penstock_from_pond` removes the existing stream-intake penstock
+  and re-routes with no bends), so the count read 18 → 18 and the clicked
+  bend was gone (verified in the sandbox autosave: the new wire restyled
+  `poly_penstock`, 0 route points). The probe now skips hydro-turbine pins
+  and takes the FARTHEST qualifying pair — at the world's saved 740 m SoI
+  radius the pins cluster inside ~100 px and the first pair (62 px) left no
+  run line clear of pins for the run-edit clicks. 45/45 at 1920×1080. The
+  view is untouched; the catchment→turbine BLOCKED rule from db298fb was
+  not involved (catchments have no 3D anchor, so the probe never offers
+  them).
+- **The lens viewport caps: RESOLVED 2026-10-18.** `SubViewportContainer
+  .stretch` sizes the viewport to the container every frame and the engine
+  refuses a hand-written `_viewport.size`, so `MAX_VIEWPORT_PX` /
+  `MAX_SECTION_VIEWPORT_PX` had been dead since the perspective lenses. The
+  cap now goes through `stretch_shrink` (`GraphSoiPreview.shrink_for`: the
+  smallest integer divisor keeping the longest side under the cap;
+  `world_to_host_local`'s viewport→container ratio already handled it).
+  Measured with the new `tools/bench/lens_gpu_bench.gd` (per lens render,
+  gpu_toggle_bench's sampling; Mount Vernon, 1920×1080, render scale 0.5,
+  MSAA 8x): the 1080p canvas is 1240×858, under both caps, so every lens
+  stays ÷1 and nothing changes — Site Plan 18.0 → 18.1 ms, Elevation
+  12.0 → 12.5, Globe 9.9 → 9.7 (noise). The viewport is in LOGICAL pixels
+  (stretch mode `canvas_items` at 1920×1080): at 2560×1440 the container
+  is still 1240×858 and still ÷1, so the window size never trips the cap —
+  only the canvas growing does (both sidebars collapsed ≈ 1900 px wide →
+  Globe / Elevation ÷2 under their 1280 cap, ~950×500 upscaled; raising
+  `MAX_SECTION_VIEWPORT_PX` to 2048 is the one-line call if that reads
+  soft). The Globe forced to ÷2 renders in 6.4 ms (−3.5 ms; 7.2 vs 9.5 at
+  1440p). site-review
+  `site,elevation,globe,snowglobe` 15/15 (disc-vs-centre 0.00 px, cut-face
+  cap present); `siphon`'s Hydro Lab checks (the embed shares the
+  container: stat deck, dip tube, state ring, close-up) all pass. No "Can't
+  change the size" line in any run since.
+- **`siphon` on Mount Vernon FAILS one physics check (2026-10-18, world-
+  driven, pre-existing):** "a 20 m exit drop cavitates (useful draft
+  20.0 m, 0.0 m wasted)" — identical on the committed tree without the
+  lens change, so it is the saved siphon's geometry against
+  `SiphonTurbinePhysics` (the 20 m drop no longer reaches inception at
+  this site's atmospheric head / dip), not code touched here. The matrix
+  row's PASS dates from the 2026-10-12 world. Not investigated.
 - **`penstock` on Mount Vernon: RESOLVED 2026-10-18 (world data + a
   capture that leaned on it).** The "turbine never adopts its routed run"
   reds were the saved world's CLOCK: Mount Vernon is saved paused

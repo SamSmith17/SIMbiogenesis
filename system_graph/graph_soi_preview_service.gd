@@ -635,8 +635,9 @@ func _process_tween() -> void:
 		_container.material = _disc_material
 		_container.position = _canvas.position
 		_container.size = _canvas.size
+		# (Size follows the container — SubViewportContainer.stretch — at the
+		# shrink the last layout chose.)
 		if _viewport != null:
-			# (Size follows the container — SubViewportContainer.stretch.)
 			_viewport.msaa_3d = Viewport.MSAA_DISABLED
 		var mc0: Vector2 = _tween_mask_from.get("c", _canvas.size * 0.5) as Vector2
 		var mc1: Vector2 = _tween_mask_to.get("c", _canvas.size * 0.5) as Vector2
@@ -1757,22 +1758,43 @@ func _viewport_px_cap() -> float:
 	return float(MAX_SECTION_VIEWPORT_PX if _section_mode else MAX_VIEWPORT_PX)
 
 
-## SubViewport resolution that fits within `cap` while PRESERVING the container's
-## aspect ratio. Clamping each axis independently (the old behavior) broke the
-## camera-vs-container aspect once the canvas exceeded the cap on one axis, so
-## world_to_host_local scaled X wrong and the whole top-down disc — terrain and 2D
-## chips together — shifted sideways past the crop-zoom threshold. Scaling both axes
-## by one factor keeps px-per-metre equal on both axes.
-func _aspect_clamped_viewport_size(container_size: Vector2, cap: float) -> Vector2i:
+## The lens viewport cap, made REAL through `SubViewportContainer.stretch_shrink`.
+## With `stretch` on, the container sizes its SubViewport to ITS OWN size every
+## frame and the engine REFUSES a hand-written `_viewport.size` ("Can't change
+## the size of a SubViewport with a SubViewportContainer parent that has
+## stretch enabled") — so from the perspective lenses (2026-10-13) until
+## 2026-10-18 every lens rendered at the container's full size and
+## `MAX_VIEWPORT_PX` / `MAX_SECTION_VIEWPORT_PX` were dead. The one knob the
+## container honours is `stretch_shrink`, an INTEGER divisor: the viewport is
+## container ÷ shrink, aspect preserved by construction (the reason the old
+## per-axis clamp was replaced by one factor), and the container draws the
+## texture back up to its own size, so `world_to_host_local`'s
+## viewport→container ratio stays exact. `shrink_for` is the pure rule (the
+## smallest divisor that keeps the longest side at or under `cap`, never
+## shrinking the short side under MIN_VIEWPORT_PX); `_apply_viewport_cap`
+## writes it. The cap bites only ABOVE it, and the size is LOGICAL pixels
+## (stretch mode canvas_items at 1920×1080: a 2560×1440 window still gives a
+## 1240×858 canvas), so with the sidebars up every lens stays ÷ 1 and nothing
+## changes; a canvas wider than the 1280 Globe / Elevation cap (both sidebars
+## collapsed) takes ÷ 2. Measured with tools/bench/lens_gpu_bench.gd on Mount
+## Vernon at 1080p: a Globe render 9.9 ms at ÷ 1, 6.4 ms forced to ÷ 2.
+static func shrink_for(container_size: Vector2, cap: float) -> int:
 	var w := maxf(container_size.x, 1.0)
 	var h := maxf(container_size.y, 1.0)
 	var longest := maxf(w, h)
-	var scale := 1.0
-	if longest > cap:
-		scale = cap / longest
-	var rx := int(round(maxf(w * scale, float(MIN_VIEWPORT_PX))))
-	var ry := int(round(maxf(h * scale, float(MIN_VIEWPORT_PX))))
-	return Vector2i(maxi(rx, 1), maxi(ry, 1))
+	var shortest := minf(w, h)
+	var shrink := maxi(1, int(ceil(longest / maxf(cap, 1.0))))
+	while shrink > 1 and shortest / float(shrink) < float(MIN_VIEWPORT_PX):
+		shrink -= 1
+	return shrink
+
+
+func _apply_viewport_cap(container_size: Vector2, cap: float) -> void:
+	if _container == null or not is_instance_valid(_container):
+		return
+	var k := shrink_for(container_size, cap)
+	if _container.stretch_shrink != k:
+		_container.stretch_shrink = k
 
 
 func _sync_layout() -> void:
@@ -1793,9 +1815,7 @@ func _sync_layout() -> void:
 		_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_container.position = Vector2.ZERO
 		_container.size = _embed_host.size
-		if _viewport != null:
-			# Aspect-preserving clamp (same reason as the crop branch below).
-			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		_apply_viewport_cap(_container.size, vp_cap)
 		_apply_viewport_msaa()
 		_apply_section_environment()
 		# The SAME format _layout_changed compares against — the two used to
@@ -1816,9 +1836,7 @@ func _sync_layout() -> void:
 		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		_container.position = _canvas.position
 		_container.size = _canvas.size
-		if _viewport != null:
-			_viewport.size = _aspect_clamped_viewport_size(_container.size,
-					float(MAX_SECTION_VIEWPORT_PX))
+		_apply_viewport_cap(_container.size, float(MAX_SECTION_VIEWPORT_PX))
 		_apply_viewport_msaa()
 		_last_layout_key = _canvas_layout_key()
 		return
@@ -1840,8 +1858,7 @@ func _sync_layout() -> void:
 		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		_container.position = _canvas.position
 		_container.size = _canvas.size
-		if _viewport != null:
-			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		_apply_viewport_cap(_container.size, vp_cap)
 		_apply_viewport_msaa()
 		_apply_section_environment()
 		_last_layout_key = _canvas_layout_key()
@@ -1864,8 +1881,7 @@ func _sync_layout() -> void:
 		_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		_container.position = _canvas.position
 		_container.size = _canvas.size
-		if _viewport != null:
-			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		_apply_viewport_cap(_container.size, vp_cap)
 		_apply_viewport_msaa()
 		_sync_plan_backdrop()
 		_last_layout_key = _canvas_layout_key()
@@ -1895,19 +1911,17 @@ func _sync_layout() -> void:
 			_container.size = csz
 		_container.position = _canvas.position
 		_set_disc_mask(true, origin, r_px, _container.size)
-		if _viewport != null:
-			# Aspect-preserving clamp — see _aspect_clamped_viewport_size. Independent
-			# per-axis clamping here caused the top-down disc to shift sideways once
-			# the canvas passed the cap on one axis.
-			_viewport.size = _aspect_clamped_viewport_size(_container.size, vp_cap)
+		# One factor for both axes — see shrink_for. Independent per-axis
+		# clamping here caused the top-down disc to shift sideways once the
+		# canvas passed the cap on one axis.
+		_apply_viewport_cap(_container.size, vp_cap)
 	elif place_d > MAX_DISC_CONTAINER_PX * 4.0 and not _top_down and not _section_mode:
 		# Freeform bubble at absurd zoom — refuse giant Control.
 		_container.size = Vector2(MAX_DISC_CONTAINER_PX, MAX_DISC_CONTAINER_PX)
 		_container.position = _canvas.position + origin \
 				- Vector2(MAX_DISC_CONTAINER_PX, MAX_DISC_CONTAINER_PX) * 0.5
 		_set_disc_mask(false)
-		if _viewport != null:
-			_viewport.size = Vector2i(MAX_VIEWPORT_PX, MAX_VIEWPORT_PX)
+		_apply_viewport_cap(_container.size, vp_cap)
 	else:
 		# Disc-sized square: UV-centered circular mask (legacy / zoomed-out).
 		# Clamp place_d so a bug never allocates megapixel Controls.
@@ -1915,10 +1929,7 @@ func _sync_layout() -> void:
 		_container.position = _canvas.position + origin - Vector2(safe_d, safe_d) * 0.5
 		_container.size = Vector2(safe_d, safe_d)
 		_set_disc_mask(false)
-		if _viewport != null:
-			var res := int(round(clampf(safe_d,
-					float(MIN_VIEWPORT_PX), vp_cap)))
-			_viewport.size = Vector2i(res, res)
+		_apply_viewport_cap(_container.size, vp_cap)
 	_apply_viewport_msaa()
 	_last_layout_key = _canvas_layout_key()
 
