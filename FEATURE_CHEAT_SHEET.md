@@ -92,6 +92,7 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **X** | Dismount / stop charge | |
 | **C** | Charge EUC (at a charging station) / CAMPS section of the edit toolbar | `charge` + `camp_scatter`; the legacy camp scatter dock is **Shift+C** (`camp_scatter_legacy`). Both handlers are event-driven, so whichever consumes the event wins — see [Key conflicts](#key-conflicts--gotchas) |
 | **R** | Repair shorted EUC | |
+| **Shift+H** | WATER section of the edit toolbar (Trace / Draw / Edit / Culvert / View) | `water_edit` (2026-10-18); switches sections when the toolbar is already up, like T / V |
 | **1 / 0** | Equip / unequip tool | |
 | **G** | System graph | Core gameplay surface |
 | **U** | Unified Library | Also timeline 📦 |

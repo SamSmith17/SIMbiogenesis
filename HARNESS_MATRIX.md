@@ -239,6 +239,23 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
 
 ## Open items (not fixed)
 
+- **`graphtools` on Mount Vernon FAILS the Globe Connect run (3 checks:
+  "clicking the other pin makes one connection", "the run is shown in 3D
+  with its bend locked", "the run is built and measured")** (2026-10-18).
+  The source pin and the ground bend register; the click on the target pin
+  adds no connection. Identical at HEAD 712d7ed, at cfbcf64 (before Push 2)
+  and with the Push 3 working tree, so it came with 646f533 or the world
+  as saved since; last green record 2026-10-14 (29 checks). First suspect:
+  the pair the probe picks (first two pins with compatible ports) is now a
+  pair the view refuses — e.g. a catchment into a turbine, BLOCKED since
+  db298fb — in which case the probe should skip refused pairs; else the
+  target-pin click path in `_handle_connect_tool_input`. Not investigated.
+- The same run logs `Can't change the size of a SubViewport with a
+  SubViewportContainer parent that has stretch enabled` from
+  `graph_soi_preview_service.gd:1910`: the lens viewport caps
+  (`MAX_VIEWPORT_PX`, `MAX_SECTION_VIEWPORT_PX`) are dead — every lens
+  renders at the container's full size (NEXT_PASS_PLAN.md Push 1 #15).
+
 - **`penstock` on Mount Vernon: RESOLVED 2026-10-18 (world data + a
   capture that leaned on it).** The "turbine never adopts its routed run"
   reds were the saved world's CLOCK: Mount Vernon is saved paused

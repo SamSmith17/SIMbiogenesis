@@ -830,6 +830,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			_camp_scatter_ui.call("_exit_mode")
 		_edit_toolbar_ui.call("toggle_section", "terrain")
 		get_viewport().set_input_as_handled()
+	# Shift+H = the unified toolbar's WATER section (streams, culverts, the
+	# flow view). It had no key: every other section has one, and the only
+	# way in was T then a click on the strip. Same switch-or-close rule as T.
+	if event.is_action_pressed("water_edit", false, true) and _edit_toolbar_ui != null:
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
+		_edit_toolbar_ui.call("toggle_section", "water")
+		get_viewport().set_input_as_handled()
 
 
 func _resolve_location() -> void:
@@ -5020,6 +5030,10 @@ func update_camp_area(id: String, patch: Dictionary) -> bool:
 				camp_areas.get_area(id).get("polygon", PackedVector2Array()))
 	camp_areas.update(id, p)
 	_apply_camp_changes([id], [])
+	# A headcount is a graph fact (the camp's compound and its habitat), so a
+	# hand-set one goes to the graph the way festival mode's does.
+	if p.has("headcount"):
+		_push_camps_to_graph()
 	return true
 
 

@@ -168,10 +168,14 @@ const TOOLS: Array[Dictionary] = [
 	},
 	{
 		"id": "camp_select", "section": "camps", "label": "Edit",
-		"tooltip": "Click a camp to edit it: style, density, heading, name. Del deletes it.",
+		"tooltip": "Click a camp to edit it: style, density, heading, people, name. Del deletes it.",
 		"shapes": [],
 		"params": [
 			{"key": "density", "label": "Density", "unit": "×", "min": 0.2, "max": 1.0, "default": 0.8, "step": 0.05},
+			# How many people live in this camp on the graph (0 = scenery until
+			# festival mode deals it a headcount from its area). The record key
+			# festival mode writes; the graph sync picks the change up.
+			{"key": "headcount", "label": "People", "auto_below": 1.0, "min": 0.0, "max": 500.0, "default": 0.0, "step": 1.0},
 			{"key": "heading_deg", "label": "Heading", "unit": "°", "auto_below": 0.0, "min": -1.0, "max": 179.0, "default": -1.0, "step": 1.0},
 			{"key": "align_jitter_deg", "label": "Alignment ±", "unit": "°", "min": 0.0, "max": 30.0, "default": 5.0, "step": 0.5},
 			{"key": "light_density", "label": "Lights", "unit": "×", "min": 0.0, "max": 2.0, "default": 1.0, "step": 0.05},

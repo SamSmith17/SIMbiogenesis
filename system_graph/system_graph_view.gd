@@ -1790,6 +1790,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("controller_reset_pressed"):
 		if not gc.is_connected("controller_reset_pressed", _on_controller_reset_pressed):
 			gc.connect("controller_reset_pressed", _on_controller_reset_pressed)
+	if gc.has_signal("camp_watch_pressed"):
+		if not gc.is_connected("camp_watch_pressed", _on_camp_watch_pressed):
+			gc.connect("camp_watch_pressed", _on_camp_watch_pressed)
 	if gc.has_signal("site_background_clicked"):
 		if not gc.is_connected("site_background_clicked", _on_site_background_clicked):
 			gc.connect("site_background_clicked", _on_site_background_clicked)
@@ -18536,6 +18539,14 @@ func _reset_controller(controller_id: String) -> void:
 		_graph_canvas.call("queue_redraw")
 
 
+## The camp card's "Watch" pill: the settlement view over that camp, with the
+## graph's return ticket (Esc comes back to this node and lens) — the same
+## handoff as the inspector's Locate in 3D.
+func _on_camp_watch_pressed(item_id: String) -> void:
+	if not locate_item_in_world(item_id):
+		_show_toast("This camp has no place in the 3D world yet")
+
+
 func _on_controller_reset_pressed(controller_id: String) -> void:
 	_reset_controller(controller_id)
 
@@ -19514,35 +19525,85 @@ func _sync_show_menu() -> void:
 	_sync_filter_chip(hidden)
 
 
-## While a show-only view is on, an amber chip on the canvas says so (the Show
-## menu folds to an icon on a narrow bar); clicking it shows everything again.
+## While a show-only view is on, an amber LEGEND on the canvas says so (the
+## Show menu folds to an icon on a narrow bar): one pill per domain — lit
+## when shown, dim when hidden — that toggles that domain, and a "✕ all"
+## pill that shows everything again. Before 2026-10-18 it was one chip that
+## could only clear the filter; changing it meant the Show menu.
 var _filter_chip: Button = null
+var _filter_legend: HBoxContainer = null
+var _filter_pills: Dictionary = {}   # domain -> Button
 
 
 func _sync_filter_chip(hidden: int) -> void:
 	if _graph_canvas == null:
 		return
 	var on := not _domain_shown.is_empty()
-	if _filter_chip == null or not is_instance_valid(_filter_chip):
+	if _filter_legend == null or not is_instance_valid(_filter_legend):
 		if not on:
 			return
-		_filter_chip = Button.new()
+		_filter_legend = HBoxContainer.new()
+		_filter_legend.name = "FilterLegend"
+		_filter_legend.add_theme_constant_override("separation", 4)
+		_filter_legend.position = Vector2(12, 12)
+		(_graph_canvas as Control).add_child(_filter_legend)
+		_filter_chip = _make_legend_pill("", "Show everything again")
 		_filter_chip.name = "FilterChip"
-		_filter_chip.focus_mode = Control.FOCUS_NONE
-		_filter_chip.add_theme_stylebox_override("normal", UITheme.chip_style(UITheme.C_AMBER))
-		_filter_chip.add_theme_stylebox_override("hover", UITheme.chip_style(UITheme.C_AMBER))
-		_filter_chip.add_theme_color_override("font_color", UITheme.C_AMBER)
-		_filter_chip.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-		_filter_chip.tooltip_text = "Click to show everything again"
 		_filter_chip.pressed.connect(func() -> void:
 			set_domain_filter({})
 			_schedule_graph_autosave())
-		(_graph_canvas as Control).add_child(_filter_chip)
-		_filter_chip.position = Vector2(12, 12)
-	_filter_chip.visible = on
-	if on:
-		_filter_chip.text = "Showing %s · %s hidden  ✕" % [
-			GraphDomainFilter.describe(_domain_shown), UiText.count(hidden, "node")]
+		_filter_legend.add_child(_filter_chip)
+		for d_v in GraphDomainFilter.DOMAINS:
+			var d := str(d_v)
+			var pill := _make_legend_pill(str(GraphDomainFilter.LABELS.get(d, d)),
+				"Show or hide %s nodes and wires" % str(GraphDomainFilter.LABELS.get(d, d)).to_lower())
+			pill.pressed.connect(_on_legend_pill_pressed.bind(d))
+			_filter_legend.add_child(pill)
+			_filter_pills[d] = pill
+	_filter_legend.visible = on
+	if not on:
+		return
+	_filter_chip.text = "%s hidden  ✕" % UiText.count(hidden, "node")
+	for d in _filter_pills:
+		var pill: Button = _filter_pills[d]
+		var shown := bool(_domain_shown.get(d, false))
+		var col := UITheme.C_AMBER if shown else UITheme.C_TEXT_S
+		pill.add_theme_stylebox_override("normal", UITheme.chip_style(col))
+		pill.add_theme_stylebox_override("hover", UITheme.chip_style(col))
+		pill.add_theme_color_override("font_color", col)
+		pill.modulate = Color(1, 1, 1, 1.0 if shown else 0.7)
+
+
+func _make_legend_pill(text: String, tip: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.tooltip_text = tip
+	b.add_theme_stylebox_override("normal", UITheme.chip_style(UITheme.C_AMBER))
+	b.add_theme_stylebox_override("hover", UITheme.chip_style(UITheme.C_AMBER))
+	b.add_theme_color_override("font_color", UITheme.C_AMBER)
+	b.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	return b
+
+
+## A legend pill toggles its domain. Toggling the last hidden one on is the
+## same as "everything" (the filter clears); toggling the last shown one off
+## is refused — an empty canvas is never what a click on a legend means.
+func _on_legend_pill_pressed(domain: String) -> void:
+	var shown := _domain_shown.duplicate()
+	if bool(shown.get(domain, false)):
+		var left := 0
+		for d in shown:
+			if bool(shown[d]):
+				left += 1
+		if left <= 1:
+			_show_toast("At least one kind stays shown — pick ✕ to show everything")
+			return
+		shown.erase(domain)
+	else:
+		shown[domain] = true
+	set_domain_filter(shown)
+	_schedule_graph_autosave()
 
 
 

@@ -2077,7 +2077,7 @@ func _sync_camp_select_controls() -> void:
 		if is_instance_valid(b):
 			b.disabled = not have
 	if have and _state.active_tool == "camp_select":
-		for key in ["density", "heading_deg", "align_jitter_deg", "light_density"]:
+		for key in ["density", "heading_deg", "align_jitter_deg", "light_density", "headcount"]:
 			_state.set_param(key, float(info.get(key, _state.get_param(key))))
 			if _param_rows.has(key):
 				SliderSpinRow.set_values(_param_rows[key], _state.get_param(key))
@@ -2095,6 +2095,9 @@ func _apply_camp_select_params() -> void:
 	for key in ["density", "align_jitter_deg", "light_density"]:
 		if absf(float(info.get(key, 0.0)) - _state.get_param(key)) > 0.001:
 			patch[key] = _state.get_param(key)
+	var people := int(round(_state.get_param("headcount", 0.0)))
+	if people != int(info.get("headcount", 0)):
+		patch["headcount"] = people
 	var heading := _state.get_param("heading_deg", -1.0)
 	if heading < 0.0:
 		if not bool(info.get("heading_auto", false)):

@@ -179,9 +179,58 @@ func _build_header(parent: VBoxContainer) -> void:
 	refresh_btn.pressed.connect(_on_recompute_pressed)
 	hbox.add_child(refresh_btn)
 
+	_export_btn = Button.new()
+	_export_btn.text = "📷 PNG"
+	_export_btn.focus_mode = Control.FOCUS_NONE
+	_export_btn.tooltip_text = "Save this report as a PNG under the game's screenshots folder."
+	UITheme.style_button(_export_btn)
+	_export_btn.pressed.connect(_on_export_pressed)
+	hbox.add_child(_export_btn)
+
 	var close_btn := IconButton.close(close)
 	close_btn.custom_minimum_size = Vector2(32, 32)
 	hbox.add_child(close_btn)
+
+
+var _export_btn: Button = null
+
+
+## Export the report as the player sees it: the rendered panel, cropped out
+## of the frame after the next draw, to user://screenshots/. The button then
+## shows the file name for a few seconds. The site label is whatever the
+## panel prints (SitePrivacy decides that), so a harness export is redacted.
+func _on_export_pressed() -> void:
+	if _panel == null or not is_inside_tree():
+		return
+	_export_btn.disabled = true
+	await RenderingServer.frame_post_draw
+	var vp := get_viewport()
+	var img: Image = vp.get_texture().get_image() if vp != null else null
+	if img == null:
+		_export_btn.disabled = false
+		return
+	# The panel sits on a CanvasLayer: its canvas rect through the viewport's
+	# final transform is its place in the rendered frame (UI scale included).
+	var xf := vp.get_final_transform() * _panel.get_global_transform_with_canvas()
+	var r: Rect2 = xf * Rect2(Vector2.ZERO, _panel.size)
+	var ri := Rect2i(r.position.round(), r.size.round()).intersection(Rect2i(Vector2i.ZERO, img.get_size()))
+	if ri.size.x < 8 or ri.size.y < 8:
+		_export_btn.disabled = false
+		return
+	var out := img.get_region(ri)
+	DirAccess.make_dir_recursive_absolute("user://screenshots")
+	var stamp := Time.get_datetime_string_from_system(false, true).replace(":", "").replace("-", "").replace("T", "_")
+	var path := "user://screenshots/site_report_%s.png" % stamp
+	var err := out.save_png(path)
+	_export_btn.disabled = false
+	if err != OK:
+		_export_btn.text = "📷 failed"
+	else:
+		_export_btn.text = "📷 " + path.get_file()
+		print("SiteReport: exported %s (%d x %d)" % [ProjectSettings.globalize_path(path), out.get_width(), out.get_height()])
+	get_tree().create_timer(4.0).timeout.connect(func() -> void:
+		if is_instance_valid(_export_btn):
+			_export_btn.text = "📷 PNG")
 
 
 func _build_cards(parent: VBoxContainer) -> void:

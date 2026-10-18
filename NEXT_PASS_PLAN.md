@@ -103,8 +103,13 @@ topology cached on (struct_rev, user_rev) — 7 ms a call on Walton — and the
 nav grid reusing its baked heights across prop / camp / space changes
 (`NpcNavGrid.begin_bake_reusing`, selftested). NOT done: #1 stream tracers
 (0 ms in first person — flow view only), #6 conduit tick (0.25 ms), #14 the
-small items, #15 the SoI stretch cap (unmeasured; the manual size is written
-after the container size each layout, so the cap most likely holds).
+small items, #15 the SoI stretch cap — CONFIRMED real by the engine itself
+(the graphtools run logs "Can't change the size of a SubViewport with a
+SubViewportContainer parent that has stretch enabled" from
+graph_soi_preview_service.gd:1910): every lens renders at the container's
+full size and MAX_VIEWPORT_PX / MAX_SECTION_VIEWPORT_PX are dead. Fix with
+`stretch_shrink` (integer) or `stretch = false` + a TextureRect; measure
+with gpu_toggle_bench's method on an open Globe.
 
 Ranked by expected ms saved per line changed. Each is a change-gate or a
 cache; none changes what the sim computes, so the flow-step hash is the pin.
@@ -194,6 +199,18 @@ Ordered by player impact. Each names the harness that currently shows it.
     binding.
 
 ## Push 3 — easy-win features
+
+**Status 2026-10-18:** DONE — #1 legend toggles (the show-only chip is a row
+of per-domain pills; the soil key was left as a key, it filters nothing),
+#2 place at a POI pin (Site Plan: click a pin with a 3D-less node selected
+→ "Place it here"; prop editor: "Snap to pin…" in Placement), #3 headcount
+slider on the camp Edit tool (writes the record key and re-syncs the graph),
+#4 Shift+H for the WATER section (`water_edit`), #8 the popin capture
+asserts (zero vanish / appear, ≤ 2 jumps), #9 Site Report "📷 PNG", #10
+Watch on the graph's camp card. NOT done, for a follow-up session: #5
+settings from the launch hub (every settings page must first tolerate no
+Main, and a hub capture has to prove it), #6 the key-rebind page, #7 the
+ambient audio bed.
 
 Small, self-contained, each already has the data it needs.
 

@@ -497,6 +497,10 @@ signal world_route_edited(conn_id: String, route: Array)
 signal world_place_requested(item_id: String, world: Vector3)
 signal resource_containers_merged(target_id: String, absorbed_id: String, kind: String)
 signal controller_reset_pressed(item_id: String)
+## The "Watch" pill on a festival camp card: open the settlement view over
+## that camp (the project panel's Watch, from the graph).
+signal camp_watch_pressed(item_id: String)
+var _camp_watch_rects: Dictionary = {}
 ## SoI live preview camera — Shift+drag orbit, Shift+wheel zoom.
 signal soi_preview_orbit(relative: Vector2)
 signal soi_preview_zoom(zoom_in: bool)
@@ -2332,6 +2336,15 @@ func request_continuous_redraw() -> void:
 # Left-button press: port hit → wire drag; item hit → item drag.
 func _on_lmb_press(screen_pos: Vector2) -> void:
 	if model == null:
+		return
+	for wid in _camp_watch_rects:
+		var wr: Rect2 = _camp_watch_rects[wid]
+		if _touch_input_active():
+			wr = wr.grow(10.0)
+		if wr.has_point(screen_pos):
+			camp_watch_pressed.emit(str(wid))
+			return
+	if _poi_place_press(screen_pos):
 		return
 	for rid in _controller_reset_rects:
 		var item := model.get_item(str(rid))
@@ -6927,6 +6940,8 @@ func _draw() -> void:
 			pm.end("gv_draw")
 		return
 	_controller_reset_rects.clear()
+	_camp_watch_rects.clear()
+	_poi_heads.clear()
 	_refresh_ambient_wired_ports()
 	_alert_seen_this_draw = false
 	# Destroy-FX camera shake. Purely visual — one canvas-item transform for the
@@ -8242,7 +8257,7 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 	# that made the festival canvas crawl). `camp_open` / `camp_morale` are
 	# stamped onto the compound by the view's 1 s ledger refresh.
 	if specs.has("camp_lot_id"):
-		_draw_camp_card(rect, specs)
+		_draw_camp_card(rect, specs, str(item.get("id", "")))
 		return
 	# When the super-node is drawn large enough on screen, show a live miniature
 	# of its child canvas (TouchDesigner-style) instead of a plain text summary,
@@ -8271,11 +8286,22 @@ func _draw_compound_body(rect: Rect2, specs: Dictionary, item: Dictionary = {}) 
 ## The camp card: headcount + morale band in the band's colour, then one line
 ## per open loop ("⚠ water in", "⚠ blackwater out"). Nothing here walks the
 ## model — the view precomputes `camp_open` and `camp_morale`.
-func _draw_camp_card(rect: Rect2, specs: Dictionary) -> void:
+func _draw_camp_card(rect: Rect2, specs: Dictionary, item_id: String = "") -> void:
 	var fnt := ThemeDB.fallback_font
 	var fsize := _fit_font_size(rect, 2, 10.0, 11.0)
 	var x := rect.position.x + 8.0
 	var y := rect.position.y + fsize + 4.0
+	# "Watch" pill, bottom-right: the click-through from the card to the
+	# settlement view over this camp. Registered for _on_lmb_press like the
+	# controller's RESET; drawn only when the card has room for it.
+	if not item_id.is_empty() and rect.size.x >= 90.0 and rect.size.y >= 34.0:
+		var pw := 46.0 * clampf(_zoom, 0.75, 1.5)
+		var ph := (fsize + 6.0)
+		var pill := Rect2(rect.end - Vector2(pw + 5.0, ph + 4.0), Vector2(pw, ph))
+		draw_rect(pill, Color(0.18, 0.32, 0.5, 0.9), true)
+		draw_string(fnt, Vector2(pill.position.x + 7.0, pill.end.y - 5.0), "Watch",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color(0.92, 0.96, 1.0))
+		_camp_watch_rects[item_id] = pill
 	var n := int(specs.get("camp_headcount", 0))
 	var present := int(specs.get("camp_present", n))
 	var morale := float(specs.get("camp_morale", -1.0))
@@ -9878,7 +9904,55 @@ func _draw_water_network_site(npc_r: Object) -> void:
 ## Site Plan: the player's imported points of interest (core/poi/) — a pin
 ## glyph + name per point, the ribbon per line / polygon. Read straight off
 ## the loader like the water network; the canvas never writes the layer.
+## The POI pin heads drawn this frame (Site Plan): {id, name, head: Vector2,
+## r: px, xz: Vector2}. A click on one with a node selected that has no place
+## in 3D offers "Place it here" — a Google Earth pin is where the player
+## marked the real thing (the hydro inlet, the pond outlet).
+var _poi_heads: Array = []
+
+
+func _poi_head_at(screen_pos: Vector2) -> Dictionary:
+	for h_v in _poi_heads:
+		var hd: Dictionary = h_v
+		if (hd.get("head", Vector2.INF) as Vector2).distance_to(screen_pos) <= float(hd.get("r", 8.0)):
+			return hd
+	return {}
+
+
+## Site Plan press on a pin head: offer to place the selected 3D-less node
+## there. Returns true when the press was taken.
+func _poi_place_press(screen_pos: Vector2) -> bool:
+	# Site Plan only: the heads are drawn there, and the Globe's draw returns
+	# before the per-draw caches clear, so a stale head must never take a
+	# Globe click (it ate the Connect tool's second pin). The Connect tool has
+	# its own "Place it here".
+	if _poi_heads.is_empty() or model == null or connect_tool_active \
+			or view_mode != GraphSiteLayout.VIEW_SITE:
+		return false
+	var hd := _poi_head_at(screen_pos)
+	if hd.is_empty():
+		return false
+	var sel: Array = selected_item_ids
+	if sel.size() != 1:
+		_ct_flash("Select one node with no place in 3D, then click a pin to place it there")
+		return true
+	var it := model.get_item(str(sel[0]))
+	if it.is_empty() or model.item_has_3d_anchor(it):
+		_ct_flash("%s already has its place in 3D" % GraphPortLabels.node_name(it))
+		return true
+	var loader := _terrain_loader_node()
+	var world := Vector3.INF
+	if loader != null and loader.has_method("poi_world_position"):
+		world = loader.call("poi_world_position", str(hd.get("id", "")))
+	if not is_finite(world.x):
+		var xz: Vector2 = hd.get("xz", Vector2.ZERO)
+		world = Vector3(xz.x, 0.0, xz.y)
+	_ct_offer_place(str(sel[0]), world, screen_pos, false)
+	return true
+
+
 func _draw_poi_site(npc_r: Object) -> void:
+	_poi_heads.clear()
 	var loader := _terrain_loader_node()
 	if loader == null or not loader.has_method("poi_markers"):
 		return
@@ -9913,6 +9987,9 @@ func _draw_poi_site(npc_r: Object) -> void:
 		draw_line(sp, top, Color(0.95, 0.96, 0.98, 0.9), 1.6, true)
 		draw_circle(top, h * 0.3 + 1.2, ink)
 		draw_circle(top, h * 0.3, col)
+		# The head is a click target: see _poi_head_at (place a node AT a pin).
+		_poi_heads.append({"id": str(m.get("id", "")), "name": str(m.get("name", "")),
+			"head": top, "r": h * 0.3 + 6.0, "xz": m.get("pos", Vector2.ZERO)})
 		var label := str(m.get("name", ""))
 		if label.is_empty():
 			continue

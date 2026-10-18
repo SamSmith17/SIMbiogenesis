@@ -130,6 +130,7 @@ func open_for_prop(prop_id: String) -> void:
 		return
 	_rebuild_dynamic_sections()
 	_sync_widgets()
+	_refresh_pin_pick()
 	if not was_open:
 		_active = true
 		visible = true
@@ -382,6 +383,50 @@ func _build_placement_section() -> void:
 		_tf["y_offset"] = 0.0
 		_push_transform(true))
 	_button("Free move…", "Carry it with the crosshair; click to set it down", quick, _on_free_move)
+	# Points of interest (the KML pins): move the prop onto one exactly. The
+	# list is rebuilt each time the editor opens on a prop.
+	_pin_pick = OptionButton.new()
+	_pin_pick.focus_mode = Control.FOCUS_NONE
+	_pin_pick.tooltip_text = "Move this prop onto a point of interest (a Google Earth pin)"
+	_pin_pick.fit_to_longest_item = false
+	_pin_pick.item_selected.connect(_on_pin_picked)
+	quick.add_child(_pin_pick)
+	_refresh_pin_pick()
+
+
+var _pin_pick: OptionButton = null
+
+
+func _refresh_pin_pick() -> void:
+	if _pin_pick == null or not is_instance_valid(_pin_pick):
+		return
+	_pin_pick.clear()
+	_pin_pick.add_item("Snap to pin…")
+	_pin_pick.set_item_disabled(0, true)
+	var n := 0
+	if _loader != null and _loader.has_method("poi_records"):
+		for rec_v in (_loader.call("poi_records") as Array):
+			var rec: Dictionary = rec_v
+			if str(rec.get("kind", "point")) != "point":
+				continue
+			_pin_pick.add_item(str(rec.get("name", "pin")))
+			_pin_pick.set_item_metadata(_pin_pick.item_count - 1, str(rec.get("id", "")))
+			n += 1
+	_pin_pick.select(0)
+	_pin_pick.visible = n > 0
+
+
+func _on_pin_picked(index: int) -> void:
+	if index <= 0 or _loader == null or not _loader.has_method("poi_world_position"):
+		return
+	var pid := str(_pin_pick.get_item_metadata(index))
+	_pin_pick.select(0)
+	var world: Vector3 = _loader.call("poi_world_position", pid)
+	if not is_finite(world.x):
+		return
+	_tf["x"] = world.x
+	_tf["z"] = world.z
+	_push_transform(true)
 
 
 func _build_display_section() -> void:

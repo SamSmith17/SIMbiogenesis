@@ -13170,6 +13170,8 @@ func _fm_visibility_probe(main: Node, bridge, ids: Array, frames: int) -> Dictio
 # festival mode touches.
 const POPIN_R_M := 70.0
 const POPIN_JUMP_M := 4.0
+## Jumps tolerated over both phases (a glide can ride one hitch frame).
+const POPIN_MAX_JUMPS := 2
 
 
 func _run_popin_capture() -> void:
@@ -13263,6 +13265,27 @@ func _run_popin_capture() -> void:
 	print("PlaytestHarness: popin — phase B (camera hops %d, %.0f s): %s" % [hops.size(), 10.0 * hops.size(), str(b["summary"])])
 	for line in b["lines"]:
 		print("PlaytestHarness: popin —   %s" % line)
+	# The gate (2026-10-18; it used to only report). The user's rule is ZERO
+	# pop-in: nobody vanishes or appears while drawn, in either phase. A JUMP
+	# is a glide faster than the catch-up allows; one can ride a hitch frame
+	# (the open item: a 40 m jump during a 131 ms frame), so jumps are capped,
+	# not forbidden, and the hitch count stays a report.
+	var counts := {"VANISH": 0, "APPEAR": 0, "JUMP": 0}
+	for phase in [a, b]:
+		var sm: Dictionary = (phase as Dictionary).get("summary", {})
+		for key in sm:
+			for kind in counts:
+				if str(key).begins_with(kind):
+					counts[kind] = int(counts[kind]) + int(sm[key])
+	var hitches := int((a["summary"] as Dictionary).get("hitch frames >100 ms", 0)) \
+			+ int((b["summary"] as Dictionary).get("hitch frames >100 ms", 0))
+	print("PlaytestHarness: popin %s — nobody vanished while drawn (%d)" % [
+		"PASS" if int(counts["VANISH"]) == 0 else "FAIL", int(counts["VANISH"])])
+	print("PlaytestHarness: popin %s — nobody appeared from nowhere (%d)" % [
+		"PASS" if int(counts["APPEAR"]) == 0 else "FAIL", int(counts["APPEAR"])])
+	print("PlaytestHarness: popin %s — at most %d jump(s) faster than a catch-up glide (%d; %d hitch frames over 100 ms)" % [
+		"PASS" if int(counts["JUMP"]) <= POPIN_MAX_JUMPS else "FAIL", POPIN_MAX_JUMPS,
+		int(counts["JUMP"]), hitches])
 	if main.has_method("close_festival_mode"):
 		main.call("close_festival_mode")
 	main.time_scale = 0.0
