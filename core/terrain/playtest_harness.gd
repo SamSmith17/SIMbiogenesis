@@ -3259,18 +3259,22 @@ func _run_population_verify() -> void:
 		"water_point": Vector2(0, 70), "sleep": Vector2(0, -80),
 		"shower": Vector2(-45, -45),
 	}
+	# The ids this capture seeds: the marker check below counts THESE, not the
+	# registry's total, because the world's own tagged spaces (a saved site
+	# carries whatever the player tagged) would otherwise move the count.
+	var seeded_ids: Array = []
 	for stype in sites:
 		var c: Vector2 = sites[stype]
-		reg.call("set_space_type", {"kind": "area", "poly": [
+		seeded_ids.append(str(reg.call("set_space_type", {"kind": "area", "poly": [
 			[c.x - half, c.y - half], [c.x + half, c.y - half],
-			[c.x + half, c.y + half], [c.x - half, c.y + half]]}, str(stype), 30)
+			[c.x + half, c.y + half], [c.x - half, c.y + half]]}, str(stype), 30)))
 	# One deliberately CONCAVE area (a U, like a courtyard wrapping a building).
 	# Its centroid lands in the opening, outside the space, so this exercises
 	# SpaceRegistry.area_interior_point's fallback against a real registry and
 	# real agents rather than only in the offline geometry test.
 	var u_poly: Array = [[40, 40], [70, 40], [70, 70], [61, 70], [61, 49],
 			[49, 49], [49, 70], [40, 70]]
-	reg.call("set_space_type", {"kind": "area", "poly": u_poly}, "fire_circle", 12)
+	seeded_ids.append(str(reg.call("set_space_type", {"kind": "area", "poly": u_poly}, "fire_circle", 12)))
 	var u_pt: Variant = SpaceRegistry.area_interior_point(u_poly)
 	var u_centroid := SpaceRegistry.polygon_centroid(u_poly)
 	var ok_concave := u_pt is Vector2 \
@@ -3702,11 +3706,18 @@ func _run_population_verify() -> void:
 		if player != null:
 			player.global_position = home
 
-	# Tagged spaces must be resolvable as Site Plan markers with occupancy.
+	# Tagged spaces must be resolvable as Site Plan markers with occupancy —
+	# every space THIS capture seeded (matched by id), whatever else the
+	# world carries. Mount Vernon's own tagged space made the old equality
+	# read "7 of 6" (2026-10-18).
 	var marks: Array = bridge.call("space_markers", main)
-	var ok_marks := marks.size() == sites.size() + 1   # +1 = the concave area
-	print("PlaytestHarness: population verify — space markers %s (%d of %d resolved)" % [
-		"PASS" if ok_marks else "FAIL", marks.size(), sites.size() + 1])
+	var resolved_seeded := 0
+	for m in marks:
+		if seeded_ids.has(str((m as Dictionary).get("id", ""))):
+			resolved_seeded += 1
+	var ok_marks := resolved_seeded == seeded_ids.size()
+	print("PlaytestHarness: population verify — space markers %s (%d of %d seeded resolved; %d on the site)" % [
+		"PASS" if ok_marks else "FAIL", resolved_seeded, seeded_ids.size(), marks.size()])
 	var ok_drape := false
 	if main != null:
 		var prev_cam := get_viewport().get_camera_3d()

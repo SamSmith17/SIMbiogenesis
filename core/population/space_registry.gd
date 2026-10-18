@@ -717,7 +717,14 @@ static func slot_offset_for_index(slot: int) -> Vector2:
 ## Convenience: the standing offset for this agent at this space, with a
 ## per-person shuffle (SLOT_JITTER_M) so the sunflower spiral never reads as
 ## the lattice it is.
-const SLOT_JITTER_M := 0.35
+##
+## The shuffle is a DISC of this radius. The slots are ~0.855 m apart at the
+## closest, and two neighbours shuffled toward each other lose twice the
+## radius, so this bounds the worst standing pair at ~0.45 m. The first form
+## was a ±0.35 m SQUARE per axis (a corner is 0.49 m out), which could put two
+## people in adjacent slots 0.03 m apart — a stack the separation pass never
+## undid at festival speeds, where it is off. Pinned in npc_population_selftest.
+const SLOT_JITTER_M := 0.2
 
 
 ## Where the n-th extra sleeper on one bed lies (n >= 1): alternating sides
@@ -740,7 +747,10 @@ func slot_offset(space_id: String, agent_id: String) -> Vector2:
 
 
 static func slot_jitter(agent_id: String) -> Vector2:
-	return Vector2(NpcHash.unit01(agent_id, "jx") - 0.5, NpcHash.unit01(agent_id, "jz") - 0.5) * (SLOT_JITTER_M * 2.0)
+	# Uniform over the disc (sqrt on the radius), never past SLOT_JITTER_M.
+	var ang := NpcHash.unit01(agent_id, "jx") * TAU
+	var r := sqrt(NpcHash.unit01(agent_id, "jz")) * SLOT_JITTER_M
+	return Vector2(cos(ang), sin(ang)) * r
 
 
 ## Testing switch (PopTestPrefs.ignore_capacity, set by the bridge each

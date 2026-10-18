@@ -4517,6 +4517,32 @@ func _test_standing_slots() -> void:
 	_check("occupants stand apart",
 			reg.slot_offset(sid, "b").distance_to(reg.slot_offset(sid, "c"))
 			>= SpaceRegistry.PERSONAL_SPACE_M * 0.95)
+	# The per-person shuffle is BOUNDED: the closest two slots are ~0.855 m
+	# apart and each shuffle may pull its person toward the other by at most
+	# SLOT_JITTER_M, so no two occupants can ever stand nearer than ~0.45 m.
+	# The old ±0.35 m square (0.49 m to a corner) put two neighbours 0.03 m
+	# apart on the Mount Vernon capture's camp.
+	var jit_max := 0.0
+	for i in 2000:
+		jit_max = maxf(jit_max, SpaceRegistry.slot_jitter("jit_%d_npc_%d" % [i % 7, i]).length())
+	_check("slot jitter never leaves its disc", jit_max <= SpaceRegistry.SLOT_JITTER_M + 1e-6,
+			"max %.3f m" % jit_max)
+	_check("two jittered neighbours keep ~half a metre",
+			worst - 2.0 * SpaceRegistry.SLOT_JITTER_M >= 0.4,
+			"slot spacing %.3f − 2 × %.2f" % [worst, SpaceRegistry.SLOT_JITTER_M])
+	var jworst := INF
+	for sa in 12:
+		for sb in range(sa + 1, 12):
+			for ia in 16:
+				for ib in 16:
+					if ia == ib:
+						continue
+					jworst = minf(jworst, (SpaceRegistry.slot_offset_for_index(sa)
+						+ SpaceRegistry.slot_jitter("cap_pop_hab_npc_%d" % ia)).distance_to(
+						SpaceRegistry.slot_offset_for_index(sb)
+						+ SpaceRegistry.slot_jitter("cap_pop_hab_npc_%d" % ib)))
+	_check("the capture camp's 16 people never stack in adjacent slots", jworst >= 0.4,
+			"closest %.3f m" % jworst)
 	_check("a non-occupant has no slot", reg.slot_index_for(sid, "zz") == -1)
 	_check("a non-occupant gets no offset", reg.slot_offset(sid, "zz") == Vector2.ZERO)
 	# Slots are KEPT for the visit: a leaver does not shuffle everyone behind
@@ -4616,6 +4642,26 @@ func _test_separation() -> void:
 						(engine.agents[j] as NpcAgent).pos))
 	_check("coincident agents push apart", closest > 0.15,
 			"closest pair %.3f m" % closest)
+
+	# At festival speed (>= 120x) and after a coarse catch-up, travellers are
+	# left alone (their position is an approximation) but two people STANDING
+	# on one point are still pushed apart. The capture at 180x / 720x left an
+	# idle pair stacked at 0.09 m for the rest of the run.
+	var fast_e := NpcPopulationEngine.new()
+	fast_e.configure(4, "fast_hab", Vector2.ZERO)
+	for k in 4:
+		var fa: NpcAgent = fast_e.agents[k]
+		fa.pos = Vector2(20.0, 20.0)   # stacked, far from every space
+		if k >= 2:
+			fa.state = NpcAgent.State.TRAVELING
+			fa.target_pos = Vector2(60.0, 20.0)
+			fa.activity = "enrichment"
+	var trav_before: Array = [(fast_e.agents[2] as NpcAgent).pos, (fast_e.agents[3] as NpcAgent).pos]
+	fast_e._separate(0.05, {"time_mult": 720.0})
+	var idle_gap := (fast_e.agents[0] as NpcAgent).pos.distance_to((fast_e.agents[1] as NpcAgent).pos)
+	_check("a stacked idle pair separates at 720x", idle_gap > 0.15, "%.3f m" % idle_gap)
+	_check("travellers are left alone at 720x",
+			(fast_e.agents[2] as NpcAgent).pos == trav_before[0] and (fast_e.agents[3] as NpcAgent).pos == trav_before[1])
 
 	# Separation must never shove anyone through a wall: with everything
 	# unwalkable, no push may be applied at all.

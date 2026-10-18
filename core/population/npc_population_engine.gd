@@ -647,8 +647,15 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 	# nudging it is noise on top of noise.
 	# Also off at festival speeds: the nudges are cosmetic, O(n^2), and at
 	# 120x+ a person crosses several personal spaces per frame anyway.
-	if dt > SEPARATION_MAX_DT_H or agents.size() < 2 			or float(ctx.get("time_mult", 0.0)) >= SEPARATION_MAX_TIME_MULT:
+	if agents.size() < 2:
 		return
+	# Those two gates are about TRAVELLERS, whose position at speed is an
+	# approximation. Two people STANDING still are exactly where the sim
+	# says, so a pair of them is still pushed apart at any speed — a coarse
+	# catch-up or a tick at 180x used to leave two idle people stacked on one
+	# point for good (the Mount Vernon capture's npc_2 / npc_7, 0.09 m).
+	var fast := float(ctx.get("time_mult", 0.0)) >= SEPARATION_MAX_TIME_MULT
+	var travel_ok := dt <= SEPARATION_MAX_DT_H and not fast
 	var walkable: Callable = ctx.get("walkable", Callable())
 	var gap := SpaceRegistry.PERSONAL_SPACE_M
 	# O(n^2) on purpose: the roster caps at 64, so this is at most ~2k pairs of
@@ -673,6 +680,9 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 			if asleep[j]:
 				continue
 			var b: NpcAgent = agents[j]
+			if not travel_ok and (a.state == NpcAgent.State.TRAVELING
+					or b.state == NpcAgent.State.TRAVELING):
+				continue
 			var d := b.pos - a.pos
 			var dist := d.length()
 			if dist >= gap:

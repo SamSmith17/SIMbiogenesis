@@ -1281,6 +1281,7 @@ func space_markers(main: Node) -> Array:
 		var sid := str(space.get("id", ""))
 		var target: Dictionary = space.get("target", {})
 		out.append({
+			"id": sid,
 			"pos": p,
 			"space_type": str(space.get("space_type", "")),
 			"label": str(space.get("label", "")),
