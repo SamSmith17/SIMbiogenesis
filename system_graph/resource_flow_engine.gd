@@ -150,15 +150,31 @@ var _conn_by_id: Dictionary = {}
 ## Rebuilds every adjacency index above from _model.connections. O(connections)
 ## once per tick, replacing what used to be an O(connections) scan PER PORT
 ## LOOKUP (of which a single processor tick can do several).
+## The index is a function of the model's TOPOLOGY plus the player's wire
+## edits (GraphModel.struct_rev / user_rev): rebuilt only when either moved,
+## not every step. The per-step memo of the routed penstock still clears.
+var _conn_index_key: String = ""
+
+
 func _rebuild_conn_index() -> void:
 	_penstock_conn_cache.clear()
+	if _model == null:
+		_conn_index_key = ""
+		_conn_by_source.clear()
+		_conn_by_target.clear()
+		_resource_conns_by_source_item.clear()
+		_resource_conns_by_target_item.clear()
+		_conn_by_id.clear()
+		return
+	var key := "%d|%d|%d" % [_model.struct_rev, _model.user_rev, _model.connections.size()]
+	if key == _conn_index_key and not _conn_by_id.is_empty():
+		return
+	_conn_index_key = key
 	_conn_by_source.clear()
 	_conn_by_target.clear()
 	_resource_conns_by_source_item.clear()
 	_resource_conns_by_target_item.clear()
 	_conn_by_id.clear()
-	if _model == null:
-		return
 	# _conn_by_id must reference the REAL connection dicts so _cache_conn_flow's
 	# flow_rate/flow_active writeback animates the actual (possibly boundary)
 	# wire the player sees.
@@ -173,7 +189,7 @@ func _rebuild_conn_index() -> void:
 	# nested compounds resolves to a direct tank->processor edge. Each flat edge
 	# keeps its origin conn id, so _cache_conn_flow(edge.id) still hits the real
 	# wire via _conn_by_id above.
-	for conn: Dictionary in GraphNesting.flat_connections(_model):
+	for conn: Dictionary in GraphNesting.flat_connections_cached(_model):
 		var sid := str(conn.get("source_item_id", ""))
 		var shid := str(conn.get("source_handle_id", ""))
 		var tid := str(conn.get("target_item_id", ""))
@@ -253,6 +269,91 @@ func seek_all_tanks(abs_hours: float) -> void:
 	_ensure_timelines_at(abs_hours)
 	_read_all_tanks_at(abs_hours)
 	_last_abs_hours = abs_hours
+
+
+# ---------------------------------------------------------------------------
+# Pre-render replay API (CLAUDE.md "Sim pre-render + playback"). Inside a
+# rendered range the ambient tick READS instead of simulating: every tank off
+# its timeline, the hydro readouts re-derived from the restored pond levels.
+# Nothing here integrates anything.
+# ---------------------------------------------------------------------------
+
+## Replay the world at `abs_hours`: tanks from their timelines + the hydro
+## telemetry (siphon prime / Q / rpm / W, culvert glow) off those levels — the
+## same read the backward scrub does, now usable forward. The caller must
+## never ask for a time past the rendered range's end: `ResourceTimeline.seek`
+## extrapolates past its last sample at constant rates.
+func replay_at(abs_hours: float) -> void:
+	if _model == null:
+		return
+	_ensure_timelines_at(abs_hours)
+	_read_all_tanks_at(abs_hours)
+	_refresh_hydro_telemetry_readonly()
+	_last_abs_hours = abs_hours
+	# The ambient caller replaced this step's tick(): consume the accumulator
+	# so the next replay waits a tick interval like a live step would.
+	_tick_accum = 0.0
+
+
+## Cut every tank's cache after `abs_hours` (a player edit invalidated the
+## rendered future). Deficit tanks have no timeline; the render keyframes carry
+## them.
+func truncate_timelines_after(abs_hours: float) -> void:
+	for tl in _timelines.values():
+		(tl as ResourceTimeline).truncate_after(abs_hours)
+
+
+## The wire-animation flows as the render saw them at one instant …
+func conn_flow_snapshot() -> Dictionary:
+	return _conn_flow.duplicate(true)
+
+
+## … and put back on replay, so the 2D wires and the 3D conduit glow follow
+## the playhead (they read `get_connection_flow` / the conn dicts, which only
+## the forward step writes).
+func apply_conn_flow_snapshot(snap: Dictionary) -> void:
+	if _model == null:
+		return
+	_rebuild_conn_index()
+	_conn_flow.clear()
+	for conn: Dictionary in _model.connections:
+		conn["flow_active"] = false
+		conn["flow_rate"] = 0.0
+	for cid in snap:
+		var e: Variant = snap[cid]
+		if e is Dictionary:
+			_cache_conn_flow(str(cid), float((e as Dictionary).get("rate", 0.0)),
+				str((e as Dictionary).get("kind", "")))
+
+
+## The engine state the live step carries BETWEEN steps and no timeline
+## records: batch progress, the NPC bridge's demand overrides, external venue
+## flows, per-scope camp AC, the seasonal supply curves, the diversions. A
+## render moves all of it to the range's end; when the player drops the range
+## (an edit, a scrub before its start) the live step must resume from the
+## playhead's state, not the end's.
+func internal_state_snapshot() -> Dictionary:
+	return {
+		"processor_states": _processor_states.duplicate(true),
+		"habitat_demand": _habitat_demand.duplicate(true),
+		"external_flows": _external_flows.duplicate(true),
+		"scope_ac_available": _scope_ac_available.duplicate(true),
+		"supply_profiles": _supply_profiles.duplicate(true),
+		"stream_diversions": _stream_diversions.duplicate(true),
+		"last_abs_hours": _last_abs_hours,
+	}
+
+
+func restore_internal_state(snap: Dictionary) -> void:
+	if snap.is_empty():
+		return
+	_processor_states = (snap.get("processor_states", {}) as Dictionary).duplicate(true)
+	_habitat_demand = (snap.get("habitat_demand", {}) as Dictionary).duplicate(true)
+	_external_flows = (snap.get("external_flows", {}) as Dictionary).duplicate(true)
+	_scope_ac_available = (snap.get("scope_ac_available", {}) as Dictionary).duplicate(true)
+	_supply_profiles = (snap.get("supply_profiles", {}) as Dictionary).duplicate(true)
+	_stream_diversions = (snap.get("stream_diversions", {}) as Dictionary).duplicate(true)
+	_last_abs_hours = float(snap.get("last_abs_hours", _last_abs_hours))
 
 
 func _wall_tick_interval() -> float:
@@ -572,6 +673,7 @@ func _integrate_deficit_tank(iid: String, specs: Dictionary,
 func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_rebuild_conn_index()
 	_refresh_ambient_cache()
+	_pond_tank_index_valid = false
 	_pond_budget.clear()
 	_stream_catch_m2 = {}
 	_stream_catch_valid = false
@@ -643,7 +745,8 @@ func _process_pbi(item: Dictionary, _abs_hours: float) -> void:
 			if total_lph > 0.0 else "dry"
 	specs["is_active"] = rain_mmh > 0.0
 	var iid := str(item.get("id", ""))
-	_model.update_item(iid, {"specs": specs})
+	_write_if_changed(iid, item, specs,
+		["live_capture_lph", "live_rain_mmh", "display_value", "is_active"])
 	# Animate outbound wires to catchments at the SoI total rate (informational).
 	if total_lph <= 0.0:
 		return
@@ -667,7 +770,8 @@ func _process_sun_pbi(item: Dictionary, specs: Dictionary) -> void:
 	specs["display_value"] = SolarIrradiance.pbi_display_string(ghi, flux_kw)
 	specs["is_active"] = ghi > 1.0
 	var iid := str(item.get("id", ""))
-	_model.update_item(iid, {"specs": specs})
+	_write_if_changed(iid, item, specs,
+		["irradiance_wm2", "flux_kw", "sun_availability", "cloud_frac", "display_value", "is_active"])
 	# Animate outbound (optional) radiant wires at the SoI total flux — informational.
 	if flux_kw <= 0.0:
 		return
@@ -697,7 +801,8 @@ func _process_wind_pbi(item: Dictionary, specs: Dictionary) -> void:
 	specs["display_value"] = AtmospherePbiScript.pbi_display_string(wind_ms, temp_c, humidity)
 	specs["is_active"] = wind_ms > 0.5 or rain > 0.05 or cloud > 0.05
 	var iid := str(item.get("id", ""))
-	_model.update_item(iid, {"specs": specs})
+	_write_if_changed(iid, item, specs, ["wind_ms", "temp_c", "humidity_pct", "cloud_frac",
+		"rain_mmh", "kinetic_kw", "weather_class", "display_value", "is_active"])
 	if kinetic_kw <= 0.0:
 		return
 	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
@@ -972,7 +1077,7 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	# Rain catchments require an inbound wire from a Rain PBI node.
 	if not pond_direct and not _catchment_has_pbi_feed(item, "water"):
 		specs["live_capture_lph"] = 0.0
-		_model.update_item(str(item.get("id", "")), {"specs": specs})
+		_write_if_changed(str(item.get("id", "")), item, specs, ["live_capture_lph"])
 		return
 	var area_m2: float = _catchment_area_m2(specs)
 	# A hillside catchment and a mapped stream into the same pond drain the SAME
@@ -987,7 +1092,7 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	# mm/h * m² = L/h (1 mm on 1 m² = 1 L)
 	var capture_lph: float = area_m2 * runoff * maxf(rain_mmh, 0.0)
 	specs["live_capture_lph"] = capture_lph
-	_model.update_item(str(item.get("id", "")), {"specs": specs})
+	_write_if_changed(str(item.get("id", "")), item, specs, ["live_capture_lph", "stream_covered_m2"])
 	if capture_lph <= 0.0:
 		return
 	var abs_h: float = abs_hours if abs_hours >= 0.0 else _get_abs_hours()
@@ -1168,12 +1273,12 @@ func _process_siphon_hydro(net_rates: Dictionary, dt_hours: float,
 	if _model == null:
 		return
 	_stream_diversions.clear()
-	for item: Dictionary in _model.items:
-		if str(item.get("type", "")) != "processor":
+	for item: Dictionary in _model.items_of_type("processor"):
+		# Role check on the live dict first — the deep copy used to be taken
+		# for EVERY processor before the role was looked at.
+		if str((item.get("specs", {}) as Dictionary).get("role", "")) != "siphon_hydro":
 			continue
 		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		if str(specs.get("role", "")) != "siphon_hydro":
-			continue
 		var proc_id := str(item.get("id", ""))
 		if bool(specs.get(HydroSource.SPEC_OFF, false)):
 			_idle_switched_off_turbine(item, specs, proc_id)
@@ -1649,18 +1754,17 @@ func _refresh_hydro_telemetry_readonly() -> void:
 func _stamp_siphon_outlet_culvert_flow(siphon_id: String, q_lph: float, q_lps: float) -> void:
 	if _model == null or siphon_id.is_empty():
 		return
-	for conn: Dictionary in _model.connections:
-		if str(conn.get("source_item_id", "")) != siphon_id \
-				and str(conn.get("target_item_id", "")) != siphon_id:
-			continue
+	# Outlet side only (siphon as source), through the per-topology index
+	# instead of a scan of every wire per siphon per step. The stamp lands on
+	# the REAL wire (the index holds flattened copies).
+	for edge: Dictionary in (_resource_conns_by_source_item.get(siphon_id, []) as Array):
+		var cid := str(edge.get("id", ""))
+		var real: Variant = _conn_by_id.get(cid)
+		var conn: Dictionary = (real as Dictionary) if real is Dictionary else edge
 		var type_id := ConduitKinds.derive_type_for_connection(conn)
 		if not ConduitKinds.uses_culvert_kit(type_id) \
 				and str(conn.get("conduit_type", "")) != "culvert_pipe":
 			continue
-		# Only outlet side (siphon as source).
-		if str(conn.get("source_item_id", "")) != siphon_id:
-			continue
-		var cid := str(conn.get("id", ""))
 		conn["live_q_lps"] = q_lps
 		conn["live_q_lph"] = q_lph
 		_cache_conn_flow(cid, q_lph, "water")
@@ -2143,8 +2247,7 @@ func _process_culvert_stage_discharge(net_rates: Dictionary, _dt_hours: float,
 			float(hs["length_m"]),
 			float(hs.get("manning_n", CulvertHydraulics.DEFAULT_MANNING_N)))
 		var q_lph := float(r.get("q_m3s", 0.0)) * 1000.0 * 3600.0
-		var cid := str(conn.get("id", ""))
-		_model.update_connection(cid, {
+		_stamp_conn_telemetry(conn, {
 			"live_q_lps": float(r.get("q_lps", 0.0)),
 			"live_q_lph": q_lph,
 			"live_head_m": float(r.get("head_m", 0.0)),
@@ -2163,18 +2266,34 @@ func _process_culvert_stage_discharge(net_rates: Dictionary, _dt_hours: float,
 				net_rates[tid] = float(net_rates.get(tid, 0.0)) + q_lph
 
 
+## pond tag -> pond_storage tank, built once per step on first use (the
+## culvert pass used to scan every item per culvert per step).
+var _pond_tank_by_tag: Dictionary = {}
+var _pond_tank_index_valid: bool = false
+
+
+func _pond_tank_for_tag(pond_tag: String) -> Dictionary:
+	if not _pond_tank_index_valid:
+		_pond_tank_by_tag.clear()
+		for it in _model.items_of_type("resource"):
+			var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+			if bool(specs.get("pond_storage", false)):
+				var tag := str(specs.get("osm_water_tag", ""))
+				if not tag.is_empty() and not _pond_tank_by_tag.has(tag):
+					_pond_tank_by_tag[tag] = it
+		_pond_tank_index_valid = true
+	var hit: Variant = _pond_tank_by_tag.get(pond_tag)
+	return (hit as Dictionary) if hit is Dictionary else {}
+
+
 func _resolve_culvert_inlet_tank(conn: Dictionary, pond_tag: String) -> Dictionary:
 	if _model == null:
 		return {}
 	# Prefer explicit pond tag on the connection.
 	if not pond_tag.is_empty():
-		for it in _model.items:
-			if not (it is Dictionary):
-				continue
-			var specs: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
-			if bool(specs.get("pond_storage", false)) \
-					and str(specs.get("osm_water_tag", "")) == pond_tag:
-				return it as Dictionary
+		var by_tag := _pond_tank_for_tag(pond_tag)
+		if not by_tag.is_empty():
+			return by_tag
 	# Else: source item is the pond tank, or a pond catchment → linked tank.
 	var src := _model.get_item(str(conn.get("source_item_id", "")))
 	if src.is_empty():
@@ -2409,15 +2528,15 @@ func _process_jit_transfers(net_rates: Dictionary, dt_hours: float,
 	if dt_hours <= 0.0:
 		return
 	var abs_h: float = abs_hours if abs_hours >= 0.0 else 0.0
-	for item: Dictionary in _model.items:
-		if str(item.get("type", "")) != "resource":
+	for item: Dictionary in _model.items_of_type("resource"):
+		# Cheap gates on the live dict first (migration only ADDS a missing
+		# jit_outflow as false, so the raw read is the migrated answer); the
+		# deep copy used to be taken for every tank on the graph.
+		var raw: Dictionary = item.get("specs", {}) as Dictionary
+		if not bool(raw.get("jit_outflow", false)) or not bool(raw.get("output_valve_open", true)):
 			continue
-		var src_specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+		var src_specs: Dictionary = raw.duplicate(true)
 		_rk.migrate_resource_specs(src_specs)
-		if not bool(src_specs.get("jit_outflow", false)):
-			continue
-		if not bool(src_specs.get("output_valve_open", true)):
-			continue
 		var src_id := str(item.get("id", ""))
 		var src_kind := ResourceKinds.normalize_kind(str(src_specs.get("resource_kind", "")))
 		if src_kind.is_empty():
@@ -2448,21 +2567,23 @@ func _process_jit_transfers(net_rates: Dictionary, dt_hours: float,
 			var tgt := _model.get_item(tgt_id)
 			if tgt.is_empty() or str(tgt.get("type", "")) != "resource":
 				continue
+			# Kind check before the deep copy (normalize_kind is what migration
+			# would apply to the kind anyway).
+			if ResourceKinds.normalize_kind(str((tgt.get("specs", {}) as Dictionary).get("resource_kind", ""))) != src_kind:
+				continue
 			var tgt_specs: Dictionary = (tgt.get("specs", {}) as Dictionary).duplicate(true)
 			_rk.migrate_resource_specs(tgt_specs)
-			if ResourceKinds.normalize_kind(str(tgt_specs.get("resource_kind", ""))) != src_kind:
-				continue
 			# Gravity head gate: uphill transfers need a pump flag on the connection
 			# or either tank (specs.pump / specs.is_pump / connection.pump).
 			var gravity := _gravity_allows_transfer(item, tgt, conn)
 			if not bool(gravity.get("ok", true)):
 				_cache_conn_flow(str(conn.get("id", "")), 0.0, src_kind)
-				_model.update_connection(str(conn.get("id", "")), {
+				_stamp_conn_telemetry(conn, {
 					"needs_pump": true,
 					"gravity_delta_m": float(gravity.get("delta_m", 0.0)),
 				})
 				continue
-			_model.update_connection(str(conn.get("id", "")), {
+			_stamp_conn_telemetry(conn, {
 				"needs_pump": false,
 				"gravity_delta_m": float(gravity.get("delta_m", 0.0)),
 			})
@@ -3988,6 +4109,52 @@ func _connections_from_handle(item_id: String, handle_id: String) -> Array:
 
 func _connections_to_handle(item_id: String, handle_id: String) -> Array:
 	return _conn_by_target.get(item_id + "|" + handle_id, []) as Array
+
+
+## Write an item's specs only when one of `keys` differs from what the model
+## holds — EXACT comparison, so no value is ever left behind (the model dict
+## is identical either way); only the signal cascade is saved. The PBI and
+## catchment passes wrote unconditionally every step, and each write woke
+## every `changed` listener (the placeholder host's O(N) sync, the pond push).
+func _write_if_changed(iid: String, item: Dictionary, specs: Dictionary, keys: Array) -> void:
+	var orig: Dictionary = item.get("specs", {}) as Dictionary
+	for k in keys:
+		if not orig.has(k) or orig[k] != specs[k]:
+			_model.update_item(iid, {"specs": specs})
+			return
+
+
+## Sim telemetry onto a wire, CHANGE-GATED (floats within 1e-6 relative, else
+## exact) and routed through `GraphModel.stamp_connection_telemetry`, whose
+## "conn_telemetry" reason the view coalesces into a redraw and nothing else.
+## `conn` may be a flattened edge: it is resolved by id, so the stamp lands on
+## the REAL wire. Before this the culvert and JIT passes called
+## update_connection unconditionally per edge per step, and each call queued a
+## full electrical fault check and a conduit remesh sweep with the graph closed.
+func _stamp_conn_telemetry(conn: Dictionary, updates: Dictionary) -> void:
+	if _model == null:
+		return
+	var cid := str(conn.get("id", ""))
+	if cid.is_empty():
+		return
+	var real: Variant = _conn_by_id.get(cid)
+	var target: Dictionary = (real as Dictionary) if real is Dictionary else conn
+	var dirty := false
+	for k in updates:
+		if not target.has(k):
+			dirty = true
+			break
+		var nv: Variant = updates[k]
+		var ov: Variant = target[k]
+		if (nv is float or nv is int) and (ov is float or ov is int):
+			if absf(float(nv) - float(ov)) > 1e-6 * maxf(1.0, absf(float(ov))):
+				dirty = true
+				break
+		elif nv != ov:
+			dirty = true
+			break
+	if dirty:
+		_model.stamp_connection_telemetry(cid, updates)
 
 
 func _cache_conn_flow(conn_id: String, rate: float, kind: String = "") -> void:

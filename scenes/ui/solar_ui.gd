@@ -3261,6 +3261,85 @@ func make_render_evaluator() -> Callable:
 	return Callable(self, "evaluate_inputs_at")
 
 
+# ==================== SIM PRE-RENDER (timeline Render button) ====================
+# The SimRenderer fills the LIVE energy_timeline ahead of the playhead and
+# registers the range in a SimRenderCache; inside a rendered range the battery
+# reads the cache and never truncates it (CLAUDE.md "Sim pre-render + playback").
+
+## Aux generation (kW) the render evaluator uses for the NEXT step: the
+## stepper sets it from the flow engine's graph DC output after each
+## render_step (hydro into the battery, one-step lag like the live 0.25 s
+## sync). NAN = hold the live aux constant (the legacy batch render).
+var render_aux_kw: float = NAN
+## Whether the inverter is serving the loads in the render (the stepper's
+## floor / resume hysteresis). false = loads shed, load reads 0 like the live
+## `_calculate_load_power` does during low-SOC protection.
+var render_ac_on: bool = true
+var _render_cache: RefCounted = null
+
+
+## The evaluator for a sim pre-render: solar as a pure function of the
+## instant (SPA + weather + shade + DC caps), load = the SAME GraphAcLoad
+## reading the live tick integrates (the model is handed in once; the legacy
+## `_modeled_load_at` did a `find_child` per call), aux from `render_aux_kw`.
+func make_sim_render_evaluator(model: Object) -> Callable:
+	return func(abs_hours: float) -> Dictionary:
+		var solar := evaluate_solar_at(abs_hours)
+		var aux := evaluate_aux_at(abs_hours) if is_nan(render_aux_kw) else maxf(render_aux_kw, 0.0)
+		var load := 0.0
+		if render_ac_on:
+			if model != null and get_tree() != null:
+				load = float(_GRAPH_AC_LOAD_SCRIPT.compute_kw(model, get_tree()))
+			else:
+				load = _modeled_load_at(abs_hours)
+		return {"solar_kw": solar, "aux_kw": aux, "load_kw": load}
+
+
+## The SimRenderer's cache: while it covers the playhead, `_update_battery`
+## reads the rendered SOC and readouts and never truncates the timeline.
+func set_render_cache(cache: RefCounted) -> void:
+	_render_cache = cache
+
+
+func _in_rendered_range(abs_h: float) -> bool:
+	return _render_cache != null and _render_cache.has_method("covers") \
+		and bool(_render_cache.call("covers", abs_h))
+
+
+## The SimRenderer's entry: the LIVE timeline, configured, anchored at the
+## playhead if it was empty, cut there, and given the sim-render evaluator.
+## Returns the timeline for the stepper to fill.
+func prepare_live_timeline_for_render(abs_h: float, model: Object) -> EnergyTimeline:
+	var aux_total := current_aux_generation_kw + current_graph_dc_kw
+	energy_timeline.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY,
+		min_battery_kwh())
+	if energy_timeline.is_empty():
+		energy_timeline.init_anchor(abs_h, battery_kwh_stored, current_solar_kw, aux_total, current_load_kw)
+	energy_timeline.truncate_after(abs_h)
+	render_aux_kw = maxf(aux_total, 0.0)
+	render_ac_on = not _soc_protect_active
+	energy_timeline.set_evaluator(make_sim_render_evaluator(model))
+	return energy_timeline
+
+
+## The render is over (or cancelled): the live timeline goes back to having no
+## evaluator (a backward scrub past its start fills with held inputs, as it
+## always did) and the render inputs are cleared.
+func end_render_evaluator() -> void:
+	energy_timeline.set_evaluator(Callable())
+	render_aux_kw = NAN
+	render_ac_on = true
+
+
+## After a render restores the world to the playhead: re-anchor the forward
+## read so the next tick is a cache read, not a "forward from the render's
+## end" step, and show the SOC the cache holds there.
+func reseat_battery_at(abs_h: float) -> void:
+	_battery_last_abs_h = abs_h
+	if not energy_timeline.is_empty():
+		battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
+
+
 # ==================== CHALLENGE PRE-BAKE / PLAYBACK ====================
 # ChallengeBakeEngine drives _sim_series directly (its own frame budget, not
 # BatchRenderer) — reusing the SIM clip lane the timeline already draws.
@@ -3320,6 +3399,8 @@ func set_playback_series_active(on: bool) -> void:
 ## the baked physics (_weather_at_abs) and the visible sky
 ## (_try_apply_open_meteo_weather) so the two can't disagree.
 func set_clear_sky_override(on: bool) -> void:
+	if _clear_sky_override != on and _render_cache != null and _render_cache.has_method("invalidate_all"):
+		_render_cache.call("invalidate_all")  # the rendered sun was the other sky's
 	_clear_sky_override = on
 
 
@@ -3673,12 +3754,21 @@ func _update_battery(_delta: float) -> void:
 	if energy_timeline.is_empty():
 		energy_timeline.init_anchor(abs_h, battery_kwh_stored,
 			current_solar_kw, aux_total, current_load_kw)
+	# Inside a RENDERED range the timeline is authoritative: the render
+	# integrated the same inputs as a pure function of time, and the live
+	# `current_solar_kw` comes from the scene-sun path (cloud noise, the
+	# battery-full lerp), so the divergence test below would cut every render
+	# on its first tick. Readouts come from the cache too (same rule as the
+	# challenge playback), or the cards and the SOC tell different stories.
+	var rendered := _in_rendered_range(abs_h)
 	if abs_h > energy_timeline.end_abs_hours():
 		# Forward — integrate with exact live inputs (held across the step).
 		energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw)
 	elif abs_h < energy_timeline.start_abs_hours():
 		# Scrubbed before the cache start — extend backward (best-effort).
 		energy_timeline.seek(abs_h)
+	elif rendered:
+		pass  # pure read of the rendered curve, forward or back
 	elif abs_h > _battery_last_abs_h + 1e-6 \
 			and _battery_last_abs_h >= energy_timeline.start_abs_hours():
 		# Moving FORWARD through samples cached on an earlier pass (the clock was
@@ -3698,6 +3788,8 @@ func _update_battery(_delta: float) -> void:
 	# else: paused or moving back inside the cache — pure reversible read.
 	_battery_last_abs_h = abs_h
 	battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
+	if rendered:
+		_apply_playback_readouts(abs_h, energy_timeline.sample_at(abs_h))
 	# Scoreboard/24h-history are derived read-only views over the timeline —
 	# they don't need to recompute at the same 10 Hz cadence as the actual SOC
 	# integration above. Moved to the existing 4 Hz UI tick (see _process).

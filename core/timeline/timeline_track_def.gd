@@ -78,7 +78,8 @@ static func default_tracks() -> Array:
 	clips.id = "clips"
 	clips.kind = KIND_CLIPS
 	clips.label = "Clips"
-	clips.height = 11.0
+	# 3 px render strip on top (TimelineUI.RENDER_STRIP_H) + four clip rows.
+	clips.height = 14.0
 	clips.enabled = true
 	out.append(clips)
 	for spec in [

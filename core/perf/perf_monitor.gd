@@ -21,6 +21,10 @@ extends Node
 const SECTION_ORDER: Array[String] = [
 	"graph_sim", "flow_engine", "npc_population", "npc_dots", "npc_host", "crowd_sim",
 	"crowd_render", "crowd_raster", "camp_power", "npc_persist", "npc_venues", "npc_peaks",
+	# The graph-closed cascade that used to be invisible on the HUD: the DC
+	# throttle pass, the (deferred) electrical fault check, the 3D placeholder
+	# host's sync and the pond twin push. Read these when first person stutters.
+	"gv_dc_throttle", "gv_faults", "gv_placeholder", "gv_pond_push",
 	"conduits_3d", "world_env", "terrain_tick", "drone",
 	"prop_ticks", "canvas_draw",
 ]

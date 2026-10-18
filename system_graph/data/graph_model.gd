@@ -42,6 +42,28 @@ var definitions: Dictionary = {}
 var _item_counter: int = 0
 var _connection_counter: int = 0
 
+## Revision counters (CLAUDE.md "Sim pre-render + playback").
+## `struct_rev` moves on TOPOLOGY: an item or connection added or removed, a
+## type / scope / handle-set change, an endpoint or polarity change on a wire,
+## deserialize, clear. It keys every cached adjacency / electrical analysis.
+## `user_rev` moves on ANY write made while `sim_writing` is false — it is the
+## key the pre-render cache is valid against. The simulation's own telemetry
+## (tank levels, hydro readouts, DC throttle, camp power, NPC pop_state, pond
+## bathymetry writeback, HA mirror values) runs inside the graph view's
+## `_begin_sim_writes()` / `_end_sim_writes()` bracket, which sets `sim_writing`,
+## so those writes never move `user_rev`. Connection telemetry stamped through
+## `stamp_connection_telemetry` never moves either counter.
+var struct_rev: int = 0
+var user_rev: int = 0
+var sim_writing: bool = false
+## Item keys whose change is a topology change (everything else on update_item
+## is a spec / layout edit).
+const STRUCTURAL_ITEM_KEYS: Array[String] = ["type", "scope_id", "child_scope_id", "handles"]
+## Connection keys whose change is a topology change (an endpoint moved, the
+## polarity changed, a wire burnt through).
+const STRUCTURAL_CONN_KEYS: Array[String] = ["source_item_id", "source_handle_id",
+	"target_item_id", "target_handle_id", "polarity", "severed", "scope_id"]
+
 ## Last connection line_style the user picked (Smooth bezier / Rounded
 ## rectilinear / Metro). New connections default to this so a graph keeps a
 ## consistent style. Round-trips through serialize/deserialize.
@@ -118,6 +140,28 @@ func _init() -> void:
 	_ensure_root_scope()
 
 
+## Debug: print every user_rev move with what caused it (the harness probes
+## switch it on to find a sim writer that forgot the sim-write bracket).
+var trace_user_rev: bool = false
+
+
+## Advance the revision counters for a write. `structural` = topology moved.
+func _bump(structural: bool, what: String = "") -> void:
+	if structural:
+		struct_rev += 1
+	if not sim_writing:
+		user_rev += 1
+		if trace_user_rev:
+			print("GraphModel user_rev -> %d: %s" % [user_rev, what])
+
+
+static func _touches_any(updates: Dictionary, keys: Array[String]) -> bool:
+	for k in keys:
+		if updates.has(k):
+			return true
+	return false
+
+
 # ---------------------------------------------------------------------------
 # ID generation
 # ---------------------------------------------------------------------------
@@ -156,6 +200,7 @@ func add_item(item: Dictionary) -> void:
 		for key: String in item:
 			existing[key] = item[key]
 		_type_index_dirty = true
+		_bump(true)
 		changed.emit("add_item")
 		return
 	if not item.has("scope_id"):
@@ -166,6 +211,7 @@ func add_item(item: Dictionary) -> void:
 	items.append(item)
 	_item_index[iid] = item
 	_type_index_dirty = true
+	_bump(true, "add_item " + iid)
 	changed.emit("add_item")
 
 
@@ -190,6 +236,7 @@ func remove_item(item_id: String) -> void:
 		if c.get("source_item_id") == item_id or c.get("target_item_id") == item_id:
 			_conn_index.erase(str(c.get("id", "")))
 			connections.remove_at(i)
+	_bump(true, "remove_item " + item_id)
 	changed.emit("remove_item")
 
 
@@ -250,10 +297,26 @@ func update_item(item_id: String, updates: Dictionary) -> void:
 	var item := get_item(item_id)
 	if item.is_empty():
 		return
+	var what := ""
+	if trace_user_rev and not sim_writing:
+		# Which spec keys actually changed: the writer's fingerprint.
+		var changed_keys: Array = []
+		if updates.get("specs") is Dictionary and item.get("specs") is Dictionary:
+			var old_specs: Dictionary = item["specs"]
+			var new_specs: Dictionary = updates["specs"]
+			for k in new_specs:
+				if not old_specs.has(k) or old_specs[k] != new_specs[k]:
+					changed_keys.append(str(k))
+			for k in old_specs:
+				if not new_specs.has(k):
+					changed_keys.append("-" + str(k))
+		what = "update_item %s %s changed=%s frame=%d" % [item_id, str(updates.keys()),
+			str(changed_keys), Engine.get_process_frames()]
 	for key: String in updates:
 		item[key] = updates[key]
 	if updates.has("type"):
 		_type_index_dirty = true
+	_bump(_touches_any(updates, STRUCTURAL_ITEM_KEYS), what)
 	changed.emit("update_item")
 
 
@@ -281,6 +344,7 @@ func add_connection(conn: Dictionary) -> void:
 		conn.get("source_item_id", ""), conn.get("source_handle_id", ""),
 		conn.get("id", "")
 	)
+	_bump(true, "add_connection " + str(conn.get("id", "")))
 	changed.emit("add_connection")
 
 
@@ -323,6 +387,7 @@ func remove_connection(conn_id: String) -> void:
 			connections.remove_at(i)
 			break
 	_conn_index.erase(conn_id)
+	_bump(true, "remove_connection " + conn_id)
 	changed.emit("remove_connection")
 
 
@@ -372,8 +437,30 @@ func update_connection(conn_id: String, updates: Dictionary) -> void:
 						updates[key] as Dictionary)
 				else:
 					conn[key] = updates[key]
+			_bump(_touches_any(updates, STRUCTURAL_CONN_KEYS),
+				("update_connection %s %s" % [conn_id, str(updates.keys())]) if trace_user_rev else "")
 			changed.emit("update_connection")
 			return
+
+
+## Sim-tick TELEMETRY on a wire (culvert Q / head / regime, JIT pump flags):
+## written through the id index (update_connection is an O(C) scan), emitted
+## as its own reason `"conn_telemetry"` so the view coalesces a redraw and
+## nothing else — no electrical fault check, no undo history, no 3D conduit
+## remesh — and never moves either revision counter. The flow engine stamped
+## these through update_connection UNCONDITIONALLY per culvert per step, and
+## every one queued a full `_check_electrical_faults` (~4× flat_connections +
+## a BFS per controller) with the graph closed.
+func stamp_connection_telemetry(conn_id: String, updates: Dictionary) -> void:
+	var conn := get_connection(conn_id)
+	if conn.is_empty():
+		return
+	for key: String in updates:
+		if updates[key] == null:
+			conn.erase(key)
+		else:
+			conn[key] = updates[key]
+	changed.emit("conn_telemetry")
 
 
 ## Returns all connections that touch a given item (either endpoint).
@@ -444,6 +531,7 @@ func clear() -> void:
 	_type_index_dirty = true
 	scopes = {}
 	_ensure_root_scope()
+	_bump(true)
 	changed.emit("clear")
 
 
@@ -560,6 +648,7 @@ func deserialize(data: Dictionary) -> void:
 	last_line_style     = str(data.get("last_line_style", "bezier"))
 	_rebuild_item_index()
 	_rebuild_conn_index()
+	_bump(true)
 	changed.emit("deserialize")
 
 
@@ -609,6 +698,7 @@ func put_definition(def: Dictionary) -> void:
 	if did.is_empty():
 		return
 	definitions[did] = def.duplicate(true)
+	_bump(false)
 	changed.emit("definition")
 
 

@@ -1343,6 +1343,13 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 		solar : Node, fnt : Font) -> void:
 	var lane_h := lane_rect.size.y
 	var lane_y := lane_rect.position.y
+	# The top of the clips lane is the sim render strip (green = rendered, red
+	# = selected but not), like Premiere's bar above the sequence.
+	var strip_h := minf(RENDER_STRIP_H, maxf(lane_h - 8.0, 0.0))
+	if strip_h > 0.0:
+		_draw_render_strip(lane_y, strip_h, win_start, span, w, solar)
+		lane_y += strip_h
+		lane_h -= strip_h
 	var quarter := lane_h / 4.0
 	_track.draw_rect(lane_rect, Color(LANE_OBS_BG.r, LANE_OBS_BG.g, LANE_OBS_BG.b, 0.35), true)
 	_track.draw_string(fnt, Vector2(3.0, lane_y + quarter * 0.8), "OBS",
@@ -1565,6 +1572,7 @@ func _update_mode_chips() -> void:
 			1: dcol = C_PRIMARY   # OBSERVED
 			2: dcol = C_LAVENDER  # PROJECTED
 			3: dcol = C_GOLD      # RECORDED
+			4: dcol = C_GREEN     # RENDERED (the sim pre-render's cache)
 		_data_chip.add_theme_color_override("font_color", dcol)
 
 
@@ -1791,8 +1799,7 @@ func _build_left_cluster() -> Control:
 			"Import datastream — load a Home Assistant CSV as an observed comparison clip")
 	left.add_child(_import_btn)
 
-	_render_btn = _mk_icon_btn("📈", _on_render_pressed,
-			"Render — bake energy sim (or climelapse) for the Ctrl-drag selection on the track")
+	_render_btn = _mk_icon_btn("📈", _on_render_pressed, RENDER_TIP)
 	left.add_child(_render_btn)
 
 	_export_mp4_btn = _mk_icon_btn("🎬", _on_export_clim_mp4_pressed,
@@ -2243,11 +2250,191 @@ func _update_clim_progress_dialog() -> void:
 			1 if result == "ok" else 3)
 
 
+const RENDER_TIP := ("Render — pre-compute the whole simulation (battery, water, hydro, camps, "
+	+ "people) from the playhead to the end of the Ctrl-drag selection, or the next 24 h, "
+	+ "so that stretch plays back from the cache while you explore. The green strip above "
+	+ "the clips shows what is rendered; an edit cuts it at the playhead.\n"
+	+ "Shift-click: the observed-vs-sim comparison render (needs an imported CSV clip).")
+const _MONTHS: Array[String] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+	"Oct", "Nov", "Dec"]
+const RENDER_STRIP_H := 3.0
+const STRIP_RENDERED := Color(0.149, 0.902, 0.467, 0.95)   # green — rendered, plays back
+const STRIP_PENDING := Color(0.149, 0.902, 0.467, 0.30)    # the part still rendering
+const STRIP_NEEDED := Color(0.937, 0.267, 0.267, 0.80)     # red — selected, not rendered
+
+var _render_card: Control = null
+var _render_signals_connected := false
+
+
+## 📈: pre-render the simulation from the playhead. Shift-click keeps the old
+## energy-only observed-vs-sim render into the Compare series.
 func _on_render_pressed() -> void:
+	if Input.is_key_pressed(KEY_SHIFT):
+		var s := _get_solar()
+		if s != null and s.has_method("start_batch_render"):
+			if not bool(s.call("start_batch_render")):
+				_render_toast("Nothing to compare: import a CSV clip (📥) or Ctrl-drag a range first.", true)
+			_update_nle_controls()
+		return
+	var sr := _sim_renderer(true)
+	if sr == null:
+		_render_toast("The simulation is not up yet.", true)
+		return
+	var res: Dictionary = sr.call("start", _render_target_end())
+	if not bool(res.get("ok", false)):
+		_render_toast(str(res.get("why", "Cannot render right now.")), true)
+	_update_nle_controls()
+
+
+## The range end the button renders to: the Ctrl-drag selection's end when it
+## lies ahead of the playhead, else the next 24 h.
+func _render_target_end() -> float:
+	var play := _playhead_abs()
 	var s := _get_solar()
-	if s != null and s.has_method("start_batch_render"):
-		s.call("start_batch_render")
-		_update_nle_controls()
+	if s != null and s.has_method("get_selection_abs"):
+		var sel: Vector2 = s.call("get_selection_abs")
+		if not is_nan(sel.x) and not is_nan(sel.y) and sel.y > play + 1.0 / 60.0:
+			return sel.y
+	return play + SimRenderer.DEFAULT_RENDER_H
+
+
+## The graph view's renderer. `create` false only looks (the 10 Hz control
+## refresh and the track draw must not spawn one).
+func _sim_renderer(create: bool = false) -> Node:
+	var ui_layer := get_parent()
+	if ui_layer == null:
+		return null
+	var gv := ui_layer.get_node_or_null("SystemGraphView")
+	if gv == null:
+		return null
+	var sr: Node = null
+	if create and gv.has_method("sim_renderer"):
+		sr = gv.call("sim_renderer")
+	else:
+		var v: Variant = gv.get("_sim_renderer")
+		sr = v if v is Node and is_instance_valid(v) else null
+	if sr != null and not _render_signals_connected:
+		_render_signals_connected = true
+		sr.connect("render_started", _on_render_started)
+		sr.connect("render_progress", _on_render_progress)
+		sr.connect("render_finished", _on_render_finished)
+		sr.connect("cache_changed", _on_render_cache_changed)
+	return sr
+
+
+func _ensure_render_card() -> Control:
+	if _render_card != null and is_instance_valid(_render_card):
+		return _render_card
+	var ui_layer := get_parent()
+	if ui_layer == null:
+		return null
+	_render_card = RenderProgressCard.new()
+	ui_layer.add_child(_render_card)
+	_render_card.connect("cancel_requested", func() -> void:
+		var sr := _sim_renderer()
+		if sr != null:
+			sr.call("cancel"))
+	return _render_card
+
+
+func _on_render_started(a: float, b: float) -> void:
+	var card := _ensure_render_card()
+	if card != null:
+		card.call("show_render", "%s → %s · %s" % [_fmt_abs(a), _fmt_abs(b), UiText.duration(b - a)])
+	_update_nle_controls()
+	if _track != null:
+		_track.queue_redraw()
+
+
+func _on_render_progress(frac: float, eta_s: float, _cursor: float) -> void:
+	if _render_card != null and is_instance_valid(_render_card):
+		_render_card.call("set_progress", frac, eta_s)
+	if _track != null:
+		_track.queue_redraw()
+
+
+func _on_render_finished(completed: bool, a: float, b: float) -> void:
+	if _render_card != null and is_instance_valid(_render_card):
+		_render_card.call("finish")
+	if b > a + 1e-6:
+		_render_toast("%s %s → %s. That stretch now plays back from the cache." % [
+			"Rendered" if completed else "Kept the rendered part", _fmt_abs(a), _fmt_abs(b)], false)
+	_update_nle_controls()
+	if _track != null:
+		_track.queue_redraw()
+
+
+func _on_render_cache_changed() -> void:
+	_update_nle_controls()
+	if _track != null:
+		_track.queue_redraw()
+
+
+func _render_toast(msg: String, warn: bool) -> void:
+	if _main != null and is_instance_valid(_main) and _main.has_method("show_toast"):
+		_main.call("show_toast", msg, ToastUI.Level.WARN if warn else ToastUI.Level.INFO, 5.0)
+	else:
+		print("timeline render: %s" % msg)
+
+
+## "Oct 17 14:00" for an absolute sim-hour, through the clock's own calendar.
+func _fmt_abs(h: float) -> String:
+	var clk := _track_clock()
+	if clk == null:
+		return "%.1f h" % h
+	var d: Dictionary = clk.abs_hours_to_date(h)
+	var dt := float(d.get("day_time", 0.0))
+	var mins := int(round(fmod(dt, 1.0) * 60.0))
+	var hrs := int(floor(dt))
+	if mins >= 60:
+		mins = 0
+		hrs += 1
+	return "%s %d %02d:%02d" % [_MONTHS[clampi(int(d.get("month", 1)) - 1, 0, 11)],
+		int(d.get("day", 1)), hrs % 24, mins]
+
+
+## The Premiere-style render strip: green over every rendered range, the part
+## still rendering in dim green, red over a selection ahead of the playhead
+## that is not rendered. Drawn in the band reserved at the top of the clips
+## lane.
+func _draw_render_strip(y: float, h: float, win_start: float, span: float, w: float,
+		solar: Node) -> void:
+	var sr := _sim_renderer()
+	var play := _playhead_abs()
+	var ranges: Array = []
+	var active := false
+	var active_range := Vector2(NAN, NAN)
+	var prog := 0.0
+	if sr != null:
+		ranges = sr.call("ranges")
+		active = bool(sr.call("is_active"))
+		if active:
+			active_range = sr.call("active_range")
+			prog = float(sr.call("progress"))
+	# Red first (under the green): a selection ahead of the playhead.
+	if solar != null and solar.has_method("get_selection_abs"):
+		var sel: Vector2 = solar.call("get_selection_abs")
+		if not is_nan(sel.x) and not is_nan(sel.y) and sel.y > sel.x:
+			var a := maxf(sel.x, play)
+			if sel.y > a:
+				_draw_strip_span(a, sel.y, y, h, win_start, span, w, STRIP_NEEDED)
+	for r in ranges:
+		if r is Dictionary:
+			_draw_strip_span(float((r as Dictionary)["a"]), float((r as Dictionary)["b"]),
+				y, h, win_start, span, w, STRIP_RENDERED)
+	if active and not is_nan(active_range.x):
+		var cur := active_range.x + (active_range.y - active_range.x) * prog
+		_draw_strip_span(active_range.x, cur, y, h, win_start, span, w, STRIP_RENDERED)
+		_draw_strip_span(cur, active_range.y, y, h, win_start, span, w, STRIP_PENDING)
+
+
+func _draw_strip_span(a0: float, a1: float, y: float, h: float, win_start: float, span: float,
+		w: float, col: Color) -> void:
+	var x0 := clampf((a0 - win_start) / span * w, 0.0, w)
+	var x1 := clampf((a1 - win_start) / span * w, 0.0, w)
+	if x1 <= x0:
+		return
+	_track.draw_rect(Rect2(x0, y, x1 - x0, h), col, true)
 
 
 # NOTE: the old `_on_render_clim_pressed` keyframe-bake handler was removed — it
@@ -2353,10 +2540,18 @@ func _update_nle_controls() -> void:
 		var tl2 := _get_terrain_loader()
 		var clim_busy := tl2 != null and tl2.has_method("is_climelapse_rendering") \
 			and bool(tl2.call("is_climelapse_rendering"))
-		var need_clip := true
-		if s != null and s.has_method("has_observed_clip"):
-			need_clip = bool(s.call("has_observed_clip"))
-		_render_btn.disabled = clim_busy or not need_clip
+		# The sim render needs no clip (it renders from the playhead); only a
+		# render / bake / export already owning the world disables it.
+		var sr := _sim_renderer()
+		var render_busy := sr != null and bool(sr.call("is_active"))
+		var clock_owned := _main != null and is_instance_valid(_main) \
+			and _main.has_method("clock_is_owned") and bool(_main.call("clock_is_owned"))
+		_render_btn.disabled = clim_busy or render_busy or (clock_owned and not render_busy)
+		_render_btn.tooltip_text = ("Rendering… (click Cancel on the card to stop)" if render_busy
+			else RENDER_TIP)
+		_dim_disabled(_render_btn)
+		_dim_disabled(_compare_btn)
+		_dim_disabled(_snap_video_btn)
 	if not _clim_signals_connected:
 		var tl4 := _get_terrain_loader()
 		if tl4 != null and tl4.has_signal("climelapse_state_changed"):
@@ -3421,7 +3616,20 @@ func _mk_icon_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 	btn.add_theme_stylebox_override("normal", sb_n)
 	btn.add_theme_stylebox_override("hover", sb_h)
 	btn.add_theme_stylebox_override("pressed", sb_p)
+	# A DISABLED icon button must look disabled: these are colour emoji, which
+	# ignore the font colour, so the whole button dims (the 📈 Render button sat
+	# disabled-but-identical for every player without a CSV clip loaded, which
+	# read as "the button does nothing").
+	btn.add_theme_stylebox_override("disabled", sb_n)
+	btn.add_theme_color_override("font_disabled_color", Color(C_TEXT_M.r, C_TEXT_M.g, C_TEXT_M.b, 0.6))
 	return btn
+
+
+## Keep an icon button's dimming in step with its `disabled` flag.
+func _dim_disabled(btn: Button) -> void:
+	if btn == null:
+		return
+	btn.modulate.a = 0.38 if btn.disabled else 1.0
 
 
 func _mk_ctrl_btn(txt: String, callback: Callable) -> Button:

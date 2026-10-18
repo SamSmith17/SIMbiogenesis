@@ -266,7 +266,9 @@ func _on_model_changed(reason: String) -> void:
 	# Tank / telemetry item writes are the hot path during flow_engine — skip.
 	# Prop moves call sync_all / invalidate explicitly from SystemGraphView.
 	match reason:
-		"update_item", "definition":
+		"update_item", "definition", "conn_telemetry":
+			# conn_telemetry = the flow engine's culvert Q / pump-flag stamps:
+			# nothing about a run's geometry or style moved.
 			return
 		"update_connection", "add_connection", "remove_connection", \
 				"remove_item", "add_item", "clear", "deserialize":

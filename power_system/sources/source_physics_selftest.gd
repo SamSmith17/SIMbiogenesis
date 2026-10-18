@@ -847,6 +847,43 @@ func _test_timecode() -> void:
 	_check("timeline: replay after truncate follows the new inputs",
 		et.soc_at(1002.0) < mid_before - 0.9,
 		"mid %.3f end %.3f" % [mid_before, et.soc_at(1002.0)])
+	# A sim pre-render fills the LIVE timeline through the evaluator
+	# (fill_forward_chunk) from a cut at the playhead; it must land exactly
+	# where live record_step'ing the same inputs would — same step_soc, same
+	# grid — or leaving a rendered range forward would show a jump.
+	var et_live := EnergyTimeline.new()
+	et_live.step_hours = 1.0 / 60.0
+	et_live.configure(16.0, 0.95, 0.95, 1.6)
+	et_live.init_anchor(1000.0, 8.0, 2.0, 0.0, 3.0)
+	var et_render := EnergyTimeline.new()
+	et_render.step_hours = 1.0 / 60.0
+	et_render.configure(16.0, 0.95, 0.95, 1.6)
+	et_render.init_anchor(1000.0, 8.0, 2.0, 0.0, 3.0)
+	et_render.set_evaluator(func(_abs_h: float) -> Dictionary:
+		return {"solar_kw": 2.0, "aux_kw": 0.0, "load_kw": 3.0})
+	t = 1000.0
+	while t < 1003.0 - 1e-9:
+		t += et_live.step_hours
+		et_live.record_step(t, 2.0, 0.0, 3.0)
+	var done_fill := et_render.fill_forward_chunk(et_render.step_of(1003.0), 1 << 30)
+	_check("timeline: render fill reaches its target", done_fill)
+	# Compare at the live buffer's own last step (accumulating 1/60 in float
+	# can land its final sample one step short of 1003.0; both buffers hold
+	# the same per-step curve).
+	# Tolerance = the float32 sample storage: one-step record_step calls re-read
+	# the rounded SOC every step while the fill keeps a float64 running value
+	# (measured 1.2e-5 kWh apart over 180 steps). 0.1 Wh is the honest pin.
+	var t_cmp := et_live.end_abs_hours()
+	_check("timeline: render fill == live record_step (same inputs, float32 storage)",
+		absf(et_render.soc_at(t_cmp) - et_live.soc_at(t_cmp)) < 1e-4,
+		"render %.6f live %.6f at %.4f" % [et_render.soc_at(t_cmp), et_live.soc_at(t_cmp), t_cmp])
+	# Truncate the rendered future at the midpoint and fill again: identical.
+	var fill_soc := et_render.soc_at(1003.0)
+	et_render.truncate_after(1001.5)
+	et_render.fill_forward_chunk(et_render.step_of(1003.0), 1 << 30)
+	_check("timeline: truncate + re-fill reproduces the curve",
+		absf(et_render.soc_at(1003.0) - fill_soc) < 1e-6,
+		"again %.6f first %.6f" % [et_render.soc_at(1003.0), fill_soc])
 	var et_one := EnergyTimeline.new()
 	et_one.init_anchor(50.0, 4.0)
 	et_one.truncate_after(10.0)   # before the start: still one sample

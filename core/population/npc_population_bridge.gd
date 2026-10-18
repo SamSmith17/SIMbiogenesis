@@ -297,8 +297,9 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		ts_mult = absf(float(main.get("time_scale"))) * 3600.0
 	# Settings -> NPCs -> "Simulated in full" (0 = the default budget).
 	var max_full := NpcDisplayPrefs.full_sim() if NpcDisplayPrefs.full_sim() > 0 else CrowdFocus.MAX_FULL_PEOPLE
-	_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h,
-		max_full, ts_mult)
+	if not _tiers_frozen:
+		_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h,
+			max_full, ts_mult)
 
 	for item in habitats:
 		var d: Dictionary = item
@@ -3561,6 +3562,17 @@ func _service_alarms(iid: String, engine: NpcPopulationEngine, abs_h: float) -> 
 
 ## Challenge replay: snapshot / restore every live engine so a retry replays
 ## the SAME segment from identical population state.
+## While a sim pre-render steps every camp to the range's end, the tier
+## decision must hold still: `restore_all` only restores a roster whose camp
+## is still in the tier the snapshot was taken in (a FULL snapshot cannot land
+## on a LIGHT cohort), and CrowdFocus re-tiers on the viewer's distance.
+var _tiers_frozen: bool = false
+
+
+func freeze_tiers(on: bool) -> void:
+	_tiers_frozen = on
+
+
 func snapshot_all(abs_h: float) -> Dictionary:
 	var out: Dictionary = {}
 	for iid in _engines:

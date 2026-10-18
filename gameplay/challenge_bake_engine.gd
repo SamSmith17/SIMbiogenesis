@@ -64,7 +64,10 @@ var _cursor := 0.0
 var _attempts := 0
 var _failure: Dictionary = {}
 var _power_fail_h := 0.0
-var _pot_solar_kwh := 0.0
+## The one deterministic step, shared with the timeline's SimRenderer
+## (core/sim/sim_bake_stepper.gd). It owns the cost counters and the
+## PV-utilization denominator.
+var _stepper: SimBakeStepper = null
 
 var _play_from := 0.0
 var _play_to := 0.0
@@ -74,12 +77,8 @@ var _play_speed := 1.0
 var _lead_h := 0.0
 
 # Bake cost instrumentation (printed once per attempt) — "too long" should be a
-# number before any constant gets tuned.
+# number before any constant gets tuned. The per-phase split lives on the stepper.
 var _t_bake_us: int = 0
-var _t_solar_us: int = 0
-var _t_pop_us: int = 0
-var _t_flow_us: int = 0
-var _bake_steps: int = 0
 
 # Retry snapshots (taken once at start; restored on every retry).
 var _specs_snapshot: Dictionary = {}
@@ -178,7 +177,6 @@ func _begin_attempt() -> void:
 	_attempts += 1
 	_failure = {}
 	_power_fail_h = 0.0
-	_pot_solar_kwh = 0.0
 	_cursor = _start_abs
 	_playing = false
 	_play_t = _start_abs
@@ -187,10 +185,6 @@ func _begin_attempt() -> void:
 	_lead_h = maxf(_step_h * float(LEAD_MIN_STEPS),
 		(_end_abs - _start_abs) * LEAD_FRACTION)
 	_t_bake_us = 0
-	_t_solar_us = 0
-	_t_pop_us = 0
-	_t_flow_us = 0
-	_bake_steps = 0
 	if _main != null:
 		_main.call("set_absolute_hours", _start_abs)
 	if _solar_ui.has_method("set_playback_series_active"):
@@ -198,6 +192,20 @@ func _begin_attempt() -> void:
 	_series = _solar_ui.call("prepare_challenge_series", _start_abs, _step_h)
 	if _flow.has_method("clear_timelines"):
 		_flow.call("clear_timelines")
+	_stepper = SimBakeStepper.new()
+	_stepper.solar = _solar_ui
+	_stepper.flow = _flow
+	_stepper.bridge = _bridge
+	_stepper.gv = _gv
+	_stepper.main = _main
+	_stepper.model = _gv.get("model")
+	_stepper.series = _series
+	_stepper.step_h = _step_h
+	_stepper.pop_substep_h = POP_SUBSTEP_H
+	# The bake keeps its own conventions: constant aux (evaluate_inputs_at),
+	# AC = SOC above the hard floor.
+	_stepper.couple_dc_aux = false
+	_stepper.ac_rule = SimBakeStepper.AcRule.FLOOR
 	_phase = Phase.BAKING
 	set_process(true)
 	state_changed.emit()
@@ -286,33 +294,12 @@ func _bake_chunk() -> void:
 	# Every render/population step writes item specs — run the whole chunk
 	# under the same history/bulk suppression the ambient tick uses, or 14k
 	# steps of telemetry would flood undo history and redraws.
-	var was_suppress: bool = bool(_gv.get("_history_suppress"))
-	var was_bulk: bool = bool(_gv.get("_sim_bulk_update"))
-	_gv.set("_history_suppress", true)
-	_gv.set("_sim_bulk_update", true)
+	_gv.call("_begin_sim_writes")
 	while budget > 0 and _cursor < _end_abs - 1e-9 and _failure.is_empty():
 		_cursor = minf(_cursor + _step_h, _end_abs)
-		_bake_steps += 1
-		var t_solar0 := Time.get_ticks_usec()
-		# 1) Energy: fill the sim series up to the cursor.
-		_series.fill_forward_chunk(_series.step_of(_cursor), 1 << 30)
-		var s := _series.sample_at(_cursor)
-		var soc := float(s.get("soc_kwh", 0.0))
-		var net := float(s.get("solar_kw", 0.0)) + float(s.get("aux_kw", 0.0)) \
-				- float(s.get("load_kw", 0.0))
-		var floor_kwh := float(_solar_ui.call("min_battery_kwh"))
-		var ac := soc > floor_kwh + 1e-4
-		# PV-utilization denominator: what the sky offered, unclipped.
-		_pot_solar_kwh += float(_solar_ui.call("evaluate_potential_solar_at", _cursor)) * _step_h
-		_t_solar_us += Time.get_ticks_usec() - t_solar0
-		# 2) Population (before flow, mirroring the ambient tick's order).
-		var t_pop0 := Time.get_ticks_usec()
+		# Energy → population → camp power → resources, one shared step.
+		var r := _stepper.step(_cursor)
 		if _bridge != null and bool(_bridge.call("has_pop_driven")):
-			var t := _cursor - _step_h
-			while t < _cursor - 1e-9:
-				var sub := minf(POP_SUBSTEP_H, _cursor - t)
-				t += sub
-				_bridge.call("tick_at", model, _flow, _main, t)
 			# Cursor-named log read: the graph's toast drain keeps its own
 			# cursor, so a bake no longer eats the player's toasts (the old
 			# destructive take_events race).
@@ -320,17 +307,11 @@ func _bake_chunk() -> void:
 				var kind := str((e as Dictionary).get("kind", ""))
 				if _def.fail_on_collapse and (kind == "collapsed" or kind == "deserted"):
 					_failure = {"abs_h": _cursor, "reason": "colony_collapsed"}
-		_t_pop_us += Time.get_ticks_usec() - t_pop0
-		# 3) Resources (deterministic render step with injected AC).
-		var t_flow0 := Time.get_ticks_usec()
-		_flow.call("render_step", _cursor, _step_h, ac)
-		_t_flow_us += Time.get_ticks_usec() - t_flow0
-		# 4) Failure predicates.
+		# Failure predicates.
 		if _failure.is_empty():
-			_failure = _detect_failure(soc, net, floor_kwh, model)
+			_failure = _detect_failure(float(r["soc"]), float(r["net"]), float(r["floor_kwh"]), model)
 		budget -= 1
-	_gv.set("_history_suppress", was_suppress)
-	_gv.set("_sim_bulk_update", was_bulk)
+	_gv.call("_end_sim_writes")
 	if _gv.has_method("_flush_sim_bulk_update"):
 		_gv.call("_flush_sim_bulk_update")
 	_t_bake_us += Time.get_ticks_usec() - chunk_t0
@@ -435,12 +416,10 @@ func _park() -> void:
 
 ## One line per attempt so bake cost is measured, not guessed.
 func _report_bake_cost() -> void:
-	if _bake_steps <= 0:
+	if _stepper == null or _stepper.steps <= 0:
 		return
-	print(("ChallengeBakeEngine: baked %d steps over %.1f h in %.0f ms "
-		+ "(solar %.0f, population %.0f, resources %.0f)") % [
-		_bake_steps, _end_abs - _start_abs, _t_bake_us / 1000.0,
-		_t_solar_us / 1000.0, _t_pop_us / 1000.0, _t_flow_us / 1000.0])
+	print("ChallengeBakeEngine: baked in %.0f ms — %s" % [_t_bake_us / 1000.0,
+		_stepper.report_line("steps", _end_abs - _start_abs)])
 
 
 func _finish_success() -> void:
@@ -453,6 +432,7 @@ func _finish_success() -> void:
 		load_kwh = float(_series.integrate_channel(_start_abs, _end_abs, "load"))
 		start_soc = float(_series.sample_at(_start_abs).get("soc_kwh", start_soc))
 		end_soc = float(_series.sample_at(_end_abs).get("soc_kwh", end_soc))
+	var _pot_solar_kwh := _stepper.pot_solar_kwh if _stepper != null else 0.0
 	var util := 100.0
 	if _pot_solar_kwh > 1e-6:
 		util = clampf(delivered_kwh / _pot_solar_kwh * 100.0, 0.0, 100.0)
@@ -509,16 +489,12 @@ func _restore_snapshots() -> void:
 	if model != null:
 		# Bulk state rewrite — suppress per-item history/undo churn exactly the
 		# way the sim ticks do.
-		var was_suppress: bool = bool(_gv.get("_history_suppress"))
-		var was_bulk: bool = bool(_gv.get("_sim_bulk_update"))
-		_gv.set("_history_suppress", true)
-		_gv.set("_sim_bulk_update", true)
+		_gv.call("_begin_sim_writes")
 		for iid in _specs_snapshot:
 			if not model.get_item(str(iid)).is_empty():
 				model.update_item(str(iid),
 					{"specs": (_specs_snapshot[iid] as Dictionary).duplicate(true)})
-		_gv.set("_history_suppress", was_suppress)
-		_gv.set("_sim_bulk_update", was_bulk)
+		_gv.call("_end_sim_writes")
 		if _gv.has_method("_flush_sim_bulk_update"):
 			_gv.call("_flush_sim_bulk_update")
 	if _bridge != null and not _npc_snapshot.is_empty():

@@ -84,11 +84,13 @@ static func find_battery_for_dc_port(model: GraphModel, item_id: String,
 ## included the same way; scene/HA-mirrored ones are skipped outright since
 ## their output is already counted by SolarUI._poll_aux_generation()'s
 ## real energy_sources group — this is the double-count guard.
+## Runs at 4 Hz with the graph closed: the flattened wires come from the
+## revision-keyed memo (read-only here).
 static func sum_graph_dc_generation_kw(model: GraphModel) -> float:
 	if model == null:
 		return 0.0
 	var total := 0.0
-	var flat_conns := GraphNesting.flat_connections(model)
+	var flat_conns := GraphNesting.flat_connections_cached(model)
 	# Nesting-aware: count DC generators anywhere in the tree (including inside
 	# collapsed super-nodes), wired to a battery across any boundary.
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):

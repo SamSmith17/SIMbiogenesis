@@ -33,6 +33,76 @@ static func volume_to_level_l(poly: PackedVector2Array, height_at: Callable,
 	return vol_m3 * 1000.0
 
 
+## The sample grid behind volume_to_level_l, taken ONCE: the ground height at
+## every grid cell inside the outline, in the SAME x-outer / z-inner order the
+## sweep integrates in, so a volume evaluated over these samples is
+## bit-identical to a fresh sweep (same cells, same float64 sum, same order).
+## The sweep's cost is one terrain query + one point-in-polygon test per cell;
+## a pond twin push used to pay it ~21 times per pond every 0.25 s (a 19-step
+## level bisection + the capacity + the stock), measured at 36 ms a frame on
+## Mount Vernon. TerrainLoader caches these per outline and ground fingerprint.
+static func basin_samples(poly: PackedVector2Array, height_at: Callable,
+		cell_m: float = 1.25) -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	if poly.size() < 3 or height_at == null or cell_m < 0.2:
+		return out
+	var aabb := _poly_aabb(poly)
+	var x := aabb.position.x
+	while x <= aabb.end.x + 1e-4:
+		var z := aabb.position.y
+		while z <= aabb.end.y + 1e-4:
+			var p := Vector2(x, z)
+			if Geometry2D.is_point_in_polygon(p, poly):
+				out.append(float(height_at.call(p.x, p.y)))
+			z += cell_m
+		x += cell_m
+	return out
+
+
+## volume_to_level_l over cached samples (see basin_samples). Identical maths.
+static func volume_from_samples(samples: PackedFloat64Array, cell_m: float,
+		level_m: float, spill_cap_m: float = INF) -> float:
+	if cell_m < 0.2:
+		return 0.0
+	var surface := minf(level_m, spill_cap_m)
+	var cell_area := cell_m * cell_m
+	var vol_m3 := 0.0
+	for gy in samples:
+		var h := surface - float(gy)
+		if h > 0.0:
+			vol_m3 += h * cell_area
+	return vol_m3 * 1000.0
+
+
+## capacity_l over cached samples.
+static func capacity_from_samples(samples: PackedFloat64Array, cell_m: float,
+		spill_m: float, freeboard_m: float = FREEBOARD_DEFAULT_M) -> float:
+	var cap_level := spill_m - maxf(freeboard_m, 0.0)
+	return volume_from_samples(samples, cell_m, cap_level, spill_m)
+
+
+## level_for_volume_l over cached samples: the same 18-step bisection.
+static func level_for_volume_from_samples(samples: PackedFloat64Array, cell_m: float,
+		target_l: float, floor_m: float, spill_m: float,
+		freeboard_m: float = FREEBOARD_DEFAULT_M) -> float:
+	var lo := floor_m
+	var hi := spill_m - maxf(freeboard_m, 0.0)
+	if hi <= lo + 1e-4:
+		return lo
+	var target := maxf(target_l, 0.0)
+	var cap := volume_from_samples(samples, cell_m, hi, spill_m)
+	if target >= cap:
+		return hi
+	for _i in 18:
+		var mid := (lo + hi) * 0.5
+		var v := volume_from_samples(samples, cell_m, mid, spill_m)
+		if v < target:
+			lo = mid
+		else:
+			hi = mid
+	return (lo + hi) * 0.5
+
+
 ## Auto capacity = volume at spill − freeboard.
 static func capacity_l(poly: PackedVector2Array, height_at: Callable,
 		spill_m: float, freeboard_m: float = FREEBOARD_DEFAULT_M,

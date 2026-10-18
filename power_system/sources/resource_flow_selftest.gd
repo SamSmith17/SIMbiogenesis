@@ -13,6 +13,7 @@ const DcPowerWiringScript := preload("res://system_graph/dc_power_wiring.gd")
 const GraphHubPortsScript := preload("res://system_graph/graph_hub_ports.gd")
 const GraphPortServiceScript := preload("res://system_graph/graph_port_service.gd")
 const ComponentPresetsScript := preload("res://system_graph/data/component_presets.gd")
+const SimRenderCacheScript := preload("res://core/sim/sim_render_cache.gd")
 
 var _failures: int = 0
 var _checks: int = 0
@@ -54,6 +55,9 @@ func _initialize() -> void:
 	_test_node_state_reasons()
 	_test_habitat_node_state()
 	_test_render_step_determinism()
+	_test_model_revisions()
+	_test_replay_truncate_and_snapshots()
+	_test_sim_render_cache()
 	_test_biochar_electric_input_fix()
 	_test_processor_ready_idle()
 	_test_graph_ac_load_running_draws()
@@ -1431,6 +1435,229 @@ func _test_render_step_determinism() -> void:
 	var mid := _tank_level_via_seek(eng, g["model"], 12.0, "dst")
 	_check("seek_all_tanks reads mid-render level", mid > 0.001 and mid < lvl,
 		"mid=%.4f full=%.4f" % [mid, lvl])
+
+
+## GraphModel.struct_rev / user_rev / sim_writing — the keys the pre-render
+## cache and the topology caches are valid against (CLAUDE.md "Sim pre-render
+## + playback"). The property that matters: a whole simulated day of telemetry
+## writes inside the sim-write bracket moves NEITHER counter, while one player
+## edit outside it moves user_rev, and only a topology edit moves struct_rev.
+func _test_model_revisions() -> void:
+	var g := _build_pump_graph(true)
+	var model = g["model"]
+	var eng = g["engine"]
+	var reasons: Array = []
+	model.changed.connect(func(r: String) -> void: reasons.append(r))
+	var u0 := int(model.user_rev)
+	var s0 := int(model.struct_rev)
+	model.sim_writing = true
+	eng.render_step(0.0, 0.0, true)
+	for i in range(1, 25):
+		eng.render_step(float(i), 1.0, true)
+	model.sim_writing = false
+	_check("24 h of sim writes leave user_rev alone", int(model.user_rev) == u0,
+		"%d -> %d" % [u0, int(model.user_rev)])
+	_check("24 h of sim writes leave struct_rev alone", int(model.struct_rev) == s0,
+		"%d -> %d" % [s0, int(model.struct_rev)])
+	_check("sim writes did reach the model", reasons.has("update_item"))
+	# A spec edit by the player: user_rev moves, struct_rev does not.
+	var pump_id := "pump" if not model.get_item("pump").is_empty() else str((model.items[0] as Dictionary).get("id", ""))
+	var sp: Dictionary = (model.get_item(pump_id).get("specs", {}) as Dictionary).duplicate(true)
+	sp["name"] = "Renamed by the player"
+	model.update_item(pump_id, {"specs": sp})
+	_check("player spec edit bumps user_rev by one", int(model.user_rev) == u0 + 1,
+		"%d" % int(model.user_rev))
+	_check("player spec edit leaves struct_rev", int(model.struct_rev) == s0)
+	# A scope move IS topology.
+	model.update_item(pump_id, {"scope_id": "root"})
+	_check("scope_id write bumps struct_rev", int(model.struct_rev) == s0 + 1)
+	# Wiring: both.
+	var u1 := int(model.user_rev)
+	var s1 := int(model.struct_rev)
+	model.add_connection({"scope_id": "root", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "src", "source_handle_id": "output",
+		"target_item_id": "dst", "target_handle_id": "input", "id": "rev_probe_wire"})
+	_check("add_connection bumps both", int(model.user_rev) == u1 + 1 and int(model.struct_rev) == s1 + 1,
+		"u %d->%d s %d->%d" % [u1, int(model.user_rev), s1, int(model.struct_rev)])
+	# Telemetry on a wire: never moves a counter, its own reason, value lands.
+	var u2 := int(model.user_rev)
+	var s2 := int(model.struct_rev)
+	reasons.clear()
+	model.stamp_connection_telemetry("rev_probe_wire", {"live_q_lps": 1.25, "needs_pump": true})
+	_check("stamp_connection_telemetry moves no counter",
+		int(model.user_rev) == u2 and int(model.struct_rev) == s2)
+	_check("stamp_connection_telemetry emits conn_telemetry only",
+		reasons == ["conn_telemetry"], str(reasons))
+	_check("stamp_connection_telemetry wrote the value",
+		absf(float(model.get_connection("rev_probe_wire").get("live_q_lps", 0.0)) - 1.25) < 1e-9
+		and bool(model.get_connection("rev_probe_wire").get("needs_pump", false)))
+	# update_connection: a telemetry-ish key is a user edit (user_rev only);
+	# `severed` is topology.
+	model.update_connection("rev_probe_wire", {"conduit_type": "hose"})
+	_check("update_connection style key bumps user_rev only",
+		int(model.user_rev) == u2 + 1 and int(model.struct_rev) == s2)
+	model.update_connection("rev_probe_wire", {"severed": true})
+	_check("update_connection severed bumps struct_rev", int(model.struct_rev) == s2 + 1)
+	model.remove_connection("rev_probe_wire")
+	_check("remove_connection bumps struct_rev", int(model.struct_rev) == s2 + 2)
+	# The engine's own conn stamps are change-gated: a second identical step
+	# at the same state writes nothing new.
+	reasons.clear()
+	var u3 := int(model.user_rev)
+	model.sim_writing = true
+	eng.render_step(25.0, 1.0, true)
+	model.sim_writing = false
+	_check("sim step under the bracket still leaves user_rev", int(model.user_rev) == u3,
+		"%d -> %d" % [u3, int(model.user_rev)])
+
+
+## The replay substrate (Phase 2 of the pre-render plan): a truncated tank
+## cache resumes from the cut, replay_at reads what the render wrote, and the
+## engine's between-step state round-trips through its snapshot.
+func _test_replay_truncate_and_snapshots() -> void:
+	var g := _build_pump_graph(true)
+	var eng = g["engine"]
+	var model = g["model"]
+	eng.render_step(0.0, 0.0, true)
+	for i in range(1, 25):
+		eng.render_step(float(i), 1.0, true)
+	var at_12 := _tank_level_via_seek(eng, model, 12.0, "dst")
+	var at_24 := _tank_level_via_seek(eng, model, 24.0, "dst")
+	_check("render filled dst by 24 h", at_24 > at_12 + 0.05, "12h=%.4f 24h=%.4f" % [at_12, at_24])
+	# replay_at == seek (plus the hydro refresh, a no-op on this graph).
+	eng.replay_at(12.0)
+	_check("replay_at reads the 12 h level exactly", _tank_level(model, "dst") == at_12,
+		"replay=%.6f seek=%.6f" % [_tank_level(model, "dst"), at_12])
+	# Truncate at 12 h: the timeline's last sample is the 12 h step, and a
+	# seek past it extrapolates from there instead of reading the old 24 h.
+	eng.truncate_timelines_after(12.0)
+	var tl: ResourceTimeline = eng.get_timeline("dst")
+	_check("truncate_timelines_after cut at 12 h", tl.last_step() == tl.step_of(12.0),
+		"last=%d step12=%d" % [tl.last_step(), tl.step_of(12.0)])
+	_check("level at the cut unchanged", tl.level_at(12.0) == at_12)
+	# Live stepping resumes from the cut and lands where the render did (the
+	# same deterministic step), so a dropped range costs nothing but time.
+	eng.render_step(12.0, 0.0, true)
+	for i in range(13, 25):
+		eng.render_step(float(i), 1.0, true)
+	_check("re-render from the cut reproduces 24 h", absf(_tank_level(model, "dst") - at_24) < 1e-6,
+		"again=%.6f first=%.6f" % [_tank_level(model, "dst"), at_24])
+	# Internal state snapshot round trip.
+	eng.set_habitat_demand("probe_hab", {"water": 3.0})
+	eng.set_scope_ac_available("camp_1", false)
+	var snap: Dictionary = eng.internal_state_snapshot()
+	eng.set_habitat_demand("probe_hab", {"water": 9.0})
+	eng.set_scope_ac_available("camp_1", true)
+	eng.restore_internal_state(snap)
+	var hd: Dictionary = eng._habitat_demand
+	_check("internal snapshot restores habitat demand",
+		absf(float((hd.get("probe_hab", {}) as Dictionary).get("water", 0.0)) - 3.0) < 1e-9, str(hd))
+	_check("internal snapshot restores scope AC", eng._scope_ac_available.get("camp_1", true) == false)
+	# Conn-flow snapshot round trip drives the wire animation on replay.
+	var flows: Dictionary = eng.conn_flow_snapshot()
+	var any_active := false
+	for cid in flows:
+		if bool((flows[cid] as Dictionary).get("active", false)):
+			any_active = true
+	_check("pump graph has an active wire flow to snapshot", any_active, str(flows))
+	eng.apply_conn_flow_snapshot({})
+	var cleared := true
+	for cid in flows:
+		if bool(eng.get_connection_flow(str(cid)).get("active", false)):
+			cleared = false
+	_check("empty conn snapshot clears the flows", cleared)
+	eng.apply_conn_flow_snapshot(flows)
+	var same := true
+	for cid in flows:
+		var a: Dictionary = flows[cid]
+		var b: Dictionary = eng.get_connection_flow(str(cid))
+		if absf(float(a.get("rate", 0.0)) - float(b.get("rate", 0.0))) > 1e-9 \
+				or bool(a.get("active", false)) != bool(b.get("active", false)):
+			same = false
+	_check("conn snapshot round-trips", same)
+
+
+## SimRenderCache: ranges, keyframes (full then sparse), composed apply,
+## truncation at the playhead, the energy-timeline guard.
+func _test_sim_render_cache() -> void:
+	var cache = SimRenderCacheScript.new()
+	var g := _build_pump_graph(true)
+	var eng = g["engine"]
+	var model = g["model"]
+	_check("cache starts empty", cache.is_empty() and not cache.covers(0.0))
+	cache.begin_range(0.0, 7, 5.0)
+	eng.render_step(0.0, 0.0, true)
+	cache.capture(model, eng.conn_flow_snapshot(), 0.0)
+	_check("first keyframe is full", bool((cache.keyframes[0] as Dictionary)["full"]))
+	var pump0: Dictionary = model.get_item("pump").get("specs", {}) as Dictionary
+	_check("pump has no node_state before the first step", not pump0.has("node_state")
+		or str(pump0.get("node_state", "")).is_empty())
+	# Keyframe 1: the engine's own node_state write ("running") plus a probe
+	# key the engine never touches. Keyframe 2: the probe moves on.
+	var sp: Dictionary = (model.get_item("pump").get("specs", {}) as Dictionary).duplicate(true)
+	sp["probe_flag"] = 1
+	model.update_item("pump", {"specs": sp})
+	eng.render_step(1.0, 1.0, true)
+	cache.capture(model, eng.conn_flow_snapshot(), 1.0)
+	var kf1: Dictionary = cache.keyframes[1]
+	_check("second keyframe is sparse", not bool(kf1["full"]))
+	var kf1_pump: Dictionary = (kf1["items"] as Dictionary).get("pump", {}) as Dictionary
+	_check("sparse keyframe carries the changed keys only",
+		kf1_pump.has("probe_flag") and kf1_pump.has("node_state") and not kf1_pump.has("name"),
+		str(kf1["items"]))
+	var state_1 := str((model.get_item("pump").get("specs", {}) as Dictionary).get("node_state", ""))
+	_check("engine wrote a node_state at step 1", not state_1.is_empty())
+	sp = (model.get_item("pump").get("specs", {}) as Dictionary).duplicate(true)
+	sp["probe_flag"] = 2
+	model.update_item("pump", {"specs": sp})
+	eng.render_step(2.0, 1.0, true)
+	cache.capture(model, eng.conn_flow_snapshot(), 2.0)
+	_check("range grew with the captures", cache.covers(2.0) and not cache.covers(2.5),
+		str(cache.ranges))
+	# Apply backwards: at 0.5 the probe is gone AND the node_state the engine
+	# only started writing at step 1 is gone too (the erase rule).
+	cache.apply_at(model, eng, 0.5)
+	var at_half: Dictionary = model.get_item("pump").get("specs", {}) as Dictionary
+	_check("apply_at 0.5 erases keys the range introduced later",
+		not at_half.has("probe_flag") and not at_half.has("node_state"), str(at_half.keys()))
+	cache.apply_at(model, eng, 1.5)
+	var at_15: Dictionary = model.get_item("pump").get("specs", {}) as Dictionary
+	_check("apply_at 1.5 composes through keyframe 1",
+		int(at_15.get("probe_flag", 0)) == 1 and str(at_15.get("node_state", "")) == state_1,
+		str(at_15.get("probe_flag")) + " " + str(at_15.get("node_state")))
+	cache.apply_at(model, eng, 2.0)
+	_check("apply_at 2.0 reaches keyframe 2 (incremental)",
+		int((model.get_item("pump").get("specs", {}) as Dictionary).get("probe_flag", 0)) == 2)
+	# Timeline tanks are NOT in keyframes (the seek owns them); deficit tanks are.
+	var kf0_items: Dictionary = (cache.keyframes[0] as Dictionary)["items"]
+	_check("timeline tank level stays out of keyframes",
+		not (kf0_items.get("dst", {}) as Dictionary).has("level"), str(kf0_items.get("dst", {})))
+	_check("keyframe key rule: live_* excluded, node_state kept, tank level excluded on timeline tanks",
+		not SimRenderCacheScript.keyframe_key("live_q_lps", false)
+		and SimRenderCacheScript.keyframe_key("node_state", false)
+		and not SimRenderCacheScript.keyframe_key("level", true)
+		and SimRenderCacheScript.keyframe_key("level", false))
+	# Truncate at 1.2: keyframe 2 goes, the range ends at 1.2.
+	_check("truncate_after reports a change", cache.truncate_after(1.2))
+	_check("truncate dropped keyframes past the cut", cache.keyframe_count() == 2)
+	_check("range ends at the cut", cache.covers(1.2) and not cache.covers(1.5))
+	# A range starting after the cut is dropped whole.
+	cache.begin_range(5.0, 8, 4.0)
+	cache.extend_range(6.0)
+	_check("two ranges", cache.ranges.size() == 2)
+	cache.truncate_after(3.0)
+	_check("later range dropped whole, earlier kept", cache.ranges.size() == 1 and cache.covers(1.0))
+	# Energy-timeline guard: a re-anchored timeline drops the cache.
+	var et := EnergyTimeline.new()
+	et.configure(16.0, 0.95, 0.95, 1.6)
+	et.init_anchor(0.0, 5.0, 0.0, 0.0, 0.0)
+	cache.begin_range(0.0, 9, 5.0)
+	cache.extend_range(1.0)
+	_check("guard passes while the anchor SOC holds", not cache.verify_energy_timeline(et) and cache.covers(0.5))
+	et.clear()
+	et.init_anchor(0.0, 9.0, 0.0, 0.0, 0.0)
+	_check("guard drops the cache when the timeline was re-anchored",
+		cache.verify_energy_timeline(et) and cache.is_empty())
 
 
 func _tank_level_via_seek(engine, model, abs_h: float, tank_id: String) -> float:

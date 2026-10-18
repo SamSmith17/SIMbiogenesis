@@ -284,7 +284,13 @@ func _on_sensor_updated(entity_id: String, state: Dictionary) -> void:
 		if apply_live:
 			# Mirror into display-friendly fields so the canvas reflects HA.
 			_mirror_to_spec(specs, itype, role, numeric, unit)
+		# A measured value arriving is not a player edit: it must not move
+		# GraphModel.user_rev (which would invalidate a rendered range every
+		# few seconds while HA is connected).
+		var was_sim_writing := model.sim_writing
+		model.sim_writing = true
 		model.update_item(iid, {"specs": specs})
+		model.sim_writing = was_sim_writing
 		if apply_live:
 			_push_to_solar_ui(itype, role, numeric, unit)
 		ha_live_updated.emit(iid, role, numeric)

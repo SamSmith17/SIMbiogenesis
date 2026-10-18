@@ -267,6 +267,12 @@ func _on_autosave_timer_timeout() -> void:
 	var tree := get_tree()
 	if tree == null:
 		return
+	# A sim pre-render has the graph's specs at its render CURSOR for a few
+	# seconds; a save taken then would persist a future that is then rolled
+	# back. Skip this tick; the timer fires again in three minutes.
+	var renderer := tree.get_first_node_in_group("sim_renderer")
+	if renderer != null and renderer.has_method("is_active") and bool(renderer.call("is_active")):
+		return
 	var main := tree.get_first_node_in_group("main_scene")
 	if (
 		main != null

@@ -2149,9 +2149,8 @@ func set_pond_stock_l(idx: int, stock_l: float, from_graph: bool = false) -> boo
 	var floor_y := float(rec.get("floor_m", bounds.get("floor_m", 0.0)))
 	var spill := float(rec.get("spill_m", bounds.get("rim_m", floor_y + 1.0)))
 	var cell := PondBathymetry.suggested_cell_m(BuildingBuilder.footprint_area_m2(poly))
-	rec["level_m"] = PondBathymetry.level_for_volume_l(
-		poly, Callable(self, "ground_height_at"), float(rec["stock_l"]),
-		floor_y, spill, cell)
+	rec["level_m"] = PondBathymetry.level_for_volume_from_samples(
+		_basin_samples_for(poly, cell), cell, float(rec["stock_l"]), floor_y, spill)
 	var cap := maxf(float(rec.get("capacity_l", 1.0)), 1.0)
 	rec["level"] = PondBathymetry.fill_frac(float(rec["stock_l"]), cap)
 	_refresh_water_data()
@@ -2207,12 +2206,12 @@ func pond_stage_curve(tag: String, n: int = 24) -> Array:
 	if _stage_curve_cache.has(key):
 		return _stage_curve_cache[key]
 	var cell := PondBathymetry.suggested_cell_m(float(info.get("area_m2", 0.0)))
-	var hfn := Callable(self, "ground_height_at")
+	var samples := _basin_samples_for(poly, cell)
 	var out: Array = []
 	var rows := maxi(n, 2)
 	for i in rows:
 		var lv := lerpf(floor_y, hi, float(i) / float(rows - 1))
-		out.append([PondBathymetry.volume_to_level_l(poly, hfn, lv, cell, spill), lv])
+		out.append([PondBathymetry.volume_from_samples(samples, cell, lv, spill), lv])
 	if _stage_curve_cache.size() > 32:
 		_stage_curve_cache.clear()
 	_stage_curve_cache[key] = out
@@ -6826,6 +6825,13 @@ func _refresh_detail_sink(force: bool = false) -> void:
 ## pos.y ≈ gy and `pos.y < gy + 0.1` was true on EVERY commit, teleporting them
 ## to gy + 2.0 to fall back down (the "player pops on brush release" bug).
 func _reseat_actors_after_edit(touched_keys: Array = []) -> void:
+	# Every sculpt commit and undo lands here: the ground under a pond may have
+	# moved, so the basin memos go (the fingerprint check is the backstop) —
+	# and so does any pre-rendered simulation that integrated the old basin.
+	_invalidate_basin_caches()
+	var graph := _find_system_graph_view()
+	if graph != null and graph.has_method("invalidate_sim_render_all"):
+		graph.call("invalidate_sim_render_all")
 	if _main == null or touched_keys.is_empty():
 		return
 	var player := _main.get_node_or_null("Player") as CharacterBody3D
@@ -10711,7 +10717,58 @@ func pond_rim_height(poly: PackedVector2Array) -> float:
 
 ## Sample DEM+tiles inside the footprint: floor = min interior, rim = lowest
 ## outline (spill). Used by the pond modal so carved bowls aren't clamped wrong.
+## Basin geometry memos. Everything a pond push needs is a pure function of
+## the outline and the ground inside it: the bounds sweep below, and the grid
+## of ground samples PondBathymetry integrates volumes over. Both are keyed on
+## the outline's hash plus `_basin_ground_fingerprint` (a handful of ground
+## queries, re-read on every lookup, so a sculpt edit inside the basin misses
+## the memo) and cleared outright on a sculpt commit / undo. Before this a
+## pond push re-ran the ~1k-sample sweep three times and a 19-sweep bisection
+## per pond every 0.25 s: gv_pond_push averaged 36 ms a frame (215 ms peaks)
+## on Mount Vernon with ONE pond — the first-person stall, measured.
+var _basin_samples_cache: Dictionary = {}
+var _basin_bounds_cache: Dictionary = {}
+
+
+func _basin_samples_for(poly: PackedVector2Array, cell: float) -> PackedFloat64Array:
+	if poly.size() < 3:
+		return PackedFloat64Array()
+	var key := "%d|%.4f" % [hash(poly), cell]
+	var fp := _basin_ground_fingerprint(poly)
+	var hit: Variant = _basin_samples_cache.get(key)
+	if hit is Dictionary and float((hit as Dictionary).get("fp", NAN)) == fp:
+		return (hit as Dictionary)["samples"]
+	var samples := PondBathymetry.basin_samples(poly, Callable(self, "ground_height_at"), cell)
+	if _basin_samples_cache.size() > 64:
+		_basin_samples_cache.clear()
+	_basin_samples_cache[key] = {"fp": fp, "samples": samples}
+	return samples
+
+
+## Drop every basin memo (and the stage curves built from them): the ground
+## under a pond may have moved. Called from the sculpt commit / undo paths.
+func _invalidate_basin_caches() -> void:
+	_basin_samples_cache.clear()
+	_basin_bounds_cache.clear()
+	_stage_curve_cache.clear()
+
+
 func sample_pond_basin_elevations(poly: PackedVector2Array) -> Dictionary:
+	if poly.size() < 3:
+		return {"rim_m": 0.0, "floor_m": 0.0}
+	var key := "%d" % hash(poly)
+	var fp := _basin_ground_fingerprint(poly)
+	var hit: Variant = _basin_bounds_cache.get(key)
+	if hit is Dictionary and float((hit as Dictionary).get("fp", NAN)) == fp:
+		return ((hit as Dictionary)["bounds"] as Dictionary).duplicate()
+	var bounds := _sample_pond_basin_elevations_uncached(poly)
+	if _basin_bounds_cache.size() > 64:
+		_basin_bounds_cache.clear()
+	_basin_bounds_cache[key] = {"fp": fp, "bounds": bounds.duplicate()}
+	return bounds
+
+
+func _sample_pond_basin_elevations_uncached(poly: PackedVector2Array) -> Dictionary:
 	var out := {"rim_m": 0.0, "floor_m": 0.0}
 	if poly.size() < 3:
 		return out
@@ -10973,8 +11030,9 @@ func _recompute_pond_volume_rec(rec: Dictionary, overwrite_auto: bool = true) ->
 	rec["basin_rim_m"] = basin_rim
 	rec["spill_m"] = spill
 	var cell := PondBathymetry.suggested_cell_m(BuildingBuilder.footprint_area_m2(poly))
-	var height_at := Callable(self, "ground_height_at")
-	var terrain_cap := PondBathymetry.capacity_l(poly, height_at, spill, PondBathymetry.FREEBOARD_DEFAULT_M, cell)
+	var samples := _basin_samples_for(poly, cell)
+	var terrain_cap := PondBathymetry.capacity_from_samples(samples, cell, spill,
+		PondBathymetry.FREEBOARD_DEFAULT_M)
 	rec["terrain_capacity_l"] = terrain_cap
 	if not rec.has("capacity_mode"):
 		rec["capacity_mode"] = "auto"
@@ -10989,8 +11047,7 @@ func _recompute_pond_volume_rec(rec: Dictionary, overwrite_auto: bool = true) ->
 		level = floor_y + 0.05
 		rec["level_m"] = level
 	if str(rec.get("fill_mode", "auto")) == "auto" or not rec.has("stock_l"):
-		rec["stock_l"] = PondBathymetry.volume_to_level_l(
-			poly, height_at, level, cell, spill)
+		rec["stock_l"] = PondBathymetry.volume_from_samples(samples, cell, level, spill)
 	var cap := maxf(float(rec.get("capacity_l", 1.0)), 1.0)
 	rec["level"] = PondBathymetry.fill_frac(float(rec.get("stock_l", 0.0)), cap)
 

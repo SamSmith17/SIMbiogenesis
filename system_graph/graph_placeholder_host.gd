@@ -31,17 +31,43 @@ func teardown() -> void:
 	_model = null
 	_main = null
 
+var _sync_queued: bool = false
+
+
 func _on_model_changed(reason: String) -> void:
-	if reason in ["update_item", "deserialize", "add_item"]:
-		call_deferred("sync_all")
+	if reason not in ["update_item", "deserialize", "add_item"]:
+		return
+	# Sim telemetry never moves a placeholder (position / binding / the
+	# placeholder flag are player edits), and one deferred sync per frame is
+	# enough however many writes queued it: the flow tick used to queue one
+	# O(N) sync per update_item.
+	if reason == "update_item" and _model != null and bool(_model.get("sim_writing")):
+		return
+	if _sync_queued:
+		return
+	_sync_queued = true
+	call_deferred("_run_queued_sync")
+
+
+func _run_queued_sync() -> void:
+	_sync_queued = false
+	sync_all()
 
 func sync_all() -> void:
 	if _model == null:
 		return
+	# Looked up by path, not by bare autoload name: this script is preloaded by
+	# the graph view, and a bare `PerfMonitor` would break any headless
+	# --script run that ever loads it (the autoload-compile trap).
+	var pm := get_node_or_null("/root/PerfMonitor")
+	if pm != null:
+		pm.call("begin", "gv_placeholder")
 	_refresh_battery_frame()
 	for item: Dictionary in _model.items:
 		if bool((item.get("specs", {}) as Dictionary).get("graph_placeholder", false)):
 			_ensure_placeholder(item)
+	if pm != null:
+		pm.call("end", "gv_placeholder")
 
 func auto_link_battery_to_ibc() -> bool:
 	if _model == null:

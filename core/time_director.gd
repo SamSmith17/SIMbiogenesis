@@ -23,7 +23,9 @@ extends Node
 ## keep calling SimMode.is_live()/should_apply_live_data()/etc unchanged.
 
 enum Mode { LIVE, PLAYBACK, SIMULATE }
-enum Provenance { REAL, OBSERVED, PROJECTED, RECORDED }
+## RENDERED = inside a range the timeline's Render button pre-computed (the
+## sim is played back from its caches there; see core/sim/sim_renderer.gd).
+enum Provenance { REAL, OBSERVED, PROJECTED, RECORDED, RENDERED }
 
 signal mode_changed(new_mode: int)
 signal playhead_changed(abs_hours: float)
@@ -158,6 +160,30 @@ func has_observed_range() -> bool:
 	return not is_nan(_obs_range_start)
 
 
+## The sim pre-render's ranges ([{a, b, …}] in absolute hours), replaced whole
+## whenever the SimRenderer's cache changes.
+var _rendered_ranges: Array = []
+
+
+func register_rendered_ranges(ranges: Array) -> void:
+	_rendered_ranges = []
+	for r in ranges:
+		if r is Dictionary and (r as Dictionary).has("a") and (r as Dictionary).has("b"):
+			_rendered_ranges.append(Vector2(float((r as Dictionary)["a"]), float((r as Dictionary)["b"])))
+
+
+func rendered_ranges() -> Array:
+	return _rendered_ranges
+
+
+func is_rendered_at(abs_hours: float) -> bool:
+	for r in _rendered_ranges:
+		var v: Vector2 = r
+		if abs_hours >= v.x - 1e-6 and abs_hours <= v.y + 1e-6:
+			return true
+	return false
+
+
 ## Toggle the split-screen observed-vs-simulated overlay.
 func set_compare_active(active: bool) -> void:
 	_compare_active = active
@@ -173,6 +199,9 @@ func provenance_at(abs_hours: float) -> int:
 	# Inside an imported datastream clip we have real measured data.
 	if not is_nan(_obs_range_start) and abs_hours >= _obs_range_start and abs_hours <= _obs_range_end:
 		return Provenance.OBSERVED
+	# A pre-rendered span: the simulation here is a cache being played back.
+	if is_rendered_at(abs_hours):
+		return Provenance.RENDERED
 	if abs_hours > now_abs_hours + NOW_EPSILON_HOURS:
 		return Provenance.PROJECTED
 	if _effective_mode == Mode.LIVE and absf(abs_hours - now_abs_hours) <= NOW_EPSILON_HOURS:
@@ -201,6 +230,7 @@ func provenance_label(prov: int) -> String:
 		Provenance.OBSERVED:  return "OBSERVED"
 		Provenance.PROJECTED: return "PROJECTED"
 		Provenance.RECORDED:  return "RECORDED"
+		Provenance.RENDERED:  return "RENDERED"
 	return "?"
 
 

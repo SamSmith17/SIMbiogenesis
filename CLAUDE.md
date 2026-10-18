@@ -1444,6 +1444,33 @@ tools\harness.ps1 -World mtvernon -Capture sitebalance
 # hydro term drops, no Hydro Lab) and on again. Prints the graph's readouts
 # beside SolarUI's:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/energy_balance_probe.gd
+# Sim pre-render substrate (offline — core/sim/: SimBakeStepper's contract
+# over stubs: step order energy → people → camp power → water, 0.1 h
+# population substeps, the FLOOR vs HYSTERESIS AC rules (off at 10 %, back
+# at 20 %, loads shed in the series), hydro-into-battery coupling, keyframe
+# cadence. EXPECTED_CHECKS; --import first. The cache, replay_at, truncation
+# and the engine-state snapshots are pinned in resource_flow_selftest
+# (_test_model_revisions / _test_replay_truncate_and_snapshots /
+# _test_sim_render_cache) and the energy fill in source_physics_selftest):
+Godot.exe.exe --headless --path . --script core/sim/sim_render_selftest.gd
+# Sim pre-render end to end (sandbox): renders the next 24 h through
+# SystemGraphView.sim_renderer() and asserts the clock, every tank, the
+# battery and the claims are back at the playhead, the cache covers the
+# range, user_rev did NOT move (a render is sim writes only — the probe turns
+# on GraphModel.trace_user_rev, which names any writer that forgot the
+# bracket), then runs the clock INTO the range: the ambient tick replays
+# (flow_engine idle, flow_replay busy), tanks == their timelines, the 3D
+# pond follows, the battery reads the rendered SOC; a capacity edit cuts the
+# range at the playhead and the live step resumes; a scrub back replays:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/sim_render_probe.gd
+# Graph-CLOSED cost bench + the flow engine's ACCURACY PIN (sandbox): F3
+# sections at 60x and paused (incl. the once-invisible gv_pond_push /
+# gv_dc_throttle / gv_faults / gv_placeholder), a user_rev PASS line (no
+# writer outside the sim-write bracket over 10 s), then 24 h of render_step
+# from a fixed clock hashed over every tank / wire / telemetry. Every live-sim
+# optimization must leave that hash unchanged (2026-10-17: fe644fbb3825ae00
+# on the Mount Vernon world as saved that day):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/flow_step_bench.gd
 # Hydro LOAD-TIME diagnostic (WINDOWED, console-only, needs a REAL saved map with
 # hydro on it): dumps every penstock/culvert conn's visible_3d, routability, 3D
 # instance and BOTH resolved endpoint anchors at four moments — as loaded (graph
@@ -1866,6 +1893,114 @@ Each piece has its own harness gate (Validation list).
   from it. Pond / stream / PBI nodes are refused with the reason.
   `--capture=graphtools` drives all of it with real clicks.
 - Not built: clickable legend toggles.
+
+## Sim pre-render + playback (2026-10-17, the timeline's 📈 Render button)
+
+Plan: `~/.claude/plans/i-ve-noticed-that-as-quiet-dove.md`. The sim is a
+deterministic function of sim-hours, so a stretch of it is RENDERED ahead into
+the live caches and the ambient tick REPLAYS it (reads) instead of simulating,
+which is what lets the player explore in first person with a growing graph.
+`core/sim/`: `SimRenderCache` (ranges + keyframes), `SimBakeStepper` (the ONE
+deterministic step, shared with `ChallengeBakeEngine`), `SimRenderer` (a child
+of SystemGraphView, `sim_renderer()`); `scenes/ui/hud/render_progress_card.gd`.
+- **The user's complaint was measured first** (`tools/bench/flow_step_bench.gd`):
+  on Mount Vernon (14 items) the flow step was 0.3 ms a frame; the pond twin
+  push was **36 ms a frame, 215 ms peaks** — `get_pond_info` re-swept the
+  basin three times and ran a 19-sweep level bisection per pond every 0.25 s.
+  `TerrainLoader._basin_samples_for` memoises the basin's ground samples on
+  `_basin_ground_fingerprint` (cleared on sculpt commit / undo) and
+  `PondBathymetry.*_from_samples` integrate over them in the SAME cell order,
+  bit-identical (pinned exactly in terrain_selftest). 16 → 35 fps at 60×, the
+  same as paused. The F3 HUD gained `gv_pond_push`, `gv_dc_throttle`,
+  `gv_faults`, `gv_placeholder`: read them before blaming `flow_engine`.
+- **Render into the LIVE timelines.** `energy_timeline` (battery) and every
+  tank's `ResourceTimeline` already had backward read + forward-in-cache read;
+  the render fills them ahead of the playhead through
+  `SolarUI.make_sim_render_evaluator(model)` (solar = SPA + weather + shade +
+  DC caps at the instant; load = the SAME `GraphAcLoad.compute_kw` the live
+  tick integrates, zero while the inverter is shed; aux = scene aux + the flow
+  engine's graph DC from the PREVIOUS step — hydro into the battery, one-step
+  lag like the live 0.25 s sync). Range = `[playhead, end]` (tanks can only be
+  rendered from the current state), end = the Ctrl-drag selection's end or
+  +24 h, capped at `MAX_RENDER_H` 7 d (the live timelines are a fixed 1-min
+  grid of 20160 samples INCLUDING history). `_sim_series` stays for the
+  observed-vs-sim Compare render (Shift-click 📈).
+- **Keyframes carry only what no timeline records and nothing re-derives**
+  (`SimRenderCache.keyframe_key`): node states, starved kinds, habitat ideal
+  imports, batch progress, camp power, pop_state, the deficit tanks (no
+  timeline), the wire flows, and the engine's between-step state
+  (`internal_state_snapshot`: batch progress, demand overrides, per-scope AC,
+  supply curves) so a live step resuming at any instant of the range starts
+  from THAT instant's state. Hydro `live_*` is recomputed on replay by
+  `_refresh_hydro_telemetry_readonly`; `dc_*` is the DC throttle's live display.
+  Sparse deltas every 15 sim-min; the range's first keyframe is FULL; a
+  non-incremental compose ERASES keys later keyframes introduced (a node
+  state the engine set at step 40 must be gone at step 10).
+- **Replay = read, never simulate** (`_tick_resource_flow_ambient`): inside a
+  rendered range `cache.apply_at` then `flow.replay_at(now)` (apply first — it
+  restores the engine's clock-at-keyframe; replay_at leaves `_last_abs_hours`
+  at now, so a later live step continues from here); camp power stands down
+  (keyframes carry `camp_*`; `_camp_power` is cleared so it re-seeds from
+  specs on exit); the DC throttle runs display-only; SolarUI reads the
+  rendered SOC and takes the readouts from the cache (the divergence
+  truncation is gated OFF inside a range — the live scene-sun path differs
+  from the pure evaluator by more than 0.05 kW on the first tick). NPCs keep
+  simulating live off the cached supply (user's call). **Not in LIVE mode**
+  (`SimMode.is_live()`): HA measurements are authoritative there, and this
+  also sidesteps a 1× playback resolving LIVE and pushing to HA.
+- **Invalidation is `GraphModel.user_rev`.** `struct_rev` moves on topology,
+  `user_rev` on any write made while `model.sim_writing` is false. The view's
+  `_begin_sim_writes()` / `_end_sim_writes()` is THE bracket for every sim
+  writer (it replaced eight hand-rolled `was_suppress / was_bulk` blocks) and
+  sets the flag; the HA linker and the fault check set it themselves; wire
+  telemetry goes through `stamp_connection_telemetry` (reason
+  `"conn_telemetry"`: a coalesced redraw, no fault check, no conduit remesh,
+  no counter). A `user_rev` move → `SimRenderer.invalidate_from(playhead)`
+  cuts every range there (drops one starting after the playhead) and
+  truncates the energy + tank timelines. Non-graph inputs the render
+  integrated are compared each tick (`_weather_sig`: datasets loaded +
+  forecast window; connector-losses setting; PopTestPrefs generation) and a
+  sculpt commit calls `invalidate_sim_render_all`. ⚠ **ANY unbracketed sim
+  write kills the cache** — by design. `GraphModel.trace_user_rev = true`
+  prints each move with the item and the changed keys; the probe turns it on.
+  Found that way: `_sync_graph_energy_from_solar` reached from the post-tick
+  flush (panel `current_output_kw` / `pv_offered_kw`). The bench prints a
+  `user_rev` PASS line for the graph-closed regime.
+- **The render owns the world like the bake**: exclusive clock claim
+  `"sim_render"` at time_scale 0 (time stands still, the player can walk), the
+  ambient tick suspended, `_pond_twin_push_blocked` (render steps would walk
+  the 3D water to the range's end), `NpcPopulationBridge.freeze_tiers` (a
+  FULL snapshot cannot `restore_all` onto a camp CrowdFocus re-tiered
+  meanwhile), snapshots of specs / rosters / battery / flow internals /
+  `camp_power_state_snapshot`. Finish or cancel keeps the rendered part
+  (Premiere keeps a partial preview) and restores the playhead: specs →
+  `cache.apply_at` → `flow.replay_at` → rosters → `reseat_battery_at` → one
+  pond push → claims released. Steps on a 24 ms per-frame budget (Mount
+  Vernon: 24 h ≈ 1441 steps ≈ 5 s; solar ~0.4 s, resources ~2 s of that).
+  `SaveSystem` skips an autosave tick while a render is active (the specs are
+  at the cursor). Refused in LIVE mode, while another system owns the clock,
+  in the bootcamp sandbox, or for an end at or before the playhead.
+- **Timeline UI**: 📈 enabled whenever nothing owns the clock (it used to be
+  disabled without a CSV clip, and the disabled look was invisible —
+  `_mk_icon_btn` now has a `disabled` stylebox + `_dim_disabled`); a
+  3 px **render strip** at the top of the clips lane (`RENDER_STRIP_H`; the
+  default clips track is 14 px): green = rendered, dim green = rendering,
+  red = a selection ahead of the playhead not yet rendered; the
+  `RenderProgressCard` (HudLayout top_center: range, bar, %, ETA, Cancel);
+  toasts on refusal and completion; `TimeDirector.Provenance.RENDERED`
+  (`register_rendered_ranges`, the data chip reads RENDERED in green). Tour
+  stop `20b_render_sim`.
+- **Live-sim streamlining, accuracy-neutral (the bench hash is the pin):**
+  `GraphNesting.flat_connections_cached` (keyed struct_rev + user_rev +
+  count; read-only — fault-flag writers keep the fresh copy) for the flow
+  index, the AC load reading (10 Hz) and the DC sum (4 Hz); the engine's conn
+  index rebuilt only when that key moves; lazy `duplicate(true)` in the
+  siphon / JIT passes; a per-step pond-tag → tank map for culverts; the
+  siphon outlet stamp through the index; `_write_if_changed` (exact compare)
+  for the PBI / catchment writes; the deferred fault check coalesced to one
+  per frame and never queued by `conn_telemetry`; `GraphPlaceholderHost`
+  one deferred sync per frame and none for sim writes; `_find_terrain_loader`
+  cached; `_dc_analysis` keyed on struct_rev.
 
 ## Maps and scene shell
 

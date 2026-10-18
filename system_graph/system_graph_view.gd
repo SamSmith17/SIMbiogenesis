@@ -1568,7 +1568,7 @@ func tutorial_seed_level(seed: Array, seed_wires: Array = []) -> Array:
 			"target_item_id": str(ids[b]), "target_handle_id": str(wd.get("to_handle", "negative"))})
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
-	call_deferred("_check_electrical_faults")
+	_queue_electrical_fault_check()
 	return ids
 
 
@@ -6412,10 +6412,19 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 			ppui.call("notify_bundle_imported", r)
 
 
+## Cached: 42 call sites, several on per-tick paths (the pond push, the
+## siphon's pond capacity), each a recursive find_child over the scene.
+var _terrain_loader_cache: Node = null
+
+
 func _find_terrain_loader(main: Node) -> Node:
 	if main == null:
 		return null
-	return main.find_child("TerrainLoader", true, false)
+	if _terrain_loader_cache != null and is_instance_valid(_terrain_loader_cache) \
+			and _terrain_loader_cache.is_inside_tree():
+		return _terrain_loader_cache
+	_terrain_loader_cache = main.find_child("TerrainLoader", true, false)
+	return _terrain_loader_cache
 
 
 # ---------------------------------------------------------------------------
@@ -7827,7 +7836,7 @@ func _apply_array_controller_choice(array_id: String, controller_id: String,
 	SolarArrayIntelligence.wire_array_to_controller(model, array_id, ctrl_id, _active_scope_id)
 	_history_suppress = false
 	_push_history()
-	call_deferred("_check_electrical_faults")
+	_queue_electrical_fault_check()
 	_schedule_graph_autosave()
 	_show_toast("Wired array → %s (%s)" % [
 		str((cit.get("specs", {}) as Dictionary).get("name", ctrl_id)),
@@ -9578,6 +9587,7 @@ func push_pond_levels_to_mesh(update_mesh: bool = false) -> void:
 	var loader := _find_terrain_loader(_get_scene_main_node())
 	if loader == null:
 		return
+	PerfMonitor.begin("gv_pond_push")
 	_pond_twin_sync_active = true
 	var any := false
 	var levels: Dictionary = {}
@@ -9656,6 +9666,7 @@ func push_pond_levels_to_mesh(update_mesh: bool = false) -> void:
 	_pond_twin_sync_active = false
 	if update_mesh and any:
 		queue_canvas_redraw()
+	PerfMonitor.end("gv_pond_push")
 
 
 ## Inside `_pond_twin_sync_active`: stamp mesh bathymetry onto pond_storage + the
@@ -9716,10 +9727,27 @@ func _writeback_pond_twins_from_mesh(tag: String, info: Dictionary) -> void:
 			elif capacity_l > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual":
 				specs["capacity_qty"] = capacity_l
 				specs["capacity"] = "%.0f L" % capacity_l
+		# Change-gated + inside the sim-write bracket: this ran OUTSIDE bulk on
+		# every 0.12 s pond push, so each pond paid a full telemetry refresh +
+		# SolarUI sync + DC-cache wipe + autosave reschedule per push, and it
+		# would have moved user_rev (invalidating a render) four times a second.
+		var orig: Dictionary = item.get("specs", {}) as Dictionary
+		var dirty := absf(float(item.get("elevation_m", NAN)) - lm) > 1e-4 \
+				if not is_nan(float(item.get("elevation_m", NAN))) else true
+		if not dirty:
+			for k in ["level_m", "rim_m", "floor_m", "stock_l", "level",
+					"capacity_qty", "capacity", "stage_curve"]:
+				if specs.has(k) != orig.has(k) or specs.get(k) != orig.get(k):
+					dirty = true
+					break
+		if not dirty:
+			continue
+		_begin_sim_writes()
 		model.update_item(str(item.get("id", "")), {
 			"specs": specs,
 			"elevation_m": lm,
 		})
+		_end_sim_writes()
 
 
 func _try_throttled_pond_mesh_rebuild(loader: Node, levels: Dictionary) -> bool:
@@ -9769,8 +9797,15 @@ func _pond_mesh_remember(levels: Dictionary) -> void:
 	_pond_mesh_last_levels = levels.duplicate()
 
 
+## While a SimRenderer runs, every render step writes tank levels at the
+## render CURSOR; pushing those to the 3D water would walk the pond to the
+## range's end in front of the player. The renderer pushes once after it has
+## restored the playhead.
+var _pond_twin_push_blocked: bool = false
+
+
 func _schedule_pond_twin_push() -> void:
-	if _pond_twin_sync_active:
+	if _pond_twin_sync_active or _pond_twin_push_blocked:
 		return
 	if _pond_twin_push_timer == null:
 		_pond_twin_push_timer = Timer.new()
@@ -13419,6 +13454,71 @@ var _live_preview_restore: int = -1
 ## ChallengeBakeEngine handshake: while suspended, the engine steps the flow
 ## sim + population itself (render_step / seek_all_tanks) and the ambient
 ## tick stands down entirely.
+## ONE bracket for every write the SIMULATION makes to the model (the flow
+## tick, the NPC bridge, camp power, the DC throttle, the pond bathymetry
+## writeback, a bake). It sets the view's coalescing flags (`_history_suppress`
+## — no undo entry, no autosave; `_sim_bulk_update` — one redraw / telemetry
+## flush per tick instead of one per update_item) AND `model.sim_writing`, so
+## `GraphModel.user_rev` — the key the pre-render cache is valid against — only
+## moves on a PLAYER edit. Nestable; the outermost `_end_sim_writes` restores
+## whatever the flags were before. Replaced eight hand-rolled
+## `was_suppress / was_bulk` save-restore blocks that each forgot the model.
+var _sim_write_depth: int = 0
+var _sim_write_saved_suppress: bool = false
+var _sim_write_saved_bulk: bool = false
+
+
+func _begin_sim_writes() -> void:
+	if _sim_write_depth == 0:
+		_sim_write_saved_suppress = _history_suppress
+		_sim_write_saved_bulk = _sim_bulk_update
+	_sim_write_depth += 1
+	_history_suppress = true
+	_sim_bulk_update = true
+	if model != null:
+		model.sim_writing = true
+
+
+func _end_sim_writes() -> void:
+	if _sim_write_depth <= 0:
+		return
+	_sim_write_depth -= 1
+	if _sim_write_depth == 0:
+		_history_suppress = _sim_write_saved_suppress
+		_sim_bulk_update = _sim_write_saved_bulk
+		if model != null:
+			model.sim_writing = false
+
+
+## The timeline's Render button engine (CLAUDE.md "Sim pre-render + playback"),
+## created on first use as a child of the view so it lives and dies with the
+## graph.
+var _sim_renderer: Node = null
+
+
+func sim_renderer() -> Node:
+	if _sim_renderer != null and is_instance_valid(_sim_renderer):
+		return _sim_renderer
+	_sim_renderer = SimRenderer.new()
+	_sim_renderer.name = "SimRenderer"
+	add_child(_sim_renderer)
+	_sim_renderer.call("setup", self, _get_scene_main_node(), _solar_ui)
+	if model != null:
+		_seen_user_rev = int(model.user_rev)
+	# The weather inputs a render integrated are remembered per render; the
+	# ambient tick compares them (see _replay_time_if_cached). A signal-driven
+	# "drop everything on weather_data_ready" was tried first and emptied the
+	# cache on the sandbox's own cache load seconds after the render.
+	_sim_renderer.connect("render_started", func(_a: float, _b: float) -> void:
+		_seen_wx_sig = _weather_sig())
+	# The rendered ranges reach the timeline's provenance chip.
+	var td := get_node_or_null("/root/TimeDirector")
+	if td != null and td.has_method("register_rendered_ranges"):
+		_sim_renderer.connect("cache_changed", func() -> void:
+			td.call("register_rendered_ranges", _sim_renderer.cache.ranges))
+	return _sim_renderer
+
+
 func set_ambient_flow_suspended(on: bool) -> void:
 	_ambient_flow_suspended = on
 
@@ -13756,12 +13856,13 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if _resource_flow.has_method("would_tick") and not _resource_flow.call("would_tick", delta):
 		_resource_flow.call("tick", delta)  # cheap: accumulate + early-out
 		return
-	var was_suppress := _history_suppress
-	var was_bulk := _sim_bulk_update
-	_history_suppress = true
-	_sim_bulk_update = true
+	_begin_sim_writes()
 	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
 		_sim_load_host.call("begin_bulk_sync")
+	# Inside a pre-rendered range this tick READS the caches instead of
+	# simulating (NaN = live). Decided once up front: camp power and the flow
+	# step both branch on it.
+	var replay_now := _replay_time_if_cached()
 	# NPC population: step agents + install this tick's habitat demand rates
 	# BEFORE the flow step consumes them (runs ambient, graph open or closed).
 	if _npc_population == null:
@@ -13793,9 +13894,10 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		var mn := _get_scene_main_node()
 		if mn != null and mn.has_method("get_absolute_hours"):
 			pop_abs_h = float(mn.call("get_absolute_hours"))
-	PerfMonitor.begin("camp_power")
-	_tick_camp_power(pop_abs_h)
-	PerfMonitor.end("camp_power")
+	if is_nan(replay_now):
+		PerfMonitor.begin("camp_power")
+		_tick_camp_power(pop_abs_h)
+		PerfMonitor.end("camp_power")
 	_ensure_feed_strip()
 	if _desire_3d_on and npcs_on:
 		_ensure_desire_overlay()
@@ -13808,13 +13910,124 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		_graph_canvas.queue_redraw()
 	# (The Site Plan's old 5 s lighting re-capture lives in the preview's own
 	# clock-driven refresh policy now, for every lens and the Hydro Lab.)
-	PerfMonitor.begin("flow_engine")
-	_resource_flow.call("tick", delta)
-	PerfMonitor.end("flow_engine")
+	if not is_nan(replay_now):
+		# REPLAY: keyframe (engine-written specs + wire flows + the engine's
+		# between-step state at that instant) first, then every tank off its
+		# timeline + the hydro readouts, which leaves the engine's clock at
+		# `now` so a later live step continues from here. Nothing is simulated.
+		if not _replaying:
+			_enter_replay()
+		PerfMonitor.begin("flow_replay")
+		_sim_renderer.cache.apply_at(model, _resource_flow, replay_now)
+		_resource_flow.call("replay_at", replay_now)
+		PerfMonitor.end("flow_replay")
+	else:
+		if _replaying:
+			_leave_replay()
+		PerfMonitor.begin("flow_engine")
+		_resource_flow.call("tick", delta)
+		PerfMonitor.end("flow_engine")
 	if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
 		_sim_load_host.call("end_bulk_sync")
-	_history_suppress = was_suppress
-	_sim_bulk_update = was_bulk
+	_end_sim_writes()
+
+
+# ---------------------------------------------------------------------------
+# Sim pre-render REPLAY (CLAUDE.md "Sim pre-render + playback")
+# ---------------------------------------------------------------------------
+
+## True while the ambient tick reads the rendered caches instead of stepping.
+var _replaying: bool = false
+## GraphModel.user_rev as last seen by _on_model_changed: a move is a player
+## edit, which cuts every rendered range at the playhead.
+var _seen_user_rev: int = -1
+## Non-graph inputs the render depends on, watched for change each tick.
+var _seen_connector_losses: int = -1
+var _seen_wx_sig: String = ""
+
+
+## What the weather the sim samples depends on: which datasets are loaded and
+## where the forecast window sits. A change here means a render integrated a
+## different sky / rain than the live tick now would.
+func _weather_sig() -> String:
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws == null:
+		return "none"
+	var parts: Array = []
+	parts.append(str(bool(ws.call("has_data"))) if ws.has_method("has_data") else "?")
+	parts.append(str(bool(ws.call("has_forecast"))) if ws.has_method("has_forecast") else "?")
+	if ws.has_method("effective_year"):
+		parts.append(str(int(ws.call("effective_year", 2026))))
+	var fs: Variant = ws.get("_forecast_start_hoy")
+	parts.append(str(fs) if fs != null else "-")
+	var series: Variant = ws.get("_forecast_series")
+	parts.append(str((series as Array).size()) if series is Array else "-")
+	return "|".join(PackedStringArray(parts))
+
+
+func is_replaying() -> bool:
+	return _replaying
+
+
+## The time to replay this tick, or NAN when the tick must simulate: no
+## renderer, a render in progress, the playhead outside every rendered range,
+## or LIVE mode (there the HA measurements are authoritative and the rendered
+## future is a projection only).
+func _replay_time_if_cached() -> float:
+	if _sim_renderer == null or not is_instance_valid(_sim_renderer):
+		return NAN
+	if bool(_sim_renderer.call("is_active")) or _sim_renderer.cache.is_empty():
+		return NAN
+	var mn := _get_scene_main_node()
+	if mn == null or not mn.has_method("get_absolute_hours"):
+		return NAN
+	var sm := get_node_or_null("/root/SimMode")
+	if sm != null and sm.has_method("is_live") and bool(sm.call("is_live")):
+		return NAN
+	var now := float(mn.call("get_absolute_hours"))
+	if not bool(_sim_renderer.call("covers", now)):
+		return NAN
+	# A setting the physics reads changed under the cache → it is stale: the
+	# connector-loss simulation, and the testing switches (ideal supply never
+	# starves a habitat — a render made with it off is a different world).
+	var ssc := get_node_or_null("/root/SimSettingsController")
+	var sig := PopTestPrefs.generation() * 2
+	if ssc != null and bool(ssc.get("connector_losses_enabled")):
+		sig += 1
+	if _seen_connector_losses >= 0 and sig != _seen_connector_losses:
+		_sim_renderer.call("invalidate_all")
+		_seen_connector_losses = sig
+		return NAN
+	_seen_connector_losses = sig
+	var wx := _weather_sig()
+	if not _seen_wx_sig.is_empty() and wx != _seen_wx_sig:
+		print("SimRenderer: weather inputs changed (%s -> %s) — rendered ranges dropped" % [_seen_wx_sig, wx])
+		_sim_renderer.call("invalidate_all")
+		_seen_wx_sig = wx
+		return NAN
+	return now
+
+
+func _enter_replay() -> void:
+	_replaying = true
+	# The camp power integrators are forward-only; while the keyframes carry
+	# camp_soc they stand down, and re-seed from the keyframed specs when the
+	# live step resumes (_tick_camp_power makes a fresh state from camp_soc).
+	_camp_power = {}
+	_camp_power_last_h = NAN
+	_camp_power_written = {}
+
+
+func _leave_replay() -> void:
+	_replaying = false
+
+
+## Anything outside the graph that the render depends on changed (weather
+## data arrived, the terrain under a pond moved): drop every rendered range.
+## No-op when no renderer exists yet.
+func invalidate_sim_render_all() -> void:
+	if _sim_renderer != null and is_instance_valid(_sim_renderer):
+		_sim_renderer.call("invalidate_all")
 
 
 func _process(delta: float) -> void:
@@ -13835,26 +14048,23 @@ func _process(delta: float) -> void:
 		# persists its snapshot through model.update_item, and outside this
 		# window every one of those recorded undo history and refreshed the
 		# canvas (measured: 28 ms a frame on Walton).
-		var was_suppress := _history_suppress
-		var was_bulk := _sim_bulk_update
-		_history_suppress = true
-		_sim_bulk_update = true
+		_begin_sim_writes()
 		if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
 			_sim_load_host.call("begin_bulk_sync")
 		var ticked: int = _npc_population.service_frame()
 		if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
 			_sim_load_host.call("end_bulk_sync")
-		_history_suppress = was_suppress
-		_sim_bulk_update = was_bulk
+		_end_sim_writes()
 		if ticked > 0 and _crowd_renderer != null and is_instance_valid(_crowd_renderer):
 			PerfMonitor.begin("crowd_render")
 			_crowd_renderer.sync(_npc_population.last_abs_h())
 			PerfMonitor.end("crowd_render")
 	# DC current-limit throttle must stay live with the graph closed — it caps
 	# the battery charge rate SolarUI integrates every frame. During a challenge
-	# bake / playback it runs DISPLAY-ONLY: the cards follow what plays back,
-	# but the battery's charge cap belongs to the bake.
-	_tick_dc_throttle(delta, _ambient_flow_suspended)
+	# bake / playback — and inside a pre-rendered range — it runs DISPLAY-ONLY:
+	# the cards follow what plays back, but the battery's charge cap belongs
+	# to the bake / the render.
+	_tick_dc_throttle(delta, _ambient_flow_suspended or _replaying)
 	# Graph DC generation (hydro, graph-only wind, fuel generators wired into a
 	# battery) must reach SolarUI with the graph CLOSED and while the Hydro Lab
 	# owns the view — both early-return below, and the battery then never saw a
@@ -13900,8 +14110,7 @@ func _process(delta: float) -> void:
 	# Bridge tick — suppress history so its model updates are not recorded, and
 	# batch the redraw/telemetry cascade so a tick touching many items (tanks,
 	# virtual nodes) triggers one redraw instead of one per update_item.
-	_history_suppress = true
-	_sim_bulk_update = true
+	_begin_sim_writes()
 	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
 		_sim_load_host.call("begin_bulk_sync")
 	PerfMonitor.begin("gv_bridge")
@@ -13941,8 +14150,7 @@ func _process(delta: float) -> void:
 		PerfMonitor.begin("gv_bulk")
 		_sim_load_host.call("end_bulk_sync")
 		PerfMonitor.end("gv_bulk")
-	_history_suppress = false
-	_sim_bulk_update = false
+	_end_sim_writes()
 	_telemetry_flush_acc += delta
 	PerfMonitor.begin("gv_flush")
 	_flush_sim_bulk_update(_telemetry_flush_acc >= _TELEMETRY_FLUSH_INTERVAL)
@@ -14992,8 +15200,29 @@ func _other_ui_needs_free_mouse() -> bool:
 # ---------------------------------------------------------------------------
 
 func _on_model_changed(reason: String) -> void:
+	if reason == "conn_telemetry":
+		# Flow-engine stamps on a wire (culvert Q / head / regime, JIT pump
+		# flags): a coalesced redraw and nothing else. Routing these through
+		# `update_connection` used to queue a FULL electrical fault check per
+		# culvert per sim step and a 3D conduit remesh sweep, graph closed.
+		if _sim_bulk_update:
+			_pending_canvas_redraw = true
+		elif _graph_canvas != null:
+			_graph_canvas.call("queue_redraw")
+		return
 	if reason != "update_item":
 		_queue_world_inventory()
+	# A PLAYER edit (user_rev moved — sim writes run inside the sim-write
+	# bracket and never move it) makes the rendered future a different graph's:
+	# cut every rendered range at the playhead.
+	if model != null:
+		var rev := int(model.user_rev)
+		if _seen_user_rev >= 0 and rev != _seen_user_rev and _sim_renderer != null \
+				and is_instance_valid(_sim_renderer) and not bool(_sim_renderer.call("is_active")):
+			var mn := _get_scene_main_node()
+			if mn != null and mn.has_method("get_absolute_hours"):
+				_sim_renderer.call("invalidate_from", float(mn.call("get_absolute_hours")))
+		_seen_user_rev = rev
 	if _sim_bulk_update:
 		# Defer — a sim tick can call update_item dozens of times; coalesce into
 		# one redraw + one telemetry refresh via _flush_sim_bulk_update().
@@ -15021,7 +15250,7 @@ func _on_model_changed(reason: String) -> void:
 			and reason in ["add_item", "remove_item", "add_connection", "remove_connection", "reset"]:
 		_layout_driver.mark_dirty()
 	if reason in ["add_connection", "remove_connection", "update_connection"]:
-		call_deferred("_check_electrical_faults")
+		_queue_electrical_fault_check()
 	if reason == "add_connection" and not _history_suppress and not _sim_bulk_update:
 		call_deferred("_auto_penstock_for_new_water_wires")
 	elif not _sim_bulk_update and reason in ["add_item", "remove_item", "update_item", "reset"]:
@@ -15724,7 +15953,13 @@ func _sync_solar_ui_from_graph() -> void:
 		_solar_ui.call("apply_from_graph", payload)
 	if _solar_ui.has_method("set_graph_has_solar"):
 		_solar_ui.call("set_graph_has_solar", panel_count > 0)
+	# Telemetry (panel cards' delivered / offered kW, the battery's SOC): a sim
+	# write wherever it is reached from — this runs from the post-tick flush,
+	# AFTER the tick's bracket closed, and was the one writer that moved
+	# user_rev during a render (found by GraphModel.trace_user_rev).
+	_begin_sim_writes()
 	_sync_graph_energy_from_solar()
+	_end_sim_writes()
 
 
 
@@ -16176,15 +16411,13 @@ func _tick_dc_throttle(delta: float, display_only: bool = false) -> void:
 		return
 	_dc_throttle_acc = 0.0
 	_dc_sync_serial = serial
+	PerfMonitor.begin("gv_dc_throttle")
 	_dc_throttle_pass(display_only)
+	PerfMonitor.end("gv_dc_throttle")
 	if visible:
-		var was_suppress := _history_suppress
-		var was_bulk := _sim_bulk_update
-		_history_suppress = true
-		_sim_bulk_update = true
+		_begin_sim_writes()
 		_sync_graph_energy_from_solar()
-		_history_suppress = was_suppress
-		_sim_bulk_update = was_bulk
+		_end_sim_writes()
 
 
 ## One pass of the controller model. Per real controller: OFFERED = its Wmp
@@ -16195,12 +16428,20 @@ func _tick_dc_throttle(delta: float, display_only: bool = false) -> void:
 ## caps. The panel cards are then written from DELIVERED (_pv_live_w), so the
 ## panels sum to the controller, the controller's delivered + aux − load is the
 ## battery's flow, and the dashboard's "Making" is the same current_solar_kw.
+## The DC topology the throttle pass runs on is keyed on the model's
+## structural revision as well as the explicit invalidations: a topology edit
+## made under the bulk flags (a bake's restore, a sync) used to leave a stale
+## analysis in place.
+var _dc_analysis_struct_rev: int = -1
+
+
 func _dc_throttle_pass(display_only: bool) -> void:
-	if _dc_analysis.is_empty():
+	if _dc_analysis.is_empty() or _dc_analysis_struct_rev != model.struct_rev:
 		# Fresh load — _check_electrical_faults hasn't run yet (it refreshes the
 		# cache on wiring changes). Build the topology once here.
 		_dc_flat_conns = GraphNesting.flat_connections(model)
 		_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
+		_dc_analysis_struct_rev = model.struct_rev
 	var raw_kw := 0.0
 	var actual_kw := 0.0
 	var soc := 0.0
@@ -16271,13 +16512,9 @@ func _dc_throttle_pass(display_only: bool) -> void:
 		csp2["dc_cap_w"] = 0.0
 		csp2["dc_curtail"] = ""
 		csp2["dc_clipped"] = false
-		var ws0 := _history_suppress
-		var wb0 := _sim_bulk_update
-		_history_suppress = true
-		_sim_bulk_update = true
+		_begin_sim_writes()
 		model.update_item(str(cd_it.get("id", "")), {"specs": csp2})
-		_history_suppress = ws0
-		_sim_bulk_update = wb0
+		_end_sim_writes()
 	# Placed panels' shade (one model: SolarUI scales the array output by it
 	# and re-splits the controllers' shares; the cards below split by the same
 	# effective Wmp, so panels, controllers and "Making" agree).
@@ -16337,10 +16574,7 @@ func _dc_throttle_pass(display_only: bool) -> void:
 		throttles.append(th)
 	var actual := GraphDcElectrical.split_actual(actual_kw * 1000.0, caps_w,
 		raw_kw * 1000.0 * eff_unrouted)
-	var was_suppress := _history_suppress
-	var was_bulk := _sim_bulk_update
-	_history_suppress = true
-	_sim_bulk_update = true
+	_begin_sim_writes()
 	var live_w := {}
 	for i in entries.size():
 		var ed2: Dictionary = entries[i]
@@ -16390,8 +16624,7 @@ func _dc_throttle_pass(display_only: bool) -> void:
 			sp["dc_limit_w"] = limit_w
 			sp["dc_clipped"] = bool(th2.get("clipped", false))
 			model.update_item(str(it3.get("id", "")), {"specs": sp})
-	_history_suppress = was_suppress
-	_sim_bulk_update = was_bulk
+	_end_sim_writes()
 	_pv_live_w = live_w
 	_publish_live_circuits(entries)
 	if not display_only:
@@ -18022,10 +18255,35 @@ func _sync_graph_controller_ac_fault() -> void:
 		_solar_ui.call("set_graph_controller_destroyed", _any_controller_destroyed())
 
 
+## ONE deferred fault check per frame however many wiring writes queued it.
+## `_checking_voltage` only stops re-entry; before this every queued call ran
+## in full (K writes in a tick = K full checks).
+var _faults_pending: bool = false
+
+
+func _queue_electrical_fault_check() -> void:
+	if _faults_pending:
+		return
+	_faults_pending = true
+	call_deferred("_run_queued_fault_check")
+
+
+func _run_queued_fault_check() -> void:
+	_faults_pending = false
+	_check_electrical_faults()
+
+
 func _check_electrical_faults() -> void:
 	if model == null or _checking_voltage:
 		return
 	_checking_voltage = true
+	PerfMonitor.begin("gv_faults")
+	# The check's own writes (voltage flags, destroyed, severed) are
+	# consequences of the wiring edit that queued it — that edit already moved
+	# user_rev; these must not move it again. Only the model flag: the view's
+	# coalescing flags stay as they are so a fault still redraws + autosaves.
+	var was_sim_writing := model.sim_writing
+	model.sim_writing = true
 	var temp_c := _ambient_temp_c_for_voc()
 	# Nesting-aware: flatten super-node portals and scan EVERY scope at once, so a
 	# PV string split across a compound boundary or buried in a collapsed
@@ -18034,6 +18292,7 @@ func _check_electrical_faults() -> void:
 	# DC-side topology (battery banks, shorts) — cached for _tick_dc_throttle.
 	_dc_flat_conns = GraphNesting.flat_connections(model)
 	_dc_analysis = GraphDcElectrical.analyze(model, _dc_flat_conns)
+	_dc_analysis_struct_rev = model.struct_rev
 	# 0) Reverse polarity. Checked BEFORE the destructive families so a crossed
 	# battery lead is reported as what it is rather than as a downstream
 	# symptom. PV reversal is non-destructive (a panel is a current source and
@@ -18079,6 +18338,8 @@ func _check_electrical_faults() -> void:
 	_sync_graph_controller_ac_fault()
 	if _graph_canvas != null:
 		_graph_canvas.call("queue_redraw")
+	model.sim_writing = was_sim_writing
+	PerfMonitor.end("gv_faults")
 	_checking_voltage = false
 
 
@@ -18221,7 +18482,7 @@ func _reset_controller(controller_id: String) -> void:
 	# A reset while the blast is still playing must not pop a stale card.
 	_cancel_pending_fault_card()
 	_sync_graph_controller_ac_fault()
-	call_deferred("_check_electrical_faults")
+	_queue_electrical_fault_check()
 	if ty == "battery" or ty == "smartbattery":
 		_show_toast("Battery reset — fix the wiring before it burns again", 3.0)
 	else:
@@ -18458,7 +18719,7 @@ func _wire_selected_panels(series: bool) -> void:
 	_layout_panel_grid(ids)
 	_history_suppress = false
 	_push_history()
-	call_deferred("_check_electrical_faults")
+	_queue_electrical_fault_check()
 	_show_toast("Wired %s %s → controller" % [
 		UiText.count(ids.size(), "panel"), "in series" if series else "in parallel"])
 	_update_special_group_buttons()
@@ -18836,6 +19097,22 @@ func _refresh_camp_cards() -> void:
 var _camp_power: Dictionary = {}       # comp_id -> CampPowerModel state
 var _camp_power_last_h := NAN
 var _camp_power_written: Dictionary = {}   # comp_id -> {soc, h}
+
+
+## The camp power integrators are forward-only state a render moves to the
+## range's end; the SimRenderer snapshots them at the playhead and puts them
+## back (CLAUDE.md "Sim pre-render + playback").
+func camp_power_state_snapshot() -> Dictionary:
+	return {"power": _camp_power.duplicate(true), "last_h": _camp_power_last_h,
+		"written": _camp_power_written.duplicate(true)}
+
+
+func restore_camp_power_state(snap: Dictionary) -> void:
+	if snap.is_empty():
+		return
+	_camp_power = (snap.get("power", {}) as Dictionary).duplicate(true)
+	_camp_power_last_h = float(snap.get("last_h", NAN))
+	_camp_power_written = (snap.get("written", {}) as Dictionary).duplicate(true)
 const _CAMP_POWER_PERSIST_H := 0.5
 
 

@@ -73,6 +73,33 @@ static func resolve_port(model: GraphModel, item_id: String, handle_id: String,
 ## fields overwritten and its origin id preserved. Feed these to a sim engine to
 ## make generic super-node grouping transparent at any depth. The origin id lets
 ## flow writeback (_cache_conn_flow) animate the real (possibly boundary) wire.
+## The flattened edge list, memoised against the model's revisions. The
+## flattening allocates a copy of every connection and resolves both ports
+## through the compound portals, and it was rebuilt by the flow step every
+## tick, by the AC load reading at 10 Hz and by the DC sync at 4 Hz. Keyed on
+## struct_rev (topology) AND user_rev (any player edit — a `pump` flag on a
+## wire is read off the flat copy), so sim-tick telemetry never rebuilds it
+## and never goes stale on a field a reader uses: the engine reads telemetry
+## off the REAL wires through its id index. The array is SHARED: read-only.
+## Writers that mutate the flat copies (the fault flags) keep calling
+## flat_connections().
+static var _flat_cache_model: WeakRef = null
+static var _flat_cache_key: String = ""
+static var _flat_cache: Array = []
+
+
+static func flat_connections_cached(model: GraphModel) -> Array:
+	if model == null:
+		return []
+	var key := "%d|%d|%d" % [model.struct_rev, model.user_rev, model.connections.size()]
+	if _flat_cache_model != null and _flat_cache_model.get_ref() == model and _flat_cache_key == key:
+		return _flat_cache
+	_flat_cache = flat_connections(model)
+	_flat_cache_model = weakref(model)
+	_flat_cache_key = key
+	return _flat_cache
+
+
 static func flat_connections(model: GraphModel) -> Array:
 	var out: Array = []
 	if model == null:

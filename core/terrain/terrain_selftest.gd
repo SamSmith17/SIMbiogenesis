@@ -1179,6 +1179,26 @@ func _test_pond_bathymetry() -> void:
 	var lvl := PondBathymetry.level_for_volume_l(
 		poly, height_at, mid_v, floor_m, spill_m, cell)
 	_check("bathymetry inverse ~ mid level", absf(lvl - 9.7) < 0.25, "lvl=%f" % lvl)
+	# The cached-sample evaluators TerrainLoader's pond push runs on must be
+	# BIT-IDENTICAL to the sweeps (same cells, same order, same float64 sum) —
+	# exact equality, not a tolerance: a pond level that moved by a micron on
+	# this change would be a different simulation.
+	var samples := PondBathymetry.basin_samples(poly, height_at, cell)
+	_check("basin_samples covers the outline", samples.size() > 400, "n=%d" % samples.size())
+	var same := true
+	for lv in [floor_m, 8.4, 9.0, 9.7, spill_m - 0.05, spill_m + 1.0]:
+		var a := PondBathymetry.volume_to_level_l(poly, height_at, float(lv), cell, spill_m)
+		var b := PondBathymetry.volume_from_samples(samples, cell, float(lv), spill_m)
+		if a != b:
+			same = false
+			print("  volume mismatch at %.2f: sweep %.9f samples %.9f" % [float(lv), a, b])
+	_check("volume_from_samples == volume_to_level_l (exact)", same)
+	_check("capacity_from_samples == capacity_l (exact)",
+		PondBathymetry.capacity_from_samples(samples, cell, spill_m, 0.05) == cap_v)
+	_check("level_for_volume_from_samples == level_for_volume_l (exact)",
+		PondBathymetry.level_for_volume_from_samples(samples, cell, mid_v, floor_m, spill_m) == lvl)
+	_check("empty samples → zero volume",
+		PondBathymetry.volume_from_samples(PackedFloat64Array(), cell, 9.0, spill_m) == 0.0)
 	# Manual capacity must not be confused with terrain integral in callers —
 	# fill_frac uses whatever capacity is passed.
 	_check("bathymetry manual cap fill",

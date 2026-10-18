@@ -23,7 +23,9 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 	# Flatten super-node (compound) portals once: AC reachability then tunnels
 	# through generic groups at any depth, while opaque load-group compounds stay
 	# nodes (summed via sum_load_group_watts). Computed once, threaded down.
-	var flat := GraphNesting.flat_connections(model)
+	# The memoised flattening: this runs at 10 Hz from SolarUI's load reading
+	# and the edges are read-only here (loss telemetry lands on the real wires).
+	var flat := GraphNesting.flat_connections_cached(model)
 	var reachable := _reachable_ac_load_ids(model, flat)
 	if reachable.is_empty():
 		return 0.0
@@ -53,7 +55,7 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 static func demand_watts(model: GraphModel) -> float:
 	if model == null:
 		return 0.0
-	var flat := GraphNesting.flat_connections(model)
+	var flat := GraphNesting.flat_connections_cached(model)
 	var total := 0.0
 	for iid: String in _reachable_ac_load_ids(model, flat).keys():
 		var item: Dictionary = model.get_item(iid)

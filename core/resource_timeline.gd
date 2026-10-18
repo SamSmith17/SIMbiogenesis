@@ -201,6 +201,23 @@ func _append_strided_run(lvl0: float, net: float, inflow: float, outflow: float,
 	_level[n - 1] = step_level(lvl0, net, capacity_qty, full_dt)
 
 
+## Drop every sample after the step that holds `abs_hours` (mirror of
+## EnergyTimeline.truncate_after). A pre-rendered future is only valid for the
+## graph it was rendered with: a player edit cuts the tank's cache at the
+## playhead and the live step continues from there. Always keeps one sample.
+## `total_overflow_qty` is cumulative and deliberately left alone.
+func truncate_after(abs_hours: float) -> void:
+	if is_empty():
+		return
+	var g := maxi(_step_of(abs_hours), first_step())
+	var keep := g - _base_step + 1
+	if keep >= _level.size():
+		return
+	_level.resize(keep)
+	_inflow.resize(keep)
+	_outflow.resize(keep)
+
+
 func seek(abs_hours: float) -> Dictionary:
 	if is_empty():
 		return {"level": 0.0, "inflow_rate": 0.0, "outflow_rate": 0.0}

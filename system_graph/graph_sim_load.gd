@@ -199,4 +199,13 @@ func _apply_state_to_model() -> void:
 	specs["requested_state"] = new_req
 	specs["input_valve_open"] = input_valve_open
 	specs["output_valve_open"] = output_valve_open
+	# A load following the inverter (AC came back → "on") is the simulation
+	# writing, not the player: it must not move GraphModel.user_rev, or every
+	# AC flip would cut a pre-rendered range (it did — found by trace_user_rev).
+	var had_flag: bool = ("sim_writing" in model_ref)
+	var was_sim: bool = bool(model_ref.get("sim_writing")) if had_flag else false
+	if had_flag:
+		model_ref.set("sim_writing", true)
 	model_ref.call("update_item", item_id, {"specs": specs})
+	if had_flag:
+		model_ref.set("sim_writing", was_sim)
