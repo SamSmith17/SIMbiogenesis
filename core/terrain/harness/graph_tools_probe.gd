@@ -197,11 +197,30 @@ func _test_globe_connect(gv: Node) -> void:
 	canvas.queue_redraw()
 	await _wait(0.3)
 	var pins: Dictionary = canvas.get("_globe_pin_px")
-	# A source with a startable port and a target that takes a wire from it.
+	# A source with a startable port and a target that takes a wire from it —
+	# and a pair the view keeps as a PLAIN run. A water wire into a hydro
+	# turbine's intake is not one: `_on_world_connect_requested` defers
+	# `_auto_penstock_for_new_water_wires`, which makes that wire the
+	# turbine's penstock (`_route_penstock_from_pond`: the old penstock and
+	# an orphaned intake are REMOVED, the clicked bends dropped for a fresh
+	# route). The count then reads n0 and the bend is gone — that is the
+	# tool working as designed, not the run this check is about, so turbines
+	# are skipped here (the pair used to be the pond into the PowerSpout).
+	# Of the pairs that qualify, the one whose pins sit FARTHEST apart on
+	# screen: the run-edit checks need a stretch of the drawn line clear of
+	# every pin and handle, and at the world's saved SoI radius (740 m on
+	# Mount Vernon) the site's pins cluster inside ~100 px, so the first
+	# qualifying pair (62 px apart) left no such point.
 	var pair: Array = []
+	var pair_d := 0.0
+	var skipped: Array = []
 	for a in pins.keys():
 		var ia := model.get_item(str(a))
 		if not model.item_has_3d_anchor(ia):
+			continue
+		if _is_hydro_turbine(ia):
+			if not skipped.has(str(a)):
+				skipped.append(str(a))
 			continue
 		for ha in canvas.call("_ct_ports", ia):
 			for b in pins.keys():
@@ -210,14 +229,17 @@ func _test_globe_connect(gv: Node) -> void:
 				var ib := model.get_item(str(b))
 				if not model.item_has_3d_anchor(ib):
 					continue
+				if _is_hydro_turbine(ib):
+					if not skipped.has(str(b)):
+						skipped.append(str(b))
+					continue
 				var tp: Array = canvas.call("_ct_ports", ib, ia, str((ha as Dictionary).get("id", "")))
-				if not tp.is_empty() and (pins[a] as Vector2).distance_to(pins[b] as Vector2) > 60.0:
+				var d := (pins[a] as Vector2).distance_to(pins[b] as Vector2)
+				if not tp.is_empty() and d > 60.0 and d > pair_d:
 					pair = [str(a), str(b)]
-					break
-			if not pair.is_empty():
-				break
-		if not pair.is_empty():
-			break
+					pair_d = d
+	if not skipped.is_empty():
+		print("graphtools info — globe connect skipped the hydro turbine pin(s) %s (a water wire into one becomes its penstock)" % str(skipped))
 	if pair.is_empty():
 		print("graphtools info — no two pins on screen with compatible ports; globe connect skipped")
 		gv.call("set_connect_tool", false)
@@ -225,14 +247,35 @@ func _test_globe_connect(gv: Node) -> void:
 	var n0 := model.connections.size()
 	var pa: Vector2 = pins[pair[0]]
 	var pb: Vector2 = pins[pair[1]]
+	var ia0 := model.get_item(pair[0])
+	var ib0 := model.get_item(pair[1])
+	print("graphtools info — globe connect pair: %s (%s '%s' locked %s) at %s -> %s (%s '%s' locked %s) at %s; src ports %s" % [
+		pair[0], str(ia0.get("type", "")), str(ia0.get("label", "")), str(canvas.call("_pin_locked", ia0)), str(pa),
+		pair[1], str(ib0.get("type", "")), str(ib0.get("label", "")), str(canvas.call("_pin_locked", ib0)), str(pb),
+		str(canvas.call("_ct_ports", ia0).map(func(h: Dictionary) -> String: return str(h.get("id", ""))))])
 	await _click_canvas(canvas, pa)
 	_check(not str(canvas.get("_ct_src_item")).is_empty(), "clicking a pin starts the run from it")
-	var bend := (pa + pb) * 0.5 + Vector2(0.0, 40.0)
+	print("graphtools info — source %s port %s; target ports from it: %s" % [
+		str(canvas.get("_ct_src_item")), str(canvas.get("_ct_src_handle")),
+		str(canvas.call("_ct_ports", ib0, model.get_item(str(canvas.get("_ct_src_item"))),
+			str(canvas.get("_ct_src_handle"))).map(func(h: Dictionary) -> String: return str(h.get("id", ""))))])
+	# The bend sits below the midpoint by a share of the pin distance, so the
+	# two legs are long enough on screen for the run-edit clicks to land on.
+	var bend := (pa + pb) * 0.5 + Vector2(0.0, maxf(40.0, pa.distance_to(pb) * 0.3))
 	await _click_canvas(canvas, bend)
 	_check((canvas.get("_ct_waypoints") as Array).size() == 1, "clicking the ground drops a bend")
 	await _shot("globe_00_connecting")
+	var pins_now: Dictionary = canvas.get("_globe_pin_px")
+	print("graphtools info — before the target click: src %s, waypoints %d, pin under %s = '%s' (pin now at %s)" % [
+		str(canvas.get("_ct_src_item")), (canvas.get("_ct_waypoints") as Array).size(), str(pb),
+		str(canvas.call("_globe_pin_at", pb)), str(pins_now.get(pair[1], Vector2.INF))])
 	await _click_canvas(canvas, pb)
 	await _wait(0.8)
+	var menu_dbg: PopupMenu = canvas.get("_ct_menu")
+	print("graphtools info — after the target click: src '%s', waypoints %d, flash '%s', menu %s, connections %d -> %d" % [
+		str(canvas.get("_ct_src_item")), (canvas.get("_ct_waypoints") as Array).size(), str(canvas.get("_ct_flash_text")),
+		("visible" if (menu_dbg != null and is_instance_valid(menu_dbg) and menu_dbg.visible) else "closed"),
+		n0, model.connections.size()])
 	_check(model.connections.size() == n0 + 1, "clicking the other pin makes one connection")
 	var conn: Dictionary = model.connections[model.connections.size() - 1] if model.connections.size() > n0 else {}
 	_check(conn.get("visible_3d") == true and (conn.get("route_3d", []) as Array).size() == 1
@@ -245,6 +288,12 @@ func _test_globe_connect(gv: Node) -> void:
 		await _test_run_edit(gv, canvas, model, str(conn.get("id", "")))
 		model.remove_connection(str(conn.get("id", "")))
 	await _test_place_here(gv, canvas, model)
+
+
+## A hydro turbine on the graph (the siphon / PowerSpout / micro Pelton
+## machines): a wire into its water intake is adopted as its penstock.
+func _is_hydro_turbine(item: Dictionary) -> bool:
+	return str((item.get("specs", {}) as Dictionary).get("role", "")) == "siphon_hydro"
 
 
 func _route_pt(model: GraphModel, cid: String, k: int) -> Vector3:
