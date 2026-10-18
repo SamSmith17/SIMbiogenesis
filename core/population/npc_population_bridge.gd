@@ -2203,6 +2203,15 @@ func find_agent(agent_id: String) -> NpcAgent:
 	return null
 
 
+## Possession hand-over (MultiplayerSession): the engine that owns the person
+## releases their chore claim, see NpcPopulationEngine.set_controller.
+func set_agent_controller(agent_id: String, peer_id: int) -> bool:
+	for iid in _engines:
+		if (_engines[iid] as NpcPopulationEngine).set_controller(agent_id, peer_id):
+			return true
+	return false
+
+
 ## The habitat whose roster carries this agent, "" when unknown. The
 ## settlement card's person jump needs it — passing "" let the planner bind
 ## to whichever habitat happened to be first, silently showing a different

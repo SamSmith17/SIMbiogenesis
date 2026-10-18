@@ -1275,6 +1275,12 @@ func _grant_possession(peer_id: int, agent_id: String) -> Dictionary:
 
 
 func _set_agent_controller(agent_id: String, peer_id: int) -> void:
+	# Through the engine, which also hands a claimed chore back to the board
+	# so the crew re-forms without the possessed body (Push 2 #4).
+	var view := _find_graph_view()
+	var bridge = view.get("_npc_population") if view != null else null
+	if bridge != null and bridge.has_method("set_agent_controller") 			and bool(bridge.call("set_agent_controller", agent_id, peer_id)):
+		return
 	var agent = _find_agent(agent_id)
 	if agent != null:
 		agent.controlled_by_peer = peer_id

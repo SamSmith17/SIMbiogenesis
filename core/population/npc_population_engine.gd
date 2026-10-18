@@ -835,6 +835,26 @@ func _need_is_starved(need: String) -> bool:
 ##
 ## This hides nothing real: if supply is genuinely broken, the very next
 ## simulated ticks block the activities and the cascade starts properly.
+## Hand a person to a human player (`peer_id`), or back to the FSM (0).
+##
+## A possessed body is skipped by every planner, so a chore it had claimed
+## would stay claimed and never progress — the crew around it stalls at a
+## quorum it can no longer meet. Taking over therefore RELEASES the claim
+## (and the space claim with it: the person stops where the human takes
+## them). Handing back does nothing but clear the flag: re-claiming is the
+## planner's job, and the first idle step does it.
+func set_controller(agent_id: String, peer_id: int) -> bool:
+	var a := find_agent(agent_id)
+	if a == null:
+		return false
+	if peer_id != 0 and a.controlled_by_peer == 0 and a.activity == NpcAgent.CHORE_ACTIVITY:
+		var ctx: Dictionary = _last_ctx.duplicate() if not _last_ctx.is_empty() else {}
+		ctx["board"] = chore_board
+		a._finish(ctx, false)
+	a.controlled_by_peer = peer_id
+	return true
+
+
 func _catch_up(abs_hours: float, dt: float, ctx: Dictionary) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	for item in agents:

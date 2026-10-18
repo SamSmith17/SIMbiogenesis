@@ -1387,6 +1387,49 @@ func _test_chore_crew_and_deps() -> void:
 	board.release_all_for_agent("a1")
 	_check("release_all removes from crews", board.worker_count(drill) == 2)
 
+	# POSSESSION hands the claim back (Push 2 #4). A human taking over a crew
+	# member used to leave their claim on the board: the planner skips a
+	# possessed body, so the chore kept a worker who never worked and a crew
+	# of three stalled at a quorum it could no longer meet.
+	var pe := NpcPopulationEngine.new()
+	pe.configure(3, "poss", Vector2.ZERO)
+	var pboard := pe.chore_board
+	var lift := pboard.add_chore("Lift the beam", 2.0,
+			{"min_workers": 2, "max_workers": 3, "repeat": "once"})
+	var psite := _make_test_site()
+	for i in 20:
+		pe.tick(10.0 + float(i) / 60.0, {"registry": psite["registry"], "pos_of": psite["pos_of"],
+			"hour_of_day": 10.0, "chore_pos_of": _pos_chore_resolver()})
+	var worker: NpcAgent = null
+	for a in pe.agents:
+		if (a as NpcAgent).chore_id == lift:
+			worker = a
+			break
+	_check("a crew member holds the lift claim before possession", worker != null,
+			"workers %d" % pboard.worker_count(lift))
+	if worker != null:
+		var crew_before := pboard.worker_count(lift)
+		_check("the engine hands the body over", pe.set_controller(worker.id, 7)
+				and worker.controlled_by_peer == 7)
+		_check("possession releases the chore claim",
+				not (pboard.find(lift).get("workers", []) as Array).has(worker.id)
+				and worker.chore_id.is_empty() and worker.activity != NpcAgent.CHORE_ACTIVITY,
+				"workers %d -> %d" % [crew_before, pboard.worker_count(lift)])
+		var pos_held := worker.pos
+		for i in 10:
+			pe.tick(10.5 + float(i) / 60.0, {"registry": psite["registry"], "pos_of": psite["pos_of"],
+				"hour_of_day": 10.5, "chore_pos_of": _pos_chore_resolver()})
+		_check("the possessed body is left where the human has it", worker.pos == pos_held
+				and worker.chore_id.is_empty())
+		pe.set_controller(worker.id, 0)
+		for i in 30:
+			pe.tick(11.0 + float(i) / 60.0, {"registry": psite["registry"], "pos_of": psite["pos_of"],
+				"hour_of_day": 11.0, "chore_pos_of": _pos_chore_resolver()})
+		_check("handed back, the planner re-claims", worker.controlled_by_peer == 0
+				and (pboard.worker_count(lift) >= 2 or pboard.find(lift).is_empty()
+					or float(pboard.find(lift).get("progress_h", 0.0)) > 0.0),
+				"workers %d" % pboard.worker_count(lift))
+
 	# Quorum: below min_workers the work credits NOTHING — early arrivals
 	# wait; the gathering is the emergent behavior.
 	var raise_c := board.add_chore("Raise structure", 1.0,
