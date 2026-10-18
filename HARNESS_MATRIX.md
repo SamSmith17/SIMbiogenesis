@@ -247,10 +247,14 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
   at the typed 100 m / 37.5 mm, outlet invert NAN, 0 W, and the stream
   intake's live supply reads 0 while the Lab's own test flow still makes
   power. A/B'd by reverting Push 2's conduit_manager / resource_flow_engine
-  / terrain_loader edits: identical at HEAD, so it came in with 646f533 or
-  cfbcf64 (both touched the engine's connection index and sim writes) or
-  with the world. The last green record is 2026-10-13. Not investigated
-  past the A/B.
+  / terrain_loader edits: identical at HEAD. A second A/B with every
+  tracked file at 646f533 (the sim pre-render commit, BEFORE the perf
+  commit cfbcf64) fails the same 14 checks, so the perf pass did not bring
+  it in: it came with 646f533 (the sim-write bracket / connection-index
+  work) or with the world as saved since. The last green record is
+  2026-10-13. Not investigated past the two A/Bs — the first suspect is
+  `_adopt_penstock_conn` running inside a bracket or cache that no longer
+  sees the rebuilt run's stamps.
 - **`festival` on Walton FAILS 4 count checks** (2026-10-18): the world is
   saved mid-festival — 40 camp compounds / 1053 people already on the
   graph, so "24 lots became 11 new camp compounds" (13 of the capture's
