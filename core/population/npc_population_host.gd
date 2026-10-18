@@ -94,6 +94,14 @@ const HERO_HYSTERESIS_M := 8.0
 const HERO_PUSH_S := 0.2
 var _crowd_renderer: Node = null
 var _hero_ids: Dictionary = {}
+## The dot Array handed over last frame (the bridge caches it between ticks),
+## and the pick gate: where the viewer stood at the last hero / ambient pick,
+## the last ambient set, and a flag the focus / spotlight setters raise.
+var _last_dots: Array = []
+var _last_pick_eye := Vector2.INF
+var _last_pick_eye3 := Vector3.INF
+var _last_ambient_ids: Dictionary = {}
+var _pick_dirty := true
 var _hero_push_accum := 0.0
 var _crowd_prev: Dictionary = {}   # id -> {pos: Vector2, h: float}
 ## agent_id -> size of the carry group this frame (how many hands share the
@@ -170,6 +178,10 @@ func _process_avatars(delta: float) -> void:
 	# Full-tier only when the bridge can say so: the light crowd is drawn by
 	# CrowdRenderer straight from the cohorts and never needs a dot here.
 	var dots: Array = _bridge.agent_dots_full() if _bridge.has_method("agent_dots_full") 		else _bridge.agent_dots()
+	# Same Array instance as last frame = no tick happened since: every value
+	# read off a dot is the one already shown.
+	var dots_changed := not is_same(dots, _last_dots)
+	_last_dots = dots
 	var seen: Dictionary = {}
 	var near: Array = []   # [dist, agent_id] candidates for the rigged body
 	var carried: Dictionary = {}   # prop_id -> Array of carrier agent ids
@@ -190,7 +202,21 @@ func _process_avatars(delta: float) -> void:
 			carry_group_of[str(aid1)] = (carried[cp1] as Array).size()
 	_carry_group_of = carry_group_of
 	var prev_heroes := _hero_ids
-	var heroes := _pick_heroes(dots, eye)
+	# The hero and ambient picks each SORT the roster. They change only when
+	# the dots did (a tick), the viewer moved, or the focus / spotlight
+	# changed — not every frame.
+	var eye3 := _viewer_pos3()
+	var repick := dots_changed or _pick_dirty \
+			or eye.distance_squared_to(_last_pick_eye) > 0.25 \
+			or eye3.distance_squared_to(_last_pick_eye3) > 0.25
+	var heroes: Dictionary
+	if repick:
+		_pick_dirty = false
+		_last_pick_eye = eye
+		_last_pick_eye3 = eye3
+		heroes = _pick_heroes(dots, eye)
+	else:
+		heroes = _hero_ids
 	# With a crowd renderer, a hero past the cull distance is drawn by IT
 	# rather than vanishing (it used to pop out at 220 m and back in again).
 	if _crowd_renderer != null and is_instance_valid(_crowd_renderer):
@@ -214,8 +240,12 @@ func _process_avatars(delta: float) -> void:
 	# fade radius (plus the focus, always). Measured in 3D from the camera,
 	# not in XZ: from the settlement view's block height the camp directly
 	# below used to read as "0 m away" and stacked a wall of tags.
-	var eye3 := _viewer_pos3()
-	var ambient_ids := _pick_ambient(dots, heroes, eye3)
+	var ambient_ids: Dictionary
+	if repick or hero_changed:
+		ambient_ids = _pick_ambient(dots, heroes, eye3)
+		_last_ambient_ids = ambient_ids
+	else:
+		ambient_ids = _last_ambient_ids
 	var overflow: Array = []   # full-tier dots past the hero budget (crowd figures)
 	var push_crowd := false
 	var crowd_moved := false
@@ -285,14 +315,19 @@ func _process_avatars(delta: float) -> void:
 			fresh = true
 		if fresh or not av.visible:
 			_hand_in(av, aid, dot)
-		av.status_text = str(dot.get("status", ""))
-		av.morale_label = str(dot.get("morale_label", ""))
-		av.set_display_name(str(dot.get("name", "")))
-		av.set_morale(float(dot.get("morale", 0.0)))
-		av.set_mood(float(dot.get("morale", 0.0)), float(dot.get("peak_since", NAN)),
-			float(dot.get("peak_buzz", 0.0)), int(dot.get("peak_fed", 0)))
-		av.set_morale_trend(_morale_trend_of(aid, float(dot.get("morale", 0.0))))
-		av.set_task_text(_task_text_of(dot))
+		# The dot payload only changes on a bridge tick (the bridge hands back
+		# the SAME cached Array between ticks), so the ~10 readout setters per
+		# hero — each a String build or a label write — run once per tick, not
+		# once per frame. A fresh avatar still takes them now.
+		if dots_changed or fresh:
+			av.status_text = str(dot.get("status", ""))
+			av.morale_label = str(dot.get("morale_label", ""))
+			av.set_display_name(str(dot.get("name", "")))
+			av.set_morale(float(dot.get("morale", 0.0)))
+			av.set_mood(float(dot.get("morale", 0.0)), float(dot.get("peak_since", NAN)),
+				float(dot.get("peak_buzz", 0.0)), int(dot.get("peak_fed", 0)))
+			av.set_morale_trend(_morale_trend_of(aid, float(dot.get("morale", 0.0))))
+			av.set_task_text(_task_text_of(dot))
 		var sim_pos: Vector2 = dot.get("pos", Vector2.ZERO)
 		var dist := (sim_pos - eye).length()
 		# Near people carry their morale bar + task tag ambiently — the
@@ -661,6 +696,7 @@ func set_focus_agent(agent_id: String) -> void:
 	if prev != null and is_instance_valid(prev):
 		prev.set_tag_visible(false)
 	_focus_id = agent_id
+	_pick_dirty = true
 	var now: NpcAvatar = _avatars.get(agent_id)
 	if now != null and is_instance_valid(now):
 		now.set_tag_visible(true)
@@ -1193,6 +1229,7 @@ func _hand_in(av: NpcAvatar, aid: String, dot: Dictionary) -> void:
 ## beacon's target must be a real, unique body.
 func spotlight(agent_id: String, seconds: float) -> void:
 	_spotlight[agent_id] = Time.get_ticks_msec() + int(seconds * 1000.0)
+	_pick_dirty = true
 
 
 ## Where this person's body is DRAWN right now: their avatar (a hero), else

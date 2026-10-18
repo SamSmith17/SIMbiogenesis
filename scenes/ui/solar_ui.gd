@@ -305,6 +305,7 @@ signal ac_shutdown_changed(active: bool, reason: String)
 
 var main_node : Node = null
 var _cached_time_ui : Control = null
+var _time_ui_lookup_ms : int = -100000
 
 # Home Assistant integration
 var ha_client: Node = null
@@ -1893,6 +1894,13 @@ var _current_moon_shadow_opacity : float = 0.3
 const _MOON_SHADOW_OPACITY_PEAK : float = 0.6
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("solar_ui")
+	_perf_tick(delta)
+	PerfSpan.end("solar_ui")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if _is_graph_embed:
 		if is_instance_valid(_graph_embed_mirror_from):
 			_graph_embed_sync_acc += delta
@@ -2092,6 +2100,13 @@ func _sync_time_ui_cloud_sliders(cutoff: float, weight: float) -> void:
 		var tree := get_tree()
 		if tree == null:
 			return
+		# The legacy TimeUI is a hidden shim and is MISSING on every current
+		# scene: without this negative cache the root walk below ran at 10 Hz
+		# for the whole session. Re-looked every few seconds in case it lands.
+		var now_ms := Time.get_ticks_msec()
+		if now_ms - _time_ui_lookup_ms < 5000:
+			return
+		_time_ui_lookup_ms = now_ms
 		_cached_time_ui = tree.root.get_node_or_null("Main/CanvasLayer/TimeUI")
 		if _cached_time_ui == null:
 			for child in tree.root.get_children():
@@ -2099,7 +2114,7 @@ func _sync_time_ui_cloud_sliders(cutoff: float, weight: float) -> void:
 				if canvas:
 					_cached_time_ui = canvas
 					break
-	
+
 	if _cached_time_ui == null:
 		return
 	
@@ -3854,13 +3869,25 @@ func _update_inverter_overload(delta: float) -> void:
 ## hydro, …) in the "energy_sources" group. Sources flag themselves out of
 ## the balance via contribute_to_grid (e.g. SolarPanelSource, since SolarUI
 ## models the solar array internally).
+## The group walk is cached (AUX_SOURCES_TTL_S): this runs at 10 Hz and
+## `get_nodes_in_group` builds a fresh Array each call for a set that changes
+## only when a source node enters or leaves the tree.
+const AUX_SOURCES_TTL_S := 2.0
+var _aux_sources: Array = []
+var _aux_sources_at_ms := -100000
+
+
 func _poll_aux_generation() -> void:
 	current_aux_generation_kw = 0.0
 	var tree := get_tree()
 	if tree == null:
 		return
-	for source: Node in tree.get_nodes_in_group("energy_sources"):
-		if source == null or not is_instance_valid(source):
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _aux_sources_at_ms > int(AUX_SOURCES_TTL_S * 1000.0):
+		_aux_sources = tree.get_nodes_in_group("energy_sources")
+		_aux_sources_at_ms = now_ms
+	for source: Node in _aux_sources:
+		if source == null or not is_instance_valid(source) or not source.is_inside_tree():
 			continue
 		var contributes: Variant = source.get("contribute_to_grid")
 		if contributes != null and not bool(contributes):

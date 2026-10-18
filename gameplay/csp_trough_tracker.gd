@@ -165,6 +165,13 @@ func _bind() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if _model_root != null:
 		# Force the fixed yaw every frame — wins over any yaw a re-ground or
 		# record edit might otherwise re-apply to ModelRoot (a single-axis E-W

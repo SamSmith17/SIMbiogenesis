@@ -85,6 +85,8 @@ const MONTH_NAMES  : Array = ["Jan","Feb","Mar","Apr","May","Jun",
 var _main         : Node  = null
 var _player       : Node  = null
 var _is_playing   : bool  = true
+## Play-button ring state last written (-1 = never): see _update_display.
+var _play_ring_key : int = -1
 var _speed_idx    : int   = 2        # default 60×
 var _stored_scale : float = 0.016667
 ## True while the sim is paused by THIS bar (spacebar). Used externally by time_ui.
@@ -536,6 +538,13 @@ func _setup_settings_panel() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("timeline_ui")
+	_perf_tick(delta)
+	PerfSpan.end("timeline_ui")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if Engine.is_editor_hint() or not _ready_done:
 		return
 	if _main == null:
@@ -919,22 +928,29 @@ func _update_display() -> void:
 	var ts : float = float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
 	var analemma := _analemma_active()
 	_is_playing    = ts > 0.0 or analemma
-	_play_btn.text = "⏸" if _is_playing else ("◀" if ts < 0.0 else "▶")
-	# Update the ring border and icon colour to signal play/pause state.
-	var ring_col   : Color = C_AMBER if _is_playing else C_PRIMARY
-	var sb_n := StyleBoxFlat.new()
-	sb_n.bg_color   = Color(ring_col.r * 0.22, ring_col.g * 0.22, ring_col.b * 0.22, 1.0)
-	sb_n.border_color = Color(ring_col.r, ring_col.g, ring_col.b, 0.90)
-	sb_n.set_border_width_all(2)
-	sb_n.set_corner_radius_all(21)
-	var sb_h := sb_n.duplicate() as StyleBoxFlat
-	sb_h.bg_color   = Color(ring_col.r * 0.38, ring_col.g * 0.38, ring_col.b * 0.38, 1.0)
-	sb_h.border_color = ring_col
-	_play_btn.add_theme_stylebox_override("normal",  sb_n)
-	_play_btn.add_theme_stylebox_override("hover",   sb_h)
-	_play_btn.add_theme_stylebox_override("pressed", sb_h)
-	_play_btn.add_theme_color_override("font_color",
-		Color(ring_col.r * 1.6, ring_col.g * 1.6, ring_col.b * 1.6, 1.0).clamp())
+	var play_text := "⏸" if _is_playing else ("◀" if ts < 0.0 else "▶")
+	if _play_btn.text != play_text:
+		_play_btn.text = play_text
+	# The ring border and icon colour signal play/pause state. Written only
+	# when the state CHANGES: two StyleBoxFlats and four theme overrides every
+	# 0.1 s re-themed the button (and re-laid out its row) while nothing moved.
+	var ring_key := 1 if _is_playing else 0
+	if ring_key != _play_ring_key:
+		_play_ring_key = ring_key
+		var ring_col   : Color = C_AMBER if _is_playing else C_PRIMARY
+		var sb_n := StyleBoxFlat.new()
+		sb_n.bg_color   = Color(ring_col.r * 0.22, ring_col.g * 0.22, ring_col.b * 0.22, 1.0)
+		sb_n.border_color = Color(ring_col.r, ring_col.g, ring_col.b, 0.90)
+		sb_n.set_border_width_all(2)
+		sb_n.set_corner_radius_all(21)
+		var sb_h := sb_n.duplicate() as StyleBoxFlat
+		sb_h.bg_color   = Color(ring_col.r * 0.38, ring_col.g * 0.38, ring_col.b * 0.38, 1.0)
+		sb_h.border_color = ring_col
+		_play_btn.add_theme_stylebox_override("normal",  sb_n)
+		_play_btn.add_theme_stylebox_override("hover",   sb_h)
+		_play_btn.add_theme_stylebox_override("pressed", sb_h)
+		_play_btn.add_theme_color_override("font_color",
+			Color(ring_col.r * 1.6, ring_col.g * 1.6, ring_col.b * 1.6, 1.0).clamp())
 	if _is_playing and ts > 0.0:
 		_stored_scale = ts
 		_speed_idx    = _nearest_speed_idx(ts)
@@ -1288,13 +1304,32 @@ func _draw_track() -> void:
 ## band, each calibration rule as a lavender band, nearest-match as a faint
 ## one — so a rule made from one foggy night visibly recurs on the others.
 ## Skipped beyond two weeks of span (hourly resolution stops meaning anything).
+## The microclimate sweep is up to 337 dict rows (a 14-day window, hourly),
+## and the track redraws at 10 Hz: the rows are recomputed only when the
+## window moves or MC_SWEEP_TTL_S has passed (a drawer edit lands within it).
+const MC_SWEEP_TTL_S := 1.0
+var _mc_sweep_rows: Array = []
+var _mc_sweep_key := Vector2.INF
+var _mc_sweep_at_ms := -100000
+
+
+func _mc_sweep_rows_for(mc: Node, win_start: float, span: float) -> Array:
+	var key := Vector2(win_start, span)
+	var now_ms := Time.get_ticks_msec()
+	if key != _mc_sweep_key or now_ms - _mc_sweep_at_ms > int(MC_SWEEP_TTL_S * 1000.0):
+		_mc_sweep_rows = mc.call("sweep", win_start, win_start + span)
+		_mc_sweep_key = key
+		_mc_sweep_at_ms = now_ms
+	return _mc_sweep_rows
+
+
 func _draw_microclimate_strip(win_start : float, span : float, w : float, groove_y : float) -> void:
 	if span > 14.0 * 24.0:
 		return
 	var mc := get_node_or_null("/root/Microclimate")
 	if mc == null or not bool(mc.get("enabled")):
 		return
-	var rows: Array = mc.call("sweep", win_start, win_start + span)
+	var rows: Array = _mc_sweep_rows_for(mc, win_start, span)
 	if rows.is_empty():
 		return
 	# Inside the provenance band, just under the groove (the ruler is 14 px).

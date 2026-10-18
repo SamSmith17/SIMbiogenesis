@@ -122,6 +122,7 @@ func _clear_all_instances() -> void:
 	_fitting_sig.clear()
 	_fittings.clear()
 	_sample_cache.clear()
+	_sample_rev += 1
 	_obstacle_cache.clear()
 	_obstacle_cache_valid = false
 	_lane_map.clear()
@@ -508,6 +509,17 @@ func pick_conduit(origin: Vector3, direction: Vector3,
 	var best := {"conn_id": "", "point": Vector3.ZERO, "segment_i": -1, "distance": INF}
 	if direction.length_squared() < 1e-12:
 		return best
+	# The crosshair asks at 60 Hz from a camera that mostly has not moved: the
+	# same ray against the same samples is answered from the last result. The
+	# memo is keyed on the sample cache's revision, so any rebuild re-picks.
+	if _pick_memo_rev == _sample_rev and is_equal_approx(_pick_memo_max, max_dist) \
+			and origin.distance_squared_to(_pick_memo_o) < 1e-6 \
+			and direction.distance_squared_to(_pick_memo_d) < 1e-8:
+		return _pick_memo.duplicate()
+	_pick_memo_rev = _sample_rev
+	_pick_memo_max = max_dist
+	_pick_memo_o = origin
+	_pick_memo_d = direction
 	for cid: String in _sample_cache.keys():
 		var samples: PackedVector3Array = _sample_cache[cid] as PackedVector3Array
 		var hit := ConduitKinds.ray_polyline_pick(origin, direction, samples, max_dist)
@@ -519,7 +531,18 @@ func pick_conduit(origin: Vector3, direction: Vector3,
 				"distance": float(hit.get("distance", INF)),
 				"t": float(hit.get("t", 0.0)),
 			}
+	_pick_memo = best.duplicate()
 	return best
+
+
+## pick_conduit's one-entry memo (see there) and the sample-cache revision it
+## is valid for. Bump `_sample_rev` wherever `_sample_cache` is written.
+var _sample_rev: int = 0
+var _pick_memo: Dictionary = {}
+var _pick_memo_rev: int = -1
+var _pick_memo_max: float = -1.0
+var _pick_memo_o := Vector3.INF
+var _pick_memo_d := Vector3.ZERO
 
 
 func set_focus_highlight(conn_id: String) -> void:
@@ -570,6 +593,7 @@ func ensure_preview_samples(conn: Dictionary) -> PackedVector3Array:
 	var samples := ConduitMeshBuilder.sample_path(control, mesh_style, segs)
 	if samples.size() >= 2:
 		_sample_cache[cid] = samples
+		_sample_rev += 1
 	return samples
 
 
@@ -1806,6 +1830,7 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	inst.visible = true
 	var samples: PackedVector3Array = built.get("sample_points", PackedVector3Array())
 	_sample_cache[cid] = samples
+	_sample_rev += 1
 	_apply_burial_cue(cid, inst, type_id, samples, tint, is_light, use_flow)
 	_sync_light_runtime(cid, conn, type_id, built, inst)
 	_sync_end_fittings(cid, conn, type_id, control, samples)
@@ -2314,6 +2339,7 @@ func _try_rebuild_pipe_parts(cid: String, conn: Dictionary, type_id: String,
 		return false
 	_parts_active[cid] = true
 	_sample_cache[cid] = cl
+	_sample_rev += 1
 	_elbow_cache[cid] = applied.get("elbows", []) as Array
 	_finish_parts_instance(cid, conn, type_id, mat, severed, cl, "PipeParts_%s" % cid)
 	return true
@@ -2354,6 +2380,7 @@ func _try_rebuild_culvert(cid: String, conn: Dictionary, type_id: String,
 	var cl: PackedVector3Array = applied.get("centerline", PackedVector3Array()) as PackedVector3Array
 	_parts_active[cid] = true
 	_sample_cache[cid] = cl
+	_sample_rev += 1
 	_elbow_cache[cid] = []  # no discrete elbows — wide PE arcs
 	_finish_parts_instance(cid, conn, type_id, mat, severed, cl, "CulvertParts_%s" % cid)
 	return true
@@ -2406,6 +2433,7 @@ func _remove_instance(conn_id: String) -> void:
 	clear_elbow_highlight()
 	_clear_fittings(conn_id)
 	_sample_cache.erase(conn_id)
+	_sample_rev += 1
 	_last_cheap.erase(conn_id)
 	_fitting_sig.erase(conn_id)
 	if has_meta("_glow_%s" % conn_id):

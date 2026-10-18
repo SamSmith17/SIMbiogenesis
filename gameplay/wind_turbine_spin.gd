@@ -75,6 +75,13 @@ func _bind_turbine() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if not _ready_ok or not is_instance_valid(_turbine):
 		return
 	_poll_acc += delta

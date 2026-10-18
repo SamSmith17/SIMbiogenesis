@@ -192,6 +192,48 @@ func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "",
 	_fingerprint = fp
 	_cursor = 0
 	_phase = Phase.HEIGHT
+	reused_ground = false
+
+
+## True when `other` covers the same cells (same origin, cell size and
+## dimensions), so its height and slope arrays describe this grid's ground.
+func same_lattice(other: NpcNavGrid) -> bool:
+	return other != null and other.nx == nx and other.nz == nz \
+			and is_equal_approx(other.cell_m, cell_m) \
+			and other.origin.distance_squared_to(origin) < 1e-6
+
+
+## Start a bake that REUSES a finished grid's ground: the HEIGHT and SLOPE
+## phases are copied (the terrain has not moved — a prop was placed, a camp
+## repainted, a space tagged) and the bake resumes at OBSTACLES. On a festival
+## site the height pass is 600k terrain queries at ~2.8 ms a frame for two
+## minutes; without this every placed prop paid it again. The caller decides
+## the ground is unchanged (the bridge's terrain fingerprint); `prev` must be
+## ready and on the same lattice, else this falls back to a full bake.
+func begin_bake_reusing(prev: NpcNavGrid, height_fn: Callable, obstacles: Array = [],
+		fp: String = "", surfaces_fn: Callable = Callable()) -> void:
+	if prev == null or not prev.is_ready() or not same_lattice(prev):
+		begin_bake(height_fn, obstacles, fp, surfaces_fn)
+		return
+	begin_bake(height_fn, obstacles, fp, surfaces_fn)
+	reused_ground = true
+	var cols := nx * nz
+	for i in cols:
+		_height[i] = prev._height[i]
+		var deg: float = prev._slope[i]
+		_slope[i] = deg
+		if deg > MAX_SLOPE_DEG:
+			_flags[i] = _flags[i] | F_STEEP | F_BLOCKED
+	_cursor = 0
+	_obstacle_i = 0
+	if _obstacles.is_empty():
+		_phase = Phase.LAYERS if _surfaces_fn.is_valid() else Phase.DONE
+	else:
+		_phase = Phase.OBSTACLES
+
+
+## Whether this grid skipped its own height pass (see begin_bake_reusing).
+var reused_ground := false
 
 
 ## Advance the bake by at most `budget` cells. Returns true once ready.

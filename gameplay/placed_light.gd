@@ -170,6 +170,13 @@ func _apply_fields() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("placed_lights")
+	_perf_tick(delta)
+	PerfSpan.end("placed_lights")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	_sync_gizmo()
 	_poll -= delta
 	if _poll <= 0.0:
@@ -237,11 +244,21 @@ func _sim_paused() -> bool:
 	return SimFxRate.is_paused(_main)
 
 
+## Gizmo state last written: (shown, outlined). Runs every frame per light,
+## so the rendering / physics server writes happen only when it changes.
+var _gizmo_state := Vector2i(-1, -1)
+
+
 func _sync_gizmo() -> void:
 	var show := PlacedLightService.gizmos_visible() or _focus_local or _selected
+	var outlined := _selected or _focus_local
+	var state := Vector2i(1 if show else 0, 1 if outlined else 0)
+	if state == _gizmo_state:
+		return
+	_gizmo_state = state
 	if _gizmo != null:
 		_gizmo.visible = show
-		_gizmo.material_overlay = _outline_mat if (_selected or _focus_local) else null
+		_gizmo.material_overlay = _outline_mat if outlined else null
 	if _body != null:
 		_body.collision_layer = 1 if show else 0
 

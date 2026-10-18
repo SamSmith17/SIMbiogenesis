@@ -1,5 +1,7 @@
 shader_type spatial;
-render_mode unshaded, cull_disabled, depth_prepass_alpha;
+// Opaque pass (2026-10-18): this shader only ever DISCARDS, it never writes
+// ALPHA, so depth_prepass_alpha bought a second pass for nothing.
+render_mode unshaded, cull_disabled;
 
 // Distant-tree impostor (veg overhaul Phase 3b): ONE camera-facing quad per
 // tree sampling a 3x3 baked atlas (8 yaw views + 1 top view) of the real

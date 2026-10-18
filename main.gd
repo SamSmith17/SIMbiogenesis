@@ -2081,18 +2081,45 @@ func _update_hazard_vfx( delta : float ) -> void :
 	# turbines and the vegetation shader use (WindMath.downwind_xz). One wind
 	# source means nothing on screen can visibly disagree about which way it is
 	# blowing.
-	var speed := 4.0
-	var dir2 := Vector2( 1.0, 0.0 )
-	var ws := get_node_or_null( "/root/WeatherService" )
+	var w2 := _frame_wind_xz( 4.0 )
+	var wind := Vector3( w2.x, 0.0, w2.y ) * float( hz.get( "wind_mult", 1.0 ) )
+	_dust_smoke_vfx.update_frame( delta, hz, wind, cam.global_position )
+
+
+## The per-frame VFX passes (hazard particles, ground fog) each asked the
+## weather service for the wind twice a frame through `/root/…` lookups. One
+## resolution per frame, shared: downwind XZ × speed (m/s), or a `fallback`
+## m/s eastward wind when no weather covers the site.
+var _frame_wind_frame : int = -1
+var _frame_wind : Vector2 = Vector2.ZERO
+var _autoload_cache : Dictionary = {}
+
+
+func _autoload( name : String ) -> Node :
+	var n : Variant = _autoload_cache.get( name )
+	if n is Node and is_instance_valid( n ) :
+		return n
+	var found := get_node_or_null( "/root/" + name )
+	if found != null :
+		_autoload_cache[ name ] = found
+	return found
+
+
+func _frame_wind_xz( fallback : float ) -> Vector2 :
+	var f := Engine.get_process_frames()
+	if f == _frame_wind_frame :
+		return _frame_wind
+	_frame_wind_frame = f
+	_frame_wind = Vector2( fallback, 0.0 )
+	var ws := _autoload( "WeatherService" )
 	if ws != null and ws.has_method( "has_data" ) and bool( ws.call( "has_data" ) ) :
 		var s : float = ws.call( "wind_speed_ms", month, day, day_time )
-		if is_finite( s ) :
-			speed = s
 		var from_deg : float = ws.call( "wind_direction_deg", month, day, day_time )
+		var dir2 := Vector2( 1.0, 0.0 )
 		if is_finite( from_deg ) :
 			dir2 = WindMath.downwind_xz( from_deg )
-	var wind := Vector3( dir2.x, 0.0, dir2.y ) * speed * float( hz.get( "wind_mult", 1.0 ) )
-	_dust_smoke_vfx.update_frame( delta, hz, wind, cam.global_position )
+		_frame_wind = dir2 * ( s if is_finite( s ) else fallback )
+	return _frame_wind
 
 
 ## Extreme weather combined with the site's microclimate VISUAL layer (haze,
@@ -2101,10 +2128,10 @@ func _update_hazard_vfx( delta : float ) -> void :
 ## site haze and a smoke event compound rather than fight.
 func _combined_visual_hazard() -> Dictionary :
 	var hz : Dictionary = HazardState.blank()
-	var xw := get_node_or_null( "/root/ExtremeWeather" )
+	var xw := _autoload( "ExtremeWeather" )
 	if xw != null :
 		hz = xw.call( "current" )
-	var mc := get_node_or_null( "/root/Microclimate" )
+	var mc := _autoload( "Microclimate" )
 	if mc != null :
 		var vh := MicroclimateResolver.visual_hazard( mc.call( "current" ) )
 		if HazardState.is_active( vh ) :
@@ -2116,7 +2143,7 @@ func _combined_visual_hazard() -> Dictionary :
 func _update_ground_fog( delta : float ) -> void :
 	if _ground_fog == null or not is_instance_valid( _ground_fog ) :
 		return
-	var mc := get_node_or_null( "/root/Microclimate" )
+	var mc := _autoload( "Microclimate" )
 	var cam := get_viewport().get_camera_3d()
 	if mc == null or cam == null or _graph_soi_section_preview_active() :
 		_mc_state = {}
@@ -2125,13 +2152,8 @@ func _update_ground_fog( delta : float ) -> void :
 	var st : Dictionary = mc.call( "current" )
 	var was_on := float( _mc_state.get( "fog_sigma", 0.0 ) ) > 1e-5
 	_mc_state = st
-	var wind := Vector2.ZERO
-	var ws := get_node_or_null( "/root/WeatherService" )
-	if ws != null and bool( ws.call( "has_data" ) ) :
-		var s : float = ws.call( "wind_speed_ms", month, day, day_time )
-		var from_deg : float = ws.call( "wind_direction_deg", month, day, day_time )
-		if is_finite( s ) and is_finite( from_deg ) :
-			wind = WindMath.downwind_xz( from_deg ) * s
+	# No weather → no wind (the fog stands still), as before.
+	var wind := _frame_wind_xz( 0.0 )
 	_ground_fog.update_from( st, cam.global_position, wind, delta, _vegetation_night_factor, _fog_sky_light )
 	# The volumetric pass is switched on/off by the toggles; re-run them on the
 	# edge so the fog appears the frame it starts, not at the next env update.
@@ -2696,12 +2718,17 @@ func _process( delta: float ) -> void :
 	if lightning_flash_boost > 0.001 :
 		lightning_flash_boost = lerpf( lightning_flash_boost, 0.0, 1.0 - exp( -delta * 18.0 ) )
 		_apply_tonemap_settings()
+	# F3 `main_fx`: the hazard particles, the ground fog and the cosmetic clocks
+	# run before (and independently of) the `world_env` span below.
+	PerfMonitor.begin("main_fx")
 	_update_hazard_vfx( delta )
 	_update_ground_fog( delta )
 	if not Engine.is_editor_hint() :
 		# The cosmetic clocks (fire / crowd / lights) — advanced once per frame
 		# and pushed as global shader uniforms. Frozen while paused.
 		SimFxRate.tick( self )
+	PerfMonitor.end("main_fx")
+	if not Engine.is_editor_hint() :
 		# Analemma / ∞ view: each frame jumps to the next day's solar noon and
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
 		# integrates (battery/energy stay frozen).
@@ -2752,12 +2779,14 @@ func _process( delta: float ) -> void :
 			# visibly jump at high speed while the sun/moon glide. Push them every
 			# frame (cheap — 5 planets × a few uniforms); PlanetSystem eases each
 			# rendered direction toward its freshly computed position per frame, so
-			# the motion stays smooth even at Max speed.
-			_update_planets()
+			# the motion stays smooth even at Max speed. `_update()` pushes them
+			# itself, so on its frames they are not pushed twice.
 			_env_update_accum += delta
 			if _env_update_accum >= _ENV_UPDATE_INTERVAL :
 				_env_update_accum = 0.0
 				_update()
+			else :
+				_update_planets()
 			PerfMonitor.end("world_env")
 
 func _update() -> void :

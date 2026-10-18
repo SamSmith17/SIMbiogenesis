@@ -172,6 +172,13 @@ func _bind() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	# Keep the model's world yaw fixed so the local frame stays world-aligned
 	# (a re-ground / record edit could otherwise re-apply a yaw to ModelRoot).
 	if _model_root != null:

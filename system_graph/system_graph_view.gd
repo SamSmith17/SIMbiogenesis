@@ -15863,7 +15863,8 @@ func _sync_graph_energy_from_solar() -> void:
 		var per_kw := solar_kw / float(panel_items.size()) if total_wmp <= 0.0 else 0.0
 		for item: Dictionary in panel_items:
 			var iid: String = str(item.get("id", ""))
-			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			# Read off the live dict; the copy happens only on the write below.
+			var specs: Dictionary = item.get("specs", {}) as Dictionary
 			var sun_f := _pv_sun_factor(item)
 			var wmp_p := float(specs.get("wmp", 0.0)) * sun_f
 			var share := per_kw
@@ -15891,10 +15892,11 @@ func _sync_graph_energy_from_solar() -> void:
 					and absf(float(specs.get("pv_offered_kw", -1.0)) - offered) < 0.0005 \
 					and str(specs.get("pv_curtail", "")) == curtail:
 				continue
-			specs["current_output_kw"] = share
-			specs["pv_offered_kw"] = offered
-			specs["pv_curtail"] = curtail
-			model.update_item(iid, {"specs": specs})
+			var specs_w: Dictionary = specs.duplicate(true)
+			specs_w["current_output_kw"] = share
+			specs_w["pv_offered_kw"] = offered
+			specs_w["pv_curtail"] = curtail
+			model.update_item(iid, {"specs": specs_w})
 
 	for item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if bool(item.get("is_virtual", false)):
@@ -15903,9 +15905,12 @@ func _sync_graph_energy_from_solar() -> void:
 		if itype not in ["battery", "smartbattery"]:
 			continue
 		var iid: String = str(item.get("id", ""))
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		if absf(float(specs.get("soc", -1.0)) - bank_soc) < 0.0005:
+		var live_specs: Dictionary = item.get("specs", {}) as Dictionary
+		# Compare against the live dict; copy only when there is a write (this
+		# runs at 10 Hz with the graph open, and the deep copy was per bank).
+		if absf(float(live_specs.get("soc", -1.0)) - bank_soc) < 0.0005:
 			continue
+		var specs: Dictionary = live_specs.duplicate(true)
 		specs["soc"] = bank_soc
 		model.update_item(iid, {"specs": specs})
 
@@ -16420,6 +16425,58 @@ func _tick_dc_throttle(delta: float, display_only: bool = false) -> void:
 		_end_sim_writes()
 
 
+## The DC throttle's topology: which controllers are real PV routes (a bank
+## and PV sources, not crated, leads the right way round), their sources and
+## Wmp, the site's total and routed Wmp, and the placed panels that receive
+## world shade. Pure over the model; cached by _dc_throttle_pass.
+var _dc_topo: Dictionary = {}
+var _dc_topo_key := ""
+
+
+func _dc_throttle_topology() -> Dictionary:
+	var entries: Array = []
+	var total_wmp := 0.0
+	var routed_wmp := 0.0
+	var shade_ids: Array = []
+	for item in GraphNesting.walk_items(model, "root"):
+		if not (item is Dictionary):
+			continue
+		var it: Dictionary = item
+		if bool(it.get("is_virtual", false)):
+			continue
+		if PvElectrical.is_pv_source_item(it):
+			total_wmp += _pv_item_wmp(it)
+			if not _sandbox_active and _pv_is_shade_receiver(it) and _pv_item_wmp(it) > 0.0:
+				shade_ids.append(str(it.get("id", "")))
+			continue
+		if str(it.get("type", "")) != "controller":
+			continue
+		# A crated controller delivers no charge current (Phase 5 packed gate).
+		if GraphDcElectrical.is_packed(it):
+			continue
+		var bank := GraphDcElectrical.bank_for_controller(
+			model, str(it.get("id", "")), _dc_flat_conns, _dc_analysis)
+		if bank.is_empty():
+			continue
+		var sources := PvElectrical.pv_sources_for_controller_flat(
+			model, str(it.get("id", "")), _dc_flat_conns)
+		if sources.is_empty():
+			continue
+		# A backwards PV pair presents no usable voltage — the array delivers
+		# nothing until the leads are swapped.
+		if GraphDcElectrical.controller_pv_reversed(
+				model, str(it.get("id", "")), _dc_flat_conns):
+			continue
+		var wmp := 0.0
+		for sid in sources:
+			wmp += _pv_item_wmp(model.get_item(str(sid)))
+		routed_wmp += wmp
+		entries.append({"id": str(it.get("id", "")), "bank": bank, "wmp": wmp,
+			"sources": sources.duplicate()})
+	return {"entries": entries, "total_wmp": total_wmp, "routed_wmp": routed_wmp,
+		"shade_ids": shade_ids}
+
+
 ## One pass of the controller model. Per real controller: OFFERED = its Wmp
 ## share of what the array could make right now (SolarUI _raw_solar_kw), CAP =
 ## that share limited to bus_V × max_charge_amps (clipping), DELIVERED = what
@@ -16455,45 +16512,32 @@ func _dc_throttle_pass(display_only: bool) -> void:
 		if _solar_ui.has_method("get_battery_percent"):
 			soc = clampf(float(_solar_ui.call("get_battery_percent")) / 100.0, 0.0, 1.0)
 	# Eligible = real controllers wired to both a PV source and a battery bank.
+	# The topology walk (every item, a bank + source trace per controller) is
+	# a function of the wiring and the player's edits only, so it is cached on
+	# (struct_rev, user_rev): sim writes never move either, and with the graph
+	# closed this pass ran it every 0.25 s — 7 ms a call on a festival site.
+	var topo_key := "%d|%d|%s" % [model.struct_rev, model.user_rev, str(_sandbox_active)]
+	if topo_key != _dc_topo_key:
+		_dc_topo_key = topo_key
+		_dc_topo = _dc_throttle_topology()
+	# Entries carry item IDS; the live dicts are re-fetched per pass because the
+	# write below replaces the item's specs.
 	var entries: Array = []
-	var total_wmp := 0.0
-	var routed_wmp := 0.0
+	for e_c in (_dc_topo.get("entries", []) as Array):
+		var ec: Dictionary = e_c
+		var live := model.get_item(str(ec.get("id", "")))
+		if live.is_empty():
+			continue
+		var ed_live := ec.duplicate(false)
+		ed_live["item"] = live
+		entries.append(ed_live)
+	var total_wmp := float(_dc_topo.get("total_wmp", 0.0))
+	var routed_wmp := float(_dc_topo.get("routed_wmp", 0.0))
 	var shade_items: Array = []
-	for item in GraphNesting.walk_items(model, "root"):
-		if not (item is Dictionary):
-			continue
-		var it: Dictionary = item
-		if bool(it.get("is_virtual", false)):
-			continue
-		if PvElectrical.is_pv_source_item(it):
-			total_wmp += _pv_item_wmp(it)
-			if not _sandbox_active and _pv_is_shade_receiver(it) and _pv_item_wmp(it) > 0.0:
-				shade_items.append(it)
-			continue
-		if str(it.get("type", "")) != "controller":
-			continue
-		# A crated controller delivers no charge current (Phase 5 packed gate).
-		if GraphDcElectrical.is_packed(it):
-			continue
-		var bank := GraphDcElectrical.bank_for_controller(
-			model, str(it.get("id", "")), _dc_flat_conns, _dc_analysis)
-		if bank.is_empty():
-			continue
-		var sources := PvElectrical.pv_sources_for_controller_flat(
-			model, str(it.get("id", "")), _dc_flat_conns)
-		if sources.is_empty():
-			continue
-		# A backwards PV pair presents no usable voltage — the array delivers
-		# nothing until the leads are swapped.
-		if GraphDcElectrical.controller_pv_reversed(
-				model, str(it.get("id", "")), _dc_flat_conns):
-			continue
-		var wmp := 0.0
-		for sid in sources:
-			wmp += _pv_item_wmp(model.get_item(str(sid)))
-		routed_wmp += wmp
-		entries.append({"item": it, "bank": bank, "wmp": wmp,
-			"sources": sources.duplicate()})
+	for sid_s in (_dc_topo.get("shade_ids", []) as Array):
+		var sit_live := model.get_item(str(sid_s))
+		if not sit_live.is_empty():
+			shade_items.append(sit_live)
 	# A controller that stopped being a PV route (array unwired or removed, no
 	# bank, crated) passes nothing: its card must not keep the last delivered
 	# watts it had while it was one.
@@ -18030,10 +18074,11 @@ func _tick_graph_solar_shading(delta: float) -> void:
 			continue
 		var factor := GraphSolarShading.shade_factor_for_item(
 				item, main, center, sun_dir, space)
-		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-		if specs.has("sunlight_factor") \
-				and absf(float(specs.get("sunlight_factor", 1.0)) - factor) < 0.001:
+		var live_specs: Dictionary = item.get("specs", {}) as Dictionary
+		if live_specs.has("sunlight_factor") \
+				and absf(float(live_specs.get("sunlight_factor", 1.0)) - factor) < 0.001:
 			continue
+		var specs: Dictionary = live_specs.duplicate(true)
 		specs["sunlight_factor"] = factor
 		specs["shade_factor"] = factor  # geometric alias for inspector/debug
 		model.update_item(iid, {"specs": specs})

@@ -3739,9 +3739,13 @@ func _processor_has_power(item: Dictionary) -> bool:
 	if _model == null:
 		return false
 	var iid: String = str(item.get("id", ""))
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-	_rk.migrate_processor_specs(specs)
+	# Only `energy_source` is needed here, so the one-key half of
+	# migrate_processor_specs is applied inline instead of deep-copying every
+	# processor's specs on every flow step (three callers per step, per item).
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var es: String = str(specs.get("energy_source", ""))
+	if not specs.has("energy_source") or es == "thermal" or es == "mechanical":
+		es = "ac" if (not specs.has("energy_source") and float(specs.get("watts", 0.0)) > 0.0) else ""
 	if es.is_empty() and float(specs.get("watts", 0.0)) > 0.0:
 		es = "ac"
 	if es == "ac":

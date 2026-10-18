@@ -162,6 +162,13 @@ func _ready() -> void:
 		_snap_render_to_target()
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("planets")
+	_perf_tick(delta)
+	PerfSpan.end("planets")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
 	# Recompute the true positions every frame (a handful of Kepler solves — cheap)

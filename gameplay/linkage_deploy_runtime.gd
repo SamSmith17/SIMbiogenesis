@@ -92,6 +92,13 @@ func toggle_deploy() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if not _animating or _builder == null:
 		set_process(false)
 		return

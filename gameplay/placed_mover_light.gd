@@ -223,7 +223,14 @@ func _sync_lasers(fixture: String) -> void:
 
 
 func _process(delta: float) -> void:
-	super._process(delta)
+	PerfSpan.begin("placed_lights")
+	_perf_tick(delta)
+	PerfSpan.end("placed_lights")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
+	super._perf_tick(delta)
 	if _head == null:
 		return
 	# Sound reactive in a beat mode: the sweep moves with the music.

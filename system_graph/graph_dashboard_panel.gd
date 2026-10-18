@@ -67,6 +67,15 @@ func _ready() -> void:
 	add_theme_constant_override("separation", 0)
 	_build_ui()
 	set_process(true)
+	visibility_changed.connect(_on_visibility_changed)
+
+
+## Shown again (the graph reopened): refresh at once rather than at the next
+## interval, since nothing refreshed while it was hidden.
+func _on_visibility_changed() -> void:
+	if is_visible_in_tree():
+		_refresh_acc = REFRESH_INTERVAL
+		refresh(true)
 
 
 func bind_graph_view(gv: Node) -> void:
@@ -96,11 +105,14 @@ func refresh(force: bool = false) -> void:
 
 
 func _process(delta: float) -> void:
+	# Nothing refreshes while the panel is off screen (the graph closed): the
+	# 5 Hz power / closure refresh used to run behind the first-person view.
+	# `_on_visibility_changed` forces one refresh when it comes back.
+	if not is_visible_in_tree():
+		return
 	_refresh_acc += delta
 	if _refresh_acc >= REFRESH_INTERVAL:
 		refresh(true)
-	if not is_visible_in_tree():
-		return
 	var su := _solar_ui()
 	if su == null or not is_instance_valid(su):
 		return

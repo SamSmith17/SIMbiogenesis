@@ -25,8 +25,13 @@ const SECTION_ORDER: Array[String] = [
 	# throttle pass, the (deferred) electrical fault check, the 3D placeholder
 	# host's sync and the pond twin push. Read these when first person stutters.
 	"gv_dc_throttle", "gv_faults", "gv_placeholder", "gv_pond_push",
-	"conduits_3d", "world_env", "terrain_tick", "drone",
-	"prop_ticks", "canvas_draw",
+	"conduits_3d", "world_env", "main_fx", "planets", "terrain_tick",
+	"terrain_season", "stream_tracers", "drone",
+	# First-person per-frame work that was invisible on the HUD before
+	# 2026-10-18: every placed prop runtime (trackers, spins, rings, vehicles),
+	# the placed lights, the crosshair ladder, SolarUI / TimelineUI / HudLayout.
+	"prop_ticks", "placed_lights", "interact_focus", "solar_ui", "timeline_ui",
+	"hud_layout", "gv_draw",
 ]
 
 ## Exponential smoothing factor for the displayed averages (per frame).

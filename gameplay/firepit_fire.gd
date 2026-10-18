@@ -159,6 +159,13 @@ func _make_particles(nm: String, amount: int, life: float, size: float,
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	_poll += delta
 	if _poll >= _POLL_S:
 		_poll = 0.0

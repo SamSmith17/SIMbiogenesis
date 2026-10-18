@@ -269,6 +269,13 @@ func _push_light_colors() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("placed_lights")
+	_perf_tick(delta)
+	PerfSpan.end("placed_lights")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	_poll -= delta
 	if _poll <= 0.0:
 		_poll = 0.5

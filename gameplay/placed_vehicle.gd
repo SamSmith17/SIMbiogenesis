@@ -206,6 +206,13 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	if is_mounted and current_rider != null and is_instance_valid(current_rider) and _prop != null:
 		_prop.global_position = current_rider.global_position + Vector3(0.0, _dy, 0.0)
 		if _model != null:

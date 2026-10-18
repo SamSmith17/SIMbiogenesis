@@ -56,6 +56,9 @@ var _last_abs_h := 0.0
 var _nav_grid: NpcNavGrid = null
 var _nav_query: NpcNavQuery = null
 var _nav_fp := ""
+## The ground half of _nav_fp (nav_rev + region only): equal across two
+## fingerprints means the finished grid's heights can be reused.
+var _nav_terrain_fp := ""
 var _nav_queries_this_tick := 0
 var _nav_keyed_misses_this_tick := 0
 var _model_item_cache: Dictionary = {}   # item_id -> item (for nav anchors)
@@ -1333,10 +1336,18 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 	if _nav_grid == null or _nav_grid.needs_rebuild(fp):
 		if _nav_fp != fp:
 			_nav_fp = fp
+			# The GROUND part of the fingerprint: when only props, camps or
+			# spaces changed, the finished grid's heights and slopes are
+			# reused and the bake resumes at the obstacle stamps.
+			var terrain_fp := NpcNavGrid.compose_fingerprint(0, 0, _nav_rev, 0, center, half)
+			var prev_grid := _nav_grid
 			_nav_grid = NpcNavGrid.new()
 			if not _nav_grid.configure_for_points(anchors):
 				_nav_grid = null
 				return
+			var reuse := prev_grid != null and prev_grid.is_ready() \
+					and terrain_fp == _nav_terrain_fp and _nav_grid.same_lattice(prev_grid)
+			_nav_terrain_fp = terrain_fp
 			# Height source. With a TerrainLoader we get a real heightfield
 			# lookup (cheap, and correct everywhere). WITHOUT one — the
 			# hand-built scenes — ground_height_at falls back to a raycast
@@ -1348,11 +1359,15 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 				return TerrainSurfaceQuery.ground_height_at(main, x, z)
 			if not has_terrain:
 				height_fn = func(_x: float, _z: float) -> float: return 0.0
-			_nav_grid.begin_bake(height_fn,
-					_collect_nav_obstacles(main, registry), fp,
-					func(x: float, z: float) -> PackedFloat32Array:
-						return _probe_surfaces(main, x, z,
-								TerrainSurfaceQuery.ground_height_at(main, x, z)))
+			var surfaces_fn := func(x: float, z: float) -> PackedFloat32Array:
+				return _probe_surfaces(main, x, z,
+						TerrainSurfaceQuery.ground_height_at(main, x, z))
+			if reuse:
+				_nav_grid.begin_bake_reusing(prev_grid, height_fn,
+						_collect_nav_obstacles(main, registry), fp, surfaces_fn)
+			else:
+				_nav_grid.begin_bake(height_fn,
+						_collect_nav_obstacles(main, registry), fp, surfaces_fn)
 			if _nav_query == null:
 				_nav_query = NpcNavQuery.new()
 		_bake_nav_for(NAV_TICK_BUDGET_US)

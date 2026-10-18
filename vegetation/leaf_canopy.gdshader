@@ -15,7 +15,14 @@
 shader_type spatial;
 // diffuse_lambert_wrap: light wraps round leaves as it scatters through a real
 // crown, rather than a hard terminator leaving half the canopy in flat ambient.
-render_mode cull_disabled, depth_prepass_alpha, diffuse_lambert_wrap;
+// ONE opaque pass (2026-10-18). This shipped as depth_prepass_alpha — a depth
+// pre-pass AND an alpha pass, each resolving every leaf edge under MSAA — and
+// on the user's own site the canopy was 24 of 31 GPU ms at half render scale
+// (tools/bench/gpu_toggle_bench.gd). Writing ALPHA_SCISSOR_THRESHOLD beside
+// ALPHA keeps the material in the opaque pass: the cutout is still decided by
+// the discard rules below, a surviving texel is simply solid, and the measured
+// cost fell by 9 ms at 8x MSAA with no visible change in the bench's PNGs.
+render_mode cull_disabled, diffuse_lambert_wrap;
 
 #include "res://vegetation/veg_lighting.gdshaderinc"
 #include "res://vegetation/wind_vertex.gdshaderinc"
@@ -215,6 +222,7 @@ void fragment() {
 	}
 
 	ALPHA = mask;
+	ALPHA_SCISSOR_THRESHOLD = 0.02;  // opaque pass; the discards below are the cutout
 
 	// ---- Distance dither (mirror foliage.gdshader edge softening) ----
 	float dist_t = clamp((v_view_dist - haze_start) / max(haze_end - haze_start, 1.0), 0.0, 1.0);
@@ -242,6 +250,7 @@ void fragment() {
 	// per-pixel dither discard ALREADY thins coverage — semi-transparency on
 	// top double-counted it). A leaf is opaque; only its rim feathers.
 	ALPHA = clamp(mask * 2.2, 0.0, 1.0);
+	ALPHA_SCISSOR_THRESHOLD = 0.02;
 
 	// ---- Lighting normal (double-sided) ----
 	// (No manual back-face flip — see veg_lighting.gdshaderinc.)

@@ -414,6 +414,13 @@ func _peek_panel(id: String) -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("hud_layout")
+	_perf_tick(delta)
+	PerfSpan.end("hud_layout")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	# Pills refresh their summary twice a second; peeks end once the pointer
 	# has been off the panel for a moment.
 	_pill_acc += delta

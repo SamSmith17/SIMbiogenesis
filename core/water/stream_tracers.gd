@@ -91,7 +91,14 @@ func set_streams(items: Array, main: Node) -> void:
 		(st as Dictionary)["hidden"] = true
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	PerfSpan.begin("stream_tracers")
+	_perf_tick(delta)
+	PerfSpan.end("stream_tracers")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(_delta: float) -> void:
 	if multimesh == null or multimesh.instance_count == 0 or not visible:
 		return
 	var t := SimFxRate.now(_main, SimFxRate.SYS_LIGHTS) if _main != null else 0.0

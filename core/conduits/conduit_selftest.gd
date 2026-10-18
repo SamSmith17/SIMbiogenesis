@@ -477,7 +477,11 @@ func _test_light_load_presets() -> void:
 	conn["simulate_losses"] = true
 	var w2: float = GraphAcLoad.compute_watts(model, self)
 	_check("light wire adds loss when enabled", w2 > w1, "w2=%.2f w1=%.2f" % [w2, w1])
-	conn["severed"] = true
+	# Through the model API, as the burnout tick does: the AC reader walks the
+	# memoised flat copy (GraphNesting.flat_connections_cached, keyed on the
+	# model's revisions), so a field poked straight into the live dict is
+	# invisible to it until something bumps a revision.
+	model.update_connection("wl", {"severed": true})
 	var w3: float = GraphAcLoad.compute_watts(model, self)
 	_check("severed light string goes dark", absf(w3) < 0.001, "got %.2f" % w3)
 

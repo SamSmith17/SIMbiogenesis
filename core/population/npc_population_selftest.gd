@@ -3019,6 +3019,54 @@ func _test_nav_grid_bake() -> void:
 	g2.configure_region(Vector2.ZERO, 10.0)
 	g2.bake_now(Callable())
 	_check("missing height_fn still bakes", g2.is_ready() and g2.is_walkable(2, 2))
+	_test_nav_grid_reuse()
+
+
+## A rebake that only changes the OBSTACLES (a prop placed, a camp repainted)
+## copies the finished grid's heights and slopes instead of sampling the
+## terrain again: the height source is never called, the ground is identical,
+## and the new stamps land. A different lattice falls back to a full bake.
+func _test_nav_grid_reuse() -> void:
+	var a := NpcNavGrid.new()
+	a.configure_region(Vector2.ZERO, 15.0)
+	a.bake_now(Callable(self, "_ramp_h"))
+	var calls := [0]   # a lambda captures locals BY VALUE — count in an Array
+	var counting := func(x: float, z: float) -> float:
+		calls[0] += 1
+		return _ramp_h(x, z)
+	var block := PackedVector2Array([Vector2(2.0, 2.0), Vector2(6.0, 2.0),
+			Vector2(6.0, 6.0), Vector2(2.0, 6.0)])
+	var b := NpcNavGrid.new()
+	b.configure_region(Vector2.ZERO, 15.0)
+	b.begin_bake_reusing(a, counting, [{"poly": block, "flags": NpcNavGrid.F_BLOCKED}], "fp2")
+	var guard := 0
+	while not b.bake_step(256) and guard < 10000:
+		guard += 1
+	_check("reuse bake converges", b.is_ready(), "steps=%d" % guard)
+	_check("reuse skipped the height pass", calls[0] == 0 and b.reused_ground, "calls=%d" % calls[0])
+	var same := true
+	for iz in a.nz:
+		for ix in a.nx:
+			if absf(a.height_at(ix, iz) - b.height_at(ix, iz)) > 0.0001 \
+					or absf(a.slope_deg_at(ix, iz) - b.slope_deg_at(ix, iz)) > 0.0001:
+				same = false
+				break
+	_check("reused ground is identical", same)
+	var inside := b.cell_of(Vector2(4.0, 4.0))
+	_check("reuse stamps the new obstacle", a.is_walkable(inside.x, inside.y)
+			and not b.is_walkable(inside.x, inside.y))
+	var outside := b.cell_of(Vector2(-8.0, -8.0))
+	_check("reuse keeps open ground walkable", b.is_walkable(outside.x, outside.y))
+	# A different region cannot reuse: full bake, height source called.
+	var c := NpcNavGrid.new()
+	c.configure_region(Vector2(3.0, 0.0), 15.0)
+	calls[0] = 0
+	c.begin_bake_reusing(a, counting, [], "fp3")
+	guard = 0
+	while not c.bake_step(4096) and guard < 10000:
+		guard += 1
+	_check("different lattice falls back to a full bake", c.is_ready() and calls[0] > 0
+			and not c.reused_ground, "calls=%d" % calls[0])
 
 
 func _test_nav_grid_slope_vs_steps() -> void:

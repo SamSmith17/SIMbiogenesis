@@ -151,6 +151,13 @@ func is_dragging() -> bool:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("prop_ticks")
+	_perf_tick(delta)
+	PerfSpan.end("prop_ticks")
+
+
+## The per-frame body; `_process` above only times it.
+func _perf_tick(delta: float) -> void:
 	_pulse_t += delta
 	# Every still-water body on the map carries one of these; the ring shows
 	# only while the player is SELECTING (Ctrl/Alt held — the J IK-sphere

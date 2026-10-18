@@ -442,6 +442,15 @@ func _process(delta: float) -> void:
 	_push_growth_year()
 	_apply_water_flow(delta)
 	PerfMonitor.end("terrain_tick")
+	PerfMonitor.begin("terrain_season")
+	_tick_season_uniforms()
+	PerfMonitor.end("terrain_season")
+
+
+## The snow / leaf-litter / floor-moss uniforms on the ground and building
+## materials. Litter is change-gated on the season; snow is pushed whenever the
+## amount or depth moved since the last push.
+func _tick_season_uniforms() -> void:
 	if not _main.has_method("get_snow_amount"):
 		return
 	var snow := clampf(float(_main.call("get_snow_amount")), 0.0, 1.0)
@@ -460,11 +469,23 @@ func _process(delta: float) -> void:
 	var litter_due := absf(litter - _litter_pushed) > 0.001
 	if litter_due:
 		_litter_pushed = litter
+	# Snow likewise: pushed when the amount or depth moved, and otherwise on a
+	# slow poll so a drape swap or a building rebuild (a fresh material that
+	# never saw the value) catches up within SNOW_REPUSH_S. It used to walk
+	# every ground and building material every frame.
+	var snow_key := Vector2(snappedf(snow, 0.002), snappedf(depth_m, 0.005))
+	var now_ms := Time.get_ticks_msec()
+	var snow_due := snow_key != _snow_pushed_key \
+			or now_ms - _snow_pushed_at_ms > int(SNOW_REPUSH_S * 1000.0)
+	if snow_due:
+		_snow_pushed_key = snow_key
+		_snow_pushed_at_ms = now_ms
 	for node_name in ["Ground", "DetailGround"]:
 		var mi := terrain.get_node_or_null(node_name) as MeshInstance3D
 		if mi == null:
 			continue
-		_push_snow_to_mesh(mi, snow, depth_m)
+		if snow_due:
+			_push_snow_to_mesh(mi, snow, depth_m)
 		if litter_due:
 			_push_litter_to_mesh(mi, litter)
 		# A drape swap replaces the material: re-push the moss when it lost it.
@@ -475,7 +496,14 @@ func _process(delta: float) -> void:
 					if msm != null else null
 			if msm != null and (moss_now == null or float(moss_now) != _floor_moss_effective()):
 				_push_floor_moss()
-	_apply_snow_to_buildings(terrain, snow, depth_m)
+	if snow_due:
+		_apply_snow_to_buildings(terrain, snow, depth_m)
+
+
+## The snow value last pushed to the ground / building materials and when.
+const SNOW_REPUSH_S := 2.0
+var _snow_pushed_key := Vector2.INF
+var _snow_pushed_at_ms := -100000
 
 
 func _apply_water_flow(delta: float) -> void:

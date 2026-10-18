@@ -155,7 +155,42 @@ sitebalance PASS (new), hydroload PASS, siphon PASS, ambient PASS, graph PASS.
   the 120 V MPPT floor), and the prop editor's rack tilt / "Face the
   equator" drive the graph array and SolarUI.
 
+## First-person frame baselines (2026-10-18)
+
+`tools\harness.ps1 -World <w> -RunScript res://tools/bench/first_person_bench.gd`
+(graph closed, clock parked at noon, 1x / 60x / paused, every F3 section)
+and `… res://tools/bench/gpu_toggle_bench.gd` (the renderer's GPU time with
+one feature or scene layer off at a time; `-UserArgs @("--veg-groups")` adds
+a per-species batch breakdown; PNGs of the canopy render-mode variants under
+`screenshots\gpubench\`). Both at the user's own prefs: 1920×1080 maximized,
+render scale 0.5, MSAA 8x, SSAO + SSIL + volumetric fog on, graphics Low.
+
+| world | frame median | render GPU | F3 sections | bound by |
+|---|---|---|---|---|
+| mtvernon, before | 32.3 ms | 31.4 ms | 3.9 ms | GPU: vegetation 24 ms, MSAA 8x 12 ms |
+| walton, before | 45.3 ms | 11.5 ms | 24.7 ms | CPU: population 5.1, host 5.6, nav bake 2.9, raster 2.2, flow 2.2, timeline 1.8, DC throttle 1.5 |
+| walton, after the CPU batch | 34.8 ms | 10.9 ms | 18.6 ms | DC throttle 0.4, timeline 1.4, host 4.4 |
+| mtvernon, canopy shaders one opaque pass | **23.3 ms (43 fps)** | 22.0 ms | 2.9 ms | still GPU: MSAA 8x is the next 12 ms |
+
+GPU isolation on Mount Vernon (Δ vs baseline): vegetation hidden −23.6 ms
+(8 ms, 60 fps); MSAA off −12.4; canopy shaders as alpha scissor −9.0;
+scissor + MSAA off −19.2 (14 ms, 60 fps); SSIL / sun shadow / volumetric fog
+/ SSAO / glow each ≤ 1.4; every other scene layer < 0.6. Per species the
+near-tier Douglas-firs and maples cost 2–3 ms each; the 106 shrubs by the
+camera cost 9 ms (overdraw of overlapping alpha cards).
+
 ## Open items (not fixed)
+
+- **`lights` on Walton FAILS its first two checks at HEAD `646f533`**
+  (2026-10-18, before and after the perf pass — A/B'd by reverting the
+  working tree): "J opens the Light Studio dock" and "the dock runs in the
+  tool-overlay tier". The J key posted through `Input.parse_input_event`
+  no longer opens the dock on the Walton world as saved now; the 23-check
+  pass is from 2026-10-12. World- or pref-driven; not investigated.
+- **`population` on Mount Vernon: "space markers FAIL (7 of 6 resolved)"**
+  (2026-10-18, identical at HEAD): the world now carries one more tagged
+  space than the capture seeds, and the "3D avatars" verdict is derived
+  from that count, so it reads FAIL with it. World-driven.
 
 - **`population` personal-space check FAILS on Mount Vernon** (2026-10-12,
   deterministic): two awake, idle agents of the seeded `cap_pop_hab` camp

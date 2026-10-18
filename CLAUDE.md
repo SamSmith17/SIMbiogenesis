@@ -1469,8 +1469,28 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/sim_render_probe
 # writer outside the sim-write bracket over 10 s), then 24 h of render_step
 # from a fixed clock hashed over every tank / wire / telemetry. Every live-sim
 # optimization must leave that hash unchanged (2026-10-17: fe644fbb3825ae00
-# on the Mount Vernon world as saved that day):
+# on the Mount Vernon world as saved that day; 2026-10-18: 1205f81ade523735
+# at HEAD 646f533 AND after the perf pass — the world file had changed, the
+# code had not. ALWAYS take the before-hash on the same world in the same
+# session; the saved world moves it):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/flow_step_bench.gd
+# FIRST-PERSON frame bench (sandbox, either world): graph closed, clock parked
+# at noon, every F3 section at 1x / 60x / paused, render CPU / GPU split, draw
+# calls, the nav-bake + crowd-raster progress and the F4 processing histogram.
+# The sections main_fx / planets / terrain_season / stream_tracers / prop_ticks
+# / placed_lights / interact_focus / solar_ui / timeline_ui / hud_layout were
+# added 2026-10-18 through `PerfSpan` (core/perf/perf_span.gd — autoload-safe,
+# use it in any script a selftest loads under --script; a bare `PerfMonitor`
+# there fails the compile). Baselines in HARNESS_MATRIX.md:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/first_person_bench.gd
+# GPU isolation bench (sandbox): the renderer's measured GPU ms with ONE
+# feature or scene layer off at a time (SSIL, SSAO, volumetric fog, glow,
+# MSAA, sun shadow, vegetation, props, tiles, buildings, water, camps, people,
+# lights, ground), then the canopy shaders re-rendered as alpha scissor /
+# alpha-to-coverage with a PNG per variant under screenshots\gpubench\.
+# `-UserArgs @("--veg-groups")` hides each species/tier batch group in turn.
+# 2026-10-18 on Mount Vernon: vegetation 24 of 31 GPU ms, MSAA 8x another 12:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/gpu_toggle_bench.gd
 # Hydro LOAD-TIME diagnostic (WINDOWED, console-only, needs a REAL saved map with
 # hydro on it): dumps every penstock/culvert conn's visible_3d, routability, 3D
 # instance and BOTH resolved endpoint anchors at four moments — as loaded (graph
@@ -2827,11 +2847,19 @@ trap that renders plausibly:
   it. **Hero GLBs** import with metallic leaves (free_tree_1 = 0.54);
   `HeroTreeCatalog.strip_night_glow` also makes them matte (cached dups).
 - **The SoI shell draws LAST** (`soi_subsurface.gd` render_priority MAX):
-  vegetation is `depth_prepass_alpha` (depth in the opaque pre-pass, colour in
+  vegetation WAS `depth_prepass_alpha` (depth in the opaque pre-pass, colour in
   the transparent pass); the `depth_draw_always` glass sorting ahead of a tree
   rejected its colour pass → tree-shaped BLACK holes in the Globe lens and the
   snowglobe only. Found by hiding Main children one at a time with a forced
   `request_refresh()` — the preview does NOT redraw on visibility changes.
+  **2026-10-18: the canopy shaders (`foliage`, `leaf_canopy`, `veg_impostor`)
+  are ONE opaque pass now** — `ALPHA_SCISSOR_THRESHOLD` written beside
+  `ALPHA`, the existing discard rules unchanged. The two-pass form was 24 of
+  Mount Vernon's 31 GPU ms at half render scale (`gpu_toggle_bench`: canopy
+  as scissor −9 ms at 8x MSAA, scissor + MSAA off 13.5 ms / 61 fps; MSAA 8x
+  alone is 12 ms; alpha-to-coverage thins the shrubs away, so not that). The
+  shell-last rule still stands; the trees simply no longer have a colour pass
+  for the glass to reject.
 Impostors: BAKE_VERSION 7 (side key light, ambient 0.5, `fix_alpha_edges`).
 Verify with `--capture=tree` on mtvernon and a `site-review` with
 `--review-sets=world,elevation,globe,snowglobe`.

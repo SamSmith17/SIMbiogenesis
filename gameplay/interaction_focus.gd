@@ -75,7 +75,14 @@ func clear_focus() -> void:
 	_clear_focus()
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
+	PerfSpan.begin("interact_focus")
+	_perf_phys_tick(delta)
+	PerfSpan.end("interact_focus")
+
+
+## The per-frame body; `_physics_process` above only times it.
+func _perf_phys_tick(_delta: float) -> void:
 	if _focused != null and not is_instance_valid(_focused):
 		_focused = null
 		_update_ui()
