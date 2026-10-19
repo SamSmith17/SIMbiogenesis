@@ -244,7 +244,17 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
   the site's street address in the Site Report stop (chapter at 5:43). Every
   harness run redacts it now, so a fresh `tools	our.ps1 -Mode record` is
   clean; `docs/tour/video.json` stays empty until a redacted recording is
-  uploaded.
+  uploaded. **Re-recorded 2026-10-18** as `screenshots	our_movie_20261018  tour.mp4` (541 s, 45 clips, 42 of 43 stops PASS, the Site Report stop's
+  redaction check green, real user data unchanged) — the one to upload.
+- **`render_sim` tour stop FAILS under Movie Maker only** ("the render
+  started: not as expected", 2.6 s in): in `-Mode record` the 📈 click lands
+  but `SimRenderer.is_active()` stays false, so the stop has no hero and the
+  2026-10-18 recording carries the previous day's render_sim image. The same
+  stop PASSES in `-Mode stills` on the same code (6.0 s). Never recorded
+  before (the stop dates from 2026-10-17). Suspect one of `SimRenderer.
+  refusal`'s rules under `--write-movie --fixed-fps` (a clock owner, or the
+  selection end vs the playhead at a fixed timestep) — read the refusal
+  string in the stop before guessing.
 - **`graphtools` on Mount Vernon: RESOLVED 2026-10-18 (world-driven pair,
   probe fixed).** The probe's "first two pins with compatible ports" had
   become the Pond Storage tank into the PowerSpout's water intake. The
