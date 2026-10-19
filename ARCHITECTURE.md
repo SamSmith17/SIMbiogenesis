@@ -152,6 +152,15 @@ selftests green.
    cohesive responsibility per push into a delegate helper (e.g. the graph's
    `_tick_graph_csp` / `_tick_graph_renewables` / `_tick_resource_flow_ambient`;
    main's env/sky, save/load, collision generation).
+   *Re-measured 2026-10-18:* `system_graph_view.gd` 19.9k, `terrain_loader.gd`
+   12.9k, `playtest_harness.gd` 16.4k. *First slice (2026-10-18, Push 4):* the
+   hydro-source routing (intakes, penstocks, stream taps — the ONE water-source
+   model) lives in `system_graph/graph_hydro_routing.gd` (`GraphHydroRouting`,
+   a RefCounted the view owns); the view keeps one-line delegates so no caller
+   moved. Pattern for the next slice: move the functions byte for byte, point
+   their self-references at `view`, type every local the view hands back
+   (`var x: Node = view._f()` — `:=` on a duck-typed call is a compile error
+   here), keep the public names on the view. 19.9k → 19.4k lines.
 3. **Loose root `.gd` (11 files)** — vehicles (`euc_/golf_cart_/skid_steer_`),
    `ha_switch`, `ha_websocket_client`, `ibc_glow`, `auto_light`,
    `solar_calculator`, `planets`, `star_system`, `main.gd`

@@ -7580,7 +7580,11 @@ make a penstock (3D plug drag → `create_penstock_intake_at`; Lab drag; Lab
 auto-route with its own terrain ring scan; Lab "From pond" restyling the
 pond wire in the modal; the WATER toolbar chip / Site Plan drop with their
 own reach + turbine-seating code) had three source types and no shared
-notion of "what feeds this turbine". Now `SystemGraphView` owns it:
+notion of "what feeds this turbine". Now ONE module owns it —
+`system_graph/graph_hydro_routing.gd` (`GraphHydroRouting`, lifted out of
+the view on 2026-10-18 as the first Push 4 monolith slice; the view keeps
+one-line delegates with the same names, so every caller below still says
+`SystemGraphView.<fn>`):
 - `resolve_hydro_source_at(world_xz, stream_max_m=8)` → `{kind: "pond" |
   "pond_unadded" | "stream" | "spring", …}` — a still-water body with a
   `pond_storage` tank on the graph (matched by `osm_water_tag`), else a
