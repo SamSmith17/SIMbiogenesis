@@ -33,7 +33,7 @@ const LIBRARY_GROUPS := [
 		["resource_kinds.cfg", "process_recipes.json", "workflow_recipes.json", "user_presets.json",
 			"camp_styles.json", "pack_defs.json", "conduit_kinds.cfg", "conduit_style_presets.json",
 			"vegetation_style_v3.json", "vegetation_species_defaults.json", "vegetation_presets.cfg",
-			"education_card_overrides.json", "maps/packing_layouts.json", "maps/packing_custom_items.json"]],
+			"maps/packing_layouts.json", "maps/packing_custom_items.json"]],
 	["npc_anims", "NPC animations", "Clips made in the animation editor", ["npc_anims"]],
 	["player_characters", "Player characters", "Custom player bodies", ["player_characters"]],
 	["fab_tools", "Fabrication tools", "Tool models the crews hold", ["fab_tools"]],

@@ -6308,7 +6308,9 @@ playing the bootcamp through `--capture=bootcamp` (the regression gate).
   count 0 W in the sandbox; the real-world projection / best score are hidden
   while sandboxed; the live globe dims to a backdrop during a run (shader
   `opacity`, container modulate does nothing to it); a newly wired AC load
-  defaults ON; the card text editor needs `--card-editor`. The DC throttle
+  defaults ON; the TEMP dev card-text editor (`--card-editor`,
+  `EducationCardOverrides`) was removed on 2026-10-18 — card copy is
+  edited in `GraphEducationCards` / the tutorial catalog. The DC throttle
   runs display-only while the ambient flow is suspended (bake / playback) so
   the controller card follows the playback without touching SolarUI's cap.
 - Freeform drags push ONE history entry on release (`items_moved`).

@@ -11,10 +11,11 @@ extends CanvasLayer
 ## so a hand placement is legal exactly when an auto placement would be —
 ## the modal can never teach a packing the report would reject.
 ##
-## Opened by the Site Report packing card ("Open Packing Lab…") or the
-## --capture=packing harness. v1 scope notes: per-site layout persistence,
-## sub-container drill-in (tote interiors), and LIFO unpack-order warnings
-## are deferred (see PACKING_PLAN.md Phase 4 status).
+## Opened by the Site Report packing card ("Open Packing Lab…"), Q, or the
+## --capture=packing harness. Per-site layout persistence and the LIFO unpack
+## order (deliveries stow inside the container and come out top-first, see
+## UnpackScenario.stow_plan) have landed since v1; sub-container drill-in
+## (tote interiors) is still deferred (PACKING_PLAN.md Phase 4 status).
 
 signal closed
 

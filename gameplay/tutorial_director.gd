@@ -222,7 +222,6 @@ func _show_brief() -> void:
 		"title": "Level %d — %s" % [_level.index, _level.title],
 		"title_color": UITheme.C_PRIMARY,
 		"body": _level.brief_bbcode,
-		"override_key": "tutorial:%s:brief" % _level.id,
 		"actions": [
 			{"label": "Let's go", "callback": Callable(self, "_on_brief_done")},
 		],
@@ -495,7 +494,6 @@ func _complete_level(stats: Dictionary = {}) -> void:
 		"title_color": UITheme.C_GREEN,
 		"body": _level.debrief_bbcode,
 		"body_suffix": suffix,
-		"override_key": "tutorial:%s:debrief" % _level.id,
 		"actions": actions,
 		# Docked to the side so the finished circuit stays in view.
 		"placement": "corner",
