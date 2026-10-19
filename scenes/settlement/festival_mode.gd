@@ -96,7 +96,7 @@ func open(main: Node) -> void:
 	_opening = true
 	_notes = PackedStringArray()
 	PopTestPrefs.set_easy_override(true)
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		_note("No systems graph on this map — festival mode needs one.")
 		_opening = false
@@ -185,7 +185,7 @@ func clear_seeded() -> void:
 	var main := _main if _main != null else get_tree().current_scene
 	if main == null:
 		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	var reg: SpaceRegistry = _registry(main, sgv)
 	var removed := 0
@@ -516,7 +516,7 @@ func _refresh_status() -> void:
 	if _main == null:
 		_status = out
 		return
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null:
 		_status = out
 		return

@@ -130,14 +130,17 @@ selftests green.
    Do **not** register autoloads (WeatherService, TimeDirector, …) — reference
    those directly.
    ⚠ *Regressed (re-measured 2026-08-11):* 12 `"UILayer/SystemGraphView"`
-   lookups are back, **concentrated in code written AFTER the sweep** — the
-   settlement surface (`scenes/settlement/work_dock.gd`, `settlement_view.gd`,
-   `settlement_hud.gd`), `core/population/site_project_effects.gd`,
-   `scenes/ui/site_project_panel.gd`, `gameplay/site_target_picker.gd`,
-   `core/placed_models/placed_prop_service.gd`, `core/terrain/terrain_loader.gd`.
-   The convention is not enforcing itself on new code; use
-   `ServiceLocator.graph()` in anything new and sweep these when touching those
-   files.
+   lookups were back, **concentrated in code written AFTER the sweep**, and by
+   2026-10-18 there were 28 in 20 files (the settlement surface, the peak /
+   festival chips, the site-project effects, the ambient bed, the fire props).
+   *Swept again 2026-10-18 (Push 4), and this time it enforces itself:*
+   `core/services_selftest.gd` walks every `.gd` in the repo and FAILS on the
+   literal anywhere outside an allow-list — `core/services.gd` (its doc
+   comment names the path it replaces), the selftest itself, and the harness
+   probes (`core/terrain/harness/`, `core/terrain/playtest_harness.gd`,
+   `tools/`), which walk the REAL scene tree by path on purpose. A new
+   `get_node_or_null("UILayer/SystemGraphView")` anywhere else fails the
+   selftest with the file named. Use `ServiceLocator.graph()`.
 2. **Monoliths — the big files keep growing** (re-measured 2026-08-11):
    `system_graph_view.gd` (~15.8k lines), `terrain_loader.gd` (~10.2k),
    `graph_canvas.gd` (~9.2k), `playtest_harness.gd` (~6.8k — now bigger than

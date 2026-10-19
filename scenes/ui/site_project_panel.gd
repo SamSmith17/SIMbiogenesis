@@ -793,10 +793,7 @@ func _experiment_table() -> Control:
 ## Same yield-first pattern as the work dock: the modals live on the graph
 ## view, which handles opening them over whatever is up.
 func _open_work_modal(method: String) -> void:
-	var main := get_tree().current_scene
-	if main == null:
-		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method(method):
 		return
 	var iid := ""

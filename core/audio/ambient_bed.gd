@@ -235,7 +235,7 @@ func _live_inputs(main: Node) -> Dictionary:
 func _in_first_person(main: Node) -> bool:
 	if main == null:
 		return false
-	var gv := main.get_node_or_null("UILayer/SystemGraphView")
+	var gv := ServiceLocator.graph()
 	if gv != null and gv.visible:
 		return false
 	var cam := _listener_camera(main)

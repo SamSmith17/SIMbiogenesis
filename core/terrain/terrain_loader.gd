@@ -12122,8 +12122,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 	# place would put the model through the container walls, floating at stack
 	# height. The crew hauling it out is what clears `stowed_in`.
 	if not packed and not str(rec.get("stowed_in", "")).is_empty():
-		var sgv0: Node = get_tree().current_scene.get_node_or_null("UILayer/SystemGraphView") \
-			if get_tree().current_scene != null else null
+		var sgv0: Node = ServiceLocator.graph()
 		if sgv0 != null and sgv0.has_method("_show_toast"):
 			sgv0.call("_show_toast",
 				"📦 Stowed in the container — unload the delivery first")
@@ -12153,8 +12152,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 		return
 	_placed_prop_layer.save(_lat, _lon)
 	_rebuild_placed_props()
-	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
-		if main != null else null
+	var sgv: Node = ServiceLocator.graph()
 	if is_linkage:
 		if sgv != null and sgv.has_method("set_imported_array_stowed"):
 			var stowed := packed or not bool(rec.get("linkage_deployed", false))
@@ -12218,9 +12216,7 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 ## priced by NpcHaulModel over the real route and split per crate. Silent
 ## no-op with no population — the player just unpacks by hand.
 func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
-	var main := get_tree().current_scene
-	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
-		if main != null else null
+	var sgv: Node = ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("npc_population_bridge"):
 		return
 	var bridge: Variant = sgv.call("npc_population_bridge")

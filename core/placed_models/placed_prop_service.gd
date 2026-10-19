@@ -408,7 +408,7 @@ static func _auto_tag_space(main: Node, prop_id: String, space_type: String, cap
 		label: String) -> void:
 	var target := {"kind": "prop", "prop_id": prop_id}
 	var reg: SpaceRegistry = null
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView") if main != null else null
+	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
 		var bridge: Variant = sgv.call("npc_population_bridge")
 		if bridge != null and bridge.has_method("registry_for"):

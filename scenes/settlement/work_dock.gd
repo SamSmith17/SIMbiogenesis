@@ -458,10 +458,7 @@ func _open_full_editor() -> void:
 ## Close the settlement view and open one of the graph view's work modals —
 ## they live on the UI layer the view sits under, so the view must yield first.
 func _open_modal(method: String) -> void:
-	var main := get_tree().current_scene
-	if main == null:
-		return
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method(method):
 		return
 	var iid := _first_iid()

@@ -216,8 +216,7 @@ func _process(delta: float) -> void:
 
 
 func _host() -> Node:
-	var scene := get_tree().current_scene if get_tree() != null else null
-	var sgv := scene.get_node_or_null("UILayer/SystemGraphView") if scene != null else null
+	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("npc_population_host"):
 		return null
 	return sgv.call("npc_population_host")

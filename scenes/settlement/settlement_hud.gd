@@ -202,10 +202,7 @@ func _build() -> void:
 		var aid := str(_view.selection().get("agent_id", ""))
 		if aid.is_empty():
 			return
-		var main := get_tree().current_scene
-		if main == null:
-			return
-		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		var sgv := ServiceLocator.graph()
 		if sgv == null or not sgv.has_method("open_work_planner"):
 			return
 		# THIS person's habitat — "" let the planner bind to whichever
@@ -490,7 +487,7 @@ func _refresh() -> void:
 		_scale_lbl.text = "%s · %s m" % [cam.scale_label(), str(int(round(cam.height())))]
 	var main := get_tree().current_scene
 	if _vibe_lbl != null and main != null:
-		var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+		var sgv := ServiceLocator.graph()
 		var v: Dictionary = sgv.call("festival_vibe") if sgv != null and sgv.has_method("festival_vibe") else {}
 		_vibe_lbl.visible = not v.is_empty() and int(v.get("people", 0)) > 0
 		# The PEAK EXPERIENCE score: the festival's measure of success, on its

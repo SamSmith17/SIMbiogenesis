@@ -40,8 +40,7 @@ func _process(delta: float) -> void:
 
 
 func _refresh() -> void:
-	var sgv := get_tree().current_scene.get_node_or_null("UILayer/SystemGraphView") \
-		if get_tree().current_scene != null else null
+	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("festival_vibe"):
 		_chip.visible = false
 		return

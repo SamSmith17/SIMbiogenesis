@@ -224,7 +224,7 @@ static func _registry(main: Node) -> SpaceRegistry:
 
 
 static func _bridge(main: Node) -> Variant:
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
 		return sgv.call("npc_population_bridge")
 	return null
