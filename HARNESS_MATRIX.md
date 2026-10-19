@@ -240,6 +240,11 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
 
 ## Open items (not fixed)
 
+- **The 2026-10-14 tour video must not be published.** `screenshots  tour_movie_20261014	our.mp4` was recorded before `SitePrivacy` and shows
+  the site's street address in the Site Report stop (chapter at 5:43). Every
+  harness run redacts it now, so a fresh `tools	our.ps1 -Mode record` is
+  clean; `docs/tour/video.json` stays empty until a redacted recording is
+  uploaded.
 - **`graphtools` on Mount Vernon: RESOLVED 2026-10-18 (world-driven pair,
   probe fixed).** The probe's "first two pins with compatible ports" had
   become the Pond Storage tank into the PowerSpout's water intake. The

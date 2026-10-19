@@ -26,8 +26,8 @@ measurement, and every item below names the bench or capture that proves it.
   TimelineUI, HudLayout, the lights, InteractionFocus, StreamTracers,
   Planets/StarSystem, main's hazard/fog pass. Two F3 sections (`prop_ticks`,
   `canvas_draw`) are listed but never emitted and always read 0.
-- Many memory notes still say "landed uncommitted"; that work is in the last
-  four commits. Treat those notes as stale.
+- Many memory notes used to say "landed uncommitted"; that work has been on
+  main since the October pushes (the memory index was corrected 2026-10-18).
 
 ## Push 0 — measure (half a day)
 
@@ -261,6 +261,16 @@ Small, self-contained, each already has the data it needs.
     view over that camp (the project panel already does this per project).
 
 ## Push 4 — hygiene (one slice per push, never a big bang)
+
+**Status 2026-10-18:** DONE for the slices below — the ServiceLocator sweep
+(0 literals outside the allow-list, `services_selftest` now walks the repo and
+fails on a new one; verified to FAIL on a planted literal), the first
+monolith slice (`system_graph/graph_hydro_routing.gd`, the view keeps
+delegates), the TEMP education-card override layer deleted (no saved
+overrides existed to fold), the stale comments, and the tour-video note in
+HARNESS_MATRIX.md "Open items" (no new upload, so `docs/tour/video.json` is
+unchanged). Not done here: the `terrain_loader.gd` season-push extraction
+(Push 1 #2 territory) and the cheat-sheet rows of Push 2 #10.
 
 - **ServiceLocator sweep**: replace the 28 `"UILayer/SystemGraphView"`
   lookups with `ServiceLocator.graph()` (20 files, mechanical). Then add a
