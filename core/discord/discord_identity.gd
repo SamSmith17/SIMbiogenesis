@@ -10,7 +10,7 @@ extends Node
 ## and would need a JavaScript shim to get it back), so a ~60-line loopback
 ## TCPServer is enough to catch it.
 ##
-## One-time human setup is in LOCAL_CONFIG.md. The two things that fail opaquely
+## One-time human setup is in docs/LOCAL_CONFIG.md. The two things that fail opaquely
 ## if missed: "Public Client" must be ON, and every redirect URI in
 ## `DiscordConfig.REDIRECT_PORTS` must be registered verbatim.
 ##
@@ -438,7 +438,7 @@ func _expires_in() -> int:
 # ── Persistence ──────────────────────────────────────────────────────────────
 #
 # Plain ConfigFile under user://, matching every other credential in this
-# project (see LOCAL_CONFIG.md). It holds a real refresh token, so it is named
+# project (see docs/LOCAL_CONFIG.md). It holds a real refresh token, so it is named
 # explicitly in .gitignore even though user:// is outside the repo.
 
 func _load_auth() -> void:

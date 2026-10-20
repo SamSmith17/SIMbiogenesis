@@ -14,7 +14,7 @@ extends Node
 ##
 ## Key: user://terrain_config.cfg [gemini] api_key=  (or the GEMINI_API_KEY env var,
 ## the same the offline tools/generate_facades.py uses). User-local, gitignored
-## (LOCAL_CONFIG.md policy — never log it).
+## (docs/LOCAL_CONFIG.md policy — never log it).
 ##
 ## HTTP + cache + deferred-signal pattern mirrors imagery_service.gd /
 ## mapillary_service.gd. Cache PNGs under user://terrain_cache/ai_imagery/.

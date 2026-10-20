@@ -76,7 +76,7 @@ below **and** a matching object in `credits/credits.json`. Copy this template:
 External executables we ship with or shell out to.
 
 - **OpenSCAD** — headless CAD kernel; we shell out to it to render parametric
-  `.scad` parts into STL in-game (see [`PARAMETRIC_STORE_PLAN.md`](PARAMETRIC_STORE_PLAN.md)).
+  `.scad` parts into STL in-game (see `PARAMETRIC_STORE_PLAN.md`).
   - Author: The OpenSCAD developers / Marius Kintel et al.
   - Source: https://openscad.org · https://github.com/openscad/openscad
   - License: `GPL-2.0-or-later` · Added: _pending (not yet bundled)_
@@ -99,7 +99,7 @@ External executables we ship with or shell out to.
 
 ## Engine & addons
 
-- **Godot Engine** (4.6, Forward+) — the game engine.
+- **Godot Engine** (4.7, Forward+) — the game engine.
   - Author: Juan Linietsky, Ariel Manzur, and the Godot community
   - Source: https://godotengine.org
   - License: `MIT` · Added: (project foundation)
@@ -233,7 +233,7 @@ usage; confirm each provider's live attribution string before release.**
     others CC-BY) · Attribution: credit OpenTopography + dataset.
   - Attribution required: yes · Status: pending-verification
 
-- **NASA POWER** — GHI solar-resource grid (`data/ghi-grid.json`, GhiService).
+- **NASA POWER** — GHI solar-resource grid (`scenes/ui/location_picker/data/ghi-grid.json`, GhiService).
   - Source: https://power.larc.nasa.gov · License: free/open, credit requested.
   - Attribution required: courtesy yes · Status: pending-verification
 
@@ -254,9 +254,20 @@ usage; confirm each provider's live attribution string before release.**
 ## 3D models, art & textures
 
 Bespoke map art (SOAK, Mars, player mesh, Starshade) lives in a gitignored local
-asset pack — see [`ASSETS.md`](ASSETS.md). Record each third-party model/texture's
-origin + license here as it's added (PBR sets `Wood034_1K-JPG/`,
-`Metal051C_1K-JPG/`, imported GLBs, StarShade FBX, etc.).
+asset pack — see [`docs/ASSETS.md`](docs/ASSETS.md). Record each third-party model/texture's
+origin + license here as it's added (the PBR set
+`Imported Models/Materials/Wood034_1K-JPG/`, imported GLBs, StarShade FBX, etc.).
+
+- **Ground088** — tiling ground PBR texture set (`assets/materials/ground088/`:
+  colour, normal, roughness, AO + the `Ground088_1K-JPG.tres` material), used by
+  the Mars terrain (`scenes/gameplay/Terrain.tscn`) and the gravel road.
+  - Author: ambientCG (Lennart Demes)
+  - Source: https://ambientcg.com/a/Ground088
+  - License: CC0-1.0  ·  Added: (initial commit)
+  - Attribution required: no  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: the ambientCG file naming (`Ground088_1K-JPG_*`) identifies the
+    source; the original download was not recorded. Credited per ledger policy.
+  - Status: pending-verification
 
 - **Mixamo character + animation clips** (Adobe) — `Imported Models/NPC/`
   (`Ch36_nonPBR.fbx` + Walking / Laying Sleeping / Overhead Squat / Sitting Idle /

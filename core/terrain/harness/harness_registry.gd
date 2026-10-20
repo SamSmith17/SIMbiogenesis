@@ -20,6 +20,7 @@ const DEFAULT_TIMEOUT_S := 900.0
 const BUILTIN_SCENES := [
 	"res://scenes/maps/soak_festival_2026.tscn",
 	"res://scenes/maps/mars_aerial.tscn",
+	"res://scenes/maps/mars_main_legacy.tscn",
 	"res://main.tscn",
 ]
 

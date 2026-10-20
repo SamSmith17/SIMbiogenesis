@@ -5,8 +5,12 @@ extends Resource
 
 ## Canonical Mars / aerial map (formerly root `main.tscn`).
 const MARS_SCENE_CANONICAL: String = "res://scenes/maps/mars_aerial.tscn"
-## Still accepted in save JSON and normalized to `MARS_SCENE_CANONICAL`.
+## Still accepted in save JSON and normalized to `MARS_SCENE_CANONICAL`. Only a
+## save-path KEY now: the file itself moved to `LEGACY_MARS_FALLBACK`.
 const LEGACY_MARS_SCENE: String = "res://main.tscn"
+## The older Mars variant (a gitignored maintainer file, formerly the root
+## `main.tscn`), loaded only when `mars_aerial.tscn` is missing.
+const LEGACY_MARS_FALLBACK: String = "res://scenes/maps/mars_main_legacy.tscn"
 
 ## Canonical soak map scene (formerly `main- maybe unstable.tscn`).
 const SOAK_SCENE_CANONICAL: String = "res://scenes/maps/soak_festival_2026.tscn"
@@ -62,7 +66,7 @@ static func normalize_scene_path(path: String) -> String:
 	var p := path.strip_edges()
 	if p == LEGACY_SOAK_SCENE:
 		return SOAK_SCENE_CANONICAL
-	if p == LEGACY_MARS_SCENE:
+	if p == LEGACY_MARS_SCENE or p == LEGACY_MARS_FALLBACK:
 		return MARS_SCENE_CANONICAL
 	return p
 
@@ -77,7 +81,7 @@ static func is_trusted_scene_path(path: String) -> bool:
 		return true
 	if p == SOAK_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_SOAK_SCENE):
 		return true
-	if p == MARS_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_MARS_SCENE):
+	if p == MARS_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_MARS_FALLBACK):
 		return true
 	return false
 
@@ -131,8 +135,8 @@ static func resolve_playable_scene_path(normalized_path: String) -> String:
 	if p == MARS_SCENE_CANONICAL:
 		if ResourceLoader.exists(MARS_SCENE_CANONICAL):
 			return MARS_SCENE_CANONICAL
-		if ResourceLoader.exists(LEGACY_MARS_SCENE):
-			return LEGACY_MARS_SCENE
+		if ResourceLoader.exists(LEGACY_MARS_FALLBACK):
+			return LEGACY_MARS_FALLBACK
 	if ResourceLoader.exists(p):
 		return p
 	return p
@@ -145,7 +149,7 @@ static func _canonical_fallback_scene_path() -> String:
 		return SOAK_SCENE_CANONICAL
 	if ResourceLoader.exists(LEGACY_SOAK_SCENE):
 		return SOAK_SCENE_CANONICAL
-	if ResourceLoader.exists(LEGACY_MARS_SCENE):
+	if ResourceLoader.exists(LEGACY_MARS_FALLBACK):
 		return MARS_SCENE_CANONICAL
 	return MARS_SCENE_CANONICAL
 
@@ -161,6 +165,6 @@ static func snapshot_scene_path(node: Node) -> String:
 			return p
 		if p == SOAK_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_SOAK_SCENE):
 			return SOAK_SCENE_CANONICAL
-		if p == MARS_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_MARS_SCENE):
+		if p == MARS_SCENE_CANONICAL and ResourceLoader.exists(LEGACY_MARS_FALLBACK):
 			return MARS_SCENE_CANONICAL
 	return _canonical_fallback_scene_path()

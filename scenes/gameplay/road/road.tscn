@@ -1,0 +1,38 @@
+[gd_scene load_steps=5 format=3 uid="uid://road_scene_1"]
+
+[ext_resource type="Script" path="res://scenes/gameplay/road/road.gd" id="1_road_script"]
+[ext_resource type="Texture2D" path="res://assets/materials/ground088/Ground088_1K-JPG_Color.jpg" id="2_color"]
+[ext_resource type="Texture2D" path="res://assets/materials/ground088/Ground088_1K-JPG_NormalGL.jpg" id="3_normal"]
+[ext_resource type="Texture2D" path="res://assets/materials/ground088/Ground088_1K-JPG_Roughness.jpg" id="4_roughness"]
+
+[sub_resource type="Curve3D" id="Curve3D_default"]
+_data = {
+"points": PackedVector3Array(0, 0, 0, 15, 0, 0, 0, 0, 0, -10, 0, 0, 10, 0, 0, 30, 0, -15, -10, 0, 0, 10, 0, 0, 60, 0, 0, -15, 0, 0, 0, 0, 0, 90, 0, 10)
+}
+point_count = 4
+bake_interval = 0.2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_road"]
+albedo_texture = ExtResource("2_color")
+metallic_specular = 0.0
+roughness = 1.0
+roughness_texture = ExtResource("4_roughness")
+roughness_texture_channel = 4
+normal_enabled = true
+normal_scale = 0.6
+normal_texture = ExtResource("3_normal")
+uv1_scale = Vector3(0.5, 1.0, 1.0)
+
+[node name="RoadPath" type="Node3D"]
+script = ExtResource("1_road_script")
+road_width = 6.0
+segments_per_meter = 2.0
+y_offset = 0.05
+uv_tile_length = 4.0
+road_surface_material = SubResource("StandardMaterial3D_road")
+
+[node name="Path" type="Path3D" parent="."]
+curve = SubResource("Curve3D_default")
+
+[node name="RoadMesh" type="MeshInstance3D" parent="."]
+cast_shadow = 0

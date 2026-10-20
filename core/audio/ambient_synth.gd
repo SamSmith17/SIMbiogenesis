@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Procedural ambience for the first-person bed when the player has put no
 ## file of their own in user://ambient/ (the repo ships NO audio — see
-## ASSETS.md). Pure, deterministic (a seeded LCG, never randf), cheap: each
+## docs/ASSETS.md). Pure, deterministic (a seeded LCG, never randf), cheap: each
 ## loop is a few seconds of filtered noise made ONCE at load and looped by
 ## the player; the gusts, the bubbling and the chirp timing are done live on
 ## the players' volume and pitch, not in the samples.

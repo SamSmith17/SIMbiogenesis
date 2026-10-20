@@ -157,7 +157,7 @@ const _DAYS_IN_MONTH: Array = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 ## Turbine-kind registry — the single source of truth for turbine metadata across
 ## the generalized hydro path (estimator, HydroReach conveyance, inspector,
-## Hydro Lab). Head bands (m) follow ROADMAP.md; default `eta_t` matches the
+## Hydro Lab). Head bands (m) follow docs/ROADMAP.md; default `eta_t` matches the
 ## historic per-kind efficiencies (pelton .85 / turgo .80 / else .70). Unknown
 ## kinds resolve to a "custom" fallback via kind_meta() so a free-text kind from
 ## an old save is never rejected or mangled.

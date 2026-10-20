@@ -11,7 +11,7 @@ extends RefCounted
 ##     demand override (set_habitat_demand).
 ## Runs inside the view's history-suppress/bulk-sync window, with the graph
 ## open or closed (ambient). Kept out of system_graph_view per the
-## delegate-helper convention (ARCHITECTURE.md debt #2).
+## delegate-helper convention (docs/ARCHITECTURE.md debt #2).
 
 const PERSIST_INTERVAL_H := 0.5   # snapshot into specs.pop_state at most 2x/sim-hour
 ## At most this many habitats persist in one tick. Every camp started on the

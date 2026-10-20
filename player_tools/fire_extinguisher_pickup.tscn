@@ -1,7 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://dqxk8extinguisher_pickup"]
-
-[ext_resource type="Script" path="res://player_tools/fire_extinguisher_pickup.gd" id="1_pickup"]
-
-[node name="FireExtinguisherPickup" type="Node3D"]
-script = ExtResource("1_pickup")
-

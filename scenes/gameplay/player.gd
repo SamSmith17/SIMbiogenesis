@@ -61,7 +61,7 @@ var anim_jog_name : String = ""
 const IDLE_ANIM_PATH := "res://Player Character/Breathing Idle (no skin).fbx"
 const JOG_ANIM_PATH := "res://Player Character/Jogging (no skin).fbx"
 
-# Rigged body mesh (optional — see ASSETS.md, gitignored on the public repo).
+# Rigged body mesh (optional — see docs/ASSETS.md, gitignored on the public repo).
 const CHARACTER_FBX_PATH := "res://Player Character/Walking (in place).fbx"
 const CHARACTER_FBX_TRANSFORM := Transform3D(
 	Basis(Vector3(-0.5, 0.0, 0.0), Vector3(0.0, 0.5, 0.0), Vector3(0.0, 0.0, -0.5)),
@@ -2175,7 +2175,7 @@ func on_charging_station_left_range(station: Node3D) -> void:
 func _setup_tool_manager() -> void:
 	# Create tool manager if it doesn't exist
 	if tool_manager == null:
-		var tool_mgr := preload("res://player_tools/tool_manager.gd").new()
+		var tool_mgr := preload("res://gameplay/player_tools/tool_manager.gd").new()
 		tool_mgr.name = "ToolManager"
 		add_child(tool_mgr)
 		tool_manager = tool_mgr

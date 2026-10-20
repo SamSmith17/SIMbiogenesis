@@ -15,7 +15,7 @@ Thumbs.db
 desktop.ini
 
 # If someone mistakenly copies runtime configs into the project tree, do not track them.
-# Real saves live under user:// (see LOCAL_CONFIG.md).
+# Real saves live under user:// (see docs/LOCAL_CONFIG.md).
 **/ha_connection.cfg
 **/uisp_settings.cfg
 **/solar_ui_ha_entities.cfg
@@ -51,9 +51,10 @@ desktop.ini
 /Full SOAK 2026 Datastream*
 /starshade_soak_report*.html
 
-# Local bespoke maps (maintainer copies stay beside project.godot; see maps/examples/)
+# Local bespoke maps (maintainer copies; see maps/examples/ and docs/ASSETS.md)
 /scenes/maps/soak_festival_2026.tscn
 /scenes/maps/mars_aerial.tscn
+/scenes/maps/mars_main_legacy.tscn
 /maps/soak_camp_map.tres
 /maps/mars_aerial_map.tres
 /main.tscn
@@ -67,7 +68,7 @@ desktop.ini
 *.gamebundle.json
 
 # -----------------------------------------------------------------------------
-# GitHub lite — heavy art ships via local asset pack (see ASSETS.md, PHASE3_ASSET_PACK.md)
+# GitHub lite — heavy art ships via a local asset pack (see docs/ASSETS.md)
 # -----------------------------------------------------------------------------
 /Imported Models/
 /StarShade FBX/
@@ -81,7 +82,9 @@ desktop.ini
 # gitignored map scenes do), so there's no script to attach a fallback to.
 /scenes/gameplay/Tree.tscn
 
-# Root-level map blobs (Mars / SOAK bespoke scenes)
+# Root-level map blobs. Since 2026-10-20 this art lives under /Imported Models/
+# and /Starshade Pretty Version/; the patterns stay so an older asset pack that
+# unpacks to the root still cannot be committed by accident.
 /SoakSim.exe
 /10m_*.obj
 /10m_*.STL
@@ -114,3 +117,21 @@ desktop.ini
 # Python bytecode from the tools/ scripts
 __pycache__/
 *.pyc
+
+# -----------------------------------------------------------------------------
+# Plans, status matrices and working notes (human or AI) — local only.
+# Write them in /plans/; the root patterns catch one dropped at the top level.
+# Documentation that should ship goes in docs/ instead.
+# -----------------------------------------------------------------------------
+/plans/
+/*PLAN*.md
+/*_PLAN*.md
+/PHASE*_*.md
+/WAVE*_*.md
+/*_INVENTORY.md
+/*_MATRIX.md
+/*_WALKTHROUGH.md
+
+# Claude Code local state (the shared .claude/ settings, if any, stay tracked)
+.claude/settings.local.json
+.claude/worktrees/

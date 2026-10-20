@@ -3,7 +3,7 @@ extends Node
 
 ## On-demand + updatable OpenSCAD install manager. We deliberately do NOT commit
 ## the ~120 MB GPL binary to git (same rationale as the gitignored asset pack in
-## ASSETS.md): the game runs fine without it, and the parametric store prompts to
+## docs/ASSETS.md): the game runs fine without it, and the parametric store prompts to
 ## install when first used. Installs land in versioned folders under
 ## user://tools/openscad/<version>/ keyed by a small JSON manifest, so "update"
 ## is just fetching a newer version alongside and repointing — no reinstall, no

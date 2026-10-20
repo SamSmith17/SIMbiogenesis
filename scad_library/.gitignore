@@ -1,5 +1,5 @@
 # The parametric-store library is LOCAL, like the gitignored asset pack in
-# ASSETS.md. It's seeded from an external Thingiverse-style folder by
+# docs/ASSETS.md. It's seeded from an external Thingiverse-style folder by
 # core/scad/scad_import.gd and catalogued by core/scad/scad_ingest.gd, and each
 # .scad carries its original author's own CC license (pending-verification until
 # confirmed — see CREDITS.md / credits/credits.json, which IS the committed

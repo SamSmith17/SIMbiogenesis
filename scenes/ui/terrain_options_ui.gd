@@ -265,7 +265,7 @@ func _build_ui() -> void:
 	# working/secure enough to recommend patrons wire up a Gemini key). The
 	# backend (AiImageryService, terrain_loader.gd's _ai_hero_enabled()/
 	# refresh_ai_hero()) is untouched and still reachable by hand-editing
-	# terrain_config.cfg — see LOCAL_CONFIG.md.
+	# terrain_config.cfg — see docs/LOCAL_CONFIG.md.
 
 	var align_lbl := SectionHeader.make("Align OSM to imagery")
 	align_lbl.tooltip_text = "Slide buildings/roads/camps onto the aerial when OSM and the photo disagree (e.g. BRC year mismatch)."

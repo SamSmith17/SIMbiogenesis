@@ -40,7 +40,7 @@ const SIPHON_LAB_W := 380.0
 const LAB_AUTOBIND_MAX_M := 300.0
 const TOGGLE_W    := 20.0   # width of the sidebar collapse tabs
 
-const _CANVAS_SCRIPT    := preload("res://system_graph_v2/graph_canvas_v2.gd")
+const _CANVAS_SCRIPT    := preload("res://system_graph/canvas_v2/graph_canvas_v2.gd")
 const _LIB_PANEL_SCRIPT := preload("res://system_graph/library_panel.gd")
 const _INSP_PANEL_SCRIPT := preload("res://system_graph/inspector_panel.gd")
 const _SIPHON_LAB_SCRIPT := preload("res://scenes/ui/siphon_hydro_modal.gd")

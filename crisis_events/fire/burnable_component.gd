@@ -24,7 +24,7 @@ var is_destroyed: bool = false
 @export var flammability: float = 1.0
 
 ## Material to check for (Wood034/plywood or Mars Aerial Located_14)
-var wood_material_path: String = "res://Wood034_1K-JPG/Wood034_1K-JPG.tres"
+var wood_material_path: String = "res://Imported Models/Materials/Wood034_1K-JPG/Wood034_1K-JPG.tres"
 var plywood_texture_path: String = "res://Imported Models/Mars Aerial/Mars 2026 - Aerial Located_14.jpg"
 
 ## Whether this component has been initialized
