@@ -3,8 +3,8 @@ extends Node
 ## (port of energy.ts + ghiGrid.ts + constants.ts).
 ## NOTE: no `class_name` because the autoload already exposes this script globally as `GhiService`.
 
-const GHI_GRID_PATH: String = "res://data/ghi-grid.json"
-const ZONE_POP_PATH: String = "res://data/zone-population.json"
+const GHI_GRID_PATH: String = "res://scenes/ui/location_picker/data/ghi-grid.json"
+const ZONE_POP_PATH: String = "res://scenes/ui/location_picker/data/zone-population.json"
 
 # --- Zones: id 1–6, GHI kWh/m²/d half-open [lo, hi); zone 6 is [6, +inf) ---
 const ZONES: Array[Dictionary] = [
@@ -89,7 +89,7 @@ func is_ghi_grid_loaded() -> bool:
 func get_ghi_data_source_line() -> String:
 	if _grid_loaded:
 		return "NASA POWER GHI (2001–2020) — %s" % _ghi_period
-	return "GHI fall back: synthetic model (no grid in res://data/ghi-grid.json)"
+	return "GHI fall back: synthetic model (no grid in res://scenes/ui/location_picker/data/ghi-grid.json)"
 
 
 ## --- NASA POWER bilinear sample (ghiGrid.ts) ---

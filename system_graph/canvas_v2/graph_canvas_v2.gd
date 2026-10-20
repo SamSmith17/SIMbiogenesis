@@ -1,7 +1,7 @@
 extends "res://system_graph/graph_canvas.gd"
 
-const InteractionController := preload("res://system_graph_v2/interaction_controller.gd")
-const WireRenderer := preload("res://system_graph_v2/wire_renderer.gd")
+const InteractionController := preload("res://system_graph/canvas_v2/interaction_controller.gd")
+const WireRenderer := preload("res://system_graph/canvas_v2/wire_renderer.gd")
 
 var _interaction: GraphInteractionControllerV2
 var _wire_renderer: GraphWireRendererV2

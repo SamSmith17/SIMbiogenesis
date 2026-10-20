@@ -28,8 +28,8 @@
 [ext_resource type="Script" path="res://system_graph/system_graph_view.gd" id="26_v78ji"]
 [ext_resource type="PackedScene" path="res://scenes/ui/timeline_ui.tscn" id="27_c6g33"]
 [ext_resource type="Script" path="res://scenes/ui/timeline_ui.gd" id="28_t7f11"]
-[ext_resource type="PackedScene" path="res://location_picker/location_picker_ui.tscn" id="29_ah531"]
-[ext_resource type="Script" path="res://location_picker/location_picker_ui.gd" id="30_1glnn"]
+[ext_resource type="PackedScene" path="res://scenes/ui/location_picker/location_picker_ui.tscn" id="29_ah531"]
+[ext_resource type="Script" path="res://scenes/ui/location_picker/location_picker_ui.gd" id="30_1glnn"]
 [ext_resource type="Script" path="res://power_system/ha/ha_websocket_client.gd" id="31_k77fk"]
 [ext_resource type="Script" path="res://core/terrain/terrain_loader.gd" id="32_myaw8"]
 

@@ -2,7 +2,7 @@ extends RefCounted
 class_name TopojsonLoader
 ## Decodes world-atlas countries-110m.json: arcs, stitch rings, point-in-land, coast polylines.
 
-const DEFAULT_PATH: String = "res://data/countries-110m.json"
+const DEFAULT_PATH: String = "res://scenes/ui/location_picker/data/countries-110m.json"
 
 ## Each outer ring as PackedVector2 in (lon, lat)
 var _outer_rings: Array[PackedVector2Array] = []

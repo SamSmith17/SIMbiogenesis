@@ -46,7 +46,7 @@ QUOTED_RES_RE = re.compile(r"(?<=[\"'`])res://[^\"'`\n]+")
 RES_RE = re.compile(r"res://[^\"'\s)\]>,;`]+")
 MD_LINK_RE = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 IMG_RE = re.compile(r"<img[^>]*\ssrc=\"([^\"]+)\"")
-DYNAMIC = set("%{$*<")
+DYNAMIC = set("%{$*<[\\…")
 
 
 def tracked_files():

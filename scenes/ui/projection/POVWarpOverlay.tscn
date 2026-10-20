@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" path="res://godot/StarShadeConsole/scripts/pov_warp_overlay.gd" id="1_pov_warp_script"]
+[ext_resource type="Script" path="res://scenes/ui/projection/pov_warp_overlay.gd" id="1_pov_warp_script"]
 
 [node name="POVWarpOverlay" type="Control"]
 visible = false

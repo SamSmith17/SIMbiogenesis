@@ -4478,7 +4478,7 @@ func ensure_projection_canvas() -> Control :
 	if existing != null :
 		projection_canvas = existing
 		return projection_canvas
-	var packed := load( "res://godot/StarShadeConsole/scenes/ProjectionCanvas.tscn" ) as PackedScene
+	var packed := load( "res://scenes/ui/projection/ProjectionCanvas.tscn" ) as PackedScene
 	if packed == null :
 		push_warning( "Main: could not load ProjectionCanvas.tscn" )
 		return null
@@ -5050,7 +5050,7 @@ func _spawn_fire_extinguisher_pickups() -> void :
 	if gr_pickups == null or not gr_pickups.is_fire_tools_enabled() :
 		return
 	
-	var pickup_scene := load( "res://player_tools/fire_extinguisher_pickup.tscn" ) as PackedScene
+	var pickup_scene := load( "res://gameplay/player_tools/fire_extinguisher_pickup.tscn" ) as PackedScene
 	if pickup_scene == null :
 		push_warning( "[Main] Could not load fire extinguisher pickup scene" )
 		return

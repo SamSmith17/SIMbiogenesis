@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://bbu7x25puukxp"]
 
-[ext_resource type="Script" uid="uid://dpruewgulxoxc" path="res://godot/StarShadeConsole/scripts/projection_canvas.gd" id="1_projection_script"]
-[ext_resource type="Theme" path="res://godot/StarShadeConsole/themes/projection_canvas.tres" id="2_projection_theme"]
+[ext_resource type="Script" uid="uid://dpruewgulxoxc" path="res://scenes/ui/projection/projection_canvas.gd" id="1_projection_script"]
+[ext_resource type="Theme" path="res://scenes/ui/projection/projection_canvas.tres" id="2_projection_theme"]
 
 [node name="ProjectionCanvas" type="Control" unique_id=1232511996]
 custom_minimum_size = Vector2(1920, 1080)

@@ -2175,7 +2175,7 @@ func on_charging_station_left_range(station: Node3D) -> void:
 func _setup_tool_manager() -> void:
 	# Create tool manager if it doesn't exist
 	if tool_manager == null:
-		var tool_mgr := preload("res://player_tools/tool_manager.gd").new()
+		var tool_mgr := preload("res://gameplay/player_tools/tool_manager.gd").new()
 		tool_mgr.name = "ToolManager"
 		add_child(tool_mgr)
 		tool_manager = tool_mgr

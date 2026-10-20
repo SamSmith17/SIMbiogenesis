@@ -406,7 +406,7 @@ func _test_cache_token_boundary() -> void:
 
 
 func _test_picker_helpers() -> void:
-	var picker: GDScript = load("res://location_picker/location_picker_ui.gd")
+	var picker: GDScript = load("res://scenes/ui/location_picker/location_picker_ui.gd")
 	_check("picker script loads", picker != null)
 	if picker == null:
 		for i in 8:

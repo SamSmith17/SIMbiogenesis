@@ -70,7 +70,6 @@ const SCAN_DIRS: Array[String] = [
 	"res://scenes/windowwall",
 	"res://gameplay",
 	"res://crisis_events",
-	"res://location_picker",
 ]
 
 var _fails := 0

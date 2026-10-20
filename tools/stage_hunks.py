@@ -118,7 +118,7 @@ def classify_project(hunk: str) -> str:
 
 
 CLASSIFIERS = {
-	"main.gd": classify_main,
+	"scenes/maps/main.gd": classify_main,
 	"scenes/ui/solar_ui.gd": classify_solar_ui,
 	"project.godot": classify_project,
 }

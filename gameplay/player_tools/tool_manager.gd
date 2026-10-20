@@ -24,7 +24,7 @@ func _ready() -> void:
 
 func _register_tools() -> void:
 	# Fire extinguisher
-	var extinguisher_scene := preload("res://player_tools/fire_extinguisher.tscn")
+	var extinguisher_scene := preload("res://gameplay/player_tools/fire_extinguisher.tscn")
 	if extinguisher_scene != null:
 		available_tools["fire_extinguisher"] = extinguisher_scene
 
