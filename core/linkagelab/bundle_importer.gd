@@ -6,7 +6,7 @@ extends RefCounted
 const DesignBundleScript := preload("res://core/linkagelab/design_bundle.gd")
 const GlbDecoderScript := preload("res://core/linkagelab/glb_decoder.gd")
 const CircuitMapperScript := preload("res://core/linkagelab/circuit_mapper.gd")
-const IBCGlowScript := preload("res://ibc_glow.gd")
+const IBCGlowScript := preload("res://power_system/devices/ibc_glow.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 
 const BUNDLE_FILTER := "*.gamebundle.json ; LinkageLab Game Bundle,*.json ; JSON"

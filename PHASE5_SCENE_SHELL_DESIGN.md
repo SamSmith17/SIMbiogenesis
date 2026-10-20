@@ -54,7 +54,7 @@ This is a “scene shell” in user experience: one start menu and a consistent 
 Each playable map scene should keep:
 
 - Root node named `Main`.
-- Root script `res://main.gd`.
+- Root script `res://scenes/maps/main.gd`.
 - Group `main_scene` added by `main.gd`.
 - `Player` child.
 - `UILayer` child with these shared UI nodes:

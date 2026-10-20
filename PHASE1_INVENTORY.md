@@ -21,7 +21,7 @@ This document is the Phase 1 deliverable: what is in the project, where weight a
 | Godot | **4.6**, Forward Plus (`project.godot` → `config/features`) |
 | Display name | **SIMbiogenesis** |
 | Main scene | `res://scenes/ui/map_select/map_select.tscn` (chooser); maps are `scenes/maps/mars_aerial.tscn`, `scenes/maps/soak_festival_2026.tscn` (SOAK Festival 2026) |
-| Icon | `res://icon.png` |
+| Icon | `res://assets/ui/icon.png` |
 
 ### Autoloads (`project.godot`)
 

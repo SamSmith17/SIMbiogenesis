@@ -421,7 +421,7 @@ func _test_planet_star_frame() -> void :
 	# Measured: every station within 0.5 d. Tolerance ±1.5 d because the mean
 	# Keplerian elements are arcminute-accurate, and at a station the longitude
 	# is flat, so an arcminute of error moves the DATE by roughly a day.
-	var ps : Node = load( "res://planets.gd" ).new()
+	var ps : Node = load( "res://core/astronomy/planets.gd" ).new()
 	var stations := [
 		[ "mars",    _jd( 2024, 12, 7 ),  _jd( 2025, 2, 24 ) ],
 		[ "jupiter", _jd( 2024, 10, 9 ),  _jd( 2025, 2, 4 ) ],

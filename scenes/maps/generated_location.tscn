@@ -1,10 +1,10 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://main.gd" id="1_fe5si"]
-[ext_resource type="Shader" path="res://sky.gdshader" id="2_sj4uw"]
+[ext_resource type="Script" path="res://scenes/maps/main.gd" id="1_fe5si"]
+[ext_resource type="Shader" path="res://core/env/sky.gdshader" id="2_sj4uw"]
 [ext_resource type="Texture2D" path="res://assets/sky/starmap_equirect_8k.png" id="3_60swm"]
-[ext_resource type="Script" path="res://planets.gd" id="4_olklb"]
-[ext_resource type="Script" path="res://star_system.gd" id="5_uuouk"]
+[ext_resource type="Script" path="res://core/astronomy/planets.gd" id="4_olklb"]
+[ext_resource type="Script" path="res://core/astronomy/star_system.gd" id="5_uuouk"]
 [ext_resource type="PackedScene" path="res://scenes/gameplay/player.tscn" id="6_vd1b2"]
 [ext_resource type="Script" path="res://scenes/gameplay/player.gd" id="7_trt2q"]
 [ext_resource type="Script" path="res://scenes/gameplay/player_health.gd" id="8_kxe5h"]
@@ -30,7 +30,7 @@
 [ext_resource type="Script" path="res://scenes/ui/timeline_ui.gd" id="28_t7f11"]
 [ext_resource type="PackedScene" path="res://location_picker/location_picker_ui.tscn" id="29_ah531"]
 [ext_resource type="Script" path="res://location_picker/location_picker_ui.gd" id="30_1glnn"]
-[ext_resource type="Script" path="res://ha_websocket_client.gd" id="31_k77fk"]
+[ext_resource type="Script" path="res://power_system/ha/ha_websocket_client.gd" id="31_k77fk"]
 [ext_resource type="Script" path="res://core/terrain/terrain_loader.gd" id="32_myaw8"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_msgkm"]
