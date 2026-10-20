@@ -761,6 +761,19 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pnw_forest_shots
 # October, the Tune-look maple page; FAILs unless "Show vegetation" off hides
 # every plant root, the plant props and the floor moss, and on brings them back:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/broadleaf_shots.gd -Label <dir>
+# V Select across both layers + Detect (offline — the per-tree look as the
+# strongest resolution layer + idempotent, KEY_MAP_SPECIES beating map family
+# edits for a generic species, map species store writes on a TEMP path, a
+# painted per-tree look through JSON, OSM single-tree pins (look replaces,
+# resize stacks, clear removes one), VegTreePick ray picks, VegColorDetect on a
+# synthetic photo incl. the two-tone-sand trap, the shader glow uniform.
+# EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script vegetation/veg_select_detect_selftest.gd
+# The same on a real world (sandbox): a screen-ray pick of a painted and an OSM
+# tree, hover marker + species glow, one-tree Tune look re-meshing that tree,
+# "This world" → map override, an OSM tree's look surviving a regeneration,
+# Detect preview / plant / Undo. Shots under screenshots\veg_select_detect\:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/veg_select_detect_check.gd -Timeout 900
 # In-game "Restore an earlier vegetation look" round trip (sandbox):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/veg_look_restore_check.gd
 # Extreme weather (offline — core/weather/): hazard catalog + VTEC mapping, the
@@ -2941,6 +2954,74 @@ would leave stale trees on screen, while a spare one costs only time. Verify
 with `--capture=areafill` (above) plus the `_test_area_fill_*` and
 `_test_incremental_chunk_rebuild` checks in `auto_vegetation_selftest.gd` (the
 latter pins incremental == full-regen).
+
+**V Select across both layers + Detect from the photo (2026-10-20).** The
+painted layer and the OSM-generated forest are one thing to the V toolbar now.
+- **Pick** (`VegTreePick`, pure): every non-grass plant of both layers is a
+  vertical cylinder (ground → height, radius ≈ crown) in a lazy 16 m grid; the
+  pick is the nearest one the SCREEN RAY passes through, culled behind the
+  terrain hit. Rebuilt on a count/identity signature (`_veg_pick_rev` bumps
+  for resizes). Loader: `veg_pick_at_screen` / `veg_pick_near` return a
+  descriptor `{source: painted|auto, kind, slot, species (RESOLVED — an OSM
+  slot can be an alias), index, x, z, height_m, crown_m, label, …}`; layers'
+  `record_for(desc)` look up by **slot**, never by species.
+- **Hover** (Select tool, 20 Hz): `VegHoverMarker` (rings + Label3D, no depth
+  test) on the plant and the **species glow**: every batch carries meta
+  `veg_species` (set at the five batch-construction sites in the two
+  runtimes) and `set_veg_species_glow` sets the shader **instance uniform**
+  `veg_hl` on them (declared in `veg_lighting.gdshaderinc`, applied in
+  foliage / leaf_canopy / bark / impostor). No per-tree markers.
+- **Click** opens Tune look in **one-tree mode**
+  (`open_vegetation_instance_editor` → modal `open_for_instance`; Shift+click
+  only selects). Map-wide rows (shader, forest age, OSM binding, brush rows,
+  type pickers, leaf/branch builder) hide; every shape edit is species-scoped
+  (`_is_named_variant()` is true in this mode). Three scopes:
+  - **This tree**: the strongest resolution layer,
+    `VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE` (unprefixed species-override
+    keys, applied after the whole ladder, never gated by the generic-family
+    rule). Painted: on the record's `card_settings` (nested colours
+    round-trip as arrays). OSM: `AutoVegetationEdits.add_tree_patch` — a
+    0.3 m pin polygon replayed by the ordinary patch path after every
+    regeneration (a later look REPLACES, resizes stack, a pinned clear
+    deletes). Positions are deterministic, so a pin finds its tree again;
+    a re-scatter that moves trees (density change) orphans pins harmlessly.
+  - **This world**: `VegStyleStore.save_species_override_map`; flat_merged
+    lists such species under `KEY_MAP_SPECIES` (only when non-empty — maps
+    without one resolve byte-identically), which lets a GENERIC species'
+    map entry beat that map's family edits.
+  - **Every world**: the global species override, minus the same keys on
+    this map's species entry. Both "all" scopes drop that species'
+    per-tree looks in this world.
+- One-tree mode's SIZE rows (height, crown, trunk, shrub card size) read the
+  tree's real metres: a record's own `scale` (paint jitter, or OSM height ÷
+  resolved height) multiplies the mesh, so the rows show stored × scale and
+  edits store ÷ scale (`_inst_dim_scale`). The world/all scopes then scale
+  that look to each tree's own size.
+- ⚠ A partition group with its own look (per-tree look, brush snapshot)
+  draws in the SAME chunk as its species-mates, so its batches carry a look
+  tag (`VegetationRuntime.KEY_LOOK_TAG`, `Bulk_cedar_v2_l1_0_0_0`). Before
+  that, the names collided and Godot renamed one `@MultiMeshInstance3D@N`,
+  which every by-name lookup (chunk rebuilds, leaf fall, harness checks)
+  silently missed.
+- Del / [ ] work on OSM trees too (`delete_veg_plant` / `scale_veg_plant`,
+  pinned); H stays painted-only. Vegetation undo already snapshots the OSM
+  edits file.
+- **Detect** (toolbar tool `veg_detect`, the SOAK scene's editor-only
+  `VegetationScatter` bake made general — that one is untouched):
+  `VegColorDetect` (pure) reads ONE drape per region (the finest covering it:
+  site > hyper > detail > base, CPU copies ≤ 3072 px cached until the tool is
+  put down), crops + box-filters it to the cell grid natively (a per-cell
+  `get_pixel` loop cost seconds per preview), classifies by excess green
+  (ExG, Woebbecke 1995) + a brightness cap with an **Otsu** cut per region;
+  the cut is trusted only when the split is clean AND the class above it is
+  green (mean ExG ≥ 0.07) — two-tone bare sand is bimodal too. 8-connected
+  patches: up to "One plant up to" across → one plant at the centroid sized
+  to the patch (below "Shrubs under" it is a shrub); bigger → canopy filled
+  on a world-anchored jittered lattice at the species crown × 0.8 / density.
+  The mask previews on the ground (terrain-following quad grid); Enter /
+  "Plant them" adds PAINTED plants (editable, undoable), skipping roads,
+  buildings, water and spots a plant already stands on. "Whole hi-res area"
+  = the finest photo's square (where single plants are visible at all).
 
 **Veg UI (Phase 8).** The V dock is on `UITheme` (panel/button/chip styles,
 `LAYER_PANEL`; the Tune-look modal moved to its OWN CanvasLayer at

@@ -44,6 +44,10 @@ const FAMILY_PREFIXES: Array[String] = [
 ## normal settings plumbing (and its hash-based batching) untouched.
 const KEY_USER_FAMILY := "_user_family_keys"
 const KEY_SPECIES_OVERRIDES := "_species_overrides"
+## Species ids whose override came from THIS MAP's store (Select → Tune look →
+## "All of these in this world"). Present only when non-empty, so a map
+## without one resolves byte-identically. See settings_with_variant.
+const KEY_MAP_SPECIES := "_map_species"
 
 ## Test hook: suffixed onto every file path so the selftest never touches the
 ## player's real style files.
@@ -111,12 +115,21 @@ static func flat_merged(lat: float, lon: float) -> Dictionary:
 	var out: Dictionary = VegetationStyleConfig.defaults()
 	var user_family: Dictionary = {}
 	var species_over: Dictionary = {}
-	for store in [load_global_store(), load_map_store(lat, lon)]:
+	var map_store := load_map_store(lat, lon)
+	for store in [load_global_store(), map_store]:
 		_apply_store_into(store, out, user_family, species_over)
 	var fam_keys: Array = user_family.keys()
 	fam_keys.sort()
 	out[KEY_USER_FAMILY] = fam_keys
 	out[KEY_SPECIES_OVERRIDES] = species_over
+	var map_sps: Array = []
+	var raw_sps: Variant = map_store.get("species", {})
+	if raw_sps is Dictionary:
+		for sid in (raw_sps as Dictionary):
+			map_sps.append(str(sid))
+	if not map_sps.is_empty():
+		map_sps.sort()
+		out[KEY_MAP_SPECIES] = map_sps
 	return out
 
 
@@ -250,6 +263,44 @@ static func save_species_override(species: String, values: Dictionary) -> void:
 	sps[species] = cur
 	store["species"] = sps
 	_write_store(global_v2_path(), store)
+	invalidate_cache()
+
+
+## The same, for ONE map: values land in that map's species layer, which
+## flat_merged applies after the global one (so per key, this map wins) and
+## lists under KEY_MAP_SPECIES.
+static func save_species_override_map(lat: float, lon: float, species: String,
+		values: Dictionary) -> void:
+	if species.is_empty() or values.is_empty():
+		return
+	var store := load_map_store(lat, lon)
+	var sps: Dictionary = store.get("species", {})
+	var cur: Dictionary = sps.get(species, {})
+	for k in values:
+		cur[str(k)] = values[k]
+	sps[species] = cur
+	store["species"] = sps
+	_write_store(map_v2_path(lat, lon), store)
+	invalidate_cache()
+
+
+## Drop `keys` from one map's species entry (an empty entry is removed) — a
+## new every-world default must not stay shadowed on the map it was set on.
+static func remove_species_override_keys_map(lat: float, lon: float, species: String,
+		keys: Array) -> void:
+	var store := load_map_store(lat, lon)
+	var sps: Dictionary = store.get("species", {})
+	if not sps.has(species):
+		return
+	var cur: Dictionary = sps[species]
+	for k in keys:
+		cur.erase(str(k))
+	if cur.is_empty():
+		sps.erase(species)
+	else:
+		sps[species] = cur
+	store["species"] = sps
+	_write_store(map_v2_path(lat, lon), store)
 	invalidate_cache()
 
 

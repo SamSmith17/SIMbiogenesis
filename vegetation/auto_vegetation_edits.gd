@@ -72,6 +72,57 @@ func add_patch(poly: PackedVector2Array, params: Dictionary) -> void:
 	})
 
 
+## Radius of the pin a single-tree edit is stored under. Generated plants sit
+## metres apart; the pin only has to catch the one it was made for after a
+## reload regenerates the same scatter.
+const TREE_PIN_R := 0.3
+
+
+## A pin around one generated tree's position: the polygon the single-tree
+## patches and clears are stored as (both replay through the existing
+## polygon paths, so a reload reapplies them like any other edit).
+static func tree_pin(x: float, z: float) -> PackedVector2Array:
+	var poly := PackedVector2Array()
+	for i in 8:
+		var a := TAU * float(i) / 8.0
+		poly.append(Vector2(x + cos(a) * TREE_PIN_R, z + sin(a) * TREE_PIN_R))
+	return poly
+
+
+## Pin an edit on ONE generated tree of `slot` (Select tool: a per-tree look,
+## a resize). A look REPLACES an earlier look on the same tree; resizes stack.
+func add_tree_patch(x: float, z: float, slot: String, params: Dictionary) -> void:
+	var p := params.duplicate(true)
+	p["patch_species"] = slot
+	p["tree_pin"] = true
+	if p.get(VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE) is Dictionary:
+		remove_tree_patches(slot, VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE, Vector2(x, z))
+		p[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] = VegetationLayer._card_to_json(
+			p[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] as Dictionary)
+	add_patch(tree_pin(x, z), p)
+
+
+## Drop the single-tree pins of `slot` carrying `key` — all of them, or only
+## the one at `at`. Returns how many went.
+func remove_tree_patches(slot: String, key: String, at: Variant = null) -> int:
+	var keep: Array = []
+	var n := 0
+	for patch in patches:
+		var pd: Dictionary = patch
+		var params: Dictionary = pd.get("params", {})
+		var hit := bool(params.get("tree_pin", false)) \
+			and str(params.get("patch_species", "")) == slot and params.has(key)
+		if hit and at is Vector2:
+			var poly: PackedVector2Array = pd.get("polygon", PackedVector2Array())
+			hit = Geometry2D.is_point_in_polygon(at as Vector2, poly)
+		if hit:
+			n += 1
+		else:
+			keep.append(patch)
+	patches = keep
+	return n
+
+
 func add_forest_zone(poly: PackedVector2Array, params: Dictionary) -> void:
 	if poly.size() < 3:
 		return

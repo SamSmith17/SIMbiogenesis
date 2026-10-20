@@ -255,6 +255,7 @@ static func _build_bulk_layer(root: Node3D, slot: String, records: Array,
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
 	var groups: Dictionary = {}
+	var look_n := 0
 	for item in records:
 		if not (item is Dictionary):
 			continue
@@ -263,10 +264,19 @@ static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -
 		if d.has("vert_off"):
 			s["vertical_offset_m"] = float(d["vert_off"])
 		var card: Variant = d.get("card_settings", {})
-		if card is Dictionary and not (card as Dictionary).is_empty():
+		var has_card := card is Dictionary and not (card as Dictionary).is_empty()
+		if has_card:
 			s.merge(VegetationLayer.coerce_card_colors(card as Dictionary), true)
 		var key := _batch_settings_key(s)
 		if key not in groups:
+			# A group with its own look (a brush snapshot, one tree tuned in
+			# Tune look) is drawn by its own batches in the SAME chunk as its
+			# species-mates: tag it, or the node names collide and Godot
+			# renames one "@MultiMeshInstance3D@N" — which every by-name
+			# lookup (chunk rebuilds, leaf fall) then silently misses.
+			if has_card:
+				look_n += 1
+				s[VegetationRuntime.KEY_LOOK_TAG] = "l%d" % look_n
 			groups[key] = {"settings": s, "records": []}
 		(groups[key]["records"] as Array).append(d)
 	var out: Array = []
@@ -369,7 +379,8 @@ static func _build_bulk_batch(root: Node3D, slot: String, species: String, recor
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_%d_%d" % [slot, chunk_x, chunk_z]
+	mi.name = "Bulk_%s_%d_%d" % [VegetationRuntime._batch_species_tag(slot, settings), chunk_x, chunk_z]
+	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.

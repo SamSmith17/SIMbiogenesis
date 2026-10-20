@@ -105,6 +105,14 @@ var _veg_undo_pushed := false
 var _paint_click_candidate := false
 var _paint_press_px := Vector2.ZERO
 var _picked_plant: Dictionary = {}
+## Select hover: the plant under the pointer (TerrainLoader pick descriptor).
+var _hover_plant: Dictionary = {}
+var _hover_ms := 0
+var _lmb_shift := false
+## Detect: the region being previewed, and its re-preview debounce.
+var _detect_poly := PackedVector2Array()
+var _detect_timer: Timer = null
+var _detect_stats_lbl: Label = null
 ## The section the last reground ran for — sculpting terrain leaves painted
 ## plants floating, so switching terrain -> veg re-snaps them once.
 var _last_section := ""
@@ -226,6 +234,8 @@ func _exit_mode() -> void:
 		return
 	_water_tools.deactivate()
 	_cancel_stroke()
+	_clear_veg_hover()
+	_end_detect(true)
 	_clear_picked_camp()
 	_end_water_modulate()
 	_clear_locked_selection()
@@ -266,6 +276,10 @@ func _escape_step() -> void:
 	if _selection_locked:
 		_clear_locked_selection()
 		_set_status("Selection cleared")
+		return
+	if not _detect_poly.is_empty():
+		_end_detect(false)
+		_set_status("Detection preview cleared")
 		return
 	if not _picked_place["kind"].is_empty():
 		_clear_picked_place()
@@ -364,7 +378,7 @@ const TOOL_ICONS := {
 	"level": "minus", "ramp": "trending-up", "pond": "droplet",
 	"rain": "cloud-rain", "drain": "download", "measure": "ruler",
 	"veg_paint": "sprout", "veg_place": "trees", "veg_clear": "eraser",
-	"veg_select": "mouse-pointer-2",
+	"veg_select": "mouse-pointer-2", "veg_detect": "sparkles",
 	"camp_paint": "tent", "camp_erase": "eraser", "camp_subdivide": "layout-grid",
 	"camp_select": "pencil",
 	"fest_road": "route", "fest_zone": "square-dashed", "fest_lots": "layout-grid",
@@ -490,6 +504,9 @@ func _set_active_tool(id: String) -> void:
 	if _selection_locked and not _is_water_tool():
 		_clear_locked_selection()
 	_picked_plant = {}
+	_clear_veg_hover()
+	if id != "veg_detect":
+		_end_detect(true)
 	_clear_picked_camp()
 	_clear_picked_place()
 	_gesture.set_mode(_state.shape_for(id))
@@ -633,6 +650,8 @@ func _make_param_handler(key: String) -> Callable:
 			_camp_apply_timer.start()
 		if _state.active_tool == "fest_edit" and _place_apply_timer != null:
 			_place_apply_timer.start()
+		if _state.active_tool == "veg_detect" and not _detect_poly.is_empty():
+			_queue_detect_preview()
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +678,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			elif _gesture.mode == "path" and _gesture.poly_points().size() >= 2:
 				_commit_festival_road(_gesture.finish_polygon())
+				get_viewport().set_input_as_handled()
+			elif _state.active_tool == "veg_detect" and not _detect_poly.is_empty():
+				_place_detected()
 				get_viewport().set_input_as_handled()
 			return
 		# With a plant picked, Del / [ ] / H act on THAT plant — the bracket keys
@@ -706,6 +728,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed:
 			if _pointer_over_ui() or CursorController.overlay_look_active():
 				return
+			_lmb_shift = mb.shift_pressed
 			_on_lmb_pressed()
 			get_viewport().set_input_as_handled()
 		elif _stroking or _water_modulating or _gesture.is_dragging():
@@ -1128,6 +1151,8 @@ func _process(delta: float) -> void:
 		return
 	_last_pointer_px = mouse
 	_cursor_hit = _pick_pointer()
+	if _state.active_tool == "veg_select" and not busy:
+		_update_veg_hover()
 	if _water_modulating:
 		_tick_water_modulate(delta)
 	elif _stroking and _cursor_hit is Vector3:
@@ -1235,6 +1260,12 @@ func _draw_overlay() -> void:
 		if pts2.size() >= 3:
 			pts2.append(pts2[0])
 			_overlay.draw_polyline(pts2, col, 2.0, true)
+		return
+	if _state.active_tool == "veg_detect" and _detect_poly.size() >= 3:
+		var dpts := _project_poly(_detect_poly)
+		if dpts.size() >= 3:
+			dpts.append(dpts[0])
+			_overlay.draw_polyline(dpts, Color(0.35, 1.0, 0.45, 0.85), 2.0, true)
 		return
 	if _selection_locked and _selection_poly.size() >= 3:
 		var pts3 := _project_poly(_selection_poly)
@@ -1460,6 +1491,8 @@ func _build_species_row() -> void:
 	_species_row.add_child(tune)
 	_restyle_family_buttons()
 	_refresh_subspecies()
+	if _state.active_tool == "veg_detect":
+		_build_detect_rows()
 
 
 func _restyle_family_buttons() -> void:
@@ -1687,6 +1720,9 @@ func _apply_veg_region(poly: PackedVector2Array) -> void:
 			_push_veg_undo("clear")
 			_clear_veg_in(poly)
 			_set_status("Cleared ~%.0f m2" % VegetationPaint.polygon_area(poly))
+		"veg_detect":
+			_detect_poly = poly.duplicate()
+			_run_detect_preview()
 	if _loader.has_method("clear_vegetation_highlight"):
 		_loader.call("clear_vegetation_highlight")
 	_update_undo_button()
@@ -1748,26 +1784,72 @@ func _place_hero_at(p: Vector3) -> void:
 
 # --- Select: per-plant editing ---------------------------------------------
 
-static func _picked_label(desc: Dictionary) -> String:
-	var species := str(desc.get("species", ""))
-	var nm := VegSpeciesCatalog.label_for(species) if not species.is_empty() else "plant"
-	if str(desc.get("kind", "")) == "hero":
-		nm = "%s (hero)" % nm
-	return "%s x%.2f, %.1f m away" % [nm, float(desc.get("scale", 1.0)),
-		float(desc.get("dist_m", 0.0))]
-
-
 func _pick_plant_at(world_xz: Vector2) -> void:
-	if _loader == null or not _loader.has_method("pick_plant_at"):
+	if _loader == null or not _loader.has_method("veg_pick_near"):
 		return
-	var desc: Dictionary = _loader.call("pick_plant_at", world_xz, PICK_RADIUS_M)
+	# The plant the pointer is over (a ray through the crowns), else the one
+	# nearest the ground point — painted or OSM forest alike.
+	var desc: Dictionary = _hover_plant
+	if desc.is_empty():
+		desc = _loader.call("veg_pick_at_screen", _pointer_screen())
+	if desc.is_empty():
+		desc = _loader.call("veg_pick_near", world_xz, PICK_RADIUS_M)
 	if desc.is_empty():
 		_picked_plant = {}
-		_set_status("No painted plant within %.0f m (auto-scattered OSM trees are not individually editable)"
-			% PICK_RADIUS_M)
+		_set_status("No plant within %.0f m" % PICK_RADIUS_M)
 		return
 	_picked_plant = desc
-	_set_status("%s · Del deletes · [ / ] resize · H → hero" % _picked_label(desc))
+	var keys := "Del deletes · [ / ] resize"
+	if str(desc.get("source", "")) == "painted" and str(desc.get("kind", "")) != "hero":
+		keys += " · H → hero"
+	_set_status("%s · %s" % [_select_label(desc), keys])
+	if _lmb_shift or str(desc.get("kind", "")) == "hero":
+		return
+	if _loader.has_method("open_vegetation_instance_editor"):
+		_loader.call("open_vegetation_instance_editor", desc)
+
+
+static func _select_label(desc: Dictionary) -> String:
+	return "%s (%s) · %.0f m" % [str(desc.get("label", "plant")),
+		str(desc.get("source_label", "")), float(desc.get("height_m", 0.0))]
+
+
+func _pointer_screen() -> Vector2:
+	var vp := get_viewport()
+	if vp == null:
+		return Vector2.ZERO
+	if Input.get_mouse_mode() != Input.MOUSE_MODE_VISIBLE:
+		return vp.get_visible_rect().size * 0.5
+	return vp.get_mouse_position()
+
+
+## Select hover: label + ring on the plant under the pointer, every plant of
+## its species glowing. 20 Hz at most — the pick is a grid walk, but it runs
+## on every pointer move.
+func _update_veg_hover() -> void:
+	if _loader == null or not _loader.has_method("veg_pick_at_screen"):
+		return
+	var now := Time.get_ticks_msec()
+	if now - _hover_ms < 50:
+		# Throttled: force a re-run next frame, or the pointer's final resting
+		# place (no further motion) would never be picked.
+		_last_pointer_px = Vector2(-1e9, -1e9)
+		return
+	_hover_ms = now
+	if _pointer_over_ui() or CursorController.has_blocking_modal():
+		_clear_veg_hover()
+		return
+	var desc: Dictionary = _loader.call("veg_pick_at_screen", _pointer_screen())
+	_hover_plant = desc
+	_loader.call("set_veg_hover", desc)
+	if not desc.is_empty() and _picked_plant.is_empty():
+		_set_status("%s — click to tune this tree, Shift+click to select" % _select_label(desc))
+
+
+func _clear_veg_hover() -> void:
+	_hover_plant = {}
+	if _loader != null and _loader.has_method("clear_veg_hover"):
+		_loader.call("clear_veg_hover")
 
 
 func _delete_picked_plant() -> void:
@@ -1775,13 +1857,13 @@ func _delete_picked_plant() -> void:
 			or not _loader.has_method("delete_plant_at"):
 		return
 	_push_veg_undo("delete plant")
-	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
-	var gone: Dictionary = _loader.call("delete_plant_at", at, PICK_RADIUS_M)
-	if gone.is_empty():
+	var gone := _picked_plant
+	if not bool(_loader.call("delete_veg_plant", _picked_plant)):
 		_set_status("Nothing deleted — pick a plant first")
 		return
 	_picked_plant = {}
-	_set_status("Deleted %s — Undo restores it" % _picked_label(gone))
+	_clear_veg_hover()
+	_set_status("Deleted %s — Undo restores it" % _select_label(gone))
 
 
 ## Promote the picked card plant to a hero GLB at the same spot and apparent
@@ -1792,6 +1874,9 @@ func _convert_picked_to_hero() -> void:
 		return
 	if str(_picked_plant.get("kind", "")) == "hero":
 		_set_status("Already a hero tree")
+		return
+	if str(_picked_plant.get("source", "painted")) != "painted":
+		_set_status("Only painted plants become hero models (this one is OSM forest)")
 		return
 	_push_veg_undo("convert to hero")
 	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
@@ -1810,12 +1895,138 @@ func _resize_picked_plant(factor: float) -> void:
 		return
 	_push_veg_undo("resize plant")
 	var at := Vector2(float(_picked_plant.get("x", 0.0)), float(_picked_plant.get("z", 0.0)))
-	var changed: Dictionary = _loader.call("scale_plant_at", at, factor, PICK_RADIUS_M)
-	if changed.is_empty():
+	if not bool(_loader.call("scale_veg_plant", _picked_plant, factor)):
 		return
-	# Re-read the record so the readout shows the NEW scale, not the old one.
-	_picked_plant = _loader.call("pick_plant_at", at, PICK_RADIUS_M)
-	_set_status("Resized %s" % _picked_label(_picked_plant))
+	# Re-read the record so the readout shows the NEW size, not the old one.
+	var again: Dictionary = _loader.call("veg_pick_near", at, 0.6)
+	if not again.is_empty():
+		_picked_plant = again
+	_set_status("Resized %s" % _select_label(_picked_plant))
+
+
+# --- Detect: plants from the satellite photo ---------------------------------
+# Draw a region (or take the whole hi-res area) → the green it finds is laid on
+# the ground as a preview → Plant (or Enter) adds them as painted plants of the
+# chosen type. Every slider re-runs the preview. TerrainLoader + VegColorDetect
+# do the work; this only turns gestures into calls.
+
+func _build_detect_rows() -> void:
+	var whole := Button.new()
+	whole.text = "Whole hi-res area"
+	whole.tooltip_text = "Detect over the whole square the sharpest photo covers"
+	whole.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(whole)
+	whole.pressed.connect(_detect_whole_area)
+	_options_box.add_child(whole)
+	var plant := Button.new()
+	plant.text = "Plant them"
+	plant.tooltip_text = "Add what the preview found as painted plants (Enter). Undo takes them back."
+	plant.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(plant)
+	plant.pressed.connect(_place_detected)
+	_options_box.add_child(plant)
+	_detect_stats_lbl = Label.new()
+	_detect_stats_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_detect_stats_lbl.add_theme_color_override("font_color", UITheme.C_OK)
+	_detect_stats_lbl.text = "Draw an area to find the plants in the photo"
+	_options_box.add_child(_detect_stats_lbl)
+
+
+func _detect_params() -> Dictionary:
+	var p := _scatter_params()
+	for k in ["sensitivity", "max_luma", "min_patch_m2", "single_max_d_m", "shrub_below_m"]:
+		p[k] = _state.get_param(k, float(VegColorDetect.DEFAULTS.get(k, 0.0)))
+	return p
+
+
+func _detect_whole_area() -> void:
+	if _loader == null or not _loader.has_method("veg_detect_whole_area"):
+		return
+	var poly: PackedVector2Array = _loader.call("veg_detect_whole_area")
+	if poly.size() < 3:
+		_set_status("No satellite photo loaded yet")
+		return
+	_detect_poly = poly
+	_run_detect_preview()
+
+
+func _queue_detect_preview() -> void:
+	if _detect_timer == null:
+		_detect_timer = Timer.new()
+		_detect_timer.one_shot = true
+		_detect_timer.wait_time = 0.3
+		_detect_timer.timeout.connect(_run_detect_preview)
+		add_child(_detect_timer)
+	_detect_timer.start()
+
+
+func _run_detect_preview() -> void:
+	if _detect_poly.size() < 3 or _loader == null:
+		return
+	_set_detect_text("Looking for green in the photo…")
+	await get_tree().process_frame
+	if _detect_poly.size() < 3:
+		return
+	var st: Dictionary = _loader.call("preview_veg_detect", _detect_poly, _detect_params())
+	_set_detect_text(_detect_summary(st))
+	_queue_overlay_redraw()
+
+
+func _place_detected() -> void:
+	if _detect_poly.size() < 3 or _loader == null:
+		_set_status("Draw an area first")
+		return
+	_push_veg_undo("detect")
+	var st: Dictionary = _loader.call("place_detected_vegetation", _detect_poly, _detect_params())
+	var added := int(st.get("added", 0))
+	var parts: Array = []
+	var by: Dictionary = st.get("by_species", {})
+	for sid in by:
+		parts.append(UiText.count(int(by[sid]), VegSpeciesCatalog.label_for(str(sid)).to_lower()))
+	var msg := "Planted %s" % (", ".join(parts) if not parts.is_empty() else "nothing")
+	if int(st.get("skipped", 0)) > 0:
+		msg += " · %d skipped (road, building, water or a plant already there)" % int(st["skipped"])
+	_set_status(msg)
+	_set_detect_text(msg)
+	_detect_poly = PackedVector2Array()
+	_update_undo_button()
+	_queue_overlay_redraw()
+
+
+func _detect_summary(st: Dictionary) -> String:
+	if st.has("error"):
+		return str(st["error"])
+	var area := float(st.get("area_m2", 0.0))
+	var green := float(st.get("green_m2", 0.0))
+	var pct := 100.0 * green / maxf(area, 1.0)
+	var how := "auto cut %.2f" % float(st.get("cut", 0.0))
+	if bool(st.get("auto", true)) and not bool(st.get("auto_split", false)):
+		how = "no clear green/ground split — default cut"
+	var res := float(st.get("mpp", INF))
+	var res_txt := (" · photo %.2f m/px" % res) if is_finite(res) else ""
+	return "%s green (%.0f %%) · %s → %s%s · %s · Enter or Plant them" % [
+		UiText.num(green, "m²"), pct, UiText.count(int(st.get("patches", 0)), "patch", "patches"),
+		UiText.count(int(st.get("plants", 0)), "plant"),
+		(" (%d canopy)" % int(st.get("canopy", 0))) if int(st.get("canopy", 0)) > 0 else "",
+		how + res_txt]
+
+
+func _set_detect_text(t: String) -> void:
+	if _detect_stats_lbl != null and is_instance_valid(_detect_stats_lbl):
+		_detect_stats_lbl.text = t
+	_set_status(t)
+
+
+## `release`: the tool is being put down — also drop the CPU photo copies.
+func _end_detect(release: bool) -> void:
+	_detect_poly = PackedVector2Array()
+	if _loader == null:
+		return
+	if release and _loader.has_method("release_veg_detect_cache"):
+		_loader.call("release_veg_detect_cache")
+	elif _loader.has_method("clear_veg_detect_preview"):
+		_loader.call("clear_veg_detect_preview")
+	_queue_overlay_redraw()
 
 
 # ---------------------------------------------------------------------------

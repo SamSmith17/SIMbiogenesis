@@ -541,6 +541,9 @@ static func _card_to_json(card: Dictionary) -> Dictionary:
 		if v is Color:
 			var c: Color = v
 			out[k] = [c.r, c.g, c.b, c.a]
+		elif v is Dictionary:
+			# A per-tree look (KEY_INSTANCE_OVERRIDE) nests its own tints.
+			out[k] = _card_to_json(v as Dictionary)
 		else:
 			out[k] = v
 	return out
@@ -558,13 +561,71 @@ static func coerce_card_colors(card: Dictionary) -> Dictionary:
 		if str(k).ends_with(TINT_SUFFIX) and not (card[k] is Color):
 			needs_fix = true
 			break
+		if card[k] is Dictionary and str(k) == VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE:
+			for k2 in (card[k] as Dictionary):
+				if str(k2).ends_with(TINT_SUFFIX) and not ((card[k] as Dictionary)[k2] is Color):
+					needs_fix = true
 	if not needs_fix:
 		return card
 	var out := card.duplicate()
 	for k in out:
 		if str(k).ends_with(TINT_SUFFIX):
 			out[k] = _as_color(out[k])
+		elif out[k] is Dictionary and str(k) == VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE:
+			out[k] = coerce_card_colors(out[k] as Dictionary)
 	return out
+
+
+## The record a nearest_plant() / VegTreePick descriptor points at, or {}.
+func record_for(desc: Dictionary) -> Dictionary:
+	var idx := int(desc.get("index", -1))
+	if str(desc.get("kind", "bulk")) == "hero":
+		return hero[idx] if idx >= 0 and idx < hero.size() and hero[idx] is Dictionary else {}
+	var records: Variant = bulk.get(str(desc.get("slot", desc.get("species", ""))), [])
+	if not (records is Array) or idx < 0 or idx >= (records as Array).size():
+		return {}
+	var rec: Variant = (records as Array)[idx]
+	return rec if rec is Dictionary else {}
+
+
+## One tree's own look (Select → Tune look → "This tree"): stored as the
+## record's card_settings so it persists with the plant and wins over every
+## map / global style (VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE). An empty
+## look removes it. Returns false when the descriptor no longer resolves.
+func set_instance_look(desc: Dictionary, look: Dictionary) -> bool:
+	var rec := record_for(desc)
+	if rec.is_empty() or str(desc.get("kind", "bulk")) == "hero":
+		return false
+	var card: Dictionary = rec.get("card_settings", {}) if rec.get("card_settings") is Dictionary else {}
+	card = card.duplicate()
+	if look.is_empty():
+		card.erase(VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE)
+	else:
+		card[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] = look.duplicate(true)
+	if card.is_empty():
+		rec.erase("card_settings")
+	else:
+		rec["card_settings"] = card
+	return true
+
+
+func instance_look(desc: Dictionary) -> Dictionary:
+	var rec := record_for(desc)
+	var card: Variant = rec.get("card_settings", {})
+	if card is Dictionary and (card as Dictionary).get(VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE) is Dictionary:
+		return coerce_card_colors((card as Dictionary)[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE]).duplicate(true)
+	return {}
+
+
+## Drop every per-tree look (and brush snapshot) from one species — the
+## "apply to all of these" scopes must not leave hand-tuned trees behind.
+func clear_species_looks(species: String) -> int:
+	var n := 0
+	for item in bulk.get(species, []):
+		if item is Dictionary and (item as Dictionary).has("card_settings"):
+			(item as Dictionary).erase("card_settings")
+			n += 1
+	return n
 
 
 static func _as_color(v: Variant) -> Color:

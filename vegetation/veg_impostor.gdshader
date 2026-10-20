@@ -215,4 +215,6 @@ void fragment() {
 	// look is already tuned to the world's light.
 	light_mul += veg_fill * (1.0 - night_factor);
 	ALBEDO = veg_saturate(albedo, veg_saturation) * light_mul;
+	// Unshaded: the Select glow rides ALBEDO (EMISSION is not read here).
+	ALBEDO = veg_hl_albedo(ALBEDO) + veg_hl_emission();
 }

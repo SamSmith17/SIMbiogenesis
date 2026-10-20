@@ -278,6 +278,11 @@ func _patch_bulk_in_polygon(poly: PackedVector2Array, params: Dictionary) -> int
 		if not target.is_empty() and species != target:
 			continue
 		var card := VegetationLayer._card_settings_for_species(params, species)
+		# A single-tree look pinned by Select → Tune look (AutoVegetationEdits
+		# .add_tree_patch). It REPLACES the record's previous one.
+		if params.get(VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE) is Dictionary:
+			card[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] = VegetationLayer.coerce_card_colors(
+				params[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] as Dictionary)
 		for item in bulk.get(slot, []):
 			if not (item is Dictionary):
 				continue
@@ -337,6 +342,58 @@ static func _card_settings_from_params(params: Dictionary) -> Dictionary:
 		if params.has(key):
 			out[key] = params[key]
 	return out
+
+
+## Nearest generated plant to a world point (the Select tool's fallback when
+## the ray misses every crown). Same descriptor shape as
+## VegetationLayer.nearest_plant, `species` = the layer SLOT.
+func nearest_plant(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	var best := {}
+	var best_d := radius_m * radius_m
+	for slot in bulk.keys():
+		var arr: Array = bulk[slot]
+		if _is_grass_slot(str(slot)):
+			continue
+		for i in arr.size():
+			if not (arr[i] is Dictionary):
+				continue
+			var d: Dictionary = arr[i]
+			var pt := Vector2(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+			var dist := pt.distance_squared_to(world_xz)
+			if dist < best_d:
+				best_d = dist
+				best = {"kind": "bulk", "species": str(slot), "index": i,
+					"x": pt.x, "z": pt.y, "scale": float(d.get("scale", 1.0)),
+					"height_m": float(d.get("height_m", 0.0)), "dist_m": sqrt(dist)}
+	return best
+
+
+func record_for(desc: Dictionary) -> Dictionary:
+	var idx := int(desc.get("index", -1))
+	if str(desc.get("kind", "bulk")) == "hero":
+		return hero[idx] if idx >= 0 and idx < hero.size() and hero[idx] is Dictionary else {}
+	var records: Variant = bulk.get(str(desc.get("slot", desc.get("species", ""))), [])
+	if not (records is Array) or idx < 0 or idx >= (records as Array).size():
+		return {}
+	var rec: Variant = (records as Array)[idx]
+	return rec if rec is Dictionary else {}
+
+
+func instance_look(desc: Dictionary) -> Dictionary:
+	var card: Variant = record_for(desc).get("card_settings", {})
+	if card is Dictionary and (card as Dictionary).get(VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE) is Dictionary:
+		return VegetationLayer.coerce_card_colors(
+			(card as Dictionary)[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE]).duplicate(true)
+	return {}
+
+
+func clear_species_looks(slot: String) -> int:
+	var n := 0
+	for item in bulk.get(slot, []):
+		if item is Dictionary and (item as Dictionary).has("card_settings"):
+			(item as Dictionary).erase("card_settings")
+			n += 1
+	return n
 
 
 ## All placement positions (bulk + hero) — used for cross-pass spacing/dedup.

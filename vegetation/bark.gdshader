@@ -114,8 +114,8 @@ void fragment() {
 		bark_rough = mix(roughness_value, 0.6, snow_mask);
 	}
 	albedo *= 1.0 - night_factor * night_darkness;
-	ALBEDO = albedo;
-	EMISSION = albedo * veg_fill_amount() * (1.0 - night_factor);
+	ALBEDO = veg_hl_albedo(albedo);
+	EMISSION = albedo * veg_fill_amount() * (1.0 - night_factor) + veg_hl_emission();
 	ROUGHNESS = bark_rough;
 	METALLIC = 0.0;
 	SPECULAR = 0.2;
