@@ -75,16 +75,22 @@ const DATA_EXTENSIONS := [
 const STORE_EXTENSIONS := ["glb", "png", "jpg", "jpeg", "webp", "mp3", "ogg", "ctex", "fbx"]
 
 ## The gitignored art (.gitignore "GitHub lite" + local maps + root blobs).
+## The root art moved under these folders on 2026-10-20 (Wood034 into
+## "Imported Models/Materials/", the Mars/motorhome/Starshade blobs into
+## "Imported Models/Mars Aerial/" and "Starshade Pretty Version/"); the old
+## locations stay listed so packs made before then still install.
 const ART_DIRS := [
 	"Imported Models", "StarShade FBX", "Starshade Pretty Version", "Player Character",
 	"Wood034_1K-JPG", "Metal051C_1K-JPG",
 ]
 const ART_FILES := [
 	"scenes/maps/soak_festival_2026.tscn", "scenes/maps/mars_aerial.tscn",
-	"maps/soak_camp_map.tres", "maps/mars_aerial_map.tres", "main.tscn",
+	"maps/soak_camp_map.tres", "maps/mars_aerial_map.tres",
+	"scenes/maps/mars_main_legacy.tscn", "main.tscn",
 	"scenes/gameplay/Tree.tscn",
 ]
-## Root-level blobs, as glob patterns matched against the bare file name.
+## Root-level blobs from before 2026-10-20, as glob patterns matched against the
+## bare file name (kept so older packs still install).
 const ART_ROOT_GLOBS := [
 	"10m_*.obj", "10m_*.STL", "Mars *.glb", "Mars*.jpg", "Mars*.png", "motorhome.glb",
 	"motorhome_*.jpg", "Starshade Pretty Version*.glb", "Starshade Pretty Version*.jpg",

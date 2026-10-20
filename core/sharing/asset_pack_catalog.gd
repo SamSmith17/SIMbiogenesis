@@ -439,6 +439,7 @@ static func _art_group_of(rel: String) -> String:
 	if r.begins_with("Imported Models/Mars Aerial/") or r.begins_with("Imported Models/Newest Mars Model/") \
 			or r.begins_with("Imported Models/Mars") or r == "scenes/maps/mars_aerial.tscn" \
 			or r == "maps/mars_aerial_map.tres" or r == "main.tscn" \
+			or r == "scenes/maps/mars_main_legacy.tscn" \
 			or (not r.contains("/") and (r.begins_with("Mars") or r.begins_with("10m_") \
 				or r.begins_with("motorhome"))):
 		return "art:mars"
@@ -448,7 +449,8 @@ static func _art_group_of(rel: String) -> String:
 		return "art:starshade_fbx"
 	if r.begins_with("Imported Models/Trees/"):
 		return "art:trees"
-	if r.begins_with("Wood034_1K-JPG/") or r.begins_with("Metal051C_1K-JPG/"):
+	if r.begins_with("Imported Models/Materials/") or r.begins_with("Wood034_1K-JPG/") \
+			or r.begins_with("Metal051C_1K-JPG/"):
 		return "art:pbr"
 	if r.begins_with("Imported Models/"):
 		var rest := r.trim_prefix("Imported Models/")

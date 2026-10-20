@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://ckppdtf7vld4"]
 
-[ext_resource type="ArrayMesh" uid="uid://cg2mwatl6lx04" path="res://10m_-115.74_33.76_tile_1_1.obj" id="1_46jbc"]
+[ext_resource type="ArrayMesh" uid="uid://cg2mwatl6lx04" path="res://Imported Models/Mars Aerial/10m_-115.74_33.76_tile_1_1.obj" id="1_46jbc"]
 [ext_resource type="Material" uid="uid://eocg1a2eayuk" path="res://assets/materials/ground088/Ground088_1K-JPG.tres" id="2_nrd8o"]
 
 [node name="Node3D" type="Node3D"]

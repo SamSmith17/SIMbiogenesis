@@ -36,7 +36,6 @@ LOCAL_EXTRA = [
     "scenes/maps/soak_festival_2026.tscn",
     "scenes/maps/mars_aerial.tscn",
     "scenes/maps/mars_main_legacy.tscn",
-    "main.tscn",
     "maps/soak_camp_map.tres",
     "maps/mars_aerial_map.tres",
 ]
@@ -47,6 +46,8 @@ RES_RE = re.compile(r"res://[^\"'\s)\]>,;`]+")
 MD_LINK_RE = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 IMG_RE = re.compile(r"<img[^>]*\ssrc=\"([^\"]+)\"")
 DYNAMIC = set("%{$*<[\\…")
+# Paths kept on purpose as keys for old saves (MapDefinition.LEGACY_*), not loads.
+LEGACY_KEYS = {"res://main.tscn", "res://main- maybe unstable.tscn"}
 
 
 def tracked_files():
@@ -81,7 +82,7 @@ def scan(files):
                       if not any(a <= m.start() < b for a, b in spans)]
             for m in found:
                 t = m.group(0).rstrip(".:")
-                if any(c in DYNAMIC for c in t) or t in ("res://", "res:///"):
+                if any(c in DYNAMIC for c in t) or t in ("res://", "res:///") or t in LEGACY_KEYS:
                     continue
                 if not res_exists(t):
                     misses.append((t[len("res://"):], name, no, t))
