@@ -186,6 +186,22 @@
       "status": "verified"
     },
     {
+      "added": "2026-06-29",
+      "attribution_required": false,
+      "author": "ambientCG (Lennart Demes)",
+      "category": "textures",
+      "commercial_ok": true,
+      "id": "ambientcg-ground088",
+      "license": "CC0-1.0",
+      "local_path": "assets/materials/ground088/",
+      "name": "Ground088",
+      "notes": "Tiling ground PBR set (colour/normal/roughness/AO + material) for the Mars terrain and the gravel road. ambientCG file naming identifies the source; the original download was not recorded.",
+      "role": "Ground texture",
+      "share_alike": false,
+      "source": "https://ambientcg.com/a/Ground088",
+      "status": "pending-verification"
+    },
+    {
       "added": "2026-08-01",
       "attribution_required": false,
       "author": "City Building Game Art (CityBuildingKit.com)",
@@ -1267,16 +1283,16 @@
       "status": "pending-verification"
     },
     {
-      "added": "2023-01-01",
+      "added": "2026-06-29",
       "attribution_required": true,
-      "author": "krzmig",
+      "author": "Disruptively Useful (SamSmith17)",
       "category": "engine",
       "commercial_ok": true,
       "id": "simbiogenesis",
       "license": "MIT",
       "license_file": "../LICENSE",
       "name": "SIMbiogenesis (this project)",
-      "notes": "Root LICENSE, Copyright (c) 2023 krzmig.",
+      "notes": "Root LICENSE, Copyright (c) 2026 Disruptively Useful (SamSmith17). Until 2026-10-20 the file carried a template holder (krzmig, 2023).",
       "role": "The game itself",
       "share_alike": false,
       "source": null,

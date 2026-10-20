@@ -51,7 +51,7 @@ func _setup_visual() -> void:
 
 ## Shared by this pickup and the held tool (fire_extinguisher.gd) so the two
 ## visuals can never drift out of sync. The GLB itself is optional — gitignored
-## on the public repo, see ASSETS.md — so this always checks ResourceLoader.exists()
+## on the public repo, see docs/ASSETS.md — so this always checks ResourceLoader.exists()
 ## before load()ing it (avoids a console parse-error on a fresh clone, not just
 ## recovering from one), falling back to a plain red capsule placeholder.
 static func build_extinguisher_visual(node_name: String, model_scale: Vector3) -> Node3D:

@@ -4,11 +4,30 @@ Godot 4.7 (Forward+ on desktop; GL Compatibility only as the `.mobile` fallback)
 First-person ISRU / renewable-energy simulator with a real
 Home Assistant digital-twin bridge. **Core gameplay = 2D systems graph** (schematic
 map of resource flows within a Sphere of Influence); **3D world = embodied digital twin**.
-Product vision: `ROADMAP.md` + graph overhaul: `SYSTEMS_GRAPH_VISION.md`. Structure
+Product vision: `docs/ROADMAP.md` + graph overhaul: `docs/SYSTEMS_GRAPH_VISION.md`. Structure
 & module conventions (where new code goes, extension points, cleanup backlog):
-`ARCHITECTURE.md`. Restructure history: `PHASE1_INVENTORY.md` … `PHASE7_PERFORMANCE.md`. Secrets policy:
-`LOCAL_CONFIG.md` (real HA/UISP credentials live under `user://` only — never
+`docs/ARCHITECTURE.md`. Restructure history: `plans/PHASE1_INVENTORY.md` … `plans/PHASE7_PERFORMANCE.md`. Secrets policy:
+`docs/LOCAL_CONFIG.md` (real HA/UISP credentials live under `user://` only — never
 commit URLs or tokens).
+
+## Repo layout and where files go (2026-10-20)
+
+- **The repo root stays minimal:** `project.godot`, `export_presets.cfg` (Godot
+  needs both there), `README.md`, `CLAUDE.md`, `CREDITS.md` (`linkage_selftest`
+  opens `res://CREDITS.md`), `LICENSE`, `.gitignore`, `.gitattributes`. Never add
+  scripts, textures or notes at the root.
+- **Plans, status matrices, walkthroughs and working notes go in `plans/`**
+  (gitignored, local only). That includes plan files, "next pass" lists, phase
+  write-ups and the harness status matrix (`plans/HARNESS_MATRIX.md`).
+  `.gitignore` also catches `*PLAN*.md`, `PHASE*_*.md`, `*_MATRIX.md` and the
+  like dropped at the root. Code comments may still cite them by bare name.
+- **Documentation that ships goes in `docs/`** (architecture, assets, local
+  config, the feature cheat sheet, roadmap, vision, `docs/FEATURES.md` + the tour
+  images, `docs/config-templates/`).
+- **Moving a file:** move its `.uid` / `.import` sidecar with it, rewrite every
+  `res://` reference (including the gitignored local map scenes), then run
+  `python tools/checks/res_path_audit.py` — it lists every `res://` path and
+  relative Markdown link whose target is missing.
 
 ## Validation (run before every commit)
 
@@ -84,7 +103,7 @@ Their `--world=` / `--user-map=<x>` parts name the default world, and
 used to boot SOAK were moved to Mount Vernon or Walton on 2026-10-12. Their
 prose may still say "soak map"; read that as the world they now run on.
 `tools\harness_matrix.ps1 [-Modes a,b]` runs a list of captures back to back
-and prints a results table. `HARNESS_MATRIX.md` holds the current status of
+and prints a results table. `plans/HARNESS_MATRIX.md` holds the current status of
 every mode and the open items. Two baselines apply to test captures and are
 skipped for `look` and `script`:
 - `PopTestPrefs` is reset in memory, because the author's all-off guardrails
@@ -114,7 +133,7 @@ Godot.exe.exe --headless --path . --script power_system/sources/source_physics_s
 # extend it with every flow-engine change):
 Godot.exe.exe --headless --path . --script power_system/sources/resource_flow_selftest.gd
 # Services node-registry self-test (offline — register/get/has, auto-clear on
-# tree exit, freed-node guard; see ARCHITECTURE.md debt #1):
+# tree exit, freed-node guard; see docs/ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
 # Render presets self-test (offline — the graphics/shadow quality tables pulled
 # out of main.gd into core/env/render_profile.gd; pins every value AND that the
@@ -283,7 +302,7 @@ Godot.exe.exe --headless --path . --script core/clock_claims_selftest.gd
 # [input] edit:
 Godot.exe.exe --headless --path . --script core/input_map_selftest.gd
 # UI compile smoke + duck-typing contract guard (offline — sweeps scenes/ui/,
-# crisis_events/ and location_picker/; these scripts mostly have NO class_name,
+# crisis_events/ and scenes/ui/location_picker/; these scripts mostly have NO class_name,
 # so Godot never parses them at import and a GDScript error surfaces only when
 # a player opens that panel). Also asserts the method surface other subsystems
 # call BY STRING still exists — terrain_loader.gd calls `_exit_mode` at ~10
@@ -1062,7 +1081,7 @@ Godot.exe.exe --headless --path . --script core/conduits/pipe_kit_extractor.gd
 # which is what protects every pinned value here. Extend with every solver
 # change; run --import first so new class_names register):
 Godot.exe.exe --headless --path . --script core/linkage/linkage_selftest.gd
-# Packing data model (offline — PACKING_PLAN.md Phase 0: PackedSpec
+# Packing data model (offline — plans/PACKING_PLAN.md Phase 0: PackedSpec
 # resolution/normalization, per-type mass+dims heuristics, the shipped-model
 # packing-decision coverage guard (a new structures/tools catalog model FAILS
 # this until it appears in CURATED_MODELS / DYNAMIC_MODELS / NON_PACKABLE),
@@ -1125,7 +1144,7 @@ Godot.exe.exe --headless --path . --script core/scad/scad_import.gd -- --src="<p
 # In-game store: press H in a loaded map (ScadStore + scenes/ui/scad_store_modal.gd;
 # ScadPartBuilder MODEL_ID scad_part places rendered parts via PlacedProp).
 
-# Packing Lab capture (WINDOWED — PACKING_PLAN.md Phase 4): sweeps the site
+# Packing Lab capture (WINDOWED — plans/PACKING_PLAN.md Phase 4): sweeps the site
 # cargo (graph + placed props, same sweep as the Site Report card) into the
 # interactive Packing Lab modal, auto-packs it into the 15' and 26' trucks,
 # orbits, then loads the builtin StarShade kit into a 20' container — one PNG
@@ -1148,7 +1167,7 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --world=mtvernon --ca
 # — the only combination that emits placements while leaving the beams identical
 # to linkage_reference.mjs's cyl_default, which the printed cornerSum proves:
 node tools/linkage_hw_reference.mjs ../LinkageLab
-# LinkageLab PARITY fixtures + the shipped JS presets (LINKAGE_PARITY.md): exports
+# LinkageLab PARITY fixtures + the shipped JS presets (plans/LINKAGE_PARITY.md): exports
 # the ref (default main) with git archive — the sibling working tree is never
 # touched — and runs a generated vitest spec in the JS repo's own environment.
 # Writes core/linkage/testdata/parity/*.json and core/linkage/presets/ll_*.json.
@@ -1551,7 +1570,7 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/flow_step_bench.g
 # / placed_lights / interact_focus / solar_ui / timeline_ui / hud_layout were
 # added 2026-10-18 through `PerfSpan` (core/perf/perf_span.gd — autoload-safe,
 # use it in any script a selftest loads under --script; a bare `PerfMonitor`
-# there fails the compile). Baselines in HARNESS_MATRIX.md:
+# there fails the compile). Baselines in plans/HARNESS_MATRIX.md:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/first_person_bench.gd
 # GPU isolation bench (sandbox): the renderer's measured GPU ms with ONE
 # feature or scene layer off at a time (SSIL, SSAO, volumetric fog, glow,
@@ -2133,11 +2152,14 @@ of SystemGraphView, `sim_renderer()`); `scenes/ui/hud/render_progress_card.gd`.
 ## Maps and scene shell
 
 Two playable maps, both rooted on `main.gd` (Node3D "Main"):
-- `scenes/maps/soak_festival_2026.tscn` (default main scene in project.godot)
+- `scenes/maps/soak_festival_2026.tscn`
 - `scenes/maps/mars_aerial.tscn`
 Map chooser: `scenes/ui/map_select/` + `maps/map_definition.gd`
 (TRUSTED_SCENE_PATHS, legacy-path normalization for old saves).
-`main.tscn` at root is a legacy Mars variant kept for slim-export fallback.
+The boot scene is the launch hub (`scenes/ui/map_select/map_select.tscn`). The
+older Mars variant `scenes/maps/mars_main_legacy.tscn` (formerly root
+`main.tscn`, gitignored) is the fallback when `mars_aerial.tscn` is missing;
+`res://main.tscn` survives only as an old-save key in `MapDefinition`.
 
 **MAPS vs WORLDS (core/worlds/, 2026-10-10).** A MAP is terrain + auto-
 generated OSM content: `terrain_cache/*`, `weather_cache/*`, the
@@ -4513,17 +4535,17 @@ autoload holds the shared logic; `TimeUI` only forwards signals for backward com
 | DeviceRegistry | power_system/core/device_registry.gd | Consumer registry; `total_power_changed(w)` |
 | AutomationEngine | power_system/automation/automation_engine.gd | HA-style rules @0.1s; exports HA YAML |
 | SaveSystem | core/save_system.gd | 8 slots + autosave, SAVE_VERSION=2, user://saves/ |
-| GhiService | location_picker/ghi_service.gd | NASA POWER GHI grid (data/ghi-grid.json) |
+| GhiService | scenes/ui/location_picker/ghi_service.gd | NASA POWER GHI grid (scenes/ui/location_picker/data/ghi-grid.json) |
 | InverterBridge | core/inverter_bridge.gd | Mirrors ~80 live HA entities (EcoWorthy + Shelly) |
 | TimeDirector | core/time_director.gd | Authority over sim time: modes (LIVE/PLAYBACK/SIMULATE), NOW anchor, playhead, provenance; `mode_changed`/`playhead_changed`/`now_changed` |
 | SimMode | core/sim_mode.gd | Compatibility shim over TimeDirector (preserves is_live/should_run_realworld_actions/etc.) |
 | GameplayRules | gameplay/gameplay_rules.gd | Survival toggles, sync with main.gd |
-| CameraServerBootstrap | godot/StarShadeConsole/scripts/camera_server_bootstrap.gd | OBS virtual camera |
+| CameraServerBootstrap | scenes/ui/projection/camera_server_bootstrap.gd | OBS virtual camera |
 | WeatherService | core/weather_service.gd | Open-Meteo archive weather, cached per location/year |
 | ElevationService | core/terrain/elevation_service.gd | DEM grid: Open-Meteo (no key) / OpenTopography (key); `elevation_ready/failed/progress` |
 | ImageryService | core/terrain/imagery_service.gd | ESRI World Imagery XYZ drape; `imagery_ready/failed/progress` |
 | AiImageryService | core/terrain/ai_imagery_service.gd | Opt-in Gemini "hero patch" ground enhancement (image in/out); `ai_imagery_ready/failed`; key `[gemini] api_key` / `GEMINI_API_KEY` |
-| DiscordIdentity | core/discord/discord_identity.gd | "Sign in with Discord" via OAuth2 **authorization-code + PKCE, no client_secret** (needs the app's "Public Client" toggle — see LOCAL_CONFIG.md). Loopback `TCPServer` on one of 34199/34200/34201 catches the callback; refresh token in `user://discord_auth.cfg`; scopes deliberately limited to `identify` + `guilds.members.read`. Signals `sign_in_completed/failed`, `signed_out`, `membership_checked` |
+| DiscordIdentity | core/discord/discord_identity.gd | "Sign in with Discord" via OAuth2 **authorization-code + PKCE, no client_secret** (needs the app's "Public Client" toggle — see docs/LOCAL_CONFIG.md). Loopback `TCPServer` on one of 34199/34200/34201 catches the callback; refresh token in `user://discord_auth.cfg`; scopes deliberately limited to `identify` + `guilds.members.read`. Signals `sign_in_completed/failed`, `signed_out`, `membership_checked` |
 | DiscordDirectory | core/discord/discord_directory.gd (+ `Relay` and `Population` children on MultiplayerSession) | "Who is playing right now", as ONE webhook message edited in place (no server, no bot). Read/heartbeat/vacate + the host election; `play_together()` is the whole one-button flow. Polls only while the lobby is open or we host — the webhook route budget is shared by the community. Signals `directory_changed`, `directory_error`, `election_result(won, record)` |
 | MultiplayerSession | core/multiplayer/multiplayer_session.gd | **v3**: UPnP reachability + candidate-address connect ladder + Discord admission (see below). Listen-server co-presence (ENet host/join, avatars, host clock) + Phase 3–4 design share/ghost-merge + live graph/props sync (`Design` child) + Phase 5 session text chat (`Chat` child; Enter compose, proximity bubbles, mute, Discord invite deep-link) + Phase 6 hardening (join-code expiry, optional password, trusted-key allowlist, peer/snapshot caps, rate-limit kicks, local `user://mp_telemetry.log`); lobby via Timeline **Multiplayer** chip |
 | AirQualityService | core/weather/air_quality_service.gd | Open-Meteo/CAMS hourly aerosols (pm2_5, pm10, dust, AOD, us_aqi); `air_quality_ready/failed` |
@@ -4540,7 +4562,7 @@ autoload holds the shared logic; `TimeUI` only forwards signals for backward com
 clock. `contribute_to_grid=false` opts out of the grid balance
 (SolarPanelSource does this — SolarUI models solar internally).
 
-- `SolarPanelSource` (solar_calculator.gd, repo root) — PV estimator.
+- `SolarPanelSource` (power_system/sources/solar_calculator.gd) — PV estimator.
 - `WindTurbineSource` + `WindTurbineConfig` — P=½ρACpv³ (Manwell et al.),
   Betz cap 16/27, ISA density, log-law shear. Default: default_wind_1kw.tres.
 - `HydroSource` + `HydroConfig` — P=ρgQh_netη (Paish 2002), Darcy–Weisbach via
@@ -4560,14 +4582,14 @@ clock. `contribute_to_grid=false` opts out of the grid balance
 SolarUI sums contributing sources via `_poll_aux_generation()` into
 `current_aux_generation_kw` → battery balance + HUD net.
 
-## System graph (system_graph/ + system_graph_v2/) — **core gameplay surface**
+## System graph (system_graph/ + system_graph/canvas_v2/) — **core gameplay surface**
 
-**Vision:** `SYSTEMS_GRAPH_VISION.md` (SoI, Planetary Basic Income catchments, ISRU
+**Vision:** `docs/SYSTEMS_GRAPH_VISION.md` (SoI, Planetary Basic Income catchments, ISRU
 catalog, TouchDesigner nested canvases, sim↔real calibration). ROADMAP Pillar 9 +
 Phase 8.
 
 One view: `system_graph/system_graph_view.gd` (G toggles), using the V2 canvas
-`system_graph_v2/graph_canvas_v2.gd` (extends graph_canvas.gd). Type
+`system_graph/canvas_v2/graph_canvas_v2.gd` (extends graph_canvas.gd). Type
 registries in graph_canvas.gd: PORT_COLORS / NODE_BORDER_COLORS / NODE_SIZES /
 HANDLES / `_type_title`. Library presets: `system_graph/data/component_presets.gd`
 (types: panel, wind, hydro, battery, smartbattery, controller, appliance,
@@ -4632,7 +4654,7 @@ HAEntityLinker (`system_graph/ha_entity_linker.gd`) gated by
 `SimMode.should_apply_live_data()`. Historical replay:
 `core/csv_history_player.gd` (HA CSV exports). Real-load measurement:
 `system_graph/load_calibrator.gd`. Automation push: AutomationEngine YAML +
-`system_graph/ha_automation_pusher.gd`. NOTE: ROADMAP.md Pillar 5 prescribes a
+`system_graph/ha_automation_pusher.gd`. NOTE: docs/ROADMAP.md Pillar 5 prescribes a
 HACS-integration architecture instead — that is a migration decision, do not
 rebuild the bridge without an explicit call.
 
@@ -4717,7 +4739,7 @@ includes solar-physics checks (NOCT formula, gamma derating, SPA horizon, cos_in
 
 ## Night sky (stars)
 
-`star_system.gd` (root, node "StarSystem" under Main) + the star block of
+`core/astronomy/star_system.gd` (node "StarSystem" under Main) + the star block of
 `sky.gdshader` + `core/astronomy/star_sky_math.gd` (`StarSkyMath`, pure static,
 selftest `core/astronomy/star_sky_selftest.gd`). **Orientation is COMPUTED,
 never calibrated:** every sky tick StarSystem pushes the local sidereal time
@@ -5046,8 +5068,8 @@ to metres (×0.0254) only in the mesh builder.
   `summary`, `handoff`, …) are dropped. `name`/`designName` → `design_name`.
   A port that starts modelling a key takes it over just by emitting it.
   Parity status, the five shipped JS presets (`presets/ll_*.json`) and the
-  fixtures: `LINKAGE_PARITY.md`.
-- **Coverings, raised floor, shade tarps (A4, LINKAGE_PARITY.md).**
+  fixtures: `plans/LINKAGE_PARITY.md`.
+- **Coverings, raised floor, shade tarps (A4, plans/LINKAGE_PARITY.md).**
   - `LinkageEnclosure` is the ONE aggregator for `part_data`, the builder
     and the BOM: deck, then coverings, then tarps (the web's order; the
     walls can start on the deck, the tarps sit above the wall bands).
@@ -5061,7 +5083,7 @@ to metres (×0.0254) only in the mesh builder.
     `Callable.call(...)` returns Variant: `var x := some_callable.call()`
     fails to compile, and every script that depends on that file then fails
     with it. Call the static function directly.
-- **Radial array + sequential fold (A3, LINKAGE_PARITY.md).**
+- **Radial array + sequential fold (A3, plans/LINKAGE_PARITY.md).**
   - `LinkageRadialArray` is the JS radial-array.js. The plan is measured on
     the DEPLOYED pose and cached per design. `apply(plan, geo, slot_geo)`
     copies every part list into each visible slot, IN SLOT ORDER, so part
@@ -5085,7 +5107,7 @@ to metres (×0.0254) only in the mesh builder.
   `washers`; `LinkageStructureBuilder.set_part_state(key, {visible, offset})`
   hides or moves any drawn part by key (washers are drawn now too). Keys are
   pinned == JS per preset (`_test_part_keys_parity`).
-- `core/linkage/build/` (LINKAGE_PARITY.md A2): `LinkageBuildSteps` (port of
+- `core/linkage/build/` (plans/LINKAGE_PARITY.md A2): `LinkageBuildSteps` (port of
   build-steps.js — steps are camelCase CONFIG data in `extra["buildSteps"]`,
   `p.get_build_steps()/set_build_steps()`; `generate_for(p)` == the web's
   Auto-generate), `LinkageBeamHoles` (getBeamBoltIntersections + the drill
@@ -5174,7 +5196,7 @@ to metres (×0.0254) only in the mesh builder.
   `scenes/ui/linkage_steps_panel.gd` (the 🎬 Steps dock under the 3D view:
   list with groups as "× N", transport, scrub, speed, repeats, Follow,
   title / notes / duration, move / duplicate / delete, Auto-generate, Save
-  to design, NPC animation…). See LINKAGE_PARITY.md "Step player". ⚠ The
+  to design, NPC animation…). See plans/LINKAGE_PARITY.md "Step player". ⚠ The
   Lab offsets its builder INSIDE the holder (turntable centring), so the
   player copies `builder.transform` every frame; a sibling that assumed the
   holder frame framed every step on empty ground. ⚠ Hardware the builder
@@ -5421,7 +5443,7 @@ offers "Open in Linkage Lab" so the web design becomes live-foldable natively.
 **Deferred:** kinematic RCP continuation solver; PDF export (GDScript has no
 jsPDF equivalent — the guide exports CSV and JSON and says so in a footnote).
 
-## Packing data model (core/packing/ — PACKING_PLAN.md, Phase 0 landed)
+## Packing data model (core/packing/ — plans/PACKING_PLAN.md, Phase 0 landed)
 
 Every physical thing gets a **packed ("shipping") spec** — dims (m, displayed
 ft/in), first-class `mass_kg` (-1.0 = unknown; NAN doesn't survive JSON), form,
@@ -5445,7 +5467,7 @@ stats refresh runs per fold tick. The modal's fold-slider FLOOR now tracks
 through each other), with the Min Fold Angle Override spin as the escape
 hatch; "Packed Size"/"Packed Wt" stat rows show the result. The BETTER fix —
 collision-aware min fold via OBB sweep over solved beams+brackets — is
-planned, not built (PACKING_PLAN.md Phase 0.5). **Display:** library item
+planned, not built (plans/PACKING_PLAN.md Phase 0.5). **Display:** library item
 buttons carry a "Packs to" tooltip; the inspector adds a generic "Packed
 (shipping)" section after the per-type match (`_build_packed_section` —
 short ft/in form via `format_dims_short`, the narrow value column clips the
@@ -5575,7 +5597,7 @@ the flat "assemble" task splits into one per hardware assembly, priced at
 schedule onto NpcChoreBoard (depends_on/min_workers carried as groundwork
 for a dependency-aware board). Surfaced LIVE in the Linkage Lab stats
 block ("🔧 Fabrication …", cached on part counts — recommend_crew sweeps
-crew sizes, not per fold tick). Full vision: PACKING_PLAN.md Phase 6.5.
+crew sizes, not per fold tick). Full vision: plans/PACKING_PLAN.md Phase 6.5.
 **Deliveries stow INSIDE the container (Round 3).**
 `UnpackScenario.stow_plan(scenario_id)` resolves each unit to a PackedSpec
 (`LinkageStructureBuilder.packed_spec_for` for `linkage_default`, else
@@ -5626,7 +5648,7 @@ every `--capture` run; festival mode switches it on for real.
 Individual simulated people (10–50) driven by needs, wayfinding to
 player-tagged spaces; consumption emerges from activity and flows through the
 graph, and morale decides whether the community holds together. Design doc:
-`POPULATION_PLAN.md`. **Tagging:** `SpaceTypes`
+`plans/POPULATION_PLAN.md`. **Tagging:** `SpaceTypes`
 (restroom/kitchen/sleep/water_point/shower + enrichment types fire_circle/
 movement/quiet/workshop_social, with `COLORS`/`ICONS` for markers) +
 `SpaceRegistry` (per-map `user://maps/npc_spaces_*.json`; targets = prop id /
@@ -5683,7 +5705,7 @@ brutal, not merely additive), floored at 0.15; `is_unsafe` skips the chore
 entirely (work backs up); exposure also drains morale. Indoor work is immune;
 sheltered gets `SHELTER_RELIEF`. Weather is sampled per tick from
 `WeatherService` and degrades to "comfortable" when uncovered/offline.
-**Navigation** (`NpcNavGrid` + `NpcNavQuery`, POPULATION_PLAN.md Tier 3):
+**Navigation** (`NpcNavGrid` + `NpcNavQuery`, plans/POPULATION_PLAN.md Tier 3):
 person-scale walkable grid (0.75 m cells) over the bounding box of the tagged
 spaces + habitat, padded — not the whole SoI. The bake is **chunked across
 ticks** (`bake_step`); `ConduitAStar`'s header records that per-cell ground
@@ -5951,7 +5973,7 @@ broke the later starvation phase.
 bodies behind one API — the rigged Mixamo character up close, the original
 head/torso/legs primitive far away and whenever the FBX assets are missing
 (`Imported Models/NPC/` is **gitignored**, so the fallback is the normal state
-on a fresh clone; see ASSETS.md). `NpcPopulationHost` hands the rig to the
+on a fresh clone; see docs/ASSETS.md). `NpcPopulationHost` hands the rig to the
 `MAX_RIGGED` (12) nearest agents within `RIG_DIST_M` (45 m), with hysteresis so
 walking the boundary doesn't thrash the swap. Everything the Mixamo exporter
 gets wrong for this use is corrected in `NpcRig` at load, and each correction is
@@ -6253,7 +6275,7 @@ unconditionally once `_pick()` named ANY need. `_pick` returns `"hygiene"` at
 0.7 with no satisfiability check, so on a map with no shower tagged the agent
 re-picked it forever and tiers 2.5/3/4 became unreachable — **every agent
 locked between ~5 and ~13 sim-hours and never worked again.** Tier 1 absorbs by
-design (`POPULATION_PLAN.md:248`); tier 2 inherited it by accident. Now only
+design (`plans/POPULATION_PLAN.md:248`); tier 2 inherited it by accident. Now only
 `CRITICAL_NEEDS` absorb, and a blocked comfort need falls through to routine
 and chores. It hid three ways: hygiene is not in `NpcMorale.CRITICAL_NEEDS` so
 morale sat at 0.75 with no warning; `status_line()` reported `_worst_need()`
@@ -6810,7 +6832,7 @@ Goal: a private community on one Discord server drops into a shared world with
 Discord handling identity, discovery and voice. **Zero always-on servers of
 ours.** Full plan + remaining phases:
 `~/.claude/plans/i-want-to-do-flickering-torvalds.md`. One-time Discord
-developer-portal setup: `LOCAL_CONFIG.md`.
+developer-portal setup: `docs/LOCAL_CONFIG.md`.
 
 **The structural rule:** every security-relevant decision lives in a PURE
 `class_name` file with no HTTP (`discord_pkce`, `gate_rules`, `community_file`,
@@ -7963,7 +7985,7 @@ selftest` (catalog / kind / ports / strip pins) and the micro-Pelton phase of
   spacing scales, and `LAYER_*` CanvasLayer bands. Migrating files keep their
   local const names but redirect values (`const C_BG := UITheme.C_BG`).
   Semantic registries (graph PORT_COLORS etc.) stay local. Multi-phase UX/veg
-  improvement plan: `UX_IMPROVEMENT_PLAN.md`.
+  improvement plan: `plans/UX_IMPROVEMENT_PLAN.md`.
 - Physics: cite formula sources in comments; never invent constants; every
   physics change adds checks to source_physics_selftest.gd.
 - Node-name lookups are load-bearing (e.g. "SystemGraphView", "SolarUI",
@@ -8793,7 +8815,7 @@ inlet, the pond outlet, the yurt clearing), exports a KML, and **Terrain
 options → Points of interest → Import KML / KMZ…** puts a pin at every
 placemark's exact coordinates so nothing has to be guessed at in the world.
 - **`KmlPoiParser`** (`core/poi/kml_poi_parser.gd`, pure — NOT the older
-  `KmlParser` in `location_picker/`, which is the regex zone parser for the
+  `KmlParser` in `scenes/ui/location_picker/`, which is the regex zone parser for the
   world map): Godot `XMLParser` over Placemarks with a Point / LineString /
   Polygon (outer ring only; MultiGeometry splits into "name (2)" …), name,
   description (HTML stripped), folder, and the colour the `styleUrl` resolves
@@ -8847,18 +8869,18 @@ List re-verified + pruned 2026-08-11: both boot-time "Node not found" errors
 are FIXED (`ToolManager` under Player → `get_node_or_null` + self-heal;
 HAConnectionUI button paths now include `/ButtonContainer`). Four long-listed
 entries were STALE and are dropped: duplicate device id `ibc_glow_lights`
-(second instance renamed `ibc_glow_lights_2`, see ARCHITECTURE.md), the 4×
+(second instance renamed `ibc_glow_lights_2`, see docs/ARCHITECTURE.md), the 4×
 fire-extinguisher `!is_inside_tree()` (main.gd adds children before setting
 global_position), the missing `camp_scatter_bake.tres` (the only load site is
 guarded by `ResourceLoader.exists()`), and "target vector can't be zero" from
 road/camp scatter (every look_at/Basis site now guards zero-length).
 The clean-boot claim for the built-in maps no longer holds. A boot log on
 2026-10-12 showed two C++ errors:
-- "target vector can't be zero" with a backtrace into `road/road.gd:190`
+- "target vector can't be zero" with a backtrace into `scenes/gameplay/road/road.gd:190`
   (`curve.get_baked_length()`, i.e. Curve3D baking its up vectors over
   coincident points of the SOAK scene's road, not a script look_at).
 - `curve.cpp` `!p_data.has("tilts")` from a Curve3D in the Mars /
-  `main.tscn` `string_lights.tscn` instance.
+  `mars_main_legacy.tscn` `string_lights.tscn` instance.
 
 Both belong to the built-in scenes, which are no longer harness targets.
 Neither is a script error.

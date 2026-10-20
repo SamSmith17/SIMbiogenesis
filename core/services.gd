@@ -17,7 +17,7 @@ extends Node
 ## get_node_or_null("UILayer/SystemGraphView"). This decouples code from the
 ## Main scene's node names (renaming a node, or a mod swapping in its own view,
 ## no longer silently breaks 48 files) and is the intended replacement for the
-## remaining node-name lookups tracked in ARCHITECTURE.md (debt #1).
+## remaining node-name lookups tracked in docs/ARCHITECTURE.md (debt #1).
 ##
 ## Migration is incremental and non-breaking: unregistered keys simply return
 ## null, exactly like the get_node_or_null() calls they replace, so old lookups

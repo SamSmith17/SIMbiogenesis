@@ -16,24 +16,24 @@ If you need to share structure with collaborators, use the examples in [`config-
 
 | File (under `user://`) | Purpose |
 |------------------------|---------|
-| `ha_connection.cfg` | Home Assistant WebSocket URL, token, subscribed entities (Settings → **Home Assistant** tab; legacy [`ha_connection_ui.gd`](scenes/ui/ha_connection_ui.gd)) |
-| `uisp_settings.cfg` | UISP URL and API token ([`uisp/uisp_connection_ui.gd`](uisp/uisp_connection_ui.gd)) |
-| `terrain_config.cfg` | OpenTopography API key — `[opentopography] api_key=` (or the `OPENTOPOGRAPHY_API_KEY` env var) — for 30 m global DEM, 10 m USGS DEM in the US, and (academic-tier OpenTopography accounts only — see [`core/terrain/elevation_service.gd`](core/terrain/elevation_service.gd)) 1 m USGS lidar; same key, no separate one needed. Set it from **Settings → Keys** rather than hand-editing this file. Mapillary access token ([`core/terrain/mapillary_service.gd`](core/terrain/mapillary_service.gd)); Gemini image API key for the AI spawn-area "hero patch" — `[gemini] api_key=` / `ai_hero_enabled` / `ai_hero_half_extent_m` / `ai_image_size` (or the `GEMINI_API_KEY` env var), see [`core/terrain/ai_imagery_service.gd`](core/terrain/ai_imagery_service.gd) |
-| `keys_config.cfg` | Copernicus CDS API key ([`core/climate_projection_service.gd`](core/climate_projection_service.gd)) |
-| `weather_gen_engine.cfg` | Weather generation engine prefs ([`core/weather_service.gd`](core/weather_service.gd)) |
-| `sim_settings.cfg` | Timeline settings panel persistence ([`scenes/ui/sim_settings_controller.gd`](scenes/ui/sim_settings_controller.gd)) |
-| `ui_prefs.cfg` | Timeline UI units / track layout ([`scenes/ui/timeline_ui.gd`](scenes/ui/timeline_ui.gd)) |
-| `solar_ui_ha_entities.cfg` | Solar UI HA entity bindings ([`scenes/ui/solar_ui.gd`](scenes/ui/solar_ui.gd)) |
-| `solar_panel_config.cfg` | Solar panel / battery config ([`scenes/ui/solar_ui.gd`](scenes/ui/solar_ui.gd)) |
-| `star_calibration.cfg` | Star LOOK prefs (brightness/twinkle/fade/glow/contrast/trails/lock) + uploaded starmap path ([`star_system.gd`](star_system.gd)). `calibration_version 2` dropped the old RA/Dec/flip/scale/drift keys: orientation is computed and the map's registration is its sidecar JSON, not a setting |
-| `planet_prefs.cfg` | Planet visibility / colors ([`planets.gd`](planets.gd)) |
-| `location_prefs.cfg` | Location prefs ([`main.gd`](main.gd)) |
+| `ha_connection.cfg` | Home Assistant WebSocket URL, token, subscribed entities (Settings → **Home Assistant** tab; legacy [`ha_connection_ui.gd`](../scenes/ui/ha_connection_ui.gd)) |
+| `uisp_settings.cfg` | UISP URL and API token ([`uisp/uisp_connection_ui.gd`](../uisp/uisp_connection_ui.gd)) |
+| `terrain_config.cfg` | OpenTopography API key — `[opentopography] api_key=` (or the `OPENTOPOGRAPHY_API_KEY` env var) — for 30 m global DEM, 10 m USGS DEM in the US, and (academic-tier OpenTopography accounts only — see [`core/terrain/elevation_service.gd`](../core/terrain/elevation_service.gd)) 1 m USGS lidar; same key, no separate one needed. Set it from **Settings → Keys** rather than hand-editing this file. Mapillary access token ([`core/terrain/mapillary_service.gd`](../core/terrain/mapillary_service.gd)); Gemini image API key for the AI spawn-area "hero patch" — `[gemini] api_key=` / `ai_hero_enabled` / `ai_hero_half_extent_m` / `ai_image_size` (or the `GEMINI_API_KEY` env var), see [`core/terrain/ai_imagery_service.gd`](../core/terrain/ai_imagery_service.gd) |
+| `keys_config.cfg` | Copernicus CDS API key ([`core/climate_projection_service.gd`](../core/climate_projection_service.gd)) |
+| `weather_gen_engine.cfg` | Weather generation engine prefs ([`core/weather_service.gd`](../core/weather_service.gd)) |
+| `sim_settings.cfg` | Timeline settings panel persistence ([`scenes/ui/sim_settings_controller.gd`](../scenes/ui/sim_settings_controller.gd)) |
+| `ui_prefs.cfg` | Timeline UI units / track layout ([`scenes/ui/timeline_ui.gd`](../scenes/ui/timeline_ui.gd)) |
+| `solar_ui_ha_entities.cfg` | Solar UI HA entity bindings ([`scenes/ui/solar_ui.gd`](../scenes/ui/solar_ui.gd)) |
+| `solar_panel_config.cfg` | Solar panel / battery config ([`scenes/ui/solar_ui.gd`](../scenes/ui/solar_ui.gd)) |
+| `star_calibration.cfg` | Star LOOK prefs (brightness/twinkle/fade/glow/contrast/trails/lock) + uploaded starmap path ([`star_system.gd`](../core/astronomy/star_system.gd)). `calibration_version 2` dropped the old RA/Dec/flip/scale/drift keys: orientation is computed and the map's registration is its sidecar JSON, not a setting |
+| `planet_prefs.cfg` | Planet visibility / colors ([`planets.gd`](../core/astronomy/planets.gd)) |
+| `location_prefs.cfg` | Location prefs ([`main.gd`](../scenes/maps/main.gd)) |
 | `climate_prefs.cfg` | Climate scenario prefs |
-| `saves/` | Save index and slots ([`core/save_system.gd`](core/save_system.gd)) |
-| `mp_prefs.cfg` | Multiplayer display name + Discord invite URL ([`core/multiplayer/multiplayer_session.gd`](core/multiplayer/multiplayer_session.gd)) |
+| `saves/` | Save index and slots ([`core/save_system.gd`](../core/save_system.gd)) |
+| `mp_prefs.cfg` | Multiplayer display name + Discord invite URL ([`core/multiplayer/multiplayer_session.gd`](../core/multiplayer/multiplayer_session.gd)) |
 | `mp_telemetry.log` | Local multiplayer event log. Secrets are stripped by `MpHardening.redact` before anything is written — **never bypass `log_event` to write a raw payload** |
-| `discord_auth.cfg` | **Real Discord OAuth refresh token** ([`core/discord/discord_identity.gd`](core/discord/discord_identity.gd)). Delete it to sign out |
-| `discord_config.cfg` | Optional dev override: `[discord] client_id=` ([`core/discord/discord_config.gd`](core/discord/discord_config.gd)) |
+| `discord_auth.cfg` | **Real Discord OAuth refresh token** ([`core/discord/discord_identity.gd`](../core/discord/discord_identity.gd)). Delete it to sign out |
+| `discord_config.cfg` | Optional dev override: `[discord] client_id=` ([`core/discord/discord_config.gd`](../core/discord/discord_config.gd)) |
 | `communities/<guild_id>.json` | Imported community files. **These carry Discord webhook URLs, which are write credentials for that channel — treat one like a server invite** |
 
 ## Discord integration — one-time setup
@@ -85,9 +85,9 @@ To see the absolute path on your machine, run the project once and use **Project
 
 ## Code defaults
 
-- [`ha_websocket_client.gd`](ha_websocket_client.gd) uses placeholder `YOUR_LONG_LIVED_TOKEN` — safe for public repo.
-- [`uisp/uisp_api_client.gd`](uisp/uisp_api_client.gd) uses placeholder `YOUR_API_TOKEN` for `@export var api_token`. The in-game UI saves real values to `user://uisp_settings.cfg`. Before pushing to GitHub, confirm no scene or resource overrides embed a real token.
+- [`ha_websocket_client.gd`](../power_system/ha/ha_websocket_client.gd) uses placeholder `YOUR_LONG_LIVED_TOKEN` — safe for public repo.
+- [`uisp/uisp_api_client.gd`](../uisp/uisp_api_client.gd) uses placeholder `YOUR_API_TOKEN` for `@export var api_token`. The in-game UI saves real values to `user://uisp_settings.cfg`. Before pushing to GitHub, confirm no scene or resource overrides embed a real token.
 
 ## `.gitignore`
 
-Accidental copies of the above `*.cfg` files anywhere under the repo are ignored. Bespoke SOAK/Mars map scenes, local MapDefinition `.tres`, HA CSV exports, and the `build/` folder are also ignored. See [`.gitignore`](.gitignore).
+Accidental copies of the above `*.cfg` files anywhere under the repo are ignored. Bespoke SOAK/Mars map scenes, local MapDefinition `.tres`, HA CSV exports, and the `build/` folder are also ignored. See [`.gitignore`](../.gitignore).

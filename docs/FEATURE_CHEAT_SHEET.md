@@ -215,7 +215,7 @@ afterwards — which is why an export looked like "the game just starts flying" 
 the orphaned `_on_render_clim_pressed` bake handler was removed.
 
 **📹 📷 ⏲ / projection canvas (I)** — only `soak_festival_2026.tscn` and the legacy
-`main.tscn` author a `UILayer/ProjectionCanvas`, so on Mars and every generated
+`mars_main_legacy.tscn` author a `UILayer/ProjectionCanvas`, so on Mars and every generated
 location map these silently did nothing. `main.ensure_projection_canvas()` now
 instances it on demand (lazily — it owns an always-updating SubViewport).
 

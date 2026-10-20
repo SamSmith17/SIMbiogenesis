@@ -5,7 +5,7 @@ extends SceneTree
 
 const ServicesScript := preload("res://core/services.gd")
 
-## The convention guard (ARCHITECTURE.md debt #1). Every scene-node lookup of
+## The convention guard (docs/ARCHITECTURE.md debt #1). Every scene-node lookup of
 ## the graph view goes through ServiceLocator.graph(); the August 2026 sweep
 ## regressed to 28 hardcoded paths in 20 files because nothing checked. This
 ## walks the repo's .gd files and FAILS on the literal anywhere outside the

@@ -151,7 +151,7 @@ const SOURCES := {
 	# reads acceptably at silhouette distance.
 	#
 	# To enable: download the FBX to Imported Models/NPC/, uncomment, and add
-	# it to the ASSETS.md table. The 4th column FORCES the role — see
+	# it to the docs/ASSETS.md table. The 4th column FORCES the role — see
 	# ROLE_CARRY for why measuring a lift is actively harmful.
 	# "Walking With Box.fbx": [CLIP_CARRY, true, "", ROLE_CARRY],
 	# "Idle With Box.fbx": [CLIP_CARRY_IDLE, true, "", ROLE_CARRY],

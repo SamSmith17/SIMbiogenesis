@@ -7,7 +7,7 @@ extends RefCounted
 ## application's "Public Client" toggle is enabled in the developer portal, so
 ## the whole sign-in flow fits in GDScript with nothing secret shipped in the
 ## binary. Without that toggle every token exchange returns 401 — see
-## LOCAL_CONFIG.md for the one-time portal checklist.
+## docs/LOCAL_CONFIG.md for the one-time portal checklist.
 ##
 ## Pure and deterministic apart from `mint()`; `challenge_for()` is pinned
 ## against the RFC 7636 Appendix B vector in discord_selftest.gd because a

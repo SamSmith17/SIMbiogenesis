@@ -8135,9 +8135,9 @@ func _maybe_opentopo_hint() -> void:
 		return
 	if es.has_method("is_openmeteo_daily_exhausted") and es.is_openmeteo_daily_exhausted():
 		_notify_options_status(
-			"Open-Meteo elevation quota used up today — add OpenTopography key (see LOCAL_CONFIG.md) or reload tomorrow",
+			"Open-Meteo elevation quota used up today — add OpenTopography key (see docs/LOCAL_CONFIG.md) or reload tomorrow",
 			"warn")
-	print("TerrainLoader: add an OpenTopography API key to user://terrain_config.cfg for 30 m / 10 m DEM (see LOCAL_CONFIG.md)")
+	print("TerrainLoader: add an OpenTopography API key to user://terrain_config.cfg for 30 m / 10 m DEM (see docs/LOCAL_CONFIG.md)")
 
 
 func _setup_terrain_options_ui() -> void:

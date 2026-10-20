@@ -30,7 +30,7 @@ even while old code is migrated incrementally.
 | **Services (autoloads)** | Global, always-on singletons that own state or talk to the outside world. The de-facto public API other code depends on. | `TimeDirector`/`SimMode`, `SaveSystem`, `WeatherService`, `ElevationService`/`ImageryService`/`AiImageryService`, `DeviceRegistry`, `MapContext`, `MultiplayerSession` (37 total — see `project.godot [autoload]`) |
 | **Core sim** | The simulation surfaces. Heavy, central, currently monolithic. | `system_graph/` (the 2D systems graph = core gameplay), `power_system/`, `core/` subsystems, `main.gd` (world/env/save orchestration) |
 | **World & gameplay** | Embodied 3D twin, player, props, vehicles. | `gameplay/`, `scenes/gameplay/`, `core/terrain/`, `vegetation/`, `core/placed_models/` |
-| **UI / views** | Screens and panels under the Main `UILayer` (CanvasLayer). | `scenes/ui/`, `system_graph/*_view.gd`, `location_picker/` |
+| **UI / views** | Screens and panels under the Main `UILayer` (CanvasLayer). | `scenes/ui/` (incl. `scenes/ui/location_picker/`), `system_graph/*_view.gd` |
 | **Settlement mode** | The second play mode: full-screen camera on Main, work dock, HUD, space overlay (see CLAUDE.md "Settlement mode"). | `scenes/settlement/` (`settlement_view.gd`, `settlement_camera.gd`, `settlement_hud.gd`, `work_dock.gd`, `space_overlay.gd`) |
 | **Feature subsystems** | Self-contained capabilities, each in its own `core/` dir with a selftest. This is the pattern to copy. | `core/conduits/`, `core/machines/`, `core/scad/`, `core/linkage/`, `core/esim/`, `core/multiplayer/`, `core/report/`, `core/perf/` |
 
@@ -171,12 +171,15 @@ selftests green.
    `.tscn` / `.tres` references are rewritten — do not `git mv` code blindly.
    *Partial (2026-09-14):* `core/astronomy/` now exists and holds the star-field
    math (`StarSkyMath` + selftest) that `star_system.gd`, `planets.gd`,
-   `CelestialClock` and `LunarPosition` all delegate to; the root scripts
-   themselves stay put by decision (4 scenes reference them).
-4. **Stalled v1/v2 split** — `system_graph_v2/graph_canvas_v2.gd extends
+   `CelestialClock` and `LunarPosition` all delegate to.
+   *Done (2026-10-20):* the root scripts moved too — `main.gd` → `scenes/maps/`,
+   `sky.gdshader` → `core/env/`, `planets.gd` / `star_system.gd` →
+   `core/astronomy/`, the HA client + switch → `power_system/ha/`. Check moves
+   with `python tools/checks/res_path_audit.py`.
+4. **Stalled v1/v2 split** — `system_graph/canvas_v2/graph_canvas_v2.gd extends
    system_graph/graph_canvas.gd`. Decide: finish the migration or fold v2 back.
 5. **Compat shims / dead ends** — `SimMode`→`TimeDirector`, the hidden `TimeUI`
-   shim, `legacy/`. Mark with deprecation headers; remove once the registry
+   shim. Mark with deprecation headers; remove once the registry
    migration (debt #1) is far enough along.
    *Resolved:* the duplicate `ibc_glow_lights` device id is **already fixed** —
    `soak_festival_2026.tscn` carries `ibc_glow_lights` and `ibc_glow_lights_2`,

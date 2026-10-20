@@ -14,10 +14,10 @@ the current engine and APIs until it is un-parked.
 1. Delete its `.gdignore`.
 2. `git mv parked/<name> <name>` **from inside the Godot editor** so `res://`
    paths, `.uid` files, and `.tscn`/`.tres` references are rewritten
-   (see `ARCHITECTURE.md` debt #3 — do not `git mv` code blindly from a shell).
+   (see `docs/ARCHITECTURE.md` debt #3 — do not `git mv` code blindly from a shell).
 3. Run `--headless --path . --import`, then boot both maps and diff the error
    output against the known pre-existing set in `CLAUDE.md`.
-4. Wire it to an actual entry point, and add it to `ARCHITECTURE.md`'s layer
+4. Wire it to an actual entry point, and add it to `docs/ARCHITECTURE.md`'s layer
    table so the next audit does not find it orphaned again.
 
 ## Currently parked

@@ -15,7 +15,7 @@ Thumbs.db
 desktop.ini
 
 # If someone mistakenly copies runtime configs into the project tree, do not track them.
-# Real saves live under user:// (see LOCAL_CONFIG.md).
+# Real saves live under user:// (see docs/LOCAL_CONFIG.md).
 **/ha_connection.cfg
 **/uisp_settings.cfg
 **/solar_ui_ha_entities.cfg

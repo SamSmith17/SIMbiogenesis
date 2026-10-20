@@ -1255,7 +1255,7 @@ func _save_game() -> SaveGameService:
 
 
 ## A trusted scene path can still be an unplayable OFFER — e.g. a partially
-## restored local copy where the outer .tscn is present (see ASSETS.md's
+## restored local copy where the outer .tscn is present (see docs/ASSETS.md's
 ## restore workflow) but the asset pack behind it isn't. Checked in addition to
 ## (not instead of) is_trusted_scene_path(), which stays a cheap allow-list
 ## check used elsewhere for save-routing trust.

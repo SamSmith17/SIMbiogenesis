@@ -10,7 +10,7 @@ extends Node
 ## Street View is NOT an alternative source (its ToS forbids this use).
 ##
 ## Token: `user://terrain_config.cfg`  [mapillary] access_token=MLY|...
-## (user-local, gitignored — LOCAL_CONFIG.md policy; never log it). Without a
+## (user-local, gitignored — docs/LOCAL_CONFIG.md policy; never log it). Without a
 ## token every request fails fast with a friendly reason.
 ##
 ## HTTP + cache + deferred-signal pattern mirrors imagery_service.gd: one

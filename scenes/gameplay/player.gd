@@ -61,7 +61,7 @@ var anim_jog_name : String = ""
 const IDLE_ANIM_PATH := "res://Player Character/Breathing Idle (no skin).fbx"
 const JOG_ANIM_PATH := "res://Player Character/Jogging (no skin).fbx"
 
-# Rigged body mesh (optional — see ASSETS.md, gitignored on the public repo).
+# Rigged body mesh (optional — see docs/ASSETS.md, gitignored on the public repo).
 const CHARACTER_FBX_PATH := "res://Player Character/Walking (in place).fbx"
 const CHARACTER_FBX_TRANSFORM := Transform3D(
 	Basis(Vector3(-0.5, 0.0, 0.0), Vector3(0.0, 0.5, 0.0), Vector3(0.0, 0.0, -0.5)),

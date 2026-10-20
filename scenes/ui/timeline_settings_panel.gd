@@ -3563,7 +3563,7 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	mc.step = 0.05
 	mc.custom_minimum_size = Vector2(160, 0)
 	mc.value = NpcDisplayPrefs.mocap_spice()
-	mc.tooltip_text = "Simplified style: how often a nearby stick figure breaks into a real motion-captured clip (FUCK YES, a cheer, a dance break, a story, a stretch…) before easing back. 0 = never (procedural only), middle = as designed, right = twice as often. Clips live in Imported Models/NPC/mocap/<moment>/ (see ASSETS.md); a moment with none stays procedural."
+	mc.tooltip_text = "Simplified style: how often a nearby stick figure breaks into a real motion-captured clip (FUCK YES, a cheer, a dance break, a story, a stretch…) before easing back. 0 = never (procedural only), middle = as designed, right = twice as often. Clips live in Imported Models/NPC/mocap/<moment>/ (see docs/ASSETS.md); a moment with none stays procedural."
 	var mc_val := Label.new()
 	mc_val.custom_minimum_size = Vector2(60, 0)
 	mc_val.add_theme_color_override("font_color", C_TEXT_S)
@@ -3576,7 +3576,7 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	v.add_child(mc_row)
 	if not NpcRig.available():
 		var miss := Label.new()
-		miss.text = "The humanoid character pack is not installed (see ASSETS.md) — simplified is in use regardless."
+		miss.text = "The humanoid character pack is not installed (see docs/ASSETS.md) — simplified is in use regardless."
 		miss.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		miss.custom_minimum_size = Vector2(420, 0)
 		miss.add_theme_color_override("font_color", UITheme.C_WARN)
