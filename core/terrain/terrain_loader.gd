@@ -12228,6 +12228,8 @@ func delete_prop_by_id(prop_id: String) -> bool:
 	var rec := _placed_prop_layer.find_by_id(prop_id)
 	if str(rec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID and _main != null:
 		PlacedPropService.remove_linkage_graph(_main, prop_id)
+	elif str(rec.get("model_id", "")) == PalletRackBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_pallet_rack_graph(_main, prop_id)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
 	# 2D/3D twin consistency: a graph node bound to this prop is the same object

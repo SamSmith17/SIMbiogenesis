@@ -8,18 +8,22 @@ func _init() -> void:
 	id = "pallet_rack"
 	title = "Pallet rack builder"
 	chapter = "Build"
-	summary = "Design warehouse racking — bays, levels, stepped and U layouts — and place it."
+	summary = "Design pallet-rack buildings — decks, walls, doors, stairs, railings and solar slopes — and place them."
 	how = PackedStringArray(["Press the pallet-rack key, or Library → Structures → Pallet Rack",
 		"Change bays, columns, levels and beams; click parts in the preview to edit them",
+		"Add to the structure: pick Door, Window, Stairs, Solar slope, Greenhouse, Railing or Courtyard, then click where it goes",
+		"Load a built-in design or save your own; save single elements as presets",
 		"Place in world; click a placed rack → Edit rack… to change it in place"])
 	action = "toggle_pallet_rack"
 	world = "mtvernon"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("A parametric racking designer with real upright, beam and decking sizes. " +
-		"Layouts can be stepped or U-shaped, single parts can be picked and changed in " +
-		"the preview, and the finished rack is placed as one prop with collision, a " +
-		"packed shipping size and an NPC space tag.")
+		"Doors and windows cut their own holes in the plywood walls, stairs climb to any " +
+		"deck, railings follow every open deck edge, and a sloped array of solar panels " +
+		"or greenhouse glazing can lean on any face, bay by bay. Designs and single " +
+		"elements save to a library. The finished rack is placed as one prop with " +
+		"collision, and its solar panels join the system graph.")
 
 
 func run(ctx: TourContext) -> void:
@@ -45,6 +49,13 @@ func run(ctx: TourContext) -> void:
 		sb.value = minf(sb.value + 1.0, sb.max_value)
 		ctx.caption("…and another level", 2.0)
 		await ctx.wait(2.2)
+	if ui.has_method("load_design"):
+		ui.call("load_design", "two_storey")
+		ctx.caption("Doors, stairs and railings", 2.5)
+		await ctx.wait(2.8)
+		ui.call("load_design", "solar_workshop")
+		ctx.caption("A solar slope with a greenhouse bay", 2.5)
+		await ctx.wait(2.5)
 	await ctx.hero()
 	await ctx.wait(1.0)
 

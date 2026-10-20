@@ -661,7 +661,21 @@ Godot.exe.exe --headless --path . --quit-after 120
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/soak_festival_2026.tscn
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial.tscn
 
-# Terrain pipeline self-test (offline, deterministic — geo math + mesh builder):
+# Map extents (offline — TerrainExtents side/half + clamps + overlay cap, the
+# stale-result key test against the REAL elevation/imagery key formats, the
+# elevation source ladder, tiling + stitch == one request, retry delay;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/terrain/terrain_extents_selftest.gd
+# Terrain options → Apply & reload end to end (sandbox; one Overpass request):
+# the new size in the loader, world record, snapshot and site meta, the SAME
+# world relaunched, the resumed player on the ground:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/terrain_extents_apply_check.gd -Timeout 600
+# Pallet-rack design elements on a real world (sandbox): every built-in design
+# built + shot, the Door / Window / Stairs / Railing tools clicked through the
+# modal's own click path, a slope bay picked on its own, close-ups:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_elements_shots.gd -Label <dir>
+# Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
+# also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
 # Terrain seam compose diagnostic (offline, synthetic mismatch grid):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_seam_diag_run.gd
@@ -2358,6 +2372,44 @@ deleting the `.godot/imported/*.md5` alone does nothing. The plugin is active in
 headless imports (it prints "SketchUp Import Fix: <name> — N materials").
 Selftest `core/placed_models/import_material_fixer_selftest.gd` (also pins
 ImagerySources).
+
+**Pallet-rack design elements (2026-10-20, `core/terrain/pallet_rack_builder.gd`
++ `scenes/ui/pallet_rack_builder_modal.gd`).** Modelled on the Mars College
+builds. `rack_spec.elements` is ONE list of `{id, type, ...}` records: `door`
+(hinged / double / sliding barn door on a track / open doorway, painted per
+colour), `window`, `stair` (IRC risers ≤ 7.5", 10" treads; "along" a face to a
+landing, or "out"), `lean_to` (a sloped array on any face: solar modules,
+greenhouse glazing, plywood, bare rafters, or "none", per bay via `segments`,
+optional glazed ends), `railing` (one per deck: a rail on every deck-cell edge
+with no same-height deck beside it, minus faces turned off, stretches a wall
+guards and stair landings) and `courtyard` (cut rects in `_layout`'s notch:
+deck cells and the rows strictly inside go). `resolve_element` fills
+`ELEMENT_DEFAULTS` and clamps to the rack; an unknown type is kept, not drawn.
+`ELEMENT_FIELDS` is the inspector's row model (selftest: every key has a
+default). Walls gained a band (`wall_bottom_ft` / `wall_top_ft`, -1 = top) and
+doors / windows cut their holes (`rect_minus`). Rules that carry it:
+- **Faces are named as seen standing in front of the front (-Z) face: left
+  is +X, right is -X** (`_face_frame`, `_wall_faces`, the railing classifier).
+  Before 2026-10-20 the left wall was -X; the modal camera opens on the
+  front-right three-quarter now, and the old naming put "left" on your right.
+- Positions along a face are feet from the face's start (`_face_frame.base`),
+  floors index `_levels` (template levels then the roof), -1 = ground.
+- Pick ids: `el:<id>` (doors, windows, stairs, courtyards), `el:<id>:<bay>`
+  (one ORIENTED box per slope bay: `obb_xf` / `obb_half`, tested by
+  `ray_hits_component`), `el:<id>:r<k>` (railing runs). The modal groups them
+  by `el_id`; a slope bay is selectable alone and Del on it sets that bay to
+  "none".
+- `solar_summary(spec)` uses the SAME `_pv_layout` as the geometry; placing
+  or applying a rack seeds a graph array tagged `rack_<prop_id>`
+  (`PlacedPropService.seed_pallet_rack_graph`, removed on delete).
+- Modal: "Add to the structure" tools (`TOOL_PRESETS`) arm a placement; the
+  cyan ghost is `element_components(spec, candidate)`; a door/window on a wall
+  that is off turns it on. Undo snapshots the WHOLE spec now. Designs:
+  `design_presets()` (Solar workshop, Two storey with stairs, Stepped
+  amphitheatre, Courtyard compound) + the player's library
+  (`user://pallet_rack_library.json`, designs and element presets).
+- Known, not from this work: plywood walls in the studio show bright
+  diagonal streaks (seen on a bare wall too).
 
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`

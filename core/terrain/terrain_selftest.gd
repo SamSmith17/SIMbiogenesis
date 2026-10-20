@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_test_sculpt_ops_v2()
 	_test_pallet_rack()
 	_test_pallet_rack_editor()
+	_test_pallet_rack_elements()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -531,7 +532,213 @@ func _test_pallet_rack_editor() -> void:
 		# _ready is deferred under --script; call it directly to build the UI.
 		modal.call("_ready")
 		_check("editor modal builds ui", modal.get_child_count() > 0)
+		# Design elements through the modal's own paths: a loaded design, a
+		# placed door, the inspector card for it, undo.
+		_check("modal loads a built-in design", bool(modal.call("load_design", "two_storey")))
+		modal.call("_rebuild_preview")
+		var els: Array = (modal.get("_spec") as Dictionary)["elements"]
+		_check("modal design brought its elements", els.size() == 5, "got %d" % els.size())
+		var did := str(modal.call("add_element", {"type": "door", "face": "right", "at_ft": 4.0}))
+		modal.call("_rebuild_preview")
+		_check("modal add_element selects the new door",
+			str(modal.call("_selected_element_id")) == did, str(modal.get("_selection")))
+		var frame: Variant = modal.get("_insp_frame")
+		_check("modal inspector card shows", frame is Control and (frame as Control).visible)
+		var fields: Dictionary = modal.get("_insp_fields")
+		_check("modal inspector has the door's fields", fields.has("width_ft") and fields.has("color"))
+		modal.call("_on_field_changed", "width_ft", 5.0)
+		modal.call("_rebuild_preview")
+		var w := float((modal.call("_element_by_id", did) as Dictionary).get("width_ft", 0.0))
+		_check("modal field edit lands on the element", _approx(w, 5.0, 1e-4), "got %f" % w)
+		modal.call("_undo")
+		modal.call("_rebuild_preview")
+		_check("modal undo takes the edit back", _approx(float((modal.call("_element_by_id", did)
+			as Dictionary).get("width_ft", 0.0)), 3.0, 1e-4))
 		modal.free()
+
+
+func _test_pallet_rack_elements() -> void:
+	var P := PalletRackBuilder
+	# Every inspector field names a real default of its type.
+	var fields_ok := true
+	for t in P.ELEMENT_FIELDS.keys():
+		for f in P.ELEMENT_FIELDS[t]:
+			if not (P.ELEMENT_DEFAULTS[t] as Dictionary).has(str(f["key"])):
+				fields_ok = false
+				print("  missing default %s.%s" % [t, f["key"]])
+	_check("elements: every field has a default", fields_ok)
+	var tools_ok := true
+	for tp in P.TOOL_PRESETS:
+		if not P.ELEMENT_DEFAULTS.has(str(tp["element"]["type"])):
+			tools_ok = false
+	_check("elements: every tool preset is a known type", tools_ok)
+
+	# rect_minus conserves area and leaves the hole empty.
+	var r := Rect2(0, 0, 4, 3)
+	var hole := Rect2(1, 0, 1, 2)
+	var pieces := P.rect_minus(r, [hole])
+	var area := 0.0
+	var overlap := false
+	for pc in pieces:
+		area += (pc as Rect2).get_area()
+		if (pc as Rect2).intersects(hole):
+			overlap = true
+	_check("rect_minus conserves area", _approx(area, 10.0, 1e-4), "got %f" % area)
+	_check("rect_minus keeps the hole open", not overlap)
+
+	# Ids are assigned and kept unique; an unknown type survives untouched.
+	var s := P.resolve_spec({"elements": [{"type": "door"}, {"type": "door", "id": "e7"},
+		{"type": "door", "id": "e7"}, {"type": "hovercraft", "id": "x1", "foo": 3}]})
+	var ids := {}
+	for e in s["elements"]:
+		ids[str(e["id"])] = true
+	_check("elements: ids unique", ids.size() == 4, str(ids.keys()))
+	_check("elements: unknown type kept", ids.has("x1")
+		and int((s["elements"][3] as Dictionary).get("foo", 0)) == 3)
+
+	# A door in a wall: counted, painted, clamped inside its wall, a hole cut.
+	var walled := {"bay_count": 2, "column_count": 1, "decked": false, "roof_deck": false,
+		"walls": {"front": true, "back": false, "left": false, "right": false}}
+	var b0 := P.bom(walled)
+	var door := walled.duplicate(true)
+	door["elements"] = [{"type": "door", "face": "front", "at_ft": 6.0, "floor": -1}]
+	_check("door counted", int(P.bom(door)["doors"]) == 1)
+	var n0 := P.build_node(walled)
+	var n1 := P.build_node(door)
+	var sc0 := (n0.get_node("RackMesh") as MeshInstance3D).mesh.get_surface_count()
+	var sc1 := (n1.get_node("RackMesh") as MeshInstance3D).mesh.get_surface_count()
+	_check("door adds a painted surface", sc1 > sc0, "%d vs %d" % [sc1, sc0])
+	n0.free()
+	n1.free()
+	var far := P.resolve_spec({"bay_count": 1, "elements": [{"type": "door", "at_ft": 99.0}]})
+	_check("door clamped inside its wall",
+		float(far["elements"][0]["at_ft"]) <= P.face_length_ft(far, "front") - 1.4)
+	var sd := P.resolve_spec(door)
+	var L := P._layout(sd, P._metrics(sd))
+	_check("door opening found", P._face_openings(sd, L, "front").size() == 1)
+
+	# Wall band: a ground-floor-only wall uses fewer sheets.
+	var low := walled.duplicate(true)
+	low["wall_top_ft"] = 8.0
+	_check("wall band shortens the wall", int(P.bom(low)["plywood"]) < int(b0["plywood"]),
+		"%d vs %d" % [int(P.bom(low)["plywood"]), int(b0["plywood"])])
+
+	var win := walled.duplicate(true)
+	win["elements"] = [{"type": "window", "face": "front", "at_ft": 8.0}]
+	_check("window counted", int(P.bom(win)["windows"]) == 1)
+
+	# Sloped solar array: panels, tilt == slope angle; a glazed bay swaps
+	# panels for glazing.
+	var shop := {"bay_count": 3, "column_count": 1, "upright_height_ft": 16, "roof_deck": true,
+		"elements": [{"type": "lean_to", "face": "front", "angle_deg": 50.0}]}
+	var bs := P.bom(shop)
+	_check("lean-to makes solar panels", int(bs["solar_panels"]) > 0, str(bs["solar_panels"]))
+	var sm := P.solar_summary(shop)
+	_check("solar summary count == geometry", int(sm["count"]) == int(bs["solar_panels"]),
+		"%d vs %d" % [int(sm["count"]), int(bs["solar_panels"])])
+	_check("solar tilt == slope angle", _approx(float(sm["tilt_deg"]), 50.0, 0.1),
+		"got %f" % float(sm["tilt_deg"]))
+	_check("front array faces out the front (-Z)", (sm["avg_normal"] as Vector3).z < -0.5)
+	var glazed := shop.duplicate(true)
+	glazed["elements"][0]["segments"] = {"1": "glazing"}
+	var bg := P.bom(glazed)
+	_check("glazed bay: fewer panels, some glazing",
+		int(bg["solar_panels"]) < int(bs["solar_panels"]) and int(bg["glazing"]) > 0)
+	_check("watts follow the panel count", _approx(float(bs["solar_watts"]),
+		float(bs["solar_panels"]) * P.PV_WATTS, 0.01))
+	var gh := shop.duplicate(true)
+	gh["elements"][0]["surface"] = "glazing"
+	gh["elements"][0]["ends"] = "glazing"
+	var gh_open := shop.duplicate(true)
+	gh_open["elements"][0]["surface"] = "glazing"
+	_check("greenhouse ends are glazed", int(P.bom(gh)["glazing"]) > int(P.bom(gh_open)["glazing"]))
+
+	# Stairs: risers within code, the flight reaches its deck.
+	var two := {"bay_count": 2, "column_count": 1, "deck_levels": 2,
+		"level_heights_ft": [0.5, 8.0], "roof_deck": false,
+		"elements": [{"type": "stair", "face": "left", "at_ft": 11.5, "to_level": 1}]}
+	var st2 := P.resolve_spec(two)
+	var L2 := P._layout(st2, P._metrics(st2))
+	var G := P._stair_geo(L2, st2["elements"][0])
+	_check("stair riser <= 7.5 in", float(G["riser"]) <= P.RISER_MAX + 1e-6)
+	_check("stair rises to the deck", _approx(float(G["riser"]) * float(G["n"]),
+		P._floor_y(L2, 1), 1e-4))
+	_check("stairs counted", int(P.bom(two)["stairs"]) == 1)
+
+	# Railing: round the deck; a stair landing opens a gap; face toggles work.
+	var railed := two.duplicate(true)
+	railed["elements"] = [{"type": "railing", "floor": 1}]
+	var rail_ft := float(P.bom(railed)["railing_ft"])
+	_check("railing runs round the deck", rail_ft > 40.0, "got %f" % rail_ft)
+	var railed_st := two.duplicate(true)
+	railed_st["elements"].append({"type": "railing", "floor": 1})
+	var rail_gap := float(P.bom(railed_st)["railing_ft"])
+	# The landing's own guard adds a little; the deck's rail loses the gap.
+	var st_only := float(P.bom(two)["railing_ft"])
+	_check("stair landing opens the railing", rail_gap - st_only < rail_ft - 2.0,
+		"%f - %f vs %f" % [rail_gap, st_only, rail_ft])
+	var no_front := two.duplicate(true)
+	no_front["elements"] = [{"type": "railing", "floor": 1, "front": false}]
+	_check("railing face toggle", float(P.bom(no_front)["railing_ft"]) < rail_ft)
+
+	# Courtyard: interior rows + decks go, inner railings appear.
+	var grid := {"bay_count": 4, "column_count": 3, "deck_levels": 1, "level_heights_ft": [0.5],
+		"roof_deck": true, "decked": true}
+	var court := grid.duplicate(true)
+	court["elements"] = [{"type": "courtyard", "bay0": 1, "bays": 2, "col0": 0, "cols": 3}]
+	_check("courtyard removes uprights", int(P.bom(court)["uprights"]) < int(P.bom(grid)["uprights"]))
+	_check("courtyard removes plywood", int(P.bom(court)["plywood"]) < int(P.bom(grid)["plywood"]))
+	var court_r := court.duplicate(true)
+	court_r["elements"].append({"type": "railing", "floor": 1, "front": false, "back": false,
+		"left": false, "right": false, "inner": true})
+	_check("courtyard gets inner railings", float(P.bom(court_r)["railing_ft"]) > 10.0,
+		"got %f" % float(P.bom(court_r)["railing_ft"]))
+
+	# Picking: a lean-to bay by its oriented box.
+	var comps := P.pick_components(glazed)
+	var seg_comp := {}
+	for c in comps:
+		if str(c.get("etype", "")) == "lean_to" and int(c.get("seg", -1)) == 1:
+			seg_comp = c
+	_check("lean-to bay pick component", not seg_comp.is_empty())
+	if not seg_comp.is_empty():
+		var xf: Transform3D = seg_comp["obb_xf"]
+		var up_n := xf.basis.y.normalized()
+		var hit := P.pick_nearest(comps, xf.origin + up_n * 6.0, -up_n, ["element"])
+		_check("ray down the slope normal hits that bay",
+			str(hit.get("id", "")) == str(seg_comp["id"]), str(hit.get("id", "")))
+	var fh := P.face_hit(shop, Vector3(0, 2, -30), Vector3(0, 0, 1))
+	_check("face_hit front", str(fh.get("face", "")) == "front", str(fh))
+	var fl := P.face_hit(shop, Vector3(-40, 2, 0), Vector3(1, 0, 0))
+	# Left / right as seen facing the front (-Z) face: the -X face is "right".
+	_check("face_hit right (-X)", str(fl.get("face", "")) == "right", str(fl))
+	_check("floor_at ground", P.floor_at(two, 0.1) == -1)
+	_check("floor_at upper deck", P.floor_at(two, 3.0) == 1)
+
+	var mir := P.mirror_element({"type": "door", "face": "front", "at_ft": 5.0}, walled)
+	_check("mirror to the back", str(mir["face"]) == "back"
+		and _approx(float(mir["at_ft"]), P.face_length_ft(walled, "back") - 5.0, 1e-4))
+
+	# Every built-in design builds, with all its elements.
+	for d in P.design_presets():
+		var node := P.build_node(d["spec"])
+		var rs := P.resolve_spec(d["spec"])
+		_check("design '%s' builds with its elements" % d["id"], node.get_child_count() > 0
+			and (rs["elements"] as Array).size() == (d["spec"]["elements"] as Array).size())
+		node.free()
+
+	# Library round trip on a TEMP path (the player's file is never touched).
+	var tmp := OS.get_user_data_dir().path_join("pallet_rack_library_selftest.json")
+	var lib := {"designs": [{"name": "Mine", "spec": P.resolve_spec(shop)}],
+		"elements": [{"name": "Yellow barn door", "element": {"type": "door", "style": "sliding"}}]}
+	_check("library saves", P.save_library(lib, tmp))
+	var back := P.load_library(tmp)
+	_check("library round trip", (back["designs"] as Array).size() == 1
+		and (back["elements"] as Array).size() == 1)
+	if (back["designs"] as Array).size() == 1:
+		_check("saved design rebuilds the same panels",
+			int(P.bom(back["designs"][0]["spec"])["solar_panels"]) == int(bs["solar_panels"]))
+	DirAccess.remove_absolute(tmp)
 
 
 func _check(label: String, ok: bool, detail: String = "") -> void:
