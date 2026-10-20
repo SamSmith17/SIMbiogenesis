@@ -1,11 +1,92 @@
-# SIMbiogenesis — renewable energy simulator (Godot 4.7)
+# SIMbiogenesis
 
-First-person ISRU simulator with real weather, terrain from GPS, solar/wind/hydro
-physics, multi-resource systems graph, and Home Assistant digital-twin bridge.
-**Godot 4.7.1**, Forward+. Product vision: [`ROADMAP.md`](ROADMAP.md) · Graph design:
-[`SYSTEMS_GRAPH_VISION.md`](SYSTEMS_GRAPH_VISION.md).
+**Pick any place on Earth, then design, build and live in an off-grid site there.**
 
-**GitHub lite clone:** bespoke SOAK/Mars art is not in Git — see [ASSETS.md](ASSETS.md). Generated location maps work without the asset pack.
+SIMbiogenesis is a first-person simulator for renewable energy and in-situ resources, made with [Godot 4.7](https://godotengine.org). Choose a spot on a world map and the game builds the land from real data: elevation, satellite imagery, OpenStreetMap buildings, roads, water and forest, plus that site's real historical weather. On that land you design how energy, water, food and waste move:
+
+- solar arrays, wind turbines and micro-hydro;
+- batteries, inverters and charge controllers;
+- ponds, siphons, penstocks and tanks;
+- processors, camps and whole festivals of simulated people.
+
+You design those systems on a schematic **systems graph**. Every node on the graph is also a real object in the 3D world, so you can walk up to it, follow its pipe down the hill and watch the battery charge as the sun crosses the sky. The physics uses published models: solar position and irradiance, Betz-limited wind, pipe friction and Pelton/siphon hydraulics, and battery state of charge integrated over time. Your site's numbers mean something.
+
+A **Home Assistant bridge** connects a real off-grid system to its digital twin. Live inverter and battery data drives the graph, and recorded history can be replayed and compared against the simulation.
+
+<p align="center"><img src="docs/tour/arrival.jpg" width="820" alt="A generated site: real terrain, imagery and OSM buildings around the player"></p>
+
+> **Status:** in active development, with no packaged releases yet. Run it from source with the Godot editor (below). Mostly tested on Windows 11 with an NVIDIA/AMD GPU.
+
+## What you can do
+
+- **Make a world anywhere.** Use the launch hub's world map or address search, then **New world here**. Terrain, imagery, buildings, roads, streams, ponds and auto-generated vegetation load for that location. Worlds save continuously, and several can share one map.
+- **Design systems on the graph (G).** Wire panels, controllers, batteries, inverters, loads, tanks, ponds and processors. Strings over-volt, shorts trip and batteries overcharge, all following the real electrical rules. Three 3D lenses show the same design in context: **Site Plan**, **Elevation** cross-section, and a **Globe** of your sphere of influence.
+- **Build the place.** Use the edit toolbar for terrain sculpting (**T**), vegetation (**V**), camps (**C**) and water and streams. There is also a Light Studio (**J**), a building builder (**B**), placed props and vehicles, and pallet-rack structures.
+- **Engineer the water.** The **Hydro Lab** sizes siphon turbines and stream-fed Pelton penstocks against the real terrain profile and seasonal flow.
+- **Watch people live there.** Simulated residents have needs, routines, morale and jobs. They work through chore boards and site projects, crowd into festivals with stages and effigy burns, and walk away if the water runs out.
+- **Learn it.** The **Solar Bootcamp** is a 12-level tutorial. Pre-baked **challenges** replay a whole day or year in seconds, and a feature tour walks through every mode.
+- **Labs:** **Linkage Lab** (deployable scissor structures), **Packing Lab** (will it fit in the truck?), a parametric OpenSCAD store, a mud printer, CSP heliostats.
+- **Play together.** Co-presence multiplayer has Discord sign-in, discovery and chat relay.
+
+Every mode is shown with screenshots in the [feature tour](#what-it-does) below and in **[docs/FEATURES.md](docs/FEATURES.md)**.
+
+## Getting started
+
+### Requirements
+
+| | |
+|---|---|
+| **Engine** | [Godot **4.7.1**](https://godotengine.org/download/archive/), the **standard** build (not the .NET/C# one) |
+| **OS / GPU** | Windows 10/11 is the main target; Linux and macOS export presets exist but get less testing. You need a GPU with Vulkan support (the Forward+ renderer). |
+| **Network** | Needed the first time you visit a site, to download elevation, imagery, OSM and weather. After that the data is cached, and a cached site loads offline. |
+| **Optional** | Python 3 for the `tools/` scripts; [ffmpeg](https://ffmpeg.org) on `PATH` for video export and tour recording; [OpenSCAD](https://openscad.org) for the parametric store |
+
+### Download and first run
+
+1. **Get the code:**
+   ```bash
+   git clone https://github.com/SamSmith17/SIMbiogenesis.git
+   ```
+   You can also use **Code → Download ZIP** on GitHub and unzip it.
+2. **Open it in Godot.** Start Godot 4.7.1, choose **Import** in the Project Manager, and select the `project.godot` file in the folder.
+3. **Wait for the first import.** Imported-asset caches are not stored in git, so the first time Godot opens the project it imports every texture and model. That takes a few minutes. Later opens are fast.
+4. **Press F5 (Run Project).** The launch hub opens: your worlds on the left and an energy map of the planet.
+5. **Make a world.** Click a place on the map (or search an address), then press **New world here ⊕**. A new site takes about 15–60 s on the first visit while its data downloads; cached sites start in seconds.
+6. **Look around.** Walk with **WASD** and **Shift**. Press **G** for the systems graph, **F1** for the in-game help and key list, **Tab** for a drone view, and **F5** for third person.
+
+No accounts or API keys are needed: elevation (Open-Meteo / Copernicus), imagery (Esri World Imagery), OpenStreetMap and weather (Open-Meteo) all work without keys.
+
+### What a fresh clone does not include
+
+The repository is kept small. It holds the code, UI, shaders and small shared data. The large bespoke art lives in a separate local asset pack and is gitignored. That art includes the hand-built SOAK festival and Mars maps, the Mixamo NPC pack, some imported models and the detailed player character.
+
+- **Everything built around a generated location works without it.** You get the terrain, systems graph, NPCs and labs, with simplified stand-ins wherever a model is missing.
+- To add the art, install a shared pack: **Share… → Install a pack**, or drop the `.simpack.zip` file onto the game window. See **[docs/ASSETS.md](docs/ASSETS.md)** for what lives where.
+
+### Optional integrations
+
+These all stay off until you configure them. Credentials live in Godot's per-user data folder (`user://`), never in the repo.
+
+- **Home Assistant** digital twin
+- **OpenTopography** (sharper US elevation)
+- **Gemini** imagery enhancement
+- **Mapillary** street photos
+- **Discord** multiplayer
+
+Setup for each is in **[docs/LOCAL_CONFIG.md](docs/LOCAL_CONFIG.md)**, with placeholder templates in [docs/config-templates/](docs/config-templates/).
+
+### Essential controls
+
+| Key | Does | Key | Does |
+|---|---|---|---|
+| **WASD**, **Shift** | Move, sprint | **G** | Systems graph |
+| **Space** | Pause / play the clock | **L** | Location picker |
+| **Esc** | Free the mouse / close the top panel | **T** / **V** / **C** | Terrain / vegetation / camps toolbar |
+| **F1** | Help + every key | **J** | Light Studio |
+| **Tab** | Drone view | **K** | Site Report |
+| **F5** | Third person | **E** | Solar / power panel |
+
+Every binding can be changed in **Settings → Controls**. The full player reference is **[docs/FEATURE_CHEAT_SHEET.md](docs/FEATURE_CHEAT_SHEET.md)**.
 
 <!-- TOUR:BEGIN -->
 <!-- Generated by tools/tour_docs.py — edit the tour stops in core/tour/stops/, not this block. -->
@@ -115,64 +196,53 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 
 <!-- TOUR:END -->
 
-## Map flow (launch hub)
+## Saving, worlds and sharing
 
-- **Play** from the project opens the **Launch hub** (`scenes/ui/map_select/map_select.tscn`): energy-zone world map, scrollable **Your maps** list, **Create map here**, **Start**, and **Continue** (latest autosave or newest manual slot).
-- **While in-game:** **L** opens the location picker overlay (Set location); bottom **Timeline** — **💾** save/load; **🗺** autosaves and returns to the launch hub.
-- **Direct map testing (editor):** open `scenes/maps/generated_location.tscn` or your local SOAK/Mars scenes (if present) and run the **current** scene (F6). Old saves referencing legacy paths are rewritten when you Continue / Load.
+- A **world** is a map plus everything you built and simulated on it. It saves as you go, and also checkpoints every 3 minutes and when you exit. Use the timeline's **💾** button to rename, copy, start a new world on the same map, or exit to the launch hub.
+- **Share…** (in the launch hub, on each world row, and in the 💾 panel) exports a `.simpack.zip` file. It can hold worlds, cached map data, libraries and, optionally, art and settings. Installing one never overwrites the recipient's own files.
 
-## Save / load
+## Building an export
 
-- **Timeline** (bottom bar): **💾** opens **Save / Load** (eight manual slots, **Continue**, **Delete**, overwrite prompts). **Esc** still opens the legacy time UI as before.
-- **Autosave** every **3 minutes** to `user://saves/autosave.save.json` while a **Main** map runs (not in the editor).
-- Manual slots: `user://saves/slot_01.save.json` … `slot_08.save.json`.
-- Saves include **which map** (`scene_path`) so **Continue** / load can open the correct `Main` scene when it differs from your current one.
+1. Install the **export templates** that match your editor (Editor → Manage Export Templates).
+2. Open **Project → Export**. Presets for Windows, macOS and Linux are in `export_presets.cfg`, and each writes into `build/`, which is gitignored.
+3. Before you distribute a macOS build, set a real bundle ID and signing identity. The preset ships with the placeholder `com.simbio.genesis.beta`.
 
-**Quick check:** enter a map, move, save slot 1, return to map menu, **Continue** — same map and position. Switch maps, load a slot from the other map — scene should switch and apply the snapshot.
+## For developers
 
-## Beta builds (Phase 6)
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** covers the module layers and where a new file goes. It also lists the extension points and the live architectural-debt backlog. Read it before adding a feature.
+- **[CLAUDE.md](CLAUDE.md)** is the project memory: the feature map, every subsystem's invariants and the full validation suite. It is authoritative when it disagrees with anything else.
+- **Selftests** are offline and headless. Each one is a single command, for example:
+  ```bash
+  godot --headless --path . --script scenes/ui/ui_compile_selftest.gd
+  ```
+  `CLAUDE.md` lists them all. After adding a `class_name` script, run `godot --headless --path . --import` once.
+- **Windowed captures** go through `tools\harness.ps1`, which runs the game in a sandboxed copy of your user data. One example: `tools\harness.ps1 -World mtvernon -Capture look`.
+- **Feature tour:** `tools\tour.ps1 -Mode stills` regenerates the screenshots, and `python tools/tour_docs.py` rebuilds `docs/FEATURES.md` and the gallery above.
+- **Moving files:** move the `.uid` or `.import` sidecar with each file and rewrite its `res://` references. Then run `python tools/checks/res_path_audit.py`, which lists every reference whose target is missing.
+- **Plans and working notes** belong in `plans/`, which is gitignored. Shipping documentation goes in `docs/`.
 
-- **Godot 4.6** + export templates matching your editor build.
-- Presets: **Windows**, **macOS**, **Linux** → `build/SIMbiogenesis.exe`, `build/SIMbiogenesis.app`, `build/SIMbiogenesis.x86_64` (see **`export_presets.cfg`**).
-- Maintainer checklist and patron pointers: **[`PHASE6_BETA_READINESS.md`](PHASE6_BETA_READINESS.md)**.
-- **macOS:** Set your real **bundle ID** and signing identity before distributing outside quick tests; placeholder in preset is `com.simbio.genesis.beta`.
-- **Secrets / HA:** still **`user://`** only — **[`LOCAL_CONFIG.md`](LOCAL_CONFIG.md)**.
+## Repository layout
 
-## Secrets and integrations (GitHub / collaboration)
+| Path | What's there |
+|---|---|
+| `scenes/maps/` | Map scenes: `generated_location.tscn` (every user world) and `main.gd`, the root script of every map |
+| `scenes/ui/` | HUD, panels and modals, incl. the launch hub / `location_picker/`, `projection/`, `toolbar/`, `kit/` |
+| `scenes/gameplay/`, `gameplay/` | Player, vehicles, interactables, tutorials and challenges, placed props and lights |
+| `system_graph/` | The systems graph: model, canvas (`canvas_v2/`), inspector, flow engine, electrical rules |
+| `core/` | Services and subsystems: terrain, weather, water, population, worlds, sharing, astronomy, packing, linkage, … |
+| `power_system/` | Energy sources (solar, wind, hydro, CSP), devices, Home Assistant client, automation |
+| `vegetation/` | Tree and plant builders, species catalog, growth model, scatter |
+| `crisis_events/` | Fire and other crisis events |
+| `assets/` | Small shipped art: fonts, icons, sky maps, materials, photocards |
+| `addons/` | Godot plugins and GDExtensions (camera server, ffmpeg, SpaceMouse, import fix) |
+| `tools/` | Harness, tour, benches, one-off checks and fixes, asset pipelines (Python / PowerShell / GDScript) |
+| `maps/` | `MapDefinition` and the example definitions for the bespoke maps |
+| `docs/` | Documentation, the feature tour, config templates |
+| `credits/`, `CREDITS.md` | Third-party attribution ledger (human + machine-readable) |
+| `scad_library/`, `parked/` | OpenSCAD part library; built-but-unwired code |
 
-Home Assistant, UISP, and other user-specific settings are stored under Godot’s `user://` path at runtime — **never commit** real tokens or URLs copied from your machine into this repo.
+## Credits and license
 
-Templates with placeholders: [`config-templates/`](config-templates/README.md). Full reference: [`LOCAL_CONFIG.md`](LOCAL_CONFIG.md).
+SIMbiogenesis stands on open tools and open data: Godot, OpenStreetMap, Open-Meteo, Copernicus DEM, Esri imagery, Stellarium, NASA POWER, and many CC0 and open-licensed assets. Every third-party dependency and asset, with its license, is listed in **[CREDITS.md](CREDITS.md)**.
 
-## Assets and lite GitHub clone
-
-Maps depend on large `res://` art (see **[`PHASE3_ASSET_PACK.md`](PHASE3_ASSET_PACK.md)**): use a **Patreon/private asset zip** merged at the project root, or commit everything / Git LFS. The project does **not** yet open `scenes/maps/mars_aerial.tscn` with zero art installed.
-
-## Where things live
-
-- **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — module conventions, where a new file
-  goes, extension points, and the live architectural-debt backlog. **Read this
-  before adding a feature.**
-- **[`CLAUDE.md`](CLAUDE.md)** — the feature map and the full validation suite
-  (every offline selftest + windowed capture harness). Authoritative when it
-  disagrees with anything else here.
-- **[`FEATURE_CHEAT_SHEET.md`](FEATURE_CHEAT_SHEET.md)** — player-facing hotkeys,
-  docks, and an honest ✅/⚠️/❌ status table.
-- Autoloads and save helpers live under **`core/`**; map scenes under
-  **`scenes/maps/`**; HUD and world prefabs under **`scenes/ui/`** and
-  **`scenes/gameplay/`**.
-
-### Historical archive (April 2026 — superseded)
-
-The `PHASE*.md` series documents a completed repo-hygiene and beta-readiness
-effort. It is kept for provenance and is **no longer current guidance** — it
-describes a 107-file / 7-autoload project with no `addons/`, against today's
-~540 files and 33 autoloads. Where it disagrees with `ARCHITECTURE.md` or
-`CLAUDE.md`, those win.
-
-[`PHASE1_INVENTORY.md`](PHASE1_INVENTORY.md) ·
-[`PHASE3_ASSET_PACK.md`](PHASE3_ASSET_PACK.md) ·
-[`PHASE4_MODULE_DESIGN.md`](PHASE4_MODULE_DESIGN.md) ·
-[`PHASE5_SCENE_SHELL_DESIGN.md`](PHASE5_SCENE_SHELL_DESIGN.md) ·
-[`PHASE6_BETA_READINESS.md`](PHASE6_BETA_READINESS.md) ·
-[`PHASE7_PERFORMANCE.md`](PHASE7_PERFORMANCE.md)
+The project's own code is released under the **[MIT License](LICENSE)**. Third-party assets keep their own licenses, as recorded in the credits.
