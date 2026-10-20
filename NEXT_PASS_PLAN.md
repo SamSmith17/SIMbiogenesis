@@ -26,8 +26,8 @@ measurement, and every item below names the bench or capture that proves it.
   TimelineUI, HudLayout, the lights, InteractionFocus, StreamTracers,
   Planets/StarSystem, main's hazard/fog pass. Two F3 sections (`prop_ticks`,
   `canvas_draw`) are listed but never emitted and always read 0.
-- Many memory notes still say "landed uncommitted"; that work is in the last
-  four commits. Treat those notes as stale.
+- Many memory notes used to say "landed uncommitted"; that work has been on
+  main since the October pushes (the memory index was corrected 2026-10-18).
 
 ## Push 0 — measure (half a day)
 
@@ -209,10 +209,15 @@ of per-domain pills; the soil key was left as a key, it filters nothing),
 slider on the camp Edit tool (writes the record key and re-syncs the graph),
 #4 Shift+H for the WATER section (`water_edit`), #8 the popin capture
 asserts (zero vanish / appear, ≤ 2 jumps), #9 Site Report "📷 PNG", #10
-Watch on the graph's camp card. NOT done, for a follow-up session: #5
-settings from the launch hub (every settings page must first tolerate no
-Main, and a hub capture has to prove it), #6 the key-rebind page, #7 the
-ambient audio bed.
+Watch on the graph's camp card. **2026-10-18, later:** #5 settings from the
+launch hub (the gear; `hub_mode` builds only `HUB_PAGES`, every one
+Main-free, proven by `--capture=hubsettings` at 1080 + 720), #6 the
+Controls page (`core/input_overrides.gd`, `user://input_overrides.cfg`,
+applied in CursorController._ready; the F1 overlay, the prompt and the tour
+cards show the rebound key), #7 the ambient bed (`core/audio/`, procedural
+or `user://ambient/` files, one volume beside the stage music; no tour stop
+— it has no pixels — `tools/checks/ambient_bed_probe.gd` is its gate).
+Push 3 is complete.
 
 Small, self-contained, each already has the data it needs.
 
@@ -256,6 +261,16 @@ Small, self-contained, each already has the data it needs.
     view over that camp (the project panel already does this per project).
 
 ## Push 4 — hygiene (one slice per push, never a big bang)
+
+**Status 2026-10-18:** DONE for the slices below — the ServiceLocator sweep
+(0 literals outside the allow-list, `services_selftest` now walks the repo and
+fails on a new one; verified to FAIL on a planted literal), the first
+monolith slice (`system_graph/graph_hydro_routing.gd`, the view keeps
+delegates), the TEMP education-card override layer deleted (no saved
+overrides existed to fold), the stale comments, and the tour-video note in
+HARNESS_MATRIX.md "Open items" (no new upload, so `docs/tour/video.json` is
+unchanged). Not done here: the `terrain_loader.gd` season-push extraction
+(Push 1 #2 territory) and the cheat-sheet rows of Push 2 #10.
 
 - **ServiceLocator sweep**: replace the 28 `"UILayer/SystemGraphView"`
   lookups with `ServiceLocator.graph()` (20 files, mechanical). Then add a

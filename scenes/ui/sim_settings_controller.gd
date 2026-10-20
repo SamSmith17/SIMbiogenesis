@@ -13,6 +13,12 @@ signal conduit_flow_glow_changed(enabled: bool)
 
 const REALTIME_SCALE: float = 1.0 / 3600.0
 const LIVE_SYNC_INTERVAL: float = 10.0
+## Settings → Environment → Horizon / Atmospheric haze. Each is a Main
+## set_<key>/get_<key> pair saved under [rendering_adv] (apply_sky_setting).
+const HORIZON_FLOAT_KEYS := ["horizon_height_deg", "horizon_softness_deg", "horizon_haze",
+	"horizon_haze_height_deg", "horizon_match_haze", "haze_density_mult", "haze_aerial_mult",
+	"haze_sun_glow_mult", "twilight_cool_bias", "late_day_clearing"]
+const HORIZON_COLOR_KEYS := ["horizon_user_color", "day_haze_color", "sky_zenith_color", "sky_horizon_color"]
 
 ## Single source of truth for FPV drone flight defaults (m/s unless noted).
 const DRONE_DEFAULTS := {
@@ -252,6 +258,9 @@ func get_state_snapshot() -> Dictionary:
 		"player_fov": _main_float("get_player_fov", 50.0),
 		"drone_fov": _main_float("get_drone_fov", 50.0),
 	}
+	for hk in HORIZON_FLOAT_KEYS + HORIZON_COLOR_KEYS:
+		if main.has_method("get_" + hk):
+			snap[hk] = main.call("get_" + hk)
 	var star := _star_system()
 	if star != null and star.has_method("get_settings"):
 		snap.merge(star.get_settings())
@@ -1037,7 +1046,7 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "sun_glow", main_node.call("get_sun_glow"))
 		cfg.set_value("rendering_adv", "sun_glow_size", main_node.call("get_sun_glow_size"))
 		cfg.set_value("rendering_adv", "sun_aureole", main_node.call("get_sun_aureole"))
-	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "airglow_color", "light_pollution", "light_pollution_color", "moon_sky_glow"]:
+	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "airglow_color", "light_pollution", "light_pollution_color", "moon_sky_glow"] + HORIZON_FLOAT_KEYS + HORIZON_COLOR_KEYS:
 		if main_node.has_method("get_" + sky_key):
 			cfg.set_value("rendering_adv", sky_key, main_node.call("get_" + sky_key))
 		if main_node.has_method("get_cirrus_user_scale"):
@@ -1167,10 +1176,10 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_sun_glow_size(float(cfg.get_value("rendering_adv", "sun_glow_size")))
 	if cfg.has_section_key("rendering_adv", "sun_aureole"):
 		apply_sun_aureole(float(cfg.get_value("rendering_adv", "sun_aureole")))
-	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "light_pollution", "moon_sky_glow"]:
+	for sky_key in ["twilight_drama", "twilight_length", "sun_warmth", "airglow_strength", "light_pollution", "moon_sky_glow"] + HORIZON_FLOAT_KEYS:
 		if cfg.has_section_key("rendering_adv", sky_key):
 			apply_sky_setting(sky_key, float(cfg.get_value("rendering_adv", sky_key)))
-	for sky_col in ["airglow_color", "light_pollution_color"]:
+	for sky_col in ["airglow_color", "light_pollution_color"] + HORIZON_COLOR_KEYS:
 		if cfg.has_section_key("rendering_adv", sky_col):
 			var cv: Variant = cfg.get_value("rendering_adv", sky_col)
 			if cv is Color:

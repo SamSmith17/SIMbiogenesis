@@ -44,6 +44,7 @@ const CATEGORIES := [
 
 var _timeline: Control = null
 var _syncing: bool = false
+var _sfx_mute_chk: CheckBox = null
 
 var _clouds_cutoff: HSlider
 var _clouds_weight: HSlider
@@ -120,6 +121,21 @@ var _airglow_col: ColorPickerButton
 var _light_pollution: HSlider
 var _light_pollution_col: ColorPickerButton
 var _moon_sky_glow: HSlider
+# Environment → Horizon / Atmospheric haze
+var _hz_match: CheckBox
+var _hz_color: ColorPickerButton
+var _hz_height: HSlider
+var _hz_soft: HSlider
+var _hz_haze: HSlider
+var _hz_haze_h: HSlider
+var _sky_zenith: ColorPickerButton
+var _sky_horizon: ColorPickerButton
+var _haze_density: HSlider
+var _haze_aerial: HSlider
+var _haze_sun_glow: HSlider
+var _day_haze_col: ColorPickerButton
+var _dusk_cool: HSlider
+var _late_clear: HSlider
 var _star_trails: CheckBox
 var _star_trail_length: HSlider
 var _lock_sky: CheckBox
@@ -1505,12 +1521,16 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	# user://audio_prefs.cfg) — this is just the missing control surface.
 	# Resolve by path, never bare identifier (CLAUDE.md autoload trap).
 	var sfx := get_node_or_null("/root/UiSound")
-	var mute_chk := _add_check(v, "Mute UI sound effects", func(on: bool) -> void:
+	var mute_chk := _add_check(v, "Mute sound effects", func(on: bool) -> void:
 		var s := get_node_or_null("/root/UiSound")
 		if s != null:
 			s.call("set_muted", on))
 	if sfx != null:
 		mute_chk.set_pressed_no_signal(bool(sfx.call("is_muted")))
+		# The timeline's 🔇 button flips the same switch.
+		_sfx_mute_chk = mute_chk
+		if sfx.has_signal("muted_changed") and not sfx.is_connected("muted_changed", _on_sfx_muted_changed):
+			sfx.connect("muted_changed", _on_sfx_muted_changed)
 	var vol := _add_slider(v, "Volume", -30.0, 6.0, 1.0, func(db: float) -> void:
 		var s := get_node_or_null("/root/UiSound")
 		if s != null:
@@ -1519,7 +1539,7 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	if sfx != null:
 		vol.set_value_no_signal(float(sfx.call("get_volume_db")))
 	var sfx_hint := Label.new()
-	sfx_hint.text = "Feedback chirps for wiring, warnings and unlocks. Warnings are also rate-limited to one per 1.5 s so repeated mistakes don't machine-gun."
+	sfx_hint.text = "UI chirps for wiring, warnings and unlocks, and the world's effects: wind, rain, streams, birds, thunder, the extinguisher (stage music has its own volume under NPCs). Also on the timeline's speaker button. Warnings are also rate-limited to one per 1.5 s so repeated mistakes don't machine-gun."
 	sfx_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sfx_hint.custom_minimum_size = Vector2(520, 0)
 	sfx_hint.add_theme_color_override("font_color", C_TEXT_S)
@@ -1568,6 +1588,11 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 
 ## Interface: the UI scale (UiThemeBuilder). Auto boosts small windows, where
 ## the 1920×1080 canvas otherwise shrinks every word.
+func _on_sfx_muted_changed(on: bool) -> void:
+	if is_instance_valid(_sfx_mute_chk):
+		_sfx_mute_chk.set_pressed_no_signal(on)
+
+
 func _build_interface_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Interface")
 	_add_section_lbl(v, "Text and panel size")
@@ -1652,6 +1677,10 @@ func _build_environment_tab(tabs: TabContainer) -> void:
 	v.add_child(cs_hint)
 
 	v.add_child(HSeparator.new())
+	_build_horizon_haze_sections(v)
+	v.add_child(HSeparator.new())
+	_build_sun_moon_sections(v)
+	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Future Climate Scenario")
 	_scenario_opt = OptionButton.new()
 	_scenario_opt.add_item("Low (+1.5 °C by 2100, SSP1-2.6)",   0)
@@ -1668,6 +1697,127 @@ func _build_environment_tab(tabs: TabContainer) -> void:
 	hint2.add_theme_color_override("font_color", C_TEXT_S)
 	hint2.add_theme_font_size_override("font_size", 10)
 	v.add_child(hint2)
+
+
+## Settings → Environment → Horizon + Atmospheric haze. Every control is a Main
+## set_<key>/get_<key> pair through SimSettingsController.apply_sky_setting,
+## saved under [rendering_adv] (SimSettingsController.HORIZON_*_KEYS).
+func _sky_cb(key: String) -> Callable:
+	return func(value: Variant) -> void:
+		if _syncing: return
+		SimSettingsController.apply_sky_setting(key, value)
+
+
+func _build_horizon_haze_sections(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Horizon")
+	_hz_match = _add_check(v, "Horizon colour matches the haze", func(on: bool) -> void:
+		if _hz_color:
+			_hz_color.disabled = on
+			_hz_color.modulate.a = 0.35 if on else 1.0
+		if _syncing: return
+		SimSettingsController.apply_sky_setting("horizon_match_haze", on))
+	_hz_match.tooltip_text = "The sky below the horizon line takes the colour the haze paints distant ground, at every hour, so the far terrain and the sky meet without a stripe."
+	_hz_color = _add_color_row(v, "Horizon colour", Color(0.0, 0.5, 0.6), _sky_cb("horizon_user_color"))
+	_hz_color.tooltip_text = "Used when \"matches the haze\" is off."
+	_hz_height = _add_slider(v, "Horizon height °", -5.0, 5.0, 0.05, _sky_cb("horizon_height_deg"))
+	_hz_soft = _add_slider(v, "Horizon softness °", 0.05, 10.0, 0.05, _sky_cb("horizon_softness_deg"))
+	_hz_haze = _add_slider(v, "Horizon haze band", 0.0, 1.0, 0.01, _sky_cb("horizon_haze"))
+	_hz_haze_h = _add_slider(v, "Haze band height °", 0.5, 25.0, 0.5, _sky_cb("horizon_haze_height_deg"))
+	_sky_zenith = _add_color_row(v, "Sky overhead", Color(0.25, 0.55, 0.95), _sky_cb("sky_zenith_color"))
+	_sky_horizon = _add_color_row(v, "Sky near horizon", Color(0.7, 0.85, 1.0), _sky_cb("sky_horizon_color"))
+	_add_hint(v, "Height moves the sky's horizon line up or down (degrees above level) — useful from a drone, where the terrain's edge sits below level. Softness is how far below the line the sky takes to reach the horizon colour. The haze band is a glow of that colour fading up into the sky; it is what blends hazy distant ground into the sky on flat land. The two sky colours are the clear daytime gradient (twilight and night paint over them).")
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Atmospheric haze")
+	_fog_amount = _add_slider(v, "Fog amount", 0.0, 1.0, 0.01, _on_fog_amount)
+	_haze_density = _add_slider(v, "Haze density ×", 0.0, 4.0, 0.05, _sky_cb("haze_density_mult"))
+	_haze_aerial = _add_slider(v, "Haze takes sky colour ×", 0.0, 1.6, 0.05, _sky_cb("haze_aerial_mult"))
+	_haze_sun_glow = _add_slider(v, "Haze glow toward sun ×", 0.0, 4.0, 0.05, _sky_cb("haze_sun_glow_mult"))
+	_day_haze_col = _add_color_row(v, "Daytime haze colour", Color(0.68, 0.78, 0.94), _sky_cb("day_haze_color"))
+	_dusk_cool = _add_slider(v, "Dusk haze coolness", 0.0, 1.0, 0.01, _sky_cb("twilight_cool_bias"))
+	_late_clear = _add_slider(v, "Late-day clearing", 0.0, 1.0, 0.01, _sky_cb("late_day_clearing"))
+	_add_hint(v, "The haze is the distance fog that fades far ground toward the sky. Density × scales how quickly it thickens with distance (lower = clearer desert air); Fog amount adds more on top and also sets the thickness of volumetric fog (Lighting). \"Takes sky colour\" is how much distant ground picks up the sky's own colour instead of the haze colour. Dusk coolness pushes twilight haze from warm amber (0) to blue-grey (1). Late-day clearing thins the haze in the hours before sunset so distant ridges stay dark.")
+	var reset := Button.new()
+	reset.text = "Reset horizon & haze"
+	reset.tooltip_text = "Put every control in Horizon and Atmospheric haze back to its default."
+	UITheme.style_button(reset)
+	reset.pressed.connect(_on_reset_horizon_haze)
+	v.add_child(reset)
+
+
+func _build_sun_moon_sections(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Sun")
+	_sun_energy = _add_slider(v, "Sun energy", 0.0, 3.0, 0.05, _on_sun_energy)
+	_sun_size = _add_slider(v, "Sun disc size", 0.02, 0.5, 0.005, _on_sun_size)
+	_sun_glow = _add_slider(v, "Sun glow", 0.0, 4.0, 0.05, _on_sun_glow)
+	_sun_glow_size = _add_slider(v, "Sun glow size", 1.0, 30.0, 0.5, _on_sun_glow_size)
+	_sun_aureole = _add_slider(v, "Sun aureole", 0.0, 3.0, 0.05, _on_sun_aureole)
+	_sun_warmth = _add_slider(v, "Low-sun warmth", 0.0, 2.0, 0.05, _on_sun_warmth)
+	_add_hint(v, "Sunlight follows the real atmosphere: none until the disc clears the horizon, then a few percent of noon in deep orange, half strength by 10°, white by 30°. Low-sun warmth is the reddening of the direct light near the horizon (0 = white).")
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Twilight")
+	_twilight_drama = _add_slider(v, "Twilight drama", 0.0, 2.0, 0.05, _on_twilight_drama)
+	_twilight_length = _add_slider(v, "Twilight length", 0.25, 3.0, 0.05, _on_twilight_length)
+	_add_hint(v, "Drama scales the horizon fire band, the sun's aureole and glow near the horizon, and the pink Belt of Venus opposite the sun (1.0 = natural, 0 = flat). Length stretches how slowly the sky and ground fade after sunset (1 = natural, compressed for the screen).")
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Moon")
+	_moon_energy = _add_slider(v, "Moon energy", 0.0, 2.0, 0.05, _on_moon_energy)
+	_moon_phase_lbl = _add_status_label(v, "")
+	_moon_size = _add_slider(v, "Moon disc size", 0.01, 0.2, 0.005, _on_moon_size)
+	_moon_glow = _add_slider(v, "Moon glow", 0.0, 2.0, 0.05, _on_moon_glow)
+	_moon_sky_glow = _add_slider(v, "Moonlit sky", 0.0, 2.0, 0.05, _on_moon_sky_glow)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Night sky")
+	_airglow = _add_slider(v, "Airglow", 0.0, 1.0, 0.01, _on_airglow)
+	_airglow_col = _add_color_row(v, "Airglow colour", Color(0.16, 0.30, 0.22), _on_airglow_color)
+	_light_pollution = _add_slider(v, "Light pollution", 0.0, 1.0, 0.01, _on_light_pollution)
+	_light_pollution_col = _add_color_row(v, "Pollution colour", Color(0.95, 0.62, 0.35), _on_light_pollution_color)
+	_add_hint(v, "The dark sky is a near-black gradient plus three light sources: airglow (the faint green band real dark skies show low down), a light-pollution dome, and moonlight (Moon → Moonlit sky). All zero on a moonless night = a Bortle-1 wilderness sky. Bright skies wash out faint stars (Stars & Planets → Sky-glow washout).")
+
+
+func _on_reset_horizon_haze() -> void:
+	var d: Dictionary = {}
+	var main: Node = SimSettingsController.main_node
+	if is_instance_valid(main) and main.has_method("horizon_haze_defaults"):
+		d = main.call("horizon_haze_defaults")
+	for k in d.keys():
+		SimSettingsController.apply_sky_setting(str(k), d[k])
+	SimSettingsController.apply_fog_amount(0.2)
+	_syncing = true
+	_sync_horizon_haze_from_snapshot(SimSettingsController.get_state_snapshot())
+	_syncing = false
+
+
+func _sync_horizon_haze_from_snapshot(snap: Dictionary) -> void:
+	if _fog_amount:
+		_fog_amount.value = snap.get("fog_amount", 0.2)
+	var sliders := {
+		"horizon_height_deg": _hz_height, "horizon_softness_deg": _hz_soft,
+		"horizon_haze": _hz_haze, "horizon_haze_height_deg": _hz_haze_h,
+		"haze_density_mult": _haze_density, "haze_aerial_mult": _haze_aerial,
+		"haze_sun_glow_mult": _haze_sun_glow, "twilight_cool_bias": _dusk_cool,
+		"late_day_clearing": _late_clear,
+	}
+	for k in sliders.keys():
+		var sl: HSlider = sliders[k]
+		if sl != null and snap.has(k):
+			sl.value = float(snap[k])
+	var colors := {
+		"horizon_user_color": _hz_color, "day_haze_color": _day_haze_col,
+		"sky_zenith_color": _sky_zenith, "sky_horizon_color": _sky_horizon,
+	}
+	for k in colors.keys():
+		var cp: ColorPickerButton = colors[k]
+		if cp != null and snap.get(k) is Color:
+			cp.color = snap[k]
+	if _hz_match and snap.has("horizon_match_haze"):
+		_hz_match.button_pressed = bool(snap["horizon_match_haze"])
+		if _hz_color:
+			_hz_color.disabled = _hz_match.button_pressed
+			_hz_color.modulate.a = 0.35 if _hz_match.button_pressed else 1.0
 
 
 func _build_lighting_tab(tabs: TabContainer) -> void:
@@ -1729,15 +1879,12 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 		_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
 		_shadow_opacity     = _add_slider(v, "Shadow darkness", 0.0, 1.0, 0.05, _on_shadow_opacity)
 		_shadow_quality_lbl = _add_status_label(v, "Shadow Quality: High")
-		_add_hint(v, "Sun, moon, ambient, glow, fog, tonemapping and the night sky are tuned inside a world (Settings ⚙ on the timeline), where you can see them.")
+		_add_hint(v, "Sun, moon, ambient, glow, fog, tonemapping and the night sky are tuned inside a world (Settings ⚙ on the timeline → Lighting and Environment), where you can see them.")
 		return
-	_sun_energy         = _add_slider(v, "Sun energy",     0.0, 3.0, 0.05, _on_sun_energy)
 	_shadow_quality     = _add_slider(v, "Shadow quality", 0.0, 3.0, 1.0,  _on_shadow_quality)
 	_shadow_opacity     = _add_slider(v, "Shadow darkness", 0.0, 1.0, 0.05, _on_shadow_opacity)
 	_shadow_quality_lbl = _add_status_label(v, "Shadow Quality: High")
 	_building_shadows   = _add_check(v, "Building shadows", _on_building_shadows)
-	_moon_energy        = _add_slider(v, "Moon energy",    0.0, 2.0, 0.05, _on_moon_energy)
-	_moon_phase_lbl     = _add_status_label(v, "")
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Advanced")
 	_ambient_energy = _add_slider(v, "Ambient ×", 0.0, 3.0, 0.05, _on_ambient_energy_mult)
@@ -1757,7 +1904,7 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	# carries direct beam + skylight on its own.
 	_sdfgi_enabled.tooltip_text = "Bounced-light GI. Not recommended at this world scale: SDFGI only covers a ~400 m box centred on the camera, so it lights a square patch of ground that follows you and stops at a hard edge — very visible at night, especially with Ambient × turned down."
 	_volumetric_fog = _add_check(v, "Volumetric fog", _on_volumetric_fog_enabled)
-	_fog_amount = _add_slider(v, "Fog amount", 0.0, 1.0, 0.01, _on_fog_amount)
+	_volumetric_fog.tooltip_text = "How thick it is follows Environment → Atmospheric haze → Fog amount."
 	_tonemap_mode = _add_option(v, "Tonemap", ["Linear", "Reinhard", "Filmic", "ACES", "AgX"], _on_tonemap_mode)
 	_tonemap_exposure = _add_slider(v, "Exposure", 0.1, 4.0, 0.05, _on_tonemap_exposure)
 	_tonemap_white = _add_slider(v, "Tonemap white", 0.1, 16.0, 0.1, _on_tonemap_white)
@@ -1769,27 +1916,6 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	msaa_hint.add_theme_color_override("font_color", C_TEXT_S)
 	msaa_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(msaa_hint)
-	_sun_size = _add_slider(v, "Sun disc size", 0.02, 0.5, 0.005, _on_sun_size)
-	_sun_glow = _add_slider(v, "Sun glow", 0.0, 4.0, 0.05, _on_sun_glow)
-	_sun_glow_size = _add_slider(v, "Sun glow size", 1.0, 30.0, 0.5, _on_sun_glow_size)
-	_sun_aureole = _add_slider(v, "Sun aureole", 0.0, 3.0, 0.05, _on_sun_aureole)
-	_twilight_drama = _add_slider(v, "Twilight drama", 0.0, 2.0, 0.05, _on_twilight_drama)
-	var td_hint := Label.new()
-	td_hint.text = "Scales the horizon fire band, the sun's aureole and glow near the horizon, and the pink Belt of Venus opposite the sun. 1.0 = natural, 0 = flat."
-	td_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	td_hint.custom_minimum_size = Vector2(420, 0)
-	td_hint.add_theme_color_override("font_color", C_TEXT_S)
-	td_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(td_hint)
-	_twilight_length = _add_slider(v, "Twilight length", 0.25, 3.0, 0.05, _on_twilight_length)
-	_sun_warmth = _add_slider(v, "Low-sun warmth", 0.0, 2.0, 0.05, _on_sun_warmth)
-	var tl_hint := Label.new()
-	tl_hint.text = "Sunlight follows the real atmosphere: none until the disc clears the horizon, then a few percent of noon in deep orange, half strength by 10°, white by 30°. Twilight length stretches how slowly the sky and ground fade after sunset (1 = natural, compressed for the screen). Low-sun warmth is the reddening of the direct light near the horizon (0 = white)."
-	tl_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	tl_hint.custom_minimum_size = Vector2(420, 0)
-	tl_hint.add_theme_color_override("font_color", C_TEXT_S)
-	tl_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(tl_hint)
 	_god_rays = _add_check(v, "God rays (light shafts via volumetric fog)", _on_god_rays)
 	var gr_hint := Label.new()
 	gr_hint.text = "God rays enable a thin volumetric fog so the sun casts crepuscular shafts, strongest at sunrise/sunset. Adds some GPU cost."
@@ -1798,22 +1924,6 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	gr_hint.add_theme_color_override("font_color", C_TEXT_S)
 	gr_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(gr_hint)
-	_moon_size = _add_slider(v, "Moon disc size", 0.01, 0.2, 0.005, _on_moon_size)
-	_moon_glow = _add_slider(v, "Moon glow", 0.0, 2.0, 0.05, _on_moon_glow)
-	v.add_child(HSeparator.new())
-	_add_section_lbl(v, "Night sky")
-	_airglow = _add_slider(v, "Airglow", 0.0, 1.0, 0.01, _on_airglow)
-	_airglow_col = _add_color_row(v, "Airglow colour", Color(0.16, 0.30, 0.22), _on_airglow_color)
-	_light_pollution = _add_slider(v, "Light pollution", 0.0, 1.0, 0.01, _on_light_pollution)
-	_light_pollution_col = _add_color_row(v, "Pollution colour", Color(0.95, 0.62, 0.35), _on_light_pollution_color)
-	_moon_sky_glow = _add_slider(v, "Moonlit sky", 0.0, 2.0, 0.05, _on_moon_sky_glow)
-	var ns_hint := Label.new()
-	ns_hint.text = "The dark sky is a near-black gradient plus three light sources: airglow (the faint green band real dark skies show low down), a light-pollution dome, and moonlight. All zero on a moonless night = a Bortle-1 wilderness sky. Bright skies wash out faint stars (Stars tab → Sky-glow washout)."
-	ns_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	ns_hint.custom_minimum_size = Vector2(420, 0)
-	ns_hint.add_theme_color_override("font_color", C_TEXT_S)
-	ns_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(ns_hint)
 	# (The player's field of view moved to the Player tab.)
 
 
@@ -2233,6 +2343,7 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_light_pollution_col.color = snap.get("light_pollution_color")
 	if _moon_sky_glow:
 		_moon_sky_glow.value = snap.get("moon_sky_glow", 1.0)
+	_sync_horizon_haze_from_snapshot(snap)
 	if _god_rays:
 		_god_rays.button_pressed = snap.get("god_rays_enabled", false)
 	if _player_fov:
@@ -3608,6 +3719,25 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	mus.value_changed.connect(func(val: float) -> void: NpcDisplayPrefs.set_stage_music_volume(val))
 	mus_row.add_child(mus)
 	v.add_child(mus_row)
+	# The first-person ambient bed (AmbientBed): wind, rain, the nearest
+	# stream, birdsong — procedural, or the player's own files.
+	var amb_row := HBoxContainer.new()
+	amb_row.add_theme_constant_override("separation", 8)
+	var amb_lbl := Label.new()
+	amb_lbl.text = "Ambient sound volume"
+	amb_lbl.custom_minimum_size = Vector2(150, 0)
+	amb_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	amb_row.add_child(amb_lbl)
+	var amb := HSlider.new()
+	amb.min_value = 0.0
+	amb.max_value = 1.0
+	amb.step = 0.05
+	amb.custom_minimum_size = Vector2(160, 0)
+	amb.value = NpcDisplayPrefs.ambient_volume()
+	amb.tooltip_text = "The first-person sound bed: wind with the weather's wind speed, rain with the rain rate, the nearest stream's rush, birdsong by daylight in the forest. Silent while the clock is paused and away from first person. Drop your own wind / rain / stream / birds .mp3, .ogg or .wav into user://ambient/ to replace the built-in sounds. 0 = off."
+	amb.value_changed.connect(func(val: float) -> void: NpcDisplayPrefs.set_ambient_volume(val))
+	amb_row.add_child(amb)
+	v.add_child(amb_row)
 	var glow_hint := Label.new()
 	glow_hint.text = "People glow with how good a time they are having; a crowd that is vibing with its needs met builds a CHARGE toward FUCK YES!!! — a green shimmer that grows and quickens on the body, faster with peakers nearby (the meter over their head shows it, with ↑ while someone is feeding it) — then tips into a green, pulsing glow and the samba. Every one scores a Peak Experience. Each person's state (FUCK THIS!!! … Fuck It!) shows over their head; the bars are off by default."
 	glow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

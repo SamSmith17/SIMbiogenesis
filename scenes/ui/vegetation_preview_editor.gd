@@ -207,6 +207,29 @@ const SHADER_SLIDERS := [
 var _loader: Node = null
 var _dock: Control = null
 var _active := false
+## One-tree mode (the V toolbar's Select → click a tree): the TerrainLoader
+## pick descriptor of that plant, {} otherwise. The sliders then edit that
+## tree, and the footer offers three scopes — this tree, every one of its
+## species in this world, every world (the species default).
+var _instance: Dictionary = {}
+## The tree's own look as it stands (unprefixed keys; {} = follows its species).
+var _instance_base: Dictionary = {}
+## Colour picks made in one-tree mode (albedo_tint / highlight_tint / bark_tint).
+var _inst_colors: Dictionary = {}
+## Map-scope species ids from the style (VegStyleStore.KEY_MAP_SPECIES), so the
+## preview resolves a generic species the way the map does.
+var _store_map_species: Array = []
+var _general_nodes: Array = []
+var _inst_bar: VBoxContainer = null
+var _inst_header: Label = null
+var _inst_this_btn: Button = null
+var _inst_world_btn: Button = null
+var _inst_all_btn: Button = null
+var _inst_reset_btn: Button = null
+var _top_rows: Array = []
+var _btn_row: HBoxContainer = null
+var _type_rows: Array = []
+var _adv_toggle: CheckButton = null
 static var _last_species := "shrub"
 var _species := "shrub"
 var _density := 1.0
@@ -380,6 +403,11 @@ func close() -> void:
 	if not _active:
 		return
 	_active = false
+	if not _instance.is_empty():
+		_instance = {}
+		_instance_base = {}
+		_inst_colors = {}
+		_set_instance_ui(false)
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rebuild_pending = false
@@ -521,6 +549,7 @@ func _build_ui() -> void:
 		_species_opt.add_item(SPECIES_LABELS[i], i)
 	_species_opt.item_selected.connect(_on_species_selected)
 	type_row.add_child(_species_opt)
+	_type_rows.append(type_row)
 
 	var sub_row := HBoxContainer.new()
 	sidebar.add_child(sub_row)
@@ -532,6 +561,7 @@ func _build_ui() -> void:
 	_subspecies_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_subspecies_opt.item_selected.connect(_on_subspecies_selected)
 	sub_row.add_child(_subspecies_opt)
+	_type_rows.append(sub_row)
 
 	_build_preset_row(sidebar)
 
@@ -560,6 +590,9 @@ func _build_ui() -> void:
 			_queue_rebuild(), 0.05)
 	_plant_scale_slider = psc.get("slider")
 	_plant_scale_spin = psc.get("spin")
+	for pair in [dens, dia, svar, psc]:
+		if (pair as Dictionary).get("row") is Control:
+			_top_rows.append((pair as Dictionary)["row"])
 
 	_species_section = VBoxContainer.new()
 	_species_section.add_theme_constant_override("separation", 4)
@@ -584,6 +617,8 @@ func _build_ui() -> void:
 	_hi_picker.custom_minimum_size = Vector2(52, 24)
 	_hi_picker.tooltip_text = "Sun-lit leaf accent colour (maple's orange, olive's silver…)"
 	_hi_picker.color_changed.connect(func(c: Color) -> void:
+		if not _instance.is_empty():
+			_inst_colors["highlight_tint"] = c
 		_hi_tints[_species] = c
 		_queue_rebuild())
 	tint_row.add_child(_hi_picker)
@@ -594,11 +629,15 @@ func _build_ui() -> void:
 	_bark_picker.custom_minimum_size = Vector2(52, 24)
 	_bark_picker.tooltip_text = "Trunk + limb bark colour (birch white, redwood rust…)"
 	_bark_picker.color_changed.connect(func(c: Color) -> void:
+		if not _instance.is_empty():
+			_inst_colors["bark_tint"] = c
 		_bark_tints[_species] = c
 		_queue_rebuild())
 	tint_row.add_child(_bark_picker)
 
+	var general_from := sidebar.get_child_count()
 	var adv_toggle := CheckButton.new()
+	_adv_toggle = adv_toggle
 	adv_toggle.text = "Advanced shader"
 	adv_toggle.button_pressed = false
 	adv_toggle.toggled.connect(func(on: bool) -> void:
@@ -619,10 +658,16 @@ func _build_ui() -> void:
 
 	_build_forest_age_section(sidebar)
 	_build_osm_section(sidebar)
+	# Everything from the shader toggle down is MAP-wide (shader, forest age,
+	# OSM binding): hidden while one tree is being tuned.
+	for i in range(general_from, sidebar.get_child_count()):
+		_general_nodes.append(sidebar.get_child(i))
 
+	_build_instance_bar(sidebar)
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 8)
 	sidebar.add_child(btn_row)
+	_btn_row = btn_row
 	_apply_btn = Button.new()
 	_apply_btn.text = "Apply to map"
 	_apply_btn.custom_minimum_size = Vector2(104, 30)
@@ -718,7 +763,7 @@ func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
 func _record_slider_edit(key: String, v: float) -> void:
 	if _is_named_variant() and _family_prefixed(key):
 		var d: Dictionary = _species_edits.get(_species, {})
-		d[key] = v
+		d[key] = v / _inst_dim_scale(key)
 		_species_edits[_species] = d
 	else:
 		_values[key] = v
@@ -731,7 +776,8 @@ func _revert_key(key: String) -> void:
 		var base: Dictionary = _species_baselines.get(_species, {})
 		var entry_s: Dictionary = _keyed_sliders.get(key, {})
 		if not entry_s.is_empty() and base.has(key):
-			SliderSpinRowScript.set_values(entry_s.get("pair", {}), float(base[key]))
+			SliderSpinRowScript.set_values(entry_s.get("pair", {}),
+				float(base[key]) * _inst_dim_scale(key))
 		_refresh_slider_diff(key)
 		_refresh_apply_state()
 		_queue_rebuild(true)
@@ -826,6 +872,8 @@ func _rebuild_species_section() -> void:
 		var scope_hint := Label.new()
 		scope_hint.text = "Edits apply to %s only (pick the family type to restyle all)" \
 			% VegSpeciesCatalog.label_for(_species)
+		if not _instance.is_empty():
+			scope_hint.text = "Edits preview on this tree — choose below where they apply"
 		scope_hint.add_theme_font_size_override("font_size", 9)
 		scope_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
 		scope_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -862,10 +910,13 @@ func _rebuild_species_section() -> void:
 			_refresh_apply_state()
 			_queue_rebuild())
 		arch_row.add_child(arch_opt)
-		if fam == "deciduous":
-			_build_leaf_builder_row()
-		else:
-			_build_branch_builder_row()
+		# The leaf / branch builder is how a whole FAMILY is built — not a
+		# per-tree choice, so one-tree mode leaves it out.
+		if _instance.is_empty():
+			if fam == "deciduous":
+				_build_leaf_builder_row()
+			else:
+				_build_branch_builder_row()
 		_build_lod_chain_row(fam)
 	# Sliders display the RESOLVED value for the active species — selecting
 	# Birch shows Birch's real dims (SPECS variant / species override), not the
@@ -899,8 +950,11 @@ func _rebuild_species_section() -> void:
 			var start := float(resolved.get(key, _values.get(key, 0.0)))
 			if _is_named_variant() and session_edits.has(key):
 				start = float(session_edits[key])
-			_keyed_slider(body, key, str(sd2["label"]), float(sd2["min"]),
-				float(sd2["max"]), start)
+			# One-tree mode: size rows read THIS tree's metres (the record's
+			# own scale × the species mesh), not the species mesh.
+			var dim_k := _inst_dim_scale(key)
+			_keyed_slider(body, key, str(sd2["label"]), float(sd2["min"]) * minf(dim_k, 1.0),
+				float(sd2["max"]) * maxf(dim_k, 1.0), start * dim_k)
 
 
 ## Broadleaf foliage: leaf sprays on the twigs (each species' own leaves) or
@@ -1654,6 +1708,12 @@ func _merged_settings() -> Dictionary:
 			out[k] = _quality_style[k]
 	out[VegStyleStore.KEY_USER_FAMILY] = fam_keys
 	out[VegStyleStore.KEY_SPECIES_OVERRIDES] = _overrides_with_edits()
+	if not _store_map_species.is_empty():
+		out[VegStyleStore.KEY_MAP_SPECIES] = _store_map_species.duplicate()
+	if not _instance.is_empty():
+		var look := _instance_look_now()
+		if not look.is_empty():
+			out[VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE] = look
 	var fam := _shape_family()
 	var tint: Color = _tints.get(_species, _tints.get(fam, Color.WHITE))
 	out["%s_albedo_tint" % _species] = tint
@@ -1705,7 +1765,9 @@ func _overrides_with_edits() -> Dictionary:
 ## True while the active selection is a NAMED subspecies (Maple, Spruce…) rather
 ## than the generic family — the case where edits scope per-species.
 func _is_named_variant() -> bool:
-	return _species != "mix" and _species != _shape_family()
+	# One-tree mode scopes like a named subspecies: every shape edit is that
+	# tree's, never a family-wide value.
+	return _species != "mix" and (_species != _shape_family() or not _instance.is_empty())
 
 
 func _family_prefixed(key: String) -> bool:
@@ -1825,6 +1887,9 @@ func _effective_spacing() -> float:
 
 
 func _scatter_spots() -> Array:
+	# One-tree mode: that one tree, at its own scale, in the middle.
+	if not _instance.is_empty():
+		return [{"x": 0.0, "z": 0.0, "scale": _plant_scale}]
 	var radius := _patch_diameter * 0.5
 	var poly := VegetationPaint.circle_polygon(Vector2.ZERO, radius, 28)
 	var rng := RandomNumberGenerator.new()
@@ -2084,6 +2149,10 @@ func _load_from_state(shape: Dictionary, style: Dictionary) -> void:
 	var raw_over: Variant = style.get(VegStyleStore.KEY_SPECIES_OVERRIDES, {})
 	if raw_over is Dictionary:
 		_store_species_overrides = (raw_over as Dictionary).duplicate(true)
+	_store_map_species = []
+	var raw_ms: Variant = style.get(VegStyleStore.KEY_MAP_SPECIES, [])
+	if raw_ms is Array:
+		_store_map_species = (raw_ms as Array).duplicate()
 	_quality_style = {}
 	if _loader != null and _loader.has_method("veg_quality_tier_style"):
 		_quality_style = _loader.call("veg_quality_tier_style")
@@ -2463,6 +2532,8 @@ func _on_subspecies_selected(idx: int) -> void:
 
 
 func _on_tint_changed(c: Color) -> void:
+	if not _instance.is_empty():
+		_inst_colors["albedo_tint"] = c
 	_tints[_species] = c
 	var fam := _shape_family()
 	if fam != _species and fam != "mix":
@@ -2521,3 +2592,222 @@ func _set_species_from_preset(preset: int) -> void:
 			_species = "mix"
 		_:
 			_species = "shrub"
+
+
+# --- One-tree mode (V toolbar Select → click a tree) -------------------------
+
+## Tune ONE plant: `desc` is a TerrainLoader pick descriptor (veg_pick_at_screen
+## / veg_pick_near). The preview shows that species with this tree's own look;
+## the footer applies the edits to this tree, to every one of its species in
+## this world, or to every world.
+func open_for_instance(desc: Dictionary) -> void:
+	if desc.is_empty() or str(desc.get("kind", "")) == "hero":
+		return
+	var species := str(desc.get("species", ""))
+	if not VegSpeciesCatalog.is_paintable(species):
+		return
+	if _active:
+		close()
+	_instance = desc.duplicate(true)
+	_instance_base = {}
+	if _loader != null and _loader.has_method("veg_instance_look"):
+		_instance_base = _loader.call("veg_instance_look", desc)
+	_inst_colors = {}
+	open(-1, species)
+	if not _active:
+		_instance = {}
+		return
+	# One tree at the size it stands, with room round it.
+	_patch_diameter = clampf(float(desc.get("crown_m", 6.0)) * 1.8, 6.0, 40.0)
+	_density = 0.25
+	_size_var = 0.0
+	_plant_scale = float(desc.get("scale", 1.0))
+	_species_edits.erase(_species)
+	_species_baselines.erase(_species)
+	_set_instance_ui(true)
+	_rebuild_species_section()
+	_sync_tint_picker()
+	_sync_instance_pickers()
+	_sync_top_sliders()
+	_update_ground_and_camera()
+	_queue_rebuild(true)
+
+
+## Size keys a plant's record scale multiplies (the mesh is built to them,
+## then scaled per tree): in one-tree mode their rows show the tree's real
+## size, and edits are stored divided by that scale.
+const INST_LINEAR_DIMS := ["height_m", "crown_width_m", "trunk_diameter_cm", "card_w", "card_h"]
+
+
+func _inst_dim_scale(key: String) -> float:
+	if _instance.is_empty():
+		return 1.0
+	var fam := _shape_family()
+	if not key.begins_with(fam + "_") or key.substr(fam.length() + 1) not in INST_LINEAR_DIMS:
+		return 1.0
+	return maxf(float(_instance.get("scale", 1.0)), 0.05)
+
+
+## True while the modal is tuning one tree.
+func is_instance_mode() -> bool:
+	return not _instance.is_empty()
+
+
+## This tree's look as edited now: what it had + this session's shape edits
+## (unprefixed, the species-override form) + colour picks.
+func _instance_look_now() -> Dictionary:
+	var look := _instance_base.duplicate(true)
+	var fam := _shape_family()
+	var edits: Dictionary = _species_edits.get(_species, {})
+	for k in edits:
+		var key := str(k)
+		var unpref := key.substr(fam.length() + 1) if key.begins_with(fam + "_") else key
+		look[unpref] = edits[k]
+	for k in _inst_colors:
+		look[k] = _inst_colors[k]
+	return look
+
+
+func _build_instance_bar(sidebar: VBoxContainer) -> void:
+	_inst_bar = VBoxContainer.new()
+	_inst_bar.add_theme_constant_override("separation", 6)
+	_inst_bar.visible = false
+	sidebar.add_child(_inst_bar)
+	_inst_bar.add_child(SectionHeader.make("Apply to"))
+	_inst_this_btn = Button.new()
+	_inst_this_btn.text = "This tree only"
+	_inst_this_btn.tooltip_text = "Give just this tree its own look. Others of its species are unchanged."
+	UITheme.style_button(_inst_this_btn)
+	_inst_this_btn.pressed.connect(_apply_instance_scope.bind("tree"))
+	_inst_bar.add_child(_inst_this_btn)
+	_inst_world_btn = Button.new()
+	_inst_world_btn.tooltip_text = "Every tree of this species in this world, painted and OSM forest alike. Other worlds are unchanged."
+	UITheme.style_button(_inst_world_btn)
+	_inst_world_btn.pressed.connect(_apply_instance_scope.bind("world"))
+	_inst_bar.add_child(_inst_world_btn)
+	_inst_all_btn = Button.new()
+	_inst_all_btn.tooltip_text = "Save as this species' default: every world that has not tuned it itself."
+	UITheme.style_button(_inst_all_btn)
+	_inst_all_btn.pressed.connect(_apply_instance_scope.bind("all"))
+	_inst_bar.add_child(_inst_all_btn)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	_inst_bar.add_child(row)
+	_inst_reset_btn = Button.new()
+	_inst_reset_btn.text = "Give back to species"
+	_inst_reset_btn.tooltip_text = "Remove this tree's own look so it follows its species again"
+	_inst_reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_inst_reset_btn.pressed.connect(_apply_instance_scope.bind("reset"))
+	row.add_child(_inst_reset_btn)
+	var close_btn := Button.new()
+	close_btn.text = "Close"
+	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	close_btn.pressed.connect(close)
+	row.add_child(close_btn)
+
+
+func _set_instance_ui(on: bool) -> void:
+	for n in _general_nodes + _top_rows:
+		if n is Control and is_instance_valid(n):
+			(n as Control).visible = not on
+	# The shader sliders follow their own toggle, not this mode.
+	if not on and _shader_advanced != null and _adv_toggle != null:
+		_shader_advanced.visible = _adv_toggle.button_pressed
+	# The shader rows are children of a hidden container; the toggle hides them.
+	for n in _type_rows:
+		if n is Control and is_instance_valid(n):
+			(n as Control).visible = not on
+	if _btn_row != null:
+		_btn_row.visible = not on
+	if _inst_bar != null:
+		_inst_bar.visible = on
+	if _inst_header == null and _species_section != null:
+		_inst_header = Label.new()
+		_inst_header.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_inst_header.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		_inst_header.add_theme_color_override("font_color", UITheme.C_AMBER)
+		var parent := _species_section.get_parent()
+		parent.add_child(_inst_header)
+		parent.move_child(_inst_header, 0)
+	if _inst_header != null:
+		_inst_header.visible = on
+	if on:
+		_refresh_instance_labels()
+
+
+func _refresh_instance_labels() -> void:
+	if _instance.is_empty():
+		return
+	var label := VegSpeciesCatalog.label_for(_species)
+	var n := 0
+	if _loader != null and _loader.has_method("veg_species_count"):
+		n = int(_loader.call("veg_species_count", _species))
+	var src := str(_instance.get("source_label", ""))
+	if _inst_header != null:
+		_inst_header.text = "One %s · %s · %.0f m tall%s" % [label, src,
+			float(_instance.get("height_m", 0.0)),
+			" · has its own look" if not _instance_base.is_empty() else ""]
+	if _inst_world_btn != null:
+		_inst_world_btn.text = "All %s in this world (%s)" % [
+			UiText.plural_of(label.to_lower()) if n != 1 else label.to_lower(),
+			UiText.thousands(n)]
+	if _inst_all_btn != null:
+		_inst_all_btn.text = "All %s in every world (species default)" % UiText.plural_of(label.to_lower())
+	if _inst_reset_btn != null:
+		_inst_reset_btn.visible = not _instance_base.is_empty()
+
+
+## The tree's own colours win over the species palette in the pickers too.
+func _sync_instance_pickers() -> void:
+	if _instance.is_empty():
+		return
+	if _instance_base.get("albedo_tint") is Color and _tint_picker != null:
+		_tint_picker.color = _instance_base["albedo_tint"]
+	if _instance_base.get("highlight_tint") is Color and _hi_picker != null:
+		_hi_picker.color = _instance_base["highlight_tint"]
+	if _instance_base.get("bark_tint") is Color and _bark_picker != null:
+		_bark_picker.color = _instance_base["bark_tint"]
+
+
+func _apply_instance_scope(scope: String) -> void:
+	if _instance.is_empty() or _loader == null:
+		return
+	var look := _instance_look_now()
+	var label := VegSpeciesCatalog.label_for(_species)
+	var msg := ""
+	match scope:
+		"tree":
+			if look.is_empty():
+				_refresh_apply_state("Nothing changed yet — move a slider or pick a colour")
+				return
+			_loader.call("apply_veg_instance_look", _instance, look)
+			_instance_base = look
+			msg = "This %s now has its own look" % label.to_lower()
+		"reset":
+			_loader.call("apply_veg_instance_look", _instance, {})
+			_instance_base = {}
+			msg = "This %s follows its species again" % label.to_lower()
+		"world", "all":
+			if look.is_empty():
+				_refresh_apply_state("Nothing changed yet — move a slider or pick a colour")
+				return
+			_loader.call("apply_veg_species_look", _species, look, scope)
+			# The store now carries the look; this tree's own copy was dropped.
+			var cur: Dictionary = _store_species_overrides.get(_species, {}) \
+				if _store_species_overrides.get(_species) is Dictionary else {}
+			cur = cur.duplicate()
+			cur.merge(look, true)
+			_store_species_overrides[_species] = cur
+			if scope == "world" and _species not in _store_map_species:
+				_store_map_species.append(_species)
+			_instance_base = {}
+			msg = ("Every %s in this world now looks like this" if scope == "world"
+				else "Saved as the %s default for every world") % label.to_lower()
+	_species_edits.erase(_species)
+	_species_baselines.erase(_species)
+	_inst_colors = {}
+	_rebuild_species_section()
+	_refresh_all_slider_diffs()
+	_refresh_instance_labels()
+	_queue_rebuild(true)
+	_refresh_apply_state(msg)

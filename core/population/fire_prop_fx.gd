@@ -151,8 +151,7 @@ func _night(main: Node) -> float:
 
 
 func _sgv() -> Node:
-	var scene := get_tree().current_scene if get_tree() != null else null
-	return scene.get_node_or_null("UILayer/SystemGraphView") if scene != null else null
+	return ServiceLocator.graph()
 
 
 func _bridge() -> Object:

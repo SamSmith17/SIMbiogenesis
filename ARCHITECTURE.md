@@ -130,14 +130,17 @@ selftests green.
    Do **not** register autoloads (WeatherService, TimeDirector, …) — reference
    those directly.
    ⚠ *Regressed (re-measured 2026-08-11):* 12 `"UILayer/SystemGraphView"`
-   lookups are back, **concentrated in code written AFTER the sweep** — the
-   settlement surface (`scenes/settlement/work_dock.gd`, `settlement_view.gd`,
-   `settlement_hud.gd`), `core/population/site_project_effects.gd`,
-   `scenes/ui/site_project_panel.gd`, `gameplay/site_target_picker.gd`,
-   `core/placed_models/placed_prop_service.gd`, `core/terrain/terrain_loader.gd`.
-   The convention is not enforcing itself on new code; use
-   `ServiceLocator.graph()` in anything new and sweep these when touching those
-   files.
+   lookups were back, **concentrated in code written AFTER the sweep**, and by
+   2026-10-18 there were 28 in 20 files (the settlement surface, the peak /
+   festival chips, the site-project effects, the ambient bed, the fire props).
+   *Swept again 2026-10-18 (Push 4), and this time it enforces itself:*
+   `core/services_selftest.gd` walks every `.gd` in the repo and FAILS on the
+   literal anywhere outside an allow-list — `core/services.gd` (its doc
+   comment names the path it replaces), the selftest itself, and the harness
+   probes (`core/terrain/harness/`, `core/terrain/playtest_harness.gd`,
+   `tools/`), which walk the REAL scene tree by path on purpose. A new
+   `get_node_or_null("UILayer/SystemGraphView")` anywhere else fails the
+   selftest with the file named. Use `ServiceLocator.graph()`.
 2. **Monoliths — the big files keep growing** (re-measured 2026-08-11):
    `system_graph_view.gd` (~15.8k lines), `terrain_loader.gd` (~10.2k),
    `graph_canvas.gd` (~9.2k), `playtest_harness.gd` (~6.8k — now bigger than
@@ -149,6 +152,15 @@ selftests green.
    cohesive responsibility per push into a delegate helper (e.g. the graph's
    `_tick_graph_csp` / `_tick_graph_renewables` / `_tick_resource_flow_ambient`;
    main's env/sky, save/load, collision generation).
+   *Re-measured 2026-10-18:* `system_graph_view.gd` 19.9k, `terrain_loader.gd`
+   12.9k, `playtest_harness.gd` 16.4k. *First slice (2026-10-18, Push 4):* the
+   hydro-source routing (intakes, penstocks, stream taps — the ONE water-source
+   model) lives in `system_graph/graph_hydro_routing.gd` (`GraphHydroRouting`,
+   a RefCounted the view owns); the view keeps one-line delegates so no caller
+   moved. Pattern for the next slice: move the functions byte for byte, point
+   their self-references at `view`, type every local the view hands back
+   (`var x: Node = view._f()` — `:=` on a duck-typed call is a compile error
+   here), keep the public names on the view. 19.9k → 19.4k lines.
 3. **Loose root `.gd` (11 files)** — vehicles (`euc_/golf_cart_/skid_steer_`),
    `ha_switch`, `ha_websocket_client`, `ibc_glow`, `auto_light`,
    `solar_calculator`, `planets`, `star_system`, `main.gd`

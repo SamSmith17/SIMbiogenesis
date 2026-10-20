@@ -239,6 +239,14 @@ const _FAMILY_DIM_KEYS := {
 const KEY_RESOLVE_RAW := "_resolve_raw"
 const RESOLVE_ABSENT := "<absent>"
 
+## ONE tree's own look (the V toolbar's Select → Tune look → "This tree"):
+## unprefixed keys in the species-override form (height_m, albedo_tint, …),
+## riding the record's card_settings. The STRONGEST layer: it beats the
+## species override, user family edits and SPECS, and is never gated by the
+## generic-family rule below — a tree the player tuned by hand looks exactly
+## as tuned.
+const KEY_INSTANCE_OVERRIDE := "_instance_over"
+
 
 ## Resolve the FLAT settings dict a builder sees for one species, with the
 ## Phase 2 precedence: per-species user override > user family edit > catalog
@@ -276,7 +284,10 @@ static func settings_with_variant(species: String, settings: Dictionary,
 		out[k] = v
 	var spec: Dictionary = specs.get(species, specs.get(family, {}))
 	out["_variant_species"] = species
+	var inst: Dictionary = out[KEY_INSTANCE_OVERRIDE] \
+		if out.get(KEY_INSTANCE_OVERRIDE) is Dictionary else {}
 	if spec.is_empty():
+		_put_instance_keys(inst, family, out, put, [])
 		out[KEY_RESOLVE_RAW] = raw
 		return out
 	var user_family: Array = out.get(VegStyleStore.KEY_USER_FAMILY, [])
@@ -287,7 +298,11 @@ static func settings_with_variant(species: String, settings: Dictionary,
 	# on plain Deciduous) is the WEAKEST user layer: it yields to any user
 	# family edit — per-map tuning or a family-wide Apply. Un-gated it outranked
 	# per-map family values forever ("my per-map tuning does nothing").
-	var generic_self := species == family
+	# Exception: an entry THIS MAP wrote (Select → "All of these in this
+	# world") is the player naming that species on this map, so it wins.
+	var map_species: Array = out[VegStyleStore.KEY_MAP_SPECIES] \
+		if out.get(VegStyleStore.KEY_MAP_SPECIES) is Array else []
+	var generic_self := species == family and species not in map_species
 	# Provenance out-channel: species-override values count as EXPLICIT user
 	# edits downstream (the v3 macro system derives Advanced values unless the
 	# player explicitly set them — see VegetationCardFactory._derived_or_user).
@@ -344,6 +359,8 @@ static func settings_with_variant(species: String, settings: Dictionary,
 		put.call(flat_over, over[k])
 		if flat_over not in explicit_out:
 			explicit_out.append(flat_over)
+	# The one tree's own look last: it beats everything above.
+	_put_instance_keys(inst, family, out, put, explicit_out)
 	put.call(VegStyleStore.KEY_USER_FAMILY, explicit_out)
 	# Colors: same ladder. SPECS carry real per-variant palettes (birch/aspen
 	# white bark, maple's orange highlight) that were previously unreachable.
@@ -351,13 +368,17 @@ static func settings_with_variant(species: String, settings: Dictionary,
 	var family_hi := "%s_highlight_tint" % family
 	var albedo_key := "%s_albedo_tint" % species
 	var hi_key := "%s_highlight_tint" % species
-	if over.has("albedo_tint") and not (generic_self and family_albedo in user_family):
+	if inst.get("albedo_tint") is Color:
+		put.call(family_albedo, inst["albedo_tint"])
+	elif over.has("albedo_tint") and not (generic_self and family_albedo in user_family):
 		put.call(family_albedo, over["albedo_tint"])
 	elif out.has(albedo_key) and species != family:
 		put.call(family_albedo, out[albedo_key])
 	elif named_variant and spec.has("top") and family_albedo not in user_family:
 		put.call(family_albedo, spec["top"])
-	if over.has("highlight_tint") and not (generic_self and family_hi in user_family):
+	if inst.get("highlight_tint") is Color:
+		put.call(family_hi, inst["highlight_tint"])
+	elif over.has("highlight_tint") and not (generic_self and family_hi in user_family):
 		put.call(family_hi, over["highlight_tint"])
 	elif out.has(hi_key) and species != family:
 		put.call(family_hi, out[hi_key])
@@ -370,6 +391,27 @@ static func settings_with_variant(species: String, settings: Dictionary,
 		put.call("bark_albedo_tint", VegetationCardFactory.bark_paint_color(spec["bark"]))
 	out[KEY_RESOLVE_RAW] = raw
 	return out
+
+
+## Write a per-tree override onto the family flat keys. Dims and every other
+## key alike (no SPECS ratio: the values ARE this tree's numbers); albedo and
+## highlight tints go through the colour ladder in the caller.
+static func _put_instance_keys(inst: Dictionary, family: String, out: Dictionary,
+		put: Callable, explicit_out: Array) -> void:
+	if inst.is_empty():
+		return
+	var dims: Dictionary = _FAMILY_DIM_KEYS.get(family, {})
+	for k in inst:
+		var key := str(k)
+		if key == "albedo_tint" or key == "highlight_tint" or key.begins_with("_"):
+			continue
+		var flat_key := "%s_%s" % [family, key]
+		var v: Variant = inst[k]
+		if dims.has(key) and (v is float or v is int):
+			v = float(v)
+		put.call(flat_key, v)
+		if flat_key not in explicit_out:
+			explicit_out.append(flat_key)
 
 
 ## Subspecies ids under a paint-dock family button (Pine / Decid / Shrub / grass).

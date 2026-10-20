@@ -322,6 +322,8 @@ void fragment() {
 	ALBEDO = albedo * (1.0 - haze_amount);
 	EMISSION = haze_color * haze_amount
 			+ albedo * (1.0 - haze_amount) * veg_fill_amount() * (1.0 - night_factor);
+	ALBEDO = veg_hl_albedo(ALBEDO);
+	EMISSION += veg_hl_emission();
 	ROUGHNESS = snow_rough;
 	METALLIC = 0.0;
 	SPECULAR = 0.25;

@@ -4,6 +4,15 @@ extends Control
 ## preview. Drives PalletRackBuilder from catalog dropdowns, layout sliders, level
 ## / deck / variant / wall controls, and places the result via PlacedPropService
 ## as model_id "pallet_rack" + rack_spec extras.
+##
+## Design elements (doors, sliding doors, windows, stairs, solar / greenhouse
+## slopes, railings, courtyards) are placed with the "Add to the structure"
+## tools: arm one, hover the preview (a cyan ghost shows where it lands), click.
+## Clicking a placed element selects it; the "Selected" card edits it, drags
+## slide doors / windows / stairs along their wall, Ctrl+D duplicates, Del
+## removes. A slope bay can be clicked on its own to change just that bay's
+## covering. Whole designs and single elements save to a library that every
+## rack can reuse (PalletRackBuilder.LIBRARY_PATH).
 
 const MODAL_NAME := "pallet_rack_builder"
 const REBUILD_DEBOUNCE_S := 0.10
@@ -49,7 +58,34 @@ var _u_row: HBoxContainer = null
 var _u_bays_spin: SpinBox = null
 var _u_cols_spin: SpinBox = null
 var _wall_chks: Dictionary = {}
+var _wall_bottom_spin: SpinBox = null
+var _wall_top_spin: SpinBox = null
 var _collide_chk: CheckBox = null
+
+# ---- Design elements ----
+## The armed placement tool: "" none, "step" the step dropper, else a
+## TOOL_PRESETS id or "lib:<n>" (a saved element preset).
+var _tool := ""
+var _tool_element: Dictionary = {}
+var _tool_btns: Dictionary = {}
+## Ghost pick boxes of the element the armed tool would place.
+var _ghost_comps: Array = []
+var _insp_frame: PanelContainer = null
+var _insp_box: VBoxContainer = null
+var _insp_el_id := ""
+var _insp_seg := -1
+var _insp_fields: Dictionary = {}
+var _insp_suppress := false
+var _last_field_undo_ms := 0
+var _el_list_box: VBoxContainer = null
+var _el_list_sig := ""
+var _design_opt: OptionButton = null
+var _design_name: LineEdit = null
+var _el_preset_opt: OptionButton = null
+var _library: Dictionary = {}
+var _status_lbl: Label = null
+## Element to select once the rebuild that adds it lands (its pick ids exist then).
+var _pending_select := ""
 var _bom_lbl: Label = null
 var _title_lbl: Label = null
 var _place_btn: Button = null
@@ -71,7 +107,9 @@ var _suppress := false
 var _framed := false
 
 # Orbit camera state (RMB-drag).
-var _yaw := 0.7
+## Opens on the front-right three-quarter (the camera on -Z, +X): "front" is
+## the -Z face, where slopes and doors are placed by default.
+var _yaw := PI - 0.75
 var _pitch := 0.5
 var _dist := 12.0
 var _target := Vector3(0, 2.0, 0)
@@ -80,7 +118,9 @@ var _dragging := false
 # ---- Per-component editor state ----
 ## Small dead-zone so a click reads as a select, a nudge reads as a drag.
 const DRAG_THRESHOLD_PX := 1.5
-const MANIP_KINDS := ["deck", "step", "beam", "wall_sheet"]
+const MANIP_KINDS := ["deck", "step", "beam", "wall_sheet", "element"]
+## Elements that slide along their wall when dragged.
+const SLIDE_TYPES := ["door", "window", "stair"]
 ## Fraction of the deck's far Z edge that counts as the resize grab band.
 const RESIZE_EDGE_FRAC := 0.28
 const UNDO_LIMIT := 40
@@ -158,6 +198,13 @@ func _activate() -> void:
 	_hover_group.clear()
 	_undo_stack.clear()
 	_place_step_mode = false
+	_tool = ""
+	_tool_element = {}
+	_ghost_comps = []
+	_sync_tool_buttons()
+	_library = PalletRackBuilder.load_library()
+	_refresh_design_list()
+	_refresh_element_presets()
 	_reset_gesture()
 	_active = true
 	visible = true
@@ -182,7 +229,7 @@ func close() -> void:
 		return
 	_active = false
 	_bound_prop_id = ""
-	_set_step_mode(false)
+	_set_tool("")
 	_undo_stack.clear()
 	_update_undo_btn()
 	visible = false
@@ -261,6 +308,8 @@ func _build_ui() -> void:
 	side.add_theme_constant_override("separation", 6)
 	scroll.add_child(side)
 
+	_build_element_ui(side)
+
 	_section(side, "Rack system")
 	_depth_opt = _add_option(side, "Upright depth", PalletRackBuilder.DEPTH_OPTIONS_IN,
 		"\"", int(_spec["upright_depth_in"]))
@@ -322,6 +371,18 @@ func _build_ui() -> void:
 	for face in ["front", "back", "left", "right"]:
 		_wall_chks[face] = _add_check(wall_row, face.capitalize(),
 			bool((_spec["walls"] as Dictionary).get(face, false)))
+	var band_row := HBoxContainer.new()
+	band_row.add_theme_constant_override("separation", 8)
+	side.add_child(band_row)
+	var bb := VBoxContainer.new()
+	bb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	band_row.add_child(bb)
+	_wall_bottom_spin = _add_spin(bb, "Walls from (ft)", 0.0, 20.0, 0.25, 0.0)
+	var bt := VBoxContainer.new()
+	bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	band_row.add_child(bt)
+	_wall_top_spin = _add_spin(bt, "up to (ft, 0 = top)", 0.0, 20.0, 0.25, 0.0)
+	_wall_top_spin.tooltip_text = "Where the walls stop. 0 runs them to the top of the frame; 8 walls in just the ground floor."
 
 	_section(side, "Bill of materials")
 	_bom_lbl = Label.new()
@@ -356,7 +417,7 @@ func _build_topbar() -> Control:
 	row.add_child(_sel_hud)
 
 	var hint := Label.new()
-	hint.text = "RMB: orbit  •  LMB: select/drag deck strip  •  Shift+LMB: multi  •  Del: remove"
+	hint.text = "RMB orbit  •  LMB select / drag  •  Shift multi  •  Del remove  •  Ctrl+D duplicate"
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -602,6 +663,9 @@ func _on_viewport_input(e: InputEvent) -> void:
 			if _place_step_mode:
 				if mb.pressed:
 					_place_step_at(mb.position)
+			elif not _tool.is_empty():
+				if mb.pressed:
+					_tool_click(mb.position, mb.shift_pressed)
 			elif mb.pressed:
 				_begin_gesture(mb.position, mb.shift_pressed)
 			else:
@@ -614,6 +678,8 @@ func _on_viewport_input(e: InputEvent) -> void:
 			_update_camera()
 		elif _place_step_mode:
 			_update_step_ghost(mm.position)
+		elif not _tool.is_empty():
+			_update_tool_ghost(mm.position)
 		elif _lmb_down and not _manip_mode.is_empty():
 			_update_manip(mm.position)
 		else:
@@ -638,13 +704,16 @@ func _input(e: InputEvent) -> void:
 	elif ke.keycode == KEY_DELETE or ke.keycode == KEY_BACKSPACE:
 		_delete_selection()
 		get_viewport().set_input_as_handled()
+	elif ke.keycode == KEY_D and ke.ctrl_pressed:
+		_duplicate_selected_element()
+		get_viewport().set_input_as_handled()
 	elif ke.keycode == KEY_S and not ke.ctrl_pressed:
 		_toggle_step_on_selection()
 		get_viewport().set_input_as_handled()
 	elif ke.keycode == KEY_ESCAPE:
-		# Esc backs out one layer at a time: step tool → selection → (modal close).
-		if _place_step_mode:
-			_set_step_mode(false)
+		# Esc backs out one layer at a time: tool → selection → (modal close).
+		if not _tool.is_empty():
+			_set_tool("")
 			get_viewport().set_input_as_handled()
 		elif not _selection.is_empty():
 			_selection.clear()
@@ -733,6 +802,9 @@ func _update_hover(local_pos: Vector2) -> void:
 				shape = Control.CURSOR_BDIAGSIZE
 			elif k == "deck" or k == "step" or k == "beam":
 				shape = Control.CURSOR_MOVE
+			elif k == "element":
+				shape = Control.CURSOR_MOVE if SLIDE_TYPES.has(str(comp.get("etype", ""))) \
+					else Control.CURSOR_POINTING_HAND
 			elif k == "wall_sheet":
 				shape = Control.CURSOR_POINTING_HAND
 		_vp_container.mouse_default_cursor_shape = shape
@@ -749,7 +821,22 @@ func _pick_group(comp: Dictionary) -> Array:
 	var kind := str(comp.get("kind", ""))
 	if kind == "deck" or kind == "step":
 		return _strip_of(comp)
+	if kind == "element":
+		# A slope bay is picked on its own (its covering is per bay); every
+		# other element is one unit, all its runs / boxes together.
+		if str(comp.get("etype", "")) == "lean_to":
+			return [str(comp["id"])]
+		return _element_group(str(comp.get("el_id", "")))
 	return [str(comp["id"])]
+
+
+## Every pick id that belongs to element `el_id`.
+func _element_group(el_id: String) -> Array:
+	var ids: Array = []
+	for c in _pick_cache:
+		if str(c.get("kind", "")) == "element" and str(c.get("el_id", "")) == el_id:
+			ids.append(str(c["id"]))
+	return ids
 
 
 ## All ids in the deck strip of `comp`: every cell in its (col, level) across
@@ -807,6 +894,18 @@ func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
 		return
 	var kind := str(comp["kind"])
 	var id := str(comp["id"])
+	if kind == "element":
+		if not SLIDE_TYPES.has(str(comp.get("etype", ""))):
+			return  # slopes, railings, courtyards: click to select, edit in the card
+		var el := _element_by_id(str(comp.get("el_id", "")))
+		var along := _ray_face_along(local_pos, str(el.get("face", "front")))
+		if el.is_empty() or is_nan(along):
+			return
+		_manip_mode = "el_slide"
+		_manip_targets = _element_group(str(el["id"]))
+		_manip_start = {"el_id": str(el["id"]), "at_ft": float(el.get("at_ft", 0.0)),
+			"grab_ft": along - float(el.get("at_ft", 0.0)), "face": str(el.get("face", ""))}
+		return
 	if kind == "beam":
 		_manip_mode = "beam_move"
 	elif kind == "deck" or kind == "step":
@@ -932,6 +1031,17 @@ func _update_manip(local_pos: Vector2) -> void:
 			_preview_vertical(-d.y)
 		"deck_resize":
 			_preview_deck_resize(local_pos)
+		"el_slide":
+			var along := _ray_face_along(local_pos, str(_manip_start.get("face", "")))
+			if not is_nan(along):
+				var el := _element_by_id(str(_manip_start["el_id"]))
+				if not el.is_empty():
+					el["at_ft"] = snappedf(along - float(_manip_start["grab_ft"]), 0.5)
+					_sel_hud.text = "%s at %s along the wall  (snaps to 6\")" % [
+						PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+						PalletRackBuilder.fmt_ft(float(el["at_ft"]))]
+			_queue_rebuild(true, true)
+			return
 	_update_manip_hud()
 	_queue_rebuild(true, true)  # immediate + light → glides at frame rate
 
@@ -1092,8 +1202,21 @@ func _delete_selection() -> void:
 	if _selection.is_empty():
 		return
 	_push_undo()
+	var gone_elements := {}
 	for id in _selection:
-		if str(id).begins_with("cell:"):
+		if str(id).begins_with("el:"):
+			var comp := _comp_by_id(id)
+			var el_id := str(comp.get("el_id", ""))
+			if comp.has("seg"):
+				# Del on one slope bay leaves just that bay off.
+				var el := _element_by_id(el_id)
+				if not el.is_empty():
+					var segs: Dictionary = el.get("segments", {})
+					segs[str(int(comp["seg"]))] = "none"
+					el["segments"] = segs
+			elif not el_id.is_empty():
+				gone_elements[el_id] = true
+		elif str(id).begins_with("cell:"):
 			_set_cell_override(_id_key(id), "kind", "none")
 		elif str(id).begins_with("beam:"):
 			_set_beam_override(_id_key(id), "deleted", true)
@@ -1103,6 +1226,12 @@ func _delete_selection() -> void:
 			if not wdel.has(key):
 				wdel.append(key)
 			_spec["wall_sheet_deleted"] = wdel
+	if not gone_elements.is_empty():
+		var kept: Array = []
+		for e in (_spec.get("elements", []) as Array):
+			if not gone_elements.has(str((e as Dictionary).get("id", ""))):
+				kept.append(e)
+		_spec["elements"] = kept
 	_selection.clear()
 	_queue_rebuild(true)
 
@@ -1111,12 +1240,10 @@ func _delete_selection() -> void:
 # Undo (button + Ctrl+Z) — snapshots the override containers before each edit.
 # ---------------------------------------------------------------------------
 
+## The whole spec: element edits, wall toggles and loaded designs change more
+## than the per-part overrides, and undo has to take all of them back.
 func _snapshot_overrides() -> Dictionary:
-	return {
-		"cell_overrides": (_spec.get("cell_overrides", {}) as Dictionary).duplicate(true),
-		"beam_overrides": (_spec.get("beam_overrides", {}) as Dictionary).duplicate(true),
-		"wall_sheet_deleted": (_spec.get("wall_sheet_deleted", []) as Array).duplicate(true),
-	}
+	return _spec.duplicate(true)
 
 
 func _push_undo() -> void:
@@ -1130,11 +1257,10 @@ func _undo() -> void:
 	if _undo_stack.is_empty():
 		return
 	var snap: Dictionary = _undo_stack.pop_back()
-	_spec["cell_overrides"] = snap["cell_overrides"]
-	_spec["beam_overrides"] = snap["beam_overrides"]
-	_spec["wall_sheet_deleted"] = snap["wall_sheet_deleted"]
+	_spec = snap
 	_selection.clear()
 	_hover_group.clear()
+	_sync_controls()
 	_update_undo_btn()
 	_queue_rebuild(true)
 
@@ -1151,14 +1277,39 @@ func _update_undo_btn() -> void:
 # ---------------------------------------------------------------------------
 
 func _set_step_mode(on: bool) -> void:
-	_place_step_mode = on
+	if on == (_tool == "step"):
+		return
+	_set_tool("step" if on else "")
+
+
+## Arm a placement tool ("" disarms). `element` is the template the tool
+## places; the step dropper and the TOOL_PRESETS ids need none.
+func _set_tool(tool: String, element: Dictionary = {}) -> void:
+	_tool = tool
+	_place_step_mode = tool == "step"
+	_tool_element = {}
+	if not tool.is_empty() and tool != "step":
+		if not element.is_empty():
+			_tool_element = element.duplicate(true)
+		else:
+			for tp in PalletRackBuilder.TOOL_PRESETS:
+				if str(tp["id"]) == tool:
+					_tool_element = (tp["element"] as Dictionary).duplicate(true)
+		if _tool_element.is_empty():
+			_tool = ""
+	_ghost_comps = []
 	if _steps_btn != null:
-		_steps_btn.button_pressed = on
-	if on:
+		_steps_btn.set_pressed_no_signal(_place_step_mode)
+	_sync_tool_buttons()
+	if not _tool.is_empty():
 		_selection.clear()
 	_hover_group.clear()
+	if _vp_container != null:
+		_vp_container.mouse_default_cursor_shape = Control.CURSOR_CROSS if not _tool.is_empty() \
+			else Control.CURSOR_ARROW
 	_refresh_highlight()
 	_update_sel_hud()
+	_refresh_inspector()
 
 
 func _pick_slot(local_pos: Vector2) -> Dictionary:
@@ -1198,7 +1349,10 @@ func _refresh_highlight(step_ghost: bool = false) -> void:
 	for id in _selection:
 		var comp := _comp_by_id(id)
 		if not comp.is_empty():
-			_add_highlight_box(comp["aabb"], Color(1.0, 0.6, 0.1, 0.38))
+			_add_comp_highlight(comp, Color(1.0, 0.6, 0.1, 0.38))
+	# Where the armed tool would put its element.
+	for gc in _ghost_comps:
+		_add_comp_highlight(gc, Color(0.2, 0.75, 1.0, 0.42))
 	# Cyan ghost while dropping a step; green for a normal hover.
 	var hover_col := Color(0.2, 0.75, 1.0, 0.4) if step_ghost else Color(0.2, 1.0, 0.35, 0.28)
 	for id in _hover_group:
@@ -1206,7 +1360,19 @@ func _refresh_highlight(step_ghost: bool = false) -> void:
 			continue
 		var hc := _slot_or_comp_by_id(id) if step_ghost else _comp_by_id(id)
 		if not hc.is_empty():
-			_add_highlight_box(hc["aabb"], hover_col)
+			_add_comp_highlight(hc, hover_col)
+
+
+## A component's highlight: its oriented box when it has one (a slope bay).
+func _add_comp_highlight(comp: Dictionary, color: Color) -> void:
+	if not comp.has("obb_xf"):
+		_add_highlight_box(comp["aabb"], color)
+		return
+	var xf: Transform3D = comp["obb_xf"]
+	var half: Vector3 = comp["obb_half"]
+	_add_highlight_box(AABB(-half, half * 2.0), color)
+	var mi := _highlight_holder.get_child(_highlight_holder.get_child_count() - 1) as MeshInstance3D
+	mi.transform = xf * Transform3D(Basis(), mi.position)
 
 
 ## Resolve an id against the full slot list (includes empty cells) for the step
@@ -1240,8 +1406,18 @@ func _update_sel_hud() -> void:
 	if _place_step_mode:
 		_sel_hud.text = "Step tool: click a cell to drop steps  (Esc to exit)"
 		return
+	if not _tool.is_empty():
+		_sel_hud.text = "%s: %s  (Shift-click to place several • Esc to stop)" % [
+			_tool_label(), _tool_prompt()]
+		return
 	if _selection.is_empty():
 		_sel_hud.text = ""
+		return
+	var el := _element_by_id(_selected_element_id())
+	if not el.is_empty():
+		_sel_hud.text = "Selected: %s  (drag to slide • Del remove • Ctrl+D duplicate)" % \
+			PalletRackBuilder.element_label(el, _spec) if SLIDE_TYPES.has(str(el.get("type", ""))) \
+			else "Selected: %s  (Del remove • Ctrl+D duplicate)" % PalletRackBuilder.element_label(el, _spec)
 		return
 	# Count distinct deck strips (a strip is many cell ids) so the readout is
 	# meaningful rather than "12 deck".
@@ -1378,6 +1554,10 @@ func _sync_controls() -> void:
 	for face in _wall_chks.keys():
 		(_wall_chks[face] as CheckBox).button_pressed = \
 			bool((_spec["walls"] as Dictionary).get(face, false))
+	if _wall_bottom_spin:
+		_wall_bottom_spin.value = float(_spec.get("wall_bottom_ft", 0.0))
+	if _wall_top_spin:
+		_wall_top_spin.value = maxf(float(_spec.get("wall_top_ft", -1.0)), 0.0)
 	_suppress = false
 	_rebuild_level_spins()
 
@@ -1420,6 +1600,10 @@ func _read_spec() -> Dictionary:
 		"cell_overrides": (_spec.get("cell_overrides", {}) as Dictionary),
 		"beam_overrides": (_spec.get("beam_overrides", {}) as Dictionary),
 		"wall_sheet_deleted": (_spec.get("wall_sheet_deleted", []) as Array),
+		"wall_bottom_ft": float(_wall_bottom_spin.value) if _wall_bottom_spin else 0.0,
+		"wall_top_ft": (float(_wall_top_spin.value) if _wall_top_spin.value > 0.0 else -1.0) \
+			if _wall_top_spin else -1.0,
+		"elements": (_spec.get("elements", []) as Array),
 	})
 
 
@@ -1449,7 +1633,7 @@ func _rebuild_preview(light: bool = false) -> void:
 		var fp := PalletRackBuilder.footprint_xz(_spec)
 		var h := float(_spec["upright_height_ft"]) * PalletRackBuilder.FT
 		_target = Vector3(0, h * 0.45, 0)
-		_dist = maxf(fp.x, fp.y) * 1.2 + h * 0.9 + 4.0
+		_dist = maxf(fp.x, fp.y) * 0.9 + h * 0.5 + 3.0
 		_update_camera()
 		_framed = true
 	if not light:
@@ -1469,19 +1653,43 @@ func _rebuild_preview(light: bool = false) -> void:
 		if live.has(id):
 			kept_hover.append(id)
 	_hover_group = kept_hover
+	if not _pending_select.is_empty() and not light:
+		_selection = _element_group(_pending_select)
+		_pending_select = ""
 	_refresh_highlight()
 	if not light:
 		_update_undo_btn()
 		_update_sel_hud()
+		_refresh_element_list()
+		_refresh_inspector()
 
 
 func _update_bom(node: Node3D) -> void:
 	if _bom_lbl == null:
 		return
 	var b: Dictionary = node.get_meta("bom", {}) if node.has_meta("bom") else {}
-	_bom_lbl.text = "%s   %s\n%s   %s" % [
-		UiText.count(int(b.get("uprights", 0)), "upright"), UiText.count(int(b.get("beams", 0)), "beam"),
-		UiText.count(int(b.get("lumber", 0)), "2x4 joist"), UiText.count(int(b.get("plywood", 0)), "plywood sheet")]
+	var lines: Array = ["%s   %s" % [UiText.count(int(b.get("uprights", 0)), "upright"),
+			UiText.count(int(b.get("beams", 0)), "beam")],
+		"%s   %s" % [UiText.count(int(b.get("lumber", 0)), "piece", "pieces") + " of lumber",
+			UiText.count(int(b.get("plywood", 0)), "plywood sheet")]]
+	var n_pv := int(b.get("solar_panels", 0))
+	if n_pv > 0:
+		lines.append("%s · %s" % [UiText.count(n_pv, "solar panel"),
+			UiText.num(float(b.get("solar_watts", 0.0)), "W")])
+	var extras: Array = []
+	if int(b.get("glazing", 0)) > 0:
+		extras.append(UiText.count(int(b["glazing"]), "glazing sheet"))
+	if int(b.get("doors", 0)) > 0:
+		extras.append(UiText.count(int(b["doors"]), "door"))
+	if int(b.get("windows", 0)) > 0:
+		extras.append(UiText.count(int(b["windows"]), "window"))
+	if int(b.get("stairs", 0)) > 0:
+		extras.append(UiText.count(int(b["stairs"]), "staircase"))
+	if float(b.get("railing_ft", 0.0)) > 0.5:
+		extras.append("%d ft of railing" % int(round(float(b["railing_ft"]))))
+	if not extras.is_empty():
+		lines.append("   ".join(extras))
+	_bom_lbl.text = "\n".join(lines)
 
 
 func _on_place() -> void:
@@ -1504,6 +1712,9 @@ func _on_apply_to_prop() -> void:
 			{"rack_spec": _spec.duplicate(true)}, true)
 	elif _loader != null and _loader.has_method("update_prop_record"):
 		_loader.call("update_prop_record", _bound_prop_id, {"rack_spec": _spec.duplicate(true)})
+	# A sloped solar array on the rack is an array on the graph (or no longer is).
+	if main != null:
+		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, _bound_prop_id)
 	close()
 
 
@@ -1534,3 +1745,818 @@ func _prop_record(prop_id: String) -> Dictionary:
 	if main != null:
 		return PlacedPropService.get_prop_record(main, prop_id)
 	return {}
+
+
+# ---------------------------------------------------------------------------
+# Design elements — the Add palette, the designs library, the inspector card
+# ---------------------------------------------------------------------------
+
+func _small_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_color_override("font_color", C_TEXT_S)
+	l.add_theme_font_size_override("font_size", 11)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return l
+
+
+func _small_button(text: String, tip: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 11)
+	b.pressed.connect(cb)
+	return b
+
+
+func _build_element_ui(side: VBoxContainer) -> void:
+	# The selected element's card sits on top, so it is in view the moment
+	# something is clicked; hidden while nothing is selected.
+	_insp_frame = PanelContainer.new()
+	var sb := _card_style()
+	sb.border_color = C_PRIMARY
+	_insp_frame.add_theme_stylebox_override("panel", sb)
+	_insp_frame.visible = false
+	side.add_child(_insp_frame)
+	_insp_box = VBoxContainer.new()
+	_insp_box.add_theme_constant_override("separation", 4)
+	_insp_frame.add_child(_insp_box)
+
+	_section(side, "Add to the structure")
+	side.add_child(_small_label("Pick one, then click the preview where it goes."))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	for tp in PalletRackBuilder.TOOL_PRESETS:
+		var b := Button.new()
+		b.text = str(tp["label"])
+		b.tooltip_text = str(tp["tip"])
+		b.toggle_mode = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.add_theme_font_size_override("font_size", 11)
+		var tid := str(tp["id"])
+		b.toggled.connect(func(on: bool) -> void: _set_tool(tid if on else ""))
+		grid.add_child(b)
+		_tool_btns[tid] = b
+	side.add_child(grid)
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 4)
+	_el_preset_opt = OptionButton.new()
+	_el_preset_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_el_preset_opt.focus_mode = Control.FOCUS_NONE
+	_el_preset_opt.clip_text = true
+	_el_preset_opt.tooltip_text = "Elements you saved with \"Save preset\" — on any rack"
+	prow.add_child(_el_preset_opt)
+	prow.add_child(_small_button("Place", "Place the saved element (click where it goes)",
+		_arm_element_preset))
+	side.add_child(prow)
+
+	_section(side, "In this design")
+	_el_list_box = VBoxContainer.new()
+	_el_list_box.add_theme_constant_override("separation", 2)
+	side.add_child(_el_list_box)
+
+	_section(side, "Designs")
+	_design_opt = OptionButton.new()
+	_design_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_design_opt.focus_mode = Control.FOCUS_NONE
+	_design_opt.clip_text = true
+	side.add_child(_design_opt)
+	var drow := HBoxContainer.new()
+	drow.add_theme_constant_override("separation", 4)
+	var load_b := _small_button("Load", "Replace this design with the one picked (Ctrl+Z goes back)",
+		_on_load_design)
+	load_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	drow.add_child(load_b)
+	drow.add_child(_small_button("Forget", "Remove the picked saved design from your library",
+		_on_forget_design))
+	side.add_child(drow)
+	var srow := HBoxContainer.new()
+	srow.add_theme_constant_override("separation", 4)
+	_design_name = LineEdit.new()
+	_design_name.placeholder_text = "Name this design"
+	_design_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	srow.add_child(_design_name)
+	srow.add_child(_small_button("Save design", "Save the whole rack to your library", _on_save_design))
+	side.add_child(srow)
+	_status_lbl = _small_label("")
+	_status_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	side.add_child(_status_lbl)
+	_refresh_design_list()
+	_refresh_element_presets()
+	_refresh_element_list()
+
+
+func _flash(text: String) -> void:
+	if _status_lbl != null:
+		_status_lbl.text = text
+
+
+func _sync_tool_buttons() -> void:
+	for tid in _tool_btns.keys():
+		(_tool_btns[tid] as Button).set_pressed_no_signal(_tool == str(tid))
+
+
+func _tool_label() -> String:
+	if _tool.begins_with("lib:"):
+		var saved: Array = _library.get("elements", [])
+		var k := int(_tool.substr(4))
+		return str((saved[k] as Dictionary).get("name", "Saved element")) if k < saved.size() else "Saved element"
+	for tp in PalletRackBuilder.TOOL_PRESETS:
+		if str(tp["id"]) == _tool:
+			return str(tp["label"])
+	return "Place"
+
+
+func _tool_prompt() -> String:
+	match str(_tool_element.get("type", "")):
+		"door", "window":
+			return "click a wall face where it goes"
+		"stair":
+			return "click the face the stairs climb, level with the deck they reach"
+		"lean_to":
+			return "click the face the slope leans on"
+		"railing":
+			return "click the deck that needs railings"
+		"courtyard":
+			return "click the deck cell where the courtyard starts"
+	return "click the preview"
+
+
+func _refresh_design_list() -> void:
+	if _design_opt == null:
+		return
+	_design_opt.clear()
+	var i := 0
+	for d in PalletRackBuilder.design_presets():
+		_design_opt.add_item(str(d["name"]))
+		_design_opt.set_item_metadata(i, "builtin:" + str(d["id"]))
+		_design_opt.set_item_tooltip(i, str(d["blurb"]))
+		i += 1
+	var saved: Array = _library.get("designs", [])
+	for k in saved.size():
+		_design_opt.add_item("Mine · " + str((saved[k] as Dictionary).get("name", "")))
+		_design_opt.set_item_metadata(i, "lib:%d" % k)
+		i += 1
+
+
+func _refresh_element_presets() -> void:
+	if _el_preset_opt == null:
+		return
+	_el_preset_opt.clear()
+	var saved: Array = _library.get("elements", [])
+	if saved.is_empty():
+		_el_preset_opt.add_item("No saved elements yet")
+		_el_preset_opt.set_item_disabled(0, true)
+		return
+	for k in saved.size():
+		_el_preset_opt.add_item(str((saved[k] as Dictionary).get("name", "")))
+		_el_preset_opt.set_item_metadata(k, k)
+
+
+## Replace the design with a built-in ("builtin:<id>" or a bare id) or a saved
+## one ("lib:<n>"). Undoable.
+func load_design(id: String) -> bool:
+	var spec: Dictionary = {}
+	if id.begins_with("lib:"):
+		var saved: Array = _library.get("designs", [])
+		var k := int(id.substr(4))
+		if k >= 0 and k < saved.size():
+			spec = (saved[k] as Dictionary).get("spec", {}) as Dictionary
+	else:
+		spec = PalletRackBuilder.design_preset(id.trim_prefix("builtin:")).get("spec", {}) as Dictionary
+	if spec.is_empty():
+		return false
+	_push_undo()
+	_spec = PalletRackBuilder.resolve_spec(spec)
+	_selection.clear()
+	_hover_group.clear()
+	_sync_controls()
+	_framed = false
+	_queue_rebuild(true)
+	return true
+
+
+func _on_load_design() -> void:
+	if _design_opt == null or _design_opt.selected < 0:
+		return
+	var meta: Variant = _design_opt.get_selected_metadata()
+	if meta != null and load_design(str(meta)):
+		_flash("Loaded \"%s\" — Ctrl+Z goes back." % _design_opt.get_item_text(_design_opt.selected))
+
+
+func _on_save_design() -> void:
+	var name := _design_name.text.strip_edges() if _design_name != null else ""
+	if name.is_empty():
+		_flash("Type a name for the design first.")
+		return
+	_spec = _read_spec()
+	var saved: Array = _library.get("designs", [])
+	var rec := {"name": name, "spec": _spec.duplicate(true)}
+	var replaced := false
+	for k in saved.size():
+		if str((saved[k] as Dictionary).get("name", "")) == name:
+			saved[k] = rec
+			replaced = true
+	if not replaced:
+		saved.append(rec)
+	_library["designs"] = saved
+	if PalletRackBuilder.save_library(_library):
+		_flash("Saved \"%s\" to your library." % name)
+	else:
+		_flash("Could not write the library file.")
+	_refresh_design_list()
+
+
+func _on_forget_design() -> void:
+	if _design_opt == null or _design_opt.selected < 0:
+		return
+	var meta := str(_design_opt.get_selected_metadata())
+	if not meta.begins_with("lib:"):
+		_flash("Built-in designs stay; only your saved ones can be forgotten.")
+		return
+	var saved: Array = _library.get("designs", [])
+	var k := int(meta.substr(4))
+	if k < 0 or k >= saved.size():
+		return
+	var name := str((saved[k] as Dictionary).get("name", ""))
+	saved.remove_at(k)
+	_library["designs"] = saved
+	PalletRackBuilder.save_library(_library)
+	_refresh_design_list()
+	_flash("Forgot \"%s\"." % name)
+
+
+func _save_element_preset(name: String) -> void:
+	var el := _element_by_id(_insp_el_id)
+	if el.is_empty():
+		return
+	var tmpl := el.duplicate(true)
+	tmpl.erase("id")
+	if name.strip_edges().is_empty():
+		name = PalletRackBuilder.element_label(el, _spec)
+	var saved: Array = _library.get("elements", [])
+	var rec := {"name": name.strip_edges(), "element": tmpl}
+	var replaced := false
+	for k in saved.size():
+		if str((saved[k] as Dictionary).get("name", "")) == rec["name"]:
+			saved[k] = rec
+			replaced = true
+	if not replaced:
+		saved.append(rec)
+	_library["elements"] = saved
+	PalletRackBuilder.save_library(_library)
+	_refresh_element_presets()
+	_flash("Saved \"%s\" — place it on any rack from Add to the structure." % rec["name"])
+
+
+func _arm_element_preset() -> void:
+	if _el_preset_opt == null or _el_preset_opt.selected < 0:
+		return
+	var meta: Variant = _el_preset_opt.get_selected_metadata()
+	if meta == null:
+		return
+	var saved: Array = _library.get("elements", [])
+	var k := int(meta)
+	if k < 0 or k >= saved.size():
+		return
+	_set_tool("lib:%d" % k, (saved[k] as Dictionary).get("element", {}) as Dictionary)
+
+
+# ---- Placing ----
+
+func _ray(local_pos: Vector2) -> Array:
+	if _camera == null:
+		return []
+	var vp := _to_viewport_pos(local_pos)
+	return [_camera.project_ray_origin(vp), _camera.project_ray_normal(vp)]
+
+
+func _ray_face_along(local_pos: Vector2, face: String) -> float:
+	var r := _ray(local_pos)
+	if r.is_empty():
+		return NAN
+	return PalletRackBuilder.face_plane_along_ft(_spec, face, r[0], r[1])
+
+
+## The element the armed tool would place under the cursor, or {"_select": id}
+## when that spot already has one (a face's slope, a deck's railing), or {}.
+func _tool_candidate(local_pos: Vector2) -> Dictionary:
+	var r := _ray(local_pos)
+	if r.is_empty() or _tool_element.is_empty():
+		return {}
+	var el := _tool_element.duplicate(true)
+	var t := str(el.get("type", ""))
+	match t:
+		"door", "window", "stair", "lean_to":
+			var hit := PalletRackBuilder.face_hit(_spec, r[0], r[1])
+			if hit.is_empty():
+				return {}
+			var face := str(hit["face"])
+			el["face"] = face
+			if t == "lean_to":
+				for e in (_spec.get("elements", []) as Array):
+					if str(e.get("type", "")) == "lean_to" and str(e.get("face", "")) == face:
+						return {"_select": str(e.get("id", ""))}
+				return el
+			el["at_ft"] = snappedf(float(hit["along_ft"]), 0.5)
+			var y: float = hit["y"]
+			if t == "stair":
+				el["to_level"] = _first_raised_floor(PalletRackBuilder.floor_at(_spec, y + 0.6))
+			else:
+				var fl := PalletRackBuilder.floor_at(_spec, y)
+				el["floor"] = fl
+				if t == "window":
+					var fy := PalletRackBuilder.floor_y(_spec, fl)
+					var h := float(el.get("height_ft", 2.5))
+					el["sill_ft"] = clampf(snappedf((y - fy) / PalletRackBuilder.FT - h * 0.5, 0.25),
+						0.0, 10.0)
+			return el
+		"railing", "courtyard":
+			var comp := PalletRackBuilder.pick_nearest(_pick_cache, r[0], r[1], ["deck", "step"])
+			if comp.is_empty():
+				return {}
+			if t == "railing":
+				var lv := int(comp.get("level", 0))
+				for e in (_spec.get("elements", []) as Array):
+					if str(e.get("type", "")) == "railing" and int(e.get("floor", -9)) == lv:
+						return {"_select": str(e.get("id", ""))}
+				el["floor"] = lv
+			else:
+				el["bay0"] = int(comp.get("bay", 0))
+				el["col0"] = int(comp.get("col", 0))
+			return el
+	return {}
+
+
+## Stairs climb to a raised deck: never the ground, never a 6" ground deck.
+func _first_raised_floor(fl: int) -> int:
+	for o in PalletRackBuilder.floor_options(_spec):
+		if int(o["floor"]) >= maxi(fl, 0) and float(o["y_ft"]) > 2.0:
+			return int(o["floor"])
+	return maxi(fl, 0)
+
+
+func _update_tool_ghost(local_pos: Vector2) -> void:
+	var cand := _tool_candidate(local_pos)
+	_ghost_comps = []
+	_hover_group = []
+	if cand.has("_select"):
+		_hover_group = _element_group(str(cand["_select"]))
+	elif not cand.is_empty():
+		_ghost_comps = PalletRackBuilder.element_components(_spec, cand)
+	_refresh_highlight()
+
+
+func _tool_click(local_pos: Vector2, keep_tool: bool) -> void:
+	var cand := _tool_candidate(local_pos)
+	if cand.is_empty():
+		_flash("Nothing to put it on there — aim at the structure.")
+		return
+	if cand.has("_select"):
+		_set_tool("")
+		_select_element(str(cand["_select"]))
+		_flash("There is one there already — it is selected.")
+		return
+	var t := str(cand.get("type", ""))
+	_push_undo()
+	if t == "door" or t == "window":
+		var face := str(cand.get("face", ""))
+		if _wall_chks.has(face) and not (_wall_chks[face] as CheckBox).button_pressed:
+			(_wall_chks[face] as CheckBox).set_pressed_no_signal(true)
+			_flash("Turned the %s wall on for it." % face)
+	add_element(cand, false)
+	if not keep_tool:
+		_set_tool("")
+
+
+## Add an element to the design (selected once it is built). Returns its id.
+func add_element(el: Dictionary, undo: bool = true) -> String:
+	if undo:
+		_push_undo()
+	var rec := el.duplicate(true)
+	rec["id"] = _next_element_id()
+	var els: Array = _spec.get("elements", [])
+	els.append(rec)
+	_spec["elements"] = els
+	_pending_select = str(rec["id"])
+	_queue_rebuild(true)
+	return str(rec["id"])
+
+
+func _next_element_id() -> String:
+	var n := 1
+	for e in (_spec.get("elements", []) as Array):
+		var id := str((e as Dictionary).get("id", ""))
+		if id.begins_with("e") and id.substr(1).is_valid_int():
+			n = maxi(n, int(id.substr(1)) + 1)
+	return "e%d" % n
+
+
+func _element_by_id(id: String) -> Dictionary:
+	if id.is_empty():
+		return {}
+	for e in (_spec.get("elements", []) as Array):
+		if e is Dictionary and str((e as Dictionary).get("id", "")) == id:
+			return e
+	return {}
+
+
+func _selected_element_id() -> String:
+	for id in _selection:
+		if str(id).begins_with("el:"):
+			var comp := _comp_by_id(id)
+			if not comp.is_empty():
+				return str(comp.get("el_id", ""))
+			return str(id).get_slice(":", 1)
+	return ""
+
+
+## The slope bay picked on its own (-1 = the whole element).
+func _selected_seg() -> int:
+	if _selection.size() != 1:
+		return -1
+	var comp := _comp_by_id(str(_selection[0]))
+	return int(comp.get("seg", -1))
+
+
+func select_element(id: String) -> void:
+	_select_element(id)
+
+
+func _select_element(id: String) -> void:
+	_selection = _element_group(id)
+	_refresh_highlight()
+	_update_sel_hud()
+	_refresh_inspector()
+	_refresh_element_list()
+
+
+func _remove_element(id: String) -> void:
+	_push_undo()
+	var kept: Array = []
+	for e in (_spec.get("elements", []) as Array):
+		if str((e as Dictionary).get("id", "")) != id:
+			kept.append(e)
+	_spec["elements"] = kept
+	_selection.clear()
+	_queue_rebuild(true)
+
+
+func _duplicate_selected_element() -> void:
+	var el := _element_by_id(_selected_element_id())
+	if el.is_empty():
+		return
+	var cp := el.duplicate(true)
+	cp.erase("id")
+	match str(el.get("type", "")):
+		"door", "window", "stair":
+			cp["at_ft"] = float(el.get("at_ft", 0.0)) + float(el.get("width_ft", 3.0)) + 1.0
+		"lean_to":
+			var taken := {}
+			for e in (_spec.get("elements", []) as Array):
+				if str(e.get("type", "")) == "lean_to":
+					taken[str(e.get("face", ""))] = true
+			var free_face := ""
+			for f in PalletRackBuilder.FACES:
+				if not taken.has(f):
+					free_face = f
+					break
+			if free_face.is_empty():
+				_flash("Every face already has a slope.")
+				return
+			cp["face"] = free_face
+		"railing":
+			cp["floor"] = int(el.get("floor", 0)) + 1
+		"courtyard":
+			cp["bay0"] = int(el.get("bay0", 0)) + int(el.get("bays", 1))
+	add_element(cp)
+	_flash("Duplicated — drag or edit the copy.")
+
+
+func _mirror_selected_element() -> void:
+	var el := _element_by_id(_selected_element_id())
+	if el.is_empty() or not el.has("face"):
+		return
+	add_element(PalletRackBuilder.mirror_element(el, _spec))
+	_flash("Mirrored onto the %s." % str(PalletRackBuilder.OPPOSITE_FACE.get(str(el["face"]), "")))
+
+
+# ---- The element list ----
+
+func _refresh_element_list() -> void:
+	if _el_list_box == null:
+		return
+	var els: Array = _spec.get("elements", [])
+	var sel := _selected_element_id()
+	var sig := sel + "#"
+	for e in els:
+		sig += str(e.get("id", "")) + "|" + PalletRackBuilder.element_label(e, _spec) + ";"
+	if sig == _el_list_sig:
+		return
+	_el_list_sig = sig
+	for c in _el_list_box.get_children():
+		_el_list_box.remove_child(c)
+		c.queue_free()
+	if els.is_empty():
+		_el_list_box.add_child(_small_label("Nothing added yet — a bare rack."))
+		return
+	for e in els:
+		var eid := str(e.get("id", ""))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		var b := Button.new()
+		b.text = PalletRackBuilder.element_label(e, _spec)
+		b.tooltip_text = b.text
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.clip_text = true
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.add_theme_font_size_override("font_size", 11)
+		b.add_theme_color_override("font_color", C_PRIMARY if eid == sel else C_TEXT)
+		b.pressed.connect(func() -> void: _select_element(eid))
+		row.add_child(b)
+		row.add_child(IconButton.make("trash-2", "Remove", func() -> void: _remove_element(eid)))
+		_el_list_box.add_child(row)
+
+
+# ---- The inspector card ----
+
+func _refresh_inspector() -> void:
+	if _insp_box == null:
+		return
+	var el_id := _selected_element_id()
+	var seg := _selected_seg()
+	var el := _element_by_id(el_id)
+	if el.is_empty():
+		_insp_el_id = ""
+		_insp_frame.visible = false
+		return
+	if el_id == _insp_el_id and seg == _insp_seg \
+			and str(el.get("type", "")) == str(_insp_fields.get("_type", "")):
+		_sync_inspector_values(el)
+		return
+	_insp_el_id = el_id
+	_insp_seg = seg
+	for c in _insp_box.get_children():
+		_insp_box.remove_child(c)
+		c.queue_free()
+	var t := str(el.get("type", ""))
+	_insp_fields = {"_type": t}
+	_insp_frame.visible = true
+	var head := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Selected · " + str(PalletRackBuilder.ELEMENT_LABELS.get(t, t))
+	title.add_theme_color_override("font_color", C_PRIMARY)
+	title.add_theme_font_size_override("font_size", 13)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(title)
+	head.add_child(IconButton.close(func() -> void:
+		_selection.clear()
+		_refresh_highlight()
+		_update_sel_hud()
+		_refresh_inspector(), "Deselect (Esc)"))
+	_insp_box.add_child(head)
+	if seg >= 0:
+		var segs: Dictionary = el.get("segments", {})
+		var cur := str(segs.get(str(seg), el.get("surface", "solar")))
+		var opt := _insp_option(PalletRackBuilder.SLOPE_SURFACES, cur)
+		opt.item_selected.connect(func(i: int) -> void: _on_seg_surface(str(opt.get_item_metadata(i))))
+		_insp_row("This bay (%d)" % (seg + 1), opt)
+		_insp_fields["_seg"] = opt
+		_insp_box.add_child(_small_label("Click the slope away from this bay to edit the whole array."))
+	for f in (PalletRackBuilder.ELEMENT_FIELDS.get(t, []) as Array):
+		_add_insp_field(f, el)
+	var brow := HBoxContainer.new()
+	brow.add_theme_constant_override("separation", 4)
+	brow.add_child(_small_button("Duplicate", "A copy beside it (Ctrl+D)", _duplicate_selected_element))
+	if el.has("face"):
+		brow.add_child(_small_button("Mirror", "A copy on the opposite face", _mirror_selected_element))
+	var del := _small_button("Delete", "Remove it (Del)", func() -> void: _remove_element(el_id))
+	del.add_theme_color_override("font_color", Color(0.94, 0.45, 0.45))
+	brow.add_child(del)
+	_insp_box.add_child(brow)
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 4)
+	var name_le := LineEdit.new()
+	name_le.placeholder_text = "Preset name"
+	name_le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	prow.add_child(name_le)
+	prow.add_child(_small_button("Save preset", "Keep this element in your library for any rack",
+		func() -> void: _save_element_preset(name_le.text)))
+	_insp_box.add_child(prow)
+
+
+func _insp_row(label: String, ctrl: Control) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.tooltip_text = label
+	lbl.custom_minimum_size.x = 112
+	lbl.clip_text = true
+	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
+	lbl.add_theme_color_override("font_color", C_TEXT_S)
+	lbl.add_theme_font_size_override("font_size", 11)
+	row.add_child(lbl)
+	ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(ctrl)
+	_insp_box.add_child(row)
+
+
+func _insp_option(values: Array, current: Variant, labels: Array = []) -> OptionButton:
+	var opt := OptionButton.new()
+	opt.focus_mode = Control.FOCUS_NONE
+	opt.clip_text = true
+	opt.add_theme_font_size_override("font_size", 11)
+	for i in values.size():
+		var label := str(labels[i]) if i < labels.size() \
+			else str(PalletRackBuilder.OPTION_LABELS.get(str(values[i]), str(values[i]).capitalize()))
+		opt.add_item(label)
+		opt.set_item_metadata(i, values[i])
+		if str(values[i]) == str(current):
+			opt.select(i)
+	return opt
+
+
+## The floors a field offers: every floor, decks only ("level"), or the
+## slope's attachment ("attach": the top of the frame, then the decks).
+func _floor_choices(kind: String) -> Array:
+	var vals: Array = []
+	var labels: Array = []
+	if kind == "attach":
+		vals.append(-1)
+		labels.append("Top of the frame")
+	for o in PalletRackBuilder.floor_options(_spec):
+		if int(o["floor"]) < 0 and kind != "floor":
+			continue
+		vals.append(int(o["floor"]))
+		labels.append(str(o["label"]))
+	return [vals, labels]
+
+
+func _add_insp_field(f: Dictionary, el: Dictionary) -> void:
+	var key := str(f["key"])
+	var kind := str(f["kind"])
+	var ctrl: Control = null
+	match kind:
+		"face":
+			var opt := _insp_option(PalletRackBuilder.FACES, el.get(key, "front"))
+			opt.item_selected.connect(func(i: int) -> void: _on_field_changed(key, str(opt.get_item_metadata(i))))
+			ctrl = opt
+		"floor", "level", "attach":
+			var ch := _floor_choices(kind)
+			var opt := _insp_option(ch[0], int(el.get(key, 0)), ch[1])
+			opt.item_selected.connect(func(i: int) -> void: _on_field_changed(key, int(opt.get_item_metadata(i))))
+			ctrl = opt
+		"option":
+			var opt := _insp_option(f.get("options", []) as Array, el.get(key, ""))
+			opt.item_selected.connect(func(i: int) -> void: _on_field_changed(key, str(opt.get_item_metadata(i))))
+			ctrl = opt
+		"bool":
+			var chk := CheckBox.new()
+			chk.focus_mode = Control.FOCUS_NONE
+			chk.button_pressed = bool(el.get(key, false))
+			chk.toggled.connect(func(on: bool) -> void: _on_field_changed(key, on))
+			ctrl = chk
+		"color":
+			var cpb := ColorPickerButton.new()
+			cpb.edit_alpha = false
+			cpb.custom_minimum_size.y = 22
+			var hex := str(el.get(key, "#ffffff"))
+			cpb.color = Color.html(hex) if Color.html_is_valid(hex) else Color.WHITE
+			cpb.color_changed.connect(func(c: Color) -> void: _on_field_changed(key, "#" + c.to_html(false)))
+			ctrl = cpb
+		_:
+			var sp := SpinBox.new()
+			sp.add_theme_font_size_override("font_size", 11)
+			_config_spin(sp, f)
+			sp.value = _spin_value(f, el)
+			sp.value_changed.connect(func(v: float) -> void: _on_spin_field(f, v))
+			ctrl = sp
+	_insp_fields[key] = ctrl
+	_insp_row(str(f["label"]), ctrl)
+
+
+func _config_spin(sp: SpinBox, f: Dictionary) -> void:
+	var kind := str(f["kind"])
+	var face := str(_element_by_id(_insp_el_id).get("face", "front"))
+	match kind:
+		"along":
+			sp.min_value = 0.0
+			sp.max_value = PalletRackBuilder.face_length_ft(_spec, face)
+			sp.step = 0.5
+			sp.suffix = "ft"
+		"seg":
+			sp.min_value = 1
+			sp.max_value = PalletRackBuilder.face_segment_count(_spec, face)
+			sp.step = 1
+		"bay":
+			sp.min_value = 1
+			sp.max_value = int(_spec.get("bay_count", 1))
+			sp.step = 1
+		"col":
+			sp.min_value = 1
+			sp.max_value = int(_spec.get("column_count", 1))
+			sp.step = 1
+		"int":
+			sp.min_value = float(f.get("min", 1))
+			sp.max_value = float(f.get("max", 10))
+			sp.step = 1
+		_:
+			sp.min_value = float(f.get("min", 0.0))
+			sp.max_value = float(f.get("max", 100.0))
+			sp.step = float(f.get("step", 0.25))
+			sp.suffix = str(f.get("unit", "ft"))
+
+
+## The spin box shows bays / grid cells 1-based, and "to bay" as the last bay
+## when the slope runs to the end (-1 in the record).
+func _spin_value(f: Dictionary, el: Dictionary) -> float:
+	var key := str(f["key"])
+	match str(f["kind"]):
+		"seg":
+			var v := int(el.get(key, 0))
+			if key == "seg_to" and v < 0:
+				return float(PalletRackBuilder.face_segment_count(_spec, str(el.get("face", "front"))))
+			return float(v + 1)
+		"bay", "col":
+			return float(int(el.get(key, 0)) + 1)
+	return float(el.get(key, 0.0))
+
+
+func _on_spin_field(f: Dictionary, v: float) -> void:
+	var key := str(f["key"])
+	match str(f["kind"]):
+		"seg":
+			var nseg := PalletRackBuilder.face_segment_count(_spec,
+				str(_element_by_id(_insp_el_id).get("face", "front")))
+			if key == "seg_to" and int(v) >= nseg:
+				_on_field_changed(key, -1)
+			else:
+				_on_field_changed(key, int(v) - 1)
+		"bay", "col":
+			_on_field_changed(key, int(v) - 1)
+		"int":
+			_on_field_changed(key, int(v))
+		_:
+			_on_field_changed(key, v)
+
+
+func _on_field_changed(key: String, value: Variant) -> void:
+	if _insp_suppress:
+		return
+	var el := _element_by_id(_insp_el_id)
+	if el.is_empty():
+		return
+	# One undo step per burst of edits (a spin box held down, a colour dragged).
+	var now := Time.get_ticks_msec()
+	if now - _last_field_undo_ms > 800:
+		_push_undo()
+	_last_field_undo_ms = now
+	el[key] = value
+	if key == "face":
+		_insp_el_id = ""  # ranges (position, bays) depend on the face: rebuild the card
+	_queue_rebuild(true)
+
+
+func _on_seg_surface(surface: String) -> void:
+	var el := _element_by_id(_insp_el_id)
+	if el.is_empty() or _insp_seg < 0:
+		return
+	_push_undo()
+	var segs: Dictionary = el.get("segments", {})
+	if surface == str(el.get("surface", "")):
+		segs.erase(str(_insp_seg))
+	else:
+		segs[str(_insp_seg)] = surface
+	el["segments"] = segs
+	_queue_rebuild(true)
+
+
+## Pull resolved values (clamps, a drag) back into the card without echoing.
+func _sync_inspector_values(el: Dictionary) -> void:
+	_insp_suppress = true
+	var t := str(el.get("type", ""))
+	for f in (PalletRackBuilder.ELEMENT_FIELDS.get(t, []) as Array):
+		var key := str(f["key"])
+		var ctrl: Variant = _insp_fields.get(key)
+		if ctrl == null or not is_instance_valid(ctrl):
+			continue
+		if ctrl is SpinBox:
+			_config_spin(ctrl as SpinBox, f)
+			(ctrl as SpinBox).set_value_no_signal(_spin_value(f, el))
+		elif ctrl is CheckBox:
+			(ctrl as CheckBox).set_pressed_no_signal(bool(el.get(key, false)))
+		elif ctrl is OptionButton:
+			var opt := ctrl as OptionButton
+			for i in opt.item_count:
+				if str(opt.get_item_metadata(i)) == str(el.get(key, "")):
+					opt.select(i)
+					break
+	_insp_suppress = false

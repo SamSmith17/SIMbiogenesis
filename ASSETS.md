@@ -71,6 +71,11 @@ The simulator still runs:
 - SOAK / Mars entries appear in **Your maps** only when you add the local scene files and MapDefinition resources (see below).
 - **NPC population** simulates and renders normally; people just show as the
   simple primitive figures instead of the rigged Mixamo silhouettes (see below).
+- **Ambient sound** on foot (wind, rain, the nearest stream, birdsong) is
+  procedural — the repo ships no audio. Drop your own loops into
+  `user://ambient/` as `wind`, `rain`, `stream` and `birds` `.mp3`, `.ogg` or
+  `.wav` and the bed plays those instead (volume: Settings → NPCs → Ambient
+  sound volume). Venue tracks go in `user://stage_audio/` as before.
 
 ## NPC character pack (`Imported Models/NPC/`)
 

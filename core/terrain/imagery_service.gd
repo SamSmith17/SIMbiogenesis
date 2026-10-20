@@ -45,6 +45,9 @@ var _busy: bool = false
 var _job: Dictionary = {}
 ## Pending jobs (base + detail layers serialise through the single HTTPRequest).
 var _pending: Array[Dictionary] = []
+## Bumped per job and per reset_session: a retry timer or a stale HTTP reply
+## only acts while the job it was armed for is still the current one.
+var _job_seq := 0
 
 
 func _ready() -> void:
@@ -69,6 +72,21 @@ func attribution() -> String:
 	if extra.is_empty():
 		return ATTRIBUTION
 	return ATTRIBUTION + " · " + " · ".join(PackedStringArray(extra))
+
+
+## Drop every queued and in-flight layer (a new map load). This service is an
+## autoload and outlives the scene: without this the previous load's hyper /
+## site / detail jobs kept downloading ahead of the new load's base drape (the
+## base phase then timed out on a slow 8k site patch) and their results were
+## taken by the new loader. BC7 tasks already running finish and emit; the
+## loader drops results whose key is not its own (TerrainExtents.key_matches).
+func reset_session() -> void:
+	if _http != null and is_instance_valid(_http):
+		_http.cancel_request()
+	_job_seq += 1
+	_busy = false
+	_job = {}
+	_pending.clear()
 
 
 ## Attribution for one layer ("hyper", "site", …): the sources its tiles came from.
@@ -154,6 +172,8 @@ func _start_next() -> void:
 	if _busy or _pending.is_empty():
 		return
 	_job = _pending.pop_front()
+	_job_seq += 1
+	_job["seq"] = _job_seq
 	_busy = true
 	_fire_tile()
 
@@ -246,8 +266,9 @@ func _next_source() -> bool:
 
 
 func _after(delay: float, cb: Callable) -> void:
+	var seq := int(_job.get("seq", -1))
 	var fire := func() -> void:
-		if _busy and not _job.is_empty():
+		if _busy and not _job.is_empty() and int(_job.get("seq", -2)) == seq:
 			cb.call()
 	get_tree().create_timer(delay).timeout.connect(fire, CONNECT_ONE_SHOT)
 

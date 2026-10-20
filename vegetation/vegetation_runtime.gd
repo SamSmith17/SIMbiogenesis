@@ -57,6 +57,8 @@ const KEY_TREE_VARIANTS := "tree_variants"
 const DEFAULT_TREE_VARIANTS := 3
 ## Runtime-only: a batch built for one variant ("v1") — names its nodes.
 const KEY_BATCH_SUFFIX := "_batch_suffix"
+## Per-look partition tag (see _partition_bulk_batches), part of the name.
+const KEY_LOOK_TAG := "_look_tag"
 
 
 ## Which of `n` variants a tree record draws, from its position alone.
@@ -72,7 +74,9 @@ static func variant_index(d: Dictionary, n: int) -> int:
 ## The species segment of a batch node name: "fir" or "fir_v1".
 static func _batch_species_tag(species: String, settings: Dictionary) -> String:
 	var suf := str(settings.get(KEY_BATCH_SUFFIX, ""))
-	return species if suf.is_empty() else "%s_%s" % [species, suf]
+	var look := str(settings.get(KEY_LOOK_TAG, ""))
+	var tag := species if suf.is_empty() else "%s_%s" % [species, suf]
+	return tag if look.is_empty() else "%s_%s" % [tag, look]
 
 
 ## Dither-fade band on every visibility-range edge. Godot's DEFAULT fade mode
@@ -133,7 +137,8 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 		if i == 0:
 			continue
 		var mi := MultiMeshInstance3D.new()
-		mi.name = "Bulk_%s_%s_%d_%d" % [species, tier, chunk_x, chunk_z]
+		mi.name = "Bulk_%s_%s_%d_%d" % [_batch_species_tag(species, settings), tier, chunk_x, chunk_z]
+		mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
 		mi.multimesh = mm
 		mi.material_override = mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -286,6 +291,7 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 		return
 	var mi := MultiMeshInstance3D.new()
 	mi.name = "Bulk_%s_imp_%d_%d" % [_batch_species_tag(species, settings), chunk_x, chunk_z]
+	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
@@ -347,6 +353,7 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 	mi.name = "Bulk_%s_%d_%d_%d" % [sp_tag, tier, chunk_x, chunk_z] \
 			if name_tag.is_empty() \
 			else "Bulk_%s_%s_%d_%d" % [sp_tag, name_tag, chunk_x, chunk_z]
+	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
@@ -574,6 +581,7 @@ static func _partition_spatial_chunks(records: Array) -> Array:
 
 static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -> Array:
 	var groups: Dictionary = {}
+	var look_n := 0
 	for item in records:
 		if not (item is Dictionary):
 			continue
@@ -582,10 +590,19 @@ static func _partition_bulk_batches(records: Array, base_settings: Dictionary) -
 		if d.has("vert_off"):
 			s["vertical_offset_m"] = float(d["vert_off"])
 		var card: Variant = d.get("card_settings", {})
-		if card is Dictionary and not (card as Dictionary).is_empty():
+		var has_card := card is Dictionary and not (card as Dictionary).is_empty()
+		if has_card:
 			s.merge(VegetationLayer.coerce_card_colors(card as Dictionary), true)
 		var key := hash(s)
 		if key not in groups:
+			# A group with its own look (a brush snapshot, one tree tuned in
+			# Tune look) is drawn by its own batches in the SAME chunk as its
+			# species-mates: tag it, or the node names collide and Godot
+			# renames one "@MultiMeshInstance3D@N" — which every by-name
+			# lookup (chunk rebuilds, leaf fall) then silently misses.
+			if has_card:
+				look_n += 1
+				s[VegetationRuntime.KEY_LOOK_TAG] = "l%d" % look_n
 			groups[key] = {"settings": s, "records": []}
 		(groups[key]["records"] as Array).append(d)
 	var out: Array = []
@@ -651,7 +668,8 @@ static func _build_bulk_batch(root: Node3D, species: String, records: Array,
 	if i == 0:
 		return
 	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_%d_%d" % [species, chunk_x, chunk_z]
+	mi.name = "Bulk_%s_%d_%d" % [_batch_species_tag(species, settings), chunk_x, chunk_z]
+	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
 	mi.multimesh = mm
 	# A regrown generation stands up to a metre off the original spot
 	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.

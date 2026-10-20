@@ -21,9 +21,10 @@ signal map_load_complete
 signal auto_vegetation_ready
 signal climelapse_state_changed
 
-const HALF_EXTENT_DEFAULT := 15000.0   # 30 km square
-const DETAIL_HALF_EXTENT_DEFAULT := 1500.0
-const OSM_HALF_EXTENT_DEFAULT := 1500.0
+# Sizes are HALF-extents (centre to edge); TerrainExtents owns the rules.
+const HALF_EXTENT_DEFAULT := TerrainExtents.WORLD_HALF_DEFAULT     # 30 km square
+const DETAIL_HALF_EXTENT_DEFAULT := TerrainExtents.DETAIL_HALF_DEFAULT
+const OSM_HALF_EXTENT_DEFAULT := TerrainExtents.OSM_HALF_DEFAULT
 # Centre drape resolution. pick_zoom() picks the highest ESRI zoom whose stitched
 # width stays <= DETAIL_TARGET_PX, so this is the real lever on sharpness: 2048 px
 # only reaches z17 (~1.5 m/px) on the 3 km patch, while 4096 px reaches z18
@@ -85,6 +86,10 @@ const SITE_TARGET_PX := 8192
 const AI_HERO_HALF_EXTENT_DEFAULT := 50.0
 const AI_IMAGE_SIZE_DEFAULT := "2K"
 
+## A resumed player saved this far above the ground (or any amount below it)
+## is in another frame — the world was rebuilt at another size — and is
+## reseated. Generous, so someone saved on a roof or a hill-top deck stays put.
+const RESUME_MAX_ABOVE_GROUND_M := 40.0
 const MESH_RES := TerrainBuilder.DEFAULT_MESH_RES
 # The detail DEM is fetched at 512² but its real source resolution is only ~30–90 m
 # (SRTM / Copernicus, or ~10 m USGS), so a 512² visual mesh + 512² HeightMapShape3D
@@ -180,6 +185,14 @@ var _hyper_drape: Texture2D = null
 ## Native-resolution site patch drape + the half-extent it was fetched at.
 var _site_drape: Texture2D = null
 var _site_half_m := 0.0
+## Hyper patch half-extent the CURRENT hyper drape was requested at (0 = none):
+## the tier or the hi-res patch can change between request and arrival.
+var _hyper_half_m := 0.0
+## A base / detail DEM that landed after its load phase had given up waiting
+## (the world went on flat or without the hi-res patch): applied once the load
+## sequence finishes instead of being dropped on the floor.
+var _late_base_dem := false
+var _late_detail_dem := false
 ## Gemini-enhanced hero patch drape + its geo bbox (null until generated/cached).
 var _ai_drape: Texture2D = null
 var _ai_bbox: Dictionary = {}
@@ -870,6 +883,7 @@ func _resolve_location() -> void:
 		_from_resume = bool(d.get("from_resume", false))
 		_force_refetch = bool(d.get("force_refetch", false))
 		_fill_extent_gaps(he <= 0.0, dhe <= 0.0, ohe <= 0.0)
+		_sanitize_extents()
 		# Map-select "Load from cache" is the sole source of truth for this session.
 		TerrainCacheSettings.set_cache_enabled(not _force_refetch)
 		_load_osm_offset_prefs()
@@ -882,8 +896,20 @@ func _resolve_location() -> void:
 			_lat = float(la)
 			_lon = float(lo)
 	_fill_extent_gaps(true, true, true)
+	_sanitize_extents()
 	TerrainCacheSettings.set_cache_enabled(not _force_refetch)
 	_load_osm_offset_prefs()
+
+
+## Clamp the three sizes into range and keep the hi-res patch and the OSM
+## square inside the world (TerrainExtents.sanitize). A saved 180 km world with
+## a 10 km hi-res patch stays as it is; a hand-edited 0 or a patch bigger than
+## the world does not reach a fetch.
+func _sanitize_extents() -> void:
+	var s := TerrainExtents.sanitize(_half_extent, _detail_half_extent, _osm_half_extent)
+	_half_extent = float(s["world_half_m"])
+	_detail_half_extent = float(s["detail_half_m"])
+	_osm_half_extent = float(s["osm_half_m"])
 
 
 ## Fill unset extent fields: per-site meta first, then global config. Meta wins
@@ -1094,6 +1120,16 @@ func _run_load_sequence() -> void:
 	var es := get_node_or_null("/root/ElevationService")
 	if es != null and es.has_method("reset_session"):
 		es.reset_session()
+	# The imagery queue outlives the scene too: the previous load's hyper /
+	# site / detail jobs would otherwise download ahead of this load's base
+	# drape, and their results be taken as this load's (TerrainExtents).
+	var img_svc := get_node_or_null("/root/ImageryService")
+	if img_svc != null and img_svc.has_method("reset_session"):
+		img_svc.reset_session()
+	_hyper_half_m = 0.0
+	_site_half_m = 0.0
+	_late_base_dem = false
+	_late_detail_dem = false
 
 	# Fresh launch: bypass DEM/imagery AND wipe OSM caches so BuildingService
 	# cannot serve a stale vector file while Elevation/Imagery refetch.
@@ -1183,6 +1219,7 @@ func _run_load_sequence() -> void:
 	await _run_vegetation_load_phase()
 
 	_load_sequence_active = false
+	_apply_late_dems()
 	_check_load_complete()
 	_maybe_opentopo_hint()
 	var mly := get_node_or_null("/root/MapillaryService")
@@ -1192,6 +1229,22 @@ func _run_load_sequence() -> void:
 	_ensure_leaf_fall()
 	_resolve_graph_site_elevations()
 	map_load_complete.emit()
+
+
+## A DEM that arrived after its phase timed out (see _late_base_dem).
+func _apply_late_dems() -> void:
+	if not _built:
+		return
+	if _late_base_dem:
+		_late_base_dem = false
+		_late_detail_dem = false
+		print("TerrainLoader: base DEM arrived after the load gave up — rebuilding the terrain")
+		_apply_base_dem_refresh()
+		_toast("Elevation arrived late — terrain updated.", ToastUI.Level.INFO)
+	elif _late_detail_dem:
+		_late_detail_dem = false
+		print("TerrainLoader: hi-res DEM arrived after the load gave up — rebuilding the centre")
+		_rebuild_heightfield_staggered(false)
 
 
 ## Resolve every placed graph item's `elevation_m` now that the terrain exists.
@@ -3687,8 +3740,10 @@ func _clear_solar_highlight() -> void:
 ## Service callbacks
 ## ---------------------------------------------------------------------------
 
-func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows: int,
+func _on_elevation_ready(key: String, grid: PackedFloat32Array, cols: int, rows: int,
 		tag: String = "base") -> void:
+	if not _result_is_current(key, _detail_half_extent if tag == "detail" else _half_extent, tag + " DEM"):
+		return
 	if tag == "detail":
 		# Resample the detail DEM to the mesh/collision resolution UP FRONT so that
 		# footing queries (vegetation + building grounding) sample the EXACT surface
@@ -3710,7 +3765,10 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 			_detail_elev_cols, _detail_elev_rows, _detail_extent_m()])
 		_log_load_mem("detail DEM ready")
 		if _load_sequence_active:
-			_phase_resolve("elev:detail", true)
+			if _phase_waiting and _phase_key == "elev:detail":
+				_phase_resolve("elev:detail", true)
+			elif _built:
+				_late_detail_dem = true
 			return
 		_rebuild_heightfield_staggered(false)
 		_queue_auto_veg_generate(false)
@@ -3724,7 +3782,10 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 	_elev_done = true
 	_load_progress_mark_done("base_dem")
 	if _load_sequence_active:
-		_phase_resolve("elev:base", true)
+		if _phase_waiting and _phase_key == "elev:base":
+			_phase_resolve("elev:base", true)
+		elif _built:
+			_late_base_dem = true
 		return
 	if _built:
 		_apply_base_dem_refresh()
@@ -3773,11 +3834,36 @@ func _on_elevation_progress(done: int, total: int) -> void:
 		_log_load_mem("dem %d/%d" % [done, total])
 
 
-func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void:
+## True when a fetch result is for THIS load's site and square. ImageryService
+## and ElevationService are autoloads: a result requested by the previous load
+## (another size, another map) used to be taken as this load's own, draping an
+## old-size photo over the new terrain — the hi-res patch "not lining up".
+func _result_is_current(key: String, half_m: float, what: String) -> bool:
+	if TerrainExtents.key_matches(key, _lat, _lon, half_m):
+		return true
+	print("TerrainLoader: ignoring a stale %s result (%s) — not this load's %s square" % [
+		what, key, TerrainExtents.format_side(TerrainExtents.side_from_half(half_m))])
+	return false
+
+
+func _imagery_half_for_tag(tag: String) -> float:
+	match tag:
+		"hyper":
+			return _hyper_half_m
+		"site":
+			return _site_half_m
+		"detail":
+			return _detail_half_extent
+	return _half_extent
+
+
+func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
+	if not _result_is_current(key, _imagery_half_for_tag(tag), tag + " imagery"):
+		return
 	if tag == "hyper":
 		_hyper_drape = texture
 		_log_load_mem("hyper img ready")
-		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_extent() * 2.0))
+		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_m * 2.0))
 		_apply_building_textures()
 		_apply_hyper_to_terrain()
 		_maybe_request_ai_hero()
@@ -3889,7 +3975,8 @@ func _request_hyper_imagery() -> void:
 	if img == null:
 		return
 	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
-	img.request_imagery(_lat, _lon, _hyper_half_extent(), _hyper_target_px(),
+	_hyper_half_m = _hyper_half_extent()
+	img.request_imagery(_lat, _lon, _hyper_half_m, _hyper_target_px(),
 		"hyper", HYPER_MAX_ZOOM, bypass, ImagerySources.chain_for(_lat, _lon))
 
 
@@ -3907,7 +3994,7 @@ func _site_half_extent() -> float:
 	# 0.95: pick_zoom measures the bbox in tiles, and a bbox straddling tile
 	# edges costs one extra column.
 	var fit := float(SITE_TARGET_PX) * ImagerySources.metres_per_px(z, _lat) * 0.5 * 0.95
-	return minf(want, fit)
+	return TerrainExtents.overlay_half(minf(want, fit), _detail_half_extent)
 
 
 ## Queue the native-resolution site patch (after hyper, so it never delays
@@ -3978,9 +4065,14 @@ func _detail_target_px() -> int:
 	return int(QUALITY_DETAIL_TARGET_PX[_quality_tier()])
 
 
-## Hyper (sharpest) layer half-extent (m) for the current quality tier.
+## Hyper (sharpest) layer half-extent (m) for the current quality tier, never
+## past the hi-res patch (TerrainExtents.overlay_half): on High / Ultra the
+## 1–1.5 km hyper square used to reach beyond a smaller hi-res patch, so the
+## sharpest photo lay on the coarse world mesh and its edge cut across the
+## hi-res terrain's.
 func _hyper_half_extent() -> float:
-	return float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()])
+	return TerrainExtents.overlay_half(
+		float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()]), _detail_half_extent)
 
 
 ## --- Terrain imagery quality (public API for the settings UI) ---------------
@@ -4060,9 +4152,10 @@ func _apply_hyper_to_terrain(terrain: Node3D = null) -> void:
 		terrain = _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
-	var hyper_extent := _hyper_half_extent() * 2.0
+	var hyper_half := _hyper_half_m if _hyper_half_m > 0.0 else _hyper_half_extent()
+	var hyper_extent := hyper_half * 2.0
 	var hyper_vec := TerrainBuilder.bbox_to_shader_vec4(
-		GeoMath.bbox_for(_lat, _lon, _hyper_half_extent()))
+		GeoMath.bbox_for(_lat, _lon, hyper_half))
 	var hyper_feather_uv := TerrainBuilder.feather_uv_from_metres(
 		_seam_feather_m, hyper_extent)
 	for child_name in ["Ground", "DetailGround"]:
@@ -6100,7 +6193,8 @@ func _make_world_roof_material() -> Material:
 	var sm := mat as ShaderMaterial
 	sm.set_shader_parameter("use_ortho", true)
 	sm.set_shader_parameter("ortho_tex", ortho)
-	var ortho_half := _detail_half_extent if _hyper_drape == null else _hyper_half_extent()
+	var ortho_half := _detail_half_extent if _hyper_drape == null \
+		else (_hyper_half_m if _hyper_half_m > 0.0 else _hyper_half_extent())
 	var scale := BuildingBuilder.roof_ortho_uv_scale(ortho_half)
 	sm.set_shader_parameter("ortho_uv_scale", scale)
 	# Ortho texture covers this half-extent; UV2 is ORTHO_HALF-normalized then
@@ -6300,12 +6394,23 @@ func _finalize_resume_actors() -> void:
 	var pos: Vector3 = saved
 	if bool(player.get("is_riding")):
 		return
+	# A world reloaded at a different size (Terrain options → Apply & reload)
+	# is centred on a different mean elevation, so the saved Y belongs to the
+	# old frame — hundreds of metres off on a big world — and a smaller world
+	# can leave the saved spot past its edge. Keep the spot, fix the height.
+	var limit := maxf(_half_extent - 50.0, 0.0)
+	pos.x = clampf(pos.x, -limit, limit)
+	pos.z = clampf(pos.z, -limit, limit)
 	player.global_position = pos + Vector3(0.0, 0.05, 0.0)
 	if player is CharacterBody3D:
 		(player as CharacterBody3D).velocity = Vector3.ZERO
 	if "fall_start_height" in player:
 		player.fall_start_height = pos.y
 		player.highest_point_during_fall = pos.y
+	var footing := _ground_height_at(pos.x, pos.z)
+	if is_finite(footing) and (pos.y < footing - 0.5 or pos.y > footing + RESUME_MAX_ABOVE_GROUND_M):
+		print("TerrainLoader: resumed player %.1f m off the ground — reseating" % (pos.y - footing))
+		_raycast_reseat_player()
 
 
 ## Lift the player to just above the true collision surface (topmost raycast hit),
@@ -7269,13 +7374,17 @@ func get_detail_dem_status() -> Dictionary:
 	}
 
 
+## Rebuild this map at new sizes. All three are HALF-extents (centre to edge);
+## the Terrain options panel converts from the side lengths it shows. A value
+## <= 0 keeps the current size.
 func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m: float) -> void:
-	if world_half_m > 0.0:
-		_half_extent = world_half_m
-	if detail_half_m > 0.0:
-		_detail_half_extent = detail_half_m
-	if osm_half_m > 0.0:
-		_osm_half_extent = osm_half_m
+	var s := TerrainExtents.sanitize(
+		world_half_m if world_half_m > 0.0 else _half_extent,
+		detail_half_m if detail_half_m > 0.0 else _detail_half_extent,
+		osm_half_m if osm_half_m > 0.0 else _osm_half_extent)
+	_half_extent = float(s["world_half_m"])
+	_detail_half_extent = float(s["detail_half_m"])
+	_osm_half_extent = float(s["osm_half_m"])
 	_save_terrain_config_value("world_half_extent_m", _half_extent)
 	_save_terrain_config_value("detail_half_extent_m", _detail_half_extent)
 	_save_terrain_config_value("osm_half_extent_m", _osm_half_extent)
@@ -7302,13 +7411,50 @@ func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m
 	_notify_options_status(
 		"Extents changed — reloading map to rebuild the terrain (cleared %s) …" % UiText.count(n_edits, "user veg file"),
 		"busy")
+	# Inside a world, reload THROUGH the world: record the new sizes on its
+	# map block, save the snapshot (which now carries them, with the player,
+	# clock and battery), and play it again. The old direct scene change left
+	# the snapshot holding the OLD sizes — WorldSession.launch prefers the
+	# snapshot's — so the next time the world was played from the list it
+	# came back at the size it had before; it also skipped the WorldPaths
+	# seal and reset the clock and battery.
+	if WorldPaths.has_active_world() and _relaunch_world_at_current_extents():
+		return
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx == null or get_tree() == null:
 		push_warning("TerrainLoader: MapContext unavailable — falling back to in-place refresh (terrain size will not update until the map is fully reloaded)")
 		reset_site_to_fresh()
 		return
 	ctx.set_pending(_lat, _lon, _map_label, _half_extent, false, _detail_half_extent, _osm_half_extent)
-	get_tree().change_scene_to_file(MapDefinition.GENERATED_SCENE)
+	WorldSession.switch_scene(MapDefinition.GENERATED_SCENE, {}, "")
+
+
+func _relaunch_world_at_current_extents() -> bool:
+	var rec := WorldSession.active_record()
+	if rec.is_empty():
+		return false
+	var map: Dictionary = rec.get("map", {}) if rec.get("map", {}) is Dictionary else {}
+	map["half_extent_m"] = _half_extent
+	map["detail_half_extent_m"] = _detail_half_extent
+	map["osm_half_extent_m"] = _osm_half_extent
+	rec["map"] = map
+	WorldStore.save_record(rec)
+	if not WorldSession.save_now(_main, false, false):
+		push_warning("TerrainLoader: world save before the resize failed")
+	# launch() takes the snapshot's sizes over the map block's: make sure the
+	# snapshot on disk says the new ones even if the save above did not run.
+	var id := str(rec.get("id", ""))
+	var snap := WorldStore.read_snapshot(id)
+	if not snap.is_empty():
+		snap["half_extent_m"] = _half_extent
+		snap["detail_half_extent_m"] = _detail_half_extent
+		snap["osm_half_extent_m"] = _osm_half_extent
+		WorldStore.write_snapshot(id, snap)
+	var err := WorldSession.launch(WorldSession.active_record())
+	if err != OK:
+		push_warning("TerrainLoader: world relaunch failed (%s) — reloading the map directly" % error_string(err))
+		return false
+	return true
 
 
 func _persist_active_map_definition_extents() -> void:
@@ -7600,8 +7746,12 @@ func _short_fetch_error(reason: String) -> String:
 	return r
 
 
+## How long the base elevation phase waits. A big world goes up as several
+## OpenTopography tiles with retries and a fallback ladder (ElevationService),
+## so it gets up to 10 minutes; a DEM that still lands later is applied then
+## (_late_base_dem) rather than thrown away.
 func _elev_phase_timeout_s() -> float:
-	return clampf(_half_extent / 25000.0 * 120.0, 120.0, 360.0)
+	return clampf(_half_extent / 25000.0 * 150.0, 150.0, 600.0)
 
 
 func _imagery_phase_timeout_s() -> float:
@@ -8042,6 +8192,15 @@ func open_vegetation_preview_editor(initial_preset: int = -1, species_id: String
 		_vegetation_preview_ui.call("open", initial_preset, species_id)
 
 
+## Tune look on ONE plant (V toolbar Select → click): the modal's one-tree
+## mode, with "this tree / this world / every world" scopes.
+func open_vegetation_instance_editor(desc: Dictionary) -> bool:
+	if _vegetation_preview_ui == null or not _vegetation_preview_ui.has_method("open_for_instance"):
+		return false
+	_vegetation_preview_ui.call("open_for_instance", desc)
+	return bool(_vegetation_preview_ui.call("is_instance_mode"))
+
+
 func _setup_camp_scatter_ui() -> void:
 	if _main == null:
 		return
@@ -8280,6 +8439,47 @@ func veg_point_excluded_callable() -> Callable:
 	# A lambda, not Callable(idx, ...): a Callable does not keep a RefCounted
 	# alive, the captured variable does.
 	return func(p: Vector2) -> bool: return idx.is_excluded(p)
+
+
+## How many TREES (pine / deciduous families — never grass, shrubs or
+## crops) stand within `radius_m` of a site point, over the painted layer,
+## the generated forest (when it is shown) and the hero GLBs. The ambient
+## bed's birdsong reads it (AmbientMix.forest_density); a bounding-box test
+## first, so a 30 m query over a 20 000-record forest is one cheap pass.
+func forest_trees_within(x: float, z: float, radius_m: float) -> int:
+	var r2 := radius_m * radius_m
+	var n := 0
+	var bulks: Array = []
+	if _vegetation_layer != null:
+		bulks.append(_vegetation_layer.bulk)
+	if _auto_veg_layer != null and _terrain_config().show_auto_vegetation:
+		bulks.append(_auto_veg_layer.bulk)
+	for b in bulks:
+		for species in (b as Dictionary):
+			if not VegSpeciesCatalog.is_tree_family(str(species)):
+				continue
+			var recs: Variant = (b as Dictionary)[species]
+			if not (recs is Array):
+				continue
+			for rec in (recs as Array):
+				if not (rec is Dictionary):
+					continue
+				var dx := float((rec as Dictionary).get("x", 0.0)) - x
+				if dx > radius_m or dx < -radius_m:
+					continue
+				var dz := float((rec as Dictionary).get("z", 0.0)) - z
+				if dz > radius_m or dz < -radius_m:
+					continue
+				if dx * dx + dz * dz <= r2:
+					n += 1
+	if _vegetation_layer != null:
+		for h in _vegetation_layer.hero:
+			if h is Dictionary:
+				var dx := float((h as Dictionary).get("x", 0.0)) - x
+				var dz := float((h as Dictionary).get("z", 0.0)) - z
+				if dx * dx + dz * dz <= r2:
+					n += 1
+	return n
 
 
 
@@ -10104,6 +10304,652 @@ func convert_plant_to_hero_at(world_xz: Vector2, radius_m: float = 6.0) -> Dicti
 		"species": species, "preset": preset, "height_m": target_h,
 		"x": x, "z": z,
 	}
+
+
+## ---------------------------------------------------------------------------
+## Select across BOTH layers: hover, the species glow, per-tree looks.
+##
+## The painted layer and the OSM-generated forest used to be two worlds: the
+## Select tool only saw painted plants, Tune look only edited whole families,
+## and nothing said what species a tree was. Here one pick (VegTreePick, a ray
+## through the crowns) answers for either layer, and every edit lands where
+## it persists for that layer — a painted plant's record, or a pinned patch in
+## the OSM edits file that a reload replays onto the regenerated scatter.
+## ---------------------------------------------------------------------------
+
+var _veg_pick := VegTreePick.new()
+## Bumped by edits that change a plant's size without changing a count (the
+## pick index caches heights).
+var _veg_pick_rev := 0
+var _veg_hover_marker: VegHoverMarker = null
+var _veg_glow_species := ""
+var _veg_glow_nodes: Array = []
+var _veg_glow_walked_ms := 0
+var _veg_nominal_cache: Dictionary = {}
+
+
+func _veg_pick_sources() -> Array:
+	var out: Array = []
+	if _vegetation_layer != null:
+		out.append({"source": "painted", "bulk": _vegetation_layer.bulk,
+			"hero": _vegetation_layer.hero, "rev": _veg_pick_rev})
+	if _auto_veg_layer != null and _auto_veg_generated and _terrain_config().show_auto_vegetation:
+		out.append({"source": "auto", "bulk": _auto_veg_layer.bulk,
+			"hero": _auto_veg_layer.hero,
+			"rev": _auto_veg_layer.get_instance_id() + _veg_pick_rev})
+	return out
+
+
+## The species a layer slot draws as (an OSM slot can be an alias: conifer →
+## pine). Painted slots ARE species ids.
+func _veg_species_of(source: String, slot: String) -> String:
+	if source == "auto":
+		return AutoVegetationRuntime._resolve_species(slot)
+	return slot
+
+
+## Resolved species dims, cached per species until the look changes.
+func _veg_nominal(species: String) -> Dictionary:
+	if _veg_nominal_cache.has(species):
+		return _veg_nominal_cache[species]
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	var s := VegSpeciesCatalog.settings_with_variant(species, _veg_style,
+		VegetationCardFactory.SPECS)
+	var h := 0.0
+	var crown := 0.0
+	if fam == "pine" or fam == "deciduous":
+		h = float(s.get("%s_height_m" % fam, 0.0))
+		crown = float(s.get("%s_crown_width_m" % fam, 0.0))
+	else:
+		h = float(s.get("%s_card_h" % fam, 0.0))
+		crown = float(s.get("%s_card_w" % fam, 0.0))
+	if h <= 0.05:
+		h = float(AutoVegetationGenerator.NOMINAL_CARD_H.get(species, 6.0))
+	if crown <= 0.05:
+		crown = clampf(h * 0.55, 0.8, 18.0)
+	var out := {"height_m": h, "crown_m": crown}
+	_veg_nominal_cache[species] = out
+	return out
+
+
+func _veg_plant_height(slot: String, rec: Dictionary) -> float:
+	var hm := float(rec.get("height_m", 0.0))
+	if hm > 0.1:
+		return hm
+	if rec.has("preset"):
+		return 12.0 * float(rec.get("scale", 1.0))
+	var species := AutoVegetationRuntime._resolve_species(slot) \
+		if not VegSpeciesCatalog.is_paintable(slot) else slot
+	return float(_veg_nominal(species)["height_m"]) * float(rec.get("scale", 1.0))
+
+
+## The plant under a screen point (ray through the crowns), else {}. The
+## descriptor is good until the next edit: {source: painted|auto, kind:
+## bulk|hero, slot, species, index, x, z, height_m, crown_m, label, …}.
+func veg_pick_at_screen(screen_pos: Vector2) -> Dictionary:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or _main == null:
+		return {}
+	var origin := cam.project_ray_origin(screen_pos)
+	var dir := cam.project_ray_normal(screen_pos)
+	var terrain_t := INF
+	var ground: Variant = terrain_pick_ray(screen_pos)
+	if ground is Vector3:
+		terrain_t = origin.distance_to(ground as Vector3)
+	_veg_pick.rebuild_if_changed(_veg_pick_sources(), Callable(self, "_veg_plant_height"))
+	var hit := _veg_pick.pick(origin, dir, terrain_t, Callable(self, "_ground_height_at"))
+	if hit.is_empty():
+		return {}
+	return _veg_describe(str(hit["source"]), str(hit["kind"]), str(hit["slot"]),
+		int(hit["index"]), float(hit["x"]), float(hit["z"]), float(hit["h"]), float(hit["r"]))
+
+
+## Nearest plant to a ground point over both layers (the click fallback when
+## the ray passes between crowns).
+func veg_pick_near(world_xz: Vector2, radius_m: float = 6.0) -> Dictionary:
+	var best := {}
+	if _vegetation_layer != null:
+		var d := _vegetation_layer.nearest_plant(world_xz, radius_m)
+		if not d.is_empty():
+			best = d
+			best["source"] = "painted"
+	if _auto_veg_layer != null and _auto_veg_generated and _terrain_config().show_auto_vegetation:
+		var a := _auto_veg_layer.nearest_plant(world_xz, radius_m)
+		if not a.is_empty() and (best.is_empty() \
+				or float(a["dist_m"]) < float(best.get("dist_m", INF))):
+			best = a
+			best["source"] = "auto"
+	if best.is_empty():
+		return {}
+	var src := str(best["source"])
+	var slot := str(best["species"])
+	var rec: Dictionary = (_vegetation_layer.record_for(best) if src == "painted"
+		else _auto_veg_layer.record_for(best))
+	var h := _veg_plant_height(slot, rec)
+	return _veg_describe(src, str(best.get("kind", "bulk")), slot, int(best["index"]),
+		float(best["x"]), float(best["z"]), h, clampf(h * 0.28, 0.5, 9.0))
+
+
+func _veg_describe(source: String, kind: String, slot: String, index: int,
+		x: float, z: float, h: float, r: float) -> Dictionary:
+	var species := slot if kind == "hero" else _veg_species_of(source, slot)
+	var label := ""
+	if kind == "hero":
+		label = "%s (hero model)" % slot.capitalize()
+	else:
+		label = VegSpeciesCatalog.label_for(species)
+	var rec: Dictionary = {}
+	var layer: Variant = _vegetation_layer if source == "painted" else _auto_veg_layer
+	var desc := {"source": source, "kind": kind, "slot": slot, "species": species,
+		"index": index, "x": x, "z": z, "height_m": h, "crown_m": r * 2.0,
+		"label": label,
+		"source_label": "painted" if source == "painted" else "OSM forest"}
+	if layer != null:
+		rec = layer.record_for(desc)
+	desc["scale"] = float(rec.get("scale", 1.0))
+	var card: Variant = rec.get("card_settings", {})
+	desc["custom_look"] = card is Dictionary and (card as Dictionary).has(
+		VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE)
+	return desc
+
+
+## How many plants of `species` stand in this world, both layers.
+func veg_species_count(species: String) -> int:
+	var n := 0
+	if _vegetation_layer != null and _vegetation_layer.bulk.get(species) is Array:
+		n += (_vegetation_layer.bulk[species] as Array).size()
+	if _auto_veg_layer != null and _auto_veg_generated:
+		for slot in _auto_veg_layer.bulk.keys():
+			if _veg_species_of("auto", str(slot)) == species:
+				n += (_auto_veg_layer.bulk[slot] as Array).size()
+	return n
+
+
+## Show the hover ring + label on one plant, and glow its whole species.
+func set_veg_hover(desc: Dictionary) -> void:
+	if desc.is_empty():
+		clear_veg_hover()
+		return
+	if _veg_hover_marker == null or not is_instance_valid(_veg_hover_marker):
+		var terrain := _main.get_node_or_null("Terrain") if _main != null else null
+		if terrain == null:
+			return
+		_veg_hover_marker = VegHoverMarker.new()
+		_veg_hover_marker.name = "VegHoverMarker"
+		terrain.add_child(_veg_hover_marker)
+	var x := float(desc["x"])
+	var z := float(desc["z"])
+	var gy := _ground_height_at(x, z)
+	var species := str(desc["species"])
+	var n := veg_species_count(species) if str(desc.get("kind", "")) != "hero" else 0
+	var line2 := "%s · %.0f m" % [str(desc.get("source_label", "")), float(desc["height_m"])]
+	if n > 1:
+		line2 += " · %s in this world" % UiText.thousands(n)
+	if bool(desc.get("custom_look", false)):
+		line2 += " · own look"
+	_veg_hover_marker.show_at(Vector3(x, gy, z), float(desc["height_m"]),
+		float(desc["crown_m"]) * 0.5, "%s\n%s" % [str(desc["label"]), line2])
+	set_veg_species_glow("" if str(desc.get("kind", "")) == "hero" else species)
+
+
+func clear_veg_hover() -> void:
+	if _veg_hover_marker != null and is_instance_valid(_veg_hover_marker):
+		_veg_hover_marker.hide_marker()
+	set_veg_species_glow("")
+
+
+## Light every batch of one species (shader instance uniform `veg_hl`, see
+## veg_lighting.gdshaderinc); "" turns it off. Batches carry their species
+## as meta "veg_species" (VegetationRuntime / AutoVegetationRuntime). The
+## walk is redone at most twice a second while a species is lit, so chunks
+## rebuilt under the pointer pick it up.
+func set_veg_species_glow(species: String) -> void:
+	var now := Time.get_ticks_msec()
+	var stale := not _veg_glow_nodes.is_empty() and not is_instance_valid(_veg_glow_nodes[0])
+	if species == _veg_glow_species and not stale \
+			and (species.is_empty() or now - _veg_glow_walked_ms < 500):
+		return
+	for n in _veg_glow_nodes:
+		if is_instance_valid(n):
+			(n as GeometryInstance3D).set_instance_shader_parameter(&"veg_hl", 0.0)
+	_veg_glow_nodes = []
+	_veg_glow_species = species
+	_veg_glow_walked_ms = now
+	if species.is_empty() or _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	for root_name in ["Vegetation", AutoVegetationRuntime.ROOT_NAME]:
+		var root := terrain.get_node_or_null(NodePath(root_name))
+		if root == null:
+			continue
+		for node in root.find_children("*", "GeometryInstance3D", true, false):
+			if str(node.get_meta(&"veg_species", "")) == species:
+				(node as GeometryInstance3D).set_instance_shader_parameter(&"veg_hl", 1.0)
+				_veg_glow_nodes.append(node)
+
+
+## The per-tree look on one plant ({} = it follows its species).
+func veg_instance_look(desc: Dictionary) -> Dictionary:
+	if str(desc.get("source", "")) == "auto":
+		return _auto_veg_layer.instance_look(desc) if _auto_veg_layer != null else {}
+	return _vegetation_layer.instance_look(desc) if _vegetation_layer != null else {}
+
+
+## Give ONE plant its own look (Tune look → "This tree"). `look` holds
+## unprefixed species-override keys (height_m, archetype, albedo_tint, …);
+## {} returns the plant to its species. Painted: on the record. OSM: a pinned
+## single-tree patch, replayed after every regeneration.
+func apply_veg_instance_look(desc: Dictionary, look: Dictionary) -> bool:
+	var x := float(desc.get("x", 0.0))
+	var z := float(desc.get("z", 0.0))
+	if str(desc.get("source", "")) == "auto":
+		if _auto_veg_layer == null:
+			return false
+		if _auto_veg_edits == null:
+			_auto_veg_edits = AutoVegetationEdits.create_empty()
+		var slot := str(desc.get("slot", ""))
+		var key := VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE
+		_auto_veg_edits.remove_tree_patches(slot, key, Vector2(x, z))
+		var rec := _auto_veg_layer.record_for(desc)
+		if look.is_empty():
+			if rec.get("card_settings") is Dictionary:
+				(rec["card_settings"] as Dictionary).erase(key)
+		else:
+			_auto_veg_edits.add_tree_patch(x, z, slot, {key: look})
+			var card: Dictionary = rec.get("card_settings", {}) if rec.get("card_settings") is Dictionary else {}
+			card = card.duplicate()
+			card[key] = look.duplicate(true)
+			rec["card_settings"] = card
+		_auto_veg_edits.save(_lat, _lon)
+		if not _rebuild_auto_vegetation_chunks(AutoVegetationEdits.tree_pin(x, z)):
+			_rebuild_auto_vegetation()
+		return true
+	if _vegetation_layer == null or not _vegetation_layer.set_instance_look(desc, look):
+		return false
+	_vegetation_layer.save(_lat, _lon)
+	_rebuild_vegetation()
+	return true
+
+
+## Every plant of `species`, in this world ("world") or every world ("all"):
+## the species override at that scope, with the per-tree looks of that
+## species in THIS world dropped so all of them follow. "all" also removes
+## the same keys from this map's own species entry, or they would keep
+## shadowing the new default right here.
+func apply_veg_species_look(species: String, values: Dictionary, scope: String) -> int:
+	if species.is_empty() or values.is_empty():
+		return 0
+	if scope == "world":
+		VegStyleStore.save_species_override_map(_lat, _lon, species, values)
+	else:
+		VegStyleStore.save_species_override(species, values)
+		VegStyleStore.remove_species_override_keys_map(_lat, _lon, species, values.keys())
+	var cleared := 0
+	if _vegetation_layer != null:
+		cleared += _vegetation_layer.clear_species_looks(species)
+		_vegetation_layer.save(_lat, _lon)
+	if _auto_veg_layer != null:
+		for slot in _auto_veg_layer.bulk.keys():
+			if _veg_species_of("auto", str(slot)) != species:
+				continue
+			cleared += _auto_veg_layer.clear_species_looks(str(slot))
+			if _auto_veg_edits != null:
+				_auto_veg_edits.remove_tree_patches(str(slot),
+					VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE)
+		if _auto_veg_edits != null:
+			_auto_veg_edits.save(_lat, _lon)
+	VegStyleStore.invalidate_cache()
+	_veg_style.merge(VegStyleStore.flat_merged(_lat, _lon), true)
+	_veg_nominal_cache.clear()
+	_veg_pick_rev += 1
+	VegetationCardFactory.clear_foot_cache()
+	call_deferred("_rebuild_vegetation")
+	call_deferred("_rebuild_auto_vegetation_async")
+	return cleared
+
+
+## Delete one plant from either layer. An OSM tree is cleared through a
+## pinned clear polygon, so it stays gone after a reload.
+func delete_veg_plant(desc: Dictionary) -> bool:
+	if str(desc.get("source", "")) != "auto":
+		return not delete_plant_at(Vector2(float(desc["x"]), float(desc["z"])), 0.5).is_empty()
+	if _auto_veg_layer == null:
+		return false
+	var pin := AutoVegetationEdits.tree_pin(float(desc["x"]), float(desc["z"]))
+	if _auto_veg_edits == null:
+		_auto_veg_edits = AutoVegetationEdits.create_empty()
+	_auto_veg_edits.add_cleared_polygon(pin)
+	_auto_veg_edits.save(_lat, _lon)
+	var n := _auto_veg_layer.remove_in_polygon(pin)
+	if not _rebuild_auto_vegetation_chunks(pin):
+		_rebuild_auto_vegetation()
+	return n > 0
+
+
+## Resize one plant from either layer (OSM: a pinned scale patch, which
+## stacks with earlier resizes the way repeated [ / ] does).
+func scale_veg_plant(desc: Dictionary, factor: float) -> bool:
+	_veg_pick_rev += 1
+	if str(desc.get("source", "")) != "auto":
+		return not scale_plant_at(Vector2(float(desc["x"]), float(desc["z"])), factor, 0.5).is_empty()
+	if _auto_veg_layer == null:
+		return false
+	var x := float(desc["x"])
+	var z := float(desc["z"])
+	var slot := str(desc.get("slot", ""))
+	var params := {"scale_mul": factor}
+	if _auto_veg_edits == null:
+		_auto_veg_edits = AutoVegetationEdits.create_empty()
+	_auto_veg_edits.add_tree_patch(x, z, slot, params)
+	_auto_veg_edits.save(_lat, _lon)
+	var live := params.duplicate()
+	live["patch_species"] = slot
+	var n := _auto_veg_layer.apply_patch_in_polygon(AutoVegetationEdits.tree_pin(x, z), live, true)
+	if not _rebuild_auto_vegetation_chunks(AutoVegetationEdits.tree_pin(x, z)):
+		_rebuild_auto_vegetation()
+	return n > 0
+
+
+## ---------------------------------------------------------------------------
+## Detect plants from the satellite photo (VegColorDetect; the V toolbar's
+## Detect tool). The SOAK scene's editor bake, available on every map.
+## ---------------------------------------------------------------------------
+
+## Longest side of the CPU copy kept of each drape for detection. A 1 km site
+## patch at 3072 px is still 0.33 m a pixel — finer than any crown.
+const VEG_DETECT_MAX_PX := 3072
+
+var _veg_detect: VegColorDetect = null
+var _veg_detect_sig := ""
+var _veg_detect_overlay: MeshInstance3D = null
+var _veg_detect_last: Dictionary = {}
+var _veg_detect_last_key := 0
+
+
+## The drapes as CPU images, finest first. Rebuilt only when a drape changed;
+## release_veg_detect_cache() frees them when the tool is put down.
+func _veg_detect_layers() -> VegColorDetect:
+	var hyper_half := _hyper_half_m if _hyper_half_m > 0.0 else _hyper_half_extent()
+	var layers := [
+		[_site_drape, _site_half_m], [_hyper_drape, hyper_half],
+		[_detail_drape, _detail_half_extent], [_drape, _half_extent],
+	]
+	var sig := ""
+	for l in layers:
+		sig += "%d:%.1f|" % [(l[0] as Object).get_instance_id() if l[0] != null else 0, float(l[1])]
+	if _veg_detect != null and sig == _veg_detect_sig:
+		return _veg_detect
+	var d := VegColorDetect.new()
+	for l in layers:
+		var tex: Texture2D = l[0]
+		var half := float(l[1])
+		if tex == null or half <= 0.0:
+			continue
+		var img := tex.get_image()
+		if img == null or img.is_empty():
+			continue
+		if img.is_compressed() and img.decompress() != OK:
+			continue
+		if img.get_format() != Image.FORMAT_RGB8 and img.get_format() != Image.FORMAT_RGBA8:
+			img.convert(Image.FORMAT_RGBA8)
+		var longest := maxi(img.get_width(), img.get_height())
+		if longest > VEG_DETECT_MAX_PX:
+			var k := float(VEG_DETECT_MAX_PX) / float(longest)
+			img.resize(maxi(1, int(img.get_width() * k)), maxi(1, int(img.get_height() * k)),
+				Image.INTERPOLATE_BILINEAR)
+		var bb := GeoMath.bbox_for(_lat, _lon, half)
+		d.add_layer(img, half, float(bb["north"]), float(bb["south"]))
+	_veg_detect = d
+	_veg_detect_sig = sig
+	return d
+
+
+func release_veg_detect_cache() -> void:
+	_veg_detect = null
+	_veg_detect_sig = ""
+	_veg_detect_last = {}
+	clear_veg_detect_preview()
+
+
+## The square the sharpest photo covers — "Whole area" for the Detect tool:
+## the place where individual plants can actually be seen.
+func veg_detect_whole_area() -> PackedVector2Array:
+	var d := _veg_detect_layers()
+	var half := d.finest_half_m() * 0.995
+	if half <= 0.0:
+		return PackedVector2Array()
+	return PackedVector2Array([Vector2(-half, -half), Vector2(half, -half),
+		Vector2(half, half), Vector2(-half, half)])
+
+
+func _veg_detect_run(poly: PackedVector2Array, params: Dictionary) -> Dictionary:
+	var key := hash([poly, params])
+	if key == _veg_detect_last_key and not _veg_detect_last.is_empty():
+		return _veg_detect_last
+	var d := _veg_detect_layers()
+	if not d.has_layers():
+		return {}
+	var p := params.duplicate()
+	p["spacing_m"] = _veg_detect_spacing(params)
+	var res := d.detect(poly, p)
+	_veg_detect_last = res
+	_veg_detect_last_key = key
+	return res
+
+
+## Canopy fill spacing: the planted species' crown, closed up a little (crowns
+## overlap in a stand), divided by the brush density.
+func _veg_detect_spacing(params: Dictionary) -> float:
+	var crowns: Array = []
+	var mix: Variant = params.get("mix")
+	if mix is Dictionary and (mix as Dictionary).get("trees") is Dictionary:
+		for sid in ((mix as Dictionary)["trees"] as Dictionary):
+			crowns.append(float(_veg_nominal(str(sid))["crown_m"]))
+	elif VegSpeciesCatalog.is_paintable(str(params.get("species", ""))):
+		crowns.append(float(_veg_nominal(str(params["species"]))["crown_m"]))
+	var c := 6.0
+	if not crowns.is_empty():
+		c = 0.0
+		for v in crowns:
+			c += float(v)
+		c /= float(crowns.size())
+	return clampf(c * 0.8 / maxf(float(params.get("density", 1.0)), 0.25), 1.0, 30.0)
+
+
+## Classify the region and show what was found (green over the ground) without
+## planting anything. Returns the stats line's numbers.
+func preview_veg_detect(poly: PackedVector2Array, params: Dictionary) -> Dictionary:
+	var res := _veg_detect_run(poly, params)
+	if res.is_empty():
+		clear_veg_detect_preview()
+		return {"error": "No imagery loaded yet"}
+	_draw_veg_detect_overlay(res.get("mask", {}))
+	return _veg_detect_stats(res)
+
+
+static func _veg_detect_stats(res: Dictionary) -> Dictionary:
+	var plants: Array = res.get("plants", [])
+	var canopy := 0
+	for p in plants:
+		if bool((p as Dictionary).get("canopy", false)):
+			canopy += 1
+	return {"plants": plants.size(), "canopy": canopy, "patches": int(res.get("patches", 0)),
+		"green_m2": float(res.get("green_m2", 0.0)), "area_m2": float(res.get("area_m2", 0.0)),
+		"cut": float(res.get("cut", NAN)), "auto": bool(res.get("auto", true)),
+		"separability": float(res.get("separability", 0.0)),
+		"auto_split": bool(res.get("auto_split", false)),
+		"mpp": float(res.get("mpp", INF)), "cell_m": float(res.get("cell_m", 0.0))}
+
+
+## Plant what detection found as PAINTED plants (editable, clearable and
+## undoable like anything painted). A patch narrower than `shrub_below_m`
+## becomes a shrub; the rest take the brush species / mix, sized from the
+## patch (single plants) or the fill spacing (canopy). Plants are skipped on
+## roads / buildings / water and where a plant already stands.
+func place_detected_vegetation(poly: PackedVector2Array, params: Dictionary) -> Dictionary:
+	var res := _veg_detect_run(poly, params)
+	if res.is_empty() or _vegetation_layer == null:
+		return {"added": 0, "error": "No imagery loaded yet"}
+	_vegetation_layer.ensure_species_keys()
+	var excluded := veg_point_excluded_callable()
+	var existing := _veg_point_grid(3.0)
+	var rng := RandomNumberGenerator.new()
+	var growth_st := _growth_style()
+	var growth_now := float(growth_st[VegetationGrowth.KEY_NOW])
+	var forced := str(params.get("species", ""))
+	var use_forced := VegSpeciesCatalog.is_paintable(forced)
+	var mix: Dictionary = params["mix"] if params.get("mix") is Dictionary else {}
+	var shrub_below := float(params.get("shrub_below_m", 0.0))
+	var shrub_sp := _veg_detect_shrub_species(forced, mix)
+	var plant_scale := clampf(float(params.get("scale", 1.0)), 0.1, 5.0)
+	var size_var := clampf(float(params.get("size_var", 0.25)), 0.0, 0.5)
+	var added := 0
+	var skipped := 0
+	var by_species := {}
+	for item in res.get("plants", []):
+		var pl: Dictionary = item
+		var x := float(pl["x"])
+		var z := float(pl["z"])
+		var dm := float(pl["d_m"])
+		rng.seed = hash(Vector2i(int(round(x * 10.0)), int(round(z * 10.0))))
+		if bool(excluded.call(Vector2(x, z))) or _veg_point_taken(existing, x, z, maxf(0.9, dm * 0.35)):
+			skipped += 1
+			continue
+		var species := ""
+		if shrub_below > 0.0 and not bool(pl["canopy"]) and dm < shrub_below:
+			species = shrub_sp
+		elif use_forced:
+			species = forced
+		elif not mix.is_empty():
+			species = BiomePalette.pick_species(mix.get("trees", {"deciduous": 1.0}), rng)
+		else:
+			species = "shrub"
+		if not _vegetation_layer.ensure_species_key(species):
+			skipped += 1
+			continue
+		var fam := VegSpeciesCatalog.mesh_family(species)
+		var scale := 1.0
+		if not fam.begins_with("grass_"):
+			scale = clampf(dm / maxf(float(_veg_nominal(species)["crown_m"]), 0.3), 0.3, 2.5)
+			scale *= plant_scale * (1.0 + (rng.randf() * 2.0 - 1.0) * size_var)
+		if not _vegetation_layer.add_bulk(species, x, z, rng.randf() * TAU, scale):
+			skipped += 1
+			continue
+		var rec: Dictionary = (_vegetation_layer.bulk[species] as Array).back()
+		VegetationGrowth.stamp_established(rec, species, growth_st, growth_now)
+		_veg_point_mark(existing, x, z)
+		added += 1
+		by_species[species] = int(by_species.get(species, 0)) + 1
+	if added > 0:
+		_vegetation_layer.save(_lat, _lon)
+		_rebuild_vegetation()
+	clear_veg_detect_preview()
+	var out := _veg_detect_stats(res)
+	out["added"] = added
+	out["skipped"] = skipped
+	out["by_species"] = by_species
+	return out
+
+
+func _veg_detect_shrub_species(forced: String, mix: Dictionary) -> String:
+	if VegSpeciesCatalog.mesh_family(forced) == "shrub":
+		return forced
+	if mix.get("understory") is Dictionary:
+		for sid in (mix["understory"] as Dictionary):
+			if VegSpeciesCatalog.mesh_family(str(sid)) == "shrub" \
+					and VegSpeciesCatalog.is_paintable(str(sid)):
+				return str(sid)
+	return "shrub"
+
+
+## Every standing plant (both layers) in a coarse hash grid, for the
+## "something already grows here" test.
+func _veg_point_grid(cell: float) -> Dictionary:
+	var g := {"cell": cell, "cells": {}}
+	var pts: Array = []
+	if _vegetation_layer != null:
+		pts.append_array(_vegetation_layer.all_placement_points())
+	if _auto_veg_layer != null and _auto_veg_generated:
+		pts.append_array(_auto_veg_layer.all_points())
+	for p in pts:
+		_veg_point_mark(g, (p as Vector2).x, (p as Vector2).y)
+	return g
+
+
+static func _veg_point_mark(g: Dictionary, x: float, z: float) -> void:
+	var c := float(g["cell"])
+	var k := Vector2i(floori(x / c), floori(z / c))
+	var cells: Dictionary = g["cells"]
+	if not cells.has(k):
+		cells[k] = []
+	(cells[k] as Array).append(Vector2(x, z))
+
+
+static func _veg_point_taken(g: Dictionary, x: float, z: float, r: float) -> bool:
+	var c := float(g["cell"])
+	var cells: Dictionary = g["cells"]
+	var k := Vector2i(floori(x / c), floori(z / c))
+	var reach := int(ceil(r / c))
+	for dz in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			for p in cells.get(Vector2i(k.x + dx, k.y + dz), []):
+				if (p as Vector2).distance_squared_to(Vector2(x, z)) < r * r:
+					return true
+	return false
+
+
+## The detection mask laid on the ground: a terrain-following grid (one
+## ground sample per vertex, so it hugs slopes) textured with the mask.
+func _draw_veg_detect_overlay(mask: Dictionary) -> void:
+	var img := VegColorDetect.mask_image(mask)
+	if img == null or _main == null:
+		clear_veg_detect_preview()
+		return
+	var terrain := _main.get_node_or_null("Terrain")
+	if terrain == null:
+		return
+	if _veg_detect_overlay == null or not is_instance_valid(_veg_detect_overlay):
+		_veg_detect_overlay = MeshInstance3D.new()
+		_veg_detect_overlay.name = "VegDetectPreview"
+		_veg_detect_overlay.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		mat.render_priority = 5
+		_veg_detect_overlay.material_override = mat
+		terrain.add_child(_veg_detect_overlay)
+	var origin: Vector2 = mask["origin"]
+	var cell := float(mask["cell"])
+	var size := Vector2(float(mask["w"]), float(mask["h"])) * cell
+	var segs_x := clampi(int(size.x / 4.0), 2, 96)
+	var segs_z := clampi(int(size.y / 4.0), 2, 96)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for iz in segs_z:
+		for ix in segs_x:
+			var quad: Array = []
+			for c in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]:
+				var u := float(ix + (c as Vector2i).x) / float(segs_x)
+				var v := float(iz + (c as Vector2i).y) / float(segs_z)
+				var wx := origin.x + u * size.x
+				var wz := origin.y + v * size.y
+				quad.append([Vector3(wx, _ground_height_at(wx, wz) + 0.25, wz), Vector2(u, v)])
+			for t in [0, 1, 2, 0, 2, 3]:
+				st.set_uv(quad[t][1])
+				st.add_vertex(quad[t][0])
+	_veg_detect_overlay.mesh = st.commit()
+	(_veg_detect_overlay.material_override as StandardMaterial3D).albedo_texture = \
+		ImageTexture.create_from_image(img)
+	_veg_detect_overlay.visible = true
+
+
+func clear_veg_detect_preview() -> void:
+	if _veg_detect_overlay != null and is_instance_valid(_veg_detect_overlay):
+		_veg_detect_overlay.visible = false
 
 
 func update_vegetation_highlight(poly: PackedVector2Array,
@@ -12037,6 +12883,8 @@ func delete_prop_by_id(prop_id: String) -> bool:
 	var rec := _placed_prop_layer.find_by_id(prop_id)
 	if str(rec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID and _main != null:
 		PlacedPropService.remove_linkage_graph(_main, prop_id)
+	elif str(rec.get("model_id", "")) == PalletRackBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_pallet_rack_graph(_main, prop_id)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
 	# 2D/3D twin consistency: a graph node bound to this prop is the same object
@@ -12081,8 +12929,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 	# place would put the model through the container walls, floating at stack
 	# height. The crew hauling it out is what clears `stowed_in`.
 	if not packed and not str(rec.get("stowed_in", "")).is_empty():
-		var sgv0: Node = get_tree().current_scene.get_node_or_null("UILayer/SystemGraphView") \
-			if get_tree().current_scene != null else null
+		var sgv0: Node = ServiceLocator.graph()
 		if sgv0 != null and sgv0.has_method("_show_toast"):
 			sgv0.call("_show_toast",
 				"📦 Stowed in the container — unload the delivery first")
@@ -12112,8 +12959,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 		return
 	_placed_prop_layer.save(_lat, _lon)
 	_rebuild_placed_props()
-	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
-		if main != null else null
+	var sgv: Node = ServiceLocator.graph()
 	if is_linkage:
 		if sgv != null and sgv.has_method("set_imported_array_stowed"):
 			var stowed := packed or not bool(rec.get("linkage_deployed", false))
@@ -12177,9 +13023,7 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 ## priced by NpcHaulModel over the real route and split per crate. Silent
 ## no-op with no population — the player just unpacks by hand.
 func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
-	var main := get_tree().current_scene
-	var sgv: Node = main.get_node_or_null("UILayer/SystemGraphView") \
-		if main != null else null
+	var sgv: Node = ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("npc_population_bridge"):
 		return
 	var bridge: Variant = sgv.call("npc_population_bridge")

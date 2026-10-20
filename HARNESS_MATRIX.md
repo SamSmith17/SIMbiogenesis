@@ -240,6 +240,34 @@ camera cost 9 ms (overdraw of overlapping alpha cards).
 
 ## Open items (not fixed)
 
+- **The 2026-10-14 tour video must not be published.** `screenshots  tour_movie_20261014	our.mp4` was recorded before `SitePrivacy` and shows
+  the site's street address in the Site Report stop (chapter at 5:43). Every
+  harness run redacts it now, so a fresh `tools	our.ps1 -Mode record` is
+  clean; `docs/tour/video.json` stays empty until a redacted recording is
+  uploaded. **Re-recorded 2026-10-18** as `screenshots	our_movie_20261018  tour.mp4` (541 s, 45 clips, 42 of 43 stops PASS, the Site Report stop's
+  redaction check green, real user data unchanged) — the one to upload.
+- **`render_sim` tour stop under Movie Maker: RESOLVED 2026-10-18 (a
+  harness click race, not the renderer).** The stop clicks the real 📈
+  button, and in the 2026-10-18 recording the click never reached
+  `_on_render_pressed`: `SimRenderer.refusal` was empty, the button enabled,
+  no clock owner (the stop now prints that line when a render does not
+  start). Reproduced solo (`tools	our.ps1 -Mode record -Stops render_sim`
+  failed the same way, then passed on the next run — intermittent). The
+  mechanism, pinned with a throwaway windowed probe: `HarnessInput.click`
+  pushes the press and the release ONE FRAME apart, and Godot's BaseButton
+  re-evaluates `pressing_inside` from every mouse-motion event while it is
+  held — with the mouse captured (first person) every REAL motion reports
+  the window centre, so one stray motion in that frame (the player touching
+  the mouse, Windows re-centring the captured cursor) makes the release
+  emit `button_up` and no `pressed`. A Movie Maker frame at 1920×1080 is
+  ~10× longer in real time than a stills frame, which is why only `-Mode
+  record` caught it. Fix: `click()` and `drag()` push a held motion at the
+  release point in the SAME frame as the release (nothing real can land
+  between two synchronous `push_input` calls). The older private `_lc_*`
+  copies in playtest_harness carry the same shape and the same (so far
+  unseen) race. Validated by: tour_selftest 459, sim_render_selftest 27,
+  `-Mode record -Stops render_sim` ×2 PASS, `-Mode stills` PASS, the
+  bootcamp capture (real wire drags) PASS.
 - **`graphtools` on Mount Vernon: RESOLVED 2026-10-18 (world-driven pair,
   probe fixed).** The probe's "first two pins with compatible ports" had
   become the Pond Storage tank into the PowerSpout's water intake. The

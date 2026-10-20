@@ -48,3 +48,19 @@ vec3 veg_saturate(vec3 c, float s) {
 	float l = dot(c, vec3(0.299, 0.587, 0.114));
 	return max(mix(vec3(l), c, s), vec3(0.0));
 }
+
+// Select-tool species glow. The V toolbar's Select hover sets this on every
+// batch of the hovered tree's species (TerrainLoader.set_veg_species_glow —
+// one value per MultiMeshInstance3D, so a whole species lights at once with
+// no per-tree markers), and 0 everywhere else. Subtle on purpose: a warm
+// lift so the eye finds the others, not a recolour.
+instance uniform float veg_hl = 0.0;
+const vec3 VEG_HL_COLOR = vec3(1.0, 0.78, 0.32);
+
+vec3 veg_hl_albedo(vec3 a) {
+	return mix(a, VEG_HL_COLOR * 0.6, veg_hl * 0.22);
+}
+
+vec3 veg_hl_emission() {
+	return VEG_HL_COLOR * (veg_hl * 0.16);
+}

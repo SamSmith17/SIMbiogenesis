@@ -371,6 +371,9 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		# Deferred so the prop's global_transform has propagated (azimuth is
 		# derived from the world-space panel normal).
 		Callable(PlacedPropService, "seed_linkage_graph").call_deferred(main, prop_id)
+	elif model_id == PalletRackBuilder.MODEL_ID:
+		# A rack with a sloped solar array owns a graph array, like a linkage.
+		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
@@ -408,7 +411,7 @@ static func _auto_tag_space(main: Node, prop_id: String, space_type: String, cap
 		label: String) -> void:
 	var target := {"kind": "prop", "prop_id": prop_id}
 	var reg: SpaceRegistry = null
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView") if main != null else null
+	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
 		var bridge: Variant = sgv.call("npc_population_bridge")
 		if bridge != null and bridge.has_method("registry_for"):
@@ -584,6 +587,57 @@ static func remove_linkage_graph(main: Node, prop_id: String) -> void:
 	var sgv := _system_graph_view(main)
 	if sgv != null and sgv.has_method("remove_imported_solar_array"):
 		sgv.call("remove_imported_solar_array", linkage_array_tag(prop_id))
+
+
+static func pallet_rack_array_tag(prop_id: String) -> String:
+	return "rack_%s" % prop_id
+
+
+## Push a placed pallet rack's sloped solar modules into the system graph as
+## an imported array tagged per prop (idempotent: re-applying replaces only
+## this rack's array; no panels left = the array is dropped). Tilt and azimuth
+## come from the panel normal rotated into world space.
+static func seed_pallet_rack_graph(main: Node, prop_id: String) -> bool:
+	if main == null or prop_id.is_empty():
+		return false
+	var sgv := _system_graph_view(main)
+	if sgv == null:
+		return false
+	var tag := pallet_rack_array_tag(prop_id)
+	var rec := get_prop_record(main, prop_id)
+	var spec: Dictionary = rec.get("rack_spec", {}) as Dictionary
+	var summary := PalletRackBuilder.solar_summary(spec)
+	var count := int(summary.get("count", 0))
+	if count <= 0:
+		if sgv.has_method("remove_imported_solar_array"):
+			sgv.call("remove_imported_solar_array", tag)
+		return false
+	var n_world: Vector3 = summary.get("avg_normal", Vector3.UP)
+	var prop := _find_prop_node(main, prop_id)
+	if prop is Node3D:
+		n_world = (prop as Node3D).global_transform.basis * n_world
+	var orient: Dictionary = LinkageStructureBuilder.orientation_from_normal(n_world)
+	var opts := {
+		"tilt_deg": float(orient.get("tilt_deg", 0.0)),
+		"azimuth_deg": float(orient.get("azimuth_deg", 180.0)),
+		"panel_w_m": float(summary.get("panel_w_m", 0.0)),
+		"panel_h_m": float(summary.get("panel_h_m", 0.0)),
+		"show_picker": false,
+		"auto_wire": true,
+	}
+	if sgv.has_method("add_imported_solar_panels"):
+		sgv.call("add_imported_solar_panels", count,
+			float(summary.get("watts_per_panel", PalletRackBuilder.PV_WATTS)),
+			"Pallet Rack Solar", tag, opts)
+	return true
+
+
+static func remove_pallet_rack_graph(main: Node, prop_id: String) -> void:
+	if main == null or prop_id.is_empty():
+		return
+	var sgv := _system_graph_view(main)
+	if sgv != null and sgv.has_method("remove_imported_solar_array"):
+		sgv.call("remove_imported_solar_array", pallet_rack_array_tag(prop_id))
 
 
 static func _system_graph_view(main: Node) -> Node:

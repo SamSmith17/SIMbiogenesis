@@ -106,7 +106,7 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			var preset := str(op.get("graph_preset", ""))
 			if preset.is_empty():
 				return true
-			var sgv2 := main.get_node_or_null("UILayer/SystemGraphView")
+			var sgv2 := ServiceLocator.graph()
 			if sgv2 == null or not sgv2.has_method("bind_assembled_structure"):
 				return false  # view not up yet — retry next sweep
 			return bool(sgv2.call("bind_assembled_structure", prop_id, preset))
@@ -123,7 +123,7 @@ static func execute(main: Node, op: Dictionary) -> bool:
 static func _finish_recipe_step(main: Node, item_id: String, step_id: String) -> bool:
 	if item_id.is_empty():
 		return true   # nothing to resume; consumed, not retried
-	var sgv := main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("resume_recipe_step"):
 		return false  # view not up yet — retry next sweep
 	return bool(sgv.call("resume_recipe_step", item_id, step_id))

@@ -42,6 +42,12 @@ static func mouse_move(vp: Viewport, pos: Vector2, ctrl: bool = false, shift: bo
 	# window is not the 1920×1080 base (1280×720 at UI scale 1.25: 1.2× off),
 	# and the OS's own motion event then dragged every hover / wire drag there.
 	Input.warp_mouse(vp.get_final_transform() * pos)
+	_push_motion(vp, pos, ctrl, shift, held)
+	await _tree().process_frame
+
+
+## One motion event, no frame wait (see click()).
+static func _push_motion(vp: Viewport, pos: Vector2, ctrl: bool, shift: bool, held: bool) -> void:
 	var mm := InputEventMouseMotion.new()
 	mm.position = pos
 	mm.global_position = pos
@@ -50,12 +56,24 @@ static func mouse_move(vp: Viewport, pos: Vector2, ctrl: bool = false, shift: bo
 	if held:
 		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
 	vp.push_input(mm, true)
-	await _tree().process_frame
 
 
+## The press and the release are a frame apart, and a REAL mouse-motion event
+## delivered in that frame cancels the click: BaseButton re-evaluates
+## `pressing_inside` from every motion's position while it is held, and with
+## the mouse captured (first person) every real motion reports the window
+## CENTRE, nowhere near the button, so the release emits button_up and no
+## `pressed`. Under Movie Maker a frame is many times longer in real time, so
+## a stray motion (the player touching the mouse, Windows re-centring the
+## captured cursor) lands in that window far more often — the render_sim tour
+## stop failed only in `-Mode record` for exactly this. A held motion at the
+## release point pushed in the SAME frame as the release (no await between
+## them) puts `pressing_inside` back before the button sees the release;
+## nothing real can be processed between two synchronous push_input calls.
 static func click(vp: Viewport, pos: Vector2, double: bool = false) -> void:
 	await mouse_move(vp, pos)
 	await mouse_press(vp, pos, true, double)
+	_push_motion(vp, pos, false, false, true)
 	await mouse_press(vp, pos, false)
 
 
@@ -66,6 +84,8 @@ static func drag(vp: Viewport, a: Vector2, b: Vector2, steps: int = 12,
 	var n := maxi(steps, 1)
 	for i in range(1, n + 1):
 		await mouse_move(vp, a.lerp(b, float(i) / float(n)), ctrl, shift, true)
+	# Same guard as click(): the last held motion and the release in one frame.
+	_push_motion(vp, b, ctrl, shift, true)
 	await mouse_press(vp, b, false, false, ctrl, shift)
 
 

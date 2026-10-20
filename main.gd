@@ -524,6 +524,79 @@ func set_world_suspended_for_lab(on: bool) -> void:
 		moon_sky_glow = clampf( value, 0.0, 2.0 ) if is_finite( value ) else 1.0
 		_update_celestial_sizes()
 
+## Horizon — where the ground meets the sky (sky.gdshader HORIZON block).
+## Settings → Environment → Horizon. Angles are in degrees here and pushed to
+## the shader as sin(elevation).
+## Raise (+) or lower (−) the sky's horizon line.
+@export_range( -5.0, 5.0, 0.05 ) var horizon_height_deg : float = 0.0 :
+	set( value ) :
+		horizon_height_deg = clampf( value, -5.0, 5.0 ) if is_finite( value ) else 0.0
+		_update_celestial_sizes()
+## How far below the line the sky takes to reach the horizon colour.
+@export_range( 0.05, 10.0, 0.05 ) var horizon_softness_deg : float = 1.7 :
+	set( value ) :
+		horizon_softness_deg = clampf( value, 0.05, 10.0 ) if is_finite( value ) else 1.7
+		_update_celestial_sizes()
+## A band of horizon colour fading up into the sky (0 = none).
+@export_range( 0.0, 1.0, 0.01 ) var horizon_haze : float = 0.45 :
+	set( value ) :
+		horizon_haze = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.45
+		_update_celestial_sizes()
+@export_range( 0.5, 25.0, 0.5 ) var horizon_haze_height_deg : float = 5.0 :
+	set( value ) :
+		horizon_haze_height_deg = clampf( value, 0.5, 25.0 ) if is_finite( value ) else 5.0
+		_update_celestial_sizes()
+## true = the horizon takes the live haze colour (the colour the fog paints
+## distant ground), so far terrain and the sky under it match at every hour.
+## false = horizon_user_color.
+@export var horizon_match_haze : bool = true :
+	set( value ) :
+		horizon_match_haze = value
+		_update_environment()
+@export var horizon_user_color : Color = Color( 0.0, 0.5, 0.6 ) :
+	set( value ) :
+		horizon_user_color = value
+		_update_environment()
+
+## Atmospheric haze (distance fog) — scales on the time-of-day curve in
+## _update_environment, so 1.0 everywhere = the built-in look.
+@export_range( 0.0, 4.0, 0.05 ) var haze_density_mult : float = 1.0 :
+	set( value ) :
+		haze_density_mult = clampf( value, 0.0, 4.0 ) if is_finite( value ) else 1.0
+		_update_environment()
+## How much of distant ground takes the sky's own colour (fog_aerial_perspective).
+@export_range( 0.0, 1.6, 0.05 ) var haze_aerial_mult : float = 1.0 :
+	set( value ) :
+		haze_aerial_mult = clampf( value, 0.0, 1.6 ) if is_finite( value ) else 1.0
+		_update_environment()
+## The haze's brightening toward the sun (fog_sun_scatter).
+@export_range( 0.0, 4.0, 0.05 ) var haze_sun_glow_mult : float = 1.0 :
+	set( value ) :
+		haze_sun_glow_mult = clampf( value, 0.0, 4.0 ) if is_finite( value ) else 1.0
+		_update_environment()
+@export var day_haze_color : Color = Color( 0.68, 0.78, 0.94 ) :
+	set( value ) :
+		day_haze_color = value
+		_update_environment()
+
+## Defaults for Settings → Environment's "Reset horizon & haze".
+const HORIZON_HAZE_DEFAULTS := {
+	"horizon_height_deg": 0.0,
+	"horizon_softness_deg": 1.7,
+	"horizon_haze": 0.45,
+	"horizon_haze_height_deg": 5.0,
+	"horizon_match_haze": true,
+	"horizon_user_color": Color( 0.0, 0.5, 0.6 ),
+	"haze_density_mult": 1.0,
+	"haze_aerial_mult": 1.0,
+	"haze_sun_glow_mult": 1.0,
+	"day_haze_color": Color( 0.68, 0.78, 0.94 ),
+	"twilight_cool_bias": 0.65,
+	"late_day_clearing": 0.4,
+	"sky_zenith_color": Color( 0.25, 0.55, 0.95 ),
+	"sky_horizon_color": Color( 0.7, 0.85, 1.0 ),
+}
+
 ## Moon light intensity (0 = use node default)
 @export_range( 0.0, 10.0, 0.01 ) var moon_base_enegry : float = 0.0 :
 	set( value ) :
@@ -1788,6 +1861,124 @@ func set_moon_sky_glow( value: float ) -> void :
 
 func get_moon_sky_glow() -> float :
 	return moon_sky_glow
+
+# --- Horizon + haze (Settings → Environment). Generic set_/get_ pairs so
+# SimSettingsController.apply_sky_setting and its [rendering_adv] loops carry them.
+func set_horizon_height_deg( value: float ) -> void :
+	horizon_height_deg = value
+
+func get_horizon_height_deg() -> float :
+	return horizon_height_deg
+
+func set_horizon_softness_deg( value: float ) -> void :
+	horizon_softness_deg = value
+
+func get_horizon_softness_deg() -> float :
+	return horizon_softness_deg
+
+func set_horizon_haze( value: float ) -> void :
+	horizon_haze = value
+
+func get_horizon_haze() -> float :
+	return horizon_haze
+
+func set_horizon_haze_height_deg( value: float ) -> void :
+	horizon_haze_height_deg = value
+
+func get_horizon_haze_height_deg() -> float :
+	return horizon_haze_height_deg
+
+## Variant: the settings file loader hands every [rendering_adv] key over as a float.
+func set_horizon_match_haze( value ) -> void :
+	horizon_match_haze = bool( value )
+
+func get_horizon_match_haze() -> bool :
+	return horizon_match_haze
+
+func set_horizon_user_color( value: Color ) -> void :
+	horizon_user_color = value
+
+func get_horizon_user_color() -> Color :
+	return horizon_user_color
+
+func set_haze_density_mult( value: float ) -> void :
+	haze_density_mult = value
+
+func get_haze_density_mult() -> float :
+	return haze_density_mult
+
+func set_haze_aerial_mult( value: float ) -> void :
+	haze_aerial_mult = value
+
+func get_haze_aerial_mult() -> float :
+	return haze_aerial_mult
+
+func set_haze_sun_glow_mult( value: float ) -> void :
+	haze_sun_glow_mult = value
+
+func get_haze_sun_glow_mult() -> float :
+	return haze_sun_glow_mult
+
+func set_day_haze_color( value: Color ) -> void :
+	day_haze_color = value
+
+func get_day_haze_color() -> Color :
+	return day_haze_color
+
+func set_twilight_cool_bias( value: float ) -> void :
+	twilight_cool_bias = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.65
+
+func get_twilight_cool_bias() -> float :
+	return twilight_cool_bias
+
+## 0..1 in the UI; pre_sunset_reduction_strength's real range is 0..0.00025
+## (fog density per metre taken off in the hours before sunset).
+func set_late_day_clearing( value: float ) -> void :
+	var v := clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.4
+	pre_sunset_reduction_strength = v * 0.00025
+
+func get_late_day_clearing() -> float :
+	return pre_sunset_reduction_strength / 0.00025
+
+func horizon_haze_defaults() -> Dictionary :
+	return HORIZON_HAZE_DEFAULTS.duplicate()
+
+## The daytime sky gradient lives on the scene's sky material (no script var):
+## zenith = day_top_color, horizon = day_bottom_color.
+func _sky_material() -> ShaderMaterial :
+	if not is_instance_valid( environment ) or environment.environment == null :
+		return null
+	var sk := environment.environment.sky
+	if sk == null :
+		return null
+	return sk.sky_material as ShaderMaterial
+
+func _sky_color_param( param: String, fallback: Color ) -> Color :
+	var m := _sky_material()
+	if m == null :
+		return fallback
+	var v = m.get_shader_parameter( param )
+	if v is Color :
+		return v
+	if v is Vector3 :
+		return Color( v.x, v.y, v.z )
+	return fallback
+
+func set_sky_zenith_color( value: Color ) -> void :
+	var m := _sky_material()
+	if m != null :
+		m.set_shader_parameter( "day_top_color", value )
+
+func get_sky_zenith_color() -> Color :
+	return _sky_color_param( "day_top_color", HORIZON_HAZE_DEFAULTS[ "sky_zenith_color" ] )
+
+func set_sky_horizon_color( value: Color ) -> void :
+	var m := _sky_material()
+	if m != null :
+		m.set_shader_parameter( "day_bottom_color", value )
+
+func get_sky_horizon_color() -> Color :
+	return _sky_color_param( "day_bottom_color", HORIZON_HAZE_DEFAULTS[ "sky_horizon_color" ] )
 
 func set_cirrus_amount( value: float ) -> void :
 	cirrus_amount = value
@@ -3082,6 +3273,10 @@ func _update_celestial_sizes() -> void :
 		_skym.set_shader_parameter( "light_pollution", light_pollution )
 		_skym.set_shader_parameter( "light_pollution_color", light_pollution_color )
 		_skym.set_shader_parameter( "moon_sky_glow", moon_sky_glow )
+		_skym.set_shader_parameter( "horizon_height", sin( deg_to_rad( horizon_height_deg ) ) )
+		_skym.set_shader_parameter( "horizon_blur", sin( deg_to_rad( horizon_softness_deg ) ) )
+		_skym.set_shader_parameter( "horizon_haze", horizon_haze )
+		_skym.set_shader_parameter( "horizon_haze_height", sin( deg_to_rad( horizon_haze_height_deg ) ) )
 		var obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
 		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_obscuration", obs )
 		var tot := 1.0 if bool( _solar_eclipse.get( "is_total", false ) ) else 0.0
@@ -3147,7 +3342,7 @@ func _update_environment() -> void :
 	#
 	# Haze color: used for the exponential depth falloff curve.
 	# Keep twilight haze predominantly cool/blue-grey so distant mountains shift darker/bluer.
-	var day_haze    := Color( 0.68, 0.78, 0.94 )          # cool blue-grey, daytime
+	var day_haze    : Color = day_haze_color              # cool blue-grey, daytime (Settings → Environment)
 	var sunset_haze_cool := Color( 0.43, 0.48, 0.60 )     # blue-grey dusk haze (mountain silhouette tone)
 	var sunset_haze_warm := Color( 0.52, 0.38, 0.26 )     # subtle warm horizon tint
 	var warm_mix : float = ( 1.0 - twilight_cool_bias ) * twilight_amount * 0.35
@@ -3158,7 +3353,7 @@ func _update_environment() -> void :
 	
 	# Sun scatter: keep this moderate at twilight.
 	# High values can over-brighten distant terrain into white bands.
-	environment.environment.fog_sun_scatter = lerpf( 0.03, 0.12, twilight_amount )
+	environment.environment.fog_sun_scatter = lerpf( 0.03, 0.12, twilight_amount ) * haze_sun_glow_mult
 	
 	# Density: higher than the original so closer mountains (~300 units) pick up haze,
 	# but low enough that far mountains don't become fully sky-colored.
@@ -3167,7 +3362,7 @@ func _update_environment() -> void :
 	var sunset_boost : float = 0.00003 * twilight_amount
 	var pre_sunset_reduction : float = pre_sunset_reduction_strength * pre_sunset_amount
 	var night_reduction : float = 0.00016 * night_amount
-	environment.environment.fog_density = clampf( base_density + sunset_boost - pre_sunset_reduction - night_reduction, 0.00008, 0.0010 )
+	environment.environment.fog_density = clampf( base_density + sunset_boost - pre_sunset_reduction - night_reduction, 0.00008, 0.0010 ) * haze_density_mult
 	
 	# Aerial perspective: how much the fog color is replaced by the sky shader's color.
 	# Reduce this at twilight/night so mountains keep more of their own dark albedo.
@@ -3184,7 +3379,7 @@ func _update_environment() -> void :
 		moon_visibility = moon_above_horizon_for_fog * get_lunar_phase_brightness()
 	aerial_amount += night_amount * moon_visibility * 0.02
 	aerial_amount = clampf( aerial_amount, 0.22, 0.62 )
-	environment.environment.fog_aerial_perspective = aerial_amount
+	environment.environment.fog_aerial_perspective = clampf( aerial_amount * haze_aerial_mult, 0.0, 1.0 )
 	
 	# Extend fog depth end far enough that density alone governs the falloff curve
 	# rather than a hard clamp at 2365 units (the scene file default) turning
@@ -3240,6 +3435,19 @@ func _update_environment() -> void :
 	# _hazard_vol, which this reads. Called before it, the dust wall always ran
 	# one environment update behind the storm.
 	_apply_advanced_rendering_toggles()
+	_push_horizon_color()
+
+
+## The sky below the horizon line. Matched to the FINAL haze colour (after the
+## hazard pass) because that is what the fog paints distant ground: on a flat
+## map the terrain's edge meets the sky there, and a different colour reads as
+## a stripe between the two.
+func _push_horizon_color() -> void :
+	var m := _sky_material()
+	if m == null :
+		return
+	var c : Color = environment.environment.fog_light_color if horizon_match_haze else horizon_user_color
+	m.set_shader_parameter( "horizon_color", c )
 
 
 ## Single injection point for extreme weather. AtmosphereApplier does the maths
@@ -4230,6 +4438,13 @@ func _setup_toast_ui() -> void :
 		var music : Node3D = load( "res://core/population/stage_music.gd" ).new()
 		music.name = "StageMusic"
 		add_child( music )
+	# The first-person ambient bed: wind, rain, the nearest stream and
+	# birdsong from the weather, the water network and the forest round the
+	# listener (AmbientBed; silent when paused or away from first person).
+	if get_node_or_null( "AmbientBed" ) == null :
+		var bed : Node = load( "res://core/audio/ambient_bed.gd" ).new()
+		bed.name = "AmbientBed"
+		add_child( bed )
 	# Where a FUCK YES!!! happened: a beacon over the person each toast names.
 	if get_node_or_null( "PeakBeacon" ) == null :
 		var beacon : Node3D = load( "res://core/population/peak_beacon.gd" ).new()

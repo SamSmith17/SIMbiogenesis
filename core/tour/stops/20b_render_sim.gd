@@ -31,6 +31,19 @@ func run(ctx: TourContext) -> void:
 		return
 	var sr: Node = sgv.call("sim_renderer")
 	await ctx.wait(0.6)
+	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
+		# The button's own refusal only reaches a toast: name it in the log. An
+		# empty refusal with the button enabled means the CLICK never reached
+		# the handler (the 2026-10-18 recording — see HarnessInput.click).
+		var tl: Node = ctx.main.find_child("TimelineUI", true, false)
+		var end_abs := NAN
+		if tl != null and tl.has_method("_render_target_end"):
+			end_abs = float(tl.call("_render_target_end"))
+		var btn := HarnessInput.find_button(ctx.tree().root, "📈")
+		ctx.note("render did not start: refusal='%s' end=%.3f play=%.3f button_disabled=%s shift=%s clock_owner='%s' hold='%s'" % [
+			str(sr.call("refusal", end_abs)), end_abs, float(ctx.main.call("get_absolute_hours")),
+			str(btn.disabled if btn != null else "<no button>"), str(Input.is_key_pressed(KEY_SHIFT)),
+			str(ctx.main.call("clock_is_owned")), str(ctx.main.call("clock_hold_owner"))])
 	if not ctx.require(bool(sr.call("is_active")) or not sr.cache.is_empty(), "the render started"):
 		return
 	# Catch it mid-render: the progress card and the strip filling in.

@@ -6398,7 +6398,9 @@ func _run_fix_script() -> void:
 		print("fix-script: FAIL — the script reported ok=false")
 		return
 	if WorldPaths.has_active_world():
-		var saved := WorldSession.save_now(main, true, true)
+		# The script may have reloaded the scene (a resize relaunches the
+		# world), which frees the `main` it was handed.
+		var saved := WorldSession.save_now(_find_main(), true, true)
 		print("fix-script: world saved %s%s" % ["PASS" if saved else "FAIL",
 			" — kept in the player's world" if _persist else " (sandbox only)"])
 	else:
@@ -13659,6 +13661,13 @@ func _run_festival_mode_capture() -> void:
 		push_error("PlaytestHarness: festivalmode — graph model or Main entry point unavailable")
 		_maybe_quit()
 		return
+	# A world saved mid-festival (Walton, 2026-10-18) resumes INTO the mode:
+	# the easy override is already on and the settlement view already open
+	# before the harness runs, so every "before" check reads the resume, not
+	# the open this capture exists to measure. Start from the mode closed.
+	if main.has_method("festival_mode_active") and bool(main.call("festival_mode_active")):
+		print("PlaytestHarness: festivalmode — the world resumed in festival mode; closing it first")
+	await _first_person_baseline(main)
 	# The Peak Experience score is the PLAYER'S: snapshot its file and put it
 	# back afterwards (the harness's own onsets must not count).
 	var peak_files := []

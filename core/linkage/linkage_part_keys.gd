@@ -711,8 +711,8 @@ static func hw_assembly_enabled(p: LinkageParams, assembly_id: String) -> bool:
 ## line for line as solver.js:2008-2315 does — including its asymmetries (the
 ## h-pivot INNER bolt and the bottom-inner V washers are never replaced).
 ##
-## Not yet produced (later parity phases): floor beams and coverings / floor
-## deck / shade ("wall").
+## Floor beams and the coverings / floor deck / shade ("wall") come from
+## LinkageEnclosure (A4) and are folded in below.
 static func part_data(p: LinkageParams, fold: float, include_panels: bool = true) -> Dictionary:
 	var q := p.duplicate_params()
 	q.show_brackets = true

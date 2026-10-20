@@ -418,6 +418,30 @@ static func set_stage_music_volume(v: float) -> void:
 	cfg.save(CFG_PATH)
 
 
+## The first-person ambient bed's volume, 0..1 (0 = off): wind, rain, the
+## nearest stream, birdsong (AmbientBed). Beside the stage music in
+## Settings → NPCs, and in this file because it is the game's one sound
+## taste file.
+static var _ambient := -1.0
+
+static func ambient_volume() -> float:
+	if _ambient < 0.0:
+		var cfg := ConfigFile.new()
+		var v := 0.7
+		if cfg.load(CFG_PATH) == OK:
+			v = float(cfg.get_value(SECTION, "ambient_volume", 0.7))
+		_ambient = clampf(v, 0.0, 1.0)
+	return _ambient
+
+
+static func set_ambient_volume(v: float) -> void:
+	_ambient = clampf(v, 0.0, 1.0)
+	var cfg := ConfigFile.new()
+	cfg.load(CFG_PATH)
+	cfg.set_value(SECTION, "ambient_volume", _ambient)
+	cfg.save(CFG_PATH)
+
+
 ## The FUCK YES! toast (the Peak Experience score always counts).
 static var _peak_toasts := -1
 

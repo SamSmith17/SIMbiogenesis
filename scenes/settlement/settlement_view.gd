@@ -367,7 +367,7 @@ func _dots() -> Array:
 func _bridge() -> Variant:
 	if _main == null:
 		return null
-	var sgv := _main.get_node_or_null("UILayer/SystemGraphView")
+	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
 		return sgv.call("npc_population_bridge")
 	return null

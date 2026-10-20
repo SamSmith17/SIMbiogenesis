@@ -390,6 +390,27 @@ Godot.exe.exe --headless --path . --script core/population/festival_vibe_selftes
 # time, so every bench median before 2026-10-06 printed 1000x low — the F3
 # HUD was right (npc_host ≈ 220 ms for 100 NpcAvatars, ~2 ms per figure):
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=crowdbench --count=1000 --shots-dir=<label> --quit-after-capture
+# First-person ambient bed (offline — AmbientMix, the ONE mix rule the
+# AmbientBed node follows, + AmbientSynth's procedural loops): wind / rain /
+# stream / birds each monotonic, bounded, continuous in its input (Beaufort
+# wind, the met rain classes, Manning velocity × distance, DaylightModel ×
+# forest with the rain + wind hush and the midday hush), the gates (night,
+# bare field, paused, away from first person, volume 0) silencing exactly
+# what they should, the master scaling every layer, the loops SEAMLESS
+# (join step ≤ the largest step inside), bounded, told apart by brightness
+# and deterministic, a chirp short and silent at both ends. EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/audio/ambient_mix_selftest.gd
+# The bed on a REAL world (sandbox, read-only): Main made it, the live
+# inputs come off the weather / sun / forest count / nearest stream, forced
+# inputs drive the players (gain → volume_db, playing, calls on the chirp
+# players), a paused clock and the open graph silence it, the Settings
+# volume at 0 silences it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ambient_bed_probe.gd
+# Settings → Environment horizon + haze (sandbox): every control reaches its
+# sky uniform / the fog, the matched horizon == fog_light_color, a
+# persist_settings → _load_persisted_settings round trip, the reset:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/horizon_settings_check.gd
 # Festival look studio (WINDOWED, not a selftest): a lit FIREPIT, crowd
 # figures in the DJ (1 m up on a box) / cheer / rave / talk / sit poses with
 # glow sticks, and three stick figures with glow bands — at night and by day,
@@ -640,7 +661,21 @@ Godot.exe.exe --headless --path . --quit-after 120
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/soak_festival_2026.tscn
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial.tscn
 
-# Terrain pipeline self-test (offline, deterministic — geo math + mesh builder):
+# Map extents (offline — TerrainExtents side/half + clamps + overlay cap, the
+# stale-result key test against the REAL elevation/imagery key formats, the
+# elevation source ladder, tiling + stitch == one request, retry delay;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/terrain/terrain_extents_selftest.gd
+# Terrain options → Apply & reload end to end (sandbox; one Overpass request):
+# the new size in the loader, world record, snapshot and site meta, the SAME
+# world relaunched, the resumed player on the ground:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/terrain_extents_apply_check.gd -Timeout 600
+# Pallet-rack design elements on a real world (sandbox): every built-in design
+# built + shot, the Door / Window / Stairs / Railing tools clicked through the
+# modal's own click path, a slope bay picked on its own, close-ups:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_elements_shots.gd -Label <dir>
+# Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
+# also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
 # Terrain seam compose diagnostic (offline, synthetic mismatch grid):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_seam_diag_run.gd
@@ -726,6 +761,19 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pnw_forest_shots
 # October, the Tune-look maple page; FAILs unless "Show vegetation" off hides
 # every plant root, the plant props and the floor moss, and on brings them back:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/broadleaf_shots.gd -Label <dir>
+# V Select across both layers + Detect (offline — the per-tree look as the
+# strongest resolution layer + idempotent, KEY_MAP_SPECIES beating map family
+# edits for a generic species, map species store writes on a TEMP path, a
+# painted per-tree look through JSON, OSM single-tree pins (look replaces,
+# resize stacks, clear removes one), VegTreePick ray picks, VegColorDetect on a
+# synthetic photo incl. the two-tone-sand trap, the shader glow uniform.
+# EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script vegetation/veg_select_detect_selftest.gd
+# The same on a real world (sandbox): a screen-ray pick of a painted and an OSM
+# tree, hover marker + species glow, one-tree Tune look re-meshing that tree,
+# "This world" → map override, an OSM tree's look surviving a regeneration,
+# Detect preview / plant / Undo. Shots under screenshots\veg_select_detect\:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/veg_select_detect_check.gd -Timeout 900
 # In-game "Restore an earlier vegetation look" round trip (sandbox):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/veg_look_restore_check.gd
 # Extreme weather (offline — core/weather/): hazard catalog + VTEC mapping, the
@@ -1559,6 +1607,44 @@ Gotchas: headless runs rename `addons/**/~lib*.dll` → `*.TMP` (restore with
 ignored `.godot` class cache goes stale. If the Godot editor is open during
 file operations, it can resurrect deleted/modified scenes from memory on save.
 
+## First-person ambient bed (core/audio/, 2026-10-18)
+
+The world used to be near-silent on foot. `AmbientBed` (a Main child made
+in `_ready` beside StageMusic) plays four non-positional layers under ONE
+pure rule, `AmbientMix.levels(inputs)`: **wind** from WeatherService's wind
+speed (Beaufort: nothing under 1 m/s, full by 14), **rain** from
+`rain_rate_mmh` through the met classes NpcComfort uses (light < 2.5 mm/h,
+moderate to 7.6, heavy beyond), the nearest **stream**'s Manning velocity
+(`WaterNetwork.nearest_flow` — ONE station's hydraulics, full within 6 m,
+gone by 60) and **birdsong** gated by `DaylightModel.sky_light` (none at
+night, the chorus from civil dawn, quieter under a high sun) × the forest
+round the listener (`TerrainLoader.forest_trees_within`, trees only — a
+bbox pass over both layers' records, every 2 s) and hushed by rain and
+wind. The master is `NpcDisplayPrefs.ambient_volume` (Settings → NPCs,
+beside the stage music), ZERO while `SimFxRate.is_paused` (a frozen world
+is silent, like the fire and the lights) and away from first person (the
+graph hides the world; a camera claim — settlement view, globe, window
+wall — swaps the camera; the drone borrows the player's and still hears
+the wind). Gains ease with `AmbientMix.smooth` (0.6 s); wind rides two
+slow sines as gusts; birds are single calls on a Poisson clock over
+one-shot players (deterministic hashes of the gust clock, never randf).
+- **No shipped audio.** Each layer plays the player's own
+  `user://ambient/<wind|rain|stream|birds>.{mp3,ogg,wav}` when one exists,
+  else `AmbientSynth`'s procedural loop made once at load: filtered noise
+  (wind dark, rain bright with drops, the stream mid-band with a two-tone
+  bubbling) cross-faded tail-into-head so the loop point is SEAMLESS (the
+  selftest pins the join step), chirps as 2–4 sine sweeps.
+- **The sound-effects mute** (`UiSfx`, the UiSound autoload; Settings →
+  UI sounds and the timeline's 🔇/🔊 button) mutes the `UI` and `SFX`
+  AudioServer buses. The bed, thunder and the extinguisher play on `SFX`
+  (`UiSfx.sfx_bus()`): a new world effect must too, or the mute misses it.
+  Muted by DEFAULT (`audio_prefs.cfg [audio] sfx_muted`, a new key so every
+  install starts muted once). Stage music is not an effect and stays on Master.
+- Probes read `inputs()` / `levels()` / `gains()` / `debug_line()` and
+  force the rule through `override_inputs`.
+- **No tour stop**: the tour is hero stills and the bed has no pixels.
+  `tools/checks/ambient_bed_probe.gd` is its gate instead (Validation list).
+
 ## Feature tour (core/tour/ — the show-people-what-it-does harness)
 
 A recordable visual tour of every mode: a title card per feature (chapter,
@@ -2300,6 +2386,44 @@ headless imports (it prints "SketchUp Import Fix: <name> — N materials").
 Selftest `core/placed_models/import_material_fixer_selftest.gd` (also pins
 ImagerySources).
 
+**Pallet-rack design elements (2026-10-20, `core/terrain/pallet_rack_builder.gd`
++ `scenes/ui/pallet_rack_builder_modal.gd`).** Modelled on the Mars College
+builds. `rack_spec.elements` is ONE list of `{id, type, ...}` records: `door`
+(hinged / double / sliding barn door on a track / open doorway, painted per
+colour), `window`, `stair` (IRC risers ≤ 7.5", 10" treads; "along" a face to a
+landing, or "out"), `lean_to` (a sloped array on any face: solar modules,
+greenhouse glazing, plywood, bare rafters, or "none", per bay via `segments`,
+optional glazed ends), `railing` (one per deck: a rail on every deck-cell edge
+with no same-height deck beside it, minus faces turned off, stretches a wall
+guards and stair landings) and `courtyard` (cut rects in `_layout`'s notch:
+deck cells and the rows strictly inside go). `resolve_element` fills
+`ELEMENT_DEFAULTS` and clamps to the rack; an unknown type is kept, not drawn.
+`ELEMENT_FIELDS` is the inspector's row model (selftest: every key has a
+default). Walls gained a band (`wall_bottom_ft` / `wall_top_ft`, -1 = top) and
+doors / windows cut their holes (`rect_minus`). Rules that carry it:
+- **Faces are named as seen standing in front of the front (-Z) face: left
+  is +X, right is -X** (`_face_frame`, `_wall_faces`, the railing classifier).
+  Before 2026-10-20 the left wall was -X; the modal camera opens on the
+  front-right three-quarter now, and the old naming put "left" on your right.
+- Positions along a face are feet from the face's start (`_face_frame.base`),
+  floors index `_levels` (template levels then the roof), -1 = ground.
+- Pick ids: `el:<id>` (doors, windows, stairs, courtyards), `el:<id>:<bay>`
+  (one ORIENTED box per slope bay: `obb_xf` / `obb_half`, tested by
+  `ray_hits_component`), `el:<id>:r<k>` (railing runs). The modal groups them
+  by `el_id`; a slope bay is selectable alone and Del on it sets that bay to
+  "none".
+- `solar_summary(spec)` uses the SAME `_pv_layout` as the geometry; placing
+  or applying a rack seeds a graph array tagged `rack_<prop_id>`
+  (`PlacedPropService.seed_pallet_rack_graph`, removed on delete).
+- Modal: "Add to the structure" tools (`TOOL_PRESETS`) arm a placement; the
+  cyan ghost is `element_components(spec, candidate)`; a door/window on a wall
+  that is off turns it on. Undo snapshots the WHOLE spec now. Designs:
+  `design_presets()` (Solar workshop, Two storey with stairs, Stepped
+  amphitheatre, Courtyard compound) + the player's library
+  (`user://pallet_rack_library.json`, designs and element presets).
+- Known, not from this work: plywood walls in the studio show bright
+  diagonal streaks (seen on a bare wall too).
+
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`
 = 500 m square, (0,0) = NW like the terrain drape; fixed constant → mesh never
@@ -2510,18 +2634,35 @@ pattern):**
  OPENMETEO_DETAIL_N (64² ≈ ~47 m spacing) at ~40 serial requests. **Seam compose**
  (`TerrainBuilder` + `TerrainSeamDiag`): vertical offset alignment in the overlap
  ring, adaptive feather (80–800 m from boundary delta), exterior coarse ring blend,
- and player spawn gated until composed heightfield is ready. Configurable extents:
- `MapDefinition.half_extent_m` / `detail_half_extent_m` / `osm_half_extent_m`,
- user-adjustable via Terrain options → "Advanced terrain size" (World size / Hi-res
- DEM-imagery / Buildings-water-veg SpinBoxes, `terrain_options_ui.gd`), which calls
- `TerrainLoader.apply_terrain_extents()` — this restores a control surface that
- briefly existed as location-picker-only UI and was later dropped as collateral
- damage in an unrelated batch commit; `apply_terrain_extents` itself was never
- broken, it just had no caller. Works for an ALREADY-VISITED site, not just at
- map creation, because per-site cache metadata
- (`TerrainCacheSettings.get_meta_extents`) always wins over the global
- `terrain_config.cfg` once a site has loaded once — hand-editing that config file
- does nothing for a returning site. The `terrain_loader` used to
+ and player spawn gated until composed heightfield is ready. **Map extents
+ (`core/terrain/terrain_extents.gd`, `TerrainExtents`, 2026-10-19)** — the
+ one set of rules for the three sizes (world / hi-res patch / OSM square).
+ STORED as half-extents (`MapDefinition.*half_extent_m`, MapContext,
+ `extents_*.json`, the world snapshot + map block, every fetch); SHOWN as side
+ lengths in km in Terrain options → "Advanced terrain size". ⚠ The panel used to
+ show the half under "World size", so typing 80 built a 160 km world (the
+ loading screen prints the side) and quadrupled every request — convert only
+ with `side_from_half` / `half_from_side`. `sanitize` clamps (world 10–200 km,
+ patch 1–10 km, OSM 1–16 km) and keeps patch and OSM inside the world; the
+ loader runs it on every resolve and apply. Sharp overlays (hyper, site) never
+ reach past the hi-res patch (`overlay_half`) — outside it the photo lay on the
+ coarse world mesh. **Stale results:** ImageryService / ElevationService are
+ autoloads that outlive a scene; both get `reset_session()` at load start (job
+ seq guards on retry timers) and the loader drops any result whose key is not
+ this load's site + square (`TerrainExtents.key_matches`, `_result_is_current`)
+ — the previous load's drape used to be taken as the new one's (the "hi-res
+ imagery does not line up" report) and its hyper/site downloads queued ahead of
+ the new base drape. A DEM that lands after its phase timed out is applied once
+ the load finishes (`_late_base_dem` / `_late_detail_dem`) instead of leaving the
+ world flat. **Apply & reload** (`apply_terrain_extents`) relaunches THROUGH the
+ world (`_relaunch_world_at_current_extents`: map block + snapshot get the new
+ sizes, `WorldSession.save_now`, `WorldSession.launch`) — the old direct scene
+ change left the snapshot on the old sizes, and `launch` prefers the
+ snapshot's, so the next play from the list undid the resize; a resumed player
+ off the new frame's ground is reseated (`RESUME_MAX_ABOVE_GROUND_M`). Per-site
+ meta still wins over the global `terrain_config.cfg` for a returning site.
+ Verify: `terrain_extents_selftest` + `tools/checks/terrain_extents_apply_check.gd`
+ (Validation list). The `terrain_loader` used to
  gate detail behind post-terrain phases — detail now blocks terrain build. DEM caches,
  so the first visit per site pays the fetch once (inside the blocking load sequence)
  and every reload is an instant cache hit. Optional upgrade = OpenTopography SRTM 30 m
@@ -2565,7 +2706,19 @@ pattern):**
  Note a 3 km 1 m square is ~9 M cells ≈ 190 MB of ASCII (measured: 26 s to pull,
  10 s to parse) resampled down to `DETAIL_GRID_N` 512² ≈ 5.9 m/vertex — the win is
  accuracy and noise floor, NOT resolution; raising the mesh resolution to actually
- express 1 m is a separate, unmade decision. 429/5xx → backoff retry (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota
+ express 1 m is a separate, unmade decision. **Fetch plan (2026-10-19):** every
+ request walks `source_ladder` (pure): base = the size's global product then the
+ coarser ones, detail = USGS 1 m → 10 m → SRTMGL1 → COP90 (US), and ALWAYS
+ Open-Meteo last (a keyed base falls back at ≤ 96²), so a run of 502s no longer
+ means flat terrain. A global square over `OPENTOPO_MAX_TILE_CELLS` (2 M source
+ cells) goes up as ≤ 4×4 padded tiles stitched into one grid (`tile_bboxes`,
+ `sample_tile_into`) — one 180 km COP90 AAIGrid (~5 M cells) 502'd / timed out
+ and the world loaded flat; tiled it loads (measured live: 9 tiles at 1.2 M,
+ 194 s). A timeout drops a rung at once; 429 / 5xx / network errors retry with
+ doubling backoff honouring Retry-After (`retry_delay_s`), then drop a rung;
+ Open-Meteo batches retry network errors too (one blip used to fail the DEM). A
+ later rung's cached grid is served on the next load (`_cached_fallback_path`,
+ never for a 1 m first choice) instead of re-hitting the failing source. **Open-Meteo enforces a DAILY quota
  per IP** — when a batch returns `{"error":true,"reason":"Daily API request limit exceeded"}`
  (`_is_openmeteo_daily_limit`), the service fails FAST (no wasteful retries),
  latches `is_openmeteo_daily_exhausted()`, and the loader then SKIPS the no-key
@@ -2801,6 +2954,74 @@ would leave stale trees on screen, while a spare one costs only time. Verify
 with `--capture=areafill` (above) plus the `_test_area_fill_*` and
 `_test_incremental_chunk_rebuild` checks in `auto_vegetation_selftest.gd` (the
 latter pins incremental == full-regen).
+
+**V Select across both layers + Detect from the photo (2026-10-20).** The
+painted layer and the OSM-generated forest are one thing to the V toolbar now.
+- **Pick** (`VegTreePick`, pure): every non-grass plant of both layers is a
+  vertical cylinder (ground → height, radius ≈ crown) in a lazy 16 m grid; the
+  pick is the nearest one the SCREEN RAY passes through, culled behind the
+  terrain hit. Rebuilt on a count/identity signature (`_veg_pick_rev` bumps
+  for resizes). Loader: `veg_pick_at_screen` / `veg_pick_near` return a
+  descriptor `{source: painted|auto, kind, slot, species (RESOLVED — an OSM
+  slot can be an alias), index, x, z, height_m, crown_m, label, …}`; layers'
+  `record_for(desc)` look up by **slot**, never by species.
+- **Hover** (Select tool, 20 Hz): `VegHoverMarker` (rings + Label3D, no depth
+  test) on the plant and the **species glow**: every batch carries meta
+  `veg_species` (set at the five batch-construction sites in the two
+  runtimes) and `set_veg_species_glow` sets the shader **instance uniform**
+  `veg_hl` on them (declared in `veg_lighting.gdshaderinc`, applied in
+  foliage / leaf_canopy / bark / impostor). No per-tree markers.
+- **Click** opens Tune look in **one-tree mode**
+  (`open_vegetation_instance_editor` → modal `open_for_instance`; Shift+click
+  only selects). Map-wide rows (shader, forest age, OSM binding, brush rows,
+  type pickers, leaf/branch builder) hide; every shape edit is species-scoped
+  (`_is_named_variant()` is true in this mode). Three scopes:
+  - **This tree**: the strongest resolution layer,
+    `VegSpeciesCatalog.KEY_INSTANCE_OVERRIDE` (unprefixed species-override
+    keys, applied after the whole ladder, never gated by the generic-family
+    rule). Painted: on the record's `card_settings` (nested colours
+    round-trip as arrays). OSM: `AutoVegetationEdits.add_tree_patch` — a
+    0.3 m pin polygon replayed by the ordinary patch path after every
+    regeneration (a later look REPLACES, resizes stack, a pinned clear
+    deletes). Positions are deterministic, so a pin finds its tree again;
+    a re-scatter that moves trees (density change) orphans pins harmlessly.
+  - **This world**: `VegStyleStore.save_species_override_map`; flat_merged
+    lists such species under `KEY_MAP_SPECIES` (only when non-empty — maps
+    without one resolve byte-identically), which lets a GENERIC species'
+    map entry beat that map's family edits.
+  - **Every world**: the global species override, minus the same keys on
+    this map's species entry. Both "all" scopes drop that species'
+    per-tree looks in this world.
+- One-tree mode's SIZE rows (height, crown, trunk, shrub card size) read the
+  tree's real metres: a record's own `scale` (paint jitter, or OSM height ÷
+  resolved height) multiplies the mesh, so the rows show stored × scale and
+  edits store ÷ scale (`_inst_dim_scale`). The world/all scopes then scale
+  that look to each tree's own size.
+- ⚠ A partition group with its own look (per-tree look, brush snapshot)
+  draws in the SAME chunk as its species-mates, so its batches carry a look
+  tag (`VegetationRuntime.KEY_LOOK_TAG`, `Bulk_cedar_v2_l1_0_0_0`). Before
+  that, the names collided and Godot renamed one `@MultiMeshInstance3D@N`,
+  which every by-name lookup (chunk rebuilds, leaf fall, harness checks)
+  silently missed.
+- Del / [ ] work on OSM trees too (`delete_veg_plant` / `scale_veg_plant`,
+  pinned); H stays painted-only. Vegetation undo already snapshots the OSM
+  edits file.
+- **Detect** (toolbar tool `veg_detect`, the SOAK scene's editor-only
+  `VegetationScatter` bake made general — that one is untouched):
+  `VegColorDetect` (pure) reads ONE drape per region (the finest covering it:
+  site > hyper > detail > base, CPU copies ≤ 3072 px cached until the tool is
+  put down), crops + box-filters it to the cell grid natively (a per-cell
+  `get_pixel` loop cost seconds per preview), classifies by excess green
+  (ExG, Woebbecke 1995) + a brightness cap with an **Otsu** cut per region;
+  the cut is trusted only when the split is clean AND the class above it is
+  green (mean ExG ≥ 0.07) — two-tone bare sand is bimodal too. 8-connected
+  patches: up to "One plant up to" across → one plant at the centroid sized
+  to the patch (below "Shrubs under" it is a shrub); bigger → canopy filled
+  on a world-anchored jittered lattice at the species crown × 0.8 / density.
+  The mask previews on the ground (terrain-following quad grid); Enter /
+  "Plant them" adds PAINTED plants (editable, undoable), skipping roads,
+  buildings, water and spots a plant already stands on. "Whole hi-res area"
+  = the finest photo's square (where single plants are visible at all).
 
 **Veg UI (Phase 8).** The V dock is on `UITheme` (panel/button/chip styles,
 `LAYER_PANEL`; the Tune-look modal moved to its OWN CanvasLayer at
@@ -4601,6 +4822,31 @@ author's own prefs at the time) sees the ground lit by the beam alone —
 the ambient ramp being wrong was probably why it got zeroed. Verify with the
 selftest and `--capture=dawn` (Validation list).
 
+**Horizon + haze settings (Settings → Environment, 2026-10-20).** On a flat
+map (Bombay Beach) the terrain's edge meets the sky directly, and the scenes'
+sky material paints everything BELOW the line a hard-coded teal
+(`horizon_color` 0, 0.5, 0.6) — a dark stripe between the fogged playa and the
+sky. `horizon_match_haze` (default on) pushes the FINAL `fog_light_color`
+(after the hazard pass) into `horizon_color` every environment update
+(`main._push_horizon_color`), so distant ground and the sky under it are one
+colour at every hour. New sky uniforms: `horizon_height` (sin elev, + raises
+the line — the sun/moon "behind the horizon" test follows it) and a
+`horizon_haze` band of horizon colour fading up over `horizon_haze_height`
+(0 = the old look); `horizon_blur` is guarded against 0. Previously
+hard-coded haze knobs are now multipliers on the time-of-day curve
+(`haze_density_mult`, `haze_aerial_mult`, `haze_sun_glow_mult` — all 1.0 =
+the built-in look), plus `day_haze_color`, `twilight_cool_bias`,
+`late_day_clearing` (UI 0..1 = `pre_sunset_reduction_strength` / 0.00025)
+and the day sky gradient (`sky_zenith_color` / `sky_horizon_color` =
+`day_top/bottom_color` on the material). All are Main `set_/get_` pairs
+saved by SimSettingsController's `[rendering_adv]` loops
+(`HORIZON_FLOAT_KEYS` / `HORIZON_COLOR_KEYS`); `HORIZON_HAZE_DEFAULTS` /
+`horizon_haze_defaults()` back the page's reset button. The Environment page
+also now carries Sun, Twilight, Moon and Night sky (moved from Lighting) and
+Fog amount; Lighting keeps rendering (quality, shadows, ambient, glow, AO/GI,
+volumetric fog, tonemap, MSAA, god rays). Verify:
+`tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/horizon_settings_check.gd`.
+
 **Night-sky look (visual polish pass).** The shader's TWILIGHT/NIGHT blocks are
 a solar-DEPRESSION model: `_sunset_amount` is 1 on the horizon and gone 15°
 above / 14° below; `_night_amount = 1 − min(daylight_fraction / 0.55, 1)`, i.e.
@@ -6259,7 +6505,9 @@ playing the bootcamp through `--capture=bootcamp` (the regression gate).
   count 0 W in the sandbox; the real-world projection / best score are hidden
   while sandboxed; the live globe dims to a backdrop during a run (shader
   `opacity`, container modulate does nothing to it); a newly wired AC load
-  defaults ON; the card text editor needs `--card-editor`. The DC throttle
+  defaults ON; the TEMP dev card-text editor (`--card-editor`,
+  `EducationCardOverrides`) was removed on 2026-10-18 — card copy is
+  edited in `GraphEducationCards` / the tutorial catalog. The DC throttle
   runs display-only while the ambient flow is suspended (bake / playback) so
   the controller card follows the playback without touching SolarUI's cap.
 - Freeform drags push ONE history entry on release (`items_moved`).
@@ -7531,7 +7779,11 @@ make a penstock (3D plug drag → `create_penstock_intake_at`; Lab drag; Lab
 auto-route with its own terrain ring scan; Lab "From pond" restyling the
 pond wire in the modal; the WATER toolbar chip / Site Plan drop with their
 own reach + turbine-seating code) had three source types and no shared
-notion of "what feeds this turbine". Now `SystemGraphView` owns it:
+notion of "what feeds this turbine". Now ONE module owns it —
+`system_graph/graph_hydro_routing.gd` (`GraphHydroRouting`, lifted out of
+the view on 2026-10-18 as the first Push 4 monolith slice; the view keeps
+one-line delegates with the same names, so every caller below still says
+`SystemGraphView.<fn>`):
 - `resolve_hydro_source_at(world_xz, stream_max_m=8)` → `{kind: "pond" |
   "pond_unadded" | "stream" | "spring", …}` — a still-water body with a
   `pond_storage` tank on the graph (matched by `osm_water_tag`), else a

@@ -130,9 +130,24 @@ const TOOLS: Array[Dictionary] = [
 	},
 	{
 		"id": "veg_select", "section": "veg", "label": "Select",
-		"tooltip": "Pick a single plant: Del deletes, [ ] resize, H promotes it to a hero model",
+		"tooltip": "Hover any plant — painted or OSM forest — to see its species (all of that species glow).\nClick to tune THAT tree (this one, this world or every world). Shift+click selects without tuning.\nDel deletes, [ ] resize, H promotes a painted plant to a hero model",
 		"shapes": ["brush"],
 		"params": [],
+	},
+	{
+		"id": "veg_detect", "section": "veg", "label": "Detect",
+		"tooltip": "Find the plants in the satellite photo: draw an area (or use the whole hi-res area),\npreview the green it finds, then Plant them as painted plants of the chosen type.\nWorks best where green stands out against tan or brown ground.",
+		"shapes": ["rect", "circle", "lasso", "polygon"],
+		"params": [
+			{"key": "sensitivity", "label": "Sensitivity", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.05},
+			{"key": "max_luma", "label": "Max brightness", "min": 0.1, "max": 1.0, "default": 0.62, "step": 0.01},
+			{"key": "min_patch_m2", "label": "Smallest patch", "unit": "m²", "min": 0.2, "max": 30.0, "default": 1.0, "step": 0.1},
+			{"key": "single_max_d_m", "label": "One plant up to", "unit": "m", "min": 1.0, "max": 25.0, "default": 8.0, "step": 0.5},
+			{"key": "shrub_below_m", "label": "Shrubs under", "unit": "m", "min": 0.0, "max": 8.0, "default": 2.5, "step": 0.1},
+			{"key": "density", "label": "Density", "unit": "×", "min": 0.25, "max": 3.0, "default": 1.0, "step": 0.05},
+			{"key": "size_var", "label": "Size variation", "unit": "%", "min": 0.0, "max": 50.0, "default": 15.0, "step": 1.0},
+			{"key": "scale", "label": "Plant scale", "unit": "×", "min": 0.25, "max": 3.0, "default": 1.0, "step": 0.05},
+		],
 	},
 	{
 		"id": "camp_paint", "section": "camps", "label": "Camp",
