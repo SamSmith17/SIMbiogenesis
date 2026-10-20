@@ -88,6 +88,7 @@ func _ready() -> void:
 	# Panning/doppler still apply since those are independent of attenuation_model.
 	_thunder_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_DISABLED
 	_thunder_player.max_distance = 0.0
+	_thunder_player.bus = UiSfx.sfx_bus()  # the sound-effects mute
 	add_child(_thunder_player)
 
 

@@ -20,6 +20,16 @@ extends Node
 ##   WARN     — allowed, but wrong or wasteful; nothing was destroyed
 ##   DANGER   — you broke something; pairs with the destroy FX
 ##   FANFARE  — you earned something (level complete / component unlocked)
+##
+## The mute here is THE sound-effects mute (Settings → Graphics → UI sounds,
+## and the 🔇 button on the timeline). It mutes the UI bus AND the SFX bus,
+## which the world's effects play on (the ambient bed, thunder, the fire
+## extinguisher) — route a new effect through `UiSfx.sfx_bus()`. Music
+## (StageMusic) is not an effect and keeps its own volume. Muted by DEFAULT:
+## the key is `sfx_muted` (the old `ui_muted` covered the UI chirps only, so
+## every install starts muted once).
+
+signal muted_changed(on: bool)
 
 const SUCCESS := "success"
 const CONNECT := "connect"
@@ -29,6 +39,9 @@ const FANFARE := "fanfare"
 
 const SAMPLE_RATE := 22050
 const BUS_NAME := "UI"
+## The world's sound effects (see the header). Created by the autoload.
+const SFX_BUS := "SFX"
+const DEFAULT_MUTED := true
 const PREFS_PATH := "user://audio_prefs.cfg"
 ## Voices, so a warn chirp landing on top of a boom doesn't cut it off (the
 ## graph's single cached boom player had exactly that limitation).
@@ -51,7 +64,7 @@ const TIER_MIN_GAP_MS := {WARN: 1500}
 var _streams: Dictionary = {}
 var _voices: Array[AudioStreamPlayer] = []
 var _next_voice: int = 0
-var _muted: bool = false
+var _muted: bool = DEFAULT_MUTED
 var _volume_db: float = 0.0
 var _last_played_ms: Dictionary = {}
 
@@ -63,6 +76,9 @@ var _last_played_ms: Dictionary = {}
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS  # UI feedback must survive pause
 	_load_prefs()
+	ensure_bus(BUS_NAME)
+	ensure_bus(SFX_BUS)
+	_apply_bus_mute()
 
 
 ## Play a tier. `min_gap_ms` rate-limits a tier against itself — the per-wire
@@ -94,8 +110,16 @@ func play_ui(kind: String, min_gap_ms: int = 0) -> void:
 
 
 func set_muted(on: bool) -> void:
+	if on == _muted:
+		return
 	_muted = on
+	_apply_bus_mute()
 	_save_prefs()
+	muted_changed.emit(on)
+
+
+func toggle_muted() -> void:
+	set_muted(not _muted)
 
 
 func is_muted() -> bool:
@@ -122,7 +146,7 @@ func _stream_for(kind: String) -> AudioStreamWAV:
 func _ensure_voices() -> void:
 	if not _voices.is_empty():
 		return
-	var bus := _ensure_ui_bus()
+	var bus := ensure_bus(BUS_NAME)
 	for i in VOICE_COUNT:
 		var p := AudioStreamPlayer.new()
 		p.name = "UiVoice%d" % i
@@ -131,31 +155,45 @@ func _ensure_voices() -> void:
 		_voices.append(p)
 
 
-## Route through a dedicated UI bus when we can create one, so a future audio
-## manager (UX_IMPROVEMENT_PLAN Phase 7) has a single fader to grab. Falls back
-## to Master when the audio server is unavailable.
-func _ensure_ui_bus() -> String:
-	if AudioServer.get_bus_index(BUS_NAME) >= 0:
-		return BUS_NAME
+## A named bus sending to Master, created on first use, so the mute (and a
+## future audio manager, UX_IMPROVEMENT_PLAN Phase 7) has one fader per kind.
+## Falls back to Master when the audio server cannot make one.
+static func ensure_bus(bus_name: String) -> String:
+	if AudioServer.get_bus_index(bus_name) >= 0:
+		return bus_name
 	var idx := AudioServer.bus_count
 	AudioServer.add_bus(idx)
-	AudioServer.set_bus_name(idx, BUS_NAME)
+	AudioServer.set_bus_name(idx, bus_name)
 	AudioServer.set_bus_send(idx, "Master")
-	return BUS_NAME if AudioServer.get_bus_index(BUS_NAME) >= 0 else "Master"
+	return bus_name if AudioServer.get_bus_index(bus_name) >= 0 else "Master"
+
+
+## The bus a world sound effect plays on — static, so a player can be routed
+## before (or without) the autoload. A bus made here starts unmuted; the
+## autoload made it first at boot and holds its mute.
+static func sfx_bus() -> String:
+	return ensure_bus(SFX_BUS)
+
+
+func _apply_bus_mute() -> void:
+	for b in [BUS_NAME, SFX_BUS]:
+		var idx := AudioServer.get_bus_index(b)
+		if idx >= 0:
+			AudioServer.set_bus_mute(idx, _muted)
 
 
 func _load_prefs() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(PREFS_PATH) != OK:
 		return
-	_muted = bool(cfg.get_value("audio", "ui_muted", false))
+	_muted = bool(cfg.get_value("audio", "sfx_muted", DEFAULT_MUTED))
 	_volume_db = clampf(float(cfg.get_value("audio", "ui_volume_db", 0.0)), -40.0, 6.0)
 
 
 func _save_prefs() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(PREFS_PATH)  # keep any other sections
-	cfg.set_value("audio", "ui_muted", _muted)
+	cfg.set_value("audio", "sfx_muted", _muted)
 	cfg.set_value("audio", "ui_volume_db", _volume_db)
 	cfg.save(PREFS_PATH)
 

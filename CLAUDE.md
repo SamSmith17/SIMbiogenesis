@@ -407,6 +407,10 @@ Godot.exe.exe --headless --path . --script core/audio/ambient_mix_selftest.gd
 # players), a paused clock and the open graph silence it, the Settings
 # volume at 0 silences it:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ambient_bed_probe.gd
+# Settings → Environment horizon + haze (sandbox): every control reaches its
+# sky uniform / the fog, the matched horizon == fog_light_color, a
+# persist_settings → _load_persisted_settings round trip, the reset:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/horizon_settings_check.gd
 # Festival look studio (WINDOWED, not a selftest): a lit FIREPIT, crowd
 # figures in the DJ (1 m up on a box) / cheer / rave / talk / sit poses with
 # glow sticks, and three stick figures with glow bands — at night and by day,
@@ -1603,6 +1607,12 @@ one-shot players (deterministic hashes of the gust clock, never randf).
   (wind dark, rain bright with drops, the stream mid-band with a two-tone
   bubbling) cross-faded tail-into-head so the loop point is SEAMLESS (the
   selftest pins the join step), chirps as 2–4 sine sweeps.
+- **The sound-effects mute** (`UiSfx`, the UiSound autoload; Settings →
+  UI sounds and the timeline's 🔇/🔊 button) mutes the `UI` and `SFX`
+  AudioServer buses. The bed, thunder and the extinguisher play on `SFX`
+  (`UiSfx.sfx_bus()`): a new world effect must too, or the mute misses it.
+  Muted by DEFAULT (`audio_prefs.cfg [audio] sfx_muted`, a new key so every
+  install starts muted once). Stage music is not an effect and stays on Master.
 - Probes read `inputs()` / `levels()` / `gains()` / `debug_line()` and
   force the rule through `override_inputs`.
 - **No tour stop**: the tour is hero stills and the bed has no pixels.
@@ -2559,18 +2569,35 @@ pattern):**
  OPENMETEO_DETAIL_N (64² ≈ ~47 m spacing) at ~40 serial requests. **Seam compose**
  (`TerrainBuilder` + `TerrainSeamDiag`): vertical offset alignment in the overlap
  ring, adaptive feather (80–800 m from boundary delta), exterior coarse ring blend,
- and player spawn gated until composed heightfield is ready. Configurable extents:
- `MapDefinition.half_extent_m` / `detail_half_extent_m` / `osm_half_extent_m`,
- user-adjustable via Terrain options → "Advanced terrain size" (World size / Hi-res
- DEM-imagery / Buildings-water-veg SpinBoxes, `terrain_options_ui.gd`), which calls
- `TerrainLoader.apply_terrain_extents()` — this restores a control surface that
- briefly existed as location-picker-only UI and was later dropped as collateral
- damage in an unrelated batch commit; `apply_terrain_extents` itself was never
- broken, it just had no caller. Works for an ALREADY-VISITED site, not just at
- map creation, because per-site cache metadata
- (`TerrainCacheSettings.get_meta_extents`) always wins over the global
- `terrain_config.cfg` once a site has loaded once — hand-editing that config file
- does nothing for a returning site. The `terrain_loader` used to
+ and player spawn gated until composed heightfield is ready. **Map extents
+ (`core/terrain/terrain_extents.gd`, `TerrainExtents`, 2026-10-19)** — the
+ one set of rules for the three sizes (world / hi-res patch / OSM square).
+ STORED as half-extents (`MapDefinition.*half_extent_m`, MapContext,
+ `extents_*.json`, the world snapshot + map block, every fetch); SHOWN as side
+ lengths in km in Terrain options → "Advanced terrain size". ⚠ The panel used to
+ show the half under "World size", so typing 80 built a 160 km world (the
+ loading screen prints the side) and quadrupled every request — convert only
+ with `side_from_half` / `half_from_side`. `sanitize` clamps (world 10–200 km,
+ patch 1–10 km, OSM 1–16 km) and keeps patch and OSM inside the world; the
+ loader runs it on every resolve and apply. Sharp overlays (hyper, site) never
+ reach past the hi-res patch (`overlay_half`) — outside it the photo lay on the
+ coarse world mesh. **Stale results:** ImageryService / ElevationService are
+ autoloads that outlive a scene; both get `reset_session()` at load start (job
+ seq guards on retry timers) and the loader drops any result whose key is not
+ this load's site + square (`TerrainExtents.key_matches`, `_result_is_current`)
+ — the previous load's drape used to be taken as the new one's (the "hi-res
+ imagery does not line up" report) and its hyper/site downloads queued ahead of
+ the new base drape. A DEM that lands after its phase timed out is applied once
+ the load finishes (`_late_base_dem` / `_late_detail_dem`) instead of leaving the
+ world flat. **Apply & reload** (`apply_terrain_extents`) relaunches THROUGH the
+ world (`_relaunch_world_at_current_extents`: map block + snapshot get the new
+ sizes, `WorldSession.save_now`, `WorldSession.launch`) — the old direct scene
+ change left the snapshot on the old sizes, and `launch` prefers the
+ snapshot's, so the next play from the list undid the resize; a resumed player
+ off the new frame's ground is reseated (`RESUME_MAX_ABOVE_GROUND_M`). Per-site
+ meta still wins over the global `terrain_config.cfg` for a returning site.
+ Verify: `terrain_extents_selftest` + `tools/checks/terrain_extents_apply_check.gd`
+ (Validation list). The `terrain_loader` used to
  gate detail behind post-terrain phases — detail now blocks terrain build. DEM caches,
  so the first visit per site pays the fetch once (inside the blocking load sequence)
  and every reload is an instant cache hit. Optional upgrade = OpenTopography SRTM 30 m
@@ -2614,7 +2641,19 @@ pattern):**
  Note a 3 km 1 m square is ~9 M cells ≈ 190 MB of ASCII (measured: 26 s to pull,
  10 s to parse) resampled down to `DETAIL_GRID_N` 512² ≈ 5.9 m/vertex — the win is
  accuracy and noise floor, NOT resolution; raising the mesh resolution to actually
- express 1 m is a separate, unmade decision. 429/5xx → backoff retry (MAX_RETRIES=3). **Open-Meteo enforces a DAILY quota
+ express 1 m is a separate, unmade decision. **Fetch plan (2026-10-19):** every
+ request walks `source_ladder` (pure): base = the size's global product then the
+ coarser ones, detail = USGS 1 m → 10 m → SRTMGL1 → COP90 (US), and ALWAYS
+ Open-Meteo last (a keyed base falls back at ≤ 96²), so a run of 502s no longer
+ means flat terrain. A global square over `OPENTOPO_MAX_TILE_CELLS` (2 M source
+ cells) goes up as ≤ 4×4 padded tiles stitched into one grid (`tile_bboxes`,
+ `sample_tile_into`) — one 180 km COP90 AAIGrid (~5 M cells) 502'd / timed out
+ and the world loaded flat; tiled it loads (measured live: 9 tiles at 1.2 M,
+ 194 s). A timeout drops a rung at once; 429 / 5xx / network errors retry with
+ doubling backoff honouring Retry-After (`retry_delay_s`), then drop a rung;
+ Open-Meteo batches retry network errors too (one blip used to fail the DEM). A
+ later rung's cached grid is served on the next load (`_cached_fallback_path`,
+ never for a 1 m first choice) instead of re-hitting the failing source. **Open-Meteo enforces a DAILY quota
  per IP** — when a batch returns `{"error":true,"reason":"Daily API request limit exceeded"}`
  (`_is_openmeteo_daily_limit`), the service fails FAST (no wasteful retries),
  latches `is_openmeteo_daily_exhausted()`, and the loader then SKIPS the no-key
@@ -4649,6 +4688,31 @@ during the disc rise. Note a player running `ambient_energy_mult 0` (the
 author's own prefs at the time) sees the ground lit by the beam alone —
 the ambient ramp being wrong was probably why it got zeroed. Verify with the
 selftest and `--capture=dawn` (Validation list).
+
+**Horizon + haze settings (Settings → Environment, 2026-10-20).** On a flat
+map (Bombay Beach) the terrain's edge meets the sky directly, and the scenes'
+sky material paints everything BELOW the line a hard-coded teal
+(`horizon_color` 0, 0.5, 0.6) — a dark stripe between the fogged playa and the
+sky. `horizon_match_haze` (default on) pushes the FINAL `fog_light_color`
+(after the hazard pass) into `horizon_color` every environment update
+(`main._push_horizon_color`), so distant ground and the sky under it are one
+colour at every hour. New sky uniforms: `horizon_height` (sin elev, + raises
+the line — the sun/moon "behind the horizon" test follows it) and a
+`horizon_haze` band of horizon colour fading up over `horizon_haze_height`
+(0 = the old look); `horizon_blur` is guarded against 0. Previously
+hard-coded haze knobs are now multipliers on the time-of-day curve
+(`haze_density_mult`, `haze_aerial_mult`, `haze_sun_glow_mult` — all 1.0 =
+the built-in look), plus `day_haze_color`, `twilight_cool_bias`,
+`late_day_clearing` (UI 0..1 = `pre_sunset_reduction_strength` / 0.00025)
+and the day sky gradient (`sky_zenith_color` / `sky_horizon_color` =
+`day_top/bottom_color` on the material). All are Main `set_/get_` pairs
+saved by SimSettingsController's `[rendering_adv]` loops
+(`HORIZON_FLOAT_KEYS` / `HORIZON_COLOR_KEYS`); `HORIZON_HAZE_DEFAULTS` /
+`horizon_haze_defaults()` back the page's reset button. The Environment page
+also now carries Sun, Twilight, Moon and Night sky (moved from Lighting) and
+Fog amount; Lighting keeps rendering (quality, shadows, ambient, glow, AO/GI,
+volumetric fog, tonemap, MSAA, god rays). Verify:
+`tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/horizon_settings_check.gd`.
 
 **Night-sky look (visual polish pass).** The shader's TWILIGHT/NIGHT blocks are
 a solar-DEPRESSION model: `_sunset_amount` is 1 on the horizon and gone 15°

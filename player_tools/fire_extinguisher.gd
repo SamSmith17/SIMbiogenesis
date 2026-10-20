@@ -66,6 +66,8 @@ func _ready() -> void:
 	mist_particles = get_node_or_null("MistParticles")
 	spray_area = get_node_or_null("SprayArea")
 	audio_player = get_node_or_null("AudioStreamPlayer3D")
+	if audio_player != null:
+		audio_player.bus = UiSfx.sfx_bus()  # the sound-effects mute
 
 	visual_mesh = FireExtinguisherPickup.build_extinguisher_visual("ExtinguisherModel", Vector3.ONE)
 	add_child(visual_mesh)

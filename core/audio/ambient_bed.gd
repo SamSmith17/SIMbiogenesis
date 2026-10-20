@@ -12,7 +12,8 @@ extends Node
 ## ships no audio. Muted while SimFxRate says the sim is paused and away
 ## from first person (the graph hides the world; the settlement view, the
 ## globe and the window wall own the camera). Volume: NpcDisplayPrefs
-## .ambient_volume (Settings → NPCs, beside the stage music).
+## .ambient_volume (Settings → NPCs, beside the stage music). Plays on the
+## SFX bus, so the sound-effects mute (UiSfx) silences it.
 
 const DIR := "user://ambient/"
 const LAYERS := ["wind", "rain", "stream", "birds"]
@@ -56,7 +57,7 @@ func _build() -> void:
 			continue
 		var p := AudioStreamPlayer.new()
 		p.name = layer.capitalize()
-		p.bus = "Master"
+		p.bus = UiSfx.sfx_bus()
 		p.volume_db = -80.0
 		var stream := _load_user_file(layer)
 		_from_files[layer] = stream != null
@@ -75,7 +76,7 @@ func _build() -> void:
 	if bird_file != null:
 		var bp := AudioStreamPlayer.new()
 		bp.name = "Birds"
-		bp.bus = "Master"
+		bp.bus = UiSfx.sfx_bus()
 		bp.volume_db = -80.0
 		bp.stream = bird_file
 		add_child(bp)
@@ -86,7 +87,7 @@ func _build() -> void:
 		for i in CHIRP_PLAYERS:
 			var cp := AudioStreamPlayer.new()
 			cp.name = "Chirp%d" % i
-			cp.bus = "Master"
+			cp.bus = UiSfx.sfx_bus()
 			cp.volume_db = -80.0
 			add_child(cp)
 			_chirp_players.append(cp)

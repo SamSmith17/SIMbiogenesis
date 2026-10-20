@@ -254,6 +254,7 @@ var _right_cluster  : Control = null
 ## Right-cluster buttons that fold into the ⋯ menu when the row is too
 ## narrow, in fold order (least used first): {btn, label}.
 var _right_fold_items: Array = []
+var _sfx_btn: Button = null
 var _right_overflow: MenuButton = null
 var _right_folded := -1
 const INFO_ROW_EDGE_PAD : float = 8.0
@@ -2947,6 +2948,12 @@ func _build_right_cluster() -> Control:
 	_festival_chip = _mk_chip_btn("Festival", _on_festival_chip_pressed,
 		"Festival mode — populate every painted camp, assume the camps stocked (no starving, no queues, no leaving), and watch the crowd from the settlement view")
 	right.add_child(_festival_chip)
+	_sfx_btn = _mk_icon_btn("🔇", _on_sfx_pressed, "")
+	right.add_child(_sfx_btn)
+	var sfx := get_node_or_null("/root/UiSound")
+	if sfx != null and sfx.has_signal("muted_changed") and not sfx.is_connected("muted_changed", _on_sfx_muted_changed):
+		sfx.connect("muted_changed", _on_sfx_muted_changed)
+	_refresh_sfx_btn()
 	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — simulation, player, graphics & sky, site, integrations")
 	right.add_child(gear_btn)
 	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")
@@ -2982,7 +2989,7 @@ func _build_right_cluster() -> Control:
 	_right_overflow.get_popup().id_pressed.connect(_on_right_overflow_id)
 	right.add_child(_right_overflow)
 
-	# Fold order: least-used first. Save, Settings and the Library never fold.
+	# Fold order: least-used first. Save, Sound, Settings and the Library never fold.
 	_right_fold_items.clear()
 	for pair in [[csv_btn, "Open datastream CSV"], [_linkagelab_btn, "Import LinkageLab bundle"],
 			[_shading_btn, "Solar shading"], [mc_btn, "Microclimate"],
@@ -2998,6 +3005,29 @@ func _build_right_cluster() -> Control:
 		_right_fold_items.append({"btn": b, "label": lbl})
 
 	return right
+
+
+## Sound effects on / off — the same switch as Settings → UI sounds (UiSound
+## autoload, resolved by path: the autoload-identifier trap).
+func _on_sfx_pressed() -> void:
+	var sfx := get_node_or_null("/root/UiSound")
+	if sfx != null:
+		sfx.call("toggle_muted")
+	_refresh_sfx_btn()
+
+
+func _on_sfx_muted_changed(_on: bool) -> void:
+	_refresh_sfx_btn()
+
+
+func _refresh_sfx_btn() -> void:
+	if _sfx_btn == null:
+		return
+	var sfx := get_node_or_null("/root/UiSound")
+	var muted := sfx == null or bool(sfx.call("is_muted"))
+	_sfx_btn.text = "🔇" if muted else "🔊"
+	_sfx_btn.tooltip_text = ("Sound effects are OFF — click to turn them on" if muted
+		else "Sound effects are ON — click to mute them (wind, rain, birds, thunder, UI chirps; not stage music)")
 
 
 func _on_library_pressed() -> void:

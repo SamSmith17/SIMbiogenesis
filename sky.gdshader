@@ -14,8 +14,18 @@ group_uniforms sky;
 	uniform vec3 night_bottom_color : source_color = vec3( 0.010, 0.014, 0.024 );
 
 group_uniforms horizon;
+	// What the sky shows BELOW the horizon line (past the terrain's edge).
+	// main.gd pushes the live haze colour here when "Match the haze" is on, so
+	// fogged distant ground and the sky under it are one colour.
 	uniform vec3 horizon_color : source_color = vec3( 0.0, 0.7, 0.8 );
 	uniform float horizon_blur : hint_range( 0.0, 1.0, 0.01 ) = 0.05;
+	// Where the line sits, as sin(elevation): + raises it, − lowers it.
+	uniform float horizon_height : hint_range( -0.2, 0.2, 0.001 ) = 0.0;
+	// A band of horizon colour fading upward from the line — the whitish haze
+	// real horizons carry, and what blends fogged ground into the sky.
+	// 0 = no band (the original look). Height in sin(elevation).
+	uniform float horizon_haze : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
+	uniform float horizon_haze_height : hint_range( 0.001, 0.5, 0.001 ) = 0.07;
 
 group_uniforms sun; // First DirectionalLight3D will be the sun
 	uniform vec3 sun_color : source_color = vec3( 10.0, 8.0, 1.0 );
@@ -569,14 +579,27 @@ void sky()
 
 	//////////////////// HORIZON ///////////////////////////////////////////////////////////////////
 	float _horizon_amount = 0.0;
-	if( EYEDIR.y < 0.0 )
+	float _hz_y = EYEDIR.y - horizon_height;
+	if( _hz_y < 0.0 || horizon_haze > 0.001 )
 	{
-		_horizon_amount = clamp( abs( EYEDIR.y ) / horizon_blur, 0.0, 1.0 );
 		// Mixing with the color of the night sky to make the horizon darker
 		vec3 _horizon_color = mix( horizon_color, _sky_color, _night_amount * 0.9 );
 		// And if ther are many dark clouds, we also make the horizon darker
 		_horizon_color = mix( _horizon_color, vec3( 0.0 ), ( 1.0 - clouds_cutoff ) * clouds_weight * 0.7 );
-		COLOR = mix( COLOR, _horizon_color, _horizon_amount );
+		if( _hz_y < 0.0 )
+		{
+			_horizon_amount = clamp( -_hz_y / max( horizon_blur, 0.0005 ), 0.0, 1.0 );
+			// The band (below) carries on under the line so the two meet without a seam.
+			float _under = horizon_haze * ( 1.0 - _horizon_amount );
+			COLOR = mix( COLOR, _horizon_color, max( _horizon_amount, _under ) );
+		}
+		else
+		{
+			float _t = clamp( _hz_y / max( horizon_haze_height, 0.001 ), 0.0, 1.0 );
+			// Smooth both ends: full at the line, a long soft tail into the sky.
+			float _band = horizon_haze * ( 1.0 - _t ) * ( 1.0 - _t ) * ( 1.0 + 2.0 * _t );
+			COLOR = mix( COLOR, _horizon_color, _band );
+		}
 	}
 
 	//////////////////// HAZARD HAZE ///////////////////////////////////////////////////////////////

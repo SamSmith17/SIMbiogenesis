@@ -6398,7 +6398,9 @@ func _run_fix_script() -> void:
 		print("fix-script: FAIL — the script reported ok=false")
 		return
 	if WorldPaths.has_active_world():
-		var saved := WorldSession.save_now(main, true, true)
+		# The script may have reloaded the scene (a resize relaunches the
+		# world), which frees the `main` it was handed.
+		var saved := WorldSession.save_now(_find_main(), true, true)
 		print("fix-script: world saved %s%s" % ["PASS" if saved else "FAIL",
 			" — kept in the player's world" if _persist else " (sandbox only)"])
 	else:

@@ -48,9 +48,13 @@ var _veg_backup_btn: Button = null
 var _veg_backup_dirs: Array = []
 var _veg_backup_confirm: ConfirmationDialog = null
 var _osm_offset_lbl: Label = null
+## The three size boxes hold SIDE lengths in km (edge to edge, what the
+## loading screen prints); the loader stores half-extents. Convert only through
+## TerrainExtents.half_from_side / side_from_half.
 var _world_km_spin: SpinBox = null
-var _detail_m_spin: SpinBox = null
-var _osm_m_spin: SpinBox = null
+var _detail_km_spin: SpinBox = null
+var _osm_km_spin: SpinBox = null
+var _extent_summary_lbl: Label = null
 var _extent_hint_lbl: Label = null
 var _dem_status_lbl: Label = null
 var _extent_apply_confirm: ConfirmationDialog = null
@@ -642,20 +646,26 @@ func _sync_from_loader() -> void:
 		_auto_veg_density_spin.set_block_signals(false)
 	_set_cb(_cache_cb, bool(opts.get("cached_geometry_visible", true)))
 	_sync_osm_offset_lbl(opts)
-	if _world_km_spin != null:
-		_world_km_spin.set_block_signals(true)
-		_world_km_spin.value = float(opts.get("half_extent_m", 15000.0)) / 1000.0
-		_world_km_spin.set_block_signals(false)
-	if _detail_m_spin != null:
-		_detail_m_spin.set_block_signals(true)
-		_detail_m_spin.value = float(opts.get("detail_half_extent_m", 1500.0))
-		_detail_m_spin.set_block_signals(false)
-		_update_extent_hint(_detail_m_spin.value)
-		_update_dem_status_label()
-	if _osm_m_spin != null:
-		_osm_m_spin.set_block_signals(true)
-		_osm_m_spin.value = float(opts.get("osm_half_extent_m", 1500.0))
-		_osm_m_spin.set_block_signals(false)
+	_set_side_km(_world_km_spin, float(opts.get("half_extent_m", TerrainExtents.WORLD_HALF_DEFAULT)))
+	_set_side_km(_detail_km_spin, float(opts.get("detail_half_extent_m", TerrainExtents.DETAIL_HALF_DEFAULT)))
+	_set_side_km(_osm_km_spin, float(opts.get("osm_half_extent_m", TerrainExtents.OSM_HALF_DEFAULT)))
+	_update_extent_hint()
+	_update_dem_status_label()
+
+
+func _set_side_km(spin: SpinBox, half_m: float) -> void:
+	if spin == null:
+		return
+	spin.set_block_signals(true)
+	spin.value = TerrainExtents.side_from_half(half_m) / 1000.0
+	spin.set_block_signals(false)
+
+
+## The half-extent (m) a size box asks for.
+func _half_from_spin(spin: SpinBox) -> float:
+	if spin == null:
+		return 0.0
+	return TerrainExtents.half_from_side(spin.value * 1000.0)
 
 
 func _sync_osm_offset_lbl(opts: Dictionary = {}) -> void:
@@ -706,18 +716,13 @@ func _build_extent_ui(parent: Control) -> void:
 	parent.add_child(world_row)
 	var world_lbl := Label.new()
 	world_lbl.text = "World size"
-	world_lbl.tooltip_text = "Lo-res terrain half-width. Side >20 km uses SRTMGL3 (90 m); side >60 km uses COP90 -- both coarser than the 30 m default."
+	world_lbl.tooltip_text = "Width of the whole lo-res terrain square, edge to edge. Over 20 km the elevation comes from SRTMGL3 (90 m), over 60 km from COP90 -- both coarser than the 30 m default. Big worlds download in tiles the first time."
 	world_lbl.add_theme_color_override("font_color", C_MUTED)
 	world_lbl.add_theme_font_size_override("font_size", 11)
 	world_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	world_row.add_child(world_lbl)
-	_world_km_spin = SpinBox.new()
-	_world_km_spin.min_value = 5.0
-	_world_km_spin.max_value = 100.0
-	_world_km_spin.step = 1.0
-	_world_km_spin.value = 15.0
-	_world_km_spin.suffix = " km"
-	_world_km_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_world_km_spin = _make_side_spin(TerrainExtents.WORLD_SIDE_MIN_M, TerrainExtents.WORLD_SIDE_MAX_M,
+		1.0, TerrainExtents.WORLD_HALF_DEFAULT)
 	world_row.add_child(_world_km_spin)
 
 	var detail_row := HBoxContainer.new()
@@ -725,20 +730,14 @@ func _build_extent_ui(parent: Control) -> void:
 	parent.add_child(detail_row)
 	var detail_lbl := Label.new()
 	detail_lbl.text = "Hi-res DEM/imagery"
-	detail_lbl.tooltip_text = "Hi-res DEM + imagery patch radius. 1 m USGS lidar DEM (US sites, key required) needs this at or below half of ElevationService.USGS1M_MAX_SIDE_M."
+	detail_lbl.tooltip_text = "Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs %s or less." % TerrainExtents.format_side(ElevationService.USGS1M_MAX_SIDE_M)
 	detail_lbl.add_theme_color_override("font_color", C_MUTED)
 	detail_lbl.add_theme_font_size_override("font_size", 11)
 	detail_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	detail_row.add_child(detail_lbl)
-	_detail_m_spin = SpinBox.new()
-	_detail_m_spin.min_value = 500.0
-	_detail_m_spin.max_value = 5000.0
-	_detail_m_spin.step = 100.0
-	_detail_m_spin.value = 1500.0
-	_detail_m_spin.suffix = " m"
-	_detail_m_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_detail_m_spin.value_changed.connect(_update_extent_hint)
-	detail_row.add_child(_detail_m_spin)
+	_detail_km_spin = _make_side_spin(TerrainExtents.DETAIL_SIDE_MIN_M, TerrainExtents.DETAIL_SIDE_MAX_M,
+		0.2, TerrainExtents.DETAIL_HALF_DEFAULT)
+	detail_row.add_child(_detail_km_spin)
 
 	_extent_hint_lbl = Label.new()
 	_extent_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -756,19 +755,22 @@ func _build_extent_ui(parent: Control) -> void:
 	parent.add_child(osm_row)
 	var osm_lbl := Label.new()
 	osm_lbl.text = "Buildings/water/veg"
-	osm_lbl.tooltip_text = "OSM fetch radius for buildings, roads, water, and vegetation polygons."
+	osm_lbl.tooltip_text = "Width of the square OpenStreetMap buildings, roads, water and vegetation are loaded from, edge to edge. Independent of the hi-res patch: outside the patch they sit on the lo-res terrain."
 	osm_lbl.add_theme_color_override("font_color", C_MUTED)
 	osm_lbl.add_theme_font_size_override("font_size", 11)
 	osm_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	osm_row.add_child(osm_lbl)
-	_osm_m_spin = SpinBox.new()
-	_osm_m_spin.min_value = 500.0
-	_osm_m_spin.max_value = 8000.0
-	_osm_m_spin.step = 100.0
-	_osm_m_spin.value = 1500.0
-	_osm_m_spin.suffix = " m"
-	_osm_m_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	osm_row.add_child(_osm_m_spin)
+	_osm_km_spin = _make_side_spin(TerrainExtents.OSM_SIDE_MIN_M, TerrainExtents.OSM_SIDE_MAX_M,
+		0.2, TerrainExtents.OSM_HALF_DEFAULT)
+	osm_row.add_child(_osm_km_spin)
+
+	_extent_summary_lbl = Label.new()
+	_extent_summary_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_extent_summary_lbl.add_theme_font_size_override("font_size", 11)
+	_extent_summary_lbl.add_theme_color_override("font_color", C_MUTED)
+	parent.add_child(_extent_summary_lbl)
+	for spin in [_world_km_spin, _detail_km_spin, _osm_km_spin]:
+		(spin as SpinBox).value_changed.connect(func(_v: float) -> void: _update_extent_hint())
 
 	var apply_btn := Button.new()
 	apply_btn.text = "Apply & reload"
@@ -785,7 +787,18 @@ func _build_extent_ui(parent: Control) -> void:
 	_extent_apply_confirm.confirmed.connect(_on_apply_extents_confirmed)
 	add_child(_extent_apply_confirm)
 
-	_update_extent_hint(_detail_m_spin.value)
+	_update_extent_hint()
+
+
+func _make_side_spin(min_side_m: float, max_side_m: float, step_km: float, default_half_m: float) -> SpinBox:
+	var spin := SpinBox.new()
+	spin.min_value = min_side_m / 1000.0
+	spin.max_value = max_side_m / 1000.0
+	spin.step = step_km
+	spin.value = TerrainExtents.side_from_half(default_half_m) / 1000.0
+	spin.suffix = " km"
+	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return spin
 
 
 ## Necessary-but-not-sufficient by design: fitting under the size cap is only
@@ -794,16 +807,25 @@ func _build_extent_ui(parent: Control) -> void:
 ## regardless of coverage) -- so this can only ever promise an ATTEMPT, not a
 ## result. _update_dem_status_label (synced from the loader, not predicted from
 ## the spinbox) is what tells you whether it actually landed.
-func _update_extent_hint(detail_m: float) -> void:
+func _update_extent_hint() -> void:
+	var s := TerrainExtents.sanitize(_half_from_spin(_world_km_spin),
+		_half_from_spin(_detail_km_spin), _half_from_spin(_osm_km_spin))
+	var world_half := float(s["world_half_m"])
+	var detail_half := float(s["detail_half_m"])
+	var osm_half := float(s["osm_half_m"])
+	if _extent_summary_lbl != null:
+		var lines: Array[String] = [TerrainExtents.describe(world_half, detail_half, osm_half)]
+		if TerrainExtents.side_from_half(world_half) > TerrainExtents.WORLD_SIDE_SLOW_M:
+			lines.append("A world this big downloads its elevation in tiles the first time (a few minutes); it is cached after.")
+		_extent_summary_lbl.text = "\n".join(lines)
 	if _extent_hint_lbl == null:
 		return
 	var cap: float = ElevationService.USGS1M_MAX_SIDE_M
-	if detail_m * 2.0 <= cap:
+	if TerrainExtents.side_from_half(detail_half) <= cap:
 		_extent_hint_lbl.text = "Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below)."
-		_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
 	else:
-		_extent_hint_lbl.text = "Above %.0f m -- always uses 10 m DEM" % (cap * 0.5)
-		_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
+		_extent_hint_lbl.text = "Over %s -- the hi-res patch uses the 10 m DEM" % TerrainExtents.format_side(cap)
+	_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
 
 
 ## The REAL outcome for THIS site, read from the actual cache (not predicted).
@@ -845,10 +867,8 @@ func _on_apply_extents_confirmed() -> void:
 	if _loader == null or not _loader.has_method("apply_terrain_extents"):
 		set_status("Terrain not ready", "error")
 		return
-	var world_m := (_world_km_spin.value if _world_km_spin != null else 0.0) * 1000.0
-	var detail_m := _detail_m_spin.value if _detail_m_spin != null else 0.0
-	var osm_m := _osm_m_spin.value if _osm_m_spin != null else 0.0
-	_loader.call("apply_terrain_extents", world_m, detail_m, osm_m)
+	_loader.call("apply_terrain_extents", _half_from_spin(_world_km_spin),
+		_half_from_spin(_detail_km_spin), _half_from_spin(_osm_km_spin))
 
 
 func _on_auto_align_osm() -> void:

@@ -21,9 +21,10 @@ signal map_load_complete
 signal auto_vegetation_ready
 signal climelapse_state_changed
 
-const HALF_EXTENT_DEFAULT := 15000.0   # 30 km square
-const DETAIL_HALF_EXTENT_DEFAULT := 1500.0
-const OSM_HALF_EXTENT_DEFAULT := 1500.0
+# Sizes are HALF-extents (centre to edge); TerrainExtents owns the rules.
+const HALF_EXTENT_DEFAULT := TerrainExtents.WORLD_HALF_DEFAULT     # 30 km square
+const DETAIL_HALF_EXTENT_DEFAULT := TerrainExtents.DETAIL_HALF_DEFAULT
+const OSM_HALF_EXTENT_DEFAULT := TerrainExtents.OSM_HALF_DEFAULT
 # Centre drape resolution. pick_zoom() picks the highest ESRI zoom whose stitched
 # width stays <= DETAIL_TARGET_PX, so this is the real lever on sharpness: 2048 px
 # only reaches z17 (~1.5 m/px) on the 3 km patch, while 4096 px reaches z18
@@ -85,6 +86,10 @@ const SITE_TARGET_PX := 8192
 const AI_HERO_HALF_EXTENT_DEFAULT := 50.0
 const AI_IMAGE_SIZE_DEFAULT := "2K"
 
+## A resumed player saved this far above the ground (or any amount below it)
+## is in another frame — the world was rebuilt at another size — and is
+## reseated. Generous, so someone saved on a roof or a hill-top deck stays put.
+const RESUME_MAX_ABOVE_GROUND_M := 40.0
 const MESH_RES := TerrainBuilder.DEFAULT_MESH_RES
 # The detail DEM is fetched at 512² but its real source resolution is only ~30–90 m
 # (SRTM / Copernicus, or ~10 m USGS), so a 512² visual mesh + 512² HeightMapShape3D
@@ -180,6 +185,14 @@ var _hyper_drape: Texture2D = null
 ## Native-resolution site patch drape + the half-extent it was fetched at.
 var _site_drape: Texture2D = null
 var _site_half_m := 0.0
+## Hyper patch half-extent the CURRENT hyper drape was requested at (0 = none):
+## the tier or the hi-res patch can change between request and arrival.
+var _hyper_half_m := 0.0
+## A base / detail DEM that landed after its load phase had given up waiting
+## (the world went on flat or without the hi-res patch): applied once the load
+## sequence finishes instead of being dropped on the floor.
+var _late_base_dem := false
+var _late_detail_dem := false
 ## Gemini-enhanced hero patch drape + its geo bbox (null until generated/cached).
 var _ai_drape: Texture2D = null
 var _ai_bbox: Dictionary = {}
@@ -870,6 +883,7 @@ func _resolve_location() -> void:
 		_from_resume = bool(d.get("from_resume", false))
 		_force_refetch = bool(d.get("force_refetch", false))
 		_fill_extent_gaps(he <= 0.0, dhe <= 0.0, ohe <= 0.0)
+		_sanitize_extents()
 		# Map-select "Load from cache" is the sole source of truth for this session.
 		TerrainCacheSettings.set_cache_enabled(not _force_refetch)
 		_load_osm_offset_prefs()
@@ -882,8 +896,20 @@ func _resolve_location() -> void:
 			_lat = float(la)
 			_lon = float(lo)
 	_fill_extent_gaps(true, true, true)
+	_sanitize_extents()
 	TerrainCacheSettings.set_cache_enabled(not _force_refetch)
 	_load_osm_offset_prefs()
+
+
+## Clamp the three sizes into range and keep the hi-res patch and the OSM
+## square inside the world (TerrainExtents.sanitize). A saved 180 km world with
+## a 10 km hi-res patch stays as it is; a hand-edited 0 or a patch bigger than
+## the world does not reach a fetch.
+func _sanitize_extents() -> void:
+	var s := TerrainExtents.sanitize(_half_extent, _detail_half_extent, _osm_half_extent)
+	_half_extent = float(s["world_half_m"])
+	_detail_half_extent = float(s["detail_half_m"])
+	_osm_half_extent = float(s["osm_half_m"])
 
 
 ## Fill unset extent fields: per-site meta first, then global config. Meta wins
@@ -1094,6 +1120,16 @@ func _run_load_sequence() -> void:
 	var es := get_node_or_null("/root/ElevationService")
 	if es != null and es.has_method("reset_session"):
 		es.reset_session()
+	# The imagery queue outlives the scene too: the previous load's hyper /
+	# site / detail jobs would otherwise download ahead of this load's base
+	# drape, and their results be taken as this load's (TerrainExtents).
+	var img_svc := get_node_or_null("/root/ImageryService")
+	if img_svc != null and img_svc.has_method("reset_session"):
+		img_svc.reset_session()
+	_hyper_half_m = 0.0
+	_site_half_m = 0.0
+	_late_base_dem = false
+	_late_detail_dem = false
 
 	# Fresh launch: bypass DEM/imagery AND wipe OSM caches so BuildingService
 	# cannot serve a stale vector file while Elevation/Imagery refetch.
@@ -1183,6 +1219,7 @@ func _run_load_sequence() -> void:
 	await _run_vegetation_load_phase()
 
 	_load_sequence_active = false
+	_apply_late_dems()
 	_check_load_complete()
 	_maybe_opentopo_hint()
 	var mly := get_node_or_null("/root/MapillaryService")
@@ -1192,6 +1229,22 @@ func _run_load_sequence() -> void:
 	_ensure_leaf_fall()
 	_resolve_graph_site_elevations()
 	map_load_complete.emit()
+
+
+## A DEM that arrived after its phase timed out (see _late_base_dem).
+func _apply_late_dems() -> void:
+	if not _built:
+		return
+	if _late_base_dem:
+		_late_base_dem = false
+		_late_detail_dem = false
+		print("TerrainLoader: base DEM arrived after the load gave up — rebuilding the terrain")
+		_apply_base_dem_refresh()
+		_toast("Elevation arrived late — terrain updated.", ToastUI.Level.INFO)
+	elif _late_detail_dem:
+		_late_detail_dem = false
+		print("TerrainLoader: hi-res DEM arrived after the load gave up — rebuilding the centre")
+		_rebuild_heightfield_staggered(false)
 
 
 ## Resolve every placed graph item's `elevation_m` now that the terrain exists.
@@ -3687,8 +3740,10 @@ func _clear_solar_highlight() -> void:
 ## Service callbacks
 ## ---------------------------------------------------------------------------
 
-func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows: int,
+func _on_elevation_ready(key: String, grid: PackedFloat32Array, cols: int, rows: int,
 		tag: String = "base") -> void:
+	if not _result_is_current(key, _detail_half_extent if tag == "detail" else _half_extent, tag + " DEM"):
+		return
 	if tag == "detail":
 		# Resample the detail DEM to the mesh/collision resolution UP FRONT so that
 		# footing queries (vegetation + building grounding) sample the EXACT surface
@@ -3710,7 +3765,10 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 			_detail_elev_cols, _detail_elev_rows, _detail_extent_m()])
 		_log_load_mem("detail DEM ready")
 		if _load_sequence_active:
-			_phase_resolve("elev:detail", true)
+			if _phase_waiting and _phase_key == "elev:detail":
+				_phase_resolve("elev:detail", true)
+			elif _built:
+				_late_detail_dem = true
 			return
 		_rebuild_heightfield_staggered(false)
 		_queue_auto_veg_generate(false)
@@ -3724,7 +3782,10 @@ func _on_elevation_ready(_key: String, grid: PackedFloat32Array, cols: int, rows
 	_elev_done = true
 	_load_progress_mark_done("base_dem")
 	if _load_sequence_active:
-		_phase_resolve("elev:base", true)
+		if _phase_waiting and _phase_key == "elev:base":
+			_phase_resolve("elev:base", true)
+		elif _built:
+			_late_base_dem = true
 		return
 	if _built:
 		_apply_base_dem_refresh()
@@ -3773,11 +3834,36 @@ func _on_elevation_progress(done: int, total: int) -> void:
 		_log_load_mem("dem %d/%d" % [done, total])
 
 
-func _on_imagery_ready(_key: String, texture: ImageTexture, tag: String) -> void:
+## True when a fetch result is for THIS load's site and square. ImageryService
+## and ElevationService are autoloads: a result requested by the previous load
+## (another size, another map) used to be taken as this load's own, draping an
+## old-size photo over the new terrain — the hi-res patch "not lining up".
+func _result_is_current(key: String, half_m: float, what: String) -> bool:
+	if TerrainExtents.key_matches(key, _lat, _lon, half_m):
+		return true
+	print("TerrainLoader: ignoring a stale %s result (%s) — not this load's %s square" % [
+		what, key, TerrainExtents.format_side(TerrainExtents.side_from_half(half_m))])
+	return false
+
+
+func _imagery_half_for_tag(tag: String) -> float:
+	match tag:
+		"hyper":
+			return _hyper_half_m
+		"site":
+			return _site_half_m
+		"detail":
+			return _detail_half_extent
+	return _half_extent
+
+
+func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
+	if not _result_is_current(key, _imagery_half_for_tag(tag), tag + " imagery"):
+		return
 	if tag == "hyper":
 		_hyper_drape = texture
 		_log_load_mem("hyper img ready")
-		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_extent() * 2.0))
+		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_m * 2.0))
 		_apply_building_textures()
 		_apply_hyper_to_terrain()
 		_maybe_request_ai_hero()
@@ -3889,7 +3975,8 @@ func _request_hyper_imagery() -> void:
 	if img == null:
 		return
 	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
-	img.request_imagery(_lat, _lon, _hyper_half_extent(), _hyper_target_px(),
+	_hyper_half_m = _hyper_half_extent()
+	img.request_imagery(_lat, _lon, _hyper_half_m, _hyper_target_px(),
 		"hyper", HYPER_MAX_ZOOM, bypass, ImagerySources.chain_for(_lat, _lon))
 
 
@@ -3907,7 +3994,7 @@ func _site_half_extent() -> float:
 	# 0.95: pick_zoom measures the bbox in tiles, and a bbox straddling tile
 	# edges costs one extra column.
 	var fit := float(SITE_TARGET_PX) * ImagerySources.metres_per_px(z, _lat) * 0.5 * 0.95
-	return minf(want, fit)
+	return TerrainExtents.overlay_half(minf(want, fit), _detail_half_extent)
 
 
 ## Queue the native-resolution site patch (after hyper, so it never delays
@@ -3978,9 +4065,14 @@ func _detail_target_px() -> int:
 	return int(QUALITY_DETAIL_TARGET_PX[_quality_tier()])
 
 
-## Hyper (sharpest) layer half-extent (m) for the current quality tier.
+## Hyper (sharpest) layer half-extent (m) for the current quality tier, never
+## past the hi-res patch (TerrainExtents.overlay_half): on High / Ultra the
+## 1–1.5 km hyper square used to reach beyond a smaller hi-res patch, so the
+## sharpest photo lay on the coarse world mesh and its edge cut across the
+## hi-res terrain's.
 func _hyper_half_extent() -> float:
-	return float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()])
+	return TerrainExtents.overlay_half(
+		float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()]), _detail_half_extent)
 
 
 ## --- Terrain imagery quality (public API for the settings UI) ---------------
@@ -4060,9 +4152,10 @@ func _apply_hyper_to_terrain(terrain: Node3D = null) -> void:
 		terrain = _main.get_node_or_null("Terrain") as Node3D
 	if terrain == null:
 		return
-	var hyper_extent := _hyper_half_extent() * 2.0
+	var hyper_half := _hyper_half_m if _hyper_half_m > 0.0 else _hyper_half_extent()
+	var hyper_extent := hyper_half * 2.0
 	var hyper_vec := TerrainBuilder.bbox_to_shader_vec4(
-		GeoMath.bbox_for(_lat, _lon, _hyper_half_extent()))
+		GeoMath.bbox_for(_lat, _lon, hyper_half))
 	var hyper_feather_uv := TerrainBuilder.feather_uv_from_metres(
 		_seam_feather_m, hyper_extent)
 	for child_name in ["Ground", "DetailGround"]:
@@ -6100,7 +6193,8 @@ func _make_world_roof_material() -> Material:
 	var sm := mat as ShaderMaterial
 	sm.set_shader_parameter("use_ortho", true)
 	sm.set_shader_parameter("ortho_tex", ortho)
-	var ortho_half := _detail_half_extent if _hyper_drape == null else _hyper_half_extent()
+	var ortho_half := _detail_half_extent if _hyper_drape == null \
+		else (_hyper_half_m if _hyper_half_m > 0.0 else _hyper_half_extent())
 	var scale := BuildingBuilder.roof_ortho_uv_scale(ortho_half)
 	sm.set_shader_parameter("ortho_uv_scale", scale)
 	# Ortho texture covers this half-extent; UV2 is ORTHO_HALF-normalized then
@@ -6300,12 +6394,23 @@ func _finalize_resume_actors() -> void:
 	var pos: Vector3 = saved
 	if bool(player.get("is_riding")):
 		return
+	# A world reloaded at a different size (Terrain options → Apply & reload)
+	# is centred on a different mean elevation, so the saved Y belongs to the
+	# old frame — hundreds of metres off on a big world — and a smaller world
+	# can leave the saved spot past its edge. Keep the spot, fix the height.
+	var limit := maxf(_half_extent - 50.0, 0.0)
+	pos.x = clampf(pos.x, -limit, limit)
+	pos.z = clampf(pos.z, -limit, limit)
 	player.global_position = pos + Vector3(0.0, 0.05, 0.0)
 	if player is CharacterBody3D:
 		(player as CharacterBody3D).velocity = Vector3.ZERO
 	if "fall_start_height" in player:
 		player.fall_start_height = pos.y
 		player.highest_point_during_fall = pos.y
+	var footing := _ground_height_at(pos.x, pos.z)
+	if is_finite(footing) and (pos.y < footing - 0.5 or pos.y > footing + RESUME_MAX_ABOVE_GROUND_M):
+		print("TerrainLoader: resumed player %.1f m off the ground — reseating" % (pos.y - footing))
+		_raycast_reseat_player()
 
 
 ## Lift the player to just above the true collision surface (topmost raycast hit),
@@ -7269,13 +7374,17 @@ func get_detail_dem_status() -> Dictionary:
 	}
 
 
+## Rebuild this map at new sizes. All three are HALF-extents (centre to edge);
+## the Terrain options panel converts from the side lengths it shows. A value
+## <= 0 keeps the current size.
 func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m: float) -> void:
-	if world_half_m > 0.0:
-		_half_extent = world_half_m
-	if detail_half_m > 0.0:
-		_detail_half_extent = detail_half_m
-	if osm_half_m > 0.0:
-		_osm_half_extent = osm_half_m
+	var s := TerrainExtents.sanitize(
+		world_half_m if world_half_m > 0.0 else _half_extent,
+		detail_half_m if detail_half_m > 0.0 else _detail_half_extent,
+		osm_half_m if osm_half_m > 0.0 else _osm_half_extent)
+	_half_extent = float(s["world_half_m"])
+	_detail_half_extent = float(s["detail_half_m"])
+	_osm_half_extent = float(s["osm_half_m"])
 	_save_terrain_config_value("world_half_extent_m", _half_extent)
 	_save_terrain_config_value("detail_half_extent_m", _detail_half_extent)
 	_save_terrain_config_value("osm_half_extent_m", _osm_half_extent)
@@ -7302,13 +7411,50 @@ func apply_terrain_extents(world_half_m: float, detail_half_m: float, osm_half_m
 	_notify_options_status(
 		"Extents changed — reloading map to rebuild the terrain (cleared %s) …" % UiText.count(n_edits, "user veg file"),
 		"busy")
+	# Inside a world, reload THROUGH the world: record the new sizes on its
+	# map block, save the snapshot (which now carries them, with the player,
+	# clock and battery), and play it again. The old direct scene change left
+	# the snapshot holding the OLD sizes — WorldSession.launch prefers the
+	# snapshot's — so the next time the world was played from the list it
+	# came back at the size it had before; it also skipped the WorldPaths
+	# seal and reset the clock and battery.
+	if WorldPaths.has_active_world() and _relaunch_world_at_current_extents():
+		return
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx == null or get_tree() == null:
 		push_warning("TerrainLoader: MapContext unavailable — falling back to in-place refresh (terrain size will not update until the map is fully reloaded)")
 		reset_site_to_fresh()
 		return
 	ctx.set_pending(_lat, _lon, _map_label, _half_extent, false, _detail_half_extent, _osm_half_extent)
-	get_tree().change_scene_to_file(MapDefinition.GENERATED_SCENE)
+	WorldSession.switch_scene(MapDefinition.GENERATED_SCENE, {}, "")
+
+
+func _relaunch_world_at_current_extents() -> bool:
+	var rec := WorldSession.active_record()
+	if rec.is_empty():
+		return false
+	var map: Dictionary = rec.get("map", {}) if rec.get("map", {}) is Dictionary else {}
+	map["half_extent_m"] = _half_extent
+	map["detail_half_extent_m"] = _detail_half_extent
+	map["osm_half_extent_m"] = _osm_half_extent
+	rec["map"] = map
+	WorldStore.save_record(rec)
+	if not WorldSession.save_now(_main, false, false):
+		push_warning("TerrainLoader: world save before the resize failed")
+	# launch() takes the snapshot's sizes over the map block's: make sure the
+	# snapshot on disk says the new ones even if the save above did not run.
+	var id := str(rec.get("id", ""))
+	var snap := WorldStore.read_snapshot(id)
+	if not snap.is_empty():
+		snap["half_extent_m"] = _half_extent
+		snap["detail_half_extent_m"] = _detail_half_extent
+		snap["osm_half_extent_m"] = _osm_half_extent
+		WorldStore.write_snapshot(id, snap)
+	var err := WorldSession.launch(WorldSession.active_record())
+	if err != OK:
+		push_warning("TerrainLoader: world relaunch failed (%s) — reloading the map directly" % error_string(err))
+		return false
+	return true
 
 
 func _persist_active_map_definition_extents() -> void:
@@ -7600,8 +7746,12 @@ func _short_fetch_error(reason: String) -> String:
 	return r
 
 
+## How long the base elevation phase waits. A big world goes up as several
+## OpenTopography tiles with retries and a fallback ladder (ElevationService),
+## so it gets up to 10 minutes; a DEM that still lands later is applied then
+## (_late_base_dem) rather than thrown away.
 func _elev_phase_timeout_s() -> float:
-	return clampf(_half_extent / 25000.0 * 120.0, 120.0, 360.0)
+	return clampf(_half_extent / 25000.0 * 150.0, 150.0, 600.0)
 
 
 func _imagery_phase_timeout_s() -> float:
