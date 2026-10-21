@@ -40,9 +40,10 @@ const ALLOWED_OVERLAPS: Array = [
 	},
 	{
 		"actions": ["mp_chat", "ui_accept"],
-		"reason": "scenes/ui/multiplayer_chat_hud.gd:139 handles mp_chat in _unhandled_input, "
+		"reason": "scenes/ui/multiplayer_chat_hud.gd:212 handles mp_chat in _unhandled_input, "
 			+ "so a focused Control consumes Enter as ui_accept first; it further guards on "
-			+ "visible + session active + not composing + no blocking modal",
+			+ "visible + session active + not composing + no blocking modal, no tool "
+			+ "overlay, no focused control and the graph closed (_may_open)",
 	},
 	{
 		"actions": ["toggle_light_menu", "toggle_pallet_rack"],

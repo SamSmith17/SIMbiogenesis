@@ -26,7 +26,9 @@ const MAX_PEERS := 10
 ## rpc_hello AND the same constant in `_poll_lan_packets` mean old and new
 ## builds neither join nor SEE each other, and only the new client can print a
 ## useful message about it.
-const PROTOCOL_VERSION := 3
+## v4: shared design travels as change ops + guest proposals the host approves
+## (mp_design_controller), and presence carries the body's pose.
+const PROTOCOL_VERSION := 4
 const PREFS_PATH := "user://mp_prefs.cfg"
 const PRESENCE_HZ := 12.0
 const CLOCK_HZ := 2.0
@@ -299,12 +301,21 @@ func join_decoded(decoded: Dictionary) -> Dictionary:
 	leave_session(false)
 	_pending_join = decoded.duplicate(true)
 	var map_info: Dictionary = decoded.get("map", {}) as Dictionary
+	# The guest's own world is saved, then left alone: the session plays in a
+	# throwaway copy (MpGuestWorld) the host's world is written into.
+	var main := _find_main()
+	if main != null and WorldPaths.has_active_world() and not MpGuestWorld.is_active():
+		WorldSession.save_now(main, false, false)
+	if not map_info.is_empty():
+		MpGuestWorld.prepare(map_info)
 	if _map_needs_switch(map_info):
 		_awaiting_map_load = true
 		_begin_map_switch(map_info)
 		_emit_status("Loading host map…", "info")
 		session_changed.emit()
 		return {"ok": true, "loading_map": true, "pending": true}
+	if not map_info.is_empty():
+		MpGuestWorld.activate(map_info)
 	return _connect_pending()
 
 
@@ -351,10 +362,13 @@ func leave_session(announce: bool = true) -> void:
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
+	var was_guest := role == Role.CLIENT
 	role = Role.NONE
 	if was_active:
 		MpHardeningScript.log_event("session_leave", {})
-	if announce:
+	if was_active and was_guest and MpGuestWorld.is_active():
+		_emit_status("Session over — this is a copy of the host's world and is not saved to your worlds. Exit to the menu to go back to yours.", "warn")
+	elif announce:
 		_emit_status("Left multiplayer session", "info")
 	session_changed.emit()
 	peer_list_changed.emit()
@@ -810,7 +824,7 @@ func _begin_map_switch(map_info: Dictionary) -> void:
 			_emit_status("Host map scene path invalid", "error")
 			_pending_join.clear()
 			return
-		tree.change_scene_to_file(path)
+		WorldSession.switch_scene(path, MpGuestWorld.record_for(map_info))
 		return
 	var lat := float(map_info.get("latitude", 0.0))
 	var lon := float(map_info.get("longitude", 0.0))
@@ -821,7 +835,7 @@ func _begin_map_switch(map_info: Dictionary) -> void:
 	var map_ctx := get_node_or_null("/root/MapContext")
 	if map_ctx != null and map_ctx.has_method("set_pending"):
 		map_ctx.call("set_pending", lat, lon, label, he, false, dhe, ohe, false)
-	tree.change_scene_to_file(MapDefinitionScript.GENERATED_SCENE)
+	WorldSession.switch_scene(MapDefinitionScript.GENERATED_SCENE, MpGuestWorld.record_for(map_info))
 
 
 func _connect_pending() -> Dictionary:
@@ -910,6 +924,10 @@ func _poll_connect_deadline() -> void:
 func _send_local_presence() -> void:
 	if not is_active():
 		return
+	# Still joining, or the host just went away (the disconnect signal lands a
+	# frame later): an RPC now is an engine error.
+	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
 	var main := _find_main()
 	if main == null:
 		return
@@ -918,19 +936,26 @@ func _send_local_presence() -> void:
 		return
 	var pos := player.global_position
 	var yaw := player.rotation.y
+	# What the body is doing, so other screens draw the same pose.
+	var body := PackedFloat32Array()
+	if player.has_method("net_body_state"):
+		body = RemotePlayerAvatar.pack_body(player.call("net_body_state"))
+	var tint := PlayerPrefs.tint()
 	if role == Role.HOST:
 		# Host → all clients (no local avatar for self).
-		rpc_presence_apply.rpc(multiplayer.get_unique_id(), pos, yaw, display_name, my_agent_id)
+		rpc_presence_apply.rpc(multiplayer.get_unique_id(), pos, yaw, display_name, my_agent_id,
+			body, tint)
 		# The host's own possession still has to reach the sim.
 		_drive_possessed_agent(my_agent_id, pos, yaw)
 	else:
 		# Client → host; host relays to everyone else.
-		rpc_presence_to_host.rpc_id(1, pos, yaw, display_name, my_agent_id)
+		rpc_presence_to_host.rpc_id(1, pos, yaw, display_name, my_agent_id, body, tint)
 
 
 @rpc("any_peer", "unreliable_ordered", "call_remote")
 func rpc_presence_to_host(pos: Vector3, yaw: float, p_name: String,
-		agent_id: String = "") -> void:
+		agent_id: String = "", body: PackedFloat32Array = PackedFloat32Array(),
+		tint: Color = Color(0.55, 0.62, 0.78)) -> void:
 	if role != Role.HOST:
 		return
 	var sender := multiplayer.get_remote_sender_id()
@@ -945,21 +970,25 @@ func rpc_presence_to_host(pos: Vector3, yaw: float, p_name: String,
 		_drive_possessed_agent(agent_id, pos, yaw)
 	else:
 		agent_id = granted
-	_apply_remote_presence(sender, p_name, pos, yaw, agent_id)
+	if body.size() > 16:
+		body = PackedFloat32Array()
+	_apply_remote_presence(sender, p_name, pos, yaw, agent_id, body, tint)
 	# Relay to all clients (call_remote skips host local).
-	rpc_presence_apply.rpc(sender, pos, yaw, p_name, agent_id)
+	rpc_presence_apply.rpc(sender, pos, yaw, p_name, agent_id, body, tint)
 
 
 @rpc("authority", "unreliable_ordered", "call_remote")
 func rpc_presence_apply(peer_id: int, pos: Vector3, yaw: float, p_name: String,
-		agent_id: String = "") -> void:
+		agent_id: String = "", body: PackedFloat32Array = PackedFloat32Array(),
+		tint: Color = Color(0.55, 0.62, 0.78)) -> void:
 	if peer_id == multiplayer.get_unique_id():
 		return
-	_apply_remote_presence(peer_id, p_name, pos, yaw, agent_id)
+	_apply_remote_presence(peer_id, p_name, pos, yaw, agent_id, body, tint)
 
 
 func _apply_remote_presence(peer_id: int, p_name: String, pos: Vector3, yaw: float,
-		agent_id: String = "") -> void:
+		agent_id: String = "", body: PackedFloat32Array = PackedFloat32Array(),
+		tint: Color = Color(0.55, 0.62, 0.78)) -> void:
 	if not peers.has(peer_id):
 		peers[peer_id] = {"name": p_name, "ready": true}
 		peer_list_changed.emit()
@@ -967,7 +996,7 @@ func _apply_remote_presence(peer_id: int, p_name: String, pos: Vector3, yaw: flo
 		(peers[peer_id] as Dictionary)["name"] = p_name
 		peer_list_changed.emit()
 	if agent_id.is_empty():
-		_upsert_avatar(peer_id, p_name, pos, yaw)
+		_upsert_avatar(peer_id, p_name, pos, yaw, RemotePlayerAvatar.unpack_body(body), tint)
 		return
 	# Possessed: the person is already on screen as an NpcAvatar. Drawing the
 	# capsule too would render the same player twice, standing in the same spot.
@@ -1139,10 +1168,9 @@ func _admit_peer(sender: int, p_name: String, extra: Dictionary = {}) -> void:
 	}
 	rpc_welcome.rpc_id(sender, welcome)
 	rpc_peer_info.rpc(sender, p_name, true)
-	# Push host's current design so the joiner converges quickly.
-	if design != null and design.has_method("rpc_request_full_sync"):
-		design.call("_flush_graph_snapshot")
-		design.call("_flush_props_snapshot")
+	# The joiner gets the whole shared world once; after that only changes.
+	if design != null and design.has_method("send_full_to"):
+		design.call("send_full_to", sender)
 	MpHardeningScript.log_event("join_ok", {"peer_id": sender, "name": p_name,
 		"discord": str(extra.get("user_id", ""))})
 	_emit_status("%s joined" % p_name, "ok")
@@ -1398,6 +1426,8 @@ func _on_peer_disconnected(id: int) -> void:
 	peers.erase(id)
 	_remove_avatar(id)
 	if design != null:
+		if design.has_method("drop_peer"):
+			design.call("drop_peer", id)
 		var lock_keys: Array = []
 		for k in design.locks.keys():
 			var info: Dictionary = design.locks[k] as Dictionary
@@ -1526,7 +1556,8 @@ func _ensure_remote_root() -> void:
 		main.add_child(_remote_root)
 
 
-func _upsert_avatar(peer_id: int, p_name: String, pos: Vector3, yaw: float) -> void:
+func _upsert_avatar(peer_id: int, p_name: String, pos: Vector3, yaw: float,
+		body: Dictionary = {}, tint: Color = Color(0, 0, 0, 0)) -> void:
 	_ensure_remote_root()
 	if _remote_root == null:
 		return
@@ -1536,9 +1567,51 @@ func _upsert_avatar(peer_id: int, p_name: String, pos: Vector3, yaw: float) -> v
 		av.setup(peer_id, p_name)
 		_remote_root.add_child(av)
 		_avatars[peer_id] = av
-	else:
+	elif av.display_name != p_name:
 		av.set_display_name(p_name)
-	av.apply_pose(pos, yaw)
+	if tint.a > 0.0:
+		av.set_rim(Color(tint.r, tint.g, tint.b, 1.0))
+	av.push_snapshot(pos, yaw, body)
+
+
+## The other players' figures in this world (markers, the players list).
+func remote_avatars() -> Array:
+	var out: Array = []
+	for k in _avatars.keys():
+		var av: RemotePlayerAvatar = _avatars[k] as RemotePlayerAvatar
+		if av != null and is_instance_valid(av) and av.is_inside_tree():
+			out.append(av)
+	return out
+
+
+## Where a peer is right now (their figure, or the person they possess).
+func peer_world_position(peer_id: int) -> Vector3:
+	var av: RemotePlayerAvatar = _avatars.get(peer_id) as RemotePlayerAvatar
+	if av != null and is_instance_valid(av) and av.is_inside_tree():
+		return av.global_position
+	return Vector3.INF
+
+
+## Stand the local player a couple of metres from another player, facing them.
+func go_to_peer(peer_id: int) -> bool:
+	var at := peer_world_position(peer_id)
+	var main := _find_main()
+	var player := main.get_node_or_null("Player") as Node3D if main != null else null
+	if at == Vector3.INF or player == null:
+		return false
+	var away := player.global_position - at
+	away.y = 0.0
+	if away.length() < 0.1:
+		away = Vector3(0.0, 0.0, 1.0)
+	var spot := at + away.normalized() * 2.5
+	var gy := TerrainSurfaceQuery.ground_height_at(main, spot.x, spot.z)
+	spot.y = (gy if not is_nan(gy) else at.y) + 0.05
+	player.global_position = spot
+	if "velocity" in player:
+		player.set("velocity", Vector3.ZERO)
+	var to := at - spot
+	player.rotation.y = atan2(-to.x, -to.z)
+	return true
 
 
 func _remove_avatar(peer_id: int) -> void:

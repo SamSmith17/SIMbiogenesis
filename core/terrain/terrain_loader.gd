@@ -13021,7 +13021,7 @@ func _place_free_prop(model_id: String, x: float, z: float) -> bool:
 		model_id, x, 0.0, z, 0.0, 0.0, 0.0, 1.0, gy)
 	if prop_id.is_empty():
 		return false
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	call_deferred("_rebuild_placed_props")
 	return true
 
@@ -13054,7 +13054,7 @@ func _replace_osm_from_pick(pick: Dictionary, model_id: String) -> bool:
 		centroid.x, 0.0, centroid.y, 0.0, 0.0, 0.0, fit_scale, gy)
 	if prop_id.is_empty():
 		return false
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 	return true
@@ -13079,7 +13079,7 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		var sgv := ServiceLocator.graph()
 		if sgv != null and sgv.has_method("remove_items_bound_to_prop"):
 			sgv.call("remove_items_bound_to_prop", prop_id)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 	return true
@@ -13142,7 +13142,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 				return
 	if not _placed_prop_layer.update_prop(prop_id, {"packed": packed}):
 		return
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	var sgv: Node = ServiceLocator.graph()
 	if is_linkage:
@@ -13192,7 +13192,7 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 		yaw_deg, abs_h)
 	if res.is_empty():
 		return {}
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	_queue_unload_chore(res, at_x, at_z)
 	return res
@@ -13275,7 +13275,7 @@ func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 		return
 	if not _placed_prop_layer.update_prop(prop_id, patch):
 		return
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 
@@ -13326,7 +13326,7 @@ func duplicate_prop_record(copy: Dictionary) -> String:
 		patch.erase(k)
 	if not patch.is_empty():
 		_placed_prop_layer.update_prop(new_id, patch)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	return new_id
 
@@ -13343,6 +13343,15 @@ func clear_prop_burn_record(prop_id: String) -> void:
 
 
 var _prop_layer_save_pending := false
+## Persist the prop layer AND tell a multiplayer session a person changed it
+## (deletes, duplicates, editor commits, pack / unpack used to reach the other
+## players only on the 12 s full resync). The session ignores calls made while
+## it is applying a change it received, so this cannot echo.
+func _save_props_and_share() -> void:
+	_placed_prop_layer.save(_lat, _lon)
+	PlacedPropService._notify_mp_props_edited()
+
+
 func _schedule_prop_layer_save() -> void:
 	if _prop_layer_save_pending:
 		return
@@ -13413,7 +13422,7 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 		return
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 
 
 # ---------------------------------------------------------------------------

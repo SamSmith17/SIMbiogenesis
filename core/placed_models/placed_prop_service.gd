@@ -993,6 +993,109 @@ static func _reposition_scene_prop(main: Node, layer: PlacedPropLayer, prop_id: 
 		PlacedPropRuntime.add_one(parent, rec, gy_fn)
 
 
+## --- multiplayer: one record at a time ---------------------------------------
+## The shared-design sync applies props as single-record ops (MpChangeSet):
+## upsert = this exact record, remove = this id. A pose-only change slides the
+## live node there (it is the same object, still in place); anything else
+## respawns that ONE node. Returns true when the record is an OSM building
+## replacement, which only a full rebuild re-attaches (mp_finish).
+
+## Every record on the layer (live dicts — duplicate before keeping).
+static func mp_records(main: Node) -> Array:
+	var layer := _layer_for_main(main)
+	return layer.props if layer != null else []
+
+
+static func mp_upsert_record(main: Node, rec: Dictionary, glide_s: float = 0.25) -> bool:
+	if main == null or rec.is_empty():
+		return false
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return false
+	var id := str(rec.get("id", ""))
+	if id.is_empty():
+		return false
+	var live := layer.find_by_id(id)
+	var pose_only := false
+	if live.is_empty():
+		layer.props.append(rec.duplicate(true))
+	else:
+		pose_only = MpChangeSet.is_pose_only(live, rec)
+		live.clear()
+		live.merge(rec.duplicate(true))
+	if str(rec.get("type", "")) == "osm":
+		return true
+	var node := PlacedPropRuntime.find_by_prop_id(main, id)
+	if pose_only and node != null and is_instance_valid(node) and node.is_inside_tree():
+		var from := node.global_position
+		_reposition_scene_prop(main, layer, id)
+		var to := node.global_position
+		if glide_s > 0.0 and from.distance_to(to) > 0.05:
+			node.global_position = from
+			var tw := node.create_tween()
+			tw.tween_property(node, "global_position", to, glide_s) \
+				.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		return false
+	_mp_free_node(main, id)
+	var parent := _props_parent(main)
+	if parent != null:
+		PlacedPropRuntime.add_one(parent, layer.find_by_id(id), TerrainSurfaceQuery.ground_y_callable(main))
+	return false
+
+
+static func mp_remove_record(main: Node, prop_id: String) -> bool:
+	var layer := _layer_for_main(main)
+	if layer == null or prop_id.is_empty():
+		return false
+	var rec := layer.find_by_id(prop_id)
+	if rec.is_empty():
+		return false
+	var osm := str(rec.get("type", "")) == "osm"
+	layer.remove_prop(prop_id)
+	_mp_free_node(main, prop_id)
+	return osm
+
+
+## The whole layer at once (a guest receiving the host's world on join).
+static func mp_replace_all(main: Node, props: Array) -> void:
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return
+	layer.props = props.duplicate(true)
+	mp_finish(main, true)
+
+
+## Persist once after a batch of ops; `full` re-attaches buildings and
+## rebuilds every prop (an OSM replacement was touched).
+static func mp_finish(main: Node, full: bool) -> void:
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return
+	_save_layer(main, layer)
+	if not full:
+		return
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader != null and loader.has_method("_rebuild_placed_props"):
+		if loader.has_method("_attach_buildings"):
+			loader.call("_attach_buildings")
+		loader.call("_rebuild_placed_props")
+	else:
+		_rebuild_scene_props(main, layer)
+
+
+static func _mp_free_node(main: Node, prop_id: String) -> void:
+	var node := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+	if node == null or not is_instance_valid(node):
+		return
+	# Drop crosshair / grab references first — the next `is PlacedProp` test on
+	# a freed node is a runtime error (the loader's full rebuild does the same).
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader != null and loader.has_method("_clear_placed_prop_focus"):
+		loader.call("_clear_placed_prop_focus")
+	node.get_parent().remove_child(node)
+	node.queue_free()
+
+
 static func _notify_mp_props_edited() -> void:
 	# Soft lookup — keeps this class compilable in headless --script selftests
 	# that pull PlacedPropService via ConduitManager without MP autoloads.

@@ -19,6 +19,8 @@ var _leave_btn: Button = null
 var _copy_btn: Button = null
 var _share_btn: Button = null
 var _live_sync_btn: CheckButton = null
+var _policy_opt: OptionButton = null
+var _policy_lbl: Label = null
 var _preview_lbl: Label = null
 var _discord_edit: LineEdit = null
 var _host_pw_edit: LineEdit = null
@@ -123,6 +125,8 @@ func _ready() -> void:
 			d.offer_changed.connect(_refresh_offers)
 		if d.has_signal("sync_changed") and not d.sync_changed.is_connected(_sync_from_session):
 			d.sync_changed.connect(_sync_from_session)
+		if d.has_signal("review_changed") and not d.review_changed.is_connected(_refresh_policy):
+			d.review_changed.connect(_refresh_policy)
 
 
 ## One scrollable page inside the TabContainer. Each tab scrolls on its own so
@@ -617,6 +621,33 @@ func _build_ui() -> void:
 	lan_scroll.add_child(_lan_box)
 
 	root = design_box
+	# Who decides what changes in the shared world: the host. A guest's edit
+	# shows on the guest's screen at once and waits for the host's answer.
+	root.add_child(SectionHeader.make("Changes from guests"))
+	var pol_row := HBoxContainer.new()
+	pol_row.add_theme_constant_override("separation", 8)
+	root.add_child(pol_row)
+	var pol_lbl := Label.new()
+	pol_lbl.text = "When a guest edits"
+	pol_lbl.custom_minimum_size.x = 140
+	pol_row.add_child(pol_lbl)
+	_policy_opt = OptionButton.new()
+	_policy_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var pol_opts: Array = MultiplayerSession.design.call("policy_options") \
+		if MultiplayerSession.design != null else []
+	for i in pol_opts.size():
+		_policy_opt.add_item(str(pol_opts[i][1]), i)
+		_policy_opt.set_item_metadata(i, str(pol_opts[i][0]))
+	_policy_opt.item_selected.connect(func(idx: int) -> void:
+		if MultiplayerSession.design != null:
+			MultiplayerSession.design.call("set_guest_policy", str(_policy_opt.get_item_metadata(idx))))
+	pol_row.add_child(_policy_opt)
+	_policy_lbl = Label.new()
+	_policy_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_policy_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_policy_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	root.add_child(_policy_lbl)
+
 	# Design collaboration
 	root.add_child(SectionHeader.make("Design collaboration"))
 
@@ -630,7 +661,7 @@ func _build_ui() -> void:
 	design_row.add_child(_share_btn)
 	_live_sync_btn = CheckButton.new()
 	_live_sync_btn.text = "Live sync graph + props"
-	_live_sync_btn.tooltip_text = "Host-canonical debounced snapshots of the system graph and placed props"
+	_live_sync_btn.tooltip_text = "Send each change to the graph and placed objects as you make it (the host's world is the shared one)"
 	_live_sync_btn.toggled.connect(func(on: bool) -> void:
 		MultiplayerSession.set_live_design_sync(on))
 	design_row.add_child(_live_sync_btn)
@@ -750,9 +781,33 @@ func _sync_from_session() -> void:
 	else:
 		_preview_lbl.text = "No ghost preview"
 		_preview_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_refresh_policy()
 	_refresh_peers()
 	_refresh_lan()
 	_refresh_offers()
+
+
+func _refresh_policy() -> void:
+	if _policy_opt == null or MultiplayerSession.design == null:
+		return
+	var d: Node = MultiplayerSession.design
+	var host := MultiplayerSession.is_host()
+	var cur := str(d.get("guest_policy")) if host or not MultiplayerSession.is_active() \
+		else str(d.get("host_policy"))
+	for i in _policy_opt.item_count:
+		if str(_policy_opt.get_item_metadata(i)) == cur:
+			_policy_opt.select(i)
+	# Only the host decides; a guest sees what the host chose.
+	_policy_opt.disabled = MultiplayerSession.is_active() and not host
+	if not MultiplayerSession.is_active():
+		_policy_lbl.text = "The host's world is the shared one. Guests' edits show on their screen straight away and wait for your answer."
+	elif host:
+		_policy_lbl.text = "Accepted %d · declined %d · waiting %d. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest." % [
+			int(d.get("accepted_count")), int(d.get("rejected_count")), (d.get("review") as Array).size()]
+	else:
+		_policy_lbl.text = "The host decides. Your waiting changes: %d · accepted %d · declined %d." % [
+			(d.get("my_pending") as Dictionary).size(), int(d.get("accepted_count")),
+			int(d.get("rejected_count"))]
 
 
 func _discord_identity() -> Node:
@@ -1075,8 +1130,24 @@ func _refresh_peers() -> void:
 		var tag_s := (" (" + ", ".join(tags) + ")") if not tags.is_empty() else ""
 		var lbl := Label.new()
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.text = "%s · peer %d%s" % [str(info.get("name", "Player")), int(id), tag_s]
+		var where := ""
+		var at: Vector3 = MultiplayerSession.peer_world_position(int(id))
+		var me := get_tree().current_scene.get_node_or_null("Player") as Node3D \
+			if get_tree().current_scene != null else null
+		if at != Vector3.INF and me != null:
+			where = " · %s away" % UiText.num(me.global_position.distance_to(at), "m", 2)
+		lbl.text = "%s%s%s" % [str(info.get("name", "Player")), tag_s, where]
+		if int(id) != my_id:
+			lbl.add_theme_color_override("font_color", RemotePlayerAvatar.color_for_peer(int(id)).lightened(0.25))
 		row.add_child(lbl)
+		if int(id) != my_id and at != Vector3.INF:
+			var go := Button.new()
+			go.text = "Go to"
+			go.tooltip_text = "Stand next to this player"
+			go.pressed.connect(func() -> void:
+				if MultiplayerSession.go_to_peer(int(id)):
+					close())
+			row.add_child(go)
 		if int(id) != my_id and MultiplayerSession.is_active():
 			var mute_btn := Button.new()
 			var muted := MultiplayerSession.is_peer_muted(int(id))

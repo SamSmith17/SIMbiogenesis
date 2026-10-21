@@ -405,6 +405,17 @@ func _setup_mp_chat_hud() -> void:
 		ui_layer.add_child(_mp_chat_hud)
 	else:
 		add_child(_mp_chat_hud)
+	# Sync line, the host's review cards, edge arrows to other players.
+	var act_script := load("res://scenes/ui/multiplayer_activity_hud.gd") as Script
+	if act_script != null:
+		var act := Control.new()
+		act.name = "MultiplayerActivityHUD"
+		act.set_script(act_script)
+		UiScreenLayout.pin_fullscreen(act)
+		if ui_layer != null:
+			ui_layer.add_child(act)
+		else:
+			add_child(act)
 
 
 func _refresh_mp_chip() -> void:
