@@ -233,6 +233,21 @@
     },
     {
       "attribution_required": true,
+      "attribution_string": "Terrain Tiles courtesy of Mapzen/Tilezen via AWS Open Data; data from 3DEP/NED (USGS), SRTM (NASA), GMTED2010, ETOPO1 (NOAA), EU-DEM (Copernicus) and others",
+      "author": "Mapzen / Tilezen (Linux Foundation), hosted on AWS Open Data",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "terrain-tiles-aws",
+      "license": "mixed-open (see attribution list)",
+      "name": "Terrain Tiles (Terrarium)",
+      "notes": "No key, no quota. Full attribution list: https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
+      "role": "No-key elevation source (ElevationService terrarium rung)",
+      "share_alike": false,
+      "source": "https://registry.opendata.aws/terrain-tiles/",
+      "status": "pending-verification"
+    },
+    {
+      "attribution_required": true,
       "attribution_string": "Air quality data: Copernicus Atmosphere Monitoring Service (CAMS) ENSEMBLE, via Open-Meteo.com",
       "author": "Copernicus Atmosphere Monitoring Service (CAMS), served via Open-Meteo",
       "category": "data-source",
