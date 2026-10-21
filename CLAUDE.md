@@ -1129,6 +1129,13 @@ Godot.exe.exe --headless --path . --script core/water/water_features_selftest.gd
 # accumulation conserves cells, valley channel on its axis, Strahler 2 at a Y,
 # burning, trace downhill, RDP, determinism):
 Godot.exe.exe --headless --path . --script core/water/flow_routing_selftest.gd
+# Stream curves + channel-tile seams on a REAL world with streams (sandbox):
+# the map-wide Smoothing / Meander re-curve and re-carve every stream (longer,
+# ends on the waypoints, bed on the centreline) and V reopens the toolbar
+# where it closed; the seam probe checks tile edges vs the DetailGround,
+# its normals beside the tiles, and matching shadow casting:
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_curve_check.gd
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/channel_tile_seam_probe.gd
 # Water end to end (WINDOWED, a REAL map with waterways; --time=14 dodges the
 # Mt Vernon valley fog): carve + drainage land, every bed monotone, ground ==
 # bed on carved stations, water at or below the banks, rain raises a mapped
@@ -1137,7 +1144,7 @@ Godot.exe.exe --headless --path . --script core/water/flow_routing_selftest.gd
 # person, shown by the toggle, headwalls), Ctrl+Z, Trace), the flow view (beads
 # move only while the clock runs, storm raises the outflow chip) and the graph
 # link (an intake on a stream takes its flow). Byte-restores the map's
-# water_features / channel_tiles files:
+# water_features / channel_tiles files. (Curves: the stream_curve_check below.)
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon --capture=water --time=14 --shots-dir=<label> --quit-after-capture
 # ABS DWV pipe kit (offline — kit JSON/meshes, planner 45/90 BOM; bake once with
 # pipe_kit_extractor.gd if data/*.res missing; --import first):
@@ -2474,6 +2481,17 @@ incl. StarShade and hands off to `PlacedPropService` ghost placement or
 the styled set re-runs `_attach_buildings`. Selftest:
 `core/terrain/building_builder_selftest.gd` (148 checks).
 
+**User model cache (2026-10-21).** `ModelCatalog._packed_scene_for_user`
+saves each converted user GLB (glTF import + `_replace_importer_meshes` + the
+SketchUp fix) as `user://model_cache/<file>_<key>.scn` (key = size + mtime +
+`material_fix` mode + `USER_SCENE_CACHE_VERSION`; older conversions of the same
+file are deleted) and later launches load that. Before it, every launch
+re-imported every placed user model from the raw file, slow for the big ones,
+and Godot printed a "specular and glossiness workflow" warning per SimLab
+material (259 a launch on Mount Vernon, 466 on Walton). Bump
+`USER_SCENE_CACHE_VERSION` when the conversion itself changes (the fixer's
+rules, `_replace_importer_meshes`).
+
 **SketchUp material fix (`core/placed_models/import_material_fixer.gd`,
 `ImportMaterialFixer`, 2026-10-13).** SketchUp has no PBR, so glTF exporters
 invent the shading terms: SimLab (generator "SimLab GLTF", the common SketchUp
@@ -3096,9 +3114,18 @@ painted layer and the OSM-generated forest are one thing to the V toolbar now.
 - **Hover** (Select tool, 20 Hz): `VegHoverMarker` (rings + Label3D, no depth
   test) on the plant and the **species glow**: every batch carries meta
   `veg_species` (set at the five batch-construction sites in the two
-  runtimes) and `set_veg_species_glow` sets the shader **instance uniform**
-  `veg_hl` on them (declared in `veg_lighting.gdshaderinc`, applied in
-  foliage / leaf_canopy / bark / impostor). No per-tree markers.
+  runtimes) and `set_veg_species_glow` sets the material uniform `veg_hl` on
+  their MATERIALS (`veg_glow_materials_of`; VegAssetCache shares one per
+  species look, so the whole species lights; declared in
+  `veg_lighting.gdshaderinc`, applied in foliage / leaf_canopy / bark /
+  impostor). No per-tree markers. ⚠ It was an `instance uniform` until
+  2026-10-21: every object using one reserves 16 slots of the global shader
+  buffer (4096 objects at the default size), Mount Vernon has more vegetation
+  batches than that, and the engine logged ~3000 "Too many instances using
+  shader instance variables" / "instance_buffer_pos" errors a session (they
+  surface at whatever script line next flushes the renderer's dirty
+  instances, e.g. a `free()` in ModelCatalog.instantiate). Do not add an
+  instance uniform to any shader drawn by many objects.
 - **Click** opens Tune look in **one-tree mode**
   (`open_vegetation_instance_editor` → modal `open_for_instance`; Shift+click
   only selects). Map-wide rows (shader, forest age, OSM binding, brush rows,
@@ -3727,6 +3754,26 @@ it only ever writes the procedural CHANNEL tile layer.
   sizes the bed (the parser's 10 m default "stream" width is a render default —
   carving it made 7 m trenches holding 2 cm of water). Beds are sized for
   bankfull, so base flow sits over a flat bed with its own smooth edge.
+- **Curves** (`StreamCurve`, pure, 2026-10-21): a feature's waypoints are
+  CONTROL points (`ctrl_points` / `ctrl_modes`); `points` / `modes` are the
+  centreline made from them, which everything downstream (profile, carve,
+  surface, tracers, drainage links, intakes) uses. Two knobs, each 0..1, map-wide
+  (`settings.curve_smooth` / `curve_meander`, View tool) or per stream (`smooth`
+  / `meander` on the stream record or OSM override, Edit tool, "Use map curve"
+  drops them): Smoothing = centripetal Catmull-Rom through the waypoints mixed
+  with the polyline; Meander = a sine-generated curve (Langbein & Leopold 1966,
+  Kinoshita skew), ω = meander × 2.0 rad (per-wave ω capped at 2.1 — past ~2.2
+  it crosses itself), valley wavelength 11 bankfull widths, each wave its own
+  length / swing from the id's hash, every wave closed back onto the valley
+  line, lateral offset pinned to 0 at the ends, at tributary junctions and
+  across culvert / pipe / penstock spans. Both 0 = the waypoint line exactly (no
+  re-carve for old worlds). `apply_curves` finds links on the WAYPOINT lines,
+  then snaps each tributary's end onto the curved channel it joins.
+  `ctrl_seg` (centreline span → waypoint span) and `ctrl_vtx` (waypoint →
+  centreline index) are how the editor, the Site Plan stream drop
+  (`StreamNetwork.ctrl_span_of`) and the penstock tap
+  (`centreline_between`) translate. Full meander roughly doubles a channel's
+  length and swings ~1 wavelength either side of the mapped line.
 - **Profile** (`ChannelProfile`): smoothed ground − depth, clamped under the
   LOWER BANK (`bank_offset_m` — mapped streams run on valley sides the DEM
   smeared), then a running MINIMUM downstream with a 0.0005 grade
@@ -3771,13 +3818,28 @@ it only ever writes the procedural CHANNEL tile layer.
   pin contract: press arms, drag past 6 px, release = ONE undo step; drag a line
   to insert a waypoint, Del removes the hovered one or deletes/hides the stream,
   Ctrl-drag moves it all) / Culvert (span modes) / View. Picking is screen-space
-  against projected waypoints. Undo = layer snapshots in the network (the carve
-  regenerates from the layer).
+  against projected waypoints (pins) and the projected CENTRELINE (line clicks,
+  mapped back to the waypoint span); a curved stream draws its waypoint polygon
+  dashed under the pins and re-curves live while a pin is dragged. Undo = layer
+  snapshots in the network (the carve regenerates from the layer).
 - **Graph link**: the flow engine asks its host `water_feature_supply_for_intake`
   — an intake within 6 m of a stream takes that stream's discharge (supply 0.0
   is still DRY, the supply_lps contract) and its seasonal curve; streams ending
   in a pond on the graph credit that tank (`stream_pond_inflows`, headroom-capped).
 - `.esim` packages carry `water_features` (not the channel tiles).
+- **Carved tiles must look like the ground around them** (fixed 2026-10-21 on
+  Bombay Beach, where every channel tile read as a slab hovering on a ledge
+  with a dark staircase along its edges). Two causes, neither of them height —
+  the edges meet the DetailGround within 6 cm: (1) the DetailGround's normals
+  were generated from its SUNK grid, so every vertex on a tile's edge leaned
+  toward the hidden 60 m drop and the ground beside the tiles shaded as a cliff
+  (orange toward a low sun, dark blue away). `TerrainBuilder.build_mesh` takes
+  `shade_elev` and `_rebuild_detail_patch` passes the unsunk grid. (2) a ≥ 3 km
+  patch turns the DetailGround's shadows off, but the tiles still cast, so
+  under a low sun a 15–20 m shadow texel spilled off each tile edge onto ground
+  that casts none (`TerrainHeightField.set_cast_shadow`, synced by
+  `_sync_height_field_shadows`). `tools/checks/channel_tile_seam_probe.gd`
+  measures both; `channel_tile_seam_shots.gd` is the sunrise A/B.
 ⚠ `SystemGraphView._input` used to handle Delete / Ctrl+Z / Ctrl+Y even with the
 graph CLOSED — it runs before every `_unhandled_input`, so it ate those keys
 from the 3D tools (edit toolbar, Light Studio). They are gated on `visible` now.
@@ -3860,7 +3922,10 @@ wrong family everywhere. `set_veg_family` resets the subspecies only on a REAL
 family change (membership belongs to the species catalog; a name-prefix guess
 wrongly cleared spruce, which is a pine). T/V go through `toggle_section`, which
 SWITCHES sections when the toolbar is already open on the other one rather than
-closing. There is no fullscreen capture rect — the two panels stop mouse events
+closing. A section opens on the tool last used in it
+(`last_tool_by_section`), and V with the toolbar CLOSED reopens it exactly where
+it was closed (`reopen_tool`, any section — a Water Edit session comes back as
+Water Edit with its stream still picked); both persist in toolbar_prefs.cfg. There is no fullscreen capture rect — the two panels stop mouse events
 over themselves and everything else arrives via `_unhandled_input`, which is
 what lets RMB reach the player. **RMB deliberately does NOT close a polygon or
 cancel a shape** (it is the look button); polygons close with Enter or by

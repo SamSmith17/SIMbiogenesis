@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 612   # +42: the veg Detect tool (10 registry + 8 params × 4)
+const EXPECTED_CHECKS := 618   # +42: the veg Detect tool (10 registry + 8 params × 4)
 
 var _fails := 0
 var _checks := 0
@@ -403,6 +403,27 @@ func _test_config_round_trip() -> void:
 		absf(StateScript.new().get_tool_param_value("veg_paint", "scale") - 1.0) < 1e-4)
 	_check("untouched tools keep their defaults",
 		absf(st2.params_for("smooth")["radius_m"] - 16.0) < 1e-4)
+	# Section memory + the reopen tool (V reopens where the toolbar closed).
+	st.set_active_tool("water_edit")
+	st.set_active_tool("veg_select")
+	st.reopen_tool = "water_edit"
+	var cfg2 := ConfigFile.new()
+	st.to_config(cfg2)
+	var st3 = StateScript.new()
+	st3.from_config(cfg2)
+	_check("a section reopens on its last tool", st3.tool_for_section("water") == "water_edit")
+	_check("the active tool counts as its section's last", st3.tool_for_section("veg") == "veg_select")
+	_check("a section never used opens on its first tool",
+		st3.tool_for_section("camps") == String(st3.tools_in_section("camps")[0]["id"]))
+	_check("the reopen tool survives", st3.reopen_tool == "water_edit")
+	var bad := ConfigFile.new()
+	bad.set_value("toolbar", "last_tools", {"water": "raise", "veg": "no_such_tool"})
+	bad.set_value("toolbar", "reopen_tool", "no_such_tool")
+	var st4 = StateScript.new()
+	st4.from_config(bad)
+	_check("a last tool from the wrong section is ignored", st4.tool_for_section("water") == "water_trace"
+		or st4.tool_for_section("water") == String(st4.tools_in_section("water")[0]["id"]))
+	_check("an unknown reopen tool is dropped", st4.reopen_tool == "")
 
 
 ## A config from an older/newer build, or a hand-edited one, must never break

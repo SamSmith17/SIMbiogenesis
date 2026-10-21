@@ -315,6 +315,12 @@ const CAMP_STYLES: Array[Dictionary] = [
 const PENDING_TOOLS: Array[String] = []
 
 var active_tool: String = "raise"
+## section -> the tool last used in it, so switching back to a section (its
+## header, T / V / C) lands on that tool rather than the section's first.
+var last_tool_by_section: Dictionary = {}
+## The tool that was up when the toolbar last CLOSED ("" = never closed). V
+## reopens the toolbar exactly there, whatever section it was in.
+var reopen_tool: String = ""
 ## tool_id -> {param_key: float}, seeded from schema defaults.
 var _params: Dictionary = {}
 ## tool_id -> shape mode string (per-tool memory, like the params).
@@ -366,10 +372,23 @@ func tools_in_section(section: String) -> Array[Dictionary]:
 
 
 func set_active_tool(tool_id: String) -> bool:
-	if tool_def(tool_id).is_empty():
+	var def := tool_def(tool_id)
+	if def.is_empty():
 		return false
 	active_tool = tool_id
+	last_tool_by_section[String(def["section"])] = tool_id
 	return true
+
+
+## The tool to show when `section` is opened: the one last used there, else
+## the section's first.
+func tool_for_section(section: String) -> String:
+	var last := String(last_tool_by_section.get(section, ""))
+	var def := tool_def(last)
+	if not def.is_empty() and String(def["section"]) == section and not PENDING_TOOLS.has(last):
+		return last
+	var tools := tools_in_section(section)
+	return String(tools[0]["id"]) if not tools.is_empty() else ""
 
 
 func get_param(key: String, default_v: float = 0.0) -> float:
@@ -609,6 +628,8 @@ func load_from(path: String = PREFS_PATH) -> bool:
 
 func to_config(cfg: ConfigFile) -> void:
 	cfg.set_value("toolbar", "active_tool", active_tool)
+	cfg.set_value("toolbar", "reopen_tool", reopen_tool)
+	cfg.set_value("toolbar", "last_tools", last_tool_by_section.duplicate())
 	cfg.set_value("toolbar", "veg_family", veg_family)
 	cfg.set_value("toolbar", "veg_species", veg_species)
 	cfg.set_value("toolbar", "hero_preset", hero_preset)
@@ -632,9 +653,18 @@ func to_config(cfg: ConfigFile) -> void:
 ## Unknown tools/keys in the file are ignored; missing keys keep their schema
 ## defaults — a config from an older or newer build never breaks the model.
 func from_config(cfg: ConfigFile) -> void:
+	var lt: Variant = cfg.get_value("toolbar", "last_tools", {})
+	if lt is Dictionary:
+		for sec in (lt as Dictionary).keys():
+			var tid := String((lt as Dictionary)[sec])
+			var d := tool_def(tid)
+			if not d.is_empty() and String(d["section"]) == String(sec):
+				last_tool_by_section[String(sec)] = tid
 	var at := String(cfg.get_value("toolbar", "active_tool", active_tool))
 	if not tool_def(at).is_empty():
-		active_tool = at
+		set_active_tool(at)
+	var rt := String(cfg.get_value("toolbar", "reopen_tool", ""))
+	reopen_tool = rt if not tool_def(rt).is_empty() else ""
 	var fam := String(cfg.get_value("toolbar", "veg_family", veg_family))
 	if not veg_family_def(fam).is_empty():
 		veg_family = fam

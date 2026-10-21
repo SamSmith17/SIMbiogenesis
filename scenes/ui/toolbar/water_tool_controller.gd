@@ -46,9 +46,13 @@ const KIND_CHOICES := ["stream", "river", "canal", "ditch", "drain"]
 var ui: Control = null
 var tool := ""
 
-var _lines: Array = []          # [{id, source, pts3, modes, kind}]
+## pts3 / modes = the WAYPOINTS (pins, spans); path3 / pseg = the curved
+## centreline StreamCurve made from them and, per centreline span, its
+## waypoint span (what is drawn and what a line click hits).
+var _lines: Array = []          # [{id, source, pts3, modes, kind, path3, pseg, curve}]
 var _lines_dirty := true
 var _proj: Dictionary = {}      # id -> PackedVector2Array (screen; INF = hidden)
+var _proj_path: Dictionary = {} # id -> PackedVector2Array, the centreline on screen
 var _picked := ""
 var _hover := {}                # {kind: "pin"|"line", id, index}
 var _press := {}                # armed press: {px, hover, ctrl}
@@ -143,8 +147,14 @@ func _rebuild_lines() -> void:
 		return
 	for f_v in wn.call("features"):
 		var f: Dictionary = f_v
-		_lines.append({"id": str(f["id"]), "source": str(f["source"]),
-			"pts3": _lift(f["points"], ld), "modes": f["modes"], "kind": str(f["kind"])})
+		var ctrl: PackedVector2Array = f.get("ctrl_points", f["points"])
+		var rec := {"id": str(f["id"]), "source": str(f["source"]),
+			"pts3": _lift(ctrl, ld), "modes": f.get("ctrl_modes", f["modes"]), "kind": str(f["kind"]),
+			"curve": f}
+		if f.has("ctrl_seg") and (f["points"] as PackedVector2Array).size() != ctrl.size():
+			rec["path3"] = _lift(f["points"], ld)
+			rec["pseg"] = f["ctrl_seg"]
+		_lines.append(rec)
 	if tool == "water_edit" or tool == "water_trace" or tool == "water_span":
 		for ch_v in wn.call("derived_channels"):
 			var ch: Dictionary = ch_v
@@ -171,6 +181,7 @@ func _line(id: String) -> Dictionary:
 
 func _project_all() -> void:
 	_proj = {}
+	_proj_path = {}
 	var cam := ui.get_viewport().get_camera_3d() if ui != null else null
 	if cam == null:
 		return
@@ -178,8 +189,10 @@ func _project_all() -> void:
 	for l_v in _lines:
 		var l: Dictionary = l_v
 		var pts3: PackedVector3Array = l["pts3"]
+		var path3: Variant = l.get("path3", null)
 		if _drag.get("id", "") == l["id"]:
 			pts3 = _lift(_drag["points"], loader())
+			path3 = _drag_path3(l)
 		var range_m := DERIVED_RANGE_M if str(l["source"]) == "derived" else DRAW_RANGE_M
 		var near := false
 		for p in pts3:
@@ -188,11 +201,43 @@ func _project_all() -> void:
 				break
 		if not near:
 			continue
-		var sp := PackedVector2Array()
-		sp.resize(pts3.size())
-		for i in pts3.size():
-			sp[i] = Vector2(INF, INF) if cam.is_position_behind(pts3[i]) else cam.unproject_position(pts3[i])
-		_proj[l["id"]] = sp
+		_proj[l["id"]] = _unproject(cam, pts3)
+		if path3 is PackedVector3Array:
+			_proj_path[l["id"]] = _unproject(cam, path3)
+
+
+static func _unproject(cam: Camera3D, pts3: PackedVector3Array) -> PackedVector2Array:
+	var sp := PackedVector2Array()
+	sp.resize(pts3.size())
+	for i in pts3.size():
+		sp[i] = Vector2(INF, INF) if cam.is_position_behind(pts3[i]) else cam.unproject_position(pts3[i])
+	return sp
+
+
+## The dragged stream's centreline, re-curved from the waypoints as they move
+## (null when the stream is drawn straight).
+func _drag_path3(l: Dictionary) -> Variant:
+	var f: Dictionary = l.get("curve", {})
+	var sm := float(f.get("smooth", 0.0))
+	var me := float(f.get("meander", 0.0))
+	if StreamCurve.is_identity(sm, me):
+		return null
+	var probe := {"id": f.get("id", ""), "points": _drag["points"], "modes": _drag["modes"],
+		"section": f.get("section", {}), "own_smooth": sm, "own_meander": me}
+	StreamNetwork.curve_feature(probe, {})
+	_drag["pseg"] = probe["ctrl_seg"]
+	return _lift(probe["points"], loader())
+
+
+## Screen centreline of a line + its per-span waypoint index (the waypoint
+## polyline itself when the stream is straight).
+func _screen_path(id: String) -> Array:
+	if _proj_path.has(id):
+		var l := _line(id)
+		var pseg: Variant = _drag.get("pseg", null) if _drag.get("id", "") == id else l.get("pseg", null)
+		if pseg is PackedInt32Array:
+			return [_proj_path[id], pseg]
+	return [_proj.get(id, PackedVector2Array()), null]
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +291,11 @@ func _pick(mouse: Vector2) -> Dictionary:
 	var best_d := LINE_PICK_PX
 	var hit := {}
 	for id in _proj.keys():
-		var sp2: PackedVector2Array = _proj[id]
+		# The line the player SEES is the curved centreline; a hit on it maps
+		# back to the waypoint span it belongs to (what insert / span modes use).
+		var sp_seg := _screen_path(str(id))
+		var sp2: PackedVector2Array = sp_seg[0]
+		var pseg: Variant = sp_seg[1]
 		for i in range(sp2.size() - 1):
 			if not is_finite(sp2[i].x) or not is_finite(sp2[i + 1].x):
 				continue
@@ -257,7 +306,10 @@ func _pick(mouse: Vector2) -> Dictionary:
 				d += 2.0
 			if d < best_d:
 				best_d = d
-				hit = {"kind": "line", "id": str(id), "index": i}
+				var span := i
+				if pseg is PackedInt32Array and i < (pseg as PackedInt32Array).size():
+					span = (pseg as PackedInt32Array)[i]
+				hit = {"kind": "line", "id": str(id), "index": span}
 	return hit
 
 
@@ -776,6 +828,19 @@ func _build_edit_rows(box: Container, wn: Node) -> void:
 		_rows[key] = pair
 	SliderSpinRow.add_param(box, "Base flow", 0.0, 20000.0, float(f.get("base_lps", 25.0)), 1.0, "L/s",
 		func(v: float) -> void: _queue_patch({"base_lps": v}), NAN, 92, 76)
+	# This stream's curve: its own values, or the map's (View tool) until set.
+	var own := bool(f.get("curve_own", false))
+	SliderSpinRow.add_param(box, "Smoothing", 0.0, 100.0, float(f.get("smooth", 0.0)) * 100.0, 1.0, "%",
+		func(v: float) -> void: _queue_patch({"smooth": v / 100.0}), NAN, 92, 64)
+	SliderSpinRow.add_param(box, "Meander", 0.0, 100.0, float(f.get("meander", 0.0)) * 100.0, 1.0, "%",
+		func(v: float) -> void: _queue_patch({"meander": v / 100.0}), NAN, 92, 64)
+	if own:
+		_chip(box, "Use map curve", false,
+			"Drop this stream's own smoothing / meander and follow the map's (View tool)").pressed.connect(
+			func() -> void:
+				_queue_patch({"smooth": null, "meander": null})
+				_flush_patch()
+				ui.call("_rebuild_options_bar"))
 	var carve := CheckBox.new()
 	carve.text = "Carve"
 	carve.button_pressed = bool(f.get("carve", true))
@@ -807,6 +872,22 @@ func _build_view_rows(box: Container, wn: Node) -> void:
 	box.add_child(dr)
 	SliderSpinRow.add_param(box, "Min catchment", 0.1, 100.0, float(lay.setting("min_catchment_ha")),
 		0.1, "ha", func(v: float) -> void: wn.call("set_min_catchment_ha", v))
+	# Map-wide curve for every stream without its own (Edit sets one stream).
+	var cd := StreamNetwork.curve_defaults(lay.settings)
+	var sm_row: Array = []
+	var me_row: Array = []
+	var push := func() -> void:
+		if sm_row.is_empty() or me_row.is_empty():
+			return
+		wn.call("set_curve_defaults", float((sm_row[0] as Range).value) / 100.0,
+			float((me_row[0] as Range).value) / 100.0)
+		_status("Re-curving the streams…")
+	var sm_pair: Variant = SliderSpinRow.add_param(box, "Smoothing", 0.0, 100.0, cd.x * 100.0, 1.0, "%",
+		func(_v: float) -> void: push.call(), NAN, 92, 64)
+	var me_pair: Variant = SliderSpinRow.add_param(box, "Meander", 0.0, 100.0, cd.y * 100.0, 1.0, "%",
+		func(_v: float) -> void: push.call(), NAN, 92, 64)
+	sm_row.append(_range_of(sm_pair))
+	me_row.append(_range_of(me_pair))
 	var cv := CheckBox.new()
 	cv.text = "Carve channels"
 	cv.tooltip_text = "Cut mapped and drawn streams into the hi-res terrain"
@@ -826,6 +907,21 @@ func _build_view_rows(box: Container, wn: Node) -> void:
 			wn.call("invalidate_cache")
 			wn.call("request_rebuild", true)
 			_status("Re-carving every channel…"))
+
+
+## The value Range of a SliderSpinRow.add_param result.
+static func _range_of(pair: Variant) -> Range:
+	if pair is Range:
+		return pair
+	if pair is Array:
+		for x in (pair as Array):
+			if x is Range:
+				return x
+	if pair is Dictionary:
+		for x in (pair as Dictionary).values():
+			if x is Range:
+				return x
+	return null
 
 
 func _kind_chips(box: Container, current: String, on_pick: Callable) -> void:
@@ -853,7 +949,9 @@ func draw(canvas: Control) -> void:
 		return
 	var wn := network()
 	for id in _proj.keys():
-		var sp: PackedVector2Array = _proj[id]
+		var sp_seg := _screen_path(str(id))
+		var sp: PackedVector2Array = sp_seg[0]
+		var pseg: Variant = sp_seg[1]
 		var l := _line(str(id))
 		if l.is_empty():
 			continue
@@ -870,21 +968,24 @@ func draw(canvas: Control) -> void:
 			if not is_finite(sp[i].x) or not is_finite(sp[i + 1].x):
 				continue
 			var col := base
-			if i < modes.size():
-				if str(modes[i]) == "culvert":
+			var span := i
+			if pseg is PackedInt32Array and i < (pseg as PackedInt32Array).size():
+				span = (pseg as PackedInt32Array)[i]
+			if span < modes.size():
+				if str(modes[span]) == "culvert":
 					col = COL_CULVERT
-				elif str(modes[i]) == "pipe":
+				elif str(modes[span]) == "pipe":
 					col = COL_PIPE
-				elif str(modes[i]) == WaterFeatureLayer.MODE_PENSTOCK:
+				elif str(modes[span]) == WaterFeatureLayer.MODE_PENSTOCK:
 					col = COL_PENSTOCK
 			if str(id) == _picked:
 				col = col.lerp(COL_PICK, 0.35)
-			if hovered and int(_hover.get("index", -1)) == i and tool == "water_span":
+			if hovered and int(_hover.get("index", -1)) == span and tool == "water_span":
 				col = COL_PICK
 			canvas.draw_line(sp[i], sp[i + 1], col, w + (1.5 if hovered else 0.0), true)
 		# Direction ticks on real streams: a chevron every few vertices.
 		if src != "derived":
-			for i in range(1, sp.size(), 4):
+			for i in range(1, sp.size(), 4 if pseg == null else 24):
 				if not is_finite(sp[i].x) or not is_finite(sp[i - 1].x):
 					continue
 				var d := (sp[i] - sp[i - 1])
@@ -898,6 +999,10 @@ func draw(canvas: Control) -> void:
 	# Picked stream: waypoints + the stations flagged as running uphill.
 	if not _picked.is_empty() and _proj.has(_picked) and tool == "water_edit":
 		var sp2: PackedVector2Array = _proj[_picked]
+		if _proj_path.has(_picked):
+			for i in range(sp2.size() - 1):
+				if is_finite(sp2[i].x) and is_finite(sp2[i + 1].x):
+					canvas.draw_dashed_line(sp2[i], sp2[i + 1], Color(1, 1, 1, 0.35), 1.0, 6.0)
 		for i in sp2.size():
 			if not is_finite(sp2[i].x):
 				continue

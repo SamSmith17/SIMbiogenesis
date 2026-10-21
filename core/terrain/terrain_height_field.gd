@@ -28,6 +28,7 @@ var _base_fn: Callable = Callable()
 var _uv_scale: float = 0.0
 var _uv_origin: float = 0.5
 var _material: Material = null
+var _cast_shadow: GeometryInstance3D.ShadowCastingSetting = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 var _collision_layer: int = 1
 var _collision_mask: int = 0
 
@@ -66,6 +67,16 @@ func set_material(material: Material) -> void:
 		var mi := child.get_node_or_null("Mesh") as MeshInstance3D
 		if mi != null:
 			mi.material_override = material
+
+
+## Match the shadow casting of the ground the tiles sit in (the loader passes
+## the DetailGround's own setting).
+func set_cast_shadow(setting: GeometryInstance3D.ShadowCastingSetting) -> void:
+	_cast_shadow = setting
+	for child in get_children():
+		var mi := child.get_node_or_null("Mesh") as MeshInstance3D
+		if mi != null:
+			mi.cast_shadow = setting
 
 
 func has_edits() -> bool:
@@ -200,6 +211,7 @@ func _reconcile_tile(key: Vector2i) -> void:
 	if mi != null:
 		mi.mesh = mesh
 		mi.material_override = _material
+		mi.cast_shadow = _cast_shadow
 	if cs != null:
 		# Reuse the HeightMapShape3D and rewrite map_data in place when possible.
 		var shape := cs.shape as HeightMapShape3D

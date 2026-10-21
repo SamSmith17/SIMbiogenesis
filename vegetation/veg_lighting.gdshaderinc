@@ -49,12 +49,18 @@ vec3 veg_saturate(vec3 c, float s) {
 	return max(mix(vec3(l), c, s), vec3(0.0));
 }
 
-// Select-tool species glow. The V toolbar's Select hover sets this on every
-// batch of the hovered tree's species (TerrainLoader.set_veg_species_glow —
-// one value per MultiMeshInstance3D, so a whole species lights at once with
-// no per-tree markers), and 0 everywhere else. Subtle on purpose: a warm
-// lift so the eye finds the others, not a recolour.
-instance uniform float veg_hl = 0.0;
+// Select-tool species glow. The V toolbar's Select hover sets this on the
+// MATERIALS of the hovered tree's species (TerrainLoader.set_veg_species_glow
+// — VegAssetCache shares one material per species look across every chunk, so
+// a whole species lights at once with no per-tree markers), and 0 everywhere
+// else. Subtle on purpose: a warm lift so the eye finds the others, not a
+// recolour.
+// ⚠ NOT an `instance uniform`: each object using one reserves 16 slots of the
+// global shader buffer, which holds 4096 objects by default, and a forested
+// map has more vegetation batches than that — the engine then logged "Too many
+// instances using shader instance variables" (plus an "instance_buffer_pos"
+// error on every later material update) by the thousand.
+uniform float veg_hl = 0.0;
 const vec3 VEG_HL_COLOR = vec3(1.0, 0.78, 0.32);
 
 vec3 veg_hl_albedo(vec3 a) {

@@ -700,12 +700,37 @@ static func _save_user_catalog() -> void:
 	f.store_string(JSON.stringify(_user_catalog))
 
 
+## Converted user models, saved so a launch loads them instead of re-importing
+## the raw glTF: an import is slow for a big SketchUp model (142 materials on
+## one of the author's), and Godot's importer prints a "specular and
+## glossiness workflow" warning for every SimLab material on EVERY launch —
+## 259 lines a session — although ImportMaterialFixer rewrites those very
+## materials. Keyed on the file's size + modified time + the fix mode, so an
+## edited model or a changed Materials setting converts again.
+const USER_SCENE_CACHE_DIR := "user://model_cache"
+const USER_SCENE_CACHE_VERSION := 1
+
+
+static func _user_scene_cache_path(path: String) -> String:
+	var mode := str(_user_entry_for_path(path).get("material_fix", ImportMaterialFixer.MODE_AUTO))
+	var f := FileAccess.open(path, FileAccess.READ)
+	var size := f.get_length() if f != null else 0
+	var key := hash([USER_SCENE_CACHE_VERSION, path, size, FileAccess.get_modified_time(path), mode])
+	return "%s/%s_%08x.scn" % [USER_SCENE_CACHE_DIR, path.get_file().get_basename(), key & 0xFFFFFFFF]
+
+
 static func _packed_scene_for_user(path: String) -> PackedScene:
 	if _user_packed.has(path):
 		return _user_packed[path] as PackedScene
 	var abs_path := ProjectSettings.globalize_path(path)
 	if not FileAccess.file_exists(path):
 		return null
+	var cache_path := _user_scene_cache_path(path)
+	if FileAccess.file_exists(cache_path):
+		var cached := ResourceLoader.load(cache_path, "PackedScene") as PackedScene
+		if cached != null:
+			_user_packed[path] = cached
+			return cached
 	var gltf := GLTFDocument.new()
 	var state := GLTFState.new()
 	if gltf.append_from_file(abs_path, state) != OK:
@@ -732,7 +757,21 @@ static func _packed_scene_for_user(path: String) -> PackedScene:
 	if err != OK:
 		return null
 	_user_packed[path] = ps
+	_save_user_scene_cache(path, cache_path, ps)
 	return ps
+
+
+## Write the converted scene and drop this model's older conversions.
+static func _save_user_scene_cache(path: String, cache_path: String, ps: PackedScene) -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(USER_SCENE_CACHE_DIR))
+	var stem := path.get_file().get_basename() + "_"
+	var dir := DirAccess.open(USER_SCENE_CACHE_DIR)
+	if dir != null:
+		for fn in dir.get_files():
+			if fn.begins_with(stem) and fn != cache_path.get_file():
+				dir.remove(fn)
+	if ResourceSaver.save(ps, cache_path, ResourceSaver.FLAG_COMPRESS) != OK:
+		push_warning("ModelCatalog: could not cache %s" % path.get_file())
 
 
 static func _user_entry_for_path(path: String) -> Dictionary:

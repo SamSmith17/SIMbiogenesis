@@ -47,6 +47,8 @@ const SHAPE_TIPS := {
 	"path": "Click each bend; Enter finishes the road",
 }
 
+## The section key that reopens the toolbar exactly where it was closed.
+const REOPEN_SECTION := "veg"
 var _state: ToolbarStateScript = ToolbarStateScript.new()
 var _gesture: GestureScript = GestureScript.new()
 ## The WATER section's tools live in their own controller (pin dragging,
@@ -194,18 +196,27 @@ func open_with_section(section: String) -> void:
 		_enter_mode()
 	var def := _state.tool_def(_state.active_tool)
 	if def.is_empty() or String(def["section"]) != section:
-		var tools := _state.tools_in_section(section)
-		if not tools.is_empty():
-			_set_active_tool(String(tools[0]["id"]))
+		var tid := _state.tool_for_section(section)
+		if not tid.is_empty():
+			_set_active_tool(tid)
 
 
 ## What T and V do: open into that section, SWITCH to it when the toolbar is
 ## already up on the other section, and close only when it is already showing
 ## the section asked for. Pressing V while sculpting should move you to the
 ## plants, not shut the toolbar.
+##
+## V with the toolbar CLOSED reopens it exactly as it was closed — same
+## section, same tool (a Water Edit session comes back as Water Edit, with the
+## stream still picked). The other keys open their own section, on the tool
+## last used there.
 func toggle_section(section: String) -> void:
 	if _active and String(_state.tool_def(_state.active_tool).get("section", "")) == section:
 		_exit_mode()
+		return
+	if not _active and section == REOPEN_SECTION and not _state.reopen_tool.is_empty():
+		_state.set_active_tool(_state.reopen_tool)
+		_enter_mode()
 		return
 	open_with_section(section)
 
@@ -248,6 +259,7 @@ func _exit_mode() -> void:
 	_free_brush_ring()
 	if _loader != null and _loader.has_method("end_sculpt_session"):
 		_loader.call("end_sculpt_session")
+	_state.reopen_tool = _state.active_tool
 	# Flush now rather than waiting out the debounce, which closing would eat.
 	_save_prefs_now()
 	CursorController.release_tool_overlay(OVERLAY_NAME)

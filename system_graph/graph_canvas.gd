@@ -9838,7 +9838,7 @@ func _site_stream_hit(screen_pos: Vector2, radius_px: float) -> Dictionary:
 				var d := q.distance_to(screen_pos)
 				if d < best_d:
 					best_d = d
-					best = {"fid": fid, "seg": i - 1, "name": str(f.get("name", ""))}
+					best = {"fid": fid, "seg": StreamNetwork.ctrl_span_of(f, i - 1), "name": str(f.get("name", ""))}
 			prev = sp
 	return best
 

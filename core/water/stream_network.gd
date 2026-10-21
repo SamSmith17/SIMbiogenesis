@@ -19,6 +19,14 @@ extends RefCounted
 ##   base_lps  authored base flow (L/s)
 ##   covered   true when a riverbank polygon draws this reach's surface
 ##   overridden true when the player edited an OSM way
+##   smooth / meander  the effective StreamCurve knobs (the feature's own, else
+##             the map's `curve_smooth` / `curve_meander`); curve_own = true
+##             when this feature carries its own
+##   ctrl_points / ctrl_modes  the WAYPOINTS and their span modes: what the
+##             editor shows and edits. `points` / `modes` are the centreline
+##             StreamCurve made from them (identical when both knobs are 0)
+##   ctrl_seg  PackedInt32Array: per `points` span, its waypoint span
+##   ctrl_vtx  PackedInt32Array: per waypoint, its index in `points`
 
 ## Default cross-sections per kind. bed_w/depth are typical small-channel
 ## proportions (width:depth ~ 3–12 for natural streams — Leopold & Maddock
@@ -125,6 +133,8 @@ static func resolve(osm_water: Array, layer: WaterFeatureLayer) -> Array:
 			"base_lps": float(ov.get("base_lps", KIND_BASE_LPS.get(kind, 25.0))),
 			"covered": bool(item.get("covered", false)),
 			"overridden": not ov.is_empty(),
+			"own_smooth": float(ov.get("smooth", -1.0)),
+			"own_meander": float(ov.get("meander", -1.0)),
 		})
 	if layer != null:
 		for s_v in layer.streams:
@@ -150,8 +160,123 @@ static func resolve(osm_water: Array, layer: WaterFeatureLayer) -> Array:
 				"base_lps": base_lps if base_lps >= 0.0 else float(KIND_BASE_LPS.get(kind2, 25.0)),
 				"covered": false,
 				"overridden": false,
+				"own_smooth": float(s.get("smooth", -1.0)),
+				"own_meander": float(s.get("meander", -1.0)),
 			})
+	apply_curves(out, settings)
 	return out
+
+
+## Map-wide curve defaults (`settings` = the layer's settings).
+static func curve_defaults(settings: Dictionary) -> Vector2:
+	return Vector2(clampf(float(settings.get("curve_smooth", 0.0)), 0.0, 1.0),
+		clampf(float(settings.get("curve_meander", 0.0)), 0.0, 1.0))
+
+
+## Turn every feature's waypoints into its centreline (StreamCurve). Drainage
+## links are found on the WAYPOINT lines (what the map / the player drew), the
+## confluences are pinned on the channel they join so the meander passes
+## through them, and each tributary's end is then snapped onto the curved
+## channel it drains into, so drainage_links on the curved lines still finds
+## every join.
+static func apply_curves(features: Array, settings: Dictionary) -> void:
+	var by_id := {}
+	for f in features:
+		by_id[(f as Dictionary)["id"]] = f
+	var links := drainage_links(features)
+	var pins := {}
+	for id in links.keys():
+		var into := str((links[id] as Dictionary)["into"])
+		var tp: PackedVector2Array = (by_id[id] as Dictionary)["points"]
+		if not pins.has(into):
+			pins[into] = PackedVector2Array()
+		var arr: PackedVector2Array = pins[into]
+		arr.append(tp[tp.size() - 1])
+		pins[into] = arr
+	for f in features:
+		curve_feature(f, settings, pins.get((f as Dictionary)["id"], PackedVector2Array()))
+	for id in links.keys():
+		var f: Dictionary = by_id[id]
+		var g: Dictionary = by_id.get(str((links[id] as Dictionary)["into"]), {})
+		if g.is_empty() or StreamCurve.is_identity(float(g["smooth"]), float(g["meander"])):
+			continue
+		var pts: PackedVector2Array = f["points"]
+		var hit := nearest_on_line(g["points"], pts[pts.size() - 1])
+		if float(hit["dist"]) <= 0.05:
+			continue
+		pts.append(hit["point"])
+		f["points"] = pts
+		var seg: PackedInt32Array = f["ctrl_seg"]
+		seg.append(seg[seg.size() - 1] if seg.size() > 0 else 0)
+		f["ctrl_seg"] = seg
+		var modes: Array = f["modes"]
+		modes.append(modes.back() if not modes.is_empty() else "surface")
+		var vtx: PackedInt32Array = f["ctrl_vtx"]
+		vtx[vtx.size() - 1] = pts.size() - 1
+		f["ctrl_vtx"] = vtx
+
+
+## (Re)build one feature's centreline from its waypoints. Before the first
+## call `points` / `modes` ARE the waypoints; after it they live in
+## ctrl_points / ctrl_modes. `pins` = confluences on this channel.
+static func curve_feature(f: Dictionary, settings: Dictionary,
+		pins: PackedVector2Array = PackedVector2Array()) -> void:
+	if not f.has("ctrl_points"):
+		f["ctrl_points"] = f["points"]
+		f["ctrl_modes"] = f["modes"]
+	var ctrl: PackedVector2Array = f["ctrl_points"]
+	var cmodes: Array = WaterFeatureLayer._fit_modes(f["ctrl_modes"], ctrl.size())
+	f["ctrl_modes"] = cmodes
+	var defaults := curve_defaults(settings)
+	var own_s := float(f.get("own_smooth", -1.0))
+	var own_m := float(f.get("own_meander", -1.0))
+	var smooth := clampf(own_s, 0.0, 1.0) if own_s >= 0.0 else defaults.x
+	var meander := clampf(own_m, 0.0, 1.0) if own_m >= 0.0 else defaults.y
+	f["smooth"] = smooth
+	f["meander"] = meander
+	f["curve_own"] = own_s >= 0.0 or own_m >= 0.0
+	# Culverts, pipes and penstocks run straight (no meander across them).
+	var flat: Array = []
+	var run_start := -1
+	for i in cmodes.size() + 1:
+		var straight := i < cmodes.size() and str(cmodes[i]) != "surface"
+		if straight and run_start < 0:
+			run_start = i
+		elif not straight and run_start >= 0:
+			flat.append(Vector2i(run_start, i))
+			run_start = -1
+	var sec: Dictionary = f.get("section", {})
+	var top_w := float(sec.get("bed_w", 2.0)) \
+		+ 2.0 * float(sec.get("bank_slope", 2.0)) * float(sec.get("depth", 0.7))
+	var r := StreamCurve.curve(ctrl, smooth, meander, StreamCurve.wavelength_for_width(top_w),
+		hash(str(f.get("id", ""))), pins, flat)
+	var seg: PackedInt32Array = r["seg"]
+	var modes: Array = []
+	for i in seg.size():
+		modes.append(cmodes[clampi(seg[i], 0, cmodes.size() - 1)] if not cmodes.is_empty() else "surface")
+	f["points"] = r["points"]
+	f["modes"] = modes
+	f["ctrl_seg"] = seg
+	f["ctrl_vtx"] = r["vtx"]
+
+
+## The waypoint span a centreline span belongs to.
+static func ctrl_span_of(f: Dictionary, seg: int) -> int:
+	var cs: Variant = f.get("ctrl_seg", null)
+	if cs is PackedInt32Array and seg >= 0 and seg < (cs as PackedInt32Array).size():
+		return (cs as PackedInt32Array)[seg]
+	return seg
+
+
+## The centreline between waypoints a and b (inclusive).
+static func centreline_between(f: Dictionary, a: int, b: int) -> PackedVector2Array:
+	var pts: PackedVector2Array = f.get("points", PackedVector2Array())
+	var vtx: Variant = f.get("ctrl_vtx", null)
+	if not (vtx is PackedInt32Array) or (vtx as PackedInt32Array).size() <= maxi(a, b):
+		var ctrl: PackedVector2Array = f.get("ctrl_points", pts)
+		return ctrl.slice(a, b + 1)
+	var v: PackedInt32Array = vtx
+	return pts.slice(v[a], v[b] + 1)
 
 
 ## For each feature, which feature its downstream END drains into and at what

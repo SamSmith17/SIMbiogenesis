@@ -234,7 +234,9 @@ func tap_stream_for_turbine(feature_id: String, seg: int, turbine_id: String,
 	var fname := str(f.get("name", ""))
 	if fname.is_empty():
 		fname = str(f.get("kind", "stream")).capitalize()
-	var conn := create_penstock_from_stream(nid, fname, pts.slice(intake_i, exit_i + 1), turbine_id, style_ov)
+	# The pipe follows the channel as drawn (its curve), not the waypoint chords.
+	var conn := create_penstock_from_stream(nid, fname,
+		StreamNetwork.centreline_between(f, intake_i, exit_i), turbine_id, style_ov)
 	if conn.is_empty():
 		return ""
 	# The drop named a handle; the route defaults to res_in_0 — honour the
@@ -442,7 +444,7 @@ func find_uphill_source(turbine_id: String, max_m: float = 150.0) -> Dictionary:
 					if y > best_y + 0.05 or (absf(y - best_y) <= 0.05 and d < best_d):
 						best_y = y
 						best_d = d
-						best = {"kind": "stream", "feature_id": fid, "seg": i,
+						best = {"kind": "stream", "feature_id": fid, "seg": StreamNetwork.ctrl_span_of(f, i),
 							"label": str(f.get("name", "")) if not str(f.get("name", "")).is_empty() else str(f.get("kind", "stream")).capitalize(),
 							"rise_m": y - t_y}
 	if not best.is_empty():

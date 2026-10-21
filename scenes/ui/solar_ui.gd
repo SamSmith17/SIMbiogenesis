@@ -4659,11 +4659,16 @@ func _draw_solar_graph() -> void:
 	fill_points.append(Vector2(padding, graph_size.y - padding))
 	
 	# Add data points
+	var has_area := false
 	for i in range(HISTORY_SIZE):
 		var x : float = padding + (float(i) + 0.5) / 24.0 * graph_width
 		var val : float = solar_history[i] if i < solar_history.size() else 0.0
+		if not is_finite(val):
+			val = 0.0
 		var y : float = graph_size.y - padding - (val / max_val) * graph_height
 		y = clampf(y, padding, graph_size.y - padding)
+		if y < graph_size.y - padding - 0.01:
+			has_area = true
 		
 		fill_points.append(Vector2(x, y))
 		line_points.append(Vector2(x, y))
@@ -4671,8 +4676,11 @@ func _draw_solar_graph() -> void:
 	# End at bottom right
 	fill_points.append(Vector2(padding + graph_width, graph_size.y - padding))
 	
-	# Draw filled area with gradient effect (approximate with solid color)
-	if fill_points.size() >= 3:
+	# Draw filled area with gradient effect (approximate with solid color).
+	# A day with no sun yet (night, or no panels) puts every point on the
+	# baseline: a zero-area polygon Godot cannot triangulate, which logged
+	# "Invalid polygon data, triangulation failed" on every redraw.
+	if fill_points.size() >= 3 and has_area:
 		var fill_colors : PackedColorArray = PackedColorArray()
 		for i in range(fill_points.size()):
 			# Gradient from top (bright) to bottom (dim)

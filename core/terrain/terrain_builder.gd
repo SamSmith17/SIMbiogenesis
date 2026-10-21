@@ -195,8 +195,25 @@ static func resample(src: PackedFloat32Array, src_cols: int, src_rows: int,
 
 ## Build the displaced ground ArrayMesh. `elev` is a square grid (res × res,
 ## row-major, metres). UVs map 0..1 across the tile to match the stitched drape.
+##
+## `shade_elev` (optional, same size as `elev`) is the surface the NORMALS are
+## taken from. The DetailGround passes its UNSUNK grid: it is pushed 60 m down
+## under active edit tiles, and normals generated from the sunk grid tilt every
+## vertex on the tiles' edge toward that hidden cliff, so the strip of ground
+## just outside each tile shaded as a steep slope (orange toward a low sun,
+## dark blue away from it) and the tiles read as slabs hovering on a ledge.
 static func build_mesh(elev: PackedFloat32Array, res: int, extent_m: float,
-		center_elev: float) -> ArrayMesh:
+		center_elev: float, shade_elev: PackedFloat32Array = PackedFloat32Array()) -> ArrayMesh:
+	if shade_elev.size() == elev.size() and shade_elev != elev:
+		var shaded := build_mesh(shade_elev, res, extent_m, center_elev)
+		var arrays := shaded.surface_get_arrays(0)
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in verts.size():
+			verts[i].y = elev[i] - center_elev
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		var out := ArrayMesh.new()
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		return out
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var half := extent_m * 0.5
@@ -824,7 +841,8 @@ static func feather_detail_to_coarse(detail: PackedFloat32Array, detail_res: int
 static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: int,
 		detail_extent_m: float, center_elev: float, base_drape: Texture2D = null,
 		detail_drape: Texture2D = null, terrain_extent_m: float = 0.0,
-		seam_feather_m: float = DEFAULT_FEATHER_M) -> void:
+		seam_feather_m: float = DEFAULT_FEATHER_M,
+		shade_elev: PackedFloat32Array = PackedFloat32Array()) -> void:
 	if terrain == null or elev.is_empty() or res < 2:
 		return
 	var feather_uv := feather_uv_from_metres(seam_feather_m, detail_extent_m)
@@ -833,7 +851,7 @@ static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: 
 		ground = MeshInstance3D.new()
 		ground.name = "DetailGround"
 		terrain.add_child(ground)
-	ground.mesh = build_mesh(elev, res, detail_extent_m, center_elev)
+	ground.mesh = build_mesh(elev, res, detail_extent_m, center_elev, shade_elev)
 	ground.material_override = make_terrain_material(
 		base_drape, detail_drape, terrain_extent_m, detail_extent_m, true, false, false, feather_uv)
 	_apply_render_priority(ground.material_override, DETAIL_GROUND_RENDER_PRIORITY)

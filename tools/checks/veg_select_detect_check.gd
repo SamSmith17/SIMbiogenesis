@@ -155,7 +155,7 @@ func _test_tree(main: Node, loader: Node, rec: Dictionary, source: String) -> vo
 	var lit_ok := not glow.is_empty()
 	for n in glow:
 		if str((n as Node).get_meta(&"veg_species", "")) != species \
-				or float((n as GeometryInstance3D).get_instance_shader_parameter(&"veg_hl")) < 0.99:
+				or not _glow_lit(loader, n as GeometryInstance3D):
 			lit_ok = false
 	if not lit_ok:
 		_fail("%s: species glow missing (%d nodes)" % [source, glow.size()])
@@ -338,3 +338,15 @@ func _shot(main: Node, name: String) -> void:
 	var img := main.get_viewport().get_texture().get_image()
 	if img != null:
 		img.save_png(SHOTS + name)
+
+
+## A batch reads as lit when every vegetation material it draws with has the
+## glow up (the glow lives on the species' shared materials).
+func _glow_lit(loader: Node, gi: GeometryInstance3D) -> bool:
+	var mats: Array = loader.call("veg_glow_materials_of", gi)
+	if mats.is_empty():
+		return false
+	for m in mats:
+		if float((m as ShaderMaterial).get_shader_parameter(&"veg_hl")) < 0.99:
+			return false
+	return true

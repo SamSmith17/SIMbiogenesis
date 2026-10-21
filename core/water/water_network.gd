@@ -1235,6 +1235,15 @@ func _drive_outlet_vfx(delta: float) -> void:
 		vfx.set_flow(delta, q, run["outlet"], run["out_dir"])
 
 
+## Map-wide stream curve defaults (each 0..1; a stream's own values win).
+func set_curve_defaults(smooth: float, meander: float) -> void:
+	layer.set_setting("curve_smooth", clampf(smooth, 0.0, 1.0))
+	layer.set_setting("curve_meander", clampf(meander, 0.0, 1.0))
+	save_layer()
+	_clear_veg_after_carve = true
+	request_rebuild()
+
+
 func set_min_catchment_ha(ha: float) -> void:
 	layer.set_setting("min_catchment_ha", clampf(ha, 0.1, 500.0))
 	save_layer()
@@ -1271,8 +1280,8 @@ func editable_points(id: String) -> Dictionary:
 	var f := feature(id)
 	if f.is_empty():
 		return {}
-	return {"points": (f["points"] as PackedVector2Array).duplicate(),
-		"modes": (f["modes"] as Array).duplicate()}
+	return {"points": (f.get("ctrl_points", f["points"]) as PackedVector2Array).duplicate(),
+		"modes": (f.get("ctrl_modes", f["modes"]) as Array).duplicate()}
 
 
 ## Turn a derived channel into a player stream (kind by Strahler order).
@@ -1310,8 +1319,9 @@ func apply_points(id: String, points: PackedVector2Array, modes: Array) -> Strin
 	# debounced rebuild re-resolves.
 	var f := feature(id)
 	if not f.is_empty():
-		f["points"] = points
-		f["modes"] = WaterFeatureLayer._fit_modes(modes, points.size())
+		f["ctrl_points"] = points
+		f["ctrl_modes"] = WaterFeatureLayer._fit_modes(modes, points.size())
+		StreamNetwork.curve_feature(f, layer.settings)
 	return id
 
 
@@ -1337,7 +1347,8 @@ func set_span_mode(id: String, seg: int, mode: String) -> String:
 		layer.set_osm_override(osm_id_of(id), {"modes": modes})
 		var f := feature(id)
 		if not f.is_empty():
-			f["modes"] = modes
+			f["ctrl_modes"] = modes
+			StreamNetwork.curve_feature(f, layer.settings)
 		return id
 	return apply_points(id, ep["points"], modes)
 

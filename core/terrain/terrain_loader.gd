@@ -6525,6 +6525,13 @@ func _spawn_xz() -> Vector2:
 	return xz
 
 
+## True once the terrain is built, i.e. ground_height_at answers in world Y.
+## Before that it samples grids that are not centred yet (and the actors stand
+## on the temporary load floor), so nothing may treat its heights as ground.
+func is_terrain_ready() -> bool:
+	return _built
+
+
 ## Make sure the map has a survey drone (a save resume skips the spawn pass, and
 ## an older save may not carry one). Used by the remote drone-view hotkey.
 func ensure_explore_drone() -> Node3D:
@@ -6584,7 +6591,10 @@ func _finalize_resume_actors() -> void:
 	if not is_instance_valid(player) or not (saved is Vector3):
 		return
 	var pos: Vector3 = saved
-	if bool(player.get("is_riding")):
+	# A vehicle carries its rider; leave them be. The survey drone does NOT:
+	# a world saved mid-flight parks the body here, and skipping it left the
+	# body on the vanished load floor (y 0, ~73 m over Mount Vernon's ground).
+	if bool(player.get("is_riding")) and not bool(player.get("is_fpv_drone_mode")):
 		return
 	# A world reloaded at a different size (Terrain options → Apply & reload)
 	# is centred on a different mean elevation, so the saved Y belongs to the
@@ -6599,6 +6609,8 @@ func _finalize_resume_actors() -> void:
 	if "fall_start_height" in player:
 		player.fall_start_height = pos.y
 		player.highest_point_during_fall = pos.y
+	if "void_reference_y" in player:
+		player.void_reference_y = pos.y
 	var footing := _ground_height_at(pos.x, pos.z)
 	if is_finite(footing) and (pos.y < footing - 0.5 or pos.y > footing + RESUME_MAX_ABOVE_GROUND_M):
 		print("TerrainLoader: resumed player %.1f m off the ground — reseating" % (pos.y - footing))
@@ -7044,7 +7056,21 @@ func _ensure_height_field(terrain: Node3D) -> void:
 	hf.pre_consume = Callable(self, "_sync_composed_tiles")
 	hf.configure(_composed_tiles, Callable(self, "_height_field_base"),
 		_detail_extent_m(), _detail_ground_material(terrain))
+	_sync_height_field_shadows(terrain)
 	hf.rebuild_all_now()
+
+
+## Edit tiles cast shadows exactly when the DetailGround around them does. A
+## large patch (≥ 3 km) turns the ground's shadows off; tiles that still cast
+## then spill a shadow-map texel (15–20 m at that range) off every edge onto
+## ground that throws none back, which under a low sun draws a dark staircase
+## along each tile and makes it read as a raised slab.
+func _sync_height_field_shadows(terrain: Node3D) -> void:
+	if _height_field == null or not is_instance_valid(_height_field) or terrain == null:
+		return
+	var dg := terrain.get_node_or_null("DetailGround") as MeshInstance3D
+	if dg != null:
+		_height_field.set_cast_shadow(dg.cast_shadow)
 
 
 ## How far the DetailGround surface drops beneath the interior of active edit
@@ -8247,11 +8273,16 @@ func _rebuild_detail_patch(terrain: Node3D) -> void:
 		mesh_res = DETAIL_MESH_RES
 	# Sink the coarse detail surface under active edit tiles (hi-res tile meshes
 	# own those areas); keeps cut bowls visible and their colliders authoritative.
+	# Normals still come from the UNSUNK grid, or every vertex on a tile's edge
+	# leans toward the hidden 60 m drop and shades the ground beside the tiles.
+	var shade_grid := mesh_grid
 	mesh_grid = _detail_mesh_grid_with_sink(mesh_grid, mesh_res)
 	_detail_sink_sig = _sink_signature()
 	TerrainBuilder.upsert_detail_patch(
 		terrain, mesh_grid, mesh_res, _detail_extent_m(),
-		_built_center_elev, _drape, _detail_drape, _built_extent, _seam_feather_m)
+		_built_center_elev, _drape, _detail_drape, _built_extent, _seam_feather_m,
+		shade_grid)
+	_sync_height_field_shadows(terrain)
 	_stamp_drape_mercator_bboxes(terrain)
 	print("TerrainLoader: hi-res centre mesh %d×%d (%.0f m, ~%.1f m/vertex)" % [
 		mesh_res, mesh_res, _detail_extent_m(),
@@ -10516,6 +10547,7 @@ var _veg_pick_rev := 0
 var _veg_hover_marker: VegHoverMarker = null
 var _veg_glow_species := ""
 var _veg_glow_nodes: Array = []
+var _veg_glow_materials: Array = []
 var _veg_glow_walked_ms := 0
 var _veg_nominal_cache: Dictionary = {}
 
@@ -10690,20 +10722,23 @@ func clear_veg_hover() -> void:
 	set_veg_species_glow("")
 
 
-## Light every batch of one species (shader instance uniform `veg_hl`, see
+## Light every batch of one species (material uniform `veg_hl`, see
 ## veg_lighting.gdshaderinc); "" turns it off. Batches carry their species
-## as meta "veg_species" (VegetationRuntime / AutoVegetationRuntime). The
-## walk is redone at most twice a second while a species is lit, so chunks
-## rebuilt under the pointer pick it up.
+## as meta "veg_species" (VegetationRuntime / AutoVegetationRuntime); the
+## glow is written on THEIR MATERIALS (shared per species look by
+## VegAssetCache), never per instance — see the shader for why. The walk is
+## redone at most twice a second while a species is lit, so chunks rebuilt
+## under the pointer pick it up.
 func set_veg_species_glow(species: String) -> void:
 	var now := Time.get_ticks_msec()
 	var stale := not _veg_glow_nodes.is_empty() and not is_instance_valid(_veg_glow_nodes[0])
 	if species == _veg_glow_species and not stale \
 			and (species.is_empty() or now - _veg_glow_walked_ms < 500):
 		return
-	for n in _veg_glow_nodes:
-		if is_instance_valid(n):
-			(n as GeometryInstance3D).set_instance_shader_parameter(&"veg_hl", 0.0)
+	for m in _veg_glow_materials:
+		if is_instance_valid(m):
+			(m as ShaderMaterial).set_shader_parameter(&"veg_hl", 0.0)
+	_veg_glow_materials = []
 	_veg_glow_nodes = []
 	_veg_glow_species = species
 	_veg_glow_walked_ms = now
@@ -10718,8 +10753,48 @@ func set_veg_species_glow(species: String) -> void:
 			continue
 		for node in root.find_children("*", "GeometryInstance3D", true, false):
 			if str(node.get_meta(&"veg_species", "")) == species:
-				(node as GeometryInstance3D).set_instance_shader_parameter(&"veg_hl", 1.0)
 				_veg_glow_nodes.append(node)
+				for m in veg_glow_materials_of(node as GeometryInstance3D):
+					if not _veg_glow_materials.has(m):
+						m.set_shader_parameter(&"veg_hl", 1.0)
+						_veg_glow_materials.append(m)
+
+
+## The vegetation ShaderMaterials a batch draws with (override, overlay and
+## per-surface), those whose shader has the `veg_hl` uniform.
+static func veg_glow_materials_of(gi: GeometryInstance3D) -> Array[ShaderMaterial]:
+	var out: Array[ShaderMaterial] = []
+	var mats: Array = [gi.material_override, gi.material_overlay]
+	var mesh: Mesh = null
+	if gi is MeshInstance3D:
+		mesh = (gi as MeshInstance3D).mesh
+		for i in (gi as MeshInstance3D).get_surface_override_material_count():
+			mats.append((gi as MeshInstance3D).get_surface_override_material(i))
+	elif gi is MultiMeshInstance3D and (gi as MultiMeshInstance3D).multimesh != null:
+		mesh = (gi as MultiMeshInstance3D).multimesh.mesh
+	if mesh != null:
+		for i in mesh.get_surface_count():
+			mats.append(mesh.surface_get_material(i))
+	for m in mats:
+		var sm := m as ShaderMaterial
+		if sm != null and sm.shader != null and not out.has(sm) and _shader_has_veg_hl(sm.shader):
+			out.append(sm)
+	return out
+
+
+static var _veg_hl_shaders := {}
+
+
+static func _shader_has_veg_hl(sh: Shader) -> bool:
+	var key := sh.get_instance_id()
+	if not _veg_hl_shaders.has(key):
+		var found := false
+		for u in sh.get_shader_uniform_list(true):
+			if str((u as Dictionary).get("name", "")) == "veg_hl":
+				found = true
+				break
+		_veg_hl_shaders[key] = found
+	return bool(_veg_hl_shaders[key])
 
 
 ## The per-tree look on one plant ({} = it follows its species).

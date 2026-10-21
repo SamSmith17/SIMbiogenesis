@@ -49,6 +49,9 @@ static func default_settings() -> Dictionary:
 		# "osm" | "all" | "flow" | "off"
 		"display_mode": "all",
 		"show_buried": false,
+		# StreamCurve knobs for every stream without its own (0..1).
+		"curve_smooth": 0.0,
+		"curve_meander": 0.0,
 	}
 
 
@@ -110,7 +113,10 @@ func update_stream(id: String, patch: Dictionary) -> bool:
 	for k in patch.keys():
 		if k == "id":
 			continue
-		rec[k] = patch[k]
+		if patch[k] == null:
+			rec.erase(k)
+		else:
+			rec[k] = patch[k]
 	var pts: PackedVector2Array = rec.get("points", PackedVector2Array())
 	rec["modes"] = _fit_modes(rec.get("modes", []), pts.size())
 	return true

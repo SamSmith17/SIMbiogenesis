@@ -8,12 +8,16 @@ extends SceneTree
 ## computed trapezoid and the rational method, ChannelCarver (only lowers, the
 ## bed sits under the centreline, a brute-force reference agrees, incremental
 ## re-runs touch nothing / only a moved feature's footprint), and the delta
-## stack (compose = channel + player; player undo never touches the channel).
+## stack (compose = channel + player; player undo never touches the channel),
+## and StreamCurve (zero knobs = the waypoint line exactly; smoothing passes
+## through every waypoint; meander lengthens the channel by the sine-generated
+## sinuosity yet starts and ends on the waypoints, keeps confluences joined and
+## leaves culvert spans straight; deterministic; the editor's waypoint map).
 ##
 ## Run: Godot.exe.exe --headless --path . --script core/water/water_features_selftest.gd
 ## (run --import first after adding a class_name).
 
-const EXPECTED_CHECKS := 63
+const EXPECTED_CHECKS := 83
 
 var _fails := 0
 var _checks := 0
@@ -34,6 +38,7 @@ func _initialize() -> void:
 	_test_carver()
 	_test_stack()
 	_test_osm_cache()
+	_test_curves()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a runtime error aborted a test?)"
@@ -384,3 +389,111 @@ func _test_osm_cache() -> void:
 	_check("serializer keeps centreline / id / covered",
 		(back.get("centerline", PackedVector2Array()) as PackedVector2Array).size() == 4
 		and int(back.get("osm_id", -1)) == 1234 and bool(back.get("covered", false)))
+
+
+# ---------------------------------------------------------------------------
+
+## Polyline length.
+func _len(pts: PackedVector2Array) -> float:
+	return StreamNetwork.polyline_length(pts)
+
+
+## Largest distance of any point of `pts` from the polyline `line`.
+func _max_off(pts: PackedVector2Array, line: PackedVector2Array) -> float:
+	var m := 0.0
+	for p in pts:
+		m = maxf(m, float(StreamNetwork.nearest_on_line(line, p)["dist"]))
+	return m
+
+
+func _test_curves() -> void:
+	# A zig-zag the way OSM digitises a desert wash: long straight runs.
+	var zig := PackedVector2Array([Vector2(0, 0), Vector2(300, 80), Vector2(520, -60),
+		Vector2(900, 40), Vector2(1200, -30)])
+	var ident := StreamCurve.curve(zig, 0.0, 0.0, 80.0, 7)
+	_check("curve: zero knobs return the waypoints", ident["points"] == zig)
+	_check("curve: zero knobs map spans 1:1", (ident["seg"] as PackedInt32Array).size() == zig.size() - 1)
+
+	var sm := StreamCurve.curve(zig, 1.0, 0.0, 80.0, 7)
+	var smp: PackedVector2Array = sm["points"]
+	var vtx: PackedInt32Array = sm["vtx"]
+	var through := true
+	for i in zig.size():
+		if smp[vtx[i]].distance_to(zig[i]) > 1e-3:
+			through = false
+	_check("smoothing passes through every waypoint", through)
+	# Rounded: the heading change between consecutive steps stays small
+	# (the straight polyline turns 30+ degrees in one step at each vertex).
+	var worst := 0.0
+	for i in range(1, smp.size() - 1):
+		var a := (smp[i] - smp[i - 1]).normalized()
+		var b := (smp[i + 1] - smp[i]).normalized()
+		worst = maxf(worst, rad_to_deg(a.angle_to(b)))
+	_check("smoothing rounds the corners (<8 deg per 2 m step)", worst < 8.0, "worst %.1f" % worst)
+	var seg: PackedInt32Array = sm["seg"]
+	var mono := seg.size() == smp.size() - 1
+	for i in range(1, seg.size()):
+		if seg[i] < seg[i - 1]:
+			mono = false
+	_check("smoothed spans map to waypoint spans in order", mono)
+
+	# Meander: the sine-generated curve is longer than its valley by ~1/J0(w).
+	var lam := StreamCurve.wavelength_for_width(7.0)
+	_check("wavelength ~11 widths", _near(lam, 77.0, 0.01))
+	var straight := PackedVector2Array([Vector2(0, 0), Vector2(2000, 0)])
+	var mid := StreamCurve.curve(straight, 0.0, 0.5, lam, 3)
+	var hi := StreamCurve.curve(straight, 0.0, 1.0, lam, 3)
+	var l_mid := _len(mid["points"])
+	var l_hi := _len(hi["points"])
+	var want_mid := 2000.0 / StreamCurve.bessel_j0(0.5 * StreamCurve.OMEGA_MAX)
+	_check("meander 0.5 lengthens the channel about 1/J0(w)",
+		l_mid > 2000.0 * 1.12 and l_mid < want_mid * 1.12, "%.0f m vs %.0f" % [l_mid, want_mid])
+	_check("more meander, more sinuous", l_hi > l_mid * 1.4, "%.0f vs %.0f" % [l_hi, l_mid])
+	var mp: PackedVector2Array = hi["points"]
+	_check("meander starts on the first waypoint", mp[0].distance_to(straight[0]) < 1e-3)
+	_check("meander ends on the last waypoint", mp[mp.size() - 1].distance_to(straight[1]) < 1e-3)
+	var off := _max_off(mp, straight)
+	_check("meander swings across the valley (> 0.3 wavelength)", off > lam * 0.3, "%.1f m" % off)
+	# Goosenecks at w ~115 deg swing about one valley wavelength either side.
+	_check("meander stays within 1.3 wavelengths of the valley", off < lam * 1.3, "%.1f m" % off)
+	var again := StreamCurve.curve(straight, 0.0, 1.0, lam, 3)
+	_check("meander is deterministic", again["points"] == hi["points"])
+	var other := StreamCurve.curve(straight, 0.0, 1.0, lam, 4)
+	_check("another stream bends differently", other["points"] != hi["points"])
+	# Culvert span (vertices 1..2) stays on the straight line.
+	var three := PackedVector2Array([Vector2(0, 0), Vector2(800, 0), Vector2(900, 0), Vector2(1800, 0)])
+	var cv := StreamCurve.curve(three, 0.0, 1.0, lam, 5, PackedVector2Array(), [Vector2i(1, 2)])
+	var cvp: PackedVector2Array = cv["points"]
+	var cseg: PackedInt32Array = cv["seg"]
+	var culvert_off := 0.0
+	for i in cseg.size():
+		if cseg[i] == 1:
+			culvert_off = maxf(culvert_off, absf(cvp[i].y))
+	_check("a culvert span runs straight", culvert_off < 0.5, "%.2f m" % culvert_off)
+
+	# Network: the map's meander curves both streams, the tributary still
+	# drains into the main channel, the editor still sees the waypoints.
+	var layer := WaterFeatureLayer.new()
+	layer.set_setting("curve_meander", 0.8)
+	var main_id := layer.add_stream(PackedVector2Array([Vector2(0, 0), Vector2(1500, 0)]), {"name": "Main"})
+	var trib_id := layer.add_stream(PackedVector2Array([Vector2(700, 600), Vector2(700, 0)]), {"name": "Trib"})
+	var feats := StreamNetwork.resolve([], layer)
+	var by := {}
+	for f in feats:
+		by[(f as Dictionary)["id"]] = f
+	var fm: Dictionary = by[main_id]
+	_check("resolved feature keeps its waypoints", (fm["ctrl_points"] as PackedVector2Array).size() == 2)
+	_check("resolved centreline is curved", (fm["points"] as PackedVector2Array).size() > 50)
+	var links := StreamNetwork.drainage_links(feats)
+	_check("tributary still drains into the curved main channel",
+		str((links.get(trib_id, {}) as Dictionary).get("into", "")) == main_id)
+	# A stream's own value wins over the map's; zero keeps it straight.
+	layer.update_stream(main_id, {"meander": 0.0, "smooth": 0.0})
+	var feats2 := StreamNetwork.resolve([], layer)
+	var fm2: Dictionary = {}
+	for f in feats2:
+		if (f as Dictionary)["id"] == main_id:
+			fm2 = f
+	_check("a stream's own zero meander keeps it straight", (fm2["points"] as PackedVector2Array).size() == 2)
+	layer.update_stream(main_id, {"meander": null, "smooth": null})
+	_check("clearing the stream's own values falls back to the map", not layer.stream(main_id).has("meander"))

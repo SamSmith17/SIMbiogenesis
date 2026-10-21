@@ -1630,6 +1630,13 @@ func _apply_save_snapshot( data: Dictionary ) -> bool :
 			if restore_fpv :
 				var fpv_path: String = str( pdict.get( "fpv_drone_path", "" ) )
 				var drone: Node = get_node_or_null( NodePath( fpv_path ) ) if fpv_path != "" else null
+				# A generated map makes its survey drone on first use, so a world
+				# saved mid-flight has none yet at resume: make it the way Tab
+				# does, then put the flight back.
+				if drone == null and fpv_path.get_file() == "FPVDrone" :
+					var tl : Node = find_child( "TerrainLoader", true, false )
+					if tl != null and tl.has_method( "ensure_explore_drone" ) :
+						drone = tl.call( "ensure_explore_drone" )
 				if drone != null and drone.has_method( "restore_from_save" ) and fpv_st is Dictionary :
 					if drone.restore_from_save( player, fpv_st ) and player.has_method( "apply_fpv_drone_restore_after_load" ) :
 						player.apply_fpv_drone_restore_after_load( drone )

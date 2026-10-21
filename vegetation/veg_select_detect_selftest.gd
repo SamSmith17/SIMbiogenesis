@@ -393,8 +393,11 @@ func _test_detect_bare_and_mercator() -> void:
 
 func _test_shader_glow() -> void:
 	var inc := FileAccess.get_file_as_string("res://vegetation/veg_lighting.gdshaderinc")
-	_check("the include declares the glow instance uniform",
-		inc.contains("instance uniform float veg_hl"))
+	# A plain material uniform, never `instance uniform`: every object using
+	# one reserves 16 slots of a 4096-object global buffer, and a forest has
+	# more batches than that (thousands of engine errors on Mount Vernon).
+	_check("the include declares the glow as a material uniform",
+		inc.contains("uniform float veg_hl") and not inc.contains("instance uniform float veg_hl"))
 	for path in ["res://vegetation/foliage.gdshader", "res://vegetation/leaf_canopy.gdshader",
 			"res://vegetation/bark.gdshader", "res://vegetation/veg_impostor.gdshader"]:
 		var src := FileAccess.get_file_as_string(path)

@@ -142,6 +142,8 @@ var _suppress_gamepad_look_until_axes_released : bool = false
 var is_falling : bool = false
 var fall_start_height : float = 0.0
 var void_reference_y : float = 0.0
+var _void_loader : Node = null
+var _void_loader_looked := false
 var _void_respawn_cooldown_s : float = 0.0
 var highest_point_during_fall : float = 0.0
 
@@ -1524,6 +1526,14 @@ func _check_void_fall_respawn() -> void:
 		return
 	if _void_respawn_cooldown_s > 0.0:
 		return
+	# Nothing to fall out of until the map's terrain exists. A world saved
+	# mid-flight resumes in drone mode with the body parked on the temporary
+	# load floor, and before the build the footing answers un-centred heights
+	# (119.6 m where the ground will be at -73.5 on Mount Vernon): the body was
+	# "rescued" ~195 m into the air and then fell when the terrain arrived.
+	if not _terrain_ready_for_void_check():
+		void_reference_y = global_position.y
+		return
 	if is_fpv_drone_mode:
 		_check_fpv_body_void_respawn()
 		return
@@ -1533,6 +1543,18 @@ func _check_void_fall_respawn() -> void:
 	if global_position.y > void_reference_y - void_fall_respawn_distance:
 		return
 	_respawn_from_void()
+
+
+func _terrain_ready_for_void_check() -> bool:
+	var main := get_tree().current_scene
+	if main == null:
+		return true
+	if not _void_loader_looked or (_void_loader != null and not is_instance_valid(_void_loader)):
+		_void_loader_looked = true
+		_void_loader = TerrainSurfaceQuery.find_terrain_loader(main)
+	if _void_loader == null:
+		return true   # a built-in scene: its ground is there from the start
+	return not _void_loader.has_method("is_terrain_ready") or bool(_void_loader.call("is_terrain_ready"))
 
 
 func _check_fpv_body_void_respawn() -> void:
