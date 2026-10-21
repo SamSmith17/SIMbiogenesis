@@ -32,6 +32,38 @@ world, and nothing of theirs is overwritten:
 If the pack has game art, Godot imports it in the background and then offers
 to restart the game.
 
+### Terrain imagery quality
+
+The aerial imagery a world arrives with was saved at its author's **terrain
+quality**: Low, Medium, High or Ultra, set in Terrain options. That setting
+belongs to each computer, so a friend's may differ from yours. An imported
+world therefore opens with the imagery **as it was saved**: from disk, with no
+download, looking exactly as it did for you.
+
+When the two qualities differ, the Share window's install screen and the
+world panel (timeline 💾) both show **Terrain imagery** with the GPU memory
+each choice takes:
+
+- **As saved (Ultra) · 1.2 GB GPU** shows the imagery that came with the world.
+- **My quality (Medium) · 300 MB GPU** downloads the imagery at this
+  computer's quality: lighter on the GPU, or sharper if this computer is set
+  higher. Any part that cannot be downloaded (no internet, a server error)
+  uses the saved copy instead, so the terrain never turns blurry. The saved
+  imagery is never deleted, and switching back is instant.
+
+The choice is saved with the world. Each world also records the quality it
+was last shown at. That way, if you later change your own quality setting
+and the download fails, your own worlds fall back to what they showed
+before. Packs made before 2026-10-20 have no record of the quality; it is
+read off the imagery files the pack carries. Imagery cached before the game
+started combining imagery sources (`img_…_z18.png` rather than
+`img_…_z18_esri_clarity.png`) still counts: the game loads it as plain Esri
+imagery instead of downloading the same square again.
+
+Code: `core/terrain/terrain_imagery_plan.gd` (which layers a quality asks
+for, whether they are on disk, what they cost), and the "Per-world imagery"
+block in `terrain_loader.gd`.
+
 Code: `core/sharing/` (format, catalog, writer, reader, installer) and
 `scenes/ui/asset_pack_modal.gd`.
 

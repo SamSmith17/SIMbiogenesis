@@ -54,6 +54,7 @@ var _imp_sec_checks := {}          # section -> CheckBox
 var _installer: AssetPackInstaller = null
 var _reimport_pid := -1
 var _reimport_t0 := 0
+var _reopen_when_imported := false
 
 # Progress / done
 var _prog_title: Label = null
@@ -642,7 +643,10 @@ func _build_import_preview(info: Dictionary) -> void:
 		if sec == "project" and not AssetPackFormat.running_from_source():
 			cb.button_pressed = false
 			cb.disabled = true
-			cb.tooltip_text = "Game art can only be installed into a copy of the game opened from its project folder."
+			cb.tooltip_text = ("This copy of the game gets its art from the art add-on: the "
+				+ "simbiogenesis-art-*.pck files from the release page, placed next to the game "
+				+ "(%s). The pack's art is only needed by a copy opened from its project folder."
+				% ("art add-on loaded" if ArtPackMount.has_art() else "not found yet"))
 		_imp_sec_checks[sec] = cb
 		h.add_child(cb)
 		var n := _muted(str(notes.get(sec, "")))
@@ -780,9 +784,28 @@ func _install_done(_extract_result: Variant) -> void:
 		if need_restart:
 			play.tooltip_text = "Restart the game first so the new art is loaded."
 		row.add_child(play)
+		# Imagery made at another quality than this computer's: keep it, or
+		# download it at this computer's (the saved copy stays as the fallback).
+		var wrec := WorldStore.get_world(str(w["id"]))
+		var isum := TerrainImageryPlan.summary_for_record(wrec, WorldStore.read_snapshot(str(w["id"])))
+		if TerrainImageryChoice.has_choice(isum):
+			var choice := TerrainImageryChoice.create()
+			choice.show_summary(isum)
+			choice.mode_chosen.connect(_set_world_imagery_mode.bind(str(w["id"])))
+			_done_box.add_child(choice)
 	if need_restart:
 		_start_reimport()
 	_set_view(View.DONE)
+
+
+func _set_world_imagery_mode(mode: String, id: String) -> void:
+	var rec := WorldStore.get_world(id)
+	if rec.is_empty():
+		return
+	var ti: Dictionary = rec.get("terrain_imagery", {}) if rec.get("terrain_imagery", {}) is Dictionary else {}
+	ti["mode"] = "saved" if mode == "saved" else "local"
+	rec["terrain_imagery"] = ti
+	WorldStore.save_record(rec)
 
 
 func _play_world(id: String) -> void:
@@ -821,6 +844,9 @@ func _start_reimport() -> void:
 
 func _reimport_finished(ok: bool) -> void:
 	_reimport_pid = -1
+	if _reopen_when_imported:
+		_reopen_when_imported = false
+		_frame.open()
 	if _reimport_bar != null:
 		_reimport_bar.visible = false
 	if ok:
@@ -903,6 +929,12 @@ func _on_frame_closed() -> void:
 	if _job != null and _job.running():
 		_job.cancel()
 		_close_when_idle = true
+		return
+	if _reimport_pid >= 0:
+		# Game art is still importing. Stay alive (hidden) and come back with the
+		# Restart button when it is done: closed now, nothing would tell the
+		# player that the worlds they are about to play need a restart first.
+		_reopen_when_imported = true
 		return
 	queue_free()
 

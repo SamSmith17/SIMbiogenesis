@@ -59,16 +59,16 @@ const HYPER_MAX_ZOOM := 19
 ## the sculpt mesh/collider density is untouched, so sculpt perf is unaffected.
 ## Persisted as [terrain] quality_tier in terrain_config.cfg; default = Medium (1),
 ## which matches the previous hard-coded 4096 detail / 500 m hyper behaviour.
-const QUALITY_TIER_COUNT := 4
-const QUALITY_TIER_DEFAULT := 1
-const QUALITY_TIER_NAMES := ["Low", "Medium", "High", "Ultra"]
+const QUALITY_TIER_COUNT := TerrainImageryPlan.TIER_COUNT
+const QUALITY_TIER_DEFAULT := TerrainImageryPlan.TIER_DEFAULT
+const QUALITY_TIER_NAMES := TerrainImageryPlan.TIER_NAMES
 ## Detail-drape stitch target (px) per tier — the real lever on centre sharpness.
-const QUALITY_DETAIL_TARGET_PX := [2048, 4096, 8192, 8192]
+const QUALITY_DETAIL_TARGET_PX := TerrainImageryPlan.DETAIL_TARGET_PX
 ## Hyper (sharpest) layer half-extent (m) per tier — how far the crispest imagery
 ## reaches from the site centre across the walkable zone.
-const QUALITY_HYPER_HALF_EXTENT := [500.0, 500.0, 1000.0, 1500.0]
+const QUALITY_HYPER_HALF_EXTENT := TerrainImageryPlan.HYPER_HALF_EXTENT
 ## Hyper stitch target (px) per tier (an explicit [terrain] hyper_target_px still wins).
-const QUALITY_HYPER_TARGET_PX := [4096, 8192, 8192, 8192]
+const QUALITY_HYPER_TARGET_PX := TerrainImageryPlan.HYPER_TARGET_PX
 ## "Site" patch half-extent (m) per tier: the property at the best source's
 ## NATIVE resolution (ImagerySources — a county orthophoto where one is
 ## listed, else ESRI z19), BC7-compressed, over hyper. 0 = off. Hyper alone
@@ -76,8 +76,8 @@ const QUALITY_HYPER_TARGET_PX := [4096, 8192, 8192, 8192]
 ## coarser than the source; this patch keeps the walkable core native.
 ## Shrunk automatically to what fits SITE_TARGET_PX at the native zoom.
 ## Override `[terrain] site_half_extent_m` (0 disables).
-const QUALITY_SITE_HALF_EXTENT := [0.0, 400.0, 500.0, 600.0]
-const SITE_TARGET_PX := 8192
+const QUALITY_SITE_HALF_EXTENT := TerrainImageryPlan.SITE_HALF_EXTENT
+const SITE_TARGET_PX := TerrainImageryPlan.SITE_TARGET_PX
 
 ## AI "hero" patch: an opt-in Gemini-enhanced ground drape over a small square
 ## centred on the map origin, overlaid on top of hyper where the player spawns.
@@ -102,6 +102,7 @@ const MESH_RES := TerrainBuilder.DEFAULT_MESH_RES
 # surface — trees and buildings sit exactly on the ground the player sees and walks.
 const DETAIL_MESH_RES := 256
 const FPV_DRONE_SCENE := preload("res://scenes/gameplay/fpv_drone.tscn")
+const _IMAGERY_SERVICE := preload("res://core/terrain/imagery_service.gd")
 const DRONE_SPAWN_CLEARANCE_M := 0.1
 const DRONE_SPAWN_OFFSET := Vector3(5.0, 0.0, 5.0)
 
@@ -188,6 +189,24 @@ var _site_half_m := 0.0
 ## Hyper patch half-extent the CURRENT hyper drape was requested at (0 = none):
 ## the tier or the hi-res patch can change between request and arrival.
 var _hyper_half_m := 0.0
+## The half-extents of the hyper / site drapes actually ON SCREEN (the two
+## above are the latest request's): a request that fails with nothing to fall
+## back to restores these, so the layer still showing keeps its own size.
+var _hyper_drape_half := 0.0
+var _site_drape_half := 0.0
+## Per-world imagery (see "Per-world imagery"): the world's mode, its imported
+## imagery tier, the tier a failed download falls back to, the tier each layer
+## was last asked for at, and the layers that fell back this session.
+var _imagery_mode := "local"
+var _imagery_saved_tier := -1
+var _imagery_fallback_tier := -1
+var _imagery_tag_tier := {}
+var _imagery_tag_shown := {}
+## The cache key each layer was last asked for. A result with another key is
+## an earlier request finishing late (a mode switch while it downloaded) and is
+## dropped — it would otherwise put the previous mode's layer back on screen.
+var _imagery_tag_key := {}
+var _imagery_fell_back := {}
 ## A base / detail DEM that landed after its load phase had given up waiting
 ## (the world went on flat or without the hi-res patch): applied once the load
 ## sequence finishes instead of being dropped on the floor.
@@ -865,11 +884,25 @@ func _resolve_location() -> void:
 	_osm_offset_east_m = 0.0
 	_osm_offset_north_m = 0.0
 	_osm_offset_user_set = false
+	_imagery_mode = "local"
+	_imagery_saved_tier = -1
+	_imagery_fallback_tier = -1
+	_imagery_tag_tier.clear()
+	_imagery_tag_shown.clear()
+	_imagery_tag_key.clear()
+	_imagery_fell_back.clear()
 	var ctx := get_node_or_null("/root/MapContext")
 	if ctx != null and ctx.has_pending:
 		var d: Dictionary = ctx.consume()
 		_lat = float(d["latitude"])
 		_lon = float(d["longitude"])
+		var ti: Dictionary = d.get("terrain_imagery", {})
+		_imagery_saved_tier = clampi(int(ti.get("saved_tier", -1)), -1, QUALITY_TIER_COUNT - 1)
+		_imagery_mode = "saved" if str(ti.get("mode", "local")) == "saved" and _imagery_saved_tier >= 0 else "local"
+		# A download that fails falls back to the imported imagery, else to the
+		# tier this world was last shown at (still on disk from that visit).
+		_imagery_fallback_tier = _imagery_saved_tier if _imagery_saved_tier >= 0 \
+			else clampi(int(ti.get("tier", -1)), -1, QUALITY_TIER_COUNT - 1)
 		_map_label = str(d.get("label", ""))
 		var he := float(d["half_extent_m"])
 		var dhe := float(d.get("detail_half_extent_m", 0.0))
@@ -1128,6 +1161,8 @@ func _run_load_sequence() -> void:
 		img_svc.reset_session()
 	_hyper_half_m = 0.0
 	_site_half_m = 0.0
+	_hyper_drape_half = 0.0
+	_site_drape_half = 0.0
 	_late_base_dem = false
 	_late_detail_dem = false
 
@@ -1304,8 +1339,7 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img != null:
 		_phase_begin("img:detail")
-		img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(), "detail",
-			DETAIL_MAX_ZOOM, bypass)
+		_request_detail_imagery()
 		if not await _phase_await(180.0):
 			push_warning("TerrainLoader: detail imagery phase timed out — applying if ready")
 		if _detail_drape != null:
@@ -3860,8 +3894,14 @@ func _imagery_half_for_tag(tag: String) -> float:
 func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
 	if not _result_is_current(key, _imagery_half_for_tag(tag), tag + " imagery"):
 		return
+	if _imagery_tag_key.has(tag) and str(_imagery_tag_key[tag]) != key:
+		print("TerrainLoader: ignoring a late %s imagery result (%s) — %s was asked for since" % [
+			tag, key, str(_imagery_tag_key[tag]) if not str(_imagery_tag_key[tag]).is_empty() else "no layer"])
+		return
 	if tag == "hyper":
 		_hyper_drape = texture
+		_hyper_drape_half = _hyper_half_m
+		_imagery_tag_shown["hyper"] = _imagery_tag_tier.get("hyper", -1)
 		_log_load_mem("hyper img ready")
 		print("TerrainLoader: hyper roof ortho ready (%.0f m square)" % (_hyper_half_m * 2.0))
 		_apply_building_textures()
@@ -3871,6 +3911,8 @@ func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
 		return
 	if tag == "site":
 		_site_drape = texture
+		_site_drape_half = _site_half_m
+		_imagery_tag_shown["site"] = _imagery_tag_tier.get("site", -1)
 		_log_load_mem("site img ready")
 		var svc := get_node_or_null("/root/ImageryService")
 		print("TerrainLoader: site patch ready (%.0f m square) — %s" % [_site_half_m * 2.0,
@@ -3880,6 +3922,7 @@ func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
 	if tag == "detail":
 		_log_load_mem("detail img ready")
 		_detail_drape = texture
+		_imagery_tag_shown["detail"] = _imagery_tag_tier.get("detail", -1)
 		if _load_sequence_active:
 			_phase_resolve("img:detail", true)
 			if _built:
@@ -3903,19 +3946,22 @@ func _on_imagery_ready(key: String, texture: ImageTexture, tag: String) -> void:
 		if _refresh_pending.has("imagery"):
 			var img_svc := get_node_or_null("/root/ImageryService")
 			if img_svc != null:
-				img_svc.request_imagery(_lat, _lon, _detail_half_extent,
-					_detail_target_px(), "detail", DETAIL_MAX_ZOOM, true)
+				_request_detail_imagery(-1, true)
 		return
 	_img_done = true
 	_try_build()
 
 
 func _on_imagery_failed(reason: String, tag: String) -> void:
+	if tag in ["detail", "hyper", "site"] and _imagery_saved_fallback(tag):
+		return
 	if tag == "hyper":
+		_hyper_half_m = _hyper_drape_half
 		push_warning("TerrainLoader: hyper roof ortho failed (%s) — roofs use detail/procedural" % reason)
 		_request_site_imagery()
 		return
 	if tag == "site":
+		_site_half_m = _site_drape_half
 		push_warning("TerrainLoader: native site patch failed (%s) — hyper drape only" % reason)
 		return
 	if tag == "detail":
@@ -3925,6 +3971,8 @@ func _on_imagery_failed(reason: String, tag: String) -> void:
 			if img_retry != null and _detail_img_retry_zoom >= 15:
 				push_warning("TerrainLoader: detail imagery failed (%s) — retrying at z%d" % [
 					reason, _detail_img_retry_zoom])
+				_imagery_tag_key["detail"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _detail_half_extent,
+					_detail_target_px(), _detail_img_retry_zoom)
 				img_retry.request_imagery(_lat, _lon, _detail_half_extent,
 					_detail_target_px(), "detail", _detail_img_retry_zoom)
 				return
@@ -3970,50 +4018,69 @@ func _on_vegetation_progress(message: String) -> void:
 
 ## Queue the hyper roof-ortho fetch (rides ImageryService's serialized queue, so
 ## it never races the base/detail layers; result lands in _on_imagery_ready).
-func _request_hyper_imagery() -> void:
+func _request_hyper_imagery(tier: int = -1) -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img == null:
 		return
-	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
-	_hyper_half_m = _hyper_half_extent()
-	img.request_imagery(_lat, _lon, _hyper_half_m, _hyper_target_px(),
-		"hyper", HYPER_MAX_ZOOM, bypass, ImagerySources.chain_for(_lat, _lon))
+	var t := tier if tier >= 0 else _tier_for_tag("hyper")
+	_imagery_tag_tier["hyper"] = t
+	var bypass := (_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0
+	_hyper_half_m = _hyper_half_extent(t)
+	var chain := ImagerySources.chain_for(_lat, _lon)
+	_imagery_tag_key["hyper"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _hyper_half_m,
+		_hyper_target_px(t), HYPER_MAX_ZOOM, chain)
+	img.request_imagery(_lat, _lon, _hyper_half_m, _hyper_target_px(t),
+		"hyper", HYPER_MAX_ZOOM, bypass, chain)
 
 
 ## Half-extent (m) the site patch is fetched at: the tier's (or the config
 ## override), shrunk so the native zoom fits SITE_TARGET_PX. 0 = off.
-func _site_half_extent() -> float:
-	var want := float(QUALITY_SITE_HALF_EXTENT[_quality_tier()])
-	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) == OK and cfg.has_section_key("terrain", "site_half_extent_m"):
-		want = float(cfg.get_value("terrain", "site_half_extent_m", want))
-	if want <= 1.0:
-		return 0.0
-	var chain := ImagerySources.chain_for(_lat, _lon)
-	var z := ImagerySources.native_zoom(chain, _lat)
-	# 0.95: pick_zoom measures the bbox in tiles, and a bbox straddling tile
-	# edges costs one extra column.
-	var fit := float(SITE_TARGET_PX) * ImagerySources.metres_per_px(z, _lat) * 0.5 * 0.95
-	return TerrainExtents.overlay_half(minf(want, fit), _detail_half_extent)
+func _site_half_extent(tier: int = -1) -> float:
+	var l := TerrainImageryPlan.layer("site", tier if tier >= 0 else _imagery_tier(), _lat, _lon,
+		_detail_half_extent, TerrainImageryPlan.config_overrides())
+	return 0.0 if l.is_empty() else float(l["half"])
 
 
 ## Queue the native-resolution site patch (after hyper, so it never delays
 ## the walkable drape). BC7 on a worker thread; the layer pops in when done.
-func _request_site_imagery() -> void:
+func _request_site_imagery(tier: int = -1) -> void:
 	var img := get_node_or_null("/root/ImageryService")
 	if img == null:
 		return
-	var half := _site_half_extent()
+	var t := tier if tier >= 0 else _tier_for_tag("site")
+	var half := _site_half_extent(t)
 	if half <= 0.0:
+		_imagery_tag_tier["site"] = t
+		_imagery_tag_key["site"] = ""
+		_site_half_m = 0.0
+		if _site_drape != null:
+			# This tier has no site patch (a live switch to Low imagery).
+			_site_drape = null
+			_site_half_m = 0.0
+			_site_drape_half = 0.0
+			_imagery_tag_shown.erase("site")
+			_set_site_patch_off()
 		return
+	_imagery_tag_tier["site"] = t
 	var chain := ImagerySources.chain_for(_lat, _lon)
 	var z := ImagerySources.native_zoom(chain, _lat)
-	var bypass := _force_refetch or not TerrainCacheSettings.cache_enabled()
+	var bypass := (_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0
 	_site_half_m = half
 	print("TerrainLoader: site patch %.0f m square at z%d from %s (%.2f m/px)" % [
 		half * 2.0, z, " -> ".join(PackedStringArray(chain)),
 		ImagerySources.metres_per_px(z, _lat)])
+	_imagery_tag_key["site"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, half, SITE_TARGET_PX, z, chain)
 	img.request_imagery(_lat, _lon, half, SITE_TARGET_PX, "site", z, bypass, chain, true)
+
+
+func _set_site_patch_off() -> void:
+	var terrain := _main.get_node_or_null("Terrain") as Node3D if _main != null else null
+	if terrain == null:
+		return
+	for child_name in ["Ground", "DetailGround"]:
+		var mi := terrain.get_node_or_null(child_name) as MeshInstance3D
+		if mi != null and mi.material_override is ShaderMaterial:
+			(mi.material_override as ShaderMaterial).set_shader_parameter("use_site", false)
 
 
 ## Stamp the site patch onto the terrain drape shaders (over hyper).
@@ -4042,37 +4109,151 @@ func _apply_site_to_terrain(terrain: Node3D = null) -> void:
 		sm.set_shader_parameter("site_feather", site_feather_uv)
 
 
-func _hyper_target_px() -> int:
+func _hyper_target_px(tier: int = -1) -> int:
 	# An explicit manual override (low-VRAM machines) always wins; otherwise the
 	# selected quality tier drives it.
 	var cfg := ConfigFile.new()
 	if cfg.load(CONFIG_PATH) == OK and cfg.has_section_key("terrain", "hyper_target_px"):
 		return int(cfg.get_value("terrain", "hyper_target_px", HYPER_TARGET_PX_DEFAULT))
-	return int(QUALITY_HYPER_TARGET_PX[_quality_tier()])
+	return int(QUALITY_HYPER_TARGET_PX[tier if tier >= 0 else _imagery_tier()])
 
 
-## Current terrain imagery quality tier (0..QUALITY_TIER_COUNT-1), from config.
+## This COMPUTER's terrain imagery quality tier (0..QUALITY_TIER_COUNT-1),
+## from config — the Terrain options slider. What this world shows can differ:
+## see _imagery_tier().
 func _quality_tier() -> int:
-	var cfg := ConfigFile.new()
-	if cfg.load(CONFIG_PATH) == OK:
-		return clampi(int(cfg.get_value("terrain", "quality_tier", QUALITY_TIER_DEFAULT)),
-			0, QUALITY_TIER_COUNT - 1)
-	return QUALITY_TIER_DEFAULT
+	return TerrainImageryPlan.local_tier()
 
 
-## Detail-drape stitch target (px) for the current quality tier.
-func _detail_target_px() -> int:
-	return int(QUALITY_DETAIL_TARGET_PX[_quality_tier()])
+## Detail-drape stitch target (px) for `tier` (default: the tier this world shows).
+func _detail_target_px(tier: int = -1) -> int:
+	return int(QUALITY_DETAIL_TARGET_PX[tier if tier >= 0 else _imagery_tier()])
 
 
-## Hyper (sharpest) layer half-extent (m) for the current quality tier, never
-## past the hi-res patch (TerrainExtents.overlay_half): on High / Ultra the
-## 1–1.5 km hyper square used to reach beyond a smaller hi-res patch, so the
-## sharpest photo lay on the coarse world mesh and its edge cut across the
-## hi-res terrain's.
-func _hyper_half_extent() -> float:
+## Hyper (sharpest) layer half-extent (m) for `tier`, never past the hi-res
+## patch (TerrainExtents.overlay_half): on High / Ultra the 1–1.5 km hyper
+## square used to reach beyond a smaller hi-res patch, so the sharpest photo
+## lay on the coarse world mesh and its edge cut across the hi-res terrain's.
+func _hyper_half_extent(tier: int = -1) -> float:
 	return TerrainExtents.overlay_half(
-		float(QUALITY_HYPER_HALF_EXTENT[_quality_tier()]), _detail_half_extent)
+		float(QUALITY_HYPER_HALF_EXTENT[tier if tier >= 0 else _imagery_tier()]), _detail_half_extent)
+
+
+# -- Per-world imagery ------------------------------------------------------------
+#
+# A shared world arrives with its author's imagery cached at the AUTHOR's tier,
+# while the quality setting is this computer's. MapContext hands the loader the
+# world's record ({"tier": author's tier, "mode": "saved" | "local"}):
+#   saved — each layer of the author's tier that is on disk loads from it, as
+#           the author saw it (a layer it lacks falls back to this computer's
+#           tier). The default for an imported world.
+#   local — this computer's tier, downloaded if not cached. A layer that fails
+#           (offline, server error) loads the saved tier's copy from disk
+#           instead (_imagery_saved_fallback), so it never goes blurry.
+# Nothing is ever deleted; switching back is instant.
+
+## The tier this world shows: the saved tier in "saved" mode, else this computer's.
+func _imagery_tier() -> int:
+	if _imagery_mode == "saved" and _imagery_saved_tier >= 0:
+		return _imagery_saved_tier
+	return _quality_tier()
+
+
+## The tier to ask for for one layer: in "saved" mode the saved tier when that
+## layer is on disk (no surprise download of the author's bigger layers) or
+## when the saved tier has no such layer at all (Low has no site patch: it
+## stays off, as it was saved); otherwise this computer's.
+func _tier_for_tag(tag: String) -> int:
+	if _imagery_mode == "saved" and _imagery_saved_tier >= 0 and _imagery_saved_tier != _quality_tier():
+		var l := TerrainImageryPlan.layer(tag, _imagery_saved_tier, _lat, _lon, _detail_half_extent,
+			TerrainImageryPlan.config_overrides())
+		if l.is_empty() or TerrainImageryPlan.is_cached(l):
+			return _imagery_saved_tier
+	return _quality_tier()
+
+
+## A layer failed. If the saved tier has that layer on disk and it is not what
+## just failed, load it instead. True when a fallback was queued.
+func _imagery_saved_fallback(tag: String) -> bool:
+	var saved := _imagery_fallback_tier
+	if saved < 0 or int(_imagery_tag_tier.get(tag, -1)) == saved:
+		return false
+	var l := TerrainImageryPlan.layer(tag, saved, _lat, _lon, _detail_half_extent,
+		TerrainImageryPlan.config_overrides())
+	if not TerrainImageryPlan.is_cached(l):
+		return false
+	push_warning("TerrainLoader: %s imagery could not be downloaded — using the saved %s copy" % [
+		tag, TerrainImageryPlan.tier_name(saved)])
+	_imagery_fell_back[tag] = true
+	match tag:
+		"detail":
+			_request_detail_imagery(saved)
+		"hyper":
+			_request_hyper_imagery(saved)
+		"site":
+			_request_site_imagery(saved)
+	return true
+
+
+## Queue the detail drape at `tier` (default: per _tier_for_tag).
+func _request_detail_imagery(tier: int = -1, force: bool = false) -> void:
+	var img := get_node_or_null("/root/ImageryService")
+	if img == null:
+		return
+	var t := tier if tier >= 0 else _tier_for_tag("detail")
+	_imagery_tag_tier["detail"] = t
+	var bypass := force or ((_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0)
+	_imagery_tag_key["detail"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _detail_half_extent,
+		_detail_target_px(t), DETAIL_MAX_ZOOM)
+	img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(t), "detail",
+		DETAIL_MAX_ZOOM, bypass)
+
+
+## What this world's imagery is doing, for the world panel and Terrain options.
+## {mode, saved_tier, local_tier, shown {tag: tier ON SCREEN},
+##  requested {tag: tier last asked for}, fell_back [tags],
+##  saved_cached Vector2i(on disk, layers), vram_saved, vram_local}
+func get_world_imagery() -> Dictionary:
+	var ov := TerrainImageryPlan.config_overrides()
+	var local := _quality_tier()
+	var out := {"mode": _imagery_mode, "saved_tier": _imagery_saved_tier, "local_tier": local,
+		"shown": _imagery_tag_shown.duplicate(), "requested": _imagery_tag_tier.duplicate(),
+		"fell_back": _imagery_fell_back.keys(),
+		"vram_local": TerrainImageryPlan.vram_bytes(local, _lat, _lon, _detail_half_extent, ov)}
+	if _imagery_saved_tier >= 0:
+		out["vram_saved"] = TerrainImageryPlan.vram_bytes(_imagery_saved_tier, _lat, _lon, _detail_half_extent, ov)
+		out["saved_cached"] = TerrainImageryPlan.cached_count(_imagery_saved_tier, _lat, _lon, _detail_half_extent, ov)
+	return out
+
+
+## Switch this world between its saved imagery and this computer's quality,
+## live: the detail drape is re-requested (from disk when it is there) and
+## chains on to hyper and the site patch, each falling back to the saved copy
+## if a download fails. The world's record is written on the next save
+## (world_extras "terrain_imagery").
+func set_world_imagery_mode(mode: String) -> void:
+	var m := "saved" if mode == "saved" else "local"
+	if m == _imagery_mode:
+		return
+	_imagery_mode = m
+	_imagery_fell_back.clear()
+	if not _built or _load_sequence_active:
+		return
+	_begin_refresh("imagery")
+	_detail_img_retry_zoom = -1
+	_request_detail_imagery()
+	print("TerrainLoader: world imagery → %s (%s) — reloading the drape" % [m,
+		TerrainImageryPlan.tier_name(_imagery_tier())])
+
+
+## For the world record (WorldSession folds it into world.json on every save):
+##   tier       — what this world is shown at now. The next person it is
+##                shared with gets this as their "saved" imagery, and a later
+##                load here falls back to it if a download fails.
+##   saved_tier — the imported imagery's tier (-1 for a world made here).
+##   mode       — "saved" | "local".
+func world_imagery_record() -> Dictionary:
+	return {"tier": _imagery_tier(), "saved_tier": _imagery_saved_tier, "mode": _imagery_mode}
 
 
 ## --- Terrain imagery quality (public API for the settings UI) ---------------
@@ -4101,6 +4282,12 @@ func set_terrain_quality(tier: int) -> void:
 		return
 	_save_terrain_config_value("quality_tier", t)
 	if not _built or _load_sequence_active:
+		return
+	if _imagery_mode == "saved":
+		# This world shows its saved imagery; the slider applies to it once
+		# the world panel switches it to this computer's quality.
+		print("TerrainLoader: terrain quality → %s; this world keeps its saved %s imagery" % [
+			QUALITY_TIER_NAMES[t], TerrainImageryPlan.tier_name(_imagery_saved_tier)])
 		return
 	_begin_refresh("imagery")
 	_begin_detail_imagery_refetch()
@@ -7804,12 +7991,10 @@ func _begin_imagery_refetch(force: bool = false) -> void:
 ## tier change doesn't re-download the tier-independent base drape.
 func _begin_detail_imagery_refetch() -> void:
 	_detail_img_retry_zoom = -1
-	var img := get_node_or_null("/root/ImageryService")
-	if img == null:
+	if get_node_or_null("/root/ImageryService") == null:
 		push_warning("TerrainLoader: ImageryService unavailable")
 		return
-	img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(),
-		"detail", DETAIL_MAX_ZOOM, true)
+	_request_detail_imagery(-1, true)
 
 
 func _begin_osm_vectors_refetch() -> void:

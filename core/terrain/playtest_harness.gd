@@ -8194,6 +8194,21 @@ func _run_assetpack_import_capture() -> void:
 		fails += 1
 		_maybe_quit()
 		return
+	# A pack with game art: the modal imports it in a background Godot and only
+	# then offers the restart. Playing before that loads models that are not
+	# imported yet, which is exactly what a player must never see — wait.
+	var ins: AssetPackInstaller = im.get("_installer")
+	if ins != null and ins.needs_reimport():
+		var t1 := Time.get_ticks_msec()
+		while int(im.get("_reimport_pid")) >= 0 and Time.get_ticks_msec() - t1 < 1800000:
+			await tree.process_frame
+		var lbl := im.get("_reimport_lbl") as Label
+		var art_ok := lbl != null and lbl.text.begins_with("The new art is imported")
+		print("assetpack-import: art import %s — %d file(s) in %.1f s" % ["PASS" if art_ok else "FAIL",
+			int(ins.result.get("art_files", 0)), (Time.get_ticks_msec() - t1) / 1000.0])
+		await _shoot_ui(dir, "03b_art_imported")
+		if not art_ok:
+			fails += 1
 	var target: Dictionary = {}
 	for r in recs:
 		if (r as Dictionary).has("imported_from"):

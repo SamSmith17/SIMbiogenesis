@@ -68,6 +68,9 @@ static func build_snapshot(main: Node) -> Dictionary:
 		extras["riding"] = riding
 	if FileAccess.file_exists(SOLAR_CONFIG_PATH):
 		extras["solar_config"] = FileAccess.get_file_as_string(SOLAR_CONFIG_PATH)
+	var loader := main.get_node_or_null("TerrainLoader")
+	if loader != null and loader.has_method("world_imagery_record"):
+		extras["terrain_imagery"] = loader.call("world_imagery_record")
 	snap["world_extras"] = extras
 	return snap
 
@@ -271,7 +274,21 @@ static func launch(rec: Dictionary, opts: Dictionary = {}) -> Error:
 				ohe = ohe if ohe > 0.0 else float(meta.get("osm_half_extent_m", 0.0))
 			ctx.call("set_pending", float(map.get("lat", 0.0)), float(map.get("lon", 0.0)),
 				str(map.get("label", "")), he, has_snap, dhe, ohe, bool(opts.get("force_refetch", false)))
+			ctx.set("terrain_imagery", imagery_record(rec, snap))
 	return switch_scene(MapDefinition.resolve_playable_scene_path(scene), rec, cfg)
+
+
+## The world's imagery record ({"tier", "saved_tier", "mode"}): world.json's
+## (the Share window and the world panel write the mode there), else the
+## snapshot's, else {} (this computer's quality, no fallback).
+static func imagery_record(rec: Dictionary, snap: Dictionary = {}) -> Dictionary:
+	var ti: Variant = rec.get("terrain_imagery", null)
+	if ti is Dictionary and not (ti as Dictionary).is_empty():
+		return (ti as Dictionary).duplicate()
+	var extras: Variant = snap.get("world_extras", {})
+	if extras is Dictionary and (extras as Dictionary).get("terrain_imagery", null) is Dictionary:
+		return ((extras as Dictionary)["terrain_imagery"] as Dictionary).duplicate()
+	return {}
 
 
 ## Save, then back to the map chooser (which runs with no world active).

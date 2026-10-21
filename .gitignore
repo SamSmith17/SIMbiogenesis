@@ -5,9 +5,13 @@
 # across machines at the cost of larger diffs and merge noise.
 *.import
 
-# Local export outputs (see export_presets.cfg paths under build/)
-build/
-export/
+# Local export outputs (see export_presets.cfg paths under build/).
+# ANCHORED to the repo root: an unanchored `build/` also matched the
+# core/linkage/build/ source module, which then never reached GitHub and
+# a fresh clone could not compile (2026-10-20).
+/build/
+/export/
+/release/
 
 # OS
 .DS_Store
@@ -43,8 +47,12 @@ desktop.ini
 **/communities/
 **/*.simcommunity
 
-# Godot headless / import TMP artifacts
+# Godot headless / import TMP artifacts, and the editor's hot-reload copies
+# of GDExtension libraries (it recreates them on every load)
 **/~*.TMP
+**/~*.dll
+**/~*.so
+**/~*.dylib
 **/*~RF*.TMP
 
 # HA data exports and site-specific reports (never commit real entity history)
@@ -135,3 +143,6 @@ __pycache__/
 # Claude Code local state (the shared .claude/ settings, if any, stay tracked)
 .claude/settings.local.json
 .claude/worktrees/
+
+# Temporary uid tables tools/release/build_release.py writes during a build
+/art_uids/

@@ -15,12 +15,14 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="SIMbiogenesis"
+config/version="0.1.0"
 run/main_scene="res://scenes/ui/map_select/map_select.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://assets/ui/icon.png"
 
 [autoload]
 
+ArtPacks="*res://core/art_packs.gd"
 Services="*res://core/services.gd"
 PerfMonitor="*res://core/perf/perf_monitor.gd"
 DeviceRegistry="*res://power_system/core/device_registry.gd"

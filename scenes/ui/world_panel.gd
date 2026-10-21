@@ -20,6 +20,7 @@ var _copy_name: LineEdit = null
 var _adopt_btn: Button = null
 var _world_btns: Array[Button] = []
 var _accum := 0.0
+var _imagery: TerrainImageryChoice = null
 
 
 func _ready() -> void:
@@ -127,6 +128,10 @@ func _build() -> void:
 		+ "the clock, your battery and the people's state are saved every 3 minutes, on Save now, "
 		+ "and when you exit — Play from the menu puts you back exactly here.")
 	v.add_child(note)
+	_imagery = TerrainImageryChoice.create()
+	_imagery.visible = false
+	_imagery.mode_chosen.connect(_on_imagery_mode_chosen)
+	v.add_child(_imagery)
 
 	var row1 := HBoxContainer.new()
 	row1.add_theme_constant_override("separation", 8)
@@ -224,7 +229,42 @@ func _utc_offset_s() -> float:
 	return float(Time.get_time_zone_from_system().get("bias", 0)) * 60.0
 
 
+func _loader() -> Node:
+	return _main.get_node_or_null("TerrainLoader") if _main != null else null
+
+
+## The terrain imagery choice, shown only for a world whose saved imagery was
+## made at another quality than this computer's (a world from a friend).
+func _refresh_imagery() -> void:
+	var loader := _loader()
+	if loader == null or not loader.has_method("get_world_imagery"):
+		_imagery.visible = false
+		return
+	var st: Dictionary = loader.call("get_world_imagery")
+	_imagery.visible = TerrainImageryChoice.has_choice(st)
+	if not _imagery.visible:
+		return
+	_imagery.show_summary(st)
+	var fell: Array = st.get("fell_back", [])
+	_imagery.set_status("" if fell.is_empty() or str(st.get("mode", "")) == "saved" else
+		"Could not download all of it (offline?) — showing the saved %s imagery for: %s." % [
+		TerrainImageryPlan.tier_name(int(st.get("saved_tier", -1))), ", ".join(PackedStringArray(fell))])
+
+
+func _on_imagery_mode_chosen(mode: String) -> void:
+	var loader := _loader()
+	if loader == null:
+		return
+	loader.call("set_world_imagery_mode", mode)
+	if WorldPaths.has_active_world():
+		WorldSession.save_now(_main, false, false)   # world.json remembers the choice
+	_status.text = ("Showing the imagery as it was saved." if mode == "saved"
+		else "Loading the imagery at this computer's quality …")
+	_refresh_imagery()
+
+
 func _refresh_holds() -> void:
+	_refresh_imagery()
 	for c in _holds.get_children():
 		_holds.remove_child(c)
 		c.queue_free()
