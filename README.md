@@ -43,16 +43,26 @@ Every mode is shown with screenshots in the [feature tour](#what-it-does) below 
 
 ### Download and first run
 
+**Just want to play?** Download the zip for your computer from the
+[Releases](https://github.com/SamSmith17/SIMbiogenesis/releases) page, unzip it
+and run it. Put the optional `simbiogenesis-art-*.pck` files from the same page
+next to the game for the built-in maps and detailed models. The release notes
+have the macOS and Linux details, and [docs/RELEASES.md](docs/RELEASES.md) has
+the whole picture.
+
+**From the source:**
+
 1. **Get the code:**
    ```bash
    git clone https://github.com/SamSmith17/SIMbiogenesis.git
    ```
    You can also use **Code → Download ZIP** on GitHub and unzip it.
-2. **Open it in Godot.** Start Godot 4.7.1, choose **Import** in the Project Manager, and select the `project.godot` file in the folder.
+2. **Open it in Godot.** Start Godot **4.7.1** (check the version: another one may not open the project), choose **Import** in the Project Manager, and select the `project.godot` file in the folder.
 3. **Wait for the first import.** Imported-asset caches are not stored in git, so the first time Godot opens the project it imports every texture and model. That takes a few minutes. Later opens are fast.
 4. **Press F5 (Run Project).** The launch hub opens: your worlds on the left and an energy map of the planet.
 5. **Make a world.** Click a place on the map (or search an address), then press **New world here ⊕**. A new site takes about 15–60 s on the first visit while its data downloads; cached sites start in seconds.
 6. **Look around.** Walk with **WASD** and **Shift**. Press **G** for the systems graph, **F1** for the in-game help and key list, **Tab** for a drone view, and **F5** for third person.
+7. **Got a friend's worlds?** Drop their `.simpack.zip` onto the game window (or **Share… → Install a pack** in the hub) and press **Install**. If the pack carries game art, the Share window imports it and then asks you to **Restart now**; after that their worlds open exactly as they left them.
 
 No accounts or API keys are needed: elevation (Open-Meteo / Copernicus), imagery (Esri World Imagery), OpenStreetMap and weather (Open-Meteo) all work without keys.
 
@@ -203,9 +213,12 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 
 ## Building an export
 
-1. Install the **export templates** that match your editor (Editor → Manage Export Templates).
-2. Open **Project → Export**. Presets for Windows, macOS and Linux are in `export_presets.cfg`, and each writes into `build/`, which is gitignored.
-3. Before you distribute a macOS build, set a real bundle ID and signing identity. The preset ships with the placeholder `com.simbio.genesis.beta`.
+`python tools/release/build_release.py` builds the Windows, macOS and Linux
+zips and the optional art add-on into `release/<version>/`. Run
+`python tools/release/install_export_templates.py` once first. Details,
+including macOS signing and how the art add-on is found, are in
+**[docs/RELEASES.md](docs/RELEASES.md)**. **Project → Export** in the editor
+uses the same presets and writes into `build/`.
 
 ## For developers
 

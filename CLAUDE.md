@@ -29,6 +29,70 @@ commit URLs or tokens).
   `python tools/checks/res_path_audit.py` — it lists every `res://` path and
   relative Markdown link whose target is missing.
 
+## Releases + fresh clones (2026-10-20, docs/RELEASES.md)
+
+- **A fresh clone must compile.** An unanchored `build/` in `.gitignore`
+  hid `core/linkage/build/` from GitHub, and every clone failed with
+  "LinkageBuildSteps not declared". Anchor every output-folder rule
+  (`/build/`, `/release/`). Before pushing, run
+  `python tools/checks/ignored_source_audit.py`: it fails on any ignored
+  `.gd` / `.tscn` / `.gdshader` / `.uid` outside the art folders and
+  local-only folders.
+- **Releases:** `python tools/release/build_release.py` (templates:
+  `tools/release/install_export_templates.py`). It writes
+  `release/<version>/` (gitignored, `.gdignore`d), containing:
+  - three game zips with NO gitignored art;
+  - the art add-on, `simbiogenesis-art-{mars,soak,starshade,models}.pck`,
+    each under GitHub's 2 GiB asset limit (`ART_PACKS` groups);
+  - `SHA256SUMS.txt` and the release notes.
+
+  `GAME_EXCLUDE` / `GAME_INCLUDE` in the script are the ONE filter list. The
+  script syncs them into the committed presets, so the editor's
+  Project → Export makes the same build.
+- **`ArtPackMount` (core/art_packs.gd) is the FIRST autoload** (`ArtPacks`).
+  In an exported game it mounts every `simbiogenesis-art-*.pck` found beside
+  the executable (also `art/`, macOS `Contents/Resources` and beside the
+  `.app`, `user://art/`, `--art-dir=`). It mounts with
+  `replace_files = false`, so code always comes from the game build.
+- **Exported builds have no `project.godot`** and list `res://` folders as
+  `X.import` / `X.remap`. `InputOverrides.project_actions` falls back to
+  `ProjectSettings` for that reason. Any new `DirAccess` listing of
+  `res://` must strip those suffixes; the NPC rig, tour catalog and Linkage
+  presets already do. A loose file opened with `FileAccess` needs its
+  extension in `GAME_INCLUDE`.
+- **The friend's path**, rehearsed by `<clone>\tools\harness.ps1 -EmptyUser
+  -Capture assetpack-import -UserArgs @("--import=<pack>")`: it installs the
+  pack, WAITS for the Share window's background art import, then plays.
+  Closing the Share window mid-import keeps it alive, and it reopens with
+  Restart now.
+- **Per-world terrain imagery** (`TerrainImageryPlan`, the "Per-world imagery"
+  block in terrain_loader). The quality tier is per COMPUTER
+  (terrain_config.cfg), but cache keys are site + square + zoom, so a pack's
+  layers at the author's tier were never loaded on a friend's tier. Now:
+  - `world.json` `terrain_imagery` = `{tier` (shown at, recorded on every
+    save via world_extras), `saved_tier` (the imported imagery's, -1 for a
+    world made here), `mode` "saved" | "local"`}`.
+  - The installer sets `mode: "saved"`. Its tier comes from the record, or
+    from `infer_tier` over the cached files for older packs.
+  - In saved mode a layer the saved tier has on disk (or does not have at
+    all) is shown at that tier.
+  - In local mode a layer that fails (`_on_imagery_failed`) re-requests the
+    saved tier's copy from disk, or the last-shown tier's for a world made
+    here.
+  - `_hyper_drape_half` / `_site_drape_half` keep the size of the drape on
+    screen when a request fails with no fallback.
+  - The UI is `TerrainImageryChoice`, in the Share install screen and the
+    world panel.
+  - `ImageryService.offline_for_test` / `--imagery-offline` makes every
+    download fail, which is how the fallback is tested.
+  - Caches made before the source-chain change are named without the
+    `_esri_clarity` (or regional) suffix. Since 2026-10-20 a chained layer
+    also loads that plain-ESRI file (`ImageryService.cache_candidates`:
+    own name → img_v1_ → plain), with ESRI attribution. Before that, those
+    files were ignored and re-downloaded, which made the author's pack read
+    as Low instead of Ultra. `TerrainImageryPlan.is_cached` uses the same
+    list, so inference and loading always agree.
+
 ## Validation (run before every commit)
 
 ### Harness rules (user, 2026-10-12): read before running ANY windowed capture
@@ -680,6 +744,19 @@ Godot.exe.exe --headless --path . --quit-after 120
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/soak_festival_2026.tscn
 Godot.exe.exe --headless --path . --quit-after 120 res://scenes/maps/mars_aerial.tscn
 
+# Per-world terrain imagery (offline — TerrainImageryPlan: the loader's tier
+# tables ARE the plan's, layer keys == ImageryService.layer_key, infer_tier
+# off fake cache files at a coordinate nobody plays (deleted after),
+# record_for_import precedence, GPU cost, when the choice is offered;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/terrain/terrain_imagery_plan_selftest.gd
+# The same end to end on a friend's side: install a pack with
+# `tools\harness.ps1 -EmptyUser -Capture assetpack-import -UserArgs @("--import=<pack>")`,
+# then with APPDATA at that sandbox run
+# `Godot --path . -- --world=<id> --run-script=res://tools/checks/terrain_imagery_check.gd`.
+# It covers saved -> my quality OFFLINE (the cached layers load at my tier,
+# the rest fall back to the saved copy) -> online -> saved again, and that
+# world.json follows each switch.
 # Map extents (offline — TerrainExtents side/half + clamps + overlay cap, the
 # stale-result key test against the REAL elevation/imagery key formats, the
 # elevation source ladder, tiling + stitch == one request, retry delay;

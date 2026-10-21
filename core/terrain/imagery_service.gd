@@ -50,9 +50,17 @@ var _pending: Array[Dictionary] = []
 var _job_seq := 0
 
 
+## Test switch: every download fails as a dropped connection does (cached
+## layers still load). Set by checks, or `--imagery-offline` after "--".
+static var offline_for_test := false
+
+
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
 	_ensure_http()
+	if "--imagery-offline" in OS.get_cmdline_user_args():
+		offline_for_test = true
+		print("ImageryService: --imagery-offline — every download will fail")
 
 
 func _ensure_http() -> void:
@@ -112,25 +120,26 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
 	var chain: Array = sources.duplicate() if not sources.is_empty() else ImagerySources.default_chain()
-	var key := _cache_key(lat, lon, half_extent_m, z)
-	var ck := ImagerySources.chain_key(chain)
-	if not ck.is_empty():
-		key += "_" + ck
-	var cache_path := "%s/%s.png" % [CACHE_DIR, key]
+	var key := layer_key(lat, lon, half_extent_m, target_px, max_zoom, sources)
+	var cache_path := cache_path_for(key)
 	if not force_refetch and TerrainCacheSettings.cache_enabled():
 		var img := Image.new()
 		var loaded := false
-		if FileAccess.file_exists(cache_path) and img.load(cache_path) == OK:
-			loaded = true
-		else:
-			# Pre-v3 exact-bbox crops work with shader Mercator correction.
-			var legacy := cache_path.replace("img_v3_", "img_v1_")
-			if FileAccess.file_exists(legacy) and img.load(legacy) == OK:
-				print("ImageryService: '%s' layer from legacy cache (%s)" % [tag, legacy.get_file()])
+		var from := ""
+		for cand in cache_candidates(key):
+			if FileAccess.file_exists(cand) and img.load(cand) == OK:
 				loaded = true
+				from = cand
+				break
 		if loaded:
+			var pk := plain_key(key)
+			var plain := not pk.is_empty() and (from == cache_path_for(pk)
+				or from == cache_path_for(pk).replace("img_v3_", "img_v1_"))
+			if from != cache_path:
+				print("ImageryService: '%s' layer from an older cache file (%s)" % [tag, from.get_file()])
 			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
-			_attrib_by_tag[tag] = ImagerySources.attribution_for(_cached_sources(key, chain))
+			# A pre-source-chain file is a plain ESRI mosaic.
+			_attrib_by_tag[tag] = ImagerySources.attribution_for(["esri"] if plain else _cached_sources(key, chain))
 			if hq:
 				_emit_hq_async(key, img, tag)
 			else:
@@ -179,6 +188,9 @@ func _start_next() -> void:
 
 
 func _fire_tile() -> void:
+	if offline_for_test:
+		_fail.call_deferred("offline (test)")
+		return
 	_ensure_http()
 	var tiles: Array = _job["tiles"]
 	var t: Vector2i = tiles[int(_job["idx"])]
@@ -328,7 +340,7 @@ func _emit_hq_async(key: String, img: Image, tag: String) -> void:
 	var task := func() -> void:
 		if not work.has_mipmaps():
 			work.generate_mipmaps()
-		if work.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
+		if can_compress_bc() and work.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
 			work.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
 		_emit_hq_done.call_deferred(key, work, tag)
 	_hq_tasks[key] = WorkerThreadPool.add_task(task, false, "imagery_bc7_%s" % tag)
@@ -413,8 +425,17 @@ static func _make_drape_texture(img: Image) -> ImageTexture:
 	if img.get_width() >= 1024:
 		if not img.has_mipmaps():
 			img.generate_mipmaps()
-		img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
+		if can_compress_bc():
+			img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
 	return ImageTexture.create_from_image(img)
+
+
+## Godot's BC compressors (cvtt / betsy) are editor-only modules: an exported
+## game has none, and Image.compress() then logs an engine error and leaves
+## the image as RGBA8. Releases therefore upload drapes uncompressed (about 4x
+## the VRAM of DXT1); asking first keeps the error out of every load.
+static func can_compress_bc() -> bool:
+	return not OS.has_feature("template")
 
 
 func _fail(reason: String) -> void:
@@ -423,6 +444,69 @@ func _fail(reason: String) -> void:
 	_job = {}
 	imagery_failed.emit(reason, tag)
 	_start_next()
+
+
+## The cache key request_imagery() uses for these arguments — the one place
+## it is computed, so TerrainImageryPlan's "is this layer cached?" can never
+## disagree with the request it predicts.
+static func layer_key(lat: float, lon: float, half_extent_m: float, target_px: int,
+		max_zoom: int, sources: Array = []) -> String:
+	var z := GeoMath.pick_zoom(GeoMath.bbox_for(lat, lon, half_extent_m), target_px, max_zoom)
+	var chain: Array = sources if not sources.is_empty() else ImagerySources.default_chain()
+	var key := _cache_key(lat, lon, half_extent_m, z)
+	var ck := ImagerySources.chain_key(chain)
+	if not ck.is_empty():
+		key += "_" + ck
+	return key
+
+
+static func cache_path_for(key: String) -> String:
+	return "%s/%s.png" % [CACHE_DIR, key]
+
+
+## The files a layer may already be cached as, best first:
+##   1. its own name;
+##   2. the pre-v3 name (img_v1_…, exact-bbox crops the shader still corrects);
+##   3. for a layer fetched through a source chain (hyper, site: the key ends
+##      "_esri_clarity" or a regional source id), the name it had BEFORE source
+##      chains existed — the same square at the same zoom, as a plain ESRI
+##      mosaic. Every chain ends in ESRI, so that is the chain's last resort
+##      anyway, and it keeps caches (and shared packs) made before the chains
+##      from being ignored and downloaded again.
+static func cache_candidates(key: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var p := cache_path_for(key)
+	out.append(p)
+	out.append(p.replace("img_v3_", "img_v1_"))
+	var pk := plain_key(key)
+	if not pk.is_empty():
+		var pp := cache_path_for(pk)
+		out.append(pp)
+		out.append(pp.replace("img_v3_", "img_v1_"))
+	return out
+
+
+## The first file in cache_candidates() that exists, "" when none.
+static func cached_file_for_key(key: String) -> String:
+	for c in cache_candidates(key):
+		if FileAccess.file_exists(c):
+			return c
+	return ""
+
+
+## A chained layer's key without its source suffix ("img_v3_…_z18_esri_clarity"
+## -> "img_v3_…_z18"); "" for a key that has none.
+static func plain_key(key: String) -> String:
+	var at := key.rfind("_z")
+	if at < 0:
+		return ""
+	var rest := key.substr(at + 2)
+	var digits := 0
+	while digits < rest.length() and rest[digits] >= "0" and rest[digits] <= "9":
+		digits += 1
+	if digits == 0 or digits >= rest.length() or rest[digits] != "_":
+		return ""
+	return key.substr(0, at + 2 + digits)
 
 
 static func _cache_key(lat: float, lon: float, half_extent_m: float, z: int) -> String:

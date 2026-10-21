@@ -403,6 +403,9 @@ static func record_save(id: String, snap: Dictionary, summary: Dictionary = {},
 	rec["game_time"] = _game_time_of(snap)
 	if not summary.is_empty():
 		rec["summary"] = summary
+	var extras: Variant = snap.get("world_extras", {})
+	if extras is Dictionary and (extras as Dictionary).get("terrain_imagery", null) is Dictionary:
+		rec["terrain_imagery"] = ((extras as Dictionary)["terrain_imagery"] as Dictionary).duplicate()
 	return save_record(rec, root)
 
 

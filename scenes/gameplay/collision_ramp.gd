@@ -69,7 +69,7 @@ func _setup_nodes() -> void:
 		_collision_shape = CollisionShape3D.new()
 		_collision_shape.name = "CollisionShape3D"
 		add_child(_collision_shape)
-		if Engine.is_editor_hint() and get_tree() != null and get_tree().edited_scene_root != null:
+		if Engine.is_editor_hint() and is_inside_tree() and get_tree().edited_scene_root != null:
 			_collision_shape.owner = get_tree().edited_scene_root
 	
 	_debug_mesh = get_node_or_null("DebugMesh")
@@ -78,7 +78,7 @@ func _setup_nodes() -> void:
 		_debug_mesh.name = "DebugMesh"
 		_debug_mesh.visible = false
 		add_child(_debug_mesh)
-		if Engine.is_editor_hint() and get_tree() != null and get_tree().edited_scene_root != null:
+		if Engine.is_editor_hint() and is_inside_tree() and get_tree().edited_scene_root != null:
 			_debug_mesh.owner = get_tree().edited_scene_root
 
 func _update_shape() -> void:

@@ -176,7 +176,7 @@ static func project_actions() -> Dictionary:
 	var out := {}
 	var f := FileAccess.open("res://project.godot", FileAccess.READ)
 	if f == null:
-		return out
+		return _project_actions_from_settings()
 	var in_input := false
 	while not f.eof_reached():
 		var line := f.get_line().strip_edges()
@@ -194,6 +194,39 @@ static func project_actions() -> Dictionary:
 		out[action] = default_events(action)
 	f.close()
 	return out
+
+
+## An exported game has no project.godot to read (it ships project.binary), so
+## the same set comes off ProjectSettings: every `input/` action the project
+## defines, plus the built-in ui_* ones only where the project changed them —
+## exactly what the [input] section lists.
+static func _project_actions_from_settings() -> Dictionary:
+	var out := {}
+	for p in ProjectSettings.get_property_list():
+		var key := str(p.get("name", ""))
+		if not key.begins_with("input/"):
+			continue
+		var action := key.trim_prefix("input/")
+		if action.begins_with("ui_"):
+			var cur: Variant = ProjectSettings.get_setting(key)
+			var def: Variant = ProjectSettings.property_get_revert(key)
+			if cur is Dictionary and def is Dictionary \
+					and _events_sig((cur as Dictionary).get("events", [])) \
+					== _events_sig((def as Dictionary).get("events", [])):
+				continue
+		out[action] = default_events(action)
+	return out
+
+
+static func _events_sig(events: Variant) -> String:
+	var parts := PackedStringArray()
+	if events is Array:
+		for e in events:
+			if e is InputEvent:
+				parts.append("%s|%s|%s" % [(e as InputEvent).get_class(),
+						var_to_str((e as InputEvent).get("physical_keycode")),
+						(e as InputEvent).as_text()])
+	return ",".join(parts)
 
 
 ## The events project.godot gives an action (copies). [] for an unknown one.

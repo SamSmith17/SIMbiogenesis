@@ -1275,6 +1275,9 @@ func _resolve_maps() -> void:
 		_sort_maps_by_recency()
 		return
 	for p in _DEFAULT_MAP_PATHS:
+		# The built-in map definitions are gitignored art; a fresh clone has none.
+		if not ResourceLoader.exists(p):
+			continue
 		var r := load(p)
 		if r is MapDefinition:
 			var md := r as MapDefinition

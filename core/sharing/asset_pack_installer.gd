@@ -129,6 +129,14 @@ func extract(progress: AssetPackProgress = null) -> Dictionary:
 		rec["last_played_unix"] = Time.get_unix_time_from_system()
 		rec.erase("migrated")
 		rec.erase("scratch")
+		# Opens with the terrain imagery its author saw (the map cache that
+		# came with it); the Share window and the world panel can switch it to
+		# this computer's quality.
+		var ti := TerrainImageryPlan.record_for_import(rec, WorldStore.read_snapshot(new_id, worlds_root))
+		if ti.is_empty():
+			rec.erase("terrain_imagery")
+		else:
+			rec["terrain_imagery"] = ti
 		WorldStore.save_record(rec, worlds_root)
 		_new_worlds.append(rec)
 		existing_names[name.to_lower()] = true
