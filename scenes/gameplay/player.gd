@@ -265,9 +265,18 @@ func _setup_character_animation() -> void:
 ## (Re)build the body PlayerPrefs asks for. Cheap when nothing changed.
 func _apply_body_choice() -> void:
 	_body_prefs_gen = PlayerPrefs.generation()
+	var want := PlayerPrefs.body()
+	# Silhouette (default) and the detailed figure are the same class built
+	# two ways; switching between them rebuilds it.
+	var want_hi := want == PlayerPrefs.BODY_FIGURE
+	if _simple_figure != null and _simple_figure.hi_detail != want_hi:
+		character_model.remove_child(_simple_figure)
+		_simple_figure.queue_free()
+		_simple_figure = null
+		_ensure_simple_figure()
+		_head_shown_state = -1
 	if _simple_figure != null:
 		_simple_figure.set_tint(PlayerPrefs.tint())
-	var want := PlayerPrefs.body()
 	if want == _body_id:
 		return
 	_body_id = want
@@ -289,8 +298,8 @@ func _apply_body_choice() -> void:
 		ok = _try_load_custom_body(want.substr(PlayerPrefs.CUSTOM_PREFIX.length()))
 	if ok and _simple_figure != null:
 		_simple_figure.visible = false
-	elif not ok and want != PlayerPrefs.BODY_FIGURE:
-		push_warning("Player body '%s' could not be loaded — using the detailed figure." % want)
+	elif not ok and want != PlayerPrefs.BODY_FIGURE and want != PlayerPrefs.BODY_SILHOUETTE:
+		push_warning("Player body '%s' could not be loaded — using the silhouette figure." % want)
 	_head_shown_state = -1
 
 
@@ -346,7 +355,7 @@ func _ensure_simple_figure() -> void:
 		return
 	_simple_figure = NpcSimpleFigure.new()
 	_simple_figure.name = "SimpleFigureBody"
-	_simple_figure.hi_detail = true
+	_simple_figure.hi_detail = PlayerPrefs.body() == PlayerPrefs.BODY_FIGURE
 	_simple_figure.setup("player", PlayerPrefs.tint())
 	_simple_figure.rotation.y = PI
 	character_model.add_child(_simple_figure)
@@ -1037,6 +1046,31 @@ func _update_character_animation_simple(delta: float) -> void:
 			clampf(wrapf(_tp_yaw - rotation.y, -PI, PI) * 0.7, -1.0, 1.0))
 	_simple_figure.position = seat - Vector3(0.0, _fig_dip, 0.0)
 	_simple_figure.pose_player(st, dt)
+	_net_body = {"mode": st["mode"], "rate": float(st.get("rate", 1.0)),
+		"vy": float(st.get("vy", 0.0)), "steer": float(st.get("steer", 0.0)),
+		"aim": bool(st.get("aim", false)), "seat": seat}
+
+
+## What the body is doing, for multiplayer presence (another player's screen
+## draws this player with the same figure and the same pose).
+var _net_body: Dictionary = {}
+func net_body_state() -> Dictionary:
+	if character_anim_player != null or _net_body.is_empty():
+		# A rigged / custom body does not run the figure driver: derive the
+		# gait from the motion the way the driver would.
+		var sp := Vector2(velocity.x, velocity.z).length()
+		var mode := "idle"
+		if is_riding and not is_fpv_drone_mode:
+			mode = "drive" if is_golf_cart_mode else "euc"
+		elif not is_on_floor() and velocity.y > 1.0:
+			mode = "air"
+		elif sp >= JOG_SPEED_THRESHOLD:
+			mode = "run"
+		elif sp >= WALK_SPEED_THRESHOLD:
+			mode = "walk"
+		return {"mode": mode, "rate": 1.0, "vy": velocity.y, "steer": 0.0,
+			"aim": false, "seat": Vector3.ZERO}
+	return _net_body
 
 
 func _using_tool() -> bool:

@@ -52,6 +52,18 @@ func _run_all() -> void:
 	checks += 1
 	fails += _run("possession_sim_contract", _test_possession_sim_contract)
 	checks += 1
+	fails += _run("change_set_props", _test_change_set_props)
+	checks += 1
+	fails += _run("change_set_canon", _test_change_set_canon)
+	checks += 1
+	fails += _run("change_set_graph_merge", _test_change_set_graph_merge)
+	checks += 1
+	fails += _run("change_set_volatile", _test_change_set_volatile)
+	checks += 1
+	fails += _run("body_packet_roundtrip", _test_body_packet_roundtrip)
+	checks += 1
+	fails += _run("guest_world_keys", _test_guest_world_keys)
+	checks += 1
 	if fails == 0:
 		print("multiplayer_selftest: PASS (%d checks)" % checks)
 	else:
@@ -660,3 +672,175 @@ func _test_possession_sim_contract() -> int:
 		push_error("agent_dots must report possession")
 		fails += 1
 	return fails
+
+
+# ── shared-design change sets (MpChangeSet) ─────────────────────────────────
+
+func _prop(id: String, x: float, z: float, mid: String = "shiftpod") -> Dictionary:
+	return {"id": id, "model_id": mid, "type": "free", "x": x, "z": z, "yaw": 0.0, "scale": 1.0}
+
+
+func _test_change_set_props() -> int:
+	var base := MpChangeSet.index_records([_prop("a", 0, 0), _prop("b", 5, 5), _prop("c", 9, 9, "firepit")])
+	# a moved 12 m, b removed, d placed, c untouched.
+	var cur: Array = [_prop("a", 12, 0), _prop("c", 9, 9, "firepit"), _prop("d", 1, 1, "firepit")]
+	var ops := MpChangeSet.diff_props(base, cur)
+	if (ops["up"] as Array).size() != 2 or (ops["rm"] as Array) != ["b"]:
+		push_error("props diff wrong: %s" % str(ops))
+		return 1
+	var lines := MpChangeSet.summarize(ops, {}, base, {})
+	var text := " | ".join(PackedStringArray(lines))
+	if not (text.contains("Moved Shiftpod 12 m") and text.contains("Placed Firepit") and text.contains("Removed Shiftpod")):
+		push_error("props summary wrong: %s" % text)
+		return 1
+	# Applying the ops to the base reproduces cur (as a set).
+	var merged := MpChangeSet.apply_records(base.values(), ops["up"], ops["rm"])
+	if not MpChangeSet.same(MpChangeSet.index_records(merged), MpChangeSet.index_records(cur)):
+		push_error("props apply != cur")
+		return 1
+	# Reverting puts every touched prop back.
+	var rv := MpChangeSet.revert_props(ops, base)
+	var back := MpChangeSet.apply_records(merged, rv["up"], rv["rm"])
+	if not MpChangeSet.same(MpChangeSet.index_records(back), base):
+		push_error("props revert != base")
+		return 1
+	if not MpChangeSet.is_pose_only(_prop("a", 0, 0), _prop("a", 3, 4)) \
+			or MpChangeSet.is_pose_only(_prop("a", 0, 0), _prop("a", 0, 0, "tent")):
+		push_error("is_pose_only wrong")
+		return 1
+	return 0
+
+
+func _test_change_set_canon() -> int:
+	# A JSON round trip turns ints into floats and trims digits: still "same".
+	var rec := {"id": "p", "n": 3, "x": 1.0 / 3.0, "nested": {"k": [1, 2, 3]}}
+	var back: Variant = JSON.parse_string(JSON.stringify(rec))
+	if not MpChangeSet.same(rec, back):
+		push_error("canon: JSON round trip reads as a change")
+		return 1
+	if MpChangeSet.same({"x": 1.0}, {"x": 1.01}):
+		push_error("canon: a real change reads as same")
+		return 1
+	if not MpChangeSet.same({"b": 1, "a": 2}, {"a": 2, "b": 1}):
+		push_error("canon: key order matters")
+		return 1
+	return 0
+
+
+func _graph(items: Array, conns: Array) -> Dictionary:
+	return {"version": 7, "items": items, "connections": conns,
+		"scopes": {"root": {"id": "root"}}, "definitions": {}, "item_counter": 10,
+		"connection_counter": 10}
+
+
+func _test_change_set_graph_merge() -> int:
+	var a := {"id": "item_1", "type": "battery", "label": "Bank", "x": 0.0, "y": 0.0, "specs": {"capacity_kwh": 5.0}}
+	var b := {"id": "item_2", "type": "panel", "label": "Panel", "x": 100.0, "y": 0.0, "specs": {}}
+	var c1 := {"id": "conn_1", "source_item_id": "item_2", "target_item_id": "item_1"}
+	var base := _graph([a, b], [c1])
+	# Guest: edits the bank, adds a load wired to it.
+	var a2 := a.duplicate(true)
+	(a2["specs"] as Dictionary)["capacity_kwh"] = 10.0
+	var fridge := {"id": "p5_item_11", "type": "acload", "label": "Fridge", "x": 0.0, "y": 80.0, "specs": {}}
+	var c2 := {"id": "p5_conn_11", "source_item_id": "item_1", "target_item_id": "p5_item_11"}
+	var guest := _graph([a2, b, fridge], [c1, c2])
+	var touched := {"items": {"item_1": true}, "conns": {}}
+	var gops := MpChangeSet.diff_graph(base, guest, touched)
+	if (gops["items_up"] as Array).size() != 2 or (gops["conns_up"] as Array).size() != 1:
+		push_error("graph diff wrong: %s" % str(gops))
+		return 1
+	# Host meanwhile added its own node; the guest's change MERGES onto it.
+	var host_extra := {"id": "item_11", "type": "wind", "label": "Turbine", "x": 300.0, "y": 0.0, "specs": {}}
+	var host := _graph([a, b, host_extra], [c1])
+	var merged := MpChangeSet.apply_graph(host, gops)
+	var idx := MpChangeSet.index_records(merged["items"])
+	if not (idx.has("item_11") and idx.has("p5_item_11")) \
+			or float(((idx["item_1"] as Dictionary)["specs"] as Dictionary)["capacity_kwh"]) != 10.0 \
+			or (merged["connections"] as Array).size() != 2:
+		push_error("graph merge lost something: %s" % str(merged))
+		return 1
+	var lines := " | ".join(PackedStringArray(MpChangeSet.summarize({}, gops, {}, base)))
+	if not (lines.contains("Added Fridge") and lines.contains("Edited Bank") and lines.contains("Wired 1 connection")):
+		push_error("graph summary wrong: %s" % lines)
+		return 1
+	# Removing a node takes its wires with it.
+	var after := MpChangeSet.apply_graph(merged, {"items_rm": ["item_1"]})
+	if not (after["connections"] as Array).is_empty():
+		push_error("removed node left wires behind")
+		return 1
+	# Reject: reverting the guest's ops on the guest's copy restores the base.
+	var rv := MpChangeSet.revert_graph(gops, base)
+	var back := MpChangeSet.apply_graph(guest, rv)
+	if not MpChangeSet.same(MpChangeSet.index_records(back["items"]), MpChangeSet.index_records(base["items"])) \
+			or not MpChangeSet.same(MpChangeSet.index_records(back["connections"]),
+				MpChangeSet.index_records(base["connections"])):
+		push_error("graph revert != base")
+		return 1
+	return 0
+
+
+func _test_change_set_volatile() -> int:
+	var a := {"id": "item_1", "type": "battery", "specs": {"capacity_kwh": 5.0, "live_power_w": 10.0}}
+	var a_sim := a.duplicate(true)
+	(a_sim["specs"] as Dictionary)["live_power_w"] = 999.0
+	# Touched by a person, but only the simulation's keys moved: no change.
+	var ops := MpChangeSet.diff_graph(_graph([a], []), _graph([a_sim], []),
+		{"items": {"item_1": true}, "conns": {}})
+	if not MpChangeSet.graph_empty(ops):
+		push_error("telemetry-only change read as an edit")
+		return 1
+	# Untouched ids are never compared at all.
+	var a_edit := a.duplicate(true)
+	(a_edit["specs"] as Dictionary)["capacity_kwh"] = 7.0
+	var ops2 := MpChangeSet.diff_graph(_graph([a], []), _graph([a_edit], []), {"items": {}, "conns": {}})
+	if not MpChangeSet.graph_empty(ops2):
+		push_error("untouched item compared")
+		return 1
+	# The sim frame carries only the volatile keys, and only when they move.
+	var last := {}
+	var f1 := MpChangeSet.volatile_frame([a_sim], last)
+	var f2 := MpChangeSet.volatile_frame([a_sim], last)
+	if not f1.has("item_1") or (f1["item_1"] as Dictionary).has("capacity_kwh") or not f2.is_empty():
+		push_error("volatile frame wrong: %s / %s" % [str(f1), str(f2)])
+		return 1
+	return 0
+
+
+func _test_body_packet_roundtrip() -> int:
+	var body := {"mode": "drive", "rate": 1.2, "vy": -2.0, "steer": 0.5, "aim": true,
+		"seat": Vector3(0.3, 0.9, -0.2)}
+	var back := RemotePlayerAvatar.unpack_body(RemotePlayerAvatar.pack_body(body))
+	if str(back.get("mode", "")) != "drive" or not bool(back.get("aim", false)) \
+			or not (back.get("seat") as Vector3).is_equal_approx(Vector3(0.3, 0.9, -0.2)):
+		push_error("body packet round trip: %s" % str(back))
+		return 1
+	if not RemotePlayerAvatar.unpack_body(PackedFloat32Array([1, 2])).is_empty():
+		push_error("short body packet accepted")
+		return 1
+	# Out-of-range values from a peer are clamped, never trusted.
+	var wild := RemotePlayerAvatar.unpack_body(PackedFloat32Array([99, 50, 900, 9, 1, 50, 50, 50]))
+	if float(wild["vy"]) > 60.0 or (wild["seat"] as Vector3).y > 3.0 or str(wild["mode"]) != "sit":
+		push_error("body packet not clamped: %s" % str(wild))
+		return 1
+	return 0
+
+
+func _test_guest_world_keys() -> int:
+	var gen := {"kind": "generated", "latitude": 48.3252, "longitude": -122.2469,
+		"scene_path": "res://scenes/maps/generated_location.tscn"}
+	var rec := MpGuestWorld.record_for(gen)
+	if str(rec["id"]) != MpGuestWorld.ID or str(rec["storage"]) != WorldPaths.STORAGE_DIR:
+		push_error("guest record wrong: %s" % str(rec))
+		return 1
+	if MpGuestWorld.site_key_for(gen) != WorldPaths.site_key_for(48.3252, -122.2469):
+		push_error("guest site key != the map's site key")
+		return 1
+	var scene := {"kind": "scene", "scene_path": "res://scenes/maps/soak_festival_2026.tscn"}
+	if not MpGuestWorld.site_key_for(scene).begins_with("scene_"):
+		push_error("scene guest key wrong: %s" % MpGuestWorld.site_key_for(scene))
+		return 1
+	# Never listed as one of the player's worlds.
+	if not MpGuestWorld.ID.begins_with("_"):
+		push_error("guest world id would be listed")
+		return 1
+	return 0

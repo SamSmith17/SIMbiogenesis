@@ -41,6 +41,12 @@ var definitions: Dictionary = {}
 
 var _item_counter: int = 0
 var _connection_counter: int = 0
+## Multiplayer guests mint ids under their own prefix ("p<peer>_item_57"), so a
+## node the guest adds can never take the id of one the host adds the same
+## moment. "" everywhere else — ids are unchanged outside a session.
+var id_prefix: String = ""
+var mp_touched_items: Dictionary = {}
+var mp_touched_conns: Dictionary = {}
 
 ## Revision counters (CLAUDE.md "Sim pre-render + playback").
 ## `struct_rev` moves on TOPOLOGY: an item or connection added or removed, a
@@ -168,12 +174,23 @@ static func _touches_any(updates: Dictionary, keys: Array[String]) -> bool:
 
 func generate_item_id() -> String:
 	_item_counter += 1
-	return "item_%d" % _item_counter
+	return "%sitem_%d" % [id_prefix, _item_counter]
 
 
 func generate_connection_id() -> String:
 	_connection_counter += 1
-	return "conn_%d" % _connection_counter
+	return "%sconn_%d" % [id_prefix, _connection_counter]
+
+
+## Multiplayer: what a PERSON wrote since the last take — the ids of items and
+## connections updated while `sim_writing` was false. The shared-design sync
+## diffs only these for "changed" (adds and removes it finds by id), so the
+## telemetry the simulation writes every tick never reads as somebody's edit.
+func take_mp_touched() -> Dictionary:
+	var out := {"items": mp_touched_items, "conns": mp_touched_conns}
+	mp_touched_items = {}
+	mp_touched_conns = {}
+	return out
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +333,8 @@ func update_item(item_id: String, updates: Dictionary) -> void:
 		item[key] = updates[key]
 	if updates.has("type"):
 		_type_index_dirty = true
+	if not sim_writing:
+		mp_touched_items[item_id] = true
 	_bump(_touches_any(updates, STRUCTURAL_ITEM_KEYS), what)
 	changed.emit("update_item")
 
@@ -437,6 +456,8 @@ func update_connection(conn_id: String, updates: Dictionary) -> void:
 						updates[key] as Dictionary)
 				else:
 					conn[key] = updates[key]
+			if not sim_writing:
+				mp_touched_conns[conn_id] = true
 			_bump(_touches_any(updates, STRUCTURAL_CONN_KEYS),
 				("update_connection %s %s" % [conn_id, str(updates.keys())]) if trace_user_rev else "")
 			changed.emit("update_connection")

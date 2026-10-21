@@ -13170,6 +13170,102 @@ func _wire_npc_providers() -> void:
 ## True when a multiplayer client should render the host's population rather
 ## than run its own. Soft lookup: the harness and headless selftests have no
 ## session, and single-player must be byte-identical to before.
+## Multiplayer: replace the graph MODEL with a shared blob while keeping this
+## player's own view — lens, camera, scope, sidebars. The old sync applied the
+## host's whole save state, so every resync flipped a guest's graph to
+## whatever lens and zoom the host had open.
+func apply_shared_graph(blob: Dictionary) -> void:
+	if blob.is_empty() or model == null:
+		return
+	if _sandbox_active:
+		# The tutorial owns the canvas; the shared graph is the one it restores.
+		_sandbox_pre_state["graph"] = blob.duplicate(true)
+		return
+	var st := collect_save_state()
+	st["graph"] = blob
+	apply_save_state(st)
+
+
+## Multiplayer: merge one change (MpChangeSet graph ops) into the live model
+## through its own add / update / remove calls — the same path a local edit
+## takes, so wires, conduits and cards update for just what changed, the undo
+## history and tank timelines survive, and nothing about this player's view
+## moves. Not recorded as an undo step (it is somebody else's edit).
+func apply_shared_graph_ops(ops: Dictionary) -> void:
+	if ops.is_empty() or model == null or _sandbox_active:
+		return
+	var was_suppress := _history_suppress
+	_history_suppress = true
+	for cid in ops.get("conns_rm", []):
+		if not model.get_connection(str(cid)).is_empty():
+			model.remove_connection(str(cid))
+	for iid in ops.get("items_rm", []):
+		if not model.get_item(str(iid)).is_empty():
+			model.remove_item(str(iid))
+	for sid in ops.get("scopes_rm", []):
+		model.scopes.erase(str(sid))
+	var su: Dictionary = ops.get("scopes_up", {}) as Dictionary
+	for sid2 in su.keys():
+		model.scopes[str(sid2)] = su[sid2]
+	for did in ops.get("defs_rm", []):
+		model.definitions.erase(str(did))
+	var du: Dictionary = ops.get("defs_up", {}) as Dictionary
+	for did2 in du.keys():
+		model.definitions[str(did2)] = du[did2]
+	for raw in ops.get("items_up", []):
+		if not (raw is Dictionary):
+			continue
+		var it: Dictionary = (raw as Dictionary).duplicate(true)
+		var iid2 := str(it.get("id", ""))
+		var live := model.get_item(iid2)
+		if live.is_empty():
+			model.add_item(it)
+		else:
+			# Keys the sender no longer has are gone, not left behind.
+			for k in live.keys():
+				if not it.has(k):
+					live.erase(k)
+			model.update_item(iid2, it)
+	for raw2 in ops.get("conns_up", []):
+		if not (raw2 is Dictionary):
+			continue
+		var c: Dictionary = (raw2 as Dictionary).duplicate(true)
+		if c.get("conduit_style") is Dictionary:
+			c["conduit_style"] = ConduitStylePresets.style_dict_from_raw(c["conduit_style"] as Dictionary)
+		var cid2 := str(c.get("id", ""))
+		if not model.get_connection(cid2).is_empty():
+			model.remove_connection(cid2)
+		model.add_connection(c)
+	var ctr: Dictionary = ops.get("counters", {}) as Dictionary
+	model.set("_item_counter", maxi(int(model.get("_item_counter")), int(ctr.get("item", 0))))
+	model.set("_connection_counter", maxi(int(model.get("_connection_counter")), int(ctr.get("conn", 0))))
+	_history_suppress = was_suppress
+	# The suppressed changes skipped the usual autosave hook; it is still an
+	# edit to this world.
+	_schedule_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
+## Multiplayer: the host's simulated values (tank levels, live output, SOC …)
+## for a guest, who does not run the flow engine. `frame` = {item_id: {spec
+## key: value}}; written as SIM writes, so none of it reads as a guest's edit.
+func apply_shared_sim_state(frame: Dictionary) -> void:
+	if frame.is_empty() or model == null or _sandbox_active:
+		return
+	_begin_sim_writes()
+	for iid in frame.keys():
+		var item := model.get_item(str(iid))
+		if item.is_empty() or not (frame[iid] is Dictionary):
+			continue
+		var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate() \
+				if item.get("specs") is Dictionary else {}
+		specs.merge(frame[iid] as Dictionary, true)
+		model.update_item(str(iid), {"specs": specs})
+	_end_sim_writes()
+	_flush_sim_bulk_update(false)
+
+
 func _mp_is_replica() -> bool:
 	var mp := get_node_or_null("/root/MultiplayerSession")
 	if mp == null:

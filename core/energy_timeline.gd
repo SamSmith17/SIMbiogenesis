@@ -10,7 +10,10 @@ extends RefCounted
 ## absolute hours. Scrubbing then *reads SOC back from the buffer* — so moving
 ## backward "uncharges" exactly along the curve it charged up.
 ##
-## Channels stored per sample: solar_kw, aux_kw, load_kw, soc_kwh.
+## Channels stored per sample: solar_kw, aux_kw, load_kw, soc_kwh, plus raw_kw —
+## the array's MAX capture (before battery-full curtailment and DC caps), which
+## never touches the battery maths; it only feeds the "possible today" counter.
+## A caller that does not know it passes -1 and the sample takes solar_kw.
 ## Sample i covers global step (_base_step + i); its absolute time is
 ## (_base_step + i) * step_hours. This is the same epoch CelestialClock and
 ## TimeDirector use (absolute hours since year 1 Jan 1 00:00).
@@ -33,9 +36,10 @@ var _soc: PackedFloat32Array = PackedFloat32Array()
 var _solar: PackedFloat32Array = PackedFloat32Array()
 var _aux: PackedFloat32Array = PackedFloat32Array()
 var _load: PackedFloat32Array = PackedFloat32Array()
+var _raw: PackedFloat32Array = PackedFloat32Array()
 
 ## Optional evaluator: Callable(abs_hours: float) -> Dictionary
-## {solar_kw, aux_kw, load_kw}. Lets the timeline fill instant-scrub gaps with
+## {solar_kw, aux_kw, load_kw, raw_kw?}. Lets the timeline fill instant-scrub gaps with
 ## pure functions of time (weather + sun). When unset, gaps hold the last
 ## known inputs constant.
 var _eval: Callable = Callable()
@@ -95,6 +99,7 @@ func clear() -> void:
 	_solar = PackedFloat32Array()
 	_aux = PackedFloat32Array()
 	_load = PackedFloat32Array()
+	_raw = PackedFloat32Array()
 	_base_step = 0
 
 
@@ -141,13 +146,20 @@ func end_abs_hours() -> float:
 
 ## Establish the known initial condition. Resets the buffer to a single sample.
 func init_anchor(abs_hours: float, soc_kwh: float, solar_kw: float = 0.0,
-		aux_kw: float = 0.0, load_kw: float = 0.0) -> void:
+		aux_kw: float = 0.0, load_kw: float = 0.0, raw_kw: float = -1.0) -> void:
 	clear()
 	_base_step = _step_of(abs_hours)
 	_soc.append(clampf(soc_kwh, 0.0, capacity_kwh))
 	_solar.append(solar_kw)
 	_aux.append(aux_kw)
 	_load.append(load_kw)
+	_raw.append(_raw_or(raw_kw, solar_kw))
+
+
+## The max-capture value to store: the caller's, never below what was
+## actually delivered; -1 (unknown) = the delivered solar.
+static func _raw_or(raw_kw: float, solar_kw: float) -> float:
+	return maxf(raw_kw, solar_kw)
 
 
 ## Advance the cache to `abs_hours` using the supplied instantaneous inputs,
@@ -170,9 +182,11 @@ func init_anchor(abs_hours: float, soc_kwh: float, solar_kw: float = 0.0,
 ## per-minute value bit-for-bit with the old per-minute step_soc() loop — same
 ## curve, same integrated kWh, just without the redundant function-call/branch
 ## overhead per sample.
-func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: float) -> void:
+func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: float,
+		raw_kw: float = -1.0) -> void:
 	if is_empty():
-		init_anchor(abs_hours, clampf(capacity_kwh * 0.5, 0.0, capacity_kwh), solar_kw, aux_kw, load_kw)
+		init_anchor(abs_hours, clampf(capacity_kwh * 0.5, 0.0, capacity_kwh), solar_kw, aux_kw,
+			load_kw, raw_kw)
 		return
 	var target_g := _step_of(abs_hours)
 	var cur_g := last_step()
@@ -193,7 +207,7 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh)
 		steps -= skip_steps
 
-	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps)
+	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps, _raw_or(raw_kw, solar_kw))
 	_trim_if_needed()
 
 
@@ -203,7 +217,7 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 ## resize() + indexed writes instead of append() to avoid incremental
 ## PackedArray reallocation across a large fast-forward run.
 func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: float,
-		steps: int) -> void:
+		steps: int, raw_kw: float = -1.0) -> void:
 	if steps <= 0:
 		return
 	var start := _soc.size()
@@ -212,6 +226,8 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 	_solar.resize(n)
 	_aux.resize(n)
 	_load.resize(n)
+	_raw.resize(n)
+	var raw := _raw_or(raw_kw, solar_kw)
 
 	var net := solar_kw + aux_kw - load_kw
 	if net > 0.0:
@@ -246,6 +262,7 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 		_solar[start + k] = solar_kw
 		_aux[start + k] = aux_kw
 		_load[start + k] = load_kw
+		_raw[start + k] = raw
 
 
 ## Smallest step count k (>= 0) such that k*per_step covers `amount`, i.e. the
@@ -265,10 +282,11 @@ func _steps_to_cover(amount: float, per_step: float) -> int:
 ## integrated one. Lets LIVE mode build a real history buffer the user can
 ## later scrub back through. The measured value is held flat across the step.
 func record_measured(abs_hours: float, soc_kwh: float, solar_kw: float,
-		aux_kw: float, load_kw: float) -> void:
+		aux_kw: float, load_kw: float, raw_kw: float = -1.0) -> void:
 	var soc := clampf(soc_kwh, 0.0, capacity_kwh)
+	var raw := _raw_or(raw_kw, solar_kw)
 	if is_empty():
-		init_anchor(abs_hours, soc, solar_kw, aux_kw, load_kw)
+		init_anchor(abs_hours, soc, solar_kw, aux_kw, load_kw, raw)
 		return
 	var target_g := _step_of(abs_hours)
 	var cur_g := last_step()
@@ -279,6 +297,7 @@ func record_measured(abs_hours: float, soc_kwh: float, solar_kw: float,
 		_solar[n] = solar_kw
 		_aux[n] = aux_kw
 		_load[n] = load_kw
+		_raw[n] = raw
 		return
 	while cur_g < target_g:
 		cur_g += 1
@@ -286,6 +305,7 @@ func record_measured(abs_hours: float, soc_kwh: float, solar_kw: float,
 		_solar.append(solar_kw)
 		_aux.append(aux_kw)
 		_load.append(load_kw)
+		_raw.append(raw)
 	_trim_if_needed()
 
 
@@ -311,7 +331,7 @@ func seek(abs_hours: float) -> Dictionary:
 ## Interpolated read at `abs_hours` (no gap fill). Clamps to buffer range.
 func sample_at(abs_hours: float) -> Dictionary:
 	if is_empty():
-		return {"soc_kwh": 0.0, "solar_kw": 0.0, "aux_kw": 0.0, "load_kw": 0.0}
+		return {"soc_kwh": 0.0, "solar_kw": 0.0, "aux_kw": 0.0, "load_kw": 0.0, "raw_kw": 0.0}
 	var g_lo := first_step()
 	var g_hi := last_step()
 	var pos := (abs_hours / step_hours) - float(_base_step)   # fractional index
@@ -326,6 +346,7 @@ func sample_at(abs_hours: float) -> Dictionary:
 		"solar_kw": lerp(float(_solar[i]), float(_solar[i + 1]), frac),
 		"aux_kw":   lerp(float(_aux[i]),   float(_aux[i + 1]),   frac),
 		"load_kw":  lerp(float(_load[i]),  float(_load[i + 1]),  frac),
+		"raw_kw":   lerp(float(_raw[i]),   float(_raw[i + 1]),   frac),
 	}
 
 
@@ -339,6 +360,7 @@ func _sample_index(i: int) -> Dictionary:
 		"solar_kw": float(_solar[i]),
 		"aux_kw":   float(_aux[i]),
 		"load_kw":  float(_load[i]),
+		"raw_kw":   float(_raw[i]),
 	}
 
 
@@ -366,6 +388,7 @@ func _fill_forward_to(target_g: int) -> void:
 		_solar.append(s)
 		_aux.append(a)
 		_load.append(l)
+		_raw.append(_raw_or(float(inp.get("raw_kw", -1.0)), s))
 	_trim_if_needed()
 
 
@@ -392,6 +415,7 @@ func fill_forward_chunk(target_g: int, max_steps: int) -> bool:
 		_solar.append(s)
 		_aux.append(a)
 		_load.append(l)
+		_raw.append(_raw_or(float(inp.get("raw_kw", -1.0)), s))
 		done += 1
 	_trim_if_needed()
 	return last_step() >= target_g or _soc.size() >= MAX_SAMPLES
@@ -406,6 +430,7 @@ func _fill_backward_to(target_g: int) -> void:
 	var pre_solar := PackedFloat32Array()
 	var pre_aux := PackedFloat32Array()
 	var pre_load := PackedFloat32Array()
+	var pre_raw := PackedFloat32Array()
 	while g > target_g and (pre_soc.size() + _soc.size()) < MAX_SAMPLES:
 		g -= 1
 		var inp := _inputs_at(time_of_step(g), first)
@@ -420,6 +445,7 @@ func _fill_backward_to(target_g: int) -> void:
 		pre_solar = PackedFloat32Array([s]) + pre_solar
 		pre_aux = PackedFloat32Array([a]) + pre_aux
 		pre_load = PackedFloat32Array([l]) + pre_load
+		pre_raw = PackedFloat32Array([_raw_or(float(inp.get("raw_kw", -1.0)), s)]) + pre_raw
 	if pre_soc.is_empty():
 		return
 	_base_step = g
@@ -427,6 +453,7 @@ func _fill_backward_to(target_g: int) -> void:
 	_solar = pre_solar + _solar
 	_aux = pre_aux + _aux
 	_load = pre_load + _load
+	_raw = pre_raw + _raw
 
 
 ## Drop every sample after the step that holds `abs_hours` (that step and the
@@ -445,6 +472,7 @@ func truncate_after(abs_hours: float) -> void:
 	_solar.resize(keep)
 	_aux.resize(keep)
 	_load.resize(keep)
+	_raw.resize(keep)
 
 
 func _trim_if_needed() -> void:
@@ -455,6 +483,7 @@ func _trim_if_needed() -> void:
 	_solar = _solar.slice(over)
 	_aux = _aux.slice(over)
 	_load = _load.slice(over)
+	_raw = _raw.slice(over)
 	_base_step += over
 
 
@@ -462,7 +491,7 @@ func _trim_if_needed() -> void:
 # Range queries (derived daily counters / graph views)
 # ---------------------------------------------------------------------------
 
-## kWh in a channel ("solar"/"aux"/"load") over [abs_start, abs_end].
+## kWh in a channel ("solar"/"aux"/"load"/"raw") over [abs_start, abs_end].
 func integrate_channel(abs_start: float, abs_end: float, channel: String) -> float:
 	if is_empty() or abs_end <= abs_start:
 		return 0.0
@@ -485,6 +514,7 @@ func _channel(channel: String) -> PackedFloat32Array:
 		"solar": return _solar
 		"aux":   return _aux
 		"load":  return _load
+		"raw":   return _raw
 		"soc":   return _soc
 	return PackedFloat32Array()
 

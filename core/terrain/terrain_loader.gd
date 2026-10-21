@@ -212,6 +212,10 @@ var _imagery_fell_back := {}
 ## sequence finishes instead of being dropped on the floor.
 var _late_base_dem := false
 var _late_detail_dem := false
+## Why the base DEM failed this load (ElevationService's reason). The phase
+## await only reports true/false, so a refused fetch used to be reported as
+## "timed out waiting for elevation" — which hid the Open-Meteo quota answer.
+var _base_elev_fail_reason := ""
 ## Gemini-enhanced hero patch drape + its geo bbox (null until generated/cached).
 var _ai_drape: Texture2D = null
 var _ai_bbox: Dictionary = {}
@@ -1165,6 +1169,7 @@ func _run_load_sequence() -> void:
 	_site_drape_half = 0.0
 	_late_base_dem = false
 	_late_detail_dem = false
+	_base_elev_fail_reason = ""
 
 	# Fresh launch: bypass DEM/imagery AND wipe OSM caches so BuildingService
 	# cannot serve a stale vector file while Elevation/Imagery refetch.
@@ -1191,7 +1196,8 @@ func _run_load_sequence() -> void:
 		es.request_elevation(_lat, _lon, _half_extent,
 			ElevationService.base_grid_n_for_extent(_half_extent), "base", bypass)
 		if not await _phase_await(_elev_phase_timeout_s()):
-			_apply_elevation_fallback("base", "timed out waiting for elevation")
+			_apply_elevation_fallback("base", _base_elev_fail_reason
+				if not _base_elev_fail_reason.is_empty() else "timed out waiting for elevation")
 		await _settle_gpu()
 	else:
 		_apply_elevation_fallback("base")
@@ -1303,12 +1309,10 @@ func _resolve_graph_site_elevations() -> void:
 
 
 func _fetch_detail_dem_phase(es: Node) -> void:
+	# A keyless detail patch comes from Terrarium tiles first, so a spent
+	# Open-Meteo quota no longer means "skip the hi-res centre" — only that its
+	# own last-resort rung fails fast (ElevationService._begin_rung).
 	var skip_detail := false
-	if es != null:
-		var has_key: bool = es.has_method("has_opentopo_key") and es.has_opentopo_key()
-		var quota_hit: bool = es.has_method("is_openmeteo_daily_exhausted") \
-				and es.is_openmeteo_daily_exhausted()
-		skip_detail = not has_key and quota_hit
 	if es != null and not skip_detail:
 		var has_key: bool = es.has_method("has_opentopo_key") and es.has_opentopo_key()
 		if not has_key:
@@ -3845,6 +3849,7 @@ func _on_elevation_failed(reason: String, tag: String = "base") -> void:
 			_abort_refresh("dem", reason)
 		return
 	if _load_sequence_active:
+		_base_elev_fail_reason = reason
 		_phase_resolve("elev:base", false)
 		return
 	if _built:
@@ -7548,6 +7553,8 @@ func get_detail_dem_status() -> Dictionary:
 			label = "10 m USGS"
 		"openmeteo":
 			label = "Open-Meteo (~90 m)"
+		"terrarium":
+			label = "Terrain tiles (no key)"
 		_:
 			if source.begins_with("opentopo_"):
 				label = "OpenTopography %s" % source.trim_prefix("opentopo_")
@@ -13021,7 +13028,7 @@ func _place_free_prop(model_id: String, x: float, z: float) -> bool:
 		model_id, x, 0.0, z, 0.0, 0.0, 0.0, 1.0, gy)
 	if prop_id.is_empty():
 		return false
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	call_deferred("_rebuild_placed_props")
 	return true
 
@@ -13054,7 +13061,7 @@ func _replace_osm_from_pick(pick: Dictionary, model_id: String) -> bool:
 		centroid.x, 0.0, centroid.y, 0.0, 0.0, 0.0, fit_scale, gy)
 	if prop_id.is_empty():
 		return false
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 	return true
@@ -13079,7 +13086,7 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		var sgv := ServiceLocator.graph()
 		if sgv != null and sgv.has_method("remove_items_bound_to_prop"):
 			sgv.call("remove_items_bound_to_prop", prop_id)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 	return true
@@ -13142,7 +13149,7 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 				return
 	if not _placed_prop_layer.update_prop(prop_id, {"packed": packed}):
 		return
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	var sgv: Node = ServiceLocator.graph()
 	if is_linkage:
@@ -13192,7 +13199,7 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 		yaw_deg, abs_h)
 	if res.is_empty():
 		return {}
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	_queue_unload_chore(res, at_x, at_z)
 	return res
@@ -13275,7 +13282,7 @@ func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 		return
 	if not _placed_prop_layer.update_prop(prop_id, patch):
 		return
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
 
@@ -13326,7 +13333,7 @@ func duplicate_prop_record(copy: Dictionary) -> String:
 		patch.erase(k)
 	if not patch.is_empty():
 		_placed_prop_layer.update_prop(new_id, patch)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 	_rebuild_placed_props()
 	return new_id
 
@@ -13343,6 +13350,15 @@ func clear_prop_burn_record(prop_id: String) -> void:
 
 
 var _prop_layer_save_pending := false
+## Persist the prop layer AND tell a multiplayer session a person changed it
+## (deletes, duplicates, editor commits, pack / unpack used to reach the other
+## players only on the 12 s full resync). The session ignores calls made while
+## it is applying a change it received, so this cannot echo.
+func _save_props_and_share() -> void:
+	_placed_prop_layer.save(_lat, _lon)
+	PlacedPropService._notify_mp_props_edited()
+
+
 func _schedule_prop_layer_save() -> void:
 	if _prop_layer_save_pending:
 		return
@@ -13413,7 +13429,7 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 		return
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
-	_placed_prop_layer.save(_lat, _lon)
+	_save_props_and_share()
 
 
 # ---------------------------------------------------------------------------

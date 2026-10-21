@@ -1176,8 +1176,23 @@ Godot.exe.exe --headless --path . --script core/esim/esim_selftest.gd
 # protocol reject, avatar color, transfer codec, chat sanitize/mute, Phase 6
 # password/allowlist/rate-limit + headless host bind smoke, which now also pins
 # that a hosted code carries a candidate address list AND still mirrors the LAN
-# address into the top-level ip/port every pre-v3 consumer reads; --import first):
+# address into the top-level ip/port every pre-v3 consumer reads; plus the
+# shared-world change sets (MpChangeSet: prop / graph diff, merge onto a copy
+# the host changed meanwhile, reject-revert, JSON int/float equality, telemetry
+# keys never an edit), the presence body packet and the guest-world keys;
+# --import first):
 Godot.exe.exe --headless --path . --script core/multiplayer/multiplayer_selftest.gd
+# Multiplayer end to end — TWO sandboxed instances on one machine over
+# 127.0.0.1, stepping each other through %TEMP%\mp_probe\. Start the host,
+# wait ~4 s (two harness runs in the same second share a sandbox id and the
+# second fails to seed), then the guest. Times a host prop reaching the guest
+# (0.33 s on 2026-10-20), a guest move as a proposal (card words, ghost,
+# host world unchanged until Accept), a declined delete put back, a guest
+# graph node, "view only", the silhouette bodies + positions:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_host_probe.gd -Label mp_host -Timeout 900
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_guest_probe.gd -Label mp_guest -Timeout 900
+# What another player looks like (one instance, no network):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.gd -Label mp_figure
 # Discord integration (offline — every security-relevant decision in core/discord/
 # is a PURE class_name file precisely so it can be fed fixtures here instead of
 # only against a live Discord app). Covers: PKCE pinned to the RFC 7636 Appendix B
@@ -1604,6 +1619,11 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # an 8 mm/h storm books rain on each pond's surface and raises it (or it spills
 # / a siphon drains it). The Mt Vernon playtest of 2026-10-12, formalized:
 tools\harness.ps1 -World mtvernon -Capture sitebalance
+# Power Scoreboard daily counters (sandbox): dawn -> past midnight, the
+# TODAY column (solar / wind & hydro / max capture / generated / consumed,
+# from the timeline's solar/aux/raw/load channels) counts up, resets at
+# midnight, YESTERDAY takes the day's solar, a scrub back rewinds it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/solar_scoreboard_probe.gd
 # Energy balance (sandbox, edits the graph in memory): a load switched on
 # inside a scrubbed-back hour drains the battery, solar follows the sun with
 # the graph OPEN, double-clicking a turbine switches it off (0 W, SolarUI's
@@ -2720,8 +2740,17 @@ Pinned by `_test_near_detail_toggle` in terrain_selftest.
 
 **Terrain data services (autoloads, copy the weather_service HTTP+cache+deferred
 pattern):**
-- `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid. No-key
-  default = Open-Meteo Elevation (Copernicus 90 m). **Open-Meteo rate-limits
+- `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid.
+  **No-key default (since 2026-10-21) = Terrarium terrain tiles** on AWS Open
+  Data (`TERRARIUM_URL`, PNG tiles, no key, no quota), tried before Open-Meteo
+  in every source ladder. Why: a fresh install (the exported .exe) has no
+  OpenTopography key, and Open-Meteo bills EACH POINT as one call at 600 a
+  minute — the 64² default base grid could never finish, the per-minute 429
+  was misread as the daily quota, and the world built flat (Bombay Beach
+  0..0 m; with tiles -135..914 m). Open-Meteo is now the last rung, capped at
+  24² per fetch, and a per-minute / per-hour 429 waits 62 s instead of
+  latching the daily flag. The notes below describe Open-Meteo as it still
+  behaves when it IS reached. **Open-Meteo rate-limits
   CONCURRENT connections per IP (429), not request count** — so batches are
   fetched SEQUENTIALLY (POOL_SIZE=1, DISPATCH_DELAY between requests). A concurrent
   pool tripped 429 and fell back to flat terrain; sequential is reliable.
@@ -6902,6 +6931,70 @@ input corrections. Deliberately NOT in TerrainCacheSettings' reset sweep.
   `_apply_advanced_rendering_toggles` now composes density explicitly from
   `FogOptics.volumetric_density_for_amount` (0 → exactly 0), never reading it
   back, and writes the full parameter set; it now runs AFTER the hazard pass.
+
+## Multiplayer shared world: changes, approval, bodies (2026-10-20)
+
+The host's world IS the shared world. PROTOCOL_VERSION 4 (old builds neither
+join nor see new ones).
+- **Changes travel as ops, not snapshots** (`MpChangeSet`, pure). The old
+  sync sent the whole props layer + whole graph save state on every edit
+  and every 12 s; the receiver rebuilt EVERY prop and applied the host's whole
+  save state (lens, camera, scope too). On top of that the loader's delete /
+  duplicate / editor commit / pack paths never notified, so most edits only
+  arrived on the 12 s resync — the "5–10 s" the user saw. Now:
+  - props diff by id against the last published copy; the receiver upserts or
+    removes ONE record (`PlacedPropService.mp_upsert_record` / `mp_remove_record`
+    / `mp_finish`; a pose-only change slides the node, an OSM replacement
+    forces the full rebuild). Every loader prop save goes through
+    `_save_props_and_share()`.
+  - graph diffs adds/removes by id and "changed" only for ids a PERSON wrote
+    (`GraphModel.take_mp_touched()`, recorded when `sim_writing` is false),
+    compared through `MpChangeSet.authored` (VOLATILE_SPEC_PREFIXES stripped —
+    extend it when a new sim writer stamps a spec key). Applied through the
+    model's own CRUD (`SystemGraphView.apply_shared_graph_ops`), so undo
+    history, tank timelines and the viewer's camera survive.
+    `apply_shared_graph(blob)` (whole graph, keeps the view) is only for the
+    join snapshot.
+  - Guests don't run the flow engine: every 2 s the host sends the volatile
+    spec values that moved (`volatile_frame` → `apply_shared_sim_state`, sim
+    writes) plus `design_rev`; a guest behind that rev asks for the full world.
+  - Guest graph ids are `p<peer>_item_N` (`GraphModel.id_prefix`) so they
+    never collide with the host's.
+- **Guests propose, the host decides** (`mp_design_controller.gd`). A guest
+  edit shows locally at once and goes as a proposal after a 0.45 s quiet
+  period (a drag = one proposal). The host's `guest_policy`: ask (default) /
+  auto / view; per-peer "Always accept". The card text is worded ON THE HOST
+  from its own copy (`summarize`) — guest text is never shown. Waiting changes
+  draw as ghosts (`MpReviewGhosts`, guest colour; removals red). Decline →
+  the guest's copy is put back (`revert_props` / `revert_graph` against the
+  canon). Alt+Y / Alt+N take the oldest without freeing the cursor.
+- **Feedback** (`scenes/ui/multiplayer_activity_hud.gd`): the sync line
+  (top centre: waiting / accepted / declined / getting the world N %), the
+  host's review cards (FIRST in the top-right column — Terrain options draws
+  taller than it reports and covered them at order 1), edge arrows with
+  name + distance for off-screen players (projected in CAMERA SPACE first:
+  `unproject_position` errors for a point on the camera plane). Lobby →
+  Design: the policy picker + counts; each player row has "Go to" + distance.
+- **Guests play in a throwaway world** (`MpGuestWorld`,
+  `user://worlds/_mp_guest/`). Joining used to write the host's props and
+  graph over the guest's OWN files for that site. Now the guest's world is
+  saved, their own files for the host's site are copied in (terrain edits,
+  veg, water — what the sync does not carry), and WorldPaths points there.
+  Leaving keeps the copy (it says so); exit to the menu to get back.
+- **Bodies.** `RemotePlayerAvatar` is the NPC silhouette `NpcSimpleFigure`
+  in the player's own outline colour (sent in presence), posed from their
+  `player.net_body_state()` (8-float packet: mode idle/walk/run/air/drive/euc,
+  rate, vy, steer, aim, seat), drawn 0.12 s behind the newest packet and
+  interpolated, x-ray constant-size name tag with distance, a ring at the
+  feet. The PLAYER's default body is now the same silhouette
+  (`PlayerPrefs.BODY_SILHOUETTE`); the detailed figure is
+  `BODY_FIGURE`.
+- **Chat** registers with HudLayout (bottom-left, above the timeline), takes
+  the mouse only while typing, fades when idle, and Enter yields to tool
+  overlays, focused controls and the graph (`_may_open`). It used to sit ON
+  the timeline with MOUSE_FILTER_STOP and eat its clicks.
+Not synced yet: vegetation painting, sculpting, water edits, camps, J lights,
+the SoI after the join snapshot — those still differ per machine.
 
 ## Discord-native multiplayer (core/discord/ + core/multiplayer/)
 

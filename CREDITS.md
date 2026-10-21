@@ -228,6 +228,14 @@ usage; confirm each provider's live attribution string before release.**
     WeatherService, labelled as an estimate in the UI.
   - Status: pending-verification
 
+- **Terrain Tiles (Mapzen / Tilezen, AWS Open Data)** — the no-key elevation source
+  (`ElevationService` "terrarium" rung): 256 px Terrarium-encoded PNG tiles.
+  - Source: https://registry.opendata.aws/terrain-tiles/ · Data: 3DEP / NED (USGS, public
+    domain), SRTM (NASA), GMTED2010 (USGS), ETOPO1 (NOAA), EU-DEM (Copernicus), and
+    others listed at https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+  - Attribution required: yes (per that list) · Share-alike: no · Commercial OK: yes
+  - Status: pending-verification
+
 - **OpenTopography / SRTM** — optional 30 m elevation upgrade (with API key).
   - Source: https://opentopography.org · License: data varies (SRTM public domain,
     others CC-BY) · Attribution: credit OpenTopography + dataset.

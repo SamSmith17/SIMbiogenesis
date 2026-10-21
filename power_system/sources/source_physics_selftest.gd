@@ -889,6 +889,40 @@ func _test_timecode() -> void:
 	et_one.truncate_after(10.0)   # before the start: still one sample
 	_check("timeline: truncate never empties the cache", et_one.count() == 1)
 
+	# Max-capture ("raw") channel: the scoreboard's "possible today". It
+	# never feeds the battery, defaults to the delivered solar, is never
+	# below it, and follows the evaluator's raw_kw on a fill.
+	var er := EnergyTimeline.new()
+	er.configure(16.0, 0.95, 0.95, 1.6)
+	er.init_anchor(3000.0, 8.0, 2.0, 0.0, 0.0, 3.0)
+	er.record_step(3001.0, 2.0, 0.0, 0.0, 3.0)    # 1 h clipped to 2 of 3 kW
+	er.record_step(3002.0, 2.0, 0.0, 0.0)         # raw unknown -> = solar
+	var eq := EnergyTimeline.new()
+	eq.configure(16.0, 0.95, 0.95, 1.6)
+	eq.init_anchor(3000.0, 8.0, 2.0, 0.0, 0.0)
+	eq.record_step(3001.0, 2.0, 0.0, 0.0)
+	eq.record_step(3002.0, 2.0, 0.0, 0.0)
+	_check("timeline raw: 1 h at 3 kW + 1 h at 2 kW = 5 kWh possible",
+		absf(er.integrate_channel(3000.0, 3002.0, "raw") - 5.0) < 0.02,
+		"got %.3f" % er.integrate_channel(3000.0, 3002.0, "raw"))
+	_check("timeline raw: delivered solar unchanged (4 kWh)",
+		absf(er.integrate_channel(3000.0, 3002.0, "solar") - 4.0) < 0.02)
+	_check("timeline raw: battery identical with or without raw",
+		absf(er.soc_at(3002.0) - eq.soc_at(3002.0)) < 1e-6)
+	er.record_step(3003.0, 2.0, 0.0, 0.0, 1.0)     # raw below solar is lifted
+	_check("timeline raw: never below delivered solar",
+		absf(er.integrate_channel(3002.0, 3003.0, "raw") - 2.0) < 0.02)
+	er.set_evaluator(func(_h: float) -> Dictionary:
+		return {"solar_kw": 1.0, "aux_kw": 0.0, "load_kw": 0.0, "raw_kw": 4.0})
+	er.seek(3004.0)
+	_check("timeline raw: evaluator fill carries raw_kw",
+		absf(er.integrate_channel(3003.0, 3004.0, "raw") - 4.0) < 0.1,
+		"got %.3f" % er.integrate_channel(3003.0, 3004.0, "raw"))
+	er.truncate_after(3001.0)
+	_check("timeline raw: truncate keeps channels aligned",
+		absf(er.integrate_channel(3000.0, 3001.0, "raw") - 3.0) < 0.02
+		and er.sample_at(3001.0).has("raw_kw"))
+
 	# Measured (live-mirror) samples: stored verbatim, readable on rewind.
 	var em := EnergyTimeline.new()
 	em.step_hours = 1.0 / 60.0

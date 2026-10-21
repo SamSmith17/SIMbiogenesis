@@ -10,7 +10,7 @@ extends SceneTree
 const ElevationServiceScript := preload("res://core/terrain/elevation_service.gd")
 const ImageryServiceScript := preload("res://core/terrain/imagery_service.gd")
 
-const EXPECTED_CHECKS := 47
+const EXPECTED_CHECKS := 64
 
 var _checks := 0
 var _fails := 0
@@ -29,6 +29,7 @@ func _initialize() -> void:
 	_test_overlay_half()
 	_test_key_matches()
 	_test_source_ladder()
+	_test_terrarium()
 	_test_tiling()
 	_test_tile_stitch()
 	_test_retry_delay()
@@ -104,26 +105,97 @@ func _test_source_ladder() -> void:
 	var lat := 48.3252
 	var lon := -122.2469
 	var base_big: Array = ElevationServiceScript.source_ladder(lat, lon, "base", 90000.0, true, false)
-	_check(_rung_names(base_big) == "opentopo_COP90,openmeteo", "180 km base: COP90 then Open-Meteo (%s)" % _rung_names(base_big))
+	_check(_rung_names(base_big) == "opentopo_COP90,terrarium,openmeteo", "180 km base: COP90, Terrarium, Open-Meteo (%s)" % _rung_names(base_big))
 	var base_small: Array = ElevationServiceScript.source_ladder(lat, lon, "base", 5000.0, true, false)
-	_check(_rung_names(base_small) == "opentopo_SRTMGL1,opentopo_SRTMGL3,opentopo_COP90,openmeteo",
+	_check(_rung_names(base_small) == "opentopo_SRTMGL1,opentopo_SRTMGL3,opentopo_COP90,terrarium,openmeteo",
 		"10 km base walks every global product (%s)" % _rung_names(base_small))
 	var det_us: Array = ElevationServiceScript.source_ladder(lat, lon, "detail", 1500.0, true, false)
-	_check(_rung_names(det_us) == "opentopo_usgs1,opentopo_usgs10,opentopo_SRTMGL1,opentopo_COP90,openmeteo",
+	_check(_rung_names(det_us) == "opentopo_usgs1,opentopo_usgs10,opentopo_SRTMGL1,opentopo_COP90,terrarium,openmeteo",
 		"US 3 km detail: 1 m, 10 m, global, Open-Meteo (%s)" % _rung_names(det_us))
 	var det_miss: Array = ElevationServiceScript.source_ladder(lat, lon, "detail", 1500.0, true, true)
 	_check(str((det_miss[0] as Dictionary)["cache_source"]) == "opentopo_usgs10", "a recorded 1 m miss starts at 10 m")
 	var det_big: Array = ElevationServiceScript.source_ladder(lat, lon, "detail", 5000.0, true, false)
 	_check(str((det_big[0] as Dictionary)["cache_source"]) == "opentopo_usgs10", "a 10 km patch is too big for 1 m")
 	var det_eu: Array = ElevationServiceScript.source_ladder(46.0, 8.0, "detail", 1500.0, true, false)
-	_check(_rung_names(det_eu) == "opentopo_SRTMGL1,opentopo_COP90,openmeteo", "non-US detail is global only")
+	_check(_rung_names(det_eu) == "opentopo_SRTMGL1,opentopo_COP90,terrarium,openmeteo", "non-US detail is global only")
 	var nokey: Array = ElevationServiceScript.source_ladder(lat, lon, "base", 15000.0, false, false)
-	_check(_rung_names(nokey) == "openmeteo", "no key: Open-Meteo only")
+	_check(_rung_names(nokey) == "terrarium,openmeteo", "no key: Terrarium tiles, then Open-Meteo (%s)" % _rung_names(nokey))
+	_check(int(ElevationServiceScript.rung_grid_n(nokey[0], 87, "base")) == ElevationServiceScript.OPENTOPO_GRID_N,
+		"a Terrarium base is at least 256²")
+	_check(int(ElevationServiceScript.rung_grid_n(nokey[0], 512, "detail")) == ElevationServiceScript.DETAIL_GRID_N,
+		"a Terrarium detail is 512²")
+	# Open-Meteo bills one call per coordinate, 600 a minute: its grids must
+	# fit one minute or the 7th batch is refused (the flat-world bug).
+	var om_n := ElevationServiceScript.OPENMETEO_BASE_MAX_N
+	_check(om_n * om_n <= 600, "an Open-Meteo base fits one minute's 600 calls (%d points)" % (om_n * om_n))
+	var om_d := ElevationServiceScript.OPENMETEO_DETAIL_N
+	_check(om_d * om_d <= 600, "an Open-Meteo detail fits one minute's 600 calls (%d points)" % (om_d * om_d))
+	_check(not ElevationServiceScript._is_openmeteo_daily_limit(429,
+		'{"error":true,"reason":"Minutely API request limit exceeded. Please try again in one minute."}'),
+		"the MINUTELY limit is not the daily quota")
+	_check(ElevationServiceScript._is_openmeteo_minutely_limit(
+		'{"reason":"Minutely API request limit exceeded. Please try again in one minute.","error":true}'),
+		"the minutely limit is recognised")
 	var om: Dictionary = base_big[base_big.size() - 1]
 	_check(int(ElevationServiceScript.rung_grid_n(om, 256, "base")) == ElevationServiceScript.OPENMETEO_BASE_MAX_N,
-		"an Open-Meteo fallback of a keyed base is capped at 96²")
+		"an Open-Meteo fallback of a keyed base is capped at %d²" % ElevationServiceScript.OPENMETEO_BASE_MAX_N)
 	_check(int(ElevationServiceScript.rung_grid_n(base_big[0], 64, "base")) == ElevationServiceScript.OPENTOPO_GRID_N,
 		"an OpenTopography base is at least 256²")
+
+
+func _test_terrarium() -> void:
+	# Bombay Beach, the default 60 km world: a handful of tiles at a zoom whose
+	# pixels are no coarser than the 256² grid's spacing.
+	var bbox := GeoMath.bbox_for(33.3626, -115.7146, 30000.0)
+	var plan: Dictionary = ElevationServiceScript.terrarium_plan(bbox, 256)
+	var tiles: Array = plan["tiles"]
+	_check(int(plan["z"]) == 10, "60 km at 256²: z10 (got z%d)" % int(plan["z"]))
+	_check(tiles.size() >= 4 and tiles.size() <= 16, "60 km at 256²: 4-16 tiles (%d)" % tiles.size())
+	var px_deg := 360.0 / (256.0 * float(1 << int(plan["z"])))
+	var spacing := (float(bbox["east"]) - float(bbox["west"])) / 255.0
+	_check(px_deg <= spacing, "tile pixels no coarser than the sample spacing")
+	# The mosaic covers the bbox with a pixel to spare on every side.
+	var z := int(plan["z"])
+	var xw := ElevationServiceScript.terrarium_tile_xf(float(bbox["west"]), z) - float(plan["x0"])
+	var xe := ElevationServiceScript.terrarium_tile_xf(float(bbox["east"]), z) - float(plan["x0"])
+	var yn := ElevationServiceScript.terrarium_tile_yf(float(bbox["north"]), z) - float(plan["y0"])
+	var ys := ElevationServiceScript.terrarium_tile_yf(float(bbox["south"]), z) - float(plan["y0"])
+	_check(xw > 0.0 and yn > 0.0 and xe < float(plan["ntx"]) and ys < float(plan["nty"]),
+		"the mosaic covers the whole bbox")
+	# A 180 km world drops zoom to stay under the tile cap.
+	var big: Dictionary = ElevationServiceScript.terrarium_plan(GeoMath.bbox_for(33.3626, -115.7146, 90000.0), 256)
+	_check((big["tiles"] as Array).size() <= ElevationServiceScript.TERRARIUM_MAX_TILES,
+		"180 km stays under the tile cap (%d tiles, z%d)" % [(big["tiles"] as Array).size(), int(big["z"])])
+	var det: Dictionary = ElevationServiceScript.terrarium_plan(GeoMath.bbox_for(33.3626, -115.7146, 3000.0), 512)
+	_check(int(det["z"]) >= 13, "a 6 km detail patch at 512² is z13+ (z%d)" % int(det["z"]))
+	# Tile y in 64-bit: z14 at Bombay Beach is ~3289.
+	var ty := ElevationServiceScript.terrarium_tile_yf(33.3626, 13)
+	_check(int(floor(ty)) == 3289, "tile y at z13 matches the slippy-map formula (%.3f)" % ty)
+	# Decode: R·256 + G + B/256 − 32768, through a real PNG round trip.
+	var img := Image.create(256, 256, false, Image.FORMAT_RGB8)
+	for y in 256:
+		for x in 256:
+			var m := -69.0 + float(x) * 4.0 + float(y) * 0.5   # metres
+			var v := m + 32768.0
+			var r := int(floor(v / 256.0))
+			var g := int(floor(v)) - r * 256
+			var b := int(round((v - floor(v)) * 256.0))
+			img.set_pixel(x, y, Color8(r, g, b))
+	var dec: PackedFloat32Array = ElevationServiceScript.decode_terrarium_png(img.save_png_to_buffer())
+	_check(dec.size() == 65536, "a Terrarium tile decodes to 256² heights")
+	if dec.size() == 65536:
+		_check(absf(dec[0] - (-69.0)) < 0.01, "below-sea-level height decodes (%.2f)" % dec[0])
+		_check(absf(dec[255 * 256 + 255] - (-69.0 + 1020.0 + 127.5)) < 0.01, "corner height decodes")
+		# Sample the mosaic at a tile's own pixel centres: identity.
+		var tb := {
+			"west": ElevationServiceScript.terrarium_tile_x_to_lon(0.5 / 256.0, 0),
+			"east": ElevationServiceScript.terrarium_tile_x_to_lon(255.5 / 256.0, 0),
+			"north": ElevationServiceScript.terrarium_tile_y_to_lat(100.5 / 256.0, 0),
+			"south": ElevationServiceScript.terrarium_tile_y_to_lat(155.5 / 256.0, 0),
+		}
+		var g2: PackedFloat32Array = ElevationServiceScript.sample_terrarium_mosaic(dec, 256, 256, 0, 0, 0, tb, 2)
+		_check(absf(g2[0] - dec[100 * 256]) < 0.05 and absf(g2[3] - dec[155 * 256 + 255]) < 0.05,
+			"mosaic sampling lands on pixel centres (%.2f vs %.2f)" % [g2[0], dec[100 * 256]])
 
 
 func _test_tiling() -> void:

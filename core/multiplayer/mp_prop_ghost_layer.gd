@@ -55,7 +55,10 @@ static func _make_ghost_node(main: Node, rec: Dictionary, tint: Color) -> Node3D
 
 	var holder := Node3D.new()
 	holder.name = "Ghost_%s" % str(rec.get("id", count_placeholder()))
-	holder.global_position = Vector3(x, gy + y_off, z)
+	# Local, not global: the holder is not in the tree yet (setting a global
+	# transform there is an engine error), and every ghost root sits under Main
+	# at the origin, so the two are the same.
+	holder.position = Vector3(x, gy + y_off, z)
 	holder.rotation = Vector3(pitch, yaw, roll)
 	holder.scale = Vector3(scl, scl, scl)
 

@@ -2,8 +2,18 @@ extends Node
 
 ## ElevationService — fetches DEM grids for the terrain builder. Supports tagged
 ## base + detail layers (mirrors ImageryService), job queueing, and best-available
-## source selection: Open-Meteo (no key), OpenTopography SRTM 30 m, USGS 10 m DTM,
-## and USGS 3DEP 1 m lidar for the near-field detail patch over US sites.
+## source selection: AWS Terrarium tiles (no key), Open-Meteo (no key, last
+## resort), OpenTopography SRTM 30 m, USGS 10 m DTM, and USGS 3DEP 1 m lidar for
+## the near-field detail patch over US sites.
+##
+## Why Terrarium is the no-key source (measured 2026-10-21): Open-Meteo's
+## elevation API bills EVERY COORDINATE as one API call — 600 a minute, 5,000
+## an hour, 10,000 a day. A 60 km world at 87² is 7,569 points; the 7th
+## 100-point batch came back "Minutely API request limit exceeded", which
+## _is_openmeteo_daily_limit then read as the DAILY quota, failed the job, and
+## every new player without an OpenTopography key got a flat world. Terrarium
+## (Mapzen's terrain tiles on the AWS Open Data registry) is a plain CDN of
+## PNG tiles: the same 60 km world is ~9 tiles at z10, no key, no quota.
 ##
 ## CRS warning: the 3DEP 1 m AAIGrid arrives in UTM METRES; every other source
 ## here is in degrees. resample_aaigrid_to_bbox dispatches on that — see
@@ -16,6 +26,16 @@ signal elevation_progress(done: int, total: int)
 const OPEN_METEO_URL := "https://api.open-meteo.com/v1/elevation"
 const OPENTOPO_GLOBAL_URL := "https://portal.opentopography.org/API/globaldem"
 const OPENTOPO_USGS_URL := "https://portal.opentopography.org/API/usgsdem"
+## Mapzen/Tilezen terrain tiles ("terrarium" encoding) on the AWS Open Data
+## registry: https://registry.opendata.aws/terrain-tiles/ — 256 px Web Mercator
+## PNGs, height = R·256 + G + B/256 − 32768 m, z0–15, global (SRTM, GMTED,
+## NED/3DEP in the US, ETOPO1 bathymetry). Attribution in CREDITS.md.
+const TERRARIUM_URL := "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%d/%d/%d.png"
+const TERRARIUM_MAX_ZOOM := 15
+## Most tiles one request may pull (sequential, ~0.4 s each). The zoom drops
+## until the square fits, so a 180 km world is a few z9 tiles.
+const TERRARIUM_MAX_TILES := 36
+const TERRARIUM_TILE_PX := 256
 const CACHE_DIR := "user://terrain_cache/dem"
 ## v4: OpenTopo AAIGrid is georeferenced into the requested bbox (v3 stretched
 ## cell-snapped grids onto the mesh and shifted relief vs OSM/imagery).
@@ -26,10 +46,10 @@ const DEFAULT_GRID_N := 64
 const DEFAULT_GRID_N_LEGACY := 16
 const DETAIL_GRID_N := 512
 const OPENTOPO_GRID_N := 256
-## Cap for the Open-Meteo (no-key) detail fetch: 64² = 4,096 points = ~41 serial
-## batch requests (≈20 s) instead of 512² = 262,144 points = ~2,600 requests. The
-## upsampled detail mesh/collider hide the difference (Open-Meteo's DEM is ~90 m).
-const OPENMETEO_DETAIL_N := 64
+## Cap for an Open-Meteo detail fetch (the last rung). Open-Meteo bills each
+## coordinate as one call, 600 a minute: 24² = 576 points fits one minute. The
+## old 64² (4,096 points) could never finish inside the minutely limit.
+const OPENMETEO_DETAIL_N := 24
 ## USGS 3DEP 1 m lidar DEM, via OpenTopography's `usgsdem` endpoint. AAIGrid runs
 ## ~21 bytes per cell, so a 3 km detail square is ~9 M cells ≈ 190 MB of ASCII
 ## (~15 s to pull, ~7 s to parse, measured). That is fine once per site because
@@ -51,9 +71,14 @@ const POOL_SIZE := 1
 const DISPATCH_DELAY := 0.5
 const RETRY_BACKOFF := 4.0
 const MAX_RETRIES := 3
-## Open-Meteo grid cap for a base DEM (96² = 93 serial batches). Also the size
-## a keyed base request falls back to when every OpenTopography product failed.
-const OPENMETEO_BASE_MAX_N := 96
+## Open-Meteo grid cap for a base DEM. Open-Meteo bills one API call PER
+## COORDINATE and allows 600 a minute, so 24² = 576 points is the largest grid
+## that finishes inside one minute's budget (96² = 9,216 points needed 16
+## minutes and blew the 5,000/hour limit). It is the LAST rung now — coarse
+## real relief rather than flat terrain when every tile source is unreachable.
+const OPENMETEO_BASE_MAX_N := 24
+## Seconds to wait after Open-Meteo's per-minute (not daily) limit answer.
+const OPENMETEO_MINUTE_WAIT_S := 62.0
 ## Largest single OpenTopography AAIGrid we ask for, in source cells; bigger
 ## global squares go up as tiles (tile_bboxes). ~2 M cells ≈ 16 MB of ASCII.
 ## Measured 2026-10-19: one 3.5 M-cell COP90 square (160 km) loaded, one of
@@ -66,6 +91,7 @@ var _busy: bool = false
 var _job: Dictionary = {}
 var _pending: Array[Dictionary] = []
 var _opentopo_http: HTTPRequest = null
+var _terrarium_http: HTTPRequest = null
 ## Set when Open-Meteo returns a daily quota error — further Open-Meteo fetches
 ## fail fast and the loader skips the no-key detail storm.
 var _openmeteo_daily_exhausted := false
@@ -133,6 +159,8 @@ func reset_session() -> void:
 			http.cancel_request()
 	if _opentopo_http != null and is_instance_valid(_opentopo_http):
 		_opentopo_http.cancel_request()
+	if _terrarium_http != null and is_instance_valid(_terrarium_http):
+		_terrarium_http.cancel_request()
 	_job_seq += 1
 	_busy = false
 	_job = {}
@@ -318,7 +346,7 @@ func _start_next() -> void:
 					print("ElevationService: '%s' DEM served from legacy cache (%s) — promoting" % [
 						tag, legacy_path.get_file()])
 					_save_cache(key, cached["grid"], int(cached["cols"]), int(cached["rows"]))
-		if cached.is_empty() and str(first["kind"]) == "openmeteo":
+		if cached.is_empty() and str(first["kind"]) in ["openmeteo", "terrarium"]:
 			# No key on this machine, but a DEM of the same footprint from a
 			# BETTER source is on disk (an asset pack from someone with an
 			# OpenTopography key, or a key that has since been removed): use
@@ -395,6 +423,10 @@ func _begin_rung(req: Dictionary) -> void:
 		print("ElevationService: '%s' DEM not cached — fetching via openmeteo (grid %d²) …" % [tag, n])
 		_request_open_meteo(lat, lon, half_extent_m, n, key, tag, req)
 		return
+	if str(rung["kind"]) == "terrarium":
+		print("ElevationService: '%s' DEM not cached — fetching via terrarium tiles (grid %d²) …" % [tag, n])
+		_request_terrarium(lat, lon, half_extent_m, n, key, tag, req)
+		return
 	print("ElevationService: '%s' DEM not cached — fetching via %s (grid %d²) …" % [
 		tag, str(rung["cache_source"]), n])
 	_request_opentopo(lat, lon, half_extent_m, n, key, tag,
@@ -426,6 +458,7 @@ static func source_ladder(lat: float, lon: float, tag: String, half_extent_m: fl
 				out.append(_opentopo_rung(OPENTOPO_USGS_URL, "USGS10m"))
 			out.append(_opentopo_rung(OPENTOPO_GLOBAL_URL, "SRTMGL1"))
 			out.append(_opentopo_rung(OPENTOPO_GLOBAL_URL, "COP90"))
+	out.append({"kind": "terrarium", "cache_source": "terrarium", "dem": "", "base_url": TERRARIUM_URL})
 	out.append({"kind": "openmeteo", "cache_source": "openmeteo", "dem": "", "base_url": OPEN_METEO_URL})
 	return out
 
@@ -437,12 +470,11 @@ static func _opentopo_rung(base_url: String, dem_name: String) -> Dictionary:
 
 ## Grid N a rung is fetched and cached at (part of its cache key).
 static func rung_grid_n(rung: Dictionary, grid_n: int, tag: String) -> int:
-	if str(rung.get("kind", "")) == "opentopo":
+	if str(rung.get("kind", "")) in ["opentopo", "terrarium"]:
 		return maxi(grid_n, OPENTOPO_GRID_N if tag == "base" else DETAIL_GRID_N)
 	if tag == "detail":
 		return mini(grid_n, OPENMETEO_DETAIL_N)
-	# Open-Meteo as a FALLBACK for a keyed base request: grid_n may be up to
-	# 256² = 656 serial batches. 96² (93 batches) is the no-key cap already.
+	# Open-Meteo is the last resort: one minute's call budget (see the const).
 	return mini(grid_n, OPENMETEO_BASE_MAX_N)
 
 
@@ -455,7 +487,7 @@ func _cached_fallback_path(lat: float, lon: float, tag: String, half_extent_m: f
 		return ""
 	for i in range(1, ladder.size()):
 		var rung: Dictionary = ladder[i]
-		if str(rung["kind"]) != "opentopo":
+		if str(rung["kind"]) not in ["opentopo", "terrarium"]:
 			continue
 		var key := _cache_key(lat, lon, half_extent_m, rung_grid_n(rung, grid_n, tag), tag,
 			str(rung["cache_source"]))
@@ -652,6 +684,10 @@ func _on_pool_completed(result: int, response_code: int,
 			_fail("Open-Meteo %s after %d retries" % [_http_what(result, response_code), MAX_RETRIES])
 			return
 		var delay := _jittered(retry_delay_s(n, headers))
+		if response_code == 429 and _is_openmeteo_minutely_limit(body_text):
+			# The per-minute budget refills in a minute; a 4 / 8 / 16 s backoff
+			# burned all three retries inside the same minute.
+			delay = OPENMETEO_MINUTE_WAIT_S
 		push_warning("ElevationService: Open-Meteo batch %d %s — retry %d in %.0f s" % [
 			batch, _http_what(result, response_code), n, delay])
 		_after(delay, func() -> void:
@@ -707,6 +743,219 @@ func _finish_open_meteo() -> void:
 	_busy = false
 	_job = {}
 	elevation_ready.emit(key, grid, cols, rows, tag)
+	_start_next()
+
+
+## Fetch a square from AWS Terrarium tiles: pick the zoom whose pixels are no
+## coarser than the target sample spacing (dropped until <= TERRARIUM_MAX_TILES
+## tiles cover it), pull the tiles one at a time into one mosaic, then sample
+## the target grid bilinearly in Web Mercator pixel space. Positions are worked
+## in 64-bit floats here (GeoMath.lonlat_to_tile_f returns a float32 Vector2,
+## a few pixels off at z14).
+func _request_terrarium(lat: float, lon: float, half_extent_m: float,
+		grid_n: int, key: String, tag: String, req: Dictionary = {}) -> void:
+	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
+	var plan := terrarium_plan(bbox, grid_n)
+	_job = {
+		"source": "terrarium",
+		"key": key,
+		"tag": tag,
+		"target_n": grid_n,
+		"bbox": bbox,
+		"z": int(plan["z"]),
+		"x0": int(plan["x0"]),
+		"y0": int(plan["y0"]),
+		"ntx": int(plan["ntx"]),
+		"nty": int(plan["nty"]),
+		"tiles": plan["tiles"],
+		"tile_i": 0,
+		"retries": 0,
+		"mosaic": PackedFloat32Array(),
+		"req": req,
+		"seq": _next_job_seq(),
+	}
+	var w := int(plan["ntx"]) * TERRARIUM_TILE_PX
+	var h := int(plan["nty"]) * TERRARIUM_TILE_PX
+	var mosaic := PackedFloat32Array()
+	mosaic.resize(w * h)
+	mosaic.fill(NAN)
+	_job["mosaic"] = mosaic
+	_busy = true
+	if _terrarium_http == null or not is_instance_valid(_terrarium_http):
+		_terrarium_http = HTTPRequest.new()
+		_terrarium_http.timeout = 30.0
+		add_child(_terrarium_http)
+		_terrarium_http.request_completed.connect(_on_terrarium_completed)
+	print("ElevationService: terrarium z%d, %d tile(s) for a %.0f km square …" % [
+		int(plan["z"]), (plan["tiles"] as Array).size(), half_extent_m * 2.0 / 1000.0])
+	_fire_terrarium_tile()
+
+
+## Tile plan for a bbox: {z, x0, y0, ntx, nty, tiles: [Vector2i]}. Pure.
+static func terrarium_plan(bbox: Dictionary, grid_n: int) -> Dictionary:
+	var west := float(bbox["west"])
+	var east := float(bbox["east"])
+	var north := float(bbox["north"])
+	var south := float(bbox["south"])
+	var spacing_deg := (east - west) / float(maxi(grid_n - 1, 1))
+	var z := TERRARIUM_MAX_ZOOM
+	if spacing_deg > 0.0:
+		z = clampi(int(ceil(log(360.0 / (float(TERRARIUM_TILE_PX) * spacing_deg)) / log(2.0))),
+			0, TERRARIUM_MAX_ZOOM)
+	var r := {}
+	while true:
+		# One pixel of margin so the bilinear sample at the bbox edge has both
+		# neighbours inside the mosaic.
+		var m := 1.0 / float(TERRARIUM_TILE_PX)
+		var x0 := int(floor(terrarium_tile_xf(west, z) - m))
+		var x1 := int(floor(terrarium_tile_xf(east, z) + m))
+		var y0 := int(floor(terrarium_tile_yf(north, z) - m))
+		var y1 := int(floor(terrarium_tile_yf(south, z) + m))
+		var lim := (1 << z) - 1
+		x0 = clampi(x0, 0, lim)
+		x1 = clampi(x1, 0, lim)
+		y0 = clampi(y0, 0, lim)
+		y1 = clampi(y1, 0, lim)
+		var ntx := x1 - x0 + 1
+		var nty := y1 - y0 + 1
+		if ntx * nty <= TERRARIUM_MAX_TILES or z == 0:
+			var tiles: Array = []
+			for ty in range(y0, y1 + 1):
+				for tx in range(x0, x1 + 1):
+					tiles.append(Vector2i(tx, ty))
+			r = {"z": z, "x0": x0, "y0": y0, "ntx": ntx, "nty": nty, "tiles": tiles}
+			break
+		z -= 1
+	return r
+
+
+## Fractional Web Mercator tile x / y at zoom z, in 64-bit floats.
+static func terrarium_tile_xf(lon_deg: float, z: int) -> float:
+	return (lon_deg + 180.0) / 360.0 * float(1 << z)
+
+
+static func terrarium_tile_yf(lat_deg: float, z: int) -> float:
+	var la := deg_to_rad(clampf(lat_deg, -85.05112878, 85.05112878))
+	return (1.0 - log(tan(la) + 1.0 / cos(la)) / PI) / 2.0 * float(1 << z)
+
+
+## Inverses of the two above (the selftest's pixel-centre identity).
+static func terrarium_tile_x_to_lon(x: float, z: int) -> float:
+	return x / float(1 << z) * 360.0 - 180.0
+
+
+static func terrarium_tile_y_to_lat(y: float, z: int) -> float:
+	return rad_to_deg(atan(sinh(PI * (1.0 - 2.0 * y / float(1 << z)))))
+
+
+## Decode one Terrarium PNG into metres (row-major, w × h). Empty on failure.
+static func decode_terrarium_png(body: PackedByteArray) -> PackedFloat32Array:
+	var img := Image.new()
+	if img.load_png_from_buffer(body) != OK or img.is_empty():
+		return PackedFloat32Array()
+	if img.get_format() != Image.FORMAT_RGB8:
+		img.convert(Image.FORMAT_RGB8)
+	var data := img.get_data()
+	var n := img.get_width() * img.get_height()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	for i in n:
+		var j := i * 3
+		out[i] = float(data[j]) * 256.0 + float(data[j + 1]) + float(data[j + 2]) / 256.0 - 32768.0
+	return out
+
+
+## Sample a target_n² grid of `bbox` (north row first, like every DEM here)
+## out of a Terrarium mosaic whose top-left tile is (x0, y0) at zoom z. Pure.
+static func sample_terrarium_mosaic(mosaic: PackedFloat32Array, w: int, h: int,
+		z: int, x0: int, y0: int, bbox: Dictionary, target_n: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(target_n * target_n)
+	var inv := 1.0 / float(maxi(target_n - 1, 1))
+	var px := float(TERRARIUM_TILE_PX)
+	for r in target_n:
+		var la := lerpf(float(bbox["north"]), float(bbox["south"]), float(r) * inv)
+		var fy := (terrarium_tile_yf(la, z) - float(y0)) * px - 0.5
+		for c in target_n:
+			var lo := lerpf(float(bbox["west"]), float(bbox["east"]), float(c) * inv)
+			var fx := (terrarium_tile_xf(lo, z) - float(x0)) * px - 0.5
+			out[r * target_n + c] = _sample_grid_bilinear(mosaic, w, h, fx, fy)
+	return out
+
+
+func _fire_terrarium_tile() -> void:
+	var t: Vector2i = (_job["tiles"] as Array)[int(_job["tile_i"])]
+	var url := TERRARIUM_URL % [int(_job["z"]), t.x, t.y]
+	var err := _terrarium_http.request(url)
+	if err != OK:
+		if _advance_ladder("HTTPRequest error %d" % err):
+			return
+		_fail("HTTPRequest error %d" % err)
+
+
+func _on_terrarium_completed(result: int, response_code: int,
+		headers: PackedStringArray, body: PackedByteArray) -> void:
+	if _job.is_empty() or str(_job.get("source", "")) != "terrarium":
+		return
+	var tiles: Array = _job["tiles"]
+	var tile_i := int(_job["tile_i"])
+	var heights := PackedFloat32Array()
+	if result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
+		heights = decode_terrarium_png(body)
+	if heights.size() != TERRARIUM_TILE_PX * TERRARIUM_TILE_PX:
+		# 4xx (not 429) = the tile is not there: a permanent answer for this
+		# source. Everything else (network, 429, 5xx, a truncated PNG) retries.
+		var permanent := result == HTTPRequest.RESULT_SUCCESS and response_code >= 400 \
+				and response_code < 500 and response_code != 429
+		var what := _http_what(result, response_code) if heights.is_empty() and response_code != 200 \
+				else "undecodable tile"
+		var n := int(_job.get("retries", 0)) + 1
+		_job["retries"] = n
+		if permanent or n > MAX_RETRIES:
+			if _advance_ladder("terrarium tile %d/%d %s" % [tile_i + 1, tiles.size(), what], permanent):
+				return
+			_fail("terrarium %s" % what)
+			return
+		var delay := _jittered(retry_delay_s(n, headers))
+		push_warning("ElevationService: terrarium tile %d/%d %s — retry %d in %.0f s" % [
+			tile_i + 1, tiles.size(), what, n, delay])
+		_after(delay, _fire_terrarium_tile)
+		return
+	var ntx := int(_job["ntx"])
+	var w := ntx * TERRARIUM_TILE_PX
+	var mosaic: PackedFloat32Array = _job["mosaic"]
+	_job["mosaic"] = PackedFloat32Array()   # drop the ref so the writes do not copy
+	var t: Vector2i = tiles[tile_i]
+	var ox := (t.x - int(_job["x0"])) * TERRARIUM_TILE_PX
+	var oy := (t.y - int(_job["y0"])) * TERRARIUM_TILE_PX
+	for row in TERRARIUM_TILE_PX:
+		var src := row * TERRARIUM_TILE_PX
+		var dst := (oy + row) * w + ox
+		for col in TERRARIUM_TILE_PX:
+			mosaic[dst + col] = heights[src + col]
+	_job["mosaic"] = mosaic
+	elevation_progress.emit(tile_i + 1, tiles.size())
+	if tile_i + 1 < tiles.size():
+		_job["tile_i"] = tile_i + 1
+		_job["retries"] = 0
+		_fire_terrarium_tile()
+		return
+	var target_n := int(_job["target_n"])
+	var grid := sample_terrarium_mosaic(mosaic, w, int(_job["nty"]) * TERRARIUM_TILE_PX,
+		int(_job["z"]), int(_job["x0"]), int(_job["y0"]), _job["bbox"], target_n)
+	if not grid_is_usable(grid, target_n, target_n):
+		if _advance_ladder("terrarium DEM has no usable relief", true):
+			return
+		_fail("elevation grid has no usable relief")
+		return
+	var key := str(_job["key"])
+	var tag := str(_job.get("tag", "base"))
+	print("ElevationService: '%s' DEM ready from terrarium (%d tiles, z%d)" % [
+		tag, tiles.size(), int(_job["z"])])
+	_save_cache(key, grid, target_n, target_n)
+	_busy = false
+	_job = {}
+	elevation_ready.emit(key, grid, target_n, target_n, tag)
 	_start_next()
 
 
@@ -990,6 +1239,8 @@ func _advance_ladder(reason: String, permanent: bool = false) -> bool:
 		str(req["tag"]), str(cur["cache_source"]), reason, str(nxt["cache_source"])])
 	if _opentopo_http != null and is_instance_valid(_opentopo_http):
 		_opentopo_http.cancel_request()
+	if _terrarium_http != null and is_instance_valid(_terrarium_http):
+		_terrarium_http.cancel_request()
 	for http in _pool:
 		if is_instance_valid(http):
 			http.cancel_request()
@@ -1293,8 +1544,17 @@ static func _load_cache_file(path: String) -> Dictionary:
 	return {"grid": grid, "cols": cols, "rows": rows}
 
 
+## Open-Meteo's "Minutely API request limit exceeded" (and the hourly one):
+## transient — wait and retry, never latch the daily flag on it.
+static func _is_openmeteo_minutely_limit(body_text: String) -> bool:
+	var low := body_text.to_lower()
+	return low.contains("minutely") or low.contains("hourly")
+
+
 static func _is_openmeteo_daily_limit(response_code: int, body_text: String) -> bool:
 	if body_text.is_empty():
+		return false
+	if _is_openmeteo_minutely_limit(body_text):
 		return false
 	if body_text.to_lower().contains("daily api request limit"):
 		return true

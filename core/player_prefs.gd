@@ -20,6 +20,11 @@ const CAMERA_FIRST := "first"
 const CAMERA_THIRD := "third"
 
 ## Body choices. A custom body is "custom:<file name>" in CUSTOM_DIR.
+## The default is the SILHOUETTE: the same stick figure the NPCs are drawn
+## with (NpcSimpleFigure, black body, rim in the player's colour), so the
+## player and the people around them read as one cast. FIGURE is its
+## detailed variant (waist, hands, feet, head-look).
+const BODY_SILHOUETTE := "silhouette"
 const BODY_FIGURE := "figure"
 const BODY_REMY := "remy"
 const CUSTOM_PREFIX := "custom:"
@@ -38,7 +43,7 @@ static var _camera := CAMERA_FIRST
 static var _tp_distance := 3.4
 static var _tp_shoulder := 1          ## -1 left, 0 centred, 1 right
 static var _tp_recenter := true       ## driving: swing back behind the vehicle
-static var _body := BODY_FIGURE
+static var _body := BODY_SILHOUETTE
 static var _tint := Color(0.55, 0.62, 0.78)
 
 
@@ -59,7 +64,7 @@ static func _ensure() -> void:
 	_tp_distance = clampf(float(cfg.get_value(SECTION, "tp_distance", 3.4)), TP_DISTANCE_MIN, TP_DISTANCE_MAX)
 	_tp_shoulder = clampi(int(cfg.get_value(SECTION, "tp_shoulder", 1)), -1, 1)
 	_tp_recenter = bool(cfg.get_value(SECTION, "tp_recenter", true))
-	_body = str(cfg.get_value(SECTION, "body", BODY_FIGURE))
+	_body = str(cfg.get_value(SECTION, "body", BODY_SILHOUETTE))
 	var t: Variant = cfg.get_value(SECTION, "tint", _tint)
 	if t is Color:
 		_tint = t
@@ -87,7 +92,7 @@ static func reset_defaults() -> void:
 	_tp_distance = 3.4
 	_tp_shoulder = 1
 	_tp_recenter = true
-	_body = BODY_FIGURE
+	_body = BODY_SILHOUETTE
 	_tint = Color(0.55, 0.62, 0.78)
 	_generation += 1
 
@@ -147,7 +152,7 @@ static func body() -> String:
 
 static func set_body(id: String) -> void:
 	_ensure()
-	_body = id if not id.is_empty() else BODY_FIGURE
+	_body = id if not id.is_empty() else BODY_SILHOUETTE
 	_save_key("body", _body)
 
 
@@ -179,9 +184,10 @@ static func custom_files() -> PackedStringArray:
 	return out
 
 
-## The body choices to offer: [{id, label}], the detailed figure first.
+## The body choices to offer: [{id, label}], the silhouette first.
 static func body_options() -> Array:
-	var out: Array = [{"id": BODY_FIGURE, "label": "Detailed figure (default)"}]
+	var out: Array = [{"id": BODY_SILHOUETTE, "label": "Silhouette, like the NPCs (default)"},
+		{"id": BODY_FIGURE, "label": "Detailed figure"}]
 	if remy_available():
 		out.append({"id": BODY_REMY, "label": "Remy (Mixamo)"})
 	for f in custom_files():
