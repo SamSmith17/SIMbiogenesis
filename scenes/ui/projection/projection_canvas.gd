@@ -719,11 +719,13 @@ func _resolve_solar_ui_fallback() -> void:
 	if _solar_ui == null:
 		return
 
-	_solar_daily_label = _solar_ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColToday/ScoreboardToday")
-	_solar_power_label = _solar_ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/SolarContainer/SolarValue")
-	_solar_load_label = _solar_ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/LoadContainer/LoadValue")
-	_solar_net_label = _solar_ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/NetContainer/NetValue")
-	_solar_battery_percent_label = _solar_ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryPercent")
+	# SolarUI reparents its rows into a collapsible body at runtime, so these
+	# are read off its @onready label properties, never by scene path.
+	_solar_daily_label = _solar_ui.get("scoreboard_today") as Label
+	_solar_power_label = _solar_ui.get("solar_value") as Label
+	_solar_load_label = _solar_ui.get("load_value") as Label
+	_solar_net_label = _solar_ui.get("net_value") as Label
+	_solar_battery_percent_label = _solar_ui.get("battery_percent") as Label
 
 
 func _resolve_source_camera() -> void:
@@ -1222,14 +1224,12 @@ func _sync_from_solar_ui_fallback() -> void:
 	if _solar_ui == null or not _solar_ui.visible:
 		return
 
-	if _solar_daily_label != null:
-		simulated_solar_today_kwh = _parse_state_to_float(_solar_daily_label.text)
-	if _solar_power_label != null:
-		simulated_current_solar_watts = _parse_state_to_float(_solar_power_label.text)
-	if _solar_load_label != null:
-		simulated_current_load_watts = _parse_state_to_float(_solar_load_label.text)
-	if _solar_battery_percent_label != null:
-		simulated_battery_soc = clampf(_parse_state_to_float(_solar_battery_percent_label.text), 0.0, 100.0)
+	# The readouts print W or kW by magnitude, so take the numbers, not the text.
+	simulated_solar_today_kwh = float(_solar_ui.get("daily_solar_generated_kwh"))
+	simulated_current_solar_watts = float(_solar_ui.get("current_solar_kw")) * 1000.0
+	simulated_current_load_watts = float(_solar_ui.get("current_load_kw")) * 1000.0
+	if _solar_ui.has_method("get_battery_percent"):
+		simulated_battery_soc = clampf(float(_solar_ui.call("get_battery_percent")), 0.0, 100.0)
 	_refresh_simulated_panel()
 
 

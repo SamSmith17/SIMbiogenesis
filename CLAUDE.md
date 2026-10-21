@@ -1619,6 +1619,11 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # an 8 mm/h storm books rain on each pond's surface and raises it (or it spills
 # / a siphon drains it). The Mt Vernon playtest of 2026-10-12, formalized:
 tools\harness.ps1 -World mtvernon -Capture sitebalance
+# Power Scoreboard daily counters (sandbox): dawn -> past midnight, the
+# TODAY column (solar / wind & hydro / max capture / generated / consumed,
+# from the timeline's solar/aux/raw/load channels) counts up, resets at
+# midnight, YESTERDAY takes the day's solar, a scrub back rewinds it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/solar_scoreboard_probe.gd
 # Energy balance (sandbox, edits the graph in memory): a load switched on
 # inside a scrubbed-back hour drains the battery, solar follows the sun with
 # the graph OPEN, double-clicking a turbine switches it off (0 W, SolarUI's
@@ -2735,8 +2740,17 @@ Pinned by `_test_near_detail_toggle` in terrain_selftest.
 
 **Terrain data services (autoloads, copy the weather_service HTTP+cache+deferred
 pattern):**
-- `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid. No-key
-  default = Open-Meteo Elevation (Copernicus 90 m). **Open-Meteo rate-limits
+- `core/terrain/elevation_service.gd` (`ElevationService`): DEM grid.
+  **No-key default (since 2026-10-21) = Terrarium terrain tiles** on AWS Open
+  Data (`TERRARIUM_URL`, PNG tiles, no key, no quota), tried before Open-Meteo
+  in every source ladder. Why: a fresh install (the exported .exe) has no
+  OpenTopography key, and Open-Meteo bills EACH POINT as one call at 600 a
+  minute — the 64² default base grid could never finish, the per-minute 429
+  was misread as the daily quota, and the world built flat (Bombay Beach
+  0..0 m; with tiles -135..914 m). Open-Meteo is now the last rung, capped at
+  24² per fetch, and a per-minute / per-hour 429 waits 62 s instead of
+  latching the daily flag. The notes below describe Open-Meteo as it still
+  behaves when it IS reached. **Open-Meteo rate-limits
   CONCURRENT connections per IP (429), not request count** — so batches are
   fetched SEQUENTIALLY (POOL_SIZE=1, DISPATCH_DELAY between requests). A concurrent
   pool tripped 429 and fell back to flat terrain; sequential is reliable.

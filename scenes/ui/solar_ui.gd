@@ -30,6 +30,8 @@ extends Control
 @onready var scoreboard_today : Label = $Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColToday/ScoreboardToday
 @onready var scoreboard_prev : Label = $Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColPrev/ScoreboardPrev
 @onready var scoreboard_best : Label = $Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColBest/ScoreboardBest
+@onready var scoreboard_best_hdr : Label = $Panel/MarginContainer/VBoxContainer/ScoreboardRow/ColBest/Hdr3
+@onready var capture_label : Label = $Panel/MarginContainer/VBoxContainer/CaptureLabel
 @onready var battery_bar : ProgressBar = $Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryBar
 @onready var battery_percent : Label = $Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryPercent
 @onready var battery_kwh : Label = $Panel/MarginContainer/VBoxContainer/BatteryKwhLabel
@@ -40,6 +42,16 @@ extends Control
 @onready var potential_label : Label = $Panel/MarginContainer/VBoxContainer/PotentialContainer/PotentialLabel
 @onready var load_value : Label = $Panel/MarginContainer/VBoxContainer/LoadContainer/LoadValue
 @onready var net_value : Label = $Panel/MarginContainer/VBoxContainer/NetContainer/NetValue
+@onready var gen_value : Label = $Panel/MarginContainer/VBoxContainer/GenContainer/GenValue
+@onready var net_icon : Label = $Panel/MarginContainer/VBoxContainer/NetContainer/NetIcon
+# Daily kWh column (TODAY): counts up from local midnight, read off the
+# EnergyTimeline so it rewinds with the clock like the battery does.
+@onready var solar_today : Label = $Panel/MarginContainer/VBoxContainer/SolarContainer/SolarToday
+@onready var aux_today : Label = $Panel/MarginContainer/VBoxContainer/AuxContainer/AuxToday
+@onready var potential_today : Label = $Panel/MarginContainer/VBoxContainer/PotentialContainer/PotentialToday
+@onready var gen_today : Label = $Panel/MarginContainer/VBoxContainer/GenContainer/GenToday
+@onready var load_today : Label = $Panel/MarginContainer/VBoxContainer/LoadContainer/LoadToday
+@onready var net_today : Label = $Panel/MarginContainer/VBoxContainer/NetContainer/NetToday
 @onready var status_label : Label = $Panel/MarginContainer/VBoxContainer/StatusLabel
 @onready var solar_graph : Control = $Panel/MarginContainer/VBoxContainer/SolarGraphContainer/SolarGraph
 @onready var graph_peak_label : Label = $Panel/MarginContainer/VBoxContainer/SolarGraphContainer/GraphPeakLabel
@@ -280,6 +292,13 @@ signal render_state_changed()
 var daily_solar_generated_kwh : float = 0.0
 var daily_aux_generated_kwh : float = 0.0
 var daily_load_consumed_kwh : float = 0.0
+## What the array could have made today (the "raw" channel: before battery-
+## full curtailment and the DC caps) — the denominator of the capture score.
+var daily_potential_kwh : float = 0.0
+## A CSV clip's own "daily_load" reading wins over the timeline while mapped.
+var _csv_daily_load_override : float = -1.0
+## The day the scoreboard last counted (-1 = not yet since load).
+var _scoreboard_day_start : float = -1.0
 var daily_battery_charge_kwh : float = 0.0
 var daily_battery_discharge_kwh : float = 0.0
 ## Completed sim-day total for the previous calendar sim day (for scoreboard)
@@ -460,8 +479,7 @@ func _ready() -> void:
 	_load_panel_settings()
 	
 	battery_bar.max_value = 100.0
-	if potential_label:
-		potential_label.tooltip_text = "Maximum array output before battery-full curtailment. Green when it matches Solar in; red when the battery is full and surplus is clipped."
+	_style_scoreboard()
 
 	call_deferred("_setup_collapse")
 	
@@ -1825,7 +1843,7 @@ func apply_csv_playback_reading(role: String, value: float) -> void:
 		"daily_solar":
 			_ha_daily_solar_override = value
 		"daily_load":
-			daily_load_consumed_kwh = maxf(value, 0.0)
+			_csv_daily_load_override = maxf(value, 0.0)
 		_:
 			pass
 
@@ -1843,6 +1861,7 @@ func set_csv_playback_active(active: bool, linked_roles: Dictionary = {}, source
 		_ha_solar_override = -1.0
 		_ha_load_override = -1.0
 		_ha_daily_solar_override = -1.0
+		_csv_daily_load_override = -1.0
 
 
 ## Replace the 24h graph with hourly CSV profiles for the current playback day (values in kW).
@@ -3299,7 +3318,8 @@ var _render_cache: RefCounted = null
 ## `_modeled_load_at` did a `find_child` per call), aux from `render_aux_kw`.
 func make_sim_render_evaluator(model: Object) -> Callable:
 	return func(abs_hours: float) -> Dictionary:
-		var solar := evaluate_solar_at(abs_hours)
+		var pair := _evaluate_solar_pair(abs_hours)
+		var solar := pair.y
 		var aux := evaluate_aux_at(abs_hours) if is_nan(render_aux_kw) else maxf(render_aux_kw, 0.0)
 		var load := 0.0
 		if render_ac_on:
@@ -3307,7 +3327,7 @@ func make_sim_render_evaluator(model: Object) -> Callable:
 				load = float(_GRAPH_AC_LOAD_SCRIPT.compute_kw(model, get_tree()))
 			else:
 				load = _modeled_load_at(abs_hours)
-		return {"solar_kw": solar, "aux_kw": aux, "load_kw": load}
+		return {"solar_kw": solar, "aux_kw": aux, "load_kw": load, "raw_kw": pair.x}
 
 
 ## The SimRenderer's cache: while it covers the playhead, `_update_battery`
@@ -3445,7 +3465,8 @@ func evaluate_potential_solar_at(abs_hours: float) -> float:
 
 ## Battery inputs at an arbitrary absolute-hours instant.
 func evaluate_inputs_at(abs_hours: float) -> Dictionary:
-	var solar : float = evaluate_solar_at(abs_hours)
+	var pair := _evaluate_solar_pair(abs_hours)
+	var solar : float = pair.y
 	var aux : float = evaluate_aux_at(abs_hours)
 	var load : float
 	if _render_load_mode == RenderLoadMode.CSV and _observed_series != null \
@@ -3453,7 +3474,7 @@ func evaluate_inputs_at(abs_hours: float) -> Dictionary:
 		load = float(_observed_series.call("sample_at", abs_hours).get("load_kw", 0.0))
 	else:
 		load = _modeled_load_at(abs_hours)
-	return {"solar_kw": solar, "aux_kw": aux, "load_kw": load}
+	return {"solar_kw": solar, "aux_kw": aux, "load_kw": load, "raw_kw": pair.x}
 
 
 ## Auxiliary generation (wind/hydro + graph DC generation) at an absolute-
@@ -3468,11 +3489,18 @@ func evaluate_aux_at(_abs_hours: float) -> float:
 ## Pure solar AC output (kW) at an absolute-hours instant, off the live clock.
 ## Sun via Meeus SPA at that instant; weather sampled at that instant.
 func evaluate_solar_at(abs_hours: float) -> float:
+	return _evaluate_solar_pair(abs_hours).y
+
+
+## (max capture, delivered) kW at an instant: x = the shaded array output
+## before the graph DC caps (the scoreboard's "possible" channel), y = what
+## the wiring delivers (evaluate_solar_at). One sun + weather evaluation.
+func _evaluate_solar_pair(abs_hours: float) -> Vector2:
 	if main_node == null:
-		return 0.0
+		return Vector2.ZERO
 	var clock_obj = main_node.get("clock")
 	if clock_obj == null or not clock_obj.has_method("abs_hours_to_julian_day_utc"):
-		return 0.0
+		return Vector2.ZERO
 	var lat_v = main_node.get("latitude")
 	var lon_v = main_node.get("longitude")
 	var lat : float = float(lat_v) if lat_v != null else 33.36
@@ -3482,7 +3510,7 @@ func evaluate_solar_at(abs_hours: float) -> float:
 	var el : float = float(sp.get("elevation_deg", 0.0))
 	var az : float = float(sp.get("azimuth_deg", 180.0))
 	if el < -2.0:
-		return 0.0
+		return Vector2.ZERO
 	var wx := _weather_at_abs(abs_hours)
 	# _weather_at_abs decorates with the hazard resolved AT abs_hours, so a
 	# rendered week carries each day's own smoke rather than today's.
@@ -3500,7 +3528,7 @@ func evaluate_solar_at(abs_hours: float) -> float:
 		shade = _graph_pv_shade_at(Vector3(cos(el_r) * sin(az_r), sin(el_r),
 			-cos(el_r) * cos(az_r)))
 		kw *= clampf(float(shade.get("factor", 1.0)), 0.0, 1.0)
-	return graph_dc_delivered_kw(kw, shade)
+	return Vector2(kw, graph_dc_delivered_kw(kw, shade))
 
 
 ## Weather inputs at an arbitrary instant: {ghi, cloud, temp, has_real}.
@@ -3738,7 +3766,7 @@ func _update_battery(_delta: float) -> void:
 			var soc_live : float = (_ha_battery_soc_override / 100.0) * BATTERY_CAPACITY_KWH
 			battery_kwh_stored = soc_live
 			energy_timeline.record_measured(abs_h_live, soc_live,
-				current_solar_kw, aux_total, current_load_kw)
+				current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
 		# Update availability
 		var battery_percent_val : float = _ha_battery_soc_override
 		_apply_soc_hysteresis(battery_percent_val)
@@ -3768,7 +3796,7 @@ func _update_battery(_delta: float) -> void:
 	energy_timeline.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
 	if energy_timeline.is_empty():
 		energy_timeline.init_anchor(abs_h, battery_kwh_stored,
-			current_solar_kw, aux_total, current_load_kw)
+			current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
 	# Inside a RENDERED range the timeline is authoritative: the render
 	# integrated the same inputs as a pure function of time, and the live
 	# `current_solar_kw` comes from the scene-sun path (cloud noise, the
@@ -3778,7 +3806,7 @@ func _update_battery(_delta: float) -> void:
 	var rendered := _in_rendered_range(abs_h)
 	if abs_h > energy_timeline.end_abs_hours():
 		# Forward — integrate with exact live inputs (held across the step).
-		energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw)
+		energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
 	elif abs_h < energy_timeline.start_abs_hours():
 		# Scrubbed before the cache start — extend backward (best-effort).
 		energy_timeline.seek(abs_h)
@@ -3799,7 +3827,7 @@ func _update_battery(_delta: float) -> void:
 		if absf(cached_net - live_net) > BATTERY_CACHE_DIVERGE_KW:
 			var cut_at := _battery_last_abs_h if abs_h - _battery_last_abs_h <= 1.0 else abs_h
 			energy_timeline.truncate_after(cut_at)
-			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw)
+			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
 	# else: paused or moving back inside the cache — pure reversible read.
 	_battery_last_abs_h = abs_h
 	battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
@@ -3914,9 +3942,27 @@ func _recompute_scoreboard_from_timeline(abs_h: float) -> void:
 	var day_start : float = floor(abs_h / 24.0) * 24.0
 	daily_solar_generated_kwh = energy_timeline.integrate_channel(day_start, abs_h, "solar")
 	daily_aux_generated_kwh   = energy_timeline.integrate_channel(day_start, abs_h, "aux")
+	daily_potential_kwh = maxf(energy_timeline.integrate_channel(day_start, abs_h, "raw"),
+		daily_solar_generated_kwh)
+	if _csv_daily_load_override >= 0.0:
+		daily_load_consumed_kwh = _csv_daily_load_override
+	else:
+		daily_load_consumed_kwh = energy_timeline.integrate_channel(day_start, abs_h, "load")
 	var prev_start : float = day_start - 24.0
-	if energy_timeline.start_abs_hours() <= prev_start + 1e-6:
+	var tl_start : float = energy_timeline.start_abs_hours()
+	if energy_timeline.is_empty():
+		pass
+	elif tl_start <= prev_start + 1e-6:
 		yesterday_solar_kwh = energy_timeline.integrate_channel(prev_start, day_start, "solar")
+	elif tl_start < day_start and day_start != _scoreboard_day_start:
+		# Only part of yesterday is cached (loaded, or the battery re-anchored,
+		# mid-day). The saved figure belonged to the day BEFORE once a midnight
+		# has passed, so take what was recorded rather than keep a stale number.
+		yesterday_solar_kwh = energy_timeline.integrate_channel(tl_start, day_start, "solar")
+	if day_start != _scoreboard_day_start and _scoreboard_day_start >= 0.0 \
+			and tl_start >= day_start - 1e-6:
+		yesterday_solar_kwh = 0.0   # jumped past a day the cache never saw
+	_scoreboard_day_start = day_start
 	best_day_solar_kwh = maxf(best_day_solar_kwh, daily_solar_generated_kwh)
 	var cur_day : int = int(main_node.get("day")) if main_node != null and "day" in main_node else _last_energy_day
 	_last_energy_day = cur_day
@@ -3934,22 +3980,10 @@ func _update_display() -> void:
 		battery_percent.text = "%.0f%%%s" % [battery_percent_val, battery_linked]
 		battery_percent.remove_theme_color_override("font_color")
 		battery_percent.tooltip_text = _get_link_tooltip("battery SOC", ha_battery_soc_entity)
-	battery_kwh.text = "%.1f / %.0f kWh" % [battery_kwh_stored, BATTERY_CAPACITY_KWH]
-	
-	# --- Scoreboard: today / previous day / best (kWh) ---
-	if scoreboard_today:
-		if _ha_daily_solar_override >= 0.0:
-			scoreboard_today.text = "%.1f%s" % [
-				_ha_daily_solar_override,
-				_source_link_icon("daily_solar", true),
-			]
-		else:
-			scoreboard_today.text = "%.1f" % daily_solar_generated_kwh
-		scoreboard_today.tooltip_text = _get_link_tooltip("daily solar (today)", ha_daily_solar_entity)
-	if scoreboard_prev:
-		scoreboard_prev.text = "%.1f" % yesterday_solar_kwh
-	if scoreboard_best:
-		scoreboard_best.text = "%.1f" % best_day_solar_kwh
+	battery_kwh.text = "%.1f / %.0f kWh stored" % [battery_kwh_stored, BATTERY_CAPACITY_KWH]
+
+	_update_score_card()
+	_update_daily_column()
 	
 	# Update title to show mode and HA status
 	if title_label:
@@ -4014,17 +4048,17 @@ func _update_display() -> void:
 	
 	# Color code battery bar
 	if battery_percent_val > 60.0:
-		battery_bar.modulate = Color(0.3, 1.0, 0.3, 1.0)  # Green
+		_set_battery_fill(Color(0.3, 1.0, 0.3, 1.0))  # Green
 	elif battery_percent_val > 30.0:
-		battery_bar.modulate = Color(1.0, 0.9, 0.2, 1.0)  # Yellow
+		_set_battery_fill(Color(1.0, 0.9, 0.2, 1.0))  # Yellow
 	elif battery_percent_val > MIN_BATTERY_PERCENT:
-		battery_bar.modulate = Color(1.0, 0.5, 0.2, 1.0)  # Orange
+		_set_battery_fill(Color(1.0, 0.5, 0.2, 1.0))  # Orange
 	else:
-		battery_bar.modulate = Color(1.0, 0.2, 0.2, 1.0)  # Red
+		_set_battery_fill(Color(1.0, 0.2, 0.2, 1.0))  # Red
 	
 	# Solar power (show 📡 live HA or 📂 CSV playback when linked)
 	var solar_linked = _source_link_icon("solar", _ha_solar_override >= 0.0)
-	solar_value.text = "%.2f kW%s" % [current_solar_kw, solar_linked]
+	solar_value.text = "%s%s" % [_fmt_power(current_solar_kw), solar_linked]
 	if current_solar_kw > 0.1:
 		solar_value.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2, 1.0))
 	else:
@@ -4036,7 +4070,7 @@ func _update_display() -> void:
 	# battery, see system_graph/dc_power_wiring.gd). Included in Net below.
 	if aux_value:
 		var aux_kw := current_aux_generation_kw + current_graph_dc_kw
-		aux_value.text = "%.2f kW" % aux_kw
+		aux_value.text = _fmt_power(aux_kw)
 		if aux_kw > 0.01:
 			aux_value.add_theme_color_override("font_color", Color(0.686, 0.6, 1.0, 1.0))
 		else:
@@ -4045,7 +4079,7 @@ func _update_display() -> void:
 	# Max array output before battery curtailment (see _apply_battery_full_throttle)
 	if potential_value:
 		var pot_kw: float = _raw_solar_kw
-		potential_value.text = "%.2f kW" % pot_kw
+		potential_value.text = _fmt_power(pot_kw)
 		var gap: float = _raw_solar_kw - current_solar_kw
 		# Red when useful solar is being clipped; green when all available power is used
 		if gap > 0.02 and _raw_solar_kw > 0.02:
@@ -4068,7 +4102,7 @@ func _update_display() -> void:
 		load_value.add_theme_color_override("font_color", Color(1.0, 0.28, 0.22, 1.0))
 		load_value.tooltip_text = _ac_shutdown_reason_label()
 	else:
-		load_value.text = "%.2f kW%s" % [current_load_kw, load_linked]
+		load_value.text = "%s%s" % [_fmt_power(current_load_kw), load_linked]
 		if current_load_kw > 0.01:
 			load_value.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3, 1.0))
 		else:
@@ -4079,12 +4113,17 @@ func _update_display() -> void:
 	battery_percent.tooltip_text = _get_link_tooltip("battery SOC", ha_battery_soc_entity)
 	
 	# Net power (solar + auxiliary sources such as wind/hydro + graph DC generation)
-	var net_power : float = current_solar_kw + current_aux_generation_kw + current_graph_dc_kw - current_load_kw
+	var gen_now : float = current_solar_kw + current_aux_generation_kw + current_graph_dc_kw
+	if gen_value:
+		gen_value.text = _fmt_power(gen_now)
+		gen_value.add_theme_color_override("font_color",
+			UITheme.C_PRIMARY if gen_now > 0.01 else UITheme.C_TEXT_M)
+	var net_power : float = gen_now - current_load_kw
 	if net_power >= 0.0:
-		net_value.text = "+%.2f kW" % net_power
+		net_value.text = "+" + _fmt_power(net_power)
 		net_value.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3, 1.0))
 	else:
-		net_value.text = "%.2f kW" % net_power
+		net_value.text = "−" + _fmt_power(-net_power)
 		net_value.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3, 1.0))
 	
 	# Status message - show battery state and weather
@@ -4121,6 +4160,152 @@ func _update_display() -> void:
 	
 	# Update rain display periodically
 	_update_rain_display()
+
+# ==================== SCOREBOARD FACE ====================
+# TODAY / YESTERDAY / BEST DAY solar on top with a capture line (today's solar
+# against what the array could have made), then each flow's power NOW beside
+# its kWh TODAY — since local midnight on the sim clock, read off the
+# EnergyTimeline so a scrub back rewinds the counters with the battery.
+
+
+func _style_scoreboard() -> void:
+	var vbox := get_node_or_null("Panel/MarginContainer/VBoxContainer")
+	if vbox == null:
+		return
+	# Tabular figures: a counter that changes while you watch must not jitter.
+	var num_font := UITheme.font("medium", true)
+	for lbl in [scoreboard_today, scoreboard_prev, scoreboard_best,
+			solar_value, aux_value, potential_value, gen_value, load_value, net_value,
+			solar_today, aux_today, potential_today, gen_today, load_today, net_today,
+			battery_percent]:
+		if lbl != null:
+			(lbl as Label).add_theme_font_override("font", num_font)
+	# One icon column: emoji glyphs differ in width, which staggered the labels.
+	for path in ["SolarContainer/SolarIcon", "AuxContainer/AuxIcon", "PotentialContainer/PotIcon",
+			"GenContainer/GenIcon", "LoadContainer/LoadIcon", "NetContainer/NetIcon"]:
+		var icon := vbox.get_node_or_null(path) as Label
+		if icon != null:
+			icon.custom_minimum_size.x = 20.0
+			icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if potential_label:
+		potential_label.tooltip_text = "Max capture: what the array could make right now, before the battery-full taper and the wiring's current caps. Green when Solar takes all of it; red when surplus is clipped."
+	var tips := {
+		"SolarContainer/SolarLabel": "Solar delivered to the battery and loads.",
+		"AuxContainer/AuxLabel": "Wind, hydro and other generators wired into the battery.",
+		"GenContainer/GenLabel": "Everything generated: solar + aux.",
+		"LoadContainer/LoadLabel": "Power used by the AC loads.",
+		"NetContainer/NetLabel": "Generated minus consumed. Positive charges the battery.",
+		"EnergyHeader/HdrToday": "Energy since midnight on the sim clock. Resets at midnight.",
+		"EnergyHeader/HdrNow": "Power at this moment.",
+	}
+	for path in tips:
+		var l := vbox.get_node_or_null(path) as Label
+		if l != null:
+			l.mouse_filter = Control.MOUSE_FILTER_STOP
+			l.tooltip_text = tips[path]
+	if capture_label:
+		capture_label.tooltip_text = "Today's solar as a share of what the array could have made today. Keep loads running and the battery hungry while the sun is up to score higher."
+
+
+func _set_battery_fill(c: Color) -> void:
+	if battery_bar:
+		battery_bar.modulate = c
+
+
+## kW for the NOW column: watts under 1 kW, two decimals above.
+static func _fmt_power(kw: float) -> String:
+	if absf(kw) < 1.0:
+		return "%d W" % roundi(kw * 1000.0)
+	return "%.2f kW" % kw
+
+
+## kWh for the TODAY column: Wh under 1 kWh so the dawn count-up shows.
+static func _fmt_energy(kwh: float) -> String:
+	var a := absf(kwh)
+	if a < 1.0:
+		return "%d Wh" % roundi(kwh * 1000.0)
+	if a < 100.0:
+		return "%.1f kWh" % kwh
+	return "%.0f kWh" % kwh
+
+
+## The hero number (unit printed beside it).
+static func _fmt_score(kwh: float) -> String:
+	if kwh < 10.0:
+		return "%.2f" % kwh
+	if kwh < 1000.0:
+		return "%.1f" % kwh
+	return "%.0f" % kwh
+
+
+func _today_solar_kwh() -> float:
+	return _ha_daily_solar_override if _ha_daily_solar_override >= 0.0 else daily_solar_generated_kwh
+
+
+func _update_score_card() -> void:
+	if scoreboard_today == null:
+		return
+	var today := _today_solar_kwh()
+	var linked := _source_link_icon("daily_solar", true) if _ha_daily_solar_override >= 0.0 else ""
+	scoreboard_today.text = _fmt_score(today) + linked
+	scoreboard_today.tooltip_text = _get_link_tooltip("daily solar (today)", ha_daily_solar_entity)
+	if scoreboard_prev:
+		scoreboard_prev.text = _fmt_score(yesterday_solar_kwh)
+	var record := today > 0.05 and today >= best_day_solar_kwh - 1e-4
+	if scoreboard_best:
+		scoreboard_best.text = _fmt_score(maxf(best_day_solar_kwh, today))
+	if scoreboard_best_hdr:
+		scoreboard_best_hdr.text = "BEST DAY ★" if record else "BEST DAY"
+	if capture_label == null:
+		return
+	var possible := maxf(daily_potential_kwh, today)
+	var clipped := maxf(possible - today, 0.0)
+	if possible < 0.005:
+		capture_label.text = "Waiting for the sun"
+		capture_label.add_theme_color_override("font_color", _CAPTURE_DIM)
+		return
+	var pct := clampf(today / possible, 0.0, 1.0) * 100.0
+	var line := "%d%% captured · %s possible" % [floori(pct), _fmt_energy(possible)]
+	if clipped >= 0.0005:
+		line += " · %s clipped" % _fmt_energy(clipped)
+	capture_label.text = line
+	var col := _CAPTURE_DIM
+	if pct >= 95.0:
+		col = Color(0.4, 0.95, 0.5)
+	elif pct < 80.0:
+		col = Color(1.0, 0.7, 0.3)
+	capture_label.add_theme_color_override("font_color", col)
+
+
+const _CAPTURE_DIM := Color(0.55, 0.6, 0.65)
+
+
+func _update_daily_column() -> void:
+	var solar := _today_solar_kwh()
+	var gen := solar + daily_aux_generated_kwh
+	var net := gen - daily_load_consumed_kwh
+	_set_daily(solar_today, solar, Color(1.0, 0.9, 0.2))
+	_set_daily(aux_today, daily_aux_generated_kwh, Color(0.686, 0.6, 1.0))
+	_set_daily(potential_today, maxf(daily_potential_kwh, solar), Color(0.35, 0.95, 0.4))
+	_set_daily(gen_today, gen, UITheme.C_PRIMARY)
+	_set_daily(load_today, daily_load_consumed_kwh, Color(1.0, 0.5, 0.3))
+	if net_today:
+		net_today.text = ("+" if net >= 0.0 else "−") + _fmt_energy(absf(net))
+		net_today.add_theme_color_override("font_color",
+			Color(0.3, 1.0, 0.3) if net >= 0.0 else Color(1.0, 0.3, 0.3))
+		net_today.tooltip_text = "%.3f kWh generated − %.3f kWh consumed since midnight" % [gen, daily_load_consumed_kwh]
+	if net_icon != null:
+		net_icon.add_theme_color_override("font_color",
+			Color(0.3, 1.0, 0.3) if net >= 0.0 else Color(1.0, 0.3, 0.3))
+
+
+func _set_daily(lbl: Label, kwh: float, col: Color) -> void:
+	if lbl == null:
+		return
+	lbl.text = _fmt_energy(kwh)
+	lbl.add_theme_color_override("font_color", col if kwh >= 0.0005 else UITheme.C_TEXT_M)
+	lbl.tooltip_text = "%.3f kWh since midnight" % kwh
+
 
 func _get_weather_icon() -> String:
 	var icon : String = ""
@@ -4838,6 +5023,7 @@ func _setup_collapse() -> void:
 	if vbox == null or title_label == null:
 		return
 	_expanded_height = maxf(size.y, 520.0)
+	custom_minimum_size.x = maxf(custom_minimum_size.x, PANEL_MIN_WIDTH)
 
 	var header := HBoxContainer.new()
 	header.name = "CollapseHeader"
@@ -4877,7 +5063,7 @@ func _setup_collapse() -> void:
 	# weather card); it tucks this into a pill when a tool needs the space.
 	HudLayout.register(self, "scoreboard", "top_left", {
 		"order": 10, "priority": 3, "title": "power scoreboard", "icon": "zap",
-		"size": func() -> Vector2: return Vector2(maxf(size.x, 380.0), _expanded_height if _expanded else COLLAPSED_BAR_HEIGHT),
+		"size": func() -> Vector2: return Vector2(_panel_width(), _panel_height() if _expanded else COLLAPSED_BAR_HEIGHT),
 		"compact": _hud_compact_text,
 	})
 	# Hidden until the graph reports at least one solar panel.
@@ -4911,8 +5097,24 @@ func _hud_compact_text() -> String:
 	return line + ("" if _power_available else " · AC off")
 
 
+## The scoreboard's width and expanded height, never smaller than what its
+## content needs (the map scenes still carry the old 380 x 610 offsets).
+const PANEL_MIN_WIDTH : float = 396.0
+
+func _panel_width() -> float:
+	var panel := get_node_or_null("Panel") as Control
+	var need := panel.get_combined_minimum_size().x if panel != null else 0.0
+	return maxf(maxf(size.x, PANEL_MIN_WIDTH), need)
+
+
+func _panel_height() -> float:
+	var panel := get_node_or_null("Panel") as Control
+	var need := panel.get_combined_minimum_size().y if panel != null else 0.0
+	return maxf(_expanded_height, need)
+
+
 func _apply_collapsed_size() -> void:
-	var h := _expanded_height if _expanded else COLLAPSED_BAR_HEIGHT
+	var h := _panel_height() if _expanded else COLLAPSED_BAR_HEIGHT
 	offset_bottom = offset_top + h
 	custom_minimum_size.y = h
 
