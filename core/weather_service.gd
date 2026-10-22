@@ -88,15 +88,22 @@ const COVERAGE_EPSILON_DEG := 0.05
 ## dataset (location picker writes straight to Main's lat/lon).
 const LOCATION_POLL_INTERVAL := 3.0
 
-## Cumulative days before each month (non-leap; archive years are sampled by
-## calendar position, so the one-day leap shift is below weather noise).
+## Cumulative days before each month, common year. Never index an hourly
+## series with this directly: go through day_of_year0 / hour_index, which know
+## the series' own layout (an Open-Meteo leap-year archive has 8784 hours, and
+## reading it with this table put every date after Feb 29 one day early).
 const _DAYS_BEFORE_MONTH: Array[int] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+## Hours in a common / leap year — the two lengths a full archive can have.
+const HOURS_COMMON_YEAR := 8760
+const HOURS_LEAP_YEAR := 8784
+## First hour of Feb 29 in a leap-year layout (31 + 28 days).
+const FEB29_HOUR := 59 * 24
 
 var _http: HTTPRequest = null
 var _fetching: bool = false
 
-## Loaded dataset descriptor + per-variable hour-of-year arrays (8760 floats;
-## missing samples are NAN).
+## Loaded dataset descriptor + per-variable hour-of-year arrays (8760 floats,
+## 8784 for a leap-year archive; missing samples are NAN).
 var _data_lat: float = NAN
 var _data_lon: float = NAN
 var _data_year: int = 0
@@ -557,7 +564,7 @@ func parse_forecast_json(text: String, lat: float, lon: float,
 	var start_month := clampi(int(d_parts[1]), 1, 12)
 	var start_day := clampi(int(d_parts[2]), 1, 31)
 	var start_hour := clampi(int(h_parts[0]), 0, 23)
-	var start_doy := _DAYS_BEFORE_MONTH[start_month - 1] + start_day - 1
+	var start_doy := day_of_year0(start_month, start_day, is_leap_year(start_year))
 	var start_hoy := start_doy * 24 + start_hour
 	# Parse per-variable arrays.
 	var new_series: Dictionary = {}
@@ -592,13 +599,16 @@ func _forecast_hour_idx(month: int, day: int, hour: float) -> int:
 	var farr: PackedFloat32Array = _forecast_series.get("cloud_cover", PackedFloat32Array())
 	if farr.is_empty():
 		return -1
-	var doy := _DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1
-	var req_hoy := doy * 24 + clampi(int(hour), 0, 23)
+	# The window's entries are consecutive hours, so the request is laid out in
+	# the start year's calendar (a window crossing Feb 29 holds that day).
+	var start_leap := is_leap_year(_forecast_start_year)
+	var req_hoy := day_of_year0(month, day, start_leap) * 24 + clampi(int(hour), 0, 23)
 	var offset := req_hoy - _forecast_start_hoy
-	# Forecast window spans at most 21 days; a large negative offset means the
-	# requested date is in the prior year (Dec-start window wrapping to Jan).
+	# The window spans a few weeks; a large negative offset means the request
+	# is in January after a December start. January is before any Feb 29, so
+	# only the start year's length matters.
 	if offset < -300 * 24:
-		offset += 365 * 24
+		offset += (366 if start_leap else 365) * 24
 	if offset < 0 or offset >= farr.size():
 		return -1
 	return offset
@@ -614,9 +624,10 @@ func is_forecast_date(month: int, day: int) -> bool:
 	return _forecast_hour_idx(month, day, 12.0) >= 0
 
 
+## Hour of year in the COMMON layout: it is compared with _gen_effective_hoy,
+## an index into the generated (always 8760-hour) years.
 func _calendar_hoy(month: int, day: int, hour: float) -> int:
-	var doy := _DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1
-	return doy * 24 + clampi(int(hour), 0, 23)
+	return day_of_year0(month, day, false) * 24 + clampi(int(hour), 0, 23)
 
 
 func _current_calendar_hoy() -> int:
@@ -795,9 +806,56 @@ func _sample_series_dict(series: Dictionary, var_name: String, month: int, day: 
 	return _sample_hourly_array(arr, month, day, hour)
 
 
+## Gregorian leap year.
+static func is_leap_year(year: int) -> bool:
+	return (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+
+
+## True when a FULL hourly series is laid out over a leap year (8784 hours).
+## Generated years and stochastic output are always 8760; a partial series
+## (the current year's archive) cannot be told by length — pass its year.
+static func is_leap_layout(size: int) -> bool:
+	return size >= HOURS_LEAP_YEAR
+
+
+## Zero-based day of year of a calendar date in a common (leap = false) or
+## leap (leap = true) layout. Feb 29 in a common layout reads Feb 28 — a
+## leap-year date on a common-year dataset repeats the 28th rather than
+## jumping ahead to Mar 1.
+static func day_of_year0(month: int, day: int, leap: bool) -> int:
+	var m := clampi(month, 1, 12)
+	var d := clampi(day, 1, 31)
+	if m == 2 and d == 29 and not leap:
+		d = 28
+	var doy := _DAYS_BEFORE_MONTH[m - 1] + d - 1
+	if leap and m > 2:
+		doy += 1
+	return doy
+
+
+## Fractional hour index of (month, day, hour) into an hourly series of the
+## given layout. 2024-04-14 15:00 in a leap layout = (31+29+31+13)*24 + 15.
+static func hour_index(month: int, day: int, hour: float, leap: bool) -> float:
+	return float(day_of_year0(month, day, leap)) * 24.0 + clampf(hour, 0.0, 23.999)
+
+
+## A series dict with Feb 29 cut out of every leap-layout array, so it lines
+## up hour for hour with the common-year layout the weather generators train
+## on and emit (they index by day of a 365-day year).
+static func to_common_year(series: Dictionary) -> Dictionary:
+	var out := {}
+	for k in series:
+		var v: Variant = series[k]
+		if v is PackedFloat32Array and is_leap_layout((v as PackedFloat32Array).size()):
+			var a := v as PackedFloat32Array
+			out[k] = a.slice(0, FEB29_HOUR) + a.slice(FEB29_HOUR + 24)
+		else:
+			out[k] = v
+	return out
+
+
 func _sample_hourly_array(arr: PackedFloat32Array, month: int, day: int, hour: float) -> float:
-	var doy := _DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1
-	var h := float(doy) * 24.0 + clampf(hour, 0.0, 23.999)
+	var h := hour_index(month, day, hour, is_leap_layout(arr.size()))
 	var i0 := clampi(int(h), 0, arr.size() - 1)
 	var i1 := mini(i0 + 1, arr.size() - 1)
 	var a := arr[i0]
@@ -1010,8 +1068,8 @@ func _current_year_sample(var_name: String, month: int, day: int, hour: float) -
 	var arr: PackedFloat32Array = _cy_series.get(var_name, PackedFloat32Array())
 	if arr.is_empty():
 		return NAN
-	var doy := _DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1] + clampi(day, 1, 31) - 1
-	var h := float(doy) * 24.0 + clampf(hour, 0.0, 23.999)
+	# A partial year cannot be told leap by its length — use its own year.
+	var h := hour_index(month, day, hour, is_leap_year(_cy_year))
 	var i0 := int(h)
 	# Unlike _sample_hourly_array this never clamps past the end: a date beyond
 	# what the partial year holds must fall through, not repeat the last hour.
@@ -1485,7 +1543,12 @@ func _begin_generation_impl(seed: int, num_years: int, lat: float, lon: float, s
 	_gen_engine_kind = clampi(engine_kind, 0, GenEngine.size() - 1)
 	generation_training_started.emit()
 	_gen_engine = _make_engine(_gen_engine_kind)
-	if not _gen_engine.train_from_multi_series(_training_series):
+	# The engines learn by day of a 365-day year: drop Feb 29 from leap
+	# archives or every later day of those years trains on the next one.
+	var common := {}
+	for yr in _training_series:
+		common[yr] = to_common_year(_training_series[yr] as Dictionary)
+	if not _gen_engine.train_from_multi_series(common):
 		push_warning("WeatherService: failed to train %s engine from %d archive years" \
 			% [_engine_tag(_gen_engine_kind), _training_series.size()])
 		return false
@@ -1857,9 +1920,10 @@ func monthly_precip_mm() -> Array[float]:
 	var sums: Array[float] = []
 	sums.resize(12)
 	sums.fill(0.0)
+	var leap := is_leap_layout(arr.size())
 	for m in 12:
-		var start := _DAYS_BEFORE_MONTH[m] * 24
-		var end := (_DAYS_BEFORE_MONTH[m + 1] * 24) if m < 11 else arr.size()
+		var start := day_of_year0(m + 1, 1, leap) * 24
+		var end := (day_of_year0(m + 2, 1, leap) * 24) if m < 11 else arr.size()
 		end = mini(end, arr.size())
 		for i in range(start, end):
 			var v := arr[i]
