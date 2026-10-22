@@ -1136,6 +1136,28 @@ Godot.exe.exe --headless --path . --script core/water/flow_routing_selftest.gd
 # its normals beside the tiles, and matching shadow casting:
 tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_curve_check.gd
 tools\harness.ps1 -World <world> -RunScript res://tools/checks/channel_tile_seam_probe.gd
+# Ramp Height / Top width / Side slope with REAL clicks (berm + channel cross
+# sections measured, undo), and nothing swallowing world clicks under the
+# toolbar (a grid of points per section):
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/ramp_tool_check.gd
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/toolbar_input_probe.gd
+# A Rain-tool storm over the head of the longest stream with REAL input, "dry
+# between storms" on: the front runs down the channel, never skips ahead, and
+# the channel drains after; close-up shots of the rain and the front:
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_storm_check.gd -Label <dir>
+# A bowl dug across a stream fills before anything runs on, then spills, then
+# soaks away; a large storm cuts the bed and is re-carved; Reset erosion:
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_basin_check.gd -Label <dir>
+tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_erosion_check.gd
+# Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
+# a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
+# prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
+# what the slow frames spent, and whole-frame dark-flash detection. Env:
+# WBENCH_X (speed, default 600), WBENCH_NOREAD=1 (no readbacks — the honest
+# frame times), WBENCH_ONLY=D|E (re-drape probe / flash hunt), WBENCH_HEAVY=1
+# (replay the old full carve side effects), WBENCH_HUNT_S. 2026-10-22 at
+# 1440x NOREAD: p50 ~24 ms, p95 ~27 ms, 0 dark frames:
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/bench/stream_rain_bench.gd
 # Water end to end (WINDOWED, a REAL map with waterways; --time=14 dodges the
 # Mt Vernon valley fog): carve + drainage land, every bed monotone, ground ==
 # bed on carved stations, water at or below the banks, rain raises a mapped
@@ -3797,6 +3819,90 @@ it only ever writes the procedural CHANNEL tile layer.
   deep enough to tumble. Q = base + rational-method runoff (C 0.25) of rain at
   the CLOCK (`WeatherService.rain_rate_mmh`) on each station's catchment — a pure
   function of time, scrub-safe.
+- **Rain reaching the streams** (`StreamRunoff`, pure, 2026-10-21): the
+  discharge the surfaces, beads and readouts show is `station_q_now`: base flow
+  plus the rational-method hydrograph of the weather's rain (the mean rate over
+  each station's time of concentration, Kirpich 1940 on Hack's-law length, from
+  a 5-min rain history) plus every Rain-tool STORM. A storm
+  (`WaterNetwork.add_storm(poly, mm/h, start_h, end_h)`) is the toolbar's Rain
+  held over ground that is not a pond (no closed basin, or a hollow under 20 %
+  of the selection): its patch is accumulated down the drainage grid
+  (`weighted_accumulate`) to the stations it feeds, enters each channel at one
+  station and TRAVELS from there (`channel_travel_h`: Σ ds / Manning v — never a
+  difference of Tc, which jumps where a side catchment joins and made the water
+  skip ahead with dry gaps), rising over the patch's own Tc and spreading 0.3 ×
+  the lag, volume conserved. Everything is a function of the clock (storms are
+  kept for the session, newest 64), so it scrubs. Rain streaks fall over a storm
+  while the clock is inside it. `station_q_lps(f, i, rain)` is still the
+  instantaneous form the graph's intakes use. "Dry between storms" (View tool,
+  `settings.dry_between_storms`) drops the kind's default base flow so a desert
+  wash carries nothing until rain reaches it. The poll remeshes when any of 9
+  sample stations per channel changes by 12 % or wets / dries (every 0.5 s
+  while water is moving). Verify: `tools/checks/stream_storm_check.gd`.
+  The storm PULSE (`storm_arrival_mean`): nothing runs off until the first
+  `INITIAL_LOSS_MM` (3 mm, SCS initial abstraction) has fallen — the delay —
+  then a linear reservoir (Clark / Zoch) with K = the patch's Tc + 0.3 × the
+  travel time: a smooth rise and an exponential tail after the rain.
+- **Basins along a stream** (`StreamBasins`, 2026-10-21): on the EDITED
+  ground along each carved channel, a 1-D Priority-Flood
+  (`level[i] = max(ground[i], level[i+1])`) finds stretches the water must
+  rise through; each is flood-filled in 2-D at 1.5 m below its spill height
+  (with a DAM across the channel at the spill station — without it the fill
+  runs on down the channel, which is lower, and every hollow reads as open;
+  an `open` hollow is not a basin). `_q_at(f, i, tau)` is the ONE discharge
+  function: sources (base, weather slices, storms) are held back by every
+  basin between them and the station until that basin was full when the
+  water passed it; inside a basin no stream is drawn. Each basin's water is a
+  2-min balance over the last 24 h (inflow above it − 8 mm/h infiltration
+  over the wetted area, clamped: fill-and-spill), recomputed as the clock
+  moves, its surface meshed flat at the level (`StreamBasins` node). Found in
+  `_update_station_areas` (after every carve / drainage pass, so a sculpt
+  shows up once drainage reruns). Verify: `tools/checks/stream_basin_check.gd`.
+- **Erosion** (`StreamHydraulics.bed_shear_pa` / `erosion_rate_mps`,
+  excess-shear model, k_d 2e-6 m³/(N·s), τc 4 Pa): while the clock runs
+  FORWARD (steps ≤ 1 h; a scrub or jump erodes nothing) every carved open
+  station lowers at k_d (τ − τc); the cut lives in
+  `WaterFeatureLayer.erosion[fid]` (10 m bins, saved with the map, capped at
+  2.5 m), `ChannelProfile.compute(..., erosion)` adds it to the depth and the
+  carver re-carves every 5 cm (≥ 10 s apart, the rest flushed when the flood
+  ends). A 15-min 60 mm/h shower cuts ~1 cm; an hour at 100 mm/h over 50 ha
+  cut 0.40 m on Bombay Beach. View tool: Reset erosion. Verify:
+  `tools/checks/stream_erosion_check.gd`.
+- **Rain at speed stays smooth (perf pass 2026-10-22).** At 600x in a storm
+  the stream system froze the game for 1.1–1.3 s every 3 s (p95 1248 ms) —
+  the likely cause of the reported "black flash", which never showed up in
+  any rendered frame. Now ~24 ms steady at 1440x. What carries it:
+  - An EROSION re-carve takes a LIGHT path (`_apply_job_result`,
+    `erosion_only`): only props on the touched tiles are re-grounded
+    (`on_channels_carved(touched, true)`), the station hydraulics are
+    re-derived from the existing areas (`_update_station_hydraulics`, no
+    catchment pass), no drainage rerun, the channel cache is saved at most
+    every 30 s, and the changed streams re-mesh on a worker.
+  - The flow re-mesh the poll asks for runs on a WORKER
+    (`_start_async_remesh` → static `_remesh_job` → `_process_remesh`): q is
+    summed on the main thread, states + strip arrays off it from per-feature
+    caches (`_bank_refs`, `_drape_refs`, `_surf_masks`, `_surf_arrays`); a
+    result whose `_rev`/`_surf_gen` moved is re-queued, never applied.
+    `StreamMeshBuilder.feature_arrays` builds packed arrays directly (no
+    SurfaceTool, UP normals) and with no ground Callable uses the bank tops
+    and the drape cache.
+  - `StreamNetwork.surface_mask` replaces per-station `mode_at` (one pass);
+    `StreamHydraulics.normal_depth_m` is Illinois regula falsi, not a
+    48-step bisection; `feature_states_now` is vectorised per feature.
+  - Storm areas: `StreamRunoff.sparse_accumulate` walks only the sources'
+    downstream closure in rank order (bit-identical to the dense pass over
+    409k cells; pinned in water_features_selftest).
+  - `rebuild_buried` is signature-gated and `_update_buried_flow` only
+    re-tints; the basin mesh rebuilds on its own show signature.
+  - Terrain tiles: `build_tile_mesh_data` reuses the base heights
+    (`TerrainHeightField._base_cache`, 5 probe points check them) and the
+    rebuild loop is TIME-budgeted (`REBUILD_BUDGET_MS` 6, was 4 tiles a frame
+    ≈ 105 ms).
+  - Still rare and large: the DetailGround sink rebuild when the SET of
+    carved tiles changes (~240–330 ms), and drainage + find_basins after a
+    player edit (~380 + 260 ms). PerfMonitor `last_frame` holds the last
+    frame's unsmoothed section times for the bench's slow-frame breakdowns.
+  - Bench: `tools/bench/stream_rain_bench.gd` (Validation list).
 - **Drainage** (`FlowRouting`, worker): burn mapped lines 4 m, Priority-Flood+ε
   (Barnes 2014) with a binary heap, D8, accumulation in reverse pop order,
   Strahler channels, RDP. 597² @ 5 m in ~4 s. Gives every station its catchment
@@ -3852,7 +3958,13 @@ line-continuations ended up joined onto one line with stray tabs).
 height DELTAS at 1.5 m/cell in 64-cell tiles allocated only where edited, with
 region-scoped undo sessions + binary persistence (`user://maps/terrain_tiles_*`).
 Ops in `core/terrain/terrain_sculpt_ops.gd` (raise/lower/smooth/flatten brushes,
-`level_polygon`, `ramp`, `carve_basin`); loader commands `brush_stamp` /
+`level_polygon`, `ramp`, `carve_basin`). `ramp` (2026-10-21) is a straight
+graded strip: a flat top `width_m` wide running from the ground at one click to
+the other plus `height_m` (+ berm, − channel, 0 a road across a slope), sides at
+`side_run`:1 that cut where the ground is higher and fill where it is lower
+until they meet it (rounded toe, rounded ends; a side that cannot daylight
+within 120 m eases back to the ground); toolbar params Top width / Height /
+Side slope 1:; loader commands `brush_stamp` /
 `level_region_command` / `ramp_command` / `pond_command` (carve + optional seed puddle;
 water folded into the SAME undo entry as the carve). **Rendering is an overlay,
 NOT a bake**: the detail DEM mesh is far too coarse (~12–47 m/vertex) to show a
@@ -3927,7 +4039,12 @@ closing. A section opens on the tool last used in it
 it was closed (`reopen_tool`, any section — a Water Edit session comes back as
 Water Edit with its stream still picked); both persist in toolbar_prefs.cfg. There is no fullscreen capture rect — the two panels stop mouse events
 over themselves and everything else arrives via `_unhandled_input`, which is
-what lets RMB reach the player. **RMB deliberately does NOT close a polygon or
+what lets RMB reach the player. ⚠ So ANY visible Control with the default
+STOP filter swallows the world clicks under it: the legacy `TimeUI` root (a
+430 px column down the right) and `HAConnectionUI` root (445 × 490 bottom-left)
+did, with nothing drawn, until 2026-10-21 (both now MOUSE_FILTER_IGNORE).
+`tools/checks/toolbar_input_probe.gd` lists every Control under a grid of
+points with the toolbar open; run it after adding a full-size UI root. **RMB deliberately does NOT close a polygon or
 cancel a shape** (it is the look button); polygons close with Enter or by
 clicking the first vertex. Options rows are rebuilt per tool switch with the
 dying rows DETACHED before `queue_free`, or the container measures both sets for
@@ -4893,6 +5010,46 @@ covers the location (synthetic only fills offline/uncovered gaps); solar_ui
 weather control is a non-interactive **source indicator** (`_wx_source_lbl` in
 timeline_ui), not a toggle. The legacy `set_weather()`/`cycle_weather()` manual
 state machine is retained in code but no longer wired to any UI.
+
+**Time-zone alignment (2026-10-21).** `timezone=auto` stamps the WHOLE series
+with ONE fixed offset, the one in force on the day it was fetched (Bombay Beach
+2024 cached at UTC-7 all year: no skipped or repeated hour at the DST changes).
+The game clock is its own zone (`CelestialClock.zone_offset_hours`: rounded
+meridian + US DST anywhere). Reading the file by the clock's wall time put US
+winter weather an hour early and Madrid / Sydney 1-2 h off. `sample()` now
+re-expresses the clock's local instant in each real dataset's offset
+(`_data_utc_off_h` / `_cy_utc_off_h` / `_forecast_utc_off_h`, parsed from
+`utc_offset_seconds`; `shift_calendar`, `_offset_shift`), so the weather is
+the weather of the UTC instant the in-game sun is drawn for. Generated years
+and runs with no clock (selftests) are unshifted. Pinned by
+`_test_weather_utc_alignment`; end to end by
+`tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/weather_fidelity_check.gd -Timeout 1500`.
+That check reads every hour of 15 extreme events against a UTC reference
+fetched independently (`python tools/checks/weather_reference_fetch.py` →
+`core/weather/testdata/weather_events_ref.json`). The sites include your
+worlds plus Madrid, Houston and Sydney; the events include the heat dome,
+the Skagit atmospheric river, Hilary, Ciarán, Filomena, Harvey, the Texas
+freeze and Feb 29. After the fix every reading matched; 1,277 of the 3,720
+(about a third) were off before it. The game equals the Open-Meteo
+reanalysis (ERA5 family); a reanalysis grid cell is smoother than a station,
+so it under-reads local peaks. Note the clock's US-DST-everywhere rule is a
+separate, older simplification (the sun is drawn by the same rule, so weather
+and sun agree).
+
+**Rain looks like its rate (core/precipitation_vfx.gd `rain_look`).**
+- Drop size: Marshall-Palmer D0 = 0.89 R^0.21 mm, drawn ×1.6.
+- Fall speed: Atlas 1973, v = 9.65 − 10.3 e^(−0.6 D).
+- Drops in the air ∝ R^0.37 / v, normalised at 50 mm/h.
+- Streak = a camera-facing quad along each drop's own velocity
+  (`core/rain_streak.gdshader`, `particle_flag_align_y`). Its length is the
+  speed × 0.05 s exposure and its width scales with the diameter.
+- Wind: the drops' horizontal speed is the 10 m wind × 0.72 (log law to 2 m).
+  So light rain blows over and heavy rain falls nearly straight; still air is
+  vertical. SolarUI passes the wind speed (`update_frame(..., wind_ms)`).
+- The volume is a tight 26 × 18 × 26 m box in WORLD space round the eye.
+- Classes are the AMS ones. Pinned by `_test_rain_look`; shots:
+  `tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/bombay_rain_check.gd`
+  (Hilary 2023-08-20, local time: 10:00 light, 12:00 heavy, 15:00 windy).
 
 ## Solar physics (SolarUI + SolarPanelSource)
 
@@ -6959,6 +7116,68 @@ legitimate (dust fronts really do arrive fast) while one anomalous step is not.
 Related: the US AQI truncates at 500 by definition, which smoke reaches by ~0.6
 severity, so gameplay channels derive from SEVERITY while the displayed AQI stays
 truncated like the real index.
+
+**Wind-blown dust + the smoke/dust look swap (2026-10-21).** Dust used to fire
+only from CAMS dust readings, which cover a ~99-day window, so a windy desert
+site (Bombay Beach, `w6ad922917357`) never got dusty. Now:
+- `HazardEvaluators.evaluate_dust_storm` = max(measured AQ dust,
+  `evaluate_wind_dust`). The wind layer is the player's rule: 10 m wind above
+  `ExtremeWeatherPrefs.dust_wind_mph` (10) with no rain ≥ 0.1 mm in the last
+  `dust_dry_hours` (24). Severity follows a Bagnold/Gillette flux
+  u³(1 − (ut/u)²) normalised at 20 m/s, through the inverse of the dust PM10
+  curve: ~0.1 at 12 mph, ~0.55 at 30, 1.0 from 45 mph. `dust_climate_scale`
+  multiplies the flux by `dust_ground_factor(annual precip)` (1.0 under
+  250 mm, 0.2 by 1000 mm), so Mount Vernon raises a fifth as much.
+- The director puts `rain_prev_mm` (`HazardEvaluators.rain_in_window` over
+  WeatherService's hourly precipitation, cached per whole hour, cleared by
+  `invalidate()`), the threshold and `dust_ground` into the sample; still a pure
+  function of the clock. `dust_drivers_now()` feeds the Settings line.
+- Settings → Extreme Weather → "Wind-blown dust" (wind mph, dry spell h,
+  climate scaling, a live "Now: wind … → dust N %" line). Prefs `[dust]` in
+  `extreme_weather.cfg`. The MASTER switch is still per world and OFF by
+  default — Bombay Beach's snapshot has it off.
+- **The look swap.** The old dust rendered as a glowing orange dome (the emissive
+  volumetric wall + an orange-biased sky lift) and read as wildfire; the old
+  smoke read as low brown haze. Only LOOK fields moved; AOD, PM, visibility,
+  sun_energy_mult, energy and life channels stayed with their hazard. Smoke:
+  grey-brown, `sky_tint` sev × 1.25, `horizon_bias` 0.25 (the whole dome),
+  red disc. Dust: tan/ochre, `horizon_bias` 0.92, pale sun, glow halved,
+  `haze_layer_m` 30–350 m. Two new HazardState fields: `horizon_bias`
+  (→ sky.gdshader `hazard_horizon_bias`; combine blends by severity) and
+  `haze_layer_m` (combine takes the deeper).
+- A dust layer is drawn by main.gd as a SECOND GroundFogLayer (`DustLayer`,
+  `_update_dust_layer`): top = ground under the camera + `haze_layer_m`,
+  σ = 1.5 × the hazard's Koschmieder σ (`AtmosphereApplier.volumetric_for`
+  `layer_*`), tan, drifting with the wind (`drift_cap_ms`/`drift_frac`,
+  `keep_hue`). With a layer the uniform froxel fog is only a quarter-strength
+  veil and `vol_sky_affect` 0.35, or it fills the sky again. The sky lift is
+  `AtmosphereApplier.lift_sky_color` (hue-preserving; main.gd's per-channel
+  ×1.9/1.7/1.5 turned tan yellow). `sky_affect_scale(bias)` trims
+  fog_sky_affect for horizon-heavy hazards only (bias ≤ 0.65 → unchanged).
+- **Dust look v2 (same day, to the player's whiteout photo).** No particles
+  (`particle_kind` ""; `haze_layer_m > 0` is what marks dust for
+  `volumetric_for` now, the microclimate's grain dust keeps the old path).
+  Light dust stays a low layer on the horizon; from ~0.3 the horizon bias
+  falls to 0.05 and `sky_veil` climbs to 1 — sky.gdshader's `hazard_veil`
+  block at the very END of `sky()` covers sun, moon, clouds and stars, and its
+  colour darkens with the night (`AtmosphereApplier.sky_haze_for` `veil` /
+  `veil_color`); a full tint now reaches the whole gradient. Whiteout light
+  is bright and flat (`ambient_mult` up to 1.7, exposure +0.12), and the fog
+  colour target darkens at night for every hazard (`NIGHT_HAZE_LIGHT`). The
+  player's look lives in `ExtremeWeatherPrefs` `[dust_look]` (colour default
+  0.82/0.79/0.74, Thickness default 2.0 → `optical_mult`, Hides the sky,
+  Layer height, Wind streaks) and touches no physics channel —
+  `visibility_m` stays physical, the applier multiplies fog and layer σ.
+  Settings → Extreme Weather → "Dust look" (+ Reset look). The dust layer
+  streams with the wind: ground_fog.gdshader `wind_dir` / `streak` (noise
+  stretched along the wind) / `gust_amount` (broad bands sweeping downwind);
+  defaults reproduce the valley fog exactly. Selftests pin the shipped look
+  with `ExtremeWeatherPrefs.use_defaults_for_test()`.
+- Verify: the selftest (`_test_smoke_dust_look_swap`, `_test_dust_look_controls`, `_test_wind_blown_dust`)
+  and `tools\harness.ps1 -World w6ad922917357 -RunScript
+  res://tools/checks/bombay_dust_check.gd` (2024-04-14 15:00 28.5 mph dry →
+  storm; 12:00 6.3 mph → none; 2024-02-07 15:00 19.1 mph after 1.5 mm → none;
+  22:00 14.9 mph → light; forced smoke vs dust shots).
 
 ## Microclimate calibration (core/microclimate/ + 🌫 timeline drawer)
 

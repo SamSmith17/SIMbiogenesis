@@ -58,6 +58,34 @@ const VOL_DENSITY_MAX := 0.035
 const VOL_LENGTH_M := 180.0
 const VOL_SUN_ENERGY_MAX := 8.0
 
+## A ground-hugging layer (HazardState.haze_layer_m > 0 — blowing dust) is
+## drawn by main.gd as a height-capped FogVolume. Its extinction is the
+## hazard's own Koschmieder coefficient times this, so standing inside the layer
+## reads thicker than the distance fog that carries it past the froxel range —
+## the "wall" — and it is clamped like the hazard fog itself.
+const LAYER_FROM_SEV := 0.12
+const LAYER_SIGMA_MULT := 1.5
+const LAYER_SIGMA_MAX := 0.03
+## With the player's Thickness above 1 the layer may go past that, to a
+## whiteout's ~40 m visibility, never further.
+const LAYER_SIGMA_HARD_MAX := 0.10
+## Haze is lit by the sky: at night the hazard colour the fog blends toward
+## falls to this share, or a dust storm at midnight glows as a pale box.
+const NIGHT_HAZE_LIGHT := 0.10
+## Dust-layer volumetrics barely touch the sky: the layer is SHALLOW, and the
+## sky above it must stay visible or dust reads as smoke aloft again.
+const LAYER_VOL_SKY_AFFECT := 0.35
+## Sunlit dust glows a little from within, but tan, not the orange furnace the
+## old wall was tuned to (that read as wildfire).
+const DUST_EMISSION_GAIN := 0.6
+const DUST_ALBEDO := Color(0.88, 0.71, 0.52)
+const DUST_EMISSION := Color(0.84, 0.64, 0.44)
+## Sky haze lift: the sky is scattered light and reads far brighter than the
+## same aerosol does over shadowed ground. Hue-preserving (scale all channels
+## alike) so tan stays tan and grey-brown stays grey-brown; capped so the
+## brightest channel never clips.
+const SKY_LIFT_MAX := 1.7
+
 
 ## `base` is the clean-air environment main.gd has already computed for this
 ## frame (night/twilight/eclipse all folded in). Returns the same keys, modified.
@@ -83,19 +111,24 @@ static func resolve(base: Dictionary, hz: Dictionary,
 	# --- fog density: never below the clean-air baseline, so a mild hazard
 	# cannot accidentally make the air CLEARER than it was.
 	var base_density := _f(base, "fog_density", 0.0003)
-	var hazard_density := HazardState.fog_density_for_visibility(vis)
+	var optical := float(hz.get("optical_mult", 1.0))
+	optical = clampf(optical, 0.1, 4.0) if is_finite(optical) else 1.0
+	var hazard_density := HazardState.fog_density_for_visibility(vis) * optical
 	out["fog_density"] = clampf(maxf(base_density, hazard_density),
-		FOG_DENSITY_MIN, FOG_DENSITY_MAX)
+		FOG_DENSITY_MIN, FOG_DENSITY_MAX * maxf(optical, 1.0))
 
 	# --- visibility: the strongest "I cannot see" cue.
 	out["fog_depth_end"] = clampf(
-		minf(_f(base, "fog_depth_end", DEPTH_END_MAX), vis * DEPTH_END_VISIBILITY_MULT),
+		minf(_f(base, "fog_depth_end", DEPTH_END_MAX), vis / optical * DEPTH_END_VISIBILITY_MULT),
 		DEPTH_END_MIN, DEPTH_END_MAX)
 
 	# --- colour.
 	var haze_col: Color = hz.get("haze_color", Color(0.68, 0.78, 0.94))
 	var base_col: Color = base.get("fog_light_color", haze_col)
-	out["fog_light_color"] = base_col.lerp(haze_col, haze)
+	# The haze is lit by the sky, so its colour darkens with the night.
+	var lit_col := haze_col * lerpf(NIGHT_HAZE_LIGHT, 1.0, day)
+	lit_col.a = 1.0
+	out["fog_light_color"] = base_col.lerp(lit_col, haze)
 
 	# --- aerial perspective moves DOWN. See the header.
 	out["fog_aerial_perspective"] = lerpf(
@@ -105,12 +138,19 @@ static func resolve(base: Dictionary, hz: Dictionary,
 	out["fog_sun_scatter"] = lerpf(
 		_f(base, "fog_sun_scatter", 0.05), SUN_SCATTER_HAZE, haze * day)
 
-	# --- the sky itself. Daylight-gated so night stays dark and starry.
+	# --- the sky itself. Daylight-gated so night stays dark and starry. A
+	# horizon-heavy hazard (a shallow dust layer) gives the fog less of the sky:
+	# fog_sky_affect is uniform over the dome, and blending it in at full
+	# strength would bury the zenith the sky shader keeps clear.
 	out["fog_sky_affect"] = _clamp01(
-		SKY_AFFECT_MAX * _clamp01(float(hz.get("sky_tint_strength", 0.0))) * day)
+		SKY_AFFECT_MAX * _clamp01(float(hz.get("sky_tint_strength", 0.0))) * day
+		* sky_affect_scale(float(hz.get("horizon_bias", 0.65))))
 
 	# --- light. Ambient dims AND flattens; the sun disc reddens and dims.
-	out["ambient_energy"] = _f(base, "ambient_energy", 0.3) * lerpf(1.0, 0.62, haze * day)
+	var amb_mult := float(hz.get("ambient_mult", 1.0))
+	amb_mult = clampf(amb_mult, 0.0, 3.0) if is_finite(amb_mult) else 1.0
+	out["ambient_energy"] = _f(base, "ambient_energy", 0.3) * lerpf(1.0, 0.62, haze * day) \
+		* lerpf(1.0, amb_mult, day)
 	out["sun_tint"] = hz.get("sun_tint", Color.WHITE)
 	var sun_mult := float(hz.get("sun_energy_mult", 1.0))
 	out["sun_energy_mult"] = clampf(sun_mult, 0.0, 1.0) if is_finite(sun_mult) else 1.0
@@ -151,13 +191,44 @@ static func volumetric_for(hz: Dictionary, sun_height: float = 1.0) -> Dictionar
 		"vol_emission_energy": 0.0,
 		"vol_length": VOL_LENGTH_M,
 		"vol_sun_energy": 0.0,
+		"vol_sky_affect": 1.0,
+		# Ground layer (FogVolume), 0 sigma = none. Top is metres above ground.
+		"layer_sigma": 0.0,
+		"layer_top_m": 0.0,
+		"layer_color": DUST_ALBEDO,
 	}
 	var kind := str(hz.get("particle_kind", ""))
 	var sev := float(hz.get("severity", 0.0))
-	if kind != "dust" or not is_finite(sev) or sev < 0.35:
+	var layer_m := float(hz.get("haze_layer_m", 0.0))
+	var has_layer := is_finite(layer_m) and layer_m > 0.5
+	# Dust is either a ground layer (the dust storm) or, for the microclimate's
+	# site dust, a hazard that emits grains.
+	if (kind != "dust" and not has_layer) or not is_finite(sev):
 		return out
 
-	# Wind is what separates a glowing driven wall from suspended brown haze.
+	# The ground layer: present whenever a dust hazard says it hugs the ground,
+	# driven or not. It needs the volumetric pass, hence vol_force.
+	var optical := float(hz.get("optical_mult", 1.0))
+	optical = clampf(optical, 0.1, 4.0) if is_finite(optical) else 1.0
+	var veil := _clamp01(float(hz.get("sky_veil", 0.0)))
+	if has_layer and sev >= LAYER_FROM_SEV:
+		var vis := float(hz.get("visibility_m", HazardState.CLEAR_VISIBILITY_M))
+		var sigma := HazardState.fog_density_for_visibility(vis) * LAYER_SIGMA_MULT * optical
+		if is_finite(sigma) and sigma > 0.0:
+			out["vol_force"] = true
+			out["vol_sun_energy"] = 1.0
+			# A shallow layer leaves the sky above it; a whiteout takes it.
+			out["vol_sky_affect"] = lerpf(LAYER_VOL_SKY_AFFECT, 1.0, veil)
+			out["layer_sigma"] = minf(sigma, minf(LAYER_SIGMA_MAX * maxf(optical, 1.0),
+				LAYER_SIGMA_HARD_MAX))
+			out["layer_top_m"] = layer_m
+			var hc: Color = hz.get("haze_color", DUST_ALBEDO)
+			out["layer_color"] = hc
+			out["vol_albedo"] = hc
+	if sev < 0.35:
+		return out
+
+	# Wind is what separates a glowing driven wall from suspended haze.
 	var wind_mult := float(hz.get("wind_mult", 1.0))
 	var drive := clampf((wind_mult - 1.3) / 0.7, 0.0, 1.0)
 	if drive <= 0.01:
@@ -167,24 +238,57 @@ static func volumetric_for(hz: Dictionary, sun_height: float = 1.0) -> Dictionar
 	# the sun — a self-luminous wall at midnight would read as a bug.
 	var lit := clampf(sun_height * 4.0, 0.0, 1.0) if is_finite(sun_height) else 1.0
 	var amount := sev * drive
+	var layered := float(out["layer_sigma"]) > 0.0
 	out["vol_force"] = true
-	out["vol_density"] = VOL_DENSITY_MAX * amount
-	out["vol_albedo"] = Color(0.85, 0.66, 0.42)
-	out["vol_emission"] = Color(0.85, 0.60, 0.32)
-	out["vol_emission_energy"] = amount * lit * 1.6
-	out["vol_sun_energy"] = 1.0 + VOL_SUN_ENERGY_MAX * amount * lit
+	# With a ground layer the thick part lives in the FogVolume; the uniform
+	# froxel fog is only a thin veil, or it would fill the sky again.
+	out["vol_density"] = VOL_DENSITY_MAX * amount * (0.25 if layered else 1.0)
+	var dust_col: Color = hz.get("haze_color", DUST_ALBEDO) if layered else DUST_ALBEDO
+	out["vol_albedo"] = dust_col
+	out["vol_emission"] = dust_col if layered else DUST_EMISSION
+	out["vol_emission_energy"] = amount * lit * DUST_EMISSION_GAIN
+	out["vol_sun_energy"] = 1.0 + VOL_SUN_ENERGY_MAX * 0.5 * amount * lit
 	return out
+
+
+## How much of fog_sky_affect a hazard keeps, from its horizon bias. The
+## default bias (0.65) and anything below keep all of it, so every hazard that
+## predates the bias renders exactly as before; a shallow dust layer (0.92)
+## keeps under half.
+static func sky_affect_scale(horizon_bias: float) -> float:
+	var b := horizon_bias if is_finite(horizon_bias) else 0.65
+	return lerpf(1.0, 0.45, smoothstep(0.65, 0.95, b))
+
+
+## Hue-preserving lift of a haze colour into the sky's brightness range.
+static func lift_sky_color(c: Color) -> Color:
+	var m := maxf(maxf(c.r, c.g), maxf(c.b, 0.001))
+	var k := minf(SKY_LIFT_MAX, 1.0 / m)
+	return Color(c.r * k, c.g * k, c.b * k)
 
 
 ## Sky-shader haze, for the optional horizon-weighted tint. Returned separately
 ## because main.gd pushes sky uniforms from _update_clouds, not the environment
 ## update.
 static func sky_haze_for(hz: Dictionary, night_amount: float = 0.0) -> Dictionary:
-	var day := 1.0 - clampf(night_amount, 0.0, 1.0)
+	var day := 1.0 - _clamp01(night_amount)
+	var hc: Color = hz.get("haze_color", Color(0.68, 0.78, 0.94))
+	var bias := float(hz.get("horizon_bias", 0.65))
+	var tint := _clamp01(float(hz.get("sky_tint_strength", 0.0)))
+	var lifted := lift_sky_color(hc)
+	# The veil is the same air seen against the sky, lit by it: at night it
+	# darkens with the sky instead of glowing.
+	var veil_col := lifted * lerpf(NIGHT_HAZE_LIGHT, 1.0, day)
 	return {
-		"haze_color": hz.get("haze_color", Color(0.68, 0.78, 0.94)),
-		"haze_strength": clampf(
-			float(hz.get("sky_tint_strength", 0.0)), 0.0, 1.0) * day * 0.85,
+		# Already lifted to sky brightness (main.gd used to do this with an
+		# orange-biased per-channel multiply that turned tan dust yellow).
+		"haze_color": lifted,
+		# A full tint reaches the whole gradient (it used to stop at 0.85).
+		"haze_strength": tint * day * (0.85 + 0.15 * smoothstep(0.6, 1.0, tint)),
+		"horizon_bias": clampf(bias, 0.0, 1.0) if is_finite(bias) else 0.65,
+		# Over EVERYTHING in the sky (sun, moon, clouds, stars), day or night.
+		"veil": _clamp01(float(hz.get("sky_veil", 0.0))),
+		"veil_color": Color(veil_col.r, veil_col.g, veil_col.b),
 	}
 
 

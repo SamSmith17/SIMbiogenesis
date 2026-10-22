@@ -895,6 +895,15 @@ func _build_view_rows(box: Container, wn: Node) -> void:
 	cv.focus_mode = Control.FOCUS_NONE
 	cv.toggled.connect(func(on: bool) -> void: wn.call("set_carve_enabled", on))
 	box.add_child(cv)
+	var dry := CheckBox.new()
+	dry.text = "Dry between storms"
+	dry.tooltip_text = ("Streams without a base flow of their own carry nothing until rain "
+		+ "reaches them (a desert wash). Rain — the weather's, or the Terrain Rain tool "
+		+ "held over open ground — fills them from the top down as it runs off.")
+	dry.button_pressed = bool(lay.setting("dry_between_storms"))
+	dry.focus_mode = Control.FOCUS_NONE
+	dry.toggled.connect(func(on: bool) -> void: wn.call("set_dry_between_storms", on))
+	box.add_child(dry)
 	var bu := CheckBox.new()
 	bu.text = "Show buried"
 	bu.tooltip_text = "Show culverts and pipes through the ground"
@@ -902,6 +911,11 @@ func _build_view_rows(box: Container, wn: Node) -> void:
 	bu.focus_mode = Control.FOCUS_NONE
 	bu.toggled.connect(func(on: bool) -> void: wn.call("set_show_buried", on))
 	box.add_child(bu)
+	_chip(box, "Reset erosion", false,
+		"Fill back what floods have cut into the channel beds (big storms deepen them)").pressed.connect(
+		func() -> void:
+			wn.call("reset_erosion")
+			_status("Erosion reset — re-carving the channels…"))
 	_chip(box, "Re-carve", false, "Recompute every channel from scratch").pressed.connect(
 		func() -> void:
 			wn.call("invalidate_cache")

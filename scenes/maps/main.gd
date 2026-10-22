@@ -808,6 +808,12 @@ var _dust_smoke_vfx : DustSmokeVfx
 ## latter to force the volumetric pass on while the fog is present.
 var _ground_fog : GroundFogLayer
 var _mc_state : Dictionary = {}
+## Blowing dust's ground-hugging layer: a second GroundFogLayer, capped at
+## HazardState.haze_layer_m above the ground under the camera (fed from
+## AtmosphereApplier.volumetric_for's layer_* keys in _update_hazard_vfx).
+var _dust_layer : GroundFogLayer
+var _dust_layer_ground_y : float = NAN
+var _dust_layer_ground_xz : Vector2 = Vector2.INF
 ## DaylightModel.sky_light from the last environment update — lights the
 ## ground fog's droplets (GroundFogLayer.update_from).
 var _fog_sky_light : float = 1.0
@@ -2198,7 +2204,8 @@ func _apply_advanced_rendering_toggles() -> void :
 		env.volumetric_fog_density = maxf( float( _hazard_vol[ "vol_density" ] ), user_density )
 		env.volumetric_fog_length = float( _hazard_vol[ "vol_length" ] )
 		env.volumetric_fog_anisotropy = -0.37   # the scene value the dust wall was tuned against
-		env.volumetric_fog_sky_affect = 1.0
+		# A shallow dust layer must leave the sky above it visible.
+		env.volumetric_fog_sky_affect = float( _hazard_vol.get( "vol_sky_affect", 1.0 ) )
 		env.volumetric_fog_detail_spread = 2.0
 		env.volumetric_fog_gi_inject = 0.0
 		env.volumetric_fog_ambient_inject = 0.9
@@ -2282,6 +2289,46 @@ func _update_hazard_vfx( delta : float ) -> void :
 	var w2 := _frame_wind_xz( 4.0 )
 	var wind := Vector3( w2.x, 0.0, w2.y ) * float( hz.get( "wind_mult", 1.0 ) )
 	_dust_smoke_vfx.update_frame( delta, hz, wind, cam.global_position )
+	_update_dust_layer( delta, cam, w2 * float( hz.get( "wind_mult", 1.0 ) ) )
+
+
+## Blowing dust's low, thick layer. `_hazard_vol` (refreshed by the hazard pass)
+## carries layer_sigma / layer_top_m; the layer's floor is the ground under the
+## camera, sampled only when the camera has moved 8 m (a terrain query per
+## frame is not free). Hidden under the graph's section preview, like the
+## microclimate fog, and whenever no dust layer is wanted.
+func _update_dust_layer( delta : float, cam : Camera3D, wind_xz : Vector2 ) -> void :
+	if _dust_layer == null or not is_instance_valid( _dust_layer ) :
+		return
+	var sigma := float( _hazard_vol.get( "layer_sigma", 0.0 ) )
+	if sigma <= 1e-6 or _graph_soi_section_preview_active() :
+		_dust_layer.visible = false
+		return
+	var p := cam.global_position
+	var xz := Vector2( p.x, p.z )
+	if is_nan( _dust_layer_ground_y ) or xz.distance_to( _dust_layer_ground_xz ) > 8.0 :
+		_dust_layer_ground_y = TerrainSurfaceQuery.ground_height_at( self, p.x, p.z )
+		_dust_layer_ground_xz = xz
+	var floor_y := _dust_layer_ground_y if is_finite( _dust_layer_ground_y ) else p.y - 1.7
+	var st := {
+		"fog_sigma": sigma,
+		"fog_floor_y": floor_y,
+		"fog_top_y": floor_y + float( _hazard_vol.get( "layer_top_m", 30.0 ) ),
+		"fog_color": _hazard_vol.get( "layer_color", AtmosphereApplier.DUST_ALBEDO ),
+		# Dust streams with the wind (the valley fog drifts at a third of it).
+		"drift_cap_ms": 25.0,
+		"drift_frac": 0.9,
+		"keep_hue": true,
+		# Streams in bands along the wind, with gust fronts sweeping downwind
+		# (Settings → Extreme Weather → Dust look → Wind streaks).
+		"wind_dir": wind_xz.normalized() if wind_xz.length() > 0.05 else Vector2( 1.0, 0.0 ),
+		"streak": ExtremeWeatherPrefs.dust_streaks,
+		"gust": ExtremeWeatherPrefs.dust_streaks * 0.8,
+		"noise_amount": lerpf( 0.35, 0.7, ExtremeWeatherPrefs.dust_streaks ),
+		"noise_scale": 0.012,
+	}
+	_dust_layer.sun_warmth = 0.0
+	_dust_layer.update_from( st, p, wind_xz, delta, _vegetation_night_factor, _fog_sky_light )
 
 
 ## The per-frame VFX passes (hazard particles, ground fog) each asked the
@@ -2397,6 +2444,9 @@ func _setup_environment_vfx() -> void :
 	_ground_fog = GroundFogLayer.new()
 	_ground_fog.name = "GroundFogLayer"
 	add_child( _ground_fog )
+	_dust_layer = GroundFogLayer.new()
+	_dust_layer.name = "DustLayer"
+	add_child( _dust_layer )
 
 
 func _on_lightning_flash( intensity: float ) -> void :
@@ -3482,6 +3532,7 @@ func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> voi
 			var m = environment.environment.sky.sky_material
 			if m != null :
 				m.set_shader_parameter( "hazard_haze", 0.0 )
+				m.set_shader_parameter( "hazard_veil", 0.0 )
 		return
 
 	var env : Environment = environment.environment
@@ -3523,14 +3574,19 @@ func _apply_hazard_atmosphere( night_amount : float, sun_height : float ) -> voi
 	if environment.environment.sky != null :
 		var sky_mat = environment.environment.sky.sky_material
 		if sky_mat != null :
+			# The colour comes back already lifted to sky brightness (the sky is
+			# scattered light and reads far brighter than the same aerosol over
+			# shadowed ground) — AtmosphereApplier.lift_sky_color.
 			var sh := AtmosphereApplier.sky_haze_for( hz, night_amount )
 			var sc : Color = sh[ "haze_color" ]
-			# The sky is scattered light, so it reads far brighter than the same
-			# aerosol does looking at shadowed ground. Lift it well clear of the
-			# fog colour or the sky reads as dirty brown rather than as glowing.
-			sky_mat.set_shader_parameter( "hazard_haze_color",
-				Vector3( minf( sc.r * 1.9, 1.0 ), minf( sc.g * 1.7, 1.0 ), minf( sc.b * 1.5, 1.0 ) ) )
+			sky_mat.set_shader_parameter( "hazard_haze_color", Vector3( sc.r, sc.g, sc.b ) )
 			sky_mat.set_shader_parameter( "hazard_haze", float( sh[ "haze_strength" ] ) )
+			# Smoke takes the whole dome, a dust layer mostly the horizon.
+			sky_mat.set_shader_parameter( "hazard_horizon_bias", float( sh[ "horizon_bias" ] ) )
+			# The veil covers the sun, clouds and stars too (a dust whiteout).
+			var vc : Color = sh[ "veil_color" ]
+			sky_mat.set_shader_parameter( "hazard_veil_color", Vector3( vc.r, vc.g, vc.b ) )
+			sky_mat.set_shader_parameter( "hazard_veil", float( sh[ "veil" ] ) )
 
 	# Handed to _update_sun / solar_ui rather than written here: solar_ui owns
 	# weather_light_factor through a per-frame lerp and would fight a direct

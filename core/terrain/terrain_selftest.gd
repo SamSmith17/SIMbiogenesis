@@ -1693,6 +1693,35 @@ func _test_sculpt_ops_v2() -> void:
 	var near_end := 100.0 + t4.sample_delta(19.0, 0.0)
 	_check("sculptops ramp rises to end", near_end > 115.0, "got %f" % near_end)
 
+	# Berm: +2 m over flat ground, a 6 m top, 2:1 sides daylighting 4 m out.
+	var tb := TerrainEditTiles.new()
+	TerrainSculptOps.ramp(tb, Vector2(-30, 0), Vector2(30, 0), 100.0, 100.0, 6.0, flat, 2.0, 2.0)
+	var hb := func(z: float) -> float: return 100.0 + tb.sample_delta(0.0, z)
+	_check("ramp berm: the top sits at +height", _approx(float(hb.call(0.0)), 102.0, 0.05), "got %f" % float(hb.call(0.0)))
+	_check("ramp berm: flat across the top width", _approx(float(hb.call(2.9)), 102.0, 0.1), "got %f" % float(hb.call(2.9)))
+	_check("ramp berm: the side falls at 1:2", _approx(float(hb.call(5.0)), 101.0, 0.1), "got %f" % float(hb.call(5.0)))
+	_check("ramp berm: the toe meets the ground", absf(float(hb.call(7.5)) - 100.0) < 0.2, "got %f" % float(hb.call(7.5)))
+	_check("ramp berm: ground past the toe untouched", absf(tb.sample_delta(0.0, 12.0)) < 1e-4)
+	_check("ramp berm: rounded past its end", absf(tb.sample_delta(42.0, 0.0)) < 1e-4)
+	# Channel: -1.5 m, the sides climb back up to the ground.
+	var tc := TerrainEditTiles.new()
+	TerrainSculptOps.ramp(tc, Vector2(-30, 0), Vector2(30, 0), 100.0, 100.0, 4.0, flat, -1.5, 2.0)
+	_check("ramp channel: the floor sits at -height", _approx(100.0 + tc.sample_delta(0.0, 0.0), 98.5, 0.05))
+	_check("ramp channel: the side climbs at 1:2", _approx(100.0 + tc.sample_delta(0.0, 3.5), 99.25, 0.1),
+		"got %f" % (100.0 + tc.sample_delta(0.0, 3.5)))
+	_check("ramp channel: never raises the ground", tc.sample_delta(0.0, 6.0) <= 1e-4)
+	# Across a 30 % hillside at grade: uphill side cut, downhill side fill.
+	var hill := func(_x: float, z: float) -> float: return 100.0 + 0.3 * z
+	var th := TerrainEditTiles.new()
+	TerrainSculptOps.ramp(th, Vector2(-30, 0), Vector2(30, 0), 100.0, 100.0, 6.0, hill, 0.0, 2.0)
+	var up := 100.0 + 0.3 * 5.0 + th.sample_delta(0.0, 5.0)
+	var dn := 100.0 - 0.3 * 5.0 + th.sample_delta(0.0, -5.0)
+	_check("ramp hillside: the top is level across", _approx(100.0 + 0.3 * 2.0 + th.sample_delta(0.0, 2.0), 100.0, 0.1))
+	_check("ramp hillside: uphill side is a cut at 1:2", _approx(up, 101.0, 0.15) and th.sample_delta(0.0, 5.0) < 0.0,
+		"got %f" % up)
+	_check("ramp hillside: downhill side is a fill at 1:2", _approx(dn, 99.0, 0.15) and th.sample_delta(0.0, -5.0) > 0.0,
+		"got %f" % dn)
+
 	# Carve basin: flat floor at rim-depth, sloped banks, rim returned for fill.
 	var poly2 := PackedVector2Array([
 		Vector2(-20, -20), Vector2(20, -20), Vector2(20, 20), Vector2(-20, 20)])

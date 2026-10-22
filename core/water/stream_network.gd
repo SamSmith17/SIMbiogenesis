@@ -87,6 +87,9 @@ static func section_for(kind: String, settings: Dictionary, osm_half_w: float,
 ## `centerline` are lines); `layer` may be null.
 static func resolve(osm_water: Array, layer: WaterFeatureLayer) -> Array:
 	var settings: Dictionary = layer.settings if layer != null else {}
+	# "Dry between storms": a stream with no base flow of its own runs only
+	# when rain reaches it (a desert wash), instead of the kind's default.
+	var dry := bool(settings.get("dry_between_storms", false))
 	var out: Array = []
 	for item_v in osm_water:
 		if not (item_v is Dictionary):
@@ -130,11 +133,12 @@ static func resolve(osm_water: Array, layer: WaterFeatureLayer) -> Array:
 			"modes": modes,
 			"section": sec,
 			"carve": bool(ov.get("carve", true)),
-			"base_lps": float(ov.get("base_lps", KIND_BASE_LPS.get(kind, 25.0))),
+			"base_lps": float(ov.get("base_lps", 0.0 if dry else KIND_BASE_LPS.get(kind, 25.0))),
 			"covered": bool(item.get("covered", false)),
 			"overridden": not ov.is_empty(),
 			"own_smooth": float(ov.get("smooth", -1.0)),
 			"own_meander": float(ov.get("meander", -1.0)),
+			"erosion": layer.erosion_of("osm:%d" % osm_id) if layer != null else PackedFloat32Array(),
 		})
 	if layer != null:
 		for s_v in layer.streams:
@@ -157,11 +161,12 @@ static func resolve(osm_water: Array, layer: WaterFeatureLayer) -> Array:
 				"section": section_for(kind2, settings, 0.0,
 					s.get("section", {}) if s.get("section") is Dictionary else {}),
 				"carve": bool(s.get("carve", true)),
-				"base_lps": base_lps if base_lps >= 0.0 else float(KIND_BASE_LPS.get(kind2, 25.0)),
+				"base_lps": base_lps if base_lps >= 0.0 else (0.0 if dry else float(KIND_BASE_LPS.get(kind2, 25.0))),
 				"covered": false,
 				"overridden": false,
 				"own_smooth": float(s.get("smooth", -1.0)),
 				"own_meander": float(s.get("meander", -1.0)),
+				"erosion": layer.erosion_of(str(s.get("id", ""))),
 			})
 	apply_curves(out, settings)
 	return out
@@ -394,6 +399,38 @@ static func mode_at(feature: Dictionary, s: float, varc: PackedFloat32Array = Pa
 		if s <= va[i + 1] + 1e-4:
 			return str(modes[i])
 	return str(modes.back())
+
+
+## Per station (arc lengths `s`, ascending): 1 where the strip draws water —
+## the station's span is open, or the span just above it is (so the strip
+## reaches a culvert mouth). One forward pass: mode_at per station walks the
+## span list from the start, which on a meandered 4 km wash was ~2 000 steps
+## a station, twice a station, every re-mesh.
+static func surface_mask(feature: Dictionary, s: PackedFloat32Array,
+		varc: PackedFloat32Array = PackedFloat32Array()) -> PackedByteArray:
+	var n := s.size()
+	var out := PackedByteArray()
+	out.resize(n)
+	var modes: Array = feature.get("modes", [])
+	if modes.is_empty():
+		out.fill(1)
+		return out
+	var va := varc if not varc.is_empty() else vertex_arc(feature["points"])
+	var m := modes.size()
+	var ja := 0
+	var jb := 0
+	for i in n:
+		var x := s[i]
+		while ja < m - 1 and x > va[ja + 1] + 1e-4:
+			ja += 1
+		var surf := str(modes[ja]) == "surface"
+		if not surf and i > 0:
+			var xb := maxf(x - 0.01, 0.0)
+			while jb < m - 1 and xb > va[jb + 1] + 1e-4:
+				jb += 1
+			surf = str(modes[jb]) == "surface"
+		out[i] = 1 if surf else 0
+	return out
 
 
 ## True when a line, read in its own order, mostly falls (sampled ground at the

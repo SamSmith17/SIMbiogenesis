@@ -95,6 +95,13 @@ var _profile_ready := false
 ## heatwave in Portland and a Tuesday in Phoenix, so an absolute threshold would
 ## either never fire in one place or never stop firing in the other.
 var _heat_threshold_c := NAN
+## Dust erodibility of the site's ground (HazardEvaluators.dust_ground_factor of
+## its annual rainfall), set with the risk profile. NAN until then = 1.0.
+var _dust_ground := NAN
+## floor(abs hour) -> rain (mm) over the dry window ending at that hour. The
+## window sum is ~25 WeatherService samples; one per whole hour keeps a bake
+## sweep cheap, and it is cleared with the memo.
+var _rain_window_cache: Dictionary = {}
 
 ## Manual override: {id, severity, from_abs, to_abs}. Never persisted — this is
 ## a testing/storytelling affordance, and a forced hazard surviving a reload
@@ -214,6 +221,7 @@ func set_enabled(on: bool) -> void:
 func invalidate() -> void:
 	_memo.clear()
 	_memo_keys.clear()
+	_rain_window_cache.clear()
 	_state = HazardState.blank()
 
 
@@ -318,6 +326,8 @@ func refresh_risk_profile() -> void:
 	# top of the ordinary range, and a heatwave is what exceeds it.
 	var smax := float(stats.get("summer_max_c", NAN))
 	_heat_threshold_c = (smax - 4.0) if is_finite(smax) else NAN
+	_dust_ground = HazardEvaluators.dust_ground_factor(
+		float(stats.get("annual_precip_mm", NAN)))
 	var climo := HazardRiskProfile.from_climatology(stats)
 	_profile = HazardRiskProfile.merge(vtec, climo) if not vtec.is_empty() else climo
 	_profile_ready = true
@@ -450,9 +460,56 @@ func _sample_at(abs_hours: float) -> Dictionary:
 		out["rain_mmh"] = float(ws.call("rain_rate_mmh", month, day, hour))
 		out["humidity_pct"] = float(ws.call("humidity_pct", month, day, hour))
 		out["has_data"] = true
+		# Wind-blown dust: the dry-ground gate and the player's threshold.
+		out["rain_prev_mm"] = _rain_prev_mm(ws, abs_hours)
+		out["dust_wind_threshold_ms"] = ExtremeWeatherPrefs.dust_wind_threshold_ms()
+		out["dust_ground"] = _dust_ground if (ExtremeWeatherPrefs.dust_climate_scale
+			and is_finite(_dust_ground)) else 1.0
 	if is_finite(_heat_threshold_c):
 		out["heat_threshold_c"] = _heat_threshold_c
 	return out
+
+
+## Rain (mm) over the player's dry window (ExtremeWeatherPrefs.dust_dry_hours)
+## ending at the whole hour containing `abs_hours`. Pure in the loaded data —
+## a function of the clock like everything here, so it scrubs backwards.
+func _rain_prev_mm(ws: Node, abs_hours: float) -> float:
+	var hour_key := floori(abs_hours)
+	if _rain_window_cache.has(hour_key):
+		return float(_rain_window_cache[hour_key])
+	var clk := _scratch_clock
+	var rain_at := func(t: float) -> float:
+		var d: Dictionary = clk.abs_hours_to_date(t)
+		return float(ws.call("rain_rate_mmh", int(d.get("month", 6)),
+			int(d.get("day", 15)), float(d.get("day_time", 12.0))))
+	var mm := HazardEvaluators.rain_in_window(
+		rain_at, float(hour_key), ExtremeWeatherPrefs.dust_dry_hours)
+	if _rain_window_cache.size() > 4096:
+		_rain_window_cache.clear()
+	_rain_window_cache[hour_key] = mm
+	return mm
+
+
+## The wind-blown-dust drivers at an instant, for the settings tab's live line:
+## {has_data, wind_ms, rain_prev_mm, threshold_ms, ground, severity}.
+func dust_drivers_at(abs_hours: float) -> Dictionary:
+	var s := _sample_at(abs_hours)
+	return {
+		"has_data": s.has("wind_ms"),
+		"wind_ms": float(s.get("wind_ms", NAN)),
+		"rain_prev_mm": float(s.get("rain_prev_mm", NAN)),
+		"threshold_ms": float(s.get("dust_wind_threshold_ms",
+			ExtremeWeatherPrefs.dust_wind_threshold_ms())),
+		"ground": float(s.get("dust_ground", 1.0)),
+		"severity": HazardEvaluators.evaluate_wind_dust(s),
+	}
+
+
+func dust_drivers_now() -> Dictionary:
+	var t := _current_abs_hours()
+	if is_nan(t):
+		return {"has_data": false}
+	return dust_drivers_at(t)
 
 
 ## Ramp in, plateau, ramp out. Deterministic and pure in `abs_hours`, so a
@@ -650,6 +707,7 @@ func _on_location_changed(_lat: float, _lon: float) -> void:
 	_climo_cache = {}
 	_climo_cache_key = ""
 	_heat_threshold_c = NAN
+	_dust_ground = NAN
 	invalidate()
 
 

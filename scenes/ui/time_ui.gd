@@ -14,6 +14,11 @@ var ui_visible: bool = false
 
 
 func _ready() -> void:
+	# The root is a 430 px column down the right of the screen (the scenes'
+	# anchors) holding a panel that stays hidden: with the default STOP filter
+	# it swallowed every click there, so the edit toolbar's tools could not
+	# reach the right of the world. Only the panel takes input.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	main_node = get_parent().get_parent()
 	if main_node:
 		player_node = main_node.get_node_or_null("Player")

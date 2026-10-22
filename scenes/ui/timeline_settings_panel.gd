@@ -807,6 +807,15 @@ var _xw_preview_sev: HSlider = null
 var _xw_preview_btn: Button = null
 var _xw_preview_dur: SpinBox = null
 var _xw_rows: Dictionary = {}   # hazard id -> {check, bar, stat}
+var _xw_dust_wind: HSlider = null
+var _xw_dust_dry: HSlider = null
+var _xw_dust_climate: CheckBox = null
+var _xw_dust_now: Label = null
+var _xw_dust_color: ColorPickerButton = null
+var _xw_dust_thick: HSlider = null
+var _xw_dust_sky: HSlider = null
+var _xw_dust_height: HSlider = null
+var _xw_dust_streaks: HSlider = null
 
 
 func _build_extreme_weather_tab(tabs: TabContainer) -> void:
@@ -847,6 +856,54 @@ func _build_extreme_weather_tab(tabs: TabContainer) -> void:
 	v.add_child(_xw_rows_box)
 	for id: String in HazardCatalog.ids():
 		_xw_add_hazard_row(_xw_rows_box, id)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Wind-blown dust")
+	var dust_hint := Label.new()
+	dust_hint.text = "Dry ground starts to blow once the wind passes the speed below, unless it rained within the dry spell. Light haze just past it, a real dust storm around 30 mph and a wall from about 45 mph. Needs the Dust Storm hazard ticked above and the simulation switched on."
+	dust_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dust_hint.custom_minimum_size = Vector2(440, 0)
+	dust_hint.add_theme_color_override("font_color", C_TEXT_S)
+	dust_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(dust_hint)
+	_xw_dust_wind = _add_slider(v, "Wind (mph)", ExtremeWeatherPrefs.DUST_WIND_MPH_MIN,
+		ExtremeWeatherPrefs.DUST_WIND_MPH_MAX, 0.5, _on_xw_dust_wind)
+	_xw_dust_dry = _add_slider(v, "Dry spell (h)", ExtremeWeatherPrefs.DUST_DRY_HOURS_MIN,
+		ExtremeWeatherPrefs.DUST_DRY_HOURS_MAX, 1.0, _on_xw_dust_dry)
+	_xw_dust_climate = _add_check(v, "Wet climates raise less dust", _on_xw_dust_climate)
+	_xw_dust_climate.tooltip_text = "Scales the dust by the site's yearly rainfall: full on desert ground (under 250 mm a year), a fifth on a wet, green site (1000 mm and more)."
+	_xw_dust_now = Label.new()
+	_xw_dust_now.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_xw_dust_now.custom_minimum_size = Vector2(440, 0)
+	_xw_dust_now.add_theme_color_override("font_color", C_TEXT_S)
+	_xw_dust_now.add_theme_font_size_override("font_size", 10)
+	v.add_child(_xw_dust_now)
+
+	v.add_child(HSeparator.new())
+	_add_section_lbl(v, "Dust look")
+	var look_hint := Label.new()
+	look_hint.text = "How a dust storm looks. These change nothing but the picture: visibility, solar output and health still follow the real dust. Preview a Dust Storm below to see your changes."
+	look_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	look_hint.custom_minimum_size = Vector2(440, 0)
+	look_hint.add_theme_color_override("font_color", C_TEXT_S)
+	look_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(look_hint)
+	_xw_dust_color = _add_color_picker(v, "Colour", _on_xw_dust_color)
+	_xw_dust_color.edit_alpha = false
+	_xw_dust_thick = _add_slider(v, "Thickness", ExtremeWeatherPrefs.DUST_THICKNESS_MIN,
+		ExtremeWeatherPrefs.DUST_THICKNESS_MAX, 0.05, _on_xw_dust_thick)
+	_xw_dust_thick.tooltip_text = "How thick the air gets for a given storm. Above 1 it closes in further than the measured visibility."
+	_xw_dust_sky = _add_slider(v, "Hides the sky", 0.0, 1.0, 0.05, _on_xw_dust_sky)
+	_xw_dust_sky.tooltip_text = "How much of the sky a full storm covers, sun, clouds and stars included. At 0 the dust stays a low layer with the sky clear above it."
+	_xw_dust_height = _add_slider(v, "Layer height", ExtremeWeatherPrefs.DUST_HEIGHT_MIN,
+		ExtremeWeatherPrefs.DUST_HEIGHT_MAX, 0.05, _on_xw_dust_height)
+	_xw_dust_height.tooltip_text = "Scales how tall the dust layer stands: 30 m for light dust up to 350 m for a full storm at 1."
+	_xw_dust_streaks = _add_slider(v, "Wind streaks", 0.0, 1.0, 0.05, _on_xw_dust_streaks)
+	_xw_dust_streaks.tooltip_text = "How strongly the dust streams in bands along the wind, with denser gusts sweeping downwind."
+	var reset_look := Button.new()
+	reset_look.text = "Reset look"
+	reset_look.pressed.connect(_on_xw_dust_reset_look)
+	v.add_child(reset_look)
 
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Preview a hazard")
@@ -969,6 +1026,12 @@ func _refresh_extreme_weather_tab() -> void:
 	_xw_enabled.button_pressed = gr != null and gr.is_extreme_weather_enabled()
 	_xw_notify.button_pressed = ExtremeWeatherPrefs.notify
 	_xw_intensity.value = ExtremeWeatherPrefs.intensity
+	if _xw_dust_wind != null:
+		_xw_dust_wind.value = ExtremeWeatherPrefs.dust_wind_mph
+		_xw_dust_dry.value = ExtremeWeatherPrefs.dust_dry_hours
+		_xw_dust_climate.button_pressed = ExtremeWeatherPrefs.dust_climate_scale
+	_xw_sync_dust_look()
+	_xw_refresh_dust_now()
 
 	var profile: Dictionary = {}
 	var ready := false
@@ -1029,6 +1092,112 @@ func _on_xw_enabled(on: bool) -> void:
 	var xw := get_node_or_null("/root/ExtremeWeather")
 	if xw != null:
 		xw.call("invalidate")
+
+
+## The live wind-blown-dust line: what the wind and the rain are doing at the
+## playhead and what that makes of the dust right now.
+func _xw_refresh_dust_now() -> void:
+	if _xw_dust_now == null:
+		return
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw == null or not xw.has_method("dust_drivers_now"):
+		_xw_dust_now.text = ""
+		return
+	var d: Dictionary = xw.call("dust_drivers_now")
+	if not bool(d.get("has_data", false)):
+		_xw_dust_now.text = "Now: no weather data for this site yet."
+		return
+	var mph := float(d.get("wind_ms", NAN)) / HazardEvaluators.MPH_TO_MS
+	var rain := float(d.get("rain_prev_mm", NAN))
+	var sev := float(d.get("severity", 0.0))
+	var rain_txt := "no rain data"
+	var window := UiText.count(int(ExtremeWeatherPrefs.dust_dry_hours), "hour")
+	if is_finite(rain):
+		if rain >= HazardEvaluators.WIND_DUST_RAIN_TRACE_MM:
+			rain_txt = "%s mm of rain in the last %s" % [UiText.num(rain, "", 2), window]
+		else:
+			rain_txt = "dry for %s" % window
+	var verdict := "no dust"
+	if sev > 0.005:
+		verdict = "dust %d%%" % roundi(sev * 100.0)
+	var ground := float(d.get("ground", 1.0))
+	var ground_txt := "" if ground >= 0.999 else " · ground x%.2f (wet climate)" % ground
+	_xw_dust_now.text = "Now: wind %.0f mph, %s → %s%s" % [mph, rain_txt, verdict, ground_txt]
+
+
+func _xw_dust_changed() -> void:
+	ExtremeWeatherPrefs.save()
+	var xw := get_node_or_null("/root/ExtremeWeather")
+	if xw != null:
+		xw.call("invalidate")
+	_xw_refresh_dust_now()
+
+
+func _xw_sync_dust_look() -> void:
+	if _xw_dust_color == null:
+		return
+	var prev := _syncing
+	_syncing = true
+	_xw_dust_color.color = ExtremeWeatherPrefs.dust_color
+	_xw_dust_thick.value = ExtremeWeatherPrefs.dust_thickness
+	_xw_dust_sky.value = ExtremeWeatherPrefs.dust_sky
+	_xw_dust_height.value = ExtremeWeatherPrefs.dust_height
+	_xw_dust_streaks.value = ExtremeWeatherPrefs.dust_streaks
+	_syncing = prev
+
+
+func _on_xw_dust_color(c: Color) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_color(c)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_thick(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_thickness(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_sky(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_sky(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_height(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_height(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_streaks(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_streaks(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_reset_look() -> void:
+	ExtremeWeatherPrefs.reset_dust_look()
+	_xw_sync_dust_look()
+	_xw_dust_changed()
+
+
+func _on_xw_dust_wind(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_wind_mph(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_dry(v: float) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.set_dust_dry_hours(v)
+	_xw_dust_changed()
+
+
+func _on_xw_dust_climate(on: bool) -> void:
+	if _syncing: return
+	ExtremeWeatherPrefs.dust_climate_scale = on
+	_xw_dust_changed()
 
 
 func _on_xw_notify(on: bool) -> void:

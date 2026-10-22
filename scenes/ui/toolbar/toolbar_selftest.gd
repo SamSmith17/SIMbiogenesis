@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 618   # +42: the veg Detect tool (10 registry + 8 params × 4)
+const EXPECTED_CHECKS := 630   # +42: the veg Detect tool (10 registry + 8 params × 4)
 
 var _fails := 0
 var _checks := 0

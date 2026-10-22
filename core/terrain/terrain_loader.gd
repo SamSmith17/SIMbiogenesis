@@ -6941,8 +6941,32 @@ func make_water_ground_sampler() -> WaterGroundSampler:
 
 ## A carve landed on `touched` tiles: things seated on the ground there follow
 ## it down (vegetation, camps, props) and the water surfaces re-drape.
-func on_channels_carved(touched: Array) -> void:
+## `light` = an erosion re-carve: the beds dropped a few cm inside the
+## channels, where nothing stands — only placed props (an intake on the bank)
+## are re-seated; the forest, camps and still water are left as they are.
+func on_channels_carved(touched: Array, light: bool = false) -> void:
 	if touched.is_empty():
+		return
+	if light:
+		# Only a prop standing on a touched tile can have moved, and only
+		# a move of a centimetre or more is worth rebuilding the props for.
+		var moved := false
+		if _placed_prop_layer != null:
+			for item in _placed_prop_layer.props:
+				if not (item is Dictionary):
+					continue
+				var d: Dictionary = item
+				var xz := Vector2(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+				if not _xz_in_touched_tiles(xz, touched):
+					continue
+				var gy := _ground_height_at(xz.x, xz.y)
+				if absf(gy - float(d.get("ground_y", gy))) > 0.01:
+					d["ground_y"] = gy
+					moved = true
+		if moved:
+			_rebuild_placed_props()
+			if not _user_overlays_ephemeral:
+				_placed_prop_layer.save(_lat, _lon)
 		return
 	_reground_vegetation()
 	if _auto_veg_generated:
@@ -11597,7 +11621,11 @@ func level_region_command(poly: PackedVector2Array, target_y: float,
 
 
 ## Grade a ramp between two world points (endpoints snap to current surface).
-func ramp_command(a: Vector3, b: Vector3, width_m: float) -> void:
+## Grade a straight strip from a to b (TerrainSculptOps.ramp): `width_m` flat
+## top, `height_m` above (berm) or below (channel) the line between the two
+## clicked ground heights, sides at `side_run`:1 down / up to the ground.
+func ramp_command(a: Vector3, b: Vector3, width_m: float, height_m: float = 0.0,
+		side_run: float = TerrainSculptOps.DEFAULT_RAMP_SIDE_RUN) -> void:
 	_ensure_edit_tiles()
 	if _edit_tiles == null:
 		return
@@ -11605,7 +11633,7 @@ func ramp_command(a: Vector3, b: Vector3, width_m: float) -> void:
 	var yb := ground_height_at(b.x, b.z)
 	begin_terrain_tile_edit()
 	TerrainSculptOps.ramp(_edit_tiles, Vector2(a.x, a.z), Vector2(b.x, b.z),
-		ya, yb, width_m, Callable(self, "_height_field_base"))
+		ya, yb, width_m, Callable(self, "_height_field_base"), height_m, side_run)
 	end_terrain_tile_edit()
 
 

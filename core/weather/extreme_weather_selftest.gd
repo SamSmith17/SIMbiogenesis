@@ -43,6 +43,9 @@ func _approx(got: float, want: float, eps := 0.0001) -> bool:
 
 func _initialize() -> void:
 	_snapshot_prefs()
+	# The dust look reads ExtremeWeatherPrefs: pin the shipped defaults so the
+	# player's saved taste can never decide a result here.
+	ExtremeWeatherPrefs.use_defaults_for_test()
 
 	_test_catalog_integrity()
 	_test_vtec_mapping()
@@ -59,6 +62,9 @@ func _initialize() -> void:
 	_test_aqi_breakpoints()
 	_test_beer_lambert()
 	_test_hazard_profiles()
+	_test_smoke_dust_look_swap()
+	_test_dust_look_controls()
+	_test_wind_blown_dust()
 	_test_risk_profile_from_vtec()
 	_test_risk_profile_climatology()
 	_test_risk_profile_merge_and_display()
@@ -516,6 +522,10 @@ func _test_rh_growth() -> void:
 ## --- prefs -------------------------------------------------------------------
 
 func _test_prefs_roundtrip() -> void:
+	# Start from NO file: the player's own prefs (restored by _restore_prefs)
+	# must not decide what "the catalog default" reads as.
+	if FileAccess.file_exists(ExtremeWeatherPrefs.CFG_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ExtremeWeatherPrefs.CFG_PATH))
 	ExtremeWeatherPrefs.reset_for_test()
 	# An id absent from the file falls back to the catalog default, so a hazard
 	# added in a later build opts in on its own terms.
@@ -535,6 +545,60 @@ func _test_prefs_roundtrip() -> void:
 		_approx(ExtremeWeatherPrefs.intensity, 1.75, 0.001),
 		"got %f" % ExtremeWeatherPrefs.intensity)
 	_check("prefs: notify round-trips", not ExtremeWeatherPrefs.notify)
+
+	# Wind-blown dust settings: defaults are the player's rule, they persist,
+	# and they clamp.
+	ExtremeWeatherPrefs.reset_for_test()
+	_check("prefs: dust wind default 10 mph", _approx(ExtremeWeatherPrefs.dust_wind_mph, 10.0))
+	_check("prefs: dust dry spell default 24 h", _approx(ExtremeWeatherPrefs.dust_dry_hours, 24.0))
+	_check("prefs: dust threshold is 10 mph in m/s",
+		_approx(ExtremeWeatherPrefs.dust_wind_threshold_ms(), 4.4704, 0.0001))
+	ExtremeWeatherPrefs.set_dust_wind_mph(15.0)
+	ExtremeWeatherPrefs.set_dust_dry_hours(48.0)
+	ExtremeWeatherPrefs.dust_climate_scale = false
+	ExtremeWeatherPrefs.save()
+	ExtremeWeatherPrefs.reset_for_test()
+	ExtremeWeatherPrefs.ensure_loaded()
+	_check("prefs: dust wind round-trips", _approx(ExtremeWeatherPrefs.dust_wind_mph, 15.0, 0.001))
+	_check("prefs: dust dry spell round-trips", _approx(ExtremeWeatherPrefs.dust_dry_hours, 48.0, 0.001))
+	_check("prefs: dust climate scale round-trips", not ExtremeWeatherPrefs.dust_climate_scale)
+	ExtremeWeatherPrefs.set_dust_wind_mph(NAN)
+	_check("prefs: NaN dust wind -> 10 mph", _approx(ExtremeWeatherPrefs.dust_wind_mph, 10.0))
+	ExtremeWeatherPrefs.set_dust_dry_hours(9999.0)
+	_check("prefs: dust dry spell clamps",
+		_approx(ExtremeWeatherPrefs.dust_dry_hours, ExtremeWeatherPrefs.DUST_DRY_HOURS_MAX))
+
+	# Dust look: persists, clamps, resets.
+	ExtremeWeatherPrefs.use_defaults_for_test()
+	ExtremeWeatherPrefs.set_dust_color(Color(0.7, 0.5, 0.3))
+	ExtremeWeatherPrefs.set_dust_thickness(2.0)
+	ExtremeWeatherPrefs.set_dust_sky(0.25)
+	ExtremeWeatherPrefs.set_dust_height(1.5)
+	ExtremeWeatherPrefs.set_dust_streaks(0.9)
+	ExtremeWeatherPrefs.save()
+	ExtremeWeatherPrefs.reset_for_test()
+	ExtremeWeatherPrefs.ensure_loaded()
+	_check("prefs: dust colour round-trips",
+		ExtremeWeatherPrefs.dust_color.is_equal_approx(Color(0.7, 0.5, 0.3)))
+	_check("prefs: dust thickness round-trips", _approx(ExtremeWeatherPrefs.dust_thickness, 2.0, 0.001))
+	_check("prefs: dust sky round-trips", _approx(ExtremeWeatherPrefs.dust_sky, 0.25, 0.001))
+	_check("prefs: dust height round-trips", _approx(ExtremeWeatherPrefs.dust_height, 1.5, 0.001))
+	_check("prefs: dust streaks round-trips", _approx(ExtremeWeatherPrefs.dust_streaks, 0.9, 0.001))
+	ExtremeWeatherPrefs.set_dust_thickness(NAN)
+	_check("prefs: NaN thickness -> default",
+		_approx(ExtremeWeatherPrefs.dust_thickness, ExtremeWeatherPrefs.DUST_THICKNESS_DEFAULT))
+	ExtremeWeatherPrefs.set_dust_sky(5.0)
+	_check("prefs: dust sky clamps to 1", _approx(ExtremeWeatherPrefs.dust_sky, 1.0))
+	ExtremeWeatherPrefs.set_dust_color(Color(NAN, 0.0, 0.0))
+	_check("prefs: NaN colour -> default",
+		ExtremeWeatherPrefs.dust_color.is_equal_approx(ExtremeWeatherPrefs.DUST_COLOR_DEFAULT))
+	ExtremeWeatherPrefs.reset_dust_look()
+	_check("prefs: reset look restores the default thickness",
+		_approx(ExtremeWeatherPrefs.dust_thickness, ExtremeWeatherPrefs.DUST_THICKNESS_DEFAULT))
+	# Leave no file and in-memory defaults for the tests that follow.
+	if FileAccess.file_exists(ExtremeWeatherPrefs.CFG_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ExtremeWeatherPrefs.CFG_PATH))
+	ExtremeWeatherPrefs.use_defaults_for_test()
 
 	# The Drama slider is clamped, and NaN cannot poison it.
 	ExtremeWeatherPrefs.set_intensity(99.0)
@@ -701,7 +765,10 @@ func _test_hazard_profiles() -> void:
 	_check("dust: tan not red",
 		(dust["haze_color"] as Color).g > (smoke["haze_color"] as Color).g)
 	_check("dust: drives wind", float(dust["wind_mult"]) > 1.0)
-	_check("dust: emits dust", str(dust["particle_kind"]) == "dust")
+	# No grains (the player asked for the particle system to go): the ground
+	# layer carries the look.
+	_check("dust: emits no particles", str(dust["particle_kind"]) == "")
+	_check("dust: is a ground layer", float(dust["haze_layer_m"]) > 0.0)
 
 	# Wind is deliberately NOT a haze — if it dimmed the sun like smoke, the two
 	# hazards would be indistinguishable on screen.
@@ -779,6 +846,296 @@ func _test_hazard_profiles() -> void:
 		bool(HazardEvaluators.state_for("dust_storm", 0.9)["shelter_required"]))
 	_check("shelter: mild dust does not",
 		not bool(HazardEvaluators.state_for("dust_storm", 0.2)["shelter_required"]))
+
+
+## THE LOOK SWAP (2026-10-21). The player saw the dust storm render as a
+## glowing orange sky (a wildfire image) and smoke as low brown haze (a dust
+## image). The optics were swapped while every gameplay channel stayed with
+## its hazard. Pinned here so the two cannot drift back together.
+func _test_smoke_dust_look_swap() -> void:
+	for sev: float in [0.3, 0.6, 0.9]:
+		var sm := HazardEvaluators.state_for("wildfire_smoke", sev)
+		var du := HazardEvaluators.state_for("dust_storm", sev)
+		var tag := "%.1f" % sev
+		# Smoke aloft takes the whole dome but never hides the disc; dust starts
+		# as a shallow layer on the horizon and climbs into a whiteout veil.
+		_check("swap %s: smoke fills the dome (low horizon bias)" % tag,
+			float(sm["horizon_bias"]) < 0.4, "got %f" % float(sm["horizon_bias"]))
+		_check("swap %s: smoke never veils the sun" % tag,
+			_approx(float(sm["sky_veil"]), 0.0))
+		_check("swap %s: smoke is no ground layer" % tag,
+			_approx(float(sm["haze_layer_m"]), 0.0))
+		_check("swap %s: dust is a ground layer" % tag,
+			float(du["haze_layer_m"]) >= 20.0 and float(du["haze_layer_m"]) <= 500.0,
+			"got %f m" % float(du["haze_layer_m"]))
+		# Colours: smoke grey-brown (low chroma), dust tan/ochre (warm, light).
+		var shc: Color = sm["haze_color"]
+		var dhc: Color = du["haze_color"]
+		_check("swap %s: smoke haze is grey-brown, not orange" % tag,
+			shc.r - shc.b < 0.26 and shc.g / maxf(shc.r, 0.001) > 0.65,
+			"got %s" % str(shc))
+		_check("swap %s: dust haze is pale grey-beige (r > g > b, light)" % tag,
+			dhc.r > dhc.g and dhc.g > dhc.b and dhc.r > 0.65, "got %s" % str(dhc))
+		_check("swap %s: dust lighter than smoke" % tag,
+			dhc.get_luminance() > shc.get_luminance())
+		# Sun: a red disc in smoke (fine particles strip the blue), pale in dust.
+		var sst: Color = sm["sun_tint"]
+		var dst: Color = du["sun_tint"]
+		_check("swap %s: smoke sun redder than dust sun" % tag,
+			sst.b / maxf(sst.r, 0.001) < dst.b / maxf(dst.r, 0.001))
+		_check("swap %s: dust sun stays pale" % tag,
+			dst.b / maxf(dst.r, 0.001) > 0.6, "got %s" % str(dst))
+		# The old dust look's furnace glow is gone.
+		_check("swap %s: dust glows less than smoke" % tag,
+			float(du["glow_boost"]) < float(sm["glow_boost"]))
+		# Gameplay channels did NOT move with the look.
+		_check("swap %s: smoke AOD is the smoke physics" % tag,
+			_approx(float(sm["aod"]), HazardEvaluators.SMOKE_AOD_MAX * sev, 0.001))
+		_check("swap %s: dust AOD is the dust physics" % tag,
+			_approx(float(du["aod"]), HazardEvaluators.DUST_AOD_MAX * sev, 0.001))
+		_check("swap %s: smoke PM2.5 is the smoke curve" % tag,
+			_approx(float(sm["pm25_ugm3"]),
+				HazardEvaluators.SMOKE_PM25_MAX * pow(sev, 1.4), 0.01))
+		_check("swap %s: no particles either way; only dust drives wind" % tag,
+			str(du["particle_kind"]) == "" and str(sm["particle_kind"]) == ""
+				and float(du["wind_mult"]) > 1.0 and _approx(float(sm["wind_mult"]), 1.0))
+
+		# Applier: the dust layer exists only for dust, and the sky haze carries
+		# each hazard's bias.
+		var vs := AtmosphereApplier.volumetric_for(sm, 1.0)
+		var vd := AtmosphereApplier.volumetric_for(du, 1.0)
+		_check("swap %s: smoke has no fog layer" % tag, _approx(float(vs["layer_sigma"]), 0.0))
+		_check("swap %s: dust has a fog layer" % tag, float(vd["layer_sigma"]) > 0.0)
+		_check("swap %s: dust volumetrics take the sky as the veil does" % tag,
+			_approx(float(vd["vol_sky_affect"]),
+				lerpf(AtmosphereApplier.LAYER_VOL_SKY_AFFECT, 1.0, float(du["sky_veil"])), 0.001))
+		var shs := AtmosphereApplier.sky_haze_for(sm, 0.0)
+		var shd := AtmosphereApplier.sky_haze_for(du, 0.0)
+		_check("swap %s: sky haze bias follows the hazard" % tag,
+			_approx(float(shs["horizon_bias"]), float(sm["horizon_bias"]))
+				and _approx(float(shd["horizon_bias"]), float(du["horizon_bias"])))
+		if sev < 0.5:
+			_check("swap %s: light dust hugs the horizon more than smoke" % tag,
+				float(shs["horizon_bias"]) < float(shd["horizon_bias"]))
+		var lc: Color = shd["haze_color"]
+		_check("swap %s: sky lift keeps dust hue" % tag,
+			absf(lc.g / lc.r - dhc.g / dhc.r) < 0.01
+				and absf(lc.b / lc.r - dhc.b / dhc.r) < 0.01, "%s vs %s" % [str(lc), str(dhc)])
+		_check("swap %s: sky lift never clips" % tag, lc.r <= 1.0001 and lc.g <= 1.0001)
+
+	# Light dust hugs the horizon; a storm becomes a whiteout over the sky.
+	var light := HazardEvaluators.state_for("dust_storm", 0.2)
+	var storm := HazardEvaluators.state_for("dust_storm", 0.95)
+	_check("dust look: light dust hugs the horizon",
+		float(light["horizon_bias"]) > 0.85, "got %f" % float(light["horizon_bias"]))
+	_check("dust look: light dust leaves the sun and clouds",
+		float(light["sky_veil"]) < 0.05, "got %f" % float(light["sky_veil"]))
+	_check("dust look: a storm takes the whole sky",
+		float(storm["horizon_bias"]) < 0.2, "got %f" % float(storm["horizon_bias"]))
+	_check("dust look: a storm veils sun, clouds and stars",
+		float(storm["sky_veil"]) > 0.9, "got %f" % float(storm["sky_veil"]))
+	var shst := AtmosphereApplier.sky_haze_for(storm, 0.0)
+	_check("dust look: a storm tints the full gradient",
+		float(shst["haze_strength"]) > 0.99, "got %f" % float(shst["haze_strength"]))
+	_check("dust look: the veil reaches the sky shader",
+		_approx(float(shst["veil"]), float(storm["sky_veil"])))
+	var shnight := AtmosphereApplier.sky_haze_for(storm, 1.0)
+	_check("dust look: the veil still hides stars at night",
+		float(shnight["veil"]) > 0.9)
+	_check("dust look: the night veil is dark, not a glowing dome",
+		(shnight["veil_color"] as Color).get_luminance()
+			< (shst["veil_color"] as Color).get_luminance() * 0.2)
+	# Bright, shadowless whiteout: ambient is lifted, not dimmed.
+	var ab := _clean_base()
+	var aout := AtmosphereApplier.resolve(ab, storm, 0.0, 1.0)
+	_check("dust look: whiteout ambient is not darker than clean air",
+		float(aout["ambient_energy"]) >= float(ab["ambient_energy"]) * 0.99,
+		"%f vs %f" % [float(aout["ambient_energy"]), float(ab["ambient_energy"])])
+	var anight := AtmosphereApplier.resolve(ab, storm, 1.0, -0.3)
+	_check("dust look: the haze colour darkens at night",
+		(anight["fog_light_color"] as Color).get_luminance()
+			< (aout["fog_light_color"] as Color).get_luminance() * 0.5)
+
+	# fog_sky_affect: the default bias keeps all of it (every older hazard
+	# renders as before); a dust layer keeps under half.
+	_check("swap: default bias keeps full sky affect",
+		_approx(AtmosphereApplier.sky_affect_scale(0.65), 1.0))
+	_check("swap: smoke keeps full sky affect",
+		_approx(AtmosphereApplier.sky_affect_scale(0.25), 1.0))
+	_check("swap: dust layer keeps under half the sky affect",
+		AtmosphereApplier.sky_affect_scale(0.92) < 0.5)
+	_check("swap: NaN bias is safe", is_finite(AtmosphereApplier.sky_affect_scale(NAN)))
+	# combine(): bias blends, layer takes the deeper.
+	var both := HazardState.combine(HazardEvaluators.state_for("wildfire_smoke", 0.5),
+		HazardEvaluators.state_for("dust_storm", 0.5))
+	_check("swap: combined bias between the two",
+		float(both["horizon_bias"]) > 0.25 and float(both["horizon_bias"]) < 0.92)
+	_check("swap: combined layer is the dust layer",
+		_approx(float(both["haze_layer_m"]),
+			float(HazardEvaluators.state_for("dust_storm", 0.5)["haze_layer_m"])))
+
+
+func _wind_dust_at(wind_mph: float, extra: Dictionary = {}) -> float:
+	var smp := {"rain_prev_mm": 0.0, "wind_ms": wind_mph * HazardEvaluators.MPH_TO_MS}
+	for k: Variant in extra.keys():
+		smp[k] = extra[k]
+	return HazardEvaluators.evaluate_wind_dust(smp)
+
+
+## The player's dust-look controls: each moves only the picture, never the
+## physics channels, and the shipped defaults are the whiteout reference.
+func _test_dust_look_controls() -> void:
+	ExtremeWeatherPrefs.use_defaults_for_test()
+	ExtremeWeatherPrefs.set_dust_thickness(1.0)
+	var ref := HazardEvaluators.state_for("dust_storm", 0.8)
+	var ref_vol := AtmosphereApplier.volumetric_for(ref, 1.0)
+	var base := _clean_base()
+	var ref_env := AtmosphereApplier.resolve(base, ref, 0.0, 1.0)
+
+	ExtremeWeatherPrefs.set_dust_color(Color(0.70, 0.50, 0.30))
+	var col := HazardEvaluators.state_for("dust_storm", 0.8)
+	_check("look: colour reaches the haze",
+		(col["haze_color"] as Color).b < (ref["haze_color"] as Color).b - 0.2)
+	_check("look: colour reaches the ground layer",
+		(AtmosphereApplier.volumetric_for(col, 1.0)["layer_color"] as Color).b
+			< (ref_vol["layer_color"] as Color).b - 0.2)
+	ExtremeWeatherPrefs.reset_dust_look()
+
+	ExtremeWeatherPrefs.set_dust_thickness(2.5)
+	var thick := HazardEvaluators.state_for("dust_storm", 0.8)
+	var thick_env := AtmosphereApplier.resolve(base, thick, 0.0, 1.0)
+	_check("look: thickness thickens the fog",
+		float(thick_env["fog_density"]) > float(ref_env["fog_density"]) * 1.5,
+		"%f vs %f" % [float(thick_env["fog_density"]), float(ref_env["fog_density"])])
+	_check("look: thickness thickens the ground layer",
+		float(AtmosphereApplier.volumetric_for(thick, 1.0)["layer_sigma"])
+			> float(ref_vol["layer_sigma"]) * 1.5)
+	_check("look: thickness leaves visibility_m physical",
+		_approx(float(thick["visibility_m"]), float(ref["visibility_m"]), 0.01))
+	_check("look: thickness leaves AOD and PM alone",
+		_approx(float(thick["aod"]), float(ref["aod"]), 0.0001)
+			and _approx(float(thick["pm25_ugm3"]), float(ref["pm25_ugm3"]), 0.001))
+	_check("look: thickness leaves the energy channels alone",
+		_approx(float(thick["dni_factor"]), float(ref["dni_factor"]), 0.0001)
+			and _approx(float(thick["ghi_factor"]), float(ref["ghi_factor"]), 0.0001))
+	_check("look: the ground layer never passes its hard cap",
+		float(AtmosphereApplier.volumetric_for(thick, 1.0)["layer_sigma"])
+			<= AtmosphereApplier.LAYER_SIGMA_HARD_MAX + 0.000001)
+	ExtremeWeatherPrefs.reset_dust_look()
+
+	ExtremeWeatherPrefs.set_dust_sky(0.0)
+	var low := HazardEvaluators.state_for("dust_storm", 0.95)
+	_check("look: sky 0 keeps dust a low layer (no veil)", _approx(float(low["sky_veil"]), 0.0))
+	_check("look: sky 0 keeps the horizon bias high", float(low["horizon_bias"]) > 0.85)
+	ExtremeWeatherPrefs.reset_dust_look()
+
+	ExtremeWeatherPrefs.set_dust_height(2.0)
+	var tall := HazardEvaluators.state_for("dust_storm", 0.8)
+	_check("look: height scales the layer",
+		_approx(float(tall["haze_layer_m"]), float(ref["haze_layer_m"]) * 2.0, 0.01))
+	ExtremeWeatherPrefs.reset_dust_look()
+
+	# Thickness 1 is the identity on fog density for every other hazard.
+	var smoke := HazardEvaluators.state_for("wildfire_smoke", 0.7)
+	_check("look: optical_mult defaults to 1 outside dust",
+		_approx(float(smoke["optical_mult"]), 1.0) and _approx(float(smoke["ambient_mult"]), 1.0))
+	ExtremeWeatherPrefs.use_defaults_for_test()
+
+
+## Wind-blown dust from the weather alone: over 10 mph, unless it rained in the
+## last 24 h. The director copies the window rain and the player threshold
+## into the sample; everything below is the pure rule.
+func _test_wind_blown_dust() -> void:
+	var mph := HazardEvaluators.MPH_TO_MS
+	_check("wind dust: 9 mph dry -> none", _approx(_wind_dust_at(9.0), 0.0))
+	_check("wind dust: exactly 10 mph -> none", _approx(_wind_dust_at(10.0), 0.0))
+	var s12 := _wind_dust_at(12.0)
+	_check("wind dust: 12 mph dry -> dust", s12 > 0.02, "got %f" % s12)
+	_check("wind dust: 12 mph is light haze, not a storm", s12 < 0.2, "got %f" % s12)
+	var s30 := _wind_dust_at(30.0)
+	_check("wind dust: 30 mph is a real storm", s30 > 0.4 and s30 < 0.8, "got %f" % s30)
+	_check("wind dust: 45 mph is the full wall", _wind_dust_at(45.0) > 0.98)
+	_check("wind dust: 12 mph after rain -> none",
+		_approx(_wind_dust_at(12.0, {"rain_prev_mm": 0.4}), 0.0))
+	_check("wind dust: a trace under 0.1 mm does not wet the ground",
+		_wind_dust_at(12.0, {"rain_prev_mm": 0.05}) > 0.02)
+	_check("wind dust: no rain history -> none (offline invents nothing)",
+		_approx(HazardEvaluators.evaluate_wind_dust({"wind_ms": 20.0 * mph}), 0.0))
+	_check("wind dust: NaN wind -> none", _approx(_wind_dust_at(NAN), 0.0))
+	_check("wind dust: threshold pref respected (15 mph)",
+		_approx(_wind_dust_at(12.0, {"dust_wind_threshold_ms": 15.0 * mph}), 0.0)
+			and _wind_dust_at(17.0, {"dust_wind_threshold_ms": 15.0 * mph}) > 0.0)
+	_check("wind dust: no erodible ground -> none",
+		_approx(_wind_dust_at(30.0, {"dust_ground": 0.0}), 0.0))
+	_check("wind dust: wet ground raises less",
+		_wind_dust_at(30.0, {"dust_ground": 0.2}) < s30 * 0.8)
+
+	# Monotonic in wind, and no jump just past the threshold.
+	var prev := -1.0
+	for w: float in [8.0, 10.5, 12.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 50.0, 70.0]:
+		var v := _wind_dust_at(w)
+		_check("wind dust: monotonic at %.1f mph" % w, v >= prev, "%f after %f" % [v, prev])
+		prev = v
+	_check("wind dust: no jump just past the threshold", _wind_dust_at(10.2) < 0.05,
+		"got %f" % _wind_dust_at(10.2))
+
+	# The dust storm hazard takes the worse of measured and wind-blown dust,
+	# so a windy dry hour with no air-quality data still raises it.
+	var windy := {"wind_ms": 30.0 * mph, "rain_prev_mm": 0.0, "rain_mmh": 0.0}
+	_check("wind dust: raises the dust_storm hazard with no AQ data",
+		_approx(HazardEvaluators.evaluate("dust_storm", windy), s30, 0.0001))
+	_check("wind dust: never raises smoke",
+		_approx(HazardEvaluators.evaluate("wildfire_smoke", windy), 0.0))
+	var st := HazardEvaluators.state_for("dust_storm", s30, "weather")
+	_check("wind dust: 30 mph pulls visibility under 3 km",
+		float(st["visibility_m"]) < 3000.0, "got %.0f m" % float(st["visibility_m"]))
+
+	# The 24 h window over a rain series: rain 20 h ago blocks, 30 h ago does not.
+	var t0 := 1000.0
+	var rain_20h := func(t: float) -> float:
+		return 0.6 if absf(t - (t0 - 20.0)) < 0.5 else 0.0
+	var rain_30h := func(t: float) -> float:
+		return 0.6 if absf(t - (t0 - 30.0)) < 0.5 else 0.0
+	var r20 := HazardEvaluators.rain_in_window(rain_20h, t0, 24.0)
+	var r30 := HazardEvaluators.rain_in_window(rain_30h, t0, 24.0)
+	_check("rain window: rain 20 h ago is inside 24 h", r20 >= 0.5, "got %f" % r20)
+	_check("rain window: rain 30 h ago is outside 24 h", _approx(r30, 0.0), "got %f" % r30)
+	_check("wind dust: 12 mph with rain 20 h ago -> none",
+		_approx(_wind_dust_at(12.0, {"rain_prev_mm": r20}), 0.0))
+	_check("wind dust: 12 mph with rain 30 h ago -> dust",
+		_wind_dust_at(12.0, {"rain_prev_mm": r30}) > 0.02)
+	var r48 := HazardEvaluators.rain_in_window(rain_30h, t0, 48.0)
+	_check("rain window: a 48 h dry spell sees the 30 h rain", r48 >= 0.5)
+	var nodata := func(_t: float) -> float:
+		return NAN
+	_check("rain window: no data -> NAN",
+		is_nan(HazardEvaluators.rain_in_window(nodata, t0, 24.0)))
+	var a := HazardEvaluators.rain_in_window(rain_20h, t0, 24.0)
+	var b := HazardEvaluators.rain_in_window(rain_20h, t0, 24.0)
+	_check("rain window: deterministic", _approx(a, b, 0.0))
+
+	# Ground from climate: desert full, wet site a fifth, unknown full.
+	_check("ground: Bombay Beach (~70 mm) is desert",
+		_approx(HazardEvaluators.dust_ground_factor(70.0), 1.0))
+	_check("ground: 1200 mm is a wet site",
+		_approx(HazardEvaluators.dust_ground_factor(1200.0), HazardEvaluators.DUST_WET_GROUND_FACTOR))
+	_check("ground: unknown climate counts as dust-prone",
+		_approx(HazardEvaluators.dust_ground_factor(NAN), 1.0))
+	var pg := 2.0
+	for mm: float in [0.0, 250.0, 400.0, 600.0, 800.0, 1000.0, 2000.0]:
+		var g := HazardEvaluators.dust_ground_factor(mm)
+		_check("ground: non-increasing at %d mm" % int(mm), g <= pg + 0.000001)
+		pg = g
+
+	# The identity when off: a calm hour resolves to nothing, and nothing
+	# leaves the environment exactly as it was.
+	var calm := HazardEvaluators.state_for("dust_storm", _wind_dust_at(9.0))
+	_check("wind dust: calm hour is inactive", not HazardState.is_active(calm))
+	var base := _clean_base()
+	var out := AtmosphereApplier.resolve(base, calm, 0.0, 1.0)
+	for key: String in base.keys():
+		_check("wind dust: calm hour is the applier identity (%s)" % key,
+			_same(out[key], base[key]))
 
 
 ## --- risk profile ------------------------------------------------------------
@@ -1077,8 +1434,10 @@ func _test_atmosphere_applier() -> void:
 		var prev_d := 0.0
 		var prev_e := 8001.0
 		for sev: float in [0.2, 0.4, 0.6, 0.8, 1.0]:
-			var o := AtmosphereApplier.resolve(
-				base, HazardEvaluators.state_for(id, sev), 0.0, 1.0)
+			var hs := HazardEvaluators.state_for(id, sev)
+			var o := AtmosphereApplier.resolve(base, hs, 0.0, 1.0)
+			# The player's dust Thickness may close in past the base cap.
+			var cap := AtmosphereApplier.FOG_DENSITY_MAX * maxf(float(hs["optical_mult"]), 1.0)
 			var d := float(o["fog_density"])
 			var e := float(o["fog_depth_end"])
 			_check("applier: %s density non-decreasing at %.1f" % [id, sev],
@@ -1087,7 +1446,7 @@ func _test_atmosphere_applier() -> void:
 				e <= prev_e + 0.01, "%f after %f" % [e, prev_e])
 			_check("applier: %s density within clamp at %.1f" % [id, sev],
 				d >= AtmosphereApplier.FOG_DENSITY_MIN
-					and d <= AtmosphereApplier.FOG_DENSITY_MAX, "got %f" % d)
+					and d <= cap + 0.0000001, "got %f (cap %f)" % [d, cap])
 			prev_d = d
 			prev_e = e
 
@@ -1119,7 +1478,12 @@ func _test_atmosphere_applier() -> void:
 	var still_dust := HazardEvaluators.state_for("dust_storm", 0.8)
 	still_dust["wind_mult"] = 1.0   # dust suspended, not driven
 	var v_still := AtmosphereApplier.volumetric_for(still_dust, 1.0)
-	_check("volumetric: suspended dust does not glow", not bool(v_still["vol_force"]))
+	_check("volumetric: suspended dust does not glow",
+		_approx(float(v_still["vol_emission_energy"]), 0.0)
+			and _approx(float(v_still["vol_density"]), 0.0))
+	# ...but it still hugs the ground: the layer needs the volumetric pass.
+	_check("volumetric: suspended dust still draws its ground layer",
+		bool(v_still["vol_force"]) and float(v_still["layer_sigma"]) > 0.0)
 	var driven := HazardEvaluators.state_for("dust_storm", 0.8)
 	var v_driven := AtmosphereApplier.volumetric_for(driven, 1.0)
 	_check("volumetric: driven dust forces volumetric fog", bool(v_driven["vol_force"]))

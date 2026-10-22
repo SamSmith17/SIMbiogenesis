@@ -91,6 +91,14 @@ var _basin_cache: Dictionary = {}
 # Rain / Drain hold-to-modulate
 var _water_modulating := false
 var _water_mod_undo_pushed := false
+## Rain over ground that is not a closed basin: a storm on the water network
+## (WaterNetwork.add_storm) whose end follows the held button.
+var _storm_id := -1
+var _storm_start_h := 0.0
+## A click makes at least this much of a shower (sim hours).
+const STORM_MIN_H := 0.25
+## Rain fills a pond only when its hollow covers this share of the selection.
+const POND_MIN_SHARE := 0.2
 var _last_fill_rate_lps := 0.0
 
 var _brush_ring: MeshInstance3D = null
@@ -1004,18 +1012,70 @@ func _begin_water_modulate() -> void:
 	_water_mod_undo_pushed = false
 	_last_fill_rate_lps = 0.0
 	_refresh_basin_preview()
-	if _state.active_tool == "rain" and not bool(_basin_cache.get("valid", false)):
-		var msg := "No closed basin"
-		if _loader.has_method("basin_failure_message"):
-			msg = str(_loader.call("basin_failure_message", _basin_cache))
-		_set_status(msg)
-		_water_modulating = false
+	# A pond is filled only when the hollow is a real part of what was drawn: a
+	# wide area over a stream holds some 20 cm dimple in the channel bed, and
+	# filling that instead of raining on the area is not what anyone meant.
+	var basin_share := float(_basin_cache.get("area_m2", 0.0)) 		/ maxf(BuildingBuilder.footprint_area_m2(_selection_poly), 1.0)
+	if _state.active_tool == "rain" and (not bool(_basin_cache.get("valid", false))
+			or basin_share < POND_MIN_SHARE):
+		# Open ground: rain a storm there. Its runoff finds the streams below.
+		if not _begin_storm():
+			var msg := "No closed basin"
+			if _loader.has_method("basin_failure_message"):
+				msg = str(_loader.call("basin_failure_message", _basin_cache))
+			_set_status(msg)
+			_water_modulating = false
+
+
+func _water_net() -> Node:
+	if _loader == null or not _loader.has_method("water_network"):
+		return null
+	return _loader.call("water_network") as Node
+
+
+func _begin_storm() -> bool:
+	var wn := _water_net()
+	if wn == null:
+		return false
+	var now := float(wn.call("_now_h"))
+	if not is_finite(now):
+		return false
+	_storm_start_h = now
+	_storm_id = int(wn.call("add_storm", _selection_poly, _state.get_param("storm_mmh", 40.0),
+		now, now + STORM_MIN_H))
+	_set_status(_storm_status(wn, now))
+	return true
+
+
+func _storm_status(wn: Node, now: float) -> String:
+	var reach := float(wn.call("storm_reach_m2", _storm_id))
+	var mmh := _state.get_param("storm_mmh", 40.0)
+	var txt := "Storm %.0f mm/h" % mmh
+	if reach <= 0.0:
+		var dr: Dictionary = wn.call("drainage")
+		txt += " — no stream drains this ground" if not dr.is_empty() \
+			else " — working out where it drains…"
+	else:
+		txt += " — %.1f ha of it runs off into the streams below" % (reach / 10000.0)
+	if SimFxRate.is_paused(_loader.get("_main") as Node):
+		txt += " · the clock is paused: run it to watch the water come down"
+	else:
+		txt += " · %.0f min so far" % ((maxf(now, _storm_start_h + STORM_MIN_H) - _storm_start_h) * 60.0)
+	return txt
 
 
 func _end_water_modulate() -> void:
 	if not _water_modulating:
 		return
 	_water_modulating = false
+	if _storm_id >= 0:
+		var wn := _water_net()
+		if wn != null:
+			var now := float(wn.call("_now_h"))
+			wn.call("extend_storm", _storm_id, maxf(now, _storm_start_h + STORM_MIN_H))
+			_set_status(_storm_status(wn, now).replace(" so far", "") + " — it runs off for a while yet")
+		_storm_id = -1
+		return
 	_last_fill_rate_lps = 0.0
 	_refresh_basin_preview()
 	_update_undo_button()
@@ -1030,6 +1090,13 @@ func _end_water_modulate() -> void:
 func _tick_water_modulate(delta: float) -> void:
 	if _loader == null or not _selection_locked or _selection_poly.size() < 3:
 		_end_water_modulate()
+		return
+	if _storm_id >= 0:
+		var wn := _water_net()
+		if wn != null:
+			var now := float(wn.call("_now_h"))
+			wn.call("extend_storm", _storm_id, maxf(now, _storm_start_h + STORM_MIN_H))
+			_set_status(_storm_status(wn, now))
 		return
 	# One undo snapshot per HOLD, not per frame.
 	if not _water_mod_undo_pushed:
@@ -1114,13 +1181,21 @@ func _brush_op_name() -> String:
 		_: return "raise"
 
 
+## "top 12 m · berm +1.5 m · sides 1:2" for the status line.
+func _ramp_summary() -> String:
+	var h := _state.get_param("height_m", 0.0)
+	var kind := "on grade" if absf(h) < 0.05 else ("berm %+.1f m" % h if h > 0.0 else "channel %.1f m" % h)
+	return "top %.1f m · %s · sides 1:%.1f" % [_state.get_param("width_m", 12.0), kind,
+		_state.get_param("side_run", 2.0)]
+
+
 ## First click anchors; second completes the ramp grade / measure readout.
 func _gesture_click(world: Vector2) -> void:
 	if not _gesture_has_a:
 		_gesture_a = world
 		_gesture_has_a = true
 		if _state.active_tool == "ramp":
-			_set_status("Ramp: click the far end (width %.0f m)" % _state.get_param("width_m", 12.0))
+			_set_status("Ramp: click the far end (%s)" % _ramp_summary())
 		else:
 			_set_status("Measure: click the second point")
 		_queue_overlay_redraw()
@@ -1130,8 +1205,9 @@ func _gesture_click(world: Vector2) -> void:
 	if _state.active_tool == "ramp":
 		if _loader != null:
 			_loader.call("ramp_command", Vector3(a.x, 0.0, a.y),
-				Vector3(world.x, 0.0, world.y), _state.get_param("width_m", 12.0))
-			_set_status("Ramp graded — %s" % _volume_summary())
+				Vector3(world.x, 0.0, world.y), _state.get_param("width_m", 12.0),
+				_state.get_param("height_m", 0.0), _state.get_param("side_run", 2.0))
+			_set_status("Ramp graded (%s) — %s" % [_ramp_summary(), _volume_summary()])
 			_update_undo_button()
 	else:
 		var ya := 0.0
@@ -1245,6 +1321,13 @@ func _draw_overlay() -> void:
 			_overlay.draw_polyline(line, col, 2.5, true)
 			_overlay.draw_circle(line[0], 4.0, col)
 			_overlay.draw_circle(line[1], 4.0, col)
+		# The ramp's flat top: its two edges, dashed.
+		if _state.active_tool == "ramp" and _gesture_a.distance_to(cursor_w) > 0.5:
+			var n := (cursor_w - _gesture_a).normalized().orthogonal() * _state.get_param("width_m", 12.0) * 0.5
+			for side in [n, -n]:
+				var edge := _project_poly(PackedVector2Array([_gesture_a + side, cursor_w + side]))
+				if edge.size() == 2:
+					_overlay.draw_dashed_line(edge[0], edge[1], col, 1.5, 8.0)
 		return
 	# Camp brush stroke in progress: the outline that will be committed.
 	if _stroking and _is_camp_tool():

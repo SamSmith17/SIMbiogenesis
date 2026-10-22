@@ -217,16 +217,53 @@ static func _polyline_point_at(pts: PackedVector2Array, cum: PackedFloat32Array,
 	return pts[pts.size() - 1]
 
 
-## Linear grade (ramp) between world points `a` and `b` at heights `ya`/`yb`,
-## `width_m` wide, feathered at the sides.
+## Side slope of a ramp, horizontal : vertical. 2:1 is the usual stable fill
+## embankment (USDA NRCS NEH 650 ch. 6); 0.5 is the steepest offered.
+const DEFAULT_RAMP_SIDE_RUN := 2.0
+const MIN_RAMP_SIDE_RUN := 0.5
+## Samples along the strip used to bound how far the sides reach.
+const RAMP_REACH_SAMPLES := 32
+const RAMP_REACH_SLACK_M := 2.0
+## A side never reaches further than this from the top's edge (a cut into a
+## hill steeper than the side would otherwise run on forever).
+const RAMP_MAX_SIDE_REACH_M := 120.0
+## How far the toe of a side is rounded where it meets the ground (m).
+const RAMP_TOE_SOFT_M := 0.6
+
+
+## Straight graded strip from world point `a` to `b`: a flat-across top
+## `width_m` wide whose height runs linearly from `ya` to `yb` (the ground at
+## the two clicks) plus `height_m` — positive builds a berm, negative cuts a
+## channel, zero grades a road across a slope. Each side then slopes at
+## `side_run` (horizontal per vertical) until it meets the ground, cutting
+## where the ground is higher and filling where it is lower, so on a hillside
+## the uphill side is a cut and the downhill side a fill. Ends are rounded
+## (distance to the clamped end point).
 static func ramp(tiles: TerrainEditTiles, a: Vector2, b: Vector2, ya: float,
-		yb: float, width_m: float, base_fn: Callable) -> void:
+		yb: float, width_m: float, base_fn: Callable, height_m: float = 0.0,
+		side_run: float = DEFAULT_RAMP_SIDE_RUN) -> void:
 	var axis := b - a
 	var len2 := axis.length_squared()
 	if len2 < 1e-4:
 		return
 	var half_w := maxf(width_m, tiles.cell_m) * 0.5
-	var aabb := Rect2(a, Vector2.ZERO).expand(b).grow(half_w + tiles.cell_m)
+	var run := maxf(side_run, MIN_RAMP_SIDE_RUN)
+	var nrm := Vector2(-axis.y, axis.x).normalized()
+	# How far the sides can reach before they meet the ground: the largest
+	# top-vs-ground difference along the strip, sampled down its middle and
+	# both edges, times the run (plus slack for ground that keeps falling or
+	# rising past the edge).
+	var max_diff := 0.0
+	for k in RAMP_REACH_SAMPLES + 1:
+		var t := float(k) / float(RAMP_REACH_SAMPLES)
+		var top := lerpf(ya, yb, t) + height_m
+		for off in [-half_w, 0.0, half_w]:
+			var q: Vector2 = a + axis * t + nrm * float(off)
+			max_diff = maxf(max_diff, absf(top - _surface_at(tiles, q, base_fn)))
+	var side_reach := minf(run * (max_diff + RAMP_REACH_SLACK_M), RAMP_MAX_SIDE_REACH_M)
+	var capped := run * (max_diff + RAMP_REACH_SLACK_M) > RAMP_MAX_SIDE_REACH_M
+	var reach := half_w + side_reach
+	var aabb := Rect2(a, Vector2.ZERO).expand(b).grow(reach + tiles.cell_m)
 	var bnd := tiles.sample_bounds_for_aabb(aabb, 1)
 	for gj in range(bnd.y, bnd.w + 1):
 		var z := float(gj) * tiles.cell_m
@@ -234,14 +271,44 @@ static func ramp(tiles: TerrainEditTiles, a: Vector2, b: Vector2, ya: float,
 			var x := float(gi) * tiles.cell_m
 			var p := Vector2(x, z)
 			var t := clampf((p - a).dot(axis) / len2, 0.0, 1.0)
-			var on_axis := a + axis * t
-			var perp := p.distance_to(on_axis)
-			if perp > half_w:
+			var d := p.distance_to(a + axis * t)
+			if d > reach:
 				continue
-			var w := 1.0 - smoothstep(0.6, 1.0, perp / half_w)
-			var target := lerpf(ya, yb, t)
+			var top := lerpf(ya, yb, t) + height_m
 			var base := float(base_fn.call(x, z))
-			tiles.set_delta_sample(gi, gj, (target - base) * w)
+			var cur := base + tiles.get_delta_sample(gi, gj)
+			var target := top
+			if d > half_w:
+				var drop := (d - half_w) / run
+				if cur > top:
+					# Cut: the side climbs from the top edge until it meets the ground.
+					target = _smooth_min(cur, top + drop, RAMP_TOE_SOFT_M)
+				else:
+					# Fill: the side falls away until it meets the ground.
+					target = _smooth_max(cur, top - drop, RAMP_TOE_SOFT_M)
+				if capped:
+					# A side that never meets the ground (a cut into a slope steeper
+					# than the side) eases back to the ground at the reach limit
+					# instead of ending in a cliff.
+					target = lerpf(target, cur, smoothstep(reach - 4.0 * tiles.cell_m, reach, d))
+			tiles.set_delta_sample(gi, gj, target - base)
+
+
+## Edited surface (base + this layer's delta) at a world point.
+static func _surface_at(tiles: TerrainEditTiles, q: Vector2, base_fn: Callable) -> float:
+	return float(base_fn.call(q.x, q.y)) + tiles.sample_delta(q.x, q.y)
+
+
+## Polynomial smooth max / min (Quilez): equal to max / min once the two are
+## more than `k` apart, a rounded blend within it — softens the toe of a ramp
+## side so it does not alias into a staircase on the 1.5 m grid.
+static func _smooth_max(p: float, q: float, k: float) -> float:
+	var h := clampf(0.5 + 0.5 * (q - p) / k, 0.0, 1.0)
+	return lerpf(p, q, h) + k * h * (1.0 - h)
+
+
+static func _smooth_min(p: float, q: float, k: float) -> float:
+	return -_smooth_max(-p, -q, k)
 
 
 # ---------------------------------------------------------------------------

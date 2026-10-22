@@ -65,7 +65,7 @@ static func soft_cut(x: float) -> float:
 static func feature_signature(f: Dictionary, profile: Dictionary, carve_on: bool) -> int:
 	var bed: PackedFloat32Array = profile.get("bed", PackedFloat32Array())
 	return hash([f.get("points"), f.get("modes"), f.get("section"), bool(f.get("carve", true)),
-		carve_on, bed])
+		carve_on, bed, f.get("erosion", PackedFloat32Array())])
 
 
 ## Run a carve job. `job`:
@@ -104,7 +104,8 @@ static func run(job: Dictionary) -> Dictionary:
 		var prof := ChannelProfile.compute(f["points"], ground_fn,
 			float(sec.get("depth", 0.8)), float(sec.get("max_cut", 6.0)), floor_y,
 			ChannelProfile.STEP_M, ChannelProfile.SMOOTH_RADIUS_M,
-			float(sec.get("bed_w", 2.0)) * 0.5 + 1.0)
+			float(sec.get("bed_w", 2.0)) * 0.5 + 1.0,
+			f.get("erosion", PackedFloat32Array()))
 		prof["varc"] = StreamNetwork.vertex_arc(f["points"])
 		profiles[id] = prof
 		sigs[id] = feature_signature(f, prof, carve_on)

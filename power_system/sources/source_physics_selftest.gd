@@ -30,6 +30,8 @@ func _initialize() -> void:
 	_test_graph_adapters()
 	_test_weather_service()
 	_test_weather_leap_index()
+	_test_weather_utc_alignment()
+	_test_rain_look()
 	_test_solar_physics()
 	_test_timecode()
 	_test_timeline_view()
@@ -721,6 +723,121 @@ func _test_weather_leap_index() -> void:
 
 ## WeatherService parsing/accessors on canned Open-Meteo JSON (no network),
 ## and the real-data paths through the graph adapters.
+## Time-zone alignment. An Open-Meteo file is stamped in ONE fixed offset (the
+## one in force when it was fetched: Bombay Beach 2024 cached at UTC-7 all
+## year), while the game clock is the rounded meridian + US DST. Reading the
+## file by the clock's wall time put US winter weather an hour early and a
+## Madrid storm 1-2 h off. sample() now goes clock local -> UTC -> file offset.
+func _test_weather_utc_alignment() -> void:
+	var WS = load("res://core/weather_service.gd")
+	# Pure calendar shift with carry.
+	var a: Vector3 = WS.shift_calendar(1, 15, 15.0, 1.0, 2024)
+	_check("utc: +1 h stays on Jan 15", a == Vector3(1, 15, 16), str(a))
+	var b: Vector3 = WS.shift_calendar(1, 31, 23.5, 1.0, 2024)
+	_check("utc: +1 h carries Jan 31 23:30 -> Feb 1 00:30", b.is_equal_approx(Vector3(2, 1, 0.5)), str(b))
+	var c: Vector3 = WS.shift_calendar(3, 1, 0.5, -1.0, 2024)
+	_check("utc: -1 h carries Mar 1 00:30 -> Feb 29 23:30 in a leap year",
+		c.is_equal_approx(Vector3(2, 29, 23.5)), str(c))
+	var c2: Vector3 = WS.shift_calendar(3, 1, 0.5, -1.0, 2023)
+	_check("utc: ... and -> Feb 28 23:30 in a common year",
+		c2.is_equal_approx(Vector3(2, 28, 23.5)), str(c2))
+	_check("utc: clamps at the year end",
+		int(WS.shift_calendar(12, 31, 23.0, 3.0, 2024).x) == 12)
+	_check("utc: shift is data offset minus clock offset",
+		float(WS._offset_shift(-7.0, -8.0)) == 1.0 and float(WS._offset_shift(NAN, -8.0)) == 0.0)
+	_check("utc: Open-Meteo offset parsed",
+		float(WS.utc_offset_hours_of('{"utc_offset_seconds": -25200}')) == -7.0
+		and is_nan(float(WS.utc_offset_hours_of('{}'))))
+
+	# End to end through sample() with a real CelestialClock: a canned archive
+	# whose value IS its hour index, stamped UTC-7 like the cached file.
+	var scr := GDScript.new()
+	scr.source_code = "extends Node\nvar clock\n"
+	scr.reload()
+	var fake := Node.new()
+	fake.set_script(scr)
+	var clk := CelestialClock.new()
+	clk.longitude = -115.73
+	fake.set("clock", clk)
+	var ws: Node = WS.new()
+	ws.set("_main_node", fake)
+	ws.set("_sim_year", 2024)
+	var vals: Array = []
+	for i in 8784:
+		vals.append(float(i))
+	ws.parse_archive_json(JSON.stringify({"utc_offset_seconds": -25200,
+		"hourly": {"temperature_2m": vals}}), 33.36, -115.73, 2024)
+	# Jan 15 15:00 PST = 23:00 UTC = 16:00 in the file.
+	var jan := float(ws.sample("temperature_2m", 1, 15, 15.0))
+	_check("utc: Bombay Beach Jan 15 15:00 PST reads the file's 16:00",
+		jan == float(14 * 24 + 16), "got %.0f want %d" % [jan, 14 * 24 + 16])
+	# Jul 15 15:00 PDT = 22:00 UTC = 15:00 in the file (no shift in summer).
+	var jul := float(ws.sample("temperature_2m", 7, 15, 15.0))
+	var jul_want := (31 + 29 + 31 + 30 + 31 + 30 + 14) * 24 + 15
+	_check("utc: Bombay Beach Jul 15 15:00 PDT reads the file's 15:00",
+		jul == float(jul_want), "got %.0f want %d" % [jul, jul_want])
+	# Madrid: clock meridian 0 (+1 in summer by the clock's US rule), a file
+	# fetched in summer is UTC+2 all year.
+	clk.longitude = -3.70
+	ws.parse_archive_json(JSON.stringify({"utc_offset_seconds": 7200,
+		"hourly": {"temperature_2m": vals}}), 40.42, -3.70, 2024)
+	var mad := float(ws.sample("temperature_2m", 1, 9, 12.0))
+	_check("utc: Madrid Jan 9 12:00 (clock UTC+0) reads the file's 14:00 (UTC+2)",
+		mad == float(8 * 24 + 14), "got %.0f" % mad)
+	ws.free()
+	fake.free()
+
+
+## Rain that LOOKS like its rate: Marshall-Palmer drop size, Atlas 1973 fall
+## speed, drop count from the water flux, slanted by the wind.
+func _test_rain_look() -> void:
+	var PV = load("res://core/precipitation_vfx.gd")
+	# Hand numbers: D0 = 0.89 R^0.21; 10 mm/h -> 1.44 mm, drawn x1.6 = 2.31 mm.
+	_check("rain: drawn drop at 10 mm/h = 1.6 x 0.89 x 10^0.21 mm",
+		absf(float(PV.drop_diameter_mm(10.0)) - 1.6 * 0.89 * pow(10.0, 0.21)) < 0.0001)
+	# Atlas: a 2 mm drop falls 9.65 - 10.3 e^-1.2 = 6.55 m/s.
+	_check("rain: Atlas terminal velocity of a 2 mm drop = 6.55 m/s",
+		absf(float(PV.terminal_velocity_ms(2.0)) - (9.65 - 10.3 * exp(-1.2))) < 0.0001)
+	_check("rain: AMS classes",
+		PV.rain_class(1.0) == "light" and PV.rain_class(5.0) == "moderate"
+		and PV.rain_class(20.0) == "heavy" and PV.rain_class(60.0) == "violent"
+		and PV.rain_class(0.0) == "none")
+	var light: Dictionary = PV.rain_look(0.5, 0.0, Vector2.ZERO)
+	var heavy: Dictionary = PV.rain_look(20.0, 0.0, Vector2.ZERO)
+	var violent: Dictionary = PV.rain_look(60.0, 0.0, Vector2.ZERO)
+	_check("rain: heavy drops are bigger than light", float(heavy["diameter_mm"]) > float(light["diameter_mm"]) * 1.8,
+		"%.2f vs %.2f mm" % [float(heavy["diameter_mm"]), float(light["diameter_mm"])])
+	_check("rain: heavy drops fall faster", float(heavy["fall_ms"]) > float(light["fall_ms"]) + 2.0,
+		"%.2f vs %.2f m/s" % [float(heavy["fall_ms"]), float(light["fall_ms"])])
+	_check("rain: heavy streaks are wider and longer",
+		float(heavy["width_m"]) > float(light["width_m"]) * 1.8
+		and float(heavy["length_m"]) > float(light["length_m"]) * 1.3)
+	_check("rain: heavy rain has more drops in the air", float(heavy["density"]) > float(light["density"]) * 1.8)
+	_check("rain: heavy rain is more opaque", float(heavy["alpha"]) > float(light["alpha"]) + 0.15)
+	_check("rain: violent is the top of the scale", absf(float(violent["density"]) - 1.0) < 0.001)
+	# Monotonic in rate.
+	var prev := {"diameter_mm": 0.0, "fall_ms": 0.0, "density": 0.0}
+	for r: float in [0.05, 0.2, 0.5, 1.0, 2.5, 5.0, 7.6, 15.0, 30.0, 50.0]:
+		var lk: Dictionary = PV.rain_look(r, 0.0, Vector2.ZERO)
+		for key: String in prev.keys():
+			_check("rain: %s non-decreasing at %.2f mm/h" % [key, r], float(lk[key]) >= float(prev[key]))
+			prev[key] = float(lk[key])
+	# Still air falls straight down; wind slants it, light rain more than heavy.
+	_check("rain: still air falls straight down", absf(float(light["slant_deg"])) < 0.001
+		and (light["velocity"] as Vector3).x == 0.0)
+	var light_w: Dictionary = PV.rain_look(0.5, 10.0, Vector2(1, 0))
+	var heavy_w: Dictionary = PV.rain_look(20.0, 10.0, Vector2(1, 0))
+	_check("rain: wind slants the drops downwind", (light_w["velocity"] as Vector3).x > 0.0)
+	_check("rain: wind at drop height is the log-law share of the 10 m wind",
+		absf((light_w["velocity"] as Vector3).x - 10.0 * PV.WIND_2M_FACTOR) < 0.0001)
+	_check("rain: light rain blows over more than heavy",
+		float(light_w["slant_deg"]) > float(heavy_w["slant_deg"]) + 10.0,
+		"%.1f vs %.1f deg" % [float(light_w["slant_deg"]), float(heavy_w["slant_deg"])])
+	_check("rain: none below the threshold", float(PV.rain_density_ratio(0.0)) == 0.0)
+	_check("rain: NaN safe", is_finite(float(PV.drop_diameter_mm(NAN)))
+		and float(PV.rain_density_ratio(NAN)) == 0.0)
+
+
 func _test_weather_service() -> void:
 	var ws: Node = load("res://core/weather_service.gd").new()
 

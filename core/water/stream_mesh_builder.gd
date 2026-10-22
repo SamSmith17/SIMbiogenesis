@@ -45,20 +45,26 @@ const MIN_WIDTH_M := 0.4
 ## per station), carved (PackedByteArray per station)}.
 ## `ground_fn(x, z) -> float` = the composed (edited) surface.
 static func build(items: Array, ground_fn: Callable) -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var vtx := 0
+	var list: Array = []
 	for it_v in items:
-		var it: Dictionary = it_v
-		vtx = _append_feature(st, vtx, it, ground_fn)
-	if vtx == 0:
-		return null
-	st.generate_normals()
-	return st.commit()
+		list.append(feature_arrays(it_v as Dictionary, ground_fn))
+	return mesh_from_arrays(list)
 
 
-static func _append_feature(st: SurfaceTool, vtx_base: int, it: Dictionary,
-		ground_fn: Callable) -> int:
+## One feature's surface as mesh arrays ([] when it draws nothing), so a
+## network can re-mesh only the streams whose flow moved and keep the rest.
+## Written straight into packed arrays (a SurfaceTool call per vertex
+## attribute cost ~100 ms on a 4 km wash). Normals are straight up: the water
+## shader writes its own NORMAL from the ripples, so generated ones were never
+## seen. `bank_ref` (optional, per station): the ground just outside the
+## channel's TOP width — the overbank test samples the ground only where the
+## water could reach it (see _append_feature).
+## `drape` (optional, from drape_refs): the ground under uncarved stations
+## at fixed lateral offsets, so the strip drapes without a ground query per
+## vertex on every re-mesh.
+static func feature_arrays(it: Dictionary, ground_fn: Callable,
+		bank_ref: PackedFloat32Array = PackedFloat32Array(), drape: Dictionary = {},
+		surf_mask: PackedByteArray = PackedByteArray()) -> Array:
 	var f: Dictionary = it["feature"]
 	var prof: Dictionary = it["profile"]
 	var states: Array = it["states"]
@@ -69,17 +75,26 @@ static func _append_feature(st: SurfaceTool, vtx_base: int, it: Dictionary,
 	var varc: PackedFloat32Array = prof.get("varc", PackedFloat32Array())
 	var n := pts.size()
 	if n < 2 or states.size() != n:
-		return vtx_base
+		return []
 	var sec: Dictionary = f["section"]
 	var bank_z := maxf(float(sec.get("bank_slope", 1.5)), 0.05)
-	var vtx := vtx_base
-	var run_open := false   # true while the previous station emitted a row
+	var bed_half := float(sec.get("bed_w", 2.0)) * 0.5
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var cols := PackedColorArray()
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
+	var idx := PackedInt32Array()
+	var vtx := 0
+	var run_open := false
+	var has_ref := bank_ref.size() == n
+	var dz: PackedFloat32Array = drape.get("z", PackedFloat32Array())
+	var d_m := int(drape.get("m", 0))
+	var d_r := float(drape.get("r", 0.0))
+	var has_drape := d_m > 1 and dz.size() == n * d_m
+	var mask := surf_mask if surf_mask.size() == n else StreamNetwork.surface_mask(f, s, varc)
 	for i in n:
-		var surf := StreamNetwork.mode_at(f, s[i], varc) == "surface"
-		# A station at a span boundary belongs to the surface run when either
-		# neighbouring span is open, so the strip reaches the culvert mouth.
-		if not surf and i > 0:
-			surf = StreamNetwork.mode_at(f, maxf(s[i] - 0.01, 0.0), varc) == "surface"
+		var surf := mask[i] == 1
 		var stt: Dictionary = states[i]
 		var depth := float(stt.get("depth_m", 0.0))
 		if not surf or depth < DRY_DEPTH_M:
@@ -93,21 +108,20 @@ static func _append_feature(st: SurfaceTool, vtx_base: int, it: Dictionary,
 		var level := 0.0
 		if is_carved:
 			level = bed[i] + maxf(depth, MIN_RENDER_DEPTH_M)
-			# Overbank: the channel is full — hold the water at the bank top
-			# and the width at the channel's top width there.
-			var bank_y := float(ground_fn.call(pts[i].x + across.x * (half + 1.0),
-				pts[i].y + across.y * (half + 1.0)))
-			if level > bank_y:
-				level = bank_y - 0.02
-				half = maxf(half, float(sec.get("bed_w", 2.0)) * 0.5 + (level - bed[i]) * bank_z)
-			# Only water that has climbed the banks is widened to tuck under
-			# them; water over the flat bed keeps its own smooth edge.
-			if half > float(sec.get("bed_w", 2.0)) * 0.5:
+			# Inside the channel the ground a metre past the water's edge is
+			# always above the water, so only a level over the ground at the
+			# channel's own top needs the live sample.
+			if not has_ref or level > bank_ref[i] - 0.05:
+				# On a worker (no ground callable) the bank top stands in.
+				var bank_y := float(ground_fn.call(pts[i].x + across.x * (half + 1.0),
+					pts[i].y + across.y * (half + 1.0))) if ground_fn.is_valid() \
+					else (bank_ref[i] if has_ref else INF)
+				if level > bank_y:
+					level = bank_y - 0.02
+					half = maxf(half, bed_half + (level - bed[i]) * bank_z)
+			if half > bed_half:
 				half *= 1.0 + EDGE_TUCK
 		var spd := clampf(float(stt.get("velocity_ms", 0.0)) / SPEED_FULL_MS, 0.0, 1.0)
-		# White water needs both supercritical flow AND depth to tumble — a
-		# 2 cm sheet on a steep slope has a high Froude number but is a glassy
-		# riffle, not foam.
 		var white := clampf((float(stt.get("froude", 0.0)) - 1.0) / 1.2, 0.0, 1.0) \
 			* clampf(depth / 0.25, 0.0, 1.0)
 		var col := Color(tan.x * 0.5 + 0.5, tan.y * 0.5 + 0.5, spd, white)
@@ -116,24 +130,95 @@ static func _append_feature(st: SurfaceTool, vtx_base: int, it: Dictionary,
 			var p := pts[i] + across * (lat * half)
 			var y := level
 			if not is_carved:
-				y = float(ground_fn.call(p.x, p.y)) + DRAPE_LIFT_M
-			st.set_color(col)
-			st.set_uv(p)
-			st.set_uv2(Vector2(lat, s[i]))
-			st.add_vertex(Vector3(p.x, y, p.y))
+				var o := lat * half
+				if has_drape and not ground_fn.is_valid():
+					o = clampf(o, -d_r, d_r)
+				if has_drape and absf(o) <= d_r:
+					var t := (o + d_r) / (2.0 * d_r) * float(d_m - 1)
+					var j := mini(int(t), d_m - 2)
+					y = lerpf(dz[i * d_m + j], dz[i * d_m + j + 1], t - float(j)) + DRAPE_LIFT_M
+				else:
+					y = float(ground_fn.call(p.x, p.y)) + DRAPE_LIFT_M
+			verts.append(Vector3(p.x, y, p.y))
+			norms.append(Vector3.UP)
+			cols.append(col)
+			uvs.append(p)
+			uv2s.append(Vector2(lat, s[i]))
 		if run_open:
 			var a0 := vtx - ACROSS_VERTS
 			var b0 := vtx
 			for k in ACROSS_VERTS - 1:
-				st.add_index(a0 + k)
-				st.add_index(b0 + k)
-				st.add_index(a0 + k + 1)
-				st.add_index(a0 + k + 1)
-				st.add_index(b0 + k)
-				st.add_index(b0 + k + 1)
+				idx.append(a0 + k)
+				idx.append(b0 + k)
+				idx.append(a0 + k + 1)
+				idx.append(a0 + k + 1)
+				idx.append(b0 + k)
+				idx.append(b0 + k + 1)
 		vtx += ACROSS_VERTS
 		run_open = true
-	return vtx
+	if idx.is_empty():
+		return []
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_COLOR] = cols
+	arr[Mesh.ARRAY_TEX_UV] = uvs
+	arr[Mesh.ARRAY_TEX_UV2] = uv2s
+	arr[Mesh.ARRAY_INDEX] = idx
+	return arr
+
+
+## The ground just outside each station's channel top (for feature_arrays).
+static func bank_refs(f: Dictionary, prof: Dictionary, ground_fn: Callable) -> PackedFloat32Array:
+	var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
+	var sec: Dictionary = f["section"]
+	var top_half := float(sec.get("bed_w", 2.0)) * 0.5 \
+		+ float(sec.get("bank_slope", 1.5)) * float(sec.get("depth", 0.8))
+	var out := PackedFloat32Array()
+	out.resize(pts.size())
+	for i in pts.size():
+		var across := _tangent(pts, i)
+		across = Vector2(-across.y, across.x)
+		var a := pts[i] + across * (top_half + 1.0)
+		var b := pts[i] - across * (top_half + 1.0)
+		out[i] = minf(float(ground_fn.call(a.x, a.y)), float(ground_fn.call(b.x, b.y)))
+	return out
+
+
+## The ground under every UNCARVED station at DRAPE_STEPS lateral offsets
+## across ±(channel top + 1 m) — what feature_arrays drapes onto. Carved
+## stations are level water and need none (left 0).
+const DRAPE_STEPS := 7
+
+
+static func drape_refs(f: Dictionary, prof: Dictionary, carved: PackedByteArray,
+		ground_fn: Callable) -> Dictionary:
+	var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
+	var sec: Dictionary = f["section"]
+	var r := float(sec.get("bed_w", 2.0)) * 0.5 		+ float(sec.get("bank_slope", 1.5)) * float(sec.get("depth", 0.8)) + 1.0
+	var m := DRAPE_STEPS
+	var z := PackedFloat32Array()
+	z.resize(pts.size() * m)
+	for i in pts.size():
+		if i < carved.size() and carved[i] == 1:
+			continue
+		var t := _tangent(pts, i)
+		var across := Vector2(-t.y, t.x)
+		for j in m:
+			var p := pts[i] + across * (-r + 2.0 * r * float(j) / float(m - 1))
+			z[i * m + j] = float(ground_fn.call(p.x, p.y))
+	return {"z": z, "m": m, "r": r}
+
+
+## A mesh of one surface per non-empty feature arrays.
+static func mesh_from_arrays(list: Array) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	for a in list:
+		if (a as Array).is_empty():
+			continue
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+	return mesh if mesh.get_surface_count() > 0 else null
 
 
 ## Downstream unit tangent at station i (central difference).

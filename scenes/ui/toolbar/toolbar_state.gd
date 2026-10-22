@@ -63,10 +63,14 @@ const TOOLS: Array[Dictionary] = [
 	},
 	{
 		"id": "ramp", "section": "terrain", "label": "Ramp",
-		"tooltip": "Click the start, then the end — grades a straight ramp between them",
+		"tooltip": "Click the start, then the end — grades a straight strip between them. "
+			+ "Height raises it into a berm (+) or sinks it into a channel (−); "
+			+ "the sides slope down / up to meet the ground",
 		"shapes": [],
 		"params": [
-			{"key": "width_m", "label": "Width", "unit": "m", "min": 1.0, "max": 60.0, "default": 12.0, "step": 0.5},
+			{"key": "width_m", "label": "Top width", "unit": "m", "min": 1.0, "max": 60.0, "default": 12.0, "step": 0.5},
+			{"key": "height_m", "label": "Height", "unit": "m", "min": -15.0, "max": 15.0, "default": 0.0, "step": 0.1},
+			{"key": "side_run", "label": "Side slope 1:", "unit": "", "min": 0.5, "max": 8.0, "default": 2.0, "step": 0.1},
 		],
 	},
 	{
@@ -79,10 +83,13 @@ const TOOLS: Array[Dictionary] = [
 	},
 	{
 		"id": "rain", "section": "terrain", "label": "Rain",
-		"tooltip": "Draw an area over a depression, then hold LMB to raise its water",
+		"tooltip": "Draw an area, then hold LMB. Over a depression it raises the water; "
+			+ "anywhere else it rains a storm there for as long as you hold — the runoff "
+			+ "fills the streams below and runs down them as the clock runs",
 		"shapes": ["circle", "rect", "lasso", "polygon"],
 		"params": [
-			{"key": "rate_mps", "label": "Rate", "unit": "m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
+			{"key": "rate_mps", "label": "Pond rise", "unit": "m/s", "min": 0.02, "max": 1.0, "default": 0.15, "step": 0.01},
+			{"key": "storm_mmh", "label": "Storm", "unit": "mm/h", "min": 2.0, "max": 150.0, "default": 40.0, "step": 1.0},
 		],
 	},
 	{

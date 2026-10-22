@@ -62,9 +62,13 @@ func update_from(st: Dictionary, cam_pos: Vector3, wind_xz: Vector2, delta: floa
 	_vol.global_position = Vector3(cam_pos.x, (y0 + y1) * 0.5, cam_pos.z)
 	# Fog drifts with the air but slowly — at a third of the wind, capped, so a
 	# breezy hour does not stream it past like smoke.
-	var w := wind_xz.limit_length(2.0) * 0.35
+	# (A blowing-dust layer — main.gd's second instance — streams with the
+	# wind instead: it passes `drift_cap_ms` / `drift_frac`.)
+	var w := wind_xz.limit_length(float(st.get("drift_cap_ms", 2.0))) \
+		* float(st.get("drift_frac", 0.35))
 	_drift -= Vector3(w.x, 0.0, w.y) * delta
 	var col: Color = st.get("fog_color", Color(0.85, 0.87, 0.9))
+	var keep_hue := bool(st.get("keep_hue", false))
 	# A night fog is not a glowing white box: the albedo scatters whatever light
 	# reaches it, and main.gd fades the ambient injection at night, so keeping
 	# the albedo honest is enough. A slight cool shift reads as moonlit.
@@ -74,6 +78,14 @@ func update_from(st: Dictionary, cam_pos: Vector3, wind_xz: Vector2, delta: floa
 	_mat.set_shader_parameter("feather_m", feather)
 	_mat.set_shader_parameter("albedo", Vector3(col.r, col.g, col.b))
 	_mat.set_shader_parameter("drift", _drift)
+	# Wind-streaked dust (main.gd's DustLayer); the valley fog omits these keys
+	# and keeps the shader defaults (isotropic noise).
+	var wd: Vector2 = st.get("wind_dir", Vector2(1.0, 0.0))
+	_mat.set_shader_parameter("wind_dir", wd)
+	_mat.set_shader_parameter("streak", float(st.get("streak", 0.0)))
+	_mat.set_shader_parameter("gust_amount", float(st.get("gust", 0.0)))
+	_mat.set_shader_parameter("noise_amount", float(st.get("noise_amount", 0.35)))
+	_mat.set_shader_parameter("noise_scale", float(st.get("noise_scale", 0.018)))
 	# Skylight in the droplets, independent of the player's ambient-light pref
 	# (which can be 0). Scaled so a noon fog reads bright grey, not white-out.
 	# Fog is lit by the white sky dome. As the sun warms toward the horizon its
@@ -85,7 +97,8 @@ func update_from(st: Dictionary, cam_pos: Vector3, wind_xz: Vector2, delta: floa
 	# otherwise it overrides the moonlit cool shift above.
 	var warm := sun_warmth * (1.0 - clampf(night_amount, 0.0, 1.0))
 	var sl := clampf(sky_light, 0.0, 1.0) * SKY_EMISSION_GAIN * (1.0 + 0.5 * warm)
-	var neutral := col.lerp(Color(0.86, 0.88, 0.91), clampf(warm * 1.5, 0.0, 1.0))
+	# Dust keeps its own colour: it is tan because of the grains, not the light.
+	var neutral := col if keep_hue else col.lerp(Color(0.86, 0.88, 0.91), clampf(warm * 1.5, 0.0, 1.0))
 	_mat.set_shader_parameter("albedo", Vector3(neutral.r, neutral.g, neutral.b))
 	_mat.set_shader_parameter("sky_emission", Vector3(neutral.r * sl, neutral.g * sl, neutral.b * sl))
 

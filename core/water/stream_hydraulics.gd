@@ -77,16 +77,39 @@ static func normal_depth_m(q_m3s: float, b: float, z: float, slope: float,
 		return 0.0
 	var bw := maxf(b, 0.05)
 	var lo := 0.0
+	var flo := -q_m3s
 	var hi := 1.0
-	while manning_q_m3s(bw, z, hi, slope, n) < q_m3s and hi < MAX_DEPTH_M:
-		hi *= 2.0
-	hi = minf(hi, MAX_DEPTH_M)
-	for _i in 48:
-		var mid := 0.5 * (lo + hi)
-		if manning_q_m3s(bw, z, mid, slope, n) < q_m3s:
-			lo = mid
-		else:
+	var fhi := manning_q_m3s(bw, z, hi, slope, n) - q_m3s
+	while fhi < 0.0 and hi < MAX_DEPTH_M:
+		lo = hi
+		flo = fhi
+		hi = minf(hi * 2.0, MAX_DEPTH_M)
+		fhi = manning_q_m3s(bw, z, hi, slope, n) - q_m3s
+	if fhi < 0.0:
+		return hi
+	# Illinois (modified regula falsi) on the bracket: Q(y) is smooth and
+	# monotone, so it converges in a handful of steps where plain bisection
+	# took 48 — this runs at every station of every stream on each re-mesh.
+	var side := 0
+	for _i in 60:
+		var mid := (lo * fhi - hi * flo) / (fhi - flo)
+		if not (mid > lo and mid < hi):
+			mid = 0.5 * (lo + hi)
+		var fm := manning_q_m3s(bw, z, mid, slope, n) - q_m3s
+		if absf(fm) <= q_m3s * 1e-7 or hi - lo < 1e-7:
+			return mid
+		if fm > 0.0:
 			hi = mid
+			fhi = fm
+			if side == 1:
+				flo *= 0.5
+			side = 1
+		else:
+			lo = mid
+			flo = fm
+			if side == -1:
+				fhi *= 0.5
+			side = -1
 	return 0.5 * (lo + hi)
 
 
@@ -105,3 +128,32 @@ static func state(q_lps: float, b: float, z: float, slope: float,
 	var fr := v / sqrt(9.80665 * dh) if dh > 1e-9 else 0.0
 	return {"q_lps": q * 1000.0, "depth_m": y, "top_w_m": t if y > 0.0 else 0.0,
 		"velocity_ms": v, "froude": fr}
+
+
+# ---------------------------------------------------------------------------
+# Bed erosion — the excess-shear-stress model (Partheniades 1965; jet-test
+# erodibilities of Hanson & Simon 2001): the bed lowers at
+#     ε = k_d · (τ − τc)      for τ > τc,
+# τ = ρ g R S the mean bed shear stress. k_d 2e-6 m³/(N·s) and τc 4 Pa sit in
+# Hanson & Simon's range for loose, weakly cohesive alluvium — erodible enough
+# that a desert wash's floods cut it, firm enough that a trickle does not.
+# ---------------------------------------------------------------------------
+
+const ERODE_KD := 2.0e-6
+const ERODE_TAU_C_PA := 4.0
+const RHO_W := 1000.0
+const G := 9.80665
+
+
+## Mean bed shear stress (Pa) of a trapezoid flowing at depth y on slope S.
+static func bed_shear_pa(b: float, z: float, y: float, slope: float) -> float:
+	if y <= 0.0:
+		return 0.0
+	var p := wetted_perimeter_m(maxf(b, 0.05), z, y)
+	var r := area_m2(maxf(b, 0.05), z, y) / maxf(p, 1e-6)
+	return RHO_W * G * r * maxf(slope, MIN_SLOPE)
+
+
+## Bed lowering rate (m/s) under shear `tau_pa`.
+static func erosion_rate_mps(tau_pa: float) -> float:
+	return ERODE_KD * maxf(tau_pa - ERODE_TAU_C_PA, 0.0)

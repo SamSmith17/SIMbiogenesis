@@ -380,19 +380,48 @@ func _surface_height(x: float, z: float, height_fn: Callable) -> float:
 ## make between them. Same output, ~5x fewer base-height evaluations — what keeps
 ## a hundred carved channel tiles from stalling a load.
 ## Returns { "arrays": Array, "heightmap": PackedFloat32Array }.
+## `base_cache` (optional): this tile's base heights from an earlier build
+## (the result's "base"). The base surface does not move when only the deltas
+## do (a channel re-carve, a brush stroke), so it is reused — after checking
+## five probe samples against height_fn, so a new DEM still rebuilds it.
 func build_tile_mesh_data(key: Vector2i, height_fn: Callable, center_elev: float,
-		uv_scale: float, uv_origin: float) -> Dictionary:
+		uv_scale: float, uv_origin: float,
+		base_cache: PackedFloat32Array = PackedFloat32Array()) -> Dictionary:
 	var e := _samples_per_edge()
 	var g := e + 2
 	var gi0 := key.x * tile_cells
 	var gj0 := key.y * tile_cells
+	var base := base_cache
+	if base.size() == g * g:
+		for pr in [Vector2i(0, 0), Vector2i(g - 1, 0), Vector2i(0, g - 1), Vector2i(g - 1, g - 1),
+				Vector2i(g / 2, g / 2)]:
+			var pv: Vector2i = pr
+			var want := float(height_fn.call(float(gi0 + pv.x - 1) * cell_m, float(gj0 + pv.y - 1) * cell_m))
+			if absf(want - base[pv.y * g + pv.x]) > 1e-4:
+				base = PackedFloat32Array()
+				break
+	if base.size() != g * g:
+		base = PackedFloat32Array()
+		base.resize(g * g)
+		for bj in g:
+			var z := float(gj0 + bj - 1) * cell_m
+			for bi in g:
+				base[bj * g + bi] = float(height_fn.call(float(gi0 + bi - 1) * cell_m, z))
+	# The deltas at the samples themselves: x / cell_m is the exact sample
+	# index there, so sample_delta's bilinear blend IS that one sample — read
+	# it straight from this tile's array (the 1-sample ring from the neighbours).
+	var own: PackedFloat32Array = _tiles.get(key, PackedFloat32Array())
+	var has_own := own.size() == e * e
 	var h := PackedFloat32Array()
 	h.resize(g * g)
 	for bj in g:
-		var z := float(gj0 + bj - 1) * cell_m
 		for bi in g:
-			var x := float(gi0 + bi - 1) * cell_m
-			h[bj * g + bi] = float(height_fn.call(x, z)) + sample_delta(x, z)
+			var d := 0.0
+			if has_own and bi >= 1 and bi <= e and bj >= 1 and bj <= e:
+				d = own[(bj - 1) * e + (bi - 1)]
+			else:
+				d = get_delta_sample(gi0 + bi - 1, gj0 + bj - 1)
+			h[bj * g + bi] = base[bj * g + bi] + d
 	var verts := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var normals := PackedVector3Array()
@@ -446,7 +475,7 @@ func build_tile_mesh_data(key: Vector2i, height_fn: Callable, center_elev: float
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_INDEX] = indices
-	return {"arrays": arrays, "heightmap": hm}
+	return {"arrays": arrays, "heightmap": hm, "base": base}
 
 
 # ---------------------------------------------------------------------------

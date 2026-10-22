@@ -54,10 +54,13 @@ static func resample(line: PackedVector2Array, step: float = STEP_M) -> Dictiona
 ## the bed of whatever it drains into at the junction (NAN = none); the whole
 ## bed is held at or above it so a tributary never digs a pit at a confluence.
 ## Returns {points, s, ground, bed, blocked: PackedByteArray, length_m}.
+## `erosion` (optional): extra depth (m) cut by floods, one value per
+## EROSION_STEP_M of arc (WaterFeatureLayer.erosion) — added to the depth.
 static func compute(line: PackedVector2Array, ground_fn: Callable, depth_m: float,
 		max_cut_m: float = DEFAULT_MAX_CUT_M, floor_y: float = NAN,
 		step: float = STEP_M, smooth_radius_m: float = SMOOTH_RADIUS_M,
-		bank_offset_m: float = 0.0) -> Dictionary:
+		bank_offset_m: float = 0.0,
+		erosion: PackedFloat32Array = PackedFloat32Array()) -> Dictionary:
 	var rs := resample(line, step)
 	var pts: PackedVector2Array = rs["points"]
 	var s: PackedFloat32Array = rs["s"]
@@ -88,13 +91,14 @@ static func compute(line: PackedVector2Array, ground_fn: Callable, depth_m: floa
 	blocked.resize(n)
 	var prev := INF
 	for i in n:
+		var d_i := depth_m + erosion_at(erosion, s[i])
 		# Never above the local ground less half a depth: smoothing can lift
 		# the profile over a dip, and a bed above the ground carves nothing.
-		var want := minf(sm[i] - depth_m, low[i] - 0.5 * depth_m)
+		var want := minf(sm[i] - d_i, low[i] - 0.5 * depth_m - (d_i - depth_m))
 		if i > 0:
 			var ds := maxf(s[i] - s[i - 1], 0.0)
 			want = minf(want, prev - MIN_GRADE * ds)
-		var cap := ground[i] - maxf(max_cut_m, depth_m)
+		var cap := ground[i] - maxf(max_cut_m, d_i)
 		if want < cap:
 			want = cap
 			blocked[i] = 1
@@ -112,6 +116,22 @@ static func compute(line: PackedVector2Array, ground_fn: Callable, depth_m: floa
 			bed[i] = lifted
 	return {"points": pts, "s": s, "ground": ground, "bed": bed, "blocked": blocked,
 		"length_m": s[n - 1] if n > 0 else 0.0}
+
+
+## Arc spacing of the erosion bins (m).
+const EROSION_STEP_M := 10.0
+
+
+## Extra depth (m) at arc length s from an erosion bin array (linear).
+static func erosion_at(erosion: PackedFloat32Array, s: float) -> float:
+	var n := erosion.size()
+	if n == 0:
+		return 0.0
+	var f := s / EROSION_STEP_M
+	var i := clampi(int(floor(f)), 0, n - 1)
+	if i >= n - 1:
+		return erosion[n - 1]
+	return lerpf(erosion[i], erosion[i + 1], f - float(i))
 
 
 ## Boxcar mean of `v` over ±radius metres of arc (s ascending). O(n) with a

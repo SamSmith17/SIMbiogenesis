@@ -108,6 +108,11 @@ var _data_lat: float = NAN
 var _data_lon: float = NAN
 var _data_year: int = 0
 var _series: Dictionary = {}  # var name -> PackedFloat32Array
+## Fixed UTC offset (hours) the archive's timestamps are in. Open-Meteo's
+## `timezone=auto` stamps the WHOLE series with the offset in force when it
+## was fetched (no DST changes inside it: measured 2026-10-21, Bombay Beach
+## 2024 cached at a constant UTC-7). NAN = unknown (treated as the clock's).
+var _data_utc_off_h: float = NAN
 
 ## Partial archive for the CURRENT calendar year (see CURRENT_YEAR_MAX_AGE_SEC).
 ## Same hour-of-year layout as _series; hours not yet published are NAN.
@@ -118,6 +123,7 @@ var _cy_year: int = 0
 var _cy_lat: float = NAN
 var _cy_lon: float = NAN
 var _cy_fetched_unix: int = 0
+var _cy_utc_off_h: float = NAN
 
 ## Forecast window — separate HTTPRequest, separate series.
 var _http_forecast: HTTPRequest = null
@@ -131,6 +137,7 @@ var _forecast_start_hoy: int = -1
 var _forecast_start_year: int = 0
 var _forecast_lat: float = NAN
 var _forecast_lon: float = NAN
+var _forecast_utc_off_h: float = NAN
 ## "YYYY-MM-DD" of the day this forecast was fetched; triggers daily refresh.
 var _forecast_fetched_date: String = ""
 ## Unix time of last successful forecast load (network or cache).
@@ -581,6 +588,8 @@ func parse_forecast_json(text: String, lat: float, lon: float,
 	if new_series.is_empty():
 		return false
 	_forecast_series = new_series
+	_forecast_utc_off_h = float(int((parsed as Dictionary).get("utc_offset_seconds", 0))) / 3600.0 \
+		if (parsed as Dictionary).has("utc_offset_seconds") else NAN
 	_forecast_start_hoy = start_hoy
 	_forecast_start_year = start_year
 	_forecast_lat = lat
@@ -721,6 +730,7 @@ func parse_archive_json(text: String, lat: float, lon: float, year: int) -> bool
 	if new_series.is_empty():
 		return false
 	_series = new_series
+	_data_utc_off_h = utc_offset_hours_of(text)
 	_data_lat = lat
 	_data_lon = lon
 	_data_year = year
@@ -750,14 +760,19 @@ func covers(lat: float, lon: float) -> bool:
 ## Priority: (1) real forecast for the next FORECAST_OVERRIDE_DAYS when loaded,
 ## (2) stochastic generated data when it covers the date, (3) archive year series.
 func sample(var_name: String, month: int, day: int, hour: float) -> float:
+	# The clock's local instant, re-expressed in each real dataset's own fixed
+	# UTC offset (see _data_utc_off_h). The decisions below (forecast window,
+	# generated coverage) stay on the clock's own calendar.
+	var clock_off := _clock_offset_h(month, day, hour)
 	if _forecast_overrides_generated(month, day, hour):
-		var fi := _forecast_hour_idx(month, day, hour)
+		var fq := shift_calendar(month, day, hour, _offset_shift(_forecast_utc_off_h, clock_off), _sim_year)
+		var fi := _forecast_hour_idx(int(fq.x), int(fq.y), fq.z)
 		if fi >= 0:
 			var farr: PackedFloat32Array = _forecast_series.get(var_name, PackedFloat32Array())
 			if fi < farr.size():
 				var fa := farr[fi]
 				var fb := farr[mini(fi + 1, farr.size() - 1)]
-				var frac := hour - float(int(hour))
+				var frac := fq.z - float(int(fq.z))
 				if is_nan(fa):
 					if not is_nan(fb):
 						return fb
@@ -773,19 +788,21 @@ func sample(var_name: String, month: int, day: int, hour: float) -> float:
 	# the forecast model's past-days analysis and last year's substitute. NAN
 	# (an unpublished recent hour, or a forecast-only var like visibility)
 	# falls through.
-	var cy := _current_year_sample(var_name, month, day, hour)
+	var cq := shift_calendar(month, day, hour, _offset_shift(_cy_utc_off_h, clock_off), _sim_year)
+	var cy := _current_year_sample(var_name, int(cq.x), int(cq.y), cq.z)
 	if not is_nan(cy):
 		return cy
 	# Fall back to archive series (and forecast outside the override window for the
 	# current calendar year when generated data does not cover the date).
 	if _sim_year == _current_calendar_year() and not _forecast_series.is_empty():
-		var fi2 := _forecast_hour_idx(month, day, hour)
+		var fq2 := shift_calendar(month, day, hour, _offset_shift(_forecast_utc_off_h, clock_off), _sim_year)
+		var fi2 := _forecast_hour_idx(int(fq2.x), int(fq2.y), fq2.z)
 		if fi2 >= 0:
 			var farr2: PackedFloat32Array = _forecast_series.get(var_name, PackedFloat32Array())
 			if fi2 < farr2.size():
 				var fa2 := farr2[fi2]
 				var fb2 := farr2[mini(fi2 + 1, farr2.size() - 1)]
-				var frac2 := hour - float(int(hour))
+				var frac2 := fq2.z - float(int(fq2.z))
 				if is_nan(fa2):
 					if not is_nan(fb2):
 						return fb2
@@ -796,7 +813,64 @@ func sample(var_name: String, month: int, day: int, hour: float) -> float:
 	var arr: PackedFloat32Array = _series.get(var_name, PackedFloat32Array())
 	if arr.is_empty():
 		return NAN
-	return _sample_hourly_array(arr, month, day, hour)
+	var aq := shift_calendar(month, day, hour, _offset_shift(_data_utc_off_h, clock_off), _sim_year)
+	return _sample_hourly_array(arr, int(aq.x), int(aq.y), aq.z)
+
+
+## --- time-zone alignment ------------------------------------------------------
+##
+## The game clock's local time is its own zone (CelestialClock: rounded
+## meridian + US DST rules); each Open-Meteo file is in ONE fixed offset, the
+## one in force on the day it was fetched. Reading the file by the clock's
+## wall time therefore put US winter weather an hour early and a Madrid storm
+## one to two hours off. Every read goes clock local -> UTC (the clock's own
+## offset, so weather lines up with the in-game sun) -> the file's offset.
+
+## Hours to add to UTC for the clock's local reading at this calendar instant,
+## or NAN with no clock (selftests: no shift).
+func _clock_offset_h(month: int, day: int, hour: float) -> float:
+	if _main_node == null or not is_instance_valid(_main_node):
+		return NAN
+	var clk: Variant = _main_node.get("clock")
+	if clk == null or not (clk as Object).has_method("zone_offset_hours"):
+		return NAN
+	var y := _sim_year if _sim_year > 0 else _current_calendar_year()
+	return float((clk as Object).call("zone_offset_hours", y, month, day, hour))
+
+
+## Hours to add to a clock-local reading to land on the same instant in a
+## dataset stamped at `data_off_h`. 0 when either offset is unknown.
+static func _offset_shift(data_off_h: float, clock_off_h: float) -> float:
+	if not is_finite(data_off_h) or not is_finite(clock_off_h):
+		return 0.0
+	return data_off_h - clock_off_h
+
+
+## (month, day, hour) moved by `shift_h` hours with day / month carry, as
+## Vector3(month, day, hour). Clamped at the year's ends (a dataset is one
+## year). Pure.
+static func shift_calendar(month: int, day: int, hour: float, shift_h: float, year: int) -> Vector3:
+	if shift_h == 0.0:
+		return Vector3(float(month), float(day), hour)
+	var leap := is_leap_year(year)
+	var doy := day_of_year0(month, day, leap)
+	var total := float(doy) * 24.0 + clampf(hour, 0.0, 23.999) + shift_h
+	var last := float((366 if leap else 365) * 24) - 0.001
+	total = clampf(total, 0.0, last)
+	var d0 := int(floor(total / 24.0))
+	var h := total - float(d0) * 24.0
+	var m := 1
+	while m < 12 and d0 >= day_of_year0(m + 1, 1, leap):
+		m += 1
+	return Vector3(float(m), float(d0 - day_of_year0(m, 1, leap) + 1), h)
+
+
+## Fixed UTC offset (hours) of an Open-Meteo response, NAN when absent.
+static func utc_offset_hours_of(text: String) -> float:
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary) or not (parsed as Dictionary).has("utc_offset_seconds"):
+		return NAN
+	return float(int((parsed as Dictionary)["utc_offset_seconds"])) / 3600.0
 
 
 func _sample_series_dict(series: Dictionary, var_name: String, month: int, day: int, hour: float) -> float:
@@ -955,7 +1029,10 @@ func wind_direction_deg(month: int, day: int, hour: float) -> float:
 func _sample_forecast_var(var_name: String, month: int, day: int, hour: float) -> float:
 	if not is_forecast_date(month, day):
 		return NAN
-	var fi := _forecast_hour_idx(month, day, hour)
+	var fq := shift_calendar(month, day, hour,
+		_offset_shift(_forecast_utc_off_h, _clock_offset_h(month, day, hour)), _sim_year)
+	hour = fq.z
+	var fi := _forecast_hour_idx(int(fq.x), int(fq.y), fq.z)
 	if fi < 0:
 		return NAN
 	var farr: PackedFloat32Array = _forecast_series.get(var_name, PackedFloat32Array())
@@ -1115,6 +1192,7 @@ func _try_load_current_year_cache(lat: float, lon: float, year: int) -> bool:
 	if series.is_empty():
 		return false
 	_cy_series = series
+	_cy_utc_off_h = utc_offset_hours_of(str(d.get("response_text", "")))
 	_cy_year = year
 	_cy_lat = lat
 	_cy_lon = lon
@@ -1150,6 +1228,7 @@ func _on_current_year_completed(result: int, response_code: int,
 	if series.is_empty():
 		return
 	_cy_series = series
+	_cy_utc_off_h = utc_offset_hours_of(text)
 	_cy_year = int(pending.get("year", 0))
 	_cy_lat = float(pending.get("lat", 0.0))
 	_cy_lon = float(pending.get("lon", 0.0))

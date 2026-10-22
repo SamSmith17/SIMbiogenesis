@@ -34,6 +34,26 @@ const STREAM_SHADER := preload("res://core/water/stream_water.gdshader")
 const HYDRAULICS_POLL_S := 1.5
 ## Re-mesh the surfaces when any feature's flow moved by more than this share.
 const REMESH_Q_CHANGE := 0.12
+## Stations sampled per channel to decide when to remesh, the flow below which
+## a station counts as dry for that test, and the poll interval while rain is
+## moving through the network.
+const SAMPLE_STATIONS := 9
+const WET_LPS := 0.5
+const ACTIVE_POLL_S := 0.5
+const MAX_STORMS := 64
+## How far back a basin's water is followed, and the step of its balance.
+const BASIN_HORIZON_H := 24.0
+const BASIN_STEP_H := 2.0 / 60.0
+const BASINS_NODE := "StreamBasins"
+## Erosion: re-carve once the bed has dropped this much somewhere since the
+## last carve (and no more often than EROSION_RECARVE_MS); never deeper than
+## EROSION_MAX_M below the designed bed.
+const EROSION_RECARVE_M := 0.05
+const EROSION_RECARVE_MS := 10000
+## A re-carve rewrites the channel tile cache; erosion's are saved at most
+## this often (and on exit).
+const CHANNEL_CACHE_SAVE_MS := 30000
+const EROSION_MAX_M := 2.5
 const STREAMS_NODE := "WaterStreams"
 const BURIED_NODE := "WaterBuried"
 const MOUTHS_NODE := "WaterCulvertMouths"
@@ -56,6 +76,62 @@ var rain_override_mmh := -1.0
 ## (PackedFloat32Array, one per station) — filled by the drainage analysis;
 ## absent = base flow only.
 var station_area: Dictionary = {}
+## Time of concentration (h) at every profile station, per feature id
+## (StreamRunoff.station_tc_h) — how long rain takes to reach that point.
+var station_tc: Dictionary = {}
+## Travel time (h) down each channel from its first station
+## (StreamRunoff.channel_travel_h): when a storm's water reaches a point.
+var station_travel: Dictionary = {}
+## Rain-tool storms: [{id, start_h, end_h, rate_mmh, poly, areas: {fid ->
+## PackedFloat32Array per station}, pending}]. Session-only, and timed in sim
+## hours, so a storm scrubs back and forth with the clock like real rain.
+var _storms: Array = []
+var _storm_seq := 0
+var _storm_fx: Dictionary = {}    # storm id -> GPUParticles3D
+## Rain history ending at _hist_now_h (StreamRunoff.history_prefix).
+var _hist_prefix := PackedFloat32Array()
+var _hist_now_h := NAN
+## Discharge last meshed at a few sample stations per feature, to tell when a
+## storm front has moved far enough to remesh.
+var _sample_q: Dictionary = {}
+## Hollows the channels run into (StreamBasins), per feature id, in
+## downstream order: {i0, i1, i_low, spill_y, floor_y, flood…, capacity_m3,
+## t0, vol (PackedFloat32Array), full (PackedByteArray)} — the series is the
+## basin's water over the last BASIN_HORIZON_H, recomputed as the clock moves.
+var _basins: Dictionary = {}
+var _basins_mi: MeshInstance3D = null
+var _basin_levels: Dictionary = {}    # "fid:i0" -> level last meshed
+var _erosion_last_h := NAN
+var _erosion_pending_m := 0.0
+var _erosion_carved_ms := 0
+## A rebuild asked for only by erosion (no edit, no setting): its carve lowers
+## beds a few cm, so it skips what a real edit needs — the vegetation / camp
+## re-ground, catchments, basins and the drainage re-analysis.
+var _erosion_rebuild := false
+var _task_erosion := false
+var _channel_cache_dirty := false
+var _channel_cache_due_ms := 0
+## Per feature, the station facts erosion reads every poll: {rev, carved,
+## surface, slope} — fixed until the next carve.
+var _ero_cache: Dictionary = {}
+## Per feature, its water surface arrays (StreamMeshBuilder.feature_arrays),
+## and the ground beside its channel top per station (bank_refs) — fixed until
+## the next carve.
+var _surf_arrays: Dictionary = {}
+var _bank_refs: Dictionary = {}
+## Per feature, the ground under its uncarved stations (StreamMeshBuilder.
+## drape_refs) — outside the carved patch, so an erosion re-carve keeps it.
+var _drape_refs: Dictionary = {}
+var _surf_masks: Dictionary = {}
+var _buried_sig := 0
+## The flow re-mesh the poll asks for runs on a worker: {task, box, rev}.
+var _remesh_task := -1
+var _remesh_box: Dictionary = {}
+var _remesh_rev := -1
+var _remesh_pending: Dictionary = {}
+var _surf_gen := 0
+var _remesh_ids: Dictionary = {}
+var _basin_show_sig := ""
 
 var loader: Node = null
 var layer := WaterFeatureLayer.new()
@@ -125,9 +201,14 @@ func _exit_tree() -> void:
 	if _task_id >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task_id)
 		_task_id = -1
+	if _channel_cache_dirty:
+		_flush_channel_cache()
 	if _drain_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_drain_task)
 		_drain_task = -1
+	if _remesh_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_remesh_task)
+		_remesh_task = -1
 
 
 func bind_map(lat: float, lon: float) -> void:
@@ -141,6 +222,7 @@ func bind_map(lat: float, lon: float) -> void:
 	_sigs = {}
 	_footprints = {}
 	_inputs_sig = 0
+	clear_storms()
 
 
 func layer_path() -> String:
@@ -229,6 +311,15 @@ func invalidate_cache() -> void:
 func request_rebuild(force: bool = false) -> void:
 	_rebuild_pending = true
 	_rebuild_force = _rebuild_force or force
+	_erosion_rebuild = false
+	_debounce_t = DEBOUNCE_S
+
+
+func _request_erosion_rebuild() -> void:
+	if _rebuild_pending:
+		return
+	_rebuild_pending = true
+	_erosion_rebuild = true
 	_debounce_t = DEBOUNCE_S
 
 
@@ -238,6 +329,7 @@ func _process(delta: float) -> void:
 		_hyd_t = HYDRAULICS_POLL_S
 		_poll_hydraulics()
 	_process_drainage(delta)
+	_process_remesh()
 	_drive_outlet_vfx(delta)
 	if _task_id >= 0:
 		if WorkerThreadPool.is_task_completed(_task_id):
@@ -252,7 +344,19 @@ func _process(delta: float) -> void:
 			_rebuild_pending = false
 			var force := _rebuild_force
 			_rebuild_force = false
+			_task_erosion = _erosion_rebuild and not force
+			_erosion_rebuild = false
 			_start_rebuild(force)
+	elif _channel_cache_dirty and Time.get_ticks_msec() >= _channel_cache_due_ms:
+		_flush_channel_cache()
+
+
+func _flush_channel_cache() -> void:
+	_channel_cache_dirty = false
+	var channel: TerrainEditTiles = loader.call("channel_tile_layer") \
+		if loader != null and is_instance_valid(loader) else null
+	if channel != null:
+		_save_cache(channel)
 
 
 func is_busy() -> bool:
@@ -391,10 +495,38 @@ static func _grid_probe(s: WaterGroundSampler) -> Array:
 
 
 func _apply_job_result(res: Dictionary) -> void:
+	PerfSpan.begin("water_carve_apply")
+	_apply_job_result_inner(res)
+	PerfSpan.end("water_carve_apply")
+
+
+func _apply_job_result_inner(res: Dictionary) -> void:
 	if res.is_empty() or loader == null or not is_instance_valid(loader):
 		return
+	var erosion_only := _task_erosion
+	_task_erosion = false
 	_profiles = res.get("profiles", {})
 	_links = res.get("links", {})
+	_ero_cache = {}
+	_bank_refs = {}
+	_surf_masks = {}
+	if not erosion_only:
+		_drape_refs = {}
+	# A re-carve rebuilt every profile dict, but a feature whose carve signature
+	# did not move has the same stations: keep its surface and flow.
+	var changed := {}
+	for f in _features:
+		var fid: String = f["id"]
+		if not _sigs.has(fid) or int(_sigs[fid]) != int((res.get("sigs", {}) as Dictionary).get(fid, -1)):
+			changed[fid] = true
+	# An erosion carve keeps the changed streams' surfaces on screen (beds a few
+	# cm off) until their worker re-mesh lands; any other carve drops them.
+	if not erosion_only:
+		for fid in _surf_arrays.keys():
+			if changed.has(fid):
+				_surf_arrays.erase(fid)
+		for fid in changed.keys():
+			_states.erase(fid)
 	var prev_sigs: Dictionary = _sigs
 	_sigs = res.get("sigs", {})
 	_footprints = res.get("footprints", {})
@@ -409,19 +541,38 @@ func _apply_job_result(res: Dictionary) -> void:
 		var tiles: Dictionary = res.get("tiles", {})
 		for k in touched:
 			channel.set_tile_data(k, tiles.get(k, PackedFloat32Array()))
+		PerfSpan.begin("water_carve_commit")
 		loader.call("commit_channel_tiles", touched)
-		_save_cache(channel)
+		PerfSpan.end("water_carve_commit")
+		if erosion_only:
+			_channel_cache_dirty = true
+			_channel_cache_due_ms = Time.get_ticks_msec() + CHANNEL_CACHE_SAVE_MS
+		else:
+			_save_cache(channel)
 		if loader.has_method("on_channels_carved"):
-			loader.call("on_channels_carved", touched)
+			PerfSpan.begin("water_carve_reground")
+			loader.call("on_channels_carved", touched, erosion_only)
+			PerfSpan.end("water_carve_reground")
 	elif channel != null and _task_force:
 		_save_cache(channel)
-	# New/moved features get catchment areas off the current grid at once; the
-	# debounced re-analysis below refines them once the new channel is in it.
-	_update_station_areas()
+	PerfSpan.begin("water_carve_areas")
+	if erosion_only:
+		# The beds dropped a few cm: same lines, same grid, same catchments and
+		# basins — only the travel times and Tc follow the new bed.
+		_update_station_hydraulics()
+		_hist_now_h = NAN
+	else:
+		# New/moved features get catchment areas off the current grid at once;
+		# the debounced re-analysis below refines them once the channel is in it.
+		_update_station_areas()
+	PerfSpan.end("water_carve_areas")
 	_rev += 1
-	rebuild_surfaces()
+	if erosion_only:
+		_start_async_remesh(changed)
+	else:
+		rebuild_surfaces()
 	network_rebuilt.emit()
-	if not touched.is_empty() or _drain.is_empty() or _task_force:
+	if not erosion_only and (not touched.is_empty() or _drain.is_empty() or _task_force):
 		request_drainage()
 
 
@@ -456,6 +607,713 @@ func station_q_lps(f: Dictionary, i: int, rain_mmh: float) -> float:
 	if arr is PackedFloat32Array and (arr as PackedFloat32Array).size() > 0:
 		area = (arr as PackedFloat32Array)[clampi(i, 0, (arr as PackedFloat32Array).size() - 1)]
 	return StreamHydraulics.discharge_lps(float(f.get("base_lps", 0.0)), area, rain_mmh)
+
+
+## Discharge (L/s) at station i NOW, with rain's travel time: base flow plus
+## the rational-method hydrograph of the weather's rain and of every Rain-tool
+## storm draining there (StreamRunoff). Before the drainage analysis lands
+## there are no catchments yet, so it is base flow.
+func station_q_now(f: Dictionary, i: int) -> float:
+	var tcs: Variant = station_tc.get(f["id"], null)
+	if not (tcs is PackedFloat32Array) or (tcs as PackedFloat32Array).is_empty():
+		return station_q_lps(f, i, rain_mmh_now())
+	_ensure_rain_history()
+	return _q_at(f, i, _hist_now_h)
+
+
+## Discharge (L/s) at station i at time `tau` (≤ the history's end): base
+## flow + the weather's rain over each station's Tc + every storm's travelled
+## pulse — with every basin between a source and the station holding the
+## source back until that basin was full at the time the water passed it.
+## Inside a basin nothing flows as a stream (the basin's own water is drawn).
+func _q_at(f: Dictionary, i: int, tau: float) -> float:
+	var fid: String = f["id"]
+	var tcs: PackedFloat32Array = station_tc[fid]
+	var n := tcs.size()
+	i = clampi(i, 0, n - 1)
+	var basins: Array = _basins.get(fid, [])
+	for bv in basins:
+		if i >= int((bv as Dictionary)["i0"]) and i <= int((bv as Dictionary)["i1"]):
+			return 0.0
+	var areas: PackedFloat32Array = station_area.get(fid, PackedFloat32Array())
+	var trv: PackedFloat32Array = station_travel.get(fid, PackedFloat32Array())
+	var a_i := areas[mini(i, areas.size() - 1)] if areas.size() > 0 else 0.0
+	var mean := StreamRunoff.window_mean_offset(_hist_prefix, _hist_now_h - tau, tcs[i])
+	# Weather + base flow, in slices between the basins above this station,
+	# each held back by every basin below it (bottom-up gate product).
+	var q := 0.0
+	var gate := 1.0
+	var a_below := a_i
+	for k in range(basins.size() - 1, -1, -1):
+		var bd: Dictionary = basins[k]
+		if int(bd["i1"]) >= i:
+			continue
+		var a_in := areas[maxi(int(bd["i0"]) - 1, 0)] if areas.size() > 0 else 0.0
+		q += gate * StreamHydraulics.runoff_m3s(mean, maxf(a_below - a_in, 0.0)) * 1000.0
+		var lag_b := (trv[i] - trv[int(bd["i1"])]) if trv.size() == n else 0.0
+		gate *= _basin_full_at(bd, tau - lag_b)
+		a_below = a_in
+		if gate <= 0.0:
+			break
+	q += gate * (StreamHydraulics.runoff_m3s(mean, a_below) * 1000.0 + float(f.get("base_lps", 0.0)))
+	for st_v in _storms:
+		var st: Dictionary = st_v
+		var sa: Variant = (st["areas"] as Dictionary).get(fid, null)
+		if not (sa is PackedFloat32Array) or (sa as PackedFloat32Array).is_empty():
+			continue
+		var a2: float = (sa as PackedFloat32Array)[mini(i, (sa as PackedFloat32Array).size() - 1)]
+		if a2 <= 0.0:
+			continue
+		# Travel time down the channel from where the storm's water enters it,
+		# held back by any basin between the entry and here.
+		var entry := int((st["entry"] as Dictionary).get(fid, 0))
+		var lag := 0.0
+		if trv.size() == n:
+			lag = maxf(trv[i] - trv[clampi(entry, 0, n - 1)], 0.0)
+		var g2 := 1.0
+		for bv2 in basins:
+			var bd2: Dictionary = bv2
+			if int(bd2["i0"]) >= entry and int(bd2["i1"]) < i:
+				var lag_b2 := (trv[i] - trv[int(bd2["i1"])]) if trv.size() == n else 0.0
+				g2 *= _basin_full_at(bd2, tau - lag_b2)
+		if g2 <= 0.0:
+			continue
+		var smean := StreamRunoff.storm_arrival_mean(float(st["start_h"]), float(st["end_h"]),
+			float(st["rate_mmh"]), tau, lag, float(st["patch_tc_h"]))
+		q += g2 * StreamHydraulics.runoff_m3s(smean, a2) * 1000.0
+	return q
+
+
+## 1 when the basin was full (spilling) at `tau`, else 0.
+func _basin_full_at(bd: Dictionary, tau: float) -> float:
+	var full: Variant = bd.get("full", null)
+	if not (full is PackedByteArray) or (full as PackedByteArray).is_empty():
+		return 0.0
+	var k := int(floor((tau - float(bd["t0"])) / BASIN_STEP_H))
+	if k < 0:
+		return 0.0
+	var fa: PackedByteArray = full
+	return float(fa[mini(k, fa.size() - 1)])
+
+
+## Per-station hydraulic state of one feature NOW (station_q_now).
+func feature_states_now(f: Dictionary) -> Array:
+	var prof: Dictionary = _profiles.get(f["id"], {})
+	var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+	var bed: PackedFloat32Array = prof.get("bed", PackedFloat32Array())
+	var sec: Dictionary = f["section"]
+	var b := float(sec.get("bed_w", 2.0))
+	var z := float(sec.get("bank_slope", 1.5))
+	var qs := _feature_q_now(f, s.size())
+	var out: Array = []
+	out.resize(s.size())
+	var dry := {"q_lps": 0.0, "depth_m": 0.0, "top_w_m": 0.0, "velocity_ms": 0.0, "froude": 0.0}
+	for i in s.size():
+		if qs[i] <= 0.0:
+			out[i] = dry
+			continue
+		out[i] = StreamHydraulics.state(qs[i], b, z, ChannelProfile._slope(s, bed, i))
+	return out
+
+
+## station_q_now at every station of a feature at once: the same sum as _q_at,
+## with the per-feature lookups and each storm's constants taken once. A
+## feature with basins on it goes station by station (_q_at) for its gates.
+func _feature_q_now(f: Dictionary, n: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var fid: String = f["id"]
+	var tcs: Variant = station_tc.get(fid, null)
+	if not (tcs is PackedFloat32Array) or (tcs as PackedFloat32Array).size() != n:
+		var rain := rain_mmh_now()
+		for i in n:
+			out[i] = station_q_lps(f, i, rain)
+		return out
+	_ensure_rain_history()
+	if not (_basins.get(fid, []) as Array).is_empty():
+		for i in n:
+			out[i] = _q_at(f, i, _hist_now_h)
+		return out
+	var tc: PackedFloat32Array = tcs
+	var areas: PackedFloat32Array = station_area.get(fid, PackedFloat32Array())
+	var trv: PackedFloat32Array = station_travel.get(fid, PackedFloat32Array())
+	var base := float(f.get("base_lps", 0.0))
+	var hist := _hist_prefix
+	var src: Array = []
+	for st_v in _storms:
+		var st: Dictionary = st_v
+		var sa: Variant = (st["areas"] as Dictionary).get(fid, null)
+		if not (sa is PackedFloat32Array) or (sa as PackedFloat32Array).size() != n:
+			continue
+		var entry := clampi(int((st["entry"] as Dictionary).get(fid, 0)), 0, n - 1)
+		src.append([sa, entry, float(st["start_h"]), float(st["end_h"]), float(st["rate_mmh"]),
+			float(st["patch_tc_h"])])
+	var now := _hist_now_h
+	var has_trv := trv.size() == n
+	for i in n:
+		var a_i := areas[mini(i, areas.size() - 1)] if areas.size() > 0 else 0.0
+		var mean := StreamRunoff.window_mean_offset(hist, 0.0, tc[i])
+		var q := StreamHydraulics.runoff_m3s(mean, a_i) * 1000.0 + base
+		for sv in src:
+			var sd: Array = sv
+			var a2: float = (sd[0] as PackedFloat32Array)[i]
+			if a2 <= 0.0:
+				continue
+			var lag := maxf(trv[i] - trv[int(sd[1])], 0.0) if has_trv else 0.0
+			var smean := StreamRunoff.storm_arrival_mean(float(sd[2]), float(sd[3]), float(sd[4]),
+				now, lag, float(sd[5]))
+			q += StreamHydraulics.runoff_m3s(smean, a2) * 1000.0
+		out[i] = q
+	return out
+
+
+## The clock now, in absolute hours (NAN without a world).
+func _now_h() -> float:
+	var main: Node = loader.get("_main") if loader != null else null
+	if main == null or not main.has_method("get_absolute_hours"):
+		return NAN
+	return float(main.call("get_absolute_hours"))
+
+
+## Rain intensity (mm/h) at any instant: the harness override, else the
+## weather at that date and hour.
+func rain_mmh_at(abs_h: float) -> float:
+	if rain_override_mmh >= 0.0:
+		return rain_override_mmh
+	var main: Node = loader.get("_main") if loader != null else null
+	if main == null:
+		return 0.0
+	var ws := get_node_or_null("/root/WeatherService")
+	var clock: Variant = main.get("clock")
+	if ws == null or not ws.has_method("rain_rate_mmh") or clock == null:
+		return 0.0
+	var lat := float(main.get("latitude")) if main.get("latitude") != null else 0.0
+	var lon := float(main.get("longitude")) if main.get("longitude") != null else 0.0
+	if ws.has_method("covers") and not bool(ws.call("covers", lat, lon)):
+		return 0.0
+	var d: Dictionary = (clock as Object).call("abs_hours_to_date", abs_h)
+	return float(ws.call("rain_rate_mmh", int(d["month"]), int(d["day"]), float(d["day_time"])))
+
+
+## Rebuild the rain history when the clock has moved (it is a pure function of
+## the clock, so a scrub back simply reads the past again).
+func _ensure_rain_history() -> void:
+	var now := _now_h()
+	if not is_finite(now):
+		now = 0.0
+	if is_finite(_hist_now_h) and absf(now - _hist_now_h) < 1e-4:
+		return
+	var max_tc := StreamRunoff.TC_MIN_H
+	for fid in station_tc.keys():
+		for t in (station_tc[fid] as PackedFloat32Array):
+			max_tc = maxf(max_tc, t)
+	var span := max_tc + (BASIN_HORIZON_H if not _basins.is_empty() else 0.0)
+	var samples := clampi(int(ceil(span / StreamRunoff.HISTORY_STEP_H)) + 1, 2,
+		int(ceil((StreamRunoff.TC_MAX_H + BASIN_HORIZON_H) / StreamRunoff.HISTORY_STEP_H)) + 1)
+	PerfSpan.begin("water_hist")
+	_hist_prefix = StreamRunoff.history_prefix(Callable(self, "rain_mmh_at"), now, samples)
+	PerfSpan.end("water_hist")
+	_hist_now_h = now
+	PerfSpan.begin("water_basins")
+	_refresh_basin_series()
+	PerfSpan.end("water_basins")
+
+
+# ---------------------------------------------------------------------------
+# Erosion: floods deepen the beds they run over
+# ---------------------------------------------------------------------------
+
+## While the clock runs FORWARD (a step of at most an hour — a jump or a scrub
+## back erodes nothing), every carved, open-channel station whose flow puts
+## more than the critical shear on its bed lowers it at
+## StreamHydraulics.erosion_rate_mps. The cut is kept per feature in 10 m bins
+## (WaterFeatureLayer.erosion, saved with the map) and re-carved in steps.
+func _accumulate_erosion() -> void:
+	var now := _now_h()
+	if not is_finite(now):
+		return
+	var last := _erosion_last_h
+	_erosion_last_h = now
+	if not is_finite(last) or not bool(layer.setting("carve_enabled")):
+		return
+	var dt_s := (now - last) * 3600.0
+	if dt_s <= 0.0 or dt_s > 3600.0:
+		_maybe_erosion_recarve([], 0.0)
+		return
+	var step := ChannelProfile.EROSION_STEP_M
+	var grew := 0.0
+	var touched: Array = []
+	var half := -1.0
+	for f in _features:
+		var fid: String = f["id"]
+		var states: Array = _states.get(fid, [])
+		var prof: Dictionary = _profiles.get(fid, {})
+		var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+		if states.is_empty() or states.size() != s.size() or not bool(f.get("carve", true)):
+			continue
+		var ec: Dictionary = _ero_cache.get(fid, {})
+		if ec.is_empty():
+			if half < 0.0:
+				half = _carve_half()
+			ec = _erosion_facts(f, prof, half)
+			_ero_cache[fid] = ec
+		var mask: PackedByteArray = ec["mask"]
+		var slope: PackedFloat32Array = ec["slope"]
+		var sec: Dictionary = f["section"]
+		var b := float(sec.get("bed_w", 2.0))
+		var z := float(sec.get("bank_slope", 1.5))
+		var ero := PackedFloat32Array()
+		var bins := int(ceil(s[s.size() - 1] / step)) + 1
+		var any := false
+		for i in range(1, states.size()):
+			if mask[i] == 0:
+				continue
+			var y := float((states[i] as Dictionary).get("depth_m", 0.0))
+			if y < 0.02:
+				continue
+			var rate := StreamHydraulics.erosion_rate_mps(StreamHydraulics.bed_shear_pa(b, z, y, slope[i]))
+			if rate <= 0.0:
+				continue
+			if not any:
+				any = true
+				ero = layer.erosion_of(fid).duplicate()
+				if ero.size() < bins:
+					var old := ero.size()
+					ero.resize(bins)
+					for k in range(old, bins):
+						ero[k] = 0.0
+			var k := clampi(int(round(s[i] / step)), 0, bins - 1)
+			var dz := rate * dt_s * (s[i] - s[i - 1]) / step
+			var before := ero[k]
+			ero[k] = minf(ero[k] + dz, EROSION_MAX_M)
+			grew = maxf(grew, ero[k] - before)
+		if any:
+			layer.erosion[fid] = ero
+			f["erosion"] = ero
+			touched.append(fid)
+	_maybe_erosion_recarve(touched, grew)
+
+
+## What erosion needs per station, fixed until the next carve: carved AND an
+## open (surface) span, and the bed slope.
+func _erosion_facts(f: Dictionary, prof: Dictionary, half: float) -> Dictionary:
+	var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+	var bed: PackedFloat32Array = prof.get("bed", PackedFloat32Array())
+	var varc: PackedFloat32Array = prof.get("varc", PackedFloat32Array())
+	var carved := _carved_flags(f, prof, half)
+	var open_ := StreamNetwork.surface_mask(f, s, varc)
+	var mask := PackedByteArray()
+	mask.resize(s.size())
+	var slope := PackedFloat32Array()
+	slope.resize(s.size())
+	var modes: Array = f.get("modes", [])
+	var va := varc if not varc.is_empty() or modes.is_empty() else StreamNetwork.vertex_arc(f["points"])
+	var j := 0
+	for i in s.size():
+		slope[i] = ChannelProfile._slope(s, bed, i)
+		# Erosion wants the station's OWN span open (not the mouth rule).
+		var own := true
+		if not modes.is_empty():
+			while j < modes.size() - 1 and s[i] > va[j + 1] + 1e-4:
+				j += 1
+			own = str(modes[j]) == "surface"
+		if i < carved.size() and carved[i] == 1 and own and open_[i] == 1:
+			mask[i] = 1
+	return {"mask": mask, "slope": slope}
+
+
+## Re-carve once the beds have dropped EROSION_RECARVE_M somewhere (at most
+## every EROSION_RECARVE_MS), or carve what is left once the floods stop.
+func _maybe_erosion_recarve(touched: Array, grew: float) -> void:
+	_erosion_pending_m += grew
+	if _erosion_pending_m <= 0.002:
+		return
+	if Time.get_ticks_msec() - _erosion_carved_ms < EROSION_RECARVE_MS:
+		return
+	if not touched.is_empty() and _erosion_pending_m < EROSION_RECARVE_M:
+		return
+	print("WaterNetwork: floods cut %s deeper (%.2f m since the last carve) — re-carving" % [
+		", ".join(PackedStringArray(touched)) if not touched.is_empty() else "the beds",
+		_erosion_pending_m])
+	_erosion_pending_m = 0.0
+	_erosion_carved_ms = Time.get_ticks_msec()
+	save_layer()
+	_request_erosion_rebuild()
+
+
+## Forget every flood cut (View tool's Reset erosion).
+func reset_erosion() -> void:
+	layer.erosion = {}
+	_erosion_pending_m = 0.0
+	save_layer()
+	request_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Basins along the channels (StreamBasins): fill, then spill
+# ---------------------------------------------------------------------------
+
+## Find every closed hollow the carved channels run into, on the EDITED
+## ground (a swale or pond the player dug across a stream).
+func _update_basins() -> void:
+	_basins = {}
+	if loader == null or not loader.has_method("ground_height_at"):
+		return
+	var half := _carve_half()
+	var gfn := Callable(loader, "ground_height_at")
+	for f in _features:
+		var prof: Dictionary = _profiles.get(f["id"], {})
+		var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
+		if pts.size() < 3:
+			continue
+		var ground := PackedFloat32Array()
+		ground.resize(pts.size())
+		for i in pts.size():
+			ground[i] = float(gfn.call(pts[i].x, pts[i].y))
+		var found: Array = []
+		var sec: Dictionary = f["section"]
+		var top_w := float(sec.get("bed_w", 2.0)) + 2.0 * float(sec.get("bank_slope", 2.0)) * float(sec.get("depth", 0.7))
+		for pit_v in StreamBasins.find_pits(ground, _carved_flags(f, prof, half)):
+			var pit: Dictionary = pit_v
+			# A dam across the channel where it leaves the hollow (the spill).
+			var r := mini(int(pit["i1"]) + 1, pts.size() - 1)
+			var tg := (pts[mini(r + 1, pts.size() - 1)] - pts[maxi(r - 1, 0)]).normalized()
+			var dam_half := top_w * 0.5 + 6.0
+			var nrm := Vector2(-tg.y, tg.x) * dam_half
+			var dams := [[pts[r] - nrm, pts[r] + nrm]]
+			var fl := StreamBasins.flood(pts[int(pit["i_low"])], float(pit["spill_y"]), gfn,
+				StreamBasins.CELL_M, StreamBasins.MAX_HALF_M, dams)
+			if bool(fl["open"]) or float(fl["volume_m3"]) < 1.0:
+				continue
+			pit.merge(fl)
+			pit["capacity_m3"] = float(fl["volume_m3"])
+			found.append(pit)
+		if not found.is_empty():
+			_basins[f["id"]] = found
+			var desc := PackedStringArray()
+			for b in found:
+				desc.append("%.0f m3 / %.0f m2" % [float(b["capacity_m3"]), float(b["area_m2"])])
+			print("WaterNetwork: %s runs into %s (%s)" % [f["id"], UiText.count(found.size(), "basin"),
+				", ".join(desc)])
+	_basin_levels = {}
+
+
+## Half-size of the carved (hi-res) square, as rebuild_surfaces measures it.
+func _carve_half() -> float:
+	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler") \
+		if loader != null and loader.has_method("make_water_ground_sampler") else null
+	return sampler.detail_half() if sampler != null else 0.0
+
+
+## Each basin's water over the last BASIN_HORIZON_H, empty at the start:
+## the inflow at the station above it (held back by basins further up) less
+## infiltration, clamped at full. Basins in downstream order, so a lower one
+## sees the upper ones' spill.
+func _refresh_basin_series() -> void:
+	if _basins.is_empty():
+		return
+	var steps := int(ceil(BASIN_HORIZON_H / BASIN_STEP_H))
+	var t0 := _hist_now_h - BASIN_HORIZON_H
+	for fid in _basins.keys():
+		var f := feature(str(fid))
+		if f.is_empty():
+			continue
+		for bv in _basins[fid]:
+			var bd: Dictionary = bv
+			bd["t0"] = t0
+			bd["full"] = PackedByteArray()
+			var vol := PackedFloat32Array()
+			var full := PackedByteArray()
+			vol.resize(steps + 1)
+			full.resize(steps + 1)
+			var cap := float(bd["capacity_m3"])
+			var stage: PackedVector3Array = bd["stage"]
+			var i_in := maxi(int(bd["i0"]) - 1, 0)
+			var v := 0.0
+			for k in steps + 1:
+				var tau := t0 + float(k) * BASIN_STEP_H
+				if k > 0:
+					v = StreamBasins.step_volume(v, _q_at(f, i_in, tau), BASIN_STEP_H, stage, cap)
+				vol[k] = v
+				full[k] = 1 if v >= cap * 0.995 else 0
+			bd["vol"] = vol
+			bd["full"] = full
+
+
+## Water in a basin now (m³), and its level.
+func basin_now(bd: Dictionary) -> Vector2:
+	var vol: Variant = bd.get("vol", null)
+	if not (vol is PackedFloat32Array) or (vol as PackedFloat32Array).is_empty():
+		return Vector2(0.0, float(bd.get("floor_y", 0.0)))
+	var v: float = (vol as PackedFloat32Array)[(vol as PackedFloat32Array).size() - 1]
+	return Vector2(v, StreamBasins.level_for_volume(bd["stage"], v))
+
+
+func basins() -> Dictionary:
+	return _basins
+
+
+## Re-mesh the basins' water when a level has moved (2 cm) or a basin
+## emptied / started filling.
+func _sync_basin_mesh(force: bool = false) -> void:
+	var show_sig := "%s|%s" % [str(loader.call("water_visible")) if loader != null
+		and loader.has_method("water_visible") else "true", str(layer.setting("display_mode"))]
+	var changed := force or show_sig != _basin_show_sig
+	_basin_show_sig = show_sig
+	var want := {}
+	for fid in _basins.keys():
+		for bv in _basins[fid]:
+			var bd: Dictionary = bv
+			var now_v := basin_now(bd)
+			var key := "%s:%d" % [fid, int(bd["i0"])]
+			want[key] = now_v
+			var prev: Variant = _basin_levels.get(key, null)
+			if prev == null or absf((prev as Vector2).y - now_v.y) > 0.02 \
+					or ((prev as Vector2).x > 0.5) != (now_v.x > 0.5):
+				changed = true
+	if _basin_levels.size() != want.size():
+		changed = true
+	if not changed:
+		return
+	_basin_levels = want
+	var terrain := _terrain_node()
+	if terrain == null:
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var any := false
+	var show := bool(loader.call("water_visible")) if loader.has_method("water_visible") else true
+	for fid in _basins.keys():
+		var f := feature(str(fid))
+		if not show or f.is_empty() or not _display_allows(f):
+			continue
+		for bv in _basins[fid]:
+			var bd: Dictionary = bv
+			var now_v := basin_now(bd)
+			if now_v.x < 0.5:
+				continue
+			var lv := now_v.y
+			var cells: PackedVector2Array = bd["cells"]
+			var zs: PackedFloat32Array = bd["z"]
+			var h := float(bd["cell"]) * 0.5
+			for c in cells.size():
+				if zs[c] >= lv:
+					continue
+				var p := cells[c]
+				any = true
+				var col := Color(0.5, 0.5, 0.0, 0.0)
+				for q in [Vector2(-h, -h), Vector2(h, -h), Vector2(h, h), Vector2(-h, -h), Vector2(h, h), Vector2(-h, h)]:
+					var v2: Vector2 = p + (q as Vector2)
+					st.set_color(col)
+					st.set_uv(v2)
+					st.set_uv2(Vector2(0.0, 0.0))
+					st.set_normal(Vector3.UP)
+					st.add_vertex(Vector3(v2.x, lv, v2.y))
+	if not any:
+		if _basins_mi != null and is_instance_valid(_basins_mi):
+			_basins_mi.queue_free()
+		_basins_mi = null
+		return
+	if _basins_mi == null or not is_instance_valid(_basins_mi):
+		_basins_mi = MeshInstance3D.new()
+		_basins_mi.name = BASINS_NODE
+		_basins_mi.layers = WaterBuilder.WATER_RENDER_LAYER
+		_basins_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if _streams_mat == null:
+			_streams_mat = ShaderMaterial.new()
+			_streams_mat.shader = STREAM_SHADER
+		_basins_mi.material_override = _streams_mat
+		terrain.add_child(_basins_mi)
+	_basins_mi.mesh = st.commit()
+
+
+# ---------------------------------------------------------------------------
+# Rain-tool storms
+# ---------------------------------------------------------------------------
+
+## A storm over `poly` (world XZ) at `rate_mmh` from `start_h` to `end_h`
+## (absolute sim hours). Its runoff reaches each stream through the drainage
+## grid. Returns its id.
+func add_storm(poly: PackedVector2Array, rate_mmh: float, start_h: float, end_h: float) -> int:
+	_storm_seq += 1
+	var st := {"id": _storm_seq, "poly": poly.duplicate(), "rate_mmh": maxf(rate_mmh, 0.0),
+		"start_h": start_h, "end_h": maxf(end_h, start_h), "areas": {}, "entry": {},
+		"area_m2": 0.0, "patch_tc_h": StreamRunoff.TC_MIN_H}
+	_compute_storm_areas(st)
+	_storms.append(st)
+	if _drain.is_empty():
+		request_drainage()
+	_hist_now_h = NAN
+	_hyd_t = 0.0
+	return _storm_seq
+
+
+## Move a storm's end (the Rain tool extends it while the button is held).
+func extend_storm(id: int, end_h: float) -> void:
+	for st in _storms:
+		if int((st as Dictionary)["id"]) == id:
+			(st as Dictionary)["end_h"] = maxf(end_h, float((st as Dictionary)["start_h"]))
+			_hyd_t = minf(_hyd_t, 0.25)
+			return
+
+
+func storms() -> Array:
+	return _storms
+
+
+## True while any storm's water can still be in a channel.
+func _storm_flowing() -> bool:
+	var now := _now_h()
+	for st in _storms:
+		var s: Dictionary = st
+		if is_finite(now) and now >= float(s["start_h"]) \
+				and now <= float(s["end_h"]) + StreamRunoff.TC_MAX_H + 1.0:
+			return true
+	return false
+
+
+## How much of a storm's ground drains into the mapped / drawn streams (m²).
+func storm_reach_m2(id: int) -> float:
+	for st in _storms:
+		if int((st as Dictionary)["id"]) == id:
+			var best := 0.0
+			for arr in ((st as Dictionary)["areas"] as Dictionary).values():
+				var a := arr as PackedFloat32Array
+				if a.size() > 0:
+					best = maxf(best, a[a.size() - 1])
+			return best
+	return 0.0
+
+
+func clear_storms() -> void:
+	_storms = []
+	for k in _storm_fx.keys():
+		if is_instance_valid(_storm_fx[k]):
+			(_storm_fx[k] as Node).queue_free()
+	_storm_fx = {}
+
+
+## The storm's area (m²) draining to every station: its ground as weights on
+## the drainage grid, accumulated downstream the way the catchments are.
+func _compute_storm_areas(st: Dictionary) -> void:
+	st["areas"] = {}
+	st["entry"] = {}
+	st["patch_tc_h"] = StreamRunoff.TC_MIN_H
+	if _drain.is_empty():
+		return
+	var poly: PackedVector2Array = st["poly"]
+	var n := int(_drain["n"])
+	var cell := float(_drain["cell_m"])
+	var half := float(_drain["half_m"])
+	var w := PackedFloat32Array()
+	if not _drain.has("rank"):
+		w.resize(n * n)
+	var bb := Rect2(poly[0], Vector2.ZERO)
+	for p in poly:
+		bb = bb.expand(p)
+	var c0 := clampi(int(floor((bb.position.x + half) / cell)), 0, n - 1)
+	var c1 := clampi(int(ceil((bb.end.x + half) / cell)), 0, n - 1)
+	var r0 := clampi(int(floor((bb.position.y + half) / cell)), 0, n - 1)
+	var r1 := clampi(int(ceil((bb.end.y + half) / cell)), 0, n - 1)
+	var cells := 0
+	var src := PackedInt32Array()
+	for r in range(r0, r1 + 1):
+		for c in range(c0, c1 + 1):
+			if Geometry2D.is_point_in_polygon(Vector2(-half + float(c) * cell, -half + float(r) * cell), poly):
+				src.append(r * n + c)
+				cells += 1
+	st["area_m2"] = float(cells) * cell * cell
+	st["patch_tc_h"] = StreamRunoff.patch_tc_h(float(st["area_m2"]))
+	if cells == 0:
+		return
+	var acc: PackedFloat32Array
+	if _drain.has("rank"):
+		acc = StreamRunoff.sparse_accumulate(_drain["recv"], _drain["rank"], src)
+	else:
+		for i in src:
+			w[i] = 1.0
+		acc = StreamRunoff.weighted_accumulate(_drain["recv"], _drain["order"], w)
+	var grid := {"n": n, "cell_m": cell, "half_m": half, "acc": acc}
+	for f in _features:
+		var prof: Dictionary = _profiles.get(f["id"], {})
+		var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
+		var arr := PackedFloat32Array()
+		arr.resize(pts.size())
+		var run := 0.0
+		var entry := -1
+		for i in pts.size():
+			run = maxf(run, FlowRouting.area_at(grid, pts[i]))
+			arr[i] = run
+			if run > 0.0 and entry < 0:
+				entry = i
+		if entry >= 0:
+			(st["areas"] as Dictionary)[f["id"]] = arr
+			(st["entry"] as Dictionary)[f["id"]] = entry
+
+
+## Rain falling over every storm the clock is inside of. Storms are kept for
+## the session (a scrub back must find them again), the newest MAX_STORMS.
+func _sync_storm_fx() -> void:
+	var now := _now_h()
+	var terrain := _terrain_node()
+	var keep := {}
+	while _storms.size() > MAX_STORMS:
+		_storms.pop_front()
+	for st_v in _storms:
+		var st: Dictionary = st_v
+		var id := int(st["id"])
+		var raining: bool = is_finite(now) and now >= float(st["start_h"]) and now <= float(st["end_h"])
+		if not raining or terrain == null:
+			continue
+		keep[id] = true
+		if not _storm_fx.has(id) or not is_instance_valid(_storm_fx[id]):
+			_storm_fx[id] = _make_storm_fx(st, terrain)
+	for k in _storm_fx.keys():
+		if not keep.has(k):
+			if is_instance_valid(_storm_fx[k]):
+				(_storm_fx[k] as Node).queue_free()
+			_storm_fx.erase(k)
+
+
+func _make_storm_fx(st: Dictionary, terrain: Node3D) -> GPUParticles3D:
+	var poly: PackedVector2Array = st["poly"]
+	var bb := Rect2(poly[0], Vector2.ZERO)
+	for p in poly:
+		bb = bb.expand(p)
+	var c := bb.get_center()
+	var gy := float(loader.call("ground_height_at", c.x, c.y)) if loader != null else 0.0
+	var fx := GPUParticles3D.new()
+	fx.name = "Storm_%d" % int(st["id"])
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(bb.size.x * 0.5, 1.0, bb.size.y * 0.5)
+	pm.direction = Vector3(0.05, -1.0, 0.0)
+	pm.spread = 2.0
+	pm.initial_velocity_min = 16.0
+	pm.initial_velocity_max = 20.0
+	pm.gravity = Vector3(0.0, -4.0, 0.0)
+	fx.process_material = pm
+	var quad := QuadMesh.new()
+	# Thicker and longer than a real drop: rain reads as streaks blurred by
+	# motion, and a true 2 mm drop is sub-pixel past a few metres.
+	quad.size = Vector2(0.07, 1.6)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.85, 0.9, 0.97, 0.42)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+	mat.billboard_keep_scale = true
+	quad.material = mat
+	fx.draw_pass_1 = quad
+	fx.amount = clampi(int(bb.get_area() / 4.0), 400, 14000)
+	fx.lifetime = 2.2
+	fx.preprocess = 2.2
+	fx.visibility_aabb = AABB(Vector3(-bb.size.x * 0.5 - 5.0, -45.0, -bb.size.y * 0.5 - 5.0),
+		Vector3(bb.size.x + 10.0, 50.0, bb.size.y + 10.0))
+	fx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	terrain.add_child(fx)
+	fx.global_position = Vector3(c.x, gy + 38.0, c.y)
+	return fx
 
 
 ## Per-station hydraulic state of one feature at a rain rate.
@@ -497,28 +1355,64 @@ func _display_allows(f: Dictionary) -> bool:
 
 
 func _poll_hydraulics() -> void:
+	PerfSpan.begin("water_poll")
+	_poll_hydraulics_inner()
+	PerfSpan.end("water_poll")
+
+
+func _poll_hydraulics_inner() -> void:
+	_sync_storm_fx()
 	if _features.is_empty() or _profiles.is_empty():
 		return
+	PerfSpan.begin("water_erosion")
+	_accumulate_erosion()
+	PerfSpan.end("water_erosion")
+	if not _basins.is_empty():
+		_ensure_rain_history()
+		_sync_basin_mesh()
 	var rain := rain_mmh_now()
-	if absf(rain - _last_rain) < 0.05 and not _last_q.is_empty():
-		return
-	var moved := false
+	# Rain takes its travel time to reach each point, so the flow changes
+	# while the clock runs even at a steady rate: compare the discharge at a
+	# few stations down every channel with what was last meshed.
+	# Only the streams whose flow moved are re-meshed; the rest keep theirs.
+	var full := _last_q.is_empty()
+	var moved_ids := {}
 	for f in _features:
-		var n_st := (_profiles.get(f["id"], {}).get("s", PackedFloat32Array()) as PackedFloat32Array).size()
-		var q := station_q_lps(f, maxi(n_st - 1, 0), rain)
-		var prev := float(_last_q.get(f["id"], -1.0))
-		if prev < 0.0 or absf(q - prev) > REMESH_Q_CHANGE * maxf(prev, 1.0):
-			moved = true
+		if full:
 			break
+		var n_st := (_profiles.get(f["id"], {}).get("s", PackedFloat32Array()) as PackedFloat32Array).size()
+		if n_st == 0:
+			continue
+		var prev: PackedFloat32Array = _sample_q.get(f["id"], PackedFloat32Array())
+		for k in SAMPLE_STATIONS:
+			var i := int(round(float(k) / float(SAMPLE_STATIONS - 1) * float(n_st - 1)))
+			var q := station_q_now(f, i)
+			var p := prev[k] if k < prev.size() else -1.0
+			var wet_flip := (q >= WET_LPS) != (p >= WET_LPS)
+			if p < 0.0 or wet_flip or absf(q - p) > REMESH_Q_CHANGE * maxf(p, 1.0):
+				moved_ids[f["id"]] = true
+				break
+	# Poll faster while anything is moving through the channels.
+	if _storm_flowing() or not _basins.is_empty() \
+			or StreamRunoff.window_mean(_hist_prefix, StreamRunoff.TC_MAX_H) > 0.01:
+		_hyd_t = minf(_hyd_t, ACTIVE_POLL_S)
 	_last_rain = rain
-	if moved:
+	if full:
 		rebuild_surfaces()
+	elif not moved_ids.is_empty():
+		_start_async_remesh(moved_ids)
 	elif _flow_chip != null and is_instance_valid(_flow_chip) and _flow_chip.visible:
 		_update_flow_chip()
 
 
 ## (Re)mesh every visible feature's water surface at the current flow.
 func rebuild_surfaces() -> void:
+	PerfSpan.begin("water_remesh")
+	_rebuild_surfaces_inner()
+	PerfSpan.end("water_remesh")
+
+
+func _rebuild_surfaces_inner(only: Dictionary = {}) -> void:
 	if loader == null or not is_instance_valid(loader):
 		return
 	var terrain := _terrain_node()
@@ -532,25 +1426,60 @@ func rebuild_surfaces() -> void:
 		if loader.has_method("make_water_ground_sampler") else null
 	if sampler != null:
 		half = sampler.detail_half()
+	var partial := not only.is_empty()
 	var items: Array = []
-	_states = {}
-	_last_q = {}
+	var arrays: Array = []
+	if not partial:
+		_surf_gen += 1
+		_states = {}
+		_last_q = {}
+		_sample_q = {}
+		_surf_arrays = {}
+	var ground := Callable(loader, "ground_height_at")
 	for f in _features:
-		var prof: Dictionary = _profiles.get(f["id"], {})
+		var fid: String = f["id"]
+		var prof: Dictionary = _profiles.get(fid, {})
 		if prof.is_empty():
 			continue
-		var states := feature_states(f, rain)
-		_states[f["id"]] = states
-		if not states.is_empty():
-			_last_q[f["id"]] = float((states.back() as Dictionary).get("q_lps", 0.0))
+		var fresh := not partial or only.has(fid) or not _states.has(fid)
+		var states: Array = _states.get(fid, [])
+		if fresh:
+			PerfSpan.begin("water_states")
+			states = feature_states_now(f)
+			PerfSpan.end("water_states")
+			_states[fid] = states
+			if not states.is_empty():
+				var smp := PackedFloat32Array()
+				for k in SAMPLE_STATIONS:
+					var i := int(round(float(k) / float(SAMPLE_STATIONS - 1) * float(states.size() - 1)))
+					smp.append(float((states[i] as Dictionary).get("q_lps", 0.0)))
+				_sample_q[fid] = smp
+				_last_q[fid] = float((states.back() as Dictionary).get("q_lps", 0.0))
 		if bool(f.get("covered", false)) or not _display_allows(f):
 			continue
-		items.append({"feature": f, "profile": prof, "states": states,
-			"carved": _carved_flags(f, prof, half)})
+		var it := {"feature": f, "profile": prof, "states": states,
+			"carved": _carved_flags(f, prof, half)}
+		items.append(it)
+		if show:
+			if fresh or not _surf_arrays.has(fid):
+				PerfSpan.begin("water_mesh_build")
+				if not _bank_refs.has(fid):
+					_bank_refs[fid] = StreamMeshBuilder.bank_refs(f, prof, ground)
+				if not _drape_refs.has(fid):
+					_drape_refs[fid] = StreamMeshBuilder.drape_refs(f, prof, it["carved"], ground)
+				if not _surf_masks.has(fid):
+					_surf_masks[fid] = StreamNetwork.surface_mask(f, prof.get("s", PackedFloat32Array()),
+						prof.get("varc", PackedFloat32Array()))
+				_surf_arrays[fid] = StreamMeshBuilder.feature_arrays(it, ground, _bank_refs[fid],
+					_drape_refs[fid], _surf_masks[fid])
+				PerfSpan.end("water_mesh_build")
+			arrays.append(_surf_arrays[fid])
+	_sync_basin_mesh()
 	var mesh: ArrayMesh = null
-	if show and not items.is_empty():
-		mesh = StreamMeshBuilder.build(items, Callable(loader, "ground_height_at"))
+	if show and not arrays.is_empty():
+		mesh = StreamMeshBuilder.mesh_from_arrays(arrays)
 	rebuild_buried()
+	_update_buried_flow()
 	_rebuild_flow_view(items)
 	if mesh == null:
 		if _streams_mi != null and is_instance_valid(_streams_mi):
@@ -567,6 +1496,150 @@ func rebuild_surfaces() -> void:
 			_streams_mat.shader = STREAM_SHADER
 		_streams_mi.material_override = _streams_mat
 		terrain.add_child(_streams_mi)
+	_streams_mi.mesh = mesh
+
+
+## Re-mesh `ids` on a worker: the flow at every station is summed here (it
+## reads the storms, the rain history and the basins), the depth / width at
+## each (StreamHydraulics.state) and the strip's arrays are built off the main
+## thread from the per-feature caches (bank tops, drape, open spans), and the
+## result swaps in when it lands. A carve or a full rebuild meanwhile makes it
+## stale (dropped). Asked again while one runs, the ids wait for it.
+func _start_async_remesh(ids: Dictionary) -> void:
+	if _remesh_task >= 0:
+		_remesh_pending.merge(ids)
+		return
+	if loader == null or not is_instance_valid(loader):
+		return
+	PerfSpan.begin("water_remesh_prep")
+	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler") \
+		if loader.has_method("make_water_ground_sampler") else null
+	var half := sampler.detail_half() if sampler != null else 0.0
+	var ground := Callable(loader, "ground_height_at")
+	var jobs: Array = []
+	for f in _features:
+		var fid: String = f["id"]
+		if not ids.has(fid):
+			continue
+		var prof: Dictionary = _profiles.get(fid, {})
+		var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+		if s.is_empty():
+			continue
+		var carved := _carved_flags(f, prof, half)
+		if not _bank_refs.has(fid):
+			_bank_refs[fid] = StreamMeshBuilder.bank_refs(f, prof, ground)
+		if not _drape_refs.has(fid):
+			_drape_refs[fid] = StreamMeshBuilder.drape_refs(f, prof, carved, ground)
+		if not _surf_masks.has(fid):
+			_surf_masks[fid] = StreamNetwork.surface_mask(f, s, prof.get("varc", PackedFloat32Array()))
+		jobs.append({"fid": fid, "f": f.duplicate(true), "prof": prof.duplicate(true),
+			"qs": _feature_q_now(f, s.size()), "carved": carved, "bank": _bank_refs[fid],
+			"drape": _drape_refs[fid], "mask": _surf_masks[fid],
+			"draw": not bool(f.get("covered", false)) and _display_allows(f)})
+	PerfSpan.end("water_remesh_prep")
+	if jobs.is_empty():
+		return
+	var box := {}
+	_remesh_box = box
+	_remesh_rev = _rev * 100000 + _surf_gen
+	_remesh_ids = ids.duplicate()
+	_remesh_task = WorkerThreadPool.add_task(func() -> void:
+		box["result"] = _remesh_job(jobs), false, "WaterNetwork remesh")
+
+
+## Worker: states + strip arrays per feature (pure).
+static func _remesh_job(jobs: Array) -> Array:
+	var out: Array = []
+	for j_v in jobs:
+		var j: Dictionary = j_v
+		var f: Dictionary = j["f"]
+		var prof: Dictionary = j["prof"]
+		var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+		var bed: PackedFloat32Array = prof.get("bed", PackedFloat32Array())
+		var sec: Dictionary = f["section"]
+		var b := float(sec.get("bed_w", 2.0))
+		var z := float(sec.get("bank_slope", 1.5))
+		var qs: PackedFloat32Array = j["qs"]
+		var dry := {"q_lps": 0.0, "depth_m": 0.0, "top_w_m": 0.0, "velocity_ms": 0.0, "froude": 0.0}
+		var states: Array = []
+		states.resize(s.size())
+		for i in s.size():
+			states[i] = dry if qs[i] <= 0.0 \
+				else StreamHydraulics.state(qs[i], b, z, ChannelProfile._slope(s, bed, i))
+		var arrays: Array = []
+		if bool(j["draw"]):
+			arrays = StreamMeshBuilder.feature_arrays({"feature": f, "profile": prof,
+				"states": states, "carved": j["carved"]}, Callable(), j["bank"], j["drape"], j["mask"])
+		out.append({"fid": j["fid"], "states": states, "arrays": arrays})
+	return out
+
+
+func _process_remesh() -> void:
+	if _remesh_task < 0 or not WorkerThreadPool.is_task_completed(_remesh_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(_remesh_task)
+	_remesh_task = -1
+	var res: Array = _remesh_box.get("result", [])
+	_remesh_box = {}
+	if _remesh_rev != _rev * 100000 + _surf_gen:
+		# Stale (a carve or a full re-mesh landed meanwhile): do them again.
+		_remesh_pending.merge(_remesh_ids)
+	elif not res.is_empty():
+		PerfSpan.begin("water_remesh_swap")
+		for r_v in res:
+			var r: Dictionary = r_v
+			var fid: String = r["fid"]
+			var states: Array = r["states"]
+			_states[fid] = states
+			if not states.is_empty():
+				var smp := PackedFloat32Array()
+				for k in SAMPLE_STATIONS:
+					var i := int(round(float(k) / float(SAMPLE_STATIONS - 1) * float(states.size() - 1)))
+					smp.append(float((states[i] as Dictionary).get("q_lps", 0.0)))
+				_sample_q[fid] = smp
+				_last_q[fid] = float((states.back() as Dictionary).get("q_lps", 0.0))
+			_surf_arrays[fid] = r["arrays"]
+		_swap_stream_mesh()
+		PerfSpan.end("water_remesh_swap")
+	if not _remesh_pending.is_empty():
+		var ids := _remesh_pending
+		_remesh_pending = {}
+		_start_async_remesh(ids)
+
+
+## The strip mesh from every shown feature's cached arrays, plus what reads
+## the states (buried flow, the flow view, the basins' water).
+func _swap_stream_mesh() -> void:
+	var terrain := _terrain_node()
+	if terrain == null:
+		return
+	var show := bool(loader.call("water_visible")) if loader.has_method("water_visible") else true
+	var arrays: Array = []
+	var items: Array = []
+	var flow_on := str(layer.setting("display_mode")) == "flow"
+	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler") 		if flow_on and loader.has_method("make_water_ground_sampler") else null
+	var half := sampler.detail_half() if sampler != null else 0.0
+	for f in _features:
+		var fid: String = f["id"]
+		if bool(f.get("covered", false)) or not _display_allows(f) or not _states.has(fid):
+			continue
+		var prof: Dictionary = _profiles.get(fid, {})
+		items.append({"feature": f, "profile": prof, "states": _states[fid],
+			"carved": _carved_flags(f, prof, half) if flow_on else PackedByteArray()})
+		if show and _surf_arrays.has(fid):
+			arrays.append(_surf_arrays[fid])
+	_sync_basin_mesh()
+	_update_buried_flow()
+	_rebuild_flow_view(items)
+	var mesh: ArrayMesh = StreamMeshBuilder.mesh_from_arrays(arrays) if show and not arrays.is_empty() else null
+	if mesh == null:
+		if _streams_mi != null and is_instance_valid(_streams_mi):
+			_streams_mi.queue_free()
+		_streams_mi = null
+		return
+	if _streams_mi == null or not is_instance_valid(_streams_mi):
+		rebuild_surfaces()
+		return
 	_streams_mi.mesh = mesh
 
 
@@ -604,12 +1677,18 @@ func _rebuild_flow_view(items: Array) -> void:
 		var bed: PackedFloat32Array = prof["bed"]
 		var lev := PackedFloat32Array()
 		lev.resize(pts.size())
+		# The ground under the line from the drape cache (its middle offset).
+		var dr: Dictionary = _drape_refs.get(f["id"], {})
+		var dz: PackedFloat32Array = dr.get("z", PackedFloat32Array())
+		var dm := int(dr.get("m", 1))
 		var vsum := 0.0
 		for i in pts.size():
 			var st: Dictionary = states[i]
 			vsum += float(st.get("velocity_ms", 0.0))
 			if i < carved.size() and carved[i] == 1:
 				lev[i] = bed[i] + maxf(float(st.get("depth_m", 0.0)), StreamMeshBuilder.MIN_RENDER_DEPTH_M)
+			elif dz.size() == pts.size() * dm:
+				lev[i] = dz[i * dm + dm / 2] + StreamMeshBuilder.DRAPE_LIFT_M
 			else:
 				lev[i] = float(loader.call("ground_height_at", pts[i].x, pts[i].y)) + StreamMeshBuilder.DRAPE_LIFT_M
 		beads.append({"id": f["id"], "points": pts, "s": prof["s"], "level": lev,
@@ -941,6 +2020,7 @@ static func _drainage_job(job: Dictionary) -> Dictionary:
 		var sampler: WaterGroundSampler = job["sampler"]
 		res = FlowRouting.analyze(Callable(sampler, "surface_at"), float(job["half"]),
 			DRAIN_CELL_M, job.get("lines", []))
+		res["rank"] = StreamRunoff.order_rank(res["order"])
 	var chans := FlowRouting.channels(res, float(job["min_area"]))
 	# Spatial hash of the feature lines (10 m buckets) for the duplicate test.
 	var bucket := {}
@@ -984,6 +2064,12 @@ static func _near_bucket(bucket: Dictionary, p: Vector2, dist: float) -> bool:
 
 
 func _apply_drainage(res: Dictionary) -> void:
+	PerfSpan.begin("water_drain_apply")
+	_apply_drainage_inner(res)
+	PerfSpan.end("water_drain_apply")
+
+
+func _apply_drainage_inner(res: Dictionary) -> void:
 	if res.is_empty():
 		return
 	_drain = res.get("grid", {})
@@ -992,6 +2078,7 @@ func _apply_drainage(res: Dictionary) -> void:
 	print("WaterNetwork: drainage %d² @ %.1f m — %d derived channels (%d ms)" % [
 		int(_drain.get("n", 0)), float(_drain.get("cell_m", 0.0)), _derived.size(),
 		Time.get_ticks_msec() - _drain_started_ms])
+	_drape_refs = {}
 	_update_station_areas()
 	rebuild_surfaces()
 	rebuild_drainage_overlay()
@@ -1002,6 +2089,8 @@ func _apply_drainage(res: Dictionary) -> void:
 ## downstream, since a hand-drawn line may wander a cell off the thread.
 func _update_station_areas() -> void:
 	station_area = {}
+	station_tc = {}
+	station_travel = {}
 	if _drain.is_empty():
 		return
 	for f in _features:
@@ -1014,6 +2103,33 @@ func _update_station_areas() -> void:
 			run = maxf(run, FlowRouting.area_at(_drain, pts[i]))
 			arr[i] = run
 		station_area[f["id"]] = arr
+	_update_station_hydraulics()
+	PerfSpan.begin("water_storm_areas")
+	for st in _storms:
+		_compute_storm_areas(st)
+	PerfSpan.end("water_storm_areas")
+	PerfSpan.begin("water_find_basins")
+	_update_basins()
+	PerfSpan.end("water_find_basins")
+	_hist_now_h = NAN
+
+
+## Tc and travel time at every station from its catchment and the CURRENT bed.
+func _update_station_hydraulics() -> void:
+	station_tc = {}
+	station_travel = {}
+	for f in _features:
+		var arr: PackedFloat32Array = station_area.get(f["id"], PackedFloat32Array())
+		var prof: Dictionary = _profiles.get(f["id"], {})
+		var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+		if arr.size() != s.size():
+			continue
+		station_tc[f["id"]] = StreamRunoff.station_tc_h(s,
+			prof.get("ground", PackedFloat32Array()), prof.get("bed", PackedFloat32Array()), arr)
+		var sec: Dictionary = f["section"]
+		station_travel[f["id"]] = StreamRunoff.channel_travel_h(s,
+			prof.get("bed", PackedFloat32Array()), arr, float(sec.get("bed_w", 2.0)),
+			float(sec.get("bank_slope", 1.5)))
 
 
 func drainage() -> Dictionary:
@@ -1116,10 +2232,16 @@ func buried_runs(id: String) -> Array:
 ## ground), so the root is hidden in first person unless "Show buried" is on
 ## or a graph lens is up; the headwalls and jets are above ground and always
 ## drawn.
-func rebuild_buried() -> void:
+func rebuild_buried(force: bool = false) -> void:
 	var terrain := _terrain_node()
 	if terrain == null:
 		return
+	# The barrels, headwalls and outlet jets follow the network, not the flow:
+	# a re-mesh as the flow changes only re-tints them (_update_buried_flow).
+	var sig := hash([_rev, str(layer.setting("display_mode")), _features.size()])
+	if not force and sig == _buried_sig and _buried_root != null and is_instance_valid(_buried_root):
+		return
+	_buried_sig = sig
 	if _buried_root == null or not is_instance_valid(_buried_root):
 		_buried_root = Node3D.new()
 		_buried_root.name = BURIED_NODE
@@ -1165,6 +2287,7 @@ func rebuild_buried() -> void:
 			run["surcharged"] = BuriedWaterBuilder.surcharged(run, q)
 			var tint := COL_SURCHARGED if bool(run["surcharged"]) else Color(0, 0, 0, 0)
 			var mi := MeshInstance3D.new()
+			run["mi"] = mi
 			mi.mesh = ConduitMeshBuilder.build_tube(run["path"], float(run["d"]) * 0.5)
 			mi.material_override = ConduitKinds.make_flow_material(
 				"culvert_pipe" if str(run["mode"]) == "culvert" else "pvc_6in", tint,
@@ -1177,6 +2300,27 @@ func rebuild_buried() -> void:
 			_mouths_root.add_child(vfx)
 			_outlet_vfx.append({"vfx": vfx, "fid": f["id"], "run": run})
 	_refresh_buried_visibility()
+
+
+## The buried runs' flow, surcharge flag and tint at the current states.
+func _update_buried_flow() -> void:
+	for fid in _runs.keys():
+		var states: Array = _states.get(fid, [])
+		for run_v in (_runs[fid] as Array):
+			var run: Dictionary = run_v
+			var q := float((states[int(run["i0"])] as Dictionary).get("q_lps", 0.0)) \
+				if int(run["i0"]) < states.size() else 0.0
+			var sur := BuriedWaterBuilder.surcharged(run, q)
+			var mi: Variant = run.get("mi", null)
+			var fill := clampf(q / maxf(float(run["capacity_lps"]), 1.0), 0.15, 1.0)
+			if absf(float(run.get("q_lps", -1.0)) - q) < 0.05 and bool(run.get("surcharged", false)) == sur:
+				continue
+			run["q_lps"] = q
+			run["surcharged"] = sur
+			if mi is MeshInstance3D and is_instance_valid(mi):
+				(mi as MeshInstance3D).material_override = ConduitKinds.make_flow_material(
+					"culvert_pipe" if str(run["mode"]) == "culvert" else "pvc_6in",
+					COL_SURCHARGED if sur else Color(0, 0, 0, 0), fill, 1.0)
 
 
 ## A concrete headwall at a barrel mouth, square to the flow, seated on the
@@ -1233,6 +2377,14 @@ func _drive_outlet_vfx(delta: float) -> void:
 		var i1 := int(run["i1"])
 		var q := float((states[i1] as Dictionary).get("q_lps", 0.0)) if i1 < states.size() else 0.0
 		vfx.set_flow(delta, q, run["outlet"], run["out_dir"])
+
+
+## Streams with no base flow of their own carry nothing between storms
+## (desert washes): the kind's default base flow is dropped.
+func set_dry_between_storms(on: bool) -> void:
+	layer.set_setting("dry_between_storms", on)
+	save_layer()
+	request_rebuild()
 
 
 ## Map-wide stream curve defaults (each 0..1; a stream's own values win).

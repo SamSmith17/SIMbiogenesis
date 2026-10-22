@@ -2350,13 +2350,21 @@ func _update_rain_system(delta: float) -> void:
 	if kind == "snow" and snow_cmh < 0.01 and precip_rate_mmh > PRECIP_RAIN_THRESHOLD_MMH:
 		snow_cmh = maxf(precip_rate_mmh * 0.1, 0.05)
 	var wind_down := Vector2(0.0, 1.0)
+	# 10 m wind speed: slants the rain (light drops blow over, heavy ones fall
+	# nearly straight) — 0 = still air when no weather data drives the scene.
+	var wind_ms := 0.0
 	if main_node != null and _open_meteo_active:
 		var from_deg := WeatherService.wind_direction_deg(
 			int(main_node.month), int(main_node.day), float(main_node.day_time))
 		wind_down = WindMath.downwind_xz(from_deg)
+		wind_ms = WeatherService.wind_speed_ms(
+			int(main_node.month), int(main_node.day), float(main_node.day_time))
+		if not is_finite(wind_ms):
+			wind_ms = 0.0
 	_ensure_environment_vfx()
 	if _precip_vfx != null:
-		_precip_vfx.update_frame(delta, kind, precip_rate_mmh, snow_cmh, wind_down, _get_rain_follow_position())
+		_precip_vfx.update_frame(delta, kind, precip_rate_mmh, snow_cmh, wind_down,
+			_get_rain_follow_position(), wind_ms)
 	if _lightning_vfx != null:
 		_lightning_vfx.set_storm_active(_is_thunderstorm(), _thunderstorm_intensity())
 	

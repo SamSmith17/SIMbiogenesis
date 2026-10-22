@@ -16,6 +16,9 @@ extends Node3D
 ## Max tile (mesh + collider) rebuilds per frame. A tile is ~65² verts; a brush
 ## stroke touches 1–4 tiles, so live strokes reconcile the same frame.
 const MAX_REBUILDS_PER_FRAME := 4
+## Stop rebuilding queued tiles once this much of the frame has gone (at least
+## one tile a frame): a channel re-carve touches ~90 tiles.
+const REBUILD_BUDGET_MS := 6.0
 ## Perimeter skirt drop (m). Must exceed the loader's TILE_SINK_HEADROOM_M
 ## (60 m): the DetailGround is sunk that far beneath active tiles, and where a
 ## cut reaches the tile perimeter the skirt is the only thing sealing the sink
@@ -25,6 +28,8 @@ const SKIRT_DROP_M := 65.0
 var tiles: TerrainEditTiles = null
 
 var _base_fn: Callable = Callable()
+## Per tile key, its base heights (build_tile_mesh_data's "base").
+var _base_cache: Dictionary = {}
 var _uv_scale: float = 0.0
 var _uv_origin: float = 0.5
 var _material: Material = null
@@ -53,6 +58,7 @@ func configure(store: TerrainEditTiles, base_fn: Callable,
 		detail_extent_m: float, material: Material) -> void:
 	tiles = store
 	_base_fn = base_fn
+	_base_cache = {}
 	_material = material
 	var e := maxf(detail_extent_m, 1.0)
 	_uv_scale = 1.0 / e
@@ -103,11 +109,16 @@ func queue_dirty() -> void:
 
 func _process(_delta: float) -> void:
 	var budget := MAX_REBUILDS_PER_FRAME
+	PerfSpan.begin("terrain_tiles")
+	var t0 := Time.get_ticks_usec()
 	while budget > 0 and not _rebuild_queue.is_empty():
 		var key: Vector2i = _rebuild_queue.pop_front()
 		_queued.erase(key)
 		_reconcile_tile(key)
 		budget -= 1
+		if float(Time.get_ticks_usec() - t0) / 1000.0 >= REBUILD_BUDGET_MS:
+			break
+	PerfSpan.end("terrain_tiles")
 	if _rebuild_queue.is_empty():
 		set_process(false)
 
@@ -178,7 +189,9 @@ func _reconcile_tile(key: Vector2i) -> void:
 
 	# center_elev = 0: base_fn already returns world-Y heights. One height pass
 	# feeds both the mesh and the collider.
-	var md := tiles.build_tile_mesh_data(key, _base_fn, 0.0, _uv_scale, _uv_origin)
+	var md := tiles.build_tile_mesh_data(key, _base_fn, 0.0, _uv_scale, _uv_origin,
+		_base_cache.get(key, PackedFloat32Array()))
+	_base_cache[key] = md["base"]
 	var arrays: Array = md["arrays"]
 	_append_skirt(arrays)
 	var mesh := TerrainBuilder.make_array_mesh(arrays)

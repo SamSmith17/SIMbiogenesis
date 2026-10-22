@@ -32,6 +32,15 @@ var streams: Array = []
 var osm: Dictionary = {}
 var settings: Dictionary = {}
 var next_id: int = 1
+## Depth (m) floods have cut into each feature's bed, per resolved feature id,
+## one value per ChannelProfile.EROSION_STEP_M of arc. Added to the carved
+## depth; "Reset erosion" (View tool) clears it.
+var erosion: Dictionary = {}
+
+
+func erosion_of(fid: String) -> PackedFloat32Array:
+	var e: Variant = erosion.get(fid, null)
+	return e if e is PackedFloat32Array else PackedFloat32Array()
 
 
 static func save_path_for_map(lat: float, lon: float) -> String:
@@ -52,6 +61,8 @@ static func default_settings() -> Dictionary:
 		# StreamCurve knobs for every stream without its own (0..1).
 		"curve_smooth": 0.0,
 		"curve_meander": 0.0,
+		# Streams without a base flow of their own run only when rain reaches them.
+		"dry_between_storms": false,
 	}
 
 
@@ -213,13 +224,27 @@ func serialize() -> Dictionary:
 		if d.has("points"):
 			d["points"] = _ser_points(d["points"])
 		out_osm[k] = d
+	var out_ero := {}
+	for k in erosion.keys():
+		var arr: Array = []
+		for v in (erosion[k] as PackedFloat32Array):
+			arr.append(snappedf(v, 0.001))
+		out_ero[k] = arr
 	return {"version": VERSION, "next_id": next_id, "streams": out_streams,
-		"osm": out_osm, "settings": settings.duplicate(true)}
+		"osm": out_osm, "settings": settings.duplicate(true), "erosion": out_ero}
 
 
 func deserialize(d: Dictionary) -> void:
 	streams = []
 	osm = {}
+	erosion = {}
+	var ero_in: Variant = d.get("erosion", {})
+	if ero_in is Dictionary:
+		for k in (ero_in as Dictionary).keys():
+			var arr := PackedFloat32Array()
+			for v in ((ero_in as Dictionary)[k] as Array):
+				arr.append(float(v))
+			erosion[str(k)] = arr
 	settings = (d.get("settings", {}) as Dictionary).duplicate(true) if d.get("settings") is Dictionary else {}
 	next_id = maxi(int(d.get("next_id", 1)), 1)
 	for s in d.get("streams", []):

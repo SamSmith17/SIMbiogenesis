@@ -163,10 +163,118 @@ static func evaluate_wildfire_smoke(sample: Dictionary) -> float:
 	return clampf(sev, 0.0, 1.0)
 
 
-## Dust severity needs BOTH airborne dust and wind to raise it — and dies on wet
+## Dust severity: the WORSE of the measured dust (air-quality data, below) and
+## dust raised by the local wind on dry ground (evaluate_wind_dust). The
+## air-quality layer only covers CAMS's ~99-day window, so without the wind
+## layer a windy desert site never got dusty at all.
+static func evaluate_dust_storm(sample: Dictionary) -> float:
+	return maxf(evaluate_measured_dust(sample), evaluate_wind_dust(sample))
+
+
+## --- wind-blown dust ----------------------------------------------------------
+##
+## Dust raised LOCALLY by the wind, from nothing but the hourly weather: 10 m
+## wind above a threshold, on ground that has not been rained on recently. The
+## player's rule (2026-10-21): "when the windspeed is more than 10 mph it should
+## start to get dusty, unless it has rained within 24 h". Both numbers are
+## prefs (ExtremeWeatherPrefs) that the director copies into the sample.
+
+## 10 mph in m/s (exact: 1 mph = 0.44704 m/s). Below the textbook saltation
+## threshold for bare loose soil (6-8 m/s, Bagnold 1941), which is the point:
+## a disturbed playa and a dirt road loft dust well before an undisturbed crust.
+const WIND_DUST_THRESHOLD_MS := 4.4704
+const MPH_TO_MS := 0.44704
+## Wind at which the wind-blown layer is fully developed (~45 mph).
+const WIND_DUST_FULL_MS := 20.0
+## Hours of dry weather wind-blown dust needs, and the rain that resets it:
+## 0.1 mm is the resolution of the hourly precipitation data, i.e. "any
+## measurable rain".
+const WIND_DUST_DRY_HOURS := 24.0
+const WIND_DUST_RAIN_TRACE_MM := 0.1
+## Annual rainfall below which ground counts as fully dust-prone: 250 mm is the
+## conventional desert threshold (the Koppen BW / UNESCO arid band). At
+## DUST_WET_PRECIP_MM a damp, vegetated site raises a fifth as much.
+const DUST_ARID_PRECIP_MM := 250.0
+const DUST_WET_PRECIP_MM := 1000.0
+const DUST_WET_GROUND_FACTOR := 0.2
+
+
+## 0..1 severity of wind-blown dust. Sample keys: wind_ms, rain_prev_mm (rain
+## summed over the dry window, current hour included), and optionally
+## dust_wind_threshold_ms and dust_ground (0..1 erodibility, 1 = desert).
+## Missing wind or a missing rain history reads as NO dust — an offline site
+## must not invent a storm.
+##
+## Shape: vertical dust flux grows roughly with the CUBE of the wind above the
+## threshold (Bagnold 1941; Gillette & Passi 1988: F ~ u^3 (1 - (ut/u)^2)).
+## The flux, normalised at WIND_DUST_FULL_MS, stands in for the airborne
+## concentration, and severity is that ratio through the inverse of the dust
+## profile's PM10 curve — so the visibility the player sees follows the flux.
+## Just past 10 mph that is a light haze (severity ~0.1); 30 mph is a real
+## storm (~0.55); 45 mph and above is the full wall.
+static func evaluate_wind_dust(sample: Dictionary) -> float:
+	var wind := _num(sample, "wind_ms")
+	var rain_prev := _num(sample, "rain_prev_mm")
+	if not is_finite(wind) or not is_finite(rain_prev):
+		return 0.0
+	if rain_prev >= WIND_DUST_RAIN_TRACE_MM:
+		return 0.0
+	var ut := _num(sample, "dust_wind_threshold_ms")
+	if not is_finite(ut) or ut <= 0.0:
+		ut = WIND_DUST_THRESHOLD_MS
+	if wind <= ut:
+		return 0.0
+	var ground := _num(sample, "dust_ground")
+	if not is_finite(ground):
+		ground = 1.0
+	ground = clampf(ground, 0.0, 1.0)
+	if ground <= 0.0:
+		return 0.0
+	var full := maxf(WIND_DUST_FULL_MS, ut + 1.0)
+	var flux := _dust_flux(wind, ut) / maxf(_dust_flux(full, ut), 0.000001)
+	flux = clampf(flux * ground, 0.0, 1.0)
+	return clampf(pow(flux, 1.0 / DUST_PM10_EXPONENT), 0.0, 1.0)
+
+
+static func _dust_flux(u: float, ut: float) -> float:
+	if u <= ut:
+		return 0.0
+	return u * u * u * (1.0 - (ut * ut) / (u * u))
+
+
+## Erodibility of the site's ground from its annual rainfall: 1.0 for a desert
+## (Bombay Beach, ~70 mm), falling to DUST_WET_GROUND_FACTOR for a wet,
+## vegetated site (Mount Vernon, ~900 mm) — the same wind lofts far less dust
+## off grass and forest litter than off a dry playa. NAN (unknown) = 1.0.
+static func dust_ground_factor(annual_precip_mm: float) -> float:
+	if not is_finite(annual_precip_mm):
+		return 1.0
+	var t := clampf((annual_precip_mm - DUST_ARID_PRECIP_MM)
+		/ (DUST_WET_PRECIP_MM - DUST_ARID_PRECIP_MM), 0.0, 1.0)
+	return lerpf(1.0, DUST_WET_GROUND_FACTOR, t)
+
+
+## Rain summed over the `hours` before (and including) `abs_hours`, from a
+## callable (abs_hours -> mm/h). One sample per hour; pure in its inputs, so the
+## dry-ground gate scrubs backwards like everything else. NAN when no sample in
+## the window has data.
+static func rain_in_window(rain_at: Callable, abs_hours: float, hours: float) -> float:
+	var n := maxi(int(ceil(hours)), 1)
+	var total := 0.0
+	var any := false
+	for k in n + 1:
+		var r := float(rain_at.call(abs_hours - float(k)))
+		if not is_finite(r):
+			continue
+		any = true
+		total += maxf(r, 0.0)
+	return total if any else NAN
+
+
+## Measured dust needs BOTH airborne dust and wind to raise it — and dies on wet
 ## ground. Concentration alone would fire on transported Saharan dust aloft on a
 ## still day, which is a hazy sky, not a dust storm.
-static func evaluate_dust_storm(sample: Dictionary) -> float:
+static func evaluate_measured_dust(sample: Dictionary) -> float:
 	var dust := _num(sample, "dust")
 	# `dust` is a global-model-only field; fall back to the coarse fraction of
 	# PM10 where CAMS Europe does not supply it.
@@ -280,9 +388,15 @@ static func _profile_wildfire_smoke(sev: float) -> Dictionary:
 	s["visibility_m"] = HazardState.visibility_from_pm25(
 		pm25, 1.0, HazardState.MEE_SMOKE)
 
-	s["haze_color"] = Color(0.42, 0.20, 0.09).lerp(Color(0.72, 0.34, 0.13), 1.0 - sev)
+	# THE LOOK (swapped with dust's on 2026-10-21 — the old smoke colours and
+	# low sky tint read as a dust storm, the old dust ones as wildfire). Smoke
+	# is a deep layer ALOFT: it takes over the whole dome (low horizon bias,
+	# high sky tint) in a grey-brown that browns as it thickens, and the sun
+	# becomes a dim red disc. Not a ground layer — haze_layer_m stays 0.
+	s["haze_color"] = Color(0.56, 0.48, 0.40).lerp(Color(0.44, 0.32, 0.22), sev)
 	s["haze_strength"] = clampf(sev * 1.05, 0.0, 1.0)
-	s["sky_tint_strength"] = clampf(sev * 0.95, 0.0, 1.0)
+	s["sky_tint_strength"] = clampf(sev * 1.25, 0.0, 1.0)
+	s["horizon_bias"] = 0.25
 	# The disc reddens hard and dims: short wavelengths scatter out of the beam
 	# first, which is the whole reason a smoke sun is orange.
 	s["sun_tint"] = Color(1.0, 1.0, 1.0).lerp(Color(1.0, 0.34, 0.12), sev)
@@ -333,13 +447,37 @@ static func _profile_dust_storm(sev: float) -> Dictionary:
 	s["pm25_ugm3"] = pm25
 	s["aqi"] = us_aqi_from_pm25(pm25)
 
-	s["haze_color"] = Color(0.78, 0.58, 0.33).lerp(Color(0.66, 0.42, 0.19), sev)
-	s["haze_strength"] = clampf(sev * 1.15, 0.0, 1.0)
-	s["sky_tint_strength"] = clampf(sev * 1.1, 0.0, 1.0)
-	s["sun_tint"] = Color(1.0, 1.0, 1.0).lerp(Color(1.0, 0.62, 0.24), sev)
+	# THE LOOK. Swapped with smoke's on 2026-10-21, then rebuilt to the
+	# player's whiteout photo: pale grey-beige air that is BRIGHT (diffuse,
+	# shadowless light), near objects just visible, and at full strength the
+	# sky simply gone. Light dust is a shallow layer hugging the ground (high
+	# horizon bias, the sky above still blue); as it thickens the layer deepens
+	# and the veil climbs over the whole dome, sun and clouds included. Coarse
+	# grains scatter all wavelengths nearly alike, so the sun goes PALE and
+	# dim, never red (the smoke signature). No particle system: the player
+	# asked for none, and grains read as confetti against a whiteout.
+	# Colour, thickness, sky, height and wind streaks are the player's
+	# (ExtremeWeatherPrefs dust look) and touch no physics channel.
+	ExtremeWeatherPrefs.ensure_loaded()
+	var base_col := ExtremeWeatherPrefs.dust_color
+	var sky_pref := ExtremeWeatherPrefs.dust_sky
+	# A touch darker and warmer as it thickens, never orange.
+	s["haze_color"] = base_col.lerp(base_col * Color(0.93, 0.91, 0.88), sev * 0.6)
+	s["haze_strength"] = clampf(sev * 1.25, 0.0, 1.0)
+	s["sky_tint_strength"] = clampf(sev * 1.3, 0.0, 1.0) * lerpf(0.5, 1.0, sky_pref)
+	var climb := smoothstep(0.25, 0.9, sev) * sky_pref
+	s["horizon_bias"] = lerpf(0.92, 0.05, climb)
+	s["sky_veil"] = smoothstep(0.35, 0.95, sev) * sky_pref
+	s["optical_mult"] = ExtremeWeatherPrefs.dust_thickness
+	# A haboob front stands ~0.5-1.5 km tall (Phoenix 2011 ~1.5 km); ordinary
+	# blowing dust stays in the lowest tens of metres.
+	s["haze_layer_m"] = lerpf(30.0, 350.0, sev) * ExtremeWeatherPrefs.dust_height
+	s["sun_tint"] = Color(1.0, 1.0, 1.0).lerp(Color(1.0, 0.93, 0.84), sev)
 	s["sun_energy_mult"] = lerpf(1.0, 0.16, sev)
-	s["glow_boost"] = sev * 1.2
-	s["exposure_offset"] = -0.20 * sev
+	# Bright and flat: the light the beam loses comes back as diffuse.
+	s["ambient_mult"] = lerpf(1.0, 1.7, sev)
+	s["glow_boost"] = sev * 0.35
+	s["exposure_offset"] = 0.12 * sev
 
 	s["dni_factor"] = beer_lambert(aod)
 	s["ghi_factor"] = lerpf(1.0, 0.42, sev)
@@ -348,8 +486,8 @@ static func _profile_dust_storm(sev: float) -> Dictionary:
 	s["wind_mult"] = lerpf(1.0, 2.0, sev)
 	s["gust_mult"] = lerpf(1.0, 2.2, sev)
 	s["turbulence"] = sev
-	s["particle_kind"] = "dust"
-	s["particle_density"] = clampf(sev * 1.2, 0.0, 1.0)
+	# particle_kind stays "" (no grains, see THE LOOK above); the ground layer
+	# (haze_layer_m) is what marks this as dust for the applier.
 	s["breath_hazard"] = clampf(sev * 1.1, 0.0, 1.0)
 	s["shelter_required"] = sev >= 0.6
 	return s

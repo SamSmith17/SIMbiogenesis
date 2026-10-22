@@ -104,6 +104,11 @@ group_uniforms hazard; // Extreme weather (wildfire smoke, dust) — see Atmosph
 	// along a grazing line of sight than straight up, which is why the horizon
 	// goes opaque orange while the zenith stays comparatively clear.
 	uniform float hazard_horizon_bias : hint_range( 0.0, 1.0, 0.01 ) = 0.65;
+	// The VEIL: the same air drawn over EVERYTHING at the end of sky() — sun,
+	// moon, clouds, stars. A dust whiteout hides the disc; smoke (veil 0) does
+	// not. main.gd darkens the colour with the night (AtmosphereApplier).
+	uniform vec3 hazard_veil_color : source_color = vec3( 0.80, 0.76, 0.69 );
+	uniform float hazard_veil : hint_range( 0.0, 1.0, 0.01 ) = 0.0;
 
 group_uniforms stars;
 	// Stars texture — an EQUIRECTANGULAR (plate carrée) all-sky map in the EQUATORIAL
@@ -1167,4 +1172,13 @@ void sky()
 		COLOR += _col_s * ( _core_s + _glow_s ) * _gate * 0.16;
 	}
 
+	//////////////////// HAZARD VEIL ///////////////////////////////////////////////////////////////
+	// Last, so nothing in the sky survives a whiteout. Slightly heavier toward
+	// the horizon, where the line of sight runs longest through the air.
+	if( hazard_veil > 0.003 )
+	{
+		float _vlo = 1.0 - smoothstep( -0.05, 0.60, EYEDIR.y );
+		float _v = hazard_veil * mix( 0.88, 1.0, _vlo );
+		COLOR = mix( COLOR, hazard_veil_color, clamp( _v, 0.0, 1.0 ) );
+	}
 }

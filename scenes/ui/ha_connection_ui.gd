@@ -19,6 +19,10 @@ var is_connected: bool = false
 var is_authenticated: bool = false
 
 func _ready() -> void:
+	# The root is a 445 x 490 box over the bottom-left of the screen; with the
+	# default STOP filter it swallowed clicks there even with nothing shown.
+	# Its child panels take their own input.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Find the HA client node (should be added to main scene)
 	# UILayer -> main -> HAClient
 	var main_node = get_parent().get_parent()

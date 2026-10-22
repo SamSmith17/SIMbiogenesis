@@ -57,6 +57,28 @@ static func blank() -> Dictionary:
 		"sun_energy_mult": 1.0,
 		"glow_boost": 0.0,
 		"exposure_offset": 0.0,
+		# How much the sky tint favours the horizon over the zenith (sky.gdshader
+		# hazard_horizon_bias). Smoke is a deep layer aloft and takes the whole
+		# dome; blowing dust is a shallow layer on the ground and takes the
+		# horizon while the zenith stays comparatively clear. 0.65 = the shader's
+		# own default.
+		"horizon_bias": 0.65,
+		# Top of a GROUND-HUGGING aerosol layer, metres above the ground (0 = the
+		# aerosol is well mixed / aloft, no layer). main.gd draws it as a
+		# height-capped FogVolume, which is what makes dust read as low and thick.
+		"haze_layer_m": 0.0,
+		# How much of the sky the aerosol VEILS — drawn over the sun, moon,
+		# clouds and stars at the very end of sky.gdshader (hazard_veil). The sky
+		# tint above takes the gradient only, so the sun disc still shows through
+		# smoke; a whiteout dust storm hides everything.
+		"sky_veil": 0.0,
+		# Visual-only thickness multiplier on the fog the applier derives from
+		# visibility_m (the player's "Thickness" taste). visibility_m itself stays
+		# physical, so nothing that reads it as data moves with a graphics slider.
+		"optical_mult": 1.0,
+		# Multiplier on ambient light after the applier's generic haze dimming. A
+		# dust whiteout is a bright, shadowless diffuse light, not a dim one.
+		"ambient_mult": 1.0,
 		# --- dynamics ---
 		"wind_mult": 1.0,
 		"gust_mult": 1.0,
@@ -146,6 +168,12 @@ static func combine(a: Dictionary, b: Dictionary) -> Dictionary:
 		float(a.get("sky_tint_strength", 0.0)), float(b.get("sky_tint_strength", 0.0)))
 	out["haze_color"] = _blend_color(a.get("haze_color"), b.get("haze_color"), sa, sb)
 	out["sun_tint"] = _blend_color(a.get("sun_tint"), b.get("sun_tint"), sa, sb)
+	out["horizon_bias"] = _blend_float(
+		float(a.get("horizon_bias", 0.65)), float(b.get("horizon_bias", 0.65)), sa, sb)
+	out["haze_layer_m"] = maxf(float(a.get("haze_layer_m", 0.0)), float(b.get("haze_layer_m", 0.0)))
+	out["sky_veil"] = maxf(float(a.get("sky_veil", 0.0)), float(b.get("sky_veil", 0.0)))
+	out["optical_mult"] = maxf(float(a.get("optical_mult", 1.0)), float(b.get("optical_mult", 1.0)))
+	out["ambient_mult"] = maxf(float(a.get("ambient_mult", 1.0)), float(b.get("ambient_mult", 1.0)))
 	out["sun_energy_mult"] = float(a.get("sun_energy_mult", 1.0)) * float(b.get("sun_energy_mult", 1.0))
 	out["glow_boost"] = maxf(float(a.get("glow_boost", 0.0)), float(b.get("glow_boost", 0.0)))
 	out["exposure_offset"] = minf(
@@ -187,6 +215,13 @@ static func combine_all(states: Array) -> Dictionary:
 		if s is Dictionary:
 			out = combine(out, s as Dictionary)
 	return out
+
+
+static func _blend_float(a: float, b: float, sa: float, sb: float) -> float:
+	var total := sa + sb
+	if total <= 0.0001:
+		return a
+	return (a * sa + b * sb) / total
 
 
 static func _blend_color(a: Variant, b: Variant, sa: float, sb: float) -> Color:

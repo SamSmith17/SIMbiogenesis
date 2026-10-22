@@ -12,12 +12,18 @@ extends SceneTree
 ## and StreamCurve (zero knobs = the waypoint line exactly; smoothing passes
 ## through every waypoint; meander lengthens the channel by the sine-generated
 ## sinuosity yet starts and ends on the waypoints, keeps confluences joined and
-## leaves culvert spans straight; deterministic; the editor's waypoint map).
+## leaves culvert spans straight; deterministic; the editor's waypoint map),
+## and StreamRunoff (Kirpich / Hack pinned by hand, rain reaching a point over
+## its time of concentration: rise, hold, recede; weighted accumulation down a
+## chain; "dry between storms" dropping the kind's base flow; the pulse's
+## delay and tail), StreamBasins (1-D pits, the 2-D fill against a
+## paraboloid's exact volume, an open hollow, fill-and-soak) and erosion
+## (shear and rate by hand, an eroded bed, erosion saved with the map).
 ##
 ## Run: Godot.exe.exe --headless --path . --script core/water/water_features_selftest.gd
 ## (run --import first after adding a class_name).
 
-const EXPECTED_CHECKS := 83
+const EXPECTED_CHECKS := 124
 
 var _fails := 0
 var _checks := 0
@@ -39,6 +45,8 @@ func _initialize() -> void:
 	_test_stack()
 	_test_osm_cache()
 	_test_curves()
+	_test_runoff()
+	_test_basins_erosion()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a runtime error aborted a test?)"
@@ -497,3 +505,177 @@ func _test_curves() -> void:
 	_check("a stream's own zero meander keeps it straight", (fm2["points"] as PackedVector2Array).size() == 2)
 	layer.update_stream(main_id, {"meander": null, "smooth": null})
 	_check("clearing the stream's own values falls back to the map", not layer.stream(main_id).has("meander"))
+
+
+func _test_runoff() -> void:
+	# Kirpich metric: 1000 m at 1 % -> 0.0195 * 1000^0.77 * 0.01^-0.385 = 23.4 min.
+	_check("kirpich Tc pinned", _near(StreamRunoff.kirpich_tc_h(1000.0, 0.01) * 60.0, 23.45, 0.1),
+		"%.2f min" % (StreamRunoff.kirpich_tc_h(1000.0, 0.01) * 60.0))
+	_check("kirpich: steeper is faster", StreamRunoff.kirpich_tc_h(1000.0, 0.05) < StreamRunoff.kirpich_tc_h(1000.0, 0.01))
+	_check("hack length: 1 sq mi -> 1.4 mi", _near(StreamRunoff.hack_length_m(StreamRunoff.MI2_M2), 1.4 * StreamRunoff.MI_M, 0.5))
+	# Station Tc grows down a channel.
+	var s_arr := PackedFloat32Array([0.0, 500.0, 1000.0, 2000.0])
+	var g := PackedFloat32Array([110.0, 105.0, 100.0, 90.0])
+	var area := PackedFloat32Array([1e4, 1e5, 5e5, 1e6])
+	var tcs := StreamRunoff.station_tc_h(s_arr, g, g, area)
+	_check("Tc grows downstream", tcs[3] > tcs[1] and tcs[1] >= tcs[0])
+	# A constant rain's window mean is that rain, whatever the window.
+	var const_rain := func(_h: float) -> float: return 12.0
+	var pre := StreamRunoff.history_prefix(const_rain, 100.0, 40)
+	_check("window mean of steady rain", _near(StreamRunoff.window_mean(pre, 1.3), 12.0, 1e-3))
+	# Rain that started 30 min ago reaches a 1 h-Tc point at half strength.
+	var started := func(h: float) -> float: return 10.0 if h >= 99.5 else 0.0
+	var pre2 := StreamRunoff.history_prefix(started, 100.0, 40)
+	_check("rising limb: half a Tc in, half the flow", _near(StreamRunoff.window_mean(pre2, 1.0), 5.0, 0.5),
+		"%.2f" % StreamRunoff.window_mean(pre2, 1.0))
+	_check("a short-Tc point is already full", _near(StreamRunoff.window_mean(pre2, 0.25), 10.0, 0.5))
+	# Storm hydrograph: 10 mm/h from 0 to 2 h at a 1 h-Tc point.
+	_check("storm: rising", _near(StreamRunoff.storm_mean(0.0, 2.0, 10.0, 0.5, 1.0), 5.0, 1e-3))
+	_check("storm: full", _near(StreamRunoff.storm_mean(0.0, 2.0, 10.0, 1.5, 1.0), 10.0, 1e-3))
+	_check("storm: receding", _near(StreamRunoff.storm_mean(0.0, 2.0, 10.0, 2.5, 1.0), 5.0, 1e-3))
+	_check("storm: gone", StreamRunoff.storm_mean(0.0, 2.0, 10.0, 3.1, 1.0) == 0.0)
+	_check("storm: not yet", StreamRunoff.storm_mean(5.0, 6.0, 10.0, 4.0, 1.0) == 0.0)
+	# A storm's water reaches a point 2 h down the channel only after 2 h.
+	_check("storm travels: nothing before it arrives",
+		StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 1.9, 2.0, 0.1) == 0.0)
+	_check("storm travels: it arrives",
+		StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 2.4, 2.0, 0.1) > 0.0)
+	# Its volume is the storm's, however far it has travelled (spread or not).
+	var vol := 0.0
+	var t := 0.0
+	while t < 6.0:
+		vol += StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, t, 2.0, 0.1) * 0.01
+		t += 0.01
+	# What ran off is the storm less the ground's first 3 mm.
+	_check("storm travels: volume kept", _near(vol, 60.0 * 0.25 - StreamRunoff.INITIAL_LOSS_MM, 0.3), "%.2f mm" % vol)
+	# The delay: 3 mm at 60 mm/h is 3 min before anything runs off at all.
+	_check("storm pulse: a delay before runoff",
+		StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 0.04, 0.0, 0.1) == 0.0
+		and StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 0.08, 0.0, 0.1) > 0.0)
+	# The tail: after the rain the flow drains away, it does not stop dead.
+	var at_end := StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 0.25, 0.0, 0.1)
+	var later := StreamRunoff.storm_arrival_mean(0.0, 0.25, 60.0, 0.4, 0.0, 0.1)
+	_check("storm pulse: a draining tail", later > 0.05 * at_end and later < at_end, "%.2f -> %.2f" % [at_end, later])
+	# Rises smoothly: halfway up the rise it is below the full rate.
+	_check("storm pulse: rises gradually",
+		StreamRunoff.storm_arrival_mean(0.0, 1.0, 60.0, 0.15, 0.0, 0.2) < 60.0 * 0.7)
+	# Weighted accumulation down a chain 0 -> 1 -> 2 (cell 1 rained on).
+	var recv := PackedInt32Array([1, 2, -1])
+	var order := PackedInt32Array([2, 1, 0])   # ascending: outlet first
+	var acc := StreamRunoff.weighted_accumulate(recv, order, PackedFloat32Array([0.0, 1.0, 0.0]))
+	_check("storm area flows downstream only", acc[0] == 0.0 and acc[1] == 1.0 and acc[2] == 1.0)
+	# The sparse form (only cells downstream of the patch) equals the dense one
+	# bit for bit on a real routed grid: a tilted valley with noise.
+	var valley := func(x: float, z: float) -> float:
+		return absf(x) * 0.08 - z * 0.02 + sin(x * 0.37) * 0.3 + cos(z * 0.29 + x * 0.11) * 0.25
+	var grid := FlowRouting.analyze(valley, 80.0, 5.0, [])
+	var gn := int(grid["n"])
+	var src := PackedInt32Array()
+	var wts := PackedFloat32Array()
+	wts.resize(gn * gn)
+	for r in range(4, 12):
+		for c in range(6, 15):
+			src.append(r * gn + c)
+			wts[r * gn + c] = 1.0
+	var dense := StreamRunoff.weighted_accumulate(grid["recv"], grid["order"], wts)
+	var sparse := StreamRunoff.sparse_accumulate(grid["recv"],
+		StreamRunoff.order_rank(grid["order"]), src)
+	var same := dense.size() == sparse.size()
+	var top := 0.0
+	for i in dense.size():
+		top = maxf(top, dense[i])
+		if dense[i] != sparse[i]:
+			same = false
+	# The one-pass surface mask == mode_at station by station (with the mouth
+	# rule), on a line with a culvert span in the middle.
+	var mf := {"points": PackedVector2Array([Vector2(0, 0), Vector2(40, 0), Vector2(80, 0), Vector2(120, 0)]),
+		"modes": ["surface", "culvert", "surface"]}
+	var ms := PackedFloat32Array()
+	for k in 61:
+		ms.append(float(k) * 2.0)
+	var mmask := StreamNetwork.surface_mask(mf, ms)
+	var mok := true
+	for i in ms.size():
+		var want := StreamNetwork.mode_at(mf, ms[i]) == "surface"
+		if not want and i > 0:
+			want = StreamNetwork.mode_at(mf, maxf(ms[i] - 0.01, 0.0)) == "surface"
+		if (mmask[i] == 1) != want:
+			mok = false
+	_check("surface mask == mode_at per station", mok and mmask[30] == 0 and mmask[0] == 1)
+	_check("storm area: sparse accumulate == dense", same and top > 4.0, "same %s, max %.0f" % [same, top])
+	# Dry between storms: the kind default goes, an authored base flow stays.
+	var layer := WaterFeatureLayer.new()
+	var a_id := layer.add_stream(PackedVector2Array([Vector2(0, 0), Vector2(100, 0)]), {"kind": "stream"})
+	var b_id := layer.add_stream(PackedVector2Array([Vector2(0, 50), Vector2(100, 50)]), {"kind": "stream", "base_lps": 7.0})
+	layer.set_setting("dry_between_storms", true)
+	var by := {}
+	for f in StreamNetwork.resolve([], layer):
+		by[(f as Dictionary)["id"]] = f
+	_check("dry: a default stream carries nothing", float((by[a_id] as Dictionary)["base_lps"]) == 0.0)
+	_check("dry: an authored base flow stays", float((by[b_id] as Dictionary)["base_lps"]) == 7.0)
+
+
+func _test_basins_erosion() -> void:
+	# Shear on a 2 m bed, 2:1 banks, 0.5 m deep, 1 %: R = 1.5 / 4.236 m.
+	var tau := StreamHydraulics.bed_shear_pa(2.0, 2.0, 0.5, 0.01)
+	_check("bed shear by hand", _near(tau, 34.73, 0.1), "%.2f Pa" % tau)
+	_check("erosion rate above critical", _near(StreamHydraulics.erosion_rate_mps(tau),
+		StreamHydraulics.ERODE_KD * (tau - StreamHydraulics.ERODE_TAU_C_PA), 1e-9))
+	_check("a trickle erodes nothing", StreamHydraulics.erosion_rate_mps(
+		StreamHydraulics.bed_shear_pa(2.0, 2.0, 0.02, 0.005)) == 0.0)
+	# An eroded profile sits deeper by the cut.
+	var line := PackedVector2Array([Vector2(0, 0), Vector2(200, 0)])
+	var slope_fn := func(x: float, _z: float) -> float: return 100.0 - 0.01 * x
+	var ero := PackedFloat32Array()
+	for _k in 22:
+		ero.append(0.5)
+	var p0 := ChannelProfile.compute(line, slope_fn, 0.7)
+	var p1 := ChannelProfile.compute(line, slope_fn, 0.7, 6.0, NAN, ChannelProfile.STEP_M,
+		ChannelProfile.SMOOTH_RADIUS_M, 0.0, ero)
+	var b0: PackedFloat32Array = p0["bed"]
+	var b1: PackedFloat32Array = p1["bed"]
+	_check("erosion deepens the carved bed", _near(b0[50] - b1[50], 0.5, 0.05), "%.2f m" % (b0[50] - b1[50]))
+	_check("an eroded bed still runs downhill", ChannelProfile.is_monotone(b1))
+	var lay := WaterFeatureLayer.new()
+	lay.erosion["ws_1"] = PackedFloat32Array([0.0, 0.25, 0.5])
+	var lay2 := WaterFeatureLayer.new()
+	lay2.deserialize(JSON.parse_string(JSON.stringify(lay.serialize())))
+	_check("erosion is saved with the map", _near(lay2.erosion_of("ws_1")[2], 0.5, 1e-3))
+	# 1-D pits: a dip at stations 3-4 under a rim of 4.7.
+	var g := PackedFloat32Array([5.0, 4.9, 4.8, 4.0, 3.9, 4.7, 4.6, 4.5])
+	var carved := PackedByteArray([1, 1, 1, 1, 1, 1, 1, 1])
+	var pits := StreamBasins.find_pits(g, carved)
+	_check("a dip along the channel is a pit", pits.size() == 1)
+	if pits.size() == 1:
+		var pit: Dictionary = pits[0]
+		_check("the pit spills at its rim", _near(float(pit["spill_y"]), 4.7, 1e-4) and int(pit["i_low"]) == 4)
+	_check("a channel running downhill has no pits",
+		StreamBasins.find_pits(PackedFloat32Array([5.0, 4.8, 4.6, 4.4]), carved).is_empty())
+	_check("uncarved stations are not pits",
+		StreamBasins.find_pits(g, PackedByteArray([0, 0, 0, 0, 0, 0, 0, 0])).is_empty())
+	# 2-D fill of a paraboloid bowl z = r^2/100 - 1 to the rim z = 0 (R 10 m):
+	# volume pi R^2 h / 2 = 157 m3.
+	var bowl := func(x: float, z: float) -> float: return (x * x + z * z) / 100.0 - 1.0
+	var fl := StreamBasins.flood(Vector2.ZERO, 0.0, bowl, 0.5, 30.0)
+	_check("bowl fill is closed", not bool(fl["open"]))
+	_check("bowl volume ~ pi R^2 h / 2", _near(float(fl["volume_m3"]), PI * 100.0 * 0.5, 157.0 * 0.05),
+		"%.1f m3" % float(fl["volume_m3"]))
+	_check("bowl level for half the volume is below the rim",
+		StreamBasins.level_for_volume(fl["stage"], float(fl["volume_m3"]) * 0.5) < -0.1)
+	var flat_low := func(_x: float, _z: float) -> float: return -1.0
+	_check("a hollow that never closes is open", bool(StreamBasins.flood(Vector2.ZERO, 0.0, flat_low, 1.0, 20.0)["open"]))
+	# A dam across the outlet keeps a fill from running out along a channel.
+	var trench := func(x: float, z: float) -> float:
+		return -1.0 if absf(z) < 2.0 and x > -10.0 else (x * x + z * z) / 100.0 - 1.0
+	_check("an open trench leaks", bool(StreamBasins.flood(Vector2.ZERO, 0.0, trench, 0.5, 30.0)["open"]))
+	_check("dammed at the spill it is closed", not bool(StreamBasins.flood(Vector2.ZERO, 0.0, trench, 0.5, 30.0,
+		[[Vector2(9.5, -5.0), Vector2(9.5, 5.0)]])["open"]))
+	# Fill and soak: 10 L/s fills a 157 m3 bowl, then it soaks away slowly.
+	var v := 0.0
+	var st: PackedVector3Array = fl["stage"]
+	var cap := float(fl["volume_m3"])
+	for _i in 300:
+		v = StreamBasins.step_volume(v, 10.0, 0.1, st, cap)
+	_check("inflow fills the basin to its capacity, no further", _near(v, cap, 1e-3))
+	var v2 := StreamBasins.step_volume(v, 0.0, 1.0, st, cap)
+	_check("without inflow it soaks away slowly", v2 < v and v2 > v * 0.9)
