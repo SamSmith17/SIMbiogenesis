@@ -4873,6 +4873,18 @@ deferred-emit pattern as the archive signal). Consumers: solar_ui
 `_try_apply_open_meteo_weather` (sets `_forecast_active` flag when in window),
 WindTurbineSource (real 10m wind), HydroSource monthly multipliers.
 Synthetic fallback must always keep working offline.
+**Leap years (fixed 2026-10-21).** A leap-year archive has 8784 hours. Every
+(month, day, hour) → index goes through `WeatherService.hour_index` /
+`day_of_year0(month, day, leap)`; never index a series with
+`_DAYS_BEFORE_MONTH` directly. Reading a 2024 archive with the common table
+put every date after Feb 29 one day early (Bombay Beach's Apr 14 15:00 dust
+storm, 28.5 mph, read Apr 13's 5.5 mph). The layout comes from the array
+(`is_leap_layout`: size ≥ 8784), from `_cy_year` for the partial current
+year, from the start year for the forecast window. Feb 29 on a common-year
+dataset reads Feb 28. Generated years stay 8760, and training archives lose
+Feb 29 (`to_common_year`) before the engines see them. Checks:
+`_test_weather_leap_index` in source_physics_selftest, and on the world
+`tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/weather_leap_probe.gd`.
 UI indicators: 🌤 green-teal = live forecast; 🌎 blue = historical archive;
 📡 = live HA; 🔄 = synthetic.
 **No manual weather picker.** Open-Meteo drives automatically whenever a dataset

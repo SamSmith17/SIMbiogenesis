@@ -29,6 +29,7 @@ func _initialize() -> void:
 	_test_defaults()
 	_test_graph_adapters()
 	_test_weather_service()
+	_test_weather_leap_index()
 	_test_solar_physics()
 	_test_timecode()
 	_test_timeline_view()
@@ -637,6 +638,85 @@ func _test_graph_adapters() -> void:
 	var kw_flat := HydroSource.power_kw_from_graph_specs(flat, 6)   # flat → every month same
 	_check("hydro annual: flat spec == kW × 8760 h", absf(annual_kwh - kw_flat * 8760.0) < 1.0,
 		"annual %.1f vs %.1f" % [annual_kwh, kw_flat * 8760.0])
+
+
+## Leap-year indexing. An Open-Meteo leap-year archive has 8784 hours; it used
+## to be read with the common-year month table, so every date after Feb 29
+## read the PREVIOUS day (Bombay Beach 2024-04-14 15:00 showed Apr 13's wind).
+func _test_weather_leap_index() -> void:
+	var WS = load("res://core/weather_service.gd")
+	_check("leap: 2024 / 2000 leap, 2023 / 1900 not",
+		WS.is_leap_year(2024) and WS.is_leap_year(2000)
+		and not WS.is_leap_year(2023) and not WS.is_leap_year(1900))
+	_check("leap: 8784 is a leap layout, 8760 is not",
+		WS.is_leap_layout(8784) and not WS.is_leap_layout(8760))
+	var idx := float(WS.hour_index(4, 14, 15.0, true))
+	_check("leap: 2024-04-14 15:00 = (31+29+31+13)*24+15",
+		idx == float((31 + 29 + 31 + 13) * 24 + 15), "got %.1f" % idx)
+	_check("leap: common 04-14 15:00 = (31+28+31+13)*24+15",
+		float(WS.hour_index(4, 14, 15.0, false)) == float((31 + 28 + 31 + 13) * 24 + 15))
+	_check("leap: Jan/Feb identical in both layouts",
+		WS.day_of_year0(2, 7, true) == WS.day_of_year0(2, 7, false)
+		and WS.day_of_year0(2, 28, true) == 58)
+	_check("leap: Feb 29 = day 59 in a leap layout, Mar 1 = 60",
+		WS.day_of_year0(2, 29, true) == 59 and WS.day_of_year0(3, 1, true) == 60)
+	_check("leap: Feb 29 on a common layout repeats Feb 28 (not Mar 1)",
+		WS.day_of_year0(2, 29, false) == 58 and WS.day_of_year0(3, 1, false) == 59)
+	_check("leap: Dec 31 last hour = 8783 / 8759",
+		int(WS.hour_index(12, 31, 23.0, true)) == 8783
+		and int(WS.hour_index(12, 31, 23.0, false)) == 8759)
+
+	# End to end through sample(): a canned 8784-hour archive whose value IS the
+	# day of year, so the read says which day it landed on.
+	var ws: Node = WS.new()
+	var leap_vals: Array = []
+	for i in 8784:
+		leap_vals.append(float(i / 24))
+	ws.parse_archive_json(JSON.stringify({"hourly": {"temperature_2m": leap_vals}}),
+		33.36, -115.73, 2024)
+	var d := float(ws.sample("temperature_2m", 4, 14, 15.0))
+	_check("leap: archive read on Apr 14 lands on day 104 (not Apr 13 = 103)",
+		d == 104.0, "got %.1f" % d)
+	_check("leap: archive Feb 29 reads its own day 59",
+		float(ws.sample("temperature_2m", 2, 29, 12.0)) == 59.0)
+	_check("leap: archive Feb 7 unchanged (day 37)",
+		float(ws.sample("temperature_2m", 2, 7, 15.0)) == 37.0)
+	# Monthly sums follow the layout: one unit per hour in March only.
+	var precip: Array = []
+	for i in 8784:
+		precip.append(1.0 if (i >= 60 * 24 and i < 91 * 24) else 0.0)
+	ws.parse_archive_json(JSON.stringify({"hourly": {"precipitation": precip}}),
+		33.36, -115.73, 2024)
+	var mm: Array = ws.monthly_precip_mm()
+	_check("leap: March precip sum is all of March, nothing in Feb / Apr",
+		mm.size() == 12 and float(mm[2]) == 31.0 * 24.0 and float(mm[1]) == 0.0
+		and float(mm[3]) == 0.0, str(mm))
+	# A common-year archive read with a leap-year date keeps Mar 1 as Mar 1.
+	var common_vals: Array = []
+	for i in 8760:
+		common_vals.append(float(i / 24))
+	ws.parse_archive_json(JSON.stringify({"hourly": {"temperature_2m": common_vals}}),
+		33.36, -115.73, 2023)
+	_check("leap: common archive Mar 1 = day 59, Feb 29 = Feb 28 (58)",
+		float(ws.sample("temperature_2m", 3, 1, 12.0)) == 59.0
+		and float(ws.sample("temperature_2m", 2, 29, 12.0)) == 58.0)
+	# Training data loses Feb 29 so it lines up with the common layout.
+	var cut: Dictionary = WS.to_common_year({"t": PackedFloat32Array(leap_vals),
+		"c": PackedFloat32Array(common_vals)})
+	var t: PackedFloat32Array = cut["t"]
+	_check("leap: to_common_year drops Feb 29 (8760 h, Mar 1 = day 60)",
+		t.size() == 8760 and t[59 * 24] == 60.0 and t[58 * 24] == 58.0
+		and (cut["c"] as PackedFloat32Array).size() == 8760)
+	# Forecast window crossing Feb 29 of a leap year: entries are consecutive.
+	var fvals: Array = []
+	for i in 30 * 24:
+		fvals.append(float(i))
+	var ok := bool(ws.parse_forecast_json(JSON.stringify({"hourly": {
+		"time": ["2028-02-20T00:00"], "cloud_cover": fvals}}), 33.36, -115.73))
+	var fi := int(ws._forecast_hour_idx(3, 5, 6.0))
+	_check("leap: forecast window over Feb 29 — Mar 5 06:00 is 14 days in",
+		ok and fi == 14 * 24 + 6, "got %d" % fi)
+	ws.free()
 
 
 ## WeatherService parsing/accessors on canned Open-Meteo JSON (no network),
