@@ -45,6 +45,7 @@ func _initialize() -> void:
 	_test_pallet_rack()
 	_test_pallet_rack_editor()
 	_test_pallet_rack_elements()
+	_test_pallet_rack_parts()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -740,6 +741,198 @@ func _test_pallet_rack_elements() -> void:
 			int(P.bom(back["designs"][0]["spec"])["solar_panels"]) == int(bs["solar_panels"]))
 	DirAccess.remove_absolute(tmp)
 
+
+
+## SketchUp-style nesting: the part tree, stable part ids, per-part overrides.
+func _test_pallet_rack_parts() -> void:
+	var P := PalletRackBuilder
+	var shop: Dictionary = P.design_preset("solar_workshop")["spec"]
+	var tr := P.part_tree(shop)
+	var nodes: Dictionary = tr["nodes"]
+	_check("parts: tree has uprights, decks, the slope, the railing",
+		(tr["roots"] as Array).has(P.FRAMES_ID) and nodes.has("deck:0") and nodes.has("deck:2")
+		and nodes.has("el:e1") and nodes.has("el:e2"), str(tr["roots"]))
+	# A one-column rack: deck level -> bays -> sheets / joists / beams.
+	var bays: Array = nodes["deck:1"]["children"]
+	_check("parts: a deck level opens into its bays", bays.size() == 3
+		and str(bays[0]).begins_with("cell:"), str(bays))
+	var kinds := {}
+	for k in (nodes[str(bays[1])]["children"] as Array):
+		kinds[str(nodes[k]["kind"])] = true
+	_check("parts: a bay opens into sheets, joists and beams",
+		kinds.has("sheet") and kinds.has("joist") and kinds.has("beam"), str(kinds.keys()))
+	var lean_kids: Array = nodes["el:e1"]["children"]
+	var mod_parent := ""
+	for k in lean_kids:
+		if str(nodes[k]["kind"]) == "slope_bay":
+			for kk in (nodes[k]["children"] as Array):
+				if str(nodes[kk]["kind"]) == "module":
+					mod_parent = str(k)
+	_check("parts: a slope opens into bays, a solar bay into modules", not mod_parent.is_empty())
+	_check("parts: every node's parent lists it", _tree_consistent(tr))
+	# Several columns add a column level between the deck and its bays.
+	var court: Dictionary = P.design_preset("courtyard_compound")["spec"]
+	var ct := P.part_tree(court)
+	_check("parts: columns sit between deck and bays",
+		str(ct["nodes"]["deck:0"]["children"][0]).begins_with("strip:")
+		and ct["nodes"].has("wallface:front"))
+
+	# Ids are stable: the same spec rebuilt, and an unrelated edit, keep them.
+	var again := P.part_tree(shop)
+	_check("parts: same ids on a rebuild", (again["nodes"] as Dictionary).keys() == nodes.keys())
+	var walled := shop.duplicate(true)
+	walled["walls"] = {"back": true}
+	var wt := P.part_tree(walled)
+	var kept := true
+	for id in nodes.keys():
+		if not (wt["nodes"] as Dictionary).has(id):
+			kept = false
+	_check("parts: a wall added keeps every other id", kept and wt["nodes"].has("wallface:back"))
+
+	# Nested picking: straight down onto the roof, one level per open group.
+	var o := Vector3(0.2, 40.0, -0.3)
+	var down := Vector3.DOWN
+	var top := P.pick_part(tr, o, down, [])
+	_check("parts: a click at the top picks the roof deck", str(top["node"]) == "deck:2", str(top))
+	var leaf := str(top["leaf"])
+	var path := P.part_path(tr, leaf)
+	_check("parts: the piece under it is a plywood sheet", leaf.begins_with("ply:")
+		and path.size() == 3, str(path))
+	_check("parts: open the deck, the bay is picked",
+		str(P.pick_part(tr, o, down, path.slice(0, 1))["node"]) == str(path[1]))
+	_check("parts: open the bay, the sheet is picked",
+		str(P.pick_part(tr, o, down, path.slice(0, 2))["node"]) == leaf)
+	var miss := P.pick_part(tr, Vector3(60, 40, 0), down, path.slice(0, 1))
+	_check("parts: a ray past the rack picks nothing", str(miss["node"]).is_empty() and not bool(miss["any"]))
+
+	# Overrides: a hidden sheet is one less sheet, still in the tree (so it can
+	# be shown again), no longer pickable; JSON round trip keeps it.
+	var hid := shop.duplicate(true)
+	hid["part_overrides"] = {leaf: {"hidden": true}}
+	_check("parts: hiding a sheet drops one sheet",
+		int(P.bom(hid)["plywood"]) == int(P.bom(shop)["plywood"]) - 1)
+	var ht := P.part_tree(hid)
+	_check("parts: a hidden sheet stays in the tree, flagged", bool(ht["nodes"][leaf]["hidden"]))
+	_check("parts: a hidden sheet is not picked",
+		str(P.pick_part(ht, o, down, path.slice(0, 2))["node"]) != leaf)
+	var rt := P.resolve_spec(JSON.parse_string(JSON.stringify(P.resolve_spec(hid))))
+	_check("parts: overrides survive JSON", bool((rt["part_overrides"] as Dictionary)
+		.get(leaf, {}).get("hidden", false)))
+	_check("parts: junk overrides dropped", (P.resolve_spec({"part_overrides":
+		{"a": {"hidden": false}, "b": {"color": "nope"}, "c": 3}})["part_overrides"] as Dictionary).is_empty())
+	# A colour on the deck level paints everything paintable in it — its wood
+	# (one paint surface) and its steel beams (one painted-steel surface); a
+	# sheet's own colour wins over its group's (a third).
+	var painted := shop.duplicate(true)
+	painted["part_overrides"] = {"deck:2": {"color": "#3d6b8f"}, leaf: {"color": "#c0472d"}}
+	var pn := P.build_node(painted)
+	var sn := P.build_node(shop)
+	var sc0 := (sn.get_node("RackMesh") as MeshInstance3D).mesh.get_surface_count()
+	sn.free()
+	var sc1 := (pn.get_node("RackMesh") as MeshInstance3D).mesh.get_surface_count()
+	_check("parts: group and sheet colours add three surfaces", sc1 == sc0 + 3, "%d vs %d" % [sc1, sc0])
+	_check("parts: a group colour changes no counts",
+		JSON.stringify(P.bom(painted)) == JSON.stringify(P.bom(shop)))
+	pn.free()
+	# A hidden solar module: one module fewer in the geometry AND the summary.
+	var mod_id := ""
+	for kk in (nodes[mod_parent]["children"] as Array):
+		if str(nodes[kk]["kind"]) == "module":
+			mod_id = str(kk)
+			break
+	var one_off := shop.duplicate(true)
+	one_off["part_overrides"] = {mod_id: {"hidden": true}}
+	var b1 := P.bom(one_off)
+	_check("parts: a hidden module is one panel fewer",
+		int(b1["solar_panels"]) == int(P.bom(shop)["solar_panels"]) - 1)
+	_check("parts: the solar summary agrees", int(P.solar_summary(one_off)["count"]) == int(b1["solar_panels"]))
+	# A hidden group hides everything inside it.
+	var no_frames := shop.duplicate(true)
+	no_frames["part_overrides"] = {P.FRAMES_ID: {"hidden": true}}
+	_check("parts: hiding the uprights group hides them all", int(P.bom(no_frames)["uprights"]) == 0)
+
+	# No overrides = the same mesh, recorded or not, with an empty override map.
+	_check("parts: recording changes no geometry", _rack_mesh_sig(P.build_node(shop))
+		== _rack_mesh_sig(P.build_node(shop, "R", {"record": true})))
+	var empty_po := shop.duplicate(true)
+	empty_po["part_overrides"] = {}
+	_check("parts: an empty override map changes no geometry",
+		_rack_mesh_sig(P.build_node(empty_po)) == _rack_mesh_sig(P.build_node(shop)))
+	# An open group fades the rest: the same triangles, moved onto one faded
+	# surface (the last), so nothing appears or disappears.
+	var dn := P.build_node(shop, "R", {"record": true, "dim_ctx": "deck:1"})
+	var dm := (dn.get_node("RackMesh") as MeshInstance3D).mesh
+	var plain := P.build_node(shop)
+	var pm := (plain.get_node("RackMesh") as MeshInstance3D).mesh
+	_check("parts: an open group fades the rest, same triangles",
+		_mesh_vertex_count(dm) == _mesh_vertex_count(pm)
+		and (dm.surface_get_material(dm.get_surface_count() - 1) as StandardMaterial3D).albedo_color.a < 0.5
+		and dn.has_meta("part_tree"))
+	dn.free()
+	plain.free()
+
+	# The modal: open a deck, select a sheet, hide it, undo brings it back.
+	var ModalScript: GDScript = load("res://scenes/ui/pallet_rack_builder_modal.gd")
+	var modal: Control = ModalScript.new()
+	get_root().add_child(modal)
+	modal.call("_ready")
+	modal.call("load_design", "solar_workshop")
+	modal.call("_rebuild_preview")
+	modal.call("_set_ctx", ["deck:2", str(path[1])], [leaf])
+	modal.call("_rebuild_preview")
+	_check("modal: inside the bay, the sheet selected",
+		(modal.get("_ctx") as Array).size() == 2 and (modal.get("_sel_nodes") as Array) == [leaf])
+	var frame: Variant = modal.get("_insp_frame")
+	_check("modal: the parts card shows for a sheet", frame is Control and (frame as Control).visible
+		and (modal.get("_insp_fields") as Dictionary).has("_color"))
+	var ply0 := int(P.bom(modal.get("_spec"))["plywood"])
+	modal.call("_delete_selection")
+	modal.call("_rebuild_preview")
+	_check("modal: Del hides the sheet", int(P.bom(modal.get("_spec"))["plywood"]) == ply0 - 1
+		and bool(((modal.get("_spec") as Dictionary)["part_overrides"] as Dictionary).has(leaf)))
+	_check("modal: the group is still open after the edit", (modal.get("_ctx") as Array).size() == 2)
+	modal.call("_undo")
+	modal.call("_rebuild_preview")
+	_check("modal: undo brings the sheet back", int(P.bom(modal.get("_spec"))["plywood"]) == ply0)
+	modal.call("_set_selection", [str(path[1])])
+	modal.call("_on_parts_color", "#3d6b8f")
+	modal.call("_rebuild_preview")
+	_check("modal: colour on a bay lands on the bay", str(((modal.get("_spec") as Dictionary)
+		["part_overrides"] as Dictionary).get(str(path[1]), {}).get("color", "")) == "#3d6b8f")
+	modal.call("_step_out")
+	_check("modal: Esc steps out one level, the bay selected",
+		(modal.get("_ctx") as Array) == ["deck:2"] and (modal.get("_sel_nodes") as Array) == [str(path[1])])
+	modal.free()
+
+
+func _tree_consistent(tr: Dictionary) -> bool:
+	var nodes: Dictionary = tr["nodes"]
+	for id in nodes.keys():
+		var par := str(nodes[id]["parent"])
+		if par.is_empty():
+			if not (tr["roots"] as Array).has(id):
+				return false
+		elif not nodes.has(par) or not (nodes[par]["children"] as Array).has(id):
+			return false
+	return true
+
+
+func _mesh_vertex_count(m: Mesh) -> int:
+	var n := 0
+	for si in m.get_surface_count():
+		n += (m.surface_get_arrays(si)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	return n
+
+
+func _rack_mesh_sig(node: Node3D) -> String:
+	var hc := HashingContext.new()
+	hc.start(HashingContext.HASH_SHA256)
+	for c in node.get_children():
+		var m := (c as MeshInstance3D).mesh as ArrayMesh
+		for si in m.get_surface_count():
+			hc.update((m.surface_get_arrays(si)[Mesh.ARRAY_VERTEX] as PackedVector3Array).to_byte_array())
+	node.free()
+	return hc.finish().hex_encode()
 
 func _check(label: String, ok: bool, detail: String = "") -> void:
 	_checks += 1

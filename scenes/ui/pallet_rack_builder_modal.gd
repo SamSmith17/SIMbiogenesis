@@ -10,9 +10,17 @@ extends Control
 ## tools: arm one, hover the preview (a cyan ghost shows where it lands), click.
 ## Clicking a placed element selects it; the "Selected" card edits it, drags
 ## slide doors / windows / stairs along their wall, Ctrl+D duplicates, Del
-## removes. A slope bay can be clicked on its own to change just that bay's
-## covering. Whole designs and single elements save to a library that every
+## removes. Whole designs and single elements save to a library that every
 ## rack can reuse (PalletRackBuilder.LIBRARY_PATH).
+##
+## Selection is NESTED, as in SketchUp: a click selects at the open level
+## (at the top: a deck level, the uprights, a wall, an element); a double-click
+## opens what it hits, fading the rest, so its bays and then its single pieces
+## (plywood sheets, joists, beams, solar modules, rail runs) become clickable.
+## Esc, a click outside, or the breadcrumb over the preview steps back out.
+## Shift / Ctrl-click adds to the selection at the same level. The card edits
+## whatever is selected; a piece's colour or hidden state is stored in
+## spec["part_overrides"] under its part id (PalletRackBuilder.part_tree).
 
 const MODAL_NAME := "pallet_rack_builder"
 const REBUILD_DEBOUNCE_S := 0.10
@@ -131,8 +139,26 @@ var _steps_btn: Button = null
 var _highlight_holder: Node3D = null
 ## Pick registry for the currently-built spec (refreshed on every rebuild).
 var _pick_cache: Array = []
+var _comp_index: Dictionary = {}
+## Hover in the tool / step modes (component or slot ids).
 var _hover_group: Array = []
+## The editable components under the selected parts (cell / beam / wall /
+## element ids) — what drags, Del and the element card act on. Derived from
+## _sel_nodes by _derive_selection.
 var _selection: Array = []
+## The part tree of the current build (PalletRackBuilder.part_tree).
+var _tree: Dictionary = {}
+## The open group: part ids from the top down, [] = the whole rack.
+var _ctx: Array = []
+## Selected part ids, all children of the open group.
+var _sel_nodes: Array = []
+var _hover_node := ""
+## The press of a double-click: its release must not select again.
+var _press_double := false
+var _crumb_row: HBoxContainer = null
+var _crumb_hint: Label = null
+var _show_hidden_btn: Button = null
+var _parts_sig := ""
 ## Undo history of override snapshots (cell/beam/wall).
 var _undo_stack: Array = []
 ## When true, LMB drops a step section on the cell slot under the cursor.
@@ -146,6 +172,8 @@ var _manip_active := false
 var _manip_mode := ""          # "deck_move" | "deck_resize" | "beam_move"
 var _manip_targets: Array = []  # component ids being moved together
 var _manip_start: Dictionary = {}  # id -> starting values
+## The parts being dragged (their cells / beams are _manip_targets).
+var _manip_nodes: Array = []
 
 
 func _ready() -> void:
@@ -195,6 +223,9 @@ func open_for_prop(prop_id: String) -> void:
 func _activate() -> void:
 	_framed = false
 	_selection.clear()
+	_sel_nodes.clear()
+	_ctx.clear()
+	_hover_node = ""
 	_hover_group.clear()
 	_undo_stack.clear()
 	_place_step_mode = false
@@ -280,12 +311,16 @@ func _build_ui() -> void:
 	vp_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vp_frame.add_theme_stylebox_override("panel", _card_style())
 	main_row.add_child(vp_frame)
+	var vp_col := VBoxContainer.new()
+	vp_col.add_theme_constant_override("separation", 6)
+	vp_frame.add_child(vp_col)
+	vp_col.add_child(_build_crumb_bar())
 	_vp_container = SubViewportContainer.new()
 	_vp_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_vp_container.stretch = true
 	_vp_container.gui_input.connect(_on_viewport_input)
-	vp_frame.add_child(_vp_container)
+	vp_col.add_child(_vp_container)
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(960, 720)
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
@@ -417,7 +452,7 @@ func _build_topbar() -> Control:
 	row.add_child(_sel_hud)
 
 	var hint := Label.new()
-	hint.text = "RMB orbit  •  LMB select / drag  •  Shift multi  •  Del remove  •  Ctrl+D duplicate"
+	hint.text = "RMB orbit  •  LMB select / drag  •  Double-click open  •  Shift multi  •  Del remove"
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -666,8 +701,15 @@ func _on_viewport_input(e: InputEvent) -> void:
 			elif not _tool.is_empty():
 				if mb.pressed:
 					_tool_click(mb.position, mb.shift_pressed)
+			elif mb.pressed and mb.double_click:
+				_press_double = true
+				_reset_gesture()
+				_double_click(mb.position)
 			elif mb.pressed:
-				_begin_gesture(mb.position, mb.shift_pressed)
+				_press_double = false
+				_begin_gesture(mb.position, mb.shift_pressed or mb.ctrl_pressed)
+			elif _press_double:
+				_press_double = false
 			else:
 				_end_gesture(mb.position)
 	elif e is InputEventMouseMotion:
@@ -711,14 +753,16 @@ func _input(e: InputEvent) -> void:
 		_toggle_step_on_selection()
 		get_viewport().set_input_as_handled()
 	elif ke.keycode == KEY_ESCAPE:
-		# Esc backs out one layer at a time: tool → selection → (modal close).
+		# Esc backs out one layer at a time: tool → open group (one level, the
+		# group it leaves selected) → selection → (modal close).
 		if not _tool.is_empty():
 			_set_tool("")
 			get_viewport().set_input_as_handled()
-		elif not _selection.is_empty():
-			_selection.clear()
-			_refresh_highlight()
-			_update_sel_hud()
+		elif not _ctx.is_empty():
+			_step_out()
+			get_viewport().set_input_as_handled()
+		elif not _sel_nodes.is_empty() or not _selection.is_empty():
+			_set_selection([])
 			get_viewport().set_input_as_handled()
 
 
@@ -783,51 +827,123 @@ func _ray_plane_z(local_pos: Vector2, plane_y: float) -> float:
 
 
 func _comp_by_id(id: String) -> Dictionary:
-	for comp in _pick_cache:
-		if str(comp["id"]) == id:
-			return comp
-	return {}
+	return _comp_index.get(id, {}) as Dictionary
+
+
+# ---------------------------------------------------------------------------
+# Nested selection (the part tree)
+# ---------------------------------------------------------------------------
+
+## The part under the cursor resolved to a child of the open group:
+## {node, leaf, t, any} (PalletRackBuilder.pick_part).
+func _pick_node(local_pos: Vector2) -> Dictionary:
+	var r := _ray(local_pos)
+	if r.is_empty() or _tree.is_empty():
+		return {}
+	return PalletRackBuilder.pick_part(_tree, r[0], r[1], _ctx)
+
+
+func _tree_nodes() -> Dictionary:
+	return _tree.get("nodes", {}) as Dictionary
+
+
+func _node_label(id: String) -> String:
+	var n: Variant = _tree_nodes().get(id)
+	return str((n as Dictionary).get("label", id)) if n is Dictionary else id
+
+
+func _node_has_children(id: String) -> bool:
+	var n: Variant = _tree_nodes().get(id)
+	return n is Dictionary and not ((n as Dictionary).get("children", []) as Array).is_empty()
+
+
+## Every part id under the selected parts (themselves included).
+func _sel_subtree() -> Array:
+	var out: Array = []
+	var seen := {}
+	for n in _sel_nodes:
+		for id in PalletRackBuilder.part_subtree(_tree, str(n)):
+			if not seen.has(id):
+				seen[id] = true
+				out.append(id)
+	return out
+
+
+## The editable components under the selected parts.
+func _derive_selection() -> void:
+	var out: Array = []
+	for id in _sel_subtree():
+		if _comp_index.has(id):
+			out.append(id)
+	_selection = out
+
+
+func _set_selection(nodes: Array) -> void:
+	_sel_nodes = nodes.duplicate()
+	_derive_selection()
+	_refresh_highlight()
+	_update_sel_hud()
+	_refresh_inspector()
+	_refresh_element_list()
+
+
+## Open the group at `path` (part ids from the top, [] = the whole rack) with
+## `select` selected inside it. Rebuilds: the rest of the rack draws faded.
+func _set_ctx(path: Array, select: Array = []) -> void:
+	_ctx = path.duplicate()
+	_hover_node = ""
+	_set_selection(select)
+	_refresh_crumbs()
+	_queue_rebuild(true)
+
+
+## One level out; the group just closed stays selected (one more Esc clears).
+func _step_out() -> void:
+	if _ctx.is_empty():
+		_set_selection([])
+		return
+	var left := str(_ctx[-1])
+	_set_ctx(_ctx.slice(0, _ctx.size() - 1), [left])
+
+
+## Open the group under the cursor; a single piece is just selected.
+func _double_click(local_pos: Vector2) -> void:
+	var hit := _pick_node(local_pos)
+	var node := str(hit.get("node", ""))
+	if node.is_empty():
+		if not _ctx.is_empty():
+			_step_out()
+		return
+	if _node_has_children(node):
+		_set_ctx(_ctx + [node], [])
+	else:
+		_set_selection([node])
 
 
 func _update_hover(local_pos: Vector2) -> void:
 	var comp := _pick_at(local_pos, MANIP_KINDS)
-	var group := _pick_group(comp)
+	var hit := _pick_node(local_pos)
+	var node := str(hit.get("node", ""))
 	# Cursor hint: resize arrows over a deck's far edge, move arrows over a
 	# draggable body, default arrow over nothing.
 	if _vp_container != null:
 		var shape := Control.CURSOR_ARROW
-		if not comp.is_empty():
+		if not node.is_empty():
+			var nk := PalletRackBuilder.part_kind(node)
 			var k := str(comp.get("kind", ""))
-			if (k == "deck" or k == "step") and _near_cell_z_edge(comp, local_pos):
+			if (k == "deck" or k == "step") and ["deck_level", "strip", "cell"].has(nk) \
+					and _near_cell_z_edge(comp, local_pos):
 				shape = Control.CURSOR_BDIAGSIZE
-			elif k == "deck" or k == "step" or k == "beam":
+			elif ["deck_level", "strip", "cell", "beam"].has(nk):
 				shape = Control.CURSOR_MOVE
-			elif k == "element":
-				shape = Control.CURSOR_MOVE if SLIDE_TYPES.has(str(comp.get("etype", ""))) \
-					else Control.CURSOR_POINTING_HAND
-			elif k == "wall_sheet":
+			elif nk == "element" and SLIDE_TYPES.has(str(comp.get("etype", ""))):
+				shape = Control.CURSOR_MOVE
+			else:
 				shape = Control.CURSOR_POINTING_HAND
 		_vp_container.mouse_default_cursor_shape = shape
-	if group != _hover_group:
-		_hover_group = group
+	if node != _hover_node:
+		_hover_node = node
 		_refresh_highlight()
-
-
-## The set of ids a pick resolves to: a whole deck strip (column of cells + its
-## two inner beam lines) for a deck/step, otherwise just the picked id.
-func _pick_group(comp: Dictionary) -> Array:
-	if comp.is_empty():
-		return []
-	var kind := str(comp.get("kind", ""))
-	if kind == "deck" or kind == "step":
-		return _strip_of(comp)
-	if kind == "element":
-		# A slope bay is picked on its own (its covering is per bay); every
-		# other element is one unit, all its runs / boxes together.
-		if str(comp.get("etype", "")) == "lean_to":
-			return [str(comp["id"])]
-		return _element_group(str(comp.get("el_id", "")))
-	return [str(comp["id"])]
 
 
 ## Every pick id that belongs to element `el_id`.
@@ -836,36 +952,6 @@ func _element_group(el_id: String) -> Array:
 	for c in _pick_cache:
 		if str(c.get("kind", "")) == "element" and str(c.get("el_id", "")) == el_id:
 			ids.append(str(c["id"]))
-	return ids
-
-
-## All ids in the deck strip of `comp`: every cell in its (col, level) across
-## bays, plus the two beam lines that bound its column gap on the inside (so the
-## plywood, joists — which follow cell height — and crossbeams move as one unit).
-func _strip_of(comp: Dictionary) -> Array:
-	var col := int(comp.get("col", -1))
-	var lvl := int(comp.get("level", -1))
-	if col < 0 or lvl < 0:
-		return [str(comp["id"])]
-	var cols := int(_spec.get("column_count", 1))
-	var last_row := cols  # rows = cols + 1; row index of the rear frame line
-	var ids: Array = []
-	for c in _pick_cache:
-		var k := str(c.get("kind", ""))
-		if (k == "deck" or k == "step") and int(c.get("col", -1)) == col \
-				and int(c.get("level", -1)) == lvl:
-			ids.append(str(c["id"]))
-		elif k == "beam" and int(c.get("level", -1)) == lvl:
-			var row := int(c.get("row", -1))
-			var side := int(c.get("side", -1))
-			# Inner rails the deck rests on, PLUS the outer rail the edge deck
-			# overhangs (front frame's front beam / rear frame's back beam) so an
-			# edge strip moves together with every beam beneath it.
-			var inner := (row == col and side == 1) or (row == col + 1 and side == 0)
-			var edge_front := col == 0 and row == 0 and side == 0
-			var edge_back := col == cols - 1 and row == last_row and side == 1
-			if inner or edge_front or edge_back:
-				ids.append(str(c["id"]))
 	return ids
 
 
@@ -879,6 +965,7 @@ func _reset_gesture() -> void:
 	_manip_mode = ""
 	_manip_targets = []
 	_manip_start = {}
+	_manip_nodes = []
 
 
 func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
@@ -889,39 +976,54 @@ func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
 	_manip_mode = ""
 	_manip_targets = []
 	_manip_start = {}
-	var comp := _pick_at(local_pos, MANIP_KINDS)
-	if comp.is_empty():
+	_manip_nodes = []
+	var hit := _pick_node(local_pos)
+	var node := str(hit.get("node", ""))
+	if node.is_empty():
 		return
-	var kind := str(comp["kind"])
-	var id := str(comp["id"])
-	if kind == "element":
-		if not SLIDE_TYPES.has(str(comp.get("etype", ""))):
+	var nk := PalletRackBuilder.part_kind(node)
+	var comp := _pick_at(local_pos, MANIP_KINDS)
+	if nk == "element":
+		var el := _element_by_id(node.get_slice(":", 1))
+		if el.is_empty() or not SLIDE_TYPES.has(str(el.get("type", ""))):
 			return  # slopes, railings, courtyards: click to select, edit in the card
-		var el := _element_by_id(str(comp.get("el_id", "")))
 		var along := _ray_face_along(local_pos, str(el.get("face", "front")))
-		if el.is_empty() or is_nan(along):
+		if is_nan(along):
 			return
 		_manip_mode = "el_slide"
+		_manip_nodes = [node]
 		_manip_targets = _element_group(str(el["id"]))
 		_manip_start = {"el_id": str(el["id"]), "at_ft": float(el.get("at_ft", 0.0)),
 			"grab_ft": along - float(el.get("at_ft", 0.0)), "face": str(el.get("face", ""))}
 		return
-	if kind == "beam":
+	# A deck level, a column, a bay or a beam rises and falls as one unit: every
+	# cell and beam inside it. Dragging one of several selected parts drags all.
+	_manip_nodes = _sel_nodes.duplicate() if (_sel_nodes.has(node) and _sel_nodes.size() > 1) \
+		else [node]
+	var cells: Array = []
+	var beams: Array = []
+	for n in _manip_nodes:
+		for id in PalletRackBuilder.part_subtree(_tree, str(n)):
+			if not _comp_index.has(id):
+				continue
+			if str(id).begins_with("cell:"):
+				cells.append(id)
+			elif str(id).begins_with("beam:"):
+				beams.append(id)
+	if cells.is_empty() and beams.is_empty():
+		_manip_nodes = []
+		return  # a sheet, a joist, a wall: click select / delete only, no drag
+	var k := str(comp.get("kind", ""))
+	if (k == "deck" or k == "step") and cells.has(str(comp.get("id", ""))) \
+			and _near_cell_z_edge(comp, local_pos):
+		_manip_mode = "deck_resize"
+		_manip_targets = cells
+	elif cells.is_empty():
 		_manip_mode = "beam_move"
-	elif kind == "deck" or kind == "step":
-		_manip_mode = "deck_resize" if _near_cell_z_edge(comp, local_pos) else "deck_move"
+		_manip_targets = beams
 	else:
-		return  # wall sheets: click select / delete only, no drag
-	# Drag the whole current selection if the pressed item belongs to it; else
-	# the pressed item's natural unit (a deck drags its full strip + beams).
-	if _selection.has(id) and _selection.size() > 1:
-		_manip_targets = _compatible_targets(_manip_mode)
-	elif _manip_mode == "beam_move":
-		_manip_targets = [id]
-	elif _manip_mode == "deck_resize":
-		_manip_targets = _strip_cells_only(comp)
-	else:
-		_manip_targets = _strip_of(comp)
+		_manip_mode = "deck_move"
+		_manip_targets = cells + beams
 	_capture_manip_start()
 
 
@@ -934,36 +1036,25 @@ func _end_gesture(local_pos: Vector2) -> void:
 
 
 func _click_select(local_pos: Vector2) -> void:
-	var comp := _pick_at(local_pos, MANIP_KINDS)
-	var group := _pick_group(comp)
-	if group.is_empty():
-		if not _press_shift:
-			_selection.clear()
-	elif _press_shift:
-		# Toggle the whole group in/out of the selection set together.
-		var present := true
-		for gid in group:
-			if not _selection.has(gid):
-				present = false
-				break
-		for gid in group:
-			if present:
-				_selection.erase(gid)
-			elif not _selection.has(gid):
-				_selection.append(gid)
+	var hit := _pick_node(local_pos)
+	var node := str(hit.get("node", ""))
+	if node.is_empty():
+		# A click outside the open group (on the faded rack or on nothing)
+		# closes it; at the top it clears the selection.
+		if not _ctx.is_empty() and not _press_shift:
+			_step_out()
+		elif not _press_shift:
+			_set_selection([])
+		return
+	if _press_shift:
+		var sel := _sel_nodes.duplicate()
+		if sel.has(node):
+			sel.erase(node)
+		else:
+			sel.append(node)
+		_set_selection(sel)
 	else:
-		_selection = group.duplicate()
-	_refresh_highlight()
-	_update_sel_hud()
-
-
-## Cell ids of the strip only (deck-edge resize changes depth, never beams).
-func _strip_cells_only(comp: Dictionary) -> Array:
-	var out: Array = []
-	for id in _strip_of(comp):
-		if str(id).begins_with("cell:"):
-			out.append(id)
-	return out
+		_set_selection([node])
 
 
 ## True when the click sits in the far-Z grab band of a deck cell (edge resize).
@@ -979,21 +1070,6 @@ func _near_cell_z_edge(comp: Dictionary, local_pos: Vector2) -> bool:
 		return false
 	var band := (z1 - z0) * RESIZE_EDGE_FRAC
 	return zw >= z1 - band
-
-
-func _compatible_targets(mode: String) -> Array:
-	var out: Array = []
-	for id in _selection:
-		if mode == "beam_move":
-			if str(id).begins_with("beam:"):
-				out.append(id)
-		elif mode == "deck_resize":
-			if str(id).begins_with("cell:"):
-				out.append(id)
-		else:  # deck_move: cells (height) AND beams (dy) move together
-			if str(id).begins_with("cell:") or str(id).begins_with("beam:"):
-				out.append(id)
-	return out
 
 
 func _capture_manip_start() -> void:
@@ -1025,7 +1101,8 @@ func _update_manip(local_pos: Vector2) -> void:
 		_manip_active = true
 		_push_undo()  # one undo entry per drag, capturing the pre-drag state
 		# Make the moving unit the live selection so it's obvious what's dragging.
-		_selection = _manip_targets.duplicate()
+		_sel_nodes = _manip_nodes.duplicate()
+		_derive_selection()
 	match _manip_mode:
 		"deck_move", "beam_move":
 			_preview_vertical(-d.y)
@@ -1130,15 +1207,18 @@ func _spec_height_ft_from_start(st: Dictionary) -> float:
 
 func _finalize_manip() -> void:
 	match _manip_mode:
-		"deck_move":
+		"deck_move", "beam_move":
 			for id in _manip_targets:
+				if not str(id).begins_with("cell:"):
+					continue
 				var key := _id_key(id)
 				var cov: Dictionary = _spec.get("cell_overrides", {})
 				var e: Dictionary = cov.get(key, {})
 				if e.has("height_ft"):
 					_set_cell_override(key, "height_ft", _snap_inch_ft(float(e["height_ft"])))
-		"beam_move":
 			for id in _manip_targets:
+				if not str(id).begins_with("beam:"):
+					continue
 				var key := _id_key(id)
 				var bov: Dictionary = _spec.get("beam_overrides", {})
 				var e: Dictionary = bov.get(key, {})
@@ -1198,41 +1278,112 @@ func _set_beam_override(key: String, field: String, value: Variant) -> void:
 	_spec["beam_overrides"] = bov
 
 
+## spec["part_overrides"][id][field] = value; null erases it (and an emptied
+## entry), so clearing an override leaves the spec as if it never had one.
+func _set_part_override(id: String, field: String, value: Variant) -> void:
+	var po: Dictionary = _spec.get("part_overrides", {})
+	var e: Dictionary = (po.get(id, {}) as Dictionary).duplicate()
+	if value == null:
+		e.erase(field)
+	else:
+		e[field] = value
+	if e.is_empty():
+		po.erase(id)
+	else:
+		po[id] = e
+	_spec["part_overrides"] = po
+
+
+## Del on the selected parts, each in the way that fits it: an element goes,
+## a slope bay is left off, a deck (level, column, bay) loses its decking, a
+## beam or wall sheet is taken out the way the rack always did, a whole wall
+## is turned off, and any other piece (or group) is hidden.
 func _delete_selection() -> void:
-	if _selection.is_empty():
+	if _sel_nodes.is_empty() and _selection.is_empty():
 		return
 	_push_undo()
 	var gone_elements := {}
-	for id in _selection:
-		if str(id).begins_with("el:"):
-			var comp := _comp_by_id(id)
-			var el_id := str(comp.get("el_id", ""))
-			if comp.has("seg"):
-				# Del on one slope bay leaves just that bay off.
-				var el := _element_by_id(el_id)
+	var nodes := _sel_nodes.duplicate()
+	if nodes.is_empty():
+		nodes = _selection.duplicate()
+	for n in nodes:
+		var id := str(n)
+		match PalletRackBuilder.part_kind(id):
+			"element":
+				gone_elements[id.get_slice(":", 1)] = true
+			"slope_bay":
+				var el := _element_by_id(id.get_slice(":", 1))
 				if not el.is_empty():
 					var segs: Dictionary = el.get("segments", {})
-					segs[str(int(comp["seg"]))] = "none"
+					segs[id.get_slice(":", 2)] = "none"
 					el["segments"] = segs
-			elif not el_id.is_empty():
-				gone_elements[el_id] = true
-		elif str(id).begins_with("cell:"):
-			_set_cell_override(_id_key(id), "kind", "none")
-		elif str(id).begins_with("beam:"):
-			_set_beam_override(_id_key(id), "deleted", true)
-		elif str(id).begins_with("wall:"):
-			var wdel: Array = _spec.get("wall_sheet_deleted", [])
-			var key := _id_key(id)
-			if not wdel.has(key):
-				wdel.append(key)
-			_spec["wall_sheet_deleted"] = wdel
+			"deck_level", "strip", "cell":
+				for sub in PalletRackBuilder.part_subtree(_tree, id):
+					if str(sub).begins_with("cell:"):
+						_set_cell_override(_id_key(sub), "kind", "none")
+			"beam":
+				_set_beam_override(_id_key(id), "deleted", true)
+			"wall_sheet":
+				var wdel: Array = _spec.get("wall_sheet_deleted", [])
+				if not wdel.has(_id_key(id)):
+					wdel.append(_id_key(id))
+				_spec["wall_sheet_deleted"] = wdel
+			"wall":
+				var face := _id_key(id)
+				(_spec["walls"] as Dictionary)[face] = false
+				if _wall_chks.has(face):
+					(_wall_chks[face] as CheckBox).set_pressed_no_signal(false)
+			_:
+				_set_part_override(id, "hidden", true)
 	if not gone_elements.is_empty():
 		var kept: Array = []
 		for e in (_spec.get("elements", []) as Array):
 			if not gone_elements.has(str((e as Dictionary).get("id", ""))):
 				kept.append(e)
 		_spec["elements"] = kept
+	_sel_nodes.clear()
 	_selection.clear()
+	_queue_rebuild(true)
+
+
+## Hidden parts inside `roots` (part ids; [] = the whole rack): the ones hidden
+## on their own, deleted beams and taken-out wall sheets.
+func _hidden_under(roots: Array) -> Array:
+	var ids: Array = []
+	var nodes := _tree_nodes()
+	if roots.is_empty():
+		ids = nodes.keys()
+	else:
+		for r in roots:
+			ids.append_array(PalletRackBuilder.part_subtree(_tree, str(r)))
+	var out: Array = []
+	for id in ids:
+		if bool((nodes.get(id, {}) as Dictionary).get("hidden", false)):
+			out.append(id)
+	return out
+
+
+## Bring back every hidden piece inside `roots` ([] = the whole rack).
+func _show_hidden(roots: Array) -> void:
+	var hid := _hidden_under(roots)
+	if hid.is_empty():
+		return
+	_push_undo()
+	var bov: Dictionary = _spec.get("beam_overrides", {})
+	var wdel: Array = _spec.get("wall_sheet_deleted", [])
+	for id in hid:
+		var sid := str(id)
+		_set_part_override(sid, "hidden", null)
+		if sid.begins_with("beam:") and bov.has(_id_key(sid)):
+			var e: Dictionary = bov[_id_key(sid)]
+			e.erase("deleted")
+			if e.is_empty():
+				bov.erase(_id_key(sid))
+		elif sid.begins_with("wall:"):
+			wdel.erase(_id_key(sid))
+	_spec["beam_overrides"] = bov
+	_spec["wall_sheet_deleted"] = wdel
+	_flash("Showing %s again." % UiText.count(hid.size(), "hidden part"))
 	_queue_rebuild(true)
 
 
@@ -1259,6 +1410,7 @@ func _undo() -> void:
 	var snap: Dictionary = _undo_stack.pop_back()
 	_spec = snap
 	_selection.clear()
+	_sel_nodes.clear()
 	_hover_group.clear()
 	_sync_controls()
 	_update_undo_btn()
@@ -1303,6 +1455,11 @@ func _set_tool(tool: String, element: Dictionary = {}) -> void:
 	_sync_tool_buttons()
 	if not _tool.is_empty():
 		_selection.clear()
+		_sel_nodes.clear()
+		if not _ctx.is_empty():
+			_ctx.clear()
+			_refresh_crumbs()
+			_queue_rebuild(true)
 	_hover_group.clear()
 	if _vp_container != null:
 		_vp_container.mouse_default_cursor_shape = Control.CURSOR_CROSS if not _tool.is_empty() \
@@ -1346,21 +1503,40 @@ func _refresh_highlight(step_ghost: bool = false) -> void:
 		return
 	for c in _highlight_holder.get_children():
 		c.queue_free()
-	for id in _selection:
-		var comp := _comp_by_id(id)
-		if not comp.is_empty():
-			_add_comp_highlight(comp, Color(1.0, 0.6, 0.1, 0.38))
+	for n in _sel_nodes:
+		_add_node_highlight(str(n), Color(1.0, 0.6, 0.1, 0.38))
 	# Where the armed tool would put its element.
 	for gc in _ghost_comps:
 		_add_comp_highlight(gc, Color(0.2, 0.75, 1.0, 0.42))
 	# Cyan ghost while dropping a step; green for a normal hover.
-	var hover_col := Color(0.2, 0.75, 1.0, 0.4) if step_ghost else Color(0.2, 1.0, 0.35, 0.28)
-	for id in _hover_group:
-		if _selection.has(id):
-			continue
-		var hc := _slot_or_comp_by_id(id) if step_ghost else _comp_by_id(id)
-		if not hc.is_empty():
-			_add_comp_highlight(hc, hover_col)
+	if step_ghost or not _tool.is_empty():
+		var hover_col := Color(0.2, 0.75, 1.0, 0.4) if step_ghost else Color(0.2, 1.0, 0.35, 0.28)
+		for id in _hover_group:
+			var hc := _slot_or_comp_by_id(id) if step_ghost else _comp_by_id(id)
+			if not hc.is_empty():
+				_add_comp_highlight(hc, hover_col)
+	elif not _hover_node.is_empty() and not _sel_nodes.has(_hover_node):
+		_add_node_highlight(_hover_node, Color(0.2, 1.0, 0.35, 0.28))
+
+
+## A part's highlight: a single piece shows its own oriented box(es); a group
+## its bounding box, fainter, so a whole deck does not wash the view out.
+func _add_node_highlight(id: String, color: Color) -> void:
+	var boxes := PalletRackBuilder.part_boxes(_tree, id)
+	if boxes.is_empty():
+		return
+	if not _node_has_children(id) and boxes.size() == 1 and (boxes[0] as Dictionary).has("obbs"):
+		for ob in (boxes[0]["obbs"] as Array):
+			var xf: Transform3D = (ob[0] as Transform3D).affine_inverse()
+			var half: Vector3 = ob[1]
+			_add_comp_highlight({"obb_xf": xf, "obb_half": half, "aabb": AABB()}, color)
+		return
+	var bb: AABB = boxes[0]["aabb"]
+	for b in boxes:
+		bb = bb.merge(b["aabb"])
+	if _node_has_children(id):
+		color.a *= 0.6
+	_add_highlight_box(bb, color)
 
 
 ## A component's highlight: its oriented box when it has one (a slope bay).
@@ -1410,37 +1586,26 @@ func _update_sel_hud() -> void:
 		_sel_hud.text = "%s: %s  (Shift-click to place several • Esc to stop)" % [
 			_tool_label(), _tool_prompt()]
 		return
-	if _selection.is_empty():
-		_sel_hud.text = ""
+	if _sel_nodes.is_empty():
+		_sel_hud.text = "" if _ctx.is_empty() else \
+			"Inside %s — click a part  (Esc or click outside to close)" % _node_label(str(_ctx[-1]))
 		return
 	var el := _element_by_id(_selected_element_id())
-	if not el.is_empty():
+	if not el.is_empty() and _sel_nodes.size() == 1:
 		_sel_hud.text = "Selected: %s  (drag to slide • Del remove • Ctrl+D duplicate)" % \
 			PalletRackBuilder.element_label(el, _spec) if SLIDE_TYPES.has(str(el.get("type", ""))) \
 			else "Selected: %s  (Del remove • Ctrl+D duplicate)" % PalletRackBuilder.element_label(el, _spec)
+		if _node_has_children(str(_sel_nodes[0])):
+			_sel_hud.text = _sel_hud.text.trim_suffix(")") + " • double-click to open)"
 		return
-	# Count distinct deck strips (a strip is many cell ids) so the readout is
-	# meaningful rather than "12 deck".
-	var strips := {}
-	var n_beam := 0
-	var n_wall := 0
-	for id in _selection:
-		if str(id).begins_with("cell:"):
-			var parts_cell := _id_key(id).split(",")
-			if parts_cell.size() == 3:
-				strips["%s,%s" % [parts_cell[1], parts_cell[2]]] = true
-		elif str(id).begins_with("beam:"):
-			n_beam += 1
-		elif str(id).begins_with("wall:"):
-			n_wall += 1
-	var parts: Array = []
-	if strips.size() > 0:
-		parts.append("%d deck%s" % [strips.size(), "" if strips.size() == 1 else "s"])
-	if n_beam > 0:
-		parts.append("%d beam" % n_beam)
-	if n_wall > 0:
-		parts.append("%d sheet" % n_wall)
-	_sel_hud.text = "Selected: " + ", ".join(parts) + "  (Del remove • Ctrl+Z undo)"
+	var what := _node_label(str(_sel_nodes[0])) if _sel_nodes.size() == 1 \
+		else UiText.count(_sel_nodes.size(), "part")
+	var tips: Array = []
+	if _sel_nodes.size() == 1 and _node_has_children(str(_sel_nodes[0])):
+		tips.append("double-click to open")
+	tips.append("Shift-click to add")
+	tips.append("Del remove")
+	_sel_hud.text = "Selected: %s  (%s)" % [what, " • ".join(tips)]
 
 
 func _build_studio_world() -> void:
@@ -1604,6 +1769,7 @@ func _read_spec() -> Dictionary:
 		"wall_top_ft": (float(_wall_top_spin.value) if _wall_top_spin.value > 0.0 else -1.0) \
 			if _wall_top_spin else -1.0,
 		"elements": (_spec.get("elements", []) as Array),
+		"part_overrides": (_spec.get("part_overrides", {}) as Dictionary),
 	})
 
 
@@ -1626,8 +1792,20 @@ func _rebuild_preview(light: bool = false) -> void:
 		c.free()
 	if not light:
 		_spec = _read_spec()
-	var node := PalletRackBuilder.build_node(_spec)
+	var node := PalletRackBuilder.build_node(_spec, "PalletRack",
+		{"record": true, "dim_ctx": str(_ctx[-1]) if not _ctx.is_empty() else ""})
 	_holder.add_child(node)
+	_tree = node.get_meta("part_tree", {}) as Dictionary
+	# An open group the edit took away (fewer columns, a removed element):
+	# close back to the nearest group that still exists, and draw again.
+	var nodes := _tree_nodes()
+	var ctx_gone := false
+	while not _ctx.is_empty() and not nodes.has(str(_ctx[-1])):
+		_ctx.pop_back()
+		ctx_gone = true
+	if ctx_gone:
+		_refresh_crumbs()
+		_queue_rebuild(true)
 	# Frame the structure once (on open); keep the user's orbit/zoom afterwards.
 	if not _framed:
 		var fp := PalletRackBuilder.footprint_xz(_spec)
@@ -1640,28 +1818,33 @@ func _rebuild_preview(light: bool = false) -> void:
 		_update_bom(node)
 	# Refresh the pick registry + prune selection/hover to still-present ids.
 	_pick_cache = PalletRackBuilder.pick_components(_spec)
-	var live := {}
+	_comp_index = {}
 	for comp in _pick_cache:
-		live[str(comp["id"])] = true
-	var kept: Array = []
-	for id in _selection:
-		if live.has(id):
-			kept.append(id)
-	_selection = kept
+		_comp_index[str(comp["id"])] = comp
+	var kept_nodes: Array = []
+	for id in _sel_nodes:
+		if nodes.has(str(id)):
+			kept_nodes.append(id)
+	_sel_nodes = kept_nodes
+	if not nodes.has(_hover_node):
+		_hover_node = ""
+	_derive_selection()
 	var kept_hover: Array = []
 	for id in _hover_group:
-		if live.has(id):
+		if _comp_index.has(id):
 			kept_hover.append(id)
 	_hover_group = kept_hover
 	if not _pending_select.is_empty() and not light:
-		_selection = _element_group(_pending_select)
+		var pend := _pending_select
 		_pending_select = ""
+		_select_element(pend)
 	_refresh_highlight()
 	if not light:
 		_update_undo_btn()
 		_update_sel_hud()
 		_refresh_element_list()
 		_refresh_inspector()
+		_refresh_crumbs()
 
 
 func _update_bom(node: Node3D) -> void:
@@ -1933,6 +2116,9 @@ func load_design(id: String) -> bool:
 	_push_undo()
 	_spec = PalletRackBuilder.resolve_spec(spec)
 	_selection.clear()
+	_sel_nodes.clear()
+	_ctx.clear()
+	_refresh_crumbs()
 	_hover_group.clear()
 	_sync_controls()
 	_framed = false
@@ -2165,22 +2351,22 @@ func _element_by_id(id: String) -> Dictionary:
 	return {}
 
 
+## The element the element card edits: a selected element, or the element of
+## a selected slope bay. Pieces inside an element (a module, a rail run) get
+## the parts card instead.
 func _selected_element_id() -> String:
-	for id in _selection:
-		if str(id).begins_with("el:"):
-			var comp := _comp_by_id(id)
-			if not comp.is_empty():
-				return str(comp.get("el_id", ""))
+	for id in _sel_nodes:
+		var k := PalletRackBuilder.part_kind(str(id))
+		if k == "element" or k == "slope_bay":
 			return str(id).get_slice(":", 1)
 	return ""
 
 
 ## The slope bay picked on its own (-1 = the whole element).
 func _selected_seg() -> int:
-	if _selection.size() != 1:
+	if _sel_nodes.size() != 1 or PalletRackBuilder.part_kind(str(_sel_nodes[0])) != "slope_bay":
 		return -1
-	var comp := _comp_by_id(str(_selection[0]))
-	return int(comp.get("seg", -1))
+	return int(str(_sel_nodes[0]).get_slice(":", 2))
 
 
 func select_element(id: String) -> void:
@@ -2188,11 +2374,12 @@ func select_element(id: String) -> void:
 
 
 func _select_element(id: String) -> void:
-	_selection = _element_group(id)
-	_refresh_highlight()
-	_update_sel_hud()
-	_refresh_inspector()
-	_refresh_element_list()
+	# Elements sit at the top of the rack: close any open group first.
+	if not _ctx.is_empty():
+		_ctx.clear()
+		_refresh_crumbs()
+		_queue_rebuild(true)
+	_set_selection(["el:" + id])
 
 
 func _remove_element(id: String) -> void:
@@ -2203,6 +2390,7 @@ func _remove_element(id: String) -> void:
 			kept.append(e)
 	_spec["elements"] = kept
 	_selection.clear()
+	_sel_nodes.clear()
 	_queue_rebuild(true)
 
 
@@ -2294,8 +2482,13 @@ func _refresh_inspector() -> void:
 	var el := _element_by_id(el_id)
 	if el.is_empty():
 		_insp_el_id = ""
-		_insp_frame.visible = false
+		if _sel_nodes.is_empty() or _tree.is_empty():
+			_parts_sig = ""
+			_insp_frame.visible = false
+		else:
+			_refresh_parts_card()
 		return
+	_parts_sig = ""
 	if el_id == _insp_el_id and seg == _insp_seg \
 			and str(el.get("type", "")) == str(_insp_fields.get("_type", "")):
 		_sync_inspector_values(el)
@@ -2315,11 +2508,7 @@ func _refresh_inspector() -> void:
 	title.add_theme_font_size_override("font_size", 13)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
-	head.add_child(IconButton.close(func() -> void:
-		_selection.clear()
-		_refresh_highlight()
-		_update_sel_hud()
-		_refresh_inspector(), "Deselect (Esc)"))
+	head.add_child(IconButton.close(func() -> void: _set_selection([]), "Deselect (Esc)"))
 	_insp_box.add_child(head)
 	if seg >= 0:
 		var segs: Dictionary = el.get("segments", {})
@@ -2559,4 +2748,302 @@ func _sync_inspector_values(el: Dictionary) -> void:
 				if str(opt.get_item_metadata(i)) == str(el.get(key, "")):
 					opt.select(i)
 					break
+	_insp_suppress = false
+
+
+# ---------------------------------------------------------------------------
+# Breadcrumb (the open group) + the parts card
+# ---------------------------------------------------------------------------
+
+func _build_crumb_bar() -> Control:
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 6)
+	_crumb_row = HBoxContainer.new()
+	_crumb_row.add_theme_constant_override("separation", 2)
+	_crumb_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(_crumb_row)
+	_crumb_hint = Label.new()
+	_crumb_hint.add_theme_color_override("font_color", C_TEXT_S)
+	_crumb_hint.add_theme_font_size_override("font_size", 11)
+	_crumb_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bar.add_child(_crumb_hint)
+	_show_hidden_btn = _small_button("Show hidden", "Bring back the parts hidden in here",
+		func() -> void: _show_hidden(_ctx.slice(_ctx.size() - 1) if not _ctx.is_empty() else []))
+	_show_hidden_btn.visible = false
+	bar.add_child(_show_hidden_btn)
+	_refresh_crumbs()
+	return bar
+
+
+## Rack › Level 2 deck › Bay 2 — each crumb closes back to that level.
+func _refresh_crumbs() -> void:
+	if _crumb_row == null:
+		return
+	for c in _crumb_row.get_children():
+		_crumb_row.remove_child(c)
+		c.queue_free()
+	var path: Array = [""]
+	path.append_array(_ctx)
+	for i in path.size():
+		if i > 0:
+			var sep := Label.new()
+			sep.text = "›"
+			sep.add_theme_color_override("font_color", C_TEXT_S)
+			_crumb_row.add_child(sep)
+		var id := str(path[i])
+		var b := Button.new()
+		b.text = "Rack" if id.is_empty() else _node_label(id)
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_font_size_override("font_size", 12)
+		var here := i == path.size() - 1
+		b.add_theme_color_override("font_color", C_PRIMARY if here else C_TEXT)
+		b.tooltip_text = "You are here" if here else "Close back to %s" % b.text
+		var depth := i
+		b.pressed.connect(func() -> void:
+			if depth < _ctx.size():
+				_set_ctx(_ctx.slice(0, depth), [_ctx[depth]]))
+		_crumb_row.add_child(b)
+	if _crumb_hint != null:
+		_crumb_hint.text = "Double-click a part to open it" if _ctx.is_empty() \
+			else "Esc or click outside to close"
+	if _show_hidden_btn != null:
+		var n := _hidden_under(_ctx.slice(_ctx.size() - 1) if not _ctx.is_empty() else []).size()
+		_show_hidden_btn.visible = n > 0
+		_show_hidden_btn.text = "Show %s" % UiText.count(n, "hidden part")
+
+
+## Default colours the card's swatch starts from (the builder's materials).
+func _kind_color(kind: String) -> Color:
+	match kind:
+		"beam":
+			return Color(0.86, 0.36, 0.13)
+		"upright":
+			return Color(0.18, 0.45, 0.50)
+		"joist", "tread", "rail_run", "slope_frame":
+			return Color(0.72, 0.55, 0.34)
+	return Color(0.80, 0.66, 0.42)
+
+
+## Can a colour go on part `id`? Glazing and modules have none of their own.
+func _paintable(id: String) -> bool:
+	var k := PalletRackBuilder.part_kind(id)
+	if not PalletRackBuilder.PAINTABLE_KINDS.has(k):
+		return false
+	if k == "slope_sheet":
+		var el := _element_by_id(id.get_slice(":", 1))
+		var segs: Dictionary = el.get("segments", {})
+		return str(segs.get(id.get_slice(":", 2), el.get("surface", ""))) == "plywood"
+	return true
+
+
+func _refresh_parts_card() -> void:
+	var sub := _sel_subtree()
+	var cells: Array = []
+	var beams: Array = []
+	var paint_ids: Array = []
+	for id in sub:
+		var sid := str(id)
+		if sid.begins_with("cell:"):
+			cells.append(sid)
+		elif sid.begins_with("beam:") and _comp_index.has(sid):
+			beams.append(sid)
+		if _paintable(sid):
+			paint_ids.append(sid)
+	var hidden_n := _hidden_under(_sel_nodes).size()
+	var sig := ",".join(_sel_nodes) + "#%d#%d#%d" % [cells.size(), paint_ids.size(), hidden_n]
+	if sig == _parts_sig and _insp_frame.visible:
+		_sync_parts_values(cells, beams, paint_ids)
+		return
+	_parts_sig = sig
+	_insp_el_id = ""
+	for c in _insp_box.get_children():
+		_insp_box.remove_child(c)
+		c.queue_free()
+	_insp_fields = {"_type": "_parts"}
+	_insp_frame.visible = true
+	var one := _sel_nodes.size() == 1
+	var first := str(_sel_nodes[0])
+	var head := HBoxContainer.new()
+	var title := Label.new()
+	title.text = "Selected · " + (_node_label(first) if one else UiText.count(_sel_nodes.size(), "part"))
+	title.add_theme_color_override("font_color", C_PRIMARY)
+	title.add_theme_font_size_override("font_size", 13)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.clip_text = true
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	head.add_child(title)
+	head.add_child(IconButton.close(func() -> void: _set_selection([]), "Deselect (Esc)"))
+	_insp_box.add_child(head)
+	var where: Array = ["Rack"]
+	for id in PalletRackBuilder.part_path(_tree, first).slice(0, -1):
+		where.append(_node_label(str(id)))
+	_insp_box.add_child(_small_label(" › ".join(where)))
+	if not cells.is_empty():
+		var kinds := ["deck", "step", "none"]
+		var opt := _insp_option(kinds, _cell_kind(cells[0]), ["Deck", "Steps", "No deck"])
+		opt.item_selected.connect(func(i: int) -> void:
+			_on_cells_field("kind", str(opt.get_item_metadata(i))))
+		_insp_row("Decking", opt)
+		_insp_fields["_kind"] = opt
+		var sp := SpinBox.new()
+		sp.add_theme_font_size_override("font_size", 11)
+		sp.min_value = 0.25
+		sp.max_value = maxf(float(_spec.get("upright_height_ft", 16)) - 0.25, 0.25)
+		sp.step = 1.0 / 12.0
+		sp.suffix = "ft"
+		sp.value = _cell_height_ft(cells[0])
+		sp.value_changed.connect(func(v: float) -> void: _on_cells_field("height_ft", v))
+		_insp_row("Deck height", sp)
+		_insp_fields["_height"] = sp
+	elif not beams.is_empty():
+		var bsp := SpinBox.new()
+		bsp.add_theme_font_size_override("font_size", 11)
+		bsp.min_value = -24.0
+		bsp.max_value = 24.0
+		bsp.step = 1.0
+		bsp.suffix = "in"
+		bsp.value = float((_comp_by_id(beams[0])).get("dy_in", 0.0))
+		bsp.value_changed.connect(func(v: float) -> void: _on_beams_offset(beams, v))
+		_insp_row("Beam offset", bsp)
+		_insp_fields["_beam_dy"] = bsp
+	if not paint_ids.is_empty():
+		var crow := HBoxContainer.new()
+		crow.add_theme_constant_override("separation", 4)
+		var cpb := ColorPickerButton.new()
+		cpb.edit_alpha = false
+		cpb.custom_minimum_size = Vector2(60, 22)
+		cpb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cpb.color = _current_color(first, paint_ids)
+		cpb.color_changed.connect(func(c: Color) -> void: _on_parts_color("#" + c.to_html(false)))
+		crow.add_child(cpb)
+		crow.add_child(_small_button("Default", "Back to the material's own colour",
+			func() -> void: _on_parts_color("")))
+		_insp_row("Colour", crow)
+		_insp_fields["_color"] = cpb
+	if hidden_n > 0:
+		_insp_box.add_child(_small_button("Show %s inside" % UiText.count(hidden_n, "hidden part"),
+			"Bring back what is hidden inside the selection", func() -> void: _show_hidden(_sel_nodes)))
+	var brow := HBoxContainer.new()
+	brow.add_theme_constant_override("separation", 4)
+	if one and _node_has_children(first):
+		brow.add_child(_small_button("Open", "Open it to select its parts (double-click)",
+			func() -> void: _set_ctx(_ctx + [first], [])))
+	var del := _small_button(_delete_label(), "Del", _delete_selection)
+	del.add_theme_color_override("font_color", Color(0.94, 0.45, 0.45))
+	brow.add_child(del)
+	_insp_box.add_child(brow)
+
+
+func _delete_label() -> String:
+	var kinds := {}
+	for n in _sel_nodes:
+		kinds[PalletRackBuilder.part_kind(str(n))] = true
+	if kinds.size() == 1:
+		match str(kinds.keys()[0]):
+			"deck_level", "strip", "cell":
+				return "Remove the decking"
+			"wall":
+				return "Turn the wall off"
+	return "Hide"
+
+
+func _cell_kind(cell_id: String) -> String:
+	var comp := _comp_by_id(cell_id)
+	if not comp.is_empty():
+		return str(comp.get("kind", "deck"))
+	var cov: Dictionary = (_spec.get("cell_overrides", {}) as Dictionary).get(_id_key(cell_id), {})
+	return str(cov.get("kind", "none"))
+
+
+func _cell_height_ft(cell_id: String) -> float:
+	var comp := _comp_by_id(cell_id)
+	if not comp.is_empty():
+		return float(comp.get("height_ft", 0.0))
+	var cov: Dictionary = (_spec.get("cell_overrides", {}) as Dictionary).get(_id_key(cell_id), {})
+	if cov.has("height_ft"):
+		return float(cov["height_ft"])
+	var li := int(_id_key(cell_id).get_slice(",", 2))
+	var lv := PalletRackBuilder._levels(_spec)
+	return float(lv[mini(li, lv.size() - 1)]["y"]) / PalletRackBuilder.FT if not lv.is_empty() else 0.5
+
+
+func _current_color(first: String, paint_ids: Array) -> Color:
+	var ov := PalletRackBuilder.merged_override(_spec, PalletRackBuilder.part_path(_tree, first))
+	# The swatch shows the surface the group is mostly made of: its sheets
+	# before its beams.
+	var probe := first if _paintable(first) else str(paint_ids[0])
+	if not _paintable(first):
+		for id in paint_ids:
+			if ["sheet", "wall_sheet", "slope_sheet"].has(PalletRackBuilder.part_kind(str(id))):
+				probe = str(id)
+				break
+	if not ov.has("color"):
+		ov = PalletRackBuilder.merged_override(_spec, PalletRackBuilder.part_path(_tree, probe))
+	var hex := str(ov.get("color", ""))
+	return Color.html(hex) if Color.html_is_valid(hex) else _kind_color(PalletRackBuilder.part_kind(probe))
+
+
+## One undo step per burst of edits (a spin box held down, a colour dragged).
+func _push_undo_burst() -> void:
+	var now := Time.get_ticks_msec()
+	if now - _last_field_undo_ms > 800:
+		_push_undo()
+	_last_field_undo_ms = now
+
+
+func _on_cells_field(field: String, value: Variant) -> void:
+	if _insp_suppress:
+		return
+	_push_undo_burst()
+	for id in _sel_subtree():
+		if str(id).begins_with("cell:"):
+			if field == "height_ft":
+				_set_cell_override(_id_key(id), field, _snap_inch_ft(float(value)))
+			else:
+				_set_cell_override(_id_key(id), field, value)
+	_queue_rebuild(true)
+
+
+func _on_beams_offset(beams: Array, dy_in: float) -> void:
+	if _insp_suppress:
+		return
+	_push_undo_burst()
+	for id in beams:
+		_set_beam_override(_id_key(id), "dy_in", roundf(dy_in))
+	_queue_rebuild(true)
+
+
+## Paint the selection ("" = back to the default). A group's colour covers
+## everything in it, so the colours set on its pieces before are cleared.
+func _on_parts_color(hex: String) -> void:
+	if _insp_suppress:
+		return
+	_push_undo_burst()
+	for n in _sel_nodes:
+		for id in PalletRackBuilder.part_subtree(_tree, str(n)):
+			_set_part_override(str(id), "color", null)
+		if not hex.is_empty():
+			_set_part_override(str(n), "color", hex)
+	_queue_rebuild(true)
+
+
+func _sync_parts_values(cells: Array, beams: Array, paint_ids: Array) -> void:
+	_insp_suppress = true
+	var hs: Variant = _insp_fields.get("_height")
+	if hs is SpinBox and is_instance_valid(hs) and not cells.is_empty():
+		(hs as SpinBox).set_value_no_signal(_cell_height_ft(cells[0]))
+	var ko: Variant = _insp_fields.get("_kind")
+	if ko is OptionButton and is_instance_valid(ko) and not cells.is_empty():
+		var opt := ko as OptionButton
+		for i in opt.item_count:
+			if str(opt.get_item_metadata(i)) == _cell_kind(cells[0]):
+				opt.select(i)
+	var bd: Variant = _insp_fields.get("_beam_dy")
+	if bd is SpinBox and is_instance_valid(bd) and not beams.is_empty():
+		(bd as SpinBox).set_value_no_signal(float(_comp_by_id(beams[0]).get("dy_in", 0.0)))
+	var cp: Variant = _insp_fields.get("_color")
+	if cp is ColorPickerButton and is_instance_valid(cp) and not paint_ids.is_empty() \
+			and not (cp as ColorPickerButton).get_popup().visible:
+		(cp as ColorPickerButton).color = _current_color(str(_sel_nodes[0]), paint_ids)
 	_insp_suppress = false

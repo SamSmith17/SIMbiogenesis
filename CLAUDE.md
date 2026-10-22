@@ -770,6 +770,9 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/terrain_extents_
 # built + shot, the Door / Window / Stairs / Railing tools clicked through the
 # modal's own click path, a slope bay picked on its own, close-ups:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_elements_shots.gd -Label <dir>
+# Nested selection with REAL clicks: rack → deck → bay → sheet, slope →
+# bay → module, Esc / click outside / breadcrumb, colour, hide, show hidden:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nested_check.gd -Label <dir>
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -2582,6 +2585,43 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
   (`user://pallet_rack_library.json`, designs and element presets).
 - Known, not from this work: plywood walls in the studio show bright
   diagonal streaks (seen on a bare wall too).
+- **Nested selection (2026-10-21, SketchUp-style).** Emission files every
+  piece it draws under a PART id with a path of groups
+  (`_Geom.begin(path, labels)`), so the tree and the mesh can never drift:
+  - Top level: `deck:<li>` (a level), `frames` (uprights), `wallface:<face>`,
+    `el:<id>`. Then `strip:<c>,<li>` (only with more than one column),
+    `cell:<b>,<c>,<li>`, then the pieces: `ply:<cell>:<ix>,<iz>`,
+    `joist:<cell>:<i>`, `tread:<cell>:<k>`, `beam:<li>,<r>,<b>,<side>` (in
+    the cell it carries, `_beam_cell`), `post:<r>,<bx>`, `wall:<face>,<ia>,<iv>`,
+    slope `el:<id>:<bay>` → `:m<r>,<c>` modules / `:s<ia>,<si>` sheets /
+    `:purlins`, plus `el:<id>:frame` and `:ends`; railing `el:<id>:r<k>`.
+    Ids are grid indices: stable across rebuilds and undo.
+  - `spec["part_overrides"]` = {id: {hidden, color}}; a group's entry covers
+    everything under it, the nearest wins (`merged_override`). Colour paints
+    wood (`paint_for`) or steel (`metal_for`); hidden parts are still
+    registered (flag `hidden`, no pick box) so "Show hidden" can find them.
+    Deleted beams / wall sheets keep their old stores and are flagged too.
+    `solar_summary` skips hidden modules.
+  - `build_node(spec, name, {record, dim_ctx})`: `record` keeps
+    `part_tree()` as meta, `dim_ctx` routes everything outside that group to
+    one faded surface. Placed props pass neither; old specs build
+    byte-identically (vertex hash checked on every preset).
+  - `pick_part(tree, o, d, ctx)` = the nearest piece INSIDE the open group,
+    resolved to the group's child (0.3 ms on the largest preset). Pick boxes
+    are the oriented boxes each piece was drawn with (≤ 64 a part): a union
+    AABB of a sloped frame swallowed the slope's bays.
+  - Modal: `_ctx` (open path), `_sel_nodes` (selected part ids); `_selection`
+    is DERIVED (the editable components under them) and drives drags, Del and
+    the element card as before. Click = select at the level; double-click
+    opens; Esc / click outside / the breadcrumb (over the preview) step out;
+    Shift or Ctrl adds. Del per kind: element removed, slope bay "none",
+    deck/column/bay loses its decking, beam/wall sheet the old way, a whole
+    wall turned off, anything else hidden. The parts card: decking + height
+    for cells, beam offset, colour (a group colour clears its pieces' own),
+    Show hidden inside, Open.
+  - Gate: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nested_check.gd -Label <dir>`
+    (real clicks / double-clicks / keys, a shot per level) and
+    `_test_pallet_rack_parts` in terrain_selftest.
 
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`

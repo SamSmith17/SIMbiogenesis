@@ -20,6 +20,16 @@ extends RefCounted
 ## railings round every open deck edge, and courtyards cut out of the grid. Each
 ## is one record {id, type, ...}; resolve_element fills its type's defaults and
 ## clamps it to the rack, so a saved preset lands sanely on any other rack.
+##
+## PARTS (SketchUp-style nesting). Emission registers every piece it draws as a
+## part with a stable id and a path of groups above it: the rack's assemblies
+## (a deck level, the uprights, a wall face, an element), their bays (a deck
+## cell, a column strip when there are several, a slope bay), and the pieces
+## (plywood sheets, joists, beams, treads, wall sheets, solar modules, rail
+## runs). part_tree() returns that tree with pick boxes; the modal opens one
+## group at a time. spec["part_overrides"] holds {hidden, color} keyed by part
+## id; an override on a group applies to everything inside it, and the nearest
+## one wins. Ids are grid indices, so they survive rebuilds and undo.
 
 const MODEL_ID := "pallet_rack"
 
@@ -233,6 +243,8 @@ static func default_spec() -> Dictionary:
 		"wall_top_ft": -1.0,
 		# Design elements (doors, windows, stairs, slopes, railings, courtyards).
 		"elements": [],
+		# Per-part overrides keyed by part id (see part_tree): {hidden, color}.
+		"part_overrides": {},
 	}
 
 
@@ -308,6 +320,7 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 		for k in (s["wall_sheet_deleted"] as Array):
 			wdel.append(str(k))
 	s["wall_sheet_deleted"] = wdel
+	s["part_overrides"] = _normalize_part_overrides(s.get("part_overrides"))
 
 	# Migrate the legacy stepped_module flag into per-cell "step" overrides so the
 	# new editor sees one uniform model. Only when there are no explicit cell edits
@@ -356,6 +369,27 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 		els.append(r)
 	s["elements"] = els
 	return s
+
+
+## Only the keys the geometry honours survive: `hidden` (true) and `color`
+## ("#rrggbb"). Empty entries are dropped so a cleared override leaves no trace.
+static func _normalize_part_overrides(v: Variant) -> Dictionary:
+	var out := {}
+	if not (v is Dictionary):
+		return out
+	for k in (v as Dictionary).keys():
+		var o: Variant = (v as Dictionary)[k]
+		if not (o is Dictionary):
+			continue
+		var r := {}
+		if bool((o as Dictionary).get("hidden", false)):
+			r["hidden"] = true
+		var c := str((o as Dictionary).get("color", ""))
+		if not c.is_empty() and Color.html_is_valid(c):
+			r["color"] = "#" + Color.html(c).to_html(false)
+		if not r.is_empty():
+			out[str(k)] = r
+	return out
 
 
 static func _map_legacy_spec(o: Dictionary) -> Dictionary:
@@ -424,14 +458,191 @@ class _Geom:
 		glass.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	func paint_for(hex: String) -> SurfaceTool:
+		return _tool_in(paint, hex)
+
+	## Painted steel (a beam or an upright given a colour), one surface per colour.
+	var metal := {}
+
+	func metal_for(hex: String) -> SurfaceTool:
+		return _tool_in(metal, hex)
+
+	func _tool_in(d: Dictionary, hex: String) -> SurfaceTool:
 		var key := hex.to_lower() if Color.html_is_valid(hex) else "#f2efe6"
 		if not key.begins_with("#"):
 			key = "#" + key
-		if not paint.has(key):
+		if not d.has(key):
 			var st := SurfaceTool.new()
 			st.begin(Mesh.PRIMITIVE_TRIANGLES)
-			paint[key] = st
-		return paint[key]
+			d[key] = st
+		return d[key]
+
+	## The surface a part draws on: its own colour when the override has one.
+	func surf(ov: Dictionary, base: SurfaceTool, is_metal: bool = false) -> SurfaceTool:
+		var c := str(ov.get("color", ""))
+		if c.is_empty():
+			return base
+		return metal_for(c) if is_metal else paint_for(c)
+
+	# ---- Parts (see the PARTS note at the top) ----
+	## spec["part_overrides"].
+	var po := {}
+	## Record pick boxes (the editor) — off for placed props, which never pick.
+	var record := false
+	## While a group is open in the editor, everything outside it draws faded.
+	var dim_ctx := ""
+	var dim: SurfaceTool = null
+	## id -> {id, label, kind, parent, children, hidden}
+	var nodes := {}
+	var roots: Array = []
+	## One per drawn part: {path, aabb (all of it, for culling), obbs?: [[inverse
+	## xf, half]] one per box drawn, aabbs?: [AABB] one per loose triangle}. A
+	## part with more pieces than MAX_PART_BOXES keeps only its aabb.
+	var boxes: Array = []
+	const MAX_PART_BOXES := 64
+	var cur_in_ctx := true
+	var cur_box := {}
+
+	## Register `path` (group ids down to the part) with its `labels`, make the
+	## part current (its boxes are what emission draws until the next begin),
+	## and return the overrides merged down the path, nearest last. A hidden
+	## part is registered but gets no box; the caller draws nothing.
+	func begin(path: Array, labels: Array, force_hidden: bool = false) -> Dictionary:
+		end_part()
+		var ov := {}
+		var parent := ""
+		for i in path.size():
+			var id := str(path[i])
+			var own: Variant = po.get(id)
+			if own is Dictionary:
+				ov.merge(own as Dictionary, true)
+			if not nodes.has(id):
+				nodes[id] = {"id": id, "label": str(labels[i]) if i < labels.size() else id,
+					"kind": PalletRackBuilder.part_kind(id), "parent": parent, "children": [],
+					"hidden": false}
+				if parent.is_empty():
+					roots.append(id)
+				else:
+					(nodes[parent]["children"] as Array).append(id)
+			if own is Dictionary and bool((own as Dictionary).get("hidden", false)):
+				nodes[id]["hidden"] = true
+			parent = id
+		if force_hidden:
+			ov["hidden"] = true
+			if not path.is_empty():
+				nodes[str(path[-1])]["hidden"] = true
+		cur_in_ctx = dim_ctx.is_empty() or path.has(dim_ctx)
+		if record and not bool(ov.get("hidden", false)):
+			cur_box = {"path": path.duplicate(), "obbs": [], "aabbs": []}
+		return ov
+
+	func end_part() -> void:
+		if not cur_box.is_empty() and cur_box.has("aabb"):
+			var n := (cur_box["obbs"] as Array).size() + (cur_box["aabbs"] as Array).size()
+			if n > MAX_PART_BOXES:
+				cur_box.erase("obbs")
+				cur_box.erase("aabbs")
+			elif (cur_box["aabbs"] as Array).is_empty():
+				cur_box.erase("aabbs")
+			boxes.append(cur_box)
+		cur_box = {}
+		cur_in_ctx = dim_ctx.is_empty()
+
+	func route(st: SurfaceTool) -> SurfaceTool:
+		if cur_in_ctx:
+			return st
+		if dim == null:
+			dim = SurfaceTool.new()
+			dim.begin(Mesh.PRIMITIVE_TRIANGLES)
+		return dim
+
+	func add_box(xf: Transform3D, size: Vector3) -> void:
+		if cur_box.is_empty():
+			return
+		var half := (size * 0.5).max(Vector3(0.012, 0.012, 0.012))
+		var bb := xf * AABB(-half, half * 2.0)
+		cur_box["aabb"] = (cur_box["aabb"] as AABB).merge(bb) if cur_box.has("aabb") else bb
+		if (cur_box["obbs"] as Array).size() <= MAX_PART_BOXES:
+			(cur_box["obbs"] as Array).append([xf.affine_inverse(), half])
+
+	func add_points(pts: Array) -> void:
+		if cur_box.is_empty() or pts.is_empty():
+			return
+		var bb := AABB(pts[0] as Vector3, Vector3.ZERO)
+		for p in pts:
+			bb = bb.expand(p as Vector3)
+		bb = bb.grow(0.02)
+		cur_box["aabb"] = (cur_box["aabb"] as AABB).merge(bb) if cur_box.has("aabb") else bb
+		if (cur_box["aabbs"] as Array).size() <= MAX_PART_BOXES:
+			(cur_box["aabbs"] as Array).append(bb)
+
+	func add_aabb(bb: AABB) -> void:
+		add_points([bb.position, bb.end])
+
+	func tree() -> Dictionary:
+		end_part()
+		var root_aabb := {}
+		for b in boxes:
+			var r := str((b["path"] as Array)[0])
+			root_aabb[r] = (root_aabb[r] as AABB).merge(b["aabb"]) if root_aabb.has(r) else b["aabb"]
+		return {"nodes": nodes, "roots": roots, "boxes": boxes, "root_aabb": root_aabb}
+
+
+## The _Geom being emitted into, so the box / triangle writers can file each
+## piece under the current part and fade it when a group is open. Set for the
+## length of one _emit_structure; nothing else writes boxes.
+static var _rec: _Geom = null
+
+const FRAMES_ID := "frames"
+## Kinds a colour can go on (the rest are glass, modules or whole elements).
+const PAINTABLE_KINDS := ["sheet", "joist", "tread", "beam", "upright", "wall_sheet",
+	"slope_sheet", "slope_frame", "rail_run"]
+const METAL_KINDS := ["beam", "upright"]
+
+
+## What a part id names, from its prefix (ids: see the PARTS note at the top).
+static func part_kind(id: String) -> String:
+	if id == FRAMES_ID:
+		return "frames"
+	if id.begins_with("el:"):
+		var bits := id.split(":")
+		if bits.size() == 2:
+			return "element"
+		var tail := str(bits[2])
+		if bits.size() == 3:
+			if tail.begins_with("r"):
+				return "rail_run"
+			if tail == "frame" or tail == "ends":
+				return "slope_frame"
+			return "slope_bay"
+		var leaf := str(bits[3])
+		if leaf.begins_with("m"):
+			return "module"
+		if leaf.begins_with("s"):
+			return "slope_sheet"
+		return "slope_frame"
+	var pre := id.get_slice(":", 0)
+	match pre:
+		"deck":
+			return "deck_level"
+		"strip":
+			return "strip"
+		"cell":
+			return "cell"
+		"ply":
+			return "sheet"
+		"joist":
+			return "joist"
+		"tread":
+			return "tread"
+		"beam":
+			return "beam"
+		"post":
+			return "upright"
+		"wallface":
+			return "wall"
+		"wall":
+			return "wall_sheet"
+	return "part"
 
 
 static func footprint_xz(spec: Dictionary = {}) -> Vector2:
@@ -469,7 +680,10 @@ static func _levels(s: Dictionary, _m: Dictionary = {}) -> Array:
 	return out
 
 
-static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack") -> Node3D:
+## `opts`: record (bool) keeps the part tree as meta "part_tree"; dim_ctx (a
+## part id) draws everything outside that group faded — the editor's open group.
+static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack",
+		opts: Dictionary = {}) -> Node3D:
 	var s := resolve_spec(spec)
 	var m := _metrics(s)
 	var root := Node3D.new()
@@ -477,6 +691,8 @@ static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack") 
 	root.set_meta("rack_spec", s.duplicate(true))
 
 	var g := _Geom.new()
+	g.record = bool(opts.get("record", false))
+	g.dim_ctx = str(opts.get("dim_ctx", ""))
 	_emit_structure(g, s, m)
 
 	var mesh := ArrayMesh.new()
@@ -486,6 +702,10 @@ static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack") 
 			[g.pv, _pv_material()], [g.glass, _glass_material()]]
 	for hex in g.paint.keys():
 		pairs.append([g.paint[hex], _paint_material(str(hex))])
+	for hex in g.metal.keys():
+		pairs.append([g.metal[hex], _paint_metal_material(str(hex))])
+	if g.dim != null:
+		pairs.append([g.dim, _dim_material()])
 	# Arrays of the solid shade-makers (decks, walls, panels, doors) for the
 	# shadow proxy below.
 	var shade_arrays: Array = []
@@ -541,8 +761,124 @@ static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack") 
 		root.add_child(pmi)
 
 	root.set_meta("bom", g.counts.duplicate())
+	if g.record:
+		root.set_meta("part_tree", g.tree())
 	# Foot origin on ground centre so PlacedProp footing works (local Y=0).
 	return root
+
+
+## The rack's parts as a tree: {nodes: id -> {id, label, kind, parent,
+## children, hidden}, roots: [ids], boxes: [{path, aabb, obbs?}], root_aabb}.
+## The same emission draws the mesh, so a box is exactly the piece drawn.
+static func part_tree(spec: Dictionary = {}) -> Dictionary:
+	var s := resolve_spec(spec)
+	var g := _Geom.new()
+	g.record = true
+	_emit_structure(g, s, _metrics(s))
+	return g.tree()
+
+
+## Distance along the ray to a part (the nearest of the boxes it was drawn
+## with; its bounding box alone when it had too many to keep).
+static func ray_hits_part_box(origin: Vector3, dir: Vector3, b: Dictionary) -> float:
+	var t_all := ray_hits_aabb(origin, dir, b["aabb"] as AABB)
+	if t_all < 0.0 or not b.has("obbs"):
+		return t_all
+	var best := -1.0
+	for ob in (b["obbs"] as Array):
+		var inv: Transform3D = ob[0]
+		var half: Vector3 = ob[1]
+		var t := ray_hits_aabb(inv * origin, inv.basis * dir, AABB(-half, half * 2.0))
+		if t >= 0.0 and (best < 0.0 or t < best):
+			best = t
+	for bb in (b.get("aabbs", []) as Array):
+		var t := ray_hits_aabb(origin, dir, bb as AABB)
+		if t >= 0.0 and (best < 0.0 or t < best):
+			best = t
+	return best
+
+
+## The nearest piece the ray meets INSIDE the open group `ctx` (a path of ids,
+## [] = the whole rack), resolved to the child of that group it belongs to:
+## {node: child id or "", leaf, t, any: the ray met any part at all}.
+static func pick_part(tree: Dictionary, origin: Vector3, dir: Vector3, ctx: Array = []) -> Dictionary:
+	var d := ctx.size()
+	var root_hit := {}
+	var ra: Dictionary = tree.get("root_aabb", {})
+	for r in ra.keys():
+		root_hit[r] = ray_hits_aabb(origin, dir, (ra[r] as AABB).grow(0.05)) >= 0.0
+	var best_t := INF
+	var best := ""
+	var leaf := ""
+	var any := false
+	for b in (tree.get("boxes", []) as Array):
+		var path: Array = b["path"]
+		if not bool(root_hit.get(path[0], false)):
+			continue
+		var inside := path.size() > d
+		if inside:
+			for i in d:
+				if str(path[i]) != str(ctx[i]):
+					inside = false
+					break
+		if not inside and any:
+			continue
+		var t := ray_hits_part_box(origin, dir, b)
+		if t < 0.0:
+			continue
+		any = true
+		if inside and t < best_t:
+			best_t = t
+			best = str(path[d])
+			leaf = str(path[-1])
+	return {"node": best, "leaf": leaf, "t": best_t, "any": any}
+
+
+## Root-first ids from the top group down to `id`.
+static func part_path(tree: Dictionary, id: String) -> Array:
+	var nodes: Dictionary = tree.get("nodes", {})
+	var out: Array = []
+	var cur := id
+	while not cur.is_empty() and nodes.has(cur):
+		out.push_front(cur)
+		cur = str(nodes[cur]["parent"])
+	return out
+
+
+## `id` and every node under it.
+static func part_subtree(tree: Dictionary, id: String) -> Array:
+	var nodes: Dictionary = tree.get("nodes", {})
+	var out: Array = []
+	var stack: Array = [id]
+	while not stack.is_empty():
+		var cur := str(stack.pop_back())
+		if not nodes.has(cur):
+			continue
+		out.append(cur)
+		var kids: Array = nodes[cur]["children"]
+		for i in range(kids.size() - 1, -1, -1):
+			stack.append(kids[i])
+	return out
+
+
+## The boxes drawn under `id` (its own and its descendants').
+static func part_boxes(tree: Dictionary, id: String) -> Array:
+	var out: Array = []
+	for b in (tree.get("boxes", []) as Array):
+		if (b["path"] as Array).has(id):
+			out.append(b)
+	return out
+
+
+## The overrides a part gets, merged down its path (nearest wins).
+static func merged_override(spec: Dictionary, path: Array) -> Dictionary:
+	var po: Dictionary = spec.get("part_overrides", {})
+	var ov := {}
+	for id in path:
+		var o: Variant = po.get(str(id))
+		if o is Dictionary:
+			ov.merge(o as Dictionary, true)
+	return ov
 
 
 static func _arrays_have_geometry(arr: Array) -> bool:
@@ -674,6 +1010,8 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 	var total_z: float = L.total_z
 	var decked := bool(s["decked"])
 	var beam_ov: Dictionary = s.get("beam_overrides", {})
+	g.po = s.get("part_overrides", {})
+	_rec = g
 
 	# Uprights (frames) at every row x bay-boundary.
 	for r in range(rows):
@@ -682,11 +1020,16 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 			var x := float(fx[bx])
 			if _in_notch(notch, x, zf + frame_depth * 0.5):
 				continue
-			_emit_frame(g, x, zf, zf + frame_depth, height)
+			var pov := g.begin([FRAMES_ID, "post:%d,%d" % [r, bx]],
+				["Uprights", "Upright %d, rack row %d" % [bx + 1, r + 1]])
+			if bool(pov.get("hidden", false)):
+				continue
+			_emit_frame(g, x, zf, zf + frame_depth, height, g.surf(pov, g.frame, true))
 			g.counts["uprights"] += 1
 
 	# Beams at every level x row x bay (front + back side), honoring overrides
-	# (deleted beams vanish; dy_in nudges them 1" at a time).
+	# (deleted beams vanish; dy_in nudges them 1" at a time). Each belongs to
+	# the deck cell it carries.
 	for li in range(levels.size()):
 		var y := float(levels[li]["y"])
 		for r in range(rows):
@@ -698,11 +1041,17 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 					var zb := zf if side == 0 else zf + frame_depth
 					if _in_notch(notch, cx, zb):
 						continue
-					var ov: Dictionary = beam_ov.get(_beam_key(li, r, b, side), {})
-					if bool(ov.get("deleted", false)):
+					var bkey := _beam_key(li, r, b, side)
+					var ov: Dictionary = beam_ov.get(bkey, {})
+					var bc := _beam_cell(r, side, cols)
+					var cp := _cell_path(s, L, b, bc, li)
+					var bov := g.begin((cp[0] as Array) + ["beam:" + bkey],
+						(cp[1] as Array) + [_beam_label(r, side, cols)], bool(ov.get("deleted", false)))
+					if bool(bov.get("hidden", false)):
 						continue
 					var yy := y + float(ov.get("dy_in", 0.0)) * IN
-					_emit_box(g.beam, Transform3D(Basis(), Vector3(cx, yy - BEAM_H * 0.5, zb)),
+					_emit_box(g.surf(bov, g.beam, true),
+						Transform3D(Basis(), Vector3(cx, yy - BEAM_H * 0.5, zb)),
 						Vector3(span, BEAM_H, BEAM_T))
 					g.counts["beams"] += 1
 
@@ -729,28 +1078,69 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 				var ccx := (bx0 + bx1) * 0.5
 				if _in_notch(notch, ccx, (cz0 + cz1) * 0.5):
 					continue
+				var cp := _cell_path(s, L, b, c, li)
+				var key := _cell_key(b, c, li)
 				if kind == "step":
 					var y_lo := float(levels[li - 1]["y"]) if li > 0 else 0.0
-					_emit_stairs(g, bx0, bx1, cz0, cz1, y_lo, y, notch)
+					_emit_stairs(g, bx0, bx1, cz0, cz1, y_lo, y, notch, cp, key)
 					continue
-				_emit_joists_span(g, s, bx0, bx1, cz0, cz1, y, notch)
-				_emit_ply_field(g, bx0, bx1, cz0, cz1, y + JOIST_H + PLY_T * 0.5, notch)
+				_emit_joists_span(g, s, bx0, bx1, cz0, cz1, y, notch, cp, key)
+				_emit_ply_field(g, bx0, bx1, cz0, cz1, y + JOIST_H + PLY_T * 0.5, notch, [],
+					[cp[0], cp[1], key])
 
 	# Plywood walls on chosen perimeter faces (doors / windows cut through).
 	_emit_walls(g, s, m, x0, z0, total_x, total_z, height, notch)
 
 	# Design elements: doors, windows, stairs, sloped arrays, railings.
 	_emit_elements(g, s, L)
+	g.end_part()
+	_rec = null
 
 
-static func _emit_frame(g: _Geom, x: float, z0: float, z1: float, h: float) -> void:
+## Which deck cell (column) a beam carries: a frame's back beam is the front
+## edge of the cell behind it, its front beam the back edge of the cell in
+## front; the outermost beams carry the edge cells' overhang.
+static func _beam_cell(r: int, side: int, cols: int) -> int:
+	if side == 0:
+		return 0 if r == 0 else r - 1
+	return cols - 1 if r >= cols else r
+
+
+static func _beam_label(r: int, side: int, cols: int) -> String:
+	if side == 0:
+		return "Front beam, outer" if r == 0 else "Back beam"
+	return "Back beam, outer" if r >= cols else "Front beam"
+
+
+## [ids, labels] of the groups above a deck cell's pieces: the deck level, its
+## column strip (only when there are several columns), the cell itself.
+static func _cell_path(s: Dictionary, L: Dictionary, b: int, c: int, li: int) -> Array:
+	var levels: Array = L.levels
+	var lv: Dictionary = levels[li]
+	var ids: Array = ["deck:%d" % li]
+	var labels: Array = ["Roof deck" if bool(lv["roof"]) else "Level %d deck · %s" % [li + 1,
+		fmt_ft(float(lv["y"]) / FT)]]
+	if int(L.cols) > 1:
+		ids.append("strip:%d,%d" % [c, li])
+		labels.append("Column %d" % (c + 1))
+	var kind := str(_resolve_cell(s, b, c, li, lv, bool(s["decked"]))["kind"])
+	ids.append("cell:" + _cell_key(b, c, li))
+	labels.append("Bay %d%s" % [b + 1, " (steps)" if kind == "step"
+		else (" (no deck)" if kind == "none" else "")])
+	return [ids, labels]
+
+
+static func _emit_frame(g: _Geom, x: float, z0: float, z1: float, h: float,
+		st: SurfaceTool = null) -> void:
+	if st == null:
+		st = g.frame
 	# Two posts.
 	for z in [z0, z1]:
-		_emit_box(g.frame, Transform3D(Basis(), Vector3(x, h * 0.5, z)),
+		_emit_box(st, Transform3D(Basis(), Vector3(x, h * 0.5, z)),
 			Vector3(POST_W, h, POST_W))
 	# Foot plates.
 	for z in [z0, z1]:
-		_emit_box(g.frame, Transform3D(Basis(), Vector3(x, 0.02, z)),
+		_emit_box(st, Transform3D(Basis(), Vector3(x, 0.02, z)),
 			Vector3(POST_W * 1.6, 0.04, POST_W * 1.8))
 	# Horizontal + diagonal bracing in the Z-Y plane between the two posts.
 	var nodes := [0.15]
@@ -759,17 +1149,19 @@ static func _emit_frame(g: _Geom, x: float, z0: float, z1: float, h: float) -> v
 		nodes.append(0.15 + (h - 0.3) * float(i) / float(steps))
 	var brace := POST_W * 0.55
 	for yy in nodes:
-		_emit_strut(g.frame, Vector3(x, yy, z0), Vector3(x, yy, z1), brace)
+		_emit_strut(st, Vector3(x, yy, z0), Vector3(x, yy, z1), brace)
 	for i in range(nodes.size() - 1):
 		var y_lo := float(nodes[i])
 		var y_hi := float(nodes[i + 1])
 		var za := z0 if (i % 2 == 0) else z1
 		var zb := z1 if (i % 2 == 0) else z0
-		_emit_strut(g.frame, Vector3(x, y_lo, za), Vector3(x, y_hi, zb), brace)
+		_emit_strut(st, Vector3(x, y_lo, za), Vector3(x, y_hi, zb), brace)
 
 
+## `cp` = the cell's [ids, labels] (_cell_path); each joist is its own part.
 static func _emit_joists_span(g: _Geom, s: Dictionary, x_a: float, x_b: float,
-		z_a: float, z_b: float, beam_y: float, notch: Dictionary) -> void:
+		z_a: float, z_b: float, beam_y: float, notch: Dictionary, cp: Array = [],
+		key: String = "") -> void:
 	var joist_cy := beam_y + JOIST_H * 0.5
 	var span_z := z_b - z_a
 	var joist_len := span_z + 2.0 * BEARING
@@ -784,13 +1176,21 @@ static func _emit_joists_span(g: _Geom, s: Dictionary, x_a: float, x_b: float,
 			jx = x_b
 		if _in_notch(notch, jx, joist_cz):
 			continue
-		_emit_box(g.lumber, Transform3D(Basis(), Vector3(jx, joist_cy, joist_cz)),
+		var st := g.lumber
+		if not cp.is_empty():
+			var ov := g.begin((cp[0] as Array) + ["joist:%s:%d" % [key, i]],
+				(cp[1] as Array) + ["Joist %d" % (i + 1)])
+			if bool(ov.get("hidden", false)):
+				continue
+			st = g.surf(ov, g.lumber)
+		_emit_box(st, Transform3D(Basis(), Vector3(jx, joist_cy, joist_cz)),
 			Vector3(JOIST_W, JOIST_H, joist_len))
 		g.counts["lumber"] += 1
 
 
 static func _emit_stairs(g: _Geom, x_a: float, x_b: float, z_a: float,
-		z_b: float, y_lo: float, y_hi: float, notch: Dictionary) -> void:
+		z_b: float, y_lo: float, y_hi: float, notch: Dictionary, cp: Array = [],
+		key: String = "") -> void:
 	var span := z_b - z_a
 	var step_dz := span / float(STAIR_STEPS)
 	var cxm := (x_a + x_b) * 0.5
@@ -802,15 +1202,29 @@ static func _emit_stairs(g: _Geom, x_a: float, x_b: float, z_a: float,
 		var cz := (za + zb2) * 0.5
 		if _in_notch(notch, cxm, cz):
 			continue
+		var lum := g.lumber
+		var ply := g.ply
+		if not cp.is_empty():
+			var ov := g.begin((cp[0] as Array) + ["tread:%s:%d" % [key, s_i]],
+				(cp[1] as Array) + ["Step %d" % (s_i + 1)])
+			if bool(ov.get("hidden", false)):
+				continue
+			lum = g.surf(ov, g.lumber)
+			ply = g.surf(ov, g.ply)
 		# Support lumber under the tread.
-		_emit_box(g.lumber, Transform3D(Basis(), Vector3(cxm, y - JOIST_H * 0.5, cz)),
+		_emit_box(lum, Transform3D(Basis(), Vector3(cxm, y - JOIST_H * 0.5, cz)),
 			Vector3(wx, JOIST_H, step_dz * 0.9))
 		g.counts["lumber"] += 1
-		_emit_ply_field(g, x_a, x_b, za, zb2, y + PLY_T * 0.5, notch)
+		_emit_ply_field(g, x_a, x_b, za, zb2, y + PLY_T * 0.5, notch, [], [], ply)
 
 
+## `part` = [ids, labels, cell key] makes each sheet its own part (a deck);
+## without it the sheets go on `st` (default plywood) in the current part.
 static func _emit_ply_field(g: _Geom, x_a: float, x_b: float, z_a: float, z_b: float,
-		cy: float, notch: Dictionary, skip_z: Array = []) -> void:
+		cy: float, notch: Dictionary, skip_z: Array = [], part: Array = [],
+		st: SurfaceTool = null) -> void:
+	if st == null:
+		st = g.ply
 	# Deck sheets run their 4' short edge along X — three of them fill each 12' bay
 	# span between uprights — and their 8' long edge along Z (front→back, spanning
 	# across the joists), so the deck stays unbroken from the player to the wall
@@ -835,7 +1249,14 @@ static func _emit_ply_field(g: _Geom, x_a: float, x_b: float, z_a: float, z_b: f
 				continue
 			if _z_in_ranges(skip_z, ccz):
 				continue
-			_emit_box(g.ply, Transform3D(Basis(), Vector3(ccx, cy, ccz)),
+			var sst := st
+			if not part.is_empty():
+				var ov := g.begin((part[0] as Array) + ["ply:%s:%d,%d" % [str(part[2]), ix, iz]],
+					(part[1] as Array) + ["Sheet %d" % (iz * nx + ix + 1)])
+				if bool(ov.get("hidden", false)):
+					continue
+				sst = g.surf(ov, g.ply)
+			_emit_box(sst, Transform3D(Basis(), Vector3(ccx, cy, ccz)),
 				Vector3(sxw, PLY_T, szw))
 			g.counts["plywood"] += 1
 
@@ -933,11 +1354,19 @@ static func _emit_walls(g: _Geom, s: Dictionary, m: Dictionary, _x0: float, _z0:
 		var holes := _face_openings(s, L, str(f[0]))
 		var along_x := bool(f[5])
 		var fixed := float(f[3])
+		var wid := "wallface:" + str(f[0])
+		var wlabel := "%s wall" % str(OPTION_LABELS.get(str(f[0]), str(f[0])))
+		var n_sheet := 0
 		for sh in _wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7]):
-			if deleted.has("%s,%d,%d" % [f[0], int(sh["ia"]), int(sh["iv"])]):
+			n_sheet += 1
+			var wkey := "%s,%d,%d" % [f[0], int(sh["ia"]), int(sh["iv"])]
+			var wov := g.begin([wid, "wall:" + wkey], [wlabel, "Sheet %d" % n_sheet],
+				deleted.has(wkey))
+			if bool(wov.get("hidden", false)):
 				continue
+			var wst := g.surf(wov, g.ply)
 			if holes.is_empty():
-				_emit_box(g.ply, Transform3D(Basis(), sh["pos"]), sh["size"])
+				_emit_box(wst, Transform3D(Basis(), sh["pos"]), sh["size"])
 				g.counts["plywood"] += 1
 				continue
 			var pieces := _sheet_pieces(sh, holes)
@@ -948,10 +1377,10 @@ static func _emit_walls(g: _Geom, s: Dictionary, m: Dictionary, _x0: float, _z0:
 				var cc := pr.position.x + pr.size.x * 0.5
 				var cy := pr.position.y + pr.size.y * 0.5
 				if along_x:
-					_emit_box(g.ply, Transform3D(Basis(), Vector3(cc, cy, fixed)),
+					_emit_box(wst, Transform3D(Basis(), Vector3(cc, cy, fixed)),
 						Vector3(pr.size.x, pr.size.y, PLY_T))
 				else:
-					_emit_box(g.ply, Transform3D(Basis(), Vector3(fixed, cy, cc)),
+					_emit_box(wst, Transform3D(Basis(), Vector3(fixed, cy, cc)),
 						Vector3(PLY_T, pr.size.y, pr.size.x))
 			g.counts["plywood"] += 1
 
@@ -1080,6 +1509,7 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 	var cols: int = L.cols
 	var decked := bool(s["decked"])
 	var beam_ov: Dictionary = s.get("beam_overrides", {})
+	var any_po := not (s.get("part_overrides", {}) as Dictionary).is_empty()
 
 	# Deck cells.
 	for li in range(levels.size()):
@@ -1099,6 +1529,8 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 					cz1 = minf(cz1, cz0 + float(du) * HALF_PANEL_FT * FT)
 				var ccx := (bx0 + bx1) * 0.5
 				if _in_notch(notch, ccx, (cz0 + cz1) * 0.5):
+					continue
+				if any_po and _part_hidden(s, _cell_path(s, L, b, c, li)[0]):
 					continue
 				var y := float(cell["y"])
 				var lo := Vector3(bx0, y - JOIST_H, cz0)
@@ -1125,6 +1557,9 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 					var ov: Dictionary = beam_ov.get(_beam_key(li, r, b, side), {})
 					if bool(ov.get("deleted", false)):
 						continue
+					if any_po and _part_hidden(s, (_cell_path(s, L, b, _beam_cell(r, side, cols), li)[0] as Array)
+							+ ["beam:" + _beam_key(li, r, b, side)]):
+						continue
 					var yy := y + float(ov.get("dy_in", 0.0)) * IN
 					var center := Vector3(cx, yy - BEAM_H * 0.5, zb)
 					var size := Vector3(span, BEAM_H, maxf(BEAM_T, PICK_MIN_THICK * 2.0))
@@ -1143,6 +1578,8 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 			var key := "%s,%d,%d" % [f[0], int(sh["ia"]), int(sh["iv"])]
 			if deleted.has(key):
 				continue
+			if any_po and _part_hidden(s, ["wallface:" + str(f[0]), "wall:" + key]):
+				continue
 			if not holes.is_empty() and _sheet_pieces(sh, holes).is_empty():
 				continue
 			var pos: Vector3 = sh["pos"]
@@ -1158,6 +1595,8 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 			var x := float(fx[bx])
 			if _in_notch(notch, x, zf + frame_depth * 0.5):
 				continue
+			if any_po and _part_hidden(s, [FRAMES_ID, "post:%d,%d" % [r, bx]]):
+				continue
 			var lo := Vector3(x - POST_W, 0.0, zf - POST_W)
 			var hi := Vector3(x + POST_W, height, zf + frame_depth + POST_W)
 			out.append({"id": "post:%d,%d" % [r, bx], "kind": "upright",
@@ -1165,9 +1604,15 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 
 	# Design elements (doors, windows, stairs, slope bays, railings, courtyards).
 	for e in (s.get("elements", []) as Array):
-		if e is Dictionary:
+		if e is Dictionary and not (any_po and _part_hidden(s, ["el:" + str((e as Dictionary).get("id", ""))])):
 			out.append_array(_element_components(s, L, e as Dictionary))
 	return out
+
+
+static func _part_hidden(s: Dictionary, path: Array) -> bool:
+	if (s.get("part_overrides", {}) as Dictionary).is_empty():
+		return false
+	return bool(merged_override(s, path).get("hidden", false))
 
 
 ## Every (bay, col, level) cell slot INCLUDING empty ones (kind "none"), with an
@@ -1592,18 +2037,31 @@ static func _emit_elements(g: _Geom, s: Dictionary, L: Dictionary) -> void:
 	for e in (s.get("elements", []) as Array):
 		if not (e is Dictionary):
 			continue
-		match str((e as Dictionary).get("type", "")):
+		var t := str((e as Dictionary).get("type", ""))
+		if not ELEMENT_DEFAULTS.has(t):
+			continue
+		var eid := "el:" + str((e as Dictionary).get("id", ""))
+		if t == "lean_to":
+			_emit_lean_to(g, s, L, e)
+			continue
+		if t == "railing":
+			_emit_railing(g, s, L, e)
+			continue
+		var ov := g.begin([eid], [element_label(e, s) if g.record else ""])
+		if bool(ov.get("hidden", false)):
+			continue
+		match t:
 			"door":
 				_emit_door(g, L, e)
 			"window":
 				_emit_window(g, L, e)
 			"stair":
 				_emit_stair(g, L, e)
-			"lean_to":
-				_emit_lean_to(g, s, L, e)
-			"railing":
-				_emit_railing(g, s, L, e)
-			# A courtyard is a cut in the layout (_layout's notch rects), not geometry.
+			"courtyard":
+				# A cut in the layout (_layout's notch rects), not geometry: its
+				# pick box is the ground it opens.
+				for c in _element_components(s, L, e):
+					g.add_aabb(c["aabb"])
 
 
 ## Box centred at `center` with its X along `ax` and Y along `ay` (made
@@ -1632,6 +2090,10 @@ static func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 	var n := (b - a).cross(c - a)
 	if n.length() < 1e-6:
 		return
+	if _rec != null:
+		st = _rec.route(st)
+		if _rec.record:
+			_rec.add_points([a, b, c])
 	n = n.normalized()
 	for p in [[a, Vector2(0, 0)], [b, Vector2(1, 0)], [c, Vector2(1, 1)]]:
 		st.set_normal(n)
@@ -1905,10 +2367,27 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 	var dv: Vector3 = G.d
 	var nv: Vector3 = G.n
 	var slen: float = G.slope_len
+	var eid := "el:" + str(e.get("id", ""))
+	var elab := element_label(e)
+	# Every bay is a part with its own pick box, drawn or not: a bay left off
+	# stays clickable so it can be covered again.
 	var live: Array = []
 	for sg in G.segs:
-		if str(sg["surface"]) != "none":
+		var a0: float = sg["a0"]
+		var a1: float = sg["a1"]
+		var bid := "%s:%d" % [eid, int(sg["i"])]
+		var blab := "Bay %d · %s" % [int(sg["i"]) + 1, str(OPTION_LABELS.get(str(sg["surface"]), ""))]
+		var bov := g.begin([eid, bid], [elab, blab])
+		if g.record:
+			var half := Vector3((a1 - a0) * 0.5, 0.18, slen * 0.5)
+			g.add_box(Transform3D(Basis(along_v, nv, along_v.cross(nv)),
+				_lean_point(G, (a0 + a1) * 0.5, slen * 0.5, 0.0)), half * 2.0)
+		sg["id"] = bid
+		sg["label"] = blab
+		sg["ov"] = bov
+		if str(sg["surface"]) != "none" and not bool(bov.get("hidden", false)):
 			live.append(sg)
+	g.end_part()
 	if live.is_empty():
 		return
 	# Rafters at every bay edge and at most 4' apart in between.
@@ -1924,30 +2403,36 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 	var amax: float = raf[-1]
 	var lift_r := -(PURLIN_T + RAFTER_D * 0.5)
 	var under := -(PURLIN_T + RAFTER_D)
-	for ra in raf:
-		var a := clampf(float(ra), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
-		_emit_obox(g.lumber, _lean_point(G, a, slen * 0.5, lift_r), dv, nv,
-			Vector3(slen, RAFTER_D, RAFTER_W))
-		g.counts["lumber"] += 1
-		# A leg under the low end, and a prop at mid-slope on tall arrays.
-		for s_up in [0.12, slen * 0.5]:
-			var foot := _lean_point(G, a, s_up, under)
-			if (s_up < 0.5 and foot.y > 0.08) or (s_up > 0.5 and foot.y > 1.4):
-				_emit_obox(g.lumber, Vector3(foot.x, foot.y * 0.5, foot.z), Vector3.UP, along_v,
-					Vector3(foot.y, LEG_W, LEG_W))
-				g.counts["lumber"] += 1
-	var amid := (amin + amax) * 0.5
-	var span := amax - amin
-	_emit_obox(g.lumber, _lean_point(G, amid, slen - 0.07, lift_r), along_v, Vector3.UP,
-		Vector3(span, RAFTER_D, RAFTER_W))
-	var foot0 := _lean_point(G, amid, 0.12, under)
-	if foot0.y > 0.08:
-		_emit_obox(g.lumber, Vector3(foot0.x, 0.045, foot0.z), along_v, Vector3.UP,
-			Vector3(span + LEG_W, 0.09, RAFTER_D))
-	g.counts["lumber"] += 2
+	var fov := g.begin([eid, eid + ":frame"], [elab, "Rafters and legs"])
+	if not bool(fov.get("hidden", false)):
+		var lum := g.surf(fov, g.lumber)
+		for ra in raf:
+			var a := clampf(float(ra), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
+			_emit_obox(lum, _lean_point(G, a, slen * 0.5, lift_r), dv, nv,
+				Vector3(slen, RAFTER_D, RAFTER_W))
+			g.counts["lumber"] += 1
+			# A leg under the low end, and a prop at mid-slope on tall arrays.
+			for s_up in [0.12, slen * 0.5]:
+				var foot := _lean_point(G, a, s_up, under)
+				if (s_up < 0.5 and foot.y > 0.08) or (s_up > 0.5 and foot.y > 1.4):
+					_emit_obox(lum, Vector3(foot.x, foot.y * 0.5, foot.z), Vector3.UP, along_v,
+						Vector3(foot.y, LEG_W, LEG_W))
+					g.counts["lumber"] += 1
+		var amid := (amin + amax) * 0.5
+		var span := amax - amin
+		_emit_obox(lum, _lean_point(G, amid, slen - 0.07, lift_r), along_v, Vector3.UP,
+			Vector3(span, RAFTER_D, RAFTER_W))
+		var foot0 := _lean_point(G, amid, 0.12, under)
+		if foot0.y > 0.08:
+			_emit_obox(lum, Vector3(foot0.x, 0.045, foot0.z), along_v, Vector3.UP,
+				Vector3(span + LEG_W, 0.09, RAFTER_D))
+		g.counts["lumber"] += 2
 	for sg in live:
 		var a0: float = sg["a0"]
 		var a1: float = sg["a1"]
+		var bid := str(sg["id"])
+		var pre: Array = [eid, bid]
+		var pre_l: Array = [elab, str(sg["label"])]
 		var purlins: Array = []
 		match str(sg["surface"]):
 			"solar":
@@ -1958,33 +2443,45 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 					var ph: float = lay["ph"]
 					for r in int(lay["nr"]):
 						for c in int(lay["nc"]):
+							var mov := g.begin(pre + ["%s:m%d,%d" % [bid, r, c]],
+								pre_l + ["Panel %d" % (r * int(lay["nc"]) + c + 1)])
+							if bool(mov.get("hidden", false)):
+								continue
 							var pa := float(lay["a_start"]) + float(c) * (pw + PV_GAP) + pw * 0.5
 							var ps := float(lay["s_start"]) + float(r) * (ph + PV_GAP) + ph * 0.5
 							_emit_obox(g.pv, _lean_point(G, pa, ps, PV_T * 0.5), long_ax, nv,
 								Vector3(PV_LONG, PV_T, PV_SHORT))
+							g.counts["solar_panels"] += 1
+							g.counts["solar_watts"] += float(e["panel_watts"])
 					for r in range(int(lay["nr"]) + 1):
 						purlins.append(float(lay["s_start"]) + float(r) * (ph + PV_GAP) - PV_GAP * 0.5)
-					g.counts["solar_panels"] += int(lay["count"])
-					g.counts["solar_watts"] += float(lay["count"]) * float(e["panel_watts"])
 			"glazing":
-				_emit_slope_sheets(g, g.glass, G, a0, a1, GLAZING_T, "glazing")
+				_emit_slope_sheets(g, g.glass, G, a0, a1, GLAZING_T, "glazing", pre, pre_l, bid, false)
 			"plywood":
-				_emit_slope_sheets(g, g.ply, G, a0, a1, PLY_T, "plywood")
+				_emit_slope_sheets(g, g.ply, G, a0, a1, PLY_T, "plywood", pre, pre_l, bid, true)
 		if purlins.is_empty():
 			var k := 0.0
 			while k < slen:
 				purlins.append(k)
 				k += 2.0 * FT
 			purlins.append(slen)
+		var pov := g.begin(pre + [bid + ":purlins"], pre_l + ["Purlins"])
+		if bool(pov.get("hidden", false)):
+			continue
+		var pst := g.surf(pov, g.lumber)
 		for ps in purlins:
 			var sp := clampf(float(ps), 0.04, slen - 0.04)
-			_emit_obox(g.lumber, _lean_point(G, (a0 + a1) * 0.5, sp, -PURLIN_T * 0.5), along_v, nv,
+			_emit_obox(pst, _lean_point(G, (a0 + a1) * 0.5, sp, -PURLIN_T * 0.5), along_v, nv,
 				Vector3(a1 - a0, PURLIN_T, PURLIN_W))
 			g.counts["lumber"] += 1
 	# Close the triangular ends (a greenhouse) and the skirt under a raised slope.
 	var ends := str(e.get("ends", "open"))
 	if ends != "open":
-		var st_e: SurfaceTool = g.glass if ends == "glazing" else g.ply
+		var eov := g.begin([eid, eid + ":ends"], [elab, "End walls"])
+		if bool(eov.get("hidden", false)):
+			g.end_part()
+			return
+		var st_e: SurfaceTool = g.glass if ends == "glazing" else g.surf(eov, g.ply)
 		var o_wall := POST_W * 0.5 + 0.02
 		var top_y: float = G.top_y
 		var bot_y: float = G.bot_y
@@ -1997,10 +2494,13 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 			if bot_y > 0.05:
 				_emit_quad(st_e, w_bot, p_bot, Vector3(p_bot.x, 0.0, p_bot.z), Vector3(w_bot.x, 0.0, w_bot.z))
 			g.counts["glazing" if ends == "glazing" else "plywood"] += 1
+	g.end_part()
 
 
+## `pre` / `pre_l` = the bay's path + labels; each sheet is a part of the bay.
 static func _emit_slope_sheets(g: _Geom, st: SurfaceTool, G: Dictionary, a0: float, a1: float,
-		thick: float, count_key: String) -> void:
+		thick: float, count_key: String, pre: Array = [], pre_l: Array = [], bid: String = "",
+		paintable: bool = false) -> void:
 	var along_v: Vector3 = (G.fr as Dictionary).along
 	var nv: Vector3 = G.n
 	var slen: float = G.slope_len
@@ -2016,7 +2516,15 @@ static func _emit_slope_sheets(g: _Geom, st: SurfaceTool, G: Dictionary, a0: flo
 			var sh := minf(SHEET_LONG, slen - ss) - SEAM
 			if sh <= 0.01:
 				continue
-			_emit_obox(st, _lean_point(G, sa + sw * 0.5, ss + sh * 0.5, thick * 0.5), along_v, nv,
+			var sst := st
+			if not pre.is_empty():
+				var ov := g.begin(pre + ["%s:s%d,%d" % [bid, ia, si]],
+					pre_l + ["Sheet %d" % (si * na + ia + 1)])
+				if bool(ov.get("hidden", false)):
+					continue
+				if paintable:
+					sst = g.surf(ov, st)
+			_emit_obox(sst, _lean_point(G, sa + sw * 0.5, ss + sh * 0.5, thick * 0.5), along_v, nv,
 				Vector3(sw, thick, sh))
 			g.counts[count_key] += 1
 
@@ -2189,12 +2697,22 @@ static func _railing_runs(s: Dictionary, L: Dictionary, e: Dictionary) -> Array:
 
 
 static func _emit_railing(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary) -> void:
-	for r in _railing_runs(s, L, e):
-		_emit_rail_run(g, r["a"], r["b"], float(r["h"]))
+	var eid := "el:" + str(e.get("id", ""))
+	var elab := element_label(e, s) if g.record else ""
+	var runs := _railing_runs(s, L, e)
+	for k in runs.size():
+		var r: Dictionary = runs[k]
+		var ov := g.begin([eid, "%s:r%d" % [eid, k]], [elab, "Rail %d" % (k + 1)])
+		if bool(ov.get("hidden", false)):
+			continue
+		_emit_rail_run(g, r["a"], r["b"], float(r["h"]), g.surf(ov, g.lumber))
 
 
 ## Posts at most RAIL_POST_MAX apart, a flat cap rail and a mid rail.
-static func _emit_rail_run(g: _Geom, a: Vector3, b: Vector3, h: float) -> void:
+static func _emit_rail_run(g: _Geom, a: Vector3, b: Vector3, h: float,
+		st: SurfaceTool = null) -> void:
+	if st == null:
+		st = g.lumber
 	var dv := b - a
 	var len := dv.length()
 	if len < 0.1:
@@ -2203,11 +2721,11 @@ static func _emit_rail_run(g: _Geom, a: Vector3, b: Vector3, h: float) -> void:
 	var np := maxi(1, int(ceil(len / RAIL_POST_MAX)))
 	for k in range(np + 1):
 		var p := a + axis * (len * float(k) / float(np))
-		_emit_obox(g.lumber, p + Vector3.UP * (h * 0.5), Vector3.UP, axis,
+		_emit_obox(st, p + Vector3.UP * (h * 0.5), Vector3.UP, axis,
 			Vector3(h, 1.5 * IN, 3.5 * IN))
-	_emit_obox(g.lumber, (a + b) * 0.5 + Vector3.UP * (h + 0.75 * IN), axis, Vector3.UP,
+	_emit_obox(st, (a + b) * 0.5 + Vector3.UP * (h + 0.75 * IN), axis, Vector3.UP,
 		Vector3(len + 0.09, 1.5 * IN, 3.5 * IN))
-	_emit_obox(g.lumber, (a + b) * 0.5 + Vector3.UP * (h * 0.5), axis, Vector3.UP,
+	_emit_obox(st, (a + b) * 0.5 + Vector3.UP * (h * 0.5), axis, Vector3.UP,
 		Vector3(len, 3.5 * IN, 1.5 * IN))
 	g.counts["lumber"] += np + 3
 	g.counts["railing_ft"] += len / FT
@@ -2321,10 +2839,19 @@ static func solar_summary(spec: Dictionary) -> Dictionary:
 		if not (e is Dictionary) or str(e.get("type", "")) != "lean_to":
 			continue
 		var G := _lean_to_geo(s, L, e)
+		var eid := "el:" + str(e.get("id", ""))
 		for sg in G.segs:
 			if str(sg["surface"]) != "solar":
 				continue
-			var n := int(_pv_layout(G, sg["a0"], sg["a1"], e)["count"])
+			var lay := _pv_layout(G, sg["a0"], sg["a1"], e)
+			var bid := "%s:%d" % [eid, int(sg["i"])]
+			# Modules hidden one by one (or a hidden bay) make nothing.
+			var n := 0
+			if int(lay["count"]) > 0:
+				for r in int(lay["nr"]):
+					for c in int(lay["nc"]):
+						if not bool(merged_override(s, [eid, bid, "%s:m%d,%d" % [bid, r, c]]).get("hidden", false)):
+							n += 1
 			count += n
 			watts += float(n) * float(e["panel_watts"])
 			nsum += (G.n as Vector3) * float(n)
@@ -2455,6 +2982,10 @@ static func _emit_strut(st: SurfaceTool, a: Vector3, b: Vector3, thick: float) -
 
 
 static func _emit_box(st: SurfaceTool, xf: Transform3D, size: Vector3) -> void:
+	if _rec != null:
+		st = _rec.route(st)
+		if _rec.record:
+			_rec.add_box(xf, size)
 	var h := size * 0.5
 	var c := [
 		Vector3(-h.x, -h.y, -h.z), Vector3(h.x, -h.y, -h.z),
@@ -2549,6 +3080,22 @@ static func _glass_material() -> StandardMaterial3D:
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.roughness = 0.08
 	m.metallic_specular = 0.8
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+
+## Painted steel (a beam or upright given its own colour).
+static func _paint_metal_material(hex: String) -> StandardMaterial3D:
+	var c := Color.html(hex) if Color.html_is_valid(hex) else Color(0.5, 0.5, 0.5)
+	return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, c)
+
+
+## Everything outside the group open in the editor: faded, so the group reads.
+static func _dim_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.62, 0.66, 0.72, 0.16)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return m
 

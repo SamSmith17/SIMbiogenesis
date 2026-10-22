@@ -129,9 +129,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 			bay = c
 	_ok(not bay.is_empty(), "the glazed bay is pickable")
 	if not bay.is_empty():
-		ui.set("_selection", [str(bay["id"])])
-		ui.call("_refresh_inspector")
-		ui.call("_refresh_highlight")
+		ui.call("_set_ctx", ["el:" + str(bay["el_id"])], [str(bay["id"])])
 		await _settle(tree, 6)
 		var fields: Dictionary = ui.get("_insp_fields")
 		_ok(fields.has("_seg"), "a bay's own covering is in the card")
