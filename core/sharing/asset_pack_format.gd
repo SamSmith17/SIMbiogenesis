@@ -48,7 +48,7 @@ const CFG_JSON_EXT := ".cfgjson"
 
 ## Never exported, never imported, never offered.
 const SECRET_FILES := [
-	"ha_connection.cfg", "uisp_settings.cfg", "terrain_config.cfg", "keys_config.cfg",
+	"ha_connection.cfg", "ha_profiles.cfg", "uisp_settings.cfg", "terrain_config.cfg", "keys_config.cfg",
 	"discord_auth.cfg", "discord_config.cfg", "discord_cache.cfg", "mp_prefs.cfg",
 	"mp_telemetry.log", "solar_ui_ha_entities.cfg", "location_prefs.cfg",
 	"automations.yaml", "progress.json",

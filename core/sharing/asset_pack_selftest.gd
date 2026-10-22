@@ -29,7 +29,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --script core/sharing/asset_pack_selftest.gd
 ## (--import first after adding class_names.)
 
-const EXPECTED_CHECKS := 116
+const EXPECTED_CHECKS := 117
 
 const LAT := 44.0113
 const LON := -123.5911
@@ -88,6 +88,7 @@ func _test_format() -> void:
 	_check("entry: cfgjson library ok", F.entry_allowed("library/resource_kinds.cfgjson"))
 	_check("entry: secret cfgjson refused", not F.entry_allowed("library/terrain_config.cfgjson"))
 	_check("entry: secret setting refused", not F.entry_allowed("settings/ha_connection.cfgjson"))
+	_check("entry: saved HA instances refused", not F.entry_allowed("settings/ha_profiles.cfgjson"))
 	_check("entry: shareable setting ok", F.entry_allowed("settings/npc_display.cfgjson"))
 	_check("entry: art glb ok", F.entry_allowed("project/Imported Models/NPC/Walking.fbx"))
 	_check("entry: art .import ok", F.entry_allowed("project/Imported Models/NPC/Walking.fbx.import"))
@@ -211,6 +212,7 @@ func _seed_sender() -> void:
 	# Secrets, each with a sentinel.
 	_write(_u("terrain_config.cfg"), '[opentopography]\napi_key="%s"\n' % SENTINELS[0])
 	_write(_u("ha_connection.cfg"), '[connection]\ntoken="%s"\n' % SENTINELS[1])
+	_write(_u("ha_profiles.cfg"), '[profile.ha_1]\ntoken="%s"\n' % SENTINELS[1])
 	_write(_u("discord_auth.cfg"), '[auth]\nrefresh_token="%s"\n' % SENTINELS[2])
 	_write(_u("communities/123.json"), '{"directory_webhook": "%s"}' % SENTINELS[3])
 	_write(_u("mp_prefs.cfg"), '[mp]\ndisplay_name="%s"\n' % SENTINELS[4])
@@ -266,7 +268,7 @@ func _test_catalog_and_roundtrip() -> void:
 			all_src.append(str(e.get("src", "")))
 	var leaked := false
 	for s in all_src + all_zip:
-		for bad in ["terrain_config", "ha_connection", "discord_auth", "communities", "mp_prefs",
+		for bad in ["terrain_config", "ha_connection", "ha_profiles", "discord_auth", "communities", "mp_prefs",
 				"location_prefs", "openscad", "logs/", "veg_impostors", "_trash", "evil.gd", "not_art"]:
 			if str(s).contains(bad):
 				leaked = true

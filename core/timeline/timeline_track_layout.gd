@@ -98,6 +98,26 @@ func find_track(track_id : String) -> TimelineTrackDef:
 	return null
 
 
+## A Home Assistant observed track: `target_id` is a Live links target
+## (HaTargets id) whose recorded readings the lane draws.
+func add_ha_track(target_id : String, label : String) -> TimelineTrackDef:
+	for t in tracks:
+		if t is TimelineTrackDef and (t as TimelineTrackDef).source == "ha" and (t as TimelineTrackDef).channel == target_id:
+			(t as TimelineTrackDef).enabled = true
+			return t
+	var t := TimelineTrackDef.new()
+	t.id = "ha_%s_%d" % [target_id.replace(".", "_"), Time.get_ticks_msec()]
+	t.kind = TimelineTrackDef.KIND_WAVEFORM
+	t.channel = target_id
+	t.source = "ha"
+	t.label = "HA: %s" % label
+	t.color = Color(0.40, 0.85, 0.95, 1.0)
+	t.height = 28.0
+	t.enabled = true
+	tracks.append(t)
+	return t
+
+
 func add_waveform_track(channel_id : String, source : String) -> TimelineTrackDef:
 	var meta : Dictionary = TimelineTrackDef.lookup_channel(channel_id)
 	if meta.is_empty():

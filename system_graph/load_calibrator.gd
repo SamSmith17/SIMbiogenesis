@@ -129,7 +129,14 @@ func cancel() -> void:
 		return
 	_running = false
 	set_process(false)
+	_switch_back_off()
 	cancelled.emit(_item_id)
+
+
+## The calibration switched the load on; put it back off when it ends.
+func _switch_back_off() -> void:
+	if not _switch_eid.is_empty() and _ha_client != null and _ha_client.has_method("call_service"):
+		_ha_client.call_service("switch", "turn_off", _switch_eid, {}, true)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +181,7 @@ func _poll_sample() -> void:
 func _finish() -> void:
 	_running = false
 	set_process(false)
+	_switch_back_off()
 	var results := _finalize()
 	# Write calibration into the graph item.
 	if _model != null and not _item_id.is_empty():

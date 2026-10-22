@@ -378,6 +378,9 @@ var _ha_lux_override: float = -1.0  # Lux from HA (-1 = not overridden)
 var _ha_rain_rate_override: float = -1.0  # mm/h from HA (-1 = not overridden)
 var _ha_rain_state_override: int = -1  # 0 = not raining, 1 = raining, -1 = not overridden
 var _ha_temperature_override: float = -999.0  # °C from HA (-999 = not overridden)
+## True once a world's Live links (HAEntityLinker) drive the site values; the
+## per-field entity ids above then only feed the solar history graph.
+var ha_links_external: bool = false
 var _ha_wind_speed_override: float = -1.0  # m/s from HA (-1 = not overridden)
 
 # Simulated weather data (for display when not in live mode)
@@ -617,7 +620,7 @@ func _on_ha_auth_changed(authenticated: bool) -> void:
 
 func _request_ha_initial_states() -> void:
 	"""Request initial state for configured HA entities"""
-	if ha_client == null:
+	if ha_client == null or ha_links_external:
 		return
 	
 	var entities_to_request: Array[String] = []
@@ -833,6 +836,13 @@ func _create_entity_link_popup() -> void:
 
 func _show_entity_link_popup(target: String, title: String, placeholder: String, current_value: String) -> void:
 	"""Show the entity link popup for a specific field"""
+	# The Live links window (searchable entity picker) replaces the free-text
+	# popup for every live value; the history-graph sensor keeps the popup.
+	var tid := str(HaTargets.SOLAR_UI_KEYS.get(target, ""))
+	var main := get_tree().current_scene if get_tree() != null else null
+	if not tid.is_empty() and main != null and main.has_method("open_ha_links"):
+		main.call("open_ha_links", tid)
+		return
 	if _entity_link_popup == null:
 		return
 	
@@ -1729,10 +1739,77 @@ func is_simulating_from_live() -> bool:
 	"""Returns true if simulating forward from live data snapshot"""
 	return _live_mode_active and _simulation_mode
 
+## Home Assistant link runtime (HAEntityLinker): one live reading for a site
+## or weather target, already converted into this field's unit (HaTargets).
+## Ignored while simulating forward, like the old per-field entities.
+func set_live_reading(field: String, value: float) -> void:
+	if _simulation_mode:
+		return
+	match field:
+		"battery_soc":
+			_ha_battery_soc_override = clampf(value, 0.0, 100.0)
+			battery_kwh_stored = (_ha_battery_soc_override / 100.0) * BATTERY_CAPACITY_KWH
+		"solar_kw":
+			_ha_solar_override = maxf(value, 0.0)
+		"load_kw":
+			_ha_load_override = maxf(value, 0.0)
+		"daily_solar_kwh":
+			_ha_daily_solar_override = maxf(value, 0.0)
+		"irradiance":
+			_ha_solar_radiation_override = maxf(value, 0.0)
+		"lux":
+			_ha_lux_override = maxf(value, 0.0)
+		"rain_rate":
+			_ha_rain_rate_override = maxf(value, 0.0)
+		"raining":
+			_ha_rain_state_override = 1 if value >= 0.5 else 0
+		"temp_c":
+			_ha_temperature_override = value
+		"wind_ms":
+			_ha_wind_speed_override = maxf(value, 0.0)
+		_:
+			return
+	if field in ["irradiance", "lux", "rain_rate", "raining"] and _weather_live_mode:
+		_apply_live_weather_to_simulation()
+	if field in ["irradiance", "lux", "rain_rate", "raining", "temp_c", "wind_ms"]:
+		_update_weather_data_display()
+
+
+## The link was removed: the sim's own value takes over again.
+func clear_live_reading(field: String) -> void:
+	match field:
+		"battery_soc": _ha_battery_soc_override = -1.0
+		"solar_kw": _ha_solar_override = -1.0
+		"load_kw": _ha_load_override = -1.0
+		"daily_solar_kwh": _ha_daily_solar_override = -1.0
+		"irradiance": _ha_solar_radiation_override = -1.0
+		"lux": _ha_lux_override = -1.0
+		"rain_rate": _ha_rain_rate_override = -1.0
+		"raining": _ha_rain_state_override = -1
+		"temp_c": _ha_temperature_override = -999.0
+		"wind_ms": _ha_wind_speed_override = -1.0
+
+
+## The simulation's own value for a weather / daily field (sim vs real).
+func get_live_reading_sim(field: String) -> float:
+	match field:
+		"irradiance": return _simulated_solar_radiation
+		"lux": return _simulated_lux
+		"rain_rate": return _simulated_rain_rate
+		"raining": return 1.0 if _simulated_rain_rate > 0.0 else 0.0
+		"temp_c": return _simulated_temperature
+		"wind_ms": return _simulated_wind_speed
+	return NAN
+
+
 func _on_ha_sensor_updated(entity_id: String, state: Dictionary) -> void:
 	"""Handle incoming sensor data from Home Assistant"""
 	# In simulation mode (fast-forward from live), ignore HA updates
 	if _simulation_mode:
+		return
+	# A world's Live links drive these values now (HAEntityLinker →
+	# set_live_reading); only the history-graph entity is still read here.
+	if ha_links_external and entity_id != ha_solar_energy_entity:
 		return
 	
 	var state_value: String = state.get("state", "")

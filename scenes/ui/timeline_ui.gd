@@ -142,6 +142,7 @@ var _challenge_chip: Button = null
 var _challenge_picker_panel: Control = null
 ## Multiplayer lobby (listen-server co-presence) + status chip + chat HUD.
 var _mp_chip: Button = null
+var _ha_chip: Button = null
 var _mp_lobby: Control = null
 var _mp_chat_hud: Control = null
 var _conduits_chip: Button = null
@@ -829,6 +830,26 @@ func _rebuild_tracks_menu() -> void:
 			_tracks_menu.add_item("＋ %s (%s)" % [str(ch.get("label", cid)), src], add_base + add_i)
 			_tracks_menu.set_item_metadata(_tracks_menu.item_count - 1, {"add": cid, "source": str(src)})
 			add_i += 1
+	# Home Assistant: one observed track per Live link in this world.
+	var linker := _ha_linker()
+	if linker != null:
+		var first := true
+		for l in linker.call("links"):
+			var tid := str(l.get("target_id", ""))
+			var t: Dictionary = linker.call("target", tid)
+			if t.is_empty():
+				continue
+			if first:
+				_tracks_menu.add_separator()
+				first = false
+			_tracks_menu.add_item("＋ HA: %s" % str(t.get("label", tid)), add_base + add_i)
+			_tracks_menu.set_item_metadata(_tracks_menu.item_count - 1, {"add_ha": tid, "label": str(t.get("label", tid))})
+			add_i += 1
+
+
+func _ha_linker() -> Node:
+	var g := ServiceLocator.graph()
+	return g.get("_ha_linker") if g != null else null
 
 
 func _on_tracks_pressed() -> void:
@@ -844,7 +865,11 @@ func _on_tracks_menu_id_pressed(id : int) -> void:
 	if _tracks_menu == null:
 		return
 	var meta : Variant = _tracks_menu.get_item_metadata(id)
-	if meta is Dictionary and meta.has("add"):
+	if meta is Dictionary and meta.has("add_ha"):
+		var dh : Dictionary = meta as Dictionary
+		_track_layout.add_ha_track(str(dh["add_ha"]), str(dh.get("label", "")))
+		_save_track_layout_prefs()
+	elif meta is Dictionary and meta.has("add"):
 		var d : Dictionary = meta as Dictionary
 		_track_layout.add_waveform_track(str(d.get("add", "")), str(d.get("source", "live")))
 		_save_track_layout_prefs()
@@ -1448,6 +1473,9 @@ func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : f
 	var bg := Color(0.05, 0.07, 0.11, 0.55)
 	TimelineWaveformDraw.draw_track_background(_track, lane_rect, bg, Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.35))
 	TimelineWaveformDraw.draw_label(_track, lane_rect, td.label, td.color, fnt)
+	if td.source == "ha":
+		_draw_ha_lane(td, lane_rect, win_start, span, w, fnt)
+		return
 	if solar == null or not solar.has_method("get_timeline_waveform_bins"):
 		return
 	var bins : int = clampi(int(w), 64, 512)
@@ -1471,6 +1499,54 @@ func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : f
 	else:
 		var v_max := TimelineWaveformDraw.vmax_for_bins(samples, td.channel, cap)
 		TimelineWaveformDraw.draw_envelope(_track, lane_rect, samples, v_max, td.color)
+
+
+## A Home Assistant observed track: the linked sensor's recorded readings
+## (HAEntityLinker.observed_bins, real time), drawn as a line that breaks
+## where nothing was recorded, scaled to its own min / max in the window.
+func _draw_ha_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
+		w : float, fnt : Font) -> void:
+	var linker := _ha_linker()
+	if linker == null:
+		return
+	var bins : int = clampi(int(w / 3.0), 32, 400)
+	var samples : PackedFloat32Array = linker.call("observed_bins", td.channel, win_start, win_start + span, bins)
+	var lo := INF
+	var hi := -INF
+	for v in samples:
+		if not is_nan(v):
+			lo = minf(lo, v)
+			hi = maxf(hi, v)
+	if lo == INF:
+		var t : Dictionary = linker.call("target", td.channel)
+		var msg := "no readings in this window" if not t.is_empty() else "link removed"
+		_track.draw_string(fnt, Vector2(lane_rect.position.x + 120.0, lane_rect.position.y + lane_rect.size.y * 0.5 + 4.0),
+			msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.65, 0.72, 0.8))
+		return
+	if hi - lo < 1e-6:
+		hi = lo + 1.0
+	var pad := lane_rect.size.y * 0.15
+	var y0 := lane_rect.position.y + lane_rect.size.y - pad
+	var yh := lane_rect.size.y - pad * 2.0
+	var bw := w / float(bins)
+	var seg := PackedVector2Array()
+	for i in bins:
+		var v := samples[i]
+		if is_nan(v):
+			if seg.size() >= 2:
+				_track.draw_polyline(seg, td.color, 1.5, true)
+			seg = PackedVector2Array()
+			continue
+		seg.append(Vector2(lane_rect.position.x + (float(i) + 0.5) * bw, y0 - (v - lo) / (hi - lo) * yh))
+	if seg.size() >= 2:
+		_track.draw_polyline(seg, td.color, 1.5, true)
+	elif seg.size() == 1:
+		_track.draw_circle(seg[0], 1.5, td.color)
+	var t2 : Dictionary = linker.call("target", td.channel)
+	var unit := str(t2.get("unit", ""))
+	_track.draw_string(fnt, Vector2(lane_rect.position.x + lane_rect.size.x - 150.0, lane_rect.position.y + 11.0),
+		"%.1f – %.1f %s" % [lo, hi, unit if unit != "bool" else ""], HORIZONTAL_ALIGNMENT_RIGHT, 144, 9,
+		Color(td.color.r, td.color.g, td.color.b, 0.75))
 
 
 ## Draw a clip rect for an absolute-hours range on a lane (clamped to the window).
@@ -2947,6 +3023,10 @@ func _build_right_cluster() -> Control:
 	_mp_chip = _mk_chip_btn("Multiplayer", _on_mp_pressed,
 		"Multiplayer — host or join a private listen-server session (avatars + shared clock)")
 	right.add_child(_mp_chip)
+	_ha_chip = _mk_chip_btn("HA", _on_ha_chip_pressed,
+		"Home Assistant — not connected. Click to set it up.")
+	right.add_child(_ha_chip)
+	_hook_ha_chip()
 	_conduits_chip = _mk_chip_btn("3D wires", _on_conduits_chip_pressed,
 		"Toggle 3D graph wires in the world (off by default for performance)")
 	right.add_child(_conduits_chip)
@@ -3008,7 +3088,7 @@ func _build_right_cluster() -> Control:
 			[report_btn, "Site Report"], [map_btn, "Map select"],
 			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
 			[_festival_chip, "Festival mode"], [_settlement_chip, "Settlement view"],
-			[_projects_chip, "Site Projects"]]:
+			[_projects_chip, "Site Projects"], [_ha_chip, "Home Assistant"]]:
 		var b: Button = pair[0]
 		var lbl := str(pair[1])
 		if b.text.length() <= 2:
@@ -3060,6 +3140,67 @@ func _on_library_pressed() -> void:
 func _on_settings_pressed() -> void:
 	if _settings_panel != null and _settings_panel.has_method("toggle"):
 		_settings_panel.toggle()
+
+
+## Home Assistant status chip: grey = off, amber = connecting / retrying,
+## green = connected (with how many sensors are live), red = failed. A click
+## opens Settings on the Home Assistant page.
+func _hook_ha_chip() -> void:
+	var ha := get_node_or_null("/root/HomeAssistant")
+	if ha == null:
+		_ha_chip.visible = false
+		return
+	if not ha.is_connected("state_changed", _on_ha_state_changed):
+		ha.connect("state_changed", _on_ha_state_changed)
+	_refresh_ha_chip()
+
+
+func _on_ha_state_changed(_state: int, _info: Dictionary) -> void:
+	_refresh_ha_chip()
+
+
+func _refresh_ha_chip() -> void:
+	if _ha_chip == null or Engine.is_editor_hint():
+		return
+	var ha := get_node_or_null("/root/HomeAssistant")
+	if ha == null:
+		return
+	var st := int(ha.get("state"))
+	var info: Dictionary = ha.call("info")
+	var col := UITheme.C_TEXT_M
+	var text := "HA"
+	match st:
+		HomeAssistantService.State.CONNECTING, HomeAssistantService.State.AUTHENTICATING:
+			col = UITheme.C_WARN
+			text = "HA …"
+		HomeAssistantService.State.CONNECTED:
+			col = UITheme.C_OK
+			var live := int(ha.call("live_link_count")) if ha.has_method("live_link_count") else 0
+			text = "HA · %d live" % live if live > 0 else "HA"
+		HomeAssistantService.State.FAILED:
+			col = UITheme.C_WARN if info.has("retry_in_s") else UITheme.C_ERROR
+			text = "HA ✕"
+	_ha_chip.text = text
+	_ha_chip.add_theme_color_override("font_color", col)
+	var tip := "Home Assistant — %s" % str(ha.call("status_text"))
+	if st == HomeAssistantService.State.FAILED:
+		tip += "\n" + str(info.get("detail", ""))
+	tip += "\nClick to open the Home Assistant settings."
+	_ha_chip.tooltip_text = tip
+
+
+func _on_ha_chip_pressed() -> void:
+	open_settings_page("Home Assistant")
+
+
+## Open the Settings modal on one page (by its title).
+func open_settings_page(title: String) -> void:
+	if _settings_panel == null:
+		return
+	if _settings_panel.has_method("open"):
+		_settings_panel.call("open")
+	if _settings_panel.has_method("open_page"):
+		_settings_panel.call("open_page", title)
 
 
 func _on_mp_pressed() -> void:

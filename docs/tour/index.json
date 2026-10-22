@@ -1037,12 +1037,37 @@
       "image": "starshade_crew.jpg",
       "image_run": "2026-10-14T20:27:56",
       "image_commit": "27831f5"
+    },
+    "home_assistant": {
+      "id": "home_assistant",
+      "title": "Home Assistant live links",
+      "chapter": "Systems",
+      "summary": "Connect your Home Assistant and link any sensor to any value the simulation tracks.",
+      "how": [
+        "Settings → Home Assistant: address + long-lived token → Connect",
+        "Live links: pick a value, click the sensor that measures it",
+        "Turn on Live mode and linked values follow your real system"
+      ],
+      "action": "",
+      "button": "HA",
+      "key": "",
+      "open_hints": [
+        "Click HA"
+      ],
+      "world": "mtvernon",
+      "blurb": "Type your Home Assistant's address the way a browser shows it and paste a long-lived token; the status card shows each step as it happens and offers the right address when the port is wrong. Live links ties any HA sensor to any value the simulation tracks — the battery, solar, a load, a tank, the weather — with the units converted. In Live mode the simulation follows your real system; at any speed the readings are recorded beside it on the timeline.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "home_assistant.jpg",
+      "image_run": "2026-10-22T15:50:15",
+      "image_commit": "327a083"
     }
   },
   "last_run": {
-    "label": "tour_privacy_sr",
-    "generated": "2026-10-15T12:26:16",
-    "git_commit": "27831f5",
+    "label": "ha_tour",
+    "generated": "2026-10-22T15:50:15",
+    "git_commit": "327a083",
     "passed": 1,
     "total": 1,
     "video_secs": null

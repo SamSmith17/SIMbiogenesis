@@ -2,11 +2,13 @@ extends Node
 
 ## EcoWorthy SL3500 Inverter + Shelly Pro 4PM digital twin bridge.
 ##
-## Autoload singleton that subscribes to every Home Assistant entity from the
-## EcoWorthy RS-485/ESPHome dashboard and the Shelly Pro 4PM power meter.
-## Exposes live sensor values as typed properties and emits signals on change.
-## Provides service-call helpers so any in-game node can read data or control
-## Shelly outputs without knowing the HA WebSocket internals.
+## Mirrors the EcoWorthy ESPHome dashboard and a Shelly Pro 4PM into typed
+## properties WHEN those entities are linked in the open world (Live links;
+## Presets → "EcoWorthy inverter" / "Shelly Pro 4PM" link them in one step).
+## It no longer subscribes to the original author's device ids by name — the
+## id lists below are kept as the reference for what the properties mean.
+## The Shelly helpers switch whatever entity a shelly4pm node's channel is
+## linked to.
 ##
 ## Usage:
 ##   # Read a sensor value
@@ -199,7 +201,6 @@ var raw_states: Dictionary = {}
 
 # ── Internal ──────────────────────────────────────────────────────────────────
 var _ha_client: Node = null
-var _subscribed: bool = false
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -207,37 +208,17 @@ func _ready() -> void:
 	call_deferred("_find_and_connect")
 
 func _find_and_connect() -> void:
-	await get_tree().create_timer(0.5).timeout
-	var root := get_tree().root
-	for child in root.get_children():
-		var client := child.get_node_or_null("HAClient")
-		if client != null:
-			_ha_client = client
-			break
+	# The HomeAssistant autoload owns the connection (it used to be a node in
+	# each map scene, which this looked for once at boot — at the launch hub,
+	# where there is none — and so never connected).
+	_ha_client = get_node_or_null("/root/HomeAssistant")
 	if _ha_client == null:
 		return
 	_ha_client.sensor_updated.connect(_on_sensor_updated)
 	_ha_client.authentication_status_changed.connect(_on_auth_changed)
-	if _ha_client.get("is_authenticated"):
-		_subscribe_all()
 
 func _on_auth_changed(authenticated: bool) -> void:
 	connected_changed.emit(authenticated)
-	if authenticated:
-		_subscribed = false  # Allow re-subscribe after reconnect
-		_subscribe_all()
-
-func _subscribe_all() -> void:
-	if _ha_client == null or _subscribed:
-		return
-	_subscribed = true
-	var all_entities: Array[String] = []
-	all_entities.append_array(INVERTER_ENTITIES)
-	all_entities.append_array(SHELLY_ENTITIES)
-	if _ha_client.has_method("subscribe_to_entities"):
-		_ha_client.subscribe_to_entities(all_entities)
-	if _ha_client.has_method("get_entity_states"):
-		_ha_client.get_entity_states(all_entities)
 
 # ── Sensor update handler ─────────────────────────────────────────────────────
 
@@ -453,10 +434,23 @@ func set_shelly_output(output_index: int, on: bool) -> void:
 	if _ha_client != null and _ha_client.has_method("call_service"):
 		_ha_client.call_service("switch", service, entity_id)
 
+## The switch entity the first shelly4pm node's channel is linked to (Live
+## links), "" when none is.
 func _shelly_switch_id(output_index: int) -> String:
 	if output_index < 0 or output_index > 3:
 		return ""
-	return "switch.shellypro4pm_ece334ed2e80_output_%d" % output_index
+	var g := ServiceLocator.graph()
+	var linker: Node = g.get("_ha_linker") if g != null else null
+	var model: Variant = g.get("model") if g != null else null
+	if linker == null or model == null:
+		return ""
+	for it in model.items:
+		if str(it.get("type", "")) != "shelly4pm":
+			continue
+		var l: Dictionary = linker.call("link_for_target", HaTargets.item_target_id(str(it["id"]), "c%d_switch" % output_index))
+		if not l.is_empty():
+			return str(l["entity_id"])
+	return ""
 
 # ── Convenience helpers ───────────────────────────────────────────────────────
 

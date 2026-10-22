@@ -1,7 +1,7 @@
 class_name CsvHistoryPlayer
 extends Node
 ## Replays a Home Assistant CSV export (entity_id,state,last_changed) through
-## HAClient.sensor_updated and HAEntityLinker.apply_historical_value, while
+## the world's Live links (HAEntityLinker.apply_historical_value), while
 ## driving main.gd world clock from the CSV timestamps.
 
 signal state_changed(state: int)
@@ -377,8 +377,10 @@ func _apply_at_cursor() -> void:
 
 
 func _push_sample(entity_id: String, value: float, t_unix: int) -> void:
-	if _ha_client != null and _ha_client.has_signal("sensor_updated"):
-		_ha_client.sensor_updated.emit(entity_id, {"state": str(value)})
+	# Recorded samples go through the world's Live links (the linker applies
+	# them in PLAYBACK) and the CSV role mapper below. They used to be faked
+	# into HAClient.sensor_updated as well, which every live consumer then
+	# took for a real reading.
 	if _linker != null and _linker.has_method("apply_historical_value"):
 		_linker.apply_historical_value(entity_id, value, "", t_unix)
 	if _mapper != null and _solar_ui != null:

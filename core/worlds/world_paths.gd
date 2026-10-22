@@ -61,6 +61,7 @@ const KINDS: Array = [
 	["channel_tiles", "bin"],
 	["channel_tiles", "json"],
 	["poi", "json"],
+	["ha_links", "json"],
 ]
 
 static var _world_id: String = ""

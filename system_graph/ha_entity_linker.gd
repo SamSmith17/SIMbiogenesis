@@ -1,378 +1,702 @@
 class_name HAEntityLinker
 extends Node
 
-## Routes live Home Assistant sensor values into graph items via per-role links
-## stored in each item's specs.ha_links, and pushes well-known roles into solar_ui
-## overrides so the simulation reflects the real system in live mode and uses the
-## latest live snapshot as the base when time_scale is increased.
+## The Home Assistant link runtime for the open world (a SystemGraphView child).
 ##
-## Roles (conventions):
-##   panel:       power  (W), voltage (V), current (A)
-##   battery:     soc    (%), voltage (V), power   (W), current (A)
-##   smartbattery: same roles as battery
-##   controller:  ac_power (W), voltage (V), current (A)
+## Links live in the world's own file (HaLinkStore, WorldPaths kind
+## "ha_links"): any HA entity → any tracked sim value (HaTargets — the site's
+## energy picture, the weather station, a graph node's field, a tank). For
+## every linked reading the runtime:
+##   1. converts it into the target's unit (HaUnits, from the sensor's
+##      unit_of_measurement) and applies the link's scale / offset / invert;
+##   2. keeps it as the target's latest live value (status for the UI, the
+##      graph's 📡 badge through specs.ha_live, the observed track);
+##   3. ONLY while TimeDirector is LIVE, the service is connected and the
+##      reading is fresh (STALE_S), writes it into the simulation: graph
+##      nodes inside the view's sim-write bracket (so the pre-render cache
+##      survives), site / weather values through SolarUI.set_live_reading,
+##      tanks onto their ResourceTimeline. Outside LIVE the sim runs its own
+##      model and the readings are only recorded.
 ##
-## Each item may define at most one entity_id per role. Values are stored at
-##   item.specs.ha_links[role]   -> entity_id
-##   item.specs.ha_live[role]    -> {value: float, unit: String, t: int}
+## The old places links lived (each node's specs.ha_links, SolarUI's
+## solar_ui_ha_entities.cfg) migrate into a world once, the first time it
+## opens with no link file.
 
 signal ha_live_updated(item_id: String, role: String, value: float)
+signal links_changed()
+
+## A reading older than this no longer drives the sim (the sim takes over).
+const STALE_S := 600
+## Tanks are re-held at the measured level this often in LIVE (the flow
+## engine integrates them every tick).
+const HOLD_INTERVAL_S := 1.0
 
 const SOLAR_UI_PATHS := ["Main/UILayer/SolarUI", "UILayer/SolarUI"]
-## Anything above ~1.5× real-time is treated as "simulate forward" mode so the sim
-## can advance from the last live snapshot without HA snapping every reading.
-const REALTIME_SCALE_REF := 1.0 / 3600.0
-const REALTIME_THRESHOLD := REALTIME_SCALE_REF * 1.5
 
 var model: GraphModel = null
-var _ha_client: Node = null
+var _svc: Node = null
 var _solar_ui: Node = null
-var _main_node: Node = null
-var _was_simulating: bool = false
-
-## entity_id → Array of {item_id, role, unit, scale}
-var _routes: Dictionary = {}
+var _store: HaLinkStore = HaLinkStore.new()
+var _store_path: String = ""
+var _last: Dictionary = {}       # link id -> {raw, unit, value, ok, warn, t_unix}
+var _was_live: bool = false
+var _hold_acc: float = 0.0
+## Old consumers (history player, CSV player) look links up by entity.
+var _routes: Dictionary = {}     # entity_id -> [{item_id, role}]
+## Every reading, in the target's unit, on the real clock (the timeline's
+## "HA:" tracks and the Live links window's sim-vs-real read it).
+var _observed: HaObservedStore = HaObservedStore.new()
+var _history_asked: Dictionary = {}   # target id -> true (backfilled this session)
+## How far back a newly linked value is filled in from HA's recorder.
+const HISTORY_BACKFILL_H := 72.0
 
 
 func setup(mdl: GraphModel) -> void:
 	model = mdl
 	_resolve_nodes()
-	if _ha_client != null and _ha_client.has_signal("sensor_updated") and not _ha_client.sensor_updated.is_connected(_on_sensor_updated):
-		_ha_client.sensor_updated.connect(_on_sensor_updated)
-	if _ha_client != null and _ha_client.has_signal("authentication_status_changed") and not _ha_client.authentication_status_changed.is_connected(_on_auth_changed):
-		_ha_client.authentication_status_changed.connect(_on_auth_changed)
+	if model != null and not model.changed.is_connected(_on_model_changed):
+		model.changed.connect(_on_model_changed)
 
 
 func teardown() -> void:
-	if _ha_client != null and _ha_client.has_signal("sensor_updated") and _ha_client.sensor_updated.is_connected(_on_sensor_updated):
-		_ha_client.sensor_updated.disconnect(_on_sensor_updated)
-	if _ha_client != null and _ha_client.has_signal("authentication_status_changed") and _ha_client.authentication_status_changed.is_connected(_on_auth_changed):
-		_ha_client.authentication_status_changed.disconnect(_on_auth_changed)
+	if _svc != null:
+		if _svc.sensor_updated.is_connected(_on_sensor_updated):
+			_svc.sensor_updated.disconnect(_on_sensor_updated)
+		if _svc.state_changed.is_connected(_on_svc_state):
+			_svc.state_changed.disconnect(_on_svc_state)
 	_routes.clear()
 
 
-## Rebuild routing table from current model, subscribe in HAClient, request initial states.
-## Call this after inspector saves new links.
+func _exit_tree() -> void:
+	teardown()
+
+
+# ---------------------------------------------------------------------------
+# Store
+# ---------------------------------------------------------------------------
+
+## (Re)load this world's links when the world / map changed, migrate the old
+## links once, subscribe. Called after the graph loads and after any edit.
 func refresh_subscriptions() -> void:
 	_resolve_nodes()
+	var path := _links_path()
+	if path != _store_path:
+		_store_path = path
+		_store = HaLinkStore.load_from(path)
+		_last.clear()
+		if not _store.migrated:
+			_migrate_legacy()
+	_prune()
 	_rebuild_routes()
-	# Even without HA connected we keep routes so incoming sensor events from a
-	# future reconnect will be routed correctly via _on_auth_changed.
-	if _ha_client == null:
-		return
-	var ids: Array[String] = []
-	for k in _routes.keys():
-		var s: String = str(k)
-		if not s.is_empty() and not ids.has(s):
-			ids.append(s)
-	# Merge with existing subs so manual subscriptions from ha_connection_ui aren't lost
-	var existing_v: Variant = _ha_client.get("subscribed_entities")
-	if existing_v is Array:
-		for e in (existing_v as Array):
-			var se: String = str(e)
-			if not se.is_empty() and not ids.has(se):
-				ids.append(se)
-	if ids.is_empty():
-		return
-	if _ha_client.has_method("subscribe_to_entities"):
-		_ha_client.subscribe_to_entities(ids)
-	if _ha_client.has_method("get_entity_states"):
-		_ha_client.get_entity_states(ids)
+	_tell_solar_ui()
+	if _svc != null:
+		var ids := _store.entity_ids()
+		_svc.call("subscribe_to_entities", ids)
+		_svc.call("get_entity_states", ids)
+		_publish_summary()
+		_backfill_history()
+	links_changed.emit()
 
 
-## Apply a historical (replayed) value to every graph item linked to the
-## given entity.  Used by HistoryPlayer to drive the canvas while scrubbing
-## through recorded HA data.  Bypasses the SimMode "should_apply_live_data"
-## gate because, in HISTORICAL mode, this player is the legitimate writer.
-##
-## Behaviour mirrors _on_sensor_updated (ha_live cache + display fields)
-## but tags the source so consumers can tell live from historical pushes.
-func apply_historical_value(entity_id: String, value: float, unit: String,
-		t_unix: int) -> void:
+func store() -> HaLinkStore:
+	return _store
+
+
+func links() -> Array:
+	return _store.links.duplicate(true)
+
+
+func link_for_target(target_id: String) -> Dictionary:
+	return _store.for_target(target_id)
+
+
+func linked_entity_ids() -> Array:
+	return _store.entity_ids()
+
+
+## Link an entity to a target (replacing the target's old link) and save.
+func link_entity(entity_id: String, target_id: String, opts: Dictionary = {}) -> Dictionary:
+	var l := _store.link(entity_id, target_id, opts)
+	_save()
+	refresh_subscriptions()
+	# A cached reading answers at once.
+	if _svc != null:
+		var lt: Dictionary = _svc.call("latest", entity_id)
+		if not lt.is_empty():
+			_on_sensor_updated(entity_id, {"entity_id": entity_id, "state": lt.get("value", ""),
+				"attributes": lt.get("attributes", {})})
+	return l
+
+
+func unlink_target(target_id: String) -> void:
+	var l := _store.for_target(target_id)
+	if l.is_empty():
+		return
+	_store.unlink_target(target_id)
+	_last.erase(str(l["id"]))
+	_observed.clear_key(target_id)
+	_history_asked.erase(target_id)
+	_clear_target_live(target_id)
+	_save()
+	refresh_subscriptions()
+
+
+func set_link_fields(link_id: String, patch: Dictionary) -> void:
+	if _store.set_fields(link_id, patch):
+		_save()
+		# Re-convert the last raw reading with the new scale / offset.
+		for l in _store.links:
+			if str(l["id"]) == link_id:
+				var lt: Dictionary = _svc.call("latest", str(l["entity_id"])) if _svc != null else {}
+				if not lt.is_empty():
+					_take(l, str(lt.get("value", "")), str((lt.get("attributes", {}) as Dictionary).get("unit_of_measurement", "")), true)
+		refresh_subscriptions()
+
+
+## Every target in this world (HaTargets over the graph's items).
+func targets() -> Array:
+	return HaTargets.all_targets(model.items if model != null else [])
+
+
+func target(target_id: String) -> Dictionary:
+	return HaTargets.find(target_id, model.items if model != null else [])
+
+
+## What the UI shows for one target: {linked, entity_id, link, value, raw,
+## unit, warn, age_s, stale, applies}. `value` is in the target's unit.
+func link_status(target_id: String) -> Dictionary:
+	var l := _store.for_target(target_id)
+	if l.is_empty():
+		return {"linked": false}
+	var last: Dictionary = _last.get(str(l["id"]), {})
+	var age := int(Time.get_unix_time_from_system()) - int(last.get("t_unix", 0)) if not last.is_empty() else -1
+	return {"linked": true, "link": l, "entity_id": str(l["entity_id"]),
+		"has_value": not last.is_empty() and bool(last.get("ok", false)),
+		"value": float(last.get("value", 0.0)), "raw": str(last.get("raw", "")),
+		"unit": str(last.get("unit", "")), "warn": str(last.get("warn", "")),
+		"age_s": age, "stale": age < 0 or age > STALE_S,
+		"applies": _may_apply() and age >= 0 and age <= STALE_S and bool(l.get("enabled", true))}
+
+
+## The sim's own current value for a target (for "sim vs real"), NAN if unknown.
+func sim_value(target_id: String) -> float:
+	var p := HaTargets.parse(target_id)
+	if p.is_empty():
+		return NAN
+	var f := str(p["field"])
+	if p["scope"] != "item":
+		_resolve_nodes()
+		if _solar_ui == null:
+			return NAN
+		match f:
+			"battery_soc":
+				var cap := float(_solar_ui.get("BATTERY_CAPACITY_KWH")) if _solar_ui.get("BATTERY_CAPACITY_KWH") != null else 0.0
+				var kwh := float(_solar_ui.get("battery_kwh_stored")) if _solar_ui.get("battery_kwh_stored") != null else 0.0
+				return kwh / cap * 100.0 if cap > 0.0 else NAN
+			"solar_kw":
+				return float(_solar_ui.get("current_solar_kw")) if _solar_ui.get("current_solar_kw") != null else NAN
+			"load_kw":
+				return float(_solar_ui.get("current_load_kw")) if _solar_ui.get("current_load_kw") != null else NAN
+		if _solar_ui.has_method("get_live_reading_sim"):
+			return float(_solar_ui.call("get_live_reading_sim", f))
+		return NAN
+	var it := model.get_item(str(p["item_id"])) if model != null else {}
+	if it.is_empty():
+		return NAN
+	var s: Dictionary = it.get("specs", {})
+	match str(it.get("type", "")):
+		"appliance", "acload":
+			match f:
+				"power": return float(s.get("avg_watts", NAN))
+				"switch": return 1.0 if str(s.get("current_state", "")) == "on" else 0.0
+				"energy": return float(s.get("energy_kwh", NAN))
+		"panel", "controller", "wind", "hydro":
+			if f in ["power", "ac_power"]:
+				return float(s.get("current_output_kw", NAN)) * 1000.0
+		"battery", "smartbattery":
+			if f == "soc":
+				return float(s.get("soc", NAN)) * 100.0
+			if f == "voltage":
+				return float(s.get("voltage", NAN))
+		"resource":
+			if f == "level_pct":
+				return float(s.get("level", NAN)) * 100.0
+			if f == "stock_l":
+				return float(s.get("stock_l", float(s.get("level", 0.0)) * float(s.get("capacity_qty", 0.0))))
+		"processor":
+			if f == "switch":
+				return 1.0 if str(s.get("current_state", "")) == "on" else 0.0
+		"shelly4pm":
+			var ci := f.substr(1, 1)
+			if f.ends_with("_power"): return float(s.get("c%s_power_w" % ci, NAN))
+			if f.ends_with("_switch"): return 1.0 if bool(s.get("c%s_on" % ci, false)) else 0.0
+			if f.ends_with("_energy"): return float(s.get("c%s_energy_kwh" % ci, NAN))
+	return NAN
+
+
+# ---------------------------------------------------------------------------
+# Observed track (recorded readings + HA's own history)
+# ---------------------------------------------------------------------------
+
+## `n` bins of a target's recorded readings over [t0, t1) abs hours (NAN where
+## nothing was recorded). Real time: the timeline's NOW axis.
+func observed_bins(target_id: String, t0: float, t1: float, n: int) -> PackedFloat32Array:
+	return _observed.bins(target_id, t0, t1, n)
+
+
+func observed_value_at(target_id: String, t_abs: float) -> float:
+	return _observed.value_at(target_id, t_abs)
+
+
+func observed_range(target_id: String) -> Vector2:
+	return _observed.range_of(target_id)
+
+
+func observed_count(target_id: String) -> int:
+	return _observed.size(target_id)
+
+
+## Ask HA's recorder for the last HISTORY_BACKFILL_H of every linked entity
+## not filled in yet this session.
+func _backfill_history() -> void:
+	if _svc == null or not bool(_svc.call("is_authed")):
+		return
+	var now := Time.get_unix_time_from_system()
+	var asked_eids := {}
+	for l in _store.links:
+		var tid := str(l["target_id"])
+		if _history_asked.has(tid) or not bool(l.get("enabled", true)):
+			continue
+		_history_asked[tid] = true
+		var eid := str(l["entity_id"])
+		if asked_eids.has(eid):
+			continue
+		asked_eids[eid] = true
+		_svc.call("get_entity_history", eid, HaObservedStore.unix_to_iso(now - HISTORY_BACKFILL_H * 3600.0),
+			HaObservedStore.unix_to_iso(now), true)
+
+
+func _on_history(entity_id: String, rows: Array) -> void:
+	var ls := _store.for_entity(entity_id)
+	if ls.is_empty() or rows.is_empty():
+		return
+	var unit := ""
+	if _svc != null:
+		unit = str((_svc.call("catalog_entry", entity_id) as Dictionary).get("unit", ""))
+	var n := 0
+	for l in ls:
+		var t := target(str(l["target_id"]))
+		if t.is_empty():
+			continue
+		for row in rows:
+			if not (row is Dictionary):
+				continue
+			var tu := HaObservedStore.row_unix(row)
+			if is_nan(tu):
+				continue
+			var raw := str(row.get("s", row.get("state", "")))
+			var c := HaUnits.convert(raw, unit, str(t["unit"]))
+			if not bool(c["ok"]):
+				continue
+			var v := HaUnits.adjust(float(c["value"]), float(l.get("scale", 1.0)), float(l.get("offset", 0.0)), bool(l.get("invert", false)))
+			if str(t["kind"]) == "binary":
+				v = 1.0 if v >= 0.5 else 0.0
+			_observed.add(str(l["target_id"]), HaObservedStore.abs_hours_local(tu), v)
+			n += 1
+	if n > 0:
+		print("[HA] Filled %d recorded reading(s) of %s from Home Assistant's history" % [n, entity_id])
+		links_changed.emit()
+
+
+## Returns true if Home Assistant is connected and logged in.
+func is_live() -> bool:
+	_resolve_nodes()
+	return _svc != null and bool(_svc.call("is_authed"))
+
+
+# ---------------------------------------------------------------------------
+# Readings
+# ---------------------------------------------------------------------------
+
+func _on_sensor_updated(entity_id: String, state: Dictionary) -> void:
+	var ls := _store.for_entity(entity_id)
+	if ls.is_empty():
+		return
+	var attrs: Dictionary = state.get("attributes", {}) if state.get("attributes", {}) is Dictionary else {}
+	var unit := str(attrs.get("unit_of_measurement", ""))
+	var raw := str(state.get("state", ""))
+	for l in ls:
+		if bool(l.get("enabled", true)):
+			_take(l, raw, unit, true)
+
+
+## Convert, remember, and (in LIVE) apply one reading for one link.
+func _take(l: Dictionary, raw: String, unit: String, apply: bool) -> void:
+	var t := target(str(l["target_id"]))
+	if t.is_empty():
+		return
+	var c := HaUnits.convert(raw, unit, str(t["unit"]))
+	var v := HaUnits.adjust(float(c["value"]), float(l.get("scale", 1.0)), float(l.get("offset", 0.0)), bool(l.get("invert", false)))
+	if str(t["kind"]) == "binary":
+		v = 1.0 if v >= 0.5 else 0.0
+	_last[str(l["id"])] = {"raw": raw, "unit": unit, "value": v, "ok": bool(c["ok"]),
+		"warn": str(c.get("warn", "")), "t_unix": int(Time.get_unix_time_from_system())}
+	if not bool(c["ok"]):
+		return
+	_observed.add(str(l["target_id"]), HaObservedStore.now_abs_hours(), v)
+	_write_live_badge(t, v, unit)
+	if apply and _may_apply():
+		_apply(t, v)
+
+
+func _may_apply() -> bool:
+	var td := get_node_or_null("/root/TimeDirector")
+	var live: bool = td == null or bool(td.call("should_apply_live_data"))
+	return live and is_live()
+
+
+## Item targets: the 📡 cache (specs.ha_live[field]) that the canvas badge and
+## solar_bridge's live-wins rule read. Written in every mode, as a sim write.
+func _write_live_badge(t: Dictionary, v: float, unit: String) -> void:
+	if str(t["scope"]) != "item" or model == null:
+		return
+	var iid := str(t["item_id"])
+	var it := model.get_item(iid)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var live: Dictionary = (specs.get("ha_live", {}) as Dictionary).duplicate(true)
+	live[str(t["field"])] = {"value": v, "unit": unit, "t": int(Time.get_unix_time_from_system())}
+	specs["ha_live"] = live
+	_sim_write(iid, specs)
+
+
+func _clear_target_live(target_id: String) -> void:
+	var p := HaTargets.parse(target_id)
+	if p.is_empty():
+		return
+	if p["scope"] != "item":
+		_resolve_nodes()
+		if _solar_ui != null and _solar_ui.has_method("clear_live_reading"):
+			_solar_ui.call("clear_live_reading", str(p["field"]))
+		return
+	var it := model.get_item(str(p["item_id"])) if model != null else {}
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var live: Dictionary = (specs.get("ha_live", {}) as Dictionary).duplicate(true)
+	live.erase(str(p["field"]))
+	specs["ha_live"] = live
+	_sim_write(str(p["item_id"]), specs)
+
+
+## Write one converted reading into the simulation (LIVE only).
+func _apply(t: Dictionary, v: float) -> void:
+	var f := str(t["field"])
+	if str(t["scope"]) != "item":
+		_resolve_nodes()
+		if _solar_ui != null and _solar_ui.has_method("set_live_reading"):
+			_solar_ui.call("set_live_reading", f, v)
+		return
+	var iid := str(t["item_id"])
+	var it := model.get_item(iid)
+	if it.is_empty():
+		return
+	var itype := str(it.get("type", ""))
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	match itype:
+		"appliance", "acload":
+			match f:
+				"power": specs["avg_watts"] = v
+				"switch": specs["current_state"] = "on" if v >= 0.5 else "off"
+				"energy": specs["energy_kwh"] = v
+				"voltage": specs["voltage_v"] = v
+				"current": specs["current_a"] = v
+		"panel", "controller", "wind", "hydro":
+			if f in ["power", "ac_power"]:
+				specs["current_output_kw"] = v / 1000.0
+		"battery", "smartbattery":
+			if f == "soc":
+				specs["soc"] = clampf(v / 100.0, 0.0, 1.0)
+			elif f == "voltage":
+				specs["voltage"] = v
+		"resource":
+			var cap := float(specs.get("capacity_qty", specs.get("capacity_l", 0.0)))
+			var frac := -1.0
+			if f == "level_pct":
+				frac = clampf(v / 100.0, 0.0, 1.0)
+			elif f == "stock_l" and cap > 0.0:
+				frac = clampf(v / cap, 0.0, 1.0)
+			if frac >= 0.0:
+				specs["level"] = frac
+				if cap > 0.0:
+					specs["stock_l"] = frac * cap
+				_hold_tank(iid, frac)
+		"processor":
+			if f == "switch":
+				specs["current_state"] = "on" if v >= 0.5 else "off"
+				specs.erase("requested_state")
+		"shelly4pm":
+			var ci := f.substr(1, 1)
+			if f.ends_with("_power"): specs["c%s_power_w" % ci] = v
+			elif f.ends_with("_switch"): specs["c%s_on" % ci] = v >= 0.5
+			elif f.ends_with("_energy"): specs["c%s_energy_kwh" % ci] = v
+	_sim_write(iid, specs)
+	_push_item_to_solar_ui(itype, f, v)
+	ha_live_updated.emit(iid, f, v)
+
+
+## The measured level becomes the tank's present on its timeline, so the flow
+## engine carries on from the real level instead of its own.
+func _hold_tank(iid: String, frac: float) -> void:
+	var view := get_parent()
+	var flow: Variant = view.get("_resource_flow") if view != null else null
+	if flow == null or not (flow as Object).has_method("get_timeline"):
+		return
+	var tl: Variant = flow.call("get_timeline", iid)
+	if tl != null and (tl as Object).has_method("set_current_level"):
+		var main := get_tree().current_scene if get_tree() != null else null
+		var h := float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0
+		tl.call("set_current_level", h, frac)
+
+
+## Before site targets existed, a battery / panel / inverter node's link also
+## drove SolarUI's battery, solar and load. Kept for those nodes unless the
+## world links that site value directly.
+func _push_item_to_solar_ui(itype: String, f: String, v: float) -> void:
+	_resolve_nodes()
+	if _solar_ui == null or not _solar_ui.has_method("set_live_reading"):
+		return
+	if itype in ["battery", "smartbattery"] and f == "soc":
+		if _store.for_target("site.battery_soc").is_empty():
+			_solar_ui.call("set_live_reading", "battery_soc", v)
+	elif itype == "panel" and f == "power":
+		if _store.for_target("site.solar_kw").is_empty():
+			_solar_ui.call("set_live_reading", "solar_kw", v / 1000.0)
+	elif itype == "controller" and f == "ac_power":
+		if _store.for_target("site.load_kw").is_empty():
+			_solar_ui.call("set_live_reading", "load_kw", v / 1000.0)
+
+
+func _sim_write(iid: String, specs: Dictionary) -> void:
 	if model == null:
 		return
-	var routes: Array = _routes.get(entity_id, []) as Array
-	if routes.is_empty():
+	var view := get_parent()
+	var bracket := view != null and view.has_method("_begin_sim_writes")
+	if bracket:
+		view.call("_begin_sim_writes")
+	else:
+		model.sim_writing = true
+	model.update_item(iid, {"specs": specs})
+	if bracket:
+		view.call("_end_sim_writes")
+	else:
+		model.sim_writing = false
+
+
+# ---------------------------------------------------------------------------
+# History replay (HistoryPlayer / CsvHistoryPlayer)
+# ---------------------------------------------------------------------------
+
+## Apply a replayed value to every target linked to `entity_id`, bypassing the
+## LIVE gate: in PLAYBACK the player is the legitimate writer. `unit` "" =
+## already in the target's unit.
+func apply_historical_value(entity_id: String, value: float, unit: String, t_unix: int) -> void:
+	for l in _store.for_entity(entity_id):
+		var t := target(str(l["target_id"]))
+		if t.is_empty():
+			continue
+		var c := HaUnits.convert(str(value), unit, str(t["unit"]))
+		if not bool(c["ok"]):
+			continue
+		var v := HaUnits.adjust(float(c["value"]), float(l.get("scale", 1.0)), float(l.get("offset", 0.0)), bool(l.get("invert", false)))
+		_last[str(l["id"])] = {"raw": str(value), "unit": unit, "value": v, "ok": true, "warn": "", "t_unix": t_unix, "history": true}
+		_apply(t, v)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+func _process(delta: float) -> void:
+	var live := _may_apply()
+	if live and not _was_live:
+		_reapply_all()
+	elif not live and _was_live:
+		_snapshot_for_sim()
+	_was_live = live
+	if live:
+		_hold_acc += delta
+		if _hold_acc >= HOLD_INTERVAL_S:
+			_hold_acc = 0.0
+			_reapply_held()
+
+
+## Entering LIVE: every fresh reading takes over at once.
+func _reapply_all() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	for l in _store.links:
+		var last: Dictionary = _last.get(str(l["id"]), {})
+		if last.is_empty() or not bool(last.get("ok", false)) or now - int(last.get("t_unix", 0)) > STALE_S:
+			continue
+		var t := target(str(l["target_id"]))
+		if not t.is_empty() and bool(l.get("enabled", true)):
+			_apply(t, float(last["value"]))
+
+
+## Tanks: the flow engine integrates them every tick, so the measured level is
+## re-held once a second while LIVE.
+func _reapply_held() -> void:
+	var now := int(Time.get_unix_time_from_system())
+	for l in _store.links:
+		var tid := str(l["target_id"])
+		if not tid.ends_with(".level_pct") and not tid.ends_with(".stock_l"):
+			continue
+		var last: Dictionary = _last.get(str(l["id"]), {})
+		if last.is_empty() or not bool(last.get("ok", false)) or now - int(last.get("t_unix", 0)) > STALE_S:
+			continue
+		var t := target(tid)
+		if not t.is_empty() and bool(l.get("enabled", true)):
+			_apply(t, float(last["value"]))
+
+
+## LIVE → SIMULATE: SolarUI snapshots the live readings as its starting point
+## and runs on its own model from there.
+func _snapshot_for_sim() -> void:
+	_resolve_nodes()
+	if _solar_ui == null:
 		return
-	for r: Dictionary in routes:
-		var iid: String = r.get("item_id", "") as String
-		var role: String = r.get("role", "") as String
-		var it: Dictionary = model.get_item(iid)
+	if is_instance_valid(SimSettingsController) and SimSettingsController.has_method("notify_simulation_start"):
+		SimSettingsController.notify_simulation_start()
+
+
+func _on_svc_state(state: int, _info: Dictionary) -> void:
+	if state == HomeAssistantService.State.CONNECTED:
+		refresh_subscriptions.call_deferred()
+	_publish_summary()
+
+
+func _on_model_changed(reason: String) -> void:
+	if reason == "remove_item" or reason == "deserialize" or reason == "clear":
+		_prune_deferred.call_deferred()
+
+
+func _prune_deferred() -> void:
+	if _prune() > 0:
+		_save()
+		_rebuild_routes()
+		_publish_summary()
+		links_changed.emit()
+
+
+func _prune() -> int:
+	if model == null:
+		return 0
+	var live := {}
+	for it in model.items:
+		live[str(it.get("id", ""))] = true
+	return _store.prune_items(live)
+
+
+func _migrate_legacy() -> void:
+	if model == null:
+		return
+	var solar_cfg := HaLinkStore.LEGACY_SOLAR_CFG if FileAccess.file_exists(HaLinkStore.LEGACY_SOLAR_CFG) else ""
+	var res := _store.migrate_legacy(model.items, solar_cfg)
+	# The old free-text "Entity Subscriptions" list had no targets: nothing to
+	# carry over except as a hint the Live links window can show.
+	for iid in res.get("cleared", []):
+		var it := model.get_item(str(iid))
 		if it.is_empty():
 			continue
 		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-		var live: Dictionary = (specs.get("ha_live", {}) as Dictionary).duplicate(true)
-		live[role] = {"value": value, "unit": unit, "t": t_unix, "source": "history"}
-		specs["ha_live"] = live
-		var itype: String = it.get("type", "") as String
-		_mirror_to_spec(specs, itype, role, value, unit)
-		model.update_item(iid, {"specs": specs})
-		ha_live_updated.emit(iid, role, value)
+		specs.erase("ha_links")
+		_sim_write(str(iid), specs)
+	if int(res.get("added", 0)) > 0:
+		print("[HA] Moved %d Home Assistant link(s) into this world's link file" % int(res["added"]))
+	_save()
 
 
-## Returns true if HAClient is connected & authenticated.
-func is_live() -> bool:
+func _save() -> void:
+	if not _store_path.is_empty():
+		_store.save_to(_store_path)
+
+
+func _links_path() -> String:
+	var view := get_parent()
+	var key := ""
+	if view != null and view.has_method("_resolve_map_graph_key"):
+		key = str(view.call("_resolve_map_graph_key"))
+	if key.is_empty():
+		return ""
+	return WorldPaths.keyed_file(HaLinkStore.KIND, key.trim_prefix("map_"), "json")
+
+
+func _rebuild_routes() -> void:
+	_routes.clear()
+	for l in _store.links:
+		var p := HaTargets.parse(str(l["target_id"]))
+		if p.is_empty() or p["scope"] != "item":
+			continue
+		var eid := str(l["entity_id"])
+		var arr: Array = _routes.get(eid, [])
+		arr.append({"item_id": str(p["item_id"]), "role": str(p["field"])})
+		_routes[eid] = arr
+
+
+## SolarUI's own per-field entity handling stands down while this world's
+## links drive the site values.
+func _tell_solar_ui() -> void:
 	_resolve_nodes()
-	if _ha_client == null:
-		return false
-	return bool(_ha_client.get("is_connected")) and bool(_ha_client.get("is_authenticated"))
+	if _solar_ui != null:
+		_solar_ui.set("ha_links_external", true)
 
 
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
+func _publish_summary() -> void:
+	if _svc == null or not _svc.has_method("set_link_summary"):
+		return
+	var live := 0
+	var stale := 0
+	var warn := 0
+	var now := int(Time.get_unix_time_from_system())
+	for l in _store.links:
+		var last: Dictionary = _last.get(str(l["id"]), {})
+		if last.is_empty() or now - int(last.get("t_unix", 0)) > STALE_S:
+			stale += 1
+		elif not bool(last.get("ok", false)) or not str(last.get("warn", "")).is_empty():
+			warn += 1
+		else:
+			live += 1
+	_svc.call("set_link_summary", {"total": _store.links.size(), "live": live, "stale": stale, "warn": warn})
+
+
+var _summary_acc := 0.0
+
+func _physics_process(delta: float) -> void:
+	_summary_acc += delta
+	if _summary_acc >= 2.0:
+		_summary_acc = 0.0
+		_publish_summary()
+
 
 func _resolve_nodes() -> void:
 	var tr := get_tree()
 	if tr == null:
 		return
-	if not is_instance_valid(_ha_client):
-		# HAClient lives as a child of the main scene node, not directly under
-		# /root.  Mirror InverterBridge's search: iterate every root child and
-		# find the one that has "HAClient" as a child node.
-		_ha_client = tr.root.get_node_or_null("HAClient")
-		if not is_instance_valid(_ha_client):
-			for scene_child in tr.root.get_children():
-				var candidate := scene_child.get_node_or_null("HAClient")
-				if candidate != null:
-					_ha_client = candidate
-					break
-		# Reconnect signal whenever we first resolve the client.
-		if is_instance_valid(_ha_client):
-			if _ha_client.has_signal("sensor_updated") and not _ha_client.sensor_updated.is_connected(_on_sensor_updated):
-				_ha_client.sensor_updated.connect(_on_sensor_updated)
-			if _ha_client.has_signal("authentication_status_changed") and not _ha_client.authentication_status_changed.is_connected(_on_auth_changed):
-				_ha_client.authentication_status_changed.connect(_on_auth_changed)
+	if not is_instance_valid(_svc):
+		_svc = tr.root.get_node_or_null("HomeAssistant")
+		if _svc != null:
+			if not _svc.sensor_updated.is_connected(_on_sensor_updated):
+				_svc.sensor_updated.connect(_on_sensor_updated)
+			if not _svc.state_changed.is_connected(_on_svc_state):
+				_svc.state_changed.connect(_on_svc_state)
+			if not _svc.raw_history_received.is_connected(_on_history):
+				_svc.raw_history_received.connect(_on_history)
 	if not is_instance_valid(_solar_ui):
-		for p in SOLAR_UI_PATHS:
-			var n := tr.root.get_node_or_null(p)
-			if n != null:
-				_solar_ui = n
-				break
-	if not is_instance_valid(_main_node):
-		var sc := tr.current_scene
-		if sc != null and sc.name == "Main":
-			_main_node = sc
-		elif sc != null and sc.has_node("/root/Main"):
-			_main_node = tr.root.get_node_or_null("Main")
-		else:
-			_main_node = tr.root.get_node_or_null("Main")
-
-
-func _is_simulating_forward() -> bool:
-	# TimeDirector is the single mode authority — SIMULATE means "not mirroring
-	# live", which is exactly when HA overrides should be snapshotted then frozen.
-	var td := get_node_or_null("/root/TimeDirector")
-	if td != null and td.has_method("is_sim"):
-		return bool(td.call("is_sim"))
-	# Fallbacks when TimeDirector is unavailable (e.g. isolated tests).
-	if _solar_ui != null and _solar_ui.has_method("is_simulating_from_live"):
-		if bool(_solar_ui.is_simulating_from_live()):
-			return true
-	if _main_node != null and _main_node.get("time_scale") != null:
-		return float(_main_node.time_scale) > REALTIME_THRESHOLD
-	return false
-
-
-func _process(_delta: float) -> void:
-	_resolve_nodes()
-	# On transition live → simulating-forward, snapshot current HA overrides so
-	# solar_ui can use them as the starting point and then run forward.
-	var simulating := _is_simulating_forward()
-	if simulating and not _was_simulating:
-		_snapshot_for_sim()
-	elif not simulating and _was_simulating:
-		# Back to live: let the next HA update repopulate overrides naturally.
-		pass
-	_was_simulating = simulating
-
-
-func _snapshot_for_sim() -> void:
-	if _solar_ui == null:
-		return
-	# If solar_ui is mid-way through live readings, emit the simulation_started
-	# signal through TimeUI so solar_ui snapshots & clears overrides itself.
-	var time_ui: Node = null
-	var sc := get_tree().current_scene if get_tree() != null else null
-	if sc != null:
-		time_ui = sc.get_node_or_null("UILayer/TimeUI")
-	if time_ui == null and _solar_ui.get_parent() != null:
-		time_ui = _solar_ui.get_parent().get_node_or_null("TimeUI")
-	if time_ui != null and time_ui.has_method("_notify_simulation_start"):
-		time_ui.call("_notify_simulation_start")
-		return
-	if is_instance_valid(SimSettingsController):
-		SimSettingsController.notify_simulation_start()
-		return
-	# Fallback: directly snapshot overrides on solar_ui
-	var soc: Variant = _solar_ui.get("_ha_battery_soc_override")
-	var ld:  Variant = _solar_ui.get("_ha_load_override")
-	var sl:  Variant = _solar_ui.get("_ha_solar_override")
-	if soc != null and float(soc) >= 0.0:
-		_solar_ui.set("_sim_start_battery_soc", float(soc))
-	if ld != null and float(ld) >= 0.0:
-		_solar_ui.set("_sim_start_load_kw", float(ld))
-	if sl != null and float(sl) >= 0.0:
-		_solar_ui.set("_sim_start_solar_kw", float(sl))
-	_solar_ui.set("_simulation_mode", true)
-	_solar_ui.set("_ha_battery_soc_override", -1.0)
-	_solar_ui.set("_ha_load_override", -1.0)
-	_solar_ui.set("_ha_solar_override", -1.0)
-
-
-func _rebuild_routes() -> void:
-	_routes.clear()
-	if model == null:
-		return
-	for it: Dictionary in model.items:
-		var iid: String = it.get("id", "") as String
-		var specs: Dictionary = it.get("specs", {}) as Dictionary
-		var links: Dictionary = specs.get("ha_links", {}) as Dictionary
-		for role: String in links.keys():
-			var eid: String = str(links[role]).strip_edges()
-			if eid.is_empty():
-				continue
-			var arr: Array = _routes.get(eid, []) as Array
-			arr.append({"item_id": iid, "role": role})
-			_routes[eid] = arr
-
-
-func _on_auth_changed(authenticated: bool) -> void:
-	if authenticated:
-		# Re-apply subscriptions so reconnects continue to stream our entities.
-		call_deferred("refresh_subscriptions")
-
-
-func _on_sensor_updated(entity_id: String, state: Dictionary) -> void:
-	if model == null or _routes.is_empty():
-		return
-	var routes: Array = _routes.get(entity_id, []) as Array
-	if routes.is_empty():
-		return
-	var sv: String = str(state.get("state", ""))
-	if sv in ["unavailable", "unknown", ""]:
-		return
-	# Normalize boolean HA states ("on"/"off") to 1.0 / 0.0 so that switch
-	# entities can be handled numerically the same as sensor entities.
-	var numeric: float
-	var sv_lower := sv.to_lower()
-	if sv_lower == "on":
-		numeric = 1.0
-	elif sv_lower == "off":
-		numeric = 0.0
-	else:
-		numeric = sv.to_float()
-	var unit: String = str(state.get("attributes", {}).get("unit_of_measurement", ""))
-	var t_unix: int = int(Time.get_unix_time_from_system())
-	# In SIMULATE mode we still want to keep the ha_live cache fresh (so the
-	# next sim run can pick up real "initial conditions") but we must NOT
-	# mirror the value into display fields or push it to solar_ui — that
-	# would let live data leak into a forward simulation.
-	var sm: Node = get_node_or_null("/root/SimMode")
-	var apply_live: bool = sm == null or bool(sm.call("should_apply_live_data"))
-	for r: Dictionary in routes:
-		var iid: String = r.get("item_id", "") as String
-		var role: String = r.get("role", "") as String
-		var it: Dictionary = model.get_item(iid)
-		if it.is_empty():
-			continue
-		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-		var live: Dictionary = (specs.get("ha_live", {}) as Dictionary).duplicate(true)
-		live[role] = {"value": numeric, "unit": unit, "t": t_unix}
-		specs["ha_live"] = live
-		var itype: String = it.get("type", "") as String
-		if apply_live:
-			# Mirror into display-friendly fields so the canvas reflects HA.
-			_mirror_to_spec(specs, itype, role, numeric, unit)
-		# A measured value arriving is not a player edit: it must not move
-		# GraphModel.user_rev (which would invalidate a rendered range every
-		# few seconds while HA is connected).
-		var was_sim_writing := model.sim_writing
-		model.sim_writing = true
-		model.update_item(iid, {"specs": specs})
-		model.sim_writing = was_sim_writing
-		if apply_live:
-			_push_to_solar_ui(itype, role, numeric, unit)
-		ha_live_updated.emit(iid, role, numeric)
-
-
-## Copy the live HA value into well-known spec fields so the canvas/battery/panel
-## widgets show the live reading without waiting for the full simulation cycle.
-func _mirror_to_spec(specs: Dictionary, itype: String, role: String, value: float, unit: String) -> void:
-	match itype:
-		"appliance", "acload":
-			match role:
-				"power":
-					# Write live watts into avg_watts — the field the canvas
-					# and simulation both read for appliance current draw.
-					var w: float = value
-					if unit.to_lower() == "kw":
-						w = value * 1000.0
-					specs["avg_watts"] = w
-				"switch":
-					# Normalize 1.0/0.0 (already done by linker) to on/off string
-					specs["current_state"] = "on" if value >= 0.5 else "off"
-				"energy":
-					specs["energy_kwh"] = value
-				"voltage":
-					specs["voltage_v"] = value
-				"current":
-					specs["current_a"] = value
-		"panel":
-			if role == "power":
-				# W → kW, stored in current_output_kw (same key used by solar_bridge)
-				var w: float = value
-				if unit.to_lower() == "kw":
-					w = value * 1000.0
-				specs["current_output_kw"] = w / 1000.0
-		"battery", "smartbattery":
-			if role == "soc":
-				specs["soc"] = clampf(value * 0.01 if value > 1.5 else value, 0.0, 1.0)
-			elif role == "voltage":
-				specs["voltage"] = value
-		"controller":
-			if role == "ac_power":
-				var w: float = value
-				if unit.to_lower() == "kw":
-					w = value * 1000.0
-				specs["current_output_kw"] = w / 1000.0
-		"shelly4pm":
-			# role format: "cN_power" | "cN_switch" | "cN_energy"  (N = 0..3)
-			if role.length() >= 2:
-				var ci_str := role.substr(1, 1)   # "c0_power" → "0"
-				if role.ends_with("_power"):
-					specs["c%s_power_w" % ci_str] = value
-				elif role.ends_with("_switch"):
-					# value is 1.0 (on) or 0.0 (off) after normalization above
-					specs["c%s_on" % ci_str] = value >= 0.5
-				elif role.ends_with("_energy"):
-					specs["c%s_energy_kwh" % ci_str] = value
-
-
-## Push well-known roles into solar_ui overrides so the simulation core reflects HA.
-func _push_to_solar_ui(itype: String, role: String, value: float, unit: String) -> void:
-	if _solar_ui == null:
-		return
-	# Don't fight the simulator while it's running forward from a snapshot.
-	if _is_simulating_forward():
-		return
-	var to_kw: float = value / 1000.0
-	if unit.to_lower() == "kw":
-		to_kw = value
-	match itype:
-		"battery", "smartbattery":
-			if role == "soc":
-				var soc_pct: float = clampf(value if value > 1.5 else value * 100.0, 0.0, 100.0)
-				_solar_ui.set("_ha_battery_soc_override", soc_pct)
-				var cap_kwh: float = 16.0
-				if _solar_ui.has_method("get_battery_capacity_kwh"):
-					cap_kwh = float(_solar_ui.get_battery_capacity_kwh())
-				elif _solar_ui.get("BATTERY_CAPACITY_KWH") != null:
-					cap_kwh = float(_solar_ui.get("BATTERY_CAPACITY_KWH"))
-				_solar_ui.set("battery_kwh_stored", (soc_pct / 100.0) * cap_kwh)
-		"panel":
-			if role == "power":
-				_solar_ui.set("_ha_solar_override", to_kw)
-		"controller":
-			if role == "ac_power":
-				_solar_ui.set("_ha_load_override", to_kw)
+		_solar_ui = ServiceLocator.solar_ui()
+		if _solar_ui == null:
+			for p in SOLAR_UI_PATHS:
+				var n := tr.root.get_node_or_null(p)
+				if n != null:
+					_solar_ui = n
+					break

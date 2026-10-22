@@ -5190,6 +5190,50 @@ func _timeline_ui() -> Node :
 	return get_node_or_null( "UILayer/TimelineUI" )
 
 
+## Settings opened on one page ("Home Assistant", "Lighting", …).
+func open_settings_page( title: String ) -> void :
+	var tl := _timeline_ui()
+	if tl != null and tl.has_method( "open_settings_page" ) :
+		tl.call( "open_settings_page", title )
+
+
+## Home Assistant Live links (scenes/ui/ha_links_modal.gd), optionally opened
+## on one tracked value (an HaTargets id). The links belong to the graph's
+## HAEntityLinker, so the modal needs the graph view.
+var _ha_links_modal : Node = null
+
+func open_ha_links( target_id: String = "" ) -> void :
+	var g := ServiceLocator.graph()
+	var linker : Node = g.get( "_ha_linker" ) if g != null else null
+	if linker == null :
+		show_toast( "Live links need the system graph — load a world first.", ToastUI.Level.WARN )
+		return
+	if linker.has_method( "refresh_subscriptions" ) :
+		linker.call( "refresh_subscriptions" )
+	if _ha_links_modal == null or not is_instance_valid( _ha_links_modal ) :
+		var script := load( "res://scenes/ui/ha_links_modal.gd" ) as Script
+		if script == null :
+			return
+		_ha_links_modal = Node.new()
+		_ha_links_modal.name = "HaLinksModal"
+		_ha_links_modal.set_script( script )
+		add_child( _ha_links_modal )
+	_ha_links_modal.call( "open_on", linker, target_id )
+
+
+## One-click device presets (HaPresets) for the Live links window.
+func open_ha_presets( target_id: String = "" ) -> void :
+	var g := ServiceLocator.graph()
+	var linker : Node = g.get( "_ha_linker" ) if g != null else null
+	var script := load( "res://scenes/ui/ha_presets_modal.gd" ) as Script
+	if linker == null or script == null :
+		return
+	var m := Node.new()
+	m.set_script( script )
+	add_child( m )
+	m.call( "open_on", linker, target_id )
+
+
 func open_challenge_picker() -> void :
 	var tl := _timeline_ui()
 	if tl != null and tl.has_method( "_open_challenge_picker" ) :

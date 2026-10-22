@@ -85,9 +85,8 @@ func _load_settings() -> void:
 		if entity_list_input:
 			entity_list_input.text = saved_entities
 		
-		# Auto-connect if we have valid saved credentials
-		if _is_valid_url(saved_url) and _is_valid_token(saved_token):
-			call_deferred("_auto_connect", saved_entities)
+		# Auto-connect belongs to the HomeAssistant autoload now (saved
+		# instances, per world); this hidden legacy panel only mirrors status.
 	else:
 		# Use defaults
 		if url_input:

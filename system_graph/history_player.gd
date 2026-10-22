@@ -330,6 +330,14 @@ func _set_state(s: int) -> void:
 
 func _collect_linked_entities() -> Array[String]:
 	var out: Array[String] = []
+	# The world's Live links (HAEntityLinker) — specs.ha_links is the old
+	# place, read only for graphs that were never migrated.
+	if _linker != null and _linker.has_method("linked_entity_ids"):
+		for e in _linker.call("linked_entity_ids"):
+			if not out.has(str(e)):
+				out.append(str(e))
+		if not out.is_empty():
+			return out
 	if _model == null:
 		return out
 	var seen: Dictionary = {}

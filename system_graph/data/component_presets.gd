@@ -1090,21 +1090,7 @@ const SHELLY4PM: Array = [
 			"c1_name": "Circuit 1", "c1_power_w": 0.0, "c1_on": true,
 			"c2_name": "Circuit 2", "c2_power_w": 0.0, "c2_on": true,
 			"c3_name": "Circuit 3", "c3_power_w": 0.0, "c3_on": true,
-			# Pre-linked HA entities — subscribed automatically on load.
-			"ha_links": {
-				"c0_power":  "sensor.shellypro4pm_ece334ed2e80_output_0_power",
-				"c0_switch": "switch.shellypro4pm_ece334ed2e80_output_0",
-				"c0_energy": "sensor.shellypro4pm_ece334ed2e80_output_0_energy",
-				"c1_power":  "sensor.shellypro4pm_ece334ed2e80_output_1_power",
-				"c1_switch": "switch.shellypro4pm_ece334ed2e80_output_1",
-				"c1_energy": "sensor.shellypro4pm_ece334ed2e80_output_1_energy",
-				"c2_power":  "sensor.shellypro4pm_ece334ed2e80_output_2_power",
-				"c2_switch": "switch.shellypro4pm_ece334ed2e80_output_2",
-				"c2_energy": "sensor.shellypro4pm_ece334ed2e80_output_2_energy",
-				"c3_power":  "sensor.shellypro4pm_ece334ed2e80_output_3_power",
-				"c3_switch": "switch.shellypro4pm_ece334ed2e80_output_3",
-				"c3_energy": "sensor.shellypro4pm_ece334ed2e80_output_3_energy",
-			},
+			# Live links: Live links → Presets → "Shelly Pro 4PM" finds your device.
 		},
 	},
 ]

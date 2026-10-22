@@ -24,7 +24,7 @@ const PREFS_PATH := "user://ui_prefs.cfg"
 ## reads and writes files, not Main. The Lighting page is built in its
 ## graphics-preset form there (quality tier, performance, terrain detail,
 ## shadows); the sky / sun / fog fine-tuning needs a lit world.
-const HUB_PAGES := ["Lighting", "Interface", "Player", "Controls", "NPC", "Stars & Planets", "Window Wall"]
+const HUB_PAGES := ["Lighting", "Interface", "Player", "Controls", "NPC", "Stars & Planets", "Window Wall", "Home Assistant"]
 
 ## Set BEFORE the node enters the tree (the hub creates it by script): only
 ## HUB_PAGES are built, the sliders read SimSettingsController.hub_snapshot()
@@ -194,10 +194,7 @@ var _solar_inverter_max: HSlider = null
 var _solar_calibration: HSlider = null
 var _solar_high_accuracy: CheckBox = null
 var _solar_shadow_raycast: CheckBox = null
-var _ha_url_input: LineEdit = null
-var _ha_token_input: LineEdit = null
-var _ha_entities_input: TextEdit = null
-var _ha_status_lbl: Label = null
+var _ha_tab: VBoxContainer = null
 var _center_panel: PanelContainer = null
 var _tabs: TabContainer = null
 var _nav_box: VBoxContainer = null
@@ -447,6 +444,7 @@ func _build_ui() -> void:
 		_build_npc_tab(tabs)
 		_build_window_wall_tab(tabs)
 		_build_stars_planets_tab(tabs)
+		_build_ha_tab(tabs)
 	else:
 		_build_gameplay_tab(tabs)
 		_build_player_tab(tabs)
@@ -1335,164 +1333,14 @@ func _build_solar_tab(tabs: TabContainer) -> void:
 
 func _build_ha_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Home Assistant")
-	_add_section_lbl(v, "WebSocket Connection")
-	var hint := Label.new()
-	hint.text = (
-		"Credentials are stored only in user://ha_connection.cfg on your machine — never in the project or git.\n"
-		+ "Create a long-lived access token in Home Assistant → Profile → Security."
-	)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(420, 0)
-	hint.add_theme_color_override("font_color", C_TEXT_S)
-	hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(hint)
-
-	_ha_url_input = _add_ha_line_row(v, "WebSocket URL", "ws://192.168.1.10:8123/api/websocket", false)
-	_ha_token_input = _add_ha_line_row(v, "Access token", "Paste long-lived token…", true)
-	if _ha_url_input:
-		_ha_url_input.text_changed.connect(_on_ha_fields_changed)
-	if _ha_token_input:
-		_ha_token_input.text_changed.connect(_on_ha_fields_changed)
-
-	v.add_child(HSeparator.new())
-	_add_section_lbl(v, "Entity Subscriptions")
-	var ent_hint := Label.new()
-	ent_hint.text = "Optional: one entity_id per line (or comma-separated). Subscribed on connect."
-	ent_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	ent_hint.custom_minimum_size = Vector2(420, 0)
-	ent_hint.add_theme_color_override("font_color", C_TEXT_S)
-	ent_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(ent_hint)
-	_ha_entities_input = TextEdit.new()
-	_ha_entities_input.custom_minimum_size = Vector2(420, 72)
-	_ha_entities_input.placeholder_text = "sensor.battery_soc\nsensor.solar_power"
-	_ha_entities_input.text_changed.connect(_on_ha_fields_changed)
-	v.add_child(_ha_entities_input)
-
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 8)
-	var connect_btn := Button.new()
-	connect_btn.text = "Save & Connect"
-	connect_btn.tooltip_text = "Save credentials to user:// and open the WebSocket connection"
-	connect_btn.pressed.connect(_on_ha_connect_pressed)
-	btn_row.add_child(connect_btn)
-	var disconnect_btn := Button.new()
-	disconnect_btn.text = "Disconnect"
-	disconnect_btn.pressed.connect(_on_ha_disconnect_pressed)
-	btn_row.add_child(disconnect_btn)
-	var subscribe_btn := Button.new()
-	subscribe_btn.text = "Subscribe entities"
-	subscribe_btn.tooltip_text = "Subscribe to the entity list without reconnecting"
-	subscribe_btn.pressed.connect(_on_ha_subscribe_pressed)
-	btn_row.add_child(subscribe_btn)
-	v.add_child(btn_row)
-
-	_ha_status_lbl = _add_status_label(v, "Status: —")
-	_connect_ha_status_signals()
-
-
-func _add_ha_line_row(parent: Control, label_text: String, placeholder: String, secret: bool) -> LineEdit:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	var lbl := Label.new()
-	lbl.text = label_text
-	lbl.custom_minimum_size = Vector2(120, 0)
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 10)
-	row.add_child(lbl)
-	var ed := LineEdit.new()
-	ed.placeholder_text = placeholder
-	ed.secret = secret
-	ed.max_length = 512
-	ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(ed)
-	if secret:
-		var show_btn := Button.new()
-		show_btn.text = "Show"
-		show_btn.toggle_mode = true
-		show_btn.toggled.connect(func(on: bool) -> void:
-			ed.secret = not on
-			show_btn.text = "Hide" if on else "Show"
-		)
-		row.add_child(show_btn)
-	parent.add_child(row)
-	return ed
-
-
-func _connect_ha_status_signals() -> void:
-	if not is_instance_valid(SimSettingsController):
+	var script := load("res://scenes/ui/ha_settings_tab.gd") as Script
+	if script == null:
 		return
-	var main: Node = SimSettingsController.main_node
-	if main == null:
-		return
-	var client := main.get_node_or_null("HAClient")
-	if client == null:
-		return
-	if client.has_signal("connection_status_changed") \
-			and not client.connection_status_changed.is_connected(_on_ha_client_connection_changed):
-		client.connection_status_changed.connect(_on_ha_client_connection_changed)
-	if client.has_signal("authentication_status_changed") \
-			and not client.authentication_status_changed.is_connected(_on_ha_client_auth_changed):
-		client.authentication_status_changed.connect(_on_ha_client_auth_changed)
-
-
-func _on_ha_client_connection_changed(_connected: bool) -> void:
-	_refresh_ha_status()
-
-
-func _on_ha_client_auth_changed(_authenticated: bool) -> void:
-	_refresh_ha_status()
-
-
-func _on_ha_fields_changed(_arg: Variant = null) -> void:
-	if _syncing or not is_instance_valid(SimSettingsController):
-		return
-	var url := _ha_url_input.text if _ha_url_input else ""
-	var token := _ha_token_input.text if _ha_token_input else ""
-	var entities := _ha_entities_input.text if _ha_entities_input else ""
-	SimSettingsController.set_pending_ha_connection(url, token, entities)
-
-
-func _on_ha_connect_pressed() -> void:
-	if not is_instance_valid(SimSettingsController):
-		return
-	var url := _ha_url_input.text.strip_edges() if _ha_url_input else ""
-	var token := _ha_token_input.text.strip_edges() if _ha_token_input else ""
-	var entities := _ha_entities_input.text if _ha_entities_input else ""
-	SimSettingsController.connect_ha(url, token, entities)
-	if not entities.strip_edges().is_empty():
-		SimSettingsController.subscribe_ha_entities(entities)
-	_refresh_ha_status()
-
-
-func _on_ha_disconnect_pressed() -> void:
-	if is_instance_valid(SimSettingsController):
-		SimSettingsController.disconnect_ha()
-	_refresh_ha_status()
-
-
-func _on_ha_subscribe_pressed() -> void:
-	if not is_instance_valid(SimSettingsController):
-		return
-	var entities := _ha_entities_input.text if _ha_entities_input else ""
-	SimSettingsController.subscribe_ha_entities(entities)
-	_on_ha_fields_changed()
-	_refresh_ha_status()
-
-
-func _refresh_ha_status() -> void:
-	if _ha_status_lbl == null or not is_instance_valid(SimSettingsController):
-		return
-	var txt: String = SimSettingsController.get_ha_status_text()
-	_ha_status_lbl.text = "Status: %s" % txt
-	var col := C_TEXT_S
-	if txt.begins_with("Connected and"):
-		col = Color(0.15, 0.90, 0.47, 1.0)
-	elif txt.begins_with("Connected"):
-		col = Color(0.95, 0.78, 0.22, 1.0)
-	elif txt == "Disconnected":
-		col = Color(0.95, 0.35, 0.35, 1.0)
-	_ha_status_lbl.add_theme_color_override("font_color", col)
+	_ha_tab = VBoxContainer.new()
+	_ha_tab.set_script(script)
+	_ha_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_child(_ha_tab)
+	_ha_tab.call("bind", self)
 
 
 func _sync_solar_from_snapshot(snap: Dictionary) -> void:
@@ -1516,19 +1364,9 @@ func _sync_solar_from_snapshot(snap: Dictionary) -> void:
 		_solar_shadow_raycast.button_pressed = bool(snap.get("shadow_raycast", false))
 
 
-func _sync_ha_from_snapshot(snap: Dictionary) -> void:
-	if _ha_url_input:
-		_ha_url_input.text = str(snap.get("ha_url", ""))
-	if _ha_token_input:
-		_ha_token_input.text = str(snap.get("ha_token", ""))
-	if _ha_entities_input:
-		_ha_entities_input.text = str(snap.get("ha_entities", ""))
-	if is_instance_valid(SimSettingsController):
-		SimSettingsController.set_pending_ha_connection(
-			_ha_url_input.text if _ha_url_input else "",
-			_ha_token_input.text if _ha_token_input else "",
-			_ha_entities_input.text if _ha_entities_input else "")
-	_refresh_ha_status()
+func _sync_ha_from_snapshot(_snap: Dictionary) -> void:
+	if _ha_tab != null and is_instance_valid(_ha_tab):
+		_ha_tab.call("refresh")
 
 
 func _on_solar_panel_count(v: float) -> void:

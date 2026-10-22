@@ -1256,16 +1256,9 @@ func _find_solar_ui() -> Control:
 	return null
 
 
-const HA_CONNECTION_CFG := "user://ha_connection.cfg"
-const HA_URL_DEFAULT := "ws://YOUR_HA_IP:8123/api/websocket"
-const HA_TOKEN_DEFAULT := "YOUR_LONG_LIVED_TOKEN"
-
-## Pending HA fields edited in the settings panel (flushed on persist).
-var _pending_ha_url : String = ""
-var _pending_ha_token : String = ""
-var _pending_ha_entities : String = ""
-var _ha_fields_dirty : bool = false
-
+## Home Assistant lives in the HomeAssistant autoload (core/ha/ha_service.gd):
+## saved instances, the connection and its step-by-step status. These wrappers
+## keep the old entry points working for callers that still use them.
 
 func get_solar_panel_settings() -> Dictionary:
 	var solar := _find_solar_ui()
@@ -1280,111 +1273,48 @@ func apply_solar_panel_setting(key: String, value: Variant) -> void:
 		solar.call("apply_panel_setting", key, value)
 
 
+func _ha_service() -> Node:
+	return get_node_or_null("/root/HomeAssistant")
+
+
 func get_ha_connection_snapshot() -> Dictionary:
-	var cfg := ConfigFile.new()
-	var url := HA_URL_DEFAULT
-	var token := ""
-	var entities := ""
-	if cfg.load(HA_CONNECTION_CFG) == OK:
-		url = str(cfg.get_value("connection", "url", HA_URL_DEFAULT))
-		token = str(cfg.get_value("connection", "token", ""))
-		entities = str(cfg.get_value("connection", "entities", ""))
-	var client := _ha_client()
-	var connected := false
-	var authenticated := false
-	if client != null:
-		connected = bool(client.get("is_connected"))
-		authenticated = bool(client.get("is_authenticated"))
+	var svc := _ha_service()
+	if svc == null:
+		return {"ha_url": "", "ha_token": "", "ha_entities": "", "ha_connected": false, "ha_authenticated": false}
+	var p: Dictionary = svc.call("profile", str(svc.call("active_profile_id")))
 	return {
-		"ha_url": url,
-		"ha_token": token,
-		"ha_entities": entities,
-		"ha_connected": connected,
-		"ha_authenticated": authenticated,
+		"ha_url": str(p.get("url", "")),
+		"ha_token": str(p.get("token", "")),
+		"ha_entities": "",
+		"ha_connected": bool(svc.call("is_ws_open")),
+		"ha_authenticated": bool(svc.call("is_authed")),
 	}
 
 
-func set_pending_ha_connection(url: String, token: String, entities: String) -> void:
-	_pending_ha_url = url.strip_edges()
-	_pending_ha_token = token.strip_edges()
-	_pending_ha_entities = entities.strip_edges()
-	_ha_fields_dirty = true
-
-
-func save_ha_connection(url: String, token: String, entities: String = "") -> void:
-	var cfg := ConfigFile.new()
-	cfg.load(HA_CONNECTION_CFG)
-	cfg.set_value("connection", "url", url.strip_edges())
-	cfg.set_value("connection", "token", token.strip_edges())
-	if not entities.is_empty() or cfg.has_section_key("connection", "entities"):
-		cfg.set_value("connection", "entities", entities.strip_edges())
-	cfg.save(HA_CONNECTION_CFG)
-	_pending_ha_url = url.strip_edges()
-	_pending_ha_token = token.strip_edges()
-	_pending_ha_entities = entities.strip_edges()
-	_ha_fields_dirty = false
+## Old settings-panel hooks: the new page saves on Connect, so these are no-ops.
+func set_pending_ha_connection(_url: String, _token: String, _entities: String) -> void:
+	pass
 
 
 func save_ha_connection_from_panel() -> void:
-	if not _ha_fields_dirty:
-		return
-	save_ha_connection(_pending_ha_url, _pending_ha_token, _pending_ha_entities)
+	pass
 
 
-func connect_ha(url: String, token: String, entities: String = "") -> void:
-	save_ha_connection(url, token, entities)
-	var client := _ha_client()
-	if client == null or not client.has_method("connect_to_ha"):
-		return
-	client.call("connect_to_ha", url.strip_edges(), token.strip_edges())
+func connect_ha(url: String, token: String, _entities: String = "") -> void:
+	var svc := _ha_service()
+	if svc != null:
+		svc.call("connect_with", url, token, "", true)
 
 
 func disconnect_ha() -> void:
-	var client := _ha_client()
-	if client != null and client.has_method("disconnect_from_ha"):
-		client.call("disconnect_from_ha")
-
-
-func subscribe_ha_entities(entities_text: String) -> void:
-	save_ha_connection(_pending_ha_url, _pending_ha_token, entities_text)
-	var client := _ha_client()
-	if client == null or not bool(client.get("is_authenticated")):
-		return
-	var raw := entities_text.strip_edges()
-	if raw.is_empty():
-		return
-	var raw_entities: PackedStringArray
-	if "\n" in raw:
-		raw_entities = raw.split("\n", false)
-	else:
-		raw_entities = raw.split(",", false)
-	var cleaned: Array[String] = []
-	for entity in raw_entities:
-		var trimmed := str(entity).strip_edges()
-		if not trimmed.is_empty():
-			cleaned.append(trimmed)
-	if cleaned.is_empty():
-		return
-	if client.has_method("subscribe_to_entities"):
-		client.call("subscribe_to_entities", cleaned)
-	if client.has_method("get_entity_states"):
-		client.call("get_entity_states", cleaned)
+	var svc := _ha_service()
+	if svc != null:
+		svc.call("disconnect_ha")
 
 
 func get_ha_status_text() -> String:
-	var snap := get_ha_connection_snapshot()
-	if snap.get("ha_connected", false) and snap.get("ha_authenticated", false):
-		return "Connected and authenticated"
-	if snap.get("ha_connected", false):
-		return "Connected (authenticating…)"
-	return "Disconnected"
-
-
-func _ha_client() -> Node:
-	var main := _valid_main()
-	if main != null:
-		return main.get_node_or_null("HAClient")
-	return null
+	var svc := _ha_service()
+	return str(svc.call("status_text")) if svc != null else "Not connected"
 
 
 func _moon_phase_icon(phase: float) -> String:

@@ -1225,6 +1225,20 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_host_probe.gd
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_guest_probe.gd -Label mp_guest -Timeout 900
 # What another player looks like (one instance, no network):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.gd -Label mp_figure
+# Home Assistant (offline — HaUrl / HaToken / HaFailure / HaProfiles on TEMP
+# files incl. the ha_connection.cfg migration, HaUnits, HaTargets, HaLinkStore
+# incl. the specs.ha_links + SolarUI cfg migration and pruning, HaObservedStore,
+# HaPresets; then the REAL HomeAssistantService against HaFakeServer on
+# 127.0.0.1: steps in order, one subscription for many callers, coalesced
+# get_states, wrong token (no retry), dead port + the finder's suggestion, not
+# HA's API, auth timeout, dropped + reconnected. EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script core/ha/ha_selftest.gd
+# The same on a real world (sandbox, fake HA): the settings page with a REAL
+# Connect click and its four steps, links to the site battery / a load (W) /
+# the weather (°F), Live mode at 1x drives them with user_rev unmoved, 60x only
+# records, HA history backfills the track, the timeline HA lane, automations see
+# the sensor, the Live links window (UiAudit), a preset, unlink:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ha_link_probe.gd -Label ha_probe
 # Discord integration (offline — every security-relevant decision in core/discord/
 # is a PURE class_name file precisely so it can be fed fixtures here instead of
 # only against a live Discord app). Covers: PKCE pinned to the RFC 7636 Appendix B
@@ -4846,7 +4860,8 @@ Main scene UILayer (CanvasLayer) children by name (looked up by other code):
 TimeUI (legacy hidden shim), GameOverUI, SolarUI, InteractionPromptUI, CrosshairUI,
 EUCUI, HealthUI, HAConnectionUI, SaveLoadUI, SystemGraphView, TimelineUI,
 CsvPlaybackUI, ProjectionCanvas, POVWarpOverlay, LocationPickerUI. HAClient
-(HA WebSocket, `ha_websocket_client.gd`) is a direct child of Main, NOT an autoload.
+(`ha_websocket_client.gd`) is a direct child of Main, but only a FACADE over the
+HomeAssistant autoload, which owns the connection (see "Home Assistant").
 
 **Timeline-centric UI (replaces ESC TimeUI panel):** `TimelineUI` owns date
 Y/M/D spinboxes, play/pause (Space releases mouse), and a gear settings drawer
@@ -4881,6 +4896,7 @@ autoload holds the shared logic; `TimeUI` only forwards signals for backward com
 | MapContext | core/terrain/map_context.gd | Transient lat/lon hand-off to generated map scene (pre-`change_scene`) |
 | CursorController | scenes/ui/cursor_controller.gd | Mouse capture policy: play/pause/modal stack |
 | SimSettingsController | scenes/ui/sim_settings_controller.gd | Date/location/clouds/lighting/live mode; `live_mode_changed` / `simulation_started` |
+| HomeAssistant | core/ha/ha_service.gd | The ONE HA WebSocket connection, saved instances, entity catalog; `state_changed(state, info)`, `sensor_updated`, `catalog_updated` |
 
 ## Energy sources (power_system/sources/)
 
@@ -4975,16 +4991,118 @@ miniature (`_draw_compound_banner`, same preview path as processor cards) — th
 StarShade definition does this. Self-test: `system_graph/graph_components_selftest.gd`
 (includes a 3S6P no-over-voltage regression check).
 
-## HA digital twin (working today)
+## Home Assistant (core/ha/, 2026-10-22)
 
-Direct WebSocket: HAClient (scene child) → InverterBridge (autoload) →
-HAEntityLinker (`system_graph/ha_entity_linker.gd`) gated by
-`SimMode.should_apply_live_data()`. Historical replay:
-`core/csv_history_player.gd` (HA CSV exports). Real-load measurement:
-`system_graph/load_calibrator.gd`. Automation push: AutomationEngine YAML +
-`system_graph/ha_automation_pusher.gd`. NOTE: docs/ROADMAP.md Pillar 5 prescribes a
-HACS-integration architecture instead — that is a migration decision, do not
-rebuild the bridge without an explicit call.
+Plan: `~/.claude/plans/early-in-the-development-immutable-owl.md`. Connect, say
+what happened, link any sensor to any tracked sim value.
+- **Why "Connect did nothing":** Godot's WebSocketPeer never reports a REFUSED
+  port on Windows. The socket stays "connecting" forever (measured: still
+  connecting after 25 s), and the old client only signalled after a socket had
+  opened, then retried every frame in silence. The player's saved
+  `ws://<lan-ip>:8123` was refused because their HA answers on port 80.
+  - A dead address is now only found by `connect_timeout_s` (6 s).
+  - The FINDER starts at `early_probe_s` (2 s): it probes `HaUrl.candidates`
+    (the same host on :8123 / :80 / wss :443) for a peer that sends
+    `auth_required`. No token is sent. A hit becomes `info.suggestion_url`,
+    offered on the status card as "Use <address>".
+  - Never classify by elapsed time: Windows retries a refused SYN for about 2 s.
+- **`HomeAssistant` autoload** (`HomeAssistantService`, autoload-free so the
+  selftest builds it under `--script`) owns everything:
+  - **State machine:** IDLE → CONNECTING → AUTHENTICATING → CONNECTED, or
+    FAILED with `info.reason` set to an `HaFailure` constant.
+    `HaFailure.describe` gives the words and a fix.
+  - **Auth** is sent ON `auth_required`, never on a timer.
+  - **Keepalive:** ping every 30 s, with a pong timeout.
+  - **Retries** back off from 2 s to 60 s, and only after a success or under
+    auto-connect. A rejected token is never retried.
+  - **ONE** `state_changed` subscription per connection, filtered locally. The
+    old client opened one per caller, so each update arrived N times.
+  - `get_entity_states` calls are COALESCED into one `get_states` per frame.
+    The old client's second call overwrote the first's filter, and that reply
+    leaked every entity.
+  - `get_single_entity_state` used to open a `render_template` subscription per
+    call, which leaked; it now goes through the coalesced fetch.
+  - The entity catalog comes from that same fetch.
+  - `call_service` is gated by `SimMode.should_run_realworld_actions` unless
+    `force`.
+- **Main/HAClient** (`ha_websocket_client.gd`) is a FACADE that re-emits the
+  service's signals and forwards its methods. The scene consumers keep finding it
+  by node path or `ServiceLocator.HA_CLIENT`; new code uses the autoload.
+- **Saved instances** (`HaProfiles`, `user://ha_profiles.cfg`, SECRET and in
+  `AssetPackFormat.SECRET_FILES`):
+  - `ha_connection.cfg` is migrated once.
+  - A world can name its own instance (world.json `ha_profile_id`).
+  - Auto-connect runs on `SceneTree.scene_changed`, only for an instance that
+    has worked before (`last_ok_unix`).
+  - It is OFF under `--capture` / `--run-script` (`--ha-autoconnect`
+    re-enables it), so a test never reaches the player's real HA.
+- **UI:**
+  - Settings → Home Assistant is `scenes/ui/ha_settings_tab.gd`, in `HUB_PAGES`
+    so it works at the launch hub. It has the instance list, a lenient address
+    with a live "Will connect to" line, a token shape check (`HaToken`), and a
+    status card with four steps and fix buttons.
+  - The timeline **HA** chip shows grey (off), amber (connecting / retrying),
+    green "· N live", or red, and opens the page.
+  - Toasts announce connected / failed / lost, once per reason per attempt chain.
+  - `SimSettingsController`'s `*_ha_*` functions are thin wrappers.
+- **Live links** (`HaTargets`, `HaUnits`, `HaLinkStore`, `HAEntityLinker`):
+  - A TARGET is `site.<f>` (SolarUI energy), `weather.<f>`, or
+    `item.<graph id>.<field>`. The item field ids are the old `specs.ha_links`
+    roles, plus tank `level_pct` / `stock_l`, processor `switch`, wind / hydro
+    `power`.
+  - Links are saved per world (WorldPaths kind `ha_links`): entity ids only.
+    One link per target.
+  - The old places migrate once into a world with no link file: each node's
+    `specs.ha_links` (stripped afterwards) and `solar_ui_ha_entities.cfg`.
+  - The runtime is `HAEntityLinker`, a SystemGraphView child. It converts by the
+    sensor's `unit_of_measurement`, then applies the link's scale / offset /
+    flip.
+  - In every mode it writes the `specs.ha_live` badge cache and records the
+    reading (below).
+  - It APPLIES only when TimeDirector is LIVE, the service is CONNECTED and the
+    reading is fresh (`STALE_S` 600). ⚠ LIVE needs the player's **Live mode**
+    switch on (SolarUI `is_in_live_mode`), not just 1×. The Live links window
+    and the HA page say so and offer "Turn on Live mode".
+  - Item writes go inside the view's `_begin_sim_writes` bracket, and the probe
+    pins that `user_rev` does not move. `apply_historical_value` used to bump it
+    on every replayed sample.
+  - Site / weather values go through `SolarUI.set_live_reading` /
+    `clear_live_reading`. SolarUI's own per-field entity handling stands down
+    while `ha_links_external`; only its solar history-graph sensor is still read
+    there.
+  - Tanks are re-held on their `ResourceTimeline.set_current_level` once a
+    second in LIVE.
+  - Battery / panel / inverter node links still drive SolarUI's battery /
+    solar / load unless the world links that site value directly.
+- **Observed tracks** (`HaObservedStore`):
+  - Every reading, in the target's unit, on REAL time: local wall-clock absolute
+    hours, the NOW marker's axis.
+  - HA's recorder backfills `HISTORY_BACKFILL_H` (72 h) per link per session.
+  - Timeline Tracks ▾ "＋ HA: <value>" adds a source-`ha` lane
+    (`TimelineTrackLayout.add_ha_track`, `timeline_ui._draw_ha_lane`).
+  - The Live links window shows sim vs real.
+- **Windows:**
+  - `scenes/ui/ha_links_modal.gd` (`Main.open_ha_links(target_id)`): the tracked
+    values with live / sim values, plus an entity browser. It searches, filters
+    by domain, and defaults to "Compatible only" (`HaUnits.compatibility`: unit
+    family, then device_class).
+  - The inspector's Live twin rows, and SolarUI's value labels, open it on
+    their target.
+  - `scenes/ui/ha_presets_modal.gd` (`HaPresets`): EcoWorthy ESP32 CAN bus,
+    Shelly Pro 4PM (both `output_N` and `switch_N` naming), and a single Shelly
+    relay. These replaced InverterBridge's 78 hard-coded ids. InverterBridge no
+    longer subscribes by name, and its Shelly toggle uses the node's links.
+- **Also fixed:**
+  - `HAAutomationPusher` looked for a `/root/HAClient` that never existed.
+  - LoadCalibrator now switches its load back off.
+  - AutomationEngine's context carries every followed entity's state, so
+    "Custom (HA entity…)" triggers can fire.
+  - The CSV player no longer fakes `sensor_updated`.
+- Real-load measurement: `system_graph/load_calibrator.gd`. Automation push:
+  AutomationEngine YAML + `system_graph/ha_automation_pusher.gd`.
+- NOTE: docs/ROADMAP.md Pillar 5 prescribes a HACS-integration architecture
+  instead. That is a migration decision; do not start it without an explicit
+  call.
 
 ## Location (single source of truth)
 

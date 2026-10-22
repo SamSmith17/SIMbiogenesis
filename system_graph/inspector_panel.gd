@@ -712,8 +712,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 
 	# Optional LIVE twin + calibration - tucked under Advanced so the default
 	# inspector stays focused on simulation gameplay.
-	if itype in ["panel", "battery", "smartbattery", "controller", "shelly4pm",
-			"spiderbox", "breaker_panel", "appliance", "acload"]:
+	if not HaTargets.fields_for_type(itype).is_empty():
 		_build_advanced_ha_twin_section(item)
 	if itype in ["appliance", "acload"]:
 		_build_advanced_calibration_section(item)
@@ -3169,75 +3168,7 @@ func _rebuild_current_item() -> void:
 # Home Assistant entity linking (panel / battery / controller)
 # ---------------------------------------------------------------------------
 
-## Role definitions per node type. role_id → {label, required, unit}
-const _HA_ROLES := {
-	# Load nodes: link any power-monitoring plug / clamp / Shelly entity.
-	# Live power writes to avg_watts so the canvas shows real wattage.
-	"appliance": [
-		{"id": "power",   "label": "Live Power",       "required": false, "unit": "W"},
-		{"id": "energy",  "label": "Total Energy",     "required": false, "unit": "kWh"},
-		{"id": "voltage", "label": "Voltage",          "required": false, "unit": "V"},
-		{"id": "current", "label": "Current",          "required": false, "unit": "A"},
-		{"id": "switch",  "label": "Switch / State",   "required": false, "unit": ""},
-	],
-	"acload": [
-		{"id": "power",   "label": "Live Power",       "required": false, "unit": "W"},
-		{"id": "energy",  "label": "Total Energy",     "required": false, "unit": "kWh"},
-		{"id": "voltage", "label": "Voltage",          "required": false, "unit": "V"},
-		{"id": "current", "label": "Current",          "required": false, "unit": "A"},
-		{"id": "switch",  "label": "Switch / State",   "required": false, "unit": ""},
-	],
-	"panel": [
-		{"id": "power",   "label": "Total PV Power",       "required": true,  "unit": "W"},
-		{"id": "voltage", "label": "String Voltage",       "required": false, "unit": "V"},
-		{"id": "current", "label": "String Current",       "required": false, "unit": "A"},
-	],
-	"battery": [
-		{"id": "soc",     "label": "State of Charge",      "required": true,  "unit": "%"},
-		{"id": "voltage", "label": "Battery Voltage",      "required": false, "unit": "V"},
-		{"id": "power",   "label": "Battery Power",        "required": false, "unit": "W"},
-		{"id": "current", "label": "Battery Current",      "required": false, "unit": "A"},
-	],
-	"smartbattery": [
-		{"id": "soc",     "label": "State of Charge",      "required": true,  "unit": "%"},
-		{"id": "voltage", "label": "Battery Voltage",      "required": false, "unit": "V"},
-		{"id": "power",   "label": "Battery Power",        "required": false, "unit": "W"},
-		{"id": "current", "label": "Battery Current",      "required": false, "unit": "A"},
-	],
-	"controller": [
-		{"id": "ac_power","label": "Inverter AC Output",   "required": true,  "unit": "W"},
-		{"id": "voltage", "label": "AC Voltage",           "required": false, "unit": "V"},
-		{"id": "current", "label": "AC Current",           "required": false, "unit": "A"},
-	],
-	# Shelly Pro 4PM: power sensor, switch state, and energy for each of 4 circuits.
-	# Default entity IDs match the ESPHome integration naming used in InverterBridge.
-	"shelly4pm": [
-		{"id": "c0_power",  "label": "Ch 0 - Power",   "required": false, "unit": "W",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_0_power"},
-		{"id": "c0_switch", "label": "Ch 0 - Switch",  "required": false, "unit": "",
-			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_0"},
-		{"id": "c0_energy", "label": "Ch 0 - Energy",  "required": false, "unit": "kWh",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_0_energy"},
-		{"id": "c1_power",  "label": "Ch 1 - Power",   "required": false, "unit": "W",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_1_power"},
-		{"id": "c1_switch", "label": "Ch 1 - Switch",  "required": false, "unit": "",
-			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_1"},
-		{"id": "c1_energy", "label": "Ch 1 - Energy",  "required": false, "unit": "kWh",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_1_energy"},
-		{"id": "c2_power",  "label": "Ch 2 - Power",   "required": false, "unit": "W",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_2_power"},
-		{"id": "c2_switch", "label": "Ch 2 - Switch",  "required": false, "unit": "",
-			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_2"},
-		{"id": "c2_energy", "label": "Ch 2 - Energy",  "required": false, "unit": "kWh",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_2_energy"},
-		{"id": "c3_power",  "label": "Ch 3 - Power",   "required": false, "unit": "W",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_3_power"},
-		{"id": "c3_switch", "label": "Ch 3 - Switch",  "required": false, "unit": "",
-			"placeholder": "switch.shellypro4pm_ece334ed2e80_output_3"},
-		{"id": "c3_energy", "label": "Ch 3 - Energy",  "required": false, "unit": "kWh",
-			"placeholder": "sensor.shellypro4pm_ece334ed2e80_output_3_energy"},
-	],
-}
+## Live-twin fields per node type: HaTargets.ITEM_FIELDS (core/ha/ha_targets.gd).
 
 
 func _build_processor_energy_picker(specs: Dictionary) -> void:
@@ -4800,9 +4731,9 @@ func _on_glb_file_selected(path: String) -> void:
 
 func _build_advanced_ha_twin_section(item: Dictionary) -> void:
 	if not _advanced_section("ha_twin", "Advanced · Live twin (Home Assistant)",
-			"Optional - mirror real HA sensors into this node in LIVE mode"):
+			"Optional - follow real Home Assistant sensors at 1× (Live)"):
 		return
-	_hint_label("Simulation does not need these links. Use them only when connected to Home Assistant.")
+	_hint_label("Link a sensor to any of these values. At 1× (Live) the node follows it; at any speed the reading is recorded so you can compare it with the simulation.")
 	_build_ha_link_section(item)
 
 
@@ -4815,66 +4746,55 @@ func _build_advanced_calibration_section(item: Dictionary) -> void:
 
 func _build_ha_link_section(item: Dictionary) -> void:
 	# Section title is provided by the Advanced wrapper - keep body only.
-	var specs: Dictionary = item.get("specs", {}) as Dictionary
-	var links: Dictionary = (specs.get("ha_links", {}) as Dictionary)
-	var live: Dictionary  = (specs.get("ha_live",  {}) as Dictionary)
-	var itype: String = item.get("type", "") as String
-	var roles: Array = _HA_ROLES.get(itype, []) as Array
-
-	var edits: Dictionary = {}   # role → LineEdit
-	for role_def: Dictionary in roles:
-		var rid: String = role_def.get("id", "") as String
-		var lbl_txt: String = role_def.get("label", rid) as String
-		var unit_s: String = role_def.get("unit", "") as String
-		var required: bool = bool(role_def.get("required", false))
-
-		var title_row := HBoxContainer.new()
-		title_row.add_theme_constant_override("separation", 6)
+	var iid := str(item.get("id", ""))
+	var itype := str(item.get("type", ""))
+	for f: Dictionary in HaTargets.fields_for_type(itype):
+		var tid := HaTargets.item_target_id(iid, str(f["field"]))
+		var st: Dictionary = _ha_linker.call("link_status", tid) if _ha_linker != null and _ha_linker.has_method("link_status") else {}
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
 		var lbl := Label.new()
-		var suffix: String = "*" if required else ""
-		lbl.text = "%s%s  (%s)" % [lbl_txt, suffix, unit_s]
-		lbl.add_theme_color_override("font_color", C_PRIMARY if required else C_TEXT_S)
+		var unit_s := str(f["unit"])
+		lbl.text = str(f["label"]) if unit_s in ["", "bool"] else "%s (%s)" % [f["label"], unit_s]
+		lbl.custom_minimum_size.x = 120
+		lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		lbl.add_theme_color_override("font_color", C_TEXT_S)
 		lbl.add_theme_font_size_override("font_size", 10)
-		title_row.add_child(lbl)
-		var live_entry: Dictionary = (live.get(rid, {}) as Dictionary)
-		if not live_entry.is_empty():
-			var live_lbl := Label.new()
-			live_lbl.text = "  live: %.2f %s" % [float(live_entry.get("value", 0.0)), str(live_entry.get("unit", unit_s))]
-			live_lbl.add_theme_color_override("font_color", Color(0.27, 0.9, 0.42))
-			live_lbl.add_theme_font_size_override("font_size", 10)
-			title_row.add_child(live_lbl)
-		_form_vbox.add_child(_wrap_margin(title_row, 12, 2))
-
-		var edit := LineEdit.new()
-		var ph_override: String = role_def.get("placeholder", "") as String
-		edit.placeholder_text = ph_override if not ph_override.is_empty() else "sensor.my_%s_%s" % [itype, rid]
-		var saved_val: String = str(links.get(rid, ""))
-		# When the placeholder IS the real entity ID (e.g. shelly4pm), treat it
-		# as the default value so the field appears pre-filled rather than empty.
-		edit.text = saved_val if not saved_val.is_empty() else ph_override
-		edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_edit(edit, false)
-		_form_vbox.add_child(_wrap_margin(edit, 12, 2))
-		edits[rid] = edit
-
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 8)
-	var save_btn := Button.new()
-	save_btn.text = "Save & Subscribe"
-	save_btn.focus_mode = Control.FOCUS_NONE
-	save_btn.flat = true
-	save_btn.add_theme_color_override("font_color", C_PRIMARY)
-	save_btn.pressed.connect(_on_ha_links_save.bind(item.get("id", "") as String, edits, itype))
-	btn_row.add_child(save_btn)
-
-	var clear_btn := Button.new()
-	clear_btn.text = "Clear links"
-	clear_btn.focus_mode = Control.FOCUS_NONE
-	clear_btn.flat = true
-	clear_btn.add_theme_color_override("font_color", C_AMBER)
-	clear_btn.pressed.connect(_on_ha_links_clear.bind(item.get("id", "") as String, edits))
-	btn_row.add_child(clear_btn)
-	_form_vbox.add_child(_wrap_margin(btn_row, 12, 8))
+		row.add_child(lbl)
+		var btn := Button.new()
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		UITheme.style_button(btn)
+		if bool(st.get("linked", false)):
+			var eid := str(st.get("entity_id", ""))
+			var txt := "🔗 " + eid
+			if bool(st.get("has_value", false)) and not bool(st.get("stale", true)):
+				var v := float(st.get("value", 0.0))
+				txt = "📡 %s  ·  %s" % [("on" if v >= 0.5 else "off") if unit_s == "bool" else "%.2f %s" % [v, unit_s], eid]
+				btn.add_theme_color_override("font_color", Color(0.27, 0.9, 0.42))
+			btn.text = txt
+			btn.tooltip_text = "Linked to %s. Click to change or unlink." % eid
+		else:
+			btn.text = "Link a sensor…"
+			btn.tooltip_text = "Pick a Home Assistant entity for %s." % str(f["label"]).to_lower()
+		btn.pressed.connect(func() -> void:
+			var main := get_tree().current_scene
+			if main != null and main.has_method("open_ha_links"):
+				main.call("open_ha_links", tid))
+		row.add_child(btn)
+		_form_vbox.add_child(_wrap_margin(row, 12, 2))
+	var open_btn := Button.new()
+	open_btn.text = "Open Live links…"
+	open_btn.focus_mode = Control.FOCUS_NONE
+	open_btn.flat = true
+	open_btn.add_theme_color_override("font_color", C_PRIMARY)
+	open_btn.pressed.connect(func() -> void:
+		var main := get_tree().current_scene
+		if main != null and main.has_method("open_ha_links"):
+			main.call("open_ha_links", HaTargets.item_target_id(iid, str((HaTargets.fields_for_type(itype)[0] as Dictionary)["field"]))))
+	_form_vbox.add_child(_wrap_margin(open_btn, 12, 8))
 
 
 ## Shelly Pro 4PM circuit switch controls.
@@ -4958,10 +4878,14 @@ func _build_shelly4pm_controls_section(item: Dictionary) -> void:
 			var is_live: bool = sm != null and bool(sm.call("is_live"))
 			var it0 := _model.get_item(captured_item_id) if _model != null else {}
 			var ty0 := str(it0.get("type", ""))
-			if is_live and ty0 == "shelly4pm":
-				var br: Node = get_node_or_null("/root/InverterBridge")
-				if br != null and br.has_method("toggle_shelly_output"):
-					br.toggle_shelly_output(circuit_idx)
+			# LIVE: flip the REAL switch this channel is linked to (Live
+			# links); the reading coming back updates the node.
+			var sw_tid := HaTargets.item_target_id(captured_item_id, "c%d_switch" % circuit_idx)
+			var sw: Dictionary = _ha_linker.call("link_for_target", sw_tid) if _ha_linker != null and _ha_linker.has_method("link_for_target") else {}
+			var ha: Node = get_node_or_null("/root/HomeAssistant")
+			if is_live and ty0 == "shelly4pm" and not sw.is_empty() and ha != null:
+				var seid := str(sw.get("entity_id", ""))
+				ha.call("call_service", seid.get_slice(".", 0), "toggle", seid)
 			else:
 				_simulate_shelly_toggle(captured_item_id, circuit_idx)
 		)
@@ -4987,61 +4911,6 @@ func _simulate_passthrough_flag(item_id: String, key: String) -> void:
 	specs[key] = not bool(specs.get(key, false))
 	_model.update_item(item_id, {"specs": specs})
 	_rebuild_for_item(_model.get_item(item_id))
-
-
-func _on_ha_links_save(item_id: String, edits: Dictionary, itype: String) -> void:
-	if _model == null or item_id.is_empty():
-		return
-	var it := _model.get_item(item_id)
-	if it.is_empty():
-		return
-	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-	var links: Dictionary = (specs.get("ha_links", {}) as Dictionary).duplicate(true)
-	var missing_required: Array[String] = []
-	var roles: Array = _HA_ROLES.get(itype, []) as Array
-	for role_def: Dictionary in roles:
-		var rid: String = role_def.get("id", "") as String
-		var edit: LineEdit = edits.get(rid, null) as LineEdit
-		if edit == null:
-			continue
-		var val: String = edit.text.strip_edges()
-		if val.is_empty():
-			links.erase(rid)
-			if bool(role_def.get("required", false)):
-				missing_required.append(rid)
-		else:
-			links[rid] = val
-	specs["ha_links"] = links
-	_model.update_item(item_id, {"specs": specs})
-
-	if not missing_required.is_empty():
-		var psa := PackedStringArray(missing_required)
-		_toast("Saved. Missing required: %s" % ", ".join(psa))
-	if _ha_linker != null and _ha_linker.has_method("refresh_subscriptions"):
-		_ha_linker.call("refresh_subscriptions")
-	var note: String = "Linked %s" % UiText.count(links.size(), "sensor")
-	if _ha_linker != null and _ha_linker.has_method("is_live"):
-		var live_ok: bool = bool(_ha_linker.call("is_live"))
-		note += "; HA %s" % ("connected" if live_ok else "offline")
-	_toast(note)
-
-
-func _on_ha_links_clear(item_id: String, edits: Dictionary) -> void:
-	for rid: String in edits.keys():
-		var e: LineEdit = edits[rid] as LineEdit
-		if e != null:
-			e.text = ""
-	if _model == null or item_id.is_empty():
-		return
-	var it := _model.get_item(item_id)
-	if it.is_empty():
-		return
-	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
-	specs["ha_links"] = {}
-	_model.update_item(item_id, {"specs": specs})
-	if _ha_linker != null and _ha_linker.has_method("refresh_subscriptions"):
-		_ha_linker.call("refresh_subscriptions")
-	_toast("Cleared HA links")
 
 
 # ---------------------------------------------------------------------------
@@ -5267,17 +5136,17 @@ func _on_calibrate_pressed(item_id: String) -> void:
 	if item.is_empty():
 		return
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
-	var links: Dictionary = (specs.get("ha_links", {}) as Dictionary)
-	var power_eid: String = str(links.get("power", ""))
-	if power_eid.is_empty():
-		_toast("Link a 'Live Power' HA sensor first.")
+	var pl: Dictionary = _ha_linker.call("link_for_target", HaTargets.item_target_id(item_id, "power")) if _ha_linker != null else {}
+	var sl: Dictionary = _ha_linker.call("link_for_target", HaTargets.item_target_id(item_id, "switch")) if _ha_linker != null else {}
+	if pl.is_empty():
+		_toast("Link a power sensor to this load first (Live twin → Power).")
 		return
 	var ok: bool = _calibrator.start({
 		"item_id":         item_id,
 		"load_type":       str(specs.get("load_type", "unknown")),
 		"duration_s":      float(specs.get("calibration_window_s", 30.0)),
 		"power_role":      "power",
-		"switch_entity":   str(links.get("switch", "")),
+		"switch_entity":   str(sl.get("entity_id", "")),
 		"capacity_wh":     float(specs.get("battery_capacity_wh", 0.0)),
 		"batch_output":    str(specs.get("batch_output", "")),
 		"batch_count":     float(specs.get("batch_count", 1.0)),

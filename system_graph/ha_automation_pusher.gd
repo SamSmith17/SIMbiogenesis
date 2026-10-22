@@ -20,11 +20,13 @@ func push(automation: Automation, tree: SceneTree) -> Dictionary:
 	else:
 		out.message = "Could not write YAML file"
 
-	var ha: Node = tree.root.get_node_or_null("HAClient")
+	# The connection is the HomeAssistant autoload (it used to look for a
+	# /root/HAClient that never existed, so this always stopped here).
+	var ha: Node = tree.root.get_node_or_null("HomeAssistant")
 	if ha == null:
-		out.message += " | HAClient not found (YAML only)."
+		out.message += " | Home Assistant service missing (YAML only)."
 		return out
-	if not bool(ha.get("is_connected")) or not bool(ha.get("is_authenticated")):
+	if not bool(ha.call("is_authed")):
 		out.message += " | HA not connected (YAML only)."
 		return out
 	if ha.has_method("call_service_no_target"):

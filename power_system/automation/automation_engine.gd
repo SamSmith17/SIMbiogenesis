@@ -161,6 +161,22 @@ func _update_context() -> void:
 		for k in (gctx.get("device_states", {}) as Dictionary):
 			device_states[k] = gctx["device_states"][k]
 
+	# Real Home Assistant states of every entity the game follows (Live links
+	# and the other subscribers), keyed by entity id, so a "Custom (HA
+	# entity…)" trigger has something to compare. The simulation's own keys
+	# above win on a name clash.
+	var ha : Node = root.get_node_or_null("HomeAssistant")
+	if ha != null and ha.has_method("latest"):
+		for eid in ha.get("subscribed_entities"):
+			var l : Dictionary = ha.call("latest", str(eid))
+			if l.is_empty():
+				continue
+			var raw := str(l.get("value", ""))
+			if not device_states.has(eid):
+				device_states[eid] = raw
+			if raw.is_valid_float() and not numeric_values.has(eid):
+				numeric_values[eid] = raw.to_float()
+
 func _find_main_node() -> Node:
 	var tree := get_tree()
 	if tree == null:

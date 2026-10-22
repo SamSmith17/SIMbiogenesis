@@ -177,6 +177,7 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#home_assistant"><img src="docs/tour/home_assistant.jpg" width="260" alt="Home Assistant live links"></a><br><b>Home Assistant live links</b><br><sub>HA</sub></td>
 </tr>
 </table>
 
