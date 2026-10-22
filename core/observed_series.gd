@@ -203,6 +203,43 @@ func waveform_bins(abs_start: float, abs_end: float, bin_count: int, channel: St
 	return out
 
 
+## One channel's samples covering [abs_start, abs_end]: {base_t, step,
+## values} (see EnergyTimeline.channel_slice). A channel the CSV has no column
+## for comes back empty, so its lane shows a gap rather than zeros.
+func channel_slice(channel: String, abs_start: float, abs_end: float,
+		capacity_kwh: float = 16.0) -> Dictionary:
+	var vals := PackedFloat32Array()
+	var empty := {"base_t": 0.0, "step": step_hours, "values": vals}
+	if is_empty() or abs_end < abs_start:
+		return empty
+	var has := true
+	match channel:
+		"solar_kw": has = _has_solar
+		"load_kw": has = _has_load
+		"soc_kwh", "soc_pct": has = _has_soc
+		"net_kw": has = _has_solar and _has_load
+		_: has = false
+	if not has:
+		return empty
+	var g0 := maxi(int(floor(abs_start / step_hours)), _base_step)
+	var g1 := mini(int(floor(abs_end / step_hours)), _base_step + _soc.size() - 1)
+	if g1 < g0:
+		return empty
+	var a := g0 - _base_step
+	var n := g1 - g0 + 1
+	vals.resize(n)
+	var cap := maxf(capacity_kwh, 0.001)
+	for k in n:
+		var i := a + k
+		match channel:
+			"solar_kw": vals[k] = _solar[i]
+			"load_kw": vals[k] = _load[i]
+			"soc_kwh": vals[k] = _soc[i]
+			"soc_pct": vals[k] = 100.0 * _soc[i] / cap
+			"net_kw": vals[k] = _solar[i] - _load[i]
+	return {"base_t": float(g0) * step_hours, "step": step_hours, "values": vals}
+
+
 func channel_value(sample: Dictionary, channel: String, capacity_kwh: float) -> float:
 	match channel:
 		"solar_kw":

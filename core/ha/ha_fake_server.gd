@@ -26,6 +26,7 @@ var service_calls: Array = []        # [{domain, service, target, service_data}]
 var subscribe_count: int = 0
 var get_states_count: int = 0
 var auth_attempts: int = 0
+var history_requests: int = 0
 var connections: int = 0
 
 var _tcp: TCPServer = null
@@ -142,6 +143,7 @@ func _on_message(c: Dictionary, m: Dictionary) -> void:
 				"target": m.get("target", {}), "service_data": m.get("service_data", {})})
 			_result(c, id, {"context": {"id": "fake"}})
 		"history/history_during_period":
+			history_requests += 1
 			var out := {}
 			for eid in m.get("entity_ids", []):
 				out[str(eid)] = history.get(str(eid), [])

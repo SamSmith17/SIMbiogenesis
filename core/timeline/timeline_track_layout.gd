@@ -98,24 +98,54 @@ func find_track(track_id : String) -> TimelineTrackDef:
 	return null
 
 
-## A Home Assistant observed track: `target_id` is a Live links target
-## (HaTargets id) whose recorded readings the lane draws.
-func add_ha_track(target_id : String, label : String) -> TimelineTrackDef:
+## A track drawn by something other than the power channel catalog (a Live
+## link's recorded readings: source "ha"; any Home Assistant entity:
+## "ha_entity"; a weather variable: "weather"). Re-adding an existing one
+## shows it again instead of duplicating it.
+func add_custom_track(source : String, channel : String, label : String, color : Color) -> TimelineTrackDef:
 	for t in tracks:
-		if t is TimelineTrackDef and (t as TimelineTrackDef).source == "ha" and (t as TimelineTrackDef).channel == target_id:
+		if t is TimelineTrackDef and (t as TimelineTrackDef).source == source and (t as TimelineTrackDef).channel == channel:
 			(t as TimelineTrackDef).enabled = true
 			return t
 	var t := TimelineTrackDef.new()
-	t.id = "ha_%s_%d" % [target_id.replace(".", "_"), Time.get_ticks_msec()]
+	t.id = "%s_%s_%d" % [source, channel.replace(".", "_"), Time.get_ticks_msec()]
 	t.kind = TimelineTrackDef.KIND_WAVEFORM
-	t.channel = target_id
-	t.source = "ha"
-	t.label = "HA: %s" % label
-	t.color = Color(0.40, 0.85, 0.95, 1.0)
+	t.channel = channel
+	t.source = source
+	t.label = label
+	t.color = color
 	t.height = 28.0
 	t.enabled = true
 	tracks.append(t)
 	return t
+
+
+## A Live link's recorded readings (`target_id` = an HaTargets id).
+func add_ha_track(target_id : String, label : String) -> TimelineTrackDef:
+	return add_custom_track("ha", target_id, "HA: %s" % label, Color(0.40, 0.85, 0.95, 1.0))
+
+
+## Any Home Assistant entity, in its own unit.
+func add_ha_entity_track(entity_id : String, label : String) -> TimelineTrackDef:
+	return add_custom_track("ha_entity", entity_id, "HA: %s" % label, Color(0.55, 0.80, 1.00, 1.0))
+
+
+## A weather variable (TimelineWeatherChannels id).
+func add_weather_track(channel_id : String) -> TimelineTrackDef:
+	var ch := TimelineWeatherChannels.find(channel_id)
+	if ch.is_empty():
+		return null
+	return add_custom_track(TimelineWeatherChannels.SOURCE, channel_id, str(ch["label"]), ch["color"] as Color)
+
+
+func remove_track(track_id : String) -> bool:
+	for i in tracks.size():
+		var t: Variant = tracks[i]
+		if t is TimelineTrackDef and (t as TimelineTrackDef).id == track_id \
+				and (t as TimelineTrackDef).kind != TimelineTrackDef.KIND_CLIPS:
+			tracks.remove_at(i)
+			return true
+	return false
 
 
 func add_waveform_track(channel_id : String, source : String) -> TimelineTrackDef:

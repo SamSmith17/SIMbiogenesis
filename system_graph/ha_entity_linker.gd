@@ -241,7 +241,12 @@ func sim_value(target_id: String) -> float:
 ## `n` bins of a target's recorded readings over [t0, t1) abs hours (NAN where
 ## nothing was recorded). Real time: the timeline's NOW axis.
 func observed_bins(target_id: String, t0: float, t1: float, n: int) -> PackedFloat32Array:
-	return _observed.bins(target_id, t0, t1, n)
+	return _observed.bins(target_id, t0, t1, n, 6.0, HaObservedStore.now_abs_hours())
+
+
+## Zoom-stable bins of a target's recorded readings (TimelineBinning).
+func observed_bins_exact(target_id: String, w: float, i0: int, n: int) -> Dictionary:
+	return _observed.bins_exact(target_id, w, i0, n, 6.0, HaObservedStore.now_abs_hours())
 
 
 func observed_value_at(target_id: String, t_abs: float) -> float:

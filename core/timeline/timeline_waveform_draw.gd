@@ -15,77 +15,97 @@ static func draw_label(canvas : Control, rect : Rect2, text : String, col : Colo
 		Color(col.r, col.g, col.b, 0.82))
 
 
-static func draw_envelope(canvas : Control, rect : Rect2, bins : PackedFloat32Array,
-		v_max : float, color : Color) -> void:
-	if bins.is_empty() or rect.size.x <= 1.0 or rect.size.y <= 1.0:
+## Draw TimelineBinning bins ({w, i0, n, mn, mean, mx}) in a lane showing
+## [view_t0, view_t0 + view_span): each bin at its OWN absolute time (anchored,
+## so nothing slides while panning). Per run of known bins: a soft fill from
+## the lane floor up to the mean, the min–max band (what a bin hides when
+## zoomed out — a sawtooth stays a band instead of turning into a smooth
+## curve), and the mean line. Gaps where nothing is known.
+static func draw_bins(canvas : Control, rect : Rect2, b : Dictionary, view_t0 : float,
+		view_span : float, v_min : float, v_max : float, color : Color) -> void:
+	var n := int(b.get("n", 0))
+	if n <= 0 or rect.size.x <= 1.0 or rect.size.y <= 1.0 or view_span <= 0.0:
 		return
-	var n := bins.size()
-	var scale := 1.0 / maxf(v_max, 1e-6)
-	var pad := 2.0
-	var inner := Rect2(rect.position.x, rect.position.y + pad,
-		rect.size.x, maxf(rect.size.y - pad * 2.0, 1.0))
-	var pts := PackedVector2Array()
-	pts.append(Vector2(inner.position.x, inner.end.y))
-	for i in n:
-		var x := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
-		var h := clampf(float(bins[i]) * scale, 0.0, 1.0) * inner.size.y
-		pts.append(Vector2(x, inner.end.y - h))
-	pts.append(Vector2(inner.end.x, inner.end.y))
-	# An all-zero window (a full battery taking no sun) is a flat line — a
-	# zero-area polygon the renderer refuses to triangulate.
-	if _has_area(pts, inner.end.y):
-		canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.45))
-	for i in n - 1:
-		var x0 := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
-		var x1 := inner.position.x + (float(i + 1) / float(maxi(n - 1, 1))) * inner.size.x
-		var y0 := inner.end.y - clampf(float(bins[i]) * scale, 0.0, 1.0) * inner.size.y
-		var y1 := inner.end.y - clampf(float(bins[i + 1]) * scale, 0.0, 1.0) * inner.size.y
-		canvas.draw_line(Vector2(x0, y0), Vector2(x1, y1), Color(color.r, color.g, color.b, 0.95), 1.0)
-
-
-static func draw_line_fill(canvas : Control, rect : Rect2, bins : PackedFloat32Array,
-		v_min : float, v_max : float, color : Color) -> void:
-	if bins.is_empty() or rect.size.x <= 1.0 or rect.size.y <= 1.0:
-		return
+	var w := float(b["w"])
+	var i0 := int(b["i0"])
+	var mn : PackedFloat32Array = b["mn"]
+	var me : PackedFloat32Array = b["mean"]
+	var mx : PackedFloat32Array = b["mx"]
 	var span := maxf(v_max - v_min, 1e-6)
-	var n := bins.size()
 	var pad := 2.0
 	var inner := Rect2(rect.position.x, rect.position.y + pad,
 		rect.size.x, maxf(rect.size.y - pad * 2.0, 1.0))
+	var px_per_h := inner.size.x / view_span
+	var mean_pts := PackedVector2Array()
+	var hi_pts := PackedVector2Array()
+	var lo_pts := PackedVector2Array()
+	for k in n + 1:
+		var known := k < n and not is_nan(me[k])
+		var x := inner.position.x + ((float(i0 + k) + 0.5) * w - view_t0) * px_per_h
+		if known and x >= inner.position.x - px_per_h * w and x <= inner.end.x + px_per_h * w:
+			x = clampf(x, inner.position.x, inner.end.x)
+			mean_pts.append(Vector2(x, _y(me[k], v_min, span, inner)))
+			hi_pts.append(Vector2(x, _y(mx[k], v_min, span, inner)))
+			lo_pts.append(Vector2(x, _y(mn[k], v_min, span, inner)))
+			continue
+		if not known or k == n:
+			_flush_run(canvas, inner, mean_pts, hi_pts, lo_pts, color, px_per_h * w)
+			mean_pts = PackedVector2Array()
+			hi_pts = PackedVector2Array()
+			lo_pts = PackedVector2Array()
+
+
+static func _y(v : float, v_min : float, span : float, inner : Rect2) -> float:
+	return inner.end.y - clampf((v - v_min) / span, 0.0, 1.0) * inner.size.y
+
+
+static func _flush_run(canvas : Control, inner : Rect2, mean_pts : PackedVector2Array,
+		hi_pts : PackedVector2Array, lo_pts : PackedVector2Array, color : Color, bin_px : float) -> void:
+	var m := mean_pts.size()
+	if m == 0:
+		return
+	if m == 1:
+		var half := maxf(bin_px * 0.5, 1.5)
+		var p := mean_pts[0]
+		canvas.draw_rect(Rect2(p.x - half, hi_pts[0].y, half * 2.0, maxf(lo_pts[0].y - hi_pts[0].y, 1.0)),
+			Color(color.r, color.g, color.b, 0.30), true)
+		canvas.draw_line(Vector2(p.x - half, p.y), Vector2(p.x + half, p.y), Color(color.r, color.g, color.b, 0.95), 1.5)
+		return
+	# Soft fill under the mean, then the min–max band. Both are strips between
+	# two edges sharing x, built as explicit triangles: a polygon outline can
+	# be zero-width in places (a flat stretch, a bin where min == max), which
+	# Godot's polygon triangulator rejects with an engine error.
+	var floor_pts := PackedVector2Array()
+	floor_pts.resize(m)
+	for i in m:
+		floor_pts[i] = Vector2(mean_pts[i].x, inner.end.y)
+	_strip(canvas, mean_pts, floor_pts, Color(color.r, color.g, color.b, 0.18))
+	_strip(canvas, hi_pts, lo_pts, Color(color.r, color.g, color.b, 0.32))
+	canvas.draw_polyline(mean_pts, Color(color.r, color.g, color.b, 0.95), 1.5, true)
+
+
+## The band between two edges with the same x (top[i].x == bottom[i].x) as one
+## triangle list — no triangulation, one draw call.
+static func _strip(canvas : Control, top : PackedVector2Array, bottom : PackedVector2Array, col : Color) -> void:
+	var m := top.size()
+	if m < 2:
+		return
 	var pts := PackedVector2Array()
-	pts.append(Vector2(inner.position.x, inner.end.y))
-	for i in n:
-		var x := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
-		var norm := (float(bins[i]) - v_min) / span
-		var y := inner.end.y - clampf(norm, 0.0, 1.0) * inner.size.y
-		pts.append(Vector2(x, y))
-	pts.append(Vector2(inner.end.x, inner.end.y))
-	if _has_area(pts, inner.end.y):
-		canvas.draw_colored_polygon(pts, Color(color.r, color.g, color.b, 0.35))
-	for i in n - 1:
-		var x0 := inner.position.x + (float(i) / float(maxi(n - 1, 1))) * inner.size.x
-		var x1 := inner.position.x + (float(i + 1) / float(maxi(n - 1, 1))) * inner.size.x
-		var y0 := inner.end.y - clampf((float(bins[i]) - v_min) / span, 0.0, 1.0) * inner.size.y
-		var y1 := inner.end.y - clampf((float(bins[i + 1]) - v_min) / span, 0.0, 1.0) * inner.size.y
-		canvas.draw_line(Vector2(x0, y0), Vector2(x1, y1), Color(color.r, color.g, color.b, 0.95), 1.5)
+	pts.resize(m * 2)
+	for i in m:
+		pts[i * 2] = top[i]
+		pts[i * 2 + 1] = bottom[i]
+	var idx := PackedInt32Array()
+	for i in m - 1:
+		var a := i * 2
+		idx.append_array([a, a + 2, a + 1, a + 1, a + 2, a + 3])
+	var cols := PackedColorArray()
+	cols.resize(pts.size())
+	cols.fill(col)
+	RenderingServer.canvas_item_add_triangle_array(canvas.get_canvas_item(), idx, pts, cols)
 
 
-static func vmax_for_bins(bins : PackedFloat32Array, channel : String, capacity_kwh : float) -> float:
-	match channel:
-		"soc_pct":
-			return 100.0
-		"soc_kwh":
-			return maxf(capacity_kwh, 1.0)
-		_:
-			var peak := 0.0
-			for v in bins:
-				peak = maxf(peak, float(v))
-			return maxf(peak * 1.15, 0.5)
-
-
-## True when any point of a baseline-closed outline rises off the baseline.
-static func _has_area(pts: PackedVector2Array, base_y: float) -> bool:
-	for p in pts:
-		if base_y - p.y > 0.25:
-			return true
-	return false
+## A track's scale, small at the right end of the lane ("12 – 31 °F").
+static func draw_range_label(canvas : Control, rect : Rect2, text : String, col : Color, font : Font) -> void:
+	canvas.draw_string(font, Vector2(rect.end.x - 156.0, rect.position.y + 10.0),
+		text, HORIZONTAL_ALIGNMENT_RIGHT, 150, 8, Color(col.r, col.g, col.b, 0.75))

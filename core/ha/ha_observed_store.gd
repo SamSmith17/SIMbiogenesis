@@ -55,6 +55,14 @@ func keys() -> Array:
 	return _t.keys()
 
 
+## Zoom-stable bins (TimelineBinning.from_steps: anchored, exact
+## time-weighted mean + min / max per bin) of one key's readings.
+func bins_exact(key: String, w: float, i0: int, n: int, max_gap_h: float = 6.0, until: float = INF) -> Dictionary:
+	if not _t.has(key):
+		return TimelineBinning.empty(w, i0, n)
+	return TimelineBinning.from_steps(_t[key], _v[key], w, i0, n, max_gap_h, until)
+
+
 ## Value held at `t_abs` (the last reading at or before it), NAN before the
 ## first reading or after `max_gap_h` without one.
 func value_at(key: String, t_abs: float, max_gap_h: float = 6.0) -> float:
@@ -78,8 +86,10 @@ func range_of(key: String) -> Vector2:
 
 
 ## `n` bins over [t0, t1): each the mean of the readings in it, else the value
-## held from before (zero-order hold, up to `max_gap_h`), else NAN.
-func bins(key: String, t0: float, t1: float, n: int, max_gap_h: float = 6.0) -> PackedFloat32Array:
+## held from before (zero-order hold, up to `max_gap_h`), else NAN. Bins that
+## start after `until` (NOW, for real readings) stay NAN: a reading is never
+## carried into the future.
+func bins(key: String, t0: float, t1: float, n: int, max_gap_h: float = 6.0, until: float = INF) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(maxi(n, 0))
 	out.fill(NAN)
@@ -96,6 +106,8 @@ func bins(key: String, t0: float, t1: float, n: int, max_gap_h: float = 6.0) -> 
 		held_t = ts[i]
 		i += 1
 	for b in n:
+		if t0 + w * float(b) > until:
+			break
 		var b1 := t0 + w * float(b + 1)
 		var sum := 0.0
 		var cnt := 0
@@ -125,6 +137,20 @@ static func abs_hours_local(t_unix: float) -> float:
 	var days_before := 365 * yy + yy / 4 - yy / 100 + yy / 400
 	var doy := _doy(int(dt["month"]), int(dt["day"]), y)
 	return float(days_before + doy - 1) * 24.0 + hours
+
+
+## Inverse of abs_hours_local: the Unix time of an absolute local hour.
+static func unix_from_abs_local(h: float) -> float:
+	var d := TimelineWeatherChannels.abs_to_date(h)
+	var hr: float = float(d["hour"])
+	var hh := int(floor(hr))
+	var mins := (hr - float(hh)) * 60.0
+	var mm := int(floor(mins))
+	var ss := (mins - float(mm)) * 60.0
+	var u := float(Time.get_unix_time_from_datetime_dict({"year": int(d["year"]), "month": int(d["month"]),
+		"day": int(d["day"]), "hour": hh, "minute": mm, "second": int(floor(ss))}))
+	var tz := Time.get_time_zone_from_system()
+	return u - float(int(tz.get("bias", 0)) * 60) + (ss - floorf(ss))
 
 
 static func now_abs_hours() -> float:

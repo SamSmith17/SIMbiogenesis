@@ -97,7 +97,7 @@ var _ready_done   : bool  = false
 
 const UPDATE_INTERVAL := 0.1
 
-## _draw_waveform_lane's get_timeline_waveform_bins() (up to 512 samples) and
+## _draw_waveform_lane's TimelineBinning bins (exact over every sample) and
 ## the per-day WeatherService temperature-record loop in _draw_track both
 ## recompute on every track redraw (~10 fps via UPDATE_INTERVAL above) even
 ## when the view window hasn't moved and the sim is paused. Cache the last
@@ -105,7 +105,7 @@ const UPDATE_INTERVAL := 0.1
 ## fresh while actively simulating (or after a location/dataset change) but
 ## an unchanged, paused view isn't recomputed ~10x/sec for nothing.
 const WAVEFORM_CACHE_TTL := 0.25
-var _waveform_cache : Dictionary = {}      # track label -> {key, bins, t}
+var _waveform_cache : Dictionary = {}      # track id -> {key, bins, t}
 const WEATHER_PIP_CACHE_TTL := 0.5
 var _weather_pip_cache : Dictionary = {}   # day index (int) -> {rec, sim_t, t}
 
@@ -789,48 +789,77 @@ func _save_track_layout_prefs() -> void:
 	_save_ui_prefs()
 
 
+## Tracks ▾: the tracks on the timeline (click to show / hide), then one
+## submenu per kind of track to add — power (live / simulated / observed CSV),
+## weather, Home Assistant (each Live link, or any sensor through the picker) —
+## and one to remove a track.
+var _tracks_subs: Dictionary = {}   # "power" | "weather" | "ha" | "remove" -> PopupMenu
+
+const TRACK_SOURCE_NAMES := {"live": "live", "sim": "simulated", "observed": "observed CSV",
+	"ha": "Home Assistant link", "ha_entity": "Home Assistant", "weather": "weather"}
+
+
 func _setup_tracks_menu() -> void:
 	if _tracks_menu != null:
 		return
 	_tracks_menu = PopupMenu.new()
 	_tracks_menu.name = "TracksMenu"
 	add_child(_tracks_menu)
-	_tracks_menu.id_pressed.connect(_on_tracks_menu_id_pressed)
+	_tracks_menu.id_pressed.connect(_on_tracks_menu_id_pressed.bind(_tracks_menu))
+	for key in ["power", "weather", "ha", "remove"]:
+		var sub := PopupMenu.new()
+		sub.name = "Tracks_%s" % key
+		_tracks_menu.add_child(sub)
+		sub.id_pressed.connect(_on_tracks_menu_id_pressed.bind(sub))
+		_tracks_subs[key] = sub
 	_rebuild_tracks_menu()
+
+
+func _track_menu_add(menu: PopupMenu, text: String, meta: Variant, disabled: bool = false) -> void:
+	var id := menu.item_count
+	menu.add_item(text, id)
+	menu.set_item_metadata(menu.get_item_index(id), meta)
+	menu.set_item_disabled(menu.get_item_index(id), disabled)
 
 
 func _rebuild_tracks_menu() -> void:
 	if _tracks_menu == null:
 		return
 	_tracks_menu.clear()
-	var idx := 0
+	for sub in _tracks_subs.values():
+		(sub as PopupMenu).clear()
+	var shown := 0
 	for t_v in _track_layout.tracks:
 		if not (t_v is TimelineTrackDef):
 			continue
 		var td : TimelineTrackDef = t_v as TimelineTrackDef
 		if td.kind == TimelineTrackDef.KIND_CLIPS:
 			continue
-		var label := td.label
-		if td.enabled:
-			label = "✓ " + label
-		else:
-			label = "   " + label
-		_tracks_menu.add_item("%s  (%s)" % [label, td.source], idx)
-		_tracks_menu.set_item_metadata(idx, td.id)
-		idx += 1
-	if idx > 0:
+		var src := str(TRACK_SOURCE_NAMES.get(td.source, td.source))
+		_track_menu_add(_tracks_menu, "%s %s  (%s)" % ["✓" if td.enabled else "   ", td.label, src], td.id)
+		_track_menu_add(_tracks_subs["remove"], "%s  (%s)" % [td.label, src], {"remove": td.id})
+		shown += 1
+	if shown > 0:
 		_tracks_menu.add_separator()
-	# PopupMenu.set_item_metadata takes the item INDEX, not the id. Using
-	# id=1000+ as the index was spamming "Index p_idx out of bounds" on load.
-	var add_base := 1000
-	var add_i := 0
+	# Power: the energy timeline's channels, each as live / simulated / CSV.
+	var power: PopupMenu = _tracks_subs["power"]
 	for ch in TimelineTrackDef.channel_catalog():
 		var cid := str(ch.get("id", ""))
 		for src in ch.get("sources", []):
-			_tracks_menu.add_item("＋ %s (%s)" % [str(ch.get("label", cid)), src], add_base + add_i)
-			_tracks_menu.set_item_metadata(_tracks_menu.item_count - 1, {"add": cid, "source": str(src)})
-			add_i += 1
-	# Home Assistant: one observed track per Live link in this world.
+			_track_menu_add(power, "%s (%s)" % [str(ch.get("label", cid)), str(TRACK_SOURCE_NAMES.get(str(src), src))],
+				{"add": cid, "source": str(src)})
+	_tracks_menu.add_submenu_node_item("Add power track", power)
+	# Weather: WeatherService's variables (the loaded archive / forecast).
+	var wx: PopupMenu = _tracks_subs["weather"]
+	for ch in TimelineWeatherChannels.CHANNELS:
+		_track_menu_add(wx, str(ch["label"]), {"add_weather": str(ch["id"])})
+	_tracks_menu.add_submenu_node_item("Add weather track", wx)
+	# Home Assistant: each Live link (in the value's own unit), then any sensor.
+	var ha: PopupMenu = _tracks_subs["ha"]
+	var svc := get_node_or_null("/root/HomeAssistant")
+	var connected := svc != null and bool(svc.call("is_authed"))
+	_track_menu_add(ha, "Pick any sensor…" if connected else "Pick any sensor… (connect Home Assistant first)",
+		{"pick_ha": true}, not connected)
 	var linker := _ha_linker()
 	if linker != null:
 		var first := true
@@ -840,11 +869,13 @@ func _rebuild_tracks_menu() -> void:
 			if t.is_empty():
 				continue
 			if first:
-				_tracks_menu.add_separator()
+				ha.add_separator("Linked values")
 				first = false
-			_tracks_menu.add_item("＋ HA: %s" % str(t.get("label", tid)), add_base + add_i)
-			_tracks_menu.set_item_metadata(_tracks_menu.item_count - 1, {"add_ha": tid, "label": str(t.get("label", tid))})
-			add_i += 1
+			_track_menu_add(ha, str(t.get("label", tid)), {"add_ha": tid, "label": str(t.get("label", tid))})
+	_tracks_menu.add_submenu_node_item("Add Home Assistant track", ha)
+	if shown > 0:
+		_tracks_menu.add_separator()
+		_tracks_menu.add_submenu_node_item("Remove a track", _tracks_subs["remove"])
 
 
 func _ha_linker() -> Node:
@@ -861,27 +892,64 @@ func _on_tracks_pressed() -> void:
 	_tracks_menu.popup()
 
 
-func _on_tracks_menu_id_pressed(id : int) -> void:
-	if _tracks_menu == null:
+## Metadata is looked up by the item's INDEX: the old handler read it with
+## the id, so every "＋ add" item (ids from 1000) found nothing and did nothing.
+func _on_tracks_menu_id_pressed(id : int, menu : PopupMenu) -> void:
+	if menu == null:
 		return
-	var meta : Variant = _tracks_menu.get_item_metadata(id)
+	var idx := menu.get_item_index(id)
+	if idx < 0:
+		return
+	var meta : Variant = menu.get_item_metadata(idx)
+	if meta is Dictionary and meta.has("pick_ha"):
+		_open_ha_sensor_picker()
+		return
 	if meta is Dictionary and meta.has("add_ha"):
 		var dh : Dictionary = meta as Dictionary
 		_track_layout.add_ha_track(str(dh["add_ha"]), str(dh.get("label", "")))
-		_save_track_layout_prefs()
+	elif meta is Dictionary and meta.has("add_weather"):
+		_track_layout.add_weather_track(str(meta["add_weather"]))
 	elif meta is Dictionary and meta.has("add"):
 		var d : Dictionary = meta as Dictionary
 		_track_layout.add_waveform_track(str(d.get("add", "")), str(d.get("source", "live")))
-		_save_track_layout_prefs()
+	elif meta is Dictionary and meta.has("remove"):
+		_track_layout.remove_track(str(meta["remove"]))
+		_waveform_cache.clear()
 	elif meta is String:
 		var track : TimelineTrackDef = _track_layout.find_track(str(meta))
 		if track != null:
 			track.enabled = not track.enabled
-			_save_track_layout_prefs()
+	else:
+		return
+	_tracks_changed()
+
+
+func _tracks_changed() -> void:
+	_save_track_layout_prefs()
 	_sync_scrubber_row_height()
 	_request_bar_layout()
 	if _track != null:
 		_track.queue_redraw()
+
+
+## Any Home Assistant sensor as a track: the entity picker, then a track.
+func add_ha_entity_track(entity_id : String, label : String) -> void:
+	_track_layout.add_ha_entity_track(entity_id, label)
+	var svc := get_node_or_null("/root/HomeAssistant")
+	if svc != null:
+		svc.call("track_entity", entity_id)
+	_tracks_changed()
+
+
+func _open_ha_sensor_picker() -> void:
+	var script := load("res://scenes/ui/ha_entity_picker.gd") as Script
+	if script == null:
+		return
+	var picker := Node.new()
+	picker.set_script(script)
+	add_child(picker)
+	picker.call("open", "Add a Home Assistant track", "Its readings are recorded while the game runs, and the window on screen is filled in from Home Assistant's history.",
+		func(eid: String, label: String) -> void: add_ha_entity_track(eid, label))
 
 
 func _ensure_solar_ref() -> void:
@@ -1468,85 +1536,182 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 			_draw_clip(vrng.x, vrng.y, win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
 
 
+## Every sensor lane — power, weather, Home Assistant — goes through ONE
+## path (TimelineBinning): a bin width from a fixed ladder, bins anchored to
+## absolute time, and exact min / mean / max per bin, drawn as the mean line
+## over its min–max band. Panning never resamples (a bin is the same interval
+## wherever the window sits) and zooming only changes the shape when the ladder
+## steps; a fast oscillation zoomed out stays a band, never a different curve.
 func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
-		w : float, fnt : Font, solar : Node) -> void:
+		_w : float, fnt : Font, solar : Node) -> void:
 	var bg := Color(0.05, 0.07, 0.11, 0.55)
 	TimelineWaveformDraw.draw_track_background(_track, lane_rect, bg, Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.35))
 	TimelineWaveformDraw.draw_label(_track, lane_rect, td.label, td.color, fnt)
-	if td.source == "ha":
-		_draw_ha_lane(td, lane_rect, win_start, span, w, fnt)
-		return
-	if solar == null or not solar.has_method("get_timeline_waveform_bins"):
-		return
-	var bins : int = clampi(int(w), 64, 512)
-	var cache_key : Array = [td.source, td.channel, win_start, span, bins]
+	match td.source:
+		"ha":
+			_draw_ha_lane(td, lane_rect, win_start, span, fnt)
+		"ha_entity":
+			_draw_ha_entity_lane(td, lane_rect, win_start, span, fnt)
+		TimelineWeatherChannels.SOURCE:
+			_draw_weather_lane(td, lane_rect, win_start, span, fnt)
+		_:
+			_draw_power_lane(td, lane_rect, win_start, span, fnt, solar)
+
+
+## Bin width + anchored grid for a lane: {w, i0, n}. `min_w` = the data's own
+## sample spacing (no bin finer than one sample).
+func _lane_grid(lane_rect : Rect2, win_start : float, span : float, min_w : float) -> Dictionary:
+	var bw := TimelineBinning.bin_width(span, lane_rect.size.x, min_w)
+	var g := TimelineBinning.grid(win_start, win_start + span, bw)
+	g["w"] = bw
+	return g
+
+
+## Cached bins for a lane. The key is the anchored grid, so a pan smaller than
+## a bin reuses them; `ttl` lets live data refresh.
+func _lane_bins_cached(td : TimelineTrackDef, g : Dictionary, ttl : float, make : Callable) -> Dictionary:
+	var key : Array = [td.source, td.channel, g["w"], g["i0"], g["n"]]
 	var now := Time.get_ticks_msec() / 1000.0
-	var cached : Dictionary = _waveform_cache.get(td.label, {})
-	var samples : PackedFloat32Array
-	if cached.get("key", []) == cache_key and now - float(cached.get("t", -1.0)) < WAVEFORM_CACHE_TTL:
-		samples = cached.get("bins", PackedFloat32Array())
-	else:
-		samples = solar.call("get_timeline_waveform_bins",
-			td.source, td.channel, win_start, win_start + span, bins)
-		_waveform_cache[td.label] = {"key": cache_key, "bins": samples, "t": now}
-	if samples.is_empty():
+	var cached : Dictionary = _waveform_cache.get(td.id, {})
+	if cached.get("key", []) == key and now - float(cached.get("t", -1.0)) < ttl:
+		return cached.get("bins", {})
+	var out : Dictionary = make.call()
+	_waveform_cache[td.id] = {"key": key, "bins": out, "t": now}
+	return out
+
+
+## Draw bins with an axis (or the empty note) and the range label.
+func _draw_bins_lane(td : TimelineTrackDef, lane_rect : Rect2, bins : Dictionary, win_start : float,
+		span : float, axis : Vector2, unit : String, empty_msg : String, fnt : Font) -> void:
+	if is_nan(axis.x):
+		if not empty_msg.is_empty():
+			_track.draw_string(fnt, Vector2(lane_rect.position.x + 140.0, lane_rect.position.y + lane_rect.size.y * 0.5 + 4.0),
+				empty_msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.6, 0.65, 0.72, 0.8))
 		return
+	TimelineWaveformDraw.draw_bins(_track, lane_rect, bins, win_start, span, axis.x, axis.y, td.color)
+	var txt := "off – on" if unit == "bool" else "%s – %s %s" % [_fmt_axis(axis.x), _fmt_axis(axis.y), unit]
+	TimelineWaveformDraw.draw_range_label(_track, lane_rect, txt.strip_edges(), td.color, fnt)
+
+
+static func _fmt_axis(v : float) -> String:
+	var a := absf(v)
+	if a >= 100.0:
+		return "%.0f" % v
+	if a >= 10.0:
+		return "%.1f" % v
+	return "%.2f" % v
+
+
+## An axis around a value range: [NAN, NAN] when empty; from 0 when the
+## values never go below it and `floor_zero`; padded otherwise.
+static func _axis_for(r : Vector2, floor_zero : bool = false) -> Vector2:
+	if is_nan(r.x):
+		return r
+	if floor_zero and r.x >= 0.0:
+		return Vector2(0.0, maxf(r.y * 1.15, 1e-3))
+	var pad := maxf((r.y - r.x) * 0.1, maxf(absf(r.y) * 0.02, 0.05))
+	return Vector2(r.x - pad, r.y + pad)
+
+
+## Power: the energy timeline / simulated run / CSV clip (SolarUI).
+func _draw_power_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
+		fnt : Font, solar : Node) -> void:
+	if solar == null or not solar.has_method("get_timeline_bins"):
+		return
+	var step := float(solar.call("get_timeline_step_hours", td.source))
+	var g := _lane_grid(lane_rect, win_start, span, step)
+	var bins : Dictionary = _lane_bins_cached(td, g, WAVEFORM_CACHE_TTL, func() -> Dictionary:
+		return solar.call("get_timeline_bins", td.source, td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
 	var cap := float(solar.call("get_timeline_capacity_kwh")) if solar.has_method("get_timeline_capacity_kwh") else 16.0
-	var mode := td.aggregate_mode()
-	if mode == "avg" or td.channel.begins_with("soc"):
-		var v_max := TimelineWaveformDraw.vmax_for_bins(samples, td.channel, cap)
-		TimelineWaveformDraw.draw_line_fill(_track, lane_rect, samples, 0.0, v_max, td.color)
-	else:
-		var v_max := TimelineWaveformDraw.vmax_for_bins(samples, td.channel, cap)
-		TimelineWaveformDraw.draw_envelope(_track, lane_rect, samples, v_max, td.color)
+	var r := TimelineBinning.value_range(bins)
+	var axis := _axis_for(r, true)
+	var unit := str(TimelineTrackDef.lookup_channel(td.channel).get("unit", ""))
+	if not is_nan(r.x):
+		match td.channel:
+			"soc_pct":
+				axis = Vector2(0.0, 100.0)
+			"soc_kwh":
+				axis = Vector2(0.0, maxf(cap, 1.0))
+	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, unit, "", fnt)
 
 
-## A Home Assistant observed track: the linked sensor's recorded readings
-## (HAEntityLinker.observed_bins, real time), drawn as a line that breaks
-## where nothing was recorded, scaled to its own min / max in the window.
-func _draw_ha_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
-		w : float, fnt : Font) -> void:
+## A Live link's recorded readings, in the linked value's unit (real time).
+func _draw_ha_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float, fnt : Font) -> void:
 	var linker := _ha_linker()
 	if linker == null:
 		return
-	var bins : int = clampi(int(w / 3.0), 32, 400)
-	var samples : PackedFloat32Array = linker.call("observed_bins", td.channel, win_start, win_start + span, bins)
-	var lo := INF
-	var hi := -INF
-	for v in samples:
-		if not is_nan(v):
-			lo = minf(lo, v)
-			hi = maxf(hi, v)
-	if lo == INF:
-		var t : Dictionary = linker.call("target", td.channel)
-		var msg := "no readings in this window" if not t.is_empty() else "link removed"
-		_track.draw_string(fnt, Vector2(lane_rect.position.x + 120.0, lane_rect.position.y + lane_rect.size.y * 0.5 + 4.0),
-			msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.65, 0.72, 0.8))
+	var g := _lane_grid(lane_rect, win_start, span, 0.0)
+	var bins : Dictionary = _lane_bins_cached(td, g, 0.5, func() -> Dictionary:
+		return linker.call("observed_bins_exact", td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
+	var t : Dictionary = linker.call("target", td.channel)
+	var unit := str(t.get("unit", ""))
+	var r := TimelineBinning.value_range(bins)
+	var axis := _axis_for(r, unit in ["W", "kW", "kWh", "%", "L"])
+	if unit == "bool" and not is_nan(r.x):
+		axis = Vector2(-0.05, 1.05)
+	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, unit,
+		"no readings in this window" if not t.is_empty() else "this link was removed", fnt)
+
+
+## Any Home Assistant entity (the service records it and fetches the window
+## from HA's history), in the entity's own unit.
+func _draw_ha_entity_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float, fnt : Font) -> void:
+	var svc := get_node_or_null("/root/HomeAssistant")
+	if svc == null:
 		return
-	if hi - lo < 1e-6:
-		hi = lo + 1.0
-	var pad := lane_rect.size.y * 0.15
-	var y0 := lane_rect.position.y + lane_rect.size.y - pad
-	var yh := lane_rect.size.y - pad * 2.0
-	var bw := w / float(bins)
-	var seg := PackedVector2Array()
-	for i in bins:
-		var v := samples[i]
-		if is_nan(v):
-			if seg.size() >= 2:
-				_track.draw_polyline(seg, td.color, 1.5, true)
-			seg = PackedVector2Array()
-			continue
-		seg.append(Vector2(lane_rect.position.x + (float(i) + 0.5) * bw, y0 - (v - lo) / (hi - lo) * yh))
-	if seg.size() >= 2:
-		_track.draw_polyline(seg, td.color, 1.5, true)
-	elif seg.size() == 1:
-		_track.draw_circle(seg[0], 1.5, td.color)
-	var t2 : Dictionary = linker.call("target", td.channel)
-	var unit := str(t2.get("unit", ""))
-	_track.draw_string(fnt, Vector2(lane_rect.position.x + lane_rect.size.x - 150.0, lane_rect.position.y + 11.0),
-		"%.1f – %.1f %s" % [lo, hi, unit if unit != "bool" else ""], HORIZONTAL_ALIGNMENT_RIGHT, 144, 9,
-		Color(td.color.r, td.color.g, td.color.b, 0.75))
+	var g := _lane_grid(lane_rect, win_start, span, 0.0)
+	var bins : Dictionary = _lane_bins_cached(td, g, 1.0, func() -> Dictionary:
+		return svc.call("entity_bins_exact", td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
+	var row : Dictionary = svc.call("catalog_entry", td.channel)
+	var unit := str(row.get("unit", ""))
+	var binary := td.channel.get_slice(".", 0) in ["switch", "binary_sensor", "input_boolean", "light", "fan"]
+	var r := TimelineBinning.value_range(bins)
+	var axis := _axis_for(r, unit in ["W", "kW", "kWh", "Wh", "%", "L", "mm", "mm/h", "in", "in/h"])
+	if binary and not is_nan(r.x):
+		axis = Vector2(-0.05, 1.05)
+	var msg := "no readings in this window"
+	if not bool(svc.call("is_authed")):
+		msg = "Home Assistant is not connected"
+	elif row.is_empty() and int(svc.call("catalog_size")) > 0:
+		msg = "%s is not in your Home Assistant" % td.channel
+	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, "bool" if binary else unit, msg, fnt)
+
+
+## A weather variable from WeatherService (hourly, linear between hours), in
+## the weather card's units (°F / °C switch).
+func _draw_weather_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float, fnt : Font) -> void:
+	var ws := get_node_or_null("/root/WeatherService")
+	var ch := TimelineWeatherChannels.find(td.channel)
+	if ws == null or ch.is_empty():
+		return
+	var g := _lane_grid(lane_rect, win_start, span, 0.0)
+	var reader := func(acc : String, m : int, d : int, h : float) -> float:
+		return float(ws.call(acc, m, d, h))
+	var bins : Dictionary = _lane_bins_cached(td, g, 10.0, func() -> Dictionary:
+		return TimelineWeatherChannels.bins_exact(td.channel, float(g["w"]), int(g["i0"]), int(g["n"]), reader))
+	var si_unit := str(ch["si"])
+	var imperial := _weather_imperial()
+	var unit := str(TimelineWeatherChannels.display(0.0, si_unit, imperial)["unit"])
+	var shown := bins
+	if unit != si_unit:
+		shown = TimelineBinning.mapped(bins, func(v : float) -> float:
+			return float(TimelineWeatherChannels.display(v, si_unit, imperial)["value"]))
+	var r := TimelineBinning.value_range(shown)
+	var axis := _axis_for(r, bool(ch.get("floor_zero", false)))
+	var fixed : Variant = ch.get("fixed", null)
+	if fixed is Array and not is_nan(r.x):
+		axis = Vector2(float(fixed[0]), float(fixed[1]))
+	var msg := "no weather data loaded for this site" if not bool(ws.call("has_data")) else "no data for this variable"
+	_draw_bins_lane(td, lane_rect, shown, win_start, span, axis, unit, msg, fnt)
+
+
+## The weather card's unit switch (ui_prefs.cfg [units] imperial).
+func _weather_imperial() -> bool:
+	if is_instance_valid(_weather_card):
+		var v : Variant = _weather_card.get("_use_imperial")
+		if v != null:
+			return bool(v)
+	return _use_imperial
 
 
 ## Draw a clip rect for an absolute-hours range on a lane (clamped to the window).

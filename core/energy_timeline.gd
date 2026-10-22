@@ -542,6 +542,34 @@ func waveform_bins(abs_start: float, abs_end: float, bin_count: int, channel: St
 	return out
 
 
+## The samples of one channel that cover [abs_start, abs_end], straight from
+## the packed buffers (no per-sample Dictionary): {base_t, step, values}.
+## TimelineBinning.from_regular turns it into zoom-stable bins.
+func channel_slice(channel: String, abs_start: float, abs_end: float) -> Dictionary:
+	var vals := PackedFloat32Array()
+	if is_empty() or abs_end < abs_start:
+		return {"base_t": 0.0, "step": step_hours, "values": vals}
+	var g0 := maxi(_step_of(abs_start), first_step())
+	var g1 := mini(_step_of(abs_end), last_step())
+	if g1 < g0:
+		return {"base_t": 0.0, "step": step_hours, "values": vals}
+	var a := g0 - _base_step
+	var n := g1 - g0 + 1
+	vals.resize(n)
+	var cap := maxf(capacity_kwh, 0.001)
+	for k in n:
+		var i := a + k
+		match channel:
+			"solar_kw": vals[k] = _solar[i]
+			"load_kw": vals[k] = _load[i]
+			"aux_kw": vals[k] = _aux[i]
+			"soc_kwh": vals[k] = _soc[i]
+			"soc_pct": vals[k] = 100.0 * _soc[i] / cap
+			"net_kw": vals[k] = _solar[i] + _aux[i] - _load[i]
+			_: vals[k] = 0.0
+	return {"base_t": time_of_step(g0), "step": step_hours, "values": vals}
+
+
 static func channel_value(sample: Dictionary, channel: String, cap_kwh: float = 16.0) -> float:
 	match channel:
 		"solar_kw":

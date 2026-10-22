@@ -35,6 +35,8 @@ signal history_statistics_received(statistic_id: String, statistics: Array)
 signal raw_history_received(entity_id: String, history: Array)
 signal catalog_updated()
 signal profiles_changed()
+## A sensor track's history arrived (`count` readings added).
+signal entity_history_received(entity_id: String, count: int)
 
 enum State { IDLE, CONNECTING, AUTHENTICATING, CONNECTED, FAILED }
 
@@ -384,6 +386,123 @@ func get_entity_history(entity_id: String, start_time: String, end_time: String,
 
 
 # =============================================================================
+# Sensor tracks (the timeline's "HA:" lanes for any entity)
+# =============================================================================
+## An entity on a timeline track is TRACKED: every reading of it is recorded
+## (real time, the entity's own unit) and the window on screen is filled in
+## from Home Assistant's recorder on demand, ENTITY_HISTORY_MAX_DAYS back at
+## most. Numbers as they are; on / off and the like as 1 / 0; text is skipped.
+
+const ENTITY_HISTORY_MAX_DAYS := 14.0
+## A window edge this close to what was already fetched is not worth a request.
+const HISTORY_SLACK_S := 120.0
+
+var _entity_obs: HaObservedStore = HaObservedStore.new()
+var _tracked: Dictionary = {}       # entity id -> true
+var _hist_cover: Dictionary = {}    # entity id -> Vector2(unix from, unix to) fetched
+var _hist_inflight: Dictionary = {} # entity id -> true
+
+
+func track_entity(entity_id: String) -> void:
+	if entity_id.is_empty():
+		return
+	_tracked[entity_id] = true
+	subscribe_to_entities([entity_id])
+	get_entity_states([entity_id])
+
+
+func is_tracked(entity_id: String) -> bool:
+	return _tracked.has(entity_id)
+
+
+## `n` bins of an entity's readings over [t0, t1) absolute LOCAL hours (the
+## timeline's axis), NAN where nothing is known. Asks HA for any part of the
+## window not fetched yet.
+func entity_bins(entity_id: String, t0_abs: float, t1_abs: float, n: int) -> PackedFloat32Array:
+	if not _tracked.has(entity_id):
+		track_entity(entity_id)
+	_ensure_history(entity_id, t0_abs, t1_abs)
+	return _entity_obs.bins(entity_id, t0_abs, t1_abs, n, 24.0, HaObservedStore.now_abs_hours())
+
+
+## Zoom-stable bins of an entity's readings (TimelineBinning): bin width `w`
+## hours, bins i0 .. i0 + n - 1 on the timeline's axis. Fetches the window from
+## HA's history like entity_bins.
+func entity_bins_exact(entity_id: String, w: float, i0: int, n: int) -> Dictionary:
+	if not _tracked.has(entity_id):
+		track_entity(entity_id)
+	_ensure_history(entity_id, float(i0) * w, float(i0 + n) * w)
+	return _entity_obs.bins_exact(entity_id, w, i0, n, 24.0, HaObservedStore.now_abs_hours())
+
+
+func entity_reading_count(entity_id: String) -> int:
+	return _entity_obs.size(entity_id)
+
+
+## A state string as a number for a track: a number, or 1 / 0 for the usual
+## on / off words; NAN for anything else.
+static func entity_number(raw: String) -> float:
+	var s := raw.strip_edges()
+	if s.is_valid_float():
+		return s.to_float()
+	var low := s.to_lower()
+	if low in HaUnits.TRUE_STATES:
+		return 1.0
+	if low in HaUnits.FALSE_STATES:
+		return 0.0
+	return NAN
+
+
+func _ensure_history(eid: String, t0_abs: float, t1_abs: float) -> void:
+	if not is_authed() or _hist_inflight.has(eid):
+		return
+	var now := Time.get_unix_time_from_system()
+	var a := maxf(HaObservedStore.unix_from_abs_local(t0_abs), now - ENTITY_HISTORY_MAX_DAYS * 86400.0)
+	var b := minf(HaObservedStore.unix_from_abs_local(t1_abs), now)
+	if b - a < HISTORY_SLACK_S:
+		return
+	var cov: Variant = _hist_cover.get(eid, null)
+	var fa := a
+	var fb := b
+	if cov is Vector2:
+		var c: Vector2 = cov
+		# Everything after the fetch is recorded live, so the cover reaches now.
+		c.y = now
+		if a >= c.x - HISTORY_SLACK_S and b <= c.y + HISTORY_SLACK_S:
+			return
+		if a < c.x - HISTORY_SLACK_S:
+			fa = a
+			fb = c.x
+		else:
+			fa = c.y
+			fb = b
+		_hist_cover[eid] = Vector2(minf(c.x, fa), maxf(c.y, fb))
+	else:
+		_hist_cover[eid] = Vector2(fa, fb)
+	_hist_inflight[eid] = true
+	_send({"type": "history/history_during_period",
+		"start_time": HaObservedStore.unix_to_iso(fa), "end_time": HaObservedStore.unix_to_iso(fb),
+		"entity_ids": [eid], "minimal_response": true, "no_attributes": true,
+		"significant_changes_only": false},
+		{"kind": "history", "id": eid, "track": true})
+
+
+func _take_entity_history(eid: String, rows: Array) -> void:
+	var n := 0
+	for row in rows:
+		if not (row is Dictionary):
+			continue
+		var tu := HaObservedStore.row_unix(row)
+		var v := entity_number(str(row.get("s", row.get("state", ""))))
+		if is_nan(tu) or is_nan(v):
+			continue
+		_entity_obs.add(eid, HaObservedStore.abs_hours_local(tu), v)
+		n += 1
+	if n > 0:
+		entity_history_received.emit(eid, n)
+
+
+# =============================================================================
 # Link summary (pushed by the open world's HAEntityLinker)
 # =============================================================================
 
@@ -553,6 +672,7 @@ func _close_socket(emit_signals: bool) -> void:
 	_socket_open = false
 	_phase = ""
 	_pending.clear()
+	_hist_inflight.clear()
 	_state_sub_id = -1
 	_states_inflight_id = -1
 	_pong_wait_id = -1
@@ -623,6 +743,9 @@ func _on_auth_ok(data: Dictionary) -> void:
 	_set_state(State.CONNECTED, {"title": "Connected"})
 	authentication_status_changed.emit(true)
 	_ensure_state_subscription()
+	# Readings were not recorded while disconnected: refetch what is on screen.
+	_hist_cover.clear()
+	_hist_inflight.clear()
 	_send({"type": "get_config"}, {"kind": "config"})
 	refresh_catalog()
 	if not subscribed_entities.is_empty():
@@ -666,6 +789,10 @@ func _take_state(st: Dictionary, emit_if_subscribed: bool) -> void:
 		(_catalog[eid] as Dictionary)["state"] = str(st.get("state", ""))
 	else:
 		_catalog[eid] = catalog_row(st)
+	if _tracked.has(eid):
+		var v := entity_number(str(st.get("state", "")))
+		if not is_nan(v):
+			_entity_obs.add(eid, HaObservedStore.now_abs_hours(), v)
 	if emit_if_subscribed and eid in subscribed_entities:
 		sensor_updated.emit(eid, st)
 
@@ -722,7 +849,11 @@ func _handle_result(data: Dictionary) -> void:
 			var harr: Array = []
 			if ok and res is Dictionary and res.get(eid, []) is Array:
 				harr = res.get(eid, [])
-			raw_history_received.emit(eid, harr)
+			if bool(p.get("track", false)):
+				_hist_inflight.erase(eid)
+				_take_entity_history(eid, harr)
+			else:
+				raw_history_received.emit(eid, harr)
 		"subscribe":
 			if not ok:
 				_state_sub_id = -1

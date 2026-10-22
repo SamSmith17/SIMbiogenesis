@@ -1239,6 +1239,15 @@ Godot.exe.exe --headless --path . --script core/ha/ha_selftest.gd
 # records, HA history backfills the track, the timeline HA lane, automations see
 # the sensor, the Live links window (UiAudit), a preset, unlink:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ha_link_probe.gd -Label ha_probe
+# Timeline binning (offline — ladder, anchoring across a pan, exact nesting
+# across zoom levels, a sawtooth keeping its range at every level, the weather
+# trapezoid, HA step bins with gaps and NOW; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/timeline/timeline_binning_selftest.gd
+# Timeline tracks (sandbox, fake HA): the Tracks ▾ submenus through the menu's
+# own handler (a power track — the old id-as-index bug — and three weather
+# tracks with their lanes filled from WeatherService), Pick any sensor… with a
+# REAL click, the lane filled from HA's history, Remove a track:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_tracks_probe.gd -Label tl_tracks
 # Discord integration (offline — every security-relevant decision in core/discord/
 # is a PURE class_name file precisely so it can be fed fixtures here instead of
 # only against a live Discord app). Covers: PKCE pinned to the RFC 7636 Appendix B
@@ -5078,9 +5087,61 @@ what happened, link any sensor to any tracked sim value.
   - Every reading, in the target's unit, on REAL time: local wall-clock absolute
     hours, the NOW marker's axis.
   - HA's recorder backfills `HISTORY_BACKFILL_H` (72 h) per link per session.
-  - Timeline Tracks ▾ "＋ HA: <value>" adds a source-`ha` lane
-    (`TimelineTrackLayout.add_ha_track`, `timeline_ui._draw_ha_lane`).
+  - Timeline Tracks ▾ → Add Home Assistant track → a linked value adds a
+    source-`ha` lane (`TimelineTrackLayout.add_ha_track`,
+    `timeline_ui._draw_ha_lane`).
   - The Live links window shows sim vs real.
+- **Timeline tracks for weather and any HA sensor** (2026-10-22):
+  - Tracks ▾ has the shown tracks (click to show / hide), then the submenus
+    Add power track, Add weather track, Add Home Assistant track and Remove a
+    track.
+  - ⚠ The old handler read PopupMenu metadata by ID, while the "＋" items have
+    ids from 1000 that never match an index, so adding a track from the menu
+    never worked. Metadata is now read by `get_item_index(id)`.
+  - **Weather** (`TimelineWeatherChannels`, source `weather`): temperature,
+    dew point, humidity, wind, gusts, solar radiation, cloud cover, rain and
+    snow depth.
+    - Each value comes from WeatherService's own accessor, sampled per bin; rain
+      and gusts take the bin's peak.
+    - The display follows the weather card's °F / °C switch.
+    - NAN draws as a gap.
+    - Lanes are cached 10 s per window.
+  - **Any HA entity** (source `ha_entity`) is picked in
+    `scenes/ui/ha_entity_picker.gd`. It lists numbers and on / off domains;
+    text states are skipped.
+    - `HomeAssistantService.track_entity` records every reading.
+    - `entity_bins` fetches the visible window from HA's recorder
+      (`significant_changes_only` false, ≤ 14 days back). It fetches only what is
+      not covered yet (`_hist_cover`), and the cover is cleared on reconnect.
+  - HA lanes are REAL time (the NOW axis) and are never carried past NOW
+    (`HaObservedStore.bins(..., until)`). With the playhead days away from NOW,
+    the lane says "no readings in this window".
+  - **Zoom-stable binning (`TimelineBinning`, all lanes, power included).**
+    The old lanes cut a fixed number of bins between the window's edges and
+    kept ONE value per bin, and power bins strided past 64 samples. Every zoom
+    or pan moved the bin edges in time, so a sawtooth turned smooth at some
+    zoom levels.
+    - Bin widths now come from a fixed `LADDER` (1 min … ~1 y), at one bin per
+      ~3 px and never finer than the data's step.
+    - Bins are ANCHORED: bin k is [k·w, (k+1)·w) whatever the window.
+    - Each bin is EXACT: min / mean / max of everything in it.
+      - `from_regular` is used for the energy timeline / sim / CSV, through
+        their packed-array `channel_slice`.
+      - `from_function` is used for hourly-linear weather. It reads the edges
+        plus every whole hour, at most `MAX_POINTS_PER_BIN`, with a trapezoid
+        mean.
+      - `from_steps` is used for HA readings: time-weighted mean, the held
+        value counted, gaps, nothing past NOW.
+    - Drawing (`TimelineWaveformDraw.draw_bins`) shows a soft fill to the mean,
+      the min–max band and the mean line. The fill and band are explicit
+      triangle strips (`RenderingServer.canvas_item_add_triangle_array`):
+      `draw_colored_polygon` failed triangulation on flat stretches.
+    - Lane caches are keyed on the anchored grid.
+    - SolarUI's entry point is `get_timeline_bins(source, channel, w, i0, n)`.
+      The old fixed-count `get_timeline_waveform_bins` and the one-value draw
+      helpers are gone.
+    - Selftest `core/timeline/timeline_binning_selftest.gd`; the probe below
+      shoots five zoom levels.
 - **Windows:**
   - `scenes/ui/ha_links_modal.gd` (`Main.open_ha_links(target_id)`): the tracked
     values with live / sim values, plus an entity browser. It searches, filters

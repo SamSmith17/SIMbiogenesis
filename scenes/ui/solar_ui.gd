@@ -3183,41 +3183,42 @@ func get_rendered_range_abs() -> Vector2:
 
 
 ## Downsampled waveform bins for NLE sensor tracks on the timeline UI.
-func get_timeline_waveform_bins(source : String, channel : String,
-		abs_start : float, abs_end : float, bin_count : int) -> PackedFloat32Array:
-	var mode := "peak"
-	var meta : Dictionary = TimelineTrackDef.lookup_channel(channel)
-	if not meta.is_empty():
-		mode = str(meta.get("mode", "peak"))
+## Zoom-stable bins for a power track (TimelineBinning: anchored bins of a
+## ladder width, exact min / mean / max of every sample in each). `w` hours
+## per bin, bins i0 .. i0 + n - 1.
+func get_timeline_bins(source : String, channel : String, w : float, i0 : int, n : int) -> Dictionary:
+	var t0 := float(i0) * w
+	var t1 := float(i0 + n) * w
 	match source:
 		"sim":
 			if _sim_series != null and not _sim_series.is_empty():
-				return _sim_series.waveform_bins(abs_start, abs_end, bin_count, channel, mode)
+				var s : Dictionary = _sim_series.channel_slice(channel, t0, t1)
+				return TimelineBinning.from_regular(s["values"], float(s["base_t"]), float(s["step"]), w, i0, n)
 		"observed":
 			if _observed_series != null and not _observed_series.is_empty():
-				return _observed_series.waveform_bins(abs_start, abs_end, bin_count, channel,
-					BATTERY_CAPACITY_KWH, mode)
+				var o : Dictionary = _observed_series.channel_slice(channel, t0, t1, BATTERY_CAPACITY_KWH)
+				return TimelineBinning.from_regular(o["values"], float(o["base_t"]), float(o["step"]), w, i0, n)
 		_:
 			if energy_timeline != null and not energy_timeline.is_empty():
-				return energy_timeline.waveform_bins(abs_start, abs_end, bin_count, channel, mode)
-			return _eval_waveform_bins(abs_start, abs_end, bin_count, channel, mode)
-	return PackedFloat32Array()
+				var e : Dictionary = energy_timeline.channel_slice(channel, t0, t1)
+				return TimelineBinning.from_regular(e["values"], float(e["base_t"]), float(e["step"]), w, i0, n)
+			# No recorded timeline yet: the pure evaluator, a few instants per bin.
+			var f := func(t : float) -> float:
+				var sample : Dictionary = evaluate_inputs_at(t)
+				sample["soc_kwh"] = battery_kwh_stored
+				return EnergyTimeline.channel_value(sample, channel, BATTERY_CAPACITY_KWH)
+			return TimelineBinning.from_function(f, maxf(w, 0.25), w, i0, n)
+	return TimelineBinning.empty(w, i0, n)
 
 
-func _eval_waveform_bins(abs_start : float, abs_end : float, bin_count : int,
-		channel : String, mode : String) -> PackedFloat32Array:
-	var out := PackedFloat32Array()
-	if bin_count < 1:
-		return out
-	out.resize(bin_count)
-	for i in bin_count:
-		var t0 := lerpf(abs_start, abs_end, float(i) / float(bin_count))
-		var t1 := lerpf(abs_start, abs_end, float(i + 1) / float(bin_count))
-		var mid := (t0 + t1) * 0.5
-		var sample : Dictionary = evaluate_inputs_at(mid)
-		sample["soc_kwh"] = battery_kwh_stored
-		out[i] = EnergyTimeline.channel_value(sample, channel, BATTERY_CAPACITY_KWH)
-	return out
+## The finest bin width a power track's data supports (one sample per step).
+func get_timeline_step_hours(source : String) -> float:
+	match source:
+		"sim":
+			return _sim_series.step_hours if _sim_series != null else 1.0 / 60.0
+		"observed":
+			return _observed_series.step_hours if _observed_series != null else 1.0 / 60.0
+	return energy_timeline.step_hours if energy_timeline != null else 1.0 / 60.0
 
 
 ## Battery capacity for timeline SOC scaling.

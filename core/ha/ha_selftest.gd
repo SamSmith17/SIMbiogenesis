@@ -18,7 +18,7 @@ extends SceneTree
 
 ## A Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS; the count catches it.
-const EXPECTED_CHECKS := 155
+const EXPECTED_CHECKS := 189
 
 var _checks := 0
 var _fails := 0
@@ -59,12 +59,16 @@ func _run() -> void:
 	_test_observed()
 	print("== HaPresets")
 	_test_presets()
+	print("== Timeline weather + tracks")
+	_test_weather_channels()
+	_test_track_layout()
 	print("== Service against a fake Home Assistant")
 	await _test_e2e_ok()
 	await _test_e2e_bad_token()
 	await _test_e2e_refused_and_finder()
 	await _test_e2e_not_ha()
 	await _test_e2e_lost_and_back()
+	await _test_e2e_entity_track()
 	_cleanup()
 	if EXPECTED_CHECKS > 0 and _checks != EXPECTED_CHECKS:
 		_fails += 1
@@ -284,6 +288,8 @@ func _test_observed() -> void:
 	_ok(is_nan(o.value_at("k", 30.0, 6.0)), "nothing after a long gap")
 	var b := o.bins("k", 10.0, 14.0, 4)
 	_ok(_near(b[0], 1.0) and _near(b[1], 2.0) and _near(b[2], 3.0) and _near(b[3], 3.0), "bins: the reading inside each, held after (%s)" % str(b))
+	var b3 := o.bins("k", 10.0, 14.0, 4, 6.0, 12.5)
+	_ok(_near(b3[2], 3.0) and is_nan(b3[3]), "nothing is carried past NOW (%s)" % str(b3))
 	var b2 := o.bins("k", 0.0, 4.0, 2)
 	_ok(is_nan(b2[0]) and is_nan(b2[1]), "bins before any reading are empty")
 	var u := HaObservedStore.iso_to_unix("2026-10-22T12:00:00.500+02:00")
@@ -331,6 +337,84 @@ func _test_presets() -> void:
 	_ok(pd == ["shellyplus1pm_kitchen"], "a single Shelly relay found, the 4PMs not (%s)" % str(pd))
 	var pp := HaPresets.plan(plug, "shellyplus1pm_kitchen", {"acload": "item_2"}, cat)
 	_ok(pp.size() == 2, "relay → load power + switch (%d)" % pp.size())
+
+
+func _abs(y: int, m: int, d: int, h: float) -> float:
+	var yy := y - 1
+	var days := 365 * yy + yy / 4 - yy / 100 + yy / 400
+	return float(days + HaObservedStore._doy(m, d, y) - 1) * 24.0 + h
+
+
+func _test_weather_channels() -> void:
+	var W := TimelineWeatherChannels
+	var d: Dictionary = W.abs_to_date(_abs(2024, 2, 29, 12.5))
+	_ok(int(d["year"]) == 2024 and int(d["month"]) == 2 and int(d["day"]) == 29 and _near(float(d["hour"]), 12.5),
+		"abs hours → 29 Feb 2024 12:30 (%s)" % str(d))
+	d = W.abs_to_date(_abs(2026, 12, 31, 23.75))
+	_ok(int(d["year"]) == 2026 and int(d["month"]) == 12 and int(d["day"]) == 31, "…31 Dec 2026")
+	d = W.abs_to_date(_abs(2027, 1, 1, 0.0))
+	_ok(int(d["year"]) == 2027 and int(d["month"]) == 1 and int(d["day"]) == 1 and _near(float(d["hour"]), 0.0), "…1 Jan 2027 00:00")
+	d = W.abs_to_date(0.5)
+	_ok(int(d["year"]) == 1 and int(d["month"]) == 1 and int(d["day"]) == 1, "…the epoch")
+	var u := 1761134400.0   # 2025-10-22 12:00 UTC
+	_ok(absf(HaObservedStore.unix_from_abs_local(HaObservedStore.abs_hours_local(u)) - u) < 0.01,
+		"real time ↔ timeline axis round trip")
+	# A reader: temperature = 10 × month + hour / 2; rain only at 06:00–07:00.
+	var reader := func(acc: String, m: int, _dd: int, h: float) -> float:
+		match acc:
+			"temperature_c":
+				return 10.0 * float(m) + h * 0.5
+			"rain_rate_mmh":
+				return 8.0 if h >= 6.0 and h < 7.0 else 0.0
+			"cloud_cover_frac":
+				return 0.25
+		return NAN
+	var t0 := _abs(2026, 3, 10, 0.0)
+	var b := W.bins("wx_temp_c", t0, t0 + 24.0, 24, reader)
+	_ok(_near(b[0], 30.25, 0.01) and _near(b[23], 30.0 + 23.5 * 0.5, 0.01), "temperature bins follow the reader (%.2f … %.2f)" % [b[0], b[23]])
+	var r := W.bins("wx_rain_mmh", t0, t0 + 24.0, 4, reader)
+	_ok(_near(r[1], 8.0) and _near(r[0], 0.0), "rain bins keep the burst (peak, not mean): %s" % str(r))
+	var c := W.bins("wx_cloud_pct", t0, t0 + 24.0, 4, reader)
+	_ok(_near(c[0], 25.0), "cloud cover in percent")
+	var g := W.bins("wx_ghi_wm2", t0, t0 + 24.0, 4, reader)
+	_ok(is_nan(g[0]) and is_nan(g[3]), "no data → gaps, not zero")
+	_ok(W.axis_range("wx_cloud_pct", c) == Vector2(0.0, 100.0), "cloud cover axis is 0–100 %")
+	var ax := W.axis_range("wx_rain_mmh", r)
+	_ok(_near(ax.x, 0.0) and ax.y > 8.0, "rain axis starts at 0")
+	_ok(is_nan(W.axis_range("wx_temp_c", g).x), "an empty window has no axis")
+	_ok(_near(float(W.display(10.0, "°C", true)["value"]), 50.0) and str(W.display(10.0, "°C", true)["unit"]) == "°F", "°C → °F for display")
+	_ok(_near(float(W.display(4.4704, "m/s", true)["value"]), 10.0), "m/s → mph")
+	_ok(_near(float(W.display(25.4, "mm/h", true)["value"]), 1.0), "mm/h → in/h")
+	_ok(_near(float(W.display(10.0, "°C", false)["value"]), 10.0), "metric unchanged")
+	var ids := {}
+	for ch in W.CHANNELS:
+		ids[str(ch["id"])] = true
+	_ok(ids.has("wx_temp_c") and ids.has("wx_wind_ms") and ids.has("wx_rain_mmh") and ids.has("wx_ghi_wm2"),
+		"temperature, wind, rain and radiation are offered")
+
+
+func _test_track_layout() -> void:
+	var L := TimelineTrackLayout.new()
+	L.reset_defaults()
+	var n0 := L.tracks.size()
+	var a := L.add_weather_track("wx_temp_c")
+	var a2 := L.add_weather_track("wx_temp_c")
+	_ok(a != null and a == a2 and L.tracks.size() == n0 + 1, "a weather track is added once")
+	_ok(a.source == "weather" and a.label == "Temperature", "…labelled and sourced")
+	a.enabled = false
+	L.add_weather_track("wx_temp_c")
+	_ok(a.enabled, "re-adding a hidden track shows it again")
+	var e := L.add_ha_entity_track("sensor.outdoor", "Outdoor")
+	_ok(e.source == "ha_entity" and e.channel == "sensor.outdoor" and e.label == "HA: Outdoor", "any HA sensor as a track")
+	var back := TimelineTrackLayout.new()
+	back.load_from_array(L.to_array())
+	var found := false
+	for t in back.tracks:
+		if t is TimelineTrackDef and (t as TimelineTrackDef).source == "ha_entity" and (t as TimelineTrackDef).channel == "sensor.outdoor":
+			found = true
+	_ok(found, "custom tracks survive the saved layout")
+	_ok(L.remove_track(e.id) and L.tracks.size() == n0 + 1, "remove a track")
+	_ok(not L.remove_track("clips"), "the clips row cannot be removed")
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +608,52 @@ func _test_e2e_lost_and_back() -> void:
 	srv.push_state("sensor.battery_soc", "70")
 	ok = await _until(func() -> bool: return got[0], 2.0)
 	_ok(ok, "subscriptions survive the reconnect")
+	svc.queue_free()
+	srv.stop()
+	srv.queue_free()
+	await _frames(2)
+
+
+func _test_e2e_entity_track() -> void:
+	var srv := _make_server()
+	var now_u := Time.get_unix_time_from_system()
+	srv.set_entity("sensor.outdoor_temp", "12.5", {"unit_of_measurement": "°C", "friendly_name": "Outdoor"})
+	srv.history["sensor.outdoor_temp"] = [{"s": "10", "lu": now_u - 7200.0}, {"s": "11", "lu": now_u - 3600.0},
+		{"s": "unavailable", "lu": now_u - 3000.0}, {"s": "12.5", "lu": now_u - 1800.0}]
+	srv.history["switch.pump"] = [{"s": "on", "lu": now_u - 5400.0}, {"s": "off", "lu": now_u - 2700.0}]
+	var svc := _make_service()
+	svc.connect_with(srv.url(), _fake_token(), "Test", true)
+	await _until(func() -> bool: return svc.state == HomeAssistantService.State.CONNECTED, 5.0)
+	var now_h := HaObservedStore.now_abs_hours()
+	var got := [0]
+	svc.entity_history_received.connect(func(_e: String, n: int) -> void: got[0] += n)
+	var first := svc.entity_bins("sensor.outdoor_temp", now_h - 3.0, now_h, 12)
+	_ok(svc.is_tracked("sensor.outdoor_temp"), "drawing a sensor track tracks it")
+	var ok := await _until(func() -> bool: return got[0] >= 3, 3.0)
+	_ok(ok and srv.history_requests == 1, "the window is fetched from HA's history (%d readings, %d requests)" % [got[0], srv.history_requests])
+	var b := svc.entity_bins("sensor.outdoor_temp", now_h - 3.0, now_h, 12)
+	_ok(is_nan(b[0]) and _near(b[4], 10.0) and _near(b[8], 11.0) and _near(b[11], 12.5),
+		"bins: nothing before the first reading, then 10, 11, 12.5 (%s)" % str(b))
+	_ok(first.size() == 12, "the first call answers at once (empty until history lands)")
+	await _frames(5)
+	svc.entity_bins("sensor.outdoor_temp", now_h - 2.5, now_h, 12)
+	await _frames(5)
+	_ok(srv.history_requests == 1, "a window already fetched is not asked for again")
+	svc.entity_bins("sensor.outdoor_temp", now_h - 10.0, now_h, 12)
+	await _until(func() -> bool: return srv.history_requests == 2, 3.0)
+	_ok(srv.history_requests == 2, "scrolling further back fetches only the new part")
+	srv.push_state("sensor.outdoor_temp", "13")
+	# The newest bin averages the snapshot (12.5) with the push (13).
+	await _until(func() -> bool: return svc.entity_bins("sensor.outdoor_temp", now_h - 1.0, now_h + 0.1, 11)[10] > 12.6, 2.0)
+	var lb := svc.entity_bins("sensor.outdoor_temp", now_h - 1.0, now_h + 0.1, 11)[10]
+	_ok(lb > 12.6 and lb <= 13.0, "a live change lands on the track (%.2f)" % lb)
+	got[0] = 0
+	svc.entity_bins("switch.pump", now_h - 2.0, now_h, 8)
+	await _until(func() -> bool: return got[0] >= 2, 3.0)
+	var sb := svc.entity_bins("switch.pump", now_h - 2.0, now_h, 8)
+	_ok(_near(sb[2], 1.0) and _near(sb[6], 0.0), "an on / off entity draws as 1 / 0 (%s)" % str(sb))
+	_ok(is_nan(HomeAssistantService.entity_number("Sunny")) and _near(HomeAssistantService.entity_number("on"), 1.0),
+		"text states are skipped, on / off are numbers")
 	svc.queue_free()
 	srv.stop()
 	srv.queue_free()
