@@ -2311,7 +2311,7 @@ func _build_left_cluster() -> Control:
 	left.add_child(_loadmode_btn)
 
 	_compare_btn = _mk_icon_btn("⧉", _on_compare_pressed,
-			"Compare — split-screen observed vs simulated on the projection canvas (I)")
+			"Compare — simulate a past span and lay it over what really happened (Home Assistant or the imported CSV)")
 	left.add_child(_compare_btn)
 
 	_tracks_btn = _mk_icon_btn("🎚", _on_tracks_pressed,
@@ -2869,14 +2869,8 @@ func _on_loadmode_pressed() -> void:
 
 
 func _on_compare_pressed() -> void:
-	var s := _get_solar()
-	if s == null or not s.has_method("set_compare_active"):
-		return
-	var on := false
-	if s.has_method("is_compare_active"):
-		on = bool(s.call("is_compare_active"))
-	s.call("set_compare_active", not on)
-	_update_nle_controls()
+	if _main != null and is_instance_valid(_main) and _main.has_method("open_compare_view"):
+		_main.call("open_compare_view", _climelapse_selection_range())
 
 
 func _on_load_video_pressed() -> void:
@@ -2923,13 +2917,6 @@ func _update_nle_controls() -> void:
 					"Render load source: CSV (observed load — isolates solar/weather error). Click for Modeled."
 					if csv_mode else
 					"Render load source: Modeled (simulates load too). Click for CSV.")
-		if _compare_btn != null:
-			var has_render := false
-			if s.has_method("get_rendered_range_abs"):
-				has_render = not is_nan((s.call("get_rendered_range_abs") as Vector2).x)
-			_compare_btn.disabled = not has_render
-			var on := s.has_method("is_compare_active") and bool(s.call("is_compare_active"))
-			_compare_btn.add_theme_color_override("font_color", C_GREEN if on else C_TEXT)
 		if _render_progress_lbl != null and s.has_method("get_render_progress"):
 			var parts: PackedStringArray = []
 			if s.has_method("is_rendering") and bool(s.call("is_rendering")):

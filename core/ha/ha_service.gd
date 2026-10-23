@@ -385,6 +385,39 @@ func get_entity_history(entity_id: String, start_time: String, end_time: String,
 		{"kind": "history", "id": entity_id})
 
 
+## History rows of one entity over [t0, t1] Unix seconds, handed to `cb(rows)`
+## when the reply lands (rows = minimal_response dicts {s, lu}; [] on any
+## failure, including not being connected). Every change, not just the
+## significant ones — an experiment integrates the readings.
+func request_history(entity_id: String, t0_unix: float, t1_unix: float, cb: Callable) -> void:
+	if entity_id.is_empty() or not is_authed():
+		if cb.is_valid():
+			cb.call_deferred([])
+		return
+	if _send({"type": "history/history_during_period",
+		"start_time": HaObservedStore.unix_to_iso(t0_unix), "end_time": HaObservedStore.unix_to_iso(t1_unix),
+		"entity_ids": [entity_id], "minimal_response": true, "no_attributes": true,
+		"significant_changes_only": false},
+		{"kind": "history", "id": entity_id, "cb": cb}) < 0 and cb.is_valid():
+		cb.call_deferred([])
+
+
+## Long-term statistics of one entity (hourly by default) over [t0, t1] Unix
+## seconds, handed to `cb(rows)` (rows = HA's {start, mean, min, max, …};
+## [] on failure). The recorder keeps these after its raw history is purged.
+func request_statistics(statistic_id: String, t0_unix: float, t1_unix: float, cb: Callable,
+		period: String = "hour") -> void:
+	if statistic_id.is_empty() or not is_authed():
+		if cb.is_valid():
+			cb.call_deferred([])
+		return
+	if _send({"type": "recorder/statistics_during_period",
+		"start_time": HaObservedStore.unix_to_iso(t0_unix), "end_time": HaObservedStore.unix_to_iso(t1_unix),
+		"statistic_ids": [statistic_id], "period": period, "types": ["mean"]},
+		{"kind": "stats", "id": statistic_id, "cb": cb}) < 0 and cb.is_valid():
+		cb.call_deferred([])
+
+
 # =============================================================================
 # Sensor tracks (the timeline's "HA:" lanes for any entity)
 # =============================================================================
@@ -671,6 +704,11 @@ func _close_socket(emit_signals: bool) -> void:
 	_ws = null
 	_socket_open = false
 	_phase = ""
+	# A request with a callback still gets its answer (empty) when the line drops.
+	for pid in _pending:
+		var pcb: Variant = (_pending[pid] as Dictionary).get("cb", null)
+		if pcb is Callable and (pcb as Callable).is_valid():
+			(pcb as Callable).call_deferred([])
 	_pending.clear()
 	_hist_inflight.clear()
 	_state_sub_id = -1
@@ -843,13 +881,20 @@ func _handle_result(data: Dictionary) -> void:
 							break
 				if v is Array:
 					arr = v
-			history_statistics_received.emit(sid, arr)
+			var scb: Variant = p.get("cb", null)
+			if scb is Callable and (scb as Callable).is_valid():
+				(scb as Callable).call(arr)
+			else:
+				history_statistics_received.emit(sid, arr)
 		"history":
 			var eid := str(p.get("id", ""))
 			var harr: Array = []
 			if ok and res is Dictionary and res.get(eid, []) is Array:
 				harr = res.get(eid, [])
-			if bool(p.get("track", false)):
+			var hcb: Variant = p.get("cb", null)
+			if hcb is Callable and (hcb as Callable).is_valid():
+				(hcb as Callable).call(harr)
+			elif bool(p.get("track", false)):
 				_hist_inflight.erase(eid)
 				_take_entity_history(eid, harr)
 			else:

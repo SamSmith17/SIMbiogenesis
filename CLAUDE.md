@@ -1232,6 +1232,18 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_host_probe.gd
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_guest_probe.gd -Label mp_guest -Timeout 900
 # What another player looks like (one instance, no network):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.gd -Label mp_figure
+# Sim vs reality experiments (offline — core/experiment/: SiteTime Unix <->
+# site clock (PDT / PST noons, round trip), ExperimentObserved held states /
+# time-weighted flows / sums / gaps / CSV watts, ExperimentEnergyRun == step_soc,
+# AC hysteresis, battery-full curtailment, determinism + chunking, the scores
+# incl. ASHRAE G14 NMBE by hand and a time shift failing CV(RMSE), and
+# HaHistoryFetch's link resolution + units. EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.gd
+# The Compare window end to end (sandbox, fake HA): reality for the last 3
+# days MADE BY THE SIM and served as history → NMBE ≈ 0 (the hours line up,
+# W → kW); 25 % less real solar → not a match, sim 33 % high; the live world
+# unmoved; ⧉ opens it; UiAudit 0 errors; shots under screenshots\compare_probe\:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/compare_calibration_probe.gd -Label compare_probe
 # Home Assistant (offline — HaUrl / HaToken / HaFailure / HaProfiles on TEMP
 # files incl. the ha_connection.cfg migration, HaUnits, HaTargets, HaLinkStore
 # incl. the specs.ha_links + SolarUI cfg migration and pruning, HaObservedStore,
@@ -5627,13 +5639,68 @@ render in/out selection (defaults to the full clip). A controls row adds
 **Import datastream…**, **Render selection**, the **Load: CSV/Modeled** toggle,
 and **Compare**. `BAR_HEIGHT` is 164 (scene `TimelineUI` offset_top/min-size match).
 
-**Split-screen compare.** Reuses the "I" `ProjectionCanvas` BL(sim)/BR(observed)
-panels: `set_compare_mode()` suspends its live mirror + rolling-history sampler,
-and SolarUI's `_tick_compare_feed()` pushes one synced frame each tick
-(`feed_comparison(payload)`) — both panels, graphs, and Δ labels driven by the one
-playhead. `TimeDirector.register_observed_range()` makes provenance read OBSERVED
-inside the clip; `set_compare_active()` is a flag (compare rides on PLAYBACK/SIM,
-not a 4th mode).
+**Split-screen compare: RETIRED (2026-10-22).** SolarUI no longer feeds the
+"I" `ProjectionCanvas` (`set_compare_active` / `_tick_compare_feed` are gone);
+⧉ opens the Compare window below. The canvas's BL/BR stat panels still hold
+their placeholder exports until the projection split (plan milestone 4);
+`feed_comparison` / `set_compare_mode` there have no caller.
+
+## Sim vs reality: the Compare window (core/experiment/, 2026-10-22)
+
+Plan: `~/.claude/plans/i-want-to-be-polymorphic-island.md` (A/B experiments;
+milestone 1 = calibration, landed; sim-vs-sim with automations, forks, the
+"would / did save" modes and the projection split are next). ⧉ on the
+timeline (`Main.open_compare_view(selection)`, `scenes/ui/experiment/
+compare_view.gd`, a `ModalFrame`) simulates THIS world over a past span and
+lays it over what really happened, with error numbers.
+- **Isolated runs.** `ExperimentEnergyRun` steps its own `ExperimentSeries`
+  on a frame budget (6 ms) from `inputs_at(abs_h)`; same battery as SolarUI
+  (`EnergyTimeline.step_soc`), SolarUI's AC hysteresis (shed at
+  max(MIN_BATTERY_PERCENT, battery_soc_shutdown_pct), back at
+  battery_soc_resume_pct) and its battery-full curtailment (raw_kw keeps what
+  the array could make). Nothing live is touched: no clock claim, no model
+  write, no SolarUI state (the probe pins user_rev, clock and battery).
+- **Evaluator** (`ExperimentEvaluator.current_world`): solar =
+  `SolarUI.evaluate_solar_pair_at` (public wrapper of `_evaluate_solar_pair`:
+  SPA + weather at the hour + panel shade + DC caps); load "model" = the
+  graph's AC load at the run's start, HELD (automations do not switch loads
+  inside a run yet — milestone 2) or "observed" = the real load replayed;
+  aux "held" (today's hydro / wind) or "observed".
+- **Two sims per comparison** when the real load is known: model loads (the
+  whole model on trial) and real loads (only solar + battery on trial).
+  Both start from the real battery at the span's start.
+- **Reality** (`HaHistoryFetch`): the world's live links —
+  site.battery_soc / solar_kw / load_kw, falling back to the first battery
+  node's soc, the SUM of panel power links, the sum of inverter ac_power
+  links; aux = wind / hydro power links. `HomeAssistantService.request_history`
+  / `request_statistics` (new, callback-based; a dropped connection answers
+  pending callbacks with []) fetch every change (significant_changes_only
+  false); where raw history starts late (recorder purge, 10 days by default)
+  the hourly long-term statistics fill the gap and the channel says so.
+  Units through `HaUnits` + the link's scale / offset / invert. Or the
+  imported CSV clip (`ExperimentObserved.from_csv_roles`).
+- **One time axis: `SiteTime`.** Unix → absolute hours on the SITE's clock
+  via `CelestialClock.zone_offset_hours` (the clock the sun and weather use).
+  `CelestialClock.unix_to_abs_hours` treats UTC as local (the old CSV clip
+  path) and `HaObservedStore.abs_hours_local` uses the computer's zone — use
+  neither for anything compared with the sim.
+- **Resampling** (`ExperimentObserved.build`): a state (SOC) is the reading
+  held at the sample's start; a flow (power) is the time-weighted mean of the
+  held readings over the sample (unknown below half an interval known);
+  several entities of one channel SUM (unknown if any is); "unavailable" is a
+  gap. Step: 1 min to 2 days, 5 min to 2 weeks, 15 min beyond (max 62 days).
+- **Scores** (`ExperimentScore`): `energy()` (made, used, unserved, AC-off
+  hours, curtailed, throughput, cycles, per day) and `calibration()` per
+  channel: MAE, bias (sim − real), RMSE, r, and on HOURLY means the ASHRAE
+  Guideline 14-2014 NMBE and CV(RMSE) (p = 1): good = |NMBE| ≤ 10 % and
+  CV ≤ 30 %, fair = within twice that; battery judged by mean error in
+  points (≤ 5 good, ≤ 12 fair). A time shift keeps NMBE small and fails CV —
+  that is the point of reporting both.
+- `ExperimentCompareChart`: four lanes (battery %, solar, load, net), reality
+  as a min–max band + mean, sims as lines, TimelineBinning bins, hover values.
+- ⚠ A Node that defines `_process` is processing from the start: the
+  experiment "finished" on its first frame, before the history arrived, until
+  `_ready` turned it off. Any new background stepper needs the same.
 
 ## Site Report (interactive infographic)
 

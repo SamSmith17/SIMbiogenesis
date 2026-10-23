@@ -279,8 +279,6 @@ var _observed_source_path : String = ""
 ## User in/out selection on the timeline (defaults to the full observed span).
 var _sel_start_abs : float = NAN
 var _sel_end_abs : float = NAN
-## Split-screen observed-vs-simulated compare mode active.
-var _compare_active : bool = false
 
 ## Emitted when the observed clip is (re)loaded — timeline UI redraws its track.
 signal observed_clip_changed()
@@ -2046,8 +2044,6 @@ func _perf_tick(delta: float) -> void:
 		_update_display()
 		_update_graph()
 		_update_weather_data_display()
-		if _compare_active:
-			_tick_compare_feed()
 
 	# Overload protection — real-time, only while sim clock is running
 	if main_node != null:
@@ -3294,82 +3290,6 @@ func get_render_progress() -> float:
 	return 1.0 if _sim_series_ready else -1.0
 
 
-# ---- Split-screen compare (drives ProjectionCanvas BL=sim / BR=observed) ----
-
-func set_compare_active(active: bool) -> void:
-	_compare_active = active
-	var td := get_node_or_null("/root/TimeDirector")
-	if td != null and td.has_method("set_compare_active"):
-		td.call("set_compare_active", active)
-	var pc := _find_projection_canvas()
-	if pc != null and pc.has_method("set_compare_mode"):
-		pc.call("set_compare_mode", active)
-	if active:
-		_tick_compare_feed()   # paint the first frame immediately
-	render_state_changed.emit()
-
-
-func is_compare_active() -> bool:
-	return _compare_active
-
-
-func _find_projection_canvas() -> Node:
-	var tree := get_tree()
-	if tree == null:
-		return null
-	var sc := tree.current_scene
-	if sc != null:
-		var pc := sc.get_node_or_null("UILayer/ProjectionCanvas")
-		if pc != null:
-			return pc
-	return tree.root.find_child("ProjectionCanvas", true, false)
-
-
-## Push one synced compare frame to the projection canvas: BL from the rendered
-## sim series, BR from the observed series, both sampled at the playhead and
-## across a trailing 48 h window for the graphs.
-func _tick_compare_feed() -> void:
-	if main_node == null or not main_node.has_method("get_absolute_hours"):
-		return
-	var pc := _find_projection_canvas()
-	if pc == null or not pc.has_method("feed_comparison"):
-		return
-	var abs_h : float = float(main_node.call("get_absolute_hours"))
-	var day_start : float = floor(abs_h / 24.0) * 24.0
-	var payload : Dictionary = {}
-	if _sim_series_ready and not bool(_sim_series.is_empty()):
-		var ss := _sim_series.sample_at(abs_h)
-		payload["sim_soc_pct"] = float(ss.get("soc_kwh", 0.0)) / BATTERY_CAPACITY_KWH * 100.0
-		payload["sim_solar_w"] = float(ss.get("solar_kw", 0.0)) * 1000.0
-		payload["sim_load_w"]  = float(ss.get("load_kw", 0.0)) * 1000.0
-		payload["sim_solar_kwh"] = _sim_series.integrate_channel(day_start, abs_h, "solar")
-		payload["sim_load_kwh"]  = _sim_series.integrate_channel(day_start, abs_h, "load")
-		payload["sim_solar_hist"] = _series_hist(_sim_series, "solar_kw", abs_h - 48.0, abs_h, 96)
-		payload["sim_load_hist"]  = _series_hist(_sim_series, "load_kw", abs_h - 48.0, abs_h, 96)
-	if _observed_series != null and not bool(_observed_series.call("is_empty")):
-		var os : Dictionary = _observed_series.call("sample_at", abs_h)
-		payload["obs_soc_pct"] = float(os.get("soc_kwh", 0.0)) / BATTERY_CAPACITY_KWH * 100.0
-		payload["obs_solar_w"] = float(os.get("solar_kw", 0.0)) * 1000.0
-		payload["obs_load_w"]  = float(os.get("load_kw", 0.0)) * 1000.0
-		payload["obs_solar_kwh"] = float(_observed_series.call("integrate_channel", day_start, abs_h, "solar"))
-		payload["obs_load_kwh"]  = float(_observed_series.call("integrate_channel", day_start, abs_h, "load"))
-		payload["obs_solar_hist"] = _series_hist(_observed_series, "solar_kw", abs_h - 48.0, abs_h, 96)
-		payload["obs_load_hist"]  = _series_hist(_observed_series, "load_kw", abs_h - 48.0, abs_h, 96)
-	pc.call("feed_comparison", payload)
-
-
-## Resample a series channel (kW) into an N-point watt history over [t0, t1].
-func _series_hist(series: Object, channel: String, t0: float, t1: float, n: int) -> PackedFloat32Array:
-	var out := PackedFloat32Array()
-	out.resize(n)
-	var denom : float = float(maxi(n - 1, 1))
-	for i in n:
-		var t : float = t0 + (t1 - t0) * float(i) / denom
-		var s : Dictionary = series.call("sample_at", t)
-		out[i] = float(s.get(channel, 0.0)) * 1000.0
-	return out
-
-
 # ==================== BATCH-RENDER EVALUATOR ====================
 # Pure functions of absolute time used to pre-compute a simulated datastream
 # over a selected range (the deferred "pre-render a day/week" feature). They do
@@ -3576,6 +3496,13 @@ func evaluate_aux_at(_abs_hours: float) -> float:
 ## Sun via Meeus SPA at that instant; weather sampled at that instant.
 func evaluate_solar_at(abs_hours: float) -> float:
 	return _evaluate_solar_pair(abs_hours).y
+
+
+## Public form of _evaluate_solar_pair for the experiment's evaluator
+## (core/experiment/): (max capture, delivered) kW at an instant, a pure
+## function of the instant and this site's configuration.
+func evaluate_solar_pair_at(abs_hours: float) -> Vector2:
+	return _evaluate_solar_pair(abs_hours)
 
 
 ## (max capture, delivered) kW at an instant: x = the shaded array output

@@ -5221,6 +5221,25 @@ func open_ha_links( target_id: String = "" ) -> void :
 	_ha_links_modal.call( "open_on", linker, target_id )
 
 
+## ⧉ Compare (scenes/ui/experiment/compare_view.gd): simulate a past span of
+## this world and lay it over what really happened. `selection` is the
+## timeline's Ctrl-drag range (NAN = none). One window at a time.
+var _compare_view : Node = null
+
+func open_compare_view( selection: Vector2 = Vector2( NAN, NAN ) ) -> Node :
+	if _compare_view != null and is_instance_valid( _compare_view ) :
+		return _compare_view
+	var script := load( "res://scenes/ui/experiment/compare_view.gd" ) as Script
+	if script == null :
+		return null
+	_compare_view = Node.new()
+	_compare_view.name = "CompareView"
+	_compare_view.set_script( script )
+	add_child( _compare_view )
+	_compare_view.call( "open_on", self, selection )
+	return _compare_view
+
+
 ## One-click device presets (HaPresets) for the Live links window.
 func open_ha_presets( target_id: String = "" ) -> void :
 	var g := ServiceLocator.graph()
