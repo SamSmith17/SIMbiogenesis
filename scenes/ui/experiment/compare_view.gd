@@ -697,6 +697,7 @@ func is_running() -> bool:
 
 ## For the harness: set the span and source, then run.
 func run_with(start_abs: float, end_abs: float, source: String) -> void:
+	_set_mode(MODE_CAL)
 	var clock := _clock()
 	_start_edit.text = SiteTime.format_abs(clock, start_abs)
 	_end_edit.text = SiteTime.format_abs(clock, end_abs)
