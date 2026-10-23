@@ -56,6 +56,7 @@ func _reality(main: Node, a: float, b: float, step: float, solar_scale: float) -
 	# The same world the Compare window builds: a graph copy whose own
 	# automations switch its loads.
 	var w := ExperimentWorld.from_live(model as GraphModel, su, main.get("clock"))
+	w.enable_flow(gv)
 	var scaled := func(t: float) -> Dictionary:
 		var d: Dictionary = w.inputs_at(t)
 		d["solar_kw"] = float(d["solar_kw"]) * solar_scale

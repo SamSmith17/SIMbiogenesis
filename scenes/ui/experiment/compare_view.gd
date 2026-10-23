@@ -87,6 +87,8 @@ var _table: GridContainer = null
 var _days: GridContainer = null
 var _autos_header: SectionHeader = null
 var _autos: GridContainer = null
+var _res_header: SectionHeader = null
+var _res: GridContainer = null
 
 
 func open_on(main: Node, selection: Vector2, opts: Dictionary = {}) -> void:
@@ -216,6 +218,16 @@ func _build() -> void:
 	_days.add_theme_constant_override("h_separation", 18)
 	_days.add_theme_constant_override("v_separation", 3)
 	b.add_child(_days)
+
+	_res_header = SectionHeader.make("Tanks and machines", "droplet", "simulated in each version")
+	_res_header.visible = false
+	b.add_child(_res_header)
+	_res = GridContainer.new()
+	_res.columns = 4
+	_res.add_theme_constant_override("h_separation", 18)
+	_res.add_theme_constant_override("v_separation", 3)
+	_res.visible = false
+	b.add_child(_res)
 
 	_autos_header = SectionHeader.make("Automations in the sim", "workflow")
 	b.add_child(_autos_header)
@@ -362,6 +374,11 @@ func _show_empty() -> void:
 		c.queue_free()
 	for c in _days.get_children():
 		c.queue_free()
+	if _res != null:
+		for c in _res.get_children():
+			c.queue_free()
+		_res.visible = false
+		_res_header.visible = false
 
 
 func _show_result(res: Dictionary) -> void:
@@ -430,6 +447,8 @@ func _show_result(res: Dictionary) -> void:
 	_fill_table(obs, sims)
 	_fill_days(obs, sims)
 	_fill_autos(sims)
+	_res_header.visible = false
+	_res.visible = false
 
 
 func _fill_table(obs: ExperimentSeries, sims: Array) -> void:
@@ -994,7 +1013,7 @@ func _show_ab_result(res: Dictionary) -> void:
 		var n := int(sm.get("automation_rules", 0))
 		notes.append("%s: %s, %s in the span." % [str(sm["label"]), UiText.count(n, "automation"),
 			UiText.count((sm.get("automation_log", []) as Array).size(), "switch", "switches")])
-	notes.append("Same sun, weather and starting battery for both; tanks and machines held as they are now.")
+	notes.append("Same sun, weather and starting battery for both; tanks, water and machines are simulated in each from their levels now (people are not: habitats use their set headcount).")
 	_notes.text = "\n".join(notes)
 	_notes.visible = true
 	for ch in _legend.get_children():
@@ -1007,6 +1026,7 @@ func _show_ab_result(res: Dictionary) -> void:
 	_fill_ab_table(sims)
 	_fill_ab_days(sims)
 	_fill_ab_autos(sims)
+	_fill_ab_resources(sims)
 
 
 func _fill_ab_table(sims: Array) -> void:
@@ -1060,6 +1080,74 @@ func _fill_ab_days(sims: Array) -> void:
 		_cell(_days, "%s / %s" % [UiText.num(float(a["served_kwh"]), "kWh"), UiText.num(float(b["served_kwh"]), "kWh")])
 		_cell(_days, "%s / %s" % [UiText.duration(float(a["ac_off_h"])), UiText.duration(float(b["ac_off_h"]))])
 		_cell(_days, "%s / %s" % [_pct(float(a["soc_end_pct"])), _pct(float(b["soc_end_pct"]))])
+
+
+## Every tank and machine side by side: fill start → end and the lowest,
+## hours empty; machines' hours running / blocked or starved.
+func _fill_ab_resources(sims: Array) -> void:
+	for ch in _res.get_children():
+		ch.queue_free()
+	var ra: Dictionary = sims[0].get("resources", {})
+	var rb: Dictionary = sims[1].get("resources", {})
+	var ids: Array = []
+	for d in [ra.get("tanks", {}), rb.get("tanks", {})]:
+		for iid in d:
+			if not (iid in ids):
+				ids.append(iid)
+	var mids: Array = []
+	for d in [ra.get("machines", {}), rb.get("machines", {})]:
+		for iid in d:
+			if not (iid in mids):
+				mids.append(iid)
+	var any := not ids.is_empty() or not mids.is_empty()
+	_res_header.visible = any
+	_res.visible = any
+	if not any:
+		return
+	if not ids.is_empty():
+		_cell(_res, "Tank", true)
+		_cell(_res, str(sims[0]["label"]), true, SIM_COLORS[0])
+		_cell(_res, str(sims[1]["label"]), true, SIM_COLORS[1])
+		_cell(_res, "Empty A / B", true)
+		for iid in ids:
+			var a: Dictionary = (ra.get("tanks", {}) as Dictionary).get(iid, {})
+			var b: Dictionary = (rb.get("tanks", {}) as Dictionary).get(iid, {})
+			var src: Dictionary = a if not a.is_empty() else b
+			var res_name := str(src.get("resource", ""))
+			_cell(_res, str(src.get("name", iid)) + ("" if res_name.is_empty() else "  · " + res_name))
+			_cell(_res, _tank_text(a))
+			_cell(_res, _tank_text(b))
+			var ea := float(a.get("empty_h", NAN))
+			var eb := float(b.get("empty_h", NAN))
+			var worse := (not is_nan(ea) and ea > 0.0) or (not is_nan(eb) and eb > 0.0)
+			_cell(_res, "%s / %s" % [UiText.duration(ea) if not is_nan(ea) else "—", UiText.duration(eb) if not is_nan(eb) else "—"],
+				false, UITheme.C_WARN if worse else UITheme.C_TEXT_S)
+	if not mids.is_empty():
+		_cell(_res, "Machine", true)
+		_cell(_res, "Running A / B", true)
+		_cell(_res, "Blocked or starved A / B", true)
+		_cell(_res, "", true)
+		for iid in mids:
+			var a: Dictionary = (ra.get("machines", {}) as Dictionary).get(iid, {})
+			var b: Dictionary = (rb.get("machines", {}) as Dictionary).get(iid, {})
+			var src: Dictionary = a if not a.is_empty() else b
+			_cell(_res, str(src.get("name", iid)))
+			_cell(_res, "%s / %s" % [_hours(a, "running_h"), _hours(b, "running_h")])
+			var da := float(a.get("blocked_h", 0.0)) + float(a.get("starved_h", 0.0))
+			var db := float(b.get("blocked_h", 0.0)) + float(b.get("starved_h", 0.0))
+			_cell(_res, "%s / %s" % [UiText.duration(da) if not a.is_empty() else "—", UiText.duration(db) if not b.is_empty() else "—"],
+				false, UITheme.C_WARN if da > 0.0 or db > 0.0 else UITheme.C_TEXT_S)
+			_cell(_res, "")
+
+
+static func _tank_text(a: Dictionary) -> String:
+	if a.is_empty():
+		return "—"
+	return "%.0f %% → %.0f %%  (low %.0f %%)" % [float(a["start_pct"]), float(a["end_pct"]), float(a["min_pct"])]
+
+
+static func _hours(a: Dictionary, key: String) -> String:
+	return "—" if a.is_empty() else UiText.duration(float(a.get(key, 0.0)))
 
 
 func _fill_ab_autos(sims: Array) -> void:

@@ -132,6 +132,14 @@ func run(main: Node, _harness: Node) -> Dictionary:
 			"the nightly shutdown lowers what the loads ask for (A %.1f < B %.1f kWh)" % [float(ea["demand_kwh"]), float(eb["demand_kwh"])])
 		_ok((sims[0]["automation_log"] as Array).size() > (sims[1]["automation_log"] as Array).size(),
 			"A's automations switch more often than B's")
+		var resa: Dictionary = sims[0].get("resources", {})
+		print("ab-check: resources A %s tanks, %s machines; totals %s" % [
+			(resa.get("tanks", {}) as Dictionary).size(), (resa.get("machines", {}) as Dictionary).size(),
+			str(resa.get("totals", {}))])
+		_ok(not (resa.get("tanks", {}) as Dictionary).is_empty(), "the copies simulate the world's tanks")
+		_ok(float(resa.get("hours", 0.0)) > 160.0, "resource accounting covers the week (%.0f h)" % float(resa.get("hours", 0.0)))
+		var res_grid: GridContainer = view.get("_res")
+		_ok(res_grid != null and res_grid.visible and res_grid.get_child_count() > 4, "the window lists tanks and machines")
 		var banner: AlertBanner = view.get("_banner")
 		print("ab-check: banner \"%s\"" % str(banner.get("_text")))
 		_ok(banner.visible and str(banner.get("_text")).begins_with("A ·") and "wins" in str(banner.get("_text")),

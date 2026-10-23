@@ -14,6 +14,21 @@ extends RefCounted
 ##
 ## Optional `observed`: replay the real load instead (load_mode "observed"),
 ## and / or the real aux (aux_mode "observed").
+##
+## Resources (`enable_flow(host)`): the copy gets its OWN ResourceFlowEngine,
+## stepped by the run with the run's AC state (render_step, weather and sun
+## at each instant) — tanks fill and drain, processors run, block and starve,
+## siphon / penstock turbines make power from the copy's ponds and streams.
+## That feeds back: a running machine draws its watts (the load is re-read
+## every step), tank levels and node states reach the automations, and the
+## copy's graph DC generation (hydro into the bank) joins the battery
+## (DcPowerWiring.sum_graph_dc_generation_kw, one step behind, as the
+## pre-render does). The host is the live SystemGraphView, asked only
+## read-only questions (terrain ponds, stream supply at an intake, stream
+## inflows — matched to tanks by id, so a pond that exists only in a fork
+## gets no stream). Not simulated: people (pop-driven habitats bill their
+## authored headcount at the preset rates), the graph's wind / hydro
+## ESTIMATOR nodes (held at their output now), camp power.
 
 var model: GraphModel = null
 var automations: AutomationSim = null
@@ -37,6 +52,13 @@ var _clock_ref: Object = null
 var _tank_levels: Dictionary = {}
 var _node_states: Dictionary = {}
 
+var flow: ResourceFlowEngine = null
+var _scene_aux := 0.0
+var _dc_kw := 0.0
+## Per-item accounting over the run (resource_summary()).
+var _acc: Dictionary = {}       # item id -> {...}
+var _acc_h := 0.0
+
 
 ## A world from a serialized graph (GraphModel.serialize()), or the live model.
 static func from_graph(graph_data: Dictionary, su: Node, clock: Object) -> ExperimentWorld:
@@ -57,7 +79,22 @@ static func from_graph(graph_data: Dictionary, su: Node, clock: Object) -> Exper
 	w._normalize_loads()
 	w._snapshot_resources()
 	w.automations = AutomationSim.from_model(w.model)
+	if su != null:
+		var sa: Variant = su.get("current_aux_generation_kw")
+		w._scene_aux = maxf(float(sa), 0.0) if sa != null else 0.0
 	return w
+
+
+## Simulate the copy's resources too (see the header). `host` = the live
+## SystemGraphView (its read-only world queries); null still runs the engine
+## with no ponds or streams to ask about.
+func enable_flow(host: Node) -> void:
+	flow = ResourceFlowEngine.new()
+	flow.setup(model, host)
+	flow.connector_losses_override = 1 if losses_on else 0
+	_dc_kw = maxf(DcPowerWiring.sum_graph_dc_generation_kw(model), 0.0)
+	_acc.clear()
+	_acc_h = 0.0
 
 
 ## The live world's graph, copied.
@@ -93,10 +130,18 @@ func _snapshot_resources() -> void:
 			_tank_levels["tank.%s.level" % iid] = pct
 			if not nm.is_empty():
 				_tank_levels["tank.%s.level" % nm] = pct
-		elif ity in ["processor", "appliance", "acload"]:
-			_node_states["node.%s" % iid] = _on_off(sp)
+		elif ity in ["processor", "appliance", "acload", "habitat"]:
+			# As get_automation_resource_context: on / off, escalated to the
+			# flow engine's starved / blocked.
+			var st := str(sp.get("node_state", ""))
+			var v := _on_off(sp)
+			if st == GraphNodeState.STARVED:
+				v = "starved"
+			elif st == GraphNodeState.BLOCKED:
+				v = "blocked"
+			_node_states["node.%s" % iid] = v
 			if not nm.is_empty():
-				_node_states["node.%s" % nm] = _node_states["node.%s" % iid]
+				_node_states["node.%s" % nm] = v
 
 
 static func _on_off(sp: Dictionary) -> String:
@@ -124,8 +169,16 @@ func apply_command(item_id: String, command: String) -> void:
 	_load_dirty = true
 
 
-## ExperimentEnergyRun.before_step: run the automations over the last step.
-func before_step(t: float, soc_kwh: float, _ac_on: bool) -> void:
+## ExperimentEnergyRun.before_step: the resources over the last step (with
+## the AC state the battery had), then the automations at `t`.
+func before_step(t: float, soc_kwh: float, ac_on: bool) -> void:
+	if flow != null:
+		var dt := 0.0 if is_nan(_last_t) else maxf(t - _last_t, 0.0)
+		flow.render_step(t, dt, ac_on)
+		_dc_kw = maxf(DcPowerWiring.sum_graph_dc_generation_kw(model), 0.0)
+		_load_dirty = true   # a machine that started or stopped draws differently
+		_snapshot_resources()
+		_account(dt)
 	if automations != null and not automations.is_empty():
 		var t0 := t if is_nan(_last_t) else _last_t
 		var numeric := _tank_levels.duplicate()
@@ -152,7 +205,9 @@ func inputs_at(abs_h: float) -> Dictionary:
 		var v := observed.value_at("load_kw", abs_h)
 		if not is_nan(v):
 			load = v
-	var aux := _held_aux
+	# With the copy's resources simulated, the graph's own DC generators
+	# (hydro into the bank) come from the copy; scene sources stay held.
+	var aux := _held_aux if flow == null else _scene_aux + _dc_kw
 	if aux_mode == ExperimentEvaluator.AUX_OBSERVED:
 		aux = 0.0
 		if observed != null:
@@ -188,3 +243,90 @@ func sun_times(abs_h: float) -> Vector2:
 
 static func weekday(abs_h: float) -> int:
 	return AutomationSim.weekday_of(abs_h)
+
+
+# --- resource accounting ----------------------------------------------------------
+
+## Per tank: start / end / lowest fill, hours empty (≤ 1 % — only for a tank
+## wired to feed something) and full (≥ 99 %).
+## Per processor / habitat: hours running, blocked, starved.
+func _account(dt: float) -> void:
+	if dt <= 0.0:
+		_seed_acc()
+		return
+	_acc_h += dt
+	for it in model.items:
+		var iid := str(it.get("id", ""))
+		var ity := str(it.get("type", ""))
+		var sp: Dictionary = it.get("specs", {})
+		if ity == "resource":
+			var a: Dictionary = _acc.get(iid, {})
+			if a.is_empty():
+				continue
+			var pct := clampf(float(sp.get("level", 0.0)), 0.0, 1.0) * 100.0
+			a["end_pct"] = pct
+			a["min_pct"] = minf(float(a["min_pct"]), pct)
+			# Empty matters only for a tank something draws from.
+			if pct <= 1.0 and bool(a.get("feeds", false)):
+				a["empty_h"] = float(a["empty_h"]) + dt
+			if pct >= 99.0:
+				a["full_h"] = float(a["full_h"]) + dt
+		elif ity in ["processor", "habitat"]:
+			var b: Dictionary = _acc.get(iid, {})
+			if b.is_empty():
+				continue
+			match str(sp.get("node_state", "")):
+				GraphNodeState.RUNNING:
+					b["running_h"] = float(b["running_h"]) + dt
+				GraphNodeState.BLOCKED:
+					b["blocked_h"] = float(b["blocked_h"]) + dt
+				GraphNodeState.STARVED:
+					b["starved_h"] = float(b["starved_h"]) + dt
+
+
+func _seed_acc() -> void:
+	if not _acc.is_empty():
+		return
+	var feeds := {}
+	for c in GraphNesting.flat_connections(model):
+		feeds[str(c.get("source_item_id", ""))] = true
+	for it in model.items:
+		var iid := str(it.get("id", ""))
+		var ity := str(it.get("type", ""))
+		var sp: Dictionary = it.get("specs", {})
+		var nm := str(sp.get("name", iid))
+		if ity == "resource":
+			# Sources without a level (stream intakes, unlimited supplies, the
+			# solar bridge's virtual items) are not tanks to run dry.
+			if bool(sp.get("is_virtual", false)) or str(iid).begins_with("virtual_") 					or bool(sp.get("unlimited_capacity", false)) or bool(sp.get("stream_source", false)):
+				continue
+			var pct := clampf(float(sp.get("level", 0.0)), 0.0, 1.0) * 100.0
+			_acc[iid] = {"kind": "tank", "name": nm,
+				"resource": ResourceKinds.normalize_kind(str(sp.get("resource_kind", ""))),
+				"start_pct": pct, "end_pct": pct, "min_pct": pct, "empty_h": 0.0, "full_h": 0.0,
+				"feeds": feeds.has(iid)}
+		elif ity in ["processor", "habitat"]:
+			_acc[iid] = {"kind": ity, "name": nm, "running_h": 0.0, "blocked_h": 0.0, "starved_h": 0.0}
+
+
+## {hours, tanks: {id: {...}}, machines: {id: {...}}, totals: {tank_empty_h,
+## machine_down_h, machine_run_h}} — empty when resources were not simulated.
+func resource_summary() -> Dictionary:
+	if flow == null:
+		return {}
+	var tanks := {}
+	var machines := {}
+	var empty_h := 0.0
+	var down_h := 0.0
+	var run_h := 0.0
+	for iid in _acc:
+		var a: Dictionary = _acc[iid]
+		if str(a["kind"]) == "tank":
+			tanks[iid] = a.duplicate()
+			empty_h += float(a["empty_h"])
+		else:
+			machines[iid] = a.duplicate()
+			down_h += float(a["blocked_h"]) + float(a["starved_h"])
+			run_h += float(a["running_h"])
+	return {"hours": _acc_h, "tanks": tanks, "machines": machines,
+		"totals": {"tank_empty_h": empty_h, "machine_down_h": down_h, "machine_run_h": run_h}}

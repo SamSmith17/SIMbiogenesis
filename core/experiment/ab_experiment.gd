@@ -32,6 +32,8 @@ const METRICS := [
 	["soc_end_pct", "Battery at the end", "%", "higher"],
 	["soc_min_pct", "Lowest battery", "%", "higher"],
 	["cycles", "Battery cycles", "", "lower"],
+	["tank_empty_h", "Hours tanks sat empty", "h", "lower"],
+	["machine_down_h", "Hours machines were blocked or starved", "h", "lower"],
 ]
 
 var _runs: Array = []
@@ -69,8 +71,10 @@ func start(main: Node, start_abs: float, end_abs: float, variants: Array) -> Str
 	var soc0 := float(su.get("battery_kwh_stored")) if su.get("battery_kwh_stored") != null else 0.5 * float(bat["cap_kwh"])
 	_start_note = "Both start from the battery as it is now (%s)." % UiText.pct(soc0 / maxf(float(bat["cap_kwh"]), 1e-6))
 	_runs.clear()
+	var host := main.find_child("SystemGraphView", true, false)
 	for v in variants:
 		var w := ExperimentWorld.from_graph(v["graph"] as Dictionary, su, clock)
+		w.enable_flow(host)
 		_runs.append({"id": str(v["id"]), "label": str(v["label"]), "world": w,
 			"run": make_run(w, bat, start_abs, end_abs, _step, soc0)})
 	_running = true
@@ -128,8 +132,11 @@ func result() -> Dictionary:
 		var r: ExperimentEnergyRun = e["run"]
 		var w: ExperimentWorld = e["world"]
 		r.series.label = str(e["label"])
-		sims.append({"id": e["id"], "label": e["label"], "series": r.series,
-			"energy": ExperimentScore.energy(r.series),
+		var res := w.resource_summary()
+		var en := ExperimentScore.energy(r.series)
+		en.merge(res.get("totals", {}), true)
+		sims.append({"id": e["id"], "label": e["label"], "series": r.series, "energy": en,
+			"resources": res,
 			"automation_rules": w.automations.rules.size(), "automation_log": w.automations.log})
 	return {"mode": "ab", "span": _span, "step_h": _step, "sims": sims,
 		"report": {"start_soc_note": _start_note}}

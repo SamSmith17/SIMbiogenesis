@@ -1239,7 +1239,9 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.
 # incl. ASHRAE G14 NMBE by hand and a time shift failing CV(RMSE), and
 # HaHistoryFetch's link resolution + units, the fork store (temp-file round
 # trip, unique names, the without-automation copy) and an A/B run where B
-# lacks an evening heater rule. EXPECTED_CHECKS; --import first):
+# lacks an evening heater rule, and a pump on a 30 L tank run by the copy's
+# own flow engine (runs 3 h, draws only then, blocks). EXPECTED_CHECKS;
+# --import first):
 Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.gd
 # Automations in sim time (offline — AutomationSim crossings incl. midnight,
 # the same switches at 1-min and 1-h steps, numeric edges + `for` in sim
@@ -5665,9 +5667,9 @@ their placeholder exports until the projection split (plan milestone 4);
 ## Sim vs reality: the Compare window (core/experiment/, 2026-10-22)
 
 Plan: `~/.claude/plans/i-want-to-be-polymorphic-island.md` (A/B experiments;
-landed: calibration, automations in sim time, forks + A vs B; next:
-resources in the runs, the "would / did save" observed modes, the
-projection split). ⧉ on the
+landed: calibration, automations in sim time, forks + A vs B, resources
+in the runs; next: the "would / did save" observed modes, the projection
+split). ⧉ on the
 timeline (`Main.open_compare_view(selection)`, `scenes/ui/experiment/
 compare_view.gd`, a `ModalFrame`) simulates THIS world over a past span and
 lays it over what really happened, with error numbers.
@@ -5688,9 +5690,30 @@ lays it over what really happened, with error numbers.
   losses as the player's setting). Solar = `SolarUI.evaluate_solar_pair_at`
   (public wrapper of `_evaluate_solar_pair`: SPA + weather at the hour +
   panel shade + DC caps). Load "model" or "observed" (the real load
-  replayed); aux "held" (today's hydro / wind) or "observed". Tank levels and
-  processor states are held from the start (resources join the run later).
+  replayed); aux "held" (today's hydro / wind) or "observed".
   The window lists what the automations switched ("Automations in the sim").
+- **Resources in the runs** (`ExperimentWorld.enable_flow(host)`, used by
+  every A/B world and the calibration's model-loads sim): the copy gets its
+  OWN `ResourceFlowEngine`, `render_step`ped at each run step with the AC
+  state the battery had (weather + sun at the instant). Tanks fill and
+  drain, processors run / block / starve, siphon and penstock turbines run
+  on the copy's ponds and streams. It feeds back: the load is re-read every
+  step (a machine draws only while RUNNING), tank levels and node states
+  (incl. starved / blocked) reach the automations, and the copy's graph DC
+  generation (`DcPowerWiring.sum_graph_dc_generation_kw`, one step behind,
+  as the pre-render) joins the battery with the scene's own sources held.
+  The host is the live SystemGraphView, asked read-only questions only
+  (`get_pond_info` via the loader, `water_feature_supply_for_intake`,
+  `stream_pond_inflows` — matched to tanks by id, so a pond only a fork has
+  gets no stream); its signals are connected to nothing. Not simulated:
+  people (pop-driven habitats bill their authored headcount at the preset
+  rates), the graph's wind / hydro ESTIMATOR nodes (held), camp power.
+  `resource_summary()`: per tank start / end / lowest fill, hours empty
+  (only for a tank wired to feed something) and full; per processor /
+  habitat hours running / blocked / starved; totals `tank_empty_h`,
+  `machine_down_h`, `machine_run_h` (merged into the energy dict, so they
+  are A/B metrics too). The window's "Tanks and machines" table shows both
+  versions.
 - **Two sims per comparison** when the real load is known: model loads (the
   whole model on trial) and real loads (only solar + battery on trial).
   Both start from the real battery at the span's start.
@@ -5743,8 +5766,8 @@ lays it over what really happened, with error numbers.
 - **A vs B** (the window's second mode, `AbExperiment`): two versions of
   the world — "This world as it is" (copied at run time) and FORKS — over the
   same span (Next 24 h / Next 7 d from the playhead, Last 7 d, the timeline
-  selection, custom), from the battery as it is now, each an
-  `ExperimentWorld` with its own automations. Scored on a headline metric
+  selection, custom), from the battery and tank levels as they are now, each
+  an `ExperimentWorld` with its own automations and resources. Scored on a headline metric
   (`AbExperiment.METRICS`; default "Energy the loads asked for" — delivered
   energy is capped by the battery: on Mount Vernon in October a nightly
   2.5 kW shutdown cut demand 420 → 295 kWh a week while delivered moved

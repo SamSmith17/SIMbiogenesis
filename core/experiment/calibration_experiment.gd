@@ -145,6 +145,10 @@ func _begin_sims() -> void:
 		w.observed = _observed
 		w.load_mode = str(p[2])
 		w.aux_mode = aux_mode
+		# The model-loads sim runs the copy's resources too: machines draw
+		# while they run, hydro turbines feed the bank.
+		if str(p[2]) == ExperimentEvaluator.LOAD_MODEL:
+			w.enable_flow(_find(_main, "SystemGraphView"))
 		var r := ExperimentEnergyRun.new()
 		r.floor_pct = float(bat["floor_pct"])
 		r.resume_pct = float(bat["resume_pct"])
@@ -155,7 +159,8 @@ func _begin_sims() -> void:
 			r.before_step = w.before_step
 		r.series.label = str(p[1])
 		if aux_mode == ExperimentEvaluator.AUX_HELD:
-			r.series.notes["aux_kw"] = "hydro / wind held at today's rate"
+			r.series.notes["aux_kw"] = ("the graph's hydro simulated, scene wind / hydro held at today's rate"
+				if w.flow != null else "hydro / wind held at today's rate")
 		_runs.append({"id": str(p[0]), "label": str(p[1]), "run": r, "load_mode": str(p[2]),
 			"world": w})
 	set_process(true)

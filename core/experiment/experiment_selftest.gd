@@ -13,7 +13,7 @@ extends SceneTree
 ## Carries EXPECTED_CHECKS: a Godot runtime error aborts the enclosing test
 ## function while the suite still prints PASS.
 
-const EXPECTED_CHECKS := 72
+const EXPECTED_CHECKS := 80
 
 var _checks := 0
 var _failures := 0
@@ -37,6 +37,7 @@ func _initialize() -> void:
 	_test_sources()
 	_test_store()
 	_test_ab()
+	_test_resources_in_run()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: check count %d != EXPECTED_CHECKS %d (a runtime error aborted a test?)" % [
@@ -361,3 +362,60 @@ func _test_ab() -> void:
 		str(AbExperiment.compare(ea, eb, "soc_end_pct", "higher")["winner"]) == "b")
 	_check("ab: a tie within half a percent", str(AbExperiment.compare({"x": 10.0}, {"x": 10.02}, "x", "lower")["winner"]) == "tie")
 	_check("ab: A switched 6 times, B 3 (off only)", wa.automations.log.size() == 6 and wb.automations.log.size() == 3)
+
+
+## A pump on a 30 L tank, 10 L/h at 500 W, into a 500 L tank: with the copy's
+## own flow engine the pump runs 3 h, draws its watts only while it runs,
+## then blocks on the empty tank; the same world with the pump switched off
+## moves nothing. Resource accounting reports both.
+func _pump_graph(pump_on: bool) -> Dictionary:
+	var m := GraphModel.new()
+	m.add_item({"id": "src", "type": "resource", "specs": {"name": "Source", "resource_kind": "water",
+		"capacity_qty": 30.0, "capacity_unit": "L", "level": 1.0}})
+	m.add_item({"id": "pump", "type": "processor", "specs": {"name": "Pump", "watts": 500.0,
+		"energy_source": "ac", "efficiency": 1.0, "current_state": "on" if pump_on else "off",
+		"requested_state": "on" if pump_on else "off",
+		"inputs": [{"kind": "water", "rate": 10.0, "unit": "L/h"}],
+		"outputs": [{"kind": "water", "rate": 10.0, "unit": "L/h"}]}})
+	m.add_item({"id": "dst", "type": "resource", "specs": {"name": "Dest", "resource_kind": "water",
+		"capacity_qty": 500.0, "capacity_unit": "L", "level": 0.0}})
+	m.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Controller"}})
+	m.add_connection({"id": "c_in", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "src", "source_handle_id": "output", "target_item_id": "pump", "target_handle_id": "res_in_0"})
+	m.add_connection({"id": "c_out", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "pump", "source_handle_id": "res_out_0", "target_item_id": "dst", "target_handle_id": "input"})
+	m.add_connection({"id": "c_pwr", "polarity": "ac", "source_item_id": "ctrl", "source_handle_id": "acOutput",
+		"target_item_id": "pump", "target_handle_id": "power_in"})
+	return m.serialize()
+
+
+func _test_resources_in_run() -> void:
+	var bat := {"cap_kwh": 60.0, "ceff": 0.95, "deff": 0.95, "floor_pct": 10.0, "resume_pct": 20.0}
+	var day0 := 24.0 * 739000.0
+	var wa := ExperimentWorld.from_graph(_pump_graph(true), null, null)
+	var wb := ExperimentWorld.from_graph(_pump_graph(false), null, null)
+	wa.enable_flow(null)
+	wb.enable_flow(null)
+	var ra := AbExperiment.make_run(wa, bat, day0, day0 + 6.0, 1.0 / 12.0, 50.0)
+	var rb := AbExperiment.make_run(wb, bat, day0, day0 + 6.0, 1.0 / 12.0, 50.0)
+	ra.step_chunk(1000000)
+	rb.step_chunk(1000000)
+	var sa := wa.resource_summary()
+	var sb := wb.resource_summary()
+	var ta: Dictionary = (sa["tanks"] as Dictionary).get("src", {})
+	var da: Dictionary = (sa["tanks"] as Dictionary).get("dst", {})
+	print("  resources A: src %s dst %s pump %s" % [str(ta), str(da), str((sa["machines"] as Dictionary).get("pump", {}))])
+	_check("flow: the source ran dry", not ta.is_empty() and float(ta["end_pct"]) <= 1.0)
+	_check("flow: the destination got the 30 L (6 %)", not da.is_empty() and absf(float(da["end_pct"]) - 6.0) < 0.6,
+		str(da.get("end_pct", "")))
+	var pump: Dictionary = (sa["machines"] as Dictionary).get("pump", {})
+	_check("flow: the pump ran about 3 h", absf(float(pump.get("running_h", 0.0)) - 3.0) < 0.25, str(pump))
+	_check("flow: then it blocked on the empty tank", float(pump.get("blocked_h", 0.0)) > 2.5, str(pump))
+	_check("flow: it drew 500 W only while running (~1.5 kWh)",
+		absf(ra.series.integrate("load_kw") - 1.5) < 0.15, str(ra.series.integrate("load_kw")))
+	_check("flow: the source sat empty about 3 h", absf(float(sa["totals"]["tank_empty_h"]) - 3.0) < 0.3,
+		str(sa["totals"]))
+	var tb: Dictionary = (sb["tanks"] as Dictionary).get("src", {})
+	_check("flow: switched off, nothing moves and nothing is drawn",
+		float(tb.get("end_pct", 0.0)) > 99.0 and rb.series.integrate("load_kw") < 1e-6)
+	_check("flow: the live-world-less run never touched a host", wa.flow != null)
