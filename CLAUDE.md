@@ -2280,7 +2280,9 @@ off-screen SubViewport and streams the frames into ffmpeg.
   `ModalFrame`): range (pre-filled from the Ctrl-drag selection; none = the
   next 24 h from the playhead), speed in sim-hours per VIDEO second
   (`ClimelapseExportOptions.TIME_PRESETS`: the bar's speeds, "Max" = the bar's
-  Max = 2 h/s, then a day and a week per second, or any value), folder +
+  Max = 2 h/s, then a day / 3 days / a week / a month / a season / a year per
+  second, or any value up to `MAX_RATE`; or type the VIDEO LENGTH and the
+  speed follows, `speed_for_length`), folder +
   file name, size (presets, the game window, custom; rounded to even for
   yuv420p), fps, CRF, the date/time strip, and render settings for the export
   only (graphics + shadow preset, MSAA, TAA, settle frames per video frame).
@@ -2334,10 +2336,18 @@ off-screen SubViewport and streams the frames into ffmpeg.
   plays from the selected key and the editor comes back after.
 - **Sky options** (dialog "Sky" + "Aim"; `ClimelapseSkyDirector`, shared by
   the export and the preview so they match; everything restored by `end()`):
-  - Analemma (sun / moon, every 1-7 days): one frame per day; main.gd's own
-    analemma stepped by the export (`analemma_export_begin / _step / _end`,
-    `analemma_external_step` stops `_process` stepping it). Frame count =
-    calendar days in the range ÷ days, +1; the speed does not apply.
+  - Analemma (sun / moon): the game's ∞, stepped by the export
+    (`analemma_export_begin / _step / _end`, `analemma_external_step` stops
+    `_process` stepping it). Its speed is `analemma_days_per_second` (any
+    value; presets a day … a year per second, "60 days/s" = the game's ∞ at
+    60 fps; the speed row switches unit). Frame i shows day
+    `analemma_day_of_frame` = floor(i × dps / fps): below the frame rate a
+    day is held, above it days are skipped in the VIDEO but the director
+    still steps through each one (≤ 7 per call), so the figure on the sky
+    gets every day, as in the game. A range under `ANALEMMA_MIN_DAYS` (30)
+    becomes a year from its start day (`analemma_range`, 365 frames at one a
+    day) — in the dialog, the path editor's preview and the lane menu's
+    preview; the dialog also has a "One year" range button.
   - Clouds off = `main.clear_sky_override` (cloud layers, cloud shadows and
     the weather light factor, for the video only; data untouched).
   - Star trails "grow through the night": closed above −6° sun altitude,

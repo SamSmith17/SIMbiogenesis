@@ -499,7 +499,7 @@ func _preview_opts() -> Dictionary:
 		else:
 			o["start_abs"] = _now()
 			o["end_abs"] = _now() + 24.0
-	return ClimelapseExportOptions.normalize(o)
+	return ClimelapseExportOptions.normalize(ClimelapseExportOptions.analemma_range(o))
 
 
 func _on_preview() -> void:

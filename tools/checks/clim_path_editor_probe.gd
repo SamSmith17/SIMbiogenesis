@@ -228,26 +228,58 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		var trails0 := [ss.star_trails, ss.star_trail_length] if ss != null else [0.0, 0.0]
 		var clear0 := bool(main.get("clear_sky_override"))
 		var ana0 := bool(main.get("analemma_mode"))
-		var eo := ClimelapseExportOptions.load_prefs()
-		eo["start_abs"] = day0
-		eo["end_abs"] = day0 + 21.0 * 24.0
-		eo["analemma"] = 1
-		eo["analemma_days"] = 7
-		eo["clouds"] = false
-		eo["star_trails"] = 1
-		eo["follow"] = "stars"
-		eo["width"] = 640
-		eo["height"] = 360
-		eo["fps"] = 30
-		eo["settle_frames"] = 1
-		eo["folder"] = out_dir
-		eo["file_name"] = "analemma_weekly.mp4"
-		var want := ClimelapseExportOptions.frame_count(ClimelapseExportOptions.normalize(eo))
-		_ok(want == 4, "22 calendar days every 7 days = 4 frames (%d)" % want)
-		var out_mp4 := ClimelapseExportOptions.output_path(ClimelapseExportOptions.normalize(eo))
-		if FileAccess.file_exists(out_mp4):
-			DirAccess.remove_absolute(out_mp4)
-		_ok(bool(loader.call("start_climelapse_export_with", eo)), "analemma export started")
+		# Through the real dialog: no keyframes (a still shot), the camera
+		# following the sun so the figure stays in frame.
+		var ana_keys: ClimelapseKeyframes = loader.call("climelapse_keys")
+		ana_keys.clear()
+		loader.call("_save_climelapse_keys")
+		tl_ui.call("_on_export_clim_mp4_pressed")
+		await _settle(tree, 4)
+		var dlg: Node = tl_ui.get("_clim_options_dialog")
+		_ok(dlg != null and is_instance_valid(dlg), "the export dialog opened")
+		if dlg == null:
+			return {"ok": false, "fails": _fails}
+		var spd_opt: OptionButton = dlg.get("_speed_opt")
+		_ok(spd_opt.item_count == ClimelapseExportOptions.TIME_PRESETS.size() + 1
+			and str(spd_opt.get_item_text(spd_opt.item_count - 2)) == "Year per second",
+			"clock speeds run up to a year per second (%d choices)" % spd_opt.item_count)
+		(dlg.get("_analemma_opt") as OptionButton).select(1)
+		(dlg.get("_clouds_opt") as OptionButton).select(1)
+		(dlg.get("_trails_opt") as OptionButton).select(1)
+		(dlg.get("_follow_opt") as OptionButton).select(1)
+		dlg.call("_on_changed")
+		var o1: Dictionary = dlg.call("current_options")
+		_ok(int(ClimelapseExportOptions.analemma_days_in(o1)) == ClimelapseExportOptions.ANALEMMA_YEAR_DAYS,
+			"choosing the analemma widens the range to a year (%d days)" % int(ClimelapseExportOptions.analemma_days_in(o1)))
+		var spin: SpinBox = dlg.get("_speed_spin")
+		_ok(bool(dlg.get("_speed_ana")) and spin.suffix == " days/s" and not (dlg.get("_max_btn") as Button).visible
+			and spd_opt.item_count == ClimelapseExportOptions.ANALEMMA_PRESETS.size() + 1,
+			"the speed row is in days per second of video")
+		var res_opt: OptionButton = dlg.get("_res_opt")
+		res_opt.select(ClimelapseExportOptions.RES_PRESETS.size() + 1)
+		dlg.call("_on_res_preset", ClimelapseExportOptions.RES_PRESETS.size() + 1)
+		(dlg.get("_w_spin") as SpinBox).value = 640
+		(dlg.get("_h_spin") as SpinBox).value = 360
+		(dlg.get("_fps_opt") as OptionButton).select(ClimelapseExportOptions.FPS_CHOICES.find(30))
+		(dlg.get("_settle_spin") as SpinBox).value = 1
+		(dlg.get("_folder_edit") as LineEdit).text = out_dir
+		(dlg.get("_file_edit") as LineEdit).text = "analemma_year.mp4"
+		dlg.call("_on_changed")
+		# A typed video length sets the speed.
+		(dlg.get("_length_spin") as SpinBox).value = 2.0
+		await _settle(tree, 2)
+		var eo: Dictionary = dlg.call("current_options")
+		var want := ClimelapseExportOptions.frame_count(eo)
+		_ok(want == 60 and absf(ClimelapseExportOptions.video_seconds(eo) - 2.0) < 0.02,
+			"a 2 s video of the year: %d frames at %.1f days/s" % [want, float(eo["analemma_days_per_second"])])
+		_ok(absf(spin.value - float(eo["analemma_days_per_second"])) < 0.01, "the speed field shows the speed the length gave")
+		var shot_dlg := main.get_viewport().get_texture().get_image()
+		shot_dlg.save_png("user://screenshots/%s/06_dialog_analemma.png" % LABEL)
+		dlg.call("_on_export")
+		await _settle(tree, 3)
+		eo["file_name"] = "analemma_year.mp4"
+		var out_mp4 := ClimelapseExportOptions.output_path(eo)
+		_ok(bool(loader.call("is_climelapse_exporting")), "analemma export started from the dialog")
 		var saw_clear := false
 		var saw_ana := false
 		var saw_ext := false
@@ -266,6 +298,9 @@ func run(main: Node, _harness: Node) -> Dictionary:
 			and not bool(main.get("analemma_external_step")), "after: clouds and analemma handed back")
 		_ok(ss == null or (is_equal_approx(ss.star_trails, float(trails0[0])) and is_equal_approx(ss.star_trail_length, float(trails0[1]))),
 			"after: star trails as they were")
+		var trail: PackedVector3Array = main.get("_analemma_trail")
+		_ok(trail.size() >= ClimelapseExportOptions.ANALEMMA_YEAR_DAYS - 1,
+			"the figure on the sky got every day of the year (%d points), as in the game" % trail.size())
 		_ok(str(main.call("clock_hold_owner")).is_empty() and vp.get_camera_3d() == cam, "after: no clock claim, player camera current")
 		var ffprobe := ffmpeg.get_base_dir().path_join("ffprobe.exe") if OS.get_name() == "Windows" else "ffprobe"
 		var probe: Array = []
@@ -273,7 +308,7 @@ func run(main: Node, _harness: Node) -> Dictionary:
 			"-of", "default=nw=1", out_mp4], probe)
 		var txt := str(probe[0]) if not probe.is_empty() else ""
 		_ok(txt.contains("nb_read_frames=%d" % want) and txt.contains("width=640"), "ffprobe: %s" % txt.replace("\n", " "))
-		for n in [0, 3]:
+		for n in [0, 30, 59]:
 			OS.execute(ffmpeg, ["-v", "error", "-y", "-i", out_mp4, "-vf", "select=eq(n\\,%d)" % n,
 				"-frames:v", "1", out_dir.path_join("analemma_frame_%d.png" % n)], [])
 

@@ -7,7 +7,7 @@ extends SceneTree
 ## test function while the suite would still print PASS.
 
 const HOURS_PER_YEAR := 8760.0
-const EXPECTED_CHECKS := 57
+const EXPECTED_CHECKS := 62
 
 var _checks := 0
 
@@ -199,11 +199,36 @@ func _test_path_editing() -> int:
 func _test_sky_options() -> int:
 	var f := 0
 	var o := ClimelapseExportOptions.normalize({"start_abs": 41.0 * 24.0 + 10.0, "end_abs": 71.0 * 24.0 + 3.0,
-		"analemma": 1, "analemma_days": 1, "fps": 30})
-	f += _ok(ClimelapseExportOptions.frame_count(o) == 31, "analemma: one frame per calendar day (got %d)" % ClimelapseExportOptions.frame_count(o))
-	o["analemma_days"] = 7
+		"analemma": 1, "analemma_days_per_second": 30.0, "fps": 30})
+	f += _ok(ClimelapseExportOptions.frame_count(o) == 31, "analemma at the frame rate: one frame per calendar day (got %d)" % ClimelapseExportOptions.frame_count(o))
+	o["analemma_days_per_second"] = 210.0
 	f += _ok(ClimelapseExportOptions.frame_count(o) == 5 and absf(ClimelapseExportOptions.frame_hours(o, 1) - (48.0 * 24.0 + 12.0)) < 1e-9,
-		"analemma every 7 days: 5 frames, frame 1 a week on")
+		"analemma at 7 days a frame: 5 frames, frame 1 a week on")
+	o["analemma_days_per_second"] = 7.5
+	f += _ok(ClimelapseExportOptions.frame_count(o) == 121 and ClimelapseExportOptions.analemma_day_of_frame(o, 3) == 0
+		and ClimelapseExportOptions.analemma_day_of_frame(o, 4) == 1 and ClimelapseExportOptions.analemma_day_of_frame(o, 120) == 30,
+		"analemma slower than the frame rate: each day held 4 frames (got %d frames)" % ClimelapseExportOptions.frame_count(o))
+	var short := ClimelapseExportOptions.analemma_range({"analemma": 1, "start_abs": 100.0 * 24.0 + 15.0, "end_abs": 101.0 * 24.0 + 15.0})
+	var yo := ClimelapseExportOptions.normalize(short)
+	yo["analemma_days_per_second"] = 30.0
+	var kept := ClimelapseExportOptions.analemma_range({"analemma": 1, "start_abs": 0.0, "end_abs": 40.0 * 24.0})
+	var off := ClimelapseExportOptions.analemma_range({"analemma": 0, "start_abs": 0.0, "end_abs": 24.0})
+	f += _ok(int(ClimelapseExportOptions.analemma_days_in(yo)) == ClimelapseExportOptions.ANALEMMA_YEAR_DAYS
+		and ClimelapseExportOptions.frame_count(yo) == ClimelapseExportOptions.ANALEMMA_YEAR_DAYS
+		and float(kept["end_abs"]) == 40.0 * 24.0 and float(off["end_abs"]) == 24.0,
+		"a short analemma range becomes a year (365 frames at the frame rate); a month+ or no analemma is kept")
+	for sec in [12.0, 3.3]:
+		var a := yo.duplicate()
+		a["analemma_days_per_second"] = ClimelapseExportOptions.speed_for_length(a, sec)
+		var n := ClimelapseExportOptions.normalize({"start_abs": 0.0, "end_abs": 24.0 * 9.0, "fps": 30})
+		n["hours_per_second"] = ClimelapseExportOptions.speed_for_length(n, sec)
+		f += _ok(absf(ClimelapseExportOptions.video_seconds(a) - sec) <= 1.0 / 30.0 + 1e-6
+			and absf(ClimelapseExportOptions.video_seconds(n) - sec) <= 1.0 / 30.0 + 1e-6,
+			"a typed video length gives that length (%.1f s: analemma %.2f s, clock %.2f s)" % [sec,
+				ClimelapseExportOptions.video_seconds(a), ClimelapseExportOptions.video_seconds(n)])
+	f += _ok(float(ClimelapseExportOptions.TIME_PRESETS[ClimelapseExportOptions.TIME_PRESETS.size() - 1][1]) == 8766.0
+		and ClimelapseExportOptions.normalize({"hours_per_second": 1.0e9})["hours_per_second"] == ClimelapseExportOptions.MAX_RATE,
+		"the fastest preset is a year per second; speeds clamp at MAX_RATE")
 	var day := ClimelapseSkyDirector.trail_state(NAN, 100.0, 10.0)
 	var dusk := ClimelapseSkyDirector.trail_state(NAN, 100.0, -10.0)
 	var later := ClimelapseSkyDirector.trail_state(float(dusk["night_start"]), 102.0, -30.0)

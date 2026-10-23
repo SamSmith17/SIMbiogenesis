@@ -41,7 +41,9 @@ var _crf_spin: SpinBox = null
 var _timecode_chk: CheckBox = null
 var _smooth_chk: CheckBox = null
 var _analemma_opt: OptionButton = null
-var _analemma_days: SpinBox = null
+var _length_spin: SpinBox = null
+var _max_btn: Button = null
+var _speed_ana := false     # the speed row shows analemma days/s (else sim-h/s)
 var _clouds_opt: OptionButton = null
 var _trails_opt: OptionButton = null
 var _follow_opt: OptionButton = null
@@ -68,6 +70,8 @@ func open_on(loader: Node, main: Node, selection: PackedFloat64Array, playhead: 
 	else:
 		_opts["start_abs"] = selection[0]
 		_opts["end_abs"] = selection[1]
+	# An analemma (remembered from last time) defaults to a year.
+	_opts = ClimelapseExportOptions.analemma_range(_opts)
 	_opts["file_name"] = ClimelapseExportOptions.default_file_name(float(_opts["start_abs"]))
 	var vp := get_viewport()
 	if vp != null:
@@ -98,6 +102,8 @@ func _build() -> void:
 	_end_edit = _line(rr, "YYYY-MM-DD HH:MM")
 	var use_sel := _button(rr, "Use selection", _on_use_selection)
 	use_sel.disabled = is_nan(_selection[0])
+	var year_btn := _button(rr, "One year", _on_one_year)
+	year_btn.tooltip_text = "A year from the start day (what an analemma needs)"
 	use_sel.tooltip_text = "The range you Ctrl-dragged on the timeline"
 	_start_edit.text_submitted.connect(func(_t: String) -> void: _on_changed())
 	_end_edit.text_submitted.connect(func(_t: String) -> void: _on_changed())
@@ -105,20 +111,26 @@ func _build() -> void:
 	_end_edit.focus_exited.connect(_on_changed)
 	_range_note = _note(b, "")
 
-	b.add_child(SectionHeader.make("Speed", "gauge", "sim-hours per second of video"))
+	b.add_child(SectionHeader.make("Speed", "gauge", "how much time passes per second of video"))
 	var sr := _row(b)
 	_speed_opt = OptionButton.new()
 	_speed_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for p in ClimelapseExportOptions.TIME_PRESETS:
-		_speed_opt.add_item(str(p[0]))
-	_speed_opt.add_item("Custom")
 	_speed_opt.item_selected.connect(_on_speed_preset)
 	sr.add_child(_speed_opt)
-	_speed_spin = _spin(sr, 0.0001, 10000.0, 0.0001, " h/s")
+	_speed_spin = _spin(sr, 0.0001, ClimelapseExportOptions.MAX_RATE, 0.0001, " h/s")
 	_speed_spin.custom_minimum_size = Vector2(150, 0)
+	_speed_spin.allow_greater = false
 	_speed_spin.value_changed.connect(func(_v: float) -> void: _on_changed())
-	_button(sr, "Max", func() -> void:
+	_max_btn = _button(sr, "Max", func() -> void:
 		_speed_spin.value = float(ClimelapseExportOptions.TIME_PRESETS[ClimelapseExportOptions.MAX_PRESET][1]))
+	_max_btn.tooltip_text = "The timeline bar's Max (2 h of sim time per second)"
+	var lr := _row(b)
+	_lbl(lr, "Video length")
+	_length_spin = _spin(lr, 0.1, 36000.0, 0.1, " s")
+	_length_spin.custom_minimum_size = Vector2(150, 0)
+	_length_spin.tooltip_text = "Type how long the video should be; the speed follows"
+	_length_spin.value_changed.connect(_on_length_changed)
+	_lbl(lr, "or pick a speed above")
 
 	b.add_child(SectionHeader.make("File", "folder-open"))
 	var fr := _row(b)
@@ -188,12 +200,8 @@ func _build() -> void:
 	b.add_child(SectionHeader.make("Sky", "moon", "the preview shows these too"))
 	var an := _row(b)
 	_lbl(an, "Analemma")
-	_analemma_opt = _choice(an, ["Off", "Sun: one frame a day at the same time", "Moon: one frame a day at its transit"])
-	_analemma_opt.tooltip_text = "One frame per day instead of a steady clock: the sun (or the moon) is caught at the same moment each day, and the figure-eight it traces is drawn on the sky as the video plays."
-	_lbl(an, "every")
-	_analemma_days = _spin(an, 1, 7, 1, " d")
-	_analemma_days.tooltip_text = "Days between frames"
-	_analemma_days.value_changed.connect(func(_v: float) -> void: _on_changed())
+	_analemma_opt = _choice(an, ["Off", "Sun: the same time each day", "Moon: its transit each day"])
+	_analemma_opt.tooltip_text = "The game's analemma (the timeline's ∞): the clock jumps a day at a time, the sun (or the moon) is caught at the same moment each day, and the figure-eight it traces is drawn on the sky as the video plays. A range shorter than a month becomes a year; the speed is days per second of video."
 	var cl := _row(b)
 	_lbl(cl, "Clouds")
 	_clouds_opt = _choice(cl, ["As the weather had them", "None (a clear sky)"])
@@ -315,10 +323,7 @@ func _load_into_controls() -> void:
 	_updating = true
 	_start_edit.text = _fmt_abs(float(_opts["start_abs"]))
 	_end_edit.text = _fmt_abs(float(_opts["end_abs"]))
-	var rate := float(_opts["hours_per_second"])
-	_speed_spin.value = rate
-	var pi := ClimelapseExportOptions.preset_for_rate(rate)
-	_speed_opt.select(pi if pi >= 0 else ClimelapseExportOptions.TIME_PRESETS.size())
+	_set_speed_mode(int(_opts["analemma"]) > 0)
 	_folder_edit.text = str(_opts["folder"])
 	_file_edit.text = str(_opts["file_name"])
 	_w_spin.value = int(_opts["width"])
@@ -333,7 +338,6 @@ func _load_into_controls() -> void:
 	_taa_opt.select(int(_opts["taa"]) + 1)
 	_settle_spin.value = int(_opts["settle_frames"])
 	_analemma_opt.select(int(_opts["analemma"]))
-	_analemma_days.value = int(_opts["analemma_days"])
 	_clouds_opt.select(0 if bool(_opts["clouds"]) else 1)
 	_trails_opt.select(int(_opts["star_trails"]) + 1)
 	var fi := 0
@@ -356,9 +360,72 @@ func _res_index(w: int, h: int) -> int:
 	return ClimelapseExportOptions.RES_PRESETS.size() + 1
 
 
+func _speed_presets() -> Array:
+	return ClimelapseExportOptions.ANALEMMA_PRESETS if _speed_ana else ClimelapseExportOptions.TIME_PRESETS
+
+
 func _on_speed_preset(i: int) -> void:
-	if i < ClimelapseExportOptions.TIME_PRESETS.size():
-		_speed_spin.value = float(ClimelapseExportOptions.TIME_PRESETS[i][1])
+	var presets := _speed_presets()
+	if i < presets.size():
+		_speed_spin.value = float(presets[i][1])
+	_on_changed()
+
+
+## Switch the speed row between sim-hours per second and analemma days per
+## second (the presets, the unit, the value it edits).
+func _set_speed_mode(ana: bool) -> void:
+	var was := _updating
+	_updating = true
+	_speed_ana = ana
+	_speed_opt.clear()
+	for p in _speed_presets():
+		_speed_opt.add_item(str(p[0]))
+	_speed_opt.add_item("Custom")
+	if ana:
+		_speed_spin.min_value = 0.01
+		_speed_spin.max_value = 100000.0
+		_speed_spin.step = 0.01
+		_speed_spin.suffix = " days/s"
+		_speed_spin.value = float(_opts.get("analemma_days_per_second", 30.4375))
+	else:
+		_speed_spin.min_value = 0.0001
+		_speed_spin.max_value = ClimelapseExportOptions.MAX_RATE
+		_speed_spin.step = 0.0001
+		_speed_spin.suffix = " h/s"
+		_speed_spin.value = float(_opts.get("hours_per_second", 2.0))
+	_max_btn.visible = not ana
+	_select_speed_preset()
+	_updating = was
+
+
+func _select_speed_preset() -> void:
+	var v := _speed_spin.value
+	var pi := ClimelapseExportOptions.analemma_preset_for(v) if _speed_ana \
+		else ClimelapseExportOptions.preset_for_rate(v)
+	_speed_opt.select(pi if pi >= 0 else _speed_presets().size())
+
+
+## The video length typed: the speed that gives it.
+func _on_length_changed(sec: float) -> void:
+	if _updating:
+		return
+	_read_controls()
+	var sp := ClimelapseExportOptions.speed_for_length(ClimelapseExportOptions.normalize(_opts), sec)
+	if is_nan(sp):
+		_refresh()
+		return
+	_updating = true
+	_speed_spin.value = sp
+	_select_speed_preset()
+	_updating = false
+	_opts["analemma_days_per_second" if _speed_ana else "hours_per_second"] = sp
+	_refresh()
+
+
+## A year from the start day.
+func _on_one_year() -> void:
+	_read_controls()
+	_end_edit.text = _fmt_abs(ClimelapseExportOptions.year_end(float(_opts["start_abs"])))
 	_on_changed()
 
 
@@ -397,10 +464,9 @@ func _read_controls() -> void:
 		_opts["start_abs"] = s
 	if not is_nan(e):
 		_opts["end_abs"] = e
-	_opts["hours_per_second"] = _speed_spin.value
-	var pi := ClimelapseExportOptions.preset_for_rate(_speed_spin.value)
+	_opts["analemma_days_per_second" if _speed_ana else "hours_per_second"] = _speed_spin.value
 	_updating = true
-	_speed_opt.select(pi if pi >= 0 else ClimelapseExportOptions.TIME_PRESETS.size())
+	_select_speed_preset()
 	_res_opt.select(_res_index(int(_w_spin.value), int(_h_spin.value)))
 	_updating = false
 	_opts["folder"] = _folder_edit.text.strip_edges()
@@ -416,10 +482,26 @@ func _read_controls() -> void:
 	_opts["taa"] = _taa_opt.selected - 1
 	_opts["settle_frames"] = int(_settle_spin.value)
 	_opts["analemma"] = maxi(_analemma_opt.selected, 0)
-	_opts["analemma_days"] = int(_analemma_days.value)
+	if (int(_opts["analemma"]) > 0) != _speed_ana:
+		_on_analemma_toggled(int(_opts["analemma"]) > 0)
 	_opts["clouds"] = _clouds_opt.selected != 1
 	_opts["star_trails"] = _trails_opt.selected - 1
 	_opts["follow"] = str(ClimelapseExportOptions.FOLLOW_CHOICES[maxi(_follow_opt.selected, 0)][0])
+
+
+## Analemma on: the speed row edits days per second, and a range shorter than
+## a month becomes a year from its start day (the export's default for it).
+func _on_analemma_toggled(on: bool) -> void:
+	_set_speed_mode(on)
+	if not on:
+		return
+	var widened := ClimelapseExportOptions.analemma_range(_opts)
+	if float(widened["end_abs"]) != float(_opts["end_abs"]):
+		_opts["end_abs"] = widened["end_abs"]
+		var was := _updating
+		_updating = true
+		_end_edit.text = _fmt_abs(float(_opts["end_abs"]))
+		_updating = was
 
 
 func _refresh() -> void:
@@ -427,7 +509,9 @@ func _refresh() -> void:
 	var span := float(o["end_abs"]) - float(o["start_abs"])
 	_range_note.text = ("%s of sim time." % ClimelapseExportOptions.span_label(span)) if span > 0.0 \
 		else "The end must be after the start."
-	if is_nan(_selection[0]):
+	if int(o["analemma"]) > 0:
+		_range_note.text += " %s for the analemma." % UiText.count(int(ClimelapseExportOptions.analemma_days_in(o)), "day")
+	elif is_nan(_selection[0]):
 		_range_note.text += " (No Ctrl-drag selection — this is the next 24 h from the playhead.)"
 	var keys: ClimelapseKeyframes = _loader.call("climelapse_keys") if _loader != null else null
 	var n := keys.size() if keys != null else 0
@@ -444,13 +528,9 @@ func _refresh() -> void:
 			UiText.count(n, "camera keyframe"), inside]
 	_smooth_chk.disabled = n < 3
 	var ana := int(o["analemma"]) > 0
-	_speed_opt.disabled = ana
-	_speed_spin.editable = not ana
-	_analemma_days.editable = ana
 	var sky_bits: Array = []
 	if ana:
-		sky_bits.append("Analemma: one frame every %s, %s. The speed above does not apply." % [
-			UiText.count(int(o["analemma_days"]), "day"),
+		sky_bits.append("Analemma, as the game's ∞ draws it: %s, the figure growing on the sky a day at a time. Speed is in days per second of video." % [
 			"the sun at the same time each day (Settings, Stars & Planets sets the time)" if int(o["analemma"]) == 1
 				else "the moon at its daily transit"])
 	if not bool(o["clouds"]):
@@ -460,12 +540,20 @@ func _refresh() -> void:
 	_sky_note.text = " ".join(sky_bits)
 	_sky_note.visible = not sky_bits.is_empty()
 	var frames := ClimelapseExportOptions.frame_count(o)
+	_updating = true
+	_length_spin.value = ClimelapseExportOptions.video_seconds(o)
+	_updating = false
 	var ok := frames > 0 and frames <= ClimelapseExportOptions.MAX_FRAMES \
 		and not str(o["folder"]).is_empty()
 	var text := ClimelapseExportOptions.summary(o)
-	var step_txt := UiText.count(int(o["analemma_days"]), "day") if ana \
-		else _step_label(ClimelapseExportOptions.hours_per_frame(o))
-	text += "\nOne frame every %s of sim time. Saves to %s" % [step_txt, ClimelapseExportOptions.output_path(o)]
+	var step_txt := ""
+	if ana:
+		var dpf := ClimelapseExportOptions.analemma_dps(o) / float(int(o["fps"]))
+		step_txt = ("%.2f days a frame" % dpf) if dpf >= 1.0 else ("each day held for %.1f frames" % (1.0 / dpf))
+	else:
+		step_txt = "one frame every %s of sim time" % _step_label(ClimelapseExportOptions.hours_per_frame(o))
+	text += "\n%s. Saves to %s" % [step_txt.substr(0, 1).to_upper() + step_txt.substr(1),
+		ClimelapseExportOptions.output_path(o)]
 	if frames > ClimelapseExportOptions.MAX_FRAMES:
 		text += "\nToo many frames — pick a faster speed or a shorter range."
 	elif str(o["folder"]).is_empty():
@@ -484,7 +572,9 @@ static func _step_label(h: float) -> String:
 		return "%.1f s" % (h * 3600.0)
 	if h < 1.0:
 		return "%.1f min" % (h * 60.0)
-	return "%.2f h" % h
+	if h < 48.0:
+		return "%.2f h" % h
+	return "%.1f days" % (h / 24.0)
 
 
 func _fmt_abs(abs_h: float) -> String:

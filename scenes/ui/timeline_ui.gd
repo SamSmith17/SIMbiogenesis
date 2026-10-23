@@ -1715,6 +1715,9 @@ func _preview_clim_from(from_abs : float) -> void:
 		var a := _playhead_abs() if is_nan(from_abs) else from_abs
 		o["start_abs"] = a
 		o["end_abs"] = a + 24.0
+	o = ClimelapseExportOptions.analemma_range(o)
+	if int(o.get("analemma", 0)) > 0:
+		from_abs = NAN   # an analemma plays from its first day
 	if not bool(tl.call("start_climelapse_preview", o, from_abs)):
 		_notify("Preview could not start (an export or another view holds the clock).")
 

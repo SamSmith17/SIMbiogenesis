@@ -21,7 +21,10 @@ extends RefCounted
 ##   analemma             0 off, 1 the sun's analemma, 2 the moon's: one frame
 ##                        per day (at the same solar time / at the moon's
 ##                        transit), with the figure drawn on the sky
-##   analemma_days        days between analemma frames (1..7)
+##   analemma_days_per_second  analemma calendar days per second of VIDEO
+##                        (any value: below the frame rate a day is held for
+##                        several frames, above it days are skipped — the
+##                        figure on the sky still gets every day)
 ##   clouds               false = a clear sky for the export (no clouds, no
 ##                        cloud shadows, full sunlight); the weather otherwise
 ##   star_trails          -1 as set in the game, 0 off, 1 grow through each
@@ -37,7 +40,8 @@ const CFG_PATH := "user://climelapse_export.cfg"
 
 ## Speeds offered in the dialog: label, sim-hours per video second. The first
 ## seven are the timeline bar's own speeds (1× … Max), so "Max" means the same
-## thing in both places; the last two are faster than any bar speed.
+## thing in both places; the rest are faster than any bar speed (any value can
+## also be typed, or the video length set instead).
 const TIME_PRESETS: Array = [
 	["1× (real time)", 0.000278],
 	["10×", 0.002778],
@@ -47,8 +51,29 @@ const TIME_PRESETS: Array = [
 	["1440× (24 min per second)", 0.4],
 	["Max (2 h per second)", 2.0],
 	["Day per second", 24.0],
+	["3 days per second", 72.0],
 	["Week per second", 168.0],
+	["Month per second", 730.5],
+	["Season per second", 2191.5],
+	["Year per second", 8766.0],
 ]
+## Fastest speed the dialog accepts (sim-hours per video second).
+const MAX_RATE := 100000.0
+
+## Analemma speeds: label, calendar days per video second. The game's ∞ is one
+## day per rendered frame, so at 60 fps it plays 60 days a second.
+const ANALEMMA_PRESETS: Array = [
+	["A day per second", 1.0],
+	["A week per second", 7.0],
+	["A month per second", 30.4375],
+	["60 days per second (∞ in the game)", 60.0],
+	["A season per second", 91.3125],
+	["A year per second", 365.25],
+]
+## An analemma needs most of a year to show its figure: a shorter range is
+## widened to this many days when analemma is chosen (analemma_range).
+const ANALEMMA_YEAR_DAYS := 365
+const ANALEMMA_MIN_DAYS := 30
 ## Index of "Max" in TIME_PRESETS.
 const MAX_PRESET := 6
 
@@ -86,7 +111,7 @@ static func defaults() -> Dictionary:
 		"timecode": true,
 		"crf": 18,
 		"analemma": 0,
-		"analemma_days": 1,
+		"analemma_days_per_second": 30.4375,
 		"clouds": true,
 		"star_trails": -1,
 		"follow": "none",
@@ -117,7 +142,7 @@ static func normalize(o: Dictionary) -> Dictionary:
 	for k in d.keys():
 		if not out.has(k):
 			out[k] = d[k]
-	out["hours_per_second"] = maxf(float(out["hours_per_second"]), 1e-5)
+	out["hours_per_second"] = clampf(float(out["hours_per_second"]), 1e-5, MAX_RATE)
 	out["fps"] = clampi(int(out["fps"]), 1, 120)
 	out["width"] = even_size(int(out["width"]))
 	out["height"] = even_size(int(out["height"]))
@@ -130,7 +155,7 @@ static func normalize(o: Dictionary) -> Dictionary:
 	out["crf"] = clampi(int(out["crf"]), 0, 51)
 	out["timecode"] = bool(out["timecode"])
 	out["analemma"] = clampi(int(out["analemma"]), 0, 2)
-	out["analemma_days"] = clampi(int(out["analemma_days"]), 1, 7)
+	out["analemma_days_per_second"] = clampf(float(out["analemma_days_per_second"]), 0.01, 100000.0)
 	out["clouds"] = bool(out["clouds"])
 	out["star_trails"] = clampi(int(out["star_trails"]), -1, 1)
 	var fol := str(out["follow"])
@@ -171,15 +196,68 @@ static func hours_per_frame(o: Dictionary) -> float:
 
 
 ## Frames the export renders: the range divided into steps, both ends
-## included. An analemma export takes one frame per `analemma_days` calendar
-## days of the range instead.
+## included. An analemma export walks the calendar days of the range at
+## `analemma_days_per_second` instead (first day to last day, both included).
 static func frame_count(o: Dictionary) -> int:
 	var span := float(o.get("end_abs", 0.0)) - float(o.get("start_abs", 0.0))
 	if span <= 0.0:
 		return 0
 	if int(o.get("analemma", 0)) > 0:
-		return int(floor(analemma_days_in(o) / float(maxi(1, int(o.get("analemma_days", 1)))) - 1e-9)) + 1
+		var last := analemma_days_in(o) - 1.0
+		return int(floor(last * float(_fps(o)) / analemma_dps(o) + 1e-6)) + 1
 	return int(floor(span / hours_per_frame(o) + 1e-6)) + 1
+
+
+static func _fps(o: Dictionary) -> int:
+	return maxi(1, int(o.get("fps", 30)))
+
+
+static func analemma_dps(o: Dictionary) -> float:
+	return clampf(float(o.get("analemma_days_per_second", 30.4375)), 0.01, 100000.0)
+
+
+## The calendar day (0 = the range's first) analemma frame i shows. Below the
+## frame rate a day repeats over several frames; above it days are skipped
+## (the export still steps through them, so the figure gets every day).
+static func analemma_day_of_frame(o: Dictionary, i: int) -> int:
+	var last := int(analemma_days_in(o)) - 1
+	return clampi(int(floor(float(i) * analemma_dps(o) / float(_fps(o)) + 1e-6)), 0, last)
+
+
+## The range an analemma export should cover: kept when it spans at least
+## ANALEMMA_MIN_DAYS, else widened to a year from the start day. Returns a
+## copy of `o` (unchanged when analemma is off).
+static func analemma_range(o: Dictionary) -> Dictionary:
+	var out := o.duplicate()
+	if int(out.get("analemma", 0)) <= 0:
+		return out
+	var s := float(out.get("start_abs", 0.0))
+	if float(out.get("end_abs", 0.0)) - s >= float(ANALEMMA_MIN_DAYS) * 24.0:
+		return out
+	out["end_abs"] = year_end(s)
+	return out
+
+
+## Noon of the last day of a year that starts on `start_abs`'s day (so the
+## export has exactly ANALEMMA_YEAR_DAYS frames at one day per frame).
+static func year_end(start_abs: float) -> float:
+	return (floorf(start_abs / 24.0) + float(ANALEMMA_YEAR_DAYS - 1)) * 24.0 + 12.0
+
+
+## The speed (sim-hours per second, or analemma days per second) that makes
+## the video `seconds` long. NAN when the range is empty.
+static func speed_for_length(o: Dictionary, seconds: float) -> float:
+	var fps := float(_fps(o))
+	var frames := maxf(roundf(seconds * fps), 2.0)
+	if int(o.get("analemma", 0)) > 0:
+		var last := analemma_days_in(o) - 1.0
+		if last <= 0.0:
+			return NAN
+		return clampf(last * fps / (frames - 1.0), 0.01, 100000.0)
+	var span := float(o.get("end_abs", 0.0)) - float(o.get("start_abs", 0.0))
+	if span <= 0.0:
+		return NAN
+	return clampf(span * fps / (frames - 1.0), 1e-5, MAX_RATE)
 
 
 ## Calendar days an analemma export covers (the start day through the end day).
@@ -199,8 +277,17 @@ static func video_seconds(o: Dictionary) -> float:
 static func frame_hours(o: Dictionary, i: int) -> float:
 	if int(o.get("analemma", 0)) > 0:
 		var d0 := floorf(float(o.get("start_abs", 0.0)) / 24.0)
-		return (d0 + float(i * maxi(1, int(o.get("analemma_days", 1))))) * 24.0 + 12.0
+		return (d0 + float(analemma_day_of_frame(o, i))) * 24.0 + 12.0
 	return float(o.get("start_abs", 0.0)) + float(i) * hours_per_frame(o)
+
+
+## Index into ANALEMMA_PRESETS matching `dps`, else -1.
+static func analemma_preset_for(dps: float) -> int:
+	for i in ANALEMMA_PRESETS.size():
+		var r := float(ANALEMMA_PRESETS[i][1])
+		if absf(r - dps) <= r * 0.01:
+			return i
+	return -1
 
 
 ## Index into TIME_PRESETS whose rate is closest to `h_per_s`, else -1.
@@ -272,7 +359,7 @@ static func span_label(hours: float) -> String:
 # --- remembered choices -------------------------------------------------------
 
 const _PERSIST_KEYS := ["hours_per_second", "fps", "width", "height", "folder", "quality",
-	"shadows", "msaa", "taa", "settle_frames", "timecode", "crf", "analemma", "analemma_days",
+	"shadows", "msaa", "taa", "settle_frames", "timecode", "crf", "analemma", "analemma_days_per_second",
 	"clouds", "star_trails", "follow"]
 
 

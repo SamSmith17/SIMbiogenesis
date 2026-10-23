@@ -25,7 +25,8 @@ var _prev := {}
 var _night_start := NAN
 var _ref_sky := Basis.IDENTITY
 var _ref_set := false
-var _ana_frame := -1
+var _ana_day := -1        # analemma day the clock is on (-1 = before the first)
+var _ana_h := NAN         # the instant that day shows
 
 
 func _init(o: Dictionary = {}) -> void:
@@ -45,7 +46,8 @@ func clock_claim_values() -> Dictionary:
 func begin(main: Node) -> void:
 	_night_start = NAN
 	_ref_set = false
-	_ana_frame = -1
+	_ana_day = -1
+	_ana_h = NAN
 	if main == null:
 		return
 	if not bool(opts.get("clouds", true)) and "clear_sky_override" in main:
@@ -62,14 +64,18 @@ func begin(main: Node) -> void:
 
 ## Put the world at frame i's instant. Returns that instant (absolute hours).
 ## Analemma frames must be asked for in order (0, 1, 2 …); restart() goes
-## back to the first.
+## back to the first. The game's own analemma stepper walks EVERY day up to
+## the frame's (≤ 7 a call), so the figure on the sky is whole however fast
+## the video plays; a frame that shows the same day as the last one does not
+## step at all.
 func place(main: Node, i: int) -> float:
 	if analemma() > 0 and main != null and main.has_method("analemma_export_step"):
-		var h := NAN
-		while _ana_frame < i:
-			var days := 1 if _ana_frame < 0 else int(opts.get("analemma_days", 1))
-			h = float(main.call("analemma_export_step", days))
-			_ana_frame += 1
+		var target := ClimelapseExportOptions.analemma_day_of_frame(opts, i)
+		while _ana_day < target:
+			var step := mini(target - _ana_day, 7)
+			_ana_h = float(main.call("analemma_export_step", step))
+			_ana_day += step
+		var h := _ana_h
 		if is_nan(h) and main.has_method("get_absolute_hours"):
 			h = float(main.call("get_absolute_hours"))
 		_after_place(main, h)
@@ -90,7 +96,8 @@ func place_at(main: Node, abs_h: float) -> void:
 func restart(main: Node) -> void:
 	_night_start = NAN
 	_ref_set = false
-	_ana_frame = -1
+	_ana_day = -1
+	_ana_h = NAN
 	if analemma() > 0 and main != null and main.has_method("analemma_export_begin"):
 		main.call("analemma_export_begin", float(opts.get("start_abs", 0.0)), analemma() - 1)
 
