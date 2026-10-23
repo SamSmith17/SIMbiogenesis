@@ -47,6 +47,10 @@ func evaluate(context: Dictionary) -> bool:
 	while target_time >= 24.0:
 		target_time -= 24.0
 	
+	# The engine's sim clock: fire when the target is crossed since the last
+	# evaluation (AutomationSim.crossed); else the window below.
+	if context.has("abs_hours") and context.has("prev_abs_hours"):
+		return AutomationSim.crossed(target_time, float(context["prev_abs_hours"]), float(context["abs_hours"]))
 	# Check if current time is within tolerance
 	var tolerance_hours := tolerance_minutes / 60.0
 	var diff := absf(current_time - target_time)

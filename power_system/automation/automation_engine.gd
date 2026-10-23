@@ -36,6 +36,12 @@ var _context : Dictionary = {}
 ## Reference to main scene (for time data)
 var _main_node : Node = null
 
+## The sim clock (absolute hours) at the previous evaluation: time and sun
+## triggers fire when their clock time is CROSSED between two evaluations,
+## the same rule AutomationSim uses inside a simulated run. At 60× one
+## evaluation spans six sim-minutes; the old ±1 min window stepped over it.
+var _prev_abs_h : float = NAN
+
 func _ready() -> void:
 	set_process(true)
 
@@ -91,6 +97,18 @@ func _update_context() -> void:
 			_context["day"] = int(_main_node.day)
 		if "time_scale" in _main_node:
 			_context["time_scale"] = float(_main_node.time_scale)
+		if _main_node.has_method("get_absolute_hours"):
+			var now_h := float(_main_node.call("get_absolute_hours"))
+			# A jump (scrub, load, date change) is not a crossing.
+			var prev := _prev_abs_h
+			if is_nan(prev) or now_h < prev or now_h - prev > 2.0:
+				prev = now_h
+			_context["prev_abs_hours"] = prev
+			_context["abs_hours"] = now_h
+			# `for` durations run on the sim clock, not real seconds.
+			_context["sim_seconds"] = now_h * 3600.0
+			_context["weekday"] = AutomationSim.weekday_of(now_h)
+			_prev_abs_h = now_h
 		
 		# Get calculated sunrise/sunset from main.gd (based on latitude, date, axial tilt)
 		if "sunrise_hour" in _main_node:
@@ -141,12 +159,14 @@ func _update_context() -> void:
 				battery_capacity = float(solar_ui.BATTERY_CAPACITY_KWH)
 			_context["battery_percent"] = (battery_kwh / battery_capacity) * 100.0
 			numeric_values["sensor.battery_level"] = _context["battery_percent"]
+		# In WATTS, as the inspector's signal picker labels them ("Solar
+		# power (W)"); they were filled in kW, so a 500 W threshold never hit.
 		if "current_solar_kw" in solar_ui:
 			_context["solar_power_kw"] = solar_ui.current_solar_kw
-			numeric_values["sensor.solar_power"] = _context["solar_power_kw"]
+			numeric_values["sensor.solar_power"] = float(solar_ui.current_solar_kw) * 1000.0
 		if "current_load_kw" in solar_ui:
 			_context["load_power_kw"] = solar_ui.current_load_kw
-			numeric_values["sensor.load_power"] = _context["load_power_kw"]
+			numeric_values["sensor.load_power"] = float(solar_ui.current_load_kw) * 1000.0
 			# Total AC output in watts for overload-style numeric triggers
 			numeric_values["sensor.total_ac_load"] = solar_ui.current_load_kw * 1000.0
 

@@ -32,7 +32,7 @@ func evaluate(context: Dictionary) -> bool:
 	var device_states : Dictionary = context.get("device_states", {})
 	
 	var current_state : String = device_states.get(entity_id, "unknown")
-	var game_time : float = context.get("game_time", 0.0)
+	var game_time : float = context.get("sim_seconds", context.get("game_time", 0.0))  # `for` on the sim clock
 	
 	# Check if state matches target
 	var state_matches := false

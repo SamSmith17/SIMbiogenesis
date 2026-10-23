@@ -139,17 +139,25 @@ func _begin_sims() -> void:
 	if _observed != null and _observed.has("load_kw"):
 		plans.append(["real_load", "Sim · real loads", ExperimentEvaluator.LOAD_OBSERVED])
 	for p in plans:
+		# Each sim gets its own copy of the graph, with the graph's automations
+		# switching its loads in sim time (ExperimentWorld).
+		var w := ExperimentWorld.from_live(_model as GraphModel, _solar_ui, _clock)
+		w.observed = _observed
+		w.load_mode = str(p[2])
+		w.aux_mode = aux_mode
 		var r := ExperimentEnergyRun.new()
 		r.floor_pct = float(bat["floor_pct"])
 		r.resume_pct = float(bat["resume_pct"])
 		r.ceff = float(bat["ceff"])
 		r.deff = float(bat["deff"])
-		r.configure(_span.x, _span.y, _step, float(bat["cap_kwh"]), start_soc,
-			ExperimentEvaluator.current_world(_solar_ui, _model, _observed, str(p[2]), aux_mode))
+		r.configure(_span.x, _span.y, _step, float(bat["cap_kwh"]), start_soc, w.inputs_at)
+		if str(p[2]) == ExperimentEvaluator.LOAD_MODEL:
+			r.before_step = w.before_step
 		r.series.label = str(p[1])
 		if aux_mode == ExperimentEvaluator.AUX_HELD:
 			r.series.notes["aux_kw"] = "hydro / wind held at today's rate"
-		_runs.append({"id": str(p[0]), "label": str(p[1]), "run": r, "load_mode": str(p[2])})
+		_runs.append({"id": str(p[0]), "label": str(p[1]), "run": r, "load_mode": str(p[2]),
+			"world": w})
 	set_process(true)
 
 
@@ -184,9 +192,13 @@ func _finish() -> void:
 	for e in _runs:
 		var r: ExperimentEnergyRun = e["run"]
 		var cal := ExperimentScore.calibration(_observed, r.series) if _observed != null else {}
+		var w: ExperimentWorld = e["world"]
+		var used_autos := str(e["load_mode"]) == ExperimentEvaluator.LOAD_MODEL
 		sims.append({"id": e["id"], "label": e["label"], "series": r.series,
 			"energy": ExperimentScore.energy(r.series), "calibration": cal,
-			"load_mode": e["load_mode"]})
+			"load_mode": e["load_mode"],
+			"automation_rules": w.automations.rules.size() if used_autos else 0,
+			"automation_log": w.automations.log if used_autos else []})
 	finished.emit({"span": _span, "step_h": _step, "observed": _observed,
 		"observed_energy": ExperimentScore.energy(_observed) if _observed != null else {},
 		"sims": sims, "report": _report})

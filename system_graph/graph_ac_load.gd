@@ -20,6 +20,21 @@ const SWITCHED_CIRCUIT_TYPES: Array[String] = ["shelly4pm", "spiderbox", "breake
 static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 	if model == null or tree == null:
 		return 0.0
+	return _compute_watts(model, tree, _find_sim_load_host(tree), -1)
+
+
+## The same reading with no scene at all — for a model that is not the live
+## one (an experiment's copy): every load's on / off comes from its own specs
+## (requested / current state), scene devices draw their rated watts, the AC
+## bus is assumed on (the caller sheds load itself), and wire losses are
+## counted when `losses_on`.
+static func compute_watts_offline(model: GraphModel, losses_on: bool) -> float:
+	if model == null:
+		return 0.0
+	return _compute_watts(model, null, null, 1 if losses_on else 0)
+
+
+static func _compute_watts(model: GraphModel, tree: SceneTree, sim_host: Node, losses: int) -> float:
 	# Flatten super-node (compound) portals once: AC reachability then tunnels
 	# through generic groups at any depth, while opaque load-group compounds stay
 	# nodes (summed via sum_load_group_watts). Computed once, threaded down.
@@ -29,7 +44,6 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 	var reachable := _reachable_ac_load_ids(model, flat)
 	if reachable.is_empty():
 		return 0.0
-	var sim_host := _find_sim_load_host(tree)
 	var total := 0.0
 	for iid: String in reachable.keys():
 		var item: Dictionary = model.get_item(iid)
@@ -42,7 +56,7 @@ static func compute_watts(model: GraphModel, tree: SceneTree) -> float:
 				total += sum_load_group_watts(model, item, tree, sim_host)
 				continue
 		total += _item_draw_watts(iid, item, tree, sim_host, model)
-	total += connection_losses_watts(model, tree, sim_host, flat)
+	total += connection_losses_watts(model, tree, sim_host, flat, losses)
 	return maxf(0.0, total)
 
 
@@ -88,8 +102,9 @@ static func losses_enabled(tree: SceneTree) -> bool:
 ## the connection dicts (no update_connection — avoids signal churn, same
 ## pattern as resource_flow_engine's flow_rate writeback).
 static func connection_losses_watts(model: GraphModel, tree: SceneTree,
-		sim_host: Node = null, flat_conns: Array = []) -> float:
-	var global_on := losses_enabled(tree)
+		sim_host: Node = null, flat_conns: Array = [], losses: int = -1) -> float:
+	# losses: -1 = the player's setting, 0 / 1 = forced (an offline model).
+	var global_on := losses_enabled(tree) if losses < 0 else losses == 1
 	if flat_conns.is_empty():
 		flat_conns = GraphNesting.flat_connections(model)
 	var total := 0.0

@@ -46,6 +46,8 @@ var _legend: HBoxContainer = null
 var _chart: ExperimentCompareChart = null
 var _table: GridContainer = null
 var _days: GridContainer = null
+var _autos_header: SectionHeader = null
+var _autos: GridContainer = null
 
 
 func open_on(main: Node, selection: Vector2) -> void:
@@ -130,6 +132,14 @@ func _build() -> void:
 	_days.add_theme_constant_override("h_separation", 18)
 	_days.add_theme_constant_override("v_separation", 3)
 	b.add_child(_days)
+
+	_autos_header = SectionHeader.make("Automations in the sim", "workflow")
+	b.add_child(_autos_header)
+	_autos = GridContainer.new()
+	_autos.columns = 3
+	_autos.add_theme_constant_override("h_separation", 18)
+	_autos.add_theme_constant_override("v_separation", 3)
+	b.add_child(_autos)
 
 	_frame.add_button("Close", ModalFrame.SECONDARY, _frame.close)
 	_run_btn = _frame.add_button("Run comparison", ModalFrame.PRIMARY, _on_run)
@@ -282,7 +292,13 @@ func _show_result(res: Dictionary) -> void:
 		var s0: ExperimentSeries = sims[0]["series"]
 		if s0.notes.has("aux_kw"):
 			notes.append("Hydro / wind: %s (no real readings linked)." % str(s0.notes["aux_kw"]))
-		notes.append("Model loads are the graph's loads as they are switched now; automations do not switch them inside the sim yet.")
+		var nrules := int(sims[0].get("automation_rules", 0))
+		var nfired := (sims[0].get("automation_log", []) as Array).size()
+		if nrules > 0:
+			notes.append("Model loads start as switched now and follow this world's %s (%s in the span)." % [
+				UiText.count(nrules, "automation"), UiText.count(nfired, "switch", "switches")])
+		else:
+			notes.append("Model loads are the graph's loads as they are switched now (this world has no automations).")
 	_notes.text = "\n".join(notes)
 	_notes.visible = not notes.is_empty()
 	# Chart.
@@ -299,6 +315,7 @@ func _show_result(res: Dictionary) -> void:
 	_chart.set_data(items, span, _clock())
 	_fill_table(obs, sims)
 	_fill_days(obs, sims)
+	_fill_autos(sims)
 
 
 func _fill_table(obs: ExperimentSeries, sims: Array) -> void:
@@ -380,6 +397,36 @@ func _fill_days(obs: ExperimentSeries, sims: Array) -> void:
 		var cov := float(dd.get("obs_cov_solar_kw", dd.get("obs_cov_load_kw", NAN)))
 		_cell(_days, UiText.pct(cov) if not is_nan(cov) else "—", false,
 			UITheme.C_TEXT_M if is_nan(cov) or cov >= 0.95 else UITheme.C_WARN)
+
+
+## What the world's automations switched in the model-loads sim.
+func _fill_autos(sims: Array) -> void:
+	for c in _autos.get_children():
+		c.queue_free()
+	var lg: Array = []
+	for sm in sims:
+		if str(sm.get("load_mode", "")) == ExperimentEvaluator.LOAD_MODEL:
+			lg = sm.get("automation_log", [])
+	_autos_header.visible = not lg.is_empty()
+	_autos.visible = not lg.is_empty()
+	var clock := _clock()
+	var names := {}
+	var gv := _main.find_child("SystemGraphView", true, false) if _main != null else null
+	var m: Object = gv.get("model") if gv != null else null
+	var shown := 0
+	for e in lg:
+		if shown >= 40:
+			_cell(_autos, "… and %s more" % UiText.count(lg.size() - shown, "switch", "switches"), false, UITheme.C_TEXT_M)
+			break
+		var iid := str(e["item_id"])
+		if not names.has(iid):
+			var it: Dictionary = m.call("get_item", iid) if m != null else {}
+			names[iid] = str((it.get("specs", {}) as Dictionary).get("name", iid)) if not it.is_empty() else iid
+		_cell(_autos, SiteTime.format_abs(clock, float(e["t"])) if clock != null else "")
+		_cell(_autos, "%s %s" % [str(names[iid]), {"turn_on": "on", "turn_off": "off", "toggle": "toggled"}.get(str(e["command"]), str(e["command"]))],
+			false, UITheme.C_OK if str(e["command"]) == "turn_on" else UITheme.C_TEXT)
+		_cell(_autos, str(e["alias"]), false, UITheme.C_TEXT_S)
+		shown += 1
 
 
 # --- small helpers ----------------------------------------------------------------

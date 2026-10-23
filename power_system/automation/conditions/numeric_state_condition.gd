@@ -39,11 +39,11 @@ func evaluate(context: Dictionary) -> bool:
 		elif entity_id == "sensor.solar_power":
 			var solar_kw : float = context.get("solar_power_kw", -1.0)
 			if solar_kw >= 0.0:
-				numeric_values[key] = solar_kw
+				numeric_values[key] = solar_kw * 1000.0   # W, as labelled
 		elif entity_id == "sensor.load_power":
 			var load_kw : float = context.get("load_power_kw", -1.0)
 			if load_kw >= 0.0:
-				numeric_values[key] = load_kw
+				numeric_values[key] = load_kw * 1000.0   # W, as labelled
 	
 	if not numeric_values.has(key):
 		return false

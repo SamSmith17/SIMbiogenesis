@@ -45,7 +45,7 @@ func evaluate(context: Dictionary) -> bool:
 		return false
 	
 	var value : float = numeric_values[key]
-	var game_time : float = context.get("game_time", 0.0)
+	var game_time : float = context.get("sim_seconds", context.get("game_time", 0.0))  # `for` on the sim clock
 	
 	# Check if value is in range
 	var in_range := true

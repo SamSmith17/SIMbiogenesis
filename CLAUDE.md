@@ -1239,6 +1239,15 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.
 # incl. ASHRAE G14 NMBE by hand and a time shift failing CV(RMSE), and
 # HaHistoryFetch's link resolution + units. EXPECTED_CHECKS; --import first):
 Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.gd
+# Automations in sim time (offline — AutomationSim crossings incl. midnight,
+# the same switches at 1-min and 1-h steps, numeric edges + `for` in sim
+# seconds, delays, time / weekday / sun conditions, and ExperimentWorld: a
+# graph copy whose heater follows 18:00-on / 23:00-off through a real
+# GraphAcLoad reading while the live model never moves. EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script power_system/automation/automation_sim_selftest.gd
+# The LIVE engine at 2 sim-h per second (sandbox): an on / off time rule
+# pair on a graph load fires once each and the load follows; load W in W:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/automation_speed_probe.gd
 # The Compare window end to end (sandbox, fake HA): reality for the last 3
 # days MADE BY THE SIM and served as history → NMBE ≈ 0 (the hours line up,
 # W → kW); 25 % less real solar → not a match, sim 33 % high; the live world
@@ -5660,12 +5669,19 @@ lays it over what really happened, with error numbers.
   battery_soc_resume_pct) and its battery-full curtailment (raw_kw keeps what
   the array could make). Nothing live is touched: no clock claim, no model
   write, no SolarUI state (the probe pins user_rev, clock and battery).
-- **Evaluator** (`ExperimentEvaluator.current_world`): solar =
-  `SolarUI.evaluate_solar_pair_at` (public wrapper of `_evaluate_solar_pair`:
-  SPA + weather at the hour + panel shade + DC caps); load "model" = the
-  graph's AC load at the run's start, HELD (automations do not switch loads
-  inside a run yet — milestone 2) or "observed" = the real load replayed;
-  aux "held" (today's hydro / wind) or "observed".
+- **Each sim is an `ExperimentWorld`**: its OWN copy of the graph
+  (`GraphModel.deserialize(live.serialize())`; loads start as the player
+  REQUESTED them — the run sheds them itself), the graph's automations
+  running on it in sim time (`AutomationSim`, below, via
+  `ExperimentEnergyRun.before_step`), and the AC load read off the copy after
+  every switch (`GraphAcLoad.compute_watts_offline(model, losses_on)`: on /
+  off from specs, scene devices at rated watts, the AC bus assumed on, wire
+  losses as the player's setting). Solar = `SolarUI.evaluate_solar_pair_at`
+  (public wrapper of `_evaluate_solar_pair`: SPA + weather at the hour +
+  panel shade + DC caps). Load "model" or "observed" (the real load
+  replayed); aux "held" (today's hydro / wind) or "observed". Tank levels and
+  processor states are held from the start (resources join the run later).
+  The window lists what the automations switched ("Automations in the sim").
 - **Two sims per comparison** when the real load is known: model loads (the
   whole model on trial) and real loads (only solar + battery on trial).
   Both start from the real battery at the span's start.
@@ -5698,6 +5714,23 @@ lays it over what really happened, with error numbers.
   that is the point of reporting both.
 - `ExperimentCompareChart`: four lanes (battery %, solar, load, net), reality
   as a min–max band + mean, sims as lines, TimelineBinning bins, hover values.
+- **Automations in sim time** (`power_system/automation/automation_sim.gd`,
+  pure): evaluates each item's `specs.graph_automations` (the inspector's
+  cards) between two instants. Time / sun triggers fire when their clock time
+  is CROSSED in (t0, t1] (`AutomationSim.crossed`), numeric / state triggers
+  on entering their range after `for_seconds` of SIM time, conditions at t1,
+  `delay` defers the rest of the list (the rule ignores new triggers while
+  it waits — mode "single"); a numeric trigger already in range at the first
+  step fires, as the live engine's does. The same 1-min and 1-h steps give
+  the same switches (pinned).
+- **The live AutomationEngine follows the same rules now**: it puts
+  `prev_abs_hours` / `abs_hours` (a jump > 2 h or backwards is no crossing),
+  `sim_seconds` and `weekday` in the context; TimeTrigger / SunTrigger fire
+  on crossing (their ±1 / ±5 min window — stepped over at speed — is only the
+  fallback), numeric / state `for` counts sim seconds, and
+  `sensor.solar_power` / `sensor.load_power` are in W as the inspector labels
+  them (they were kW, so a W threshold never hit). Still open there:
+  `DelayAction` does nothing live (`update_delay` is never called).
 - ⚠ A Node that defines `_process` is processing from the start: the
   experiment "finished" on its first frame, before the history arrived, until
   `_ready` turned it off. Any new background stepper needs the same.

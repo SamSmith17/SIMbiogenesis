@@ -16,6 +16,11 @@ func get_platform() -> String:
 func evaluate(context: Dictionary) -> bool:
 	if not enabled:
 		return false
+	# The engine's sim clock: fire when at_hour is crossed since the last
+	# evaluation (exact at any clock speed; AutomationSim.crossed). The window
+	# below is the fallback for a context without the clock.
+	if context.has("abs_hours") and context.has("prev_abs_hours"):
+		return AutomationSim.crossed(at_hour, float(context["prev_abs_hours"]), float(context["abs_hours"]))
 	
 	var current_time : float = context.get("day_time", -1.0)
 	if current_time < 0.0:

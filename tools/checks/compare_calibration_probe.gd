@@ -53,10 +53,11 @@ func _reality(main: Node, a: float, b: float, step: float, solar_scale: float) -
 	var gv := ServiceLocator.graph()
 	var model: Object = gv.get("model") if gv != null else null
 	var bat := ExperimentEvaluator.battery_of(su)
-	var ev := ExperimentEvaluator.current_world(su, model, null, ExperimentEvaluator.LOAD_MODEL,
-		ExperimentEvaluator.AUX_HELD)
+	# The same world the Compare window builds: a graph copy whose own
+	# automations switch its loads.
+	var w := ExperimentWorld.from_live(model as GraphModel, su, main.get("clock"))
 	var scaled := func(t: float) -> Dictionary:
-		var d: Dictionary = ev.call(t)
+		var d: Dictionary = w.inputs_at(t)
 		d["solar_kw"] = float(d["solar_kw"]) * solar_scale
 		d["raw_kw"] = float(d["raw_kw"]) * solar_scale
 		return d
@@ -64,6 +65,7 @@ func _reality(main: Node, a: float, b: float, step: float, solar_scale: float) -
 	r.floor_pct = float(bat["floor_pct"])
 	r.resume_pct = float(bat["resume_pct"])
 	r.configure(a, b, step, float(bat["cap_kwh"]), 0.6 * float(bat["cap_kwh"]), scaled)
+	r.before_step = w.before_step
 	r.step_chunk(1000000)
 	var clock: Object = main.get("clock")
 	var soc_rows: Array = []
