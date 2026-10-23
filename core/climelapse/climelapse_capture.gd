@@ -1,8 +1,20 @@
 class_name ClimelapseCapture
 extends Node
 
-## Viewport frame capture for climelapse MP4 export (Phase 5).
-## Drives the simulation forward frame by frame directly and captures the viewport.
+## Video export: steps the world one frame at a time with the clock held,
+## renders each instant through its own camera into an off-screen viewport at
+## the chosen size, and streams the frames straight into ffmpeg
+## (ClimelapseFramePipe). Options come from ClimelapseExportOptions.
+##
+## What used to make every export black (2026-10-22): the 3D viewport hands
+## back RGB8 images, the timecode compositor built an RGBA8 frame, and
+## `Image.blit_rect` refuses mismatched formats — so every frame stayed
+## all-zero and ffmpeg encoded 45 s of black. The timecode is now a Label drawn
+## INSIDE the capture viewport, so a frame is one image straight off the GPU
+## with nothing composited on the CPU. The capture viewport also copies the
+## root viewport's AA / shadow-atlas settings and the player camera's
+## Environment / CameraAttributes, without which it rendered darker than the
+## game.
 
 signal capture_started()
 signal capture_progress(frac: float)
@@ -11,19 +23,23 @@ signal capture_complete(success: bool, output_path: String, message: String)
 ## Name this export holds the world clock under (see core/clock_claims.gd).
 const CLOCK_OWNER := "climelapse_export"
 const DEFAULT_FPS := 30
-const FRAMES_SUBDIR := "_clim_frames"
-
-## Safety net only — one hour of 30 fps video. The UI asks for confirmation long
-## before this, so hitting it means something is genuinely wrong with the range.
-const MAX_FRAMES := 108000
+## Frames rendered and thrown away before the first grab (shader compiles,
+## TAA history, volumetric fog, streaming).
+const WARMUP_FRAMES := 12
+## Extra frames after a graphics-quality change (the vegetation rebuilds).
+const QUALITY_SETTLE_FRAMES := 90
+const MAX_FRAMES := ClimelapseExportOptions.MAX_FRAMES
+const TIMECODE_BAR_FRAC := 0.048
 
 var _active := false
 var _cancel := false
 var _frac := 0.0
 var _frames_done := 0
 var _frames_total := 0
-## "capture" while stepping the sim, "encode" while ffmpeg runs, "" when idle.
+## "warmup", "capture", "encode" — "" when idle.
 var _phase := ""
+var _svp: SubViewport = null
+var _opts: Dictionary = {}
 
 
 func is_active() -> bool:
@@ -46,323 +62,296 @@ func get_phase() -> String:
 	return _phase
 
 
+func get_options() -> Dictionary:
+	return _opts
+
+
+## The export viewport's live texture (for a preview in the progress window),
+## or null when no export is running.
+func get_preview_texture() -> Texture2D:
+	return _svp.get_texture() if is_instance_valid(_svp) else null
+
+
 func cancel() -> void:
 	_cancel = true
 
 
-## Sim-hours advanced per exported frame. `time_scale` is the world clock's
-## sim-hours-per-real-second, so a 30 fps export of a "450×" (0.125 h/s) session
-## walks 0.125/30 h per frame — the video plays back at exactly the speed the
-## player had selected.
+## Old API kept for callers that think in "world speed": sim-hours per real
+## second at 1 video second per real second.
 static func hours_per_frame(time_scale: float, fps: int) -> float:
 	return time_scale / float(maxi(1, fps))
 
 
-## Frame count an export of this range would produce. Pure — the UI calls it to
-## show the estimate (and the confirmation prompt) BEFORE anything starts.
 static func frames_for(start_abs: float, end_abs: float, time_scale: float, fps: int = DEFAULT_FPS) -> int:
-	if time_scale <= 0.0 or end_abs <= start_abs:
-		return 0
-	return maxi(1, int(ceil((end_abs - start_abs) / hours_per_frame(time_scale, fps))))
+	return ClimelapseExportOptions.frame_count({"start_abs": start_abs, "end_abs": end_abs,
+		"hours_per_second": time_scale, "fps": fps})
 
 
-func start_capture(loader: Node, start_abs: float, end_abs: float, time_scale: float, output_mp4: String,
-		camera: ClimelapseCameraRig, fps: int = DEFAULT_FPS) -> void:
+func start_capture(loader: Node, opts_in: Dictionary, camera: ClimelapseCameraRig) -> void:
 	if _active:
 		return
-	if loader == null or output_mp4.is_empty():
-		capture_complete.emit(false, output_mp4, "No output path for the export.")
+	var opts := ClimelapseExportOptions.normalize(opts_in)
+	var out_mp4 := ClimelapseExportOptions.output_path(opts)
+	if loader == null or str(opts.get("folder", "")).is_empty():
+		capture_complete.emit(false, out_mp4, "No output folder for the export.")
 		return
-	if not camera.is_valid():
-		capture_complete.emit(false, output_mp4, "No active 3D camera to lock.")
+	if camera == null or not camera.is_valid():
+		capture_complete.emit(false, out_mp4, "No active 3D camera to lock.")
 		return
-	if time_scale <= 0.0:
-		capture_complete.emit(false, output_mp4, "Time scale must be > 0.")
+	var total := ClimelapseExportOptions.frame_count(opts)
+	if total <= 0:
+		capture_complete.emit(false, out_mp4, "Export range is empty.")
 		return
-	if end_abs <= start_abs:
-		capture_complete.emit(false, output_mp4, "Export range is empty.")
+	if total > MAX_FRAMES:
+		capture_complete.emit(false, out_mp4, "Export would need %s frames (%s of video). Pick a faster speed or a shorter range."
+			% [UiText.thousands(total), ClimelapseExportOptions.duration_label(ClimelapseExportOptions.video_seconds(opts))])
 		return
+	_opts = opts
 	_active = true
 	_cancel = false
 	_frac = 0.0
 	_frames_done = 0
-	_frames_total = frames_for(start_abs, end_abs, time_scale, fps)
-	_phase = "capture"
+	_frames_total = total
+	_phase = "warmup"
 	capture_started.emit()
-	_run_capture.call_deferred(loader, start_abs, end_abs, time_scale, output_mp4, camera, fps)
+	_run_capture.call_deferred(loader, opts, camera)
 
 
-func _run_capture(loader: Node, start_abs: float, end_abs: float, time_scale: float, output_mp4: String,
-		camera: ClimelapseCameraRig, fps: int) -> void:
+func _run_capture(loader: Node, opts: Dictionary, camera: ClimelapseCameraRig) -> void:
 	var tree := get_tree()
-	if tree == null:
-		_finish(false, output_mp4, "No scene tree.")
+	var out_mp4 := ClimelapseExportOptions.output_path(opts)
+	if tree == null or tree.current_scene == null:
+		_finish(false, out_mp4, "No active scene.")
 		return
 	var main := tree.current_scene
-	if main == null:
-		_finish(false, output_mp4, "No active scene.")
-		return
-
 	var cc := tree.root.get_node_or_null("CursorController")
 	if cc != null and cc.has_method("request_modal"):
 		cc.call("request_modal", "climelapse_capture")
 
-	# The export owns the clock for its duration: this loop places every frame's
-	# instant by hand, so BOTH continuous playback (time_scale) and the analemma
-	# stepper (a calendar day per rendered frame) have to be off. Leaving
-	# analemma_mode on is what used to make an export "just play at ∞ speed".
-	# One EXCLUSIVE claim carrying BOTH values — they are a pair here, and a
-	# claim cannot half-restore the way two private "prev_" fields could. While
-	# it is held, a UI speed change or another subsystem's claim is a logged
-	# no-op. Released on every exit path via _restore_world().
+	# The export owns the clock: this loop places every frame's instant by hand,
+	# so continuous playback (time_scale) and the analemma stepper both stay off,
+	# under ONE exclusive claim carrying both. Released on every exit path via
+	# _restore_world().
 	var claimed := false
 	if main.has_method("push_clock_claim"):
 		claimed = bool(main.call("push_clock_claim", CLOCK_OWNER,
 			{"time_scale": 0.0, "analemma_mode": false}, true))
-	var prev_scale: Variant = null
-	var prev_analemma: Variant = null
+	var prev := {}
 	if not claimed:
-		# Fallback for a Main without the claim API (older save/scene shells).
-		prev_scale = main.get("time_scale") if "time_scale" in main else null
-		prev_analemma = main.get("analemma_mode") if "analemma_mode" in main else null
-		if prev_scale != null:
+		if "time_scale" in main:
+			prev["time_scale"] = main.get("time_scale")
 			main.set("time_scale", 0.0)
-		if prev_analemma != null:
+		if "analemma_mode" in main:
+			prev["analemma_mode"] = main.get("analemma_mode")
 			main.set("analemma_mode", false)
 
-	var h_per_frame := hours_per_frame(time_scale, fps)
-	var total := maxi(1, _frames_total if _frames_total > 0 else frames_for(start_abs, end_abs, time_scale, fps))
-	_frames_total = total
-	if total > MAX_FRAMES:
-		_restore_world(main, cc, prev_scale, prev_analemma)
-		_finish(false, output_mp4, "Export would need %s frames (%s of video). Pick a faster speed or a shorter range."
-			% [_thousands(total), _duration_label(total, fps)])
-		return
+	# Render settings for the export only; put back by _restore_world.
+	var settle_extra := 0
+	if int(opts["quality"]) >= 0 and main.has_method("get_graphics_quality_level") \
+			and int(main.call("get_graphics_quality_level")) != int(opts["quality"]):
+		prev["quality"] = int(main.call("get_graphics_quality_level"))
+		main.call("set_graphics_quality_level", int(opts["quality"]))
+		settle_extra = QUALITY_SETTLE_FRAMES
+	if int(opts["shadows"]) >= 0 and main.has_method("get_shadow_quality_level") \
+			and int(main.call("get_shadow_quality_level")) != int(opts["shadows"]):
+		prev["shadows"] = int(main.call("get_shadow_quality_level"))
+		main.call("set_shadow_quality_level", int(opts["shadows"]))
 
-	var composer := ClimelapseFrameCompose.new()
-	tree.root.add_child(composer)
-
-	# Use a SubViewport to capture a clean 3D frame without the 2D UI
+	# The game window stops drawing the 3D world while the export runs (the
+	# progress window shows the export's own picture), so the GPU renders the
+	# world once per step, not twice.
 	var root_vp := tree.root.get_viewport()
-	var svp := SubViewport.new()
-	svp.size = root_vp.size
-	svp.world_3d = root_vp.world_3d
-	svp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	svp.transparent_bg = false
-	main.add_child(svp)
+	prev["root_disable_3d"] = root_vp.disable_3d
+	root_vp.disable_3d = true
 
-	var lock_cam: Camera3D = camera.call("spawn_lock_camera", svp)
+	var svp := _make_viewport(root_vp, opts)
+	_svp = svp
+	main.add_child(svp)
+	var lock_cam: Camera3D = camera.spawn_lock_camera(svp)
+	var tc_label := _make_timecode(svp, opts)
 	if loader.has_method("begin_climelapse_export_cull"):
 		loader.call("begin_climelapse_export_cull", lock_cam)
 
-	var out_dir := output_mp4.get_base_dir()
-	var frames_dir := out_dir.path_join(FRAMES_SUBDIR)
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(frames_dir))
-	# Clear stale PNGs first: ffmpeg encodes the whole frame_%05d sequence found
-	# on disk, so leftovers from a longer earlier (or cancelled) run would be
-	# appended to this video.
-	_erase_frames(frames_dir)
+	var pipe := ClimelapseFramePipe.new()
+	var open_err := pipe.open(ClimelapseVideoEncoder.find_ffmpeg(), opts, out_mp4)
+	if not open_err.is_empty():
+		_teardown(loader, svp, lock_cam)
+		_restore_world(main, cc, prev)
+		_finish(false, out_mp4, open_err)
+		return
 
+	var total := _frames_total
 	var manifest: Array = []
-	var clock := CelestialClock.new()
+	var start_abs := float(opts["start_abs"])
+	var end_abs := float(opts["end_abs"])
+	var settle := int(opts["settle_frames"])
+	var reason := ""
 
 	for i in total:
 		if _cancel:
 			break
-
-		_frames_done = i
-		_frac = float(i) / float(total)
-		capture_progress.emit(_frac)
-
-		var abs_h = start_abs + i * h_per_frame
-		if main.has_method("set_absolute_hours"):
-			main.call("set_absolute_hours", abs_h)
-
-		# Step physics so vegetation growth catches up
+		var abs_h := minf(ClimelapseExportOptions.frame_hours(opts, i), end_abs)
+		main.call("set_absolute_hours", abs_h)
 		if loader.has_method("_push_growth_year"):
 			loader.call("_push_growth_year")
+		# Pose the camera BEFORE the render waits — posing it afterwards grabbed
+		# the texture drawn from the previous frame's pose.
+		var t_norm := 0.0 if total <= 1 else float(i) / float(total - 1)
+		var pose := camera.pose_at(abs_h, t_norm)
+		lock_cam.transform = pose.get("xform", camera.global_xform)
+		lock_cam.fov = float(pose.get("fov", camera.fov))
+		if tc_label != null:
+			tc_label.text = ClimelapseExportOptions.timecode_at(abs_h)
 
-		# Pose the camera BEFORE the render waits — setting it afterwards
-		# captured the texture drawn from the PREVIOUS frame's pose, so a moving
-		# hyperlapse lagged its path by one frame.
-		var t_path := 0.0 if total <= 1 else float(i) / float(total - 1)
-		if camera.has_path():
-			lock_cam.global_transform = camera.interpolate_at(t_path)
-		else:
-			lock_cam.global_transform = camera.global_xform
-
-		await tree.process_frame
+		var waits := settle
+		if i == 0:
+			_phase = "warmup"
+			waits = maxi(settle, WARMUP_FRAMES) + settle_extra
+		for _w in waits:
+			await tree.process_frame
 		await RenderingServer.frame_post_draw
+		_phase = "capture"
+		if _cancel:
+			break
 
-		var tex := svp.get_texture()
-		if tex != null:
-			var img := tex.get_image()
-			if img != null and not img.is_empty():
-				var dt: Dictionary = clock.abs_hours_to_date(abs_h)
-				var tc := ClimelapseFrameCompose.format_timecode(
-					int(dt.get("year", 1)),
-					int(dt.get("month", 1)),
-					int(dt.get("day", 1)),
-					fmod(abs_h, 24.0))
-				img = await composer.stamp_async(img, tc)
-				var frame_path := frames_dir.path_join("frame_%05d.png" % i)
-				img.save_png(frame_path)
-				manifest.append({
-					"index": i,
-					"abs_h": abs_h,
-					"year": dt.get("year", 0),
-					"month": dt.get("month", 1),
-					"day": dt.get("day", 1),
-					"timecode": tc,
-				})
+		var img := svp.get_texture().get_image()
+		if img == null or img.is_empty():
+			reason = "The export viewport returned no image at frame %d." % i
+			break
+		if img.get_format() != Image.FORMAT_RGB8:
+			img.convert(Image.FORMAT_RGB8)
+		while pipe.queued() >= ClimelapseFramePipe.MAX_QUEUE and not pipe.failed():
+			await tree.process_frame
+		if not pipe.push(img):
+			reason = "ffmpeg stopped taking frames at frame %d." % i
+			break
+		manifest.append({"index": i, "abs_h": abs_h})
+		_frames_done = i + 1
+		_frac = float(_frames_done) / float(total) * 0.97
+		capture_progress.emit(_frac)
 
 	if loader.has_method("end_climelapse_export_cull"):
 		loader.call("end_climelapse_export_cull")
+	_phase = "encode"
+	capture_progress.emit(_frac)
 
-	if lock_cam != null and is_instance_valid(lock_cam):
-		lock_cam.queue_free()
+	if _cancel or not reason.is_empty():
+		await pipe.abort(tree)
+		_teardown(loader, svp, lock_cam)
+		_restore_world(main, cc, prev)
+		_finish(false, out_mp4, "Export cancelled." if reason.is_empty() else reason)
+		return
+
+	var res: Dictionary = await pipe.close(tree)
+	_teardown(loader, svp, lock_cam)
+	_restore_world(main, cc, prev)
+	_write_manifest(out_mp4, opts, camera, manifest)
+	if bool(res.get("ok", false)):
+		_finish(true, out_mp4, "Saved %s (%s, %s at %d fps, %d × %d)" % [out_mp4,
+			UiText.count(manifest.size(), "frame"),
+			ClimelapseExportOptions.duration_label(float(manifest.size()) / float(int(opts["fps"]))),
+			int(opts["fps"]), int(opts["width"]), int(opts["height"])])
+	else:
+		_finish(false, out_mp4, str(res.get("reason", "encode failed")))
+
+
+func _make_viewport(root_vp: Viewport, opts: Dictionary) -> SubViewport:
+	var svp := SubViewport.new()
+	svp.name = "ClimelapseExportViewport"
+	svp.size = Vector2i(int(opts["width"]), int(opts["height"]))
+	svp.world_3d = root_vp.world_3d
+	svp.own_world_3d = false
+	svp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	svp.transparent_bg = false
+	var msaa := int(opts["msaa"])
+	match msaa:
+		-1: svp.msaa_3d = root_vp.msaa_3d
+		0: svp.msaa_3d = Viewport.MSAA_DISABLED
+		2: svp.msaa_3d = Viewport.MSAA_2X
+		4: svp.msaa_3d = Viewport.MSAA_4X
+		8: svp.msaa_3d = Viewport.MSAA_8X
+	var taa := int(opts["taa"])
+	svp.use_taa = root_vp.use_taa if taa < 0 else taa == 1
+	svp.screen_space_aa = root_vp.screen_space_aa
+	svp.use_debanding = root_vp.use_debanding
+	svp.scaling_3d_mode = root_vp.scaling_3d_mode
+	svp.scaling_3d_scale = root_vp.scaling_3d_scale
+	svp.fsr_sharpness = root_vp.fsr_sharpness
+	svp.positional_shadow_atlas_size = maxi(root_vp.positional_shadow_atlas_size, 4096)
+	svp.mesh_lod_threshold = root_vp.mesh_lod_threshold
+	svp.use_occlusion_culling = root_vp.use_occlusion_culling
+	svp.texture_mipmap_bias = root_vp.texture_mipmap_bias
+	return svp
+
+
+## The date/time strip, drawn by the capture viewport itself.
+func _make_timecode(svp: SubViewport, opts: Dictionary) -> Label:
+	if not bool(opts.get("timecode", true)):
+		return null
+	var h := maxf(18.0, float(int(opts["height"])) * TIMECODE_BAR_FRAC)
+	var layer := CanvasLayer.new()
+	svp.add_child(layer)
+	var bar := ColorRect.new()
+	bar.color = Color(0, 0, 0, 0.62)
+	bar.position = Vector2(0.0, float(int(opts["height"])) - h)
+	bar.size = Vector2(float(int(opts["width"])), h)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(bar)
+	var lbl := Label.new()
+	lbl.position = bar.position
+	lbl.size = bar.size
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.add_theme_font_size_override("font_size", int(h * 0.58))
+	lbl.add_theme_font_override("font", UITheme.font("semibold", true))
+	layer.add_child(lbl)
+	return lbl
+
+
+func _teardown(_loader: Node, svp: SubViewport, cam: Camera3D) -> void:
+	if cam != null and is_instance_valid(cam):
+		cam.queue_free()
 	if svp != null and is_instance_valid(svp):
 		svp.queue_free()
+	_svp = null
 
 
-	if is_instance_valid(composer):
-		composer.queue_free()
-
-	_restore_world(main, cc, prev_scale, prev_analemma)
-
-	if _cancel:
-		_finish(false, output_mp4, "Export cancelled — %s left at %s (cleared by the next export)"
-			% [UiText.count(manifest.size(), "partial frame"), frames_dir])
-		return
-	if manifest.is_empty():
-		_finish(false, output_mp4, "No frames captured.")
-		return
-
-	_frames_done = manifest.size()
-	_phase = "encode"
-	_frac = 0.95
-	capture_progress.emit(_frac)
-	var enc: Dictionary = ClimelapseVideoEncoder.encode_png_sequence(frames_dir, fps, output_mp4)
-	_write_manifest(out_dir, output_mp4, start_abs, end_abs, camera, fps, manifest)
-
-	if bool(enc.get("ok", false)):
-		_cleanup_frames(frames_dir)
-		_finish(true, output_mp4, "Saved %s (%s @ %d fps)" % [output_mp4, UiText.count(manifest.size(), "frame"), fps])
-	else:
-		var msg := str(enc.get("reason", "encode failed"))
-		msg += "\nPNG frames kept at: %s" % frames_dir
-		_finish(false, output_mp4, msg)
-
-
-## Hand the clock back exactly as the export found it (playback speed + analemma
-## stepper) and release the cursor. Every exit path goes through here.
-func _restore_world(main: Node, cursor: Node, prev_scale: Variant, prev_analemma: Variant) -> void:
+## Hand back the clock, the render settings and the cursor exactly as found.
+## Every exit path goes through here.
+func _restore_world(main: Node, cursor: Node, prev: Dictionary) -> void:
+	var tree := get_tree()
+	if tree != null and prev.has("root_disable_3d"):
+		tree.root.get_viewport().disable_3d = bool(prev["root_disable_3d"])
 	if main != null and is_instance_valid(main):
 		# Idempotent, so running twice (or after the fallback path) is harmless.
 		if main.has_method("pop_clock_claim"):
 			main.call("pop_clock_claim", CLOCK_OWNER)
-		if prev_analemma != null:
-			main.set("analemma_mode", prev_analemma)
-		if prev_scale != null:
-			main.set("time_scale", prev_scale)
+		if prev.has("analemma_mode"):
+			main.set("analemma_mode", prev["analemma_mode"])
+		if prev.has("time_scale"):
+			main.set("time_scale", prev["time_scale"])
+		if prev.has("quality") and main.has_method("set_graphics_quality_level"):
+			main.call("set_graphics_quality_level", int(prev["quality"]))
+		if prev.has("shadows") and main.has_method("set_shadow_quality_level"):
+			main.call("set_shadow_quality_level", int(prev["shadows"]))
 	if cursor != null and is_instance_valid(cursor) and cursor.has_method("release_modal"):
 		cursor.call("release_modal", "climelapse_capture")
 
 
-static func _thousands(n: int) -> String:
-	var s := str(n)
-	var out := ""
-	var c := 0
-	for i in range(s.length() - 1, -1, -1):
-		out = s[i] + out
-		c += 1
-		if c % 3 == 0 and i > 0:
-			out = "," + out
-	return out
-
-
-## Playback length of an exported frame count, e.g. "2m 14s".
-static func _duration_label(frames: int, fps: int) -> String:
-	var secs := int(round(float(frames) / float(maxi(1, fps))))
-	if secs < 60:
-		return "%ds" % secs
-	return "%dm %02ds" % [secs / 60, secs % 60]
-
-
-static func _hide_all_ui(root: Node) -> Array:
-	var hidden: Array = []
-	_hide_ui_walk(root, hidden)
-	return hidden
-
-
-static func _hide_ui_walk(node: Node, hidden: Array) -> void:
-	if (node is CanvasLayer or node is Window) and node != node.get_tree().root:
-		if node.get("visible"):
-			hidden.append(node)
-			node.set("visible", false)
-	elif node is Control and node.get_parent() == node.get_tree().root:
-		if node.get("visible"):
-			hidden.append(node)
-			node.set("visible", false)
-	for child in node.get_children():
-		_hide_ui_walk(child, hidden)
-
-
-static func _hide_known_ui(hidden: Array) -> void:
-	for node in hidden:
-		if is_instance_valid(node):
-			node.set("visible", false)
-
-
-static func _restore_hidden_ui(hidden: Array) -> void:
-	for node in hidden:
-		if is_instance_valid(node):
-			node.set("visible", true)
-
-
-func _write_manifest(out_dir: String, mp4: String, start_abs: float, end_abs: float,
-		camera: ClimelapseCameraRig, fps: int, frames: Array) -> void:
-	var path_out: Array = []
-	for wp in camera.path:
-		if wp is Dictionary:
-			var p: Vector3 = (wp as Dictionary).get("pos", Vector3.ZERO)
-			path_out.append({
-				"pos": [p.x, p.y, p.z],
-				"yaw": float((wp as Dictionary).get("yaw", 0.0)),
-				"pitch": float((wp as Dictionary).get("pitch", 0.0)),
-			})
+func _write_manifest(mp4: String, opts: Dictionary, camera: ClimelapseCameraRig, frames: Array) -> void:
 	var doc := {
-		"version": 3,
-		"fps": fps,
-		"start_abs_h": start_abs,
-		"end_abs_h": end_abs,
+		"version": 4,
 		"mp4": mp4.get_file(),
+		"options": opts,
 		"camera_mode": camera.mode,
-		"drone_path": path_out,
-		"timecode_bar_px": ClimelapseFrameCompose.BAR_HEIGHT,
+		"keyframes": camera.keys.to_dict() if camera.has_keys() else {},
 		"frames": frames,
 	}
-	var mf := FileAccess.open(out_dir.path_join("manifest.json"), FileAccess.WRITE)
+	var path := mp4.get_basename() + ".manifest.json"
+	var mf := FileAccess.open(path, FileAccess.WRITE)
 	if mf != null:
 		mf.store_string(JSON.stringify(doc, "\t"))
-
-
-func _erase_frames(frames_dir: String) -> void:
-	var dir := DirAccess.open(frames_dir)
-	if dir == null:
-		return
-	dir.list_dir_begin()
-	var f := dir.get_next()
-	while f != "":
-		if not dir.current_is_dir() and f.ends_with(".png"):
-			dir.remove(f)
-		f = dir.get_next()
-	dir.list_dir_end()
-
-
-func _cleanup_frames(frames_dir: String) -> void:
-	_erase_frames(frames_dir)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(frames_dir))
 
 
 func _finish(ok: bool, path: String, message: String) -> void:

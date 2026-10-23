@@ -72,8 +72,9 @@ const SPEED_STEPS : Array = [
 ## (selected speed / CLIM_EXPORT_FPS) sim-hours per rendered frame, so the video
 ## plays back at exactly the speed shown on the bar.
 const CLIM_EXPORT_FPS := 30
-## Above this many frames the export asks for confirmation first (≈1 min video).
-const CLIM_CONFIRM_FRAMES := 1800
+const CLIM_EXPORT_DIALOG_SCRIPT := preload("res://scenes/ui/climelapse_export_dialog.gd")
+## Pixels either side of a keyframe diamond that still pick it.
+const CLIM_KEY_HIT_PX := 7.0
 
 const MOON_EMOJIS  : Array = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"]
 const MONTH_NAMES  : Array = ["Jan","Feb","Mar","Apr","May","Jun",
@@ -223,11 +224,17 @@ var _clim_progress_dialog : Window = null
 var _clim_progress_bar : ProgressBar = null
 var _clim_progress_lbl : Label = null
 var _clim_cancel_btn : Button = null
-var _clim_export_dialog : FileDialog = null
-var _clim_confirm_dialog : ConfirmationDialog = null
-var _pending_clim_export_start := NAN
-var _pending_clim_export_end := NAN
-var _pending_clim_export_path := ""
+var _clim_options_dialog : Node = null
+var _clim_preview_rect : TextureRect = null
+## Camera keyframe being dragged on the CLIM lane (index), -1 = none.
+var _clim_key_drag := -1
+var _clim_key_drag_moved := false
+## Screen rect of the CLIM sub-lane, cached by the draw for hit tests.
+var _clim_lane_rect := Rect2()
+var _clim_key_menu : PopupMenu = null
+var _clim_key_menu_idx := -1
+var _clim_key_menu_t := 0.0
+var _clim_key_drag_t := NAN
 ## Guards the one-shot completion toast (state_changed fires repeatedly).
 var _clim_last_reported_result := ""
 var _sunrise_lbl  : Label
@@ -242,6 +249,7 @@ const CLOCK_HOLD_LABELS := {
 	"csv_playback": "CSV playback",
 	"challenge_bake": "challenge bake",
 	"climelapse_export": "video export",
+	"climelapse_preview": "video preview",
 	"window_wall": "Window Wall",
 }
 # Info-row clusters (manually placed: NLE icons left · transport/time/date
@@ -1534,6 +1542,173 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 		var vrng : Vector2 = pc.call("get_video_clip_range_abs")
 		if not is_nan(vrng.x):
 			_draw_clip(vrng.x, vrng.y, win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
+	_clim_lane_rect = Rect2(0.0, lane_y + quarter * 2.0, w, quarter)
+	_draw_clim_keys(tl, win_start, span, w)
+
+
+## Camera keyframes as diamonds on the CLIM sub-lane, joined by a thin line —
+## drag one to retime it, right-click for its menu, double-click to jump there.
+func _draw_clim_keys(tl : Node, win_start : float, span : float, w : float) -> void:
+	if tl == null or not tl.has_method("climelapse_keys"):
+		return
+	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
+	if keys == null or keys.is_empty():
+		return
+	var cy := _clim_lane_rect.position.y + _clim_lane_rect.size.y * 0.5
+	var r := clampf(_clim_lane_rect.size.y * 0.5 + 2.0, 4.0, 6.0)
+	var ts := keys.times()
+	var xs := PackedFloat32Array()
+	for i in ts.size():
+		var t := ts[i]
+		if i == _clim_key_drag and not is_nan(_clim_key_drag_t):
+			t = _clim_key_drag_t
+		xs.append((t - win_start) / span * w)
+	if xs.size() >= 2:
+		var lo := clampf(xs[0], 0.0, w)
+		var hi := clampf(xs[0], 0.0, w)
+		for x in xs:
+			lo = minf(lo, clampf(x, 0.0, w))
+			hi = maxf(hi, clampf(x, 0.0, w))
+		if hi > lo:
+			_track.draw_line(Vector2(lo, cy), Vector2(hi, cy),
+				Color(LANE_CLIM_FILL.r, LANE_CLIM_FILL.g, LANE_CLIM_FILL.b, 0.7), 1.0)
+	for i in xs.size():
+		var x := xs[i]
+		if x < -r or x > w + r:
+			continue
+		var hot := i == _clim_key_drag or i == _clim_key_menu_idx
+		var col := Color(1.0, 0.85, 0.35) if hot else Color(0.86, 0.72, 1.0)
+		var pts := PackedVector2Array([Vector2(x, cy - r), Vector2(x + r, cy),
+			Vector2(x, cy + r), Vector2(x - r, cy)])
+		_track.draw_colored_polygon(pts, col)
+		pts.append(pts[0])
+		_track.draw_polyline(pts, Color(0.1, 0.05, 0.2, 0.9), 1.0)
+
+
+## Index of the keyframe diamond under track point `p`, else -1.
+func _clim_key_at(p : Vector2) -> int:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("climelapse_keys") or _clim_lane_rect.size.x <= 0.0:
+		return -1
+	var cy := _clim_lane_rect.position.y + _clim_lane_rect.size.y * 0.5
+	if absf(p.y - cy) > CLIM_KEY_HIT_PX + 2.0:
+		return -1
+	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
+	if keys == null:
+		return -1
+	var win := _track_window()
+	var best := -1
+	var best_d := CLIM_KEY_HIT_PX
+	var ts := keys.times()
+	for i in ts.size():
+		var x := (ts[i] - win.x) / win.y * _clim_lane_rect.size.x
+		var d := absf(x - p.x)
+		if d <= best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _clim_key_time(i : int) -> float:
+	var tl := _get_terrain_loader()
+	if tl == null:
+		return 0.0
+	return float((tl.call("climelapse_keys") as ClimelapseKeyframes).key(i).get("t", 0.0))
+
+
+func _on_clim_lane_right_click(p : Vector2) -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("climelapse_keys"):
+		return
+	if _clim_key_menu == null:
+		_clim_key_menu = PopupMenu.new()
+		_clim_key_menu.id_pressed.connect(_on_clim_key_menu)
+		_clim_key_menu.popup_hide.connect(func() -> void:
+			_clim_key_menu_idx = -1
+			if _track != null:
+				_track.queue_redraw())
+		add_child(_clim_key_menu)
+	_clim_key_menu.clear()
+	_clim_key_menu_idx = _clim_key_at(p)
+	_clim_key_menu_t = _x_to_abs(p.x)
+	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
+	if _clim_key_menu_idx >= 0:
+		var k : Dictionary = keys.key(_clim_key_menu_idx)
+		_clim_key_menu.add_item("Camera keyframe · %s" % ClimelapseExportOptions.timecode_at(float(k.get("t", 0.0))), 99)
+		_clim_key_menu.set_item_disabled(0, true)
+		_clim_key_menu.add_item("Jump the playhead here", 1)
+		_clim_key_menu.add_item("Preview from here", 2)
+		_clim_key_menu.add_item("Set to the current view", 3)
+		_clim_key_menu.add_separator()
+		_clim_key_menu.add_item("Delete keyframe", 4)
+	else:
+		_clim_key_menu.add_item("Key the current view here (%s)" % ClimelapseExportOptions.timecode_at(_clim_key_menu_t), 5)
+		_clim_key_menu.add_item("Key the current view at the playhead", 6)
+		if keys.size() > 0:
+			_clim_key_menu.add_item("Preview the keyframed shot", 8)
+			_clim_key_menu.add_separator()
+			_clim_key_menu.add_item("Clear all %s" % UiText.count(keys.size(), "keyframe"), 7)
+	var screen := _track.get_screen_transform() * p
+	_clim_key_menu.popup(Rect2i(Vector2i(screen), Vector2i.ZERO))
+	_track.queue_redraw()
+
+
+func _on_clim_key_menu(id : int) -> void:
+	var tl := _get_terrain_loader()
+	if tl == null:
+		return
+	var i := _clim_key_menu_idx
+	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
+	match id:
+		1:
+			if i >= 0 and _main != null:
+				_main.call("set_absolute_hours", float(keys.key(i).get("t", 0.0)))
+				_update_display()
+		2:
+			if i >= 0:
+				_preview_clim_from(float(keys.key(i).get("t", 0.0)))
+		3:
+			if i >= 0:
+				tl.call("repose_climelapse_key", i)
+				_notify("Keyframe set to the current view.", 1)
+		4:
+			if i >= 0:
+				tl.call("remove_climelapse_key", i)
+		5:
+			tl.call("set_climelapse_key_at", _clim_key_menu_t)
+		6:
+			tl.call("set_climelapse_key_at", _playhead_abs())
+		7:
+			tl.call("clear_climelapse_path")
+		8:
+			_preview_clim_from(NAN)
+	_clim_key_menu_idx = -1
+	if _track != null:
+		_track.queue_redraw()
+
+
+## Play the hyperlapse with the last export settings over the selection (or the
+## keyframes' span when nothing is selected), from `from_abs` (NAN = the start).
+func _preview_clim_from(from_abs : float) -> void:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("start_climelapse_preview"):
+		return
+	var o := ClimelapseExportOptions.load_prefs()
+	var sel := _climelapse_selection_range()
+	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
+	if not is_nan(sel.x):
+		o["start_abs"] = sel.x
+		o["end_abs"] = sel.y
+	elif keys != null and keys.size() >= 2:
+		var ts := keys.times()
+		o["start_abs"] = ts[0]
+		o["end_abs"] = ts[ts.size() - 1]
+	else:
+		var a := _playhead_abs() if is_nan(from_abs) else from_abs
+		o["start_abs"] = a
+		o["end_abs"] = a + 24.0
+	if not bool(tl.call("start_climelapse_preview", o, from_abs)):
+		_notify("Preview could not start (an export or another view holds the clock).")
 
 
 ## Every sensor lane — power, weather, Home Assistant — goes through ONE
@@ -1748,6 +1923,16 @@ func _on_track_input(event: InputEvent) -> void:
 				if hit >= 0:
 					_resize_track_idx = hit
 					get_viewport().set_input_as_handled()
+				elif not mb.ctrl_pressed and _clim_key_at(mb.position) >= 0:
+					var ki := _clim_key_at(mb.position)
+					if mb.double_click:
+						_main.call("set_absolute_hours", _clim_key_time(ki))
+						_update_display()
+					else:
+						_clim_key_drag = ki
+						_clim_key_drag_t = _clim_key_time(ki)
+						_clim_key_drag_moved = false
+					get_viewport().set_input_as_handled()
 				elif mb.ctrl_pressed:
 					# Ctrl-drag = set the render in/out selection.
 					_selecting = true
@@ -1760,6 +1945,13 @@ func _on_track_input(event: InputEvent) -> void:
 				if _resize_track_idx >= 0:
 					_resize_track_idx = -1
 					_save_track_layout_prefs()
+				if _clim_key_drag >= 0:
+					var tlk := _get_terrain_loader()
+					if _clim_key_drag_moved and tlk != null and not is_nan(_clim_key_drag_t):
+						tlk.call("move_climelapse_key", _clim_key_drag, _clim_key_drag_t)
+					_clim_key_drag = -1
+					_clim_key_drag_t = NAN
+					_track.queue_redraw()
 				_track_dragging = false
 				_selecting = false
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
@@ -1768,6 +1960,11 @@ func _on_track_input(event: InputEvent) -> void:
 				_track_pan_anchor_x = mb.position.x
 			else:
 				_track_panning = false
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not mb.alt_pressed \
+				and _clim_lane_rect.size.x > 0.0 \
+				and absf(mb.position.y - (_clim_lane_rect.position.y + _clim_lane_rect.size.y * 0.5)) <= CLIM_KEY_HIT_PX + 2.0:
+			_on_clim_lane_right_click(mb.position)
+			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and mb.alt_pressed:
 			_track_view.reset_to_playhead(_playhead_abs())
 			_track.queue_redraw()
@@ -1784,6 +1981,10 @@ func _on_track_input(event: InputEvent) -> void:
 			_track_view.pan_by_pixels(mm.relative.x)
 			_track.queue_redraw()
 			_update_track_edge_labels()
+		elif _clim_key_drag >= 0:
+			_clim_key_drag_t = _x_to_abs(mm.position.x)
+			_clim_key_drag_moved = true
+			_track.queue_redraw()
 		elif _selecting:
 			_apply_selection(_sel_anchor_abs, _x_to_abs(mm.position.x))
 		elif _track_dragging:
@@ -2091,16 +2292,18 @@ func _build_left_cluster() -> Control:
 	left.add_child(_render_btn)
 
 	_export_mp4_btn = _mk_icon_btn("🎬", _on_export_clim_mp4_pressed,
-			"Export MP4 — render the Ctrl-drag selection to video at 30 fps, "
-			+ "one frame at a time, at the playback speed set on this bar (needs ffmpeg)")
+			"Export video — choose the range (the Ctrl-drag selection), speed, size, frame "
+			+ "rate and render settings, preview it, then render an MP4 (needs ffmpeg)")
 	_export_mp4_btn.add_theme_color_override("font_color", Color(0.45, 0.75, 1.0))
 	left.add_child(_export_mp4_btn)
 
 	var path_add := _mk_icon_btn("📍", _on_clim_path_add_pressed,
-			"Add drone path waypoint — current camera pose for moving hyperlapse export")
+			"Camera keyframe — key the current view at the playhead. Keys sit on the CLIM "
+			+ "lane: drag to retime, double-click to jump there, right-click to edit, delete "
+			+ "or preview. The video camera flies between them in time.")
 	left.add_child(path_add)
 	var path_clr := _mk_icon_btn("🧹", _on_clim_path_clear_pressed,
-			"Clear climelapse drone path waypoints")
+			"Clear every camera keyframe")
 	left.add_child(path_clr)
 
 	_loadmode_btn = _mk_icon_btn("📄", _on_loadmode_pressed,
@@ -2295,115 +2498,62 @@ func _climelapse_selection_range() -> Vector2:
 	return sel
 
 
-func _default_clim_mp4_name(start_abs: float) -> String:
-	var clock := CelestialClock.new()
-	var dt: Dictionary = clock.abs_hours_to_date(start_abs)
-	return "climelapse_%d_%02d_%02d.mp4" % [
-		int(dt.get("year", 1)), int(dt.get("month", 1)), int(dt.get("day", 1))]
-
-
 func _on_clim_path_add_pressed() -> void:
 	var tl := _get_terrain_loader()
 	if tl == null or not tl.has_method("add_climelapse_path_waypoint"):
-		_notify("Drone path needs a location map (this one has no TerrainLoader).")
+		_notify("Camera keyframes need a location map (this one has no TerrainLoader).")
 		return
 	if bool(tl.call("add_climelapse_path_waypoint")):
 		var n := int(tl.call("get_climelapse_path_count")) if tl.has_method("get_climelapse_path_count") else 0
-		_notify("Drone path: %s." % UiText.count(n, "waypoint"), 1)
+		_notify("Camera keyframe at %s — %s on the CLIM lane." % [
+			ClimelapseExportOptions.timecode_at(_playhead_abs()), UiText.count(n, "keyframe")], 1)
+		if _track != null:
+			_track.queue_redraw()
 
 
 func _on_clim_path_clear_pressed() -> void:
 	var tl := _get_terrain_loader()
 	if tl != null and tl.has_method("clear_climelapse_path"):
 		tl.call("clear_climelapse_path")
-		_notify("Drone path cleared.", 1)
+		_notify("Camera keyframes cleared.", 1)
 	else:
-		_notify("Drone path needs a location map (this one has no TerrainLoader).")
+		_notify("Camera keyframes need a location map (this one has no TerrainLoader).")
 
 
 func _on_export_clim_mp4_pressed() -> void:
 	var tl := _get_terrain_loader()
-	if tl == null or not tl.has_method("start_climelapse_export"):
-		_notify("MP4 export needs a location map (this one has no TerrainLoader).")
+	if tl == null or not tl.has_method("start_climelapse_export_with"):
+		_notify("Video export needs a location map (this one has no TerrainLoader).")
+		return
+	if _clim_options_dialog != null and is_instance_valid(_clim_options_dialog):
 		return
 	var sel := _climelapse_selection_range()
-	if is_nan(sel.x):
-		_notify("Ctrl-drag a time range on the timeline first, then press 🎬.")
-		return
-	_pending_clim_export_start = sel.x
-	_pending_clim_export_end = sel.y
-	if _clim_export_dialog == null:
-		_clim_export_dialog = FileDialog.new()
-		_clim_export_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
-		_clim_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
-		_clim_export_dialog.filters = PackedStringArray(["*.mp4 ; MPEG-4 video"])
-		_clim_export_dialog.title = "Save climelapse MP4"
-		_clim_export_dialog.size = Vector2i(900, 600)
-		_clim_export_dialog.file_selected.connect(_on_clim_export_path_selected)
-		add_child(_clim_export_dialog)
-	_clim_export_dialog.current_file = _default_clim_mp4_name(sel.x)
-	_clim_export_dialog.popup_centered_ratio(0.6)
+	_clim_options_dialog = CLIM_EXPORT_DIALOG_SCRIPT.new()
+	_clim_options_dialog.name = "ClimelapseExportDialog"
+	add_child(_clim_options_dialog)
+	_clim_options_dialog.export_requested.connect(_begin_clim_export)
+	_clim_options_dialog.open_on(tl, _main, sel, _playhead_abs(), _clim_bar_rate())
 
 
-## Sim-hours per real second the export should walk: whatever speed the player
-## has selected on the bar. The ∞ analemma presets have no finite rate, so they
-## fall back to their documented meaning (1 or 2 calendar days per frame at 30 fps).
-func _clim_export_time_scale() -> float:
-	var time_scale := float(SPEED_STEPS[_speed_idx][1])
-	if is_inf(time_scale):
-		var is_x2 := str(SPEED_STEPS[_speed_idx][0]) == "∞×2"
-		time_scale = (48.0 if is_x2 else 24.0) * float(CLIM_EXPORT_FPS)
-	return time_scale
-
-
-func _on_clim_export_path_selected(path: String) -> void:
-	var tl := _get_terrain_loader()
-	if tl == null or not tl.has_method("start_climelapse_export"):
-		return
-	var out := path
-	if not out.to_lower().ends_with(".mp4"):
-		out += ".mp4"
-	_pending_clim_export_path = out
-
-	var frames := ClimelapseCapture.frames_for(_pending_clim_export_start,
-		_pending_clim_export_end, _clim_export_time_scale(), CLIM_EXPORT_FPS)
-	if frames <= 0:
-		_notify("Nothing to export — the selected range is empty.")
-		return
-	# Frame count is set by the player's speed, so a slow speed over a long range
-	# is a very long export. Show the cost and let them decide before it starts.
-	if frames > CLIM_CONFIRM_FRAMES:
-		_ensure_clim_confirm_dialog()
-		_clim_confirm_dialog.dialog_text = (
-			"Exporting %s at %s renders %s frames — %s of video at %d fps.\n\n"
-			+ "The world stays frozen and steps one frame at a time until it's done.\n\nContinue?"
-		) % [
-			_clim_span_label(_pending_clim_export_end - _pending_clim_export_start),
-			str(SPEED_STEPS[_speed_idx][0]),
-			_clim_thousands(frames),
-			_clim_duration_label(frames),
-			CLIM_EXPORT_FPS,
-		]
-		_clim_confirm_dialog.popup_centered()
-		return
-	_begin_clim_export()
+## Sim-hours per real second the bar is set to (the dialog's first-time
+## default). The ∞ analemma presets have no finite rate.
+func _clim_bar_rate() -> float:
+	return float(SPEED_STEPS[_speed_idx][1])
 
 
 ## Kick off the capture with the world clock parked where the export starts.
-func _begin_clim_export() -> void:
+func _begin_clim_export(opts: Dictionary) -> void:
 	var tl := _get_terrain_loader()
-	if tl == null or _pending_clim_export_path.is_empty():
+	if tl == null:
 		return
-	# Stop the world: the capture places every frame's instant itself. Leaving
-	# playback (or the analemma stepper) running is what made an export look like
-	# it was "just playing" instead of rendering.
+	# Stop the world: the capture places every frame's instant itself.
 	_sim_paused_by_bar = true
 	_pause_motion()
 	CursorController.set_paused(true)
 	if _main != null and _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", _pending_clim_export_start)
+		_main.call("set_absolute_hours", float(opts.get("start_abs", _playhead_abs())))
 
-	# Dialog first, so there is visible feedback even if the start call refuses.
+	# Progress window first, so there is visible feedback even if the start refuses.
 	_clim_last_reported_result = ""
 	_ensure_clim_progress_dialog()
 	_clim_progress_bar.value = 0.0
@@ -2412,54 +2562,17 @@ func _begin_clim_export() -> void:
 	if not _clim_progress_dialog.visible:
 		_clim_progress_dialog.popup_centered()
 
-	tl.call("start_climelapse_export", _pending_clim_export_start,
-		_pending_clim_export_end, _clim_export_time_scale(),
-		_pending_clim_export_path, CLIM_EXPORT_FPS)
+	tl.call("start_climelapse_export_with", opts)
 	_update_clim_progress_dialog()
 	_update_nle_controls()
-
-
-func _ensure_clim_confirm_dialog() -> void:
-	if _clim_confirm_dialog != null:
-		return
-	_clim_confirm_dialog = ConfirmationDialog.new()
-	_clim_confirm_dialog.title = "Export video"
-	_clim_confirm_dialog.ok_button_text = "Export"
-	_clim_confirm_dialog.confirmed.connect(_begin_clim_export)
-	add_child(_clim_confirm_dialog)
-
-
-func _clim_span_label(hours: float) -> String:
-	if hours < 48.0:
-		return "%.1f h" % hours
-	return "%.1f days" % (hours / 24.0)
-
-
-func _clim_duration_label(frames: int) -> String:
-	var secs := int(round(float(frames) / float(CLIM_EXPORT_FPS)))
-	if secs < 60:
-		return "%ds" % secs
-	return "%dm %02ds" % [secs / 60, secs % 60]
-
-
-func _clim_thousands(n: int) -> String:
-	var s := str(n)
-	var out := ""
-	var c := 0
-	for i in range(s.length() - 1, -1, -1):
-		out = s[i] + out
-		c += 1
-		if c % 3 == 0 and i > 0:
-			out = "," + out
-	return out
 
 
 func _ensure_clim_progress_dialog() -> void:
 	if _clim_progress_dialog != null:
 		return
 	_clim_progress_dialog = Window.new()
-	_clim_progress_dialog.title = "Exporting video (MP4 encode uses ffmpeg)"
-	_clim_progress_dialog.size = Vector2i(460, 140)
+	_clim_progress_dialog.title = "Exporting video"
+	_clim_progress_dialog.size = Vector2i(660, 500)
 	_clim_progress_dialog.unresizable = true
 	_clim_progress_dialog.close_requested.connect(func() -> void:
 		_clim_progress_dialog.hide())
@@ -2471,6 +2584,14 @@ func _ensure_clim_progress_dialog() -> void:
 	vb.offset_bottom = -12
 	vb.add_theme_constant_override("separation", 8)
 	_clim_progress_dialog.add_child(vb)
+	# The export's own picture, live: the game window stops drawing the world
+	# while the export renders it once per step.
+	_clim_preview_rect = TextureRect.new()
+	_clim_preview_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_clim_preview_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_clim_preview_rect.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_clim_preview_rect.custom_minimum_size = Vector2(0, 300)
+	vb.add_child(_clim_preview_rect)
 	_clim_progress_lbl = Label.new()
 	_clim_progress_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_clim_progress_lbl.text = "Preparing export…"
@@ -2513,17 +2634,23 @@ func _update_clim_progress_dialog() -> void:
 		_clim_progress_bar.value = prog * 100.0
 		var done := int(st.get("done", 0))
 		var total := int(st.get("total", 0))
-		if str(st.get("phase", "")) == "encode":
-			_clim_progress_lbl.text = "Encoding %s frames to MP4 with ffmpeg…" % _clim_thousands(total)
-		else:
-			_clim_progress_lbl.text = "Exporting — frame %s / %s (%d%%) · %s of video" % [
-				_clim_thousands(done), _clim_thousands(total),
-				int(round(prog * 100.0)), _clim_duration_label(total)]
+		if _clim_preview_rect != null and _clim_preview_rect.texture == null 				and tl.has_method("get_climelapse_export_preview_texture"):
+			_clim_preview_rect.texture = tl.call("get_climelapse_export_preview_texture")
+		match str(st.get("phase", "")):
+			"encode":
+				_clim_progress_lbl.text = "Finishing the MP4 (ffmpeg)…"
+			"warmup":
+				_clim_progress_lbl.text = "Warming up the renderer…"
+			_:
+				_clim_progress_lbl.text = "Frame %s / %s (%d%%)" % [
+					UiText.thousands(done), UiText.thousands(total), int(round(prog * 100.0))]
 		if not _clim_progress_dialog.visible:
 			_clim_progress_dialog.popup_centered()
 		return
 
 	# Finished (or refused) — show the outcome on whichever dialog is open.
+	if _clim_preview_rect != null:
+		_clim_preview_rect.texture = null
 	var result := str(st.get("result", ""))
 	if result.is_empty() or _clim_progress_dialog == null or not _clim_progress_dialog.visible:
 		return

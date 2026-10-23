@@ -62,6 +62,7 @@ const KINDS: Array = [
 	["channel_tiles", "json"],
 	["poi", "json"],
 	["ha_links", "json"],
+	["climelapse_keys", "json"],
 ]
 
 static var _world_id: String = ""

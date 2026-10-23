@@ -298,8 +298,11 @@ var _export_mp4_path := ""
 var _export_camera: ClimelapseCameraRig = null
 var _export_pending := false
 var _export_fps := 30
-## Waypoints collected for hyperlapse export ({pos, yaw, pitch}).
-var _climelapse_drone_path: Array = []
+## Camera keyframes for the hyperlapse export, each pinned to a timeline
+## moment (ClimelapseKeyframes). Saved per world (WorldPaths kind
+## "climelapse_keys"), loaded lazily on first use.
+var _clim_keys: ClimelapseKeyframes = null
+var _clim_preview: ClimelapsePreview = null
 var _placed_prop_layer: PlacedPropLayer = null
 ## Linkage fold-to-pack sweeps currently animating (prop_id → true) — a
 ## second Pack press mid-fold must not double-toggle the sweep.
@@ -9415,46 +9418,61 @@ func _ensure_climelapse_capture() -> void:
 	_climelapse_capture.capture_complete.connect(_on_climelapse_capture_complete)
 
 
-## Capture an MP4 from the locked active camera by simulating forward.
-## When climelapse drone path has ≥2 waypoints, camera interpolates along it
-## (moving hyperlapse); otherwise the view stays locked at the current pose.
-func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float, output_mp4: String, fps: int = 30) -> bool:
-	# Every refusal records a message + emits, so the timeline's progress dialog
-	# can SHOW why nothing happened instead of silently closing.
-	if output_mp4.is_empty():
-		return _refuse_export("No output path chosen.")
-	if end_abs <= start_abs:
+## Export a video. `opts` is a ClimelapseExportOptions dictionary (range,
+## speed, size, fps, folder + file name, render settings). The camera follows
+## the timeline keyframes when there are any; with none it stays locked on the
+## current view (from the drone with no keys: the default sweep).
+func start_climelapse_export_with(opts: Dictionary) -> bool:
+	var o := ClimelapseExportOptions.normalize(opts)
+	if str(o.get("folder", "")).is_empty():
+		return _refuse_export("No output folder chosen.")
+	if float(o["end_abs"]) <= float(o["start_abs"]):
 		return _refuse_export("Export range is empty — the end time must be after the start.")
 	var tree := get_tree()
 	if tree == null:
 		return _refuse_export("No scene tree.")
+	stop_climelapse_preview()
 	var rig := ClimelapseCameraRig.snapshot_from_tree(tree)
 	if not rig.is_valid():
 		return _refuse_export("No active 3D camera — switch to player or drone view first.")
-	if _climelapse_drone_path.size() >= 2:
-		rig.path = _climelapse_drone_path.duplicate(true)
-		rig.mode = "path"
-	elif bool(rig.mode == "drone") and _climelapse_drone_path.is_empty():
-		# Optional default sweep when exporting from drone with no saved points.
+	var keys := climelapse_keys()
+	if not keys.is_empty():
+		rig.keys = keys.duplicate_keys()
+		rig.mode = "keys"
+	elif rig.mode == "drone":
 		rig.ensure_default_hyperlapse_path()
 
-	_export_render_start = start_abs
-	_export_render_end = end_abs
-	_export_time_scale = time_scale
-	_export_mp4_path = output_mp4
+	_export_render_start = float(o["start_abs"])
+	_export_render_end = float(o["end_abs"])
+	_export_time_scale = float(o["hours_per_second"])
+	_export_mp4_path = ClimelapseExportOptions.output_path(o)
 	_export_camera = rig
-	_export_fps = maxi(1, fps)
+	_export_fps = int(o["fps"])
 	_export_pending = true
 	_export_status_message = ""
 	_export_last_result = ""
 
 	if _main != null and _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", start_abs)
+		_main.call("set_absolute_hours", _export_render_start)
 
 	_ensure_climelapse_capture()
-	_climelapse_capture.start_capture(self, start_abs, end_abs, time_scale, output_mp4, rig, fps)
+	_climelapse_capture.start_capture(self, o, rig)
 	climelapse_state_changed.emit()
 	return true
+
+
+## Older entry point (range + world speed + full path), kept for scripts.
+func start_climelapse_export(start_abs: float, end_abs: float, time_scale: float, output_mp4: String, fps: int = 30) -> bool:
+	if output_mp4.is_empty():
+		return _refuse_export("No output path chosen.")
+	var o := ClimelapseExportOptions.load_prefs()
+	o["start_abs"] = start_abs
+	o["end_abs"] = end_abs
+	o["hours_per_second"] = time_scale
+	o["fps"] = fps
+	o["folder"] = output_mp4.replace("\\", "/").get_base_dir()
+	o["file_name"] = output_mp4.get_file()
+	return start_climelapse_export_with(o)
 
 
 func _refuse_export(reason: String) -> bool:
@@ -9466,26 +9484,135 @@ func _refuse_export(reason: String) -> bool:
 	return false
 
 
-func add_climelapse_path_waypoint() -> bool:
-	var tree := get_tree()
-	if tree == null:
-		return false
-	var cam := tree.root.get_viewport().get_camera_3d() if tree.root.get_viewport() else null
-	if cam == null:
-		push_warning("Climelapse path: no active Camera3D.")
-		return false
-	_climelapse_drone_path.append(ClimelapseCameraRig.waypoint_from_transform(cam.global_transform))
+# --- camera keyframes ---------------------------------------------------------
+
+func _clim_keys_path() -> String:
+	return WorldPaths.site_file("climelapse_keys", _lat, _lon)
+
+
+func climelapse_keys() -> ClimelapseKeyframes:
+	if _clim_keys == null:
+		_clim_keys = ClimelapseKeyframes.load_json(_clim_keys_path())
+	return _clim_keys
+
+
+func _save_climelapse_keys() -> void:
+	var keys := climelapse_keys()
+	var path := _clim_keys_path()
+	if keys.is_empty():
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+	else:
+		keys.save_json(path)
 	climelapse_state_changed.emit()
-	return true
+
+
+func _active_camera() -> Camera3D:
+	var tree := get_tree()
+	if tree == null or tree.root.get_viewport() == null:
+		return null
+	return tree.root.get_viewport().get_camera_3d()
+
+
+## Key the current view at absolute hour `t` (replaces a key already at that
+## moment). Returns the key's index, or -1 without a camera.
+func set_climelapse_key_at(t: float) -> int:
+	var cam := _active_camera()
+	if cam == null:
+		push_warning("Climelapse keyframe: no active Camera3D.")
+		return -1
+	var i := climelapse_keys().set_key(t, cam.global_transform, cam.fov)
+	_save_climelapse_keys()
+	return i
+
+
+func move_climelapse_key(i: int, t: float) -> int:
+	var j := climelapse_keys().move_key(i, t)
+	_save_climelapse_keys()
+	return j
+
+
+## Give key i the current view, keeping its time.
+func repose_climelapse_key(i: int) -> void:
+	var cam := _active_camera()
+	if cam == null:
+		return
+	climelapse_keys().repose_key(i, cam.global_transform, cam.fov)
+	_save_climelapse_keys()
+
+
+func remove_climelapse_key(i: int) -> void:
+	climelapse_keys().remove_key(i)
+	_save_climelapse_keys()
+
+
+func set_climelapse_keys_smooth(on: bool) -> void:
+	climelapse_keys().smooth = on
+	_save_climelapse_keys()
+
+
+## 📍: key the current view at the playhead.
+func add_climelapse_path_waypoint() -> bool:
+	var t := float(_main.call("get_absolute_hours")) if _main != null and _main.has_method("get_absolute_hours") else 0.0
+	return set_climelapse_key_at(t) >= 0
 
 
 func clear_climelapse_path() -> void:
-	_climelapse_drone_path.clear()
-	climelapse_state_changed.emit()
+	climelapse_keys().clear()
+	_save_climelapse_keys()
 
 
 func get_climelapse_path_count() -> int:
-	return _climelapse_drone_path.size()
+	return climelapse_keys().size()
+
+
+# --- preview ------------------------------------------------------------------
+
+## Play the shot in the game window before exporting: the clock walks the range
+## at the export's speed in real time and the camera follows the keyframes.
+## `from_abs` NAN = the range start. Esc or stop_climelapse_preview ends it.
+func start_climelapse_preview(opts: Dictionary, from_abs: float = NAN, paused: bool = false) -> bool:
+	if is_climelapse_exporting():
+		return false
+	stop_climelapse_preview()
+	var rig := ClimelapseCameraRig.snapshot_from_tree(get_tree())
+	if not rig.is_valid():
+		return false
+	var keys := climelapse_keys()
+	if not keys.is_empty():
+		rig.keys = keys.duplicate_keys()
+	elif rig.mode == "drone":
+		rig.ensure_default_hyperlapse_path()
+	_clim_preview = ClimelapsePreview.new()
+	_clim_preview.name = "ClimelapsePreview"
+	add_child(_clim_preview)
+	_clim_preview.finished.connect(func() -> void:
+		_clim_preview = null
+		climelapse_state_changed.emit())
+	var ok := _clim_preview.begin(_main, ClimelapseExportOptions.normalize(opts), rig, from_abs, paused)
+	if not ok:
+		_clim_preview.queue_free()
+		_clim_preview = null
+	climelapse_state_changed.emit()
+	return ok
+
+
+func stop_climelapse_preview() -> void:
+	if is_instance_valid(_clim_preview):
+		_clim_preview.end()
+	_clim_preview = null
+
+
+func is_climelapse_previewing() -> bool:
+	return is_instance_valid(_clim_preview) and _clim_preview.is_running()
+
+
+func get_climelapse_preview_hours() -> float:
+	return _clim_preview.current_hours() if is_climelapse_previewing() else NAN
+
+
+func get_climelapse_export_preview_texture() -> Texture2D:
+	return _climelapse_capture.get_preview_texture() if _climelapse_capture != null else null
 
 
 func cancel_climelapse_render() -> void:

@@ -781,12 +781,19 @@ Godot.exe.exe --headless --path . --script core/terrain/terrain_seam_diag_run.gd
 # Building pipeline self-test (offline — roof geometry/UVs/styles/facade
 # elements/wall picking/model catalog; extend it with every building change):
 Godot.exe.exe --headless --path . --script core/terrain/building_builder_selftest.gd
-# Climelapse keyframe + scale-bake round-trip (offline):
+# Climelapse / video export (offline — the series bake, timed camera keyframes
+# (ClimelapseKeyframes: pose at each key's hour, ease at the ends, no stop at an
+# interior key, short-way yaw, retime/repose/round trip), the export options
+# maths (frame count, even sizes, Max == the bar's Max, prefs round trip) and
+# the ffmpeg frame pipe (12 frames in, ffprobe count, a decoded frame is not
+# black; counted as skipped without ffmpeg). EXPECTED_CHECKS:
 Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_selftest.gd
-# Video export (in-game): Ctrl-drag a range on the timeline → 🎬 → save path. Steps
-# the world one frame at a time (paused clock, `speed / 30` sim-hours per frame) and
-# encodes 30 fps MP4 — requires ffmpeg in PATH. The export owns the clock: it forces
-# time_scale 0 + analemma_mode off and restores both on every exit path.
+# Video export end to end (sandbox): one-day selection → 🎬 dialog (range
+# pre-filled) → Max → three keyframes → Preview (clock + camera claimed and
+# handed back) → Export → ffprobe 361 frames 1920×1080 12.03 s → 04/12/20 h
+# frames to screenshots\clim_export\ with their brightness → world restored.
+# See "Video export" below:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/clim_export_probe.gd -Label clim_export -Timeout 1500
 # Plant growth model (offline — VegGrowthModel, the pure calendar → size
 # function, + the VegetationGrowth record facade: Chapman-Richards height
 # exactly 1.0 at maturity, crown/girth allometry, the staggered life cycle
@@ -2192,6 +2199,64 @@ Each piece has its own harness gate (Validation list).
   from it. Pond / stream / PBI nodes are refused with the reason.
   `--capture=graphtools` drives all of it with real clicks.
 - Not built: clickable legend toggles.
+
+## Video export + camera keyframes (core/climelapse/, 2026-10-22)
+
+The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a
+time with the clock held, draws each instant through its own camera into an
+off-screen SubViewport and streams the frames into ffmpeg.
+- **Why every export was black.** The 3D SubViewport's `get_image()` is RGB8;
+  the old timecode compositor built an RGBA8 frame, and `Image.blit_rect`
+  refuses mismatched formats (an engine error, nothing copied), so every frame
+  stayed all-zero. The user's `climelapse_2024_04_18.mp4` was 1350 frames of
+  Y = 16. The timecode is now a Label on a CanvasLayer INSIDE the capture
+  viewport, so a frame is one image straight off the GPU and nothing is
+  composited on the CPU. The capture viewport also copies the root viewport's
+  MSAA / TAA / scaling / shadow atlas and the player camera's `environment`,
+  `attributes` and `cull_mask` (`ClimelapseCameraRig`); without them it drew
+  far darker than the game.
+- **Frames go through a pipe, not PNGs** (`ClimelapseFramePipe`): raw rgb24 on
+  ffmpeg's stdin via `OS.execute_with_pipe(..., true)` (a writer thread, a
+  6-frame queue). ⚠ The pipe must be BLOCKING: non-blocking dropped every
+  write once the buffer filled and ffmpeg wrote a 262-byte file (measured).
+  ffmpeg runs `-loglevel error` so its stderr cannot fill; it is read after
+  exit. `store_buffer` returns false once ffmpeg dies.
+- **The options dialog** (`scenes/ui/climelapse_export_dialog.gd`, a
+  `ModalFrame`): range (pre-filled from the Ctrl-drag selection; none = the
+  next 24 h from the playhead), speed in sim-hours per VIDEO second
+  (`ClimelapseExportOptions.TIME_PRESETS`: the bar's speeds, "Max" = the bar's
+  Max = 2 h/s, then a day and a week per second, or any value), folder +
+  file name, size (presets, the game window, custom; rounded to even for
+  yuv420p), fps, CRF, the date/time strip, and render settings for the export
+  only (graphics + shadow preset, MSAA, TAA, settle frames per video frame).
+  Choices persist in `user://climelapse_export.cfg`. Frame i is at
+  `start + i × hours_per_second / fps`, both ends included (24 h at Max,
+  30 fps = 361 frames, 12.03 s).
+- **While it renders** the export holds an exclusive clock claim
+  (`climelapse_export`: time_scale 0, analemma off), sets the root viewport
+  `disable_3d` (the world is drawn once per step, by the export) and shows
+  the export's own picture in the progress window. `_restore_world` gives back
+  the claim, the graphics / shadow presets it changed and `disable_3d` on
+  every exit path. A cancel keeps nothing (the partial MP4 is deleted).
+- **Camera keyframes** (`ClimelapseKeyframes`, replacing the untimed
+  waypoint list): each key is pinned to an absolute hour, saved per world
+  (WorldPaths kind `climelapse_keys`). Between keys the camera follows a cubic
+  Hermite in TIME (Catmull-Rom tangents over uneven spacing, zero at the
+  ends, so the shot eases in and out; "Smooth path" off = straight lines);
+  yaw is unwrapped the short way; fov lerps. 0 keys = the current view
+  (the drone with none keeps its default sweep), 1 key = locked on it.
+  Editing on the timeline's CLIM lane: 📍 keys the current view at the
+  playhead (a key at the same moment is replaced), drag a diamond to retime,
+  double-click to jump the playhead to it, right-click for jump / preview
+  from here / set to the current view / delete, or on empty lane: key here /
+  key at playhead / preview / clear all.
+- **Preview** (`ClimelapsePreview`, the dialog's Preview button or the lane
+  menu): plays the shot in the game window in real time at the export's
+  speed, with an exclusive clock claim and an exclusive camera claim
+  (`climelapse_preview`), a top bar (Pause / Restart / Stop), HUD hidden;
+  Esc or Stop puts the clock back where it was and the player camera back.
+- Old `start_climelapse_export(start, end, time_scale, path, fps)` still works
+  (it fills the remembered options). Selftest + probe in the Validation list.
 
 ## Sim pre-render + playback (2026-10-17, the timeline's 📈 Render button)
 

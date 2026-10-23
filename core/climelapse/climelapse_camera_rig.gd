@@ -12,7 +12,16 @@ var near_plane := 0.05
 var far_plane := 4000.0
 var valid := false
 ## Array of {pos: Vector3, yaw: float, pitch: float} — empty = static lock camera.
+## The old untimed form (the drone's default sweep); `keys` wins when set.
 var path: Array = []
+## Time-stamped camera keyframes (ClimelapseKeyframes). One key = the shot is
+## locked on that pose; two or more = the camera flies between them in time.
+var keys: ClimelapseKeyframes = null
+## The player camera's look (Environment / CameraAttributes / cull mask) so the
+## export camera renders exactly what the player sees.
+var environment: Environment = null
+var attributes: CameraAttributes = null
+var cull_mask := 0xFFFFF
 
 
 static func snapshot_from_tree(tree: SceneTree) -> ClimelapseCameraRig:
@@ -29,6 +38,9 @@ static func snapshot_from_tree(tree: SceneTree) -> ClimelapseCameraRig:
 	rig.fov = cam.fov
 	rig.near_plane = cam.near
 	rig.far_plane = cam.far
+	rig.environment = cam.environment
+	rig.attributes = cam.attributes
+	rig.cull_mask = cam.cull_mask
 	rig.valid = true
 	var player: Node = tree.get_first_node_in_group("player")
 	if player != null and player.get("is_fpv_drone_mode"):
@@ -59,6 +71,20 @@ func is_valid() -> bool:
 
 func has_path() -> bool:
 	return path.size() >= 2
+
+
+func has_keys() -> bool:
+	return keys != null and not keys.is_empty()
+
+
+## The camera at absolute hour `abs_h` (`t_norm` = the same moment as a 0..1
+## fraction of the export, for the untimed path): {xform, fov}.
+func pose_at(abs_h: float, t_norm: float) -> Dictionary:
+	if has_keys():
+		return keys.sample(abs_h)
+	if has_path():
+		return {"xform": interpolate_at(t_norm), "fov": fov}
+	return {"xform": global_xform, "fov": fov}
 
 
 func clear_path() -> void:
@@ -122,10 +148,13 @@ func ensure_default_hyperlapse_path(radius_m: float = 40.0, height_m: float = 25
 func spawn_lock_camera(parent: Node) -> Camera3D:
 	var cam := Camera3D.new()
 	cam.name = "ClimelapseLockCam"
-	cam.global_transform = global_xform
+	cam.transform = global_xform
 	cam.fov = fov
 	cam.near = near_plane
 	cam.far = far_plane
+	cam.environment = environment
+	cam.attributes = attributes
+	cam.cull_mask = cull_mask
 	parent.add_child(cam)
 	cam.make_current()
 	return cam
