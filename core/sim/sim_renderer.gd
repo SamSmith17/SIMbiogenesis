@@ -96,8 +96,10 @@ func progress() -> float:
 	return clampf((_cursor - _start_abs) / span, 0.0, 1.0)
 
 
-func active_range() -> Vector2:
-	return Vector2(_start_abs, _end_abs) if _active else Vector2(NAN, NAN)
+## A pair of absolute hours is a PackedFloat64Array, never a Vector2: its
+## float32 components hold ~1.8e7 h only to the nearest 2 h.
+func active_range() -> PackedFloat64Array:
+	return PackedFloat64Array([_start_abs, _end_abs]) if _active else PackedFloat64Array([NAN, NAN])
 
 
 func ranges() -> Array:

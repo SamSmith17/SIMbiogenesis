@@ -1226,9 +1226,12 @@ func _recenter_track_on_playhead() -> void:
 	_track_view.reset_to_playhead(_playhead_abs())
 
 
-func _track_window() -> Vector2:
+## [start, span] of the track's window in hours. 64-bit: as a Vector2 the
+## start (~1.8e7 h) was rounded to 2 h, so everything drawn on the track
+## moved in 2-hour jumps while panning.
+func _track_window() -> PackedFloat64Array:
 	_sync_track_view()
-	return Vector2(_track_view.start, _track_view.span)
+	return PackedFloat64Array([_track_view.start, _track_view.span])
 
 
 func _resolve_td() -> void:
@@ -1251,9 +1254,9 @@ func _update_track_edge_labels() -> void:
 		return
 	var win := _track_window()
 	var clk : CelestialClock = _track_clock()
-	_track_lbl_start.text = _track_view.format_edge_label(win.x, win.y, clk)
-	_track_lbl_end.text = _track_view.format_edge_label(win.x + win.y, win.y, clk)
-	var zoom_lbl : String = TimelineView.span_label(win.y)
+	_track_lbl_start.text = _track_view.format_edge_label(win[0], win[1], clk)
+	_track_lbl_end.text = _track_view.format_edge_label(win[0] + win[1], win[1], clk)
+	var zoom_lbl : String = TimelineView.span_label(win[1])
 	if _track != null:
 		_track.tooltip_text = (
 			"Drag: scrub  •  Ctrl-drag: render range  •  Wheel: zoom  •  Alt/MMB-drag: pan\n"
@@ -1280,8 +1283,8 @@ func _draw_track() -> void:
 	if w <= 1.0 or h <= 1.0:
 		return
 	var win := _track_window()
-	var win_start := win.x
-	var span := win.y
+	var win_start := win[0]
+	var span := win[1]
 	var ph := _playhead_abs()
 	var now := _now_abs()
 	var fnt := ThemeDB.fallback_font
@@ -1391,10 +1394,10 @@ func _draw_track() -> void:
 	var s := null if Engine.is_editor_hint() else _get_solar()
 	lanes_bottom = _draw_track_lanes(win_start, span, w, fnt, s, lanes_top)
 	if s != null and s.has_method("get_selection_abs"):
-		var sel : Vector2 = s.call("get_selection_abs")
-		if not is_nan(sel.x) and sel.y > sel.x:
-			var sx0 := clampf((sel.x - win_start) / span * w, 0.0, w)
-			var sx1 := clampf((sel.y - win_start) / span * w, 0.0, w)
+		var sel : PackedFloat64Array = s.call("get_selection_abs")
+		if not is_nan(sel[0]) and sel[1] > sel[0]:
+			var sx0 := clampf((sel[0] - win_start) / span * w, 0.0, w)
+			var sx1 := clampf((sel[1] - win_start) / span * w, 0.0, w)
 			_track.draw_rect(Rect2(sx0, lanes_top - 2.0, sx1 - sx0, lanes_bottom - lanes_top + 4.0),
 				SEL_FILL, true)
 			_track.draw_line(Vector2(sx0, lanes_top - 2.0), Vector2(sx0, lanes_bottom + 2.0), SEL_EDGE, 1.0)
@@ -1422,12 +1425,12 @@ func _draw_track() -> void:
 ## window moves or MC_SWEEP_TTL_S has passed (a drawer edit lands within it).
 const MC_SWEEP_TTL_S := 1.0
 var _mc_sweep_rows: Array = []
-var _mc_sweep_key := Vector2.INF
+var _mc_sweep_key := PackedFloat64Array([INF, INF])
 var _mc_sweep_at_ms := -100000
 
 
 func _mc_sweep_rows_for(mc: Node, win_start: float, span: float) -> Array:
-	var key := Vector2(win_start, span)
+	var key := PackedFloat64Array([win_start, span])
 	var now_ms := Time.get_ticks_msec()
 	if key != _mc_sweep_key or now_ms - _mc_sweep_at_ms > int(MC_SWEEP_TTL_S * 1000.0):
 		_mc_sweep_rows = mc.call("sweep", win_start, win_start + span)
@@ -1510,38 +1513,38 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(LANE_VID_FILL.r, LANE_VID_FILL.g, LANE_VID_FILL.b, 0.75))
 	if solar != null:
 		if solar.has_method("get_observed_range_abs"):
-			var orng : Vector2 = solar.call("get_observed_range_abs")
-			if not is_nan(orng.x):
-				_draw_clip(orng.x, orng.y, win_start, span, w, lane_y, quarter, LANE_OBS_FILL)
+			var orng : PackedFloat64Array = solar.call("get_observed_range_abs")
+			if not is_nan(orng[0]):
+				_draw_clip(orng[0], orng[1], win_start, span, w, lane_y, quarter, LANE_OBS_FILL)
 		if solar.has_method("get_rendered_range_abs"):
-			var rrng : Vector2 = solar.call("get_rendered_range_abs")
-			if not is_nan(rrng.x):
-				_draw_clip(rrng.x, rrng.y, win_start, span, w,
+			var rrng : PackedFloat64Array = solar.call("get_rendered_range_abs")
+			if not is_nan(rrng[0]):
+				_draw_clip(rrng[0], rrng[1], win_start, span, w,
 					lane_y + quarter, quarter, LANE_SIM_FILL)
 				if solar.has_method("is_rendering") and bool(solar.call("is_rendering")):
 					var prog := clampf(float(solar.call("get_render_progress")), 0.0, 1.0)
-					var fx0 := clampf((rrng.x - win_start) / span * w, 0.0, w)
-					var fx1 := clampf((rrng.x + (rrng.y - rrng.x) * prog - win_start) / span * w, 0.0, w)
+					var fx0 := clampf((rrng[0] - win_start) / span * w, 0.0, w)
+					var fx1 := clampf((rrng[0] + (rrng[1] - rrng[0]) * prog - win_start) / span * w, 0.0, w)
 					if fx1 > fx0:
 						_track.draw_rect(Rect2(fx0, lane_y + quarter, fx1 - fx0, quarter),
 							Color(LANE_SIM_FILL.r, LANE_SIM_FILL.g, LANE_SIM_FILL.b, 0.9), true)
 	var tl := _get_terrain_loader()
 	if tl != null and tl.has_method("get_climelapse_range_abs"):
-		var crng : Vector2 = tl.call("get_climelapse_range_abs")
-		if not is_nan(crng.x):
-			_draw_clip(crng.x, crng.y, win_start, span, w, lane_y + quarter * 2.0, quarter, LANE_CLIM_FILL)
+		var crng : PackedFloat64Array = tl.call("get_climelapse_range_abs")
+		if not is_nan(crng[0]):
+			_draw_clip(crng[0], crng[1], win_start, span, w, lane_y + quarter * 2.0, quarter, LANE_CLIM_FILL)
 			if tl.has_method("is_climelapse_rendering") and bool(tl.call("is_climelapse_rendering")):
 				var cprog := clampf(float(tl.call("get_climelapse_progress")), 0.0, 1.0)
-				var cx0 := clampf((crng.x - win_start) / span * w, 0.0, w)
-				var cx1 := clampf((crng.x + (crng.y - crng.x) * cprog - win_start) / span * w, 0.0, w)
+				var cx0 := clampf((crng[0] - win_start) / span * w, 0.0, w)
+				var cx1 := clampf((crng[0] + (crng[1] - crng[0]) * cprog - win_start) / span * w, 0.0, w)
 				if cx1 > cx0:
 					_track.draw_rect(Rect2(cx0, lane_y + quarter * 2.0, cx1 - cx0, quarter),
 						Color(LANE_CLIM_FILL.r, LANE_CLIM_FILL.g, LANE_CLIM_FILL.b, 0.9), true)
 	var pc := _get_projection_canvas()
 	if pc != null and pc.has_method("get_video_clip_range_abs"):
-		var vrng : Vector2 = pc.call("get_video_clip_range_abs")
-		if not is_nan(vrng.x):
-			_draw_clip(vrng.x, vrng.y, win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
+		var vrng : PackedFloat64Array = pc.call("get_video_clip_range_abs")
+		if not is_nan(vrng[0]):
+			_draw_clip(vrng[0], vrng[1], win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
 	_clim_lane_rect = Rect2(0.0, lane_y + quarter * 2.0, w, quarter)
 	_draw_clim_keys(tl, win_start, span, w)
 
@@ -1601,7 +1604,7 @@ func _clim_key_at(p : Vector2) -> int:
 	var best_d := CLIM_KEY_HIT_PX
 	var ts := keys.times()
 	for i in ts.size():
-		var x := (ts[i] - win.x) / win.y * _clim_lane_rect.size.x
+		var x := (ts[i] - win[0]) / win[1] * _clim_lane_rect.size.x
 		var d := absf(x - p.x)
 		if d <= best_d:
 			best_d = d
@@ -1696,9 +1699,9 @@ func _preview_clim_from(from_abs : float) -> void:
 	var o := ClimelapseExportOptions.load_prefs()
 	var sel := _climelapse_selection_range()
 	var keys : ClimelapseKeyframes = tl.call("climelapse_keys")
-	if not is_nan(sel.x):
-		o["start_abs"] = sel.x
-		o["end_abs"] = sel.y
+	if not is_nan(sel[0]):
+		o["start_abs"] = sel[0]
+		o["end_abs"] = sel[1]
 	elif keys != null and keys.size() >= 2:
 		var ts := keys.times()
 		o["start_abs"] = ts[0]
@@ -2488,13 +2491,13 @@ func _find_main_for_linkage() -> Node:
 
 
 
-func _climelapse_selection_range() -> Vector2:
+func _climelapse_selection_range() -> PackedFloat64Array:
 	var s := _get_solar()
-	var sel := Vector2(NAN, NAN)
+	var sel := PackedFloat64Array([NAN, NAN])
 	if s != null and s.has_method("get_selection_abs"):
 		sel = s.call("get_selection_abs")
-	if is_nan(sel.x) or is_nan(sel.y) or sel.y <= sel.x:
-		return Vector2(NAN, NAN)
+	if is_nan(sel[0]) or is_nan(sel[1]) or sel[1] <= sel[0]:
+		return PackedFloat64Array([NAN, NAN])
 	return sel
 
 
@@ -2707,9 +2710,9 @@ func _render_target_end() -> float:
 	var play := _playhead_abs()
 	var s := _get_solar()
 	if s != null and s.has_method("get_selection_abs"):
-		var sel: Vector2 = s.call("get_selection_abs")
-		if not is_nan(sel.x) and not is_nan(sel.y) and sel.y > play + 1.0 / 60.0:
-			return sel.y
+		var sel: PackedFloat64Array = s.call("get_selection_abs")
+		if not is_nan(sel[0]) and not is_nan(sel[1]) and sel[1] > play + 1.0 / 60.0:
+			return sel[1]
 	return play + SimRenderer.DEFAULT_RENDER_H
 
 
@@ -2818,7 +2821,7 @@ func _draw_render_strip(y: float, h: float, win_start: float, span: float, w: fl
 	var play := _playhead_abs()
 	var ranges: Array = []
 	var active := false
-	var active_range := Vector2(NAN, NAN)
+	var active_range := PackedFloat64Array([NAN, NAN])
 	var prog := 0.0
 	if sr != null:
 		ranges = sr.call("ranges")
@@ -2828,19 +2831,19 @@ func _draw_render_strip(y: float, h: float, win_start: float, span: float, w: fl
 			prog = float(sr.call("progress"))
 	# Red first (under the green): a selection ahead of the playhead.
 	if solar != null and solar.has_method("get_selection_abs"):
-		var sel: Vector2 = solar.call("get_selection_abs")
-		if not is_nan(sel.x) and not is_nan(sel.y) and sel.y > sel.x:
-			var a := maxf(sel.x, play)
-			if sel.y > a:
-				_draw_strip_span(a, sel.y, y, h, win_start, span, w, STRIP_NEEDED)
+		var sel: PackedFloat64Array = solar.call("get_selection_abs")
+		if not is_nan(sel[0]) and not is_nan(sel[1]) and sel[1] > sel[0]:
+			var a := maxf(sel[0], play)
+			if sel[1] > a:
+				_draw_strip_span(a, sel[1], y, h, win_start, span, w, STRIP_NEEDED)
 	for r in ranges:
 		if r is Dictionary:
 			_draw_strip_span(float((r as Dictionary)["a"]), float((r as Dictionary)["b"]),
 				y, h, win_start, span, w, STRIP_RENDERED)
-	if active and not is_nan(active_range.x):
-		var cur := active_range.x + (active_range.y - active_range.x) * prog
-		_draw_strip_span(active_range.x, cur, y, h, win_start, span, w, STRIP_RENDERED)
-		_draw_strip_span(cur, active_range.y, y, h, win_start, span, w, STRIP_PENDING)
+	if active and not is_nan(active_range[0]):
+		var cur := active_range[0] + (active_range[1] - active_range[0]) * prog
+		_draw_strip_span(active_range[0], cur, y, h, win_start, span, w, STRIP_RENDERED)
+		_draw_strip_span(cur, active_range[1], y, h, win_start, span, w, STRIP_PENDING)
 
 
 func _draw_strip_span(a0: float, a1: float, y: float, h: float, win_start: float, span: float,
@@ -2873,8 +2876,8 @@ func _on_compare_pressed() -> void:
 		# 64-bit: a Vector2 selection is rounded to 2 h at absolute-hour scale.
 		var sel := PackedFloat64Array([NAN, NAN])
 		var s := _get_solar()
-		if s != null and s.has_method("get_selection_abs_f64"):
-			sel = s.call("get_selection_abs_f64")
+		if s != null and s.has_method("get_selection_abs"):
+			sel = s.call("get_selection_abs")
 			if not is_nan(sel[0]) and sel[1] <= sel[0]:
 				sel = PackedFloat64Array([NAN, NAN])
 		_main.call("open_compare_view", sel)
@@ -2943,7 +2946,7 @@ func _update_nle_controls() -> void:
 	if _snap_video_btn != null:
 		var pc2 := _get_projection_canvas()
 		var has_video := pc2 != null and pc2.has_method("get_video_clip_range_abs") and \
-			not is_nan((pc2.call("get_video_clip_range_abs") as Vector2).x)
+			not is_nan((pc2.call("get_video_clip_range_abs") as PackedFloat64Array)[0])
 		_snap_video_btn.disabled = not has_video
 	if _render_btn != null:
 		var tl2 := _get_terrain_loader()

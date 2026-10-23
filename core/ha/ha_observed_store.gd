@@ -77,12 +77,13 @@ func value_at(key: String, t_abs: float, max_gap_h: float = 6.0) -> float:
 	return float((_v[key] as PackedFloat32Array)[i])
 
 
-## [first, last] abs hours recorded, or [NAN, NAN].
-func range_of(key: String) -> Vector2:
+## [first, last] abs hours recorded, or [NAN, NAN] (64-bit: a Vector2 holds
+## absolute hours only to the nearest 2 h).
+func range_of(key: String) -> PackedFloat64Array:
 	var ts: PackedFloat64Array = _t.get(key, PackedFloat64Array())
 	if ts.is_empty():
-		return Vector2(NAN, NAN)
-	return Vector2(ts[0], ts[ts.size() - 1])
+		return PackedFloat64Array([NAN, NAN])
+	return PackedFloat64Array([ts[0], ts[ts.size() - 1]])
 
 
 ## `n` bins over [t0, t1): each the mean of the readings in it, else the value

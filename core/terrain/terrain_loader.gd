@@ -9660,8 +9660,10 @@ func get_climelapse_progress() -> float:
 	return -1.0
 
 
-func get_climelapse_range_abs() -> Vector2:
-	return Vector2(_export_render_start, _export_render_end)
+## A pair of absolute hours is a PackedFloat64Array, never a Vector2: its
+## float32 components hold ~1.8e7 h only to the nearest 2 h.
+func get_climelapse_range_abs() -> PackedFloat64Array:
+	return PackedFloat64Array([_export_render_start, _export_render_end])
 
 
 func _on_climelapse_progress(_frac: float) -> void:

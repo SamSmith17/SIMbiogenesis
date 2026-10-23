@@ -64,8 +64,8 @@ static func from_csv_roles(role_samples: Dictionary, clock: Object, start_abs: f
 	return build(by_ch, clock, start_abs, end_abs, step_h, capacity_kwh)
 
 
-## The span a CSV clip's readings cover, on the site clock (Vector2(NAN) if none).
-static func csv_span(role_samples: Dictionary, clock: Object) -> Vector2:
+## The span a CSV clip's readings cover, on the site clock ([NAN, NAN] if none).
+static func csv_span(role_samples: Dictionary, clock: Object) -> PackedFloat64Array:
 	var lo := INF
 	var hi := -INF
 	for role in role_samples:
@@ -74,8 +74,8 @@ static func csv_span(role_samples: Dictionary, clock: Object) -> Vector2:
 			lo = minf(lo, t)
 			hi = maxf(hi, t)
 	if is_inf(lo):
-		return Vector2(NAN, NAN)
-	return Vector2(SiteTime.unix_to_site_abs(clock, lo), SiteTime.unix_to_site_abs(clock, hi))
+		return PackedFloat64Array([NAN, NAN])
+	return PackedFloat64Array([SiteTime.unix_to_site_abs(clock, lo), SiteTime.unix_to_site_abs(clock, hi)])
 
 
 ## One stream onto the series grid. A STATE (state of charge) is the reading

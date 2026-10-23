@@ -3822,11 +3822,11 @@ func _find_moon_transit_hour_for_current_day() -> float :
 ## Out point and motion should stop (analemma + playback are cleared).
 func _advance_analemma_one_day() -> bool :
 	var clim_rng := _climelapse_playback_range()
-	var clim_play := not is_nan( clim_rng.x )
+	var clim_play := not is_nan( clim_rng[0] )
 	var start_year : int = clock.year
 	var cur : float = clock.get_absolute_hours()
-	if clim_play and cur >= clim_rng.y - 0.01 :
-		_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+	if clim_play and cur >= clim_rng[1] - 0.01 :
+		_stop_climelapse_analemma_at( clim_rng[1], clim_rng[0] )
 		return false
 		
 	var next_time : float
@@ -3837,8 +3837,8 @@ func _advance_analemma_one_day() -> bool :
 		next_time = _lunar_analemma_start_abs_hours + _analemma_session_day_index * ( mean_lunar_day_h + drift_h )
 	else : # Solar
 		var next_midnight : float = ( floor( cur / 24.0 ) + 1.0 ) * 24.0
-		if clim_play and next_midnight > clim_rng.y + 0.01 :
-			_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+		if clim_play and next_midnight > clim_rng[1] + 0.01 :
+			_stop_climelapse_analemma_at( clim_rng[1], clim_rng[0] )
 			return false
 		next_time = next_midnight
 
@@ -3849,8 +3849,8 @@ func _advance_analemma_one_day() -> bool :
 	
 	if clim_play :
 		# Baked climelapse scrub: stay inside the rendered span — never wrap to 1940.
-		if clock.get_absolute_hours() > clim_rng.y + 0.01 :
-			_stop_climelapse_analemma_at( clim_rng.y, clim_rng.x )
+		if clock.get_absolute_hours() > clim_rng[1] + 0.01 :
+			_stop_climelapse_analemma_at( clim_rng[1], clim_rng[0] )
 			return false
 	else :
 		# Wrap only when we *cross* past the top of the archive window (Dec 31 → Jan 1
@@ -3895,14 +3895,14 @@ func _advance_analemma_one_day() -> bool :
 	return true
 
 
-func _climelapse_playback_range() -> Vector2 :
+func _climelapse_playback_range() -> PackedFloat64Array :
 	var loader := get_node_or_null( "TerrainLoader" )
 	if loader == null or not loader.has_method( "is_climelapse_playback" ) \
 			or not bool( loader.call( "is_climelapse_playback" ) ) :
-		return Vector2( NAN, NAN )
+		return PackedFloat64Array( [ NAN, NAN ] )
 	if not loader.has_method( "get_climelapse_range_abs" ) :
-		return Vector2( NAN, NAN )
-	return loader.call( "get_climelapse_range_abs" ) as Vector2
+		return PackedFloat64Array( [ NAN, NAN ] )
+	return loader.call( "get_climelapse_range_abs" )
 
 
 func _stop_climelapse_analemma_at( end_abs: float, _start_abs: float ) -> void :

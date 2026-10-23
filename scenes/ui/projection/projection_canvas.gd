@@ -2089,13 +2089,14 @@ func _hide_tr_video_controls() -> void:
 
 
 ## Public — returns the absolute-hours [start, end] of the loaded video clip,
-## or Vector2(NAN, NAN) when no video is loaded or no anchor is set.
-func get_video_clip_range_abs() -> Vector2:
+## or [NAN, NAN] when no video is loaded or no anchor is set. 64-bit: a
+## Vector2 holds absolute hours only to the nearest 2 h.
+func get_video_clip_range_abs() -> PackedFloat64Array:
 	if tr_video_stream_player == null or tr_video_stream_player.stream == null:
-		return Vector2(NAN, NAN)
+		return PackedFloat64Array([NAN, NAN])
 	if is_nan(video_start_abs_hours) or _video_duration_sim_hours <= 0.0:
-		return Vector2(NAN, NAN)
-	return Vector2(video_start_abs_hours, video_start_abs_hours + _video_duration_sim_hours)
+		return PackedFloat64Array([NAN, NAN])
+	return PackedFloat64Array([video_start_abs_hours, video_start_abs_hours + _video_duration_sim_hours])
 
 
 ## Snap the video start anchor to an explicit absolute-hours value (e.g. the

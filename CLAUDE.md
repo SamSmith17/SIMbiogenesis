@@ -1250,6 +1250,10 @@ Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.g
 # graph copy whose heater follows 18:00-on / 23:00-off through a real
 # GraphAcLoad reading while the live model never moves. EXPECTED_CHECKS):
 Godot.exe.exe --headless --path . --script power_system/automation/automation_sim_selftest.gd
+# Absolute hours never through a Vector2 (sandbox): an odd-hour selection
+# arrives exact in SolarUI, the video-export range + dialog, the render end,
+# and the track window is the view's own start:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_abs_precision_probe.gd
 # Would / did save end to end (sandbox, fake HA): reality = the world's own
 # sim with a nightly shutdown, served as history; "did" with a fork without
 # it — the window's span exact to the hour, the estimate = the fork's sim,
@@ -5817,11 +5821,20 @@ lays it over what really happened, with error numbers.
   points). Probe: the estimate without the change equals the fork's own sim
   to 0.01 kWh when reality IS the world's sim.
 - ⚠ **Never put absolute hours in a Vector2.** Its components are float32,
-  which holds ~1.8e7 only to the nearest 2 h: every Compare span was being
-  rounded to an even hour (a 23:00 start ran from 00:00). Spans are
-  `PackedFloat64Array([a, b])` now; `SolarUI.get_selection_abs_f64()` is the
-  exact selection. `get_selection_abs()` (Vector2) still rounds — its other
-  callers (video export, render) have the same 2 h error.
+  which holds ~1.8e7 only to the nearest 2 h. Found in the Compare spans (a
+  23:00 start ran from 00:00) and then everywhere a pair of hours crossed an
+  API: the timeline's `_track_window()` (the whole track — playhead, NOW,
+  clips, lanes, keyframes — was positioned from a start rounded to 2 h, so
+  panning moved it in 2-hour jumps), `SolarUI.get_selection_abs /
+  get_observed_range_abs / get_rendered_range_abs`, `SimRenderer
+  .active_range`, `TerrainLoader.get_climelapse_range_abs`,
+  `ProjectionCanvas.get_video_clip_range_abs`, `HaObservedStore.range_of`
+  (+ the linker's `observed_range`), the video-export dialog's selection
+  and the microclimate sweep's cache key. All return / take
+  `PackedFloat64Array([a, b])` now ([NAN, NAN] = none). Also: never compare
+  absolute hours with `is_equal_approx` — it is relative (1e-5 ≈ 177 h).
+  Gate: `tools/checks/timeline_abs_precision_probe.gd` (an odd-hour
+  selection exact in every consumer).
 - **HA links survive the bootcamp now.** `HAEntityLinker.set_suspended`:
   the tutorial sandbox's cleared graph used to make the linker prune (and
   save away) every node-level link of the world — once from the model's

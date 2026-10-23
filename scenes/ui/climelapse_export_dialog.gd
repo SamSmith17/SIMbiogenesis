@@ -15,7 +15,8 @@ var _loader: Node = null
 var _main: Node = null
 var _frame: ModalFrame = null
 var _opts: Dictionary = {}
-var _selection := Vector2(NAN, NAN)
+## [start, end] absolute hours (64-bit; a Vector2 rounds them to 2 h).
+var _selection := PackedFloat64Array([NAN, NAN])
 var _window_size := Vector2i(1920, 1080)
 var _updating := false
 var _waiting_on_preview := false
@@ -46,7 +47,7 @@ var _dir_dialog: FileDialog = null
 
 
 ## `selection` is the Ctrl-drag range (NAN = none: the next 24 h from `playhead`).
-func open_on(loader: Node, main: Node, selection: Vector2, playhead: float, current_rate: float) -> void:
+func open_on(loader: Node, main: Node, selection: PackedFloat64Array, playhead: float, current_rate: float) -> void:
 	_loader = loader
 	_main = main
 	_selection = selection
@@ -55,12 +56,12 @@ func open_on(loader: Node, main: Node, selection: Vector2, playhead: float, curr
 	# (a real-time day would be 24 h of footage); otherwise Max.
 	if not _has_saved_rate() and current_rate >= 0.08 and not is_inf(current_rate):
 		_opts["hours_per_second"] = current_rate
-	if is_nan(selection.x):
+	if is_nan(selection[0]):
 		_opts["start_abs"] = playhead
 		_opts["end_abs"] = playhead + 24.0
 	else:
-		_opts["start_abs"] = selection.x
-		_opts["end_abs"] = selection.y
+		_opts["start_abs"] = selection[0]
+		_opts["end_abs"] = selection[1]
 	_opts["file_name"] = ClimelapseExportOptions.default_file_name(float(_opts["start_abs"]))
 	var vp := get_viewport()
 	if vp != null:
@@ -90,7 +91,7 @@ func _build() -> void:
 	_lbl(rr, "to")
 	_end_edit = _line(rr, "YYYY-MM-DD HH:MM")
 	var use_sel := _button(rr, "Use selection", _on_use_selection)
-	use_sel.disabled = is_nan(_selection.x)
+	use_sel.disabled = is_nan(_selection[0])
 	use_sel.tooltip_text = "The range you Ctrl-dragged on the timeline"
 	_start_edit.text_submitted.connect(func(_t: String) -> void: _on_changed())
 	_end_edit.text_submitted.connect(func(_t: String) -> void: _on_changed())
@@ -324,10 +325,10 @@ func _on_res_preset(i: int) -> void:
 
 
 func _on_use_selection() -> void:
-	if is_nan(_selection.x):
+	if is_nan(_selection[0]):
 		return
-	_start_edit.text = _fmt_abs(_selection.x)
-	_end_edit.text = _fmt_abs(_selection.y)
+	_start_edit.text = _fmt_abs(_selection[0])
+	_end_edit.text = _fmt_abs(_selection[1])
 	_on_changed()
 
 
@@ -370,7 +371,7 @@ func _refresh() -> void:
 	var span := float(o["end_abs"]) - float(o["start_abs"])
 	_range_note.text = ("%s of sim time." % ClimelapseExportOptions.span_label(span)) if span > 0.0 \
 		else "The end must be after the start."
-	if is_nan(_selection.x):
+	if is_nan(_selection[0]):
 		_range_note.text += " (No Ctrl-drag selection — this is the next 24 h from the playhead.)"
 	var keys: ClimelapseKeyframes = _loader.call("climelapse_keys") if _loader != null else null
 	var n := keys.size() if keys != null else 0

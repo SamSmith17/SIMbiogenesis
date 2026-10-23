@@ -3149,19 +3149,17 @@ func _register_observed_range_with_director() -> void:
 func has_observed_clip() -> bool:
 	return _observed_series != null
 
-func get_observed_range_abs() -> Vector2:
+## A pair of absolute hours is a PackedFloat64Array, never a Vector2: its
+## float32 components hold ~1.8e7 h only to the nearest 2 h.
+func get_observed_range_abs() -> PackedFloat64Array:
 	if is_nan(_observed_start_abs):
-		return Vector2(NAN, NAN)
-	return Vector2(_observed_start_abs, _observed_end_abs)
+		return PackedFloat64Array([NAN, NAN])
+	return PackedFloat64Array([_observed_start_abs, _observed_end_abs])
 
-func get_selection_abs() -> Vector2:
+## The Ctrl-drag selection [start, end] (absolute hours), NAN when none.
+func get_selection_abs() -> PackedFloat64Array:
 	if is_nan(_sel_start_abs):
-		return Vector2(NAN, NAN)
-	return Vector2(_sel_start_abs, _sel_end_abs)
-
-## The selection as 64-bit floats. get_selection_abs's Vector2 is float32,
-## which holds absolute hours (~1.8e7) only to the nearest 2 h.
-func get_selection_abs_f64() -> PackedFloat64Array:
+		return PackedFloat64Array([NAN, NAN])
 	return PackedFloat64Array([_sel_start_abs, _sel_end_abs])
 
 
@@ -3178,10 +3176,10 @@ func set_render_load_mode(mode: int) -> void:
 func get_render_load_mode() -> int:
 	return _render_load_mode
 
-func get_rendered_range_abs() -> Vector2:
+func get_rendered_range_abs() -> PackedFloat64Array:
 	if not _sim_series_ready and not is_rendering():
-		return Vector2(NAN, NAN)
-	return Vector2(_sim_render_start_abs, _sim_render_end_abs)
+		return PackedFloat64Array([NAN, NAN])
+	return PackedFloat64Array([_sim_render_start_abs, _sim_render_end_abs])
 
 
 ## Downsampled waveform bins for NLE sensor tracks on the timeline UI.
@@ -3235,8 +3233,8 @@ func start_batch_render() -> bool:
 	var e := _sel_end_abs
 	if is_nan(s) or is_nan(e):
 		var r := get_observed_range_abs()
-		s = r.x
-		e = r.y
+		s = r[0]
+		e = r[1]
 	if is_nan(s) or is_nan(e) or e <= s:
 		return false
 	return _render_range(s, e)

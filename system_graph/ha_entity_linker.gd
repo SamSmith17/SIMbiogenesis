@@ -270,7 +270,7 @@ func observed_value_at(target_id: String, t_abs: float) -> float:
 	return _observed.value_at(target_id, t_abs)
 
 
-func observed_range(target_id: String) -> Vector2:
+func observed_range(target_id: String) -> PackedFloat64Array:
 	return _observed.range_of(target_id)
 
 
