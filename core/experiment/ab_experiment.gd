@@ -37,7 +37,9 @@ const METRICS := [
 ]
 
 var _runs: Array = []
-var _span := Vector2.ZERO
+## [start, end] absolute hours. Never a Vector2: its float32 components
+## hold absolute hours (~1.8e7) only to the nearest 2 h.
+var _span := PackedFloat64Array([0.0, 0.0])
 var _step := 1.0 / 60.0
 var _running := false
 var _start_note := ""
@@ -65,7 +67,7 @@ func start(main: Node, start_abs: float, end_abs: float, variants: Array) -> Str
 		return "Pick a span of at most %d days." % int(MAX_SPAN_H / 24.0)
 	if variants.size() < 2:
 		return "Pick two versions to compare."
-	_span = Vector2(start_abs, end_abs)
+	_span = PackedFloat64Array([start_abs, end_abs])
 	_step = CalibrationExperiment.step_for(end_abs - start_abs)
 	var bat := ExperimentEvaluator.battery_of(su)
 	var soc0 := float(su.get("battery_kwh_stored")) if su.get("battery_kwh_stored") != null else 0.5 * float(bat["cap_kwh"])
@@ -119,7 +121,7 @@ func _process(_delta: float) -> void:
 	for e in _runs:
 		f += (e["run"] as ExperimentEnergyRun).progress()
 	progress.emit(f / float(_runs.size()), "Simulating %s for %s…" % [
-		UiText.duration(_span.y - _span.x), UiText.count(_runs.size(), "version")])
+		UiText.duration(_span[1] - _span[0]), UiText.count(_runs.size(), "version")])
 	if all_done:
 		_running = false
 		set_process(false)

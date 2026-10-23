@@ -25,7 +25,9 @@ var _main: Node = null
 var _solar_ui: Node = null
 var _model: Object = null
 var _clock: Object = null
-var _span := Vector2.ZERO
+## [start, end] absolute hours. Never a Vector2: its float32 components
+## hold absolute hours (~1.8e7) only to the nearest 2 h.
+var _span := PackedFloat64Array([0.0, 0.0])
 var _step := 1.0 / 60.0
 var _observed: ExperimentSeries = null
 var _report: Dictionary = {}
@@ -33,6 +35,11 @@ var _runs: Array = []      # [{id, label, run: ExperimentEnergyRun}]
 var _fetch: HaHistoryFetch = null
 var _running := false
 var _cancelled := false
+## Savings modes ("would" / "did"): the two setups to simulate on the real
+## span instead of the model-loads / real-loads pair — [{id, label, graph}],
+## reality's setup first.
+var _variants: Array = []
+var _mode := "calibration"
 
 
 func _ready() -> void:
@@ -54,7 +61,9 @@ func is_running() -> bool:
 	return _running
 
 
-## `opts`: {source: "ha" | "csv"}. Returns "" or why it cannot start.
+## `opts`: {source: "ha" | "csv", mode: "calibration" | "would" | "did",
+## variants: [{id, label, graph}] (the savings modes: reality's setup first,
+## then the other)}. Returns "" or why it cannot start.
 func start(main: Node, start_abs: float, end_abs: float, opts: Dictionary = {}) -> String:
 	if _running:
 		return "A comparison is already running."
@@ -72,12 +81,14 @@ func start(main: Node, start_abs: float, end_abs: float, opts: Dictionary = {}) 
 	var now_abs := SiteTime.unix_to_site_abs(_clock, Time.get_unix_time_from_system())
 	if str(opts.get("source", SOURCE_HA)) == SOURCE_HA and start_abs >= now_abs:
 		return "Reality has not happened yet for that span — pick one in the past."
-	_span = Vector2(start_abs, minf(end_abs, now_abs) if str(opts.get("source", SOURCE_HA)) == SOURCE_HA else end_abs)
-	_step = step_for(_span.y - _span.x)
+	_span = PackedFloat64Array([start_abs, minf(end_abs, now_abs) if str(opts.get("source", SOURCE_HA)) == SOURCE_HA else end_abs])
+	_step = step_for(_span[1] - _span[0])
 	_cancelled = false
 	_running = true
 	_runs.clear()
 	_observed = null
+	_mode = str(opts.get("mode", "calibration"))
+	_variants = (opts.get("variants", []) as Array).duplicate()
 	var cap := float(ExperimentEvaluator.battery_of(_solar_ui)["cap_kwh"])
 	if str(opts.get("source", SOURCE_HA)) == SOURCE_CSV:
 		var clip: Node = _solar_ui.get("_clip_player") if "_clip_player" in _solar_ui else null
@@ -86,7 +97,7 @@ func start(main: Node, start_abs: float, end_abs: float, opts: Dictionary = {}) 
 			return "No CSV clip is loaded. Import one with 📥 on the timeline first."
 		var roles: Dictionary = clip.call("get_role_samples")
 		var viw: Variant = _solar_ui.get("ha_values_in_watts")
-		_observed = ExperimentObserved.from_csv_roles(roles, _clock, _span.x, _span.y, _step, cap,
+		_observed = ExperimentObserved.from_csv_roles(roles, _clock, _span[0], _span[1], _step, cap,
 			bool(viw) if viw != null else true)
 		_observed.label = "Observed (CSV clip)"
 		_report = {"channels": {}, "missing": {}, "error": ""}
@@ -99,7 +110,7 @@ func start(main: Node, start_abs: float, end_abs: float, opts: Dictionary = {}) 
 	add_child(_fetch)
 	_fetch.finished.connect(_on_fetched)
 	progress.emit(0.0, "Asking Home Assistant for what happened…")
-	_fetch.start(svc, linker, _clock, _span.x, _span.y, _step, cap)
+	_fetch.start(svc, linker, _clock, _span[0], _span[1], _step, cap)
 	return ""
 
 
@@ -135,13 +146,23 @@ func _begin_sims() -> void:
 	_report["start_soc_note"] = soc_note
 	var aux_mode := ExperimentEvaluator.AUX_OBSERVED \
 		if _observed != null and _observed.has("aux_kw") else ExperimentEvaluator.AUX_HELD
-	var plans := [["model", "Sim · model loads", ExperimentEvaluator.LOAD_MODEL]]
+	var plans := [["model", "Sim · model loads", ExperimentEvaluator.LOAD_MODEL, {}]]
 	if _observed != null and _observed.has("load_kw"):
-		plans.append(["real_load", "Sim · real loads", ExperimentEvaluator.LOAD_OBSERVED])
+		plans.append(["real_load", "Sim · real loads", ExperimentEvaluator.LOAD_OBSERVED, {}])
+	if not _variants.is_empty():
+		# Savings: both setups with model loads, their automations and their
+		# resources, hydro simulated (not replayed) so a change to it shows;
+		# only their DIFFERENCE is used, on top of the real readings.
+		plans.clear()
+		aux_mode = ExperimentEvaluator.AUX_HELD
+		for v in _variants:
+			plans.append([str(v["id"]), str(v["label"]), ExperimentEvaluator.LOAD_MODEL, v["graph"]])
 	for p in plans:
 		# Each sim gets its own copy of the graph, with the graph's automations
 		# switching its loads in sim time (ExperimentWorld).
-		var w := ExperimentWorld.from_live(_model as GraphModel, _solar_ui, _clock)
+		var graph: Dictionary = p[3]
+		var w: ExperimentWorld = ExperimentWorld.from_live(_model as GraphModel, _solar_ui, _clock) \
+			if graph.is_empty() else ExperimentWorld.from_graph(graph, _solar_ui, _clock)
 		w.observed = _observed
 		w.load_mode = str(p[2])
 		w.aux_mode = aux_mode
@@ -154,7 +175,7 @@ func _begin_sims() -> void:
 		r.resume_pct = float(bat["resume_pct"])
 		r.ceff = float(bat["ceff"])
 		r.deff = float(bat["deff"])
-		r.configure(_span.x, _span.y, _step, float(bat["cap_kwh"]), start_soc, w.inputs_at)
+		r.configure(_span[0], _span[1], _step, float(bat["cap_kwh"]), start_soc, w.inputs_at)
 		if str(p[2]) == ExperimentEvaluator.LOAD_MODEL:
 			r.before_step = w.before_step
 		r.series.label = str(p[1])
@@ -185,7 +206,7 @@ func _process(_delta: float) -> void:
 	for e in _runs:
 		f += (e["run"] as ExperimentEnergyRun).progress()
 	f = f / maxf(float(_runs.size()), 1.0)
-	progress.emit(f, "Simulating %s…" % UiText.duration(_span.y - _span.x))
+	progress.emit(f, "Simulating %s…" % UiText.duration(_span[1] - _span[0]))
 	if all_done:
 		set_process(false)
 		_running = false
@@ -203,8 +224,9 @@ func _finish() -> void:
 			"energy": ExperimentScore.energy(r.series), "calibration": cal,
 			"load_mode": e["load_mode"],
 			"automation_rules": w.automations.rules.size() if used_autos else 0,
-			"automation_log": w.automations.log if used_autos else []})
-	finished.emit({"span": _span, "step_h": _step, "observed": _observed,
+			"automation_log": w.automations.log if used_autos else [],
+			"resources": w.resource_summary()})
+	finished.emit({"mode": _mode, "span": _span, "step_h": _step, "observed": _observed,
 		"observed_energy": ExperimentScore.energy(_observed) if _observed != null else {},
 		"sims": sims, "report": _report})
 

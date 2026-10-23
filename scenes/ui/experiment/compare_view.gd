@@ -25,7 +25,13 @@ extends Node
 
 const MODE_CAL := "calibration"
 const MODE_AB := "ab"
-const MODES := [["Sim vs reality", MODE_CAL], ["A vs B — two versions of this world", MODE_AB]]
+const MODE_WOULD := "would"
+const MODE_DID := "did"
+const MODES := [["Sim vs reality", MODE_CAL], ["A vs B — two versions of this world", MODE_AB],
+	["Would a change have saved? — real data + a fork", MODE_WOULD],
+	["Did a change save? — real data, without it", MODE_DID]]
+## Modes whose A / B pickers choose setups (the savings modes reuse them).
+const PICKER_MODES := [MODE_AB, MODE_WOULD, MODE_DID]
 ## [label, hours (- = before the anchor, + = after), key]. Calibration spans
 ## end at the real now; A/B spans run from the playhead.
 const CAL_SPANS := [
@@ -45,7 +51,8 @@ const SIM_COLORS := [UITheme.C_AMBER, UITheme.C_PRIMARY, UITheme.C_LAVENDER]
 const VERDICT_WORDS := {"good": "Matches", "fair": "Roughly", "poor": "Off", "n/a": "—"}
 
 var _main: Node = null
-var _selection := Vector2(NAN, NAN)
+## [start, end] of the timeline selection, absolute hours (NAN = none).
+var _selection := PackedFloat64Array([NAN, NAN])
 var _frame: ModalFrame = null
 var _exp: CalibrationExperiment = null
 var _ab: AbExperiment = null
@@ -91,9 +98,11 @@ var _res_header: SectionHeader = null
 var _res: GridContainer = null
 
 
-func open_on(main: Node, selection: Vector2, opts: Dictionary = {}) -> void:
+## `selection`: [start, end] absolute hours (PackedFloat64Array or Array; a
+## Vector2 is accepted but has lost precision already).
+func open_on(main: Node, selection: Variant, opts: Dictionary = {}) -> void:
 	_main = main
-	_selection = selection
+	_selection = _span_of(selection)
 	var gv := main.find_child("SystemGraphView", true, false) if main != null else null
 	_store_path = ExperimentStore.path_for_view(gv)
 	_store = ExperimentStore.load_from(_store_path)
@@ -108,17 +117,27 @@ func open_on(main: Node, selection: Vector2, opts: Dictionary = {}) -> void:
 ## {mode, a, b, span (a span key), metric, run}.
 func apply_opts(opts: Dictionary) -> void:
 	_set_mode(str(opts.get("mode", _mode)))
-	if _mode == MODE_AB:
+	if _mode in PICKER_MODES:
 		_refresh_variants(str(opts.get("a", _store.last.get("a", ExperimentStore.CURRENT))),
 			str(opts.get("b", _store.last.get("b", ""))))
 		if opts.has("metric") or _store.last.has("metric"):
 			_select_metric(str(opts.get("metric", _store.last.get("metric", ""))))
 	var key := str(opts.get("span", ""))
 	if key.is_empty():
-		key = "selection" if not is_nan(_selection.x) else ("next_7d" if _mode == MODE_AB else "last_7d")
+		key = "selection" if not is_nan(_selection[0]) else ("next_7d" if _mode == MODE_AB else "last_7d")
 	_select_span(key)
 	if bool(opts.get("run", false)):
 		_on_run()
+
+
+static func _span_of(v: Variant) -> PackedFloat64Array:
+	if v is PackedFloat64Array and (v as PackedFloat64Array).size() >= 2:
+		return v
+	if v is Array and (v as Array).size() >= 2:
+		return PackedFloat64Array([float(v[0]), float(v[1])])
+	if v is Vector2:
+		return PackedFloat64Array([(v as Vector2).x, (v as Vector2).y])
+	return PackedFloat64Array([NAN, NAN])
 
 
 func close() -> void:
@@ -147,7 +166,7 @@ func _build() -> void:
 		_mode_opt.add_item(str(m[0]))
 	_mode_opt.item_selected.connect(func(i: int) -> void:
 		_set_mode(str(MODES[i][1]))
-		if _mode == MODE_AB:
+		if _mode in PICKER_MODES:
 			_refresh_variants(ExperimentStore.CURRENT, "")
 		_select_span("next_7d" if _mode == MODE_AB else "last_7d"))
 	r0.add_child(_mode_opt)
@@ -267,9 +286,9 @@ func _on_span_preset(idx: int) -> void:
 	var hours := float(sp[1])
 	var a := NAN
 	var e := NAN
-	if str(sp[2]) == "selection" and not is_nan(_selection.x):
-		a = _selection.x
-		e = _selection.y
+	if str(sp[2]) == "selection" and not is_nan(_selection[0]):
+		a = _selection[0]
+		e = _selection[1]
 	elif hours != 0.0:
 		# Calibration: the past up to the real now. A / B: from the playhead,
 		# where the battery the runs start from is. Whole hours, so two runs a
@@ -290,25 +309,25 @@ func _on_span_preset(idx: int) -> void:
 	_refresh_range_note()
 
 
-func _span() -> Vector2:
+func _span() -> PackedFloat64Array:
 	var a := _parse_abs(_start_edit.text)
 	var e := _parse_abs(_end_edit.text)
-	return Vector2(a, e)
+	return PackedFloat64Array([a, e])
 
 
 func _refresh_range_note() -> void:
 	var s := _span()
-	if is_nan(s.x) or is_nan(s.y):
+	if is_nan(s[0]) or is_nan(s[1]):
 		_range_note.text = "Type dates as 2026-10-15 06:00 (this site's clock)."
 		_range_note.add_theme_color_override("font_color", UITheme.C_WARN)
 		return
-	if s.y <= s.x:
+	if s[1] <= s[0]:
 		_range_note.text = "The span must end after it starts."
 		_range_note.add_theme_color_override("font_color", UITheme.C_WARN)
 		return
-	var step := CalibrationExperiment.step_for(s.y - s.x)
+	var step := CalibrationExperiment.step_for(s[1] - s[0])
 	_range_note.text = "%s, simulated every %s. Times are this site's clock." % [
-		UiText.duration(s.y - s.x), UiText.duration(step)]
+		UiText.duration(s[1] - s[0]), UiText.duration(step)]
 	_range_note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 
 
@@ -324,11 +343,14 @@ func _on_run() -> void:
 		_status.text = "Stopped."
 		return
 	var s := _span()
-	if is_nan(s.x) or is_nan(s.y):
+	if is_nan(s[0]) or is_nan(s[1]):
 		_refresh_range_note()
 		return
 	if _mode == MODE_AB:
 		_run_ab(s)
+		return
+	if _mode == MODE_WOULD or _mode == MODE_DID:
+		_run_savings(s)
 		return
 	if _exp == null:
 		_exp = CalibrationExperiment.new()
@@ -337,7 +359,7 @@ func _on_run() -> void:
 		_exp.progress.connect(_on_progress)
 		_exp.finished.connect(_on_finished)
 	var src := str(SOURCES[_source_opt.selected][1])
-	var err := _exp.start(_main, s.x, s.y, {"source": src})
+	var err := _exp.start(_main, s[0], s[1], {"source": src})
 	if not err.is_empty():
 		_banner.show_alert(AlertBanner.WARN, err)
 		return
@@ -362,6 +384,8 @@ func _on_finished(result: Dictionary) -> void:
 	_result = result
 	if str(result.get("mode", "")) == MODE_AB:
 		_show_ab_result(result)
+	elif str(result.get("mode", "")) in [MODE_WOULD, MODE_DID]:
+		_show_savings_result(result)
 	else:
 		_show_result(result)
 
@@ -369,7 +393,7 @@ func _on_finished(result: Dictionary) -> void:
 # --- results ----------------------------------------------------------------------
 
 func _show_empty() -> void:
-	_chart.set_data([], Vector2.ZERO, _clock())
+	_chart.set_data([], PackedFloat64Array([0.0, 0.0]), _clock())
 	for c in _table.get_children():
 		c.queue_free()
 	for c in _days.get_children():
@@ -385,7 +409,7 @@ func _show_result(res: Dictionary) -> void:
 	var obs: ExperimentSeries = res.get("observed", null)
 	var sims: Array = res.get("sims", [])
 	var report: Dictionary = res.get("report", {})
-	var span: Vector2 = res.get("span", Vector2.ZERO)
+	var span: PackedFloat64Array = res.get("span", PackedFloat64Array([0.0, 0.0]))
 	# Verdict.
 	var err := str(report.get("error", ""))
 	var have_obs := obs != null and (obs.has("soc_kwh") or obs.has("solar_kw") or obs.has("load_kw"))
@@ -731,17 +755,28 @@ func run_with(start_abs: float, end_abs: float, source: String) -> void:
 # --- A vs B -----------------------------------------------------------------------
 
 func _set_mode(m: String) -> void:
-	_mode = MODE_AB if m == MODE_AB else MODE_CAL
+	_mode = m if m in [MODE_AB, MODE_WOULD, MODE_DID] else MODE_CAL
 	for i in MODES.size():
 		if str(MODES[i][1]) == _mode:
 			_mode_opt.select(i)
-	_source_row.visible = _mode == MODE_CAL
-	_ab_box.visible = _mode == MODE_AB
+	var savings := _mode == MODE_WOULD or _mode == MODE_DID
+	_source_row.visible = _mode == MODE_CAL or savings
+	_ab_box.visible = _mode in PICKER_MODES
 	_table_header.visible = _mode == MODE_CAL
-	_ab_table_header.visible = _mode == MODE_AB
+	_ab_table_header.visible = _mode in PICKER_MODES
+	_metric_lbl.visible = _mode == MODE_AB
+	_metric_opt.visible = _mode == MODE_AB
+	_a_lbl.text = {MODE_WOULD: "Reality ran", MODE_DID: "Reality ran (with the change)"}.get(_mode, "A")
+	_b_lbl.text = {MODE_WOULD: "With the change", MODE_DID: "Without it"}.get(_mode, "B")
 	if _mode == MODE_AB:
 		_frame.set_title("Compare two versions of this world",
 			"Simulate A and B over the same span from the same battery, and see which scores higher.")
+	elif _mode == MODE_WOULD:
+		_frame.set_title("What would a change have saved?",
+			"Your real readings, plus what the sim says the change would have made different.")
+	elif _mode == MODE_DID:
+		_frame.set_title("What did a change save?",
+			"Your real readings with the change in place, against an estimate of the same days without it.")
 	else:
 		_frame.set_title("Compare sim with reality",
 			"Simulate this world over a past span and lay it over what really happened.")
@@ -750,30 +785,33 @@ func _set_mode(m: String) -> void:
 	for i in sp.size():
 		_span_opt.add_item(str(sp[i][0]))
 		if str(sp[i][2]) == "selection":
-			_span_opt.set_item_disabled(i, is_nan(_selection.x))
+			_span_opt.set_item_disabled(i, is_nan(_selection[0]))
 	_banner.clear()
 	_notes.visible = false
 	_show_empty()
 
 
 var _ab_table_header: SectionHeader = null
+var _a_lbl: Label = null
+var _b_lbl: Label = null
+var _metric_lbl: Label = null
 
 
 func _build_ab(box: VBoxContainer) -> void:
 	var r := _row(box)
-	var la := _lbl(r, "A")
-	la.add_theme_color_override("font_color", SIM_COLORS[0])
+	_a_lbl = _lbl(r, "A")
+	_a_lbl.add_theme_color_override("font_color", SIM_COLORS[0])
 	_a_opt = OptionButton.new()
 	_a_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_a_opt.item_selected.connect(func(_i: int) -> void: _refresh_fork_buttons())
 	r.add_child(_a_opt)
-	var lb := _lbl(r, "B")
-	lb.add_theme_color_override("font_color", SIM_COLORS[1])
+	_b_lbl = _lbl(r, "B")
+	_b_lbl.add_theme_color_override("font_color", SIM_COLORS[1])
 	_b_opt = OptionButton.new()
 	_b_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_b_opt.item_selected.connect(func(_i: int) -> void: _refresh_fork_buttons())
 	r.add_child(_b_opt)
-	_lbl(r, "Score by")
+	_metric_lbl = _lbl(r, "Score by")
 	_metric_opt = OptionButton.new()
 	for m in AbExperiment.METRICS:
 		_metric_opt.add_item(str(m[1]))
@@ -954,7 +992,7 @@ func _metric_key() -> String:
 	return str(AbExperiment.METRICS[maxi(_metric_opt.selected, 0)][0])
 
 
-func _run_ab(s: Vector2) -> void:
+func _run_ab(s: PackedFloat64Array) -> void:
 	var a := _sel_id(_a_opt)
 	var b := _sel_id(_b_opt)
 	if a == b:
@@ -973,7 +1011,7 @@ func _run_ab(s: Vector2) -> void:
 		add_child(_ab)
 		_ab.progress.connect(_on_progress)
 		_ab.finished.connect(_on_finished)
-	var err := _ab.start(_main, s.x, s.y, variants)
+	var err := _ab.start(_main, s[0], s[1], variants)
 	if not err.is_empty():
 		_banner.show_alert(AlertBanner.WARN, err)
 		return
@@ -987,7 +1025,7 @@ func _show_ab_result(res: Dictionary) -> void:
 	var sims: Array = res.get("sims", [])
 	if sims.size() < 2:
 		return
-	var span: Vector2 = res.get("span", Vector2.ZERO)
+	var span: PackedFloat64Array = res.get("span", PackedFloat64Array([0.0, 0.0]))
 	var ea: Dictionary = sims[0]["energy"]
 	var eb: Dictionary = sims[1]["energy"]
 	var m := AbExperiment.metric(_metric_key())
@@ -997,12 +1035,12 @@ func _show_ab_result(res: Dictionary) -> void:
 	match str(c["winner"]):
 		"tie":
 			head = "No real difference in %s over %s (A %s, B %s)." % [str(m[1]).to_lower(),
-				UiText.duration(span.y - span.x), _fmt_metric(float(c["a"]), unit), _fmt_metric(float(c["b"]), unit)]
+				UiText.duration(span[1] - span[0]), _fmt_metric(float(c["a"]), unit), _fmt_metric(float(c["b"]), unit)]
 		"a", "b":
 			var w := str(c["winner"]).to_upper()
 			var who: String = str(sims[0 if w == "A" else 1]["label"])
 			head = "%s wins on %s over %s: A %s, B %s (B − A %s%s)." % [who, str(m[1]).to_lower(),
-				UiText.duration(span.y - span.x), _fmt_metric(float(c["a"]), unit),
+				UiText.duration(span[1] - span[0]), _fmt_metric(float(c["a"]), unit),
 				_fmt_metric(float(c["b"]), unit), _signed(float(c["delta"]), unit),
 				"" if is_nan(float(c["pct"])) else ", %+.0f %%" % float(c["pct"])]
 		_:
@@ -1216,6 +1254,227 @@ func run_ab_with(a_id: String, b_id: String, start_abs: float, end_abs: float, m
 	_refresh_variants(a_id, b_id)
 	if not metric_key.is_empty():
 		_select_metric(metric_key)
+	var clock := _clock()
+	_start_edit.text = SiteTime.format_abs(clock, start_abs)
+	_end_edit.text = SiteTime.format_abs(clock, end_abs)
+	_span_opt.select(_spans().size() - 1)
+	_refresh_range_note()
+	_on_run()
+
+
+# --- would have saved / did save ----------------------------------------------------
+
+func _run_savings(s: PackedFloat64Array) -> void:
+	var a := _sel_id(_a_opt)
+	var b := _sel_id(_b_opt)
+	if a == b:
+		_banner.show_alert(AlertBanner.WARN, "Pick two different setups — reality's, and the other one.")
+		return
+	var other_word := "With the change" if _mode == MODE_WOULD else "Without it"
+	var variants: Array = []
+	for pair in [[a, "Reality's setup"], [b, other_word]]:
+		var g := _variant_graph(str(pair[0]))
+		if g.is_empty():
+			_banner.show_alert(AlertBanner.WARN, "%s has no graph to simulate." % str(pair[1]))
+			return
+		variants.append({"id": str(pair[0]), "label": "Sim · %s · %s" % [str(pair[1]), _variant_name(str(pair[0]))],
+			"graph": g})
+	if _exp == null:
+		_exp = CalibrationExperiment.new()
+		_exp.name = "CalibrationExperiment"
+		add_child(_exp)
+		_exp.progress.connect(_on_progress)
+		_exp.finished.connect(_on_finished)
+	var src := str(SOURCES[_source_opt.selected][1])
+	var err := _exp.start(_main, s[0], s[1], {"source": src, "mode": _mode, "variants": variants})
+	if not err.is_empty():
+		_banner.show_alert(AlertBanner.WARN, err)
+		return
+	_store.last = {"mode": _mode, "a": a, "b": b}
+	_save_store()
+	_banner.clear()
+	_set_running(true)
+
+
+func _show_savings_result(res: Dictionary) -> void:
+	var obs: ExperimentSeries = res.get("observed", null)
+	var sims: Array = res.get("sims", [])
+	var report: Dictionary = res.get("report", {})
+	var span: PackedFloat64Array = res.get("span", PackedFloat64Array([0.0, 0.0]))
+	var would := str(res.get("mode", "")) == MODE_WOULD
+	if obs == null or sims.size() < 2 or not obs.has("load_kw"):
+		var err := str(report.get("error", ""))
+		_banner.show_alert(AlertBanner.ERROR, err if not err.is_empty() else
+			"The estimate needs real power-use readings for that span. Check the span and this world's Live links (Power use).")
+		_show_empty()
+		return
+	var sim_real: ExperimentSeries = sims[0]["series"]
+	var sim_other: ExperimentSeries = sims[1]["series"]
+	var est_label := "Estimate · with the change" if would else "Estimate · without the change"
+	var est := ExperimentScore.counterfactual(obs, sim_real, sim_other, est_label)
+	var sv := ExperimentScore.savings(obs, est)
+	_last_savings = sv
+	var saved := float(sv.get("saved_kwh", NAN))
+	var pct := float(sv.get("saved_pct", NAN))
+	var real_used := float((sv.get("load_kw", {}) as Dictionary).get("real_kwh", NAN))
+	var est_used := float((sv.get("load_kw", {}) as Dictionary).get("est_kwh", NAN))
+	var days := UiText.duration(span[1] - span[0])
+	var head := ""
+	var tie := absf(saved) < maxf(0.005 * maxf(real_used, est_used), 0.05)
+	if would:
+		if tie:
+			head = "Over %s the change would have made no real difference to the energy used (%s)." % [days, UiText.num(real_used, "kWh")]
+		elif saved > 0.0:
+			head = "With the change you would have used %s less over %s (%.0f %%): %s instead of the %s you really used." % [
+				UiText.num(saved, "kWh"), days, -pct, UiText.num(est_used, "kWh"), UiText.num(real_used, "kWh")]
+		else:
+			head = "With the change you would have used %s MORE over %s (+%.0f %%): %s instead of the %s you really used." % [
+				UiText.num(-saved, "kWh"), days, -pct, UiText.num(est_used, "kWh"), UiText.num(real_used, "kWh")]
+	else:
+		# Did: the estimate is the world WITHOUT the change; reality had it.
+		var did_save := est_used - real_used
+		if tie:
+			head = "Over %s the change made no real difference to the energy used (%s)." % [days, UiText.num(real_used, "kWh")]
+		elif did_save > 0.0:
+			head = "The change saved %s over %s (%.0f %%): you really used %s; without it, an estimated %s." % [
+				UiText.num(did_save, "kWh"), days, 100.0 * did_save / maxf(est_used, 1e-9),
+				UiText.num(real_used, "kWh"), UiText.num(est_used, "kWh")]
+		else:
+			head = "The change COST %s over %s: you really used %s; without it, an estimated %s." % [
+				UiText.num(-did_save, "kWh"), days, UiText.num(real_used, "kWh"), UiText.num(est_used, "kWh")]
+	# When the battery, not the loads, limited what was used, the meters
+	# barely move: say where the change really shows (the sims' demand and
+	# AC-off hours — what no meter records).
+	var e0: Dictionary = sims[0]["energy"]
+	var e1: Dictionary = sims[1]["energy"]
+	var dem := float(e1.get("demand_kwh", 0.0)) - float(e0.get("demand_kwh", 0.0))
+	var served_d := absf(est_used - real_used)
+	if absf(dem) > maxf(2.0 * served_d, 1.0):
+		var off_d := float(e1.get("ac_off_h", 0.0)) - float(e0.get("ac_off_h", 0.0))
+		var less_more := "less" if dem < 0.0 else "more"
+		var other_name := "with the change" if would else "without it"
+		head += "  The loads would have asked for %s %s %s; the battery limited what could be used, so it shows as %s %s with the AC off." % [
+			UiText.num(absf(dem), "kWh"), less_more, other_name, UiText.duration(absf(off_d)),
+			"more time" if off_d > 0.0 else "less time"]
+	var cal: Dictionary = sims[0].get("calibration", {})
+	var trust := str(cal.get("overall", ""))
+	var lvl := AlertBanner.OK if trust == "good" else (AlertBanner.WARN if trust in ["fair", ""] else AlertBanner.ERROR)
+	_banner.show_alert(lvl, head)
+	var notes: Array = []
+	notes.append("How it is worked out: your real readings, plus the difference between two sims of the same days — reality's setup and the other one. The sim's own error mostly cancels, because only its difference is used.")
+	var chs: Dictionary = cal.get("channels", {})
+	var parts: Array = []
+	for ch in ["load_kw", "solar_kw", "soc_pct"]:
+		if chs.has(ch):
+			var st: Dictionary = chs[ch]
+			if ch == "soc_pct":
+				parts.append("battery off by %.0f pts on average" % float(st.get("mae", NAN)))
+			else:
+				parts.append("%s: NMBE %.0f %%, CV(RMSE) %.0f %%" % [_ch_name(ch).to_lower(),
+					float(st.get("nmbe_pct", NAN)), float(st.get("cvrmse_pct", NAN))])
+	notes.append("How far to trust it: the sim of reality's setup matched reality %s (%s)." % [
+		{"good": "well", "fair": "roughly", "poor": "poorly"}.get(trust, "—"), ", ".join(parts)])
+	if not str(report.get("start_soc_note", "")).is_empty():
+		notes.append("Both sims start from %s." % str(report["start_soc_note"]))
+	for ch in (report.get("missing", {}) as Dictionary):
+		notes.append(str(report["missing"][ch]))
+	for ch in ["load_kw", "solar_kw", "soc_kwh"]:
+		if obs.has(ch) and obs.coverage(ch) < 0.95:
+			notes.append("%s: real readings cover %s of the span." % [_ch_name(ch), UiText.pct(obs.coverage(ch))])
+	_notes.text = "\n".join(notes)
+	_notes.visible = true
+	for ch in _legend.get_children():
+		ch.queue_free()
+	var items: Array = [{"series": obs, "color": C_OBS, "band": true},
+		{"series": est, "color": SIM_COLORS[1]}, {"series": sim_real, "color": SIM_COLORS[0]}]
+	_legend_item(obs.label, C_OBS)
+	_legend_item(est_label, SIM_COLORS[1])
+	_legend_item(str(sims[0]["label"]), SIM_COLORS[0])
+	_chart.set_data(items, span, _clock())
+	_fill_savings_table(obs, est, sv, sims, would)
+	_fill_savings_days(obs, est, would)
+	_fill_ab_autos(sims)
+	_fill_ab_resources(sims)
+
+
+var _last_savings: Dictionary = {}
+
+
+## For the harness: the last savings totals (ExperimentScore.savings).
+func last_savings() -> Dictionary:
+	return _last_savings
+
+
+func _fill_savings_table(obs: ExperimentSeries, est: ExperimentSeries, sv: Dictionary, sims: Array, would: bool) -> void:
+	for ch in _table.get_children():
+		ch.queue_free()
+	_table.columns = 4
+	var est_head := "With the change (estimated)" if would else "Without it (estimated)"
+	_cell(_table, "", true)
+	_cell(_table, "Reality", true, C_OBS)
+	_cell(_table, est_head, true, SIM_COLORS[1])
+	_cell(_table, "Difference", true)
+	for row in [["load_kw", "Energy used"], ["solar_kw", "Solar delivered"], ["aux_kw", "Hydro / wind"]]:
+		var d: Dictionary = sv.get(str(row[0]), {})
+		if d.is_empty():
+			continue
+		_cell(_table, str(row[1]))
+		_cell(_table, UiText.num(float(d["real_kwh"]), "kWh"))
+		_cell(_table, UiText.num(float(d["est_kwh"]), "kWh"))
+		var p := float(d.get("pct", NAN))
+		_cell(_table, _signed(float(d["delta_kwh"]), "kWh") + ("" if is_nan(p) else "  (%+.0f %%)" % p), false, UITheme.C_TEXT_S)
+	if sv.has("soc_end_real_pct"):
+		_cell(_table, "Battery at the end")
+		_cell(_table, _pct(float(sv["soc_end_real_pct"])))
+		_cell(_table, _pct(float(sv["soc_end_est_pct"])))
+		_cell(_table, _signed(float(sv["soc_end_est_pct"]) - float(sv["soc_end_real_pct"]), "%"), false, UITheme.C_TEXT_S)
+	# From the two sims (no real reading for these).
+	var e0: Dictionary = sims[0]["energy"]
+	var e1: Dictionary = sims[1]["energy"]
+	for m in [["demand_kwh", "Energy the loads asked for (sims)", "kWh"], ["ac_off_h", "Time with AC off (sims)", "h"],
+			["tank_empty_h", "Hours tanks sat empty (sims)", "h"]]:
+		if not e0.has(str(m[0])):
+			continue
+		_cell(_table, str(m[1]), false, UITheme.C_TEXT_S)
+		_cell(_table, _fmt_metric(float(e0[str(m[0])]), str(m[2])), false, SIM_COLORS[0])
+		_cell(_table, _fmt_metric(float(e1[str(m[0])]), str(m[2])), false, SIM_COLORS[1])
+		_cell(_table, _signed(float(e1[str(m[0])]) - float(e0[str(m[0])]), str(m[2])), false, UITheme.C_TEXT_S)
+
+
+func _fill_savings_days(obs: ExperimentSeries, est: ExperimentSeries, would: bool) -> void:
+	for ch in _days.get_children():
+		ch.queue_free()
+	_days.columns = 4
+	for h in ["Day", "Used really", "Used " + ("with the change" if would else "without it") + " (est.)", "Difference"]:
+		_cell(_days, h, true)
+	var clock := _clock()
+	var d0 := SiteTime.day_start(obs.start_abs)
+	var t := d0
+	while t < obs.end_abs() - 1e-9:
+		var a := maxf(t, obs.start_abs)
+		var b := minf(t + 24.0, obs.end_abs())
+		var r := obs.integrate("load_kw", a, b)
+		var e := est.integrate("load_kw", a, b)
+		var date := ""
+		if clock != null:
+			var dt: Dictionary = clock.call("abs_hours_to_date", t + 12.0)
+			date = "%d/%d" % [int(dt["month"]), int(dt["day"])]
+		_cell(_days, date)
+		_cell(_days, UiText.num(r, "kWh"))
+		_cell(_days, UiText.num(e, "kWh"))
+		_cell(_days, _signed(e - r, "kWh"), false, UITheme.C_TEXT_S)
+		t += 24.0
+
+
+## For the harness: savings mode by variant id over [start, end), then run.
+func run_savings_with(mode: String, a_id: String, b_id: String, start_abs: float, end_abs: float,
+		source: String = "ha") -> void:
+	_set_mode(mode)
+	_store = ExperimentStore.load_from(_store_path)
+	_refresh_variants(a_id, b_id)
+	for i in SOURCES.size():
+		if str(SOURCES[i][1]) == source:
+			_source_opt.select(i)
 	var clock := _clock()
 	_start_edit.text = SiteTime.format_abs(clock, start_abs)
 	_end_edit.text = SiteTime.format_abs(clock, end_abs)

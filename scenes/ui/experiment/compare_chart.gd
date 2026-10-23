@@ -20,7 +20,7 @@ const LEFT_W := 86.0
 
 ## [{series: ExperimentSeries, color: Color, band: bool}]
 var _items: Array = []
-var _span := Vector2.ZERO
+var _span := PackedFloat64Array([0.0, 0.0])
 var _clock: Object = null
 var _hover_x := -1.0
 var _cache: Dictionary = {}
@@ -35,7 +35,8 @@ func _init() -> void:
 		queue_redraw())
 
 
-func set_data(items: Array, span: Vector2, clock: Object) -> void:
+## `span` = [start, end] absolute hours (64-bit; a Vector2 rounds them to 2 h).
+func set_data(items: Array, span: PackedFloat64Array, clock: Object) -> void:
 	_items = items
 	_span = span
 	_clock = clock
@@ -62,7 +63,7 @@ func _plot_rect() -> Rect2:
 func _draw() -> void:
 	var font := UITheme.font("regular", true)
 	var pr := _plot_rect()
-	var view_span := _span.y - _span.x
+	var view_span := _span[1] - _span[0]
 	if view_span <= 0.0 or _items.is_empty():
 		draw_string(font, Vector2(LEFT_W, 24.0), "Run a comparison to see the curves here.",
 			HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_SM, UITheme.C_TEXT_M)
@@ -71,7 +72,7 @@ func _draw() -> void:
 	for it in _items:
 		min_step = minf(min_step, (it["series"] as ExperimentSeries).step_h)
 	var w := TimelineBinning.bin_width(view_span, pr.size.x, min_step)
-	var g := TimelineBinning.grid(_span.x, _span.y, w)
+	var g := TimelineBinning.grid(_span[0], _span[1], w)
 	var y := 0.0
 	for lane in LANES:
 		var ch := str(lane["ch"])
@@ -131,12 +132,12 @@ func _draw_series(r: Rect2, b: Dictionary, lo: float, hi: float, col: Color, ban
 	var me: PackedFloat32Array = b["mean"]
 	var mn: PackedFloat32Array = b["mn"]
 	var mx: PackedFloat32Array = b["mx"]
-	var px_per_h := r.size.x / (_span.y - _span.x)
+	var px_per_h := r.size.x / (_span[1] - _span[0])
 	var run := PackedVector2Array()
 	for k in me.size() + 1:
 		var known := k < me.size() and not is_nan(me[k])
 		if known:
-			var x := r.position.x + ((float(i0 + k) + 0.5) * w - _span.x) * px_per_h
+			var x := r.position.x + ((float(i0 + k) + 0.5) * w - _span[0]) * px_per_h
 			if x < r.position.x - 1.0 or x > r.end.x + 1.0:
 				known = false
 			else:
@@ -155,15 +156,15 @@ func _draw_series(r: Rect2, b: Dictionary, lo: float, hi: float, col: Color, ban
 
 
 func _draw_axis(pr: Rect2, font: Font) -> void:
-	var span := _span.y - _span.x
-	var day0 := SiteTime.day_start(_span.x)
+	var span := _span[1] - _span[0]
+	var day0 := SiteTime.day_start(_span[0])
 	var stride := 24.0 if span <= 24.0 * 16.0 else 24.0 * 7.0
 	var tick_h := 6.0 if span <= 30.0 else (stride if span > 24.0 * 3.0 else 6.0)
 	var t := day0
 	var y := pr.end.y
-	while t <= _span.y + 1e-6:
-		if t >= _span.x - 1e-6:
-			var x := pr.position.x + (t - _span.x) / span * pr.size.x
+	while t <= _span[1] + 1e-6:
+		if t >= _span[0] - 1e-6:
+			var x := pr.position.x + (t - _span[0]) / span * pr.size.x
 			var is_day := absf(fposmod(t, 24.0)) < 1e-6
 			draw_line(Vector2(x, 0.0), Vector2(x, y), Color(UITheme.C_BORDER, 0.55 if is_day else 0.25), 1.0)
 			var txt := ""
@@ -178,7 +179,7 @@ func _draw_axis(pr: Rect2, font: Font) -> void:
 func _draw_hover(pr: Rect2, font: Font) -> void:
 	if _hover_x < pr.position.x or _hover_x > pr.end.x:
 		return
-	var t := _span.x + (_hover_x - pr.position.x) / pr.size.x * (_span.y - _span.x)
+	var t := _span[0] + (_hover_x - pr.position.x) / pr.size.x * (_span[1] - _span[0])
 	draw_line(Vector2(_hover_x, 0.0), Vector2(_hover_x, pr.end.y), Color(UITheme.C_TEXT, 0.5), 1.0)
 	var y := 0.0
 	for lane in LANES:

@@ -3159,6 +3159,12 @@ func get_selection_abs() -> Vector2:
 		return Vector2(NAN, NAN)
 	return Vector2(_sel_start_abs, _sel_end_abs)
 
+## The selection as 64-bit floats. get_selection_abs's Vector2 is float32,
+## which holds absolute hours (~1.8e7) only to the nearest 2 h.
+func get_selection_abs_f64() -> PackedFloat64Array:
+	return PackedFloat64Array([_sel_start_abs, _sel_end_abs])
+
+
 func set_selection_abs(a: float, b: float) -> void:
 	_sel_start_abs = minf(a, b)
 	_sel_end_abs = maxf(a, b)

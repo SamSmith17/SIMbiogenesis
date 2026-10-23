@@ -254,3 +254,76 @@ static func _g14(y: PackedFloat32Array, yh: PackedFloat32Array) -> Dictionary:
 	var dof := float(n - 1)
 	return {"hours": n, "nmbe_pct": 100.0 * sd / (dof * absf(mean)),
 		"cvrmse_pct": 100.0 * sqrt(sd2 / dof) / absf(mean)}
+
+
+# --- savings from real data + the sim's difference --------------------------------
+
+## The channels a counterfactual carries over from reality.
+const CF_CHANNELS := ["load_kw", "solar_kw", "aux_kw", "soc_kwh"]
+
+
+## What reality would have looked like under the OTHER setup, on reality's
+## grid: the real readings plus what the sims say changes,
+##   estimate = observed + (sim_other − sim_reality)
+## per channel the observed series has (the calibrated-simulation method,
+## IPMVP Option D: the sim supplies only the DIFFERENCE, so its absolute
+## error largely cancels). Flows are kept ≥ 0, the battery inside [0, cap].
+## Unknown where either side is unknown. Both sims must share the grid.
+static func counterfactual(obs: ExperimentSeries, sim_real: ExperimentSeries,
+		sim_other: ExperimentSeries, label: String) -> ExperimentSeries:
+	var est := ExperimentSeries.new()
+	est.label = label
+	est.capacity_kwh = obs.capacity_kwh
+	var chans: Array = []
+	for ch in CF_CHANNELS:
+		if obs.has(ch):
+			chans.append(ch)
+	var n := obs.size()
+	est.setup(obs.start_abs, obs.step_h, n, chans)
+	for ch in chans:
+		var a := est.values(ch)
+		for i in n:
+			var o := obs.value(ch, i)
+			var r := sim_real.value(ch, i)
+			var x := sim_other.value(ch, i)
+			if is_nan(o) or is_nan(r) or is_nan(x):
+				continue
+			var v := o + (x - r)
+			a[i] = clampf(v, 0.0, est.capacity_kwh) if ch == "soc_kwh" else maxf(v, 0.0)
+		est.data[ch] = a
+	return est
+
+
+## Totals for the savings table: per channel (kWh) reality vs the estimate,
+## over the samples the estimate knows; battery at the end. `saved_kwh` =
+## real energy used − estimated (positive = the OTHER setup uses less).
+static func savings(obs: ExperimentSeries, est: ExperimentSeries) -> Dictionary:
+	var out := {}
+	var n := mini(obs.size(), est.size())
+	for ch in ["load_kw", "solar_kw", "aux_kw"]:
+		if not est.has(ch):
+			continue
+		var real := 0.0
+		var other := 0.0
+		for i in n:
+			var e := est.value(ch, i)
+			var o := obs.value(ch, i)
+			if is_nan(e) or is_nan(o):
+				continue
+			real += o * obs.step_h
+			other += e * obs.step_h
+		out[ch] = {"real_kwh": real, "est_kwh": other, "delta_kwh": other - real,
+			"pct": NAN if absf(real) < 1e-9 else 100.0 * (other - real) / absf(real)}
+	if out.has("load_kw"):
+		out["saved_kwh"] = -float(out["load_kw"]["delta_kwh"])
+		out["saved_pct"] = -float(out["load_kw"]["pct"]) if not is_nan(float(out["load_kw"]["pct"])) else NAN
+	if est.has("soc_kwh"):
+		var last := -1
+		for i in range(n - 1, -1, -1):
+			if not is_nan(est.value("soc_kwh", i)):
+				last = i
+				break
+		if last >= 0:
+			out["soc_end_real_pct"] = obs.value("soc_pct", last)
+			out["soc_end_est_pct"] = est.value("soc_pct", last)
+	return out

@@ -1240,7 +1240,8 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.
 # HaHistoryFetch's link resolution + units, the fork store (temp-file round
 # trip, unique names, the without-automation copy) and an A/B run where B
 # lacks an evening heater rule, and a pump on a 30 L tank run by the copy's
-# own flow engine (runs 3 h, draws only then, blocks). EXPECTED_CHECKS;
+# own flow engine (runs 3 h, draws only then, blocks), and the
+# counterfactual / savings maths by hand. EXPECTED_CHECKS;
 # --import first):
 Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.gd
 # Automations in sim time (offline — AutomationSim crossings incl. midnight,
@@ -1249,6 +1250,11 @@ Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.g
 # graph copy whose heater follows 18:00-on / 23:00-off through a real
 # GraphAcLoad reading while the live model never moves. EXPECTED_CHECKS):
 Godot.exe.exe --headless --path . --script power_system/automation/automation_sim_selftest.gd
+# Would / did save end to end (sandbox, fake HA): reality = the world's own
+# sim with a nightly shutdown, served as history; "did" with a fork without
+# it — the window's span exact to the hour, the estimate = the fork's sim,
+# the reality sim a good match; "would" worded as a what-if:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/compare_savings_probe.gd -Label compare_savings
 # A vs B end to end (sandbox): a nightly shutdown on a load, the automation
 # card's A/B (fork without it, next week) — A asks for less and wins; editing
 # the fork (canvas holds it, clock held, engine + HA links stand down), Done
@@ -5668,8 +5674,7 @@ their placeholder exports until the projection split (plan milestone 4);
 
 Plan: `~/.claude/plans/i-want-to-be-polymorphic-island.md` (A/B experiments;
 landed: calibration, automations in sim time, forks + A vs B, resources
-in the runs; next: the "would / did save" observed modes, the projection
-split). ⧉ on the
+in the runs, would / did save; next: the projection split). ⧉ on the
 timeline (`Main.open_compare_view(selection)`, `scenes/ui/experiment/
 compare_view.gd`, a `ModalFrame`) simulates THIS world over a past span and
 lays it over what really happened, with error numbers.
@@ -5792,6 +5797,31 @@ lays it over what really happened, with error numbers.
   `Main.ab_test_automation(item, auto_id)`): a fork named
   `Without “<alias>”` (refreshed from the world if it exists) and Compare
   in A vs B over the next week, run at once.
+- **"Would a change have saved?" / "Did a change save?"** (the window's
+  third and fourth modes; IPMVP Option D, calibrated simulation). On a past
+  span with real data (HA or the CSV clip), `CalibrationExperiment` runs the
+  two chosen setups (opts `variants`: reality's setup first, then the other)
+  with model loads, their automations and resources, hydro simulated, from
+  the real battery at the start. `ExperimentScore.counterfactual(obs,
+  sim_real, sim_other)` = the real readings + (other − reality) per channel
+  (flows ≥ 0, battery inside its capacity, unknown where either side is):
+  only the sims' DIFFERENCE is used, so their absolute error largely
+  cancels (pinned: a constant sim error gives the same savings).
+  `ExperimentScore.savings` totals real vs estimated energy used / solar /
+  aux and the battery at the end. "Would" = reality + the change; "did" =
+  reality had the change, the estimate is without it. The banner states the
+  saving and, when the battery rather than the loads limited what was used
+  (the sims' demand moves ≥ 2× more than delivered energy), where it really
+  shows (asked-for kWh, AC-off hours). The notes say how far to trust it:
+  how well the sim of reality's setup matched (G14 NMBE / CV(RMSE), battery
+  points). Probe: the estimate without the change equals the fork's own sim
+  to 0.01 kWh when reality IS the world's sim.
+- ⚠ **Never put absolute hours in a Vector2.** Its components are float32,
+  which holds ~1.8e7 only to the nearest 2 h: every Compare span was being
+  rounded to an even hour (a 23:00 start ran from 00:00). Spans are
+  `PackedFloat64Array([a, b])` now; `SolarUI.get_selection_abs_f64()` is the
+  exact selection. `get_selection_abs()` (Vector2) still rounds — its other
+  callers (video export, render) have the same 2 h error.
 - **HA links survive the bootcamp now.** `HAEntityLinker.set_suspended`:
   the tutorial sandbox's cleared graph used to make the linker prune (and
   save away) every node-level link of the world — once from the model's

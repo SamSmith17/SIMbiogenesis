@@ -2870,7 +2870,14 @@ func _on_loadmode_pressed() -> void:
 
 func _on_compare_pressed() -> void:
 	if _main != null and is_instance_valid(_main) and _main.has_method("open_compare_view"):
-		_main.call("open_compare_view", _climelapse_selection_range())
+		# 64-bit: a Vector2 selection is rounded to 2 h at absolute-hour scale.
+		var sel := PackedFloat64Array([NAN, NAN])
+		var s := _get_solar()
+		if s != null and s.has_method("get_selection_abs_f64"):
+			sel = s.call("get_selection_abs_f64")
+			if not is_nan(sel[0]) and sel[1] <= sel[0]:
+				sel = PackedFloat64Array([NAN, NAN])
+		_main.call("open_compare_view", sel)
 
 
 func _on_load_video_pressed() -> void:

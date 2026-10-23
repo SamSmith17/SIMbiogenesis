@@ -5228,7 +5228,9 @@ var _compare_view : Node = null
 
 ## `opts`: {mode: "calibration" | "ab", a, b: variant ids ("current" or a
 ## fork id), run: bool}.
-func open_compare_view( selection: Vector2 = Vector2( NAN, NAN ), opts: Dictionary = {} ) -> Node :
+## `selection`: [start, end] absolute hours as a PackedFloat64Array (a
+## Vector2 is accepted but float32 has already rounded it to 2 h).
+func open_compare_view( selection: Variant = PackedFloat64Array( [ NAN, NAN ] ), opts: Dictionary = {} ) -> Node :
 	if _compare_view != null and is_instance_valid( _compare_view ) :
 		if not opts.is_empty() and _compare_view.has_method( "apply_opts" ) :
 			_compare_view.call( "apply_opts", opts )

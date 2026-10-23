@@ -13,7 +13,7 @@ extends SceneTree
 ## Carries EXPECTED_CHECKS: a Godot runtime error aborts the enclosing test
 ## function while the suite still prints PASS.
 
-const EXPECTED_CHECKS := 80
+const EXPECTED_CHECKS := 90
 
 var _checks := 0
 var _failures := 0
@@ -38,6 +38,7 @@ func _initialize() -> void:
 	_test_store()
 	_test_ab()
 	_test_resources_in_run()
+	_test_counterfactual()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: check count %d != EXPECTED_CHECKS %d (a runtime error aborted a test?)" % [
@@ -419,3 +420,42 @@ func _test_resources_in_run() -> void:
 	_check("flow: switched off, nothing moves and nothing is drawn",
 		float(tb.get("end_pct", 0.0)) > 99.0 and rb.series.integrate("load_kw") < 1e-6)
 	_check("flow: the live-world-less run never touched a host", wa.flow != null)
+
+
+func _flat(load_kw: float, soc_kwh: float, n: int = 24) -> ExperimentSeries:
+	var s := ExperimentSeries.new()
+	s.setup(1000.0, 1.0, n, ["load_kw", "soc_kwh"])
+	s.capacity_kwh = 10.0
+	for i in n:
+		s.put("load_kw", i, load_kw)
+		s.put("soc_kwh", i, soc_kwh)
+	return s
+
+
+## estimate = observed + (other − reality), by hand.
+func _test_counterfactual() -> void:
+	var obs := _flat(1.0, 5.0)
+	var real := _flat(0.8, 6.0)
+	var other := _flat(0.5, 7.0)
+	var est := ExperimentScore.counterfactual(obs, real, other, "est")
+	_check("counterfactual: obs + (other − reality)", _near(est.value("load_kw", 3), 0.7, 1e-6))
+	_check("counterfactual: battery shifts by the sims' difference", _near(est.value("soc_kwh", 3), 6.0, 1e-6))
+	var sv := ExperimentScore.savings(obs, est)
+	_check("savings: 24 h × 0.3 kW = 7.2 kWh saved", _near(float(sv["saved_kwh"]), 7.2, 1e-4), str(sv))
+	_check("savings: 30 %", _near(float(sv["saved_pct"]), 30.0, 1e-3))
+	_check("savings: battery at the end, real vs estimate",
+		_near(float(sv["soc_end_real_pct"]), 50.0, 1e-3) and _near(float(sv["soc_end_est_pct"]), 60.0, 1e-3))
+	# A sim that is off by a constant cancels out: same difference, same estimate.
+	var real_off := _flat(1.8, 6.0)
+	var other_off := _flat(1.5, 7.0)
+	_check("savings: the sim's constant error cancels",
+		_near(float(ExperimentScore.savings(obs, ExperimentScore.counterfactual(obs, real_off, other_off, "e"))["saved_kwh"]), 7.2, 1e-4))
+	# Clamps and gaps.
+	var small := _flat(0.1, 9.5)
+	var est2 := ExperimentScore.counterfactual(small, _flat(1.0, 1.0), _flat(0.0, 5.0), "e")
+	_check("counterfactual: a flow never goes negative", est2.value("load_kw", 0) == 0.0)
+	_check("counterfactual: the battery stays inside its capacity", _near(est2.value("soc_kwh", 0), 10.0, 1e-6))
+	obs.put("load_kw", 5, NAN)
+	var est3 := ExperimentScore.counterfactual(obs, real, other, "e")
+	_check("counterfactual: unknown where reality is unknown", is_nan(est3.value("load_kw", 5)))
+	_check("savings: gaps leave both totals out", _near(float(ExperimentScore.savings(obs, est3)["saved_kwh"]), 0.3 * 23.0, 1e-4))
