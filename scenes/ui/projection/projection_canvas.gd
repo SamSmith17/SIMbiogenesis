@@ -1,79 +1,25 @@
 extends Control
 
+## The projection canvas (I): two projection SOURCES side by side, the sim
+## camera (left) and a live camera feed or a recorded timelapse video locked to
+## the sim clock (right), with corner-pin projection mapping (ProjectionWarp)
+## over them for a projector. The timeline's VID lane and its video / live-feed
+## buttons drive the right-hand source.
+##
+## Until 2026-10-23 it also carried a "sim vs live" dashboard in its bottom
+## half (placeholder numbers when SolarUI was hidden, fabricated history
+## curves, device rows nobody fed). That job is the Compare window now
+## (scenes/ui/experiment/compare_view.gd, ⧉ on the timeline), which scores the
+## sim against real Home Assistant history.
+
 @export_group("Projection Canvas Visibility")
 @export var start_hidden: bool = true
-@export var mirror_from_solar_ui_when_available: bool = true
-@export_node_path("Control") var solar_ui_path: NodePath = NodePath("../../UILayer/SolarUI")
 
-@export_group("Warp Calibration")
-@export var warp_enabled: bool = true
-@export var calibration_mode_enabled: bool = false
-@export var warp_config_path: String = "user://projection_canvas_warp.cfg"
-@export var warp_toggle_action_name: StringName = &"toggle_projection_warp"
-@export var calibration_toggle_action_name: StringName = &"toggle_projection_calibration"
-@export var warp_reset_action_name: StringName = &"reset_projection_warp"
-
-@export_group("Home Assistant")
-@export_node_path("Node") var ha_client_path: NodePath
-@export var auto_subscribe_on_ready: bool = true
-@export var request_initial_entity_states: bool = true
-
-@export_group("Power Entities")
-@export var ha_values_in_watts: bool = true
-@export var ha_battery_soc_entity: String = ""
-@export var ha_load_entity: String = ""
-@export var ha_solar_entity: String = ""
-@export var ha_daily_solar_entity: String = ""
-@export var ha_daily_load_entity: String = ""
-
-@export_group("Weather Entities")
-@export var ha_solar_radiation_entity: String = ""
-@export var ha_lux_entity: String = ""
-@export var ha_rain_rate_entity: String = ""
-@export var ha_rain_state_entity: String = ""
-@export var ha_temperature_entity: String = ""
-@export var ha_wind_speed_entity: String = ""
-@export var ha_rain_rate_in_mm: bool = true
-@export var ha_temp_in_celsius: bool = true
-@export var ha_wind_in_ms: bool = true
-
-@export_group("Device Rows")
-@export var device_names: PackedStringArray = [
-	"Device 01",
-	"Device 02",
-	"Device 03",
-	"Device 04",
-	"Device 05",
-	"Device 06",
-	"Device 07",
-	"Device 08"
-]
-@export var device_entity_ids: PackedStringArray = ["", "", "", "", "", "", "", ""]
-@export var device_max_watts: PackedFloat32Array = [4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0, 4000.0]
-
-@export_group("Simulated Comparison Values")
-@export var simulated_battery_soc: float = 82.0
-@export var simulated_solar_today_kwh: float = 18.4
-@export var simulated_load_today_kwh: float = 14.1
-@export var simulated_current_load_watts: float = 1850.0
-@export var simulated_current_solar_watts: float = 2275.0
-@export var simulated_weather_state: String = "Sunny"
-@export var simulated_weather_temp_c: float = 24.0
-@export var simulated_weather_wind_ms: float = 2.8
-@export var simulated_device_watts: PackedFloat32Array = [350.0, 220.0, 110.0, 480.0, 160.0, 95.0, 210.0, 145.0]
-
-enum AccentThemeMode {
-	NEON_CYAN,
-	NEON_AMBER,
-	NEON_CRIMSON,
-	NEON_AUTO_ALERT
-}
-
-@export_group("Visual Theme + Animation")
-@export var accent_theme_mode: AccentThemeMode = AccentThemeMode.NEON_CYAN
-@export var low_battery_alert_threshold: float = 20.0
-@export var high_load_alert_watts: float = 4500.0
-@export var value_animation_speed: float = 10.0
+@export_group("Projection mapping")
+## Corner-pin calibration (fractions of the screen; ProjectionWarp).
+@export var warp_config_path: String = "user://projection_canvas_warp_v2.cfg"
+## The pre-2026-10-23 file (absolute pixels, four quadrants) migrated on load.
+@export var legacy_warp_config_path: String = "user://projection_canvas_warp.cfg"
 
 @export_group("Simulated View Camera")
 @export_node_path("Camera3D") var source_camera_path: NodePath
@@ -95,7 +41,7 @@ enum AccentThemeMode {
 ## Simulation day_time (hours 0–24) that corresponds to video frame 0.
 ## Set this to align the video start with the correct time of day in the simulation.
 @export var video_start_hour: float = 0.0
-## Keep TR video letterboxed instead of stretching when controls reduce panel height.
+## Keep the video letterboxed instead of stretching when the panel changes shape.
 @export var timelapse_display_aspect: float = 1.7777778
 ## Optional explicit path to the shared TimelineUI controller.
 @export_node_path("Node") var timeline_ui_path: NodePath = NodePath("../TimelineUI")
@@ -113,29 +59,14 @@ enum AccentThemeMode {
 	"obs-cam",
 ])
 
-const QUADRANT_KEYS: Array[String] = ["TL", "TR", "BL", "BR"]
+const HUD_CLAIM := "projection_canvas"
 const WEBCAM_FEED_RETRY_SECONDS: float = 1.0
 const WEBCAM_FEED_RETRY_COUNT: int = 30
-const HANDLE_HALF_SIZE: float = 6.0
-const WARP_CONFIG_VERSION: int = 1
+const VIDEO_SYNC_SEEK_INTERVAL_SECONDS: float = 0.15
+const VIDEO_SYNC_DRIFT_TOLERANCE_SECONDS: float = 0.20
 
 @onready var source_preview: SubViewportContainer = $SourcePreview
 @onready var source_subviewport: SubViewport = $SourcePreview/SourceSubViewport
-@onready var calibration_overlay: Control = $CalibrationOverlay
-@onready var warp_output_layer: Node2D = $WarpOutputLayer
-@onready var active_quadrant_label: Label = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ActiveQuadrantLabel
-@onready var warp_enabled_check: CheckBox = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/WarpEnabledCheck
-@onready var prev_quadrant_button: Button = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ButtonsRow/PrevQuadrantButton
-@onready var next_quadrant_button: Button = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ButtonsRow/NextQuadrantButton
-@onready var save_warp_button: Button = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ButtonsRow2/SaveWarpButton
-@onready var reset_warp_button: Button = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ButtonsRow2/ResetWarpButton
-@onready var exit_calibration_button: Button = $CalibrationOverlay/WarpControlPanel/WarpPanelMargin/WarpPanelVBox/ExitCalibrationButton
-
-@onready var warp_quadrant_tl: Polygon2D = $WarpOutputLayer/WarpQuadrantTL
-@onready var warp_quadrant_tr: Polygon2D = $WarpOutputLayer/WarpQuadrantTR
-@onready var warp_quadrant_bl: Polygon2D = $WarpOutputLayer/WarpQuadrantBL
-@onready var warp_quadrant_br: Polygon2D = $WarpOutputLayer/WarpQuadrantBR
-
 @onready var tl_subviewport: SubViewport = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantTL_SimulatedView/TLMargin/TLVBox/TLViewportPanel/TLViewportContainer/TLSubViewport
 @onready var tl_camera: Camera3D = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantTL_SimulatedView/TLMargin/TLVBox/TLViewportPanel/TLViewportContainer/TLSubViewport/TLCamera3D
 @onready var tl_status_label: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantTL_SimulatedView/TLMargin/TLVBox/TLStatusLabel
@@ -181,200 +112,6 @@ const _TR_SPEED_BAR := "SourcePreview/SourceSubViewport/SourceCanvasRoot/Quadran
 @onready var tr_video_faster_btn: Button = get_node_or_null(_TR_SPEED_BAR + "/TRVideoFasterBtn")
 @onready var tr_video_sync_btn: Button = get_node_or_null(_TR_SPEED_BAR + "/TRVideoSyncBtn")
 
-@onready var bl_battery_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLBatteryPanel/BLBatteryVBox/BLBatteryValue
-@onready var bl_panel: PanelContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison
-@onready var bl_solar_today_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLSolarTodayPanel/BLSolarTodayVBox/BLSolarTodayValue
-@onready var bl_load_today_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLLoadTodayPanel/BLLoadTodayVBox/BLLoadTodayValue
-@onready var bl_current_load_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLCurrentLoadPanel/BLCurrentLoadVBox/BLCurrentLoadValue
-@onready var bl_current_solar_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLCurrentSolarPanel/BLCurrentSolarVBox/BLCurrentSolarValue
-@onready var bl_net_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLNetPanel/BLNetVBox/BLNetValue
-@onready var bl_weather_state_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLWeatherPanel/BLWeatherMargin/BLWeatherGrid/BLWeatherStateValue
-@onready var bl_weather_temp_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLWeatherPanel/BLWeatherMargin/BLWeatherGrid/BLWeatherTempValue
-@onready var bl_weather_wind_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLWeatherPanel/BLWeatherMargin/BLWeatherGrid/BLWeatherWindValue
-@onready var bl_connection_label: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLConnectionLabel
-
-@onready var br_battery_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRBatteryPanel/BRBatteryVBox/BRBatteryValue
-@onready var br_panel: PanelContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison
-@onready var br_solar_today_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRSolarTodayPanel/BRSolarTodayVBox/BRSolarTodayValue
-@onready var br_load_today_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRLoadTodayPanel/BRLoadTodayVBox/BRLoadTodayValue
-@onready var br_current_load_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentLoadPanel/BRCurrentLoadVBox/BRCurrentLoadValue
-@onready var br_current_solar_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentSolarPanel/BRCurrentSolarVBox/BRCurrentSolarValue
-@onready var br_net_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRNetPanel/BRNetVBox/BRNetValue
-@onready var br_weather_state_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRWeatherPanel/BRWeatherMargin/BRWeatherGrid/BRWeatherStateValue
-@onready var br_weather_temp_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRWeatherPanel/BRWeatherMargin/BRWeatherGrid/BRWeatherTempValue
-@onready var br_weather_wind_value: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRWeatherPanel/BRWeatherMargin/BRWeatherGrid/BRWeatherWindValue
-@onready var br_connection_label: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRConnectionLabel
-@onready var br_battery_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRBatteryPanel/BRBatteryVBox/BRBatteryDelta
-@onready var br_solar_today_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRSolarTodayPanel/BRSolarTodayVBox/BRSolarTodayDelta
-@onready var br_load_today_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRLoadTodayPanel/BRLoadTodayVBox/BRLoadTodayDelta
-@onready var br_current_load_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentLoadPanel/BRCurrentLoadVBox/BRCurrentLoadDelta
-@onready var br_current_solar_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentSolarPanel/BRCurrentSolarVBox/BRCurrentSolarDelta
-@onready var br_net_delta: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRNetPanel/BRNetVBox/BRNetDelta
-@onready var bl_graph_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLGraphPanel
-@onready var bl_graph_host: Control = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLGraphPanel/BLGraphMargin/BLGraphHost
-@onready var bl_graph_solar_line: Line2D = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLGraphPanel/BLGraphMargin/BLGraphHost/BLGraphSolarLine
-@onready var bl_graph_load_line: Line2D = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLGraphPanel/BLGraphMargin/BLGraphHost/BLGraphLoadLine
-@onready var br_graph_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRGraphPanel
-@onready var br_graph_host: Control = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRGraphPanel/BRGraphMargin/BRGraphHost
-@onready var br_graph_solar_line: Line2D = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRGraphPanel/BRGraphMargin/BRGraphHost/BRGraphSolarLine
-@onready var br_graph_load_line: Line2D = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRGraphPanel/BRGraphMargin/BRGraphHost/BRGraphLoadLine
-@onready var bl_weather_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLWeatherPanel
-@onready var br_weather_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRWeatherPanel
-@onready var bl_devices_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel
-@onready var br_devices_panel: Panel = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel
-@onready var bl_weather_grid: GridContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLWeatherPanel/BLWeatherMargin/BLWeatherGrid
-@onready var br_weather_grid: GridContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRWeatherPanel/BRWeatherMargin/BRWeatherGrid
-@onready var bl_device_rows: VBoxContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows
-@onready var br_device_rows: VBoxContainer = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows
-@onready var bl_devices_header: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDevicesHeader
-@onready var br_devices_header: Label = $SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDevicesHeader
-@onready var sim_stat_panels: Array[Panel] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLBatteryPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLSolarTodayPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLLoadTodayPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLCurrentLoadPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLStatsGrid/BLCurrentSolarPanel
-]
-@onready var live_stat_panels: Array[Panel] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRBatteryPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRSolarTodayPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRLoadTodayPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentLoadPanel,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRStatsGrid/BRCurrentSolarPanel
-]
-
-@onready var sim_device_name_labels: Array[Label] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow01/BLDevice01Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow02/BLDevice02Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow03/BLDevice03Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow04/BLDevice04Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow05/BLDevice05Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow06/BLDevice06Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow07/BLDevice07Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow08/BLDevice08Name
-]
-
-@onready var sim_device_power_labels: Array[Label] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow01/BLDevice01Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow02/BLDevice02Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow03/BLDevice03Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow04/BLDevice04Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow05/BLDevice05Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow06/BLDevice06Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow07/BLDevice07Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow08/BLDevice08Power
-]
-
-@onready var sim_device_meter_bars: Array[ProgressBar] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow01/BLDevice01Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow02/BLDevice02Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow03/BLDevice03Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow04/BLDevice04Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow05/BLDevice05Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow06/BLDevice06Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow07/BLDevice07Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBL_Comparison/BLMargin/BLVBox/BLDevicesPanel/BLDevicesMargin/BLDevicesVBox/BLDeviceRows/BLDeviceRow08/BLDevice08Meter
-]
-
-@onready var actual_device_name_labels: Array[Label] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow01/BRDevice01Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow02/BRDevice02Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow03/BRDevice03Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow04/BRDevice04Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow05/BRDevice05Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow06/BRDevice06Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow07/BRDevice07Name,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow08/BRDevice08Name
-]
-
-@onready var actual_device_power_labels: Array[Label] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow01/BRDevice01Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow02/BRDevice02Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow03/BRDevice03Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow04/BRDevice04Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow05/BRDevice05Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow06/BRDevice06Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow07/BRDevice07Power,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow08/BRDevice08Power
-]
-
-@onready var actual_device_meter_bars: Array[ProgressBar] = [
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow01/BRDevice01Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow02/BRDevice02Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow03/BRDevice03Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow04/BRDevice04Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow05/BRDevice05Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow06/BRDevice06Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow07/BRDevice07Meter,
-	$SourcePreview/SourceSubViewport/SourceCanvasRoot/QuadrantGrid/QuadrantBR_Comparison/BRMargin/BRVBox/BRDevicesPanel/BRDevicesMargin/BRDevicesVBox/BRDeviceRows/BRDeviceRow08/BRDevice08Meter
-]
-
-@onready var handle_tl_0: ColorRect = $CalibrationOverlay/HandleTL_0
-@onready var handle_tl_1: ColorRect = $CalibrationOverlay/HandleTL_1
-@onready var handle_tl_2: ColorRect = $CalibrationOverlay/HandleTL_2
-@onready var handle_tl_3: ColorRect = $CalibrationOverlay/HandleTL_3
-@onready var handle_tr_0: ColorRect = $CalibrationOverlay/HandleTR_0
-@onready var handle_tr_1: ColorRect = $CalibrationOverlay/HandleTR_1
-@onready var handle_tr_2: ColorRect = $CalibrationOverlay/HandleTR_2
-@onready var handle_tr_3: ColorRect = $CalibrationOverlay/HandleTR_3
-@onready var handle_bl_0: ColorRect = $CalibrationOverlay/HandleBL_0
-@onready var handle_bl_1: ColorRect = $CalibrationOverlay/HandleBL_1
-@onready var handle_bl_2: ColorRect = $CalibrationOverlay/HandleBL_2
-@onready var handle_bl_3: ColorRect = $CalibrationOverlay/HandleBL_3
-@onready var handle_br_0: ColorRect = $CalibrationOverlay/HandleBR_0
-@onready var handle_br_1: ColorRect = $CalibrationOverlay/HandleBR_1
-@onready var handle_br_2: ColorRect = $CalibrationOverlay/HandleBR_2
-@onready var handle_br_3: ColorRect = $CalibrationOverlay/HandleBR_3
-
-var _ha_client: Node = null
-var _source_camera: Camera3D = null
-var _actual_current_solar_watts: float = 0.0
-var _actual_current_load_watts: float = 0.0
-var _actual_daily_solar_kwh: float = 0.0
-var _actual_daily_load_kwh: float = 0.0
-var _actual_battery_soc: float = 0.0
-var _actual_weather_state: String = "Unknown"
-var _solar_ui: Node = null
-var _solar_daily_label: Label = null
-var _solar_power_label: Label = null
-var _solar_load_label: Label = null
-var _solar_net_label: Label = null
-var _solar_battery_percent_label: Label = null
-var _camera_texture: CameraTexture = null
-var _active_webcam_feed_name: String = ""
-var _saved_webcam_feed_name: String = ""
-var _active_video_file_path: String = ""
-var _webcam_feed_retry_remaining: int = 0
-var _webcam_feed_retry_timer: float = 0.0
-var _webcam_user_disabled_auto: bool = false
-
-var _warp_polygons: Dictionary = {}
-var _warp_default_points: Dictionary = {}
-var _warp_default_uv: Dictionary = {}
-var _warp_points: Dictionary = {}
-var _handle_nodes: Dictionary = {}
-var _active_quadrant_idx: int = 0
-var _dragging_handle: bool = false
-var _drag_quadrant: String = ""
-var _drag_corner: int = -1
-var _sim_camera_control_active: bool = false
-var _sim_camera_look_dragging: bool = false
-var _sim_camera_yaw: float = 0.0
-var _sim_camera_pitch: float = 0.0
-var _metric_targets: Dictionary = {}
-var _metric_displayed: Dictionary = {}
-var _metric_labels: Dictionary = {}
-var _sim_solar_history: PackedFloat32Array = PackedFloat32Array()
-var _sim_load_history: PackedFloat32Array = PackedFloat32Array()
-var _actual_solar_history: PackedFloat32Array = PackedFloat32Array()
-var _actual_load_history: PackedFloat32Array = PackedFloat32Array()
-var _graph_sample_timer: float = 0.0
-## Observed-vs-simulated compare mode: BL = batch-rendered sim, BR = imported
-## observed datastream, both driven by SolarUI from the synced playhead. When
-## active, the rolling-history sampler and live-solar mirror are suspended so the
-## panels reflect the playhead instead of wall-clock-appended samples.
-var _compare_active: bool = false
-
 ## Emitted when a video file is loaded or the start anchor changes.
 signal video_clip_changed
 
@@ -384,185 +121,96 @@ var video_start_abs_hours: float = NAN
 ## Sim-hours covered by one full play-through of the loaded video (cached on load).
 var _video_duration_sim_hours: float = 0.0
 
+## The corner-pin warp over both sources (left = sim camera, right = feed).
+var warp: ProjectionWarp = null
+
+var _source_camera: Camera3D = null
+var _camera_texture: CameraTexture = null
+var _active_webcam_feed_name: String = ""
+var _saved_webcam_feed_name: String = ""
+var _active_video_file_path: String = ""
+var _webcam_feed_retry_remaining: int = 0
+var _webcam_feed_retry_timer: float = 0.0
+var _webcam_user_disabled_auto: bool = false
+var _sim_camera_control_active: bool = false
+var _sim_camera_look_dragging: bool = false
+var _sim_camera_yaw: float = 0.0
+var _sim_camera_pitch: float = 0.0
 var _video_sync_main: Node = null
 var _video_scrubber_updating: bool = false
 var _video_last_timescale: float = 0.125
 var _video_seek_accum: float = 0.0
 var _tr_video_layout_guard: bool = false
 
-const GRAPH_SAMPLE_COUNT: int = 96
-const GRAPH_SAMPLE_INTERVAL_SECONDS: float = 30.0
-const VIDEO_SYNC_SEEK_INTERVAL_SECONDS: float = 0.15
-const VIDEO_SYNC_DRIFT_TOLERANCE_SECONDS: float = 0.20
 
 func _ready() -> void:
 	visible = not start_hidden
-	_apply_layout_polish()
-	_setup_warp_nodes()
-	_initialize_metric_animation()
-	_initialize_graph_history()
-	_apply_device_editor_defaults()
+	_style_quadrant_shells()
+	_style_top_viewports()
+	_setup_warp()
 	_load_webcam_config()
 	_initialize_camera_extension()
 	_resolve_source_camera()
-	_resolve_solar_ui_fallback()
 	_update_camera_status_label()
 	_connect_webcam_ui_signals()
-	_connect_warp_ui_signals()
 	_connect_sim_camera_ui_signals()
 	_sync_subviewport_input()
 	_begin_webcam_feed_discovery()
-	_resolve_ha_client()
-	_load_warp_config()
-	_apply_warp_visibility()
-	_update_active_quadrant_ui()
 	_cache_sim_camera_angles()
-	_apply_accent_theme()
 	_connect_video_sync_signals()
 	_hide_tr_video_controls()
+	_apply_render_mode()
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_VISIBILITY_CHANGED and visible:
-		_rescan_camera_feeds(true)
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_apply_render_mode()
+		# A projector output: nothing of the first-person HUD over it.
+		if is_visible_in_tree():
+			HudLayout.claim(HUD_CLAIM, {"hide": ["*"]})
+		else:
+			HudLayout.release(HUD_CLAIM)
+		if visible:
+			_rescan_camera_feeds(true)
+	elif what == NOTIFICATION_EXIT_TREE:
+		HudLayout.release(HUD_CLAIM)
 
 
-func _process(delta: float) -> void:
-	if not visible and _sim_camera_control_active:
+## The two SubViewports draw the world a second (and third) time; while the
+## canvas is hidden nobody sees them, so they stop rendering. (Both were
+## UPDATE_ALWAYS for the life of the scene, canvas hidden or not.)
+func _apply_render_mode() -> void:
+	var mode := SubViewport.UPDATE_ALWAYS if is_visible_in_tree() else SubViewport.UPDATE_DISABLED
+	if source_subviewport != null:
+		source_subviewport.render_target_update_mode = mode
+	if tl_subviewport != null:
+		tl_subviewport.render_target_update_mode = mode
+
+
+func _setup_warp() -> void:
+	warp = ProjectionWarp.new()
+	warp.name = "ProjectionWarp"
+	warp.config_path = warp_config_path
+	warp.quad_count = 2
+	warp.title = "Projection mapping · sim camera | live feed"
+	add_child(warp)
+	warp.setup(source_subviewport.get_texture() if source_subviewport != null else null)
+	if not warp.has_saved():
+		warp.load_config(legacy_warp_config_path)
+	warp.warp_changed.connect(_on_warp_state_changed)
+	warp.calibration_changed.connect(_on_warp_state_changed)
+
+
+## Warped: the flat sources are hidden (they still render into the warp's
+## texture) and stop taking clicks.
+func _on_warp_state_changed(_on: bool) -> void:
+	if source_preview != null:
+		source_preview.modulate.a = 0.0 if warp.active else 1.0
+	if warp.active:
 		_sim_camera_control_active = false
 		_sim_camera_look_dragging = false
 		_update_camera_status_label()
-	_animate_metric_values(delta)
-	_tick_graph_history(delta)
-	_update_graph_lines()
-	_sync_simulated_camera()
-	_update_sim_camera_controls(delta)
-	_sync_from_solar_ui_fallback()
-	_update_webcam_status()
-	_tick_webcam_feed_discovery(delta)
 	_sync_subviewport_input()
-	_layout_tr_video_content()
-	_update_video_sync(delta)
-
-
-func _input(event: InputEvent) -> void:
-	if visible and not calibration_mode_enabled:
-		_try_activate_sim_camera_from_click(event)
-		_try_open_webcam_setup_from_click(event)
-
-	if visible and _sim_camera_control_active and not calibration_mode_enabled:
-		_handle_sim_camera_input(event)
-		if _should_consume_sim_camera_event(event):
-			get_viewport().set_input_as_handled()
-			return
-
-	if not calibration_mode_enabled:
-		return
-
-	if event is InputEventMouseMotion and _dragging_handle:
-		var local_mouse: Vector2 = get_local_mouse_position()
-		local_mouse.x = clampf(local_mouse.x, 0.0, size.x)
-		local_mouse.y = clampf(local_mouse.y, 0.0, size.y)
-		_set_warp_corner(_drag_quadrant, _drag_corner, local_mouse)
-		get_viewport().set_input_as_handled()
-		return
-
-	if event is InputEventMouseButton:
-		var mouse_event := event as InputEventMouseButton
-		if mouse_event.button_index == MOUSE_BUTTON_LEFT and not mouse_event.pressed and _dragging_handle:
-			_dragging_handle = false
-			_drag_quadrant = ""
-			_drag_corner = -1
-			get_viewport().set_input_as_handled()
-
-
-func _unhandled_input(event: InputEvent) -> void:
-	var key_event: InputEventKey = null
-	if event is InputEventKey:
-		key_event = event as InputEventKey
-
-	var key_pressed: bool = key_event != null and key_event.pressed and not key_event.echo
-	var toggle_warp_pressed: bool = event.is_action_pressed(warp_toggle_action_name) or (key_pressed and (key_event.keycode == KEY_F9 or key_event.physical_keycode == KEY_F9))
-	var toggle_calibration_pressed: bool = event.is_action_pressed(calibration_toggle_action_name) or (key_pressed and (key_event.keycode == KEY_F10 or key_event.physical_keycode == KEY_F10))
-	var reset_warp_pressed: bool = event.is_action_pressed(warp_reset_action_name) or (key_pressed and (key_event.keycode == KEY_F8 or key_event.physical_keycode == KEY_F8))
-
-	if toggle_warp_pressed:
-		warp_enabled = not warp_enabled
-		_apply_warp_visibility()
-		get_viewport().set_input_as_handled()
-		return
-
-	if toggle_calibration_pressed:
-		calibration_mode_enabled = not calibration_mode_enabled
-		if calibration_mode_enabled:
-			warp_enabled = true
-		_apply_warp_visibility()
-		_update_active_quadrant_ui()
-		get_viewport().set_input_as_handled()
-		return
-
-	if reset_warp_pressed:
-		_reset_warp_to_defaults()
-		get_viewport().set_input_as_handled()
-		return
-
-	if calibration_mode_enabled and key_event != null:
-		if key_event.pressed and not key_event.echo and key_event.keycode == KEY_ENTER:
-			_save_warp_config()
-			get_viewport().set_input_as_handled()
-
-
-func _setup_warp_nodes() -> void:
-	_warp_polygons = {
-		"TL": warp_quadrant_tl,
-		"TR": warp_quadrant_tr,
-		"BL": warp_quadrant_bl,
-		"BR": warp_quadrant_br
-	}
-
-	_handle_nodes = {
-		"TL": [handle_tl_0, handle_tl_1, handle_tl_2, handle_tl_3],
-		"TR": [handle_tr_0, handle_tr_1, handle_tr_2, handle_tr_3],
-		"BL": [handle_bl_0, handle_bl_1, handle_bl_2, handle_bl_3],
-		"BR": [handle_br_0, handle_br_1, handle_br_2, handle_br_3]
-	}
-
-	var source_texture: Texture2D = source_subviewport.get_texture()
-	for key in QUADRANT_KEYS:
-		var poly: Polygon2D = _warp_polygons[key]
-		poly.texture = source_texture
-		_warp_default_points[key] = Array(poly.polygon)
-		_warp_default_uv[key] = Array(poly.uv)
-		_warp_points[key] = Array(poly.polygon)
-		_apply_polygon_points(key)
-
-
-func _connect_warp_ui_signals() -> void:
-	if warp_enabled_check != null and not warp_enabled_check.toggled.is_connected(_on_warp_enabled_check_toggled):
-		warp_enabled_check.toggled.connect(_on_warp_enabled_check_toggled)
-	if prev_quadrant_button != null and not prev_quadrant_button.pressed.is_connected(_on_prev_quadrant_pressed):
-		prev_quadrant_button.pressed.connect(_on_prev_quadrant_pressed)
-	if next_quadrant_button != null and not next_quadrant_button.pressed.is_connected(_on_next_quadrant_pressed):
-		next_quadrant_button.pressed.connect(_on_next_quadrant_pressed)
-	if save_warp_button != null and not save_warp_button.pressed.is_connected(_save_warp_config):
-		save_warp_button.pressed.connect(_save_warp_config)
-	if reset_warp_button != null and not reset_warp_button.pressed.is_connected(_reset_warp_to_defaults):
-		reset_warp_button.pressed.connect(_reset_warp_to_defaults)
-	if exit_calibration_button != null and not exit_calibration_button.pressed.is_connected(_on_exit_calibration_pressed):
-		exit_calibration_button.pressed.connect(_on_exit_calibration_pressed)
-
-	for key in QUADRANT_KEYS:
-		var handles: Array = _handle_nodes[key]
-		for i in range(handles.size()):
-			var handle: ColorRect = handles[i]
-			if handle == null:
-				continue
-			handle.mouse_filter = Control.MOUSE_FILTER_STOP
-			handle.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-			if not handle.gui_input.is_connected(_on_warp_handle_gui_input):
-				handle.gui_input.connect(_on_warp_handle_gui_input.bind(key, i))
-
-	_update_handle_positions()
 
 
 func _connect_sim_camera_ui_signals() -> void:
@@ -570,162 +218,101 @@ func _connect_sim_camera_ui_signals() -> void:
 		tl_viewport_container.gui_input.connect(_on_tl_viewport_gui_input)
 
 
-func _on_warp_enabled_check_toggled(checked: bool) -> void:
-	warp_enabled = checked
-	_apply_warp_visibility()
+func _warp_active() -> bool:
+	return warp != null and warp.active
 
 
-func _on_prev_quadrant_pressed() -> void:
-	_active_quadrant_idx = wrapi(_active_quadrant_idx - 1, 0, QUADRANT_KEYS.size())
-	_update_active_quadrant_ui()
-
-
-func _on_next_quadrant_pressed() -> void:
-	_active_quadrant_idx = wrapi(_active_quadrant_idx + 1, 0, QUADRANT_KEYS.size())
-	_update_active_quadrant_ui()
-
-
-func _on_exit_calibration_pressed() -> void:
-	calibration_mode_enabled = false
-	_apply_warp_visibility()
-
-
-func _on_warp_handle_gui_input(event: InputEvent, quadrant_key: String, corner_index: int) -> void:
-	if not calibration_mode_enabled:
+func _process(delta: float) -> void:
+	if not visible and _sim_camera_control_active:
+		_sim_camera_control_active = false
+		_sim_camera_look_dragging = false
+		_update_camera_status_label()
+	_update_video_sync(delta)
+	if not visible:
 		return
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			_active_quadrant_idx = QUADRANT_KEYS.find(quadrant_key)
-			_update_active_quadrant_ui()
-			_dragging_handle = true
-			_drag_quadrant = quadrant_key
-			_drag_corner = corner_index
+	_sync_simulated_camera()
+	_update_sim_camera_controls(delta)
+	_update_webcam_status()
+	_tick_webcam_feed_discovery(delta)
+	_sync_subviewport_input()
+	_layout_tr_video_content()
+
+
+func _input(event: InputEvent) -> void:
+	if not visible or _warp_active():
+		return
+	_try_activate_sim_camera_from_click(event)
+	_try_open_webcam_setup_from_click(event)
+	if _sim_camera_control_active:
+		_handle_sim_camera_input(event)
+		if _should_consume_sim_camera_event(event):
 			get_viewport().set_input_as_handled()
 
 
-func _apply_warp_visibility() -> void:
-	if source_preview != null:
-		source_preview.visible = true
-		source_preview.modulate.a = 0.0 if warp_enabled else 1.0
-	if warp_output_layer != null:
-		warp_output_layer.visible = warp_enabled
-	if calibration_overlay != null:
-		calibration_overlay.visible = calibration_mode_enabled
-	if warp_enabled_check != null:
-		warp_enabled_check.button_pressed = warp_enabled
-	_update_handle_positions()
-	_sync_subviewport_input()
+func _style_quadrant_shells() -> void:
+	if tl_panel != null:
+		tl_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(false, 0.94))
+	if tr_panel != null:
+		tr_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(true, 0.94))
 
 
-func _update_active_quadrant_ui() -> void:
-	var key := QUADRANT_KEYS[_active_quadrant_idx]
-	_set_label_text(active_quadrant_label, "Active Quadrant: %s" % key)
-	for k in QUADRANT_KEYS:
-		var alpha := 1.0 if k == key else 0.42
-		var handles: Array = _handle_nodes[k]
-		for handle in handles:
-			var c := (handle as ColorRect).color
-			c.a = alpha
-			(handle as ColorRect).color = c
-
-
-func _set_warp_corner(quadrant_key: String, corner_index: int, point: Vector2) -> void:
-	var points: Array = _warp_points[quadrant_key]
-	points[corner_index] = point
-	_warp_points[quadrant_key] = points
-	_apply_polygon_points(quadrant_key)
-	_update_handle_positions()
-
-
-func _apply_polygon_points(quadrant_key: String) -> void:
-	var poly: Polygon2D = _warp_polygons[quadrant_key]
-	var points: Array = _warp_points[quadrant_key]
-	poly.polygon = PackedVector2Array(points)
-	poly.uv = PackedVector2Array(_warp_default_uv[quadrant_key])
-
-
-func _update_handle_positions() -> void:
-	for key in QUADRANT_KEYS:
-		var points: Array = _warp_points[key]
-		var handles: Array = _handle_nodes[key]
-		for i in range(min(points.size(), handles.size())):
-			var handle: ColorRect = handles[i]
-			var p: Vector2 = points[i]
-			handle.position = p - Vector2(HANDLE_HALF_SIZE, HANDLE_HALF_SIZE)
-
-
-func _reset_warp_to_defaults() -> void:
-	for key in QUADRANT_KEYS:
-		_warp_points[key] = _warp_default_points[key].duplicate(true)
-		_apply_polygon_points(key)
-	_update_handle_positions()
-	_save_warp_config()
-
-
-func _load_warp_config() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load(warp_config_path) != OK:
-		return
-	var version := int(cfg.get_value("warp", "version", 0))
-	if version != WARP_CONFIG_VERSION:
-		return
-
-	for key in QUADRANT_KEYS:
-		var packed: PackedVector2Array = cfg.get_value("warp", key, PackedVector2Array())
-		if packed.size() != 4:
+func _style_top_viewports() -> void:
+	for m in [tl_margin, tr_margin]:
+		if m == null:
 			continue
-		_warp_points[key] = Array(packed)
-		_apply_polygon_points(key)
-	_update_handle_positions()
+		for side in ["left", "top", "right", "bottom"]:
+			(m as MarginContainer).add_theme_constant_override("margin_" + side, 8)
+	for v in [tl_vbox, tr_vbox]:
+		if v != null:
+			(v as VBoxContainer).add_theme_constant_override("separation", 4)
+	for pair in [[tl_title_label, UITheme.C_PRIMARY], [tr_title_label, UITheme.C_LAVENDER]]:
+		var l := pair[0] as Label
+		if l == null:
+			continue
+		l.add_theme_font_override("font", UITheme.font("semibold"))
+		l.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+		l.add_theme_color_override("font_color", pair[1])
+	for l in [tl_status_label, tr_status_label, tr_feed_name_label]:
+		if l != null:
+			(l as Label).add_theme_font_size_override("font_size", UITheme.FONT_SM)
+			(l as Label).add_theme_color_override("font_color", UITheme.C_TEXT_S)
+			(l as Label).text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	for btn in [tr_select_feed_button, tr_load_video_button]:
+		if btn != null:
+			UITheme.style_button(btn as Button)
+	if tr_placeholder_label != null:
+		tr_placeholder_label.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		tr_placeholder_label.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	if tl_viewport_panel != null:
+		tl_viewport_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(false, 0.98))
+	if tr_video_panel != null:
+		tr_video_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(true, 0.98))
+	if tr_video_host != null:
+		tr_video_host.clip_contents = true
+	if tr_camera_texture_rect != null:
+		tr_camera_texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		tr_camera_texture_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	if tr_video_stream_player != null:
+		tr_video_stream_player.expand = true
+	if tl_viewport_container != null:
+		tl_viewport_container.stretch = true
 
 
-func _save_warp_config() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("warp", "version", WARP_CONFIG_VERSION)
-	cfg.set_value("warp", "canvas_size", size)
-	for key in QUADRANT_KEYS:
-		cfg.set_value("warp", key, PackedVector2Array(_warp_points[key]))
-	cfg.save(warp_config_path)
-
-
-func _resolve_ha_client() -> void:
-	if not ha_client_path.is_empty():
-		_ha_client = get_node_or_null(ha_client_path)
-	if _ha_client == null:
-		_ha_client = get_tree().root.find_child("HAClient", true, false)
-
-	if _ha_client == null:
-		_set_label_text(br_connection_label, "Live Source: HAClient node not found")
-		return
-
-	if _ha_client.has_signal("sensor_updated") and not _ha_client.sensor_updated.is_connected(_on_ha_sensor_updated):
-		_ha_client.sensor_updated.connect(_on_ha_sensor_updated)
-	if _ha_client.has_signal("connection_status_changed") and not _ha_client.connection_status_changed.is_connected(_on_ha_connection_status_changed):
-		_ha_client.connection_status_changed.connect(_on_ha_connection_status_changed)
-	if _ha_client.has_signal("authentication_status_changed") and not _ha_client.authentication_status_changed.is_connected(_on_ha_auth_status_changed):
-		_ha_client.authentication_status_changed.connect(_on_ha_auth_status_changed)
-
-	if auto_subscribe_on_ready:
-		_subscribe_to_exported_entities()
-
-
-func _resolve_solar_ui_fallback() -> void:
-	if solar_ui_path.is_empty():
-		_solar_ui = null
-		return
-
-	_solar_ui = get_node_or_null(solar_ui_path)
-	if _solar_ui == null:
-		return
-
-	# SolarUI reparents its rows into a collapsible body at runtime, so these
-	# are read off its @onready label properties, never by scene path.
-	_solar_daily_label = _solar_ui.get("scoreboard_today") as Label
-	_solar_power_label = _solar_ui.get("solar_value") as Label
-	_solar_load_label = _solar_ui.get("load_value") as Label
-	_solar_net_label = _solar_ui.get("net_value") as Label
-	_solar_battery_percent_label = _solar_ui.get("battery_percent") as Label
+func _make_hud_panel_style(is_live_panel: bool, alpha: float) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.10, 0.14, alpha) if not is_live_panel else Color(0.09, 0.09, 0.16, alpha)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.border_color = Color(0.20, 0.40, 0.60, 0.8) if not is_live_panel else Color(0.38, 0.43, 0.70, 0.85)
+	style.corner_radius_top_left = 8
+	style.corner_radius_top_right = 8
+	style.corner_radius_bottom_right = 8
+	style.corner_radius_bottom_left = 8
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.32)
+	style.shadow_size = 5
+	return style
 
 
 func _resolve_source_camera() -> void:
@@ -900,7 +487,7 @@ func _apply_sim_camera_rotation() -> void:
 
 
 func _on_tl_viewport_gui_input(event: InputEvent) -> void:
-	if not visible or calibration_mode_enabled:
+	if not visible or _warp_active():
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -956,7 +543,7 @@ func _set_placeholder_hint(show_hint: bool) -> void:
 func _sync_subviewport_input() -> void:
 	if source_preview == null:
 		return
-	var allow_subviewport_ui := visible and not warp_enabled and not calibration_mode_enabled
+	var allow_subviewport_ui := visible and not _warp_active()
 	source_preview.mouse_filter = Control.MOUSE_FILTER_STOP if allow_subviewport_ui else Control.MOUSE_FILTER_IGNORE
 
 
@@ -1013,680 +600,6 @@ func _on_bootstrap_feeds_rescan_completed(_feed_count: int, _feed_names: PackedS
 
 func _is_webcam_feed_active() -> bool:
 	return webcam_use_camera_texture and webcam_feed_id >= 0 and tr_camera_texture_rect != null and tr_camera_texture_rect.visible and tr_camera_texture_rect.texture != null
-
-
-func _on_ha_connection_status_changed(connected: bool) -> void:
-	if connected:
-		_set_label_text(br_connection_label, "Live Source: Home Assistant Connected")
-	else:
-		_set_label_text(br_connection_label, "Live Source: Home Assistant Disconnected")
-
-
-func _on_ha_auth_status_changed(authenticated: bool) -> void:
-	if authenticated:
-		_set_label_text(br_connection_label, "Live Source: Home Assistant Authenticated")
-
-
-func _subscribe_to_exported_entities() -> void:
-	if _ha_client == null:
-		return
-	if not _ha_client.has_method("subscribe_to_entities"):
-		return
-
-	var dedupe: Dictionary = {}
-	for entity_id in _collect_entities_to_subscribe():
-		if entity_id != "":
-			dedupe[entity_id] = true
-
-	var entity_list: Array[String] = []
-	for key in dedupe.keys():
-		entity_list.append(key)
-	if entity_list.is_empty():
-		return
-
-	_ha_client.subscribe_to_entities(entity_list)
-	if request_initial_entity_states and _ha_client.has_method("get_entity_states"):
-		_ha_client.get_entity_states(entity_list)
-
-
-func _collect_entities_to_subscribe() -> Array[String]:
-	var entities: Array[String] = [
-		ha_battery_soc_entity,
-		ha_load_entity,
-		ha_solar_entity,
-		ha_daily_solar_entity,
-		ha_daily_load_entity,
-		ha_solar_radiation_entity,
-		ha_lux_entity,
-		ha_rain_rate_entity,
-		ha_rain_state_entity,
-		ha_temperature_entity,
-		ha_wind_speed_entity
-	]
-	for entity_id in device_entity_ids:
-		entities.append(entity_id)
-	return entities
-
-
-func _on_ha_sensor_updated(entity_id: String, state: Dictionary) -> void:
-	var state_value: String = str(state.get("state", "")).strip_edges()
-	if state_value in ["", "unknown", "unavailable"]:
-		return
-
-	if entity_id == ha_battery_soc_entity and ha_battery_soc_entity != "":
-		_actual_battery_soc = clampf(_parse_state_to_float(state_value), 0.0, 100.0)
-		_set_metric_target("actual_battery_soc", _actual_battery_soc)
-		return
-
-	if entity_id == ha_solar_entity and ha_solar_entity != "":
-		var solar_raw := _parse_state_to_float(state_value)
-		_actual_current_solar_watts = solar_raw if ha_values_in_watts else solar_raw * 1000.0
-		_set_metric_target("actual_current_solar_watts", _actual_current_solar_watts)
-		_set_metric_target("actual_net_watts", _actual_current_solar_watts - _actual_current_load_watts)
-		return
-
-	if entity_id == ha_load_entity and ha_load_entity != "":
-		var load_raw := _parse_state_to_float(state_value)
-		_actual_current_load_watts = load_raw if ha_values_in_watts else load_raw * 1000.0
-		_set_metric_target("actual_current_load_watts", _actual_current_load_watts)
-		_set_metric_target("actual_net_watts", _actual_current_solar_watts - _actual_current_load_watts)
-		return
-
-	if entity_id == ha_daily_solar_entity and ha_daily_solar_entity != "":
-		_actual_daily_solar_kwh = _parse_state_to_float(state_value)
-		_set_metric_target("actual_solar_today_kwh", _actual_daily_solar_kwh)
-		return
-
-	if entity_id == ha_daily_load_entity and ha_daily_load_entity != "":
-		_actual_daily_load_kwh = _parse_state_to_float(state_value)
-		_set_metric_target("actual_load_today_kwh", _actual_daily_load_kwh)
-		return
-
-	if entity_id == ha_temperature_entity and ha_temperature_entity != "":
-		var temp_c := _parse_state_to_float(state_value)
-		if not ha_temp_in_celsius:
-			temp_c = (temp_c - 32.0) * 5.0 / 9.0
-		_set_label_text(br_weather_temp_value, "%.1f C" % temp_c)
-		return
-
-	if entity_id == ha_wind_speed_entity and ha_wind_speed_entity != "":
-		var wind_ms := _parse_state_to_float(state_value)
-		if not ha_wind_in_ms:
-			wind_ms = wind_ms * 0.44704
-		_set_label_text(br_weather_wind_value, "%.1f m/s" % wind_ms)
-		return
-
-	if entity_id == ha_rain_state_entity and ha_rain_state_entity != "":
-		var lower := state_value.to_lower()
-		var raining := lower in ["on", "true", "1", "raining", "yes", "rain"]
-		if not raining and _parse_state_to_float(state_value) > 0.0:
-			raining = true
-		_actual_weather_state = "Rainy" if raining else "Clear"
-		_set_label_text(br_weather_state_value, _actual_weather_state)
-		return
-
-	if entity_id == ha_solar_radiation_entity and ha_solar_radiation_entity != "" and _actual_weather_state == "Unknown":
-		var radiation := maxf(_parse_state_to_float(state_value), 0.0)
-		if radiation > 450.0:
-			_actual_weather_state = "Sunny"
-		elif radiation > 180.0:
-			_actual_weather_state = "Partly Cloudy"
-		else:
-			_actual_weather_state = "Cloudy"
-		_set_label_text(br_weather_state_value, _actual_weather_state)
-		return
-
-	for i in range(min(device_entity_ids.size(), actual_device_power_labels.size())):
-		if entity_id == device_entity_ids[i] and device_entity_ids[i] != "":
-			_update_device_row(actual_device_power_labels, actual_device_meter_bars, i, _parse_state_to_float(state_value))
-			return
-
-
-func _update_device_row(power_labels: Array[Label], meter_bars: Array[ProgressBar], index: int, watts: float) -> void:
-	if power_labels.is_empty() or meter_bars.is_empty():
-		return
-	var clamped_index := clampi(index, 0, power_labels.size() - 1)
-	var safe_watts := maxf(watts, 0.0)
-	if power_labels[clamped_index] != null:
-		power_labels[clamped_index].text = "%d W" % int(round(safe_watts))
-	if meter_bars[clamped_index] != null:
-		meter_bars[clamped_index].value = safe_watts
-
-
-# ==================== OBSERVED-VS-SIMULATED COMPARE ====================
-
-## Enter/exit split-screen compare mode. SolarUI calls feed_comparison() each
-## frame while active. Entering shows the canvas; exiting restores live mirroring.
-func set_compare_mode(active: bool) -> void:
-	_compare_active = active
-	if active:
-		visible = true
-		_set_label_text(bl_connection_label, "Simulation Source: Batch render")
-		_set_label_text(br_connection_label, "Observed Source: Imported datastream")
-	else:
-		_set_label_text(br_connection_label, "")
-
-
-## Push one synced comparison frame. SolarUI samples both series at the playhead
-## (instantaneous scalars + daily totals) and across the visible window (the 96-
-## point history arrays); this stores them into the BL(sim)/BR(observed) panels.
-## payload keys: sim_soc_pct, sim_solar_w, sim_load_w, sim_solar_kwh, sim_load_kwh,
-## obs_soc_pct, obs_solar_w, obs_load_w, obs_solar_kwh, obs_load_kwh,
-## sim_solar_hist, sim_load_hist, obs_solar_hist, obs_load_hist (PackedFloat32Array).
-func feed_comparison(payload: Dictionary) -> void:
-	if not _compare_active:
-		return
-	# Instantaneous panel values.
-	simulated_battery_soc       = clampf(float(payload.get("sim_soc_pct", simulated_battery_soc)), 0.0, 100.0)
-	simulated_current_solar_watts = maxf(float(payload.get("sim_solar_w", 0.0)), 0.0)
-	simulated_current_load_watts  = maxf(float(payload.get("sim_load_w", 0.0)), 0.0)
-	simulated_solar_today_kwh   = maxf(float(payload.get("sim_solar_kwh", 0.0)), 0.0)
-	simulated_load_today_kwh    = maxf(float(payload.get("sim_load_kwh", 0.0)), 0.0)
-	_actual_battery_soc         = clampf(float(payload.get("obs_soc_pct", _actual_battery_soc)), 0.0, 100.0)
-	_actual_current_solar_watts = maxf(float(payload.get("obs_solar_w", 0.0)), 0.0)
-	_actual_current_load_watts  = maxf(float(payload.get("obs_load_w", 0.0)), 0.0)
-	_actual_daily_solar_kwh     = maxf(float(payload.get("obs_solar_kwh", 0.0)), 0.0)
-	_actual_daily_load_kwh      = maxf(float(payload.get("obs_load_kwh", 0.0)), 0.0)
-
-	# History arrays (already resampled across the window by SolarUI).
-	if payload.has("sim_solar_hist"):
-		_sim_solar_history = payload["sim_solar_hist"]
-	if payload.has("sim_load_hist"):
-		_sim_load_history = payload["sim_load_hist"]
-	if payload.has("obs_solar_hist"):
-		_actual_solar_history = payload["obs_solar_hist"]
-	if payload.has("obs_load_hist"):
-		_actual_load_history = payload["obs_load_hist"]
-
-	# Drive the metric animators (BL sim + BR observed).
-	_set_metric_target("sim_battery_soc", simulated_battery_soc)
-	_set_metric_target("sim_solar_today_kwh", simulated_solar_today_kwh)
-	_set_metric_target("sim_load_today_kwh", simulated_load_today_kwh)
-	_set_metric_target("sim_current_solar_watts", simulated_current_solar_watts)
-	_set_metric_target("sim_current_load_watts", simulated_current_load_watts)
-	_set_metric_target("sim_net_watts", simulated_current_solar_watts - simulated_current_load_watts)
-	_set_metric_target("actual_battery_soc", _actual_battery_soc)
-	_set_metric_target("actual_solar_today_kwh", _actual_daily_solar_kwh)
-	_set_metric_target("actual_load_today_kwh", _actual_daily_load_kwh)
-	_set_metric_target("actual_current_solar_watts", _actual_current_solar_watts)
-	_set_metric_target("actual_current_load_watts", _actual_current_load_watts)
-	_set_metric_target("actual_net_watts", _actual_current_solar_watts - _actual_current_load_watts)
-	_refresh_delta_indicators()
-	_update_graph_lines()
-
-
-func _sync_from_solar_ui_fallback() -> void:
-	if _compare_active:
-		return   # compare mode drives the panels from the playhead instead
-	_refresh_simulated_panel()
-	if not mirror_from_solar_ui_when_available:
-		return
-	if _solar_ui == null or not _solar_ui.visible:
-		return
-
-	# The readouts print W or kW by magnitude, so take the numbers, not the text.
-	simulated_solar_today_kwh = float(_solar_ui.get("daily_solar_generated_kwh"))
-	simulated_current_solar_watts = float(_solar_ui.get("current_solar_kw")) * 1000.0
-	simulated_current_load_watts = float(_solar_ui.get("current_load_kw")) * 1000.0
-	if _solar_ui.has_method("get_battery_percent"):
-		simulated_battery_soc = clampf(float(_solar_ui.call("get_battery_percent")), 0.0, 100.0)
-	_refresh_simulated_panel()
-
-
-func _apply_device_editor_defaults() -> void:
-	for i in range(actual_device_name_labels.size()):
-		var default_name := "Device %02d" % (i + 1)
-		if i < device_names.size() and device_names[i].strip_edges() != "":
-			default_name = device_names[i]
-		_set_label_text(actual_device_name_labels[i], default_name)
-		_set_label_text(sim_device_name_labels[i], default_name)
-
-		if i < device_max_watts.size():
-			if actual_device_meter_bars[i] != null:
-				actual_device_meter_bars[i].max_value = maxf(device_max_watts[i], 1.0)
-			if sim_device_meter_bars[i] != null:
-				sim_device_meter_bars[i].max_value = maxf(device_max_watts[i], 1.0)
-
-	for i in range(min(simulated_device_watts.size(), sim_device_power_labels.size())):
-		_update_device_row(sim_device_power_labels, sim_device_meter_bars, i, simulated_device_watts[i])
-
-	_refresh_simulated_panel()
-	_set_metric_target("actual_battery_soc", _actual_battery_soc)
-	_set_metric_target("actual_solar_today_kwh", _actual_daily_solar_kwh)
-	_set_metric_target("actual_load_today_kwh", _actual_daily_load_kwh)
-	_set_metric_target("actual_current_load_watts", _actual_current_load_watts)
-	_set_metric_target("actual_current_solar_watts", _actual_current_solar_watts)
-	_set_metric_target("actual_net_watts", _actual_current_solar_watts - _actual_current_load_watts)
-	_set_label_text(br_weather_state_value, _actual_weather_state)
-
-
-func _refresh_simulated_panel() -> void:
-	_set_label_text(bl_connection_label, "Simulation Source: Internal scenario model")
-	_set_metric_target("sim_battery_soc", clampf(simulated_battery_soc, 0.0, 100.0))
-	_set_metric_target("sim_solar_today_kwh", maxf(simulated_solar_today_kwh, 0.0))
-	_set_metric_target("sim_load_today_kwh", maxf(simulated_load_today_kwh, 0.0))
-	_set_metric_target("sim_current_load_watts", maxf(simulated_current_load_watts, 0.0))
-	_set_metric_target("sim_current_solar_watts", maxf(simulated_current_solar_watts, 0.0))
-	_set_metric_target("sim_net_watts", maxf(simulated_current_solar_watts, 0.0) - maxf(simulated_current_load_watts, 0.0))
-	_set_label_text(bl_weather_state_value, simulated_weather_state)
-	_set_label_text(bl_weather_temp_value, "%.1f C" % simulated_weather_temp_c)
-	_set_label_text(bl_weather_wind_value, "%.1f m/s" % simulated_weather_wind_ms)
-	_refresh_delta_indicators()
-	_apply_accent_theme()
-
-
-func _initialize_graph_history() -> void:
-	_sim_solar_history.resize(GRAPH_SAMPLE_COUNT)
-	_sim_load_history.resize(GRAPH_SAMPLE_COUNT)
-	_actual_solar_history.resize(GRAPH_SAMPLE_COUNT)
-	_actual_load_history.resize(GRAPH_SAMPLE_COUNT)
-
-	for i in range(GRAPH_SAMPLE_COUNT):
-		var t := float(i) / float(GRAPH_SAMPLE_COUNT - 1)
-		var day_curve := maxf(0.0, sin(t * PI))
-		_sim_solar_history[i] = day_curve * maxf(simulated_current_solar_watts * 1.2, 1000.0)
-		_sim_load_history[i] = (0.45 + 0.2 * sin(t * TAU * 2.0 + 1.2)) * maxf(simulated_current_load_watts * 1.1, 900.0)
-		_actual_solar_history[i] = _sim_solar_history[i] * 0.92
-		_actual_load_history[i] = _sim_load_history[i] * 1.06
-
-	_update_graph_lines()
-
-
-func _tick_graph_history(delta: float) -> void:
-	if _compare_active:
-		return   # histories are filled by feed_comparison() from the series
-	_graph_sample_timer += delta
-	if _graph_sample_timer < GRAPH_SAMPLE_INTERVAL_SECONDS:
-		return
-	_graph_sample_timer = 0.0
-
-	_append_history_point(_sim_solar_history, maxf(simulated_current_solar_watts, 0.0))
-	_append_history_point(_sim_load_history, maxf(simulated_current_load_watts, 0.0))
-	_append_history_point(_actual_solar_history, maxf(_actual_current_solar_watts, 0.0))
-	_append_history_point(_actual_load_history, maxf(_actual_current_load_watts, 0.0))
-	_update_graph_lines()
-
-
-func _append_history_point(history: PackedFloat32Array, value: float) -> void:
-	if history.size() <= 1:
-		return
-	for i in range(history.size() - 1):
-		history[i] = history[i + 1]
-	history[history.size() - 1] = value
-
-
-func _update_graph_lines() -> void:
-	_apply_graph_points(bl_graph_host, bl_graph_solar_line, bl_graph_load_line, _sim_solar_history, _sim_load_history)
-	_apply_graph_points(br_graph_host, br_graph_solar_line, br_graph_load_line, _actual_solar_history, _actual_load_history)
-
-
-func _apply_graph_points(host: Control, solar_line: Line2D, load_line: Line2D, solar_history: PackedFloat32Array, load_history: PackedFloat32Array) -> void:
-	if host == null or solar_line == null or load_line == null:
-		return
-	if host.size.x < 4.0 or host.size.y < 4.0:
-		return
-	if solar_history.size() < 2 or load_history.size() < 2:
-		return
-
-	var max_val := 1.0
-	for i in range(solar_history.size()):
-		max_val = maxf(max_val, solar_history[i])
-		max_val = maxf(max_val, load_history[i])
-
-	var usable_height := host.size.y - 24.0
-	var width := host.size.x
-	var solar_points := PackedVector2Array()
-	var load_points := PackedVector2Array()
-	for i in range(solar_history.size()):
-		var x := float(i) / float(solar_history.size() - 1) * width
-		var sy := usable_height - (solar_history[i] / max_val) * usable_height
-		var ly := usable_height - (load_history[i] / max_val) * usable_height
-		solar_points.append(Vector2(x, sy))
-		load_points.append(Vector2(x, ly))
-
-	solar_line.points = solar_points
-	load_line.points = load_points
-
-
-func _apply_layout_polish() -> void:
-	_style_quadrant_shells()
-	_style_top_viewports()
-	for stat_panel in sim_stat_panels:
-		_style_stat_panel(stat_panel, false)
-	for stat_panel in live_stat_panels:
-		_style_stat_panel(stat_panel, true)
-	_style_weather_section(bl_weather_panel, bl_weather_grid, false)
-	_style_weather_section(br_weather_panel, br_weather_grid, true)
-	_style_devices_section(bl_devices_panel, bl_device_rows, bl_devices_header, false)
-	_style_devices_section(br_devices_panel, br_device_rows, br_devices_header, true)
-	_style_graph_section(bl_graph_panel, bl_graph_host, false)
-	_style_graph_section(br_graph_panel, br_graph_host, true)
-
-
-func _style_quadrant_shells() -> void:
-	if tl_panel != null:
-		tl_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(false, 0.94))
-	if tr_panel != null:
-		tr_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(true, 0.94))
-	if bl_panel != null:
-		bl_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(false, 0.94))
-	if br_panel != null:
-		br_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(true, 0.94))
-
-
-func _style_top_viewports() -> void:
-	if tl_margin != null:
-		tl_margin.add_theme_constant_override("margin_left", 8)
-		tl_margin.add_theme_constant_override("margin_top", 8)
-		tl_margin.add_theme_constant_override("margin_right", 8)
-		tl_margin.add_theme_constant_override("margin_bottom", 8)
-	if tr_margin != null:
-		tr_margin.add_theme_constant_override("margin_left", 8)
-		tr_margin.add_theme_constant_override("margin_top", 8)
-		tr_margin.add_theme_constant_override("margin_right", 8)
-		tr_margin.add_theme_constant_override("margin_bottom", 8)
-	if tl_vbox != null:
-		tl_vbox.add_theme_constant_override("separation", 4)
-	if tr_vbox != null:
-		tr_vbox.add_theme_constant_override("separation", 4)
-
-	if tl_title_label != null:
-		tl_title_label.add_theme_font_size_override("font_size", 20)
-		tl_title_label.add_theme_color_override("font_color", Color(0.40, 0.80, 1.0, 1.0))
-	if tr_title_label != null:
-		tr_title_label.add_theme_font_size_override("font_size", 20)
-		tr_title_label.add_theme_color_override("font_color", Color(0.50, 0.65, 0.8, 1.0))
-	if tr_feed_name_label != null:
-		tr_feed_name_label.add_theme_font_size_override("font_size", 11)
-		tr_feed_name_label.add_theme_color_override("font_color", Color(0.55, 0.72, 0.88, 0.92))
-	for btn in [tr_select_feed_button, tr_load_video_button]:
-		if btn == null:
-			continue
-		btn.add_theme_font_size_override("font_size", 12)
-		btn.add_theme_color_override("font_color", Color(0.82, 0.93, 1.0, 1.0))
-		btn.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0, 1.0))
-		btn.add_theme_stylebox_override("normal", _make_hud_panel_style(true, 0.98))
-		btn.add_theme_stylebox_override("hover", _make_hud_panel_style(true, 1.0))
-		btn.add_theme_stylebox_override("pressed", _make_hud_panel_style(true, 0.9))
-	if tr_placeholder_label != null:
-		tr_placeholder_label.add_theme_font_size_override("font_size", 14)
-		tr_placeholder_label.add_theme_color_override("font_color", Color(0.62, 0.78, 0.95, 0.95))
-
-	if tl_viewport_panel != null:
-		tl_viewport_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(false, 0.98))
-	if tr_video_panel != null:
-		tr_video_panel.add_theme_stylebox_override("panel", _make_hud_panel_style(true, 0.98))
-
-	if tr_video_host != null:
-		tr_video_host.clip_contents = true
-	if tr_camera_texture_rect != null:
-		tr_camera_texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		tr_camera_texture_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
-	if tr_video_stream_player != null:
-		tr_video_stream_player.expand = true
-	if tl_viewport_container != null:
-		tl_viewport_container.stretch = true
-
-
-func _style_stat_panel(panel: Panel, is_live_panel: bool) -> void:
-	if panel == null:
-		return
-	panel.custom_minimum_size = Vector2(220.0, 112.0)
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	panel.clip_contents = true
-
-	var content_vbox: VBoxContainer = panel.get_child(0) as VBoxContainer
-	if content_vbox != null:
-		content_vbox.anchor_left = 0.0
-		content_vbox.anchor_top = 0.0
-		content_vbox.anchor_right = 1.0
-		content_vbox.anchor_bottom = 1.0
-		content_vbox.offset_left = 10.0
-		content_vbox.offset_top = 8.0
-		content_vbox.offset_right = -10.0
-		content_vbox.offset_bottom = -8.0
-		content_vbox.grow_horizontal = 2
-		content_vbox.grow_vertical = 2
-		content_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		content_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		content_vbox.add_theme_constant_override("separation", 4)
-		var label_idx := 0
-		for child in content_vbox.get_children():
-			var label := child as Label
-			if label == null:
-				continue
-			label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-			label.custom_minimum_size = Vector2(0.0, 18.0)
-			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-			if label.name.ends_with("Value"):
-				label.add_theme_font_size_override("font_size", 22)
-				label.custom_minimum_size = Vector2(0.0, 34.0)
-			elif label.name.ends_with("Delta"):
-				label.add_theme_font_size_override("font_size", 11)
-				label.custom_minimum_size = Vector2(0.0, 14.0)
-			else:
-				label.add_theme_font_size_override("font_size", 12)
-			label_idx += 1
-		if label_idx == 2:
-			var value_only_label := content_vbox.get_child(1) as Label
-			if value_only_label != null:
-				value_only_label.custom_minimum_size = Vector2(0.0, 54.0)
-
-	var tint := Color(0.09, 0.16, 0.24, 1.0) if not is_live_panel else Color(0.12, 0.14, 0.24, 1.0)
-	panel.add_theme_color_override("font_color", Color(0.86, 0.93, 1.0, 1.0))
-	panel.self_modulate = tint
-	panel.add_theme_stylebox_override("panel", _make_hud_panel_style(is_live_panel, 0.92))
-
-
-func _style_weather_section(panel: Panel, grid: GridContainer, is_live_panel: bool) -> void:
-	if panel == null or grid == null:
-		return
-	panel.custom_minimum_size = Vector2(0.0, 110.0)
-	panel.add_theme_stylebox_override("panel", _make_hud_panel_style(is_live_panel, 0.88))
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 8)
-	for child in grid.get_children():
-		var label := child as Label
-		if label == null:
-			continue
-		label.custom_minimum_size = Vector2(90, 0)
-		if label.name.ends_with("Value"):
-			label.add_theme_font_size_override("font_size", 18)
-			label.add_theme_color_override("font_color", Color(0.72, 0.93, 1.0, 1.0) if not is_live_panel else Color(1.0, 0.82, 0.48, 1.0))
-		else:
-			label.add_theme_font_size_override("font_size", 11)
-			label.add_theme_color_override("font_color", Color(0.54, 0.66, 0.78, 1.0))
-
-
-func _style_devices_section(panel: Panel, rows: VBoxContainer, header: Label, is_live_panel: bool) -> void:
-	if panel == null or rows == null:
-		return
-	panel.custom_minimum_size = Vector2(0.0, 248.0)
-	panel.add_theme_stylebox_override("panel", _make_hud_panel_style(is_live_panel, 0.9))
-	if header != null:
-		header.add_theme_font_size_override("font_size", 13)
-		header.add_theme_color_override("font_color", Color(0.63, 0.88, 1.0, 1.0) if not is_live_panel else Color(1.0, 0.80, 0.43, 1.0))
-	rows.add_theme_constant_override("separation", 7)
-	for row_node in rows.get_children():
-		var row := row_node as HBoxContainer
-		if row == null:
-			continue
-		row.add_theme_constant_override("separation", 10)
-		row.custom_minimum_size = Vector2(0.0, 24.0)
-		for child in row.get_children():
-			if child is Label:
-				var label := child as Label
-				if label.name.ends_with("Name"):
-					label.add_theme_font_size_override("font_size", 12)
-					label.add_theme_color_override("font_color", Color(0.74, 0.82, 0.9, 1.0))
-				else:
-					label.add_theme_font_size_override("font_size", 12)
-					label.add_theme_color_override("font_color", Color(0.78, 0.96, 1.0, 1.0) if not is_live_panel else Color(1.0, 0.84, 0.55, 1.0))
-			elif child is ProgressBar:
-				var bar := child as ProgressBar
-				bar.custom_minimum_size = Vector2(0.0, 8.0)
-				bar.add_theme_stylebox_override("background", _make_meter_background_style())
-				bar.add_theme_stylebox_override("fill", _make_meter_fill_style(is_live_panel))
-
-
-func _style_graph_section(panel: Panel, host: Control, is_live_panel: bool) -> void:
-	if panel == null or host == null:
-		return
-	panel.add_theme_stylebox_override("panel", _make_hud_panel_style(is_live_panel, 0.9))
-	host.clip_contents = true
-
-
-func _make_hud_panel_style(is_live_panel: bool, alpha: float) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.08, 0.10, 0.14, alpha) if not is_live_panel else Color(0.09, 0.09, 0.16, alpha)
-	style.border_width_left = 2
-	style.border_width_top = 2
-	style.border_width_right = 2
-	style.border_width_bottom = 2
-	style.border_color = Color(0.20, 0.40, 0.60, 0.8) if not is_live_panel else Color(0.38, 0.43, 0.70, 0.85)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_right = 8
-	style.corner_radius_bottom_left = 8
-	style.shadow_color = Color(0.0, 0.0, 0.0, 0.32)
-	style.shadow_size = 5
-	return style
-
-
-func _make_meter_background_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.08, 0.12, 1.0)
-	style.corner_radius_top_left = 2
-	style.corner_radius_top_right = 2
-	style.corner_radius_bottom_right = 2
-	style.corner_radius_bottom_left = 2
-	return style
-
-
-func _make_meter_fill_style(is_live_panel: bool) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.30, 0.86, 1.0, 0.95) if not is_live_panel else Color(1.0, 0.72, 0.30, 0.95)
-	style.corner_radius_top_left = 2
-	style.corner_radius_top_right = 2
-	style.corner_radius_bottom_right = 2
-	style.corner_radius_bottom_left = 2
-	return style
-
-
-func _initialize_metric_animation() -> void:
-	_metric_labels = {
-		"sim_battery_soc": bl_battery_value,
-		"sim_solar_today_kwh": bl_solar_today_value,
-		"sim_load_today_kwh": bl_load_today_value,
-		"sim_current_load_watts": bl_current_load_value,
-		"sim_current_solar_watts": bl_current_solar_value,
-		"sim_net_watts": bl_net_value,
-		"actual_battery_soc": br_battery_value,
-		"actual_solar_today_kwh": br_solar_today_value,
-		"actual_load_today_kwh": br_load_today_value,
-		"actual_current_load_watts": br_current_load_value,
-		"actual_current_solar_watts": br_current_solar_value,
-		"actual_net_watts": br_net_value
-	}
-
-	for key in _metric_labels.keys():
-		_metric_targets[key] = 0.0
-		_metric_displayed[key] = 0.0
-
-	_refresh_simulated_panel()
-
-
-func _set_metric_target(metric_key: String, value: float) -> void:
-	if not _metric_targets.has(metric_key):
-		return
-	_metric_targets[metric_key] = value
-
-
-func _animate_metric_values(delta: float) -> void:
-	if _metric_targets.is_empty():
-		return
-
-	for key in _metric_targets.keys():
-		var target: float = float(_metric_targets[key])
-		var displayed: float = float(_metric_displayed.get(key, target))
-		var next_value: float = lerpf(displayed, target, clampf(delta * value_animation_speed, 0.0, 1.0))
-		if absf(next_value - target) < 0.005:
-			next_value = target
-		_metric_displayed[key] = next_value
-		var label: Label = _metric_labels.get(key, null) as Label
-		_set_label_text(label, _format_metric_value(key, next_value))
-
-	_refresh_delta_indicators()
-	_apply_accent_theme()
-
-
-func _format_metric_value(metric_key: String, value: float) -> String:
-	if metric_key.ends_with("battery_soc"):
-		return "%.1f %%" % value
-	if metric_key.ends_with("today_kwh"):
-		return "%.2f kWh" % value
-	return "%d W" % int(round(value))
-
-
-func _refresh_delta_indicators() -> void:
-	_set_delta_label(br_battery_delta, _metric_displayed.get("actual_battery_soc", 0.0) - _metric_displayed.get("sim_battery_soc", 0.0), "%%")
-	_set_delta_label(br_solar_today_delta, _metric_displayed.get("actual_solar_today_kwh", 0.0) - _metric_displayed.get("sim_solar_today_kwh", 0.0), "kWh")
-	_set_delta_label(br_load_today_delta, _metric_displayed.get("actual_load_today_kwh", 0.0) - _metric_displayed.get("sim_load_today_kwh", 0.0), "kWh")
-	_set_delta_label(br_current_load_delta, _metric_displayed.get("actual_current_load_watts", 0.0) - _metric_displayed.get("sim_current_load_watts", 0.0), "W")
-	_set_delta_label(br_current_solar_delta, _metric_displayed.get("actual_current_solar_watts", 0.0) - _metric_displayed.get("sim_current_solar_watts", 0.0), "W")
-	_set_delta_label(br_net_delta, _metric_displayed.get("actual_net_watts", 0.0) - _metric_displayed.get("sim_net_watts", 0.0), "W")
-
-
-func _set_delta_label(label: Label, delta_value: float, unit: String) -> void:
-	if label == null:
-		return
-	var sign_prefix := "+" if delta_value >= 0.0 else "-"
-	var magnitude := absf(delta_value)
-	var value_text := ""
-	if unit == "%%":
-		value_text = "%s%.1f %%" % [sign_prefix, magnitude]
-	elif unit == "kWh":
-		value_text = "%s%.2f kWh" % [sign_prefix, magnitude]
-	else:
-		value_text = "%s%d %s" % [sign_prefix, int(round(magnitude)), unit]
-	label.text = "DELTA %s" % value_text
-	if delta_value > 0.0:
-		label.add_theme_color_override("font_color", Color(0.50, 1.0, 0.65, 1.0))
-	elif delta_value < 0.0:
-		label.add_theme_color_override("font_color", Color(1.0, 0.45, 0.45, 1.0))
-	else:
-		label.add_theme_color_override("font_color", Color(0.75, 0.85, 0.95, 1.0))
-
-
-func _apply_accent_theme() -> void:
-	var accent: Color = Color(0.30, 0.95, 1.0, 1.0)
-	var glow: Color = Color(0.16, 0.32, 0.45, 1.0)
-
-	match accent_theme_mode:
-		AccentThemeMode.NEON_AMBER:
-			accent = Color(1.0, 0.70, 0.26, 1.0)
-			glow = Color(0.45, 0.28, 0.12, 1.0)
-		AccentThemeMode.NEON_CRIMSON:
-			accent = Color(1.0, 0.30, 0.35, 1.0)
-			glow = Color(0.40, 0.10, 0.16, 1.0)
-		AccentThemeMode.NEON_AUTO_ALERT:
-			if _actual_battery_soc < low_battery_alert_threshold:
-				accent = Color(1.0, 0.30, 0.35, 1.0)
-				glow = Color(0.40, 0.10, 0.16, 1.0)
-			elif _actual_current_load_watts > high_load_alert_watts:
-				accent = Color(1.0, 0.70, 0.26, 1.0)
-				glow = Color(0.45, 0.28, 0.12, 1.0)
-
-	for label in [
-		bl_battery_value, bl_solar_today_value, bl_load_today_value, bl_current_load_value, bl_current_solar_value,
-		br_battery_value, br_solar_today_value, br_load_today_value, br_current_load_value, br_current_solar_value
-	]:
-		if label != null:
-			(label as Label).add_theme_color_override("font_color", accent)
-	for label in [bl_connection_label, br_connection_label, bl_weather_state_value, br_weather_state_value]:
-		if label != null:
-			(label as Label).add_theme_color_override("font_color", glow)
 
 
 func _connect_webcam_ui_signals() -> void:
@@ -2046,22 +959,6 @@ func _save_webcam_config() -> void:
 	cfg.set_value("webcam", "user_disabled_auto", _webcam_user_disabled_auto)
 	cfg.set_value("webcam", "video_file_path", _active_video_file_path)
 	cfg.save(webcam_config_path)
-
-
-func _parse_state_to_float(raw_state: String) -> float:
-	var trimmed := raw_state.strip_edges()
-	if trimmed.is_valid_float():
-		return trimmed.to_float()
-
-	const numeric_chars := "0123456789.-"
-	var cleaned := ""
-	for c in trimmed:
-		if numeric_chars.contains(c):
-			cleaned += c
-
-	if cleaned.is_valid_float():
-		return cleaned.to_float()
-	return 0.0
 
 
 func _set_label_text(label: Label, value: String) -> void:

@@ -54,7 +54,7 @@ const _GROUPS := [
 		["vegetation_area_edit", "Vegetation area fill"],
 		["placed_props_edit", "Placed props editor"],
 		["toggle_solar_ui", "Solar panel HUD"],
-		["toggle_projection_canvas", "Projection canvas"],
+		["toggle_projection_canvas", "Projection canvas (sim camera | live feed)"],
 	]],
 	["Design & Analysis", [
 		["toggle_site_report", "Site Report (year-round site analysis)"],
@@ -96,11 +96,11 @@ const _GROUPS := [
 		["key:F7", "Vegetation shadow A/B toggle"],
 		["key:Shift+F7", "Hide all trees (perf diagnosis)"],
 		["key:Ctrl+F7", "Cycle 3D render scale"],
-		["toggle_pov_warp", "POV warp overlay"],
+		["toggle_pov_warp", "POV warp (your view, corner-pinned)"],
 		["toggle_star_calibration", "Reference-star markers (sky alignment check)"],
-		["toggle_projection_warp", "Projection warp (StarShade)"],
-		["toggle_projection_calibration", "Projection calibration"],
-		["reset_projection_warp", "Reset projection warp"],
+		["toggle_projection_warp", "Projection canvas: warp on / off"],
+		["toggle_projection_calibration", "Projection mapping: drag the corners"],
+		["reset_projection_warp", "Projection mapping: reset the corners"],
 	]],
 ]
 

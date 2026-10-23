@@ -1338,8 +1338,9 @@ func _unhandled_input( e : InputEvent ) -> void :
 		return
 	var key_event : InputEventKey = e as InputEventKey
 	if InputMap.has_action( "toggle_pov_warp" ) and e.is_action_pressed( "toggle_pov_warp" ) :
-		if is_instance_valid( pov_warp_overlay ) and pov_warp_overlay.has_method( "toggle_warp_mode" ) :
-			pov_warp_overlay.call( "toggle_warp_mode" )
+		var pov := ensure_pov_warp_overlay()
+		if is_instance_valid( pov ) and pov.has_method( "toggle_warp_mode" ) :
+			pov.call( "toggle_warp_mode" )
 			get_viewport().set_input_as_handled()
 			return
 	# GPU A/B levers on the editor-safe F7 key (F5/F6/F8 are the editor's own
@@ -4525,6 +4526,31 @@ func _setup_toast_ui() -> void :
 		ui_layer.add_child( fun )
 
 
+## Returns the POV warp overlay (Z), instancing it under UILayer on maps that
+## don't ship one (every generated location map). Lazy for the same reason as
+## the canvas: its mirror camera renders the world again while it is up.
+func ensure_pov_warp_overlay() -> Control :
+	if is_instance_valid( pov_warp_overlay ) :
+		return pov_warp_overlay
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return null
+	var existing := ui_layer.get_node_or_null( "POVWarpOverlay" ) as Control
+	if existing == null :
+		var packed := load( "res://scenes/ui/projection/POVWarpOverlay.tscn" ) as PackedScene
+		if packed == null :
+			return null
+		existing = packed.instantiate() as Control
+		if existing == null :
+			return null
+		existing.name = "POVWarpOverlay"
+		if get_node_or_null( "Player/CameraArm/Camera3D" ) != null :
+			existing.set( "source_camera_path", NodePath( "../../Player/CameraArm/Camera3D" ) )
+		ui_layer.add_child( existing )
+	pov_warp_overlay = existing
+	return pov_warp_overlay
+
+
 ## Returns the ProjectionCanvas, instancing it under UILayer on maps that don't
 ## ship one (mars_aerial + every generated location map — only soak_festival and
 ## the legacy main.tscn have the node authored in the scene). Without this the
@@ -4550,12 +4576,8 @@ func ensure_projection_canvas() -> Control :
 		return null
 	pc.name = "ProjectionCanvas"
 	pc.visible = false
-	# Match the authored soak/main.tscn instances: warp off, HA + source camera
-	# bound by the same relative paths the scene files use.
-	if "warp_enabled" in pc :
-		pc.set( "warp_enabled", false )
-	if get_node_or_null( "HAClient" ) != null and "ha_client_path" in pc :
-		pc.set( "ha_client_path", NodePath( "../../HAClient" ) )
+	# Match the authored soak / legacy instances: the sim camera mirrors the
+	# player camera by the same relative path the scene files use.
 	if get_node_or_null( "Player/CameraArm/Camera3D" ) != null and "source_camera_path" in pc :
 		pc.set( "source_camera_path", NodePath( "../../Player/CameraArm/Camera3D" ) )
 	ui_layer.add_child( pc )

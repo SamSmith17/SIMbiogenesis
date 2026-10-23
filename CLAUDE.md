@@ -1259,6 +1259,15 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_abs_pre
 # it — the window's span exact to the hour, the estimate = the fork's sim,
 # the reality sim a good match; "would" worded as a what-if:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/compare_savings_probe.gd -Label compare_savings
+# Projection mapping (offline — ProjectionWarp: the perspective corner pin's
+# homography, Basis == GLSL mat3, layouts, bow-tie refused, v2 round trip and
+# the v1 pixel file migrated, on TEMP paths; EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script scenes/ui/projection/projection_warp_selftest.gd
+# The canvas (I) + POV warp (Z) on a real world (sandbox): no dashboard left,
+# viewports idle while hidden, F9 inert while hidden, a keystone quad drawn
+# with black outside, handles over the quads, the panel off the corners,
+# UiAudit clean, the HUD hidden while up; shots under screenshots\projection\:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/projection_warp_probe.gd -Label projection
 # A vs B end to end (sandbox): a nightly shutdown on a load, the automation
 # card's A/B (fork without it, next week) — A asks for less and wins; editing
 # the fork (canvas holds it, clock held, engine + HA links stand down), Done
@@ -5670,9 +5679,48 @@ and **Compare**. `BAR_HEIGHT` is 164 (scene `TimelineUI` offset_top/min-size mat
 
 **Split-screen compare: RETIRED (2026-10-22).** SolarUI no longer feeds the
 "I" `ProjectionCanvas` (`set_compare_active` / `_tick_compare_feed` are gone);
-⧉ opens the Compare window below. The canvas's BL/BR stat panels still hold
-their placeholder exports until the projection split (plan milestone 4);
-`feed_comparison` / `set_compare_mode` there have no caller.
+⧉ opens the Compare window below. The canvas's dashboard half went with the
+projection split (next section).
+
+## Projection mapping (scenes/ui/projection/, 2026-10-23)
+
+The projection canvas (**I**) and the POV warp (**Z**) are projector outputs,
+nothing else. Until 2026-10-23 the canvas was also a 2×2 "sim vs live"
+dashboard whose bottom half showed placeholder numbers, a fabricated history
+curve and device rows nothing fed; that is gone (the Compare window does the
+job with real data).
+- **`ProjectionWarp`** (`projection_warp.gd` + `.gdshader`) is the ONE
+  corner-pin, used by both views. The source texture is cut into 1, 2 or 4
+  regions; each is drawn into a quad whose corners the player drags. It is a
+  true PERSPECTIVE pin: `homography(quad)` (Heckbert 1989) solved on the CPU,
+  its inverse a `mat3` uniform, mapped per pixel in the shader (outside the
+  quad discarded, black backdrop). The old Polygon2D quads were two affine
+  triangles and bent the image along the diagonal on any keystone. A Basis
+  goes into a `mat3` column for column (pinned in the selftest).
+- Corners are stored as FRACTIONS of the control, so a resize keeps a
+  calibration on the wall (`[warp] version 2, quads, q0..`). A v1 file
+  (absolute pixels, TL/TR/BL/BR) migrates on load, divided by its saved
+  `canvas_size`; the canvas reads its old `projection_canvas_warp.cfg`
+  through `load_config(legacy_path)` and saves to `..._warp_v2.cfg`.
+- Keys act only while the host is visible (the canvas) or the warp is up
+  (POV, `key_gate`): `toggle_projection_warp` F9 (canvas only — POV has Z),
+  `toggle_projection_calibration` F10, `reset_projection_warp` F8, Enter
+  save, Tab next quad, Esc done. They used to fire while the canvas was
+  hidden, and both views fought over F10.
+- Handles draw on a child layer: a parent's `_draw` is UNDER its children,
+  so drawn on the warp control they were hidden by the quads. The panel moves
+  to mid-screen when a corner is under its top-centre spot.
+- **The canvas** (`ProjectionCanvas.tscn`, `projection_canvas.gd`, ~1300
+  lines from 2400): left = sim camera (free / synced, click to fly), right =
+  live camera feed (OBS virtual camera preferred) or a timelapse video locked
+  to the sim clock (the timeline's VID lane, 📹 📷 ⏲). Two warp quads. Its
+  SubViewports render only while it is shown (they were UPDATE_ALWAYS for the
+  life of the scene, hidden or not), and it claims the HUD hidden while up.
+- **The POV warp** (`pov_warp_overlay.gd`): a mirror of the player camera in
+  four quads; its viewport renders only while warped; made on demand on maps
+  without one (`Main.ensure_pov_warp_overlay`), as the canvas is.
+- Gates: `scenes/ui/projection/projection_warp_selftest.gd` (offline) and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/projection_warp_probe.gd -Label projection`.
 
 ## Sim vs reality: the Compare window (core/experiment/, 2026-10-22)
 

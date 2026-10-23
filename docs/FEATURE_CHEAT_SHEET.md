@@ -108,10 +108,10 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **Q** | Packing Lab (site cargo → truck) | `toggle_packing_lab`; also Site Report packing card |
 | **M** | Placed Props edit dock | `placed_props_edit` |
 | **Y** | NPC space edit dock | `space_edit` |
-| **Z** | POV warp overlay | `toggle_pov_warp` (StarShade projector) |
+| **Z** | POV warp: your view corner-pinned in four quads for a projector | `toggle_pov_warp`; F10 calibrate, F8 reset, Enter save while up |
 | **Home** | Reference-star markers (computed Polaris/Sirius/… over the star map — alignment check) | `toggle_star_calibration` |
 | **P** | Light menu / pallet rack | Contextual — see [Key conflicts](#key-conflicts--gotchas) |
-| **I** | Projection canvas | NLE / compare panels |
+| **I** | Projection canvas: sim camera \| live feed or timelapse video, with projection mapping | F9 warp, F10 calibrate (drag corners), F8 reset, Enter save |
 | **F1** | Help overlay | |
 | **F11** | Window wall (multi-monitor viewport) | `toggle_window_wall`; off until enabled in Settings → Window Wall. In the view: Esc/F11 leave, U toggles UI, WASD/QE nudge, ←→ or mouse-drag turn, R reset, Ctrl+S save viewpoint, I identify screens |
 | **Enter** | Multiplayer chat compose | `mp_chat` |
@@ -199,7 +199,7 @@ Bottom bar owns the clock.
 | 🎬 | Export selection to **MP4** at 30 fps, at the bar's playback speed (needs `ffmpeg`) |
 | 📍 / 🧹 | Add / clear climelapse drone path waypoints |
 | 📄/🧮 | Render load: CSV vs Modeled |
-| ⧉ | Compare observed vs sim → projection canvas (**I**) |
+| ⧉ | Compare window: sim vs Home Assistant history, A vs B forks, would/did save |
 | 🎚 | Tracks menu (waveform lanes) |
 | 📹 📷 ⏲ | Load video / live camera / snap video to playhead |
 
@@ -217,7 +217,8 @@ the orphaned `_on_render_clim_pressed` bake handler was removed.
 **📹 📷 ⏲ / projection canvas (I)** — only `soak_festival_2026.tscn` and the legacy
 `mars_main_legacy.tscn` author a `UILayer/ProjectionCanvas`, so on Mars and every generated
 location map these silently did nothing. `main.ensure_projection_canvas()` now
-instances it on demand (lazily — it owns an always-updating SubViewport).
+instances it on demand (lazily), and its SubViewports render only while it is shown.
+The same goes for the POV warp (**Z**): `main.ensure_pov_warp_overlay()`.
 
 ---
 
@@ -542,8 +543,8 @@ Timeline **Multiplayer** chip → lobby:
 
 | Feature | Key / UI |
 |---------|----------|
-| Projection canvas | **I** — BL/BR panels, compare mode |
-| POV warp | **Z** (`toggle_pov_warp`) — calibration-related |
+| Projection canvas | **I** — sim camera \| live feed / video, corner-pin mapping (F9 / F10 / F8) |
+| POV warp | **Z** (`toggle_pov_warp`) — your view in four corner-pinned quads |
 | Warp / calibration actions | InputMap `toggle_projection_warp` / `_calibration` / `reset_projection_warp` (special keys) |
 | Video / OBS feed | Timeline 📹 📷 |
 
