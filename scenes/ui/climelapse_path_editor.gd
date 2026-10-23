@@ -11,6 +11,8 @@ extends PanelContainer
 ##   click a marker                   picks that keyframe
 ##   Look through                     sees the key's own view; drag to pan and
 ##                                    tilt, the wheel zooms (field of view)
+##   Ctrl+Z / Ctrl+Y                  undo / redo any edit made here
+##   PageUp / PageDown                the keyframe before / after
 ##
 ## A right-edge dock in CursorController's tool-overlay tier, like the prop
 ## editor: the cursor is free, RMB looks, WASD walks, Esc steps out (a drag,
@@ -25,6 +27,10 @@ const DOCK_W := 380.0
 const SNAP_M := 0.25
 const SNAP_DEG := 5.0
 const LOOK_SENS := 0.0035   # radians per pixel dragged while looking through
+const UNDO_MAX := 60
+## Edits of one kind closer together than this are one undo step (a spin
+## held down, wheel notches, typing).
+const UNDO_COALESCE_S := 0.8
 
 var _loader: Node = null
 var _main: Node = null
@@ -43,6 +49,10 @@ var _drag := {}
 var _look := false
 var _look_cam: Camera3D = null
 var _look_drag := false
+var _undo: Array = []       # ClimelapseKeyframes copies, oldest first
+var _redo: Array = []
+var _undo_kind := ""
+var _undo_at := -1.0
 var _look_last := Vector2.ZERO
 
 var _sub_lbl: Label
@@ -58,6 +68,10 @@ var _smooth_chk: CheckBox
 var _path_lbl: Label
 var _hint_lbl: Label
 var _key_box: Control
+var _add_btn: Button
+var _undo_btn: Button
+var _redo_btn: Button
+var _video_lbl: Label
 
 
 func _ready() -> void:
@@ -106,6 +120,9 @@ func open(key_index: int = -1, opts: Dictionary = {}) -> bool:
 		_opts = opts.duplicate()
 	if not _open:
 		_keys0 = keys.duplicate_keys()
+		_undo.clear()
+		_redo.clear()
+		_undo_kind = ""
 	_sel = key_index if key_index >= 0 and key_index < keys.size() else _nearest_to_playhead(keys)
 	if not _open:
 		_open = true
@@ -119,7 +136,7 @@ func open(key_index: int = -1, opts: Dictionary = {}) -> bool:
 	_list_sig = ""
 	_refresh_list()
 	_sync_fields()
-	_hint("Drag the green ring to pan, the red ring to tilt, the arrows to move. Click a marker to pick a keyframe. Esc closes.")
+	_hint("Drag the green ring to pan, the red ring to tilt, the arrows to move. Click a marker to pick a keyframe. Ctrl+Z undoes. Esc closes.")
 	return true
 
 
@@ -234,12 +251,20 @@ func _build_ui() -> void:
 	_list.item_selected.connect(func(i: int) -> void: _select(i))
 	keys_box.add_child(_list)
 	var nav := _row(keys_box)
-	_button(nav, "◀ Previous", "The keyframe before", func() -> void: _select(_sel - 1))
-	_button(nav, "Next ▶", "The keyframe after", func() -> void: _select(_sel + 1))
+	_button(nav, "◀ Previous", "The keyframe before (PageUp)", func() -> void: _select(_sel - 1))
+	_button(nav, "Next ▶", "The keyframe after (PageDown)", func() -> void: _select(_sel + 1))
+	var addr := _row(keys_box)
+	_add_btn = _button(addr, "Add at the playhead", "A new keyframe with the view you have now, at the playhead's moment (move the playhead on the timeline first)", _on_add_key)
+	_button(addr, "Move here", "Move this keyframe to the playhead's moment (keeps its view)", _on_move_to_playhead)
+	var ur := _row(keys_box)
+	_undo_btn = _button(ur, "Undo", "Ctrl+Z", undo)
+	_redo_btn = _button(ur, "Redo", "Ctrl+Y", redo)
 
 	var kb := _section(body, "This keyframe", "camera")
 	_key_box = kb
 	_time_lbl = _label(kb, "")
+	_video_lbl = _label(kb, "")
+	_video_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var tr := _row(kb)
 	_button(tr, "Move the playhead here", "Put the clock at this keyframe's moment", _on_jump)
 	_look_btn = _button(tr, "Look through", "See this keyframe's own view. Drag to pan and tilt, the wheel zooms.", func() -> void: _set_look(not _look))
@@ -270,6 +295,7 @@ func _build_ui() -> void:
 	_smooth_chk.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_smooth_chk.toggled.connect(func(on: bool) -> void:
 		if not _syncing and _loader != null:
+			_checkpoint("")
 			_loader.call("set_climelapse_keys_smooth", on))
 	pb.add_child(_smooth_chk)
 	_path_lbl = _label(pb, "")
@@ -419,15 +445,36 @@ func _sync_fields() -> void:
 	_pan_spin.value = ClimelapseKeyframes.heading_deg(float(k.get("yaw", 0.0)))
 	_tilt_spin.value = rad_to_deg(float(k.get("pitch", 0.0)))
 	_fov_spin.value = float(k.get("fov", 75.0))
+	_video_lbl.text = _video_place(keys, float(k.get("t", 0.0)))
 	(_pos_spins[0] as SpinBox).value = p.x
 	(_pos_spins[1] as SpinBox).value = p.y
 	(_pos_spins[2] as SpinBox).value = p.z
 	_syncing = false
 
 
+## Where key time `t` lands in the video the preview / export would make.
+func _video_place(keys: ClimelapseKeyframes, t: float) -> String:
+	var o := _preview_opts()
+	var total := ClimelapseExportOptions.video_seconds(o)
+	if total <= 0.0:
+		return ""
+	if ClimelapseExportOptions.key_timing(o, keys) == "spread":
+		return "At %s of the %s video (the path is spread over it)." % [
+			ClimelapseExportOptions.duration_label(keys.progress_of(t) * total),
+			ClimelapseExportOptions.duration_label(total)]
+	var s := float(o["start_abs"])
+	var e := float(o["end_abs"])
+	if t < s or t > e:
+		return "Outside the export range: the video holds the nearest keyframe."
+	return "At %s of the %s video." % [
+		ClimelapseExportOptions.duration_label((t - s) / maxf(float(o["hours_per_second"]), 1e-6)),
+		ClimelapseExportOptions.duration_label(total)]
+
+
 func _on_fields_changed() -> void:
 	if _syncing or _sel < 0:
 		return
+	_checkpoint("fields")
 	var pos := Vector3((_pos_spins[0] as SpinBox).value, (_pos_spins[1] as SpinBox).value, (_pos_spins[2] as SpinBox).value)
 	_write(pos, ClimelapseKeyframes.yaw_for_heading(_pan_spin.value), deg_to_rad(_tilt_spin.value), _fov_spin.value, true)
 	if _pan_spin.value < 0.0 or _pan_spin.value >= 360.0:
@@ -449,7 +496,78 @@ func _key_pose() -> Dictionary:
 		"pitch": float(k.get("pitch", 0.0)), "fov": float(k.get("fov", 75.0)), "t": float(k.get("t", 0.0))}
 
 
+# --- undo ---------------------------------------------------------------------
+
+## Remember the keys before an edit. Edits of the same `kind` within
+## UNDO_COALESCE_S of each other share one step.
+func _checkpoint(kind: String) -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	if kind == _undo_kind and kind != "" and now - _undo_at < UNDO_COALESCE_S:
+		_undo_at = now
+		return
+	var keys := _keys()
+	if keys == null:
+		return
+	_undo.append(keys.duplicate_keys())
+	if _undo.size() > UNDO_MAX:
+		_undo.pop_front()
+	_redo.clear()
+	_undo_kind = kind
+	_undo_at = now
+
+
+func undo() -> void:
+	_swap_history(_undo, _redo)
+
+
+func redo() -> void:
+	_swap_history(_redo, _undo)
+
+
+func _swap_history(from: Array, to: Array) -> void:
+	if from.is_empty() or _loader == null:
+		return
+	if _dragging:
+		_end_drag(false)
+	var keys := _keys()
+	if keys != null:
+		to.append(keys.duplicate_keys())
+	_loader.call("restore_climelapse_keys", from.pop_back())
+	_undo_kind = ""
+	var n := _keys().size()
+	_sel = clampi(_sel, -1, n - 1) if n > 0 else -1
+	_list_sig = ""
+	_refresh_list()
+	_sync_fields()
+
+
+func can_undo() -> bool:
+	return not _undo.is_empty()
+
+
 # --- buttons ------------------------------------------------------------------
+
+func _on_add_key() -> void:
+	if _loader == null or _look:
+		return
+	_checkpoint("")
+	var i := int(_loader.call("set_climelapse_key_at", _now()))
+	if i >= 0:
+		_sel = i
+		_list_sig = ""
+		_refresh_list()
+		_sync_fields()
+		_hint("Keyframe %d added at %s with your view." % [i + 1, ClimelapsePathView.time_label(_clock(), _now())])
+
+
+func _on_move_to_playhead() -> void:
+	if _loader == null or _sel < 0:
+		return
+	_checkpoint("")
+	_sel = int(_loader.call("move_climelapse_key", _sel, _now()))
+	_list_sig = ""
+	_refresh_list()
+	_sync_fields()
 
 func _on_jump() -> void:
 	var kp := _key_pose()
@@ -461,6 +579,7 @@ func _on_jump() -> void:
 func _on_set_my_view() -> void:
 	if _sel < 0 or _look or _loader == null:
 		return
+	_checkpoint("")
 	_loader.call("repose_climelapse_key", _sel)
 	_sync_fields()
 
@@ -468,6 +587,7 @@ func _on_set_my_view() -> void:
 func _on_delete() -> void:
 	if _sel < 0 or _loader == null:
 		return
+	_checkpoint("")
 	_set_look(false)
 	_loader.call("remove_climelapse_key", _sel)
 	var keys := _keys()
@@ -481,6 +601,7 @@ func _on_revert() -> void:
 		return
 	if _dragging:
 		_end_drag(false)
+	_checkpoint("")
 	_loader.call("restore_climelapse_keys", _keys0)
 	_sel = clampi(_sel, -1, _keys0.size() - 1)
 	_list_sig = ""
@@ -584,6 +705,9 @@ func _process(_delta: float) -> void:
 	if _sel >= keys.size():
 		_sel = keys.size() - 1
 		_sync_fields()
+	_undo_btn.disabled = _undo.is_empty()
+	_redo_btn.disabled = _redo.is_empty()
+	_add_btn.disabled = _look
 	var cam := get_viewport().get_camera_3d()
 	if is_instance_valid(_view):
 		_view.visible = not _look
@@ -620,13 +744,41 @@ func _ray(mouse: Vector2) -> Dictionary:
 	return {"o": cam.project_ray_origin(mouse), "d": cam.project_ray_normal(mouse), "cam": cam}
 
 
+## Ctrl+Z / Ctrl+Y before anything else sees them: the terrain and graph
+## have their own undo on the same keys. A focused text field keeps its own.
+func _input(event: InputEvent) -> void:
+	if not _open or _suspended or not (event is InputEventKey):
+		return
+	var k := event as InputEventKey
+	if not k.pressed or k.echo or not k.ctrl_pressed:
+		return
+	var f := get_viewport().gui_get_focus_owner()
+	if f is LineEdit or f is TextEdit:
+		return
+	if k.physical_keycode == KEY_Z and not k.shift_pressed:
+		undo()
+	elif k.physical_keycode == KEY_Y or (k.physical_keycode == KEY_Z and k.shift_pressed):
+		redo()
+	else:
+		return
+	get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not _open or _suspended:
 		return
 	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
 		var k := event as InputEventKey
+		var handled := true
 		if k.physical_keycode == KEY_DELETE and _sel >= 0:
 			_on_delete()
+		elif k.physical_keycode == KEY_PAGEUP:
+			_select(_sel - 1)
+		elif k.physical_keycode == KEY_PAGEDOWN:
+			_select(_sel + 1)
+		else:
+			handled = false
+		if handled:
 			get_viewport().set_input_as_handled()
 		return
 	if _look:
@@ -671,6 +823,7 @@ func _look_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed and not _pointer_over_ui():
+				_checkpoint("")
 				_look_drag = true
 				_look_last = mb.position
 				get_viewport().set_input_as_handled()
@@ -684,6 +837,7 @@ func _look_input(event: InputEvent) -> void:
 				and not _pointer_over_ui():
 			var kp2 := _key_pose()
 			if not kp2.is_empty():
+				_checkpoint("wheel")
 				var f := float(kp2["fov"]) + (-2.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 2.0)
 				_write(kp2["pos"], kp2["yaw"], kp2["pitch"], f, true)
 				_sync_fields()
@@ -710,6 +864,7 @@ func _begin_drag(handle: String, r: Dictionary) -> void:
 	var kp := _key_pose()
 	if kp.is_empty():
 		return
+	_checkpoint("")
 	_dragging = true
 	var o := _gizmo.global_position
 	_drag = {"handle": handle, "origin": o, "kp0": kp}

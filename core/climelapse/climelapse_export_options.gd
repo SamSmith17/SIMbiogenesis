@@ -29,6 +29,10 @@ extends RefCounted
 ##                        cloud shadows, full sunlight); the weather otherwise
 ##   star_trails          -1 as set in the game, 0 off, 1 grow through each
 ##                        night (a long exposure that starts at dusk)
+##   camera_timing        "auto" | "pinned" | "spread": keyframes play at
+##                        their moments on the timeline, or their path is
+##                        spread over the whole video (key_timing resolves
+##                        "auto")
 ##   follow               "none" | "sun" | "moon" | "stars": the camera turns
 ##                        to keep the sun / moon centred, or turns with the
 ##                        sky so the stars hold still and the ground wheels
@@ -115,7 +119,45 @@ static func defaults() -> Dictionary:
 		"clouds": true,
 		"star_trails": -1,
 		"follow": "none",
+		"camera_timing": "auto",
 	}
+
+
+## Keyframe timing choices: id, label.
+const CAMERA_TIMING_CHOICES: Array = [
+	["auto", "Automatic"],
+	["pinned", "At their moments on the timeline"],
+	["spread", "Spread over the whole video"],
+]
+
+
+## How the keyframes play in this export: "pinned" (each key at its moment on
+## the timeline) or "spread" (the path from the first key to the last fills
+## the video, the keys keeping their spacing). "auto" pins when the keys
+## belong to this range — two or more inside it, or their span covering at
+## least half of it — and spreads otherwise; an analemma always spreads (its
+## clock jumps a day a frame, so pinned keys would play in its first frames
+## and then hold). Keys a few hours apart and a year-long export used to give
+## a camera that moved once and then sat still.
+static func key_timing(o: Dictionary, keys: ClimelapseKeyframes) -> String:
+	var want := str(o.get("camera_timing", "auto"))
+	if want == "pinned" or want == "spread":
+		return want
+	if keys == null or keys.size() < 2:
+		return "pinned"
+	if int(o.get("analemma", 0)) > 0:
+		return "spread"
+	var s := float(o.get("start_abs", 0.0))
+	var e := float(o.get("end_abs", 0.0))
+	if e <= s:
+		return "pinned"
+	var ts := keys.times()
+	var inside := 0
+	for t in ts:
+		if t >= s and t <= e:
+			inside += 1
+	var overlap := minf(e, ts[ts.size() - 1]) - maxf(s, ts[0])
+	return "pinned" if inside >= 2 or overlap >= 0.5 * (e - s) else "spread"
 
 
 ## Camera follow choices: id, label.
@@ -160,6 +202,8 @@ static func normalize(o: Dictionary) -> Dictionary:
 	out["star_trails"] = clampi(int(out["star_trails"]), -1, 1)
 	var fol := str(out["follow"])
 	out["follow"] = fol if ["none", "sun", "moon", "stars"].has(fol) else "none"
+	var tim := str(out["camera_timing"])
+	out["camera_timing"] = tim if ["auto", "pinned", "spread"].has(tim) else "auto"
 	out["file_name"] = clean_file_name(str(out["file_name"]))
 	out["folder"] = str(out["folder"]).replace("\\", "/")
 	return out
@@ -360,7 +404,7 @@ static func span_label(hours: float) -> String:
 
 const _PERSIST_KEYS := ["hours_per_second", "fps", "width", "height", "folder", "quality",
 	"shadows", "msaa", "taa", "settle_frames", "timecode", "crf", "analemma", "analemma_days_per_second",
-	"clouds", "star_trails", "follow"]
+	"clouds", "star_trails", "follow", "camera_timing"]
 
 
 static func load_prefs(path: String = CFG_PATH) -> Dictionary:

@@ -172,6 +172,25 @@ func sample(abs_h: float) -> Dictionary:
 	return {"xform": Transform3D(Basis.from_euler(Vector3(pitch, yaw, 0.0)), pos), "fov": fov}
 
 
+## The camera at fraction `u` (0..1) of the keys' own span, first key to
+## last: the "spread" timing, where the path plays over the whole video
+## whatever the export's range, the keys keeping their relative spacing.
+func sample_progress(u: float) -> Dictionary:
+	if keys.is_empty():
+		return {}
+	var ts := times()
+	return sample(lerpf(ts[0], ts[ts.size() - 1], clampf(u, 0.0, 1.0)))
+
+
+## Where moment `t` sits on the keys' span, 0..1 (0 with fewer than two keys).
+func progress_of(t: float) -> float:
+	if keys.size() < 2:
+		return 0.0
+	var ts := times()
+	var span := ts[ts.size() - 1] - ts[0]
+	return clampf((t - ts[0]) / span, 0.0, 1.0) if span > 0.0 else 0.0
+
+
 ## The path the camera flies, `n` samples from the first key's moment to the
 ## last's: [{t, pos, fwd}]. One key gives that key; none gives [].
 func sample_path(n: int) -> Array:

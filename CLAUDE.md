@@ -2333,7 +2333,11 @@ off-screen SubViewport and streams the frames into ffmpeg.
   a wrong `relative`), the wheel zooms. Click a marker to select a key.
   Edits save on release (`set_climelapse_key_pose(..., save)`); Revert =
   `restore_climelapse_keys` with the keys as the editor opened; Preview
-  plays from the selected key and the editor comes back after.
+  plays from the selected key and the editor comes back after. Undo / redo
+  (Ctrl+Z / Ctrl+Y in `_input`, ahead of the terrain's own undo; buttons
+  too) over whole-key snapshots, held-spin / wheel edits coalesced;
+  "Add at the playhead" (your view), "Move here" (the selected key to the
+  playhead), PageUp / PageDown, and where the key lands in the video.
 - **Sky options** (dialog "Sky" + "Aim"; `ClimelapseSkyDirector`, shared by
   the export and the preview so they match; everything restored by `end()`):
   - Analemma (sun / moon): the game's ∞, stepped by the export
@@ -2355,11 +2359,25 @@ off-screen SubViewport and streams the frames into ffmpeg.
   - Aim: follow the sun / moon (look at it, horizon level, `look_basis`) or
     the stars (the camera turned with the sky since the first frame,
     `follow_stars_basis`: the stars hold still and the horizon rolls).
+- **Keyframe timing** (`camera_timing` auto / pinned / spread,
+  `ClimelapseExportOptions.key_timing`, `rig.key_timing`): PINNED = each key
+  at its hour on the timeline; SPREAD = the path from the first key to the
+  last fills the whole video (`ClimelapseKeyframes.sample_progress(t_norm)`,
+  t_norm = VIDEO progress in both the capture and the preview), keys keeping
+  their spacing. Auto pins when ≥ 2 keys are inside the range or their span
+  covers half of it, and always spreads under an analemma. ⚠ Before this, a
+  path keyed a few hours apart played in the first frames of a year-long
+  analemma (or never, for a range elsewhere) and the camera then sat on the
+  last key — "the preview has no camera movement". The dialog's camera note
+  says which timing applies and why.
 - **Preview** (`ClimelapsePreview`, the dialog's Preview button or the lane
   menu): plays the shot in the game window in real time at the export's
   speed, with an exclusive clock claim and an exclusive camera claim
-  (`climelapse_preview`), a top bar (Pause / Restart / Stop), HUD hidden;
-  Esc or Stop puts the clock back where it was and the player camera back.
+  (`climelapse_preview`), a top bar (Pause / Restart / Stop, a scrub bar,
+  Space / ← → / Home, a camera-path line), HUD hidden; an analemma scrubbed
+  back restarts and steps forward; from a key on a spread path it starts at
+  that key's place in the video. Esc or Stop puts the clock back where it
+  was and the player camera back.
 - Old `start_climelapse_export(start, end, time_scale, path, fps)` still works
   (it fills the remembered options). Selftest + probe in the Validation list.
 

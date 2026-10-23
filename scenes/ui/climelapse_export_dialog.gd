@@ -47,6 +47,7 @@ var _speed_ana := false     # the speed row shows analemma days/s (else sim-h/s)
 var _clouds_opt: OptionButton = null
 var _trails_opt: OptionButton = null
 var _follow_opt: OptionButton = null
+var _timing_opt: OptionButton = null
 var _sky_note: Label = null
 var _cam_note: Label = null
 var _summary: Label = null
@@ -220,6 +221,13 @@ func _build() -> void:
 		labels.append(str(c[1]))
 	_follow_opt = _choice(fo, labels)
 	_follow_opt.tooltip_text = "Follow the sun or moon: the camera keeps it centred with the horizon level. Follow the stars: the camera turns with the sky like a tracking mount, so the stars hold still and the ground wheels round."
+	var tr := _row(b)
+	_lbl(tr, "Keyframes play")
+	var tlabels: Array = []
+	for c in ClimelapseExportOptions.CAMERA_TIMING_CHOICES:
+		tlabels.append(str(c[1]))
+	_timing_opt = _choice(tr, tlabels)
+	_timing_opt.tooltip_text = "At their moments: each keyframe is reached at its hour on the timeline. Spread: the path from the first keyframe to the last fills the whole video, keeping their spacing (an analemma, or keyframes outside this range). Automatic picks for you."
 	var cr := _row(b)
 	_smooth_chk = CheckBox.new()
 	_smooth_chk.text = "Smooth path between keyframes"
@@ -345,6 +353,11 @@ func _load_into_controls() -> void:
 		if str(ClimelapseExportOptions.FOLLOW_CHOICES[i][0]) == str(_opts["follow"]):
 			fi = i
 	_follow_opt.select(fi)
+	var ti := 0
+	for i in ClimelapseExportOptions.CAMERA_TIMING_CHOICES.size():
+		if str(ClimelapseExportOptions.CAMERA_TIMING_CHOICES[i][0]) == str(_opts.get("camera_timing", "auto")):
+			ti = i
+	_timing_opt.select(ti)
 	var keys: ClimelapseKeyframes = _loader.call("climelapse_keys") if _loader != null else null
 	_smooth_chk.button_pressed = keys == null or keys.smooth
 	_updating = false
@@ -487,6 +500,7 @@ func _read_controls() -> void:
 	_opts["clouds"] = _clouds_opt.selected != 1
 	_opts["star_trails"] = _trails_opt.selected - 1
 	_opts["follow"] = str(ClimelapseExportOptions.FOLLOW_CHOICES[maxi(_follow_opt.selected, 0)][0])
+	_opts["camera_timing"] = str(ClimelapseExportOptions.CAMERA_TIMING_CHOICES[maxi(_timing_opt.selected, 0)][0])
 
 
 ## Analemma on: the speed row edits days per second, and a range shorter than
@@ -515,8 +529,9 @@ func _refresh() -> void:
 		_range_note.text += " (No Ctrl-drag selection — this is the next 24 h from the playhead.)"
 	var keys: ClimelapseKeyframes = _loader.call("climelapse_keys") if _loader != null else null
 	var n := keys.size() if keys != null else 0
+	_timing_opt.disabled = n < 2
 	if n == 0:
-		_cam_note.text = "No camera keyframes: the camera stays where you are looking now. Add keyframes with 📍 on the timeline (they sit on the CLIM lane; drag to retime, right-click to edit)."
+		_cam_note.text = "No camera keyframes: the camera holds the view you have now. Add keyframes with 📍 on the timeline (the CLIM lane: click one to edit the path, drag to retime)."
 	elif n == 1:
 		_cam_note.text = "1 camera keyframe: the shot is locked on that view."
 	else:
@@ -524,8 +539,17 @@ func _refresh() -> void:
 		for t in keys.times():
 			if t >= float(o["start_abs"]) and t <= float(o["end_abs"]):
 				inside += 1
-		_cam_note.text = "%s: the camera flies between them, %d inside this range." % [
-			UiText.count(n, "camera keyframe"), inside]
+		var timing := ClimelapseExportOptions.key_timing(o, keys)
+		var how := ""
+		if timing == "spread":
+			how = "the path from the first to the last is spread over the whole video, keeping their spacing"
+			if str(o["camera_timing"]) == "auto":
+				how += " (an analemma jumps a day a frame)" if int(o["analemma"]) > 0 					else " (they are not in this range)"
+		else:
+			how = "the camera reaches each at its moment on the timeline"
+			if inside < n:
+				how += "; outside this range it holds the nearest one"
+		_cam_note.text = "%s, %d inside this range: %s." % [UiText.count(n, "camera keyframe"), inside, how]
 	_smooth_chk.disabled = n < 3
 	var ana := int(o["analemma"]) > 0
 	var sky_bits: Array = []

@@ -7,7 +7,7 @@ extends SceneTree
 ## test function while the suite would still print PASS.
 
 const HOURS_PER_YEAR := 8760.0
-const EXPECTED_CHECKS := 62
+const EXPECTED_CHECKS := 64
 
 var _checks := 0
 
@@ -181,6 +181,28 @@ func _test_path_editing() -> int:
 	f += _ok(east.is_equal_approx(Vector3(1, 0, 0)) and absf(ClimelapseKeyframes.heading_deg(ClimelapseKeyframes.yaw_for_heading(237.5)) - 237.5) < 1e-6,
 		"heading 90° faces east (+X); heading ↔ yaw round trip")
 	f += _ok(ClimelapseKeyframes.forward(0.0, deg_to_rad(30.0)).y > 0.49, "positive pitch looks up")
+	# Keyframe timing: pinned keys play at their hours; a spread path fills
+	# the video whatever the range (the analemma / out-of-range fix).
+	var tk := ClimelapseKeyframes.new()
+	tk.set_key(1000.0, Transform3D(Basis.IDENTITY, Vector3(0, 0, 0)))
+	tk.set_key(1004.0, Transform3D(Basis.IDENTITY, Vector3(40, 0, 0)))
+	var inside := {"start_abs": 990.0, "end_abs": 1010.0}
+	var far := {"start_abs": 5000.0, "end_abs": 5024.0}
+	var ana := {"start_abs": 990.0, "end_abs": 990.0 + 365.0 * 24.0, "analemma": 1}
+	var forced := {"start_abs": 5000.0, "end_abs": 5024.0, "camera_timing": "pinned"}
+	f += _ok(ClimelapseExportOptions.key_timing(inside, tk) == "pinned" and ClimelapseExportOptions.key_timing(far, tk) == "spread"
+		and ClimelapseExportOptions.key_timing(ana, tk) == "spread" and ClimelapseExportOptions.key_timing(forced, tk) == "pinned",
+		"auto timing: keys in the range pinned, outside or under an analemma spread, an explicit choice wins")
+	var trig := ClimelapseCameraRig.new()
+	trig.valid = true
+	trig.keys = tk
+	trig.key_timing = "spread"
+	var mid: Transform3D = trig.pose_at(5012.0, 0.5)["xform"]
+	trig.key_timing = "pinned"
+	var held: Transform3D = trig.pose_at(5012.0, 0.5)["xform"]
+	f += _ok(mid.origin.is_equal_approx(Vector3(20, 0, 0)) and held.origin.is_equal_approx(Vector3(40, 0, 0))
+		and is_equal_approx(tk.progress_of(1001.0), 0.25),
+		"a spread path is halfway at half the video; pinned outside the keys holds the last one")
 	var cs := ClimelapseKeyframes.frustum_corners(Transform3D.IDENTITY, 90.0, 2.0, 1.0)
 	f += _ok(cs.size() == 4 and cs[0].is_equal_approx(Vector3(-2, 1, -1)) and cs[2].is_equal_approx(Vector3(2, -1, -1)),
 		"frustum corners: vertical fov, aspect widens (%s)" % str(cs))

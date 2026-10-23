@@ -34,6 +34,11 @@ var _prev_hours := NAN
 ## day per video frame).
 var _vt := 0.0
 var _sky: ClimelapseSkyDirector = null
+var _scrub: HSlider = null
+var _scrub_sync := false
+var _ana_frame := -1      # last analemma frame placed (stepping only goes forward)
+## Seconds a ←/→ press moves the preview.
+const STEP_S := 1.0
 
 
 func is_running() -> bool:
@@ -61,6 +66,10 @@ func begin(main: Node, opts: Dictionary, rig: ClimelapseCameraRig, from_abs: flo
 	_sky = ClimelapseSkyDirector.new(opts)
 	if _sky.analemma() > 0:
 		_vt = 0.0
+	# A spread camera path: start where the asked-for moment (a keyframe's)
+	# sits on the path, not at its timeline hour.
+	if not is_nan(from_abs) and rig.has_keys() and rig.key_timing == "spread":
+		_vt = rig.keys.progress_of(from_abs) * ClimelapseExportOptions.video_seconds(opts)
 	_sky.begin(main)
 	if main.has_method("push_clock_claim") and not bool(main.call("push_clock_claim", OWNER,
 			_sky.clock_claim_values(), true)):
@@ -107,24 +116,34 @@ func _apply_instant() -> void:
 	if _main == null or not is_instance_valid(_main):
 		return
 	var start := float(_opts["start_abs"])
+	var total_s := ClimelapseExportOptions.video_seconds(_opts)
 	if _sky.analemma() > 0:
 		var frames := ClimelapseExportOptions.frame_count(_opts)
-		_t = _sky.place(_main, clampi(int(floor(_vt * float(int(_opts["fps"])))), 0, maxi(frames - 1, 0)))
+		var fi := clampi(int(floor(_vt * float(int(_opts["fps"])))), 0, maxi(frames - 1, 0))
+		if fi < _ana_frame:
+			# The analemma only steps forward: a scrub back starts it again.
+			_sky.restart(_main)
+		_ana_frame = fi
+		_t = _sky.place(_main, fi)
 	else:
 		_t = minf(start + _vt * float(_opts["hours_per_second"]), float(_opts["end_abs"]))
 		_sky.place_at(_main, _t)
 	var tl := get_parent()
 	if tl != null and tl.has_method("_push_growth_year"):
 		tl.call("_push_growth_year")
-	var span := float(_opts["end_abs"]) - start
-	var t_norm := clampf((_t - start) / span, 0.0, 1.0) if span > 0.0 else 0.0
+	# Progress through the VIDEO (what the export's frame index gives the rig).
+	var t_norm := clampf(_vt / total_s, 0.0, 1.0) if total_s > 0.0 else 0.0
 	var pose := _sky.camera_pose(_main, _rig.pose_at(_t, t_norm))
 	if is_instance_valid(_cam):
 		_cam.global_transform = pose.get("xform", _rig.global_xform)
 		_cam.fov = float(pose.get("fov", _rig.fov))
+	if _scrub != null and not _scrub_sync:
+		_scrub_sync = true
+		_scrub.max_value = maxf(total_s, 0.01)
+		_scrub.set_value_no_signal(_vt)
+		_scrub_sync = false
 	if _label != null:
 		var vid_s := _vt
-		var total_s := ClimelapseExportOptions.video_seconds(_opts)
 		_label.text = "Preview  ·  %s  ·  %s / %s of video%s" % [
 			ClimelapseExportOptions.timecode_at(_t),
 			ClimelapseExportOptions.duration_label(vid_s),
@@ -142,8 +161,42 @@ func restart() -> void:
 	_t = float(_opts["start_abs"])
 	_vt = 0.0
 	_hold = 0.0
+	_ana_frame = -1
 	if _sky != null:
 		_sky.restart(_main)
+
+
+## Jump to `sec` seconds of the video (the scrub bar, ←/→).
+func seek(sec: float) -> void:
+	_vt = clampf(sec, 0.0, ClimelapseExportOptions.video_seconds(_opts))
+	_hold = 0.0
+	_apply_instant()
+
+
+func video_time() -> float:
+	return _vt
+
+
+func camera() -> Camera3D:
+	return _cam
+
+
+func _input(event: InputEvent) -> void:
+	if not _running or not (event is InputEventKey) or not (event as InputEventKey).pressed:
+		return
+	var k := event as InputEventKey
+	match k.physical_keycode:
+		KEY_SPACE:
+			toggle_pause()
+		KEY_LEFT:
+			seek(_vt - STEP_S)
+		KEY_RIGHT:
+			seek(_vt + STEP_S)
+		KEY_HOME:
+			restart()
+		_:
+			return
+	get_viewport().set_input_as_handled()
 
 
 ## Stop and give everything back. Idempotent.
@@ -185,9 +238,12 @@ func _build_hud() -> void:
 	panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	panel.position = Vector2(0, 16)
 	_hud.add_child(panel)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	panel.add_child(col)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
-	panel.add_child(row)
+	col.add_child(row)
 	_label = Label.new()
 	_label.add_theme_font_override("font", UITheme.font("regular", true))
 	_label.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -195,11 +251,50 @@ func _build_hud() -> void:
 	_label.custom_minimum_size = Vector2(430, 0)
 	row.add_child(_label)
 	_pause_btn = _btn(row, "Play" if _paused else "Pause", toggle_pause)
-	_btn(row, "Restart", restart)
+	_pause_btn.tooltip_text = "Space"
+	var restart_btn := _btn(row, "Restart", restart)
+	restart_btn.tooltip_text = "Home"
 	_btn(row, "Stop (Esc)", end)
+	_scrub = HSlider.new()
+	_scrub.min_value = 0.0
+	_scrub.max_value = maxf(ClimelapseExportOptions.video_seconds(_opts), 0.01)
+	_scrub.step = 0.0
+	_scrub.custom_minimum_size = Vector2(560, 18)
+	_scrub.focus_mode = Control.FOCUS_NONE
+	_scrub.tooltip_text = "Drag to scrub the video (← / → step a second)"
+	_scrub.value_changed.connect(func(v: float) -> void:
+		if not _scrub_sync:
+			seek(v))
+	col.add_child(_scrub)
+	var info := Label.new()
+	info.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	info.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	info.text = _camera_line()
+	col.add_child(info)
 	# Keep it centred as its width settles.
 	panel.resized.connect(func() -> void:
 		panel.position.x = (panel.get_viewport_rect().size.x - panel.size.x) * 0.5)
+
+
+## What the camera does in this shot, one line.
+func _camera_line() -> String:
+	var bits: Array = []
+	if _rig != null and _rig.has_keys():
+		var n := _rig.keys.size()
+		if n == 1:
+			bits.append("Camera locked on 1 keyframe")
+		elif _rig.key_timing == "spread":
+			bits.append("Camera path: %s spread over the video" % UiText.count(n, "keyframe"))
+		else:
+			bits.append("Camera path: %s at their moments" % UiText.count(n, "keyframe"))
+	else:
+		bits.append("Camera still (no keyframes)")
+	var fol := str(_opts.get("follow", "none"))
+	if fol != "none":
+		bits.append("following the %s" % fol)
+	if _sky != null and _sky.analemma() > 0:
+		bits.append("analemma")
+	return "  ·  ".join(bits)
 
 
 func _btn(row: HBoxContainer, text: String, cb: Callable) -> Button:

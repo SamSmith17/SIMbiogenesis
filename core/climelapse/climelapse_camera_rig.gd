@@ -17,6 +17,10 @@ var path: Array = []
 ## Time-stamped camera keyframes (ClimelapseKeyframes). One key = the shot is
 ## locked on that pose; two or more = the camera flies between them in time.
 var keys: ClimelapseKeyframes = null
+## "pinned": key i at its moment on the timeline; "spread": the path from the
+## first key to the last plays over the whole export (t_norm).
+## ClimelapseExportOptions.key_timing resolves it per export.
+var key_timing := "pinned"
 ## The player camera's look (Environment / CameraAttributes / cull mask) so the
 ## export camera renders exactly what the player sees.
 var environment: Environment = null
@@ -81,6 +85,8 @@ func has_keys() -> bool:
 ## fraction of the export, for the untimed path): {xform, fov}.
 func pose_at(abs_h: float, t_norm: float) -> Dictionary:
 	if has_keys():
+		if key_timing == "spread":
+			return keys.sample_progress(t_norm)
 		return keys.sample(abs_h)
 	if has_path():
 		return {"xform": interpolate_at(t_norm), "fov": fov}

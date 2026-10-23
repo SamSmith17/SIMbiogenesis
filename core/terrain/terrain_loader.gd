@@ -9441,6 +9441,7 @@ func start_climelapse_export_with(opts: Dictionary) -> bool:
 	if not keys.is_empty():
 		rig.keys = keys.duplicate_keys()
 		rig.mode = "keys"
+		rig.key_timing = ClimelapseExportOptions.key_timing(o, rig.keys)
 
 	_export_render_start = float(o["start_abs"])
 	_export_render_end = float(o["end_abs"])
@@ -9626,15 +9627,18 @@ func start_climelapse_preview(opts: Dictionary, from_abs: float = NAN, paused: b
 	if not rig.is_valid():
 		return false
 	var keys := climelapse_keys()
+	var o := ClimelapseExportOptions.normalize(opts)
 	if not keys.is_empty():
 		rig.keys = keys.duplicate_keys()
+		rig.mode = "keys"
+		rig.key_timing = ClimelapseExportOptions.key_timing(o, rig.keys)
 	_clim_preview = ClimelapsePreview.new()
 	_clim_preview.name = "ClimelapsePreview"
 	add_child(_clim_preview)
 	_clim_preview.finished.connect(func() -> void:
 		_clim_preview = null
 		climelapse_state_changed.emit())
-	var ok := _clim_preview.begin(_main, ClimelapseExportOptions.normalize(opts), rig, from_abs, paused)
+	var ok := _clim_preview.begin(_main, o, rig, from_abs, paused)
 	if not ok:
 		_clim_preview.queue_free()
 		_clim_preview = null

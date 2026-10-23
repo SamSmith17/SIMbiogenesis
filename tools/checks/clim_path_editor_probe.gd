@@ -220,6 +220,95 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	_ok(vp.get_camera_3d() == cam and absf(float(main.call("get_absolute_hours")) - now_h) < 0.05,
 		"preview stopped: player camera and clock back")
 
+	# --- 7b. the preview flies the keyframes (the user's report) ---------------------------
+	keys = loader.call("climelapse_keys")
+	_ok(keys.size() == 3, "three keyframes for the preview checks")
+	# An analemma over a year with keys a few hours apart: the path is spread.
+	var ao := ClimelapseExportOptions.load_prefs()
+	ao["start_abs"] = day0
+	ao["end_abs"] = day0 + 24.0
+	ao["analemma"] = 1
+	ao["analemma_days_per_second"] = 60.0
+	ao["follow"] = "none"
+	ao["camera_timing"] = "auto"
+	_ok(bool(loader.call("start_climelapse_preview", ClimelapseExportOptions.analemma_range(ao))), "analemma preview started")
+	await _settle(tree, 3)
+	var pv: Node = loader.get("_clim_preview")
+	var pcam0: Camera3D = pv.call("camera") if pv != null else null
+	_ok(pcam0 != null and vp.get_camera_3d() == pcam0, "the preview camera is current")
+	pv.call("toggle_pause")
+	var total := ClimelapseExportOptions.video_seconds(ClimelapseExportOptions.analemma_range(ao))
+	var seen: Array = []
+	for uf in [0.0, 0.5, 1.0]:
+		pv.call("seek", uf * total)
+		await _settle(tree, 2)
+		var want_pose: Transform3D = keys.sample_progress(uf)["xform"]
+		seen.append(pcam0.global_transform.origin)
+		_ok(pcam0.global_transform.origin.distance_to(want_pose.origin) < 0.05,
+			"analemma preview at %d%% of the video: the camera is on the spread path (%.2f m off)" % [
+				int(uf * 100.0), pcam0.global_transform.origin.distance_to(want_pose.origin)])
+	_ok((seen[0] as Vector3).distance_to(seen[2]) > 5.0, "the camera moves across the year (%.1f m)" % (seen[0] as Vector3).distance_to(seen[2]))
+	_shot(main, "05b_analemma_preview_mid")
+	pv.call("seek", 0.25 * total)
+	await _settle(tree, 2)
+	_ok(absf(float(pv.call("video_time")) - 0.25 * total) < 0.05, "scrubbing back through an analemma works")
+	loader.call("stop_climelapse_preview")
+	await _settle(tree, 4)
+	# The keys' own hours inside the range: pinned, at their moments.
+	var kt := keys.times()
+	var po2 := ClimelapseExportOptions.load_prefs()
+	po2["start_abs"] = kt[0]
+	po2["end_abs"] = kt[kt.size() - 1]
+	po2["analemma"] = 0
+	po2["hours_per_second"] = 2.0
+	po2["follow"] = "none"
+	po2["camera_timing"] = "auto"
+	_ok(bool(loader.call("start_climelapse_preview", po2)), "pinned preview started")
+	await _settle(tree, 3)
+	pv = loader.get("_clim_preview")
+	var pcam1: Camera3D = pv.call("camera")
+	pv.call("toggle_pause")
+	var mid_s := (kt[1] - kt[0]) / 2.0
+	pv.call("seek", mid_s)
+	await _settle(tree, 2)
+	var on_key: Transform3D = keys.sample(kt[1])["xform"]
+	_ok(pcam1.global_transform.origin.distance_to(on_key.origin) < 0.05,
+		"pinned preview: at key 2's moment the camera is on key 2 (%.2f m)" % pcam1.global_transform.origin.distance_to(on_key.origin))
+	loader.call("stop_climelapse_preview")
+	await _settle(tree, 4)
+	_ok(vp.get_camera_3d() == cam and absf(float(main.call("get_absolute_hours")) - now_h) < 0.05,
+		"previews stopped: player camera and clock back")
+
+	# --- 7c. the editor's add / move / undo / redo -----------------------------------------
+	loader.call("open_climelapse_path_editor", 0)
+	await _settle(tree, 3)
+	editor = main.get_node_or_null("UILayer/ClimelapsePathEditor")
+	main.call("set_absolute_hours", now_h + 20.0)
+	editor.call("_on_add_key")
+	await _settle(tree, 2)
+	_ok(keys_count(loader) == 4 and int(editor.call("selected")) == 3, "Add at the playhead: a 4th key, selected")
+	await HarnessInput.key(vp, KEY_Z, true)
+	await _settle(tree, 2)
+	_ok(keys_count(loader) == 3, "Ctrl+Z takes it back")
+	await HarnessInput.key(vp, KEY_Y, true)
+	await _settle(tree, 2)
+	_ok(keys_count(loader) == 4, "Ctrl+Y puts it back")
+	editor.call("_select", 0)
+	main.call("set_absolute_hours", now_h + 30.0)
+	editor.call("_on_move_to_playhead")
+	await _settle(tree, 2)
+	var lastk: ClimelapseKeyframes = loader.call("climelapse_keys")
+	_ok(absf(float(lastk.key(int(editor.call("selected")))["t"]) - (now_h + 30.0)) < 1e-6 and int(editor.call("selected")) == 3,
+		"Move here: key 1 now sits at the playhead, last in time, still selected")
+	editor.call("undo")
+	editor.call("undo")
+	await _settle(tree, 2)
+	_ok(keys_count(loader) == 3 and absf(float((loader.call("climelapse_keys") as ClimelapseKeyframes).key(0)["t"]) - kt[0]) < 1e-6,
+		"two undos: back to the three keys as they were")
+	main.call("set_absolute_hours", now_h)
+	editor.call("close")
+	await _settle(tree, 2)
+
 	# --- 8. analemma export with the sky options --------------------------------------------
 	if ffmpeg.is_empty():
 		_ok(false, "ffmpeg found")
@@ -240,6 +329,9 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		if dlg == null:
 			return {"ok": false, "fails": _fails}
 		var spd_opt: OptionButton = dlg.get("_speed_opt")
+		# Whatever was remembered, start from a plain clock export.
+		(dlg.get("_analemma_opt") as OptionButton).select(0)
+		dlg.call("_on_changed")
 		_ok(spd_opt.item_count == ClimelapseExportOptions.TIME_PRESETS.size() + 1
 			and str(spd_opt.get_item_text(spd_opt.item_count - 2)) == "Year per second",
 			"clock speeds run up to a year per second (%d choices)" % spd_opt.item_count)
@@ -314,3 +406,7 @@ func run(main: Node, _harness: Node) -> Dictionary:
 
 	loader.call("restore_climelapse_keys", saved_keys)
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+func keys_count(loader: Node) -> int:
+	return (loader.call("climelapse_keys") as ClimelapseKeyframes).size()
