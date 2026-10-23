@@ -12,6 +12,11 @@ signal electrical_fault_observed(reason: String, item_id: String)
 ## tutorial sandbox is active — the incoming state wins, the sandbox is dropped
 ## WITHOUT restore, and the tutorial director must reset its UI.
 signal sandbox_interrupted
+## An experiment fork entered / left the canvas (begin / end_fork_edit).
+signal fork_edit_changed(active: bool)
+## A game load or import replaced the graph while a fork was being edited:
+## `graph` is the fork as it stood, so its edits are not lost.
+signal fork_edit_interrupted(fork_id: String, graph: Dictionary)
 
 # ---------------------------------------------------------------------------
 # Mission-control color palette — redirected to UITheme (single source of
@@ -458,6 +463,14 @@ var _fault_card_modal: GraphFaultCardModal = null
 # per-map autosave nor a game save can ever capture sandbox content.
 var _sandbox_active: bool = false
 var _sandbox_pre_state: Dictionary = {}
+# Experiment fork editing (⧉ Compare → A vs B → Edit): the same idea for a
+# copy of THIS world. The real state waits in _fork_pre_state, the clock is
+# held, autosave / HA links / live automations stand down; Done hands the
+# fork's graph back and puts the world back exactly as it was.
+var _fork_edit_id: String = ""
+var _fork_edit_name: String = ""
+var _fork_pre_state: Dictionary = {}
+var _fork_pre_battery: float = NAN
 var _autosave_suspended: bool = false
 var _tutorial_director: Node = null
 ## Set by ChallengeBakeEngine while it owns the flow engine (bake/playback).
@@ -1407,6 +1420,7 @@ func begin_tutorial_sandbox() -> bool:
 	_sandbox_pre_state = collect_save_state()
 	_sandbox_active = true
 	_autosave_suspended = true
+	_set_linker_suspended(true)
 	if _bridge != null and _bridge.has_method("set_enabled"):
 		_bridge.call("set_enabled", false)
 	# The player's selection must not follow them in: the inspector kept
@@ -1461,7 +1475,99 @@ func end_tutorial_sandbox() -> void:
 	if not pre.is_empty():
 		apply_save_state(pre)
 	_autosave_suspended = false
+	_set_linker_suspended(false)
 	_schedule_graph_autosave()
+
+
+func _set_linker_suspended(on: bool) -> void:
+	if _ha_linker != null and is_instance_valid(_ha_linker) and _ha_linker.has_method("set_suspended"):
+		_ha_linker.call("set_suspended", on)
+
+
+# ---------------------------------------------------------------------------
+# Experiment fork editing (core/experiment/experiment_store.gd)
+# ---------------------------------------------------------------------------
+
+## Put fork `graph` on the canvas to edit it as if it were the world. The
+## real graph waits; the clock is held (claim "fork_edit"), autosave, the HA
+## links and the live automation engine stand down. Refused while the
+## tutorial sandbox or another fork is up.
+func begin_fork_edit(fork_id: String, fork_name: String, graph: Dictionary) -> bool:
+	if _sandbox_active or not _fork_edit_id.is_empty() or graph.is_empty() or model == null:
+		return false
+	_fork_pre_state = collect_save_state()
+	var su := _find_solar_ui()
+	_fork_pre_battery = float(su.get("battery_kwh_stored")) if su != null and su.get("battery_kwh_stored") != null else NAN
+	_fork_edit_id = fork_id
+	_fork_edit_name = fork_name
+	_autosave_suspended = true
+	_set_linker_suspended(true)
+	var eng := get_node_or_null("/root/AutomationEngine")
+	if eng != null:
+		eng.set_process(false)
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("push_clock_claim"):
+		main.call("push_clock_claim", "fork_edit", {"time_scale": 0.0})
+	select_item_by_id("")
+	_unregister_model_automations()
+	apply_save_state({"graph": graph}, {"fork": true, "preserve_positions": false})
+	fork_edit_changed.emit(true)
+	return true
+
+
+## Leave fork editing. Returns the fork's graph as edited (keep) or {} (discard);
+## the world is put back as it was either way.
+func end_fork_edit(keep: bool) -> Dictionary:
+	if _fork_edit_id.is_empty():
+		return {}
+	var out: Dictionary = model.serialize() if keep and model != null else {}
+	var pre := _fork_pre_state
+	select_item_by_id("")
+	_unregister_model_automations()
+	var su := _find_solar_ui()
+	if su != null and not is_nan(_fork_pre_battery):
+		# A fork with another battery size must not rescale the real one.
+		su.set("_soc_restored_pending", true)
+	_leave_fork_session()
+	if not pre.is_empty():
+		apply_save_state(pre, {"fork": true})
+	if su != null and not is_nan(_fork_pre_battery):
+		su.set("battery_kwh_stored", _fork_pre_battery)
+	_fork_pre_battery = NAN
+	_schedule_graph_autosave()
+	return out
+
+
+func fork_edit_id() -> String:
+	return _fork_edit_id
+
+
+func fork_edit_name() -> String:
+	return _fork_edit_name
+
+
+func _leave_fork_session() -> void:
+	_fork_edit_id = ""
+	_fork_edit_name = ""
+	_fork_pre_state = {}
+	_autosave_suspended = false
+	_set_linker_suspended(false)
+	var eng := get_node_or_null("/root/AutomationEngine")
+	if eng != null:
+		eng.set_process(true)
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("pop_clock_claim"):
+		main.call("pop_clock_claim", "fork_edit")
+	fork_edit_changed.emit(false)
+
+
+## The engine keeps automations registered by id; the fork's (or the world's)
+## must not stay registered once the other graph is on the canvas.
+func _unregister_model_automations() -> void:
+	if model == null or _inspector_panel == null or not _inspector_panel.has_method("unregister_item_automations"):
+		return
+	for it in model.items:
+		_inspector_panel.call("unregister_item_automations", it)
 
 
 func is_sandbox_active() -> bool:
@@ -14120,6 +14226,12 @@ func _apply_graph_open_mode_from_sim_state() -> void:
 # SolarUI discovery
 # ---------------------------------------------------------------------------
 
+func _find_solar_ui() -> Node:
+	if not is_instance_valid(_solar_ui):
+		_refresh_solar_ui_ref()
+	return _solar_ui if is_instance_valid(_solar_ui) else null
+
+
 func _refresh_solar_ui_ref() -> void:
 	var root := get_tree().root
 	if root:
@@ -15559,6 +15671,8 @@ func collect_save_state() -> Dictionary:
 	# must capture THAT, never the throwaway level content.
 	if _sandbox_active and not _sandbox_pre_state.is_empty():
 		return _sandbox_pre_state.duplicate(true)
+	if not _fork_edit_id.is_empty() and not _fork_pre_state.is_empty():
+		return _fork_pre_state.duplicate(true)
 	var pan  := Vector2.ZERO
 	var zoom := 1.0
 	if _graph_canvas != null:
@@ -15630,7 +15744,15 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_autosave_suspended = false
 		if _bridge != null and _bridge.has_method("set_enabled"):
 			_bridge.call("set_enabled", true)
+		_set_linker_suspended(false)
 		sandbox_interrupted.emit()
+	# The same for a fork being edited: the incoming state wins; the fork's
+	# graph is handed out so its edits are kept.
+	if not _fork_edit_id.is_empty() and not bool(options.get("fork", false)):
+		var fid := _fork_edit_id
+		var fgraph: Dictionary = model.serialize() if model != null else {}
+		_leave_fork_session()
+		fork_edit_interrupted.emit(fid, fgraph)
 	# Game snapshot must latch so deferred per-map autosave restore cannot
 	# clobber it. Graph import / autosave restore leave the flag alone.
 	if bool(options.get("from_game_save", false)):

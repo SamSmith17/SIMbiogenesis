@@ -5226,8 +5226,12 @@ func open_ha_links( target_id: String = "" ) -> void :
 ## timeline's Ctrl-drag range (NAN = none). One window at a time.
 var _compare_view : Node = null
 
-func open_compare_view( selection: Vector2 = Vector2( NAN, NAN ) ) -> Node :
+## `opts`: {mode: "calibration" | "ab", a, b: variant ids ("current" or a
+## fork id), run: bool}.
+func open_compare_view( selection: Vector2 = Vector2( NAN, NAN ), opts: Dictionary = {} ) -> Node :
 	if _compare_view != null and is_instance_valid( _compare_view ) :
+		if not opts.is_empty() and _compare_view.has_method( "apply_opts" ) :
+			_compare_view.call( "apply_opts", opts )
 		return _compare_view
 	var script := load( "res://scenes/ui/experiment/compare_view.gd" ) as Script
 	if script == null :
@@ -5236,8 +5240,64 @@ func open_compare_view( selection: Vector2 = Vector2( NAN, NAN ) ) -> Node :
 	_compare_view.name = "CompareView"
 	_compare_view.set_script( script )
 	add_child( _compare_view )
-	_compare_view.call( "open_on", self, selection )
+	_compare_view.call( "open_on", self, selection, opts )
 	return _compare_view
+
+
+## Edit an experiment fork in the graph view (scenes/ui/experiment/
+## fork_edit_bar.gd owns the session; Done comes back to Compare).
+var _fork_edit_bar : Node = null
+
+func edit_experiment_fork( fork_id: String ) -> bool :
+	if _fork_edit_bar != null and is_instance_valid( _fork_edit_bar ) :
+		show_toast( "A fork is already being edited.", ToastUI.Level.WARN )
+		return false
+	var gv := ServiceLocator.graph()
+	var script := load( "res://scenes/ui/experiment/fork_edit_bar.gd" ) as Script
+	if gv == null or script == null :
+		return false
+	if _compare_view != null and is_instance_valid( _compare_view ) and _compare_view.has_method( "close" ) :
+		_compare_view.call( "close" )
+	_fork_edit_bar = CanvasLayer.new()
+	_fork_edit_bar.name = "ForkEditBar"
+	_fork_edit_bar.set_script( script )
+	add_child( _fork_edit_bar )
+	if not bool( _fork_edit_bar.call( "start", self, gv, fork_id ) ) :
+		_fork_edit_bar.queue_free()
+		_fork_edit_bar = null
+		show_toast( "That fork cannot be edited right now (the tutorial or another fork is open).", ToastUI.Level.WARN )
+		return false
+	return true
+
+
+## The inspector's "A/B this automation": a fork of the world WITHOUT that
+## automation, compared with the world as it is over the next week.
+func ab_test_automation( item_id: String, auto_id: String ) -> void :
+	var gv := ServiceLocator.graph()
+	var m: Object = gv.get( "model" ) if gv != null else null
+	if m == null :
+		return
+	var path := ExperimentStore.path_for_view( gv )
+	if path.is_empty() :
+		show_toast( "Experiments need a world — load one first.", ToastUI.Level.WARN )
+		return
+	var graph: Dictionary = m.call( "serialize" )
+	var without := ExperimentStore.without_automation( graph, item_id, auto_id )
+	if without.is_empty() :
+		show_toast( "Save the automation first, then A/B it.", ToastUI.Level.WARN )
+		return
+	var alias := ExperimentStore.automation_alias( graph, item_id, auto_id )
+	var store := ExperimentStore.load_from( path )
+	# One fork per automation: asking again refreshes it from the world now.
+	var name := "Without “%s”" % alias
+	var fid := store.find_by_name( name )
+	if fid.is_empty() :
+		fid = store.add_fork( name, without, "The world as it is, minus one automation." )
+	else :
+		store.set_fork_graph( fid, without )
+	store.save_to( path )
+	open_compare_view( Vector2( NAN, NAN ), {"mode": "ab", "a": ExperimentStore.CURRENT, "b": fid,
+		"span": "next_7d", "run": true} )
 
 
 ## One-click device presets (HaPresets) for the Live links window.

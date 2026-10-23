@@ -50,6 +50,22 @@ var _history_asked: Dictionary = {}   # target id -> true (backfilled this sessi
 ## How far back a newly linked value is filled in from HA's recorder.
 const HISTORY_BACKFILL_H := 72.0
 
+## While the graph holds something that is NOT this world — the Solar
+## Bootcamp sandbox, an experiment fork being edited — the links stand down:
+## no pruning (a cleared graph used to prune and SAVE away every node link of
+## the world), no writes into the borrowed model. set_suspended(false) picks
+## the world back up.
+var suspended := false
+
+
+func set_suspended(on: bool) -> void:
+	if suspended == on:
+		return
+	suspended = on
+	if not on:
+		_rebuild_routes()
+		refresh_subscriptions.call_deferred()
+
 
 func setup(mdl: GraphModel) -> void:
 	model = mdl
@@ -86,7 +102,8 @@ func refresh_subscriptions() -> void:
 		_last.clear()
 		if not _store.migrated:
 			_migrate_legacy()
-	_prune()
+	if not suspended:
+		_prune()
 	_rebuild_routes()
 	_tell_solar_ui()
 	if _svc != null:
@@ -349,12 +366,16 @@ func _take(l: Dictionary, raw: String, unit: String, apply: bool) -> void:
 	if not bool(c["ok"]):
 		return
 	_observed.add(str(l["target_id"]), HaObservedStore.now_abs_hours(), v)
+	if suspended:
+		return
 	_write_live_badge(t, v, unit)
 	if apply and _may_apply():
 		_apply(t, v)
 
 
 func _may_apply() -> bool:
+	if suspended:
+		return false
 	var td := get_node_or_null("/root/TimeDirector")
 	var live: bool = td == null or bool(td.call("should_apply_live_data"))
 	return live and is_live()
@@ -582,11 +603,15 @@ func _on_svc_state(state: int, _info: Dictionary) -> void:
 
 
 func _on_model_changed(reason: String) -> void:
+	if suspended:
+		return
 	if reason == "remove_item" or reason == "deserialize" or reason == "clear":
 		_prune_deferred.call_deferred()
 
 
 func _prune_deferred() -> void:
+	if suspended:
+		return
 	if _prune() > 0:
 		_save()
 		_rebuild_routes()

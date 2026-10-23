@@ -1841,6 +1841,16 @@ func _build_auto_card(item: Dictionary, index: int) -> void:
 	alias_lbl.tooltip_text = _summarize_auto(aut)
 	hdr.add_child(alias_lbl)
 
+	# A / B: this world against a fork of it without this automation, over
+	# the next week (Main.ab_test_automation → ⧉ Compare, A vs B).
+	var ab_btn := Button.new()
+	IconButton.style(ab_btn, "chart-column", "A/B this automation — simulate the next week with and without it")
+	ab_btn.pressed.connect(func() -> void:
+		var main := get_tree().current_scene if get_tree() != null else null
+		if main != null and main.has_method("ab_test_automation"):
+			main.call("ab_test_automation", _item_id, auto_id))
+	hdr.add_child(ab_btn)
+
 	var del_btn := Button.new()
 	IconButton.style(del_btn, "trash-2", "Delete automation")
 	del_btn.pressed.connect(_on_auto_delete.bind(index))

@@ -63,6 +63,7 @@ const KINDS: Array = [
 	["poi", "json"],
 	["ha_links", "json"],
 	["climelapse_keys", "json"],
+	["experiments", "json"],
 ]
 
 static var _world_id: String = ""

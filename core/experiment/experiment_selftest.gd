@@ -13,7 +13,7 @@ extends SceneTree
 ## Carries EXPECTED_CHECKS: a Godot runtime error aborts the enclosing test
 ## function while the suite still prints PASS.
 
-const EXPECTED_CHECKS := 55
+const EXPECTED_CHECKS := 72
 
 var _checks := 0
 var _failures := 0
@@ -35,6 +35,8 @@ func _initialize() -> void:
 	_test_energy_run()
 	_test_scores()
 	_test_sources()
+	_test_store()
+	_test_ab()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: check count %d != EXPECTED_CHECKS %d (a runtime error aborted a test?)" % [
@@ -287,3 +289,75 @@ func _test_sources() -> void:
 	var none := HaHistoryFetch.sources_for(FakeLinker.new())
 	_check("sources: missing links named", (none["_missing"] as Dictionary).has("soc_kwh")
 		and (none["_missing"] as Dictionary).has("load_kw"))
+
+
+func _heater_graph() -> Dictionary:
+	var m := GraphModel.new()
+	m.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Ctrl"}})
+	m.add_item({"id": "heater", "type": "appliance", "specs": {"name": "Heater", "avg_watts": 1500.0,
+		"requested_state": "off", "current_state": "off", "graph_automations": [
+			{"id": "on18", "alias": "Heater on at 18", "enabled": true,
+				"triggers": [{"kind": "time", "at_hour": 18.0}], "conditions": [],
+				"actions": [{"kind": "scene_node", "command": "turn_on"}]},
+			{"id": "off23", "alias": "Heater off at 23", "enabled": true,
+				"triggers": [{"kind": "time", "at_hour": 23.0}], "conditions": [],
+				"actions": [{"kind": "scene_node", "command": "turn_off"}]}]}})
+	m.add_item({"id": "fridge", "type": "appliance", "specs": {"name": "Fridge", "avg_watts": 100.0,
+		"requested_state": "on", "current_state": "on"}})
+	for id in ["heater", "fridge"]:
+		m.add_connection({"id": "c_" + id, "polarity": "ac", "source_item_id": "ctrl",
+			"source_handle_id": "acOutput", "target_item_id": id, "target_handle_id": "power_in"})
+	return m.serialize()
+
+
+func _test_store() -> void:
+	var g := _heater_graph()
+	var st := ExperimentStore.new()
+	var a := st.add_fork("Fork", g)
+	var b := st.add_fork("Fork", g)
+	_check("store: names made unique", str(st.get_fork(b)["name"]) == "Fork (2)")
+	_check("store: rename keeps names unique", st.rename(b, "Fork") and str(st.get_fork(b)["name"]) == "Fork (2)")
+	var w := ExperimentStore.without_automation(g, "heater", "on18")
+	_check("store: without-automation copy", not w.is_empty()
+		and ExperimentStore.automation_count(w) == ExperimentStore.automation_count(g) - 1)
+	_check("store: the original blob untouched", ExperimentStore.automation_count(g) == 2)
+	_check("store: alias lookup", ExperimentStore.automation_alias(g, "heater", "off23") == "Heater off at 23")
+	_check("store: unknown automation → {}", ExperimentStore.without_automation(g, "heater", "nope").is_empty())
+	st.last = {"mode": "ab", "a": "current", "b": a}
+	var path := OS.get_user_data_dir().path_join("experiment_selftest_tmp.json")
+	_check("store: saves", st.save_to(path))
+	var back := ExperimentStore.load_from(path)
+	DirAccess.remove_absolute(path)
+	_check("store: round trip", back.forks.size() == 2 and str(back.last.get("b", "")) == a
+		and ExperimentStore.automation_count(back.get_fork(a)["graph"]) == 2)
+	_check("store: find by name", back.find_by_name("Fork (2)") == b)
+	_check("store: remove", back.remove(a) and back.get_fork(a).is_empty())
+	var c := back.add_fork("New", g)
+	_check("store: new ids never reuse a live one", c != b)
+
+
+func _test_ab() -> void:
+	var g := _heater_graph()
+	var without := ExperimentStore.without_automation(g, "heater", "on18")
+	# Big enough that neither run reaches the floor (no solar here).
+	var bat := {"cap_kwh": 60.0, "ceff": 0.95, "deff": 0.95, "floor_pct": 10.0, "resume_pct": 20.0}
+	var day0 := 24.0 * 739000.0
+	var wa := ExperimentWorld.from_graph(g, null, null)
+	var wb := ExperimentWorld.from_graph(without, null, null)
+	var ra := AbExperiment.make_run(wa, bat, day0, day0 + 72.0, 1.0 / 12.0, 50.0)
+	var rb := AbExperiment.make_run(wb, bat, day0, day0 + 72.0, 1.0 / 12.0, 50.0)
+	ra.step_chunk(1000000)
+	rb.step_chunk(1000000)
+	var ea := ExperimentScore.energy(ra.series)
+	var eb := ExperimentScore.energy(rb.series)
+	# A: fridge 0.1 kW × 72 h + heater 1.5 kW × 5 h × 3 evenings; B: the fridge.
+	_check("ab: A uses the heater's evenings", absf(float(ea["served_kwh"]) - (7.2 + 22.5)) < 0.05,
+		str(ea["served_kwh"]))
+	_check("ab: B without the automation uses the fridge only", absf(float(eb["served_kwh"]) - 7.2) < 0.05,
+		str(eb["served_kwh"]))
+	var c := AbExperiment.compare(ea, eb, "served_kwh", "lower")
+	_check("ab: B wins on energy used, by 22.5 kWh", str(c["winner"]) == "b" and absf(float(c["delta"]) + 22.5) < 0.05)
+	_check("ab: higher-is-better metric (battery at the end)",
+		str(AbExperiment.compare(ea, eb, "soc_end_pct", "higher")["winner"]) == "b")
+	_check("ab: a tie within half a percent", str(AbExperiment.compare({"x": 10.0}, {"x": 10.02}, "x", "lower")["winner"]) == "tie")
+	_check("ab: A switched 6 times, B 3 (off only)", wa.automations.log.size() == 6 and wb.automations.log.size() == 3)

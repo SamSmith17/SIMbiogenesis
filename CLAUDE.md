@@ -1237,7 +1237,9 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/mp_figure_probe.
 # time-weighted flows / sums / gaps / CSV watts, ExperimentEnergyRun == step_soc,
 # AC hysteresis, battery-full curtailment, determinism + chunking, the scores
 # incl. ASHRAE G14 NMBE by hand and a time shift failing CV(RMSE), and
-# HaHistoryFetch's link resolution + units. EXPECTED_CHECKS; --import first):
+# HaHistoryFetch's link resolution + units, the fork store (temp-file round
+# trip, unique names, the without-automation copy) and an A/B run where B
+# lacks an evening heater rule. EXPECTED_CHECKS; --import first):
 Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.gd
 # Automations in sim time (offline — AutomationSim crossings incl. midnight,
 # the same switches at 1-min and 1-h steps, numeric edges + `for` in sim
@@ -1245,6 +1247,12 @@ Godot.exe.exe --headless --path . --script core/experiment/experiment_selftest.g
 # graph copy whose heater follows 18:00-on / 23:00-off through a real
 # GraphAcLoad reading while the live model never moves. EXPECTED_CHECKS):
 Godot.exe.exe --headless --path . --script power_system/automation/automation_sim_selftest.gd
+# A vs B end to end (sandbox): a nightly shutdown on a load, the automation
+# card's A/B (fork without it, next week) — A asks for less and wins; editing
+# the fork (canvas holds it, clock held, engine + HA links stand down), Done
+# restores the world byte for byte with every HA link, the fork keeps its
+# change, Compare reopens; the bootcamp sandbox keeps the HA links:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/compare_ab_probe.gd -Label compare_ab
 # The LIVE engine at 2 sim-h per second (sandbox): an on / off time rule
 # pair on a graph load fires once each and the load follows; load W in W:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/automation_speed_probe.gd
@@ -5657,8 +5665,9 @@ their placeholder exports until the projection split (plan milestone 4);
 ## Sim vs reality: the Compare window (core/experiment/, 2026-10-22)
 
 Plan: `~/.claude/plans/i-want-to-be-polymorphic-island.md` (A/B experiments;
-milestone 1 = calibration, landed; sim-vs-sim with automations, forks, the
-"would / did save" modes and the projection split are next). ⧉ on the
+landed: calibration, automations in sim time, forks + A vs B; next:
+resources in the runs, the "would / did save" observed modes, the
+projection split). ⧉ on the
 timeline (`Main.open_compare_view(selection)`, `scenes/ui/experiment/
 compare_view.gd`, a `ModalFrame`) simulates THIS world over a past span and
 lays it over what really happened, with error numbers.
@@ -5731,6 +5740,41 @@ lays it over what really happened, with error numbers.
   `sensor.solar_power` / `sensor.load_power` are in W as the inspector labels
   them (they were kW, so a W threshold never hit). Still open there:
   `DelayAction` does nothing live (`update_delay` is never called).
+- **A vs B** (the window's second mode, `AbExperiment`): two versions of
+  the world — "This world as it is" (copied at run time) and FORKS — over the
+  same span (Next 24 h / Next 7 d from the playhead, Last 7 d, the timeline
+  selection, custom), from the battery as it is now, each an
+  `ExperimentWorld` with its own automations. Scored on a headline metric
+  (`AbExperiment.METRICS`; default "Energy the loads asked for" — delivered
+  energy is capped by the battery: on Mount Vernon in October a nightly
+  2.5 kW shutdown cut demand 420 → 295 kWh a week while delivered moved
+  164 → 162 kWh and the difference showed as AC-off hours 102 → 67), with
+  every other metric, B − A and the better side, per-day rows and both
+  automation logs. `compare(ea, eb, key, better)` calls a tie within 0.5 %.
+- **Forks** (`ExperimentStore`, WorldPaths kind `experiments`, so they
+  travel with the world): named copies of the world's graph
+  ({id, name, note, created_unix, graph}) plus the window's `last` choice.
+  Made / renamed / deleted in the window; EDITED in the real graph editor:
+  `Main.edit_experiment_fork(id)` → `scenes/ui/experiment/fork_edit_bar.gd`
+  → `SystemGraphView.begin_fork_edit / end_fork_edit` (the tutorial
+  sandbox's pattern: the real state waits in `_fork_pre_state`,
+  `collect_save_state` returns it so no save can capture the fork, autosave
+  off, a (non-exclusive) clock claim "fork_edit" at time_scale 0, the live
+  AutomationEngine stopped, the HA linker suspended, the world's automations
+  unregistered and re-registered; the battery kWh is put back and a
+  capacity difference is treated as a restore, not new hardware). A game
+  load meanwhile emits `fork_edit_interrupted(id, graph)` and the bar saves
+  the fork. Done writes the fork back and reopens Compare on it.
+- **"A/B this automation"** (chart icon on each inspector automation card,
+  `Main.ab_test_automation(item, auto_id)`): a fork named
+  `Without “<alias>”` (refreshed from the world if it exists) and Compare
+  in A vs B over the next week, run at once.
+- **HA links survive the bootcamp now.** `HAEntityLinker.set_suspended`:
+  the tutorial sandbox's cleared graph used to make the linker prune (and
+  save away) every node-level link of the world — once from the model's
+  "deserialize", once from the view's deferred `refresh_subscriptions`.
+  Suspended, it neither prunes, writes live badges nor applies readings;
+  both sandboxes suspend it.
 - ⚠ A Node that defines `_process` is processing from the start: the
   experiment "finished" on its first frame, before the history arrived, until
   `_ready` turned it off. Any new background stepper needs the same.
