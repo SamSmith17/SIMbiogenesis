@@ -190,6 +190,19 @@ var cirrus_wave_intensity_scale : float = 1.0 :
 var weather_light_factor : float = 1.0 :
 	set(value):
 		weather_light_factor = clampf(value, 0.0, 4.0) if is_finite(value) else 1.0
+		if clear_sky_override :
+			weather_light_factor = 1.0
+
+## A clear sky for a video export ("Clouds: none"): no cloud layers, no cloud
+## shadows, the sun at full clear-sky strength. Visual only — the weather data,
+## the PV physics and every reading are unchanged. Set by ClimelapseSkyDirector
+## for the length of an export or a preview, never saved.
+var clear_sky_override : bool = false :
+	set(value):
+		clear_sky_override = value
+		if value :
+			weather_light_factor = 1.0
+		_update_clouds()
 
 ## Extreme-weather sun dimming, 0..1. SEPARATE from weather_light_factor on
 ## purpose: solar_ui._apply_smooth_weather_lighting owns that one through a
@@ -2824,6 +2837,11 @@ var analemma_mode : bool = false :
 
 ## The user's own analemma choice, preserved across claims that override it.
 var _analemma_user_intent : bool = false
+## True while a video export / preview drives the analemma frame by frame
+## (analemma_export_begin / _step / _end): _process stops stepping it, and the
+## year never wraps back to 1940 in the middle of a render.
+var analemma_external_step : bool = false
+var _analemma_export_prev : Dictionary = {}
 ## Guard so a claim-driven write to analemma_mode is not mistaken for intent.
 var _analemma_applying_claim : bool = false
 
@@ -2982,7 +3000,10 @@ func _process( delta: float ) -> void :
 		# refreshes the world. Visual-only — time_scale is 0 so no other system
 		# integrates (battery/energy stay frozen).
 		if analemma_mode :
-			_step_analemma()
+			# A video export / preview steps the analemma itself, one day per
+			# rendered frame (analemma_export_step), not one per game frame.
+			if not analemma_external_step :
+				_step_analemma()
 			_session_playtime_seconds += delta
 			return
 		# Advance the clock directly so the date still rolls (clock.day_time setter
@@ -3139,7 +3160,7 @@ func _eclipse_sun_transmission() -> float :
 ## "sun ducked behind a cloud" dimming on partly-cloudy days. Returns 1.0 (no
 ## change) when disabled or when the sky is clear. Cheap: one noise sample.
 func _compute_cloud_shadow_factor() -> float :
-	if not cloud_shadows_enabled :
+	if not cloud_shadows_enabled or clear_sky_override :
 		return 1.0
 	var coverage : float = clampf( 1.0 - clouds_cutoff, 0.0, 1.0 )
 	if coverage <= 0.001 :
@@ -3279,9 +3300,9 @@ func _update_clouds() -> void :
 	if not is_instance_valid( environment ) :
 		return
 	var mat := environment.environment.sky.sky_material
-	mat.set_shader_parameter( "clouds_cutoff", clouds_cutoff )
-	mat.set_shader_parameter( "clouds_weight", clouds_weight )
-	mat.set_shader_parameter( "cirrus_amount", cirrus_amount )
+	mat.set_shader_parameter( "clouds_cutoff", 1.0 if clear_sky_override else clouds_cutoff )
+	mat.set_shader_parameter( "clouds_weight", 0.0 if clear_sky_override else clouds_weight )
+	mat.set_shader_parameter( "cirrus_amount", 0.0 if clear_sky_override else cirrus_amount )
 	mat.set_shader_parameter( "rainbow_strength", rainbow_strength )
 	var m := month
 	var d := day
@@ -3819,6 +3840,36 @@ func _find_moon_transit_hour_for_current_day() -> float :
 	return best_hour
 
 
+## Video export / preview: hand the analemma to an outside stepper. `body` 0 =
+## the sun, 1 = the moon. Call BEFORE switching analemma_mode on (the clock
+## claim does that): the lunar start time is read off the clock's day then.
+## The first analemma_export_step(1) lands on the start day.
+func analemma_export_begin( start_abs: float, body: int ) -> void :
+	if _analemma_export_prev.is_empty() :
+		_analemma_export_prev = { "type": analemma_type, "days": analemma_days_per_frame }
+	analemma_external_step = true
+	analemma_type = clampi( body, 0, 1 )
+	clock.set_absolute_hours( floor( start_abs / 24.0 ) * 24.0 - 1.0 )
+	if analemma_mode :
+		_on_analemma_mode_changed( true )
+
+
+## Advance `days` analemma days (one video frame) and draw the figure so far.
+## Returns the instant the frame shows.
+func analemma_export_step( days: int ) -> float :
+	analemma_days_per_frame = clampi( days, 1, 7 )
+	_step_analemma()
+	return clock.get_absolute_hours()
+
+
+func analemma_export_end() -> void :
+	analemma_external_step = false
+	if not _analemma_export_prev.is_empty() :
+		analemma_type = int( _analemma_export_prev.get( "type", 0 ) )
+		analemma_days_per_frame = int( _analemma_export_prev.get( "days", 1 ) )
+	_analemma_export_prev = {}
+
+
 ## Advance one calendar day. Returns false when climelapse playback reached its
 ## Out point and motion should stop (analemma + playback are cleared).
 func _advance_analemma_one_day() -> bool :
@@ -3853,7 +3904,7 @@ func _advance_analemma_one_day() -> bool :
 		if clock.get_absolute_hours() > clim_rng[1] + 0.01 :
 			_stop_climelapse_analemma_at( clim_rng[1], clim_rng[0] )
 			return false
-	else :
+	elif not analemma_external_step :
 		# Wrap only when we *cross* past the top of the archive window (Dec 31 → Jan 1
 		# of year bounds.y + 1). Playheads already above bounds.y (e.g. current calendar
 		# year) must not snap to 1940 on the first ∞ step.

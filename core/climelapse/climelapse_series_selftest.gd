@@ -7,7 +7,7 @@ extends SceneTree
 ## test function while the suite would still print PASS.
 
 const HOURS_PER_YEAR := 8760.0
-const EXPECTED_CHECKS := 46
+const EXPECTED_CHECKS := 57
 
 var _checks := 0
 
@@ -32,6 +32,8 @@ func _run() -> void:
 	fails += _test_keyframes_edit_and_roundtrip()
 	fails += _test_rig_pose_at()
 	fails += _test_export_options()
+	fails += _test_path_editing()
+	fails += _test_sky_options()
 	fails += await _test_frame_pipe()
 	if _checks != EXPECTED_CHECKS:
 		fails += 1
@@ -152,6 +154,74 @@ func _test_rig_pose_at() -> int:
 	rig.keys = ClimelapseKeyframes.new()
 	rig.keys.set_key(100.0, Transform3D(Basis.IDENTITY, Vector3(1, 1, 1)))
 	f += _ok((rig.pose_at(500.0, 1.0)["xform"] as Transform3D).origin == Vector3(1, 1, 1), "one key = that view")
+	return f
+
+
+## No keys = a still shot from where the camera is, whatever the camera
+## (the drone used to sweep a near-full circle); the editor's pose maths.
+func _test_path_editing() -> int:
+	var f := 0
+	var rig := ClimelapseCameraRig.new()
+	rig.valid = true
+	rig.mode = "drone"
+	rig.global_xform = Transform3D(Basis(Vector3.UP, 0.7), Vector3(3, 40, -2))
+	var a: Transform3D = rig.pose_at(10.0, 0.0)["xform"]
+	var b: Transform3D = rig.pose_at(34.0, 1.0)["xform"]
+	f += _ok(a.is_equal_approx(rig.global_xform) and b.is_equal_approx(rig.global_xform), "drone with no keys holds still")
+	var kf := ClimelapseKeyframes.new()
+	kf.set_key(0.0, Transform3D.IDENTITY)
+	kf.set_key(10.0, Transform3D(Basis.IDENTITY, Vector3(10, 0, 0)))
+	kf.set_key(20.0, Transform3D(Basis.IDENTITY, Vector3(10, 0, 10)))
+	kf.set_pose(1, Vector3(9, 1, 0), 7.0, 2.0, 500.0)
+	var k1 := kf.key(1)
+	f += _ok(absf(float(k1["pitch"]) - ClimelapseKeyframes.MAX_PITCH) < 1e-9 and float(k1["fov"]) == ClimelapseKeyframes.MAX_FOV
+		and absf(float(k1["yaw"]) - wrapf(7.0, -PI, PI)) < 1e-9 and k1["pos"] == Vector3(9, 1, 0)
+		and float(k1["t"]) == 10.0, "set_pose clamps pitch / fov, wraps yaw, keeps the time")
+	var east := ClimelapseKeyframes.forward(ClimelapseKeyframes.yaw_for_heading(90.0), 0.0)
+	f += _ok(east.is_equal_approx(Vector3(1, 0, 0)) and absf(ClimelapseKeyframes.heading_deg(ClimelapseKeyframes.yaw_for_heading(237.5)) - 237.5) < 1e-6,
+		"heading 90° faces east (+X); heading ↔ yaw round trip")
+	f += _ok(ClimelapseKeyframes.forward(0.0, deg_to_rad(30.0)).y > 0.49, "positive pitch looks up")
+	var cs := ClimelapseKeyframes.frustum_corners(Transform3D.IDENTITY, 90.0, 2.0, 1.0)
+	f += _ok(cs.size() == 4 and cs[0].is_equal_approx(Vector3(-2, 1, -1)) and cs[2].is_equal_approx(Vector3(2, -1, -1)),
+		"frustum corners: vertical fov, aspect widens (%s)" % str(cs))
+	kf.set_pose(1, Vector3(10, 0, 0), 0.0, 0.0, 75.0)
+	var path := kf.sample_path(11)
+	var unit := true
+	for smp in path:
+		unit = unit and absf(((smp as Dictionary)["fwd"] as Vector3).length() - 1.0) < 1e-5
+	f += _ok(path.size() == 11 and ((path[0] as Dictionary)["pos"] as Vector3).is_equal_approx(Vector3.ZERO)
+		and ((path[10] as Dictionary)["pos"] as Vector3).is_equal_approx(Vector3(10, 0, 10))
+		and float((path[5] as Dictionary)["t"]) == 10.0 and unit, "sample_path spans first → last key, unit view vectors")
+	return f
+
+
+## Analemma framing, star-trail exposure, and the follow-cam maths.
+func _test_sky_options() -> int:
+	var f := 0
+	var o := ClimelapseExportOptions.normalize({"start_abs": 41.0 * 24.0 + 10.0, "end_abs": 71.0 * 24.0 + 3.0,
+		"analemma": 1, "analemma_days": 1, "fps": 30})
+	f += _ok(ClimelapseExportOptions.frame_count(o) == 31, "analemma: one frame per calendar day (got %d)" % ClimelapseExportOptions.frame_count(o))
+	o["analemma_days"] = 7
+	f += _ok(ClimelapseExportOptions.frame_count(o) == 5 and absf(ClimelapseExportOptions.frame_hours(o, 1) - (48.0 * 24.0 + 12.0)) < 1e-9,
+		"analemma every 7 days: 5 frames, frame 1 a week on")
+	var day := ClimelapseSkyDirector.trail_state(NAN, 100.0, 10.0)
+	var dusk := ClimelapseSkyDirector.trail_state(NAN, 100.0, -10.0)
+	var later := ClimelapseSkyDirector.trail_state(float(dusk["night_start"]), 102.0, -30.0)
+	f += _ok(float(day["trails"]) == 0.0 and is_nan(float(day["night_start"])) and float(dusk["trails"]) == 0.0
+		and float(later["trails"]) == 1.0 and absf(float(later["length"]) - (2.0 * ClimelapseSkyDirector.SIDEREAL_DEG_PER_H - 8.0) / 40.0) < 1e-6,
+		"star trails: closed by day, open at dusk, grow at the sky's rate")
+	var s0 := StarSkyMath.equatorial_to_world_basis(30.0, 48.3)
+	var s1 := StarSkyMath.equatorial_to_world_basis(75.0, 48.3)
+	var cam := Basis(Vector3.UP, 1.1) * Basis(Vector3.RIGHT, 0.4)
+	var star := Vector3(0.3, -0.5, 0.81).normalized()
+	var seen0 := cam.inverse() * (s0 * star)
+	var cam1 := ClimelapseSkyDirector.follow_stars_basis(cam, s0, s1)
+	var seen1 := cam1.inverse() * (s1 * star)
+	f += _ok(seen0.is_equal_approx(seen1) and not (s0 * star).is_equal_approx(s1 * star),
+		"follow the stars: a star keeps its place in the frame while the sky turns")
+	var d := Vector3(1, 1, -2).normalized()
+	var lb := ClimelapseSkyDirector.look_basis(d, Basis.IDENTITY)
+	f += _ok((-lb.z).is_equal_approx(d) and absf(lb.x.y) < 1e-6, "follow the sun: looks at it with the horizon level")
 	return f
 
 

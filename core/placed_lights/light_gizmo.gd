@@ -26,6 +26,8 @@ var world_space := true
 var size_mult := 1.0
 var show_move := true
 var show_rotate := true
+## Handle ids never shown or picked (e.g. ["rz"] for a camera that does not roll).
+var hidden: Array = []
 
 var _basis := Basis.IDENTITY     # axes the handles use (world or the light's own)
 var _scale := 1.0
@@ -152,10 +154,10 @@ func set_target(pos: Vector3, rot_basis: Basis, camera: Camera3D, spot: Dictiona
 		_scale = maxf(camera.global_position.distance_to(pos) * SCREEN_SCALE * size_mult, 0.05)
 	global_transform = Transform3D(_basis.scaled(Vector3.ONE * _scale), pos)
 	for ax in ["x", "y", "z"]:
-		(_parts[ax] as Node3D).visible = show_move
-		(_parts["r" + ax] as Node3D).visible = show_rotate
+		(_parts[ax] as Node3D).visible = show_move and not hidden.has(ax)
+		(_parts["r" + ax] as Node3D).visible = show_rotate and not hidden.has("r" + ax)
 	for pl in ["xy", "yz", "xz"]:
-		(_parts[pl] as Node3D).visible = show_move
+		(_parts[pl] as Node3D).visible = show_move and not hidden.has(pl)
 	_draw_cone(rot_basis.orthonormalized(), spot)
 	visible = true
 
@@ -212,12 +214,16 @@ func pick(ray_o: Vector3, ray_d: Vector3) -> String:
 	var best_d := INF
 	if show_move:
 		for ax in ["x", "y", "z"]:
+			if hidden.has(ax):
+				continue
 			var r := LightGizmoMath.ray_segment(ray_o, ray_d, o, o + axis(ax) * _scale)
 			var d := float(r["dist"]) / _scale
 			if d < PICK_AXIS and d < best_d:
 				best_d = d
 				best = ax
 		for pl in ["xy", "yz", "xz"]:
+			if hidden.has(pl):
+				continue
 			var a := axis(pl[0])
 			var b := axis(pl[1])
 			var hit: Variant = LightGizmoMath.ray_plane(ray_o, ray_d, o, a.cross(b))
@@ -231,6 +237,8 @@ func pick(ray_o: Vector3, ray_d: Vector3) -> String:
 				best = pl
 	if show_rotate and best.is_empty():
 		for ax in ["x", "y", "z"]:
+			if hidden.has("r" + ax):
+				continue
 			var rr := LightGizmoMath.ray_ring(ray_o, ray_d, o, axis(ax), RING_R * _scale)
 			var d2 := float(rr["dist"]) / _scale
 			if d2 < PICK_RING and d2 < best_d:

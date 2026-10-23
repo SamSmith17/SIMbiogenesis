@@ -132,18 +132,23 @@ func _run_capture(loader: Node, opts: Dictionary, camera: ClimelapseCameraRig) -
 	# so continuous playback (time_scale) and the analemma stepper both stay off,
 	# under ONE exclusive claim carrying both. Released on every exit path via
 	# _restore_world().
+	# The sky options (analemma, clear sky, star trails, camera follow) set up
+	# BEFORE the claim: an analemma export positions the clock for its first
+	# day before the claim switches analemma_mode on.
+	var sky := ClimelapseSkyDirector.new(opts)
+	sky.begin(main)
+	var claim_values := sky.clock_claim_values()
 	var claimed := false
 	if main.has_method("push_clock_claim"):
-		claimed = bool(main.call("push_clock_claim", CLOCK_OWNER,
-			{"time_scale": 0.0, "analemma_mode": false}, true))
-	var prev := {}
+		claimed = bool(main.call("push_clock_claim", CLOCK_OWNER, claim_values, true))
+	var prev := {"sky": sky}
 	if not claimed:
 		if "time_scale" in main:
 			prev["time_scale"] = main.get("time_scale")
 			main.set("time_scale", 0.0)
 		if "analemma_mode" in main:
 			prev["analemma_mode"] = main.get("analemma_mode")
-			main.set("analemma_mode", false)
+			main.set("analemma_mode", bool(claim_values["analemma_mode"]))
 
 	# Render settings for the export only; put back by _restore_world.
 	var settle_extra := 0
@@ -182,22 +187,19 @@ func _run_capture(loader: Node, opts: Dictionary, camera: ClimelapseCameraRig) -
 
 	var total := _frames_total
 	var manifest: Array = []
-	var start_abs := float(opts["start_abs"])
-	var end_abs := float(opts["end_abs"])
 	var settle := int(opts["settle_frames"])
 	var reason := ""
 
 	for i in total:
 		if _cancel:
 			break
-		var abs_h := minf(ClimelapseExportOptions.frame_hours(opts, i), end_abs)
-		main.call("set_absolute_hours", abs_h)
+		var abs_h := sky.place(main, i)
 		if loader.has_method("_push_growth_year"):
 			loader.call("_push_growth_year")
 		# Pose the camera BEFORE the render waits — posing it afterwards grabbed
 		# the texture drawn from the previous frame's pose.
 		var t_norm := 0.0 if total <= 1 else float(i) / float(total - 1)
-		var pose := camera.pose_at(abs_h, t_norm)
+		var pose := sky.camera_pose(main, camera.pose_at(abs_h, t_norm))
 		lock_cam.transform = pose.get("xform", camera.global_xform)
 		lock_cam.fov = float(pose.get("fov", camera.fov))
 		if tc_label != null:
@@ -327,6 +329,8 @@ func _restore_world(main: Node, cursor: Node, prev: Dictionary) -> void:
 		# Idempotent, so running twice (or after the fallback path) is harmless.
 		if main.has_method("pop_clock_claim"):
 			main.call("pop_clock_claim", CLOCK_OWNER)
+		if prev.has("sky"):
+			(prev["sky"] as ClimelapseSkyDirector).end(main)
 		if prev.has("analemma_mode"):
 			main.set("analemma_mode", prev["analemma_mode"])
 		if prev.has("time_scale"):

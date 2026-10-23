@@ -18,6 +18,17 @@ extends RefCounted
 ##                        (lets TAA and the volumetric fog catch up)
 ##   timecode             draw the date/time strip along the bottom
 ##   crf                  x264 quality (lower = bigger, sharper)
+##   analemma             0 off, 1 the sun's analemma, 2 the moon's: one frame
+##                        per day (at the same solar time / at the moon's
+##                        transit), with the figure drawn on the sky
+##   analemma_days        days between analemma frames (1..7)
+##   clouds               false = a clear sky for the export (no clouds, no
+##                        cloud shadows, full sunlight); the weather otherwise
+##   star_trails          -1 as set in the game, 0 off, 1 grow through each
+##                        night (a long exposure that starts at dusk)
+##   follow               "none" | "sun" | "moon" | "stars": the camera turns
+##                        to keep the sun / moon centred, or turns with the
+##                        sky so the stars hold still and the ground wheels
 ##
 ## A video SECOND, not a real second: the export steps the world itself, so
 ## the time it takes to render has nothing to do with how fast the result plays.
@@ -74,7 +85,21 @@ static func defaults() -> Dictionary:
 		"settle_frames": 2,
 		"timecode": true,
 		"crf": 18,
+		"analemma": 0,
+		"analemma_days": 1,
+		"clouds": true,
+		"star_trails": -1,
+		"follow": "none",
 	}
+
+
+## Camera follow choices: id, label.
+const FOLLOW_CHOICES: Array = [
+	["none", "Keyframes only"],
+	["sun", "Follow the sun"],
+	["moon", "Follow the moon"],
+	["stars", "Follow the stars (sky holds still)"],
+]
 
 
 static func default_folder() -> String:
@@ -104,6 +129,12 @@ static func normalize(o: Dictionary) -> Dictionary:
 	out["settle_frames"] = clampi(int(out["settle_frames"]), 1, 8)
 	out["crf"] = clampi(int(out["crf"]), 0, 51)
 	out["timecode"] = bool(out["timecode"])
+	out["analemma"] = clampi(int(out["analemma"]), 0, 2)
+	out["analemma_days"] = clampi(int(out["analemma_days"]), 1, 7)
+	out["clouds"] = bool(out["clouds"])
+	out["star_trails"] = clampi(int(out["star_trails"]), -1, 1)
+	var fol := str(out["follow"])
+	out["follow"] = fol if ["none", "sun", "moon", "stars"].has(fol) else "none"
 	out["file_name"] = clean_file_name(str(out["file_name"]))
 	out["folder"] = str(out["folder"]).replace("\\", "/")
 	return out
@@ -139,12 +170,23 @@ static func hours_per_frame(o: Dictionary) -> float:
 	return maxf(float(o.get("hours_per_second", 2.0)), 1e-5) / float(maxi(1, int(o.get("fps", 30))))
 
 
-## Frames the export renders: the range divided into steps, both ends included.
+## Frames the export renders: the range divided into steps, both ends
+## included. An analemma export takes one frame per `analemma_days` calendar
+## days of the range instead.
 static func frame_count(o: Dictionary) -> int:
 	var span := float(o.get("end_abs", 0.0)) - float(o.get("start_abs", 0.0))
 	if span <= 0.0:
 		return 0
+	if int(o.get("analemma", 0)) > 0:
+		return int(floor(analemma_days_in(o) / float(maxi(1, int(o.get("analemma_days", 1)))) - 1e-9)) + 1
 	return int(floor(span / hours_per_frame(o) + 1e-6)) + 1
+
+
+## Calendar days an analemma export covers (the start day through the end day).
+static func analemma_days_in(o: Dictionary) -> float:
+	var d0 := floorf(float(o.get("start_abs", 0.0)) / 24.0)
+	var d1 := floorf(float(o.get("end_abs", 0.0)) / 24.0)
+	return maxf(d1 - d0 + 1.0, 1.0)
 
 
 static func video_seconds(o: Dictionary) -> float:
@@ -152,7 +194,12 @@ static func video_seconds(o: Dictionary) -> float:
 
 
 ## Sim hour of frame i (frame 0 = the range start, the last frame <= the end).
+## For an analemma export: noon of the frame's day (the exact instant is the
+## sun's / moon's own, set by ClimelapseSkyDirector).
 static func frame_hours(o: Dictionary, i: int) -> float:
+	if int(o.get("analemma", 0)) > 0:
+		var d0 := floorf(float(o.get("start_abs", 0.0)) / 24.0)
+		return (d0 + float(i * maxi(1, int(o.get("analemma_days", 1))))) * 24.0 + 12.0
 	return float(o.get("start_abs", 0.0)) + float(i) * hours_per_frame(o)
 
 
@@ -225,7 +272,8 @@ static func span_label(hours: float) -> String:
 # --- remembered choices -------------------------------------------------------
 
 const _PERSIST_KEYS := ["hours_per_second", "fps", "width", "height", "folder", "quality",
-	"shadows", "msaa", "taa", "settle_frames", "timecode", "crf"]
+	"shadows", "msaa", "taa", "settle_frames", "timecode", "crf", "analemma", "analemma_days",
+	"clouds", "star_trails", "follow"]
 
 
 static func load_prefs(path: String = CFG_PATH) -> Dictionary:

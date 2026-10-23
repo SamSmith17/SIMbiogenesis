@@ -30,6 +30,10 @@ var _hud: CanvasLayer = null
 var _label: Label = null
 var _pause_btn: Button = null
 var _prev_hours := NAN
+## Video seconds into the shot (the clock follows it; an analemma steps one
+## day per video frame).
+var _vt := 0.0
+var _sky: ClimelapseSkyDirector = null
 
 
 func is_running() -> bool:
@@ -51,10 +55,16 @@ func begin(main: Node, opts: Dictionary, rig: ClimelapseCameraRig, from_abs: flo
 	var range_start := float(opts["start_abs"])
 	var range_end := float(opts["end_abs"])
 	_t = clampf(from_abs, range_start, range_end) if not is_nan(from_abs) else range_start
+	_vt = (_t - range_start) / maxf(float(opts["hours_per_second"]), 1e-6)
 	if main.has_method("get_absolute_hours"):
 		_prev_hours = float(main.call("get_absolute_hours"))
+	_sky = ClimelapseSkyDirector.new(opts)
+	if _sky.analemma() > 0:
+		_vt = 0.0
+	_sky.begin(main)
 	if main.has_method("push_clock_claim") and not bool(main.call("push_clock_claim", OWNER,
-			{"time_scale": 0.0, "analemma_mode": false}, true)):
+			_sky.clock_claim_values(), true)):
+		_sky.end(main)
 		return false
 	# From here on end() owns the clean-up, whatever fails below.
 	_running = true
@@ -82,35 +92,38 @@ func begin(main: Node, opts: Dictionary, rig: ClimelapseCameraRig, from_abs: flo
 func _process(delta: float) -> void:
 	if not _running:
 		return
-	var end_abs := float(_opts["end_abs"])
+	var total_s := ClimelapseExportOptions.video_seconds(_opts)
 	if not _paused:
-		if _t >= end_abs:
+		if _vt >= total_s:
 			_hold += delta
 			if _hold >= END_HOLD_S:
-				_hold = 0.0
-				_t = float(_opts["start_abs"])
+				restart()
 		else:
-			_t = minf(_t + delta * float(_opts["hours_per_second"]), end_abs)
+			_vt = minf(_vt + delta, total_s)
 	_apply_instant()
 
 
 func _apply_instant() -> void:
 	if _main == null or not is_instance_valid(_main):
 		return
-	if _main.has_method("set_absolute_hours"):
-		_main.call("set_absolute_hours", _t)
+	var start := float(_opts["start_abs"])
+	if _sky.analemma() > 0:
+		var frames := ClimelapseExportOptions.frame_count(_opts)
+		_t = _sky.place(_main, clampi(int(floor(_vt * float(int(_opts["fps"])))), 0, maxi(frames - 1, 0)))
+	else:
+		_t = minf(start + _vt * float(_opts["hours_per_second"]), float(_opts["end_abs"]))
+		_sky.place_at(_main, _t)
 	var tl := get_parent()
 	if tl != null and tl.has_method("_push_growth_year"):
 		tl.call("_push_growth_year")
-	var span := float(_opts["end_abs"]) - float(_opts["start_abs"])
-	var t_norm := clampf((_t - float(_opts["start_abs"])) / span, 0.0, 1.0) if span > 0.0 else 0.0
-	var pose := _rig.pose_at(_t, t_norm)
+	var span := float(_opts["end_abs"]) - start
+	var t_norm := clampf((_t - start) / span, 0.0, 1.0) if span > 0.0 else 0.0
+	var pose := _sky.camera_pose(_main, _rig.pose_at(_t, t_norm))
 	if is_instance_valid(_cam):
 		_cam.global_transform = pose.get("xform", _rig.global_xform)
 		_cam.fov = float(pose.get("fov", _rig.fov))
 	if _label != null:
-		var start := float(_opts["start_abs"])
-		var vid_s := (_t - start) / maxf(float(_opts["hours_per_second"]), 1e-6)
+		var vid_s := _vt
 		var total_s := ClimelapseExportOptions.video_seconds(_opts)
 		_label.text = "Preview  ·  %s  ·  %s / %s of video%s" % [
 			ClimelapseExportOptions.timecode_at(_t),
@@ -127,7 +140,10 @@ func toggle_pause() -> void:
 
 func restart() -> void:
 	_t = float(_opts["start_abs"])
+	_vt = 0.0
 	_hold = 0.0
+	if _sky != null:
+		_sky.restart(_main)
 
 
 ## Stop and give everything back. Idempotent.
@@ -140,6 +156,8 @@ func end() -> void:
 			_main.call("pop_camera_claim", OWNER)
 		if _main.has_method("pop_clock_claim"):
 			_main.call("pop_clock_claim", OWNER)
+		if _sky != null:
+			_sky.end(_main)
 		if not is_nan(_prev_hours) and _main.has_method("set_absolute_hours"):
 			_main.call("set_absolute_hours", _prev_hours)
 	if is_instance_valid(_cam):

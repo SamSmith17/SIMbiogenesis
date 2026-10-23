@@ -303,6 +303,7 @@ var _export_fps := 30
 ## "climelapse_keys"), loaded lazily on first use.
 var _clim_keys: ClimelapseKeyframes = null
 var _clim_preview: ClimelapsePreview = null
+var _clim_path_editor: Control = null
 var _placed_prop_layer: PlacedPropLayer = null
 ## Linkage fold-to-pack sweeps currently animating (prop_id → true) — a
 ## second Pack press mid-fold must not double-toggle the sweep.
@@ -9421,7 +9422,8 @@ func _ensure_climelapse_capture() -> void:
 ## Export a video. `opts` is a ClimelapseExportOptions dictionary (range,
 ## speed, size, fps, folder + file name, render settings). The camera follows
 ## the timeline keyframes when there are any; with none it stays locked on the
-## current view (from the drone with no keys: the default sweep).
+## current view. (The drone used to make up a sweep of its own with no keys —
+## a half-orbit pan nobody asked for; with no keys the shot is now still.)
 func start_climelapse_export_with(opts: Dictionary) -> bool:
 	var o := ClimelapseExportOptions.normalize(opts)
 	if str(o.get("folder", "")).is_empty():
@@ -9439,8 +9441,6 @@ func start_climelapse_export_with(opts: Dictionary) -> bool:
 	if not keys.is_empty():
 		rig.keys = keys.duplicate_keys()
 		rig.mode = "keys"
-	elif rig.mode == "drone":
-		rig.ensure_default_hyperlapse_path()
 
 	_export_render_start = float(o["start_abs"])
 	_export_render_end = float(o["end_abs"])
@@ -9546,6 +9546,53 @@ func remove_climelapse_key(i: int) -> void:
 	_save_climelapse_keys()
 
 
+## Set key i's pose (the camera-path editor). `save` false while a gizmo drag
+## is under way; the release saves.
+func set_climelapse_key_pose(i: int, pos: Vector3, yaw: float, pitch: float, fov: float, save: bool = true) -> void:
+	climelapse_keys().set_pose(i, pos, yaw, pitch, fov)
+	if save:
+		_save_climelapse_keys()
+
+
+## Put the keys back as they were (the editor's Revert).
+func restore_climelapse_keys(kf: ClimelapseKeyframes) -> void:
+	if kf == null:
+		return
+	_clim_keys = kf.duplicate_keys()
+	_save_climelapse_keys()
+
+
+## The camera-path editor: the keyframes drawn as a path in the world with
+## each one's view, a gizmo for pan / tilt / position, and the numbers.
+## `key_index` -1 = the key nearest the playhead. `opts` = the export's
+## options for its Preview (empty = the remembered ones).
+func open_climelapse_path_editor(key_index: int = -1, opts: Dictionary = {}) -> bool:
+	if is_climelapse_exporting():
+		return false
+	stop_climelapse_preview()
+	if not is_instance_valid(_clim_path_editor):
+		if _main == null:
+			return false
+		var ui_layer := _main.get_node_or_null("UILayer")
+		if ui_layer == null:
+			return false
+		_clim_path_editor = PanelContainer.new()
+		_clim_path_editor.name = "ClimelapsePathEditor"
+		_clim_path_editor.set_script(load("res://scenes/ui/climelapse_path_editor.gd"))
+		ui_layer.add_child(_clim_path_editor)
+		_clim_path_editor.call("bind_loader", self)
+	return bool(_clim_path_editor.call("open", key_index, opts))
+
+
+func is_climelapse_path_editing() -> bool:
+	return is_instance_valid(_clim_path_editor) and bool(_clim_path_editor.call("is_open"))
+
+
+func close_climelapse_path_editor() -> void:
+	if is_instance_valid(_clim_path_editor):
+		_clim_path_editor.call("close")
+
+
 func set_climelapse_keys_smooth(on: bool) -> void:
 	climelapse_keys().smooth = on
 	_save_climelapse_keys()
@@ -9581,8 +9628,6 @@ func start_climelapse_preview(opts: Dictionary, from_abs: float = NAN, paused: b
 	var keys := climelapse_keys()
 	if not keys.is_empty():
 		rig.keys = keys.duplicate_keys()
-	elif rig.mode == "drone":
-		rig.ensure_default_hyperlapse_path()
 	_clim_preview = ClimelapsePreview.new()
 	_clim_preview.name = "ClimelapsePreview"
 	add_child(_clim_preview)
@@ -9703,7 +9748,9 @@ func end_climelapse_export_cull() -> void:
 		if not (item is Dictionary):
 			continue
 		var node: Variant = (item as Dictionary).get("node")
-		if node is MultiMeshInstance3D and is_instance_valid(node):
+		# Validity first: a vegetation rebuild during the export frees batches,
+		# and `is` on a freed instance is a runtime error.
+		if is_instance_valid(node) and node is MultiMeshInstance3D:
 			var mi := node as MultiMeshInstance3D
 			mi.visibility_range_begin = float((item as Dictionary).get("begin", 0.0))
 			mi.visibility_range_end = float((item as Dictionary).get("end", 0.0))

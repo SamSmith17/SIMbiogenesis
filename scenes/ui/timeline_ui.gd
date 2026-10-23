@@ -229,6 +229,7 @@ var _clim_preview_rect : TextureRect = null
 ## Camera keyframe being dragged on the CLIM lane (index), -1 = none.
 var _clim_key_drag := -1
 var _clim_key_drag_moved := false
+var _clim_key_press_x := 0.0
 ## Screen rect of the CLIM sub-lane, cached by the draw for hit tests.
 var _clim_lane_rect := Rect2()
 var _clim_key_menu : PopupMenu = null
@@ -1642,6 +1643,7 @@ func _on_clim_lane_right_click(p : Vector2) -> void:
 		_clim_key_menu.add_item("Jump the playhead here", 1)
 		_clim_key_menu.add_item("Preview from here", 2)
 		_clim_key_menu.add_item("Set to the current view", 3)
+		_clim_key_menu.add_item("Edit camera path…", 9)
 		_clim_key_menu.add_separator()
 		_clim_key_menu.add_item("Delete keyframe", 4)
 	else:
@@ -1649,6 +1651,7 @@ func _on_clim_lane_right_click(p : Vector2) -> void:
 		_clim_key_menu.add_item("Key the current view at the playhead", 6)
 		if keys.size() > 0:
 			_clim_key_menu.add_item("Preview the keyframed shot", 8)
+			_clim_key_menu.add_item("Edit camera path…", 9)
 			_clim_key_menu.add_separator()
 			_clim_key_menu.add_item("Clear all %s" % UiText.count(keys.size(), "keyframe"), 7)
 	var screen := _track.get_screen_transform() * p
@@ -1685,6 +1688,8 @@ func _on_clim_key_menu(id : int) -> void:
 			tl.call("clear_climelapse_path")
 		8:
 			_preview_clim_from(NAN)
+		9:
+			tl.call("open_climelapse_path_editor", i)
 	_clim_key_menu_idx = -1
 	if _track != null:
 		_track.queue_redraw()
@@ -1935,6 +1940,7 @@ func _on_track_input(event: InputEvent) -> void:
 						_clim_key_drag = ki
 						_clim_key_drag_t = _clim_key_time(ki)
 						_clim_key_drag_moved = false
+						_clim_key_press_x = mb.position.x
 					get_viewport().set_input_as_handled()
 				elif mb.ctrl_pressed:
 					# Ctrl-drag = set the render in/out selection.
@@ -1952,6 +1958,9 @@ func _on_track_input(event: InputEvent) -> void:
 					var tlk := _get_terrain_loader()
 					if _clim_key_drag_moved and tlk != null and not is_nan(_clim_key_drag_t):
 						tlk.call("move_climelapse_key", _clim_key_drag, _clim_key_drag_t)
+					elif tlk != null and tlk.has_method("open_climelapse_path_editor"):
+						# A click (no drag) opens the camera-path editor on that key.
+						tlk.call("open_climelapse_path_editor", _clim_key_drag)
 					_clim_key_drag = -1
 					_clim_key_drag_t = NAN
 					_track.queue_redraw()
@@ -1985,9 +1994,10 @@ func _on_track_input(event: InputEvent) -> void:
 			_track.queue_redraw()
 			_update_track_edge_labels()
 		elif _clim_key_drag >= 0:
-			_clim_key_drag_t = _x_to_abs(mm.position.x)
-			_clim_key_drag_moved = true
-			_track.queue_redraw()
+			if _clim_key_drag_moved or absf(mm.position.x - _clim_key_press_x) >= 4.0:
+				_clim_key_drag_t = _x_to_abs(mm.position.x)
+				_clim_key_drag_moved = true
+				_track.queue_redraw()
 		elif _selecting:
 			_apply_selection(_sel_anchor_abs, _x_to_abs(mm.position.x))
 		elif _track_dragging:

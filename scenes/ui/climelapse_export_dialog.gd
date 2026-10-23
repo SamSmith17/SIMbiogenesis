@@ -40,6 +40,12 @@ var _settle_spin: SpinBox = null
 var _crf_spin: SpinBox = null
 var _timecode_chk: CheckBox = null
 var _smooth_chk: CheckBox = null
+var _analemma_opt: OptionButton = null
+var _analemma_days: SpinBox = null
+var _clouds_opt: OptionButton = null
+var _trails_opt: OptionButton = null
+var _follow_opt: OptionButton = null
+var _sky_note: Label = null
 var _cam_note: Label = null
 var _summary: Label = null
 var _export_btn: Button = null
@@ -179,8 +185,33 @@ func _build() -> void:
 	_settle_spin.tooltip_text = "Frames rendered per video frame before it is kept. More lets TAA and the volumetric fog catch up with the jump in time (cleaner, slower)."
 	_settle_spin.value_changed.connect(func(_v: float) -> void: _on_changed())
 
+	b.add_child(SectionHeader.make("Sky", "moon", "the preview shows these too"))
+	var an := _row(b)
+	_lbl(an, "Analemma")
+	_analemma_opt = _choice(an, ["Off", "Sun: one frame a day at the same time", "Moon: one frame a day at its transit"])
+	_analemma_opt.tooltip_text = "One frame per day instead of a steady clock: the sun (or the moon) is caught at the same moment each day, and the figure-eight it traces is drawn on the sky as the video plays."
+	_lbl(an, "every")
+	_analemma_days = _spin(an, 1, 7, 1, " d")
+	_analemma_days.tooltip_text = "Days between frames"
+	_analemma_days.value_changed.connect(func(_v: float) -> void: _on_changed())
+	var cl := _row(b)
+	_lbl(cl, "Clouds")
+	_clouds_opt = _choice(cl, ["As the weather had them", "None (a clear sky)"])
+	_clouds_opt.tooltip_text = "A clear sky hides the cloud layers and their shadows for the video only. The weather data and the energy figures do not change."
+	_lbl(cl, "Star trails")
+	_trails_opt = _choice(cl, ["As in the game", "Off", "Grow through the night"])
+	_trails_opt.tooltip_text = "Grow through the night: a long exposure that opens at dusk and lengthens at the sky's own rate (15 degrees an hour) until dawn."
+	_sky_note = _note(b, "")
+
 	b.add_child(SectionHeader.make("Camera", "camera"))
 	_cam_note = _note(b, "")
+	var fo := _row(b)
+	_lbl(fo, "Aim")
+	var labels: Array = []
+	for c in ClimelapseExportOptions.FOLLOW_CHOICES:
+		labels.append(str(c[1]))
+	_follow_opt = _choice(fo, labels)
+	_follow_opt.tooltip_text = "Follow the sun or moon: the camera keeps it centred with the horizon level. Follow the stars: the camera turns with the sky like a tracking mount, so the stars hold still and the ground wheels round."
 	var cr := _row(b)
 	_smooth_chk = CheckBox.new()
 	_smooth_chk.text = "Smooth path between keyframes"
@@ -189,6 +220,8 @@ func _build() -> void:
 			return
 		_loader.call("set_climelapse_keys_smooth", on))
 	cr.add_child(_smooth_chk)
+	var edit_btn := _button(cr, "Edit camera path…", _on_edit_path)
+	edit_btn.tooltip_text = "See the keyframes as a path in the world, with each one's view, and fine-tune pan, tilt and position"
 
 	b.add_child(SectionHeader.make("Result", "check"))
 	_summary = _note(b, "")
@@ -257,6 +290,15 @@ func _button(parent: Control, text: String, cb: Callable) -> Button:
 	return bt
 
 
+func _choice(parent: Control, items: Array) -> OptionButton:
+	var o := OptionButton.new()
+	for it in items:
+		o.add_item(str(it))
+	o.item_selected.connect(func(_i: int) -> void: _on_changed())
+	parent.add_child(o)
+	return o
+
+
 func _preset_opt(parent: Control, current_name: String) -> OptionButton:
 	var o := OptionButton.new()
 	o.add_item("As in game" + (" (%s)" % current_name if not current_name.is_empty() else ""))
@@ -290,6 +332,15 @@ func _load_into_controls() -> void:
 	_msaa_opt.select(maxi(0, ClimelapseExportOptions.MSAA_CHOICES.find(int(_opts["msaa"]))))
 	_taa_opt.select(int(_opts["taa"]) + 1)
 	_settle_spin.value = int(_opts["settle_frames"])
+	_analemma_opt.select(int(_opts["analemma"]))
+	_analemma_days.value = int(_opts["analemma_days"])
+	_clouds_opt.select(0 if bool(_opts["clouds"]) else 1)
+	_trails_opt.select(int(_opts["star_trails"]) + 1)
+	var fi := 0
+	for i in ClimelapseExportOptions.FOLLOW_CHOICES.size():
+		if str(ClimelapseExportOptions.FOLLOW_CHOICES[i][0]) == str(_opts["follow"]):
+			fi = i
+	_follow_opt.select(fi)
 	var keys: ClimelapseKeyframes = _loader.call("climelapse_keys") if _loader != null else null
 	_smooth_chk.button_pressed = keys == null or keys.smooth
 	_updating = false
@@ -364,6 +415,11 @@ func _read_controls() -> void:
 	_opts["msaa"] = int(ClimelapseExportOptions.MSAA_CHOICES[maxi(_msaa_opt.selected, 0)])
 	_opts["taa"] = _taa_opt.selected - 1
 	_opts["settle_frames"] = int(_settle_spin.value)
+	_opts["analemma"] = maxi(_analemma_opt.selected, 0)
+	_opts["analemma_days"] = int(_analemma_days.value)
+	_opts["clouds"] = _clouds_opt.selected != 1
+	_opts["star_trails"] = _trails_opt.selected - 1
+	_opts["follow"] = str(ClimelapseExportOptions.FOLLOW_CHOICES[maxi(_follow_opt.selected, 0)][0])
 
 
 func _refresh() -> void:
@@ -387,12 +443,29 @@ func _refresh() -> void:
 		_cam_note.text = "%s: the camera flies between them, %d inside this range." % [
 			UiText.count(n, "camera keyframe"), inside]
 	_smooth_chk.disabled = n < 3
+	var ana := int(o["analemma"]) > 0
+	_speed_opt.disabled = ana
+	_speed_spin.editable = not ana
+	_analemma_days.editable = ana
+	var sky_bits: Array = []
+	if ana:
+		sky_bits.append("Analemma: one frame every %s, %s. The speed above does not apply." % [
+			UiText.count(int(o["analemma_days"]), "day"),
+			"the sun at the same time each day (Settings, Stars & Planets sets the time)" if int(o["analemma"]) == 1
+				else "the moon at its daily transit"])
+	if not bool(o["clouds"]):
+		sky_bits.append("A clear sky for the video.")
+	if int(o["star_trails"]) == 1:
+		sky_bits.append("Star trails open at dusk and lengthen through each night.")
+	_sky_note.text = " ".join(sky_bits)
+	_sky_note.visible = not sky_bits.is_empty()
 	var frames := ClimelapseExportOptions.frame_count(o)
 	var ok := frames > 0 and frames <= ClimelapseExportOptions.MAX_FRAMES \
 		and not str(o["folder"]).is_empty()
 	var text := ClimelapseExportOptions.summary(o)
-	text += "\nOne frame every %s of sim time. Saves to %s" % [
-		_step_label(ClimelapseExportOptions.hours_per_frame(o)), ClimelapseExportOptions.output_path(o)]
+	var step_txt := UiText.count(int(o["analemma_days"]), "day") if ana \
+		else _step_label(ClimelapseExportOptions.hours_per_frame(o))
+	text += "\nOne frame every %s of sim time. Saves to %s" % [step_txt, ClimelapseExportOptions.output_path(o)]
 	if frames > ClimelapseExportOptions.MAX_FRAMES:
 		text += "\nToo many frames — pick a faster speed or a shorter range."
 	elif str(o["folder"]).is_empty():
@@ -483,10 +556,26 @@ func _on_preview() -> void:
 		_frame.close_on_backdrop = true
 
 
+## The camera-path editor: the dialog hides while it is open and comes back
+## when it closes (its Preview plays these options).
+func _on_edit_path() -> void:
+	_read_controls()
+	if _loader == null or not _loader.has_method("open_climelapse_path_editor"):
+		return
+	_waiting_on_preview = true
+	_frame.visible = false
+	_frame.close_on_backdrop = false
+	if not bool(_loader.call("open_climelapse_path_editor", -1, ClimelapseExportOptions.normalize(_opts))):
+		_waiting_on_preview = false
+		_frame.visible = true
+		_frame.close_on_backdrop = true
+
+
 func _process(_delta: float) -> void:
 	if not _waiting_on_preview or _loader == null:
 		return
-	if not bool(_loader.call("is_climelapse_previewing")):
+	if not bool(_loader.call("is_climelapse_previewing")) \
+			and not bool(_loader.call("is_climelapse_path_editing")):
 		_waiting_on_preview = false
 		_frame.visible = true
 		_frame.close_on_backdrop = true

@@ -788,6 +788,11 @@ Godot.exe.exe --headless --path . --script core/terrain/building_builder_selftes
 # the ffmpeg frame pipe (12 frames in, ffprobe count, a decoded frame is not
 # black; counted as skipped without ffmpeg). EXPECTED_CHECKS:
 Godot.exe.exe --headless --path . --script core/climelapse/climelapse_series_selftest.gd
+# Camera-path editor + sky options (sandbox): no keys = still, a REAL click
+# on a CLIM key opens the editor, REAL ring / arrow drags, marker click,
+# look through, revert, follow-the-sun preview, a weekly analemma export with
+# clear sky + trails + follow stars and the world handed back:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/clim_path_editor_probe.gd -Label clim_path -Timeout 1200
 # Video export end to end (sandbox): one-day selection → 🎬 dialog (range
 # pre-filled) → Max → three keyframes → Preview (clock + camera claimed and
 # handed back) → Export → ffprobe 361 frames 1920×1080 12.03 s → 04/12/20 h
@@ -2283,7 +2288,8 @@ off-screen SubViewport and streams the frames into ffmpeg.
   `start + i × hours_per_second / fps`, both ends included (24 h at Max,
   30 fps = 361 frames, 12.03 s).
 - **While it renders** the export holds an exclusive clock claim
-  (`climelapse_export`: time_scale 0, analemma off), sets the root viewport
+  (`climelapse_export`: time_scale 0, analemma off unless the export is an
+  analemma), sets the root viewport
   `disable_3d` (the world is drawn once per step, by the export) and shows
   the export's own picture in the progress window. `_restore_world` gives back
   the claim, the graphics / shadow presets it changed and `disable_3d` on
@@ -2293,13 +2299,52 @@ off-screen SubViewport and streams the frames into ffmpeg.
   (WorldPaths kind `climelapse_keys`). Between keys the camera follows a cubic
   Hermite in TIME (Catmull-Rom tangents over uneven spacing, zero at the
   ends, so the shot eases in and out; "Smooth path" off = straight lines);
-  yaw is unwrapped the short way; fov lerps. 0 keys = the current view
-  (the drone with none keeps its default sweep), 1 key = locked on it.
-  Editing on the timeline's CLIM lane: 📍 keys the current view at the
-  playhead (a key at the same moment is replaced), drag a diamond to retime,
-  double-click to jump the playhead to it, right-click for jump / preview
-  from here / set to the current view / delete, or on empty lane: key here /
-  key at playhead / preview / clear all.
+  yaw is unwrapped the short way; fov lerps. 0 keys = a STILL shot from the
+  current view, whatever the camera (2026-10-23: the drone used to make up a
+  near-full-circle sweep of its own; `ensure_default_hyperlapse_path` is
+  gone), 1 key = locked on it. Editing on the timeline's CLIM lane: 📍 keys
+  the current view at the playhead (a key at the same moment is replaced),
+  drag a diamond to retime (a press that moves under 4 px is a CLICK and
+  opens the camera-path editor on that key), double-click to jump the
+  playhead to it, right-click for jump / preview from here / set to the
+  current view / edit camera path / delete, or on empty lane: key here / key
+  at playhead / preview / edit camera path / clear all.
+- **Camera-path editor** (`scenes/ui/climelapse_path_editor.gd`,
+  `UILayer/ClimelapsePathEditor`, made by `TerrainLoader.open_climelapse_
+  path_editor(key, opts)`; also "Edit camera path…" in the export dialog,
+  which hides while it is open). A right-edge dock in the TOOL-OVERLAY tier
+  (prop-editor contract: free cursor, RMB looks, Esc steps out a drag, then
+  Look through, then the editor). `ClimelapsePathView` draws the keys in the
+  world, no depth test: the flown path (`ClimelapseKeyframes.sample_path`,
+  the export's own sampling), view ticks along it, each key's marker, number
+  + time and frustum wireframe at the export's aspect (`frustum_corners`,
+  VERTICAL fov), the selected key amber, the playhead's camera white. A
+  `LightGizmo` sits on the selected key in a YAW-ONLY frame with
+  `hidden = ["rz"]` (the gizmo's new hidden-handles list): the green ring
+  pans (yaw about world up), the red ring tilts (pitch about the key's side
+  axis, clamped ±89°), arrows / squares move it. A ring seen edge-on (the
+  tilt ring when the key faces along your view) cannot be grabbed — use the
+  Tilt field or Look through. Fields: Pan = compass heading
+  (`heading_deg` = −yaw, 0 north), Tilt, FOV, East / Up / South. Look
+  through = a (non-exclusive) camera claim on an editor camera at the key;
+  drag pans and tilts (from mouse POSITIONS — pushed / warped motions carry
+  a wrong `relative`), the wheel zooms. Click a marker to select a key.
+  Edits save on release (`set_climelapse_key_pose(..., save)`); Revert =
+  `restore_climelapse_keys` with the keys as the editor opened; Preview
+  plays from the selected key and the editor comes back after.
+- **Sky options** (dialog "Sky" + "Aim"; `ClimelapseSkyDirector`, shared by
+  the export and the preview so they match; everything restored by `end()`):
+  - Analemma (sun / moon, every 1-7 days): one frame per day; main.gd's own
+    analemma stepped by the export (`analemma_export_begin / _step / _end`,
+    `analemma_external_step` stops `_process` stepping it). Frame count =
+    calendar days in the range ÷ days, +1; the speed does not apply.
+  - Clouds off = `main.clear_sky_override` (cloud layers, cloud shadows and
+    the weather light factor, for the video only; data untouched).
+  - Star trails "grow through the night": closed above −6° sun altitude,
+    then the exposure arc grows at 15.04°/h (`trail_state`).
+  - Aim: follow the sun / moon (look at it, horizon level, `look_basis`) or
+    the stars (the camera turned with the sky since the first frame,
+    `follow_stars_basis`: the stars hold still and the horizon rolls).
 - **Preview** (`ClimelapsePreview`, the dialog's Preview button or the lane
   menu): plays the shot in the game window in real time at the export's
   speed, with an exclusive clock claim and an exclusive camera claim

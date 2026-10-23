@@ -129,22 +129,6 @@ func interpolate_at(t: float) -> Transform3D:
 	return Transform3D(Basis.from_euler(Vector3(pitch, yaw, 0.0)), pos)
 
 
-## Convenience: seed a 2-point orbit if path empty but drone mode wants motion.
-func ensure_default_hyperlapse_path(radius_m: float = 40.0, height_m: float = 25.0) -> void:
-	if has_path():
-		return
-	var origin := global_xform.origin
-	var yaw0 := global_xform.basis.get_euler().y
-	var pitch := deg_to_rad(-25.0)
-	path = [
-		{"pos": origin + Vector3(cos(yaw0) * radius_m, height_m, sin(yaw0) * radius_m),
-			"yaw": yaw0 + PI, "pitch": pitch},
-		{"pos": origin + Vector3(cos(yaw0 + PI) * radius_m, height_m, sin(yaw0 + PI) * radius_m),
-			"yaw": yaw0, "pitch": pitch},
-	]
-	mode = "path"
-
-
 func spawn_lock_camera(parent: Node) -> Camera3D:
 	var cam := Camera3D.new()
 	cam.name = "ClimelapseLockCam"

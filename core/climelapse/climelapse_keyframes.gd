@@ -20,6 +20,10 @@ const VERSION := 1
 ## Two keys closer than this (sim hours) count as the same moment.
 const SAME_MOMENT_H := 1.0 / 120.0
 
+const MAX_PITCH := 1.5533430342749532  # 89°
+const MIN_FOV := 5.0
+const MAX_FOV := 120.0
+
 var keys: Array = []
 var smooth := true
 
@@ -80,6 +84,19 @@ func repose_key(i: int, xform: Transform3D, fov: float) -> void:
 		return
 	var t := float((keys[i] as Dictionary).get("t", 0.0))
 	keys[i] = make_key(t, xform, fov)
+
+
+## Set key i's pose directly (the camera-path editor): position, yaw and
+## pitch in radians, fov in degrees. Pitch stops short of straight up / down
+## (the yaw would be undefined there); the key keeps its time.
+func set_pose(i: int, pos: Vector3, yaw: float, pitch: float, fov: float) -> void:
+	if i < 0 or i >= keys.size():
+		return
+	var k: Dictionary = keys[i]
+	k["pos"] = pos
+	k["yaw"] = wrapf(yaw, -PI, PI)
+	k["pitch"] = clampf(pitch, -MAX_PITCH, MAX_PITCH)
+	k["fov"] = clampf(fov, MIN_FOV, MAX_FOV)
 
 
 func remove_key(i: int) -> void:
@@ -153,6 +170,49 @@ func sample(abs_h: float) -> Dictionary:
 	var fov := lerpf(float((keys[i] as Dictionary).get("fov", 75.0)),
 		float((keys[i + 1] as Dictionary).get("fov", 75.0)), u)
 	return {"xform": Transform3D(Basis.from_euler(Vector3(pitch, yaw, 0.0)), pos), "fov": fov}
+
+
+## The path the camera flies, `n` samples from the first key's moment to the
+## last's: [{t, pos, fwd}]. One key gives that key; none gives [].
+func sample_path(n: int) -> Array:
+	var out: Array = []
+	if keys.is_empty():
+		return out
+	var ts := times()
+	var t0 := ts[0]
+	var t1 := ts[ts.size() - 1]
+	var m := 1 if keys.size() == 1 or t1 <= t0 else maxi(n, 2)
+	for j in m:
+		var t := t0 if m == 1 else lerpf(t0, t1, float(j) / float(m - 1))
+		var smp := sample(t)
+		var xf: Transform3D = smp["xform"]
+		out.append({"t": t, "pos": xf.origin, "fwd": -xf.basis.z})
+	return out
+
+
+## The camera's view direction for a yaw / pitch (radians).
+static func forward(yaw: float, pitch: float) -> Vector3:
+	return Basis.from_euler(Vector3(pitch, yaw, 0.0)) * Vector3.FORWARD
+
+
+## Compass heading (degrees clockwise from north = -Z) of a yaw, and back.
+static func heading_deg(yaw: float) -> float:
+	return wrapf(rad_to_deg(-yaw), 0.0, 360.0)
+
+
+static func yaw_for_heading(deg: float) -> float:
+	return wrapf(deg_to_rad(-deg), -PI, PI)
+
+
+## The four corners of a camera's view `dist` metres out (TL, TR, BR, BL).
+## `fov_deg` is the VERTICAL field of view (Godot's keep-height default).
+static func frustum_corners(xf: Transform3D, fov_deg: float, aspect: float, dist: float) -> PackedVector3Array:
+	var hh := tan(deg_to_rad(clampf(fov_deg, 1.0, 179.0)) * 0.5) * dist
+	var hw := hh * maxf(aspect, 0.01)
+	var out := PackedVector3Array()
+	for c in [Vector2(-hw, hh), Vector2(hw, hh), Vector2(hw, -hh), Vector2(-hw, -hh)]:
+		out.append(xf * Vector3(c.x, c.y, -dist))
+	return out
 
 
 func _pos(j: int) -> Vector3:
