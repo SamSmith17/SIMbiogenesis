@@ -2650,7 +2650,8 @@ func _update_clim_progress_dialog() -> void:
 		_clim_progress_bar.value = prog * 100.0
 		var done := int(st.get("done", 0))
 		var total := int(st.get("total", 0))
-		if _clim_preview_rect != null and _clim_preview_rect.texture == null 				and tl.has_method("get_climelapse_export_preview_texture"):
+		if _clim_preview_rect != null and _clim_preview_rect.texture == null \
+				and tl.has_method("get_climelapse_export_preview_texture"):
 			_clim_preview_rect.texture = tl.call("get_climelapse_export_preview_texture")
 		match str(st.get("phase", "")):
 			"encode":
@@ -3339,7 +3340,7 @@ func _build_right_cluster() -> Control:
 		"Settlement view — watch the community at work, from ground level out to the whole site")
 	right.add_child(_settlement_chip)
 	_festival_chip = _mk_chip_btn("Festival", _on_festival_chip_pressed,
-		"Festival mode — populate every painted camp, assume the camps stocked (no starving, no queues, no leaving), and watch the crowd from the settlement view")
+		"Festival mode — populate every painted camp and watch the crowd from the settlement view. Each camp's supply (infinite, its own tanks or shared depots) is set per camp; nobody queues or leaves while it is on")
 	right.add_child(_festival_chip)
 	_sfx_btn = _mk_icon_btn("🔇", _on_sfx_pressed, "")
 	right.add_child(_sfx_btn)

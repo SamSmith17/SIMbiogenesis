@@ -214,11 +214,23 @@ func _edit_ground_at(s: Vector2) -> Variant:
 	return Vector2(p.x, p.z)
 
 
+## The map's TerrainLoader, looked up once (the per-vertex projection and the
+## per-frame overlay check both asked; on a built-in scene that is a
+## recursive find_child each time).
+var _loader_ref: Node = null
+
+
+func _terrain_loader() -> Node:
+	if _loader_ref == null or not is_instance_valid(_loader_ref):
+		_loader_ref = TerrainSurfaceQuery.find_terrain_loader(_main)
+	return _loader_ref
+
+
 func _edit_to_screen(w: Vector2) -> Variant:
 	if _cam == null:
 		return Vector2.INF
 	var y := 0.0
-	var loader := TerrainSurfaceQuery.find_terrain_loader(_main)
+	var loader := _terrain_loader()
 	if loader != null and loader.has_method("ground_height_at"):
 		y = float(loader.call("ground_height_at", w.x, w.y))
 	var p3 := Vector3(w.x, y + 0.2, w.y)
@@ -266,7 +278,7 @@ func _process(delta: float) -> void:
 	# Spaces moved, drawn or removed (the site editor, the Y dock): the
 	# overlay follows the registry's revision instead of waiting for a reopen.
 	if _overlay != null and is_instance_valid(_overlay):
-		var loader := TerrainSurfaceQuery.find_terrain_loader(_main)
+		var loader := _terrain_loader()
 		var reg: Variant = loader.get("npc_spaces") if loader != null else null
 		if reg != null and int(reg.get("revision")) != _overlay_rev:
 			_overlay_rev = int(reg.get("revision"))

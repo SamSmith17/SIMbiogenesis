@@ -461,7 +461,9 @@ static func _build_glb_bracket(p: Dictionary) -> ArrayMesh:
 	if raw.is_empty():
 		return null
 	var target_h := maxf(0.2, _or(p, "height", 3.77))
-	var rot := Basis(Vector3.RIGHT, deg_to_rad(_num(p, "glbRotX", 0.0))) 		* Basis(Vector3.UP, deg_to_rad(_num(p, "glbRotY", 0.0))) 		* Basis(Vector3.BACK, deg_to_rad(_num(p, "glbRotZ", 0.0)))
+	var rot := Basis(Vector3.RIGHT, deg_to_rad(_num(p, "glbRotX", 0.0))) \
+		* Basis(Vector3.UP, deg_to_rad(_num(p, "glbRotY", 0.0))) \
+		* Basis(Vector3.BACK, deg_to_rad(_num(p, "glbRotZ", 0.0)))
 	var auto_flag = p.get("glbAutoOrient")
 	if not (auto_flag is bool and auto_flag == false):
 		var size := _box_of(raw, rot).size
@@ -685,7 +687,8 @@ static func _transformed(src: ArrayMesh, xf: Transform3D) -> ArrayMesh:
 	var out := SurfaceTool.new()
 	out.begin(Mesh.PRIMITIVE_TRIANGLES)
 	out.set_smooth_group(-1)
-	var has_norms := norms is PackedVector3Array 		and (norms as PackedVector3Array).size() == verts.size()
+	var has_norms := norms is PackedVector3Array \
+		and (norms as PackedVector3Array).size() == verts.size()
 	for i in idx:
 		if has_norms:
 			out.set_normal((nb * (norms as PackedVector3Array)[i]).normalized())

@@ -49,6 +49,7 @@ var _log: SettlementLog = null
 var _fallback_registry: SpaceRegistry = null
 var _weather_cache: Dictionary = {}
 var _weather_hour := -999.0
+var _weather_day := -1   # month * 100 + day the cache was sampled for
 var _last_abs_h := 0.0
 
 ## Navigation (Tier 3). The grid bakes in budgeted slices off the tick; until
@@ -327,6 +328,9 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		var engine := _ensure_engine(iid, specs, main)
 		# Last flow tick's verdict drives this tick's blocked activities.
 		engine.set_starved(specs.get("starved_kinds", []) as Array)
+		# One home per habitat per tick (a prop-record lookup); the ctx and the
+		# home_bed_of callable used to resolve it again on every call.
+		var home_xz := _home_pos(specs, main)
 		var ctx := {
 			# Meal-first eating: true when this habitat's meal input is wired
 			# to a stocked tank. Checked ONCE per tick, not per agent — the
@@ -356,7 +360,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			# SOCIAL blocks (NpcSocial): the camp's conversation circles hang
 			# off its home point and its seed — the SAME two the light tier
 			# reads off the cohort, so both tiers pick the same circles.
-			"camp_home": _home_pos(specs, main),
+			"camp_home": home_xz,
 			"camp_seed": iid,
 			"time_mult": absf(float(main.get("time_scale"))) * 3600.0 if "time_scale" in main else 0.0,
 			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
@@ -372,7 +376,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			"comfort_spot": func(kind: String, from: Vector2, aid: String) -> Dictionary:
 				return _comfort_spot(kind, from, aid),
 			"home_bed_of": func(aid: String) -> Variant:
-				return _home_bed_of(main, _home_pos(specs, main), aid),
+				return _home_bed_of(main, home_xz, aid),
 			# Fire perimeters a straight-line walk must go round.
 			"no_go": _no_go_circles(),
 			"plan_path": func(from_xz: Vector2, to_xz: Vector2, from_key: String,
@@ -407,7 +411,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		_service_oncall(iid, engine, model, abs_h)
 		_service_duty_roster(iid, engine, abs_h)
 		var store := _ensure_project_store(iid, specs)
-		store.sync(engine.chore_board)
+		store.sync(engine.chore_board, abs_h)
 		_push_build_progress(store, engine.chore_board, main)
 		PerfMonitor.begin("npc_persist")
 		_maybe_persist(model, iid, engine, abs_h)
@@ -1098,6 +1102,7 @@ func cancel_project(iid: String, project_id: String, main: Node = null) -> void:
 			board.remove_chore(str(task.get("chore_id", "")))
 			task["status"] = "skipped"
 	project["state"] = "cancelled"
+	project["ended_h"] = current_abs_hours()
 	if main != null and str(project.get("kind", "")) == "assembly":
 		var plan: Dictionary = project.get("plan", {})
 		var refund: Dictionary = plan.get("refund_parts", {})
@@ -1881,18 +1886,21 @@ func nav_grid() -> NpcNavGrid:
 ## back to comfortable conditions when WeatherService has no coverage, so an
 ## offline site never has its work blocked.
 func _sample_weather(main: Node, hour_of_day: float) -> Dictionary:
-	if absf(hour_of_day - _weather_hour) < 0.25 and not _weather_cache.is_empty():
+	var clock: Variant = main.get("clock") if main != null else null
+	var month := int(main.get("month")) if main != null and main.get("month") != null else 6
+	var day := int(main.get("day")) if main != null and main.get("day") != null else 15
+	if clock != null:
+		month = int(clock.get("month"))
+		day = int(clock.get("day"))
+	# Keyed on the DATE as well as the hour: a jump of whole days that lands
+	# on the same hour used to keep the previous day's weather.
+	if absf(hour_of_day - _weather_hour) < 0.25 and month * 100 + day == _weather_day \
+			and not _weather_cache.is_empty():
 		return _weather_cache
 	var ws := main.get_node_or_null("/root/WeatherService") if main != null else null
 	if ws == null or not ws.has_method("sample"):
 		_weather_cache = {}
 		return _weather_cache
-	var clock: Variant = main.get("clock")
-	var month := int(main.get("month")) if main.get("month") != null else 6
-	var day := int(main.get("day")) if main.get("day") != null else 15
-	if clock != null:
-		month = int(clock.get("month"))
-		day = int(clock.get("day"))
 	_weather_cache = {
 		"temp_c": float(ws.call("temperature_c", month, day, hour_of_day)),
 		"wind_ms": float(ws.call("sample", "wind_speed_10m", month, day, hour_of_day)),
@@ -1911,6 +1919,7 @@ func _sample_weather(main: Node, hour_of_day: float) -> Dictionary:
 		_weather_cache["aqi"] = float(hz.get("aqi", 0.0))
 		_weather_cache["pm25_ugm3"] = float(hz.get("pm25_ugm3", 0.0))
 	_weather_hour = hour_of_day
+	_weather_day = month * 100 + day
 	return _weather_cache
 
 

@@ -3476,7 +3476,8 @@ func _build_population_section(specs: Dictionary) -> void:
 	if not blocked.is_empty():
 		var bparts: PackedStringArray = PackedStringArray()
 		for k in blocked:
-			bparts.append("%s ×%d" % [str(k), int(blocked[k])])
+			bparts.append("%d can't get %s" % [int(blocked[k]),
+				str((NpcAgent.ACTIVITY_WORDS.get(str(k), ["", str(k)]) as Array)[1])])
 		_readonly_field("Blocked on", ", ".join(bparts))
 	var avg: Dictionary = summ.get("avg_needs", {})
 	var worst: Dictionary = summ.get("worst_needs", {})
@@ -3485,8 +3486,11 @@ func _build_population_section(specs: Dictionary) -> void:
 				"avg %d%%  worst %d%%" % [int(float(avg.get(n, 0.0)) * 100.0), int(float(worst.get(n, 0.0)) * 100.0)])
 	var acts: Dictionary = summ.get("activities", {})
 	var parts: PackedStringArray = PackedStringArray()
-	for k in acts:
-		parts.append("%s ×%d" % [str(k), int(acts[k])])
+	# Most people first, in words (the keys are "-> hunger", "queue bladder").
+	var act_keys: Array = acts.keys()
+	act_keys.sort_custom(func(a, b) -> bool: return int(acts[a]) > int(acts[b]))
+	for k in act_keys:
+		parts.append("%d %s" % [int(acts[k]), NpcAgent.activity_words(str(k))])
 	if not parts.is_empty():
 		_readonly_field("Doing", ", ".join(parts))
 	# Spatial efficiency — what this layout costs the people living in it.

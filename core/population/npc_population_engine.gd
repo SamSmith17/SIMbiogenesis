@@ -298,7 +298,8 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 func _ask_order(ranks: Dictionary) -> Array:
 	var out: Array = agents.duplicate()
 	out.sort_custom(func(x, y) -> bool:
-		return int(ranks.get((x as NpcAgent).id, 0)) 			< int(ranks.get((y as NpcAgent).id, 0)))
+		return int(ranks.get((x as NpcAgent).id, 0)) \
+			< int(ranks.get((y as NpcAgent).id, 0)))
 	return out
 
 
@@ -307,9 +308,14 @@ func _fair_ranks(abs_h: float) -> Dictionary:
 	var ids: Array = []
 	for a in agents:
 		ids.append((a as NpcAgent).id)
+	# Each person's trailing-week hours once, not twice per comparison (each
+	# call walks that person's day log).
+	var hours: Dictionary = {}
+	for id in ids:
+		hours[id] = labour.week_hours(str(id), day)
 	ids.sort_custom(func(x: String, y: String) -> bool:
-		var hx := labour.week_hours(x, day)
-		var hy := labour.week_hours(y, day)
+		var hx := float(hours[x])
+		var hy := float(hours[y])
 		if absf(hx - hy) > 0.01:
 			return hx < hy
 		return x < y)
@@ -382,7 +388,8 @@ func _remove_agents(gone: Array, kind: String, abs_hours: float,
 		var agent: NpcAgent = a
 		agent.release_claims(ctx)
 		agents.erase(agent)
-		var why := reason_override if not reason_override.is_empty() 			else _departure_reason(agent)
+		var why := reason_override if not reason_override.is_empty() \
+			else _departure_reason(agent)
 		_departures.append({
 			"id": agent.id, "name": agent.display_name,
 			"reason": why, "kind": kind, "abs_h": abs_hours,
@@ -546,7 +553,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 	# key the agents need must be forwarded explicitly. Forgetting one fails
 	# silently — `plan_path` was dropped here once and agents just kept
 	# walking straight lines with a perfectly good nav grid sitting idle.
-	return {
+	var out := {
 		"registry": ctx_in.get("registry"),
 		"pos_of": ctx_in.get("pos_of", Callable()),
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
@@ -631,6 +638,25 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 					n += 1
 			return n,
 	}
+	if OS.is_debug_build():
+		_warn_dropped_ctx_keys(ctx_in, out)
+	return out
+
+
+## Keys the bridge passes that _make_ctx does not forward, warned about ONCE
+## each (debug builds only). Every past whitelist bug here (plan_path, the
+## venue keys, abs_hours) failed silently: one tier did the right thing and
+## the other fell back. Keys the engine consumes itself are listed below.
+const CTX_ENGINE_ONLY: Array = []
+static var _ctx_warned: Dictionary = {}
+
+
+func _warn_dropped_ctx_keys(ctx_in: Dictionary, out: Dictionary) -> void:
+	for k in ctx_in:
+		if out.has(k) or _ctx_warned.has(k) or CTX_ENGINE_ONLY.has(k):
+			continue
+		_ctx_warned[k] = true
+		push_warning("NpcPopulationEngine._make_ctx does not forward ctx key \"%s\" — the full tier will not see it (add it to _make_ctx, or to CTX_ENGINE_ONLY if the engine reads it itself)" % str(k))
 
 
 ## Push apart anyone standing inside someone else. Standing slots
@@ -957,7 +983,8 @@ func summary() -> Dictionary:
 		kcal += a2.walk_kcal
 		for k in a2.need_distance:
 			per_need[k] = float(per_need.get(k, 0.0)) + float(a2.need_distance[k])
-			per_need_trips[k] = int(per_need_trips.get(k, 0)) 					+ int(a2.need_trips.get(k, 0))
+			per_need_trips[k] = int(per_need_trips.get(k, 0)) \
+					+ int(a2.need_trips.get(k, 0))
 	var n := maxf(float(agents.size()), 1.0)
 	# Mean metres walked per COMPLETED trip, split by need — the diagnostic
 	# that points at which space is misplaced rather than just saying the
@@ -1125,11 +1152,25 @@ func snapshot(saved_h: float) -> Dictionary:
 	return out
 
 
+## id -> agent, rebuilt when `agents` is a different array or size (every
+## mutation here either reassigns the array or changes its size). agent_live
+## asks this per bed per agent; a scan made that roster^2.
+var _agent_idx: Dictionary = {}
+var _agent_idx_arr: Array = []
+var _agent_idx_n := -1
+
+
 ## Agents by id, for lookups from the 3D/interaction layer.
 func find_agent(agent_id: String) -> NpcAgent:
-	for a in agents:
-		if (a as NpcAgent).id == agent_id:
-			return a
+	if _agent_idx_n != agents.size() or not is_same(_agent_idx_arr, agents):
+		_agent_idx.clear()
+		for a0 in agents:
+			_agent_idx[(a0 as NpcAgent).id] = a0
+		_agent_idx_arr = agents
+		_agent_idx_n = agents.size()
+	var hit: Variant = _agent_idx.get(agent_id)
+	if hit != null and (hit as NpcAgent).id == agent_id:
+		return hit
 	return null
 
 

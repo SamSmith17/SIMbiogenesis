@@ -18743,6 +18743,13 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			var comp: Dictionary = model.get_item(cid)
 			var cspecs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
 			var changed := int(cspecs.get("camp_headcount", -1)) != n or str(cspecs.get("name", "")) != name
+			var moved := absf(float(cspecs.get("site_x_m", INF)) - site.x) > 0.01 \
+				or absf(float(cspecs.get("site_z_m", INF)) - site.y) > 0.01
+			if not changed and not moved:
+				# Nothing this sync owns moved: leave the compound and its
+				# habitat alone (every write here is a user_rev move, which
+				# also drops a rendered sim range).
+				continue
 			cspecs["camp_headcount"] = n
 			cspecs["name"] = name
 			cspecs["site_x_m"] = site.x
@@ -18870,7 +18877,7 @@ func festival_camps() -> Array:
 # `camp_meter` and is what the camps panel shows.
 # ---------------------------------------------------------------------------
 
-const CAMP_SUPPLY_MODES: Array = ["infinite", "own", "shared"]
+const CAMP_SUPPLY_MODES: Array = CampTemplates.SUPPLY_MODES
 const DEPOT_ITEMS := {
 	"water": ["fest_depot_water", "Site water depot", "L", 20000.0, 1.0],
 	"food": ["fest_depot_food", "Site food depot", "kg", 2000.0, 1.0],
@@ -18906,7 +18913,10 @@ func camp_supply_modes(camp_key: String) -> Dictionary:
 	var c := _camp_by_key(camp_key)
 	if c.is_empty():
 		return {}
-	var specs: Dictionary = (model.get_item(str(c["id"])) as Dictionary).get("specs", {})
+	return _supply_from_specs((model.get_item(str(c["id"])) as Dictionary).get("specs", {}))
+
+
+func _supply_from_specs(specs: Dictionary) -> Dictionary:
 	var cur: Dictionary = specs.get("camp_supply", {})
 	var dflt := "infinite" if PopTestPrefs.ideal_supply() else "own"
 	return {"inputs": str(cur.get("inputs", dflt)), "wastes": str(cur.get("wastes", dflt)),
@@ -18917,13 +18927,18 @@ func camp_supply_modes(camp_key: String) -> Dictionary:
 func set_camp_supply(camp_key: String, patch: Dictionary) -> bool:
 	if model == null:
 		return false
-	var c := _camp_by_key(camp_key)
+	return _set_supply_on(_camp_by_key(camp_key), patch)
+
+
+## set_camp_supply for a festival_camps() row already in hand (one walk of
+## the root scope, not one per camp).
+func _set_supply_on(c: Dictionary, patch: Dictionary) -> bool:
 	if c.is_empty():
 		return false
 	var cid := str(c["id"])
 	var specs: Dictionary = (model.get_item(cid).get("specs", {}) as Dictionary).duplicate(true)
 	var cur: Dictionary = (specs.get("camp_supply", {}) as Dictionary).duplicate()
-	var now := camp_supply_modes(camp_key)
+	var now := _supply_from_specs(specs)
 	for k in ["inputs", "wastes"]:
 		var m := str(patch.get(k, cur.get(k, now.get(k, "infinite"))))
 		cur[k] = m if CAMP_SUPPLY_MODES.has(m) else "infinite"
@@ -18942,8 +18957,10 @@ func set_camp_supply(camp_key: String, patch: Dictionary) -> bool:
 ## Every festival camp to one mode, both sides ("infinite" | "own" | "shared").
 func set_all_camp_supply(mode: String) -> int:
 	var n := 0
+	if model == null:
+		return 0
 	for c in festival_camps():
-		if set_camp_supply(str((c as Dictionary)["lot_id"]), {"inputs": mode, "wastes": mode}):
+		if _set_supply_on(c as Dictionary, {"inputs": mode, "wastes": mode}):
 			n += 1
 	return n
 
@@ -18975,6 +18992,15 @@ func _tick_camp_meters(abs_h: float) -> void:
 	if not is_nan(_camp_meter_last_h) and abs_h > _camp_meter_last_h:
 		dt = minf(abs_h - _camp_meter_last_h, 6.0)
 	_camp_meter_last_h = abs_h
+	# Meters of compounds that are gone (Clear, a re-cut) go with them.
+	if _camp_meters.size() > camps.size():
+		var live := {}
+		for c0 in camps:
+			live[str(c0["id"])] = true
+		for k in _camp_meters.keys():
+			if not live.has(k):
+				_camp_meters.erase(k)
+				_camp_meter_saved_h.erase(k)
 	for c in camps:
 		var cid := str(c["id"])
 		var comp: Dictionary = model.get_item(cid)
@@ -19041,7 +19067,7 @@ func festival_camp_rows() -> Array:
 		out.append({"id": cid, "lot_id": str(c["lot_id"]), "name": str(c["name"]), "scope": str(c["scope"]),
 			"headcount": int(c["headcount"]), "present": int(specs.get("camp_present", c["headcount"])),
 			"morale": float(specs.get("camp_morale", -1.0)), "soc": float(specs.get("camp_soc", -1.0)),
-			"supply": camp_supply_modes(str(c["lot_id"])), "meter": m.summary(), "hours": m.hours(),
+			"supply": _supply_from_specs(specs), "meter": m.summary(), "hours": m.hours(),
 			"closure": CampLoopClosure.score(model, cid)})
 	return out
 

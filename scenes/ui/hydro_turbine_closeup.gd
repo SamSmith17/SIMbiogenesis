@@ -586,7 +586,9 @@ func _measure_runner() -> void:
 	# The axis the WHEEL is actually rotated about: the catalog's model-root
 	# axis carried into the parent frame (inverse of the parent's chain up to
 	# ModelRoot), the same conversion SiphonTurbineSpin does through world space.
-	var parent_chain := _local_chain(_runner.get_parent() as Node3D, _model_root) 			if _runner.get_parent() is Node3D and _runner.get_parent() != _model_root 			else Transform3D.IDENTITY
+	var parent_chain := _local_chain(_runner.get_parent() as Node3D, _model_root) \
+			if _runner.get_parent() is Node3D and _runner.get_parent() != _model_root \
+			else Transform3D.IDENTITY
 	_runner_axis_parent = (parent_chain.basis.inverse() * _runner_axis_local).normalized()
 	if _runner_axis_parent.length_squared() < 1e-6:
 		_runner_axis_parent = Vector3(0, 0, 1)
@@ -1337,7 +1339,8 @@ func _update_siphon_water(delta: float, flowing: bool, q_lps: float) -> void:
 	# makes), falling back to the leg's intake end on a model with no elbow;
 	# the draft tube leaves under the riser. Both clamped so the studio stays
 	# framed.
-	var elbow := SiphonGeometry.elbow_outlet(_model_root, _housing_meshes, axis, rc) 			if _model_root != null else {}
+	var elbow := SiphonGeometry.elbow_outlet(_model_root, _housing_meshes, axis, rc) \
+			if _model_root != null else {}
 	var dip_top := leg_a + Vector3.DOWN * (leg_r * 0.2)
 	var elbow_corner := Vector3.INF
 	if not elbow.is_empty():

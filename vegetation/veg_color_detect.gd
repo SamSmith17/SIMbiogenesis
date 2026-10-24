@@ -299,7 +299,8 @@ func detect(poly: PackedVector2Array, params: Dictionary = {}) -> Dictionary:
 	if is_nan(cut):
 		var ot := otsu(valid)
 		out["separability"] = float(ot["separability"])
-		var trusted := float(ot["separability"]) >= MIN_SEPARABILITY 			and float(ot.get("upper_mean", 0.0)) >= GREEN_CLASS_MIN
+		var trusted := float(ot["separability"]) >= MIN_SEPARABILITY \
+			and float(ot.get("upper_mean", 0.0)) >= GREEN_CLASS_MIN
 		out["auto_split"] = trusted
 		cut = float(ot["cut"]) if trusted else FALLBACK_EXG
 		cut = maxf(cut - clampf(float(p["sensitivity"]), -1.0, 1.0) * SENSITIVITY_SPAN, MIN_EXG_CUT)

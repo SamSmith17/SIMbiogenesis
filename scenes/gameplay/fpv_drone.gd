@@ -292,7 +292,8 @@ func _handle_flight_input(delta: float, yaw_only_look: bool = false) -> void:
 	# SpinBoxes on screen WHILE the player is mounted, and typing a brush radius
 	# used to fly the drone across the map one keystroke at a time.
 	var typing := _keyboard_captured_by_ui()
-	var move_input := Vector2.ZERO if typing 		else Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	var move_input := Vector2.ZERO if typing \
+		else Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var input_forward := -move_input.y
 	var input_strafe := move_input.x
 	

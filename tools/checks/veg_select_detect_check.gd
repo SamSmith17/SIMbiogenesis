@@ -272,7 +272,8 @@ func _batch_height_at(main: Node, species: String, x: float, z: float) -> float:
 	if terrain == null:
 		return -1.0
 	for n in terrain.find_children("Bulk_*", "MultiMeshInstance3D", true, false):
-		if str(n.get_meta(&"veg_species", "")) != species or "_imp_" in str(n.name) 				or "photo" in str(n.name):
+		if str(n.get_meta(&"veg_species", "")) != species or "_imp_" in str(n.name) \
+				or "photo" in str(n.name):
 			continue
 		var mm := (n as MultiMeshInstance3D).multimesh
 		if mm == null or mm.mesh == null:

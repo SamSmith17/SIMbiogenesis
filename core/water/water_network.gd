@@ -432,7 +432,8 @@ func _clear_vegetation_on_changed_channels(prev_sigs: Dictionary) -> void:
 		if pts.size() < 2:
 			continue
 		var sec: Dictionary = f.get("section", {})
-		var half := 0.5 * float(sec.get("bed_w", 3.5)) 				+ float(sec.get("bank_slope", 2.5)) * float(sec.get("depth", 0.7)) + VEG_CLEAR_MARGIN_M
+		var half := 0.5 * float(sec.get("bed_w", 3.5)) \
+				+ float(sec.get("bank_slope", 2.5)) * float(sec.get("depth", 0.7)) + VEG_CLEAR_MARGIN_M
 		var poly := channel_footprint_polygon(pts, half)
 		if poly.size() < 3:
 			continue
@@ -440,7 +441,8 @@ func _clear_vegetation_on_changed_channels(prev_sigs: Dictionary) -> void:
 		# pay it when a painted plant actually stands in the channel; the
 		# auto-vegetation clear is a persisted patch (cheap) and always lands,
 		# so the next scatter keeps out of the water too.
-		var painted := int(loader.call("count_manual_bulk_in_polygon", poly)) 				if loader.has_method("count_manual_bulk_in_polygon") else 1
+		var painted := int(loader.call("count_manual_bulk_in_polygon", poly)) \
+				if loader.has_method("count_manual_bulk_in_polygon") else 1
 		if painted > 0:
 			loader.call("clear_vegetation_in_polygon", poly)
 		var auto_n := 0
@@ -1617,7 +1619,8 @@ func _swap_stream_mesh() -> void:
 	var arrays: Array = []
 	var items: Array = []
 	var flow_on := str(layer.setting("display_mode")) == "flow"
-	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler") 		if flow_on and loader.has_method("make_water_ground_sampler") else null
+	var sampler: WaterGroundSampler = loader.call("make_water_ground_sampler") \
+		if flow_on and loader.has_method("make_water_ground_sampler") else null
 	var half := sampler.detail_half() if sampler != null else 0.0
 	for f in _features:
 		var fid: String = f["id"]

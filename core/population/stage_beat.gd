@@ -38,6 +38,7 @@ static var pushed_pos: Array = [Vector4.ZERO, Vector4.ZERO, Vector4.ZERO, Vector
 
 static func publish(venues: Array) -> void:
 	_venues = venues
+	_at_memo.clear()
 
 
 static func clear() -> void:
@@ -56,7 +57,33 @@ static func at(pos: Vector3, for_npc: bool = true) -> Dictionary:
 		return {}
 	if for_npc and not NpcDisplayPrefs.beat_sync():
 		return {}
-	return nearest(_venues, Vector2(pos.x, pos.z), Time.get_ticks_usec())
+	# Every dancing figure and every sound-reactive light asks each frame, and
+	# extrapolate() copies the entry: one copy per venue per frame is shared
+	# instead (callers only read it).
+	var p := Vector2(pos.x, pos.z)
+	var best_i := -1
+	var best_d := INF
+	for i in _venues.size():
+		var e: Dictionary = _venues[i]
+		var d := p.distance_to(e.get("pos", Vector2.INF))
+		if d <= float(e.get("radius", EARSHOT_M)) and d < best_d:
+			best_d = d
+			best_i = i
+	if best_i < 0:
+		return {}
+	var frame := Engine.get_process_frames()
+	if frame != _at_memo_frame:
+		_at_memo_frame = frame
+		_at_memo.clear()
+	var hit: Variant = _at_memo.get(best_i)
+	if hit == null:
+		hit = extrapolate(_venues[best_i], Time.get_ticks_usec())
+		_at_memo[best_i] = hit
+	return hit
+
+
+static var _at_memo: Dictionary = {}
+static var _at_memo_frame := -1
 
 
 ## Pure: the nearest entry within its radius, extrapolated to `now_us`.

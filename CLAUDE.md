@@ -4985,8 +4985,9 @@ forces `crowd_draw != none` and unpauses the clock (a NUDGE, never a claim);
 (`open_settlement_view(at, start_h)` — new third parameter, threaded through
 `SettlementView.open`). The settlement HUD shows a festival panel (people /
 camps / up-close vs crowd / seeded venues, Evening 19:30 and Morning 10:00
-jumps, Leave, Clear seeded) and its speed line reads "FESTIVAL (supplies
-assumed infinite)". `close()` hands the guardrails back and closes the view
+jumps, Leave, Clear seeded — two clicks) and its speed line reads "FESTIVAL
+(each camp's own supply)". The population slider shows a number at every
+position (at 0, the camps' own total). `close()` hands the guardrails back and closes the view
 but KEEPS the camps and venues (they are the player's site now);
 `clear_seeded()` removes exactly the prefixed venues, every painted camp's
 headcount, the demo zone/road and the fallback habitats. **Painted camps ride
@@ -5066,8 +5067,20 @@ the light tier, zero blocked after 4 sim-hours. Verify with
   kind closure from the camp's own sub-graph (plants' `biomass_kg_h`,
   catchments' `live_capture_lph` as live telemetry), suggestions keyed on
   the worst loop, `apply` drops a preset in wired to the camp's tanks.
-- Not built: a lot camp (in a zone) moved by the editor is reset by the next
-  zone re-cut; toilet types (urine / feces as their own kinds); goal cards.
+- An edit to a LOT camp (in a zone) is written to the lot too
+  (`TerrainLoader._write_edit_to_lot`): `_sync_lot_camps` mirrors the lot's
+  outline / name / style back onto the record on every sync, so the edit
+  used to be undone by the next sync. A moved or reshaped outline also LOCKS
+  the lot, so a zone re-cut keeps it.
+- Festival mode's default camps on empty lots carry `festival_seeded` on the
+  assignment (`assign_default_lot_camps`, one save); Clear takes them back
+  (`clear_seeded_lot_camps`) and leaves the player's own. A headcount the
+  player typed on their own camp (`headcount_locked`, not seeded) survives
+  Clear and Set up. Set up's supply choice applies to the camps it lays out.
+- Loops: a plant credits a BIOMASS tank in the flow engine (the camp's
+  firewood), so `CampLoopClosure` counts plants toward firewood; nothing in
+  the library makes food yet, and the food row says so.
+- Not built: toilet types (urine / feces as their own kinds); goal cards.
 
 **Venue choreography + capacity sharing (`core/population/venue_crowd.gd`,
 `npc_venue_state.gd`).** Three asks landed together on 2026-10-06:

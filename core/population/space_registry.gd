@@ -238,7 +238,8 @@ func set_space_fields(space_id: String, patch: Dictionary) -> bool:
 		return false
 	for k in patch.keys():
 		match str(k):
-			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", 					"layout", "perform_h_m", "crowd_gap_m", "music", "festival_seeded", "camp_id":
+			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", \
+					"layout", "perform_h_m", "crowd_gap_m", "music", "festival_seeded", "camp_id":
 				rec[str(k)] = patch[k]
 	_normalized(rec)
 	revision += 1

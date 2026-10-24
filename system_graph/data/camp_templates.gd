@@ -20,6 +20,19 @@ extends RefCounted
 ## position, lot id) are written onto the realized items afterwards.
 
 const DEF_PREFIX := "camp_"
+
+## A camp's supply modes (the compound's camp_supply, the habitat's
+## supply_mode) and their words: the ONE list every panel builds from.
+const SUPPLY_MODES: Array = ["infinite", "own", "shared"]
+const SUPPLY_LABELS := {"infinite": "Infinite (metered)", "own": "Own tanks", "shared": "Shared depot"}
+
+
+## [[mode, label], ...] in SUPPLY_MODES order.
+static func supply_choices() -> Array:
+	var out: Array = []
+	for m in SUPPLY_MODES:
+		out.append([m, str(SUPPLY_LABELS.get(m, m))])
+	return out
 ## Stores per PERSON, scaled by headcount at stamping (water 50 L/day).
 ## Store sizes come from CampProvisioning (rates per person × the preset's
 ## days × margin) so the templates, the inspector's Provision action and the

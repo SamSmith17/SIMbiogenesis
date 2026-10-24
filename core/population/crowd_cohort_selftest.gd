@@ -472,7 +472,8 @@ func _test_resize_in_place() -> void:
 	var same := c.count() == 10
 	for i in 10:
 		var b: Array = before[i]
-		same = same and c.ids[i] == str(b[0]) and c.pos_at(i, 14.0) == (b[1] as Vector2) 			and is_equal_approx(c.morale[i], float(b[2])) and is_equal_approx(c.needs[i * 6], float(b[3]))
+		same = same and c.ids[i] == str(b[0]) and c.pos_at(i, 14.0) == (b[1] as Vector2) \
+			and is_equal_approx(c.morale[i], float(b[2])) and is_equal_approx(c.needs[i * 6], float(b[3]))
 	_check("shrinking keeps the survivors exactly", same)
 	c.resize(30, reg)
 	_check("growing appends configure()'s ids", c.count() == 30 and c.ids[29] == "rs_npc_29"

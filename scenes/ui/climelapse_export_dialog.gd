@@ -544,7 +544,8 @@ func _refresh() -> void:
 		if timing == "spread":
 			how = "the path from the first to the last is spread over the whole video, keeping their spacing"
 			if str(o["camera_timing"]) == "auto":
-				how += " (an analemma jumps a day a frame)" if int(o["analemma"]) > 0 					else " (they are not in this range)"
+				how += " (an analemma jumps a day a frame)" if int(o["analemma"]) > 0 \
+					else " (they are not in this range)"
 		else:
 			how = "the camera reaches each at its moment on the timeline"
 			if inside < n:

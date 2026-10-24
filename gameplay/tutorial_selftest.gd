@@ -74,7 +74,8 @@ func _test_prompt_and_gating() -> int:
 	if ProgressStore.is_new_player():
 		push_error("prompt seen should clear new-player state")
 		return 1
-	if not ProgressStore.is_unlocked("category", "controllers") 			or not ProgressStore.is_unlocked("preset", "Victron 100/20"):
+	if not ProgressStore.is_unlocked("category", "controllers") \
+			or not ProgressStore.is_unlocked("preset", "Victron 100/20"):
 		push_error("gating is disabled — everything must read unlocked")
 		return 1
 	if ProgressStore._would_be_unlocked("category", "controllers"):

@@ -75,6 +75,7 @@ var _dock_body: VBoxContainer = null
 var _tool_btns: Dictionary = {}
 var _type_pick: OptionButton = null
 var _hint: Label = null
+var _flash_gen := 0
 
 
 func _ready() -> void:
@@ -141,7 +142,35 @@ func _process(_delta: float) -> void:
 	# from the data every frame — a few hundred points.
 	if not _sel.is_empty() and _drag.is_empty():
 		_reload_selected_poly()
-	queue_redraw()
+	# Redraw only when something drawn could have moved: the view (two
+	# reference points through the host's own projection catch pan, zoom and
+	# orbit), the pointer, a gesture, the selection or the data. _draw walks
+	# every camp and space and projects each vertex, which was a per-frame
+	# cost whether or not anything changed. A half-second fallback covers
+	# data edited elsewhere without a count change.
+	_redraw_fallback -= _delta
+	var sig := _redraw_signature()
+	if sig != _redraw_sig or not _drag.is_empty() or not _draw_pts.is_empty() or _redraw_fallback <= 0.0:
+		_redraw_sig = sig
+		_redraw_fallback = 0.5
+		queue_redraw()
+
+
+var _redraw_sig := ""
+var _redraw_fallback := 0.0
+
+
+func _redraw_signature() -> String:
+	var a: Variant = _to_screen.call(Vector2.ZERO) if _to_screen.is_valid() else null
+	var b: Variant = _to_screen.call(Vector2(100.0, 100.0)) if _to_screen.is_valid() else null
+	var n_camps := 0
+	var areas: Variant = _loader.get("camp_areas") if _loader != null and is_instance_valid(_loader) else null
+	if areas != null:
+		n_camps = (areas.get("areas") as Array).size()
+	var reg: Variant = _loader.get("npc_spaces") if _loader != null and is_instance_valid(_loader) else null
+	var rev := int(reg.get("revision")) if reg != null else -1
+	return "%s|%s|%s|%s|%s|%d|%d|%s|%.0f" % [str(a), str(b), str(get_local_mouse_position()),
+		str(_hover_world), str(_sel.get("id", "")), n_camps, rev, tool, _clip_y]
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +596,6 @@ func undo() -> void:
 		"camp_deleted":
 			if _loader != null and _loader.has_method("undo_camps"):
 				_loader.call("undo_camps")
-				_loader.call("_push_camps_to_graph")
 		"prop_move":
 			PlacedPropService.update_prop_record(_main, str(u["id"]), u["patch"], true)
 	_reload_selected_poly()
@@ -847,9 +875,17 @@ func _build_camp_card() -> void:
 	ppl.value = int(rec.get("headcount", 0))
 	ppl.suffix = "people"
 	ppl.tooltip_text = "Exactly how many people live here (0 = scenery, nobody)"
-	ppl.value_changed.connect(func(v: float) -> void:
-		if _loader != null:
-			_loader.call("update_camp_area", id, {"headcount": int(v)}))
+	# Debounced: each commit rebuilds the camp's meshes and re-syncs the
+	# graph, and holding an arrow used to do that every step.
+	var ppl_timer := Timer.new()
+	ppl_timer.one_shot = true
+	ppl_timer.wait_time = 0.3
+	ppl.add_child(ppl_timer)
+	ppl_timer.timeout.connect(func() -> void:
+		if _loader != null and int(ppl.value) != int(_camp_rec(id).get("headcount", -1)):
+			_loader.call("update_camp_area", id, {"headcount": int(ppl.value)}))
+	ppl.value_changed.connect(func(_v: float) -> void:
+		ppl_timer.start())
 	_dock_body.add_child(_row("People", ppl))
 	var style := OptionButton.new()
 	for sid in CampStyles.STYLES.keys():
@@ -869,6 +905,7 @@ func _build_camp_card() -> void:
 	_dock_body.add_child(row)
 	var tune := Button.new()
 	tune.text = "Tune look…"
+	tune.tooltip_text = "Tents, vehicles, density and layout of this camp, in a studio preview"
 	UITheme.style_button(tune)
 	tune.pressed.connect(func() -> void:
 		if _loader != null:
@@ -917,7 +954,7 @@ func _add_supply_rows(camp_key: String) -> void:
 	for group in [["inputs", "Water, food, wood"], ["wastes", "Grey, black water"]]:
 		var opt := OptionButton.new()
 		var cur := str(modes.get(str(group[0]), "infinite"))
-		for m in [["infinite", "Infinite (metered)"], ["own", "Own tanks"], ["shared", "Shared depot"]]:
+		for m in CampTemplates.supply_choices():
 			opt.add_item(str(m[1]))
 			opt.set_item_metadata(opt.item_count - 1, str(m[0]))
 			if str(m[0]) == cur:
@@ -938,6 +975,15 @@ func _delete_button() -> Button:
 		if not armed[0]:
 			armed[0] = true
 			del.text = "Click again to delete"
+			# Disarm after a few seconds, so a stray click later never deletes.
+			# A weak reference: the dock may free the button first, and a
+			# lambda holding a freed object errors when the timer fires.
+			var wr: WeakRef = weakref(del)
+			get_tree().create_timer(3.0).timeout.connect(func() -> void:
+				var b: Button = wr.get_ref()
+				if b != null:
+					armed[0] = false
+					b.text = "Delete")
 			return
 		delete_selected())
 	return del
@@ -969,7 +1015,13 @@ func _lbl(t: String) -> Label:
 func _flash(t: String) -> void:
 	if _hint != null:
 		_hint.text = t
-		get_tree().create_timer(2.5).timeout.connect(_set_hint)
+		# Only the newest flash clears the hint (an older timer would cut the
+		# newer message short).
+		_flash_gen += 1
+		var gen := _flash_gen
+		get_tree().create_timer(2.5).timeout.connect(func() -> void:
+			if gen == _flash_gen:
+				_set_hint())
 
 
 # ---------------------------------------------------------------------------

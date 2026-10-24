@@ -532,8 +532,27 @@ var _chores_sig := "<unbuilt>"
 func _refresh_roster() -> void:
 	var board := _board()
 	var abs_h: float = _bridge.current_abs_hours()
+	# A camp simulated as a crowd (the light tier) has no people up close, so
+	# there is no roster to list; the title's headcount used to sit over an
+	# empty list with no word why.
+	if _bridge.has_method("tier_of") and str(_bridge.tier_of(_item_id)) == CrowdFocus.TIER_LIGHT:
+		var n := int((_bridge.summary_for(_item_id) as Dictionary).get("count", 0))
+		var lsig := "light|%d" % n
+		if lsig == _roster_sig:
+			return
+		_roster_sig = lsig
+		for c in _roster_box.get_children():
+			c.queue_free()
+		var note := Label.new()
+		note.text = "This camp is simulated as a crowd right now: %s, none up close. Look at the camp from nearby (or watch it) to see each person." % UiText.count(n, "person", "people")
+		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		note.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		_roster_box.add_child(note)
+		return
 	var sig := ""
-	for a in _bridge.roster_for(_item_id):
+	var roster: Array = _bridge.roster_for(_item_id)
+	for a in roster:
 		var ag: NpcAgent = a
 		var hrs := 0.0
 		if board != null:
@@ -547,7 +566,7 @@ func _refresh_roster() -> void:
 	UITheme.keep_scroll(_roster_box).call()
 	for c in _roster_box.get_children():
 		c.queue_free()
-	for a in _bridge.roster_for(_item_id):
+	for a in roster:
 		var agent: NpcAgent = a
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
@@ -687,7 +706,11 @@ func _bed_tooltip(agent_id: String) -> String:
 
 func _space_display_name(sp: Dictionary) -> String:
 	var name := str(sp.get("label", ""))
-	return name if not name.is_empty() else "Sleep spot %s" % str(sp.get("id", ""))
+	if not name.is_empty():
+		return name
+	# No label: the space's kind in words, never its raw id.
+	return "%s %s" % [SpaceTypes.label(str(sp.get("space_type", "sleep"))),
+		str(sp.get("id", "")).trim_prefix("sp_")]
 
 
 ## Pick this person's bed. Assigning a spot that belongs to somebody else
@@ -871,6 +894,7 @@ func _refresh_chores() -> void:
 		_consequence_hint.text = NpcConsequence.blurb(pol)
 	var abs_h: float = _bridge.current_abs_hours()
 	var weather: Dictionary = _bridge.current_weather()
+	var roster_n: int = _bridge.roster_size_for(_item_id)
 	# Rebuild only when the DISPLAYED content changed (progress snapped to
 	# 0.1 h, so a working crew redraws in readable steps rather than every
 	# refresh) — a blind rebuild dismisses tooltips mid-hover.
@@ -886,8 +910,7 @@ func _refresh_chores() -> void:
 			str(ch.get("covered_by", "")),
 			str(ch.get("held", false)),
 			str(ch.get("orphaned_from", "")),
-			board.blocked_reason(ch, abs_h, fposmod(abs_h, 24.0), weather,
-				_bridge.roster_size_for(_item_id))]
+			board.blocked_reason(ch, abs_h, fposmod(abs_h, 24.0), weather, roster_n)]
 	if sig == _chores_sig:
 		return
 	_chores_sig = sig
@@ -941,10 +964,7 @@ func _refresh_chores() -> void:
 		# daily one looked identical, and priority was authored and then never
 		# shown again anywhere.
 		var pri := int(chore.get("priority", 0))
-		var pri_name := "Normal"
-		for band in PRIORITIES:
-			if int((band as Array)[1]) == pri:
-				pri_name = str((band as Array)[0])
+		var pri_name := NpcChoreBoard.band_name(pri)
 		var done_today := int(chore.get("done_day", -1)) == day
 		var held := bool(chore.get("held", false))
 		# The one line that says why a chore is not moving — the honesty this

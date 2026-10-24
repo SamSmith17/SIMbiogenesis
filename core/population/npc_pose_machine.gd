@@ -552,7 +552,8 @@ func _begin_oneshot(new_state: int, clip: String, blend: float) -> void:
 func _begin_walk(_activity: String) -> void:
 	# Leaving a seated or lying pose gets its stand-up first.
 	var pair := _transitions_for(_current_pose)
-	if (_state == State.POSE or _state == State.ENTER) 			and not String(pair[1]).is_empty() and _has(String(pair[1])):
+	if (_state == State.POSE or _state == State.ENTER) \
+			and not String(pair[1]).is_empty() and _has(String(pair[1])):
 		_begin_oneshot(State.EXIT, String(pair[1]), BLEND_FAST)
 		return
 	_current_pose = ""

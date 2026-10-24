@@ -498,16 +498,24 @@ func _blocked_dict(i: int) -> Dictionary:
 	return d
 
 
+## Blocked bits exist only for the six needs; a non-need name (a chore, a
+## mingle stint) is never blocked and never marks one. Shifting by find()'s
+## -1 was undefined.
 func _is_blocked(i: int, name: String) -> bool:
-	return (blocked[i] & (1 << NpcAgent.NEEDS.find(name))) != 0
+	var k := NpcAgent.NEEDS.find(name)
+	return k >= 0 and (blocked[i] & (1 << k)) != 0
 
 
 func _mark_blocked(i: int, name: String) -> void:
-	blocked[i] = blocked[i] | (1 << NpcAgent.NEEDS.find(name))
+	var k := NpcAgent.NEEDS.find(name)
+	if k >= 0:
+		blocked[i] = blocked[i] | (1 << k)
 
 
 func _clear_blocked(i: int, name: String) -> void:
-	blocked[i] = blocked[i] & ~(1 << NpcAgent.NEEDS.find(name))
+	var k := NpcAgent.NEEDS.find(name)
+	if k >= 0:
+		blocked[i] = blocked[i] & ~(1 << k)
 
 
 func _update_morale(i: int, t: float, ctx: Dictionary) -> void:
@@ -603,7 +611,8 @@ func _fire(i: int, t: float, ctx: Dictionary) -> void:
 			# At a LIVE venue the venue speaks first: an EVENT phase holds the
 			# person (the cap moves), a phase change re-seats them, the
 			# collapse starts the circle. Only then does the clock get a say.
-			if act[i] == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(space_type[i]) 					and _service_live_venue(i, t, ctx):
+			if act[i] == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(space_type[i]) \
+					and _service_live_venue(i, t, ctx):
 				pass
 			elif act[i] == A_PERFORM and t < end_h[i] - 1e-6 and _perform.has(i) \
 					and not ((_perform[i] as Dictionary).get("orbit", {}) as Dictionary).is_empty():
@@ -1639,7 +1648,7 @@ func _poll_queue(i: int, t: float, ctx: Dictionary) -> void:
 	if t - queue_since[i] >= QUEUE_MAX_H:
 		# Gave up: the need stays, retry elsewhere after the backoff.
 		var name := str(ACT_NAMES[act[i]])
-		if not name.is_empty() and name != NpcAgent.CHORE_ACTIVITY:
+		if ACT_OF_NEED.has(name):
 			_mark_blocked(i, name)
 		state[i] = S_IDLE
 		space_id[i] = ""
@@ -2132,8 +2141,8 @@ func _status_line(i: int) -> String:
 						return "watching the burn" if (vpose[i] == VPOSE_SIT or vpose[i] == VPOSE_LIE) else "at the effigy"
 					if vpose[i] == VPOSE_RAVE:
 						return "raving (Bass Stage)"
-					return "%s" % SpaceTypes.label(space_type[i])
-				_: return name
+					return "at the %s" % SpaceTypes.label(space_type[i]).to_lower()
+				_: return NpcAgent.activity_words(name)
 		S_CIRCLE:
 			return "circling the fire"
 		S_TRAVEL:
@@ -2147,9 +2156,19 @@ func _status_line(i: int) -> String:
 				return "wandering" if vpose[i] == VPOSE_STAND else "joining friends"
 			if act[i] == A_PERFORM:
 				return "heading to the decks"
-			return "heading to %s" % (SpaceTypes.label(space_type[i]) if not space_type[i].is_empty() else name)
+			return "heading to %s" % (SpaceTypes.label(space_type[i]) if not space_type[i].is_empty()
+				else NpcAgent.activity_words(name))
 		S_QUEUE:
+			if space_type[i].is_empty():
+				return "queueing"
 			return "queueing for %s" % SpaceTypes.label(space_type[i])
+	# Idle with a need nothing on site can meet: say so, as the full tier
+	# does ("waiting — no shower"), instead of a bare "idle".
+	if blocked[i] != 0:
+		for k in 6:
+			if blocked[i] & (1 << k):
+				var w: Array = NpcAgent.ACTIVITY_WORDS.get(str(NpcAgent.NEEDS[k]), [])
+				return "waiting — no %s" % (str(w[1]) if w.size() > 1 else str(NpcAgent.NEEDS[k]))
 	return "idle"
 
 

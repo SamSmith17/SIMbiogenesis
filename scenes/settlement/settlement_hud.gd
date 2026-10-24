@@ -39,6 +39,9 @@ var _fest_notes: Label = null
 var _fest_sig := "<unbuilt>"
 var _fest_pop_slider: HSlider = null
 var _fest_pop_lbl: Label = null
+## The camps' own headcount total (the festival status's "natural"): what the
+## slider's 0 position means, shown as that number rather than a word.
+var _fest_natural := 0
 var _fest_pop_timer: Timer = null
 const FESTIVAL_SETUP_CARD := preload("res://scenes/settlement/festival_setup_card.gd")
 var _setup_card: Node = null
@@ -135,7 +138,7 @@ func _build() -> void:
 	_speed_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	tl.add_child(_speed_lbl)
 	var keys := Label.new()
-	keys.text = "Wheel zoom · drag pan · right-drag orbit · F follow · G drop in · Esc leave"
+	keys.text = "Wheel zoom · drag pan · right-drag orbit · F follow · E edit site · G drop in · Esc leave"
 	keys.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	keys.custom_minimum_size = Vector2(STATUS_W - 24.0, 0)
 	keys.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -262,8 +265,8 @@ func _build_festival_panel() -> void:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(hint)
 	# Population: the festival's total headcount — the knob for how many
-	# people this machine draws (the natural split comes from the camps'
-	# areas). Applied on release (each change resizes every roster in place).
+	# people this machine draws (0 = each camp's own headcount, from its
+	# area). Applied on release (each change resizes every roster in place).
 	var pop_row := HBoxContainer.new()
 	pop_row.add_theme_constant_override("separation", 6)
 	v.add_child(pop_row)
@@ -278,7 +281,7 @@ func _build_festival_panel() -> void:
 	_fest_pop_slider.step = 20
 	_fest_pop_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_fest_pop_slider.custom_minimum_size.x = 150
-	_fest_pop_slider.tooltip_text = "Total festival population. 0 = natural (from the camps' painted areas). Fewer people = a faster sim at high speeds."
+	_fest_pop_slider.tooltip_text = "Total festival population, split by each camp's size. All the way left = each camp's own headcount (from its painted area, or the number you typed). Fewer people = a faster sim at high speeds."
 	_fest_pop_slider.value = PopTestPrefs.festival_target_people()
 	pop_row.add_child(_fest_pop_slider)
 	_fest_pop_lbl = Label.new()
@@ -295,9 +298,9 @@ func _build_festival_panel() -> void:
 		if fm0 != null:
 			fm0.call("set_target_people", int(_fest_pop_slider.value)))
 	_fest_pop_slider.value_changed.connect(func(val: float) -> void:
-		_fest_pop_lbl.text = "natural" if val <= 0.0 else str(int(val))
+		_fest_pop_lbl.text = _pop_text(val)
 		_fest_pop_timer.start())
-	_fest_pop_lbl.text = "natural" if _fest_pop_slider.value <= 0.0 else str(int(_fest_pop_slider.value))
+	_fest_pop_lbl.text = _pop_text(_fest_pop_slider.value)
 	# FUCK YES!!! contagion (PopTestPrefs.peak_contagion, live).
 	var cont_row := HBoxContainer.new()
 	cont_row.add_theme_constant_override("separation", 6)
@@ -362,8 +365,23 @@ func _build_festival_panel() -> void:
 	var clear := Button.new()
 	UITheme.style_button(clear)
 	clear.text = "Clear seeded"
-	clear.tooltip_text = "Remove what festival mode seeded: its venues, every painted camp's headcount, the demo zone"
+	clear.tooltip_text = "Remove what festival mode seeded: its venues, the camps it gave empty lots, painted camps' headcounts (not ones you typed), the demo zone. Click twice."
+	# Two clicks, like the site editor's Delete: one stray click used to
+	# remove every seeded venue and headcount.
+	var armed := [false]
 	clear.pressed.connect(func() -> void:
+		if not armed[0]:
+			armed[0] = true
+			clear.text = "Click again to clear"
+			var wr: WeakRef = weakref(clear)
+			get_tree().create_timer(3.0).timeout.connect(func() -> void:
+				var b: Button = wr.get_ref()
+				if b != null:
+					armed[0] = false
+					b.text = "Clear seeded")
+			return
+		armed[0] = false
+		clear.text = "Clear seeded"
 		var fm := _festival_mode()
 		if fm != null:
 			fm.call("clear_seeded"))
@@ -467,8 +485,11 @@ func _refresh_festival_panel() -> void:
 	_fest_status.text = "%s in %s%s · %s" % [
 		UiText.count(people, "person"), UiText.count(int(st.get("camps", 0)), "camp"), tiers,
 		UiText.count(int(st.get("venues", 0)), "seeded venue")]
+	_fest_natural = int(st.get("natural", 0))
+	if _fest_pop_lbl != null and _fest_pop_slider != null and _fest_pop_slider.value <= 0.0:
+		_fest_pop_lbl.text = _pop_text(0.0)
 	if int(st.get("target", 0)) > 0 and int(st.get("natural", 0)) > 0:
-		_fest_status.text += "\nScaled from %d (natural) to %d." % [int(st["natural"]), int(st["target"])]
+		_fest_status.text += "\nScaled from the camps' own %d to %d." % [int(st["natural"]), int(st["target"])]
 	if people == 0:
 		_fest_status.text += "\nNobody yet — the sim starts on the next tick (unpause the clock if it is paused)."
 	var tail := PackedStringArray()
@@ -622,3 +643,10 @@ func _refresh() -> void:
 static func _clock(abs_h: float) -> String:
 	var h := fposmod(abs_h, 24.0)
 	return "%02d:%02d" % [int(h), int(fposmod(h * 60.0, 60.0))]
+
+
+## The population slider's number: the target, or at 0 the camps' own total.
+func _pop_text(val: float) -> String:
+	if val > 0.0:
+		return str(int(val))
+	return str(_fest_natural)

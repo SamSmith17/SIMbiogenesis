@@ -1015,7 +1015,8 @@ func _begin_water_modulate() -> void:
 	# A pond is filled only when the hollow is a real part of what was drawn: a
 	# wide area over a stream holds some 20 cm dimple in the channel bed, and
 	# filling that instead of raining on the area is not what anyone meant.
-	var basin_share := float(_basin_cache.get("area_m2", 0.0)) 		/ maxf(BuildingBuilder.footprint_area_m2(_selection_poly), 1.0)
+	var basin_share := float(_basin_cache.get("area_m2", 0.0)) \
+		/ maxf(BuildingBuilder.footprint_area_m2(_selection_poly), 1.0)
 	if _state.active_tool == "rain" and (not bool(_basin_cache.get("valid", false))
 			or basin_share < POND_MIN_SHARE):
 		# Open ground: rain a storm there. Its runoff finds the streams below.

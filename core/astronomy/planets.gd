@@ -222,7 +222,8 @@ func _update_labels() -> void:
 		var lbl : Label = _labels.get(pname)
 		if lbl == null:
 			continue
-		var show := mode != LabelsMode.OFF and cam != null and not sun_up 			and bool(get(pname + "_enabled")) and float(planet_altitudes[pname]) > 0.0
+		var show := mode != LabelsMode.OFF and cam != null and not sun_up \
+			and bool(get(pname + "_enabled")) and float(planet_altitudes[pname]) > 0.0
 		if not show:
 			lbl.visible = false
 			continue

@@ -420,7 +420,9 @@ func _test_modifiers_and_bulbs() -> void:
 	ModifierKeys.reset()
 	_check("focus loss resets the modifiers", not ModifierKeys.selecting())
 	_check("show bulb: off for omni/spot, on for strings",
-		not bool(PlacedLightStyles.defaults("omni")["show_body"]) 		and not bool(PlacedLightStyles.defaults("spot")["show_body"]) 		and bool(PlacedLightStyles.defaults("string")["show_body"]))
+		not bool(PlacedLightStyles.defaults("omni")["show_body"]) \
+		and not bool(PlacedLightStyles.defaults("spot")["show_body"]) \
+		and bool(PlacedLightStyles.defaults("string")["show_body"]))
 
 	var main := Node3D.new()
 	main.name = "SelftestLightsMain2"

@@ -251,7 +251,8 @@ static func follow_camp(reg: SpaceRegistry, camp_key: String, poly: PackedVector
 ## Is this space record festival mode's own (Clear removes it, Move carries
 ## it)? The flag, else the label prefix (records saved before the flag).
 static func is_seeded_space(rec: Dictionary) -> bool:
-	return bool(rec.get("festival_seeded", false)) 		or str(rec.get("label", "")).begins_with(LABEL_PREFIX)
+	return bool(rec.get("festival_seeded", false)) \
+		or str(rec.get("label", "")).begins_with(LABEL_PREFIX)
 
 
 # ---------------------------------------------------------------------------

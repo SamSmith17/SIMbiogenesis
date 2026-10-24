@@ -43,7 +43,10 @@ func rebuild(main: Node) -> void:
 		# Festival mode seeds a sleep area over EVERY camp outline and a
 		# kitchen inside it; the tents already show where those are, and 35
 		# pale blobs over 35 camps hid the camps at block height.
-		if str(sd.get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX) 				and (stype == "sleep" or stype == "kitchen"):
+		# Seeded = flagged, linked to a camp, or (older saves) by label.
+		var seeded := FestivalSeedLayout.is_seeded_space(sd) \
+				or not str(sd.get("camp_id", "")).is_empty()
+		if seeded and (stype == "sleep" or stype == "kitchen"):
 			continue
 		var col: Color = SpaceTypes.COLORS.get(stype, Color(0.6, 0.7, 0.9))
 		col.a = 0.30

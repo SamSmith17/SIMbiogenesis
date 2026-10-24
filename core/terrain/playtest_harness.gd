@@ -12271,12 +12271,24 @@ func _run_festival_capture() -> void:
 		lots = placement.lots_for_zone(zid)
 	for _i in 4:
 		await get_tree().process_frame
-	var camps: Array = sgv.call("festival_camps")
-	print("PlaytestHarness: festival — road %s, zone %s: %d lots, %d people, %d camp compounds" % [
-		rid, zid, lots.size(), people, camps.size()])
-	_fest_result(lots.size() >= 12 and camps.size() - camps_before == lots.size() and people >= 200,
-		"placement → graph: %d lots became %d new camp compounds (%d people; %d were already there)" % [
-			lots.size(), camps.size() - camps_before, people, camps_before])
+	var camps_all: Array = sgv.call("festival_camps")
+	# Everything below measures THIS capture's camps: the lots it just cut.
+	# Walton is saved mid-festival (40 compounds, ~1000 people), and some of
+	# those compounds carried lot ids the new cut reuses, so counting "new
+	# compounds" or dividing the whole site's water by this zone's people
+	# failed on the world, not the code.
+	var my_lots := {}
+	for l: Dictionary in lots:
+		my_lots[str(l["lot_id"])] = true
+	var camps: Array = []
+	for c in camps_all:
+		if my_lots.has(str((c as Dictionary)["lot_id"])):
+			camps.append(c)
+	print("PlaytestHarness: festival — road %s, zone %s: %d lots, %d people, %d camp compounds (%d on the site)" % [
+		rid, zid, lots.size(), people, camps.size(), camps_all.size()])
+	_fest_result(lots.size() >= 12 and camps.size() == lots.size() and people >= 200,
+		"placement → graph: every one of the %d lots has its camp compound (%d; %d people; %d compounds were already on the site)" % [
+			lots.size(), camps.size(), people, camps_before])
 
 	# --- 2. venues + infrastructure --------------------------------------------
 	var reg: SpaceRegistry = bridge.call("registry_for", main)
@@ -12327,15 +12339,19 @@ func _run_festival_capture() -> void:
 		flow0.call("clear_timelines")
 
 	# --- 3. one sim-day at speed, graph closed --------------------------------
+	# The vibe, the tier counts and the water cut are SITE-WIDE (every camp's
+	# habitat — the light-tier count below is too); only the per-person water
+	# figure is this zone's camps, since it divides by this zone's people.
 	var hab_ids: Array = []
 	var water_cap := 0.0
-	for c in camps:
+	for c in camps_all:
+		var mine := my_lots.has(str((c as Dictionary)["lot_id"]))
 		for it in model.get_items_in_scope(str(c["scope"])):
 			var d: Dictionary = it
 			var sp: Dictionary = d.get("specs", {})
 			if str(sp.get("role", "")) == "habitat":
 				hab_ids.append(str(d["id"]))
-			elif str(d.get("type", "")) == "resource" and str(sp.get("resource_kind", "")) == "water":
+			elif mine and str(d.get("type", "")) == "resource" and str(sp.get("resource_kind", "")) == "water":
 				water_cap += float(sp.get("capacity_qty", 0.0)) * float(sp.get("level", 0.0))
 	var stage_in: Array = []
 	var stage_out: Array = []
@@ -12453,22 +12469,30 @@ func _run_festival_capture() -> void:
 	for c in camps:
 		if (model.get_item(str(c["id"])) as Dictionary).get("specs", {}).has("camp_soc"):
 			soc_stamped += 1
-	_fest_result(pstates.size() == camps.size() and soc_stamped == camps.size(),
-		"every camp runs its own power model (%d states, %d SOC stamps)" % [pstates.size(), soc_stamped])
+	var my_states := 0
+	for c in camps:
+		if pstates.has(str(c["id"])):
+			my_states += 1
+	_fest_result(my_states == camps.size() and soc_stamped == camps.size(),
+		"every camp runs its own power model (%d of %d with a state, %d SOC stamps)" % [
+			my_states, camps.size(), soc_stamped])
 	var fest := CampLedger.festival(model)
 	var totals: Dictionary = fest.get("totals", {})
 	var wrow: Dictionary = totals.get("water", {})
 	print("PlaytestHarness: festival — ledger: %d people, water demand %.1f L/h vs supply %.1f, open kinds across camps: %s" % [
 		int(fest.get("people", 0)), float(wrow.get("demand", 0.0)), float(wrow.get("supply", 0.0)) + float(wrow.get("imports", 0.0)),
 		str(_fest_open_kinds(fest))])
-	_fest_result(int(fest.get("people", 0)) - people_before == people,
-		"the festival ledger counts the lots' people (%d over the %d already there)" % [
-			int(fest.get("people", 0)) - people_before, people_before])
+	var my_people := 0
+	for c in camps:
+		my_people += int(((model.get_item(str(c["id"])) as Dictionary).get("specs", {}) as Dictionary).get("camp_headcount", 0))
+	_fest_result(my_people == people and int(fest.get("people", 0)) >= people,
+		"the festival ledger counts the lots' people (%d on this zone's camps, %d festival-wide)" % [
+			my_people, int(fest.get("people", 0))])
 	var v_before: Dictionary = vibe_samples[vibe_samples.size() - 1] if not vibe_samples.is_empty() else {}
 	print("PlaytestHarness: festival — vibe after the day: %s" % FestivalVibe.headline(v_before, vibe.trend()))
 
 	# --- 4. cut the water: the vibe must answer -------------------------------
-	for c in camps:
+	for c in camps_all:
 		for it in model.get_items_in_scope(str(c["scope"])):
 			var d: Dictionary = it
 			var sp: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)
@@ -12586,6 +12610,7 @@ func _lc_move(vp: Viewport, pos: Vector2, ctrl: bool = false, shift: bool = fals
 func _lc_click(vp: Viewport, pos: Vector2, double: bool = false) -> void:
 	await _lc_move(vp, pos)
 	await _lc_press(vp, pos, true, double)
+	_lc_held_motion(vp, pos, false, false)
 	await _lc_press(vp, pos, false)
 
 
@@ -12594,7 +12619,23 @@ func _lc_drag(vp: Viewport, a: Vector2, b: Vector2, ctrl: bool = false, shift: b
 	await _lc_press(vp, a, true, false, ctrl, shift)
 	for i in range(1, 13):
 		await _lc_move(vp, a.lerp(b, float(i) / 12.0), ctrl, shift)
+	_lc_held_motion(vp, b, ctrl, shift)
 	await _lc_press(vp, b, false, false, ctrl, shift)
+
+
+## HarnessInput.click's race guard for these older helpers: a REAL motion
+## arriving between press and release (the captured cursor re-centring) moved
+## BaseButton's pressing_inside off the button and the click was lost. A held
+## motion at the release point, pushed in the same frame as the release (no
+## await between), puts it back. Same coordinates as _lc_press (raw window).
+func _lc_held_motion(vp: Viewport, pos: Vector2, ctrl: bool, shift: bool) -> void:
+	var mm := InputEventMouseMotion.new()
+	mm.position = pos
+	mm.global_position = pos
+	mm.ctrl_pressed = ctrl
+	mm.shift_pressed = shift
+	mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+	vp.push_input(mm)
 
 
 ## The nearest point to `want` (same ring scan outward) where the Light
@@ -12631,7 +12672,8 @@ func _lc_open_ground(main: Node, want: Vector3, fwd: Vector3) -> Vector3:
 				break
 		if not ok:
 			continue
-		if loader != null and loader.has_method("camp_area_at") 				and not str(loader.call("camp_area_at", Vector2(cx, cz))).is_empty():
+		if loader != null and loader.has_method("camp_area_at") \
+				and not str(loader.call("camp_area_at", Vector2(cx, cz))).is_empty():
 			continue
 		for rec in props:
 			var rd := rec as Dictionary

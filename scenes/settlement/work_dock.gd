@@ -195,27 +195,37 @@ func _refresh() -> void:
 	var weather: Dictionary = _bridge.call("current_weather")
 	var roster := int(_bridge.call("roster_size_for", _first_iid()))
 	var sig := ""
+	# Each chore's blocked reason, worked out ONCE per refresh: the rollup,
+	# the signature and the row's tooltip all read it.
+	var reasons: Dictionary = {}
+	var name_fn := func(aid: String) -> String: return _name_of(aid)
+	var hod := fposmod(abs_h, 24.0)
 	for c in ordered:
 		var ch: Dictionary = c
 		var w := (ch.get("workers", []) as Array).size()
 		var mn := int(ch.get("min_workers", 1))
+		var reason := ""
+		if board.has_method("blocked_reason"):
+			reason = str(board.call("blocked_reason", ch, abs_h, hod, weather, roster, name_fn))
+		reasons[str(ch.get("id", ""))] = reason
 		if int(ch.get("done_day", -1)) == day:
 			done += 1
 		elif w >= mn and w > 0:
 			working += w
 		elif w > 0:
 			waiting += w
-		elif board.has_method("blocked_reason"):
+		elif not reason.is_empty():
 			# Idle AND unexplainable is fine; idle WITH a reason feeds the
 			# rollup below — the one-line answer to "why is nobody working".
-			var reason := str(board.call("blocked_reason", ch, abs_h,
-				fposmod(abs_h, 24.0), weather, roster))
-			if not reason.is_empty():
-				var cat := "%s %s" % [NpcChoreBoard.reason_glyph(reason),
-					_reason_category(reason)]
-				blocked[cat] = int(blocked.get(cat, 0)) + 1
-		sig += "%s|%d|%d|%d;" % [str(ch.get("id", "")), w,
-			int(ch.get("priority", 0)), int(ch.get("done_day", -1))]
+			var cat := "%s %s" % [NpcChoreBoard.reason_glyph(reason),
+				_reason_category(reason)]
+			blocked[cat] = int(blocked.get(cat, 0)) + 1
+		# Everything a row shows (the Routines panel's list): a hold, an
+		# assignment or a reason changed from another panel must rebuild it.
+		sig += "%s|%s|%d|%d|%d|%s|%s|%s|%s;" % [str(ch.get("id", "")),
+			str(ch.get("label", "")), w, int(ch.get("priority", 0)),
+			int(ch.get("done_day", -1)), str(ch.get("held", false)),
+			str(ch.get("assigned_to", "")), str(ch.get("covered_by", "")), reason]
 	var line := "%d working · %d waiting · %d done today" % [
 		working, waiting, done]
 	if not blocked.is_empty():
@@ -254,7 +264,8 @@ func _refresh() -> void:
 		_rows.add_child(none)
 		return
 	for c in ordered:
-		_rows.add_child(_chore_row(board, c as Dictionary, day))
+		_rows.add_child(_chore_row(board, c as Dictionary, day,
+			str(reasons.get(str((c as Dictionary).get("id", "")), ""))))
 
 
 ## Fit the scroll to the board, capped so the dock never runs off a 720p
@@ -265,7 +276,7 @@ func _size_rows_scroll(row_count: int) -> void:
 	_rows_scroll.custom_minimum_size.y = minf(maxf(float(row_count), 1.0) * 27.0 + 4.0, ROWS_MAX_PX)
 
 
-func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
+func _chore_row(board: Variant, chore: Dictionary, day: int, reason: String) -> Control:
 	var cid := str(chore.get("id", ""))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", UITheme.SPACE_XS)
@@ -294,13 +305,6 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 		- float(chore.get("progress_h", 0.0)), 0.0)
 	# blocked_reason in the tooltip: the dock is where the player WATCHES, so
 	# "why is this not moving" must be answerable without leaving it.
-	var reason := ""
-	if board != null and board.has_method("blocked_reason"):
-		var abs_h: float = _bridge.call("current_abs_hours")
-		reason = str(board.call("blocked_reason", chore, abs_h,
-			fposmod(abs_h, 24.0), _bridge.call("current_weather"),
-			int(_bridge.call("roster_size_for", _first_iid())),
-			func(aid: String) -> String: return _name_of(aid)))
 	# Who is actually on it: cover outranks assignment (same rule as the
 	# planner's Schedule tab).
 	var cov := str(chore.get("covered_by", ""))
@@ -347,6 +351,12 @@ func _chore_row(board: Variant, chore: Dictionary, day: int) -> Control:
 	var pv := int(chore.get("priority", 0))
 	pri.text = "▲" if pv < 50 else ("▼" if pv > 50 else "–")
 	pri.tooltip_text = "Priority: %s (click to cycle). Lower sorts first." % _band_name(pv)
+	# A system-minted chore (machine, rota, alarm, project) carries a priority
+	# its minter chose; one click here used to drop an alarm to Normal.
+	var badge: Array = NpcChoreBoard.system_badge(chore)
+	if not badge.is_empty():
+		pri.disabled = true
+		pri.tooltip_text = "Priority: %s — %s" % [_band_name(pv), str(badge[1])]
 	pri.pressed.connect(func() -> void:
 		board.call("update_chore", cid, {"priority": _next_band(pv)})
 		_sig = "<unbuilt>"

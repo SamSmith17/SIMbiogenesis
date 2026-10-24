@@ -97,7 +97,7 @@ func _build() -> void:
 	for c in SUPPLY_CHOICES:
 		_supply.add_item(str(c[1]))
 		_supply.set_item_metadata(_supply.item_count - 1, str(c[0]))
-	_supply.tooltip_text = "Infinite: nothing runs out, every litre and kilo is metered per camp (the calculator). Own: each camp's tanks drain and fill. Shared: camps draw from site depots. Change it per camp later."
+	_supply.tooltip_text = "Infinite: nothing runs out, every litre and kilo is metered per camp (the calculator). Own: each camp's tanks drain and fill. Shared: camps draw from site depots. Applies to the camps laid out here; camps of your own keep theirs. Change any camp later."
 	b.add_child(_supply)
 	b.add_child(_lbl("Shared venues to add (where the site has none yet)"))
 	var grid := GridContainer.new()

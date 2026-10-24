@@ -4369,7 +4369,8 @@ func _test_rig_assets() -> void:
 		var fig2 := NpcRig.build_figure()
 		if fig2 != null:
 			var ap2 := NpcRig.find_anim_player(fig2)
-			if ap2 != null and ap2.has_animation(NpcRig.CLIP_IDLE) 					and ap2.has_animation(NpcRig.CLIP_WALK):
+			if ap2 != null and ap2.has_animation(NpcRig.CLIP_IDLE) \
+					and ap2.has_animation(NpcRig.CLIP_WALK):
 				var idle_y := _hips_rest_y(ap2.get_animation(NpcRig.CLIP_IDLE))
 				var walk_y := _hips_rest_y(ap2.get_animation(NpcRig.CLIP_WALK))
 				_check("retargeted idle stands at native hip height",

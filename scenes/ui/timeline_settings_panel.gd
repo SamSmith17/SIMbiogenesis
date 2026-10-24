@@ -3874,7 +3874,8 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 		PopTestPrefs.save())
 	prov_row.add_child(prov_opt)
 	v.add_child(prov_row)
-	# Festival population: the total the camps are scaled to (0 = natural).
+	# Festival population: the total the camps are scaled to (0 = each
+	# camp's own headcount).
 	# A performance knob as much as a taste — fewer people, faster sim.
 	var pop_row := HBoxContainer.new()
 	pop_row.add_theme_constant_override("separation", 8)
@@ -3888,7 +3889,7 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	pop_spin.max_value = PopTestPrefs.MAX_FESTIVAL_TARGET
 	pop_spin.step = 10
 	pop_spin.value = PopTestPrefs.festival_target_people()
-	pop_spin.tooltip_text = "Total people across every festival camp, split by each camp's painted size. 0 = natural (from the camps' areas). Applies live; rosters grow and shrink in place."
+	pop_spin.tooltip_text = "Total people across every festival camp, split by each camp's painted size. 0 = each camp's own headcount (from its area, or the number you typed). Applies live; rosters grow and shrink in place."
 	pop_spin.value_changed.connect(func(val: float) -> void:
 		var main0 := get_tree().current_scene
 		var fm0: Variant = main0.get("festival_mode") if main0 != null and "festival_mode" in main0 else null

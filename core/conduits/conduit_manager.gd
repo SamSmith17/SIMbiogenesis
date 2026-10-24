@@ -1872,7 +1872,10 @@ func _write_contour_report(conn_id: String, samples: PackedVector3Array,
 		var r_min := ConduitKinds.contour_bend_radius_m(type_id,
 				conn.get("conduit_style", {}) as Dictionary)
 		short_leg = float(ContourRouter.short_leg_report(control, r_min).get("short_leg_m", -1.0))
-	if absf(float(conn.get("route_min_bend_r_m", -2.0)) - r_store) < 0.01 			and int(conn.get("route_high_points", -1)) == hp 			and absf(float(conn.get("route_rise_m", -1.0)) - rise) < 0.02 			and absf(float(conn.get("route_short_leg_m", -2.0)) - short_leg) < 0.01:
+	if absf(float(conn.get("route_min_bend_r_m", -2.0)) - r_store) < 0.01 \
+			and int(conn.get("route_high_points", -1)) == hp \
+			and absf(float(conn.get("route_rise_m", -1.0)) - rise) < 0.02 \
+			and absf(float(conn.get("route_short_leg_m", -2.0)) - short_leg) < 0.01:
 		return
 	_updating_model = true
 	_model.update_connection(conn_id, {

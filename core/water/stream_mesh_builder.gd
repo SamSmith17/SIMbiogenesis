@@ -196,7 +196,8 @@ static func drape_refs(f: Dictionary, prof: Dictionary, carved: PackedByteArray,
 		ground_fn: Callable) -> Dictionary:
 	var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
 	var sec: Dictionary = f["section"]
-	var r := float(sec.get("bed_w", 2.0)) * 0.5 		+ float(sec.get("bank_slope", 1.5)) * float(sec.get("depth", 0.8)) + 1.0
+	var r := float(sec.get("bed_w", 2.0)) * 0.5 \
+		+ float(sec.get("bank_slope", 1.5)) * float(sec.get("depth", 0.8)) + 1.0
 	var m := DRAPE_STEPS
 	var z := PackedFloat32Array()
 	z.resize(pts.size() * m)

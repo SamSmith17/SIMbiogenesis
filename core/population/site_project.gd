@@ -21,6 +21,7 @@ extends RefCounted
 ##   tasks: [ {task_id, chore_id, label, status: "pending"|"done"|"skipped"} ],
 ##   plan: {crew, makespan_s},   # the scheduler's promise, for plan-vs-actual
 ##   state: "active"|"done"|"cancelled",
+##   ended_h: abs hours it finished or was cancelled (absent while active),
 ##   created_h }
 
 const KIND_DELIVERY := "delivery_unload"
@@ -69,7 +70,7 @@ static func bind_tasks(project: Dictionary, spec_rows: Array, chore_ids: Array) 
 ## player deleted it — "skip that step", per the board's own dangling-dep
 ## rule; the effect never fires (it lived on the deleted chore). Returns
 ## true when anything changed (drives change-gated persistence + redraws).
-static func sync_with_board(project: Dictionary, board) -> bool:
+static func sync_with_board(project: Dictionary, board, abs_h: float = NAN) -> bool:
 	if str(project.get("state", "")) != "active" or board == null:
 		return false
 	var changed := false
@@ -89,6 +90,8 @@ static func sync_with_board(project: Dictionary, board) -> bool:
 				all_settled = false
 	if all_settled and not (project.get("tasks", []) as Array).is_empty():
 		project["state"] = "done"
+		if not is_nan(abs_h):
+			project["ended_h"] = abs_h
 		changed = true
 	return changed
 

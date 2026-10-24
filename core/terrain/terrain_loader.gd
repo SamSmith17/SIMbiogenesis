@@ -5457,6 +5457,7 @@ func update_camp_area(id: String, patch: Dictionary) -> bool:
 		p["headcount_locked"] = int(p["headcount"]) > 0
 	var moved_from: PackedVector2Array = camp_areas.get_area(id).get("polygon", PackedVector2Array())
 	camp_areas.update(id, p)
+	_write_edit_to_lot(id, p)
 	_apply_camp_changes([id], [])
 	if p.has("polygon"):
 		_camp_moved(id, moved_from)
@@ -5468,6 +5469,39 @@ func update_camp_area(id: String, patch: Dictionary) -> bool:
 			_push_camps_to_graph()
 			break
 	return true
+
+
+## A camp cut from a placement lot draws its outline, name and style from the
+## LOT (_sync_lot_camps mirrors them back on every sync), so an edit to the
+## camp is written to the lot too. A moved or reshaped outline also LOCKS the
+## lot: a zone re-cut keeps locked lots, so the player's edit survives it.
+func _write_edit_to_lot(camp_id: String, p: Dictionary) -> void:
+	if not _placement_ready():
+		return
+	var lot := {}
+	for raw in placement.lots:
+		if str((raw as Dictionary).get("camp_area_id", "")) == camp_id:
+			lot = raw
+			break
+	if lot.is_empty():
+		return
+	var lot_patch := {}
+	if p.has("polygon"):
+		lot_patch["polygon"] = p["polygon"]
+		lot_patch["locked"] = true
+	var ac: Dictionary = (lot.get("assigned_camp", {}) as Dictionary).duplicate(true)
+	var touched := false
+	for k in ["name", "style", "headcount"]:
+		if p.has(k):
+			ac[k] = p[k]
+			touched = true
+	if touched:
+		ac["manual"] = true
+		ac.erase("festival_seeded")
+		lot_patch["assigned_camp"] = ac
+	if not lot_patch.is_empty():
+		placement.update_lot(str(lot["lot_id"]), lot_patch)
+		_save_placement()
 
 
 ## Emitted when a camp's outline changed (moved or reshaped): its linked NPC
@@ -5637,6 +5671,8 @@ func undo_camps() -> bool:
 		rt.sync(camp_areas, _camp_ctx())
 	camp_areas.save_to(_camp_areas_path)
 	clear_camp_highlight()
+	# A populated camp brought back (or taken away) is a graph camp too.
+	_push_camps_to_graph()
 	return true
 
 
@@ -5815,7 +5851,8 @@ func populate_camp_areas() -> Dictionary:
 
 
 ## The reverse: every populated painted camp back to scenery (headcount 0);
-## their compounds leave the graph on the deferred sync. Returns how many.
+## their compounds leave the graph on the deferred sync. A headcount the
+## player locked on a camp of their own is kept. Returns how many.
 func depopulate_camp_areas() -> int:
 	if not _camp_layer_ready():
 		return 0
@@ -5823,6 +5860,10 @@ func depopulate_camp_areas() -> int:
 	var n := 0
 	for raw in camp_areas.areas.duplicate():
 		var rec: Dictionary = raw
+		# A headcount the player typed (locked, on a camp festival mode did not
+		# seed) is theirs: Clear and Set up leave it alone.
+		if bool(rec.get("headcount_locked", false)) and not bool(rec.get("festival_seeded", false)):
+			continue
 		if int(rec.get("headcount", 0)) > 0 and FestivalSeedLayout.is_populatable(rec, zones):
 			camp_areas.update(str(rec["id"]), {"headcount": 0})
 			n += 1
@@ -6423,10 +6464,60 @@ func update_lot_camp(lot_id: String, patch: Dictionary) -> bool:
 		if patch.has(k):
 			ac[k] = patch[k]
 	ac["manual"] = true
+	# An edit makes the camp the player's: festival mode's Clear keeps it.
+	ac.erase("festival_seeded")
 	placement.update_lot(lot_id, {"assigned_camp": ac})
 	_sync_lot_camps(str(lot.get("zone_id", "")))
 	_save_placement()
 	return true
+
+
+## Festival mode: give every lot with no camp a default one (the same camp
+## update_lot_camp would make), marked festival_seeded. One sync per zone
+## and one save, however many lots. Returns how many lots were filled.
+func assign_default_lot_camps() -> int:
+	if not _placement_ready():
+		return 0
+	var zones := {}
+	var n := 0
+	for raw in placement.lots.duplicate():
+		var lot: Dictionary = raw
+		if not (lot.get("assigned_camp", {}) as Dictionary).is_empty():
+			continue
+		var zone := placement.get_zone(str(lot.get("zone_id", "")))
+		var styles: Array = (zone.get("spec", {}) as Dictionary).get("styles", ["mixed"])
+		var style := str(styles[0]) if not styles.is_empty() else "mixed"
+		placement.update_lot(str(lot["lot_id"]), {"assigned_camp": {"roster_id": "",
+			"name": str(lot.get("name", "")), "style": style,
+			"headcount": FestivalAssigner.default_headcount(float(lot.get("usable_m2", 0.0)), style),
+			"requirements": [], "manual": true, "festival_seeded": true}})
+		zones[str(lot.get("zone_id", ""))] = true
+		n += 1
+	for zid in zones.keys():
+		_sync_lot_camps(str(zid))
+	if n > 0:
+		_save_placement()
+	return n
+
+
+## Take back the camps assign_default_lot_camps gave; the player's own lot
+## assignments stay. Returns how many lots were emptied.
+func clear_seeded_lot_camps() -> int:
+	if not _placement_ready():
+		return 0
+	var zones := {}
+	var n := 0
+	for raw in placement.lots.duplicate():
+		var lot: Dictionary = raw
+		if bool((lot.get("assigned_camp", {}) as Dictionary).get("festival_seeded", false)):
+			placement.update_lot(str(lot["lot_id"]), {"assigned_camp": {}})
+			zones[str(lot.get("zone_id", ""))] = true
+			n += 1
+	for zid in zones.keys():
+		_sync_lot_camps(str(zid))
+	if n > 0:
+		_save_placement()
+	return n
 
 
 func set_lot_locked(lot_id: String, on: bool) -> bool:

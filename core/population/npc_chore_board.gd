@@ -147,6 +147,7 @@ func add_chore(label: String, chore_hours: float, opts: Dictionary = {}) -> Stri
 		rec["chore_key"] = str(opts["chore_key"])
 	_next_id += 1
 	chores.append(rec)
+	_rev += 1
 	return str(rec["id"])
 
 
@@ -154,14 +155,48 @@ func remove_chore(chore_id: String) -> bool:
 	for i in chores.size():
 		if str((chores[i] as Dictionary).get("id", "")) == chore_id:
 			chores.remove_at(i)
+			_rev += 1
 			return true
 	return false
 
 
-func find(chore_id: String) -> Dictionary:
+## id -> chore and chore_key -> chore, rebuilt lazily. find() runs per agent
+## per dots pass and per dependency per decision, so a linear scan was
+## agents x chores (and chores^2 per decision). The index is dropped by every
+## add / remove / prune / deserialize (`_rev`) and whenever `chores` is a
+## different array or a different size than it was built from — callers
+## outside this file mutate `chores` directly (npc_oncall's remove_at).
+var _rev := 0
+var _idx_rev := -1
+var _idx_n := -1
+var _idx_arr: Array = []
+var _by_id: Dictionary = {}
+var _by_key: Dictionary = {}
+
+
+func _index() -> void:
+	if _idx_rev == _rev and _idx_n == chores.size() and is_same(_idx_arr, chores):
+		return
+	_by_id.clear()
+	_by_key.clear()
 	for c in chores:
-		if str((c as Dictionary).get("id", "")) == chore_id:
-			return c
+		var d: Dictionary = c
+		var id := str(d.get("id", ""))
+		if not _by_id.has(id):
+			_by_id[id] = d
+		var key := str(d.get("chore_key", ""))
+		if not key.is_empty() and not _by_key.has(key):
+			_by_key[key] = d
+	_idx_rev = _rev
+	_idx_n = chores.size()
+	_idx_arr = chores
+
+
+func find(chore_id: String) -> Dictionary:
+	_index()
+	var c: Variant = _by_id.get(chore_id)
+	if c != null and str((c as Dictionary).get("id", "")) == chore_id:
+		return c
 	return {}
 
 
@@ -169,9 +204,10 @@ func find(chore_id: String) -> Dictionary:
 func find_by_key(key: String) -> Dictionary:
 	if key.is_empty():
 		return {}
-	for c in chores:
-		if str((c as Dictionary).get("chore_key", "")) == key:
-			return c
+	_index()
+	var c: Variant = _by_key.get(key)
+	if c != null and str((c as Dictionary).get("chore_key", "")) == key:
+		return c
 	return {}
 
 
@@ -191,6 +227,8 @@ func update_chore(chore_id: String, patch: Dictionary) -> bool:
 		return false
 	for k in patch:
 		rec[k] = patch[k]
+	if patch.has("id") or patch.has("chore_key"):
+		_rev += 1
 	return true
 
 
@@ -329,6 +367,8 @@ func prune_completed(abs_hours: float, keep_days: int = KEEP_DONE_DAYS) -> int:
 			continue
 		chores.remove_at(i)
 		gone += 1
+	if gone > 0:
+		_rev += 1
 	return gone
 
 
@@ -538,8 +578,8 @@ func blocked_reason(chore: Dictionary, abs_hours: float, hour_of_day: float,
 	if not bool(rules.get("night_shift", false)) \
 			and not window_open(chore, hour_of_day):
 		var w: Dictionary = chore.get("window", {})
-		return "outside its hours (%02d–%02d)" % [
-			int(w.get("start_h", 0.0)), int(w.get("end_h", 24.0))]
+		return "outside its hours (%s–%s)" % [
+			clock_text(float(w.get("start_h", 0.0))), clock_text(float(w.get("end_h", 24.0)))]
 	if NpcWeatherGate.is_unsafe(weather, str(chore.get("exposure", "outdoor"))):
 		return "weather is too dangerous for %s work" \
 			% str(chore.get("exposure", "outdoor"))
@@ -569,16 +609,23 @@ const PRIORITY_BANDS: Array = [
 const DOW_SHORT: Array = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
+## "06:30" for 6.5 h (a window's 6.5 h start used to print as "06").
+static func clock_text(h: float) -> String:
+	var m := int(round(fposmod(h, 24.0) * 60.0)) if h < 24.0 else 1440
+	return "%02d:%02d" % [m / 60, m % 60]
+
+
 static func band_name(v: int) -> String:
 	return "High" if v < PRIORITY_NORMAL \
 		else ("Low" if v > PRIORITY_NORMAL else "Normal")
 
 
-## Cycle Normal -> High -> Low -> Normal.
+## Cycle Normal -> High -> Low -> Normal, by BAND (band_name's rule): a
+## priority of 5 is High, so it goes to Low, not to Normal as if unknown.
 static func next_band(v: int) -> int:
 	if v == PRIORITY_NORMAL:
 		return PRIORITY_HIGH
-	return PRIORITY_LOW if v == PRIORITY_HIGH else PRIORITY_NORMAL
+	return PRIORITY_LOW if v < PRIORITY_NORMAL else PRIORITY_NORMAL
 
 
 ## How often, in words. Two panels used to carry two different wordings of
@@ -894,6 +941,7 @@ func serialize() -> Dictionary:
 
 func deserialize(data: Dictionary) -> void:
 	chores = []
+	_rev += 1
 	rules = (data.get("rules", {}) as Dictionary).duplicate(true)
 	_next_id = int(data.get("next_id", 1))
 	for item in data.get("chores", []):

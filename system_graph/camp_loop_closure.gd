@@ -21,7 +21,9 @@ const WASTE_KINDS: Array = ["greywater", "blackwater"]
 ## The presets that close each loop (ComponentPresets labels), best first.
 const CLOSERS := {
 	"water": ["Greywater Filter", "SoI Rain Catchment"],
-	"food": ["Garden Plot (50 m²)"],
+	# Nothing in the library makes FOOD yet: a plant node credits a biomass
+	# tank (ResourceFlowEngine._process_plant), which is the camp's firewood.
+	"food": [],
 	"biomass": ["Garden Plot (50 m²)"],
 	"greywater": ["Greywater Filter"],
 	"blackwater": ["Compost Digester", "IBC Biodigester"],
@@ -72,7 +74,7 @@ static func score(model, comp_id: String) -> Dictionary:
 		# engine stamps (a garden's biomass_kg_h, a roof's live_capture_lph),
 		# not as an output list.
 		if ty == "plant":
-			local["food"] = float(local.get("food", 0.0)) + maxf(float(specs.get("biomass_kg_h", 0.0)), 0.0)
+			local["biomass"] = float(local.get("biomass", 0.0)) + maxf(float(specs.get("biomass_kg_h", 0.0)), 0.0)
 		elif ty == "catchment":
 			local["water"] = float(local.get("water", 0.0)) + maxf(float(specs.get("live_capture_lph", 0.0)), 0.0)
 	var kinds: Dictionary = {}
@@ -100,9 +102,11 @@ static func score(model, comp_id: String) -> Dictionary:
 
 
 ## [{kind, label, presets: [label], text}] for every loop not yet closed,
-## the most open first.
-static func suggest(model, comp_id: String) -> Array:
-	var sc := score(model, comp_id)
+## the most open first. `sc` = a score() result already in hand (the camps
+## panel has one per row), else it is computed.
+static func suggest(model, comp_id: String, sc: Dictionary = {}) -> Array:
+	if sc.is_empty():
+		sc = score(model, comp_id)
 	var rows: Array = []
 	for k in (sc["kinds"] as Dictionary).keys():
 		var f := float(sc["kinds"][k])
@@ -127,14 +131,20 @@ static func apply(model, comp_id: String, label: String) -> String:
 	if preset.is_empty() or scope.is_empty():
 		return ""
 	var tanks: Dictionary = {}
+	var stores: Dictionary = {}
 	var max_x := 0.0
 	for it in model.get_items_in_scope(scope):
 		var d: Dictionary = it
 		max_x = maxf(max_x, float(d.get("x", 0.0)))
 		if str(d.get("type", "")) == "resource":
-			var k := ResourceKinds.normalize_kind(str((d.get("specs", {}) as Dictionary).get("resource_kind", "")))
-			if not tanks.has(k):
+			var ds: Dictionary = d.get("specs", {})
+			var k := ResourceKinds.normalize_kind(str(ds.get("resource_kind", "")))
+			# The camp's own stores (CampTemplates marks them camp_store) win
+			# over a tank the player added later.
+			if not tanks.has(k) or bool(ds.get("camp_store", false)) and not stores.has(k):
 				tanks[k] = str(d.get("id", ""))
+				if bool(ds.get("camp_store", false)):
+					stores[k] = true
 	var iid: String = model.generate_item_id()
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	model.add_item({"id": iid, "type": str(preset.get("type", "processor")), "scope_id": scope,

@@ -506,6 +506,9 @@ static func clean_assignment(raw: Variant) -> Dictionary:
 		"headcount": clampi(int(a.get("headcount", 0)), 0, 5000),
 		"requirements": _clean_features(a.get("requirements", [])),
 		"manual": bool(a.get("manual", false)),
+		# Given by festival mode to a lot nobody had assigned; Clear takes
+		# these back and leaves the player's own assignments.
+		"festival_seeded": bool(a.get("festival_seeded", false)),
 	}
 
 

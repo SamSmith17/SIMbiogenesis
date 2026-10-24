@@ -298,7 +298,8 @@ func _seed_acc() -> void:
 		if ity == "resource":
 			# Sources without a level (stream intakes, unlimited supplies, the
 			# solar bridge's virtual items) are not tanks to run dry.
-			if bool(sp.get("is_virtual", false)) or str(iid).begins_with("virtual_") 					or bool(sp.get("unlimited_capacity", false)) or bool(sp.get("stream_source", false)):
+			if bool(sp.get("is_virtual", false)) or str(iid).begins_with("virtual_") \
+					or bool(sp.get("unlimited_capacity", false)) or bool(sp.get("stream_source", false)):
 				continue
 			var pct := clampf(float(sp.get("level", 0.0)), 0.0, 1.0) * 100.0
 			_acc[iid] = {"kind": "tank", "name": nm,

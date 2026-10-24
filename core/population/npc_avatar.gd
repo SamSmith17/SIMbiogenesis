@@ -215,7 +215,8 @@ func set_mood(morale_v: float, peak_since: float, buzz: float = 0.0, fed: int = 
 
 
 func _ease_mood(delta: float) -> void:
-	if absf(_peak_level - _peak_target) < 0.001 and _peak_flash <= 0.0 			and absf(_buzz - _buzz_target) < 0.002:
+	if absf(_peak_level - _peak_target) < 0.001 and _peak_flash <= 0.0 \
+			and absf(_buzz - _buzz_target) < 0.002:
 		return
 	_peak_level = move_toward(_peak_level, _peak_target, delta * 1.4)
 	_buzz = move_toward(_buzz, _buzz_target, delta * 0.8)
@@ -798,7 +799,8 @@ func _refresh_speed_scale(file_clip: String = "") -> void:
 		file_clip = NpcPoseMachine._clip_file_for(_clip)
 	if file_clip.is_empty():
 		return
-	var want := NpcRig.walk_speed_scale_for(file_clip, _apparent_speed) 		if _is_gait(file_clip) else clampf(_time_mult, 0.25, NpcRig.MAX_PLAYBACK_RATE)
+	var want := NpcRig.walk_speed_scale_for(file_clip, _apparent_speed) \
+		if _is_gait(file_clip) else clampf(_time_mult, 0.25, NpcRig.MAX_PLAYBACK_RATE)
 	if is_equal_approx(want, _speed_scale) and not _frozen:
 		return
 	_speed_scale = want

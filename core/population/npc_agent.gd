@@ -519,10 +519,52 @@ const RATE_JITTER := 0.25
 const JITTERED_NEEDS: Array = ["hunger", "thirst", "bladder"]
 
 
+## Words for an activity summary key (both tiers' summary()["activities"]
+## and blocked needs): "hunger" -> "eating", "-> thirst" -> "going to drink",
+## "queue bladder" -> "queueing for the toilet". The keys stay as they are
+## (the selftests and the camp ledger read them); this is for display only.
+const ACTIVITY_WORDS := {
+	"hunger": ["eating", "a meal"], "thirst": ["drinking", "water"],
+	"bladder": ["at the toilet", "the toilet"], "sleep": ["sleeping", "bed"],
+	"hygiene": ["washing", "a shower"], "enrichment": ["out having fun", "a venue"],
+	"chore": ["working", "work"], "mingle": ["hanging out", "friends"],
+	"chat": ["chatting", "friends"], "wander": ["wandering", "a wander"],
+	"perform": ["performing", "the stage"], "shade": ["in the shade", "shade"],
+	"warm": ["warming up", "a fire"], "shelter": ["sheltering", "cover"],
+	"free": ["free time", "free time"], "idle": ["idle", "nothing"],
+}
+
+
+static func activity_words(key: String) -> String:
+	if key.begins_with("-> "):
+		var w: Array = ACTIVITY_WORDS.get(key.substr(3), [])
+		return "on the way to %s" % (str(w[1]) if w.size() > 1 else key.substr(3))
+	if key.begins_with("queue "):
+		var q: Array = ACTIVITY_WORDS.get(key.substr(6), [])
+		return "queueing for %s" % (str(q[1]) if q.size() > 1 else key.substr(6))
+	var d: Array = ACTIVITY_WORDS.get(key, [])
+	return str(d[0]) if not d.is_empty() else key.replace("_", " ")
+
+
+## Memo of rate_scale_for: it is asked per need per step (full tier) and per
+## event (light tier), and each answer is a string build + hash. Pure in its
+## inputs, so a memo is exact; cleared past MEMO_MAX so it cannot grow forever.
+static var _rate_memo: Dictionary = {}
+const RATE_MEMO_MAX := 30000
+
+
 static func rate_scale_for(agent_id: String, need: String) -> float:
 	if not JITTERED_NEEDS.has(need):
 		return 1.0
-	return 1.0 + (NpcHash.unit01(agent_id, "rate_" + need) * 2.0 - 1.0) * RATE_JITTER
+	var key := agent_id + "|" + need
+	var hit: Variant = _rate_memo.get(key)
+	if hit != null:
+		return hit
+	var v := 1.0 + (NpcHash.unit01(agent_id, "rate_" + need) * 2.0 - 1.0) * RATE_JITTER
+	if _rate_memo.size() >= RATE_MEMO_MAX:
+		_rate_memo.clear()
+	_rate_memo[key] = v
+	return v
 
 
 func _decay(dt_hours: float) -> void:
@@ -694,7 +736,8 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	# step spent doing it.
 	# Account for the last leg BEFORE teleporting to the target, or a trip
 	# that completes inside one step contributes nothing.
-	var final_leg := NpcNav.path_remaining_m(pos, path, path_idx) 			if path_idx < path.size() else pos.distance_to(target_pos)
+	var final_leg := NpcNav.path_remaining_m(pos, path, path_idx) \
+			if path_idx < path.size() else pos.distance_to(target_pos)
 	_account_walk(final_leg, pos, target_pos, ctx)
 	# Arrived: bank the walk against whatever need drove it, so "how far do
 	# people have to go for water" is answerable per need.
@@ -1062,7 +1105,8 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 			return
 		if kind == NpcRoutine.WORK:
 			routine_kind = kind
-			if abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) 					and _begin_chore(abs_hours, ctx):
+			if abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) \
+					and _begin_chore(abs_hours, ctx):
 				return
 			# Nothing on the board during a work block — fall through to
 			# gathering rather than standing still.

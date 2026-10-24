@@ -151,6 +151,10 @@ func step(abs_h: float, chunks: Array, boost_of: Dictionary = {}, label_of: Dict
 	for id in charge.keys():
 		if not seen.has(id):
 			charge.erase(id)
+	if episode.size() > seen.size():
+		for id in episode.keys():
+			if not seen.has(id):
+				episode.erase(id)
 	if _thr.size() > seen.size():
 		for id in _thr.keys():
 			if not seen.has(id):

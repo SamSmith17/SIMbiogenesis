@@ -42,10 +42,10 @@ func active() -> Array:
 
 ## Derive every active project's task statuses from the board. Returns true
 ## when anything changed.
-func sync(board) -> bool:
+func sync(board, abs_h: float = NAN) -> bool:
 	var changed := false
 	for p in projects:
-		if SiteProject.sync_with_board(p as Dictionary, board):
+		if SiteProject.sync_with_board(p as Dictionary, board, abs_h):
 			changed = true
 	return changed
 

@@ -60,6 +60,7 @@ var _seeded_space_ids: Array = []
 var _seeded_zone_id := ""
 var _seeded_road_id := ""
 var _notes: PackedStringArray = PackedStringArray()
+const MAX_NOTES := 12
 var _status: Dictionary = {}
 var _status_accum := 0.0
 
@@ -124,7 +125,10 @@ func open(main: Node) -> void:
 	for _i in 4:
 		await get_tree().process_frame
 	if not is_instance_valid(sgv):
+		# The map went away mid-open: hand the guardrails back.
 		_opening = false
+		PopTestPrefs.set_easy_override(false)
+		changed.emit()
 		return
 	var camps: Array = _camps(sgv, loader)
 	if camps.is_empty() and loader == null:
@@ -178,9 +182,9 @@ func close() -> void:
 	changed.emit()
 
 
-## Remove exactly what festival mode seeded: venues by label prefix,
-## painted-camp headcounts back to 0, the demo zone + road, the fallback
-## habitats. Closes the mode too, since there is nothing left to watch.
+## Remove exactly what festival mode seeded: venues by label prefix, the
+## camps it gave empty lots, painted-camp headcounts back to 0 (a headcount
+## the player locked stays), the demo zone + road, the fallback habitats. Closes the mode too, since there is nothing left to watch.
 func clear_seeded() -> void:
 	var removed := _clear_seeded_records()
 	if removed < 0:
@@ -232,6 +236,8 @@ func _clear_seeded_records() -> int:
 		_seeded_road_id = ""
 		if loader.has_method("delete_seeded_camp_areas"):
 			loader.call("delete_seeded_camp_areas")
+		if loader.has_method("clear_seeded_lot_camps"):
+			loader.call("clear_seeded_lot_camps")
 		if loader.has_method("depopulate_camp_areas"):
 			loader.call("depopulate_camp_areas")
 	if sgv != null and sgv.get("model") != null:
@@ -253,8 +259,11 @@ func set_target_people(n: int) -> void:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(_main) if _main != null else null
 	if loader != null and loader.has_method("apply_festival_population_target"):
 		var r: Dictionary = loader.call("apply_festival_population_target")
-		_note("Population %s: %d people (natural %d)." % [
-			"target" if n > 0 else "back to natural", int(r.get("people", 0)), int(r.get("natural", 0))])
+		if n > 0:
+			_note("Population set to %d (the camps' own total is %d)." % [
+				int(r.get("people", 0)), int(r.get("natural", 0))])
+		else:
+			_note("Population back to the camps' own %d." % int(r.get("natural", 0)))
 	_refresh_status()
 
 
@@ -283,6 +292,7 @@ func setup_gathering(spec: Dictionary) -> int:
 	var plan := FestivalSeedLayout.setup_layout(spec, SiteCentre.xz(main), free_fn)
 	var placed := 0
 	var people := 0
+	var new_ids: Array = []
 	for c in plan:
 		var cd: Dictionary = c
 		var id := str(loader.call("add_festival_camp", cd["polygon"], {"name": cd["name"],
@@ -290,15 +300,20 @@ func setup_gathering(spec: Dictionary) -> int:
 		if not id.is_empty():
 			placed += 1
 			people += int(cd["people"])
+			new_ids.append(id)
 	# The graph sync is deferred; the venues need the compounds.
 	for _i in 4:
 		await get_tree().process_frame
 	var camps := _camps(sgv, loader)
 	if not camps.is_empty():
 		_seed_venues(main, sgv, loader, camps, spec.get("venues", []) as Array)
+	# The card's supply is for the camps it just laid out; the player's own
+	# camps keep whatever each was set to.
 	var supply := str(spec.get("supply", ""))
-	if not supply.is_empty() and sgv.has_method("set_all_camp_supply"):
-		sgv.call("set_all_camp_supply", supply)
+	if not supply.is_empty() and sgv.has_method("set_camp_supply"):
+		for id in new_ids:
+			sgv.call("set_camp_supply", FestivalSeedLayout.lot_id_for_camp(str(id)),
+				{"inputs": supply, "wastes": supply})
 	_note("Set up %s (%s) round the marker." % [UiText.count(placed, "camp"),
 		UiText.count(people, "person", "people")])
 	_refresh_status()
@@ -390,19 +405,14 @@ func jump_to_hour(hour: float) -> void:
 # Seeding
 # ---------------------------------------------------------------------------
 
-## Every placement lot with no camp on it gets a default one (the loader's
-## own update_lot_camp fills style + headcount from the zone and the lot's
-## usable area), so cut-but-never-assigned zones populate too.
+## Every placement lot with no camp on it gets a default one (style +
+## headcount from the zone and the lot's usable area), so cut-but-never-
+## assigned zones populate too. They are marked festival_seeded: Clear takes
+## them back and leaves the player's own assignments. One save for all.
 func _assign_unassigned_lots(loader: Node) -> void:
-	var placement: Variant = loader.get("placement")
-	if placement == null or not loader.has_method("update_lot_camp"):
+	if not loader.has_method("assign_default_lot_camps"):
 		return
-	var n := 0
-	for l in (placement.get("lots") as Array).duplicate():
-		var lot: Dictionary = l
-		if (lot.get("assigned_camp", {}) as Dictionary).is_empty():
-			if bool(loader.call("update_lot_camp", str(lot["lot_id"]), {})):
-				n += 1
+	var n := int(loader.call("assign_default_lot_camps"))
 	if n > 0:
 		_note("Assigned default camps to %s." % UiText.count(n, "empty lot"))
 
@@ -701,4 +711,7 @@ func _refresh_status() -> void:
 
 func _note(text: String) -> void:
 	_notes.append(text)
+	# The HUD joins these every refresh; keep the newest few.
+	if _notes.size() > MAX_NOTES:
+		_notes = _notes.slice(_notes.size() - MAX_NOTES)
 	print("FestivalMode: %s" % text)

@@ -48,6 +48,10 @@ var _lab_progress := 0.0
 ## Sentinel, not "": an empty list's empty signature would compare equal to ""
 ## on the first pass and the empty-state row would never build.
 var _list_sig := "<unbuilt>"
+## [label, fixed head text, project] per card, refreshed in place.
+var _elapsed_labels: Array = []
+## The what-if crew line per design + crew size (see _whatif_block).
+var _whatif_cache: Dictionary = {}
 
 
 func _ready() -> void:
@@ -95,6 +99,26 @@ func _process(delta: float) -> void:
 	if _refresh_accum >= 0.75:
 		_refresh_accum = 0.0
 		_refresh()
+		_tick_elapsed()
+
+
+## "3.2 h since queued", or how long it took once it has ended (a finished
+## project's clock used to count up forever).
+func _elapsed_text(project: Dictionary) -> String:
+	var start := float(project.get("created_h", 0.0))
+	if project.has("ended_h"):
+		var took := maxf(float(project["ended_h"]) - start, 0.0)
+		return ("took %.1f h" if str(project.get("state", "")) == "done" else "stopped after %.1f h") % took
+	if str(project.get("state", "active")) != "active":
+		return "ended"
+	return "%.1f h since queued" % maxf(_now_h() - start, 0.0)
+
+
+func _tick_elapsed() -> void:
+	for e in _elapsed_labels:
+		var lbl: Label = e[0]
+		if is_instance_valid(lbl):
+			lbl.text = str(e[1]) + _elapsed_text(e[2] as Dictionary)
 
 
 # --- construction ------------------------------------------------------------
@@ -365,20 +389,26 @@ func _list_signature(rows: Array, crates: Array) -> String:
 		str(_lab != null and is_instance_valid(_lab) and _lab.is_running())]
 	for c in crates:
 		sig += "crate:%s;" % str((c as Dictionary).get("id", ""))
-	var now := _now_h()
 	for row in rows:
 		var p: Dictionary = row["project"]
 		var board = _bridge.chore_board_for(str(row["iid"]))
-		sig += "%s|%s|%s|%.1f;" % [str(p.get("id", "")), str(p.get("state", "")),
+		# Elapsed time is NOT in the signature: at 450x it moved every refresh
+		# and rebuilt every card (tooltips closed, buttons raced the rebuild).
+		# _tick_elapsed writes those labels in place.
+		sig += "%s|%s|%s|%s;" % [str(p.get("id", "")), str(p.get("state", "")),
 			str(p.get("paused", false)),
-			maxf(now - float(p.get("created_h", 0.0)), 0.0)]
+			str(board.rules.get("night_shift", false)) if board != null else ""]
 		for t in p.get("tasks", []):
 			var td := t as Dictionary
 			var ch: Dictionary = board.find(str(td.get("chore_id", ""))) \
 				if board != null else {}
-			sig += "%s|%d|%.1f;" % [str(td.get("status", "")),
+			var why := ""
+			if board != null and not ch.is_empty() and (ch.get("workers", []) as Array).is_empty():
+				var ah: float = _bridge.current_abs_hours()
+				why = str(board.blocked_reason(ch, ah, fposmod(ah, 24.0), _bridge.current_weather(), 0))
+			sig += "%s|%d|%.1f|%s;" % [str(td.get("status", "")),
 				(ch.get("workers", []) as Array).size(),
-				float(ch.get("progress_h", 0.0))]
+				float(ch.get("progress_h", 0.0)), why]
 	return sig
 
 
@@ -396,6 +426,7 @@ func _refresh() -> void:
 		return
 	_list_sig = sig
 	var restore := UITheme.keep_scroll(_list)
+	_elapsed_labels.clear()
 	for child in _list.get_children():
 		if child != _empty_lbl:
 			child.queue_free()
@@ -447,7 +478,8 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 		main.call("open_settlement_view", site))
 	head.add_child(watch)
 	var state_lbl := Label.new()
-	state_lbl.text = ("⏸ paused" if paused else state)
+	state_lbl.text = "⏸ paused" if paused else str({"active": "in progress", "done": "✓ done",
+		"cancelled": "cancelled"}.get(state, state))
 	state_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	state_lbl.add_theme_color_override("font_color",
 		C_DONE if state == "done" else (C_SKIPPED if state == "cancelled" else UITheme.C_TEXT_S))
@@ -484,9 +516,10 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 	if plan.has("makespan_s"):
 		plan_txt = "planned %.1f h with %d crew · " % [
 			float(plan.get("makespan_s", 0.0)) / 3600.0, int(plan.get("crew", 0))]
-	var elapsed := maxf(_now_h() - float(project.get("created_h", 0.0)), 0.0)
-	meta.text = "%s%d/%s done · %.1f h since queued" % [
-		plan_txt, int(roll.get("done", 0)), UiText.count(int(roll.get("total", 0)), "phase"), elapsed]
+	var meta_head := "%s%d/%s done · " % [
+		plan_txt, int(roll.get("done", 0)), UiText.count(int(roll.get("total", 0)), "phase")]
+	meta.text = meta_head + _elapsed_text(project)
+	_elapsed_labels.append([meta, meta_head, project])
 	meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	meta.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(meta)
@@ -556,6 +589,17 @@ func _task_row(task: Dictionary, board) -> Control:
 		elif min_w > 1:
 			crew.text = "needs %d ppl" % min_w
 			crew.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		# Nobody on it: say why, with the same words and glyph as the work
+		# dock and the Routines panel (a bare ○ answered nothing).
+		if workers == 0 and board != null and board.has_method("blocked_reason") and _bridge != null:
+			var abs_h: float = _bridge.current_abs_hours()
+			var reason := str(board.blocked_reason(chore, abs_h, fposmod(abs_h, 24.0),
+				_bridge.current_weather(), 0))
+			if not reason.is_empty():
+				crew.text = "%s %s" % [NpcChoreBoard.reason_glyph(reason), reason]
+				crew.add_theme_color_override("font_color", UITheme.C_WARN)
+				crew.tooltip_text = reason
+				crew.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(crew)
 		var hours := maxf(float(chore.get("chore_hours", 0.0)), 0.001)
 		var pb := ProgressBar.new()
@@ -623,17 +667,29 @@ func _whatif_block(iid: String, counts: Dictionary) -> Control:
 	head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	head.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	vb.add_child(head)
-	var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
 	var roster: int = _bridge.roster_size_for(iid)
-	var line := ""
-	for crew in WHATIF_CREWS:
-		var sched := NpcCrewPlan.schedule(tasks, int(crew))
-		var txt := "%.1fh" % (float(sched.get("makespan_s", 0.0)) / 3600.0) \
-			if bool(sched.get("feasible", false)) else "can't raise"
-		var cell := "%d ppl: %s" % [int(crew), txt]
-		if int(crew) == roster:
-			cell = "▶ " + cell
-		line += cell + "   "
+	# Six schedules per card per rebuild used to run here; the line depends
+	# only on the design's counts and the crew on site, so it is cached.
+	var ckey := "%s|%d" % [str(counts), roster]
+	var line := str(_whatif_cache.get(ckey, ""))
+	if line.is_empty():
+		var tasks := NpcCrewPlan.linkage_fab_tasks(counts)
+		var crews: Array = WHATIF_CREWS.duplicate()
+		# The crew actually on site always gets a column (marked ▶).
+		if roster > 0 and not crews.has(roster):
+			crews.append(roster)
+			crews.sort()
+		for crew in crews:
+			var sched := NpcCrewPlan.schedule(tasks, int(crew))
+			var txt := "%.1fh" % (float(sched.get("makespan_s", 0.0)) / 3600.0) \
+				if bool(sched.get("feasible", false)) else "can't raise"
+			var cell := "%d ppl: %s" % [int(crew), txt]
+			if int(crew) == roster:
+				cell = "▶ " + cell
+			line += cell + "   "
+		if _whatif_cache.size() > 64:
+			_whatif_cache.clear()
+		_whatif_cache[ckey] = line
 	var lbl := Label.new()
 	lbl.text = line.strip_edges()
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)

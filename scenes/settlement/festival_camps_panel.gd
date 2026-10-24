@@ -14,7 +14,8 @@ extends Node
 ## dropdown stays open while the clock runs.
 
 const REFRESH_S := 0.5
-const SUPPLY := [["infinite", "Infinite (metered)"], ["own", "Own tanks"], ["shared", "Shared depot"]]
+## CampTemplates.supply_choices(): the one list of modes and their words.
+var SUPPLY: Array = CampTemplates.supply_choices()
 
 var _frame: ModalFrame = null
 var _list: VBoxContainer = null
@@ -99,8 +100,7 @@ func _refresh() -> void:
 	var sig := ""
 	for r in rows:
 		var d: Dictionary = r
-		sig += "%s|%s|%s|%s;" % [d["id"], d["name"], str((d["supply"] as Dictionary).get("inputs", "")),
-			str((d["supply"] as Dictionary).get("wastes", ""))]
+		sig += "%s|%s;" % [d["id"], d["name"]]
 	if sig != _sig:
 		_sig = sig
 		_rebuild(rows)
@@ -154,6 +154,7 @@ func _rebuild(rows: Array) -> void:
 		head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		head_row.add_child(head)
 		var lot := str(d["lot_id"])
+		var opts := {}
 		for side in [["inputs", "In"], ["wastes", "Out"]]:
 			var cap := Label.new()
 			cap.text = str(side[1])
@@ -167,6 +168,7 @@ func _rebuild(rows: Array) -> void:
 				if str(m[0]) == cur:
 					opt.select(opt.item_count - 1)
 			var key := str(side[0])
+			opts[key] = opt
 			opt.item_selected.connect(func(i: int) -> void:
 				var sgv := ServiceLocator.graph()
 				if sgv != null:
@@ -203,10 +205,12 @@ func _rebuild(rows: Array) -> void:
 		var fix := HBoxContainer.new()
 		fix.add_theme_constant_override("separation", 6)
 		v.add_child(fix)
-		_cards[cid] = {"table": table, "head": head, "closure": closure, "fix": fix, "fix_sig": ""}
+		_cards[cid] = {"table": table, "head": head, "closure": closure, "fix": fix, "fix_sig": "",
+			"opts": opts}
 
 
 func _update_card(d: Dictionary) -> void:
+	_sync_supply_opts(d)
 	var c: Dictionary = _cards.get(str(d["id"]), {})
 	if c.is_empty():
 		return
@@ -247,7 +251,7 @@ func _update_card(d: Dictionary) -> void:
 	# The fixes for the worst loop, rebuilt only when it changes.
 	var sgv := ServiceLocator.graph()
 	var model: Variant = sgv.get("model") if sgv != null else null
-	var sugg: Array = CampLoopClosure.suggest(model, str(d["id"])) if model != null else []
+	var sugg: Array = CampLoopClosure.suggest(model, str(d["id"]), cl) if model != null else []
 	var fsig := str(sugg.size()) + ("" if sugg.is_empty() else str((sugg[0] as Dictionary)["kind"]))
 	if fsig == str(c["fix_sig"]):
 		return
@@ -261,6 +265,8 @@ func _update_card(d: Dictionary) -> void:
 	var s0: Dictionary = sugg[0]
 	var lbl := _cell(str(s0["text"]) + ":", UITheme.C_WARN)
 	fix.add_child(lbl)
+	if (s0["presets"] as Array).is_empty():
+		fix.add_child(_cell("nothing in the library makes this yet", UITheme.C_TEXT_S))
 	for p in (s0["presets"] as Array):
 		var b := Button.new()
 		b.text = "+ " + str(p)
@@ -295,3 +301,18 @@ func _copy_csv() -> void:
 				str(md["label"]).strip_edges(), str(md["unit"]), float(md["per_day"]),
 				float(md["per_person_day"]), float(md["total"]), float(md.get("offsite_total", 0.0))])
 	DisplayServer.clipboard_set("\n".join(lines))
+
+
+## A camp's supply set elsewhere (Every camp, the site editor) shows in its
+## dropdowns without rebuilding the card.
+func _sync_supply_opts(d: Dictionary) -> void:
+	var c: Dictionary = _cards.get(str(d.get("id", "")), {})
+	var opts: Dictionary = c.get("opts", {})
+	for key in opts.keys():
+		var opt: OptionButton = opts[key]
+		if not is_instance_valid(opt):
+			continue
+		var cur := str((d.get("supply", {}) as Dictionary).get(str(key), "infinite"))
+		for i in opt.item_count:
+			if str(opt.get_item_metadata(i)) == cur and opt.selected != i:
+				opt.select(i)

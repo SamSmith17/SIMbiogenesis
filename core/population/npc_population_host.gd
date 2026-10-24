@@ -177,7 +177,8 @@ func _process_avatars(delta: float) -> void:
 			_far_accum[k] = FAR_POSE_INTERVAL_S
 	# Full-tier only when the bridge can say so: the light crowd is drawn by
 	# CrowdRenderer straight from the cohorts and never needs a dot here.
-	var dots: Array = _bridge.agent_dots_full() if _bridge.has_method("agent_dots_full") 		else _bridge.agent_dots()
+	var dots: Array = _bridge.agent_dots_full() if _bridge.has_method("agent_dots_full") \
+		else _bridge.agent_dots()
 	# Same Array instance as last frame = no tick happened since: every value
 	# read off a dot is the one already shown.
 	var dots_changed := not is_same(dots, _last_dots)

@@ -74,6 +74,10 @@ const _GROUPS := [
 		["key:U", "...toggle UI while the window wall is up"],
 		["key:Ctrl+S", "...save this map's window-wall viewpoint"],
 		["key:I", "...identify screens (window wall)"],
+		["key:Settlement", "Settlement view - watch the community work (timeline chip)"],
+		["key:Festival", "Festival mode - populate the camps and watch the crowd (timeline chip)"],
+		["key:E", "...edit site: move / reshape camps and spaces (settlement view, Site Plan)"],
+		["key:F", "...follow the selected person (settlement view)"],
 	]],
 	["Puzzle & SoI", [
 		["interact", "SoI pin → Snowglobe (resize radius)"],
