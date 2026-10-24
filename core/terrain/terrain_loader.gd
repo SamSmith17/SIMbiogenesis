@@ -201,6 +201,14 @@ var _site_drape_half := 0.0
 var _imagery_mode := "local"
 var _imagery_saved_tier := -1
 var _imagery_fallback_tier := -1
+## The world's sharp-layer source: ImagerySources.SHARP_SHARPEST | SHARP_NEWEST.
+var _imagery_sharp := ImagerySources.SHARP_SHARPEST
+## "Shoreline over time" (ShorelineHistory, a child made on first use): the
+## world's record (world.json terrain_imagery.history) and whether an archived
+## capture that was not cached yet waits for the load to finish.
+var _history_rec: Dictionary = {}
+var _shoreline: ShorelineHistory = null
+var _history_deferred := false
 var _imagery_tag_tier := {}
 var _imagery_tag_shown := {}
 ## The cache key each layer was last asked for. A result with another key is
@@ -897,6 +905,12 @@ func _resolve_location() -> void:
 	_imagery_mode = "local"
 	_imagery_saved_tier = -1
 	_imagery_fallback_tier = -1
+	_imagery_sharp = ImagerySources.SHARP_SHARPEST
+	_history_rec = {}
+	_history_deferred = false
+	if _shoreline != null and is_instance_valid(_shoreline):
+		_shoreline.queue_free()
+	_shoreline = null
 	_imagery_tag_tier.clear()
 	_imagery_tag_shown.clear()
 	_imagery_tag_key.clear()
@@ -909,6 +923,8 @@ func _resolve_location() -> void:
 		var ti: Dictionary = d.get("terrain_imagery", {})
 		_imagery_saved_tier = clampi(int(ti.get("saved_tier", -1)), -1, QUALITY_TIER_COUNT - 1)
 		_imagery_mode = "saved" if str(ti.get("mode", "local")) == "saved" and _imagery_saved_tier >= 0 else "local"
+		_imagery_sharp = ImagerySources.sharp_preference(ti.get("sharp", ""))
+		_history_rec = ti.get("history", {}) if ti.get("history", {}) is Dictionary else {}
 		# A download that fails falls back to the imported imagery, else to the
 		# tier this world was last shown at (still on disk from that visit).
 		_imagery_fallback_tier = _imagery_saved_tier if _imagery_saved_tier >= 0 \
@@ -1276,6 +1292,7 @@ func _run_load_sequence() -> void:
 	_ensure_leaf_fall()
 	_resolve_graph_site_elevations()
 	map_load_complete.emit()
+	_on_shoreline_changed_for_veg.call_deferred()
 
 
 ## A DEM that arrived after its phase timed out (see _late_base_dem).
@@ -3982,10 +3999,11 @@ func _on_imagery_failed(reason: String, tag: String) -> void:
 			if img_retry != null and _detail_img_retry_zoom >= 15:
 				push_warning("TerrainLoader: detail imagery failed (%s) — retrying at z%d" % [
 					reason, _detail_img_retry_zoom])
+				var hist_r := _history_chain()
 				_imagery_tag_key["detail"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _detail_half_extent,
-					_detail_target_px(), _detail_img_retry_zoom)
+					_detail_target_px(), _detail_img_retry_zoom, hist_r)
 				img_retry.request_imagery(_lat, _lon, _detail_half_extent,
-					_detail_target_px(), "detail", _detail_img_retry_zoom)
+					_detail_target_px(), "detail", _detail_img_retry_zoom, false, hist_r)
 				return
 		push_warning("TerrainLoader: detail imagery failed (%s) — base drape only" % reason)
 		if _load_sequence_active:
@@ -4037,7 +4055,10 @@ func _request_hyper_imagery(tier: int = -1) -> void:
 	_imagery_tag_tier["hyper"] = t
 	var bypass := (_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0
 	_hyper_half_m = _hyper_half_extent(t)
-	var chain := ImagerySources.chain_for(_lat, _lon)
+	var chain := ImagerySources.chain_for(_lat, _lon, _imagery_sharp)
+	var hist := _history_chain()
+	if not hist.is_empty():
+		chain = hist
 	_imagery_tag_key["hyper"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _hyper_half_m,
 		_hyper_target_px(t), HYPER_MAX_ZOOM, chain)
 	img.request_imagery(_lat, _lon, _hyper_half_m, _hyper_target_px(t),
@@ -4048,8 +4069,13 @@ func _request_hyper_imagery(tier: int = -1) -> void:
 ## override), shrunk so the native zoom fits SITE_TARGET_PX. 0 = off.
 func _site_half_extent(tier: int = -1) -> float:
 	var l := TerrainImageryPlan.layer("site", tier if tier >= 0 else _imagery_tier(), _lat, _lon,
-		_detail_half_extent, TerrainImageryPlan.config_overrides())
+		_detail_half_extent, _imagery_overrides())
 	return 0.0 if l.is_empty() else float(l["half"])
+
+
+## The plan overrides for this world: the config file's plus its sharp source.
+func _imagery_overrides() -> Dictionary:
+	return TerrainImageryPlan.with_sharp(TerrainImageryPlan.config_overrides(), _imagery_sharp)
 
 
 ## Queue the native-resolution site patch (after hyper, so it never delays
@@ -4059,7 +4085,8 @@ func _request_site_imagery(tier: int = -1) -> void:
 	if img == null:
 		return
 	var t := tier if tier >= 0 else _tier_for_tag("site")
-	var half := _site_half_extent(t)
+	# An archived capture (ShorelineHistory) is shown on detail + hyper only.
+	var half := _site_half_extent(t) if _history_chain().is_empty() else 0.0
 	if half <= 0.0:
 		_imagery_tag_tier["site"] = t
 		_imagery_tag_key["site"] = ""
@@ -4073,7 +4100,7 @@ func _request_site_imagery(tier: int = -1) -> void:
 			_set_site_patch_off()
 		return
 	_imagery_tag_tier["site"] = t
-	var chain := ImagerySources.chain_for(_lat, _lon)
+	var chain := ImagerySources.chain_for(_lat, _lon, _imagery_sharp)
 	var z := ImagerySources.native_zoom(chain, _lat)
 	var bypass := (_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0
 	_site_half_m = half
@@ -4177,7 +4204,7 @@ func _imagery_tier() -> int:
 func _tier_for_tag(tag: String) -> int:
 	if _imagery_mode == "saved" and _imagery_saved_tier >= 0 and _imagery_saved_tier != _quality_tier():
 		var l := TerrainImageryPlan.layer(tag, _imagery_saved_tier, _lat, _lon, _detail_half_extent,
-			TerrainImageryPlan.config_overrides())
+			_imagery_overrides())
 		if l.is_empty() or TerrainImageryPlan.is_cached(l):
 			return _imagery_saved_tier
 	return _quality_tier()
@@ -4190,7 +4217,7 @@ func _imagery_saved_fallback(tag: String) -> bool:
 	if saved < 0 or int(_imagery_tag_tier.get(tag, -1)) == saved:
 		return false
 	var l := TerrainImageryPlan.layer(tag, saved, _lat, _lon, _detail_half_extent,
-		TerrainImageryPlan.config_overrides())
+		_imagery_overrides())
 	if not TerrainImageryPlan.is_cached(l):
 		return false
 	push_warning("TerrainLoader: %s imagery could not be downloaded — using the saved %s copy" % [
@@ -4214,10 +4241,17 @@ func _request_detail_imagery(tier: int = -1, force: bool = false) -> void:
 	var t := tier if tier >= 0 else _tier_for_tag("detail")
 	_imagery_tag_tier["detail"] = t
 	var bypass := force or ((_force_refetch or not TerrainCacheSettings.cache_enabled()) and tier < 0)
+	var hist := _history_chain()
+	if not hist.is_empty() and _load_sequence_active and _IMAGERY_SERVICE.cached_file_for_key(
+			_IMAGERY_SERVICE.layer_key(_lat, _lon, _detail_half_extent, _detail_target_px(t),
+				DETAIL_MAX_ZOOM, hist)).is_empty():
+		# Not downloaded yet: load today's drape, fetch the capture after the load.
+		_history_deferred = true
+		hist = []
 	_imagery_tag_key["detail"] = _IMAGERY_SERVICE.layer_key(_lat, _lon, _detail_half_extent,
-		_detail_target_px(t), DETAIL_MAX_ZOOM)
+		_detail_target_px(t), DETAIL_MAX_ZOOM, hist)
 	img.request_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(t), "detail",
-		DETAIL_MAX_ZOOM, bypass)
+		DETAIL_MAX_ZOOM, bypass, hist)
 
 
 ## What this world's imagery is doing, for the world panel and Terrain options.
@@ -4225,9 +4259,10 @@ func _request_detail_imagery(tier: int = -1, force: bool = false) -> void:
 ##  requested {tag: tier last asked for}, fell_back [tags],
 ##  saved_cached Vector2i(on disk, layers), vram_saved, vram_local}
 func get_world_imagery() -> Dictionary:
-	var ov := TerrainImageryPlan.config_overrides()
+	var ov := _imagery_overrides()
 	var local := _quality_tier()
 	var out := {"mode": _imagery_mode, "saved_tier": _imagery_saved_tier, "local_tier": local,
+		"sharp": _imagery_sharp,
 		"shown": _imagery_tag_shown.duplicate(), "requested": _imagery_tag_tier.duplicate(),
 		"fell_back": _imagery_fell_back.keys(),
 		"vram_local": TerrainImageryPlan.vram_bytes(local, _lat, _lon, _detail_half_extent, ov)}
@@ -4264,7 +4299,102 @@ func set_world_imagery_mode(mode: String) -> void:
 ##   saved_tier — the imported imagery's tier (-1 for a world made here).
 ##   mode       — "saved" | "local".
 func world_imagery_record() -> Dictionary:
-	return {"tier": _imagery_tier(), "saved_tier": _imagery_saved_tier, "mode": _imagery_mode}
+	var out := {"tier": _imagery_tier(), "saved_tier": _imagery_saved_tier, "mode": _imagery_mode,
+		"sharp": _imagery_sharp}
+	var hist := _shoreline.record() if _shoreline != null and is_instance_valid(_shoreline) else _history_rec
+	if not hist.is_empty():
+		out["history"] = hist
+	return out
+
+
+## "Shoreline over time" (core/terrain/shoreline/): the archived-capture drape
+## and the gauged lake level, both following the clock. Made on first ask.
+func shoreline_history() -> ShorelineHistory:
+	if _shoreline == null or not is_instance_valid(_shoreline):
+		_shoreline = ShorelineHistory.new()
+		_shoreline.name = "ShorelineHistory"
+		_shoreline.setup(self, _lat, _lon, _history_rec)
+		add_child(_shoreline)
+		_shoreline.changed.connect(_on_shoreline_changed_for_veg)
+	return _shoreline
+
+
+## The lake's shore band (ShorelineHistory.in_shore) as an extra vegetation
+## exclusion, (x, z) -> bool; an invalid Callable when there is none yet.
+## Records what the scatter used, so a mask that lands later can rescatter.
+var _veg_shore_sig := ""
+
+
+func _veg_shore_fn() -> Callable:
+	if _shoreline == null or not is_instance_valid(_shoreline) or not _shoreline.shore_ready():
+		return Callable()
+	var sh := _shoreline
+	return func(x: float, z: float) -> bool: return is_instance_valid(sh) and sh.in_shore(x, z)
+
+
+## The reach mask is built over several frames after the water, so the forest
+## may already be scattered without it: scatter again once, when the band
+## first appears or changes (never when it goes away).
+func _on_shoreline_changed_for_veg() -> void:
+	if _shoreline == null or not is_instance_valid(_shoreline):
+		return
+	var sig := _shoreline.shore_signature()
+	if sig.is_empty() or sig == _veg_shore_sig:
+		return
+	if not _auto_veg_generated or _load_sequence_active or not _built:
+		return
+	print("TerrainLoader: lake shore band ready — scattering vegetation again without it")
+	_full_regenerate_auto_vegetation()
+
+
+## The source chain of an archived capture for detail + hyper; [] = today's.
+func _history_chain() -> Array:
+	if _history_deferred:
+		return []
+	return shoreline_history().drape_chain()
+
+
+## Reload detail → hyper (→ site) at the capture ShorelineHistory now wants.
+func refresh_history_drape() -> void:
+	_history_deferred = false
+	_imagery_fell_back.clear()
+	if not _built or _load_sequence_active:
+		return
+	# The previous capture's downloads (a hyper square is ~600 tiles) must not
+	# hold up the one asked for now.
+	var img := get_node_or_null("/root/ImageryService")
+	if img != null and img.has_method("cancel_tags"):
+		img.call("cancel_tags", ["detail", "hyper", "site"])
+	_begin_refresh("imagery")
+	_detail_img_retry_zoom = -1
+	_request_detail_imagery()
+	var c := shoreline_history().shown_capture()
+	print("TerrainLoader: drape → %s — reloading" % (
+		"today's imagery" if c.is_empty() else "Wayback capture " + WaybackCatalog.capture_label(c)))
+
+
+## This world's sharp-layer source (ImagerySources.SHARP_*).
+func get_world_imagery_sharp() -> String:
+	return _imagery_sharp
+
+
+## Switch the sharp layers (hyper + site patch) between the sharpest capture
+## and the newest one (the detail drape's), live: the detail drape reloads from
+## disk and chains on to hyper and the site patch at the new source. The
+## world's record is written on the next save (world_imagery_record "sharp").
+func set_world_imagery_sharp(pref: String) -> void:
+	var p := ImagerySources.sharp_preference(pref)
+	if p == _imagery_sharp:
+		return
+	_imagery_sharp = p
+	_imagery_fell_back.clear()
+	if not _built or _load_sequence_active:
+		return
+	_begin_refresh("imagery")
+	_detail_img_retry_zoom = -1
+	_request_detail_imagery()
+	print("TerrainLoader: sharp imagery → %s (%s) — reloading the drape" % [p,
+		" -> ".join(PackedStringArray(ImagerySources.chain_for(_lat, _lon, p)))])
 
 
 ## --- Terrain imagery quality (public API for the settings UI) ---------------
@@ -4857,6 +4987,8 @@ func _attach_water() -> void:
 		if item is Dictionary and (item as Dictionary).has("centerline"):
 			continue
 		still_only.append(item)
+	# A gauged lake is drawn by ShorelineHistory's level plane instead.
+	still_only = shoreline_history().filter_still(still_only)
 	var node := WaterBuilder.build_water_node(
 		still_only, coarse_elev, MESH_RES, _built_extent, _built_center_elev,
 		_detail_surface_grid, detail_res, _detail_extent_m(), _seam_feather_m)
@@ -8820,7 +8952,7 @@ func veg_point_excluded_callable() -> Callable:
 	var idx := VegExclusionBuilder.build_index(
 		VegExclusionBuilder.build_all(_buildings_data, roads, _water_data,
 			1.5, 1.0, 1.0, true, true),
-		maxf(_osm_half_extent, 500.0))
+		maxf(_osm_half_extent, 500.0), _veg_shore_fn())
 	# A lambda, not Callable(idx, ...): a Callable does not keep a RefCounted
 	# alive, the captured variable does.
 	return func(p: Vector2) -> bool: return idx.is_excluded(p)
@@ -9253,6 +9385,9 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	if _built:
 		_finish_refresh("osm_veg")
 	_mark_auto_veg_ready()
+	# A lake shore band that landed while this scattered (or before the load
+	# finished) rescatters once now.
+	_on_shoreline_changed_for_veg.call_deferred()
 
 
 ## Per-polygon scatter diagnostics from the last generator run (see
@@ -9321,7 +9456,11 @@ func _auto_veg_ctx() -> Dictionary:
 	# Pass the larger of world/OSM so large-map thinning triggers even when the
 	# OSM fetch window is smaller than the 30 km terrain shell.
 	var thin_half := maxf(_osm_half_extent, _half_extent)
+	var shore_fn := _veg_shore_fn()
+	_veg_shore_sig = _shoreline.shore_signature() if shore_fn.is_valid() else ""
 	return {
+		# A gauged lake's shore band: everything its record ever covered.
+		"exclude_fn": shore_fn,
 		"latitude": _lat,
 		"half_extent_m": thin_half,
 		"winter_min_c": _site_winter_min_c(),

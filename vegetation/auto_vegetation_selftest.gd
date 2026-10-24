@@ -57,6 +57,7 @@ func _initialize() -> void:
 	_test_neutral_bulk_wins()
 	_test_feature_scatter_order()
 	_test_gap_fill_bounded()
+	_test_gap_fill_extra_exclusion()
 	_test_reground_threads_growth()
 	_test_osm_key_match()
 	_test_forest_params_coverage()
@@ -1150,6 +1151,42 @@ func _test_gap_fill_bounded() -> void:
 		gate.samples <= AutoVegetationGenerator.GAP_FILL_MAX_SAMPLES + 1,
 		"samples=%d" % gate.samples)
 	_check("gap-fill returns promptly (got %d ms)" % elapsed, elapsed < 5000)
+
+
+class _GreenGateStub:
+	extends RefCounted
+	func is_valid() -> bool:
+		return true
+	func is_vegetated(_x: float, _z: float) -> bool:
+		return true
+	func canopy_factor(_x: float, _z: float) -> float:
+		return 0.5
+
+
+## The extra exclusion (a gauged lake's shore band, ShorelineHistory.in_shore)
+## holds even where no polygon is: the Salton Sea's old shallows read as dark
+## green forest to the gap fill and were planted with trees.
+func _test_gap_fill_extra_exclusion() -> void:
+	var lake_west := func(x: float, _z: float) -> bool: return x < 0.0
+	var idx := VegExclusionBuilder.build_index([], 400.0, lake_west)
+	_check("extra exclusion with no polygons", idx.is_excluded(Vector2(-10, 0)) \
+		and not idx.is_excluded(Vector2(10, 0)))
+	var layer := AutoVegetationLayer.create_empty()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	AutoVegetationGenerator._fill_imagery_gaps(layer, {"polygons": []}, _GreenGateStub.new(),
+		{"weights": {"deciduous": 1.0}, "default_height_m": 12.0}, idx,
+		{"half_extent_m": 300.0}, rng)
+	var east := 0
+	var west := 0
+	for slot in layer.bulk:
+		for rec in layer.bulk[slot]:
+			if float(rec["x"]) < 0.0:
+				west += 1
+			else:
+				east += 1
+	_check("gap fill keeps off the shore band (%d planted on it, %d beside it)" % [west, east],
+		west == 0 and east > 0)
 
 
 ## reground() must thread the live settings: the bare rebuild it used to do

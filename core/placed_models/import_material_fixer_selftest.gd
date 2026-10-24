@@ -5,7 +5,7 @@ extends SceneTree
 ## Carries EXPECTED_CHECKS: a Godot runtime error aborts a test function while
 ## the suite would still print PASS.
 
-const EXPECTED_CHECKS := 71
+const EXPECTED_CHECKS := 73
 
 var _checks := 0
 var _fails := 0
@@ -185,6 +185,15 @@ func _test_imagery_sources() -> void:
 			var v := rng.randf_range(0.1, 0.7)
 			real.set_pixel(x, y, Color(v * 0.8, v, v * 0.6))
 	_ok("real imagery is not blank", not ImagerySources.is_blank_tile(real))
+	# Uniform but REAL: Clarity's Salton Sea tile at z18 (measured (14, 10, 1))
+	# and a pale salt flat. Calling these blank mixed two captures of
+	# different years tile by tile at Bombay Beach.
+	var sea := Image.create(256, 256, false, Image.FORMAT_RGB8)
+	sea.fill(Color8(14, 10, 1))
+	_ok("a uniform dark sea tile is not blank", not ImagerySources.is_blank_tile(sea))
+	var flat := Image.create(256, 256, false, Image.FORMAT_RGB8)
+	flat.fill(Color8(226, 217, 188))
+	_ok("a uniform sand / salt-flat tile is not blank", not ImagerySources.is_blank_tile(flat))
 	_ok("Skagit attribution names the county",
 		ImagerySources.attribution_for(["skagit_2021_9in", "esri"]).contains("Skagit County"))
 	_ok("tile URL is z/y/x", ImagerySources.tile_url("esri", 19, 1, 2).ends_with("/19/2/1"))

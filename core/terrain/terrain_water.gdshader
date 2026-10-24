@@ -28,6 +28,15 @@ vec3 wave_normal(vec2 p, float t) {
 	return normalize(vec3(dx, 1.0, dz));
 }
 
+// Optional reach mask (ShorelineHistory's lake-level plane, LakeSpill): a
+// texture of SPILL levels in world Y over spill_rect (x0, z0, 1/w, 1/d);
+// water is drawn only where the lake can reach at spill_level. Off by
+// default, so every other water body is unchanged.
+uniform bool use_spill = false;
+uniform sampler2D spill_tex : filter_linear, repeat_disable;
+uniform vec4 spill_rect = vec4(0.0, 0.0, 1.0, 1.0);
+uniform float spill_level = 0.0;
+
 varying vec3 v_world_pos;
 
 void vertex() {
@@ -37,6 +46,13 @@ void vertex() {
 
 void fragment() {
 	soi_clip_fragment(v_world_pos);
+	if (use_spill) {
+		vec2 suv = (v_world_pos.xz - spill_rect.xy) * spill_rect.zw;
+		if (suv.x >= 0.0 && suv.y >= 0.0 && suv.x <= 1.0 && suv.y <= 1.0
+				&& texture(spill_tex, suv).r > spill_level) {
+			discard;
+		}
+	}
 	float t = TIME * wave_speed * flow_churn;
 	vec3 n_world = wave_normal(v_world_pos.xz, t);  // world xz (VERTEX is view space here)
 	NORMAL = normalize((VIEW_MATRIX * vec4(n_world, 0.0)).xyz);

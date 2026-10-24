@@ -64,12 +64,22 @@ static func tier_name(tier: int) -> String:
 	return str(TIER_NAMES[clampi(tier, 0, TIER_COUNT - 1)]) if tier >= 0 else "unknown"
 
 
+## The world's sharp-layer preference added to `overrides` (key
+## "sharp_source", ImagerySources.SHARP_*). Absent = sharpest.
+static func with_sharp(overrides: Dictionary, sharp: String) -> Dictionary:
+	var out := overrides.duplicate()
+	out["sharp_source"] = ImagerySources.sharp_preference(sharp)
+	return out
+
+
 ## One layer of `tier` at this site. {} when the tier has no such layer (the
 ## site patch is off on Low). Keys: tag, tier, half, px, max_zoom, chain, hq,
-## zoom, key. `detail_half` is the hi-res patch half-extent (m).
+## zoom, key. `detail_half` is the hi-res patch half-extent (m). The sharp
+## layers' chain follows overrides["sharp_source"] (see with_sharp).
 static func layer(tag: String, tier: int, lat: float, lon: float, detail_half: float,
 		overrides: Dictionary = {}) -> Dictionary:
 	var t := clampi(tier, 0, TIER_COUNT - 1)
+	var sharp := ImagerySources.sharp_preference(overrides.get("sharp_source", ""))
 	var half := 0.0
 	var px := 0
 	var max_zoom := DETAIL_MAX_ZOOM
@@ -83,12 +93,12 @@ static func layer(tag: String, tier: int, lat: float, lon: float, detail_half: f
 			half = TerrainExtents.overlay_half(float(HYPER_HALF_EXTENT[t]), detail_half)
 			px = int(overrides.get("hyper_target_px", HYPER_TARGET_PX[t]))
 			max_zoom = HYPER_MAX_ZOOM
-			chain = ImagerySources.chain_for(lat, lon)
+			chain = ImagerySources.chain_for(lat, lon, sharp)
 		"site":
 			var want := float(overrides.get("site_half_extent_m", SITE_HALF_EXTENT[t]))
 			if want <= 1.0:
 				return {}
-			chain = ImagerySources.chain_for(lat, lon)
+			chain = ImagerySources.chain_for(lat, lon, sharp)
 			max_zoom = ImagerySources.native_zoom(chain, lat)
 			# 0.95: pick_zoom measures the bbox in tiles, and a bbox straddling
 			# tile edges costs one extra column.
@@ -163,14 +173,15 @@ static func record_for_import(rec: Dictionary, snap: Dictionary = {}) -> Diction
 		if extras is Dictionary and (extras as Dictionary).get("terrain_imagery", null) is Dictionary:
 			ti = (extras as Dictionary)["terrain_imagery"]
 	var tier := int(ti.get("tier", -1))
+	var sharp := ImagerySources.sharp_preference(ti.get("sharp", ""))
 	var map: Dictionary = rec.get("map", {}) if rec.get("map", {}) is Dictionary else {}
 	if tier < 0 and WorldStore.is_generated_map(map):
 		tier = infer_tier(float(map.get("lat", 0.0)), float(map.get("lon", 0.0)),
-			detail_half_of(rec, snap), config_overrides())
+			detail_half_of(rec, snap), with_sharp(config_overrides(), sharp))
 	if tier < 0:
 		return {}
 	tier = clampi(tier, 0, TIER_COUNT - 1)
-	return {"tier": tier, "saved_tier": tier, "mode": "saved"}
+	return {"tier": tier, "saved_tier": tier, "mode": "saved", "sharp": sharp}
 
 
 ## What the "terrain imagery" choice needs to show for a world record that is
@@ -182,7 +193,7 @@ static func summary_for_record(rec: Dictionary, snap: Dictionary = {}) -> Dictio
 	var lat := float(map.get("lat", 0.0))
 	var lon := float(map.get("lon", 0.0))
 	var dh := detail_half_of(rec, snap)
-	var ov := config_overrides()
+	var ov := with_sharp(config_overrides(), str(ti.get("sharp", "")))
 	var saved := int(ti.get("saved_tier", -1))
 	var local := local_tier()
 	var out := {"saved_tier": saved, "local_tier": local, "mode": str(ti.get("mode", "local")),

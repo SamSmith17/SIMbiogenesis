@@ -54,6 +54,8 @@ var _shadow_quality_lbl: Label
 var _graphics_quality: OptionButton
 var _terrain_quality: HSlider
 var _terrain_quality_lbl: Label
+var _terrain_sharp_row: HBoxContainer
+var _terrain_sharp: OptionButton
 var _render_scale: HSlider
 var _prop_draw_dist: HSlider
 var _prop_shadows: CheckBox
@@ -1879,6 +1881,22 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	tq_hint.add_theme_color_override("font_color", C_TEXT_S)
 	tq_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(tq_hint)
+	# Per world: which capture the sharp close-up layers use (in a world only).
+	_terrain_sharp_row = HBoxContainer.new()
+	_terrain_sharp_row.add_theme_constant_override("separation", 8)
+	var ts_hdr := Label.new()
+	ts_hdr.text = "Sharpest layer"
+	ts_hdr.custom_minimum_size = Vector2(110, 0)
+	ts_hdr.add_theme_color_override("font_color", C_TEXT_S)
+	_terrain_sharp_row.add_child(ts_hdr)
+	_terrain_sharp = OptionButton.new()
+	_terrain_sharp.add_item("Sharpest photo (may be older)")
+	_terrain_sharp.add_item("Newest photo (matches the map)")
+	_terrain_sharp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_terrain_sharp.tooltip_text = "This world only. The close-up imagery round your site can come from a sharper photo that is sometimes years older than the rest of the map, so things that change (a shoreline, new buildings) can jump at its edge. Newest uses the same photo as the map round it: one date everywhere, a little softer up close."
+	_terrain_sharp.item_selected.connect(_on_terrain_sharp)
+	_terrain_sharp_row.add_child(_terrain_sharp)
+	v.add_child(_terrain_sharp_row)
 	_sync_terrain_quality()
 	v.add_child(HSeparator.new())
 	if hub_mode:
@@ -2627,6 +2645,16 @@ func _on_terrain_quality(v: float) -> void:
 		cfg.set_value("terrain", "quality_tier", tier)
 		cfg.save("user://terrain_config.cfg")
 
+func _on_terrain_sharp(idx: int) -> void:
+	if _syncing: return
+	var loader := _find_terrain_loader()
+	if loader == null or not loader.has_method("set_world_imagery_sharp"):
+		return
+	loader.call("set_world_imagery_sharp", "newest" if idx == 1 else "sharpest")
+	var main: Node = SimSettingsController.main_node
+	if main != null and WorldPaths.has_active_world():
+		WorldSession.save_now(main, false, false)   # world.json remembers the choice
+
 ## Locate the active generated-map TerrainLoader (built-in maps have none).
 func _find_terrain_loader() -> Node:
 	var tree := get_tree()
@@ -2659,6 +2687,11 @@ func _sync_terrain_quality() -> void:
 	var was_syncing := _syncing
 	_syncing = true
 	_terrain_quality.value = float(tier)
+	var has_sharp := loader != null and loader.has_method("get_world_imagery_sharp")
+	if _terrain_sharp_row != null:
+		_terrain_sharp_row.visible = has_sharp
+		if has_sharp:
+			_terrain_sharp.selected = 1 if str(loader.call("get_world_imagery_sharp")) == "newest" else 0
 	_syncing = was_syncing
 	_update_terrain_quality_label(tier)
 

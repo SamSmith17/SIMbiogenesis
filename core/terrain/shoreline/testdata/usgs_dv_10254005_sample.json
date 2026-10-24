@@ -1,0 +1,203 @@
+{
+ "name": "ns1:timeSeriesResponseType",
+ "declaredType": "org.cuahsi.waterml.TimeSeriesResponseType",
+ "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+ "value": {
+  "queryInfo": {
+   "note": "trimmed fixture of the real 2026-10-23 reply: first 3, a no-data, 2000-01-01, 2010-01-01, last 3"
+  },
+  "timeSeries": [
+   {
+    "sourceInfo": {
+     "siteName": "SALTON SEA NR WESTMORLAND CA",
+     "siteCode": [
+      {
+       "value": "10254005",
+       "network": "NWIS",
+       "agencyCode": "USGS"
+      }
+     ],
+     "timeZoneInfo": {
+      "defaultTimeZone": {
+       "zoneOffset": "-08:00",
+       "zoneAbbreviation": "PST"
+      },
+      "daylightSavingsTimeZone": {
+       "zoneOffset": "-07:00",
+       "zoneAbbreviation": "PDT"
+      },
+      "siteUsesDaylightSavingsTime": true
+     },
+     "geoLocation": {
+      "geogLocation": {
+       "srs": "EPSG:4326",
+       "latitude": 33.15375,
+       "longitude": -115.673103
+      },
+      "localSiteXY": []
+     },
+     "note": [],
+     "siteType": [],
+     "siteProperty": [
+      {
+       "value": "LK",
+       "name": "siteTypeCd"
+      },
+      {
+       "value": "181002041600",
+       "name": "hucCd"
+      },
+      {
+       "value": "06",
+       "name": "stateCd"
+      },
+      {
+       "value": "06025",
+       "name": "countyCd"
+      }
+     ]
+    },
+    "variable": {
+     "variableCode": [
+      {
+       "value": "62614",
+       "network": "NWIS",
+       "vocabulary": "NWIS:UnitValues",
+       "variableID": 51413520,
+       "default": true
+      }
+     ],
+     "variableName": "Lake or reservoir water surface elevation above NGVD 1929, ft",
+     "variableDescription": "Lake or reservoir water surface elevation above NGVD 1929, feet",
+     "valueType": "Derived Value",
+     "unit": {
+      "unitCode": "ft"
+     },
+     "options": {
+      "option": [
+       {
+        "value": "Mean",
+        "name": "Statistic",
+        "optionCode": "00003"
+       }
+      ]
+     },
+     "note": [],
+     "noDataValue": -999999.0,
+     "variableProperty": [],
+     "oid": "51413520"
+    },
+    "values": [
+     {
+      "value": [
+       {
+        "value": "-228.20",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "1987-10-01T00:00:00.000"
+       },
+       {
+        "value": "-228.20",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "1987-10-02T00:00:00.000"
+       },
+       {
+        "value": "-228.20",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "1987-10-03T00:00:00.000"
+       },
+       {
+        "value": "-999999",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "1990-06-01T00:00:00.000"
+       },
+       {
+        "value": "-228.10",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "2000-01-01T00:00:00.000"
+       },
+       {
+        "value": "-231.60",
+        "qualifiers": [
+         "A"
+        ],
+        "dateTime": "2010-01-01T00:00:00.000"
+       },
+       {
+        "value": "-244.00",
+        "qualifiers": [
+         "P",
+         "e"
+        ],
+        "dateTime": "2026-09-20T00:00:00.000"
+       },
+       {
+        "value": "-244.00",
+        "qualifiers": [
+         "P",
+         "e"
+        ],
+        "dateTime": "2026-09-21T00:00:00.000"
+       },
+       {
+        "value": "-244.00",
+        "qualifiers": [
+         "P",
+         "e"
+        ],
+        "dateTime": "2026-09-22T00:00:00.000"
+       }
+      ],
+      "qualifier": [
+       {
+        "qualifierCode": "e",
+        "qualifierDescription": "Value has been estimated.",
+        "qualifierID": 0,
+        "network": "NWIS",
+        "vocabulary": "uv_rmk_cd"
+       },
+       {
+        "qualifierCode": "A",
+        "qualifierDescription": "Approved for publication -- Processing and review completed.",
+        "qualifierID": 1,
+        "network": "NWIS",
+        "vocabulary": "uv_rmk_cd"
+       },
+       {
+        "qualifierCode": "P",
+        "qualifierDescription": "Provisional data subject to revision.",
+        "qualifierID": 2,
+        "network": "NWIS",
+        "vocabulary": "uv_rmk_cd"
+       }
+      ],
+      "qualityControlLevel": [],
+      "method": [
+       {
+        "methodDescription": "",
+        "methodID": 7209
+       }
+      ],
+      "source": [],
+      "offset": [],
+      "sample": [],
+      "censorCode": []
+     }
+    ],
+    "name": "USGS:10254005:62614:00003"
+   }
+  ]
+ },
+ "nil": false,
+ "globalScope": true,
+ "typeSubstituted": false
+}

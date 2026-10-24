@@ -262,7 +262,9 @@ static func prepare_context(osm_payload: Dictionary, ctx: Dictionary) -> Generat
 		_trim_polygons(osm_payload.get("polygons", []), DENSE_POLY_BUDGET))
 	state.dense = state.polys.size() >= DENSE_POLY_SKIP_GAP_FILL
 	var exclusions: Array = ctx.get("exclusions", [])
-	state.exclusion_index = VegExclusionBuilder.build_index(exclusions, half)
+	var extra: Variant = ctx.get("exclude_fn", Callable())
+	state.exclusion_index = VegExclusionBuilder.build_index(exclusions, half,
+		extra if extra is Callable else Callable())
 	# Meadow/lawn footprints veto tree scatter from overlapping polygons (a
 	# wood polygon drawn over a mapped meadow must not forest it). Threaded via
 	# ctx so the static scatter helpers can reach it without signature churn.

@@ -51,8 +51,13 @@ static func point_excluded(p: Vector2, exclusions: Array) -> bool:
 
 
 ## Spatial broadphase for scatter hot loops (uniform grid over the site square).
-static func build_index(exclusions: Array, half_extent_m: float) -> ExclusionIndex:
-	return ExclusionIndex.build(exclusions, half_extent_m)
+## `extra` (x, z) -> bool excludes ground no polygon describes — a lake's
+## shore band from its gauge record (ShorelineHistory.in_shore).
+static func build_index(exclusions: Array, half_extent_m: float,
+		extra: Callable = Callable()) -> ExclusionIndex:
+	var idx := ExclusionIndex.build(exclusions, half_extent_m)
+	idx.extra = extra
+	return idx
 
 
 class ExclusionIndex:
@@ -63,6 +68,7 @@ class ExclusionIndex:
 	var _polys: Array = []
 	var _half := 1500.0
 	var _cells: Dictionary = {}
+	var extra: Callable = Callable()
 
 
 	static func build(exclusions: Array, half_extent_m: float) -> ExclusionIndex:
@@ -99,6 +105,8 @@ class ExclusionIndex:
 
 
 	func is_excluded(p: Vector2) -> bool:
+		if extra.is_valid() and bool(extra.call(p.x, p.y)):
+			return true
 		if _polys.is_empty():
 			return false
 		var cx := int(floor((p.x + _half) / CELL_M))

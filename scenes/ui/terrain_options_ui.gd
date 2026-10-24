@@ -35,6 +35,9 @@ var _poi_empty_lbl: Label = null
 var _poi_dialog: FileDialog = null
 var _poi_clear_confirm: ConfirmationDialog = null
 var _auto_veg_density_spin: SpinBox = null
+## "Shoreline over time" (archived drape + gauged lake level).
+const _SHORE_PANEL := preload("res://scenes/ui/shoreline_history_panel.gd")
+var _shore_panel: Control = null
 var _cache_cb: CheckBox = null
 var _status_lbl: Label = null
 
@@ -84,6 +87,8 @@ func bind_loader(loader: Node) -> void:
 			_loader.options_status_changed.connect(_on_loader_status)
 	_sync_from_loader()
 	_maybe_opentopo_hint()
+	if _shore_panel != null:
+		_shore_panel.call("bind", loader)
 
 
 func set_status(msg: String, kind: String = "info") -> void:
@@ -181,6 +186,8 @@ func _build_ui() -> void:
 	# anything near the bottom of this long column falls off a 720p / 1080p
 	# screen (the KML import was unfindable down there).
 	_build_poi_ui(_body)
+	_shore_panel = _SHORE_PANEL.new()
+	_body.add_child(_shore_panel)
 
 	_roads_cb = _add_toggle(_body, "Flatten roads",
 		"Level highway corridors on the hi-res DEM grid (the hi-res patch only)", _on_roads_toggled)

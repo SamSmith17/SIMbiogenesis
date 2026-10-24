@@ -97,6 +97,24 @@ func reset_session() -> void:
 	_pending.clear()
 
 
+## Drop the queued and in-flight jobs of these layer tags (a drape switch:
+## ShorelineHistory moving to another archived capture must not wait behind
+## the previous capture's 600-tile hyper download). Other tags keep going.
+func cancel_tags(tags: Array) -> void:
+	var keep: Array[Dictionary] = []
+	for j in _pending:
+		if not tags.has(str(j.get("tag", ""))):
+			keep.append(j)
+	_pending = keep
+	if _busy and not _job.is_empty() and tags.has(str(_job.get("tag", ""))):
+		if _http != null and is_instance_valid(_http):
+			_http.cancel_request()
+		_job_seq += 1
+		_busy = false
+		_job = {}
+		_start_next()
+
+
 ## Attribution for one layer ("hyper", "site", …): the sources its tiles came from.
 func attribution_for(tag: String) -> String:
 	return str(_attrib_by_tag.get(tag, ATTRIBUTION))
@@ -479,7 +497,9 @@ static func cache_candidates(key: String) -> PackedStringArray:
 	out.append(p)
 	out.append(p.replace("img_v3_", "img_v1_"))
 	var pk := plain_key(key)
-	if not pk.is_empty():
+	# A Wayback (archived) layer is a photo of ANOTHER YEAR: today's plain
+	# mosaic of the same square is not a stand-in for it.
+	if not pk.is_empty() and key.find("_" + ImagerySources.WAYBACK_PREFIX) < 0:
 		var pp := cache_path_for(pk)
 		out.append(pp)
 		out.append(pp.replace("img_v3_", "img_v1_"))

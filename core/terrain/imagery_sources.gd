@@ -58,11 +58,40 @@ const SOURCES := {
 const GLOBAL_CHAIN := ["esri_clarity", "esri"]
 
 
+## Esri World Imagery Wayback: one source per archived RELEASE, id
+## "wayback_<release id>" (WaybackCatalog; ShorelineHistory picks the release).
+## The id is the cache-key suffix, so each release caches on its own.
+const WAYBACK_PREFIX := "wayback_"
+## Capture details per release id, filled by ShorelineHistory as it learns
+## them ({date, sensor, provider, res_m, release_date}) — the attribution and
+## the native resolution of a Wayback layer.
+static var wayback_meta: Dictionary = {}
+
+
+static func is_wayback(id: String) -> bool:
+	return id.begins_with(WAYBACK_PREFIX) and id.substr(WAYBACK_PREFIX.length()).is_valid_int()
+
+
+static func wayback_id(release: int) -> String:
+	return WAYBACK_PREFIX + str(release)
+
+
 static func has(id: String) -> bool:
-	return SOURCES.has(id)
+	return SOURCES.has(id) or is_wayback(id)
 
 
 static func info(id: String) -> Dictionary:
+	if is_wayback(id):
+		var rel := id.substr(WAYBACK_PREFIX.length()).to_int()
+		var meta: Dictionary = wayback_meta.get(rel, {})
+		return {
+			"label": "Wayback " + str(meta.get("date", "release %d" % rel)),
+			"url": WaybackCatalog.tile_url_template(rel),
+			"max_zoom": WaybackCatalog.MAX_ZOOM,
+			"native_m": maxf(float(meta.get("res_m", 0.5)), 0.15),
+			"attribution": WaybackCatalog.attribution(meta) if not meta.is_empty()
+				else "Imagery © Esri World Imagery Wayback",
+		}
 	return SOURCES.get(id, SOURCES["esri"]) as Dictionary
 
 
@@ -79,9 +108,30 @@ static func covers(id: String, lat: float, lon: float, margin_deg: float = 0.0) 
 		and lat >= float(b["south"]) + margin_deg and lat <= float(b["north"]) - margin_deg
 
 
+## Which capture a world's sharp layers (hyper + site) use. Per world:
+## world.json `terrain_imagery.sharp`, read by TerrainLoader.
+##   SHARP_SHARPEST — the regional flight / Clarity chain below. Crisper, but
+##                    often an OLDER photo than the layers round it.
+##   SHARP_NEWEST   — plain ESRI, the capture the detail and base drapes use,
+##                    so the whole map is one date. At Bombay Beach Clarity
+##                    shows the Salton Sea years higher than the 2024 ESRI
+##                    capture beside it, and the shoreline jumps at the edge
+##                    of the sharp square.
+const SHARP_SHARPEST := "sharpest"
+const SHARP_NEWEST := "newest"
+const SHARP_CHOICES := [SHARP_SHARPEST, SHARP_NEWEST]
+
+
+static func sharp_preference(v: Variant) -> String:
+	return SHARP_NEWEST if str(v) == SHARP_NEWEST else SHARP_SHARPEST
+
+
 ## The source chain for the sharp layers at a site: every regional source
-## that covers it (finest capture first), then the global fallbacks.
-static func chain_for(lat: float, lon: float) -> Array:
+## that covers it (finest capture first), then the global fallbacks — or
+## plain ESRI alone for SHARP_NEWEST.
+static func chain_for(lat: float, lon: float, prefer: String = SHARP_SHARPEST) -> Array:
+	if prefer == SHARP_NEWEST:
+		return default_chain()
 	var regional: Array = []
 	for id: String in SOURCES.keys():
 		if SOURCES[id].has("bbox") and covers(id, lat, lon):
@@ -148,8 +198,19 @@ static func attribution_for(used: Array) -> String:
 
 
 ## True when a decoded tile holds no imagery: fully transparent (an ArcGIS
-## cache's empty tile), or near-uniform (ESRI's grey "Map data not yet
-## available" placeholder — 90 % of a 12×12 grid within 0.03 of the median).
+## cache's empty tile), or ESRI's "Map data not yet available" placeholder —
+## near-uniform (90 % of a 12×12 grid within 0.03 of the median) AND neutral
+## grey (mean chroma under PLACEHOLDER_MAX_CHROMA, median luminance inside
+## PLACEHOLDER_LUM). The grey test is what keeps real tiles: at z18–19 open
+## water, a salt flat or bare sand is just as uniform as the placeholder, and
+## treating those as blank sent them to the next source — at Bombay Beach a
+## NEWER ESRI capture, with the Salton Sea metres further out, pasted
+## tile-by-tile into the older Clarity mosaic. Measured 2026-10-23: the
+## placeholder is (204, 204, 204), chroma 0.000; Clarity sea tiles there are
+## 99–100 % uniform with chroma 0.05.
+const PLACEHOLDER_MAX_CHROMA := 0.02
+const PLACEHOLDER_LUM := Vector2(0.6, 0.95)
+
 static func is_blank_tile(img: Image) -> bool:
 	if img == null or img.is_empty():
 		return true
@@ -159,6 +220,7 @@ static func is_blank_tile(img: Image) -> bool:
 		return true
 	var lums: Array[float] = []
 	var any_opaque := false
+	var chroma := 0.0
 	var has_alpha := img.detect_alpha() != Image.ALPHA_NONE
 	for sy in 12:
 		for sx in 12:
@@ -166,11 +228,15 @@ static func is_blank_tile(img: Image) -> bool:
 			if not has_alpha or c.a > 0.05:
 				any_opaque = true
 			lums.append((c.r + c.g + c.b) / 3.0)
+			chroma += maxf(c.r, maxf(c.g, c.b)) - minf(c.r, minf(c.g, c.b))
 	if not any_opaque:
 		return true
 	var sorted := lums.duplicate()
 	sorted.sort()
 	var med: float = sorted[sorted.size() / 2]
+	if chroma / float(lums.size()) >= PLACEHOLDER_MAX_CHROMA \
+			or med < PLACEHOLDER_LUM.x or med > PLACEHOLDER_LUM.y:
+		return false
 	var near := 0
 	for l in lums:
 		if absf(l - med) < 0.03:

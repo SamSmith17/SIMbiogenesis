@@ -6,11 +6,13 @@ extends SceneTree
 ## cached files (and refuses a half-cached tier); record_for_import prefers
 ## the author's recorded tier, falls back to inference, and returns {} when
 ## neither is known; GPU cost rises with the tier and an exported game's RGBA8
-## costs 8x DXT1; the choice is offered only when the tiers differ.
+## costs 8x DXT1; the choice is offered only when the tiers differ; a
+## world's "newest" sharp source fetches plain ESRI under the plain key and
+## travels with a shared world.
 ## Works at a coordinate nobody plays and deletes the files it writes.
 
 const _ImgSvc := preload("res://core/terrain/imagery_service.gd")
-const EXPECTED_CHECKS := 30
+const EXPECTED_CHECKS := 36
 const LAT := 0.0371
 const LON := 0.0613
 const DH := 3000.0
@@ -25,6 +27,7 @@ func _initialize() -> void:
 	_test_keys()
 	_test_infer_and_import()
 	_test_vram_and_choice()
+	_test_sharp_source()
 	_cleanup()
 	if _n != EXPECTED_CHECKS:
 		_fails += 1
@@ -97,10 +100,10 @@ func _test_infer_and_import() -> void:
 	var rec := {"map": {"scene_path": MapDefinition.GENERATED_SCENE, "lat": LAT, "lon": LON,
 		"detail_half_extent_m": DH}}
 	var r1 := TerrainImageryPlan.record_for_import(rec)
-	_ok(r1 == {"tier": 3, "saved_tier": 3, "mode": "saved"}, "old pack: tier inferred, opens saved (%s)" % str(r1))
+	_ok(r1 == {"tier": 3, "saved_tier": 3, "mode": "saved", "sharp": "sharpest"}, "old pack: tier inferred, opens saved (%s)" % str(r1))
 	var rec2 := rec.duplicate(true)
 	rec2["terrain_imagery"] = {"tier": 2, "saved_tier": -1, "mode": "local"}
-	_ok(TerrainImageryPlan.record_for_import(rec2) == {"tier": 2, "saved_tier": 2, "mode": "saved"},
+	_ok(TerrainImageryPlan.record_for_import(rec2) == {"tier": 2, "saved_tier": 2, "mode": "saved", "sharp": "sharpest"},
 		"author's recorded tier beats inference")
 	var snap := {"world_extras": {"terrain_imagery": {"tier": 0, "mode": "local"}}}
 	_ok(int(TerrainImageryPlan.record_for_import(rec, snap)["saved_tier"]) == 0, "snapshot's record when world.json has none")
@@ -134,3 +137,25 @@ func _test_vram_and_choice() -> void:
 	_ok(TerrainImageryChoice.has_choice({"saved_tier": 3, "local_tier": 1}), "choice when tiers differ")
 	_ok(not TerrainImageryChoice.has_choice({"saved_tier": 1, "local_tier": 1})
 		and not TerrainImageryChoice.has_choice({"saved_tier": -1, "local_tier": 1}), "no choice when equal / unknown")
+
+
+## The per-world sharp source: "newest" = the detail drape's plain ESRI
+## capture (one photo date over the whole map), anything else = the chain.
+func _test_sharp_source() -> void:
+	_ok(ImagerySources.chain_for(LAT, LON, ImagerySources.SHARP_NEWEST) == ["esri"],
+		"newest = plain ESRI only")
+	_ok(ImagerySources.sharp_preference("bogus") == ImagerySources.SHARP_SHARPEST
+		and ImagerySources.sharp_preference(null) == ImagerySources.SHARP_SHARPEST, "unknown -> sharpest")
+	var newest := TerrainImageryPlan.with_sharp({}, "newest")
+	var hn := TerrainImageryPlan.layer("hyper", 1, LAT, LON, DH, newest)
+	_ok(str(hn["key"]) == _ImgSvc.layer_key(LAT, LON, 500.0, 8192, 19)
+		and hn["chain"] == ["esri"], "newest hyper key == the plain ESRI key (%s)" % str(hn["key"]))
+	var hs := TerrainImageryPlan.layer("hyper", 1, LAT, LON, DH)
+	_ok(str(hs["key"]) != str(hn["key"]), "sharpest and newest are different cache files")
+	var sn := TerrainImageryPlan.layer("site", 2, LAT, LON, DH, newest)
+	_ok(sn["chain"] == ["esri"] and int(sn["max_zoom"]) == ImagerySources.native_zoom(["esri"], LAT),
+		"newest site patch: plain ESRI at its own native zoom")
+	var rec := {"map": {"scene_path": MapDefinition.GENERATED_SCENE, "lat": LAT, "lon": LON,
+		"detail_half_extent_m": DH}, "terrain_imagery": {"tier": 1, "mode": "local", "sharp": "newest"}}
+	_ok(str(TerrainImageryPlan.record_for_import(rec).get("sharp", "")) == "newest",
+		"a shared world keeps its author's sharp source")

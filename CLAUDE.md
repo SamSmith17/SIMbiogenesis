@@ -83,6 +83,16 @@ commit URLs or tokens).
     screen when a request fails with no fallback.
   - The UI is `TerrainImageryChoice`, in the Share install screen and the
     world panel.
+  - `terrain_imagery.sharp` ("sharpest" | "newest", Settings → Lighting →
+    "Sharpest layer"): the hyper + site layers' chain. Sharpest = regional /
+    Clarity (often an OLDER photo: at Bombay Beach the shoreline jumped at
+    the sharp square's edge); newest = plain ESRI, the detail drape's own
+    capture. Through `TerrainImageryPlan.with_sharp` / overrides
+    `sharp_source`, carried by `record_for_import`.
+  - `ImagerySources.is_blank_tile` calls a tile empty only if it is the
+    ESRI placeholder's neutral grey (204,204,204). Uniform water / sand used
+    to count as blank and fell through to the next source, mixing two
+    captures tile by tile (the stepped Salton Sea shoreline, 2026-10-23).
   - `ImageryService.offline_for_test` / `--imagery-offline` makes every
     download fail, which is how the fallback is tested.
   - Caches made before the source-chain change are named without the
@@ -771,6 +781,14 @@ Godot.exe.exe --headless --path . --script core/terrain/terrain_imagery_plan_sel
 # It covers saved -> my quality OFFLINE (the cached layers load at my tier,
 # the rest fall back to the saved copy) -> online -> saved again, and that
 # world.json follows each switch.
+# Shoreline over time (offline — LakeGauge dv parse / level at a date /
+# VERTCON shift / gauge pick, WaybackCatalog config / tilemap walk /
+# metadata / capture dedupe, the wayback source id + cache key; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/terrain/shoreline/shoreline_selftest.gd
+# The same on Bombay Beach (sandbox, network): the level at five dates and the
+# water edge moving seaward, the captures listed, a pinned 2011 drape and
+# follow-the-clock at 2017, shots under screenshots\shoreline\:
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/shoreline_history_check.gd -Label shoreline -Timeout 1800
 # Map extents (offline — TerrainExtents side/half + clamps + overlay cap, the
 # stale-result key test against the REAL elevation/imagery key formats, the
 # elevation source ladder, tiling + stitch == one request, retry delay;
@@ -10122,6 +10140,67 @@ placemark's exact coordinates so nothing has to be guessed at in the world.
   any new row wider than ~250 px does it again). Verify with
   `core/poi/poi_selftest.gd` and `--capture=poi` on mtvernon (Validation
   list), which asserts the panel and the block are inside the viewport.
+
+## Shoreline over time — archived drape + gauged lake level (core/terrain/shoreline/, 2026-10-23)
+
+Terrain options → "Shoreline over time". Both layers are PURE FUNCTIONS of the
+sim clock, so scrubbing the timeline moves them (the ExtremeWeather rule).
+`ShorelineHistory` is a TerrainLoader child (`shoreline_history()`, made on
+first ask); its record rides world.json `terrain_imagery.history`
+({mode current|pinned|follow, release, lake_level}) via `world_imagery_record`.
+- **Archived imagery = Esri World Imagery Wayback** (`WaybackCatalog`, pure).
+  Source id `wayback_<release>` in `ImagerySources` (the release is the cache
+  key suffix; `ImagerySources.wayback_meta` carries each capture's date /
+  provider for the attribution). `ImageryService.cache_candidates` never falls
+  back from a Wayback key to today's plain mosaic. Distinct captures: walk
+  the tilemap `select` chain at the site's centre tile (z17: 14 requests at
+  Bombay Beach instead of 197), read each changed release's metadata (layer
+  4 outward until MinMapLevel..MaxMapLevel covers the zoom), dedupe on
+  capture date + sensor keeping the newest release → 8 captures 2011–2024
+  there. Cached in terrain_cache/wayback/. Only the detail + hyper drapes swap
+  (`_history_chain()` in the loader's requests); the site patch is off while
+  a capture is shown and the 30 km base stays today's. A capture not on disk
+  at load is fetched after the load (`_history_deferred`). Follow mode waits
+  1 s on one capture before asking for it.
+  ⚠ **The "403s" were Python-urllib's User-Agent**: about half of Wayback's
+  Apache backends refuse it (30 of 60); Godot's own agent is 60 of 60. No
+  Referer or token.
+- **Lake level = the USGS gauge** (`LakeGauge`, pure): NWIS daily values,
+  62614 (NGVD29 ft) or 62615 (NAVD88); the known list first (Salton Sea
+  10254005), else an NWIS lake-site search within 45 km. Cached in
+  terrain_cache/lake_gauge/, refetched daily. NGVD29 → NAVD88 (the DEM's
+  datum) from NOAA NCAT / VERTCON 3.0 **at the gauge**: +0.534 m there,
+  +0.682 m at Bombay Beach 22 km north — the lake surface is level, so only
+  the gauge's shift is its height. The lake is drawn as ONE plane (the OSM
+  outline grown 2.5 km) at the level; its OSM body is left out of
+  WaterBuilder (`filter_still`). Days are CelestialClock absolute days.
+  **Reach mask** (`LakeSpill`, pure): a flat plane floods every hollow
+  under the level, but the blocks behind Bombay Beach's berm stayed dry. A
+  Priority-Flood seeded at the lake's own DEM cells gives each 8 m cell its
+  SPILL level (the lowest lake level that reaches it); the plane's material
+  (`terrain_water.gdshader` `use_spill`, off for every other body) discards
+  where spill > level. Ground sampled a few rows a frame, the flood on a
+  worker; unreached cells are 1e6, not INF (linear filtering of INF beside a
+  number gives NaN, which draws). `wet_at(x, z)` is the same test on the CPU.
+  ⚠ The DEM only holds ground ABOVE the water it was surveyed at (-72.56 m at
+  Bombay Beach); a lower level (2026: -73.84 m) is drawn AT the DEM's lake
+  (`drawn_level_m()`, said in the UI) — a hidden plane left no water at all.
+  The sea ROSE 1990 → ~1997 before falling. Lake level defaults ON only
+  where a KNOWN gauge is in range.
+- **The shore band keeps vegetation off** (`ShorelineHistory.in_shore`):
+  every cell the reach mask floods at the gauge record's HIGHEST level (or
+  the DEM's lake, whichever is higher) + `SHORE_MARGIN_M`. The auto scatter's
+  gap fill plants wherever the photo is dark green, and the old captures'
+  shallows are. Fed to the generator as ctx `exclude_fn` and to
+  `veg_point_excluded_callable` (Detect, deadwood) through
+  `VegExclusionBuilder.build_index(..., extra)`. The mask lands frames after
+  the water, so the loader rescatters once when `shore_signature()` first
+  appears or changes (`_on_shoreline_changed_for_veg`, also called after the
+  load and after the scatter). Bombay Beach: 202 → 23 auto plants, 0 on the
+  old lakebed. Only while the lake level is on (no mask otherwise).
+- Gates: `core/terrain/shoreline/shoreline_selftest.gd` (offline, real
+  fixtures in testdata/) and `tools/checks/shoreline_history_check.gd`
+  (Validation list).
 
 ## Known pre-existing runtime errors (not regressions)
 
