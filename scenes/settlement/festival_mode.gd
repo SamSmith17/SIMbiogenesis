@@ -155,7 +155,7 @@ func open(main: Node) -> void:
 	for c in camps:
 		polys.append((c as Dictionary)["poly"])
 	var cl := FestivalSeedLayout.cluster(polys)
-	var at: Vector2 = cl["centre"] if not polys.is_empty() else Vector2.INF
+	var at: Vector2 = cl["centre"] if not polys.is_empty() else SiteCentre.xz(main)
 	var h := clampf(float(cl["radius"]) * 1.8, MIN_START_H, MAX_START_H)
 	if main.has_method("open_settlement_view"):
 		main.call("open_settlement_view", at, h)
@@ -182,16 +182,27 @@ func close() -> void:
 ## painted-camp headcounts back to 0, the demo zone + road, the fallback
 ## habitats. Closes the mode too, since there is nothing left to watch.
 func clear_seeded() -> void:
+	var removed := _clear_seeded_records()
+	if removed < 0:
+		return
+	_note("Cleared %s and every festival headcount." % UiText.count(removed, "seeded venue"))
+	close()
+
+
+## Everything clear_seeded removes, without leaving the mode (the setup card
+## replaces the gathering in place). Returns how many venues went, -1 = no
+## scene.
+func _clear_seeded_records() -> int:
 	var main := _main if _main != null else get_tree().current_scene
 	if main == null:
-		return
+		return -1
 	var sgv := ServiceLocator.graph()
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	var reg: SpaceRegistry = _registry(main, sgv)
 	var removed := 0
 	if reg != null:
 		for rec in reg.spaces.duplicate():
-			if str((rec as Dictionary).get("label", "")).begins_with(FestivalSeedLayout.LABEL_PREFIX):
+			if FestivalSeedLayout.is_seeded_space(rec as Dictionary):
 				if reg.remove_space(str((rec as Dictionary)["id"])):
 					removed += 1
 				continue
@@ -206,12 +217,21 @@ func clear_seeded() -> void:
 		_save_registry(main, loader, reg)
 	_seeded_space_ids.clear()
 	if loader != null:
-		if not _seeded_zone_id.is_empty() and loader.has_method("delete_placement_zone"):
-			loader.call("delete_placement_zone", _seeded_zone_id)
-		if not _seeded_road_id.is_empty() and loader.has_method("delete_festival_road"):
-			loader.call("delete_festival_road", _seeded_road_id)
+		# By id when this session seeded them, else by NAME — the ids were only
+		# ever in memory, so after a reload Clear used to leave the demo zone
+		# and its 16 camps standing.
+		var zones_left := _demo_ids(loader, "zones", DEMO_ZONE_NAME, _seeded_zone_id)
+		var roads_left := _demo_ids(loader, "roads", DEMO_ROAD_NAME, _seeded_road_id)
+		for zid in zones_left:
+			if loader.has_method("delete_placement_zone"):
+				loader.call("delete_placement_zone", zid)
+		for rid in roads_left:
+			if loader.has_method("delete_festival_road"):
+				loader.call("delete_festival_road", rid)
 		_seeded_zone_id = ""
 		_seeded_road_id = ""
+		if loader.has_method("delete_seeded_camp_areas"):
+			loader.call("delete_seeded_camp_areas")
 		if loader.has_method("depopulate_camp_areas"):
 			loader.call("depopulate_camp_areas")
 	if sgv != null and sgv.get("model") != null:
@@ -220,8 +240,7 @@ func clear_seeded() -> void:
 			var iid := str((it as Dictionary).get("id", ""))
 			if iid.begins_with(FALLBACK_ITEM_PREFIX):
 				model.remove_item(iid)
-	_note("Cleared %s and every festival headcount." % UiText.count(removed, "seeded venue"))
-	close()
+	return removed
 
 
 ## The festival's total population (PopTestPrefs, 0 = the camps' natural
@@ -237,6 +256,126 @@ func set_target_people(n: int) -> void:
 		_note("Population %s: %d people (natural %d)." % [
 			"target" if n > 0 else "back to natural", int(r.get("people", 0)), int(r.get("natural", 0))])
 	_refresh_status()
+
+
+## THE SETUP CARD: lay out a gathering of named camps round the location
+## marker. spec = {camps: [{name, people, style}], venues: [shared types to
+## seed], provision: CampProvisioning preset id, replace: bool (default true:
+## what festival mode seeded before goes first; the player's own camps and
+## spaces are never touched)}. Every camp's headcount is EXACT (locked: the
+## population target leaves it alone). Returns how many camps were placed.
+func setup_gathering(spec: Dictionary) -> int:
+	var main := _main if _main != null else get_tree().current_scene
+	var sgv := ServiceLocator.graph()
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main) if main != null else null
+	if main == null or sgv == null or loader == null or not loader.has_method("add_festival_camp"):
+		_note("The setup card needs a generated map.")
+		return 0
+	if bool(spec.get("replace", true)):
+		_clear_seeded_records()
+	var preset := str(spec.get("provision", ""))
+	if CampProvisioning.PRESETS.has(preset):
+		PopTestPrefs.set_provision_preset(preset)
+		PopTestPrefs.save()
+	var free_fn := Callable()
+	if loader.has_method("festival_ground_free"):
+		free_fn = Callable(loader, "festival_ground_free")
+	var plan := FestivalSeedLayout.setup_layout(spec, SiteCentre.xz(main), free_fn)
+	var placed := 0
+	var people := 0
+	for c in plan:
+		var cd: Dictionary = c
+		var id := str(loader.call("add_festival_camp", cd["polygon"], {"name": cd["name"],
+			"style": cd["style"], "headcount": int(cd["people"]), "heading_deg": float(cd["heading_deg"])}))
+		if not id.is_empty():
+			placed += 1
+			people += int(cd["people"])
+	# The graph sync is deferred; the venues need the compounds.
+	for _i in 4:
+		await get_tree().process_frame
+	var camps := _camps(sgv, loader)
+	if not camps.is_empty():
+		_seed_venues(main, sgv, loader, camps, spec.get("venues", []) as Array)
+	var supply := str(spec.get("supply", ""))
+	if not supply.is_empty() and sgv.has_method("set_all_camp_supply"):
+		sgv.call("set_all_camp_supply", supply)
+	_note("Set up %s (%s) round the marker." % [UiText.count(placed, "camp"),
+		UiText.count(people, "person", "people")])
+	_refresh_status()
+	changed.emit()
+	return placed
+
+
+## The setup card's starting values: the camps festival mode laid out last
+## time (names, people, styles), else six camps of ten.
+func setup_defaults() -> Dictionary:
+	var out := {"camps": [], "venues": FestivalSeedLayout.SETUP_DEFAULT_VENUES.duplicate(),
+		"provision": PopTestPrefs.provision_preset()}
+	var main := _main if _main != null else get_tree().current_scene
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main) if main != null else null
+	var areas: Variant = loader.get("camp_areas") if loader != null else null
+	if areas != null:
+		for rec in (areas.get("areas") as Array):
+			var r: Dictionary = rec
+			if bool(r.get("festival_seeded", false)) and int(r.get("headcount", 0)) > 0:
+				(out["camps"] as Array).append({"name": str(r.get("name", "Camp")),
+					"people": int(r["headcount"]), "style": str(r.get("style", CampStyles.DEFAULT_STYLE))})
+	if (out["camps"] as Array).is_empty():
+		for i in 6:
+			(out["camps"] as Array).append({"name": "Camp %d" % (i + 1), "people": 10,
+				"style": CampStyles.DEFAULT_STYLE})
+	return out
+
+
+## Carry the whole festival to the location marker: the camps' cluster centre
+## lands on the marker, and every road, zone, lot, festival camp and seeded /
+## camp-linked area space moves by the same offset. Spaces on props and
+## buildings stay with their objects. Returns the offset applied.
+func move_to_marker() -> Vector2:
+	var main := _main if _main != null else get_tree().current_scene
+	var sgv := ServiceLocator.graph()
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main) if main != null else null
+	if main == null or sgv == null or loader == null or not loader.has_method("translate_festival_layout"):
+		_note("Nothing to move here (needs a generated map).")
+		return Vector2.ZERO
+	var polys: Array = []
+	for c in _camps(sgv, loader):
+		polys.append((c as Dictionary)["poly"])
+	if polys.is_empty():
+		_note("No festival camps to move yet.")
+		return Vector2.ZERO
+	var delta := SiteCentre.xz(main) - (FestivalSeedLayout.cluster(polys)["centre"] as Vector2)
+	if delta.length() < 1.0:
+		_note("The festival is already on the marker.")
+		return Vector2.ZERO
+	var res: Dictionary = loader.call("translate_festival_layout", delta)
+	var reg: SpaceRegistry = _registry(main, sgv)
+	var moved_spaces := 0
+	if reg != null:
+		moved_spaces = reg.translate_areas(delta, func(rec: Dictionary) -> bool:
+			return FestivalSeedLayout.is_seeded_space(rec) or not str(rec.get("camp_id", "")).is_empty())
+		_save_registry(main, loader, reg)
+	_note("Moved the festival %.0f m to the marker (%s, %s)." % [delta.length(),
+		UiText.count(int(res.get("camps", 0)), "camp"), UiText.count(moved_spaces, "space")])
+	_refresh_status()
+	changed.emit()
+	return delta
+
+
+## Zone / road ids festival mode seeded: this session's id, plus any record
+## carrying the demo name (a save from before the ids were remembered).
+func _demo_ids(loader: Node, which: String, demo_name: String, known: String) -> Array:
+	var out: Array = []
+	if not known.is_empty():
+		out.append(known)
+	var placement: Variant = loader.get("placement")
+	if placement == null:
+		return out
+	for r in (placement.get(which) as Array):
+		var d: Dictionary = r
+		if str(d.get("name", "")) == demo_name and not out.has(str(d.get("id", ""))):
+			out.append(str(d.get("id", "")))
+	return out
 
 
 ## The two clock jumps the HUD offers — a festival is an EVENING thing (the
@@ -268,15 +407,16 @@ func _assign_unassigned_lots(loader: Node) -> void:
 		_note("Assigned default camps to %s." % UiText.count(n, "empty lot"))
 
 
-## No camps anywhere: a road + zone next to the player, cut into lots and
-## assigned — the harness's own step 1, so a bare map still has a festival
-## to watch. Remembered so clear_seeded can take it away again.
+## No camps anywhere: a road + zone centred on the location MARKER (the
+## site's centre — SiteCentre), cut into lots and assigned, so a bare map still
+## has a festival to watch. It used to sit 150 m north of wherever the player
+## stood, so a player standing at the origin got a festival 1.4 km from the
+## marker they had moved. Found again by NAME by clear_seeded and
+## move_to_marker, so it survives a reload.
 func _seed_demo_zone(loader: Node, main: Node) -> void:
 	if not loader.has_method("add_placement_zone"):
 		return
-	var player := main.get_node_or_null("Player") as Node3D
-	var origin := Vector2(player.global_position.x, player.global_position.z) if player != null else Vector2.ZERO
-	var zc := origin + Vector2(0.0, -150.0)
+	var zc := SiteCentre.xz(main)
 	var zone_poly := PackedVector2Array([zc + Vector2(-DEMO_HALF_W, -DEMO_HALF_D), zc + Vector2(DEMO_HALF_W, -DEMO_HALF_D),
 		zc + Vector2(DEMO_HALF_W, DEMO_HALF_D), zc + Vector2(-DEMO_HALF_W, DEMO_HALF_D)])
 	var road_pts := FestivalPlacementLayer.road_from_zone_spine(zone_poly, 90.0)
@@ -290,7 +430,7 @@ func _seed_demo_zone(loader: Node, main: Node) -> void:
 		_note("Could not seed a demo zone here (steep or built-up ground).")
 		return
 	_assign_unassigned_lots(loader)
-	_note("Seeded a demo festival zone next to you (%d lots)." % DEMO_LOTS)
+	_note("Seeded a demo festival zone on the location marker (%d lots)." % DEMO_LOTS)
 
 
 ## Built-in scenes (Soak / Mars) have no TerrainLoader, so nothing to paint:
@@ -299,8 +439,7 @@ func _seed_fallback_habitats(sgv: Node, main: Node) -> void:
 	var model: Variant = sgv.get("model")
 	if model == null or not model.has_method("add_item"):
 		return
-	var player := main.get_node_or_null("Player") as Node3D
-	var origin := Vector2(player.global_position.x, player.global_position.z) if player != null else Vector2.ZERO
+	var origin := SiteCentre.xz(main)
 	var per := int(ceil(float(FALLBACK_PEOPLE) / float(FALLBACK_HABITATS)))
 	for h in FALLBACK_HABITATS:
 		var ang := TAU * float(h) / float(FALLBACK_HABITATS)
@@ -314,7 +453,8 @@ func _seed_fallback_habitats(sgv: Node, main: Node) -> void:
 			"specs": {
 				"name": "Festival camp %d" % (h + 1), "role": "habitat", "occupants": per,
 				"pop_driven": true, "watts": 0.0, "energy_source": "", "efficiency": 1.0,
-				"home_x": home.x, "home_z": home.y, "site_x_m": home.x, "site_z_m": home.y,
+				"home_x": home.x, "home_z": home.y,
+				"site_x_m": home.x - origin.x, "site_z_m": home.y - origin.y,
 				"pop_routine": NpcRoutine.festival_day().to_array(),
 				"inputs": [
 					{"kind": "water", "rate": 2.083, "unit": "L/h"},
@@ -326,7 +466,7 @@ func _seed_fallback_habitats(sgv: Node, main: Node) -> void:
 				],
 			},
 		})
-	_note("No terrain loader here — seeded %d plain camps (%d people) around you." % [
+	_note("No terrain loader here — seeded %d plain camps (%d people) round the marker." % [
 		FALLBACK_HABITATS, FALLBACK_PEOPLE])
 
 
@@ -344,6 +484,7 @@ func _camps(sgv: Node, loader: Node) -> Array:
 			if poly.size() < 3:
 				continue
 			out.append({"id": str(cd.get("id", "")), "name": str(cd.get("name", "Camp")),
+				"lot_id": str(cd.get("lot_id", "")),
 				"poly": poly, "headcount": int(cd.get("headcount", 0))})
 	if not out.is_empty():
 		return out
@@ -364,7 +505,7 @@ func _camps(sgv: Node, loader: Node) -> Array:
 
 ## Tag what the festival still lacks. Types the player already tagged are
 ## left alone (their layout is theirs); only the missing ones are seeded.
-func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
+func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array, only: Array = []) -> void:
 	var reg: SpaceRegistry = _registry(main, sgv)
 	if reg == null:
 		return
@@ -374,6 +515,9 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 		if not present.has(t):
 			present.append(t)
 	var missing := FestivalSeedLayout.missing_types(present)
+	# The setup card names the shared venues it wants: exactly those (the
+	# ones the site has none of), beside every camp's own beds and kitchen.
+	var choose := not only.is_empty()
 	# A stage the player tagged with NO programme gets the festival's evening
 	# set, so it has a crowd and a DJ when the sun goes down. The slot is
 	# labelled with the prefix, so Clear takes it off again.
@@ -403,6 +547,15 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 	# already has its stage, temple and center camp too.
 	if not present.has("art") and not missing.has("art"):
 		missing.append("art")
+	if choose:
+		var picked: Array = []
+		for t2 in missing:
+			if FestivalSeedLayout.PER_CAMP_TYPES.has(t2) or only.has(t2):
+				picked.append(t2)
+		for t3 in only:
+			if not present.has(t3) and not picked.has(t3):
+				picked.append(t3)
+		missing = picked
 	# Where the already-tagged beds and kitchens stand (per-camp types are
 	# seeded for every camp whose outline holds none — FestivalSeedLayout
 	# .needs_seeding).
@@ -440,9 +593,11 @@ func _seed_venues(main: Node, sgv: Node, loader: Node, camps: Array) -> void:
 			str(vd["type"]), int(vd["cap"]), str(vd["label"]))
 		if sid.is_empty():
 			continue
-		var fields: Dictionary = vd.get("fields", {})
-		if not fields.is_empty():
-			reg.set_space_fields(sid, fields)
+		var fields: Dictionary = (vd.get("fields", {}) as Dictionary).duplicate(true)
+		fields["festival_seeded"] = true
+		if not str(vd.get("camp_key", "")).is_empty():
+			fields["camp_id"] = str(vd["camp_key"])
+		reg.set_space_fields(sid, fields)
 		_seeded_space_ids.append(sid)
 		added += 1
 	if added > 0:
@@ -477,7 +632,7 @@ func _tag_effigy(main: Node, sgv: Node, loader: Node) -> void:
 		SpaceRegistry.CAPACITY_AUTO, FestivalSeedLayout.LABEL_PREFIX + "Effigy")
 	if sid.is_empty():
 		return
-	reg.set_space_fields(sid, {"draw": 0.5})
+	reg.set_space_fields(sid, {"draw": 0.5, "festival_seeded": true})
 	_seeded_space_ids.append(sid)
 	_save_registry(main, loader, reg)
 	_note("Tagged the burnable structure as the Effigy — light it and the festival gathers.")

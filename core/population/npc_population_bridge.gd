@@ -3634,7 +3634,9 @@ func _home_pos(specs: Dictionary, main: Node) -> Vector2:
 		var rec: Dictionary = PlacedPropService.get_prop_record(main, pid)
 		if not rec.is_empty():
 			return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-	return Vector2.ZERO
+	# Nothing to anchor on: the site's centre (the location marker), never the
+	# world origin.
+	return SiteCentre.xz(main)
 
 
 ## Change-gated snapshot into specs.pop_state (survives save/load via the

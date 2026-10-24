@@ -117,7 +117,8 @@ static func _habitat_specs(n: int) -> Dictionary:
 
 static func _tank(name: String, kind: String, unit: String, cap: float, level: float) -> Dictionary:
 	return {"name": name, "resource_kind": kind, "capacity": "%.0f %s" % [cap, unit],
-		"capacity_qty": cap, "capacity_unit": unit, "level": level, "cost": 0.0}
+		"capacity_qty": cap, "capacity_unit": unit, "level": level, "cost": 0.0,
+		"camp_store": true}
 
 
 static func _res(src: String, sh: String, dst: String, dh: String, kind: String) -> Dictionary:

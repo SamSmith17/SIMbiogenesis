@@ -105,7 +105,9 @@ static func camp_lots(areas: Array, zone_ids: Dictionary) -> Array:
 			"usable_m2": CampAreaLayer.record_area(rec),
 			"assigned_camp": {"roster_id": "", "name": name,
 				"style": str(rec.get("style", CampStyles.DEFAULT_STYLE)),
-				"headcount": n, "requirements": [], "manual": true},
+				"headcount": n, "requirements": [], "manual": true,
+				"locked": bool(rec.get("headcount_locked", false))},
+			"festival_seeded": bool(rec.get("festival_seeded", false)),
 		})
 	return out
 
@@ -117,6 +119,139 @@ static func lot_id_for_camp(camp_id: String) -> String:
 ## "" when the lot id is a real placement lot.
 static func camp_id_for_lot(lot_id: String) -> String:
 	return lot_id.trim_prefix("camp:") if lot_id.begins_with("camp:") else ""
+
+
+# ---------------------------------------------------------------------------
+# The setup card: N named camps of M people, laid out round the marker
+# ---------------------------------------------------------------------------
+
+## Room (m²) a camp of `people` needs at its style's density, with headroom
+## so the lattice's partly-filled edge cells still sleep the headcount.
+const SETUP_AREA_HEADROOM := 1.25
+## Lane between neighbouring camps and the open plaza in the middle (the
+## shared venues — stage, center camp, temple — are searched for from the
+## centre outward, so they land on the plaza).
+const SETUP_LANE_M := 12.0
+const SETUP_PLAZA_R_M := 60.0
+const SETUP_MIN_SIDE_M := 14.0
+const SETUP_MAX_CAMPS := 20
+## The shared venues the setup card ticks by default.
+const SETUP_DEFAULT_VENUES: Array = ["restroom", "water_point", "shower", "stage",
+	"center_camp", "temple", "art"]
+const SETUP_PUSH_STEP_M := 10.0
+const SETUP_PUSH_STEPS := 30
+
+
+## A setup spec's camps, cleaned: [{name, people, style}] — at least one
+## camp, at most SETUP_MAX_CAMPS, people 2..MAX_HEADCOUNT, a valid style.
+static func clean_setup(spec: Dictionary) -> Array:
+	var out: Array = []
+	for c in spec.get("camps", []):
+		if not (c is Dictionary) or out.size() >= SETUP_MAX_CAMPS:
+			continue
+		var d: Dictionary = c
+		var style := str(d.get("style", CampStyles.DEFAULT_STYLE))
+		if not CampStyles.is_valid(style) or style == CampStyles.VARIED:
+			style = CampStyles.DEFAULT_STYLE
+		var nm := str(d.get("name", "")).strip_edges()
+		if nm.is_empty():
+			nm = "Camp %d" % (out.size() + 1)
+		out.append({"name": nm, "people": clampi(int(d.get("people", 10)), MIN_HEADCOUNT, MAX_HEADCOUNT),
+			"style": style})
+	return out
+
+
+## The side (m) of a square camp that sleeps `people` in `style`.
+static func setup_side_m(people: int, style: String) -> float:
+	var ppm := maxf(FestivalAssigner.people_per_m2(style), 1e-4)
+	return maxf(sqrt(float(people) / ppm * SETUP_AREA_HEADROOM), SETUP_MIN_SIDE_M)
+
+
+## Where the camps go: a ring round `centre` with the plaza inside it, each
+## camp a square whose front faces the plaza, neighbours a lane apart. A camp
+## whose spot `free_fn(centre, half) -> bool` vetoes (buildings, water, steep
+## ground) is pushed outward along its bearing. Pure; returns
+## [{name, people, style, polygon: PackedVector2Array, centre: Vector2, heading_deg}].
+static func setup_layout(spec: Dictionary, centre: Vector2, free_fn: Callable = Callable()) -> Array:
+	var camps := clean_setup(spec)
+	var out: Array = []
+	if camps.is_empty():
+		return out
+	var sides: Array = []
+	var ring_len := 0.0
+	var biggest := 0.0
+	for c in camps:
+		var sd := setup_side_m(int(c["people"]), str(c["style"]))
+		sides.append(sd)
+		ring_len += sd + SETUP_LANE_M
+		biggest = maxf(biggest, sd)
+	var r := maxf(ring_len / TAU, SETUP_PLAZA_R_M + biggest * 0.5)
+	var placed: Array = []
+	var ang := 0.0
+	for i in camps.size():
+		var c: Dictionary = camps[i]
+		var sd: float = sides[i]
+		# Each camp takes its share of the WHOLE circle (by size, so uneven
+		# camps never overlap, and the ring is balanced round the marker);
+		# its centre sits in the middle of that share.
+		var share := (sd + SETUP_LANE_M) / maxf(ring_len, 1.0) * TAU
+		var a := ang + share * 0.5
+		ang += share
+		var dir := Vector2(sin(a), -cos(a))
+		var rr := r
+		var pc := centre + dir * rr
+		for _k in SETUP_PUSH_STEPS:
+			if _setup_spot_ok(pc, sd * 0.5, placed, free_fn):
+				break
+			rr += SETUP_PUSH_STEP_M
+			pc = centre + dir * rr
+		var poly := _facing_square(pc, sd * 0.5, -dir)
+		placed.append(poly)
+		# The rows run ACROSS the bearing (a compass bearing, 0..180).
+		var heading := fposmod(rad_to_deg(atan2(dir.y, dir.x)) + 90.0, 180.0)
+		out.append({"name": str(c["name"]), "people": int(c["people"]), "style": str(c["style"]),
+			"polygon": poly, "centre": pc, "heading_deg": heading})
+	return out
+
+
+static func _setup_spot_ok(pc: Vector2, half: float, placed: Array, free_fn: Callable) -> bool:
+	if not clear_of_camps(pc, half + SETUP_LANE_M * 0.5, placed):
+		return false
+	if free_fn.is_valid() and not bool(free_fn.call(pc, half)):
+		return false
+	return true
+
+
+## A square of half-size `half` at `pc` with one edge facing `front`.
+static func _facing_square(pc: Vector2, half: float, front: Vector2) -> PackedVector2Array:
+	var f := front.normalized() if front.length() > 1e-6 else Vector2(0, -1)
+	var s := Vector2(-f.y, f.x)
+	return CampAreaLayer._ccw(PackedVector2Array([pc + (f + s) * half, pc + (f - s) * half,
+		pc + (-f - s) * half, pc + (-f + s) * half]))
+
+
+## The spaces seeded FOR a camp (record key `camp_id` == the camp's lot key)
+## follow its outline: beds = the outline, kitchen = the inset outline.
+## Returns how many records changed.
+static func follow_camp(reg: SpaceRegistry, camp_key: String, poly: PackedVector2Array) -> int:
+	if reg == null or camp_key.is_empty() or poly.size() < 3:
+		return 0
+	var n := 0
+	for item in reg.spaces.duplicate():
+		var rec: Dictionary = item
+		if str(rec.get("camp_id", "")) != camp_key:
+			continue
+		var t := str(rec.get("space_type", ""))
+		var shape := poly if t != "kitchen" else inset_polygon(poly, KITCHEN_INSET)
+		if reg.set_space_target(str(rec.get("id", "")), {"kind": "area", "poly": poly_to_array(shape)}):
+			n += 1
+	return n
+
+
+## Is this space record festival mode's own (Clear removes it, Move carries
+## it)? The flag, else the label prefix (records saved before the flag).
+static func is_seeded_space(rec: Dictionary) -> bool:
+	return bool(rec.get("festival_seeded", false)) 		or str(rec.get("label", "")).begins_with(LABEL_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -240,11 +375,15 @@ static func venue_plan(camps: Array, free_fn: Callable = Callable()) -> Array:
 		var n := maxi(int(cd.get("headcount", 0)), 1)
 		people += n
 		var name := str(cd.get("name", cd.get("id", "Camp")))
+		# camp_key (the compound's lot id) is what the SPACE record carries as
+		# `camp_id`, so the beds and kitchen follow when the camp moves.
+		var key := str(cd.get("lot_id", ""))
 		out.append({"type": "sleep", "poly": poly_to_array(poly), "cap": n,
-			"label": LABEL_PREFIX + name + " beds", "fields": {}, "camp_id": str(cd.get("id", ""))})
+			"label": LABEL_PREFIX + name + " beds", "fields": {}, "camp_id": str(cd.get("id", "")),
+			"camp_key": key})
 		out.append({"type": "kitchen", "poly": poly_to_array(inset_polygon(poly, KITCHEN_INSET)),
 			"cap": SpaceRegistry.CAPACITY_AUTO, "label": LABEL_PREFIX + name + " kitchen", "fields": {},
-			"camp_id": str(cd.get("id", ""))})
+			"camp_id": str(cd.get("id", "")), "camp_key": key})
 	if polys.is_empty():
 		return out
 	var cl := cluster(polys)

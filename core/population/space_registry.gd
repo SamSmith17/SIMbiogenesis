@@ -69,6 +69,9 @@ var _index_dirty := true
 ## Resolved world positions, space_id -> Vector2, refreshed by the owner once
 ## per tick (refresh_positions) so a query never resolves a prop record.
 var _pos_cache: Dictionary = {}
+## Bumped by every record change (add / remove / retarget / retype / fields).
+## Overlays and the Site Plan poll it instead of rebuilding on a timer.
+var revision := 0
 
 
 static func create_empty() -> SpaceRegistry:
@@ -175,6 +178,7 @@ static func _normalized(rec: Dictionary) -> Dictionary:
 
 func _invalidate() -> void:
 	_index_dirty = true
+	revision += 1
 
 
 func _rebuild_index() -> void:
@@ -234,10 +238,79 @@ func set_space_fields(space_id: String, patch: Dictionary) -> bool:
 		return false
 	for k in patch.keys():
 		match str(k):
-			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", 					"layout", "perform_h_m", "crowd_gap_m", "music":
+			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", 					"layout", "perform_h_m", "crowd_gap_m", "music", "festival_seeded", "camp_id":
 				rec[str(k)] = patch[k]
 	_normalized(rec)
+	revision += 1
 	return true
+
+
+## Move / reshape / re-point a space: give the record a new target (an area's
+## new polygon, a different prop). The id, type, label, fields and assignment
+## stay; occupancy and standing slots are let go (people re-plan from where
+## they stand) and the cached position is dropped so the next refresh puts the
+## space where it now is. Refused when another record already holds `target`.
+func set_space_target(space_id: String, target: Dictionary) -> bool:
+	var rec := find_by_id(space_id)
+	if rec.is_empty() or not _target_valid(target):
+		return false
+	var other := space_for_target(target)
+	if not other.is_empty() and str(other.get("id", "")) != space_id:
+		return false
+	rec["target"] = target.duplicate(true)
+	_occupancy.erase(space_id)
+	_forget_slots(space_id)
+	_pos_cache.erase(space_id)
+	_invalidate()
+	return true
+
+
+## Change only a space's type (a portapotty bank becomes showers). Unknown
+## types are refused; the empty string does NOT remove (use remove_space).
+func set_space_type_of(space_id: String, space_type: String) -> bool:
+	var rec := find_by_id(space_id)
+	if rec.is_empty() or not SpaceTypes.is_valid(space_type):
+		return false
+	rec["space_type"] = space_type
+	_invalidate()
+	return true
+
+
+## Move every AREA space by `delta` (world metres) — the ones `pick(rec)`
+## accepts. Returns how many moved. Prop / building targets stay with their
+## objects.
+func translate_areas(delta: Vector2, pick: Callable) -> int:
+	var n := 0
+	for item in spaces:
+		var rec: Dictionary = item
+		var tgt: Dictionary = rec.get("target", {})
+		if str(tgt.get("kind", "")) != "area" or not bool(pick.call(rec)):
+			continue
+		var moved: Array = []
+		for v in (tgt.get("poly", []) as Array):
+			if v is Array and (v as Array).size() >= 2:
+				moved.append([float(v[0]) + delta.x, float(v[1]) + delta.y])
+		var t2 := tgt.duplicate(true)
+		t2["poly"] = moved
+		rec["target"] = t2
+		_occupancy.erase(str(rec.get("id", "")))
+		_forget_slots(str(rec.get("id", "")))
+		_pos_cache.erase(str(rec.get("id", "")))
+		n += 1
+	if n > 0:
+		_invalidate()
+	return n
+
+
+static func _target_valid(target: Dictionary) -> bool:
+	match str(target.get("kind", "")):
+		"prop":
+			return not str(target.get("prop_id", "")).is_empty()
+		"building":
+			return not str(target.get("building_tag", "")).is_empty()
+		"area":
+			return poly_points(target.get("poly", []) as Array).size() >= 3
+	return false
 
 
 # --- record CRUD ------------------------------------------------------------

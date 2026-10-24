@@ -29,6 +29,7 @@ const CLAIM := "settlement"
 const HUD_SCRIPT := preload("res://scenes/settlement/settlement_hud.gd")
 const OVERLAY_SCRIPT := preload("res://scenes/settlement/space_overlay.gd")
 const DOCK_SCRIPT := preload("res://scenes/settlement/work_dock.gd")
+const EDITOR_SCRIPT := preload("res://scenes/settlement/site_editor.gd")
 
 signal closed()
 ## True when the last close came from drop_in (G): the player went INTO the
@@ -47,6 +48,11 @@ var _drag_moved := 0.0
 var _hud: CanvasLayer = null
 var _overlay: Node3D = null
 var _dock: CanvasLayer = null
+## The site editor (E / the festival panel's Edit button): select, move,
+## reshape and define camps and NPC spaces from up here.
+var _edit_layer: CanvasLayer = null
+var _editor: Control = null
+var _overlay_rev := -1
 ## Set only while the view is borrowed for a one-shot ground pick.
 var _pick_cb := Callable()
 ## Prop cull reach is refreshed on zoom TRANSITIONS, never per frame —
@@ -137,6 +143,8 @@ func close() -> void:
 	set_process_unhandled_input(false)
 	_follow_id = ""
 	_selection = {}
+	if _editor != null and is_instance_valid(_editor):
+		_editor.call("set_active", false)
 	if _hud != null and is_instance_valid(_hud):
 		_hud.call("hide_hud")
 	if _overlay != null and is_instance_valid(_overlay):
@@ -156,6 +164,75 @@ func close() -> void:
 
 func camera() -> SettlementCamera:
 	return _cam
+
+
+## The site editor on / off (E). Editing places is not an order: people re-plan
+## round whatever moved.
+func set_editing(on: bool) -> void:
+	if on and _editor == null:
+		_edit_layer = CanvasLayer.new()
+		_edit_layer.name = "SiteEditLayer"
+		# Above the view's own panels (the work dock, the selection card), below
+		# modals.
+		_edit_layer.layer = UITheme.LAYER_MODAL - 2
+		add_child(_edit_layer)
+		_editor = EDITOR_SCRIPT.new()
+		_editor.name = "SiteEditor"
+		_editor.set("clip_to_timeline", true)
+		_edit_layer.add_child(_editor)
+	if _editor == null:
+		return
+	if on:
+		_editor.call("bind", _main, Callable(self, "_edit_ground_at"), Callable(self, "_edit_to_screen"),
+			Callable(self, "_edit_pick_prop"))
+	_editor.call("set_active", on and _active)
+	# The work dock shares the right edge; it steps aside while editing.
+	if _dock != null and is_instance_valid(_dock):
+		_dock.call("hide_dock" if (on and _active) else "show_dock")
+
+
+func is_editing() -> bool:
+	return _editor != null and bool(_editor.get("active"))
+
+
+func toggle_editing() -> void:
+	set_editing(not is_editing())
+
+
+func site_editor() -> Control:
+	return _editor
+
+
+func _edit_ground_at(s: Vector2) -> Variant:
+	if _cam == null or _main == null:
+		return Vector2.INF
+	var g := SiteTargetPicker.ground_hit(_main, _cam.project_ray_origin(s), _cam.project_ray_normal(s),
+		maxf(_cam.height() * 8.0, 400.0))
+	if g.is_empty():
+		return Vector2.INF
+	var p: Vector3 = g["point"]
+	return Vector2(p.x, p.z)
+
+
+func _edit_to_screen(w: Vector2) -> Variant:
+	if _cam == null:
+		return Vector2.INF
+	var y := 0.0
+	var loader := TerrainSurfaceQuery.find_terrain_loader(_main)
+	if loader != null and loader.has_method("ground_height_at"):
+		y = float(loader.call("ground_height_at", w.x, w.y))
+	var p3 := Vector3(w.x, y + 0.2, w.y)
+	if _cam.is_position_behind(p3):
+		return Vector2.INF
+	return _cam.unproject_position(p3)
+
+
+func _edit_pick_prop(s: Vector2) -> String:
+	if _cam == null or _main == null:
+		return ""
+	var hit := SiteTargetPicker._pick_prop(_main, _cam.project_ray_origin(s), _cam.project_ray_normal(s),
+		maxf(_cam.height() * 8.0, 400.0))
+	return str(hit.get("prop_id", ""))
 
 
 func selection() -> Dictionary:
@@ -186,6 +263,14 @@ func drop_in() -> void:
 func _process(delta: float) -> void:
 	if _cam == null:
 		return
+	# Spaces moved, drawn or removed (the site editor, the Y dock): the
+	# overlay follows the registry's revision instead of waiting for a reopen.
+	if _overlay != null and is_instance_valid(_overlay):
+		var loader := TerrainSurfaceQuery.find_terrain_loader(_main)
+		var reg: Variant = loader.get("npc_spaces") if loader != null else null
+		if reg != null and int(reg.get("revision")) != _overlay_rev:
+			_overlay_rev = int(reg.get("revision"))
+			_overlay.call("rebuild", _main)
 	if not _follow_id.is_empty():
 		var p := _agent_pos(_follow_id)
 		if p != Vector2.INF:
@@ -215,9 +300,20 @@ static func _cull_for_height(h: float) -> float:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _active or _cam == null:
 		return
+	if is_editing() and not _pick_cb.is_valid() and bool(_editor.call("handle_input", event)):
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match (event as InputEventKey).keycode:
+			KEY_E:
+				if not _pick_cb.is_valid():
+					toggle_editing()
+					get_viewport().set_input_as_handled()
 			KEY_ESCAPE:
+				if is_editing():
+					set_editing(false)
+					get_viewport().set_input_as_handled()
+					return
 				# A borrowed view always answers, even when cancelled.
 				if _pick_cb.is_valid():
 					_deliver_pick(Vector2.INF)
@@ -376,7 +472,7 @@ func _bridge() -> Variant:
 func _player_xz() -> Vector2:
 	var body := _main.get_node_or_null("Player") as Node3D if _main != null else null
 	if body == null:
-		return Vector2.ZERO
+		return SiteCentre.xz(_main)
 	return Vector2(body.global_position.x, body.global_position.z)
 
 

@@ -507,6 +507,10 @@ func _target_centre() -> Variant:
 ## An amber arrow on the ground in front of a DIRECTIONAL prop venue, pointing
 ## the way it faces, while this row is showing it.
 func _refresh_arrow() -> void:
+	# A visibility change can arrive before _ready has built the row (a host
+	# that shows its panel while the row is being added).
+	if _line2 == null:
+		return
 	if not is_inside_tree() or not is_visible_in_tree() or not _line2.visible:
 		_free_arrow()
 		return

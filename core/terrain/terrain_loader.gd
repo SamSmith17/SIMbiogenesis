@@ -5317,19 +5317,52 @@ func update_camp_area(id: String, patch: Dictionary) -> bool:
 		if auto:
 			p["heading_deg"] = _resolve_camp_heading(
 				camp_areas.get_area(id).get("polygon", PackedVector2Array()))
+	# A typed headcount is exact (the population target leaves it alone);
+	# 0 = scenery / auto again.
+	if p.has("headcount") and not p.has("headcount_locked"):
+		p["headcount_locked"] = int(p["headcount"]) > 0
+	var moved_from: PackedVector2Array = camp_areas.get_area(id).get("polygon", PackedVector2Array())
 	camp_areas.update(id, p)
 	_apply_camp_changes([id], [])
-	# A headcount is a graph fact (the camp's compound and its habitat), so a
-	# hand-set one goes to the graph the way festival mode's does.
-	if p.has("headcount"):
-		_push_camps_to_graph()
+	if p.has("polygon"):
+		_camp_moved(id, moved_from)
+	# Name, style, headcount and outline are graph facts (the camp compound,
+	# its habitat, its stores and its people's home), so they go to the graph
+	# the way festival mode's do.
+	for k in ["headcount", "name", "style", "polygon"]:
+		if p.has(k):
+			_push_camps_to_graph()
+			break
 	return true
+
+
+## Emitted when a camp's outline changed (moved or reshaped): its linked NPC
+## spaces (the beds and kitchen seeded for it) follow.
+signal camp_outline_changed(camp_id: String, old_poly: PackedVector2Array, new_poly: PackedVector2Array)
+
+
+func _camp_moved(id: String, old_poly: PackedVector2Array) -> void:
+	var new_poly: PackedVector2Array = camp_areas.get_area(id).get("polygon", PackedVector2Array())
+	if npc_spaces != null and new_poly.size() >= 3:
+		if FestivalSeedLayout.follow_camp(npc_spaces, FestivalSeedLayout.lot_id_for_camp(id), new_poly) > 0:
+			save_npc_spaces()
+	camp_outline_changed.emit(id, old_poly, new_poly)
 
 
 func delete_camp_area(id: String) -> bool:
 	if not _camp_layer_ready() or not camp_areas.remove(id):
 		return false
 	_apply_camp_changes([], [id])
+	# The beds and kitchen seeded FOR this camp go with it.
+	if npc_spaces != null:
+		var key := FestivalSeedLayout.lot_id_for_camp(id)
+		var gone := 0
+		for rec in npc_spaces.spaces.duplicate():
+			if str((rec as Dictionary).get("camp_id", "")) == key and npc_spaces.remove_space(str((rec as Dictionary)["id"])):
+				gone += 1
+		if gone > 0:
+			save_npc_spaces()
+	_push_camps_to_graph()
 	return true
 
 
@@ -5580,17 +5613,26 @@ func _push_camps_to_graph() -> void:
 func _apply_population_target(lots: Array) -> Dictionary:
 	var counts: Array = []
 	var holders: Array = []
+	# Hand-set headcounts (the setup card, a typed People value) are EXACT: the
+	# target only scales the rest, into what the locked camps leave of it.
+	var locked_n := 0
 	for l in lots:
 		var ac: Dictionary = (l as Dictionary).get("assigned_camp", {})
 		if ac.is_empty() or int(ac.get("headcount", 0)) <= 0:
 			continue
+		if bool(ac.get("locked", false)):
+			locked_n += int(ac["headcount"])
+			continue
 		counts.append(int(ac["headcount"]))
 		holders.append(ac)
-	var natural := 0
+	var natural := locked_n
 	for c in counts:
 		natural += int(c)
-	var scaled := FestivalSeedLayout.scale_headcounts(counts, PopTestPrefs.festival_target_people())
-	var people := 0
+	var target := PopTestPrefs.festival_target_people()
+	if target > 0:
+		target = maxi(target - locked_n, 1)
+	var scaled := FestivalSeedLayout.scale_headcounts(counts, target)
+	var people := locked_n
 	for i in holders.size():
 		(holders[i] as Dictionary)["headcount"] = int(scaled[i])
 		people += int(scaled[i])
@@ -5656,6 +5698,43 @@ func depopulate_camp_areas() -> int:
 	return n
 
 
+## Add one festival camp exactly as given (the setup card): a NEW record —
+## never grown into a same-style neighbour, as painting would — carrying its
+## exact headcount (locked) and the festival_seeded flag. Returns the id.
+func add_festival_camp(poly: PackedVector2Array, params: Dictionary) -> String:
+	if not _camp_layer_ready() or poly.size() < 3:
+		return ""
+	var p := params.duplicate()
+	p["festival_seeded"] = true
+	p["headcount_locked"] = int(p.get("headcount", 0)) > 0
+	if float(p.get("heading_deg", -1.0)) < 0.0:
+		p["heading_deg"] = _resolve_camp_heading(poly)
+	p["heading_auto"] = false
+	var id := camp_areas.add(poly, p)
+	if id.is_empty():
+		return ""
+	_apply_camp_changes([id], [])
+	_push_camps_to_graph()
+	return id
+
+
+## Remove every camp festival mode laid out itself (the setup card's camps,
+## record flag `festival_seeded`). Returns how many.
+func delete_seeded_camp_areas() -> int:
+	if not _camp_layer_ready():
+		return 0
+	var removed: Array = []
+	for raw in camp_areas.areas.duplicate():
+		var rec: Dictionary = raw
+		if bool(rec.get("festival_seeded", false)) and camp_areas.remove(str(rec["id"])):
+			removed.append(str(rec["id"]))
+	if removed.is_empty():
+		return 0
+	_apply_camp_changes([], removed)
+	_push_camps_to_graph()
+	return removed.size()
+
+
 ## Headcounts the graph sync will stamp: {"camps", "people"} over assigned
 ## placement lots + populated painted camps.
 func camp_population_summary() -> Dictionary:
@@ -5684,6 +5763,59 @@ func camp_population_summary() -> Dictionary:
 	var r := _apply_population_target(lots)
 	out["people"] = int(r["people"])
 	out["natural"] = int(r["natural"])
+	return out
+
+
+## Move the whole festival layout by `delta` (world metres): every festival
+## road, zone and lot, every camp in a zone, and every POPULATED free-painted
+## camp (scenery camps stay — they are not the festival). One placement undo
+## entry. The caller moves the area spaces (SpaceRegistry.translate_areas).
+## Returns {"roads", "zones", "lots", "camps"} moved.
+func translate_festival_layout(delta: Vector2) -> Dictionary:
+	var out := {"roads": 0, "zones": 0, "lots": 0, "camps": 0}
+	if not _placement_ready() or delta.length() < 0.01:
+		return out
+	push_placement_undo()
+	for r: Dictionary in placement.roads.duplicate():
+		placement.update_road(str(r["id"]), {"points": _shift_points(r["points"], delta)})
+		out["roads"] = int(out["roads"]) + 1
+	for z: Dictionary in placement.zones.duplicate():
+		var holes: Array = []
+		for h in z.get("holes", []):
+			holes.append(_shift_points(h, delta))
+		placement.update_zone(str(z["id"]), {"polygon": _shift_points(z["polygon"], delta), "holes": holes})
+		out["zones"] = int(out["zones"]) + 1
+	for l: Dictionary in placement.lots.duplicate():
+		placement.update_lot(str(l["lot_id"]), {"polygon": _shift_points(l["polygon"], delta)})
+		out["lots"] = int(out["lots"]) + 1
+	_camp_excl_index = null
+	# Free-painted camps that are part of the festival (they carry people).
+	var zones := placement.zones_by_id()
+	var changed: Array = []
+	for rec: Dictionary in camp_areas.areas.duplicate():
+		if not FestivalSeedLayout.is_populatable(rec, zones) or int(rec.get("headcount", 0)) <= 0:
+			continue
+		var holes2: Array = []
+		for h2 in rec.get("holes", []):
+			holes2.append(_shift_points(h2, delta))
+		camp_areas.update(str(rec["id"]), {"polygon": _shift_points(rec["polygon"], delta), "holes": holes2})
+		changed.append(str(rec["id"]))
+	out["camps"] = changed.size()
+	_apply_camp_changes(changed, [])
+	# Lot camps follow their lots.
+	for z2: Dictionary in placement.zones:
+		_sync_lot_camps(str(z2["id"]))
+		out["camps"] = int(out["camps"]) + placement.lots_for_zone(str(z2["id"])).size()
+	_save_placement()
+	_push_camps_to_graph()
+	return out
+
+
+static func _shift_points(pts: PackedVector2Array, delta: Vector2) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	out.resize(pts.size())
+	for i in pts.size():
+		out[i] = pts[i] + delta
 	return out
 
 

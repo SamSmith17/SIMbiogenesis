@@ -575,6 +575,20 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --c
 # EXPECTED_CHECKS; --import first. ⚠ A GDScript lambda captures locals BY
 # VALUE — a counter a Callable increments must live in an Array:
 Godot.exe.exe --headless --path . --script core/camps/festival_seed_layout_selftest.gd
+# The festival calculator + loop challenge (offline — CampFlowMeter: mass-
+# exact at any step, scrub-back truncation, a jump not metered, per day /
+# per person / pee + poo / off-site imports, dict round trip; CampLoopClosure
+# over a real CampTemplates camp: 0 when open, suggestions, `apply` wires a
+# Greywater Filter to the camp's own tanks and greywater closes).
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/population/camp_flow_meter_selftest.gd
+# Festival set-up + site editing on a world whose marker MOVED (sandbox,
+# Bombay Beach): Move festival to marker, Clear seeded after a reload, the
+# setup card's 6 named camps of exactly 10, REAL clicks in the festival view
+# (select, drag a camp 20 m with its beds, Ctrl+Z, draw a space), the same
+# editor in Site Plan, own / shared / infinite supply, the meter, a loop
+# closer:
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/festival_setup_check.gd -Label festival_setup -Timeout 1200
 # Venue choreography + capacity sharing (offline — VenueCrowd, NpcVenueState,
 # the AUTO capacity in SpaceRegistry / NpcVenueChoice): the effigy's phases
 # as a pure function of a FireTimeline record (idle → burning → circling for
@@ -4871,6 +4885,75 @@ headcount is the lot assignment; an ORPHAN lot camp (zone gone) counts as
 painted. Measured on Walton: 32 painted camps + 3 lots → 855 people, 709 in
 the light tier, zero blocked after 4 sim-hours. Verify with
 `core/camps/festival_seed_layout_selftest.gd` and `--capture=festivalmode`.
+
+**The marker is the site; festival set-up, site editing, the calculator
+(2026-10-24).** Plan: `~/.claude/plans/when-i-activate-festival-effervescent-key.md`.
+- **`SiteCentre.xz(context)`** (`core/soi/site_centre.gd`, autoload-free) is
+  where "the site" is: the location marker (SoiService's centre), never the
+  world origin or the player. Festival seeding (demo zone, fallback
+  habitats), the settlement view's default framing and the population
+  bridge's fallback home use it. The world's lat/lon frame does not move.
+  ⚠ Camp compounds' `site_x_m/site_z_m` are MARKER-relative like every graph
+  item (they used to be world xz); `home_x/home_z` stay world.
+- **Seeded records are flagged, not remembered.** `festival_seeded` on camp
+  records (CampAreaLayer, now a saved key with `headcount_locked`) and space
+  records; a space seeded FOR a camp carries `camp_id` = the camp's lot key.
+  `FestivalSeedLayout.is_seeded_space` = flag OR the legacy label prefix;
+  Clear finds the demo zone / road by NAME too (the old ids were memory-only,
+  so Clear did nothing after a reload — Bombay Beach kept a demo zone round
+  the origin, 1.4 km from its marker).
+- **Move festival to marker** (`FestivalMode.move_to_marker`,
+  `TerrainLoader.translate_festival_layout`, `SpaceRegistry.translate_areas`):
+  roads, zones, lots, populated camps and seeded / camp-linked area spaces
+  shift by marker − cluster centre; one placement undo entry.
+- **Setup card** (`scenes/settlement/festival_setup_card.gd`,
+  `FestivalMode.setup_gathering`, pure `FestivalSeedLayout.setup_layout`):
+  N named camps × people × style round the marker — a ring, each square
+  sized to sleep its headcount at its style's density (×1.25), plaza
+  (`SETUP_PLAZA_R_M`) in the middle for the shared venues, pushed out of
+  vetoed ground. Camps are added as NEW records (`add_festival_camp`, never
+  grown into a neighbour) with `headcount_locked`: the population target
+  scales only unlocked camps (`_apply_population_target`). A typed People
+  value locks too.
+- **Site editor** (`scenes/settlement/site_editor.gd`): ONE screen-space
+  editor for the festival view (E / "✎ Edit site") and Site Plan ("✎ Edit
+  site" in the lens tool row), driven by `ground_at` / `to_screen` /
+  `pick_prop` callables (graph_canvas `site_editor_ground_at` /
+  `site_editor_to_canvas`). Select (smallest footprint first across props,
+  spaces and camps; a camp's own beds / kitchen last; a still click cycles),
+  drag = move, corners = reshape, edge + = add a corner, ⟳ = rotate, Del,
+  Ctrl+Z; Draw space; Tag object (NpcSpaceTagRow for props / buildings /
+  areas). Commits: `update_camp_area` (polygon / name / style / headcount
+  all reach the graph now; a moved camp's linked spaces follow via
+  `FestivalSeedLayout.follow_camp`), `SpaceRegistry.set_space_target` /
+  `set_space_type_of`, `PlacedPropService.update_prop_record`. Picked props
+  must contain the ground point (a slanted lens ray crossed the effigy's
+  box 100 m away). `SpaceRegistry.revision` bumps on every change; the
+  settlement overlay rebuilds on it. ⚠ A Control under a CanvasLayer needs
+  `set_anchors_and_offsets_preset` — `set_anchors_preset` alone left the
+  editor 0×0 and its right-anchored dock at x = −340.
+- **Per-camp supply** (`SystemGraphView.camp_supply_modes / set_camp_supply /
+  set_all_camp_supply`): compound `camp_supply` {inputs, wastes} → habitat
+  `supply_mode`, read by `ResourceFlowEngine._process_habitat` through
+  `PopTestPrefs.habitat_ideal`: "infinite" = never runs out (tanks and any
+  loop-closing machine first, only the SHORTFALL imported / hauled off);
+  "own" / "shared" follow only the player's SAVED ideal switch (festival
+  mode's override no longer reaches them); unset = the global switch.
+  "shared" tops the camp's tanks up from root-scope site depots
+  (`fest_depot_*`) by `add_external_flow` at the rate its people used them.
+- **The calculator** (`CampFlowMeter`, compound `camp_meter`, instance-only):
+  the habitat's live flows (`ResourceFlowEngine.habitat_flows`: in, out,
+  imports, exports) binned hourly on absolute hours; scrub back truncates.
+  Pee / poo per person-day from Rose et al. 2015. **Camps & calculator**
+  window (`scenes/settlement/festival_camps_panel.gd`,
+  `SystemGraphView.open_camps_panel`, festival panel + Site Plan "Camps"):
+  per camp supply pickers, per day / per person / so far / off site, Look,
+  Sub-graph (`open_camp_subgraph`), CSV. **Loops** (`CampLoopClosure`): per
+  kind closure from the camp's own sub-graph (plants' `biomass_kg_h`,
+  catchments' `live_capture_lph` as live telemetry), suggestions keyed on
+  the worst loop, `apply` drops a preset in wired to the camp's tanks.
+- Not built: a lot camp (in a zone) moved by the editor is reset by the next
+  zone re-cut; toilet types (urine / feces as their own kinds); goal cards.
 
 **Venue choreography + capacity sharing (`core/population/venue_crowd.gd`,
 `npc_venue_state.gd`).** Three asks landed together on 2026-10-06:

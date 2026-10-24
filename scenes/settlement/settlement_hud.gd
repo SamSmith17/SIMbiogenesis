@@ -40,6 +40,8 @@ var _fest_sig := "<unbuilt>"
 var _fest_pop_slider: HSlider = null
 var _fest_pop_lbl: Label = null
 var _fest_pop_timer: Timer = null
+const FESTIVAL_SETUP_CARD := preload("res://scenes/settlement/festival_setup_card.gd")
+var _setup_card: Node = null
 
 
 func _ready() -> void:
@@ -244,7 +246,7 @@ func _build_festival_panel() -> void:
 	v.add_theme_constant_override("separation", 4)
 	_fest_panel.add_child(v)
 	var title := Label.new()
-	title.text = "🎪 Festival mode · easy supplies"
+	title.text = "🎪 Festival mode"
 	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	title.add_theme_color_override("font_color", UITheme.C_OK)
 	v.add_child(title)
@@ -254,7 +256,7 @@ func _build_festival_panel() -> void:
 	_fest_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_fest_status)
 	var hint := Label.new()
-	hint.text = "Every camp is assumed stocked: people still walk to beds, kitchens, portapotties, water and the stage, but nobody starves, queues or leaves. Stage set 20:00–02:00 · camps sleep 02:30–09:30."
+	hint.text = "Nobody queues or leaves. Each camp chooses its own supply (Camps & calculator): infinite and metered, its own tanks, or a shared site depot. Stage set 20:00–02:00 · camps sleep 02:30–09:30."
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -366,11 +368,73 @@ func _build_festival_panel() -> void:
 		if fm != null:
 			fm.call("clear_seeded"))
 	row2.add_child(clear)
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 6)
+	v.add_child(row3)
+	var setup := Button.new()
+	UITheme.style_button(setup)
+	setup.text = "Set up the gathering…"
+	setup.tooltip_text = "Lay out named camps of a set size round the location marker"
+	setup.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm == null:
+			return
+		if _setup_card == null:
+			_setup_card = FESTIVAL_SETUP_CARD.new()
+			_setup_card.name = "FestivalSetupCard"
+			add_child(_setup_card)
+		_setup_card.call("open", fm))
+	row3.add_child(setup)
+	var edit := Button.new()
+	UITheme.style_button(edit)
+	edit.text = "✎ Edit site (E)"
+	edit.tooltip_text = "Select, move, reshape and name camps and NPC spaces; draw new spaces; tag objects"
+	edit.pressed.connect(func() -> void:
+		if _view != null:
+			_view.call("toggle_editing"))
+	row3.add_child(edit)
+	var row4 := HBoxContainer.new()
+	row4.add_theme_constant_override("separation", 6)
+	v.add_child(row4)
+	var camps_btn := Button.new()
+	UITheme.style_button(camps_btn)
+	camps_btn.text = "Camps & calculator…"
+	camps_btn.tooltip_text = "Each camp's water, food and waste — per day, per person, in total — its supply, and how closed its loops are"
+	camps_btn.pressed.connect(func() -> void:
+		var sgv := ServiceLocator.graph()
+		if sgv != null:
+			sgv.call("open_camps_panel", Callable(self, "_look_at_camp")))
+	row4.add_child(camps_btn)
+	var to_marker := Button.new()
+	UITheme.style_button(to_marker)
+	to_marker.text = "Move festival to marker"
+	to_marker.tooltip_text = "Carry every festival camp, road, zone and seeded space so the festival is centred on the location marker"
+	to_marker.pressed.connect(func() -> void:
+		var fm := _festival_mode()
+		if fm != null:
+			var d: Variant = fm.call("move_to_marker")
+			if d is Vector2 and (d as Vector2).length() > 1.0:
+				var view: Node = get_parent()
+				var cam: Variant = view.call("camera") if view != null and view.has_method("camera") else null
+				if cam != null:
+					cam.call("look_at_xz", SiteCentre.xz(self)))
+	row4.add_child(to_marker)
 	_fest_notes = Label.new()
 	_fest_notes.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_fest_notes.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_fest_notes.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(_fest_notes)
+
+
+## The camps panel's "Look": fly the settlement camera to a camp.
+func _look_at_camp(lot_key: String) -> void:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(get_tree().current_scene)
+	if loader == null or _view == null:
+		return
+	var poly: PackedVector2Array = loader.call("camp_lot_polygon", lot_key)
+	var cam: Variant = _view.call("camera")
+	if poly.size() >= 3 and cam != null:
+		cam.call("look_at_xz", CampAreaLayer._inner_point(poly))
 
 
 func _festival_mode() -> Node:
@@ -511,7 +575,7 @@ func _refresh() -> void:
 			int(round(ts * 3600.0)),
 			("following %s" % _view.following()) if not _view.following().is_empty() else "watching"]
 		if PopTestPrefs.easy_override():
-			_speed_lbl.text += "  · FESTIVAL (supplies assumed infinite)"
+			_speed_lbl.text += "  · FESTIVAL (each camp's own supply)"
 		elif PopTestPrefs.any_active():
 			_speed_lbl.text += "  · TESTING (guardrails off)"
 	_refresh_festival_panel()

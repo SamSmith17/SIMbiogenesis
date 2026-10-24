@@ -112,6 +112,26 @@ static func ideal_supply() -> bool:
 	return _ideal_supply or _easy_override
 
 
+## The player's own ideal-supply switch, WITHOUT festival mode's session
+## override: what a camp set to its own tanks or a shared depot follows.
+static func saved_ideal_supply() -> bool:
+	ensure_loaded()
+	return _ideal_supply
+
+
+## A habitat's supply for one side of its loop: "infinite" (the calculator:
+## every need met, every litre metered as an import / export), "own" (its
+## tanks), "shared" (its tanks, kept topped up from a site depot), "" (not
+## set: the global switch, which festival mode turns on).
+static func habitat_ideal(supply_mode: String) -> bool:
+	match supply_mode:
+		"infinite":
+			return true
+		"own", "shared":
+			return saved_ideal_supply()
+	return ideal_supply()
+
+
 static func ignore_capacity() -> bool:
 	ensure_loaded()
 	return _ignore_capacity or _ideal_supply or _easy_override

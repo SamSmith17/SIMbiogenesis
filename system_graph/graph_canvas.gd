@@ -1244,6 +1244,13 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 		return
 
+	# The site editor (Site Plan's ✎ Edit site): camps and NPC spaces under the
+	# pointer are its; anything it does not take falls through to the lens.
+	if view_mode == GraphSiteLayout.VIEW_SITE and site_editor != null and is_instance_valid(site_editor) \
+			and bool(site_editor.get("active")) and bool(site_editor.call("handle_input", event)):
+		accept_event()
+		return
+
 	# World pins (Site Plan / Elevation on the pin layer): a pin under the
 	# pointer wins over the 3D prop pick and every chip path.
 	if _pins_mode_active() and _handle_connect_tool_input(event):
@@ -9199,6 +9206,33 @@ func _ring_ground_y(soi: Node, x: float, z: float) -> float:
 	var y := float(soi.call("ground_y_at", x, z))
 	_ring_y_cache[key] = y
 	return y
+
+
+## The site editor (scenes/settlement/site_editor.gd) over Site Plan: set by
+## the graph view; the canvas forwards input to it first while it is active.
+var site_editor: Control = null
+
+
+## World XZ -> canvas, for the site editor (both plan mappings).
+func site_editor_to_canvas(world_xz: Vector2) -> Variant:
+	var c := _soi_world_center()
+	var origin: Vector2 = get_soi_disc_layout().get("origin", size * 0.5) as Vector2
+	var v: Variant = _site_point_canvas(origin, Vector2(world_xz.x - c.x, world_xz.y - c.z))
+	return v if v is Vector2 else Vector2.INF
+
+
+## Canvas -> world XZ on the ground, for the site editor.
+func site_editor_ground_at(pos: Vector2) -> Variant:
+	var c := _soi_world_center()
+	if _site_ring_projected():
+		var hit := _pin_ground_hit(pos)
+		if hit.is_empty():
+			return Vector2.INF
+		var site: Vector2 = hit["site"]
+		return Vector2(c.x + site.x, c.z + site.y)
+	var origin: Vector2 = get_soi_disc_layout().get("origin", size * 0.5) as Vector2
+	var s := (pos - origin) / maxf(GraphSiteLayout.px_per_m(_zoom), 1e-6)
+	return Vector2(c.x + s.x, c.z + s.y)
 
 
 ## A site point (metres from the SoI centre) on screen: through the lens camera

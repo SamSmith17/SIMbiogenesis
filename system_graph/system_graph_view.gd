@@ -140,6 +140,9 @@ var _topbar_fit_queued := false
 ## not in the top bar: the bar then has the same clusters and the same labels
 ## in every lens (Site Plan's tool row used to push every label off the bar).
 var _lens_slot: HBoxContainer = null
+var _site_edit_btn: Button = null
+var _site_editor: Control = null
+const SITE_EDITOR_SCRIPT := preload("res://scenes/settlement/site_editor.gd")
 
 ## When true, PBI (Planetary Basic Income) nodes are pinned to a fixed
 ## screen-space bar along the top of the canvas instead of floating in graph
@@ -2722,6 +2725,23 @@ func _build_topbar() -> Control:
 	_site_radius_lbl.custom_minimum_size = Vector2(40, 0)
 	_site_radius_lbl.add_theme_font_size_override("font_size", 11)
 	_site_tool_row.add_child(_site_radius_lbl)
+	_site_edit_btn = Button.new()
+	_site_edit_btn.text = "✎ Edit site"
+	_site_edit_btn.toggle_mode = true
+	_site_edit_btn.focus_mode = Control.FOCUS_NONE
+	_site_edit_btn.tooltip_text = (
+			"Select, move, reshape and name camps and NPC spaces; draw new spaces; "
+			+ "tag a building as a space — the same editor as the festival view")
+	_apply_topbar_btn_style(_site_edit_btn)
+	_site_edit_btn.toggled.connect(set_site_editing)
+	_site_tool_row.add_child(_site_edit_btn)
+	var camps_btn := Button.new()
+	camps_btn.text = "Camps"
+	camps_btn.focus_mode = Control.FOCUS_NONE
+	camps_btn.tooltip_text = "Camps & calculator: each camp's water, food and waste, its supply, its loops"
+	_apply_topbar_btn_style(camps_btn)
+	camps_btn.pressed.connect(func() -> void: open_camps_panel(Callable(self, "_site_look_at_camp")))
+	_site_tool_row.add_child(camps_btn)
 	_lens_slot.add_child(_site_tool_row)
 
 	# ── Wire style ▾ — global override (Bezier / Rounded / Metro) + Apply to all ─
@@ -3652,10 +3672,56 @@ func _ensure_site_working_radius() -> void:
 		_site_radius_slider.max_value = maxf(r_m * 1.5, 50.0)
 
 
+## Site Plan's ✎ Edit site: the festival view's site editor, laid over the
+## canvas (scenes/settlement/site_editor.gd). The canvas forwards input to it
+## first while it is on (graph_canvas.site_editor).
+func set_site_editing(on: bool) -> void:
+	if _graph_canvas == null:
+		return
+	if on and _site_editor == null:
+		_site_editor = SITE_EDITOR_SCRIPT.new()
+		_site_editor.name = "SiteEditor"
+		_graph_canvas.add_child(_site_editor)
+		_graph_canvas.set("site_editor", _site_editor)
+	if _site_editor == null:
+		return
+	if on:
+		var main := get_tree().current_scene
+		_site_editor.call("bind", main, Callable(_graph_canvas, "site_editor_ground_at"),
+			Callable(_graph_canvas, "site_editor_to_canvas"), Callable(self, "_site_edit_pick_prop"))
+		_site_editor.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_site_editor.call("set_active", on)
+	if _site_edit_btn != null and _site_edit_btn.button_pressed != on:
+		_site_edit_btn.set_pressed_no_signal(on)
+	_graph_canvas.queue_redraw()
+
+
+func _site_look_at_camp(lot_key: String) -> void:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(_get_scene_main_node())
+	if loader == null or _graph_canvas == null or not _graph_canvas.has_method("center_site_on"):
+		return
+	var poly: PackedVector2Array = loader.call("camp_lot_polygon", lot_key)
+	if poly.size() >= 3:
+		_graph_canvas.call("center_site_on", CampAreaLayer._inner_point(poly))
+
+
+func site_editing() -> bool:
+	return _site_editor != null and bool(_site_editor.get("active"))
+
+
+func _site_edit_pick_prop(pos: Vector2) -> String:
+	if _spatial_edit == null or not _spatial_edit.has_method("pick_at_canvas"):
+		return ""
+	var hit: Dictionary = _spatial_edit.call("pick_at_canvas", pos)
+	return str(hit.get("id", "")) if str(hit.get("kind", "")) == "prop" else ""
+
+
 func _sync_site_tool_row() -> void:
 	var on := _graph_view_mode == GraphSiteLayout.VIEW_SITE
 	if _site_tool_row != null:
 		_site_tool_row.visible = on
+		if not on and _site_editor != null and bool(_site_editor.get("active")):
+			set_site_editing(false)
 	if on:
 		_ensure_site_working_radius()
 		if _site_radial_btn != null and _graph_canvas != null:
@@ -9652,7 +9718,7 @@ const _INSTANCE_ONLY_SPEC_KEYS := [
 	"unlimited_capacity", "allow_negative", "scale_with_fill", "jit_outflow",
 	"live_capture_lph", "live_capture_rate",
 	"pop_state", "pop_present", "pop_morale", "pop_collapse_risk",
-	"site_projects",
+	"site_projects", "camp_meter",
 ]
 
 ## Called by the inspector after "Save/Add to Library" writes `preset`. Pushes
@@ -13536,6 +13602,7 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if is_nan(replay_now):
 		PerfMonitor.begin("camp_power")
 		_tick_camp_power(pop_abs_h)
+		_tick_camp_meters(pop_abs_h)
 		PerfMonitor.end("camp_power")
 	_ensure_feed_strip()
 	if _desire_3d_on and npcs_on:
@@ -18667,6 +18734,9 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		var style := str(ac.get("style", "mixed"))
 		var poly: PackedVector2Array = lot.get("polygon", PackedVector2Array())
 		var centre := CampAreaLayer._inner_point(poly) if poly.size() >= 3 else Vector2.ZERO
+		# site_x_m / site_z_m are MARKER-relative on every graph item; the camps
+		# used to write world xz, so in Site Plan they sat offset by the marker.
+		var site := SiteCentre.to_site(centre, self)
 		var name := str(ac.get("name", lot.get("name", "Camp")))
 		if have.has(lot_id):
 			var cid := str(have[lot_id])
@@ -18675,10 +18745,10 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			var changed := int(cspecs.get("camp_headcount", -1)) != n or str(cspecs.get("name", "")) != name
 			cspecs["camp_headcount"] = n
 			cspecs["name"] = name
-			cspecs["site_x_m"] = centre.x
-			cspecs["site_z_m"] = centre.y
+			cspecs["site_x_m"] = site.x
+			cspecs["site_z_m"] = site.y
 			model.update_item(cid, {"specs": cspecs})
-			_sync_camp_habitat(cid, n, centre)
+			_sync_camp_habitat(cid, n, centre, name)
 			if changed:
 				# The stores were sized for the OLD headcount (the population
 				# target slider, a re-cut lot): resize them with the people.
@@ -18693,7 +18763,7 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		var power := CampPowerModel.defaults_for(style)
 		var cid2 := GraphComponentDefs.realize(model, str(def["id"]), "root", pos, {
 			"camp_lot_id": lot_id, "camp_headcount": n, "name": name,
-			"site_x_m": centre.x, "site_z_m": centre.y,
+			"site_x_m": site.x, "site_z_m": site.y,
 			"node_banner": false,
 			"pv_wp": float(power["pv_wp"]), "battery_kwh": float(power["battery_kwh"]),
 			"inverter_w": float(power["inverter_w"]), "base_load_w": float(power["base_load_w"]),
@@ -18701,7 +18771,7 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		if cid2.is_empty():
 			continue
 		GraphComponentDefs.make_unique(model, cid2)
-		_sync_camp_habitat(cid2, n, centre)
+		_sync_camp_habitat(cid2, n, centre, name)
 		out["added"] = int(out["added"]) + 1
 	_sim_bulk_update = false
 	_history_suppress = false
@@ -18712,7 +18782,7 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 
 ## The camp's habitat carries the headcount and the lot centre (its people's
 ## home) — instance state the template cannot know.
-func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2) -> void:
+func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2, camp_name: String = "") -> void:
 	var comp: Dictionary = model.get_item(comp_id)
 	var scope := str(comp.get("child_scope_id", ""))
 	for it in model.get_items_in_scope(scope):
@@ -18723,10 +18793,13 @@ func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2) -> void:
 		var patched: Dictionary = specs.duplicate(true)
 		patched["occupants"] = n
 		patched["pop_driven"] = true
+		if not camp_name.is_empty():
+			patched["name"] = camp_name
 		patched["home_x"] = centre.x
 		patched["home_z"] = centre.y
-		patched["site_x_m"] = centre.x
-		patched["site_z_m"] = centre.y
+		var site := SiteCentre.to_site(centre, self)
+		patched["site_x_m"] = site.x
+		patched["site_z_m"] = site.y
 		model.update_item(str(d.get("id", "")), {"specs": patched})
 		return
 
@@ -18743,11 +18816,18 @@ func _sync_camp_stores(comp_id: String, n: int, preset: String) -> int:
 		return 0
 	var sup := CampProvisioning.supply(n, preset)
 	var changed := 0
+	var flagged := false
+	for it0 in model.get_items_in_scope(scope):
+		if bool(((it0 as Dictionary).get("specs", {}) as Dictionary).get("camp_store", false)):
+			flagged = true
+			break
 	for it in model.get_items_in_scope(scope):
 		var d: Dictionary = it
 		if str(d.get("type", "")) != "resource":
 			continue
 		var specs: Dictionary = d.get("specs", {})
+		if flagged and not bool(specs.get("camp_store", false)):
+			continue   # a tank the player added inside the camp is theirs
 		var kind := str(specs.get("resource_kind", ""))
 		if not sup.has(kind):
 			continue
@@ -18775,6 +18855,230 @@ func festival_camps() -> Array:
 				"name": str(specs.get("name", "")), "headcount": int(specs.get("camp_headcount", 0)),
 				"scope": str(d.get("child_scope_id", ""))})
 	return out
+
+
+# ---------------------------------------------------------------------------
+# Per-camp supply + THE CALCULATOR. Each camp chooses, for its inputs (water,
+# food, firewood) and its wastes (grey, black), one of:
+#   infinite — nothing runs out; every litre in is an import and every litre
+#              out an export, metered (the engine bypasses the camp's tanks);
+#   own      — its own tanks drain and fill (the festival-length stores);
+#   shared   — its tanks, kept topped up from (or emptied into) a SITE DEPOT
+#              on the graph — the water truck and the pump-out, as transfers.
+# The compound carries `camp_supply`, its habitat `supply_mode` (what the
+# flow engine reads). The meter (CampFlowMeter) rides the compound as
+# `camp_meter` and is what the camps panel shows.
+# ---------------------------------------------------------------------------
+
+const CAMP_SUPPLY_MODES: Array = ["infinite", "own", "shared"]
+const DEPOT_ITEMS := {
+	"water": ["fest_depot_water", "Site water depot", "L", 20000.0, 1.0],
+	"food": ["fest_depot_food", "Site food depot", "kg", 2000.0, 1.0],
+	"biomass": ["fest_depot_biomass", "Site firewood pile", "kg", 2000.0, 1.0],
+	"greywater": ["fest_depot_grey", "Site greywater collection", "L", 20000.0, 0.0],
+	"blackwater": ["fest_depot_black", "Site pump-out tank", "L", 10000.0, 0.0],
+}
+const _CAMP_IN_KINDS := ["water", "food", "biomass"]
+const _CAMP_OUT_KINDS := ["greywater", "blackwater"]
+var _camp_meters: Dictionary = {}       # comp_id -> CampFlowMeter
+var _camp_meter_last_h := NAN
+var _camp_meter_saved_h: Dictionary = {}   # comp_id -> abs_h last persisted
+
+
+func _camp_by_key(camp_key: String) -> Dictionary:
+	for c in festival_camps():
+		if str((c as Dictionary)["lot_id"]) == camp_key or str((c as Dictionary)["id"]) == camp_key:
+			return c
+	return {}
+
+
+func _camp_habitat_id(scope: String) -> String:
+	for it in model.get_items_in_scope(scope):
+		if str(((it as Dictionary).get("specs", {}) as Dictionary).get("role", "")) == "habitat":
+			return str((it as Dictionary).get("id", ""))
+	return ""
+
+
+## {inputs, wastes} for a camp (by lot key or compound id); {} = not a camp.
+func camp_supply_modes(camp_key: String) -> Dictionary:
+	if model == null:
+		return {}
+	var c := _camp_by_key(camp_key)
+	if c.is_empty():
+		return {}
+	var specs: Dictionary = (model.get_item(str(c["id"])) as Dictionary).get("specs", {})
+	var cur: Dictionary = specs.get("camp_supply", {})
+	var dflt := "infinite" if PopTestPrefs.ideal_supply() else "own"
+	return {"inputs": str(cur.get("inputs", dflt)), "wastes": str(cur.get("wastes", dflt)),
+		"set": not cur.is_empty()}
+
+
+## patch: {inputs?, wastes?} with CAMP_SUPPLY_MODES values.
+func set_camp_supply(camp_key: String, patch: Dictionary) -> bool:
+	if model == null:
+		return false
+	var c := _camp_by_key(camp_key)
+	if c.is_empty():
+		return false
+	var cid := str(c["id"])
+	var specs: Dictionary = (model.get_item(cid).get("specs", {}) as Dictionary).duplicate(true)
+	var cur: Dictionary = (specs.get("camp_supply", {}) as Dictionary).duplicate()
+	var now := camp_supply_modes(camp_key)
+	for k in ["inputs", "wastes"]:
+		var m := str(patch.get(k, cur.get(k, now.get(k, "infinite"))))
+		cur[k] = m if CAMP_SUPPLY_MODES.has(m) else "infinite"
+	specs["camp_supply"] = cur
+	model.update_item(cid, {"specs": specs})
+	var hid := _camp_habitat_id(str(c["scope"]))
+	if not hid.is_empty():
+		var hs: Dictionary = (model.get_item(hid).get("specs", {}) as Dictionary).duplicate(true)
+		hs["supply_mode"] = cur.duplicate()
+		model.update_item(hid, {"specs": hs})
+	if str(cur["inputs"]) == "shared" or str(cur["wastes"]) == "shared":
+		_ensure_festival_depots()
+	return true
+
+
+## Every festival camp to one mode, both sides ("infinite" | "own" | "shared").
+func set_all_camp_supply(mode: String) -> int:
+	var n := 0
+	for c in festival_camps():
+		if set_camp_supply(str((c as Dictionary)["lot_id"]), {"inputs": mode, "wastes": mode}):
+			n += 1
+	return n
+
+
+## The shared site depots (root scope), made the first time a camp asks.
+func _ensure_festival_depots() -> void:
+	var y := 420.0
+	var x := -620.0
+	for kind in DEPOT_ITEMS.keys():
+		var d: Array = DEPOT_ITEMS[kind]
+		if not model.get_item(str(d[0])).is_empty():
+			continue
+		model.add_item({"id": str(d[0]), "type": "resource", "x": x, "y": y, "width": 150.0, "height": 120.0,
+			"specs": {"name": str(d[1]), "resource_kind": str(kind),
+				"capacity": "%.0f %s" % [float(d[3]), str(d[2])], "capacity_qty": float(d[3]),
+				"capacity_unit": str(d[2]), "level": float(d[4]), "cost": 0.0, "festival_depot": true}})
+		x += 200.0
+
+
+## Once per ambient tick, after the flow step: meter every camp, and move the
+## shared camps' supplies (depot -> camp store, camp waste -> collection) at
+## the rate their people used them, so a shared camp's own tanks hold steady
+## and the depot is what drains / fills.
+func _tick_camp_meters(abs_h: float) -> void:
+	if model == null or _resource_flow == null or is_nan(abs_h):
+		return
+	var camps := festival_camps()
+	var dt := 0.0
+	if not is_nan(_camp_meter_last_h) and abs_h > _camp_meter_last_h:
+		dt = minf(abs_h - _camp_meter_last_h, 6.0)
+	_camp_meter_last_h = abs_h
+	for c in camps:
+		var cid := str(c["id"])
+		var comp: Dictionary = model.get_item(cid)
+		var specs: Dictionary = comp.get("specs", {})
+		var m: CampFlowMeter = _camp_meters.get(cid)
+		if m == null:
+			m = CampFlowMeter.from_dict(specs.get("camp_meter", {}) if specs.get("camp_meter", {}) is Dictionary else {})
+			_camp_meters[cid] = m
+		var hid := _camp_habitat_id(str(c["scope"]))
+		var fl: Dictionary = _resource_flow.call("habitat_flows", hid) if not hid.is_empty() else {}
+		var fin: Dictionary = fl.get("in", {})
+		var fout: Dictionary = fl.get("out", {})
+		m.record(abs_h, fin, fout, float(specs.get("camp_present", specs.get("camp_headcount", 0))),
+			fl.get("imp", {}), fl.get("exp", {}))
+		if dt > 0.0:
+			_camp_depot_transfers(c, specs, fin, fout, dt)
+		var saved_h := float(_camp_meter_saved_h.get(cid, -INF))
+		if absf(abs_h - saved_h) >= 1.0:
+			_camp_meter_saved_h[cid] = abs_h
+			var patched: Dictionary = specs.duplicate(true)
+			patched["camp_meter"] = m.to_dict()
+			_begin_sim_writes()
+			model.update_item(cid, {"specs": patched})
+			_end_sim_writes()
+
+
+func _camp_depot_transfers(c: Dictionary, specs: Dictionary, fin: Dictionary, fout: Dictionary, dt: float) -> void:
+	var sup: Dictionary = specs.get("camp_supply", {})
+	var shared_in := str(sup.get("inputs", "")) == "shared"
+	var shared_out := str(sup.get("wastes", "")) == "shared"
+	if not shared_in and not shared_out:
+		return
+	for it in model.get_items_in_scope(str(c["scope"])):
+		var d: Dictionary = it
+		if str(d.get("type", "")) != "resource":
+			continue
+		var kind := ResourceKinds.normalize_kind(str((d.get("specs", {}) as Dictionary).get("resource_kind", "")))
+		if shared_in and _CAMP_IN_KINDS.has(kind):
+			var q := float(fin.get(kind, 0.0)) * dt
+			var depot := str((DEPOT_ITEMS[kind] as Array)[0])
+			if q > 0.0 and not model.get_item(depot).is_empty():
+				_resource_flow.call("add_external_flow", str(d["id"]), kind, q)
+				_resource_flow.call("add_external_flow", depot, kind, -q)
+		elif shared_out and _CAMP_OUT_KINDS.has(kind):
+			var q2 := float(fout.get(kind, 0.0)) * dt
+			var depot2 := str((DEPOT_ITEMS[kind] as Array)[0])
+			if q2 > 0.0 and not model.get_item(depot2).is_empty():
+				_resource_flow.call("add_external_flow", str(d["id"]), kind, -q2)
+				_resource_flow.call("add_external_flow", depot2, kind, q2)
+
+
+## The camps panel's rows: one per camp — name, people, morale, power, supply
+## modes, the meter's summary and its closure score.
+func festival_camp_rows() -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for c in festival_camps():
+		var cid := str(c["id"])
+		var specs: Dictionary = (model.get_item(cid) as Dictionary).get("specs", {})
+		var m: CampFlowMeter = _camp_meters.get(cid)
+		if m == null:
+			m = CampFlowMeter.from_dict(specs.get("camp_meter", {}) if specs.get("camp_meter", {}) is Dictionary else {})
+		out.append({"id": cid, "lot_id": str(c["lot_id"]), "name": str(c["name"]), "scope": str(c["scope"]),
+			"headcount": int(c["headcount"]), "present": int(specs.get("camp_present", c["headcount"])),
+			"morale": float(specs.get("camp_morale", -1.0)), "soc": float(specs.get("camp_soc", -1.0)),
+			"supply": camp_supply_modes(str(c["lot_id"])), "meter": m.summary(), "hours": m.hours(),
+			"closure": CampLoopClosure.score(model, cid)})
+	return out
+
+
+## Open the graph INSIDE one camp's compound (its own sub-graph), leaving the
+## settlement view if it is up. The camps panel's "Sub-graph" button.
+func open_camp_subgraph(comp_id: String) -> void:
+	if model == null or model.get_item(comp_id).is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("settlement_view_open") and bool(main.call("settlement_view_open")):
+		var view: Variant = main.get("settlement_view")
+		if view != null:
+			view.call("close")
+	open_graph_view()
+	if _graph_view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
+	_enter_compound(comp_id)
+
+
+## The camps & calculator window, from anywhere (the festival panel, Site
+## Plan's tool row). `on_look(lot_key)` flies a view to the camp.
+func open_camps_panel(on_look: Callable = Callable()) -> void:
+	if _camps_panel == null:
+		_camps_panel = CAMPS_PANEL_SCRIPT.new()
+		_camps_panel.name = "FestivalCampsPanel"
+		add_child(_camps_panel)
+	_camps_panel.call("open", on_look)
+
+
+var _camps_panel: Node = null
+const CAMPS_PANEL_SCRIPT := preload("res://scenes/settlement/festival_camps_panel.gd")
+
+
+## The meter of one camp (the panel's sparklines). null = not a camp.
+func camp_meter(comp_id: String) -> CampFlowMeter:
+	return _camp_meters.get(comp_id)
 
 
 ## Stamp what the camp card draws onto each camp compound — its open loops

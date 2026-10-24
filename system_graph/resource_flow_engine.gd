@@ -3481,9 +3481,19 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	# dry tank is not starved — its draw is counted as an ideal import and
 	# the activity goes on. The people still consume, so what accumulates
 	# here is exactly the supply a perfect infrastructure would deliver.
-	var ideal := PopTestPrefs.ideal_supply()
+	# Per camp (specs.supply_mode, stamped by the graph view): "infinite" =
+	# never runs out — the camp's own tanks (and whatever loop-closing machine
+	# fills them) are used first, and only the SHORTFALL is imported / hauled
+	# away, metered (the calculator); "own" / "shared" = the tanks alone.
+	var sm: Dictionary = specs.get("supply_mode", {}) if specs.get("supply_mode", {}) is Dictionary else {}
+	var mode_in := str(sm.get("inputs", ""))
+	var mode_out := str(sm.get("wastes", ""))
+	var ideal := PopTestPrefs.habitat_ideal(mode_in)
+	var ideal_out := PopTestPrefs.habitat_ideal(mode_out)
 	var ideal_imports: Dictionary = {}
 	var ideal_exports: Dictionary = {}
+	var flows_in: Dictionary = {}
+	var flows_out: Dictionary = {}
 
 	var pop_demand: Dictionary = _habitat_demand.get(iid, {})
 	var pop_driven := _habitat_demand.has(iid)
@@ -3506,6 +3516,7 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		if dry:
 			if ideal:
 				ideal_imports[kind] = float(ideal_imports.get(kind, 0.0)) + rate
+				flows_in[kind] = float(flows_in.get(kind, 0.0)) + rate
 				if kind == "water":
 					water_consumed_lph += rate
 				elif kind == "food":
@@ -3514,6 +3525,7 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 				starved.append(kind)
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) - rate
+		flows_in[kind] = float(flows_in.get(kind, 0.0)) + rate
 		for conn: Dictionary in _connections_to_handle(iid, "res_in_%d" % i):
 			_cache_conn_flow(str(conn.get("id", "")), rate, kind)
 		if kind == "water":
@@ -3545,20 +3557,24 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(iid, "output", false)
 		if tank_id.is_empty():
-			if ideal:
+			if ideal_out:
 				ideal_exports[kind] = float(ideal_exports.get(kind, 0.0)) + credit
+				flows_out[kind] = float(flows_out.get(kind, 0.0)) + credit
 			continue
 		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
 		var tank_item := _model.get_item(tank_id)
 		var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
 		if not _tank_accepts_inflow(tank_specs, tl, abs_h):
-			if ideal:
+			if ideal_out:
 				ideal_exports[kind] = float(ideal_exports.get(kind, 0.0)) + credit
+				flows_out[kind] = float(flows_out.get(kind, 0.0)) + credit
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + credit
+		flows_out[kind] = float(flows_out.get(kind, 0.0)) + credit
 		for conn: Dictionary in _connections_from_handle(iid, "res_out_%d" % i):
 			_cache_conn_flow(str(conn.get("id", "")), credit, kind)
 
+	_habitat_flows[iid] = {"in": flows_in, "out": flows_out, "imp": ideal_imports, "exp": ideal_exports}
 	_write_habitat_starved(iid, specs, starved)
 	_write_habitat_ideal(iid, specs, ideal_imports, ideal_exports)
 	# Unified node state: STARVED when any channel is dry, RUNNING while fed,
@@ -3570,6 +3586,16 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		_write_node_state(iid, specs, GraphNodeState.RUNNING)
 	else:
 		_write_node_state(iid, specs, GraphNodeState.IDLE)
+
+
+## What each habitat actually took in and put out on its last step, by kind
+## per hour — tank draw, ideal import and depot supply alike (the camp
+## meter's input). Runtime only.
+var _habitat_flows: Dictionary = {}
+
+
+func habitat_flows(item_id: String) -> Dictionary:
+	return _habitat_flows.get(item_id, {})
 
 
 ## Whether a habitat's input channel for `kind` is WIRED to a tank that has

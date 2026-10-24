@@ -13,7 +13,7 @@ extends SceneTree
 ## suite still prints PASS. Run --import first.
 ##   godot --headless --path . --script core/camps/festival_seed_layout_selftest.gd
 
-const EXPECTED_CHECKS := 62
+const EXPECTED_CHECKS := 87
 
 var _failures := 0
 var _checks := 0
@@ -28,6 +28,9 @@ func _init() -> void:
 	_test_missing_types()
 	_test_easy_override()
 	_test_population_target()
+	_test_setup_layout()
+	_test_camp_linked_spaces()
+	_test_supply_modes()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
@@ -332,4 +335,105 @@ func _test_population_target() -> void:
 	PopTestPrefs.load_from(path)
 	_check("the target round-trips through the prefs file", PopTestPrefs.festival_target_people() == 420)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	PopTestPrefs.reset_defaults()
+
+
+## The setup card: N named camps of M people round the marker — every camp
+## sized to sleep its headcount, none overlapping, all clear of the plaza,
+## centred on the marker, a vetoed spot pushed outward, names kept.
+func _test_setup_layout() -> void:
+	var marker := Vector2(1247.4, -706.5)
+	var spec := {"camps": []}
+	for i in 6:
+		(spec["camps"] as Array).append({"name": "Camp %s" % char(65 + i), "people": 10 + (i % 3), "style": "mixed"})
+	var plan := FestivalSeedLayout.setup_layout(spec, marker)
+	_check("setup: one camp per row", plan.size() == 6)
+	var people := 0
+	var fits := true
+	var polys: Array = []
+	var c := Vector2.ZERO
+	for p in plan:
+		var d: Dictionary = p
+		people += int(d["people"])
+		var area := CampAreaLayer.polygon_area(d["polygon"])
+		if area * FestivalAssigner.people_per_m2("mixed") < float(d["people"]) - 0.01:
+			fits = false
+		polys.append(d["polygon"])
+		c += CampAreaLayer._inner_point(d["polygon"])
+	c /= float(plan.size())
+	_check("setup: the headcounts are exact (%d)" % people, people == 66)
+	_check("setup: every outline sleeps its headcount at its style's density", fits)
+	var overlap := false
+	for i in polys.size():
+		for j in range(i + 1, polys.size()):
+			if not Geometry2D.intersect_polygons(polys[i], polys[j]).is_empty():
+				overlap = true
+	_check("setup: no two camps overlap", not overlap)
+	_check("setup: centred on the marker (%.1f m off)" % c.distance_to(marker), c.distance_to(marker) < 25.0)
+	var plaza_clear := true
+	for poly in polys:
+		for v in (poly as PackedVector2Array):
+			if v.distance_to(marker) < FestivalSeedLayout.SETUP_PLAZA_R_M - 1.0:
+				plaza_clear = false
+	_check("setup: the plaza in the middle stays open", plaza_clear)
+	_check("setup: names kept", str((plan[2] as Dictionary)["name"]) == "Camp C")
+	# A veto on the north spot pushes that camp outward along its bearing.
+	# Ground 30..200 m north of the marker is unusable (a building, water).
+	var veto := func(pc: Vector2, _half: float) -> bool:
+		return not (pc.y < marker.y - 30.0 and pc.y > marker.y - 200.0 and absf(pc.x - marker.x) < 60.0)
+	var pushed := FestivalSeedLayout.setup_layout(spec, marker, veto)
+	var p0: Vector2 = (pushed[0] as Dictionary)["centre"]
+	var q0: Vector2 = (plan[0] as Dictionary)["centre"]
+	_check("setup: a vetoed spot is pushed outward", p0.distance_to(marker) > q0.distance_to(marker) + 1.0)
+	var clean := FestivalSeedLayout.clean_setup({"camps": [{"name": "  ", "people": 1, "style": "nope"}]})
+	_check("setup: rows are cleaned (name, people floor, style)", clean.size() == 1
+		and str((clean[0] as Dictionary)["name"]) == "Camp 1" and int((clean[0] as Dictionary)["people"]) == 2
+		and str((clean[0] as Dictionary)["style"]) == CampStyles.DEFAULT_STYLE)
+
+
+## A camp's seeded beds + kitchen follow its outline; an area space can be
+## retargeted / retyped / translated; seeded spaces are found by flag or by
+## the legacy label prefix.
+func _test_camp_linked_spaces() -> void:
+	var reg := SpaceRegistry.create_empty()
+	var poly := _rect(0, 0, 20, 20)
+	var beds := reg.set_space_type({"kind": "area", "poly": FestivalSeedLayout.poly_to_array(poly)}, "sleep", 10, "beds")
+	var kit := reg.set_space_type({"kind": "area", "poly": FestivalSeedLayout.poly_to_array(
+		FestivalSeedLayout.inset_polygon(poly, FestivalSeedLayout.KITCHEN_INSET))}, "kitchen", 0, "kitchen")
+	reg.set_space_fields(beds, {"camp_id": "camp:camp_1", "festival_seeded": true})
+	reg.set_space_fields(kit, {"camp_id": "camp:camp_1"})
+	var rev0 := reg.revision
+	var moved := _rect(100, 50, 120, 70)
+	var n := FestivalSeedLayout.follow_camp(reg, "camp:camp_1", moved)
+	_check("follow: both linked spaces moved", n == 2)
+	_check("follow: the registry revision moved", reg.revision > rev0)
+	var bp := SpaceRegistry.poly_points((reg.find_by_id(beds).get("target", {}) as Dictionary).get("poly", []))
+	_check("follow: beds = the new outline", bp == moved)
+	var kp := SpaceRegistry.poly_points((reg.find_by_id(kit).get("target", {}) as Dictionary).get("poly", []))
+	_check("follow: kitchen = the inset outline", Geometry2D.is_point_in_polygon(CampAreaLayer._inner_point(kp), moved)
+		and CampAreaLayer.polygon_area(kp) < CampAreaLayer.polygon_area(moved) * 0.5)
+	_check("seeded: by flag", FestivalSeedLayout.is_seeded_space(reg.find_by_id(beds)))
+	_check("seeded: by legacy prefix", FestivalSeedLayout.is_seeded_space({"label": FestivalSeedLayout.LABEL_PREFIX + "x"}))
+	_check("seeded: not the player's own", not FestivalSeedLayout.is_seeded_space(reg.find_by_id(kit)))
+	_check("retype keeps the id", reg.set_space_type_of(kit, "restroom") and str(reg.find_by_id(kit)["space_type"]) == "restroom")
+	_check("retype refuses an unknown type", not reg.set_space_type_of(kit, "nope"))
+	_check("retarget refuses a target another space holds",
+		not reg.set_space_target(kit, (reg.find_by_id(beds)["target"] as Dictionary)))
+	var t := reg.translate_areas(Vector2(5, -5), func(r: Dictionary) -> bool: return str(r.get("id", "")) == beds)
+	var bp2 := SpaceRegistry.poly_points((reg.find_by_id(beds).get("target", {}) as Dictionary).get("poly", []))
+	_check("translate: only the picked area moved, by the delta", t == 1 and bp2[0].is_equal_approx(moved[0] + Vector2(5, -5)))
+
+
+## habitat_ideal: infinite always meets the need; own / shared follow only
+## the player's SAVED switch (never festival mode's session override); unset
+## follows the global switch.
+func _test_supply_modes() -> void:
+	PopTestPrefs.reset_defaults()
+	PopTestPrefs.set_easy_override(true)
+	_check("supply: infinite meets the need", PopTestPrefs.habitat_ideal("infinite"))
+	_check("supply: own tanks ignore the festival override", not PopTestPrefs.habitat_ideal("own"))
+	_check("supply: shared ignores it too", not PopTestPrefs.habitat_ideal("shared"))
+	_check("supply: unset follows the override", PopTestPrefs.habitat_ideal(""))
+	PopTestPrefs.set_easy_override(false)
+	_check("supply: unset is off without it", not PopTestPrefs.habitat_ideal(""))
 	PopTestPrefs.reset_defaults()
