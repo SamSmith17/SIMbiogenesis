@@ -787,6 +787,21 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_elem
 # Nested selection with REAL clicks: rack → deck → bay → sheet, slope →
 # bay → module, Esc / click outside / breadcrumb, colour, hide, show hidden:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nested_check.gd -Label <dir>
+# Flat-pack furniture (offline — core/flatpack/): outlines with true arcs,
+# dogbones / T-bones, mortises, the joint solver (cross-lap depths, widths,
+# which part opens which way, parallel parts refused, interference), the
+# SAMPLE PARITY against testdata/playatech_daybed_ref.json (12 parts, rail
+# slots at 6¼/24¼/48/71¾/89¾ 6" deep, arm slots 12" / 9", three 4×8 sheets,
+# all three poses clash-free), the router-ready sofa still 3 sheets, every
+# type clean, wedges + per-joint overrides, MaxRects nesting, DXF/SVG round
+# trip (units, bulges, layers), the builder (floor, centring, ray pick, seat
+# spots) and the packed stack. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/flatpack/flatpack_selftest.gd
+# The designer on a real world (sandbox): every built-in design shot in the
+# studio + sheets (+ profile for chairs), UiAudit on the open modal, the DXFs
+# exported and read back, a bench and a daybed placed — tagged quiet / sleep
+# with seat spots ON them at seat height — packed and unpacked, removed:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designer_check.gd -Label flatpack
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -2502,6 +2517,87 @@ of SystemGraphView, `sim_renderer()`); `scenes/ui/hud/render_progress_card.gd`.
   per frame and never queued by `conn_telemetry`; `GraphPlaceholderHost`
   one deferred sync per frame and none for sim writes; `_find_terrain_loader`
   cached; `_dc_analysis` keyed on struct_rev.
+
+## Flat-pack furniture designer (core/flatpack/, 2026-10-23)
+
+Slotted plywood furniture, Burning Man "PlayaTech" style, cut on a CNC
+router: Library → Structures → "Flat-pack furniture designer…" (no hotkey).
+Plan: `~/.claude/plans/c-users-notsa-documents-playa-tech-glb-dapper-wilkinson.md`.
+Built from the user's `Playa Tech.glb` (a SimLab export, inches): an 8 ft
+sofa of 12 half-inch parts that sets up upright, reclined or flat as a
+daybed and nests onto exactly three 4×8 sheets. `tools/flatpack_glb_reference.py`
+measured it into `core/flatpack/testdata/playatech_daybed_ref.json` (the GLB
+is not committed; it carries a scale figure).
+- **Units are INCHES** until the mesh builder (×0.0254) or a mm export.
+- **Outlines keep true arcs** (`FlatpackProfile`): a ring is points + DXF
+  bulges. A part is a straight-edged BASE polygon + per-vertex fillet radii +
+  EDGE NOTCHES; `ring_from_base` lays the notches in and shrinks a fillet
+  that would run into a slot. Inside corners get dogbones, T-bones (overcut
+  sideways only, slot bottoms stay flat) or none. Holes are CW rings.
+- **Every slot is derived from the 3D assembly** (`FlatpackJoints`): a
+  template emits slabs (base + `frame` Transform3D whose z is the normal)
+  and joints; the solver intersects the mid-planes, clips the line to both
+  outlines and cuts: `cross_lap` (A notched from the end toward `open`, B
+  from the other, A takes `ratio`; width = other sheet / sin(angle) + 2 ×
+  clearance) or `tenon` (A's outline carries tabs; B gets a mortise, or an
+  edge slot where the tab reaches B's edge; `wedge` adds a wedge hole in A
+  drawn in 1/16" and a wedge part). Slots from every POSE are laid in
+  together, and parts in one `match` group are cut identically (union), so
+  one set of parts assembles every way — exactly the sample. Only the 2-D
+  base is used for chords; parallel or <45° pairs are refused with a reason.
+- `FlatpackJoints.interference` walks the line where each pair's mid-planes
+  meet: a point solid in BOTH finished outlines is a clash (a grid sample
+  misses a 15/32" band). Every built-in design is clash-free in every pose.
+- **Templates** (`FlatpackTemplates`, furniture frame X length, Y up, +Z
+  front): sofa (the sample; rails, cross rails, arms, deck slotted into the
+  arms, back + braces per pose; the upright brace stands ~7" forward of the
+  reclined one so their rail slots do not overlap, never far enough to reach
+  the deck); the table family (bench / stool / table / coffee table: tabbed
+  leg panels or crossed X legs, a stretcher wedged outside the end legs, a
+  bench back from leg posts); chair / lounger (side profiles from six control
+  points the player can drag — `profile_offsets` — seat and back on tabs,
+  wedged stretchers). `FlatpackPresets`: the sample as drawn (0.5" exact, no
+  clearance/relief/spacing — what the selftest pins), router-ready versions
+  (15/32" actual, 0.010" clearance, dogbones, 3/8" spacing, 0 margin so a 96"
+  part comes out of a 96" sheet) and the library `user://flatpack_library.json`.
+  Router-ready sofa defaults (11 1/2" rails, 35 1/2" deck, 23 3/4" arms and
+  braces) still nest on three sheets.
+- `FlatpackDesign.solve(spec)` (cached by the resolved spec) is the ONE
+  solved design the modal, builder, packing and CNC writers read: parts with
+  rings, cut list (identical parts grouped, labelled A, B1…), MaxRects nest
+  (`FlatpackNesting`, Jylänkä 2010, BSSF, grain lock), BOM (sheets, use, cut
+  feet, passes, router minutes, mass from 1.5 lb/ft² per 1/2" — APA).
+- **CNC** (`FlatpackCam`): R12 DXF per sheet (POLYLINE + bulges; layers
+  OUTSIDE_CUT / INSIDE_CUT / ETCH_LABELS / SHEET; $INSUNITS), SVG per sheet
+  sized in real in/mm (no fills, no background rect — an importer would cut
+  it), a fit-test coupon (slots at thickness −0.010…+0.020"), a cut-list txt;
+  `write_all` → `user://flatpack_designs/<name>/` or a native folder pick.
+- **Modal** (`scenes/ui/flatpack_designer_modal.gd`, on the loader's
+  CanvasLayer 27 like the rack builder; `UiFit.keep_fitted`, modal claim):
+  types + designs left; Assembled (orbit, pose, explode, build scrub, click
+  picks a part) / Sheets / Side profile centre; Size, Material, Joinery
+  (per-joint kind / wedge / share overrides), Machine, Style, checks, parts,
+  cut list, export right. ⚠ Godot takes a SpinBox's decimals from its step
+  (a 1/4" step prints 23.75 as "23.8"): length spins step 0.001 with the
+  arrow step at the real increment.
+- **World**: ModelCatalog procedural `flatpack_furniture` (record key
+  `flatpack_spec`; one "Mesh" MeshInstance3D so prop collision works),
+  `begin_flatpack_placement`, prop editor "Edit furniture…", PackedSpec
+  DYNAMIC (`FlatpackDesign.packed_spec`: a panel_stack of the parts).
+  `PlacedPropService.tag_flatpack_space` tags it `sleep` (daybed pose: one
+  per lying spot) or `quiet` (one per seat), tables untagged.
+- **People sit ON it**: the builder's `seat_spots` meta (local metres, yaw
+  turning −Z to the faced direction) → the bridge's `_resolve_seat_spots`
+  (once a second, spaces whose prop is flat-pack furniture) → ctx
+  `seat_spot_of(sid, k)` (forwarded by the engine's `_make_ctx` WHITELIST)
+  → full tier `NpcAgent._take_seat` (target, face anchor, `seat_elev` read by
+  `elev()` while DOING, lie yaw) and light tier `CrowdCohort._take_seat`
+  (`_seat` read by `elev_of`). No furniture = no change (the tier
+  equivalence pins are untouched). Light-tier sleepers still use their camp
+  beds, so a daybed sleeper is full tier only.
+- Not built: true-shape nesting (bounding rectangles today), router G-code
+  (the user chose DXF + SVG), PDF templates, an NPC crew that cuts and
+  assembles it.
 
 ## Maps and scene shell
 

@@ -264,6 +264,11 @@ func _populate() -> void:
 			"detail": "Parametric rack → place as a structure.",
 		},
 		{
+			"kind": "flatpack",
+			"label": "Flat-pack furniture designer…",
+			"detail": "Slotted plywood sofas, benches, stools, tables and chairs → CNC cut files.",
+		},
+		{
 			"kind": "linkage_lab",
 			"label": "Linkage Lab… (N)",
 			"detail": "Design folding scissor-linkage structures (StarShade designer).",
@@ -426,7 +431,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -487,6 +492,12 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "Pallet rack builder needs a location map (TerrainLoader)."
+		"flatpack":
+			if _loader != null and _loader.has_method("open_flatpack_designer"):
+				_loader.call("open_flatpack_designer")
+				close()
+			else:
+				_status.text = "The furniture designer needs a location map (TerrainLoader)."
 		"linkage_lab":
 			var main_node := get_tree().current_scene if get_tree() != null else null
 			if main_node != null and main_node.has_method("open_linkage_lab"):
@@ -545,6 +556,11 @@ func _place_structure(model_id: String) -> void:
 	if model_id == PalletRackBuilder.MODEL_ID:
 		if _loader != null and _loader.has_method("open_pallet_rack_builder"):
 			_loader.call("open_pallet_rack_builder")
+			close()
+			return
+	if model_id == FlatpackBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_flatpack_designer"):
+			_loader.call("open_flatpack_designer")
 			close()
 			return
 	if _loader != null and _loader.has_method("begin_structure_placement"):

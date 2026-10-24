@@ -87,6 +87,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_trigger_starshade_graph_seed(main, {}, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
+	elif model_id == FlatpackBuilder.MODEL_ID:
+		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -376,6 +378,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
+	elif model_id == FlatpackBuilder.MODEL_ID:
+		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -405,8 +409,34 @@ static func _auto_tag_bed_space(main: Node, prop_id: String) -> void:
 	_auto_tag_space(main, prop_id, "sleep", 1, "Bed")
 
 
+## Flat-pack furniture is a place to be: a daybed set flat is somewhere to
+## sleep (one bed per lying spot), anything with seats a quiet place to sit
+## (one per seat), a table nothing. People then sit / lie ON it — the bridge
+## reads the piece's own seat spots. Re-run after the design changes.
+static func tag_flatpack_space(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	var spec: Dictionary = rec.get("flatpack_spec", {}) as Dictionary
+	if spec.is_empty():
+		return
+	var d := FlatpackDesign.solve(spec)
+	var lie := 0
+	var sit := 0
+	for st in FlatpackDesign.seats_in_pose(d, str(d.get("pose", ""))):
+		if str(st.get("kind", "")) == "lie":
+			lie += 1
+		else:
+			sit += 1
+	var label := str(d.get("name", "Furniture"))
+	if lie > 0:
+		_auto_tag_space(main, prop_id, "sleep", lie, label)
+	elif sit > 0:
+		_auto_tag_space(main, prop_id, "quiet", sit, label)
+	else:
+		_auto_tag_space(main, prop_id, "", 0, label)
+
+
 ## Tag a just-placed prop as a space of `space_type` (a bed sleeps one, a
-## firepit is a fire circle the evening gathers round).
+## firepit is a fire circle the evening gathers round). "" removes the tag.
 static func _auto_tag_space(main: Node, prop_id: String, space_type: String, capacity: int,
 		label: String) -> void:
 	var target := {"kind": "prop", "prop_id": prop_id}
@@ -763,6 +793,10 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 			extras["grow_bed_spec"] = rec_extra2["grow_bed_spec"]
 		elif rec_extra2.has("plant_abs_h"):
 			extras["grow_bed_spec"] = {"plant_abs_h": rec_extra2["plant_abs_h"]}
+	elif model_id == FlatpackBuilder.MODEL_ID:
+		var rec_extra_fp: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_fp.has("flatpack_spec"):
+			extras["flatpack_spec"] = rec_extra_fp["flatpack_spec"]
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		var rec_extra_pv: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_pv.has("pv_array_spec"):

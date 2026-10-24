@@ -143,6 +143,11 @@ const DYNAMIC_MODELS := {
 		"mass_kg": 250.0, "form": "panel_stack", "source": "estimated"},
 	"linkage_structure": {"w_m": 2.44, "d_m": 1.22, "h_m": 0.45,
 		"mass_kg": 150.0, "form": "folded", "source": "estimated"},
+	# Slotted plywood furniture packs as a flat stack of its parts; the real
+	# spec is FlatpackDesign.packed_spec (the record's flatpack_spec). This
+	# fallback is the default sofa: 12 parts of 1/2" ply, ~62 kg.
+	"flatpack_furniture": {"w_m": 2.44, "d_m": 0.90, "h_m": 0.15,
+		"mass_kg": 62.0, "form": "panel_stack", "source": "estimated"},
 	# Real spec comes from ContainerCatalog.packed_spec_for(container_id)
 	# (the drawer resolves the record's container_spec); this fallback is the
 	# 20' box (ISO 668 exterior + tare).

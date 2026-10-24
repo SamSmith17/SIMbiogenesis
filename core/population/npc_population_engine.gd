@@ -572,6 +572,7 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"camp_home": ctx_in.get("camp_home", null),
 		"camp_seed": str(ctx_in.get("camp_seed", "")),
 		"bed_spot_of": ctx_in.get("bed_spot_of", Callable()),
+		"seat_spot_of": ctx_in.get("seat_spot_of", Callable()),
 		"no_go": ctx_in.get("no_go", []),
 		# Weather comfort (NpcComfort): this hour's pulls, the shade / warmth
 		# spot finder, and a person's own bed for sheltering in it. Forwarded

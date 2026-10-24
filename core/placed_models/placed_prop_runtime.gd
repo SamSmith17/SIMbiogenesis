@@ -90,6 +90,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		extras["rack_spec"] = rec.get("rack_spec", {})
 	if rec.has("linkage_spec"):
 		extras["linkage_spec"] = rec.get("linkage_spec", {})
+	if rec.has("flatpack_spec"):
+		extras["flatpack_spec"] = rec.get("flatpack_spec", {})
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
 	if rec.has("tank_spec"):
@@ -141,6 +143,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Deploy structure (Interact) / Edit (click)"
 	elif model_id == PalletRackBuilder.MODEL_ID:
 		prop.prompt = "Edit prop (click) / Move (drag)"
+	elif model_id == FlatpackBuilder.MODEL_ID:
+		prop.prompt = "Edit furniture (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
 		prop.prompt = "Edit grow bed (click) / Move (drag)"
 	elif model_id == MudBuildingStructureBuilder.MODEL_ID:
@@ -250,6 +254,10 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var s := LinkageStructureBuilder.packed_spec_for(p)
 		if not s.is_empty():
 			return s
+	if rec.get("flatpack_spec") is Dictionary:
+		var fp := FlatpackDesign.packed_spec(FlatpackDesign.solve(rec.get("flatpack_spec") as Dictionary))
+		if not fp.is_empty():
+			return fp
 	if rec.get("container_spec") is Dictionary:
 		var c := ContainerCatalog.packed_spec_for(
 			str((rec.get("container_spec") as Dictionary).get("container_id", "")))

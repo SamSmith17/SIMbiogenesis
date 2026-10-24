@@ -144,6 +144,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == PalletRackBuilder.MODEL_ID:
 		var rack_spec: Dictionary = extras.get("rack_spec", extras) as Dictionary
 		return PalletRackBuilder.build_node(rack_spec)
+	if model_id == FlatpackBuilder.MODEL_ID:
+		var fp_spec: Dictionary = extras.get("flatpack_spec", extras) as Dictionary
+		return FlatpackBuilder.build_node(fp_spec)
 	if model_id == LinkageStructureBuilder.MODEL_ID:
 		var linkage_spec: Dictionary = extras.get("linkage_spec", extras) as Dictionary
 		return LinkageStructureBuilder.build_node(linkage_spec)
@@ -420,6 +423,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "pallet_rack", "label": "Pallet Rack (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.0},
+		# Procedural slotted-plywood furniture (FlatpackBuilder): the flat-pack
+		# designer's sofa / bench / stool / table / chair, cut on a CNC router.
+		{"id": "flatpack_furniture", "label": "Flat-pack furniture (parametric)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 0.9},
 		# Procedural ground-mount PV array (PvArrayBuilder): cols × rows modules
 		# on a tilted rack facing local +Z (south at yaw 0). Bound to a graph
 		# array node; its facing drives that array's tilt / azimuth.

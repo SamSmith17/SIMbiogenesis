@@ -1062,12 +1062,39 @@
       "image": "home_assistant.jpg",
       "image_run": "2026-10-22T15:50:15",
       "image_commit": "327a083"
+    },
+    "flatpack": {
+      "id": "flatpack",
+      "title": "Flat-pack furniture",
+      "chapter": "Build",
+      "summary": "Design slotted plywood furniture, see it nested on 4×8 sheets, and export DXF / SVG cut files.",
+      "how": [
+        "Library → Structures → Flat-pack furniture designer…",
+        "Pick a sofa, bench, stool, table, chair or lounger, or one of the built-in designs",
+        "Change the sizes, the plywood, the bit and the joinery; every slot is worked out from the assembly",
+        "Sheets shows the parts nested as they will be cut; Export DXF + SVG writes the files",
+        "Place in world: people sit on benches and sleep on the daybed"
+      ],
+      "action": "",
+      "button": "Flat-pack furniture designer…",
+      "key": "",
+      "open_hints": [
+        "Click Flat-pack furniture designer…"
+      ],
+      "world": "mtvernon",
+      "blurb": "A parametric designer for the slot-together plywood furniture seen all over Burning Man. Each piece is a set of flat parts; the designer intersects them in 3D and cuts the half-lap slots, mortises and wedge holes where they meet, sized to the plywood's real thickness plus clearance, with dogbones for the router bit. The parts nest onto sheets, the cut list gives every size, and one DXF and SVG per sheet goes straight to a CNC. The sample sofa sets up upright, reclined or flat as a daybed from the same twelve parts.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "flatpack.jpg",
+      "image_run": "2026-10-23T21:17:36",
+      "image_commit": "d0e0149"
     }
   },
   "last_run": {
-    "label": "ha_tour",
-    "generated": "2026-10-22T15:50:15",
-    "git_commit": "327a083",
+    "label": "tour_20261023-211610",
+    "generated": "2026-10-23T21:17:36",
+    "git_commit": "d0e0149",
     "passed": 1,
     "total": 1,
     "video_secs": null

@@ -125,6 +125,10 @@ var _fire_stamps: Dictionary = {}
 ## Beds: sleep AREA space id -> expanded list of {pos, yaw} (one entry per
 ## sleeper a shelter holds), refreshed when the camps change.
 var _sleep_spots: Dictionary = {}
+## Seats and beds ON placed furniture (flat-pack designer pieces): space id ->
+## [{pos (world xz), yaw, elev (m above the ground), kind (sit | lie)}].
+var _seat_spots: Dictionary = {}
+var _seat_spots_at_ms := -100000
 var _sleep_spots_rev := -1
 ## The population region from the last tick (anchors / centre / half) — the
 ## crowd renderer builds its height raster over it.
@@ -270,6 +274,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	_service_burn_roles(main, registry, abs_h)
 	PerfMonitor.end("npc_venues")
 	_resolve_sleep_spots(main, registry)
+	_resolve_seat_spots(main, registry)
 	_service_comfort(main, registry, abs_h, hour_of_day)
 	_nav_queries_this_tick = 0
 	_nav_keyed_misses_this_tick = 0
@@ -357,6 +362,10 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
 			"bed_spot_of": func(sid: String, k: int) -> Dictionary:
 				return _bed_spot(sid, k),
+			# A seat or bed ON a piece of furniture for slot `k` ({} = none):
+			# people sit on the bench, not inside it.
+			"seat_spot_of": func(sid: String, k: int) -> Dictionary:
+				return seat_spot(sid, k),
 			# Weather comfort (NpcComfort): this hour's pulls, the shade /
 			# warmth spot finder, and a person's own bed in this camp.
 			"comfort": _comfort,
@@ -1609,6 +1618,63 @@ func _resolve_sleep_spots(main: Node, registry: SpaceRegistry) -> void:
 		if shelters.is_empty():
 			continue
 		_sleep_spots[str(space.get("id", ""))] = _expand_beds(shelters)
+
+
+## Spaces tagged on flat-pack furniture -> the piece's own seat / bed spots
+## (FlatpackBuilder "seat_spots" meta, local metres) in world space. Furniture
+## is few and cheap to read, so this re-reads once a second: a moved bench
+## carries its seats with it.
+func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
+	if registry == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _seat_spots_at_ms < 1000:
+		return
+	_seat_spots_at_ms = now
+	_seat_spots = {}
+	for item in registry.spaces:
+		var space: Dictionary = item
+		var tgt: Dictionary = space.get("target", {})
+		if str(tgt.get("kind", "")) != "prop":
+			continue
+		var prop := PlacedPropRuntime.find_by_prop_id(main, str(tgt.get("prop_id", "")))
+		if prop == null or prop.model_id != FlatpackBuilder.MODEL_ID:
+			continue
+		var spots := furniture_spots(prop)
+		if not spots.is_empty():
+			_seat_spots[str(space.get("id", ""))] = spots
+
+
+## A placed furniture piece's seats in world space.
+static func furniture_spots(prop: Node3D) -> Array:
+	var out: Array = []
+	var model := prop.get_node_or_null("ModelRoot") as Node3D
+	if model == null:
+		return out
+	var furn: Node3D = null
+	if model.has_meta("seat_spots"):
+		furn = model
+	else:
+		for c in model.get_children():
+			if c is Node3D and (c as Node3D).has_meta("seat_spots"):
+				furn = c
+				break
+	if furn == null:
+		return out
+	var xf := furn.global_transform
+	var yaw0 := xf.basis.get_euler().y
+	for st in furn.get_meta("seat_spots", []):
+		var w: Vector3 = xf * (st["pos"] as Vector3)
+		out.append({"pos": Vector2(w.x, w.z), "yaw": float(st["yaw"]) + yaw0,
+			"elev": maxf(w.y - xf.origin.y, 0.0), "kind": str(st.get("kind", "sit"))})
+	return out
+
+
+func seat_spot(sid: String, k: int) -> Dictionary:
+	var spots: Array = _seat_spots.get(sid, [])
+	if spots.is_empty():
+		return {}
+	return spots[maxi(k, 0) % spots.size()]
 
 
 ## One entry per sleeper per shelter, scattered inside its footprint, so a

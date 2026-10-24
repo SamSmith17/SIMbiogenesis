@@ -167,6 +167,9 @@ var _comfort_bed := false
 ## DJ: metres the deck stands above the ground, and when the set ends.
 ## Transient (the bridge re-casts after a load).
 var perform_elev := 0.0
+## On a piece of furniture (a bench seat, a daybed): how high the person sits
+## or lies while DOING the visit. Transient, like perform_elev.
+var seat_elev := 0.0
 var _perform_until := 0.0
 ## A burn ROLE ("dj", "flow", "sandman", "redirect") and, for a fire-flow
 ## performer, the moving lane (VenueCrowd.orbit_point). Transient.
@@ -1157,6 +1160,7 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	# unwalkable-slot fallback (which returns the plain centre) degrades to the
 	# projection path rather than to a meaningless zero-length vector.
 	face_anchor = p
+	_take_seat(ctx, sid, registry.slot_index_for(sid, id))
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
 	_request_path(ctx, p, from_key, sid)
 	state = State.TRAVELING
@@ -1229,6 +1233,7 @@ func _begin_enrichment(abs_hours: float, ctx: Dictionary) -> void:
 			registry.cluster_index_for(sid2, id))
 		target_pos = gs["pos"]
 		face_anchor = gs["face"]
+		_take_seat(ctx, sid2, _venue_slot)
 	venue_pose = VenueCrowd.venue_pose(best_type, _venue_slot, st2, _venue_seed())
 	_venue_phase_seen = int(st2.get("phase", -1))
 	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR if SpaceTypes.OUTDOOR_TYPES.has(best_type) \
@@ -1538,9 +1543,35 @@ func vibing() -> bool:
 	return NpcPeak.needs_met(needs, blocked)
 
 
-## Metres above the ground this person's FEET are (the DJ on the deck).
+## Metres above the ground this person's FEET are (the DJ on the deck, or a
+## seat on a bench or daybed).
 func elev() -> float:
-	return perform_elev if activity == PERFORM_ACTIVITY and state == State.DOING else 0.0
+	if state != State.DOING:
+		return 0.0
+	if activity == PERFORM_ACTIVITY:
+		return perform_elev
+	return seat_elev
+
+
+## A space on furniture offers seats (or beds): take slot `k`'s spot, the way
+## it faces and its height. False when the space has none.
+func _take_seat(ctx: Dictionary, sid: String, k: int) -> bool:
+	seat_elev = 0.0
+	var seat_of: Callable = ctx.get("seat_spot_of", Callable())
+	if not seat_of.is_valid():
+		return false
+	var spot: Variant = seat_of.call(sid, k)
+	if not (spot is Dictionary) or (spot as Dictionary).is_empty():
+		return false
+	var sp: Dictionary = spot
+	var yaw := float(sp.get("yaw", 0.0))
+	target_pos = sp.get("pos", target_pos)
+	seat_elev = float(sp.get("elev", 0.0))
+	# Godot's forward is -Z: a seat's yaw turns it to face (-sin, -cos).
+	face_anchor = target_pos + Vector2(-sin(yaw), -cos(yaw)) * FACE_PROJECT_M
+	if str(sp.get("kind", "")) == "lie":
+		lie_yaw = yaw
+	return true
 
 
 ## Part of a burn's turnout right now (VenueCrowd.attends)?
@@ -1794,6 +1825,7 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	_comfort = ""
 	_comfort_bed = false
 	perform_elev = 0.0
+	seat_elev = 0.0
 	_perform_until = 0.0
 	perform_role = ""
 	_orbit = {}

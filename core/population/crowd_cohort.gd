@@ -1081,7 +1081,26 @@ func is_performing(agent_id: String) -> bool:
 
 
 ## Metres above the ground this person's FEET are (the DJ on the deck).
+## Seats on furniture: index -> {elev, sid}. Transient (re-taken on the next
+## visit), like _perform.
+var _seat: Dictionary = {}
+
+
+func _take_seat(i: int, sid: String, slot_i: int, ctx: Dictionary) -> Dictionary:
+	_seat.erase(i)
+	var seat_of: Callable = ctx.get("seat_spot_of", Callable())
+	if not seat_of.is_valid():
+		return {}
+	var spot: Variant = seat_of.call(sid, slot_i)
+	if not (spot is Dictionary) or (spot as Dictionary).is_empty():
+		return {}
+	_seat[i] = {"elev": float((spot as Dictionary).get("elev", 0.0)), "sid": sid}
+	return spot
+
+
 func elev_of(i: int) -> float:
+	if _seat.has(i) and state[i] == S_DOING and space_id[i] == str((_seat[i] as Dictionary)["sid"]):
+		return float((_seat[i] as Dictionary)["elev"])
 	if act[i] == A_PERFORM and state[i] == S_DOING and _perform.has(i):
 		return float((_perform[i] as Dictionary).get("elev", 0.0))
 	return 0.0
@@ -1154,9 +1173,15 @@ func _go_for_need(i: int, t: float, need: String, ctx: Dictionary, hour: float,
 	# same tick must not be handed the same spot (they would all walk onto it).
 	var slot_i := registry.reserve_slot(sid, ids[i])
 	var dest := centre + SpaceRegistry.slot_offset_for_index(slot_i) + SpaceRegistry.slot_jitter(ids[i])
+	var face := centre
+	var seat := _take_seat(i, sid, slot_i, ctx)
+	if not seat.is_empty():
+		dest = seat["pos"]
+		var yaw := float(seat.get("yaw", 0.0))
+		face = dest + Vector2(-sin(yaw), -cos(yaw)) * 8.0
 	_go(i, t, dest, a, sid, str(best.get("space_type", "")), ctx)
-	fx[i] = centre.x
-	fz[i] = centre.y
+	fx[i] = face.x
+	fz[i] = face.y
 	if cap_h > 0.0:
 		end_h[i] = t + cap_h   # read at arrival as the block cap
 	else:
@@ -1210,6 +1235,13 @@ func _go_to_venue(i: int, t: float, ctx: Dictionary, hour: float, left: float) -
 			registry.cluster_index_for(sid2, ids[i]))
 		dest = gs["pos"]
 		face = gs["face"]
+		var seat := _take_seat(i, sid2, slot_i, ctx)
+		if not seat.is_empty():
+			dest = seat["pos"]
+			var yaw := float(seat.get("yaw", 0.0))
+			face = dest + Vector2(-sin(yaw), -cos(yaw)) * 8.0
+	else:
+		_seat.erase(i)
 	_go(i, t, dest, A_ENRICH, sid2, stype2, ctx)
 	fx[i] = face.x
 	fz[i] = face.y

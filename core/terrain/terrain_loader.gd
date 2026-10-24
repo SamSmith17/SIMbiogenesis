@@ -130,6 +130,7 @@ const POND_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/pond_edit_ui.gd")
 const VEG_AREA_FILL_UI_SCRIPT := preload("res://scenes/ui/veg_area_fill_ui.gd")
 const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_modal.gd")
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
+const FLATPACK_DESIGNER_MODAL_SCRIPT := preload("res://scenes/ui/flatpack_designer_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 const CONFIG_PATH := "user://terrain_config.cfg"
@@ -336,6 +337,7 @@ var _pond_max_levels: Dictionary = {}
 var _pond_level_handles: Dictionary = {}
 var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
+var _flatpack_designer_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
 ## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
@@ -12679,6 +12681,7 @@ func _setup_placed_props() -> void:
 	_setup_starshade_edit_ui()
 	_setup_pond_edit_ui()
 	_setup_pallet_rack_builder_ui()
+	_setup_flatpack_designer_ui()
 	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
 	call_deferred("_consume_design_context")
@@ -13172,6 +13175,56 @@ func _setup_pallet_rack_builder_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_pallet_rack_builder_ui = ui
+
+
+## The flat-pack furniture designer, on its own CanvasLayer like the rack
+## builder (scenes/ui/flatpack_designer_modal.gd).
+func _setup_flatpack_designer_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "FlatpackDesignerLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "FlatpackDesignerModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(FLATPACK_DESIGNER_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_flatpack_designer_ui = ui
+
+
+func open_flatpack_designer(spec: Dictionary = {}) -> void:
+	if _flatpack_designer_ui != null and _flatpack_designer_ui.has_method("open"):
+		_flatpack_designer_ui.call("open", spec)
+
+
+## The designer bound to a placed piece ("Apply to placed furniture").
+func open_flatpack_designer_for_prop(prop_id: String) -> void:
+	if _flatpack_designer_ui != null and _flatpack_designer_ui.has_method("open_for_prop"):
+		_flatpack_designer_ui.call("open_for_prop", prop_id)
+
+
+func flatpack_designer() -> Control:
+	return _flatpack_designer_ui
+
+
+func begin_flatpack_placement(flatpack_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, FlatpackBuilder.MODEL_ID, {
+		"record_extra": {"flatpack_spec": FlatpackSpec.to_json_safe(flatpack_spec),
+			"collision_enabled": true},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
 
 
 func open_starshade_editor(prop_id: String) -> void:
