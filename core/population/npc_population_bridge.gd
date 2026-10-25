@@ -1679,7 +1679,21 @@ func seat_spot(sid: String, k: int) -> Dictionary:
 	var spots: Array = _seat_spots.get(sid, [])
 	if spots.is_empty():
 		return {}
-	return spots[maxi(k, 0) % spots.size()]
+	var kk := maxi(k, 0)
+	var seat: Dictionary = spots[kk % spots.size()]
+	var round_n := kk / spots.size()
+	if round_n == 0:
+		return seat
+	# More people than seats: the extras STAND behind the seat's owner, on
+	# the ground, a step apart — never on the same cushion (slot k used to
+	# wrap straight onto seat k mod n, two people in one body).
+	var yaw := float(seat.get("yaw", 0.0))
+	var facing := Vector2(-sin(yaw), -cos(yaw))
+	var across := Vector2(cos(yaw), -sin(yaw))
+	var side := 1.0 if round_n % 2 == 1 else -1.0
+	var pos: Vector2 = (seat["pos"] as Vector2) - facing * (0.8 * float((round_n + 1) / 2)) \
+		+ across * side * 0.3
+	return {"pos": pos, "yaw": yaw, "elev": 0.0, "kind": "stand"}
 
 
 ## One entry per sleeper per shelter, scattered inside its footprint, so a

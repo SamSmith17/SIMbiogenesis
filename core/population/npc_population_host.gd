@@ -943,10 +943,18 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var step_is_jump := float(st["step_m"]) >= tp_threshold
 	var use_interp := float(st["step_m"]) > INTERP_MIN_STEP_M and not step_is_jump
 	var desired := target
+	# While the body is still travelling prev→next it is MOVING, whatever the
+	# sim's state says: a person who reached their bed inside one tick is
+	# DOING sleep at once, and the glide used to carry them there lying down
+	# (in interp mode the body tracks the moving point, so `gap` is small and
+	# the catch-up test below never fired — "they slide around, even lying
+	# down" at speed).
+	var on_segment := false
 	if use_interp:
 		var f := clampf((_now - float(st["at"]))
 			/ maxf(float(st["interval"]) * INTERP_INTERVAL_BIAS, 0.05), 0.0, 1.0)
 		desired = (st["prev"] as Vector3).lerp(st["next"] as Vector3, f)
+		on_segment = f < 1.0
 	var gap := cur.distance_to(desired) if cur != Vector3.ZERO else 0.0
 
 	# The sim's own account of whether this person is going somewhere. A LEVEL,
@@ -979,13 +987,14 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	var stalled := str(dot.get("activity", "")) == NpcAgent.CHORE_ACTIVITY \
 		and _now - float(_moved_at.get(aid, _now)) > MOVE_HOLD_S
 	var in_transit := (travelling and not (stalled and gap <= ARRIVE_EPS_M)) \
-		or catching_up
+		or catching_up or on_segment
 	# A DANCER circling the fire or raving at the stage moves while dancing:
 	# the sim slides their position, the body glides after it, and the pose
 	# stays the dance rather than flipping to a walk every frame.
 	var venue_pose := str(dot.get("venue_pose", ""))
-	if not travelling and (venue_pose == VenueCrowd.POSE_DANCE or venue_pose == VenueCrowd.POSE_RAVE):
-		in_transit = false
+	if not travelling and (venue_pose == VenueCrowd.POSE_DANCE or venue_pose == VenueCrowd.POSE_RAVE
+			or venue_pose == VenueCrowd.POSE_FIREFLOW):
+		in_transit = false   # (a fire-flow performer works their lane in their own pose too)
 
 	var teleported := cur != Vector3.ZERO \
 		and ((step_is_jump and moved) or gap >= tp_threshold)

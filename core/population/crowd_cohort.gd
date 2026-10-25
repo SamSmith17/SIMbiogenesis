@@ -83,6 +83,18 @@ const WORK_CHUNK_H := 0.5
 const PORTAPOTTY_BLACKWATER_L := 1.0
 ## Lane offset so a column of walkers does not share one line.
 const LANE_OFFSET_M := 0.8
+## A straight walk leaves its lane this far short of the goal and converges
+## on the exact spot (the lane never moves the goal — see _go).
+const LANE_MERGE_M := 4.0
+## Finished at a space with nothing to do next: nobody hangs about ON the
+## spot they just used (its slot goes to the next person — the spacing probe
+## found 12 000 pairs of idlers standing on one point at the water point).
+## Within LOITER_NEAR_M of the space's centre they step aside to a spot
+## LOITER_MIN_M..+LOITER_SPREAD_M out and hang out there (NpcAgent does the
+## same with its "loiter" activity).
+const LOITER_NEAR_M := 6.0
+const LOITER_MIN_M := 5.0
+const LOITER_SPREAD_M := 3.0
 const MAX_EVENT_PASSES := 12
 
 var seed_key := ""
@@ -814,8 +826,6 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 	# block served ONCE (NpcRoutine.meals_once) the need crossing IS when the
 	# full tier eats again, and not waking for it left the light tier 8 %
 	# under. Block ENDS still do not wake anyone.
-	act[i] = A_FREE
-	state[i] = S_DOING
 	var until := t + FREE_MIN_H + _rand(i) * (FREE_MAX_H - FREE_MIN_H)
 	for wake_need: String in ["enrichment", "hunger", "thirst", "bladder"]:
 		var kn := NpcAgent.NEEDS.find(wake_need)
@@ -827,7 +837,54 @@ func _decide(i: int, t: float, ctx: Dictionary) -> void:
 		if rn > 1e-9 and vn < tn:
 			until = minf(until, t + (tn - vn) / rn + 1e-4)
 	end_h[i] = maxf(until, t + 1e-4)
+	# Standing on the spot just used? Step aside first (the slot is the next
+	# person's now) and hang out a few metres off.
+	var aside := _loiter_spot(i, t, ctx)
+	if aside != Vector2.INF:
+		_go(i, t, aside, A_FREE, "", "", ctx)
+		return
+	act[i] = A_FREE
+	state[i] = S_DOING
 	next_h[i] = end_h[i]
+
+
+## Where to hang out after finishing at the space `last_space[i]` names, when
+## still standing within LOITER_NEAR_M of its centre; Vector2.INF otherwise
+## (not at a space, or already clear of it). Hashed per person and quarter
+## hour, LOITER_MIN_M..+LOITER_SPREAD_M out, so two idlers rarely share one.
+func _loiter_spot(i: int, t: float, ctx: Dictionary) -> Vector2:
+	var ls := str(last_space[i])
+	if ls.is_empty() or ls.begins_with("home|") or not NpcAgent.loiter_enabled:
+		return Vector2.INF
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null:
+		return Vector2.INF
+	var c: Variant = registry.cached_position(ls)
+	if not (c is Vector2):
+		return Vector2.INF
+	var here := pos_at(i, t)
+	if here.distance_to(c) > LOITER_NEAR_M:
+		return Vector2.INF
+	var q := int(floor(t * 4.0))
+	var a := NpcHash.unit01(ids[i], "loiter%d" % q) * TAU
+	var r := LOITER_MIN_M + NpcHash.unit01(ids[i], "loiterr%d" % q) * LOITER_SPREAD_M
+	# Not on top of anyone already hanging about there: turn the spot round
+	# the space (a golden-angle step at a time, a few tries) until it is clear
+	# of every standing person. No separation pass runs in this tier, so the
+	# spot has to be clear when it is chosen.
+	var best := (c as Vector2) + Vector2(cos(a), sin(a)) * r
+	for k in 5:
+		var cand := (c as Vector2) + Vector2(cos(a + float(k) * VenueCrowd.GOLDEN_ANGLE), sin(a + float(k) * VenueCrowd.GOLDEN_ANGLE)) * r
+		var clear := true
+		for j in _n:
+			if j == i or alive[j] != 1 or state[j] != S_DOING:
+				continue
+			if Vector2(ax[j], az[j]).distance_squared_to(cand) < SpaceRegistry.PERSONAL_SPACE_M * SpaceRegistry.PERSONAL_SPACE_M:
+				clear = false
+				break
+		if clear:
+			return cand
+	return best
 
 
 ## A SOCIAL block (NpcSocial): a venue without the enrichment gate, a stint
@@ -839,7 +896,7 @@ func _begin_social(i: int, t: float, ctx: Dictionary, hour: float, left: float) 
 		return true
 	var wander := pick == "wander"
 	var spot := NpcSocial.wander_spot(ids[i], home, t) if wander \
-		else NpcSocial.mingle_spot(ids[i], seed_key, home, t)
+		else NpcSocial.mingle_spot(ids[i], seed_key, home, t, _n)
 	_go(i, t, spot["pos"], A_MINGLE, "", "", ctx)
 	var face: Vector2 = spot["face"]
 	fx[i] = face.x
@@ -1530,11 +1587,17 @@ func _go(i: int, t: float, dest: Vector2, a: int, sid: String, stype: String,
 	# people heading the same way does not share one line. NOT for a
 	# choreographed seat (the ring, the fan, a bed): approached tangentially
 	# the offset is radial and put ring seats 0.8 m inside the perimeter.
+	# The lane is for the WALK, never for the goal: standing slots are
+	# 0.855 m apart and two lanes meeting at the goal cancelled that — the
+	# spacing probe found people standing on one spot at the kitchen, the
+	# shower and the water point (2026-10-25). A straight walk takes the lane
+	# to LANE_MERGE_M short of the goal and converges from there (below).
 	var choreographed := a == A_SLEEP or a == A_PERFORM or (a == A_ENRICH and SpaceTypes.LIVE_VENUE_TYPES.has(stype))
+	var lane := Vector2.ZERO
 	if d > 2.0 and not choreographed:
 		var dir := (dest - from) / d
 		var side := (NpcHash.unit01(ids[i], "lane") * 2.0 - 1.0) * LANE_OFFSET_M
-		dest += Vector2(-dir.y, dir.x) * side
+		lane = Vector2(-dir.y, dir.x) * side
 	legs[i] = null
 	leg_i[i] = 0
 	var first := dest
@@ -1587,6 +1650,14 @@ func _go(i: int, t: float, dest: Vector2, a: int, sid: String, stype: String,
 			legs[i] = det
 			leg_i[i] = 0
 			first = det[0]
+		elif lane != Vector2.ZERO and d > LANE_MERGE_M + 2.0:
+			# Walk the lane, then the last few metres straight onto the exact
+			# spot. (A routed walk already carries the route cache's own lane
+			# — NpcNavQuery — and ends on the goal.)
+			var merge := dest - (dest - from) / d * LANE_MERGE_M + lane
+			legs[i] = PackedVector2Array([merge, dest])
+			leg_i[i] = 0
+			first = merge
 	ax[i] = from.x
 	az[i] = from.y
 	bx[i] = first.x
@@ -1726,6 +1797,10 @@ func _begin_activity(i: int, t: float, ctx: Dictionary) -> void:
 	elif act[i] == A_PERFORM:
 		# The set's end is the visit's end.
 		dur = cap if cap > 0.0 else 1.0
+	elif act[i] == A_FREE:
+		# Stepped aside from a space to hang out (_loiter_spot): the dawdle
+		# _decide already timed, ending at the first need crossing.
+		dur = cap if cap > 0.0 else FREE_MIN_H
 	else:
 		var base := float((NpcAgent.ACTIVITIES.get(name, {}) as Dictionary).get("duration_h", 0.25))
 		dur = base * (0.85 + _rand(i) * 0.4)
@@ -1734,6 +1809,10 @@ func _begin_activity(i: int, t: float, ctx: Dictionary) -> void:
 	dur = maxf(dur, 1.0 / 60.0)
 	end_h[i] = t + dur
 	next_h[i] = minf(end_h[i], t + HEARTBEAT_H)
+	if act[i] == A_FREE:
+		# The dawdle _decide timed: it already ends at the first need
+		# crossing, so no heartbeats (exactly as a dawdle in place).
+		next_h[i] = end_h[i]
 	if act[i] == A_PERFORM and _perform.has(i) \
 			and not ((_perform[i] as Dictionary).get("orbit", {}) as Dictionary).is_empty():
 		next_h[i] = t   # a fire-flow performer starts round the lane at once

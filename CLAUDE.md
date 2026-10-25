@@ -339,6 +339,18 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --s
 # check COUNT, because a Godot runtime error aborts the enclosing test function
 # while the suite still prints PASS — this file lost a whole function to that):
 Godot.exe.exe --headless --path . --script gameplay/site_target_picker_selftest.gd
+# NPC spacing probe (offline, NOT a selftest — the measurement behind the
+# 2026-10-25 realism pass): two days of a 24-person camp in BOTH tiers on the
+# crowd selftest's synthetic site; per tick, standing pairs under 0.3 / 0.6 /
+# 0.9 m, sleepers on one spot, walkers passing through each other and
+# travellers bound for one spot, with the activity pairs behind the worst
+# bucket NAMED. Expect "< 0.3 m: 0" in both tiers on both routines; a new
+# generator that stacks people shows up here by name. --routine=default too:
+Godot.exe.exe --headless --path . --script tools/diag/npc_spacing_probe.gd -- --days=2 --routine=festival
+# Tier morale under the step-aside switch (NpcAgent.loiter_enabled on / off,
+# last-day averages + loiter counts; how the equivalence pin was moved to a
+# day average):
+Godot.exe.exe --headless --path . --script tools/diag/npc_tier_morale_diag.gd
 # Peak Experience self-test (offline — NpcPeak rules, PeakField onset /
 # contagion + the player multiplier / CHARGE (Exp(1) thresholds, feeding,
 # leak) / hold + GRACE_H / scrub-freeze / catch-up clear / score + its
@@ -9755,6 +9767,81 @@ camp shares a name until the camp outgrows the pool; other ids hash. The id is
 the unique key everywhere, never the name. The population and cohort
 selftests clear custom names in `_init` (`reset_custom_names_for_test`) so a
 player's friends never move a pin.
+
+## NPC realism pass — spacing, sliding, moving between spaces (2026-10-25)
+
+Plan: `plans/NPC_REALISM_PASS.md`. The report: "people go to exactly the same
+place; at speed they slide around, even lying down; they should avoid each
+other and stand at a realistic distance." Measured FIRST with
+`tools/diag/npc_spacing_probe.gd` (Validation list): the full tier never
+stacked (the separation pass works); the light tier put 39 pairs on one spot
+on the festival day and **15 158 on the default day**. Both tiers read
+"< 0.3 m: 0" now. What it was, and the rules that carry the fix:
+- **The light tier's LANE OFFSET moved the GOAL.** `CrowdCohort._go` added
+  the per-person ±0.8 m lane to the destination; standing slots are 0.855 m
+  apart, so two lanes meeting at the goal cancelled the spacing (kitchen,
+  shower, water point). The lane is for the WALK: a straight walk now takes
+  it to `LANE_MERGE_M` (4 m) short of the goal and converges on the exact
+  spot (a two-leg `legs[i]`); a routed walk takes no extra lane (the route
+  cache's own lanes — NpcNavQuery — already end on the goal).
+- **Idlers hung about ON the slot they had just used** (12 207 pairs on the
+  default day: "nothing to do → dawdle where we are", while the released
+  slot went to the next thirsty person). Both tiers now STEP ASIDE: within
+  `LOITER_NEAR_M` (6 m) of the space's centre they walk to a spot
+  `LOITER_MIN_M`..`+LOITER_SPREAD_M` (5–8 m) out, hashed per person and
+  quarter hour, and hang out there. Light: `CrowdCohort._loiter_spot` (turns
+  the spot a golden-angle step at a time until it is clear of every standing
+  person — this tier has no separation pass, so the spot must be clear when
+  chosen) → `_go(... A_FREE)`; the dawdle's `end_h` (the first need
+  crossing) still ends it, no heartbeats. Full: `NpcAgent.LOITER_ACTIVITY`
+  ("loiter", in ACTIVITIES, consumes nothing; `_maybe_loiter` at the END of
+  `_step_idle`; any need past its THRESHOLD ends it, like the light tier's
+  FREE bar; status "stepping aside" / "hanging out"). Never after sleep
+  (waking in one's own bed) or after a loiter (`_loiter_ok`).
+  - ⚠ **Its duration is HASHED, never `rng.randf_range`**: a draw there moved
+    the RNG stream for everything after, and the separation-neutrality pin
+    read 3 % of water from it.
+  - ⚠ The engine gained a `separation` ctx switch (through `_make_ctx`).
+    `npc_population_selftest._consumption_over_a_day` used to disable the
+    pass by pinning `walkable` to false — which also refused every loiter
+    walk, so the two runs no longer did the same thing (5 % water).
+  - `NpcAgent.loiter_enabled` (static) is the diagnostics switch.
+- **Sleepers in a bare sleep AREA lie in rows** (`SpaceRegistry.
+  lying_offset_for_index`: 1.1 m across × 2.4 m along, one yaw per space
+  from `lying_yaw_for(space_id)`), not 0.9 m apart on the standing spiral at
+  random yaws. Full tier only — the light tier sleeps at its home slots.
+- **Furniture seats that wrap** (`NpcPopulationBridge.seat_spot`, slot k ≥
+  the seat count) now STAND behind the seat's owner (kind "stand", no elev)
+  instead of landing on the identical cushion.
+- **Friend-group clusters in a mingle circle** take sunflower cluster slots
+  by RANK among the camp's groups sharing that circle this bucket
+  (`NpcSocial.cluster_rank`, `GROUP_INNER_M` 2.6 + `GROUP_SEAT_M` 2.4·√rank,
+  a per-bucket rotation) instead of independent hashed points 1.2–3.8 m out
+  that stacked two groups. The rank needs the camp's headcount: the cohort
+  passes `_n`, the engine puts `camp_n` in `_make_ctx`; `NpcFriends.group_of`
+  now returns `g`, plus `group_key` / `group_count`.
+- **"They slide around, even lying down"** had three faces, all rendering:
+  (1) `NpcPopulationHost._pose_avatar` in interp mode tracks a MOVING point,
+  so `gap` was small, `catching_up` never fired, and the pose machine got
+  `in_transit = false` while the body still glided prev→next — a person who
+  reached bed inside one tick lay down for the glide. `on_segment` (f < 1)
+  is now part of `in_transit` (dancers, ravers and fire-flow performers
+  excepted — they move in their own pose). (2) The full-tier OVERFLOW
+  figures glide to each tick position with the dot's SETTLED pose, on the
+  GPU. (3) An eased segment (late event, tier switch, hand-off) slid a lying
+  figure. `crowd_figure.gdshader`: a STATIC pose on a segment over 2 m with
+  u < 1 draws as a WALK facing the segment heading (the YAW_FIXED facing
+  only survives on short shuffles); dance / rave / sway / peak / DJ /
+  fire-flow keep their pose while moving.
+- **The equivalence pin is the LAST DAY'S AVERAGE morale**, not the value at
+  the final instant (08:00 on a waking camp). Changing only the loiter
+  spot's hash salt moved the light tier's end value 0.795 ↔ 0.815 while the
+  day average stayed within 0.01; the instantaneous 0.08 pin was already at
+  0.074 before this pass. `tools/diag/npc_tier_morale_diag.gd` prints both.
+- Not done: a light-tier per-pair avoidance while walking (positions are
+  segments, not ticks — walkers passing through each other measured 0–1 per
+  two days); the light tier sleeping at `home` while the full tier sleeps at
+  a tagged shelterless area.
 
 ## NPC festival refinement pass (2026-10-07)
 

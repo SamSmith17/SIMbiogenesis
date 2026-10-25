@@ -44,7 +44,7 @@ const CIRCLE_R_MIN_M := 1.1
 const CIRCLE_R_PER_PERSON_M := 0.12
 const HANGOUT_R_M := 16.0
 ## How far a friend group's own cluster sits from its circle's middle.
-const GROUP_SPREAD_M := 2.6
+const GROUP_SPREAD_M := 2.6   # legacy: the cluster radius is GROUP_INNER_M + GROUP_SEAT_M·√rank now
 const WANDER_MIN_M := 30.0
 const WANDER_MAX_M := 120.0
 ## What a mingle does for the enrichment need (half a venue visit's worth):
@@ -73,15 +73,45 @@ static func circle_centre(seed_key: String, home: Vector2, c: int, abs_h: float)
 
 ## Which circle this person joins this bucket.
 static func circle_of(agent_id: String, abs_h: float) -> int:
-	var b := int(floor(abs_h / CIRCLE_BUCKET_H))
-	return int(NpcHash.unit01(NpcFriends.key_of(agent_id), "join%d" % b) * float(CIRCLES_PER_CAMP)) % CIRCLES_PER_CAMP
+	return circle_of_group(NpcFriends.key_of(agent_id), int(floor(abs_h / CIRCLE_BUCKET_H)))
+
+
+## Which circle a friend GROUP joins in bucket `b` (the choice is the
+## group's — friends sit together).
+static func circle_of_group(group_key: String, b: int) -> int:
+	return int(NpcHash.unit01(group_key, "join%d" % b) * float(CIRCLES_PER_CAMP)) % CIRCLES_PER_CAMP
+
+
+## This group's cluster SLOT in its circle: its rank among the camp's groups
+## that joined the same circle this bucket (0 = the lowest group index
+## there). Both tiers know the camp's headcount, so both compute the same
+## rank; with no headcount (an old caller) the group's own index stands in,
+## which is still distinct per group.
+static func cluster_rank(seed_key: String, g: int, c: int, b: int, camp_n: int) -> int:
+	if camp_n <= 0:
+		return maxi(g, 0)
+	var rank := 0
+	for g2 in mini(g, NpcFriends.group_count(seed_key, camp_n)):
+		if circle_of_group(NpcFriends.group_key(seed_key, g2), b) == c:
+			rank += 1
+	return rank
+
+
+## A friend group's cluster sits on a sunflower of cluster slots round its
+## circle's middle — the first GROUP_INNER_M out (clear of the solo ring),
+## then GROUP_SEAT_M apart, so two groups' F-formations (up to ~1.5 m
+## radius each) never overlap. They used to take independent hashed points
+## 1.2–3.8 m out, which stacked two groups in the same conversation.
+const GROUP_INNER_M := 2.6
+const GROUP_SEAT_M := 2.4
 
 
 ## {pos, face} — where this person stands in their circle and the point they
 ## face (the circle's middle). Seats are spread round the ring by a hashed
 ## angle with a little radial scatter, so a circle reads as people talking,
 ## not as a clock face.
-static func mingle_spot(agent_id: String, seed_key: String, home: Vector2, abs_h: float) -> Dictionary:
+static func mingle_spot(agent_id: String, seed_key: String, home: Vector2, abs_h: float,
+		camp_n: int = 0) -> Dictionary:
 	var c := circle_of(agent_id, abs_h)
 	var mid := circle_centre(seed_key, home, c, abs_h)
 	var g := NpcFriends.group_of(agent_id)
@@ -92,11 +122,14 @@ static func mingle_spot(agent_id: String, seed_key: String, home: Vector2, abs_h
 			+ (NpcHash.unit01(agent_id, "seat_r") - 0.5) * 0.5
 		return {"pos": mid + Vector2(cos(a), sin(a)) * r, "face": mid}
 	# A friend group holds its OWN conversation inside the circle's area: a
-	# cluster a few metres off the circle's middle, members evenly round it.
+	# cluster on the circle's sunflower of cluster slots (cluster_rank),
+	# turned by a per-bucket angle so the layout is not the same every time,
+	# members evenly round it.
 	var gk := str(g["key"])
 	var b := int(floor(abs_h / CIRCLE_BUCKET_H))
-	var ga := NpcHash.unit01(gk, "gc%d_a" % b) * TAU
-	var gr := 1.2 + NpcHash.unit01(gk, "gc%d_r" % b) * GROUP_SPREAD_M
+	var rank := cluster_rank(seed_key, int(g.get("g", 0)), c, b, camp_n)
+	var ga := float(rank) * VenueCrowd.GOLDEN_ANGLE + NpcHash.unit01(seed_key, "gca%d_%d" % [c, b]) * TAU
+	var gr := GROUP_INNER_M + GROUP_SEAT_M * sqrt(float(rank))
 	var centre := mid + Vector2(cos(ga), sin(ga)) * gr
 	var off := NpcFriends.formation_offset(gk, int(g["k"]), int(g["size"]),
 		NpcHash.unit01(agent_id, "seat"))

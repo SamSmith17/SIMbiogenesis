@@ -52,7 +52,19 @@ static func group_of(agent_id: String) -> Dictionary:
 	var g := lo
 	var a := starts[g]
 	var size := starts[g + 1] - a
-	return {"key": "%s_grp_%d" % [seed, g], "size": size, "k": idx - a, "camp": seed}
+	return {"key": group_key(seed, g), "size": size, "k": idx - a, "camp": seed, "g": g}
+
+
+## The key of camp `seed`'s g-th group (what group_of returns as "key").
+static func group_key(seed: String, g: int) -> String:
+	return "%s_grp_%d" % [seed, g]
+
+
+## How many groups a camp of `n` people is cut into.
+static func group_count(seed: String, n: int) -> int:
+	if n <= 0:
+		return 0
+	return _starts_for(seed, n - 1).size() - 1
 
 
 static func key_of(agent_id: String) -> String:

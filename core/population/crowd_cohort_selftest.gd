@@ -88,22 +88,27 @@ func _ctx(reg: SpaceRegistry, t: float) -> Dictionary:
 ## Run a cohort from t0 for `hours`, ticking every `step_h`; returns the
 ## integrated demand {kind: qty} and a trace string.
 func _run(cohort: CrowdCohort, reg: SpaceRegistry, t0: float, hours: float,
-		step_h: float, trace: bool = false) -> Dictionary:
+		step_h: float, trace: bool = false, morale_from_h: float = -1.0) -> Dictionary:
 	var totals := {}
 	var tr := ""
 	var t := t0
 	cohort.tick(t, _ctx(reg, t))
 	var end := t0 + hours
+	var avg := 0.0
+	var n_avg := 0
 	while t < end - 1e-9:
 		t = minf(t + step_h, end)
 		var d := cohort.tick(t, _ctx(reg, t))
 		for k in d:
 			totals[k] = float(totals.get(k, 0.0)) + float(d[k]) * step_h
+		if morale_from_h >= 0.0 and t > t0 + morale_from_h:
+			avg += cohort.mean_morale()
+			n_avg += 1
 		if trace:
 			for i in cohort.count():
 				var p := cohort.pos_at(i, t)
 				tr += "%d:%.2f,%.2f,%d,%d|" % [i, p.x, p.y, cohort.state[i], cohort.act[i]]
-	return {"totals": totals, "trace": tr}
+	return {"totals": totals, "trace": tr, "morale_avg": avg / maxf(float(n_avg), 1.0)}
 
 
 # --- tests ------------------------------------------------------------------
@@ -202,17 +207,28 @@ func _test_equivalence_with_full_engine() -> void:
 		return reg_f.resolve_position(space, null)
 	var tot_f := {}
 	var t := 8.0
+	# Morale is compared as the LAST DAY's time average, not the value at the
+	# final instant: that instant is 08:00 on a waking camp, where the mean
+	# swings by ±0.01 on a hash salt alone (measured 2026-10-25 — changing
+	# only the loiter spot's salt moved the light tier's end value 0.795 to
+	# 0.815 while its day average stayed within 0.01). The average IS the
+	# equivalence property; the instant was noise on top of it.
+	var avg_f := 0.0
+	var n_f := 0
 	e.tick(t, {"registry": reg_f, "pos_of": pos_of, "hour_of_day": 8.0})
 	while t < 8.0 + days * 24.0 - 1e-9:
 		t += step
 		var d := e.tick(t, {"registry": reg_f, "pos_of": pos_of, "hour_of_day": fposmod(t, 24.0)})
 		for k in d:
 			tot_f[k] = float(tot_f.get(k, 0.0)) + float(d[k]) * step
+		if t > 8.0 + (days - 1.0) * 24.0:
+			avg_f += e.mean_morale()
+			n_f += 1
 	# Light crowd.
 	var reg_l := _site()
 	var c := CrowdCohort.new()
 	c.configure(24, "eq", Vector2.ZERO)
-	var r := _run(c, reg_l, 8.0, days * 24.0, step)
+	var r := _run(c, reg_l, 8.0, days * 24.0, step, false, (days - 1.0) * 24.0)
 	var tot_l: Dictionary = r["totals"]
 	for kind in ["water", "food"]:
 		var f := float(tot_f.get(kind, 0.0))
@@ -220,9 +236,9 @@ func _test_equivalence_with_full_engine() -> void:
 		var rel := absf(f - l) / maxf(f, 1e-6)
 		_check("%s over %d days within 6 %% of the full engine" % [kind, int(days)], rel <= 0.06,
 			"full=%.1f light=%.1f (%.1f %%)" % [f, l, rel * 100.0])
-	var mf := e.mean_morale()
-	var ml := c.mean_morale()
-	_check("mean morale within 0.08 of the full engine", absf(mf - ml) <= 0.08,
+	var mf := avg_f / maxf(float(n_f), 1.0)
+	var ml := float(r["morale_avg"])
+	_check("last-day mean morale within 0.08 of the full engine", absf(mf - ml) <= 0.08,
 		"full=%.3f light=%.3f" % [mf, ml])
 	# The light tier gathers a little less often (it re-plans at events, the
 	# full tier every substep while idle), so the two can straddle a band

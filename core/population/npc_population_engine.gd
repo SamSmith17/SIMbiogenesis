@@ -574,10 +574,17 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# The clock's speed as a multiple of realtime (0 = unknown): gates
 		# cosmetic work (separation) at festival speeds.
 		"time_mult": float(ctx_in.get("time_mult", 0.0)),
+		# Testing switch: false turns the separation pass off and NOTHING
+		# else (the selftest's neutrality pin used to pin `walkable` to
+		# false instead, which also refused every loiter walk).
+		"separation": bool(ctx_in.get("separation", true)),
 		# SOCIAL blocks: the camp's home + seed for its conversation circles
 		# (NpcSocial). Forwarded here or agents fall back to their own pos.
 		"camp_home": ctx_in.get("camp_home", null),
 		"camp_seed": str(ctx_in.get("camp_seed", "")),
+		# The camp's headcount: NpcSocial ranks a friend group's cluster among
+		# the groups sharing its circle (the light tier passes its own count).
+		"camp_n": agents.size(),
 		"bed_spot_of": ctx_in.get("bed_spot_of", Callable()),
 		"seat_spot_of": ctx_in.get("seat_spot_of", Callable()),
 		"no_go": ctx_in.get("no_go", []),
@@ -674,7 +681,7 @@ func _separate(dt: float, ctx: Dictionary) -> void:
 	# nudging it is noise on top of noise.
 	# Also off at festival speeds: the nudges are cosmetic, O(n^2), and at
 	# 120x+ a person crosses several personal spaces per frame anyway.
-	if agents.size() < 2:
+	if agents.size() < 2 or not bool(ctx.get("separation", true)):
 		return
 	# Those two gates are about TRAVELLERS, whose position at speed is an
 	# approximation. Two people STANDING still are exactly where the sim

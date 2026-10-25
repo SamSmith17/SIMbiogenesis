@@ -813,6 +813,35 @@ static func pile_offset(n: int, yaw: float) -> Vector2:
 	return across * side * 0.3 * float((n + 1) / 2) + axis * 0.12 * float(n % 3 - 1)
 
 
+## Where the n-th sleeper LIES in a sleep area with no shelter in it: rows
+## across the area, everyone along one axis (`yaw`, the way they lie — see
+## lying_yaw_for), LYING_ACROSS_M apart across and LYING_ALONG_M along, filled
+## nearest the centre first (across the row, then the next row either side).
+## The standing spiral put lying bodies 0.9 m apart at random yaws — people
+## lying through each other.
+const LYING_ACROSS_M := 1.1
+const LYING_ALONG_M := 2.4
+const LYING_ROW_N := 5
+
+
+static func lying_offset_for_index(slot: int, yaw: float) -> Vector2:
+	var k := maxi(slot, 0)
+	var ia := k % LYING_ROW_N
+	var ja := k / LYING_ROW_N
+	# 0, 1, -1, 2, -2 … either side of the centre line.
+	var across_i := (ia + 1) / 2 * (1 if ia % 2 == 1 else -1)
+	var along_i := (ja + 1) / 2 * (1 if ja % 2 == 1 else -1)
+	var along := Vector2(-sin(yaw), -cos(yaw))
+	var across := Vector2(cos(yaw), -sin(yaw))
+	return across * (LYING_ACROSS_M * float(across_i)) + along * (LYING_ALONG_M * float(along_i))
+
+
+## The one lying direction of a sleep area (hashed off its id, so both tiers
+## and every reload agree).
+static func lying_yaw_for(space_id: String) -> float:
+	return NpcHash.unit01(space_id, "lieyaw") * TAU
+
+
 func slot_offset(space_id: String, agent_id: String) -> Vector2:
 	var slot := slot_index_for(space_id, agent_id)
 	if slot < 0:

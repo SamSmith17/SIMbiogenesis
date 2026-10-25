@@ -248,9 +248,20 @@ void vertex() {
 		// stance offset of up to ±25°. Walkers face where they are going.
 		// yaw_hint past 500 = a FIXED facing (CrowdRenderer.YAW_FIXED): a short
 		// eased glide into a standing spot keeps the person's own facing.
-		float yaw = yaw_hint > 500.0 ? yaw_hint - 1000.0 + (seed - 0.5) * 0.9
+		// A STATIC pose still travelling a long segment is a person on the
+		// move: a late event, a tier switch or a hero hand-off eases the
+		// figure to its new spot, and a full-tier overflow figure glides to
+		// each tick position with its SETTLED pose — drawn rigid, a sleeper
+		// slid across the camp lying down. Anything over a short shuffle
+		// walks there, facing the way it goes. Dancing poses keep moving in
+		// their own pose (a circler, a raver, a fire-flow lane).
+		bool static_pose = !(pose == POSE_WALK || pose == POSE_DANCE || pose == POSE_RAVE
+			|| pose == POSE_SWAY || pose == POSE_PEAK || pose == POSE_DJ || pose == POSE_FIREFLOW);
+		bool moving_far = u < 1.0 && seg_len > 2.0;
+		bool fixed_face = yaw_hint > 500.0 && !(static_pose && moving_far);
+		float yaw = fixed_face ? yaw_hint - 1000.0 + (seed - 0.5) * 0.9
 			: (seg_len > 0.05 ? atan(seg.x, seg.z) : yaw_hint + (seed - 0.5) * 0.9);
-		bool walking = pose == POSE_WALK && u < 1.0 && seg_len > 0.05;
+		bool walking = u < 1.0 && (pose == POSE_WALK ? seg_len > 0.05 : (static_pose && moving_far));
 		// Per-person tempo and throw, so a crowd is not a chorus line.
 		float tempo = 0.8 + seed * 0.45;
 		float throw = 0.75 + fract(seed * 7.31) * 0.5;

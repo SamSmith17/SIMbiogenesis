@@ -4778,8 +4778,10 @@ func _test_separation_changes_no_consumption() -> void:
 	_check("both runs consumed something", without.size() > 0)
 
 
-## `separated` false pins the walkable test to "nothing is walkable", which is
-## the one switch that disables every push without touching anything else.
+## `separated` false flips the engine's `separation` ctx switch, which turns
+## the push pass off and nothing else. (It used to pin `walkable` to "nothing
+## is walkable", which also refused every step-aside walk — NpcAgent
+## _maybe_loiter — so the two runs no longer did the same thing.)
 func _consumption_over_a_day(separated: bool) -> Dictionary:
 	var site := _make_test_site()
 	var engine := NpcPopulationEngine.new()
@@ -4794,7 +4796,7 @@ func _consumption_over_a_day(separated: bool) -> Dictionary:
 			"hour_of_day": fposmod(t, 24.0),
 		}
 		if not separated:
-			ctx["walkable"] = func(_p: Vector2) -> bool: return false
+			ctx["separation"] = false
 		var demand: Dictionary = engine.tick(t, ctx)
 		for kind in demand:
 			total[kind] = float(total.get(kind, 0.0)) + float(demand[kind]) * step

@@ -77,7 +77,21 @@ const ACTIVITIES: Dictionary = {
 	NpcSocial.ACTIVITY: {"space": "", "duration_h": 0.5, "consumes": {}},
 	# The DJ's set: cast by the bridge (begin_perform), ends with the set.
 	"perform": {"space": "", "duration_h": 1.0, "consumes": {}},
+	# Nothing to do after finishing at a space: step aside from the spot just
+	# used (its slot is the next person's) and hang out a few metres off
+	# (_maybe_loiter). Consumes nothing; any need past its threshold ends it.
+	LOITER_ACTIVITY: {"space": "", "duration_h": 0.25, "consumes": {}},
 }
+
+## Hanging out beside a space just used (see _maybe_loiter).
+const LOITER_ACTIVITY := "loiter"
+## Diagnostics switch (tools/diag): false = idle where you finished, as before.
+static var loiter_enabled := true
+## Step aside when still within LOITER_NEAR_M of the space's centre, to a spot
+## LOITER_MIN_M..+LOITER_SPREAD_M out (CrowdCohort's numbers).
+const LOITER_NEAR_M := 6.0
+const LOITER_MIN_M := 5.0
+const LOITER_SPREAD_M := 3.0
 
 ## The DJ activity (NpcPopulationBridge casts one person per live stage).
 const PERFORM_ACTIVITY := "perform"
@@ -231,6 +245,9 @@ var blocked_since: Dictionary = {}
 ## Space this agent is currently standing at ("" when out in the open) — the
 ## cache key for the next trip.
 var at_space_id: String = ""
+## Whether finishing there calls for stepping aside (_maybe_loiter): a visit
+## does, waking up in one's own bed does not. Transient, like face_anchor.
+var _loiter_ok := false
 ## Planned route to target_pos (empty = walk straight, the pre-3b fallback).
 var path := PackedVector2Array()
 var path_idx := 0
@@ -640,6 +657,10 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 	# The DJ plays the set through: only a need at its very top takes them
 	# off the decks (CrowdCohort uses the same bar).
 	var bar := PERFORM_URGENT if activity == PERFORM_ACTIVITY else URGENT
+	if activity == LOITER_ACTIVITY:
+		# Hanging out is the idle re-pick in all but name: any need past its
+		# own threshold ends it (the light tier's FREE dawdle bar).
+		bar = float(THRESHOLD.get(urgent, URGENT)) if not urgent.is_empty() else URGENT
 	if not urgent.is_empty() and urgent != activity and float(needs.get(urgent, 0.0)) >= bar:
 		var billed_part := _scaled(consumes, doing_h, dt_hours)
 		_finish(ctx, false)
@@ -810,6 +831,12 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 			var left0 := r0.hours_left_in_block(_hour(ctx), routine_offset_h, _rkey(r0, ctx))
 			if left0 > 0.0:
 				activity_ends_h = minf(activity_ends_h, abs_hours + left0)
+	if activity == LOITER_ACTIVITY:
+		# Hashed, not drawn: a loiter is a cosmetic step aside, and a draw
+		# here would move the RNG stream for everything after it (the
+		# separation-neutrality pin measured 3 % of water from exactly that).
+		dur = 0.0
+		activity_ends_h = arrive_abs + 0.25 * (0.85 + 0.4 * NpcHash.unit01(id, "loiterd%d" % int(floor(arrive_abs * 4.0))))
 	if dur > 0.0:
 		activity_ends_h = arrive_abs + dur * rng.randf_range(0.85, 1.25)
 		# Never run past the end of the scheduled block that asked for this.
@@ -1117,6 +1144,49 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 	# Tier 4: gathering — what lifts morale past the baseline ceiling.
 	if abs_hours >= float(retry_at.get("enrichment", 0.0)) and _wants_enrichment(ctx):
 		_begin_enrichment(abs_hours, ctx)
+		if state != State.IDLE:
+			return
+	# Nothing at all: do not hang about ON the spot just used.
+	_maybe_loiter(abs_hours, ctx)
+
+
+## Finished at a space with nothing to do next, still standing on its slot
+## (which is the next person's now): walk a few metres off and hang out there
+## (LOITER_ACTIVITY). The light tier does the same (CrowdCohort._loiter_spot).
+## Only from a space: an idler already clear of one stays put.
+func _maybe_loiter(abs_hours: float, ctx: Dictionary) -> void:
+	if at_space_id.is_empty() or not _loiter_ok or controlled_by_peer != 0 or not loiter_enabled:
+		return
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null:
+		return
+	var c: Variant = registry.cached_position(at_space_id)
+	if not (c is Vector2):
+		var pos_of: Callable = ctx.get("pos_of", Callable())
+		var space := registry.find_by_id(at_space_id)
+		c = pos_of.call(space) if (pos_of.is_valid() and not space.is_empty()) else null
+		if not (c is Vector2):
+			return
+	if pos.distance_to(c) > LOITER_NEAR_M:
+		at_space_id = ""   # already clear of it; no more checks
+		return
+	var q := int(floor(abs_hours * 4.0))
+	var a := NpcHash.unit01(id, "loiter%d" % q) * TAU
+	var r := LOITER_MIN_M + NpcHash.unit01(id, "loiterr%d" % q) * LOITER_SPREAD_M
+	var spot: Vector2 = (c as Vector2) + Vector2(cos(a), sin(a)) * r
+	var walkable: Callable = ctx.get("walkable", Callable())
+	if walkable.is_valid() and not bool(walkable.call(spot)):
+		return
+	trip_distance_m = 0.0
+	activity = LOITER_ACTIVITY
+	target_space_id = ""
+	target_space_type = ""
+	lie_yaw = NAN
+	target_pos = spot
+	face_anchor = Vector2.INF   # look wherever (the projection path)
+	last_exposure = NpcWeatherGate.EXPOSURE_OUTDOOR
+	_request_path(ctx, target_pos, at_space_id, "")
+	state = State.TRAVELING
 
 
 func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
@@ -1193,11 +1263,23 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	# van or RV — slot k wraps round the beds — rather than on the ground.
 	if need == "sleep":
 		var bed_of: Callable = ctx.get("bed_spot_of", Callable())
+		var bed: Variant = null
 		if bed_of.is_valid():
-			var bed: Variant = bed_of.call(sid, registry.slot_index_for(sid, id))
-			if bed is Dictionary and not (bed as Dictionary).is_empty():
-				target_pos = (bed as Dictionary).get("pos", target_pos)
-				lie_yaw = float((bed as Dictionary).get("yaw", lie_yaw))
+			bed = bed_of.call(sid, registry.slot_index_for(sid, id))
+		if bed is Dictionary and not (bed as Dictionary).is_empty():
+			target_pos = (bed as Dictionary).get("pos", target_pos)
+			lie_yaw = float((bed as Dictionary).get("yaw", lie_yaw))
+		elif str((space.get("target", {}) as Dictionary).get("kind", "")) == "area":
+			# A bare sleep AREA (no shelters): lie in rows along one axis
+			# (SpaceRegistry.lying_offset_for_index) rather than 0.9 m apart
+			# on the standing spiral at random yaws, which lay people through
+			# each other.
+			var yaw := SpaceRegistry.lying_yaw_for(sid)
+			var lying: Vector2 = (p as Vector2) + SpaceRegistry.lying_offset_for_index(registry.slot_index_for(sid, id), yaw)
+			var walkable: Callable = ctx.get("walkable", Callable())
+			if not walkable.is_valid() or bool(walkable.call(lying)):
+				target_pos = lying
+				lie_yaw = yaw
 	# Look at the space, not back down the corridor we walked in. The CENTRE,
 	# deliberately, not our own slot — occupants of a fire circle should face
 	# each other. Recomputed from the final position every tick, so the
@@ -1462,7 +1544,7 @@ func _begin_social(abs_hours: float, ctx: Dictionary) -> void:
 		seed_key = id.substr(0, cut) if cut > 0 else id
 	_wandering = pick == "wander"
 	var spot := NpcSocial.wander_spot(id, home, abs_hours) if _wandering \
-		else NpcSocial.mingle_spot(id, seed_key, home, abs_hours)
+		else NpcSocial.mingle_spot(id, seed_key, home, abs_hours, int(ctx.get("camp_n", 0)))
 	activity = NpcSocial.ACTIVITY
 	target_space_id = ""
 	target_space_type = ""
@@ -1877,6 +1959,9 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	# Remember the space we finished at: the next trip starts there, which is
 	# what lets the space-pair route cache hit.
 	at_space_id = target_space_id
+	# Step aside after a space VISIT only — never away from one's own bed
+	# (waking up in a tent), nor again after hanging out.
+	_loiter_ok = activity != "sleep" and activity != LOITER_ACTIVITY
 	activity = ""
 	activity_ends_h = 0.0
 	target_space_id = ""
@@ -2036,6 +2121,8 @@ func status_line() -> String:
 				if not _comfort.is_empty():
 					return NpcComfort.status_for(_comfort, _comfort_bed)
 				return "taking in the view" if _wandering else "chatting with camp-mates"
+			if activity == LOITER_ACTIVITY:
+				return "hanging out"
 			if activity == "enrichment":
 				if target_space_type == "effigy":
 					match venue_pose:
@@ -2055,6 +2142,8 @@ func status_line() -> String:
 				return "carrying a load" if chore_leg == 1 else "heading to work"
 			if activity == PERFORM_ACTIVITY:
 				return "heading to the decks"
+			if activity == LOITER_ACTIVITY:
+				return "stepping aside"
 			if activity == NpcSocial.ACTIVITY:
 				match _comfort:
 					NpcComfort.KIND_SHADE: return "heading for shade"
