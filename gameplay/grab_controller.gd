@@ -341,6 +341,10 @@ func _open_edit_panel(prop: PlacedProp) -> void:
 		if _loader != null and _loader.has_method("open_flatpack_designer_for_prop"):
 			_loader.call("open_flatpack_designer_for_prop", prop.prop_id)
 			return
+	if prop.model_id == DomeLabBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_domelab_for_prop"):
+			_loader.call("open_domelab_for_prop", prop.prop_id)
+			return
 	var edit_ui := tree.current_scene.get_node_or_null("UILayer/PlacedPropEditUI")
 	if edit_ui != null and edit_ui.has_method("open_for_prop"):
 		edit_ui.call("open_for_prop", prop.prop_id)

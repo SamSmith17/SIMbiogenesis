@@ -147,6 +147,10 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == FlatpackBuilder.MODEL_ID:
 		var fp_spec: Dictionary = extras.get("flatpack_spec", extras) as Dictionary
 		return FlatpackBuilder.build_node(fp_spec)
+	if model_id == DomeLabBuilder.MODEL_ID:
+		var dl_spec: Dictionary = extras.get("domelab_spec", extras) as Dictionary
+		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
 	if model_id == LinkageStructureBuilder.MODEL_ID:
 		var linkage_spec: Dictionary = extras.get("linkage_spec", extras) as Dictionary
 		return LinkageStructureBuilder.build_node(linkage_spec)
@@ -428,6 +432,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "flatpack_furniture", "label": "Flat-pack furniture (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.9},
+		# Procedural geodesic domes and zomes (DomeLabBuilder): the dome & zome
+		# designer's strut / hub / plate structures with their fabrication data.
+		{"id": "domelab_structure", "label": "Dome or zome (parametric)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 3.0},
 		# Procedural ground-mount PV array (PvArrayBuilder): cols × rows modules
 		# on a tilted rack facing local +Z (south at yaw 0). Bound to a graph
 		# array node; its facing drives that array's tilt / azimuth.

@@ -148,6 +148,11 @@ const DYNAMIC_MODELS := {
 	# fallback is the default sofa: 12 parts of 1/2" ply, ~62 kg.
 	"flatpack_furniture": {"w_m": 2.44, "d_m": 0.90, "h_m": 0.15,
 		"mass_kg": 62.0, "form": "panel_stack", "source": "estimated"},
+	# Domes and zomes pack as a strut bundle + hub box + panel stack; the real
+	# spec is DomeLabDesign.packed_spec (the record's domelab_spec). This
+	# fallback is the default 3V 5/8 conduit dome (165 struts of 3/4" EMT).
+	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,
+		"mass_kg": 140.0, "form": "bundle", "source": "estimated"},
 	# Real spec comes from ContainerCatalog.packed_spec_for(container_id)
 	# (the drawer resolves the record's container_spec); this fallback is the
 	# 20' box (ISO 668 exterior + tare).

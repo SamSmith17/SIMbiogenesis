@@ -151,6 +151,9 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pallet_rack"><img src="docs/tour/pallet_rack.jpg" width="260" alt="Pallet rack builder"></a><br><b>Pallet rack builder</b><br><sub>P</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flatpack"><img src="docs/tour/flatpack.jpg" width="260" alt="Flat-pack furniture"></a><br><b>Flat-pack furniture</b><br><sub>Flat-pack furniture designer…</sub></td>
 </tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#domelab"><img src="docs/tour/domelab.jpg" width="260" alt="Dome & zome designer"></a><br><b>Dome & zome designer</b><br><sub>Dome & zome designer…</sub></td>
+</tr>
 </table>
 
 **Systems** — The resource-flow graph and the tools that design it.

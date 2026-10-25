@@ -801,6 +801,11 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		var rec_extra_fp: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_fp.has("flatpack_spec"):
 			extras["flatpack_spec"] = rec_extra_fp["flatpack_spec"]
+	elif model_id == DomeLabBuilder.MODEL_ID:
+		var rec_extra_dl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_dl.has("domelab_spec"):
+			extras["domelab_spec"] = rec_extra_dl["domelab_spec"]
+		extras["ghost_highlight"] = true
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		var rec_extra_pv: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_pv.has("pv_array_spec"):

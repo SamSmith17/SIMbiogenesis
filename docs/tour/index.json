@@ -1089,12 +1089,40 @@
       "image": "flatpack.jpg",
       "image_run": "2026-10-23T21:17:36",
       "image_commit": "d0e0149"
+    },
+    "domelab": {
+      "id": "domelab",
+      "title": "Dome & zome designer",
+      "chapter": "Build",
+      "summary": "Design geodesic domes, zomes and helix zomes in conduit, hubs, flat bars, rotegrity slats or folded plates; get the strut schedule, hub templates and cut files.",
+      "how": [
+        "Library → Structures → Dome & zome designer…",
+        "Pick Geodesic or Zome, a connector system, or a built-in design",
+        "Set the class, frequency, truncation, radius, the strut stock, the hubs and the covering",
+        "Parts lists every strut, hub and panel type; the schedule carries chord factors, cut lengths, bends and hub arm angles",
+        "Export writes DXF / SVG per sheet and hub template, the strut and BOM CSVs and the whole design as JSON",
+        "Place in world: a dome people can shelter under, which packs to its strut bundle"
+      ],
+      "action": "",
+      "button": "Dome & zome designer…",
+      "key": "",
+      "open_hints": [
+        "Click Dome & zome designer…"
+      ],
+      "world": "mtvernon",
+      "blurb": "A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; polar-zonohedron zomes of any order; and the helix zome, the zonohedron's smooth limit built from continuous curved ribs. Five ways to join them — flattened conduit on a bolt, rigid struts into socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, arc lengths, flange folds. The chord factors match the published tables, the bill of materials counts stock lengths and bolts, and the files go straight to a saw, a drill press or a CNC.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "domelab.jpg",
+      "image_run": "2026-10-25T16:34:02",
+      "image_commit": "d374786"
     }
   },
   "last_run": {
-    "label": "tour_20261023-211610",
-    "generated": "2026-10-23T21:17:36",
-    "git_commit": "d0e0149",
+    "label": "tour_20261025-163232",
+    "generated": "2026-10-25T16:34:02",
+    "git_commit": "d374786",
     "passed": 1,
     "total": 1,
     "video_secs": null

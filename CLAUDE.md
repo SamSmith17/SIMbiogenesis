@@ -857,6 +857,23 @@ Godot.exe.exe --headless --path . --script core/flatpack/flatpack_selftest.gd
 # exported and read back, a bench and a daybed placed — tagged quiet / sleep
 # with seat spots ON them at seat height — packed and unpacked, removed:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designer_check.gd -Label flatpack
+# Dome & zome designer (offline — core/domelab/): the Goldberg–Coxeter
+# construction against the published chord-factor tables (2V A 0.54653 /
+# B 0.61803; 3V 0.34862 / 0.40355 / 0.41241; 4V six values) and strut /
+# hub / face counts (65 / 26 / 40, 165 / 61 / 105, 250 / 91 / 160), Euler on
+# Class II and III, the polar zonohedron (one strut length, a level floor,
+# the helix rib through its nodes), a sphere's dip = half the central angle,
+# the nexorade fit (four holes a slat, band vs rigid), plate flanges and
+# folds, panel nesting, stock packing, the packed envelope, the DXF round
+# trip, every preset error-free, the builder's picking. EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/domelab/domelab_selftest.gd
+# The designer on a real world (sandbox): every built-in design shot in the
+# studio (+ sheets / hubs / schedule for a few), UiAudit on the open modal,
+# the files exported and the DXFs read back, a 2V dome and a zome placed
+# (height, collision, counted as shade), packed to the strut bundle and
+# unpacked, the designer reopened bound to the dome and Apply growing it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/domelab_designer_check.gd -Label domelab
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -2653,6 +2670,97 @@ is not committed; it carries a scale figure).
 - Not built: true-shape nesting (bounding rectangles today), router G-code
   (the user chose DXF + SVG), PDF templates, an NPC crew that cuts and
   assembles it.
+
+## Dome & zome designer (core/domelab/, 2026-10-25)
+
+Library → Structures → "Dome & zome designer…" (no hotkey); click a placed
+dome or the prop editor's "Edit dome…" reopens it bound to the prop. Pure
+modules under `core/domelab/`, the modal `scenes/ui/domelab_modal.gd`
+(flat-pack designer pattern: own CanvasLayer 27, `UiFit.keep_fitted`, modal
+claim, SubViewport studio). Record key `domelab_spec`, model id
+`domelab_structure` (`DomeLabBuilder.MODEL_ID`), the existing crafted 2V
+`geodesic_dome` / `DomeParts` is untouched.
+- **`DomeLabGeodesic`** is the Goldberg–Coxeter construction: a (b, c)
+  triangular lattice per face of the icosahedron / octahedron /
+  tetrahedron, Class I (f, 0), Class II (f/2, f/2), Class III (b, c),
+  projected to the sphere. Straddling corners are carried across the edge
+  with `(λ1 + λ3, λ2 + λ3, −λ3)` on the neighbour (the reflected far corner)
+  until inside; vertices merge by position, faces by vertex set. Chord
+  factors match Domebook / desertdomes to 2e-5 (2V, 3V, 4V pinned).
+  ⚠ **The lattice maths is 64-bit scalars, never Vector2**: a Class II tie
+  (unit triangle whose centroid lies ON the face edge) computed in float32
+  read −1e-7 near two corners and 15 faces of 240 vanished with V − E + F
+  = −8. ⚠ Every icosahedral mirror plane holds two icosa edges, which a
+  Class II lattice straddles, so a Class II "hemisphere" is never a clean
+  great circle: the 8 straddlers are trimmed (4V edge-up keeps 116 of 240)
+  and the base-level check says so. Truncation picks the ring nearest the
+  fraction's height (rings merged within 3 % R: a 3V "5/8" base is two
+  heights ~0.01 R apart = one ring; `flat_base` levels it, adding strut
+  lengths; the real 3V "5/8" is ~0.59 of the sphere). `stretch` makes an
+  ellipsoid. Normals for the connector maths are the FULL surface's
+  face-average normals, taken before the cut (base hubs keep the true
+  surface normal).
+- **`DomeLabZome`**: the polar zonohedron of order n — generators on one
+  cone, vertices V(i, k) = Σ of k consecutive generators, rhombi
+  R(i, k) = [V(i,k), V(i,k+1), V(i−1,k+2), V(i−1,k+1)], ONE strut length,
+  n(n−1) rhombi. Layers 0 … K; "cut" floor = the bottom row trimmed to
+  triangles on the level ring V(·, K); "zigzag" keeps whole rhombi. Every
+  edge is tagged with its RIB (R_i: fixed i; L_m: fixed i + k). The helix
+  zome (simplydifferently.org/Helix_Zome) is exactly the polar zonohedron's
+  infinite-frequency limit: `rib_point` is the smooth curve through a rib's
+  nodes (r = L sinθ sin(kπ/n)/sin(π/n), ψ linear in k, y linear in k); the
+  ribs option builds continuous curved ribs lapped where R crosses L.
+- **`DomeLabConnectors`** reads every angle off the geometry: dip =
+  asin(−d · N) (half the central angle on a sphere = the conduit end bend),
+  azimuths in the tangent plane → hub arm patterns (canonical rotation of
+  the gap/dip sequence, `angle_tol_deg`), dihedral → flange fold = half the
+  angle between face normals, flat-bar arc = chord · δ / sin δ, bend radius
+  = chord / 2 sin δ, strain = t / 2R. Strut classes by (cut, sorted end
+  bends) within `group_tol_mm`, A = shortest. Systems: `bolt_stack` (cut =
+  chord + 2 × hole offset, bend = dip, one bolt per hub sized from the
+  stack), `hub` (socket: cut = chord − 2 × reach; plate: flattened ends on
+  a star plate, drill template per hub type; ring), `flat_bar` (arc lengths,
+  bars lie flat on the bolt), `nexorade`, `plate`.
+- **`DomeLabNexorade`**: every edge a slat turned about its midpoint in the
+  tangent plane by ρ; consecutive slats round a vertex cross at the skew
+  lines' closest points → four holes a slat (two ends, two inboard), length
+  = span + overhang. `mode` "band" (flexible bands on the surface, holes
+  spaced along the ARC; auto fits the engagement LENGTH to `engage_frac` of
+  the edge) or "rigid" (straight slats; auto fits the mean eccentricity to
+  the slat thickness — tiny angles for thin slats, that is physics).
+  Base-ring slats have no neighbour below and are shorter.
+- **`DomeLabPanels`**: a panel per face inset by the seam gap, screw holes
+  along the edges (strut systems) or FLANGES (plate system: mitred along the
+  exterior bisector, ext = w · tan(ext/2) capped at 1.5 w, relief, fold
+  lines carry the bend); each part turned to its smallest bounding box and
+  nested with `FlatpackNesting` onto the sheet (material's, or the
+  Fabrication override). Classes = congruent panels. Rings are
+  FlatpackProfile rings in MILLIMETRES.
+- **`DomeLabDesign.solve`** (cached by `DomeLabSpec.key_of`) is the one
+  solved design: geo, frames, edges, fans, struts, classes, hubs, nexorade,
+  ribs, panels, bolts, stats (height, floor area, surface, volume, chord
+  factors), the build order (rings from the base up), `DomeLabBom.compute`
+  (rows, first-fit-decreasing stock packing with kerf, fasteners, masses)
+  and the checks (Euler, stock length, slenderness L/r, flattenable
+  section, bar strain, rhombus mechanism, base level, nexorade fit, panel
+  fit, folding sheet). `packed_spec` = strut bundle (longest cut × √(n ·
+  section) square) merged with the panel stack. `DomeLabCam.write_all`:
+  DXF (R12, layers OUTSIDE_CUT / INSIDE_CUT / FOLD / ETCH / ETCH_LABELS /
+  SHEET) + SVG per sheet and per plate-hub template, a strut-end SVG per
+  conduit class, `_struts.csv`, `_bom.csv`, `_cut_sheet.txt`,
+  `_design.json` (`DomeLabBom.fabrication_json`: vertices, faces, struts,
+  hubs with arm azimuths / dips, nexors, panel outlines, BOM, checks).
+- **`DomeLabBuilder`**: one MeshInstance3D "Mesh" with a surface per
+  material (StructureMaterials by stock kind; panels alpha), tubes 8-sided,
+  bars flat on the surface, lumber / ribs on edge, hubs as bolt + nut /
+  sphere / disc, slats offset by half a thickness, ribs as helix segments;
+  `explode` moves parts out along the normal, `assembly` drops rings in
+  from the base up; `record` keeps segment / sphere / triangle pick data
+  read by `pick`. The placed dome counts as SHADE (`shade_footprints`).
+- 14 presets (`DomeLabPresets.builtins`); library `user://domelab_library.json`.
+  Panels that do not fit the sheet are an ERROR in the checks (a real
+  blocker): the presets are sized so every one solves clean. Gates in the
+  Validation list; tour stop `18d_domelab`.
 
 ## Maps and scene shell
 
