@@ -819,6 +819,17 @@ Godot.exe.exe --headless --path . --script core/terrain/pallet_rack_build_plan_s
 # The same on a real world (sandbox): Plan + Rehearse clicked in the
 # builder, the clock moved through the build, the rack's mesh back after:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_build_check.gd -Label rack_build
+# Stairs with turns and flights, picked through the inspector's own Flights
+# dropdown (rows shown only where they apply, flight / landing counts, the
+# turn side, the landing height), a shot per shape incl. a low side view,
+# and the deck's top lit brighter than its underside (the winding fix):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_stairs_check.gd -Label rack_stairs
+# Joined racks with REAL clicks and drags: a click on a faded rack edits it
+# (the camera stays put), a drag moves it while the others stay, Ctrl+Z, a
+# small drag snaps back onto a shared frame (Chiba 2024), the turn buttons;
+# the Open bay tool on a roof deck and its drag one bay over; a slope with
+# doors in both closed ends; a placed rack turned a quarter turn and applied:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_modules_check.gd -Label rack_modules
 # Flat-pack furniture (offline — core/flatpack/): outlines with true arcs,
 # dogbones / T-bones, mortises, the joint solver (cross-lap depths, widths,
 # which part opens which way, parallel parts refused, interference), the
@@ -2936,8 +2947,16 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
   `design_presets()` (Solar workshop, Two storey with stairs, Stepped
   amphitheatre, Courtyard compound) + the player's library
   (`user://pallet_rack_library.json`, designs and element presets).
-- Known, not from this work: plywood walls in the studio show bright
-  diagonal streaks (seen on a bare wall too).
+- **Winding (fixed 2026-10-24): the rack was built INSIDE OUT.** `_emit_box`
+  and `_emit_tri` laid every triangle counter-clockwise seen from outside;
+  Godot's front face is CLOCKWISE (a `BoxMesh` has cross(b − a, c − a) · n
+  < 0 on every triangle). The double-sided materials still drew each face,
+  but Godot turns a back face's normal round, so every face you saw was lit
+  as if it faced away: the whole rack rendered dark, walls facing away from
+  the sun glowed with bright diagonal streaks, and nothing cast a proper
+  shadow. Both emitters now put the corners in clockwise (a mirroring
+  transform flips them back); `_test_pallet_rack_more` checks every
+  triangle of every design. Any new emitter must keep cross · n < 0.
 - **Nested selection (2026-10-21, SketchUp-style).** Emission files every
   piece it draws under a PART id with a path of groups
   (`_Geom.begin(path, labels)`), so the tree and the mesh can never drift:
@@ -3042,6 +3061,58 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
   roof cells "none" + deleted top beams + deleted upper wall sheets.
   `_test_pallet_rack_more` pins the footprints (2024 26.1 × 11.2 m, 2026
   29.4 × 26.4 m post to post, as the models measure).
+- **Stairs with turns and flights (2026-10-24).** Stair element keys
+  `shape` (`STAIR_SHAPES`: straight / landing = two flights in line / l =
+  a quarter turn on a square landing / u = a switchback on a landing as
+  wide as both flights plus `STAIR_U_GAP` / wrap = three flights round two
+  quarter turns), `turn` (left / right as you CLIMB; going down turns the
+  other way) and `turn_pct` (the landing's height, 20–80 % of the climb;
+  a wrap's lower landing at half that). `stair_flight_counts` splits the
+  risers; `_stair_flights` lays it out from the top down into
+  `G.flights` [{top, h downhill, m, yt, yb}] and `G.landings` [{c, y, h,
+  along, across, rails}]; a flight's last riser comes down at
+  (m − 1) × tread, where the landing below starts. Landings are at least
+  as deep as the stair is wide and 3' (IRC R311.7.6). Handrails on both
+  sides of each flight and round the landings' open edges, except a side
+  or edge against the structure. A flight that doubles back would run into
+  the rack: `_stair_intrusion` measures it and a stair straight out stands
+  off on a deeper top landing (`auto_landing`), one along a wall turns the
+  other way (`turn_swapped`). `stair_walk_path(G)` is the walk up (the
+  crew's visitor uses it). Inspector rows: Flights, Turns going up (L / U
+  / wrap only), Landing height (any landing).
+- **Open bay, doors in a slope's ends, moving and turning joined racks
+  (2026-10-24).**
+  - **Open bay** is an element (`open_bay`: bay0, bays, col0, cols 0 = every
+    column, `floor` = the deck that STAYS, -1 = the ground, `beams`,
+    `walls`). `resolve_spec` derives `_open_cells` ("b,c,li" -> {id, beams,
+    walls}, never read back, erased wherever `_stepped_cells` is):
+    `_resolve_cell` gives those cells kind "none", the beams carrying them
+    are skipped when `beams`, and `_open_bay_wall_holes` cuts the walls over
+    them. The tool clicks a deck cell (that cell and everything above opens;
+    from above that is the roof deck); it drags like a courtyard. Chiba
+    2026's turned rack uses one instead of the old hand-deleted cells.
+  - **Doors in a slope's closed ends:** lean_to keys `end_door`
+    (none / left / right / both, as seen from outside facing the slope),
+    `end_door_style`, `end_door_w_ft`, `end_door_h_ft`, `end_door_color`;
+    rows show only while the ends are glazing or plywood. `end_door_spots`
+    puts a door as near the structure as fits and lowers it under the slope
+    (none where even 5' will not); `_emit_end_wall_with_door` cuts the end
+    wall round it. Doors count in the BOM.
+  - **Joined racks:** `move_module(xfs, j, a)` moves rack j by `a`
+    (left-multiplied, rack 0's frame) and, when rack 0 itself moves,
+    re-expresses every rack so rack 0 stays the identity, returning `root`
+    = how the build's own pose moved. The modal keeps that as
+    `_root_shift` (in undo, the draft and Apply: the prop goes to
+    `pose * _root_shift`; join / split / find use `_bound_world_xf()`).
+    `snap_posts(pa, pb_local, xf, tol)` = the shift landing the most posts
+    (needs 2). A click on a faded rack (`_mod_boxes`, ray vs its box, nearer
+    than the edited rack's part) edits it, and `_carry_camera` keeps the
+    view put across the frame change; a drag moves it on the ground with
+    the snap (Alt off). Joined racks: "⟲ 90° / ⟳ 90°" turn the edited rack
+    about its middle (then snap); a placed rack on its own turns itself.
+    A fresh build's root turn is not carried into "Place in world" (the
+    placement ghost has no initial yaw). Chiba 2026's racks are set apart
+    by measured offsets and share no frame, so none of them snaps.
 - **A crew builds it (2026-10-24, from Gene's Mars build lab,
   mars-campus-2026…/lab?scenario=build-bay).** `PalletRackBuildPlan`
   (core/terrain/, pure) turns a rack into the lab's step graph with named

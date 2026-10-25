@@ -62,7 +62,11 @@ const SEAM := 0.005              # gap between sheets so they read individually
 const STAIR_STEPS := 6
 
 # ---- Design elements ----
-const ELEMENT_TYPES := ["door", "window", "stair", "lean_to", "railing", "courtyard", "stepped", "ladder"]
+const ELEMENT_TYPES := ["door", "window", "stair", "lean_to", "railing", "courtyard", "stepped", "ladder",
+	"open_bay"]
+## Which end of a slope (seen from outside, facing it) carries a door.
+const END_DOORS := ["none", "left", "right", "both"]
+const END_DOOR_STYLES := ["hinged", "opening"]
 const FACES := ["front", "back", "left", "right"]
 const OPPOSITE_FACE := {"front": "back", "back": "front", "left": "right", "right": "left"}
 const DOOR_STYLES := ["hinged", "double", "sliding", "opening"]
@@ -71,6 +75,12 @@ const SLOPE_SURFACES := ["solar", "glazing", "plywood", "frame", "none"]
 const SLOPE_ENDS := ["open", "glazing", "plywood"]
 const PANEL_ORIENTATIONS := ["landscape", "portrait"]
 const STAIR_RUNS := ["along", "out"]
+## How a stair gets down: one flight, two in line with a landing between, an L
+## (a quarter turn on a square landing), a U (a switchback on a landing as wide
+## as both flights) or a wrap (three flights round two quarter-turn landings).
+const STAIR_SHAPES := ["straight", "landing", "l", "u", "wrap"]
+## The way the stair turns as you CLIMB it.
+const STAIR_TURNS := ["left", "right"]
 ## What fills the gaps round the solar modules, and the strip between an
 ## offset slope and the structure.
 const SEAL_OPTIONS := ["open", "plywood", "glazing"]
@@ -105,6 +115,7 @@ const PV_MODULE_KEYS := {"long_in": "panel_long_in", "short_in": "panel_short_in
 const ELEMENT_LABELS := {
 	"door": "Door", "window": "Window", "stair": "Stairs", "lean_to": "Sloped array",
 	"railing": "Railing", "courtyard": "Courtyard", "stepped": "Stepped module", "ladder": "Ladder",
+	"open_bay": "Open bay",
 }
 const OPTION_LABELS := {
 	"front": "Front", "back": "Back", "left": "Left", "right": "Right",
@@ -114,8 +125,11 @@ const OPTION_LABELS := {
 	"frame": "Bare rafters", "none": "Leave this bay off",
 	"landscape": "Landscape", "portrait": "Portrait",
 	"along": "Along the wall", "out": "Straight out",
+	"straight": "Straight", "landing": "Two flights, a landing between",
+	"l": "L — a quarter turn", "u": "U — a switchback", "wrap": "Wrap — two quarter turns",
 	"bay": "In a deck bay", "face": "Outside a face (big steps)", "custom": "Custom",
 	"centre": "Centred", "top": "From the top", "bottom": "From the bottom",
+	"both": "Both ends",
 }
 
 # Member + product sizes for the elements (metres).
@@ -138,6 +152,10 @@ const TREAD_RUN := 10.0 * IN
 const STRINGER_D := 9.25 * IN     # 2x10 stringers
 const RAIL_POST_MAX := 4.0 * FT   # guard posts at most 4' apart
 const STAIR_RAIL_H := 34.0 * IN   # IRC R311.7.8.1: handrail 34-38" above the nosing
+# IRC R311.7.6: a landing at least as deep as the stair is wide, and 36" at
+# the least, in the direction of travel.
+const STAIR_LANDING_MIN := 3.0 * FT
+const STAIR_U_GAP := 4.0 * IN      # between the two flights of a switchback
 
 ## Per-type defaults. Positions along a face are feet from the face's start
 ## (the -X end of front/back, the -Z end of left/right). `floor` / `to_level`
@@ -152,7 +170,10 @@ const ELEMENT_DEFAULTS := {
 		"flip": false, "width_ft": 3.0, "handrail": true,
 		# Tread depth (in, 10 = the IRC minimum) and, for a run straight out, a
 		# landing (ft) between the deck edge and the top step.
-		"tread_in": 10.0, "landing_ft": 0.0},
+		"tread_in": 10.0, "landing_ft": 0.0,
+		# The flights (STAIR_SHAPES), the way it turns as you climb, and how high
+		# the (upper) turn landing sits, in % of the height climbed.
+		"shape": "straight", "turn": "left", "turn_pct": 50.0},
 	"lean_to": {"face": "front", "surface": "solar", "segments": {}, "angle_deg": 50.0,
 		"attach_level": -1, "bottom_ft": 1.5, "seg_from": 0, "seg_to": -1,
 		"orientation": "landscape", "panel_watts": PV_WATTS, "ends": "open",
@@ -167,10 +188,20 @@ const ELEMENT_DEFAULTS := {
 		"gap_fill": "open",
 		# At most this many rows of modules (0 = as many as fit), set from
 		# the top, the bottom or centred; the rest of the bay is gap_fill.
-		"pv_rows": 0, "pv_from": "centre"},
+		"pv_rows": 0, "pv_from": "centre",
+		# A door in a closed end wall (END_DOORS, seen from outside facing the
+		# slope), set in as near the structure as the slope's height allows.
+		"end_door": "none", "end_door_style": "hinged", "end_door_w_ft": 3.0,
+		"end_door_h_ft": 6.75, "end_door_color": "#f2efe6"},
 	"railing": {"floor": 1, "height_ft": 3.5, "front": true, "back": true,
 		"left": true, "right": true, "inner": true},
 	"courtyard": {"bay0": 1, "bays": 1, "col0": 0, "cols": 1},
+	# Bays bay0.. (bays wide) open to the sky above deck `floor` (-1 = the
+	# ground: open the whole height): every deck above goes, and with `beams`
+	# the beams that carried them, with `walls` the wall sheets beside them.
+	# cols 0 = every column, else col0.. (cols deep).
+	"open_bay": {"bay0": 0, "bays": 1, "col0": 0, "cols": 0, "floor": 0, "beams": true,
+		"walls": true},
 	# mode "bay": the deck cell (bay, col, level) becomes steps rising from the
 	# level below toward `rise_toward`. mode "face": big steps outside `face`
 	# across bays seg_from..seg_to, up to deck `to_level`, each at most
@@ -210,8 +241,15 @@ const ELEMENT_FIELDS := {
 		{"key": "face", "label": "Wall", "kind": "face"},
 		{"key": "at_ft", "label": "Top of the stairs at", "kind": "along"},
 		{"key": "to_level", "label": "Up to", "kind": "level"},
-		{"key": "run", "label": "Runs", "kind": "option", "options": STAIR_RUNS},
+		{"key": "run", "label": "Top flight runs", "kind": "option", "options": STAIR_RUNS},
 		{"key": "flip", "label": "Run the other way", "kind": "bool"},
+		{"key": "shape", "label": "Flights", "kind": "option", "options": STAIR_SHAPES,
+			"tip": "One flight, or several with landings: an L turns a corner, a U doubles back"},
+		{"key": "turn", "label": "Turns, going up", "kind": "option", "options": STAIR_TURNS,
+			"show_if": {"shape": ["l", "u", "wrap"]}},
+		{"key": "turn_pct", "label": "Landing height", "kind": "float", "min": 20.0, "max": 80.0,
+			"step": 5.0, "unit": "%", "show_if": {"shape": ["landing", "l", "u", "wrap"]},
+			"tip": "How far up the climb the landing sits (the upper one, on a wrap)"},
 		{"key": "width_ft", "label": "Width", "kind": "float", "min": 2.0, "max": 12.0, "step": 0.5},
 		{"key": "tread_in", "label": "Tread depth", "kind": "float", "min": 9.0, "max": 24.0, "step": 0.5, "unit": "in"},
 		{"key": "landing_ft", "label": "Landing at the top", "kind": "float", "min": 0.0, "max": 12.0, "step": 0.5,
@@ -231,6 +269,18 @@ const ELEMENT_FIELDS := {
 		{"key": "bridge", "label": "Cover the gap", "kind": "option", "options": SEAL_OPTIONS,
 			"show_if": {"_min": {"offset_ft": 0.01}}},
 		{"key": "ends", "label": "Close the ends", "kind": "option", "options": SLOPE_ENDS},
+		{"key": "end_door", "label": "Door in an end", "kind": "option", "options": END_DOORS,
+			"show_if": {"ends": ["glazing", "plywood"]},
+			"tip": "A door in the closed end, set in where the slope is tallest"},
+		{"key": "end_door_style", "label": "End door", "kind": "option", "options": END_DOOR_STYLES,
+			"show_if": {"ends": ["glazing", "plywood"], "end_door": ["left", "right", "both"]}},
+		{"key": "end_door_w_ft", "label": "End door width", "kind": "float", "min": 2.0, "max": 6.0, "step": 0.5,
+			"show_if": {"ends": ["glazing", "plywood"], "end_door": ["left", "right", "both"]}},
+		{"key": "end_door_h_ft", "label": "End door height", "kind": "float", "min": 5.0, "max": 8.0, "step": 0.25,
+			"show_if": {"ends": ["glazing", "plywood"], "end_door": ["left", "right", "both"]},
+			"tip": "Lowered to fit when the slope is not that tall where the door goes"},
+		{"key": "end_door_color", "label": "End door colour", "kind": "color",
+			"show_if": {"ends": ["glazing", "plywood"], "end_door": ["left", "right", "both"]}},
 		{"key": "panel_model", "label": "Module", "kind": "pv_model", "section": "Solar panels",
 			"show_if": {"_solar": true}},
 		{"key": "orientation", "label": "Panels", "kind": "option", "options": PANEL_ORIENTATIONS,
@@ -292,6 +342,16 @@ const ELEMENT_FIELDS := {
 		{"key": "right", "label": "Right edge", "kind": "bool"},
 		{"key": "inner", "label": "Inner edges (courtyards, gaps)", "kind": "bool"},
 	],
+	"open_bay": [
+		{"key": "bay0", "label": "First bay", "kind": "bay"},
+		{"key": "bays", "label": "Bays wide", "kind": "int", "min": 1, "max": 10},
+		{"key": "cols", "label": "Columns (0 = all)", "kind": "int", "min": 0, "max": 10},
+		{"key": "col0", "label": "First column", "kind": "col", "show_if": {"_min": {"cols": 1}}},
+		{"key": "floor", "label": "Open above", "kind": "floor",
+			"tip": "The deck that stays; everything above it in these bays opens to the sky"},
+		{"key": "beams", "label": "Take the beams out", "kind": "bool"},
+		{"key": "walls", "label": "Take the walls off", "kind": "bool"},
+	],
 	"courtyard": [
 		{"key": "bay0", "label": "First bay", "kind": "bay"},
 		{"key": "bays", "label": "Bays wide", "kind": "int", "min": 1, "max": 10},
@@ -325,6 +385,9 @@ const TOOL_PRESETS := [
 		"element": {"type": "railing"}},
 	{"id": "courtyard", "label": "Courtyard", "tip": "Cut an open courtyard out of the grid — click a deck cell",
 		"element": {"type": "courtyard"}},
+	{"id": "open_bay", "label": "Open bay",
+		"tip": "Open a bay to the sky above a deck: the decks, beams and walls above it come off — click the deck cell to open",
+		"element": {"type": "open_bay"}},
 ]
 
 ## Whether an inspector field shows for element `el`: `show_if` maps keys to
@@ -566,8 +629,29 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 			if not claims.has(ck):
 				claims[ck] = str(e["id"])
 	s["_stepped_cells"] = claims
+	s["_open_cells"] = _open_cells_of(s, els)
 	s["fused"] = _normalize_fused(s.get("fused"))
 	return s
+
+
+## Deck cells an open bay takes away (derived each resolve, never read back
+## from a saved spec): "b,c,li" -> {id, beams, walls}.
+static func _open_cells_of(s: Dictionary, els: Array) -> Dictionary:
+	var out := {}
+	var nlv := _levels(s).size()
+	var ncols := int(s["column_count"])
+	for e in els:
+		if str(e.get("type", "")) != "open_bay":
+			continue
+		var c0 := 0 if int(e["cols"]) <= 0 else int(e["col0"])
+		var c1 := ncols - 1 if int(e["cols"]) <= 0 else int(e["col0"]) + int(e["cols"]) - 1
+		for b in range(int(e["bay0"]), int(e["bay0"]) + int(e["bays"])):
+			for c in range(c0, c1 + 1):
+				for li in range(int(e["floor"]) + 1, nlv):
+					var k := _cell_key(b, c, li)
+					if not out.has(k):
+						out[k] = {"id": str(e["id"]), "beams": bool(e["beams"]), "walls": bool(e["walls"])}
+	return out
 
 
 ## Fused racks: each entry's spec resolved on its own (one level deep — a
@@ -584,6 +668,7 @@ static func _normalize_fused(v: Variant) -> Array:
 		sub.erase("fused")
 		var rs := resolve_spec(sub)
 		rs.erase("_stepped_cells")
+		rs.erase("_open_cells")
 		out.append({"spec": rs, "x": float(f.get("x", 0.0)), "z": float(f.get("z", 0.0)),
 			"yaw": snap_quarter_deg(float(f.get("yaw", 0.0)))})
 	return out
@@ -1355,6 +1440,76 @@ static func fused_bounds(spec: Dictionary, active: int = 0) -> Rect2:
 	return r
 
 
+## Move rack `j` of a build by `a` (left-multiplied, in rack 0's frame) while
+## rack 0 stays the build's frame: when rack 0 itself moves (or turns), every
+## rack is re-expressed so rack 0 is the identity again, and `root` is how the
+## build's own pose moved — apply it to the placed prop (world * root) and
+## every rack stands where it was, the moved one where it went. {xfs, root}.
+static func move_module(xfs: Array, j: int, a: Transform3D) -> Dictionary:
+	var out: Array = []
+	for x in xfs:
+		out.append(x as Transform3D)
+	if j < 0 or j >= out.size():
+		return {"xfs": out, "root": Transform3D.IDENTITY}
+	out[j] = _square_xf(a * (out[j] as Transform3D))
+	var root: Transform3D = out[0]
+	if not root.is_equal_approx(Transform3D.IDENTITY):
+		var inv := root.affine_inverse()
+		for i in out.size():
+			out[i] = _square_xf(inv * (out[i] as Transform3D))
+		out[0] = Transform3D.IDENTITY
+	return {"xfs": out, "root": root}
+
+
+## Turn about the y axis through `centre` by `deg` (a quarter turn, usually).
+static func turn_about(centre: Vector3, deg: float) -> Transform3D:
+	var r := Basis(Vector3.UP, deg_to_rad(deg))
+	var c := Vector3(centre.x, 0.0, centre.z)
+	return Transform3D(r, c - r * c)
+
+
+## A rack pose cleaned to what the build stores: on the ground, square.
+static func _square_xf(xf: Transform3D) -> Transform3D:
+	var yaw := snap_quarter_deg(rad_to_deg(xf.basis.get_euler().y))
+	return Transform3D(Basis(Vector3.UP, deg_to_rad(yaw)), Vector3(xf.origin.x, 0.0, xf.origin.z))
+
+
+## Where rack pose `xf` (its own post points `pb_local`) lands when the shift
+## (at most `tol` m) that puts the most of its posts on posts `pa` (the other
+## racks', same frame) is taken. {xf, shared}: shared < 2 = no frame meets
+## (xf back unchanged); on a tie the smaller shift wins.
+static func snap_posts(pa: Array, pb_local: Array, xf: Transform3D, tol: float = 0.45) -> Dictionary:
+	var pb: Array = []
+	for p in pb_local:
+		pb.append(xf * (p as Vector3))
+	var best_n := 0
+	var best_d := Vector3.ZERO
+	var tried := {}
+	for a in pa:
+		for b in pb:
+			var d: Vector3 = (a as Vector3) - (b as Vector3)
+			d.y = 0.0
+			if d.length() > tol:
+				continue
+			var key := "%d,%d" % [int(round(d.x * 50.0)), int(round(d.z * 50.0))]
+			if tried.has(key):
+				continue
+			tried[key] = true
+			var n := 0
+			for b2 in pb:
+				var q: Vector3 = (b2 as Vector3) + d
+				for a2 in pa:
+					var e: Vector3 = (a2 as Vector3) - q
+					if Vector2(e.x, e.z).length() < SHARED_POST_TOL:
+						n += 1
+						break
+			if n > best_n or (n == best_n and n > 0 and d.length() < best_d.length()):
+				best_n = n
+				best_d = d
+	if best_n < 2:
+		return {"xf": xf, "shared": best_n}
+	return {"xf": Transform3D(xf.basis, xf.origin + best_d), "shared": best_n}
+
 ## Where rack B (world transform xf_b) joins rack A (xf_a) if their uprights
 ## meet: B's yaw relative to A snapped to a quarter turn (refused past
 ## `yaw_tol_deg`), then the shift that lands the most of B's posts on A's,
@@ -1418,6 +1573,7 @@ static func fuse_specs(spec_a: Dictionary, spec_b: Dictionary, rel: Dictionary) 
 		var ms: Dictionary = (m["spec"] as Dictionary).duplicate(true)
 		ms.erase("fused")
 		ms.erase("_stepped_cells")
+		ms.erase("_open_cells")
 		fused.append({"spec": ms, "x": mxf.origin.x, "z": mxf.origin.z,
 			"yaw": snap_quarter_deg(rad_to_deg(mxf.basis.get_euler().y))})
 	out["fused"] = fused
@@ -1442,11 +1598,13 @@ static func split_fused(spec: Dictionary, i: int) -> Dictionary:
 		var mxf: Transform3D = inv * (mods[k]["xf"] as Transform3D)
 		var ms: Dictionary = (mods[k]["spec"] as Dictionary).duplicate(true)
 		ms.erase("_stepped_cells")
+		ms.erase("_open_cells")
 		fused.append({"spec": ms, "x": mxf.origin.x, "z": mxf.origin.z,
 			"yaw": snap_quarter_deg(rad_to_deg(mxf.basis.get_euler().y))})
 	rest["fused"] = fused
 	var module: Dictionary = (mods[i]["spec"] as Dictionary).duplicate(true)
 	module.erase("_stepped_cells")
+	module.erase("_open_cells")
 	return {"rest": resolve_spec(rest), "rest_xf": mods[r]["xf"],
 		"module": resolve_spec(module), "module_xf": mods[i]["xf"]}
 
@@ -1543,6 +1701,9 @@ static func _resolve_cell(s: Dictionary, b: int, c: int, li: int,
 	var claims: Variant = s.get("_stepped_cells")
 	if claims is Dictionary and (claims as Dictionary).has(_cell_key(b, c, li)):
 		kind = "stepped"
+	var opened: Variant = s.get("_open_cells")
+	if opened is Dictionary and (opened as Dictionary).has(_cell_key(b, c, li)):
+		kind = "none"
 	return {"kind": kind, "height_ft": height_ft, "y": height_ft * FT,
 		"depth_units": depth_units}
 
@@ -1564,6 +1725,7 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 	var total_z: float = L.total_z
 	var decked := bool(s["decked"])
 	var beam_ov: Dictionary = s.get("beam_overrides", {})
+	var open_cells: Dictionary = s.get("_open_cells", {}) if s.get("_open_cells") is Dictionary else {}
 	g.po = s.get("part_overrides", {})
 	_rec = g
 
@@ -1605,6 +1767,9 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 					var bkey := _beam_key(li, r, b, side)
 					var ov: Dictionary = beam_ov.get(bkey, {})
 					var bc := _beam_cell(r, side, cols)
+					var oc: Variant = open_cells.get(_cell_key(b, bc, li))
+					if oc is Dictionary and bool((oc as Dictionary).get("beams", true)):
+						continue
 					var cp := _cell_path(s, L, b, bc, li)
 					var bov := g.begin((cp[0] as Array) + ["beam:" + bkey],
 						(cp[1] as Array) + [_beam_label(r, side, cols)], bool(ov.get("deleted", false)))
@@ -2315,6 +2480,9 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 				out["color"] = c if Color.html_is_valid(c) else "#f2efe6"
 		"stair":
 			out["run"] = _pick_option(out["run"], STAIR_RUNS)
+			out["shape"] = _pick_option(out["shape"], STAIR_SHAPES)
+			out["turn"] = _pick_option(out["turn"], STAIR_TURNS)
+			out["turn_pct"] = clampf(float(out["turn_pct"]), 20.0, 80.0)
 			out["width_ft"] = clampf(float(out["width_ft"]), 2.0, 12.0)
 			out["tread_in"] = clampf(float(out["tread_in"]), 9.0, 24.0)
 			out["landing_ft"] = clampf(float(out["landing_ft"]), 0.0, 12.0)
@@ -2325,6 +2493,12 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 		"lean_to":
 			out["surface"] = _pick_option(out["surface"], SLOPE_SURFACES)
 			out["ends"] = _pick_option(out["ends"], SLOPE_ENDS)
+			out["end_door"] = _pick_option(out["end_door"], END_DOORS)
+			out["end_door_style"] = _pick_option(out["end_door_style"], END_DOOR_STYLES)
+			out["end_door_w_ft"] = clampf(float(out["end_door_w_ft"]), 2.0, 6.0)
+			out["end_door_h_ft"] = clampf(float(out["end_door_h_ft"]), 5.0, 8.0)
+			var edc := str(out["end_door_color"])
+			out["end_door_color"] = edc if Color.html_is_valid(edc) else "#f2efe6"
 			out["orientation"] = _pick_option(out["orientation"], PANEL_ORIENTATIONS)
 			out["angle_deg"] = clampf(float(out["angle_deg"]), 15.0, 75.0)
 			out["attach_level"] = clampi(int(out["attach_level"]), -1, nlv - 1)
@@ -2380,6 +2554,18 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 			out["height_ft"] = clampf(float(out["height_ft"]), 2.0, 5.0)
 			for k in ["front", "back", "left", "right", "inner"]:
 				out[k] = bool(out[k])
+		"open_bay":
+			var obays := int(s["bay_count"])
+			var ocols := int(s["column_count"])
+			out["bay0"] = clampi(int(out["bay0"]), 0, obays - 1)
+			out["bays"] = clampi(int(out["bays"]), 1, obays - int(out["bay0"]))
+			out["cols"] = clampi(int(out["cols"]), 0, ocols)
+			out["col0"] = clampi(int(out["col0"]), 0, ocols - 1)
+			if int(out["cols"]) > 0:
+				out["cols"] = mini(int(out["cols"]), ocols - int(out["col0"]))
+			out["floor"] = clampi(int(out["floor"]), -1, maxi(nlv - 2, -1))
+			out["beams"] = bool(out["beams"])
+			out["walls"] = bool(out["walls"])
 		"courtyard":
 			var bays := int(s["bay_count"])
 			var cols := int(s["column_count"])
@@ -2609,6 +2795,40 @@ static func _face_openings(s: Dictionary, L: Dictionary, face: String) -> Array:
 		if t == "window":
 			y0 += float(e["sill_ft"]) * FT
 		out.append(Rect2(c0 + float(e["at_ft"]) * FT - w * 0.5, y0, w, h))
+	out.append_array(_open_bay_wall_holes(s, L, face))
+	return out
+
+
+## The wall an open bay takes off a face (rects in the face's absolute along
+## coordinate, like a door's): above its floor, across the bays / columns it
+## opens that this face bounds.
+static func _open_bay_wall_holes(s: Dictionary, L: Dictionary, face: String) -> Array:
+	var out: Array = []
+	var fx: Array = L.fx
+	var rz: Array = L.rz
+	var cols: int = L.cols
+	var bays: int = L.bays
+	var top := float(L.height) + 1.0
+	for e in (s.get("elements", []) as Array):
+		if not (e is Dictionary) or str(e.get("type", "")) != "open_bay" or not bool(e.get("walls", true)):
+			continue
+		var b0 := int(e["bay0"])
+		var b1 := b0 + int(e["bays"]) - 1
+		var c0 := 0 if int(e["cols"]) <= 0 else int(e["col0"])
+		var c1 := cols - 1 if int(e["cols"]) <= 0 else int(e["col0"]) + int(e["cols"]) - 1
+		var y0 := 0.0 if int(e["floor"]) < 0 else _floor_y(L, int(e["floor"]))
+		match face:
+			"front":
+				if c0 == 0:
+					out.append(Rect2(float(fx[b0]), y0, float(fx[b1 + 1]) - float(fx[b0]), top - y0))
+			"back":
+				if c1 == cols - 1:
+					out.append(Rect2(float(fx[b0]), y0, float(fx[b1 + 1]) - float(fx[b0]), top - y0))
+			"left", "right":
+				if (face == "left" and b1 == bays - 1) or (face == "right" and b0 == 0):
+					var za := _cell_z_bounds(rz, float(L.frame_depth), c0, cols).x
+					var zb := _cell_z_bounds(rz, float(L.frame_depth), c1, cols).y
+					out.append(Rect2(za, y0, zb - za, top - y0))
 	return out
 
 
@@ -2624,7 +2844,10 @@ static func element_label(e: Dictionary, spec: Dictionary = {}) -> String:
 		"window":
 			return "Window · %s wall" % face
 		"stair":
-			return "Stairs · %s face, up to %s" % [face, _floor_name(spec, int(e.get("to_level", 0)))]
+			var shape := str(e.get("shape", "straight"))
+			var kind := str({"landing": "Stairs with a landing", "l": "L stairs", "u": "U stairs",
+				"wrap": "Wrap-round stairs"}.get(shape, "Stairs"))
+			return "%s · %s face, up to %s" % [kind, face, _floor_name(spec, int(e.get("to_level", 0)))]
 		"lean_to":
 			return "%s · %s face" % [str(OPTION_LABELS.get(str(e.get("surface", "")), name)), face]
 		"railing":
@@ -2636,6 +2859,13 @@ static func element_label(e: Dictionary, spec: Dictionary = {}) -> String:
 				return "Steps · bay %d, column %d, up to %s" % [int(e.get("bay", 0)) + 1,
 					int(e.get("col", 0)) + 1, _floor_name(spec, int(e.get("level", 0)))]
 			return "Big steps · %s face, up to %s" % [face, _floor_name(spec, int(e.get("to_level", 0)))]
+		"open_bay":
+			var ob0 := int(e.get("bay0", 0)) + 1
+			var onb := int(e.get("bays", 1))
+			var where := ("bay %d" % ob0) if onb == 1 else ("bays %d–%d" % [ob0, ob0 + onb - 1])
+			var above := "the ground up" if int(e.get("floor", 0)) < 0 \
+				else "above " + _floor_name(spec, int(e.get("floor", 0)))
+			return "Open bay · %s, %s" % [where, above]
 		"courtyard":
 			var b0 := int(e.get("bay0", 0)) + 1
 			var nb := int(e.get("bays", 1))
@@ -2701,9 +2931,9 @@ static func _emit_elements(g: _Geom, s: Dictionary, L: Dictionary) -> void:
 				_emit_window(g, L, e)
 			"stair":
 				_emit_stair(g, L, e)
-			"courtyard":
-				# A cut in the layout (_layout's notch rects), not geometry: its
-				# pick box is the ground it opens.
+			"courtyard", "open_bay":
+				# A cut in the layout (_layout's notch rects) / derived cells, not
+				# geometry: its pick box is the space it opens.
 				for c in _element_components(s, L, e):
 					g.add_aabb(c["aabb"])
 
@@ -2734,7 +2964,9 @@ static func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 	var n := (b - a).cross(c - a)
 	if n.length() < 1e-6:
 		return
+	var mirrored := false
 	if _mxf != Transform3D.IDENTITY:
+		mirrored = _mxf.basis.determinant() < 0.0
 		a = _mxf * a
 		b = _mxf * b
 		c = _mxf * c
@@ -2744,7 +2976,15 @@ static func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 		if _rec.record:
 			_rec.add_points([a, b, c])
 	n = n.normalized()
-	for p in [[a, Vector2(0, 0)], [b, Vector2(1, 0)], [c, Vector2(1, 1)]]:
+	# Callers give the corners counter-clockwise seen from the side the normal
+	# faces; Godot's front face is CLOCKWISE from outside, so they go in as a,
+	# c, b. Emitted a, b, c, every face was a BACK face: double-sided materials
+	# still drew it, but Godot turns a back face's normal round, so each face
+	# was lit as if it faced away and the whole rack rendered dark.
+	var order := [[a, Vector2(0, 0)], [c, Vector2(1, 1)], [b, Vector2(1, 0)]]
+	if mirrored:
+		order = [[a, Vector2(0, 0)], [b, Vector2(1, 0)], [c, Vector2(1, 1)]]
+	for p in order:
 		st.set_normal(n)
 		st.set_uv(p[1])
 		st.add_vertex(p[0])
@@ -2850,11 +3090,167 @@ static func _stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
 	var n := maxi(2, int(ceil(y_top / RISER_MAX)))
 	var along := str(e["run"]) == "along"
 	var landing := 0.0 if along else float(e.get("landing_ft", 0.0)) * FT
-	return {"fr": fr, "y_top": y_top, "n": n, "riser": y_top / float(n),
+	var G := {"fr": fr, "y_top": y_top, "n": n, "riser": y_top / float(n),
 		"w": float(e["width_ft"]) * FT, "a": float(e["at_ft"]) * FT,
 		"o0": POST_W * 0.5 + 0.03 + landing, "along": along,
 		"sgn": -1.0 if bool(e["flip"]) else 1.0,
 		"tread": float(e.get("tread_in", 10.0)) * IN, "landing": landing}
+	var shape := str(e.get("shape", "straight"))
+	var turn := str(e.get("turn", "left"))
+	var frac := float(e.get("turn_pct", 50.0)) / 100.0
+	_stair_flights(G, shape, turn, frac)
+	# A flight that doubles back (a U, a wrap's last flight) can run into the
+	# structure. A stair straight out stands off on a deeper top landing; one
+	# along a wall turns the other way.
+	var inside := _stair_intrusion(G)
+	if inside > 0.0:
+		if along:
+			_stair_flights(G, shape, "right" if turn == "left" else "left", frac)
+			G["turn_swapped"] = true
+		else:
+			var extra := ceilf((inside + 0.05) / (0.5 * FT)) * 0.5 * FT
+			G["landing"] = float(G.landing) + extra
+			G["o0"] = float(G.o0) + extra
+			G["auto_landing"] = extra
+			_stair_flights(G, shape, turn, frac)
+	return G
+
+
+## How far the stair's flights and landings reach in past its face (m, 0 =
+## clear): every flight's two sides top and bottom, every landing corner.
+static func _stair_intrusion(G: Dictionary) -> float:
+	var fr: Dictionary = G.fr
+	var w: float = G.w
+	var limit := POST_W * 0.5 + 0.02
+	var worst := 0.0
+	var pts: Array = []
+	for f in (G.flights as Array):
+		for lat in [-w * 0.5, w * 0.5]:
+			pts.append(_flight_point(f, 0.0, lat, 0.0))
+			pts.append(_flight_point(f, float(int(f.m)) * float(G.tread), lat, 0.0))
+	for lnd in (G.landings as Array):
+		var lat_v := Vector3.UP.cross(lnd.h as Vector3)
+		for ca in [-0.5, 0.5]:
+			for cb in [-0.5, 0.5]:
+				pts.append((lnd.c as Vector3) + (lnd.h as Vector3) * (float(lnd.along) * float(ca))
+					+ lat_v * (float(lnd.across) * float(cb)))
+	for q in pts:
+		var o := ((q as Vector3) - (fr.base as Vector3)).dot(fr.out as Vector3)
+		worst = maxf(worst, limit - o)
+	return worst
+
+
+## Riser counts per flight, top flight first: the landings sit at `frac` of
+## the height (a wrap's lower one at half that). A stair too short for its
+## flights becomes fewer flights.
+static func stair_flight_counts(n: int, shape: String, frac: float) -> Array:
+	match shape:
+		"landing", "l", "u":
+			if n < 2:
+				return [n]
+			var low := clampi(roundi(float(n) * frac), 1, n - 1)
+			return [n - low, low]
+		"wrap":
+			if n < 3:
+				return stair_flight_counts(n, "l", frac)
+			var k1 := clampi(roundi(float(n) * frac), 2, n - 1)
+			var k2 := clampi(roundi(float(k1) * 0.5), 1, k1 - 1)
+			return [n - k1, k1 - k2, k2]
+	return [n]
+
+
+## Lays the flights and landings out from the top down into G: "flights" =
+## [{top (centreline, y 0), h (downhill), m risers, yt, yb}], "landings" =
+## [{c (centre, y 0), y, h, along, across, rails: [[a, b], ...]}]. A flight's
+## treads sit at dist (j - 0.5) * tread for j in 1..m-1; its last riser comes
+## down at dist (m - 1) * tread, where the landing below starts.
+static func _stair_flights(G: Dictionary, shape: String, turn: String, frac: float) -> void:
+	var fr: Dictionary = G.fr
+	var w: float = G.w
+	var tread: float = G.tread
+	var riser: float = G.riser
+	var counts := stair_flight_counts(int(G.n), shape, frac)
+	var p: Vector3 = _stair_point(G, 0.0, 0.0, 0.0)
+	var h: Vector3 = (_stair_axes(G)[0] as Vector3).normalized()
+	var y: float = G.y_top
+	var flights: Array = []
+	var landings: Array = []
+	for i in counts.size():
+		var m: int = counts[i]
+		var yb := y - riser * float(m)
+		if i == counts.size() - 1:
+			yb = 0.0
+		flights.append({"top": p, "h": h, "m": m, "yt": y, "yb": yb})
+		if i == counts.size() - 1:
+			break
+		var d0 := float(maxi(m - 1, 0)) * tread
+		var near := p + h * d0
+		# Going DOWN the stair turns the other way from climbing it: a climb to
+		# the left is a descent turning right.
+		var right := h.cross(Vector3.UP).normalized()
+		var side := right if turn == "left" else -right
+		var lnd := {"y": yb, "h": h}
+		if shape == "landing":
+			var ld := maxf(w, STAIR_LANDING_MIN)
+			lnd["c"] = near + h * (ld * 0.5)
+			lnd["along"] = ld
+			lnd["across"] = w
+			lnd["rails"] = [[near + right * (w * 0.5), near + h * ld + right * (w * 0.5)],
+				[near - right * (w * 0.5), near + h * ld - right * (w * 0.5)]]
+			p = near + h * ld
+		elif shape == "u":
+			var span := w + STAIR_U_GAP
+			lnd["c"] = near + h * (w * 0.5) + side * (span * 0.5)
+			lnd["along"] = w
+			lnd["across"] = w + span
+			var far := near + h * w
+			var a0 := -side * (w * 0.5)
+			var a1 := side * (span + w * 0.5)
+			lnd["rails"] = [[far + a0, far + a1], [near + a0, far + a0], [near + a1, far + a1]]
+			p = near + side * span
+			h = -h
+		else:
+			# A quarter turn on a square landing.
+			lnd["c"] = near + h * (w * 0.5)
+			lnd["along"] = w
+			lnd["across"] = w
+			var far := near + h * w
+			lnd["rails"] = [[far - side * (w * 0.5), far + side * (w * 0.5)],
+				[near - side * (w * 0.5), far - side * (w * 0.5)]]
+			p = near + h * (w * 0.5) + side * (w * 0.5)
+			h = side
+		# A rail on an edge that meets the structure would stand against it.
+		var kept: Array = []
+		for r in lnd["rails"]:
+			var mid: Vector3 = ((r[0] as Vector3) + (r[1] as Vector3)) * 0.5
+			if (mid - (fr.base as Vector3)).dot(fr.out as Vector3) > POST_W + 0.15:
+				kept.append(r)
+		lnd["rails"] = kept
+		landings.append(lnd)
+		y = yb
+	G["flights"] = flights
+	G["landings"] = landings
+
+
+## A point on flight `f`: `dist` downhill from its top edge, `lat` to the left
+## of its downhill direction, at height `y`.
+static func _flight_point(f: Dictionary, dist: float, lat: float, y: float) -> Vector3:
+	var h: Vector3 = f.h
+	return (f.top as Vector3) + h * dist + Vector3.UP.cross(h) * lat + Vector3(0.0, y, 0.0)
+
+
+## Where someone walks up the stair, bottom to top (the crew's visitor).
+static func stair_walk_path(G: Dictionary) -> Array:
+	var out: Array = []
+	var tread: float = G.tread
+	var flights: Array = G.get("flights", [])
+	for i in range(flights.size() - 1, -1, -1):
+		var f: Dictionary = flights[i]
+		var m: int = f.m
+		var r := (float(f.yt) - float(f.yb)) / float(maxi(m, 1))
+		for k in range(m + 1):
+			out.append(_flight_point(f, float(m - k) * tread, 0.0, float(f.yb) + r * float(k)))
+	return out
 
 
 ## A point on the flight: `dist` back (downhill) from its top, `lat` across it.
@@ -2877,11 +3273,7 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 	var G := _stair_geo(L, e)
 	if G.is_empty():
 		return
-	var axes := _stair_axes(G)
-	var run_dir: Vector3 = axes[0]
-	var n: int = G.n
 	var w: float = G.w
-	var riser: float = G.riser
 	var y_top: float = G.y_top
 	var tread: float = G.tread
 	var landing: float = G.landing
@@ -2900,18 +3292,62 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 				Vector3(LEG_W, lh, LEG_W))
 		g.counts["plywood"] += 1
 		g.counts["lumber"] += 3
-	for k in range(1, n):
-		var c := _stair_point(G, float(n - k) * tread - tread * 0.5, 0.0,
-			riser * float(k) - 0.75 * IN)
-		_emit_obox(g.lumber, c, run_dir, Vector3.UP, Vector3(tread + IN, 1.5 * IN, w))
+	var fr0: Dictionary = G.fr
+	var rail_on := bool(e.get("handrail", true))
+	for f in (G.flights as Array):
+		var m: int = f.m
+		var fh: Vector3 = f.h
+		var yt: float = f.yt
+		var yb: float = f.yb
+		var fr_r := (yt - yb) / float(maxi(m, 1))
+		for j in range(1, m):
+			_emit_obox(g.lumber, _flight_point(f, float(j) * tread - tread * 0.5, 0.0, yt - fr_r * float(j) - 0.75 * IN),
+				fh, Vector3.UP, Vector3(tread + IN, 1.5 * IN, w))
+			g.counts["lumber"] += 1
+		for lat in [-w * 0.5 + 0.03, w * 0.5 - 0.03]:
+			var p_bot := _flight_point(f, float(m) * tread, lat, yb)
+			var p_top := _flight_point(f, 0.0, lat, yt)
+			var dv := p_top - p_bot
+			_emit_obox(g.lumber, (p_bot + p_top) * 0.5 + Vector3.DOWN * (STRINGER_D * 0.45), dv,
+				Vector3.UP, Vector3(dv.length(), STRINGER_D, 1.5 * IN))
+			g.counts["lumber"] += 1
+		if rail_on and m >= 2:
+			for sgn_lat in [-1.0, 1.0]:
+				var lat := float(sgn_lat) * w * 0.5
+				# No rail on a side that runs against the structure.
+				var side_dir := Vector3.UP.cross(fh) * float(sgn_lat)
+				var side_o := (_flight_point(f, 0.0, lat, 0.0) - (fr0.base as Vector3)).dot(fr0.out as Vector3)
+				if side_dir.dot(fr0.out as Vector3) < -0.7 and side_o < POST_W + 0.3:
+					continue
+				var b := _flight_point(f, float(m - 1) * tread, lat, yb + fr_r)
+				var t := _flight_point(f, 0.0, lat, yt)
+				for q in [b, t]:
+					_emit_obox(g.lumber, (q as Vector3) + Vector3.UP * (STAIR_RAIL_H * 0.5), Vector3.UP,
+						fh, Vector3(STAIR_RAIL_H, 1.5 * IN, 3.5 * IN))
+				_emit_strut(g.lumber, b + Vector3.UP * STAIR_RAIL_H, t + Vector3.UP * STAIR_RAIL_H, 0.045)
+				g.counts["lumber"] += 3
+	for lnd in (G.landings as Array):
+		var ly: float = lnd.y
+		var lh: Vector3 = lnd.h
+		var lc: Vector3 = lnd.c
+		var la: float = lnd.along
+		var lx: float = lnd.across
+		_emit_obox(g.ply, lc + Vector3.UP * (ly - PLY_T * 0.5), lh, Vector3.UP, Vector3(la, PLY_T, lx))
+		_emit_obox(g.lumber, lc + Vector3.UP * (ly - PLY_T - JOIST_H * 0.5), lh, Vector3.UP,
+			Vector3(la - 0.02, JOIST_H, lx - 0.02))
+		var leg_h := ly - PLY_T - JOIST_H
+		var lat_v := Vector3.UP.cross(lh)
+		if leg_h > 0.05:
+			for ca in [-1.0, 1.0]:
+				for cb in [-1.0, 1.0]:
+					var q := lc + lh * (float(ca) * (la * 0.5 - 0.06)) + lat_v * (float(cb) * (lx * 0.5 - 0.06))
+					_emit_obox(g.lumber, q + Vector3.UP * (leg_h * 0.5), Vector3.UP, lh, Vector3(leg_h, LEG_W, LEG_W))
+			g.counts["lumber"] += 4
+		g.counts["plywood"] += 1
 		g.counts["lumber"] += 1
-	for lat in [-w * 0.5 + 0.03, w * 0.5 - 0.03]:
-		var p_bot := _stair_point(G, float(n) * tread, lat, 0.0)
-		var p_top := _stair_point(G, 0.0, lat, y_top)
-		var dv := p_top - p_bot
-		_emit_obox(g.lumber, (p_bot + p_top) * 0.5 + Vector3.DOWN * (STRINGER_D * 0.45), dv,
-			Vector3.UP, Vector3(dv.length(), STRINGER_D, 1.5 * IN))
-		g.counts["lumber"] += 1
+		if rail_on:
+			for r in (lnd.rails as Array):
+				_emit_rail_run(g, (r[0] as Vector3) + Vector3.UP * ly, (r[1] as Vector3) + Vector3.UP * ly, 3.0 * FT)
 	if bool(G.along):
 		# The landing the flight arrives on, beside the deck edge.
 		var fr: Dictionary = G.fr
@@ -2932,16 +3368,6 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 			var c2 := _fp(fr, float(G.a) + float(G.sgn) * w, y_top, float(G.o0) + 0.05)
 			_emit_rail_run(g, c0, c1, 3.0 * FT)
 			_emit_rail_run(g, c1, c2, 3.0 * FT)
-	if bool(e.get("handrail", true)):
-		var sides: Array = [w * 0.5] if bool(G.along) else [-w * 0.5, w * 0.5]
-		for lat in sides:
-			var b := _stair_point(G, float(n - 1) * tread, lat, riser)
-			var t := _stair_point(G, 0.0, lat, y_top)
-			for p in [b, t]:
-				_emit_obox(g.lumber, (p as Vector3) + Vector3.UP * (STAIR_RAIL_H * 0.5), Vector3.UP,
-					run_dir, Vector3(STAIR_RAIL_H, 1.5 * IN, 3.5 * IN))
-			_emit_strut(g.lumber, b + Vector3.UP * STAIR_RAIL_H, t + Vector3.UP * STAIR_RAIL_H, 0.045)
-			g.counts["lumber"] += 3
 	g.counts["stairs"] += 1
 
 
@@ -3330,16 +3756,103 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 		var o_wall := POST_W * 0.5 + 0.02
 		var top_y: float = G.top_y
 		var bot_y: float = G.bot_y
+		var doors := end_door_spots(G, e, amin, amax)
 		for a_end in [amin, amax]:
-			var w_top := _fp(fr, a_end, top_y, o_wall)
-			var p_top := _lean_point(G, a_end, slen, 0.0)
-			var p_bot := _lean_point(G, a_end, 0.0, 0.0)
-			var w_bot := _fp(fr, a_end, bot_y, o_wall)
-			_emit_quad(st_e, w_top, p_top, p_bot, w_bot)
-			if bot_y > 0.05:
-				_emit_quad(st_e, w_bot, p_bot, Vector3(p_bot.x, 0.0, p_bot.z), Vector3(w_bot.x, 0.0, w_bot.z))
+			var door: Dictionary = doors.get(a_end, {})
+			if door.is_empty():
+				var w_top := _fp(fr, a_end, top_y, o_wall)
+				var p_top := _lean_point(G, a_end, slen, 0.0)
+				var p_bot := _lean_point(G, a_end, 0.0, 0.0)
+				var w_bot := _fp(fr, a_end, bot_y, o_wall)
+				_emit_quad(st_e, w_top, p_top, p_bot, w_bot)
+				if bot_y > 0.05:
+					_emit_quad(st_e, w_bot, p_bot, Vector3(p_bot.x, 0.0, p_bot.z), Vector3(w_bot.x, 0.0, w_bot.z))
+			else:
+				_emit_end_wall_with_door(g, st_e, G, a_end, o_wall, door, e)
 			g.counts["glazing" if ends == "glazing" else "plywood"] += 1
 	g.end_part()
+
+
+## Where a slope's end doors go: {a_end: {o0, o1, h, side}} for each end that
+## has one. A door stands as near the structure as it can, where the slope is
+## tallest, and is lowered to fit under it (no door where even 5' will not).
+## "left" / "right" are as seen from outside, facing the slope.
+static func end_door_spots(G: Dictionary, e: Dictionary, amin: float, amax: float) -> Dictionary:
+	var out := {}
+	var which := str(e.get("end_door", "none"))
+	if which == "none" or str(e.get("ends", "open")) == "open":
+		return out
+	var fr: Dictionary = G.fr
+	var right_v := (-(fr.out as Vector3)).cross(Vector3.UP)
+	var amax_is_right := (fr.along as Vector3).dot(right_v) > 0.0
+	var ends_w: Array = []
+	if which == "both" or (which == "right") == amax_is_right:
+		ends_w.append(amax)
+	if which == "both" or (which == "right") != amax_is_right:
+		ends_w.append(amin)
+	var o_wall := POST_W * 0.5 + 0.02
+	var dw := float(e.get("end_door_w_ft", 3.0)) * FT
+	var o0 := o_wall + 0.12 + TRIM_W
+	var o1 := minf(o0 + dw, float(G.o_bot) - TRIM_W - 0.05)
+	if o1 - o0 < 0.5:
+		return out
+	var h := minf(float(e.get("end_door_h_ft", 6.75)) * FT, _end_wall_top(G, o1) - TRIM_W - 0.04)
+	if h < 5.0 * FT - 0.01:
+		return out
+	for a_end in ends_w:
+		out[a_end] = {"o0": o0, "o1": o1, "h": h, "sign": 1.0 if a_end == amax else -1.0}
+	return out
+
+
+## How high a slope's end wall reaches at distance `o` out from the face: the
+## full top height up to the slope's top edge, then down the slope.
+static func _end_wall_top(G: Dictionary, o: float) -> float:
+	var o_top: float = G.o_top
+	var o_bot: float = G.o_bot
+	var top_y: float = G.top_y
+	var bot_y: float = G.bot_y
+	if o <= o_top:
+		return top_y
+	if o >= o_bot:
+		return bot_y
+	return top_y - (o - o_top) / maxf(o_bot - o_top, 0.001) * (top_y - bot_y)
+
+
+## A slope's end wall with a door in it: strips across the end, each from the
+## ground (above the door within it) up to the wall's top, then the door.
+static func _emit_end_wall_with_door(g: _Geom, st: SurfaceTool, G: Dictionary, a_end: float,
+		o_wall: float, door: Dictionary, e: Dictionary) -> void:
+	var fr: Dictionary = G.fr
+	var o0: float = door["o0"]
+	var o1: float = door["o1"]
+	var h: float = door["h"]
+	var cuts: Array = [o_wall, o0, o1, float(G.o_top), float(G.o_bot)]
+	cuts = _sorted_unique(cuts.filter(func(v): return float(v) >= o_wall - 1e-4 and float(v) <= float(G.o_bot) + 1e-4))
+	for i in range(cuts.size() - 1):
+		var oa := float(cuts[i])
+		var ob := float(cuts[i + 1])
+		if ob - oa < 0.005:
+			continue
+		var ya := _end_wall_top(G, oa)
+		var yb := _end_wall_top(G, ob)
+		var y_lo := h if (oa >= o0 - 1e-4 and ob <= o1 + 1e-4) else 0.0
+		if ya <= y_lo + 0.005 and yb <= y_lo + 0.005:
+			continue
+		_emit_quad(st, _fp(fr, a_end, y_lo, oa), _fp(fr, a_end, y_lo, ob),
+			_fp(fr, a_end, maxf(yb, y_lo), ob), _fp(fr, a_end, maxf(ya, y_lo), oa))
+	# The door itself, in the end's own frame: "along" runs out from the face,
+	# "out" points away from the slope's middle.
+	var out_n: Vector3 = (fr.along as Vector3) * float(door.get("sign", 1.0))
+	var efr := {"face": "end", "base": _fp(fr, a_end, 0.0, 0.0), "along": fr.out, "out": out_n,
+		"len": float(G.o_bot)}
+	var w := o1 - o0
+	var a := (o0 + o1) * 0.5
+	_emit_casing(g, efr, a, 0.0, w, h, false)
+	if str(e.get("end_door_style", "hinged")) == "hinged":
+		var paint := g.paint_for(str(e.get("end_door_color", "#f2efe6")))
+		var hw := g.paint_for("#2b2b2b")
+		_emit_door_leaf(paint, hw, efr, a, 0.0, w - 0.008, h - 0.008, 1.0)
+	g.counts["doors"] += 1
 
 
 ## An offset slope's link back to the structure: a ledger on the face, a joist
@@ -3682,13 +4195,19 @@ static func _element_components(s: Dictionary, L: Dictionary, e: Dictionary) -> 
 			if G.is_empty():
 				return out
 			var w: float = G.w
-			var n: int = G.n
 			var box := AABB(_stair_point(G, 0.0, -w * 0.5, 0.0), Vector3.ZERO)
 			for lat in [-w * 0.5, w * 0.5]:
-				for p in [_stair_point(G, float(n) * float(G.tread), lat, 0.0),
-						_stair_point(G, 0.0, lat, float(G.y_top) + STAIR_RAIL_H),
-						_stair_point(G, -w if bool(G.along) else 0.0, lat, float(G.y_top))]:
-					box = box.expand(p)
+				box = box.expand(_stair_point(G, -w if bool(G.along) else 0.0, lat, float(G.y_top)))
+			for f in (G.flights as Array):
+				for lat in [-w * 0.5, w * 0.5]:
+					box = box.expand(_flight_point(f, float(int(f.m)) * float(G.tread), lat, float(f.yb)))
+					box = box.expand(_flight_point(f, 0.0, lat, float(f.yt) + STAIR_RAIL_H))
+			for lnd in (G.landings as Array):
+				var lat_v := Vector3.UP.cross(lnd.h as Vector3)
+				for ca in [-0.5, 0.5]:
+					for cb in [-0.5, 0.5]:
+						box = box.expand((lnd.c as Vector3) + (lnd.h as Vector3) * (float(lnd.along) * float(ca))
+							+ lat_v * (float(lnd.across) * float(cb)) + Vector3.UP * (float(lnd.y) + STAIR_RAIL_H))
 			box = box.expand(_fp(G.fr, float(G.a) - w * 0.5, float(G.y_top), POST_W * 0.5))
 			var c := base.duplicate()
 			c["id"] = "el:" + id
@@ -3754,6 +4273,22 @@ static func _element_components(s: Dictionary, L: Dictionary, e: Dictionary) -> 
 			c["mode"] = str(e["mode"])
 			c["aabb"] = box.grow(0.03)
 			out.append(c)
+		"open_bay":
+			var ofx: Array = L.fx
+			var orz: Array = L.rz
+			var ocols: int = L.cols
+			var ob0 := int(e["bay0"])
+			var ob1 := ob0 + int(e["bays"]) - 1
+			var oc0 := 0 if int(e["cols"]) <= 0 else int(e["col0"])
+			var oc1 := ocols - 1 if int(e["cols"]) <= 0 else int(e["col0"]) + int(e["cols"]) - 1
+			var oy0 := 0.0 if int(e["floor"]) < 0 else _floor_y(L, int(e["floor"]))
+			var za := _cell_z_bounds(orz, float(L.frame_depth), oc0, ocols).x
+			var zb := _cell_z_bounds(orz, float(L.frame_depth), oc1, ocols).y
+			var oc := base.duplicate()
+			oc["id"] = "el:" + id
+			oc["aabb"] = AABB(Vector3(float(ofx[ob0]), oy0, za),
+				Vector3(float(ofx[ob1 + 1]) - float(ofx[ob0]), maxf(float(L.height) - oy0, 0.3), zb - za))
+			out.append(oc)
 		"courtyard":
 			var mx: float = L.module_x
 			var pitch: float = L.row_pitch
@@ -4050,31 +4585,21 @@ static func chiba_2026_spec() -> Dictionary:
 	for f in ["front", "back", "left", "right"]:
 		(main["part_overrides"] as Dictionary)["wallface:" + f] = {"color": brown}
 	(main["part_overrides"] as Dictionary)["el:e1"] = {"color": brown}
-	# The turned rack: bays 0-1 (B) roofed and walled, bays 2-3 (C) open above
-	# the first floor. Its sheets on the long faces come off above 8' there.
-	var open_roof := {}
-	var bare_tops := {}
-	for b in [2, 3]:
-		for c in range(3):
-			open_roof["%d,%d,2" % [b, c]] = {"kind": "none"}
-		# No beams across the tops of the open bays: bare frames, as built.
-		for r in range(4):
-			for side in range(2):
-				bare_tops["2,%d,%d,%d" % [r, b, side]] = {"deleted": true}
+	# The turned rack: bays 0-1 (B) roofed and walled, bays 2-3 (C) an open bay
+	# above the first floor — no roof deck, no beams across the tops (bare
+	# frames, as built), the long faces' walls off above that floor.
 	var turned := {
 		"upright_depth_in": 42, "upright_height_ft": 20, "beam_span_ft": 12,
 		"bay_count": 4, "column_count": 3, "row_gap_ft": 4.5,
 		"deck_levels": 2, "level_heights_ft": [0.25, 9.0], "roof_deck": true, "decked": true,
 		"walls": {"front": true, "back": true, "left": false, "right": true},
-		"wall_sheet_deleted": _sheets_from("front", 6, 12, 1, 2) + _sheets_from("back", 6, 12, 1, 2),
-		"cell_overrides": open_roof,
-		"beam_overrides": bare_tops,
 		"part_overrides": {"wallface:front": {"color": brown}, "wallface:back": {"color": brown},
 			"wallface:right": {"color": brown}},
 		"elements": [
 			{"id": "e1", "type": "lean_to", "face": "back", "surface": "glazing", "seg_from": 2, "seg_to": 3,
 				"angle_deg": 50.0, "attach_level": 1, "bottom_ft": 0.0, "ends": "plywood"},
 			{"id": "e2", "type": "railing", "floor": 1, "inner": false, "right": false},
+			{"id": "e3", "type": "open_bay", "bay0": 2, "bays": 2, "cols": 0, "floor": 1},
 		],
 	}
 	var box := {
@@ -4168,11 +4693,15 @@ static func _emit_box(st: SurfaceTool, xf: Transform3D, size: Vector3) -> void:
 		[Vector3(0, 0, -1), 1, 0, 3, 2],
 	]
 	var uv := [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)]
+	# The corner lists run counter-clockwise seen from outside; Godot's front
+	# face is clockwise, so each triangle goes in reversed (see _emit_tri). A
+	# mirroring transform turns the winding over again.
+	var mirrored := xf.basis.determinant() < 0.0
 	for f in faces:
 		var n: Vector3 = (xf.basis * (f[0] as Vector3)).normalized()
-		# Two triangles: (0,1,2) and (0,2,3) over corners f[1..4].
-		var tri := [[1, 2, 3], [1, 3, 4]]
-		var uvmap := [[0, 1, 2], [0, 2, 3]]
+		# Two triangles over corners f[1..4]: (0,2,1) and (0,3,2).
+		var tri := [[1, 3, 2], [1, 4, 3]] if not mirrored else [[1, 2, 3], [1, 3, 4]]
+		var uvmap := [[0, 2, 1], [0, 3, 2]] if not mirrored else [[0, 1, 2], [0, 2, 3]]
 		for t in range(2):
 			for k in range(3):
 				var corner_i: int = f[tri[t][k]]

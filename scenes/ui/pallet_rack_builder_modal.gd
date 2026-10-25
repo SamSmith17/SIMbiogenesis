@@ -94,6 +94,13 @@ var _collide_chk: CheckBox = null
 ## one being edited (_active_mod); its entry here is stale until switched away.
 var _modules: Array = []
 var _active_mod := 0
+## How the build's own pose moved in here (rack 0 turned or dragged), not yet
+## on the placed prop: Apply puts the prop at its pose * this.
+var _root_shift := Transform3D.IDENTITY
+## The other racks' boxes in the preview ([{i, obb_xf, obb_half, aabb}]) and
+## the one under the cursor (-1 none).
+var _mod_boxes: Array = []
+var _hover_mod := -1
 var _mod_box: VBoxContainer = null
 var _fuse_box: VBoxContainer = null
 ## "Build it with a crew": the plan (PalletRackBuildPlan) and the rehearsal
@@ -169,7 +176,7 @@ const MANIP_KINDS := ["deck", "step", "beam", "wall_sheet", "element"]
 ## Elements that slide along their wall when dragged.
 const SLIDE_TYPES := ["door", "window", "stair"]
 ## Elements a drag moves (railings follow their deck and stay put).
-const DRAG_TYPES := ["door", "window", "stair", "lean_to", "stepped", "courtyard"]
+const DRAG_TYPES := ["door", "window", "stair", "lean_to", "stepped", "courtyard", "open_bay"]
 ## Fraction of the deck's far Z edge that counts as the resize grab band.
 const RESIZE_EDGE_FRAC := 0.28
 const UNDO_LIMIT := 40
@@ -235,6 +242,7 @@ func open() -> void:
 		return
 	_bound_prop_id = ""
 	_base_sig = ""
+	_root_shift = Transform3D.IDENTITY
 	# The rack being designed when the editor last closed comes back.
 	var fresh: Variant = _load_draft().get("fresh")
 	var restored := false
@@ -264,12 +272,14 @@ func open_for_prop(prop_id: String) -> void:
 		spec = (rec.get("record_extra", {}) as Dictionary).get("rack_spec", {}) as Dictionary
 	_bound_prop_id = prop_id
 	_base_sig = _spec_sig(spec)
+	_root_shift = Transform3D.IDENTITY
 	# Unapplied edits from last time, if the placed rack has not changed since.
 	var draft: Variant = (_load_draft().get("props", {}) as Dictionary).get(prop_id)
 	var restored := false
 	if draft is Dictionary and str((draft as Dictionary).get("base", "")) == _base_sig \
 			and (draft as Dictionary).get("spec") is Dictionary:
 		_load_full((draft as Dictionary)["spec"], int((draft as Dictionary).get("module", 0)))
+		_root_shift = _xf_from_array((draft as Dictionary).get("root"))
 		restored = true
 	else:
 		_load_full(spec)
@@ -1038,6 +1048,22 @@ func _update_hover(local_pos: Vector2) -> void:
 	var comp := _pick_at(local_pos, MANIP_KINDS)
 	var hit := _pick_node(local_pos)
 	var node := str(hit.get("node", ""))
+	var mh := _module_hit(local_pos, float(hit.get("t", INF)))
+	if mh != _hover_mod:
+		_hover_mod = mh
+		_refresh_highlight()
+		if _sel_hud != null and _sel_nodes.is_empty() and _tool.is_empty():
+			if mh < 0:
+				_sel_hud.text = ""
+			else:
+				_sel_hud.text = "Rack %d — click to edit it, drag to move it (Alt: no snap)" % (mh + 1)
+	if mh >= 0:
+		if _vp_container != null:
+			_vp_container.mouse_default_cursor_shape = Control.CURSOR_MOVE
+		if _hover_node != "":
+			_hover_node = ""
+			_refresh_highlight()
+		return
 	# Cursor hint: resize arrows over a deck's far edge, move arrows over a
 	# draggable body, default arrow over nothing.
 	if _vp_container != null:
@@ -1098,6 +1124,10 @@ func _begin_gesture(local_pos: Vector2, shift: bool, alt: bool = false) -> void:
 	_manip_nodes = []
 	var hit := _pick_node(local_pos)
 	var node := str(hit.get("node", ""))
+	var mh := _module_hit(local_pos, float(hit.get("t", INF)))
+	if mh >= 0:
+		_begin_module_drag(mh, local_pos)
+		return
 	if node.is_empty():
 		return
 	var nk := PalletRackBuilder.part_kind(node)
@@ -1164,6 +1194,12 @@ func _begin_gesture(local_pos: Vector2, shift: bool, alt: bool = false) -> void:
 func _end_gesture(local_pos: Vector2) -> void:
 	if _manip_active:
 		_finalize_manip()
+	elif _manip_mode == "mod_move":
+		# A click (no drag) on another rack edits that one.
+		var i := int(_manip_start.get("mod", -1))
+		_reset_gesture()
+		_switch_module(i)
+		return
 	else:
 		_click_select(local_pos)
 	_reset_gesture()
@@ -1250,6 +1286,9 @@ func _update_manip(local_pos: Vector2) -> void:
 			return
 		"el_cell":
 			_preview_el_cell(local_pos)
+			return
+		"mod_move":
+			_preview_mod_move(local_pos)
 			return
 		"seg_swap":
 			_preview_seg_swap(local_pos)
@@ -1363,6 +1402,14 @@ func _spec_height_ft_from_start(st: Dictionary) -> float:
 
 func _finalize_manip() -> void:
 	match _manip_mode:
+		"mod_move":
+			var mi := int(_manip_start.get("mod", 0))
+			var shared := int(_manip_start.get("shared", 0))
+			if shared >= 2:
+				_flash("Rack %d moved — %s shared with another rack." % [mi + 1, UiText.count(shared, "upright")])
+			else:
+				_flash("Rack %d moved — it does not touch another rack now." % (mi + 1))
+			_refresh_module_ui()
 		"cell_move":
 			var dlt: Vector2i = _manip_start.get("delta", Vector2i.ZERO)
 			if dlt != Vector2i.ZERO:
@@ -1576,7 +1623,7 @@ func _show_hidden(roots: Array) -> void:
 ## The whole spec: element edits, wall toggles and loaded designs change more
 ## than the per-part overrides, and undo has to take all of them back.
 func _snapshot_overrides() -> Dictionary:
-	return {"full": _full_spec(), "module": _active_mod}
+	return {"full": _full_spec(), "module": _active_mod, "root": _root_shift}
 
 
 func _push_undo() -> void:
@@ -1592,6 +1639,7 @@ func _undo() -> void:
 	var snap: Dictionary = _undo_stack.pop_back()
 	if snap.has("full"):
 		_load_full(snap["full"], int(snap.get("module", 0)))
+		_root_shift = snap.get("root", Transform3D.IDENTITY) as Transform3D
 	else:
 		_spec = snap
 	_selection.clear()
@@ -1690,6 +1738,10 @@ func _refresh_highlight(step_ghost: bool = false) -> void:
 		c.queue_free()
 	for n in _sel_nodes:
 		_add_node_highlight(str(n), Color(1.0, 0.6, 0.1, 0.38))
+	if _hover_mod >= 0 and _tool.is_empty():
+		for mb in _mod_boxes:
+			if int(mb["i"]) == _hover_mod:
+				_add_comp_highlight(mb, Color(0.3, 0.85, 1.0, 0.22))
 	# Where the armed tool would put its element.
 	for gc in _ghost_comps:
 		_add_comp_highlight(gc, Color(0.2, 0.75, 1.0, 0.42))
@@ -2001,6 +2053,7 @@ func _rebuild_preview(light: bool = false) -> void:
 		_framed = true
 	if not light:
 		_update_bom(node)
+	_refresh_module_boxes()
 	# Refresh the pick registry + prune selection/hover to still-present ids.
 	_pick_cache = PalletRackBuilder.pick_components(_spec)
 	_comp_index = {}
@@ -2078,7 +2131,11 @@ func _on_apply_to_prop() -> void:
 	if _bound_prop_id.is_empty():
 		return
 	_spec = _read_spec()
-	_write_bound_record({"rack_spec": PalletRackBuilder.resolve_spec(_full_spec())})
+	var patch := {"rack_spec": PalletRackBuilder.resolve_spec(_full_spec())}
+	if not _root_shift.is_equal_approx(Transform3D.IDENTITY):
+		patch.merge(_xf_patch(_bound_world_xf()), true)
+		_root_shift = Transform3D.IDENTITY
+	_write_bound_record(patch)
 	_forget_draft(_bound_prop_id)
 	_draft_done = true
 	close()
@@ -2268,6 +2325,8 @@ func _tool_prompt() -> String:
 			return "click the deck that needs railings"
 		"courtyard":
 			return "click the deck cell where the courtyard starts"
+		"open_bay":
+			return "click the lowest deck to open — it and everything above it in that bay goes"
 		"stepped":
 			return "click a deck bay to step it down to the level below, or a face for big outside steps"
 	return "click the preview"
@@ -2505,6 +2564,22 @@ func _tool_candidate(local_pos: Vector2) -> Dictionary:
 			el["seg_from"] = seg
 			el["seg_to"] = seg
 			el["to_level"] = _first_raised_floor(PalletRackBuilder.floor_at(_spec, float(fh["y"]) + 0.6))
+			return el
+		"open_bay":
+			# The deck cell clicked (empty slots too) and everything above it
+			# in that bay opens: the deck under it stays.
+			var oslot := PalletRackBuilder.pick_nearest(PalletRackBuilder.cell_slots(_spec), r[0], r[1])
+			if oslot.is_empty():
+				return {}
+			var okey := "%d,%d,%d" % [int(oslot["bay"]), int(oslot["col"]), int(oslot["level"])]
+			var opened: Dictionary = _spec.get("_open_cells", {})
+			if opened.has(okey):
+				return {"_select": str((opened[okey] as Dictionary).get("id", ""))}
+			el["bay0"] = int(oslot["bay"])
+			el["bays"] = 1
+			el["col0"] = int(oslot["col"])
+			el["cols"] = 0
+			el["floor"] = int(oslot["level"]) - 1
 			return el
 		"railing", "courtyard":
 			var comp := PalletRackBuilder.pick_nearest(_pick_cache, r[0], r[1], ["deck", "step"])
@@ -3392,6 +3467,7 @@ func _full_spec() -> Dictionary:
 		var ms: Dictionary = _mod_spec(i).duplicate(true)
 		ms.erase("fused")
 		ms.erase("_stepped_cells")
+		ms.erase("_open_cells")
 		var xf: Transform3D = _modules[i]["xf"]
 		fused.append({"spec": ms, "x": xf.origin.x, "z": xf.origin.z,
 			"yaw": PalletRackBuilder.snap_quarter_deg(rad_to_deg(xf.basis.get_euler().y))})
@@ -3412,22 +3488,28 @@ func _switch_module(i: int) -> void:
 		return
 	_spec = _read_spec()
 	_modules[_active_mod]["spec"] = _spec.duplicate(true)
+	var old_xf: Transform3D = _modules[_active_mod]["xf"]
 	_active_mod = i
 	_spec = (_modules[i]["spec"] as Dictionary).duplicate(true)
+	# The preview is drawn in the edited rack's frame: carry the camera over so
+	# the build stays put on screen and only the highlight moves.
+	_carry_camera((_modules[i]["xf"] as Transform3D).affine_inverse() * old_xf)
 	_selection.clear()
 	_sel_nodes.clear()
 	_ctx.clear()
 	_hover_group.clear()
+	_hover_mod = -1
 	_refresh_crumbs()
 	_sync_controls()
 	_refresh_module_ui()
-	_framed = false
 	_queue_rebuild(true)
+	_flash("Editing rack %d." % (i + 1))
 
 
 func _spec_sig(spec: Dictionary) -> String:
 	var s := PalletRackBuilder.resolve_spec(spec)
 	s.erase("_stepped_cells")
+	s.erase("_open_cells")
 	return str(JSON.stringify(s, "", true).hash())
 
 
@@ -3453,12 +3535,13 @@ func _save_draft() -> void:
 	var d := _load_draft()
 	var full := _full_spec()
 	var entry := {"spec": full, "module": _active_mod, "t": int(Time.get_unix_time_from_system()),
-		"cam": [_yaw, _pitch, _dist, _target.x, _target.y, _target.z]}
+		"cam": [_yaw, _pitch, _dist, _target.x, _target.y, _target.z],
+		"root": _xf_to_array(_root_shift)}
 	if _bound_prop_id.is_empty():
 		d["fresh"] = entry
 	else:
 		var props: Dictionary = d.get("props", {}) if d.get("props") is Dictionary else {}
-		if _spec_sig(full) == _base_sig:
+		if _spec_sig(full) == _base_sig and _root_shift.is_equal_approx(Transform3D.IDENTITY):
 			props.erase(_bound_prop_id)
 		else:
 			entry["base"] = _base_sig
@@ -3511,6 +3594,7 @@ func _on_new_or_revert() -> void:
 		_base_sig = _spec_sig(spec)
 	else:
 		_load_full(PalletRackBuilder.default_spec())
+	_root_shift = Transform3D.IDENTITY
 	_selection.clear()
 	_sel_nodes.clear()
 	_ctx.clear()
@@ -3569,8 +3653,21 @@ func _refresh_module_ui() -> void:
 			row.add_child(_small_button("Split off", "Take this rack out of the build; it stays where it is as its own rack",
 				_split_active))
 		_mod_box.add_child(row)
+		_mod_box.add_child(_small_label("Click a faded rack in the preview to edit it; drag one to move it (it snaps where uprights meet, Alt holds the snap off)."))
 	elif _bound_prop_id.is_empty():
 		_mod_box.add_child(_small_label("Place two racks so a frame of one stands on a frame of the other, then edit one of them here to join them."))
+	if _modules.size() > 1 or not _bound_prop_id.is_empty():
+		var trow := HBoxContainer.new()
+		trow.add_theme_constant_override("separation", 4)
+		var who := "this rack" if _modules.size() > 1 else "the rack"
+		var tl := _small_label("Turn %s:" % who)
+		tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		trow.add_child(tl)
+		trow.add_child(_small_button("⟲ 90°", "Turn %s a quarter turn to the left about its middle" % who,
+			func() -> void: turn_active(90.0)))
+		trow.add_child(_small_button("⟳ 90°", "Turn %s a quarter turn to the right about its middle" % who,
+			func() -> void: turn_active(-90.0)))
+		_mod_box.add_child(trow)
 	if not _bound_prop_id.is_empty():
 		_mod_box.add_child(_small_button("Find racks to join",
 			"Placed racks whose uprights meet this one's (within 2 ft, square to it)", _find_fuse_candidates))
@@ -3670,8 +3767,7 @@ func _find_fuse_candidates() -> void:
 	_clear_fuse_list()
 	if _bound_prop_id.is_empty() or _loader == null or not _loader.has_method("placed_prop_records"):
 		return
-	var rec_a := _prop_record(_bound_prop_id)
-	var xf_a := _rec_xf(rec_a)
+	var xf_a := _bound_world_xf()
 	var full := _full_spec()
 	var found := 0
 	var nearest_reason := ""
@@ -3717,7 +3813,11 @@ func _join_rack(pid_b: String, rel: Dictionary) -> void:
 	if _loader != null and _loader.has_method("delete_prop_by_id"):
 		_loader.call("delete_prop_by_id", pid_b)
 	_forget_draft(pid_b)
-	_write_bound_record({"rack_spec": full})
+	var jpatch := {"rack_spec": full}
+	if not _root_shift.is_equal_approx(Transform3D.IDENTITY):
+		jpatch.merge(_xf_patch(_bound_world_xf()), true)
+		_root_shift = Transform3D.IDENTITY
+	_write_bound_record(jpatch)
 	_base_sig = _spec_sig(full)
 	_load_full(full, keep)
 	_undo_stack.clear()
@@ -3739,7 +3839,7 @@ func _split_active() -> void:
 	if res.is_empty():
 		return
 	var rec := _prop_record(_bound_prop_id)
-	var xf_a := _rec_xf(rec)
+	var xf_a := _bound_world_xf()
 	var copy := rec.duplicate(true)
 	for k in ["graph_item_id", "burn", "stowed_in"]:
 		copy.erase(k)
@@ -3749,8 +3849,9 @@ func _split_active() -> void:
 	if _loader.has_method("duplicate_prop_record"):
 		new_id = str(_loader.call("duplicate_prop_record", copy))
 	var patch := {"rack_spec": res["rest"]}
-	if res["rest_xf"] != Transform3D.IDENTITY:
+	if res["rest_xf"] != Transform3D.IDENTITY or not _root_shift.is_equal_approx(Transform3D.IDENTITY):
 		patch.merge(_xf_patch(xf_a * (res["rest_xf"] as Transform3D)), true)
+	_root_shift = Transform3D.IDENTITY
 	_write_bound_record(patch)
 	if not new_id.is_empty():
 		var main := _main_node()
@@ -3820,14 +3921,17 @@ func _begin_element_drag(node: String, el: Dictionary, local_pos: Vector2) -> vo
 		_manip_start = {"el_id": eid, "span": maxi(to - from, 0),
 			"grab_off": clampi(grab - from, 0, maxi(to - from, 0))}
 		return
-	if t == "courtyard" or t == "stepped":
+	if t == "courtyard" or t == "stepped" or t == "open_bay":
 		var plane_y := 0.0
 		if t == "stepped":
 			plane_y = PalletRackBuilder.floor_y(_spec, int(el.get("level", 0)))
+		elif t == "open_bay":
+			plane_y = PalletRackBuilder.floor_y(_spec, maxi(int(el.get("floor", 0)), -1))
 		var p := _ray_plane_hit(local_pos, plane_y)
 		var gc := Vector2i(-1, -1) if is_nan(p.x) else PalletRackBuilder.grid_cell_at(_spec, p.x, p.z)
-		var b0 := int(el.get("bay0" if t == "courtyard" else "bay", 0))
-		var c0 := int(el.get("col0" if t == "courtyard" else "col", 0))
+		var by_corner := t != "stepped"
+		var b0 := int(el.get("bay0" if by_corner else "bay", 0))
+		var c0 := int(el.get("col0" if by_corner else "col", 0))
 		_manip_mode = "el_cell"
 		_manip_nodes = [node]
 		_manip_targets = _element_group(eid)
@@ -3913,6 +4017,15 @@ func _preview_el_cell(local_pos: Vector2) -> void:
 		c = clampi(c, 0, nc - int(el.get("cols", 1)))
 		el["bay0"] = b
 		el["col0"] = c
+	elif str(el.get("type", "")) == "open_bay":
+		# Every column (cols 0) moves along the bays only.
+		b = clampi(b, 0, nb - int(el.get("bays", 1)))
+		el["bay0"] = b
+		if int(el.get("cols", 0)) > 0:
+			c = clampi(c, 0, nc - int(el.get("cols", 1)))
+			el["col0"] = c
+		else:
+			c = -1
 	else:
 		b = clampi(b, 0, nb - 1)
 		c = clampi(c, 0, nc - 1)
@@ -3923,8 +4036,12 @@ func _preview_el_cell(local_pos: Vector2) -> void:
 			return
 		el["bay"] = b
 		el["col"] = c
-	_sel_hud.text = "%s at bay %d, column %d" % [
-		PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1, c + 1]
+	if c < 0:
+		_sel_hud.text = "%s at bay %d" % [
+			PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1]
+	else:
+		_sel_hud.text = "%s at bay %d, column %d" % [
+			PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1, c + 1]
 	_queue_rebuild(true, true)
 
 
@@ -4079,3 +4196,170 @@ func _finalize_seg_swap() -> void:
 		po_new[nid] = po[id]
 	_spec["part_overrides"] = po_new
 	_sel_nodes = [pre_j]
+
+
+# ---------------------------------------------------------------------------
+# Several racks in one build: pick one in the preview, drag it, turn it
+# ---------------------------------------------------------------------------
+
+func _module_xfs() -> Array:
+	var out: Array = []
+	for m in _modules:
+		out.append(m["xf"] as Transform3D)
+	return out
+
+
+## The placed rack's world pose with the turns and moves made in here.
+func _bound_world_xf() -> Transform3D:
+	return _rec_xf(_prop_record(_bound_prop_id)) * _root_shift
+
+
+func _xf_to_array(xf: Transform3D) -> Array:
+	return [xf.origin.x, xf.origin.z, rad_to_deg(xf.basis.get_euler().y)]
+
+
+func _xf_from_array(v: Variant) -> Transform3D:
+	if not (v is Array) or (v as Array).size() < 3:
+		return Transform3D.IDENTITY
+	var a := v as Array
+	return Transform3D(Basis(Vector3.UP, deg_to_rad(float(a[2]))), Vector3(float(a[0]), 0.0, float(a[1])))
+
+
+## The other racks' boxes in the preview (the edited rack's frame), for the
+## pick and the hover highlight.
+func _refresh_module_boxes() -> void:
+	_mod_boxes = []
+	if _modules.size() < 2:
+		_hover_mod = -1
+		return
+	var frame := (_modules[_active_mod]["xf"] as Transform3D).affine_inverse()
+	for i in _modules.size():
+		if i == _active_mod:
+			continue
+		var ms := PalletRackBuilder.resolve_spec(_mod_spec(i))
+		var m := PalletRackBuilder._metrics(ms)
+		var h := float(ms.get("upright_height_ft", 8.0)) * PalletRackBuilder.FT + 0.3
+		var half := Vector3(float(m.total_x) * 0.5 + 0.1, h * 0.5, float(m.total_z) * 0.5 + 0.1)
+		var oxf := frame * (_modules[i]["xf"] as Transform3D) * Transform3D(Basis(), Vector3(0.0, h * 0.5, 0.0))
+		_mod_boxes.append({"i": i, "obb_xf": oxf, "obb_half": half, "aabb": AABB()})
+	if _hover_mod == _active_mod or _hover_mod >= _modules.size():
+		_hover_mod = -1
+
+
+## The other rack under the cursor nearer than the edited rack's part at
+## `part_t` (-1 none). Not while a group is open: that is editing inside.
+func _module_hit(local_pos: Vector2, part_t: float) -> int:
+	if _mod_boxes.is_empty() or not _ctx.is_empty():
+		return -1
+	var r := _ray(local_pos)
+	if r.is_empty():
+		return -1
+	var best := -1
+	var best_t := part_t - 0.05
+	for mb in _mod_boxes:
+		var t := PalletRackBuilder.ray_hits_component(r[0], r[1], mb)
+		if t >= 0.0 and t < best_t:
+			best_t = t
+			best = int(mb["i"])
+	return best
+
+
+## The other racks' posts in rack 0's frame (all but rack `skip`).
+func _other_posts(xfs: Array, skip: int) -> Array:
+	var pa: Array = []
+	for k in _modules.size():
+		if k == skip:
+			continue
+		for q in PalletRackBuilder.post_points(_mod_spec(k)):
+			pa.append((xfs[k] as Transform3D) * (q as Vector3))
+	return pa
+
+
+func _begin_module_drag(i: int, local_pos: Vector2) -> void:
+	var xfs := _module_xfs()
+	_manip_mode = "mod_move"
+	_manip_start = {"mod": i, "grab": _ray_plane_hit(local_pos, 0.0), "xfs": xfs,
+		"root": _root_shift, "pa": _other_posts(xfs, i),
+		"pb": PalletRackBuilder.post_points(_mod_spec(i)), "shared": 0}
+
+
+## Rack i follows the cursor over the ground, snapping where its uprights land
+## on another rack's (Alt holds the snap off).
+func _preview_mod_move(local_pos: Vector2) -> void:
+	var st := _manip_start
+	var grab: Vector3 = st["grab"]
+	var p := _ray_plane_hit(local_pos, 0.0)
+	if is_nan(p.x) or is_nan(grab.x):
+		return
+	var i := int(st["mod"])
+	var xfs: Array = st["xfs"]
+	var xa: Transform3D = xfs[_active_mod]
+	var d_frame := p - grab
+	d_frame.y = 0.0
+	var start: Transform3D = xfs[i]
+	var cand := Transform3D(start.basis, start.origin + xa.basis * d_frame)
+	var shared := 0
+	if not Input.is_key_pressed(KEY_ALT):
+		var sn := PalletRackBuilder.snap_posts(st["pa"], st["pb"], cand, 0.45)
+		if int(sn["shared"]) >= 2:
+			cand = sn["xf"]
+			shared = int(sn["shared"])
+	st["shared"] = shared
+	_set_module_xfs(PalletRackBuilder.move_module(xfs, i, cand * start.affine_inverse()), st["root"])
+	if shared >= 2:
+		_sel_hud.text = "Rack %d: %s meet another rack's  (Alt: no snap)" % [i + 1, UiText.count(shared, "upright")]
+	else:
+		_sel_hud.text = "Rack %d: not touching another rack  (Alt: no snap)" % (i + 1)
+	_queue_rebuild(true, true)
+
+
+func _set_module_xfs(res: Dictionary, root_before: Transform3D) -> void:
+	var xfs: Array = res["xfs"]
+	for k in mini(xfs.size(), _modules.size()):
+		_modules[k]["xf"] = xfs[k]
+	_root_shift = root_before * (res["root"] as Transform3D)
+
+
+## A quarter turn of the edited rack about its middle. With other racks it
+## then snaps to where its uprights land on theirs; on a placed rack on its
+## own it turns the rack itself (Apply). The camera turns with the build, so
+## the rack is seen to turn and the others stay put.
+func turn_active(deg: float) -> void:
+	if _modules.is_empty():
+		return
+	_push_undo()
+	_spec = _read_spec()
+	var xfs := _module_xfs()
+	var i := _active_mod
+	var start: Transform3D = xfs[i]
+	var cand := PalletRackBuilder.turn_about(start.origin, deg) * start
+	var shared := 0
+	if _modules.size() > 1:
+		var m := PalletRackBuilder._metrics(PalletRackBuilder.resolve_spec(_spec))
+		var tol := absf(float(m.total_x) - float(m.total_z)) * 0.5 + 0.5
+		var sn := PalletRackBuilder.snap_posts(_other_posts(xfs, i), PalletRackBuilder.post_points(_spec), cand, tol)
+		if int(sn["shared"]) >= 2:
+			cand = sn["xf"]
+			shared = int(sn["shared"])
+	var old_world := _root_shift * start
+	_set_module_xfs(PalletRackBuilder.move_module(xfs, i, cand * start.affine_inverse()), _root_shift)
+	var new_world := _root_shift * (_modules[i]["xf"] as Transform3D)
+	_carry_camera(new_world.affine_inverse() * old_world)
+	_queue_rebuild(true)
+	var dir := "left" if deg > 0.0 else "right"
+	if _modules.size() < 2:
+		_flash("Turned %s — Apply turns the placed rack." % dir)
+	elif shared >= 2:
+		_flash("Turned %s — %s meet another rack's." % [dir, UiText.count(shared, "upright")])
+	else:
+		_flash("Turned %s — it does not touch another rack now; drag it into place." % dir)
+
+
+## The preview's frame moved by `k` (new frame from old): move the camera with
+## it so what stands still in the world stands still on screen.
+func _carry_camera(k: Transform3D) -> void:
+	if k.is_equal_approx(Transform3D.IDENTITY):
+		return
+	_target = k * _target
+	_yaw += k.basis.get_euler().y
+	_update_camera()

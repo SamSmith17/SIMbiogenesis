@@ -121,6 +121,7 @@ static func site_for(main: Node, prop_id: String) -> PalletRackBuildSite:
 static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}) -> Dictionary:
 	var s := PalletRackBuilder.resolve_spec(spec)
 	s.erase("_stepped_cells")
+	s.erase("_open_cells")
 	var sig := "%d|%d" % [hash(JSON.stringify(s, "", true)), crew_n]
 	if _plan_cache.has(sig):
 		return _plan_cache[sig]

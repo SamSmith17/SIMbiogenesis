@@ -674,6 +674,63 @@ func _test_pallet_rack_elements() -> void:
 	_check("stair rises to the deck", _approx(float(G["riser"]) * float(G["n"]),
 		P._floor_y(L2, 1), 1e-4))
 	_check("stairs counted", int(P.bom(two)["stairs"]) == 1)
+	# Stairs with turns and flights.
+	var y_deck := P._floor_y(L2, 1)
+	var want_flights := {"straight": 1, "landing": 2, "l": 2, "u": 2, "wrap": 3}
+	for shape in want_flights:
+		for run in ["along", "out"]:
+			var sp := two.duplicate(true)
+			sp["elements"] = [{"type": "stair", "face": "front" if run == "out" else "left", "at_ft": 6.0,
+				"to_level": 1, "run": run, "shape": shape, "turn": "left", "turn_pct": 50.0}]
+			var spr := P.resolve_spec(sp)
+			var Ls := P._layout(spr, P._metrics(spr))
+			var Gs := P._stair_geo(Ls, spr["elements"][0])
+			var fl: Array = Gs["flights"]
+			var risers := 0
+			for f in fl:
+				risers += int(f["m"])
+			var tag := "%s/%s" % [shape, run]
+			_check("stair %s: %d flights" % [tag, want_flights[shape]], fl.size() == int(want_flights[shape]),
+				str(fl.size()))
+			_check("stair %s: the risers add up to the climb" % tag, risers == int(Gs["n"]))
+			_check("stair %s: lands on the ground" % tag, absf(float(fl[-1]["yb"])) < 1e-4)
+			_check("stair %s: a landing between each pair of flights" % tag,
+				(Gs["landings"] as Array).size() == fl.size() - 1)
+			var walk := P.stair_walk_path(Gs)
+			var mono := true
+			var hop := 0.0
+			for wi in range(1, walk.size()):
+				if (walk[wi] as Vector3).y < (walk[wi - 1] as Vector3).y - 1e-4:
+					mono = false
+				var dxz := Vector2((walk[wi] as Vector3).x - (walk[wi - 1] as Vector3).x,
+					(walk[wi] as Vector3).z - (walk[wi - 1] as Vector3).z).length()
+				hop = maxf(hop, dxz)
+			_check("stair %s: the walk up climbs steadily from the ground to the deck" % tag, mono
+				and absf((walk[0] as Vector3).y) < 1e-4 and absf((walk[-1] as Vector3).y - y_deck) < 1e-3)
+			_check("stair %s: the walk up never jumps" % tag, hop < float(Gs["w"]) * 1.6 + 0.3, "%.2f m" % hop)
+			_check("stair %s: builds" % tag, int(P.bom(sp)["stairs"]) == 1)
+			_check("stair %s: stays clear of the structure" % tag, P._stair_intrusion(Gs) < 1e-3,
+				"%.2f m inside" % P._stair_intrusion(Gs))
+			if shape == "u":
+				_check("stair %s: the second flight doubles back" % tag,
+					((fl[1]["h"] as Vector3) + (fl[0]["h"] as Vector3)).length() < 1e-4)
+			if shape == "l":
+				var h0: Vector3 = fl[0]["h"]
+				var h1: Vector3 = fl[1]["h"]
+				# Climbing the lower flight (-h1) and turning LEFT onto the upper (-h0).
+				_check("stair %s: turns left going up" % tag,
+					Vector3.UP.cross(-h1).distance_to(-h0) < 1e-4)
+				var spr2 := spr.duplicate(true)
+				spr2["elements"][0]["turn"] = "right"
+				var Gr := P._stair_geo(Ls, spr2["elements"][0])
+				# (Along a wall one of the two turns would run into the rack and is
+				# swapped, so both give the same stair there.)
+				if not Gs.has("turn_swapped") and not Gr.has("turn_swapped"):
+					_check("stair %s: turning right goes the other way" % tag,
+						((Gr["flights"][1]["h"] as Vector3) + h1).length() < 1e-4)
+				else:
+					_check("stair %s: the turn that would hit the rack is swapped" % tag,
+						((Gr["flights"][1]["h"] as Vector3) - h1).length() < 1e-4)
 
 	# Railing: round the deck; a stair landing opens a gap; face toggles work.
 	var railed := two.duplicate(true)
@@ -752,10 +809,137 @@ func _test_pallet_rack_elements() -> void:
 
 
 
+## The open bay element, doors in a slope's closed ends, and moving / turning
+## one rack of a joined build.
+func _test_pallet_rack_open_bay_and_modules() -> void:
+	var P := PalletRackBuilder
+	# --- Open bay: the deck it keeps stays, everything above it in the bay goes.
+	var ob := P.default_spec()
+	ob["walls"] = {"front": true, "back": false, "left": false, "right": false}
+	var base_bom := P.bom(ob)
+	ob["elements"] = [{"id": "e1", "type": "open_bay", "bay0": 1, "bays": 1, "cols": 0, "floor": 0}]
+	var ors := P.resolve_spec(ob)
+	var oc: Dictionary = ors.get("_open_cells", {})
+	_check("open bay: every column above the deck it keeps",
+		oc.size() == 4 and oc.has("1,0,1") and oc.has("1,1,2") and not oc.has("1,0,0") and not oc.has("0,0,1"),
+		str(oc.keys()))
+	var open_slots := 0
+	for sl in P.cell_slots(ob):
+		if int(sl["bay"]) == 1 and int(sl["level"]) >= 1 and str(sl["kind"]) == "none":
+			open_slots += 1
+	_check("open bay: its cells draw no deck", open_slots == 4, "%d" % open_slots)
+	var ob_bom := P.bom(ob)
+	_check("open bay: its beams come out", int(ob_bom["beams"]) < int(base_bom["beams"]),
+		"%d vs %d" % [int(ob_bom["beams"]), int(base_bom["beams"])])
+	var L := P._layout(ors, P._metrics(ors))
+	_check("open bay: the front wall opens over it", P._open_bay_wall_holes(ors, L, "front").size() > 0)
+	(ob["elements"][0] as Dictionary)["beams"] = false
+	(ob["elements"][0] as Dictionary)["walls"] = false
+	var kept := P.resolve_spec(ob)
+	_check("open bay: beams kept when asked", int(P.bom(ob)["beams"]) > int(ob_bom["beams"]))
+	_check("open bay: walls kept when asked",
+		P._open_bay_wall_holes(kept, P._layout(kept, P._metrics(kept)), "front").is_empty())
+	_check("open bay: the label names the bay", P.element_label(ob["elements"][0], ob).contains("bay 2"),
+		P.element_label(ob["elements"][0], ob))
+	var cz := P.design_preset("chiba_2026")
+	var cz_open := 0
+	for f in (P.resolve_spec(cz["spec"]).get("fused", []) as Array):
+		for e in ((f as Dictionary)["spec"] as Dictionary).get("elements", []):
+			if str(e.get("type", "")) == "open_bay":
+				cz_open += 1
+	_check("open bay: Chiba 2026's turned rack opens with one", cz_open == 1, "%d" % cz_open)
+	# --- Doors in a slope's closed ends.
+	var dr := P.default_spec()
+	var lean := {"id": "e1", "type": "lean_to", "face": "front", "ends": "plywood", "end_door": "both"}
+	dr["elements"] = [lean]
+	var both := int(P.bom(dr)["doors"])
+	lean["end_door"] = "left"
+	var one := int(P.bom(dr)["doors"])
+	lean["end_door"] = "none"
+	var none := int(P.bom(dr)["doors"])
+	lean["end_door"] = "both"
+	lean["ends"] = "open"
+	var open_ends := int(P.bom(dr)["doors"])
+	_check("slope end doors: both / one / none / open ends", both == 2 and one == 1 and none == 0 and open_ends == 0,
+		"%d %d %d %d" % [both, one, none, open_ends])
+	lean["ends"] = "plywood"
+	var dn := P.build_node(dr)
+	_check("slope end doors: builds", dn != null)
+	if dn != null:
+		dn.free()
+	# --- Moving and turning one rack of a build.
+	var r1 := Transform3D(Basis(Vector3.UP, PI * 0.5), Vector3(10.0, 0.0, 2.0))
+	var xfs: Array = [Transform3D.IDENTITY, r1]
+	var mv := P.move_module(xfs, 1, P.turn_about(r1.origin, 90.0))
+	var m1: Transform3D = mv["xfs"][1]
+	_check("modules: turning rack 2 keeps rack 1 the frame",
+		(mv["xfs"][0] as Transform3D).is_equal_approx(Transform3D.IDENTITY)
+			and (mv["root"] as Transform3D).is_equal_approx(Transform3D.IDENTITY))
+	_check("modules: rack 2 turns about its middle",
+		m1.origin.is_equal_approx(r1.origin) and absf(absf(rad_to_deg(m1.basis.get_euler().y)) - 180.0) < 0.01)
+	var mv0 := P.move_module(xfs, 0, P.turn_about(Vector3.ZERO, 90.0))
+	var root0: Transform3D = mv0["root"]
+	_check("modules: turning rack 1 moves the build's pose",
+		(mv0["xfs"][0] as Transform3D).is_equal_approx(Transform3D.IDENTITY)
+			and absf(rad_to_deg(root0.basis.get_euler().y) - 90.0) < 0.01)
+	_check("modules: ... and leaves rack 2 where it stood",
+		(root0 * (mv0["xfs"][1] as Transform3D)).is_equal_approx(r1))
+	var mvt := P.move_module(xfs, 0, Transform3D(Basis(), Vector3(3.0, 0.0, 0.0)))
+	_check("modules: dragging rack 1 moves the build, not rack 2",
+		((mvt["root"] as Transform3D) * (mvt["xfs"][1] as Transform3D)).is_equal_approx(r1)
+			and (mvt["root"] as Transform3D).origin.is_equal_approx(Vector3(3.0, 0.0, 0.0)))
+	# Snap: a copy of the rack dropped a little off its neighbour's end frame
+	# lands on it, sharing that frame's uprights; far away it does not snap.
+	var sp := P.default_spec()
+	var pts := P.post_points(sp)
+	var min_x := INF
+	var max_x := -INF
+	for q in pts:
+		min_x = minf(min_x, (q as Vector3).x)
+		max_x = maxf(max_x, (q as Vector3).x)
+	var span := max_x - min_x
+	var near := Transform3D(Basis(), Vector3(span + 0.3, 0.0, 0.12))
+	var sn := P.snap_posts(pts, pts, near, 0.45)
+	_check("modules: a rack dropped near a frame snaps onto it",
+		int(sn["shared"]) >= 2 and absf((sn["xf"] as Transform3D).origin.x - span) < 0.01
+			and absf((sn["xf"] as Transform3D).origin.z) < 0.01,
+		"shared %d at %s" % [int(sn["shared"]), str((sn["xf"] as Transform3D).origin)])
+	var far := P.snap_posts(pts, pts, Transform3D(Basis(), Vector3(span + 3.0, 0.0, 0.0)), 0.45)
+	_check("modules: far off it stays where it was",
+		int(far["shared"]) < 2 and (far["xf"] as Transform3D).origin.is_equal_approx(Vector3(span + 3.0, 0.0, 0.0)))
+
+
 ## Slope offset + panel specs + gap seal, stepped modules, fused racks, and the
 ## modal's bay moves / build round trip.
 func _test_pallet_rack_more() -> void:
 	var P := PalletRackBuilder
+	# --- Winding: every triangle a FRONT face for its own normal (Godot's front
+	# face is clockwise from outside: cross(b - a, c - a) . n < 0). Inside-out
+	# triangles drew on the double-sided materials but were lit from behind,
+	# which is why every rack rendered dark.
+	var wound_back := 0
+	var wound_total := 0
+	for d in P.design_presets():
+		var wn := P.build_node(d["spec"])
+		for wmi in wn.find_children("*", "MeshInstance3D", true, false):
+			var wm: Mesh = (wmi as MeshInstance3D).mesh
+			if wm == null:
+				continue
+			for si in wm.get_surface_count():
+				var wa := wm.surface_get_arrays(si)
+				var wv: PackedVector3Array = wa[Mesh.ARRAY_VERTEX]
+				var wnm: PackedVector3Array = wa[Mesh.ARRAY_NORMAL]
+				for ti in range(0, wv.size() - 2, 3):
+					var cr := (wv[ti + 1] - wv[ti]).cross(wv[ti + 2] - wv[ti])
+					if cr.length() < 1e-9:
+						continue
+					wound_total += 1
+					if cr.dot(wnm[ti]) > 0.0:
+						wound_back += 1
+		wn.free()
+	_check("more: every rack triangle faces the way its normal points", wound_total > 0 and wound_back == 0,
+		"%d of %d inside out" % [wound_back, wound_total])
+	_test_pallet_rack_open_bay_and_modules()
 	# --- Inspector visibility rules ---
 	var glaz := {"type": "lean_to", "surface": "glazing", "segments": {}, "offset_ft": 0.0}
 	var vf := func(key: String, el: Dictionary) -> bool:

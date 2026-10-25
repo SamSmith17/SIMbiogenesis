@@ -12,7 +12,7 @@ extends SceneTree
 ## scrubbing back gives the same state; the visitor ends up on the deck; and
 ## Chiba 2024 plans in reasonable time.
 
-const EXPECTED_CHECKS := 22
+const EXPECTED_CHECKS := 24
 
 var _checks := 0
 var _failures := 0
@@ -154,6 +154,20 @@ func _initialize() -> void:
 	for w in end["workers"]:
 		top = maxf(top, (w["pos"] as Vector3).y)
 	_check("state: the visitor ends up on the deck", top > 1.7, "highest worker %.2f m" % top)
+	# A switchback stair: still buildable, and the visitor climbs it to the deck.
+	var ubay := bay.duplicate(true)
+	for e in ubay["elements"]:
+		if str(e.get("type", "")) == "stair":
+			e["shape"] = "u"
+			e["turn"] = "right"
+	var tu := P.plan(ubay, 6)
+	_check("bay with U stairs: plans with six, nothing stuck", (tu["blocked"] as Array).is_empty(), P.summary(tu))
+	var vis_top := 0.0
+	for j in tu["jobs"]:
+		if str(j["kind"]) == "visit":
+			for q in j["path"]:
+				vis_top = maxf(vis_top, (q as Vector3).y)
+	_check("bay with U stairs: the visitor's path climbs to the deck", vis_top > 1.7, "%.2f m" % vis_top)
 	# Chiba 2024 plans in reasonable time.
 	var t0 := Time.get_ticks_msec()
 	var c24 := P.plan(PalletRackBuilder.design_preset("chiba_2024")["spec"], 8)

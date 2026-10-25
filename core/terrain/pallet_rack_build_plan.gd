@@ -542,11 +542,7 @@ static func _plan_visit(P: Dictionary, deps: Array) -> void:
 		var G := PalletRackBuilder._stair_geo(L, e)
 		if G.is_empty():
 			continue
-		var n: int = G.n
-		var tread: float = G.tread
-		for k in range(n + 1):
-			var p := PalletRackBuilder._stair_point(G, float(n - k) * tread, 0.0, float(G.riser) * float(k))
-			path.append(p)
+		path.append_array(PalletRackBuilder.stair_walk_path(G))
 		# Onto the deck.
 		var fr: Dictionary = G.fr
 		var top: Vector3 = path[-1]
