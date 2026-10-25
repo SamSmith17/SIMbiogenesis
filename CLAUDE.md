@@ -811,6 +811,14 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_elem
 # Nested selection with REAL clicks: rack → deck → bay → sheet, slope →
 # bay → module, Esc / click outside / breadcrumb, colour, hide, show hidden:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nested_check.gd -Label <dir>
+# A crew building a rack (offline — PalletRackBuildPlan: the Mars build
+# lab's sequence on the "Build a rack bay" design with six, holds until the
+# release, beams only on standing frames, high beams after it with four,
+# four can't build, state_at pure; Chiba 2024 plans; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/terrain/pallet_rack_build_plan_selftest.gd
+# The same on a real world (sandbox): Plan + Rehearse clicked in the
+# builder, the clock moved through the build, the rack's mesh back after:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_build_check.gd -Label rack_build
 # Flat-pack furniture (offline — core/flatpack/): outlines with true arcs,
 # dogbones / T-bones, mortises, the joint solver (cross-lap depths, widths,
 # which part opens which way, parallel parts refused, interference), the
@@ -2967,6 +2975,100 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
   - Gate: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nested_check.gd -Label <dir>`
     (real clicks / double-clicks / keys, a shot per level) and
     `_test_pallet_rack_parts` in terrain_selftest.
+- **Second pass (2026-10-24).** Gate:
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_more_check.gd -Label <dir>`
+  and `_test_pallet_rack_more` in terrain_selftest.
+  - **Slopes:** `offset_ft` stands the slope off the face; `_emit_lean_bridge`
+    puts a ledger, a joist per rafter, a rim, posts past 4' and (`bridge`
+    plywood / glazing) a cover over the strip, part `el:<id>:bridge`. The
+    module is the element's own: `panel_model` (a `PV_MODULES` preset or
+    "custom") + `panel_long_in / short_in / gap_in / watts / voc / vmp / isc
+    / imp`; `_pv_layout` uses them and `solar_summary` hands the module that
+    makes most of the panels to the graph array (`seed_pallet_rack_graph`
+    passes voc / vmp / isc / imp). `gap_fill` seals each solar bay round and
+    between its modules (`rect_minus` of the bay, part `<bay>:g`).
+  - **Inspector fields** may carry `show_if` (`PalletRackBuilder.field_visible`:
+    key → allowed values, `_min`, `_solar`), `section` and `tip`; the card
+    rebuilds when the visible set changes (`_vis_sig`).
+  - **Stepped module = element `stepped`** (tool "Stepped module"): mode "bay"
+    turns deck cell (bay, col, level) into `steps` steps up from the level
+    below toward `rise_toward`; mode "face" builds big steps outside a face
+    over bays seg_from..seg_to up to `to_level`, each ≤ `rise_in` tall and
+    `tread_ft` deep. A bay-mode module CLAIMS its cell: `resolve_spec`
+    derives `_stepped_cells` (never read back from a saved spec) and
+    `_resolve_cell` reports kind "stepped" (no deck drawn, no deck pick).
+    The old `stepped_module` count and per-cell kind "step" migrate into
+    these elements on resolve (once); the Variants spin and the "Add steps"
+    button are gone, S / the parts card's Decking "Steps" add / remove them.
+  - **Dragging moves things** (`_begin_gesture`): a bay (`cell_move`, ghost +
+    release; `_remap_cells` swaps the displaced cells into the vacated ones,
+    with their overrides, piece colours and stepped modules; Alt-drag still
+    raises), doors / windows / stairs round corners onto another face, a slope
+    or face steps along / onto a face (`el_bays`), bay steps and courtyards
+    cell by cell (`el_cell`), a slope bay onto another (`seg_swap`).
+  - **The modal persists** (`user://pallet_rack_draft.json`): "fresh" (the
+    new rack) and per placed rack `props[id]` with `base` = a signature of
+    the record's spec — restored only while the record is unchanged, dropped
+    on Apply / Delete. Saved on close and at most every 1.5 s of edits, only
+    while the modal is open (selftests never write it). "New" / "Revert".
+  - **Fused racks:** `spec["fused"]` = [{spec, x, z, yaw}] in rack 0's frame.
+    `_emit_all` draws every rack (the edited one first and alone in the part
+    tree; the others `no_tree`, faded with `dim_others`) through the static
+    `_mxf` that `_emit_box` / `_emit_tri` apply, and skips a frame whose two
+    posts were already drawn (`_posts_done`). `fuse_transform` snaps the
+    relative yaw to a quarter turn and finds the shift landing the most posts
+    within 0.6 m (≥ 2 = one frame); `fuse_specs` / `split_fused`. Modal
+    "Joined racks": Find racks to join → Join (deletes the other prop, applies
+    at once, clears undo), the rack picker (`_switch_module`), Split off
+    (`duplicate_prop_record` at its world spot).
+- **Chiba presets (2026-10-24).** "Chiba 2024" / "Chiba 2026"
+  (`chiba_2024_spec` / `chiba_2026_spec`, ids `chiba_2024` / `chiba_2026`)
+  reproduce the camp's real builds from the user's models (`Chiba 2024.glb`,
+  `Chiba 2026.glb` in their Downloads, not committed). They were read with
+  `tools/diag/rack_model_study.gd` (WINDOWED, `--glb=` or `--rack-preset=`,
+  `--out=`, `--dist=`; APPDATA at a scratch folder): the same eight views of
+  a model or a preset, plus the post grid, deck heights and sloped areas.
+  Rules added to match them:
+  - `row_gap_ft` in half feet from 2' (`ROW_GAP_STEP_FT` / `ROW_GAP_MIN_FT`);
+    the real racks stand 3.5' and 4.5' apart.
+  - Several slopes per face, each on its own bays (the modal's `_slope_over`
+    owns the rule; the tool fills the free run round the clicked bay).
+  - `pv_rows` / `pv_from` limit a slope's modules to rows from the top /
+    bottom / centred; the rest is the gap seal.
+  - Stairs `tread_in` (9–24") and `landing_ft` for a run straight out; width
+    to 12'.
+  - Element `ladder` (face, at_ft, floor, to_level, width), BOM `ladders`.
+  Chiba 2026's fused racks sit at measured offsets with yaw 90; open bays are
+  roof cells "none" + deleted top beams + deleted upper wall sheets.
+  `_test_pallet_rack_more` pins the footprints (2024 26.1 × 11.2 m, 2026
+  29.4 × 26.4 m post to post, as the models measure).
+- **A crew builds it (2026-10-24, from Gene's Mars build lab,
+  mars-campus-2026…/lab?scenario=build-bay).** `PalletRackBuildPlan`
+  (core/terrain/, pure) turns a rack into the lab's step graph with named
+  workers: carry each piece from piles in front of the rack (frames, beams,
+  lumber, sheets, walls, parts), raise a frame with two and HOLD it (the
+  raisers are busy until the bay's `release`, crew 0), seat the low beams
+  with two while both frames stand, release, then the high beams with four
+  (two climbing the frame, two handing up), then joists (`fix`), sheets
+  (`lay`), steps, walls (`hang`), elements (`assemble`), and a visitor
+  climbing onto the top deck. Six is the fewest who can build (two frames
+  held + two seating); four reports blocked jobs. `state_at(tl, t)` is pure:
+  every piece is in the pile, lifted, carried, set down, raised about its
+  base, or installed. Pieces are the rack's BUILD UNITS:
+  `PalletRackBuilder.build_units_node` (`_Geom.split`: one Node3D per part
+  id, per-material meshes, meta `units` {aabb, kind}); fused racks' ids keep
+  their `m<i>|` prefix. `PalletRackBuildSite` (gameplay/) is the rehearsal on
+  a placed rack, LinkageBuildSite's pattern: record `build_run = {start_h,
+  crew_n}`, build time from the world clock (scrubs, survives a reload), the
+  rack's own mesh and collision off while it stands, hi-detail figures on
+  the fab clips (carry_beam, lift_ring, hold_brace, place_beam, fasten_bolt)
+  with hands on the FabContextRig tool, a progress label over the rack, the
+  mesh back after `LINGER_S`. Rack builder → "Build it with a crew": Plan
+  (time, jobs, longest chain) and, for a placed rack, Rehearse the build /
+  End rehearsal (unapplied edits are applied first). Not built: the real
+  NPC population doing it (the site draws its own crew, like the Linkage
+  rehearsal), forklifts / hand-up variants of the lab, ladders as climb
+  routes. Site cost 0.44 ms a frame on Mount Vernon.
 
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`

@@ -655,6 +655,10 @@ static func seed_pallet_rack_graph(main: Node, prop_id: String) -> bool:
 		"show_picker": false,
 		"auto_wire": true,
 	}
+	# The module the player specified in the rack builder (data-sheet numbers).
+	for k in ["voc", "vmp", "isc", "imp"]:
+		if summary.has(k):
+			opts[k] = float(summary[k])
 	if sgv.has_method("add_imported_solar_panels"):
 		sgv.call("add_imported_solar_panels", count,
 			float(summary.get("watts_per_panel", PalletRackBuilder.PV_WATTS)),

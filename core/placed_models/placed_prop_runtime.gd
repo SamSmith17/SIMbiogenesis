@@ -192,6 +192,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
 		LinkageBuildSite.attach(prop, rec)
+		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
 		_maybe_attach_vehicle(prop, model, rec)

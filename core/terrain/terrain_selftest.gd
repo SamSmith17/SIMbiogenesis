@@ -46,6 +46,7 @@ func _initialize() -> void:
 	_test_pallet_rack_editor()
 	_test_pallet_rack_elements()
 	_test_pallet_rack_parts()
+	_test_pallet_rack_more()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -476,16 +477,24 @@ func _test_pallet_rack_editor() -> void:
 	_check("editor delete beam drops bom",
 		int(PalletRackBuilder.bom(beam_del)["beams"]) == int(full_bom["beams"]) - 1)
 
-	# Legacy stepped_module migrates to per-cell step overrides.
+	# Legacy stepped_module (and per-cell "step" overrides) migrate to stepped-
+	# module elements, once: a second resolve adds nothing.
 	var stepped := PalletRackBuilder.resolve_spec({"bay_count": 2, "column_count": 2,
 		"deck_levels": 2, "decked": true, "roof_deck": true, "stepped_module": 1})
-	var cov: Dictionary = stepped["cell_overrides"]
-	var any_step := false
-	for k in cov.keys():
-		if str((cov[k] as Dictionary).get("kind", "")) == "step":
-			any_step = true
-	_check("editor stepped_module migrates to step cells", any_step,
-		"cov=%s" % str(cov))
+	var n_steps := 0
+	for e in stepped["elements"]:
+		if str(e["type"]) == "stepped" and str(e["mode"]) == "bay":
+			n_steps += 1
+	_check("editor stepped_module migrates to stepped elements", n_steps == 2
+		and int(stepped["stepped_module"]) == 0, "got %d" % n_steps)
+	var again_s := PalletRackBuilder.resolve_spec(stepped)
+	_check("editor step migration runs once", (again_s["elements"] as Array).size() == 2)
+	var legacy_cell := PalletRackBuilder.resolve_spec({"bay_count": 2, "column_count": 1,
+		"cell_overrides": {"1,0,1": {"kind": "step", "height_ft": 7.0}}})
+	_check("editor step cell becomes an element, keeps its height",
+		(legacy_cell["elements"] as Array).size() == 1
+		and str(legacy_cell["cell_overrides"]["1,0,1"].get("kind", "")) == ""
+		and float(legacy_cell["cell_overrides"]["1,0,1"]["height_ft"]) == 7.0)
 
 	# Wall-sheet deletion cuts a sheet from the plywood BOM.
 	var walled := {"bay_count": 2, "column_count": 1, "decked": false, "roof_deck": false,
@@ -741,6 +750,237 @@ func _test_pallet_rack_elements() -> void:
 			int(P.bom(back["designs"][0]["spec"])["solar_panels"]) == int(bs["solar_panels"]))
 	DirAccess.remove_absolute(tmp)
 
+
+
+## Slope offset + panel specs + gap seal, stepped modules, fused racks, and the
+## modal's bay moves / build round trip.
+func _test_pallet_rack_more() -> void:
+	var P := PalletRackBuilder
+	# --- Inspector visibility rules ---
+	var glaz := {"type": "lean_to", "surface": "glazing", "segments": {}, "offset_ft": 0.0}
+	var vf := func(key: String, el: Dictionary) -> bool:
+		for f in P.ELEMENT_FIELDS["lean_to"]:
+			if str(f["key"]) == key:
+				return P.field_visible(f, el)
+		return false
+	_check("more: panel fields hide on an all-glass slope", not bool(vf.call("panel_voc", glaz)))
+	glaz["segments"] = {"1": "solar"}
+	_check("more: a solar bay shows the panel fields", bool(vf.call("panel_voc", glaz)))
+	_check("more: the gap cover hides at no offset", not bool(vf.call("bridge", glaz)))
+	glaz["offset_ft"] = 2.0
+	_check("more: the gap cover shows with an offset", bool(vf.call("bridge", glaz)))
+	var bay_step := {"type": "stepped", "mode": "bay"}
+	var fvs := func(key: String, el: Dictionary) -> bool:
+		for f in P.ELEMENT_FIELDS["stepped"]:
+			if str(f["key"]) == key:
+				return P.field_visible(f, el)
+		return false
+	_check("more: stepped fields follow the mode", bool(fvs.call("steps", bay_step))
+		and not bool(fvs.call("tread_ft", bay_step)))
+	var pm := {}
+	P.apply_pv_module(pm, "ja_380")
+	_check("more: a module preset fills size and ratings", _approx(float(pm["panel_voc"]), 41.62, 1e-4)
+		and _approx(float(pm["panel_long_in"]), 69.6, 1e-4) and str(pm["panel_model"]) == "ja_380")
+
+	# --- Panel size, orientation, gap seal, offset ---
+	var base := {"upright_height_ft": 16, "beam_span_ft": 12, "bay_count": 2, "column_count": 1,
+		"elements": [{"type": "lean_to", "face": "front", "surface": "solar", "angle_deg": 45.0}]}
+	var n_small := int(P.bom(base)["solar_panels"])
+	var big := base.duplicate(true)
+	big["elements"][0]["panel_long_in"] = 89.7
+	big["elements"][0]["panel_short_in"] = 44.6
+	var n_big := int(P.bom(big)["solar_panels"])
+	_check("more: bigger modules, fewer of them", n_small > 0 and n_big > 0 and n_big < n_small,
+		"%d vs %d" % [n_small, n_big])
+	var sealed := base.duplicate(true)
+	sealed["elements"][0]["gap_fill"] = "plywood"
+	_check("more: a plywood gap seal adds plywood", int(P.bom(sealed)["plywood"]) > int(P.bom(base)["plywood"]))
+	sealed["elements"][0]["gap_fill"] = "glazing"
+	_check("more: a glass gap seal adds glazing", int(P.bom(sealed)["glazing"]) > int(P.bom(base)["glazing"]))
+	_check("more: sealing keeps every module", int(P.bom(sealed)["solar_panels"]) == n_small)
+	var off := base.duplicate(true)
+	off["elements"][0]["offset_ft"] = 6.0
+	off["elements"][0]["bridge"] = "plywood"
+	_check("more: an offset slope adds joists and a cover",
+		int(P.bom(off)["lumber"]) > int(P.bom(base)["lumber"])
+		and int(P.bom(off)["plywood"]) > int(P.bom(base)["plywood"]))
+	var ob0: Transform3D = P.element_components(base, base["elements"][0])[0]["obb_xf"]
+	var ob1: Transform3D = P.element_components(off, off["elements"][0])[0]["obb_xf"]
+	_check("more: the offset moves the slope out by the gap",
+		_approx(ob0.origin.z - ob1.origin.z, 6.0 * P.FT, 0.01), "%f" % (ob0.origin.z - ob1.origin.z))
+	var spec_el := base.duplicate(true)
+	spec_el["elements"][0]["panel_voc"] = 44.4
+	spec_el["elements"][0]["panel_isc"] = 12.5
+	var sm := P.solar_summary(spec_el)
+	_check("more: the solar summary carries the module's ratings",
+		_approx(float(sm["voc"]), 44.4, 1e-4) and _approx(float(sm["isc"]), 12.5, 1e-4))
+
+	# --- Stepped modules ---
+	var two := {"bay_count": 3, "column_count": 1, "deck_levels": 2, "level_heights_ft": [0.5, 8.0],
+		"roof_deck": false, "decked": true}
+	var b_two := P.bom(two)
+	var stp := two.duplicate(true)
+	stp["elements"] = [{"type": "stepped", "mode": "bay", "bay": 1, "col": 0, "level": 1}]
+	var b_stp := P.bom(stp)
+	_check("more: a bay step counts as stairs", int(b_stp["stairs"]) == int(b_two["stairs"]) + 1)
+	var deck_ids := {}
+	for c in P.pick_components(stp):
+		if str(c.get("kind", "")) == "deck":
+			deck_ids[str(c["id"])] = true
+	_check("more: the stepped bay is no longer a deck", not deck_ids.has("cell:1,0,1")
+		and deck_ids.has("cell:0,0,1"))
+	var st_tree := P.part_tree(stp)
+	var st_kids: Array = (st_tree["nodes"] as Dictionary).get("el:e1", {}).get("children", [])
+	_check("more: the stepped module opens into its steps", st_kids.size() == P.STAIR_STEPS
+		and str(st_kids[0]).begins_with("tread:"), str(st_kids))
+	var stp_l := stp.duplicate(true)
+	stp_l["elements"][0]["rise_toward"] = "left"
+	_check("more: the rise direction changes the steps",
+		_rack_mesh_sig(P.build_node(stp)) != _rack_mesh_sig(P.build_node(stp_l)))
+	var big_steps := two.duplicate(true)
+	big_steps["elements"] = [{"type": "stepped", "mode": "face", "face": "front", "seg_from": 0,
+		"seg_to": 1, "to_level": 1, "rise_in": 16.0, "tread_ft": 2.0}]
+	var rs := P.resolve_spec(big_steps)
+	var fc: Array = P.element_components(rs, rs["elements"][0])
+	var n_rise := int(ceil(P.floor_y(rs, 1) / (16.0 * P.IN)))
+	var box: AABB = fc[0]["aabb"]
+	_check("more: big steps reach out a tread per step", fc.size() == 1
+		and _approx(box.size.z, float(n_rise - 1) * 2.0 * P.FT, 0.15), "%d steps, %f deep" % [n_rise, box.size.z])
+	_check("more: big steps span the bays asked for", _approx(box.size.x,
+		2.0 * (12.0 * P.FT + P.POST_W), 0.15), "%f" % box.size.x)
+	_check("more: big steps count", int(P.bom(big_steps)["stairs"]) == 1
+		and int(P.bom(big_steps)["plywood"]) > int(b_two["plywood"]))
+
+	# --- Grid helpers ---
+	var rg := P.resolve_spec(two)
+	var Lg := P._layout(rg, P._metrics(rg))
+	var cx := float(Lg.x0) + 1.5 * float(Lg.module_x)
+	_check("more: grid_cell_at finds the middle bay", P.grid_cell_at(two, cx, 0.0) == Vector2i(1, 0))
+	_check("more: grid_cell_at outside is -1", P.grid_cell_at(two, 99.0, 0.0).x == -1)
+	_check("more: face_segment_at", P.face_segment_at(two, "front", 13.0) == 1)
+
+	# --- Fused racks ---
+	var ra := {"bay_count": 2, "column_count": 1, "decked": false, "roof_deck": false}
+	var w := P.footprint_xz(ra).x
+	var xa := Transform3D.IDENTITY
+	var xb := Transform3D(Basis(Vector3.UP, deg_to_rad(4.0)), Vector3(w + 0.25, 0.0, 0.1))
+	var ft := P.fuse_transform(ra, xa, ra, xb)
+	_check("more: racks end to end fuse", bool(ft.get("ok", false)) and int(ft["shared"]) == 4
+		and _approx(float(ft["x"]), w, 0.01) and _approx(float(ft["z"]), 0.0, 0.01)
+		and _approx(float(ft["yaw"]), 0.0, 0.01), str(ft))
+	var far := P.fuse_transform(ra, xa, ra, Transform3D(Basis(), Vector3(w + 3.0, 0, 0)))
+	_check("more: racks apart do not fuse", not bool(far.get("ok", true)))
+	var skew := P.fuse_transform(ra, xa, ra, Transform3D(Basis(Vector3.UP, deg_to_rad(45.0)), Vector3(w, 0, 0)))
+	_check("more: racks at 45 degrees do not fuse", not bool(skew.get("ok", true)))
+	var fused := P.fuse_specs(ra, ra, ft)
+	var bu := int(P.bom(ra)["uprights"])
+	_check("more: a fused build draws the shared frame once",
+		int(P.bom(fused)["uprights"]) == 2 * bu - 2, "%d vs %d" % [int(P.bom(fused)["uprights"]), bu])
+	_check("more: a fused build is two racks wide", _approx(P.fused_bounds(fused).size.x, 2.0 * w, 0.01))
+	var fnode := P.build_node(fused, "F", {"record": true, "module": 1, "dim_others": true})
+	var ftree: Dictionary = fnode.get_meta("part_tree", {})
+	fnode.free()
+	var n_posts := 0
+	for id in (ftree["nodes"] as Dictionary).keys():
+		if str(id).begins_with("post:"):
+			n_posts += 1
+	_check("more: editing rack 2 records only its parts", n_posts == bu, "%d posts" % n_posts)
+	var sp := P.split_fused(fused, 1)
+	_check("more: splitting gives both racks back", not sp.is_empty()
+		and (sp["rest"]["fused"] as Array).is_empty()
+		and _approx((sp["module_xf"] as Transform3D).origin.x, w, 0.01)
+		and int(P.bom(sp["rest"])["uprights"]) == bu)
+	var quarter := P.fuse_specs(ra, ra, {"x": w * 0.5 + 0.5, "z": 3.0, "yaw": 90.0})
+	_check("more: a quarter-turned fused rack builds", int(P.bom(quarter)["uprights"]) > bu)
+
+	# --- Rules the Chiba builds needed ---
+	_check("chiba: row spacing keeps half feet", _approx(float(P.resolve_spec({"row_gap_ft": 3.5})["row_gap_ft"]), 3.5, 1e-6)
+		and _approx(float(P.resolve_spec({"row_gap_ft": 0.5})["row_gap_ft"]), P.ROW_GAP_MIN_FT, 1e-6))
+	var rows_spec := base.duplicate(true)
+	rows_spec["elements"][0]["pv_rows"] = 1
+	rows_spec["elements"][0]["pv_from"] = "top"
+	var n_rows1 := int(P.bom(rows_spec)["solar_panels"])
+	_check("chiba: a row limit caps the modules", n_rows1 > 0 and n_rows1 < n_small, "%d vs %d" % [n_rows1, n_small])
+	var rs1 := P.resolve_spec(rows_spec)
+	var G1 := P._lean_to_geo(rs1, P._layout(rs1, P._metrics(rs1)), rs1["elements"][0])
+	var lay1 := P._pv_layout(G1, float(G1.segs[0]["a0"]), float(G1.segs[0]["a1"]), rs1["elements"][0])
+	_check("chiba: rows from the top sit at the top of the slope",
+		float(lay1["s_start"]) + float(lay1["ph"]) > float(G1.slope_len) - 0.05)
+	var two_slopes := base.duplicate(true)
+	two_slopes["bay_count"] = 4
+	two_slopes["elements"] = [
+		{"type": "lean_to", "face": "front", "surface": "solar", "seg_from": 0, "seg_to": 1},
+		{"type": "lean_to", "face": "front", "surface": "glazing", "seg_from": 3, "seg_to": 3}]
+	var b2s := P.bom(two_slopes)
+	_check("chiba: two slopes share a face", int(b2s["solar_panels"]) > 0 and int(b2s["glazing"]) > 0)
+	var lad := two.duplicate(true)
+	lad["elements"] = [{"type": "ladder", "face": "front", "at_ft": 6.0, "floor": -1, "to_level": 1}]
+	_check("chiba: a ladder counts", int(P.bom(lad)["ladders"]) == 1
+		and P.element_components(lad, lad["elements"][0]).size() == 1)
+	var st0 := two.duplicate(true)
+	st0["elements"] = [{"type": "stair", "face": "front", "at_ft": 12.0, "to_level": 1, "run": "out"}]
+	var st1 := st0.duplicate(true)
+	st1["elements"][0]["landing_ft"] = 6.0
+	st1["elements"][0]["tread_in"] = 13.0
+	var box0: AABB = P.element_components(st0, st0["elements"][0])[0]["aabb"]
+	var box1: AABB = P.element_components(st1, st1["elements"][0])[0]["aabb"]
+	_check("chiba: a landing and deeper treads run the stair further out",
+		box1.size.z > box0.size.z + 6.0 * P.FT, "%f vs %f" % [box1.size.z, box0.size.z])
+
+	# --- The two presets ---
+	for pid in ["chiba_2024", "chiba_2026"]:
+		var d := P.design_preset(pid)
+		_check("chiba: %s is a preset named after its model" % pid, not d.is_empty()
+			and str(d["name"]) == ("Chiba 2024" if pid == "chiba_2024" else "Chiba 2026"))
+	var c24 := P.resolve_spec(P.design_preset("chiba_2024")["spec"])
+	var c26 := P.resolve_spec(P.design_preset("chiba_2026")["spec"])
+	var fb24 := P.fused_bounds(c24)
+	var fb26 := P.fused_bounds(c26)
+	# Post-centre footprints read off the Chiba models (tools/diag/rack_model_study.gd).
+	_check("chiba: 2024 is 7 bays by 5 columns, as built", (c24["fused"] as Array).size() == 1
+		and _approx(fb24.size.x, 26.1, 0.5) and _approx(fb24.size.y, 11.2, 0.6), str(fb24))
+	_check("chiba: 2026 is four racks, as built", (c26["fused"] as Array).size() == 2
+		and _approx(fb26.size.x, 29.4, 1.0) and _approx(fb26.size.y, 26.4, 1.0), str(fb26))
+	var b24 := P.bom(c24)
+	var b26 := P.bom(c26)
+	_check("chiba: 2024 has its slopes, stairs, ladder and roof steps",
+		int(b24["solar_panels"]) > 0 and int(b24["glazing"]) > 0 and int(b24["stairs"]) >= 4
+		and int(b24["ladders"]) == 1, str(b24))
+	_check("chiba: 2026 has its solar slope, greenhouse and stairs",
+		int(b26["solar_panels"]) > 0 and int(b26["glazing"]) > 0 and int(b26["stairs"]) >= 2, str(b26))
+	_check("chiba: the fused end rack shares its frame",
+		int(b24["uprights"]) == 6 * 7 + 6 * 2 - 6, "%d uprights" % int(b24["uprights"]))
+	_check("chiba: the presets reach the graph as solar arrays",
+		int(P.solar_summary(c24)["count"]) > 0 and int(P.solar_summary(c26)["count"]) > 0)
+	var n24 := P.build_node(c24)
+	var n26 := P.build_node(c26)
+	_check("chiba: both presets build a mesh", n24.get_node_or_null("RackMesh") != null
+		and n26.get_node_or_null("RackMesh") != null)
+	n24.free()
+	n26.free()
+
+	# --- The modal: a bay move, and a fused build round trip ---
+	var ModalScript: GDScript = load("res://scenes/ui/pallet_rack_builder_modal.gd")
+	var modal: Control = ModalScript.new()
+	get_root().add_child(modal)
+	modal.call("_ready")
+	modal.call("_load_full", {"bay_count": 3, "column_count": 1, "deck_levels": 1,
+		"level_heights_ft": [0.5], "cell_overrides": {"0,0,0": {"height_ft": 3.0}},
+		"part_overrides": {"ply:0,0,0:0,0": {"color": "#ff0000"}}})
+	modal.call("_remap_cells", {"0,0,0": "2,0,0"})
+	var mspec: Dictionary = modal.get("_spec")
+	_check("modal: a bay moves with its height and colours",
+		(mspec["cell_overrides"] as Dictionary).has("2,0,0")
+		and not (mspec["cell_overrides"] as Dictionary).has("0,0,0")
+		and (mspec["part_overrides"] as Dictionary).has("ply:2,0,0:0,0"), str(mspec["cell_overrides"]))
+	modal.call("_load_full", fused, 1)
+	var back: Dictionary = modal.call("_full_spec")
+	_check("modal: a fused build survives the editor", (back["fused"] as Array).size() == 1
+		and int(modal.get("_active_mod")) == 1
+		and int(P.bom(back)["uprights"]) == int(P.bom(fused)["uprights"]))
+	modal.call("_rebuild_preview")
+	_check("modal: the fused build previews", (modal.get("_tree") as Dictionary).has("nodes"))
+	modal.free()
 
 
 ## SketchUp-style nesting: the part tree, stable part ids, per-part overrides.

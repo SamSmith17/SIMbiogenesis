@@ -21,9 +21,29 @@ extends Control
 ## Shift / Ctrl-click adds to the selection at the same level. The card edits
 ## whatever is selected; a piece's colour or hidden state is stored in
 ## spec["part_overrides"] under its part id (PalletRackBuilder.part_tree).
+##
+## DRAGGING moves things: a deck bay to another bay (Alt-drag raises it
+## instead), a door / window / stairs along its wall and round the corner, a
+## slope or a face-side stepped module along its face and onto another face,
+## a bay-stepped module or a courtyard to another cell, a slope's bay onto
+## another bay (their coverings swap). A whole deck level and beams still
+## rise and fall.
+##
+## The design PERSISTS: closing keeps a draft (user://pallet_rack_draft.json)
+## that the next open restores — one for a new rack, one per placed rack
+## (dropped once applied, or when the placed rack changed meanwhile). "New" /
+## "Revert" starts over.
+##
+## FUSED racks: a placed rack whose uprights meet another's can be joined
+## into one build (PalletRackBuilder.fuse_transform / fuse_specs); the build
+## keeps each rack's own spec, the picker chooses which one the editor works
+## on (the others draw faded), "Split off" takes one out again.
 
 const MODAL_NAME := "pallet_rack_builder"
 const REBUILD_DEBOUNCE_S := 0.10
+const DRAFT_PATH := "user://pallet_rack_draft.json"
+const DRAFT_SAVE_MS := 1500
+const DRAFT_MAX_PROPS := 30
 
 const C_BG := Color(0.039, 0.055, 0.098, 0.85)
 const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
@@ -60,7 +80,6 @@ var _roof_chk: CheckBox = null
 var _decked_chk: CheckBox = null
 var _lumber_opt: OptionButton = null
 var _joist_opt: OptionButton = null
-var _stepped_spin: SpinBox = null
 var _u_chk: CheckBox = null
 var _u_row: HBoxContainer = null
 var _u_bays_spin: SpinBox = null
@@ -69,6 +88,26 @@ var _wall_chks: Dictionary = {}
 var _wall_bottom_spin: SpinBox = null
 var _wall_top_spin: SpinBox = null
 var _collide_chk: CheckBox = null
+
+# ---- Fused racks + the draft ----
+## The racks of the build: [{spec, xf}] (xf in rack 0's frame). _spec is the
+## one being edited (_active_mod); its entry here is stale until switched away.
+var _modules: Array = []
+var _active_mod := 0
+var _mod_box: VBoxContainer = null
+var _fuse_box: VBoxContainer = null
+## "Build it with a crew": the plan (PalletRackBuildPlan) and the rehearsal
+## on the placed rack (PalletRackBuildSite).
+var _crew_box: VBoxContainer = null
+var _crew_spin: SpinBox = null
+var _crew_lbl: Label = null
+## Bound prop: a signature of its record's spec when the editor opened, so a
+## draft is only restored over the same record.
+var _base_sig := ""
+var _last_draft_ms := 0
+var _new_btn: Button = null
+## Set by Apply / Delete: the close that follows keeps no draft.
+var _draft_done := false
 
 # ---- Design elements ----
 ## The armed placement tool: "" none, "step" the step dropper, else a
@@ -129,6 +168,8 @@ const DRAG_THRESHOLD_PX := 1.5
 const MANIP_KINDS := ["deck", "step", "beam", "wall_sheet", "element"]
 ## Elements that slide along their wall when dragged.
 const SLIDE_TYPES := ["door", "window", "stair"]
+## Elements a drag moves (railings follow their deck and stay put).
+const DRAG_TYPES := ["door", "window", "stair", "lean_to", "stepped", "courtyard"]
 ## Fraction of the deck's far Z edge that counts as the resize grab band.
 const RESIZE_EDGE_FRAC := 0.28
 const UNDO_LIMIT := 40
@@ -181,7 +222,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	set_process(false)
-	_spec = PalletRackBuilder.default_spec()
+	_load_full(PalletRackBuilder.default_spec())
 	_build_ui()
 
 
@@ -193,13 +234,23 @@ func open() -> void:
 	if _active:
 		return
 	_bound_prop_id = ""
-	_spec = PalletRackBuilder.default_spec()
+	_base_sig = ""
+	# The rack being designed when the editor last closed comes back.
+	var fresh: Variant = _load_draft().get("fresh")
+	var restored := false
+	if fresh is Dictionary and (fresh as Dictionary).get("spec") is Dictionary:
+		_load_full((fresh as Dictionary)["spec"], int((fresh as Dictionary).get("module", 0)))
+		restored = true
+	else:
+		_load_full(PalletRackBuilder.default_spec())
 	# Nothing placed yet, so there is no target to tag.
 	if _space_row != null:
 		_space_row.bind_prop(_loader, "")
 	_sync_controls()
 	_apply_edit_mode_ui()
 	_activate()
+	if restored:
+		_restore_camera(fresh as Dictionary)
 
 
 ## Edit an already-placed pallet rack in place. "Apply changes" rebuilds that
@@ -212,12 +263,24 @@ func open_for_prop(prop_id: String) -> void:
 	if spec.is_empty() and rec.has("record_extra"):
 		spec = (rec.get("record_extra", {}) as Dictionary).get("rack_spec", {}) as Dictionary
 	_bound_prop_id = prop_id
-	_spec = PalletRackBuilder.resolve_spec(spec)
+	_base_sig = _spec_sig(spec)
+	# Unapplied edits from last time, if the placed rack has not changed since.
+	var draft: Variant = (_load_draft().get("props", {}) as Dictionary).get(prop_id)
+	var restored := false
+	if draft is Dictionary and str((draft as Dictionary).get("base", "")) == _base_sig \
+			and (draft as Dictionary).get("spec") is Dictionary:
+		_load_full((draft as Dictionary)["spec"], int((draft as Dictionary).get("module", 0)))
+		restored = true
+	else:
+		_load_full(spec)
 	if _space_row != null:
 		_space_row.bind_prop(_loader, prop_id)
 	_sync_controls()
 	_apply_edit_mode_ui()
 	_activate()
+	if restored:
+		_restore_camera(draft as Dictionary)
+		_flash("Your unapplied changes are back — Revert drops them.")
 
 
 func _activate() -> void:
@@ -237,6 +300,10 @@ func _activate() -> void:
 	_refresh_design_list()
 	_refresh_element_presets()
 	_reset_gesture()
+	_refresh_module_ui()
+	_refresh_crew_ui()
+	_clear_fuse_list()
+	_draft_done = false
 	_active = true
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -253,11 +320,17 @@ func _apply_edit_mode_ui() -> void:
 		_apply_btn.visible = editing
 	if _delete_btn != null:
 		_delete_btn.visible = editing
+	if _new_btn != null:
+		_new_btn.text = "Revert" if editing else "New"
+		_new_btn.tooltip_text = "Back to the placed rack as it is (Ctrl+Z goes back)" if editing \
+			else "Start a new rack from scratch (Ctrl+Z goes back)"
 
 
 func close() -> void:
 	if not _active:
 		return
+	if not _draft_done:
+		_save_draft()
 	_active = false
 	_bound_prop_id = ""
 	_set_tool("")
@@ -360,10 +433,11 @@ func _build_ui() -> void:
 	var col_pack := _add_slider(side, "Columns (decked spans)", 1, 10, int(_spec["column_count"]))
 	_col_slider = col_pack[0]
 	_col_val = col_pack[1]
-	var gap_pack := _add_float_slider(side, "Assembly spacing", 4.0, 20.0,
-		PalletRackBuilder.HALF_PANEL_FT, float(_spec["row_gap_ft"]), "'")
+	var gap_pack := _add_float_slider(side, "Assembly spacing", PalletRackBuilder.ROW_GAP_MIN_FT, 20.0,
+		PalletRackBuilder.ROW_GAP_STEP_FT, float(_spec["row_gap_ft"]), "'")
 	_spacing_slider = gap_pack[0]
 	_spacing_val = gap_pack[1]
+	_spacing_slider.tooltip_text = "Clear space between rack rows. 4', 8', 12' and so on tile the plywood with no cut sheets."
 
 	_section(side, "Levels")
 	_levels_spin = _add_spin(side, "Deck levels", 1, 3, 1, float(_spec["deck_levels"]))
@@ -381,8 +455,7 @@ func _build_ui() -> void:
 		"\" o.c.", int(_spec["joist_spacing_in"]))
 
 	_section(side, "Variants")
-	_stepped_spin = _add_spin(side, "Stepped module (0 = none)", 0, 10, 1,
-		float(_spec["stepped_module"]))
+	side.add_child(_small_label("Stepped modules are in Add to the structure — place them in a bay or on a face."))
 	_u_chk = _add_check(side, "U-shape (open centre bay)", bool(_spec["u_shape"]))
 	_u_row = HBoxContainer.new()
 	_u_row.add_theme_constant_override("separation", 8)
@@ -395,6 +468,14 @@ func _build_ui() -> void:
 	uc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_u_row.add_child(uc)
 	_u_cols_spin = _add_spin(uc, "Open cols", 1, 10, 1, float(_spec["u_open_cols"]))
+
+	_section(side, "Joined racks")
+	_mod_box = VBoxContainer.new()
+	_mod_box.add_theme_constant_override("separation", 4)
+	side.add_child(_mod_box)
+	_fuse_box = VBoxContainer.new()
+	_fuse_box.add_theme_constant_override("separation", 2)
+	side.add_child(_fuse_box)
 
 	_section(side, "Placement")
 	_collide_chk = _add_check(side, "Solid collision (walk into it when off)", true)
@@ -418,6 +499,11 @@ func _build_ui() -> void:
 	band_row.add_child(bt)
 	_wall_top_spin = _add_spin(bt, "up to (ft, 0 = top)", 0.0, 20.0, 0.25, 0.0)
 	_wall_top_spin.tooltip_text = "Where the walls stop. 0 runs them to the top of the frame; 8 walls in just the ground floor."
+
+	_section(side, "Build it with a crew")
+	_crew_box = VBoxContainer.new()
+	_crew_box.add_theme_constant_override("separation", 4)
+	side.add_child(_crew_box)
 
 	_section(side, "Bill of materials")
 	_bom_lbl = Label.new()
@@ -452,7 +538,7 @@ func _build_topbar() -> Control:
 	row.add_child(_sel_hud)
 
 	var hint := Label.new()
-	hint.text = "RMB orbit  •  LMB select / drag  •  Double-click open  •  Shift multi  •  Del remove"
+	hint.text = "RMB orbit  •  LMB select / drag to move  •  Alt-drag raise  •  Double-click open  •  Shift multi  •  Del remove"
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -464,12 +550,11 @@ func _build_topbar() -> Control:
 	_space_row = NpcSpaceTagRow.new()
 	row.add_child(_space_row)
 
-	_steps_btn = Button.new()
-	_steps_btn.text = "Add steps"
-	_steps_btn.toggle_mode = true
-	_steps_btn.focus_mode = Control.FOCUS_NONE
-	_steps_btn.toggled.connect(func(on: bool) -> void: _set_step_mode(on))
-	row.add_child(_steps_btn)
+	_new_btn = Button.new()
+	_new_btn.text = "New"
+	_new_btn.focus_mode = Control.FOCUS_NONE
+	_new_btn.pressed.connect(_on_new_or_revert)
+	row.add_child(_new_btn)
 
 	_undo_btn = Button.new()
 	_undo_btn.text = "Undo"
@@ -665,8 +750,6 @@ func _rebuild_level_spins() -> void:
 
 func _on_layout_changed() -> void:
 	# Keep dependent control ranges in sync with bay/column counts.
-	if _stepped_spin:
-		_stepped_spin.max_value = _col_slider.value
 	if _u_bays_spin:
 		_u_bays_spin.max_value = _bay_slider.value
 	if _u_cols_spin:
@@ -707,7 +790,7 @@ func _on_viewport_input(e: InputEvent) -> void:
 				_double_click(mb.position)
 			elif mb.pressed:
 				_press_double = false
-				_begin_gesture(mb.position, mb.shift_pressed or mb.ctrl_pressed)
+				_begin_gesture(mb.position, mb.shift_pressed or mb.ctrl_pressed, mb.alt_pressed)
 			elif _press_double:
 				_press_double = false
 			else:
@@ -769,22 +852,53 @@ func _input(e: InputEvent) -> void:
 ## Flip the selected deck cells between a flat deck and a step section (a step
 ## rises from the level below). Applies to every selected cell.
 func _toggle_step_on_selection() -> void:
-	var changed := false
+	var el := _element_by_id(_selected_element_id())
+	if not el.is_empty() and str(el.get("type", "")) == "stepped":
+		_remove_element(str(el["id"]))
+		return
+	var cells: Array = []
+	for id in _sel_subtree():
+		if str(id).begins_with("cell:"):
+			cells.append(_id_key(str(id)))
+	if cells.is_empty():
+		return
 	_push_undo()
-	for id in _selection:
-		if not str(id).begins_with("cell:"):
-			continue
-		var comp := _comp_by_id(id)
-		if comp.is_empty():
-			continue
-		var new_kind := "step" if str(comp.get("kind", "deck")) != "step" else "deck"
-		_set_cell_override(_id_key(id), "kind", new_kind)
-		changed = true
-	if changed:
-		_queue_rebuild(true)
+	var claims: Dictionary = _spec.get("_stepped_cells", {})
+	var all_stepped := true
+	for k in cells:
+		if not claims.has(k):
+			all_stepped = false
+	_set_cells_stepped(cells, not all_stepped)
+	_queue_rebuild(true)
+
+
+## Turn deck cells ("b,c,li" keys) into bay-mode stepped modules, or back.
+func _set_cells_stepped(keys: Array, on: bool) -> void:
+	var claims: Dictionary = _spec.get("_stepped_cells", {})
+	var els: Array = _spec.get("elements", [])
+	if on:
+		for k in keys:
+			if claims.has(k):
+				continue
+			var bits := str(k).split(",")
+			_erase_cell_field(str(k), "kind")
+			var rec := PalletRackBuilder.make_element("stepped", {"mode": "bay",
+				"bay": int(bits[0]), "col": int(bits[1]), "level": int(bits[2])})
+			rec["id"] = _next_element_id()
+			els.append(rec)
+			claims[k] = rec["id"]
 	else:
-		_undo_stack.pop_back()  # nothing changed; drop the snapshot
-		_update_undo_btn()
+		var gone := {}
+		for k in keys:
+			if claims.has(k):
+				gone[str(claims[k])] = true
+		var kept: Array = []
+		for e in els:
+			if not gone.has(str((e as Dictionary).get("id", ""))):
+				kept.append(e)
+		els = kept
+	_spec["elements"] = els
+	_spec["_stepped_cells"] = claims
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1050,9 @@ func _update_hover(local_pos: Vector2) -> void:
 				shape = Control.CURSOR_BDIAGSIZE
 			elif ["deck_level", "strip", "cell", "beam"].has(nk):
 				shape = Control.CURSOR_MOVE
-			elif nk == "element" and SLIDE_TYPES.has(str(comp.get("etype", ""))):
+			elif nk == "element" and DRAG_TYPES.has(str(comp.get("etype", ""))):
+				shape = Control.CURSOR_MOVE
+			elif nk == "slope_bay":
 				shape = Control.CURSOR_MOVE
 			else:
 				shape = Control.CURSOR_POINTING_HAND
@@ -960,6 +1076,9 @@ func _element_group(el_id: String) -> Array:
 # ---------------------------------------------------------------------------
 
 func _reset_gesture() -> void:
+	if _tool.is_empty() and not _ghost_comps.is_empty():
+		_ghost_comps = []
+		_refresh_highlight()
 	_lmb_down = false
 	_manip_active = false
 	_manip_mode = ""
@@ -968,7 +1087,7 @@ func _reset_gesture() -> void:
 	_manip_nodes = []
 
 
-func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
+func _begin_gesture(local_pos: Vector2, shift: bool, alt: bool = false) -> void:
 	_lmb_down = true
 	_lmb_press_pos = local_pos
 	_press_shift = shift
@@ -985,16 +1104,15 @@ func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
 	var comp := _pick_at(local_pos, MANIP_KINDS)
 	if nk == "element":
 		var el := _element_by_id(node.get_slice(":", 1))
-		if el.is_empty() or not SLIDE_TYPES.has(str(el.get("type", ""))):
-			return  # slopes, railings, courtyards: click to select, edit in the card
-		var along := _ray_face_along(local_pos, str(el.get("face", "front")))
-		if is_nan(along):
-			return
-		_manip_mode = "el_slide"
-		_manip_nodes = [node]
-		_manip_targets = _element_group(str(el["id"]))
-		_manip_start = {"el_id": str(el["id"]), "at_ft": float(el.get("at_ft", 0.0)),
-			"grab_ft": along - float(el.get("at_ft", 0.0)), "face": str(el.get("face", ""))}
+		if not el.is_empty():
+			_begin_element_drag(node, el, local_pos)
+		return
+	if nk == "slope_bay":
+		var sel_el := _element_by_id(node.get_slice(":", 1))
+		if not sel_el.is_empty():
+			_manip_mode = "seg_swap"
+			_manip_nodes = [node]
+			_manip_start = {"el_id": str(sel_el["id"]), "seg": int(node.get_slice(":", 2)), "target": -1}
 		return
 	# A deck level, a column, a bay or a beam rises and falls as one unit: every
 	# cell and beam inside it. Dragging one of several selected parts drags all.
@@ -1013,6 +1131,22 @@ func _begin_gesture(local_pos: Vector2, shift: bool) -> void:
 	if cells.is_empty() and beams.is_empty():
 		_manip_nodes = []
 		return  # a sheet, a joist, a wall: click select / delete only, no drag
+	# A bay (or several) moves to another bay; Alt-drag raises it instead.
+	var all_cells := true
+	for n in _manip_nodes:
+		if PalletRackBuilder.part_kind(str(n)) != "cell":
+			all_cells = false
+	if all_cells and not alt and not cells.is_empty():
+		var anchor := str(comp.get("id", "")) if cells.has(str(comp.get("id", ""))) else str(cells[0])
+		var abox: AABB = (_comp_by_id(anchor))["aabb"]
+		var slot_index := {}
+		for sl in PalletRackBuilder.cell_slots(_spec):
+			slot_index[str(sl["id"])] = sl
+		_manip_mode = "cell_move"
+		_manip_targets = cells
+		_manip_start = {"anchor": _id_key(anchor), "plane_y": abox.position.y + abox.size.y,
+			"delta": Vector2i.ZERO, "slots": slot_index}
+		return
 	var k := str(comp.get("kind", ""))
 	if (k == "deck" or k == "step") and cells.has(str(comp.get("id", ""))) \
 			and _near_cell_z_edge(comp, local_pos):
@@ -1108,15 +1242,37 @@ func _update_manip(local_pos: Vector2) -> void:
 			_preview_vertical(-d.y)
 		"deck_resize":
 			_preview_deck_resize(local_pos)
+		"cell_move":
+			_preview_cell_move(local_pos)
+			return
+		"el_bays":
+			_preview_el_bays(local_pos)
+			return
+		"el_cell":
+			_preview_el_cell(local_pos)
+			return
+		"seg_swap":
+			_preview_seg_swap(local_pos)
+			return
 		"el_slide":
-			var along := _ray_face_along(local_pos, str(_manip_start.get("face", "")))
-			if not is_nan(along):
-				var el := _element_by_id(str(_manip_start["el_id"]))
-				if not el.is_empty():
+			var el := _element_by_id(str(_manip_start["el_id"]))
+			if el.is_empty():
+				return
+			# Round the corner: a ray that meets another face takes it there.
+			var r := _ray(local_pos)
+			var fh := PalletRackBuilder.face_hit(_spec, r[0], r[1]) if not r.is_empty() else {}
+			if not fh.is_empty() and str(fh["face"]) != str(el.get("face", "")):
+				el["face"] = str(fh["face"])
+				_manip_start["face"] = str(fh["face"])
+				_manip_start["grab_ft"] = 0.0
+				el["at_ft"] = snappedf(float(fh["along_ft"]), 0.5)
+			else:
+				var along := _ray_face_along(local_pos, str(_manip_start.get("face", "")))
+				if not is_nan(along):
 					el["at_ft"] = snappedf(along - float(_manip_start["grab_ft"]), 0.5)
-					_sel_hud.text = "%s at %s along the wall  (snaps to 6\")" % [
-						PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
-						PalletRackBuilder.fmt_ft(float(el["at_ft"]))]
+			_sel_hud.text = "%s at %s along the %s face  (snaps to 6\" • drag round a corner to change face)" % [
+				PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+				PalletRackBuilder.fmt_ft(float(el["at_ft"])), str(el.get("face", ""))]
 			_queue_rebuild(true, true)
 			return
 	_update_manip_hud()
@@ -1207,6 +1363,29 @@ func _spec_height_ft_from_start(st: Dictionary) -> float:
 
 func _finalize_manip() -> void:
 	match _manip_mode:
+		"cell_move":
+			var dlt: Vector2i = _manip_start.get("delta", Vector2i.ZERO)
+			if dlt != Vector2i.ZERO:
+				var mapping := {}
+				for id in _manip_targets:
+					var bits := _id_key(str(id)).split(",")
+					mapping[_id_key(str(id))] = "%d,%d,%s" % [int(bits[0]) + dlt.x, int(bits[1]) + dlt.y, bits[2]]
+				_remap_cells(mapping)
+				_sel_nodes.clear()
+				for v in mapping.values():
+					_sel_nodes.append("cell:" + str(v))
+			_ghost_comps = []
+		"seg_swap":
+			_finalize_seg_swap()
+			_ghost_comps = []
+		"el_slide":
+			# A door or window moved onto a face with no wall turns the wall on.
+			var el := _element_by_id(str(_manip_start.get("el_id", "")))
+			var face := str(el.get("face", ""))
+			if ["door", "window"].has(str(el.get("type", ""))) and _wall_chks.has(face) \
+					and not (_wall_chks[face] as CheckBox).button_pressed:
+				(_wall_chks[face] as CheckBox).set_pressed_no_signal(true)
+				_flash("Turned the %s wall on for it." % face)
 		"deck_move", "beam_move":
 			for id in _manip_targets:
 				if not str(id).begins_with("cell:"):
@@ -1318,9 +1497,12 @@ func _delete_selection() -> void:
 					segs[id.get_slice(":", 2)] = "none"
 					el["segments"] = segs
 			"deck_level", "strip", "cell":
+				var keys: Array = []
 				for sub in PalletRackBuilder.part_subtree(_tree, id):
 					if str(sub).begins_with("cell:"):
 						_set_cell_override(_id_key(sub), "kind", "none")
+						keys.append(_id_key(sub))
+				_set_cells_stepped(keys, false)
 			"beam":
 				_set_beam_override(_id_key(id), "deleted", true)
 			"wall_sheet":
@@ -1394,7 +1576,7 @@ func _show_hidden(roots: Array) -> void:
 ## The whole spec: element edits, wall toggles and loaded designs change more
 ## than the per-part overrides, and undo has to take all of them back.
 func _snapshot_overrides() -> Dictionary:
-	return _spec.duplicate(true)
+	return {"full": _full_spec(), "module": _active_mod}
 
 
 func _push_undo() -> void:
@@ -1408,7 +1590,10 @@ func _undo() -> void:
 	if _undo_stack.is_empty():
 		return
 	var snap: Dictionary = _undo_stack.pop_back()
-	_spec = snap
+	if snap.has("full"):
+		_load_full(snap["full"], int(snap.get("module", 0)))
+	else:
+		_spec = snap
 	_selection.clear()
 	_sel_nodes.clear()
 	_hover_group.clear()
@@ -1490,7 +1675,7 @@ func _place_step_at(local_pos: Vector2) -> void:
 	if slot.is_empty():
 		return
 	_push_undo()
-	_set_cell_override(_id_key(str(slot["id"])), "kind", "step")
+	_set_cells_stepped([_id_key(str(slot["id"]))], true)
 	_queue_rebuild(true)
 
 
@@ -1592,8 +1777,8 @@ func _update_sel_hud() -> void:
 		return
 	var el := _element_by_id(_selected_element_id())
 	if not el.is_empty() and _sel_nodes.size() == 1:
-		_sel_hud.text = "Selected: %s  (drag to slide • Del remove • Ctrl+D duplicate)" % \
-			PalletRackBuilder.element_label(el, _spec) if SLIDE_TYPES.has(str(el.get("type", ""))) \
+		_sel_hud.text = "Selected: %s  (drag to move • Del remove • Ctrl+D duplicate)" % \
+			PalletRackBuilder.element_label(el, _spec) if DRAG_TYPES.has(str(el.get("type", ""))) \
 			else "Selected: %s  (Del remove • Ctrl+D duplicate)" % PalletRackBuilder.element_label(el, _spec)
 		if _node_has_children(str(_sel_nodes[0])):
 			_sel_hud.text = _sel_hud.text.trim_suffix(")") + " • double-click to open)"
@@ -1708,8 +1893,6 @@ func _sync_controls() -> void:
 		_roof_chk.button_pressed = bool(_spec["roof_deck"])
 	if _decked_chk:
 		_decked_chk.button_pressed = bool(_spec["decked"])
-	if _stepped_spin:
-		_stepped_spin.value = int(_spec["stepped_module"])
 	if _u_chk:
 		_u_chk.button_pressed = bool(_spec["u_shape"])
 	if _u_bays_spin:
@@ -1757,7 +1940,7 @@ func _read_spec() -> Dictionary:
 		"level_heights_ft": heights,
 		"roof_deck": _roof_chk.button_pressed if _roof_chk else true,
 		"walls": walls,
-		"stepped_module": int(_stepped_spin.value) if _stepped_spin else 0,
+		"stepped_module": 0,
 		"u_shape": _u_chk.button_pressed if _u_chk else false,
 		"u_open_bays": int(_u_bays_spin.value) if _u_bays_spin else 1,
 		"u_open_cols": int(_u_cols_spin.value) if _u_cols_spin else 1,
@@ -1792,8 +1975,9 @@ func _rebuild_preview(light: bool = false) -> void:
 		c.free()
 	if not light:
 		_spec = _read_spec()
-	var node := PalletRackBuilder.build_node(_spec, "PalletRack",
-		{"record": true, "dim_ctx": str(_ctx[-1]) if not _ctx.is_empty() else ""})
+	var node := PalletRackBuilder.build_node(_full_spec(), "PalletRack",
+		{"record": true, "dim_ctx": str(_ctx[-1]) if not _ctx.is_empty() else "",
+			"module": _active_mod, "dim_others": _modules.size() > 1})
 	_holder.add_child(node)
 	_tree = node.get_meta("part_tree", {}) as Dictionary
 	# An open group the edit took away (fewer columns, a removed element):
@@ -1808,10 +1992,11 @@ func _rebuild_preview(light: bool = false) -> void:
 		_queue_rebuild(true)
 	# Frame the structure once (on open); keep the user's orbit/zoom afterwards.
 	if not _framed:
-		var fp := PalletRackBuilder.footprint_xz(_spec)
+		var fb := PalletRackBuilder.fused_bounds(_full_spec(), _active_mod)
 		var h := float(_spec["upright_height_ft"]) * PalletRackBuilder.FT
-		_target = Vector3(0, h * 0.45, 0)
-		_dist = maxf(fp.x, fp.y) * 0.9 + h * 0.5 + 3.0
+		var fc := fb.get_center()
+		_target = Vector3(fc.x, h * 0.45, fc.y)
+		_dist = maxf(fb.size.x, fb.size.y) * 0.9 + h * 0.5 + 3.0
 		_update_camera()
 		_framed = true
 	if not light:
@@ -1845,6 +2030,8 @@ func _rebuild_preview(light: bool = false) -> void:
 		_refresh_element_list()
 		_refresh_inspector()
 		_refresh_crumbs()
+		if _active and Time.get_ticks_msec() - _last_draft_ms > DRAFT_SAVE_MS:
+			_save_draft()
 
 
 func _update_bom(node: Node3D) -> void:
@@ -1868,6 +2055,8 @@ func _update_bom(node: Node3D) -> void:
 		extras.append(UiText.count(int(b["windows"]), "window"))
 	if int(b.get("stairs", 0)) > 0:
 		extras.append(UiText.count(int(b["stairs"]), "staircase"))
+	if int(b.get("ladders", 0)) > 0:
+		extras.append(UiText.count(int(b["ladders"]), "ladder"))
 	if float(b.get("railing_ft", 0.0)) > 0.5:
 		extras.append("%d ft of railing" % int(round(float(b["railing_ft"]))))
 	if not extras.is_empty():
@@ -1881,7 +2070,7 @@ func _on_place() -> void:
 		return
 	if _loader.has_method("begin_pallet_rack_placement"):
 		var collide := _collide_chk.button_pressed if _collide_chk else true
-		_loader.call("begin_pallet_rack_placement", _spec, collide)
+		_loader.call("begin_pallet_rack_placement", _full_spec(), collide)
 	close()
 
 
@@ -1889,16 +2078,25 @@ func _on_apply_to_prop() -> void:
 	if _bound_prop_id.is_empty():
 		return
 	_spec = _read_spec()
+	_write_bound_record({"rack_spec": PalletRackBuilder.resolve_spec(_full_spec())})
+	_forget_draft(_bound_prop_id)
+	_draft_done = true
+	close()
+
+
+## Patch the bound rack's record (rebuilding it) and re-seed its solar array.
+func _write_bound_record(patch: Dictionary, prop_id: String = "") -> void:
+	var pid := _bound_prop_id if prop_id.is_empty() else prop_id
+	if pid.is_empty():
+		return
 	var main := _main_node()
 	if main != null:
-		PlacedPropService.update_prop_record(main, _bound_prop_id,
-			{"rack_spec": _spec.duplicate(true)}, true)
+		PlacedPropService.update_prop_record(main, pid, patch.duplicate(true), true)
 	elif _loader != null and _loader.has_method("update_prop_record"):
-		_loader.call("update_prop_record", _bound_prop_id, {"rack_spec": _spec.duplicate(true)})
+		_loader.call("update_prop_record", pid, patch.duplicate(true))
 	# A sloped solar array on the rack is an array on the graph (or no longer is).
 	if main != null:
-		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, _bound_prop_id)
-	close()
+		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, pid)
 
 
 func _on_delete_prop() -> void:
@@ -1907,6 +2105,8 @@ func _on_delete_prop() -> void:
 	var pid := _bound_prop_id
 	if _loader != null and _loader.has_method("delete_prop_by_id"):
 		_loader.call("delete_prop_by_id", pid)
+	_forget_draft(pid)
+	_draft_done = true
 	close()
 
 
@@ -2060,12 +2260,16 @@ func _tool_prompt() -> String:
 			return "click a wall face where it goes"
 		"stair":
 			return "click the face the stairs climb, level with the deck they reach"
+		"ladder":
+			return "click the face the ladder climbs, level with the deck it reaches"
 		"lean_to":
 			return "click the face the slope leans on"
 		"railing":
 			return "click the deck that needs railings"
 		"courtyard":
 			return "click the deck cell where the courtyard starts"
+		"stepped":
+			return "click a deck bay to step it down to the level below, or a face for big outside steps"
 	return "click the preview"
 
 
@@ -2114,13 +2318,14 @@ func load_design(id: String) -> bool:
 	if spec.is_empty():
 		return false
 	_push_undo()
-	_spec = PalletRackBuilder.resolve_spec(spec)
+	_load_full(spec)
 	_selection.clear()
 	_sel_nodes.clear()
 	_ctx.clear()
 	_refresh_crumbs()
 	_hover_group.clear()
 	_sync_controls()
+	_refresh_module_ui()
 	_framed = false
 	_queue_rebuild(true)
 	return true
@@ -2141,7 +2346,7 @@ func _on_save_design() -> void:
 		return
 	_spec = _read_spec()
 	var saved: Array = _library.get("designs", [])
-	var rec := {"name": name, "spec": _spec.duplicate(true)}
+	var rec := {"name": name, "spec": _full_spec()}
 	var replaced := false
 	for k in saved.size():
 		if str((saved[k] as Dictionary).get("name", "")) == name:
@@ -2237,20 +2442,33 @@ func _tool_candidate(local_pos: Vector2) -> Dictionary:
 	var el := _tool_element.duplicate(true)
 	var t := str(el.get("type", ""))
 	match t:
-		"door", "window", "stair", "lean_to":
+		"door", "window", "stair", "lean_to", "ladder":
 			var hit := PalletRackBuilder.face_hit(_spec, r[0], r[1])
 			if hit.is_empty():
 				return {}
 			var face := str(hit["face"])
 			el["face"] = face
 			if t == "lean_to":
-				for e in (_spec.get("elements", []) as Array):
-					if str(e.get("type", "")) == "lean_to" and str(e.get("face", "")) == face:
-						return {"_select": str(e.get("id", ""))}
+				# Several slopes share a face on their own bays: the one over
+				# the bay clicked is selected, else a new one fills the free run
+				# of bays round it.
+				var seg := PalletRackBuilder.face_segment_at(_spec, face, float(hit["along_ft"]))
+				var owner := _slope_over(face, seg, "")
+				if not owner.is_empty():
+					return {"_select": owner}
+				var nseg := PalletRackBuilder.face_segment_count(_spec, face)
+				var lo := seg
+				while lo > 0 and _slope_over(face, lo - 1, "").is_empty():
+					lo -= 1
+				var hi := seg
+				while hi < nseg - 1 and _slope_over(face, hi + 1, "").is_empty():
+					hi += 1
+				el["seg_from"] = lo
+				el["seg_to"] = hi
 				return el
 			el["at_ft"] = snappedf(float(hit["along_ft"]), 0.5)
 			var y: float = hit["y"]
-			if t == "stair":
+			if t == "stair" or t == "ladder":
 				el["to_level"] = _first_raised_floor(PalletRackBuilder.floor_at(_spec, y + 0.6))
 			else:
 				var fl := PalletRackBuilder.floor_at(_spec, y)
@@ -2260,6 +2478,33 @@ func _tool_candidate(local_pos: Vector2) -> Dictionary:
 					var h := float(el.get("height_ft", 2.5))
 					el["sill_ft"] = clampf(snappedf((y - fy) / PalletRackBuilder.FT - h * 0.5, 0.25),
 						0.0, 10.0)
+			return el
+		"stepped":
+			# A deck bay under the cursor (empty slots too) becomes steps; a
+			# face nearer than any bay gets big steps outside it.
+			var slot := PalletRackBuilder.pick_nearest(PalletRackBuilder.cell_slots(_spec), r[0], r[1])
+			var t_slot := INF if slot.is_empty() else PalletRackBuilder.ray_hits_component(r[0], r[1], slot)
+			var fh := PalletRackBuilder.face_hit(_spec, r[0], r[1])
+			var t_face := INF if fh.is_empty() else float(fh["t"])
+			if slot.is_empty() and fh.is_empty():
+				return {}
+			if t_slot <= t_face + 0.05:
+				var key := "%d,%d,%d" % [int(slot["bay"]), int(slot["col"]), int(slot["level"])]
+				var claims: Dictionary = _spec.get("_stepped_cells", {})
+				if claims.has(key):
+					return {"_select": str(claims[key])}
+				el["mode"] = "bay"
+				el["bay"] = int(slot["bay"])
+				el["col"] = int(slot["col"])
+				el["level"] = int(slot["level"])
+				return el
+			var face_s := str(fh["face"])
+			var seg := PalletRackBuilder.face_segment_at(_spec, face_s, float(fh["along_ft"]))
+			el["mode"] = "face"
+			el["face"] = face_s
+			el["seg_from"] = seg
+			el["seg_to"] = seg
+			el["to_level"] = _first_raised_floor(PalletRackBuilder.floor_at(_spec, float(fh["y"]) + 0.6))
 			return el
 		"railing", "courtyard":
 			var comp := PalletRackBuilder.pick_nearest(_pick_cache, r[0], r[1], ["deck", "step"])
@@ -2404,23 +2649,39 @@ func _duplicate_selected_element() -> void:
 		"door", "window", "stair":
 			cp["at_ft"] = float(el.get("at_ft", 0.0)) + float(el.get("width_ft", 3.0)) + 1.0
 		"lean_to":
-			var taken := {}
-			for e in (_spec.get("elements", []) as Array):
-				if str(e.get("type", "")) == "lean_to":
-					taken[str(e.get("face", ""))] = true
-			var free_face := ""
+			var placed := false
+			var faces: Array = [str(el.get("face", "front"))]
 			for f in PalletRackBuilder.FACES:
-				if not taken.has(f):
-					free_face = f
+				if not faces.has(f):
+					faces.append(f)
+			for f in faces:
+				var nseg := PalletRackBuilder.face_segment_count(_spec, str(f))
+				for i in nseg:
+					if _slope_over(str(f), i, "").is_empty():
+						var j := i
+						while j + 1 < nseg and _slope_over(str(f), j + 1, "").is_empty():
+							j += 1
+						cp["face"] = f
+						cp["seg_from"] = i
+						cp["seg_to"] = j
+						placed = true
+						break
+				if placed:
 					break
-			if free_face.is_empty():
-				_flash("Every face already has a slope.")
+			if not placed:
+				_flash("Every bay of every face already has a slope.")
 				return
-			cp["face"] = free_face
 		"railing":
 			cp["floor"] = int(el.get("floor", 0)) + 1
 		"courtyard":
 			cp["bay0"] = int(el.get("bay0", 0)) + int(el.get("bays", 1))
+		"stepped":
+			if str(el.get("mode", "")) == "bay":
+				cp["bay"] = int(el.get("bay", 0)) + 1
+			else:
+				var span := int(el.get("seg_to", 0)) - int(el.get("seg_from", 0)) + 1
+				cp["seg_from"] = int(el.get("seg_from", 0)) + span
+				cp["seg_to"] = int(el.get("seg_to", 0)) + span
 	add_element(cp)
 	_flash("Duplicated — drag or edit the copy.")
 
@@ -2490,7 +2751,8 @@ func _refresh_inspector() -> void:
 		return
 	_parts_sig = ""
 	if el_id == _insp_el_id and seg == _insp_seg \
-			and str(el.get("type", "")) == str(_insp_fields.get("_type", "")):
+			and str(el.get("type", "")) == str(_insp_fields.get("_type", "")) \
+			and _vis_sig(el) == str(_insp_fields.get("_vis", "")):
 		_sync_inspector_values(el)
 		return
 	_insp_el_id = el_id
@@ -2499,7 +2761,7 @@ func _refresh_inspector() -> void:
 		_insp_box.remove_child(c)
 		c.queue_free()
 	var t := str(el.get("type", ""))
-	_insp_fields = {"_type": t}
+	_insp_fields = {"_type": t, "_vis": _vis_sig(el)}
 	_insp_frame.visible = true
 	var head := HBoxContainer.new()
 	var title := Label.new()
@@ -2519,6 +2781,14 @@ func _refresh_inspector() -> void:
 		_insp_fields["_seg"] = opt
 		_insp_box.add_child(_small_label("Click the slope away from this bay to edit the whole array."))
 	for f in (PalletRackBuilder.ELEMENT_FIELDS.get(t, []) as Array):
+		if not PalletRackBuilder.field_visible(f, el):
+			continue
+		if f.has("section"):
+			var sec := Label.new()
+			sec.text = str(f["section"])
+			sec.add_theme_color_override("font_color", C_PRIMARY)
+			sec.add_theme_font_size_override("font_size", 11)
+			_insp_box.add_child(sec)
 		_add_insp_field(f, el)
 	var brow := HBoxContainer.new()
 	brow.add_theme_constant_override("separation", 4)
@@ -2538,6 +2808,14 @@ func _refresh_inspector() -> void:
 	prow.add_child(_small_button("Save preset", "Keep this element in your library for any rack",
 		func() -> void: _save_element_preset(name_le.text)))
 	_insp_box.add_child(prow)
+
+
+## Which of the element's fields show — the card is rebuilt when it changes.
+func _vis_sig(el: Dictionary) -> String:
+	var sig := ""
+	for f in (PalletRackBuilder.ELEMENT_FIELDS.get(str(el.get("type", "")), []) as Array):
+		sig += "1" if PalletRackBuilder.field_visible(f, el) else "0"
+	return sig
 
 
 func _insp_row(label: String, ctrl: Control) -> void:
@@ -2607,6 +2885,13 @@ func _add_insp_field(f: Dictionary, el: Dictionary) -> void:
 			var opt := _insp_option(f.get("options", []) as Array, el.get(key, ""))
 			opt.item_selected.connect(func(i: int) -> void: _on_field_changed(key, str(opt.get_item_metadata(i))))
 			ctrl = opt
+		"pv_model":
+			var labels: Array = []
+			for mid in PalletRackBuilder.PV_MODULE_ORDER:
+				labels.append(str((PalletRackBuilder.PV_MODULES.get(mid, {}) as Dictionary).get("label", "Custom")))
+			var opt := _insp_option(PalletRackBuilder.PV_MODULE_ORDER, el.get(key, "custom"), labels)
+			opt.item_selected.connect(func(i: int) -> void: _on_pv_model(str(opt.get_item_metadata(i))))
+			ctrl = opt
 		"bool":
 			var chk := CheckBox.new()
 			chk.focus_mode = Control.FOCUS_NONE
@@ -2628,6 +2913,8 @@ func _add_insp_field(f: Dictionary, el: Dictionary) -> void:
 			sp.value = _spin_value(f, el)
 			sp.value_changed.connect(func(v: float) -> void: _on_spin_field(f, v))
 			ctrl = sp
+	if f.has("tip"):
+		ctrl.tooltip_text = str(f["tip"])
 	_insp_fields[key] = ctrl
 	_insp_row(str(f["label"]), ctrl)
 
@@ -2711,6 +2998,21 @@ func _on_field_changed(key: String, value: Variant) -> void:
 	el[key] = value
 	if key == "face":
 		_insp_el_id = ""  # ranges (position, bays) depend on the face: rebuild the card
+	# A size or rating typed in is no longer the preset module.
+	if PalletRackBuilder.PV_MODULE_KEYS.values().has(key):
+		el["panel_model"] = "custom"
+	_queue_rebuild(true)
+
+
+## A module preset picked: its size and ratings fill the slope's fields.
+func _on_pv_model(model: String) -> void:
+	if _insp_suppress:
+		return
+	var el := _element_by_id(_insp_el_id)
+	if el.is_empty():
+		return
+	_push_undo()
+	PalletRackBuilder.apply_pv_module(el, model)
 	_queue_rebuild(true)
 
 
@@ -2949,6 +3251,8 @@ func _delete_label() -> String:
 
 
 func _cell_kind(cell_id: String) -> String:
+	if (_spec.get("_stepped_cells", {}) as Dictionary).has(_id_key(cell_id)):
+		return "step"
 	var comp := _comp_by_id(cell_id)
 	if not comp.is_empty():
 		return str(comp.get("kind", "deck"))
@@ -2996,6 +3300,17 @@ func _on_cells_field(field: String, value: Variant) -> void:
 	if _insp_suppress:
 		return
 	_push_undo_burst()
+	if field == "kind":
+		var keys: Array = []
+		for id in _sel_subtree():
+			if str(id).begins_with("cell:"):
+				keys.append(_id_key(str(id)))
+		_set_cells_stepped(keys, str(value) == "step")
+		if str(value) != "step":
+			for k in keys:
+				_set_cell_override(str(k), "kind", value)
+		_queue_rebuild(true)
+		return
 	for id in _sel_subtree():
 		if str(id).begins_with("cell:"):
 			if field == "height_ft":
@@ -3047,3 +3362,720 @@ func _sync_parts_values(cells: Array, beams: Array, paint_ids: Array) -> void:
 			and not (cp as ColorPickerButton).get_popup().visible:
 		(cp as ColorPickerButton).color = _current_color(str(_sel_nodes[0]), paint_ids)
 	_insp_suppress = false
+
+
+# ---------------------------------------------------------------------------
+# The build's racks (fused) + the draft that survives closing
+# ---------------------------------------------------------------------------
+
+## Load a whole build (a spec with its "fused" racks); edit rack `active`.
+func _load_full(spec: Dictionary, active: int = 0) -> void:
+	var mods := PalletRackBuilder.rack_modules(PalletRackBuilder.resolve_spec(spec))
+	_modules = []
+	for m in mods:
+		var ms: Dictionary = (m["spec"] as Dictionary).duplicate(true)
+		ms.erase("fused")
+		_modules.append({"spec": ms, "xf": m["xf"]})
+	_active_mod = clampi(active, 0, _modules.size() - 1)
+	_spec = (_modules[_active_mod]["spec"] as Dictionary).duplicate(true)
+
+
+## The whole build as one spec: rack 0 with the others as its "fused" list.
+func _full_spec() -> Dictionary:
+	if _modules.size() <= 1:
+		var one := _spec.duplicate(true)
+		one["fused"] = []
+		return one
+	var root: Dictionary = _mod_spec(0).duplicate(true)
+	var fused: Array = []
+	for i in range(1, _modules.size()):
+		var ms: Dictionary = _mod_spec(i).duplicate(true)
+		ms.erase("fused")
+		ms.erase("_stepped_cells")
+		var xf: Transform3D = _modules[i]["xf"]
+		fused.append({"spec": ms, "x": xf.origin.x, "z": xf.origin.z,
+			"yaw": PalletRackBuilder.snap_quarter_deg(rad_to_deg(xf.basis.get_euler().y))})
+	root["fused"] = fused
+	return root
+
+
+## Rack i's spec as it stands (the edited one is _spec).
+func _mod_spec(i: int) -> Dictionary:
+	if i == _active_mod:
+		return _spec
+	return _modules[i]["spec"] as Dictionary
+
+
+## Edit another rack of a fused build.
+func _switch_module(i: int) -> void:
+	if i == _active_mod or i < 0 or i >= _modules.size():
+		return
+	_spec = _read_spec()
+	_modules[_active_mod]["spec"] = _spec.duplicate(true)
+	_active_mod = i
+	_spec = (_modules[i]["spec"] as Dictionary).duplicate(true)
+	_selection.clear()
+	_sel_nodes.clear()
+	_ctx.clear()
+	_hover_group.clear()
+	_refresh_crumbs()
+	_sync_controls()
+	_refresh_module_ui()
+	_framed = false
+	_queue_rebuild(true)
+
+
+func _spec_sig(spec: Dictionary) -> String:
+	var s := PalletRackBuilder.resolve_spec(spec)
+	s.erase("_stepped_cells")
+	return str(JSON.stringify(s, "", true).hash())
+
+
+func _load_draft() -> Dictionary:
+	if not FileAccess.file_exists(DRAFT_PATH):
+		return {}
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(DRAFT_PATH))
+	return data as Dictionary if data is Dictionary else {}
+
+
+func _write_draft(d: Dictionary) -> void:
+	var f := FileAccess.open(DRAFT_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify(d))
+	f.close()
+
+
+## Keep what is on screen: the new rack's design, or a placed rack's unapplied
+## edits (none kept when they match the placed rack).
+func _save_draft() -> void:
+	_last_draft_ms = Time.get_ticks_msec()
+	var d := _load_draft()
+	var full := _full_spec()
+	var entry := {"spec": full, "module": _active_mod, "t": int(Time.get_unix_time_from_system()),
+		"cam": [_yaw, _pitch, _dist, _target.x, _target.y, _target.z]}
+	if _bound_prop_id.is_empty():
+		d["fresh"] = entry
+	else:
+		var props: Dictionary = d.get("props", {}) if d.get("props") is Dictionary else {}
+		if _spec_sig(full) == _base_sig:
+			props.erase(_bound_prop_id)
+		else:
+			entry["base"] = _base_sig
+			props[_bound_prop_id] = entry
+		# Only the most recent few placed racks keep a draft.
+		while props.size() > DRAFT_MAX_PROPS:
+			var oldest := ""
+			var oldest_t := INF
+			for k in props.keys():
+				var t := float((props[k] as Dictionary).get("t", 0.0)) if props[k] is Dictionary else 0.0
+				if t < oldest_t:
+					oldest_t = t
+					oldest = str(k)
+			props.erase(oldest)
+		d["props"] = props
+	_write_draft(d)
+
+
+func _forget_draft(prop_id: String) -> void:
+	if prop_id.is_empty():
+		return
+	var d := _load_draft()
+	if d.get("props") is Dictionary and (d["props"] as Dictionary).has(prop_id):
+		(d["props"] as Dictionary).erase(prop_id)
+		_write_draft(d)
+
+
+func _restore_camera(entry: Dictionary) -> void:
+	var cam: Variant = entry.get("cam")
+	if not (cam is Array) or (cam as Array).size() < 6:
+		return
+	_yaw = float(cam[0])
+	_pitch = clampf(float(cam[1]), 0.05, 1.4)
+	_dist = clampf(float(cam[2]), 3.0, 80.0)
+	_target = Vector3(float(cam[3]), float(cam[4]), float(cam[5]))
+	_framed = true
+	_update_camera()
+
+
+## "New" starts a fresh rack; "Revert" (a placed rack) goes back to it as placed.
+func _on_new_or_revert() -> void:
+	_push_undo()
+	var editing := not _bound_prop_id.is_empty()
+	if editing:
+		var rec := _prop_record(_bound_prop_id)
+		var spec: Dictionary = rec.get("rack_spec", {}) as Dictionary
+		if spec.is_empty() and rec.has("record_extra"):
+			spec = (rec.get("record_extra", {}) as Dictionary).get("rack_spec", {}) as Dictionary
+		_load_full(spec)
+		_base_sig = _spec_sig(spec)
+	else:
+		_load_full(PalletRackBuilder.default_spec())
+	_selection.clear()
+	_sel_nodes.clear()
+	_ctx.clear()
+	_hover_group.clear()
+	_refresh_crumbs()
+	_sync_controls()
+	_refresh_module_ui()
+	_clear_fuse_list()
+	_framed = false
+	_queue_rebuild(true)
+	_flash(("Back to the placed rack." if editing else "A new rack.") + " Ctrl+Z goes back.")
+
+
+## A placed rack's world transform (y ignored).
+func _rec_xf(rec: Dictionary) -> Transform3D:
+	return Transform3D(Basis(Vector3.UP, deg_to_rad(float(rec.get("yaw", 0.0)))),
+		Vector3(float(rec.get("x", 0.0)), 0.0, float(rec.get("z", 0.0))))
+
+
+func _xf_patch(xf: Transform3D) -> Dictionary:
+	return {"x": xf.origin.x, "z": xf.origin.z,
+		"yaw": fposmod(rad_to_deg(xf.basis.get_euler().y), 360.0)}
+
+
+func _rec_spec(rec: Dictionary) -> Dictionary:
+	var spec: Dictionary = rec.get("rack_spec", {}) as Dictionary
+	if spec.is_empty() and rec.has("record_extra"):
+		spec = (rec.get("record_extra", {}) as Dictionary).get("rack_spec", {}) as Dictionary
+	return spec
+
+
+## The rack picker of a fused build, and Split off.
+func _refresh_module_ui() -> void:
+	if _mod_box == null:
+		return
+	for c in _mod_box.get_children():
+		_mod_box.remove_child(c)
+		c.queue_free()
+	if _modules.size() > 1:
+		_mod_box.add_child(_small_label("This build joins %s where their uprights meet. Edit one at a time — the others show faded." %
+			UiText.count(_modules.size(), "rack")))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var opt := OptionButton.new()
+		opt.focus_mode = Control.FOCUS_NONE
+		opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		opt.add_theme_font_size_override("font_size", 11)
+		for i in _modules.size():
+			var ms := _mod_spec(i)
+			opt.add_item("Rack %d · %s × %s" % [i + 1, UiText.count(int(ms.get("bay_count", 1)), "bay"),
+				UiText.count(int(ms.get("column_count", 1)), "column")])
+		opt.select(_active_mod)
+		opt.item_selected.connect(func(i: int) -> void: _switch_module(i))
+		row.add_child(opt)
+		if not _bound_prop_id.is_empty():
+			row.add_child(_small_button("Split off", "Take this rack out of the build; it stays where it is as its own rack",
+				_split_active))
+		_mod_box.add_child(row)
+	elif _bound_prop_id.is_empty():
+		_mod_box.add_child(_small_label("Place two racks so a frame of one stands on a frame of the other, then edit one of them here to join them."))
+	if not _bound_prop_id.is_empty():
+		_mod_box.add_child(_small_button("Find racks to join",
+			"Placed racks whose uprights meet this one's (within 2 ft, square to it)", _find_fuse_candidates))
+
+
+func _refresh_crew_ui() -> void:
+	if _crew_box == null:
+		return
+	var crew := int(_crew_spin.value) if _crew_spin != null else PalletRackBuildSite.DEFAULT_CREW
+	for c in _crew_box.get_children():
+		_crew_box.remove_child(c)
+		c.queue_free()
+	_crew_box.add_child(_small_label("People carry every piece from the piles, two raise each frame and hold it while two more seat the beams, then the joists, sheets, steps and walls go in."))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var lbl := _small_label("Crew")
+	row.add_child(lbl)
+	_crew_spin = SpinBox.new()
+	_crew_spin.min_value = PalletRackBuildSite.MIN_CREW
+	_crew_spin.max_value = 24
+	_crew_spin.step = 1
+	_crew_spin.value = crew
+	_crew_spin.suffix = "people"
+	_crew_spin.tooltip_text = "Six is the fewest who can build a rack: two holding each of two frames, two seating the beams."
+	_crew_spin.value_changed.connect(func(_v: float) -> void: _crew_lbl.text = "")
+	row.add_child(_crew_spin)
+	row.add_child(_small_button("Plan", "How long this crew takes, and what holds it up", _on_plan_build))
+	_crew_box.add_child(row)
+	_crew_lbl = _small_label("")
+	_crew_box.add_child(_crew_lbl)
+	if _bound_prop_id.is_empty():
+		_crew_box.add_child(_small_label("Place the rack, then edit it here to watch a crew build it."))
+		return
+	var rec := _prop_record(_bound_prop_id)
+	var b := HBoxContainer.new()
+	b.add_theme_constant_override("separation", 6)
+	b.add_child(_small_button("Rehearse the build", "Close the editor and watch the crew build this rack where it stands. It follows the world clock: speed it up, or scrub back.",
+		_on_rehearse_build))
+	if rec.get(PalletRackBuildSite.RECORD_KEY) is Dictionary:
+		b.add_child(_small_button("End rehearsal", "Stop the rehearsal; the rack stands as built", _on_end_rehearsal))
+	_crew_box.add_child(b)
+
+
+func _on_plan_build() -> void:
+	_spec = _read_spec()
+	var t0 := Time.get_ticks_msec()
+	var tl := PalletRackBuildSite.plan_for(_full_spec(), int(_crew_spin.value))
+	var blocked: Array = tl["blocked"]
+	if not blocked.is_empty():
+		_crew_lbl.text = "This crew can't finish it: %s can't start (too few hands to hold the frames while the beams go on)." % UiText.count(blocked.size(), "job")
+		return
+	_crew_lbl.text = "%s: about %s, %s. The longest chain of steps alone takes %s." % [
+		UiText.count(int(tl["crew"]), "person", "people"), UiText.duration(float(tl["makespan"]) / 3600.0),
+		UiText.count((tl["jobs"] as Array).size(), "job"), UiText.duration(PalletRackBuildPlan.critical_path(tl) / 3600.0)]
+	if Time.get_ticks_msec() - t0 > 400:
+		_crew_lbl.text += " (planned in %.1f s)" % ((Time.get_ticks_msec() - t0) / 1000.0)
+
+
+func _on_rehearse_build() -> void:
+	if _bound_prop_id.is_empty():
+		return
+	var main := _main_node()
+	if main == null:
+		return
+	_spec = _read_spec()
+	var pid := _bound_prop_id
+	# The crew builds what is in the editor: unapplied edits go on first.
+	if _spec_sig(_full_spec()) != _base_sig:
+		_write_bound_record({"rack_spec": PalletRackBuilder.resolve_spec(_full_spec())})
+		_forget_draft(pid)
+	_draft_done = true
+	var crew := int(_crew_spin.value)
+	close()
+	if not PalletRackBuildSite.start_rehearsal(main, pid, crew):
+		push_warning("PalletRackBuilder: could not start a rehearsal on %s" % pid)
+
+
+func _on_end_rehearsal() -> void:
+	var main := _main_node()
+	if main == null or _bound_prop_id.is_empty():
+		return
+	PalletRackBuildSite.clear_rehearsal(main, _bound_prop_id)
+	_refresh_crew_ui()
+	_flash("Rehearsal ended.")
+
+
+func _clear_fuse_list() -> void:
+	if _fuse_box == null:
+		return
+	for c in _fuse_box.get_children():
+		_fuse_box.remove_child(c)
+		c.queue_free()
+
+
+## List the placed racks that can join this one.
+func _find_fuse_candidates() -> void:
+	_clear_fuse_list()
+	if _bound_prop_id.is_empty() or _loader == null or not _loader.has_method("placed_prop_records"):
+		return
+	var rec_a := _prop_record(_bound_prop_id)
+	var xf_a := _rec_xf(rec_a)
+	var full := _full_spec()
+	var found := 0
+	var nearest_reason := ""
+	var nearest_d := INF
+	for rec in (_loader.call("placed_prop_records") as Array):
+		if not (rec is Dictionary) or str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID:
+			continue
+		var pid := str(rec.get("id", ""))
+		if pid == _bound_prop_id or pid.is_empty():
+			continue
+		var xf_b := _rec_xf(rec)
+		var dist := xf_a.origin.distance_to(xf_b.origin)
+		var res := PalletRackBuilder.fuse_transform(full, xf_a, _rec_spec(rec), xf_b)
+		if not bool(res.get("ok", false)):
+			if dist < nearest_d:
+				nearest_d = dist
+				nearest_reason = str(res.get("reason", ""))
+			continue
+		found += 1
+		var label := "Join the rack %s away · %s shared" % [UiText.num(dist, "m", 2),
+			UiText.count(int(res["shared"]), "upright")]
+		var rel := {"x": float(res["x"]), "z": float(res["z"]), "yaw": float(res["yaw"])}
+		var b := _small_button(label, "It becomes part of this build; Split off takes it out again",
+			func() -> void: _join_rack(pid, rel))
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_fuse_box.add_child(b)
+	if found == 0:
+		_fuse_box.add_child(_small_label("No placed rack meets this one." +
+			((" The nearest (%s away): %s." % [UiText.num(nearest_d, "m", 2), nearest_reason])
+				if not nearest_reason.is_empty() else "")))
+
+
+## Fuse placed rack `pid_b` into this build at `rel` (its place in rack 0's
+## frame): it leaves the world as its own prop and this rack is rebuilt with
+## it. Applied at once (the other prop is gone), so Ctrl+Z history is cleared.
+func _join_rack(pid_b: String, rel: Dictionary) -> void:
+	var rec_b := _prop_record(pid_b)
+	if rec_b.is_empty():
+		return
+	_spec = _read_spec()
+	var keep := _active_mod
+	var full := PalletRackBuilder.fuse_specs(_full_spec(), _rec_spec(rec_b), rel)
+	if _loader != null and _loader.has_method("delete_prop_by_id"):
+		_loader.call("delete_prop_by_id", pid_b)
+	_forget_draft(pid_b)
+	_write_bound_record({"rack_spec": full})
+	_base_sig = _spec_sig(full)
+	_load_full(full, keep)
+	_undo_stack.clear()
+	_update_undo_btn()
+	_sync_controls()
+	_refresh_module_ui()
+	_clear_fuse_list()
+	_framed = false
+	_queue_rebuild(true)
+	_flash("Joined — the shared uprights are drawn once. Split off takes it out again.")
+
+
+## Take the edited rack out of the build as its own placed rack, where it stands.
+func _split_active() -> void:
+	if _bound_prop_id.is_empty() or _modules.size() < 2 or _loader == null:
+		return
+	_spec = _read_spec()
+	var res := PalletRackBuilder.split_fused(_full_spec(), _active_mod)
+	if res.is_empty():
+		return
+	var rec := _prop_record(_bound_prop_id)
+	var xf_a := _rec_xf(rec)
+	var copy := rec.duplicate(true)
+	for k in ["graph_item_id", "burn", "stowed_in"]:
+		copy.erase(k)
+	copy.merge(_xf_patch(xf_a * (res["module_xf"] as Transform3D)), true)
+	copy["rack_spec"] = res["module"]
+	var new_id := ""
+	if _loader.has_method("duplicate_prop_record"):
+		new_id = str(_loader.call("duplicate_prop_record", copy))
+	var patch := {"rack_spec": res["rest"]}
+	if res["rest_xf"] != Transform3D.IDENTITY:
+		patch.merge(_xf_patch(xf_a * (res["rest_xf"] as Transform3D)), true)
+	_write_bound_record(patch)
+	if not new_id.is_empty():
+		var main := _main_node()
+		if main != null:
+			Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, new_id)
+	_base_sig = _spec_sig(res["rest"])
+	_load_full(res["rest"], 0)
+	_undo_stack.clear()
+	_update_undo_btn()
+	_sync_controls()
+	_refresh_module_ui()
+	_clear_fuse_list()
+	_framed = false
+	_queue_rebuild(true)
+	_flash("Split off — it stands on its own now.")
+
+
+# ---------------------------------------------------------------------------
+# Dragging things to new places (bays, faces, cells)
+# ---------------------------------------------------------------------------
+
+## Where the camera ray through `local_pos` meets the plane y = plane_y
+## (rack-local); Vector3(NAN, NAN, NAN) when it does not.
+func _ray_plane_hit(local_pos: Vector2, plane_y: float) -> Vector3:
+	var r := _ray(local_pos)
+	if r.is_empty():
+		return Vector3(NAN, NAN, NAN)
+	var o: Vector3 = r[0]
+	var d: Vector3 = r[1]
+	if absf(d.y) < 1e-6:
+		return Vector3(NAN, NAN, NAN)
+	var t := (plane_y - o.y) / d.y
+	if t < 0.0:
+		return Vector3(NAN, NAN, NAN)
+	return o + d * t
+
+
+## Start dragging a whole element: doors / windows / stairs slide along their
+## wall (and round corners), slopes and face steps move bay by bay along a face
+## (and onto another), bay steps and courtyards move cell by cell.
+func _begin_element_drag(node: String, el: Dictionary, local_pos: Vector2) -> void:
+	var t := str(el.get("type", ""))
+	var eid := str(el["id"])
+	if SLIDE_TYPES.has(t):
+		var along := _ray_face_along(local_pos, str(el.get("face", "front")))
+		if is_nan(along):
+			return
+		_manip_mode = "el_slide"
+		_manip_nodes = [node]
+		_manip_targets = _element_group(eid)
+		_manip_start = {"el_id": eid, "at_ft": float(el.get("at_ft", 0.0)),
+			"grab_ft": along - float(el.get("at_ft", 0.0)), "face": str(el.get("face", ""))}
+		return
+	var bays_mode := t == "lean_to" or (t == "stepped" and str(el.get("mode", "")) == "face")
+	if bays_mode:
+		var face := str(el.get("face", "front"))
+		var nseg := PalletRackBuilder.face_segment_count(_spec, face)
+		var from := int(el.get("seg_from", 0))
+		var to := int(el.get("seg_to", -1))
+		if to < 0:
+			to = nseg - 1
+		var along := _ray_face_along(local_pos, face)
+		var grab := from if is_nan(along) else PalletRackBuilder.face_segment_at(_spec, face, along)
+		_manip_mode = "el_bays"
+		_manip_nodes = [node]
+		_manip_targets = _element_group(eid)
+		_manip_start = {"el_id": eid, "span": maxi(to - from, 0),
+			"grab_off": clampi(grab - from, 0, maxi(to - from, 0))}
+		return
+	if t == "courtyard" or t == "stepped":
+		var plane_y := 0.0
+		if t == "stepped":
+			plane_y = PalletRackBuilder.floor_y(_spec, int(el.get("level", 0)))
+		var p := _ray_plane_hit(local_pos, plane_y)
+		var gc := Vector2i(-1, -1) if is_nan(p.x) else PalletRackBuilder.grid_cell_at(_spec, p.x, p.z)
+		var b0 := int(el.get("bay0" if t == "courtyard" else "bay", 0))
+		var c0 := int(el.get("col0" if t == "courtyard" else "col", 0))
+		_manip_mode = "el_cell"
+		_manip_nodes = [node]
+		_manip_targets = _element_group(eid)
+		_manip_start = {"el_id": eid, "plane_y": plane_y, "b0": b0, "c0": c0,
+			"grab": gc if gc.x >= 0 else Vector2i(b0, c0)}
+
+
+## Can `el` move onto `face`? A slope needs some bay there no other slope covers.
+func _face_free_for(el: Dictionary, face: String) -> bool:
+	if str(el.get("type", "")) != "lean_to":
+		return true
+	for i in PalletRackBuilder.face_segment_count(_spec, face):
+		if _slope_over(face, i, str(el.get("id", ""))).is_empty():
+			return true
+	return false
+
+
+## The id of the slope covering bay `seg` of `face` ("" none), `skip` ignored.
+func _slope_over(face: String, seg: int, skip: String) -> String:
+	var nseg := PalletRackBuilder.face_segment_count(_spec, face)
+	for e in (_spec.get("elements", []) as Array):
+		if str(e.get("type", "")) != "lean_to" or str(e.get("face", "")) != face \
+				or str(e.get("id", "")) == skip:
+			continue
+		var a := int(e.get("seg_from", 0))
+		var b := int(e.get("seg_to", -1))
+		if b < 0:
+			b = nseg - 1
+		if seg >= a and seg <= b:
+			return str(e.get("id", ""))
+	return ""
+
+
+func _preview_el_bays(local_pos: Vector2) -> void:
+	var el := _element_by_id(str(_manip_start["el_id"]))
+	var r := _ray(local_pos)
+	if el.is_empty() or r.is_empty():
+		return
+	var face := str(el.get("face", "front"))
+	var along := NAN
+	var fh := PalletRackBuilder.face_hit(_spec, r[0], r[1])
+	if not fh.is_empty() and (str(fh["face"]) == face or _face_free_for(el, str(fh["face"]))):
+		face = str(fh["face"])
+		along = float(fh["along_ft"])
+	else:
+		along = PalletRackBuilder.face_plane_along_ft(_spec, face, r[0], r[1])
+	if is_nan(along):
+		return
+	var nseg := PalletRackBuilder.face_segment_count(_spec, face)
+	var span := mini(int(_manip_start["span"]), nseg - 1)
+	var seg := PalletRackBuilder.face_segment_at(_spec, face, along)
+	var from := clampi(seg - mini(int(_manip_start["grab_off"]), span), 0, maxi(nseg - 1 - span, 0))
+	if str(el.get("type", "")) == "lean_to":
+		for i in range(from, from + span + 1):
+			if not _slope_over(face, i, str(el["id"])).is_empty():
+				return  # another slope is there: stay put
+	el["face"] = face
+	el["seg_from"] = from
+	el["seg_to"] = from + span
+	_sel_hud.text = "%s on the %s face, %s  (drag onto another face to move it there)" % [
+		PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), face,
+		("bay %d" % (from + 1)) if span == 0 else ("bays %d–%d" % [from + 1, from + span + 1])]
+	_queue_rebuild(true, true)
+
+
+func _preview_el_cell(local_pos: Vector2) -> void:
+	var el := _element_by_id(str(_manip_start["el_id"]))
+	if el.is_empty():
+		return
+	var p := _ray_plane_hit(local_pos, float(_manip_start["plane_y"]))
+	if is_nan(p.x):
+		return
+	var gc := PalletRackBuilder.grid_cell_at(_spec, p.x, p.z)
+	if gc.x < 0:
+		return
+	var grab: Vector2i = _manip_start["grab"]
+	var nb := int(_spec.get("bay_count", 1))
+	var nc := int(_spec.get("column_count", 1))
+	var b := int(_manip_start["b0"]) + gc.x - grab.x
+	var c := int(_manip_start["c0"]) + gc.y - grab.y
+	if str(el.get("type", "")) == "courtyard":
+		b = clampi(b, 0, nb - int(el.get("bays", 1)))
+		c = clampi(c, 0, nc - int(el.get("cols", 1)))
+		el["bay0"] = b
+		el["col0"] = c
+	else:
+		b = clampi(b, 0, nb - 1)
+		c = clampi(c, 0, nc - 1)
+		# Never onto a cell another stepped module already stands in.
+		var key := "%d,%d,%d" % [b, c, int(el.get("level", 0))]
+		var owner := str((_spec.get("_stepped_cells", {}) as Dictionary).get(key, ""))
+		if not owner.is_empty() and owner != str(el["id"]):
+			return
+		el["bay"] = b
+		el["col"] = c
+	_sel_hud.text = "%s at bay %d, column %d" % [
+		PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1, c + 1]
+	_queue_rebuild(true, true)
+
+
+## A bay drag: the target cells show as a cyan ghost; the move lands on release.
+func _preview_cell_move(local_pos: Vector2) -> void:
+	var p := _ray_plane_hit(local_pos, float(_manip_start["plane_y"]))
+	if is_nan(p.x):
+		return
+	var gc := PalletRackBuilder.grid_cell_at(_spec, p.x, p.z)
+	if gc.x < 0:
+		return
+	var ab := str(_manip_start["anchor"]).split(",")
+	var dlt := Vector2i(gc.x - int(ab[0]), gc.y - int(ab[1]))
+	var nb := int(_spec.get("bay_count", 1))
+	var nc := int(_spec.get("column_count", 1))
+	var slots: Dictionary = _manip_start["slots"]
+	var ghosts: Array = []
+	for id in _manip_targets:
+		var bits := _id_key(str(id)).split(",")
+		var b := int(bits[0]) + dlt.x
+		var c := int(bits[1]) + dlt.y
+		if b < 0 or b >= nb or c < 0 or c >= nc:
+			return
+		var sid := "cell:%d,%d,%s" % [b, c, bits[2]]
+		if not slots.has(sid):
+			return  # cut away (a courtyard, the U)
+		ghosts.append(slots[sid])
+	_manip_start["delta"] = dlt
+	_ghost_comps = ghosts if dlt != Vector2i.ZERO else []
+	_refresh_highlight()
+	if dlt == Vector2i.ZERO:
+		_sel_hud.text = "Drag onto another bay to move it there  (Alt-drag raises or lowers)"
+	else:
+		var tb := str(_manip_start["anchor"]).split(",")
+		_sel_hud.text = "Move to bay %d, column %d  (release to drop; what is there swaps in)" % [
+			int(tb[0]) + dlt.x + 1, int(tb[1]) + dlt.y + 1]
+
+
+## Move deck cells: `mapping` "b,c,li" -> "b,c,li". The cells displaced from
+## the targets go to the cells left behind, so nothing is lost. Their
+## overrides, their pieces' colours / hidden flags and the stepped modules
+## standing in them all move.
+func _remap_cells(mapping: Dictionary) -> void:
+	var srcs: Array = mapping.keys()
+	var dsts: Array = mapping.values()
+	var vacated: Array = []
+	for k in srcs:
+		if not dsts.has(k):
+			vacated.append(k)
+	var displaced: Array = []
+	for k in dsts:
+		if not srcs.has(k):
+			displaced.append(k)
+	vacated.sort()
+	displaced.sort()
+	var m := mapping.duplicate()
+	for i in mini(vacated.size(), displaced.size()):
+		m[displaced[i]] = vacated[i]
+	# Cell overrides.
+	var cov: Dictionary = _spec.get("cell_overrides", {})
+	var moved := {}
+	for k in m.keys():
+		if cov.has(k):
+			moved[m[k]] = cov[k]
+	for k in m.keys():
+		cov.erase(k)
+	for k in moved.keys():
+		cov[k] = moved[k]
+	_spec["cell_overrides"] = cov
+	# Part overrides of the cells and their pieces.
+	var po: Dictionary = _spec.get("part_overrides", {})
+	var po_new := {}
+	for id in po.keys():
+		var sid := str(id)
+		var nid := sid
+		for pre in ["cell:", "ply:", "joist:", "tread:"]:
+			if sid.begins_with(pre):
+				var rest := sid.substr(pre.length())
+				var key := rest.get_slice(":", 0)
+				if m.has(key):
+					nid = pre + str(m[key]) + rest.substr(key.length())
+				break
+		po_new[nid] = po[id]
+	_spec["part_overrides"] = po_new
+	# Stepped modules standing in moved cells.
+	for e in (_spec.get("elements", []) as Array):
+		if str(e.get("type", "")) != "stepped" or str(e.get("mode", "")) != "bay":
+			continue
+		var ek := "%d,%d,%d" % [int(e["bay"]), int(e["col"]), int(e["level"])]
+		if m.has(ek):
+			var nb := str(m[ek]).split(",")
+			e["bay"] = int(nb[0])
+			e["col"] = int(nb[1])
+
+
+func _preview_seg_swap(local_pos: Vector2) -> void:
+	var el := _element_by_id(str(_manip_start["el_id"]))
+	if el.is_empty():
+		return
+	var face := str(el.get("face", "front"))
+	var along := _ray_face_along(local_pos, face)
+	if is_nan(along):
+		return
+	var nseg := PalletRackBuilder.face_segment_count(_spec, face)
+	var from := int(el.get("seg_from", 0))
+	var to := int(el.get("seg_to", -1))
+	if to < 0:
+		to = nseg - 1
+	var j := clampi(PalletRackBuilder.face_segment_at(_spec, face, along), from, to)
+	_manip_start["target"] = j
+	var src := int(_manip_start["seg"])
+	_ghost_comps = []
+	if j != src:
+		var c := _comp_by_id("el:%s:%d" % [str(el["id"]), j])
+		if not c.is_empty():
+			_ghost_comps = [c]
+		_sel_hud.text = "Swap bay %d with bay %d  (release to swap their coverings)" % [src + 1, j + 1]
+	else:
+		_sel_hud.text = "Drag onto another bay of the slope to swap them"
+	_refresh_highlight()
+
+
+## Swap two slope bays: their coverings and everything set on their pieces.
+func _finalize_seg_swap() -> void:
+	var el := _element_by_id(str(_manip_start.get("el_id", "")))
+	var i := int(_manip_start.get("seg", -1))
+	var j := int(_manip_start.get("target", -1))
+	if el.is_empty() or j < 0 or i == j:
+		return
+	var segs: Dictionary = el.get("segments", {})
+	var base := str(el.get("surface", "solar"))
+	var si := str(segs.get(str(i), base))
+	var sj := str(segs.get(str(j), base))
+	segs.erase(str(i))
+	segs.erase(str(j))
+	if sj != base:
+		segs[str(i)] = sj
+	if si != base:
+		segs[str(j)] = si
+	el["segments"] = segs
+	var pre_i := "el:%s:%d" % [str(el["id"]), i]
+	var pre_j := "el:%s:%d" % [str(el["id"]), j]
+	var po: Dictionary = _spec.get("part_overrides", {})
+	var po_new := {}
+	for id in po.keys():
+		var sid := str(id)
+		var nid := sid
+		if sid == pre_i or sid.begins_with(pre_i + ":"):
+			nid = pre_j + sid.substr(pre_i.length())
+		elif sid == pre_j or sid.begins_with(pre_j + ":"):
+			nid = pre_i + sid.substr(pre_j.length())
+		po_new[nid] = po[id]
+	_spec["part_overrides"] = po_new
+	_sel_nodes = [pre_j]

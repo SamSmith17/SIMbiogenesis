@@ -53,12 +53,16 @@ const PLY_T := 0.75 * IN          # 3/4" plywood
 const BEARING := 0.04            # joist rest on each beam
 const SHEET_LONG := 8.0 * FT      # 4x8 plywood long edge
 const SHEET_SHORT := 4.0 * FT     # 4x8 plywood short edge
-const HALF_PANEL_FT := 4.0        # 4x4 half-sheet — deck spacing snaps to this
+const HALF_PANEL_FT := 4.0        # 4x4 half-sheet — multiples tile plywood without cuts
+## Rack-row spacing: any half foot from 2'. Real builds run 3.5–4.5' between
+## frames (Chiba); multiples of 4' still tile the plywood with no cut sheets.
+const ROW_GAP_STEP_FT := 0.5
+const ROW_GAP_MIN_FT := 2.0
 const SEAM := 0.005              # gap between sheets so they read individually
 const STAIR_STEPS := 6
 
 # ---- Design elements ----
-const ELEMENT_TYPES := ["door", "window", "stair", "lean_to", "railing", "courtyard"]
+const ELEMENT_TYPES := ["door", "window", "stair", "lean_to", "railing", "courtyard", "stepped", "ladder"]
 const FACES := ["front", "back", "left", "right"]
 const OPPOSITE_FACE := {"front": "back", "back": "front", "left": "right", "right": "left"}
 const DOOR_STYLES := ["hinged", "double", "sliding", "opening"]
@@ -67,10 +71,40 @@ const SLOPE_SURFACES := ["solar", "glazing", "plywood", "frame", "none"]
 const SLOPE_ENDS := ["open", "glazing", "plywood"]
 const PANEL_ORIENTATIONS := ["landscape", "portrait"]
 const STAIR_RUNS := ["along", "out"]
+## What fills the gaps round the solar modules, and the strip between an
+## offset slope and the structure.
+const SEAL_OPTIONS := ["open", "plywood", "glazing"]
+## A stepped module: inside one deck bay (steps down to the level below) or
+## outside a face (big steps up to a deck — seating, a grand stair).
+const STEP_MODES := ["bay", "face"]
+const RISE_DIRS := ["back", "front", "left", "right"]
+## Where a slope's limited rows of modules sit (pv_rows > 0).
+const PV_FROM := ["centre", "top", "bottom"]
+
+## Common solar modules (typical data-sheet numbers): long x short edge in
+## inches, STC watts, Voc / Vmp volts, Isc / Imp amps. "custom" = the
+## element's own numbers.
+const PV_MODULES := {
+	"60cell_300": {"label": "60-cell 300 W (65 x 39 in)", "long_in": 65.0, "short_in": 39.0,
+		"watts": 300.0, "voc": 39.8, "vmp": 32.5, "isc": 9.8, "imp": 9.23},
+	"ja_380": {"label": "JA Solar 380 W (69.6 x 41.4 in)", "long_in": 69.6, "short_in": 41.4,
+		"watts": 380.0, "voc": 41.62, "vmp": 34.77, "isc": 11.52, "imp": 10.93},
+	"72cell_400": {"label": "72-cell 400 W (77 x 39 in)", "long_in": 77.0, "short_in": 39.1,
+		"watts": 400.0, "voc": 48.0, "vmp": 41.0, "isc": 11.0, "imp": 9.76},
+	"bifacial_550": {"label": "144 half-cell 550 W (89.7 x 44.6 in)", "long_in": 89.7,
+		"short_in": 44.6, "watts": 550.0, "voc": 49.9, "vmp": 41.96, "isc": 14.0, "imp": 13.11},
+	"12v_100": {"label": "12 V 100 W (41.8 x 20.9 in)", "long_in": 41.8, "short_in": 20.9,
+		"watts": 100.0, "voc": 22.6, "vmp": 18.9, "isc": 5.75, "imp": 5.29},
+}
+const PV_MODULE_ORDER := ["60cell_300", "ja_380", "72cell_400", "bifacial_550", "12v_100", "custom"]
+## The element keys a module preset fills.
+const PV_MODULE_KEYS := {"long_in": "panel_long_in", "short_in": "panel_short_in",
+	"watts": "panel_watts", "voc": "panel_voc", "vmp": "panel_vmp", "isc": "panel_isc",
+	"imp": "panel_imp"}
 
 const ELEMENT_LABELS := {
 	"door": "Door", "window": "Window", "stair": "Stairs", "lean_to": "Sloped array",
-	"railing": "Railing", "courtyard": "Courtyard",
+	"railing": "Railing", "courtyard": "Courtyard", "stepped": "Stepped module", "ladder": "Ladder",
 }
 const OPTION_LABELS := {
 	"front": "Front", "back": "Back", "left": "Left", "right": "Right",
@@ -80,6 +114,8 @@ const OPTION_LABELS := {
 	"frame": "Bare rafters", "none": "Leave this bay off",
 	"landscape": "Landscape", "portrait": "Portrait",
 	"along": "Along the wall", "out": "Straight out",
+	"bay": "In a deck bay", "face": "Outside a face (big steps)", "custom": "Custom",
+	"centre": "Centred", "top": "From the top", "bottom": "From the bottom",
 }
 
 # Member + product sizes for the elements (metres).
@@ -113,13 +149,38 @@ const ELEMENT_DEFAULTS := {
 	"window": {"face": "front", "at_ft": 6.0, "floor": -1, "style": "glass",
 		"width_ft": 3.0, "height_ft": 2.5, "sill_ft": 3.0},
 	"stair": {"face": "left", "at_ft": 4.0, "to_level": 1, "run": "along",
-		"flip": false, "width_ft": 3.0, "handrail": true},
+		"flip": false, "width_ft": 3.0, "handrail": true,
+		# Tread depth (in, 10 = the IRC minimum) and, for a run straight out, a
+		# landing (ft) between the deck edge and the top step.
+		"tread_in": 10.0, "landing_ft": 0.0},
 	"lean_to": {"face": "front", "surface": "solar", "segments": {}, "angle_deg": 50.0,
 		"attach_level": -1, "bottom_ft": 1.5, "seg_from": 0, "seg_to": -1,
-		"orientation": "landscape", "panel_watts": PV_WATTS, "ends": "open"},
+		"orientation": "landscape", "panel_watts": PV_WATTS, "ends": "open",
+		# A gap (ft) between the structure and the slope's top edge, spanned by
+		# joists; `bridge` covers that strip.
+		"offset_ft": 0.0, "bridge": "open",
+		# The module itself: a PV_MODULES preset or "custom" + its numbers.
+		"panel_model": "60cell_300", "panel_long_in": 65.0, "panel_short_in": 39.0,
+		"panel_gap_in": 0.5, "panel_voc": 39.8, "panel_vmp": 32.5, "panel_isc": 9.8,
+		"panel_imp": 9.23,
+		# What seals the gaps round and between the modules of a solar bay.
+		"gap_fill": "open",
+		# At most this many rows of modules (0 = as many as fit), set from
+		# the top, the bottom or centred; the rest of the bay is gap_fill.
+		"pv_rows": 0, "pv_from": "centre"},
 	"railing": {"floor": 1, "height_ft": 3.5, "front": true, "back": true,
 		"left": true, "right": true, "inner": true},
 	"courtyard": {"bay0": 1, "bays": 1, "col0": 0, "cols": 1},
+	# mode "bay": the deck cell (bay, col, level) becomes steps rising from the
+	# level below toward `rise_toward`. mode "face": big steps outside `face`
+	# across bays seg_from..seg_to, up to deck `to_level`, each at most
+	# `rise_in` tall and `tread_ft` deep.
+	"stepped": {"mode": "bay", "bay": 0, "col": 0, "level": 1, "rise_toward": "back",
+		"steps": STAIR_STEPS, "face": "front", "seg_from": 0, "seg_to": 0, "to_level": 0,
+		"rise_in": 16.0, "tread_ft": 2.0, "closed_risers": true},
+	# A ladder up a face from floor `floor` (-1 the ground) to deck `to_level`,
+	# its rails running on 3' past the deck to hold on to.
+	"ladder": {"face": "front", "at_ft": 4.0, "floor": -1, "to_level": 1, "width_ft": 1.5},
 }
 
 ## The inspector's row model per element type (pure data — the modal renders
@@ -151,7 +212,10 @@ const ELEMENT_FIELDS := {
 		{"key": "to_level", "label": "Up to", "kind": "level"},
 		{"key": "run", "label": "Runs", "kind": "option", "options": STAIR_RUNS},
 		{"key": "flip", "label": "Run the other way", "kind": "bool"},
-		{"key": "width_ft", "label": "Width", "kind": "float", "min": 2.0, "max": 8.0, "step": 0.5},
+		{"key": "width_ft", "label": "Width", "kind": "float", "min": 2.0, "max": 12.0, "step": 0.5},
+		{"key": "tread_in", "label": "Tread depth", "kind": "float", "min": 9.0, "max": 24.0, "step": 0.5, "unit": "in"},
+		{"key": "landing_ft", "label": "Landing at the top", "kind": "float", "min": 0.0, "max": 12.0, "step": 0.5,
+			"show_if": {"run": ["out"]}},
 		{"key": "handrail", "label": "Handrail", "kind": "bool"},
 	],
 	"lean_to": [
@@ -162,9 +226,62 @@ const ELEMENT_FIELDS := {
 		{"key": "bottom_ft", "label": "Bottom edge height", "kind": "float", "min": 0.0, "max": 10.0, "step": 0.25},
 		{"key": "seg_from", "label": "From bay", "kind": "seg"},
 		{"key": "seg_to", "label": "To bay", "kind": "seg"},
-		{"key": "orientation", "label": "Panels", "kind": "option", "options": PANEL_ORIENTATIONS},
-		{"key": "panel_watts", "label": "Watts per panel", "kind": "float", "min": 50.0, "max": 800.0, "step": 5.0, "unit": "W"},
+		{"key": "offset_ft", "label": "Gap to the structure", "kind": "float", "min": 0.0, "max": 12.0, "step": 0.5,
+			"tip": "Stand the slope off the face; joists span the gap"},
+		{"key": "bridge", "label": "Cover the gap", "kind": "option", "options": SEAL_OPTIONS,
+			"show_if": {"_min": {"offset_ft": 0.01}}},
 		{"key": "ends", "label": "Close the ends", "kind": "option", "options": SLOPE_ENDS},
+		{"key": "panel_model", "label": "Module", "kind": "pv_model", "section": "Solar panels",
+			"show_if": {"_solar": true}},
+		{"key": "orientation", "label": "Panels", "kind": "option", "options": PANEL_ORIENTATIONS,
+			"show_if": {"_solar": true}},
+		{"key": "pv_rows", "label": "Rows of panels", "kind": "int", "min": 0, "max": 40,
+			"show_if": {"_solar": true}, "tip": "0 = as many as fit; fewer leaves the rest of the bay to the gap seal"},
+		{"key": "pv_from", "label": "Rows start", "kind": "option", "options": PV_FROM,
+			"show_if": {"_solar": true}},
+		{"key": "panel_long_in", "label": "Long edge", "kind": "float", "min": 12.0, "max": 120.0, "step": 0.1, "unit": "in",
+			"show_if": {"_solar": true}},
+		{"key": "panel_short_in", "label": "Short edge", "kind": "float", "min": 8.0, "max": 60.0, "step": 0.1, "unit": "in",
+			"show_if": {"_solar": true}},
+		{"key": "panel_gap_in", "label": "Gap between", "kind": "float", "min": 0.0, "max": 12.0, "step": 0.25, "unit": "in",
+			"show_if": {"_solar": true}},
+		{"key": "panel_watts", "label": "Watts per panel", "kind": "float", "min": 10.0, "max": 1000.0, "step": 5.0, "unit": "W",
+			"show_if": {"_solar": true}},
+		{"key": "panel_voc", "label": "Voc", "kind": "float", "min": 1.0, "max": 120.0, "step": 0.01, "unit": "V",
+			"show_if": {"_solar": true}},
+		{"key": "panel_vmp", "label": "Vmp", "kind": "float", "min": 1.0, "max": 120.0, "step": 0.01, "unit": "V",
+			"show_if": {"_solar": true}},
+		{"key": "panel_isc", "label": "Isc", "kind": "float", "min": 0.1, "max": 30.0, "step": 0.01, "unit": "A",
+			"show_if": {"_solar": true}},
+		{"key": "panel_imp", "label": "Imp", "kind": "float", "min": 0.1, "max": 30.0, "step": 0.01, "unit": "A",
+			"show_if": {"_solar": true}},
+		{"key": "gap_fill", "label": "Seal the gaps", "kind": "option", "options": SEAL_OPTIONS,
+			"show_if": {"_solar": true}, "tip": "Fill round and between the panels so the slope is a closed roof"},
+	],
+	"ladder": [
+		{"key": "face", "label": "Wall", "kind": "face"},
+		{"key": "at_ft", "label": "Position", "kind": "along"},
+		{"key": "floor", "label": "From", "kind": "floor"},
+		{"key": "to_level", "label": "Up to", "kind": "level"},
+		{"key": "width_ft", "label": "Width", "kind": "float", "min": 1.0, "max": 3.0, "step": 0.25},
+	],
+	"stepped": [
+		{"key": "mode", "label": "Where", "kind": "option", "options": STEP_MODES},
+		{"key": "bay", "label": "Bay", "kind": "bay", "show_if": {"mode": ["bay"]}},
+		{"key": "col", "label": "Column", "kind": "col", "show_if": {"mode": ["bay"]}},
+		{"key": "level", "label": "Up to", "kind": "level", "show_if": {"mode": ["bay"]}},
+		{"key": "rise_toward", "label": "Rises toward", "kind": "option", "options": RISE_DIRS,
+			"show_if": {"mode": ["bay"]}},
+		{"key": "steps", "label": "Steps", "kind": "int", "min": 2, "max": 16, "show_if": {"mode": ["bay"]}},
+		{"key": "face", "label": "Face", "kind": "face", "show_if": {"mode": ["face"]}},
+		{"key": "seg_from", "label": "From bay", "kind": "seg", "show_if": {"mode": ["face"]}},
+		{"key": "seg_to", "label": "To bay", "kind": "seg", "show_if": {"mode": ["face"]}},
+		{"key": "to_level", "label": "Up to", "kind": "level", "show_if": {"mode": ["face"]}},
+		{"key": "rise_in", "label": "Step height up to", "kind": "float", "min": 6.0, "max": 30.0, "step": 0.5, "unit": "in",
+			"show_if": {"mode": ["face"]}},
+		{"key": "tread_ft", "label": "Step depth", "kind": "float", "min": 1.0, "max": 8.0, "step": 0.5,
+			"show_if": {"mode": ["face"]}},
+		{"key": "closed_risers", "label": "Close the risers", "kind": "bool", "show_if": {"mode": ["face"]}},
 	],
 	"railing": [
 		{"key": "floor", "label": "Deck", "kind": "level"},
@@ -194,6 +311,11 @@ const TOOL_PRESETS := [
 		"element": {"type": "window"}},
 	{"id": "stairs", "label": "Stairs", "tip": "Click the face the stairs climb, near the deck they reach",
 		"element": {"type": "stair"}},
+	{"id": "ladder", "label": "Ladder", "tip": "A ladder up a face — click the face, level with the deck it reaches",
+		"element": {"type": "ladder"}},
+	{"id": "stepped", "label": "Stepped module",
+		"tip": "Click a deck bay to turn it into steps down to the level below, or a face for big outside steps",
+		"element": {"type": "stepped"}},
 	{"id": "solar_slope", "label": "Solar slope", "tip": "A sloped solar array leaning on a face — click the face",
 		"element": {"type": "lean_to", "surface": "solar"}},
 	{"id": "greenhouse", "label": "Greenhouse", "tip": "A glazed lean-to greenhouse — click the face",
@@ -204,6 +326,49 @@ const TOOL_PRESETS := [
 	{"id": "courtyard", "label": "Courtyard", "tip": "Cut an open courtyard out of the grid — click a deck cell",
 		"element": {"type": "courtyard"}},
 ]
+
+## Whether an inspector field shows for element `el`: `show_if` maps keys to
+## the values they may take, "_min" keys to the least value, and "_solar" to
+## "some bay of this slope carries modules".
+static func field_visible(f: Dictionary, el: Dictionary) -> bool:
+	var cond: Variant = f.get("show_if")
+	if not (cond is Dictionary):
+		return true
+	for k in (cond as Dictionary).keys():
+		var want: Variant = cond[k]
+		match str(k):
+			"_min":
+				for mk in (want as Dictionary).keys():
+					if float(el.get(mk, 0.0)) < float(want[mk]):
+						return false
+			"_solar":
+				if slope_has_solar(el) != bool(want):
+					return false
+			_:
+				if want is Array and not (want as Array).has(el.get(k)):
+					return false
+	return true
+
+
+## Does any bay of a sloped array carry solar modules?
+static func slope_has_solar(el: Dictionary) -> bool:
+	if str(el.get("type", "")) != "lean_to":
+		return false
+	if str(el.get("surface", "")) == "solar":
+		return true
+	var segs: Variant = el.get("segments", {})
+	return segs is Dictionary and (segs as Dictionary).values().has("solar")
+
+
+## A module preset's numbers written onto a slope element (in place).
+static func apply_pv_module(el: Dictionary, model: String) -> void:
+	el["panel_model"] = model
+	if not PV_MODULES.has(model):
+		return
+	var m: Dictionary = PV_MODULES[model]
+	for k in PV_MODULE_KEYS.keys():
+		el[PV_MODULE_KEYS[k]] = float(m[k])
+
 
 ## The player's saved designs + element presets (one file, every map).
 const LIBRARY_PATH := "user://pallet_rack_library.json"
@@ -245,6 +410,10 @@ static func default_spec() -> Dictionary:
 		"elements": [],
 		# Per-part overrides keyed by part id (see part_tree): {hidden, color}.
 		"part_overrides": {},
+		# Other racks fused onto this one where their uprights meet:
+		# [{spec, x, z, yaw}] — x/z metres and yaw (0/90/180/270°) in THIS
+		# rack's frame. Shared uprights are drawn once (see fuse_transform).
+		"fused": [],
 	}
 
 
@@ -266,11 +435,11 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 	s["bay_count"] = clampi(int(s["bay_count"]), 1, 10)
 	s["column_count"] = clampi(int(s["column_count"]), 1, 10)
 	# Assembly spacing (deck depth between rack rows). Legacy specs (no row_gap_ft)
-	# derive it from the joist/lumber length. Snap to the nearest half-panel (4 ft)
-	# so plywood always tiles with full + half sheets — no slivers.
+	# derive it from the joist/lumber length. Half-foot steps; a multiple of 4'
+	# tiles the plywood with full + half sheets, anything else cuts a strip.
 	if not overrides.has("row_gap_ft"):
 		s["row_gap_ft"] = float(s["lumber_len_ft"])
-	s["row_gap_ft"] = clampf(_snap_half_panel(float(s["row_gap_ft"])), 4.0, 20.0)
+	s["row_gap_ft"] = clampf(snappedf(float(s["row_gap_ft"]), ROW_GAP_STEP_FT), ROW_GAP_MIN_FT, 20.0)
 	s["deck_levels"] = clampi(int(s["deck_levels"]), 1, 3)
 	s["decked"] = bool(s["decked"])
 	s["roof_deck"] = bool(s["roof_deck"])
@@ -322,9 +491,10 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 	s["wall_sheet_deleted"] = wdel
 	s["part_overrides"] = _normalize_part_overrides(s.get("part_overrides"))
 
-	# Migrate the legacy stepped_module flag into per-cell "step" overrides so the
-	# new editor sees one uniform model. Only when there are no explicit cell edits
-	# yet (an edited rack already carries the cells it wants).
+	# Steps are stepped-module ELEMENTS now (placeable, draggable, editable).
+	# The legacy stepped_module flag and per-cell "step" overrides migrate into
+	# bay-mode elements; the cell keeps its height / depth overrides.
+	var migrated: Array = []
 	if int(s["stepped_module"]) > 0 and cov.is_empty():
 		var lv_list := _levels(s)
 		var top_decked := -1
@@ -334,7 +504,26 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 		if top_decked > 0:
 			var cc := int(s["stepped_module"]) - 1
 			for b in int(s["bay_count"]):
-				cov["%d,%d,%d" % [b, cc, top_decked]] = {"kind": "step"}
+				migrated.append(make_element("stepped", {"mode": "bay", "bay": b, "col": cc,
+					"level": top_decked}))
+	s["stepped_module"] = 0
+	var step_keys: Array = cov.keys()
+	step_keys.sort()
+	for k in step_keys:
+		var ce: Dictionary = cov[k]
+		if str(ce.get("kind", "")) != "step":
+			continue
+		var bits := str(k).split(",")
+		if bits.size() == 3:
+			migrated.append(make_element("stepped", {"mode": "bay", "bay": int(bits[0]),
+				"col": int(bits[1]), "level": int(bits[2])}))
+		ce.erase("kind")
+		if ce.is_empty():
+			cov.erase(k)
+	if not migrated.is_empty():
+		var els0: Array = (s["elements"] as Array).duplicate() if s.get("elements") is Array else []
+		els0.append_array(migrated)
+		s["elements"] = els0
 
 	# The walls' band, kept at least a foot tall.
 	var wb := clampf(float(s.get("wall_bottom_ft", 0.0)), 0.0, maxf(top_ft - 1.0, 0.0))
@@ -368,7 +557,40 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 		used[rid] = true
 		els.append(r)
 	s["elements"] = els
+	# Deck cells a bay-mode stepped module stands in (derived each resolve,
+	# never read back from a saved spec): "b,c,li" -> element id.
+	var claims := {}
+	for e in els:
+		if str(e.get("type", "")) == "stepped" and str(e.get("mode", "")) == "bay":
+			var ck := _cell_key(int(e["bay"]), int(e["col"]), int(e["level"]))
+			if not claims.has(ck):
+				claims[ck] = str(e["id"])
+	s["_stepped_cells"] = claims
+	s["fused"] = _normalize_fused(s.get("fused"))
 	return s
+
+
+## Fused racks: each entry's spec resolved on its own (one level deep — a
+## fused rack's own fusions were flattened when it was fused), yaw snapped to
+## a quarter turn.
+static func _normalize_fused(v: Variant) -> Array:
+	var out: Array = []
+	if not (v is Array):
+		return out
+	for f in (v as Array):
+		if not (f is Dictionary) or not ((f as Dictionary).get("spec") is Dictionary):
+			continue
+		var sub: Dictionary = ((f as Dictionary)["spec"] as Dictionary).duplicate(true)
+		sub.erase("fused")
+		var rs := resolve_spec(sub)
+		rs.erase("_stepped_cells")
+		out.append({"spec": rs, "x": float(f.get("x", 0.0)), "z": float(f.get("z", 0.0)),
+			"yaw": snap_quarter_deg(float(f.get("yaw", 0.0)))})
+	return out
+
+
+static func snap_quarter_deg(deg: float) -> float:
+	return fposmod(roundf(deg / 90.0) * 90.0, 360.0)
 
 
 ## Only the keys the geometry honours survive: `hidden` (true) and `color`
@@ -447,7 +669,7 @@ class _Geom:
 	var paint := {}
 	var counts := {"uprights": 0, "beams": 0, "lumber": 0, "plywood": 0,
 		"solar_panels": 0, "solar_watts": 0.0, "glazing": 0, "doors": 0, "windows": 0,
-		"stairs": 0, "railing_ft": 0.0}
+		"stairs": 0, "railing_ft": 0.0, "ladders": 0}
 
 	func _init() -> void:
 		frame.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -501,6 +723,19 @@ class _Geom:
 	const MAX_PART_BOXES := 64
 	var cur_in_ctx := true
 	var cur_box := {}
+	## A fused rack that is not the one being edited: its parts never enter
+	## the tree (their ids would collide with the edited rack's), and with
+	## dim_all they draw faded.
+	var no_tree := false
+	var dim_all := false
+	## Build units (PalletRackBuilder.build_units_node): every part's geometry
+	## on its own per-material surfaces, keyed by the part's own id (a fused
+	## rack's prefixed "m<i>|"), so a build site can move each piece.
+	var split := false
+	var unit_prefix := ""
+	var cur_unit := ""
+	## unit id -> {material key -> SurfaceTool}
+	var units := {}
 
 	## Register `path` (group ids down to the part) with its `labels`, make the
 	## part current (its boxes are what emission draws until the next begin),
@@ -508,6 +743,18 @@ class _Geom:
 	## part is registered but gets no box; the caller draws nothing.
 	func begin(path: Array, labels: Array, force_hidden: bool = false) -> Dictionary:
 		end_part()
+		if split:
+			cur_unit = unit_prefix + (str(path[-1]) if not path.is_empty() else "misc")
+		if no_tree:
+			var ovn := {}
+			for pid in path:
+				var o: Variant = po.get(str(pid))
+				if o is Dictionary:
+					ovn.merge(o as Dictionary, true)
+			if force_hidden:
+				ovn["hidden"] = true
+			cur_in_ctx = not dim_all
+			return ovn
 		var ov := {}
 		var parent := ""
 		for i in path.size():
@@ -536,6 +783,10 @@ class _Geom:
 		return ov
 
 	func end_part() -> void:
+		if no_tree:
+			cur_box = {}
+			cur_in_ctx = not dim_all
+			return
 		if not cur_box.is_empty() and cur_box.has("aabb"):
 			var n := (cur_box["obbs"] as Array).size() + (cur_box["aabbs"] as Array).size()
 			if n > MAX_PART_BOXES:
@@ -548,12 +799,45 @@ class _Geom:
 		cur_in_ctx = dim_ctx.is_empty()
 
 	func route(st: SurfaceTool) -> SurfaceTool:
+		if split:
+			var u := cur_unit if not cur_unit.is_empty() else unit_prefix + "misc"
+			if not units.has(u):
+				units[u] = {}
+			var mk := mat_key(st)
+			var d: Dictionary = units[u]
+			if not d.has(mk):
+				var t := SurfaceTool.new()
+				t.begin(Mesh.PRIMITIVE_TRIANGLES)
+				d[mk] = t
+			return d[mk]
 		if cur_in_ctx:
 			return st
 		if dim == null:
 			dim = SurfaceTool.new()
 			dim.begin(Mesh.PRIMITIVE_TRIANGLES)
 		return dim
+
+	## Which material a base surface draws with ("frame", "paint:#rrggbb" …).
+	func mat_key(st: SurfaceTool) -> String:
+		if st == frame:
+			return "frame"
+		if st == beam:
+			return "beam"
+		if st == lumber:
+			return "lumber"
+		if st == ply:
+			return "ply"
+		if st == pv:
+			return "pv"
+		if st == glass:
+			return "glass"
+		for hex in paint:
+			if paint[hex] == st:
+				return "paint:" + str(hex)
+		for hex in metal:
+			if metal[hex] == st:
+				return "metal:" + str(hex)
+		return "lumber"
 
 	func add_box(xf: Transform3D, size: Vector3) -> void:
 		if cur_box.is_empty():
@@ -591,6 +875,14 @@ class _Geom:
 ## piece under the current part and fade it when a group is open. Set for the
 ## length of one _emit_structure; nothing else writes boxes.
 static var _rec: _Geom = null
+## The fused rack being emitted, in the frame of the rack being built (identity
+## for a single rack). _emit_box / _emit_tri apply it, so every emitter stays
+## in rack-local coordinates.
+static var _mxf := Transform3D.IDENTITY
+## Upright posts already drawn by an earlier rack of a fused build (in the
+## build frame); a frame whose two posts are both here is shared and skipped.
+static var _posts_done: Array = []
+const SHARED_POST_TOL := 0.06
 
 const FRAMES_ID := "frames"
 ## Kinds a colour can go on (the rest are glass, modules or whole elements).
@@ -611,13 +903,13 @@ static func part_kind(id: String) -> String:
 		if bits.size() == 3:
 			if tail.begins_with("r"):
 				return "rail_run"
-			if tail == "frame" or tail == "ends":
+			if tail == "frame" or tail == "ends" or tail == "bridge":
 				return "slope_frame"
 			return "slope_bay"
 		var leaf := str(bits[3])
 		if leaf.begins_with("m"):
 			return "module"
-		if leaf.begins_with("s"):
+		if leaf.begins_with("s") or leaf == "g":
 			return "slope_sheet"
 		return "slope_frame"
 	var pre := id.get_slice(":", 0)
@@ -685,7 +977,6 @@ static func _levels(s: Dictionary, _m: Dictionary = {}) -> Array:
 static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack",
 		opts: Dictionary = {}) -> Node3D:
 	var s := resolve_spec(spec)
-	var m := _metrics(s)
 	var root := Node3D.new()
 	root.name = node_name
 	root.set_meta("rack_spec", s.duplicate(true))
@@ -693,7 +984,7 @@ static func build_node(spec: Dictionary = {}, node_name: String = "PalletRack",
 	var g := _Geom.new()
 	g.record = bool(opts.get("record", false))
 	g.dim_ctx = str(opts.get("dim_ctx", ""))
-	_emit_structure(g, s, m)
+	_emit_all(g, s, int(opts.get("module", 0)), bool(opts.get("dim_others", false)))
 
 	var mesh := ArrayMesh.new()
 	var mats: Array = []
@@ -774,7 +1065,7 @@ static func part_tree(spec: Dictionary = {}) -> Dictionary:
 	var s := resolve_spec(spec)
 	var g := _Geom.new()
 	g.record = true
-	_emit_structure(g, s, _metrics(s))
+	_emit_all(g, s)
 	return g.tree()
 
 
@@ -888,16 +1179,276 @@ static func _arrays_have_geometry(arr: Array) -> bool:
 	return verts is PackedVector3Array and not (verts as PackedVector3Array).is_empty()
 
 
+## The rack as BUILD UNITS: one Node3D per part (named by index, the part id
+## in meta "unit_id"), each holding its geometry in the build frame, so a
+## build site (PalletRackBuildSite) can hide, carry, raise and set every
+## piece. Meta "units" on the root: {id: {aabb (build frame), kind}}.
+## Fused racks' parts carry the prefix "m<i>|".
+static func build_units_node(spec: Dictionary = {}, node_name: String = "RackUnits") -> Node3D:
+	var s := resolve_spec(spec)
+	var g := _Geom.new()
+	g.split = true
+	_emit_all(g, s)
+	g.end_part()
+	var mats := {"frame": _steel_frame_material(), "beam": _steel_beam_material(),
+		"lumber": _lumber_material(), "ply": _plywood_material(), "pv": _pv_material(),
+		"glass": _glass_material()}
+	var root := Node3D.new()
+	root.name = node_name
+	var info := {}
+	var ids: Array = g.units.keys()
+	ids.sort()
+	var n := 0
+	for id in ids:
+		var node := Node3D.new()
+		node.name = "U%d" % n
+		node.set_meta("unit_id", str(id))
+		n += 1
+		var bb := AABB()
+		var first := true
+		var d: Dictionary = g.units[id]
+		for mk in d.keys():
+			var arr := (d[mk] as SurfaceTool).commit_to_arrays()
+			if not _arrays_have_geometry(arr):
+				continue
+			var mesh := ArrayMesh.new()
+			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+			var mat: Material
+			var smk := str(mk)
+			if smk.begins_with("paint:"):
+				mat = _paint_material(smk.substr(6))
+			elif smk.begins_with("metal:"):
+				mat = _paint_metal_material(smk.substr(6))
+			else:
+				mat = mats.get(smk, mats["lumber"])
+			mesh.surface_set_material(0, mat)
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			node.add_child(mi)
+			var mb := mesh.get_aabb()
+			bb = mb if first else bb.merge(mb)
+			first = false
+		if first:
+			node.free()
+			continue
+		root.add_child(node)
+		var leaf := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
+		info[str(id)] = {"aabb": bb, "kind": part_kind(leaf), "node": node.name}
+	root.set_meta("units", info)
+	root.set_meta("rack_spec", s.duplicate(true))
+	return root
+
+
 static func build_default_node() -> Node3D:
 	return build_node(default_spec())
 
 
 static func bom(spec: Dictionary = {}) -> Dictionary:
 	var s := resolve_spec(spec)
-	var m := _metrics(s)
 	var g := _Geom.new()
-	_emit_structure(g, s, m)
+	_emit_all(g, s)
 	return g.counts.duplicate()
+
+
+# ---------------------------------------------------------------------------
+# Fused racks — several racks built as one, sharing the uprights where they meet
+# ---------------------------------------------------------------------------
+
+## Every rack of a build: [{spec, xf}], xf in rack 0's frame (rack 0 = the
+## spec itself, the rest its "fused" entries).
+static func rack_modules(s: Dictionary) -> Array:
+	var root := s.duplicate()
+	root.erase("fused")
+	var out: Array = [{"spec": root, "xf": Transform3D.IDENTITY}]
+	for f in (s.get("fused", []) as Array):
+		if f is Dictionary and (f as Dictionary).get("spec") is Dictionary:
+			out.append({"spec": resolve_spec(f["spec"]), "xf": fused_xf(f)})
+	return out
+
+
+static func fused_xf(f: Dictionary) -> Transform3D:
+	return Transform3D(Basis(Vector3.UP, deg_to_rad(float(f.get("yaw", 0.0)))),
+		Vector3(float(f.get("x", 0.0)), 0.0, float(f.get("z", 0.0))))
+
+
+## Emit every rack of a build into `g`, in the frame of rack `active` (the one
+## the editor works on: drawn first, the only one recorded in the part tree).
+## The others follow, faded with `dim_others`, skipping frames already drawn.
+static func _emit_all(g: _Geom, s: Dictionary, active: int = 0, dim_others: bool = false) -> void:
+	var mods := rack_modules(s)
+	active = clampi(active, 0, mods.size() - 1)
+	var frame := (mods[active]["xf"] as Transform3D).affine_inverse()
+	var order: Array = [active]
+	for i in mods.size():
+		if i != active:
+			order.append(i)
+	var rec0 := g.record
+	_posts_done = []
+	for i in order:
+		var ms: Dictionary = mods[i]["spec"]
+		_mxf = frame * (mods[i]["xf"] as Transform3D)
+		g.unit_prefix = "" if i == 0 else "m%d|" % i
+		g.no_tree = i != active
+		g.dim_all = dim_others and i != active
+		g.record = rec0 and i == active
+		_emit_structure(g, ms, _metrics(ms))
+	_mxf = Transform3D.IDENTITY
+	g.no_tree = false
+	g.dim_all = false
+	g.record = rec0
+	_posts_done = []
+
+
+static func _post_shared(p: Vector3) -> bool:
+	for q in _posts_done:
+		var d := (q as Vector3) - p
+		if Vector2(d.x, d.z).length() < SHARED_POST_TOL:
+			return true
+	return false
+
+
+## The upright post centres of one rack (rack-local, y = 0), cut-away ones left out.
+static func post_points(spec: Dictionary) -> Array:
+	var s := resolve_spec(spec)
+	var L := _layout(s, _metrics(s))
+	var out: Array = []
+	for r in range(int(L.rows)):
+		var zf := float(L.rz[r])
+		for bx in range(int(L.bays) + 1):
+			var x := float(L.fx[bx])
+			if _in_notch(L.notch, x, zf + float(L.frame_depth) * 0.5):
+				continue
+			out.append(Vector3(x, 0.0, zf))
+			out.append(Vector3(x, 0.0, zf + float(L.frame_depth)))
+	return out
+
+
+## Every post of a build (all its racks) in rack 0's frame.
+static func build_post_points(spec: Dictionary) -> Array:
+	var out: Array = []
+	for m in rack_modules(resolve_spec(spec)):
+		var xf: Transform3D = m["xf"]
+		for p in post_points(m["spec"]):
+			out.append(xf * (p as Vector3))
+	return out
+
+
+## The whole build's ground footprint in rack `active`'s frame.
+static func fused_bounds(spec: Dictionary, active: int = 0) -> Rect2:
+	var s := resolve_spec(spec)
+	var mods := rack_modules(s)
+	active = clampi(active, 0, mods.size() - 1)
+	var frame := (mods[active]["xf"] as Transform3D).affine_inverse()
+	var r := Rect2()
+	var first := true
+	for m in mods:
+		var mm := _metrics(m["spec"])
+		var hx := float(mm.total_x) * 0.5
+		var hz := float(mm.total_z) * 0.5
+		for c in [Vector3(-hx, 0, -hz), Vector3(hx, 0, -hz), Vector3(hx, 0, hz), Vector3(-hx, 0, hz)]:
+			var p := frame * (m["xf"] as Transform3D) * (c as Vector3)
+			if first:
+				r = Rect2(Vector2(p.x, p.z), Vector2.ZERO)
+				first = false
+			else:
+				r = r.expand(Vector2(p.x, p.z))
+	return r
+
+
+## Where rack B (world transform xf_b) joins rack A (xf_a) if their uprights
+## meet: B's yaw relative to A snapped to a quarter turn (refused past
+## `yaw_tol_deg`), then the shift that lands the most of B's posts on A's,
+## looking `tol` m around. {ok, x, z, yaw, shared, moved_m, reason}: x/z/yaw
+## are B in A's frame, ready for fuse_specs; at least one whole frame (two
+## posts) must meet.
+static func fuse_transform(spec_a: Dictionary, xf_a: Transform3D, spec_b: Dictionary,
+		xf_b: Transform3D, tol: float = 0.6, yaw_tol_deg: float = 20.0) -> Dictionary:
+	var rel := xf_a.affine_inverse() * xf_b
+	var raw_yaw := rad_to_deg(rel.basis.get_euler().y)
+	var yaw := snap_quarter_deg(raw_yaw)
+	var dyaw := absf(wrapf(raw_yaw - yaw, -180.0, 180.0))
+	if dyaw > yaw_tol_deg:
+		return {"ok": false, "reason": "the racks are not square to each other (%d degrees off)" % int(round(dyaw))}
+	var base := Transform3D(Basis(Vector3.UP, deg_to_rad(yaw)), Vector3(rel.origin.x, 0.0, rel.origin.z))
+	var pa := build_post_points(spec_a)
+	var pb: Array = []
+	for p in build_post_points(spec_b):
+		pb.append(base * (p as Vector3))
+	var best_n := 0
+	var best_d := Vector3.ZERO
+	var tried := {}
+	for a in pa:
+		for b in pb:
+			var d: Vector3 = (a as Vector3) - (b as Vector3)
+			d.y = 0.0
+			if d.length() > tol:
+				continue
+			var key := "%d,%d" % [int(round(d.x * 50.0)), int(round(d.z * 50.0))]
+			if tried.has(key):
+				continue
+			tried[key] = true
+			var n := 0
+			for b2 in pb:
+				var q: Vector3 = (b2 as Vector3) + d
+				for a2 in pa:
+					var e: Vector3 = (a2 as Vector3) - q
+					if Vector2(e.x, e.z).length() < SHARED_POST_TOL:
+						n += 1
+						break
+			if n > best_n or (n == best_n and n > 0 and d.length() < best_d.length()):
+				best_n = n
+				best_d = d
+	if best_n < 2:
+		return {"ok": false, "reason": "no uprights line up — stand a frame of one rack on a frame of the other"}
+	var o := base.origin + best_d
+	return {"ok": true, "x": o.x, "z": o.z, "yaw": yaw, "shared": best_n,
+		"moved_m": best_d.length()}
+
+
+## Rack A with rack B fused on at `rel` ({x, z, yaw}: B in A's frame). B's own
+## fused racks come along, re-expressed in A's frame.
+static func fuse_specs(spec_a: Dictionary, spec_b: Dictionary, rel: Dictionary) -> Dictionary:
+	var a := resolve_spec(spec_a)
+	var b := resolve_spec(spec_b)
+	var out := a.duplicate(true)
+	var fused: Array = (out.get("fused", []) as Array).duplicate(true)
+	var xf_rel := fused_xf(rel)
+	for m in rack_modules(b):
+		var mxf: Transform3D = xf_rel * (m["xf"] as Transform3D)
+		var ms: Dictionary = (m["spec"] as Dictionary).duplicate(true)
+		ms.erase("fused")
+		ms.erase("_stepped_cells")
+		fused.append({"spec": ms, "x": mxf.origin.x, "z": mxf.origin.z,
+			"yaw": snap_quarter_deg(rad_to_deg(mxf.basis.get_euler().y))})
+	out["fused"] = fused
+	return resolve_spec(out)
+
+
+## Take rack `i` out of a fused build: {rest, rest_xf, module, module_xf}.
+## `rest` is the build without it, re-based on its first remaining rack, which
+## sits at `rest_xf` in the old frame; `module` stands alone at `module_xf`.
+## {} when the build has only one rack.
+static func split_fused(spec: Dictionary, i: int) -> Dictionary:
+	var mods := rack_modules(resolve_spec(spec))
+	if mods.size() < 2 or i < 0 or i >= mods.size():
+		return {}
+	var r := 1 if i == 0 else 0
+	var inv := (mods[r]["xf"] as Transform3D).affine_inverse()
+	var rest: Dictionary = (mods[r]["spec"] as Dictionary).duplicate(true)
+	var fused: Array = []
+	for k in mods.size():
+		if k == i or k == r:
+			continue
+		var mxf: Transform3D = inv * (mods[k]["xf"] as Transform3D)
+		var ms: Dictionary = (mods[k]["spec"] as Dictionary).duplicate(true)
+		ms.erase("_stepped_cells")
+		fused.append({"spec": ms, "x": mxf.origin.x, "z": mxf.origin.z,
+			"yaw": snap_quarter_deg(rad_to_deg(mxf.basis.get_euler().y))})
+	rest["fused"] = fused
+	var module: Dictionary = (mods[i]["spec"] as Dictionary).duplicate(true)
+	module.erase("_stepped_cells")
+	return {"rest": resolve_spec(rest), "rest_xf": mods[r]["xf"],
+		"module": resolve_spec(module), "module_xf": mods[i]["xf"]}
 
 
 # ---------------------------------------------------------------------------
@@ -989,6 +1540,9 @@ static func _resolve_cell(s: Dictionary, b: int, c: int, li: int,
 		height_ft = float(ov["height_ft"])
 	if ov.has("depth_units"):
 		depth_units = int(ov["depth_units"])
+	var claims: Variant = s.get("_stepped_cells")
+	if claims is Dictionary and (claims as Dictionary).has(_cell_key(b, c, li)):
+		kind = "stepped"
 	return {"kind": kind, "height_ft": height_ft, "y": height_ft * FT,
 		"depth_units": depth_units}
 
@@ -1020,11 +1574,18 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 			var x := float(fx[bx])
 			if _in_notch(notch, x, zf + frame_depth * 0.5):
 				continue
+			# Fused racks share the frames where their uprights meet.
+			var p0 := _mxf * Vector3(x, 0.0, zf)
+			var p1 := _mxf * Vector3(x, 0.0, zf + frame_depth)
+			if _post_shared(p0) and _post_shared(p1):
+				continue
 			var pov := g.begin([FRAMES_ID, "post:%d,%d" % [r, bx]],
 				["Uprights", "Upright %d, rack row %d" % [bx + 1, r + 1]])
 			if bool(pov.get("hidden", false)):
 				continue
 			_emit_frame(g, x, zf, zf + frame_depth, height, g.surf(pov, g.frame, true))
+			_posts_done.append(p0)
+			_posts_done.append(p1)
 			g.counts["uprights"] += 1
 
 	# Beams at every level x row x bay (front + back side), honoring overrides
@@ -1065,7 +1626,7 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 			for b in range(bays):
 				var cell := _resolve_cell(s, b, c, li, lv, decked)
 				var kind := str(cell["kind"])
-				if kind == "none":
+				if kind == "none" or kind == "stepped":
 					continue
 				var y := float(cell["y"])
 				var bx0 := float(fx[b]) + POST_W * 0.5
@@ -1125,7 +1686,7 @@ static func _cell_path(s: Dictionary, L: Dictionary, b: int, c: int, li: int) ->
 		labels.append("Column %d" % (c + 1))
 	var kind := str(_resolve_cell(s, b, c, li, lv, bool(s["decked"]))["kind"])
 	ids.append("cell:" + _cell_key(b, c, li))
-	labels.append("Bay %d%s" % [b + 1, " (steps)" if kind == "step"
+	labels.append("Bay %d%s" % [b + 1, " (steps)" if kind == "step" or kind == "stepped"
 		else (" (no deck)" if kind == "none" else "")])
 	return [ids, labels]
 
@@ -1188,19 +1749,30 @@ static func _emit_joists_span(g: _Geom, s: Dictionary, x_a: float, x_b: float,
 		g.counts["lumber"] += 1
 
 
+## A flight of `n` steps across a deck cell, from y_lo up to y_hi, rising
+## toward `dir` ("back" = +Z, "front" = -Z, "left" = +X, "right" = -X).
 static func _emit_stairs(g: _Geom, x_a: float, x_b: float, z_a: float,
 		z_b: float, y_lo: float, y_hi: float, notch: Dictionary, cp: Array = [],
-		key: String = "") -> void:
-	var span := z_b - z_a
-	var step_dz := span / float(STAIR_STEPS)
-	var cxm := (x_a + x_b) * 0.5
-	var wx := x_b - x_a
-	for s_i in range(STAIR_STEPS):
-		var za := z_a + step_dz * float(s_i)
-		var zb2 := za + step_dz
-		var y := y_lo + (y_hi - y_lo) * float(s_i + 1) / float(STAIR_STEPS)
-		var cz := (za + zb2) * 0.5
-		if _in_notch(notch, cxm, cz):
+		key: String = "", dir: String = "back", n: int = STAIR_STEPS) -> void:
+	n = maxi(2, n)
+	var along_z := dir == "back" or dir == "front"
+	var lo := z_a if along_z else x_a
+	var hi := z_b if along_z else x_b
+	var rising_up := dir == "back" or dir == "left"
+	var step_d := (hi - lo) / float(n)
+	for s_i in range(n):
+		# Step s_i counts up from the low end.
+		var k := s_i if rising_up else n - 1 - s_i
+		var u0 := lo + step_d * float(k)
+		var u1 := u0 + step_d
+		var y := y_lo + (y_hi - y_lo) * float(s_i + 1) / float(n)
+		var sx0 := x_a if along_z else u0
+		var sx1 := x_b if along_z else u1
+		var sz0 := u0 if along_z else z_a
+		var sz1 := u1 if along_z else z_b
+		var cx := (sx0 + sx1) * 0.5
+		var cz := (sz0 + sz1) * 0.5
+		if _in_notch(notch, cx, cz):
 			continue
 		var lum := g.lumber
 		var ply := g.ply
@@ -1212,10 +1784,10 @@ static func _emit_stairs(g: _Geom, x_a: float, x_b: float, z_a: float,
 			lum = g.surf(ov, g.lumber)
 			ply = g.surf(ov, g.ply)
 		# Support lumber under the tread.
-		_emit_box(lum, Transform3D(Basis(), Vector3(cxm, y - JOIST_H * 0.5, cz)),
-			Vector3(wx, JOIST_H, step_dz * 0.9))
+		var sup := Vector3(sx1 - sx0, JOIST_H, (sz1 - sz0) * 0.9) if along_z 			else Vector3((sx1 - sx0) * 0.9, JOIST_H, sz1 - sz0)
+		_emit_box(lum, Transform3D(Basis(), Vector3(cx, y - JOIST_H * 0.5, cz)), sup)
 		g.counts["lumber"] += 1
-		_emit_ply_field(g, x_a, x_b, za, zb2, y + PLY_T * 0.5, notch, [], [], ply)
+		_emit_ply_field(g, sx0, sx1, sz0, sz1, y + PLY_T * 0.5, notch, [], [], ply)
 
 
 ## `part` = [ids, labels, cell key] makes each sheet its own part (a deck);
@@ -1518,7 +2090,7 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 			var zb := _cell_z_bounds(rz, frame_depth, c, cols)
 			for b in range(bays):
 				var cell := _resolve_cell(s, b, c, li, lv, decked)
-				if str(cell["kind"]) == "none":
+				if str(cell["kind"]) == "none" or str(cell["kind"]) == "stepped":
 					continue
 				var bx0 := float(fx[b]) + POST_W * 0.5
 				var bx1 := float(fx[b + 1]) - POST_W * 0.5
@@ -1743,7 +2315,9 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 				out["color"] = c if Color.html_is_valid(c) else "#f2efe6"
 		"stair":
 			out["run"] = _pick_option(out["run"], STAIR_RUNS)
-			out["width_ft"] = clampf(float(out["width_ft"]), 2.0, 8.0)
+			out["width_ft"] = clampf(float(out["width_ft"]), 2.0, 12.0)
+			out["tread_in"] = clampf(float(out["tread_in"]), 9.0, 24.0)
+			out["landing_ft"] = clampf(float(out["landing_ft"]), 0.0, 12.0)
 			out["to_level"] = clampi(int(out["to_level"]), 0, maxi(nlv - 1, 0))
 			out["flip"] = bool(out["flip"])
 			out["handrail"] = bool(out["handrail"])
@@ -1768,6 +2342,39 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 					if SLOPE_SURFACES.has(sv) and str(k).is_valid_int():
 						segs[str(int(str(k)))] = sv
 			out["segments"] = segs
+			out["offset_ft"] = clampf(float(out["offset_ft"]), 0.0, 12.0)
+			out["bridge"] = _pick_option(out["bridge"], SEAL_OPTIONS)
+			out["gap_fill"] = _pick_option(out["gap_fill"], SEAL_OPTIONS)
+			var pm := str(out["panel_model"])
+			out["panel_model"] = pm if (PV_MODULES.has(pm) or pm == "custom") else "custom"
+			out["panel_long_in"] = clampf(float(out["panel_long_in"]), 12.0, 120.0)
+			out["panel_short_in"] = clampf(float(out["panel_short_in"]), 8.0,
+				float(out["panel_long_in"]))
+			out["panel_gap_in"] = clampf(float(out["panel_gap_in"]), 0.0, 12.0)
+			for k in ["panel_voc", "panel_vmp", "panel_isc", "panel_imp"]:
+				out[k] = clampf(float(out[k]), 0.1, 200.0)
+			out["pv_rows"] = clampi(int(out["pv_rows"]), 0, 40)
+			out["pv_from"] = _pick_option(out["pv_from"], PV_FROM)
+		"ladder":
+			out["floor"] = clampi(int(out["floor"]), -1, maxi(nlv - 1, -1))
+			out["to_level"] = clampi(int(out["to_level"]), 0, maxi(nlv - 1, 0))
+			out["width_ft"] = clampf(float(out["width_ft"]), 1.0, 3.0)
+			out["at_ft"] = clampf(float(out["at_ft"]), 0.0, _face_len_ft(m, str(out["face"])))
+		"stepped":
+			out["mode"] = _pick_option(out["mode"], STEP_MODES)
+			out["rise_toward"] = _pick_option(out["rise_toward"], RISE_DIRS)
+			out["bay"] = clampi(int(out["bay"]), 0, int(s["bay_count"]) - 1)
+			out["col"] = clampi(int(out["col"]), 0, int(s["column_count"]) - 1)
+			out["level"] = clampi(int(out["level"]), 0, maxi(nlv - 1, 0))
+			out["to_level"] = clampi(int(out["to_level"]), 0, maxi(nlv - 1, 0))
+			out["steps"] = clampi(int(out["steps"]), 2, 16)
+			out["rise_in"] = clampf(float(out["rise_in"]), 6.0, 30.0)
+			out["tread_ft"] = clampf(float(out["tread_ft"]), 1.0, 8.0)
+			out["closed_risers"] = bool(out["closed_risers"])
+			var nsg := _face_seg_count(s, str(out["face"]))
+			out["seg_from"] = clampi(int(out["seg_from"]), 0, nsg - 1)
+			var sto := int(out["seg_to"])
+			out["seg_to"] = clampi(sto if sto >= 0 else nsg - 1, int(out["seg_from"]), nsg - 1)
 		"railing":
 			out["floor"] = clampi(int(out["floor"]), 0, maxi(nlv - 1, 0))
 			out["height_ft"] = clampf(float(out["height_ft"]), 2.0, 5.0)
@@ -1810,6 +2417,31 @@ static func _face_seg_count(s: Dictionary, face: String) -> int:
 ## A face's length in feet on `spec`.
 static func face_length_ft(spec: Dictionary, face: String) -> float:
 	return _face_len_ft(_metrics(resolve_spec(spec)), face)
+
+
+## The deck cell (bay, col) over rack-local x, z; (-1, -1) outside the grid.
+static func grid_cell_at(spec: Dictionary, x: float, z: float) -> Vector2i:
+	var s := resolve_spec(spec)
+	var L := _layout(s, _metrics(s))
+	var b := int(floor((x - float(L.x0)) / float(L.module_x)))
+	if b < 0 or b >= int(L.bays):
+		return Vector2i(-1, -1)
+	for c in range(int(L.cols)):
+		var zb := _cell_z_bounds(L.rz, float(L.frame_depth), c, int(L.cols))
+		if z >= zb.x - 0.02 and z <= zb.y + 0.02:
+			return Vector2i(b, c)
+	return Vector2i(-1, -1)
+
+
+## The bay of `face` at `along_ft` from its start (clamped to the face).
+static func face_segment_at(spec: Dictionary, face: String, along_ft: float) -> int:
+	var s := resolve_spec(spec)
+	var segs := _face_segments(face, _layout(s, _metrics(s)))
+	var a := along_ft * FT
+	for i in segs.size():
+		if a <= float(segs[i].y):
+			return i
+	return maxi(segs.size() - 1, 0)
 
 
 ## How many bays a sloped array can span on `face` (bays front/back, columns
@@ -1997,6 +2629,13 @@ static func element_label(e: Dictionary, spec: Dictionary = {}) -> String:
 			return "%s · %s face" % [str(OPTION_LABELS.get(str(e.get("surface", "")), name)), face]
 		"railing":
 			return "Railing · %s" % _floor_name(spec, int(e.get("floor", 0)))
+		"ladder":
+			return "Ladder · %s face, up to %s" % [face, _floor_name(spec, int(e.get("to_level", 0)))]
+		"stepped":
+			if str(e.get("mode", "bay")) == "bay":
+				return "Steps · bay %d, column %d, up to %s" % [int(e.get("bay", 0)) + 1,
+					int(e.get("col", 0)) + 1, _floor_name(spec, int(e.get("level", 0)))]
+			return "Big steps · %s face, up to %s" % [face, _floor_name(spec, int(e.get("to_level", 0)))]
 		"courtyard":
 			var b0 := int(e.get("bay0", 0)) + 1
 			var nb := int(e.get("bays", 1))
@@ -2047,10 +2686,15 @@ static func _emit_elements(g: _Geom, s: Dictionary, L: Dictionary) -> void:
 		if t == "railing":
 			_emit_railing(g, s, L, e)
 			continue
+		if t == "stepped":
+			_emit_stepped(g, s, L, e)
+			continue
 		var ov := g.begin([eid], [element_label(e, s) if g.record else ""])
 		if bool(ov.get("hidden", false)):
 			continue
 		match t:
+			"ladder":
+				_emit_ladder(g, L, e, g.surf(ov, g.lumber))
 			"door":
 				_emit_door(g, L, e)
 			"window":
@@ -2090,6 +2734,11 @@ static func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 	var n := (b - a).cross(c - a)
 	if n.length() < 1e-6:
 		return
+	if _mxf != Transform3D.IDENTITY:
+		a = _mxf * a
+		b = _mxf * b
+		c = _mxf * c
+		n = _mxf.basis * n
 	if _rec != null:
 		st = _rec.route(st)
 		if _rec.record:
@@ -2199,10 +2848,13 @@ static func _stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
 	if y_top < 0.3:
 		return {}
 	var n := maxi(2, int(ceil(y_top / RISER_MAX)))
+	var along := str(e["run"]) == "along"
+	var landing := 0.0 if along else float(e.get("landing_ft", 0.0)) * FT
 	return {"fr": fr, "y_top": y_top, "n": n, "riser": y_top / float(n),
 		"w": float(e["width_ft"]) * FT, "a": float(e["at_ft"]) * FT,
-		"o0": POST_W * 0.5 + 0.03, "along": str(e["run"]) == "along",
-		"sgn": -1.0 if bool(e["flip"]) else 1.0}
+		"o0": POST_W * 0.5 + 0.03 + landing, "along": along,
+		"sgn": -1.0 if bool(e["flip"]) else 1.0,
+		"tread": float(e.get("tread_in", 10.0)) * IN, "landing": landing}
 
 
 ## A point on the flight: `dist` back (downhill) from its top, `lat` across it.
@@ -2231,13 +2883,30 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 	var w: float = G.w
 	var riser: float = G.riser
 	var y_top: float = G.y_top
+	var tread: float = G.tread
+	var landing: float = G.landing
+	if landing > 0.05:
+		# The landing: plywood on joists from the deck edge to the top step,
+		# legs at its outer corners.
+		var lfr: Dictionary = G.fr
+		var o_in := POST_W * 0.5 + 0.03
+		var lo := o_in + landing * 0.5
+		_emit_face_box(g.ply, lfr, float(G.a), y_top - PLY_T * 0.5, lo, Vector3(w, PLY_T, landing))
+		_emit_face_box(g.lumber, lfr, float(G.a), y_top - PLY_T - JOIST_H * 0.5, lo,
+			Vector3(w - 0.02, JOIST_H, landing - 0.02))
+		var lh := y_top - PLY_T - JOIST_H
+		for fa in [-0.45, 0.45]:
+			_emit_face_box(g.lumber, lfr, float(G.a) + w * float(fa), lh * 0.5, o_in + landing - 0.06,
+				Vector3(LEG_W, lh, LEG_W))
+		g.counts["plywood"] += 1
+		g.counts["lumber"] += 3
 	for k in range(1, n):
-		var c := _stair_point(G, float(n - k) * TREAD_RUN - TREAD_RUN * 0.5, 0.0,
+		var c := _stair_point(G, float(n - k) * tread - tread * 0.5, 0.0,
 			riser * float(k) - 0.75 * IN)
-		_emit_obox(g.lumber, c, run_dir, Vector3.UP, Vector3(TREAD_RUN + IN, 1.5 * IN, w))
+		_emit_obox(g.lumber, c, run_dir, Vector3.UP, Vector3(tread + IN, 1.5 * IN, w))
 		g.counts["lumber"] += 1
 	for lat in [-w * 0.5 + 0.03, w * 0.5 - 0.03]:
-		var p_bot := _stair_point(G, float(n) * TREAD_RUN, lat, 0.0)
+		var p_bot := _stair_point(G, float(n) * tread, lat, 0.0)
 		var p_top := _stair_point(G, 0.0, lat, y_top)
 		var dv := p_top - p_bot
 		_emit_obox(g.lumber, (p_bot + p_top) * 0.5 + Vector3.DOWN * (STRINGER_D * 0.45), dv,
@@ -2266,7 +2935,7 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 	if bool(e.get("handrail", true)):
 		var sides: Array = [w * 0.5] if bool(G.along) else [-w * 0.5, w * 0.5]
 		for lat in sides:
-			var b := _stair_point(G, float(n - 1) * TREAD_RUN, lat, riser)
+			var b := _stair_point(G, float(n - 1) * tread, lat, riser)
 			var t := _stair_point(G, 0.0, lat, y_top)
 			for p in [b, t]:
 				_emit_obox(g.lumber, (p as Vector3) + Vector3.UP * (STAIR_RAIL_H * 0.5), Vector3.UP,
@@ -2301,6 +2970,149 @@ static func _stair_gaps(s: Dictionary, L: Dictionary, li: int) -> Dictionary:
 	return out
 
 
+# ---- Ladders ----
+
+static func _ladder_geo(L: Dictionary, e: Dictionary) -> Dictionary:
+	var y0 := _floor_y(L, int(e["floor"]))
+	var y_deck := _floor_y(L, int(e["to_level"]))
+	if y_deck < y0 + 0.5:
+		return {}
+	return {"fr": _face_frame(str(e["face"]), L), "a": float(e["at_ft"]) * FT, "y0": y0,
+		"y_deck": y_deck, "y1": y_deck + 3.0 * FT, "w": float(e["width_ft"]) * FT,
+		"o": POST_W * 0.5 + 0.06}
+
+
+## Two 2x4 rails up the face (on past the deck) and a rung every foot.
+static func _emit_ladder(g: _Geom, L: Dictionary, e: Dictionary, st: SurfaceTool) -> void:
+	var G := _ladder_geo(L, e)
+	if G.is_empty():
+		return
+	var fr: Dictionary = G.fr
+	var a: float = G.a
+	var y0: float = G.y0
+	var y1: float = G.y1
+	var w: float = G.w
+	var o: float = G.o
+	for side in [-0.5, 0.5]:
+		_emit_face_box(st, fr, a + w * float(side), (y0 + y1) * 0.5, o,
+			Vector3(1.5 * IN, y1 - y0, 3.5 * IN))
+	var y := y0 + FT
+	var n := 0
+	while y < float(G.y_deck) + 0.05:
+		_emit_face_box(st, fr, a, y, o, Vector3(w, 1.25 * IN, 1.25 * IN))
+		y += FT
+		n += 1
+	g.counts["lumber"] += 2 + n
+	g.counts["ladders"] += 1
+
+
+# ---- Stepped modules ----
+
+## A bay-mode module's cell: {x0, x1, z0, z1, y_lo, y_hi}, or {} when the cell
+## is cut away (a courtyard, the U).
+static func _stepped_cell_geo(s: Dictionary, L: Dictionary, e: Dictionary) -> Dictionary:
+	var levels: Array = L.levels
+	var li := int(e["level"])
+	if levels.is_empty() or li < 0 or li >= levels.size():
+		return {}
+	var b := int(e["bay"])
+	var c := int(e["col"])
+	var fx: Array = L.fx
+	var zb := _cell_z_bounds(L.rz, float(L.frame_depth), c, int(L.cols))
+	var cell := _resolve_cell(s, b, c, li, levels[li], bool(s["decked"]))
+	var x0 := float(fx[b]) + POST_W * 0.5
+	var x1 := float(fx[b + 1]) - POST_W * 0.5
+	var z0: float = zb.x
+	var z1: float = zb.y
+	var du := int(cell.get("depth_units", -1))
+	if du >= 0:
+		z1 = minf(z1, z0 + float(du) * HALF_PANEL_FT * FT)
+	if _in_notch(L.notch, (x0 + x1) * 0.5, (z0 + z1) * 0.5):
+		return {}
+	var y_lo := float(levels[li - 1]["y"]) if li > 0 else 0.0
+	return {"x0": x0, "x1": x1, "z0": z0, "z1": z1, "y_lo": y_lo, "y_hi": float(cell["y"])}
+
+
+## A face-mode module: big steps outside `face` over its bays seg_from..seg_to,
+## climbing to deck `to_level`. Step k (1 = the lowest) has its walking
+## surface at k * riser and lies (n - 1 - k) treads out from the face; the deck
+## itself is the n-th step.
+static func _stepped_face_geo(s: Dictionary, L: Dictionary, e: Dictionary) -> Dictionary:
+	var fr := _face_frame(str(e["face"]), L)
+	var y_top := _floor_y(L, int(e["to_level"]))
+	if y_top < 0.25:
+		return {}
+	var segs := _face_segments(str(e["face"]), L)
+	if segs.is_empty():
+		return {}
+	var sf := clampi(int(e["seg_from"]), 0, segs.size() - 1)
+	var st := clampi(int(e["seg_to"]), sf, segs.size() - 1)
+	var n := maxi(2, int(ceil(y_top / (float(e["rise_in"]) * IN))))
+	return {"fr": fr, "y_top": y_top, "n": n, "riser": y_top / float(n),
+		"tread": float(e["tread_ft"]) * FT, "a0": float(segs[sf].x), "a1": float(segs[st].y),
+		"o0": POST_W * 0.5 + 0.02}
+
+
+static func _emit_stepped(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary) -> void:
+	var eid := "el:" + str(e.get("id", ""))
+	var elab := element_label(e, s) if g.record else ""
+	var ov := g.begin([eid], [elab])
+	if bool(ov.get("hidden", false)):
+		return
+	if str(e["mode"]) == "bay":
+		var C := _stepped_cell_geo(s, L, e)
+		if C.is_empty():
+			return
+		_emit_stairs(g, C.x0, C.x1, C.z0, C.z1, C.y_lo, C.y_hi, L.notch, [[eid], [elab]],
+			str(e.get("id", "")), str(e["rise_toward"]), int(e["steps"]))
+		g.counts["stairs"] += 1
+		return
+	var G := _stepped_face_geo(s, L, e)
+	if G.is_empty():
+		return
+	var fr: Dictionary = G.fr
+	var n: int = G.n
+	var riser: float = G.riser
+	var tread: float = G.tread
+	var a0: float = G.a0
+	var a1: float = G.a1
+	var w := a1 - a0
+	var am := (a0 + a1) * 0.5
+	var key := str(e.get("id", ""))
+	for k in range(1, n):
+		var sov := g.begin([eid, "tread:%s:%d" % [key, k - 1]], [elab, "Step %d" % k])
+		if bool(sov.get("hidden", false)):
+			continue
+		var lum := g.surf(sov, g.lumber)
+		var ply := g.surf(sov, g.ply)
+		var y := riser * float(k)
+		var oi: float = float(G.o0) + float(n - 1 - k) * tread
+		var oc := oi + tread * 0.5
+		# The tread: a plywood top on joists running out from the face.
+		_emit_face_box(ply, fr, am, y - PLY_T * 0.5, oc, Vector3(w, PLY_T, tread - SEAM))
+		var nj := maxi(2, int(ceil(w / (2.0 * FT))) + 1)
+		for j in range(nj):
+			var a := lerpf(a0 + JOIST_W * 0.5, a1 - JOIST_W * 0.5, float(j) / float(nj - 1))
+			_emit_face_box(lum, fr, a, y - PLY_T - JOIST_H * 0.5, oc,
+				Vector3(JOIST_W, JOIST_H, tread))
+		# Legs at the outer edge, at most 4' apart, down to the ground.
+		var leg_h := y - PLY_T - JOIST_H
+		if leg_h > 0.05:
+			var nl := maxi(1, int(ceil(w / RAIL_POST_MAX)))
+			for j in range(nl + 1):
+				var a := lerpf(a0 + LEG_W * 0.5, a1 - LEG_W * 0.5, float(j) / float(nl))
+				_emit_face_box(lum, fr, a, leg_h * 0.5, oi + tread - LEG_W * 0.5,
+					Vector3(LEG_W, leg_h, LEG_W))
+		# The riser closes the front of the step from the one below.
+		if bool(e.get("closed_risers", true)):
+			_emit_face_box(ply, fr, am, y - riser * 0.5 - PLY_T * 0.5, oi + tread - PLY_T * 0.5,
+				Vector3(w, riser - PLY_T, PLY_T))
+			g.counts["plywood"] += 1
+		g.counts["plywood"] += maxi(1, int(ceil(w * tread / (SHEET_LONG * SHEET_SHORT) - 0.05)))
+		g.counts["lumber"] += nj + (maxi(1, int(ceil(w / RAIL_POST_MAX))) + 1 if leg_h > 0.05 else 0)
+	g.counts["stairs"] += 1
+
+
 # ---- Sloped (lean-to) arrays ----
 
 ## The slope's geometry: the panel plane runs from (o_bot, bot_y) up to
@@ -2322,8 +3134,10 @@ static func _lean_to_geo(s: Dictionary, L: Dictionary, e: Dictionary) -> Diction
 	var out_v: Vector3 = fr.out
 	var d := (-out_v * run + Vector3.UP * rise) / slope_len
 	var nv := (out_v * rise + Vector3.UP * run) / slope_len
-	# Push the plane out so the rafters under it clear the uprights at the top.
-	var o_top := POST_W * 0.5 + 0.03 + (PURLIN_T + RAFTER_D) * rise / slope_len
+	# Push the plane out so the rafters under it clear the uprights at the top,
+	# plus the gap the player asked for (spanned by joists, see _emit_lean_to).
+	var offset := clampf(float(e.get("offset_ft", 0.0)), 0.0, 12.0) * FT
+	var o_top := POST_W * 0.5 + 0.03 + (PURLIN_T + RAFTER_D) * rise / slope_len + offset
 	var segs_all := _face_segments(face, L)
 	var sf := clampi(int(e["seg_from"]), 0, segs_all.size() - 1)
 	var stt := int(e["seg_to"])
@@ -2336,7 +3150,7 @@ static func _lean_to_geo(s: Dictionary, L: Dictionary, e: Dictionary) -> Diction
 			"surface": str(segments.get(str(i), e["surface"]))})
 	return {"fr": fr, "top_y": top_y, "bot_y": bot_y, "run": run, "rise": rise,
 		"slope_len": slope_len, "d": d, "n": nv, "o_top": o_top, "o_bot": o_top + run,
-		"segs": segs}
+		"segs": segs, "offset": offset}
 
 
 static func _lean_point(G: Dictionary, a: float, s_up: float, lift: float) -> Vector3:
@@ -2345,19 +3159,43 @@ static func _lean_point(G: Dictionary, a: float, s_up: float, lift: float) -> Ve
 
 
 ## How many modules fit one bay of the slope, and where the grid starts.
+## The module's own size comes from the element (panel_long_in / short / gap).
 static func _pv_layout(G: Dictionary, a0: float, a1: float, e: Dictionary) -> Dictionary:
 	var land := str(e.get("orientation", "landscape")) != "portrait"
-	var pw := PV_LONG if land else PV_SHORT
-	var ph := PV_SHORT if land else PV_LONG
+	var long_m := float(e.get("panel_long_in", PV_LONG / IN)) * IN
+	var short_m := float(e.get("panel_short_in", PV_SHORT / IN)) * IN
+	var gap := float(e.get("panel_gap_in", PV_GAP / IN)) * IN
+	var pw := long_m if land else short_m
+	var ph := short_m if land else long_m
 	var slen: float = G.slope_len
-	var nc := int(floor((a1 - a0 - 0.04 + PV_GAP) / (pw + PV_GAP)))
-	var nr := int(floor((slen - 0.04 + PV_GAP) / (ph + PV_GAP)))
+	var nc := int(floor((a1 - a0 - 0.04 + gap) / (pw + gap)))
+	var nr := int(floor((slen - 0.04 + gap) / (ph + gap)))
+	var rows_cap := int(e.get("pv_rows", 0))
+	if rows_cap > 0:
+		nr = mini(nr, rows_cap)
 	if nc <= 0 or nr <= 0:
 		return {"count": 0}
-	var used_a := float(nc) * pw + float(nc - 1) * PV_GAP
-	var used_s := float(nr) * ph + float(nr - 1) * PV_GAP
+	var used_a := float(nc) * pw + float(nc - 1) * gap
+	var used_s := float(nr) * ph + float(nr - 1) * gap
+	var s_start := (slen - used_s) * 0.5
+	if rows_cap > 0:
+		match str(e.get("pv_from", "centre")):
+			"top":
+				s_start = slen - used_s - 0.02
+			"bottom":
+				s_start = 0.02
 	return {"count": nc * nr, "nc": nc, "nr": nr, "pw": pw, "ph": ph, "land": land,
-		"a_start": a0 + (a1 - a0 - used_a) * 0.5, "s_start": (slen - used_s) * 0.5}
+		"long": long_m, "short": short_m, "gap": gap,
+		"a_start": a0 + (a1 - a0 - used_a) * 0.5, "s_start": s_start}
+
+
+## Where module (r, c) of a bay's layout sits: Vector2(along, up-slope) centre.
+static func _pv_center(lay: Dictionary, r: int, c: int) -> Vector2:
+	var pw: float = lay["pw"]
+	var ph: float = lay["ph"]
+	var gap: float = lay["gap"]
+	return Vector2(float(lay["a_start"]) + float(c) * (pw + gap) + pw * 0.5,
+		float(lay["s_start"]) + float(r) * (ph + gap) + ph * 0.5)
 
 
 static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary) -> void:
@@ -2427,6 +3265,8 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 			_emit_obox(lum, Vector3(foot0.x, 0.045, foot0.z), along_v, Vector3.UP,
 				Vector3(span + LEG_W, 0.09, RAFTER_D))
 		g.counts["lumber"] += 2
+	if float(G.offset) > 0.02:
+		_emit_lean_bridge(g, G, raf, amin, amax, e, eid, elab)
 	for sg in live:
 		var a0: float = sg["a0"]
 		var a1: float = sg["a1"]
@@ -2437,6 +3277,7 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 		match str(sg["surface"]):
 			"solar":
 				var lay := _pv_layout(G, a0, a1, e)
+				var holes: Array = []
 				if int(lay["count"]) > 0:
 					var long_ax: Vector3 = along_v if bool(lay["land"]) else dv
 					var pw: float = lay["pw"]
@@ -2447,14 +3288,18 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 								pre_l + ["Panel %d" % (r * int(lay["nc"]) + c + 1)])
 							if bool(mov.get("hidden", false)):
 								continue
-							var pa := float(lay["a_start"]) + float(c) * (pw + PV_GAP) + pw * 0.5
-							var ps := float(lay["s_start"]) + float(r) * (ph + PV_GAP) + ph * 0.5
-							_emit_obox(g.pv, _lean_point(G, pa, ps, PV_T * 0.5), long_ax, nv,
-								Vector3(PV_LONG, PV_T, PV_SHORT))
+							var pc := _pv_center(lay, r, c)
+							_emit_obox(g.pv, _lean_point(G, pc.x, pc.y, PV_T * 0.5), long_ax, nv,
+								Vector3(float(lay["long"]), PV_T, float(lay["short"])))
+							holes.append(Rect2(pc.x - pw * 0.5, pc.y - ph * 0.5, pw, ph))
 							g.counts["solar_panels"] += 1
 							g.counts["solar_watts"] += float(e["panel_watts"])
 					for r in range(int(lay["nr"]) + 1):
-						purlins.append(float(lay["s_start"]) + float(r) * (ph + PV_GAP) - PV_GAP * 0.5)
+						purlins.append(float(lay["s_start"]) + float(r) * (ph + float(lay["gap"]))
+							- float(lay["gap"]) * 0.5)
+				var fill := str(e.get("gap_fill", "open"))
+				if fill != "open":
+					_emit_gap_seal(g, G, a0, a1, holes, fill, pre, pre_l, bid)
 			"glazing":
 				_emit_slope_sheets(g, g.glass, G, a0, a1, GLAZING_T, "glazing", pre, pre_l, bid, false)
 			"plywood":
@@ -2495,6 +3340,82 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 				_emit_quad(st_e, w_bot, p_bot, Vector3(p_bot.x, 0.0, p_bot.z), Vector3(w_bot.x, 0.0, w_bot.z))
 			g.counts["glazing" if ends == "glazing" else "plywood"] += 1
 	g.end_part()
+
+
+## An offset slope's link back to the structure: a ledger on the face, a joist
+## from it to the slope's top edge at every rafter, posts under the top edge
+## when the gap is wide, and (bridge "plywood" / "glazing") a cover over the
+## strip, flush with the slope's top. One part, "<el>:bridge".
+static func _emit_lean_bridge(g: _Geom, G: Dictionary, raf: Array, amin: float, amax: float,
+		e: Dictionary, eid: String, elab: String) -> void:
+	var ov := g.begin([eid, eid + ":bridge"], [elab, "Joists to the structure"])
+	if bool(ov.get("hidden", false)):
+		return
+	var fr: Dictionary = G.fr
+	var top_y: float = G.top_y
+	var cover := str(e.get("bridge", "open"))
+	var th := 0.0 if cover == "open" else (GLAZING_T if cover == "glazing" else PLY_T)
+	var lum := g.surf(ov, g.lumber)
+	var o_face := POST_W * 0.5 + 0.02
+	var o_end: float = G.o_top
+	var jy := top_y - th - RAFTER_D * 0.5
+	var span_o := o_end - o_face
+	var span_a := amax - amin
+	# Ledger on the face, a rim at the slope's top edge.
+	for o in [o_face + RAFTER_W * 0.5, o_end - RAFTER_W * 0.5]:
+		_emit_face_box(lum, fr, (amin + amax) * 0.5, jy, o, Vector3(span_a, RAFTER_D, RAFTER_W))
+		g.counts["lumber"] += 1
+	for ra in raf:
+		var a := clampf(float(ra), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
+		_emit_face_box(lum, fr, a, jy, o_face + span_o * 0.5, Vector3(RAFTER_W, RAFTER_D, span_o))
+		g.counts["lumber"] += 1
+	# A wide gap stands on posts under its outer rim, at most 8' apart.
+	if float(G.offset) > 4.0 * FT:
+		var post_h := jy - RAFTER_D * 0.5
+		var n := maxi(1, int(ceil(span_a / (8.0 * FT))))
+		for k in range(n + 1):
+			var a := lerpf(amin + LEG_W * 0.5, amax - LEG_W * 0.5, float(k) / float(n))
+			_emit_face_box(lum, fr, a, post_h * 0.5, o_end - RAFTER_W - LEG_W * 0.5,
+				Vector3(LEG_W, post_h, LEG_W))
+			g.counts["lumber"] += 1
+	if th > 0.0:
+		var st: SurfaceTool = g.glass if cover == "glazing" else g.surf(ov, g.ply)
+		_emit_face_box(st, fr, (amin + amax) * 0.5, top_y - th * 0.5, o_face + span_o * 0.5,
+			Vector3(span_a, th, span_o))
+		g.counts["glazing" if cover == "glazing" else "plywood"] += maxi(1,
+			int(ceil(span_a * span_o / (SHEET_LONG * SHEET_SHORT) - 0.05)))
+
+
+## Seal a solar bay: plywood or glazing over every part of the bay the modules
+## do not cover (the margins and the gaps between them), flush in the module
+## plane. A hidden module leaves its spot to be sealed too. One part per bay,
+## "<bay>:g".
+static func _emit_gap_seal(g: _Geom, G: Dictionary, a0: float, a1: float, holes: Array,
+		fill: String, pre: Array, pre_l: Array, bid: String) -> void:
+	var slen: float = G.slope_len
+	var pieces := rect_minus(Rect2(a0, 0.0, a1 - a0, slen), holes)
+	if pieces.is_empty():
+		return
+	var ov := g.begin(pre + [bid + ":g"], pre_l + ["Gap seal · %s" %
+		str(OPTION_LABELS.get(fill, fill)).to_lower()])
+	if bool(ov.get("hidden", false)):
+		return
+	var glass := fill == "glazing"
+	var th := GLAZING_T if glass else PLY_T
+	var st: SurfaceTool = g.glass if glass else g.surf(ov, g.ply)
+	var along_v: Vector3 = (G.fr as Dictionary).along
+	var nv: Vector3 = G.n
+	var area := 0.0
+	for p in pieces:
+		var pr: Rect2 = p
+		if pr.size.x < 0.004 or pr.size.y < 0.004:
+			continue
+		_emit_obox(st, _lean_point(G, pr.position.x + pr.size.x * 0.5,
+			pr.position.y + pr.size.y * 0.5, th * 0.5), along_v, nv,
+			Vector3(pr.size.x, th, pr.size.y))
+		area += pr.get_area()
+	g.counts["glazing" if glass else "plywood"] += maxi(1,
+		int(ceil(area / (SHEET_LONG * SHEET_SHORT) - 0.05)))
 
 
 ## `pre` / `pre_l` = the bay's path + labels; each sheet is a part of the bay.
@@ -2764,10 +3685,11 @@ static func _element_components(s: Dictionary, L: Dictionary, e: Dictionary) -> 
 			var n: int = G.n
 			var box := AABB(_stair_point(G, 0.0, -w * 0.5, 0.0), Vector3.ZERO)
 			for lat in [-w * 0.5, w * 0.5]:
-				for p in [_stair_point(G, float(n) * TREAD_RUN, lat, 0.0),
+				for p in [_stair_point(G, float(n) * float(G.tread), lat, 0.0),
 						_stair_point(G, 0.0, lat, float(G.y_top) + STAIR_RAIL_H),
 						_stair_point(G, -w if bool(G.along) else 0.0, lat, float(G.y_top))]:
 					box = box.expand(p)
+			box = box.expand(_fp(G.fr, float(G.a) - w * 0.5, float(G.y_top), POST_W * 0.5))
 			var c := base.duplicate()
 			c["id"] = "el:" + id
 			c["aabb"] = box.grow(0.05)
@@ -2802,6 +3724,36 @@ static func _element_components(s: Dictionary, L: Dictionary, e: Dictionary) -> 
 				c["id"] = "el:%s:r%d" % [id, k]
 				c["aabb"] = box.grow(0.1)
 				out.append(c)
+		"ladder":
+			var G := _ladder_geo(L, e)
+			if G.is_empty():
+				return out
+			var c := base.duplicate()
+			c["id"] = "el:" + id
+			c["aabb"] = _face_aabb(G.fr, G.a, (float(G.y0) + float(G.y1)) * 0.5, G.o,
+				Vector3(float(G.w) + 0.1, float(G.y1) - float(G.y0), 0.25))
+			out.append(c)
+		"stepped":
+			var box := AABB()
+			if str(e["mode"]) == "bay":
+				var C := _stepped_cell_geo(s, L, e)
+				if C.is_empty():
+					return out
+				box = AABB(Vector3(C.x0, C.y_lo, C.z0),
+					Vector3(C.x1 - C.x0, maxf(float(C.y_hi) - float(C.y_lo), 0.1) + JOIST_H + PLY_T,
+						C.z1 - C.z0))
+			else:
+				var G := _stepped_face_geo(s, L, e)
+				if G.is_empty():
+					return out
+				var o_out: float = float(G.o0) + float(int(G.n) - 1) * float(G.tread)
+				box = AABB(_fp(G.fr, G.a0, 0.0, G.o0), Vector3.ZERO)
+				box = box.expand(_fp(G.fr, G.a1, float(G.y_top), o_out))
+			var c := base.duplicate()
+			c["id"] = "el:" + id
+			c["mode"] = str(e["mode"])
+			c["aabb"] = box.grow(0.03)
+			out.append(c)
 		"courtyard":
 			var mx: float = L.module_x
 			var pitch: float = L.row_pitch
@@ -2826,20 +3778,47 @@ static func element_components(spec: Dictionary, element: Dictionary) -> Array:
 	return _element_components(s, L, e)
 
 
-## The solar modules on a rack's sloped arrays: {count, watts, watts_per_panel,
-## avg_normal (builder-local), tilt_deg, panel_w_m, panel_h_m}. Counts match
-## the geometry exactly (same _pv_layout).
+## The solar modules on a rack's sloped arrays (fused racks included):
+## {count, watts, watts_per_panel, avg_normal (builder-local), tilt_deg,
+## panel_w_m, panel_h_m, voc, vmp, isc, imp}. Counts match the geometry
+## exactly (same _pv_layout). The electrical numbers and size are the module
+## that makes up most of the panels.
 static func solar_summary(spec: Dictionary) -> Dictionary:
 	var s := resolve_spec(spec)
+	var acc := {"count": 0, "watts": 0.0, "nsum": Vector3.ZERO, "by_model": {}}
+	_solar_accumulate(s, Basis(), acc)
+	for f in (s.get("fused", []) as Array):
+		_solar_accumulate(resolve_spec(f["spec"]),
+			Basis(Vector3.UP, deg_to_rad(float(f["yaw"]))), acc)
+	var count: int = acc["count"]
+	var watts: float = acc["watts"]
+	var avg: Vector3 = (acc["nsum"] as Vector3).normalized() if count > 0 else Vector3.UP
+	var best := {}
+	var best_n := -1
+	for k in (acc["by_model"] as Dictionary).keys():
+		var r: Dictionary = acc["by_model"][k]
+		if int(r["n"]) > best_n:
+			best_n = int(r["n"])
+			best = r
+	var m0: Dictionary = PV_MODULES["60cell_300"]
+	return {"count": count, "watts": watts,
+		"watts_per_panel": watts / float(count) if count > 0 else PV_WATTS,
+		"avg_normal": avg, "tilt_deg": rad_to_deg(acos(clampf(avg.y, -1.0, 1.0))),
+		"panel_w_m": float(best.get("short", PV_SHORT)), "panel_h_m": float(best.get("long", PV_LONG)),
+		"voc": float(best.get("voc", m0["voc"])), "vmp": float(best.get("vmp", m0["vmp"])),
+		"isc": float(best.get("isc", m0["isc"])), "imp": float(best.get("imp", m0["imp"]))}
+
+
+static func _solar_accumulate(s: Dictionary, basis: Basis, acc: Dictionary) -> void:
 	var L := _layout(s, _metrics(s))
-	var count := 0
-	var watts := 0.0
-	var nsum := Vector3.ZERO
 	for e in (s.get("elements", []) as Array):
 		if not (e is Dictionary) or str(e.get("type", "")) != "lean_to":
 			continue
 		var G := _lean_to_geo(s, L, e)
 		var eid := "el:" + str(e.get("id", ""))
+		var mkey := "%s|%.1f|%.1f|%.2f|%.2f|%.2f|%.2f" % [str(e["panel_model"]),
+			float(e["panel_long_in"]), float(e["panel_short_in"]), float(e["panel_voc"]),
+			float(e["panel_vmp"]), float(e["panel_isc"]), float(e["panel_imp"])]
 		for sg in G.segs:
 			if str(sg["surface"]) != "solar":
 				continue
@@ -2852,14 +3831,18 @@ static func solar_summary(spec: Dictionary) -> Dictionary:
 					for c in int(lay["nc"]):
 						if not bool(merged_override(s, [eid, bid, "%s:m%d,%d" % [bid, r, c]]).get("hidden", false)):
 							n += 1
-			count += n
-			watts += float(n) * float(e["panel_watts"])
-			nsum += (G.n as Vector3) * float(n)
-	var avg := nsum.normalized() if count > 0 else Vector3.UP
-	return {"count": count, "watts": watts,
-		"watts_per_panel": watts / float(count) if count > 0 else PV_WATTS,
-		"avg_normal": avg, "tilt_deg": rad_to_deg(acos(clampf(avg.y, -1.0, 1.0))),
-		"panel_w_m": PV_SHORT, "panel_h_m": PV_LONG}
+			if n == 0:
+				continue
+			acc["count"] = int(acc["count"]) + n
+			acc["watts"] = float(acc["watts"]) + float(n) * float(e["panel_watts"])
+			acc["nsum"] = (acc["nsum"] as Vector3) + basis * (G.n as Vector3) * float(n)
+			var bm: Dictionary = acc["by_model"]
+			if not bm.has(mkey):
+				bm[mkey] = {"n": 0, "long": float(e["panel_long_in"]) * IN,
+					"short": float(e["panel_short_in"]) * IN, "voc": float(e["panel_voc"]),
+					"vmp": float(e["panel_vmp"]), "isc": float(e["panel_isc"]),
+					"imp": float(e["panel_imp"])}
+			bm[mkey]["n"] = int(bm[mkey]["n"]) + n
 
 
 # ---------------------------------------------------------------------------
@@ -2924,7 +3907,189 @@ static func design_presets() -> Array:
 					{"type": "railing", "floor": 1},
 					{"type": "railing", "floor": 2},
 				]}},
+		{"id": "build_bay", "name": "Build a rack bay",
+			"blurb": "The Mars build lab's flagship sequence: one bay of 12 ft uprights and 9 ft beams seated at 0.5 m and 1.8 m, a deck on the upper pair and a stair up to it.",
+			"spec": {"upright_height_ft": 12, "beam_span_ft": 9, "bay_count": 1, "column_count": 1,
+				"row_gap_ft": 4.0, "deck_levels": 2, "level_heights_ft": [1.64, 5.9], "roof_deck": false,
+				"cell_overrides": {"0,0,0": {"kind": "none"}},
+				"elements": [
+					{"type": "stair", "face": "front", "at_ft": 4.8, "to_level": 1, "run": "out",
+						"width_ft": 3.0, "handrail": true},
+				]}},
+		{"id": "chiba_2024", "name": "Chiba 2024",
+			"blurb": "Chiba at Mars College, 2024: a two-storey rack with a red solar slope and greenhouse on the back, a grand front stair, a stepped roof at one end.",
+			"spec": chiba_2024_spec()},
+		{"id": "chiba_2026", "name": "Chiba 2026",
+			"blurb": "Chiba at Mars College, 2026: a 20' walled block with an offset solar slope, a turned rack half open above its deck with a greenhouse, and a closed box.",
+			"spec": chiba_2026_spec()},
 	]
+
+
+# ---------------------------------------------------------------------------
+# Chiba — the Mars College builds, read off the camp's own models
+# ---------------------------------------------------------------------------
+
+## A rack's bay pitch (m) for a beam span in feet: the module design_presets
+## lay fused racks out on.
+static func _bay_pitch(beam_ft: int) -> float:
+	return float(beam_ft) * FT + POST_W
+
+
+## Wall-sheet keys ("face,ia,iv") of `face` from sheet column ia0 on, rows
+## iv0 and up — the upper sheets taken off where a bay is open above a deck.
+static func _sheets_from(face: String, ia0: int, ia1: int, iv0: int, iv1: int) -> Array:
+	var out: Array = []
+	for ia in range(ia0, ia1 + 1):
+		for iv in range(iv0, iv1 + 1):
+			out.append("%s,%d,%d" % [face, ia, iv])
+	return out
+
+
+## Chiba 2024: a 6-bay, 5-column 16' rack (36" frames 3.5' apart) with decks
+## at 9" and 8' 3" and a railed roof. The front (-Z) is walled on both floors,
+## a wide stair climbs straight out to a doorway on the first floor, a ladder
+## goes on to the roof. The back carries a 60° solar slope over bays 1–2
+## (four rows of modules from the top, the rest sealed red) and a 60°
+## greenhouse over bays 5–6, with a stair along the face between them. A
+## one-bay rack fused onto the -X end steps up from its first-floor deck to
+## the roof in two big flights; its end wall has windows.
+static func chiba_2024_spec() -> Dictionary:
+	var red := "#b8352a"
+	var white := "#e9e6df"
+	var px := _bay_pitch(12)
+	var main := {
+		"upright_depth_in": 36, "upright_height_ft": 16, "beam_span_ft": 12,
+		"bay_count": 6, "column_count": 5, "row_gap_ft": 3.5,
+		"deck_levels": 2, "level_heights_ft": [0.75, 8.25], "roof_deck": true, "decked": true,
+		"walls": {"front": true, "back": false, "left": false, "right": false},
+		"part_overrides": {"wallface:front": {"color": white}},
+		"elements": [
+			{"id": "e1", "type": "lean_to", "face": "back", "surface": "solar", "seg_from": 0, "seg_to": 1,
+				"angle_deg": 60.0, "attach_level": -1, "bottom_ft": 0.0, "ends": "plywood",
+				"panel_model": "60cell_300", "orientation": "landscape", "pv_rows": 4, "pv_from": "top",
+				"gap_fill": "plywood"},
+			{"id": "e2", "type": "lean_to", "face": "back", "surface": "glazing", "seg_from": 4, "seg_to": 5,
+				"angle_deg": 60.0, "attach_level": -1, "bottom_ft": 0.0, "ends": "plywood"},
+			{"id": "e3", "type": "stair", "face": "back", "at_ft": 36.0, "to_level": 1, "run": "along",
+				"width_ft": 4.0, "handrail": true},
+			{"id": "e4", "type": "stair", "face": "front", "at_ft": 30.5, "to_level": 1, "run": "out",
+				"width_ft": 11.0, "handrail": true, "tread_in": 13.0, "landing_ft": 6.0},
+			{"id": "e5", "type": "door", "face": "front", "at_ft": 30.5, "floor": 1, "style": "opening",
+				"width_ft": 6.5, "height_ft": 7.0},
+			{"id": "e6", "type": "ladder", "face": "front", "at_ft": 23.0, "floor": 1, "to_level": 2},
+			{"id": "e7", "type": "railing", "floor": 2, "right": false, "inner": false},
+		],
+	}
+	# The slopes' frames and sheathing are painted red, as the build is.
+	for eid in ["el:e1", "el:e2"]:
+		(main["part_overrides"] as Dictionary)[eid] = {"color": red}
+	var end := {
+		"upright_depth_in": 36, "upright_height_ft": 16, "beam_span_ft": 12,
+		"bay_count": 1, "column_count": 5, "row_gap_ft": 3.5,
+		"deck_levels": 2, "level_heights_ft": [0.75, 8.25], "roof_deck": true, "decked": true,
+		"walls": {"front": true, "back": true, "left": false, "right": true},
+		# The side walls stop under the first-floor deck, where the steps rise.
+		"wall_sheet_deleted": _sheets_from("front", 0, 3, 1, 1) + _sheets_from("back", 0, 3, 1, 1),
+		"part_overrides": {"wallface:right": {"color": white}, "wallface:front": {"color": white},
+			"wallface:back": {"color": white}},
+		# Open to the first-floor deck except where the two flights climb.
+		"cell_overrides": {"0,0,2": {"kind": "none"}, "0,2,2": {"kind": "none"}, "0,4,2": {"kind": "none"}},
+		"elements": [
+			{"id": "e1", "type": "stepped", "mode": "bay", "bay": 0, "col": 1, "level": 2,
+				"rise_toward": "left", "steps": 4},
+			{"id": "e2", "type": "stepped", "mode": "bay", "bay": 0, "col": 3, "level": 2,
+				"rise_toward": "left", "steps": 4},
+			{"id": "e3", "type": "window", "face": "right", "at_ft": 9.0, "floor": 1, "width_ft": 5.0,
+				"height_ft": 2.5, "sill_ft": 3.0},
+			{"id": "e4", "type": "window", "face": "right", "at_ft": 27.0, "floor": 1, "width_ft": 5.0,
+				"height_ft": 2.5, "sill_ft": 3.0},
+			{"id": "e5", "type": "railing", "floor": 1, "left": false, "inner": false},
+		],
+	}
+	main["fused"] = [{"spec": end, "x": -(3.0 * px + px * 0.5), "z": 0.0, "yaw": 0.0}]
+	return main
+
+
+## Chiba 2026: three racks staggered round a fourth.
+## - The main block (4 bays x 3 columns of 20' frames, decks at 3" and 9', a
+##   railed roof) is walled in brown all round. Its +X side carries a 45°
+##   slope stood 11' off the face on joists with a plywood cover: two rows of
+##   400 W modules at the top, plywood below, closed ends. A painted stair
+##   climbs straight out of the back to a yellow door on the first floor; a
+##   stair runs along the -X side to the roof.
+## - North-west, turned a quarter, a 4-bay x 3-column rack 4.5' between frames
+##   with a roof over its first two bays only: the other two stand open above
+##   their first-floor deck, frames bare, with a greenhouse leaning on their
+##   east side up to that deck.
+## - Beside it a closed 16' box: 2 bays of 10', walled all round, roofed.
+static func chiba_2026_spec() -> Dictionary:
+	var brown := "#6b5236"
+	var walls_all := {"front": true, "back": true, "left": true, "right": true}
+	var main := {
+		"upright_depth_in": 42, "upright_height_ft": 20, "beam_span_ft": 12,
+		"bay_count": 4, "column_count": 3, "row_gap_ft": 8.0,
+		"deck_levels": 2, "level_heights_ft": [0.25, 9.0], "roof_deck": true, "decked": true,
+		"walls": walls_all.duplicate(),
+		"part_overrides": {},
+		"elements": [
+			{"id": "e1", "type": "lean_to", "face": "left", "surface": "solar", "seg_from": 0, "seg_to": 2,
+				"angle_deg": 45.0, "attach_level": -1, "bottom_ft": 0.0, "ends": "plywood",
+				"offset_ft": 11.0, "bridge": "plywood", "panel_model": "72cell_400",
+				"panel_long_in": 77.0, "panel_short_in": 39.1, "panel_watts": 400.0, "panel_voc": 48.0,
+				"panel_vmp": 41.0, "panel_isc": 11.0, "panel_imp": 9.76,
+				"orientation": "portrait", "pv_rows": 2, "pv_from": "top", "gap_fill": "plywood"},
+			{"id": "e2", "type": "stair", "face": "back", "at_ft": 6.0, "to_level": 1, "run": "out",
+				"width_ft": 5.0, "handrail": true},
+			{"id": "e3", "type": "door", "face": "back", "at_ft": 6.0, "floor": 1, "style": "hinged",
+				"width_ft": 3.0, "height_ft": 6.75, "color": "#e5c22b"},
+			{"id": "e4", "type": "stair", "face": "right", "at_ft": 8.0, "to_level": 2, "run": "along",
+				"width_ft": 3.0, "handrail": true},
+			{"id": "e5", "type": "railing", "floor": 2},
+		],
+	}
+	for f in ["front", "back", "left", "right"]:
+		(main["part_overrides"] as Dictionary)["wallface:" + f] = {"color": brown}
+	(main["part_overrides"] as Dictionary)["el:e1"] = {"color": brown}
+	# The turned rack: bays 0-1 (B) roofed and walled, bays 2-3 (C) open above
+	# the first floor. Its sheets on the long faces come off above 8' there.
+	var open_roof := {}
+	var bare_tops := {}
+	for b in [2, 3]:
+		for c in range(3):
+			open_roof["%d,%d,2" % [b, c]] = {"kind": "none"}
+		# No beams across the tops of the open bays: bare frames, as built.
+		for r in range(4):
+			for side in range(2):
+				bare_tops["2,%d,%d,%d" % [r, b, side]] = {"deleted": true}
+	var turned := {
+		"upright_depth_in": 42, "upright_height_ft": 20, "beam_span_ft": 12,
+		"bay_count": 4, "column_count": 3, "row_gap_ft": 4.5,
+		"deck_levels": 2, "level_heights_ft": [0.25, 9.0], "roof_deck": true, "decked": true,
+		"walls": {"front": true, "back": true, "left": false, "right": true},
+		"wall_sheet_deleted": _sheets_from("front", 6, 12, 1, 2) + _sheets_from("back", 6, 12, 1, 2),
+		"cell_overrides": open_roof,
+		"beam_overrides": bare_tops,
+		"part_overrides": {"wallface:front": {"color": brown}, "wallface:back": {"color": brown},
+			"wallface:right": {"color": brown}},
+		"elements": [
+			{"id": "e1", "type": "lean_to", "face": "back", "surface": "glazing", "seg_from": 2, "seg_to": 3,
+				"angle_deg": 50.0, "attach_level": 1, "bottom_ft": 0.0, "ends": "plywood"},
+			{"id": "e2", "type": "railing", "floor": 1, "inner": false, "right": false},
+		],
+	}
+	var box := {
+		"upright_depth_in": 42, "upright_height_ft": 16, "beam_span_ft": 10,
+		"bay_count": 2, "column_count": 1, "row_gap_ft": 8.0,
+		"deck_levels": 1, "level_heights_ft": [0.25], "roof_deck": true, "decked": true,
+		"walls": walls_all.duplicate(),
+		"part_overrides": {"wallface:front": {"color": brown}, "wallface:back": {"color": brown},
+			"wallface:left": {"color": brown}, "wallface:right": {"color": brown}},
+	}
+	main["fused"] = [
+		{"spec": turned, "x": -12.9, "z": -13.1, "yaw": 90.0},
+		{"spec": box, "x": -19.7, "z": -17.2, "yaw": 90.0},
+	]
+	return main
 
 
 static func design_preset(id: String) -> Dictionary:
@@ -2982,6 +4147,7 @@ static func _emit_strut(st: SurfaceTool, a: Vector3, b: Vector3, thick: float) -
 
 
 static func _emit_box(st: SurfaceTool, xf: Transform3D, size: Vector3) -> void:
+	xf = _mxf * xf
 	if _rec != null:
 		st = _rec.route(st)
 		if _rec.record:
