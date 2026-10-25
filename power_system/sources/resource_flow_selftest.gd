@@ -544,6 +544,18 @@ func _test_habitat_pop_starvation() -> void:
 	var starved: Array = specs.get("starved_kinds", []) as Array
 	_check("pop demand vs empty tank → starved", starved.has("water"), "starved=%s" % str(starved))
 	_check("pop starved invents no grey", _tank_level(model, "grey") < 0.001)
+	# The starved people stop drinking, so the next tick's water demand is 0.
+	# The tank is still dry: the flag must HOLD (it used to clear here, and on
+	# Walton the starved flag flipped every tick or two after a water cut).
+	engine.set_habitat_demand("hab", {"food": 0.3})
+	engine.simulate_step_for_test(2.0, 1.0)
+	var starved2: Array = ((model.get_item("hab").get("specs", {}) as Dictionary)
+		.get("starved_kinds", []) as Array)
+	_check("pop starved holds while the tank stays dry, even with no demand that tick",
+		starved2.has("water"), "starved=%s" % str(starved2))
+	# A full food tank with no food demand is not starved.
+	_check("a stocked channel with no demand is not starved", not starved2.has("food"),
+		"starved=%s" % str(starved2))
 	# The feedback loop closes agent-side: NpcPopulationBridge feeds
 	# starved_kinds back into the engine so the eating/drinking activity aborts
 	# (covered in core/population/npc_population_selftest.gd).

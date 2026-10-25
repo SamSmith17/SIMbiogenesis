@@ -3506,6 +3506,23 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 			# rate (0 while nobody is consuming that kind this tick).
 			rate = maxf(float(pop_demand.get(kind, 0.0)), 0.0)
 		if rate <= 0.0:
+			# A WIRED tank that is dry stays starved with nobody drawing on it.
+			# Starved people stop drinking, so demand falls to 0, and judging
+			# "starved" only by this tick's demand cleared the flag on the
+			# next tick: they tried again, starved it, stopped — the flag
+			# flipped every tick or two (measured on Walton: 40 camp tanks cut,
+			# at most 8 camps starved at once, ~4 people blocked on thirst).
+			# An unwired channel (an optional meal input) is left alone, as
+			# before.
+			if pop_driven and not ideal and not starved.has(kind):
+				var tid0 := _tank_at_port(iid, "res_in_%d" % i, true)
+				if tid0.is_empty():
+					tid0 = _tank_at_port(iid, "input", true)
+				var tl0: ResourceTimeline = _timelines.get(tid0) as ResourceTimeline if not tid0.is_empty() else null
+				var tk0 := ResourceKinds.normalize_kind(str(((_model.get_item(tid0) as Dictionary).get("specs", {}) as Dictionary).get("resource_kind", ""))) \
+					if not tid0.is_empty() else ""
+				if tl0 != null and tk0 == kind and tl0.level_at(abs_h) <= 0.001:
+					starved.append(kind)
 			continue
 		had_demand = true
 		var tank_id := _tank_at_port(iid, "res_in_%d" % i, true)

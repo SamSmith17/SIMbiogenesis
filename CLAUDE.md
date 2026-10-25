@@ -599,6 +599,12 @@ Godot.exe.exe --headless --path . --script core/population/camp_flow_meter_selft
 # editor in Site Plan, own / shared / infinite supply, the meter, a loop
 # closer:
 tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/festival_setup_check.gd -Label festival_setup -Timeout 1200
+# A camp whose water runs out STAYS starved (sandbox, Walton): every camp
+# tank cut to 0, the starved flag held on all of them while people stop
+# drinking, and thirst blocks once they wake. A pop-driven habitat used to
+# count a dry tank as starved only while someone drew on it, so the flag
+# flipped every tick or two (at most 8 of 40 camps starved at once):
+tools\harness.ps1 -World walton -RunScript res://tools/checks/camp_water_cut_probe.gd -Timeout 900
 # Venue choreography + capacity sharing (offline — VenueCrowd, NpcVenueState,
 # the AUTO capacity in SpaceRegistry / NpcVenueChoice): the effigy's phases
 # as a pure function of a FireTimeline record (idle → burning → circling for

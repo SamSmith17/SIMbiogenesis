@@ -12180,6 +12180,13 @@ func _run_festival_capture() -> void:
 	await get_tree().create_timer(_settle_s()).timeout
 	_set_capture_conditions()
 	var main := get_tree().current_scene
+	# Walton is saved with festival mode ON, and resuming it reopens the mode,
+	# whose easy override makes every camp's supply ideal. Under it nothing
+	# can run dry, so "cut the water and the vibe names thirst" could never
+	# pass (0 of 51 camps ever starved). Start from first person, mode off.
+	await _first_person_baseline(main)
+	PopTestPrefs.set_easy_override(false)
+	print("PlaytestHarness: festival — baseline: festival mode closed, ideal supply %s" % str(PopTestPrefs.ideal_supply()))
 	var sgv := await _find_graph_view()
 	if sgv == null or sgv.get("model") == null:
 		push_error("PlaytestHarness: festival — graph model unavailable")
@@ -12505,7 +12512,34 @@ func _run_festival_capture() -> void:
 	if flow0 != null and flow0.has_method("clear_timelines"):
 		flow0.call("clear_timelines")
 	main.time_scale = 0.2
-	await get_tree().create_timer(45.0).timeout   # ~9 sim-hours
+	# ~9 sim-hours, with a line every 5 s: the hour, the blocked needs and
+	# what people are doing (a thirst that never blocks is otherwise a single
+	# FAIL with nothing to go on).
+	for _w in 9:
+		await get_tree().create_timer(5.0).timeout
+		var wb := {}
+		var wa := {}
+		var wst := 0
+		var wdem := 0
+		for hid in hab_ids:
+			var hsw: Dictionary = (model.get_item(str(hid)) as Dictionary).get("specs", {})
+			if (hsw.get("starved_kinds", []) as Array).has("water"):
+				wst += 1
+			if flow0 != null and (flow0.get("_habitat_demand") as Dictionary).has(str(hid)):
+				wdem += 1
+			var sw: Dictionary = bridge.call("summary_for", str(hid))
+			for nb in (sw.get("blocked", {}) as Dictionary):
+				wb[nb] = int(wb.get(nb, 0)) + int(sw["blocked"][nb])
+			for a in (sw.get("activities", {}) as Dictionary):
+				wa[a] = int(wa.get(a, 0)) + int(sw["activities"][a])
+		var wtop: Array = wa.keys()
+		wtop.sort_custom(func(x, y) -> bool: return int(wa[x]) > int(wa[y]))
+		var wparts := PackedStringArray()
+		for j in mini(wtop.size(), 5):
+			wparts.append("%s %d" % [str(wtop[j]), int(wa[wtop[j]])])
+		print("PlaytestHarness: festival — after the cut %05.2f h  camps starved of water %d / %d (%d pop-driven, ideal %s)  blocked %s  doing: %s" % [
+			float(main.get("day_time")), wst, hab_ids.size(), wdem, str(PopTestPrefs.ideal_supply()),
+			str(wb), ", ".join(wparts)])
 	main.time_scale = 0.0
 	var sums2: Array = []
 	for hid in hab_ids:
