@@ -326,6 +326,127 @@ func clear_toolpath_preview() -> void:
 	_bead_total = 0
 
 
+# ---------------------------------------------------------------------------
+# Marks: a part highlighted (selection, hover, clash) or a ghost (a part the
+# editor is about to place). They ride their assembly's node, so they follow
+# the jog; drawn see-through so a part inside the frame still shows.
+# ---------------------------------------------------------------------------
+
+var _marks: Dictionary = {}
+static var _mark_mats := {}
+
+
+func clear_marks(tag: String = "") -> void:
+	for k in _marks.keys():
+		if tag.is_empty() or str(k).begins_with(tag + ":"):
+			var n: Node = _marks[k]
+			if is_instance_valid(n):
+				n.get_parent().remove_child(n)
+				n.queue_free()
+			_marks.erase(k)
+
+
+static func _mark_mat(color: Color) -> StandardMaterial3D:
+	var key := color.to_html()
+	if _mark_mats.has(key):
+		return _mark_mats[key]
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = color
+	m.no_depth_test = true
+	m.cull_mode = BaseMaterial3D.CULL_BACK
+	m.render_priority = 2
+	_mark_mats[key] = m
+	return m
+
+
+## The beams and part dicts that belong to a part id, and its assembly.
+func part_items(id: String) -> Dictionary:
+	var out := {"asm": "", "beams": [], "parts": []}
+	if id.is_empty():
+		return out
+	var groups: Array = [["", _layout["static"]]]
+	for name in _layout["assemblies"]:
+		groups.append([str(name), _layout["assemblies"][name]])
+	for g in groups:
+		var gd: Dictionary = g[1]
+		for b in gd["beams"]:
+			if str((b as Dictionary).get("id", "")) == id:
+				out["beams"].append(b)
+				out["asm"] = g[0]
+		for p in gd["parts"]:
+			if str((p as Dictionary).get("id", "")) == id:
+				out["parts"].append(p)
+				out["asm"] = g[0]
+	return out
+
+
+func _overlay_mesh(beams: Array, parts: Array) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for b in beams:
+		var bd: Dictionary = b
+		GantryLabDetail.extrusion(st, bd["a"], bd["b"], str(bd["profile"]), bd.get("up", Vector3.UP))
+	for p in parts:
+		var tmp: Dictionary = {}
+		GantryLabDetail.emit(tmp, p)
+		for k in tmp:
+			var arr := (tmp[k] as SurfaceTool).commit_to_arrays()
+			var vs: Variant = arr[Mesh.ARRAY_VERTEX]
+			var ns: Variant = arr[Mesh.ARRAY_NORMAL]
+			if vs == null:
+				continue
+			var vv: PackedVector3Array = vs
+			for i in vv.size():
+				if ns != null:
+					st.set_normal((ns as PackedVector3Array)[i])
+				st.add_vertex(vv[i])
+	return st.commit()
+
+
+## Highlight a part by id in a colour (tag groups marks: "sel", "hover", "clash").
+func mark_part(tag: String, id: String, color: Color) -> void:
+	var key := "%s:%s" % [tag, id]
+	if _marks.has(key):
+		return
+	var it := part_items(id)
+	if (it["beams"] as Array).is_empty() and (it["parts"] as Array).is_empty():
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = "Mark_%s" % key.validate_node_name()
+	mi.mesh = _overlay_mesh(it["beams"], it["parts"])
+	mi.material_override = _mark_mat(color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta("skip_prop_collision", true)
+	var parent: Node3D = _asm_nodes.get(str(it["asm"]), self) if not str(it["asm"]).is_empty() else self
+	parent.add_child(mi)
+	_marks[key] = mi
+
+
+## A ghost from part dicts / beams already in machine space (zero pose),
+## riding assembly `asm`.
+func mark_ghost(tag: String, beams: Array, parts: Array, asm: String, color: Color) -> void:
+	clear_marks(tag)
+	var mi := MeshInstance3D.new()
+	mi.name = "Ghost_%s" % tag
+	mi.mesh = _overlay_mesh(beams, parts)
+	mi.material_override = _mark_mat(color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta("skip_prop_collision", true)
+	var parent: Node3D = _asm_nodes.get(asm, self) if not asm.is_empty() else self
+	parent.add_child(mi)
+	_marks["%s:ghost" % tag] = mi
+
+
+## Where an assembly sits now (its offset from the zero pose).
+func assembly_offset(asm: String) -> Vector3:
+	if asm.is_empty() or not _asm_nodes.has(asm):
+		return Vector3.ZERO
+	var po := GantryLabFrame.pose(_spec, _layout, _tool_mm)
+	return GantryLabFrame.assembly_origin(_layout, po, asm)
+
+
 ## Work mm → local metres (the tool tip's spot in this node's frame).
 func work_to_local(mm: Vector3) -> Vector3:
 	var o: Vector3 = _layout["origin"]
@@ -504,20 +625,38 @@ func _make_material(key: String, cols: Dictionary) -> Material:
 func _record_picks(beams: Array, parts: Array, assembly: String) -> void:
 	if not _record:
 		return
+	var by_id := {}
 	for b in beams:
 		var bd: Dictionary = b
 		var a: Vector3 = bd["a"]
 		var c: Vector3 = bd["b"]
 		var p := GantryLabParts.profile(str(bd["profile"]))
-		var r := maxf(float(p["w_mm"]), float(p["h_mm"])) * 0.0005
-		var lo := Vector3(minf(a.x, c.x), minf(a.y, c.y), minf(a.z, c.z)) - Vector3.ONE * r
-		var hi := Vector3(maxf(a.x, c.x), maxf(a.y, c.y), maxf(a.z, c.z)) + Vector3.ONE * r
-		_picks.append({"kind": "beam", "label": "%s (%s, %.0f mm)" % [str(bd["label"]), str(p["label"]), a.distance_to(c) * 1000.0], "aabb": AABB(lo, hi - lo), "assembly": assembly, "group": str(bd["group"])})
+		var bb: AABB
+		if bd.has("pick_aabb"):
+			bb = bd["pick_aabb"]
+		else:
+			var r := maxf(float(p["w_mm"]), float(p["h_mm"])) * 0.0005
+			var lo := Vector3(minf(a.x, c.x), minf(a.y, c.y), minf(a.z, c.z)) - Vector3.ONE * r
+			var hi := Vector3(maxf(a.x, c.x), maxf(a.y, c.y), maxf(a.z, c.z)) + Vector3.ONE * r
+			bb = AABB(lo, hi - lo)
+		_picks.append({"kind": "beam", "label": "%s (%s, %.0f mm)" % [str(bd["label"]), str(p["label"]), a.distance_to(c) * 1000.0], "aabb": bb,
+			"assembly": assembly, "group": str(bd["group"]), "id": str(bd.get("id", ""))})
 	for pt in parts:
 		var pd: Dictionary = pt
-		var s: Vector3 = pd["s"]
-		var pc: Vector3 = pd.get("pick_c", pd["c"])
-		_picks.append({"kind": str(pd["kind"]), "label": str(pd["label"]), "aabb": AABB(pc - s * 0.5, s), "assembly": assembly, "group": ""})
+		if bool(pd.get("no_pick", false)):
+			continue
+		var bb2: AABB
+		if pd.has("pick_aabb"):
+			bb2 = pd["pick_aabb"]
+		else:
+			var s3: Vector3 = pd["s"]
+			var pc: Vector3 = pd.get("pick_c", pd["c"])
+			bb2 = AABB(pc - s3 * 0.5, s3)
+		var id := str(pd.get("id", ""))
+		if not id.is_empty() and by_id.has(id):
+			continue
+		by_id[id] = true
+		_picks.append({"kind": str(pd["kind"]), "label": str(pd["label"]), "aabb": bb2, "assembly": assembly, "group": "", "id": id})
 
 
 func _asm_local_transform(name: String) -> Transform3D:
@@ -555,5 +694,6 @@ static func pick(node: Node3D, origin: Vector3, dir: Vector3) -> Dictionary:
 		var t := (hit as Vector3).distance_to(o)
 		if t < best_t:
 			best_t = t
-			best = {"kind": str(pd["kind"]), "label": str(pd["label"]), "assembly": asm, "group": str(pd["group"]), "t": t}
+			best = {"kind": str(pd["kind"]), "label": str(pd["label"]), "assembly": asm, "group": str(pd["group"]), "t": t, "id": str(pd.get("id", "")),
+				"point": origin + dir.normalized() * t}
 	return best

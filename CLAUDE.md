@@ -893,6 +893,11 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/domelab_designer
 # sample on every preset, and the builder (frame mesh, drivers, belts, pick,
 # beads). EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/gantrylab/gantrylab_selftest.gd
+# Gantry parts that mate (offline — mates, snapping, stock bolt lengths,
+# NEMA patterns, resize keeps distances, mirrored twins, every V-slot
+# preset with no collision or belt error, the BOM counting what is drawn;
+# EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script core/gantrylab/assembly/gantrylab_assembly_selftest.gd
 # The designer on a real world (sandbox): every built-in machine drawn and
 # shot, CoreXY A = X + Y on the live jog, the delta's carriages, the cube
 # sample played through the planner (beads laid, scrub to the end), UiAudit,
@@ -2905,7 +2910,7 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   so the job's duration is the simulated one.
 - Gates: `gantrylab_selftest` (227), `tools/checks/gantrylab_designer_check.gd`
   (41), tour stop `18e_gantrylab`.
-- **High-detail parts (2026-10-26, IN PROGRESS, uncommitted).** Modelled on
+- **High-detail parts (2026-10-26).** Modelled on
   the user's CR-10 S4 GLB: `GantryLabDetail` (`core/gantrylab/gantrylab_detail.gd`)
   draws every part the frame names — motors on brackets, GT2 pulleys and
   idlers, Tr8 screws with couplers and brass nuts, V-wheels on their axles,
@@ -2924,6 +2929,92 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   SCAD part models for pulleys / brackets (the scad_library has them),
   the print-setup STL slicer on a gantry (the inspector's Load G-code / STL
   works through the graph node), multi-tool heads.
+- **Parts that MATE (core/gantrylab/assembly/, 2026-10-26).** The V-slot
+  machines (bed-slinger, Cartesian XY, CoreXY, H-bot; `GantryLabAssembly
+  .KINEMATICS`) are no longer hand-placed offsets: each generator
+  (`GantryLabGenSlinger`, `GantryLabGenCube`, helpers `GantryLabGen`) builds
+  the machine the way a kit manual does, every part MATED to a feature of
+  another. CoreXZ, delta and router still use `GantryLabFrame`'s old
+  functions (`GantryLabFrame.layout` dispatches).
+  - `GantryLabCatalog`: real parts with FEATURES in their local frame
+    (`{id, kind face|grid|holes|axis|bore|end|run|point, cls, xf}`, +Y =
+    the contact face's outward normal, +X = slide / reference): V-slot
+    faces with their slot lines (20 mm cells, the side slot 10 mm in = where
+    V-wheels run), beam ends, cast corner brackets, NEMA 17/23 L mounts
+    (motor face 31 / 47.14 mm square; leg B carries a hole grid), a NEMA
+    standoff plate, gantry plates (wheel `run`, hole grids `top` / `back`,
+    `tool`), nut blocks, bed carriage plate (+ `springs`), belt clamps
+    (`grip` = where the belt passes), GT2 pulleys / idlers (bore + `belt`
+    band point), couplers, Tr8 screw / nut, motors (face + shaft).
+  - `GantryLabMates`: `COMPAT` (child class → target class → mate type:
+    slot, grid, endgrid, lines, butt, run, pattern, shaft, idler), `place`
+    (`W_t · F_t · T(s·x + lat·z + h·y) · Ry(turn·90°) · Rx(180°) · F_c⁻¹`),
+    `fits` (every bolt on a slot line / grid hole / pattern hole), `snap`,
+    `slide_range`, `infer` (pose → mate numbers), `fasteners` (T-nuts,
+    bolts cut to `STOCK_LEN`, a NEMA 17 bolt never longer than the 4.5 mm
+    thread, nylocs, washers, spacers; a `run` mate generates the V-wheels
+    with the 6 mm eccentric spacer that puts a plate 1.1 mm off the face).
+  - `GantryLabAssembly`: `build(spec)` = generated doc + the player's
+    sparse edits (`spec["assembly"] = {over: {id: {mate, ref, params,
+    removed}}, added: [part], unlinked: [id]}`); `resolve` → world poses,
+    fasteners, exempt pairs, loops; `to_layout` = the SAME layout shape the
+    builder / pose / BOM / design / runtime read (every assembly's `base`
+    is zero: parts are drawn where they are at tool 0, so a node's position
+    IS the jog). Belt planes come from the loop's first node; `auto` nodes
+    (idlers on spacer stacks, pulleys on shafts) and clamps follow it, so a
+    belt is planar by construction. A mate's `s` is measured from its
+    `anchor` (start / centre / end) so resizing keeps distances. Twins:
+    `edit_part` re-solves the mirrored twin (`mirror_mate`: mirror the
+    world pose across x = 0, pick the turn whose boxes overlay the mirror
+    image); `unlink`, `add_twin`. Editor queries: `candidate` (best spot
+    for a part under a ray), `slide` (drag along a mate), `subtree`.
+  - `GantryLabClash.check(spec, lay)`: oriented boxes (shrunk 0.4 mm, mated
+    pairs + grandparents + screw-through-nut exempt) at home and the 8
+    travel corners, belt spans through parts, loops crossing themselves or
+    another loop in their plane. It feeds `GantryLabDesign._checks`
+    (`{level, text, parts}`) and the selftest gate: EVERY V-slot preset is
+    clean, and `tools/diag/gantry_assembly_probe.gd -- --kin=sweep:<kin>`
+    (180 variants each: sizes, tools, profiles, motors) is clean.
+  - The CoreXY routing: motors behind the back corners on L mounts whose
+    leg carries the OTHER belt's back idler; the turning idlers on the X
+    beam's two top slots (A front line, B back line); clamps on a tall X
+    carriage (plate `off` up) at each deck; the two decks a belt width + 5
+    mm apart. ⚠ The V-slot generators ignore the axis `guide` (MGN rails
+    are not in the catalog yet): every V-slot machine rides V-wheels.
+  - `GantryLabBom` counts what the assembly draws (`_assembly_rows`):
+    parts by label, fasteners by size and stock length, belts from the
+    drawn loops; guides / corner formulas only for the old layouts.
+  - Builder: picks carry the part `id` and hit `point`; `mark_part` /
+    `mark_ghost` / `clear_marks` (see-through overlays riding their
+    assembly); fasteners are `fastener_*` detail kinds in the merged mesh.
+  - Modal (`scenes/ui/gantrylab_parts_editor.gd`, preloaded): Parts palette
+    at the top of the left column, "Selected part" card at the top of the
+    right. Click picks, drag slides along the mate (1 mm, Shift 5 mm, Alt
+    free), dragging well off re-snaps elsewhere, R turns, Del removes,
+    Ctrl+D duplicates, Esc; palette tool + ghost with its bolts + "Add
+    mirrored"; card: swap within the family, length, teeth, distance +
+    anchor, across (grids), stand-off, Unlink, fasteners. Collisions are
+    drawn red ("Show collisions").
+  - **Parts from the player's reference model** ("additional 3d printer
+    parts.glb", 2026-10-26; measured with `tools/diag/glb_topview_diag.gd`,
+    drawn by `tools/diag/gantry_parts_look_diag.gd`): T / 90° joining
+    plates, cube / 3-way / inside hidden corner connectors, flat NEMA 17 /
+    23 motor plates (`mount` along a slot, `wide` across a 2040, motor on
+    either face), the 8 mm Acme anti-backlash nut block (screw PARALLEL to
+    the plate), the mini V gantry plate (mini wheels Ø15.2 × 8.8: `wheel_r`
+    / `wheel_w` params reach `GantryLabMates.wheels` through the mate
+    extra), the 5 × 6 mm coupler (`bore2`). New mate classes: `tap5`
+    (into a beam's tapped end, kind `end` is now a target) and `hid`
+    (set-screwed inside a slot). A feature marked `leg` on a part with no
+    `also` gets its secondary contact found by `_auto_legs` (a joining
+    plate's second beam, a cube's other ends). Drawn by the
+    `outline_plate` emitter (outline + dark holes / pilot / slots / bores).
+  - Gates: `core/gantrylab/assembly/gantrylab_assembly_selftest.gd` (34)
+    and the parts-editor half of `gantrylab_designer_check.gd` (REAL
+    clicks: pick, slide, undo, palette mount + T-nuts, NEMA 17 onto it,
+    unlink, reset). Not done: CoreXZ / delta / router as mates, MGN rails,
+    belts the player routes by hand (loops are the generator's), more Z
+    motors than two drawn, the tour still re-shot.
 
 ## Maps and scene shell
 

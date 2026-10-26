@@ -80,6 +80,13 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 	var n_beams := beams.size()
 	var corners := str(s["frame"]["corners"])
 	var hw := GantryLabParts.HARDWARE
+	# A mated machine counts what it really holds: every bracket, plate,
+	# pulley and idler it places, every bolt (by size and stock length),
+	# T-nut, nyloc, spacer and wheel its mates generate.
+	var asm_mode := lay.has("assembly")
+	if asm_mode:
+		_assembly_rows(rows, lay["assembly"])
+		corners = "assembly"
 	match corners:
 		"bracket":
 			_add(rows, "Frame", n_beams * 2, "pc", hw["corner_bracket"], "two per beam end")
@@ -93,7 +100,7 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 			_add(rows, "Frame", int(ceil(n_beams * 0.8)), "pc", hw["gantry_plate"], "bolted corner plates")
 			_add(rows, "Frame", n_beams * 6, "pc", hw["tnut_m5"], "")
 			_add(rows, "Frame", n_beams * 6, "pc", hw["bolt_m5"], "")
-	if bool(s["frame"]["feet"]):
+	if bool(s["frame"]["feet"]) and not asm_mode:
 		_add(rows, "Frame", 4 if kin != "delta" else 3, "pc", {"label": "Rubber foot M5", "usd": 1.5, "kg": 0.02}, "")
 	# --- Guides and carriages per axis -------------------------------------
 	var spans: Dictionary = lay["spans"]
@@ -114,7 +121,7 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 	for k in ["x", "y", "z"]:
 		var g := GantryLabParts.guide(str(s["axis"][k]["guide"]))
 		var n_car := int(axis_carriages[k])
-		if n_car <= 0:
+		if n_car <= 0 or asm_mode:
 			continue
 		var m := float(axis_rail_m[k])
 		if float(g["kg_m"]) > 0.0 and m > 0.0:
@@ -152,6 +159,11 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 		var travel_mm := vx if k == "x" else (vy if k == "y" else vz)
 		if kin == "bedslinger" and k == "y":
 			travel_mm = vy
+		if asm_mode and str(dr["kind"]) != "rack":
+			axes_seen[k] = true
+			if str(dr["kind"]) == "belt":
+				belt_kind = str(dr["label"])
+			continue
 		match str(dr["kind"]):
 			"belt":
 				var m := 0.0
@@ -190,6 +202,17 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 				rows.append(_row("Motion", n_motor, "pc", "%s, %s axis" % [str(dr["label"]), k.to_upper()], "%.0f mm" % (len_m * 1000.0), len_m * float(dr["usd_m"]), len_m * float(dr["kg_m"])))
 				rows.append(_row("Motion", n_motor, "pc", "Pinion + 3:1 reduction", "", 28.0, 0.15))
 		axes_seen[k] = true
+	if asm_mode:
+		# Belts: each loop's drawn length plus 100 mm to clamp its ends.
+		var po := GantryLabFrame.pose(s, lay, Vector3.ZERO)
+		for br in GantryLabFrame.belt_routes(s, lay, po):
+			var pts: PackedVector3Array = br["points"]
+			var len_m := 0.1
+			for i in pts.size() - 1:
+				len_m += pts[i].distance_to(pts[i + 1])
+			belt_m += len_m
+			var bd := GantryLabParts.drive(str(s["axis"]["x"]["drive"]))
+			rows.append(_row("Motion", 1, "pc", "%s, %s" % [str(bd["label"]), str(br["name"])], "%.2f m" % len_m, len_m * float(bd["usd_m"]), len_m * float(bd["kg_m"])))
 	if pulleys > 0:
 		_add(rows, "Motion", pulleys, "pc", hw["pulley_gt2"], "%d-tooth on the motor shafts" % int(s["axis"]["x"]["pulley_teeth"]))
 	if idlers > 0:
@@ -258,6 +281,70 @@ static func compute(spec: Dictionary, lay: Dictionary) -> Dictionary:
 		"motor_watts": motor_w, "bed_watts": bed_w, "tool_watts": float(tool["watts"]), "psu": psu_key, "psu_w": psu_w,
 		"motors": motor_total + extruder_motor, "belt_m": belt_m, "belt_kind": belt_kind,
 	}
+
+
+## Parts by kind and size, fasteners by size and length.
+static func _assembly_rows(rows: Array, res: Dictionary) -> void:
+	var parts := {}
+	for id in res["parts"]:
+		var p: Dictionary = res["parts"][id]["part"]
+		if bool(p.get("free", false)):
+			continue
+		var ref := str(p["ref"])
+		var info := GantryLabCatalog.info(ref)
+		if info.has("profile") or bool(info.get("motor", false)) or ref == "tool" or ref == "bed":
+			continue
+		var params := GantryLabCatalog.params_of(ref, p.get("params", {}))
+		var lbl := GantryLabCatalog.label_of(ref, params)
+		if ref == "tr8_screw":
+			lbl = "%s, %.0f mm" % [lbl, float(params["len"]) * 1000.0]
+		if not parts.has(lbl):
+			parts[lbl] = {"qty": 0, "usd": GantryLabCatalog.price_usd(ref, params), "kg": GantryLabCatalog.mass_kg(ref, params),
+				"cat": "Motion" if str(info.get("cat", "")) in ["motion", "drive"] else "Frame"}
+		parts[lbl]["qty"] = int(parts[lbl]["qty"]) + 1
+	var keys := parts.keys()
+	keys.sort()
+	for lbl in keys:
+		var pd: Dictionary = parts[lbl]
+		rows.append(_row(str(pd["cat"]), int(pd["qty"]), "pc", str(lbl), "", float(pd["usd"]), float(pd["kg"])))
+	var fz := {}
+	for f in res["fasteners"]:
+		var fd: Dictionary = f
+		var lbl := str(fd.get("label", fd["kind"]))
+		if not fz.has(lbl):
+			fz[lbl] = {"qty": 0, "kind": str(fd["kind"]), "d": float(fd.get("d", 0.005))}
+		fz[lbl]["qty"] = int(fz[lbl]["qty"]) + int(fd.get("count", 1))
+	var fkeys := fz.keys()
+	fkeys.sort()
+	var price := GantryLabCatalog.FASTENER_PRICES
+	for lbl in fkeys:
+		var fd: Dictionary = fz[lbl]
+		var k := str(fd["kind"])
+		var usd := 0.1
+		var kg := 0.003
+		match k:
+			"bolt", "bolt_hidden":
+				usd = float(price["bolt_m3"] if float(fd["d"]) < 0.004 else price["bolt_m5"])
+			"tnut":
+				usd = float(price["tnut_m3"] if float(fd["d"]) < 0.004 else price["tnut_m5"])
+			"nut":
+				usd = float(price["nut_m3"] if float(fd["d"]) < 0.004 else price["nut_m5"])
+			"washer":
+				usd = float(price["washer_m5"])
+				kg = 0.001
+			"spacer":
+				usd = float(price["ecc_spacer"] if str(lbl).begins_with("Eccentric") else price["spacer"])
+				kg = 0.004
+			"wheel":
+				usd = float(price["wheel"])
+				kg = 0.012
+			"grub_hidden":
+				usd = float(price["grub"])
+				kg = 0.001
+			"spring_knob":
+				usd = float(price["spring"]) + float(price["knob"])
+				kg = 0.008
+		rows.append(_row("Fasteners" if k != "wheel" else "Motion", int(fd["qty"]), "pc", str(lbl), "", usd, kg))
 
 
 static func _row(cat: String, qty: int, unit: String, item: String, detail: String, usd: float, kg: float) -> Dictionary:

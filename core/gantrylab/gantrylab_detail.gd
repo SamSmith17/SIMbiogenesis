@@ -71,6 +71,8 @@ static func emit(sts: Dictionary, part: Dictionary, local: bool = false) -> void
 			_wheel_axle(sts, part)
 		"plate":
 			_plate(sts, part)
+		"outline_plate":
+			_outline_plate(sts, part)
 		"rail":
 			_rail(sts, part)
 		"rail_block":
@@ -119,6 +121,16 @@ static func emit(sts: Dictionary, part: Dictionary, local: bool = false) -> void
 			_rod_end(sts, part)
 		"belt_clamp":
 			_belt_clamp(sts, part)
+		"fastener_bolt":
+			_fastener_bolt(sts, part)
+		"fastener_nut":
+			_fastener_nut(sts, part)
+		"fastener_tnut":
+			_fastener_tnut(sts, part)
+		"fastener_washer":
+			_fastener_washer(sts, part)
+		"fastener_spacer":
+			_fastener_spacer(sts, part)
 		"box":
 			box(_st(sts, str(part.get("mat", "black"))), Vector3.ZERO, part["s"])
 		"panel":
@@ -535,9 +547,10 @@ static func _motor(sts: Dictionary, p: Dictionary) -> void:
 	cyl_y(chrome, 0.0, float(p.get("shaft", 0.024)), 0.0025 if frame < 0.05 else 0.004, 10)
 	# Four mounting bolts and the wiring connector on the back.
 	var bx := frame * 0.37
-	for sx in [-1.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			_cap_head(chrome, Vector3(sx * bx, 0.0, sz * bx), 0.0028, 0.003)
+	if bool(p.get("bolts", true)):
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				_cap_head(chrome, Vector3(sx * bx, 0.0, sz * bx), 0.0028, 0.003)
 	box(black, Vector3(frame * 0.5 + 0.004, -len + 0.012, 0.0), Vector3(0.008, 0.012, 0.016))
 
 
@@ -579,9 +592,10 @@ static func _idler(sts: Dictionary, p: Dictionary) -> void:
 	var chrome := _st(sts, "chrome")
 	var y0 := float(p.get("y0", 0.0))
 	# A bolt through the idler: head below, nut above, flanged wheel between.
-	cyl_y(chrome, y0 - float(p.get("bolt_down", 0.006)), y0 + w + 0.002 + 0.004, 0.0025, 8)
-	_hex_bolt_head(chrome, Vector3(0, y0 - float(p.get("bolt_down", 0.006)) - 0.003, 0), 0.0042, 0.003)
-	_hex_bolt_head(chrome, Vector3(0, y0 + w + 0.002, 0), 0.0042, 0.0025)
+	if not bool(p.get("no_bolt", false)):
+		cyl_y(chrome, y0 - float(p.get("bolt_down", 0.006)), y0 + w + 0.002 + 0.004, 0.0025, 8)
+		_hex_bolt_head(chrome, Vector3(0, y0 - float(p.get("bolt_down", 0.006)) - 0.003, 0), 0.0042, 0.003)
+		_hex_bolt_head(chrome, Vector3(0, y0 + w + 0.002, 0), 0.0042, 0.0025)
 	cyl_y(alu, y0, y0 + 0.001, r + 0.0018, 18)
 	cyl_y(alu, y0 + 0.001, y0 + 0.001 + w, r, 18)
 	cyl_y(alu, y0 + 0.001 + w, y0 + 0.002 + w, r + 0.0018, 18)
@@ -611,6 +625,8 @@ static func _nut_tr8(sts: Dictionary, p: Dictionary) -> void:
 	cyl_y(brass, 0.0, 0.0035, 0.011, 16)
 	cyl_y(brass, -float(p.get("body", 0.0115)), 0.0, body_r, 12)
 	var chrome := _st(sts, "chrome")
+	if bool(p.get("no_bolts", false)):
+		return
 	for i in 4:
 		var a := TAU * float(i) / 4.0 + PI * 0.25
 		_cap_head(chrome, Vector3(cos(a) * 0.008, 0.0035, sin(a) * 0.008), 0.0025, 0.0028)
@@ -679,6 +695,42 @@ static func _plate(sts: Dictionary, p: Dictionary) -> void:
 	var s: Vector3 = p["s"]
 	var st := _st(sts, str(p.get("mat", "plate")))
 	prism(st, rect_outline(s.x, s.z, float(p.get("chamfer", 0.004))), -s.y * 0.5, s.y * 0.5)
+
+
+## A flat part cut from an outline (part-local x, z), `t` thick from y = 0
+## up: the holes, the motor pilot (`pilot` = x, z, r) and the slots (centre,
+## size in x, z) drawn as dark through-cuts, `bores` as dark cylinders
+## through it ([a, b, r]). The outline may be wound either way.
+static func _outline_plate(sts: Dictionary, p: Dictionary) -> void:
+	var t := float(p.get("t", 0.004))
+	var outline: PackedVector2Array = p["outline"]
+	var area := 0.0
+	for i in outline.size():
+		var a: Vector2 = outline[i]
+		var b: Vector2 = outline[(i + 1) % outline.size()]
+		area += a.x * b.y - b.x * a.y
+	if area < 0.0:
+		outline = outline.duplicate()
+		outline.reverse()
+	prism(_st(sts, str(p.get("mat", "plate"))), outline, 0.0, t)
+	var dark := _st(sts, "black")
+	var hr := float(p.get("hole_r", 0.0026))
+	var saved := _xf
+	for hv in p.get("holes", PackedVector2Array()):
+		var h: Vector2 = hv
+		_xf = saved * Transform3D(Basis.IDENTITY, Vector3(h.x, 0, h.y))
+		cyl_y(dark, -0.0002, t + 0.0002, hr, 12)
+	if p.has("pilot"):
+		var pl: Vector3 = p["pilot"]
+		_xf = saved * Transform3D(Basis.IDENTITY, Vector3(pl.x, 0, pl.y))
+		cyl_y(dark, -0.0002, t + 0.0002, pl.z, 24)
+	_xf = saved
+	for sv in p.get("slots", []):
+		var c: Vector2 = sv[0]
+		var sz: Vector2 = sv[1]
+		box(dark, Vector3(c.x, t * 0.5, c.y), Vector3(sz.x, t + 0.0004, sz.y))
+	for bv in p.get("bores", []):
+		cyl(dark, bv[0], bv[1], float(bv[2]), 12)
 
 
 static func _rail(sts: Dictionary, p: Dictionary) -> void:
@@ -1008,6 +1060,8 @@ static func _corner_bracket(sts: Dictionary, p: Dictionary) -> void:
 		tri(st, Vector3(t, t, z), Vector3(size * 0.85, t, z), Vector3(t, size * 0.85, z), Vector3(0, 0, sz))
 		tri(st, Vector3(t, t, z - sz * 0.002), Vector3(t, size * 0.85, z - sz * 0.002), Vector3(size * 0.85, t, z - sz * 0.002), Vector3(0, 0, -sz))
 		quad(st, Vector3(size * 0.85, t, z), Vector3(size * 0.85, t, z - sz * 0.002), Vector3(t, size * 0.85, z - sz * 0.002), Vector3(t, size * 0.85, z), Vector3(1, 1, 0).normalized())
+	if not bool(p.get("bolts", true)):
+		return
 	_cap_head(chrome, Vector3(size * 0.65, t, 0.0), 0.0032, 0.003)
 	var saved := _xf
 	_xf = saved * Transform3D(Basis(Vector3.FORWARD, -PI * 0.5), Vector3(t, size * 0.65, 0.0))
@@ -1027,8 +1081,9 @@ static func _bracket_l(sts: Dictionary, p: Dictionary) -> void:
 	var chrome := _st(sts, "chrome")
 	box(st, Vector3(a * 0.5, -t * 0.5, 0.0), Vector3(a, t, w))
 	box(st, Vector3(-t * 0.5, b * 0.5, 0.0), Vector3(t, b, w))
-	for sz in [-1.0, 1.0]:
-		_cap_head(chrome, Vector3(a * 0.5, 0.0, sz * w * 0.33), 0.0032, 0.003)
+	if bool(p.get("bolts", true)):
+		for sz in [-1.0, 1.0]:
+			_cap_head(chrome, Vector3(a * 0.5, 0.0, sz * w * 0.33), 0.0032, 0.003)
 
 
 static func _spring_knob(sts: Dictionary, p: Dictionary) -> void:
@@ -1121,3 +1176,47 @@ static func _belt_clamp(sts: Dictionary, p: Dictionary) -> void:
 	var chrome := _st(sts, "chrome")
 	box(black, Vector3.ZERO, p.get("s", Vector3(0.02, 0.008, 0.012)))
 	_cap_head(chrome, Vector3(0.0, (p.get("s", Vector3(0.02, 0.008, 0.012)) as Vector3).y * 0.5, 0.0), 0.0025, 0.0025)
+
+
+# ---------------------------------------------------------------------------
+# Fasteners (GantryLabMates): a bolt's origin is the face under its head,
+# +Y toward the head, the shank down -Y for `len`; a nut / washer / T-nut
+# sits on its origin plane with +Y away from the joint; a spacer runs 0..len
+# along +Y.
+# ---------------------------------------------------------------------------
+
+static func _fastener_bolt(sts: Dictionary, p: Dictionary) -> void:
+	var d := float(p.get("d", 0.005))
+	var len := float(p.get("len", 0.01))
+	var chrome := _st(sts, "chrome")
+	cyl_y(chrome, -len, 0.0, d * 0.42, 6)
+	if str(p.get("head", "shcs")) == "bhcs":
+		lathe(chrome, PackedVector2Array([Vector2(0, 0), Vector2(d * 0.95, 0), Vector2(d * 0.85, d * 0.25), Vector2(d * 0.55, d * 0.5), Vector2(0, d * 0.55)]), 10)
+	else:
+		_cap_head(chrome, Vector3.ZERO, d * 0.8, d)
+
+
+static func _fastener_nut(sts: Dictionary, p: Dictionary) -> void:
+	var d := float(p.get("d", 0.005))
+	var chrome := _st(sts, "chrome")
+	prism(chrome, ngon_outline(d * 0.92, 6), 0.0, d * 0.8)
+
+
+static func _fastener_tnut(sts: Dictionary, p: Dictionary) -> void:
+	var steel := _st(sts, "steel")
+	# A drop-in T-nut: a bar across the slot's inner cavity.
+	box(steel, Vector3(0, -0.001, 0), Vector3(0.0105, 0.004, 0.006))
+
+
+static func _fastener_washer(sts: Dictionary, p: Dictionary) -> void:
+	var chrome := _st(sts, "chrome")
+	lathe(chrome, PackedVector2Array([Vector2(0.0027, 0), Vector2(0.005, 0), Vector2(0.005, 0.001), Vector2(0.0027, 0.001)]), 12)
+
+
+static func _fastener_spacer(sts: Dictionary, p: Dictionary) -> void:
+	var len := float(p.get("len", 0.006))
+	var ecc := bool(p.get("ecc", false))
+	if ecc:
+		prism(_st(sts, "alu"), ngon_outline(0.0052, 6), 0.0, len)
+	else:
+		lathe(_st(sts, "alu"), PackedVector2Array([Vector2(0.0027, 0), Vector2(0.005, 0), Vector2(0.005, len), Vector2(0.0027, len)]), 12)

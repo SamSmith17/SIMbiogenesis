@@ -123,7 +123,9 @@ static func for_application(app_id: String) -> Dictionary:
 					s["axis"]["y"]["drive"] = "belt_gt2_9"
 					s["axis"]["x"]["motor"] = "nema17_hi"
 					s["axis"]["y"]["motor"] = "nema17_hi"
-					s["axis"]["z"]["drive"] = "leadscrew_t8_8"
+					# A 600 mm bed on its plate is ~16 kg: Tr8×2 gives the two
+					# Z motors four times the lift of Tr8×8.
+					s["axis"]["z"]["drive"] = "leadscrew_t8_2"
 					s["axis"]["z"]["motors"] = 2
 					s["electronics"]["board"] = "skr_3"
 					s["electronics"]["volts"] = 24

@@ -280,7 +280,9 @@ func _test_layouts() -> void:
 	var o0 := GantryLabFrame.assembly_origin(lay, GantryLabFrame.pose(s, lay, Vector3.ZERO), "XCarriage")
 	var o1 := GantryLabFrame.assembly_origin(lay, GantryLabFrame.pose(s, lay, Vector3(220.0, 220.0, 0.0)), "XCarriage")
 	_check("carriage travels the X volume", _approx(o1.x - o0.x, 0.22, 1e-6) and _approx(o1.z - o0.z, 0.22, 1e-6))
-	_check("origin at the bed's front-left", _approx(o0.x, (lay["origin"] as Vector3).x, 1e-6))
+	# The carriage's parts sit where the tool is at x = 0; the origin is the
+	# nozzle at the bed's front-left.
+	_check("origin at the bed's front-left", _approx((lay["origin"] as Vector3).x, -0.11, 1e-6) and _approx(o0.x, 0.0, 1e-6))
 	var bs := GantryLabSpec.default_spec("bedslinger")
 	var blay := GantryLabFrame.layout(bs)
 	var b0 := GantryLabFrame.assembly_origin(blay, GantryLabFrame.pose(bs, blay, Vector3.ZERO), "Bed")

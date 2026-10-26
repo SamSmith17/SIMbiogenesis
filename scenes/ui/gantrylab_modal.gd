@@ -25,8 +25,10 @@ const UNDO_LIMIT := 60
 const REBUILD_DELAY := 0.15
 const EXPORT_ROOT := "user://gantrylab_designs"
 const SPEEDS := [0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 100.0]
+const PartsEditor := preload("res://scenes/ui/gantrylab_parts_editor.gd")
 
 var _loader: Node = null
+var _parts = PartsEditor.new()
 var _active := false
 var _spec: Dictionary = {}
 var _design: Dictionary = {}
@@ -118,6 +120,7 @@ func bind_loader(loader: Node) -> void:
 
 
 func _ready() -> void:
+	_parts.attach(self)
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -199,6 +202,9 @@ func _input(e: InputEvent) -> void:
 	if focus is LineEdit or focus is TextEdit:
 		return
 	var k := e as InputEventKey
+	if _tabs.current_tab == 0 and _parts.key(k):
+		get_viewport().set_input_as_handled()
+		return
 	if k.ctrl_pressed and k.keycode == KEY_Z and not k.shift_pressed:
 		_undo_step()
 		get_viewport().set_input_as_handled()
@@ -300,6 +306,12 @@ func _scroll_column(width: float) -> Array:
 func _build_left() -> Control:
 	var col := _scroll_column(250)
 	var box: VBoxContainer = col[1]
+	# The parts palette first: it is the Machine tab's main tool.
+	box.add_child(SectionHeader.make("Parts", "wrench"))
+	var pbox := VBoxContainer.new()
+	pbox.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	box.add_child(pbox)
+	_parts.build_palette(pbox)
 	box.add_child(SectionHeader.make("What is it for", "target"))
 	_app_box = VBoxContainer.new()
 	_app_box.add_theme_constant_override("separation", 2)
@@ -644,6 +656,9 @@ func _build_config_panel() -> Control:
 func _build_right() -> Control:
 	var col := _scroll_column(400)
 	var box: VBoxContainer = col[1]
+	var psec := Collapsible.make("Selected part", true)
+	box.add_child(psec)
+	_parts.build_card(psec.body)
 	var sec := Collapsible.make("Work volume", true)
 	box.add_child(sec)
 	_size_box = sec.body
@@ -702,7 +717,7 @@ func _build_footer() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	var hint := Label.new()
-	hint.text = "Drag to orbit · wheel to zoom · hover names a part · Kinematics jogs the tool · Simulate plays real G-code"
+	hint.text = "Drag empty space to orbit · click a part to pick it, drag it to slide it along its slot · R turns · Del removes · Kinematics jogs · Simulate plays G-code"
 	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -795,8 +810,9 @@ func _edit(group: String, key: String, value: Variant) -> void:
 	_queue_rebuild()
 
 
-func _queue_rebuild() -> void:
-	_rebuild_timer = REBUILD_DELAY
+func _queue_rebuild(delay: float = REBUILD_DELAY) -> void:
+	if _rebuild_timer < 0.0 or delay < _rebuild_timer:
+		_rebuild_timer = delay
 
 
 func _rebuild_now() -> void:
@@ -809,6 +825,7 @@ func _rebuild_now() -> void:
 		_build_settings_rows()
 	_sync_settings()
 	_rebuild_studio()
+	_parts.on_rebuilt()
 	_refresh_checks()
 	_refresh_motors()
 	_refresh_bom()
@@ -1283,6 +1300,8 @@ func _update_camera() -> void:
 
 
 func _on_studio_input(e: InputEvent) -> void:
+	if _tabs.current_tab == 0 and _parts.input(e):
+		return
 	if e is InputEventMouseButton:
 		var mb := e as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
@@ -1307,7 +1326,7 @@ func _on_studio_input(e: InputEvent) -> void:
 				_yaw -= mm.relative.x * 0.01
 				_pitch = clampf(_pitch - mm.relative.y * 0.01, -0.2, 1.45)
 				_update_camera()
-		else:
+		elif _parts.tool_ref.is_empty():
 			_hover_frame += 1
 			if _hover_frame % 4 == 0:
 				var hit := _pick_at(mm.position)

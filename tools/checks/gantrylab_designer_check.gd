@@ -70,8 +70,11 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var mach: GantryLabBuilder = ui.call("machine")
 	var car := mach.get_node_or_null("XBeam/XCarriage") as Node3D
 	var xb := mach.get_node_or_null("XBeam") as Node3D
-	_ok(car != null and xb != null and absf(car.position.x - ((mach.layout()["origin"] as Vector3).x + 0.1)) < 1e-4 and absf(xb.position.z - (-0.15 + 0.04)) < 1e-4, "carriage at x = 100 mm, beam at y = 40 mm")
+	# Mated machines draw every assembly where it sits at the tool's zero, so
+	# a node's position IS the jog.
+	_ok(car != null and xb != null and absf(car.position.x - 0.1) < 1e-4 and absf(xb.position.z - 0.04) < 1e-4, "carriage at x = 100 mm, beam at y = 40 mm")
 	_shot(vp, dir, "kinematics_corexy")
+	await _parts_editor(ui, tree, vp, dir)
 	# Delta: carriages differ, effector where asked.
 	ui.call("load_builtin", "kossel_mini")
 	ui.call("jog", Vector3(30.0, 0.0, 50.0))
@@ -213,3 +216,173 @@ func run(main: Node, harness: Node) -> Dictionary:
 		loader.call("delete_prop_by_id", pid)
 	await _settle(tree, 5)
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+
+# ---------------------------------------------------------------------------
+# The part editor, with real clicks through the window
+# ---------------------------------------------------------------------------
+
+func _screen(ui: Control, local_pt: Vector3) -> Vector2:
+	var m: Node3D = ui.call("machine")
+	var cam: Camera3D = ui.get("_camera")
+	var cont: SubViewportContainer = ui.get("_vp_container")
+	var svp: SubViewport = ui.get("_viewport")
+	var p := cam.unproject_position(m.global_transform * local_pt)
+	return cont.get_global_rect().position + p * (cont.size / Vector2(svp.size))
+
+
+func _local_of(ui: Control, screen: Vector2) -> Vector2:
+	var cont: SubViewportContainer = ui.get("_vp_container")
+	return screen - cont.get_global_rect().position
+
+
+## The first part (of `ids`) that the pointer really picks at its centre.
+func _visible_part(ui: Control, ids: Array) -> Dictionary:
+	var lay: Dictionary = (ui.call("design") as Dictionary)["layout"]
+	var res: Dictionary = lay["assembly"]
+	for id in ids:
+		if not res["parts"].has(id):
+			continue
+		var bb := GantryLabAssembly._aabb_of(res["parts"][id]["boxes"])
+		var at := _screen(ui, bb.get_center())
+		var hit: Dictionary = ui.call("_pick_at", _local_of(ui, at))
+		if str(hit.get("id", "")) == str(id):
+			return {"id": id, "at": at}
+	return {}
+
+
+func _parts_editor(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -> void:
+	var root := ui.get_viewport()
+	ui.call("load_builtin", "i3_220")
+	ui.call("set_tab", 0)
+	await _settle(tree, 8)
+	var parts: RefCounted = ui.get("_parts")
+	var lay: Dictionary = (ui.call("design") as Dictionary)["layout"]
+	_ok(lay.has("assembly") and (lay["assembly"]["fasteners"] as Array).size() > 100, "the bed-slinger is a mated assembly with its fasteners")
+	# Click a mirrored slot part.
+	var pick := _visible_part(ui, ["zmount.L", "zmount.R", "ymount", "ucorner.LF", "ucorner.RF", "corner.FL1", "corner.FR1", "xidler", "yplate.L"])
+	_ok(not pick.is_empty(), "a slot-mounted part is under the pointer")
+	if pick.is_empty():
+		return
+	var id := str(pick["id"])
+	await HarnessInput.click(root, pick["at"])
+	await _settle(tree, 4)
+	_ok(str(parts.get("sel")) == id, "a click picks %s" % id)
+	_shot(vp, dir, "parts_selected")
+	var res0: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	var p0: Dictionary = res0["parts"][id]["part"]
+	var twin := str(p0.get("twin", ""))
+	var w0: Transform3D = res0["parts"][id]["world"]
+	var tw0: Transform3D = res0["parts"][twin]["world"] if not twin.is_empty() else Transform3D.IDENTITY
+	# Drag it along its slot: the screen direction of the slot's +x.
+	var to := str(p0["mate"]["to"])
+	var tf := GantryLabAssembly.feature_of(res0["parts"][to]["part"], str(p0["mate"]["tf"]))
+	var fx: Transform3D = (res0["parts"][to]["world"] as Transform3D) * (tf["xf"] as Transform3D)
+	var a: Vector2 = pick["at"]
+	var b := _screen(ui, w0.origin + fx.basis.x.normalized() * 0.03)
+	var dir2 := (b - _screen(ui, w0.origin)).normalized()
+	await HarnessInput.drag(root, a, a + dir2 * 30.0, 10)
+	await _settle(tree, 12)
+	var res1: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	var w1: Transform3D = res1["parts"][id]["world"]
+	var moved := w1.origin - w0.origin
+	_ok(moved.length() > 0.002 and absf(moved.normalized().dot(fx.basis.x.normalized())) > 0.99, "a drag slides %s along its slot (%.1f mm)" % [id, moved.length() * 1000.0])
+	if not twin.is_empty():
+		var tmoved: Vector3 = (res1["parts"][twin]["world"] as Transform3D).origin - tw0.origin
+		_ok(absf(tmoved.x + moved.x) < 0.0008 and absf(tmoved.y - moved.y) < 0.0008 and absf(tmoved.z - moved.z) < 0.0008, "its twin %s follows in mirror" % twin)
+	var fz: Dictionary = GantryLabAssembly.fasteners_of(res1, id)
+	_ok(not fz.is_empty(), "it is still bolted (%s)" % str(fz))
+	_shot(vp, dir, "parts_dragged")
+	await HarnessInput.key(root, KEY_Z, true)
+	await _settle(tree, 10)
+	var res2: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	_ok((res2["parts"][id]["world"] as Transform3D).origin.distance_to(w0.origin) < 1e-5, "Ctrl+Z puts it back")
+	# The palette: a NEMA 17 L mount onto a slot, a motor onto it.
+	var tnuts_before := _count_label(res2, "M5 drop-in T-nut")
+	var btn := HarnessInput.find_button(ui, "NEMA17 L")
+	_ok(btn != null, "the palette has a NEMA 17 L mount")
+	if btn == null:
+		return
+	await _reveal(btn, tree)
+	await HarnessInput.click(root, HarnessInput.center_of(btn))
+	_ok(str(parts.get("tool_ref")) == "nema17_mount", "a click on the palette arms the L mount")
+	await _settle(tree, 2)
+	var spot := _visible_face(ui, res2, "cross.F")
+	var placed := ""
+	if not spot.is_empty():
+		await HarnessInput.mouse_move(root, spot["at"])
+		await _settle(tree, 2)
+		await HarnessInput.click(root, spot["at"])
+		await _settle(tree, 10)
+		placed = str(parts.get("sel"))
+	var res3: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	_ok(placed.begins_with("u") and res3["parts"].has(placed) and str(res3["parts"][placed]["part"]["mate"]["to"]) == "cross.F", "a click puts the L mount on the front cross beam's slot")
+	_ok(_count_label(res3, "M5 drop-in T-nut") >= tnuts_before + 2, "its two T-nuts and bolts are made (%d → %d T-nuts)" % [tnuts_before, _count_label(res3, "M5 drop-in T-nut")])
+	_shot(vp, dir, "parts_mount_placed")
+	if res3["parts"].has(placed):
+		var mb := HarnessInput.find_button(ui, "NEMA17")
+		if mb != null:
+			await _reveal(mb, tree)
+			await HarnessInput.click(root, HarnessInput.center_of(mb))
+			var mf := GantryLabAssembly.feature_of(res3["parts"][placed]["part"], "motor")
+			if mf.is_empty():
+				return
+			var mat := _screen(ui, (res3["parts"][placed]["world"] as Transform3D) * (mf["xf"] as Transform3D).origin)
+			await HarnessInput.mouse_move(root, mat)
+			await _settle(tree, 2)
+			await HarnessInput.click(root, mat)
+			await _settle(tree, 10)
+			var res4: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+			var mot := str(parts.get("sel"))
+			_ok(res4["parts"].has(mot) and str(res4["parts"][mot]["part"]["mate"]["to"]) == placed and _count_label(res4, "M3×6 cap screw") >= _count_label(res3, "M3×6 cap screw") + 4,
+				"a NEMA 17 snaps onto the mount's 31 mm hole square with four M3 bolts")
+			_shot(vp, dir, "parts_motor_placed")
+	# Unlink a twin from the card.
+	if not twin.is_empty():
+		parts.set("sel", id)
+		parts.call("_unlink")
+		await _settle(tree, 10)
+		var sp: Dictionary = ui.call("spec")
+		_ok((GantryLabAssembly.edits_of(sp)["unlinked"] as Array).has(id), "Unlink breaks the pair")
+	parts.call("_on_reset")
+	await _settle(tree, 10)
+	_ok(not GantryLabAssembly.has_edits(ui.call("spec")), "Reset parts forgets every edit")
+
+
+func _count_label(res: Dictionary, label: String) -> int:
+	var n := 0
+	for f in res["fasteners"]:
+		if str((f as Dictionary).get("label", "")) == label:
+			n += 1
+	return n
+
+
+## A visible point on a beam's upward / sideways face (where a bracket can land).
+func _visible_face(ui: Control, res: Dictionary, beam: String) -> Dictionary:
+	if not res["parts"].has(beam):
+		return {}
+	var w: Transform3D = res["parts"][beam]["world"]
+	var p: Dictionary = res["parts"][beam]["part"]
+	var L := float((p.get("params", {}) as Dictionary).get("len", 0.3))
+	for fid in ["+y", "-z", "+z"]:
+		var f := GantryLabAssembly.feature_of(p, fid)
+		var fx: Transform3D = w * (f["xf"] as Transform3D)
+		if fx.basis.y.normalized().dot(Vector3.DOWN) > 0.5:
+			continue
+		for t in [0.3, 0.5, 0.7]:
+			var pt := fx * Vector3(L * float(t), 0.0005, 0)
+			var at := _screen(ui, pt)
+			var hit: Dictionary = ui.call("_pick_at", _local_of(ui, at))
+			if str(hit.get("id", "")) == beam:
+				return {"at": at, "face": fid}
+	return {}
+
+
+func _reveal(c: Control, tree: SceneTree) -> void:
+	var n: Node = c.get_parent()
+	while n != null and not (n is ScrollContainer):
+		n = n.get_parent()
+	if n != null:
+		(n as ScrollContainer).ensure_control_visible(c)
+	await _settle(tree, 3)

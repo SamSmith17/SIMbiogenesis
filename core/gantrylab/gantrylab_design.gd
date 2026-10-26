@@ -299,6 +299,15 @@ static func _checks(s: Dictionary, d: Dictionary) -> Array:
 		out.append({"level": "ok", "text": "The %s itself tops out near %.0f mm/s; the machine's %.0f mm/s is for travel moves." % [str(tool["label"]), float(tool["max_feed_mm_s"]), max_feed]})
 	# Power.
 	out.append({"level": "ok", "text": "Draws %.0f W flat out: motors %.0f W, %s %.0f W, bed %.0f W." % [float(d["bom"]["watts"]), float(d["bom"]["motor_watts"]), str(tool["label"]), float(tool["watts"]), float(d["bom"]["bed_watts"])]})
+	# The assembly: mates that do not hold, parts that collide through the
+	# travel, belts that cross or run through parts.
+	if lay.has("assembly"):
+		var asm_issues: Array = []
+		asm_issues.append_array(lay.get("issues", []))
+		asm_issues.append_array(GantryLabClash.check(s, lay))
+		if asm_issues.is_empty():
+			out.append({"level": "ok", "text": "Every part fastens where it sits; nothing collides from home to the far corners of travel; every belt runs clear and flat."})
+		out.append_array(asm_issues)
 	return out
 
 
