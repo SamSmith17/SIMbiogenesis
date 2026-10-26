@@ -17,7 +17,7 @@ extends SceneTree
 ## error, and the 3D builder's picking. Carries EXPECTED_CHECKS: a runtime
 ## error aborts a test function while PASS still prints.
 
-const EXPECTED_CHECKS := 161
+const EXPECTED_CHECKS := 183
 
 var _pass := 0
 var _fail := 0
@@ -46,6 +46,8 @@ func _initialize() -> void:
 	_test_zome()
 	_test_nexorade()
 	_test_panels_and_plates()
+	_test_helical()
+	_test_folded_plates()
 	_test_bom_and_packing()
 	_test_cam()
 	_test_presets()
@@ -429,6 +431,148 @@ func _test_panels_and_plates() -> void:
 	_check("flange hole outside the face polygon", not Geometry2D.is_point_in_polygon(hp, q0["poly"]))
 
 
+func _test_helical() -> void:
+	# The reference build (Helical Zome Corten Steel.glb): 10 sides, 57.1°,
+	# 1.585 m struts, 21 cells — 452 nodes, 900 edges, 450 rhombi.
+	var ref := DomeLabPresets.helical_corten_spec()
+	var whole: Dictionary = ref["helical"].duplicate()
+	whole["levels"] = 0
+	var g := DomeLabHelical.build(whole, float(ref["radius_m"]))
+	var fc: Dictionary = g["full_count"]
+	_check("helical reference: 452 / 900 / 450", int(fc["v"]) == 452 and int(fc["e"]) == 900 and int(fc["f"]) == 450, str(fc))
+	_check("helical surface is a sphere (χ = 2)", int(fc["v"]) - int(fc["e"]) + int(fc["f"]) == 2)
+	var verts: PackedVector3Array = g["verts"]
+	var one_len := true
+	for e in g["edges"]:
+		if absf(verts[int(e[0])].distance_to(verts[int(e[1])]) - 1.585) > 0.001:
+			one_len = false
+	_check("helical: one strut length (1.585 m)", one_len)
+	_check("helical reference: 30 rows, 25.83 m from apex to tip", int(g["levels_total"]) == 30 and _approx(float(g["top_y"]), 25.828, 0.01), str(g["top_y"]))
+	# Every face a rhombus whose corner is its zone's angle.
+	var zone_ok := true
+	var zones := {}
+	var faces: Array = g["faces"]
+	for fi in faces.size():
+		var f: PackedInt32Array = faces[fi]
+		var z := int(g["face_zone"][fi])
+		zones[z] = true
+		var a := rad_to_deg((verts[f[1]] - verts[f[0]]).angle_to(verts[f[3]] - verts[f[0]]))
+		a = minf(a, 180.0 - a)
+		if f.size() != 4 or absf(a - DomeLabHelical.zone_angle_deg(10, deg_to_rad(57.1), z)) > 0.1:
+			zone_ok = false
+	_check("helical: rhombi in five zones, angle per zone", zone_ok and zones.size() == 5, str(zones.keys()))
+	# Windows w: 3 stacks rhombohedra face to face, n = w = 4 at 54.74° stacks
+	# rhombic dodecahedra (every rhombus 70.53°); all close.
+	var g3 := DomeLabHelical.build({"sides": 10, "window": 3, "steps": 20, "pitch_deg": 57.1}, 4.3)
+	_check("window 3: 86 faces, closed", (g3["faces"] as Array).size() == 86 and int(g3["full_count"]["v"]) - int(g3["full_count"]["e"]) + 86 == 2)
+	var grd := DomeLabHelical.build({"sides": 4, "window": 4, "steps": 2, "pitch_deg": 54.7356}, 1.0)
+	var rd_ok := (grd["faces"] as Array).size() == 24
+	var vr: PackedVector3Array = grd["verts"]
+	for f in grd["faces"]:
+		var pf: PackedInt32Array = f
+		var a := rad_to_deg((vr[pf[1]] - vr[pf[0]]).angle_to(vr[pf[3]] - vr[pf[0]]))
+		rd_ok = rd_ok and absf(minf(a, 180.0 - a) - 70.53) < 0.05
+	_check("three stacked rhombic dodecahedra: 24 rhombi of 70.53°", rd_ok)
+	var closed := true
+	for cfg in [[7, 5, 14], [16, 16, 12], [6, 6, 6], [12, 8, 30]]:
+		var gc := DomeLabHelical.build({"sides": cfg[0], "window": cfg[1], "steps": cfg[2], "pitch_deg": 50.0}, 2.0)
+		var cc: Dictionary = gc["full_count"]
+		closed = closed and int(cc["v"]) - int(cc["e"]) + int(cc["f"]) == 2
+	_check("every window / length closes (χ = 2)", closed)
+	# The floor cut: level, at the person's floor.
+	var gk := DomeLabHelical.build(ref["helical"], float(ref["radius_m"]))
+	var lvl := true
+	for id in gk["base_ids"]:
+		lvl = lvl and absf((gk["verts"] as PackedVector3Array)[int(id)].y) < 1e-4
+	_check("floor cut at 14 rows: 216 faces, 12.05 m tall, level floor", (gk["faces"] as Array).size() == 216
+		and _approx(float(gk["top_y"]), 12.053, 0.01) and lvl and (gk["base_ids"] as Array).size() >= 3)
+	# Handedness mirrors the body.
+	var left: Dictionary = whole.duplicate()
+	left["hand"] = "left"
+	var gl := DomeLabHelical.build(left, float(ref["radius_m"]))
+	var bx := Vector2(INF, -INF)
+	for v in verts:
+		bx = Vector2(minf(bx.x, v.x), maxf(bx.y, v.x))
+	var lx := Vector2(INF, -INF)
+	for v in (gl["verts"] as PackedVector3Array):
+		lx = Vector2(minf(lx.x, v.x), maxf(lx.y, v.x))
+	_check("left hand mirrors the right", _approx(lx.y, -bx.x, 0.002) and _approx(lx.x, -bx.y, 0.002), "%s %s" % [lx, bx])
+	# The design: floor area, BOM, checks.
+	var d := DomeLabDesign.solve(ref)
+	_check("helical home: ~82 m² floor, ~12.9 m across", float(d["stats"]["floor_area_m2"]) > 70.0
+		and float(d["stats"]["floor_area_m2"]) < 95.0 and _approx(float(d["stats"]["radius_max_m"]) * 2.0, 12.9, 0.3),
+		"%s %s" % [d["stats"]["floor_area_m2"], d["stats"]["radius_max_m"]])
+	var errs: Array = (d["checks"] as Array).filter(func(c): return str(c["level"]) == "error")
+	_check("helical home solves clean", errs.is_empty(), str(errs))
+
+
+func _test_folded_plates() -> void:
+	# The section: the flange's outer skin sits gap/2 off the bisector plane,
+	# the bend is tangent to the skin, and the outline is a sheet t thick.
+	var sec := DomeLabPanels.flange_section(deg_to_rad(30.0), 3.0, 6.0, 4.0, 60.0)
+	var m: Vector2 = sec["m"]
+	var hole: Vector2 = sec["hole"]
+	_check("flange hole on the flange's outer skin", _approx(m.dot(hole), 2.0, 1e-6), str(m.dot(hole)))
+	var prof: PackedVector2Array = sec["profile"]
+	_check("bend starts on the skin (y = 0) and ends t under it", _approx(prof[0].y, 0.0, 1e-6) and _approx(prof[prof.size() - 1].y, -3.0, 1e-6))
+	var area := absf(DomeLabPanels._signed_area(prof))
+	var dev := 3.0 * (float(sec["run"]) + (PI * 0.5 + float(sec["a2"])) * (6.0 + 1.5))
+	_check("section area = t × developed length", _approx(area, dev, dev * 0.02), "%f %f" % [area, dev])
+	# Openings: rounded inset stays inside, roundness 0 is the plain inset.
+	var sq := PackedVector2Array([Vector2(0, 0), Vector2(1000, 0), Vector2(1000, 600), Vector2(0, 600)])
+	var sharp := DomeLabPanels.rounded_inset(sq, 100.0, 0.0, 0.0)
+	var round_ := DomeLabPanels.rounded_inset(sq, 100.0, 1.0, 0.0)
+	var inside := true
+	for q in round_:
+		inside = inside and q.x >= 99.9 and q.x <= 900.1 and q.y >= 99.9 and q.y <= 500.1
+	_check("opening: sharp = inset, round stays inside", sharp.size() == 4 and round_.size() > 12 and inside
+		and absf(DomeLabPanels._signed_area(round_)) < absf(DomeLabPanels._signed_area(sharp)))
+	# The reference build's plates: windows in zones 1-2 only, panes on them,
+	# holes per edge so the two plates of every seam are drilled alike.
+	var d := DomeLabDesign.solve(DomeLabPresets.helical_corten_spec())
+	var pn: Dictionary = d["panels"]
+	var zone_ok := true
+	var n_open := 0
+	var flange_holes := 0
+	for p in pn["panels"]:
+		var has := not (p["oculus"] as PackedVector2Array).is_empty()
+		if has:
+			n_open += 1
+		zone_ok = zone_ok and has == (int(p["zone"]) <= 2)
+		flange_holes += (p["holes"] as Array).size() - (1 if has else 0)
+	_check("openings only in the 30° and 59° rhombi, all glazed", zone_ok and n_open == int(pn["panes"]) and n_open > 50, str(n_open))
+	_check("every flange hole is a bolt or a floor anchor (shared per edge)",
+		flange_holes == 2 * (pn["bolts3d"] as Array).size() + int(pn["anchors"]), "%d vs %d" % [flange_holes, 2 * (pn["bolts3d"] as Array).size() + int(pn["anchors"])])
+	_check("plate bolt count = the bolts drawn", int(d["bolts"]["count"]) == (pn["bolts3d"] as Array).size())
+	# The bolt points lie on the bisector plane of their two faces.
+	var on_plane := true
+	var verts: PackedVector3Array = d["geo"]["verts"]
+	for bt in (pn["bolts3d"] as Array).slice(0, 60):
+		var e: Dictionary = d["edges"][int(bt["edge"])]
+		var ax: Vector3 = bt["axis"]
+		on_plane = on_plane and absf(ax.dot((bt["p"] as Vector3) - verts[int(e["a"])])) < 1e-4
+	_check("bolts sit on the plane between the flanges", on_plane)
+	# 3D: corten skin, PMMA panes, bolts.
+	var node := DomeLabBuilder.build_from_design(d, "Helix", {"record": true})
+	var mi := node.get_node("Mesh") as MeshInstance3D
+	var kinds := {}
+	for si in mi.mesh.get_surface_count():
+		var mat := mi.mesh.surface_get_material(si) as StandardMaterial3D
+		kinds["glass" if mat.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED else ("corten" if mat.roughness > 0.8 else "metal")] = true
+	_check("helical home draws corten, glass and bolts", kinds.size() == 3, str(kinds))
+	# Winding: every triangle clockwise seen from where its normals point.
+	var wind_ok := true
+	for si in mi.mesh.get_surface_count():
+		var arr := mi.mesh.surface_get_arrays(si)
+		var vv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var nn: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		for i in range(0, mini(vv.size(), 60000), 3):
+			if (vv[i + 1] - vv[i]).cross(vv[i + 2] - vv[i]).dot(nn[i] + nn[i + 1] + nn[i + 2]) > 1e-12:
+				wind_ok = false
+	_check("folded plates wind clockwise (Godot's front face)", wind_ok)
+	node.free()
+
+
 func _test_bom_and_packing() -> void:
 	var spec := DomeLabSpec.default_spec()
 	spec["radius_m"] = 4.5
@@ -512,7 +656,7 @@ func _test_cam() -> void:
 
 func _test_presets() -> void:
 	var bi := DomeLabPresets.builtins()
-	_check("fourteen built-in designs", bi.size() == 14, str(bi.size()))
+	_check("sixteen built-in designs", bi.size() == 16, str(bi.size()))
 	var all_ok := true
 	var names := {}
 	for p in bi:
@@ -575,15 +719,24 @@ func _test_builder() -> void:
 			round_tube = true
 			break
 	_check("builder: a conduit tube shades round", round_tube)
+	# A folded plate: its skin is flat (one normal per triangle) and its
+	# bends shade round (the normals differ across a bend triangle).
 	var plate := DomeLabBuilder.build_node(DomeLabPresets.builtin("plate_dome")["spec"], "Plate")
 	var pmi := plate.get_node_or_null("Mesh") as MeshInstance3D
-	var pn: PackedVector3Array = (pmi.mesh.surface_get_arrays(0) as Array)[Mesh.ARRAY_NORMAL]
-	var flat := pn.size() > 0
+	var pn := PackedVector3Array()
+	for si in pmi.mesh.get_surface_count():
+		var mat := pmi.mesh.surface_get_material(si) as StandardMaterial3D
+		if mat != null and mat.metallic > 0.7:   # the aluminium sheet, not the bolts
+			pn = (pmi.mesh.surface_get_arrays(si) as Array)[Mesh.ARRAY_NORMAL]
+	var flat_tris := 0
+	var round_tris := 0
 	for i in range(0, pn.size(), 3):
-		if pn[i].distance_to(pn[i + 1]) > 1e-4 or pn[i].distance_to(pn[i + 2]) > 1e-4:
-			flat = false
-			break
-	_check("builder: a plate keeps flat normals", flat, str(pn.size()))
+		if pn[i].distance_to(pn[i + 1]) > 1e-3 or pn[i].distance_to(pn[i + 2]) > 1e-3:
+			round_tris += 1
+		else:
+			flat_tris += 1
+	_check("builder: a plate's skin is flat and its bends round", flat_tris > 100 and round_tris > 100,
+		"%d flat, %d round" % [flat_tris, round_tris])
 	plate.free()
 	# Finishes follow the stock: galvanised conduit, matte tarp, clear glazing.
 	var strut_m := mi.mesh.surface_get_material(0) as StandardMaterial3D

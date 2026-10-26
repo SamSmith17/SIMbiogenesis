@@ -1,17 +1,18 @@
 extends TourStop
 
-## The dome & zome designer: geodesic domes, zomes and helix zomes with any
-## of five connector systems, a bill of materials, the strut schedule and
-## fabrication files.
+## The dome & zome designer: geodesic domes, zomes, helix zomes and helical
+## (twisted) zomes with any of five connector systems, a bill of materials,
+## the strut schedule and fabrication files.
 
 
 func _init() -> void:
 	id = "domelab"
 	title = "Dome & zome designer"
 	chapter = "Build"
-	summary = "Design geodesic domes, zomes and helix zomes in conduit, hubs, flat bars, rotegrity slats or folded plates; get the strut schedule, hub templates and cut files."
+	summary = "Design geodesic domes, zomes and helical zomes in conduit, hubs, flat bars, rotegrity slats or folded, bolted plates with windows; get the strut schedule, hub templates and cut files."
 	how = PackedStringArray(["Library → Structures → Dome & zome designer…",
-		"Pick Geodesic or Zome, a connector system, or a built-in design",
+		"Pick Geodesic, Zome or Helical zome, a connector system, or a built-in design",
+		"Plates fold their flanges in to meet the neighbour's back to back; set the bend radius, the openings and their glazing",
 		"Set the class, frequency, truncation, radius, the strut stock, the hubs and the covering",
 		"Parts lists every strut, hub and panel type; the schedule carries chord factors, cut lengths, bends and hub arm angles",
 		"Export writes DXF / SVG per sheet and hub template, the strut and BOM CSVs and the whole design as JSON",
@@ -22,8 +23,8 @@ func _init() -> void:
 	hour = 14.0
 	blurb = ("A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the " +
 		"icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; " +
-		"polar-zonohedron zomes of any order; and the helix zome, the zonohedron's smooth limit built from " +
-		"continuous curved ribs. Five ways to join them — flattened conduit on a bolt, rigid struts into " +
+		"polar-zonohedron zomes of any order; the helix zome, the zonohedron's smooth limit built from " +
+		"continuous curved ribs; and helical zomes, the zonohedron swept round a helix like stacked cubes. Five ways to join them — flattened conduit on a bolt, rigid struts into " +
 		"socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates " +
 		"with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, " +
 		"arc lengths, flange folds. The chord factors match the published tables, the bill of materials " +
@@ -62,7 +63,10 @@ func run(ctx: TourContext) -> void:
 	await ctx.wait(2.5)
 	ui.call("load_builtin", "covered_3v")
 	ui.call("set_tab", 0)
-	await ctx.wait(1.0)
+	await ctx.wait(1.5)
+	ui.call("load_builtin", "helical_corten")
+	ctx.caption("A helical zome: a ten-sided zonohedron swept two turns round a helix, folded corten plates bolted flange to flange, acrylic windows", 3.5)
+	await ctx.wait(1.5)
 	await ctx.hero()
 	await ctx.wait(1.0)
 

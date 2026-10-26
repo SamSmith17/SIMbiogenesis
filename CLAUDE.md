@@ -870,7 +870,12 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designe
 # the helix rib through its nodes), a sphere's dip = half the central angle,
 # the nexorade fit (four holes a slat, band vs rigid), plate flanges and
 # folds, panel nesting, stock packing, the packed envelope, the DXF round
-# trip, every preset error-free, the builder's picking. EXPECTED_CHECKS;
+# trip, every preset error-free, the builder's picking; the helical zome
+# (the corten GLB's 452 / 900 / 450 node for node, one strut length, five
+# rhombus zones at their angles, w = 3 and stacked rhombic dodecahedra,
+# every window closing, the floor cut, handedness) and the folded plates
+# (section geometry, rounded openings, holes shared per edge, bolts on the
+# bisector plane, corten + glass + bolts drawn, winding). EXPECTED_CHECKS;
 # --import first:
 Godot.exe.exe --headless --path . --script core/domelab/domelab_selftest.gd
 # The designer on a real world (sandbox): every built-in design shot in the
@@ -2802,7 +2807,41 @@ claim, SubViewport studio). Record key `domelab_spec`, model id
   (`_part_color`; the modal's Colours rows show the drawn colour and reset
   to the stock). The studio lights with a sky ambient + SSAO so the facets
   shade apart; the Sheets tab scrolls at a readable size.
-- 14 presets (`DomeLabPresets.builtins`); library `user://domelab_library.json`.
+- **Helical zomes (`DomeLabHelical`, family "helical", 2026-10-26).** The
+  zome's n generators indexed over all integers; a CELL is the zonohedron
+  of w consecutive ones, and cell a−1 sits at b(a) + g_{a+w−1} — one step
+  round and down. w = n is the polar zonohedron swept along a helix (n steps
+  a turn); w = 3 stacks rhombohedra, n = w = 4 at 54.7356° rhombic
+  dodecahedra (your photo's "stacked cubes"). The surface is EXACT: bricks
+  {i<j<k, k−i<w} at Σ_{i<l<j} g + Σ_{l>k} g tile every cell with the SAME
+  bricks wherever cells overlap, so the boundary = brick faces met once.
+  ⚠ Keys are integer generator-count vectors; 0.1 mm float keys split one
+  face pair in ~2700 and left a hole. Spec `helical` {sides, pitch_deg,
+  window, steps, hand, levels (rows kept from the apex, floor cut level
+  there, straddling rhombi keep their top triangle), stretch}; radius_m =
+  one CELL's widest ring. Faces carry `face_zone` (generator distance,
+  1 … n/2 = one rhombus shape each; the plain zome got it too).
+  `Helical Zome Corten Steel.glb` (user's Documents) is reproduced node for
+  node by n = w = 10, θ 57.1°, 1.585 m, 20 steps (452 / 900 / 450); preset
+  `helical_corten` cuts it at the person's floor (14 rows), 3 mm corten,
+  PMMA in zones 1–2. `tools/diag/rack_model_study.gd --dome-preset=<id>`
+  shoots a preset the same eight ways as the GLB.
+- **Folded plates are solid (2026-10-26).** `DomeLabPanels.flange_section`
+  is the ONE section (mm, x into the face, y along its normal): flat plate
+  to xc, a bend of inside radius `fold_radius_mm` (0 = t) swept 90° + ang/2,
+  a flange parallel to the dihedral's bisector plane with its outer skin
+  gap/2 off it, so neighbours meet back to back and the bolted pair is the
+  strut (SPACEPLATES). The builder extrudes it per edge, each profile point
+  clipped on the plane bisecting the two flanges at a corner (closes like a
+  folded box). Bolt holes are laid out per EDGE (`bolts3d`, margin from the
+  corner angle), so both plates of a seam are drilled alike; floor-edge
+  holes are anchors. Openings: `oculus` + `oculus_mm` + `oculus_round` +
+  `oculus_zones`, a `glazing` pane lapped 25 mm behind (DomeLabPanels.
+  rounded_inset); `thickness_mm` overrides the sheet. Faces go into packed
+  arrays, not SurfaceTool (the 216-plate home: 608k vertices, ~130 ms).
+  Sheets corten_2/3 (look "corten" → `StructureMaterials.Kind.
+  WEATHERING_STEEL`, appended) and pmma_4/6.
+- 16 presets (`DomeLabPresets.builtins`); library `user://domelab_library.json`.
   Panels that do not fit the sheet are an ERROR in the checks (a real
   blocker): the presets are sized so every one solves clean. Gates in the
   Validation list; tour stop `18d_domelab`.

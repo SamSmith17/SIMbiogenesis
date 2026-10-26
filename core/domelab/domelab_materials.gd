@@ -110,9 +110,17 @@ const SHEETS := {
 		"sheet_h": 1000.0, "folds": false, "color": Color(0.55, 0.72, 0.62)},
 	"corflute_5": {"label": "Corrugated plastic 5 mm", "kg_m2": 1.0, "t_mm": 5.0,
 		"sheet_w": 1220.0, "sheet_h": 2440.0, "folds": true, "color": Color(0.95, 0.95, 0.92, 0.9)},
+	"corten_2": {"label": "Corten (weathering) steel 2 mm", "kg_m2": 15.7, "t_mm": 2.0,
+		"sheet_w": 2000.0, "sheet_h": 6000.0, "folds": true, "color": Color(0.55, 0.24, 0.11)},
+	"corten_3": {"label": "Corten (weathering) steel 3 mm", "kg_m2": 23.6, "t_mm": 3.0,
+		"sheet_w": 2000.0, "sheet_h": 6000.0, "folds": true, "color": Color(0.55, 0.24, 0.11)},
+	"pmma_4": {"label": "Clear acrylic (PMMA) 4 mm", "kg_m2": 4.76, "t_mm": 4.0,
+		"sheet_w": 2050.0, "sheet_h": 3050.0, "folds": false, "color": Color(0.78, 0.82, 0.85, 0.42)},
+	"pmma_6": {"label": "Clear acrylic (PMMA) 6 mm", "kg_m2": 7.14, "t_mm": 6.0,
+		"sheet_w": 2050.0, "sheet_h": 3050.0, "folds": false, "color": Color(0.78, 0.82, 0.85, 0.42)},
 }
 const SHEET_ORDER := ["none", "tarp_pe", "canvas", "ply_6", "ply_12", "polycarb_6", "polycarb_4",
-	"steel_06", "alu_1", "hdpe_3", "pp_sheet_8", "corflute_5"]
+	"steel_06", "alu_1", "corten_2", "corten_3", "pmma_4", "pmma_6", "hdpe_3", "pp_sheet_8", "corflute_5"]
 
 ## Bolts: nominal diameter (mm), the drill for it, nut + two washers' height,
 ## and standard lengths (mm) a hardware store carries.
@@ -141,7 +149,7 @@ const STRUT_LOOK := {"emt_12": "galv", "emt_34": "galv", "emt_1": "galv", "emt_1
 	"ply_rib_18x90": "ply", "steel_bar_25x3": "paint", "alu_bar_40x3": "alu"}
 const SHEET_LOOK := {"none": "fabric", "tarp_pe": "fabric", "canvas": "fabric", "ply_6": "ply",
 	"ply_12": "ply", "polycarb_6": "glazing", "polycarb_4": "glazing", "steel_06": "paint",
-	"alu_1": "alu", "hdpe_3": "plastic", "pp_sheet_8": "plastic", "corflute_5": "plastic"}
+	"alu_1": "alu", "corten_2": "corten", "corten_3": "corten", "pmma_4": "glazing", "pmma_6": "glazing", "hdpe_3": "plastic", "pp_sheet_8": "plastic", "corflute_5": "plastic"}
 
 const STEEL_KG_M3 := 7850.0
 const ALU_KG_M3 := 2700.0

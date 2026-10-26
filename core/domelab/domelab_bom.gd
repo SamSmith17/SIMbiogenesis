@@ -145,6 +145,15 @@ static func compute(d: Dictionary) -> Dictionary:
 			DomeLabSpec.fmt_len(float(pn["sheet"]["w"]), units, 0), DomeLabSpec.fmt_len(float(pn["sheet"]["h"]), units, 0)],
 			"qty": int(pn.get("sheets", 0)), "unit": "sheets", "detail": "%s of panels" % DomeLabSpec.fmt_area(float(pn["area_m2"])),
 			"mass_kg": 0.0})
+		if int(pn.get("panes", 0)) > 0:
+			var gl: Dictionary = pn["glazing"]
+			rows.append({"section": "Panels", "item": "Glazing pane — %s" % str(gl["label"]), "qty": int(pn["panes"]),
+				"unit": "pcs", "detail": "%s lapped over the openings" % DomeLabSpec.fmt_area(float(pn["pane_area_m2"])),
+				"mass_kg": float(pn["pane_area_m2"]) * float(gl.get("kg_m2", 0.0))})
+		if int(bolts.get("anchors", 0)) > 0:
+			rows.append({"section": "Fasteners", "item": "Floor anchor (%s)" % str(bolts["bolt"]["label"]),
+				"qty": int(bolts["anchors"]), "unit": "pcs", "detail": "through the floor flanges",
+				"mass_kg": int(bolts["anchors"]) * float(bolts["bolt"]["kg_each"])})
 		if sys != "plate":
 			for p in pn["panels"]:
 				screws += (p["holes"] as Array).size()

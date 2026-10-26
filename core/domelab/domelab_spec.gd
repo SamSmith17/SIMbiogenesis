@@ -6,7 +6,7 @@ extends RefCounted
 ##
 ## {
 ##   version, name,
-##   family:     "geodesic" | "zome"
+##   family:     "geodesic" | "zome" | "helical"
 ##   geodesic:   {base: icosa|octa|tetra, cls: 1|2|3, frequency: 1..10,
 ##                b, c (Class III only), orientation: vertex|face|edge,
 ##                fraction: 0.25..1.0 (the share of the sphere kept, from the
@@ -15,7 +15,14 @@ extends RefCounted
 ##                from the axis, base: "cut" | "zigzag", triangulate: bool,
 ##                stretch: vertical scale, ribs: bool (helix ribs instead of
 ##                straight struts — the "helix zome")}
-##   radius_m:   the widest horizontal radius of the finished structure
+##   helical:    {sides: 3..16, pitch_deg, window: 3..sides (generators per
+##                cell; = sides sweeps the whole zonohedron, 3 stacks
+##                rhombohedra — the "stacked cubes"), steps: 0..48 cells after
+##                the first (sides steps = one turn), hand: "right" | "left",
+##                levels: rows kept from the apex down, 0 = the whole body
+##                (the floor is cut level there), stretch}
+##   radius_m:   the widest horizontal radius of the finished structure (a
+##               helical zome: of one zonohedral cell)
 ##   system:     "bolt_stack" | "hub" | "flat_bar" | "nexorade" | "plate"
 ##   strut:      {material: DomeLabMaterials.STRUTS id}
 ##   ends:       {flatten_mm: how much of each end is pressed flat,
@@ -28,8 +35,16 @@ extends RefCounted
 ##                the eccentricity to the slat thickness), engagement_deg: 0 =
 ##                auto, engage_frac: engagement length / edge, overhang_mm,
 ##                slat: STRUTS id}
-##   face:       {material: SHEETS id, gap_mm (seam between panels),
-##                flange_mm (plate system), hole_pitch_mm, screw_mm}
+##   face:       {material: SHEETS id, gap_mm (seam between panels; for plates
+##                the gap between two flanges bolted back to back),
+##                flange_mm (plate system), hole_pitch_mm, screw_mm,
+##                thickness_mm (0 = the sheet's own), fold_radius_mm (inside
+##                radius of a flange's bend, 0 = the sheet's thickness),
+##                oculus: bool, oculus_mm (opening's offset in from the
+##                panel's edge), oculus_round (0 sharp .. 1 fully round
+##                corners), oculus_zones: [rhombus types, empty = every
+##                face], glazing: SHEETS id ("none" = open), bolts: draw the
+##                flange bolts}
 ##   fabrication:{units: "mm" | "in", group_tol_mm, angle_tol_deg,
 ##                sheet_w_mm, sheet_h_mm (0 = the material's), kerf_mm,
 ##                label_struts: bool}
@@ -38,8 +53,11 @@ extends RefCounted
 
 const VERSION := 1
 
-const FAMILIES := ["geodesic", "zome"]
-const FAMILY_LABELS := {"geodesic": "Geodesic dome", "zome": "Zome (polar zonohedron)"}
+const FAMILIES := ["geodesic", "zome", "helical"]
+const FAMILY_LABELS := {"geodesic": "Geodesic dome", "zome": "Zome (polar zonohedron)",
+	"helical": "Helical zome (twisted zonohedron)"}
+const HANDS := ["right", "left"]
+const HAND_LABELS := {"right": "Right-handed", "left": "Left-handed"}
 const BASES := ["icosa", "octa", "tetra"]
 const BASE_LABELS := {"icosa": "Icosahedron (20 faces)", "octa": "Octahedron (8 faces)",
 	"tetra": "Tetrahedron (4 faces)"}
@@ -70,6 +88,8 @@ const GEODESIC_DEFAULTS := {"base": "icosa", "cls": 1, "frequency": 3, "b": 2, "
 	"orientation": "vertex", "fraction": 0.625, "flat_base": true, "stretch": 1.0}
 const ZOME_DEFAULTS := {"sides": 8, "layers": 4, "pitch_deg": 40.0, "base": "cut",
 	"triangulate": false, "stretch": 1.0, "ribs": false}
+const HELICAL_DEFAULTS := {"sides": 10, "pitch_deg": 57.0, "window": 10, "steps": 10, "hand": "right",
+	"levels": 0, "stretch": 1.0}
 const STRUT_DEFAULTS := {"material": "emt_34"}
 const ENDS_DEFAULTS := {"flatten_mm": 50.0, "hole_offset_mm": 25.0, "insert_mm": 40.0}
 const HUB_DEFAULTS := {"kind": "bolt", "bolt": "3_8", "reach_mm": 60.0, "plate_t_mm": 3.0}
@@ -79,7 +99,8 @@ const NEXORADE_MODES := ["band", "rigid"]
 const NEXORADE_MODE_LABELS := {"band": "Flexible bands on the surface (rotegrity)",
 	"rigid": "Straight rigid slats (eccentricity = thickness)"}
 const FACE_DEFAULTS := {"material": "none", "gap_mm": 6.0, "flange_mm": 40.0, "hole_pitch_mm": 150.0,
-	"screw_mm": 5.0}
+	"screw_mm": 5.0, "thickness_mm": 0.0, "fold_radius_mm": 0.0, "oculus": false, "oculus_mm": 80.0,
+	"oculus_round": 0.3, "oculus_zones": [], "glazing": "none", "bolts": true}
 const FAB_DEFAULTS := {"units": "mm", "group_tol_mm": 1.0, "angle_tol_deg": 0.5, "sheet_w_mm": 0.0,
 	"sheet_h_mm": 0.0, "kerf_mm": 3.0, "label_struts": true}
 const COLOR_DEFAULTS := {"strut": Color(0.70, 0.72, 0.74), "hub": Color(0.25, 0.26, 0.30),
@@ -90,7 +111,12 @@ const MAX_RADIUS_M := 60.0
 
 
 static func default_spec(family: String = "geodesic") -> Dictionary:
-	return resolve({"family": family, "name": "3V 5/8 conduit dome" if family == "geodesic" else "8-sided zome"})
+	var nm := {"geodesic": "3V 5/8 conduit dome", "zome": "8-sided zome", "helical": "Helical zome"}
+	var s := {"family": family, "name": str(nm.get(family, "Dome"))}
+	if family == "helical":
+		s["system"] = "plate"
+		s["face"] = {"material": "steel_06", "flange_mm": 40.0}
+	return resolve(s)
 
 
 static func resolve(spec: Dictionary) -> Dictionary:
@@ -110,6 +136,7 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	s["system"] = sys
 	s["geodesic"] = _merge(GEODESIC_DEFAULTS, s.get("geodesic", {}))
 	s["zome"] = _merge(ZOME_DEFAULTS, s.get("zome", {}))
+	s["helical"] = _merge(HELICAL_DEFAULTS, s.get("helical", {}))
 	s["strut"] = _merge(STRUT_DEFAULTS, s.get("strut", {}))
 	s["ends"] = _merge(ENDS_DEFAULTS, s.get("ends", {}))
 	s["hub"] = _merge(HUB_DEFAULTS, s.get("hub", {}))
@@ -144,6 +171,15 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	z["triangulate"] = bool(z["triangulate"])
 	z["stretch"] = clampf(float(z["stretch"]), 0.4, 2.5)
 	z["ribs"] = bool(z["ribs"])
+	var hx: Dictionary = s["helical"]
+	hx["sides"] = clampi(int(hx["sides"]), 3, 16)
+	hx["pitch_deg"] = clampf(float(hx["pitch_deg"]), 10.0, 80.0)
+	hx["window"] = clampi(int(hx["window"]), 3, int(hx["sides"]))
+	hx["steps"] = clampi(int(hx["steps"]), 0, 48)
+	if not HANDS.has(str(hx["hand"])):
+		hx["hand"] = "right"
+	hx["levels"] = clampi(int(hx["levels"]), 0, 80)
+	hx["stretch"] = clampf(float(hx["stretch"]), 0.4, 2.5)
 	var st: Dictionary = s["strut"]
 	if not DomeLabMaterials.STRUTS.has(str(st["material"])):
 		st["material"] = "emt_34"
@@ -173,6 +209,22 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	f["flange_mm"] = clampf(float(f["flange_mm"]), 10.0, 150.0)
 	f["hole_pitch_mm"] = clampf(float(f["hole_pitch_mm"]), 40.0, 600.0)
 	f["screw_mm"] = clampf(float(f["screw_mm"]), 2.0, 12.0)
+	f["thickness_mm"] = clampf(float(f["thickness_mm"]), 0.0, 25.0)
+	f["fold_radius_mm"] = clampf(float(f["fold_radius_mm"]), 0.0, 100.0)
+	f["oculus"] = bool(f["oculus"])
+	f["oculus_mm"] = clampf(float(f["oculus_mm"]), 10.0, 1000.0)
+	f["oculus_round"] = clampf(float(f["oculus_round"]), 0.0, 1.0)
+	var zones: Array = []
+	if f["oculus_zones"] is Array:
+		for zv in (f["oculus_zones"] as Array):
+			var zi := int(zv)
+			if zi >= 1 and not zones.has(zi):
+				zones.append(zi)
+	zones.sort()
+	f["oculus_zones"] = zones
+	if not DomeLabMaterials.SHEETS.has(str(f["glazing"])):
+		f["glazing"] = "none"
+	f["bolts"] = bool(f["bolts"])
 	var fb: Dictionary = s["fabrication"]
 	if not UNITS.has(str(fb["units"])):
 		fb["units"] = "mm"
@@ -290,6 +342,11 @@ static func describe(spec: Dictionary) -> String:
 				int(g["c"]), cls_txt, frac]
 		else:
 			geo = "%dV %s %s %s" % [f, str(BASE_LABELS[str(g["base"])]).split(" ")[0], cls_txt, frac]
+	elif str(s["family"]) == "helical":
+		var hx: Dictionary = s["helical"]
+		var turns := float(hx["steps"]) / float(hx["sides"])
+		geo = "%d-sided helical zome, %s cells, %.1f turns" % [int(hx["sides"]), str(int(hx["window"])) + "-zone",
+			turns]
 	else:
 		var z: Dictionary = s["zome"]
 		geo = "%d-sided zome, %d layers%s" % [int(z["sides"]), int(z["layers"]),

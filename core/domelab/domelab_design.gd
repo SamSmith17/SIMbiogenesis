@@ -50,8 +50,11 @@ static func clear_cache() -> void:
 static func _solve(s: Dictionary) -> Dictionary:
 	var fam := str(s["family"])
 	var radius := float(s["radius_m"])
-	var geo: Dictionary = DomeLabGeodesic.build(s["geodesic"], radius) if fam == "geodesic" \
-		else DomeLabZome.build(s["zome"], radius)
+	var geo: Dictionary = {}
+	match fam:
+		"geodesic": geo = DomeLabGeodesic.build(s["geodesic"], radius)
+		"helical": geo = DomeLabHelical.build(s["helical"], radius)
+		_: geo = DomeLabZome.build(s["zome"], radius)
 	var warnings: Array = (geo.get("warnings", []) as Array).duplicate()
 	var frames := DomeLabConnectors.vertex_frames(geo)
 	var fidx := DomeLabConnectors.face_index(geo)
@@ -192,16 +195,16 @@ static func _bolts(d: Dictionary, s: Dictionary) -> Dictionary:
 		out["lengths"][L] = n
 		out["count"] = n
 	elif sys == "plate":
+		# One bolt per shared hole through a flange pair (with the seam gap
+		# between them), plus one anchor per hole in a floor flange.
 		var pn: Dictionary = d["panels"]
-		var holes := 0
-		for p in pn.get("panels", []):
-			holes += (p["holes"] as Array).size()
-		var mat_t := float((pn.get("material", {}) as Dictionary).get("t_mm", 3.0))
-		var L := DomeLabMaterials.bolt_length_mm(bolt, 2.0 * mat_t + float(bolt["nut_mm"])
-			+ 2.0 * float(bolt["washer_mm"]) + float(bolt["d_mm"]))
-		var n := int(holes / 2)
+		var mat_t := float(pn.get("t_mm", (pn.get("material", {}) as Dictionary).get("t_mm", 3.0)))
+		var L := DomeLabMaterials.bolt_length_mm(bolt, 2.0 * mat_t + float(pn.get("gap_mm", 0.0))
+			+ float(bolt["nut_mm"]) + 2.0 * float(bolt["washer_mm"]) + float(bolt["d_mm"]))
+		var n := (pn.get("bolts3d", []) as Array).size()
 		out["lengths"][L] = n
 		out["count"] = n
+		out["anchors"] = int(pn.get("anchors", 0))
 	return out
 
 
@@ -224,7 +227,16 @@ static func _stats(d: Dictionary) -> Dictionary:
 	floor_r = floor_r / maxf(base.size(), 1) if not base.is_empty() else rmax
 	# Floor polygon area (base ring sorted by angle).
 	var floor_area := 0.0
-	if base_pts.size() >= 3:
+	var loop := _floor_loop(geo)
+	if loop.size() >= 3:
+		# A helical zome's floor need not be star-shaped round the axis:
+		# chain the boundary edges into the real outline.
+		for i in loop.size():
+			var p: Vector2 = loop[i]
+			var q: Vector2 = loop[(i + 1) % loop.size()]
+			floor_area += p.x * q.y - q.x * p.y
+		floor_area = absf(floor_area) * 0.5
+	elif base_pts.size() >= 3:
 		base_pts.sort_custom(func(a, b): return atan2((a as Vector2).y, (a as Vector2).x) < atan2((b as Vector2).y, (b as Vector2).x))
 		for i in base_pts.size():
 			var p: Vector2 = base_pts[i]
@@ -259,6 +271,48 @@ static func _stats(d: Dictionary) -> Dictionary:
 		"floor_area_m2": floor_area, "surface_m2": surface, "volume_m3": absf(volume),
 		"vertices": verts.size(), "edges": (geo["edges"] as Array).size(), "faces": faces.size(),
 		"chord_factors": chord, "strut_m": strut_m, "fraction": float(geo.get("fraction_actual", 1.0))}
+
+
+## A helical zome's floor outline (plan, metres), chained from the edges
+## that bound one face only; empty for the other families.
+static func _floor_loop(geo: Dictionary) -> PackedVector2Array:
+	if not geo.has("levels_kept"):
+		return PackedVector2Array()
+	var verts: PackedVector3Array = geo["verts"]
+	var use := {}
+	for f in geo["faces"]:
+		var pf: PackedInt32Array = f
+		for k in pf.size():
+			var key := DomeLabGeodesic._ekey(pf[k], pf[(k + 1) % pf.size()])
+			use[key] = int(use.get(key, 0)) + 1
+	var nxt := {}
+	for key in use:
+		if int(use[key]) != 1:
+			continue
+		var parts := str(key).split("_")
+		var a := int(parts[0])
+		var b := int(parts[1])
+		if not nxt.has(a):
+			nxt[a] = []
+		if not nxt.has(b):
+			nxt[b] = []
+		(nxt[a] as Array).append(b)
+		(nxt[b] as Array).append(a)
+	if nxt.is_empty():
+		return PackedVector2Array()
+	var start: int = nxt.keys()[0]
+	var out := PackedVector2Array()
+	var prev := -1
+	var cur := start
+	for _i in nxt.size() + 1:
+		out.append(Vector2(verts[cur].x, verts[cur].z))
+		var nb: Array = nxt[cur]
+		var go := int(nb[0]) if int(nb[0]) != prev else (int(nb[1]) if nb.size() > 1 else -1)
+		if go < 0 or go == start:
+			break
+		prev = cur
+		cur = go
+	return out
 
 
 ## Rings of vertices by height, base first; the strut types each ring adds.
@@ -401,6 +455,26 @@ static func _checks(d: Dictionary, warnings: Array) -> Array:
 				UiText.count(int(pn.get("sheets", 0)), "sheet")]})
 		else:
 			out.append({"level": "error", "text": UiText.count(unpl.size(), "panel") + " do not fit the sheet"})
+		if sys == "plate":
+			var t_mm := float(pn.get("t_mm", 1.0))
+			var fr_mm := float(pn.get("fold_r_mm", t_mm))
+			var sec := DomeLabPanels.flange_section(0.0, t_mm, fr_mm, float(pn.get("gap_mm", 0.0)), float(pn.get("flange_mm", 40.0)))
+			var bolt := DomeLabMaterials.bolt(str(s["hub"]["bolt"]))
+			if float(sec["run"]) < float(bolt["d_mm"]) * 2.5:
+				out.append({"level": "warn", "text": "The flange's straight run (%s) is short for a %s bolt — widen the flange or tighten the bend" % [
+					DomeLabSpec.fmt_len(float(sec["run"])), str(bolt["label"])]})
+			if fr_mm < t_mm * 0.99:
+				out.append({"level": "warn", "text": "A bend radius under the sheet thickness (%s < %s) cracks most steel — use at least 1 × t" % [
+					DomeLabSpec.fmt_len(fr_mm), DomeLabSpec.fmt_len(t_mm)]})
+			var nb := (pn.get("bolts3d", []) as Array).size()
+			if nb > 0:
+				out.append({"level": "ok", "text": "%s through the flange pairs (holes drilled per edge, so both plates line up)%s" % [
+					UiText.count(nb, "bolt"), (", " + UiText.count(int(pn.get("anchors", 0)), "floor anchor")) if int(pn.get("anchors", 0)) > 0 else ""]})
+		if int(pn.get("panes", 0)) > 0 or float(pn.get("open_area_m2", 0.0)) > 0.0:
+			var gl: Dictionary = pn.get("glazing", {})
+			out.append({"level": "ok", "text": "Openings %s%s" % [DomeLabSpec.fmt_area(float(pn.get("open_area_m2", 0.0))),
+				(" glazed with %s (%s, %s of pane)" % [str(gl.get("label", "")), UiText.count(int(pn["panes"]), "pane"),
+					DomeLabSpec.fmt_area(float(pn.get("pane_area_m2", 0.0)))]) if int(pn.get("panes", 0)) > 0 else " (open)"]})
 		if sys == "plate" and not bool((pn.get("material", {}) as Dictionary).get("folds", false)):
 			out.append({"level": "warn", "text": "%s does not fold: plates need a sheet that bends (steel, aluminium, HDPE, polycarbonate)" % str(pn["material"]["label"])})
 	# Mass.

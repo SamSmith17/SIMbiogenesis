@@ -8,6 +8,8 @@ extends SceneTree
 ##   Godot.exe --path . --windowed --resolution 1280x800 --script res://tools/diag/rack_model_study.gd -- --glb=<path> --out=<dir>
 ##   Godot.exe --path . --windowed --resolution 1280x800 --script res://tools/diag/rack_model_study.gd -- --rack-preset=<id> --out=<dir>
 ## --yaw=<deg> turns the model first (to line a model's faces up with a rack's).
+## --dome-preset=<id> studies a DomeLabPresets design the same way (the
+## helical corten home against its SketchUp source, 2026-10-26).
 
 var _model: Node3D = null
 var _out := ""
@@ -29,6 +31,8 @@ func _initialize() -> void:
 			glb = s.substr(6)
 		elif s.begins_with("--rack-preset="):
 			preset = s.substr(14)
+		elif s.begins_with("--dome-preset="):
+			preset = "dome:" + s.substr(14)
 		elif s.begins_with("--out="):
 			_out = s.substr(6)
 		elif s.begins_with("--yaw="):
@@ -48,6 +52,13 @@ func _initialize() -> void:
 			quit(1)
 			return
 		_model = doc.generate_scene(st) as Node3D
+	elif preset.begins_with("dome:"):
+		var dp := DomeLabPresets.builtin(preset.substr(5))
+		if dp.is_empty():
+			print("no dome preset ", preset)
+			quit(1)
+			return
+		_model = DomeLabBuilder.build_node(dp["spec"])
 	else:
 		var d := PalletRackBuilder.design_preset(preset)
 		if d.is_empty():

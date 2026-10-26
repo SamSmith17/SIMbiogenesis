@@ -130,7 +130,58 @@ static func builtins() -> Array:
 	d["system"] = "plate"
 	d["face"]["material"] = "steel_06"
 	out.append({"id": "plate_zome", "name": "Folded steel zome", "blurb": "Six-sided, three layers, sheet-steel rhombi with folded flanges and no frame.", "spec": d})
+	out.append({"id": "helical_corten", "name": "Helical zome home (corten + PMMA)",
+		"blurb": "Ten-sided zonohedron swept two turns round a helix: 3 mm corten rhombi folded and bolted flange to flange, acrylic in the two narrowest rhombus types.",
+		"spec": helical_corten_spec()})
+	d = DomeLabSpec.default_spec("helical")
+	d["name"] = "Stacked rhombic dodecahedra"
+	d["radius_m"] = 0.9
+	d["helical"]["sides"] = 4
+	d["helical"]["pitch_deg"] = 54.7356
+	d["helical"]["window"] = 4
+	d["helical"]["steps"] = 2
+	d["face"]["material"] = "alu_1"
+	d["face"]["flange_mm"] = 35.0
+	d["face"]["fold_radius_mm"] = 3.0
+	d["face"]["oculus"] = true
+	d["face"]["oculus_mm"] = 70.0
+	d["face"]["oculus_round"] = 1.0
+	d["face"]["glazing"] = "polycarb_4"
+	d["hub"]["bolt"] = "m6"
+	out.append({"id": "helical_rd", "name": "Stacked rhombic dodecahedra",
+		"blurb": "Three rhombic dodecahedra, each one generator step round and down: the zonohedron chain that becomes a helical zome as the sides go up.",
+		"spec": d})
 	return out
+
+
+## The 10-sided corten helical zome, rebuilt from its SketchUp model
+## (Helical Zome Corten Steel.glb, measured 2026-10-26): ten generators at
+## 57.1° from the axis, 1.585 m struts, 21 cells (two turns) — 450 rhombi,
+## node for node — cut at the person's floor 14 rows down; the 30° and 59°
+## rhombi (zones 1 and 2) carry ~100 mm-offset acrylic windows.
+static func helical_corten_spec() -> Dictionary:
+	var d := DomeLabSpec.default_spec("helical")
+	d["name"] = "Helical zome home"
+	d["radius_m"] = 1.585 * sin(deg_to_rad(57.1)) / sin(PI / 10.0)
+	d["helical"]["sides"] = 10
+	d["helical"]["pitch_deg"] = 57.1
+	d["helical"]["window"] = 10
+	d["helical"]["steps"] = 20
+	d["helical"]["levels"] = 14
+	d["system"] = "plate"
+	d["face"]["material"] = "corten_3"
+	d["face"]["gap_mm"] = 4.0
+	d["face"]["flange_mm"] = 60.0
+	d["face"]["fold_radius_mm"] = 6.0
+	d["face"]["hole_pitch_mm"] = 250.0
+	d["face"]["oculus"] = true
+	d["face"]["oculus_mm"] = 100.0
+	d["face"]["oculus_round"] = 0.0
+	d["face"]["oculus_zones"] = [1, 2]
+	d["face"]["glazing"] = "pmma_4"
+	d["hub"]["bolt"] = "m10"
+	d["fabrication"]["kerf_mm"] = 1.0
+	return DomeLabSpec.resolve(d)
 
 
 static func builtin(id: String) -> Dictionary:

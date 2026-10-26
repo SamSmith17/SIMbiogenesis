@@ -10,7 +10,11 @@ extends RefCounted
 ## in front of the player: each is a prop with its spec, counted as shade by
 ## the comfort model, packs to its computed bundle and unpacks again, and a
 ## click on the placed dome reopens the designer bound to it. Removes what
-## it placed.
+## it placed. The helical part (2026-10-26) loads the corten helical home,
+## drives the new rows through the modal's own controls (length, floor cut,
+## opening offset and roundness, an opening zone, the bend radius), audits
+## the modal with them showing, shoots the studio from outside and inside,
+## and places the home in the world.
 
 var _fails: Array = []
 
@@ -93,6 +97,53 @@ func run(main: Node, harness: Node) -> Dictionary:
 				found += 1
 				break
 	_ok(found == 3, "the three published 3V chord factors are on the schedule (%s)" % str(cf))
+	# The helical zome and its folded plates, through the modal's controls.
+	ui.call("load_builtin", "helical_corten")
+	await _settle(tree, 14)
+	var dh: Dictionary = ui.call("design")
+	_ok(int(dh["geo"]["full_count"]["f"]) == 450 and (dh["geo"]["faces"] as Array).size() == 216,
+		"the helical home: 450 rhombi in the closed body, 216 above the floor cut")
+	vp.get_texture().get_image().save_png("%s/helical_studio.png" % dir)
+	var ctl := func(nm: String) -> Node: return ui.find_child(nm, true, false)
+	for want in ["hx_sides", "hx_pitch", "hx_window", "hx_steps", "hx_hand", "hx_levels", "thickness_mm",
+			"fold_radius_mm", "draw_bolts", "oculus", "oculus_mm", "oculus_round", "zone_1", "zone_5", "glazing"]:
+		_ok(ctl.call(want) != null, "the modal shows the %s control" % want)
+	main.get_viewport().get_texture().get_image().save_png("%s/helical_modal.png" % dir)
+	var audit_h := UiAudit.run(main.get_viewport())
+	print("domelab: helical ui audit — %s" % UiAudit.summary_line(audit_h))
+	_ok(int(audit_h.get("errors", 0)) == 0, "the modal with the helical rows has no UI audit errors")
+	(ctl.call("hx_levels") as SpinBox).value = 0
+	await _settle(tree, 14)
+	_ok((((ui.call("design") as Dictionary)["geo"] as Dictionary)["faces"] as Array).size() == 450,
+		"Floor cut 0 keeps the whole closed body")
+	(ctl.call("hx_steps") as SpinBox).value = 10
+	await _settle(tree, 14)
+	var d10: Dictionary = ui.call("design")
+	_ok(int(d10["geo"]["levels_total"]) == 20, "Length 10 steps = one turn, 20 rows (%d)" % int(d10["geo"]["levels_total"]))
+	(ctl.call("oculus_round") as HSlider).value = 1.0
+	(ctl.call("oculus_mm") as SpinBox).value = 160
+	await _settle(tree, 14)
+	var dr: Dictionary = ui.call("design")
+	var rounded := false
+	for pp in dr["panels"]["panels"]:
+		if (pp["oculus"] as PackedVector2Array).size() > 12:
+			rounded = true
+			break
+	_ok(rounded and absf(float(dr["spec"]["face"]["oculus_mm"]) - 160.0) < 1e-6, "Roundness and offset reshape the openings")
+	(ctl.call("zone_3") as CheckBox).button_pressed = true
+	await _settle(tree, 14)
+	var zs: Array = (ui.call("spec") as Dictionary)["face"]["oculus_zones"]
+	_ok(zs.has(3) and zs.has(1) and zs.has(2), "ticking zone 3 adds it to the openings (%s)" % str(zs))
+	(ctl.call("fold_radius_mm") as SpinBox).value = 25
+	await _settle(tree, 14)
+	_ok(absf(float((ui.call("design") as Dictionary)["panels"]["fold_r_mm"]) - 25.0) < 1e-6, "the bend radius reaches the plates")
+	vp.get_texture().get_image().save_png("%s/helical_round_openings.png" % dir)
+	ui.call("load_builtin", "helical_corten")
+	await _settle(tree, 14)
+	ui.call("set_tab", 1)
+	await _settle(tree, 4)
+	main.get_viewport().get_texture().get_image().save_png("%s/sheets_helical_corten.png" % dir)
+	ui.call("set_tab", 0)
 	# Export and read back (a plate dome has sheets + a conduit dome has strut templates).
 	ui.call("load_builtin", "plate_dome")
 	await _settle(tree, 10)
@@ -127,7 +178,9 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var placed: Array = []
 	var dome := (DomeLabPresets.builtin("2v_conduit")["spec"] as Dictionary).duplicate(true)
 	var zome := (DomeLabPresets.builtin("zome_8")["spec"] as Dictionary).duplicate(true)
-	var targets := [[dome, at + fwd * 8.0 - side * 4.0, "bundle"], [zome, at + fwd * 8.0 + side * 4.5, "bundle"]]
+	var helix := (DomeLabPresets.builtin("helical_corten")["spec"] as Dictionary).duplicate(true)
+	var targets := [[dome, at + fwd * 8.0 - side * 4.0, "bundle"], [zome, at + fwd * 8.0 + side * 4.5, "bundle"],
+		[helix, at + fwd * 24.0, "panel_stack"]]
 	var shade_before: int = (loader.call("shade_footprints") as Array).size()
 	for tg in targets:
 		var spec: Dictionary = tg[0]

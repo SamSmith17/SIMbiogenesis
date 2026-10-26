@@ -676,8 +676,9 @@ func _rebuild_now() -> void:
 	_rebuild_timer = -1.0
 	_spec = DomeLabSpec.resolve(_spec)
 	_design = DomeLabDesign.solve(_spec)
-	var key := "%s|%s|%s|%d|%s" % [str(_spec["family"]), str(_spec["system"]), str(_spec["hub"]["kind"]),
-		int(_spec["geodesic"]["cls"]), str(_spec["nexorade"]["mode"])]
+	var key := "%s|%s|%s|%d|%s|%s|%d" % [str(_spec["family"]), str(_spec["system"]), str(_spec["hub"]["kind"]),
+		int(_spec["geodesic"]["cls"]), str(_spec["nexorade"]["mode"]), str(_spec["face"]["oculus"]),
+		_zone_count()]
 	if key != _built_key:
 		_built_key = key
 		_build_settings_rows()
@@ -882,7 +883,7 @@ func _build_settings_rows() -> void:
 		var stretch := _spin(0.4, 2.5, 0.05, "×", func(v): _edit(g, "stretch", float(v)))
 		stretch.name = "stretch"
 		_row(_geo_box, "Vertical stretch", stretch, "1 = a sphere; less = a low ellipsoid, more = an egg")
-	else:
+	elif fam == "zome":
 		var z := "zome"
 		var sides := _spin(3, 16, 1, "", func(v): _edit(z, "sides", int(v)))
 		sides.name = "sides"
@@ -905,10 +906,35 @@ func _build_settings_rows() -> void:
 		var stretch := _spin(0.4, 2.5, 0.05, "×", func(v): _edit(z, "stretch", float(v)))
 		stretch.name = "stretch"
 		_row(_geo_box, "Vertical stretch", stretch)
+	else:
+		var hz := "helical"
+		var hs := _spin(3, 16, 1, "", func(v): _edit(hz, "sides", int(v)))
+		hs.name = "hx_sides"
+		_row(_geo_box, "Sides (order n)", hs, "The zonohedron's generators: n directions round the axis, one strut length")
+		var hp := _spin(10, 80, 0.1, "°", func(v): _edit(hz, "pitch_deg", float(v)))
+		hp.name = "hx_pitch"
+		_row(_geo_box, "Generator pitch", hp, "The struts' angle from the vertical axis: low = tall and narrow, high = squat")
+		var win := _spin(3, 16, 1, "", func(v): _edit(hz, "window", int(v)))
+		win.name = "hx_window"
+		_row(_geo_box, "Cell zones", win, "Generators per cell. = sides: the whole zonohedron swept along the helix (smooth lobes). 3: rhombohedra stacked like cubes; 4: rhombic dodecahedra")
+		var steps := _spin(0, 48, 1, " steps", func(v): _edit(hz, "steps", int(v)))
+		steps.name = "hx_steps"
+		_row(_geo_box, "Length", steps, "Cells after the first, each one generator step round and down; n steps make one full turn")
+		var hand := _option(_opt_list(DomeLabSpec.HANDS, DomeLabSpec.HAND_LABELS), func(v): _edit(hz, "hand", v))
+		hand.name = "hx_hand"
+		_row(_geo_box, "Twist", hand)
+		var lv := _spin(0, 80, 1, " rows", func(v): _edit(hz, "levels", int(v)))
+		lv.name = "hx_levels"
+		_row(_geo_box, "Floor cut", lv, "Rows of nodes kept from the apex down (each strut drops one row); the floor is cut level there. 0 keeps the whole closed body, standing on its lowest point")
+		var hst := _spin(0.4, 2.5, 0.05, "×", func(v): _edit(hz, "stretch", float(v)))
+		hst.name = "hx_stretch"
+		_row(_geo_box, "Vertical stretch", hst)
 	# --- size -------------------------------------------------------------
 	var rad := _spin(DomeLabSpec.MIN_RADIUS_M, DomeLabSpec.MAX_RADIUS_M, 0.1, " m", func(v): _edit("", "radius_m", float(v)))
 	rad.name = "radius_m"
-	_row(_size_box, "Radius", rad, "The widest horizontal radius of the finished structure")
+	_row(_size_box, "Cell radius" if fam == "helical" else "Radius", rad,
+		"The widest ring of one zonohedral cell (the whole helix is wider)" if fam == "helical"
+		else "The widest horizontal radius of the finished structure")
 	var dia := Label.new()
 	dia.name = "size_info"
 	dia.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -999,10 +1025,19 @@ func _build_settings_rows() -> void:
 	var gap := _spin(0, 60, 1, " mm", func(v): _edit("face", "gap_mm", float(v)))
 	gap.name = "gap_mm"
 	_row(_face_box, "Seam gap", gap)
+	var th := _spin(0, 25, 0.1, " mm", func(v): _edit("face", "thickness_mm", float(v)))
+	th.name = "thickness_mm"
+	_row(_face_box, "Thickness (0 = stock)", th, "The sheet's thickness; the panels and flanges are drawn this solid")
 	if sys == "plate":
 		var fl := _spin(10, 150, 5, " mm", func(v): _edit("face", "flange_mm", float(v)))
 		fl.name = "flange_mm"
-		_row(_face_box, "Flange width", fl, "Folded through half the angle between the two faces")
+		_row(_face_box, "Flange depth", fl, "How far each flange runs in from the face's skin. Flanges fold in to the plane halfway between two faces, so neighbours meet back to back and bolt into one strut")
+		var fr := _spin(0, 100, 0.5, " mm", func(v): _edit("face", "fold_radius_mm", float(v)))
+		fr.name = "fold_radius_mm"
+		_row(_face_box, "Bend radius (inside)", fr, "The curve of each fold; 0 = the sheet's thickness (the tightest most steel takes)")
+		var bt := _check("Draw the flange bolts", func(v): _edit("face", "bolts", bool(v)))
+		bt.name = "draw_bolts"
+		_row(_face_box, "Bolts", bt)
 	var hp := _spin(40, 600, 10, " mm", func(v): _edit("face", "hole_pitch_mm", float(v)))
 	hp.name = "hole_pitch_mm"
 	_row(_face_box, "Hole pitch", hp)
@@ -1010,6 +1045,39 @@ func _build_settings_rows() -> void:
 		var sc := _spin(2, 12, 0.5, " mm", func(v): _edit("face", "screw_mm", float(v)))
 		sc.name = "screw_mm"
 		_row(_face_box, "Screw hole", sc)
+	var oc := _check("Cut an opening in each face", func(v): _edit("face", "oculus", bool(v)))
+	oc.name = "oculus"
+	_row(_face_box, "Openings", oc, "An oculus / window: the face inset by the offset, its corners rounded")
+	if bool(_spec["face"]["oculus"]):
+		var om := _spin(10, 1000, 5, " mm", func(v): _edit("face", "oculus_mm", float(v)))
+		om.name = "oculus_mm"
+		_row(_face_box, "Offset from the edge", om)
+		var orr := HSlider.new()
+		orr.name = "oculus_round"
+		orr.min_value = 0.0
+		orr.max_value = 1.0
+		orr.step = 0.01
+		orr.custom_minimum_size = Vector2(0, 22)
+		orr.value_changed.connect(func(v): _edit("face", "oculus_round", float(v)))
+		_row(_face_box, "Corner roundness", orr, "0 = sharp corners, 1 = as round as the opening allows")
+		var nz := _zone_count()
+		if nz > 0:
+			var flow := HFlowContainer.new()
+			flow.name = "zone_flow"
+			flow.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+			for z in range(1, nz + 1):
+				var cb := CheckBox.new()
+				cb.name = "zone_%d" % z
+				cb.text = _zone_label(z)
+				cb.tooltip_text = "Rhombus type %d (generators %d apart)" % [z, z]
+				cb.toggled.connect(func(_on): _on_zone_toggled())
+				flow.add_child(cb)
+			_row(_face_box, "Openings in", flow, "Which rhombus types get an opening; none ticked = every face")
+		var glz := _option(_mat_list(DomeLabMaterials.SHEET_ORDER, DomeLabMaterials.SHEETS,
+			func(m): return str(m["label"]).contains("No covering") or DomeLabMaterials.sheet_look(_sheet_id_of(m)) == "glazing"),
+			func(v): _edit("face", "glazing", v))
+		glz.name = "glazing"
+		_row(_face_box, "Glazing", glz, "A pane lapped behind each opening, or none (open)")
 	# --- fabrication --------------------------------------------------------
 	var units := _option([["mm", "Millimetres"], ["in", "Inches"]], func(v): _edit("fabrication", "units", v))
 	units.name = "units"
@@ -1069,6 +1137,13 @@ func _sync_settings() -> void:
 			"pitch_deg": _set_ctl(c, float(z["pitch_deg"]))
 			"triangulate": _set_ctl(c, bool(z["triangulate"]))
 			"ribs": _set_ctl(c, bool(z["ribs"]))
+			"hx_sides": _set_ctl(c, int(_spec["helical"]["sides"]))
+			"hx_pitch": _set_ctl(c, float(_spec["helical"]["pitch_deg"]))
+			"hx_window": _set_ctl(c, int(_spec["helical"]["window"]))
+			"hx_steps": _set_ctl(c, int(_spec["helical"]["steps"]))
+			"hx_hand": _select_meta(c, str(_spec["helical"]["hand"]))
+			"hx_levels": _set_ctl(c, int(_spec["helical"]["levels"]))
+			"hx_stretch": _set_ctl(c, float(_spec["helical"]["stretch"]))
 	for c in _all_controls(_size_box):
 		match str(c.name):
 			"radius_m": _set_ctl(c, float(_spec["radius_m"]))
@@ -1080,7 +1155,9 @@ func _sync_settings() -> void:
 					DomeLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))), DomeLabSpec.fmt_area(float(st.get("surface_m2", 0.0))),
 					"%.0f m³" % float(st.get("volume_m3", 0.0)), int(st.get("vertices", 0)), int(st.get("edges", 0)),
 					int(st.get("faces", 0)),
-					(" · %.0f %% of the sphere" % (float(geo.get("fraction_actual", 1.0)) * 100.0)) if str(_spec["family"]) == "geodesic" else ""]
+					(" · %.0f %% of the sphere" % (float(geo.get("fraction_actual", 1.0)) * 100.0)) if str(_spec["family"]) == "geodesic"
+						else (" · strut %s" % DomeLabSpec.fmt_m(float(geo.get("gen_len_m", 0.0)))
+							+ ((" · %d of %d rows" % [int(geo.get("levels_kept", 0)), int(geo.get("levels_total", 0))]) if str(_spec["family"]) == "helical" else ""))]
 	var hub: Dictionary = _spec["hub"]
 	var ends: Dictionary = _spec["ends"]
 	var nx: Dictionary = _spec["nexorade"]
@@ -1105,8 +1182,18 @@ func _sync_settings() -> void:
 			"face_material": _select_meta(c, str(face["material"]))
 			"gap_mm": _set_ctl(c, float(face["gap_mm"]))
 			"flange_mm": _set_ctl(c, float(face["flange_mm"]))
+			"thickness_mm": _set_ctl(c, float(face["thickness_mm"]))
+			"fold_radius_mm": _set_ctl(c, float(face["fold_radius_mm"]))
+			"draw_bolts": _set_ctl(c, bool(face["bolts"]))
+			"oculus": _set_ctl(c, bool(face["oculus"]))
+			"oculus_mm": _set_ctl(c, float(face["oculus_mm"]))
+			"oculus_round": _set_ctl(c, float(face["oculus_round"]))
+			"glazing": _select_meta(c, str(face["glazing"]))
 			"hole_pitch_mm": _set_ctl(c, float(face["hole_pitch_mm"]))
 			"screw_mm": _set_ctl(c, float(face["screw_mm"]))
+			_:
+				if str(c.name).begins_with("zone_") and c is CheckBox:
+					_set_ctl(c, (face["oculus_zones"] as Array).has(int(str(c.name).trim_prefix("zone_"))))
 	var fab: Dictionary = _spec["fabrication"]
 	for c in _all_controls(_fab_box):
 		match str(c.name):
@@ -1130,6 +1217,38 @@ func _sync_settings() -> void:
 					shown = own
 			(c as ColorPickerButton).color = shown
 	_suppress = false
+
+
+## Rhombus types a family's faces come in (0 for a geodesic: no zones).
+func _zone_count() -> int:
+	match str(_spec.get("family", "")):
+		"helical": return int(int(_spec["helical"]["sides"]) / 2)
+		"zome": return int(int(_spec["zome"]["sides"]) / 2)
+	return 0
+
+
+func _zone_label(z: int) -> String:
+	var fam := str(_spec["family"])
+	var n := int(_spec[fam]["sides"])
+	var theta := deg_to_rad(float(_spec[fam]["pitch_deg"]))
+	return "%d · %.0f°" % [z, DomeLabHelical.zone_angle_deg(n, theta, z)]
+
+
+func _sheet_id_of(m: Dictionary) -> String:
+	for id in DomeLabMaterials.SHEETS:
+		if DomeLabMaterials.SHEETS[id] == m:
+			return str(id)
+	return ""
+
+
+func _on_zone_toggled() -> void:
+	if _suppress:
+		return
+	var zones: Array = []
+	for c in _all_controls(_face_box):
+		if c is CheckBox and str(c.name).begins_with("zone_") and (c as CheckBox).button_pressed:
+			zones.append(int(str(c.name).trim_prefix("zone_")))
+	_edit("face", "oculus_zones", zones)
 
 
 func _all_controls(root: Node) -> Array:

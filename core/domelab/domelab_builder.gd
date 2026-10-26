@@ -190,12 +190,19 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 			if record:
 				picks.append({"kind": "hub", "id": str(h["type"]), "c": p, "r": maxf(r, 0.04), "vertex": vid})
 	# --- panels -------------------------------------------------------------
+	# Faces go into packed arrays (accs), not SurfaceTool: a folded-plate
+	# tower is a few hundred thousand vertices and SurfaceTool's per-vertex
+	# calls were most of the build.
+	var accs := {}
 	var pn: Dictionary = d["panels"]
 	var panels: Array = pn.get("panels", [])
 	if not panels.is_empty():
-		var pmat: Dictionary = pn["material"]
-		var t := maxf(float(pmat.get("t_mm", 3.0)) * 0.001, 0.004)
+		var t_mm := float(pn.get("t_mm", 3.0))
 		var faces: Array = geo["faces"]
+		var plate := sys == "plate"
+		var glz: Dictionary = pn.get("glazing", {})
+		var pane_t := maxf(float(glz.get("t_mm", 4.0)), 2.0)
+		var secs := {}
 		for p in panels:
 			var f: PackedInt32Array = faces[int(p["face"])]
 			var k := INF
@@ -206,35 +213,72 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 			var fr: Transform3D = p["frame"]
 			var nm := fr.basis.z.normalized()
 			var off: Vector3 = nm * (EXPLODE_M * radius * 0.6 * explode) + lift.call(k)
-			# Panels sit just under the struts' outer surface (plates ARE the surface).
-			if sys != "plate" and not nx.is_empty():
-				off -= nm * (strut_t * 0.5)
-			elif sys != "plate":
-				off -= nm * (strut_t * 0.5 + t)
 			var key := "hl" if str(p.get("type", "")) == highlight else "panel"
-			if not sts.has(key):
-				var st0 := SurfaceTool.new()
-				st0.begin(Mesh.PRIMITIVE_TRIANGLES)
-				sts[key] = st0
-			var tris := _slab(sts[key], p["poly"], fr, t, off)
-			any[key] = true
+			var acc := _acc(accs, key)
+			var tris := PackedVector3Array()
+			var oculus: PackedVector2Array = p.get("oculus", PackedVector2Array())
+			var z_under := 0.0
+			if plate:
+				tris = _folded_plate(acc, p, pn, secs, off)
+				z_under = -t_mm
+			else:
+				# A covering sits just under the struts' outer surface.
+				var t_cov := maxf(t_mm, 4.0)
+				var sink := 0.0
+				if not nx.is_empty():
+					sink = strut_t * 500.0
+				else:
+					sink = strut_t * 500.0 + t_cov
+				tris = _plate_slab(acc, p["poly"], oculus, fr, -sink + t_cov * 0.5, -sink - t_cov * 0.5, off)
+				z_under = -sink - t_cov * 0.5
+			var pane: PackedVector2Array = p.get("pane", PackedVector2Array())
+			if not pane.is_empty():
+				_plate_slab(_acc(accs, "glass"), pane, PackedVector2Array(), fr, z_under - 0.5, z_under - 0.5 - pane_t, off)
 			if record:
 				picks.append({"kind": "panel", "id": str(p.get("type", "")), "tris": tris, "label": str(p.get("label", ""))})
+		# Bolts through each flange pair (hidden while the plates are pulled apart).
+		if plate and bool(s["face"]["bolts"]) and explode < 0.01:
+			var bolt := DomeLabMaterials.bolt(str(s["hub"]["bolt"]))
+			var bd := float(bolt["d_mm"]) * 0.001
+			var reach := (float(pn.get("gap_mm", 0.0)) * 0.5 + t_mm) * 0.001
+			var acc := _acc(accs, "hub")
+			for bt in pn.get("bolts3d", []):
+				var e: Dictionary = d["edges"][int(bt["edge"])]
+				var kk := minf(shown.call(int(e["a"])), shown.call(int(e["b"])))
+				if kk < 1.0:
+					continue
+				var c: Vector3 = bt["p"]
+				var ax: Vector3 = bt["axis"]
+				var side := ax.cross(Vector3.UP if absf(ax.y) < 0.9 else Vector3.RIGHT).normalized()
+				_hex(acc, c + ax * reach, c + ax * (reach + bd * 0.65), side, bd * 1.7)
+				_hex(acc, c - ax * reach, c - ax * (reach + bd * 0.85), side, bd * 1.6)
+				_hex(acc, c - ax * (reach + bd * 0.85), c - ax * (reach + bd * 1.25), side, bd * 0.95)
 	# --- commit -------------------------------------------------------------
 	var mesh := ArrayMesh.new()
-	var order := ["strut", "slat", "hub", "panel", "hl"]
+	var order := ["strut", "slat", "hub", "panel", "glass", "hl"]
 	for key in order:
-		if not sts.has(key) or not any.has(key):
+		var verts_k := PackedVector3Array()
+		var norms_k := PackedVector3Array()
+		if sts.has(key) and any.has(key):
+			var st: SurfaceTool = sts[key]
+			# ⚠ Never generate_normals() here: SurfaceTool's default smooth group
+			# merges every vertex by position, so a dome's flat panels and the
+			# prisms' crisp edges rendered as one rounded "bubble". Every emitter
+			# below writes the normal it means.
+			var arrays := st.commit_to_arrays()
+			if arrays[Mesh.ARRAY_VERTEX] != null:
+				verts_k.append_array(arrays[Mesh.ARRAY_VERTEX])
+				norms_k.append_array(arrays[Mesh.ARRAY_NORMAL])
+		if accs.has(key):
+			verts_k.append_array((accs[key] as Dictionary)["v"])
+			norms_k.append_array((accs[key] as Dictionary)["n"])
+		if verts_k.is_empty():
 			continue
-		var st: SurfaceTool = sts[key]
-		# ⚠ Never generate_normals() here: SurfaceTool's default smooth group
-		# merges every vertex by position, so a dome's flat panels and the
-		# prisms' crisp edges rendered as one rounded "bubble". Every emitter
-		# below writes the normal it means.
-		var arrays := st.commit_to_arrays()
-		if arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
-			continue
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var arr := []
+		arr.resize(Mesh.ARRAY_MAX)
+		arr[Mesh.ARRAY_VERTEX] = verts_k
+		arr[Mesh.ARRAY_NORMAL] = norms_k
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(key, d, ghost))
 	var mi := MeshInstance3D.new()
 	mi.name = "Mesh"
@@ -250,6 +294,269 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 # ---------------------------------------------------------------------------
 # Geometry emitters
 # ---------------------------------------------------------------------------
+
+static func _acc(accs: Dictionary, key: String) -> Dictionary:
+	if not accs.has(key):
+		accs[key] = {"v": PackedVector3Array(), "n": PackedVector3Array()}
+	return accs[key]
+
+
+## A triangle into a packed accumulator, wound clockwise seen from where its
+## normals point (Godot's front face).
+static func _atri(acc: Dictionary, p0: Vector3, p1: Vector3, p2: Vector3, n0: Vector3, n1: Vector3, n2: Vector3) -> void:
+	var v: PackedVector3Array = acc["v"]
+	var n: PackedVector3Array = acc["n"]
+	if (p1 - p0).cross(p2 - p0).dot(n0 + n1 + n2) > 0.0:
+		v.append(p0)
+		v.append(p2)
+		v.append(p1)
+		n.append(n0)
+		n.append(n2)
+		n.append(n1)
+	else:
+		v.append(p0)
+		v.append(p1)
+		v.append(p2)
+		n.append(n0)
+		n.append(n1)
+		n.append(n2)
+
+
+## A hexagon prism (bolt head, nut) from a to b, `w` across corners.
+static func _hex(acc: Dictionary, a: Vector3, b: Vector3, side: Vector3, w: float) -> void:
+	var axis := (b - a).normalized()
+	var u := (side - axis * side.dot(axis)).normalized()
+	var v := axis.cross(u)
+	var ring: Array = []
+	for i in 6:
+		var ang := TAU * i / 6.0
+		ring.append(u * (cos(ang) * w * 0.5) + v * (sin(ang) * w * 0.5))
+	for i in 6:
+		var r0: Vector3 = ring[i]
+		var r1: Vector3 = ring[(i + 1) % 6]
+		var nn := (r0 + r1).normalized()
+		_atri(acc, a + r0, b + r0, b + r1, nn, nn, nn)
+		_atri(acc, a + r0, b + r1, a + r1, nn, nn, nn)
+	for i in range(1, 5):
+		_atri(acc, a + ring[0], a + ring[i], a + ring[i + 1], -axis, -axis, -axis)
+		_atri(acc, b + ring[0], b + ring[i], b + ring[i + 1], axis, axis, axis)
+
+
+## A flat part between z0 (its outer face) and z1 in the panel frame (mm):
+## `outer` convex and CCW, `hole` (optional, convex) cut through it. Returns
+## the outer face's world triangles (picking).
+static func _plate_slab(acc: Dictionary, outer: PackedVector2Array, hole: PackedVector2Array, fr: Transform3D,
+		z0: float, z1: float, off: Vector3) -> PackedVector3Array:
+	var nrm := fr.basis.z.normalized()
+	var up := nrm if z0 > z1 else -nrm
+	var tris := PackedVector3Array()
+	var w := func(q: Vector2, z: float) -> Vector3: return fr * Vector3(q.x, q.y, z) + off
+	var faces2: Array = _ring_tris(outer, hole)
+	for t3 in faces2:
+		var a: Vector2 = t3[0]
+		var b: Vector2 = t3[1]
+		var c: Vector2 = t3[2]
+		var pa: Vector3 = w.call(a, z0)
+		var pb: Vector3 = w.call(b, z0)
+		var pc: Vector3 = w.call(c, z0)
+		_atri(acc, pa, pb, pc, up, up, up)
+		tris.append_array(PackedVector3Array([pa, pb, pc]))
+		_atri(acc, w.call(a, z1), w.call(b, z1), w.call(c, z1), -up, -up, -up)
+	for ri in 2:
+		var rr: PackedVector2Array = outer if ri == 0 else hole
+		var n := rr.size()
+		var inside := ri == 1
+		for i in n:
+			var a2: Vector2 = rr[i]
+			var b2: Vector2 = rr[(i + 1) % n]
+			var e := (b2 - a2).normalized()
+			# Outer rim faces out of the polygon, a hole's wall into the hole.
+			var n2 := Vector2(-e.y, e.x) if inside else Vector2(e.y, -e.x)
+			var sn := (fr.basis * Vector3(n2.x, n2.y, 0.0)).normalized()
+			var p00: Vector3 = w.call(a2, z0)
+			var p10: Vector3 = w.call(b2, z0)
+			var p11: Vector3 = w.call(b2, z1)
+			var p01: Vector3 = w.call(a2, z1)
+			_atri(acc, p00, p10, p11, sn, sn, sn)
+			_atri(acc, p00, p11, p01, sn, sn, sn)
+	return tris
+
+
+## Triangles covering a convex polygon, or the band between it and a convex
+## hole inside it (zipped round by angle from the hole's centre).
+static func _ring_tris(outer: PackedVector2Array, hole: PackedVector2Array) -> Array:
+	var out: Array = []
+	var n := outer.size()
+	if hole.size() < 3:
+		for i in range(1, n - 1):
+			out.append([outer[0], outer[i], outer[i + 1]])
+		return out
+	var m := hole.size()
+	var c := Vector2.ZERO
+	for q in hole:
+		c += q
+	c /= m
+	var a0 := (outer[0] - c).angle()
+	var ang := func(q: Vector2) -> float: return fposmod((q - c).angle() - a0, TAU)
+	# The hole vertex at the smallest angle past outer[0].
+	var j0 := 0
+	var best := INF
+	for j in m:
+		var aj: float = ang.call(hole[j])
+		if aj < best:
+			best = aj
+			j0 = j
+	var i := 0
+	var j := 0
+	while i < n or j < m:
+		var oi := outer[i % n]
+		var hj := hole[(j0 + j) % m]
+		var a_o: float = ang.call(outer[(i + 1) % n]) if i + 1 < n else TAU
+		var a_h: float = ang.call(hole[(j0 + j + 1) % m]) if j + 1 < m else TAU + best
+		if j >= m or (i < n and a_o <= a_h):
+			out.append([oi, outer[(i + 1) % n], hj])
+			i += 1
+		else:
+			out.append([oi, hole[(j0 + j + 1) % m], hj])
+			j += 1
+	return out
+
+
+## One plate as folded sheet: the flat face (skin on the face plane, the
+## sheet inward), and along every edge a bend + flange from
+## DomeLabPanels.flange_section, mitred where two flanges meet on the plane
+## that bisects them (so the corner closes like a folded box).
+static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: Dictionary, off: Vector3) -> PackedVector3Array:
+	var fr: Transform3D = p["frame"]
+	var fp: PackedVector2Array = p["face_poly"]
+	var angs: Array = p["edge_ang"]
+	var m := fp.size()
+	var t := float(pn["t_mm"])
+	var r := float(pn["fold_r_mm"])
+	var gap := float(pn["gap_mm"])
+	var depth := float(pn["flange_mm"])
+	var sec: Array = []
+	var dists := PackedFloat64Array()
+	var planes: Array = []   # [M (Vector3, panel mm frame), d]
+	for k in m:
+		var sk := "%.5f" % float(angs[k])
+		if not secs.has(sk):
+			secs[sk] = DomeLabPanels.flange_section(float(angs[k]), t, r, gap, depth)
+		var sc: Dictionary = secs[sk]
+		sec.append(sc)
+		dists.append(float(sc["xc"]))
+		var a := fp[k]
+		var b := fp[(k + 1) % m]
+		var e := (b - a).normalized()
+		var fin := Vector2(-e.y, e.x)
+		var a2 := float(sc["a2"])
+		var M := Vector3(fin.x * cos(a2), fin.y * cos(a2), sin(a2))
+		planes.append([M, M.dot(Vector3(a.x, a.y, 0.0)) + gap * 0.5])
+	var face := _inset_var(fp, dists)
+	var tris := PackedVector3Array()
+	if face.size() >= 3:
+		tris = _plate_slab(acc, face, p.get("oculus", PackedVector2Array()), fr, 0.0, -t, off)
+	var w := func(q: Vector3) -> Vector3: return fr * q + off
+	for k in m:
+		var sc: Dictionary = sec[k]
+		var prof: PackedVector2Array = sc["profile"]
+		var steps := int(sc["steps"])
+		var c2: Vector2 = sc["c"]
+		var a := fp[k]
+		var b := fp[(k + 1) % m]
+		var L := a.distance_to(b)
+		var e := (b - a).normalized()
+		var fin := Vector2(-e.y, e.x)
+		var E := Vector3(e.x, e.y, 0.0)
+		var F := Vector3(fin.x, fin.y, 0.0)
+		var A := Vector3(a.x, a.y, 0.0)
+		var Mk: Vector3 = planes[k][0]
+		var dk: float = planes[k][1]
+		var Mp: Vector3 = planes[(k - 1 + m) % m][0]
+		var dp: float = planes[(k - 1 + m) % m][1]
+		var Mn: Vector3 = planes[(k + 1) % m][0]
+		var dn: float = planes[(k + 1) % m][1]
+		var Ds := Mk - Mp
+		var De := Mk - Mn
+		var relief := 0.6
+		var np := prof.size()
+		var p0s: Array = []
+		var p1s: Array = []
+		for i in np:
+			var q := prof[i]
+			var P0 := A + F * q.x + Vector3(0, 0, q.y)
+			var s0 := 0.0
+			var s1 := L
+			if absf(Ds.dot(E)) > 1e-6:
+				s0 = (dk - dp - relief * Ds.length() - Ds.dot(P0)) / Ds.dot(E)
+			if absf(De.dot(E)) > 1e-6:
+				s1 = (dk - dn - relief * De.length() - De.dot(P0)) / De.dot(E)
+			if s1 < s0 + 0.5:
+				var mid := (s0 + s1) * 0.5
+				s0 = mid
+				s1 = mid
+			p0s.append(w.call(P0 + E * s0))
+			p1s.append(w.call(P0 + E * s1))
+		# Vertex normals: radial on the bend, flat on the flange.
+		var vn: Array = []
+		for i in np:
+			var q := prof[i]
+			var n2 := Vector2.ZERO
+			if i <= steps:
+				n2 = (q - c2).normalized()
+			elif i >= np - steps - 1:
+				n2 = -(q - c2).normalized()
+			vn.append(n2)
+		for i in np - 1:
+			var qa := prof[i]
+			var qb := prof[i + 1]
+			var seg := (qb - qa).normalized()
+			# The outline runs outer arc → flange → inner arc, counter-clockwise
+			# round the bend centre: the material is on the segment's left, the
+			# outside on its right.
+			var flat := Vector2(seg.y, -seg.x)
+			var na: Vector2 = vn[i] if (vn[i] as Vector2) != Vector2.ZERO and (i < steps or i >= np - steps - 1) else flat
+			var nb: Vector2 = vn[i + 1] if (vn[i + 1] as Vector2) != Vector2.ZERO and (i + 1 <= steps or i + 1 > np - steps - 1) else flat
+			if i == steps or i == steps + 1:
+				na = flat
+				nb = flat
+			var wa := (fr.basis * (F * na.x + Vector3(0, 0, na.y))).normalized()
+			var wb := (fr.basis * (F * nb.x + Vector3(0, 0, nb.y))).normalized()
+			_atri(acc, p0s[i], p1s[i], p1s[i + 1], wa, wa, wb)
+			_atri(acc, p0s[i], p1s[i + 1], p0s[i + 1], wa, wb, wb)
+		# End caps on the mitre planes.
+		var idx := Geometry2D.triangulate_polygon(prof)
+		var ns := (fr.basis * Ds).normalized()
+		var ne := (fr.basis * De).normalized()
+		for ti in range(0, idx.size() - 2, 3):
+			_atri(acc, p0s[idx[ti]], p0s[idx[ti + 1]], p0s[idx[ti + 2]], ns, ns, ns)
+			_atri(acc, p1s[idx[ti]], p1s[idx[ti + 1]], p1s[idx[ti + 2]], ne, ne, ne)
+	return tris
+
+
+## A convex CCW polygon with edge k moved in by dists[k].
+static func _inset_var(poly: PackedVector2Array, dists: PackedFloat64Array) -> PackedVector2Array:
+	var n := poly.size()
+	var out := PackedVector2Array()
+	for k in n:
+		var kp := (k - 1 + n) % n
+		var a0 := poly[kp]
+		var a1 := poly[k]
+		var b1 := poly[(k + 1) % n]
+		var d0 := (a1 - a0).normalized()
+		var d1 := (b1 - a1).normalized()
+		var p0 := a0 + Vector2(-d0.y, d0.x) * dists[kp]
+		var p1 := a1 + Vector2(-d1.y, d1.x) * dists[k]
+		var den := d0.x * d1.y - d0.y * d1.x
+		if absf(den) < 1e-9:
+			out.append(p1)
+			continue
+		var rr := p1 - p0
+		var tt := (rr.x * d1.y - rr.y * d1.x) / den
+		out.append(p0 + d0 * tt)
+	if DomeLabPanels._signed_area(out) <= 1.0:
+		return PackedVector2Array()
+	return out
 
 ## A prism from a to b: `across` is the direction of the W side (the other
 ## side, T, is perpendicular to both); round_ makes a tube of diameter W
@@ -356,6 +663,7 @@ static func kind_for_look(look: String) -> int:
 		"alu": return StructureMaterials.Kind.ALUMINIUM
 		"paint": return StructureMaterials.Kind.PAINTED_METAL
 		"wood": return StructureMaterials.Kind.WOOD
+		"corten": return StructureMaterials.Kind.WEATHERING_STEEL
 		"ply": return StructureMaterials.Kind.PLYWOOD
 		"glazing": return StructureMaterials.Kind.GLAZING
 		"fabric": return StructureMaterials.Kind.FABRIC
@@ -407,6 +715,13 @@ static func _material_for(key: String, d: Dictionary, ghost: bool) -> Material:
 				m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"hub":
 			m = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols["hub"])
+		"glass":
+			var gid := str(s["face"]["glazing"])
+			var gmat := DomeLabMaterials.sheet(gid)
+			var gc: Color = gmat.get("color", Color(0.8, 0.9, 1.0, 0.4))
+			m = StructureMaterials.make(StructureMaterials.Kind.GLAZING, gc)
+			if gc.a < 0.99:
+				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 		"slat":
 			var slat_id := str(s["nexorade"]["slat"])
 			var slat: Dictionary = (d["nexorade"] as Dictionary).get("slat", DomeLabMaterials.strut(slat_id))

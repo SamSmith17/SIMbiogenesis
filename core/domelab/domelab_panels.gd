@@ -14,6 +14,14 @@ extends RefCounted
 ## the face edges and carry the bend angle (half the angle between the two
 ## face normals). Pure static.
 ##
+## In 3D a plate is a SOLID folded sheet (flange_section): the face plate,
+## a bend of the chosen inside radius, and a flange lying parallel to the
+## plane that bisects the dihedral, so two neighbours' flanges meet back to
+## back with the seam gap between them — the bolted flange pair IS the strut
+## (SPACEPLATES). Bolt holes are laid out per EDGE, so both plates of an
+## edge are drilled at the same places. An opening (oculus) is the face
+## inset by oculus_mm with rounded corners; a glazing pane laps it.
+##
 ## build(geo, edges, fidx, spec) → {panels: [{id, face, n_sides, ring, holes
 ##   (rings), fold: [[a, b, bend_deg]], bbox (Rect2 mm), area_mm2, frame:
 ##   Transform3D (panel mm → world m), label, class_key}], classes: [{label,
@@ -22,6 +30,8 @@ extends RefCounted
 
 const MIN_HOLES_PER_EDGE := 2
 const HOLE_END_MARGIN_MM := 20.0
+const PANE_LAP_MM := 25.0
+const ARC_STEPS := 6
 
 
 static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Dictionary) -> Dictionary:
@@ -40,7 +50,12 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 	var flange := float(face["flange_mm"]) if plate else 0.0
 	var pitch := float(face["hole_pitch_mm"])
 	var screw := float(face["screw_mm"])
-	var t_mm := float(mat.get("t_mm", 3.0))
+	var t_mm := float(face["thickness_mm"]) if float(face["thickness_mm"]) > 0.0 else float(mat.get("t_mm", 3.0))
+	var fold_r := float(face["fold_radius_mm"]) if float(face["fold_radius_mm"]) > 0.0 else t_mm
+	var zone_of: Array = geo.get("face_zone", [])
+	var glaze := DomeLabMaterials.sheet(str(face["glazing"]))
+	var oculus_on := bool(face["oculus"])
+	var zones: Array = face["oculus_zones"]
 	var strut_w := DomeLabMaterials.strut_width_mm(DomeLabMaterials.strut(str(spec["strut"]["material"])))
 	var warnings: Array = []
 	var panels: Array = []
@@ -48,6 +63,62 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 	for ei in edges.size():
 		var e: Dictionary = edges[ei]
 		edge_by_key[DomeLabGeodesic._ekey(int(e["a"]), int(e["b"]))] = ei
+	# Plates: bolt holes per EDGE (distances from the edge's vertex a, mm) and
+	# the bolts in 3D, on the mid-plane between the two flanges.
+	var edge_holes := {}
+	var bolts3d: Array = []
+	var anchors := 0
+	if plate:
+		var corner := _corner_angles(verts, faces)
+		var hole_d := _bolt_hole(spec)
+		for ei in edges.size():
+			var e: Dictionary = edges[ei]
+			var fl: Array = e["faces"]
+			if fl.is_empty():
+				continue
+			var ang := float(e["flange_bend"]) * 2.0 if fl.size() >= 2 else 0.0
+			var sec := flange_section(ang, t_mm, fold_r, gap, flange)
+			var q: Vector2 = sec["hole"]
+			var q_eff := (q - (sec["v"] as Vector2)).length() + (sec["v"] as Vector2).x
+			var margin := [HOLE_END_MARGIN_MM, HOLE_END_MARGIN_MM]
+			for end in 2:
+				var vid := int(e["a"]) if end == 0 else int(e["b"])
+				var alpha := PI
+				for fi in fl:
+					alpha = minf(alpha, float((corner[int(fi)] as Dictionary).get(vid, PI)))
+				margin[end] = maxf(HOLE_END_MARGIN_MM, q_eff / tan(alpha * 0.5) + hole_d + 10.0)
+			var Lmm := float(e["len"]) * 1000.0
+			var usable := Lmm - float(margin[0]) - float(margin[1])
+			var ss: Array = []
+			if usable <= 0.0:
+				ss.append(Lmm * 0.5)
+			else:
+				var cnt := maxi(MIN_HOLES_PER_EDGE, int(floor(usable / pitch)) + 1)
+				for i in cnt:
+					ss.append(float(margin[0]) + usable * float(i) / float(cnt - 1))
+			edge_holes[ei] = ss
+			if fl.size() < 2:
+				anchors += ss.size()
+				continue
+			# 3D: face 0's frame along the edge.
+			var f0: PackedInt32Array = faces[int(fl[0])]
+			var n0: Vector3 = fnormals[int(fl[0])]
+			var pa := verts[int(e["a"])]
+			var pb := verts[int(e["b"])]
+			var ed := (pb - pa).normalized()
+			var cen := Vector3.ZERO
+			for id in f0:
+				cen += verts[id]
+			cen /= f0.size()
+			var fin := n0.cross(ed).normalized()
+			if fin.dot(cen - pa) < 0.0:
+				fin = -fin
+			var a2 := ang * 0.5
+			var mw := fin * cos(a2) + n0 * sin(a2)
+			var hp := q - (sec["m"] as Vector2) * (gap * 0.5)
+			for sv in ss:
+				var p3 := pa + ed * (float(sv) * 0.001) + fin * (hp.x * 0.001) + n0 * (hp.y * 0.001)
+				bolts3d.append({"p": p3, "axis": mw, "edge": ei})
 	for fi in faces.size():
 		var f: PackedInt32Array = faces[fi]
 		var m := f.size()
@@ -82,14 +153,28 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 			folds.append([inner[k], inner[(k + 1) % m], bend])
 		var ring_pts := inner
 		var holes: Array = []
+		var edge_ang: Array = []
+		for k in m:
+			var key := DomeLabGeodesic._ekey(f[k], f[(k + 1) % m])
+			var ei := int(edge_by_key.get(key, -1))
+			var two := ei >= 0 and ((edges[ei] as Dictionary)["faces"] as Array).size() >= 2
+			edge_ang.append(float((edges[ei] as Dictionary)["flange_bend"]) * 2.0 if two else 0.0)
 		if plate:
 			ring_pts = _with_flanges(inner, flange, t_mm)
 			for k in m:
-				var a := inner[k]
-				var b := inner[(k + 1) % m]
 				var mn := _outward(inner, k)
-				for q in _spaced(a, b, pitch, HOLE_END_MARGIN_MM + flange * 0.3):
-					holes.append(FlatpackProfile.circle_ring(q + mn * (flange * 0.5), _bolt_hole(spec) * 0.5))
+				var key := DomeLabGeodesic._ekey(f[k], f[(k + 1) % m])
+				var ei := int(edge_by_key.get(key, -1))
+				if ei < 0 or not edge_holes.has(ei):
+					continue
+				var e: Dictionary = edges[ei]
+				var rev := int(e["a"]) != int(f[k])
+				var Lmm := float(e["len"]) * 1000.0
+				var tdir := (poly[(k + 1) % m] - poly[k]).normalized()
+				for sv in edge_holes[ei]:
+					var sp := Lmm - float(sv) if rev else float(sv)
+					var on_edge := poly[k] + tdir * sp - mn * (gap * 0.5)
+					holes.append(FlatpackProfile.circle_ring(on_edge + mn * (flange * 0.5), _bolt_hole(spec) * 0.5))
 		else:
 			var inset := maxf(strut_w * 0.5, 8.0) - gap * 0.5
 			for k in m:
@@ -98,12 +183,29 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 				var mn := _outward(inner, k)
 				for q in _spaced(a, b, pitch, HOLE_END_MARGIN_MM + inset):
 					holes.append(FlatpackProfile.circle_ring(q - mn * inset, screw * 0.5))
+		# The opening and its pane.
+		var zone := int(zone_of[fi]) if fi < zone_of.size() else 0
+		var oculus := PackedVector2Array()
+		var pane := PackedVector2Array()
+		if oculus_on and (zones.is_empty() or zones.has(zone)):
+			oculus = rounded_inset(poly, float(face["oculus_mm"]), float(face["oculus_round"]), 0.0)
+			if oculus.is_empty():
+				warnings.append("face %d is too small for a %s opening offset" % [fi, DomeLabSpec.fmt_len(float(face["oculus_mm"]))])
+			else:
+				holes.append(FlatpackProfile.make_ring(oculus))
+				if str(face["glazing"]) != "none":
+					pane = rounded_inset(poly, maxf(float(face["oculus_mm"]) - PANE_LAP_MM, gap * 0.5 + t_mm + fold_r),
+						float(face["oculus_round"]), PANE_LAP_MM)
+		var face_poly := poly.duplicate()
 		# Turn the part so its bounding box is smallest (an edge along x):
 		# that is what lets a 3V panel on a 4 x 8 sheet fit at all.
 		var ang := _best_rotation(ring_pts)
 		if absf(ang) > 1e-9:
 			inner = _rot_poly(inner, ang)
 			ring_pts = _rot_poly(ring_pts, ang)
+			face_poly = _rot_poly(face_poly, ang)
+			oculus = _rot_poly(oculus, ang)
+			pane = _rot_poly(pane, ang)
 			for hi in holes.size():
 				holes[hi] = FlatpackProfile.transform_ring(holes[hi], -ang, Vector2.ZERO)
 			for fi2 in folds.size():
@@ -129,7 +231,8 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 		panels.append({"id": "p%d" % fi, "face": fi, "n_sides": m, "ring": ring, "holes": holes,
 			"fold": folds, "bends": bends, "bbox": bb, "area_mm2": absf(_signed_area(tess)),
 			"frame": frame, "class_key": bkey, "sides_mm": sides, "poly": inner, "flange_mm": flange,
-			"outer": ring_pts})
+			"outer": ring_pts, "face_poly": face_poly, "edge_ang": edge_ang, "zone": zone, "oculus": oculus,
+			"pane": pane})
 	# Classes (congruent panels).
 	var classes := {}
 	for p in panels:
@@ -209,10 +312,23 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 	nest["sheets"] = out_sheets
 	nest["unplaced"] = unplaced
 	var area_m2 := area * 1e-6
+	var panes := 0
+	var pane_area := 0.0
+	var open_area := 0.0
+	for p in panels:
+		if not (p["oculus"] as PackedVector2Array).is_empty():
+			open_area += absf(_signed_area(p["oculus"])) * 1e-6
+		if not (p["pane"] as PackedVector2Array).is_empty():
+			panes += 1
+			pane_area += absf(_signed_area(p["pane"])) * 1e-6
+	var kg_scale := t_mm / maxf(float(mat.get("t_mm", t_mm)), 1e-6)
 	return {"panels": panels, "classes": clist, "nest": nest, "sheet": {"w": sw, "h": sh},
 		"area_m2": area_m2, "unplaced": nest["unplaced"], "warnings": warnings,
-		"mass_kg": area_m2 * float(mat.get("kg_m2", 0.0)), "material": mat,
-		"sheets": (nest["sheets"] as Array).size()}
+		"mass_kg": (area_m2 - open_area) * float(mat.get("kg_m2", 0.0)) * kg_scale + pane_area * float(glaze.get("kg_m2", 0.0)),
+		"material": mat, "sheets": (nest["sheets"] as Array).size(), "t_mm": t_mm, "fold_r_mm": fold_r,
+		"gap_mm": gap, "flange_mm": flange, "bolts3d": bolts3d, "anchors": anchors, "panes": panes,
+		"pane_area_m2": pane_area, "open_area_m2": open_area, "glazing": glaze,
+		"glazing_id": str(face["glazing"])}
 
 
 ## Rows of congruent triangles, alternating up / down; every other part's
@@ -229,9 +345,12 @@ static func _strip_rows(panels: Array, classes: Array, row_max: float, kerf: flo
 			continue
 		var bb: Rect2 = first["bbox"]
 		var pitch := bb.size.x + kerf
-		var strip := int(c["n_sides"]) == 3 and ids.size() >= 2
+		# Triangles alternate up / down. (Rhombi in edge-to-edge rows were
+		# tried: no better on a 2 m plate, worse on small sheets.)
+		var tri := int(c["n_sides"]) == 3
+		var strip := tri and ids.size() >= 2
 		if strip:
-			pitch = _pair_pitch(first["outer"], bb, kerf)
+			pitch = _pair_pitch(first["outer"], bb, kerf, true)
 		var per_row := maxi(1, int(floor((row_max - 4.0 * kerf - bb.size.x) / pitch)) + 1) if strip else 1
 		var k := 0
 		while k < ids.size():
@@ -239,7 +358,7 @@ static func _strip_rows(panels: Array, classes: Array, row_max: float, kerf: flo
 			var parts: Array = []
 			for j in take:
 				var pid := str(ids[k + j])
-				if j % 2 == 1:
+				if tri and j % 2 == 1:
 					_turn_panel(_panel({"panels": panels}, pid))
 				parts.append(pid)
 				done[pid] = true
@@ -254,14 +373,15 @@ static func _strip_rows(panels: Array, classes: Array, row_max: float, kerf: flo
 	return rows
 
 
-## The smallest shift along x at which a 180°-turned copy of the outline no
-## longer overlaps it (bisection on polygon intersection), plus the kerf.
-static func _pair_pitch(outer: PackedVector2Array, bb: Rect2, kerf: float) -> float:
+## The smallest shift along x at which a copy of the outline (turned 180°
+## for triangles, as it is for rhombi) no longer overlaps it (bisection on
+## polygon intersection), plus the kerf.
+static func _pair_pitch(outer: PackedVector2Array, bb: Rect2, kerf: float, turn: bool = true) -> float:
 	var c := bb.get_center()
 	var turned := PackedVector2Array()
 	for q in outer:
-		turned.append(c * 2.0 - q)
-	var lo := bb.size.x * 0.3
+		turned.append(c * 2.0 - q if turn else q)
+	var lo := bb.size.x * 0.05
 	var hi := bb.size.x
 	for _i in 22:
 		var mid := (lo + hi) * 0.5
@@ -289,6 +409,11 @@ static func _turn_panel(p: Dictionary) -> void:
 	for q in (p["outer"] as PackedVector2Array):
 		outer.append(turn.call(q))
 	p["outer"] = outer
+	for k in ["face_poly", "oculus", "pane"]:
+		var pk := PackedVector2Array()
+		for q in (p.get(k, PackedVector2Array()) as PackedVector2Array):
+			pk.append(turn.call(q))
+		p[k] = pk
 	p["ring"] = FlatpackProfile.transform_ring(p["ring"], PI, c * 2.0)
 	var holes: Array = []
 	for h in p["holes"]:
@@ -481,3 +606,110 @@ static func _panel(result: Dictionary, id: String) -> Dictionary:
 		if str(p["id"]) == id:
 			return p
 	return {}
+
+
+
+# ---------------------------------------------------------------------------
+# The folded sheet in section, openings
+# ---------------------------------------------------------------------------
+
+## A flange in section, perpendicular to its edge (mm): x runs INTO the face
+## from the edge, y along the face's outward normal; the face's outer skin is
+## y = 0. `ang` is the angle between the two faces' normals (0 for a lone
+## edge: the flange turns down square). The flange lies parallel to the
+## dihedral's bisector plane, its outer skin gap/2 off it, so the
+## neighbour's flange meets it back to back; the bend is an arc of inside
+## radius r (outside r + t) swept through 90° + ang/2, and the flange runs
+## `depth` from the face's skin down the bisector.
+## → {a2, R, r, t, xc (where the flat plate ends), c (bend centre), m (unit
+##    normal of the bisector plane, into the face), d (down the flange),
+##    v (where the skin meets the flange's outer plane), run (straight
+##    length), hole (bolt centre on the flange's outer skin), profile
+##    (closed outline: outer arc, flange, inner arc)}
+static func flange_section(ang: float, t: float, r: float, gap: float, depth: float) -> Dictionary:
+	var a2 := clampf(ang * 0.5, 0.0, 1.4)
+	var R := r + t
+	var ca := cos(a2)
+	var sa := sin(a2)
+	var m := Vector2(ca, sa)
+	var dd := Vector2(sa, -ca)
+	var xc := (gap * 0.5 + R * (1.0 + sa)) / ca
+	var c := Vector2(xc, -R)
+	var v := Vector2(gap * 0.5 / ca, 0.0)
+	var t2o := c - m * R
+	var run := maxf(depth - (t2o - v).dot(dd), t)
+	var prof := PackedVector2Array()
+	var sweep := PI * 0.5 + a2
+	for i in ARC_STEPS + 1:
+		var phi := PI * 0.5 + sweep * float(i) / ARC_STEPS
+		prof.append(c + Vector2(cos(phi), sin(phi)) * R)
+	var fo := t2o + dd * run
+	prof.append(fo)
+	prof.append(fo + m * t)
+	for i in range(ARC_STEPS, -1, -1):
+		var phi := PI * 0.5 + sweep * float(i) / ARC_STEPS
+		prof.append(c + Vector2(cos(phi), sin(phi)) * r)
+	return {"a2": a2, "R": R, "r": r, "t": t, "xc": xc, "c": c, "m": m, "d": dd, "v": v, "run": run,
+		"hole": t2o + dd * (run * 0.5), "profile": prof, "steps": ARC_STEPS}
+
+
+## A convex CCW polygon inset by `d`, its corners rounded: `round_` 0 = sharp,
+## 1 = the largest radius every corner can take; `extra` grows the radius
+## (a pane's lap round an opening). Empty when the inset vanishes.
+static func rounded_inset(poly: PackedVector2Array, d: float, round_: float, extra: float) -> PackedVector2Array:
+	var q := _inset(poly, d)
+	var n := q.size()
+	if n < 3:
+		return PackedVector2Array()
+	var rmax := INF
+	var ints: Array = []
+	for k in n:
+		var a := q[(k - 1 + n) % n]
+		var b := q[k]
+		var c := q[(k + 1) % n]
+		var beta := absf((a - b).angle_to(c - b))
+		ints.append(beta)
+		var half := minf(a.distance_to(b), c.distance_to(b)) * 0.5
+		rmax = minf(rmax, half * tan(beta * 0.5))
+	var rr := clampf(round_, 0.0, 1.0) * rmax * 0.999
+	if extra > 0.0 and round_ > 0.0:
+		rr = minf(rr + extra, rmax * 0.999)
+	if rr <= 0.01:
+		return q
+	var out := PackedVector2Array()
+	for k in n:
+		var a := q[(k - 1 + n) % n]
+		var b := q[k]
+		var c := q[(k + 1) % n]
+		var beta := float(ints[k])
+		var u1 := (a - b).normalized()
+		var u2 := (c - b).normalized()
+		var tl := rr / tan(beta * 0.5)
+		var p1 := b + u1 * tl
+		var p2 := b + u2 * tl
+		var bis := (u1 + u2).normalized()
+		var cen := b + bis * (rr / sin(beta * 0.5))
+		var s0 := (p1 - cen).angle()
+		var s1 := (p2 - cen).angle()
+		var sweep := wrapf(s1 - s0, -PI, PI)
+		var steps := maxi(2, int(ceil(absf(sweep) / (PI / 12.0))))
+		for i in steps + 1:
+			var ph := s0 + sweep * float(i) / steps
+			out.append(cen + Vector2(cos(ph), sin(ph)) * rr)
+	return out
+
+
+## Each face's interior angle at each of its vertices: [{vertex id: radians}].
+static func _corner_angles(verts: PackedVector3Array, faces: Array) -> Array:
+	var out: Array = []
+	for f in faces:
+		var pf: PackedInt32Array = f
+		var m := pf.size()
+		var d := {}
+		for k in m:
+			var a := verts[pf[(k - 1 + m) % m]]
+			var b := verts[pf[k]]
+			var c := verts[pf[(k + 1) % m]]
+			d[int(pf[k])] = (a - b).angle_to(c - b)
+		out.append(d)
+	return out

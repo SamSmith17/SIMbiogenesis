@@ -90,6 +90,7 @@ static func build(z: Dictionary, radius: float = 1.0) -> Dictionary:
 		top_y = maxf(top_y, v.y)
 	# Faces kept for the dome.
 	var faces: Array = []
+	var fzone: Array = []   # per kept face: the rhombus row's zone min(k + 1, n − k − 1)
 	var edge_tag := {}
 	var tag_edge := func(a: int, b: int, fam: String, idx: int) -> void:
 		edge_tag[DomeLabGeodesic._ekey(a, b)] = {"rib": fam, "index": idx}
@@ -102,6 +103,8 @@ static func build(z: Dictionary, radius: float = 1.0) -> Dictionary:
 				# Short diagonal: V(i,k+1)–V(i-1,k+1) for the upper half (k small).
 				var d_a := verts[q[1]].distance_to(verts[q[3]])
 				var d_b := verts[q[0]].distance_to(verts[q[2]])
+				fzone.append(mini(k + 1, n - k - 1))
+				fzone.append(mini(k + 1, n - k - 1))
 				if d_a <= d_b:
 					faces.append(PackedInt32Array([q[0], q[1], q[3]]))
 					faces.append(PackedInt32Array([q[1], q[2], q[3]]))
@@ -112,6 +115,7 @@ static func build(z: Dictionary, radius: float = 1.0) -> Dictionary:
 					tag_edge.call(q[0], q[2], "diag", k)
 			else:
 				faces.append(q)
+				fzone.append(mini(k + 1, n - k - 1))
 			tag_edge.call(q[0], q[1], "R", i)
 			tag_edge.call(q[3], q[2], "R", posmod(i - 1, n))
 			tag_edge.call(q[0], q[3], "L", posmod(i + k, n))
@@ -126,6 +130,7 @@ static func build(z: Dictionary, radius: float = 1.0) -> Dictionary:
 			if K == n:
 				continue
 			faces.append(PackedInt32Array([a, b, c]))
+			fzone.append(mini(kk + 1, n - kk - 1))
 			tag_edge.call(a, b, "R", i)
 			tag_edge.call(a, c, "L", posmod(i + kk, n))
 			tag_edge.call(b, c, "base", i)
@@ -203,7 +208,7 @@ static func build(z: Dictionary, radius: float = 1.0) -> Dictionary:
 	return {"verts": v2, "faces": f2, "edges": edges, "base_ids": base2, "normals": n2,
 		"full_count": {"v": verts.size(), "e": n * (n - 1) * 2, "f": n * (n - 1)},
 		"rings": [], "cut_ring": K, "fraction_actual": float(K) / float(n), "warnings": [],
-		"centre": Vector3(0, top_y * 0.5 - min_y, 0), "edge_tags": tags2, "rib_index": ribs,
+		"centre": Vector3(0, top_y * 0.5 - min_y, 0), "edge_tags": tags2, "rib_index": ribs, "face_zone": fzone,
 		"gen_len_m": L, "sides": n, "layers": K, "theta": theta, "stretch": stretch,
 		"top_y": top_y - min_y}
 
