@@ -37,7 +37,12 @@ var _last_driver := Vector3(INF, INF, INF)
 var _ghost := false
 var _record := false
 var _picks: Array = []
+var _spins: Array = []
+var _belt_mats: Array = []
 var follow_drivers := true
+
+const _BELT_SHADER := preload("res://core/gantrylab/gantry_belt.gdshader")
+const _THREAD_SHADER := preload("res://core/gantrylab/gantry_thread.gdshader")
 
 
 static func build_node(spec: Dictionary = {}, node_name: String = "GantryMachine", opts: Dictionary = {}) -> Node3D:
@@ -77,6 +82,7 @@ func _build(s: Dictionary) -> void:
 	var st := _mesh_for(_layout["static"]["beams"], _layout["static"]["parts"], _static_screws(), cols)
 	st.name = "Mesh"
 	add_child(st)
+	_spin_nodes(_layout["static"]["parts"], self, cols)
 	_record_picks(_layout["static"]["beams"], _layout["static"]["parts"], "")
 	# Assemblies, parents first.
 	var asms: Dictionary = _layout["assemblies"]
@@ -96,6 +102,7 @@ func _build(s: Dictionary) -> void:
 		mi.set_meta("skip_prop_collision", true)
 		n.add_child(mi)
 		_asm_nodes[name] = n
+		_spin_nodes(asm["parts"], n, cols)
 		_record_picks(asm["beams"], asm["parts"], str(name))
 	# Belts and arms, rebuilt per pose.
 	_dynamic = MeshInstance3D.new()
@@ -151,7 +158,39 @@ func set_tool_mm(mm: Vector3) -> void:
 		var n: Node3D = _asm_nodes[name]
 		var asm: Dictionary = _layout["assemblies"][name]
 		n.position = (asm["base"] as Vector3) + (po.get(name, Vector3.ZERO) as Vector3)
-	_rebuild_dynamic(po)
+	# Every pulley, idler, screw, coupler and wheel turns by its motor's
+	# displacement over its own circumference / lead.
+	var mmm := GantryLabFrame.motor_mm(_spec, mm)
+	for sp in _spins:
+		var spd: Dictionary = sp
+		var spin: Dictionary = spd["spin"]
+		var idx := clampi(int(spin["motor"]), 0, mmm.size() - 1)
+		var ang := float(spin["sign"]) * float(mmm[idx]) / maxf(float(spin["per_rev_mm"]), 1e-6) * TAU
+		(spd["node"] as Node3D).transform = (spd["base"] as Transform3D) * Transform3D(Basis(Vector3.UP, ang), Vector3.ZERO)
+	_rebuild_dynamic(po, mmm)
+
+
+## A node per spinning part, built in its own frame so the thread shader's
+## +Y is the axis; `base` seats it, the pose adds the turn.
+func _spin_nodes(parts: Array, parent: Node3D, cols: Dictionary) -> void:
+	for p in parts:
+		var pd: Dictionary = p
+		if not pd.has("spin"):
+			continue
+		var sts: Dictionary = {}
+		GantryLabDetail.emit(sts, pd, true)
+		var mi := _commit(sts, cols)
+		mi.name = "Spin_%s" % str(pd["label"]).validate_node_name()
+		mi.set_meta("skip_prop_collision", true)
+		var base := Transform3D(pd.get("basis", Basis.IDENTITY), pd["c"])
+		mi.transform = base
+		parent.add_child(mi)
+		_spins.append({"node": mi, "base": base, "spin": pd["spin"]})
+
+
+## How many parts turn (probes).
+func spin_count() -> int:
+	return _spins.size()
 
 
 func _process(_delta: float) -> void:
@@ -172,32 +211,49 @@ func set_drivers_mm(mm: Vector3) -> void:
 	(_drivers["z"] as Node3D).position = Vector3(0, mm.z * 0.001, 0)
 
 
-func _rebuild_dynamic(po: Dictionary) -> void:
+func _rebuild_dynamic(po: Dictionary, mm: PackedFloat32Array = PackedFloat32Array()) -> void:
 	if _dynamic == null:
 		return
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var any := false
-	for b in GantryLabFrame.belt_routes(_spec, _layout, po):
-		var pts: PackedVector3Array = b["points"]
-		var w := 0.006
-		for i in pts.size():
-			var a := pts[i]
-			var c := pts[(i + 1) % pts.size()]
-			_bar(st, a, c, w, 0.0015)
-			any = true
-	for arm in GantryLabFrame.delta_arms(_layout, po):
-		_bar(st, (arm as Array)[0], (arm as Array)[1], 0.006, 0.006, true)
-		any = true
-	if not any:
-		_dynamic.mesh = null
-		return
-	st.generate_normals()
 	var mesh := ArrayMesh.new()
-	var arrays := st.commit_to_arrays()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	mesh.surface_set_material(0, _material("belt", _spec["colors"]))
-	_dynamic.mesh = mesh
+	var cols: Dictionary = _spec["colors"]
+	# One surface per belt loop: its own material carries the tooth scroll.
+	var bi := 0
+	for b in GantryLabFrame.belt_routes(_spec, _layout, po):
+		var bd: Dictionary = b
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		GantryLabDetail.ribbon(st, bd["points"], bd["n"], float(bd["w"]), GantryLabDetail.BELT_THICK, float(bd["inside"]))
+		var arrays := st.commit_to_arrays()
+		if arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+			continue
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		while _belt_mats.size() <= bi:
+			var m := ShaderMaterial.new()
+			m.shader = _BELT_SHADER
+			m.set_shader_parameter("albedo", cols.get("belt", Color(0.07, 0.07, 0.08)))
+			_belt_mats.append(m)
+		var bm: ShaderMaterial = _belt_mats[bi]
+		var idx := clampi(int(bd["motor"]), 0, maxi(mm.size() - 1, 0))
+		var travel := (float(mm[idx]) * 0.001 if mm.size() > 0 else 0.0) * float(bd["sign"])
+		bm.set_shader_parameter("offset_m", travel)
+		bm.set_shader_parameter("pitch_m", 0.003 if str(GantryLabParts.drive(str(_spec["axis"]["x"]["drive"]))["label"]).begins_with("GT3") else 0.002)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, bm)
+		bi += 1
+	# Bowden tube, filament, delta arms.
+	var sts: Dictionary = {}
+	for lk in GantryLabFrame.link_routes(_layout, po):
+		var ld: Dictionary = lk
+		GantryLabDetail.tube(GantryLabDetail._st(sts, "tube" if str(ld["kind"]) == "bowden" else "filament"), ld["points"], float(ld["r"]), 8 if str(ld["kind"]) == "bowden" else 5)
+	for arm in GantryLabFrame.delta_arms(_layout, po):
+		GantryLabDetail.tube(GantryLabDetail._st(sts, "carbon"), PackedVector3Array([(arm as Array)[0], (arm as Array)[1]]), 0.003, 8)
+	for key in sts:
+		var st: SurfaceTool = sts[key]
+		var arrays := st.commit_to_arrays()
+		if arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+			continue
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, _material(str(key), cols))
+	_dynamic.mesh = mesh if mesh.get_surface_count() > 0 else null
 
 
 # ---------------------------------------------------------------------------
@@ -280,242 +336,128 @@ func work_to_local(mm: Vector3) -> Vector3:
 # Meshing
 # ---------------------------------------------------------------------------
 
-func _mesh_for(beams: Array, parts: Array, screws: Array, cols: Dictionary) -> MeshInstance3D:
+func _mesh_for(beams: Array, parts: Array, _screws: Array, cols: Dictionary) -> MeshInstance3D:
 	var sts: Dictionary = {}
 	for b in beams:
 		var bd: Dictionary = b
-		_extrusion(_st(sts, "frame"), bd)
+		GantryLabDetail.extrusion(GantryLabDetail._st(sts, "frame"), bd["a"], bd["b"], str(bd["profile"]), bd.get("up", Vector3.UP))
 	for p in parts:
 		var pd: Dictionary = p
-		var kind := str(pd["kind"])
-		var key := kind
-		if kind == "bed_round":
-			_cylinder(_st(sts, "bed"), (pd["c"] as Vector3) + Vector3(0, -(pd["s"] as Vector3).y * 0.5, 0), (pd["c"] as Vector3) + Vector3(0, (pd["s"] as Vector3).y * 0.5, 0), (pd["s"] as Vector3).x * 0.5, 36)
-			continue
-		if kind == "motor":
-			_box(_st(sts, "motor"), pd["c"], pd["s"])
-			# The shaft.
-			var c: Vector3 = pd["c"]
-			var sz: Vector3 = pd["s"]
-			_cylinder(_st(sts, "rail"), c + Vector3(0, sz.y * 0.5, 0), c + Vector3(0, sz.y * 0.5 + 0.012, 0), 0.0025, 8)
-			continue
-		_box(_st(sts, key), pd["c"], pd["s"])
-	for sc in screws:
-		var sd: Dictionary = sc
-		_cylinder(_st(sts, "rail"), sd["a"], sd["b"], float(sd["d_mm"]) * 0.0005, 8)
+		if pd.has("spin"):
+			continue  # its own node, see _spin_nodes
+		GantryLabDetail.emit(sts, pd)
+	return _commit(sts, cols)
+
+
+## Every material key's SurfaceTool into one ArrayMesh (a surface each).
+func _commit(sts: Dictionary, cols: Dictionary) -> MeshInstance3D:
 	var mesh := ArrayMesh.new()
-	for key in ["frame", "plate", "motor", "rail", "bed", "tool", "board", "panel"]:
-		if not sts.has(key):
-			continue
+	var keys: Array = sts.keys()
+	keys.sort()
+	for key in keys:
 		var st: SurfaceTool = sts[key]
-		st.generate_normals()
 		var arrays := st.commit_to_arrays()
 		if arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			continue
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		mesh.surface_set_material(mesh.get_surface_count() - 1, _material(key, cols))
+		mesh.surface_set_material(mesh.get_surface_count() - 1, _material(str(key), cols))
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	return mi
 
 
-func _st(sts: Dictionary, key: String) -> SurfaceTool:
-	if not sts.has(key):
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		sts[key] = st
-	return sts[key]
-
-
-## A V-slot extrusion between a and b: the profile's rectangle with a 6 mm
-## groove every 20 mm cell on every face, extruded along the beam.
-func _extrusion(st: SurfaceTool, bd: Dictionary) -> void:
-	var a: Vector3 = bd["a"]
-	var b: Vector3 = bd["b"]
-	var p := GantryLabParts.profile(str(bd["profile"]))
-	var w := float(p["w_mm"]) * 0.001
-	var h := float(p["h_mm"]) * 0.001
-	var axis := b - a
-	var L := axis.length()
-	if L < 1e-6:
-		return
-	axis /= L
-	var up: Vector3 = bd.get("up", Vector3.UP)
-	var u := up - axis * up.dot(axis)
-	if u.length() < 1e-6:
-		u = Vector3.FORWARD - axis * Vector3.FORWARD.dot(axis)
-	if u.length() < 1e-6:
-		u = Vector3.RIGHT
-	u = u.normalized()
-	var v := axis.cross(u).normalized()
-	# Cross-section outline in (v, u): width along v, height along u.
-	var outline := _vslot_outline(w, h)
-	var n := outline.size()
-	for i in n:
-		var p0: Vector2 = outline[i]
-		var p1: Vector2 = outline[(i + 1) % n]
-		var e := p1 - p0
-		var nrm2 := Vector2(e.y, -e.x).normalized()
-		var nrm := (v * nrm2.x + u * nrm2.y).normalized()
-		var q0 := a + v * p0.x + u * p0.y
-		var q1 := a + v * p1.x + u * p1.y
-		_quad(st, q0, q0 + axis * L, q1 + axis * L, q1, nrm)
-	# End caps from a triangulation of the outline.
-	var tris := Geometry2D.triangulate_polygon(outline)
-	for t in range(0, tris.size() - 2, 3):
-		var c0: Vector2 = outline[tris[t]]
-		var c1: Vector2 = outline[tris[t + 1]]
-		var c2: Vector2 = outline[tris[t + 2]]
-		_tri(st, a + v * c0.x + u * c0.y, a + v * c1.x + u * c1.y, a + v * c2.x + u * c2.y, -axis)
-		_tri(st, b + v * c0.x + u * c0.y, b + v * c2.x + u * c2.y, b + v * c1.x + u * c1.y, axis)
-
-
-static func _vslot_outline(w: float, h: float) -> PackedVector2Array:
-	var slot_w := 0.0062
-	var slot_d := 0.0055
-	var out := PackedVector2Array()
-	var hw := w * 0.5
-	var hh := h * 0.5
-	# Walk counter-clockwise: bottom edge (y = -hh) left→right, right edge up,
-	# top edge right→left, left edge down; a groove per 20 mm cell on each.
-	var cells_w := maxi(1, int(round(w / 0.02)))
-	var cells_h := maxi(1, int(round(h / 0.02)))
-	# bottom
-	out.append(Vector2(-hw, -hh))
-	for i in cells_w:
-		var cx := -hw + 0.02 * (i + 0.5)
-		out.append(Vector2(cx - slot_w * 0.5, -hh))
-		out.append(Vector2(cx - slot_w * 0.5, -hh + slot_d))
-		out.append(Vector2(cx + slot_w * 0.5, -hh + slot_d))
-		out.append(Vector2(cx + slot_w * 0.5, -hh))
-	out.append(Vector2(hw, -hh))
-	# right
-	for i in cells_h:
-		var cy := -hh + 0.02 * (i + 0.5)
-		out.append(Vector2(hw, cy - slot_w * 0.5))
-		out.append(Vector2(hw - slot_d, cy - slot_w * 0.5))
-		out.append(Vector2(hw - slot_d, cy + slot_w * 0.5))
-		out.append(Vector2(hw, cy + slot_w * 0.5))
-	out.append(Vector2(hw, hh))
-	# top
-	for i in cells_w:
-		var cx := hw - 0.02 * (i + 0.5)
-		out.append(Vector2(cx + slot_w * 0.5, hh))
-		out.append(Vector2(cx + slot_w * 0.5, hh - slot_d))
-		out.append(Vector2(cx - slot_w * 0.5, hh - slot_d))
-		out.append(Vector2(cx - slot_w * 0.5, hh))
-	out.append(Vector2(-hw, hh))
-	# left
-	for i in cells_h:
-		var cy := hh - 0.02 * (i + 0.5)
-		out.append(Vector2(-hw, cy + slot_w * 0.5))
-		out.append(Vector2(-hw + slot_d, cy + slot_w * 0.5))
-		out.append(Vector2(-hw + slot_d, cy - slot_w * 0.5))
-		out.append(Vector2(-hw, cy - slot_w * 0.5))
-	return out
-
-
-func _box(st: SurfaceTool, c: Vector3, s: Vector3) -> void:
-	var h := s * 0.5
-	var p := [c + Vector3(-h.x, -h.y, -h.z), c + Vector3(h.x, -h.y, -h.z), c + Vector3(h.x, h.y, -h.z), c + Vector3(-h.x, h.y, -h.z),
-		c + Vector3(-h.x, -h.y, h.z), c + Vector3(h.x, -h.y, h.z), c + Vector3(h.x, h.y, h.z), c + Vector3(-h.x, h.y, h.z)]
-	_quad(st, p[0], p[1], p[2], p[3], Vector3(0, 0, -1))
-	_quad(st, p[5], p[4], p[7], p[6], Vector3(0, 0, 1))
-	_quad(st, p[4], p[0], p[3], p[7], Vector3(-1, 0, 0))
-	_quad(st, p[1], p[5], p[6], p[2], Vector3(1, 0, 0))
-	_quad(st, p[3], p[2], p[6], p[7], Vector3(0, 1, 0))
-	_quad(st, p[4], p[5], p[1], p[0], Vector3(0, -1, 0))
-
-
-## A rectangular bar from a to b, w wide (horizontal-ish) and t thick.
-func _bar(st: SurfaceTool, a: Vector3, b: Vector3, w: float, t: float, round_: bool = false) -> void:
-	var axis := b - a
-	var L := axis.length()
-	if L < 1e-6:
-		return
-	axis /= L
-	var u := Vector3.UP - axis * Vector3.UP.dot(axis)
-	if u.length() < 1e-6:
-		u = Vector3.RIGHT - axis * Vector3.RIGHT.dot(axis)
-	u = u.normalized()
-	var v := axis.cross(u).normalized()
-	var ring: Array = []
-	if round_:
-		for i in 8:
-			var ang := TAU * i / 8
-			ring.append(u * (cos(ang) * w * 0.5) + v * (sin(ang) * w * 0.5))
-	else:
-		ring = [v * (w * 0.5) + u * (t * 0.5), v * (-w * 0.5) + u * (t * 0.5), v * (-w * 0.5) + u * (-t * 0.5), v * (w * 0.5) + u * (-t * 0.5)]
-	var n := ring.size()
-	for i in n:
-		var r0: Vector3 = ring[i]
-		var r1: Vector3 = ring[(i + 1) % n]
-		_quad(st, a + r0, b + r0, b + r1, a + r1, (r0 + r1).normalized())
-
-
-func _cylinder(st: SurfaceTool, a: Vector3, b: Vector3, r: float, sides: int) -> void:
-	var axis := b - a
-	var L := axis.length()
-	if L < 1e-6:
-		return
-	axis /= L
-	var u := Vector3.UP - axis * Vector3.UP.dot(axis)
-	if u.length() < 1e-6:
-		u = Vector3.RIGHT - axis * Vector3.RIGHT.dot(axis)
-	u = u.normalized()
-	var v := axis.cross(u).normalized()
-	var ring: Array = []
-	for i in sides:
-		var ang := TAU * i / sides
-		ring.append(u * (cos(ang) * r) + v * (sin(ang) * r))
-	for i in sides:
-		var r0: Vector3 = ring[i]
-		var r1: Vector3 = ring[(i + 1) % sides]
-		_quad(st, a + r0, b + r0, b + r1, a + r1, (r0 + r1).normalized())
-	for i in range(1, sides - 1):
-		_tri(st, a + ring[0], a + ring[i + 1], a + ring[i], -axis)
-		_tri(st, b + ring[0], b + ring[i], b + ring[i + 1], axis)
-
-
-func _quad(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, n: Vector3) -> void:
-	_tri(st, p0, p1, p2, n)
-	_tri(st, p0, p2, p3, n)
-
-
-func _tri(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, n: Vector3) -> void:
-	# Godot's front face winds clockwise seen from outside.
-	var g := (p1 - p0).cross(p2 - p0)
-	if g.dot(n) > 0.0:
-		var tmp := p1
-		p1 = p2
-		p2 = tmp
-	st.set_normal(n)
-	st.add_vertex(p0)
-	st.set_normal(n)
-	st.add_vertex(p1)
-	st.set_normal(n)
-	st.add_vertex(p2)
-
-
 func _material(key: String, cols: Dictionary) -> Material:
-	var ck := "%s|%s|%s" % [key, str(cols.get("frame", "")), "g" if _ghost else "s"]
+	var ck := "%s|%s|%s|%s" % [key, str(cols.get("frame", "")), str(cols.get("plate", "")), "g" if _ghost else "s"]
 	if _mat_cache.has(ck):
 		return _mat_cache[ck]
-	var m: StandardMaterial3D
+	var m: Material = _make_material(key, cols)
+	if _ghost and m is StandardMaterial3D:
+		var sm := (m as StandardMaterial3D).duplicate() as StandardMaterial3D
+		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		sm.albedo_color = Color(sm.albedo_color.r, sm.albedo_color.g, sm.albedo_color.b, 0.55)
+		sm.emission_enabled = true
+		sm.emission = Color(0.2, 0.7, 0.9) * 0.25
+		m = sm
+	_mat_cache[ck] = m
+	return m
+
+
+static func _plain(albedo: Color, metallic: float, roughness: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = albedo
+	m.metallic = metallic
+	m.roughness = roughness
+	return m
+
+
+static func _thread_mat(lead_m: float, starts: int, duty: float, depth: float, albedo: Color) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = _THREAD_SHADER
+	m.set_shader_parameter("lead_m", lead_m)
+	m.set_shader_parameter("starts", starts)
+	m.set_shader_parameter("duty", duty)
+	m.set_shader_parameter("depth", depth)
+	m.set_shader_parameter("albedo", albedo)
+	return m
+
+
+func _make_material(key: String, cols: Dictionary) -> Material:
+	if key.begins_with("thread|"):
+		# thread|<lead m>|<starts>
+		var parts := key.split("|")
+		return _thread_mat(float(parts[1]) if parts.size() > 1 else 0.008, int(parts[2]) if parts.size() > 2 else 4, 0.5, 0.7, Color(0.78, 0.79, 0.8))
 	match key:
 		"frame":
-			m = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols.get("frame", Color(0.16, 0.17, 0.19)))
+			return StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols.get("frame", Color(0.16, 0.17, 0.19)))
 		"plate":
-			m = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols.get("plate", Color(0.72, 0.74, 0.78)))
+			return StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols.get("plate", Color(0.72, 0.74, 0.78)))
 		"motor":
-			m = StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.09, 0.09, 0.1))
-		"rail":
-			m = StandardMaterial3D.new()
-			m.albedo_color = Color(0.82, 0.83, 0.85)
-			m.metallic = 0.9
-			m.roughness = 0.25
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.09, 0.09, 0.1))
+		"alu":
+			return _plain(Color(0.8, 0.81, 0.83), 0.85, 0.35)
+		"chrome", "rail":
+			return _plain(Color(0.84, 0.85, 0.87), 0.95, 0.2)
+		"steel":
+			return _plain(Color(0.22, 0.22, 0.24), 0.7, 0.45)
+		"black":
+			return StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.08, 0.08, 0.09))
+		"brass":
+			return _plain(Color(0.82, 0.64, 0.3), 0.9, 0.35)
+		"delrin":
+			return _plain(Color(0.9, 0.9, 0.86), 0.0, 0.5)
+		"pcb":
+			return _plain(Color(0.1, 0.33, 0.2), 0.1, 0.6)
+		"screen":
+			return _plain(Color(0.08, 0.14, 0.32), 0.0, 0.3)
+		"led":
+			var l := _plain(Color(0.9, 0.2, 0.15), 0.0, 0.5)
+			l.emission_enabled = true
+			l.emission = Color(0.8, 0.1, 0.05)
+			return l
+		"blue":
+			return _plain(Color(0.2, 0.35, 0.75), 0.6, 0.5)
+		"green":
+			return _plain(Color(0.2, 0.55, 0.25), 0.0, 0.6)
+		"white":
+			return _plain(Color(0.92, 0.92, 0.9), 0.0, 0.6)
+		"rubber":
+			return _plain(Color(0.05, 0.05, 0.05), 0.0, 0.95)
+		"galv":
+			return StructureMaterials.make(StructureMaterials.Kind.GALVANISED, Color(0.7, 0.72, 0.74))
+		"glass":
+			var g := _plain(Color(0.75, 0.85, 0.9, 0.35), 0.0, 0.05)
+			g.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			return g
+		"heater":
+			return _plain(Color(0.35, 0.12, 0.1), 0.0, 0.7)
 		"bed":
-			m = StructureMaterials.make(StructureMaterials.Kind.PANEL, cols.get("bed", Color(0.22, 0.23, 0.26)))
+			return StructureMaterials.make(StructureMaterials.Kind.PANEL, cols.get("bed", Color(0.22, 0.23, 0.26)))
+		"mdf":
+			return StructureMaterials.make(StructureMaterials.Kind.WOOD, Color(0.62, 0.5, 0.36))
+		"honey":
+			return _plain(Color(0.75, 0.55, 0.2), 0.3, 0.7)
+		"concrete":
+			return _plain(Color(0.55, 0.54, 0.52), 0.0, 0.95)
 		"tool":
 			var tool := GantryLabParts.tool(str(_spec["tool"]["id"]))
 			var tc := Color(0.75, 0.3, 0.2)
@@ -524,28 +466,35 @@ func _material(key: String, cols: Dictionary) -> Material:
 					tc = Color(0.3, 0.45, 0.7)
 				"mark":
 					tc = Color(0.5, 0.25, 0.7)
-			m = StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, tc)
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, tc)
+		"tool_teal":
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.1, 0.5, 0.55))
+		"wire_red":
+			return _plain(Color(0.8, 0.12, 0.1), 0.0, 0.7)
 		"board":
-			m = StructureMaterials.make(StructureMaterials.Kind.PANEL, Color(0.1, 0.35, 0.2))
+			return StructureMaterials.make(StructureMaterials.Kind.PANEL, Color(0.1, 0.35, 0.2))
 		"panel":
-			m = StandardMaterial3D.new()
-			m.albedo_color = Color(0.7, 0.8, 0.9, 0.3)
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+			var pm := _plain(Color(0.7, 0.8, 0.9, 0.3), 0.0, 0.1)
+			pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			pm.cull_mode = BaseMaterial3D.CULL_DISABLED
+			return pm
+		"tube":
+			var t := _plain(Color(0.95, 0.95, 0.95, 0.75), 0.0, 0.3)
+			t.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			return t
+		"filament":
+			return _plain(Color(0.9, 0.45, 0.1), 0.0, 0.4)
+		"carbon":
+			return _plain(Color(0.1, 0.1, 0.11), 0.3, 0.35)
+		"clay":
+			return _plain(Color(0.45, 0.33, 0.22), 0.0, 0.9)
+		"coupler":
+			return _thread_mat(0.008, 1, 0.12, 0.9, Color(0.8, 0.81, 0.83))
+		"spring":
+			return _thread_mat(0.0028, 1, 0.45, 1.0, Color(0.75, 0.72, 0.4))
 		"belt":
-			m = StandardMaterial3D.new()
-			m.albedo_color = cols.get("belt", Color(0.08, 0.08, 0.09))
-			m.roughness = 0.9
-		_:
-			m = StandardMaterial3D.new()
-	if _ghost:
-		m = m.duplicate()
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		m.albedo_color = Color(m.albedo_color.r, m.albedo_color.g, m.albedo_color.b, 0.55)
-		m.emission_enabled = true
-		m.emission = Color(0.2, 0.7, 0.9) * 0.25
-	_mat_cache[ck] = m
-	return m
+			return _plain(cols.get("belt", Color(0.08, 0.08, 0.09)), 0.0, 0.9)
+	return _plain(Color(0.5, 0.5, 0.5), 0.0, 0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +516,8 @@ func _record_picks(beams: Array, parts: Array, assembly: String) -> void:
 	for pt in parts:
 		var pd: Dictionary = pt
 		var s: Vector3 = pd["s"]
-		_picks.append({"kind": str(pd["kind"]), "label": str(pd["label"]), "aabb": AABB((pd["c"] as Vector3) - s * 0.5, s), "assembly": assembly, "group": ""})
+		var pc: Vector3 = pd.get("pick_c", pd["c"])
+		_picks.append({"kind": str(pd["kind"]), "label": str(pd["label"]), "aabb": AABB(pc - s * 0.5, s), "assembly": assembly, "group": ""})
 
 
 func _asm_local_transform(name: String) -> Transform3D:

@@ -412,7 +412,7 @@ func _test_builder() -> void:
 	b._process(0.016)
 	_check("drivers drive the kinematics", _approx(car.position.x - x0, 0.08, 1e-6) and _approx(b.tool_mm().y, 30.0, 1e-6))
 	var belts := b.get_node("Belts") as MeshInstance3D
-	_check("belts drawn", belts.mesh != null and belts.mesh.get_surface_count() == 1)
+	_check("belts drawn", belts.mesh != null and belts.mesh.get_surface_count() >= 2)  # two CoreXY loops (+ the Bowden tube, the filament)
 	var hit := GantryLabBuilder.pick(b, Vector3(0.0, 2.0, 0.0), Vector3(0, -1, 0))
 	_check("a ray from above hits something", not hit.is_empty())
 	var pts := PackedVector3Array([Vector3(10, 10, 0.2), Vector3(50, 10, 0.2), Vector3(50, 50, 0.2), Vector3(10, 50, 0.2)])

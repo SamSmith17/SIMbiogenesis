@@ -826,10 +826,15 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_nest
 # A crew building a rack (offline — PalletRackBuildPlan: the Mars build
 # lab's sequence on the "Build a rack bay" design with six, holds until the
 # release, beams only on standing frames, high beams after it with four,
-# four can't build, state_at pure; Chiba 2024 plans; EXPECTED_CHECKS):
+# four can't build, state_at pure; Chiba 2024 plans; the yard: every piece
+# flat, none overlapping, each on the bearers or a piece under it, bundles
+# set down on the ground clear of the rack and carried at hand height, the
+# same on a side yard, the side picker avoiding a slope; EXPECTED_CHECKS):
 Godot.exe.exe --headless --path . --script core/terrain/pallet_rack_build_plan_selftest.gd
 # The same on a real world (sandbox): Plan + Rehearse clicked in the
-# builder, the clock moved through the build, the rack's mesh back after:
+# builder, the clock moved through the build, the rack's mesh back after;
+# the yard's bearers never in the ground and every stack touching it, shots
+# of the yard (00b / 00c) and the bundles set down (01b):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_build_check.gd -Label rack_build
 # Stairs with turns and flights, picked through the inspector's own Flights
 # dropdown (rows shown only where they apply, flight / landing counts, the
@@ -2899,7 +2904,23 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   machine" = `start_machine_job` with `to_toolpath` + the planner's time,
   so the job's duration is the simulated one.
 - Gates: `gantrylab_selftest` (227), `tools/checks/gantrylab_designer_check.gd`
-  (41), tour stop `18e_gantrylab`. Not built: an NPC crew assembling it,
+  (41), tour stop `18e_gantrylab`.
+- **High-detail parts (2026-10-26, IN PROGRESS, uncommitted).** Modelled on
+  the user's CR-10 S4 GLB: `GantryLabDetail` (`core/gantrylab/gantrylab_detail.gd`)
+  draws every part the frame names — motors on brackets, GT2 pulleys and
+  idlers, Tr8 screws with couplers and brass nuts, V-wheels on their axles,
+  rails and blocks, endstops, a V6-class hotend, a Bowden extruder, spool,
+  springs, feet, corner brackets, PSU, LCD, board — in a LOCAL frame whose
+  +Y is the part's axis. Belts are LOOPS of pulleys (`lay["loops"]`, nodes
+  {asm, c, r, s = wrap sign, kind}) solved by common tangents
+  (`GantryLabFrame.solve_loop`); the builder makes one `Spin_<label>` node
+  per turning part (angle = motor mm / per_rev_mm) and scrolls the belt
+  teeth (`gantry_belt.gdshader` `offset_m`); screws / couplers / springs are
+  plain cylinders under `gantry_thread.gdshader` (UV = angle, metres).
+  Still open: the look pass by eye (belt wrap signs, the i3 bed belt), the
+  print-setup hookup for placed gantries (GantryRuntime must speak
+  CncMachineRuntime's preview / reveal API), the modal pass. ⚠ Loop node
+  key `s` is the wrap sign — a clamp's extent travels as `size`. Not built: an NPC crew assembling it,
   SCAD part models for pulleys / brackets (the scad_library has them),
   the print-setup STL slicer on a gantry (the inspector's Load G-code / STL
   works through the graph node), multi-tool heads.
@@ -3402,6 +3423,35 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
   NPC population doing it (the site draws its own crew, like the Linkage
   rehearsal), forklifts / hand-up variants of the lab, ladders as climb
   routes. Site cost 0.44 ms a frame on Mount Vernon.
+  **The yard (2026-10-26).** Pieces used to be stacked 8 high by their
+  AXIS-ALIGNED box in their installed orientation, so sloped modules and
+  rafters stacked as tilted boards with air between, mixed sizes overlapped
+  or floated, a carried bundle was set down at its old pile heights (in the
+  air), poses blended about the build origin (metres away, swinging pieces
+  through the air), and the yard sat at the rack's base height whatever the
+  terrain. Now:
+  - `PalletRackBuilder.flat_frame` gives every build unit its own frame
+    (thinnest way up, long way from the smallest rectangle round it), from
+    the boxes / triangles it drew (`_Geom.unit_shape`, split mode only);
+    units meta `flat` = {basis, size, centre}.
+  - `_layout_yard`: a stack per shape per pile kind, pieces flat with the
+    long way from the rack, a few side by side a layer (a bundle's
+    proportions), up to `STACK_H`, on `DUNNAGE_H` bearers, the piece used
+    first on TOP (slots assigned in reverse use order after planning).
+    Stacks run along the yard's side and wrap to a row behind.
+  - `_finish_carries` / `_stage_bundle`: picks, stands and lift height are
+    worked out after the layout; a bundle is set down compactly on the
+    ground along the rack's face, clear of the rack and of earlier bundles
+    and stacks; carried at hand height (`CARRY_LOW`) but clear of what stays
+    in the stack. `_blend` moves a piece's CENTRE in a straight line.
+  - `unit_pose` returns g / gxz / rest; the site lifts resting pieces onto a
+    ground plane fitted over the stack's or bundle's footprint (`rests`),
+    tilt capped at 25°, raised onto the highest point so nothing sinks; the
+    bearers use the same plane.
+  - `yard_side(bounds, ground)`: the site puts the yard on the flattest side
+    of the rack (front unless another is clearly flatter; plan opt
+    `yard_side`, part of `plan_for`'s cache key). Mount Vernon's test spot
+    is a hillside with the pond in front, so the yard there goes to a side.
 
 **Photoreal buildings (ortho roofs + wall modes + facade textures).** Roof
 surface carries geo-registered **UV2** (plan position / `ORTHO_HALF_EXTENT_M`
