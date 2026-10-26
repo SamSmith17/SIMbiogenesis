@@ -821,6 +821,29 @@ class _Geom:
 	var cur_unit := ""
 	## unit id -> {material key -> SurfaceTool}
 	var units := {}
+	## unit id -> {pts: [corners drawn], axes: [directions drawn along]}: how
+	## a piece lies flat in a pile (PalletRackBuilder.flat_frame).
+	var unit_geo := {}
+
+	func unit_shape(pts: Array, axes: Array) -> void:
+		var u := cur_unit if not cur_unit.is_empty() else unit_prefix + "misc"
+		if not unit_geo.has(u):
+			unit_geo[u] = {"pts": [], "axes": []}
+		var g: Dictionary = unit_geo[u]
+		(g["pts"] as Array).append_array(pts)
+		var ax: Array = g["axes"]
+		for a in axes:
+			var v := a as Vector3
+			if ax.size() >= 24 or v.length() < 1e-6:
+				continue
+			v = v.normalized()
+			var dup := false
+			for b in ax:
+				if absf((b as Vector3).dot(v)) > 0.9995:
+					dup = true
+					break
+			if not dup:
+				ax.append(v)
 
 	## Register `path` (group ids down to the part) with its `labels`, make the
 	## part current (its boxes are what emission draws until the next begin),
@@ -1318,10 +1341,76 @@ static func build_units_node(spec: Dictionary = {}, node_name: String = "RackUni
 			continue
 		root.add_child(node)
 		var leaf := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
-		info[str(id)] = {"aabb": bb, "kind": part_kind(leaf), "node": node.name}
+		var geo: Dictionary = g.unit_geo.get(id, {})
+		info[str(id)] = {"aabb": bb, "kind": part_kind(leaf), "node": node.name,
+			"flat": flat_frame(geo.get("pts", []), geo.get("axes", []))}
 	root.set_meta("units", info)
 	root.set_meta("rack_spec", s.duplicate(true))
 	return root
+
+
+## A piece's own frame, from the corners it drew and the directions it was
+## drawn along: `basis` columns (across, thin, long) in the build frame, thin
+## the direction it is thinnest in (turned up, so a module lies face up), long
+## the long side of the smallest rectangle round it in the plane across that;
+## `size` = its extent along each; `centre` in the build frame. A sloped solar
+## module, a tilted rafter, an upright frame all come out as the plain board
+## they are, so a pile can lay them flat. {} with no points.
+static func flat_frame(pts: Array, axes: Array) -> Dictionary:
+	if pts.is_empty():
+		return {}
+	var cands: Array = axes.duplicate()
+	for w in [Vector3.RIGHT, Vector3.UP, Vector3.BACK]:
+		var dup := false
+		for b in cands:
+			if absf((b as Vector3).dot(w)) > 0.9995:
+				dup = true
+				break
+		if not dup:
+			cands.append(w)
+	var n := Vector3.UP
+	var best := INF
+	for a in cands:
+		var e := _extent_along(pts, a)
+		if e < best - 1e-4:
+			best = e
+			n = a
+	if n.dot(Vector3.UP) < 0.0:
+		n = -n
+	var u := Vector3.ZERO
+	var best_area := INF
+	for a in cands:
+		var p: Vector3 = (a as Vector3) - n * (a as Vector3).dot(n)
+		if p.length() < 0.2:
+			continue
+		p = p.normalized()
+		var area := _extent_along(pts, p) * _extent_along(pts, n.cross(p))
+		if area < best_area - 1e-6:
+			best_area = area
+			u = p
+	if u == Vector3.ZERO:
+		u = n.cross(Vector3.BACK if absf(n.dot(Vector3.BACK)) < 0.9 else Vector3.RIGHT).normalized()
+	var v := n.cross(u)
+	var long := u if _extent_along(pts, u) >= _extent_along(pts, v) else v
+	var across := n.cross(long).normalized()
+	var bas := Basis(across, n, long)
+	var lo := Vector3(INF, INF, INF)
+	var hi := Vector3(-INF, -INF, -INF)
+	for q in pts:
+		var l := Vector3((q as Vector3).dot(across), (q as Vector3).dot(n), (q as Vector3).dot(long))
+		lo = lo.min(l)
+		hi = hi.max(l)
+	return {"basis": bas, "size": hi - lo, "centre": bas * ((lo + hi) * 0.5)}
+
+
+static func _extent_along(pts: Array, d: Vector3) -> float:
+	var lo := INF
+	var hi := -INF
+	for q in pts:
+		var t := (q as Vector3).dot(d)
+		lo = minf(lo, t)
+		hi = maxf(hi, t)
+	return hi - lo
 
 
 static func build_default_node() -> Node3D:
@@ -2975,6 +3064,8 @@ static func _emit_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 		st = _rec.route(st)
 		if _rec.record:
 			_rec.add_points([a, b, c])
+		if _rec.split:
+			_rec.unit_shape([a, b, c], [n, b - a])
 	n = n.normalized()
 	# Callers give the corners counter-clockwise seen from the side the normal
 	# faces; Godot's front face is CLOCKWISE from outside, so they go in as a,
@@ -4677,6 +4768,14 @@ static func _emit_box(st: SurfaceTool, xf: Transform3D, size: Vector3) -> void:
 		st = _rec.route(st)
 		if _rec.record:
 			_rec.add_box(xf, size)
+		if _rec.split:
+			var hh := size * 0.5
+			var cs: Array = []
+			for sx in [-1.0, 1.0]:
+				for sy in [-1.0, 1.0]:
+					for sz in [-1.0, 1.0]:
+						cs.append(xf * Vector3(hh.x * sx, hh.y * sy, hh.z * sz))
+			_rec.unit_shape(cs, [xf.basis.x, xf.basis.y, xf.basis.z])
 	var h := size * 0.5
 	var c := [
 		Vector3(-h.x, -h.y, -h.z), Vector3(h.x, -h.y, -h.z),

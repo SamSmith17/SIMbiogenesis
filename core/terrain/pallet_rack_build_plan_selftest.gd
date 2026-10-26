@@ -10,9 +10,12 @@ extends SceneTree
 ## two seaters); more hands are not slower; state_at: everything in the piles
 ## at the start, everything installed at the end, installed pieces only grow,
 ## scrubbing back gives the same state; the visitor ends up on the deck; and
-## Chiba 2024 plans in reasonable time.
+## Chiba 2024 plans in reasonable time. The yard: every piece lies flat, none
+## overlap, each rests on the bearers or on a piece under it; a bundle set
+## down rests on the ground (or its own pieces) clear of the rack, and is
+## carried at hand height.
 
-const EXPECTED_CHECKS := 24
+const EXPECTED_CHECKS := 37
 
 var _checks := 0
 var _failures := 0
@@ -168,6 +171,15 @@ func _initialize() -> void:
 			for q in j["path"]:
 				vis_top = maxf(vis_top, (q as Vector3).y)
 	_check("bay with U stairs: the visitor's path climbs to the deck", vis_top > 1.7, "%.2f m" % vis_top)
+	_check_yard(tl)
+	# The yard on the rack's side, and the side a crew would pick.
+	_check_yard(P.plan(bay, 6, {}, {"yard_side": "+x"}))
+	var bnds: AABB = tl["bounds"]
+	var c := bnds.get_center()
+	var front_slope := func(xz: Vector2) -> float: return maxf(0.0, c.z - xz.y) * 0.6
+	_check("yard: a crew puts it on flat ground, not the slope in front",
+		P.yard_side(bnds, front_slope) != "-z" and P.yard_side(bnds, func(_xz: Vector2) -> float: return 0.0) == "-z",
+		P.yard_side(bnds, front_slope))
 	# Chiba 2024 plans in reasonable time.
 	var t0 := Time.get_ticks_msec()
 	var c24 := P.plan(PalletRackBuilder.design_preset("chiba_2024")["spec"], 8)
@@ -180,6 +192,92 @@ func _initialize() -> void:
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
 	print("RACK BUILD PLAN SELFTEST %s  (%d checks)" % ["PASS" if _failures == 0 else "FAIL", _checks])
 	quit(0 if _failures == 0 else 1)
+
+
+## A piece's box (world-aligned: every pose in the yard or set down is a
+## quarter turn of its flat frame) under xf.
+func _box(u: Dictionary, xf: Transform3D) -> AABB:
+	var f: Dictionary = u["flat"]
+	var bas: Basis = f["basis"]
+	var c: Vector3 = f["centre"]
+	var h: Vector3 = (f["size"] as Vector3) * 0.5
+	var bb := AABB(xf * (c - bas * h), Vector3.ZERO)
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				bb = bb.expand(xf * (c + bas * Vector3(h.x * sx, h.y * sy, h.z * sz)))
+	return bb
+
+
+func _rests_on(bb: AABB, others: Array, floor_y: float) -> bool:
+	if absf(bb.position.y - floor_y) < 0.006:
+		return true
+	for o in others:
+		var ob: AABB = o
+		if ob == bb or absf(ob.end.y - bb.position.y) > 0.008:
+			continue
+		var ix := minf(bb.end.x, ob.end.x) - maxf(bb.position.x, ob.position.x)
+		var iz := minf(bb.end.z, ob.end.z) - maxf(bb.position.z, ob.position.z)
+		if ix > 0.01 and iz > 0.01:
+			return true
+	return false
+
+
+func _check_yard(tl: Dictionary) -> void:
+	var P := PalletRackBuildPlan
+	var um: Dictionary = tl["unit"]
+	var boxes := {}
+	var not_flat := ""
+	for id in um:
+		var u: Dictionary = um[id]
+		var bb := _box(u, u["pile"])
+		boxes[id] = bb
+		var sz: Vector3 = (u["flat"] as Dictionary)["size"]
+		if absf(bb.size.y - minf(sz.x, minf(sz.y, sz.z))) > 0.002:
+			not_flat = "%s %s" % [id, str(bb.size)]
+	_check("yard: every piece lies flat", not_flat.is_empty(), not_flat)
+	var ids: Array = boxes.keys()
+	var clash := ""
+	for i in ids.size():
+		for k in range(i + 1, ids.size()):
+			var a: AABB = (boxes[ids[i]] as AABB).grow(-0.002)
+			if a.intersects((boxes[ids[k]] as AABB).grow(-0.002)):
+				clash = "%s / %s" % [ids[i], ids[k]]
+	_check("yard: no two pieces overlap", clash.is_empty(), clash)
+	var floating := ""
+	var all_boxes: Array = boxes.values()
+	for id in ids:
+		if not _rests_on(boxes[id], all_boxes, P.DUNNAGE_H):
+			floating = "%s bottom %.3f" % [id, (boxes[id] as AABB).position.y]
+	_check("yard: every piece rests on the bearers or on a piece under it", floating.is_empty(), floating)
+	# Set down: each bundle on the ground, or on its own pieces, clear of the rack.
+	var b: AABB = tl["bounds"]
+	var rack := Rect2(Vector2(b.position.x, b.position.z), Vector2(b.size.x, b.size.z))
+	var hover := ""
+	var in_rack := ""
+	var low_carry := ""
+	for j in tl["jobs"]:
+		if str(j["kind"]) != "carry":
+			continue
+		var sb: Array = []
+		for id in j["units"]:
+			sb.append(_box(um[id], um[id]["staged"]))
+		for i in sb.size():
+			var bb: AABB = sb[i]
+			if bb.position.y < -0.01 or (bb.position.y > 0.02 and not _rests_on(bb, sb, 0.003)):
+				hover = "%s bottom %.3f" % [j["units"][i], bb.position.y]
+			var foot := Rect2(Vector2(bb.position.x, bb.position.z), Vector2(bb.size.x, bb.size.z))
+			if not bool(um[j["units"][i]]["fixed"]) and foot.grow(-0.01).intersects(rack):
+				in_rack = str(j["units"][i])
+		var tm := (float(j["t_lifted"]) + float(j["t_moved"])) * 0.5
+		var low := INF
+		for id in j["units"]:
+			low = minf(low, _box(um[id], P.unit_pose(tl, str(id), tm)["xf"]).position.y)
+		if low < 0.75 or low > 1.35:
+			low_carry = "%s at %.2f m" % [j.get("label", ""), low]
+	_check("set down: every bundle rests on the ground or on its own pieces", hover.is_empty(), hover)
+	_check("set down: bundles clear of the rack", in_rack.is_empty(), in_rack)
+	_check("carried: bundles at hand height", low_carry.is_empty(), low_carry)
 
 
 func _check(label: String, ok: bool, detail: String = "") -> void:

@@ -60,6 +60,22 @@ const REACH_M := 2.0
 const CARRY_H := 1.0
 ## Piles stand this far outside the rack's front.
 const PILE_GAP_M := 3.0
+## The material yard: each pile is stacks of one shape of piece, lying flat
+## on timber bearers this tall, at most this high, at most this wide a row of
+## pieces side by side, stacks this far apart, piles this far apart, a second
+## row of piles this far behind the first.
+const DUNNAGE_H := 0.09
+const STACK_H := 1.1
+const STACK_ROW_W := 1.25
+const LAYER_GAP := 0.004
+const STACK_GAP := 0.5
+const PILE_SPACING := 1.2
+const YARD_AISLE := 1.6
+const PILE_ORDER := ["frames", "beams", "lumber", "sheets", "walls", "parts"]
+## A carried bundle's underside, about hand height.
+const CARRY_LOW := 0.8
+## A bundle set down by the rack keeps this far clear of it.
+const DROP_CLEAR := 0.3
 ## Workers stand this far off a piece.
 const STAND_OFF_M := 0.6
 
@@ -79,7 +95,9 @@ const RIG_FOR := {"carry": "carry", "lift": "place", "set": "place", "raise": "l
 
 ## Plan the build of `spec` (resolved or not) with `crew_n` people. `units` =
 ## the build units' meta (PalletRackBuilder.build_units_node(...).get_meta(
-## "units")); {} builds them here. opts: {visit: bool (default true)}.
+## "units")); {} builds them here. opts: {visit: bool (default true),
+## yard_side: "-z" (in front, the default) | "+z" | "-x" | "+x" — the side of
+## the rack the yard stands on (yard_side() picks the flattest)}.
 static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Dictionary = {}) -> Dictionary:
 	crew_n = maxi(1, crew_n)
 	var s := PalletRackBuilder.resolve_spec(spec)
@@ -94,8 +112,8 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 		bounds = bb if first else bounds.merge(bb)
 		first = false
 	var P := {"jobs": [], "unit": {}, "units": units, "bounds": bounds, "piles": {},
-		"pile_fill": {}, "spec": s}
-	_make_piles(P)
+		"stacks": [], "rec_order": [], "rests": {}, "spec": s,
+		"yard_side": str(opts.get("yard_side", "-z"))}
 	# Modules in order: a fused rack's racks go up one after another.
 	var mods := {}
 	for id in units:
@@ -113,60 +131,33 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 		prev_end = _plan_module(P, str(pre), mods[pre], prev_end, int(ms.get("column_count", 1)))
 	if bool(opts.get("visit", true)):
 		_plan_visit(P, prev_end)
+	_layout_yard(P)
+	_finish_carries(P)
 	var sched := _schedule(P["jobs"], crew_n)
 	var tl := {"jobs": P["jobs"], "unit": P["unit"], "workers": sched["workers"],
 		"makespan": sched["makespan"], "blocked": sched["blocked"], "crew": crew_n,
-		"bounds": bounds, "piles": P["piles"], "radius_m": bounds.size.length() * 0.5}
+		"bounds": bounds, "piles": P["piles"], "stacks": P["stacks"], "rests": P["rests"], "yard_side": P["yard_side"], "radius_m": bounds.size.length() * 0.5}
 	return tl
 
 
-## Material piles in a row in front of the rack (the -Z side), one per kind.
-static func _make_piles(P: Dictionary) -> void:
-	var b: AABB = P["bounds"]
-	var x := b.position.x
-	var z := b.position.z - PILE_GAP_M
-	var widths := {"frames": 2.0, "beams": 1.6, "lumber": 1.4, "sheets": 2.6, "walls": 2.6, "parts": 2.4}
-	for k in ["frames", "beams", "lumber", "sheets", "walls", "parts"]:
-		var w: float = widths[k]
-		P["piles"][k] = Vector3(x + w * 0.5, 0.0, z)
-		P["pile_fill"][k] = 0
-		x += w + 1.0
+static func _unit_rec(P: Dictionary, id: String, pile_kind: String) -> Dictionary:
+	var r := {"pile": Transform3D(), "staged": Transform3D(), "carry": -1, "install": -1, "i": 0, "n": 1,
+		"raise": false, "pivot": Vector3.ZERO, "lie": 0.0, "kind": pile_kind, "fixed": false}
+	P["unit"][id] = r
+	(P["rec_order"] as Array).append(id)
+	return r
 
 
-## The unit's pose flat on the ground (its tall axis laid down), as a basis.
-static func _flat_basis(bb: AABB) -> Basis:
-	var sz := bb.size
-	if sz.y >= maxf(sz.x, sz.z) * 0.9:
-		return Basis(Vector3.BACK, PI * 0.5) if sz.x <= sz.z else Basis(Vector3.RIGHT, PI * 0.5)
-	return Basis()
+## A staged pose the plan sets itself (a beam by its frames, a frame lying
+## at its feet), not a bundle laid out at the drop.
+static func _fix_staged(u: Dictionary, xf: Transform3D, at: Vector3) -> void:
+	u["staged"] = xf
+	u["fixed"] = true
+	u["gxz_staged"] = Vector2(at.x, at.z)
 
 
-## Transform putting unit centre `c` (rotated by `bas`) at `p`.
 static func _at(bas: Basis, c: Vector3, p: Vector3) -> Transform3D:
 	return Transform3D(bas, p - bas * c)
-
-
-## The next slot on pile `kind` for a unit of AABB `bb`: stacked 8 high,
-## stacks side by side, lying flat.
-static func _pile_pose(P: Dictionary, kind: String, bb: AABB) -> Transform3D:
-	var k: int = P["pile_fill"][kind]
-	P["pile_fill"][kind] = k + 1
-	var bas := _flat_basis(bb)
-	var ext := (bas * bb.size).abs()
-	var layer := k % 8
-	var stack := k / 8
-	var org: Vector3 = P["piles"][kind]
-	var p := org + Vector3(0.0, 0.03 + ext.y * (float(layer) + 0.5), -float(stack) * (ext.z + 0.25))
-	return _at(bas, bb.get_center(), p)
-
-
-static func _unit_rec(P: Dictionary, id: String, pile_kind: String) -> Dictionary:
-	var bb: AABB = P["units"][id]["aabb"]
-	var pile := _pile_pose(P, pile_kind, bb)
-	var r := {"pile": pile, "staged": pile, "carry": -1, "install": -1, "i": 0, "n": 1,
-		"raise": false, "pivot": Vector3.ZERO, "lie": 0.0}
-	P["unit"][id] = r
-	return r
 
 
 static func _job(P: Dictionary, kind: String, units: Array, deps: Array, crew_min: int, crew_max: int,
@@ -199,25 +190,15 @@ static func _stands_round(bb: AABB, k: int, y: float = 0.0, away: Vector3 = Vect
 	return out
 
 
-## A carry job taking `ids` (one piece or a bundle) to `drop` (ground): the
-## bundle keeps its pile arrangement and is set down there. Returns the job id.
+## A carry job taking `ids` (one piece or a bundle) from the yard to `drop`
+## (ground). Where they are picked up, the crew's stands, the bundle as it is
+## set down and how high it is carried are worked out once the yard is laid
+## out (_finish_carries). Returns the job id.
 static func _carry(P: Dictionary, ids: Array, crew: int, drop: Vector3, deps: Array, label: String) -> int:
-	var first: Dictionary = P["unit"][ids[0]]
-	var pick_xf: Transform3D = first["pile"]
-	var bb0: AABB = P["units"][ids[0]]["aabb"]
-	var pick := pick_xf * bb0.get_center()
-	pick.y = 0.0
-	var ext := (pick_xf.basis * bb0.size).abs()
-	var pbb := AABB(pick - ext * 0.5, ext)
-	var jid := _job(P, "carry", ids, deps, crew, crew, T_LIFT_S + T_SET_S, _stands_round(pbb, crew),
-		{"pick": pick, "drop": Vector3(drop.x, 0.0, drop.z), "label": label})
-	var d := Vector3(drop.x - pick.x, 0.0, drop.z - pick.z)
+	var jid := _job(P, "carry", ids, deps, crew, crew, T_LIFT_S + T_SET_S, [],
+		{"pick": Vector3.ZERO, "drop": Vector3(drop.x, 0.0, drop.z), "label": label})
 	for id in ids:
-		var u: Dictionary = P["unit"][id]
-		u["carry"] = jid
-		# Staged where it was set down: the pile arrangement moved to the drop.
-		var pile: Transform3D = u["pile"]
-		u["staged"] = Transform3D(pile.basis, pile.origin + d)
+		(P["unit"][id] as Dictionary)["carry"] = jid
 	return jid
 
 
@@ -355,7 +336,9 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				# Lying with its base on its own base line, top away from the
 				# frames already up (-X for the first, +X after).
 				var sgn := -1.0 if int(str(fk).get_slice(",", 1)) == 0 else 1.0
-				var pivot := Vector3(fbb.get_center().x, 0.0, fbb.get_center().z)
+				# It tips over the foot edge on that side, so lying it rests on
+				# the ground rather than half in it.
+				var pivot := Vector3(fbb.get_center().x + sgn * fbb.size.x * 0.5, 0.0, fbb.get_center().z)
 				u["raise"] = true
 				u["pivot"] = pivot
 				u["lie"] = sgn * PI * 0.5
@@ -363,7 +346,7 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				u["lie_xf"] = lie_xf
 				var lie_c := lie_xf * fbb.get_center()
 				var cj := _carry(P, [fid], 2, Vector3(lie_c.x, 0.0, lie_c.z), chain, "carry " + _frame_name(fk))
-				u["staged"] = lie_xf
+				_fix_staged(u, lie_xf, lie_c)
 				var base := Vector3(pivot.x, 0.0, pivot.z)
 				var top := lie_xf * Vector3(fbb.get_center().x, fbb.end.y - 0.3, fbb.get_center().z)
 				var stands := [Vector3(base.x + sgn * 0.5, 0.0, fbb.get_center().z + fbb.size.z * 0.5 + 0.4),
@@ -390,7 +373,7 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				var out := Vector3(0, 0, 1) if c.z > 0.0 else Vector3(0, 0, -1)
 				var stage := Vector3(c.x, 0.06, c.z) + out * 0.46
 				var cj := _carry(P, [bid], 2, stage, [], "carry " + _beam_name(bid))
-				bu["staged"] = _at(Basis(), c, stage)
+				_fix_staged(bu, _at(Basis(), c, Vector3(stage.x, bbb.size.y * 0.5 + 0.003, stage.z)), stage)
 				if c.y <= REACH_M:
 					var sj := _install(P, "seat", [bid], 2, 2, T_SEAT_S, [cj] + low_chain,
 						_stands_round(bbb, 2, 0.0, out), "seat " + _beam_name(bid))
@@ -559,6 +542,355 @@ static func _plan_visit(P: Dictionary, deps: Array) -> void:
 static func _pivot_xf(pivot: Vector3, ang: float) -> Transform3D:
 	var r := Transform3D(Basis(Vector3.BACK, -ang), Vector3.ZERO)
 	return Transform3D(Basis(), pivot) * r * Transform3D(Basis(), -pivot)
+
+
+# ---------------------------------------------------------------------------
+# The material yard: piles of flat stacks, and where bundles are set down
+# ---------------------------------------------------------------------------
+
+## A piece's own frame (PalletRackBuilder.flat_frame, in the units meta), or
+## one from its box for units made without it.
+static func _flat_of(P: Dictionary, id: String) -> Dictionary:
+	var info: Dictionary = P["units"][id]
+	var f: Variant = info.get("flat", {})
+	if f is Dictionary and (f as Dictionary).has("basis"):
+		return f
+	var bb: AABB = info["aabb"]
+	var dims := [bb.size.x, bb.size.y, bb.size.z]
+	var ax := [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
+	var thin := 0
+	var long := 2
+	for i in 3:
+		if float(dims[i]) < float(dims[thin]) - 1e-6:
+			thin = i
+	for i in 3:
+		if i != thin and (long == thin or float(dims[i]) > float(dims[long]) + 1e-6):
+			long = i
+	if long == thin:
+		long = (thin + 1) % 3
+	var n: Vector3 = ax[thin]
+	var l: Vector3 = ax[long]
+	var across := n.cross(l)
+	var bas := Basis(across, n, l)
+	var sz := Vector3(absf(across.dot(bb.size)), float(dims[thin]), float(dims[long]))
+	return {"basis": bas, "size": sz, "centre": bb.get_center()}
+
+
+## The rotation laying a piece flat: across -> X, thin -> up, long -> Z.
+static func _lay(f: Dictionary) -> Basis:
+	return (f["basis"] as Basis).transposed()
+
+
+## The bottom of a piece under `xf` (build frame, metres).
+static func _bottom_y(u: Dictionary, xf: Transform3D) -> float:
+	var f: Dictionary = u["flat"]
+	var bas: Basis = f["basis"]
+	var c: Vector3 = f["centre"]
+	var h: Vector3 = (f["size"] as Vector3) * 0.5
+	var lo := INF
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				lo = minf(lo, (xf * (c + bas * Vector3(h.x * sx, h.y * sy, h.z * sz))).y)
+	return lo
+
+
+## Pieces side by side in a stack: snug for timber, a little apart for steel.
+static func _side_gap(kind: String) -> float:
+	return 0.012 if kind in ["lumber", "sheets", "walls"] else 0.03
+
+
+## The yard: every piece in a pile by kind, a pile = stacks of one shape of
+## piece lying flat (thinnest way up, long way pointing from the rack), a few
+## side by side a layer as a bundle is, layers up to STACK_H, each stack on
+## bearers. The piece used first is on top. Stacks run along the rack's front
+## and wrap to a row behind. Fills P.stacks, P.piles and each unit's pile.
+static func _layout_yard(P: Dictionary) -> void:
+	var groups := {}
+	var gorder: Array = []
+	for id in P["rec_order"]:
+		var u: Dictionary = P["unit"][id]
+		var f := _flat_of(P, id)
+		u["flat"] = f
+		var sz: Vector3 = f["size"]
+		var key := "%s|%d|%d|%d" % [u["kind"], roundi(sz.x * 50.0), roundi(sz.y * 200.0), roundi(sz.z * 50.0)]
+		if not groups.has(key):
+			groups[key] = {"kind": u["kind"], "size": sz, "ids": []}
+			gorder.append(key)
+		(groups[key]["ids"] as Array).append(id)
+	# Each shape's stacks.
+	for key in gorder:
+		var gr: Dictionary = groups[key]
+		var sz: Vector3 = gr["size"]
+		var n := (gr["ids"] as Array).size()
+		var gap := _side_gap(str(gr["kind"]))
+		var w := maxf(sz.x, 0.01)
+		var t := maxf(sz.y, 0.003)
+		var row_max := clampi(floori((STACK_ROW_W + gap) / (w + gap)), 1, 10)
+		var layers_max := clampi(floori(STACK_H / (t + LAYER_GAP)), 1, 40)
+		var per_row := clampi(ceili(sqrt(float(n) * t / w)), 1, row_max)
+		per_row = mini(per_row, n)
+		var cap := per_row * layers_max
+		var stacks: Array = []
+		var left := n
+		while left > 0:
+			var k := mini(left, cap)
+			var layers := ceili(float(k) / float(per_row))
+			stacks.append({"kind": gr["kind"], "w": per_row * w + (per_row - 1) * gap,
+				"l": sz.z, "h": layers * (t + LAYER_GAP)})
+			left -= k
+		gr["per_row"] = per_row
+		gr["cap"] = cap
+		gr["gap"] = gap
+		gr["stacks"] = stacks
+	# Where the stacks stand: piles in order along the front, wrapping behind,
+	# laid out as if the yard were in front (-Z) and then turned to its side.
+	var T := _yard_xf(P)
+	var b := _yard_frame_bounds(P)
+	var x0 := b.position.x
+	var row_w := maxf(b.size.x, 8.0)
+	var x := x0
+	var z_near := b.position.z - PILE_GAP_M
+	var row_depth := 0.0
+	var all: Array = P["stacks"]
+	for kind in PILE_ORDER:
+		var first := true
+		for key in gorder:
+			var gr: Dictionary = groups[key]
+			if str(gr["kind"]) != kind:
+				continue
+			for st in gr["stacks"]:
+				var W: float = st["w"]
+				var L: float = st["l"]
+				if x > x0 + 1e-6:
+					x += PILE_SPACING if first else STACK_GAP
+				if x + W > x0 + row_w and x > x0 + 1e-6:
+					z_near -= row_depth + YARD_AISLE
+					x = x0
+					row_depth = 0.0
+				st["x0"] = x
+				st["z0"] = z_near
+				var wc := T * Vector3(x + W * 0.5, 0.0, z_near - L * 0.5)
+				st["centre"] = wc
+				st["basis"] = T.basis
+				st["size"] = Vector3(W, st["h"], L)
+				st["rect"] = _rect_xz(T, Rect2(Vector2(x, z_near - L), Vector2(W, L)))
+				st["index"] = all.size()
+				all.append(st)
+				P["rests"][Vector2(wc.x, wc.z)] = (st["rect"] as Rect2).size * 0.5
+				if first:
+					P["piles"][kind] = st["centre"]
+				first = false
+				x += W
+				row_depth = maxf(row_depth, L)
+	# Each piece's slot: the first used on top.
+	for key in gorder:
+		var gr: Dictionary = groups[key]
+		var ids: Array = gr["ids"]
+		var n := ids.size()
+		var sz: Vector3 = gr["size"]
+		var per_row: int = gr["per_row"]
+		var cap: int = gr["cap"]
+		var gap: float = gr["gap"]
+		for i in n:
+			var s := n - 1 - i
+			var st: Dictionary = gr["stacks"][s / cap]
+			var within := s % cap
+			var layer := within / per_row
+			var col := within % per_row
+			var u: Dictionary = P["unit"][ids[i]]
+			var f: Dictionary = u["flat"]
+			var p := Vector3(float(st["x0"]) + col * (sz.x + gap) + sz.x * 0.5,
+				DUNNAGE_H + layer * (sz.y + LAYER_GAP) + sz.y * 0.5, float(st["z0"]) - sz.z * 0.5)
+			u["pile"] = T * _at(_lay(f), f["centre"], p)
+			u["slot"] = {"stack": int(st["index"]), "layer": layer, "col": col, "w": sz.x, "t": sz.y,
+				"l": sz.z, "gap": gap}
+			u["gxz_pile"] = Vector2((st["centre"] as Vector3).x, (st["centre"] as Vector3).z)
+			if int(u["carry"]) < 0:
+				u["staged"] = u["pile"]
+				u["gxz_staged"] = u["gxz_pile"]
+
+
+## The yard's turn onto its side: front (-Z) to yard_side, about the rack's
+## middle.
+static func _yard_xf(P: Dictionary) -> Transform3D:
+	var ang := {"-z": 0.0, "+z": PI, "-x": PI * 0.5, "+x": -PI * 0.5}
+	var r := Basis(Vector3.UP, float(ang.get(str(P.get("yard_side", "-z")), 0.0)))
+	var b: AABB = P["bounds"]
+	var c := Vector3(b.get_center().x, 0.0, b.get_center().z)
+	return Transform3D(r, c - r * c)
+
+
+## The rack's bounds as seen from the yard's frame (sides swapped for a yard
+## off the left or right).
+static func _yard_frame_bounds(P: Dictionary) -> AABB:
+	var b: AABB = P["bounds"]
+	if str(P.get("yard_side", "-z")) in ["-x", "+x"]:
+		var c := b.get_center()
+		var sz := Vector3(b.size.z, b.size.y, b.size.x)
+		return AABB(c - sz * 0.5, sz)
+	return b
+
+
+## An xz rectangle through T (quarter turns: still a rectangle).
+static func _rect_xz(T: Transform3D, r: Rect2) -> Rect2:
+	var a := T * Vector3(r.position.x, 0.0, r.position.y)
+	var out := Rect2(Vector2(a.x, a.z), Vector2.ZERO)
+	for q in [Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]:
+		var w := T * Vector3(q.x, 0.0, q.y)
+		out = out.expand(Vector2(w.x, w.z))
+	return out
+
+
+## The side of the rack a crew would put its yard on: the one whose ground,
+## over a band like the yard's, is flattest; the front unless another side is
+## clearly flatter. `ground` (Callable(Vector2 xz) -> float, the build frame)
+## None = the front.
+static func yard_side(bounds: AABB, ground: Callable) -> String:
+	if not ground.is_valid():
+		return "-z"
+	var best := "-z"
+	var best_r := INF
+	for side in ["-z", "+z", "-x", "+x"]:
+		var P := {"bounds": bounds, "yard_side": side}
+		var T := _yard_xf(P)
+		var b := _yard_frame_bounds(P)
+		var lo := INF
+		var hi := -INF
+		for i in 5:
+			for k in 4:
+				var x := lerpf(b.position.x, b.position.x + maxf(b.size.x, 6.0), float(i) / 4.0)
+				var z := b.position.z - PILE_GAP_M - 6.0 * float(k) / 3.0
+				var w := T * Vector3(x, 0.0, z)
+				var y := float(ground.call(Vector2(w.x, w.z)))
+				lo = minf(lo, y)
+				hi = maxf(hi, y)
+		var r := hi - lo - (0.3 if side == "-z" else 0.0)
+		if r < best_r - 1e-4:
+			best_r = r
+			best = side
+	return best
+
+
+## The bounds of a rack's build units (their meta).
+static func units_bounds(units: Dictionary) -> AABB:
+	var bounds := AABB()
+	var first := true
+	for id in units:
+		var bb: AABB = units[id]["aabb"]
+		bounds = bb if first else bounds.merge(bb)
+		first = false
+	return bounds
+
+
+## Each carry: where it is picked up (the bundle in the yard), the crew's
+## stands, the bundle laid out where it is set down, how high it is carried.
+static func _finish_carries(P: Dictionary) -> void:
+	var b: AABB = P["bounds"]
+	var keep_out := Rect2(Vector2(b.position.x, b.position.z), Vector2(b.size.x, b.size.z)).grow(DROP_CLEAR)
+	var placed: Array = []
+	var T := _yard_xf(P)
+	for st in P["stacks"]:
+		placed.append((st["rect"] as Rect2).grow(0.4))
+	for j in P["jobs"]:
+		if str(j["kind"]) != "carry":
+			continue
+		var ids: Array = j["units"]
+		var pr := Rect2()
+		var pile_low := INF
+		for i in ids.size():
+			var u: Dictionary = P["unit"][ids[i]]
+			var sl: Dictionary = u["slot"]
+			var st: Dictionary = P["stacks"][int(sl["stack"])]
+			var r := _rect_xz(T, Rect2(Vector2(float(st["x0"]) + int(sl["col"]) * (float(sl["w"]) + float(sl["gap"])),
+				float(st["z0"]) - float(sl["l"])), Vector2(float(sl["w"]), float(sl["l"]))))
+			pr = r if i == 0 else pr.merge(r)
+			pile_low = minf(pile_low, _bottom_y(u, u["pile"]))
+		var pick := Vector3(pr.get_center().x, 0.0, pr.get_center().y)
+		j["pick"] = pick
+		j["stands"] = _stands_round(AABB(Vector3(pr.position.x, 0.0, pr.position.y),
+			Vector3(pr.size.x, 0.1, pr.size.y)), int(j["min"]))
+		var loose := ids.filter(func(id): return not bool(P["unit"][id]["fixed"]))
+		if not loose.is_empty():
+			_stage_bundle(P, j, loose, placed, keep_out)
+		var staged_low := INF
+		for id in ids:
+			var u: Dictionary = P["unit"][id]
+			staged_low = minf(staged_low, _bottom_y(u, u["staged"]))
+		# Carried at hand height, but lifted clear of what stays in the stack.
+		j["lift_y"] = maxf(CARRY_LOW, pile_low + 0.03) - staged_low
+
+
+## A bundle set down at its drop: the pieces of each stack it came from
+## restacked from the ground, those side by side, lying along the face of the
+## rack it is beside, clear of the rack and of the bundles and stacks before
+## it (slid along the face until it is).
+static func _stage_bundle(P: Dictionary, j: Dictionary, ids: Array, placed: Array, keep_out: Rect2) -> void:
+	var b: AABB = P["bounds"]
+	var drop: Vector3 = j["drop"]
+	var dd := Vector2(drop.x - b.get_center().x, drop.z - b.get_center().z)
+	var along_x := absf(dd.y) >= absf(dd.x)
+	var turn := Basis(Vector3.UP, PI * 0.5) if along_x else Basis()
+	var by_stack := {}
+	var order: Array = []
+	for id in ids:
+		var si := int(P["unit"][id]["slot"]["stack"])
+		if not by_stack.has(si):
+			by_stack[si] = []
+			order.append(si)
+		(by_stack[si] as Array).append(id)
+	var local := {}
+	var cx := 0.0
+	var depth := 0.0
+	for si in order:
+		var grp: Array = by_stack[si]
+		var c_lo := 1 << 30
+		var c_hi := -1
+		var l_lo := 1 << 30
+		for id in grp:
+			var sl: Dictionary = P["unit"][id]["slot"]
+			c_lo = mini(c_lo, int(sl["col"]))
+			c_hi = maxi(c_hi, int(sl["col"]))
+			l_lo = mini(l_lo, int(sl["layer"]))
+		var w := 0.0
+		for id in grp:
+			var sl: Dictionary = P["unit"][id]["slot"]
+			var pw: float = float(sl["w"]) + float(sl["gap"])
+			local[id] = Vector3(cx + (int(sl["col"]) - c_lo) * pw + float(sl["w"]) * 0.5,
+				(int(sl["layer"]) - l_lo) * (float(sl["t"]) + LAYER_GAP) + float(sl["t"]) * 0.5 + 0.003, 0.0)
+			w = (c_hi - c_lo + 1) * pw - float(sl["gap"])
+			depth = maxf(depth, float(sl["l"]))
+		cx += w + 0.3
+	var total_w := maxf(cx - 0.3, 0.01)
+	var half := Vector2(depth * 0.5, total_w * 0.5) if along_x else Vector2(total_w * 0.5, depth * 0.5)
+	var out := Vector2(0.0, -1.0 if dd.y < 0.0 else 1.0) if along_x else Vector2(-1.0 if dd.x < 0.0 else 1.0, 0.0)
+	var side := Vector2(out.y, -out.x)
+	var c := Vector2(drop.x, drop.z)
+	for _k in 60:
+		if not Rect2(c - half, half * 2.0).intersects(keep_out):
+			break
+		c += out * 0.25
+	var base := c
+	for k in 40:
+		var off := 0.0 if k == 0 else ceilf(k / 2.0) * 0.6 * (1.0 if k % 2 == 1 else -1.0)
+		var cc := base + side * off
+		var r := Rect2(cc - half, half * 2.0)
+		var hit := r.intersects(keep_out)
+		for q in placed:
+			if r.intersects(q):
+				hit = true
+				break
+		if not hit:
+			c = cc
+			break
+	placed.append(Rect2(c - half, half * 2.0).grow(0.25))
+	P["rests"][c] = half
+	for id in ids:
+		var u: Dictionary = P["unit"][id]
+		var f: Dictionary = u["flat"]
+		var at: Vector3 = Vector3(c.x, 0.0, c.y) + turn * ((local[id] as Vector3) - Vector3(total_w * 0.5, 0.0, 0.0))
+		u["staged"] = _at(turn * _lay(f), f["centre"], at)
+		u["gxz_staged"] = c
 
 
 # ---------------------------------------------------------------------------
@@ -800,7 +1132,12 @@ static func state_at(tl: Dictionary, t: float, with_units: bool = true) -> Dicti
 		"makespan": float(tl["makespan"])}
 
 
-## One piece's pose at t: {visible, xf}.
+## One piece's pose at t: {visible, xf, g, gxz, rest}. g (0..1) is how much
+## the piece sits on the ground rather than in the rack, and gxz the point
+## whose ground it sits on: a site on uneven ground lifts or lowers it by g x
+## that ground's height (and tilts it to the ground's slope by rest), so the
+## yard and the bundles lie on the terrain the crew walks on while the rack
+## stays on its own base.
 static func unit_pose(tl: Dictionary, id: String, t: float) -> Dictionary:
 	var u: Dictionary = tl["unit"][id]
 	var jobs: Array = tl["jobs"]
@@ -808,45 +1145,62 @@ static func unit_pose(tl: Dictionary, id: String, t: float) -> Dictionary:
 	var ii := int(u["install"])
 	var pile: Transform3D = u["pile"]
 	var staged: Transform3D = u["staged"]
+	var cen: Vector3 = (u.get("flat", {}) as Dictionary).get("centre", Vector3.ZERO)
+	var gp: Vector2 = u.get("gxz_pile", Vector2.ZERO)
+	var gs: Vector2 = u.get("gxz_staged", gp)
 	if ci >= 0:
 		var c: Dictionary = jobs[ci]
 		var c0 := float(c["t0"])
 		if c0 < 0.0 or t < c0:
-			return {"visible": true, "xf": pile}
+			return _pose(pile, 1.0, gp)
 		var lifted := float(c["t_lifted"])
 		var moved := float(c["t_moved"])
 		var c1 := float(c["t1"])
-		var up := Vector3(0.0, CARRY_H, 0.0)
-		var d := _flat(c["drop"]) - _flat(c["pick"])
+		var up := Vector3(0.0, float(c.get("lift_y", CARRY_H)), 0.0)
+		var back := _flat(c["pick"]) - _flat(c["drop"])
 		if t < lifted:
 			var e := _ease((t - c0) / maxf(lifted - c0, 1e-6))
-			return {"visible": true, "xf": Transform3D(pile.basis, pile.origin + up * e)}
+			return _pose(_blend(pile, Transform3D(staged.basis, staged.origin + up + back), cen, e), 1.0, gp, 1.0 - e)
 		if t < moved:
 			var e2 := (t - lifted) / maxf(moved - lifted, 1e-6)
-			return {"visible": true, "xf": Transform3D(pile.basis, pile.origin + up + d * e2)}
+			return _pose(Transform3D(staged.basis, staged.origin + up + back * (1.0 - e2)), 1.0, gp.lerp(gs, e2), 0.0)
 		if t < c1:
 			var e3 := _ease((t - moved) / maxf(c1 - moved, 1e-6))
-			var carried := Transform3D(pile.basis, pile.origin + up + d)
-			return {"visible": true, "xf": carried.interpolate_with(staged, e3)}
+			return _pose(_blend(Transform3D(staged.basis, staged.origin + up), staged, cen, e3), 1.0, gs, e3)
 	if ii < 0:
-		return {"visible": true, "xf": staged}
+		return _pose(staged, 1.0, gs)
 	var j: Dictionary = jobs[ii]
 	var t0 := float(j["t0"])
 	var t1 := float(j["t1"])
 	if t0 < 0.0 or t < t0:
-		return {"visible": true, "xf": staged}
+		return _pose(staged, 1.0, gs)
 	if t >= t1:
-		return {"visible": true, "xf": Transform3D()}
+		return _pose(Transform3D(), 0.0, gs)
 	var n := int(u["n"])
 	var i := int(u["i"])
 	var span := (t1 - t0) / float(maxi(n, 1))
 	var a := t0 + span * float(i)
 	if t < a:
-		return {"visible": true, "xf": staged}
-	var f := clampf((t - a) / maxf(span, 1e-6), 0.0, 1.0)
+		return _pose(staged, 1.0, gs)
+	var f := _ease(clampf((t - a) / maxf(span, 1e-6), 0.0, 1.0))
 	if bool(u["raise"]):
-		return {"visible": true, "xf": _pivot_xf(u["pivot"], float(u["lie"]) * (1.0 - _ease(f)))}
-	return {"visible": true, "xf": staged.interpolate_with(Transform3D(), _ease(f))}
+		return _pose(_pivot_xf(u["pivot"], float(u["lie"]) * (1.0 - f)), 1.0 - f, gs)
+	return _pose(_blend(staged, Transform3D(), cen, f), 1.0 - f, gs)
+
+
+## rest (0..1, default g): how much it lies on the ground there, taking the
+## ground's slope (a stack or a bundle set down); 0 while carried.
+static func _pose(xf: Transform3D, g: float, gxz: Vector2, rest: float = -1.0) -> Dictionary:
+	return {"visible": true, "xf": xf, "g": g, "gxz": gxz, "rest": g if rest < 0.0 else rest}
+
+
+## From a to b by f, the piece's centre `c` on a straight line (a plain
+## interpolate_with turns about the build origin, metres away, and swings the
+## piece through the air).
+static func _blend(a: Transform3D, b: Transform3D, c: Vector3, f: float) -> Transform3D:
+	var bas := a.basis.orthonormalized().slerp(b.basis.orthonormalized(), f)
+	var p := (a * c).lerp(b * c, f)
+	return Transform3D(bas, p - bas * c)
 
 
 static func _ease(x: float) -> float:

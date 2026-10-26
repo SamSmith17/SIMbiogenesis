@@ -108,6 +108,46 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(in_pile == units.size() and in_pile > 20, "every piece starts in the piles (%d)" % in_pile)
 	_ok(site.crew_figures().size() == 6, "six builders")
 	await _shot("00_start")
+	# The yard: stacks on bearers, on the ground.
+	var stacks: Array = tl.get("stacks", [])
+	_ok(stacks.size() >= 4, "the yard has stacks (%d)" % stacks.size())
+	var yard := Vector3.ZERO
+	for stk in stacks:
+		yard += site.global_transform * (stk["centre"] as Vector3)
+	yard /= maxf(float(stacks.size()), 1.0)
+	# Every bearer end: never in the ground; each stack touching it somewhere.
+	var sunk := 0.0
+	var high := 0.0
+	var bearers := (site.get_node("Piles") as Node3D).get_children()
+	var touch := {}
+	for bear in bearers:
+		var bn := bear as Node3D
+		var hx := ((bn as MeshInstance3D).mesh as BoxMesh).size.x * 0.5
+		var key := int(bn.get_meta("stack", -1))
+		var lo := INF
+		for sx in [-1.0, 0.0, 1.0]:
+			var e := bn.global_transform * Vector3(hx * sx, -PalletRackBuildPlan.DUNNAGE_H * 0.5, 0.0)
+			var gy := TerrainSurfaceQuery.ground_height_at(main, e.x, e.z)
+			if is_finite(gy):
+				sunk = maxf(sunk, gy - e.y)
+				lo = minf(lo, e.y - gy)
+		high = maxf(high, lo)
+		touch[key] = minf(float(touch.get(key, INF)), lo)
+	var stack_gap := 0.0
+	for k in touch:
+		stack_gap = maxf(stack_gap, float(touch[k]))
+	print("rack-build yard: %d stacks, %d bearers; deepest end in the ground %.2f m, highest bearer off it %.2f m, worst stack off it %.2f m"
+		% [stacks.size(), bearers.size(), sunk, high, stack_gap])
+	_ok(not bearers.is_empty() and sunk < 0.06, "no bearer sinks into the ground (%.2f m)" % sunk)
+	_ok(stack_gap < 0.08, "every stack rests on the ground (%.2f m)" % stack_gap)
+	var gyard := TerrainSurfaceQuery.ground_height_at(main, yard.x, yard.z)
+	if is_finite(gyard):
+		yard.y = gyard
+	_aim(_above_ground(yard + Vector3(-4.5, 0.0, -5.5), 3.2), yard)
+	await _shot("00b_yard")
+	_aim(_above_ground(yard + Vector3(3.0, 0.0, -3.0), 1.4), yard + Vector3(-1.0, 0.4, 0.0))
+	await _shot("00c_yard_close")
+	_aim(centre + Vector3(9.0, 6.0, -13.0), centre)
 
 	# Find the moments: a frame being raised, beams being seated, a fixer, the visit.
 	var jobs: Array = tl["jobs"]
@@ -152,6 +192,15 @@ func run(main: Node, harness: Node) -> Dictionary:
 			print("rack-build   %s at %.2f, ground %.2f" % [f.name, gp.y, gy])
 	_ok(grounded, "the crew stands on the ground")
 	await _shot("01_carrying")
+	# Halfway through the build: bundles set down by the rack, the yard thinned.
+	await _at(site, start_h, t_fix)
+	# From the yard's side, over the bundles set down by the rack.
+	var toward := (yard - centre) * Vector3(1.0, 0.0, 1.0)
+	toward = toward.normalized() if toward.length() > 0.1 else Vector3.BACK
+	var look := _above_ground(centre + toward * 2.0, 0.3)
+	_aim(_above_ground(centre + toward * 8.0 + toward.cross(Vector3.UP) * 3.0, 3.5), look)
+	await _shot("01b_set_down")
+	_aim(centre + Vector3(9.0, 6.0, -13.0), centre)
 
 	await _at(site, start_h, t_raise)
 	var acts := _activities(site)
@@ -243,6 +292,12 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(not (PlacedPropService.get_prop_record(main, pid).get("build_run") is Dictionary), "the rehearsal record is gone")
 	ui.call("close")
 	return await _cleanup(pid)
+
+
+## `p` at `h` above the ground under it.
+func _above_ground(p: Vector3, h: float) -> Vector3:
+	var gy := TerrainSurfaceQuery.ground_height_at(_main, p.x, p.z)
+	return Vector3(p.x, (gy if is_finite(gy) else p.y) + h, p.z)
 
 
 func _aim(eye: Vector3, at: Vector3) -> void:

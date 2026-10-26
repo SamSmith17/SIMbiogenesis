@@ -48,6 +48,12 @@ var _crew: Array = []                # [{fig, tools: {id: Node3D}, ground: {}}]
 var _rigs: Dictionary = {}
 var _clips: Dictionary = {}
 var _piles: Node3D = null
+## The ground under the yard and the bundles set down (_ground_local's cache).
+var _yard_ground := {"ground": {}}
+## Fitted ground planes under resting stacks and bundles (_plane_at).
+var _planes := {}
+const PLANE_R := 0.8
+const PLANE_MAX_DEG := 25.0
 var _fx_t := 0.0
 var _finished := false
 var _disposed := false
@@ -118,14 +124,14 @@ static func site_for(main: Node, prop_id: String) -> PalletRackBuildSite:
 
 
 ## The plan for a rack + crew, cached by the spec.
-static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}) -> Dictionary:
+static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard_side: String = "-z") -> Dictionary:
 	var s := PalletRackBuilder.resolve_spec(spec)
 	s.erase("_stepped_cells")
 	s.erase("_open_cells")
-	var sig := "%d|%d" % [hash(JSON.stringify(s, "", true)), crew_n]
+	var sig := "%d|%d|%s" % [hash(JSON.stringify(s, "", true)), crew_n, yard_side]
 	if _plan_cache.has(sig):
 		return _plan_cache[sig]
-	var tl := PalletRackBuildPlan.plan(s, crew_n, units)
+	var tl := PalletRackBuildPlan.plan(s, crew_n, units, {"yard_side": yard_side})
 	if _plan_cache.size() > 6:
 		_plan_cache.clear()
 	_plan_cache[sig] = tl
@@ -161,8 +167,11 @@ func _ready() -> void:
 	add_child(_units_root)
 	for c in _units_root.get_children():
 		_unit_nodes[str(c.get_meta("unit_id", ""))] = c
-	_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), _units_root.get_meta("units", {}))
 	transform = _model.transform
+	# The yard goes on the flattest side of the rack.
+	var units: Dictionary = _units_root.get_meta("units", {})
+	var side := PalletRackBuildPlan.yard_side(PalletRackBuildPlan.units_bounds(units), _ground_raw)
+	_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
 	_model.visible = false
 	_build_piles()
 	_build_crew()
@@ -296,6 +305,10 @@ func _apply_units(units: Dictionary) -> void:
 			continue
 		var s: Dictionary = units[id]
 		var xf: Transform3D = s["xf"]
+		# On the ground (yard, carried, set down): on the terrain there.
+		var g := float(s.get("g", 0.0))
+		if g > 0.0:
+			xf = _ground_xf(g, float(s.get("rest", g)), s.get("gxz", Vector2.ZERO)) * xf
 		var h := hash([(xf.origin * 200.0).round(), (xf.basis.x * 200.0).round(), (xf.basis.y * 200.0).round(),
 			bool(s["visible"])])
 		if int(_unit_sig.get(id, 0)) == h:
@@ -400,6 +413,81 @@ func _ground_local(c: Dictionary, pos: Vector3) -> float:
 	return y
 
 
+## The ground plane under a resting stack or bundle at `xz`: fitted (least
+## squares) to the ground over its footprint (the plan's rests: stacks and
+## set-down spots; ±PLANE_R for anything else), the tilt capped at
+## PLANE_MAX_DEG (past that a real yard is levelled up on blocks), then raised
+## onto the highest point under it, so a stack lies on the bumps and never
+## sinks into the hill. Cached per point: the resting points are few.
+func _plane_at(xz: Vector2) -> Dictionary:
+	if _planes.has(xz):
+		return _planes[xz]
+	var half: Vector2 = (_tl.get("rests", {}) as Dictionary).get(xz, Vector2(PLANE_R, PLANE_R))
+	half = half.max(Vector2(0.3, 0.3))
+	var pts: Array = []
+	for i in 3:
+		for k in 3:
+			var o := Vector2(half.x * (i - 1), half.y * (k - 1))
+			pts.append(Vector3(o.x, _ground_raw(xz + o), o.y))
+	var y0 := 0.0
+	var sxx := 0.0
+	var szz := 0.0
+	var sxy := 0.0
+	var szy := 0.0
+	for q in pts:
+		y0 += (q as Vector3).y
+	y0 /= float(pts.size())
+	for q in pts:
+		var v := q as Vector3
+		sxx += v.x * v.x
+		szz += v.z * v.z
+		sxy += v.x * (v.y - y0)
+		szy += v.z * (v.y - y0)
+	# The samples are a symmetric grid, so x and z decouple.
+	var dx := sxy / maxf(sxx, 1e-6)
+	var dz := szy / maxf(szz, 1e-6)
+	var n := Vector3(-dx, 1.0, -dz).normalized()
+	var ang := n.angle_to(Vector3.UP)
+	var cap := deg_to_rad(PLANE_MAX_DEG)
+	if ang > cap:
+		n = Vector3.UP.slerp(n, cap / ang).normalized()
+	# Onto the highest point under it: the plane's height over each sample.
+	var lift := -INF
+	for q in pts:
+		var v := q as Vector3
+		lift = maxf(lift, v.y - (y0 - (n.x * v.x + n.z * v.z) / n.y))
+	if _planes.size() > 1024:
+		_planes.clear()
+	_planes[xz] = {"y": y0 + lift, "n": n}
+	return _planes[xz]
+
+
+## Site-frame ground height at xz, uncached (0 off the terrain).
+func _ground_raw(xz: Vector2) -> float:
+	if _main == null or not is_inside_tree():
+		return 0.0
+	var wp := global_transform * Vector3(xz.x, 0.0, xz.y)
+	var gy := TerrainSurfaceQuery.ground_height_at(_main, wp.x, wp.z)
+	if not is_finite(gy):
+		return 0.0
+	return clampf((global_transform.affine_inverse() * Vector3(wp.x, gy, wp.z)).y, -12.0, 12.0)
+
+
+## A piece posed on flat ground at the rack's base, moved onto the terrain at
+## xz: raised by g x the ground there, tilted to its slope by rest.
+func _ground_xf(g: float, rest: float, xz: Vector2) -> Transform3D:
+	var y := 0.0
+	var bas := Basis()
+	if rest > 0.0:
+		var pl := _plane_at(xz)
+		y = float(pl["y"])
+		bas = Basis(Quaternion.IDENTITY.slerp(Quaternion(Vector3.UP, pl["n"]), rest))
+	else:
+		y = _ground_local(_yard_ground, Vector3(xz.x, 0.0, xz.y))
+	var piv := Vector3(xz.x, 0.0, xz.y)
+	return Transform3D(bas, piv + Vector3(0.0, g * y, 0.0)) * Transform3D(Basis(), -piv)
+
+
 func _rig(kind: String) -> Dictionary:
 	if not _rigs.has(kind):
 		_rigs[kind] = FabContextRig.setup(kind)
@@ -456,7 +544,8 @@ func _build_label() -> void:
 	add_child(_label)
 
 
-## A pallet of dark timber under each material pile.
+## Timber bearers across the underside of every stack in the yard, on the
+## ground under the stack.
 func _build_piles() -> void:
 	_piles = Node3D.new()
 	_piles.name = "Piles"
@@ -464,16 +553,21 @@ func _build_piles() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.36, 0.27, 0.18)
 	mat.roughness = 0.9
-	var sizes := {"frames": Vector3(1.6, 0.03, 5.6), "beams": Vector3(1.4, 0.03, 4.0),
-		"lumber": Vector3(1.2, 0.03, 3.8), "sheets": Vector3(2.5, 0.03, 2.8), "walls": Vector3(2.5, 0.03, 2.8),
-		"parts": Vector3(2.2, 0.03, 2.4)}
-	var piles: Dictionary = _tl.get("piles", {})
-	for k in piles:
-		var mi := MeshInstance3D.new()
+	var h := PalletRackBuildPlan.DUNNAGE_H
+	for st in _tl.get("stacks", []):
+		var c: Vector3 = st["centre"]
+		var sz: Vector3 = st["size"]
+		# The same ground the stack's pieces lie on (unit_pose's gxz = centre),
+		# along the stack's own length.
+		var gxf := _ground_xf(1.0, 1.0, Vector2(c.x, c.z)) * Transform3D(st.get("basis", Basis()), c)
+		var n := clampi(ceili(sz.z / 1.3) + 1, 2, 5)
 		var bm := BoxMesh.new()
-		bm.size = sizes.get(k, Vector3(2, 0.03, 2))
-		mi.mesh = bm
-		mi.material_override = mat
-		var p: Vector3 = piles[k]
-		mi.position = Vector3(p.x, 0.015, p.z - bm.size.z * 0.5 + 0.8)
-		_piles.add_child(mi)
+		bm.size = Vector3(sz.x + 0.15, h, h)
+		for k in n:
+			var mi := MeshInstance3D.new()
+			mi.mesh = bm
+			mi.material_override = mat
+			var z := lerpf(sz.z * 0.5 - 0.2, -sz.z * 0.5 + 0.2, float(k) / float(n - 1))
+			mi.transform = gxf * Transform3D(Basis(), Vector3(0.0, h * 0.5, z))
+			mi.set_meta("stack", int(st.get("index", 0)))
+			_piles.add_child(mi)
