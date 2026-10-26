@@ -94,6 +94,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		extras["flatpack_spec"] = rec.get("flatpack_spec", {})
 	if rec.has("domelab_spec"):
 		extras["domelab_spec"] = rec.get("domelab_spec", {})
+	if rec.has("gantry_spec"):
+		extras["gantry_spec"] = rec.get("gantry_spec", {})
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
 	if rec.has("tank_spec"):
@@ -149,6 +151,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Edit furniture (click) / Move (drag)"
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		prop.prompt = "Edit dome (click) / Move (drag)"
+	elif model_id == GantryLabBuilder.MODEL_ID:
+		prop.prompt = "Edit gantry (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
 		prop.prompt = "Edit grow bed (click) / Move (drag)"
 	elif model_id == MudBuildingStructureBuilder.MODEL_ID:
@@ -192,6 +196,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_siphon_dip_tube(prop, rec)
 		_maybe_attach_siphon_state_ring(prop, rec)
 		_maybe_attach_cnc_runtime(prop, rec)
+		_maybe_attach_gantry_runtime(prop, rec)
 		_maybe_attach_pp_beam_extruder(prop, rec)
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
@@ -267,6 +272,10 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var dl := DomeLabDesign.packed_spec(DomeLabDesign.solve(rec.get("domelab_spec") as Dictionary))
 		if not dl.is_empty():
 			return dl
+	if rec.get("gantry_spec") is Dictionary:
+		var gl := GantryLabDesign.packed_spec(GantryLabDesign.solve(rec.get("gantry_spec") as Dictionary))
+		if not gl.is_empty():
+			return gl
 	if rec.get("container_spec") is Dictionary:
 		var c := ContainerCatalog.packed_spec_for(
 			str((rec.get("container_spec") as Dictionary).get("container_id", "")))
@@ -615,6 +624,19 @@ static func _maybe_attach_cnc_runtime(prop: PlacedProp, rec: Dictionary) -> void
 	runtime.configure(str(rec.get("model_id", "")),
 		rec.get("machine_profile", {}) as Dictionary,
 		str(rec.get("graph_item_id", "")))
+	prop.add_child(runtime)
+
+
+## A designed gantry (GantryLabBuilder) runs its graph job through its own
+## runtime, in true millimetres on the drivers the builder exposes. Keyed on
+## the MODEL, and its record kind is "gantry_machine", so the shared CNC
+## runtime above never attaches to it. See gameplay/gantry_runtime.gd.
+static func _maybe_attach_gantry_runtime(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != GantryLabBuilder.MODEL_ID:
+		return
+	var runtime := GantryRuntime.new()
+	runtime.name = "GantryRuntime"
+	runtime.configure(str(rec.get("graph_item_id", "")))
 	prop.add_child(runtime)
 
 

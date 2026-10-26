@@ -1695,6 +1695,38 @@ const TOOLS: Array = [
 			"model_id": "cnc_router",
 		},
 	},
+	# A CNC gantry from the gantry lab (Library → Structures → CNC gantry
+	# designer…): the default 220 mm bed-slinger with a 0.4 mm hotend. The
+	# design rides specs.gantry_spec; placing it builds the designed machine
+	# and binds it here. GantryLabDesign.graph_preset makes the real one.
+	{
+		"type": "processor", "label": "CNC Gantry (designed)", "icon": "🖨",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "CNC Gantry", "role": "cartesian_machine",
+			"kind": "gantry_machine", "machine_role": "fdm_printer",
+			"machine_kind": "gantry", "print_persist": false, "bed_lowering": false,
+			"cost": 450.0, "energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"watts": 380.0, "speed_factor": 1.0,
+			"filament_diameter_mm": 1.75, "line_width_mm": 0.4,
+			"layer_height_mm": 0.2, "print_speed_mm_s": 100.0,
+			"nozzle_diameter_mm": 0.4, "print_mode": "solid", "flake_density_g_cm3": 1.24,
+			"work_x_mm": 220.0, "work_y_mm": 220.0, "work_z_mm": 250.0,
+			"wet_color": [0.85, 0.55, 0.20], "dry_color": [0.35, 0.55, 0.65],
+			"job_active": false, "job_completed": false, "job_name": "",
+			"job_id": "", "job_start_abs_hours": 0.0, "job_duration_hr": 0.0,
+			"job_material_kind": "filament", "job_material_qty": 0.0,
+			"job_energy_kwh": 0.0, "job_progress": 0.0,
+			"job_part_id": "", "job_part_label": "", "job_part_count": 1,
+			"print_mesh_path": "", "print_offset_x": 0.0, "print_offset_z": 0.0,
+			"print_scale": 1.0,
+			"daily_note": "A gantry from the designer. Click the placed machine to redesign it, simulate G-code and send a job; or load G-code here.",
+			"inputs": [{"kind": "filament", "rate": 0.0, "unit": "kg/h"}],
+			"outputs": [{"kind": "finished_part", "rate": 0.0, "unit": "units/h"}],
+			"model_id": "gantry_machine",
+			"gantry_spec": {},
+		},
+	},
 ]
 
 # ---------------------------------------------------------------------------

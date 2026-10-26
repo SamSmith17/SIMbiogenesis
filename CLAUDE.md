@@ -874,6 +874,29 @@ Godot.exe.exe --headless --path . --script core/domelab/domelab_selftest.gd
 # (height, collision, counted as shade), packed to the strut bundle and
 # unpacked, the designer reopened bound to the dome and Apply growing it:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/domelab_designer_check.gd -Label domelab
+# CNC gantry designer (offline — core/gantrylab/): the parts tables, the
+# spec (7 kinematics, applications, shared-belt coupling, key stability
+# through JSON), steps/mm against the community reference values (GT2 20T
+# 16 µsteps = 80, Tr8×8 = 400, Tr8×2 = 1600), CoreXY / H-bot / CoreXZ
+# inverse kinematics, the delta inverse + forward trilateration round trip
+# and reach, torque → force → acceleration, belt stretch, screw critical
+# speed, beam sag by hand, the G-code parser (arcs by I/J and R, relative,
+# G92, grbl laser S, packed words, to_toolpath), the trapezoid planner
+# (times by hand, corner speed = jerk/|Δd|, monotone sampling, step-rate
+# peak), every layout's assemblies / poses / belts, every preset solving
+# with no error-level check, the BOM, the graph preset, the exports, every
+# sample on every preset, and the builder (frame mesh, drivers, belts, pick,
+# beads). EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/gantrylab/gantrylab_selftest.gd
+# The designer on a real world (sandbox): every built-in machine drawn and
+# shot, CoreXY A = X + Y on the live jog, the delta's carriages, the cube
+# sample played through the planner (beads laid, scrub to the end), UiAudit,
+# the export round trip; a CoreXY placed (record kind gantry_machine, the
+# builder with its drivers, GantryRuntime attached and the GLB CNC runtime
+# NOT, a cartesian_machine graph node bound), a job sent from the lab and
+# run on the world clock (drivers in true mm, beads on the placed bed),
+# packed → bundle, Edit gantry… rebinds, Apply re-syncs the graph node:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/gantrylab_designer_check.gd -Label gantrylab
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -2761,6 +2784,113 @@ claim, SubViewport studio). Record key `domelab_spec`, model id
   Panels that do not fit the sheet are an ERROR in the checks (a real
   blocker): the presets are sized so every one solves clean. Gates in the
   Validation list; tour stop `18d_domelab`.
+
+## CNC gantry designer (core/gantrylab/, 2026-10-25)
+
+Library → Structures → "CNC gantry designer…" (no hotkey); click a placed
+machine or the prop editor's "Edit gantry…" reopens it bound to the prop.
+The dome-lab pattern: pure modules under `core/gantrylab/`, the modal
+`scenes/ui/gantrylab_modal.gd` (own CanvasLayer 27, `UiFit.keep_fitted`,
+modal claim, SubViewport studio). Record key `gantry_spec`, model id
+`gantry_machine` (`GantryLabBuilder.MODEL_ID`, catalog category "tools"),
+library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
+- **The pattern language** is `GantryLabSpec.KINEMATICS` (bedslinger,
+  cartesian_xy, corexy, corexz, hbot, delta, router) with `KINEMATICS_WHY`
+  (when to use each) and `APPLICATIONS` (a job → pattern + tool + sizes,
+  `for_application`). `resolve` couples the shared-belt axes (CoreXY / H-bot
+  copy X's drive onto Y; CoreXZ onto Z), forces a delta's bed round, and
+  keeps `volts` an int (the JSON round trip made it a float and moved the
+  cache key). `motor_axes(kin)` names the motors (A / B, the three towers).
+- **Parts are data with sources** (`GantryLabParts`): V-slot 2020 / 2040 /
+  2060 / 4040 / C-Beam 4080 / 3030 with kg/m and Ix / Iy (OpenBuilds /
+  Misumi), guides (V-wheel, MGN9 / 12, 8 mm rod, HGR15), drives (GT2 6 / 9,
+  GT3 15, Tr8×8, Tr8×2, Tr12×3, SFU1605 / 1610, mod-1 rack; belt spring rate
+  per metre, screw root diameter, efficiency), motors (NEMA 17 pancake …
+  NEMA 34, holding torque / amps / mass), boards with their usable step
+  rate (RAMPS 10 k … Klipper RP2040 500 k) and firmware list, tools
+  (hotends, pellet and clay extruders, spindles, lasers, pen: mass, watts,
+  line width, feedstock kind), beds, hardware prices.
+- **`GantryLabKinematics`** (pure): steps/mm, CoreXY A = x + y / B = x − y
+  (H-bot the same on one belt, CoreXZ with z), delta carriages
+  `z + √(L² − d²)` + forward trilateration, `motor_velocity` (per-motor mm/s
+  per mm/s of tool: a CoreXY diagonal runs one motor at √2 and the other
+  not at all), force from torque (half the holding torque usable), belt
+  stretch, `screw_critical_rpm = 4.76e6 · d_root · C / L²`, beam sag
+  `F L³ / 48 E I`, the toolhead's ringing frequency.
+- **`GantryLabGcode`** reads moves with feed / E / line (G0–G3 with I J and
+  R arcs expanded to 1 mm chords, G20 / 21 / 28 / 90 / 91 / 92, M82 / 83,
+  M104 / 109 / 140 / 190, M3 / M5 with S ≤ 1000 read as laser power so a
+  laser program "extrudes"), and `to_toolpath` emits the game's Toolpath
+  shape (points + extruding, decimated) so the job store takes it.
+  `GantryLabMotion.plan` is the classic-jerk trapezoid planner (per-move
+  caps from feed, max feed, per-axis and per-motor step-rate caps,
+  `v_junction = jerk / |d₂ − d₁|`, backward then forward pass);
+  `sample(t)` is the scrub. `GantryLabSamples` generates seven real
+  programs sized to the machine (cube, vase, speed test, pocket, laser
+  raster, plotter, surfacing).
+- **`GantryLabFrame.layout`** is the geometry: the static frame (beams with
+  profile + `up`, parts, screws) and the moving ASSEMBLIES ({parent, base,
+  beams, parts, mass, axis}); `pose(spec, layout, tool_mm)` is the
+  kinematics as offsets (a bed-slinger's bed at `vy/2 − y`, a cube's bed at
+  `−z`, delta carriages at their heights), `belt_routes` / `delta_arms`
+  the drawn loops. Machine frame: X → local +X, Y → local +Z, Z up; the
+  work origin is the bed's front-left at its surface (`origin`); beads go
+  under `bead_parent` ("Bed" where the bed moves, else the root) at
+  `bead_origin`. A delta's carriage base is the TOWER CENTRELINE with the
+  pivot `carriage_r` inward (the delta-radius convention) — the first cut
+  put the base on the tower face and the drawn arms were 34 mm short.
+- **`GantryLabDesign.solve`** (cached by `key_of`) → layout, bom, motors
+  (steps/mm, resolution, speed caps, accel capable), limits for the
+  planner, stats, checks, `graph_preset`. Checks: step rate at the max feed
+  (× √2 on a shared belt) vs the board, acceleration vs torque and moving
+  mass, Z lift force, Tr8×8 back-driving a heavy bed, belt stretch, X-beam
+  sag (tolerance `sag_tol_mm` = max(process floor, a tenth of the line —
+  an 8 mm clay bead forgives 0.8 mm), router rail sag and upright flex,
+  screw whip (Z runs 10 mm/s on a Tr8×2, 30 on other screws, never the XY
+  feed), resolution vs the line, delta reach and arm ratio, H-bot racking,
+  driver count, 12 V above 120 mm/s, bed-slinger inertia past 300 mm, 2020
+  past 350 mm. `GantryLabBom`: cut list rounded to 5 mm packed first-fit
+  into 1.5 m stock, corner hardware per beam end, rails + carriages per
+  axis, belts (two motors for A/B), pulleys / idlers / screws / nuts /
+  couplers, motors + drivers, a PSU sized to the DC load, endstops, wiring,
+  cable chain, tool, bed, enclosure. `GantryLabExport`: Klipper
+  `printer.cfg` (kinematics, rotation_distance, delta arm / radius, input
+  shaper at the ringing estimate), Marlin `Configuration.h` defines, grbl
+  `$` settings, BOM CSV, cut list, design JSON (INF → null).
+- **`GantryLabBuilder`** (Node3D): the static frame as one "Mesh" (the
+  V-slot profile outline with a 6 mm groove per 20 mm cell, extruded;
+  parts as boxes, screws and motor shafts as cylinders; surface per
+  material key), a Node3D per assembly parented as the layout says (its
+  mesh carries `skip_prop_collision`), "Belts" rebuilt per pose, and three
+  DRIVER nodes `XDrive` / `YDrive` / `ZDrive` whose local position along
+  their axis is the tool in metres; `_process` follows the drivers
+  (`follow_drivers`, off in the studio), `set_tool_mm` is the one pose
+  call, `set_toolpath_preview` / `set_preview_progress` lay beads at true
+  scale on the bed node, `pick` tests per-part AABBs through the assembly
+  chain from LOCAL transforms (a studio node is picked before it is in a
+  tree).
+- **In the world** a placed gantry's record carries `gantry_spec` and kind
+  `gantry_machine` — NOT `cartesian_machine`, whose `CncMachineRuntime`
+  stretches a path over the GLB's axis window and draws the ghost at 40 %
+  of the footprint. `GantryRuntime` (gameplay/) attaches by MODEL ID, reads
+  the same `get_cnc_job_state` + `MachineJobStore` job and moves the
+  drivers in true mm (eased, snapping on a clock jump), beads on the bed
+  by progress. `PlacedPropService.seed_gantry_graph` (deferred on
+  placement) makes a `cartesian_machine` processor from
+  `GantryLabDesign.graph_preset` through `create_bound_generator_node`
+  (machine_role fdm_printer for an extruder, cnc_router otherwise;
+  inputs = the tool's feedstock — the new `filament` resource kind,
+  `plastic_flake`, `mud`; watts and work volume from the design);
+  `sync_gantry_graph` after Apply. The TOOLS preset "CNC Gantry
+  (designed)" carries an empty `gantry_spec` (placing it from the graph
+  builds the default bed-slinger). Modal Simulate → "Send to placed
+  machine" = `start_machine_job` with `to_toolpath` + the planner's time,
+  so the job's duration is the simulated one.
+- Gates: `gantrylab_selftest` (227), `tools/checks/gantrylab_designer_check.gd`
+  (41), tour stop `18e_gantrylab`. Not built: an NPC crew assembling it,
+  SCAD part models for pulleys / brackets (the scad_library has them),
+  the print-setup STL slicer on a gantry (the inspector's Load G-code / STL
+  works through the graph node), multi-tool heads.
 
 ## Maps and scene shell
 

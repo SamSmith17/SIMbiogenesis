@@ -153,6 +153,11 @@ const DYNAMIC_MODELS := {
 	# fallback is the default 3V 5/8 conduit dome (165 struts of 3/4" EMT).
 	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,
 		"mass_kg": 140.0, "form": "bundle", "source": "estimated"},
+	# A designed gantry packs as its extrusion bundle plus boxed parts; the
+	# real spec is GantryLabDesign.packed_spec (the record's gantry_spec).
+	# This fallback is the default 220 mm bed-slinger (~12 kg).
+	"gantry_machine": {"w_m": 0.70, "d_m": 0.35, "h_m": 0.30,
+		"mass_kg": 12.0, "form": "bundle", "source": "estimated"},
 	# Real spec comes from ContainerCatalog.packed_spec_for(container_id)
 	# (the drawer resolves the record's container_spec); this fallback is the
 	# 20' box (ISO 668 exterior + tare).

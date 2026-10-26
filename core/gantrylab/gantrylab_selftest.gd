@@ -16,7 +16,7 @@ extends SceneTree
 ## EXPECTED_CHECKS: a runtime error aborts a test function while PASS prints.
 ## --import first so the class_names register.
 
-const EXPECTED_CHECKS := 198
+const EXPECTED_CHECKS := 227
 var _pass := 0
 var _fail := 0
 
@@ -45,6 +45,7 @@ func _initialize() -> void:
 	_test_layouts()
 	_test_presets_and_bom()
 	_test_exports_and_samples()
+	_test_builder()
 	var total := _pass + _fail
 	print("GantryLab selftest: %d checks, %d passed, %d failed" % [total, _pass, _fail])
 	if total != EXPECTED_CHECKS:
@@ -386,3 +387,46 @@ func _test_exports_and_samples() -> void:
 	var pocket := GantryLabGcode.parse(GantryLabSamples.text(GantryLabSpec.for_application("wood"), "pocket"))
 	_check("pocket has arcs and rapids and no extrusion", bool(pocket["ok"]) and float(pocket["total_rapid_mm"]) > 0.0 and float(pocket["extrusion_mm"]) == 0.0 and str(pocket["dialect"]) == "grbl")
 	_check("library round trip", GantryLabPresets.load_library("user://no_such_gantry_library.json").is_empty())
+
+
+func _test_builder() -> void:
+	for kin in GantryLabSpec.KINEMATICS:
+		var s := GantryLabSpec.default_spec(kin)
+		var n := GantryLabBuilder.build_node(s, "M", {"record": true})
+		var mesh := n.get_node_or_null("Mesh") as MeshInstance3D
+		_check("%s builds a frame mesh" % kin, mesh != null and mesh.mesh != null and mesh.mesh.get_surface_count() >= 2)
+		_check("%s has drivers" % kin, n.get_node_or_null("XDrive") != null and n.get_node_or_null("YDrive") != null and n.get_node_or_null("ZDrive") != null)
+		var asm_count := 0
+		for name in (n as GantryLabBuilder).layout()["assemblies"]:
+			if n.find_child(str(name), true, false) != null:
+				asm_count += 1
+		_check("%s has every assembly node" % kin, asm_count == ((n as GantryLabBuilder).layout()["assemblies"] as Dictionary).size())
+		n.free()
+	var cx := GantryLabSpec.default_spec("corexy")
+	var b := GantryLabBuilder.build_node(cx, "M", {"record": true}) as GantryLabBuilder
+	var car := b.get_node("XBeam/XCarriage") as Node3D
+	var x0 := car.position.x
+	b.set_tool_mm(Vector3(50.0, 0.0, 0.0))
+	_check("set_tool_mm moves the carriage 50 mm", _approx(car.position.x - x0, 0.05, 1e-6))
+	b.set_drivers_mm(Vector3(80.0, 30.0, 10.0))
+	b._process(0.016)
+	_check("drivers drive the kinematics", _approx(car.position.x - x0, 0.08, 1e-6) and _approx(b.tool_mm().y, 30.0, 1e-6))
+	var belts := b.get_node("Belts") as MeshInstance3D
+	_check("belts drawn", belts.mesh != null and belts.mesh.get_surface_count() == 1)
+	var hit := GantryLabBuilder.pick(b, Vector3(0.0, 2.0, 0.0), Vector3(0, -1, 0))
+	_check("a ray from above hits something", not hit.is_empty())
+	var pts := PackedVector3Array([Vector3(10, 10, 0.2), Vector3(50, 10, 0.2), Vector3(50, 50, 0.2), Vector3(10, 50, 0.2)])
+	b.set_toolpath_preview(pts, PackedInt32Array([0, 1, 1, 1]), 0.4, Color.WHITE)
+	var beads := b.bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
+	_check("beads under the bed node", beads != null and b.bead_parent().name == "Bed" and beads.multimesh.instance_count == 3)
+	b.set_preview_progress(0.67)
+	_check("progress reveals beads", beads.multimesh.visible_instance_count == 2)
+	var size: Vector3 = b.get_meta("size_m")
+	_check("size meta", size.x > 0.3 and size.y > 0.3)
+	b.free()
+	var dl := GantryLabBuilder.build_node(GantryLabSpec.default_spec("delta"), "D", {}) as GantryLabBuilder
+	dl.set_tool_mm(Vector3(20.0, 0.0, 30.0))
+	var ca := dl.get_node("CarriageA") as Node3D
+	var cb := dl.get_node("CarriageB") as Node3D
+	_check("delta carriages differ off-centre", absf(ca.position.y - cb.position.y) > 1e-4)
+	dl.free()

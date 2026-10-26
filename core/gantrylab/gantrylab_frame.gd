@@ -179,7 +179,7 @@ static func _layout_bedslinger(s: Dictionary) -> Dictionary:
 	if float(guide_x["kg_m"]) > 0.0:
 		xbeam_parts.append(_part(Vector3(0, xb_y + _h(gf) * 0.5 + 0.004, gy + _w(gf) * 0.5 - 0.008), Vector3(xb_len - 0.02, 0.008, 0.012), "rail", str(guide_x["label"])))
 	# X carriage: the toolhead; tool tip at the work origin when tool = (0,0,0).
-	var tool_tip := Vector3(-vx * 0.5, bed_top, -vy * 0.5)
+	var tool_tip := Vector3(-vx * 0.5, bed_top, gy)
 	var car_parts: Array = [_part(Vector3(0, xb_y, gy + _w(gf) * 0.5 + 0.01), Vector3(0.07, 0.09, 0.012), "plate", "X carriage"),
 		_tool_part(s, Vector3(0, xb_y - 0.045, gy + _w(gf) * 0.5 + 0.03))]
 	var tool := GantryLabParts.tool(str(s["tool"]["id"]))
@@ -198,7 +198,7 @@ static func _layout_bedslinger(s: Dictionary) -> Dictionary:
 		"moving_kg": {"x": car_kg, "y": bed_kg, "z": xbeam_kg + car_kg},
 		"spans": {"x_beam_m": xb_len, "y_rail_m": base_len, "z_col_m": col_h - ph},
 		"anchors": {"gantry_y": gy, "col_x": col_x, "col_h": col_h, "xb_y": xb_y, "base_y0": y0, "base_len": base_len, "ph": ph, "bed_top": bed_top, "vy": vy},
-		"tool_tip_local": Vector3(0, -0.045 + 0.0, 0),
+		"bead_parent": "Bed", "bead_origin": Vector3(-vx * 0.5, bed_top, -vy * 0.5),
 	}
 
 
@@ -308,7 +308,7 @@ static func _layout_cube(s: Dictionary) -> Dictionary:
 		"moving_kg": {"x": car_kg, "y": xbeam_kg + car_kg, "z": bed_kg},
 		"spans": {"x_beam_m": xb_len, "y_rail_m": y_rail_len, "z_col_m": h - FOOT - pw},
 		"anchors": {"hx": hx, "hz": hz, "h": h, "pw": pw, "xb_y": xb_y, "xb_len": xb_len, "bed_top": bed_top, "vy": vy},
-		"tool_tip_local": Vector3(0, 0, 0),
+		"bead_parent": "Bed", "bead_origin": tool_tip,
 	}
 
 
@@ -379,7 +379,7 @@ static func _layout_delta(s: Dictionary) -> Dictionary:
 		"moving_kg": {"x": moving, "y": moving, "z": moving},
 		"spans": {"x_beam_m": 0.0, "y_rail_m": 0.0, "z_col_m": tower_h - FOOT, "arm_m": arm},
 		"anchors": {"tower_h": tower_h, "bed_top": bed_top, "pw": pw, "tower_r": tower_r},
-		"tool_tip_local": Vector3(0, 0, 0),
+		"bead_parent": "", "bead_origin": tool_tip,
 	}
 
 
@@ -483,7 +483,7 @@ static func _layout_router(s: Dictionary) -> Dictionary:
 		"moving_kg": {"x": car_kg, "y": g_kg, "z": zc_kg},
 		"spans": {"x_beam_m": xb_len, "y_rail_m": d, "z_col_m": up_h - FOOT - ph, "z_plate_m": zplate_h},
 		"anchors": {"hx": hx, "hz": hz, "xb_y": xb_y, "xb_len": xb_len, "bed_top": bed_top, "up_h": up_h, "gw": gw},
-		"tool_tip_local": Vector3(0, 0, 0),
+		"bead_parent": "", "bead_origin": tool_tip,
 	}
 
 

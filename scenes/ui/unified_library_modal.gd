@@ -274,6 +274,11 @@ func _populate() -> void:
 			"detail": "Geodesic domes, zomes and helix zomes: conduit, hubs, flat bars, rotegrity, plates → BOM + cut files.",
 		},
 		{
+			"kind": "gantrylab",
+			"label": "CNC gantry designer…",
+			"detail": "Printers, routers, lasers, plotters on V-slot: CoreXY, delta, bed-slinger… → kinematics sim, G-code, BOM, firmware config.",
+		},
+		{
 			"kind": "linkage_lab",
 			"label": "Linkage Lab… (N)",
 			"detail": "Design folding scissor-linkage structures (StarShade designer).",
@@ -436,7 +441,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "gantrylab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -509,6 +514,12 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "The dome designer needs a location map (TerrainLoader)."
+		"gantrylab":
+			if _loader != null and _loader.has_method("open_gantrylab"):
+				_loader.call("open_gantrylab")
+				close()
+			else:
+				_status.text = "The gantry designer needs a location map (TerrainLoader)."
 		"linkage_lab":
 			var main_node := get_tree().current_scene if get_tree() != null else null
 			if main_node != null and main_node.has_method("open_linkage_lab"):
@@ -577,6 +588,11 @@ func _place_structure(model_id: String) -> void:
 	if model_id == DomeLabBuilder.MODEL_ID:
 		if _loader != null and _loader.has_method("open_domelab"):
 			_loader.call("open_domelab")
+			close()
+			return
+	if model_id == GantryLabBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_gantrylab"):
+			_loader.call("open_gantrylab")
 			close()
 			return
 	if _loader != null and _loader.has_method("begin_structure_placement"):

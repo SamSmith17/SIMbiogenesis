@@ -151,6 +151,10 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		var dl_spec: Dictionary = extras.get("domelab_spec", extras) as Dictionary
 		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
+	if model_id == GantryLabBuilder.MODEL_ID:
+		var gl_spec: Dictionary = extras.get("gantry_spec", extras) as Dictionary
+		return GantryLabBuilder.build_node(gl_spec, "GantryMachine",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
 	if model_id == LinkageStructureBuilder.MODEL_ID:
 		var linkage_spec: Dictionary = extras.get("linkage_spec", extras) as Dictionary
 		return LinkageStructureBuilder.build_node(linkage_spec)
@@ -437,6 +441,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "domelab_structure", "label": "Dome or zome (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 3.0},
+		# Procedural CNC gantry (GantryLabBuilder): the gantry lab's designed
+		# printers, routers, lasers and plotters, with their job runtime.
+		{"id": "gantry_machine", "label": "CNC gantry (designed)",
+			"procedural": true, "preserve_scale": true, "category": "tools",
+			"target_height_m": 0.6},
 		# Procedural ground-mount PV array (PvArrayBuilder): cols × rows modules
 		# on a tilted rack facing local +Z (south at yaw 0). Bound to a graph
 		# array node; its facing drives that array's tilt / azimuth.

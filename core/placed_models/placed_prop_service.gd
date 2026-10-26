@@ -376,6 +376,9 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 	elif model_id == PalletRackBuilder.MODEL_ID:
 		# A rack with a sloped solar array owns a graph array, like a linkage.
 		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, prop_id)
+	elif model_id == GantryLabBuilder.MODEL_ID:
+		# A designed gantry is a cartesian_machine processor on the graph.
+		Callable(PlacedPropService, "seed_gantry_graph").call_deferred(main, prop_id)
 	elif model_id == BedBuilder.MODEL_ID:
 		_auto_tag_bed_space(main, prop_id)
 	elif model_id == FlatpackBuilder.MODEL_ID:
@@ -666,6 +669,69 @@ static func seed_pallet_rack_graph(main: Node, prop_id: String) -> bool:
 	return true
 
 
+## Bind a placed gantry to a fresh cartesian_machine processor built from its
+## design (GantryLabDesign.graph_preset), unless the record already carries a
+## live graph item. Idempotent: a re-placement of a bound prop keeps its node.
+static func seed_gantry_graph(main: Node, prop_id: String) -> bool:
+	if main == null or prop_id.is_empty():
+		return false
+	var sgv := _system_graph_view(main)
+	if sgv == null or not sgv.has_method("create_bound_generator_node"):
+		return false
+	var rec := get_prop_record(main, prop_id)
+	var existing := str(rec.get("graph_item_id", ""))
+	var model: Variant = sgv.get("model")
+	if not existing.is_empty() and model != null and not (model.get_item(existing) as Dictionary).is_empty():
+		return true
+	var spec: Dictionary = rec.get("gantry_spec", {}) as Dictionary
+	var d := GantryLabDesign.solve(spec)
+	var preset: Dictionary = d["graph_preset"]
+	var graph_link := {
+		"node_type": "processor", "label": str(preset["label"]), "icon": str(preset["icon"]),
+		"width": float(preset["width"]), "height": float(preset["height"]),
+		"specs": (preset["specs"] as Dictionary).duplicate(true),
+	}
+	var node_id := str(sgv.call("create_bound_generator_node", prop_id, graph_link))
+	if node_id.is_empty():
+		return false
+	update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	var prop := _find_prop_node(main, prop_id)
+	if prop != null:
+		var rt := prop.get_node_or_null("GantryRuntime")
+		if rt != null and rt.has_method("configure"):
+			rt.call("configure", node_id)
+	return true
+
+
+## A re-designed gantry pushes its new numbers (watts, work volume, tool,
+## feedstock) onto the bound processor.
+static func sync_gantry_graph(main: Node, prop_id: String) -> void:
+	if main == null or prop_id.is_empty():
+		return
+	var sgv := _system_graph_view(main)
+	if sgv == null:
+		return
+	var model: Variant = sgv.get("model")
+	if model == null:
+		return
+	var rec := get_prop_record(main, prop_id)
+	var iid := str(rec.get("graph_item_id", ""))
+	var item: Dictionary = {}
+	if not iid.is_empty():
+		item = model.get_item(iid)
+	if item.is_empty():
+		seed_gantry_graph(main, prop_id)
+		return
+	var d := GantryLabDesign.solve(rec.get("gantry_spec", {}) as Dictionary)
+	var fresh: Dictionary = (d["graph_preset"]["specs"] as Dictionary)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	for k in ["name", "machine_role", "print_persist", "cost", "watts", "filament_diameter_mm", "line_width_mm",
+			"layer_height_mm", "print_speed_mm_s", "nozzle_diameter_mm", "flake_density_g_cm3",
+			"work_x_mm", "work_y_mm", "work_z_mm", "inputs", "job_material_kind", "daily_note", "gantry_spec"]:
+		specs[k] = fresh[k]
+	model.update_item(iid, {"specs": specs, "label": str(fresh["name"])})
+
+
 static func remove_pallet_rack_graph(main: Node, prop_id: String) -> void:
 	if main == null or prop_id.is_empty():
 		return
@@ -805,6 +871,11 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		var rec_extra_dl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_dl.has("domelab_spec"):
 			extras["domelab_spec"] = rec_extra_dl["domelab_spec"]
+		extras["ghost_highlight"] = true
+	elif model_id == GantryLabBuilder.MODEL_ID:
+		var rec_extra_gl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_gl.has("gantry_spec"):
+			extras["gantry_spec"] = rec_extra_gl["gantry_spec"]
 		extras["ghost_highlight"] = true
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		var rec_extra_pv: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary

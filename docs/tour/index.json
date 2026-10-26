@@ -1117,12 +1117,40 @@
       "image": "domelab.jpg",
       "image_run": "2026-10-25T16:34:02",
       "image_commit": "d374786"
+    },
+    "gantrylab": {
+      "id": "gantrylab",
+      "title": "CNC gantry designer",
+      "chapter": "Build",
+      "summary": "Design a 3D printer, router, laser or plotter from V-slot extrusion: seven kinematics, real parts, the motor maths, G-code played at true speed, a priced BOM and a Klipper / Marlin / grbl config.",
+      "how": [
+        "Library → Structures → CNC gantry designer…",
+        "Pick what it is for, or a pattern (bed-slinger, Cartesian XY, CoreXY, CoreXZ, H-bot, delta, router) or a built-in machine",
+        "Size the work volume; choose the extrusion, guides, drives, motors, board, tool and bed",
+        "Kinematics: jog the tool and read what each motor does (A = X + Y on a CoreXY)",
+        "Simulate: a sample program or your own .gcode plays through the planner at real speed; send it to the placed machine",
+        "Checks: step rate, torque, belt stretch, gantry sag, screw whip, delta reach; Files: printer.cfg, Configuration.h, grbl $, BOM, cut list"
+      ],
+      "action": "",
+      "button": "CNC gantry designer…",
+      "key": "",
+      "open_hints": [
+        "Click CNC gantry designer…"
+      ],
+      "world": "mtvernon",
+      "blurb": "A parametric designer for CNC gantries in the OpenBuilds / RepRap vocabulary: V-slot 2020 to C-Beam, V-wheels or linear rails, GT2 belts, lead and ball screws, NEMA 17 to 34, the boards from RAMPS to Klipper, hotends, pellet and clay extruders, spindles and lasers. Seven kinematic patterns each with their reasons, and the maths behind them made visible: jog the tool and watch the CoreXY motors turn against each other, the delta carriages climb their towers. Real G-code — a calibration cube, a spiral vase, a router pocket, your own file — runs through a trapezoid motion planner at true speed, with every corner slow-down, so the machine's limits can be seen before it is built. The checks are the engineering: step rate against the board, torque against the moving mass, belt stretch, gantry sag, screw whip, delta reach. The bill of materials prices every part and packs the cut list into stock lengths; the exported printer.cfg, Configuration.h and grbl settings carry the same numbers the simulation ran on. Placed in the world, the machine runs the job on the site's clock, drawing filament, flake or clay and power on the systems graph.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "gantrylab.jpg",
+      "image_run": "2026-10-25T22:01:31",
+      "image_commit": "f886c8a"
     }
   },
   "last_run": {
-    "label": "tour_20261025-163232",
-    "generated": "2026-10-25T16:34:02",
-    "git_commit": "d374786",
+    "label": "tour_20261025-215938",
+    "generated": "2026-10-25T22:01:31",
+    "git_commit": "f886c8a",
     "passed": 1,
     "total": 1,
     "video_secs": null

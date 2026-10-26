@@ -132,6 +132,7 @@ const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_mod
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const FLATPACK_DESIGNER_MODAL_SCRIPT := preload("res://scenes/ui/flatpack_designer_modal.gd")
 const DOMELAB_MODAL_SCRIPT := preload("res://scenes/ui/domelab_modal.gd")
+const GANTRYLAB_MODAL_SCRIPT := preload("res://scenes/ui/gantrylab_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
 const CONFIG_PATH := "user://terrain_config.cfg"
@@ -348,6 +349,7 @@ var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _flatpack_designer_ui: Control = null
 var _domelab_ui: Control = null
+var _gantrylab_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
 ## {name, poly, panel_count, watts, base_y, tilt, azimuth, tag, added}. The player
@@ -12915,6 +12917,7 @@ func _setup_placed_props() -> void:
 	_setup_pallet_rack_builder_ui()
 	_setup_flatpack_designer_ui()
 	_setup_domelab_ui()
+	_setup_gantrylab_ui()
 	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
 	call_deferred("_consume_design_context")
@@ -13502,6 +13505,58 @@ func begin_domelab_placement(domelab_spec: Dictionary) -> bool:
 	var r: Dictionary = PlacedPropService.begin_placement(_main, DomeLabBuilder.MODEL_ID, {
 		"record_extra": {"domelab_spec": DomeLabSpec.to_json_safe(domelab_spec),
 			"collision_enabled": true},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
+
+
+## The CNC gantry designer (scenes/ui/gantrylab_modal.gd), on its own
+## CanvasLayer like the dome designer.
+func _setup_gantrylab_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "GantryLabLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "GantryLabModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(GANTRYLAB_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_gantrylab_ui = ui
+
+
+func open_gantrylab(spec: Dictionary = {}) -> void:
+	if _gantrylab_ui != null and _gantrylab_ui.has_method("open"):
+		_gantrylab_ui.call("open", spec)
+
+
+func open_gantrylab_for_prop(prop_id: String) -> void:
+	if _gantrylab_ui != null and _gantrylab_ui.has_method("open_for_prop"):
+		_gantrylab_ui.call("open_for_prop", prop_id)
+
+
+func gantrylab_designer() -> Control:
+	return _gantrylab_ui
+
+
+## Place a designed gantry: the record carries the spec and the kind
+## "gantry_machine" (NOT "cartesian_machine", whose runtime would stretch the
+## path over the GLB axis window); the graph node is seeded on placement.
+func begin_gantrylab_placement(gantry_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, GantryLabBuilder.MODEL_ID, {
+		"record_extra": {"gantry_spec": GantryLabSpec.to_json_safe(gantry_spec),
+			"kind": "gantry_machine", "collision_enabled": true},
 	})
 	if not bool(r.get("ok", false)):
 		return false

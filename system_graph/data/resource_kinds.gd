@@ -90,6 +90,15 @@ const BUILTIN: Dictionary = {
 		"abbrev": "🫧",
 		"flow_ref_rate": 10.0,
 	},
+	# 1.75 / 2.85 mm thermoplastic filament on spools (PLA, PETG, recycled):
+	# what a designed gantry's hotend draws (GantryLabParts.TOOLS).
+	"filament": {
+		"display": "Filament",
+		"color": Color(0.880, 0.560, 0.260, 1.0),
+		"unit": "kg",
+		"abbrev": "🧵",
+		"flow_ref_rate": 0.2,
+	},
 	"plastic_sheet": {
 		"display": "Recycled Plastic Sheet",
 		"color": Color(0.450, 0.720, 0.820, 1.0),

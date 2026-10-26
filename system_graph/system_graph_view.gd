@@ -5967,6 +5967,10 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 		# Pass the current axis-tag profile so the 3D runtime binds even before a
 		# save; the runtime also refreshes from the store on bind.
 		record_extra["machine_profile"] = CartesianMachineProfile.get_profile(model_id).to_dict()
+	if kind == "gantry_machine" or model_id == GantryLabBuilder.MODEL_ID:
+		# A designed gantry placed from its graph preset carries its design.
+		record_extra["kind"] = "gantry_machine"
+		record_extra["gantry_spec"] = specs.get("gantry_spec", GantryLabSpec.to_json_safe({}))
 	if kind == "pp_beam_extruder" or model_id == "pp_beam_extruder":
 		record_extra["kind"] = "pp_beam_extruder"
 		record_extra["beam_mesh_name"] = str(specs.get("beam_mesh_name",

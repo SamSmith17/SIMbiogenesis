@@ -153,6 +153,7 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#domelab"><img src="docs/tour/domelab.jpg" width="260" alt="Dome & zome designer"></a><br><b>Dome & zome designer</b><br><sub>Dome & zome designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#gantrylab"><img src="docs/tour/gantrylab.jpg" width="260" alt="CNC gantry designer"></a><br><b>CNC gantry designer</b><br><sub>CNC gantry designer…</sub></td>
 </tr>
 </table>
 
