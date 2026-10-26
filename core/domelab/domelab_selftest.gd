@@ -17,7 +17,7 @@ extends SceneTree
 ## error, and the 3D builder's picking. Carries EXPECTED_CHECKS: a runtime
 ## error aborts a test function while PASS still prints.
 
-const EXPECTED_CHECKS := 156
+const EXPECTED_CHECKS := 161
 
 var _pass := 0
 var _fail := 0
@@ -564,6 +564,38 @@ func _test_builder() -> void:
 		ok = ok and m != null and m.mesh.get_surface_count() > 0
 		n.free()
 	_check("every preset builds a mesh", ok)
+	# The look: a tube shades ROUND (radial normals that differ across a
+	# wall triangle) while a flat slab keeps one normal per face — nothing
+	# is smoothed across edges, which is what made every dome a bubble.
+	var strut_arrays: Array = mi.mesh.surface_get_arrays(0)
+	var sn: PackedVector3Array = strut_arrays[Mesh.ARRAY_NORMAL]
+	var round_tube := false
+	for i in range(0, mini(sn.size(), 600), 3):
+		if sn[i].distance_to(sn[i + 2]) > 0.3:
+			round_tube = true
+			break
+	_check("builder: a conduit tube shades round", round_tube)
+	var plate := DomeLabBuilder.build_node(DomeLabPresets.builtin("plate_dome")["spec"], "Plate")
+	var pmi := plate.get_node_or_null("Mesh") as MeshInstance3D
+	var pn: PackedVector3Array = (pmi.mesh.surface_get_arrays(0) as Array)[Mesh.ARRAY_NORMAL]
+	var flat := pn.size() > 0
+	for i in range(0, pn.size(), 3):
+		if pn[i].distance_to(pn[i + 1]) > 1e-4 or pn[i].distance_to(pn[i + 2]) > 1e-4:
+			flat = false
+			break
+	_check("builder: a plate keeps flat normals", flat, str(pn.size()))
+	plate.free()
+	# Finishes follow the stock: galvanised conduit, matte tarp, clear glazing.
+	var strut_m := mi.mesh.surface_get_material(0) as StandardMaterial3D
+	_check("conduit draws as galvanised steel", strut_m != null and strut_m.metallic > 0.5 and strut_m.roughness > 0.4, str(strut_m))
+	var tarp := spec.duplicate(true)
+	tarp["face"]["material"] = "tarp_pe"
+	var tm := DomeLabBuilder._material_for("panel", DomeLabDesign.solve(tarp), false) as StandardMaterial3D
+	_check("a tarp is matte and translucent", tm.roughness > 0.9 and tm.metallic < 0.01 and tm.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED, str(tm))
+	var glz := spec.duplicate(true)
+	glz["face"]["material"] = "polycarb_4"
+	var gm := DomeLabBuilder._material_for("panel", DomeLabDesign.solve(glz), false) as StandardMaterial3D
+	_check("polycarbonate is glossy, clear glazing", gm.roughness < 0.2 and gm.albedo_color.a < 0.9, str(gm))
 	node.free()
 	half.free()
 	_check("packed spec of a nexorade uses the slat", str(DomeLabDesign.packed_spec(

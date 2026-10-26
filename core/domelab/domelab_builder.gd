@@ -90,15 +90,16 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 		var key := "hl" if str(st["label"]) == highlight else strut_mat_key
 		var pa := verts[a] + off
 		var pb := verts[b] + off
-		# Bars lie flat on the surface; lumber / beams / ribs stand on edge.
-		var across := nm if kind == "bar" else (pb - pa).cross(nm).normalized()
+		# Bars lie flat on the surface (thickness along the normal); lumber /
+		# beams stand on edge (the deep side along the normal); tubes are round.
 		var w := strut_w
 		var t := strut_t
 		if kind == "bar":
-			# across = the normal; thickness along it, width tangential.
 			add_prism.call(key, pa, pb, nm, t, w, false)
+		elif kind in ["lumber", "beam"]:
+			add_prism.call(key, pa, pb, nm, w, t, false)
 		else:
-			add_prism.call(key, pa, pb, across, w, t, round_)
+			add_prism.call(key, pa, pb, (pb - pa).cross(nm).normalized(), w, t, round_)
 		if record:
 			picks.append({"kind": "strut", "id": str(st["label"]), "a": pa, "b": pb, "r": maxf(w, t) * 0.6,
 				"edge": int(st["edge"])})
@@ -226,7 +227,10 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 		if not sts.has(key) or not any.has(key):
 			continue
 		var st: SurfaceTool = sts[key]
-		st.generate_normals()
+		# ⚠ Never generate_normals() here: SurfaceTool's default smooth group
+		# merges every vertex by position, so a dome's flat panels and the
+		# prisms' crisp edges rendered as one rounded "bubble". Every emitter
+		# below writes the normal it means.
 		var arrays := st.commit_to_arrays()
 		if arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
 			continue
@@ -248,8 +252,9 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 # ---------------------------------------------------------------------------
 
 ## A prism from a to b: `across` is the direction of the W side (the other
-## side, T, is perpendicular to both); round_ makes an 8-sided tube of
-## diameter W.
+## side, T, is perpendicular to both); round_ makes a tube of diameter W
+## (8 sides for a strut, 16 for anything wider than 6 cm) with RADIAL
+## normals, so it shades as a cylinder while a flat prism keeps hard edges.
 static func _prism(st: SurfaceTool, a: Vector3, b: Vector3, across: Vector3, w: float, t: float, round_: bool) -> void:
 	var axis := b - a
 	var L := axis.length()
@@ -265,7 +270,7 @@ static func _prism(st: SurfaceTool, a: Vector3, b: Vector3, across: Vector3, w: 
 	var v := axis.cross(u).normalized()
 	var ring: Array = []
 	if round_:
-		var n := 8
+		var n := 8 if w < 0.06 else 16
 		for i in n:
 			var ang := TAU * i / n
 			ring.append(u * (cos(ang) * w * 0.5) + v * (sin(ang) * w * 0.5))
@@ -276,8 +281,13 @@ static func _prism(st: SurfaceTool, a: Vector3, b: Vector3, across: Vector3, w: 
 	for i in n:
 		var r0: Vector3 = ring[i]
 		var r1: Vector3 = ring[(i + 1) % n]
-		var nrm := (r0 + r1).normalized()
-		_quad(st, a + r0, b + r0, b + r1, a + r1, nrm)
+		if round_:
+			var n0 := r0.normalized()
+			var n1 := r1.normalized()
+			_tri_n(st, a + r0, b + r0, b + r1, n0, n0, n1)
+			_tri_n(st, a + r0, b + r1, a + r1, n0, n1, n1)
+		else:
+			_quad(st, a + r0, b + r0, b + r1, a + r1, (r0 + r1).normalized())
 	# End caps.
 	for i in range(1, n - 1):
 		_tri(st, a + ring[0], a + ring[i + 1], a + ring[i], -axis)
@@ -290,18 +300,26 @@ static func _quad(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, p3: Ve
 
 
 static func _tri(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, n: Vector3) -> void:
-	# Godot's front face winds clockwise seen from outside: flip if the
-	# geometric normal disagrees with the intended one.
+	_tri_n(st, p0, p1, p2, n, n, n)
+
+
+## A triangle with a normal per vertex (a round tube's wall). Godot's front
+## face winds clockwise seen from outside: the winding is flipped when the
+## geometric normal disagrees with the intended one.
+static func _tri_n(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, n0: Vector3, n1: Vector3, n2: Vector3) -> void:
 	var g := (p1 - p0).cross(p2 - p0)
-	if g.dot(n) > 0.0:
-		var tmp := p1
+	if g.dot(n0 + n1 + n2) > 0.0:
+		var tp := p1
 		p1 = p2
-		p2 = tmp
-	st.set_normal(n)
+		p2 = tp
+		var tn := n1
+		n1 = n2
+		n2 = tn
+	st.set_normal(n0)
 	st.add_vertex(p0)
-	st.set_normal(n)
+	st.set_normal(n1)
 	st.add_vertex(p1)
-	st.set_normal(n)
+	st.set_normal(n2)
 	st.add_vertex(p2)
 
 
@@ -331,6 +349,31 @@ static func _slab(st: SurfaceTool, poly: PackedVector2Array, fr: Transform3D, t:
 	return tris
 
 
+## The StructureMaterials finish for a DomeLabMaterials look.
+static func kind_for_look(look: String) -> int:
+	match look:
+		"galv": return StructureMaterials.Kind.GALVANISED
+		"alu": return StructureMaterials.Kind.ALUMINIUM
+		"paint": return StructureMaterials.Kind.PAINTED_METAL
+		"wood": return StructureMaterials.Kind.WOOD
+		"ply": return StructureMaterials.Kind.PLYWOOD
+		"glazing": return StructureMaterials.Kind.GLAZING
+		"fabric": return StructureMaterials.Kind.FABRIC
+	return StructureMaterials.Kind.PLASTIC
+
+
+## The colour a part is drawn in: the player's pick, or — while the pick is
+## still the default — the stock's own colour, so swapping EMT for bamboo
+## changes the look without a trip to the colour rows.
+static func _part_color(cols: Dictionary, key: String, stock: Dictionary) -> Color:
+	var col: Color = cols[key]
+	if col.is_equal_approx(DomeLabSpec.COLOR_DEFAULTS[key]):
+		var own: Variant = stock.get("color", null)
+		if own is Color:
+			return own
+	return col
+
+
 static func _material_for(key: String, d: Dictionary, ghost: bool) -> Material:
 	var s: Dictionary = d["spec"]
 	var cols: Dictionary = s["colors"]
@@ -343,30 +386,39 @@ static func _material_for(key: String, d: Dictionary, ghost: bool) -> Material:
 			m.emission = HIGHLIGHT * 0.4
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"panel":
-			var pmat: Dictionary = (d["panels"] as Dictionary).get("material", {})
-			var c: Color = pmat.get("color", cols["face"])
-			var sheet_col: Color = cols.get("face", c)
-			var col := Color(sheet_col.r, sheet_col.g, sheet_col.b, c.a) if c.a < 0.99 else sheet_col
-			m = StructureMaterials.make(StructureMaterials.Kind.PANEL, col)
+			var sheet_id := str(s["face"]["material"])
+			var pmat: Dictionary = (d["panels"] as Dictionary).get("material", DomeLabMaterials.sheet(sheet_id))
+			var look := DomeLabMaterials.sheet_look(sheet_id)
+			var col := _part_color(cols, "face", pmat)
+			# A translucent sheet keeps its translucency whatever colour it is painted.
+			var own_a := float((pmat.get("color", Color.WHITE) as Color).a)
+			if own_a < 0.99 and col.a > 0.99:
+				col.a = own_a
+			m = StructureMaterials.make(kind_for_look(look), col)
+			if look == "ply":
+				# The shared plywood grain is sized for rack decking; on a
+				# metre-wide panel it read as soft cloud blotches.
+				m.uv1_scale = Vector3(5.0, 5.0, 5.0)
+				m.normal_scale = 0.05
 			if col.a < 0.99:
 				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+			if look == "glazing":
+				# Both faces of a clear sheet catch the light.
+				m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"hub":
 			m = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, cols["hub"])
 		"slat":
-			var slat: Dictionary = (d["nexorade"] as Dictionary).get("slat", {})
-			m = StructureMaterials.make(StructureMaterials.Kind.PANEL, slat.get("color", cols["strut"]))
+			var slat_id := str(s["nexorade"]["slat"])
+			var slat: Dictionary = (d["nexorade"] as Dictionary).get("slat", DomeLabMaterials.strut(slat_id))
+			m = StructureMaterials.make(kind_for_look(DomeLabMaterials.strut_look(slat_id)), _part_color(cols, "strut", slat))
 		_:
-			var mat := DomeLabMaterials.strut(str(s["strut"]["material"]))
-			var kind := str(mat.get("kind", "tube"))
-			var sk := StructureMaterials.Kind.PAINTED_METAL
-			if kind in ["lumber"] or str(s["strut"]["material"]).begins_with("ply") or str(s["strut"]["material"]).begins_with("bamboo"):
-				sk = StructureMaterials.Kind.WOOD
-			elif kind == "beam" or str(s["strut"]["material"]).begins_with("hdpe") or str(s["strut"]["material"]).begins_with("pvc"):
-				sk = StructureMaterials.Kind.PANEL
-			var col: Color = cols["strut"]
-			if col.is_equal_approx(DomeLabSpec.COLOR_DEFAULTS["strut"]):
-				col = mat.get("color", col)
-			m = StructureMaterials.make(sk, col)
+			var strut_id := str(s["strut"]["material"])
+			var mat := DomeLabMaterials.strut(strut_id)
+			m = StructureMaterials.make(kind_for_look(DomeLabMaterials.strut_look(strut_id)), _part_color(cols, "strut", mat))
+	# Closed prisms and slabs: back faces are never seen, and culling them
+	# keeps a translucent sheet from drawing its inside through its outside.
+	if key != "hl" and m.cull_mode == BaseMaterial3D.CULL_DISABLED and m.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+		m.cull_mode = BaseMaterial3D.CULL_BACK
 	if ghost:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		m.albedo_color = Color(m.albedo_color, 0.55)

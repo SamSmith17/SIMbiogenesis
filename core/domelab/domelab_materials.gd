@@ -130,6 +130,19 @@ const BOLTS := {
 }
 const BOLT_ORDER := ["m6", "m8", "m10", "5_16", "3_8"]
 
+## How each stock is DRAWN (DomeLabBuilder → StructureMaterials), apart from
+## its colour: galv = bare zinc, alu = mill aluminium, paint = painted steel,
+## plastic = PVC / HDPE / PP, wood = sawn lumber, ply = plywood, glazing =
+## clear sheet, fabric = tarp / canvas.
+const STRUT_LOOK := {"emt_12": "galv", "emt_34": "galv", "emt_1": "galv", "emt_114": "galv",
+	"steel_sq_1": "paint", "alu_tube_1": "alu", "pvc_34": "plastic", "pvc_1": "plastic",
+	"wood_2x2": "wood", "wood_2x4": "wood", "bamboo_40": "wood", "pp_beam_40": "plastic",
+	"hdpe_bar_50x6": "plastic", "hdpe_bar_75x10": "plastic", "ply_bar_12x75": "ply",
+	"ply_rib_18x90": "ply", "steel_bar_25x3": "paint", "alu_bar_40x3": "alu"}
+const SHEET_LOOK := {"none": "fabric", "tarp_pe": "fabric", "canvas": "fabric", "ply_6": "ply",
+	"ply_12": "ply", "polycarb_6": "glazing", "polycarb_4": "glazing", "steel_06": "paint",
+	"alu_1": "alu", "hdpe_3": "plastic", "pp_sheet_8": "plastic", "corflute_5": "plastic"}
+
 const STEEL_KG_M3 := 7850.0
 const ALU_KG_M3 := 2700.0
 const PLA_KG_M3 := 1240.0
@@ -145,6 +158,14 @@ static func sheet(id: String) -> Dictionary:
 
 static func bolt(id: String) -> Dictionary:
 	return BOLTS.get(id, BOLTS["3_8"])
+
+
+static func strut_look(id: String) -> String:
+	return str(STRUT_LOOK.get(id, "galv"))
+
+
+static func sheet_look(id: String) -> String:
+	return str(SHEET_LOOK.get(id, "plastic"))
 
 
 ## The section's outside size across (mm): tube OD, bar width.

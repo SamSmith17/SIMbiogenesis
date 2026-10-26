@@ -19,7 +19,7 @@ extends Object
 ##     no per-frame work, no custom shaders. Metal kinds get a normal map only
 ##     (uniform colour); wood/ply also get a subtle albedo-variation map.
 
-enum Kind { PAINTED_METAL, HARDWARE_METAL, WOOD, PLYWOOD, PANEL }
+enum Kind { PAINTED_METAL, HARDWARE_METAL, WOOD, PLYWOOD, PANEL, GALVANISED, ALUMINIUM, PLASTIC, GLAZING, FABRIC }
 
 ## NoiseTexture2D cache keyed by a descriptor string — one small texture per unique
 ## (kind, role) reused by every material instance.
@@ -74,6 +74,41 @@ static func make(kind: int, base_color: Color, world_triplanar: bool = false) ->
 			m.metallic_specular = 0.6
 			m.roughness = 0.18
 			m.uv1_scale = Vector3(4.0, 4.0, 4.0)
+		Kind.GALVANISED:
+			# Bare hot-dip zinc (EMT conduit, fence pipe): a dull metal mottled by
+			# its spangle, never a mirror.
+			m.metallic = 0.72
+			m.metallic_specular = 0.5
+			m.roughness = 0.52
+			m.uv1_scale = Vector3(2.4, 2.4, 2.4)
+			_apply_albedo_grain(m, "galv", 0.88, 1.0, 2.6)
+			_apply_normal(m, "hardware", 0.04, 1.6)
+		Kind.ALUMINIUM:
+			# Mill-finish aluminium: brighter and smoother than zinc.
+			m.metallic = 0.8
+			m.metallic_specular = 0.55
+			m.roughness = 0.38
+			m.uv1_scale = Vector3(2.0, 2.0, 2.0)
+			_apply_normal(m, "paint", 0.03, 1.2)
+		Kind.PLASTIC:
+			# Extruded or moulded polymer (PVC, HDPE, PP): a dielectric with a
+			# soft sheen and no grain.
+			m.metallic = 0.0
+			m.metallic_specular = 0.5
+			m.roughness = 0.58
+		Kind.GLAZING:
+			# Clear sheet (polycarbonate, acrylic): glossy dielectric. The caller
+			# sets the alpha and the transparency mode.
+			m.metallic = 0.0
+			m.metallic_specular = 0.7
+			m.roughness = 0.1
+		Kind.FABRIC:
+			# Tarp, canvas, shade cloth: fully matte with a faint weave.
+			m.metallic = 0.0
+			m.metallic_specular = 0.15
+			m.roughness = 0.96
+			m.uv1_scale = Vector3(6.0, 6.0, 6.0)
+			_apply_albedo_grain(m, "fabric", 0.9, 1.0, 5.0)
 	return m
 
 

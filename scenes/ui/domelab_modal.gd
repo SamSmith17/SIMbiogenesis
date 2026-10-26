@@ -64,6 +64,7 @@ var _studio: Node3D
 var _holder: Node3D
 var _camera: Camera3D
 var _sheet_canvas: Control
+var _sheet_scroll: ScrollContainer
 var _hub_canvas: Control
 var _schedule_scroll: ScrollContainer
 var _schedule_text: RichTextLabel
@@ -76,6 +77,7 @@ var _size_box: VBoxContainer
 var _conn_box: VBoxContainer
 var _face_box: VBoxContainer
 var _fab_box: VBoxContainer
+var _color_box: VBoxContainer
 var _parts_box: VBoxContainer
 var _bom_lbl: Label
 var _bom_box: VBoxContainer
@@ -359,11 +361,16 @@ func _build_centre() -> Control:
 	_viewport.size = Vector2i(900, 640)
 	_vp_container.add_child(_viewport)
 	_build_studio_world()
+	_sheet_scroll = ScrollContainer.new()
+	_sheet_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_sheet_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_sheet_scroll.visible = false
+	_view_stack.add_child(_sheet_scroll)
 	_sheet_canvas = SheetCanvas.new()
-	_sheet_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_sheet_canvas.visible = false
+	_sheet_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_sheet_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_sheet_canvas.set("owner_modal", self)
-	_view_stack.add_child(_sheet_canvas)
+	_sheet_scroll.add_child(_sheet_canvas)
 	_hub_canvas = HubCanvas.new()
 	_hub_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_hub_canvas.visible = false
@@ -417,6 +424,8 @@ func _build_centre() -> Control:
 	UITheme.style_button(clear)
 	clear.pressed.connect(func(): _set_highlight(""))
 	bar.add_child(clear)
+	var reset_view := IconButton.make("scan", "Frame the structure", func(): _yaw = 0.8; _pitch = 0.35; _frame_camera())
+	bar.add_child(reset_view)
 	_hover_lbl = Label.new()
 	_hover_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hover_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -434,29 +443,55 @@ func _build_studio_world() -> void:
 	_viewport.add_child(_studio)
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
+	# A dark backdrop, but the AMBIENT and the reflections come from a soft
+	# overcast sky: a flat ambient colour lit every face of a dome the same,
+	# which is what made facets read as one smooth bubble. The sky grades
+	# brighter overhead, so the top faces, the sides and the undersides each
+	# take a different tone, and SSAO darkens the hub corners.
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = Color(0.035, 0.043, 0.063)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.55, 0.58, 0.64)
-	e.ambient_light_energy = 0.6
+	var skymat := ProceduralSkyMaterial.new()
+	skymat.sky_top_color = Color(0.62, 0.68, 0.78)
+	skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
+	skymat.ground_horizon_color = Color(0.22, 0.21, 0.20)
+	skymat.ground_bottom_color = Color(0.08, 0.08, 0.08)
+	skymat.sun_angle_max = 10.0
+	skymat.sun_curve = 0.2
+	var sky := Sky.new()
+	sky.sky_material = skymat
+	sky.radiance_size = Sky.RADIANCE_SIZE_128
+	e.sky = sky
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	e.ambient_light_sky_contribution = 1.0
+	e.ambient_light_energy = 0.9
+	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	e.ssao_enabled = true
+	e.ssao_radius = 0.5
+	e.ssao_intensity = 1.6
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.tonemap_exposure = 1.05
 	env.environment = e
 	_studio.add_child(env)
 	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-50, 35, 0)
-	key.light_energy = 1.25
+	key.rotation_degrees = Vector3(-48, 35, 0)
+	key.light_energy = 1.5
+	key.light_color = Color(1.0, 0.96, 0.9)
 	key.shadow_enabled = true
+	key.light_angular_distance = 1.2
+	key.directional_shadow_max_distance = 80.0
+	key.shadow_normal_bias = 1.5
 	_studio.add_child(key)
 	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-25, -140, 0)
-	fill.light_energy = 0.35
+	fill.rotation_degrees = Vector3(-20, -140, 0)
+	fill.light_energy = 0.25
+	fill.light_color = Color(0.8, 0.88, 1.0)
 	_studio.add_child(fill)
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(200, 200)
 	ground.mesh = plane
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.20, 0.19, 0.18)
+	gmat.albedo_color = Color(0.13, 0.125, 0.12)
 	gmat.roughness = 0.95
 	ground.material_override = gmat
 	_studio.add_child(ground)
@@ -500,6 +535,9 @@ func _build_right() -> Control:
 	sec = Collapsible.make("Fabrication", false)
 	box.add_child(sec)
 	_fab_box = sec.body
+	sec = Collapsible.make("Colours", false)
+	box.add_child(sec)
+	_color_box = sec.body
 	box.add_child(SectionHeader.make("Checks", "circle-check"))
 	_warn_box = VBoxContainer.new()
 	box.add_child(_warn_box)
@@ -991,6 +1029,24 @@ func _build_settings_rows() -> void:
 	var sh := _spin(0, 12000, 10, " mm", func(v): _edit("fabrication", "sheet_h_mm", float(v)))
 	sh.name = "sheet_h_mm"
 	_row(_fab_box, "Sheet length (0 = stock)", sh)
+	# --- colours -----------------------------------------------------------
+	_clear(_color_box)
+	for ck in [["strut", "Struts", "The stock's own colour until you pick one"],
+			["hub", "Hubs and bolts", ""],
+			["face", "Faces", "The sheet's own colour (and translucency) until you pick one"]]:
+		var k := str(ck[0])
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+		var pick := ColorPickerButton.new()
+		pick.name = "col_" + k
+		pick.edit_alpha = k == "face"
+		pick.custom_minimum_size = Vector2(0, 26)
+		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pick.color_changed.connect(func(c): _edit("colors", k, c))
+		row.add_child(pick)
+		var reset := IconButton.make("undo-2", "Back to the stock's colour", func(): _edit("colors", k, DomeLabSpec.COLOR_DEFAULTS[k]))
+		row.add_child(reset)
+		_row(_color_box, str(ck[1]), row, str(ck[2]))
 
 
 func _sync_settings() -> void:
@@ -1060,6 +1116,19 @@ func _sync_settings() -> void:
 			"kerf_mm": _set_ctl(c, float(fab["kerf_mm"]))
 			"sheet_w_mm": _set_ctl(c, float(fab["sheet_w_mm"]))
 			"sheet_h_mm": _set_ctl(c, float(fab["sheet_h_mm"]))
+	var cols: Dictionary = _spec["colors"]
+	for c in _all_controls(_color_box):
+		if c is ColorPickerButton:
+			var k := str(c.name).trim_prefix("col_")
+			var shown: Color = cols[k]
+			if shown.is_equal_approx(DomeLabSpec.COLOR_DEFAULTS[k]):
+				# Show the colour the part is really drawn in.
+				var stock: Dictionary = DomeLabMaterials.sheet(str(_spec["face"]["material"])) if k == "face" \
+					else (DomeLabMaterials.strut(str(_spec["strut"]["material"])) if k == "strut" else {})
+				var own: Variant = stock.get("color", null)
+				if own is Color:
+					shown = own
+			(c as ColorPickerButton).color = shown
 	_suppress = false
 
 
@@ -1277,7 +1346,7 @@ func _on_forget_design() -> void:
 func _show_view() -> void:
 	var t := _tabs.current_tab
 	_vp_container.visible = t == 0
-	_sheet_canvas.visible = t == 1
+	_sheet_scroll.visible = t == 1
 	_hub_canvas.visible = t == 2
 	_schedule_scroll.visible = t == 3
 	_explode_slider.get_parent().visible = t == 0
@@ -1552,13 +1621,20 @@ class SheetCanvas extends Control:
 		var sw := float(pn["sheet"]["w"])
 		var sh := float(pn["sheet"]["h"])
 		var n := sheets.size()
-		var pad := 18.0
-		var top := 34.0
-		var cols := mini(n, maxi(1, int(floor((size.x - pad) / 190.0))))
+		var pad := 28.0
+		var top := 52.0
+		# Every sheet is drawn at a READABLE size (about 300 px across its
+		# short side) and the view scrolls; shrinking 35 sheets to fit one
+		# screen made each a thumbnail nobody could read a label off.
+		var short_px := 300.0 if sw <= sh else 600.0
+		var cell_w := short_px if sw <= sh else short_px
+		var k := cell_w / sw
+		var cell_h := sh * k
+		var cols := clampi(int(floor((size.x - pad) / (cell_w + pad))), 1, maxi(n, 1))
 		var rows := int(ceil(float(n) / cols))
-		var cell_w := (size.x - pad * (cols + 1)) / cols
-		var cell_h := (size.y - top - pad * rows) / rows
-		var k := minf(cell_w / sw, cell_h / sh)
+		var want_h := top + rows * (cell_h + pad) + pad
+		if absf(custom_minimum_size.y - want_h) > 0.5:
+			custom_minimum_size.y = want_h
 		var hl := str(owner_modal.call("highlight"))
 		draw_string(font, Vector2(pad, 24), "%s · %s × %s · %s" % [str(pn["material"]["label"]),
 			DomeLabSpec.fmt_len(sw, "mm", 0), DomeLabSpec.fmt_len(sh, "mm", 0), UiText.count(n, "sheet")],
@@ -1599,8 +1675,15 @@ class SheetCanvas extends Control:
 				var fs := clampi(int(float(lb["size"]) * k * 1.4), 8, 14)
 				draw_string(font, Vector2(r.position.x + p.x * k - 12.0, r.end.y - p.y * k + 4.0), txt,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-			draw_string(font, r.position + Vector2(4, -4), "Sheet %d" % (i + 1), HORIZONTAL_ALIGNMENT_LEFT, -1,
-				UITheme.FONT_XS, UITheme.C_TEXT_S)
+			var names: Array = []
+			for pl in sheets[i]["placements"]:
+				var pid := str(pl["id"])
+				for p in pn["panels"]:
+					if str(p["id"]) == pid:
+						names.append(str(p["label"]))
+						break
+			draw_string(font, r.position + Vector2(0, -8), "Sheet %d · %s" % [i + 1, ", ".join(names)],
+				HORIZONTAL_ALIGNMENT_LEFT, int(r.size.x + pad - 6.0), UITheme.FONT_XS, UITheme.C_TEXT_S)
 
 
 # ---------------------------------------------------------------------------

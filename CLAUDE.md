@@ -2774,12 +2774,24 @@ claim, SubViewport studio). Record key `domelab_spec`, model id
   `_design.json` (`DomeLabBom.fabrication_json`: vertices, faces, struts,
   hubs with arm azimuths / dips, nexors, panel outlines, BOM, checks).
 - **`DomeLabBuilder`**: one MeshInstance3D "Mesh" with a surface per
-  material (StructureMaterials by stock kind; panels alpha), tubes 8-sided,
-  bars flat on the surface, lumber / ribs on edge, hubs as bolt + nut /
+  material, tubes round (8 sides, 16 past 6 cm, RADIAL normals), bars flat
+  on the surface, lumber / beams / ribs on edge, hubs as bolt + nut /
   sphere / disc, slats offset by half a thickness, ribs as helix segments;
   `explode` moves parts out along the normal, `assembly` drops rings in
   from the base up; `record` keeps segment / sphere / triangle pick data
   read by `pick`. The placed dome counts as SHADE (`shade_footprints`).
+  ⚠ **Never `generate_normals()` on these SurfaceTools** (2026-10-25): its
+  default smooth group merges every vertex by position, so the flat panels
+  and the prisms' edges rendered as one rounded "bubble" — every emitter
+  writes the normal it means (`_tri` / `_tri_n`). Finishes follow the
+  STOCK: `DomeLabMaterials.STRUT_LOOK` / `SHEET_LOOK` (galv / alu / paint /
+  plastic / wood / ply / glazing / fabric) → `StructureMaterials` kinds
+  (GALVANISED, ALUMINIUM, PLASTIC, GLAZING, FABRIC were appended for it);
+  the PV-glass PANEL kind is not used here. A part is drawn in the player's
+  colour, or the stock's own while the colour is still the default
+  (`_part_color`; the modal's Colours rows show the drawn colour and reset
+  to the stock). The studio lights with a sky ambient + SSAO so the facets
+  shade apart; the Sheets tab scrolls at a readable size.
 - 14 presets (`DomeLabPresets.builtins`); library `user://domelab_library.json`.
   Panels that do not fit the sheet are an ERROR in the checks (a real
   blocker): the presets are sized so every one solves clean. Gates in the
