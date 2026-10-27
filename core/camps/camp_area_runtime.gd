@@ -51,6 +51,13 @@ var _main: Node = null
 var _glow_dirty := false
 var _glow_mat: ShaderMaterial = null
 var _spill_mat: ShaderMaterial = null
+## How much of each camp STANDS, 0..1 (the site deployment schedule's crews
+## pitch and strike camps household by household). Absent = 1. A rebuild
+## reads the record's `built` flag; the director pushes the live fraction
+## between the ends. Instances are revealed in each class batch's own order
+## (the generator's cell order), and the shelters / shades / solids people
+## use carry their index in that batch so they appear with their mesh.
+var _built: Dictionary = {}
 
 
 func _init() -> void:
@@ -112,11 +119,13 @@ func rebuild_area(area: Dictionary, ctx: Dictionary, keep_items: bool = false) -
 			var shade := bool(CampStyles.SHADE_CLASSES.get(str(cls), false))
 			if sleeps <= 0 and not solid and not shade:
 				continue
-			for it in classes[cls]:
-				var d: Dictionary = it
+			var n_cls: int = (classes[cls] as Array).size()
+			for ix in n_cls:
+				var d: Dictionary = (classes[cls] as Array)[ix]
 				var p: Vector3 = d.get("pos", Vector3.ZERO)
 				var entry := {"pos": Vector2(p.x, p.z), "yaw": float(d.get("yaw", 0.0)),
-					"size": d.get("size", Vector3.ONE), "cls": str(cls)}
+					"size": d.get("size", Vector3.ONE), "cls": str(cls),
+					"ix": ix, "n": n_cls}
 				if sleeps > 0:
 					entry["sleeps"] = sleeps
 					shelters.append(entry)
@@ -129,8 +138,78 @@ func rebuild_area(area: Dictionary, ctx: Dictionary, keep_items: bool = false) -
 		node.set_meta("shades", shades)
 		if keep_items:
 			node.set_meta("items", items)
+	# The record's standing state wins on a rebuild; a live fraction the
+	# director pushed is re-applied by its next push.
+	_built[id] = 1.0 if bool(area.get("built", true)) else 0.0
+	_apply_built(node, float(_built[id]))
 	_queue_glow_refresh()
 	return stats
+
+
+## How much of camp `id` stands (0..1). Pushed live by the site deployment
+## director while a crew pitches or strikes it; the record's `built` flag
+## sets it on a rebuild. Cheap: visible_instance_count on the batches, the
+## glow prefix, no mesh rebuild.
+func set_built_fraction(id: String, f: float) -> void:
+	var fr := clampf(f, 0.0, 1.0)
+	var node := get_node_or_null(_area_node_name(id))
+	if node == null:
+		return
+	if _built.has(id) and absf(float(_built[id]) - fr) < 1e-4:
+		return
+	_built[id] = fr
+	_apply_built(node, fr)
+	_queue_glow_refresh()
+
+
+func built_fraction(id: String) -> float:
+	return float(_built.get(id, 1.0))
+
+
+## Instances revealed = ceil(f × n) per batch — the first household goes up
+## as soon as the crew starts, the last with the last of the labour.
+static func revealed_count(n: int, f: float) -> int:
+	if f >= 1.0:
+		return n
+	if f <= 0.0:
+		return 0
+	return clampi(int(ceil(float(n) * f)), 0, n)
+
+
+func _apply_built(node: Node, f: float) -> void:
+	for child in node.get_children():
+		var mmi := child as MultiMeshInstance3D
+		if mmi == null or mmi.multimesh == null:
+			continue
+		var n := mmi.multimesh.instance_count
+		mmi.multimesh.visible_instance_count = -1 if f >= 1.0 else revealed_count(n, f)
+	# Lights follow the households: the glow list is in the generator's own
+	# order, so its prefix lights the camps that stand.
+	var glow_all: Array = node.get_meta("glow_all", node.get_meta("glow", []))
+	node.set_meta("glow_all", glow_all)
+	node.set_meta("glow", glow_all.slice(0, revealed_count(glow_all.size(), f)))
+
+
+## An entry (shelter / shade / solid) stands when its index in its class
+## batch is below the camp's revealed count.
+func _standing(entry: Dictionary, f: float) -> bool:
+	if f >= 1.0:
+		return true
+	return int(entry.get("ix", 0)) < revealed_count(int(entry.get("n", 1)), f)
+
+
+func _standing_entries(meta_key: String) -> Array:
+	var out: Array = []
+	for child in get_children():
+		if not String(child.name).begins_with("Area_"):
+			continue
+		var f := float(_built.get(str(child.get_meta("area_id", "")), 1.0))
+		if f <= 0.0:
+			continue
+		for e in child.get_meta(meta_key, []):
+			if _standing(e as Dictionary, f):
+				out.append(e)
+	return out
 
 
 func remove_area(id: String) -> void:
@@ -167,32 +246,21 @@ func area_items(id: String) -> Array:
 	return node.get_meta("items", []) if node != null else []
 
 
-## Every camp's shelters: [{pos: Vector2, yaw, size: Vector3, cls, sleeps}].
+## Every STANDING shelter: [{pos: Vector2, yaw, size: Vector3, cls, sleeps}].
+## A camp being pitched offers only the tents already up.
 func all_shelters() -> Array:
-	var out: Array = []
-	for child in get_children():
-		if String(child.name).begins_with("Area_"):
-			out.append_array(child.get_meta("shelters", []))
-	return out
+	return _standing_entries("shelters")
 
 
-## Every camp's shade structures (canopies, tarps, shade arrays):
+## Every standing shade structure (canopies, tarps, shade arrays):
 ## [{pos, yaw, size, cls}].
 func all_shades() -> Array:
-	var out: Array = []
-	for child in get_children():
-		if String(child.name).begins_with("Area_"):
-			out.append_array(child.get_meta("shades", []))
-	return out
+	return _standing_entries("shades")
 
 
-## Every camp's solid (walk-round) footprints: [{pos, yaw, size, cls}].
+## Every standing solid (walk-round) footprint: [{pos, yaw, size, cls}].
 func all_solids() -> Array:
-	var out: Array = []
-	for child in get_children():
-		if String(child.name).begins_with("Area_"):
-			out.append_array(child.get_meta("solids", []))
-	return out
+	return _standing_entries("solids")
 
 
 func has_area(id: String) -> bool:

@@ -20,11 +20,25 @@ extends Node3D
 ## carrying, seating and laying). After the last job and a minute's linger the
 ## pieces go and the rack's own mesh comes back.
 ##
+## Two modes, one record (LinkageBuildSite's contract):
+##   - REHEARSAL (`build_run = {start_h, crew_n}`): build time = the clock;
+##     the figures are actors.
+##   - LABOUR (`build_run = {mode: "labour", iid, project_id, crew_n}`, set by
+##     the site deployment schedule): build time follows the crew's REAL
+##     credited work on the Site Project — its labour-weighted progress mapped
+##     onto the plan's makespan, eased between ticks. A lane is drawn only
+##     while a real person is DOING one of the project's chores on site; their
+##     own body is hidden (NpcStandIns) and the lane wears their colour.
+##
 ## Coordinates: this node takes ModelRoot's local transform every frame, so its
 ## children live in the rack's build frame (metres, grounded).
 
 const NODE_NAME := "RackBuildSite"
 const RECORD_KEY := "build_run"
+const MAX_LABOUR_LANES := 12
+const STATUS_EVERY_S := 0.25
+const LABOUR_EASE_S := 1.2
+const SITE_MARGIN_M := 16.0
 ## The build lab's crew: two frames held at once + two seating the beams.
 const DEFAULT_CREW := 6
 const MIN_CREW := 6
@@ -64,6 +78,16 @@ var _label_ms := 0
 ## yet); the record's setting comes back after.
 var _collide := true
 var _coll_ms := 0
+# Labour mode.
+var _labour := false
+var _t_disp := 0.0
+var _t_target := 0.0
+var _status: Dictionary = {}
+var _status_accum := 0.0
+var _lane_of: Dictionary = {}     # agent id -> lane (worker index)
+## Labour mode with no readable project: the site steps aside (no units, no
+## crew) and the model is the record's again.
+var _suspended := false
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +177,20 @@ func configure(rec: Dictionary) -> void:
 	_rec = rec.duplicate(true)
 	_collide = bool(rec.get("collision_enabled", true))
 	_run = (rec.get(RECORD_KEY, {}) as Dictionary).duplicate(true)
+	_labour = str(_run.get("mode", "")) == "labour"
+
+
+func is_labour() -> bool:
+	return _labour
+
+
+## True while this site draws the rack (the bridge's ghost stands down).
+func owns_visuals() -> bool:
+	return not _disposed and not _tl.is_empty() and not _suspended and not _finished
+
+
+func _stand_key() -> String:
+	return "rack_site:%s" % (_prop.prop_id if _prop != null else str(get_instance_id()))
 
 
 func _ready() -> void:
@@ -173,6 +211,9 @@ func _ready() -> void:
 	var side := PalletRackBuildPlan.yard_side(PalletRackBuildPlan.units_bounds(units), _ground_raw)
 	_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
 	_model.visible = false
+	if _labour:
+		_poll_status()
+		_t_disp = _t_target
 	_build_piles()
 	_build_crew()
 	_build_label()
@@ -183,6 +224,7 @@ func _exit_tree() -> void:
 	if not _disposed and is_instance_valid(_model):
 		_model.visible = true
 	_restore_collision()
+	NpcStandIns.set_for(_stand_key(), {})
 
 
 func _restore_collision() -> void:
@@ -194,10 +236,18 @@ func _restore_collision() -> void:
 func dispose() -> void:
 	_disposed = true
 	set_process(false)
+	NpcStandIns.set_for(_stand_key(), {})
 	if is_instance_valid(_model):
 		_model.visible = true
 	if is_instance_valid(_units_root):
 		_units_root.visible = false
+	if is_instance_valid(_piles):
+		_piles.visible = false
+	if is_instance_valid(_label):
+		_label.visible = false
+	for c in _crew:
+		(c["fig"] as Node3D).visible = false
+		_hide_tools(c)
 	_restore_collision()
 
 
@@ -206,9 +256,92 @@ func is_running() -> bool:
 
 
 func build_time() -> float:
+	if _labour:
+		return _t_disp
 	if _main == null or not _main.has_method("get_absolute_hours"):
 		return 0.0
 	return (float(_main.call("get_absolute_hours")) - float(_run.get("start_h", 0.0))) * 3600.0
+
+
+# ---------------------------------------------------------------------------
+# Labour mode
+# ---------------------------------------------------------------------------
+
+func _bridge() -> Object:
+	var sgv: Object = ServiceLocator.graph()
+	if sgv == null and _main != null:
+		sgv = _main.find_child("SystemGraphView", true, false)
+	if sgv == null or not sgv.has_method("npc_population_bridge"):
+		return null
+	return sgv.call("npc_population_bridge")
+
+
+## Read the project: progress -> the target build time, who is on site. The
+## plan's work is spread evenly over its makespan here (a rack's jobs are all
+## short), so progress maps straight onto time.
+func _poll_status() -> void:
+	var bridge := _bridge()
+	if bridge == null or not bridge.has_method("linkage_build_status"):
+		_status = {"found": false}
+		return
+	var c3 := global_transform.origin if is_inside_tree() else Vector3.ZERO
+	_status = bridge.call("linkage_build_status", str(_run.get("iid", "")), str(_run.get("project_id", "")),
+		Vector2(c3.x, c3.z), float(_tl.get("radius_m", 8.0)) + SITE_MARGIN_M)
+	if not bool(_status.get("found", false)):
+		return
+	var mk := float(_tl.get("makespan", 0.0))
+	match str(_status.get("state", "")):
+		"done":
+			_t_target = mk + LINGER_S + 1.0
+			_t_disp = maxf(_t_disp, _t_target - 0.5)
+		"active":
+			_t_target = clampf(float(_status.get("progress", 0.0)), 0.0, 1.0) * mk
+		_:
+			# Cancelled: the crew stopped; the rack is the record's again.
+			dispose()
+
+
+## Assign the people on site to lanes: busiest lanes first, an agent keeps
+## its lane while it stays. Returns lane -> colour; registers the people as
+## stood in (their own bodies hidden by NpcPopulationHost).
+func _man_lanes(ws: Array) -> Dictionary:
+	var present: Array = _status.get("present", [])
+	var here := {}
+	for pr in present:
+		here[str(pr["id"])] = pr
+	for aid in _lane_of.keys():
+		if not here.has(aid):
+			_lane_of.erase(aid)
+	var taken := {}
+	for aid in _lane_of:
+		taken[int(_lane_of[aid])] = true
+	var order: Array = range(mini(ws.size(), _crew.size()))
+	var rank := {"work": 0, "carry": 1, "walk": 2, "wait": 3, "idle": 4}
+	order.sort_custom(func(a, b):
+		var ra := int(rank.get(str((ws[a] as Dictionary).get("activity", "")), 5))
+		var rb := int(rank.get(str((ws[b] as Dictionary).get("activity", "")), 5))
+		return ra < rb if ra != rb else int(a) < int(b))
+	var ids: Array = here.keys()
+	ids.sort()
+	for aid in ids:
+		if _lane_of.has(aid):
+			continue
+		for lane in order:
+			if not taken.has(lane):
+				_lane_of[aid] = lane
+				taken[lane] = true
+				break
+	var out := {}
+	var stood := {}
+	for aid in _lane_of:
+		out[int(_lane_of[aid])] = (here[aid] as Dictionary).get("color", Color.WHITE)
+		stood[aid] = true
+	NpcStandIns.set_for(_stand_key(), stood)
+	return out
+
+
+func manned_count() -> int:
+	return _lane_of.size()
 
 
 func timeline() -> Dictionary:
@@ -258,11 +391,42 @@ func _process(delta: float) -> void:
 		return
 	var r := SimFxRate.rate(_main, SimFxRate.SYS_NPC) if _main != null else 1.0
 	_fx_t += delta * r
+	if _labour:
+		_status_accum += delta
+		if _status_accum >= STATUS_EVERY_S:
+			_status_accum = 0.0
+			_poll_status()
+			if _disposed:
+				return
+		_t_disp += (_t_target - _t_disp) * (1.0 - exp(-maxf(delta, 0.0) / LABOUR_EASE_S))
+		if absf(_t_target - _t_disp) < 0.01:
+			_t_disp = _t_target
 	_update(delta)
 
 
 func _update(delta: float) -> void:
 	transform = _model.transform
+	if _labour and not bool(_status.get("found", false)):
+		if not _suspended:
+			_suspended = true
+			_model.visible = true
+			_units_root.visible = false
+			_piles.visible = false
+			_label.visible = false
+			_restore_collision()
+			for c in _crew:
+				(c["fig"] as Node3D).visible = false
+				_hide_tools(c)
+			NpcStandIns.set_for(_stand_key(), {})
+		return
+	if _suspended:
+		_suspended = false
+		_model.visible = false
+		_units_root.visible = true
+		_piles.visible = true
+		_label.visible = true
+		_unit_sig.clear()
+		_coll_ms = 0
 	var t := build_time()
 	var mk := float(_tl["makespan"])
 	if t > mk + LINGER_S or t < -5.0:
@@ -323,13 +487,22 @@ func _apply_crew(st: Dictionary, delta: float) -> void:
 	var far := cam != null and cam.global_position.distance_to(global_position) > CULL_M + float(_tl["radius_m"])
 	var rate := SimFxRate.rate(_main, SimFxRate.SYS_NPC) if _main != null else 1.0
 	var ws: Array = st["workers"]
+	# Labour mode: a lane is drawn only while a real person is on site for
+	# this project, in that person's colour (their own body stood in).
+	var manned := _man_lanes(ws) if _labour else {}
 	for i in mini(ws.size(), _crew.size()):
 		var c: Dictionary = _crew[i]
 		var fig: NpcSimpleFigure = c["fig"]
-		fig.visible = not far
-		if far:
+		var shown := not far and (not _labour or manned.has(i))
+		fig.visible = shown
+		if not shown:
 			_hide_tools(c)
 			continue
+		if _labour:
+			var col: Color = manned[i]
+			if c.get("tint") != col:
+				c["tint"] = col
+				fig.set_tint(col)
 		_pose_worker(c, ws[i], rate, delta)
 
 

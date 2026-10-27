@@ -578,6 +578,9 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# else (the selftest's neutrality pin used to pin `walkable` to
 		# false instead, which also refused every loiter walk).
 		"separation": bool(ctx_in.get("separation", true)),
+		# ALL HANDS (the site deployment schedule): the board outranks the
+		# routine's leisure blocks while this camp has a deploy / pack-up on.
+		"all_hands": bool(ctx_in.get("all_hands", false)),
 		# SOCIAL blocks: the camp's home + seed for its conversation circles
 		# (NpcSocial). Forwarded here or agents fall back to their own pos.
 		"camp_home": ctx_in.get("camp_home", null),

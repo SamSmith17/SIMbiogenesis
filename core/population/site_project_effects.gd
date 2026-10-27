@@ -55,14 +55,34 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			var loader := _loader(main)
 			if loader == null or not loader.has_method("set_prop_packed"):
 				return false
-			if kind == "unpack_prop":
-				# Clear any construction state FIRST, so the rebuild inside
-				# set_prop_packed renders the real deployed structure (and the
-				# deploy sweep IS the raise). null, not erase — update_prop is
-				# a shallow merge; consumers guard with `is Dictionary`.
-				PlacedPropService.update_prop_record(main, prop_id,
-					{"build_state": null}, false)
+			# Clear any construction state FIRST, so the rebuild inside
+			# set_prop_packed renders the real deployed structure (and the
+			# deploy sweep IS the raise) — or, packing, the plain crate: a
+			# teardown's "strip" phase ghosts the standing structure through
+			# build_state, and left on the record it would make the crate
+			# render as a ghost under construction forever. null, not erase —
+			# update_prop is a shallow merge; consumers guard with
+			# `is Dictionary`. The build_run (a labour-mode site) goes too on a
+			# pack (a site on a crate would re-attach, suspended, on every
+			# load) and on any non-linkage unpack (a raised rack with a stale
+			# run re-attached its site); a linkage's unpack keeps it — that
+			# site finishes the raise itself.
+			var clear := {"build_state": null}
+			if kind == "pack_prop" or not (PlacedPropService.get_prop_record(main, prop_id)
+					.get("linkage_spec") is Dictionary):
+				clear["build_run"] = null
+			PlacedPropService.update_prop_record(main, prop_id, clear, false)
 			loader.call_deferred("set_prop_packed", prop_id, kind == "pack_prop")
+			return true
+		"set_camp_built":
+			# A painted camp pitched or struck by its people: the record's
+			# `built` flag (persisted) + the runtime reveal. The director pushes
+			# the live fraction between the two ends.
+			var loader3 := _loader(main)
+			if loader3 == null or not loader3.has_method("set_camp_built"):
+				return false
+			loader3.call("set_camp_built", str(op.get("camp_id", "")),
+				1.0 if bool(op.get("built", true)) else 0.0, true)
 			return true
 		"remove_prop":
 			var loader2 := _loader(main)

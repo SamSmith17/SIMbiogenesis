@@ -1096,6 +1096,17 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 				and not NpcRoutine.in_sleep_window(_hour(ctx), _sleep_start(ctx), _wake_hour(ctx)):
 			kind = NpcRoutine.SOCIAL
 			scheduled = ""
+		# ALL HANDS (the site deployment schedule): while this camp has a
+		# deploy or pack-up on, the board outranks every leisure block — a
+		# festival day is SOCIAL all afternoon and `_begin_social` always
+		# finds something to do, so without this nobody ever reached tier 3
+		# and the site was never built. Sleep, meals and the other needs
+		# still come first (they are above and `scheduled` below).
+		if bool(ctx.get("all_hands", false)) and NpcComfort.LEISURE_KINDS.has(kind) \
+				and abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) \
+				and _begin_chore(abs_hours, ctx):
+			routine_kind = kind
+			return
 		# Weather as an attractor on LEISURE (NpcComfort) — the same hashed
 		# response and spots CrowdCohort._decide uses. Never during an EVENT.
 		if NpcComfort.LEISURE_KINDS.has(kind) and not bool(ctx.get("event_active", false)):

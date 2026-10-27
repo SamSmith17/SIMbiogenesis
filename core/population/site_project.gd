@@ -27,6 +27,19 @@ extends RefCounted
 const KIND_DELIVERY := "delivery_unload"
 const KIND_LINKAGE_BUILD := "linkage_build"
 const KIND_LINKAGE_BREAKDOWN := "linkage_breakdown"
+## The site deployment schedule's projects (SiteDeployPlanner rows): one per
+## structure or camp. A linkage prop's rows reuse the rebuild / breakdown task
+## ids, so build_progress / breakdown_progress drive its ghost unchanged.
+const KIND_SITE_DEPLOY := "site_deploy"
+const KIND_SITE_PACKUP := "site_packup"
+
+
+static func is_build_kind(kind: String) -> bool:
+	return kind == KIND_LINKAGE_BUILD or kind == KIND_SITE_DEPLOY
+
+
+static func is_breakdown_kind(kind: String) -> bool:
+	return kind == KIND_LINKAGE_BREAKDOWN or kind == KIND_SITE_PACKUP
 
 static var _next_ord := 1
 
@@ -94,6 +107,23 @@ static func sync_with_board(project: Dictionary, board, abs_h: float = NAN) -> b
 			project["ended_h"] = abs_h
 		changed = true
 	return changed
+
+
+## Each task's completed fraction 0..1 by task id (a settled task reads 1.0,
+## a pending one its progress over its hours) — what a staging site reads to
+## put the right parts in the right place (AssemblyBuildSite.stage_state).
+static func task_fractions(project: Dictionary, board) -> Dictionary:
+	var out: Dictionary = {}
+	for t in project.get("tasks", []):
+		var task: Dictionary = t
+		var tid := str(task.get("task_id", ""))
+		if str(task.get("status", "pending")) != "pending":
+			out[tid] = 1.0
+			continue
+		var chore: Dictionary = board.find(str(task.get("chore_id", ""))) if board != null else {}
+		var hours := maxf(float(chore.get("chore_hours", 0.0)), 0.001)
+		out[tid] = clampf(float(chore.get("progress_h", 0.0)) / hours, 0.0, 1.0)
+	return out
 
 
 ## Rollup for panels/toasts: {done, skipped, total, progress 0..1,

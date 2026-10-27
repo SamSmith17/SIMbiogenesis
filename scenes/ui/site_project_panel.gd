@@ -191,7 +191,7 @@ func _build_ui() -> void:
 	scroll.add_child(_list)
 
 	_empty_lbl = Label.new()
-	_empty_lbl.text = "No projects yet. Deliver a kit (Packing Lab → 🚚) or queue a build (Linkage Lab → 👷)."
+	_empty_lbl.text = "No projects yet. Deliver a kit (Packing Lab → 🚚), queue a build (Linkage Lab → 👷, or any placed structure's editor → Crew), or schedule the whole site (timeline → Deploy)."
 	_empty_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_empty_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -384,9 +384,66 @@ func _rebuild_row(rec: Dictionary) -> Control:
 ## Rebuild signature (same discipline as every other work panel — sentinel
 ## start, snapped progress). Rebuilding blind every 0.75 s dismissed tooltips
 ## mid-hover and made Pause/Cancel a race against the timer.
+func _site_deploy() -> SiteDeployDirector:
+	var g: Node = ServiceLocator.graph()
+	return g.call("site_deploy") if g != null and g.has_method("site_deploy") else null
+
+
+## The site deployment schedule's header: what is being deployed or packed
+## site-wide, how far along, and a Watch button (the settlement view over
+## the busiest work site).
+func _deploy_header() -> Control:
+	var sd := _site_deploy()
+	if sd == null:
+		return null
+	var st: Dictionary = sd.status()
+	if not bool(st.get("active", false)):
+		return null
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UITheme.card_style())
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 8)
+	card.add_child(hb)
+	var lbl := Label.new()
+	lbl.text = "🏕 %s" % str(st.get("line", ""))
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	lbl.add_theme_color_override("font_color", UITheme.C_OK)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hb.add_child(lbl)
+	var bar := ProgressBar.new()
+	UITheme.style_progress(bar)
+	bar.custom_minimum_size = Vector2(120, 10)
+	bar.max_value = maxf(float(st.get("total", 0)), 1.0)
+	bar.value = float(st.get("done", 0))
+	bar.show_percentage = false
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(bar)
+	var watch := Button.new()
+	UITheme.style_button(watch)
+	watch.text = "Watch"
+	watch.tooltip_text = "The settlement view over the crew's busiest work site"
+	watch.pressed.connect(func() -> void:
+		var markers: Array = _bridge.crew_site_markers(get_tree().current_scene) if _bridge != null else []
+		var best := Vector2.INF
+		var best_w := 0
+		for m in markers:
+			if int((m as Dictionary).get("workers", 0)) > best_w:
+				best_w = int((m as Dictionary).get("workers", 0))
+				best = (m as Dictionary).get("pos", Vector2.INF)
+		var main := get_tree().current_scene
+		close()
+		if main != null and main.has_method("open_settlement_view"):
+			main.call("open_settlement_view", best))
+	hb.add_child(watch)
+	return card
+
+
 func _list_signature(rows: Array, crates: Array) -> String:
-	var sig := "lab:%s|%d|%.2f|%s;" % [_lab_sig, _lab_rows.size(), _lab_progress,
-		str(_lab != null and is_instance_valid(_lab) and _lab.is_running())]
+	var sd0 := _site_deploy()
+	var sig := "lab:%s|%d|%.2f|%s;dep:%s;" % [_lab_sig, _lab_rows.size(), _lab_progress,
+		str(_lab != null and is_instance_valid(_lab) and _lab.is_running()),
+		str(sd0.status().get("line", "")) if sd0 != null else ""]
 	for c in crates:
 		sig += "crate:%s;" % str((c as Dictionary).get("id", ""))
 	for row in rows:
@@ -430,9 +487,12 @@ func _refresh() -> void:
 	for child in _list.get_children():
 		if child != _empty_lbl:
 			child.queue_free()
+	var header := _deploy_header()
+	if header != null:
+		_list.add_child(header)
 	for c in crates:
 		_list.add_child(_rebuild_row(c as Dictionary))
-	_empty_lbl.visible = rows.is_empty() and crates.is_empty()
+	_empty_lbl.visible = rows.is_empty() and crates.is_empty() and header == null
 	for row in rows:
 		_list.add_child(_project_card(str(row["iid"]), row["project"] as Dictionary))
 	restore.call()
@@ -456,6 +516,8 @@ func _project_card(iid: String, project: Dictionary) -> Control:
 		SiteProject.KIND_DELIVERY: "🚚",
 		SiteProject.KIND_LINKAGE_BUILD: "🏗",
 		SiteProject.KIND_LINKAGE_BREAKDOWN: "📦",
+		SiteProject.KIND_SITE_DEPLOY: "🏕",
+		SiteProject.KIND_SITE_PACKUP: "📦",
 	}.get(str(project.get("kind", "")), "👷"))
 	var name_lbl := Label.new()
 	name_lbl.text = "%s %s" % [glyph, str(project.get("label", "Project"))]

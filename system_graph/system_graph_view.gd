@@ -13160,6 +13160,18 @@ func npc_population_bridge() -> NpcPopulationBridge:
 	return _npc_population
 
 
+## The site deployment schedule's director (made on first ask, bound to the
+## running world so the timeline chip can read the schedule before the
+## first population tick).
+var _site_deploy: SiteDeployDirector = null
+
+func site_deploy() -> SiteDeployDirector:
+	if _site_deploy == null:
+		_site_deploy = SiteDeployDirector.new()
+	_site_deploy.bind(_get_scene_main_node(), _npc_population)
+	return _site_deploy
+
+
 ## Settings → NPC → "Simulate & draw NPCs" (NpcDisplayPrefs.npcs_enabled).
 ## Off = the population is FROZEN and nothing of it is drawn: no bridge tick,
 ## no per-frame crowd slices, no avatar host, no crowd renderer, and every
@@ -13607,6 +13619,12 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		_npc_population.tick(model, _resource_flow, _get_scene_main_node())
 		PerfMonitor.end("npc_population")
 		pop_abs_h = _npc_population.last_abs_h()
+		# The site deployment schedule: fires "deploy / pack up the site"
+		# events the clock crossed, hands the work to the crews, undoes a
+		# fired event the clock was scrubbed back past.
+		PerfMonitor.begin("site_deploy")
+		site_deploy().tick(_get_scene_main_node(), _npc_population, pop_abs_h)
+		PerfMonitor.end("site_deploy")
 		_ensure_npc_host()
 		_ensure_crowd_renderer()
 		if _crowd_renderer != null and is_instance_valid(_crowd_renderer):

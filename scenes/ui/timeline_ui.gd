@@ -153,6 +153,21 @@ var _projects_chip: Button = null
 var _settlement_chip: Button = null
 ## Festival mode -- populate the painted camps, assume them stocked, watch.
 var _festival_chip: Button = null
+## Site deployment schedule (SiteDeployDirector): the Deploy chip + its menu,
+## and the deploy / pack-up FLAGS drawn down the clips lane — drag one to
+## retime it, right-click for its menu, double-click to jump there.
+var _deploy_chip: Button = null
+var _deploy_menu: PopupMenu = null
+var _deploy_menu_ids: Array = []        # menu row -> event id
+var _deploy_flag_band := Rect2()       # where the flag tags sit (hit tests)
+var _deploy_drag := ""                 # event id being dragged
+var _deploy_drag_t := NAN
+var _deploy_drag_moved := false
+var _deploy_press_x := 0.0
+var _deploy_chip_sig := ""
+const DEPLOY_FLAG_HIT_PX := 7.0
+const FLAG_DEPLOY_COL := Color(0.45, 0.85, 0.45)
+const FLAG_PACKUP_COL := Color(0.95, 0.70, 0.30)
 
 var _solar_analyzer: SolarShadingAnalyzer = null
 var _shading_overlay: PanelContainer = null
@@ -1548,6 +1563,240 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 			_draw_clip(vrng[0], vrng[1], win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
 	_clim_lane_rect = Rect2(0.0, lane_y + quarter * 2.0, w, quarter)
 	_draw_clim_keys(tl, win_start, span, w)
+	_deploy_flag_band = Rect2(0.0, lane_y, w, quarter)
+	_draw_deploy_flags(lane_rect, lane_y, win_start, span, w, fnt)
+
+
+# ---------------------------------------------------------------------------
+# Site deployment schedule (the Deploy chip + the flags on the clips lane)
+# ---------------------------------------------------------------------------
+
+func _site_deploy() -> SiteDeployDirector:
+	var g: Node = ServiceLocator.graph()
+	if g == null or not g.has_method("site_deploy"):
+		return null
+	return g.call("site_deploy")
+
+
+## A flag per scheduled event: a line down the clips lane and a tag in the
+## OBS row ("▲ DEPLOY" / "▼ PACK UP"); fired events solid, pending ones
+## dimmer, the dragged one amber.
+func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, span : float,
+		w : float, fnt : Font) -> void:
+	var sd := _site_deploy()
+	if sd == null:
+		return
+	var evs : Array = sd.events()
+	_refresh_deploy_chip(sd)
+	if evs.is_empty():
+		return
+	var st_active : Dictionary = sd.status()
+	var band_h := _deploy_flag_band.size.y
+	for e in evs:
+		var ev := e as Dictionary
+		var id := str(ev.get("id", ""))
+		var t := float(ev.get("at_h", 0.0))
+		if id == _deploy_drag and not is_nan(_deploy_drag_t):
+			t = _deploy_drag_t
+		var x := (t - win_start) / span * w
+		if x < -40.0 or x > w + 40.0:
+			continue
+		var deploy := str(ev.get("action", "")) == SiteDeploySchedule.ACTION_DEPLOY
+		var col := FLAG_DEPLOY_COL if deploy else FLAG_PACKUP_COL
+		if id == _deploy_drag:
+			col = Color(1.0, 0.85, 0.35)
+		var fired : bool = sd.is_fired(id)
+		var a := 0.95 if fired else 0.6
+		_track.draw_line(Vector2(x, lane_y), Vector2(x, lane_rect.end.y),
+			Color(col.r, col.g, col.b, a), 1.5 if fired else 1.0)
+		var txt := "▲ DEPLOY" if deploy else "▼ PACK UP"
+		var tw := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 7).x + 6.0
+		var tag := Rect2(x, lane_y, tw, band_h)
+		_track.draw_rect(tag, Color(col.r, col.g, col.b, 0.85 if fired else 0.55), true)
+		# The event the crews are on fills its tag with their progress.
+		if fired and bool(st_active.get("active", false)) \
+				and str(st_active.get("action", "")) == str(ev.get("action", "")) \
+				and int(st_active.get("total", 0)) > 0:
+			var frac := clampf(float(st_active.get("done", 0)) / float(st_active.get("total", 1)), 0.0, 1.0)
+			_track.draw_rect(Rect2(x, lane_y + band_h - 2.0, tw * frac, 2.0), Color(1.0, 1.0, 1.0, 0.9), true)
+		_track.draw_string(fnt, Vector2(x + 3.0, lane_y + band_h * 0.8), txt,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(0.08, 0.08, 0.1, 0.95))
+
+
+## The flag under track point `p` (its event id), "" for none. The tag row
+## only: the CLIM keys live two rows down and keep their own hit test.
+func _deploy_flag_at(p : Vector2) -> String:
+	var sd := _site_deploy()
+	if sd == null or _deploy_flag_band.size.x <= 0.0:
+		return ""
+	if p.y < _deploy_flag_band.position.y - 2.0 or p.y > _deploy_flag_band.end.y + 2.0:
+		return ""
+	var win := _track_window()
+	var best := ""
+	var best_d := DEPLOY_FLAG_HIT_PX + 28.0   # the tag reads to its right
+	for e in sd.events():
+		var ev := e as Dictionary
+		var x := (float(ev.get("at_h", 0.0)) - win[0]) / win[1] * _deploy_flag_band.size.x
+		var d := p.x - x
+		if d >= -DEPLOY_FLAG_HIT_PX and d <= best_d:
+			best_d = d
+			best = str(ev.get("id", ""))
+	return best
+
+
+func _deploy_event_time(id : String) -> float:
+	var sd := _site_deploy()
+	if sd == null:
+		return 0.0
+	for e in sd.events():
+		if str((e as Dictionary).get("id", "")) == id:
+			return float((e as Dictionary).get("at_h", 0.0))
+	return 0.0
+
+
+func _refresh_deploy_chip(sd : SiteDeployDirector) -> void:
+	if _deploy_chip == null or sd == null:
+		return
+	var st : Dictionary = sd.status()
+	var active := bool(st.get("active", false))
+	var n := sd.events().size()
+	var sig := "%s|%d|%s" % [str(active), n, str(st.get("line", ""))]
+	if sig == _deploy_chip_sig:
+		return
+	_deploy_chip_sig = sig
+	# Text written only on change (a per-frame set_text crashed the engine
+	# once; see the graph top bar).
+	var txt := "Deploy ●" if active else ("Deploy" if n == 0 else "Deploy %d" % n)
+	if _deploy_chip.text != txt:
+		_deploy_chip.text = txt
+	_deploy_chip.add_theme_color_override("font_color", UITheme.C_OK if active else UITheme.C_TEXT)
+	_deploy_chip.tooltip_text = "Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.\n%s" % str(st.get("line", ""))
+
+
+## The chip's menu: schedule at the playhead, the events (jump / remove),
+## the instant no-crew actions, clear.
+func _on_deploy_chip_pressed() -> void:
+	var sd := _site_deploy()
+	if sd == null:
+		_notify("Site deployment needs a loaded world with a systems graph.")
+		return
+	_open_deploy_menu(sd, "", _deploy_chip.get_screen_position() + Vector2(0, _deploy_chip.size.y))
+
+
+func _open_deploy_menu(sd : SiteDeployDirector, flag_id : String, screen_at : Vector2) -> void:
+	if _deploy_menu == null:
+		_deploy_menu = PopupMenu.new()
+		_deploy_menu.id_pressed.connect(_on_deploy_menu)
+		add_child(_deploy_menu)
+	_deploy_menu.clear()
+	_deploy_menu_ids.clear()
+	var now := _playhead_abs()
+	var tc := ClimelapseExportOptions.timecode_at(now)
+	if not flag_id.is_empty():
+		var ev : Dictionary = {}
+		for e in sd.events():
+			if str((e as Dictionary).get("id", "")) == flag_id:
+				ev = e
+		_deploy_menu.add_item(SiteDeploySchedule.describe(ev, ClimelapseExportOptions.timecode_at), 99)
+		_deploy_menu.set_item_disabled(0, true)
+		_deploy_menu_ids.append(flag_id)
+		_deploy_menu.add_item("Jump the playhead here", 10)
+		_deploy_menu.add_item("Move to the playhead (%s)" % tc, 11)
+		_deploy_menu.add_separator()
+		_deploy_menu.add_item("Remove this event", 12)
+	else:
+		_deploy_menu.add_item("Deploy the site at the playhead (%s)" % tc, 1)
+		_deploy_menu.add_item("Pack up the site at the playhead (%s)" % tc, 2)
+		var evs : Array = sd.events()
+		if not evs.is_empty():
+			_deploy_menu.add_separator("Scheduled")
+			for e in evs:
+				var ev := e as Dictionary
+				var id := str(ev.get("id", ""))
+				var fired : bool = sd.is_fired(id)
+				_deploy_menu_ids.append(id)
+				_deploy_menu.add_item("%s%s" % ["✓ " if fired else "• ",
+					SiteDeploySchedule.describe(ev, ClimelapseExportOptions.timecode_at)],
+					100 + _deploy_menu_ids.size() - 1)
+		_deploy_menu.add_separator()
+		var inv_d : int = sd.inventory(SiteDeploySchedule.ACTION_DEPLOY).size()
+		var inv_p : int = sd.inventory(SiteDeploySchedule.ACTION_PACKUP).size()
+		_deploy_menu.add_item("Pack everything now, no crew (%s)" % UiText.count(inv_p, "item"), 3)
+		_deploy_menu.add_item("Deploy everything now, no crew (%s)" % UiText.count(inv_d, "item"), 4)
+		_deploy_menu.add_item("Open the crew's projects…", 6)
+		if not evs.is_empty():
+			_deploy_menu.add_separator()
+			_deploy_menu.add_item("Clear the schedule", 5)
+	_deploy_menu.popup(Rect2i(Vector2i(screen_at), Vector2i.ZERO))
+
+
+## The no-crew actions swap every structure and camp on the site at once —
+## one stray click used to do it. A confirmation names what it will touch.
+var _deploy_confirm : ConfirmationDialog = null
+
+func _confirm_instant(sd : SiteDeployDirector, action : String) -> void:
+	var n : int = sd.inventory(action).size()
+	if n == 0:
+		_notify("Nothing to %s." % ("deploy" if action == SiteDeploySchedule.ACTION_DEPLOY else "pack"))
+		return
+	if _deploy_confirm == null:
+		_deploy_confirm = ConfirmationDialog.new()
+		_deploy_confirm.title = "Site deployment"
+		add_child(_deploy_confirm)
+	for c in _deploy_confirm.confirmed.get_connections():
+		_deploy_confirm.confirmed.disconnect(c["callable"])
+	_deploy_confirm.dialog_text = "%s now, with no crew — %s swap at once.\nThe crews' work in flight is cancelled." % [
+		SiteDeploySchedule.action_label(action), UiText.count(n, "structure or camp", "structures and camps")]
+	_deploy_confirm.ok_button_text = SiteDeploySchedule.action_label(action)
+	_deploy_confirm.confirmed.connect(func() -> void:
+		sd.apply_instant(action)
+		_deploy_chip_sig = ""
+		if _track != null:
+			_track.queue_redraw())
+	_deploy_confirm.popup_centered()
+
+
+func _on_deploy_menu(id : int) -> void:
+	var sd := _site_deploy()
+	if sd == null:
+		return
+	var now := _playhead_abs()
+	match id:
+		1:
+			sd.add_event(SiteDeploySchedule.ACTION_DEPLOY, now)
+			_notify("Deploy the site at %s — the crews start when the clock gets there." % ClimelapseExportOptions.timecode_at(now))
+		2:
+			sd.add_event(SiteDeploySchedule.ACTION_PACKUP, now)
+			_notify("Pack up the site at %s — the crews start when the clock gets there." % ClimelapseExportOptions.timecode_at(now))
+		3:
+			_confirm_instant(sd, SiteDeploySchedule.ACTION_PACKUP)
+		4:
+			_confirm_instant(sd, SiteDeploySchedule.ACTION_DEPLOY)
+		5:
+			sd.clear()
+			_notify("Deployment schedule cleared.")
+		6:
+			_on_projects_chip_pressed()
+		10, 11, 12:
+			if _deploy_menu_ids.is_empty():
+				return
+			var fid := str(_deploy_menu_ids[0])
+			if id == 10 and _main != null and _main.has_method("set_absolute_hours"):
+				_main.call("set_absolute_hours", _deploy_event_time(fid))
+				_update_display()
+			elif id == 11:
+				sd.move_event(fid, now)
+			elif id == 12:
+				sd.remove_event(fid)
+		_:
+			if id >= 100 and id - 100 < _deploy_menu_ids.size():
+				var fid2 := str(_deploy_menu_ids[id - 100])
+				# A click on a listed event opens that flag's own menu.
+				_open_deploy_menu(sd, fid2, _deploy_chip.get_screen_position() + Vector2(0, _deploy_chip.size.y))
+				return
+	_deploy_chip_sig = ""
+	if _track != null:
+		_track.queue_redraw()
 
 
 ## Camera keyframes as diamonds on the CLIM sub-lane, joined by a thin line —
@@ -1934,6 +2183,17 @@ func _on_track_input(event: InputEvent) -> void:
 				if hit >= 0:
 					_resize_track_idx = hit
 					get_viewport().set_input_as_handled()
+				elif not mb.ctrl_pressed and not _deploy_flag_at(mb.position).is_empty():
+					var fid := _deploy_flag_at(mb.position)
+					if mb.double_click:
+						_main.call("set_absolute_hours", _deploy_event_time(fid))
+						_update_display()
+					else:
+						_deploy_drag = fid
+						_deploy_drag_t = _deploy_event_time(fid)
+						_deploy_drag_moved = false
+						_deploy_press_x = mb.position.x
+					get_viewport().set_input_as_handled()
 				elif not mb.ctrl_pressed and _clim_key_at(mb.position) >= 0:
 					var ki := _clim_key_at(mb.position)
 					if mb.double_click:
@@ -1957,6 +2217,17 @@ func _on_track_input(event: InputEvent) -> void:
 				if _resize_track_idx >= 0:
 					_resize_track_idx = -1
 					_save_track_layout_prefs()
+				if not _deploy_drag.is_empty():
+					var sdr := _site_deploy()
+					if _deploy_drag_moved and sdr != null and not is_nan(_deploy_drag_t):
+						sdr.move_event(_deploy_drag, _deploy_drag_t)
+					elif sdr != null:
+						# A click (no drag) opens the flag's menu.
+						_open_deploy_menu(sdr, _deploy_drag, _track.get_screen_transform() * mb.position)
+					_deploy_drag = ""
+					_deploy_drag_t = NAN
+					_deploy_chip_sig = ""
+					_track.queue_redraw()
 				if _clim_key_drag >= 0:
 					var tlk := _get_terrain_loader()
 					if _clim_key_drag_moved and tlk != null and not is_nan(_clim_key_drag_t):
@@ -1975,6 +2246,12 @@ func _on_track_input(event: InputEvent) -> void:
 				_track_pan_anchor_x = mb.position.x
 			else:
 				_track_panning = false
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not mb.alt_pressed \
+				and not _deploy_flag_at(mb.position).is_empty():
+			var sdf := _site_deploy()
+			if sdf != null:
+				_open_deploy_menu(sdf, _deploy_flag_at(mb.position), _track.get_screen_transform() * mb.position)
+			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not mb.alt_pressed \
 				and _clim_lane_rect.size.x > 0.0 \
 				and absf(mb.position.y - (_clim_lane_rect.position.y + _clim_lane_rect.size.y * 0.5)) <= CLIM_KEY_HIT_PX + 2.0:
@@ -1996,6 +2273,11 @@ func _on_track_input(event: InputEvent) -> void:
 			_track_view.pan_by_pixels(mm.relative.x)
 			_track.queue_redraw()
 			_update_track_edge_labels()
+		elif not _deploy_drag.is_empty():
+			if _deploy_drag_moved or absf(mm.position.x - _deploy_press_x) >= 4.0:
+				_deploy_drag_t = _x_to_abs(mm.position.x)
+				_deploy_drag_moved = true
+				_track.queue_redraw()
 		elif _clim_key_drag >= 0:
 			if _clim_key_drag_moved or absf(mm.position.x - _clim_key_press_x) >= 4.0:
 				_clim_key_drag_t = _x_to_abs(mm.position.x)
@@ -3342,6 +3624,9 @@ func _build_right_cluster() -> Control:
 	_festival_chip = _mk_chip_btn("Festival", _on_festival_chip_pressed,
 		"Festival mode — populate every painted camp and watch the crowd from the settlement view. Each camp's supply (infinite, its own tanks or shared depots) is set per camp; nobody queues or leaves while it is on")
 	right.add_child(_festival_chip)
+	_deploy_chip = _mk_chip_btn("Deploy", _on_deploy_chip_pressed,
+		"Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up")
+	right.add_child(_deploy_chip)
 	_sfx_btn = _mk_icon_btn("🔇", _on_sfx_pressed, "")
 	right.add_child(_sfx_btn)
 	var sfx := get_node_or_null("/root/UiSound")
@@ -3390,7 +3675,8 @@ func _build_right_cluster() -> Control:
 			[record_btn, "Climate Record Book"], [challenge_btn, "Challenges"],
 			[report_btn, "Site Report"], [map_btn, "Map select"],
 			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
-			[_festival_chip, "Festival mode"], [_settlement_chip, "Settlement view"],
+			[_festival_chip, "Festival mode"], [_deploy_chip, "Site deployment"],
+			[_settlement_chip, "Settlement view"],
 			[_projects_chip, "Site Projects"], [_ha_chip, "Home Assistant"]]:
 		var b: Button = pair[0]
 		var lbl := str(pair[1])

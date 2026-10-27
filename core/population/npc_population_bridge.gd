@@ -21,6 +21,11 @@ const PERSIST_INTERVAL_H := 0.5   # snapshot into specs.pop_state at most 2x/sim
 const PERSIST_PER_TICK := 4
 
 var _engines: Dictionary = {}          # item_id -> NpcPopulationEngine
+## Camps the site deployment director has pinned as ALL HANDS (iid -> true):
+## forced to the full tier, their boards beating the routine's leisure.
+var _all_hands: Dictionary = {}
+## Last tick's camps [{id, home, count}], both tiers (crew_summary).
+var _camp_homes: Array = []
 ## The LIGHT tier (festival scale): one CrowdCohort per camp that is not in
 ## focus, the tier each camp is currently in, and the full engines PARKED
 ## while their camp is light (board, labour, skills and duties stay on them,
@@ -301,6 +306,9 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		habitats.append(d0)
 		camps.append({"id": str(d0.get("id", "")), "home": _home_pos(specs0, main),
 			"count": clampi(int(float(specs0.get("occupants", 10.0))), 1, 5000)})
+	# Every camp's home + headcount this tick, both tiers (the site deployment
+	# director picks crews off it before they have a board).
+	_camp_homes = camps
 	var ts_mult := 0.0
 	if main != null and "time_scale" in main and NpcDisplayPrefs.speed_shed():
 		ts_mult = absf(float(main.get("time_scale"))) * 3600.0
@@ -309,6 +317,12 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	if not _tiers_frozen:
 		_tiers = CrowdFocus.decide(camps, _viewer_xz, _watched_iid, _tiers, _tier_pending, abs_h,
 			max_full, ts_mult)
+		# ALL HANDS: a camp with a site deploy / pack-up on runs FULL whatever
+		# the focus policy says — only a full engine has a board, and the
+		# board is where the work is.
+		for iid in _all_hands:
+			if _tiers.has(iid):
+				_tiers[iid] = CrowdFocus.TIER_FULL
 
 	for item in habitats:
 		var d: Dictionary = item
@@ -362,6 +376,8 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			# reads off the cohort, so both tiers pick the same circles.
 			"camp_home": home_xz,
 			"camp_seed": iid,
+			# The site deployment schedule has this camp's hands on deck.
+			"all_hands": _all_hands.has(iid),
 			"time_mult": absf(float(main.get("time_scale"))) * 3600.0 if "time_scale" in main else 0.0,
 			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
 			"bed_spot_of": func(sid: String, k: int) -> Dictionary:
@@ -865,7 +881,10 @@ func linkage_build_status(iid: String, project_id: String, center: Vector2, radi
 				present.append({"id": ag.id, "pos": ag.pos,
 					"color": NpcPopulationEngine.color_for_agent(ag.id)})
 	return {"found": true, "state": str(project.get("state", "")),
-		"progress": float(roll.get("progress", 0.0)), "present": present}
+		"progress": float(roll.get("progress", 0.0)), "present": present,
+		# Per-task fractions: a staging site lays parts out during one phase
+		# and seats them during the next.
+		"tasks": SiteProject.task_fractions(project, board) if board != null else {}}
 
 
 func project_store_for(iid: String) -> SiteProjectStore:
@@ -1135,9 +1154,10 @@ func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
 	for p in store.projects:
 		var project: Dictionary = p
 		var kind := str(project.get("kind", ""))
-		if kind != SiteProject.KIND_LINKAGE_BUILD \
-				and kind != SiteProject.KIND_LINKAGE_BREAKDOWN:
+		if not SiteProject.is_build_kind(kind) and not SiteProject.is_breakdown_kind(kind):
 			continue
+		# A site deploy / pack-up project on anything but a linkage has no
+		# builder here (its ghost is the generic one, stamped by its phases).
 		var builder := _linkage_builder_for(main, str(project.get("prop_id", "")))
 		if builder == null:
 			continue
@@ -1157,7 +1177,7 @@ func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
 				builder.call("set_ghost_alpha", 1.0)
 				project["vis_reset"] = true
 			continue
-		if kind == SiteProject.KIND_LINKAGE_BREAKDOWN:
+		if SiteProject.is_breakdown_kind(kind):
 			var bd := SiteProject.breakdown_progress(project, board)
 			# `folded` used to `continue` (stop painting) — which froze the
 			# frame at whatever the LAST push showed while pack_prop's ~3 s
@@ -2054,6 +2074,43 @@ func chore_board_for(item_id: String) -> NpcChoreBoard:
 func roster_size_for(item_id: String) -> int:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
 	return engine.agents.size() if engine != null else 0
+
+
+## Every camp as a CREW for the site deployment planner, both tiers:
+## [{iid, home: Vector2, roster, board (bool: full tier with a board),
+##   free_chores, free_projects}]. A light camp has no board (0 room) until
+## it is pinned ALL HANDS and runs full on the next tick.
+func crew_summary() -> Array:
+	var out: Array = []
+	for c in _camp_homes:
+		var cd := c as Dictionary
+		var iid := str(cd.get("id", ""))
+		var engine: NpcPopulationEngine = _engines.get(iid)
+		var board = engine.chore_board if engine != null else null
+		var free_chores := 0
+		var free_projects := 0
+		if board != null:
+			free_chores = maxi(NpcChoreBoard.MAX_CHORES - board.chores.size(), 0)
+			var store := project_store_for(iid)
+			free_projects = maxi(SiteProjectStore.MAX_PROJECTS - store.active().size(), 0)
+		out.append({"iid": iid, "home": cd.get("home", Vector2.ZERO),
+			"roster": engine.agents.size() if engine != null else int(cd.get("count", 0)),
+			"board": board != null, "free_chores": free_chores,
+			"free_projects": free_projects, "all_hands": _all_hands.has(iid)})
+	return out
+
+
+## Pin / release a camp as ALL HANDS (the site deployment director): full
+## tier whatever the focus policy, the board beating leisure blocks.
+func set_all_hands(iid: String, on: bool) -> void:
+	if on:
+		_all_hands[iid] = true
+	else:
+		_all_hands.erase(iid)
+
+
+func all_hands_ids() -> Array:
+	return _all_hands.keys()
 
 
 ## First habitat with a live engine, people, and a board — where a queued

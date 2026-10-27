@@ -98,6 +98,7 @@ func add(poly: PackedVector2Array, params: Dictionary = {}) -> String:
 		"headcount": params.get("headcount", 0),
 		"headcount_locked": params.get("headcount_locked", false),
 		"festival_seeded": params.get("festival_seeded", false),
+		"built": params.get("built", true),
 		# A new camp draws one of its style's saved layouts, by weight, off its
 		# own seed — and KEEPS it, so adding a layout later never restyles a
 		# camp that is already standing.
@@ -329,6 +330,7 @@ func serialize() -> Dictionary:
 			"headcount": int(rec.get("headcount", 0)),
 			"headcount_locked": bool(rec.get("headcount_locked", false)),
 			"festival_seeded": bool(rec.get("festival_seeded", false)),
+			"built": bool(rec.get("built", true)),
 			"variant": str(rec.get("variant", "")),
 			"style_override": rec.get("style_override", {}),
 			"edits": rec.get("edits", {}),
@@ -377,6 +379,7 @@ func deserialize(data: Dictionary) -> void:
 			"headcount": d.get("headcount", 0),
 			"headcount_locked": d.get("headcount_locked", false),
 			"festival_seeded": d.get("festival_seeded", false),
+			"built": d.get("built", true),
 			"variant": d.get("variant", ""),
 			"style_override": d.get("style_override", {}),
 			"edits": d.get("edits", {}),
@@ -434,6 +437,11 @@ static func _normalized(rec: Dictionary) -> Dictionary:
 		# Laid out by festival mode (the setup card, the demo zone): Clear
 		# seeded removes it, Move festival to marker moves it.
 		"festival_seeded": bool(rec.get("festival_seeded", false)),
+		# Standing (true) or packed away (false): the site deployment
+		# schedule's crews pitch and strike camps. Unbuilt, the camp draws no
+		# household and offers no bed, shade or obstacle; its people sleep on
+		# the ground until it is pitched.
+		"built": bool(rec.get("built", true)),
 		"variant": str(rec.get("variant", "")),
 		"style_override": _clean_override(rec.get("style_override", {})),
 		"edits": _clean_edits(rec.get("edits", {})),

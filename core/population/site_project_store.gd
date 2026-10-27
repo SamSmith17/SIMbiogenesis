@@ -7,7 +7,10 @@ extends RefCounted
 ## meta is a summary, never a timeline dump — and the collection is capped
 ## with oldest-done pruning so the specs blob can't grow without bound.
 
-const MAX_PROJECTS := 8
+## Raised from 8 on 2026-10-26: a site deployment (SiteDeployDirector) makes
+## one project per structure or camp, and a festival camp's board can hold a
+## dozen at once. The persisted blob stays lean (a project is its task list).
+const MAX_PROJECTS := 48
 
 var projects: Array = []   # of SiteProject record Dictionaries
 

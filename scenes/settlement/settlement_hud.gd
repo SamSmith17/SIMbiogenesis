@@ -37,6 +37,8 @@ var _fest_panel: PanelContainer = null
 var _fest_status: Label = null
 var _fest_notes: Label = null
 var _fest_sig := "<unbuilt>"
+## The site deployment schedule's line ("Deploying the site · 3 of 12 done").
+var _fest_deploy_lbl: Label = null
 var _fest_pop_slider: HSlider = null
 var _fest_pop_lbl: Label = null
 ## The camps' own headcount total (the festival status's "natural"): what the
@@ -411,6 +413,30 @@ func _build_festival_panel() -> void:
 		if _view != null:
 			_view.call("toggle_editing"))
 	row3.add_child(edit)
+	# The site deployment schedule: set up the whole site to be built (or
+	# packed) by the crews from the playhead's time on.
+	_fest_deploy_lbl = Label.new()
+	_fest_deploy_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_fest_deploy_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
+	_fest_deploy_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(_fest_deploy_lbl)
+	var row_dep := HBoxContainer.new()
+	row_dep.add_theme_constant_override("separation", 6)
+	v.add_child(row_dep)
+	var dep_btn := Button.new()
+	UITheme.style_button(dep_btn)
+	dep_btn.text = "🏕 Deploy from now"
+	dep_btn.tooltip_text = "Every packed structure and struck camp gets built by the crews, starting at the playhead's time (a flag on the timeline; drag it to retime)"
+	dep_btn.pressed.connect(func() -> void:
+		_schedule_site(SiteDeploySchedule.ACTION_DEPLOY))
+	row_dep.add_child(dep_btn)
+	var pack_btn := Button.new()
+	UITheme.style_button(pack_btn)
+	pack_btn.text = "📦 Pack up from now"
+	pack_btn.tooltip_text = "Every standing structure and camp gets taken down and packed by the crews, starting at the playhead's time"
+	pack_btn.pressed.connect(func() -> void:
+		_schedule_site(SiteDeploySchedule.ACTION_PACKUP))
+	row_dep.add_child(pack_btn)
 	var row4 := HBoxContainer.new()
 	row4.add_theme_constant_override("separation", 6)
 	v.add_child(row4)
@@ -455,6 +481,21 @@ func _look_at_camp(lot_key: String) -> void:
 		cam.call("look_at_xz", CampAreaLayer._inner_point(poly))
 
 
+## Put a deploy / pack-up event at the playhead (the timeline's Deploy chip
+## does the same; this is the festival panel's way in).
+func _schedule_site(action: String) -> void:
+	var g: Node = ServiceLocator.graph()
+	if g == null or not g.has_method("site_deploy"):
+		return
+	var sd: SiteDeployDirector = g.call("site_deploy")
+	var main := get_tree().current_scene
+	if sd == null or main == null or not main.has_method("get_absolute_hours"):
+		return
+	sd.add_event(action, float(main.call("get_absolute_hours")))
+	_fest_sig = "<dirty>"
+	_refresh_festival_panel()
+
+
 func _festival_mode() -> Node:
 	var main := get_tree().current_scene
 	if main == null or not main.has_method("festival_mode_active"):
@@ -474,10 +515,19 @@ func _refresh_festival_panel() -> void:
 		return
 	var st: Dictionary = fm.call("status")
 	var notes: PackedStringArray = fm.call("notes")
-	var sig := "%s|%s" % [str(st), ";".join(notes)]
+	var dep_line := ""
+	var g: Node = ServiceLocator.graph()
+	if g != null and g.has_method("site_deploy"):
+		var sd: SiteDeployDirector = g.call("site_deploy")
+		if sd != null:
+			dep_line = str(sd.status().get("line", ""))
+	var sig := "%s|%s|%s" % [str(st), ";".join(notes), dep_line]
 	if sig == _fest_sig:
 		return
 	_fest_sig = sig
+	if _fest_deploy_lbl != null:
+		_fest_deploy_lbl.text = dep_line
+		_fest_deploy_lbl.visible = not dep_line.is_empty()
 	var people := int(st.get("people", 0))
 	var tiers := ""
 	if int(st.get("light", 0)) > 0:

@@ -73,65 +73,24 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	# PACKED state (PACKING_PLAN.md Phase 5): render the honest packed form
 	# instead of the deployed model. Non-packable records fall through and
 	# deploy normally (the flag is meaningless for them).
+	# A packed record with a build_state is UNDER CONSTRUCTION (Site Projects
+	# / the site deployment schedule): the record stays packed:true the whole
+	# time — the finishing phase's unpack effect is what deploys it.
+	var bs0: Variant = rec.get("build_state")
+	var constructing := bs0 is Dictionary and not (bs0 as Dictionary).is_empty()
 	if bool(rec.get("packed", false)):
-		# UNDER CONSTRUCTION (Site Projects): a packed linkage record whose
-		# build project has started renders the ghost structure growing at the
-		# build site instead of the crate. The record stays packed:true the
-		# whole time — the erect phase's unpack effect is what deploys it.
-		var bs: Variant = rec.get("build_state")
-		if bs is Dictionary and not (bs as Dictionary).is_empty() \
-				and rec.get("linkage_spec") is Dictionary:
-			return _build_construction_prop(rec, bs as Dictionary, ground_y_at)
+		# A linkage renders its own ghost frame growing part by part beside
+		# the crate.
+		if constructing and rec.get("linkage_spec") is Dictionary:
+			return _build_construction_prop(rec, bs0 as Dictionary, ground_y_at)
 		var pspec := packed_spec_for_record(rec)
-		if not pspec.is_empty():
+		# Anything else under construction falls through to its REAL model,
+		# drawn as a ghost that firms with the crew's phases (the generic
+		# branch below), the kit crate standing beside it; a pallet rack's
+		# labour-mode build site then stages its units off that model.
+		if not pspec.is_empty() and not constructing:
 			return _build_packed_prop(rec, pspec, ground_y_at)
-	var extras: Dictionary = {}
-	if rec.has("rack_spec"):
-		extras["rack_spec"] = rec.get("rack_spec", {})
-	if rec.has("linkage_spec"):
-		extras["linkage_spec"] = rec.get("linkage_spec", {})
-	if rec.has("flatpack_spec"):
-		extras["flatpack_spec"] = rec.get("flatpack_spec", {})
-	if rec.has("domelab_spec"):
-		extras["domelab_spec"] = rec.get("domelab_spec", {})
-	if rec.has("gantry_spec"):
-		extras["gantry_spec"] = rec.get("gantry_spec", {})
-	if rec.has("toroid_spec"):
-		extras["toroid_spec"] = rec.get("toroid_spec", {})
-	if rec.has("box_spec"):
-		extras["box_spec"] = rec.get("box_spec", {})
-	if rec.has("tank_spec"):
-		extras["tank_spec"] = rec.get("tank_spec", {})
-	# Without this a placed container ALWAYS renders as the 20' default,
-	# whatever its container_id says — and a stow plan solved against a 40'
-	# interior would then put crates through the walls.
-	if rec.has("container_spec"):
-		extras["container_spec"] = rec.get("container_spec", {})
-	if rec.has("pv_array_spec"):
-		extras["pv_array_spec"] = rec.get("pv_array_spec", {})
-	if model_id == GrowBed.MODEL_ID:
-		var bed_spec: Dictionary = {}
-		if rec.has("grow_bed_spec"):
-			bed_spec = (rec.get("grow_bed_spec", {}) as Dictionary).duplicate(true)
-		if rec.has("plant_abs_h"):
-			bed_spec["plant_abs_h"] = rec.get("plant_abs_h")
-		if rec.has("grow_days"):
-			bed_spec["grow_days"] = rec.get("grow_days")
-		extras["grow_bed_spec"] = bed_spec
-	if model_id == GeodesicDomeBuilder.MODEL_ID:
-		var dome_spec: Dictionary = {}
-		if rec.has("dome_spec"):
-			dome_spec = (rec.get("dome_spec", {}) as Dictionary).duplicate(true)
-		dome_spec["ghost_highlight"] = false
-		if not dome_spec.has("radius_m"):
-			dome_spec["radius_m"] = DomeParts.TARGET_RADIUS_M
-		extras["dome_spec"] = dome_spec
-	if model_id == MudBuildingStructureBuilder.MODEL_ID:
-		var mud_spec: Dictionary = {}
-		if rec.has("mud_spec"):
-			mud_spec = (rec.get("mud_spec", {}) as Dictionary).duplicate(true)
-		mud_spec["ghost_highlight"] = false
-		extras["mud_spec"] = mud_spec
+	var extras := model_extras(rec)
 	var model := ModelCatalog.instantiate(model_id, extras)
 	if model == null:
 		return null
@@ -182,15 +141,36 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	# runtimes — a ghost turbine must not spin — and no connection ports
 	# until it is real. Linkage construction has its own richer branch above.
 	var bs_any: Variant = rec.get("build_state")
+	var packed_build := bool(rec.get("packed", false)) and constructing
 	var under_construction := bs_any is Dictionary \
 		and not (bs_any as Dictionary).is_empty() \
-		and not bool(rec.get("packed", false)) \
+		and (not bool(rec.get("packed", false)) or packed_build) \
 		and not (rec.get("linkage_spec") is Dictionary)
 	if under_construction:
 		_apply_generic_ghost(model,
 			clampf(float((bs_any as Dictionary).get("ghost", 0.2)), 0.05, 1.0))
 		prop.prompt = "Under construction — see the crew's project"
 		prop.set_meta("under_construction", true)
+		if packed_build:
+			# The crew builds FROM the crate: it stands beside the ghost (the
+			# linkage construction prop does the same), nothing solid yet.
+			prop.set_meta("packed", true)
+			prop.set_collision_enabled(false)
+			var pspec2 := packed_spec_for_record(rec)
+			if not pspec2.is_empty():
+				var crate := PackedFormBuilder.build_node(pspec2)
+				crate.name = "KitCrate"
+				var off := maxf(prop.get_local_pick_radius(), 1.0) + float(pspec2.get("w_m", 1.0)) * 0.5 + 1.5
+				crate.position = Vector3(off, 0.0, 0.0)
+				prop.add_child(crate)
+		# A pallet rack's labour-mode build site stages the real units off
+		# the model (and hides it while the crew works); anything else gets
+		# the generic per-part staging site (parts laid out beside the crate,
+		# seated bottom up as the crew's labour is credited).
+		if model_id == PalletRackBuilder.MODEL_ID:
+			PalletRackBuildSite.attach(prop, rec)
+		else:
+			AssemblyBuildSite.attach(prop, rec)
 	else:
 		_maybe_attach_wind_spin(prop, rec)
 		_maybe_attach_hawt_tracker(prop, rec)
@@ -749,6 +729,63 @@ static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
 		child.queue_free()
 
+
+
+
+## The ModelCatalog extras a record's model is instantiated with (every
+## designer spec the record carries, the grow bed's planting, the dome's
+## and mud building's ghost flags). ONE place: the deployed build and the
+## staging site's own copy (AssemblyBuildSite) must build the same model.
+static func model_extras(rec: Dictionary) -> Dictionary:
+	var model_id := str(rec.get("model_id", ""))
+	var extras: Dictionary = {}
+	if rec.has("rack_spec"):
+		extras["rack_spec"] = rec.get("rack_spec", {})
+	if rec.has("linkage_spec"):
+		extras["linkage_spec"] = rec.get("linkage_spec", {})
+	if rec.has("flatpack_spec"):
+		extras["flatpack_spec"] = rec.get("flatpack_spec", {})
+	if rec.has("domelab_spec"):
+		extras["domelab_spec"] = rec.get("domelab_spec", {})
+	if rec.has("gantry_spec"):
+		extras["gantry_spec"] = rec.get("gantry_spec", {})
+	if rec.has("toroid_spec"):
+		extras["toroid_spec"] = rec.get("toroid_spec", {})
+	if rec.has("box_spec"):
+		extras["box_spec"] = rec.get("box_spec", {})
+	if rec.has("tank_spec"):
+		extras["tank_spec"] = rec.get("tank_spec", {})
+	# Without this a placed container ALWAYS renders as the 20' default,
+	# whatever its container_id says — and a stow plan solved against a 40'
+	# interior would then put crates through the walls.
+	if rec.has("container_spec"):
+		extras["container_spec"] = rec.get("container_spec", {})
+	if rec.has("pv_array_spec"):
+		extras["pv_array_spec"] = rec.get("pv_array_spec", {})
+	if model_id == GrowBed.MODEL_ID:
+		var bed_spec: Dictionary = {}
+		if rec.has("grow_bed_spec"):
+			bed_spec = (rec.get("grow_bed_spec", {}) as Dictionary).duplicate(true)
+		if rec.has("plant_abs_h"):
+			bed_spec["plant_abs_h"] = rec.get("plant_abs_h")
+		if rec.has("grow_days"):
+			bed_spec["grow_days"] = rec.get("grow_days")
+		extras["grow_bed_spec"] = bed_spec
+	if model_id == GeodesicDomeBuilder.MODEL_ID:
+		var dome_spec: Dictionary = {}
+		if rec.has("dome_spec"):
+			dome_spec = (rec.get("dome_spec", {}) as Dictionary).duplicate(true)
+		dome_spec["ghost_highlight"] = false
+		if not dome_spec.has("radius_m"):
+			dome_spec["radius_m"] = DomeParts.TARGET_RADIUS_M
+		extras["dome_spec"] = dome_spec
+	if model_id == MudBuildingStructureBuilder.MODEL_ID:
+		var mud_spec: Dictionary = {}
+		if rec.has("mud_spec"):
+			mud_spec = (rec.get("mud_spec", {}) as Dictionary).duplicate(true)
+		mud_spec["ghost_highlight"] = false
+		extras["mud_spec"] = mud_spec
+	return extras
 
 static func _disable_embedded_physics(model: Node3D) -> void:
 	if model == null:

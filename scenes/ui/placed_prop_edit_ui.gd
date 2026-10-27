@@ -828,6 +828,16 @@ func _rebuild_dynamic_sections() -> void:
 		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "Pack up",
 			"Pack into its shipping form, or deploy it", _model_btns, _on_pack_toggled)
 		_pack_btn.icon = UiIcons.icon("package", 14)
+		# The crew's version of the same two verbs, for every packable thing
+		# (a linkage has its own richer pair above). The site deployment
+		# director stages it exactly as a scheduled deploy would.
+		if mid != LinkageStructureBuilder.MODEL_ID and not (_rec.get("build_state") is Dictionary):
+			if bool(_rec.get("packed", false)):
+				_button("Crew: build", "Hand it to the nearest crew: laid out beside the crate, then put up part by part",
+					_model_btns, func() -> void: _on_crew_item(SiteDeploySchedule.ACTION_DEPLOY))
+			else:
+				_button("Crew: pack up", "Hand it to the nearest crew: taken down part by part, packed, carried to a container in reach",
+					_model_btns, func() -> void: _on_crew_item(SiteDeploySchedule.ACTION_PACKUP))
 
 
 ## User-imported models only: how SketchUp's invented gloss values are
@@ -1684,6 +1694,27 @@ func _on_crew_breakdown() -> void:
 		return
 	if sgv.has_method("notify_crew_queued"):
 		sgv.call("notify_crew_queued", site, "👷 Breakdown queued — %s" % UiText.count(rows.size(), "phase"))
+
+
+## One structure to the crew through the site deployment director (the
+## same rows and staging a scheduled deploy / pack-up uses).
+func _on_crew_item(action: String) -> void:
+	if _prop_id.is_empty():
+		return
+	var sgv: Node = _graph()
+	if sgv == null or not sgv.has_method("site_deploy"):
+		return
+	var sd: SiteDeployDirector = sgv.call("site_deploy")
+	var res: Dictionary = sd.queue_item("prop", _prop_id, action)
+	if not bool(res.get("ok", false)):
+		if sgv.has_method("_show_toast"):
+			sgv.call("_show_toast", "Crew: %s" % str(res.get("error", "could not queue it")))
+		return
+	var verb := "Build" if action == SiteDeploySchedule.ACTION_DEPLOY else "Pack-up"
+	var detail := "a crew is on it" if not str(res.get("project_id", "")).is_empty() else "waiting for a crew's next tick"
+	if sgv.has_method("notify_crew_queued"):
+		sgv.call("notify_crew_queued", res.get("site", Vector2.ZERO), "👷 %s queued" % verb, detail)
+	close()
 
 
 func _on_crew_rebuild() -> void:

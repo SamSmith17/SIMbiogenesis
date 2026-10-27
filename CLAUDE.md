@@ -657,6 +657,30 @@ Godot.exe.exe --headless --path . --script core/population/venue_crowd_selftest.
 # (open / evening / block). Snapshots and byte-restores camp / placement /
 # spaces files, the graph autosave and npc_display.cfg:
 Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=walton --capture=festivalmode --shots-dir=<label> --quit-after-capture
+# Site deployment schedule (offline — SiteDeploySchedule record: add / move /
+# remove, forward-crossing `due`, backward-crossing `rewound`, phase_at, the
+# JSON round trip; SiteDeployPlanner: labour from the packed mass, the rows
+# per structure kind and action with their effects and deps, nearest-crew
+# assignment under the board caps, the ALL HANDS pick; a real NpcChoreBoard
+# taking a deploy plan + the SiteProject rollup; the camp reveal count and
+# the camp record's `built` flag; the staging site's stage_state / part_seat,
+# the load-out row, the manual stamp). EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/population/site_deploy_selftest.gd
+# The same end to end on Walton (sandbox): three packed kits + festival mode,
+# "pack everything now" strikes every camp (no beds) and packs every prop, a
+# DEPLOY event the clock crosses pins crews ALL HANDS, projects land, people
+# are seen DOING them, a camp seen half-pitched, every kit unpacked + every
+# camp standing at the end (the shiftpod cut into parts and laid out by its
+# staging site, the dome staged by its builder); a scrub back past the event
+# puts it all back and re-crossing fires it again; a PACK-UP event with the
+# crew carries the crates to the container's door; the file; one crate
+# handed to the crew on its own (queue_item):
+tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 1500
+# The LOOK of per-part staging, close up (sandbox, ~2.5 min): three kits on
+# open ground near the marker handed to the crew one by one (queue_item), the
+# settlement camera 40-55 m over them, shots of the yard laid out, the dome
+# half up by its builder, the shiftpod seating, everything standing:
+tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_look_probe.gd -Label site_deploy_look -Timeout 900
 # J Light Studio (offline — core/placed_lights/): layer v2 -> v3 migration
 # (radians -> degrees, type -> kind, identical looks share ONE auto style), the
 # built-in map path staying the v2 path, linked styles (style edit restyles
@@ -10324,6 +10348,98 @@ camp shares a name until the camp outgrows the pool; other ids hash. The id is
 the unique key everywhere, never the name. The population and cohort
 selftests clear custom names in `_init` (`reset_custom_names_for_test`) so a
 player's friends never move a pin.
+
+## Site deployment schedule — "set a time, everyone builds / packs" (2026-10-26)
+
+Plan: `plans/DEPLOY_SCHEDULE_PLAN.md`. Deployable infrastructure as a game
+mechanic: the timeline's **Deploy** chip (or the festival panel's "Deploy
+from now" / "Pack up from now") puts a DEPLOY or PACK-UP event at the
+playhead; when the clock crosses it, the camps' people build every packed
+structure and pitch every struck camp (or take it all down and pack it),
+and the site lives in it. Flags on the clips lane (drag to retime,
+right-click, double-click to jump); the chip reads green while a crew is on
+it. Everything rides the existing Site Projects pipeline; nothing was
+duplicated.
+- **`SiteDeploySchedule`** (pure): the per-world record (WorldPaths kind
+  `deploy_schedule`, `TerrainLoader.deploy_schedule_path`) — events
+  `{id, action deploy|packup, at_h}` and a `fired` stamp per event that
+  carries what a reload needs (crews, items, pending, projects, done).
+  `due(prev, now)` = forward crossings not yet fired; `rewound` = fired
+  events the clock went back past; moving an event clears its stamp.
+- **`SiteDeployPlanner`** (pure): inventory items (props with a packed spec,
+  painted camps) → `pick_crews` (nearest camps to the work until
+  `ALL_HANDS_MAX_PEOPLE` 320) → `assign` (nearest crew with board room: rows
+  + one project slot; the rest wait) → `rows_for(item, action, roster)`:
+  linkage = the rebuild / breakdown rows; pallet rack = unpack → raise
+  frames (four) → decks → finish (unpack_prop); any other packable prop =
+  lay out → assemble (ghost firming through `set_build_phase`) → finish;
+  pack-up = take down (ghost) → pack (pack_prop); a camp = one pitch /
+  strike row with the new `set_camp_built` effect. Labour is PERSON-HOURS
+  from the packed mass (0.4 + kg/40, pack-up ×0.6) — estimates, tune there.
+- **`SiteDeployDirector`** (SystemGraphView `site_deploy()`, ticked after
+  the bridge): fires due events (toast + "tap to watch"), pins the picked
+  crews as **ALL HANDS** (`NpcPopulationBridge.set_all_hands`: forced FULL
+  tier after `CrowdFocus.decide`, ctx `all_hands` through `_make_ctx`, and
+  in `NpcAgent._step_idle` the board beats every LEISURE block — a festival
+  day is SOCIAL all afternoon and `_begin_social` always succeeds, so
+  without this nobody ever reached the board), creates one project per item
+  (kinds `site_deploy` / `site_packup`; `SiteProject.is_build_kind` /
+  `is_breakdown_kind` drive the linkage ghost push), retries pending items
+  every tick as boards free up, pushes a camp's live built fraction from
+  the project rollup, releases the crews when all are done. A backward
+  scrub past a fired event cancels its projects and puts every item back
+  INSTANTLY (the fire's scrub rule, as far as a simulated crew allows);
+  the chip's "Pack / Deploy everything now, no crew" does the same for
+  setting up a before-state.
+- **World reveal**: a packed prop with `build_state` that is not a linkage
+  falls through to its REAL model, ghosted, with the kit crate beside it
+  (`PlacedPropRuntime`, `packed_build`); the pack effect clears
+  `build_state` + `build_run` (left on, the crate rendered as a ghost
+  forever). `PalletRackBuildSite` gained LABOUR mode (progress × makespan,
+  lanes only for people on site, NpcStandIns). Painted camps carry `built`
+  (CampAreaLayer, default true); `CampAreaRuntime.set_built_fraction` hides
+  household instances (`visible_instance_count`, prefix per class batch),
+  their lights, and the shelters / shades / solids people use (entries carry
+  `ix` / `n` in their batch), so a struck camp offers no beds and its people
+  sleep on the ground until it is pitched.
+- Caps raised: `SiteProjectStore.MAX_PROJECTS` 8 → 48 (one project per
+  structure). Boards stay at 160 chores; the planner spreads items over the
+  nearest crews and the rest wait.
+- **Per-part staging (`gameplay/assembly_build_site.gd`, `AssemblyBuildSite`,
+  second pass the same day).** Every non-linkage, non-rack prop a crew
+  builds or packs gets a labour-mode site (`build_run = {mode: "labour",
+  action, iid, project_id}`, attached by PlacedPropRuntime beside the
+  generic ghost, which it hides while it owns the picture). It reads the
+  project's PER-TASK fractions (`SiteProject.task_fractions`, carried by
+  `linkage_build_status` as `tasks`) through the pure `stage_state`:
+  deploy = `lay_out` lays the parts in a yard beside the crate, `assemble`
+  seats them one at a time bottom up (`part_seat`); pack-up = `strip`
+  takes them down to the yard, `pack` takes them into the crate. Two ways
+  of cutting a structure into parts: the designer builders with an
+  `assembly` build option (dome & zome, toroid, flat-pack) are REBUILT at a
+  quantised fraction (`BUILDER_STEPS` 24, their own ring / part drop-in);
+  everything else (a GLB, a gantry) is instantiated once through the shared
+  `PlacedPropRuntime.model_extras` and SPLIT into its mesh instances (one
+  mesh of several surfaces splits per surface), sorted bottom up, each part
+  gliding from its yard spot to its seat with a lift. The real people on
+  the chore stand at the prop in their work poses; the site draws no crew
+  of its own.
+- **One structure at a time**: the prop editor's "Crew: build" / "Crew:
+  pack up" (every packable thing but a linkage, which keeps its own pair)
+  go through `SiteDeployDirector.queue_item(kind, id, action)` — the same
+  rows and staging, the nearest crew with board room, pinned ALL HANDS if
+  it has no board yet, waiting under the record's `manual` stamp that the
+  tick services like an event's. A pack-up near a cargo container (200 m)
+  ends with the crate carried to its door (`item.loadout` → the `load_out`
+  row; the linkage breakdown rows take the same).
+- Polish: the Site Projects panel heads its list with the live deployment
+  line, a progress bar and **Watch** (the settlement view over the busiest
+  work site); the active flag's tag on the timeline fills with the crews'
+  progress; the chip's no-crew actions ask first (ConfirmationDialog naming
+  what they will swap).
+- Not built: per-camp schedules, the light tier working (only pinned full
+  camps do), a tour stop, the gantry's own assembly order (it splits by
+  mesh like a GLB).
 
 ## NPC realism pass — spacing, sliding, moving between spaces (2026-10-25)
 

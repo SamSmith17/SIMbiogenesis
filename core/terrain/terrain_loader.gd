@@ -5545,6 +5545,44 @@ func camp_area_at(xz: Vector2) -> String:
 	return camp_areas.area_at(xz) if _camp_layer_ready() else ""
 
 
+## How much of a painted camp stands (the site deployment schedule: its
+## crews pitch and strike camps). `frac` 0..1 is pushed to the runtime
+## (household reveal, lights, beds / shade / obstacles); with `persist` the
+## ends (0 / 1) are written to the record's `built` flag and saved, so a
+## reload stands the camp as the crew left it. Never rebuilds the camp.
+func set_camp_built(id: String, frac: float, persist: bool = false) -> bool:
+	if not _camp_layer_ready() or camp_areas.index_of(id) < 0:
+		return false
+	var rt := _ensure_camp_area_runtime()
+	if rt != null:
+		rt.set_built_fraction(id, frac)
+	if persist and (frac <= 0.0 or frac >= 1.0):
+		var built := frac >= 1.0
+		if bool(camp_areas.get_area(id).get("built", true)) != built:
+			camp_areas.update(id, {"built": built})
+			camp_areas.save_to(_camp_areas_path)
+	return true
+
+
+## The record's standing flag (a camp mid-pitch still reads its last end).
+func camp_built(id: String) -> bool:
+	if not _camp_layer_ready():
+		return true
+	var rec := camp_areas.get_area(id)
+	return bool(rec.get("built", true)) if not rec.is_empty() else true
+
+
+## Live structure count of ONE painted camp (0 while over budget; an unbuilt
+## camp still reports its count — the crew has that much to pitch).
+func camp_area_structure_count(id: String) -> int:
+	return _camp_area_runtime.area_structure_count(id) if is_instance_valid(_camp_area_runtime) else 0
+
+
+## The site deployment schedule's file for this world (SiteDeployDirector).
+func deploy_schedule_path() -> String:
+	return WorldPaths.site_file("deploy_schedule", _lat, _lon)
+
+
 ## Record + live counts for the options bar / harness. {} when unknown.
 func camp_area_info(id: String) -> Dictionary:
 	if not _camp_layer_ready():
