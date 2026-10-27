@@ -7082,6 +7082,13 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 			max_voc_guess = float(rsp.get("max_voc", 450.0))
 
 	var topo := SolarArrayIntelligence.best_series_parallel(count, panel_voc, max_voc_guess)
+	# A designed structure (a toroid's 6S x 4P ring) states its own wiring.
+	var want_s := int(opts.get("series", 0))
+	var want_p := int(opts.get("parallel", 0))
+	if want_s > 0 and want_p > 0:
+		topo = {"series": want_s, "parallel": want_p, "fitted": count,
+			"equiv_voc": float(want_s) * panel_voc, "array_topology": "%dS x %dP" % [want_s, want_p],
+			"wire_mode": "series" if want_s > 1 else "parallel"}
 	var equiv := SolarArrayIntelligence.build_array_equiv_specs(
 			count, panel_watts, panel_voc, panel_vmp, panel_imp, panel_isc, topo)
 
@@ -7103,6 +7110,8 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 		"osm_tag": array_tag,
 		"array_tag": array_tag,
 		"panel_count": count,
+		"design_series": int(opts.get("series", 0)),
+		"design_parallel": int(opts.get("parallel", 0)),
 		"wmp": panel_watts,
 		"voc": panel_voc,
 		"vmp": panel_vmp,
@@ -7443,6 +7452,13 @@ func _apply_array_controller_choice(array_id: String, controller_id: String,
 	var it := model.get_item(array_id)
 	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
 	var topo := SolarArrayIntelligence.best_series_parallel(count, panel_voc, max_voc)
+	# A designed structure's own wiring (a toroid's 6S x 4P) stands while its
+	# string fits the controller.
+	var ds := int(sp.get("design_series", 0))
+	var dp := int(sp.get("design_parallel", 0))
+	if ds > 0 and dp > 0 and float(ds) * panel_voc <= max_voc + 0.5:
+		topo = {"series": ds, "parallel": dp, "fitted": count, "equiv_voc": float(ds) * panel_voc,
+			"array_topology": "%dS x %dP" % [ds, dp], "wire_mode": "series" if ds > 1 else "parallel"}
 	var equiv := SolarArrayIntelligence.build_array_equiv_specs(
 			count, panel_watts, panel_voc,
 			float(sp.get("vmp", SolarArrayBuilder.PANEL_VMP)),

@@ -376,6 +376,9 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 	elif model_id == PalletRackBuilder.MODEL_ID:
 		# A rack with a sloped solar array owns a graph array, like a linkage.
 		Callable(PlacedPropService, "seed_pallet_rack_graph").call_deferred(main, prop_id)
+	elif model_id == ToroidLabBuilder.MODEL_ID:
+		# A toroid's panel ring is a graph array, like a linkage structure's.
+		Callable(PlacedPropService, "seed_toroid_graph").call_deferred(main, prop_id)
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		# A designed gantry is a cartesian_machine processor on the graph.
 		Callable(PlacedPropService, "seed_gantry_graph").call_deferred(main, prop_id)
@@ -740,6 +743,65 @@ static func remove_pallet_rack_graph(main: Node, prop_id: String) -> void:
 		sgv.call("remove_imported_solar_array", pallet_rack_array_tag(prop_id))
 
 
+static func toroid_array_tag(prop_id: String) -> String:
+	return "toroid_%s" % prop_id
+
+
+## Push a placed toroid's panel ring into the system graph as an imported
+## array tagged per prop (idempotent: re-applying replaces only this
+## toroid's array; no panels, or packed up = the array is dropped), wired the
+## way the design says (series x parallel). The tilt comes from the panels'
+## mean normal rotated into world space; a full ring averages to nearly flat.
+static func seed_toroid_graph(main: Node, prop_id: String) -> bool:
+	if main == null or prop_id.is_empty():
+		return false
+	var sgv := _system_graph_view(main)
+	if sgv == null:
+		return false
+	var tag := toroid_array_tag(prop_id)
+	var rec := get_prop_record(main, prop_id)
+	var spec: Dictionary = rec.get("toroid_spec", {}) as Dictionary
+	var summary := ToroidLabBuilder.panel_summary(spec)
+	var count := int(summary.get("count", 0))
+	if count <= 0 or bool(rec.get("packed", false)):
+		if sgv.has_method("remove_imported_solar_array"):
+			sgv.call("remove_imported_solar_array", tag)
+		return false
+	var n_world: Vector3 = summary.get("avg_normal", Vector3.UP)
+	var prop := _find_prop_node(main, prop_id)
+	if prop is Node3D:
+		n_world = (prop as Node3D).global_transform.basis * n_world
+	var orient: Dictionary = LinkageStructureBuilder.orientation_from_normal(n_world)
+	var opts := {
+		"tilt_deg": float(orient.get("tilt_deg", 0.0)),
+		"azimuth_deg": float(orient.get("azimuth_deg", 180.0)),
+		"panel_w_m": float(summary.get("panel_w_m", 0.0)),
+		"panel_h_m": float(summary.get("panel_h_m", 0.0)),
+		"voc": float(summary.get("voc", 0.0)),
+		"vmp": float(summary.get("vmp", 0.0)),
+		"isc": float(summary.get("isc", 0.0)),
+		"imp": float(summary.get("imp", 0.0)),
+		"show_picker": false,
+		"auto_wire": true,
+	}
+	if int(summary.get("series", 0)) > 0 and int(summary.get("parallel", 0)) > 0:
+		opts["series"] = int(summary["series"])
+		opts["parallel"] = int(summary["parallel"])
+	if sgv.has_method("add_imported_solar_panels"):
+		sgv.call("add_imported_solar_panels", count, float(summary.get("watts_per_panel", 100.0)),
+			"%s solar" % str(spec.get("name", "Toroid")), tag, opts)
+	return true
+
+
+## Remove the graph array a deleted toroid owned.
+static func remove_toroid_graph(main: Node, prop_id: String) -> void:
+	if main == null or prop_id.is_empty():
+		return
+	var sgv := _system_graph_view(main)
+	if sgv != null and sgv.has_method("remove_imported_solar_array"):
+		sgv.call("remove_imported_solar_array", toroid_array_tag(prop_id))
+
+
 static func _system_graph_view(main: Node) -> Node:
 	var sgv := ServiceLocator.graph()
 	if sgv == null:
@@ -871,6 +933,11 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		var rec_extra_dl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_dl.has("domelab_spec"):
 			extras["domelab_spec"] = rec_extra_dl["domelab_spec"]
+		extras["ghost_highlight"] = true
+	elif model_id == ToroidLabBuilder.MODEL_ID:
+		var rec_extra_tl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_tl.has("toroid_spec"):
+			extras["toroid_spec"] = rec_extra_tl["toroid_spec"]
 		extras["ghost_highlight"] = true
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		var rec_extra_gl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary

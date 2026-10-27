@@ -10,6 +10,8 @@ extends SceneTree
 ## --yaw=<deg> turns the model first (to line a model's faces up with a rack's).
 ## --dome-preset=<id> studies a DomeLabPresets design the same way (the
 ## helical corten home against its SketchUp source, 2026-10-26).
+## --toroid-preset=<id> a ToroidLabPresets design (the reference toroid
+## against "Overview Toroid structure.glb").
 
 var _model: Node3D = null
 var _out := ""
@@ -33,6 +35,8 @@ func _initialize() -> void:
 			preset = s.substr(14)
 		elif s.begins_with("--dome-preset="):
 			preset = "dome:" + s.substr(14)
+		elif s.begins_with("--toroid-preset="):
+			preset = "toroid:" + s.substr(16)
 		elif s.begins_with("--out="):
 			_out = s.substr(6)
 		elif s.begins_with("--yaw="):
@@ -59,6 +63,13 @@ func _initialize() -> void:
 			quit(1)
 			return
 		_model = DomeLabBuilder.build_node(dp["spec"])
+	elif preset.begins_with("toroid:"):
+		var tp := ToroidLabPresets.builtin(preset.substr(7))
+		if tp.is_empty():
+			print("no toroid preset ", preset)
+			quit(1)
+			return
+		_model = ToroidLabBuilder.build_node(tp["spec"])
 	else:
 		var d := PalletRackBuilder.design_preset(preset)
 		if d.is_empty():

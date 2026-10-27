@@ -96,6 +96,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		extras["domelab_spec"] = rec.get("domelab_spec", {})
 	if rec.has("gantry_spec"):
 		extras["gantry_spec"] = rec.get("gantry_spec", {})
+	if rec.has("toroid_spec"):
+		extras["toroid_spec"] = rec.get("toroid_spec", {})
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
 	if rec.has("tank_spec"):
@@ -151,6 +153,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Edit furniture (click) / Move (drag)"
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		prop.prompt = "Edit dome (click) / Move (drag)"
+	elif model_id == ToroidLabBuilder.MODEL_ID:
+		prop.prompt = "Edit toroid (click) / Move (drag)"
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		prop.prompt = "Edit gantry (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
@@ -272,6 +276,10 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var dl := DomeLabDesign.packed_spec(DomeLabDesign.solve(rec.get("domelab_spec") as Dictionary))
 		if not dl.is_empty():
 			return dl
+	if rec.get("toroid_spec") is Dictionary:
+		var tl := ToroidLabDesign.packed_spec(ToroidLabDesign.solve(rec.get("toroid_spec") as Dictionary))
+		if not tl.is_empty():
+			return tl
 	if rec.get("gantry_spec") is Dictionary:
 		var gl := GantryLabDesign.packed_spec(GantryLabDesign.solve(rec.get("gantry_spec") as Dictionary))
 		if not gl.is_empty():

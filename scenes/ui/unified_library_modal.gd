@@ -274,6 +274,11 @@ func _populate() -> void:
 			"detail": "Geodesic domes, zomes and helix zomes: conduit, hubs, flat bars, rotegrity, plates → BOM + cut files.",
 		},
 		{
+			"kind": "toroidlab",
+			"label": "Toroid designer…",
+			"detail": "Bent-tube toroids on pipe fittings: rings, bracing and tension lines, a pleated correx canopy, a solar ring → cut list, bend templates, sheets.",
+		},
+		{
 			"kind": "gantrylab",
 			"label": "CNC gantry designer…",
 			"detail": "Printers, routers, lasers, plotters on V-slot: CoreXY, delta, bed-slinger… → kinematics sim, G-code, BOM, firmware config.",
@@ -441,7 +446,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "gantrylab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -514,6 +519,12 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "The dome designer needs a location map (TerrainLoader)."
+		"toroidlab":
+			if _loader != null and _loader.has_method("open_toroidlab"):
+				_loader.call("open_toroidlab")
+				close()
+			else:
+				_status.text = "The toroid designer needs a location map (TerrainLoader)."
 		"gantrylab":
 			if _loader != null and _loader.has_method("open_gantrylab"):
 				_loader.call("open_gantrylab")
@@ -588,6 +599,11 @@ func _place_structure(model_id: String) -> void:
 	if model_id == DomeLabBuilder.MODEL_ID:
 		if _loader != null and _loader.has_method("open_domelab"):
 			_loader.call("open_domelab")
+			close()
+			return
+	if model_id == ToroidLabBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_toroidlab"):
+			_loader.call("open_toroidlab")
 			close()
 			return
 	if model_id == GantryLabBuilder.MODEL_ID:

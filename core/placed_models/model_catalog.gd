@@ -151,6 +151,10 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		var dl_spec: Dictionary = extras.get("domelab_spec", extras) as Dictionary
 		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
+	if model_id == ToroidLabBuilder.MODEL_ID:
+		var tl_spec: Dictionary = extras.get("toroid_spec", extras) as Dictionary
+		return ToroidLabBuilder.build_node(tl_spec, "ToroidStructure",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
 	if model_id == GantryLabBuilder.MODEL_ID:
 		var gl_spec: Dictionary = extras.get("gantry_spec", extras) as Dictionary
 		return GantryLabBuilder.build_node(gl_spec, "GantryMachine",
@@ -441,6 +445,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "domelab_structure", "label": "Dome or zome (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 3.0},
+		# Procedural bent-tube toroids (ToroidLabBuilder): the toroid lab's
+		# frames with their pleated canopy and solar ring.
+		{"id": "toroidlab_structure", "label": "Toroid (parametric)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 3.2},
 		# Procedural CNC gantry (GantryLabBuilder): the gantry lab's designed
 		# printers, routers, lasers and plotters, with their job runtime.
 		{"id": "gantry_machine", "label": "CNC gantry (designed)",

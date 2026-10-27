@@ -912,6 +912,21 @@ Godot.exe.exe --headless --path . --script core/gantrylab/assembly/gantrylab_ass
 # run on the world clock (drivers in true mm, beads on the placed bed),
 # packed → bundle, Edit gantry… rebinds, Apply re-syncs the graph node:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/gantrylab_designer_check.gd -Label gantrylab
+# Toroid designer (offline — core/toroidlab/): the torus from measures and
+# back, the reference build against "Overview Toroid structure.glb" (the rib
+# circle, the four rings, the inner column's bearings, the canopy's corners,
+# the panels' span), every rib point on the torus, fittings by kind, the
+# canopy's flat pieces (isometric unfold, one 4' x 8' sheet per half-bay,
+# 144 bolts), bracing and tension lines, the solar summary, the builder
+# (winding, picking, explode / assembly), the packed spec, JSON, the files,
+# every built-in. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/toroidlab/toroidlab_selftest.gd
+# The designer on a real world (sandbox): every built-in shot, the section /
+# sheets / schedule views, UiAudit, the rib count / outer radius / bracing /
+# canopy controls, the files read back; the reference toroid placed (shade,
+# collision, a 24 x 100 W 6S x 4P graph array), packed (array gone) and
+# unpacked, Apply with 20 ribs re-seeding 20 panels, delete removing it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/toroidlab_designer_check.gd -Label toroidlab
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -3054,6 +3069,65 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
     unlink, reset). Not done: CoreXZ / delta / router as mates, MGN rails,
     belts the player routes by hand (loops are the generator's), more Z
     motors than two drawn, the tour still re-shot.
+
+## Toroid designer (core/toroidlab/, 2026-10-26)
+
+Library → Structures → "Toroid designer…" (no hotkey); click a placed
+toroid or the prop editor's "Edit toroid…" reopens it bound to the prop.
+The dome-lab pattern: pure modules under `core/toroidlab/`, the modal
+`scenes/ui/toroidlab_modal.gd` (own CanvasLayer 27, `UiFit.keep_fitted`,
+modal claim, SubViewport studio; it reuses DomeLab's emitters `_atri` /
+`_hex` / `kind_for_look`, DomeLabSpec's formatting, DomeLabMaterials' bolts
+and DomeLabCam's DXF / SVG writers). Record key `toroid_spec`, model id
+`toroidlab_structure` (`ToroidLabBuilder.MODEL_ID`), library
+`user://toroidlab_library.json`, exports `user://toroidlab_designs/`.
+- **It is a torus.** The user's "Overview Toroid structure.glb" (in their
+  Documents, not committed; inch units, SketchUp via SimLab) measured with
+  `tools/diag/glb_mesh_table_diag.gd` (every mesh as a JSON row, `--verts-mat=`
+  dumps a material's vertices): a least-squares circle fit of every rib tube
+  gives ONE circle, r 1.825 m centred 2.205 m out and 1.352 m up, for the
+  outer wall, the top AND the inner hourglass. So a design is
+  `torus {major_r_m, minor_r_m, centre_h_m, base_y_m, segments}`; a point is
+  (θ round the axis, φ on the minor circle from its outer equator up over the
+  crown, ρ from its centre). The modal edits inner radius at the ground /
+  outer radius / height and solves back (`torus_from_measures`:
+  r = (H + A) − √(2AH)).
+- **Ribs**: outer ground (φ = −g, the ground cut) to the inner top ring
+  (−1 = 180 − g, so the arcs are equal) in `ribs.pieces` arcs (couplers);
+  every `inner_every`-th rib continues down the inner wall (`inner_skip` =
+  a doorway; the reference leaves ribs 17 and 19 open), with an optional
+  straight post beside it.
+- **Rings** sit at φ; on a rib node they take tees / crosses (5-way where
+  a post joins), off a node they pass ONE OD inside the ribs on crossover
+  clamps (the reference crown ring at 77° is clamped under the ribs); ring
+  tubes span `piece_bays` bays; splices off a tee are couplers.
+- **Bracing** = a list between ring indices (in φ order: outer ground = 0),
+  pattern x / diag / zigzag, member tube (swivel clamps) or cable (eye
+  clamps, a turnbuckle, thimbles), every / start.
+- **Canopy** (`ToroidLabCanopy`): per bay a diamond pleat — seam A–B on the
+  rib, mid-bay valley Vi, peak P, valley Vo, each at (φ, depth inside the
+  rib circle) — as three triangles per half, unfolded isometrically (A at
+  the origin, B on +x, flaps across A–P and P–B), a 2" flange along the
+  seam standing in the rib plane, bolted back to back with the neighbour's
+  (each half a sheet's thickness off the plane). Pieces turned to their
+  smallest rectangle that fits the sheet; MaxRects nesting. The reference:
+  692 × 2434 mm, one 4' × 8' sheet per half-bay, 48 sheets, 144 bolts —
+  the user's build. ⚠ `phi_in_deg` 118.8 (measured 119.2) keeps the seam
+  under 2440 mm; at 119.2 it is 2444 and nothing nests.
+- **Solar**: per bay, centred mid-bay at `centre_deg`, flexible modules
+  bent along the minor circle (rigid ones on the chord, with a sag warning);
+  `series` × `parallel` from the spec. Placing (or Apply) seeds a graph
+  array tagged `toroid_<prop_id>` (`PlacedPropService.seed_toroid_graph`;
+  packed = removed; delete = removed) and
+  `add_imported_solar_panels` now honours `opts.series` / `opts.parallel`
+  instead of its own best guess. A full ring's mean normal is straight up,
+  so the array is flat (tilt 0).
+- `ToroidLabCam`: the canopy sheet layouts (one file per distinct layout),
+  a full-size SVG bending template per bent class (the tube's band, the
+  chord, ticks every 100 mm), tube / BOM CSVs, cut sheet, JSON.
+- Not built: tube splice positions on rings longer than a stick (counted,
+  not placed), the canopy's hanger hardware drawn, an NPC crew, per-panel
+  azimuths on the graph (one flat array).
 
 ## Maps and scene shell
 

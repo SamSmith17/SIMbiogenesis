@@ -800,6 +800,8 @@ func _rebuild_dynamic_sections() -> void:
 			_on_flatpack)
 	if mid == DomeLabBuilder.MODEL_ID:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
+	if mid == ToroidLabBuilder.MODEL_ID:
+		_button("Edit toroid…", "The toroid designer, bound to this structure", _model_btns, _on_toroidlab)
 	if mid == GantryLabBuilder.MODEL_ID:
 		_button("Edit gantry…", "The CNC gantry designer, bound to this machine (simulate and send jobs there)", _model_btns, _on_gantrylab)
 	if prop != null and prop.get_node_or_null("CncMachineRuntime") != null:
@@ -1460,6 +1462,13 @@ func _on_domelab() -> void:
 	if _loader != null and _loader.has_method("open_domelab_for_prop"):
 		close()
 		_loader.call("open_domelab_for_prop", pid)
+
+
+func _on_toroidlab() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_toroidlab_for_prop"):
+		close()
+		_loader.call("open_toroidlab_for_prop", pid)
 
 
 func _on_gantrylab() -> void:

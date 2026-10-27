@@ -132,6 +132,7 @@ const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_mod
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const FLATPACK_DESIGNER_MODAL_SCRIPT := preload("res://scenes/ui/flatpack_designer_modal.gd")
 const DOMELAB_MODAL_SCRIPT := preload("res://scenes/ui/domelab_modal.gd")
+const TOROIDLAB_MODAL_SCRIPT := preload("res://scenes/ui/toroidlab_modal.gd")
 const GANTRYLAB_MODAL_SCRIPT := preload("res://scenes/ui/gantrylab_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
@@ -349,6 +350,7 @@ var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _flatpack_designer_ui: Control = null
 var _domelab_ui: Control = null
+var _toroidlab_ui: Control = null
 var _gantrylab_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
@@ -6060,7 +6062,8 @@ func shade_footprints() -> Array:
 		var prop := child as PlacedProp
 		var mid := str(prop.model_id)
 		var shade := ModelCatalog.is_starshade_model(mid) or mid == "ez_up" or mid == "carport" \
-			or mid == LinkageStructureBuilder.MODEL_ID or mid == DomeLabBuilder.MODEL_ID
+			or mid == LinkageStructureBuilder.MODEL_ID or mid == DomeLabBuilder.MODEL_ID \
+			or mid == ToroidLabBuilder.MODEL_ID
 		if not shade:
 			continue
 		var rec := get_prop_record(prop.prop_id)
@@ -12917,6 +12920,7 @@ func _setup_placed_props() -> void:
 	_setup_pallet_rack_builder_ui()
 	_setup_flatpack_designer_ui()
 	_setup_domelab_ui()
+	_setup_toroidlab_ui()
 	_setup_gantrylab_ui()
 	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
@@ -13513,6 +13517,56 @@ func begin_domelab_placement(domelab_spec: Dictionary) -> bool:
 	return true
 
 
+## The toroid designer (scenes/ui/toroidlab_modal.gd), on its own
+## CanvasLayer like the dome designer.
+func _setup_toroidlab_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "ToroidLabLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "ToroidLabModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(TOROIDLAB_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_toroidlab_ui = ui
+
+
+func open_toroidlab(spec: Dictionary = {}) -> void:
+	if _toroidlab_ui != null and _toroidlab_ui.has_method("open"):
+		_toroidlab_ui.call("open", spec)
+
+
+## The designer bound to a placed toroid ("Apply to placed structure").
+func open_toroidlab_for_prop(prop_id: String) -> void:
+	if _toroidlab_ui != null and _toroidlab_ui.has_method("open_for_prop"):
+		_toroidlab_ui.call("open_for_prop", prop_id)
+
+
+func toroidlab_designer() -> Control:
+	return _toroidlab_ui
+
+
+func begin_toroidlab_placement(toroid_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, ToroidLabBuilder.MODEL_ID, {
+		"record_extra": {"toroid_spec": ToroidLabSpec.to_json_safe(toroid_spec),
+			"collision_enabled": true},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
+
+
 ## The CNC gantry designer (scenes/ui/gantrylab_modal.gd), on its own
 ## CanvasLayer like the dome designer.
 func _setup_gantrylab_ui() -> void:
@@ -13883,6 +13937,8 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		PlacedPropService.remove_linkage_graph(_main, prop_id)
 	elif str(rec.get("model_id", "")) == PalletRackBuilder.MODEL_ID and _main != null:
 		PlacedPropService.remove_pallet_rack_graph(_main, prop_id)
+	elif str(rec.get("model_id", "")) == ToroidLabBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_toroid_graph(_main, prop_id)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
 	# 2D/3D twin consistency: a graph node bound to this prop is the same object

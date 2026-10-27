@@ -151,6 +151,11 @@ const DYNAMIC_MODELS := {
 	# Domes and zomes pack as a strut bundle + hub box + panel stack; the real
 	# spec is DomeLabDesign.packed_spec (the record's domelab_spec). This
 	# fallback is the default 3V 5/8 conduit dome (165 struts of 3/4" EMT).
+	# A toroid packs as its bent tube bundle, the canopy stack and the panel
+	# stack; the real spec is ToroidLabDesign.packed_spec (the record's
+	# toroid_spec). This fallback is the reference build (24 ribs, ~420 kg).
+	"toroidlab_structure": {"w_m": 2.62, "d_m": 0.72, "h_m": 0.75,
+		"mass_kg": 420.0, "form": "bundle", "source": "estimated"},
 	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,
 		"mass_kg": 140.0, "form": "bundle", "source": "estimated"},
 	# A designed gantry packs as its extrusion bundle plus boxed parts; the

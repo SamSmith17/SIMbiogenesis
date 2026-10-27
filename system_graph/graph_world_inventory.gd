@@ -120,6 +120,9 @@ static func _props(view: Node, main: Node, rows: Array) -> void:
 			add = func() -> bool:
 				PlacedPropService.seed_linkage_graph(main, pid)
 				return true
+		elif mid == ToroidLabBuilder.MODEL_ID:
+			add = func() -> bool:
+				return PlacedPropService.seed_toroid_graph(main, pid)
 		elif presets.has(mid) and view.has_method("create_bound_generator_node"):
 			var p: Dictionary = presets[mid]
 			var specs: Dictionary = (p.get("specs", {}) as Dictionary).duplicate(true)
