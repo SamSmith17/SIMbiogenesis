@@ -47,6 +47,7 @@ func _initialize() -> void:
 	_test_pallet_rack_elements()
 	_test_pallet_rack_parts()
 	_test_pallet_rack_more()
+	_test_pallet_rack_tool_camp()
 	if _failures == 0:
 		print("TERRAIN SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -911,7 +912,129 @@ func _test_pallet_rack_open_bay_and_modules() -> void:
 
 ## Slope offset + panel specs + gap seal, stepped modules, fused racks, and the
 ## modal's bay moves / build round trip.
+## Tool Camp 26 and the pieces it needed: inside stairs through a stairwell,
+## workbenches between the uprights, a pitched roof, sheets sized past the
+## frame lines, a section added onto a face (2026-10-26).
+func _test_pallet_rack_tool_camp() -> void:
+	var P := PalletRackBuilder
+	var d := P.design_preset("tool_camp_26")
+	_check("tool camp: preset listed", not d.is_empty())
+	var spec: Dictionary = d.get("spec", {})
+	var n := P.build_node(spec)
+	var bom: Dictionary = n.get_meta("bom")
+	n.free()
+	# 5 rack rows x 4 frame lines in the main block, 4 x 2 in the extension:
+	# the model's 28 uprights.
+	_check("tool camp: 28 uprights", int(bom.get("uprights", 0)) == 28, str(bom.get("uprights")))
+	_check("tool camp: 14 workbenches", int(bom.get("benches", 0)) == 14, str(bom.get("benches")))
+	_check("tool camp: one stair", int(bom.get("stairs", 0)) == 1)
+	var s := P.resolve_spec(spec)
+	var L := P._layout(s, P._metrics(s))
+	# The inside stair: from the ground deck to the loft, all inside its bay.
+	var st: Dictionary = {}
+	for e in (s["elements"] as Array):
+		if str(e.get("type", "")) == "stair":
+			st = e
+	var G := P._stair_geo(L, st)
+	_check("tool camp: inside stair solves", not G.is_empty())
+	if not G.is_empty():
+		_check("tool camp: stair starts on the ground deck",
+			absf(float((G.flights as Array)[-1]["yb"]) - P._floor_y(L, 0)) < 0.001)
+		var hr: Rect2 = G.hole
+		var fx: Array = L.fx
+		_check("tool camp: stairwell inside its bay",
+			hr.position.x >= float(fx[0]) and hr.end.x <= float(fx[1]), str(hr))
+		_check("tool camp: stairwell as long as the flight",
+			maxf(hr.size.x, hr.size.y) >= float(int(G.n) - 1) * float(G.tread), str(hr))
+		_check("tool camp: one stairwell in the loft, none in the ground deck",
+			P._deck_holes(s, L, 1).size() == 1 and P._deck_holes(s, L, 0).is_empty())
+	# Workbenches: two beams + a top per bay, the top at work height.
+	var bench := {"type": "bench", "row": 1, "bay0": 0, "bays": 2, "height_in": 36.0, "shelf": true}
+	var pcs := P._bench_boxes(L, P.resolve_element(bench, s))
+	var tops := 0
+	var top_y := 0.0
+	for p in pcs:
+		if str(p["kind"]) == "top":
+			tops += 1
+			top_y = maxf(top_y, (p["xf"] as Transform3D).origin.y + (p["size"] as Vector3).y * 0.5)
+	_check("bench: 2 bays x (work top + shelf) = 4 tops, 8 beams", tops == 4 and pcs.size() == 12,
+		"%d tops of %d" % [tops, pcs.size()])
+	_check("bench: top at work height", absf(top_y - 36.0 * P.IN) < 0.001, str(top_y))
+	# The pitched roof: peaks over the frames, no flat roof deck cells.
+	_check("roof: pitched peak above the frames", P.roof_peak_y(spec) > float(L.height) + 0.3)
+	var roof_cells := 0
+	for c in P.pick_components(spec):
+		if str(c.get("id", "")).begins_with("cell:") and int(c.get("level", -1)) == 2:
+			roof_cells += 1
+	_check("roof: pitched roof leaves no flat roof cells", roof_cells == 0, str(roof_cells))
+	var tree := P.part_tree(spec)
+	_check("roof: its sheets are parts", (tree["nodes"] as Dictionary).has("ply:roof:0,0"))
+	var flat := spec.duplicate(true)
+	flat["roof_pitch_deg"] = 0.0
+	_check("roof: flat again at 0°", absf(P.roof_peak_y(flat) - float(L.height)) < 0.001)
+	# Sizing: a cell grown 60" on its back edge, a wall run past its end and
+	# tiled in 8' wide sheets.
+	var c0 := P._cell_rect(s, L, 2, 3, 1, {"depth_units": -1})
+	var plain := spec.duplicate(true)
+	plain["part_overrides"] = {}
+	var sp := P.resolve_spec(plain)
+	var c1 := P._cell_rect(sp, P._layout(sp, P._metrics(sp)), 2, 3, 1, {"depth_units": -1})
+	_check("size: the bridged loft cell runs on 5'", absf((c0.size.y - c1.size.y) - 60.0 * P.IN) < 0.001)
+	var w0: Array = []
+	var w1: Array = []
+	var w2: Array = []
+	for f in P._wall_faces(sp, P._layout(sp, P._metrics(sp))):
+		if str(f[0]) == "front":
+			w0 = P._wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9])
+	var ws := plain.duplicate(true)
+	ws["part_overrides"] = {"wallface:front": {"edges": {"a1": 48.0}, "sheet_w_in": 96.0}}
+	var wss := P.resolve_spec(ws)
+	for f in P._wall_faces(wss, P._layout(wss, P._metrics(wss))):
+		if str(f[0]) == "front":
+			w1 = P._wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9])
+			_check("size: the front wall runs 4' past its end",
+				absf((float(f[2]) - float(f[1])) - float(L.total_x) - 48.0 * P.IN) < 0.001)
+	_check("size: 8' sheets halve the wall's sheet columns", w1.size() > 0 and w1.size() < w0.size(),
+		"%d -> %d" % [w0.size(), w1.size()])
+	var cut := plain.duplicate(true)
+	cut["part_overrides"] = {"wall:front,0,0": {"edges": {"a1": -12.0, "y1": -24.0}}}
+	var cs := P.resolve_spec(cut)
+	for f in P._wall_faces(cs, P._layout(cs, P._metrics(cs))):
+		if str(f[0]) == "front":
+			w2 = P._wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9])
+			var one := P._sized_sheet(cs, "front,0,0", w2[0], true, float(f[3]))
+			_check("size: one wall sheet cut 1' narrower, 2' shorter",
+				absf(float(one["a1"]) - (float(w2[0]["a1"]) - 12.0 * P.IN)) < 0.001
+				and absf(float(one["y1"]) - (float(w2[0]["y1"]) - 24.0 * P.IN)) < 0.001)
+	var norm := P.resolve_spec({"part_overrides": {"cell:0,0,0": {"edges": {"z1": 999.0, "x0": 0.0}}}})
+	_check("size: edges clamped, zero edges dropped",
+		(norm["part_overrides"]["cell:0,0,0"]["edges"] as Dictionary).size() == 1
+		and float(norm["part_overrides"]["cell:0,0,0"]["edges"]["z1"]) == P.EDGE_MAX_IN)
+	# A section on the back carries the rows on at the row spacing; "share"
+	# stands its first row on the last.
+	var a := P.default_spec()
+	var b := P.section_spec(a, 1, 2)
+	var ma := P._metrics(P.resolve_spec(a))
+	var mb := P._metrics(P.resolve_spec(b))
+	var xg := P.section_transform(a, b, "back", "gap", 0)
+	_check("section: back with a gap",
+		absf(xg.origin.z - (float(ma.total_z) * 0.5 + float(ma.gap_z) + float(mb.total_z) * 0.5)) < 0.001)
+	var xs := P.section_transform(a, b, "back", "share", 0)
+	_check("section: back sharing a row",
+		absf(xs.origin.z - (float(ma.total_z) * 0.5 - float(ma.frame_depth) + float(mb.total_z) * 0.5)) < 0.001)
+	var fused := a.duplicate(true)
+	fused["fused"] = [{"spec": b, "x": xs.origin.x, "z": xs.origin.z, "yaw": 0.0}]
+	var nf := P.build_node(fused)
+	var nb := P.build_node(b)
+	_check("section: a shared row's uprights drawn once",
+		int((nf.get_meta("bom") as Dictionary)["uprights"]) == int(ma.rows) * (int(a["bay_count"]) + 1)
+			+ int((nb.get_meta("bom") as Dictionary)["uprights"]) - 2)
+	nf.free()
+	nb.free()
+
+
 func _test_pallet_rack_more() -> void:
+
 	var P := PalletRackBuilder
 	# --- Winding: every triangle a FRONT face for its own normal (Godot's front
 	# face is clockwise from outside: cross(b - a, c - a) . n < 0). Inside-out

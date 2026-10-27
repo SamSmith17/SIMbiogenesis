@@ -3600,7 +3600,60 @@ doors / windows cut their holes (`rect_minus`). Rules that carry it:
     A fresh build's root turn is not carried into "Place in world" (the
     placement ghost has no initial yaw). Chiba 2026's racks are set apart
     by measured offsets and share no frame, so none of them snaps.
+- **Tool Camp pass (2026-10-26, from the user's "tool camp.glb", read with
+  `rack_model_study.gd` + `glb_mesh_table_diag.gd`).** Gate:
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pallet_rack_tool_camp_check.gd -Label <dir>`
+  and `_test_pallet_rack_tool_camp` in terrain_selftest.
+  - **Stairs inside**: stair `run` "inside" (tool "Stairs inside", click the
+    deck it reaches). Keys `bay`, `col`, `from_floor`, `climb` (CLIMB_DIRS),
+    `pos_ft`, `lat_ft`, `cut_floor`. `_inside_stair_geo` builds the face
+    stair's G round a made-up face (base = the top edge, out = downhill),
+    centred on the column's clear gap; flights end at `G.y_bot`. `G.hole`
+    (the plan footprint + 2") is the stairwell: `_deck_holes(s, L, li)` cuts
+    it from every deck the climb passes (plywood by `rect_minus`, joists cut
+    with headers, beams crossing it left out) and the stair puts a guard on
+    the three sides you do not step off. Inside stairs drag cell to cell.
+  - **Workbench** element `bench` {row (rack row), bay0, bays, height_in (top
+    of the plywood), overhang_in, shelf, shelf_in}: steel beams on the
+    frame's two post lines, plywood across them (`_bench_boxes`). Tool
+    "Workbench" picks `bench_slots` (a slab per frame per bay). Inspector
+    kind "row" (1-based, column_count + 1 rows).
+  - **Pitched roof**: spec `roof_pitch_deg` (0 = flat), `roof_low_side`,
+    `roof_eave_ft`, `roof_side_ft` (Levels section). The roof level's cells
+    are replaced by `_emit_pitched_roof`: packing on the top beams (falling
+    front / back) or on the frames + purlins (left / right), none at the low
+    frame line; rafters at the joist spacing; 4x8 sheets laid down the
+    fall from the high edge (`ply:roof:i,j`, no sizing). `pick_components`
+    and `_deck_rects` skip the pitched roof level. `roof_peak_y(spec)`.
+  - **Sheet sizing**: part override `edges` (inches, + grows, − cuts;
+    EDGE_KEYS, clamped ±EDGE_MAX_IN, read from the part's OWN id — never
+    inherited down the path): `cell:` and `ply:` x0 / x1 / z0 / z1
+    (`_cell_rect` is the one cell rect for emission, picking and railings),
+    `wallface:` and `wall:` a0 / a1 / y0 / y1 (`_wall_faces` applies the
+    face's, `_sized_sheet` the sheet's). A wall face also takes `sheet_w_in`
+    / `sheet_h_in` (`_wall_face_sheets` tiles at that size; `_wall_faces`
+    entries gained [8] sheet width, [9] height). Parts card "Size" rows +
+    Reset size.
+  - **Sections**: sidebar "Sections (joined racks)" → Add section (face,
+    joined with the row spacing or sharing the end frame, bays, columns,
+    starting bay / row). `section_spec` copies the rack system,
+    `section_transform` places it (shared frames are drawn once by the
+    fused-rack rule); the new rack becomes a module and is edited.
+  - **Tool Camp 26** (`tool_camp_26_spec`, preset `tool_camp_26`): main
+    3 bays x 4 columns of 36" x 16' frames 5' apart (the model's frames are
+    15.5'), decks at 0.4' / 8.4' (none in the middle bay above: double
+    height), 2.5° roof falling back with 3.5' eaves, front + end walls 0.75'
+    to 13' with a 4' x 9' doorway in every gap of the ends, benches 41.5" on
+    the front row / 49" behind, an inside stair in bay 1; a 1-bay x 3-column
+    section on the back of bay 3 at the row spacing, benches on its four
+    rows, its loft's far half boxed in (walls 8.75'–13.25', sides started
+    13' in) and the main loft cell over it run on 5' to meet it. Rack X runs
+    along the model's z; the extension sits on bay 3, the same side as in
+    the model. Not reproduced: the box's
+    50° sloped inner end, the loose table, the roof sitting below the frame
+    tops (our roof rests on them, so it peaks ~2' higher).
 - **A crew builds it (2026-10-24, from Gene's Mars build lab,
+
   mars-campus-2026…/lab?scenario=build-bay).** `PalletRackBuildPlan`
   (core/terrain/, pure) turns a rack into the lab's step graph with named
   workers: carry each piece from piles in front of the rack (frames, beams,

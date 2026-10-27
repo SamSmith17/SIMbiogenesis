@@ -85,6 +85,15 @@ var _u_row: HBoxContainer = null
 var _u_bays_spin: SpinBox = null
 var _u_cols_spin: SpinBox = null
 var _wall_chks: Dictionary = {}
+var _pitch_spin: SpinBox = null
+var _low_opt: OptionButton = null
+var _eave_spin: SpinBox = null
+var _side_spin: SpinBox = null
+var _sec_face_opt: OptionButton = null
+var _sec_join_opt: OptionButton = null
+var _sec_bays_spin: SpinBox = null
+var _sec_cols_spin: SpinBox = null
+var _sec_align_spin: SpinBox = null
 var _wall_bottom_spin: SpinBox = null
 var _wall_top_spin: SpinBox = null
 var _collide_chk: CheckBox = null
@@ -456,6 +465,34 @@ func _build_ui() -> void:
 	_level_box.add_theme_constant_override("separation", 4)
 	side.add_child(_level_box)
 	_roof_chk = _add_check(side, "Rooftop deck", bool(_spec["roof_deck"]))
+	var roof_row := HBoxContainer.new()
+	roof_row.add_theme_constant_override("separation", 8)
+	side.add_child(roof_row)
+	var rp := VBoxContainer.new()
+	rp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	roof_row.add_child(rp)
+	_pitch_spin = _add_spin(rp, "Roof pitch (°)", 0.0, 35.0, 0.5, float(_spec.get("roof_pitch_deg", 0.0)))
+	_pitch_spin.tooltip_text = "0 = a flat roof deck. Pitched, the roof falls to the low side on packing over the top beams."
+	var rl := VBoxContainer.new()
+	rl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	roof_row.add_child(rl)
+	rl.add_child(_small_label("Falls toward"))
+	_low_opt = _insp_option(PalletRackBuilder.ROOF_LOW_SIDES, str(_spec.get("roof_low_side", "back")))
+	_low_opt.item_selected.connect(func(_i: int) -> void: _on_control_changed())
+	rl.add_child(_low_opt)
+	var oh_row := HBoxContainer.new()
+	oh_row.add_theme_constant_override("separation", 8)
+	side.add_child(oh_row)
+	var oe := VBoxContainer.new()
+	oe.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	oh_row.add_child(oe)
+	_eave_spin = _add_spin(oe, "Eaves overhang (ft)", 0.0, 8.0, 0.25, float(_spec.get("roof_eave_ft", 0.0)))
+	_eave_spin.tooltip_text = "How far the roof runs past the structure at its high and low edges"
+	var os := VBoxContainer.new()
+	os.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	oh_row.add_child(os)
+	_side_spin = _add_spin(os, "Sides overhang (ft)", 0.0, 8.0, 0.25, float(_spec.get("roof_side_ft", 0.0)))
+	_side_spin.tooltip_text = "How far the roof runs past the structure at its two sloping sides"
 
 	_section(side, "Decking")
 	_decked_chk = _add_check(side, "Deck the columns (2x4 + plywood)", bool(_spec["decked"]))
@@ -479,7 +516,43 @@ func _build_ui() -> void:
 	_u_row.add_child(uc)
 	_u_cols_spin = _add_spin(uc, "Open cols", 1, 10, 1, float(_spec["u_open_cols"]))
 
-	_section(side, "Joined racks")
+	_section(side, "Sections (joined racks)")
+	side.add_child(_small_label("Add a section onto a face of the rack you are editing: it carries on the rows (or shares the end frame) and becomes its own rack to edit."))
+	var sec_grid := GridContainer.new()
+	sec_grid.columns = 2
+	sec_grid.add_theme_constant_override("h_separation", 8)
+	side.add_child(sec_grid)
+	var sf := VBoxContainer.new()
+	sf.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sec_grid.add_child(sf)
+	sf.add_child(_small_label("On the face"))
+	_sec_face_opt = _insp_option(PalletRackBuilder.FACES, "back")
+	sf.add_child(_sec_face_opt)
+	var sj := VBoxContainer.new()
+	sj.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sec_grid.add_child(sj)
+	sj.add_child(_small_label("Joined"))
+	_sec_join_opt = _insp_option(["gap", "share"], "gap",
+		["With the row spacing", "Sharing the end frame"])
+	sj.add_child(_sec_join_opt)
+	var sb_box := VBoxContainer.new()
+	sb_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sec_grid.add_child(sb_box)
+	_sec_bays_spin = _add_spin(sb_box, "Bays", 1, 10, 1, 1)
+	var sc_box := VBoxContainer.new()
+	sc_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sec_grid.add_child(sc_box)
+	_sec_cols_spin = _add_spin(sc_box, "Columns", 1, 10, 1, 2)
+	var sa_box := VBoxContainer.new()
+	sa_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sec_grid.add_child(sa_box)
+	_sec_align_spin = _add_spin(sa_box, "Starting at bay / row", 1, 11, 1, 1)
+	_sec_align_spin.tooltip_text = "Front / back: the bay of this rack the section's first bay lines up with. Left / right: the rack row."
+	var sbtn_box := VBoxContainer.new()
+	sbtn_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sbtn_box.alignment = BoxContainer.ALIGNMENT_END
+	sec_grid.add_child(sbtn_box)
+	sbtn_box.add_child(_small_button("Add section", "Add the section and edit it", _on_add_section))
 	_mod_box = VBoxContainer.new()
 	_mod_box.add_theme_constant_override("separation", 4)
 	side.add_child(_mod_box)
@@ -490,7 +563,8 @@ func _build_ui() -> void:
 	_section(side, "Placement")
 	_collide_chk = _add_check(side, "Solid collision (walk into it when off)", true)
 
-	_section(side, "Walls (4x8 plywood)")
+	_section(side, "Walls (plywood)")
+	side.add_child(_small_label("Click a wall (or one sheet of it) to size it: run it past the structure, stop it short, change the sheet size."))
 	var wall_row := GridContainer.new()
 	wall_row.columns = 2
 	side.add_child(wall_row)
@@ -1958,6 +2032,14 @@ func _sync_controls() -> void:
 		_wall_bottom_spin.value = float(_spec.get("wall_bottom_ft", 0.0))
 	if _wall_top_spin:
 		_wall_top_spin.value = maxf(float(_spec.get("wall_top_ft", -1.0)), 0.0)
+	if _pitch_spin:
+		_pitch_spin.value = float(_spec.get("roof_pitch_deg", 0.0))
+		_eave_spin.value = float(_spec.get("roof_eave_ft", 0.0))
+		_side_spin.value = float(_spec.get("roof_side_ft", 0.0))
+		var low := str(_spec.get("roof_low_side", "back"))
+		for i in _low_opt.item_count:
+			if str(_low_opt.get_item_metadata(i)) == low:
+				_low_opt.select(i)
 	_suppress = false
 	_rebuild_level_spins()
 
@@ -1991,7 +2073,13 @@ func _read_spec() -> Dictionary:
 		"deck_levels": int(_levels_spin.value) if _levels_spin else 2,
 		"level_heights_ft": heights,
 		"roof_deck": _roof_chk.button_pressed if _roof_chk else true,
+		"roof_pitch_deg": float(_pitch_spin.value) if _pitch_spin else float(_spec.get("roof_pitch_deg", 0.0)),
+		"roof_low_side": str(_low_opt.get_item_metadata(_low_opt.selected)) if _low_opt \
+			else str(_spec.get("roof_low_side", "back")),
+		"roof_eave_ft": float(_eave_spin.value) if _eave_spin else float(_spec.get("roof_eave_ft", 0.0)),
+		"roof_side_ft": float(_side_spin.value) if _side_spin else float(_spec.get("roof_side_ft", 0.0)),
 		"walls": walls,
+
 		"stepped_module": 0,
 		"u_shape": _u_chk.button_pressed if _u_chk else false,
 		"u_open_bays": int(_u_bays_spin.value) if _u_bays_spin else 1,
@@ -2500,7 +2588,38 @@ func _tool_candidate(local_pos: Vector2) -> Dictionary:
 		return {}
 	var el := _tool_element.duplicate(true)
 	var t := str(el.get("type", ""))
+	if t == "stair" and str(el.get("run", "")) == "inside":
+		# The deck it climbs to: the cell clicked, or the first raised deck
+		# above a ground-level one. It stands in that bay one floor down.
+		var islot := PalletRackBuilder.pick_nearest(PalletRackBuilder.cell_slots(_spec), r[0], r[1])
+		if islot.is_empty():
+			return {}
+		var lv := _first_raised_floor(int(islot["level"]))
+		for e in (_spec.get("elements", []) as Array):
+			if str(e.get("type", "")) == "stair" and str(e.get("run", "")) == "inside" \
+					and int(e.get("bay", -1)) == int(islot["bay"]) and int(e.get("col", -1)) == int(islot["col"]) \
+					and int(e.get("to_level", -9)) == lv:
+				return {"_select": str(e.get("id", ""))}
+		el["bay"] = int(islot["bay"])
+		el["col"] = int(islot["col"])
+		el["to_level"] = lv
+		el["from_floor"] = lv - 1
+		return el
+	if t == "bench":
+		var bslot := PalletRackBuilder.pick_nearest(PalletRackBuilder.bench_slots(_spec), r[0], r[1])
+		if bslot.is_empty():
+			return {}
+		for e in (_spec.get("elements", []) as Array):
+			if str(e.get("type", "")) == "bench" and int(e.get("row", -1)) == int(bslot["row"]) \
+					and int(bslot["bay"]) >= int(e.get("bay0", 0)) \
+					and int(bslot["bay"]) < int(e.get("bay0", 0)) + int(e.get("bays", 1)):
+				return {"_select": str(e.get("id", ""))}
+		el["row"] = int(bslot["row"])
+		el["bay0"] = int(bslot["bay"])
+		el["bays"] = 1
+		return el
 	match t:
+
 		"door", "window", "stair", "lean_to", "ladder":
 			var hit := PalletRackBuilder.face_hit(_spec, r[0], r[1])
 			if hit.is_empty():
@@ -3015,6 +3134,10 @@ func _config_spin(sp: SpinBox, f: Dictionary) -> void:
 			sp.min_value = 1
 			sp.max_value = int(_spec.get("column_count", 1))
 			sp.step = 1
+		"row":
+			sp.min_value = 1
+			sp.max_value = int(_spec.get("column_count", 1)) + 1
+			sp.step = 1
 		"int":
 			sp.min_value = float(f.get("min", 1))
 			sp.max_value = float(f.get("max", 10))
@@ -3036,7 +3159,7 @@ func _spin_value(f: Dictionary, el: Dictionary) -> float:
 			if key == "seg_to" and v < 0:
 				return float(PalletRackBuilder.face_segment_count(_spec, str(el.get("face", "front"))))
 			return float(v + 1)
-		"bay", "col":
+		"bay", "col", "row":
 			return float(int(el.get(key, 0)) + 1)
 	return float(el.get(key, 0.0))
 
@@ -3051,7 +3174,7 @@ func _on_spin_field(f: Dictionary, v: float) -> void:
 				_on_field_changed(key, -1)
 			else:
 				_on_field_changed(key, int(v) - 1)
-		"bay", "col":
+		"bay", "col", "row":
 			_on_field_changed(key, int(v) - 1)
 		"int":
 			_on_field_changed(key, int(v))
@@ -3298,6 +3421,8 @@ func _refresh_parts_card() -> void:
 			func() -> void: _on_parts_color("")))
 		_insp_row("Colour", crow)
 		_insp_fields["_color"] = cpb
+	if one:
+		_add_size_rows(first)
 	if hidden_n > 0:
 		_insp_box.add_child(_small_button("Show %s inside" % UiText.count(hidden_n, "hidden part"),
 			"Bring back what is hidden inside the selection", func() -> void: _show_hidden(_sel_nodes)))
@@ -3310,6 +3435,133 @@ func _refresh_parts_card() -> void:
 	del.add_theme_color_override("font_color", Color(0.94, 0.45, 0.45))
 	brow.add_child(del)
 	_insp_box.add_child(brow)
+
+
+## The sizing a part takes: [[edge key, label]] — a deck cell or one of its
+## sheets by its four edges, a wall face or one of its sheets by its ends,
+## bottom and top. The pitched roof's sheets are laid by the roof itself.
+func _size_keys(id: String) -> Array:
+	if id.begins_with("cell:") or (id.begins_with("ply:") and not id.begins_with("ply:roof:")):
+		return [["z0", "Front edge"], ["z1", "Back edge"], ["x1", "Left edge"], ["x0", "Right edge"]]
+	if id.begins_with("wallface:") or id.begins_with("wall:"):
+		return [["a0", "Start"], ["a1", "End"], ["y0", "Bottom"], ["y1", "Top"]]
+	return []
+
+
+func _part_edges(id: String) -> Dictionary:
+	var o: Variant = (_spec.get("part_overrides", {}) as Dictionary).get(id)
+	if o is Dictionary and (o as Dictionary).get("edges") is Dictionary:
+		return ((o as Dictionary)["edges"] as Dictionary).duplicate()
+	return {}
+
+
+## "Size" rows on the parts card: each edge grows (+) or cuts (−) the piece,
+## in inches; a wall face also takes its own sheet size.
+func _add_size_rows(id: String) -> void:
+	var keys := _size_keys(id)
+	if keys.is_empty():
+		return
+	var head := _small_label("Size — inches past the frame lines: + runs it on, − cuts it back")
+	_insp_box.add_child(head)
+	var ed := _part_edges(id)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 6)
+	for kv in keys:
+		var k := str(kv[0])
+		var box := VBoxContainer.new()
+		box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		box.add_child(_small_label(str(kv[1])))
+		var sp := SpinBox.new()
+		sp.add_theme_font_size_override("font_size", 11)
+		sp.min_value = -PalletRackBuilder.EDGE_MAX_IN
+		sp.max_value = PalletRackBuilder.EDGE_MAX_IN
+		sp.step = 0.5
+		sp.suffix = "in"
+		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sp.value = float(ed.get(k, 0.0))
+		sp.value_changed.connect(func(v: float) -> void: _on_part_edge(id, k, v))
+		box.add_child(sp)
+		grid.add_child(box)
+		_insp_fields["_edge_" + k] = sp
+	_insp_box.add_child(grid)
+	if id.begins_with("wallface:"):
+		var po: Dictionary = (_spec.get("part_overrides", {}) as Dictionary).get(id, {})
+		var sgrid := GridContainer.new()
+		sgrid.columns = 2
+		sgrid.add_theme_constant_override("h_separation", 6)
+		for sk in [["sheet_w_in", "Sheet width", 48.0], ["sheet_h_in", "Sheet height", 96.0]]:
+			var sbox := VBoxContainer.new()
+			sbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			sbox.add_child(_small_label(str(sk[1])))
+			var ssp := SpinBox.new()
+			ssp.add_theme_font_size_override("font_size", 11)
+			ssp.min_value = 12.0
+			ssp.max_value = 144.0
+			ssp.step = 1.0
+			ssp.suffix = "in"
+			ssp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ssp.value = float(po.get(str(sk[0]), float(sk[2])))
+			var key := str(sk[0])
+			var dflt := float(sk[2])
+			ssp.value_changed.connect(func(v: float) -> void: _on_part_sheet_size(id, key, v, dflt))
+			sbox.add_child(ssp)
+			sgrid.add_child(sbox)
+		_insp_box.add_child(sgrid)
+	_insp_box.add_child(_small_button("Reset size", "Back to the frame lines and 4x8 sheets",
+		func() -> void: _reset_part_size(id)))
+
+
+func _on_part_edge(id: String, k: String, v: float) -> void:
+	if _insp_suppress:
+		return
+	_push_undo_burst()
+	var ed := _part_edges(id)
+	if absf(v) < 0.01:
+		ed.erase(k)
+	else:
+		ed[k] = v
+	_set_part_override(id, "edges", null if ed.is_empty() else ed)
+	_queue_rebuild(true)
+
+
+func _on_part_sheet_size(id: String, key: String, v: float, dflt: float) -> void:
+	if _insp_suppress:
+		return
+	_push_undo_burst()
+	_set_part_override(id, key, null if absf(v - dflt) < 0.01 else v)
+	_queue_rebuild(true)
+
+
+func _reset_part_size(id: String) -> void:
+	_push_undo()
+	for k in ["edges", "sheet_w_in", "sheet_h_in"]:
+		_set_part_override(id, k, null)
+	_parts_sig = ""
+	_queue_rebuild(true)
+
+
+## Add a section onto the edited rack's face: a new rack of the same system
+## (frames, beams, levels) placed by PalletRackBuilder.section_transform, and
+## then edited.
+func _on_add_section() -> void:
+	_push_undo()
+	_spec = _read_spec()
+	_modules[_active_mod]["spec"] = _spec.duplicate(true)
+	var face := str(_sec_face_opt.get_item_metadata(_sec_face_opt.selected))
+	var join := str(_sec_join_opt.get_item_metadata(_sec_join_opt.selected))
+	var nb := int(_sec_bays_spin.value)
+	var nc := int(_sec_cols_spin.value)
+	var sec := PalletRackBuilder.section_spec(_spec, nb, nc)
+	var rel := PalletRackBuilder.section_transform(_spec, sec, face, join, int(_sec_align_spin.value) - 1)
+	var xf: Transform3D = (_modules[_active_mod]["xf"] as Transform3D) * rel
+	var rs := PalletRackBuilder.resolve_spec(sec)
+	rs.erase("fused")
+	_modules.append({"spec": rs, "xf": xf})
+	_switch_module(_modules.size() - 1)
+	_refresh_module_ui()
+	_flash("Added a section of %s × %s on the %s — editing it now. Pick another rack under Sections to go back." % [
+		UiText.count(nb, "bay"), UiText.count(nc, "column"), face])
 
 
 func _delete_label() -> String:
@@ -3429,7 +3681,12 @@ func _sync_parts_values(cells: Array, beams: Array, paint_ids: Array) -> void:
 		for i in opt.item_count:
 			if str(opt.get_item_metadata(i)) == _cell_kind(cells[0]):
 				opt.select(i)
+	for k in PalletRackBuilder.EDGE_KEYS:
+		var es: Variant = _insp_fields.get("_edge_" + str(k))
+		if es is SpinBox and is_instance_valid(es) and _sel_nodes.size() == 1:
+			(es as SpinBox).set_value_no_signal(float(_part_edges(str(_sel_nodes[0])).get(str(k), 0.0)))
 	var bd: Variant = _insp_fields.get("_beam_dy")
+
 	if bd is SpinBox and is_instance_valid(bd) and not beams.is_empty():
 		(bd as SpinBox).set_value_no_signal(float(_comp_by_id(beams[0]).get("dy_in", 0.0)))
 	var cp: Variant = _insp_fields.get("_color")
@@ -3895,6 +4152,19 @@ func _ray_plane_hit(local_pos: Vector2, plane_y: float) -> Vector3:
 func _begin_element_drag(node: String, el: Dictionary, local_pos: Vector2) -> void:
 	var t := str(el.get("type", ""))
 	var eid := str(el["id"])
+	if t == "stair" and str(el.get("run", "")) == "inside":
+		# An inside stair moves bay to bay, column to column, like a step module.
+		var py := PalletRackBuilder.floor_y(_spec, int(el.get("to_level", 0)))
+		var hp := _ray_plane_hit(local_pos, py)
+		var hc := Vector2i(-1, -1) if is_nan(hp.x) else PalletRackBuilder.grid_cell_at(_spec, hp.x, hp.z)
+		var sb0 := int(el.get("bay", 0))
+		var sc0 := int(el.get("col", 0))
+		_manip_mode = "el_cell"
+		_manip_nodes = [node]
+		_manip_targets = _element_group(eid)
+		_manip_start = {"el_id": eid, "plane_y": py, "b0": sb0, "c0": sc0,
+			"grab": hc if hc.x >= 0 else Vector2i(sb0, sc0)}
+		return
 	if SLIDE_TYPES.has(t):
 		var along := _ray_face_along(local_pos, str(el.get("face", "front")))
 		if is_nan(along):

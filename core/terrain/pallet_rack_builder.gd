@@ -63,7 +63,7 @@ const STAIR_STEPS := 6
 
 # ---- Design elements ----
 const ELEMENT_TYPES := ["door", "window", "stair", "lean_to", "railing", "courtyard", "stepped", "ladder",
-	"open_bay"]
+	"open_bay", "bench"]
 ## Which end of a slope (seen from outside, facing it) carries a door.
 const END_DOORS := ["none", "left", "right", "both"]
 const END_DOOR_STYLES := ["hinged", "opening"]
@@ -74,7 +74,18 @@ const WINDOW_STYLES := ["glass", "open"]
 const SLOPE_SURFACES := ["solar", "glazing", "plywood", "frame", "none"]
 const SLOPE_ENDS := ["open", "glazing", "plywood"]
 const PANEL_ORIENTATIONS := ["landscape", "portrait"]
-const STAIR_RUNS := ["along", "out"]
+## "inside": the stair stands in a deck bay and climbs through a hole cut in
+## the deck above (a stairwell), from `from_floor` up to `to_level`.
+const STAIR_RUNS := ["along", "out", "inside"]
+## Which way an inside stair climbs (as RISE_DIRS: left = +X, back = +Z).
+const CLIMB_DIRS := ["left", "right", "back", "front"]
+## A pitched roof deck: which side is the low (eave) side.
+const ROOF_LOW_SIDES := ["back", "front", "left", "right"]
+## Part-override sizing (inches, + grows the piece outward, - cuts it back):
+## decks x0 / x1 / z0 / z1 (the -X / +X / -Z / +Z edges), walls a0 / a1 / y0 /
+## y1 (start / end along the face, bottom / top).
+const EDGE_KEYS := ["x0", "x1", "z0", "z1", "a0", "a1", "y0", "y1"]
+const EDGE_MAX_IN := 240.0
 ## How a stair gets down: one flight, two in line with a landing between, an L
 ## (a quarter turn on a square landing), a U (a switchback on a landing as wide
 ## as both flights) or a wrap (three flights round two quarter-turn landings).
@@ -115,7 +126,7 @@ const PV_MODULE_KEYS := {"long_in": "panel_long_in", "short_in": "panel_short_in
 const ELEMENT_LABELS := {
 	"door": "Door", "window": "Window", "stair": "Stairs", "lean_to": "Sloped array",
 	"railing": "Railing", "courtyard": "Courtyard", "stepped": "Stepped module", "ladder": "Ladder",
-	"open_bay": "Open bay",
+	"open_bay": "Open bay", "bench": "Workbench",
 }
 const OPTION_LABELS := {
 	"front": "Front", "back": "Back", "left": "Left", "right": "Right",
@@ -124,7 +135,7 @@ const OPTION_LABELS := {
 	"solar": "Solar panels", "glazing": "Greenhouse glazing", "plywood": "Plywood",
 	"frame": "Bare rafters", "none": "Leave this bay off",
 	"landscape": "Landscape", "portrait": "Portrait",
-	"along": "Along the wall", "out": "Straight out",
+	"along": "Along the wall", "out": "Straight out", "inside": "Inside, through the deck",
 	"straight": "Straight", "landing": "Two flights, a landing between",
 	"l": "L — a quarter turn", "u": "U — a switchback", "wrap": "Wrap — two quarter turns",
 	"bay": "In a deck bay", "face": "Outside a face (big steps)", "custom": "Custom",
@@ -173,7 +184,13 @@ const ELEMENT_DEFAULTS := {
 		"tread_in": 10.0, "landing_ft": 0.0,
 		# The flights (STAIR_SHAPES), the way it turns as you climb, and how high
 		# the (upper) turn landing sits, in % of the height climbed.
-		"shape": "straight", "turn": "left", "turn_pct": 50.0},
+		"shape": "straight", "turn": "left", "turn_pct": 50.0,
+		# run "inside": the deck bay it climbs through (bay, col of the deck
+		# it reaches), the floor it starts on, the way it climbs, where it
+		# sits in the bay (ft across from the clear gap's middle, ft back from
+		# the far end) and whether the deck above gets a stairwell cut.
+		"bay": 0, "col": 0, "from_floor": -1, "climb": "left", "lat_ft": 0.0,
+		"pos_ft": 0.0, "cut_floor": true},
 	"lean_to": {"face": "front", "surface": "solar", "segments": {}, "angle_deg": 50.0,
 		"attach_level": -1, "bottom_ft": 1.5, "seg_from": 0, "seg_to": -1,
 		"orientation": "landscape", "panel_watts": PV_WATTS, "ends": "open",
@@ -212,6 +229,11 @@ const ELEMENT_DEFAULTS := {
 	# A ladder up a face from floor `floor` (-1 the ground) to deck `to_level`,
 	# its rails running on 3' past the deck to hold on to.
 	"ladder": {"face": "front", "at_ft": 4.0, "floor": -1, "to_level": 1, "width_ft": 1.5},
+	# A workbench between the two posts of a frame: a pair of beams at work
+	# height across rack row `row`, bays bay0.. (bays wide), plywood on them
+	# hanging `overhang_in` past each beam; `shelf` adds a second pair low down.
+	"bench": {"row": 0, "bay0": 0, "bays": 1, "height_in": 36.0, "overhang_in": 2.5,
+		"shelf": false, "shelf_in": 12.0},
 }
 
 ## The inspector's row model per element type (pure data — the modal renders
@@ -238,11 +260,23 @@ const ELEMENT_FIELDS := {
 		{"key": "sill_ft", "label": "Sill height", "kind": "float", "min": 0.0, "max": 10.0, "step": 0.25},
 	],
 	"stair": [
-		{"key": "face", "label": "Wall", "kind": "face"},
-		{"key": "at_ft", "label": "Top of the stairs at", "kind": "along"},
+		{"key": "run", "label": "Where", "kind": "option", "options": STAIR_RUNS,
+			"tip": "Along a wall or straight out from a face, or inside a deck bay through a hole in the deck above"},
+		{"key": "face", "label": "Wall", "kind": "face", "show_if": {"run": ["along", "out"]}},
+		{"key": "at_ft", "label": "Top of the stairs at", "kind": "along", "show_if": {"run": ["along", "out"]}},
+		{"key": "bay", "label": "Bay", "kind": "bay", "show_if": {"run": ["inside"]}},
+		{"key": "col", "label": "Column", "kind": "col", "show_if": {"run": ["inside"]}},
+		{"key": "from_floor", "label": "From", "kind": "floor", "show_if": {"run": ["inside"]}},
 		{"key": "to_level", "label": "Up to", "kind": "level"},
-		{"key": "run", "label": "Top flight runs", "kind": "option", "options": STAIR_RUNS},
-		{"key": "flip", "label": "Run the other way", "kind": "bool"},
+		{"key": "climb", "label": "Climbs toward", "kind": "option", "options": CLIMB_DIRS,
+			"show_if": {"run": ["inside"]}, "tip": "Left / right run along the bay between the uprights; front / back cross the rack rows"},
+		{"key": "pos_ft", "label": "Set back from the far end", "kind": "float", "min": 0.0, "max": 20.0,
+			"step": 0.25, "show_if": {"run": ["inside"]}},
+		{"key": "lat_ft", "label": "Shift sideways", "kind": "float", "min": -10.0, "max": 10.0,
+			"step": 0.25, "show_if": {"run": ["inside"]}},
+		{"key": "cut_floor", "label": "Cut the stairwell in the deck", "kind": "bool",
+			"show_if": {"run": ["inside"]}},
+		{"key": "flip", "label": "Run the other way", "kind": "bool", "show_if": {"run": ["along", "out"]}},
 		{"key": "shape", "label": "Flights", "kind": "option", "options": STAIR_SHAPES,
 			"tip": "One flight, or several with landings: an L turns a corner, a U doubles back"},
 		{"key": "turn", "label": "Turns, going up", "kind": "option", "options": STAIR_TURNS,
@@ -352,6 +386,18 @@ const ELEMENT_FIELDS := {
 		{"key": "beams", "label": "Take the beams out", "kind": "bool"},
 		{"key": "walls", "label": "Take the walls off", "kind": "bool"},
 	],
+	"bench": [
+		{"key": "row", "label": "Rack row", "kind": "row"},
+		{"key": "bay0", "label": "First bay", "kind": "bay"},
+		{"key": "bays", "label": "Bays long", "kind": "int", "min": 1, "max": 10},
+		{"key": "height_in", "label": "Work height", "kind": "float", "min": 18.0, "max": 60.0, "step": 0.5,
+			"unit": "in", "tip": "The top of the plywood above the ground"},
+		{"key": "overhang_in", "label": "Top overhangs", "kind": "float", "min": 0.0, "max": 24.0, "step": 0.5,
+			"unit": "in", "tip": "How far the plywood hangs past each beam"},
+		{"key": "shelf", "label": "Shelf below", "kind": "bool"},
+		{"key": "shelf_in", "label": "Shelf height", "kind": "float", "min": 4.0, "max": 40.0, "step": 0.5,
+			"unit": "in", "show_if": {"shelf": [true]}},
+	],
 	"courtyard": [
 		{"key": "bay0", "label": "First bay", "kind": "bay"},
 		{"key": "bays", "label": "Bays wide", "kind": "int", "min": 1, "max": 10},
@@ -371,6 +417,12 @@ const TOOL_PRESETS := [
 		"element": {"type": "window"}},
 	{"id": "stairs", "label": "Stairs", "tip": "Click the face the stairs climb, near the deck they reach",
 		"element": {"type": "stair"}},
+	{"id": "stairs_inside", "label": "Stairs inside",
+		"tip": "Click the deck the stairs climb to: they stand in that bay below and the deck gets a stairwell",
+		"element": {"type": "stair", "run": "inside"}},
+	{"id": "bench", "label": "Workbench",
+		"tip": "Click a frame between two uprights: beams at work height and a plywood top across the frame",
+		"element": {"type": "bench"}},
 	{"id": "ladder", "label": "Ladder", "tip": "A ladder up a face — click the face, level with the deck it reaches",
 		"element": {"type": "ladder"}},
 	{"id": "stepped", "label": "Stepped module",
@@ -454,6 +506,14 @@ static func default_spec() -> Dictionary:
 		"deck_levels": 2,
 		"level_heights_ft": [0.5, 8.0],
 		"roof_deck": true,
+		# A pitched roof deck: 0 = flat. It falls toward `roof_low_side`; its
+		# rafters sit on the top beams at that side's frame line and on
+		# packing over the others. Overhangs (ft) at the eaves (the low and
+		# high edges) and at the two sides.
+		"roof_pitch_deg": 0.0,
+		"roof_low_side": "back",
+		"roof_eave_ft": 0.0,
+		"roof_side_ft": 0.0,
 		"walls": {"front": false, "back": false, "left": false, "right": false},
 		"stepped_module": 0,
 		"u_shape": false,
@@ -504,6 +564,10 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 		s["row_gap_ft"] = float(s["lumber_len_ft"])
 	s["row_gap_ft"] = clampf(snappedf(float(s["row_gap_ft"]), ROW_GAP_STEP_FT), ROW_GAP_MIN_FT, 20.0)
 	s["deck_levels"] = clampi(int(s["deck_levels"]), 1, 3)
+	s["roof_pitch_deg"] = clampf(float(s["roof_pitch_deg"]), 0.0, 35.0)
+	s["roof_low_side"] = _pick_option(s["roof_low_side"], ROOF_LOW_SIDES)
+	s["roof_eave_ft"] = clampf(float(s["roof_eave_ft"]), 0.0, 8.0)
+	s["roof_side_ft"] = clampf(float(s["roof_side_ft"]), 0.0, 8.0)
 	s["decked"] = bool(s["decked"])
 	s["roof_deck"] = bool(s["roof_deck"])
 
@@ -694,6 +758,19 @@ static func _normalize_part_overrides(v: Variant) -> Dictionary:
 		var c := str((o as Dictionary).get("color", ""))
 		if not c.is_empty() and Color.html_is_valid(c):
 			r["color"] = "#" + Color.html(c).to_html(false)
+		var ed: Variant = (o as Dictionary).get("edges")
+		if ed is Dictionary:
+			var eo := {}
+			for ek in EDGE_KEYS:
+				var ev := clampf(float((ed as Dictionary).get(ek, 0.0)), -EDGE_MAX_IN, EDGE_MAX_IN)
+				if absf(ev) > 0.01:
+					eo[ek] = snappedf(ev, 0.125)
+			if not eo.is_empty():
+				r["edges"] = eo
+		for sk in ["sheet_w_in", "sheet_h_in"]:
+			var sv := float((o as Dictionary).get(sk, 0.0))
+			if sv >= 6.0:
+				r[sk] = clampf(sv, 6.0, 144.0)
 		if not r.is_empty():
 			out[str(k)] = r
 	return out
@@ -1797,6 +1874,288 @@ static func _resolve_cell(s: Dictionary, b: int, c: int, li: int,
 		"depth_units": depth_units}
 
 
+## A part's OWN sizing edges (inches; never inherited from its groups).
+static func _edges_of(s: Dictionary, id: String) -> Dictionary:
+	var po: Variant = s.get("part_overrides", {})
+	if not (po is Dictionary):
+		return {}
+	var o: Variant = (po as Dictionary).get(id)
+	if o is Dictionary and (o as Dictionary).get("edges") is Dictionary:
+		return (o as Dictionary)["edges"] as Dictionary
+	return {}
+
+
+static func _edge_m(ed: Dictionary, k: String) -> float:
+	return float(ed.get(k, 0.0)) * IN
+
+
+## A deck cell's plan rect (m, x / z): between the posts of its bay over its
+## column's span, shortened by depth_units, then grown or cut by the cell's
+## own edges.
+static func _cell_rect(s: Dictionary, L: Dictionary, b: int, c: int, li: int,
+		cell: Dictionary) -> Rect2:
+	var fx: Array = L.fx
+	var zb := _cell_z_bounds(L.rz, float(L.frame_depth), c, int(L.cols))
+	var x0 := float(fx[b]) + POST_W * 0.5
+	var x1 := float(fx[b + 1]) - POST_W * 0.5
+	var z0: float = zb.x
+	var z1: float = zb.y
+	var du := int(cell.get("depth_units", -1))
+	if du >= 0:
+		z1 = minf(z1, z0 + float(du) * HALF_PANEL_FT * FT)
+	var ed := _edges_of(s, "cell:" + _cell_key(b, c, li))
+	if not ed.is_empty():
+		x0 -= _edge_m(ed, "x0")
+		x1 += _edge_m(ed, "x1")
+		z0 -= _edge_m(ed, "z0")
+		z1 += _edge_m(ed, "z1")
+	return Rect2(x0, z0, maxf(x1 - x0, 0.05), maxf(z1 - z0, 0.05))
+
+
+## The level index of a pitched roof deck, or -1.
+static func _pitched_roof_level(s: Dictionary, L: Dictionary) -> int:
+	if float(s.get("roof_pitch_deg", 0.0)) < 0.1:
+		return -1
+	var lv: Array = L.levels
+	for i in lv.size():
+		if bool(lv[i]["roof"]):
+			return i
+	return -1
+
+
+## The pitched roof deck, falling toward `roof_low_side`: packing on the top
+## beams (or on the frames, falling left / right, with purlins along them)
+## lifts the rafters to the pitch — none at the low side's frame line — and
+## plywood covers them, overhanging the eaves and the sides.
+static func _emit_pitched_roof(g: _Geom, s: Dictionary, L: Dictionary, li: int) -> void:
+	var G := _pitched_roof_geo(s, L, li)
+	var fx: Array = L.fx
+	var rz: Array = L.rz
+	var fd: float = L.frame_depth
+	var notch: Dictionary = L.notch
+	var top: float = G.top
+	var along_z: bool = G.along_z
+	var lid := "deck:%d" % li
+	var llabel := "Roof deck · pitched %s°" % fmt_num(float(s["roof_pitch_deg"]))
+	# Packing (and purlins), as one part.
+	var pov := g.begin([lid, "packing:%d" % li], [llabel, "Packing"])
+	if not bool(pov.get("hidden", false)):
+		var lst := g.surf(pov, g.lumber)
+		if along_z:
+			for r in range(int(L.rows)):
+				for zl in [float(rz[r]), float(rz[r]) + fd]:
+					var h := _roof_y(G, Vector3(0.0, 0.0, float(zl))) - top
+					if h < 0.01:
+						continue
+					for b in range(int(L.bays)):
+						var cx := (float(fx[b]) + float(fx[b + 1])) * 0.5
+						if _in_notch(notch, cx, float(zl)):
+							continue
+						var span := float(fx[b + 1]) - float(fx[b]) - POST_W
+						_emit_box(lst, Transform3D(Basis(), Vector3(cx, top + h * 0.5, float(zl))),
+							Vector3(span, h, 3.5 * IN))
+						g.counts["lumber"] += 1
+		else:
+			for bx in range(int(L.bays) + 1):
+				var xl := float(fx[bx])
+				var h2 := _roof_y(G, Vector3(xl, 0.0, 0.0)) - top
+				for r in range(int(L.rows)):
+					if h2 > 0.01 and not _in_notch(notch, xl, float(rz[r]) + fd * 0.5):
+						_emit_box(lst, Transform3D(Basis(), Vector3(xl, top + h2 * 0.5, float(rz[r]) + fd * 0.5)),
+							Vector3(3.5 * IN, h2, fd + POST_W))
+						g.counts["lumber"] += 1
+				# A purlin along the frame line, the rafters' bearing.
+				var zr: Vector2 = G.zr
+				_emit_box(lst, Transform3D(Basis(), Vector3(xl, top + maxf(h2, 0.0) + RAFTER_D * 0.5,
+					(zr.x + zr.y) * 0.5)), Vector3(RAFTER_W, RAFTER_D, zr.y - zr.x))
+				g.counts["lumber"] += 1
+	# Rafters down the fall, at the joist spacing across it.
+	var sp := float(s["joist_spacing_in"]) * IN
+	var a_lo: float = G.a_lo
+	var a_hi: float = G.a_hi
+	var n_r := maxi(2, int(ceil((a_hi - a_lo) / sp)) + 1)
+	var sv: Vector3 = G.sv
+	var nrm: Vector3 = G.n
+	for k in range(n_r):
+		var a := lerpf(a_lo + RAFTER_W, a_hi - RAFTER_W, float(k) / float(n_r - 1))
+		var rov := g.begin([lid, "joist:roof:%d" % k], [llabel, "Rafter %d" % (k + 1)])
+		if bool(rov.get("hidden", false)):
+			continue
+		var p0 := _roof_point(G, float(G.f_lo), a)
+		var p1 := _roof_point(G, float(G.f_hi), a)
+		_emit_obox(g.surf(rov, g.lumber), (p0 + p1) * 0.5 + nrm * (RAFTER_D * 0.5), sv, nrm,
+			Vector3(p0.distance_to(p1), RAFTER_D, RAFTER_W))
+		g.counts["lumber"] += 1
+	# Plywood: 8' down the fall, 4' across, from the high edge.
+	var slen: float = (float(G.f_hi) - float(G.f_lo)) / float(G.cosp)
+	var wid := a_hi - a_lo
+	var ni := maxi(1, int(ceil(slen / SHEET_LONG - 0.001)))
+	var nj := maxi(1, int(ceil(wid / SHEET_SHORT - 0.001)))
+	var n_sheet := 0
+	for i in range(ni):
+		var s0 := float(i) * SHEET_LONG
+		var s1 := minf(s0 + SHEET_LONG, slen)
+		for j in range(nj):
+			var c0 := a_lo + float(j) * SHEET_SHORT
+			var c1 := minf(c0 + SHEET_SHORT, a_hi)
+			if s1 - s0 < 0.02 or c1 - c0 < 0.02:
+				continue
+			n_sheet += 1
+			var fm := float(G.f_lo) + (s0 + s1) * 0.5 * float(G.cosp)
+			var am := (c0 + c1) * 0.5
+			var hp := _roof_point(G, fm, am)
+			if _in_notch(notch, hp.x, hp.z):
+				continue
+			var sov := g.begin([lid, "ply:roof:%d,%d" % [i, j]], [llabel, "Sheet %d" % n_sheet])
+			if bool(sov.get("hidden", false)):
+				continue
+			_emit_obox(g.surf(sov, g.ply), hp + nrm * (RAFTER_D + PLY_T * 0.5), sv, nrm,
+				Vector3(s1 - s0 - SEAM, PLY_T, c1 - c0 - SEAM))
+			g.counts["plywood"] += 1
+
+
+## The pitched roof's frame: d (downhill, horizontal), c (across), f = p.d
+## and a = p.c plan coordinates, the fall's range f_lo (high edge) .. f_hi
+## (low edge) and across a_lo .. a_hi, the rafters' bearing height at f.
+static func _pitched_roof_geo(s: Dictionary, L: Dictionary, li: int) -> Dictionary:
+	var top := float((L.levels as Array)[li]["y"])
+	var pitch := deg_to_rad(float(s["roof_pitch_deg"]))
+	var low := str(s["roof_low_side"])
+	var eave := float(s["roof_eave_ft"]) * FT
+	var side := float(s["roof_side_ft"]) * FT
+	var x0: float = L.x0
+	var z0: float = L.z0
+	var tx: float = L.total_x
+	var tz: float = L.total_z
+	var along_z := low == "back" or low == "front"
+	var d := Vector3.BACK
+	match low:
+		"front":
+			d = Vector3.FORWARD
+		"left":
+			d = Vector3.RIGHT
+		"right":
+			d = Vector3.LEFT
+	var c := Vector3(-d.z, 0.0, d.x)
+	var xr := Vector2(x0 - (side if along_z else eave), x0 + tx + (side if along_z else eave))
+	var zr := Vector2(z0 - (eave if along_z else side), z0 + tz + (eave if along_z else side))
+	# Plan extremes along d and c.
+	var fs: Array = []
+	var as_: Array = []
+	for px in [xr.x, xr.y]:
+		for pz in [zr.x, zr.y]:
+			var q := Vector3(float(px), 0.0, float(pz))
+			fs.append(q.dot(d))
+			as_.append(q.dot(c))
+	# The low frame line: the structure's own extreme along d.
+	var u_low := maxf(Vector3(x0, 0.0, z0).dot(d), Vector3(x0 + tx, 0.0, z0 + tz).dot(d))
+	var sup := 0.0 if along_z else RAFTER_D
+	var sv := (d * cos(pitch) + Vector3.DOWN * sin(pitch)).normalized()
+	var n := c.cross(sv).normalized()
+	if n.y < 0.0:
+		n = -n
+	return {"top": top, "tan": tan(pitch), "cosp": cos(pitch), "d": d, "c": c,
+		"along_z": along_z, "u_low": u_low, "sup": sup, "sv": sv, "n": n,
+		"f_lo": fs.min(), "f_hi": fs.max(), "a_lo": as_.min(), "a_hi": as_.max(),
+		"xr": xr, "zr": zr}
+
+
+## Height of the rafters' bearing over plan point p (y ignored).
+static func _roof_y(G: Dictionary, p: Vector3) -> float:
+	var f := Vector3(p.x, 0.0, p.z).dot(G.d as Vector3)
+	return float(G.top) + (float(G.u_low) - f) * float(G.tan)
+
+
+## The point on the rafters' underside at plan coords (f along d, a along c).
+static func _roof_point(G: Dictionary, f: float, a: float) -> Vector3:
+	var h := (G.d as Vector3) * f + (G.c as Vector3) * a
+	return Vector3(h.x, float(G.top) + (float(G.u_low) - f) * float(G.tan) + float(G.sup), h.z)
+
+
+## The pitched roof's highest point (m), for the BOM / harness.
+static func roof_peak_y(spec: Dictionary) -> float:
+	var s := resolve_spec(spec)
+	var L := _layout(s, _metrics(s))
+	var li := _pitched_roof_level(s, L)
+	if li < 0:
+		return float(L.height)
+	var G := _pitched_roof_geo(s, L, li)
+	return _roof_point(G, float(G.f_lo), float(G.a_lo)).y + RAFTER_D + PLY_T
+
+
+static func fmt_num(v: float) -> String:
+	if absf(v - roundf(v)) < 0.01:
+		return str(int(roundf(v)))
+	return str(snappedf(v, 0.1))
+
+
+## A workbench's pieces: [{kind beam | top, xf, size}] — a pair of beams on
+## the frame's two post lines at work height (and at shelf height), plywood on
+## each pair hanging `overhang_in` past the beams.
+static func _bench_boxes(L: Dictionary, e: Dictionary) -> Array:
+	var fx: Array = L.fx
+	var rz: Array = L.rz
+	var fd: float = L.frame_depth
+	var r := clampi(int(e.get("row", 0)), 0, int(L.rows) - 1)
+	var z0 := float(rz[r])
+	var z1 := z0 + fd
+	var oh := float(e.get("overhang_in", 2.5)) * IN
+	var tops: Array = [float(e.get("height_in", 36.0)) * IN]
+	if bool(e.get("shelf", false)):
+		tops.append(float(e.get("shelf_in", 12.0)) * IN)
+	var out: Array = []
+	var b0 := int(e.get("bay0", 0))
+	for b in range(b0, mini(b0 + int(e.get("bays", 1)), int(L.bays))):
+		var xa := float(fx[b]) + POST_W * 0.5
+		var xb := float(fx[b + 1]) - POST_W * 0.5
+		var cx := (xa + xb) * 0.5
+		for ty in tops:
+			var by := float(ty) - PLY_T
+			for zb in [z0, z1]:
+				out.append({"kind": "beam", "xf": Transform3D(Basis(), Vector3(cx, by - BEAM_H * 0.5, float(zb))),
+					"size": Vector3(xb - xa, BEAM_H, BEAM_T)})
+			out.append({"kind": "top", "xf": Transform3D(Basis(), Vector3(cx, float(ty) - PLY_T * 0.5, (z0 + z1) * 0.5)),
+				"size": Vector3(xb - xa - SEAM, PLY_T, fd + 2.0 * oh)})
+	return out
+
+
+static func _emit_bench(g: _Geom, L: Dictionary, e: Dictionary, ov: Dictionary) -> void:
+	var bst := g.surf(ov, g.beam, true)
+	var pst := g.surf(ov, g.ply)
+	for p in _bench_boxes(L, e):
+		if str(p["kind"]) == "beam":
+			_emit_box(bst, p["xf"], p["size"])
+			g.counts["beams"] += 1
+		else:
+			_emit_box(pst, p["xf"], p["size"])
+			g.counts["plywood"] += 1
+	g.counts["benches"] = int(g.counts.get("benches", 0)) + 1
+
+
+## Every (rack row, bay) a workbench can go in, as a pick box over the frame
+## between the two uprights: [{id, aabb, row, bay}].
+static func bench_slots(spec: Dictionary) -> Array:
+	var s := resolve_spec(spec)
+	var L := _layout(s, _metrics(s))
+	var fx: Array = L.fx
+	var rz: Array = L.rz
+	var fd: float = L.frame_depth
+	var out: Array = []
+	for r in range(int(L.rows)):
+		for b in range(int(L.bays)):
+			var lo := Vector3(float(fx[b]), 0.0, float(rz[r]) - 0.05)
+			var hi := Vector3(float(fx[b + 1]), float(L.height), float(rz[r]) + fd + 0.05)
+			out.append({"id": "bench_slot:%d,%d" % [r, b], "aabb": AABB(lo, hi - lo), "row": r, "bay": b})
+	return out
+
+
+static func _rect_hits_any(r: Rect2, holes: Array) -> bool:
+	for h in holes:
+		if (h as Rect2).intersects(r):
+			return true
+	return false
+
+
 static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 	var L := _layout(s, m)
 	var bays: int = L.bays
@@ -1839,11 +2198,18 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 			_posts_done.append(p1)
 			g.counts["uprights"] += 1
 
+	# Stairwells, per deck level, and the pitched roof (drawn on its own).
+	var holes_at: Array = []
+	for li in range(levels.size()):
+		holes_at.append(_deck_holes(s, L, li))
+	var roof_li := _pitched_roof_level(s, L)
+
 	# Beams at every level x row x bay (front + back side), honoring overrides
 	# (deleted beams vanish; dy_in nudges them 1" at a time). Each belongs to
 	# the deck cell it carries.
 	for li in range(levels.size()):
 		var y := float(levels[li]["y"])
+		var lholes: Array = holes_at[li]
 		for r in range(rows):
 			var zf := float(rz[r])
 			for b in range(bays):
@@ -1858,6 +2224,8 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 					var bc := _beam_cell(r, side, cols)
 					var oc: Variant = open_cells.get(_cell_key(b, bc, li))
 					if oc is Dictionary and bool((oc as Dictionary).get("beams", true)):
+						continue
+					if not lholes.is_empty() and _rect_hits_any(Rect2(cx - span * 0.5, zb - 0.03, span, 0.06), lholes):
 						continue
 					var cp := _cell_path(s, L, b, bc, li)
 					var bov := g.begin((cp[0] as Array) + ["beam:" + bkey],
@@ -1875,21 +2243,22 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 	# per-bay 4' tiling (3x 4' sheets fill each 12' clear span, ~3" post gap).
 	for li in range(levels.size()):
 		var lv: Dictionary = levels[li]
+		if li == roof_li:
+			_emit_pitched_roof(g, s, L, li)
+			continue
+		var lholes: Array = holes_at[li]
 		for c in range(cols):
-			var zb := _cell_z_bounds(rz, frame_depth, c, cols)
 			for b in range(bays):
 				var cell := _resolve_cell(s, b, c, li, lv, decked)
 				var kind := str(cell["kind"])
 				if kind == "none" or kind == "stepped":
 					continue
 				var y := float(cell["y"])
-				var bx0 := float(fx[b]) + POST_W * 0.5
-				var bx1 := float(fx[b + 1]) - POST_W * 0.5
-				var cz0: float = zb.x
-				var cz1: float = zb.y
-				var du := int(cell.get("depth_units", -1))
-				if du >= 0:
-					cz1 = minf(cz1, cz0 + float(du) * HALF_PANEL_FT * FT)
+				var cr := _cell_rect(s, L, b, c, li, cell)
+				var bx0 := cr.position.x
+				var bx1 := cr.end.x
+				var cz0 := cr.position.y
+				var cz1 := cr.end.y
 				var ccx := (bx0 + bx1) * 0.5
 				if _in_notch(notch, ccx, (cz0 + cz1) * 0.5):
 					continue
@@ -1899,9 +2268,9 @@ static func _emit_structure(g: _Geom, s: Dictionary, m: Dictionary) -> void:
 					var y_lo := float(levels[li - 1]["y"]) if li > 0 else 0.0
 					_emit_stairs(g, bx0, bx1, cz0, cz1, y_lo, y, notch, cp, key)
 					continue
-				_emit_joists_span(g, s, bx0, bx1, cz0, cz1, y, notch, cp, key)
+				_emit_joists_span(g, s, bx0, bx1, cz0, cz1, y, notch, cp, key, lholes)
 				_emit_ply_field(g, bx0, bx1, cz0, cz1, y + JOIST_H + PLY_T * 0.5, notch, [],
-					[cp[0], cp[1], key])
+					[cp[0], cp[1], key], null, s, lholes)
 
 	# Plywood walls on chosen perimeter faces (doors / windows cut through).
 	_emit_walls(g, s, m, x0, z0, total_x, total_z, height, notch)
@@ -1976,7 +2345,7 @@ static func _emit_frame(g: _Geom, x: float, z0: float, z1: float, h: float,
 ## `cp` = the cell's [ids, labels] (_cell_path); each joist is its own part.
 static func _emit_joists_span(g: _Geom, s: Dictionary, x_a: float, x_b: float,
 		z_a: float, z_b: float, beam_y: float, notch: Dictionary, cp: Array = [],
-		key: String = "") -> void:
+		key: String = "", holes: Array = []) -> void:
 	var joist_cy := beam_y + JOIST_H * 0.5
 	var span_z := z_b - z_a
 	var joist_len := span_z + 2.0 * BEARING
@@ -1998,9 +2367,31 @@ static func _emit_joists_span(g: _Geom, s: Dictionary, x_a: float, x_b: float,
 			if bool(ov.get("hidden", false)):
 				continue
 			st = g.surf(ov, g.lumber)
-		_emit_box(st, Transform3D(Basis(), Vector3(jx, joist_cy, joist_cz)),
-			Vector3(JOIST_W, JOIST_H, joist_len))
+		# A stairwell cuts the joists it crosses (headers below catch them).
+		var runs: Array = [Vector2(joist_cz - joist_len * 0.5, joist_cz + joist_len * 0.5)]
+		for h in holes:
+			var hr: Rect2 = h
+			if jx > hr.position.x - JOIST_W and jx < hr.end.x + JOIST_W:
+				runs = _interval_minus(runs, Vector2(hr.position.y, hr.end.y))
+		for rv in runs:
+			var r2: Vector2 = rv
+			if r2.y - r2.x < 0.05:
+				continue
+			_emit_box(st, Transform3D(Basis(), Vector3(jx, joist_cy, (r2.x + r2.y) * 0.5)),
+				Vector3(JOIST_W, JOIST_H, r2.y - r2.x))
 		g.counts["lumber"] += 1
+	# Headers across each stairwell edge that lies inside this cell.
+	for h in holes:
+		var hr: Rect2 = h
+		var hx0 := maxf(hr.position.x, x_a)
+		var hx1 := minf(hr.end.x, x_b)
+		if hx1 - hx0 < 0.05:
+			continue
+		for hz in [hr.position.y - JOIST_W * 0.5, hr.end.y + JOIST_W * 0.5]:
+			if float(hz) > z_a + 0.02 and float(hz) < z_b - 0.02:
+				_emit_box(g.lumber, Transform3D(Basis(), Vector3((hx0 + hx1) * 0.5, joist_cy, float(hz))),
+					Vector3(hx1 - hx0, JOIST_H, JOIST_W))
+				g.counts["lumber"] += 1
 
 
 ## A flight of `n` steps across a deck cell, from y_lo up to y_hi, rising
@@ -2048,7 +2439,7 @@ static func _emit_stairs(g: _Geom, x_a: float, x_b: float, z_a: float,
 ## without it the sheets go on `st` (default plywood) in the current part.
 static func _emit_ply_field(g: _Geom, x_a: float, x_b: float, z_a: float, z_b: float,
 		cy: float, notch: Dictionary, skip_z: Array = [], part: Array = [],
-		st: SurfaceTool = null) -> void:
+		st: SurfaceTool = null, s: Dictionary = {}, holes: Array = []) -> void:
 	if st == null:
 		st = g.ply
 	# Deck sheets run their 4' short edge along X — three of them fill each 12' bay
@@ -2076,15 +2467,29 @@ static func _emit_ply_field(g: _Geom, x_a: float, x_b: float, z_a: float, z_b: f
 			if _z_in_ranges(skip_z, ccz):
 				continue
 			var sst := st
+			var sr := Rect2(sx0, sz0, sxw, szw)
 			if not part.is_empty():
-				var ov := g.begin((part[0] as Array) + ["ply:%s:%d,%d" % [str(part[2]), ix, iz]],
+				var pid := "ply:%s:%d,%d" % [str(part[2]), ix, iz]
+				var ov := g.begin((part[0] as Array) + [pid],
 					(part[1] as Array) + ["Sheet %d" % (iz * nx + ix + 1)])
 				if bool(ov.get("hidden", false)):
 					continue
 				sst = g.surf(ov, g.ply)
-			_emit_box(sst, Transform3D(Basis(), Vector3(ccx, cy, ccz)),
-				Vector3(sxw, PLY_T, szw))
+				var ed := _edges_of(s, pid)
+				if not ed.is_empty():
+					var ex0 := sr.position.x - _edge_m(ed, "x0")
+					var ex1 := sr.end.x + _edge_m(ed, "x1")
+					var ez0 := sr.position.y - _edge_m(ed, "z0")
+					var ez1 := sr.end.y + _edge_m(ed, "z1")
+					if ex1 - ex0 < 0.02 or ez1 - ez0 < 0.02:
+						continue
+					sr = Rect2(ex0, ez0, ex1 - ex0, ez1 - ez0)
+			for pc in (rect_minus(sr, holes) if not holes.is_empty() else [sr]):
+				var pr: Rect2 = pc
+				_emit_box(sst, Transform3D(Basis(), Vector3(pr.get_center().x, cy, pr.get_center().y)),
+					Vector3(pr.size.x, PLY_T, pr.size.y))
 			g.counts["plywood"] += 1
+
 
 
 static func _z_in_ranges(ranges: Array, z: float) -> bool:
@@ -2126,6 +2531,25 @@ static func _wall_faces(s: Dictionary, L: Dictionary) -> Array:
 		out.append(["left", z0, z0 + total_z, x0 + total_x, height, false, {}, band.x])
 	if bool(w.get("right", false)):
 		out.append(["right", z0, z0 + total_z, x0, height, false, {}, band.x])
+	# Each face's own size (its part override): ends run on past the structure
+	# or stop short, the bottom / top move, and the sheets tile at their own
+	# size (default 4x8, standing).
+	for f in out:
+		var fid := "wallface:" + str(f[0])
+		var ed := _edges_of(s, fid)
+		if not ed.is_empty():
+			f[1] = float(f[1]) - _edge_m(ed, "a0")
+			f[2] = float(f[2]) + _edge_m(ed, "a1")
+			f[7] = maxf(float(f[7]) - _edge_m(ed, "y0"), 0.0)
+			f[4] = float(f[4]) + _edge_m(ed, "y1")
+		var po: Variant = (s.get("part_overrides", {}) as Dictionary).get(fid)
+		var sw := SHEET_SHORT
+		var sh := SHEET_LONG
+		if po is Dictionary:
+			sw = float((po as Dictionary).get("sheet_w_in", sw / IN)) * IN
+			sh = float((po as Dictionary).get("sheet_h_in", sh / IN)) * IN
+		f.append(sw)
+		f.append(sh)
 	return out
 
 
@@ -2133,19 +2557,20 @@ static func _wall_faces(s: Dictionary, L: Dictionary) -> Array:
 ## by emission + picking so a deleted sheet always matches the box the player
 ## clicked. Sheets tile up from `y_base` (the wall band's bottom).
 static func _wall_face_sheets(a0: float, a1: float, fixed: float, height: float,
-		along_x: bool, notch: Dictionary, y_base: float = 0.0) -> Array:
+		along_x: bool, notch: Dictionary, y_base: float = 0.0, sw: float = SHEET_SHORT,
+		sh_h: float = SHEET_LONG) -> Array:
 	var out: Array = []
 	var w := a1 - a0
-	var na := maxi(1, int(ceil(w / SHEET_SHORT)))
-	var nv := maxi(1, int(ceil((height - y_base) / SHEET_LONG)))
+	var na := maxi(1, int(ceil(w / sw - 0.0005)))
+	var nv := maxi(1, int(ceil((height - y_base) / sh_h - 0.0005)))
 	for ia in range(na):
-		var pa := a0 + float(ia) * SHEET_SHORT
-		var paw := minf(SHEET_SHORT, a1 - pa) - SEAM
+		var pa := a0 + float(ia) * sw
+		var paw := minf(sw, a1 - pa) - SEAM
 		if paw <= 0.01:
 			continue
 		for iv in range(nv):
-			var vy := y_base + float(iv) * SHEET_LONG
-			var vh := minf(SHEET_LONG, height - vy) - SEAM
+			var vy := y_base + float(iv) * sh_h
+			var vh := minf(sh_h, height - vy) - SEAM
 			if vh <= 0.01:
 				continue
 			var cc := pa + paw * 0.5
@@ -2162,6 +2587,35 @@ static func _wall_face_sheets(a0: float, a1: float, fixed: float, height: float,
 				size = Vector3(PLY_T, vh, paw)
 			out.append({"ia": ia, "iv": iv, "pos": pos, "size": size,
 				"a0": pa, "a1": pa + paw, "y0": vy, "y1": vy + vh})
+	return out
+
+
+## One wall sheet grown or cut by its own edges (a0 / a1 along the face, y0 /
+## y1 bottom / top, inches). {} when it is cut away to nothing.
+static func _sized_sheet(s: Dictionary, key: String, sh: Dictionary, along_x: bool,
+		fixed: float) -> Dictionary:
+	var ed := _edges_of(s, "wall:" + key)
+	if ed.is_empty():
+		return sh
+	var a0 := float(sh["a0"]) - _edge_m(ed, "a0")
+	var a1 := float(sh["a1"]) + _edge_m(ed, "a1")
+	var y0 := maxf(float(sh["y0"]) - _edge_m(ed, "y0"), 0.0)
+	var y1 := float(sh["y1"]) + _edge_m(ed, "y1")
+	if a1 - a0 < 0.02 or y1 - y0 < 0.02:
+		return {}
+	var out := sh.duplicate()
+	out["a0"] = a0
+	out["a1"] = a1
+	out["y0"] = y0
+	out["y1"] = y1
+	var cc := (a0 + a1) * 0.5
+	var cy := (y0 + y1) * 0.5
+	if along_x:
+		out["pos"] = Vector3(cc, cy, fixed)
+		out["size"] = Vector3(a1 - a0, y1 - y0, PLY_T)
+	else:
+		out["pos"] = Vector3(fixed, cy, cc)
+		out["size"] = Vector3(PLY_T, y1 - y0, a1 - a0)
 	return out
 
 
@@ -2183,9 +2637,12 @@ static func _emit_walls(g: _Geom, s: Dictionary, m: Dictionary, _x0: float, _z0:
 		var wid := "wallface:" + str(f[0])
 		var wlabel := "%s wall" % str(OPTION_LABELS.get(str(f[0]), str(f[0])))
 		var n_sheet := 0
-		for sh in _wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7]):
+		for sh0 in _wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9]):
 			n_sheet += 1
-			var wkey := "%s,%d,%d" % [f[0], int(sh["ia"]), int(sh["iv"])]
+			var wkey := "%s,%d,%d" % [f[0], int(sh0["ia"]), int(sh0["iv"])]
+			var sh := _sized_sheet(s, wkey, sh0, along_x, fixed)
+			if sh.is_empty():
+				continue
 			var wov := g.begin([wid, "wall:" + wkey], [wlabel, "Sheet %d" % n_sheet],
 				deleted.has(wkey))
 			if bool(wov.get("hidden", false)):
@@ -2338,21 +2795,22 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 	var any_po := not (s.get("part_overrides", {}) as Dictionary).is_empty()
 
 	# Deck cells.
+	var roof_li := _pitched_roof_level(s, L)
 	for li in range(levels.size()):
 		var lv: Dictionary = levels[li]
+		if li == roof_li:
+			continue
 		for c in range(cols):
-			var zb := _cell_z_bounds(rz, frame_depth, c, cols)
 			for b in range(bays):
 				var cell := _resolve_cell(s, b, c, li, lv, decked)
 				if str(cell["kind"]) == "none" or str(cell["kind"]) == "stepped":
 					continue
-				var bx0 := float(fx[b]) + POST_W * 0.5
-				var bx1 := float(fx[b + 1]) - POST_W * 0.5
-				var cz0: float = zb.x
-				var cz1: float = zb.y
+				var cr := _cell_rect(s, L, b, c, li, cell)
+				var bx0 := cr.position.x
+				var bx1 := cr.end.x
+				var cz0 := cr.position.y
+				var cz1 := cr.end.y
 				var du := int(cell.get("depth_units", -1))
-				if du >= 0:
-					cz1 = minf(cz1, cz0 + float(du) * HALF_PANEL_FT * FT)
 				var ccx := (bx0 + bx1) * 0.5
 				if _in_notch(notch, ccx, (cz0 + cz1) * 0.5):
 					continue
@@ -2400,9 +2858,12 @@ static func pick_components(spec: Dictionary = {}) -> Array:
 	var deleted: Array = s.get("wall_sheet_deleted", [])
 	for f in _wall_faces(s, L):
 		var holes := _face_openings(s, L, str(f[0]))
-		for sh in _wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7]):
-			var key := "%s,%d,%d" % [f[0], int(sh["ia"]), int(sh["iv"])]
+		for sh0 in _wall_face_sheets(f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9]):
+			var key := "%s,%d,%d" % [f[0], int(sh0["ia"]), int(sh0["iv"])]
 			if deleted.has(key):
+				continue
+			var sh := _sized_sheet(s, key, sh0, bool(f[5]), float(f[3]))
+			if sh.is_empty():
 				continue
 			if any_po and _part_hidden(s, ["wallface:" + str(f[0]), "wall:" + key]):
 				continue
@@ -2579,6 +3040,22 @@ static func resolve_element(e: Dictionary, s: Dictionary) -> Dictionary:
 			out["flip"] = bool(out["flip"])
 			out["handrail"] = bool(out["handrail"])
 			out["at_ft"] = clampf(float(out["at_ft"]), 0.0, _face_len_ft(m, str(out["face"])))
+			out["bay"] = clampi(int(out["bay"]), 0, int(s["bay_count"]) - 1)
+			out["col"] = clampi(int(out["col"]), 0, int(s["column_count"]) - 1)
+			out["climb"] = _pick_option(out["climb"], CLIMB_DIRS)
+			out["lat_ft"] = clampf(float(out["lat_ft"]), -10.0, 10.0)
+			out["pos_ft"] = clampf(float(out["pos_ft"]), 0.0, 20.0)
+			out["cut_floor"] = bool(out["cut_floor"])
+			out["from_floor"] = clampi(int(out["from_floor"]), -1, maxi(int(out["to_level"]) - 1, -1))
+		"bench":
+			var bb := int(s["bay_count"])
+			out["row"] = clampi(int(out["row"]), 0, int(s["column_count"]))
+			out["bay0"] = clampi(int(out["bay0"]), 0, bb - 1)
+			out["bays"] = clampi(int(out["bays"]), 1, bb - int(out["bay0"]))
+			out["height_in"] = clampf(float(out["height_in"]), 18.0, 60.0)
+			out["overhang_in"] = clampf(float(out["overhang_in"]), 0.0, 24.0)
+			out["shelf"] = bool(out["shelf"])
+			out["shelf_in"] = clampf(float(out["shelf_in"]), 4.0, float(out["height_in"]) - 8.0)
 		"lean_to":
 			out["surface"] = _pick_option(out["surface"], SLOPE_SURFACES)
 			out["ends"] = _pick_option(out["ends"], SLOPE_ENDS)
@@ -2936,7 +3413,16 @@ static func element_label(e: Dictionary, spec: Dictionary = {}) -> String:
 			var shape := str(e.get("shape", "straight"))
 			var kind := str({"landing": "Stairs with a landing", "l": "L stairs", "u": "U stairs",
 				"wrap": "Wrap-round stairs"}.get(shape, "Stairs"))
+			if str(e.get("run", "")) == "inside":
+				return "%s inside · bay %d, column %d, up to %s" % [kind, int(e.get("bay", 0)) + 1,
+					int(e.get("col", 0)) + 1, _floor_name(spec, int(e.get("to_level", 0)))]
 			return "%s · %s face, up to %s" % [kind, face, _floor_name(spec, int(e.get("to_level", 0)))]
+		"bench":
+			var bb0 := int(e.get("bay0", 0)) + 1
+			var bnb := int(e.get("bays", 1))
+			return "Workbench · rack row %d, %s, %s high" % [int(e.get("row", 0)) + 1,
+				("bay %d" % bb0) if bnb == 1 else ("bays %d–%d" % [bb0, bb0 + bnb - 1]),
+				fmt_ft(float(e.get("height_in", 36.0)) / 12.0)]
 		"lean_to":
 			return "%s · %s face" % [str(OPTION_LABELS.get(str(e.get("surface", "")), name)), face]
 		"railing":
@@ -3020,6 +3506,8 @@ static func _emit_elements(g: _Geom, s: Dictionary, L: Dictionary) -> void:
 				_emit_window(g, L, e)
 			"stair":
 				_emit_stair(g, L, e)
+			"bench":
+				_emit_bench(g, L, e, ov)
 			"courtyard", "open_bay":
 				# A cut in the layout (_layout's notch rects) / derived cells, not
 				# geometry: its pick box is the space it opens.
@@ -3174,6 +3662,8 @@ static func _emit_window(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 ## "along" runs parallel to the face, outside it, to a landing beside the deck
 ## edge at `at`; "out" runs straight away from the face with its top at `at`.
 static func _stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
+	if str(e.get("run", "")) == "inside":
+		return _inside_stair_geo(L, e)
 	var fr := _face_frame(str(e["face"]), L)
 	var y_top := _floor_y(L, int(e["to_level"]))
 	if y_top < 0.3:
@@ -3194,7 +3684,7 @@ static func _stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
 	# structure. A stair straight out stands off on a deeper top landing; one
 	# along a wall turns the other way.
 	var inside := _stair_intrusion(G)
-	if inside > 0.0:
+	if inside > 0.0 and not bool(G.get("inside", false)):
 		if along:
 			_stair_flights(G, shape, "right" if turn == "left" else "left", frac)
 			G["turn_swapped"] = true
@@ -3205,6 +3695,102 @@ static func _stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
 			G["auto_landing"] = extra
 			_stair_flights(G, shape, turn, frac)
 	return G
+
+
+## A stair standing INSIDE deck cell (bay, col): it climbs `climb` from
+## `from_floor` to `to_level`, its top edge at the cell's far end (less
+## `pos_ft`), centred on the clear gap between the rack rows (or between the
+## posts, climbing front / back) shifted `lat_ft`. The frame G is the face
+## stair's with a made-up face: base = the top edge's middle, out = downhill.
+## "hole" = the plan rect the stairwell takes out of the decks it passes.
+static func _inside_stair_geo(L: Dictionary, e: Dictionary) -> Dictionary:
+	var y_top := _floor_y(L, int(e["to_level"]))
+	var y_bot := _floor_y(L, int(e.get("from_floor", -1)))
+	if y_top - y_bot < 0.3:
+		return {}
+	var fx: Array = L.fx
+	var rz: Array = L.rz
+	var fd: float = L.frame_depth
+	var b := clampi(int(e.get("bay", 0)), 0, int(L.bays) - 1)
+	var c := clampi(int(e.get("col", 0)), 0, int(L.cols) - 1)
+	var x0 := float(fx[b]) + POST_W * 0.5 + 0.04
+	var x1 := float(fx[b + 1]) - POST_W * 0.5 - 0.04
+	# The clear gap between the two rack rows of this column.
+	var z0 := float(rz[c]) + fd + POST_W * 0.5 + 0.04
+	var z1 := float(rz[c + 1]) - POST_W * 0.5 - 0.04
+	if z1 - z0 < 0.6:
+		var zb := _cell_z_bounds(rz, fd, c, int(L.cols))
+		z0 = zb.x
+		z1 = zb.y
+	var climb := str(e.get("climb", "left"))
+	var d := Vector3.RIGHT
+	match climb:
+		"right":
+			d = Vector3.LEFT
+		"back":
+			d = Vector3.BACK
+		"front":
+			d = Vector3.FORWARD
+	var lat_axis := Vector3.UP.cross(d)
+	var cx := (x0 + x1) * 0.5
+	var cz := (z0 + z1) * 0.5
+	var lat := float(e.get("lat_ft", 0.0)) * FT
+	var back := float(e.get("pos_ft", 0.0)) * FT
+	# Far end of the bay in the climbing direction.
+	var far := x1 if climb == "left" else (x0 if climb == "right" else (z1 if climb == "back" else z0))
+	var top := Vector3(cx, 0.0, cz) + lat_axis * lat
+	if absf(d.x) > 0.5:
+		top.x = far - d.x * back
+	else:
+		top.z = far - d.z * back
+	var fr := {"face": "inside", "base": top - lat_axis * 0.0, "along": -lat_axis, "out": -d,
+		"len": 0.0}
+	var rise := y_top - y_bot
+	var n := maxi(2, int(ceil(rise / RISER_MAX)))
+	var G := {"fr": fr, "y_top": y_top, "y_bot": y_bot, "n": n, "riser": rise / float(n),
+		"w": float(e["width_ft"]) * FT, "a": 0.0, "o0": 0.0, "along": false, "sgn": 1.0,
+		"tread": float(e.get("tread_in", 10.0)) * IN, "landing": 0.0, "inside": true}
+	_stair_flights(G, str(e.get("shape", "straight")), str(e.get("turn", "left")),
+		float(e.get("turn_pct", 50.0)) / 100.0)
+	# The stairwell: everything the flights and landings cover in plan.
+	var w: float = G.w
+	var box := Rect2(Vector2(top.x, top.z), Vector2.ZERO)
+	for f in (G.flights as Array):
+		for lat_s in [-w * 0.5, w * 0.5]:
+			for dist in [0.0, float(int(f.m)) * float(G.tread)]:
+				var q := _flight_point(f, float(dist), float(lat_s), 0.0)
+				box = box.expand(Vector2(q.x, q.z))
+	for lnd in (G.landings as Array):
+		var lat_v := Vector3.UP.cross(lnd.h as Vector3)
+		for ca in [-0.5, 0.5]:
+			for cb in [-0.5, 0.5]:
+				var q2: Vector3 = ((lnd.c as Vector3) + (lnd.h as Vector3) * (float(lnd.along) * float(ca))
+					+ lat_v * (float(lnd.across) * float(cb)))
+				box = box.expand(Vector2(q2.x, q2.z))
+	G["hole"] = box.grow(2.0 * IN)
+	G["top"] = top
+	G["d"] = d
+	return G
+
+
+## The stairwells cut through deck level li: [Rect2 over x / z].
+static func _deck_holes(s: Dictionary, L: Dictionary, li: int) -> Array:
+	var out: Array = []
+	var lv: Array = L.levels
+	if li < 0 or li >= lv.size():
+		return out
+	var fy := _floor_y(L, li)
+	for e in (s.get("elements", []) as Array):
+		if not (e is Dictionary) or str(e.get("type", "")) != "stair":
+			continue
+		if str(e.get("run", "")) != "inside" or not bool(e.get("cut_floor", true)):
+			continue
+		var G := _stair_geo(L, e)
+		if G.is_empty():
+			continue
+		if fy > float(G.y_bot) + 0.3 and fy <= float(G.y_top) + 0.01:
+			out.append(G.hole)
+	return out
 
 
 ## How far the stair's flights and landings reach in past its face (m, 0 =
@@ -3270,7 +3856,7 @@ static func _stair_flights(G: Dictionary, shape: String, turn: String, frac: flo
 		var m: int = counts[i]
 		var yb := y - riser * float(m)
 		if i == counts.size() - 1:
-			yb = 0.0
+			yb = float(G.get("y_bot", 0.0))
 		flights.append({"top": p, "h": h, "m": m, "yt": y, "yb": yb})
 		if i == counts.size() - 1:
 			break
@@ -3459,6 +4045,20 @@ static func _emit_stair(g: _Geom, L: Dictionary, e: Dictionary) -> void:
 			var c2 := _fp(fr, float(G.a) + float(G.sgn) * w, y_top, float(G.o0) + 0.05)
 			_emit_rail_run(g, c0, c1, 3.0 * FT)
 			_emit_rail_run(g, c1, c2, 3.0 * FT)
+	if bool(G.get("inside", false)) and bool(e.get("cut_floor", true)) and rail_on:
+		# A guard round the stairwell, open on the side you step off the top.
+		var hr: Rect2 = G.hole
+		var yy: float = G.y_top
+		var dd: Vector3 = G.d
+		var hc := Vector3(hr.get_center().x, yy, hr.get_center().y)
+		var c4 := [Vector3(hr.position.x, yy, hr.position.y), Vector3(hr.end.x, yy, hr.position.y),
+			Vector3(hr.end.x, yy, hr.end.y), Vector3(hr.position.x, yy, hr.end.y)]
+		for i in 4:
+			var qa: Vector3 = c4[i]
+			var qb: Vector3 = c4[(i + 1) % 4]
+			if (((qa + qb) * 0.5) - hc).normalized().dot(dd) > 0.7:
+				continue
+			_emit_rail_run(g, qa, qb, 3.0 * FT)
 	g.counts["stairs"] += 1
 
 
@@ -3469,7 +4069,7 @@ static func _stair_gaps(s: Dictionary, L: Dictionary, li: int) -> Dictionary:
 	for e in (s.get("elements", []) as Array):
 		if not (e is Dictionary) or str(e.get("type", "")) != "stair":
 			continue
-		if int(e.get("to_level", -9)) != li:
+		if int(e.get("to_level", -9)) != li or str(e.get("run", "")) == "inside":
 			continue
 		var face := str(e["face"])
 		var fr := _face_frame(face, L)
@@ -4061,28 +4661,24 @@ static func _emit_slope_sheets(g: _Geom, st: SurfaceTool, G: Dictionary, a0: flo
 static func _deck_rects(s: Dictionary, L: Dictionary, li: int) -> Array:
 	var out: Array = []
 	var levels: Array = L.levels
-	if li < 0 or li >= levels.size():
+	if li < 0 or li >= levels.size() or li == _pitched_roof_level(s, L):
 		return out
-	var fx: Array = L.fx
-	var rz: Array = L.rz
 	var notch: Dictionary = L.notch
 	var cols: int = L.cols
 	var decked := bool(s["decked"])
 	for c in range(cols):
-		var zb := _cell_z_bounds(rz, float(L.frame_depth), c, cols)
 		for b in range(int(L.bays)):
 			var cell := _resolve_cell(s, b, c, li, levels[li], decked)
 			var kind := str(cell["kind"])
 			if kind == "none":
 				continue
-			var bx0 := float(fx[b]) + POST_W * 0.5
-			var bx1 := float(fx[b + 1]) - POST_W * 0.5
-			var cz0: float = zb.x
-			var cz1: float = zb.y
-			var du := int(cell.get("depth_units", -1))
-			if du >= 0:
-				cz1 = minf(cz1, cz0 + float(du) * HALF_PANEL_FT * FT)
+			var cr := _cell_rect(s, L, b, c, li, cell)
+			var bx0 := cr.position.x
+			var bx1 := cr.end.x
+			var cz0 := cr.position.y
+			var cz1 := cr.end.y
 			if _in_notch(notch, (bx0 + bx1) * 0.5, (cz0 + cz1) * 0.5):
+
 				continue
 			out.append({"x0": bx0, "x1": bx1, "z0": cz0, "z1": cz1,
 				"y": float(cell["y"]) + JOIST_H + PLY_T, "kind": kind})
@@ -4269,6 +4865,21 @@ static func _element_components(s: Dictionary, L: Dictionary, e: Dictionary) -> 
 	var base := {"kind": "element", "etype": t, "el_id": id, "face": str(e.get("face", ""))}
 	var out: Array = []
 	match t:
+		"bench":
+			var bbox := AABB()
+			var first := true
+			for p in _bench_boxes(L, e):
+				var xf: Transform3D = p["xf"]
+				var sz: Vector3 = p["size"]
+				var pb := AABB(xf.origin - sz * 0.5, sz).grow(0.03)
+				bbox = pb if first else bbox.merge(pb)
+				first = false
+			if not first:
+				var cb := base.duplicate()
+				cb["id"] = "el:" + id
+				cb["aabb"] = bbox
+				out.append(cb)
+
 		"door", "window":
 			var fr := _face_frame(str(e["face"]), L)
 			var w := float(e["width_ft"]) * FT
@@ -4548,7 +5159,123 @@ static func design_presets() -> Array:
 		{"id": "chiba_2026", "name": "Chiba 2026",
 			"blurb": "Chiba at Mars College, 2026: a 20' walled block with an offset solar slope, a turned rack half open above its deck with a greenhouse, and a closed box.",
 			"spec": chiba_2026_spec()},
+		{"id": "tool_camp_26", "name": "Tool Camp 26",
+			"blurb": "A walled workshop of five rack rows under a pitched roof, workbenches between the uprights, a double-height middle bay, stairs inside to the loft, and a one-bay extension with a loft box.",
+			"spec": tool_camp_26_spec()},
 	]
+
+
+## Where a new section stands against `face` of rack A, in A's frame (no
+## turn). "gap" carries on A's rows (front / back) at A's own row spacing,
+## or leaves that gap between the frames (left / right); "share" stands the
+## section's first rack row (or frame) on A's last one. `align` = A's bay
+## (front / back) or rack row (left / right) the section's first one lines
+## up with.
+static func section_transform(spec_a: Dictionary, spec_b: Dictionary, face: String,
+		join: String, align: int) -> Transform3D:
+	var a := resolve_spec(spec_a)
+	var b := resolve_spec(spec_b)
+	var ma := _metrics(a)
+	var mb := _metrics(b)
+	var La := _layout(a, ma)
+	var tx_a: float = ma.total_x
+	var tz_a: float = ma.total_z
+	var tx_b: float = mb.total_x
+	var tz_b: float = mb.total_z
+	var fd: float = ma.frame_depth
+	var o := Vector3.ZERO
+	match face:
+		"back", "front":
+			var sgn := 1.0 if face == "back" else -1.0
+			var dz := tz_a * 0.5 + float(ma.gap_z) + tz_b * 0.5
+			if join == "share":
+				dz = tz_a * 0.5 - fd + tz_b * 0.5
+			o.z = sgn * dz
+			o.x = float(La.fx[clampi(align, 0, int(La.bays))]) + tx_b * 0.5
+		_:
+			var sgx := 1.0 if face == "left" else -1.0
+			var dx := tx_a * 0.5 + tx_b * 0.5
+			if join == "gap":
+				dx += float(ma.gap_z)
+			o.x = sgx * dx
+			o.z = float(La.rz[clampi(align, 0, int(La.rows) - 1)]) + tz_b * 0.5
+	return Transform3D(Basis(), o)
+
+
+## A new section's spec: the rack system of `spec_a` (frames, beams, levels,
+## decking) at `bays` x `cols`, with nothing added to it.
+static func section_spec(spec_a: Dictionary, bays: int, cols: int) -> Dictionary:
+	var a := resolve_spec(spec_a)
+	var out := {}
+	for k in ["upright_depth_in", "upright_height_ft", "beam_span_ft", "row_gap_ft", "decked",
+			"lumber_len_ft", "joist_spacing_in", "deck_levels", "level_heights_ft",
+			"wall_bottom_ft", "wall_top_ft"]:
+		var v: Variant = a[k]
+		out[k] = v.duplicate() if v is Array else v
+	out["bay_count"] = clampi(bays, 1, 10)
+	out["column_count"] = clampi(cols, 1, 10)
+	out["roof_deck"] = false
+	return out
+
+
+## Tool Camp 26, read off the camp's own model ("tool camp.glb"): 16' frames
+## 36" deep, 12' beams. The main block is 3 bays across 5 rack rows 5' apart,
+## a deck at 5" and a loft at 8' 5", the loft left out of the middle bay so it
+## stands double height. A plywood roof pitched 2.5° falls to the back over
+## 3.5' eaves. The front is walled to 13'; both ends are walled with a
+## doorway in every gap between the frames. Workbenches run between the
+## uprights: at 41.5" along the front row, at 49" on the rows behind (the end
+## bays). A stair inside climbs the first bay to the loft through a
+## stairwell. Off the back of the third bay, carrying on the rows, a one-bay extension of 4
+## rack rows: benches at 41.5" and a loft whose far half is boxed in to
+## 13' 3"; the loft's back cell runs on 5' to meet it.
+static func tool_camp_26_spec() -> Dictionary:
+	var main := {
+		"upright_depth_in": 36, "upright_height_ft": 16, "beam_span_ft": 12,
+		"bay_count": 3, "column_count": 4, "row_gap_ft": 5.0,
+		"deck_levels": 2, "level_heights_ft": [0.4, 8.4], "roof_deck": true, "decked": true,
+		"roof_pitch_deg": 2.5, "roof_low_side": "back", "roof_eave_ft": 3.5, "roof_side_ft": 0.5,
+		"walls": {"front": true, "back": false, "left": true, "right": true},
+		"wall_bottom_ft": 0.75, "wall_top_ft": 13.0,
+		"cell_overrides": {},
+		"part_overrides": {"cell:2,3,1": {"edges": {"z1": 60.0}}},
+		"elements": [],
+	}
+	for c in 4:
+		(main["cell_overrides"] as Dictionary)["1,%d,1" % c] = {"kind": "none"}
+	var els: Array = main["elements"]
+	# A doorway in every gap between the frames, both ends.
+	for face in ["left", "right"]:
+		for r in 4:
+			els.append({"type": "door", "face": face, "at_ft": float(r) * 8.0 + 5.5, "floor": -1,
+				"style": "opening", "width_ft": 4.0, "height_ft": 9.0})
+	for b in 3:
+		els.append({"type": "bench", "row": 0, "bay0": b, "bays": 1, "height_in": 41.5})
+	for r in [1, 2, 3]:
+		for b in [0, 2]:
+			els.append({"type": "bench", "row": r, "bay0": b, "bays": 1, "height_in": 49.0})
+	els.append({"type": "bench", "row": 4, "bay0": 2, "bays": 1, "height_in": 49.0})
+	els.append({"type": "stair", "run": "inside", "bay": 0, "col": 1, "from_floor": 0, "to_level": 1,
+		"climb": "right", "width_ft": 3.0, "handrail": true, "cut_floor": true})
+	var ext := {
+		"upright_depth_in": 36, "upright_height_ft": 16, "beam_span_ft": 12,
+		"bay_count": 1, "column_count": 3, "row_gap_ft": 5.0,
+		"deck_levels": 2, "level_heights_ft": [0.4, 8.4], "roof_deck": false, "decked": true,
+		"walls": {"front": false, "back": true, "left": true, "right": true},
+		"wall_bottom_ft": 8.75, "wall_top_ft": 13.25,
+		"cell_overrides": {"0,0,0": {"kind": "none"}, "0,1,0": {"kind": "none"}, "0,2,0": {"kind": "none"}},
+		# The box takes the far half of the loft: its side walls start 13' in.
+		"part_overrides": {"wallface:left": {"edges": {"a0": -156.0}},
+			"wallface:right": {"edges": {"a0": -156.0}}},
+		"elements": [],
+	}
+	for r in 4:
+		(ext["elements"] as Array).append({"type": "bench", "row": r, "bay0": 0, "bays": 1,
+			"height_in": 41.5})
+	var xf := section_transform(main, ext, "back", "gap", 2)
+	main["fused"] = [{"spec": ext, "x": xf.origin.x, "z": xf.origin.z, "yaw": 0.0}]
+	return main
+
 
 
 # ---------------------------------------------------------------------------
