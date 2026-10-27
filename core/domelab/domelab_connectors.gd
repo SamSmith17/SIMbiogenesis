@@ -15,7 +15,7 @@ extends RefCounted
 ##
 ## Two faces meeting along an edge make the DIHEDRAL; a plate's flange is
 ## folded through half of (180° − dihedral) so two flanges meet face to face:
-##   flange_bend = angle(n1, n2) / 2.
+##   flange_bend = ±angle(n1, n2) / 2   (negative in a valley).
 ##
 ## A flat bar bent along the surface between two hubs follows (near enough) a
 ## circular arc whose end tangents leave the chord by the two dips, so
@@ -60,7 +60,9 @@ static func face_index(geo: Dictionary) -> Dictionary:
 
 ## Every edge with its length, dips, azimuths and dihedral:
 ## {a, b, len, dir, mid, dip_a, dip_b, az_a, az_b, dihedral (radians, PI
-## for a boundary edge), flange_bend, faces: [fi...], tag}.
+## for a boundary edge; over PI in a valley), flange_bend (SIGNED: negative
+## in a valley, where the second face rises above the first's plane),
+## faces: [fi...], tag}.
 static func edge_records(geo: Dictionary, frames: Array, fidx: Dictionary) -> Array:
 	var verts: PackedVector3Array = geo["verts"]
 	var tags: Dictionary = geo.get("edge_tags", {})
@@ -86,6 +88,11 @@ static func edge_records(geo: Dictionary, frames: Array, fidx: Dictionary) -> Ar
 			var n1: Vector3 = (fidx["normals"] as PackedVector3Array)[int(fl[0])]
 			var n2: Vector3 = (fidx["normals"] as PackedVector3Array)[int(fl[1])]
 			var ang := acos(clampf(n1.dot(n2), -1.0, 1.0))
+			# A VALLEY: the second face rises above the first one's plane
+			# (a helical zome's cells meet in valleys). Its flanges fold less
+			# than square, so the angle carries the sign.
+			if _valley(verts, geo["faces"][int(fl[1])], (pa + pb) * 0.5, n1):
+				ang = -ang
 			dihedral = PI - ang
 			bend = ang * 0.5
 		out.append({"a": a, "b": b, "len": L, "dir": d, "mid": (pa + pb) * 0.5,
@@ -93,6 +100,16 @@ static func edge_records(geo: Dictionary, frames: Array, fidx: Dictionary) -> Ar
 			"dihedral": dihedral, "flange_bend": bend, "faces": fl,
 			"tag": tags.get(key, {})})
 	return out
+
+
+## True when face `f` rises above the plane through `mid` with normal `n`
+## (its centroid is on the outside): the edge between them is a valley.
+static func _valley(verts: PackedVector3Array, f: PackedInt32Array, mid: Vector3, n: Vector3) -> bool:
+	var c := Vector3.ZERO
+	for id in f:
+		c += verts[id]
+	c /= f.size()
+	return (c - mid).dot(n) > 1e-9
 
 
 static func azimuth(frame: Dictionary, d: Vector3) -> float:

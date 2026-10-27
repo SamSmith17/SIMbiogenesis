@@ -4,7 +4,7 @@ extends SceneTree
 ##   Godot --headless --path . --script core/gantrylab/assembly/gantrylab_assembly_selftest.gd
 ## Run --import first after adding a class_name.
 
-const EXPECTED_CHECKS := 34
+const EXPECTED_CHECKS := 48
 
 var _n := 0
 var _fail := 0
@@ -26,6 +26,7 @@ func _initialize() -> void:
 	_test_presets_clean()
 	_test_bom_counts()
 	_test_reference_parts()
+	_test_rod_bed_and_modules()
 	print("GantryLab assembly selftest: %d checks, %d passed, %d failed" % [_n, _n - _fail, _fail])
 	if _n != EXPECTED_CHECKS:
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_n, EXPECTED_CHECKS])
@@ -135,7 +136,11 @@ func _test_presets_clean() -> void:
 	for sp in specs:
 		var s := GantryLabSpec.resolve(sp)
 		var lay := GantryLabFrame.layout(s)
-		var issues: Array = (lay.get("issues", []) as Array) + GantryLabClash.check(s, lay)
+		var issues: Array = []
+		for iv in (lay.get("issues", []) as Array) + GantryLabClash.check(s, lay):
+			# "Not modelled yet" notes are honest, not faults.
+			if not bool((iv as Dictionary).get("note", false)):
+				issues.append(iv)
 		n += 1
 		if not issues.is_empty():
 			bad += 1
@@ -288,3 +293,74 @@ func _first(res: Dictionary, owner: String, kind: String) -> Dictionary:
 		if str(f.get("owner", "")) == owner and str(f["kind"]) == kind:
 			return f
 	return {}
+
+
+## The shaft-guided lowering bed (TRONXY X5S preset) and modules that move as one.
+func _test_rod_bed_and_modules() -> void:
+	var s := GantryLabSpec.resolve(GantryLabPresets.builtin("tronxy_x5s")["spec"])
+	var res := GantryLabAssembly.resolve(GantryLabAssembly.build(s))
+	var P: Dictionary = res["parts"]
+	var rods := 0
+	var brgs := 0
+	for id in P:
+		var ref := str(P[id]["part"].get("ref", ""))
+		if ref.begins_with("rod_"):
+			rods += 1
+		if ref.begins_with("lmf"):
+			brgs += 1
+	_check("X5S: four Z guide shafts and four flange bearings (got %d, %d)" % [rods, brgs], rods == 4 and brgs == 4)
+	_check("X5S: two Z motors and two lead screws", P.has("zmotor.L") and P.has("zmotor.R") and P.has("zscrew.L") and P.has("zscrew.R"))
+	# Each screw stands midway between its two shafts, the shafts mirrored
+	# front and back of it.
+	var ok_mid := true
+	for L in ["L", "R"]:
+		var sc: Vector3 = P["zscrew.%s" % L]["world"].origin
+		var f: Vector3 = P["rodF.%s" % L]["world"].origin
+		var b: Vector3 = P["rodB.%s" % L]["world"].origin
+		if absf((f.z + b.z) * 0.5 - sc.z) > 1e-4 or absf(f.x - b.x) > 1e-5 or absf(f.z - b.z) < 0.1:
+			ok_mid = false
+	_check("X5S: each screw midway between its two shafts", ok_mid)
+	var l: Vector3 = P["zscrew.L"]["world"].origin
+	var r: Vector3 = P["zscrew.R"]["world"].origin
+	_check("X5S: the two sides mirror", absf(l.x + r.x) < 1e-5 and absf(l.z - r.z) < 1e-5)
+	_check("X5S: the bearings are on the moving bed, the shafts are not", str(P["brg0.L"]["asm"]) == "Bed" and str(P["rodF.L"]["asm"]) == "")
+	var errs: Array = []
+	for i in res["issues"]:
+		if str(i["level"]) == "error":
+			errs.append(str(i["text"]))
+	_check("X5S: every shaft through its bearings and top support, the screw through its nut (%s)" % ", ".join(errs), errs.is_empty())
+	# Modules.
+	var mods := GantryLabAssembly.modules_of(res)
+	_check("X5S: Z axis modules hold drive, shafts and carriage", mods.has("zaxis.L") and (mods["zaxis.L"]["kids"] as Array).size() == 3 and str(mods["zaxis.L"]["twin"]) == "zaxis.R")
+	var under := GantryLabAssembly.module_under(res, "", "zcoupler.L")
+	var inner := GantryLabAssembly.module_under(res, "zaxis.L", "zcoupler.L")
+	_check("the coupler picks the Z axis at the top, its drive once opened", str(under["mod"]) == "zaxis.L" and str(inner["mod"]) == "zdrive.L")
+	# Moving the whole Z axis 30 mm back keeps every part on its mate and the
+	# screw in its nut; the twin side follows in mirror.
+	var mv := GantryLabAssembly.move_group(res, GantryLabAssembly.module_parts(res, "zaxis.L"), Vector3(0, 0, 0.03))
+	var mv2 := GantryLabAssembly.move_group(res, GantryLabAssembly.module_parts(res, "zaxis.R"), Vector3(0, 0, 0.03))
+	_check("the whole Z axis moves as one (%s)" % str(mv.get("why", "")), bool(mv["ok"]) and bool(mv2["ok"]))
+	var s2 := s.duplicate(true)
+	GantryLabAssembly.apply_patches(s2, mv["patches"])
+	GantryLabAssembly.apply_patches(s2, mv2["patches"])
+	var res2 := GantryLabAssembly.resolve(GantryLabAssembly.build(s2))
+	var moved := true
+	for pid in ["zmotor.L", "zcoupler.L", "zscrew.L", "znut.L", "rodF.L", "brg1.L", "zcar.L", "sktB.L"]:
+		var a: Vector3 = res["parts"][pid]["world"].origin
+		var b2: Vector3 = res2["parts"][pid]["world"].origin
+		if (b2 - a).distance_to(Vector3(0, 0, 0.03)) > 0.0012:
+			moved = false
+	_check("motor, coupler, screw, nut, shafts, bearings and plate all moved 30 mm", moved)
+	var errs2 := 0
+	for i in res2["issues"]:
+		if str(i["level"]) == "error":
+			errs2 += 1
+	_check("and nothing came off its mate", errs2 == 0)
+	var lone := GantryLabAssembly.move_group(res, GantryLabAssembly.module_parts(res, "zdrive.L"), Vector3(0, 0, 0.03))
+	_check("the Z drive alone cannot leave its nut on the carriage plate", not bool(lone["ok"]))
+	var fr := GantryLabAssembly.move_group(res, GantryLabAssembly.module_parts(res, "frame"), Vector3(0, 0, 0.03))
+	_check("the frame does not move", not bool(fr["ok"]))
+	# The large-flake printer is on four 12 mm shafts now.
+	var sb := GantryLabSpec.resolve(GantryLabSpec.for_application("big_parts"))
+	var rb := GantryLabAssembly.resolve(GantryLabAssembly.build(sb))
+	_check("the 600 mm flake printer's bed rides 12 mm shafts", rb["parts"].has("rodF.L") and str(rb["parts"]["rodF.L"]["part"]["ref"]) == "rod_12" and rb["parts"].has("zscrew.R"))

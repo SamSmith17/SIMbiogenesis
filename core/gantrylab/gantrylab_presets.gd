@@ -56,6 +56,59 @@ static func builtins() -> Array:
 	d = GantryLabSpec.for_application("vases")
 	d["name"] = "Clay delta"
 	out.append({"id": "clay_delta", "name": "Clay delta (Ø300 × 500)", "blurb": "A WASP-style clay printer: long arms, a heavy effector with the clay cartridge, slow and tall.", "spec": d})
+	# TRONXY X5S (330 × 330 × 400): a 2020 cube, CoreXY on V-wheels across
+	# the top, the bed dropping on round shafts — here the X5SA's two Z
+	# motors, each screw between two 10 mm shafts.
+	d = GantryLabSpec.default_spec("corexy")
+	d["name"] = "TRONXY X5S"
+	d["volume"] = {"x_mm": 330.0, "y_mm": 330.0, "z_mm": 400.0}
+	d["frame"]["profile"] = "2020"
+	d["frame"]["gantry_profile"] = "2040"
+	d["axis"]["z"]["guide"] = "rod_10"
+	d["axis"]["z"]["drive"] = "leadscrew_t8_8"
+	d["axis"]["z"]["motors"] = 2
+	d["axis"]["z"]["microsteps"] = 8
+	d["electronics"]["board"] = "ramps_14"
+	d["electronics"]["firmware"] = "marlin"
+	d["electronics"]["volts"] = 12
+	d["electronics"]["max_feed_mm_s"] = 80.0
+	d["electronics"]["accel_mm_s2"] = 1000.0
+	out.append({"id": "tronxy_x5s", "name": "TRONXY X5S (330 mm CoreXY)", "blurb": "The 2020 CoreXY cube: V-wheels on the top rails, the bed dropping on four 10 mm shafts with a Tr8 screw and motor on each side.", "spec": GantryLabSpec.resolve(d)})
+	# Ender-5 Plus class: a 350 mm Cartesian cube, the bed on two screws.
+	d = GantryLabSpec.default_spec("cartesian_xy")
+	d["name"] = "Cube Cartesian 350"
+	d["volume"] = {"x_mm": 350.0, "y_mm": 350.0, "z_mm": 400.0}
+	d["frame"]["profile"] = "2040"
+	d["axis"]["z"]["guide"] = "rod_10"
+	d["axis"]["z"]["drive"] = "leadscrew_t8_8"
+	d["axis"]["z"]["motors"] = 2
+	d["electronics"]["board"] = "skr_3"
+	d["electronics"]["firmware"] = "marlin"
+	out.append({"id": "cube_350", "name": "Cube Cartesian, dual-Z (Ender-5 Plus class, 350 mm)", "blurb": "A big head-moves-XY cube: the 350 mm bed rides four round shafts and two screws, one motor each, so it stays level as it drops.", "spec": GantryLabSpec.resolve(d)})
+	# TRONXY X3 (the assembly guide): an i3 bed-slinger on 2020, the bed on
+	# V-wheels, two Z motors on M8 threaded rod, the X motor on the left carriage.
+	d = GantryLabSpec.default_spec("bedslinger")
+	d["name"] = "TRONXY X3"
+	d["volume"] = {"x_mm": 220.0, "y_mm": 220.0, "z_mm": 300.0}
+	d["frame"]["profile"] = "2020"
+	d["frame"]["gantry_profile"] = "2020"
+	d["axis"]["z"]["drive"] = "threaded_m8"
+	d["axis"]["z"]["motors"] = 2
+	d["axis"]["x"]["pulley_teeth"] = 16
+	d["axis"]["y"]["pulley_teeth"] = 16
+	d["electronics"]["board"] = "ramps_14"
+	d["electronics"]["firmware"] = "marlin"
+	d["electronics"]["volts"] = 12
+	d["electronics"]["max_feed_mm_s"] = 80.0
+	d["electronics"]["accel_mm_s2"] = 800.0
+	out.append({"id": "tronxy_x3", "name": "TRONXY X3 (220 mm i3 kit)", "blurb": "From the X3 assembly guide: 2020 frame, V-wheel bed, GT2-16 pulleys, two Z motors on M8 threaded rod.", "spec": GantryLabSpec.resolve(d)})
+	# The Trash Printer's own flake extruder on the 600 mm shaft-bed cube.
+	d = GantryLabSpec.for_application("big_parts")
+	d["name"] = "Trash Printer 6 mm flake"
+	d["tool"] = {"id": "flake_extruder_6mm", "bed": "alu_plate"}
+	d["axis"]["x"]["motor"] = "nema23"
+	d["axis"]["y"]["motor"] = "nema23"
+	out.append({"id": "trash_flake_600", "name": "Trash Printer, 6 mm flake extruder (600 mm)", "blurb": "The large-format PP / PETE flake head: a 2\" hopper over a heated auger, 6 mm beads in 3 mm layers on a 600 mm bed riding four 12 mm shafts.", "spec": GantryLabSpec.resolve(d)})
 	d = GantryLabSpec.for_application("big_parts")
 	d["name"] = "Pellet Cartesian 600"
 	out.append({"id": "pellet_600", "name": "Pellet-extruder Cartesian (600 mm)", "blurb": "The Trash Printer's head on a 4040 frame: the bed stays still under 1.6 kg of extruder, two Z screws.", "spec": d})

@@ -42,6 +42,10 @@ var _status_cache: Dictionary = {}
 
 ## Point the director at the running world (the view calls this before any
 ## UI query, and tick does it every tick).
+## The fewest lanes a scheduled structure build plans for (carry in pairs).
+const MIN_PIECE_CREW := 4
+
+
 func bind(main: Node, bridge = null) -> void:
 	_main = main
 	if bridge != null:
@@ -392,25 +396,45 @@ func _create_project(iid: String, item: Dictionary, action: String, roster: int)
 		return pid
 	var model_id := str(item.get("model_id", ""))
 	var deploy := action == SiteDeploySchedule.ACTION_DEPLOY
-	if model_id == LinkageStructureBuilder.MODEL_ID:
-		if deploy:
-			# The ghost preview of the DEPLOYED frame beside the crate (the
-			# crew rebuild's own look); the raise's unpack clears it. A
-			# breakdown's visuals are the bridge's own progress push.
-			PlacedPropService.update_prop_record(_main, pid_prop,
-				{"build_state": {"phase": "", "ghost": 0.14, "preview": true}}, true)
-		return pid
-	# Every other prop gets a labour-mode build site that follows this
-	# project: the rack's stages its units off the real rack, the generic
-	# one lays the parts out and seats them (AssemblyBuildSite). build_state
-	# flips the prop into construction rendering (the ghost under the site).
-	var run := {"mode": "labour", "action": action, "iid": iid, "project_id": pid}
-	if model_id == PalletRackBuilder.MODEL_ID:
-		run["crew_n"] = clampi(roster, PalletRackBuildSite.MIN_CREW, PalletRackBuildSite.MAX_LABOUR_LANES)
-	PlacedPropService.update_prop_record(_main, pid_prop, {
-		"build_state": {"phase": "", "ghost": 0.14},
-		PalletRackBuildSite.RECORD_KEY: run}, true)
+	# Every prop — a rack, a dome, a toroid, a Linkage Lab frame, a GLB — gets
+	# the shared labour-mode build site, which follows this project and
+	# draws the structure piece by piece (a rack's own units, anything else
+	# cut into its real pieces; a pack-up plays it backwards). build_state
+	# flips the prop into construction rendering: the site hides the model.
+	var run := {"mode": "labour", "action": action, "iid": iid, "project_id": pid,
+		"crew_n": clampi(roster, PalletRackBuildSite.MIN_CREW if model_id == PalletRackBuilder.MODEL_ID
+			else MIN_PIECE_CREW, PalletRackBuildSite.MAX_LABOUR_LANES)}
+	var patch := {"build_state": {"phase": "", "ghost": 0.14}, PalletRackBuildSite.RECORD_KEY: run}
+	# A Linkage Lab frame comes down FOLDED: the crew stows it first (the
+	# fold sweep), then takes it apart piece by piece — its pieces are cut at
+	# the stowed fold, the same pose a deploy puts it together in.
+	if model_id == LinkageStructureBuilder.MODEL_ID and not deploy:
+		var prop := PlacedPropRuntime.find_by_prop_id(_main, pid_prop)
+		var dep: Node = prop.get_node_or_null("LinkageDeployRuntime") if prop != null else null
+		if dep != null and (bool(dep.call("is_deployed")) or bool(dep.call("is_animating"))):
+			_stow_then_stamp(dep, pid_prop, patch)
+			return pid
+	PlacedPropService.update_prop_record(_main, pid_prop, patch, true)
 	return pid
+
+
+## Fold a deployed linkage frame, then hand it to the build site.
+func _stow_then_stamp(dep: Node, pid_prop: String, patch: Dictionary) -> void:
+	if not bool(dep.call("is_animating")):
+		dep.call("toggle_deploy")
+	elif float(dep.get("_rate")) > 0.0:
+		dep.call("toggle_deploy")
+	await dep.deploy_state_changed
+	if _main == null or not is_instance_valid(_main) or not _main.is_inside_tree():
+		return
+	# Not from inside the signal: the stamp rebuilds the prop, which frees
+	# the fold runtime still emitting it (a native crash, measured).
+	await _main.get_tree().process_frame
+	if _main == null or not is_instance_valid(_main):
+		return
+	if PlacedPropService.get_prop_record(_main, pid_prop).is_empty():
+		return
+	PlacedPropService.update_prop_record(_main, pid_prop, patch, true)
 
 
 # ---------------------------------------------------------------------------

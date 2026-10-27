@@ -13,11 +13,13 @@ extends SceneTree
 ## angle), the nexorade fit (every slat four holes, slats one thickness
 ## apart), plates (nine-point flange ring, fold = half the face angle),
 ## panels nesting, the BOM's stock packing, the packed envelope, the DXF
-## round trip through FlatpackCam.dxf_parse, every preset solving without an
+## round trip through FlatpackCam.dxf_parse, every folded-plate seam as
+## made (flange skins parallel and gap apart, flat-pattern holes folded up
+## onto their partners and the bolts, valleys bending the other way), every preset solving without an
 ## error, and the 3D builder's picking. Carries EXPECTED_CHECKS: a runtime
 ## error aborts a test function while PASS still prints.
 
-const EXPECTED_CHECKS := 183
+const EXPECTED_CHECKS := 196
 
 var _pass := 0
 var _fail := 0
@@ -48,6 +50,7 @@ func _initialize() -> void:
 	_test_panels_and_plates()
 	_test_helical()
 	_test_folded_plates()
+	_test_plate_seams()
 	_test_bom_and_packing()
 	_test_cam()
 	_test_presets()
@@ -571,6 +574,168 @@ func _test_folded_plates() -> void:
 				wind_ok = false
 	_check("folded plates wind clockwise (Godot's front face)", wind_ok)
 	node.free()
+
+
+func _test_plate_seams() -> void:
+	# Every seam of every folded-plate design, read off the parts as made:
+	# each plate's flange outer skin (its panel frame, face outline, edge
+	# angle and section, as the builder draws it) must lie parallel to its
+	# partner's and gap apart, and each flat-pattern bolt hole, folded up
+	# through the developed section, must land on its partner's. Plus a
+	# helical zome with many valleys (window 8, like a saved home of
+	# 2026-10-26: 85 valley seams that used to fold the wrong way).
+	var designs: Array = []
+	for pr in DomeLabPresets.builtins():
+		if str((pr["spec"] as Dictionary)["system"]) == "plate":
+			designs.append([str(pr["id"]), pr["spec"]])
+	var valleys := DomeLabPresets.helical_corten_spec()
+	valleys["helical"]["window"] = 8
+	valleys["helical"]["steps"] = 12
+	valleys["helical"]["levels"] = 15
+	valleys["face"]["gap_mm"] = 0.0
+	designs.append(["helical window 8", DomeLabSpec.resolve(valleys)])
+	_check("three folded-plate presets incl. the helical home", designs.size() >= 4
+		and designs.any(func(x): return str(x[0]) == "helical_corten"), str(designs.map(func(x): return x[0])))
+	for dz in designs:
+		var d := DomeLabDesign.solve(dz[1])
+		var r := _seam_report(d)
+		_check("%s: every seam's flange skins parallel and gap apart" % str(dz[0]),
+			int(r["seams"]) > 0 and float(r["worst_deg"]) <= 0.5 and float(r["worst_gap_mm"]) <= 0.5,
+			"%d seams, worst %.3f° / %.3f mm" % [int(r["seams"]), float(r["worst_deg"]), float(r["worst_gap_mm"])])
+		_check("%s: every folded bolt hole lands on its partner's and on the bolt" % str(dz[0]),
+			int(r["holes"]) > 0 and int(r["unpaired"]) == 0 and float(r["worst_hole_mm"]) <= 0.5,
+			"%d holes, %d unpaired, worst %.3f mm" % [int(r["holes"]), int(r["unpaired"]), float(r["worst_hole_mm"])])
+		if str(dz[0]) == "helical window 8":
+			var nv := 0
+			for e in d["edges"]:
+				if float(e["flange_bend"]) < 0.0:
+					nv += 1
+			_check("valley seams carry a negative bend", nv > 40, str(nv))
+		if str(dz[0]) == "helical_corten":
+			# A node of four or more plates: both flanges of a seam end on ONE
+			# plane (a cut on one side means the same cut on the other).
+			var cuts: Dictionary = d["panels"]["node_cuts"]
+			var flush := not cuts.is_empty()
+			for key in cuts:
+				var parts := str(key).split("|")
+				var ab := parts[2].split("_")
+				var e_faces: Array = []
+				for e in d["edges"]:
+					if DomeLabGeodesic._ekey(int(e["a"]), int(e["b"])) == parts[2]:
+						e_faces = e["faces"]
+				for fi in e_faces:
+					var other: Array = cuts.get(DomeLabPanels._cut_key(int(fi), int(parts[1]), int(ab[0]), int(ab[1])), [])
+					flush = flush and other == cuts[key]
+			_check("helical home: node-cut flange pairs end on one plane", flush, str(cuts.size()))
+
+
+## The seams of a solved plate design as made (see _test_plate_seams).
+func _seam_report(d: Dictionary) -> Dictionary:
+	var geo: Dictionary = d["geo"]
+	var verts: PackedVector3Array = geo["verts"]
+	var pn: Dictionary = d["panels"]
+	var gap := float(pn["gap_mm"])
+	var t := float(pn["t_mm"])
+	var fr_mm := float(pn["fold_r_mm"])
+	var depth := float(pn["flange_mm"])
+	var skins := {}
+	var holes := {}
+	for p in pn["panels"]:
+		var fr: Transform3D = p["frame"]
+		var fp: PackedVector2Array = p["face_poly"]
+		var vids: PackedInt32Array = p["vids"]
+		var angs: Array = p["edge_ang"]
+		var m := fp.size()
+		var secs: Array = []
+		for k in m:
+			var sec := DomeLabPanels.flange_section(float(angs[k]), t, fr_mm, gap, depth)
+			secs.append(sec)
+			var a := fp[k]
+			var e := (fp[(k + 1) % m] - a).normalized()
+			var fin := Vector2(-e.y, e.x)
+			var a2 := float(sec["a2"])
+			var M := Vector3(fin.x * cos(a2), fin.y * cos(a2), sin(a2))
+			var key := DomeLabGeodesic._ekey(vids[k], vids[(k + 1) % m])
+			if not skins.has(key):
+				skins[key] = []
+			(skins[key] as Array).append({"n": (fr.basis * M).normalized(),
+				"p": fr * (Vector3(a.x, a.y, 0.0) + M * (gap * 0.5))})
+		# Flat-pattern holes folded up: the developed distance past the
+		# bend's start (xc in from the edge) lands on the straight flange.
+		for h in p["holes"]:
+			var pts: PackedVector2Array = h["pts"]
+			if pts.size() != 2:
+				continue
+			var hc := (pts[0] + pts[1]) * 0.5
+			var best := -1
+			var bd := INF
+			for k in m:
+				var dd := Geometry2D.get_closest_point_to_segment(hc, fp[k], fp[(k + 1) % m]).distance_to(hc)
+				if dd < bd:
+					bd = dd
+					best = k
+			var a := fp[best]
+			var e := (fp[(best + 1) % m] - a).normalized()
+			var fin := Vector2(-e.y, e.x)
+			var sec: Dictionary = secs[best]
+			var dv := DomeLabPanels.developed(sec)
+			var out_mm := (hc - a).dot(-fin)
+			var u := out_mm + float(dv["xc"]) - float(dv["ba"])
+			var q2: Vector2 = sec["c"] - (sec["m"] as Vector2) * (float(sec["r"]) + t) + (sec["d"] as Vector2) * u
+			var a2 := float(sec["a2"])
+			var M := Vector3(fin.x * cos(a2), fin.y * cos(a2), sin(a2))
+			var F := Vector3(fin.x, fin.y, 0.0)
+			var along := (hc - a).dot(e)
+			var P := Vector3(a.x, a.y, 0.0) + Vector3(e.x, e.y, 0.0) * along + F * q2.x + Vector3(0, 0, q2.y) - M * (gap * 0.5)
+			var key := DomeLabGeodesic._ekey(vids[best], vids[(best + 1) % m])
+			if not holes.has(key):
+				holes[key] = []
+			(holes[key] as Array).append(fr * P)
+	var worst_deg := 0.0
+	var worst_gap := 0.0
+	var n_seams := 0
+	for key in skins:
+		var arr: Array = skins[key]
+		if arr.size() < 2:
+			continue
+		n_seams += 1
+		var n1: Vector3 = arr[0]["n"]
+		worst_deg = maxf(worst_deg, rad_to_deg(n1.angle_to(-(arr[1]["n"] as Vector3))))
+		var sep := ((arr[0]["p"] as Vector3) - (arr[1]["p"] as Vector3)).dot(n1) * 1000.0
+		worst_gap = maxf(worst_gap, absf(sep - gap))
+	# Bolts (on the plane between the skins), by seam.
+	var bolts := {}
+	for bt in pn["bolts3d"]:
+		var e: Dictionary = d["edges"][int(bt["edge"])]
+		var key := DomeLabGeodesic._ekey(int(e["a"]), int(e["b"]))
+		if not bolts.has(key):
+			bolts[key] = []
+		(bolts[key] as Array).append(bt["p"])
+	var worst_hole := 0.0
+	var unpaired := 0
+	var n_holes := 0
+	for key in holes:
+		var arr: Array = holes[key]
+		var sk: Array = skins.get(key, [])
+		if sk.size() < 2:
+			continue
+		var bl: Array = bolts.get(key, [])
+		for i in arr.size():
+			n_holes += 1
+			var hp: Vector3 = arr[i]
+			var dmin := INF
+			for j in arr.size():
+				if j != i:
+					dmin = minf(dmin, hp.distance_to(arr[j]))
+			var bmin := INF
+			for b in bl:
+				bmin = minf(bmin, hp.distance_to(b))
+			if dmin == INF or bmin == INF:
+				unpaired += 1
+				continue
+			worst_hole = maxf(worst_hole, maxf(dmin, bmin) * 1000.0)
+	return {"seams": n_seams, "worst_deg": worst_deg, "worst_gap_mm": worst_gap,
+		"holes": n_holes, "unpaired": unpaired, "worst_hole_mm": worst_hole}
 
 
 func _test_bom_and_packing() -> void:

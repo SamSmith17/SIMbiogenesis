@@ -133,7 +133,8 @@ func _effect_ops(rows: Array) -> Array:
 	var out: Array = []
 	for r in rows:
 		var e: Dictionary = (r as Dictionary).get("effect", {})
-		out.append(str(e.get("op", "")))
+		if not e.is_empty():
+			out.append(str(e.get("op", "")))
 	return out
 
 
@@ -146,15 +147,16 @@ func _test_planner_rows() -> void:
 	_check("camp hours: 0.12 per structure, floored", absf(SiteDeployPlanner.camp_hours(20) - 2.4) < 1e-9
 		and absf(SiteDeployPlanner.camp_hours(1) - 0.3) < 1e-9)
 
-	# Generic prop: three phases, ghost stamps, the raise unpacks.
+	# Generic prop: three phases, no ghost stamps (the build site draws it
+	# piece by piece), the raise unpacks.
 	var pod := _item("p_pod", "shiftpod", 34.0)
 	var rows := SiteDeployPlanner.rows_for(pod, SiteDeploySchedule.ACTION_DEPLOY, 6)
 	_check("generic deploy = lay_out → assemble → finish", _ids(rows) == ["lay_out", "assemble", "finish"])
-	_check("generic deploy effects: ghost, ghost, unpack",
-		_effect_ops(rows) == ["set_build_phase", "set_build_phase", "unpack_prop"])
+	_check("generic deploy effects: only the finish unpacks",
+		_effect_ops(rows) == ["unpack_prop"])
 	_check("assemble depends on lay_out, finish on assemble",
 		(rows[1]["depends_on"] as Array) == ["lay_out"] and (rows[2]["depends_on"] as Array) == ["assemble"])
-	_check("assemble carries a half-way ghost stage", (rows[1].get("stage_effects", []) as Array).size() == 1)
+	_check("no ghost stages", (rows[1].get("stage_effects", []) as Array).is_empty())
 	var total := 0.0
 	for r in rows:
 		total += float((r as Dictionary)["chore_hours"])
@@ -165,7 +167,7 @@ func _test_planner_rows() -> void:
 
 	var packup := SiteDeployPlanner.rows_for(pod, SiteDeploySchedule.ACTION_PACKUP, 6)
 	_check("generic pack-up = strip → pack", _ids(packup) == ["strip", "pack"]
-		and _effect_ops(packup) == ["set_build_phase", "pack_prop"])
+		and _effect_ops(packup) == ["pack_prop"])
 	var ptotal := 0.0
 	for r in packup:
 		ptotal += float((r as Dictionary)["chore_hours"])
@@ -179,13 +181,13 @@ func _test_planner_rows() -> void:
 		int(rrows[1]["min_workers"]) == 4 and str((rrows[3]["effect"] as Dictionary).get("op", "")) == "unpack_prop")
 	_check("a crew of two raises with two", int(SiteDeployPlanner.rows_for(rack, SiteDeploySchedule.ACTION_DEPLOY, 2)[1]["min_workers"]) == 2)
 
-	# Linkage: the existing rebuild / breakdown rows.
+	# Linkage: piece by piece like everything else (the shared build site).
 	var link := _item("p_link", LinkageStructureBuilder.MODEL_ID, 150.0)
 	link["counts"] = {"module_count": 6, "bolt_count": 36, "panel_count": 4}
 	var lrows := SiteDeployPlanner.rows_for(link, SiteDeploySchedule.ACTION_DEPLOY, 8)
-	_check("linkage deploy = the prefab raise rows", _ids(lrows) == ["erect", "bolts", "panels"])
+	_check("linkage deploy = the same rows as any structure", _ids(lrows) == ["lay_out", "assemble", "finish"])
 	var lpack := SiteDeployPlanner.rows_for(link, SiteDeploySchedule.ACTION_PACKUP, 8)
-	_check("linkage pack-up = the breakdown rows", _ids(lpack) == ["strip_panels", "unbolt", "fold_pack"])
+	_check("linkage pack-up = strip → pack", _ids(lpack) == ["strip", "pack"])
 
 	# Camp: one row, the effect sets the record.
 	var camp := {"kind": "camp", "id": "camp_3", "label": "Camp Awesome", "pos": Vector2(10, 20), "structures": 25}
@@ -271,7 +273,7 @@ func _test_board_round_trip() -> void:
 		str((finish.get("effect", {}) as Dictionary).get("op", "")) == "unpack_prop"
 		and (finish.get("depends_on", []) as Array) == [str(made[1])])
 	var asm: Dictionary = board.find(str(made[1]))
-	_check("assemble carries its stage effect", (asm.get("stage_effects", []) as Array).size() == 1)
+	_check("assemble carries no ghost stage (the build site draws it)", (asm.get("stage_effects", []) as Array).is_empty())
 	_check("the whole-day window", absf(float((asm["window"] as Dictionary)["end_h"]) - 24.0) < 1e-9)
 	var project := SiteProject.make(SiteProject.KIND_SITE_DEPLOY, "Deploy: Shiftpod", "p_pod", Vector2(3, 4), 100.0)
 	SiteProject.bind_tasks(project, rows, made)
@@ -293,7 +295,7 @@ func _test_board_round_trip() -> void:
 	_check("stage effect not due before half-way", SiteProject.due_stage_effects(asm).is_empty())
 	board.update_chore(str(made[1]), {"workers": ["w1"]})
 	board.credit(str(made[1]), float(asm["chore_hours"]) * 0.6, 101.0)
-	_check("stage effect due past half-way", SiteProject.due_stage_effects(board.find(str(made[1]))) == [0])
+	_check("nothing due past half-way", SiteProject.due_stage_effects(board.find(str(made[1]))).is_empty())
 	var fr := SiteProject.task_fractions(project, board)
 	_check("task fractions: lay_out done, assemble 0.6, finish 0",
 		absf(float(fr["lay_out"]) - 1.0) < 1e-9 and absf(float(fr["assemble"]) - 0.6) < 1e-6

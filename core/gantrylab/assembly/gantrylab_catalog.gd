@@ -57,6 +57,45 @@ const MINI_WHEEL_R := 0.0076   # mini V-wheel Ø15.2 × 8.8 (the reference model
 const MINI_WHEEL_W := 0.0088
 const HOLE_R := 0.0026         # an M5 clearance hole, drawn
 
+## Round-shaft guides, by shaft diameter in mm. SK supports (Misumi / THK SK
+## series: 42 wide, 14 thick, two M5 on 32 mm, the shaft sk_h above the
+## base), LMF..UU flange bearings (Samick LMF: body D x L, flange Df x ft,
+## four M4 on the pcd), ground steel shaft (7850 kg/m3).
+const ROD_DIMS := {
+	8: {"sk_h": 0.020, "sk_w": 0.042, "sk_t": 0.014, "sk_bolts": 0.032, "D": 0.015, "L": 0.024, "Df": 0.032, "ft": 0.005, "pcd": 0.024, "kg_m": 0.395, "usd_m": 9.0},
+	10: {"sk_h": 0.020, "sk_w": 0.042, "sk_t": 0.014, "sk_bolts": 0.032, "D": 0.019, "L": 0.029, "Df": 0.040, "ft": 0.006, "pcd": 0.029, "kg_m": 0.617, "usd_m": 12.0},
+	12: {"sk_h": 0.023, "sk_w": 0.042, "sk_t": 0.014, "sk_bolts": 0.032, "D": 0.021, "L": 0.030, "Df": 0.042, "ft": 0.006, "pcd": 0.032, "kg_m": 0.888, "usd_m": 15.0},
+}
+
+
+static func rod_mm(d: float) -> int:
+	if d > 0.011:
+		return 12
+	if d > 0.009:
+		return 10
+	return 8
+
+
+static func rod_dims(d: float) -> Dictionary:
+	return ROD_DIMS[rod_mm(d)]
+
+
+## The shaft / support / bearing refs for a shaft diameter (m).
+static func rod_refs(d: float) -> Dictionary:
+	var n := rod_mm(d)
+	return {"rod": "rod_%d" % n, "sk": "sk%d" % n, "lmf": "lmf%duu" % n}
+
+
+## A Z carriage plate's outline (part-local x, z): the screw axis at the
+## origin, the shafts at (rdx, +-rs / 2), reaching `reach` inward (-x).
+static func zcar_rect(p: Dictionary) -> Rect2:
+	var dm := rod_dims(float(p["rod_d"]))
+	var rs := float(p["rs"])
+	var x1 := float(p["rdx"]) + float(dm["Df"]) * 0.5 + 0.005
+	var z1 := rs * 0.5 + float(dm["Df"]) * 0.5 + 0.005
+	return Rect2(-float(p["reach"]), -z1, float(p["reach"]) + x1, 2.0 * z1)
+
+
 const PROFILE_REFS := {"2020": "vslot_2020", "2040": "vslot_2040", "2060": "vslot_2060", "4040": "vslot_4040"}
 
 ## ref → {label, cat (palette), family (swap group), kg, usd, params}
@@ -110,6 +149,17 @@ const PARTS := {
 	"tr8_nut": {"label": "Tr8 anti-backlash nut", "cat": "drive", "family": "nut", "kg": 0.02, "usd": 5.0, "params": {}},
 	"endstop": {"label": "Microswitch endstop", "cat": "electronics", "family": "endstop", "kg": 0.01, "usd": 1.5, "params": {}},
 	"foot": {"label": "Rubber foot", "cat": "frame", "family": "foot", "kg": 0.01, "usd": 0.6, "params": {"h": 0.011}},
+	"rod_8": {"label": "8 mm linear shaft", "cat": "motion", "family": "rod", "params": {"len": 0.3, "d": 0.008}},
+	"rod_10": {"label": "10 mm linear shaft", "cat": "motion", "family": "rod", "params": {"len": 0.3, "d": 0.010}},
+	"rod_12": {"label": "12 mm linear shaft", "cat": "motion", "family": "rod", "params": {"len": 0.3, "d": 0.012}},
+	"sk8": {"label": "SK8 shaft support", "cat": "motion", "family": "shaft_support", "kg": 0.03, "usd": 1.8, "params": {"d": 0.008}},
+	"sk10": {"label": "SK10 shaft support", "cat": "motion", "family": "shaft_support", "kg": 0.03, "usd": 2.0, "params": {"d": 0.010}},
+	"sk12": {"label": "SK12 shaft support", "cat": "motion", "family": "shaft_support", "kg": 0.04, "usd": 2.2, "params": {"d": 0.012}},
+	"lmf8uu": {"label": "LMF8UU flange linear bearing", "cat": "motion", "family": "flange_bearing", "kg": 0.03, "usd": 2.5, "params": {"d": 0.008}},
+	"lmf10uu": {"label": "LMF10UU flange linear bearing", "cat": "motion", "family": "flange_bearing", "kg": 0.05, "usd": 3.5, "params": {"d": 0.010}},
+	"lmf12uu": {"label": "LMF12UU flange linear bearing", "cat": "motion", "family": "flange_bearing", "kg": 0.06, "usd": 4.0, "params": {"d": 0.012}},
+	"z_carriage": {"label": "Z carriage plate", "cat": "motion", "family": "z_carriage",
+		"params": {"rod_d": 0.008, "rs": 0.12, "rdx": 0.009, "reach": 0.06, "t": 0.008}},
 	"tool": {"label": "Tool", "cat": "tool", "family": "tool", "params": {"id": "hotend_04"}},
 	"bed": {"label": "Bed", "cat": "bed", "family": "bed", "params": {"kind": "heated_pcb", "size": Vector2(0.23, 0.23)}},
 }
@@ -119,7 +169,7 @@ const PALETTE := [
 	{"cat": "frame", "label": "Extrusion", "refs": ["vslot_2020", "vslot_2040", "vslot_2060", "vslot_4040"]},
 	{"cat": "bracket", "label": "Brackets & plates", "refs": ["corner_bracket", "inside_corner", "cube_corner", "corner_3way", "joining_plate_t", "joining_plate_90",
 		"nema17_mount", "nema23_mount", "nema17_plate", "nema17_flat", "nema23_flat", "nut_tab"]},
-	{"cat": "motion", "label": "Motion", "refs": ["gantry_plate", "mini_v_plate"]},
+	{"cat": "motion", "label": "Motion", "refs": ["gantry_plate", "mini_v_plate", "rod_8", "rod_10", "rod_12", "sk8", "sk10", "sk12", "lmf8uu", "lmf10uu", "lmf12uu"]},
 	{"cat": "drive", "label": "Drive", "refs": ["nema17", "nema17_hi", "nema17_pancake", "nema23", "gt2_pulley", "gt2_idler", "coupler", "coupler_5_6", "nut_block_8", "belt_clamp"]},
 	{"cat": "electronics", "label": "Other", "refs": ["endstop", "foot"]},
 ]
@@ -190,6 +240,11 @@ static func mass_kg(ref: String, params: Dictionary) -> float:
 	match ref:
 		"tr8_screw":
 			return float(params.get("len", 0.3)) * 0.32
+		"rod_8", "rod_10", "rod_12":
+			return float(params.get("len", 0.3)) * float(rod_dims(float(params.get("d", 0.008)))["kg_m"])
+		"z_carriage":
+			var r := zcar_rect(params_of("z_carriage", params))
+			return r.size.x * r.size.y * float(params.get("t", 0.008)) * GantryLabParts.ALU_DENSITY
 		"tool":
 			return float(GantryLabParts.tool(str(params.get("id", "hotend_04")))["kg"])
 		"bed":
@@ -211,6 +266,10 @@ static func price_usd(ref: String, params: Dictionary) -> float:
 	match ref:
 		"tr8_screw":
 			return float(params.get("len", 0.3)) * 9.0 + 3.0
+		"rod_8", "rod_10", "rod_12":
+			return float(params.get("len", 0.3)) * float(rod_dims(float(params.get("d", 0.008)))["usd_m"]) + 1.0
+		"z_carriage":
+			return 14.0
 		"tool":
 			return float(GantryLabParts.tool(str(params.get("id", "hotend_04")))["usd"])
 		"bed":
@@ -503,6 +562,42 @@ static func _features(ref: String, p: Dictionary) -> Array:
 			out.append(_f("top", "axis", d_cls(float(p.get("bore2", 0.008))), ff(Vector3(0, L * 0.5, 0), Vector3.UP, Vector3.RIGHT), {"len": 0.0}))
 		"tr8_screw":
 			out.append(_f("bore", "bore", "d8", ff(Vector3.ZERO, Vector3.DOWN, Vector3.RIGHT), {"depth": 0.012}))
+		"rod_8", "rod_10", "rod_12":
+			# The end clamps in a support; the whole length is a bearing run.
+			var n := rod_mm(float(p["d"]))
+			out.append(_f("end", "bore", "r%d" % n, ff(Vector3.ZERO, Vector3.DOWN, Vector3.RIGHT), {"depth": 0.014, "clamp_label": "M5 shaft clamp screw"}))
+			out.append(_f("rod", "axis", "lm%d" % n, ff(Vector3.ZERO, Vector3.UP, Vector3.RIGHT), {"len": float(p["len"])}))
+		"sk8", "sk10", "sk12":
+			# Origin on the shaft axis at mid-thickness, the shaft along +Y; the
+			# base lies sk_h behind it (-Z), two M5 either side of the shaft.
+			var dm := rod_dims(float(p["d"]))
+			var hh := float(dm["sk_h"])
+			var tt2 := float(dm["sk_t"])
+			var bx := float(dm["sk_bolts"]) * 0.5
+			out.append(_f("base", "holes", "m5", ff(Vector3(0, 0, -hh), Vector3.FORWARD, Vector3.RIGHT),
+				{"holes": PackedVector2Array([Vector2(-bx, 0), Vector2(bx, 0)]), "t": 0.006, "ext": Rect2(-float(dm["sk_w"]) * 0.5, -tt2 * 0.5, float(dm["sk_w"]), tt2)}))
+			out.append(_f("clamp", "axis", "r%d" % rod_mm(float(p["d"])), ff(Vector3(0, -tt2 * 0.5, 0), Vector3.UP, Vector3.RIGHT), {"len": tt2}))
+		"lmf8uu", "lmf10uu", "lmf12uu":
+			# The flange's top face at the origin, the body hanging below (-Y).
+			var dm := rod_dims(float(p["d"]))
+			out.append(_f("flange", "holes", "lmf%d" % rod_mm(float(p["d"])), ff(Vector3.ZERO, Vector3.UP, Vector3.RIGHT),
+				{"holes": _ring4(float(dm["pcd"]) * 0.5), "t": float(dm["ft"])}))
+		"z_carriage":
+			var dm := rod_dims(float(p["rod_d"]))
+			var n := rod_mm(float(p["rod_d"]))
+			var t := float(p["t"])
+			var rs := float(p["rs"])
+			var rdx := float(p["rdx"])
+			var rr := zcar_rect(p)
+			# Rides the shafts on two flange bearings under it; the lead nut on
+			# top, the bed arm bolted to the grid inboard of the screw.
+			out.append(_f("bore", "bore", "lm%d" % n, ff(Vector3(rdx, 0, -rs * 0.5), Vector3.DOWN, Vector3.RIGHT), {"depth": t, "slide": true}))
+			for i in 2:
+				out.append(_f("brg%d" % i, "holes", "lmf%d" % n, ff(Vector3(rdx, 0, (-0.5 if i == 0 else 0.5) * rs), Vector3.DOWN, Vector3.RIGHT),
+					{"holes": _ring4(float(dm["pcd"]) * 0.5), "t": t, "target": true}))
+			out.append(_f("nut", "holes", "tr8", ff(Vector3(0, t, 0), Vector3.UP, Vector3.RIGHT), {"holes": _ring4(0.008), "t": t, "target": true}))
+			out.append(_f("top", "grid", "m5grid", ff(Vector3(0, t, 0), Vector3.UP, Vector3.RIGHT),
+				{"pitch": GRID, "rect": Rect2(rr.position.x + 0.006, rr.position.y + 0.006, maxf(0.0, -0.016 - (rr.position.x + 0.006)), rr.size.y - 0.012), "t": t}))
 		"tr8_nut":
 			out.append(_f("flange", "holes", "tr8", ff(Vector3.ZERO, Vector3.DOWN, Vector3.RIGHT), {"holes": _ring4(0.008), "t": 0.0035}))
 		"endstop":
@@ -513,7 +608,7 @@ static func _features(ref: String, p: Dictionary) -> Array:
 				{"holes": PackedVector2Array([Vector2.ZERO]), "t": 0.0, "ext": Rect2(-0.013, -0.013, 0.026, 0.026)}))
 		"tool":
 			var mh := GantryLabFrame.tool_mount_h(str(p["id"]))
-			out.append(_f("mount", "holes", "tool", ff(Vector3(0, mh, 0.0135), Vector3.BACK, Vector3.RIGHT),
+			out.append(_f("mount", "holes", "tool", ff(Vector3(0, mh, GantryLabFrame.tool_mount_back(str(p["id"]))), Vector3.BACK, Vector3.RIGHT),
 				{"holes": PackedVector2Array([Vector2(-0.01, 0), Vector2(0.01, 0)]), "t": 0.0}))
 		"bed":
 			var bs: Vector2 = p["size"]
@@ -686,6 +781,22 @@ static func boxes(ref: String, params: Dictionary) -> Array:
 			return [{"c": Vector3(0, float(p["len"]) * 0.5, 0), "s": Vector3(0.019, float(p["len"]), 0.019)}]
 		"tr8_screw":
 			return [{"c": Vector3(0, float(p["len"]) * 0.5, 0), "s": Vector3(0.008, float(p["len"]), 0.008), "thin": true}]
+		"rod_8", "rod_10", "rod_12":
+			var dd := float(p["d"])
+			return [{"c": Vector3(0, float(p["len"]) * 0.5, 0), "s": Vector3(dd, float(p["len"]), dd), "thin": true}]
+		"sk8", "sk10", "sk12":
+			var dm := rod_dims(float(p["d"]))
+			var hh := float(dm["sk_h"])
+			var tt2 := float(dm["sk_t"])
+			return [{"c": Vector3(0, 0, -hh + 0.003), "s": Vector3(float(dm["sk_w"]), tt2, 0.006)},
+				{"c": Vector3(0, 0, (-hh + 0.006 + 0.011) * 0.5), "s": Vector3(0.02, tt2, hh + 0.005), "holed": true}]
+		"lmf8uu", "lmf10uu", "lmf12uu":
+			var dm := rod_dims(float(p["d"]))
+			return [{"c": Vector3(0, -float(dm["L"]) * 0.5, 0), "s": Vector3(float(dm["D"]), float(dm["L"]), float(dm["D"])), "holed": true},
+				{"c": Vector3(0, -float(dm["ft"]) * 0.5, 0), "s": Vector3(float(dm["Df"]), float(dm["ft"]), float(dm["Df"])), "holed": true}]
+		"z_carriage":
+			var rr := zcar_rect(p)
+			return [{"c": Vector3(rr.get_center().x, float(p["t"]) * 0.5, rr.get_center().y), "s": Vector3(rr.size.x, float(p["t"]), rr.size.y), "holed": true}]
 		"tr8_nut":
 			return [{"c": Vector3(0, 0.00175, 0), "s": Vector3(0.022, 0.0035, 0.022)}, {"c": Vector3(0, -0.006, 0), "s": Vector3(0.0102, 0.012, 0.0102)}]
 		"endstop":
@@ -695,6 +806,13 @@ static func boxes(ref: String, params: Dictionary) -> Array:
 			return [{"c": Vector3(0, -fh * 0.5, 0), "s": Vector3(0.026, fh, 0.026)}]
 		"tool":
 			var mh := GantryLabFrame.tool_mount_h(str(p["id"]))
+			var tsd: Dictionary = GantryLabFrame.TOOL_SCENES.get(str(p["id"]), {})
+			if not tsd.is_empty():
+				# The model's own envelope, the nozzle's last few mm left out
+				# (it reaches the bed by design).
+				var env: AABB = tsd["env"]
+				var lo := env.position + Vector3(0, 0.004, 0)
+				return [{"c": (lo + env.end) * 0.5, "s": env.end - lo}]
 			return [{"c": Vector3(0, (mh + 0.02) * 0.5 + 0.004, 0), "s": Vector3(0.032, mh + 0.02, 0.026)}]
 		"bed":
 			var bs: Vector2 = p["size"]
@@ -785,6 +903,33 @@ static func draw(ref: String, params: Dictionary) -> Array:
 		"tr8_screw":
 			return [{"kind": "screw", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "len": float(p["len"]), "d_mm": float(p["d"]) * 1000.0, "lead_mm": float(p["lead"]) * 1000.0,
 				"starts": maxi(1, int(round(float(p["lead"]) * 1000.0 / 2.0))), "s": Vector3(0.01, float(p["len"]), 0.01)}]
+		"rod_8", "rod_10", "rod_12":
+			return [{"kind": "rod", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "len": float(p["len"]), "d": float(p["d"]), "s": Vector3(float(p["d"]), float(p["len"]), float(p["d"]))}]
+		"sk8", "sk10", "sk12":
+			var dm := rod_dims(float(p["d"]))
+			return [{"kind": "sk_support", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "h": float(dm["sk_h"]), "w": float(dm["sk_w"]), "t": float(dm["sk_t"]),
+				"d": float(p["d"]), "bolts": float(dm["sk_bolts"]), "s": Vector3(float(dm["sk_w"]), float(dm["sk_t"]), float(dm["sk_h"]) + 0.012)}]
+		"lmf8uu", "lmf10uu", "lmf12uu":
+			var dm := rod_dims(float(p["d"]))
+			return [{"kind": "flange_bearing", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "D": float(dm["D"]), "L": float(dm["L"]), "Df": float(dm["Df"]),
+				"ft": float(dm["ft"]), "pcd": float(dm["pcd"]), "d": float(p["d"]), "s": Vector3(float(dm["Df"]), float(dm["L"]), float(dm["Df"]))}]
+		"z_carriage":
+			var rr := zcar_rect(p)
+			var t := float(p["t"])
+			var rs := float(p["rs"])
+			var rdx := float(p["rdx"])
+			var outline := PackedVector2Array([rr.position, Vector2(rr.end.x, rr.position.y), rr.end, Vector2(rr.position.x, rr.end.y)])
+			var holes := PackedVector2Array()
+			var g: Dictionary = feature("z_carriage", p, "top")
+			var gr: Rect2 = g.get("rect", Rect2())
+			for ix in range(ceili(gr.position.x / GRID), floori(gr.end.x / GRID) + 1):
+				for iz in range(ceili(gr.position.y / GRID), floori(gr.end.y / GRID) + 1):
+					if (ix + iz) % 2 == 0:
+						holes.append(Vector2(ix * GRID, iz * GRID))
+			return [{"kind": "outline_plate", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "outline": outline, "t": t, "holes": holes, "hole_r": HOLE_R, "mat": "plate",
+				"bores": [[Vector3(rdx, -0.001, -rs * 0.5), Vector3(rdx, t + 0.001, -rs * 0.5), float(p["rod_d"]) * 0.5 + 0.002],
+					[Vector3(rdx, -0.001, rs * 0.5), Vector3(rdx, t + 0.001, rs * 0.5), float(p["rod_d"]) * 0.5 + 0.002],
+					[Vector3(0, -0.001, 0), Vector3(0, t + 0.001, 0), 0.0055]], "s": Vector3(rr.size.x, t, rr.size.y)}]
 		"tr8_nut":
 			return [{"kind": "nut_tr8", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "no_bolts": true, "s": Vector3(0.022, 0.015, 0.022)}]
 		"endstop":
@@ -795,7 +940,13 @@ static func draw(ref: String, params: Dictionary) -> Array:
 			var tool_id := str(p["id"])
 			var kind := str(GantryLabFrame.TOOL_KINDS.get(tool_id, "tool"))
 			var mh := GantryLabFrame.tool_mount_h(tool_id)
-			return [{"kind": kind, "c": Vector3.ZERO, "basis": Basis.IDENTITY, "tool": tool_id, "volcano": tool_id == "hotend_08", "s": Vector3(0.05, mh + 0.03, 0.05)}]
+			var d0 := {"kind": kind, "c": Vector3.ZERO, "basis": Basis.IDENTITY, "tool": tool_id, "volcano": tool_id == "hotend_08", "s": Vector3(0.05, mh + 0.03, 0.05)}
+			var sc := GantryLabFrame.tool_scene(tool_id)
+			if not sc.is_empty():
+				d0["scene"] = sc
+				var env2: AABB = sc["env"]
+				d0["s"] = env2.size
+			return [d0]
 		"bed":
 			return [{"kind": "bed", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "size": p["size"], "bed_kind": str(p["kind"]), "s": Vector3((p["size"] as Vector2).x, 0.012, (p["size"] as Vector2).y)}]
 	return []

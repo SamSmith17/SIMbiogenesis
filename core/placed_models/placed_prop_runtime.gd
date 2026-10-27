@@ -78,10 +78,16 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	# time — the finishing phase's unpack effect is what deploys it.
 	var bs0: Variant = rec.get("build_state")
 	var constructing := bs0 is Dictionary and not (bs0 as Dictionary).is_empty()
+	# The site deployment schedule's crew builds EVERY structure piece by
+	# piece on the shared build site (PalletRackBuildSite over
+	# StructureUnits), a linkage frame included; the coarse ghost reveal is
+	# only the Site Projects / Lab path's now.
+	var run0: Variant = rec.get("build_run")
+	var scheduled := run0 is Dictionary and PalletRackBuildSite.is_schedule_run(run0 as Dictionary)
 	if bool(rec.get("packed", false)):
 		# A linkage renders its own ghost frame growing part by part beside
 		# the crate.
-		if constructing and rec.get("linkage_spec") is Dictionary:
+		if constructing and rec.get("linkage_spec") is Dictionary and not scheduled:
 			return _build_construction_prop(rec, bs0 as Dictionary, ground_y_at)
 		var pspec := packed_spec_for_record(rec)
 		# Anything else under construction falls through to its REAL model,
@@ -145,7 +151,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 	var under_construction := bs_any is Dictionary \
 		and not (bs_any as Dictionary).is_empty() \
 		and (not bool(rec.get("packed", false)) or packed_build) \
-		and not (rec.get("linkage_spec") is Dictionary)
+		and (scheduled or not (rec.get("linkage_spec") is Dictionary))
 	if under_construction:
 		_apply_generic_ghost(model,
 			clampf(float((bs_any as Dictionary).get("ghost", 0.2)), 0.05, 1.0))
@@ -163,13 +169,12 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 				var off := maxf(prop.get_local_pick_radius(), 1.0) + float(pspec2.get("w_m", 1.0)) * 0.5 + 1.5
 				crate.position = Vector3(off, 0.0, 0.0)
 				prop.add_child(crate)
-		# A pallet rack's labour-mode build site stages the real units off
-		# the model (and hides it while the crew works); anything else gets
-		# the generic per-part staging site (parts laid out beside the crate,
-		# seated bottom up as the crew's labour is credited).
-		if model_id == PalletRackBuilder.MODEL_ID:
-			PalletRackBuildSite.attach(prop, rec)
-		else:
+		# The crew's build site draws it piece by piece (and hides this
+		# model, the ghost, while it does): a rack's own units, anything
+		# else cut into its real pieces. A record whose run the shared site
+		# does not take (an old per-part run) keeps the per-part staging.
+		PalletRackBuildSite.attach(prop, rec)
+		if prop.get_node_or_null(PalletRackBuildSite.NODE_NAME) == null:
 			AssemblyBuildSite.attach(prop, rec)
 	else:
 		_maybe_attach_wind_spin(prop, rec)

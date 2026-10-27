@@ -31,10 +31,23 @@ const WHEEL_W := 0.0102
 const IDLER_R := 0.0064
 const SPRING_H := 0.02
 const BED_STACK := {"heated_pcb": 0.0086, "alu_plate": 0.006, "spoilboard": 0.018, "honeycomb": 0.02, "none": 0.02}
-const TOOL_MOUNT_H := {"hotend_04": 0.048, "hotend_08": 0.058, "pellet_extruder": 0.11, "clay_extruder": 0.2,
+const TOOL_MOUNT_H := {"hotend_04": 0.048, "hotend_08": 0.058, "pellet_extruder": 0.11, "flake_extruder_6mm": 0.17, "clay_extruder": 0.2,
 	"spindle_500w": 0.07, "router_1250w": 0.07, "spindle_2200w": 0.07, "laser_10w": 0.05, "laser_40w_co2": 0.05, "pen": 0.07}
-const TOOL_KINDS := {"hotend_04": "hotend", "hotend_08": "hotend", "pellet_extruder": "pellet_extruder", "clay_extruder": "clay_extruder",
+const TOOL_KINDS := {"hotend_04": "hotend", "hotend_08": "hotend", "pellet_extruder": "pellet_extruder", "flake_extruder_6mm": "pellet_extruder", "clay_extruder": "clay_extruder",
 	"spindle_500w": "spindle", "router_1250w": "spindle", "spindle_2200w": "spindle", "laser_10w": "laser", "laser_40w_co2": "laser", "pen": "pen"}
+## Tools drawn from a model: the GLB, where its nozzle tip is in the model's
+## own frame (the tool's origin goes there), nodes to drop (SketchUp leftovers),
+## and its envelope round the tip (clash box, clearances). Measured with
+## core/placed_models/glb_dump_diag.gd. Without the art the procedural kind
+## in TOOL_KINDS is drawn instead.
+const TOOL_SCENES := {
+	"flake_extruder_6mm": {"path": "res://Imported Models/Gantry/trash_printer_extruder.glb", "tip": Vector3(0.0001, -0.1597, 0.0006),
+		"strip": ["Node2", "Node5", "Laser Printer", "Active View"],
+		"env": AABB(Vector3(-0.0501, 0.0, -0.1216), Vector3(0.1089, 0.3893, 0.1718))},
+}
+## How far behind the nozzle axis the carriage face is (default 13.5 mm):
+## the flake extruder's 4" flange stands 51 mm behind its axis.
+const TOOL_MOUNT_BACK := {"flake_extruder_6mm": 0.054}
 const MASS_KINDS := {"motor": 0.3, "plate": 0.25, "rail": 0.1, "extruder": 0.45}
 
 
@@ -179,11 +192,45 @@ static func _tool_part(s: Dictionary, tip: Vector3) -> Dictionary:
 	var tool := GantryLabParts.tool(tool_id)
 	var kind := str(TOOL_KINDS.get(tool_id, "tool"))
 	var h := float(TOOL_MOUNT_H.get(tool_id, 0.06))
-	return _pk(kind, tip, str(tool["label"]), Vector3(0.05, h + 0.03, 0.05), {"tool": tool_id, "volcano": tool_id == "hotend_08", "pick_c": tip + Vector3(0, h * 0.6, 0)})
+	var extra := {"tool": tool_id, "volcano": tool_id == "hotend_08", "pick_c": tip + Vector3(0, h * 0.6, 0)}
+	var sc := tool_scene(tool_id)
+	if not sc.is_empty():
+		extra["scene"] = sc
+	return _pk(kind, tip, str(tool["label"]), Vector3(0.05, h + 0.03, 0.05), extra)
 
 
 static func tool_mount_h(tool_id: String) -> float:
 	return float(TOOL_MOUNT_H.get(tool_id, 0.06))
+
+
+static func tool_mount_back(tool_id: String) -> float:
+	return float(TOOL_MOUNT_BACK.get(tool_id, 0.0135))
+
+
+## The model a tool is drawn from ({} = procedural), only when the art is there.
+static func tool_scene(tool_id: String) -> Dictionary:
+	var d: Dictionary = TOOL_SCENES.get(tool_id, {})
+	if d.is_empty() or not ResourceLoader.exists(str(d["path"])):
+		return {}
+	return d
+
+
+## How far the tool reaches to either side of its nozzle axis, metres.
+static func tool_side(tool_id: String) -> float:
+	var d: Dictionary = TOOL_SCENES.get(tool_id, {})
+	if d.is_empty():
+		return 0.02
+	var env: AABB = d["env"]
+	return maxf(-env.position.x, env.end.x)
+
+
+## How far the tool reaches ahead of its nozzle axis (toward -Z, away from the
+## carriage), metres.
+static func tool_front(tool_id: String) -> float:
+	var d: Dictionary = TOOL_SCENES.get(tool_id, {})
+	if d.is_empty():
+		return 0.03
+	return -(d["env"] as AABB).position.z
 
 
 static func _bed(c: Vector3, size: Vector2, kind: String, label: String) -> Dictionary:

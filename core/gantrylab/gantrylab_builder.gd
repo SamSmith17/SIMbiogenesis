@@ -20,8 +20,6 @@ extends Node3D
 ## assemblies by their live pose) → {kind, label, assembly}.
 
 const MODEL_ID := "gantry_machine"
-const MIN_BEAD_M := 0.0015
-const MAX_BEADS := 4000
 
 static var _mat_cache := {}
 
@@ -32,6 +30,19 @@ var _asm_nodes: Dictionary = {}
 var _dynamic: MeshInstance3D = null
 var _beads: MultiMeshInstance3D = null
 var _bead_total := 0
+var _roads: Array = []                 # {a, dir, len, rise, layer} (bead-parent space, m)
+var _road_cum := PackedFloat32Array()  # length printed before each road
+var _road_len_total := 0.0
+var _road_w := 0.0004
+var _road_h := 0.0002
+var _partial := -1                     # the road drawn part-way, -1 none
+var _partial_len := 0.0
+var _shown := 0                        # roads drawn whole (0.._shown-1)
+const _HIDDEN := Transform3D(Basis(Vector3.ZERO, Vector3.ZERO, Vector3.ZERO), Vector3.ZERO)
+var _mv_road := PackedInt32Array()     # per move: the road it prints, -1 travel
+var _mv_before := PackedInt32Array()   # per move: roads finished before it
+var _mv_off := PackedFloat32Array()    # per move: where on its road it starts
+var _mv_len := PackedFloat32Array()
 var _drivers: Dictionary = {}
 var _last_driver := Vector3(INF, INF, INF)
 var _ghost := false
@@ -83,6 +94,7 @@ func _build(s: Dictionary) -> void:
 	st.name = "Mesh"
 	add_child(st)
 	_spin_nodes(_layout["static"]["parts"], self, cols)
+	_scene_nodes(_layout["static"]["parts"], self)
 	_record_picks(_layout["static"]["beams"], _layout["static"]["parts"], "")
 	# Assemblies, parents first.
 	var asms: Dictionary = _layout["assemblies"]
@@ -103,6 +115,7 @@ func _build(s: Dictionary) -> void:
 		n.add_child(mi)
 		_asm_nodes[name] = n
 		_spin_nodes(asm["parts"], n, cols)
+		_scene_nodes(asm["parts"], n)
 		_record_picks(asm["beams"], asm["parts"], str(name))
 	# Belts and arms, rebuilt per pose.
 	_dynamic = MeshInstance3D.new()
@@ -188,6 +201,38 @@ func _spin_nodes(parts: Array, parent: Node3D, cols: Dictionary) -> void:
 		_spins.append({"node": mi, "base": base, "spin": pd["spin"]})
 
 
+## Parts drawn from a model (the flake extruder): the GLB instanced with its
+## nozzle tip on the part's origin, the exporter's leftovers stripped.
+static var _scene_cache := {}
+
+
+func _scene_nodes(parts: Array, parent: Node3D) -> void:
+	for p in parts:
+		var pd: Dictionary = p
+		if not pd.has("scene"):
+			continue
+		var sc: Dictionary = pd["scene"]
+		var path := str(sc["path"])
+		if not _scene_cache.has(path):
+			_scene_cache[path] = load(path)
+		var ps: PackedScene = _scene_cache[path] as PackedScene
+		if ps == null:
+			continue
+		var inst := ps.instantiate() as Node3D
+		if inst == null:
+			continue
+		for nm in sc.get("strip", []):
+			var dead := inst.find_child(str(nm), true, false)
+			if dead != null:
+				dead.get_parent().remove_child(dead)
+				dead.free()
+		inst.name = "Model_%s" % str(pd.get("label", "tool")).validate_node_name()
+		inst.set_meta("skip_prop_collision", true)
+		var base := Transform3D(pd.get("basis", Basis.IDENTITY), pd["c"])
+		inst.transform = base * Transform3D(Basis.IDENTITY, -(sc["tip"] as Vector3))
+		parent.add_child(inst)
+
+
 ## How many parts turn (probes).
 func spin_count() -> int:
 	return _spins.size()
@@ -257,7 +302,7 @@ func _rebuild_dynamic(po: Dictionary, mm: PackedFloat32Array = PackedFloat32Arra
 
 
 # ---------------------------------------------------------------------------
-# Toolpath preview (beads on the bed)
+# Print preview: the extruded roads, laid as the nozzle lays them
 # ---------------------------------------------------------------------------
 
 func bead_parent() -> Node3D:
@@ -267,55 +312,322 @@ func bead_parent() -> Node3D:
 	return self
 
 
-## Lay the extruding points of a toolpath (mm, work coordinates) as beads
-## under the bed node at true scale. `extruding` may be empty (every point).
-func set_toolpath_preview(points: PackedVector3Array, extruding: PackedInt32Array, line_mm: float, color: Color) -> void:
+## The print as ROADS: one rounded bead per extruding move (straight runs of
+## short moves merged), `line_mm` wide and `layer_mm` tall, its top at the
+## nozzle tip's height, laid in path order under the bed node at true scale.
+## `moves` = [{p0, p1, e_mm}] in work mm (the planner's moves, or a toolpath's
+## points paired up). Each layer is shaded a touch apart so the layer lines
+## read. Progress is by move: `set_print_progress(i, s)` shows every road
+## before move i and the current one grown to the nozzle.
+func set_print_preview(moves: Array, line_mm: float, layer_mm: float, color: Color, mottle: float = 0.0) -> void:
 	clear_toolpath_preview()
-	if points.size() < 2:
-		return
-	var idx: PackedInt32Array = PackedInt32Array()
-	var has_ext := extruding.size() == points.size()
-	for i in points.size():
-		if not has_ext or extruding[i] != 0:
-			idx.append(i)
-	if idx.is_empty():
-		for i in points.size():
-			idx.append(i)
-	var stride := maxi(1, int(ceil(float(idx.size()) / float(MAX_BEADS))))
-	var sel: PackedInt32Array = PackedInt32Array()
-	var j := 0
-	while j < idx.size():
-		sel.append(idx[j])
-		j += stride
-	var cell := maxf(line_mm * 0.001, MIN_BEAD_M)
-	var box := BoxMesh.new()
-	box.size = Vector3(cell, cell * 0.8, cell)
+	var w := maxf(line_mm, 0.05) * 0.001
+	var h := clampf(layer_mm, 0.02, maxf(line_mm, 0.05)) * 0.001
+	var o: Vector3 = _layout["bead_origin"]
+	var n := moves.size()
+	_mv_road = PackedInt32Array()
+	_mv_road.resize(n)
+	_mv_before = PackedInt32Array()
+	_mv_before.resize(n)
+	_mv_off = PackedFloat32Array()
+	_mv_off.resize(n)
+	_mv_len = PackedFloat32Array()
+	_mv_len.resize(n)
+	_roads = []
+	var cur := -1           # the road the last extruding move extended
+	var layer_zs := {}
+	for i in n:
+		var mv: Dictionary = moves[i]
+		_mv_road[i] = -1
+		_mv_before[i] = _roads.size()
+		var a: Vector3 = mv["p0"]
+		var b: Vector3 = mv["p1"]
+		var flat := Vector2(b.x - a.x, b.y - a.y)
+		if float(mv.get("e_mm", 0.0)) <= 0.0 or flat.length() < 1e-4:
+			cur = -1
+			continue
+		var la := o + Vector3(a.x, a.z, a.y) * 0.001
+		var lb := o + Vector3(b.x, b.z, b.y) * 0.001
+		var dir := Vector3(lb.x - la.x, 0.0, lb.z - la.z).normalized()
+		var seg_len := la.distance_to(lb)
+		# Extend the road we are on when this move carries straight on.
+		if cur >= 0:
+			var rd: Dictionary = _roads[cur]
+			var end: Vector3 = (rd["a"] as Vector3) + (rd["dir"] as Vector3) * float(rd["len"])
+			if end.distance_to(la) < 1e-5 and (rd["dir"] as Vector3).dot(dir) > 0.9995 and absf(la.y - lb.y) < 1e-6:
+				_mv_road[i] = cur
+				_mv_off[i] = float(rd["len"])
+				_mv_len[i] = seg_len
+				rd["len"] = float(rd["len"]) + seg_len
+				_mv_before[i] = cur
+				continue
+		cur = _roads.size()
+		var zkey := int(round(a.z * 100.0))
+		if not layer_zs.has(zkey):
+			layer_zs[zkey] = layer_zs.size()
+		_roads.append({"a": la, "dir": dir, "len": seg_len, "rise": (lb.y - la.y) / maxf(seg_len, 1e-9), "layer": int(layer_zs[zkey])})
+		_mv_road[i] = cur
+		_mv_off[i] = 0.0
+		_mv_len[i] = seg_len
+		_mv_before[i] = cur
+	_road_w = w
+	_road_h = h
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = box
-	mm.instance_count = sel.size()
-	var o: Vector3 = _layout["bead_origin"]
-	for n in sel.size():
-		var p := points[sel[n]]
-		mm.set_instance_transform(n, Transform3D(Basis(), o + Vector3(p.x, p.z, p.y) * 0.001 + Vector3(0, cell * 0.4, 0)))
-	mm.visible_instance_count = 0
+	mm.use_colors = true
+	mm.mesh = _road_mesh()
+	mm.instance_count = _roads.size()
+	_road_len_total = 0.0
+	_road_cum = PackedFloat32Array()
+	for k in _roads.size():
+		var rd: Dictionary = _roads[k]
+		_road_cum.append(_road_len_total)
+		_road_len_total += float(rd["len"])
+		mm.set_instance_transform(k, _HIDDEN)
+		# Alternate layers a few percent apart: the layer lines read like a print's.
+		var shade := 1.0 if int(rd["layer"]) % 2 == 0 else 0.86
+		var c := Color(shade, shade, shade)
+		if mottle > 0.0:
+			# Mixed flake: each stretch of road a little different in colour.
+			var hsh := hash(k * 7919 + int(rd["layer"]))
+			c = Color(shade * (1.0 + mottle * (float(hsh & 255) / 255.0 - 0.5)), shade * (1.0 + mottle * (float((hsh >> 8) & 255) / 255.0 - 0.5)),
+				shade * (1.0 + mottle * (float((hsh >> 16) & 255) / 255.0 - 0.5)))
+		mm.set_instance_color(k, c)
+	# Every road stays in the draw (an unprinted one at zero size): the engine
+	# drops roads written while `visible_instance_count` hid them, so growing
+	# that count showed only the road being laid.
+	mm.visible_instance_count = -1
+	_shown = 0
+	# Bound the WHOLE print: the engine's own box is taken once, while only
+	# the first few roads show, and the rest would be culled as it grows.
+	if not _roads.is_empty():
+		var lo := Vector3(INF, INF, INF)
+		var hi := Vector3(-INF, -INF, -INF)
+		for rd in _roads:
+			var a: Vector3 = (rd as Dictionary)["a"]
+			var b: Vector3 = a + (rd["dir"] as Vector3) * float(rd["len"]) + Vector3.UP * float(rd["rise"]) * float(rd["len"])
+			lo = lo.min(a.min(b))
+			hi = hi.max(a.max(b))
+		var pad := Vector3.ONE * (w + h)
+		mm.custom_aabb = AABB(lo - pad, hi - lo + pad * 2.0)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
-	mat.roughness = 0.6
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.75
+	mat.metallic_specular = 0.25
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_beads = MultiMeshInstance3D.new()
 	_beads.name = "Beads"
 	_beads.multimesh = mm
 	_beads.material_override = mat
 	_beads.set_meta("skip_prop_collision", true)
-	_beads.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_beads.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	bead_parent().add_child(_beads)
-	_bead_total = sel.size()
+	_bead_total = _roads.size()
+	_partial = -1
 
 
+## A road's transform drawn `len` metres long: a unit road (x 0..1, y and z
+## -0.5..0.5) stretched along its direction, `w` wide and `h` tall with its top
+## at the nozzle, reaching half a width past each end so corners close.
+func _road_xf(rd: Dictionary, length: float) -> Transform3D:
+	var dir: Vector3 = rd["dir"]
+	var side := dir.cross(Vector3.UP)
+	var a: Vector3 = rd["a"]
+	var x := (dir + Vector3.UP * float(rd["rise"])) * (length + _road_w)
+	var origin := a - dir * (_road_w * 0.5) + Vector3.DOWN * (_road_h * 0.5)
+	return Transform3D(Basis(x, Vector3.UP * _road_h, side * _road_w), origin)
+
+
+## The bead's cross-section: flat on the layer below and above, rounded at
+## the sides (an extruded road, not a box), capped at both ends.
+static var _road_mesh_cache: ArrayMesh = null
+
+
+static func _road_mesh() -> ArrayMesh:
+	if _road_mesh_cache != null:
+		return _road_mesh_cache
+	var prof: Array = []   # (z, y) round the section
+	var steps := 6
+	for i in steps + 1:
+		var t := -PI * 0.5 + PI * float(i) / float(steps)
+		prof.append(Vector2(0.5 - 0.22 + 0.22 * cos(t), 0.5 * sin(t)))
+	for i in steps + 1:
+		var t := PI * 0.5 + PI * float(i) / float(steps)
+		prof.append(Vector2(-0.5 + 0.22 + 0.22 * cos(t), 0.5 * sin(t)))
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var np := prof.size()
+	for i in np:
+		var p0: Vector2 = prof[i]
+		var p1: Vector2 = prof[(i + 1) % np]
+		var e := p1 - p0
+		var nrm := Vector3(0.0, -e.x, e.y).normalized()
+		var v00 := Vector3(0.0, p0.y, p0.x)
+		var v01 := Vector3(1.0, p0.y, p0.x)
+		var v10 := Vector3(0.0, p1.y, p1.x)
+		var v11 := Vector3(1.0, p1.y, p1.x)
+		for v in [v00, v10, v11, v00, v11, v01]:
+			st.set_normal(nrm)
+			st.add_vertex(v)
+	for xe in [0.0, 1.0]:
+		var nrm2 := Vector3(-1.0 if xe == 0.0 else 1.0, 0, 0)
+		for i in range(1, np - 1):
+			var a: Vector2 = prof[0]
+			var b: Vector2 = prof[i]
+			var c: Vector2 = prof[i + 1]
+			var tri := [Vector3(xe, a.y, a.x), Vector3(xe, b.y, b.x), Vector3(xe, c.y, c.x)]
+			if xe == 0.0:
+				tri = [tri[0], tri[2], tri[1]]
+			for v in tri:
+				st.set_normal(nrm2)
+				st.add_vertex(v)
+	_road_mesh_cache = st.commit()
+	return _road_mesh_cache
+
+
+## The old point-list form (the in-world job runtime): consecutive points
+## pair into moves, `extruding[i]` says whether the move INTO point i prints.
+func set_toolpath_preview(points: PackedVector3Array, extruding: PackedInt32Array, line_mm: float, color: Color, layer_mm: float = -1.0) -> void:
+	var moves: Array = []
+	var has_ext := extruding.size() == points.size()
+	for i in range(1, points.size()):
+		moves.append({"p0": points[i - 1], "p1": points[i], "e_mm": 1.0 if (not has_ext or extruding[i] != 0) else 0.0})
+	set_print_preview(moves, line_mm, layer_mm if layer_mm > 0.0 else layer_guess_mm(moves, line_mm), color)
+
+
+## The layer height a program prints at: the most common step between the
+## heights its extruding moves sit at (half the line when it cannot tell).
+static func layer_guess_mm(moves: Array, line_mm: float) -> float:
+	var zs := {}
+	for mv in moves:
+		var m: Dictionary = mv
+		if float(m.get("e_mm", 0.0)) > 0.0:
+			zs[snappedf(float((m["p1"] as Vector3).z), 0.001)] = true
+	var ks: Array = zs.keys()
+	ks.sort()
+	var counts := {}
+	for i in range(1, ks.size()):
+		var dz := snappedf(float(ks[i]) - float(ks[i - 1]), 0.01)
+		if dz > 0.0:
+			counts[dz] = int(counts.get(dz, 0)) + 1
+	var best := -1.0
+	var bn := 0
+	for k in counts:
+		if int(counts[k]) > bn:
+			bn = int(counts[k])
+			best = float(k)
+	if best <= 0.0:
+		if ks.size() == 1 and float(ks[0]) > 0.0:
+			return minf(float(ks[0]), line_mm)
+		return line_mm * 0.5
+	return minf(best, line_mm)
+
+
+## Show the print up to move `i`, `s` (0..1) of the way along it.
+func set_print_progress(i: int, s: float) -> void:
+	if _beads == null or _beads.multimesh == null:
+		return
+	var mm := _beads.multimesh
+	_restore_partial()
+	if i < 0:
+		_set_shown(0)
+		return
+	if i >= _mv_road.size():
+		_set_shown(_bead_total)
+		return
+	var k := _mv_road[i]
+	if k < 0:
+		_set_shown(clampi(_mv_before[i], 0, _bead_total))
+		return
+	var length := float(_mv_off[i]) + float(_mv_len[i]) * clampf(s, 0.0, 1.0)
+	_grow(k, length)
+
+
+## Show the print up to `frac` of its printed length (the job runtime).
 func set_preview_progress(frac: float) -> void:
 	if _beads == null or _beads.multimesh == null:
 		return
-	_beads.multimesh.visible_instance_count = clampi(int(round(float(_bead_total) * clampf(frac, 0.0, 1.0))), 0, _bead_total)
+	_restore_partial()
+	var target := clampf(frac, 0.0, 1.0) * _road_len_total
+	if frac >= 1.0 - 1e-6:
+		_set_shown(_bead_total)
+		return
+	if _bead_total == 0 or target <= 0.0:
+		_set_shown(0)
+		return
+	var lo := 0
+	var hi := _bead_total - 1
+	while lo < hi:
+		var mid := (lo + hi + 1) >> 1
+		if float(_road_cum[mid]) <= target:
+			lo = mid
+		else:
+			hi = mid - 1
+	_grow(lo, target - float(_road_cum[lo]))
+
+
+## Roads 0..k-1 whole, road k drawn `length` metres from its start.
+func _grow(k: int, length: float) -> void:
+	var mm := _beads.multimesh
+	var rd: Dictionary = _roads[k]
+	if length < float(rd["len"]) - 1e-6:
+		_set_shown(k)
+		mm.set_instance_transform(k, _road_xf(rd, maxf(length, 0.0)))
+		_partial = k
+		_partial_len = maxf(length, 0.0)
+	else:
+		_set_shown(k + 1)
+
+
+## Draw roads 0..n-1 whole and hide the rest, rewriting only those that change.
+func _set_shown(n: int) -> void:
+	var mm := _beads.multimesh
+	n = clampi(n, 0, _bead_total)
+	if n > _shown:
+		for k in range(_shown, n):
+			mm.set_instance_transform(k, _road_xf(_roads[k], float(_roads[k]["len"])))
+	elif n < _shown:
+		for k in range(n, _shown):
+			mm.set_instance_transform(k, _HIDDEN)
+	_shown = n
+
+
+## Put the part-drawn road back as it should be at `_shown` (hidden or whole).
+func _restore_partial() -> void:
+	if _partial >= 0 and _partial < _roads.size() and _beads != null:
+		_beads.multimesh.set_instance_transform(_partial, _road_xf(_roads[_partial], float(_roads[_partial]["len"])) if _partial < _shown else _HIDDEN)
+	_partial = -1
+
+
+## How many roads show (whole or being laid).
+func roads_shown() -> int:
+	return _shown + (1 if _partial >= _shown else 0)
+
+
+## Road k as drawn now (the MultiMesh keeps no transforms headless).
+func road_transform(k: int) -> Transform3D:
+	if k < 0 or k >= _roads.size():
+		return Transform3D.IDENTITY
+	return _road_xf(_roads[k], _partial_len if k == _partial else float(_roads[k]["len"]))
+
+
+## The middle of the print in world space (probes, cameras).
+func print_centre_global() -> Vector3:
+	if _roads.is_empty() or _beads == null:
+		return global_position
+	var lo := Vector3(INF, INF, INF)
+	var hi := Vector3(-INF, -INF, -INF)
+	for rd in _roads:
+		var a: Vector3 = (rd as Dictionary)["a"]
+		lo = lo.min(a)
+		hi = hi.max(a)
+	return _beads.global_transform * ((lo + hi) * 0.5)
+
+
+## How many roads the preview holds (probes, tests).
+func road_count() -> int:
+	return _bead_total
 
 
 func clear_toolpath_preview() -> void:
@@ -324,6 +636,9 @@ func clear_toolpath_preview() -> void:
 		_beads.queue_free()
 	_beads = null
 	_bead_total = 0
+	_roads = []
+	_partial = -1
+	_shown = 0
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +705,13 @@ func _overlay_mesh(beams: Array, parts: Array) -> ArrayMesh:
 		GantryLabDetail.extrusion(st, bd["a"], bd["b"], str(bd["profile"]), bd.get("up", Vector3.UP))
 	for p in parts:
 		var tmp: Dictionary = {}
-		GantryLabDetail.emit(tmp, p)
+		var pd: Dictionary = p
+		if pd.has("scene"):
+			# A model-drawn part is marked by its envelope.
+			var env: AABB = (pd["scene"] as Dictionary)["env"]
+			var bs: Basis = pd.get("basis", Basis.IDENTITY)
+			pd = {"kind": "box", "c": (pd["c"] as Vector3) + bs * env.get_center(), "basis": bs, "s": env.size}
+		GantryLabDetail.emit(tmp, pd)
 		for k in tmp:
 			var arr := (tmp[k] as SurfaceTool).commit_to_arrays()
 			var vs: Variant = arr[Mesh.ARRAY_VERTEX]
@@ -464,8 +785,8 @@ func _mesh_for(beams: Array, parts: Array, _screws: Array, cols: Dictionary) -> 
 		GantryLabDetail.extrusion(GantryLabDetail._st(sts, "frame"), bd["a"], bd["b"], str(bd["profile"]), bd.get("up", Vector3.UP))
 	for p in parts:
 		var pd: Dictionary = p
-		if pd.has("spin"):
-			continue  # its own node, see _spin_nodes
+		if pd.has("spin") or pd.has("scene"):
+			continue  # its own node, see _spin_nodes / _scene_nodes
 		GantryLabDetail.emit(sts, pd)
 	return _commit(sts, cols)
 

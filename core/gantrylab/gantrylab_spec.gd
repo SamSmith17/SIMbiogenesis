@@ -127,6 +127,9 @@ static func for_application(app_id: String) -> Dictionary:
 					# Z motors four times the lift of Tr8×8.
 					s["axis"]["z"]["drive"] = "leadscrew_t8_2"
 					s["axis"]["z"]["motors"] = 2
+					# Four 12 mm shafts, a screw between each pair: a 16 kg bed
+					# stays level and cannot bind.
+					s["axis"]["z"]["guide"] = "rod_12"
 					s["electronics"]["board"] = "skr_3"
 					s["electronics"]["volts"] = 24
 					s["electronics"]["max_feed_mm_s"] = 80.0

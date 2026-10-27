@@ -72,6 +72,16 @@ const STACK_GAP := 0.5
 const PILE_SPACING := 1.2
 const YARD_AISLE := 1.6
 const PILE_ORDER := ["frames", "beams", "lumber", "sheets", "walls", "parts"]
+## plan_units (any other structure): pieces per carry + fit, what fitting
+## one looks like, seconds per piece, and the words for the progress line.
+const PIECES_PER_JOB := {"frames": 1, "beams": 3, "sheets": 2, "parts": 4}
+const PIECE_ACT := {"frames": "seat", "beams": "seat", "sheets": "lay", "parts": "assemble"}
+const PIECE_S := {"frames": 30.0, "beams": 25.0, "sheets": 35.0, "parts": 20.0}
+const PIECE_WORDS := {"frames": ["an upright", "uprights"], "beams": ["a strut", "struts"],
+	"sheets": ["a panel", "panels"], "parts": ["a part", "parts"]}
+## A pitched roof goes on in runs: rafters and sheets per job.
+const ROOF_RAFTERS_PER_JOB := 5
+const ROOF_SHEETS_PER_JOB := 6
 ## A carried bundle's underside, about hand height.
 const CARRY_LOW := 0.8
 ## A bundle set down by the rack keeps this far clear of it.
@@ -124,11 +134,26 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 	var keys: Array = mods.keys()
 	keys.sort()
 	var mod_specs := PalletRackBuilder.rack_modules(s)
+	# The racking first: every rack's frames and beams go up (one rack after
+	# another), and only then the decks, roof, walls and the design's elements
+	# of every rack — a crew does not deck a bay while the next frames are
+	# still lying in the yard.
 	var prev_end: Array = []
+	var mods_planned: Array = []
 	for pre in keys:
 		var mi := 0 if str(pre).is_empty() else int(str(pre).trim_prefix("m").trim_suffix("|"))
 		var ms: Dictionary = mod_specs[mini(mi, mod_specs.size() - 1)]["spec"]
-		prev_end = _plan_module(P, str(pre), mods[pre], prev_end, int(ms.get("column_count", 1)))
+		var m := _plan_racking(P, mods[pre], prev_end)
+		m["cols"] = int(ms.get("column_count", 1))
+		mods_planned.append(m)
+		prev_end = m["done"]
+	var racking: Array = []
+	for m in mods_planned:
+		racking.append_array(m["done"])
+	if not mods_planned.is_empty():
+		prev_end = []
+		for m in mods_planned:
+			prev_end.append_array(_plan_fitout(P, m, racking))
 	if bool(opts.get("visit", true)):
 		_plan_visit(P, prev_end)
 	_layout_yard(P)
@@ -261,7 +286,10 @@ static func _parse(id: String) -> Array:
 	return [leaf.get_slice(":", 0), leaf]
 
 
-static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Array, cols: int) -> Array:
+## A rack's pieces sorted by what they are; its frames raised and beams
+## seated (the racking), chained after `prev_end`. Returns the buckets the
+## fit-out needs and `done` = the jobs the racking ends with.
+static func _plan_racking(P: Dictionary, ids: Array, prev_end: Array) -> Dictionary:
 	var units: Dictionary = P["units"]
 	var frames := {}      # "r,bx" -> id
 	var beams := {}       # "r,b" -> [ids]
@@ -270,6 +298,9 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 	var treads := {}      # key -> [ids]
 	var walls := {}       # "face,ia" -> [ids]
 	var elems := {}       # eid -> [ids]
+	var roof_joists: Array = []   # a pitched roof's rafters
+	var roof_sheets: Array = []
+	var roof_packing: Array = []
 	var misc: Array = []
 	ids.sort()
 	for id in ids:
@@ -287,6 +318,11 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				(beams[rb] as Array).append(id)
 			"joist", "ply", "tread":
 				var key := leaf.get_slice(":", 1)
+				# A pitched roof's rafters and sheets ("joist:roof:3",
+				# "ply:roof:2,5") are not deck cells.
+				if key == "roof":
+					(roof_joists if head == "joist" else roof_sheets).append(id)
+					continue
 				var d: Dictionary = joists if head == "joist" else (sheets if head == "ply" else treads)
 				if not d.has(key):
 					d[key] = []
@@ -302,6 +338,8 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				if not elems.has(eid):
 					elems[eid] = []
 				(elems[eid] as Array).append(id)
+			"packing":
+				roof_packing.append(id)
 			_:
 				misc.append(id)
 	# ---- Frames and beams: row by row, bay by bay ----
@@ -401,6 +439,25 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 	var structure_done: Array = chain.duplicate() + all_seats
 	if structure_done.is_empty():
 		structure_done = prev_end.duplicate()
+	return {"done": structure_done, "seat_of": seat_of, "joists": joists, "sheets": sheets,
+		"treads": treads, "walls": walls, "elems": elems, "misc": misc,
+		"roof_joists": roof_joists, "roof_sheets": roof_sheets, "roof_packing": roof_packing}
+
+
+## The rest of a rack once ALL the racking stands (`racking`): decks per
+## cell, low levels first, then the pitched roof, the steps, the walls, the
+## elements and anything left. Returns the jobs it ends with.
+static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
+	var units: Dictionary = P["units"]
+	var cols := int(m.get("cols", 1))
+	var seat_of: Dictionary = m["seat_of"]
+	var joists: Dictionary = m["joists"]
+	var sheets: Dictionary = m["sheets"]
+	var treads: Dictionary = m["treads"]
+	var walls: Dictionary = m["walls"]
+	var elems: Dictionary = m["elems"]
+	var misc: Array = m["misc"]
+	var structure_done: Array = racking.duplicate()
 	# ---- Decks: per cell, low levels first ----
 	var cells := {}
 	for k in joists:
@@ -417,16 +474,15 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 	var deck_jobs: Array = []
 	for ck in cell_list:
 		var bits := str(ck).split(",")
-		var deps: Array = []
-		# The beams carrying the cell: its level, its bay, and the cell the
-		# beam's side faces.
-		for bid in seat_of:
-			var bk := (_parse(bid)[1] as String).get_slice(":", 1).split(",")
-			if bk[0] == bits[2] and bk[2] == bits[0] \
-					and PalletRackBuilder._beam_cell(int(bk[1]), int(bk[3]), cols) == int(bits[1]):
-				deps.append(seat_of[bid])
-		if deps.is_empty():
-			deps = structure_done.duplicate()
+		# Every frame and beam of every rack first, then the beams carrying
+		# the cell: its level, its bay, and the cell the beam's side faces.
+		var deps: Array = structure_done.duplicate()
+		if bits.size() >= 3:
+			for bid in seat_of:
+				var bk := (_parse(bid)[1] as String).get_slice(":", 1).split(",")
+				if bk.size() >= 4 and bk[0] == bits[2] and bk[2] == bits[0] \
+						and PalletRackBuilder._beam_cell(int(bk[1]), int(bk[3]), cols) == int(bits[1]):
+					deps.append(seat_of[bid])
 		var js: Array = joists.get(ck, [])
 		var ss: Array = sheets.get(ck, [])
 		var cbb := AABB()
@@ -451,8 +507,41 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 				"deck " + _cell_name(ck))
 		deck_jobs.append(last)
 	var after_decks: Array = deck_jobs + structure_done
-	# ---- Steps, walls, elements, the rest ----
+	# ---- A pitched roof: the packing on the top beams, the rafters, then
+	# the sheets a run at a time ----
 	var finish: Array = []
+	var roof_dep: Array = after_decks.duplicate()
+	var packing: Array = m["roof_packing"]
+	if not packing.is_empty():
+		var pbb := _bounds_of(P, packing)
+		for id in packing:
+			_unit_rec(P, id, "lumber")
+		var cjp := _carry(P, packing, 2, Vector3(pbb.get_center().x, 0, pbb.position.z - 0.8), after_decks, "carry the roof packing")
+		roof_dep = [_install(P, "fix", packing, 2, 2, T_JOIST_S, [cjp] + after_decks,
+			_stands_round(pbb, 2, maxf(0.0, pbb.get_center().y - 1.5)), "fix the roof packing")]
+	var rafters: Array = m["roof_joists"]
+	rafters.sort_custom(func(a, c): return _leaf_num(a) < _leaf_num(c))
+	var raft_jobs: Array = []
+	for g in _chunks(rafters, ROOF_RAFTERS_PER_JOB):
+		var rbb := _bounds_of(P, g)
+		for id in g:
+			_unit_rec(P, id, "lumber")
+		var cjr := _carry(P, g, 2, Vector3(rbb.get_center().x, 0, rbb.position.z - 0.8), roof_dep, "carry rafters")
+		raft_jobs.append(_install(P, "fix", g, 2, 2, T_JOIST_S, [cjr] + roof_dep,
+			_stands_round(rbb, 2, maxf(0.0, rbb.get_center().y - 1.5)), "fix the rafters"))
+	var rsheets: Array = m["roof_sheets"]
+	rsheets.sort_custom(func(a, c): return str(a).naturalnocasecmp_to(str(c)) < 0)
+	var sheet_dep: Array = raft_jobs if not raft_jobs.is_empty() else roof_dep
+	for g in _chunks(rsheets, ROOF_SHEETS_PER_JOB):
+		var sbb := _bounds_of(P, g)
+		for id in g:
+			_unit_rec(P, id, "sheets")
+		var cjs := _carry(P, g, 2, Vector3(sbb.get_center().x, 0, sbb.position.z - 1.6), sheet_dep, "carry roof sheets")
+		finish.append(_install(P, "lay", g, 2, 2, T_SHEET_S, [cjs] + sheet_dep,
+			_stands_round(sbb, 2, maxf(0.0, sbb.get_center().y - 1.5)), "sheet the roof"))
+	finish.append_array(raft_jobs)
+	finish.append_array(roof_dep)
+	# ---- Steps, walls, elements, the rest ----
 	var tk: Array = treads.keys()
 	tk.sort()
 	for k in tk:
@@ -508,6 +597,96 @@ static func _plan_module(P: Dictionary, _pre: String, ids: Array, prev_end: Arra
 		finish.append(_install(P, "assemble", misc, 2, 2, T_ELEMENT_S, [cjm] + after_decks,
 			_stands_round(mbb, 2), "finish"))
 	return finish + after_decks
+
+
+static func _bounds_of(P: Dictionary, ids: Array) -> AABB:
+	var bb: AABB = P["units"][ids[0]]["aabb"]
+	for id in ids:
+		bb = bb.merge(P["units"][id]["aabb"])
+	return bb
+
+
+static func _chunks(ids: Array, n: int) -> Array:
+	var out: Array = []
+	var i := 0
+	while i < ids.size():
+		out.append(ids.slice(i, mini(i + n, ids.size())))
+		i += n
+	return out
+
+
+## The last number in a unit id ("m1|joist:roof:12" -> 12).
+static func _leaf_num(id: Variant) -> int:
+	var t := str(id)
+	var k := t.length() - 1
+	while k >= 0 and t[k] >= "0" and t[k] <= "9":
+		k -= 1
+	return int(t.substr(k + 1)) if k < t.length() - 1 else 0
+
+
+## Any OTHER structure cut into pieces (StructureUnits: a dome, a toroid, a
+## Linkage Lab frame, a gantry, flat-pack furniture, a GLB): `units` = {id:
+## {aabb, kind (pile), flat, stage}}. Stage by stage, bottom up, the pieces
+## are carried from the yard in small bundles (round the structure in turn)
+## and fitted one by one; a stage starts once the one below is in. Same
+## timeline as plan() (state_at, unit_pose, the yard), no visitor.
+static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) -> Dictionary:
+	crew_n = maxi(1, crew_n)
+	var bounds := AABB()
+	var first := true
+	for id in units:
+		var bb: AABB = units[id]["aabb"]
+		bounds = bb if first else bounds.merge(bb)
+		first = false
+	var P := {"jobs": [], "unit": {}, "units": units, "bounds": bounds, "piles": {},
+		"stacks": [], "rec_order": [], "rests": {}, "spec": {},
+		"yard_side": str(opts.get("yard_side", "-z"))}
+	var stages := {}
+	var ids_all: Array = units.keys()
+	ids_all.sort()
+	for id in ids_all:
+		var sk := int(units[id].get("stage", 0))
+		if not stages.has(sk):
+			stages[sk] = []
+		(stages[sk] as Array).append(id)
+	var keys: Array = stages.keys()
+	keys.sort()
+	var c := bounds.get_center()
+	var prev: Array = []
+	for sk in keys:
+		var ids: Array = stages[sk]
+		var kind := str(units[ids[0]].get("kind", "parts"))
+		var per := int(PIECES_PER_JOB.get(kind, 4))
+		var crew_min := 1 if kind == "parts" else 2
+		var act := str(PIECE_ACT.get(kind, "assemble"))
+		var per_s := float(PIECE_S.get(kind, T_ELEMENT_S))
+		var stage_jobs: Array = []
+		for g in _chunks(ids, per):
+			for id in g:
+				_unit_rec(P, id, kind)
+			var bb := _bounds_of(P, g)
+			var out := Vector3(bb.get_center().x - c.x, 0.0, bb.get_center().z - c.z)
+			out = out.normalized() if out.length() > 0.1 else Vector3.BACK
+			var drop := Vector3(bb.get_center().x, 0.0, bb.get_center().z) \
+				+ out * (maxf(bb.size.x, bb.size.z) * 0.5 + 1.0)
+			var words := _piece_words(kind, g.size())
+			var cj := _carry(P, g, 2 if kind != "parts" else 1, drop, prev, "carry " + words)
+			stage_jobs.append(_install(P, act, g, crew_min, 2, per_s, [cj] + prev,
+				_stands_round(bb, crew_min, 0.0, out), "fit " + words))
+		if not stage_jobs.is_empty():
+			prev = stage_jobs
+	_layout_yard(P)
+	_finish_carries(P)
+	var sched := _schedule(P["jobs"], crew_n)
+	return {"jobs": P["jobs"], "unit": P["unit"], "workers": sched["workers"],
+		"makespan": sched["makespan"], "blocked": sched["blocked"], "crew": crew_n,
+		"bounds": bounds, "piles": P["piles"], "stacks": P["stacks"], "rests": P["rests"],
+		"yard_side": P["yard_side"], "radius_m": bounds.size.length() * 0.5}
+
+
+static func _piece_words(kind: String, n: int) -> String:
+	var w: Array = PIECE_WORDS.get(kind, ["a part", "parts"])
+	return str(w[0]) if n == 1 else "%d %s" % [n, str(w[1])]
 
 
 ## The visitor's climb onto the highest deck: by the first stairs of the

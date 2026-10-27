@@ -79,13 +79,16 @@ static func doc(spec: Dictionary) -> Dictionary:
 	var xm_cls := GantryLabCatalog.nema_cls(xm)
 	var xm_half := GantryLabCatalog.motor_frame(xm) * 0.5 + 0.005
 	var xm_reach := 0.045 if xm_cls == "nema17" else 0.06
-	var xp := -vx * 0.5 - 0.038 - xm_half
-	var x_margin := maxf(0.13, 0.038 + xm_half + xm_reach + 0.035)
+	# A wide head (the flake extruder's hopper) clears the X motor and idler.
+	var tside := GantryLabFrame.tool_side(tool_id)
+	var tsx := 0.0 if tside <= 0.02 else tside - 0.02 + 0.02
+	var xp := -vx * 0.5 - 0.038 - xm_half - tsx
+	var x_margin := maxf(0.13, 0.038 + xm_half + xm_reach + 0.035) + tsx
 	var S := vx * 0.5 + x_margin + sc + 0.014
 	var xe := S - (sc + 0.014)              # X beam half length
 	# The nozzle sits in front of the gantry: upright half depth, Z plate,
 	# X beam, the carriage's standoff and plate, the hotend's mount.
-	var z_tip := gz - (uwh.y * 0.5 + GAP_STD + 0.006 + gwh.x + GANTRY_GAP_X + 0.006 + 0.0135)
+	var z_tip := gz - (uwh.y * 0.5 + GAP_STD + 0.006 + gwh.x + GANTRY_GAP_X + 0.006 + GantryLabFrame.tool_mount_back(tool_id))
 	var L_rail := vy + 0.17
 	var zb := z_tip
 	var Lb := L_rail + 2.0 * bw
@@ -225,7 +228,7 @@ static func doc(spec: Dictionary) -> Dictionary:
 		GantryLabGen.mate(d, "zcoupler.%s" % L, "coupler", {"bore": GantryLabCatalog.shaft_d(zm)}, "zmotor.%s" % L, "shaft", "bore", {"s": zmt + 0.001},
 			{"spin": GantryLabGen.spin(mi_z, z_lead * 1000.0, 1.0), "label": "Z coupler"})
 		var c_top := GantryLabGen.feat_world(d, "zcoupler.%s" % L, "top").origin.y
-		GantryLabGen.mate(d, "zscrew.%s" % L, "tr8_screw", {"len": T + U - 0.03 - c_top, "lead": z_lead, "d": 0.008}, "zcoupler.%s" % L, "top", "bore", {"s": 0.0},
+		GantryLabGen.mate(d, "zscrew.%s" % L, "tr8_screw", {"len": T + U - 0.03 - c_top, "lead": z_lead, "d": float(GantryLabParts.drive(str(s["axis"]["z"]["drive"])).get("d_mm", 8.0)) * 0.001}, "zcoupler.%s" % L, "top", "bore", {"s": 0.0},
 			{"spin": GantryLabGen.spin(mi_z, z_lead * 1000.0, 1.0), "label": "Z lead screw"})
 		d["coax"].append(["zscrew.%s" % L, "znut.%s" % L])
 	if two_z:
@@ -256,7 +259,7 @@ static func doc(spec: Dictionary) -> Dictionary:
 	# The idler level with the pulley, on the same slot line.
 	var y_c := GantryLabGen.world(d, "xmotor").origin.y
 	GantryLabGen.mate_at(d, "xidler", "gt2_idler", {"teeth": 20, "belt_w": bw_x}, "xbeam", xfront, "bore",
-		Vector3(vx * 0.5 + 0.075, y_c, front_z), {}, {"h": 0.0, "auto": true}, {"label": "X idler"})
+		Vector3(vx * 0.5 + 0.075 + tsx, y_c, front_z), {}, {"h": 0.0, "auto": true}, {"label": "X idler"})
 	# The clamp on the carriage's back, gripping the top run.
 	var xr := GantryLabCatalog.gt2_r(t_x)
 	var xband := GantryLabAssembly.band_of(GantryLabGen.part(d, "xpulley"), GantryLabGen.world(d, "xpulley"))
@@ -292,7 +295,7 @@ static func doc(spec: Dictionary) -> Dictionary:
 		"nodes": [{"part": "ypulley", "s": 1.0, "kind": "pulley"}, {"part": "yclamp", "s": 0.0, "kind": "clamp"}, {"part": "yidler", "s": 1.0, "kind": "idler"}]})
 
 	# --- Extruder, spool, electronics (placed, not mated) --------------------
-	var additive := str(GantryLabParts.tool(tool_id)["process"]) == "additive" and tool_id != "clay_extruder" and tool_id != "pellet_extruder"
+	var additive := str(GantryLabParts.tool(tool_id)["material"]) == "filament"
 	var lf := GantryLabGen.feat_world(d, "zplate.L", "top")
 	if additive:
 		var ex_c := Vector3(-S + 0.01, xb_y + 0.05, lf.origin.z - 0.007)
@@ -317,6 +320,34 @@ static func doc(spec: Dictionary) -> Dictionary:
 	var lcd_b := Basis(Vector3.RIGHT, deg_to_rad(25.0)) * Basis(Vector3.UP, PI)
 	GantryLabGen.free_part(d, "lcd", "Display", Transform3D(lcd_b, Vector3(S - 0.07, T + 0.04, zb - Lb * 0.5 - 0.02)),
 		[{"kind": "lcd", "c": Vector3.ZERO, "basis": Basis.IDENTITY, "s": Vector3(0.1, 0.062, 0.02)}], 0.15)
+
+	# --- What this frame does not model yet: say so ---------------------------
+	for k in ["x", "y", "z"]:
+		if str(s["axis"][k]["guide"]) != "v_wheel":
+			d["issues"].append({"level": "warn", "text": "%s guide %s is not modelled on the bed-slinger yet: drawn as V-wheels on the slot." % [k.to_upper(), str(GantryLabParts.guide(str(s["axis"][k]["guide"]))["label"])], "parts": [], "note": true})
+	if str(s["frame"].get("corners", "bracket")) != "bracket":
+		d["issues"].append({"level": "warn", "text": "Corners: %s are not drawn yet; the frame is built with cast corner brackets." % str(GantryLabSpec.CORNER_LABELS.get(str(s["frame"]["corners"]), "")).to_lower(), "parts": [], "note": true})
+
+	# --- Modules (what the part editor picks first) ----------------------------
+	var base: Array = []
+	var gframe: Array = []
+	for p in d["parts"]:
+		var pd: Dictionary = p
+		match str(pd.get("group", "")):
+			"base":
+				base.append(str(pd["id"]))
+			"gantry":
+				gframe.append(str(pd["id"]))
+	GantryLabGen.module(d, "base", "Base frame", base, "")
+	GantryLabGen.module(d, "xaxis", "X axis", ["zplate.L", "zplate.R", "xbeam", "xcar", "tool", "xmplate", "xmotor", "xpulley", "xidler", "xclamp"], "zplate.L")
+	for L in ["L", "R"]:
+		GantryLabGen.module(d, "zdrive.%s" % L, "Z drive (%s)" % ("left" if L == "L" else "right"),
+			["ztab.%s" % L, "znut.%s" % L, "zmount.%s" % L, "zmotor.%s" % L, "zcoupler.%s" % L, "zscrew.%s" % L], "zmount.%s" % L)
+	GantryLabGen.twin_modules(d, "zdrive.L", "zdrive.R")
+	GantryLabGen.module(d, "gantry", "Gantry (uprights, X axis, Z drives)", gframe, "upright.L", ["xaxis", "zdrive.L", "zdrive.R"])
+	GantryLabGen.module(d, "ydrive", "Y drive", ["ymount", "ymotor", "ypulley"], "ymount")
+	GantryLabGen.module(d, "bed", "Bed (Y carriage)", ["yplate.L", "yplate.R", "bedplate", "bed", "yclamp"], "yplate.L")
+	GantryLabGen.module(d, "electronics", "Electronics", ["psu", "board", "lcd", "extruder", "spool", "spool_holder"], "")
 
 	# --- Meta ------------------------------------------------------------------
 	d["meta"] = {"mirror_x": 0.0, "moving": {"x": "XCarriage", "y": "Bed", "z": "XBeam"},

@@ -81,6 +81,10 @@ static func emit(sts: Dictionary, part: Dictionary, local: bool = false) -> void
 			_rod(sts, part)
 		"lm8uu":
 			_lm8uu(sts, part)
+		"sk_support":
+			_sk_support(sts, part)
+		"flange_bearing":
+			_flange_bearing(sts, part)
 		"hotend":
 			_hotend(sts, part)
 		"extruder":
@@ -786,6 +790,54 @@ static func _lm8uu(sts: Dictionary, p: Dictionary) -> void:
 	var r := float(p.get("d", 0.015)) * 0.5
 	lathe(_st(sts, "chrome"), PackedVector2Array([Vector2(0.0045, 0), Vector2(r, 0), Vector2(r, 0.0035), Vector2(r - 0.0008, 0.0035), Vector2(r - 0.0008, 0.0047),
 		Vector2(r, 0.0047), Vector2(r, len - 0.0047), Vector2(r - 0.0008, len - 0.0047), Vector2(r - 0.0008, len - 0.0035), Vector2(r, len - 0.0035), Vector2(r, len), Vector2(0.0045, len)]), 14)
+
+
+## An SK shaft support: origin on the shaft axis at mid-thickness, the shaft
+## along +Y, the base `h` behind it (-Z) with its two wings, the clamp slot
+## and screw over the shaft.
+static func _sk_support(sts: Dictionary, p: Dictionary) -> void:
+	var alu := _st(sts, "alu")
+	var chrome := _st(sts, "chrome")
+	var dark := _st(sts, "black")
+	var h := float(p.get("h", 0.02))
+	var w := float(p.get("w", 0.042))
+	var t := float(p.get("t", 0.014))
+	var r := float(p.get("d", 0.008)) * 0.5
+	var bx := float(p.get("bolts", 0.032)) * 0.5
+	box(alu, Vector3(0, 0, -h + 0.003), Vector3(w, t, 0.006))
+	box(alu, Vector3(0, 0, (-h + 0.006 + 0.0) * 0.5), Vector3(0.02, t, h - 0.006))
+	var saved := _xf
+	_xf = saved * Transform3D(Basis.IDENTITY, Vector3(0, -t * 0.5, 0))
+	cyl_y(alu, 0.0, t, r + 0.006, 16)
+	_xf = saved
+	box(dark, Vector3(0, 0, r + 0.004), Vector3(0.0012, t + 0.0004, 0.008))
+	for sx in [-1.0, 1.0]:
+		_xf = saved * Transform3D(GantryLabDetail.basis_y(Vector3.BACK), Vector3(sx * bx, 0, -h + 0.006))
+		cyl_y(chrome, 0.0, 0.003, 0.0043, 10)
+		_xf = saved
+	_xf = saved * Transform3D(GantryLabDetail.basis_y(Vector3.RIGHT), Vector3(0.006, 0, r + 0.004))
+	cyl_y(chrome, 0.0, 0.0035, 0.0035, 8)
+	_xf = saved
+
+
+## A flange linear bearing: the flange's top face at the origin, the body
+## hanging below; four M4 heads on the pcd.
+static func _flange_bearing(sts: Dictionary, p: Dictionary) -> void:
+	var chrome := _st(sts, "chrome")
+	var dark := _st(sts, "black")
+	var D := float(p.get("D", 0.015))
+	var L := float(p.get("L", 0.024))
+	var Df := float(p.get("Df", 0.032))
+	var ft := float(p.get("ft", 0.005))
+	var ri := float(p.get("d", 0.008)) * 0.5 + 0.0005
+	lathe(chrome, PackedVector2Array([Vector2(ri, -L), Vector2(D * 0.5, -L), Vector2(D * 0.5, -ft), Vector2(Df * 0.5, -ft), Vector2(Df * 0.5, 0.0), Vector2(ri, 0.0)]), 18)
+	lathe(dark, PackedVector2Array([Vector2(ri - 0.0004, -L - 0.0004), Vector2(ri + 0.0015, -L - 0.0004), Vector2(ri + 0.0015, 0.0004), Vector2(ri - 0.0004, 0.0004)]), 12)
+	var k := float(p.get("pcd", 0.024)) * 0.5 * 0.70710678
+	var saved := _xf
+	for q in [Vector2(-k, -k), Vector2(k, -k), Vector2(k, k), Vector2(-k, k)]:
+		_xf = saved * Transform3D(Basis.IDENTITY, Vector3(q.x, -ft - 0.0028, q.y))
+		cyl_y(chrome, 0.0, 0.0028, 0.0035, 8)
+		_xf = saved
 
 
 # ---------------------------------------------------------------------------

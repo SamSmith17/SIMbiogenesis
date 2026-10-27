@@ -150,7 +150,19 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	if not _disposed and is_instance_valid(_model):
-		_model.visible = true
+		_show_model()
+
+
+## Step aside: the prop's own model comes back — unless it is still the
+## construction ghost (a deploy / pack-up running), which reads as a second,
+## finished structure standing where the crew is working; then the kit crate
+## (if any) is all that stands there.
+func _show_model() -> void:
+	var uc := is_instance_valid(_prop) and bool(_prop.get_meta("under_construction", false))
+	_model.visible = not uc
+	var crate := _prop.get_node_or_null("KitCrate") as Node3D if is_instance_valid(_prop) else null
+	if crate != null:
+		crate.visible = true
 
 
 func owns_visuals() -> bool:
@@ -161,7 +173,7 @@ func dispose() -> void:
 	_disposed = true
 	set_process(false)
 	if is_instance_valid(_model):
-		_model.visible = true
+		_show_model()
 	if is_instance_valid(_staged):
 		_staged.visible = false
 	for p in _parts:
@@ -239,7 +251,7 @@ func _update(_delta: float) -> void:
 	if not bool(_status.get("found", false)):
 		if not _suspended:
 			_suspended = true
-			_model.visible = true
+			_show_model()
 			if is_instance_valid(_staged):
 				_staged.visible = false
 			for p in _parts:

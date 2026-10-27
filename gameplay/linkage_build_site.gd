@@ -145,6 +145,9 @@ static func attach(prop: PlacedProp, rec: Dictionary) -> void:
 		return
 	if not (rec.get(RECORD_KEY) is Dictionary):
 		return
+	# The site deployment schedule's runs are drawn by the shared build site.
+	if PalletRackBuildSite.is_schedule_run(rec.get(RECORD_KEY) as Dictionary):
+		return
 	var site := LinkageBuildSite.new()
 	site.name = NODE_NAME
 	site.configure(rec)

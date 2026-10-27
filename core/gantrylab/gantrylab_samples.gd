@@ -132,12 +132,29 @@ static func _cube(s: Dictionary) -> String:
 				e += prev.distance_to(qv) * epm
 				lines.append("G1 X%.3f Y%.3f E%.4f F%d" % [qv.x, qv.y, e, int(feed)])
 				prev = qv
-		# Sparse infill: one diagonal every other layer.
-		if li % 2 == 1 and li > 1:
-			var inset := w * 3.0
-			lines.append("G0 X%.3f Y%.3f" % [x0 + inset, y0 + inset])
-			e += (side - 2.0 * inset) * 1.414 * epm
-			lines.append("G1 X%.3f Y%.3f E%.4f F%d" % [x0 + side - inset, y0 + side - inset, e, int(feed)])
+		# Inside the walls, as a slicer fills it: two solid layers at the
+		# bottom and the top (lines one road apart), 25 % rectilinear infill
+		# between, the direction turning a quarter every layer, each layer's
+		# lines laid back and forth.
+		var lo := w * 3.0 - w * 0.5
+		var span := side - 2.0 * lo
+		var solid := li < 2 or li >= n_layers - 2
+		var pitch := w if solid else w * 4.0
+		var along_x := li % 2 == 0
+		var k := 0
+		var q := lo + pitch * 0.5
+		while q <= side - lo - pitch * 0.5 + 1e-6:
+			var a := Vector2(x0 + lo, y0 + q) if along_x else Vector2(x0 + q, y0 + lo)
+			var b := Vector2(x0 + lo + span, y0 + q) if along_x else Vector2(x0 + q, y0 + lo + span)
+			if k % 2 == 1:
+				var tmp := a
+				a = b
+				b = tmp
+			lines.append("G0 X%.3f Y%.3f F%d" % [a.x, a.y, int(feed * 2.0)])
+			e += a.distance_to(b) * epm
+			lines.append("G1 X%.3f Y%.3f E%.4f F%d" % [b.x, b.y, e, int(feed)])
+			q += pitch
+			k += 1
 	lines.append_array(_footer(s))
 	return "\n".join(lines) + "\n"
 

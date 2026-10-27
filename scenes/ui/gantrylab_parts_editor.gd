@@ -7,6 +7,13 @@ extends RefCounted
 ## pulley onto a 5 mm shaft — with the T-nuts and bolts made to match, and a
 ## mirrored twin following every edit until it is unlinked.
 ##
+## Parts come in MODULES (a Z axis = its drive, shafts and carriage; a
+## motor's drive; the XY gantry; the frame): a click picks the module,
+## dragging it moves every part in it -- and its mirrored module -- as one,
+## each part sliding along what it is fastened to; a double-click opens it to
+## pick its sub-modules and parts (Esc steps back out), as the pallet-rack
+## builder's groups do.
+##
 ## The edits live in the spec (GantryLabAssembly's sparse layer), so undo,
 ## the library, the placed machine and the exports all carry them. The
 ## modal owns the studio; this script reads its camera and machine and asks
@@ -18,12 +25,17 @@ const TWIN_COLOR := Color(1.0, 0.72, 0.2, 0.18)
 const CLASH_COLOR := Color(1.0, 0.25, 0.2, 0.45)
 const GHOST_OK := Color(0.35, 1.0, 0.55, 0.45)
 const TARGET_COLOR := Color(0.35, 0.8, 1.0, 0.3)
+const CTX_COLOR := Color(1.0, 1.0, 1.0, 0.07)
 const DRAG_PX := 4.0
 const TEAR_PX := 36.0
 
 var m: Control = null
 var sel := ""
 var hover := ""
+var ctx := ""          # the open module ("" = the whole machine)
+var sel_mod := ""      # a selected module (then `sel` is "")
+var hover_mod := ""
+var _design_sig := ""
 var tool_ref := ""
 var tool_params := {}
 var tool_turn := 0
@@ -198,6 +210,18 @@ func on_rebuilt() -> void:
 	if not on or res.is_empty() or not res["parts"].has(sel):
 		if not sel.is_empty() and (res.is_empty() or not res["parts"].has(sel)):
 			sel = ""
+	# Another design: nothing stays open or picked.
+	var sig := "%s|%s" % [str(m._spec.get("name", "")), str(m._spec.get("kinematics", ""))]
+	if sig != _design_sig:
+		_design_sig = sig
+		ctx = ""
+		sel_mod = ""
+		sel = ""
+	var mods := GantryLabAssembly.modules_of(res)
+	if not ctx.is_empty() and not mods.has(ctx):
+		ctx = ""
+	if not sel_mod.is_empty() and not mods.has(sel_mod):
+		sel_mod = ""
 	_refresh_marks()
 	refresh_card()
 
@@ -207,7 +231,7 @@ func _refresh_marks() -> void:
 	if mach == null:
 		return
 	mach.clear_marks()
-	if res.is_empty():
+	if res.is_empty() or (m._tabs != null and m._tabs.current_tab != 0):
 		return
 	if show_clashes:
 		var seen := {}
@@ -224,8 +248,22 @@ func _refresh_marks() -> void:
 		var tw := str((res["parts"].get(sel, {}).get("part", {}) as Dictionary).get("twin", ""))
 		if not tw.is_empty():
 			mach.mark_part("twin", tw, TWIN_COLOR)
-	if not hover.is_empty() and hover != sel:
+	var mods := GantryLabAssembly.modules_of(res)
+	if not sel_mod.is_empty() and mods.has(sel_mod):
+		for pid in GantryLabAssembly.module_parts(res, sel_mod):
+			mach.mark_part("sel", str(pid), SEL_COLOR)
+		var tm := str(mods[sel_mod].get("twin", ""))
+		if not tm.is_empty():
+			for pid in GantryLabAssembly.module_parts(res, tm):
+				mach.mark_part("twin", str(pid), TWIN_COLOR)
+	if not hover_mod.is_empty() and hover_mod != sel_mod and mods.has(hover_mod):
+		for pid in GantryLabAssembly.module_parts(res, hover_mod):
+			mach.mark_part("hover", str(pid), HOVER_COLOR)
+	elif not hover.is_empty() and hover != sel:
 		mach.mark_part("hover", hover, HOVER_COLOR)
+	if not ctx.is_empty() and mods.has(ctx):
+		for pid in GantryLabAssembly.module_parts(res, ctx):
+			mach.mark_part("ctx", str(pid), CTX_COLOR)
 
 
 # ---------------------------------------------------------------------------
@@ -287,11 +325,18 @@ func input(e: InputEvent) -> bool:
 			var hit := m._pick_at(mb.position) as Dictionary
 			var id := str(hit.get("id", ""))
 			if _selectable(id):
-				if id != sel:
-					sel = id
+				var u := _under(id, true)
+				if mb.double_click and not str(u["mod"]).is_empty():
+					# Open the module, then pick what is under the pointer in it.
+					ctx = str(u["mod"])
+					u = _under(id, true)
+				var want_mod := str(u["mod"])
+				if want_mod != sel_mod or (want_mod.is_empty() and id != sel) or mb.double_click:
+					sel_mod = want_mod
+					sel = "" if not want_mod.is_empty() else id
 					_refresh_marks()
 					refresh_card()
-				drag = {"id": id, "press": mb.position, "moved": false}
+				drag = {"id": id, "mod": sel_mod, "press": mb.position, "moved": false}
 				return true
 			# Empty space: let the modal orbit; a click without a drag deselects.
 			drag = {"id": "", "press": mb.position, "moved": false}
@@ -299,9 +344,10 @@ func input(e: InputEvent) -> bool:
 		# Release.
 		var was := drag.duplicate()
 		drag = {}
-		if not was.is_empty() and str(was["id"]).is_empty() and not bool(was.get("moved", false)) and not sel.is_empty():
+		if not was.is_empty() and str(was["id"]).is_empty() and not bool(was.get("moved", false)) and (not sel.is_empty() or not sel_mod.is_empty()):
 			if mb.position.distance_to(was["press"]) < DRAG_PX:
 				sel = ""
+				sel_mod = ""
 				_refresh_marks()
 				refresh_card()
 		if not was.is_empty() and bool(was.get("moved", false)):
@@ -320,7 +366,10 @@ func input(e: InputEvent) -> bool:
 					return true
 				drag["moved"] = true
 				m._push_undo("")
-			_drag_to(mm.position, _step(mm))
+			if not str(drag.get("mod", "")).is_empty():
+				_drag_module(mm.position, _step(mm))
+			else:
+				_drag_to(mm.position, _step(mm))
 			return true
 		if not tool_ref.is_empty():
 			_update_ghost(mm.position, _step(mm))
@@ -329,8 +378,10 @@ func input(e: InputEvent) -> bool:
 		var hid := str(hit.get("id", ""))
 		if not _selectable(hid):
 			hid = ""
-		if hid != hover:
+		var hm := str(_under(hid, false)["mod"]) if not hid.is_empty() else ""
+		if hid != hover or hm != hover_mod:
 			hover = hid
+			hover_mod = hm
 			_refresh_marks()
 	return false
 
@@ -343,10 +394,14 @@ func key(k: InputEventKey) -> bool:
 			if not tool_ref.is_empty():
 				_disarm()
 				return true
-			if not sel.is_empty():
+			if not sel.is_empty() or not sel_mod.is_empty():
 				sel = ""
+				sel_mod = ""
 				_refresh_marks()
 				refresh_card()
+				return true
+			if not ctx.is_empty():
+				step_out()
 				return true
 		KEY_R:
 			if not tool_ref.is_empty():
@@ -357,7 +412,7 @@ func key(k: InputEventKey) -> bool:
 				_turn_selected(1)
 				return true
 		KEY_DELETE, KEY_BACKSPACE:
-			if not sel.is_empty():
+			if not sel.is_empty() or not sel_mod.is_empty():
 				_delete_selected()
 				return true
 		KEY_D:
@@ -365,6 +420,64 @@ func key(k: InputEventKey) -> bool:
 				_duplicate_selected()
 				return true
 	return false
+
+
+# ---------------------------------------------------------------------------
+# Modules
+# ---------------------------------------------------------------------------
+
+## What a click on part `id` picks in the open module: {mod, inside}. A part
+## outside the open module steps out to the machine first (when `step`).
+func _under(id: String, step: bool) -> Dictionary:
+	if res.is_empty() or id.is_empty():
+		return {"mod": "", "inside": true}
+	var u := GantryLabAssembly.module_under(res, ctx, id)
+	if not bool(u["inside"]):
+		if step:
+			ctx = ""
+		u = GantryLabAssembly.module_under(res, "", id)
+	return u
+
+
+func _mod_label(mid: String) -> String:
+	var mods := GantryLabAssembly.modules_of(res)
+	return str(mods[mid]["label"]) if mods.has(mid) else mid
+
+
+func step_out() -> void:
+	var mods := GantryLabAssembly.modules_of(res)
+	var was := ctx
+	ctx = str(mods[ctx].get("parent", "")) if mods.has(ctx) else ""
+	sel = ""
+	sel_mod = was
+	_refresh_marks()
+	refresh_card()
+
+
+func open_module(mid: String) -> void:
+	ctx = mid
+	sel = ""
+	sel_mod = ""
+	_refresh_marks()
+	refresh_card()
+
+
+func _drag_module(pos: Vector2, step: float) -> void:
+	var mid := str(drag["mod"])
+	var r := _ray(pos)
+	var out := GantryLabAssembly.drag_module(res, _offs(), mid, r[0], r[1], step)
+	if not bool(out.get("ok", false)):
+		if not str(out.get("why", "")).is_empty():
+			m._hover_lbl.text = "%s: %s" % [_mod_label(mid), str(out["why"])]
+		return
+	if (out["patches"] as Dictionary).is_empty():
+		return
+	_pending = {"patches": out["patches"]}
+	_flush_pending()
+	var dv: Vector3 = out.get("delta", Vector3.ZERO)
+	var mods := GantryLabAssembly.modules_of(res)
+	var mirrored := mods.has(mid) and not str(mods[mid].get("twin", "")).is_empty()
+	m._hover_lbl.text = "%s · moved %.1f mm%s" % [_mod_label(mid), dv.length() * 1000.0, " (and its mirror)" if mirrored else ""]
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +519,11 @@ func _queue_edit(id: String, patch: Dictionary) -> void:
 func _flush_pending() -> void:
 	if _pending.is_empty():
 		return
+	if _pending.has("patches"):
+		GantryLabAssembly.apply_patches(m._spec, _pending["patches"])
+		_pending = {}
+		m._queue_rebuild(0.03)
+		return
 	var id := str(_pending["id"])
 	var patch: Dictionary = _pending["patch"]
 	_pending = {}
@@ -446,6 +564,7 @@ func _on_palette(ref: String) -> void:
 		tool_params["half"] = 0.026
 	tool_turn = 0
 	sel = ""
+	sel_mod = ""
 	for r in _palette_btns:
 		(_palette_btns[r] as Button).button_pressed = (str(r) == ref)
 	_refresh_marks()
@@ -570,6 +689,18 @@ func _turn_selected(dt: int) -> void:
 
 
 func _delete_selected() -> void:
+	if not sel_mod.is_empty():
+		m._push_undo("")
+		var mods := GantryLabAssembly.modules_of(res)
+		var ids := GantryLabAssembly.module_parts(res, sel_mod)
+		var tm := str(mods[sel_mod].get("twin", "")) if mods.has(sel_mod) else ""
+		if not tm.is_empty():
+			ids.append_array(GantryLabAssembly.module_parts(res, tm))
+		for pid in ids:
+			GantryLabAssembly.remove_part(m._spec, str(pid))
+		sel_mod = ""
+		m._queue_rebuild(0.0)
+		return
 	if sel.is_empty():
 		return
 	m._push_undo("")
@@ -622,9 +753,19 @@ func refresh_card() -> void:
 	for c in card_box.get_children():
 		card_box.remove_child(c)
 		c.queue_free()
+	if enabled() and not res.is_empty():
+		_breadcrumb()
+	if enabled() and not res.is_empty() and not sel_mod.is_empty() and GantryLabAssembly.modules_of(res).has(sel_mod):
+		_module_card()
+		return
 	if not enabled() or res.is_empty() or sel.is_empty() or not res["parts"].has(sel):
 		var hint := Label.new()
-		hint.text = "Click a part in the view to see what it is bolted to and move it." if enabled() else "—"
+		if not enabled():
+			hint.text = "—"
+		elif ctx.is_empty():
+			hint.text = "Click a module in the view to pick it, drag it to move it as one, double-click to open it."
+		else:
+			hint.text = "Inside the %s: click a part or sub-module; Esc steps back out." % _mod_label(ctx).to_lower()
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
@@ -753,6 +894,123 @@ func refresh_card() -> void:
 		b.pressed.connect(spec_b[2])
 		btns.add_child(b)
 	card_box.add_child(btns)
+
+
+func _breadcrumb() -> void:
+	var mods := GantryLabAssembly.modules_of(res)
+	var chain: Array = []
+	var c := ctx
+	while not c.is_empty() and mods.has(c):
+		chain.push_front(c)
+		c = str(mods[c].get("parent", ""))
+	var row := HFlowContainer.new()
+	row.add_theme_constant_override("h_separation", 2)
+	var items: Array = [["", "Machine"]]
+	for mid in chain:
+		items.append([str(mid), _mod_label(str(mid))])
+	for i in items.size():
+		if i > 0:
+			var sep := Label.new()
+			sep.text = "›"
+			sep.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			sep.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+			row.add_child(sep)
+		var b := Button.new()
+		b.text = str(items[i][1])
+		b.flat = true
+		b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		b.disabled = i == items.size() - 1
+		var target := str(items[i][0])
+		b.pressed.connect(func(): open_module(target))
+		row.add_child(b)
+	card_box.add_child(row)
+
+
+func _module_card() -> void:
+	var mods := GantryLabAssembly.modules_of(res)
+	var md: Dictionary = mods[sel_mod]
+	var title := Label.new()
+	title.text = str(md["label"])
+	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	title.add_theme_color_override("font_color", UITheme.C_AMBER)
+	card_box.add_child(title)
+	var n := GantryLabAssembly.module_parts(res, sel_mod).size()
+	var info := Label.new()
+	var movable := not str(md.get("anchor", "")).is_empty()
+	var how := "Drag it to move it as one, each part sliding along what it is bolted to; double-click to open it." if movable else "It does not move as a whole: open it to move its parts."
+	info.text = "%s. %s" % [UiText.count(n, "part"), how]
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	info.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	card_box.add_child(info)
+	var tm := str(md.get("twin", ""))
+	if not tm.is_empty():
+		var tl := Label.new()
+		tl.text = "Mirrored with the %s: moves follow on the other side." % _mod_label(tm).to_lower()
+		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		tl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		card_box.add_child(tl)
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 2)
+	flow.add_theme_constant_override("v_separation", 2)
+	for k in md["kids"]:
+		var kid := str(k)
+		var b := Button.new()
+		b.text = _mod_label(kid)
+		b.tooltip_text = "Pick this sub-module"
+		UITheme.style_button(b)
+		b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		b.pressed.connect(func():
+			ctx = sel_mod
+			sel_mod = kid
+			sel = ""
+			_refresh_marks()
+			refresh_card())
+		flow.add_child(b)
+	for pid in md["parts"]:
+		var id := str(pid)
+		var b := Button.new()
+		b.text = GantryLabAssembly.label_of(res["parts"][id]["part"])
+		b.tooltip_text = "Pick this part"
+		UITheme.style_button(b)
+		b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		b.pressed.connect(func():
+			ctx = sel_mod
+			sel_mod = ""
+			sel = id
+			_refresh_marks()
+			refresh_card())
+		flow.add_child(b)
+	card_box.add_child(flow)
+	var btns := HFlowContainer.new()
+	btns.add_theme_constant_override("h_separation", UITheme.SPACE_XS)
+	var ob := Button.new()
+	ob.text = "Open"
+	ob.tooltip_text = "Double-click: pick its parts one by one"
+	UITheme.style_button(ob)
+	ob.pressed.connect(func(): open_module(sel_mod))
+	btns.add_child(ob)
+	var db := Button.new()
+	db.text = "Delete"
+	db.tooltip_text = "Del: every part in it%s" % (" and in its mirror" if not tm.is_empty() else "")
+	UITheme.style_button(db)
+	db.pressed.connect(_delete_selected)
+	btns.add_child(db)
+	card_box.add_child(btns)
+
+
+## The hover line for a pick: the module a click would pick at this level.
+func hover_text(hit: Dictionary) -> String:
+	if not enabled() or res.is_empty() or hit.is_empty():
+		return ""
+	var id := str(hit.get("id", ""))
+	if not _selectable(id):
+		return ""
+	var u := _under(id, false)
+	if str(u["mod"]).is_empty():
+		return ""
+	return "%s · %s — click to pick, double-click to open" % [_mod_label(str(u["mod"])), str(hit.get("label", ""))]
 
 
 func _kind_verb(kind: String) -> String:

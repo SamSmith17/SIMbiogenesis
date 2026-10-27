@@ -1263,6 +1263,12 @@ func _show_view() -> void:
 	_kin_panel.visible = t == 1
 	_sim_panel.visible = t == 2
 	_config_panel.visible = t == 3
+	# The part editor's picks and hover marks belong to the Machine tab.
+	if _machine != null:
+		if t == 0:
+			_parts.on_rebuilt()
+		else:
+			_machine.clear_marks()
 	if t == 1:
 		_set_jog(_jog)
 	elif t == 2:
@@ -1336,6 +1342,10 @@ func _on_studio_input(e: InputEvent) -> void:
 func _describe_hit(hit: Dictionary) -> String:
 	if hit.is_empty():
 		return ""
+	if _tabs.current_tab == 0:
+		var mt: String = _parts.hover_text(hit)
+		if not mt.is_empty():
+			return mt
 	var asm := str(hit.get("assembly", ""))
 	return "%s%s" % [str(hit["label"]), (" · moves with the %s" % asm) if not asm.is_empty() else " · frame"]
 
@@ -1518,15 +1528,36 @@ func _replan(reset: bool = false) -> void:
 func _lay_preview() -> void:
 	if _machine == null or _parse.is_empty() or not bool(_parse.get("ok", false)):
 		return
-	var tp := GantryLabGcode.to_toolpath(_parse)
+	if _plan.is_empty():
+		return
 	var tool := GantryLabParts.tool(str(_spec["tool"]["id"]))
 	var col := Color(0.85, 0.55, 0.2)
+	var moves: Array = _plan["moves"]
+	var line := float(tool["nozzle_mm"])
+	var layer := 0.0
+	var mottle := 0.0
 	match str(tool["process"]):
 		"subtractive":
+			# The cut's path, a shallow groove at its depth.
 			col = Color(0.35, 0.3, 0.25)
+			layer = 0.3
 		"mark":
 			col = Color(0.2, 0.15, 0.1)
-	_machine.set_toolpath_preview(tp["points"], tp["extruding"], maxf(float(tool["nozzle_mm"]), 1.0 if str(tool["process"]) != "additive" else 0.4), col)
+			line = maxf(line, 0.3)
+			layer = 0.05
+		_:
+			# A printed road is a little wider than its nozzle (the melt
+			# squashes onto the layer below).
+			line = line * 1.12
+			layer = GantryLabBuilder.layer_guess_mm(moves, line)
+			match str(tool["material"]):
+				"plastic_flake":
+					# Recycled PP / PETE: a deep mixed blue, mottled road to road.
+					col = Color(0.16, 0.34, 0.55)
+					mottle = 0.45
+				"mud":
+					col = Color(0.55, 0.38, 0.26)
+	_machine.set_print_preview(moves, line, layer, col, mottle)
 
 
 func _on_play() -> void:
@@ -1546,7 +1577,7 @@ func _apply_sim_time() -> void:
 	var pos: Vector3 = smp["pos"]
 	if _tabs.current_tab == 2:
 		_machine.set_tool_mm(pos)
-		_machine.set_preview_progress(_progress_of_sample(smp))
+		_machine.set_print_progress(int(smp["i"]), float(smp["s"]))
 	_suppress = true
 	_scrub.set_value_no_signal(_sim_t / maxf(total, 1e-6))
 	_suppress = false
@@ -1771,7 +1802,7 @@ func sim_state() -> Dictionary:
 	if _plan.is_empty():
 		return {}
 	var smp := GantryLabMotion.sample(_plan, _sim_t)
-	return {"t": _sim_t, "total_s": float(_plan["total_s"]), "pos": smp["pos"], "v": smp["v"], "playing": _sim_playing, "moves": int(_plan["n"])}
+	return {"t": _sim_t, "total_s": float(_plan["total_s"]), "pos": smp["pos"], "v": smp["v"], "playing": _sim_playing, "moves": int(_plan["n"]), "extruding": bool(smp["extruding"])}
 
 
 func machine() -> GantryLabBuilder:

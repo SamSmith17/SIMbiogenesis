@@ -425,7 +425,9 @@ static func _ring_tris(outer: PackedVector2Array, hole: PackedVector2Array) -> A
 ## One plate as folded sheet: the flat face (skin on the face plane, the
 ## sheet inward), and along every edge a bend + flange from
 ## DomeLabPanels.flange_section, mitred where two flanges meet on the plane
-## that bisects them (so the corner closes like a folded box).
+## that bisects them (so the corner closes like a folded box) — or, at a
+## node of four or more plates, ended on the seam's node cut (pn.node_cuts,
+## world mm), the plane its partner flange ends on too.
 static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: Dictionary, off: Vector3) -> PackedVector3Array:
 	var fr: Transform3D = p["frame"]
 	var fp: PackedVector2Array = p["face_poly"]
@@ -452,7 +454,16 @@ static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: 
 		var a2 := float(sc["a2"])
 		var M := Vector3(fin.x * cos(a2), fin.y * cos(a2), sin(a2))
 		planes.append([M, M.dot(Vector3(a.x, a.y, 0.0)) + gap * 0.5])
-	var face := _inset_var(fp, dists)
+	var face := DomeLabPanels.inset_edges(fp, dists)
+	# Node cuts into this panel's mm frame: world mm X = 1000·origin + R q.
+	var cuts: Dictionary = pn.get("node_cuts", {})
+	var vids: PackedInt32Array = p.get("vids", PackedInt32Array())
+	var fid := int(p["face"])
+	var rt := fr.basis.transposed() * 1000.0
+	var o_mm := fr.origin * 1000.0
+	var to_panel := func(cut: Array) -> Array:
+		var nw: Vector3 = cut[0]
+		return [rt * nw, float(cut[1]) - nw.dot(o_mm)]
 	var tris := PackedVector3Array()
 	if face.size() >= 3:
 		tris = _plate_slab(acc, face, p.get("oculus", PackedVector2Array()), fr, 0.0, -t, off)
@@ -478,7 +489,16 @@ static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: 
 		var dn: float = planes[(k + 1) % m][1]
 		var Ds := Mk - Mp
 		var De := Mk - Mn
-		var relief := 0.6
+		var relief := DomeLabPanels.MITRE_RELIEF_MM
+		var cut0: Array = []
+		var cut1: Array = []
+		if vids.size() == m and not cuts.is_empty():
+			var c0: Array = cuts.get(DomeLabPanels._cut_key(fid, vids[k], vids[k], vids[(k + 1) % m]), [])
+			var c1: Array = cuts.get(DomeLabPanels._cut_key(fid, vids[(k + 1) % m], vids[k], vids[(k + 1) % m]), [])
+			if not c0.is_empty():
+				cut0 = to_panel.call(c0)
+			if not c1.is_empty():
+				cut1 = to_panel.call(c1)
 		var np := prof.size()
 		var p0s: Array = []
 		var p1s: Array = []
@@ -487,10 +507,17 @@ static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: 
 			var P0 := A + F * q.x + Vector3(0, 0, q.y)
 			var s0 := 0.0
 			var s1 := L
-			if absf(Ds.dot(E)) > 1e-6:
+			if not cut0.is_empty():
+				s0 = DomeLabPanels._cut_s(cut0, P0, E)
+			elif absf(Ds.dot(E)) > 1e-6:
 				s0 = (dk - dp - relief * Ds.length() - Ds.dot(P0)) / Ds.dot(E)
-			if absf(De.dot(E)) > 1e-6:
+			if not cut1.is_empty():
+				s1 = DomeLabPanels._cut_s(cut1, P0, E)
+			elif absf(De.dot(E)) > 1e-6:
 				s1 = (dk - dn - relief * De.length() - De.dot(P0)) / De.dot(E)
+			# Never past the corner by more than the flat pattern's cap.
+			s0 = maxf(s0, -DomeLabPanels.MITRE_CAP * q.length())
+			s1 = minf(s1, L + DomeLabPanels.MITRE_CAP * q.length())
 			if s1 < s0 + 0.5:
 				var mid := (s0 + s1) * 0.5
 				s0 = mid
@@ -526,37 +553,20 @@ static func _folded_plate(acc: Dictionary, p: Dictionary, pn: Dictionary, secs: 
 			_atri(acc, p0s[i], p1s[i + 1], p0s[i + 1], wa, wb, wb)
 		# End caps on the mitre planes.
 		var idx := Geometry2D.triangulate_polygon(prof)
-		var ns := (fr.basis * Ds).normalized()
-		var ne := (fr.basis * De).normalized()
+		# A node cut's cap faces the way the mitre's would (its sense along the edge).
+		var cs := Ds
+		if not cut0.is_empty():
+			cs = (cut0[0] as Vector3) * signf((cut0[0] as Vector3).dot(E)) * signf(Ds.dot(E) if absf(Ds.dot(E)) > 1e-9 else -1.0)
+		var ce := De
+		if not cut1.is_empty():
+			ce = (cut1[0] as Vector3) * signf((cut1[0] as Vector3).dot(E)) * signf(De.dot(E) if absf(De.dot(E)) > 1e-9 else 1.0)
+		var ns := (fr.basis * cs).normalized()
+		var ne := (fr.basis * ce).normalized()
 		for ti in range(0, idx.size() - 2, 3):
 			_atri(acc, p0s[idx[ti]], p0s[idx[ti + 1]], p0s[idx[ti + 2]], ns, ns, ns)
 			_atri(acc, p1s[idx[ti]], p1s[idx[ti + 1]], p1s[idx[ti + 2]], ne, ne, ne)
 	return tris
 
-
-## A convex CCW polygon with edge k moved in by dists[k].
-static func _inset_var(poly: PackedVector2Array, dists: PackedFloat64Array) -> PackedVector2Array:
-	var n := poly.size()
-	var out := PackedVector2Array()
-	for k in n:
-		var kp := (k - 1 + n) % n
-		var a0 := poly[kp]
-		var a1 := poly[k]
-		var b1 := poly[(k + 1) % n]
-		var d0 := (a1 - a0).normalized()
-		var d1 := (b1 - a1).normalized()
-		var p0 := a0 + Vector2(-d0.y, d0.x) * dists[kp]
-		var p1 := a1 + Vector2(-d1.y, d1.x) * dists[k]
-		var den := d0.x * d1.y - d0.y * d1.x
-		if absf(den) < 1e-9:
-			out.append(p1)
-			continue
-		var rr := p1 - p0
-		var tt := (rr.x * d1.y - rr.y * d1.x) / den
-		out.append(p0 + d0 * tt)
-	if DomeLabPanels._signed_area(out) <= 1.0:
-		return PackedVector2Array()
-	return out
 
 ## A prism from a to b: `across` is the direction of the W side (the other
 ## side, T, is perpendicular to both); round_ makes a tube of diameter W

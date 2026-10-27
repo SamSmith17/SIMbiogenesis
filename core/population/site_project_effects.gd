@@ -67,9 +67,15 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			# load) and on any non-linkage unpack (a raised rack with a stale
 			# run re-attached its site); a linkage's unpack keeps it — that
 			# site finishes the raise itself.
+			# A site deployment schedule's run is kept on an unpack too: the
+			# finished prop's build site draws the last pieces going up (the
+			# drawn build trails the labour) and clears the run itself when
+			# it is done (PalletRackBuildSite._finish_run).
 			var clear := {"build_state": null}
-			if kind == "pack_prop" or not (PlacedPropService.get_prop_record(main, prop_id)
-					.get("linkage_spec") is Dictionary):
+			var rec0 := PlacedPropService.get_prop_record(main, prop_id)
+			var run0: Variant = rec0.get("build_run")
+			var scheduled := run0 is Dictionary and PalletRackBuildSite.is_schedule_run(run0 as Dictionary)
+			if kind == "pack_prop" or (not scheduled and not (rec0.get("linkage_spec") is Dictionary)):
 				clear["build_run"] = null
 			PlacedPropService.update_prop_record(main, prop_id, clear, false)
 			loader.call_deferred("set_prop_packed", prop_id, kind == "pack_prop")

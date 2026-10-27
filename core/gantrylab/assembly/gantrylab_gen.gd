@@ -9,7 +9,7 @@ extends RefCounted
 
 
 static func new_doc(kinematics: String) -> Dictionary:
-	return {"kinematics": kinematics, "parts": [], "loops": [], "links": [], "coax": [], "assemblies": {}, "meta": {"mirror_x": 0.0},
+	return {"kinematics": kinematics, "parts": [], "loops": [], "links": [], "coax": [], "assemblies": {}, "modules": [], "meta": {"mirror_x": 0.0},
 		"issues": [], "_w": {}, "_p": {}}
 
 
@@ -186,8 +186,48 @@ static func corner(doc: Dictionary, id: String, beam_a: String, face_a: String, 
 
 
 static func twins(doc: Dictionary, a: String, b: String) -> void:
+	if part(doc, a).is_empty() or part(doc, b).is_empty():
+		return
 	part(doc, a)["twin"] = b
 	part(doc, b)["twin"] = a
+
+
+## A module: parts (and sub-modules) the editor selects and moves as one, by
+## dragging `anchor` along its mate. Ids of parts the build did not make are
+## dropped; a module left with nothing in it is not added.
+static func module(doc: Dictionary, id: String, label: String, parts: Array, anchor: String, kids: Array = []) -> void:
+	var have: Array = []
+	var taken := {}
+	for m in doc.get("modules", []):
+		for pid in (m as Dictionary)["parts"]:
+			taken[str(pid)] = true
+	for pid in parts:
+		if not part(doc, str(pid)).is_empty() and not taken.has(str(pid)):
+			have.append(str(pid))
+	var ks: Array = []
+	for k in kids:
+		for m in doc.get("modules", []):
+			if str((m as Dictionary)["id"]) == str(k):
+				ks.append(str(k))
+	if have.is_empty() and ks.is_empty():
+		return
+	if not doc.has("modules"):
+		doc["modules"] = []
+	doc["modules"].append({"id": id, "label": label, "parts": have, "kids": ks, "anchor": anchor if not part(doc, anchor).is_empty() else "", "twin": ""})
+
+
+static func twin_modules(doc: Dictionary, a: String, b: String) -> void:
+	var ma := {}
+	var mb := {}
+	for m in doc.get("modules", []):
+		if str((m as Dictionary)["id"]) == a:
+			ma = m
+		elif str((m as Dictionary)["id"]) == b:
+			mb = m
+	if ma.is_empty() or mb.is_empty():
+		return
+	ma["twin"] = b
+	mb["twin"] = a
 
 
 ## The face of a beam whose outward normal is closest to `dir` (world).

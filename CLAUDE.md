@@ -2880,6 +2880,55 @@ claim, SubViewport studio). Record key `domelab_spec`, model id
   arrays, not SurfaceTool (the 216-plate home: 608k vertices, ~130 ms).
   Sheets corten_2/3 (look "corten" → `StructureMaterials.Kind.
   WEATHERING_STEEL`, appended) and pmma_4/6.
+- **Folded-plate seams that bolt up (2026-10-26).** The flanges "almost
+  joined" because:
+  - **Valleys folded the wrong way.** `flange_bend` was `acos(n1·n2)/2`,
+    which is unsigned, and the section clamped it to ≥ 0. A helical zome's
+    cells meet in VALLEYS (12 seams on `helical_corten`; 85 of 372 on the
+    user's saved window-8 home). There the flanges stood 160–168° apart.
+    - `DomeLabConnectors.edge_records` now signs it: negative when the second
+      face's centroid is above the first face's plane (`_valley`). `dihedral`
+      is then over 180°.
+    - `flange_section` takes a half-angle in ±`MAX_HALF_BEND`. A valley's
+      fold is less than 90°.
+    - BOM / cut sheet folds print the signed half-angle.
+  - **Corners of 4+ plates.** At 3-plate nodes the three bisector planes
+    share one line, so the plate mitres close exactly (measured 1e-4°). At
+    nodes of four or more plates they don't: the two plates on a seam ended
+    their flanges along mitre lines 20–118° apart (the wedges).
+    `DomeLabPanels._node_cuts` gives such a seam end ONE plane that both
+    flanges of the pair end on (`pn.node_cuts`, world mm, keyed
+    `_cut_key(face, node, a, b)`). That plane runs halfway between the two
+    mitre lines, at least `NODE_END_MIN_DEG` 40° off the seam, square to the
+    seam, and set back `NODE_CLEAR_MM` past both mitres. The node itself is
+    left open, as a real folded-plate node is.
+  - **Mitre cap.** A mitre never runs past its corner by more than
+    `MITRE_CAP` 1.5 × the point's depth (the flat pattern's own cap). Without
+    it, a steep valley flange and its plate's next flange met 200–330 mm
+    off.
+  - **The flat pattern is developed from the section** (`developed`,
+    `BEND_K` 0.44):
+    - the face region is the outline inset by xc;
+    - each flange is the bend allowance plus the run;
+    - the DXF fold lines are the bend centre lines;
+    - each hole sits where the folded flange carries it.
+
+    Before, holes were at flange/2 from a gap/2 inset, which missed the 3D
+    bolts. Bolt end margins clear any node cut.
+  - Gate: `domelab_selftest._test_plate_seams` (196 checks). For every plate
+    preset plus a window-8 valley variant it checks, as the builder draws
+    them:
+    - flange skins within 0.5° of parallel and gap ± 0.5 mm apart;
+    - every flat-pattern hole, folded up, within 0.5 mm of its partner and
+      of a bolt;
+    - node-cut pairs on one plane.
+
+    It fails at 160° and 88 mm on the old code.
+  - Diags: `tools/diag/domelab_seam_probe.gd -- --preset=<id>|lib:<id>`
+    (headless numbers: seams, corner wedge by valence, spikes) and
+    `tools/diag/domelab_seam_look_diag.gd` (WINDOWED, APPDATA at a scratch
+    folder; close-ups of a valley, a ridge, a 4+ node and a 3 node;
+    `--library=<id>` for a saved design).
 - 16 presets (`DomeLabPresets.builtins`); library `user://domelab_library.json`.
   Panels that do not fit the sheet are an ERROR in the checks (a real
   blocker): the presets are sized so every one solves clean. Gates in the
@@ -3087,12 +3136,93 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
     `also` gets its secondary contact found by `_auto_legs` (a joining
     plate's second beam, a cube's other ends). Drawn by the
     `outline_plate` emitter (outline + dark holes / pilot / slots / bores).
-  - Gates: `core/gantrylab/assembly/gantrylab_assembly_selftest.gd` (34)
+  - Gates: `core/gantrylab/assembly/gantrylab_assembly_selftest.gd` (48)
     and the parts-editor half of `gantrylab_designer_check.gd` (REAL
-    clicks: pick, slide, undo, palette mount + T-nuts, NEMA 17 onto it,
-    unlink, reset). Not done: CoreXZ / delta / router as mates, MGN rails,
+    clicks: module pick, double-click down to the part, slide, undo,
+    palette mount + T-nuts, NEMA 17 onto it, unlink, reset, the X5S Z axis
+    dragged as one). Not done: CoreXZ / delta / router as mates, MGN rails,
     belts the player routes by hand (loops are the generator's), more Z
-    motors than two drawn, the tour still re-shot.
+    motors than two drawn, hidden / plate corners, the tour still re-shot.
+- **Shaft-guided lowering bed + modules (2026-10-26).**
+  - A cube machine whose Z guide is `rod_8` / `rod_10` / `rod_12`
+    (`GantryLabGenCube._rod_bed`) gets the X5SA / Ender-5 Plus Z: per side
+    a Tr8 screw between two round shafts, mirrored front and back of it
+    (spacing = half the bed depth, 120–420 mm). Shafts stand in SK supports
+    (`sk8/10/12`, origin ON the shaft axis, base `sk_h` behind) on the base
+    side beam's inner face and on a new Z top beam (`zt.L/R`) under the Y
+    wheel plates. A `z_carriage` plate rides the shafts (its `bore` is a
+    sliding shaft mate on `rod`, no fasteners), two `lmf*uu` flange
+    bearings hang under it, the Tr8 nut sits on top, the bed arm lies on
+    its grid ("lines" mate). The motor hangs under the base side beam on an
+    L mount; the screw is drawn at the drive's real Ø. Coax pairs check
+    every shaft through its bearings and top support. `ROD_DIMS` (Misumi SK,
+    Samick LMF, 7850 kg/m³) is the one table. Other Z guides keep the
+    V-wheel back-upright bed. The big-flake application uses `rod_12`.
+  - Unmodelled settings now SAY so as `"note": true` issues (MGN / HGR
+    guides on V-slot frames, non-bracket corners, more than two Z motors);
+    the design's "Every part fastens" line and the clean-preset gate skip
+    notes.
+  - **Modules** (`doc.modules`: {id, label, parts, kids, anchor, twin},
+    added by `GantryLabGen.module` / `twin_modules`; cube: frame, XY
+    gantry, motor drives, `zaxis.L/R` ⊃ `zdrive` + `zguide` + `zcarr`, bed,
+    electronics; slinger: base, gantry ⊃ X axis + Z drives, Y drive, bed).
+    `GantryLabAssembly.move_group(res, ids, delta)` moves a group rigidly:
+    each member whose parent is not moving is re-mated by `infer` at its
+    moved pose (refused if it cannot land there), the rest follow their
+    parents; a coax pair with one side moving is allowed only ALONG the
+    shared axis (a nut riding its screw), so a Z drive cannot leave its nut
+    behind. `drag_module` slides the module's `anchor` along its own mate
+    and moves the twin module by the x-mirrored delta; `apply_patches`
+    writes the results with `set_part` (no second mirroring).
+  - Editor (pallet-rack pattern): a click picks the module directly inside
+    the open one (`ctx`), dragging it moves it as one, a double-click opens
+    it, Esc / the breadcrumb step out, a module card lists its sub-modules
+    and parts. ⚠ The open module is reset when another design loads (same
+    module ids exist across designs).
+  - Presets: `tronxy_x5s` (CoreXY 330, 2020, 10 mm shafts, dual Z, RAMPS,
+    Z at 8 microsteps), `cube_350` (Ender-5 Plus class), `tronxy_x3` (from
+    the X3 assembly guide: 2020 bed-slinger, M8 threaded-rod dual Z,
+    GT2-16; drive `threaded_m8`, Z feed capped at 2.5 rev/s).
+  - Probe: `tools/diag/gantry_assembly_probe.gd -- --kin=rods:<kin>` (720
+    shaft-bed variants, clean for corexy and cartesian_xy).
+- **Print preview = extruded roads (2026-10-26).** The old preview put ≤4000
+  boxes at the toolpath's VERTICES: on a cube's walls those are the corners,
+  so layers read as vertical posts. `GantryLabBuilder.set_print_preview(moves,
+  line_mm, layer_mm, color, mottle)` lays one rounded road per extruding
+  planner move (straight runs merged), line wide (nozzle × 1.12 for
+  additive), layer tall (`layer_guess_mm`: the commonest Z step), its top at
+  the nozzle, alternate layers shaded, under the bed node.
+  `set_print_progress(move, s)` (the modal) grows the current road to the
+  nozzle; `set_preview_progress(frac)` (the in-world runtime, by printed
+  length) and `set_toolpath_preview` (point list) still work.
+  ⚠ Two MultiMesh traps, both of which hid the print:
+  - Instances written while `visible_instance_count` hides them are dropped
+    when the count grows: only the road being drawn showed. Every road stays
+    drawn (`visible_instance_count = -1`), unprinted ones at a zero basis
+    (`_HIDDEN`), and `_set_shown` rewrites only the range that changes.
+  - The engine's own bounds are taken once, while few roads show, so the
+    rest was culled: `custom_aabb` covers the whole print.
+
+  Headless, MultiMesh keeps no transforms: tests read `road_transform(k)` and
+  `roads_shown()`. A pale colour washes out white under the studio light;
+  plastic flake is a mottled deep blue. The cube sample now has solid bottom
+  and top layers and 25 % crossing infill. Diag:
+  `tools/diag/gantry_print_look_diag.gd` (windowed, `--preset=`, `--frac=`,
+  `--out=`).
+- **Tools drawn from a model.** `GantryLabFrame.TOOL_SCENES` = {path, tip
+  (the nozzle tip in the model's frame), strip (exporter leftovers), env
+  (envelope round the tip: clash box, clearances)};
+  `GantryLabBuilder._scene_nodes` instances it with the tip on the tool's
+  origin. Without the art it falls back to the TOOL_KINDS emitter.
+  `TOOL_MOUNT_BACK` sets the carriage face behind the axis (default 13.5 mm).
+  `tool_front` / `tool_side` widen the cube (`cz`, `x_pull`, X motor, idlers,
+  Y belt) and the slinger (`x_margin`, X motor, idler) for a big head. First
+  tool: `flake_extruder_6mm` (the player's "Trash Printer Extruder.glb",
+  copied to the gitignored `Imported Models/Gantry/trash_printer_extruder.glb`:
+  2" camlock hopper, wye, 4" flange, 150 W band, 6 mm nozzle, tip at model
+  (0, -0.1597, 0)), 6 mm beads, 3 mm layers, PP / PETE flake; preset
+  `trash_flake_600`. Hopper tools (material not "filament") get no Bowden
+  extruder.
 
 ## Toroid designer (core/toroidlab/, 2026-10-26)
 
@@ -10437,6 +10567,72 @@ duplicated.
   work site); the active flag's tag on the timeline fills with the crews'
   progress; the chip's no-crew actions ask first (ConfirmationDialog naming
   what they will swap).
+- **No twin, no ghost (2026-10-27, Tool Camp 26).** The "full rack standing
+  where they build it" was the PLAN crashing: a pitched roof's
+  `ply:roof:i,j` sheets hit the deck pass (`bits[2]` out of bounds), the
+  script error aborted the module, and 244 of 557 build units got no job —
+  `_apply_units` never touched them, so they stood finished from frame one.
+  `PalletRackBuildPlan` now splits a rack into `_plan_racking` (frames +
+  beams, every joined rack in turn) and `_plan_fitout` (decks, the pitched
+  roof — packing, rafters in fives, sheets in sixes — steps, walls,
+  elements), and EVERY fit-out job waits for ALL the racking. Any new unit
+  id family must land in a bucket there, or it will stand finished again
+  (the selftest pins "every Tool Camp piece planned").
+  Both staging sites (`PalletRackBuildSite`, `AssemblyBuildSite`) never show
+  the prop's own model while it is `under_construction` (that model IS the
+  ghost): suspended / finished / disposed fall back to the kit crate
+  (`_show_model`), and the rack site holds its last frame until the prop
+  is rebuilt for real. The rack site hides the KitCrate while its yard is
+  out, plays a PACK-UP backwards (`(1 − progress) × makespan`), and moves
+  its work loops off the clock's own steps when the clock is held but moving
+  (the video export). Gate: `tools\harness.ps1 -World walton -RunScript
+  res://tools/checks/tool_camp_build_video.gd -Label tool_camp_build`
+  (`TCV_VIDEO=0` checks only; with the video it films a second rack into
+  the user's Videos folder; `TCV_SPAN_H` 4.5 fits the build). ⚠ The
+  project lives on ONE camp's board, so its roster is the crew: the
+  sandbox's festival target (60 people = 2 a camp) made a 10 h build;
+  the script resets the target to natural (1053 on Walton, crew 12,
+  ~3 sim-h) and starts at noon (Walton's valley fog hides the morning).
+  The rack site hides its progress label while the 🎬 export or preview
+  holds the clock. Offline: `tools/diag/rack_build_order_diag.gd
+  -- --preset=<id>` prints the job order and what is up at 0/10/…/100 %.
+- **Every structure, piece by piece (2026-10-27).** A scheduled deploy or
+  pack-up of ANY prop — dome / zome, toroid, Linkage Lab frame, gantry,
+  flat-pack, a GLB — runs on the same crew site as a rack
+  (`PalletRackBuildSite`; `is_schedule_run` = labour mode with an
+  `action`, stamped by the director for every model with `crew_n`):
+  - `StructureUnits` (`core/assembly/structure_units.gd`) cuts the REAL
+    model into pieces: each MultiMesh instance (poses from the builder's
+    `instance_transforms()` when it has one — the linkage builder; a
+    headless MultiMesh keeps no transforms), each MeshInstance3D surface
+    split into welded connected components; bits under `SMALL_M` ride with
+    the nearest piece; > `MAX_UNITS` gathered on a grid; one surface per
+    material (`_concat`, the 256-surface cap). Pile kind from the flat frame
+    (frames / beams / sheets / parts), `stage` = 1.2 m height band × 4 +
+    kind rank. Scale baked in, `ground_shift` = the lowest piece; the site
+    stands at the ModelRoot's rotation + that shift (`_site_xf`). Cut cached
+    by `look_key` (cost: 25–600 ms, the 216-plate corten zome 2.7 s, once).
+  - `PalletRackBuildPlan.plan_units` schedules stage after stage, small
+    bundles round the structure, carried and fitted one by one (`PIECE_*`
+    tables); same timeline as the rack, no visitor.
+  - A linkage frame is cut and built FOLDED (effective min fold); the
+    finish unpacks it and the deploy sweep raises it. A linkage pack-up
+    stows first (`_stow_then_stamp`, the stamp deferred a frame — stamping
+    inside `deploy_state_changed` frees the emitting runtime: native crash).
+  - The planner's rows lost their `set_build_phase` ghost stamps (only the
+    finish unpacks, only the pack packs); the linkage rebuild / breakdown
+    rows are the Lab / Site Projects path's now. The unpack effect KEEPS a
+    schedule run so the finished prop's site draws the last pieces (they
+    trail the labour), carrying the drawn time across the rebuild (`_carry`)
+    and clearing the run itself when done (`_finish_run`). The read and the
+    ease keep pace with the clock (`_speed`): at 1440× a 1.2 s ease left
+    the last third of the pieces to pop.
+  - `AssemblyBuildSite` is now only the fallback for an old per-part run.
+  - Gates: `tools\harness.ps1 -World walton -RunScript
+    res://tools/checks/structure_build_check.gd -Label structure_build`
+    (deploy + pack-up of one of each, no ghost, monotone, all up / all
+    down, shots); offline `tools/diag/structure_units_diag.gd [-- --only=x]`
+    (every preset cut + planned, ms).
 - Not built: per-camp schedules, the light tier working (only pinned full
   camps do), a tour stop, the gantry's own assembly order (it splits by
   mesh like a GLB).

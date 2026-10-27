@@ -42,6 +42,17 @@ const COMPAT := {
 	"d5": {"d5": "shaft"},
 	"d635": {"d635": "shaft"},
 	"d8": {"d8": "shaft"},
+	# Round-shaft guides: a shaft's end clamps in its support; a bearing (or
+	# the plate it carries) rides the shaft; a flange bearing bolts to a plate.
+	"r8": {"r8": "shaft"},
+	"r10": {"r10": "shaft"},
+	"r12": {"r12": "shaft"},
+	"lm8": {"lm8": "shaft"},
+	"lm10": {"lm10": "shaft"},
+	"lm12": {"lm12": "shaft"},
+	"lmf8": {"lmf8": "pattern"},
+	"lmf10": {"lmf10": "pattern"},
+	"lmf12": {"lmf12": "pattern"},
 	"b5": {"s20": "idler", "m5grid": "idler"},
 	# A beam's own slotted face bolted flat to a plate's hole grid (an X
 	# beam on its Z plates): T-nuts in the beam, bolts through the plate.
@@ -539,6 +550,10 @@ static func fasteners(wt: Transform3D, tf: Dictionary, cf: Dictionary, mate: Dic
 						out.append(_nut(0.003, p - n * tt, -n))
 					"tool":
 						out.append(_bolt(0.003, stock_len(tt + 0.006), p - n * tt, -n))
+					"lmf8", "lmf10", "lmf12":
+						# Up through the flange and the plate, a nut on top.
+						out.append(_bolt(0.004, stock_len(tc + tt + 0.0035 + 0.001), p + n * tc, n))
+						out.append(_nut(0.004, p - n * tt, -n))
 					"tap5":
 						if bool(cf.get("grub", false)):
 							out.append({"kind": "grub_hidden", "label": "M5×6 set screw", "count": 1})
@@ -567,7 +582,12 @@ static func fasteners(wt: Transform3D, tf: Dictionary, cf: Dictionary, mate: Dic
 			if h > 0.0005:
 				out.append(_spacer(p, n, h, "Spacer %s mm" % _mm(h)))
 		"shaft":
-			out.append({"kind": "grub_hidden", "label": "M3×4 grub screw", "count": 2})
+			if bool(cf.get("slide", false)):
+				pass
+			elif cf.has("clamp_label"):
+				out.append({"kind": "grub_hidden", "label": str(cf["clamp_label"]), "count": 1})
+			else:
+				out.append({"kind": "grub_hidden", "label": "M3×4 grub screw", "count": 2})
 		"endgrid":
 			# Through the plate into the beam's tapped end.
 			for q in holes_on_target(tf, cf, mate):

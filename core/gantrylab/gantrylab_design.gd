@@ -305,7 +305,11 @@ static func _checks(s: Dictionary, d: Dictionary) -> Array:
 		var asm_issues: Array = []
 		asm_issues.append_array(lay.get("issues", []))
 		asm_issues.append_array(GantryLabClash.check(s, lay))
-		if asm_issues.is_empty():
+		var faults := 0
+		for iv in asm_issues:
+			if not bool((iv as Dictionary).get("note", false)):
+				faults += 1
+		if faults == 0:
 			out.append({"level": "ok", "text": "Every part fastens where it sits; nothing collides from home to the far corners of travel; every belt runs clear and flat."})
 		out.append_array(asm_issues)
 	return out
@@ -323,6 +327,10 @@ static func z_feed_mm_s(s: Dictionary) -> float:
 	var dr := str(s["axis"]["z"]["drive"])
 	if dr == "leadscrew_t8_2":
 		return Z_FEED_SCREW_FINE
+	# Threaded rod in a brass nut: ~150 rpm before it chatters and heats.
+	var drive := GantryLabParts.drive(dr)
+	if str(drive.get("kind", "")) == "screw" and float(drive.get("lead_mm", 8.0)) < 2.0:
+		return float(drive["lead_mm"]) * 2.5
 	if dr.begins_with("leadscrew") or dr.begins_with("ballscrew"):
 		return Z_FEED_MM_S
 	return 100.0

@@ -15,7 +15,7 @@ extends SceneTree
 ## down rests on the ground (or its own pieces) clear of the rack, and is
 ## carried at hand height.
 
-const EXPECTED_CHECKS := 37
+const EXPECTED_CHECKS := 39
 
 var _checks := 0
 var _failures := 0
@@ -187,6 +187,36 @@ func _initialize() -> void:
 	_check("chiba 2024: plans with eight, nothing stuck", (c24["blocked"] as Array).is_empty(), P.summary(c24))
 	_check("chiba 2024: plans in under 20 s", ms < 20000, "%d ms, %s" % [ms, P.summary(c24)])
 	print("rack build: bay %s; chiba 2024 %s (%d ms)" % [P.summary(tl), P.summary(c24), ms])
+	# Tool Camp 26 (joined racks, a pitched roof, benches, inside stairs):
+	# every piece gets a job — a pitched roof's "ply:roof:i,j" sheets used to
+	# crash the deck pass, and every piece after it stood finished from the
+	# first frame — and the racking of BOTH racks goes up before any deck,
+	# roof, wall or element.
+	var tc_n := PalletRackBuilder.build_units_node(PalletRackBuilder.tool_camp_26_spec())
+	var tc_units: Dictionary = tc_n.get_meta("units", {})
+	var tc := P.plan(PalletRackBuilder.tool_camp_26_spec(), 12, tc_units)
+	tc_n.free()
+	var unplanned := 0
+	for id in tc_units:
+		if not (tc["unit"] as Dictionary).has(id):
+			unplanned += 1
+	_check("tool camp 26: every piece is planned, nothing stuck",
+		unplanned == 0 and (tc["blocked"] as Array).is_empty(), "%d of %d unplanned, %s" % [unplanned, tc_units.size(), P.summary(tc)])
+	var last_racking := 0.0
+	var first_fit := INF
+	for id in tc["unit"]:
+		var ii := int(tc["unit"][id]["install"])
+		if ii < 0:
+			continue
+		var leaf := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
+		var head := leaf.get_slice(":", 0)
+		var j: Dictionary = tc["jobs"][ii]
+		if head in ["post", "beam"]:
+			last_racking = maxf(last_racking, float(j["t1"]))
+		else:
+			first_fit = minf(first_fit, float(j["t0"]))
+	_check("tool camp 26: the racking stands before the first deck, roof, wall or bench",
+		first_fit >= last_racking - 0.01, "racking done %.0f s, first fit-out %.0f s" % [last_racking, first_fit])
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])

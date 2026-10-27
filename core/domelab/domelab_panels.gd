@@ -22,6 +22,22 @@ extends RefCounted
 ## edge are drilled at the same places. An opening (oculus) is the face
 ## inset by oculus_mm with rounded corners; a glazing pane laps it.
 ##
+## The bend is SIGNED (DomeLabConnectors.flange_bend): in a valley, where
+## the neighbour rises above the face's plane, the flange folds through
+## less than 90°. Where three plates meet, every flange's mitre with its
+## plate's other flange lands on the one line all three bisector planes
+## share, so the corner closes like a folded box. Where four or more meet
+## the bisector planes share no line and the two plates on a seam would end
+## their flanges along different lines (a wedge of one flange past the
+## other); there the PAIR ends flush on one plane through the node's axis
+## (node_cuts: halfway between the two plates' mitre lines, square to the
+## seam, set back past both mitres) and the node is left open, as a real
+## folded-plate node is.
+## The flat pattern is developed from the section: the face region is the
+## outline inset by xc (where the bend starts), the flange is the bend
+## allowance (K = BEND_K) plus the straight run, the fold line is the bend's
+## centre line, and each hole sits where the folded flange carries it.
+##
 ## build(geo, edges, fidx, spec) → {panels: [{id, face, n_sides, ring, holes
 ##   (rings), fold: [[a, b, bend_deg]], bbox (Rect2 mm), area_mm2, frame:
 ##   Transform3D (panel mm → world m), label, class_key}], classes: [{label,
@@ -32,6 +48,24 @@ const MIN_HOLES_PER_EDGE := 2
 const HOLE_END_MARGIN_MM := 20.0
 const PANE_LAP_MM := 25.0
 const ARC_STEPS := 6
+## Neutral-axis position in a bend, as a fraction of the thickness (air
+## bending mild / weathering steel, r ≈ t … 2t: 0.42–0.45).
+const BEND_K := 0.44
+## The builder's mitre relief between a plate's own two flanges (mm).
+const MITRE_RELIEF_MM := 0.6
+## Clearance between a node cut and the nearer plate's mitre (mm).
+const NODE_CLEAR_MM := 1.0
+## A flange never runs past its corner by more than this × its depth below
+## the edge (the flat pattern's mitre cap, _mitre_ext): where a steep valley
+## flange meets its plate's next flange their true mitre runs far off.
+const MITRE_CAP := 1.5
+## Two plates' mitre lines on a seam further apart than this: cut the pair
+## flush at the node instead.
+const NODE_WEDGE_DEG := 0.5
+## A node cut's end line is kept at least this far round from the seam.
+const NODE_END_MIN_DEG := 40.0
+## Past this half-angle (80°) a flange lies almost in its own face's plane.
+const MAX_HALF_BEND := 1.4
 
 
 static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Dictionary) -> Dictionary:
@@ -68,7 +102,9 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 	var edge_holes := {}
 	var bolts3d: Array = []
 	var anchors := 0
+	var node_cuts := {}
 	if plate:
+		node_cuts = _node_cuts(verts, faces, fnormals, edges, edge_by_key, t_mm, fold_r, gap, flange)
 		var corner := _corner_angles(verts, faces)
 		var hole_d := _bolt_hole(spec)
 		for ei in edges.size():
@@ -87,6 +123,16 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 				for fi in fl:
 					alpha = minf(alpha, float((corner[int(fi)] as Dictionary).get(vid, PI)))
 				margin[end] = maxf(HOLE_END_MARGIN_MM, q_eff / tan(alpha * 0.5) + hole_d + 10.0)
+				# Clear of a node cut on either plate's flange.
+				for fi in fl:
+					var cut: Array = node_cuts.get(_cut_key(int(fi), vid, int(e["a"]), int(e["b"])), [])
+					if cut.is_empty():
+						continue
+					var ff := _flange_frame(verts, faces[int(fi)], fnormals[int(fi)], int(e["a"]), int(e["b"]), ang, gap)
+					var P0 := _section_point(ff, q)
+					var sc := _cut_s(cut, P0, ff["E"])
+					var from_v: float = sc if vid == int(e["a"]) else float(ff["L"]) - sc
+					margin[end] = maxf(float(margin[end]), from_v + hole_d * 0.5 + 10.0)
 			var Lmm := float(e["len"]) * 1000.0
 			var usable := Lmm - float(margin[0]) - float(margin[1])
 			var ss: Array = []
@@ -160,9 +206,30 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 			var two := ei >= 0 and ((edges[ei] as Dictionary)["faces"] as Array).size() >= 2
 			edge_ang.append(float((edges[ei] as Dictionary)["flange_bend"]) * 2.0 if two else 0.0)
 		if plate:
-			ring_pts = _with_flanges(inner, flange, t_mm)
+			# Developed from the section: face region to xc, then the bend
+			# allowance, then the straight run; the fold line mid-bend.
+			var insets := PackedFloat64Array()
+			var widths := PackedFloat64Array()
+			var hole_out := PackedFloat64Array()
+			var fold_in := PackedFloat64Array()
 			for k in m:
-				var mn := _outward(inner, k)
+				var dv := developed(flange_section(float(edge_ang[k]), t_mm, fold_r, gap, flange))
+				insets.append(float(dv["xc"]))
+				widths.append(float(dv["width"]))
+				hole_out.append(float(dv["hole"]) - float(dv["xc"]))
+				fold_in.append(float(dv["xc"]) - float(dv["ba"]) * 0.5)
+			var base := inset_edges(poly, insets)
+			if base.size() == m:
+				ring_pts = _with_flanges_var(base, widths, t_mm)
+				var fl_line := inset_edges(poly, fold_in)
+				if fl_line.size() == m:
+					for k in m:
+						folds[k] = [fl_line[k], fl_line[(k + 1) % m], bends[k]]
+			else:
+				warnings.append("face %d is too small for its bends" % fi)
+				ring_pts = _with_flanges(inner, flange, t_mm)
+			for k in m:
+				var mn := _outward(poly, k)
 				var key := DomeLabGeodesic._ekey(f[k], f[(k + 1) % m])
 				var ei := int(edge_by_key.get(key, -1))
 				if ei < 0 or not edge_holes.has(ei):
@@ -173,8 +240,8 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 				var tdir := (poly[(k + 1) % m] - poly[k]).normalized()
 				for sv in edge_holes[ei]:
 					var sp := Lmm - float(sv) if rev else float(sv)
-					var on_edge := poly[k] + tdir * sp - mn * (gap * 0.5)
-					holes.append(FlatpackProfile.circle_ring(on_edge + mn * (flange * 0.5), _bolt_hole(spec) * 0.5))
+					var out_mm := float(hole_out[k]) if base.size() == m else flange * 0.5 - gap * 0.5
+					holes.append(FlatpackProfile.circle_ring(poly[k] + tdir * sp + mn * out_mm, _bolt_hole(spec) * 0.5))
 		else:
 			var inset := maxf(strut_w * 0.5, 8.0) - gap * 0.5
 			for k in m:
@@ -231,7 +298,7 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 		panels.append({"id": "p%d" % fi, "face": fi, "n_sides": m, "ring": ring, "holes": holes,
 			"fold": folds, "bends": bends, "bbox": bb, "area_mm2": absf(_signed_area(tess)),
 			"frame": frame, "class_key": bkey, "sides_mm": sides, "poly": inner, "flange_mm": flange,
-			"outer": ring_pts, "face_poly": face_poly, "edge_ang": edge_ang, "zone": zone, "oculus": oculus,
+			"outer": ring_pts, "face_poly": face_poly, "edge_ang": edge_ang, "vids": f, "zone": zone, "oculus": oculus,
 			"pane": pane})
 	# Classes (congruent panels).
 	var classes := {}
@@ -327,6 +394,7 @@ static func build(geo: Dictionary, edges: Array, fidx: Dictionary, spec: Diction
 		"mass_kg": (area_m2 - open_area) * float(mat.get("kg_m2", 0.0)) * kg_scale + pane_area * float(glaze.get("kg_m2", 0.0)),
 		"material": mat, "sheets": (nest["sheets"] as Array).size(), "t_mm": t_mm, "fold_r_mm": fold_r,
 		"gap_mm": gap, "flange_mm": flange, "bolts3d": bolts3d, "anchors": anchors, "panes": panes,
+		"node_cuts": node_cuts,
 		"pane_area_m2": pane_area, "open_area_m2": open_area, "glazing": glaze,
 		"glazing_id": str(face["glazing"])}
 
@@ -627,7 +695,7 @@ static func _panel(result: Dictionary, id: String) -> Dictionary:
 ##    length), hole (bolt centre on the flange's outer skin), profile
 ##    (closed outline: outer arc, flange, inner arc)}
 static func flange_section(ang: float, t: float, r: float, gap: float, depth: float) -> Dictionary:
-	var a2 := clampf(ang * 0.5, 0.0, 1.4)
+	var a2 := clampf(ang * 0.5, -MAX_HALF_BEND, MAX_HALF_BEND)
 	var R := r + t
 	var ca := cos(a2)
 	var sa := sin(a2)
@@ -651,6 +719,195 @@ static func flange_section(ang: float, t: float, r: float, gap: float, depth: fl
 		prof.append(c + Vector2(cos(phi), sin(phi)) * r)
 	return {"a2": a2, "R": R, "r": r, "t": t, "xc": xc, "c": c, "m": m, "d": dd, "v": v, "run": run,
 		"hole": t2o + dd * (run * 0.5), "profile": prof, "steps": ARC_STEPS}
+
+
+## A section developed flat (mm, from the line where the bend starts, xc in
+## from the edge): {xc, ba (bend allowance on the neutral axis), width (ba +
+## straight run), hole (developed distance of the bolt hole)}.
+static func developed(sec: Dictionary) -> Dictionary:
+	var ba := (PI * 0.5 + float(sec["a2"])) * (float(sec["r"]) + BEND_K * float(sec["t"]))
+	var run := float(sec["run"])
+	return {"xc": float(sec["xc"]), "ba": ba, "width": ba + run, "hole": ba + run * 0.5}
+
+
+## A convex polygon with edge k moved in by dists[k] (out when negative).
+## Empty when it collapses.
+static func inset_edges(poly: PackedVector2Array, dists: PackedFloat64Array) -> PackedVector2Array:
+	var n := poly.size()
+	var out := PackedVector2Array()
+	var ccw := _signed_area(poly) > 0.0
+	for k in n:
+		var kp := (k - 1 + n) % n
+		var a0 := poly[kp]
+		var a1 := poly[k]
+		var b1 := poly[(k + 1) % n]
+		var d0 := (a1 - a0).normalized()
+		var d1 := (b1 - a1).normalized()
+		var in0 := Vector2(-d0.y, d0.x) if ccw else Vector2(d0.y, -d0.x)
+		var in1 := Vector2(-d1.y, d1.x) if ccw else Vector2(d1.y, -d1.x)
+		var p0 := a0 + in0 * dists[kp]
+		var p1 := a1 + in1 * dists[k]
+		var den := d0.x * d1.y - d0.y * d1.x
+		if absf(den) < 1e-9:
+			out.append(p1)
+			continue
+		var rr := p1 - p0
+		var tt := (rr.x * d1.y - rr.y * d1.x) / den
+		out.append(p0 + d0 * tt)
+	if absf(_signed_area(out)) <= 1.0 or (_signed_area(out) > 0.0) != ccw:
+		return PackedVector2Array()
+	return out
+
+
+## The flat pattern with a flange of its own width on every edge.
+static func _with_flanges_var(poly: PackedVector2Array, widths: PackedFloat64Array, t_mm: float) -> PackedVector2Array:
+	var n := poly.size()
+	var out := PackedVector2Array()
+	for k in n:
+		var w := float(widths[k])
+		var relief := clampf(t_mm * 2.0, 2.0, w * 0.3)
+		var a := poly[k]
+		var b := poly[(k + 1) % n]
+		var e := (b - a).normalized()
+		var mn := _outward(poly, k)
+		var ext_a := _mitre_ext(poly, k, w) - relief
+		var ext_b := _mitre_ext(poly, (k + 1) % n, w) - relief
+		out.append(a)
+		out.append(a + mn * w - e * maxf(ext_a, 0.0))
+		out.append(b + mn * w + e * maxf(ext_b, 0.0))
+	return out
+
+
+# ---------------------------------------------------------------------------
+# Flanges in the world: frames, mitres, node cuts
+# ---------------------------------------------------------------------------
+
+## Face `f`'s flange on edge va → vb, in world MILLIMETRES: {A, E (unit,
+## va → vb), F (unit, in the face, into it), N (face normal), M (normal of
+## the flange's outer skin, into the face), d (M · x on that skin), L}.
+static func _flange_frame(verts: PackedVector3Array, f: PackedInt32Array, n: Vector3, va: int, vb: int, ang: float, gap: float) -> Dictionary:
+	var A := verts[va] * 1000.0
+	var B := verts[vb] * 1000.0
+	var E := (B - A).normalized()
+	var c := Vector3.ZERO
+	for id in f:
+		c += verts[id]
+	c = c * (1000.0 / f.size())
+	var F := n.cross(E).normalized()
+	if F.dot(c - A) < 0.0:
+		F = -F
+	var a2 := clampf(ang * 0.5, -MAX_HALF_BEND, MAX_HALF_BEND)
+	var M := F * cos(a2) + n * sin(a2)
+	return {"A": A, "E": E, "F": F, "N": n, "M": M, "d": M.dot(A) + gap * 0.5, "L": A.distance_to(B), "ang": ang}
+
+
+## A section point (x into the face, y along its normal, mm) on a frame's
+## edge line at s = 0.
+static func _section_point(ff: Dictionary, q: Vector2) -> Vector3:
+	return (ff["A"] as Vector3) + (ff["F"] as Vector3) * q.x + (ff["N"] as Vector3) * q.y
+
+
+## Where a cut plane [normal, offset] crosses the line P0 + E·s.
+static func _cut_s(cut: Array, P0: Vector3, E: Vector3) -> float:
+	var nn: Vector3 = cut[0]
+	var den := nn.dot(E)
+	if absf(den) < 1e-6:
+		return 0.0
+	return (float(cut[1]) - nn.dot(P0)) / den
+
+
+## A node cut's key: the face, the node, and the seam (its two vertices).
+static func _cut_key(fi: int, vid: int, a: int, b: int) -> String:
+	return "%d|%d|%s" % [fi, vid, DomeLabGeodesic._ekey(a, b)]
+
+
+## The mitre between a flange and its plate's flange on the other edge at
+## the same corner (the builder's rule: the plane bisecting the two outer
+## skins, less a small relief): s along `ff`'s edge line from P0.
+static func _mitre_s(ff: Dictionary, other: Dictionary, P0: Vector3, at_start: bool, depth: float) -> float:
+	var D := (ff["M"] as Vector3) - (other["M"] as Vector3)
+	var den := D.dot(ff["E"])
+	var sm := 0.0 if at_start else float(ff["L"])
+	if absf(den) >= 1e-6:
+		sm = (float(ff["d"]) - float(other["d"]) - MITRE_RELIEF_MM * D.length() - D.dot(P0)) / den
+	return maxf(sm, -MITRE_CAP * depth) if at_start else minf(sm, float(ff["L"]) + MITRE_CAP * depth)
+
+
+## Node cuts where four or more plates meet: for every seam end whose two
+## plates' mitre lines disagree, one plane both flanges of the pair end on,
+## through the line halfway between the two mitre lines and square to the
+## seam, set back just past both plates' mitres. Keyed
+## _cut_key(face, vertex, edge) → [normal, offset] in world mm.
+static func _node_cuts(verts: PackedVector3Array, faces: Array, fnormals: PackedVector3Array, edges: Array,
+		edge_by_key: Dictionary, t: float, r: float, gap: float, depth: float) -> Dictionary:
+	var frames := {}
+	var face_k := {}
+	for fi in faces.size():
+		var f: PackedInt32Array = faces[fi]
+		var m := f.size()
+		for k in m:
+			var ei := int(edge_by_key.get(DomeLabGeodesic._ekey(f[k], f[(k + 1) % m]), -1))
+			var ang := 0.0
+			if ei >= 0 and ((edges[ei] as Dictionary)["faces"] as Array).size() >= 2:
+				ang = float((edges[ei] as Dictionary)["flange_bend"]) * 2.0
+			var ff := _flange_frame(verts, f, fnormals[fi], f[k], f[(k + 1) % m], ang, gap)
+			ff["sec"] = flange_section(ang, t, r, gap, depth)
+			frames["%d|%d" % [fi, k]] = ff
+			face_k["%d|%d" % [fi, ei]] = k
+	var out := {}
+	for ei in edges.size():
+		var e: Dictionary = edges[ei]
+		var fl: Array = e["faces"]
+		if fl.size() < 2:
+			continue
+		for vid in [int(e["a"]), int(e["b"])]:
+			var sides: Array = []
+			for fi in fl:
+				var f: PackedInt32Array = faces[int(fi)]
+				var m := f.size()
+				var k := int(face_k["%d|%d" % [int(fi), ei]])
+				var ff: Dictionary = frames["%d|%d" % [int(fi), k]]
+				var at_start: bool = int(f[k]) == vid
+				var other: Dictionary = frames["%d|%d" % [int(fi), (k - 1 + m) % m if at_start else (k + 1) % m]]
+				var lm := (ff["M"] as Vector3).cross(other["M"]).normalized()
+				if lm.dot(fnormals[int(fi)]) > 0.0:
+					lm = -lm
+				sides.append({"ff": ff, "other": other, "line": lm, "start": at_start})
+			if rad_to_deg((sides[0]["line"] as Vector3).angle_to(sides[1]["line"])) <= NODE_WEDGE_DEG:
+				continue
+			# The pair's end line: halfway between the two plates' mitre lines
+			# (both run in from the node on the seam's plane), cut square to
+			# the seam.
+			var se: Vector3 = (sides[0]["ff"] as Dictionary)["M"]
+			var X := (sides[0]["line"] as Vector3) + (sides[1]["line"] as Vector3)
+			var Xe := X - se * X.dot(se)
+			if Xe.length() < 1e-6:
+				continue
+			Xe = Xe.normalized()
+			# Never within NODE_END_MIN_DEG of the seam itself (a long taper).
+			var Es: Vector3 = (sides[0]["ff"] as Dictionary)["E"]
+			var perp := se.cross(Es).normalized()
+			if perp.dot(Xe) < 0.0:
+				perp = -perp
+			var lim := deg_to_rad(NODE_END_MIN_DEG)
+			if Xe.dot(perp) < sin(lim):
+				Xe = Es * (cos(lim) * signf(Xe.dot(Es) if absf(Xe.dot(Es)) > 1e-9 else 1.0)) + perp * sin(lim)
+			var nP := Xe.cross(se).normalized()
+			var V := verts[vid] * 1000.0
+			var far := int(e["b"]) if vid == int(e["a"]) else int(e["a"])
+			if nP.dot(verts[far] * 1000.0 - V) < 0.0:
+				nP = -nP
+			var h := -INF
+			for sd in sides:
+				var ff: Dictionary = sd["ff"]
+				var E: Vector3 = ff["E"]
+				for q in (ff["sec"]["profile"] as PackedVector2Array):
+					var P0 := _section_point(ff, q)
+					h = maxf(h, nP.dot(P0 + E * _mitre_s(ff, sd["other"], P0, bool(sd["start"]), q.length()) - V))
+			var cut := [nP, h + NODE_CLEAR_MM + nP.dot(V)]
+			for fi in fl:
+				out[_cut_key(int(fi), vid, int(e["a"]), int(e["b"]))] = cut
+	return out
 
 
 ## A convex CCW polygon inset by `d`, its corners rounded: `round_` 0 = sharp,

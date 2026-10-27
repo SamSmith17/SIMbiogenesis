@@ -75,6 +75,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(car != null and xb != null and absf(car.position.x - 0.1) < 1e-4 and absf(xb.position.z - 0.04) < 1e-4, "carriage at x = 100 mm, beam at y = 40 mm")
 	_shot(vp, dir, "kinematics_corexy")
 	await _parts_editor(ui, tree, vp, dir)
+	await _module_drag(ui, tree, vp, dir)
 	# Delta: carriages differ, effector where asked.
 	ui.call("load_builtin", "kossel_mini")
 	ui.call("jog", Vector3(30.0, 0.0, 50.0))
@@ -98,7 +99,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var st1: Dictionary = ui.call("sim_state")
 	mach = ui.call("machine")
 	var beads := mach.bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
-	_ok(beads != null and beads.multimesh.visible_instance_count > 0 and beads.multimesh.visible_instance_count < beads.multimesh.instance_count, "halfway: some beads laid, not all (%s)" % str(beads.multimesh.visible_instance_count if beads != null else -1))
+	_ok(beads != null and (mach as GantryLabBuilder).roads_shown() > 0 and (mach as GantryLabBuilder).roads_shown() < beads.multimesh.instance_count, "halfway: some roads laid, not all (%d)" % (mach as GantryLabBuilder).roads_shown())
 	var tool_pos: Vector3 = st1["pos"]
 	_ok(tool_pos.z > 1.0 and tool_pos.z < 20.0, "tool mid-print at z = %.1f mm" % tool_pos.z)
 	_shot(vp, dir, "simulate_half")
@@ -109,8 +110,53 @@ func run(main: Node, harness: Node) -> Dictionary:
 	ui.call("sim_play", false)
 	ui.call("sim_seek", 1.0)
 	await _settle(tree, 3)
-	_ok(beads.multimesh.visible_instance_count == beads.multimesh.instance_count, "at the end every bead is laid")
+	_ok((mach as GantryLabBuilder).roads_shown() == beads.multimesh.instance_count, "at the end every road is laid")
 	_shot(vp, dir, "simulate_end")
+	# The roads lie flat, one layer tall: no posts at the corners.
+	var flat := true
+	for k in mini(beads.multimesh.instance_count, 200):
+		var rx := (mach as GantryLabBuilder).road_transform(k)
+		if absf(rx.basis.x.normalized().dot(Vector3.UP)) > 0.05 or rx.basis.y.length() > 0.001:
+			flat = false
+	var cab := beads.multimesh.custom_aabb
+	_ok(cab.size.x > 0.019 and cab.size.z > 0.019, "the preview is bounded by the whole print, not its first roads (%s)" % str(cab.size))
+	_ok(flat and beads.multimesh.instance_count > 300, "the cube prints as flat roads a layer tall (%d roads)" % beads.multimesh.instance_count)
+	# The road being laid ends at the nozzle.
+	ui.call("sim_seek", 0.37)
+	await _settle(tree, 3)
+	var st3: Dictionary = ui.call("sim_state")
+	var vis := (mach as GantryLabBuilder).roads_shown()
+	var last := (mach as GantryLabBuilder).road_transform(vis - 1)
+	var o: Vector3 = (mach as GantryLabBuilder).layout()["bead_origin"]
+	var p3: Vector3 = st3["pos"]
+	var tip_local := o + Vector3(p3.x, p3.z, p3.y) * 0.001
+	var dirv := last.basis.x.normalized()
+	var w := last.basis.z.length()
+	var road_end_top := last.origin + last.basis.x - dirv * (w * 0.5) + Vector3.UP * (last.basis.y.length() * 0.5)
+	_ok(road_end_top.distance_to(tip_local) < 0.0008 or not bool(st3.get("extruding", true)), "the road being laid ends at the nozzle (%.2f mm off)" % (road_end_top.distance_to(tip_local) * 1000.0))
+	await _closeup(ui, tree, beads, 0.16, 0.12)
+	_shot(vp, dir, "simulate_closeup_37")
+	ui.call("sim_seek", 1.0)
+	await _closeup(ui, tree, beads, 0.16)
+	_shot(vp, dir, "simulate_closeup_end")
+	# The Trash Printer's 6 mm flake head: its model on the carriage, 6 mm roads.
+	ui.call("load_builtin", "trash_flake_600")
+	ui.call("set_tab", 2)
+	ui.call("load_sample", "cube")
+	await _settle(tree, 6)
+	mach = ui.call("machine")
+	var model := mach.find_child("Model_*", true, false)
+	_ok(model != null or not ResourceLoader.exists("res://Imported Models/Gantry/trash_printer_extruder.glb"), "the flake extruder is drawn from its model")
+	ui.call("sim_seek", 0.45)
+	await _settle(tree, 6)
+	var fb := mach.bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
+	var fw := (mach as GantryLabBuilder).road_transform(0).basis.z.length()
+	_ok(fb != null and (mach as GantryLabBuilder).roads_shown() > 0 and absf(fw - 0.00672) < 0.0003, "6 mm flake roads (%.2f mm wide)" % (fw * 1000.0))
+	_shot(vp, dir, "simulate_flake")
+	await _closeup(ui, tree, fb, 1.3)
+	_shot(vp, dir, "simulate_flake_closeup")
+	await _closeup(ui, tree, fb, 1.1, 0.12)
+	_shot(vp, dir, "simulate_flake_side")
 	# Config tab + audit.
 	ui.call("set_tab", 3)
 	await _settle(tree, 3)
@@ -176,7 +222,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var job_prog := float(sgv.model.get_item(iid)["specs"].get("job_progress", 0.0))
 	_ok(zd != null and zd.position.y > 0.0001 and zd.position.y < 0.012 and xd.position.x > 0.0, "drivers moved in true mm: x %.1f mm, z %.1f mm at %.1f %% of the job" % [xd.position.x * 1000.0, zd.position.y * 1000.0, job_prog * 100.0])
 	var wb := (builder as GantryLabBuilder).bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
-	_ok(wb != null and wb.multimesh.visible_instance_count > 0, "beads laid on the placed bed (%d)" % (wb.multimesh.visible_instance_count if wb != null else -1))
+	_ok(wb != null and (builder as GantryLabBuilder).roads_shown() > 0, "roads laid on the placed bed (%d)" % (builder as GantryLabBuilder).roads_shown())
 	if prop != null and main.has_method("push_camera_claim"):
 		# The player camera re-aims every frame: shoot through a claimed one.
 		var size: Vector3 = builder.get_meta("size_m")
@@ -268,7 +314,15 @@ func _parts_editor(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -
 	var id := str(pick["id"])
 	await HarnessInput.click(root, pick["at"])
 	await _settle(tree, 4)
-	_ok(str(parts.get("sel")) == id, "a click picks %s" % id)
+	var first_mod := str(parts.get("sel_mod"))
+	_ok(not first_mod.is_empty(), "a click picks the module %s is in (%s)" % [id, first_mod])
+	# Double-clicks open the module (and its sub-module) down to the part.
+	for _i in 3:
+		if str(parts.get("sel")) == id:
+			break
+		await HarnessInput.click(root, pick["at"], true)
+		await _settle(tree, 4)
+	_ok(str(parts.get("sel")) == id, "double-clicks open down to %s" % id)
 	_shot(vp, dir, "parts_selected")
 	var res0: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
 	var p0: Dictionary = res0["parts"][id]["part"]
@@ -386,3 +440,77 @@ func _reveal(c: Control, tree: SceneTree) -> void:
 	if n != null:
 		(n as ScrollContainer).ensure_control_visible(c)
 	await _settle(tree, 3)
+
+
+## A module moves as one: on the X5S the left Z axis (motor, coupler, screw,
+## nut, shafts, bearings, carriage) is dragged along its base beam with REAL
+## input, the right one follows in mirror, nothing comes off its mate.
+func _module_drag(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -> void:
+	var root := ui.get_viewport()
+	ui.call("load_builtin", "tronxy_x5s")
+	ui.call("set_tab", 0)
+	await _settle(tree, 8)
+	var parts: RefCounted = ui.get("_parts")
+	_shot(vp, dir, "x5s")
+	var res0: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	var pick := _visible_part(ui, ["zmotor.L", "zmount.L", "zcoupler.L", "zmotor.R", "zmount.R", "zcoupler.R", "skbF.L", "skbB.L", "skbF.R", "skbB.R"])
+	_ok(not pick.is_empty(), "a Z axis part is under the pointer")
+	if pick.is_empty():
+		return
+	var id := str(pick["id"])
+	var side := id.substr(id.length() - 1)
+	await HarnessInput.click(root, pick["at"])
+	await _settle(tree, 4)
+	var mid := str(parts.get("sel_mod"))
+	_ok(mid == "zaxis." + side, "a click on the %s picks the whole Z axis (%s)" % [id, mid])
+	_shot(vp, dir, "x5s_zaxis_selected")
+	var mot: Vector3 = res0["parts"]["zmotor." + side]["world"].origin
+	var a := _screen(ui, mot)
+	var b := _screen(ui, mot + Vector3(0, 0, 0.04))
+	var dir2 := (b - a).normalized()
+	await HarnessInput.drag(root, pick["at"], pick["at"] + dir2 * 40.0, 12)
+	await _settle(tree, 12)
+	var res1: Dictionary = (ui.call("design") as Dictionary)["layout"]["assembly"]
+	var dz := (res1["parts"]["zmotor." + side]["world"].origin as Vector3) - mot
+	_ok(dz.length() > 0.003 and absf(dz.x) < 1e-4 and absf(dz.y) < 1e-4, "the drag moves the Z axis along its beam (%.1f mm)" % (dz.length() * 1000.0))
+	var together := true
+	for pid in ["zcoupler.", "zscrew.", "znut.", "rodF.", "rodB.", "zcar.", "brg0.", "sktF."]:
+		var d0: Vector3 = (res1["parts"][pid + side]["world"].origin as Vector3) - (res0["parts"][pid + side]["world"].origin as Vector3)
+		if d0.distance_to(dz) > 0.0015:
+			together = false
+			print("  %s%s moved %s, motor %s" % [pid, side, str(d0), str(dz)])
+	_ok(together, "coupler, screw, nut, shafts, bearings and plate move with the motor")
+	var other := "R" if side == "L" else "L"
+	var dzo := (res1["parts"]["zmotor." + other]["world"].origin as Vector3) - (res0["parts"]["zmotor." + other]["world"].origin as Vector3)
+	_ok(dzo.distance_to(Vector3(-dz.x, dz.y, dz.z)) < 0.0015, "the other Z axis follows in mirror")
+	var errs := 0
+	for i in res1["issues"]:
+		if str(i["level"]) == "error":
+			errs += 1
+	_ok(errs == 0, "nothing came off its mate (%d errors)" % errs)
+	_shot(vp, dir, "x5s_zaxis_moved")
+	# Opening it: the drive is a sub-module.
+	await HarnessInput.click(root, pick["at"] + dir2 * 40.0, true)
+	await _settle(tree, 4)
+	_ok(str(parts.get("ctx")) == "zaxis." + side, "a double-click opens the Z axis")
+	await HarnessInput.key(root, KEY_ESCAPE)
+	await _settle(tree, 2)
+	await HarnessInput.key(root, KEY_ESCAPE)
+	await _settle(tree, 2)
+	_ok(str(parts.get("ctx")).is_empty(), "Esc steps back out")
+	await HarnessInput.key(root, KEY_Z, true)
+	await _settle(tree, 10)
+
+
+## Aim the studio camera at the print.
+func _closeup(ui: Control, tree: SceneTree, beads: MultiMeshInstance3D, dist: float, pitch: float = 0.45) -> void:
+	await _settle(tree, 2)
+	if beads == null:
+		return
+	var c: Vector3 = (ui.call("machine") as GantryLabBuilder).print_centre_global()
+	ui.set("_target", c)
+	ui.set("_dist", dist)
+	ui.set("_pitch", pitch)
+	ui.set("_yaw", 0.7)
+	ui.call("_update_camera")
+	await _settle(tree, 6)

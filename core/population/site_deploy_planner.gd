@@ -47,22 +47,16 @@ static func camp_hours(structures: int) -> float:
 # Rows
 # ---------------------------------------------------------------------------
 
-## Chore-spec rows for one item and action (deploy / packup). Task ids reuse
-## the Site Projects vocabulary where a renderer keys on them (a linkage's
-## erect / bolts / panels and strip_panels / unbolt / fold_pack drive
-## SiteProject.build_progress / breakdown_progress; everything else is
-## generic).
+## Chore-spec rows for one item and action (deploy / packup). Every prop —
+## a Linkage Lab frame included since 2026-10-27 — is drawn piece by piece by
+## the shared build site (PalletRackBuildSite) off the project's labour, so
+## the rows carry no ghost stamps: only the finish unpacks and the pack packs.
 static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array:
 	var kind := str(item.get("kind", "prop"))
 	if kind == "camp":
 		return _camp_rows(item, action, roster)
 	var model_id := str(item.get("model_id", ""))
 	var pid := str(item.get("id", ""))
-	if model_id == LinkageStructureBuilder.MODEL_ID:
-		var counts: Dictionary = item.get("counts", {})
-		if action == SiteDeploySchedule.ACTION_DEPLOY:
-			return SiteProject.rebuild_spec_rows(counts, pid)
-		return SiteProject.breakdown_spec_rows(counts, pid, item.get("loadout", {}) as Dictionary)
 	var h := labour_hours(float(item.get("mass_kg", -1.0)))
 	var label := str(item.get("label", "structure"))
 	var target := {"kind": "prop", "id": pid}
@@ -96,16 +90,12 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 			"chore_hours": maxf(h * 0.25, 0.1), "priority": 1,
 			"min_workers": 1, "max_workers": mini(2, r), "exposure": "outdoor",
 			"target": target,
-			"effect": {"op": "set_build_phase", "prop_id": pid, "phase": "lay_out", "ghost": 0.3},
 		}, {
 			"task_id": "assemble", "label": "Assemble — %s" % label,
 			"chore_hours": maxf(h * 0.6, 0.1), "priority": 2,
 			"min_workers": 2 if (h > 3.0 and r >= 2) else 1,
 			"max_workers": clampi(r, 2, 6) if r >= 2 else 1, "exposure": "outdoor",
 			"depends_on": ["lay_out"], "target": target,
-			"stage_effects": [{"at": 0.5, "effect": {"op": "set_build_phase",
-				"prop_id": pid, "phase": "assemble_half", "ghost": 0.55}}],
-			"effect": {"op": "set_build_phase", "prop_id": pid, "phase": "assemble", "ghost": 0.85},
 		}, {
 			"task_id": "finish", "label": "Raise and finish — %s" % label,
 			"chore_hours": maxf(h * 0.15, 0.05), "priority": 3,
@@ -122,7 +112,6 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 		"chore_hours": maxf(p * 0.5, 0.1), "priority": 1,
 		"min_workers": 1, "max_workers": mini(4, r), "exposure": "outdoor",
 		"target": target,
-		"effect": {"op": "set_build_phase", "prop_id": pid, "phase": "strip", "ghost": 0.5},
 	}, {
 		"task_id": "pack", "label": "Pack — %s" % label,
 		"chore_hours": maxf(p * 0.5, 0.1), "priority": 2,

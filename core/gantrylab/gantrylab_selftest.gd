@@ -16,7 +16,7 @@ extends SceneTree
 ## EXPECTED_CHECKS: a runtime error aborts a test function while PASS prints.
 ## --import first so the class_names register.
 
-const EXPECTED_CHECKS := 227
+const EXPECTED_CHECKS := 241
 var _pass := 0
 var _fail := 0
 
@@ -309,7 +309,7 @@ func _test_presets_and_bom() -> void:
 		ids[str(p["id"])] = true
 		var bom: Dictionary = d["bom"]
 		_check("preset %s costs and weighs" % str(p["id"]), float(bom["usd"]) > 100.0 and float(bom["kg"]) > 1.0 and int(bom["motors"]) >= 3)
-	_check("14 presets, unique ids", ids.size() == 14)
+	_check("18 presets, unique ids", ids.size() == 18)
 	var s := GantryLabSpec.default_spec("corexy")
 	var d := GantryLabDesign.solve(s)
 	_check("solve cached", GantryLabDesign.solve(s) == d)
@@ -421,8 +421,26 @@ func _test_builder() -> void:
 	b.set_toolpath_preview(pts, PackedInt32Array([0, 1, 1, 1]), 0.4, Color.WHITE)
 	var beads := b.bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
 	_check("beads under the bed node", beads != null and b.bead_parent().name == "Bed" and beads.multimesh.instance_count == 3)
-	b.set_preview_progress(0.67)
-	_check("progress reveals beads", beads.multimesh.visible_instance_count == 2)
+	b.set_preview_progress(0.5)
+	var road1 := b.road_transform(1)
+	_check("progress reveals roads, the current one grown part-way", b.roads_shown() == 2 and absf(road1.basis.x.length() - (0.02 + 0.0004)) < 1e-4)
+	# Roads are flat beads in the plane of the layer, not posts: 40 mm long,
+	# a layer tall, the nozzle wide.
+	b.set_preview_progress(1.0)
+	var r0 := b.road_transform(0)
+	_check("a road runs along its move, a layer tall", absf(r0.basis.x.length() - 0.0404) < 1e-4 and r0.basis.y.length() < 0.0005 and absf(r0.basis.x.normalized().dot(Vector3.UP)) < 1e-3)
+	var mv: Array = []
+	for z in [0.3, 0.6, 0.9]:
+		mv.append({"p0": Vector3(0, 0, z), "p1": Vector3(20, 0, z), "e_mm": 1.0})
+		mv.append({"p0": Vector3(20, 0, z), "p1": Vector3(40, 0, z), "e_mm": 1.0})
+		mv.append({"p0": Vector3(40, 0, z), "p1": Vector3(40, 0, z + 0.3), "e_mm": 0.0})
+	_check("the layer height is read off the program (0.3 mm)", absf(GantryLabBuilder.layer_guess_mm(mv, 0.45) - 0.3) < 1e-6)
+	b.set_print_preview(mv, 0.45, 0.3, Color.WHITE)
+	_check("straight runs merge into one road per layer", b.road_count() == 3)
+	b.set_print_progress(4, 0.5)
+	var beads2 := b.bead_parent().get_node_or_null("Beads") as MultiMeshInstance3D
+	var r1 := b.road_transform(1)
+	_check("mid-way through a layer: the layer below whole, this one up to the nozzle", b.roads_shown() == 2 and absf(r1.basis.x.length() - (0.03 + 0.00045)) < 1e-4)
 	var size: Vector3 = b.get_meta("size_m")
 	_check("size meta", size.x > 0.3 and size.y > 0.3)
 	b.free()

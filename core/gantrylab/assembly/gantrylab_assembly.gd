@@ -989,6 +989,180 @@ static func slide(res: Dictionary, offs: Dictionary, id: String, ray_o: Vector3,
 	return {"mate": sn, "off": off}
 
 
+# ---------------------------------------------------------------------------
+# Modules: groups of parts the editor selects, opens and moves as one
+# ---------------------------------------------------------------------------
+
+## The resolved doc's modules, by id, with parts the build dropped removed.
+static func modules_of(res: Dictionary) -> Dictionary:
+	if res.is_empty():
+		return {}
+	var doc: Dictionary = res["doc"]
+	if doc.has("_mods"):
+		return doc["_mods"]
+	var out := {}
+	for mv in doc.get("modules", []):
+		var m: Dictionary = (mv as Dictionary).duplicate(true)
+		var keep: Array = []
+		for pid in m["parts"]:
+			if res["parts"].has(str(pid)):
+				keep.append(str(pid))
+		m["parts"] = keep
+		m["parent"] = ""
+		out[str(m["id"])] = m
+	for id in out:
+		for k in out[id]["kids"]:
+			if out.has(str(k)):
+				out[str(k)]["parent"] = str(id)
+	doc["_mods"] = out
+	return out
+
+
+## Every part in a module, through its sub-modules.
+static func module_parts(res: Dictionary, mid: String) -> Array:
+	var mods := modules_of(res)
+	if not mods.has(mid):
+		return []
+	var out: Array = (mods[mid]["parts"] as Array).duplicate()
+	for k in mods[mid]["kids"]:
+		out.append_array(module_parts(res, str(k)))
+	return out
+
+
+## The module directly inside `ctx` ("" = the machine) holding part `id`, or
+## "" when the part sits in `ctx` on its own. `inside` is false when the part
+## is not in `ctx` at all.
+static func module_under(res: Dictionary, ctx: String, id: String) -> Dictionary:
+	var mods := modules_of(res)
+	if not ctx.is_empty() and not module_parts(res, ctx).has(id):
+		return {"mod": "", "inside": false}
+	var kids: Array = []
+	if ctx.is_empty():
+		for mid in mods:
+			if str(mods[mid]["parent"]).is_empty():
+				kids.append(mid)
+	else:
+		kids = mods[ctx]["kids"]
+	for k in kids:
+		if module_parts(res, str(k)).has(id):
+			return {"mod": str(k), "inside": true}
+	return {"mod": "", "inside": true}
+
+
+static func _mark_subtree(res: Dictionary, id: String, moving: Dictionary) -> void:
+	for pid in subtree(res, id):
+		moving[pid] = true
+
+
+## Move a group of parts rigidly by `delta` (world, the zero pose): every part
+## whose parent is not moving with it is mated again where the move puts it,
+## the rest follow their parents. {ok, why, patches {id: mate fields}}. Fails
+## when a part cannot land on its own mate there (a nut on a fixed pattern,
+## a bracket off the end of its beam) or a screw would leave its nut.
+static func move_group(res: Dictionary, ids: Array, delta: Vector3) -> Dictionary:
+	var members := {}
+	for i in ids:
+		if res["parts"].has(str(i)):
+			members[str(i)] = true
+	var moving := {}
+	var patches := {}
+	if delta.length() < 1e-7:
+		return {"ok": true, "why": "", "patches": {}}
+	for id in res["order"]:
+		if not members.has(id) or moving.has(id):
+			continue
+		var p: Dictionary = res["parts"][id]["part"]
+		var m: Dictionary = p.get("mate", {})
+		var to := str(m.get("to", ""))
+		if m.is_empty() or to.is_empty() or not res["parts"].has(to):
+			return {"ok": false, "why": "the %s is fixed in place" % label_of(p).to_lower(), "patches": {}}
+		if moving.has(to):
+			_mark_subtree(res, id, moving)
+			continue
+		var tf := feature_of(res["parts"][to]["part"], str(m.get("tf", "")))
+		var cf := feature_of(p, str(m.get("f", "")))
+		var kind := GantryLabMates.mate_type(cf, tf)
+		var w: Transform3D = res["parts"][id]["world"]
+		var want := Transform3D(w.basis, w.origin + delta)
+		var wt: Transform3D = res["parts"][to]["world"]
+		var inf := GantryLabMates.infer(wt, tf, cf, want)
+		var nm := m.duplicate()
+		var anchor := str(m.get("anchor", "start"))
+		nm["s"] = GantryLabMates.rel_s(tf, anchor, float(inf["s"]))
+		if not GantryLabMates.slides_along_y(kind):
+			nm["lat"] = float(inf["lat"])
+		var sn := GantryLabMates.snap(tf, cf, nm, 0.0)
+		var why := "the %s cannot follow: it would leave the %s" % [label_of(p).to_lower(), label_of(res["parts"][to]["part"]).to_lower()]
+		if sn.is_empty():
+			return {"ok": false, "why": why, "patches": {}}
+		var got := GantryLabMates.place(wt, tf, cf, sn)
+		if got.origin.distance_to(want.origin) > 0.0012 or not bool(GantryLabMates.fits(tf, cf, sn)["ok"]):
+			return {"ok": false, "why": why, "patches": {}}
+		var keep := {}
+		for k in ["s", "lat", "turn", "anchor"]:
+			if sn.has(k):
+				keep[k] = sn[k]
+		patches[id] = keep
+		_mark_subtree(res, id, moving)
+	for cx in res["doc"].get("coax", []):
+		var a := str(cx[0])
+		var b := str(cx[1])
+		if not res["parts"].has(a) or not res["parts"].has(b) or moving.has(a) == moving.has(b):
+			continue
+		# One side moving is fine along the shared axis (a nut riding its screw).
+		var ax := ((res["parts"][a]["world"] as Transform3D).basis.y).normalized()
+		if (delta - ax * delta.dot(ax)).length() > 0.0005:
+			return {"ok": false, "why": "the %s would leave the %s's axis — move them together" % [label_of(res["parts"][a]["part"]).to_lower(), label_of(res["parts"][b]["part"]).to_lower()], "patches": {}}
+	return {"ok": true, "why": "", "patches": patches}
+
+
+## Drag a module: slide its anchor along the anchor's own mate to the point
+## under the ray, move the whole module by what that moved it, and its twin
+## module mirrored. {ok, why, patches, delta}.
+static func drag_module(res: Dictionary, offs: Dictionary, mid: String, ray_o: Vector3, ray_d: Vector3, step: float = 0.001) -> Dictionary:
+	var mods := modules_of(res)
+	if not mods.has(mid):
+		return {"ok": false, "why": "no such module", "patches": {}}
+	var anchor := str(mods[mid].get("anchor", ""))
+	if anchor.is_empty() or not res["parts"].has(anchor):
+		return {"ok": false, "why": "the %s does not move as a whole — open it to move its parts" % str(mods[mid]["label"]).to_lower(), "patches": {}}
+	var sl := slide(res, offs, anchor, ray_o, ray_d, step)
+	if sl.is_empty():
+		return {"ok": false, "why": "the %s is bolted where it cannot slide" % label_of(res["parts"][anchor]["part"]).to_lower(), "patches": {}}
+	var p: Dictionary = res["parts"][anchor]["part"]
+	var m: Dictionary = p["mate"]
+	var to := str(m["to"])
+	var tf := feature_of(res["parts"][to]["part"], str(m.get("tf", "")))
+	var cf := feature_of(p, str(m.get("f", "")))
+	var nm: Dictionary = m.duplicate()
+	for k in sl["mate"]:
+		nm[k] = sl["mate"][k]
+	var w2 := GantryLabMates.place(res["parts"][to]["world"], tf, cf, nm)
+	var w1: Transform3D = res["parts"][anchor]["world"]
+	if not w2.basis.is_equal_approx(w1.basis):
+		return {"ok": false, "why": "", "patches": {}}
+	var delta := w2.origin - w1.origin
+	var r := move_group(res, module_parts(res, mid), delta)
+	if not bool(r["ok"]):
+		return r
+	var tw := str(mods[mid].get("twin", ""))
+	if not tw.is_empty() and mods.has(tw):
+		var r2 := move_group(res, module_parts(res, tw), Vector3(-delta.x, delta.y, delta.z))
+		if not bool(r2["ok"]):
+			return {"ok": false, "why": "the mirrored side: " + str(r2["why"]), "patches": {}}
+		for k in r2["patches"]:
+			r["patches"][k] = r2["patches"][k]
+	r["delta"] = delta
+	return r
+
+
+## Apply a group move's patches to the spec (no twin mirroring: the group
+## move already moved the twin side).
+static func apply_patches(spec: Dictionary, patches: Dictionary) -> void:
+	for id in patches:
+		set_part(spec, str(id), {"mate": patches[id]})
+
+
 ## How many of each fastener a part's mates add (its card).
 static func fasteners_of(res: Dictionary, id: String) -> Dictionary:
 	var out := {}

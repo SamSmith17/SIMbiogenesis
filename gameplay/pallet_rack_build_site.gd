@@ -29,9 +29,28 @@ extends Node3D
 ##     onto the plan's makespan, eased between ticks. A lane is drawn only
 ##     while a real person is DOING one of the project's chores on site; their
 ##     own body is hidden (NpcStandIns) and the lane wears their colour.
+##     A PACK-UP (`action: "packup"`) plays the same plan backwards: the
+##     crew's progress runs the build time from the end down to zero, so the
+##     roof, walls and decks come off first and the frames are lowered last.
+##
+## While the prop is UNDER CONSTRUCTION (a deploy or pack-up still running)
+## the rack's own mesh is never shown: it is the finished rack, ghosted, and
+## read as a second rack standing where the crew is building. A site with no
+## readable project leaves the kit crate (or nothing) instead.
+##
+## ANY STRUCTURE (2026-10-27): a crew deploy or pack-up of anything else the
+## site deployment schedule handles — a dome, a zome, a toroid, a Linkage Lab
+## frame, a gantry, flat-pack furniture, a GLB — runs on this same site. Its
+## pieces come from StructureUnits (the real model cut into its pieces, small
+## hardware riding with them) and PalletRackBuildPlan.plan_units schedules
+## them bottom up, skeleton before skin, carried from the yard and fitted one
+## by one; a pack-up plays it backwards. Only a rack has rehearsals and the
+## visitor.
 ##
 ## Coordinates: this node takes ModelRoot's local transform every frame, so its
-## children live in the rack's build frame (metres, grounded).
+## children live in the rack's build frame (metres, grounded). For any other
+## structure the scale is baked into its pieces (metres) and the frame stands
+## `ground shift` up, where the lowest piece sits.
 
 const NODE_NAME := "RackBuildSite"
 const RECORD_KEY := "build_run"
@@ -48,6 +67,9 @@ const PHASE_SPREAD_S := 0.731
 
 ## sig -> {tl, units}. A prop rebuild re-attaches the site; the plan is reused.
 static var _plan_cache: Dictionary = {}
+## prop id -> {t, ms}: the drawn build time of a site whose prop was rebuilt
+## under it, picked up by the site of the rebuilt prop.
+static var _carry: Dictionary = {}
 
 var _prop: PlacedProp = null
 var _model: Node3D = null
@@ -69,6 +91,9 @@ var _planes := {}
 const PLANE_R := 0.8
 const PLANE_MAX_DEG := 25.0
 var _fx_t := 0.0
+var _last_abs_h := 0.0
+var _speed := 1.0
+var _carried := false
 var _finished := false
 var _disposed := false
 var _last_state: Dictionary = {}
@@ -78,8 +103,12 @@ var _label_ms := 0
 ## yet); the record's setting comes back after.
 var _collide := true
 var _coll_ms := 0
+## Any structure but a rack: cut into StructureUnits pieces.
+var _generic := false
+var _shift := 0.0
 # Labour mode.
 var _labour := false
+var _packup := false
 var _t_disp := 0.0
 var _t_target := 0.0
 var _status: Dictionary = {}
@@ -130,16 +159,25 @@ static func clear_rehearsal(main: Node, prop_id: String) -> void:
 		site.queue_free()
 
 
-## PlacedPropRuntime's hook: a pallet rack with a build_run gets a site.
+## PlacedPropRuntime's hook: a pallet rack with a build_run gets a site, and
+## so does ANY structure the site deployment schedule hands to a crew (a
+## labour-mode run with an `action`).
 static func attach(prop: PlacedProp, rec: Dictionary) -> void:
-	if str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID:
+	var run: Variant = rec.get(RECORD_KEY)
+	if not (run is Dictionary):
 		return
-	if not (rec.get(RECORD_KEY) is Dictionary):
+	if str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID and not is_schedule_run(run as Dictionary):
 		return
 	var site := PalletRackBuildSite.new()
 	site.name = NODE_NAME
 	site.configure(rec)
 	prop.add_child(site)
+
+
+## A run stamped by the site deployment schedule (vs a rack rehearsal or a
+## Linkage Lab crew build).
+static func is_schedule_run(run: Dictionary) -> bool:
+	return str(run.get("mode", "")) == "labour" and run.has("action")
 
 
 static func site_for(main: Node, prop_id: String) -> PalletRackBuildSite:
@@ -162,6 +200,28 @@ static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard
 	return tl
 
 
+## The plan for any other structure's pieces, cached by its look + crew.
+static func plan_units_for(look: String, crew_n: int, units: Dictionary, yard_side: String) -> Dictionary:
+	var sig := "units|%s|%d|%s" % [look, crew_n, yard_side]
+	if _plan_cache.has(sig):
+		return _plan_cache[sig]
+	var tl := PalletRackBuildPlan.plan_units(units, crew_n, {"yard_side": yard_side})
+	if _plan_cache.size() > 6:
+		_plan_cache.clear()
+	_plan_cache[sig] = tl
+	return tl
+
+
+## The build frame: the ModelRoot's own for a rack; for anything else its
+## rotation only (the pieces carry the scale) and up to the lowest piece.
+func _site_xf() -> Transform3D:
+	var xf := _model.transform
+	if not _generic:
+		return xf
+	var b := xf.basis.orthonormalized()
+	return Transform3D(b, xf.origin + b * Vector3(0.0, _shift, 0.0))
+
+
 static func _rec_spec(rec: Dictionary) -> Dictionary:
 	var spec: Dictionary = rec.get("rack_spec", {}) as Dictionary
 	if spec.is_empty() and rec.has("record_extra"):
@@ -178,6 +238,7 @@ func configure(rec: Dictionary) -> void:
 	_collide = bool(rec.get("collision_enabled", true))
 	_run = (rec.get(RECORD_KEY, {}) as Dictionary).duplicate(true)
 	_labour = str(_run.get("mode", "")) == "labour"
+	_packup = _labour and str(_run.get("action", "")) == SiteDeploySchedule.ACTION_PACKUP
 
 
 func is_labour() -> bool:
@@ -201,19 +262,40 @@ func _ready() -> void:
 		return
 	_main = get_tree().current_scene
 	var spec := _rec_spec(_rec)
-	_units_root = PalletRackBuilder.build_units_node(spec)
+	_generic = str(_rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID
+	if _generic:
+		_units_root = StructureUnits.units_node(_rec, _model.transform.basis.get_scale(), self)
+		_shift = float(_units_root.get_meta("ground_shift", 0.0))
+	else:
+		_units_root = PalletRackBuilder.build_units_node(spec)
 	add_child(_units_root)
 	for c in _units_root.get_children():
 		_unit_nodes[str(c.get_meta("unit_id", ""))] = c
-	transform = _model.transform
+	transform = _site_xf()
 	# The yard goes on the flattest side of the rack.
 	var units: Dictionary = _units_root.get_meta("units", {})
+	if units.is_empty():
+		# Nothing to cut (no model, an empty mesh): the site steps aside.
+		dispose()
+		return
 	var side := PalletRackBuildPlan.yard_side(PalletRackBuildPlan.units_bounds(units), _ground_raw)
-	_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
+	if _generic:
+		_tl = plan_units_for(StructureUnits.look_key(_rec, _model.transform.basis.get_scale()),
+			int(_run.get("crew_n", DEFAULT_CREW)), units, side)
+	else:
+		_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
 	_model.visible = false
+	_set_crate_visible(false)
 	if _labour:
 		_poll_status()
 		_t_disp = _t_target
+		# The prop was just rebuilt under a running site (a chore effect, the
+		# finish unpacking it): pick up the drawn build where it was.
+		var c: Dictionary = _carry.get(_prop.prop_id, {})
+		_carry.erase(_prop.prop_id)
+		if not c.is_empty() and Time.get_ticks_msec() - int(c["ms"]) < 2000:
+			_carried = true
+			_t_disp = float(c["t"])
 	_build_piles()
 	_build_crew()
 	_build_label()
@@ -222,7 +304,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	if not _disposed and is_instance_valid(_model):
-		_model.visible = true
+		_show_model()
 	_restore_collision()
 	NpcStandIns.set_for(_stand_key(), {})
 
@@ -232,13 +314,46 @@ func _restore_collision() -> void:
 		_prop.set_collision_enabled(_collide)
 
 
+## A scheduled build drawn to its end on the finished prop: the run goes
+## from the record (no rebuild), so a reload does not cut the structure into
+## pieces again just to stand it up.
+func _finish_run() -> void:
+	if not _labour or _main == null or _prop == null or _under_construction():
+		return
+	if str(_status.get("state", "")) != "done" or not is_schedule_run(_run):
+		return
+	PlacedPropService.update_prop_record(_main, _prop.prop_id, {RECORD_KEY: null}, false)
+
+
+## The prop is still a deploy / pack-up in progress (PlacedPropRuntime draws
+## its model as a ghost then).
+func _under_construction() -> bool:
+	return is_instance_valid(_prop) and bool(_prop.get_meta("under_construction", false))
+
+
+## The site steps aside: the rack's own mesh comes back — unless that mesh is
+## the construction ghost, when the kit crate (if any) stands there instead.
+func _show_model() -> void:
+	var uc := _under_construction()
+	_model.visible = not uc
+	_set_crate_visible(uc)
+
+
+func _set_crate_visible(on: bool) -> void:
+	if not is_instance_valid(_prop):
+		return
+	var crate := _prop.get_node_or_null("KitCrate") as Node3D
+	if crate != null:
+		crate.visible = on
+
+
 ## Leave the rack as it stands without a build.
 func dispose() -> void:
 	_disposed = true
 	set_process(false)
 	NpcStandIns.set_for(_stand_key(), {})
 	if is_instance_valid(_model):
-		_model.visible = true
+		_show_model()
 	if is_instance_valid(_units_root):
 		_units_root.visible = false
 	if is_instance_valid(_piles):
@@ -292,10 +407,21 @@ func _poll_status() -> void:
 	var mk := float(_tl.get("makespan", 0.0))
 	match str(_status.get("state", "")):
 		"done":
-			_t_target = mk + LINGER_S + 1.0
-			_t_disp = maxf(_t_disp, _t_target - 0.5)
+			if _packup:
+				# Everything is back in the yard; the pack effect turns the
+				# record into its crate and this site goes with it.
+				_t_target = 0.0
+			else:
+				_t_target = mk + LINGER_S + 1.0
+				# A reload of a long-finished build skips the linger; the
+				# finished prop's own site, rebuilt the moment the crew's
+				# last job unpacked it, carries on from where the pieces
+				# were drawn (_carry) so the last ones still go up.
+				if not _carried:
+					_t_disp = maxf(_t_disp, _t_target - 0.5)
 		"active":
-			_t_target = clampf(float(_status.get("progress", 0.0)), 0.0, 1.0) * mk
+			var pr := clampf(float(_status.get("progress", 0.0)), 0.0, 1.0)
+			_t_target = (1.0 - pr) * mk if _packup else pr * mk
 		_:
 			# Cancelled: the crew stopped; the rack is the record's again.
 			dispose()
@@ -370,6 +496,10 @@ func progress_line() -> String:
 		return "The crew can't finish this rack (%d jobs can't start)" % (_tl["blocked"] as Array).size()
 	if t < 0.0:
 		return "Rehearsal starts in %s" % _fmt_s(-t)
+	if _packup:
+		# The plan runs backwards: t falls from the makespan to zero.
+		return "Taking down · %d %% down · crew %d · %s left · %s" % [int(100.0 * (1.0 - t / maxf(mk, 1.0))),
+			int(_tl["crew"]), _fmt_s(maxf(t, 0.0)), str(_last_state.get("stage", ""))]
 	if t >= mk:
 		return "Built in %s by a crew of %d" % [_fmt_s(mk), int(_tl["crew"])]
 	return "Building · %d %% · crew %d · %s left · %s" % [int(100.0 * t / maxf(mk, 1.0)), int(_tl["crew"]),
@@ -391,25 +521,40 @@ func _process(delta: float) -> void:
 		return
 	var r := SimFxRate.rate(_main, SimFxRate.SYS_NPC) if _main != null else 1.0
 	_fx_t += delta * r
+	# A held clock that still moves (the video export steps it a video frame
+	# at a time): the crew's work loops follow those steps, time-lapsed the
+	# way SimFxRate time-lapses a fast clock (sqrt), or every hammer froze.
+	var ah := float(_main.call("get_absolute_hours")) if _main != null and _main.has_method("get_absolute_hours") else 0.0
+	var moved := ah - _last_abs_h if _last_abs_h > 0.0 else 0.0
+	if r <= 0.0 and moved > 0.0:
+		_fx_t += minf(sqrt(moved * 3600.0 / 30.0), 0.5)
+	_last_abs_h = ah
+	# How fast the clock runs (x real time, smoothed): at speed the crew's
+	# labour moves faster than a 1.2 s ease, and a finished job swaps the
+	# pieces for the real structure (or the crate) mid-ease — the last pieces
+	# popped. So the read and the ease keep pace with the clock.
+	if delta > 0.0 and moved >= 0.0 and moved < 6.0:
+		_speed += (moved * 3600.0 / delta - _speed) * minf(delta * 4.0, 1.0)
 	if _labour:
 		_status_accum += delta
-		if _status_accum >= STATUS_EVERY_S:
+		if _status_accum >= STATUS_EVERY_S / maxf(1.0, _speed / 60.0):
 			_status_accum = 0.0
 			_poll_status()
 			if _disposed:
 				return
-		_t_disp += (_t_target - _t_disp) * (1.0 - exp(-maxf(delta, 0.0) / LABOUR_EASE_S))
+		var tau := LABOUR_EASE_S / maxf(1.0, sqrt(maxf(_speed, 0.0)) / 4.0)
+		_t_disp += (_t_target - _t_disp) * (1.0 - exp(-maxf(delta, 0.0) / tau))
 		if absf(_t_target - _t_disp) < 0.01:
 			_t_disp = _t_target
 	_update(delta)
 
 
 func _update(delta: float) -> void:
-	transform = _model.transform
+	transform = _site_xf()
 	if _labour and not bool(_status.get("found", false)):
 		if not _suspended:
 			_suspended = true
-			_model.visible = true
+			_show_model()
 			_units_root.visible = false
 			_piles.visible = false
 			_label.visible = false
@@ -422,6 +567,7 @@ func _update(delta: float) -> void:
 	if _suspended:
 		_suspended = false
 		_model.visible = false
+		_set_crate_visible(false)
 		_units_root.visible = true
 		_piles.visible = true
 		_label.visible = true
@@ -429,10 +575,15 @@ func _update(delta: float) -> void:
 		_coll_ms = 0
 	var t := build_time()
 	var mk := float(_tl["makespan"])
+	if _under_construction():
+		# The ghost is never the picture: hold the finished (or fully
+		# struck) rack as pieces until the prop is rebuilt for real.
+		t = clampf(t, 0.0, mk + LINGER_S)
 	if t > mk + LINGER_S or t < -5.0:
 		if not _finished:
 			_finished = true
-			_model.visible = true
+			_show_model()
+			_finish_run()
 			_units_root.visible = false
 			_piles.visible = false
 			_label.visible = false
@@ -444,6 +595,7 @@ func _update(delta: float) -> void:
 	if _finished:
 		_finished = false
 		_model.visible = false
+		_set_crate_visible(false)
 		_units_root.visible = true
 		_piles.visible = true
 		_label.visible = true
@@ -455,11 +607,17 @@ func _update(delta: float) -> void:
 		_prop.set_collision_enabled(false)
 	var st := PalletRackBuildPlan.state_at(_tl, t)
 	_last_state = st
+	# Written every frame, not on exit: a rebuilt prop's old site leaves the
+	# tree at the END of the frame, after the new site has started.
+	if _labour and _prop != null:
+		_carry[_prop.prop_id] = {"t": _t_disp, "ms": Time.get_ticks_msec()}
 	_apply_units(st["units"])
 	_apply_crew(st, delta)
 	if Time.get_ticks_msec() - _label_ms > 500:
 		_label_ms = Time.get_ticks_msec()
 		_label.text = progress_line()
+		# A video of the build shows the build, not the HUD text over it.
+		_label.visible = not _filming()
 
 
 func _apply_units(units: Dictionary) -> void:
@@ -702,6 +860,13 @@ func _build_crew() -> void:
 
 
 ## What the crew is doing, over the rack (seen through it, like a map pin).
+## The 🎬 export (or its preview) holds the clock.
+func _filming() -> bool:
+	if _main == null or not _main.has_method("clock_hold_owner"):
+		return false
+	return str(_main.call("clock_hold_owner")) in [ClimelapseCapture.CLOCK_OWNER, "climelapse_preview"]
+
+
 func _build_label() -> void:
 	_label = Label3D.new()
 	_label.name = "Progress"

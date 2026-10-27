@@ -65,12 +65,20 @@ const GUIDES := {
 	"rod_8": {"label": "8 mm rod + LM8UU", "kg_m": 0.78, "kg_carriage": 0.08,
 		"load_n": 400.0, "play_mm": 0.02, "usd_m": 14.0, "usd_carriage": 4.0,
 		"note": "The Prusa i3 guide: two rods and linear bearings; sags past ~400 mm."},
+	# 10 mm rod 0.62 kg/m, LMF10UU 0.05 kg (Samick LMF).
+	"rod_10": {"label": "10 mm rod + LMF10UU", "kg_m": 1.23, "kg_carriage": 0.12,
+		"load_n": 550.0, "play_mm": 0.02, "usd_m": 18.0, "usd_carriage": 5.0,
+		"note": "Stiffer round shafts: the usual guide for a 300 mm lowering bed (two per side, a screw between)."},
+	# 12 mm rod 0.89 kg/m, LMF12UU 0.06 kg.
+	"rod_12": {"label": "12 mm rod + LMF12UU", "kg_m": 1.78, "kg_carriage": 0.14,
+		"load_n": 800.0, "play_mm": 0.02, "usd_m": 22.0, "usd_carriage": 6.0,
+		"note": "For a heavy bed: four 12 mm shafts carry a 600 mm plate without the shafts bowing."},
 	# Hiwin HGR15: rail 1.45 kg/m, block 0.19 kg, C = 11 kN.
 	"hgr15": {"label": "HGR15 linear rail", "kg_m": 1.45, "kg_carriage": 0.25,
 		"load_n": 5000.0, "play_mm": 0.003, "usd_m": 60.0, "usd_carriage": 18.0,
 		"note": "Router-class rail: takes cutting forces without chatter."},
 }
-const GUIDE_ORDER := ["v_wheel", "mgn9", "mgn12", "rod_8", "hgr15"]
+const GUIDE_ORDER := ["v_wheel", "mgn9", "mgn12", "rod_8", "rod_10", "rod_12", "hgr15"]
 
 ## Drives. Belt pitch / width from the GT2 standard (Gates PowerGrip GT2);
 ## belt stiffness from Gates: GT2 6 mm ≈ 5.6 N per 1 % strain per cm width…
@@ -96,6 +104,11 @@ const DRIVES := {
 	"leadscrew_t12_3": {"label": "Tr12 lead screw, 3 mm lead", "kind": "screw", "lead_mm": 3.0, "d_mm": 12.0,
 		"root_mm": 9.8, "kg_m": 0.75, "usd_m": 14.0, "eff": 0.35, "max_n": 1200.0,
 		"note": "Stiffer screw for a long Z or a router axis; still a friction nut."},
+	# M8 × 1.25 threaded rod in a brass hex nut (the Tronxy X3 / early
+	# Prusa Mendel Z): ISO 261 coarse pitch, minor Ø 6.47 mm, ~25 % efficient in brass.
+	"threaded_m8": {"label": "M8 threaded rod (1.25 mm)", "kind": "screw", "lead_mm": 1.25, "d_mm": 8.0,
+		"root_mm": 6.47, "kg_m": 0.32, "usd_m": 2.0, "eff": 0.25, "max_n": 300.0,
+		"note": "Hardware-store Z: cheap and self-locking, but slow, and a bent rod wobbles every layer."},
 	"ballscrew_1605": {"label": "SFU1605 ball screw", "kind": "screw", "lead_mm": 5.0, "d_mm": 16.0,
 		"root_mm": 12.7, "kg_m": 1.35, "usd_m": 45.0, "eff": 0.90, "max_n": 3000.0,
 		"note": "Recirculating balls: 90 % efficient, no backlash with a preloaded nut, the router's axis drive."},
@@ -106,7 +119,7 @@ const DRIVES := {
 		"kg_m": 1.1, "usd_m": 40.0, "eff": 0.85, "max_n": 1500.0,
 		"note": "Mod 1 rack with a 20-tooth pinion: 62.8 mm per turn, any length, needs a geared motor to keep resolution."},
 }
-const DRIVE_ORDER := ["belt_gt2_6", "belt_gt2_9", "belt_gt3_15", "leadscrew_t8_8", "leadscrew_t8_2",
+const DRIVE_ORDER := ["belt_gt2_6", "belt_gt2_9", "belt_gt3_15", "leadscrew_t8_8", "leadscrew_t8_2", "threaded_m8",
 	"leadscrew_t12_3", "ballscrew_1605", "ballscrew_1610", "rack_pinion"]
 
 ## Motors. Holding torque / rated current / mass from typical data sheets
@@ -187,6 +200,14 @@ const TOOLS := {
 		"nozzle_mm": 3.0, "layer_mm": 1.5, "feed_mm_s": 40.0, "max_feed_mm_s": 80.0, "usd": 900.0,
 		"material": "plastic_flake", "material_unit": "kg/h", "filament_mm": 3.0, "density_g_cm3": 0.95,
 		"bed": "alu_plate", "note": "Prints shredded flake straight from the Trash Printer's hopper: 3 mm beads, 1.5 mm layers."},
+	# The Trash Printer's large-format flake extruder (the player's model):
+	# a 2" camlock hopper inlet and wye over an auger barrel, a 150 W band
+	# heater, a 6 mm nozzle. PP / PETE flake; beads about the nozzle wide,
+	# layers half of it.
+	"flake_extruder_6mm": {"label": "Flake extruder, 6 mm (Trash Printer)", "process": "additive", "kg": 4.5, "watts": 350.0,
+		"nozzle_mm": 6.0, "layer_mm": 3.0, "feed_mm_s": 25.0, "max_feed_mm_s": 60.0, "usd": 650.0,
+		"material": "plastic_flake", "material_unit": "kg/h", "filament_mm": 6.0, "density_g_cm3": 0.95,
+		"bed": "alu_plate", "note": "Large-format PP / PETE flake straight from the hopper: 6 mm beads, 3 mm layers, big simple parts fast."},
 	# Clay / mud extruder (WASP / Potterbot style): a 2 L cartridge on the head
 	# or a hose from a pump; ~3 kg on the carriage with the hose.
 	"clay_extruder": {"label": "Clay / mud extruder", "process": "additive", "kg": 3.0, "watts": 150.0,
@@ -219,7 +240,7 @@ const TOOLS := {
 		"material": "", "material_unit": "", "filament_mm": 0.0, "density_g_cm3": 0.0,
 		"bed": "alu_plate", "note": "A plotter or drag-knife cutter: the cheapest way to learn the kinematics."},
 }
-const TOOL_ORDER := ["hotend_04", "hotend_08", "pellet_extruder", "clay_extruder", "spindle_500w",
+const TOOL_ORDER := ["hotend_04", "hotend_08", "pellet_extruder", "flake_extruder_6mm", "clay_extruder", "spindle_500w",
 	"router_1250w", "spindle_2200w", "laser_10w", "laser_40w_co2", "pen"]
 
 ## Beds. kg_m2 = mass per m² of build area; watts_m2 = heater draw.

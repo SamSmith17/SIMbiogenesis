@@ -961,6 +961,48 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 			mm6.set_instance_transform(i, _apply_part_state(t6, keys6[i]) if keyed and i < keys6.size() else t6)
 
 
+## Every MultiMesh instance's transform at the current fold, computed on the
+## CPU from the solved frame (no per-part state): MultiMeshInstance3D ->
+## Array[Transform3D]. A MultiMesh's own transforms live in the
+## RenderingServer, which a headless run (the dummy renderer) does not keep
+## and a real one only hands back by a GPU read — so StructureUnits cuts a
+## frame into its crew pieces from this.
+func instance_transforms() -> Dictionary:
+	var out := {}
+	if _last_frame.is_empty():
+		return out
+	var g := _ground_offset_m()
+	var gv := Vector3(0.0, g, 0.0)
+	if _beam_mm != null:
+		out[_beam_mm] = (_last_frame.get("beams", []) as Array).map(func(b): return beam_transform(b, g))
+	if _bracket_mm != null:
+		out[_bracket_mm] = (_last_frame.get("brackets", []) as Array).map(func(b): return bracket_transform(b, g))
+	if _bolt_mm != null:
+		var bolts: Array = _last_frame.get("bolts", [])
+		out[_bolt_mm] = bolts.map(func(b): return bolt_transform(b, g))
+		if _bolt_head_mm != null:
+			var heads: Array = []
+			for bo in bolts:
+				var dir: Vector3 = (bo["dir"] as Vector3).normalized()
+				var hb := _cylinder_basis(dir, float(bo["head_radius"]) * INCH_TO_M,
+					float(bo["radius"]) * 1.2 * INCH_TO_M)
+				heads.append(Transform3D(hb, (bo["start"] as Vector3) * INCH_TO_M + gv))
+				heads.append(Transform3D(hb, (bo["end"] as Vector3) * INCH_TO_M + gv))
+			out[_bolt_head_mm] = heads
+	if _washer_mm != null:
+		var ws: Array = _last_frame.get("washers", [])
+		out[_washer_mm] = ws.slice(0, mini(ws.size(), _washer_mm.multimesh.instance_count)).map(
+			func(w): return washer_transform(w, g))
+	if _support_mm != null:
+		out[_support_mm] = _last_support.map(func(b): return beam_transform(b, g))
+	if _floor_mm != null and _floor_mm.visible:
+		out[_floor_mm] = _last_floor.slice(0, mini(_last_floor.size(), _floor_mm.multimesh.instance_count)).map(
+			func(b): return beam_transform(b, g))
+	if _panel_mm != null:
+		out[_panel_mm] = _last_panels.map(func(pn): return panel_transform(pn, g))
+	return out
+
+
 ## Metric instance transform for a solver washer (unit cylinder mesh): a disc
 ## of the washer's OD and thickness, normal along its bolt.
 static func washer_transform(w: Dictionary, ground_offset_m: float) -> Transform3D:
