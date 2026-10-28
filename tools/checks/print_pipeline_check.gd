@@ -84,7 +84,11 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	var player := main.find_child("Player", true, false) as Node3D
 	var px := player.global_position.x if player != null else 0.0
 	var pz := player.global_position.z if player != null else 0.0
+	# Daylight for the shots: 10:00 on the world's own day.
 	main.set("time_scale", 0.0)
+	var now := float(main.call("get_absolute_hours"))
+	main.call("set_absolute_hours", floor(now / 24.0) * 24.0 + 10.0)
+	await _settle(tree, 5)
 
 	# ---- Trash printer ------------------------------------------------------
 	var trash := _place(main, "trash_printer", px + 6.0, pz + 2.0)
