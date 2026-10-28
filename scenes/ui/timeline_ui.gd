@@ -1584,13 +1584,13 @@ func _site_deploy() -> SiteDeployDirector:
 func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, span : float,
 		w : float, fnt : Font) -> void:
 	var sd := _site_deploy()
-	if sd == null:
-		return
-	var evs : Array = sd.events()
-	_refresh_deploy_chip(sd)
+	var evs : Array = sd.events() if sd != null else []
+	if sd != null:
+		_refresh_deploy_chip(sd)
+	evs = evs + _burn_flag_events()
 	if evs.is_empty():
 		return
-	var st_active : Dictionary = sd.status()
+	var st_active : Dictionary = sd.status() if sd != null else {}
 	var band_h := _deploy_flag_band.size.y
 	for e in evs:
 		var ev := e as Dictionary
@@ -1601,15 +1601,20 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 		var x := (t - win_start) / span * w
 		if x < -40.0 or x > w + 40.0:
 			continue
+		var is_burn := id.begins_with(BURN_FLAG_PREFIX)
 		var deploy := str(ev.get("action", "")) == SiteDeploySchedule.ACTION_DEPLOY
 		var col := FLAG_DEPLOY_COL if deploy else FLAG_PACKUP_COL
+		if is_burn:
+			col = Color(1.0, 0.45, 0.15)
 		if id == _deploy_drag:
 			col = Color(1.0, 0.85, 0.35)
-		var fired : bool = sd.is_fired(id)
+		var fired : bool = (_playhead_abs() >= t) if is_burn else sd.is_fired(id)
 		var a := 0.95 if fired else 0.6
 		_track.draw_line(Vector2(x, lane_y), Vector2(x, lane_rect.end.y),
 			Color(col.r, col.g, col.b, a), 1.5 if fired else 1.0)
 		var txt := "▲ DEPLOY" if deploy else "▼ PACK UP"
+		if is_burn:
+			txt = "🔥 BURN %s" % str(ev.get("label", ""))
 		var tw := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 7).x + 6.0
 		var tag := Rect2(x, lane_y, tw, band_h)
 		_track.draw_rect(tag, Color(col.r, col.g, col.b, 0.85 if fired else 0.55), true)
@@ -1627,14 +1632,15 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 ## only: the CLIM keys live two rows down and keep their own hit test.
 func _deploy_flag_at(p : Vector2) -> String:
 	var sd := _site_deploy()
-	if sd == null or _deploy_flag_band.size.x <= 0.0:
+	if _deploy_flag_band.size.x <= 0.0:
 		return ""
 	if p.y < _deploy_flag_band.position.y - 2.0 or p.y > _deploy_flag_band.end.y + 2.0:
 		return ""
 	var win := _track_window()
 	var best := ""
 	var best_d := DEPLOY_FLAG_HIT_PX + 28.0   # the tag reads to its right
-	for e in sd.events():
+	var all_ev : Array = (sd.events() if sd != null else []) + _burn_flag_events()
+	for e in all_ev:
 		var ev := e as Dictionary
 		var x := (float(ev.get("at_h", 0.0)) - win[0]) / win[1] * _deploy_flag_band.size.x
 		var d := p.x - x
@@ -1644,8 +1650,47 @@ func _deploy_flag_at(p : Vector2) -> String:
 	return best
 
 
+const BURN_FLAG_PREFIX := "burn:"
+
+## Scheduled burns of burnable props (the loader's burn records), as flag
+## events beside the deploy ones: {id "burn:<prop>", at_h, action "burn", label}.
+func _burn_flag_events() -> Array:
+	var tl := _get_terrain_loader()
+	if tl == null or not tl.has_method("scheduled_burns"):
+		return []
+	var out : Array = []
+	for b in tl.call("scheduled_burns"):
+		var d := (b as Dictionary).duplicate()
+		d["action"] = "burn"
+		out.append(d)
+	return out
+
+
+func _open_burn_menu(flag_id : String, screen_at : Vector2) -> void:
+	if _deploy_menu == null:
+		_deploy_menu = PopupMenu.new()
+		_deploy_menu.id_pressed.connect(_on_deploy_menu)
+		add_child(_deploy_menu)
+	_deploy_menu.clear()
+	_deploy_menu_ids.clear()
+	_deploy_menu_ids.append(flag_id)
+	var tc := ClimelapseExportOptions.timecode_at(_deploy_event_time(flag_id))
+	_deploy_menu.add_item("Burn at %s" % tc, 99)
+	_deploy_menu.set_item_disabled(0, true)
+	_deploy_menu.add_item("Jump the playhead here", 10)
+	_deploy_menu.add_item("Move to the playhead (%s)" % ClimelapseExportOptions.timecode_at(_playhead_abs()), 11)
+	_deploy_menu.add_separator()
+	_deploy_menu.add_item("Cancel this burn", 12)
+	_deploy_menu.popup(Rect2i(Vector2i(screen_at), Vector2i.ZERO))
+
+
 func _deploy_event_time(id : String) -> float:
 	var sd := _site_deploy()
+	if id.begins_with(BURN_FLAG_PREFIX):
+		for e in _burn_flag_events():
+			if str((e as Dictionary).get("id", "")) == id:
+				return float((e as Dictionary).get("at_h", 0.0))
+		return 0.0
 	if sd == null:
 		return 0.0
 	for e in sd.events():
@@ -1756,7 +1801,29 @@ func _confirm_instant(sd : SiteDeployDirector, action : String) -> void:
 	_deploy_confirm.popup_centered()
 
 
+## A burn flag's menu: jump to it, move it to the playhead, cancel it.
+func _on_burn_menu(id : int) -> void:
+	var fid := str(_deploy_menu_ids[0])
+	var pid := fid.substr(BURN_FLAG_PREFIX.length())
+	var tl := _get_terrain_loader()
+	if tl == null:
+		return
+	if id == 10 and _main != null and _main.has_method("set_absolute_hours"):
+		_main.call("set_absolute_hours", _deploy_event_time(fid))
+		_update_display()
+	elif id == 11:
+		tl.call("schedule_prop_burn", pid, _playhead_abs())
+	elif id == 12:
+		tl.call("cancel_prop_burn", pid)
+	if _track != null:
+		_track.queue_redraw()
+
+
 func _on_deploy_menu(id : int) -> void:
+	if (id == 10 or id == 11 or id == 12) and not _deploy_menu_ids.is_empty() \
+			and str(_deploy_menu_ids[0]).begins_with(BURN_FLAG_PREFIX):
+		_on_burn_menu(id)
+		return
 	var sd := _site_deploy()
 	if sd == null:
 		return
@@ -2217,7 +2284,16 @@ func _on_track_input(event: InputEvent) -> void:
 				if _resize_track_idx >= 0:
 					_resize_track_idx = -1
 					_save_track_layout_prefs()
-				if not _deploy_drag.is_empty():
+				if _deploy_drag.begins_with(BURN_FLAG_PREFIX):
+					var tlb := _get_terrain_loader()
+					if _deploy_drag_moved and tlb != null and not is_nan(_deploy_drag_t):
+						tlb.call("schedule_prop_burn", _deploy_drag.substr(BURN_FLAG_PREFIX.length()), _deploy_drag_t)
+					elif tlb != null:
+						_open_burn_menu(_deploy_drag, _track.get_screen_transform() * mb.position)
+					_deploy_drag = ""
+					_deploy_drag_t = NAN
+					_track.queue_redraw()
+				elif not _deploy_drag.is_empty():
 					var sdr := _site_deploy()
 					if _deploy_drag_moved and sdr != null and not is_nan(_deploy_drag_t):
 						sdr.move_event(_deploy_drag, _deploy_drag_t)
@@ -2249,8 +2325,11 @@ func _on_track_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not mb.alt_pressed \
 				and not _deploy_flag_at(mb.position).is_empty():
 			var sdf := _site_deploy()
-			if sdf != null:
-				_open_deploy_menu(sdf, _deploy_flag_at(mb.position), _track.get_screen_transform() * mb.position)
+			var rfid := _deploy_flag_at(mb.position)
+			if rfid.begins_with(BURN_FLAG_PREFIX):
+				_open_burn_menu(rfid, _track.get_screen_transform() * mb.position)
+			elif sdf != null:
+				_open_deploy_menu(sdf, rfid, _track.get_screen_transform() * mb.position)
 			get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and not mb.alt_pressed \
 				and _clim_lane_rect.size.x > 0.0 \

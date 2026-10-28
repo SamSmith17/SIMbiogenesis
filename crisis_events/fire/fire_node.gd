@@ -964,6 +964,12 @@ func _set_meshes_burned(gone: bool) -> void:
 			mesh.visible = true
 			if mesh.has_meta("fire_burned"):
 				mesh.remove_meta("fire_burned")
+			# Scrubbed back out of the pile: take off the charred material
+			# _burn_out_mesh put on (the char overlay returns on its own).
+			if mesh.has_meta("fire_pre_burn_override"):
+				mesh.material_override = mesh.get_meta("fire_pre_burn_override") as Material
+				mesh.remove_meta("fire_pre_burn_override")
+			_burned_meshes.erase(mesh)
 			mesh.set_meta("fire_active", true)
 	if not gone:
 		var n: Node = burn_scope
@@ -1172,6 +1178,10 @@ func _refresh_prop_record() -> bool:
 		# Nothing on the prop yet: fine until our first write has landed —
 		# after that, a missing record means Restore forgot the fire.
 		return not _flushed_once
+	# The record exists, so a later absence means Restore removed it. A node
+	# rebuilt from a saved record (sync_prop_fires) never flushes, so without
+	# this it never disposed itself after Restore and kept burning forever.
+	_flushed_once = true
 	if not _record_dirty:
 		burn_rec = b  # the UI may have edited a duration
 	return true

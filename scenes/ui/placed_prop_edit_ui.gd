@@ -82,6 +82,10 @@ var _fire_ignite_btn: Button
 var _fire_out_btn: Button
 var _fire_restore_btn: Button
 var _fire_refresh_t := 0.0
+var _sched_spins := {}        # year / month / day / hour / minute -> SpinBox
+var _sched_btn: Button
+var _sched_cancel_btn: Button
+var _sched_loaded_for := ""   # which burn time the date boxes were last filled from
 # footer
 var _del_btn: Button
 var _del_armed := false
@@ -709,6 +713,30 @@ func _build_fire_section() -> void:
 	_fire_ignite_btn.icon = UiIcons.icon("flame", 14)
 	_fire_out_btn = _button("Put out", "Out, at the clock's current time (the char stays)", acts, _on_fire_put_out)
 	_fire_restore_btn = _button("Restore", "Forget the fire: the structure as it was", acts, _on_fire_restore)
+	# Schedule: the burn starts at a set date and time and shows as a flag on
+	# the timeline (drag it there to retime). Scrub the clock to see it burn
+	# and un-burn.
+	var sched_title := _small_label("Schedule burn", _row(_fire_box), 120)
+	sched_title.tooltip_text = "Light it at a set date and time. A flag appears on the timeline; scrub the clock across it to watch the structure burn, and back to un-burn it."
+	var date_row := _row(_fire_box)
+	var time_row := _row(_fire_box)
+	for spec in [["year", "Y", 1, 9999, date_row], ["month", "M", 1, 12, date_row],
+			["day", "D", 1, 31, date_row], ["hour", "h", 0, 23, time_row], ["minute", "m", 0, 59, time_row]]:
+		var sb := SpinBox.new()
+		sb.step = 1.0
+		sb.min_value = float(spec[2])
+		sb.max_value = float(spec[3])
+		sb.prefix = "%s " % spec[1]
+		sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sb.custom_minimum_size.x = 56.0
+		sb.get_line_edit().add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		(spec[4] as Control).add_child(sb)
+		_sched_spins[spec[0]] = sb
+	_button("At playhead", "Fill the date and time from the timeline's playhead", time_row, _on_sched_fill_playhead)
+	var sched_acts := _row(_fire_box)
+	_sched_btn = _button("Schedule", "Burn starts at this date and time", sched_acts, _on_sched_burn)
+	_sched_btn.icon = UiIcons.icon("flame", 14)
+	_sched_cancel_btn = _button("Cancel burn", "Remove the scheduled burn and stand the structure back up", sched_acts, _on_sched_cancel)
 
 
 # ---------------------------------------------------------------------------
@@ -1279,6 +1307,14 @@ func _sync_fire() -> void:
 		FireTimeline.fmt_hours(float(auto.get("bonfire_h", 0.0))),
 		FireTimeline.fmt_hours(float(auto.get("ember_h", 0.0))),
 		("%d kg" % int(float(auto.get("mass_kg", 0.0)))) if float(auto.get("mass_kg", -1.0)) > 0.0 else "unknown mass"]
+	# The date boxes follow the record's ignition time (a flag dragged on the
+	# timeline moves it); with no burn they sit at the playhead until edited.
+	var sched_key := "%.4f" % float(burn.get("ignited_h", -1.0)) if not burn.is_empty() else "none"
+	if sched_key != _sched_loaded_for:
+		_sched_loaded_for = sched_key
+		_sched_set_boxes(float(burn["ignited_h"]) if not burn.is_empty() else _clock_hours())
+	_sched_btn.text = "Reschedule" if not burn.is_empty() else "Schedule"
+	_sched_cancel_btn.visible = not burn.is_empty()
 	_fire_ignite_btn.visible = burn.is_empty()
 	_fire_out_btn.visible = not burn.is_empty()
 	_fire_restore_btn.visible = not burn.is_empty()
@@ -1357,6 +1393,18 @@ func _on_burnable_toggled(pressed: bool) -> void:
 	if _syncing or _loader == null or _prop_id.is_empty():
 		return
 	_rec["burnable"] = pressed
+	if not pressed:
+		# Not burnable any more: put the fire out of existence and stand the
+		# prop back up (the FireNode disposes itself once the record is gone).
+		var prop := _find_prop_node()
+		if prop != null and prop.has_method("restore_after_burn"):
+			prop.call("restore_after_burn")
+		if _loader.has_method("clear_prop_burn_record"):
+			_loader.call("clear_prop_burn_record", _prop_id)
+		if _loader.has_method("set_prop_fire_plan"):
+			_loader.call("set_prop_fire_plan", _prop_id, {})
+		_rec.erase("burn")
+		_rec.erase("fire_plan")
 	_loader.call("update_prop_record", _prop_id, {"burnable": pressed})
 	FireNode.invalidate_flammable_mesh_cache()
 	_syncing = true
@@ -1432,11 +1480,58 @@ func _on_fire_put_out() -> void:
 	_refresh_fire_status()
 
 
+func _sched_set_boxes(abs_h: float) -> void:
+	_resolve_main()
+	if _main == null or _main.get("clock") == null:
+		return
+	var d: Dictionary = _main.clock.abs_hours_to_date(abs_h)
+	var tod := float(d["day_time"])
+	var hh := int(floor(tod))
+	var mm := int(floor((tod - float(hh)) * 60.0 + 0.5))
+	if mm >= 60:
+		hh += 1
+		mm = 0
+	(_sched_spins["year"] as SpinBox).set_value_no_signal(float(d["year"]))
+	(_sched_spins["month"] as SpinBox).set_value_no_signal(float(d["month"]))
+	(_sched_spins["day"] as SpinBox).set_value_no_signal(float(d["day"]))
+	(_sched_spins["hour"] as SpinBox).set_value_no_signal(float(mini(hh, 23)))
+	(_sched_spins["minute"] as SpinBox).set_value_no_signal(float(mm))
+
+
+func _sched_abs_hours() -> float:
+	return SiteReportMetrics.date_to_abs_hours(
+		int((_sched_spins["year"] as SpinBox).value), int((_sched_spins["month"] as SpinBox).value),
+		int((_sched_spins["day"] as SpinBox).value),
+		(_sched_spins["hour"] as SpinBox).value + (_sched_spins["minute"] as SpinBox).value / 60.0)
+
+
+func _on_sched_fill_playhead() -> void:
+	_sched_set_boxes(_clock_hours())
+
+
+func _on_sched_burn() -> void:
+	if _loader == null or _prop_id.is_empty() or not _loader.has_method("schedule_prop_burn"):
+		return
+	var at := _sched_abs_hours()
+	if not bool(_loader.call("schedule_prop_burn", _prop_id, at)):
+		_hint("Could not schedule the burn")
+		return
+	_load_record()
+	_syncing = true
+	_sync_fire()
+	_syncing = false
+	_hint("Burn scheduled — see the flag on the timeline")
+
+
+func _on_sched_cancel() -> void:
+	_on_fire_restore()
+
+
 func _on_fire_restore() -> void:
 	var prop := _find_prop_node()
 	if prop != null and prop.has_method("restore_after_burn"):
 		prop.call("restore_after_burn")
-	elif _loader != null and _loader.has_method("clear_prop_burn_record"):
+	if _loader != null and _loader.has_method("clear_prop_burn_record"):
 		_loader.call("clear_prop_burn_record", _prop_id)
 	_rec.erase("burn")
 	_syncing = true

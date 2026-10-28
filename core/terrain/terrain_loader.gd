@@ -14415,6 +14415,66 @@ func clear_prop_burn_record(prop_id: String) -> void:
 	_schedule_prop_layer_save()
 
 
+## --- scheduled burns ---------------------------------------------------------
+## A burn record with an ignition hour in the future IS a scheduled burn: the
+## FireNode draws "nothing yet" until the clock crosses it, then the whole fire
+## plays, and scrubbing back un-burns the structure. These keep that record
+## and give the timeline its flags.
+
+## Burn flags for the timeline: [{id "burn:<prop>", prop_id, at_h, label}].
+func scheduled_burns() -> Array:
+	var out: Array = []
+	if _placed_prop_layer == null:
+		return out
+	for rec in placed_prop_records():
+		if not (rec is Dictionary) or not FireTimeline.is_record((rec as Dictionary).get("burn", null)):
+			continue
+		var pid := str((rec as Dictionary).get("id", ""))
+		var entry := ModelCatalog.find(str((rec as Dictionary).get("model_id", "")))
+		out.append({"id": "burn:%s" % pid, "prop_id": pid,
+			"at_h": float(((rec as Dictionary)["burn"] as Dictionary).get("ignited_h", 0.0)),
+			"label": str(entry.get("label", "structure"))})
+	return out
+
+
+## Schedule (or retime) a prop's burn to start at abs sim hour `at_h`. A new
+## burn takes the player's fire plan over the geometry estimate; a retimed one
+## keeps its durations but forgets extinguisher holds and being put out.
+func schedule_prop_burn(prop_id: String, at_h: float) -> bool:
+	if _placed_prop_layer == null or prop_id.is_empty():
+		return false
+	var rec := _placed_prop_layer.find_by_id(prop_id)
+	if rec.is_empty():
+		return false
+	var burn: Dictionary
+	if FireTimeline.is_record(rec.get("burn", null)):
+		burn = (rec["burn"] as Dictionary).duplicate(true)
+		burn["ignited_h"] = at_h
+		burn["holds"] = []
+		burn["out_h"] = -1.0
+		burn.erase("ignite_pos")
+	else:
+		var est: Dictionary = {}
+		var prop := _find_placed_prop_node(prop_id) as PlacedProp
+		if prop != null:
+			est = FireNode.estimate_for_prop(prop, rec)
+		var plan: Dictionary = rec["fire_plan"] if rec.get("fire_plan") is Dictionary else {}
+		est = FireNode._with_plan(est, plan)
+		burn = FireTimeline.make(at_h, est, est.get("auto_est", est))
+	_placed_prop_layer.update_prop(prop_id, {"burn": burn})
+	_schedule_prop_layer_save()
+	_sync_prop_fires()
+	return true
+
+
+## Take a scheduled / running burn away and stand the structure back up.
+func cancel_prop_burn(prop_id: String) -> void:
+	var prop := _find_placed_prop_node(prop_id) as PlacedProp
+	if prop != null:
+		prop.restore_after_burn()
+	clear_prop_burn_record(prop_id)
+
+
 var _prop_layer_save_pending := false
 ## Persist the prop layer AND tell a multiplayer session a person changed it
 ## (deletes, duplicates, editor commits, pack / unpack used to reach the other
