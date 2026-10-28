@@ -25,6 +25,11 @@ var _line_mm := 0.4
 var _bead_color := Color(0.85, 0.55, 0.2)
 var _mottle := 0.0
 var _material := "filament"
+## The gantry frame maps work Y to local +Z (a reflection: every print came
+## out a mirror image of its model). Work y is mirrored about the middle of
+## the volume on the way to the machine — `_y_mid` (0 on a delta, whose work
+## frame is centred) — for the drivers and the roads alike.
+var _y_mid := 0.0
 
 
 func configure(item_id: String) -> void:
@@ -52,6 +57,7 @@ func _bind() -> void:
 	var spec := _builder.spec()
 	var v: Dictionary = spec["volume"]
 	var kin := str(spec["kinematics"])
+	_y_mid = 0.0 if kin == "delta" else float(v["y_mm"]) * 0.5
 	_park = Vector3(0.0, 0.0, float(v["z_mm"]) * 0.3) if kin == "delta" else Vector3(0.0, 0.0, minf(float(v["z_mm"]), 20.0))
 	var tool := GantryLabParts.tool(str(spec["tool"]["id"]))
 	_line_mm = maxf(float(tool["nozzle_mm"]), 0.1)
@@ -65,7 +71,21 @@ func _bind() -> void:
 	if str(tool["process"]) != "additive":
 		_bead_color = Color(0.35, 0.3, 0.25)
 	_pos_mm = _park
-	_builder.set_drivers_mm(_pos_mm)
+	_drive(_pos_mm)
+
+
+## Work mm → the machine (work y mirrored about the middle).
+func _drive(mm: Vector3) -> void:
+	_builder.set_drivers_mm(Vector3(mm.x, 2.0 * _y_mid - mm.y, mm.z))
+
+
+## The roads node mirrored the same way (about the plane at the middle).
+func _mirror_roads() -> void:
+	var r := _builder.roads()
+	if r == null:
+		return
+	var o: Vector3 = _builder.layout()["bead_origin"]
+	r.transform = Transform3D(PrintRoads.work_basis(), Vector3(0.0, 0.0, 2.0 * (o.z + _y_mid * 0.001)))
 
 
 func _process(delta: float) -> void:
@@ -97,7 +117,7 @@ func _process(delta: float) -> void:
 	var x := delta / _POS_TAU_REAL + absf(sim_dh) / _POS_TAU_SIM
 	var k := 1.0 if snap else clampf(1.0 - exp(-x), 0.0, 1.0)
 	_pos_mm = _pos_mm.lerp(target, k)
-	_builder.set_drivers_mm(_pos_mm)
+	_drive(_pos_mm)
 	if not smp.is_empty():
 		if active:
 			_builder.set_print_progress(int(smp["i"]), float(smp["s"]))
@@ -125,8 +145,9 @@ func _load_job(job_id: String, state: Dictionary) -> void:
 	var col := _bead_color
 	if _material == "filament" and wc is Array and (wc as Array).size() >= 3:
 		col = Color(float(wc[0]), float(wc[1]), float(wc[2]))
-	var line := maxf(float(state.get("line_width_mm", _line_mm)), _line_mm) * 1.12
+	var line := maxf(float(_player.line_mm), 0.05)
 	_builder.set_print_preview(_player.moves(), line, _player.layer_mm, col, _mottle)
+	_mirror_roads()
 
 
 func _clear_job() -> void:
@@ -155,11 +176,12 @@ func begin_print_preview(job: Dictionary, _wet: Color = Color.WHITE) -> void:
 		return
 	if not _job_id.is_empty():
 		return
-	var line := maxf(float(job.get("line_width_mm", _line_mm)), 0.05) * 1.12
+	var line := maxf(float(job.get("line_width_mm", _line_mm)), 0.05)
 	var layer := float(job.get("layer_height_mm", -1.0))
 	if layer <= 0.0:
 		layer = PrintRoads.layer_guess_mm(job["moves"], line)
 	_builder.set_print_preview(job["moves"], line, layer, Color(_bead_color, 0.5), _mottle)
+	_mirror_roads()
 	_builder.set_preview_progress(1.0)
 	var r := _builder.roads()
 	if r != null and r.material_override is StandardMaterial3D:
@@ -171,7 +193,7 @@ func preview_tool_mm(mm: Vector3) -> void:
 	if _builder == null or not _job_id.is_empty():
 		return
 	_pos_mm = mm
-	_builder.set_drivers_mm(mm)
+	_drive(mm)
 
 
 func clear_print_preview() -> void:
@@ -186,6 +208,6 @@ func has_print_preview() -> bool:
 
 ## For probes: where the tool is now (work mm) and the job loaded.
 func debug_state() -> Dictionary:
-	var n := (_player.moves().size() + 1) if _player != null else 0
+	var n := (PrintMoves.count(_player.moves()) + 1) if _player != null else 0
 	return {"job_id": _job_id, "points": n, "pos_mm": _pos_mm, "total_mm": 0.0,
 		"total_s": _player.total_s if _player != null else 0.0, "roads": _builder.road_count() if _builder != null else 0}

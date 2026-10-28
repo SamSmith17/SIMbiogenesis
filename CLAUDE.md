@@ -956,6 +956,16 @@ Godot.exe.exe --headless --path . --script core/machines/print_pipeline_selftest
 # head rises), the planned time is the job's duration, completion credits
 # the part (trash) / leaves a printed object on the map (mud):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/print_pipeline_check.gd -Label print_pipeline -Timeout 900
+# Frames and scale (sandbox): a Trash Printer and a flake gantry slice the
+# same L turned 37°: every road inside the studio's model ghost (×1 and ×2),
+# the same size on both, true scale and a right-handed work frame in the
+# world on both, a typed 240 mm width = scale 2, the scale past 4×:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/print_scale_frame_check.gd -Label print_frames -Timeout 900
+# Workshop machines at true size (sandbox): the Trash Printer and the PP
+# shredder / beam extruder / sheet press stand at their files' heights, the
+# printer bed is 32 x 21.3 in, the press sheet 49 in, the press closes onto
+# its top platen with the sheet riding:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/machine_scale_check.gd -Label machine_scale
 # Solar designer (offline — core/pvlab/): the JA JAM60S20-380 data sheet
 # derived from its 120 half-cut M6 cells, substrings / sample points, the
 # single-diode fit passing through Vmp / Imp, bypass diodes (one shaded path =
@@ -3516,8 +3526,82 @@ planner. Now:
   the bed: the runtime reads the tip off the deepest moving carriage when
   the tool node does not ride an axis, and never clamps the print pose to
   the soft window.
-- Gates: `print_pipeline_selftest` (82) and `tools/checks/print_pipeline_check.gd`
-  (Validation list; 29 PASS on Mount Vernon).
+- Gates: `print_pipeline_selftest` (103), `tools/checks/print_pipeline_check.gd`
+  (29 PASS on Mount Vernon) and `tools/checks/print_scale_frame_check.gd` (35).
+- **Improvement pass (2026-10-28).** Four player reports, each with its trap:
+  - **"A gyroid cube prints to 10 % with infill, full height without."**
+    The slicer stopped at a 160 000-move cap and handed back the partial
+    print with only a warning; infill just hit the cap sooner. A move was a
+    Dictionary, measured at ~810 bytes, and a 150 mm gyroid at a 0.45 mm
+    line is ~3 M moves (2.5 GB). Moves are now `PrintMoves`
+    (`core/machines/print_moves.gd`, packed arrays, 37 bytes a move) from
+    the slicer through PrintJob, the planner, PrintRoads, the G-code writer
+    (streamed to the file in 20 000-line chunks) and the job store.
+    `max_moves` (8 M) REFUSES with advice; it never truncates. Every reader
+    takes either form through `PrintMoves.from_any` (G-code parses and the
+    gantry designer still hand over Arrays of dicts); `GantryLabMotion.plan`
+    keeps "moves" as given plus "pm" packed. The job store saves the PLAN
+    too, so a million-move job is not re-planned when the world loads it.
+    Measured: a 450 mm gyroid at a 6 mm line is 906 k moves, sliced in
+    11 s, planned in 0.8 s, laid in 0.6 s; the 150 mm one at 0.45 mm is
+    3.27 M moves over all 750 layers, 21 s to slice (on the worker), 2.9 s
+    to plan, 2.1 s to lay, 523 MB with the mesh.
+  - **PrintRoads past `DISPLAY_MAX_ROADS` (250 k)** merges curves into
+    chords: the sagitta from arc − chord (≈ 8 s²/3L) plus the last vertex's
+    offset, within a tolerance that grows with the overflow. Progress still
+    runs move by move (arc length per road, the chord scaled). Rows are
+    packed and the MultiMesh buffer is uploaded whole past `BULK_WRITE`
+    instance writes (a CPU copy `_buf`). `set_base_color` recolours
+    without a re-lay. The budget is a target: infill strokes are separate
+    roads (travels between), so that 3.27 M-move gyroid still draws ~500 k.
+  - **"The ghost and the print are rotated out of phase."** Two causes:
+    (1) roads map work (x, y, z) to local (x, z, y), a REFLECTION, while the
+    STL ghost is (x, z, −y): a mirror image, and so the Turn spun them
+    opposite ways; (2) the ghost was centred on the TURNED footprint's
+    centre, not the turned file centre. The studio now puts the roads under
+    `PrintRoads.work_basis()` (work +Y → −Z) with the bed's front-left at
+    +Z, and the slicer returns `place_xy` (where the model's own box centre
+    lands). The GLB runtime picks the work-Y direction that makes X × Y =
+    up (`_y_sign`), and GantryRuntime mirrors work Y about the volume's
+    middle (the gantry frame maps Y → +Z): prints in the world were mirror
+    images of their models too. A finished mud print is baked through the
+    reflection (`bake_mesh(..., post)` reverses the winding) so the placed
+    object has a proper turn.
+  - **"The scale is fixed at 4×; let me set the width."** One exponential
+    scale slider from 0.001× to 1000× for every printer (the mud printer's
+    8× cap also clamped `set_slicer` calls), never reset on reopen, and a
+    **Size (mm)** row: W / D / H spin boxes (the model's own extents × the
+    scale; type one, the scale follows) with 1:1 and Fit bed.
+  - **"Scaling is off between parametric and GLB printers."** A designed
+    gantry is "generic FDM" to FdmPrinterCaps, whose 0.2–2.5 mm line range
+    clamped the 6 mm flake head to 2.5 mm roads; `_fit_ranges` now widens
+    every range to the machine's own head. GantryRuntime also drew roads
+    12 % wider than the job. A delta's work origin is the bed centre
+    (`origin_centred`, `bed_centre_mm()`); the setup centred prints at
+    work/2 on it.
+  - **The Trash Printer model was 1.79× too big.** Its GLB is already in
+    true metres (SimLab inches under a 0.0254 node; NEMA 23 motor 56 mm,
+    bed 32 × 21.3 in), and the catalog's `reference_height_m: 2.0` fitted
+    its 1.12 m on top of that. Removed: the bed is 813 × 541 mm and the
+    player's profile travel 610 × 368 × 411 mm (its preset work volume is
+    still a 600 mm cube). Before trusting a `reference_height_m`, dump the
+    GLB (`glb_dump_diag.gd`): a 0.0254 node means it is already metres.
+    The PP shredder / beam extruder / sheet press had the same double fit
+    (files 1.01 / 1.06 / 1.24 m fitted to 1.6 / 1.8 / 2.0 m; their M12 x 40
+    bolts, 49 in sheet and 1.245 m beam confirm the files) — removed too.
+    The CNC router (1.303 vs 1.3) and HomeBiogas (1.26 vs 1.3) are fine.
+    The sheet press runtime wrote its 0.12 m stroke raw into an inch-space
+    node (0.12 in, and DOWNWARD — its "Z axis" is the lower platen on a
+    jack); it now measures the gap to the fixed platen (208 mm), closes
+    toward the sheet's side and carries the sheet. The beam clip shader
+    used `##` comments and never compiled. Gate:
+    `tools/checks/machine_scale_check.gd` (15).
+  - Slicing runs on a WorkerThreadPool task (progress, a `cancel` Callable
+    the slicer polls, a change mid-slice restarts it, close waits). The
+    harness API (`load_stl`, `set_slicer`, `job()`) finishes pending slices
+    synchronously. A fresh slice shows the whole print on the plate.
+  - Diag: `tools/diag/slice_probe.gd -- --stl=<path> [--scale --line --layer
+    --infill=0,20 --plan]` prints layers, the top road reached, moves, ms.
 
 ## Toroid designer (core/toroidlab/, 2026-10-26)
 

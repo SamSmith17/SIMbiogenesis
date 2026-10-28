@@ -22,6 +22,16 @@ var _sheet_rest_scale: Vector3 = Vector3.ONE
 var _sheet_thick_axis: int = 1
 var _bound := false
 var _was_completed := false
+## Closing: +1 / −1 along the travel axis (toward the side the sheet lies on,
+## where the fixed platen is), the gap to the fixed platen in the parent's
+## units (0 = not found, use the stroke), metres per parent unit.
+var _close_sign := 1.0
+var _gap_units := 0.0
+var _m_per_unit := 1.0
+var _sheet_rest_pos := Vector3.ZERO
+var _sheet_rides := false
+## Probes: ≥ 0 drives the press at this compression (0 open … 1 closed).
+var force_compression := -1.0
 
 
 func configure(graph_item_id: String, stroke_m: float = DEFAULT_STROKE_M) -> void:
@@ -53,14 +63,71 @@ func _bind() -> void:
 		_sheet_node.visible = false
 	if _z_node == null:
 		push_warning("PpSheetPressRuntime: no '%s' node under %s" % [DEFAULT_Z_NODE, model.name])
+	else:
+		_measure_press(model)
 	_bound = true
+
+
+## The press's geometry in the moving platen's parent frame: which way it
+## closes (toward the sheet, which rests on it) and how far (to the nearest
+## fixed part above the sheet's footprint — the top platen).
+func _measure_press(model: Node3D) -> void:
+	var parent := _z_node.get_parent() as Node3D
+	if parent == null:
+		return
+	var a := _z_axis
+	var axis := Vector3.ZERO
+	axis[a] = 1.0
+	_m_per_unit = maxf((parent.global_transform.basis * axis).length(), 1e-9)
+	if _sheet_node == null:
+		return
+	_sheet_rest_pos = _sheet_node.position
+	_sheet_rides = _sheet_node.get_parent() == parent
+	var zb := _aabb_in(parent, _z_node)
+	var sb := _aabb_in(parent, _sheet_node)
+	_close_sign = 1.0 if sb.get_center()[a] >= zb.get_center()[a] else -1.0
+	var sheet_far := sb.end[a] if _close_sign > 0.0 else sb.position[a]
+	var b := (a + 1) % 3
+	var c := (a + 2) % 3
+	var best := INF
+	for mi in _mesh_instances(model):
+		if _z_node.is_ancestor_of(mi) or mi == _sheet_node or _sheet_node.is_ancestor_of(mi):
+			continue
+		var m := _aabb_in(parent, mi)
+		# Covers most of the sheet's footprint (a platen, not a post).
+		var ob := minf(m.end[b], sb.end[b]) - maxf(m.position[b], sb.position[b])
+		var oc := minf(m.end[c], sb.end[c]) - maxf(m.position[c], sb.position[c])
+		if ob < sb.size[b] * 0.5 or oc < sb.size[c] * 0.5:
+			continue
+		var near := m.position[a] - sheet_far if _close_sign > 0.0 else sheet_far - m.end[a]
+		if near > -1e-4 and near < best:
+			best = near
+	if is_finite(best):
+		_gap_units = maxf(best, 0.0)
+
+
+func _aabb_in(frame: Node3D, n: Node3D) -> AABB:
+	# A mesh's own box (its subtree walk would climb past it to the root).
+	var local := (n as MeshInstance3D).mesh.get_aabb() if n is MeshInstance3D else _local_aabb(n)
+	var xf := _xform_relative_to(frame, n)
+	var out := AABB(xf * local.position, Vector3.ZERO)
+	for i in 8:
+		out = out.expand(xf * local.get_endpoint(i))
+	return out
+
+
+## For probes: the measured close direction, gap (m) and whether the sheet rides.
+func debug_state() -> Dictionary:
+	return {"axis": _z_axis, "sign": _close_sign, "gap_m": _gap_units * _m_per_unit,
+		"m_per_unit": _m_per_unit, "sheet_rides": _sheet_rides,
+		"z_offset_m": ((_z_node.position - _z_rest).length() * _m_per_unit) if _z_node != null else 0.0}
 
 
 func _process(_delta: float) -> void:
 	if not _bound:
 		return
 	var state := _read_graph_state()
-	var compression := float(state.get("compression", 0.0))
+	var compression := float(state.get("compression", 0.0)) if force_compression < 0.0 else force_compression
 	var phase := str(state.get("phase", "idle"))
 	var completed := bool(state.get("completed", false))
 	var active := bool(state.get("active", false))
@@ -71,9 +138,18 @@ func _process(_delta: float) -> void:
 
 	if _z_node != null and is_instance_valid(_z_node):
 		var pos := _z_rest
-		# Close toward −local travel axis (platen presses onto the sheet).
-		pos[_z_axis] = _z_rest[_z_axis] - stroke * clampf(compression, 0.0, 1.0)
+		# The moving platen closes toward the fixed one by the gap measured
+		# at bind (in the parent's units — the GLB's inches); the sheet rides
+		# on it. Before: a 0.12 m stroke written raw moved it 0.12 in, away
+		# from the top plate, and the sheet stayed behind.
+		var units := _gap_units if _gap_units > 0.0 else stroke / maxf(_m_per_unit, 1e-6)
+		var delta := _close_sign * units * clampf(compression, 0.0, 1.0)
+		pos[_z_axis] = _z_rest[_z_axis] + delta
 		_z_node.position = pos
+		if _sheet_node != null and is_instance_valid(_sheet_node) and _sheet_rides:
+			var sp := _sheet_rest_pos
+			sp[_z_axis] += delta
+			_sheet_node.position = sp
 
 	if _sheet_node != null and is_instance_valid(_sheet_node):
 		var show_sheet := completed or (phase == "done")

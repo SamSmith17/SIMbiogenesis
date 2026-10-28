@@ -118,7 +118,7 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	await _settle(tree, 5)
 	var job: Dictionary = modal.call("job")
 	_ok(bool(job.get("ok", false)) and int(job.get("layers", 0)) >= 6 and float(job.get("total_s", 0.0)) > 60.0,
-		"sliced: %s, %s, %s" % [UiText.count(int(job.get("layers", 0)), "layer"), UiText.count((job.get("moves", []) as Array).size(), "move"), GantryLabMotion.fmt_duration(float(job.get("total_s", 0.0)))])
+		"sliced: %s, %s, %s" % [UiText.count(int(job.get("layers", 0)), "layer"), UiText.count(PrintMoves.count(job.get("moves", [])), "move"), GantryLabMotion.fmt_duration(float(job.get("total_s", 0.0)))])
 	var ds: Dictionary = trt.debug_state()
 	_ok(bool(ds.get("bed_lowering", false)) and bool(ds.get("frame_valid", false)), "trash printer: a lowering bed, frame measured (work %s)" % str(ds.get("work")))
 	_ok(trt.has_print_preview(), "the ghost of the print is on the real bed")
@@ -135,7 +135,7 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	var written: String = modal.call("export_gcode", gpath)
 	var f := FileAccess.open(gpath, FileAccess.READ)
 	var back := GantryLabGcode.parse(f.get_as_text()) if f != null else {}
-	_ok(not written.is_empty() and bool(back.get("ok", false)) and absi((back["moves"] as Array).size() - (job["moves"] as Array).size() - 1) <= 2,
+	_ok(not written.is_empty() and bool(back.get("ok", false)) and absi((back["moves"] as Array).size() - PrintMoves.count(job["moves"]) - 1) <= 2,
 		"G-code exported and read back: %d moves" % int((back.get("moves", []) as Array).size()))
 	modal.call("start_print")
 	await _settle(tree, 5)

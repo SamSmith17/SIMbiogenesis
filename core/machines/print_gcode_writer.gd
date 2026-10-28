@@ -18,7 +18,17 @@ extends RefCounted
 ## (bool, G28), park_z_mm, travel_hop_mm (grbl), relay_on / relay_off, decimals.
 
 
-static func write(moves: Array, opts: Dictionary = {}) -> String:
+## The program as one string (moves: PrintMoves or an Array of move dicts).
+static func write(moves: Variant, opts: Dictionary = {}) -> String:
+	return _emit(PrintMoves.from_any(moves), opts, null)
+
+
+## Lines are flushed to `fh` every FLUSH_LINES when it is given (a large
+## print is millions of lines), else collected and returned.
+const FLUSH_LINES := 20000
+
+
+static func _emit(moves: PrintMoves, opts: Dictionary, fh: FileAccess) -> String:
 	var dialect := str(opts.get("dialect", "reprap"))
 	var dec := clampi(int(opts.get("decimals", 3)), 2, 5)
 	var fmt := "%%.%df" % dec
@@ -57,13 +67,15 @@ static func write(moves: Array, opts: Dictionary = {}) -> String:
 	var last_z := NAN
 	var hop := maxf(float(opts.get("travel_hop_mm", 0.0)), 0.0)
 	var first := true
-	for mv in moves:
-		var m: Dictionary = mv
-		var p0: Vector3 = m["p0"]
-		var p1: Vector3 = m["p1"]
-		var e_mm := float(m.get("e_mm", 0.0))
-		var rapid := bool(m.get("rapid", false)) or e_mm <= 0.0
-		var feed := float(m.get("feed_mm_s", 30.0)) * 60.0
+	for i in moves.size():
+		if fh != null and lines.size() >= FLUSH_LINES:
+			fh.store_string("\n".join(lines) + "\n")
+			lines = PackedStringArray()
+		var p0: Vector3 = moves.p0[i]
+		var p1: Vector3 = moves.p1[i]
+		var e_mm := float(moves.e[i])
+		var rapid := moves.rapid[i] != 0 or e_mm <= 0.0
+		var feed := float(moves.feed[i]) * 60.0
 		if first:
 			lines.append("G0 X%s Y%s Z%s F%.0f" % [fmt % p0.x, fmt % p0.y, fmt % p0.z, feed])
 			first = false
@@ -114,12 +126,14 @@ static func write(moves: Array, opts: Dictionary = {}) -> String:
 		lines.append("M84 ; motors off")
 	else:
 		lines.append("M2")
+	if fh != null:
+		fh.store_string("\n".join(lines) + "\n")
+		return ""
 	return "\n".join(lines) + "\n"
 
 
-## Write to a file; returns the path or "" on failure.
-static func write_file(moves: Array, path: String, opts: Dictionary = {}) -> String:
-	var text := write(moves, opts)
+## Write to a file, streamed; returns the path or "" on failure.
+static func write_file(moves: Variant, path: String, opts: Dictionary = {}) -> String:
 	var dir := path.get_base_dir()
 	if dir.begins_with("user://") or dir.begins_with("res://"):
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
@@ -128,6 +142,6 @@ static func write_file(moves: Array, path: String, opts: Dictionary = {}) -> Str
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return ""
-	f.store_string(text)
+	_emit(PrintMoves.from_any(moves), opts, f)
 	f.close()
 	return path

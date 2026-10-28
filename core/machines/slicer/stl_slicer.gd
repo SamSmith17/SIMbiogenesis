@@ -40,14 +40,28 @@ extends RefCounted
 ## mode ("solid" | "vase"), print_speed_mm_s, travel_speed_mm_s,
 ## first_layer_speed_mm_s, outer_wall_speed_mm_s, scale, rotation_deg,
 ## centre_xy (Vector2, where the footprint centre lands), z_hop_mm,
-## filament_mm (the feedstock bore the E words are in), max_moves.
+## filament_mm (the feedstock bore the E words are in), max_moves (a ceiling:
+## a print that needs more is REFUSED with advice, never cut short — the old
+## 160 000 cap silently ended a gyroid cube a tenth of the way up),
+## progress (a Callable taking 0..1, called from whatever thread slices),
+## cancel (a Callable returning true to stop: the result is {ok: false,
+## cancelled: true}).
+##
+## The result carries `place_xy`: where the model's OWN bounding-box centre
+## (in its file's coordinates) lands on the bed after the scale, the turn and
+## the centring — what a preview of the mesh needs to sit exactly on the
+## sliced roads (the turned footprint's centre is a different point for any
+## shape that is not symmetric).
+##
+## The moves come back packed (`PrintMoves`, ~37 bytes a move): a large
+## lattice at a fine line is millions of moves.
 
 const DEFAULTS := {
 	"layer_height_mm": 0.2, "line_width_mm": 0.45, "walls": 2, "infill_pct": 20.0,
 	"infill_pattern": "lines", "top_layers": 3, "bottom_layers": 3, "mode": "solid",
 	"print_speed_mm_s": 50.0, "travel_speed_mm_s": 120.0, "first_layer_speed_mm_s": 0.0,
 	"outer_wall_speed_mm_s": 0.0, "scale": 1.0, "rotation_deg": 0.0,
-	"z_hop_mm": 0.0, "filament_mm": 1.75, "max_moves": 160000,
+	"z_hop_mm": 0.0, "filament_mm": 1.75, "max_moves": 8000000,
 }
 ## Loops are simplified to this share of the line width (never under 5 µm).
 const SIMPLIFY_FRAC := 0.02
@@ -91,6 +105,8 @@ static func slice_triangles(tris: Array, settings_in: Dictionary = {}) -> Dictio
 	var hop := maxf(float(s["z_hop_mm"]), 0.0)
 	var d_fil := maxf(float(s["filament_mm"]), 0.05)
 	var max_moves := maxi(int(s["max_moves"]), 1000)
+	var progress: Callable = s.get("progress", Callable())
+	var cancel: Callable = s.get("cancel", Callable())
 
 	# 1. Transform: scale, turn, base on the bed, footprint centred.
 	var xf := _transform(tris, scale, rot)
@@ -101,6 +117,9 @@ static func slice_triangles(tris: Array, settings_in: Dictionary = {}) -> Dictio
 	if height <= 1e-6:
 		return {"ok": false, "error": "the model has no height"}
 	var shift := Vector3(centre.x - (bmin.x + bmax.x) * 0.5, centre.y - (bmin.y + bmax.y) * 0.5, -bmin.z)
+	var c0: Vector2 = xf["src_centre"]
+	var c0r := Vector2(c0.x * cos(rot) - c0.y * sin(rot), c0.x * sin(rot) + c0.y * cos(rot)) * scale
+	var place_xy := c0r + Vector2(shift.x, shift.y)
 	for i in tri_pts.size():
 		tri_pts[i] += shift
 	bmin += shift
@@ -109,7 +128,9 @@ static func slice_triangles(tris: Array, settings_in: Dictionary = {}) -> Dictio
 
 	# 2. Layers: the section through each layer's middle.
 	var n_layers := maxi(int(ceil(height / h - 1e-6)), 1)
-	var layers := _sections(tri_pts, n_layers, h)
+	var layers := _sections(tri_pts, n_layers, h, progress, cancel)
+	if layers.is_empty():
+		return {"ok": false, "cancelled": true, "error": "cancelled"}
 	var tol := maxf(w * SIMPLIFY_FRAC, 0.005)
 	var epm := w * h / (PI * d_fil * d_fil * 0.25)   # mm of feedstock per mm of road
 
@@ -122,8 +143,12 @@ static func slice_triangles(tris: Array, settings_in: Dictionary = {}) -> Dictio
 	var layer_starts := PackedInt32Array()
 	var layer_z := PackedFloat32Array()
 	var min_loop_len := w * MIN_LOOP_W
-	var coarsened := false
 	for li in n_layers:
+		if li % 8 == 0:
+			if progress.is_valid():
+				progress.call(0.4 + 0.6 * float(li) / float(n_layers))
+			if cancel.is_valid() and bool(cancel.call()):
+				return {"ok": false, "cancelled": true, "error": "cancelled"}
 		var z_nozzle := minf(float(li + 1) * h, height + 1e-6)
 		var loops: Array = layers[li]
 		var kept: Array = []
@@ -184,36 +209,39 @@ static func slice_triangles(tris: Array, settings_in: Dictionary = {}) -> Dictio
 			else:
 				_infill(em, inner_region, angle, w / (pct * 0.01), z_nozzle, layer_speed)
 		if em.moves.size() > max_moves:
-			coarsened = true
-			break
+			# Never a partial print: the whole height or nothing, with the
+			# numbers that say what to change.
+			var est := int(float(em.moves.size()) * float(n_layers) / float(li + 1))
+			return {"ok": false, "too_many_moves": true, "error": "this print needs about %s moves (the limit is %s) — raise the layer height or the line width, lower the infill, or scale it down" % [
+				UiText.thousands(est), UiText.thousands(max_moves)]}
+	if progress.is_valid():
+		progress.call(1.0)
 	if em.moves.is_empty():
 		return {"ok": false, "error": "nothing to print (no closed sections)"}
-	if coarsened:
-		warnings.append("stopped after %d moves — raise the layer height or lower the infill" % max_moves)
 	var ext_min := Vector3(INF, INF, INF)
 	var ext_max := Vector3(-INF, -INF, -INF)
 	var extrusion := 0.0
 	var feed_mm := 0.0
 	var rapid_mm := 0.0
 	var road_mm := 0.0
-	for mv in em.moves:
-		var m: Dictionary = mv
-		var l := (m["p0"] as Vector3).distance_to(m["p1"] as Vector3)
-		if bool(m["rapid"]):
+	var pm: PrintMoves = em.moves
+	for i in pm.size():
+		var a := pm.p0[i]
+		var b := pm.p1[i]
+		var l := a.distance_to(b)
+		if pm.rapid[i] != 0:
 			rapid_mm += l
 		else:
 			feed_mm += l
-		var e := float(m["e_mm"])
+		var e := pm.e[i]
 		if e > 0.0:
 			extrusion += e
 			road_mm += l
-			var p0: Vector3 = m["p0"]
-			var p1: Vector3 = m["p1"]
-			ext_min = ext_min.min(p0.min(p1))
-			ext_max = ext_max.max(p0.max(p1))
+			ext_min = ext_min.min(a.min(b))
+			ext_max = ext_max.max(a.max(b))
 	return {
 		"ok": true, "kind": "stl", "moves": em.moves, "bounds_min": ext_min, "bounds_max": ext_max,
-		"model_min": bmin, "model_max": bmax,
+		"model_min": bmin, "model_max": bmax, "place_xy": place_xy,
 		"extrusion_mm": extrusion, "total_feed_mm": feed_mm, "total_rapid_mm": rapid_mm,
 		"road_mm": road_mm, "layers": n_layers, "layer_count": n_layers,
 		"layer_starts": layer_starts, "layer_z": layer_z,
@@ -236,16 +264,21 @@ static func _transform(tris: Array, scale: float, rot: float) -> Dictionary:
 	var sn := sin(rot)
 	var bmin := Vector3(INF, INF, INF)
 	var bmax := Vector3(-INF, -INF, -INF)
+	var smin := Vector2(INF, INF)
+	var smax := Vector2(-INF, -INF)
 	var k := 0
 	for t in tris:
 		for v in t:
-			var p: Vector3 = (v as Vector3) * scale
+			var vv: Vector3 = v
+			smin = smin.min(Vector2(vv.x, vv.y))
+			smax = smax.max(Vector2(vv.x, vv.y))
+			var p: Vector3 = vv * scale
 			var q := Vector3(p.x * c - p.y * sn, p.x * sn + p.y * c, p.z)
 			pts[k] = q
 			k += 1
 			bmin = bmin.min(q)
 			bmax = bmax.max(q)
-	return {"pts": pts, "bmin": bmin, "bmax": bmax}
+	return {"pts": pts, "bmin": bmin, "bmax": bmax, "src_centre": (smin + smax) * 0.5}
 
 
 static func _signed_volume(pts: PackedVector3Array) -> float:
@@ -261,7 +294,8 @@ static func _signed_volume(pts: PackedVector3Array) -> float:
 
 ## Every layer's closed loops (PackedVector2Array each), from the triangle
 ## soup cut at z = (k + ½) h. Segments are oriented solid-left.
-static func _sections(pts: PackedVector3Array, n_layers: int, h: float) -> Array:
+## [] when `cancel` asked to stop.
+static func _sections(pts: PackedVector3Array, n_layers: int, h: float, progress: Callable = Callable(), cancel: Callable = Callable()) -> Array:
 	# Per layer a plain Array of [start, end] pairs: a PackedVector2Array
 	# fetched out of an Array is a copy-on-write VALUE, so appending to it in
 	# place fills nothing (the FlowRouting trap).
@@ -269,7 +303,13 @@ static func _sections(pts: PackedVector3Array, n_layers: int, h: float) -> Array
 	for _i in n_layers:
 		segs.append([])
 	var n := pts.size() / 3
+	var tick := maxi(n / 40, 1)
 	for i in n:
+		if i % tick == 0:
+			if progress.is_valid():
+				progress.call(0.35 * float(i) / float(n))
+			if cancel.is_valid() and bool(cancel.call()):
+				return []
 		var a := pts[i * 3]
 		var b := pts[i * 3 + 1]
 		var c := pts[i * 3 + 2]
@@ -578,7 +618,7 @@ static func _infill(em: _Emitter, region: Array, angle: float, spacing: float, z
 # ---------------------------------------------------------------------------
 
 class _Emitter:
-	var moves: Array = []
+	var moves := PrintMoves.new()
 	var pos := Vector3(NAN, NAN, NAN)
 	var travel_speed := 120.0
 	var hop := 0.0
@@ -603,7 +643,7 @@ class _Emitter:
 
 	func _add(a: Vector3, b: Vector3, feed: float, e: float, rapid: bool) -> void:
 		line_no += 1
-		moves.append({"p0": a, "p1": b, "feed_mm_s": feed, "e_mm": e, "rapid": rapid, "line": line_no})
+		moves.append(a, b, feed, e, rapid, line_no)
 
 	func _extrude_to(p: Vector3, speed: float) -> void:
 		var l := pos.distance_to(p)

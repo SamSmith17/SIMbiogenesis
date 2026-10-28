@@ -57,6 +57,10 @@ var _work_xf := Transform3D.IDENTITY  # the roads' transform under their parent
 var _player: PrintJobPlayer = null
 var _job_id := ""
 var _roads: PrintRoads = null
+## +1 when work +Y runs along the y axis's positive direction, −1 when the
+## machine's y axis runs the other way round (a right-handed work frame:
+## X × Y = up, so a print is never a mirror image of its model).
+var _y_sign := 1.0
 var _ghost: PrintRoads = null
 var _ghost_job: Dictionary = {}
 var _preview_mm := Vector3(NAN, NAN, NAN)
@@ -213,7 +217,14 @@ func _calibrate_frame() -> void:
 		up = -zd if _bed_lowering else zd
 		if up.y < 0.0:
 			up = -up
+	# Work X × work Y must point up, or every print comes out mirrored (an
+	# STL's text reads backwards). A GLB whose y axis runs the other way
+	# has work +Y along −ez, and its origin at the other corner.
+	_y_sign = 1.0 if ex.cross(ez).dot(up) >= 0.0 else -1.0
+	ez *= _y_sign
 	var origin := bed - ex * (_work.x * 0.0005) - ez * (_work.y * 0.0005)
+	# Roads map work (x, y, z) to local (x, z, y); this basis sends local z
+	# along work +Y.
 	var world := Transform3D(Basis(ex, up, ez), origin)
 	var parent := _roads_parent()
 	_work_xf = parent.global_transform.affine_inverse() * world
@@ -271,7 +282,7 @@ func _pose_tool(mm: Vector3) -> void:
 		var along := c
 		match key:
 			"x": along = c + (mm.x - _work.x * 0.5) * 0.001 / mpl
-			"y": along = c + (mm.y - _work.y * 0.5) * 0.001 / mpl
+			"y": along = c + _y_sign * (mm.y - _work.y * 0.5) * 0.001 / mpl
 			"z": along = c + mm.z * 0.001 / mpl
 		# The work volume is the truth (the slicer centred the print on it);
 		# Machine Setup's soft window is often an old print-span calibration
@@ -435,10 +446,13 @@ func _finish_job(state: Dictionary) -> void:
 	var dry := _color_from(state.get("dry_color"), Color(0.68, 0.56, 0.42))
 	var box := _roads.bounds_local()
 	var centre := Vector3(box.position.x + box.size.x * 0.5, box.position.y, box.position.z + box.size.z * 0.5)
-	var mesh := _roads.bake_mesh(dry, centre)
+	# The roads' frame is a reflection (see PrintRoads.work_basis); the
+	# object is baked through one more so it is placed with a proper turn.
+	var post := PrintRoads.work_basis()
+	var mesh := _roads.bake_mesh(dry, centre, post)
 	if mesh == null:
 		return
-	var xf := _roads.global_transform * Transform3D(Basis.IDENTITY, centre)
+	var xf := _roads.global_transform * Transform3D(post.inverse(), centre)
 	xf.basis = xf.basis.orthonormalized()
 	var stl := _write_print_stl(mesh, _job_id)
 	loader.call("register_printed_object", {

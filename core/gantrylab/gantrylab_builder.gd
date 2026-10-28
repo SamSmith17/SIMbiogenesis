@@ -302,7 +302,7 @@ func bead_parent() -> Node3D:
 ## extruding move, laid in path order at true scale). `moves` = [{p0, p1,
 ## e_mm}] in work mm. Progress is by move (`set_print_progress(i, s)`) or by
 ## printed length (`set_preview_progress(frac)`).
-func set_print_preview(moves: Array, line_mm: float, layer_mm: float, color: Color, mottle: float = 0.0) -> void:
+func set_print_preview(moves: Variant, line_mm: float, layer_mm: float, color: Color, mottle: float = 0.0) -> void:
 	clear_toolpath_preview()
 	_beads = PrintRoads.new()
 	_beads.lay(moves, line_mm, layer_mm, color, mottle, _layout["bead_origin"])
@@ -317,7 +317,7 @@ func set_toolpath_preview(points: PackedVector3Array, extruding: PackedInt32Arra
 
 
 ## The layer height a program prints at (PrintRoads.layer_guess_mm).
-static func layer_guess_mm(moves: Array, line_mm: float) -> float:
+static func layer_guess_mm(moves: Variant, line_mm: float) -> float:
 	return PrintRoads.layer_guess_mm(moves, line_mm)
 
 

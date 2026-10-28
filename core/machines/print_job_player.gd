@@ -35,7 +35,7 @@ func load(id: String, specs: Dictionary = {}) -> bool:
 	var data := MachineJobStore.load(id)
 	if data.is_empty():
 		return false
-	if data.has("moves") and not (data["moves"] as Array).is_empty():
+	if PrintMoves.count(data.get("moves", [])) > 0:
 		var limits: Dictionary = data.get("limits", {})
 		if limits.is_empty():
 			limits = PrintJob.limits_for_specs(specs)
@@ -75,7 +75,8 @@ func set_job(j: Dictionary) -> bool:
 	return true
 
 
-func moves() -> Array:
+## The job's moves (PrintMoves; an Array only for a job set by hand).
+func moves() -> Variant:
 	return job.get("moves", [])
 
 

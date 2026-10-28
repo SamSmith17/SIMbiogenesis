@@ -682,9 +682,14 @@ static func _shipped_models() -> Array[Dictionary]:
 			"path": "res://Imported Models/Tools/cnc_router.glb",
 			"preserve_scale": true, "reference_height_m": 1.3,
 			"category": "tools", "forced_yaw_deg": 0.0},
+		# Authored at true size (SimLab inches under a 0.0254 node): 0.97 ×
+		# 1.12 × 0.68 m, its NEMA 23 extruder motor 56 mm across, the bed plate
+		# 32 × 21.3 in. A `reference_height_m: 2.0` used to fit it to 2 m on
+		# top of that — 1.79× too big (a 1.46 × 0.97 m bed, prints that looked
+		# a size smaller than on the designed gantries).
 		{"id": "trash_printer", "label": "Trash Printer (flake FDM)",
 			"path": "res://Imported Models/Tools/trash_printer.glb",
-			"preserve_scale": true, "reference_height_m": 2.0,
+			"preserve_scale": true,
 			"category": "tools", "forced_yaw_deg": 0.0},
 		# Large-format gantry mud/clay/concrete printer. The GLB is authored at
 		# true real-world size (composed AABB ≈ 3.74 m ≈ 12' wide, ~5.5 m tall),
@@ -695,20 +700,24 @@ static func _shipped_models() -> Array[Dictionary]:
 			"path": "res://Imported Models/Tools/mud_printer.glb",
 			"preserve_scale": true,
 			"category": "tools", "forced_yaw_deg": 0.0},
-		# Precious Plastic workshop machines (SketchUp/CAD exports → height fit).
+		# Precious Plastic workshop machines. Authored at true size (SimLab
+		# inches under a 0.0254 node) — like the Trash Printer, the height fits
+		# they used to carry (1.6 / 1.8 / 2.0 m over files of 1.01 / 1.06 /
+		# 1.24 m) scaled them ~1.6x: M12 x 40 bolts drawn 19 x 64 mm, the
+		# press's 49 in sheet 2 m across, the 1.245 m beam 2.1 m long.
 		{"id": "pp_shredder", "label": "PP Shredder",
 			"path": "res://Imported Models/Tools/pp_shredder.glb",
-			"preserve_scale": true, "reference_height_m": 1.6,
+			"preserve_scale": true,
 			"category": "tools", "forced_yaw_deg": 0.0},
 		{"id": "pp_beam_extruder", "label": "PP Beam Extruder",
 			"path": "res://Imported Models/Tools/pp_beam_extruder.glb",
-			"preserve_scale": true, "reference_height_m": 1.8,
+			"preserve_scale": true,
 			"category": "tools", "forced_yaw_deg": 0.0,
 			"beam_mesh_name": "Recycled Plastic Beam",
 			"mold_mesh_name": "beam#1"},
 		{"id": "pp_sheet_press", "label": "PP Sheet Press",
 			"path": "res://Imported Models/Tools/pp_sheet_press.glb",
-			"preserve_scale": true, "reference_height_m": 2.0,
+			"preserve_scale": true,
 			"category": "tools", "forced_yaw_deg": 0.0,
 			"z_axis_node": "Z axis",
 			"sheet_mesh_name": "Recycled Plastic Sheet"},

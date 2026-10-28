@@ -34,8 +34,13 @@ var layer_lo: float = 0.05
 var layer_hi: float = 3.0
 var speed_lo: float = 10.0
 var speed_hi: float = 200.0
-var scale_lo: float = 0.2
-var scale_hi: float = 4.0
+## One scale range for every printer (the slider is exponential): a model
+## is whatever size its file is, so 4× was never a sensible ceiling — a
+## 50 mm STL on a 3 m mud printer needs 40× (the old 8× cap clamped it).
+var scale_lo: float = 0.001
+var scale_hi: float = 1000.0
+## Work (0, 0) is the bed's centre (a delta), not its front-left corner.
+var origin_centred: bool = false
 var wet_color: Color = Color(0.85, 0.55, 0.20)
 var dry_color: Color = Color(0.35, 0.55, 0.65)
 ## Layer height as a fraction of nozzle when the nozzle slider changes.
@@ -85,11 +90,43 @@ static func from_specs(specs: Dictionary) -> FdmPrinterCaps:
 	c.line_width_mm = maxf(float(specs.get("line_width_mm", c.nozzle_mm)), c.wall_lo)
 	c.layer_height_mm = maxf(float(specs.get("layer_height_mm", c.layer_height_mm)), c.layer_lo)
 	c.print_speed_mm_s = maxf(float(specs.get("print_speed_mm_s", c.print_speed_mm_s)), c.speed_lo)
+	c._fit_ranges()
+	var gspec: Variant = specs.get("gantry_spec", {})
+	if gspec is Dictionary and str((gspec as Dictionary).get("kinematics", "")) == "delta":
+		c.origin_centred = true
 	if specs.has("print_mode"):
 		c.default_print_mode = str(specs.get("print_mode"))
 	c.wet_color = _color_from(specs.get("wet_color"), c.wet_color)
 	c.dry_color = _color_from(specs.get("dry_color"), c.dry_color)
 	return c
+
+
+## Slider ranges that hold this printer's own head: a designed gantry with
+## the 6 mm flake extruder is "generic FDM" by kind, and its 0.2–2.5 mm line
+## range clamped a 6 mm road to 2.5 mm — the same STL sliced at a third of
+## the Trash Printer's road width on the same head.
+func _fit_ranges() -> void:
+	nozzle_hi = maxf(nozzle_hi, nozzle_mm * 1.5)
+	nozzle_lo = minf(nozzle_lo, nozzle_mm)
+	wall_hi = maxf(wall_hi, maxf(line_width_mm, nozzle_mm) * 1.6)
+	wall_lo = minf(wall_lo, line_width_mm)
+	layer_hi = maxf(layer_hi, maxf(layer_height_mm * 1.5, nozzle_mm * 0.75))
+	layer_lo = minf(layer_lo, layer_height_mm)
+	if nozzle_mm > 2.0 and layer_from_nozzle_frac >= 0.5 and machine_kind != "mud":
+		# A big plastic nozzle prints layers far thinner than half its bore.
+		layer_from_nozzle_frac = clampf(layer_height_mm / nozzle_mm, 0.1, 0.5)
+	speed_hi = maxf(speed_hi, print_speed_mm_s * 2.0)
+
+
+## The bed point (work mm) the footprint is centred on before the offsets.
+func bed_centre_mm() -> Vector2:
+	return Vector2.ZERO if origin_centred else Vector2(work_x_mm * 0.5, work_y_mm * 0.5)
+
+
+## Work bounds of the bed (mm): [min, max] corners in X / Y.
+func bed_rect_mm() -> Rect2:
+	var c := bed_centre_mm()
+	return Rect2(c - Vector2(work_x_mm, work_y_mm) * 0.5, Vector2(work_x_mm, work_y_mm))
 
 
 func work_m() -> float:
@@ -133,8 +170,6 @@ func _apply_mud_defaults(specs: Dictionary) -> void:
 	layer_hi = 100.0
 	speed_lo = 10.0
 	speed_hi = 600.0
-	scale_lo = 0.05
-	scale_hi = 8.0
 	wet_color = Color(0.36, 0.26, 0.17)
 	dry_color = Color(0.68, 0.56, 0.42)
 	if work_x_mm < 1000.0:
@@ -165,8 +200,6 @@ func _apply_trash_defaults(specs: Dictionary) -> void:
 	layer_hi = 1.5
 	speed_lo = 5.0
 	speed_hi = 120.0
-	scale_lo = 0.2
-	scale_hi = 4.0
 	wet_color = Color(0.85, 0.55, 0.20)
 	dry_color = Color(0.35, 0.55, 0.65)
 	if work_x_mm < 100.0:
@@ -195,8 +228,6 @@ func _apply_generic_fdm_defaults(specs: Dictionary) -> void:
 	layer_hi = 0.6
 	speed_lo = 10.0
 	speed_hi = 200.0
-	scale_lo = 0.1
-	scale_hi = 4.0
 
 
 static func _default_name(kind: String, mid: String) -> String:

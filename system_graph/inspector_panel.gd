@@ -3983,7 +3983,7 @@ func _on_machine_file_selected(path: String) -> void:
 				"layer_height_mm": caps.layer_height_mm, "line_width_mm": caps.line_width_mm,
 				"print_speed_mm_s": caps.print_speed_mm_s, "travel_speed_mm_s": caps.print_speed_mm_s * 2.5,
 				"mode": caps.default_print_mode, "filament_mm": PrintJob.filament_mm(specs),
-				"centre_xy": Vector2(caps.work_x_mm * 0.5, caps.work_y_mm * 0.5),
+				"centre_xy": caps.bed_centre_mm(),
 			})
 		else:
 			parse = StlLoader.parse_file(path)

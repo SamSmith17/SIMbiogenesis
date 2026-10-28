@@ -23,8 +23,11 @@ extends RefCounted
 static func plan(parse: Dictionary, limits: Dictionary) -> Dictionary:
 	if not bool(parse.get("ok", false)):
 		return {"ok": false, "total_s": 0.0, "n": 0}
-	var moves: Array = parse["moves"]
-	var n := moves.size()
+	# Either form: an Array of move dicts (a G-code parse) or PrintMoves (a
+	# slice). The plan keeps both: "moves" as handed in, "pm" packed.
+	var moves: Variant = parse["moves"]
+	var pm := PrintMoves.from_any(moves)
+	var n := pm.size()
 	var max_feed := maxf(float(limits.get("max_feed_mm_s", 150.0)), 0.1)
 	var accel := maxf(float(limits.get("accel_mm_s2", 1000.0)), 1.0)
 	var jerk := maxf(float(limits.get("junction_mm_s", 8.0)), 0.01)
@@ -34,7 +37,8 @@ static func plan(parse: Dictionary, limits: Dictionary) -> Dictionary:
 	var spec: Dictionary = limits.get("spec", {})
 	var len := PackedFloat32Array()
 	var vmax := PackedFloat32Array()
-	var dirs: Array = []
+	var dirs := PackedVector3Array()
+	dirs.resize(n)
 	var step_hz := PackedFloat32Array()
 	var motor_of := PackedInt32Array()
 	len.resize(n)
@@ -42,26 +46,31 @@ static func plan(parse: Dictionary, limits: Dictionary) -> Dictionary:
 	step_hz.resize(n)
 	motor_of.resize(n)
 	var feed_hit := 0
+	var cap_x := float(caps.get("x", INF))
+	var cap_y := float(caps.get("y", INF))
+	var cap_z := float(caps.get("z", INF))
+	var by_motor := not spec.is_empty()
 	for i in n:
-		var mv: Dictionary = moves[i]
-		var p0: Vector3 = mv["p0"]
-		var p1: Vector3 = mv["p1"]
+		var p0: Vector3 = pm.p0[i]
+		var p1: Vector3 = pm.p1[i]
 		var l := p0.distance_to(p1)
 		len[i] = l
 		var d := (p1 - p0) / l if l > 1e-9 else Vector3.ZERO
-		dirs.append(d)
-		var v := minf(float(mv["feed_mm_s"]), max_feed)
-		if absf(float(mv["feed_mm_s"]) - max_feed) < 1e-6 or float(mv["feed_mm_s"]) > max_feed:
+		dirs[i] = d
+		var fd := float(pm.feed[i])
+		var v := minf(fd, max_feed)
+		if absf(fd - max_feed) < 1e-6 or fd > max_feed:
 			feed_hit += 1
 		# Per-axis tool-speed caps.
-		for k in ["x", "y", "z"]:
-			var c := float(caps.get(k, INF))
-			var comp := absf(d.x if k == "x" else (d.y if k == "y" else d.z))
-			if comp > 1e-6 and is_finite(c):
-				v = minf(v, c / comp)
+		if absf(d.x) > 1e-6 and is_finite(cap_x):
+			v = minf(v, cap_x / absf(d.x))
+		if absf(d.y) > 1e-6 and is_finite(cap_y):
+			v = minf(v, cap_y / absf(d.y))
+		if absf(d.z) > 1e-6 and is_finite(cap_z):
+			v = minf(v, cap_z / absf(d.z))
 		# Per-motor caps along this direction.
 		var mv_fac := PackedFloat32Array()
-		if not spec.is_empty() and l > 1e-9:
+		if by_motor and l > 1e-9:
 			mv_fac = GantryLabKinematics.motor_velocity(spec, d, (p0 + p1) * 0.5)
 			for m in mini(mv_fac.size(), motor_caps.size()):
 				var f := float(mv_fac[m])
@@ -87,8 +96,8 @@ static func plan(parse: Dictionary, limits: Dictionary) -> Dictionary:
 		v_in[i] = 0.0
 		v_out[i] = 0.0
 	for i in range(1, n):
-		var d0: Vector3 = dirs[i - 1]
-		var d1: Vector3 = dirs[i]
+		var d0 := dirs[i - 1]
+		var d1 := dirs[i]
 		var dv := (d1 - d0).length()
 		var vj := INF if dv < 1e-6 else jerk / dv
 		var v := minf(minf(vmax[i - 1], vmax[i]), vj)
@@ -158,7 +167,7 @@ static func plan(parse: Dictionary, limits: Dictionary) -> Dictionary:
 		"max_feed_hit_share": float(feed_hit) / maxf(float(n), 1.0),
 		"accel_limited_share": float(accel_limited) / maxf(float(n), 1.0),
 		"layers": int(parse.get("layers", 0)), "extrusion_mm": float(parse.get("extrusion_mm", 0.0)),
-		"moves": moves,
+		"moves": moves, "pm": pm,
 	}
 
 
@@ -169,7 +178,9 @@ static func sample(pl: Dictionary, t: float) -> Dictionary:
 	if n == 0:
 		return {"i": -1, "s": 0.0, "pos": Vector3.ZERO, "v": 0.0, "extruding": false, "feed": 0.0, "rapid": false, "line": 0}
 	var t0: PackedFloat32Array = pl["t0"]
-	var moves: Array = pl["moves"]
+	if not pl.has("pm"):
+		pl["pm"] = PrintMoves.from_any(pl.get("moves", []))
+	var pm: PrintMoves = pl["pm"]
 	t = clampf(t, 0.0, float(pl["total_s"]))
 	# Binary search the move whose t0 <= t.
 	var lo := 0
@@ -181,9 +192,8 @@ static func sample(pl: Dictionary, t: float) -> Dictionary:
 		else:
 			hi = mid - 1
 	var i := lo
-	var mv: Dictionary = moves[i]
-	var p0: Vector3 = mv["p0"]
-	var p1: Vector3 = mv["p1"]
+	var p0: Vector3 = pm.p0[i]
+	var p1: Vector3 = pm.p1[i]
 	var l := float((pl["len"] as PackedFloat32Array)[i])
 	var tt := t - float(t0[i])
 	var vi := float((pl["v_in"] as PackedFloat32Array)[i])
@@ -207,8 +217,8 @@ static func sample(pl: Dictionary, t: float) -> Dictionary:
 		dist = (vi + vp) * 0.5 * ta + vp * tc + vp * tdd - 0.5 * a * tdd * tdd
 		v = vp - a * tdd
 	var s := clampf(dist / l, 0.0, 1.0) if l > 1e-9 else 1.0
-	return {"i": i, "s": s, "pos": p0.lerp(p1, s), "v": v, "extruding": float(mv["e_mm"]) > 0.0,
-		"feed": float(mv["feed_mm_s"]), "rapid": bool(mv["rapid"]), "line": int(mv["line"]), "t_in_move": tt}
+	return {"i": i, "s": s, "pos": p0.lerp(p1, s), "v": v, "extruding": pm.e[i] > 0.0,
+		"feed": float(pm.feed[i]), "rapid": pm.rapid[i] != 0, "line": int(pm.line[i]), "t_in_move": tt}
 
 
 ## The time (s) at which move i starts — the scrub bar's layer marks.

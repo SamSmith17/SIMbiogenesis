@@ -13,6 +13,13 @@ extends Control
 ##
 ## Layout: slicer sidebar on the left, the studio (bed, roads, nozzle) in
 ## the middle with the transport under it.
+##
+## Slicing runs on a worker thread (a large lattice is seconds of work and
+## millions of moves): the old job stays on screen until the new one lands,
+## a change mid-slice cancels it and starts again, and closing waits for it.
+## The studio draws work space RIGHT-HANDED (work +Y away from the camera's
+## default side, PrintRoads.work_basis), the same frame the model ghost is in
+## — they used to be mirror images, turning opposite ways with the Turn.
 
 const MODAL_NAME := "print_setup"
 const PRINTS_DIR := "user://machines/prints"
@@ -40,7 +47,18 @@ var _parse: Dictionary = {}
 var _job: Dictionary = {}
 var _player: PrintJobPlayer = null
 var _slice_timer := -1.0
-var _slicing := false
+## The worker slice: its task, its result, progress (0..1, written by the
+## worker), a cancel flag the slicer polls, and "settings changed meanwhile".
+var _task_id := -1
+var _task_out: Dictionary = {}
+var _slice_progress := 0.0
+var _slice_cancel := false
+var _slice_again := false
+var _slice_t0 := 0
+## The model's own size in its file (mm, X / Y / Z), for the size row.
+var _native := Vector3.ZERO
+var _size_spins: Array = []
+var _size_lock := false
 
 var _built := false
 var _title: Label = null
@@ -141,6 +159,7 @@ func open(runtime: Node, item_id: String, view: Node, specs: Dictionary) -> void
 
 
 func close() -> void:
+	_stop_slice()
 	_snapshot_settings()
 	visible = false
 	set_process(false)
@@ -152,6 +171,20 @@ func close() -> void:
 
 func is_open() -> bool:
 	return visible
+
+
+func _exit_tree() -> void:
+	_stop_slice()
+
+
+## Cancel a running slice and wait for the worker (a task is always waited on).
+func _stop_slice() -> void:
+	_slice_again = false
+	if _task_id >= 0:
+		_slice_cancel = true
+		WorkerThreadPool.wait_for_task_completion(_task_id)
+		_task_id = -1
+	_slice_cancel = false
 
 
 func _snapshot_settings() -> void:
@@ -182,6 +215,7 @@ func _process(delta: float) -> void:
 		if _slice_timer < 0.0:
 			_slice_timer = -1.0
 			_reslice()
+	_poll_slice()
 	if _sim_playing and _player != null and _player.is_loaded():
 		_sim_t += delta * _sim_speed
 		if _sim_t >= _player.total_s:
@@ -229,6 +263,7 @@ func _apply_caps_chrome() -> void:
 	_set_range(_speed, _caps.speed_lo, _caps.speed_hi)
 	_set_range(_travel, _caps.speed_lo, _caps.speed_hi * 3.0)
 	_set_range(_scale, _caps.scale_lo, _caps.scale_hi)
+	_scale.exp_edit = true
 	_set_range(_offx, -_caps.work_x_mm * 0.5, _caps.work_x_mm * 0.5)
 	_set_range(_offy, -_caps.work_y_mm * 0.5, _caps.work_y_mm * 0.5)
 	_set_range(_hop, 0.0, maxf(_caps.layer_hi * 4.0, 2.0))
@@ -313,7 +348,11 @@ func _build_sidebar() -> Control:
 	sb.add_child(SectionHeader.make("Placement", "move"))
 	_offx = _slider_row(sb, "Offset X (mm)", -300.0, 300.0, 1.0, 0.0)
 	_offy = _slider_row(sb, "Offset Y (mm)", -300.0, 300.0, 1.0, 0.0)
-	_scale = _slider_row(sb, "Scale", 0.05, 8.0, 0.01, 1.0)
+	_scale = _slider_row(sb, "Scale", 0.001, 1000.0, 0.001, 1.0)
+	_scale.exp_edit = true
+	_scale.tooltip_text = "Any scale: type it, or set a size below"
+	_scale.value_changed.connect(func(_v): _sync_size())
+	_build_size_row(sb)
 	_rot = _slider_row(sb, "Turn (°)", -180.0, 180.0, 1.0, 0.0)
 	sb.add_child(SectionHeader.make("Slicer", "layers"))
 	var mode_row := HBoxContainer.new()
@@ -565,6 +604,87 @@ func _rebuild_bed_plane() -> void:
 		_dist = clampf(maxf(_caps.work_x_mm, _caps.work_y_mm) * 0.001 * 1.4, 0.15, 12.0)
 
 
+## Width / depth / height of the print (mm): type any one and the scale
+## follows, the other two with it (a uniform scale); "1:1" and "Fit bed".
+func _build_size_row(parent: VBoxContainer) -> void:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 4)
+	var lbl := Label.new()
+	lbl.text = "Size (mm)"
+	lbl.custom_minimum_size = Vector2(110, 0)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	lbl.tooltip_text = "The model's width (X), depth (Y) and height (Z) as printed, before the turn. Type one and the scale follows."
+	h.add_child(lbl)
+	_size_spins = []
+	for axis in 3:
+		var sp := SpinBox.new()
+		sp.min_value = 0.01
+		sp.max_value = 1.0e6
+		sp.step = 0.1
+		sp.allow_greater = true
+		sp.prefix = ["W", "D", "H"][axis]
+		sp.custom_minimum_size = Vector2(78, 0)
+		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		sp.tooltip_text = ["Width along the bed's X", "Depth along the bed's Y", "Height"][axis]
+		sp.value_changed.connect(_on_size_typed.bind(axis))
+		h.add_child(sp)
+		_size_spins.append(sp)
+	parent.add_child(h)
+	var b := HBoxContainer.new()
+	b.add_theme_constant_override("separation", 6)
+	var pad := Control.new()
+	pad.custom_minimum_size = Vector2(110, 0)
+	b.add_child(pad)
+	var one := Button.new()
+	one.text = "1:1"
+	one.tooltip_text = "The size in the file (scale 1)"
+	UITheme.style_button(one)
+	one.pressed.connect(func():
+		_set_slider(_scale, 1.0)
+		_sync_size()
+		_on_slicer_changed())
+	b.add_child(one)
+	var fit := Button.new()
+	fit.text = "Fit bed"
+	fit.tooltip_text = "The largest size that fits this machine's work volume"
+	UITheme.style_button(fit)
+	fit.pressed.connect(func():
+		_set_slider(_scale, clampf(_fit_scale() * 0.98, _scale.min_value, _scale.max_value))
+		_sync_size()
+		_on_slicer_changed())
+	b.add_child(fit)
+	parent.add_child(b)
+
+
+func _on_size_typed(v: float, axis: int) -> void:
+	if _size_lock or _native[axis] <= 1e-6:
+		return
+	_set_slider(_scale, clampf(v / _native[axis], _scale.min_value, _scale.max_value))
+	_sync_size()
+	_on_slicer_changed()
+
+
+## The size row from the scale (no signals).
+func _sync_size() -> void:
+	if _size_spins.is_empty():
+		return
+	_size_lock = true
+	var sc := float(_scale.value)
+	for axis in 3:
+		var sp: SpinBox = _size_spins[axis]
+		sp.set_value_no_signal(_native[axis] * sc)
+		sp.editable = _native[axis] > 1e-6
+	_size_lock = false
+
+
+## The largest scale at which the model's own box fits the work volume.
+func _fit_scale() -> float:
+	if _caps == null or _native.x <= 1e-6:
+		return 1.0
+	return minf(minf(_caps.work_x_mm / maxf(_native.x, 1e-3), _caps.work_y_mm / maxf(_native.y, 1e-3)),
+		_caps.work_z_mm / maxf(_native.z, 1e-3))
+
+
 func _slider_row(parent: VBoxContainer, label: String, lo: float, hi: float, step: float, val: float) -> HSlider:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 6)
@@ -622,6 +742,7 @@ func _reset_from_specs() -> void:
 	_set_slider(_offx, float(_specs.get("print_offset_x", 0.0)))
 	_set_slider(_offy, float(_specs.get("print_offset_y", 0.0)))
 	_set_slider(_scale, clampf(float(_specs.get("print_scale", 1.0)), _scale.min_value, _scale.max_value))
+	_sync_size()
 	_set_slider(_rot, float(_specs.get("print_rotation_deg", 0.0)))
 	_mode.select(1 if str(_specs.get("print_mode", _caps.default_print_mode)) == "vase" else 0)
 	_set_slider(_nozzle, _caps.nozzle_mm)
@@ -723,12 +844,14 @@ func _load_stl_path(path: String, auto_fit: bool) -> void:
 	_source_name = path.get_file().get_basename()
 	_gcode_text = ""
 	_slicer_box.visible = true
-	if auto_fit and _caps != null and _mesh != null:
+	_native = Vector3.ZERO
+	if _mesh != null:
+		# build_mesh is Y-up in metres: X, Z, Y back to the file's X, Y, Z mm.
 		var a := _mesh.get_aabb().size * 1000.0
-		var fit := minf(minf(_caps.work_x_mm / maxf(a.x, 0.001), _caps.work_y_mm / maxf(a.z, 0.001)),
-			_caps.work_z_mm / maxf(a.y, 0.001))
-		_set_range(_scale, _caps.scale_lo, maxf(fit * 1.5, 1.0))
-		_set_slider(_scale, clampf(minf(fit * 0.8, 1.0), _scale.min_value, _scale.max_value))
+		_native = Vector3(a.x, a.z, a.y)
+	if auto_fit and _caps != null and _mesh != null:
+		_set_slider(_scale, clampf(minf(_fit_scale() * 0.8, 1.0), _scale.min_value, _scale.max_value))
+	_sync_size()
 	_reslice()
 
 
@@ -775,51 +898,110 @@ func _slicer_settings() -> Dictionary:
 		"mode": "vase" if _mode.selected == 1 else "solid",
 		"print_speed_mm_s": float(_speed.value), "travel_speed_mm_s": float(_travel.value),
 		"scale": float(_scale.value), "rotation_deg": float(_rot.value),
-		"centre_xy": Vector2(_caps.work_x_mm * 0.5 + float(_offx.value), _caps.work_y_mm * 0.5 + float(_offy.value)),
+		"centre_xy": _caps.bed_centre_mm() + Vector2(float(_offx.value), float(_offy.value)),
 		"z_hop_mm": float(_hop.value), "filament_mm": float(_nozzle.value),
+		"progress": Callable(self, "_on_slice_progress"), "cancel": Callable(self, "_is_slice_cancelled"),
 	}
 
 
-## Slice (or parse) the source into a job, plan it, lay it in the studio.
+func _on_slice_progress(f: float) -> void:
+	_slice_progress = f
+
+
+func _is_slice_cancelled() -> bool:
+	return _slice_cancel
+
+
+## Slice (or parse) the source into a job on a worker thread; the result is
+## planned there too and laid in the studio when it lands (_poll_slice).
 func _reslice() -> void:
-	_job = {}
-	_player = null
-	_parse = {}
-	if _source_kind == "stl" and not _tris.is_empty():
-		var t0 := Time.get_ticks_msec()
-		_parse = StlSlicer.slice_triangles(_tris, _slicer_settings())
-		if not bool(_parse.get("ok", false)):
-			_status.text = "Could not slice: %s" % str(_parse.get("error", "?"))
-			_lay_studio()
-			return
-		var ms := Time.get_ticks_msec() - t0
-		_parse["name"] = _source_name
-		_status.text = "%s · %s · sliced in %d ms" % [_source_name, UiText.count(int(_parse.get("triangles", 0)), "triangle"), ms]
-	elif _source_kind == "gcode" and not _gcode_text.is_empty():
-		_parse = GantryLabGcode.parse(_gcode_text)
-		if not bool(_parse.get("ok", false)):
-			_status.text = "No motion in %s: %s" % [_source_name, str(_parse.get("error", "?"))]
-			_lay_studio()
-			return
-		_parse["name"] = _source_name
-		_status.text = "%s · %s · %s dialect · run as written" % [_source_name, UiText.count(int(_parse.get("lines", 0)), "line"), str(_parse.get("dialect", "reprap"))]
-	else:
+	if _task_id >= 0:
+		# A slice is running on old settings: stop it, slice again after.
+		_slice_again = true
+		_slice_cancel = true
+		return
+	_slice_again = false
+	_slice_cancel = false
+	var has_src := (_source_kind == "stl" and not _tris.is_empty()) or (_source_kind == "gcode" and not _gcode_text.is_empty())
+	if not has_src:
+		_job = {}
+		_player = null
+		_parse = {}
 		_lay_studio()
 		return
 	var specs := _specs.duplicate()
 	specs["filament_diameter_mm"] = float(_nozzle.value)
-	var opts := {"name": _source_name}
+	# Limits on this thread: a designed gantry's come from GantryLabDesign's
+	# cache, which the main thread also writes.
+	var opts := {"name": _source_name, "limits": PrintJob.limits_for_specs(specs)}
 	if _source_kind == "gcode":
 		opts["line_width_mm"] = maxf(float(_wall.value), 0.05)
-	_job = PrintJob.from_parse(_parse, specs, opts)
-	if not bool(_job.get("ok", false)):
-		_status.text = str(_job.get("error", "could not plan"))
-		_lay_studio()
+	var inp := {"kind": _source_kind, "tris": _tris, "text": _gcode_text, "settings": _slicer_settings(),
+		"specs": specs, "opts": opts, "name": _source_name}
+	_task_out = {}
+	_slice_progress = 0.0
+	_slice_t0 = Time.get_ticks_msec()
+	_status.text = "Slicing %s…" % _source_name
+	_task_id = WorkerThreadPool.add_task(_slice_task.bind(inp), false, "print setup slice")
+
+
+## On the worker: slice / parse, then plan. Touches nothing but its result.
+func _slice_task(inp: Dictionary) -> void:
+	var parse: Dictionary
+	if str(inp["kind"]) == "stl":
+		parse = StlSlicer.slice_triangles(inp["tris"], inp["settings"])
+	else:
+		parse = GantryLabGcode.parse(str(inp["text"]))
+	var out := {"parse": parse}
+	if bool(parse.get("ok", false)):
+		parse["name"] = str(inp["name"])
+		out["job"] = PrintJob.from_parse(parse, inp["specs"], inp["opts"])
+	_task_out = out
+
+
+## The worker's result, when it is in (each frame; or at once, blocking).
+func _poll_slice(block: bool = false) -> void:
+	if _task_id < 0:
 		return
+	if not block and not WorkerThreadPool.is_task_completed(_task_id):
+		_status.text = "Slicing %s… %d %%" % [_source_name, int(_slice_progress * 100.0)]
+		return
+	WorkerThreadPool.wait_for_task_completion(_task_id)
+	_task_id = -1
+	if _slice_again:
+		_reslice()
+		if block:
+			_poll_slice(true)
+		return
+	_apply_slice(_task_out)
+
+
+func _apply_slice(out: Dictionary) -> void:
+	var parse: Dictionary = out.get("parse", {})
+	if bool(parse.get("cancelled", false)):
+		return
+	if not bool(parse.get("ok", false)):
+		_status.text = ("Could not slice: %s" if _source_kind == "stl" else "No motion in " + _source_name + ": %s") % str(parse.get("error", "?"))
+		return
+	var job: Dictionary = out.get("job", {})
+	if not bool(job.get("ok", false)):
+		_status.text = str(job.get("error", "could not plan"))
+		return
+	_parse = parse
+	_job = job
+	var ms := Time.get_ticks_msec() - _slice_t0
+	if _source_kind == "stl":
+		_status.text = "%s · %s · sliced and planned in %s" % [_source_name, UiText.count(int(_parse.get("triangles", 0)), "triangle"), GantryLabMotion.fmt_duration(float(ms) / 1000.0)]
+	else:
+		_status.text = "%s · %s · %s dialect · run as written" % [_source_name, UiText.count(int(_parse.get("lines", 0)), "line"), str(_parse.get("dialect", "reprap"))]
 	_player = PrintJobPlayer.new()
 	_player.set_job(_job)
 	_refresh_estimate()
 	_lay_studio()
+	# A fresh slice shows the whole print on the plate (Play starts it over);
+	# a scrubbed position is kept across re-slices.
+	if _sim_t <= 0.0 and not _sim_playing:
+		_sim_t = _player.total_s
 	_sim_t = clampf(_sim_t, 0.0, _player.total_s)
 	_apply_sim_time()
 	if _runtime != null and is_instance_valid(_runtime) and _runtime.has_method("begin_print_preview"):
@@ -841,9 +1023,12 @@ func _refresh_estimate() -> void:
 	var warn := ""
 	for w in _job.get("warnings", []):
 		warn += "\n⚠ %s" % str(w)
-	var fits := bmin.x >= -0.5 and bmin.y >= -0.5 and bmax.x <= _caps.work_x_mm + 0.5 and bmax.y <= _caps.work_y_mm + 0.5 and bmax.z <= _caps.work_z_mm + 0.5
+	var bed := _caps.bed_rect_mm()
+	var fits := bmin.x >= bed.position.x - 0.5 and bmin.y >= bed.position.y - 0.5 and bmax.x <= bed.end.x + 0.5 and bmax.y <= bed.end.y + 0.5 and bmax.z <= _caps.work_z_mm + 0.5
+	if _roads != null and _roads.is_merged():
+		warn += "\n(drawn simplified: %s roads stand for its curves)" % UiText.thousands(_roads.road_count())
 	_est_lbl.text = "%s · %s · %.0f × %.0f × %.0f mm%s\n%s of material · %s at 1×%s%s" % [
-		UiText.count(int(_job.get("layers", 0)), "layer"), UiText.count((_job["moves"] as Array).size(), "move"),
+		UiText.count(int(_job.get("layers", 0)), "layer"), UiText.count(PrintMoves.count(_job["moves"]), "move"),
 		sz.x, sz.y, sz.z, "" if fits else "  — OFF THE BED",
 		mat_txt, GantryLabMotion.fmt_duration(_player.total_s),
 		(" (%s on this machine)" % GantryLabMotion.fmt_duration(_player.total_s / speed_factor)) if absf(speed_factor - 1.0) > 0.01 else "",
@@ -864,8 +1049,7 @@ func _lay_studio() -> void:
 		_roads.queue_free()
 	_roads = null
 	_nozzle_mi.visible = false
-	var origin := Vector3(-_caps.work_x_mm * 0.0005, 0.0, -_caps.work_y_mm * 0.0005)
-	if _mesh != null and _source_kind == "stl":
+	if _mesh != null and _source_kind == "stl" and _parse.has("place_xy"):
 		_ghost_mi = MeshInstance3D.new()
 		_ghost_mi.name = "ModelGhost"
 		_ghost_mi.mesh = _mesh
@@ -875,14 +1059,15 @@ func _lay_studio() -> void:
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mat.no_depth_test = false
 		_ghost_mi.material_override = mat
-		var sc := maxf(float(_scale.value), 0.001)
-		var rot := deg_to_rad(float(_rot.value))
-		var mmin: Vector3 = _parse.get("model_min", Vector3.ZERO)
-		var mmax: Vector3 = _parse.get("model_max", Vector3.ZERO)
-		var c := (mmin + mmax) * 0.5
-		var centre := origin + Vector3(c.x, 0.0, c.y) * 0.001
-		# The mesh is footprint-centred and seated on y = 0 (StlLoader.build_mesh).
-		_ghost_mi.transform = Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * sc), Vector3(centre.x, 0.0005, centre.z))
+		# The scale and turn the slice ran with (the sliders may have moved on).
+		var st: Dictionary = _parse.get("settings", {})
+		var sc := maxf(float(st.get("scale", _scale.value)), 0.001)
+		var rot := deg_to_rad(float(st.get("rotation_deg", _rot.value)))
+		# The mesh is centred on its own box and seated on y = 0, in (x, z, −y)
+		# (StlLoader.build_mesh); the slicer says where that centre landed.
+		var place: Vector2 = _parse["place_xy"]
+		var at := _work_to_studio(Vector3(place.x, place.y, 0.0))
+		_ghost_mi.transform = Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * sc), at + Vector3(0.0, 0.0005, 0.0))
 		_ghost_mi.visible = _show_model
 		_holder.add_child(_ghost_mi)
 	if _player != null and _player.is_loaded():
@@ -890,7 +1075,8 @@ func _lay_studio() -> void:
 		var mud := _caps != null and _caps.print_persist
 		var col := _dry_btn.color if mud else _wet_btn.color
 		var line := _player.line_mm * (1.12 if _source_kind == "gcode" else 1.0)
-		_roads.lay(_player.moves(), line, _player.layer_mm, col, 0.45 if _caps != null and _caps.machine_kind == "trash" else 0.0, origin)
+		_roads.lay(_player.moves(), line, _player.layer_mm, col, 0.45 if _caps != null and _caps.machine_kind == "trash" else 0.0, Vector3.ZERO)
+		_roads.transform = _studio_work_xf()
 		_holder.add_child(_roads)
 		if mud:
 			var w := _wet_btn.color
@@ -898,15 +1084,35 @@ func _lay_studio() -> void:
 			_roads.set_wet(Color(w.r / maxf(d.r, 0.01), w.g / maxf(d.g, 0.01), w.b / maxf(d.b, 0.01)), _player.line_mm * 60.0)
 		_roads.show_all()
 		_nozzle_mi.visible = true
-		var box := _roads.bounds_local()
+		var box := _roads.transform * _roads.bounds_local()
 		_cam_target = box.get_center()
 		_dist = clampf(box.size.length() * 1.6, 0.12, 12.0)
+	if _est_lbl != null and not _job.is_empty():
+		_refresh_estimate()
 
 
+## Work mm → the studio: the bed plane is centred on the studio origin and
+## work +Y runs toward −Z (right-handed, as the model ghost is).
+func _studio_work_xf() -> Transform3D:
+	var mid := _caps.bed_rect_mm().get_center() if _caps != null else Vector2.ZERO
+	return Transform3D(PrintRoads.work_basis(), Vector3(-mid.x, 0.0, mid.y) * 0.001)
+
+
+func _work_to_studio(p: Vector3) -> Vector3:
+	return _studio_work_xf() * (Vector3(p.x, p.z, p.y) * 0.001)
+
+
+## A colour change recolours the roads (no re-lay: a large print is a
+## million moves).
 func _relay_roads() -> void:
-	if _player != null and _player.is_loaded():
-		_lay_studio()
-		_apply_sim_time()
+	if _roads == null or not is_instance_valid(_roads):
+		return
+	var mud := _caps != null and _caps.print_persist
+	_roads.set_base_color(_dry_btn.color if mud else _wet_btn.color)
+	if mud:
+		var w := _wet_btn.color
+		var d := _dry_btn.color
+		_roads.set_wet(Color(w.r / maxf(d.r, 0.01), w.g / maxf(d.g, 0.01), w.b / maxf(d.b, 0.01)), _player.line_mm * 60.0 if _player != null else 0.0)
 
 
 func _on_play() -> void:
@@ -928,11 +1134,10 @@ func _apply_sim_time() -> void:
 	if _roads != null:
 		_roads.set_progress_move(int(smp["i"]), float(smp["s"]))
 	if _nozzle_mi != null:
-		var origin := Vector3(-_caps.work_x_mm * 0.0005, 0.0, -_caps.work_y_mm * 0.0005)
 		# A cone four lines tall, its tip at the nozzle.
 		var sc := clampf(_player.line_mm / 0.4, 1.0, 60.0) * 0.35
 		_nozzle_mi.scale = Vector3.ONE * sc
-		_nozzle_mi.position = origin + Vector3(pos.x, pos.z, pos.y) * 0.001 + Vector3(0.0, 0.01 * sc, 0.0)
+		_nozzle_mi.position = _work_to_studio(pos) + Vector3(0.0, 0.01 * sc, 0.0)
 	_suppress = true
 	_scrub.set_value_no_signal(_sim_t / maxf(total, 1e-6))
 	_suppress = false
@@ -1003,6 +1208,7 @@ func _on_preview_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _on_start_pressed() -> void:
+	_finish_pending_slice()
 	if _job.is_empty() or not bool(_job.get("ok", false)):
 		_status.text = "Load an STL or a G-code file first."
 		return
@@ -1046,6 +1252,7 @@ func _on_start_pressed() -> void:
 
 
 func _on_export_pressed() -> void:
+	_finish_pending_slice()
 	if _job.is_empty() or not bool(_job.get("ok", false)):
 		_status.text = "Nothing to export yet."
 		return
@@ -1084,6 +1291,14 @@ func export_gcode(path: String) -> String:
 	return PrintGcodeWriter.write_file(_job["moves"], path, opts)
 
 
+## A debounced or running slice, finished now (Start, Export, the harness).
+func _finish_pending_slice() -> void:
+	if _slice_timer >= 0.0:
+		_slice_timer = -1.0
+		_reslice()
+	_poll_slice(true)
+
+
 func _copy_source_to_user() -> String:
 	if _source_path.is_empty():
 		return ""
@@ -1109,11 +1324,13 @@ func _copy_source_to_user() -> String:
 # ---------------------------------------------------------------------------
 
 func job() -> Dictionary:
+	_finish_pending_slice()
 	return _job
 
 
 func load_stl(path: String) -> void:
 	_load_stl_path(path, true)
+	_finish_pending_slice()
 
 
 func load_gcode_text(text: String, name: String = "program") -> void:
@@ -1125,6 +1342,7 @@ func load_gcode_text(text: String, name: String = "program") -> void:
 	_mesh = null
 	_slicer_box.visible = false
 	_reslice()
+	_finish_pending_slice()
 
 
 func set_slicer(settings: Dictionary) -> void:
@@ -1138,9 +1356,23 @@ func set_slicer(settings: Dictionary) -> void:
 		_set_slider(_walls, float(settings["walls"]))
 	if settings.has("scale"):
 		_set_slider(_scale, float(settings["scale"]))
+		_sync_size()
+	if settings.has("width_mm") and _native.x > 1e-6:
+		_set_slider(_scale, float(settings["width_mm"]) / _native.x)
+		_sync_size()
+	if settings.has("rotation_deg"):
+		_set_slider(_rot, float(settings["rotation_deg"]))
 	if settings.has("mode"):
 		_mode.select(1 if str(settings["mode"]) == "vase" else 0)
 	_reslice()
+	_finish_pending_slice()
+
+
+## For probes: the studio's work frame, the ghost and the roads.
+func studio_state() -> Dictionary:
+	return {"work_xf": _studio_work_xf(), "ghost": _ghost_mi, "roads": _roads, "scale": float(_scale.value),
+		"size": Vector3(_native.x, _native.y, _native.z) * float(_scale.value), "native": _native,
+		"parse": _parse, "scale_max": _scale.max_value}
 
 
 func sim_seek(frac: float) -> void:

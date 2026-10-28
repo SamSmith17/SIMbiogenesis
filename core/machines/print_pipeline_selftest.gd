@@ -17,7 +17,7 @@ extends SceneTree
 ##
 ##   Godot.exe.exe --headless --path . --script core/machines/print_pipeline_selftest.gd
 
-const EXPECTED_CHECKS := 82
+const EXPECTED_CHECKS := 103
 
 var _checks := 0
 var _fails := 0
@@ -32,6 +32,11 @@ func _initialize() -> void:
 	_test_print_job()
 	_test_job_store_and_player()
 	_test_roads()
+	_test_no_partial_slice()
+	_test_ghost_placement()
+	_test_frames_and_caps()
+	_test_merged_roads()
+	_test_streamed_gcode()
 	print("")
 	if _checks != EXPECTED_CHECKS:
 		print("PRINT PIPELINE SELFTEST: ran %d checks, expected %d (a runtime error aborted a test?)" % [_checks, EXPECTED_CHECKS])
@@ -93,6 +98,11 @@ static func tube(r_out: float, r_in: float, h: float, n: int) -> Array:
 	return tris
 
 
+## A slice's moves as dicts (the slicer hands back PrintMoves).
+static func _mv(r: Dictionary) -> Array:
+	return PrintMoves.from_any(r["moves"]).to_array()
+
+
 static func _layer_moves(moves: Array, z: float, tol := 0.05) -> Array:
 	var out := []
 	for m in moves:
@@ -119,7 +129,8 @@ func _test_slicer_cube() -> void:
 	_check("cube slices", bool(r.get("ok", false)), str(r.get("error", "")))
 	if not bool(r.get("ok", false)):
 		return
-	var moves: Array = r["moves"]
+	_check("cube: moves come back packed", r["moves"] is PrintMoves)
+	var moves: Array = _mv(r)
 	_check("cube: 50 layers at 0.2 mm", int(r["layers"]) == 50, str(r["layers"]))
 	_check("cube: layer starts match", (r["layer_starts"] as PackedInt32Array).size() == 50)
 	var bmin: Vector3 = r["bounds_min"]
@@ -199,7 +210,7 @@ func _test_slicer_tube() -> void:
 	_check("tube slices", bool(r.get("ok", false)), str(r.get("error", "")))
 	if not bool(r.get("ok", false)):
 		return
-	var moves: Array = r["moves"]
+	var moves: Array = _mv(r)
 	_check("tube: 20 layers", int(r["layers"]) == 20, str(r["layers"]))
 	var mid := _layer_moves(moves, 4.0)
 	var inside := 0
@@ -235,7 +246,7 @@ func _test_slicer_vase() -> void:
 	_check("vase slices", bool(r.get("ok", false)))
 	if not bool(r.get("ok", false)):
 		return
-	var moves: Array = r["moves"]
+	var moves: Array = _mv(r)
 	var lastz := -1.0
 	var mono := true
 	var travels_up := 0
@@ -280,8 +291,8 @@ func _test_slicer_placement() -> void:
 
 func _test_gcode_round_trip() -> void:
 	var r := StlSlicer.slice_triangles(box(Vector3(12, 12, 3), Vector3.ZERO), {"layer_height_mm": 0.3, "line_width_mm": 0.5, "walls": 2, "infill_pct": 25.0, "centre_xy": Vector2(60, 60), "z_hop_mm": 0.5})
-	var moves: Array = r["moves"]
-	var text := PrintGcodeWriter.write(moves, {"name": "box", "hotend_c": 210.0, "bed_c": 60.0, "filament_mm": 1.75})
+	var moves: Array = _mv(r)
+	var text := PrintGcodeWriter.write(r["moves"], {"name": "box", "hotend_c": 210.0, "bed_c": 60.0, "filament_mm": 1.75})
 	_check("gcode: has the header and layer comments", text.contains("M104 S210") and text.contains(";LAYER:0") and text.contains("G92 E0"))
 	var back := GantryLabGcode.parse(text)
 	_check("gcode: reads back", bool(back.get("ok", false)))
@@ -356,9 +367,9 @@ func _test_print_job() -> void:
 	var ext := PackedInt32Array([0, 1, 1, 1, 1, 0, 1])
 	var tp := PrintJob.from_toolpath({"ok": true, "kind": "mud_building", "points": pts, "extruding": ext, "line_width_mm": 76.2, "layer_height_mm": 50.0, "print_speed_mm_s": 120.0},
 		{"machine_role": "fdm_printer", "machine_kind": "mud", "filament_diameter_mm": 76.2}, {"shift_xy": Vector2(1524.0, 1524.0)})
-	_check("toolpath job: ok, 6 moves", bool(tp.get("ok", false)) and (tp["moves"] as Array).size() == 6)
+	_check("toolpath job: ok, 6 moves", bool(tp.get("ok", false)) and PrintMoves.count(tp["moves"]) == 6)
 	if bool(tp.get("ok", false)):
-		var mv: Array = tp["moves"]
+		var mv: Array = _mv(tp)
 		_check("toolpath job: shifted onto the bed", ((mv[0] as Dictionary)["p0"] as Vector3).distance_to(Vector3(1514.0, 1514.0, 25.0)) < 1e-3, str((mv[0] as Dictionary)["p0"]))
 		_check("toolpath job: the lift is a rapid, the rest print", bool((mv[4] as Dictionary)["rapid"]) and float((mv[4] as Dictionary)["e_mm"]) == 0.0 and not bool((mv[0] as Dictionary)["rapid"]) and float((mv[0] as Dictionary)["e_mm"]) > 0.0)
 		# 100 mm of road at 76.2 × 50: volume 381 000 mm³ = 0.381 L.
@@ -373,13 +384,14 @@ func _test_job_store_and_player() -> void:
 	var id := MachineJobStore.save(job)
 	_check("store: a v2 job is written", not id.is_empty() and FileAccess.file_exists("%s/%s.job" % [MachineJobStore.JOBS_DIR, id]))
 	var back := MachineJobStore.load(id)
-	_check("store: moves return", back.has("moves") and (back["moves"] as Array).size() == (job["moves"] as Array).size())
+	_check("store: moves return", back.has("moves") and PrintMoves.count(back["moves"]) == PrintMoves.count(job["moves"]))
 	if back.has("moves"):
-		var a: Dictionary = (job["moves"] as Array)[7]
-		var b: Dictionary = (back["moves"] as Array)[7]
+		var a: Dictionary = (job["moves"] as PrintMoves).move(7)
+		var b: Dictionary = (back["moves"] as PrintMoves).move(7)
 		_check("store: a move's numbers survive", (a["p1"] as Vector3).distance_to(b["p1"] as Vector3) < 1e-5 and absf(float(a["e_mm"]) - float(b["e_mm"])) < 1e-6 and absf(float(a["feed_mm_s"]) - float(b["feed_mm_s"])) < 1e-4 and bool(a["rapid"]) == bool(b["rapid"]))
 		_check("store: limits, road size, totals return", absf(float(back["limits"]["accel_mm_s2"]) - 400.0) < 1e-6 and absf(float(back["line_width_mm"]) - 6.0) < 1e-6 and absf(float(back["total_s"]) - float(job["total_s"])) < 1e-3 and int(back["layers"]) == 6)
-		_check("store: old readers get points + flags", (back["points"] as PackedVector3Array).size() == (job["moves"] as Array).size() + 1)
+		_check("store: old readers get points + flags", (PrintJob.moves_to_points(back["moves"])["points"] as PackedVector3Array).size() == PrintMoves.count(job["moves"]) + 1)
+		_check("store: the plan returns with the job (no re-plan on load)", back.has("plan") and int((back["plan"] as Dictionary).get("n", 0)) == PrintMoves.count(job["moves"]))
 	# The player: the same plan, sampled by progress.
 	var pl := PrintJobPlayer.new()
 	_check("player: loads the stored job", pl.load(id, specs) and pl.is_loaded())
@@ -387,8 +399,9 @@ func _test_job_store_and_player() -> void:
 		_check("player: total_s = the job's", absf(pl.total_s - float(job["total_s"])) < 1e-3)
 		var s0 := pl.sample(0.0)
 		var s1 := pl.sample(1.0)
-		var first: Vector3 = ((job["moves"] as Array)[0] as Dictionary)["p0"]
-		var last: Vector3 = ((job["moves"] as Array)[(job["moves"] as Array).size() - 1] as Dictionary)["p1"]
+		var jm: PrintMoves = job["moves"]
+		var first: Vector3 = jm.p0[0]
+		var last: Vector3 = jm.p1[jm.size() - 1]
 		_check("player: progress 0 at the first point", (s0["pos"] as Vector3).distance_to(first) < 1e-4)
 		_check("player: progress 1 at the last point, layer 6 of 6", (s1["pos"] as Vector3).distance_to(last) < 1e-3 and int(s1["layer"]) == 6 and int(s1["layers"]) == 6, "%s %s/%s" % [s1["pos"], s1["layer"], s1["layers"]])
 		var sh := pl.sample(0.5)
@@ -408,7 +421,7 @@ func _test_job_store_and_player() -> void:
 
 func _test_roads() -> void:
 	var r := StlSlicer.slice_triangles(box(Vector3(20, 20, 2), Vector3.ZERO), {"layer_height_mm": 1.0, "line_width_mm": 1.0, "walls": 1, "infill_pct": 0.0, "top_layers": 0, "bottom_layers": 0, "centre_xy": Vector2(10, 10)})
-	var moves: Array = r["moves"]
+	var moves: PrintMoves = r["moves"]
 	var roads := PrintRoads.new()
 	roads.lay(moves, 1.0, 1.0, Color.WHITE, 0.0, Vector3(-0.01, 0.0, -0.01))
 	_check("roads: one per wall side per layer (8)", roads.road_count() == 8, str(roads.road_count()))
@@ -426,3 +439,152 @@ func _test_roads() -> void:
 	var guess := PrintRoads.layer_guess_mm(moves, 1.0)
 	_check("roads: layer guessed from the Z steps", absf(guess - 1.0) < 1e-6, str(guess))
 	roads.free()
+
+
+# ---------------------------------------------------------------------------
+# The 2026-10-28 improvement pass
+# ---------------------------------------------------------------------------
+
+## A print over the move ceiling is REFUSED with advice, never cut short (the
+## old 160 000 cap ended a gyroid cube a tenth of the way up).
+func _test_no_partial_slice() -> void:
+	var tris := box(Vector3(20, 20, 40), Vector3.ZERO)
+	var r := StlSlicer.slice_triangles(tris, {"layer_height_mm": 0.2, "line_width_mm": 0.4, "infill_pct": 40.0, "max_moves": 1000})
+	_check("ceiling: refused, not truncated", not bool(r.get("ok", true)) and bool(r.get("too_many_moves", false)) and not r.has("moves"), str(r.get("error", "")))
+	_check("ceiling: the refusal says what to change", str(r.get("error", "")).contains("layer height"))
+	var full := StlSlicer.slice_triangles(tris, {"layer_height_mm": 0.2, "line_width_mm": 0.4, "infill_pct": 40.0})
+	var top := 0.0
+	var pm: PrintMoves = full["moves"]
+	for i in pm.size():
+		if pm.e[i] > 0.0:
+			top = maxf(top, pm.p1[i].z)
+	_check("ceiling: without one, the whole height prints", absf(top - 40.0) < 1e-3, str(top))
+	var calls := [0]
+	var cancelled := StlSlicer.slice_triangles(tris, {"layer_height_mm": 0.2, "cancel": func() -> bool:
+		calls[0] += 1
+		return calls[0] > 2})
+	_check("cancel: a slice stops when asked", bool(cancelled.get("cancelled", false)) and not bool(cancelled.get("ok", true)))
+
+
+## An L (two boxes, not symmetric) scaled and turned: the mesh preview put at
+## `place_xy` with the same scale and turn covers exactly the sliced model.
+func _test_ghost_placement() -> void:
+	var tris := box(Vector3(40, 10, 5), Vector3(13, 7, 0)) + box(Vector3(10, 30, 5), Vector3(13, 17, 0))
+	var sc := 1.7
+	var rot := deg_to_rad(33.0)
+	var r := StlSlicer.slice_triangles(tris, {"layer_height_mm": 1.0, "line_width_mm": 1.0, "walls": 1, "infill_pct": 0.0,
+		"scale": sc, "rotation_deg": 33.0, "centre_xy": Vector2(150, 120)})
+	_check("ghost: the L slices", bool(r.get("ok", false)))
+	if not bool(r.get("ok", false)):
+		return
+	# The preview: vertices about the file's own box centre, scaled, turned, at place_xy.
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for t in tris:
+		for v in t:
+			lo = lo.min(Vector2(v.x, v.y))
+			hi = hi.max(Vector2(v.x, v.y))
+	var c0 := (lo + hi) * 0.5
+	var place: Vector2 = r["place_xy"]
+	var gmin := Vector2(INF, INF)
+	var gmax := Vector2(-INF, -INF)
+	for t in tris:
+		for v in t:
+			var m := (Vector2(v.x, v.y) - c0) * sc
+			var w := Vector2(m.x * cos(rot) - m.y * sin(rot), m.x * sin(rot) + m.y * cos(rot)) + place
+			gmin = gmin.min(w)
+			gmax = gmax.max(w)
+	var mmin: Vector3 = r["model_min"]
+	var mmax: Vector3 = r["model_max"]
+	_check("ghost: the preview covers the sliced model exactly", gmin.distance_to(Vector2(mmin.x, mmin.y)) < 1e-3 and gmax.distance_to(Vector2(mmax.x, mmax.y)) < 1e-3,
+		"%s..%s vs %s..%s" % [gmin, gmax, mmin, mmax])
+	# The turned footprint's centre is NOT the turned file centre (an L).
+	_check("ghost: place_xy differs from the footprint centre (the old bug)", place.distance_to(Vector2(150, 120)) > 1.0, str(place))
+
+
+## The studio / world frame is right-handed (a print is not a mirror image of
+## its model); the bake through that reflection keeps faces outward; caps
+## ranges hold the machine's own head; scale reaches far past 4x.
+func _test_frames_and_caps() -> void:
+	var wb := PrintRoads.work_basis()
+	# Roads map work (x, y, z) to local (x, z, y); the node basis on top.
+	var ex := wb * Vector3(1, 0, 0)
+	var ey := wb * Vector3(0, 0, 1)
+	var ez := wb * Vector3(0, 1, 0)
+	_check("frame: work X x work Y = up (right-handed)", ex.cross(ey).dot(ez) > 0.99 and ez.is_equal_approx(Vector3.UP))
+	# A model ghost turned +90 deg (Basis about Y, the mesh in (x, z, -y))
+	# lands where the roads put the turned point: file +X to work +Y.
+	var g := Basis(Vector3.UP, PI * 0.5) * Vector3(1, 0, 0)
+	_check("frame: a +90 deg turn takes the model's +X to work +Y in both", g.is_equal_approx(wb * Vector3(0, 0, 1)), str(g))
+	var r := StlSlicer.slice_triangles(box(Vector3(10, 10, 2), Vector3.ZERO), {"layer_height_mm": 1.0, "line_width_mm": 1.0, "walls": 1, "infill_pct": 0.0, "top_layers": 0, "bottom_layers": 0})
+	var roads := PrintRoads.new()
+	roads.lay(r["moves"], 1.0, 1.0, Color.WHITE)
+	var plain := roads.bake_mesh(Color.WHITE)
+	var mesh := roads.bake_mesh(Color.WHITE, Vector3.ZERO, wb)
+	_check("bake: plain and reflected bakes wind the same way", _winding_sign(plain) == _winding_sign(mesh) and _winding_sign(mesh) != 0, "%d vs %d" % [_winding_sign(plain), _winding_sign(mesh)])
+	roads.free()
+	var flake := FdmPrinterCaps.from_specs({"machine_kind": "gantry", "nozzle_diameter_mm": 6.0, "filament_diameter_mm": 6.0, "line_width_mm": 6.0, "layer_height_mm": 3.0})
+	_check("caps: a 6 mm gantry head is not clamped to 2.5 mm lines", flake.wall_hi >= 6.0 and flake.nozzle_hi >= 6.0 and flake.layer_hi >= 3.0, "%s %s %s" % [flake.wall_hi, flake.nozzle_hi, flake.layer_hi])
+	_check("caps: scale reaches far past 4x", flake.scale_hi >= 100.0 and FdmPrinterCaps.from_specs({"machine_kind": "trash"}).scale_hi >= 100.0)
+	var delta := FdmPrinterCaps.from_specs({"machine_kind": "gantry", "gantry_spec": {"kinematics": "delta"}, "work_x_mm": 200.0, "work_y_mm": 200.0})
+	_check("caps: a delta's work origin is the bed centre", delta.origin_centred and delta.bed_centre_mm() == Vector2.ZERO and FdmPrinterCaps.from_specs({}).bed_centre_mm() == Vector2(150, 150))
+
+
+## +1 when a mesh's triangles agree with their stored normals the way the
+## road mesh's own do, −1 when every one is reversed, 0 when mixed.
+static func _winding_sign(mesh: ArrayMesh) -> int:
+	var arr := mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var pos := 0
+	var neg := 0
+	for t in range(0, v.size(), 3):
+		var fn := (v[t + 1] - v[t]).cross(v[t + 2] - v[t])
+		if fn.length() < 1e-12:
+			continue
+		if fn.dot(n[t]) > 0.0:
+			pos += 1
+		else:
+			neg += 1
+	if neg == 0 and pos > 0:
+		return 1
+	if pos == 0 and neg > 0:
+		return -1
+	return 0
+
+
+## More extruding moves than the draw budget: curves merge into chords, the
+## printed length and the progress still run move by move.
+func _test_merged_roads() -> void:
+	var r := StlSlicer.slice_triangles(tube(20.0, 15.0, 6.0, 96), {"layer_height_mm": 0.5, "line_width_mm": 0.5, "walls": 2, "infill_pct": 0.0, "top_layers": 0, "bottom_layers": 0})
+	var pm: PrintMoves = r["moves"]
+	var exact := PrintRoads.new()
+	exact.lay(pm, 0.5, 0.5, Color.WHITE)
+	var merged := PrintRoads.new()
+	merged.display_max = exact.road_count() / 6
+	merged.lay(pm, 0.5, 0.5, Color.WHITE)
+	_check("merge: a budget merges the curves", merged.is_merged() and merged.road_count() < exact.road_count() / 2, "%d vs %d" % [merged.road_count(), exact.road_count()])
+	_check("merge: the printed length is the moves' own", absf(merged.road_len_total_m() - exact.road_len_total_m()) < 1e-6)
+	merged.set_progress_move(pm.size() / 2, 0.5)
+	var half := merged.printed_m()
+	exact.set_progress_move(pm.size() / 2, 0.5)
+	_check("merge: progress by move matches the exact roads", absf(half - exact.printed_m()) < 1e-6, "%f vs %f" % [half, exact.printed_m()])
+	merged.show_all()
+	_check("merge: all shown at the end", merged.roads_shown() == merged.road_count())
+	_check("merge: bounds match the exact roads", merged.bounds_local().position.distance_to(exact.bounds_local().position) < 0.002)
+	exact.free()
+	merged.free()
+
+
+func _test_streamed_gcode() -> void:
+	var r := StlSlicer.slice_triangles(box(Vector3(30, 30, 4), Vector3.ZERO), {"layer_height_mm": 0.3, "line_width_mm": 0.5, "infill_pct": 30.0, "centre_xy": Vector2(60, 60)})
+	var path := "user://print_selftest_stream.gcode"
+	var opts := {"name": "box", "hotend_c": 200.0}
+	var written := PrintGcodeWriter.write_file(r["moves"], path, opts)
+	var f := FileAccess.open(path, FileAccess.READ)
+	var text := f.get_as_text() if f != null else ""
+	if f != null:
+		f.close()
+	var direct := PrintGcodeWriter.write(r["moves"], opts)
+	_check("gcode: the streamed file = the string form", not written.is_empty() and text == direct, "%d vs %d chars" % [text.length(), direct.length()])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))

@@ -1,9 +1,9 @@
 shader_type spatial;
 render_mode cull_disabled, depth_draw_opaque, diffuse_burley, specular_schlick_ggx;
 
-## Clip-plane reveal for Precious Plastic beam extrusion. Fragments on the
-## inward (machine) side of the die plane are discarded so the stick only
-## appears once it has left the mold mouth.
+// Clip-plane reveal for Precious Plastic beam extrusion. Fragments on the
+// inward (machine) side of the die plane are discarded so the stick only
+// appears once it has left the mold mouth.
 
 uniform vec4 albedo : source_color = vec4(0.22, 0.62, 0.58, 1.0);
 uniform float roughness : hint_range(0.0, 1.0) = 0.55;

@@ -18,8 +18,7 @@ const VERSION := 2
 static func save(parse: Dictionary) -> String:
 	var job_id := "job_%d_%d" % [Time.get_unix_time_from_system(), randi() % 100000]
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(JOBS_DIR))
-	var moves: Array = parse.get("moves", [])
-	if not moves.is_empty():
+	if PrintMoves.count(parse.get("moves", [])) > 0:
 		return job_id if _save_v2(job_id, parse) else ""
 	var pts: PackedVector3Array = parse.get("points", PackedVector3Array())
 	if pts.is_empty():
@@ -28,25 +27,13 @@ static func save(parse: Dictionary) -> String:
 
 
 static func _save_v2(job_id: String, job: Dictionary) -> bool:
-	var moves: Array = job["moves"]
-	var n := moves.size()
-	var a := PackedVector3Array()
-	var b := PackedVector3Array()
-	var f := PackedFloat32Array()
-	var e := PackedFloat32Array()
-	var r := PackedByteArray()
-	a.resize(n)
-	b.resize(n)
-	f.resize(n)
-	e.resize(n)
-	r.resize(n)
-	for i in n:
-		var m: Dictionary = moves[i]
-		a[i] = m["p0"]
-		b[i] = m["p1"]
-		f[i] = float(m.get("feed_mm_s", 30.0))
-		e[i] = float(m.get("e_mm", 0.0))
-		r[i] = 1 if bool(m.get("rapid", false)) else 0
+	var pm := PrintMoves.from_any(job["moves"])
+	var n := pm.size()
+	var a := pm.p0
+	var b := pm.p1
+	var f := pm.feed
+	var e := pm.e
+	var r := pm.rapid
 	var limits: Dictionary = (job.get("limits", {}) as Dictionary).duplicate()
 	limits.erase("spec")
 	var data := {
@@ -69,6 +56,14 @@ static func _save_v2(job_id: String, job: Dictionary) -> bool:
 		"layer_z": job.get("layer_z", PackedFloat32Array()),
 		"mode": str(job.get("mode", "")),
 	}
+	# The plan rides along (its packed arrays, not the moves twice): a
+	# million-move job re-planned on load stalled the world for seconds.
+	var plan: Dictionary = job.get("plan", {})
+	if int(plan.get("n", 0)) == n:
+		var pd := plan.duplicate()
+		pd.erase("moves")
+		pd.erase("pm")
+		data["plan"] = pd
 	var fh := FileAccess.open("%s/%s.job" % [JOBS_DIR, job_id], FileAccess.WRITE)
 	if fh == null:
 		return false
@@ -110,8 +105,8 @@ static func exists(job_id: String) -> bool:
 		or FileAccess.file_exists("%s/%s.json" % [JOBS_DIR, job_id])
 
 
-## {points, extruding, bounds_min, bounds_max, kind} for any job; a v2 job
-## also carries moves, limits, line_width_mm, layer_height_mm, filament_mm,
+## {points, extruding, bounds_min, bounds_max, kind} for a v1 job; a v2 job
+## carries moves (PrintMoves; `PrintJob.moves_to_points` for the old form), limits, line_width_mm, layer_height_mm, filament_mm,
 ## extrusion_mm, volume_mm3, additive, total_s, layers, layer_starts, layer_z.
 static func load(job_id: String) -> Dictionary:
 	if job_id.is_empty():
@@ -168,15 +163,29 @@ static func _load_v2(path: String) -> Dictionary:
 	var r: PackedByteArray = d.get("r", PackedByteArray())
 	if a.size() < n or b.size() < n:
 		return {}
-	var moves: Array = []
-	moves.resize(n)
+	var moves := PrintMoves.new()
+	moves.p0 = a.slice(0, n)
+	moves.p1 = b.slice(0, n)
+	moves.feed = f.slice(0, n)
+	moves.e = e.slice(0, n)
+	moves.rapid = r.slice(0, n)
+	moves.feed.resize(n)
+	moves.e.resize(n)
+	moves.rapid.resize(n)
+	for i in range(f.size(), n):
+		moves.feed[i] = 30.0
+	moves.line.resize(n)
 	for i in n:
-		moves[i] = {"p0": a[i], "p1": b[i], "feed_mm_s": float(f[i]) if i < f.size() else 30.0,
-			"e_mm": float(e[i]) if i < e.size() else 0.0, "rapid": (r[i] != 0) if i < r.size() else false, "line": i + 1}
-	var pe := PrintJob.moves_to_points(moves)
+		moves.line[i] = i + 1
+	var plan: Dictionary = {}
+	var pd: Variant = d.get("plan", {})
+	if pd is Dictionary and int((pd as Dictionary).get("n", 0)) == n:
+		plan = (pd as Dictionary).duplicate()
+		plan["moves"] = moves
+		plan["pm"] = moves
 	return {
 		"ok": true,
-		"points": pe["points"], "extruding": pe["extruding"],
+		"plan": plan,
 		"moves": moves,
 		"bounds_min": d.get("bmin", Vector3.ZERO), "bounds_max": d.get("bmax", Vector3.ZERO),
 		"kind": str(d.get("kind", "")), "name": str(d.get("name", "")),

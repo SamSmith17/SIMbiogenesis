@@ -15,6 +15,9 @@ extends RefCounted
 ## `MachineJobStore.save` writes (v2, binary). `PrintJobPlayer` loads one by
 ## id, plans it and answers "where is the nozzle at this progress".
 ##
+## `moves` in a job is always a `PrintMoves` (packed); a parse may hand in
+## either form.
+##
 ## Material: every extruding move carries e_mm in millimetres of the
 ## feedstock bore d (specs filament_diameter_mm), e = w·h·L / (π d²/4), so
 ## `CartesianMachineSource.derive_job` bills exactly w·h·L of road.
@@ -77,7 +80,7 @@ static func filament_mm(specs: Dictionary) -> float:
 static func from_parse(parse: Dictionary, specs: Dictionary, opts: Dictionary = {}) -> Dictionary:
 	if not bool(parse.get("ok", false)):
 		return {"ok": false, "error": str(parse.get("error", "no motion"))}
-	var moves: Array = parse.get("moves", [])
+	var moves := PrintMoves.from_any(parse.get("moves", []))
 	if moves.is_empty():
 		return {"ok": false, "error": "no moves"}
 	var limits: Dictionary = opts.get("limits", limits_for_specs(specs))
@@ -92,13 +95,12 @@ static func from_parse(parse: Dictionary, specs: Dictionary, opts: Dictionary = 
 	if str(parse.get("dialect", "")) == "grbl" and str(specs.get("machine_role", "")) == "fdm_printer" and ext > 0.0 and ext < 1e-2 * moves.size():
 		ext = 0.0
 		var area := PI * d * d * 0.25
-		for mv in moves:
-			var m: Dictionary = mv
-			if float(m.get("e_mm", 0.0)) > 0.0:
-				var l := (m["p0"] as Vector3).distance_to(m["p1"] as Vector3)
-				m["e_mm"] = l * line_w * layer_h / area
-				ext += float(m["e_mm"])
-	var plan := GantryLabMotion.plan(parse, limits)
+		for i in moves.size():
+			if moves.e[i] > 0.0:
+				var l := moves.p0[i].distance_to(moves.p1[i])
+				moves.e[i] = l * line_w * layer_h / area
+				ext += moves.e[i]
+	var plan := GantryLabMotion.plan({"ok": true, "moves": moves, "layers": parse.get("layers", 0), "extrusion_mm": ext}, limits)
 	var total_s := float(plan.get("total_s", 0.0))
 	var speed_factor := maxf(float(specs.get("speed_factor", 1.0)), 0.05)
 	var job := {
@@ -154,7 +156,7 @@ static func from_toolpath(parse: Dictionary, specs: Dictionary, opts: Dictionary
 	var additive := bool(opts.get("additive", str(specs.get("machine_role", "")) == "fdm_printer"))
 	var d := filament_mm(specs)
 	var has_ext := ext.size() == pts.size()
-	var moves: Array = []
+	var moves := PrintMoves.new()
 	var extrusion := 0.0
 	var feed_mm := 0.0
 	var rapid_mm := 0.0
@@ -177,7 +179,7 @@ static func from_toolpath(parse: Dictionary, specs: Dictionary, opts: Dictionary
 		elif on and cutting:
 			e = 1e-4 * l   # a cut marks the stock (the road preview draws it)
 		var rapid := not on
-		moves.append({"p0": a, "p1": b, "feed_mm_s": travel if rapid else speed, "e_mm": e, "rapid": rapid, "line": i})
+		moves.append(a, b, travel if rapid else speed, e, rapid, i)
 		if rapid:
 			rapid_mm += l
 		else:
@@ -205,24 +207,24 @@ static func from_toolpath(parse: Dictionary, specs: Dictionary, opts: Dictionary
 	return from_parse(p, specs, o)
 
 
-static func _count_layers(moves: Array) -> int:
+static func _count_layers(moves_in: Variant) -> int:
+	var moves := PrintMoves.from_any(moves_in)
 	var zs := {}
-	for mv in moves:
-		var m: Dictionary = mv
-		if float(m.get("e_mm", 0.0)) > 0.0:
-			zs[snappedf(float((m["p1"] as Vector3).z), 0.01)] = true
+	for i in moves.size():
+		if moves.e[i] > 0.0:
+			zs[snappedf(float(moves.p1[i].z), 0.01)] = true
 	return zs.size()
 
 
 ## The (first) move index of each layer, from the Z steps of extruding moves.
-static func layer_starts(moves: Array) -> PackedInt32Array:
+static func layer_starts(moves_in: Variant) -> PackedInt32Array:
+	var moves := PrintMoves.from_any(moves_in)
 	var out := PackedInt32Array()
 	var last_z := NAN
 	for i in moves.size():
-		var m: Dictionary = moves[i]
-		if float(m.get("e_mm", 0.0)) <= 0.0:
+		if moves.e[i] <= 0.0:
 			continue
-		var z := float((m["p1"] as Vector3).z)
+		var z := float(moves.p1[i].z)
 		if is_nan(last_z) or z > last_z + 1e-6:
 			out.append(i)
 			last_z = z
@@ -236,21 +238,21 @@ static func plan(job: Dictionary, limits: Dictionary = {}) -> Dictionary:
 
 
 ## Old readers (the inspector's summary, MudGrblExport) want points + flags.
-static func moves_to_points(moves: Array) -> Dictionary:
+static func moves_to_points(moves_in: Variant) -> Dictionary:
+	var moves := PrintMoves.from_any(moves_in)
 	var pts := PackedVector3Array()
 	var ext := PackedInt32Array()
 	if moves.is_empty():
 		return {"points": pts, "extruding": ext}
-	pts.append((moves[0] as Dictionary)["p0"])
+	pts.append(moves.p0[0])
 	ext.append(0)
-	for mv in moves:
-		var m: Dictionary = mv
-		var p0: Vector3 = m["p0"]
+	for i in moves.size():
+		var p0 := moves.p0[i]
 		if pts[pts.size() - 1].distance_squared_to(p0) > 1e-10:
 			pts.append(p0)
 			ext.append(0)
-		pts.append(m["p1"])
-		ext.append(1 if float(m.get("e_mm", 0.0)) > 0.0 else 0)
+		pts.append(moves.p1[i])
+		ext.append(1 if moves.e[i] > 0.0 else 0)
 	return {"points": pts, "extruding": ext}
 
 
