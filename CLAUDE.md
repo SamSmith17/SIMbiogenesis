@@ -3505,8 +3505,19 @@ planner. Now:
   advanced until G was pressed; the first sandbox run read 0 % with every
   road laid (the runtime's own clock-derived progress had long passed the
   end). They run in the ambient block too, inside the sim-write bracket.
+- **Where the print is on the GLB machines** (measured 2026-10-28): the
+  Trash Printer's extruder barrel pokes 9 cm through its deck INTO the
+  cabinet and the Z bed rises to it there, so the print grows inside the
+  white box, out of sight from outside (the status label over the machine
+  is what reads); the Mud Printer prints on the terrain inside its frame
+  (`_bed_world_origin` takes the ground height there). The saved
+  `profiles.json` can name a static node as a machine's tool (the trash
+  printer's says "Node") and carry print-span soft windows narrower than
+  the bed: the runtime reads the tip off the deepest moving carriage when
+  the tool node does not ride an axis, and never clamps the print pose to
+  the soft window.
 - Gates: `print_pipeline_selftest` (82) and `tools/checks/print_pipeline_check.gd`
-  (Validation list).
+  (Validation list; 29 PASS on Mount Vernon).
 
 ## Toroid designer (core/toroidlab/, 2026-10-26)
 

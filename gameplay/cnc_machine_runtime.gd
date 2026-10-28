@@ -709,6 +709,14 @@ func _bed_world_origin() -> Vector3:
 		var pp := get_parent()
 		return (pp as Node3D).global_position if pp is Node3D else global_position
 	var c := box.get_center()
+	# A fixed-bed gantry (the mud printer) prints on the GROUND inside its
+	# frame: the terrain's height there, not the frame's lowest mesh (feet
+	# seated into a slope sit under the surface).
+	var m := _main_node()
+	if m != null:
+		var gy := TerrainSurfaceQuery.ground_height_at(m, c.x, c.z)
+		if is_finite(gy) and absf(gy - box.position.y) < 3.0:
+			return Vector3(c.x, gy, c.z)
 	return Vector3(c.x, box.position.y, c.z)
 
 
