@@ -183,6 +183,11 @@ static func factors_at(receivers: Array, sun_dir: Vector3, intersect_fn: Callabl
 	var memo: Dictionary = {}
 	for r in receivers:
 		var rd: Dictionary = r as Dictionary
+		# A designed solar array works out its own shade at this sun
+		# (PvLabShading.coarse_factor_at: a ray per module, bypass diodes).
+		if rd.get("factor_fn") is Callable and (rd["factor_fn"] as Callable).is_valid():
+			out.append(float((rd["factor_fn"] as Callable).call(sun_dir)))
+			continue
 		var p: Variant = rd.get("pos", null)
 		if not (p is Vector3):
 			out.append(float(rd.get("s", 1.0)))

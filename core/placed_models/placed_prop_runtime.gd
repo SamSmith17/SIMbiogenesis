@@ -120,6 +120,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Edit dome (click) / Move (drag)"
 	elif model_id == ToroidLabBuilder.MODEL_ID:
 		prop.prompt = "Edit toroid (click) / Move (drag)"
+	elif model_id == PvLabBuilder.MODEL_ID:
+		prop.prompt = "Edit solar array (click) / Move (drag)"
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		prop.prompt = "Edit gantry (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
@@ -189,6 +191,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pp_beam_extruder(prop, rec)
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
+		_maybe_attach_pv_tracker(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
@@ -260,6 +263,10 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var dl := DomeLabDesign.packed_spec(DomeLabDesign.solve(rec.get("domelab_spec") as Dictionary))
 		if not dl.is_empty():
 			return dl
+	if rec.get("pvlab_spec") is Dictionary:
+		var pl := PvLabDesign.packed_spec(PvLabDesign.solve(rec.get("pvlab_spec") as Dictionary))
+		if not pl.is_empty():
+			return pl
 	if rec.get("toroid_spec") is Dictionary:
 		var tl := ToroidLabDesign.packed_spec(ToroidLabDesign.solve(rec.get("toroid_spec") as Dictionary))
 		if not tl.is_empty():
@@ -574,6 +581,15 @@ static func _maybe_attach_hawt_tracker(prop: PlacedProp, rec: Dictionary) -> voi
 ## thermal/steam telemetry is computed centrally by
 ## SystemGraphView._tick_graph_csp so it stays correct even if this prop's
 ## script hasn't bound yet.
+## A designed solar array on a single-axis tracker turns its heads to follow
+## the sun (gameplay/pv_tracker_runtime.gd). Visual: the energy model works
+## out the same angle for itself.
+static func _maybe_attach_pv_tracker(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != PvLabBuilder.MODEL_ID:
+		return
+	PvTrackerRuntime.attach(prop, rec)
+
+
 static func _maybe_attach_csp_tracker(prop: PlacedProp, rec: Dictionary) -> void:
 	if str(rec.get("kind", "")) != "csp_trough":
 		return
@@ -756,6 +772,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["gantry_spec"] = rec.get("gantry_spec", {})
 	if rec.has("toroid_spec"):
 		extras["toroid_spec"] = rec.get("toroid_spec", {})
+	if rec.has("pvlab_spec"):
+		extras["pvlab_spec"] = rec.get("pvlab_spec", {})
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
 	if rec.has("tank_spec"):

@@ -201,7 +201,10 @@ static func _mesh_hit(main: Node, origin: Vector3, dir: Vector3,
 				best = ch
 				best_d = float(ch["distance"])
 	# Merged OSM Buildings: NEVER full triangle walk — AABB entry only.
-	var buildings := terrain.get_node_or_null("Buildings")
+	# "Buildings" is a Node3D root; the merged mesh is its BuildingMeshes child.
+	var buildings := terrain.get_node_or_null("Buildings/BuildingMeshes")
+	if buildings == null:
+		buildings = terrain.get_node_or_null("Buildings")
 	if buildings is MeshInstance3D:
 		var bh := _pick_mi_cheap(buildings as MeshInstance3D, origin, dir, cam_pos)
 		if bool(bh.get("valid", false)) and float(bh.get("distance", INF)) < best_d:

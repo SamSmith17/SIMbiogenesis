@@ -274,6 +274,11 @@ func _populate() -> void:
 			"detail": "Geodesic domes, zomes and helix zomes: conduit, hubs, flat bars, rotegrity, plates → BOM + cut files.",
 		},
 		{
+			"kind": "pvlab",
+			"label": "Solar designer…",
+			"detail": "Digital twins of your real panels (cells, size, frame, junction box, leads) on racks of 2x4s, Unistrut or rail, or a tracker; strings with live A / V / W.",
+		},
+		{
 			"kind": "toroidlab",
 			"label": "Toroid designer…",
 			"detail": "Bent-tube toroids on pipe fittings: rings, bracing and tension lines, a pleated correx canopy, a solar ring → cut list, bend templates, sheets.",
@@ -446,7 +451,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab", "pvlab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -519,6 +524,12 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "The dome designer needs a location map (TerrainLoader)."
+		"pvlab":
+			if _loader != null and _loader.has_method("open_pvlab"):
+				_loader.call("open_pvlab")
+				close()
+			else:
+				_status.text = "The Solar designer needs a location map (TerrainLoader)."
 		"toroidlab":
 			if _loader != null and _loader.has_method("open_toroidlab"):
 				_loader.call("open_toroidlab")
@@ -604,6 +615,11 @@ func _place_structure(model_id: String) -> void:
 	if model_id == ToroidLabBuilder.MODEL_ID:
 		if _loader != null and _loader.has_method("open_toroidlab"):
 			_loader.call("open_toroidlab")
+			close()
+			return
+	if model_id == PvLabBuilder.MODEL_ID or model_id == PvArrayBuilder.MODEL_ID:
+		if _loader != null and _loader.has_method("open_pvlab"):
+			_loader.call("open_pvlab")
 			close()
 			return
 	if model_id == GantryLabBuilder.MODEL_ID:

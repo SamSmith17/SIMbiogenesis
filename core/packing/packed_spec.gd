@@ -154,6 +154,11 @@ const DYNAMIC_MODELS := {
 	# A toroid packs as its bent tube bundle, the canopy stack and the panel
 	# stack; the real spec is ToroidLabDesign.packed_spec (the record's
 	# toroid_spec). This fallback is the reference build (24 ribs, ~420 kg).
+	# A designed solar array ships as its modules on edge in a crate plus the
+	# rack bundle; the real spec is PvLabDesign.packed_spec (the record's
+	# pvlab_spec). This fallback is the default 12 × 380 W backyard rack.
+	"pvlab_array": {"w_m": 1.9, "d_m": 1.15, "h_m": 0.75,
+		"mass_kg": 300.0, "form": "crate", "source": "estimated"},
 	"toroidlab_structure": {"w_m": 2.62, "d_m": 0.72, "h_m": 0.75,
 		"mass_kg": 420.0, "form": "bundle", "source": "estimated"},
 	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,

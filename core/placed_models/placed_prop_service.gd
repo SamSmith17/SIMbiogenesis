@@ -21,6 +21,11 @@ static var _ghost_model_id := ""
 static var _ghost_valid := false
 static var _ghost_ground_y := 0.0
 static var _ghost_yaw_deg := 0.0
+## A designed solar array's aim (PvSurfaceAim: position, normal, host, the
+## pose `xf`) and the mount its spec had when placement began (a pitched
+## surface switches the ghost to a roof-flush mount, a level one back).
+static var _pv_aim: Dictionary = {}
+static var _pv_mount_base := ""
 static var _ghost_guides: MeshInstance3D = null
 
 
@@ -117,6 +122,11 @@ static func get_prop_record(main: Node, prop_id: String) -> Dictionary:
 ## shows it).
 static func update_prop_record(main: Node, prop_id: String, patch: Dictionary,
 		rebuild_prop: bool = false) -> bool:
+	return _update_prop_record_depth(main, prop_id, patch, 0, rebuild_prop)
+
+
+static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictionary, depth: int,
+		rebuild_prop: bool = true) -> bool:
 	if main == null or prop_id.is_empty() or patch.is_empty():
 		return false
 	var layer := _layer_for_main(main)
@@ -140,6 +150,14 @@ static func update_prop_record(main: Node, prop_id: String, patch: Dictionary,
 	for k in ["x", "z", "yaw", "y_offset", "pv_array_spec"]:
 		if patch.has(k):
 			_notify_graph_prop_moved(main, prop_id)
+			break
+	# What stands on this prop moves with it; a designed array's plane of
+	# array (the graph's tilt / azimuth) follows its own pose.
+	for k2 in ["x", "z", "yaw", "pitch", "roll", "y_offset", "scale"]:
+		if patch.has(k2):
+			_reseat_hosted(main, prop_id, depth)
+			if str(layer.find_by_id(prop_id).get("model_id", "")) == PvLabBuilder.MODEL_ID:
+				Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
 			break
 	_notify_mp_props_edited()
 	return true
@@ -251,6 +269,9 @@ static func update_placement_aim(main: Node, camera: Camera3D) -> void:
 		return
 	if not is_instance_valid(_ghost_node):
 		return
+	if _ghost_model_id == PvLabBuilder.MODEL_ID:
+		_update_pvlab_aim(main, camera)
+		return
 	var hit := TerrainSurfaceQuery.raycast_ground_at_camera(main, camera)
 	if hit.is_empty():
 		# No terrain under the crosshair — hide the ghost as clear "can't place" feedback.
@@ -280,6 +301,63 @@ static func update_placement_aim(main: Node, camera: Camera3D) -> void:
 	_set_ghost_tint(true)
 
 
+## A designed solar array follows any surface: the ground, a placed prop's
+## top, an OSM roof. On a pitched one it lies in the surface facing down the
+## slope (the ghost is rebuilt as a roof-flush mount); R turns it.
+static func _update_pvlab_aim(main: Node, camera: Camera3D) -> void:
+	var aim := PvSurfaceAim.pick(main, camera)
+	if not bool(aim.get("valid", false)):
+		_ghost_valid = false
+		_ghost_node.visible = false
+		return
+	var rx: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+	var spec: Dictionary = rx.get("pvlab_spec", {}) as Dictionary
+	var arr: Dictionary = spec.get("array", {}) as Dictionary
+	if _pv_mount_base.is_empty():
+		_pv_mount_base = str(arr.get("mount", "ground"))
+	var want := _pv_mount_base
+	if bool(aim.get("pitched", false)) and not (_pv_mount_base in ["roof_flush", "none"]):
+		want = "roof_flush"
+	if str(arr.get("mount", "ground")) != want:
+		arr["mount"] = want
+		spec["array"] = arr
+		rx["pvlab_spec"] = spec
+		_placement_prep["record_extra"] = rx
+		var g := _build_ghost(main, PvLabBuilder.MODEL_ID)
+		if g != null:
+			_ghost_node = g
+	var xf := PvSurfaceAim.mount_transform(aim, _ghost_yaw_deg)
+	_ghost_node.global_transform = xf
+	_pv_aim = aim.duplicate()
+	_pv_aim["xf"] = xf
+	_ghost_ground_y = xf.origin.y
+	_ghost_valid = true
+	_ghost_node.visible = true
+	_set_ghost_tint(true)
+
+
+## Turn the placement ghost (degrees). A designed solar array on a roof turns
+## about the roof's normal.
+static func rotate_placement(delta_deg: float) -> void:
+	if not _placement_active:
+		return
+	_ghost_yaw_deg = fposmod(_ghost_yaw_deg + delta_deg, 360.0)
+	if is_instance_valid(_placement_main):
+		var cam := _player_camera(_placement_main)
+		if cam != null:
+			update_placement_aim(_placement_main, cam)
+
+
+## What the crosshair prompt says while placing this model.
+static func placement_hint() -> String:
+	if _ghost_model_id == PvLabBuilder.MODEL_ID:
+		var host := str((_pv_aim.get("host", {}) as Dictionary).get("kind", ""))
+		var on := str({"building": "on the roof", "prop": "on the structure", "terrain": "on the ground"}.get(host, ""))
+		return "Aim at the ground, a roof or a structure%s — R / Shift+R turn, click to place, Esc to cancel" % (
+			(" (%s)" % on) if not str(on).is_empty() else "")
+	return "Aim at terrain — Left click to place, Esc to cancel"
+
+
 static func confirm_placement() -> bool:
 	if not _placement_active or not is_instance_valid(_placement_main):
 		_clear_placement()
@@ -289,6 +367,8 @@ static func confirm_placement() -> bool:
 		return false
 	var main := _placement_main
 	var model_id := _ghost_model_id
+	if model_id == PvLabBuilder.MODEL_ID and _pv_aim.has("xf"):
+		return not _commit_pvlab(main).is_empty()
 	var gpos := _ghost_node.global_position
 	# Commit exactly one record at the ghost's resting spot, grounded on the ray-hit
 	# Y, then spawn just that one real (colliding) prop — no full scene rebuild.
@@ -313,14 +393,89 @@ static func place_prepped_at(main: Node, model_id: String, prep: Dictionary,
 
 ## Shared commit of `confirm_placement` and `place_prepped_at`. `from_ghost`
 ## clears the placement state before the real node spawns (see below).
+## A designed solar array at its aimed pose: x / z / y_offset / yaw / pitch /
+## roll from the surface, and a link to the prop it stands on (its pose in the
+## host's frame) so moving the host carries it.
+static func _commit_pvlab(main: Node) -> String:
+	var xf: Transform3D = _pv_aim["xf"]
+	var pr := PvSurfaceAim.record_patch_for(main, PvLabBuilder.MODEL_ID, xf)
+	var prep := _placement_prep.duplicate(true)
+	var rx: Dictionary = prep.get("record_extra", {}) as Dictionary
+	var host: Dictionary = _pv_aim.get("host", {}) as Dictionary
+	var link := {"kind": str(host.get("kind", "terrain")), "id": str(host.get("id", ""))}
+	if str(link["kind"]) == "prop" and not str(link["id"]).is_empty():
+		var host_rec := get_prop_record(main, str(link["id"]))
+		if not host_rec.is_empty():
+			link["local"] = _xf_to_array(PvSurfaceAim.record_xf(main, host_rec).affine_inverse() * xf)
+	rx["mount_host"] = link
+	prep["record_extra"] = rx
+	var gy := TerrainSurfaceQuery.ground_height_at(main, float(pr["x"]), float(pr["z"]))
+	return _commit_prepped(main, PvLabBuilder.MODEL_ID, prep, float(pr["x"]), float(pr["z"]), gy,
+		float(pr["yaw"]), true, float(pr["pitch"]), float(pr["roll"]), float(pr["y_offset"]))
+
+
+static func _xf_to_array(t: Transform3D) -> Array:
+	return [t.basis.x.x, t.basis.x.y, t.basis.x.z, t.basis.y.x, t.basis.y.y, t.basis.y.z,
+		t.basis.z.x, t.basis.z.y, t.basis.z.z, t.origin.x, t.origin.y, t.origin.z]
+
+
+static func _xf_from_array(a: Array) -> Transform3D:
+	if a.size() < 12:
+		return Transform3D.IDENTITY
+	return Transform3D(Basis(Vector3(float(a[0]), float(a[1]), float(a[2])), Vector3(float(a[3]), float(a[4]), float(a[5])),
+		Vector3(float(a[6]), float(a[7]), float(a[8]))), Vector3(float(a[9]), float(a[10]), float(a[11])))
+
+
+## Props standing on `host_id` (a solar array on a shed roof) follow it: their
+## pose in the host's frame, applied to the host's new pose.
+static func _reseat_hosted(main: Node, host_id: String, depth: int = 0) -> void:
+	if depth > 3:
+		return
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return
+	var host_rec := layer.find_by_id(host_id)
+	if host_rec.is_empty():
+		return
+	var host_xf := PvSurfaceAim.record_xf(main, host_rec)
+	for rec in layer.props.duplicate():
+		var mh: Variant = (rec as Dictionary).get("mount_host")
+		if not (mh is Dictionary) or str((mh as Dictionary).get("kind", "")) != "prop" \
+				or str((mh as Dictionary).get("id", "")) != host_id:
+			continue
+		var loc: Variant = (mh as Dictionary).get("local")
+		if not (loc is Array):
+			continue
+		var nxf := host_xf * _xf_from_array(loc as Array)
+		var pr := PvSurfaceAim.record_patch_for(main, str((rec as Dictionary).get("model_id", "")), nxf)
+		_update_prop_record_depth(main, str((rec as Dictionary).get("id", "")), pr, depth + 1)
+
+
+## A host is deleted: what stood on it comes down to the ground under it.
+static func release_hosted(main: Node, host_id: String) -> int:
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return 0
+	var n := 0
+	for rec in layer.props.duplicate():
+		var mh: Variant = (rec as Dictionary).get("mount_host")
+		if mh is Dictionary and str((mh as Dictionary).get("kind", "")) == "prop" \
+				and str((mh as Dictionary).get("id", "")) == host_id:
+			update_prop_record(main, str((rec as Dictionary).get("id", "")),
+				{"y_offset": 0.0, "pitch": 0.0, "roll": 0.0, "mount_host": null}, true)
+			n += 1
+	return n
+
+
 static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
-		x: float, z: float, ground_y: float, yaw_deg: float, from_ghost: bool) -> String:
+		x: float, z: float, ground_y: float, yaw_deg: float, from_ghost: bool,
+		pitch_deg: float = 0.0, roll_deg: float = 0.0, y_offset: float = NAN) -> String:
 	var layer := _layer_for_main(main)
 	if layer == null:
 		if from_ghost:
 			_clear_placement()
 		return ""
-	var prop_id := layer.add_free_prop(model_id, x, NAN, z, yaw_deg, 0.0, 0.0, 1.0, ground_y)
+	var prop_id := layer.add_free_prop(model_id, x, y_offset, z, yaw_deg, pitch_deg, roll_deg, 1.0, ground_y)
 	if prop_id.is_empty():
 		if from_ghost:
 			_clear_placement()
@@ -379,6 +534,9 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 	elif model_id == ToroidLabBuilder.MODEL_ID:
 		# A toroid's panel ring is a graph array, like a linkage structure's.
 		Callable(PlacedPropService, "seed_toroid_graph").call_deferred(main, prop_id)
+	elif model_id == PvLabBuilder.MODEL_ID:
+		# A designed array is one graph array per MPPT input, its strings inside.
+		Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		# A designed gantry is a cartesian_machine processor on the graph.
 		Callable(PlacedPropService, "seed_gantry_graph").call_deferred(main, prop_id)
@@ -802,6 +960,105 @@ static func remove_toroid_graph(main: Node, prop_id: String) -> void:
 		sgv.call("remove_imported_solar_array", toroid_array_tag(prop_id))
 
 
+static func pvlab_array_tag(prop_id: String) -> String:
+	return "pvlab_%s" % prop_id
+
+
+## Push a placed designed solar array into the system graph: one compound
+## per MPPT input with its strings of panels inside (GraphPvLabArrays),
+## re-seeded in place on Apply so the wires outside survive. The plane is the
+## modules' normal in world space (the prop's yaw, pitch and roll on a roof);
+## a tracker carries its axis and limits instead. Packed = removed.
+static func seed_pvlab_graph(main: Node, prop_id: String) -> bool:
+	if main == null or prop_id.is_empty():
+		return false
+	var sgv := _system_graph_view(main)
+	if sgv == null or not sgv.has_method("add_designed_solar_array"):
+		return false
+	var tag := pvlab_array_tag(prop_id)
+	var rec := get_prop_record(main, prop_id)
+	var spec: Variant = rec.get("pvlab_spec")
+	if not (spec is Dictionary) or bool(rec.get("packed", false)):
+		sgv.call("remove_designed_solar_array", tag)
+		return false
+	var opts := pvlab_plane(main, rec)
+	opts["prop_id"] = prop_id
+	sgv.call("add_designed_solar_array", spec, tag, opts)
+	return true
+
+
+## A placed array's plane for the energy model: {tilt_deg, azimuth_deg} for a
+## fixed one, {tracker, axis_az, gcr} for a tracker — from the built node's
+## world basis when it is in the tree, else the record's yaw / pitch / roll.
+static func pvlab_plane(main: Node, rec: Dictionary) -> Dictionary:
+	var d := PvLabDesign.solve(rec.get("pvlab_spec", {}) as Dictionary)
+	var lay: Dictionary = d["layout"]
+	var basis := Basis.from_euler(Vector3(float(rec.get("pitch", 0.0)), float(rec.get("yaw", 0.0)),
+		float(rec.get("roll", 0.0))))
+	var prop := _find_prop_node(main, str(rec.get("id", "")))
+	if prop is Node3D and (prop as Node3D).is_inside_tree():
+		var stack: Array = [prop]
+		while not stack.is_empty():
+			var n: Node = stack.pop_back()
+			if n is Node3D and n.has_meta("pvlab_spec"):
+				basis = (n as Node3D).global_transform.basis.orthonormalized()
+				break
+			for c in n.get_children():
+				stack.append(c)
+	if str(lay["mount"]) == "tracker":
+		var z := basis * Vector3(0, 0, 1)
+		var axis_az := fposmod(rad_to_deg(atan2(z.x, -z.z)), 360.0) if Vector2(z.x, z.z).length() > 1e-5 else 180.0
+		return {"tracker": (d["spec"]["tracker"] as Dictionary).duplicate(), "axis_az": axis_az,
+			"gcr": float(lay["gcr"])}
+	var n_local := Vector3.UP
+	if not (lay["panels"] as Array).is_empty():
+		n_local = ((lay["panels"] as Array)[0]["xf"] as Transform3D).basis * Vector3.UP
+	var o := PvLabTracker.orientation_of(basis * n_local)
+	return {"tilt_deg": float(o["tilt_deg"]), "azimuth_deg": float(o["azimuth_deg"])}
+
+
+## Turn a placed "pv_array" rack into a designed array: its module from the
+## graph array it is bound to (PvLabModule.from_graph_specs), its rows and
+## tilt from the rack. The old graph array is replaced by the designed one's
+## strings. Returns false when the prop is not a pv_array.
+static func convert_pv_array_to_pvlab(main: Node, prop_id: String) -> bool:
+	var rec := get_prop_record(main, prop_id)
+	if str(rec.get("model_id", "")) != PvArrayBuilder.MODEL_ID:
+		return false
+	var pv := PvArrayBuilder.resolve_spec(rec.get("pv_array_spec", {}) as Dictionary)
+	var gs := {"wmp": float(pv.get("wmp", 380.0)), "voc": float(pv.get("voc", 41.62)), "vmp": float(pv.get("vmp", 34.77)),
+		"isc": float(pv.get("isc", 11.47)), "imp": float(pv.get("imp", 10.93)),
+		"panel_w_m": float(pv["panel_w_m"]), "panel_h_m": float(pv["panel_h_m"]), "name": "Module"}
+	var sgv := _system_graph_view(main)
+	var gid := str(rec.get("graph_item_id", ""))
+	if sgv != null and not gid.is_empty():
+		var model: Variant = sgv.get("model")
+		if model is GraphModel:
+			var it := (model as GraphModel).get_item(gid)
+			var sp: Dictionary = it.get("specs", {}) as Dictionary
+			for k in ["wmp", "voc", "vmp", "isc", "imp", "voc_temp_coeff_pct", "pmax_temp_coeff_pct"]:
+				if float(sp.get(k, 0.0)) != 0.0:
+					gs[k] = float(sp[k])
+			if not it.is_empty():
+				(model as GraphModel).remove_item(gid)
+	var spec := PvLabSpec.resolve({"name": "Solar array", "module": PvLabModule.from_graph_specs(gs),
+		"array": {"mount": "ground", "rows": int(pv["rows"]), "cols": int(pv["cols"]), "stack": 1,
+			"tilt_deg": float(pv["tilt_deg"]), "clearance_m": 0.5},
+		"rack": {"material": "alu_rail_light"}})
+	update_prop_record(main, prop_id, {"model_id": PvLabBuilder.MODEL_ID, "pvlab_spec": PvLabSpec.to_json_safe(spec),
+		"pv_array_spec": null, "graph_item_id": null}, true)
+	Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
+	return true
+
+
+static func remove_pvlab_graph(main: Node, prop_id: String) -> void:
+	if main == null or prop_id.is_empty():
+		return
+	var sgv := _system_graph_view(main)
+	if sgv != null and sgv.has_method("remove_designed_solar_array"):
+		sgv.call("remove_designed_solar_array", pvlab_array_tag(prop_id))
+
+
 static func _system_graph_view(main: Node) -> Node:
 	var sgv := ServiceLocator.graph()
 	if sgv == null:
@@ -934,6 +1191,11 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		if rec_extra_dl.has("domelab_spec"):
 			extras["domelab_spec"] = rec_extra_dl["domelab_spec"]
 		extras["ghost_highlight"] = true
+	elif model_id == PvLabBuilder.MODEL_ID:
+		var rec_extra_pl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_pl.has("pvlab_spec"):
+			extras["pvlab_spec"] = rec_extra_pl["pvlab_spec"]
+		extras["ghost_highlight"] = true
 	elif model_id == ToroidLabBuilder.MODEL_ID:
 		var rec_extra_tl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_tl.has("toroid_spec"):
@@ -1048,6 +1310,8 @@ static func _player_camera(main: Node) -> Camera3D:
 static func _clear_placement() -> void:
 	_destroy_ghost()
 	_ghost_yaw_deg = 0.0
+	_pv_aim = {}
+	_pv_mount_base = ""
 	if _ghost_guides != null and is_instance_valid(_ghost_guides):
 		_ghost_guides.queue_free()
 	_ghost_guides = null

@@ -802,6 +802,12 @@ func _rebuild_dynamic_sections() -> void:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
 	if mid == ToroidLabBuilder.MODEL_ID:
 		_button("Edit toroid…", "The toroid designer, bound to this structure", _model_btns, _on_toroidlab)
+	if mid == PvLabBuilder.MODEL_ID:
+		_button("Edit solar array…", "The Solar designer, bound to this array: modules, rack, strings", _model_btns,
+			_on_pvlab)
+	if mid == PvArrayBuilder.MODEL_ID:
+		_button("Open in Solar designer…", "Turn this rack into a designed array (its modules, rack and strings, editable) and open it",
+			_model_btns, _on_pv_array_convert)
 	if mid == GantryLabBuilder.MODEL_ID:
 		_button("Edit gantry…", "The CNC gantry designer, bound to this machine (simulate and send jobs there)", _model_btns, _on_gantrylab)
 	if prop != null and prop.get_node_or_null("CncMachineRuntime") != null:
@@ -1472,6 +1478,23 @@ func _on_domelab() -> void:
 	if _loader != null and _loader.has_method("open_domelab_for_prop"):
 		close()
 		_loader.call("open_domelab_for_prop", pid)
+
+
+func _on_pvlab() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_pvlab_for_prop"):
+		close()
+		_loader.call("open_pvlab_for_prop", pid)
+
+
+func _on_pv_array_convert() -> void:
+	var pid := _prop_id
+	var main := get_tree().current_scene if get_tree() != null else null
+	if main == null or not PlacedPropService.convert_pv_array_to_pvlab(main, pid):
+		return
+	close()
+	if _loader != null and _loader.has_method("open_pvlab_for_prop"):
+		_loader.call("open_pvlab_for_prop", pid)
 
 
 func _on_toroidlab() -> void:

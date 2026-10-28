@@ -936,6 +936,30 @@ Godot.exe.exe --headless --path . --script core/gantrylab/assembly/gantrylab_ass
 # run on the world clock (drivers in true mm, beads on the placed bed),
 # packed → bundle, Edit gantry… rebinds, Apply re-syncs the graph node:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/gantrylab_designer_check.gd -Label gantrylab
+# Solar designer (offline — core/pvlab/): the JA JAM60S20-380 data sheet
+# derived from its 120 half-cut M6 cells, substrings / sample points, the
+# single-diode fit passing through Vmp / Imp, bypass diodes (one shaded path =
+# a substring; a half-cut module under a bottom-edge shadow keeps half; CdTe
+# with no diode follows its weakest strip), two P–V peaks, parallel-string
+# mismatch, the tracker by hand + backtracking, the P1000 span by hand, layout
+# / strings / leads / window, every built-in error-free, the builder (winding,
+# pick, tracker heads, pieces), the graph (one compound per MPPT input, strings
+# inside, the controller's Voc, re-seed in place), shading, the roof plane;
+# the real-module catalog (every entry Vmp×Imp ≈ Pmax and fitting its face,
+# search), type switches building different meshes, the frame lip, the rack
+# parts (clamp counts, BOM == drawn parts, a clamp picked from above).
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/pvlab/pvlab_selftest.gd
+# The designer on a real world (sandbox): every built-in in the studio, the
+# three tabs with UiAudit, a string painted with REAL clicks, a test shadow;
+# arrays placed on the ground (graph compound, SolarUI plane, a box shading
+# one module and the factor recovering), on an OSM roof (in the roof plane),
+# on a placed pallet rack (moving the rack carries it), a tracker (east in
+# the morning, west in the afternoon); every Type through the real picker
+# (front + back shots), the face at 1.2 / 2.5 / 4 / 7 m for moiré, a search
+# picking a catalog module, a REAL click selecting a mid clamp, each rack
+# shot down to the part:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/pvlab_designer_check.gd -Label pvlab
 # Toroid designer (offline — core/toroidlab/): the torus from measures and
 # back, the reference build against "Overview Toroid structure.glb" (the rib
 # circle, the four rings, the inner column's bearings, the canopy's corners,
@@ -3274,6 +3298,157 @@ and DomeLabCam's DXF / SVG writers). Record key `toroid_spec`, model id
 - Not built: tube splice positions on rings longer than a stick (counted,
   not placed), the canopy's hanger hardware drawn, an NPC crew, per-panel
   azimuths on the graph (one flat array).
+
+## Solar designer (core/pvlab/, 2026-10-27)
+
+Library → Structures → "Solar designer…" (no hotkey); click a placed array or
+the prop editor's "Edit solar array…" reopens it bound to the prop. A placed
+legacy `pv_array` rack has "Open in Solar designer…", which converts it
+(PlacedPropService.convert_pv_array_to_pvlab). Model id `pvlab_array`
+(`PvLabBuilder.MODEL_ID`), record key `pvlab_spec`, library
+`user://pvlab_library.json` ({modules, designs}), exports
+`user://pvlab_designs/`. Plan: `~/.claude/plans/i-want-a-new-foamy-goose.md`.
+- **A spec is one module on one array** (`PvLabSpec`): `module` (PvLabModule:
+  dims mm, type rigid / glass_glass / flexible / thin_film / folding, cells
+  {tech, format, cut, cols, rows — counts of cell PIECES — gap, split gap,
+  busbars, fingers, chamfer, parallel}, frame, backsheet, glass, jbox
+  {layout, leads_mm, connector}, bypass_diodes, folding, look, electrical
+  {mode derived | datasheet, nameplate, coefficients, NOCT, mass}),
+  `array`, `rack`, `tracker`, `strings` {mode rows | cols | custom, size
+  (0 = the longest the target allows), inputs, groups}, `target` (the
+  controller window), `colors`.
+- **The cells ARE the electrics** (`PvLabCells`, per-cell Voc / Jsc / vm / im
+  read back from real data sheets, cited): Voc = series cells × cell Voc,
+  Isc = paths × Jsc × piece area (pseudo-square chamfer from the ingot
+  diameter; poly is cast square). A half-cut module is two halves in
+  parallel. Datasheet mode keeps the typed nameplate and warns past 12 %.
+- **Substrings** (`PvLabModule.substrings`): diode groups by column pairs (else
+  rows), each with its parallel paths, each path a list of sample BANDS: a
+  path's light = MIN over bands of each band's MEAN (series cells run at the
+  weakest; a thin-film strip averages along its length).
+- **I–V** (`PvLabIV`): single-diode with Rs, no shunt (Villalva 2009), V(I)
+  explicit; a, Rs, I0 fitted per cell through (Vmp, Imp) with dP/dI = 0, so
+  a uniform module at STC makes exactly Wmp (pinned). When even Rs = 0 cannot
+  reach the fill factor (CdTe), Rs = 0 and a is solved through Vmp; ⚠ v(Imp)
+  FALLS as a grows, the first bisection had it backwards. Substring = paths in
+  parallel behind a 0.5 V Schottky drop; string = voltages add at one current
+  (current grid dense under each substring's limit); array = currents add at
+  one voltage; MPP refined. Curves cached on quantised irradiance (2 W/m²).
+- ⚠ **Half-cut physics**: one shaded HALF still sends its substring's current
+  through the shared diode — it costs a third, like a full-cell module. The
+  half-cut advantage is a shadow along an EDGE (every substring's lower half):
+  half kept, where full cells go nearly dark. The plan's "a sixth" was wrong.
+- **Layout** (`PvLabArray.layout`): the array frame faces +Z (south at yaw 0,
+  as PvArrayBuilder). Fixed tables: rows march north, `cols` across, `stack`
+  up the slope; row pitch 0 = no winter-noon shade (PvGridSnap.shade_gap_m at
+  `site_lat`). roof_flush / none are tilt 0 in their own frame — the PROP's
+  pitch / roll lay them on the roof. Trackers: rows spaced along X by GCR,
+  the axis along Z, heads turned about Z (+ tips toward −X, west at yaw 0).
+- **Racks** (`PvLabRack`): 2x4 / 2x6 lumber (NDS 2018 Table 4A SPF #2),
+  Unistrut P1000 / P1001 (catalog Ix / Sx, 25 ksi), generic Al rail
+  (labelled an estimate), posts, torque tube, pipe; mounts ground, roof_flush
+  (L-feet), roof_tilt, ballast, pole, tracker, none. Span check = simply
+  supported rail, bending and L/180 deflection; BOM first-fit stock packing.
+- **Tracker** (`PvLabTracker`): Marion & Dobos 2013 eq. 7 (pvlib singleaxis
+  convention), backtracking `R − sign(R)·acos(min(cos R / GCR, 1))`
+  (pinned: the next row never shades), limits, night / wind stow.
+  `PvTrackerRuntime` turns the heads (sim-time aware like CspTroughTracker);
+  the energy model computes the same angle per instant itself.
+- **Builder** (`PvLabBuilder`): module mesh per design (glass face with
+  `pv_module.gdshader` — the cell grid procedural over UV, fingers / busbars
+  box-filtered with fwidth so they never shimmer — frame C-profile, backsheet,
+  junction boxes, connectors), modules a MultiMesh ("Panels", per tracker
+  head), members swept from their real section ("Rack"), string links as
+  cables, a hidden "CollisionMesh" (modules + members: other rows' shading
+  rays hit it), `pieces` for deploy crews. Overlay tints go through
+  INSTANCE_CUSTOM only with `use_overlay` (a plain mesh's COLOR is white).
+- **Modal** (`scenes/ui/pvlab_modal.gd`): Cell / Panel / Array tabs over one
+  studio, an I–V / P–V chart, string painting by clicking modules (switches
+  to custom wiring), test shadows (edge / module / pole / leaf) with the
+  mismatch loss, live tables against the controller window, "now" at the
+  site when bound (sun, weather, plane, live shade).
+- **Graph** (`GraphPvLabArrays`, view delegates add_designed_solar_array /
+  remove_designed_solar_array / designed_array_strings): one compound
+  `compound_kind` "pv_design" per MPPT input with ONE + / − pair (exposed
+  ports "positive" / "negative" over the strings' bus) and the real panels
+  wired in strings inside, so flat_connections / PvElectrical /
+  GraphDcElectrical see real strings. Re-seeding rebuilds the interior in
+  place (outside wires survive). Not compound_kind "array": walk_items counts
+  the panels, never the compound too. Panels carry pvlab_tag / pvlab_panel /
+  bound_prop_id and their plane or tracker. Opening the designer bound reads
+  the graph's strings back (custom wiring).
+- **Energy**: `_collect_root_array_aggregate` adds "planes" ONLY when a
+  designed array exists (each MPPT input its plane or tracker, the rest of the
+  PV one plane at SolarUI's orientation); SolarUI `_compute_solar_kw` sums
+  share × POA per plane (`_poa_for` is the same arithmetic). No planes = the
+  old single-plane path, untouched.
+- **Shade** (`PvLabShading`): samples on the module faces 3 cm out, rays to
+  the sun (`Live`: 96 rays a tick round-robin, a pass restarted when the sun
+  moves 0.25°), a shaded sample keeps the plane's diffuse share
+  (`PvLabShading.poa`, SolarUI's model), the I–V model gives the factor.
+  The throttle pass adds one receiver per compound (its `s` + a
+  `factor_fn` that GraphSolarShading.factors_at calls for rendered instants:
+  one ray per module, ≤ 48). Panel cards say "Shade on N of 3 substrings".
+  A tracker excludes its own PropBody (the collider is built flat).
+- **Placement** (`PvSurfaceAim`): physics hit on terrain or a PropBody, or an
+  OSM roof via `TerrainLoader.roof_ray` (marching `BuildingBuilder.roof_plane_at`
+  over footprints the ray crosses — buildings have no collider). A pitched
+  surface (> 6°) switches the ghost to roof_flush and lays it in the surface,
+  facing down the slope; R / Shift+R turn it. The record stores yaw / pitch /
+  roll / y_offset and `mount_host` {kind, id, local}: a prop host moving
+  carries it (`_reseat_hosted`), a deleted host drops it to the ground
+  (`release_hosted`). ConduitSurfaceAim's merged-buildings lookup now finds
+  "Buildings/BuildingMeshes".
+- **Second pass (2026-10-27).**
+  - **A type is a build** (`PvLabModule.type_patch`, `TYPE_PATCH`):
+    switching Rigid / Glass–glass / Flexible / Thin film / Folding sets the
+    frame, thickness, front sheet, backsheets, boxes and (for thin film) the
+    cells. Before, the type was only a label and nothing on screen changed.
+    Flexible laminates have rounded corners (`corner_r_mm`, −1 = by type),
+    ETFE dimples and grommets; a clear rear (glass–glass) draws the cells'
+    grey backs through it (`cell_material(..., back = true)`, shader
+    `back_side`).
+  - **Frame lip**: `frame.overlap_mm` (default 4) and `lip_mm` (1.8). The
+    glass runs under the lip, which stands proud of it.
+  - ⚠ **No point-sampled fine lines in `pv_module.gdshader`.** Every pattern
+    (cell gaps, busbars, fingers, scribes, the film's relief) is the
+    box-filtered INTEGRAL of its pulse train (`pulse_int` / `pulse_cov`, a
+    1.5-pixel box). Footprints are taken once at the top, in uniform control
+    flow: derivatives inside a branch are undefined at its edges. Sampling a
+    0.35 mm busbar with a soft edge is what made the medium-distance moiré.
+  - **Racks are drawn down to the part** (`PvLabHardware`, d["parts"]):
+    - module clamps (mid / end, black on a black frame unless set), rail
+      splices, end caps (yellow on Unistrut), grounding lugs;
+    - a joint at each rail-over-purlin (aluminium L-bracket / P1026-class
+      fitting / H2.5A-class hurricane tie) and at each leg top (post bracket
+      / gusset / BC4-class post cap);
+    - footings (`rack.footing`: ground screw, pier, base plate,
+      ABU44-class post base), flashed L-feet on roofs, ballast brackets,
+      brace bolts;
+    - on trackers: bearings, a slew drive per row, module rails
+      (`mrail` members), U-bolt rail clamps and module bolt sets.
+
+    L-feet, ground screws and bearings stopped being members. The BOM counts
+    the drawn parts and their fasteners (`FASTENERS`). `PvLabBuilder.emit_part`
+    draws each part; `pick_any` picks module / member / part.
+  - **The Array tab picks parts.** A click selects a part or member. Its card
+    says what it is, its spec, where it is, how many, cost, mass and
+    fasteners, with "Light all". The Modules toggle hides the modules. The
+    BOM's eye buttons light every part of that kind.
+  - **Real modules** (`PvLabCatalog`): 21 data-sheet modules (JA, LONGi,
+    Canadian Solar, Trina, Jinko, Qcells, REC, Maxeon, Panasonic, LG,
+    First Solar). They come from the makers' data sheets as transcribed, not
+    re-checked against the PDFs. The selftest holds every entry to
+    Vmp × Imp ≈ Pmax and its cells fitting the face. `module_spec` picks the
+    largest standard wafer that leaves a 7–25 mm lip.
+  - The left list has a search box that matches every word against maker,
+    model, watts, tech and size.
+- Not built: per-module orientation on curved hosts (an array is planar), a
+  2D plan view for string painting, bifacial rear gain, inverter /
+  optimiser / micro-inverter models, a building host re-seated after a style
+  change, MPPT-input split of one prop across two controllers by hand (the
+  compounds wire to the nearest controller), moving or swapping a rack part
+  by hand (parts are picked and listed, not edited).
 
 ## Maps and scene shell
 

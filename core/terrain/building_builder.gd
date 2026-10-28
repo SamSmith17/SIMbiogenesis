@@ -1200,6 +1200,30 @@ static func _roof_height_at(p: Vector2, frame: Dictionary) -> float:
 	return eave_y + float(frame["rise"]) * (1.0 - t)
 
 
+## The roof's surface at plan point p, for a building as resolve_building_params
+## gives it (poly, roof, height_m) seated at base_y: {y, normal, flat}. The
+## same frame and height field the mesh is built from (_roof_frame,
+## _roof_height_at), the normal from its slope a few centimetres either side
+## (each roof face is a plane between creases). A flat roof is the top.
+static func roof_plane_at(poly: PackedVector2Array, roof: Dictionary, height_m: float, base_y: float,
+		p: Vector2) -> Dictionary:
+	var pl := poly
+	if pl.size() >= 4 and pl[0].distance_squared_to(pl[pl.size() - 1]) < 0.01:
+		pl = pl.slice(0, pl.size() - 1)
+	if pl.size() < 3:
+		return {}
+	pl = _ensure_ccw(pl)
+	var wall_h := _wall_height_m(height_m, roof, pl)
+	var frame := _roof_frame(pl, roof, base_y, wall_h, height_m)
+	if frame.is_empty():
+		return {"y": base_y + height_m, "normal": Vector3.UP, "flat": true}
+	var e := 0.03
+	var y := _roof_height_at(p, frame)
+	var dx := (_roof_height_at(p + Vector2(e, 0), frame) - _roof_height_at(p - Vector2(e, 0), frame)) / (2.0 * e)
+	var dz := (_roof_height_at(p + Vector2(0, e), frame) - _roof_height_at(p - Vector2(0, e), frame)) / (2.0 * e)
+	return {"y": y, "normal": Vector3(-dx, 1.0, -dz).normalized(), "flat": false}
+
+
 ## Crease lines of the roof height field as Vector3(ca, cb, c0) coefficients
 ## over ridge-frame coordinates: the crease is the zero set of ca*a + cb*b + c0.
 static func _crease_lines(frame: Dictionary) -> Array:

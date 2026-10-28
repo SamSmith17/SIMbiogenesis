@@ -133,6 +133,7 @@ const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_b
 const FLATPACK_DESIGNER_MODAL_SCRIPT := preload("res://scenes/ui/flatpack_designer_modal.gd")
 const DOMELAB_MODAL_SCRIPT := preload("res://scenes/ui/domelab_modal.gd")
 const TOROIDLAB_MODAL_SCRIPT := preload("res://scenes/ui/toroidlab_modal.gd")
+const PVLAB_MODAL_SCRIPT := preload("res://scenes/ui/pvlab_modal.gd")
 const GANTRYLAB_MODAL_SCRIPT := preload("res://scenes/ui/gantrylab_modal.gd")
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
@@ -351,6 +352,7 @@ var _pallet_rack_builder_ui: Control = null
 var _flatpack_designer_ui: Control = null
 var _domelab_ui: Control = null
 var _toroidlab_ui: Control = null
+var _pvlab_ui: Control = null
 var _gantrylab_ui: Control = null
 var _building_highlight: MeshInstance3D = null
 ## OSM solar arrays built in-world but NOT auto-added to the graph. Each record:
@@ -12959,6 +12961,7 @@ func _setup_placed_props() -> void:
 	_setup_flatpack_designer_ui()
 	_setup_domelab_ui()
 	_setup_toroidlab_ui()
+	_setup_pvlab_ui()
 	_setup_gantrylab_ui()
 	# Unified library lives on Main (all maps); bind this loader when opening.
 	call_deferred("_rebuild_placed_props")
@@ -13236,6 +13239,109 @@ func _clear_building_highlight() -> void:
 
 func pick_building_at_world(x: float, z: float) -> Dictionary:
 	return BuildingPicker.pick_at_xz(_buildings_data, x, z)
+
+
+## The OSM roof over world (x, z): {ok, y, normal, tag, building_idx, flat}
+## (ok false off every footprint). Seated as the mesh is: on the footprint's
+## highest corner plus the style's base offset. Buildings have no collider,
+## so placement on a roof asks this instead of the physics.
+func roof_surface_at(x: float, z: float) -> Dictionary:
+	var info := pick_building_at_world(x, z)
+	if not bool(info.get("valid", false)):
+		return {"ok": false}
+	var bidx := int(info.get("building_idx", -1))
+	var d := _find_building_record(bidx)
+	if d.is_empty():
+		return {"ok": false}
+	var params := BuildingBuilder.resolve_building_params(d, get_building_style(bidx))
+	var poly: PackedVector2Array = params["poly"]
+	if poly.size() < 3:
+		return {"ok": false}
+	var base_y := -INF
+	for p in poly:
+		base_y = maxf(base_y, _ground_height_at(p.x, p.y))
+	base_y += float(params.get("base_offset_m", 0.0))
+	var rp := BuildingBuilder.roof_plane_at(poly, params["roof"], float(params["height_m"]), base_y, Vector2(x, z))
+	if rp.is_empty():
+		return {"ok": false}
+	return {"ok": true, "y": float(rp["y"]), "normal": rp["normal"], "flat": bool(rp["flat"]),
+		"building_idx": bidx, "tag": BuildingBuilder.building_tag(poly)}
+
+
+var _building_aabbs: Array = []
+var _building_aabbs_n := -1
+
+
+## Where a ray first meets an OSM roof within max_t: {ok, t, position, normal,
+## flat, building_idx, tag}. Buildings have no collider; this marches the ray
+## in 0.4 m steps over the footprints whose bounds the ray crosses, then
+## bisects onto the roof surface (BuildingBuilder.roof_plane_at).
+func roof_ray(origin: Vector3, dir: Vector3, max_t: float) -> Dictionary:
+	if _building_aabbs_n != _buildings_data.size():
+		_building_aabbs.clear()
+		for i in _buildings_data.size():
+			var d: Variant = _buildings_data[i]
+			if not (d is Dictionary):
+				continue
+			var pts: Variant = (d as Dictionary).get("points", PackedVector2Array())
+			if not (pts is PackedVector2Array) or (pts as PackedVector2Array).size() < 3:
+				continue
+			var r := Rect2((pts as PackedVector2Array)[0], Vector2.ZERO)
+			for p in (pts as PackedVector2Array):
+				r = r.expand(p)
+			_building_aabbs.append({"rect": r, "idx": int((d as Dictionary).get("idx", i))})
+		_building_aabbs_n = _buildings_data.size()
+	var end := origin + dir * max_t
+	var seg := Rect2(Vector2(origin.x, origin.z), Vector2.ZERO).expand(Vector2(end.x, end.z)).grow(0.5)
+	var cands: Array = []
+	for e in _building_aabbs:
+		if (e["rect"] as Rect2).intersects(seg):
+			var d2 := _find_building_record(int(e["idx"]))
+			var params := BuildingBuilder.resolve_building_params(d2, get_building_style(int(e["idx"])))
+			var poly: PackedVector2Array = params["poly"]
+			if poly.size() < 3:
+				continue
+			var base_y := -INF
+			for p in poly:
+				base_y = maxf(base_y, _ground_height_at(p.x, p.y))
+			cands.append({"idx": int(e["idx"]), "poly": poly, "roof": params["roof"],
+				"h": float(params["height_m"]), "base": base_y + float(params.get("base_offset_m", 0.0))})
+	if cands.is_empty():
+		return {"ok": false}
+	var below := func(t: float) -> Dictionary:
+		var q := origin + dir * t
+		var p2 := Vector2(q.x, q.z)
+		for c in cands:
+			if Geometry2D.is_point_in_polygon(p2, c["poly"]):
+				var rp := BuildingBuilder.roof_plane_at(c["poly"], c["roof"], float(c["h"]), float(c["base"]), p2)
+				if not rp.is_empty() and q.y <= float(rp["y"]):
+					return {"c": c, "rp": rp}
+		return {}
+	var step := 0.4
+	var t := 0.0
+	var prev := 0.0
+	while t <= max_t:
+		var hit: Dictionary = below.call(t)
+		if not hit.is_empty():
+			var lo := prev
+			var hi := t
+			for _i in 12:
+				var mid := (lo + hi) * 0.5
+				if (below.call(mid) as Dictionary).is_empty():
+					lo = mid
+				else:
+					hi = mid
+			var fin: Dictionary = below.call(hi)
+			if fin.is_empty():
+				fin = hit
+			var q2 := origin + dir * hi
+			var rp2: Dictionary = fin["rp"]
+			q2.y = float(rp2["y"])
+			return {"ok": true, "t": hi, "position": q2, "normal": rp2["normal"], "flat": bool(rp2["flat"]),
+				"building_idx": int(fin["c"]["idx"]), "tag": BuildingBuilder.building_tag(fin["c"]["poly"])}
+		prev = t
+		t += step
+	return {"ok": false}
 
 
 func pick_building_at_screen(screen_pos: Vector2) -> Dictionary:
@@ -13574,6 +13680,55 @@ func _setup_toroidlab_ui() -> void:
 	layer.add_child(ui)
 	ui.bind_loader(self)
 	_toroidlab_ui = ui
+
+
+## The Solar designer (scenes/ui/pvlab_modal.gd), on its own CanvasLayer like
+## the other designers.
+func _setup_pvlab_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "PvLabLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "PvLabModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(PVLAB_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_pvlab_ui = ui
+
+
+func open_pvlab(spec: Dictionary = {}) -> void:
+	if _pvlab_ui != null and _pvlab_ui.has_method("open"):
+		_pvlab_ui.call("open", spec)
+
+
+## The designer bound to a placed array ("Apply to placed array").
+func open_pvlab_for_prop(prop_id: String) -> void:
+	if _pvlab_ui != null and _pvlab_ui.has_method("open_for_prop"):
+		_pvlab_ui.call("open_for_prop", prop_id)
+
+
+func pvlab_designer() -> Control:
+	return _pvlab_ui
+
+
+func begin_pvlab_placement(pvlab_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, PvLabBuilder.MODEL_ID, {
+		"record_extra": {"pvlab_spec": PvLabSpec.to_json_safe(pvlab_spec), "collision_enabled": true},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
 
 
 func open_toroidlab(spec: Dictionary = {}) -> void:
@@ -13977,6 +14132,11 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		PlacedPropService.remove_pallet_rack_graph(_main, prop_id)
 	elif str(rec.get("model_id", "")) == ToroidLabBuilder.MODEL_ID and _main != null:
 		PlacedPropService.remove_toroid_graph(_main, prop_id)
+	elif str(rec.get("model_id", "")) == PvLabBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_pvlab_graph(_main, prop_id)
+	# Anything mounted on this prop (a solar array on its roof) comes down.
+	if _main != null:
+		PlacedPropService.release_hosted(_main, prop_id)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
 	# 2D/3D twin consistency: a graph node bound to this prop is the same object

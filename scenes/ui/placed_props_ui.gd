@@ -218,6 +218,13 @@ func _shortcut_input(event: InputEvent) -> void:
 			_confirm_bundle_placement()
 			get_viewport().set_input_as_handled()
 			return
+		# R / Shift+R turn the ghost (15° a press).
+		if event is InputEventKey and event.pressed and not event.echo \
+				and (event as InputEventKey).physical_keycode == KEY_R:
+			PlacedPropService.rotate_placement(-15.0 if (event as InputEventKey).shift_pressed else 15.0)
+			_set_crosshair_prompt(PlacedPropService.placement_hint())
+			get_viewport().set_input_as_handled()
+			return
 	if _place_mode and not _active:
 		if event is InputEventMouseButton and event.pressed \
 				and event.button_index == MOUSE_BUTTON_LEFT:
@@ -286,7 +293,7 @@ func notify_bundle_imported(result: Dictionary) -> void:
 func _begin_bundle_placement_ui() -> void:
 	if _active:
 		_exit_mode()
-	_set_crosshair_prompt("Aim at terrain — Left click to place, Esc to cancel")
+	_set_crosshair_prompt(PlacedPropService.placement_hint())
 	_sync_process_flags()
 
 

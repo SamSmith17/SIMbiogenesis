@@ -97,6 +97,15 @@ static func _panel(spec: Dictionary, item: Dictionary, specs: Dictionary, ctx: D
 	elif held > 1.0 and not why.is_empty():
 		spec["footer"] = "%s · %s unused" % [_curtail_reason(why), UiText.num(held, "W")]
 		spec["footer_color"] = GraphTheme.WARN if why == "clipping" else GraphTheme.TEXT_DIM
+	elif specs.get("pvlab_sub_lit") is Array and (specs["pvlab_sub_lit"] as Array).has(false):
+		# A designed array's panel: which substrings are shaded (bypassed).
+		var subs: Array = specs["pvlab_sub_lit"]
+		var shaded := 0
+		for on in subs:
+			if not bool(on):
+				shaded += 1
+		spec["footer"] = "Shade on %d of %s (bypassed)" % [shaded, UiText.count(subs.size(), "substring")]
+		spec["footer_color"] = GraphTheme.WARN
 	elif live <= 0.5:
 		spec["footer"] = "No sun on the panel" if voc > 0.0 else "Idle"
 	else:

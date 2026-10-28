@@ -157,6 +157,12 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return ToroidLabBuilder.build_node(tl_spec, "ToroidStructure",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
 			"pieces": bool(extras.get("pieces", false))})
+	if model_id == PvLabBuilder.MODEL_ID:
+		var pv_spec: Dictionary = extras.get("pvlab_spec", extras) as Dictionary
+		return PvLabBuilder.build_node(pv_spec, "SolarArray",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
+			"pieces": bool(extras.get("pieces", false)),
+			"tracker_deg": float(extras.get("tracker_deg", 0.0))})
 	if model_id == GantryLabBuilder.MODEL_ID:
 		var gl_spec: Dictionary = extras.get("gantry_spec", extras) as Dictionary
 		return GantryLabBuilder.build_node(gl_spec, "GantryMachine",
@@ -461,6 +467,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		# on a tilted rack facing local +Z (south at yaw 0). Bound to a graph
 		# array node; its facing drives that array's tilt / azimuth.
 		{"id": "pv_array", "label": "Solar Array (ground mount)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 1.6},
+		# Procedural designed solar array (PvLabBuilder): the Solar designer's
+		# modules (cells drawn by pv_module.gdshader), rack and strings,
+		# facing local +Z (south at yaw 0); a tracker turns its heads.
+		{"id": "pvlab_array", "label": "Solar array (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 1.6},
 		# Procedural ISO shipping container (PACKING_PLAN.md Phase 1) — dims

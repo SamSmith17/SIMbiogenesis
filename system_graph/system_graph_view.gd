@@ -7187,6 +7187,30 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 	return array_id
 
 
+## A designed solar array (the Solar designer): one compound per MPPT input
+## with its strings of real panels inside (GraphPvLabArrays). `spec` is a
+## PvLabSpec; re-seeding the same tag rebuilds the interiors in place.
+func add_designed_solar_array(spec: Dictionary, tag: String, opts: Dictionary = {}) -> Array:
+	if model == null:
+		return []
+	var ids := GraphPvLabArrays.upsert(self, PvLabDesign.solve(spec), tag, opts)
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+	return ids
+
+
+func remove_designed_solar_array(tag: String) -> bool:
+	if model == null:
+		return false
+	return GraphPvLabArrays.remove(self, tag)
+
+
+## The strings of a designed array as the graph has them (the player may have
+## rewired them inside the compounds): [[[panel index]]] per MPPT input.
+func designed_array_strings(tag: String) -> Array:
+	return GraphPvLabArrays.strings_from_model(model, tag) if model != null else []
+
+
 const _STOWED_PREFIX := "STOWED • "
 
 
@@ -15420,6 +15444,8 @@ func _collect_root_array_aggregate() -> Dictionary:
 	var orient_vec := Vector2.ZERO
 	var orient_tilt_w := 0.0
 	var orient_w := 0.0
+	var plane_by_key := {}
+	var designed_wmp := 0.0
 	if model == null:
 		return {"panel_wmp": 0.0, "panel_voc_max": 0.0, "panel_imp": 0.0, "panel_count": 0, "array_config": "—"}
 	# Bootcamp sandbox: a panel makes power only once BOTH its terminals are
@@ -15451,6 +15477,22 @@ func _collect_root_array_aggregate() -> Dictionary:
 			panel_wmp += float(specs.get("wmp", 0.0))
 			panel_imp += float(specs.get("imp", 0.0))
 			panel_count += int(specs.get("panel_count", 1.0))
+			# A designed array's panel carries its own plane (or tracker):
+			# the energy model sums each plane's light (SolarUI planes).
+			if specs.has("pvlab_tag"):
+				var pk := "%s|%s" % [str(specs.get("pvlab_tag", "")), str(specs.get("pvlab_group", 0))]
+				if not plane_by_key.has(pk):
+					var pl := {"wmp": 0.0}
+					if specs.get("tracker") is Dictionary:
+						pl["tracker"] = (specs["tracker"] as Dictionary).duplicate()
+						pl["axis_az"] = float(specs.get("tracker_axis_az", 180.0))
+						pl["gcr"] = float(specs.get("tracker_gcr", 0.0))
+					else:
+						pl["tilt_deg"] = float(specs.get("tilt_deg", 0.0))
+						pl["azimuth_deg"] = float(specs.get("azimuth_deg", 180.0))
+					plane_by_key[pk] = pl
+				plane_by_key[pk]["wmp"] = float(plane_by_key[pk]["wmp"]) + float(specs.get("wmp", 0.0))
+				designed_wmp += float(specs.get("wmp", 0.0))
 		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
 			# Stowed (folded) linkage structures keep their node/wiring but
 			# contribute no capacity until redeployed.
@@ -15487,7 +15529,25 @@ func _collect_root_array_aggregate() -> Dictionary:
 	if orient_w > 0.0:
 		orient = {"tilt_deg": orient_tilt_w / orient_w,
 			"azimuth_deg": fposmod(rad_to_deg(atan2(orient_vec.x, orient_vec.y)), 360.0)}
+	# Planes only when a designed array is on the graph (everything else keeps
+	# the one plane of array it always had): each designed MPPT input is its
+	# own plane, the rest of the PV one more at SolarUI's own orientation.
+	var planes: Array = []
+	if designed_wmp > 0.0 and panel_wmp > 0.0:
+		for pk2 in plane_by_key:
+			var pl2: Dictionary = plane_by_key[pk2]
+			pl2["share"] = float(pl2["wmp"]) / panel_wmp
+			planes.append(pl2)
+		var rest := panel_wmp - designed_wmp
+		if rest > 0.5:
+			var rp := {"wmp": rest, "share": rest / panel_wmp, "default": true}
+			if not orient.is_empty():
+				rp["tilt_deg"] = float(orient["tilt_deg"])
+				rp["azimuth_deg"] = float(orient["azimuth_deg"])
+				rp.erase("default")
+			planes.append(rp)
 	return {
+		"planes": planes,
 		"orientation": orient,
 		"panel_wmp": panel_wmp,
 		"panel_voc_max": panel_voc_max,
@@ -15700,6 +15760,7 @@ func _sync_solar_ui_from_graph() -> void:
 		if not orient.is_empty():
 			payload["tilt_deg"] = float(orient["tilt_deg"])
 			payload["azimuth_deg"] = float(orient["azimuth_deg"])
+		payload["planes"] = agg.get("planes", [])
 		var lim := _controller_power_limits()
 		if float(lim.get("pv_w", 0.0)) > 0.0:
 			payload["pv_limit_kw"] = float(lim["pv_w"]) / 1000.0
@@ -16342,6 +16403,11 @@ func _dc_throttle_pass(display_only: bool) -> void:
 			receivers.append({"id": sid2, "wmp": _pv_item_wmp(sd),
 				"group": int(src_group.get(sid2, -1)),
 				"pos": _pv_shade_origin(sd, smain, center), "s": sf})
+	# Designed arrays (the Solar designer): one receiver per MPPT input, its
+	# factor from substring shading through the bypass-diode I-V model
+	# (PvLabShading), and a coarse per-module recast for rendered instants.
+	if not _sandbox_active:
+		_append_pvlab_receivers(receivers, sun_of, src_group)
 	if not display_only and is_instance_valid(_solar_ui) and _solar_ui.has_method("set_graph_pv_shade"):
 		_solar_ui.call("set_graph_pv_shade", receivers, total_wmp)
 	if entries.is_empty() or total_wmp <= 0.0:
@@ -16540,6 +16606,161 @@ func _pv_sun_factor(item: Dictionary) -> float:
 	if _sandbox_active or not _pv_is_shade_receiver(item):
 		return 1.0
 	return clampf(float((item.get("specs", {}) as Dictionary).get("sunlight_factor", 1.0)), 0.0, 1.0)
+
+
+# --- designed solar arrays (core/pvlab/) -------------------------------------
+
+var _pvlab_shade := PvLabShading.Live.new()
+const _PVLAB_RAYS_PER_TICK := 96
+
+
+## The placed designed arrays on the graph: [{tag, design, xf, exclude,
+## comps: [compound ids]}], one entry per tag.
+func _pvlab_arrays() -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	var main := _get_scene_main_node()
+	if main == null:
+		return out
+	var by_tag := {}
+	for it in model.items:
+		var sp: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str(sp.get("compound_kind", "")) != GraphPvLabArrays.KIND:
+			continue
+		var tag := str(sp.get("pvlab_tag", ""))
+		if by_tag.has(tag):
+			(by_tag[tag]["comps"] as Array).append(str((it as Dictionary).get("id", "")))
+			continue
+		var pid := str(sp.get("bound_prop_id", ""))
+		if pid.is_empty():
+			continue
+		var prop := PlacedPropService._find_prop_node(main, pid)
+		if not (prop is Node3D) or not (prop as Node3D).is_inside_tree():
+			continue
+		var arr_node: Node3D = null
+		var stack: Array = [prop]
+		while not stack.is_empty():
+			var n: Node = stack.pop_back()
+			if n is Node3D and n.has_meta("pvlab_spec"):
+				arr_node = n as Node3D
+				break
+			for c in n.get_children():
+				stack.append(c)
+		if arr_node == null:
+			continue
+		var d := PvLabDesign.solve(arr_node.get_meta("pvlab_spec") as Dictionary)
+		var exclude: Array = []
+		if str(d["layout"]["mount"]) == "tracker":
+			var body := prop.get_node_or_null("PropBody")
+			if body is CollisionObject3D:
+				exclude.append((body as CollisionObject3D).get_rid())
+		by_tag[tag] = {"tag": tag, "design": d, "xf": arr_node.global_transform, "exclude": exclude,
+			"comps": [str((it as Dictionary).get("id", ""))]}
+	for k in by_tag:
+		out.append(by_tag[k])
+	return out
+
+
+## Live substring shading of every designed array, a budget of rays a tick.
+func _tick_pvlab_shading(main: Node, space: PhysicsDirectSpaceState3D, sun_dir: Vector3) -> void:
+	var arrays := _pvlab_arrays()
+	if arrays.is_empty():
+		return
+	var light := func(a: Dictionary) -> Dictionary:
+		return _pvlab_light(main, a, sun_dir)
+	var changed := _pvlab_shade.tick(arrays, space, sun_dir, _PVLAB_RAYS_PER_TICK, light)
+	if changed.is_empty():
+		return
+	_begin_sim_writes()
+	for a in arrays:
+		if not changed.has(str(a["tag"])):
+			continue
+		var subs := PvLabShading.substring_lit(a["design"], _pvlab_shade.lit_flags(str(a["tag"])))
+		for cid in a["comps"]:
+			var it := model.get_item(str(cid))
+			if it.is_empty():
+				continue
+			var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(false)
+			sp["pvlab_shade"] = _pvlab_shade.factor(str(a["tag"]))
+			model.update_item(str(cid), {"specs": sp})
+			# Each panel inside: which of its substrings are in sun.
+			for kid in model.get_items_in_scope(str(it.get("child_scope_id", ""))):
+				var kd: Dictionary = kid
+				var pi := int((kd.get("specs", {}) as Dictionary).get("pvlab_panel", -1))
+				if pi < 0 or pi >= subs.size():
+					continue
+				var ks: Dictionary = (kd.get("specs", {}) as Dictionary).duplicate(false)
+				ks["pvlab_sub_lit"] = subs[pi]
+				model.update_item(str(kd.get("id", "")), {"specs": ks})
+	_end_sim_writes()
+
+
+## The light on a designed array's plane now: {g (W/m²), diffuse_share, t_cell}.
+func _pvlab_light(main: Node, a: Dictionary, sun_dir: Vector3) -> Dictionary:
+	var d: Dictionary = a["design"]
+	var xf: Transform3D = a["xf"]
+	var sd := sun_dir.normalized()
+	var el := rad_to_deg(asin(clampf(sd.y, -1.0, 1.0)))
+	var saz := fposmod(rad_to_deg(atan2(sd.x, -sd.z)), 360.0)
+	var tr := PvLabShading.tracker_deg_for(d, xf, sd)
+	var lay: Dictionary = d["layout"]
+	var n := Vector3.UP
+	if not (lay["panels"] as Array).is_empty():
+		n = (xf.basis * (PvLabArray.panel_xf(lay, (lay["panels"] as Array)[0], tr).basis * Vector3.UP)).normalized()
+	var o := PvLabTracker.orientation_of(n)
+	var lat := float(main.get("latitude")) if main.get("latitude") != null else 45.0
+	var lon := float(main.get("longitude")) if main.get("longitude") != null else 0.0
+	var ws := get_node_or_null("/root/WeatherService")
+	var mo := int(main.get("month")) if main.get("month") != null else 6
+	var dd := int(main.get("day")) if main.get("day") != null else 15
+	var hr := float(main.get("day_time")) if main.get("day_time") != null else 12.0
+	var wx := SolarIrradiance.sample_weather(lat, lon, mo, dd, hr, ws)
+	var p := PvLabShading.poa(saz, el, float(o["tilt_deg"]), float(o["azimuth_deg"]), float(wx.get("ghi", 0.0)),
+		bool(wx.get("has_real", false)), float(wx.get("cloud", 0.0)))
+	return {"g": maxf(float(p["total"]), 1.0), "diffuse_share": float(p["diffuse_share"]),
+		"t_cell": PvLabIV.cell_temp_c(float(wx.get("temp", 20.0)), float(p["total"]), float(d["elec"]["noct_c"]))}
+
+
+func _append_pvlab_receivers(receivers: Array, sun_of: Dictionary, src_group: Dictionary) -> void:
+	for a in _pvlab_arrays():
+		var tag := str(a["tag"])
+		var f := _pvlab_shade.factor(tag)
+		var d: Dictionary = a["design"]
+		var xf: Transform3D = a["xf"]
+		var exclude: Array = a["exclude"]
+		for cid in a["comps"]:
+			var wmp := 0.0
+			var group := -1
+			var kids: Array = []
+			var child_scope := str(model.get_item(str(cid)).get("child_scope_id", ""))
+			for it in model.get_items_in_scope(child_scope):
+				var itd: Dictionary = it
+				if str(itd.get("type", "")) != "panel":
+					continue
+				var kid := str(itd.get("id", ""))
+				kids.append(kid)
+				wmp += _pv_item_wmp(itd)
+				if group < 0:
+					group = int(src_group.get(kid, -1))
+			if wmp <= 0.0:
+				continue
+			for kid2 in kids:
+				sun_of[kid2] = f
+			var fn := func(sun_dir: Vector3) -> float:
+				var vp := get_viewport()
+				if vp == null or vp.get_world_3d() == null:
+					return f
+				var space := vp.get_world_3d().direct_space_state
+				return PvLabShading.coarse_factor_at(d, xf, sun_dir,
+					func(from: Vector3, to: Vector3, ex: Array) -> Dictionary:
+						return PvLabShading.physics_ray(space, from, to, ex), exclude)
+			receivers.append({"id": str(cid), "wmp": wmp, "group": group, "s": f, "factor_fn": fn})
+
+
+## A designed array's live shade factor (1 = unshaded), by tag.
+func designed_array_shade(tag: String) -> float:
+	return _pvlab_shade.factor(tag)
 
 
 func _pv_is_shade_receiver(item: Dictionary) -> bool:
@@ -17811,6 +18032,8 @@ func _tick_graph_solar_shading(delta: float) -> void:
 	var center := Vector3.ZERO
 	if soi != null and soi.has_method("world_center"):
 		center = soi.call("world_center") as Vector3
+
+	_tick_pvlab_shading(main, space, sun_dir)
 
 	var receivers: Array = []
 	for item: Dictionary in model.items:

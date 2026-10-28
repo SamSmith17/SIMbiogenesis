@@ -3022,11 +3022,20 @@ func _calculate_solar_power_enhanced() -> void:
 ## behaviour of smoke — direct beam collapses, scattered light persists — with
 ## no extra term, and it is why tracking arrays and CSP suffer far more than a
 ## fixed tilted array under the same haze.
+## Planes of array the graph's designed arrays bring (SystemGraphView
+## _collect_root_array_aggregate "planes"): [{share, tilt_deg, azimuth_deg} |
+## {share, tracker, axis_az, gcr} | {share, default}]. Empty = one plane, the
+## panel_tilt / panel_azimuth below, exactly as before.
+var _graph_planes: Array = []
+
+
 func _compute_solar_kw(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
 		ghi_real: float, cloud_frac: float, t_amb: float,
 		aod: float = SolarIrradiance.AOD_BASELINE) -> float:
 	if sun_el_deg < -2.0:
 		return 0.0
+	if not _graph_planes.is_empty():
+		return _compute_solar_kw_planes(sun_el_deg, sun_az_deg, has_real_ghi, ghi_real, cloud_frac, t_amb, aod)
 	var aero : float = SolarIrradiance.aerosol_ghi_factor(sun_el_deg, aod)
 	var sun_el_rad  : float = deg_to_rad(sun_el_deg)
 	var cos_z       : float = maxf(sin(sun_el_rad), 0.01)  # cos(zenith) = sin(elevation)
@@ -3080,6 +3089,76 @@ func _compute_solar_kw(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
 	return clampf(
 		PEAK_CAPACITY_KW * (poa / STC_IRRADIANCE) * t_factor * sys_eff * SYSTEM_CALIBRATION,
 		0.0, INVERTER_MAX_SOLAR_KW)
+
+
+## The same output as _compute_solar_kw for several planes of array: each
+## plane's POA (a tracker's at its angle for this sun, PvLabTracker) weighted by
+## its share of the PV, then the one NOCT derate and system chain.
+func _compute_solar_kw_planes(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool,
+		ghi_real: float, cloud_frac: float, t_amb: float, aod: float) -> float:
+	var poa := 0.0
+	for pl_v in _graph_planes:
+		var pl: Dictionary = pl_v
+		var tilt := panel_tilt_degrees
+		var az := panel_azimuth_degrees
+		if pl.get("tracker") is Dictionary:
+			var tr := pl["tracker"] as Dictionary
+			var r := PvLabTracker.angle_at(sun_az_deg, sun_el_deg, float(pl.get("axis_az", 180.0)), tr,
+				float(pl.get("gcr", 0.0)))
+			var o := PvLabTracker.orientation_of(PvLabTracker.normal_at(r, float(pl.get("axis_az", 180.0)),
+				float(tr.get("axis_tilt_deg", 0.0))))
+			tilt = float(o["tilt_deg"])
+			az = float(o["azimuth_deg"])
+		elif not bool(pl.get("default", false)):
+			tilt = float(pl.get("tilt_deg", tilt))
+			az = float(pl.get("azimuth_deg", az))
+		poa += float(pl.get("share", 0.0)) * _poa_for(sun_el_deg, sun_az_deg, has_real_ghi, ghi_real,
+			cloud_frac, aod, tilt, az)
+	var t_cell   : float = t_amb + (poa / 800.0) * (NOCT - 20.0)
+	var t_factor : float = clampf(1.0 + TEMP_COEFFICIENT * (t_cell - 25.0), 0.7, 1.05)
+	var sys_eff : float = INVERTER_EFFICIENCY * WIRING_LOSSES * MISMATCH_LOSSES * SOILING_FACTOR * DEGRADATION
+	return clampf(
+		PEAK_CAPACITY_KW * (poa / STC_IRRADIANCE) * t_factor * sys_eff * SYSTEM_CALIBRATION,
+		0.0, INVERTER_MAX_SOLAR_KW)
+
+
+## Plane-of-array irradiance on one plane — the same arithmetic as the POA
+## block of _compute_solar_kw, for the plane given.
+func _poa_for(sun_el_deg: float, sun_az_deg: float, has_real_ghi: bool, ghi_real: float, cloud_frac: float,
+		aod: float, tilt_deg: float, az_deg: float) -> float:
+	var aero : float = SolarIrradiance.aerosol_ghi_factor(sun_el_deg, aod)
+	var cos_z : float = maxf(sin(deg_to_rad(sun_el_deg)), 0.01)
+	var cos_inc : float = SolarPosition.panel_cos_incidence(sun_az_deg, sun_el_deg, az_deg, tilt_deg)
+	var iam : float = _calculate_iam(cos_inc)
+	var tilt_rad : float = deg_to_rad(tilt_deg)
+	var diff_sky_f : float = (1.0 + cos(tilt_rad)) / 2.0
+	var diff_gnd_f : float = (1.0 - cos(tilt_rad)) / 2.0
+	if has_real_ghi:
+		var ghi : float = ghi_real * aero
+		var kt : float = clampf(ghi / maxf(STC_IRRADIANCE * cos_z, 1.0), 0.0, 1.0)
+		var dhi_frac : float
+		if kt <= 0.22:
+			dhi_frac = 1.0 - 0.09 * kt
+		elif kt <= 0.80:
+			dhi_frac = 0.9511 - 0.1604 * kt + 4.388 * kt * kt \
+					 - 16.638 * pow(kt, 3.0) + 12.336 * pow(kt, 4.0)
+		else:
+			dhi_frac = 0.165
+		var dhi : float = ghi * clampf(dhi_frac, 0.0, 1.0)
+		var dni : float = maxf(ghi - dhi, 0.0) / cos_z
+		return clampf(dni * cos_inc * iam + dhi * diff_sky_f + ghi * 0.25 * diff_gnd_f, 0.0, 1200.0)
+	var dni2 : float = SolarIrradiance.dni_clear_sky_wm2(sun_el_deg, aod) \
+		if aod > SolarIrradiance.AOD_BASELINE else _calculate_dni(sun_el_deg)
+	var dhi2 : float = SolarIrradiance.dhi_clear_sky_wm2(sun_el_deg, dni2, aod) \
+		if aod > SolarIrradiance.AOD_BASELINE else _calculate_dhi(sun_el_deg, dni2)
+	var beam : float = dni2 * cos_inc * iam
+	var ghi_est : float = dni2 * cos_z + dhi2
+	if cloud_frac > 0.0:
+		beam *= 1.0 - cloud_frac * 0.95
+		var dm : float = 1.0 + cloud_frac * 0.5 if cloud_frac < 0.3 else 1.15 - (cloud_frac - 0.3) * 0.7
+		dhi2 *= dm
+		ghi_est *= 1.0 - cloud_frac * 0.5
+	return clampf(beam + dhi2 * diff_sky_f + ghi_est * 0.25 * diff_gnd_f, 0.0, 1200.0)
 
 
 # ==================== OBSERVED-VS-SIMULATED COMPARISON (public API) ====================
@@ -4927,6 +5006,8 @@ func apply_from_graph(data: Dictionary) -> void:
 	var bank_soc := float(data.get("battery_soc", -1.0))
 	# The graph's real plane of array (placed arrays / deployed linkages) and
 	# the wired controller's limits replace the config-file values when known.
+	# Each designed array's own plane (or tracker); empty = one plane of array.
+	_graph_planes = (data.get("planes", []) as Array).duplicate(true) if data.get("planes") is Array else []
 	if data.has("tilt_deg"):
 		panel_tilt_degrees = clampf(float(data["tilt_deg"]), 0.0, 90.0)
 	if data.has("azimuth_deg"):
