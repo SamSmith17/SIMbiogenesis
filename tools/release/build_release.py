@@ -49,19 +49,35 @@ GAME_PRESETS = {
     "linux": ("Linux", "SIMbiogenesis.x86_64"),
 }
 
-# The art add-on. A file belongs to the FIRST group whose prefix matches it
-# (a prefix ending in "/" is a folder, anything else one file). Sizes measured
-# 2026-10-20 as imported data: mars ~1.9 GB, soak ~1.1 GB, starshade ~1.2 GB,
-# models ~1.0 GB. A pack over SAFE_LIMIT stops the build: split its group.
+# The art add-on. A file belongs to the group with the LONGEST matching prefix
+# (a prefix ending in "/" is a folder, one ending in "*" every file whose
+# path starts with the rest — a model and its extracted textures — anything
+# else one file), so a folder
+# can be lifted out of another group's: the camp components live under
+# "Soak Terrain/" but painted camps and the Structures catalog use them on
+# every map, so they ship in "models", not "soak". Sizes measured 2026-10-20
+# as imported data: mars ~1.9 GB, soak ~1.1 GB, starshade ~1.2 GB, models
+# ~1.0 GB. A pack over SAFE_LIMIT stops the build: split its group.
 ART_PACKS = [
     ("mars", ["Imported Models/Mars Aerial/", "Imported Models/Newest Mars Model/",
               "scenes/maps/mars_aerial.tscn", "scenes/maps/mars_main_legacy.tscn",
-              "maps/mars_aerial_map.tres", "main.tscn"]),
+              "maps/mars_aerial_map.tres", "main.tscn",
+              # Mars-only art that sits in other groups' folders.
+              "Imported Models/Mars 2026 expanded*",
+              "StarShade FBX/Starshade Pretty Version - 18 panel version/Mars 2026 - Aerial Located smaller*"]),
     ("soak", ["Imported Models/Soak Terrain/", "scenes/maps/soak_festival_2026.tscn",
-              "maps/soak_camp_map.tres", "scenes/gameplay/Tree.tscn"]),
+              "maps/soak_camp_map.tres", "scenes/gameplay/Tree.tscn",
+              "Imported Models/Soak Terrain/Camps/Camp Components/SOAK barn*"]),
     ("starshade", ["StarShade FBX/", "Starshade Pretty Version/", "Imported Models/StarShades/"]),
-    ("models", ["Imported Models/", "Player Character/"]),
+    ("models", ["Imported Models/", "Player Character/",
+                "Imported Models/Soak Terrain/Camps/Camp Components/"]),
 ]
+# The groups a release builds when --art-groups is not given. SOAK and Mars
+# are the author's own festival maps and ship separately (user, 2026-10-28);
+# `--art-groups mars,soak` builds them.
+DEFAULT_ART_GROUPS = ["starshade", "models"]
+# Model file types listed in ART_CONTENTS.md.
+MODEL_EXTS = {"glb", "gltf", "fbx", "obj", "blend", "dae", "stl"}
 ART_ROOTS = ["Imported Models", "StarShade FBX", "Starshade Pretty Version", "Player Character"]
 RESOURCE_EXTS = {"tscn", "tres", "scn", "res", "material", "mesh", "anim"}
 
@@ -221,7 +237,7 @@ def art_files_on_disk() -> list[str]:
                 out.append(rel)
     for _name, prefixes in ART_PACKS:
         for p in prefixes:
-            if not p.endswith("/") and (ROOT / p).is_file():
+            if not p.endswith("/") and not p.endswith("*") and (ROOT / p).is_file():
                 out.append(p)
     return sorted(set(out))
 
@@ -233,11 +249,16 @@ def is_resource(rel: str, on_disk: set[str]) -> bool:
 
 
 def group_of(rel: str) -> str:
+    best, best_len = "", -1
     for name, prefixes in ART_PACKS:
         for p in prefixes:
-            if (p.endswith("/") and rel.startswith(p)) or rel == p:
-                return name
-    return ""
+            if p.endswith("*"):
+                hit = rel.startswith(p[:-1])
+            else:
+                hit = (p.endswith("/") and rel.startswith(p)) or rel == p
+            if hit and len(p) > best_len:
+                best, best_len = name, len(p)
+    return best
 
 
 def art_groups() -> dict[str, list[str]]:
@@ -266,18 +287,10 @@ def art_exclude_for(group: str) -> list[str]:
             if not p.endswith("/"):
                 pats.add("res://" + p)
                 continue
-            inside = [o for o in own if o.endswith("/") and o.startswith(p) and o != p]
-            if not inside:
-                pats.add("res://" + p + "*")
-                continue
-            # p is a catch-all holding one of our folders ("Imported Models/"
-            # around "Imported Models/Mars Aerial/"): exclude its other children.
-            base = ROOT / p
-            for child in sorted(base.iterdir()) if base.is_dir() else []:
-                rel = child.relative_to(ROOT).as_posix() + ("/" if child.is_dir() else "")
-                if any(o == rel or o.startswith(rel) for o in own):
-                    continue
-                pats.add("res://" + rel + ("*" if child.is_dir() else ""))
+            # A folder of ours INSIDE p ("Imported Models/" round "Mars Aerial/",
+            # "Soak Terrain/" round the camp components) keeps its way down;
+            # everything else in p is the other group's.
+            _exclude_around(p, [o for o in own if o.endswith("/") and o.startswith(p) and o != p], pats)
     for top in sorted(ROOT.iterdir()):
         if top.name.startswith(".") or top.name in ART_ROOTS or not top.is_dir() or top == UID_DIR:
             continue
@@ -285,6 +298,100 @@ def art_exclude_for(group: str) -> list[str]:
             continue       # the bespoke map scenes live here; their tracked siblings are tiny
         pats.add(f"res://{top.name}/*")
     return sorted(pats)
+
+
+def _exclude_around(p: str, keep: list[str], pats: set[str]) -> None:
+    """Exclude folder p except the folders in `keep` (deeper than p): every
+    sibling along the way down to each kept folder is excluded."""
+    if not keep:
+        pats.add("res://" + p + "*")
+        return
+    base = ROOT / p
+    for child in sorted(base.iterdir()) if base.is_dir() else []:
+        rel = child.relative_to(ROOT).as_posix() + ("/" if child.is_dir() else "")
+        if any(o == rel for o in keep):
+            continue
+        inner = [o for o in keep if o.startswith(rel) and o != rel]
+        if inner and child.is_dir():
+            _exclude_around(rel, inner, pats)
+            continue
+        pats.add("res://" + rel + ("*" if child.is_dir() else ""))
+
+
+def _model_files(files: list[str]) -> list[str]:
+    return [f for f in files if f.rsplit(".", 1)[-1].lower() in MODEL_EXTS]
+
+
+def _catalog_paths() -> list[tuple[str, str, str]]:
+    """(id, label, res path) of every shipped ModelCatalog entry with a file."""
+    src = (ROOT / "core" / "placed_models" / "model_catalog.gd").read_text(encoding="utf-8")
+    out = []
+    for m in re.finditer(r'\{"id":\s*"([^"]+)",\s*"label":\s*"([^"]*)",\s*"path":\s*"res://([^"]+)"', src):
+        out.append((m.group(1), m.group(2), m.group(3)))
+    return out
+
+
+def _user_library() -> list[tuple[str, str]]:
+    """The author's own imported models (user://models/catalog.json on this
+    computer): never in a release."""
+    appdata = os.environ.get("APPDATA", "")
+    cat = Path(appdata) / "Godot" / "app_userdata" / "SIMbiogenesis" / "models" / "catalog.json"
+    if not appdata or not cat.is_file():
+        return []
+    import json
+    try:
+        data = json.loads(cat.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    ents = data.get("models", data) if isinstance(data, dict) else data
+    if isinstance(ents, dict):
+        ents = list(ents.values())
+    return sorted((str(e.get("label", e.get("id", ""))), str(e.get("id", ""))) for e in ents if isinstance(e, dict))
+
+
+def write_art_contents(out: Path, groups: dict[str, list[str]], built: list[str]) -> Path:
+    """ART_CONTENTS.md: which model files each art pack carries, which groups
+    this release left out, where every catalog model's file is, and the
+    author's own library (which no release carries)."""
+    lines = ["# What the art packs carry", ""]
+    lines.append("The game zips carry no imported art. Each `simbiogenesis-art-<group>.pck` "
+                 "carries the model files below (with their textures and materials).")
+    lines.append("")
+    for name, _ in ART_PACKS:
+        models = _model_files(groups.get(name, []))
+        state = "in this release" if name in built else "NOT in this release"
+        lines.append(f"## {name} ({state}) - {len(models)} model files")
+        lines.append("")
+        by_dir: dict[str, list[str]] = {}
+        for f in models:
+            d, _, base = f.rpartition("/")
+            by_dir.setdefault(d, []).append(base)
+        for d in sorted(by_dir):
+            lines.append(f"- `{d}/`: " + ", ".join(sorted(by_dir[d])))
+        lines.append("")
+    lines.append("## Library models and where their files ship")
+    lines.append("")
+    lines.append("| Catalog model | File | Ships in |")
+    lines.append("|---|---|---|")
+    for mid, label, rel in _catalog_paths():
+        g = group_of(rel)
+        where = (f"{g} pack" if g in built else f"{g} pack (not in this release)") if g else "the game zip"
+        if g == "" and not (ROOT / rel).exists():
+            where = "nowhere (file missing)"
+        lines.append(f"| {label} (`{mid}`) | `{rel}` | {where} |")
+    lines.append("")
+    lib = _user_library()
+    lines.append(f"## Your own library ({len(lib)} models) - never in a release")
+    lines.append("")
+    lines.append("These live in `user://models/` on the computer that imported them. They travel only "
+                 "inside a world shared with **Share...** (a `.simpack.zip`), which vendors the models "
+                 "its worlds use.")
+    lines.append("")
+    for label, mid in lib:
+        lines.append(f"- {label} (`{mid}`)")
+    path = out / "ART_CONTENTS.md"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 UID_DIR = ROOT / "art_uids"
@@ -362,7 +469,8 @@ def main() -> None:
     ap.add_argument("--platforms", default="windows,macos,linux")
     ap.add_argument("--no-art", action="store_true", help="skip the art add-on")
     ap.add_argument("--art-only", action="store_true", help="only build the art add-on")
-    ap.add_argument("--art-groups", default="", help="comma list of art groups to build (default all)")
+    ap.add_argument("--art-groups", default="", help="comma list of art groups to build "
+                    "(default: %s; also mars, soak)" % ",".join(DEFAULT_ART_GROUPS))
     ap.add_argument("--debug", action="store_true", help="export debug builds (console + asserts)")
     ap.add_argument("--out", default="", help="output folder (default release/<version>)")
     args = ap.parse_args()
@@ -410,7 +518,7 @@ def main() -> None:
         art_jobs: list[tuple[str, str]] = []
         if not args.no_art:
             groups = art_groups()
-            want = [g.strip() for g in args.art_groups.split(",") if g.strip()] or [n for n, _ in ART_PACKS]
+            want = [g.strip() for g in args.art_groups.split(",") if g.strip()] or list(DEFAULT_ART_GROUPS)
             for name in want:
                 files = groups.get(name, [])
                 if not files:
@@ -439,6 +547,8 @@ def main() -> None:
             built.append(zip_path)
             log(f"{zip_path.name}: {zip_path.stat().st_size / 2**20:.0f} MB")
 
+        if not args.no_art:
+            log(f"{write_art_contents(out, groups, [n for n, _ in art_jobs]).name}: what each pack carries")
         for name, pname in art_jobs:
             pck = out / f"simbiogenesis-art-{name}.pck"
             run_godot(args.godot, ["--export-pack", pname, str(pck)], logs / f"art_{name}.log", pck)

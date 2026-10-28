@@ -21,10 +21,10 @@ built on, so it opens exactly as you left it.
 | `SIMbiogenesis-<v>-windows.zip` | `SIMbiogenesis.exe` (game data embedded) and the DLLs of its native addons |
 | `SIMbiogenesis-<v>-macos.zip` | `SIMbiogenesis.app`, universal (Intel + Apple Silicon), ad-hoc signed |
 | `SIMbiogenesis-<v>-linux.zip` | `SIMbiogenesis.x86_64` (game data embedded) and its `.so` files |
-| `simbiogenesis-art-mars.pck` | Art add-on: the Mars aerial map and its scenes |
-| `simbiogenesis-art-soak.pck` | Art add-on: the SOAK festival map and its scenes |
 | `simbiogenesis-art-starshade.pck` | Art add-on: the Starshade models |
-| `simbiogenesis-art-models.pck` | Art add-on: every other imported model, the player and NPC rigs |
+| `simbiogenesis-art-models.pck` | Art add-on: every other imported model (the camp components too), the player and NPC rigs |
+| `simbiogenesis-art-mars.pck`, `simbiogenesis-art-soak.pck` | Only with `--art-groups mars,soak`: the Mars aerial and SOAK festival maps and their scenes. Releases leave them out by default (since 0.3.0 they are shared separately) |
+| `ART_CONTENTS.md` | Every model file each art pack carries, where each library model's file ships, and the author's own `user://models/` library, which no release carries |
 | `SHA256SUMS.txt`, `RELEASE_NOTES.md` | Checksums, and the install steps to paste on the release page |
 
 The game builds carry exactly what the repository carries. The gitignored
