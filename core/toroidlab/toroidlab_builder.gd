@@ -11,7 +11,10 @@ extends RefCounted
 ## opts: explode (0..1: canopy and panels lift off), assembly (0..1: the
 ## build stages appear in order), highlight (a member class, fitting kind,
 ## canopy piece or "panel"), record (keep pick data on the node),
-## ghost_highlight (the placement ghost's tint).
+## ghost_highlight (the placement ghost's tint), pieces (one MeshInstance3D
+## per part a crew carries — a tube, a fitting, a line, a solar panel, and a
+## canopy panel: one bay's origami fold, both halves' six triangles with its
+## flange and bolts — tagged for StructureUnits instead of the one "Mesh").
 
 const MODEL_ID := "toroidlab_structure"
 const DROP_M := 0.6
@@ -36,11 +39,26 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 	var highlight := str(opts.get("highlight", ""))
 	var record := bool(opts.get("record", false))
 	var ghost := bool(opts.get("ghost_highlight", false))
+	var pieces := bool(opts.get("pieces", false))
 	var fr: Dictionary = d["frame"]
 	var tube := ToroidLabMaterials.tube(str(s["tube"]["material"]))
 	var od := float(tube["od_mm"]) * 0.001
 	var accs := {}
 	var picks: Array = []
+	# Pieces mode: the part being drawn collects in pc and flush makes it its
+	# own node (`order` = the build stage it goes up in).
+	var pc := {"accs": {}}
+	var piece_nodes: Array = []
+	var flush := func(kind: String, words: Array, order: int, packed: ArrayMesh = null) -> void:
+		if not pieces:
+			return
+		var pm := _commit(pc["accs"], d, ghost)
+		pc["accs"] = {}
+		if pm.get_surface_count() > 0:
+			var pmi := MeshInstance3D.new()
+			pmi.mesh = pm
+			StructureUnits.tag_piece(pmi, kind, words, order, packed)
+			piece_nodes.append(pmi)
 	var shown := func(stage: int) -> float:
 		return assembly * float(N_STAGES) - float(stage) + 0.001
 	var lift := func(k: float) -> Vector3:
@@ -61,11 +79,12 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 		var pts := PackedVector3Array()
 		for p in (m["pts"] as PackedVector3Array):
 			pts.append(p + off)
-		_sweep(_acc(accs, key), pts, rad, 6 if cable else TUBE_SIDES)
+		_sweep(_acc(pc["accs"] if pieces else accs, key), pts, rad, 6 if cable else TUBE_SIDES)
 		if record:
 			for i in pts.size() - 1:
 				picks.append({"kind": "cable" if cable else "tube", "id": cls, "a": pts[i], "b": pts[i + 1],
 					"r": maxf(rad * 2.5, 0.03), "member": int(m["id"])})
+		flush.call("", ["a line", "lines"] if cable else ["a tube", "tubes"], int(m["stage"]))
 	# --- fittings --------------------------------------------------------------
 	for f in fr["fittings"]:
 		var k: float = shown.call(int(f["stage"]))
@@ -75,7 +94,7 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 		var typ := str(f["type"])
 		var key := "hl" if typ == highlight else "fitting"
 		var p: Vector3 = (f["p"] as Vector3) + off
-		var acc := _acc(accs, key)
+		var acc := _acc(pc["accs"] if pieces else accs, key)
 		var sr := od * 0.66
 		var dirs: Array = f["dirs"]
 		if typ == "crossover":
@@ -105,6 +124,7 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 				_box(acc, p, sr * 1.15)
 		if record:
 			picks.append({"kind": "fitting", "id": typ, "c": p, "r": maxf(sr * 1.6, 0.05)})
+		flush.call("", ["a fitting", "fittings"], int(f["stage"]))
 	# --- canopy ------------------------------------------------------------------
 	var cn: Dictionary = d["canopy"]
 	var k_cn: float = shown.call(5)
@@ -114,13 +134,17 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 		var cs: Dictionary = s["canopy"]
 		var bolt := DomeLabMaterials.bolt(str(cs["bolt"]))
 		var bd := float(bolt["d_mm"]) * 0.001
+		# Packed, a fold is the flat cut pieces it is scored from (the
+		# corrugated plastic folds along its score lines): the same for
+		# every bay.
+		var canopy_flat: ArrayMesh = _packed_canopy(cn, th, d, ghost) if pieces else null
 		for sec in cn["sectors"]:
 			for h in sec["halves"]:
 				var pid := "SL" if int(h["side"]) == 0 else "SR"
 				var key := "hl" if pid == highlight else "canopy"
 				var nrm: Vector3 = h["normal"]
 				var off: Vector3 = nrm * (0.6 * explode) + lift.call(k_cn)
-				var acc := _acc(accs, key)
+				var acc := _acc(pc["accs"] if pieces else accs, key)
 				var tris_out := PackedVector3Array()
 				for tri in h["tris"]:
 					var a: Vector3 = (tri[0] as Vector3) + off
@@ -141,7 +165,7 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 					_slab_tri(acc, q0, q1, q2, fn, th)
 					_slab_tri(acc, q0, q2, q3, fn, th)
 				if explode < 0.01 and int(h["side"]) == 0:
-					var hacc := _acc(accs, "bolt")
+					var hacc := _acc(pc["accs"] if pieces else accs, "bolt")
 					for bt in h["bolts"]:
 						var c: Vector3 = (bt["p"] as Vector3) + off
 						var ax: Vector3 = bt["axis"]
@@ -152,6 +176,9 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 						DomeLabBuilder._hex(hacc, c - ax * (reach + bd * 0.85), c - ax * (reach + bd * 1.3), side, bd * 0.95)
 				if record:
 					picks.append({"kind": "canopy", "id": pid, "tris": tris_out, "label": "%s · bay %d" % [pid, int(sec["bay"]) + 1]})
+			# One bay's fold is one canopy panel: it goes up and comes down
+			# folded, not triangle by triangle.
+			flush.call("sheets", ["a canopy panel", "canopy panels"], 5, canopy_flat)
 	# --- panels --------------------------------------------------------------------
 	var so: Dictionary = d["solar"]
 	var k_pv: float = shown.call(6)
@@ -159,8 +186,8 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 		for pnl in so["panels"]:
 			var off: Vector3 = (pnl["normal"] as Vector3) * (0.8 * explode) + lift.call(k_pv)
 			var key := "hl" if highlight == "panel" else "panel"
-			var acc := _acc(accs, key)
-			var back := _acc(accs, "panel_back")
+			var acc := _acc(pc["accs"] if pieces else accs, key)
+			var back := _acc(pc["accs"] if pieces else accs, "panel_back")
 			var rows: Array = pnl["rows"]
 			var tris_out := PackedVector3Array()
 			for i in rows.size() - 1:
@@ -179,7 +206,101 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 				tris_out.append_array(PackedVector3Array([a0 + up, a1 + up, b1 + up, a0 + up, b1 + up, b0 + up]))
 			if record:
 				picks.append({"kind": "panel", "id": "panel", "tris": tris_out, "label": "panel · bay %d" % (int(pnl["bay"]) + 1)})
+			flush.call("sheets", ["a solar panel", "solar panels"], 6,
+				_packed_panel(rows, d, ghost) if pieces else null)
 	# --- commit ----------------------------------------------------------------------
+	if pieces:
+		for i in piece_nodes.size():
+			var pn_i: MeshInstance3D = piece_nodes[i]
+			pn_i.name = "P%d" % i
+			root.add_child(pn_i)
+	else:
+		var mi := MeshInstance3D.new()
+		mi.name = "Mesh"
+		mi.mesh = _commit(accs, d, ghost)
+		root.add_child(mi)
+	if record:
+		root.set_meta("picks", picks)
+	var st: Dictionary = d["stats"]
+	var dia := float(st["radius_max_m"]) * 2.0
+	root.set_meta("size_m", Vector3(dia, float(st["height_m"]) + 0.05, dia))
+	return root
+
+
+# ---------------------------------------------------------------------------
+# Emitters (Godot's front face winds clockwise; DomeLabBuilder._atri flips a
+# triangle whose geometric normal disagrees with the one it is given)
+# ---------------------------------------------------------------------------
+
+## A canopy fold packed flat: its two cut pieces (ToroidLabCanopy's unfold,
+## flange included) stacked one on the other, each centred, in the packed
+## frame StructureUnits expects (x across, y up through the stack, z along;
+## metres).
+static func _packed_canopy(cn: Dictionary, th: float, d: Dictionary, ghost: bool) -> ArrayMesh:
+	var accs := {}
+	var acc := _acc(accs, "canopy")
+	var flat: Array = cn.get("pieces", [])
+	for i in flat.size():
+		var poly: PackedVector2Array = flat[i]["poly"]
+		var bb: Rect2 = flat[i].get("bbox", FlatpackProfile.bbox(poly))
+		var c := bb.get_center()
+		var pm := PackedVector2Array()
+		for q in poly:
+			pm.append((q - c) * 0.001)
+		_flat_slab(acc, acc, pm, float(i) * th, th)
+	return _commit(accs, d, ghost)
+
+
+## A flexible solar panel packed flat: its width across, its length the
+## length of the curve it is bent to.
+static func _packed_panel(rows: Array, d: Dictionary, ghost: bool) -> ArrayMesh:
+	if rows.size() < 2:
+		return null
+	var w := (rows[0][0] as Vector3).distance_to(rows[0][1])
+	var l := 0.0
+	for i in rows.size() - 1:
+		l += ((rows[i + 1][0] as Vector3).distance_to(rows[i][0]) + (rows[i + 1][1] as Vector3).distance_to(rows[i][1])) * 0.5
+	var accs := {}
+	var poly := PackedVector2Array([Vector2(-w * 0.5, -l * 0.5), Vector2(w * 0.5, -l * 0.5),
+		Vector2(w * 0.5, l * 0.5), Vector2(-w * 0.5, l * 0.5)])
+	_flat_slab(_acc(accs, "panel"), _acc(accs, "panel_back"), poly, 0.0, PANEL_T_M)
+	return _commit(accs, d, ghost)
+
+
+## A flat polygon (x, z) as a slab from y0 to y0 + t: the top face into
+## `top`, the underside and the edges into `rest`.
+static func _flat_slab(top: Dictionary, rest: Dictionary, poly: PackedVector2Array, y0: float, t: float) -> void:
+	var m := poly.size()
+	if m < 3:
+		return
+	var idx := Geometry2D.triangulate_polygon(poly)
+	var p3 := func(q: Vector2, y: float) -> Vector3:
+		return Vector3(q.x, y, q.y)
+	for k in idx.size() / 3:
+		var a := poly[idx[k * 3]]
+		var b := poly[idx[k * 3 + 1]]
+		var c := poly[idx[k * 3 + 2]]
+		DomeLabBuilder._atri(top, p3.call(a, y0 + t), p3.call(b, y0 + t), p3.call(c, y0 + t), Vector3.UP, Vector3.UP, Vector3.UP)
+		DomeLabBuilder._atri(rest, p3.call(a, y0), p3.call(b, y0), p3.call(c, y0), Vector3.DOWN, Vector3.DOWN, Vector3.DOWN)
+	# Edges: the outward normal of each side in the plane.
+	var area := 0.0
+	for i in m:
+		var q := poly[(i + 1) % m]
+		area += poly[i].x * q.y - q.x * poly[i].y
+	for i in m:
+		var a := poly[i]
+		var b := poly[(i + 1) % m]
+		var e := b - a
+		if e.length() < 1e-6:
+			continue
+		var o := Vector2(e.y, -e.x).normalized() if area > 0.0 else Vector2(-e.y, e.x).normalized()
+		var nn := Vector3(o.x, 0.0, o.y)
+		DomeLabBuilder._atri(rest, p3.call(a, y0), p3.call(b, y0), p3.call(b, y0 + t), nn, nn, nn)
+		DomeLabBuilder._atri(rest, p3.call(a, y0), p3.call(b, y0 + t), p3.call(a, y0 + t), nn, nn, nn)
+
+
+## The accumulators of one build as a mesh, a surface per material.
+static func _commit(accs: Dictionary, d: Dictionary, ghost: bool) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	for key in ["tube", "fitting", "cable", "canopy", "bolt", "panel", "panel_back", "hl"]:
 		if not accs.has(key):
@@ -193,22 +314,8 @@ static func build_from_design(d: Dictionary, node_name: String = "ToroidStructur
 		arr[Mesh.ARRAY_NORMAL] = a["n"]
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(key, d, ghost))
-	var mi := MeshInstance3D.new()
-	mi.name = "Mesh"
-	mi.mesh = mesh
-	root.add_child(mi)
-	if record:
-		root.set_meta("picks", picks)
-	var st: Dictionary = d["stats"]
-	var dia := float(st["radius_max_m"]) * 2.0
-	root.set_meta("size_m", Vector3(dia, float(st["height_m"]) + 0.05, dia))
-	return root
+	return mesh
 
-
-# ---------------------------------------------------------------------------
-# Emitters (Godot's front face winds clockwise; DomeLabBuilder._atri flips a
-# triangle whose geometric normal disagrees with the one it is given)
-# ---------------------------------------------------------------------------
 
 static func _acc(accs: Dictionary, key: String) -> Dictionary:
 	if not accs.has(key):

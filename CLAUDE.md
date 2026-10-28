@@ -1607,17 +1607,15 @@ tools\harness.ps1 -World mtvernon -Capture animeditor
 # state_at pure (scrub back == first visit), the structure only grows, a crew
 # smaller than a quorum lifts with everyone. Carries EXPECTED_CHECKS:
 Godot.exe.exe --headless --path . --script core/linkage/build/linkage_build_timeline_selftest.gd
-# Fabrication swarm in the world (WINDOWED — swarm B5): places the SOAK 2026
-# design on the flattest patch near the player, starts a crew-12 rehearsal
-# (LinkageBuildSite) on a frozen clock moved by hand, and asserts nothing
-# stands at the start, the structure only grows, one job of every kind (cut /
-# drill / place / fasten / lift / deploy) has its whole crew there with that
-# job's clip and every hand on a tool within 2 cm of its grip, the site costs
-# < 8 ms a frame, a scrub back gives the same structure, the end has every
-# part seated + the ring deployed + the crew gone, and ending the rehearsal
-# hands the structure back. Wide PNG per phase + a close-up per job kind;
-# removes its prop:
-tools\harness.ps1 -World mtvernon -Capture fabswarm
+# A Linkage Lab structure built by the crew (sandbox; replaced fabswarm /
+# fabcrew on 2026-10-27, when the Linkage-only site was retired): a placed
+# StarShade rehearsed on a held clock — nothing at the start, the part-open
+# frame the crew builds stands on the DEPLOYED ring's middle, half built,
+# whole, then the real structure opens about that middle and stands at its
+# placed pose; scrub back; then the build at speed against the world's own
+# frame time (the `build_site` PerfSpan section). LCB_DESIGN=<res:// preset>
+# for another design (Constellation: 235 pieces, the heaviest fold):
+tools\harness.ps1 -World walton -RunScript res://tools/checks/linkage_crew_build_check.gd -Label linkage_crew -Timeout 1200
 # Lab build-step player (offline — A5): LinkageStepScene frames (a cut is a
 # bench step with the saw out and every row kept at the end, drilling adds
 # holes, a place step starts its parts away from their seats, parts only
@@ -1639,15 +1637,9 @@ Godot.exe.exe --headless --path . --script core/linkage/build/linkage_step_playe
 # rebuild them, the deck step stages the deck, the guide writes the SVG cut
 # files. PNG per kind + radial_* + enclosure_*:
 tools\harness.ps1 -World mtvernon -Capture buildsteps
-# Fabrication by the CREW (WINDOWED — swarm B6): seeds a 12-person camp
-# (tanks + tagged spaces), places a packed SOAK 2026 kit, queues the crew build
-# as the Lab does (phase chores + a labour-mode build_run on the crate), runs
-# the clock and asserts: the labour-mode site owns the visuals (the bridge's
-# prefix reveal never touches the builder), the drawn build time only moves
-# forward, people DOING the project's chores on site man the lanes with their
-# own bodies hidden, the structure grows with the work, and the finished
-# project leaves it unpacked + deployed with every part seated:
-tools\harness.ps1 -World mtvernon -Capture fabcrew
+# The crew build of a Linkage frame through the deploy schedule / the Lab's
+# "Queue build for crew" (both SiteDeployDirector.queue_item) is the linkage
+# kit of structure_build_check (SB_ONLY=linkage).
 # Visual playtest capture (WINDOWED — cannot be --headless): launch a user map
 # by CLI, freeze a daytime clock, hide HUD, shoot drone-orbit + street PNG sets
 # (+ manifest.json) to user://screenshots/<label>/ for agent/visual review:
@@ -7238,26 +7230,12 @@ to metres (×0.0254) only in the mesh builder.
   `ring_union` of both for the deploy itself). Centred on the origin, the
   deploy and lift circles stood off to one side of the structure (pinned by
   `_test_ring_centre`).
-- **Build site (swarm B5, `gameplay/linkage_build_site.gd`).** A placed
-  linkage prop with `build_run = {start_h, crew_n}` (the fire's
-  record-on-the-prop pattern) gets a `LinkageBuildSite`
-  (`PlacedPropRuntime` attaches it; the prop editor's Crew spin + "Rehearse
-  build" / "End rehearsal" write and clear it via
-  `LinkageBuildSite.start_rehearsal` / `clear_rehearsal`). Build time =
-  (clock − start_h) × 3600, so it follows the world clock, scrubs and
-  survives a reload; the plan is cached by design + crew. It drives the
-  builder (`set_part_states`, and `set_fold_angle` only on a > 0.05° change),
-  twelve-ish hi-detail stick figures (clip on the cosmetic NPC clock for
-  looping clips, job progress for one-shots; tools on their op path from
-  `FabContextRig` in the worker's frame, hands IK'd to the grips) and
-  benches laid out as the authored contexts. Builder joint hardware (simple
-  brackets, bolts, washers) follows its JOINT via
-  `LinkageStructureBuilder.part_joint_keys()`. While it runs,
-  `LinkageDeployRuntime.toggle_deploy` does nothing. After the last job + 90
-  s the crew disperses and every part is seated. ⚠ Set the FOLD before
-  composing part states: panels and support beams only exist past their
-  visibility angles, so states composed first miss them (the panels showed
-  before they were placed). Not yet: sawdust, the chore board driving it (B6).
+- **Build site (swarm B5) — RETIRED 2026-10-27.** `LinkageBuildSite`
+  (its own crew of IK'd figures at saw / drill benches over
+  LinkageBuildTimeline) was replaced by the shared crew build site
+  (`PalletRackBuildSite`; see "Crew builds of Linkage Lab structures" in the
+  deploy schedule section). LinkageBuildTimeline stays: the build guide's
+  "crew of 9" summary and its selftest.
 - **Lab step player (A5).** `LinkageStepScene` (pure frames) +
   `LinkageStepPlayer` (engine + renderer, sibling of the Lab's builder) +
   `scenes/ui/linkage_steps_panel.gd` (the 🎬 Steps dock under the 3D view:
@@ -7270,27 +7248,9 @@ to metres (×0.0254) only in the mesh builder.
   draws its own way follows its JOINT, and only parts a step introduces
   count. "Unreferenced" washers share joints with brackets, so they had lit
   every joint over the empty site.
-- **The crew builds it (B6, labour mode).** The Lab's "Queue build for crew"
-  now also writes `build_run = {mode: "labour", iid, project_id, crew_n}` on
-  the kit crate, and the site attaches to the UNDER-CONSTRUCTION prop too
-  (`_build_construction_prop`). Build time = the project's labour-weighted
-  progress (`SiteProject.rollup`) mapped through the timeline's
-  cumulative-work curve (`time_for_fraction`), eased over `LABOUR_EASE_S`, so
-  the structure goes up exactly as fast as the crew's credited work. A lane
-  is drawn only while a real person is DOING one of the project's chores on
-  site (`NpcPopulationBridge.linkage_build_status`); busiest lanes first, an
-  agent keeps its lane while it stays, the lane wears its colour, and its own
-  body is hidden through the STATIC `NpcStandIns` (read by the host: avatar
-  hidden, crowd overflow slot written hidden). `owns_visuals()` makes the
-  bridge's `_push_build_progress` stand down. With no readable project (NPCs
-  off, bridge not up, project gone) the site SUSPENDS and hands the builder
-  back; a cancelled project disposes it; a done one finishes through the
-  deploy runtime's own `_settle` (fold persisted, graph array unstowed).
-  The phase chores, their effects and the board are unchanged, which is why
-  `--capture=project` (the coarse path) still passes. Not built: the
-  `work_anim` dot input (the stood-in agents are drawn by the site instead),
-  a glide from the arrival spot to the lane (an arriving worker pops onto
-  their lane), the light tier (no board chores there).
+- **The crew builds it (B6)** — now the Lab's "Queue build for crew" hands
+  the kit to `SiteDeployDirector.queue_item` (the deploy schedule's path);
+  see "Crew builds of Linkage Lab structures".
 - `linkage_kinematics.gd` (static): closed-form `calculate_joint_positions`,
   `optimal_closed_angle` (ring-closure scan), `min_fold_angle_v_overlap`. Core math
   runs in 64-bit scalars before `Vector2` conversion (Godot vectors are 32-bit).
@@ -10633,6 +10593,109 @@ duplicated.
     (deploy + pack-up of one of each, no ghost, monotone, all up / all
     down, shots); offline `tools/diag/structure_units_diag.gd [-- --only=x]`
     (every preset cut + planned, ms).
+- **Pieces are the parts a crew handles (2026-10-27).** Connectivity alone
+  cut the wrong pieces: a folded plate's flanges are separate meshes from
+  its face, so a helical zome (plates, no struts or hubs) was planned as
+  96 "struts" + 48 sheets; the toroid's canopy came apart triangle by
+  triangle. Now:
+  - Builders that know their parts draw them whole when asked: build
+    option `pieces` (ModelCatalog forwards `extras.pieces`; StructureUnits
+    always sets it) makes `DomeLabBuilder` / `ToroidLabBuilder` emit one
+    MeshInstance3D per part, tagged by `StructureUnits.tag_piece(mi, kind,
+    words, order)`: a strut, hub, rib length, slat, a plate WITH its
+    flanges, a panel with its pane, a tube, a fitting, a solar panel, one
+    bay's origami canopy fold (both halves' six triangles + flange +
+    bolts). A tagged node is never split; its `kind` / `words` ("a plate")
+    / `order` override the guesses, and stage = order × `ORDER_STRIDE` +
+    band × 4 + rank, so a covering (dome panels, the toroid canopy at its
+    builder stage 5, PV at 6) goes on after the frame. Bolts are their own
+    small pieces and ride with the nearest plate. Each builder's one-mesh
+    commit is now a static `_commit`. Overview toroid: 24 canopy panels + 24
+    PV; helical_rd 24 plates; helical_corten 216 plates (cut 0.7 s, was 3 s).
+  - A part that PACKS to another shape gives `tag_piece` a `packed` mesh
+    (flat, thin along y, centred): a toroid canopy fold packs as its two
+    flat cut pieces stacked (`ToroidLabBuilder._packed_canopy`, from
+    ToroidLabCanopy's unfold, flange included — scored corrugated plastic
+    folds flat), a bent flexible solar panel as a flat panel of its curve's
+    length (`_packed_panel`). StructureUnits maps it into the piece's flat
+    frame (vertex = basis · L + centre, so the yard's pose lays it flat),
+    sets the flat `size` to the packed shape's (`packed: true`) and gives the
+    unit node "Installed" + "Packed" children; PalletRackBuildSite shows
+    "Packed" while g ≥ 0.5 (yard, carried, set down, first half of the fit).
+    ⚠ `get_meta(key, null)` still errors on a missing key (null = no
+    default): use `has_meta`.
+  - Rack slopes: the end walls are 4x8 sheets stood on end
+    (`_emit_end_wall_sheets`: the end's region in (out, height), minus the
+    door, intersected with each sheet's rect — the top ones cut to the
+    slope; ids `el:<id>:ends:<end>,<col>,<row>[,<k>]`, the door
+    `el:<id>:ends:d<end>`), solid slabs (`_emit_slab_2d`). They were ONE
+    zero-thickness quad per end with both ends one unit, which the yard
+    could not lay flat and which rendered black from behind. The slope
+    frame is its rafters (`el:<id>:frame:<k>`, `:top`, `:sill`), the bridge
+    its ledger / rim / joists / posts / 4x8 cover sheets, a pitched roof's
+    packing its blocks (`packing:<li>:<k>`). The planner puts an element up
+    in `_el_stage` order — rafters + bridge, purlins, cover, ends — one
+    chained job each (`EL_STAGE_WORDS`), so a strike runs the other way.
+  - A pack-up's progress line reads the job in teardown words
+    (`PalletRackBuildPlan.strike_label`: "raise and hold" → "lower",
+    "carry X" → "carry X back to the yard" …). The site's drawn time starts
+    at the first readable target (`_t_seeded`): eased up from 0, a pack-up
+    re-played the whole build in its first second.
+  - Measured in game (`tool_camp_build_video.gd`, now with a pack-up phase;
+    `TCV_PACKUP=0` skips it): Tool Camp's fit-out is off AND back in the
+    yard before the first beam or frame comes down. Selftest pins it, the
+    slopes and the zome / toroid pieces (`pallet_rack_build_plan_selftest`,
+    49). Stairs and ladders stay one prefab piece.
+- **Crew builds of Linkage Lab structures (2026-10-27).** One crew system:
+  the deploy schedule, the Lab's "Queue build for crew" (queue_item on the
+  kit crate: nearest camp with board room, ALL HANDS) and the prop editor's
+  "Rehearse build" (`PalletRackBuildSite.start_rehearsal`, crew default
+  `LINKAGE_DEFAULT_CREW` 9) all run on `PalletRackBuildSite`.
+  - **The centre bug.** The solver hangs the ring off module 0 at the
+    origin, so the ring's middle sat off to one side and SWUNG as it folded:
+    the crew's folded frame and the opened structure stood apart, and a
+    deploy swung round module 0. `LinkageStructureBuilder.centre_fixed` (on
+    for build_node = every placed structure, and the construction ghost; off
+    in the Lab studio, which centres itself) slides each pose so the ring's
+    plan middle (`plan_centre_of`: the beams' corners) stays where it is at
+    the DEPLOYED (closed) angle: `_shift`, `frame_offset()` (= slide +
+    grounding; every transform, instance_transforms, collision, walls,
+    frame_aabb add it; the step player uses frame_offset()). A deployed
+    structure is exactly where it always was.
+  - **Built part-open.** `crew_pose_angle(p)` = stowed + `CREW_POSE_FRAC`
+    0.45 of the way to deployed (the Lab's build pose): folded flat a
+    StarShade is a 2.5 x 1.1 x 0.35 m bundle that does not read as a ring.
+    StructureUnits cuts there; a crew build's unpack opens from there
+    (terrain_loader's unpack, when the record carries a build_run); a
+    pack-up folds there first (`LinkageDeployRuntime.fold_to`, the
+    director's `_stow_then_stamp`); a rehearsal opens from there over
+    `LINKAGE_DEPLOY_S` 120 build-seconds after the last piece, on the real
+    structure (`_drive_fold`; scrubbing back folds it again; dispose / the
+    end land it at the placed pose).
+  - **The Lab's step order.** `instance_piece_info()` gives each MultiMesh
+    instance an order + words from its part key (`piece_info_for_key`):
+    bottom ring, V modules (+ their brackets and bolts), top ring, supports,
+    floor, panels, coverings (wall nodes are `tag_piece`d); radial copies
+    one after another.
+  - **Speed.** `set_fold_angle` cost on Constellation was ~19 ms a step
+    (radial copies 9 ms: `deployed_plan` hashed a JSON dump of the config on
+    every call; coverings 3.7 ms, parity-pinned JS port, left as is). Now:
+    the deployed plan and the design key are per rebuild (`_design_key`),
+    the other angles' copies cached (`_geo_cache`), ~14 ms. Sweeps of heavy
+    designs re-solve at most ~13x a second (`fold_cost_ms`;
+    LinkageDeployRuntime `HEAVY_FOLD_MS` / `FOLD_GAP_PER_MS` /
+    `MAX_FOLD_GAP_S`, the site's `_drive_fold` alike) while the angle keeps
+    time. The site's own cost is the `build_site` PerfSpan: ~2.6 ms a frame
+    at 115x on a StarShade, ~4.4 ms at 369x on Constellation (Walton's
+    world alone was ~55-60 ms median there).
+  - The bridge's ghost push stands down for any build site that owns the
+    visuals (`PalletRackBuildSite.NODE_NAME`).
+- **Toroid centre posts**: the straight uprights beside the inner-wall arcs
+  are `ribs.inner_posts` ("Straight centre posts" under Tube and ribs in the
+  Lab). The reference GLB draws them, the real build has none: off in the
+  overview preset and the spec default (the selftest counts the GLB's
+  fittings on a posted copy). A placed toroid keeps the value it was saved
+  with.
 - Not built: per-camp schedules, the light tier working (only pinned full
   camps do), a tour stop, the gantry's own assembly order (it splits by
   mesh like a GLB).

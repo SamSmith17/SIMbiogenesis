@@ -512,6 +512,7 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 	var finish: Array = []
 	var roof_dep: Array = after_decks.duplicate()
 	var packing: Array = m["roof_packing"]
+	packing.sort_custom(func(a, c): return str(a).naturalnocasecmp_to(str(c)) < 0)
 	if not packing.is_empty():
 		var pbb := _bounds_of(P, packing)
 		for id in packing:
@@ -574,18 +575,35 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 	var ek: Array = elems.keys()
 	ek.sort()
 	for k in ek:
-		var es: Array = elems[k]
-		var ebb := AABB()
-		var ef := true
-		for id in es:
-			_unit_rec(P, id, "parts")
-			ebb = units[id]["aabb"] if ef else ebb.merge(units[id]["aabb"])
-			ef = false
-		var oute := ebb.get_center() * Vector3(1, 0, 1)
-		var drop := Vector3(ebb.get_center().x, 0, ebb.get_center().z) + oute.normalized() * 1.0
-		var cj := _carry(P, es, 2, drop, after_decks, "carry the parts of " + _element_name(P, k))
-		finish.append(_install(P, "assemble", es, 2, 2, T_ELEMENT_S, [cj] + after_decks,
-			_stands_round(ebb, 2, 0.0, oute), "put up " + _element_name(P, k)))
+		# An element in the order it is built: a slope's rafters (and the
+		# joists back to the structure), its purlins, its cover, then the
+		# sheets closing its ends — one job each, chained, so taking it
+		# down runs the other way round.
+		var by_stage := {}
+		for id in elems[k]:
+			var st := _el_stage(str(_parse(id)[1]))
+			if not by_stage.has(st):
+				by_stage[st] = []
+			(by_stage[st] as Array).append(id)
+		var stages: Array = by_stage.keys()
+		stages.sort()
+		var prev_el: Array = after_decks
+		for st in stages:
+			var es: Array = by_stage[st]
+			es.sort_custom(func(a, c): return str(a).naturalnocasecmp_to(str(c)) < 0)
+			var ebb := _bounds_of(P, es)
+			for id in es:
+				_unit_rec(P, id, "lumber" if int(st) <= 1 else ("sheets" if int(st) == 3 else "parts"))
+			var oute := ebb.get_center() * Vector3(1, 0, 1)
+			var drop := Vector3(ebb.get_center().x, 0, ebb.get_center().z) + oute.normalized() * 1.0
+			var what := _element_name(P, k)
+			var words: Array = EL_STAGE_WORDS.get(int(st), ["carry the parts of %s", "put up %s"]) \
+				if stages.size() > 1 else ["carry the parts of %s", "put up %s"]
+			var cj := _carry(P, es, 2, drop, prev_el, str(words[0]) % what)
+			var ij := _install(P, "assemble" if int(st) == 2 else ("hang" if int(st) == 3 else "fix"), es, 2, 2,
+				T_ELEMENT_S, [cj] + prev_el, _stands_round(ebb, 2, 0.0, oute), str(words[1]) % what)
+			finish.append(ij)
+			prev_el = [ij] + after_decks
 	if not misc.is_empty():
 		var mbb := AABB()
 		var mf := true
@@ -597,6 +615,32 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 		finish.append(_install(P, "assemble", misc, 2, 2, T_ELEMENT_S, [cjm] + after_decks,
 			_stands_round(mbb, 2), "finish"))
 	return finish + after_decks
+
+
+## An element's part in its build order: 0 a slope's rafters, legs and the
+## joists back to the structure; 1 its purlins; 2 its cover (sheets,
+## modules, gap seals) and any other element's parts; 3 the sheets and door
+## closing a slope's ends.
+static func _el_stage(leaf: String) -> int:
+	var bits := leaf.split(":")
+	if bits.size() < 3:
+		return 2
+	match str(bits[2]):
+		"frame", "bridge":
+			return 0
+		"ends":
+			return 3
+	if bits.size() >= 4 and str(bits[3]) == "purlins":
+		return 1
+	return 2
+
+
+const EL_STAGE_WORDS := {
+	0: ["carry the rafters for %s", "put up the rafters of %s"],
+	1: ["carry the purlins for %s", "fix the purlins of %s"],
+	2: ["carry the cover for %s", "cover %s"],
+	3: ["carry the end sheets for %s", "close the ends of %s"],
+}
 
 
 static func _bounds_of(P: Dictionary, ids: Array) -> AABB:
@@ -669,7 +713,7 @@ static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) ->
 			out = out.normalized() if out.length() > 0.1 else Vector3.BACK
 			var drop := Vector3(bb.get_center().x, 0.0, bb.get_center().z) \
 				+ out * (maxf(bb.size.x, bb.size.z) * 0.5 + 1.0)
-			var words := _piece_words(kind, g.size())
+			var words := _piece_words(kind, g.size(), units[g[0]].get("words", []))
 			var cj := _carry(P, g, 2 if kind != "parts" else 1, drop, prev, "carry " + words)
 			stage_jobs.append(_install(P, act, g, crew_min, 2, per_s, [cj] + prev,
 				_stands_round(bb, crew_min, 0.0, out), "fit " + words))
@@ -684,8 +728,32 @@ static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) ->
 		"yard_side": P["yard_side"], "radius_m": bounds.size.length() * 0.5}
 
 
-static func _piece_words(kind: String, n: int) -> String:
-	var w: Array = PIECE_WORDS.get(kind, ["a part", "parts"])
+## `own` = the piece's own [singular, plural] (a builder's tag), else the
+## pile kind's.
+## A build job's label as the crew taking it down reads it (a pack-up plays
+## the build backwards; its jobs keep the build's words): "raise and hold
+## upright frame 2" -> "lower upright frame 2".
+const STRIKE_VERBS := [
+	["raise and hold ", "lower "], ["release the frames of ", "hold the frames of "],
+	["seat ", "take out "], ["fix the ", "take off the "], ["deck ", "lift the deck sheets of "],
+	["sheet the roof", "strip the roof"], ["set the steps", "take out the steps"],
+	["hang ", "take down "], ["put up ", "take down "], ["cover ", "uncover "],
+	["close the ends of ", "take the end sheets off "], ["fit ", "take off "],
+	["finish", "strip the rest"], ["the visitor climbs onto the new deck", "a last look from the deck"],
+]
+
+
+static func strike_label(label: String) -> String:
+	if label.begins_with("carry "):
+		return "carry %s back to the yard" % label.trim_prefix("carry ")
+	for pr in STRIKE_VERBS:
+		if label.begins_with(str(pr[0])):
+			return str(pr[1]) + label.trim_prefix(str(pr[0]))
+	return label
+
+
+static func _piece_words(kind: String, n: int, own: Array = []) -> String:
+	var w: Array = own if own.size() == 2 else PIECE_WORDS.get(kind, ["a part", "parts"])
 	return str(w[0]) if n == 1 else "%d %s" % [n, str(w[1])]
 
 

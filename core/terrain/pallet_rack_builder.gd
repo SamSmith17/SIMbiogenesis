@@ -1937,10 +1937,17 @@ static func _emit_pitched_roof(g: _Geom, s: Dictionary, L: Dictionary, li: int) 
 	var along_z: bool = G.along_z
 	var lid := "deck:%d" % li
 	var llabel := "Roof deck · pitched %s°" % fmt_num(float(s["roof_pitch_deg"]))
-	# Packing (and purlins), as one part.
-	var pov := g.begin([lid, "packing:%d" % li], [llabel, "Packing"])
+	# Packing (and purlins): a group, each block and purlin its own part
+	# ("packing:<li>:<k>") so a crew sets them one by one.
+	var ppath: Array = [lid, "packing:%d" % li]
+	var plab: Array = [llabel, "Packing"]
+	var pov := g.begin(ppath, plab)
+	var pk := [0]
+	var piece := func() -> SurfaceTool:
+		var ov2 := g.begin(ppath + ["packing:%d:%d" % [li, pk[0]]], plab + ["Packing %d" % (pk[0] + 1)])
+		pk[0] += 1
+		return g.surf(ov2, g.lumber)
 	if not bool(pov.get("hidden", false)):
-		var lst := g.surf(pov, g.lumber)
 		if along_z:
 			for r in range(int(L.rows)):
 				for zl in [float(rz[r]), float(rz[r]) + fd]:
@@ -1952,7 +1959,7 @@ static func _emit_pitched_roof(g: _Geom, s: Dictionary, L: Dictionary, li: int) 
 						if _in_notch(notch, cx, float(zl)):
 							continue
 						var span := float(fx[b + 1]) - float(fx[b]) - POST_W
-						_emit_box(lst, Transform3D(Basis(), Vector3(cx, top + h * 0.5, float(zl))),
+						_emit_box(piece.call(), Transform3D(Basis(), Vector3(cx, top + h * 0.5, float(zl))),
 							Vector3(span, h, 3.5 * IN))
 						g.counts["lumber"] += 1
 		else:
@@ -1961,12 +1968,12 @@ static func _emit_pitched_roof(g: _Geom, s: Dictionary, L: Dictionary, li: int) 
 				var h2 := _roof_y(G, Vector3(xl, 0.0, 0.0)) - top
 				for r in range(int(L.rows)):
 					if h2 > 0.01 and not _in_notch(notch, xl, float(rz[r]) + fd * 0.5):
-						_emit_box(lst, Transform3D(Basis(), Vector3(xl, top + h2 * 0.5, float(rz[r]) + fd * 0.5)),
+						_emit_box(piece.call(), Transform3D(Basis(), Vector3(xl, top + h2 * 0.5, float(rz[r]) + fd * 0.5)),
 							Vector3(3.5 * IN, h2, fd + POST_W))
 						g.counts["lumber"] += 1
 				# A purlin along the frame line, the rafters' bearing.
 				var zr: Vector2 = G.zr
-				_emit_box(lst, Transform3D(Basis(), Vector3(xl, top + maxf(h2, 0.0) + RAFTER_D * 0.5,
+				_emit_box(piece.call(), Transform3D(Basis(), Vector3(xl, top + maxf(h2, 0.0) + RAFTER_D * 0.5,
 					(zr.x + zr.y) * 0.5)), Vector3(RAFTER_W, RAFTER_D, zr.y - zr.x))
 				g.counts["lumber"] += 1
 	# Rafters down the fall, at the joist spacing across it.
@@ -4358,30 +4365,39 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 	var amax: float = raf[-1]
 	var lift_r := -(PURLIN_T + RAFTER_D * 0.5)
 	var under := -(PURLIN_T + RAFTER_D)
-	var fov := g.begin([eid, eid + ":frame"], [elab, "Rafters and legs"])
-	if not bool(fov.get("hidden", false)):
-		var lum := g.surf(fov, g.lumber)
-		for ra in raf:
-			var a := clampf(float(ra), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
-			_emit_obox(lum, _lean_point(G, a, slen * 0.5, lift_r), dv, nv,
-				Vector3(slen, RAFTER_D, RAFTER_W))
-			g.counts["lumber"] += 1
-			# A leg under the low end, and a prop at mid-slope on tall arrays.
-			for s_up in [0.12, slen * 0.5]:
-				var foot := _lean_point(G, a, s_up, under)
-				if (s_up < 0.5 and foot.y > 0.08) or (s_up > 0.5 and foot.y > 1.4):
-					_emit_obox(lum, Vector3(foot.x, foot.y * 0.5, foot.z), Vector3.UP, along_v,
-						Vector3(foot.y, LEG_W, LEG_W))
-					g.counts["lumber"] += 1
-		var amid := (amin + amax) * 0.5
-		var span := amax - amin
-		_emit_obox(lum, _lean_point(G, amid, slen - 0.07, lift_r), along_v, Vector3.UP,
+	# The frame, member by member: each rafter with its legs, the top rail and
+	# the sill are parts of "<el>:frame" (a crew puts them up one by one).
+	var fpath: Array = [eid, eid + ":frame"]
+	var flab: Array = [elab, "Rafters and legs"]
+	for ri in raf.size():
+		var rov := g.begin(fpath + ["%s:frame:%d" % [eid, ri]], flab + ["Rafter %d" % (ri + 1)])
+		if bool(rov.get("hidden", false)):
+			continue
+		var lum := g.surf(rov, g.lumber)
+		var a := clampf(float(raf[ri]), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
+		_emit_obox(lum, _lean_point(G, a, slen * 0.5, lift_r), dv, nv,
+			Vector3(slen, RAFTER_D, RAFTER_W))
+		g.counts["lumber"] += 1
+		# A leg under the low end, and a prop at mid-slope on tall arrays.
+		for s_up in [0.12, slen * 0.5]:
+			var foot := _lean_point(G, a, s_up, under)
+			if (s_up < 0.5 and foot.y > 0.08) or (s_up > 0.5 and foot.y > 1.4):
+				_emit_obox(lum, Vector3(foot.x, foot.y * 0.5, foot.z), Vector3.UP, along_v,
+					Vector3(foot.y, LEG_W, LEG_W))
+				g.counts["lumber"] += 1
+	var amid := (amin + amax) * 0.5
+	var span := amax - amin
+	var tov := g.begin(fpath + [eid + ":frame:top"], flab + ["Top rail"])
+	if not bool(tov.get("hidden", false)):
+		_emit_obox(g.surf(tov, g.lumber), _lean_point(G, amid, slen - 0.07, lift_r), along_v, Vector3.UP,
 			Vector3(span, RAFTER_D, RAFTER_W))
-		var foot0 := _lean_point(G, amid, 0.12, under)
-		if foot0.y > 0.08:
-			_emit_obox(lum, Vector3(foot0.x, 0.045, foot0.z), along_v, Vector3.UP,
+	var foot0 := _lean_point(G, amid, 0.12, under)
+	if foot0.y > 0.08:
+		var sov := g.begin(fpath + [eid + ":frame:sill"], flab + ["Sill"])
+		if not bool(sov.get("hidden", false)):
+			_emit_obox(g.surf(sov, g.lumber), Vector3(foot0.x, 0.045, foot0.z), along_v, Vector3.UP,
 				Vector3(span + LEG_W, 0.09, RAFTER_D))
-		g.counts["lumber"] += 2
+	g.counts["lumber"] += 2
 	if float(G.offset) > 0.02:
 		_emit_lean_bridge(g, G, raf, amin, amax, e, eid, elab)
 	for sg in live:
@@ -4439,28 +4455,24 @@ static func _emit_lean_to(g: _Geom, s: Dictionary, L: Dictionary, e: Dictionary)
 	# Close the triangular ends (a greenhouse) and the skirt under a raised slope.
 	var ends := str(e.get("ends", "open"))
 	if ends != "open":
-		var eov := g.begin([eid, eid + ":ends"], [elab, "End walls"])
+		var epath: Array = [eid, eid + ":ends"]
+		var elabs: Array = [elab, "End walls"]
+		var eov := g.begin(epath, elabs)
 		if bool(eov.get("hidden", false)):
 			g.end_part()
 			return
-		var st_e: SurfaceTool = g.glass if ends == "glazing" else g.surf(eov, g.ply)
 		var o_wall := POST_W * 0.5 + 0.02
-		var top_y: float = G.top_y
-		var bot_y: float = G.bot_y
 		var doors := end_door_spots(G, e, amin, amax)
-		for a_end in [amin, amax]:
+		var a_ends := [amin, amax]
+		for ei in a_ends.size():
+			var a_end: float = a_ends[ei]
 			var door: Dictionary = doors.get(a_end, {})
-			if door.is_empty():
-				var w_top := _fp(fr, a_end, top_y, o_wall)
-				var p_top := _lean_point(G, a_end, slen, 0.0)
-				var p_bot := _lean_point(G, a_end, 0.0, 0.0)
-				var w_bot := _fp(fr, a_end, bot_y, o_wall)
-				_emit_quad(st_e, w_top, p_top, p_bot, w_bot)
-				if bot_y > 0.05:
-					_emit_quad(st_e, w_bot, p_bot, Vector3(p_bot.x, 0.0, p_bot.z), Vector3(w_bot.x, 0.0, w_bot.z))
-			else:
-				_emit_end_wall_with_door(g, st_e, G, a_end, o_wall, door, e)
-			g.counts["glazing" if ends == "glazing" else "plywood"] += 1
+			_emit_end_wall_sheets(g, G, a_end, o_wall, door, ends == "glazing", epath, elabs,
+				"%s:ends:%d" % [eid, ei], "%s end" % ("First" if ei == 0 else "Second"))
+			if not door.is_empty():
+				var dov := g.begin(epath + ["%s:ends:d%d" % [eid, ei]], elabs + ["Door"])
+				if not bool(dov.get("hidden", false)):
+					_emit_end_door(g, G, a_end, door, e)
 	g.end_part()
 
 
@@ -4509,30 +4521,119 @@ static func _end_wall_top(G: Dictionary, o: float) -> float:
 	return top_y - (o - o_top) / maxf(o_bot - o_top, 0.001) * (top_y - bot_y)
 
 
-## A slope's end wall with a door in it: strips across the end, each from the
-## ground (above the door within it) up to the wall's top, then the door.
-static func _emit_end_wall_with_door(g: _Geom, st: SurfaceTool, G: Dictionary, a_end: float,
-		o_wall: float, door: Dictionary, e: Dictionary) -> void:
+## A slope's end wall as the sheets it is closed with: 4x8 sheets stood on
+## end from the face outward and from the ground up, the ones under the
+## slope cut to its angle and the door cut out. Each sheet is its own part
+## (`<sid>,<column>,<row>[,<piece>]`), so a crew hangs and strips them one by
+## one (it used to be one zero-thickness quad per end, both ends one part).
+## Thickness along the slope's axis, centred on the end's plane.
+static func _emit_end_wall_sheets(g: _Geom, G: Dictionary, a_end: float, o_wall: float,
+		door: Dictionary, glass: bool, pre: Array, pre_l: Array, sid: String, end_label: String) -> int:
+	var fr: Dictionary = G.fr
+	var top_y: float = G.top_y
+	var bot_y: float = G.bot_y
+	var o_top: float = G.o_top
+	var o_bot: float = G.o_bot
+	var yb := 0.0 if bot_y > 0.05 else bot_y
+	var poly := PackedVector2Array([Vector2(o_wall, yb), Vector2(o_bot, yb)])
+	if bot_y > yb + 0.005:
+		poly.append(Vector2(o_bot, bot_y))
+	poly.append(Vector2(maxf(o_top, o_wall), top_y))
+	if o_top > o_wall + 0.005:
+		poly.append(Vector2(o_wall, top_y))
+	var region: Array = [poly]
+	if not door.is_empty():
+		var d0 := float(door["o0"])
+		var d1 := float(door["o1"])
+		var dh := float(door["h"])
+		region = Geometry2D.clip_polygons(poly, PackedVector2Array([Vector2(d0, yb - 0.1),
+			Vector2(d1, yb - 0.1), Vector2(d1, dh), Vector2(d0, dh)]))
+	var th := GLAZING_T if glass else PLY_T
+	var origin := _fp(fr, a_end, 0.0, 0.0)
+	var n := 0
+	var ncol := maxi(1, int(ceil((o_bot - o_wall) / SHEET_SHORT - 0.001)))
+	var nrow := maxi(1, int(ceil((top_y - yb) / SHEET_LONG - 0.001)))
+	for ci in ncol:
+		var u0 := o_wall + float(ci) * SHEET_SHORT
+		var u1 := minf(u0 + SHEET_SHORT, o_bot) - SEAM
+		for rj in nrow:
+			var v0 := yb + float(rj) * SHEET_LONG
+			var v1 := minf(v0 + SHEET_LONG, top_y) - SEAM
+			if u1 - u0 < 0.01 or v1 - v0 < 0.01:
+				continue
+			var tile := PackedVector2Array([Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1)])
+			var pieces: Array = []
+			for rp in region:
+				if Geometry2D.is_polygon_clockwise(rp):
+					continue
+				for q in Geometry2D.intersect_polygons(tile, rp):
+					if not Geometry2D.is_polygon_clockwise(q) and _poly_area(q) > 0.01:
+						pieces.append(q)
+			for pk in pieces.size():
+				var pid := "%s,%d,%d" % [sid, ci, rj] if pk == 0 else "%s,%d,%d,%d" % [sid, ci, rj, pk]
+				var ov := g.begin(pre + [pid], pre_l + ["%s · sheet %d" % [end_label, ci * nrow + rj + 1]])
+				if bool(ov.get("hidden", false)):
+					continue
+				var st: SurfaceTool = g.glass if glass else g.surf(ov, g.ply)
+				_emit_slab_2d(st, origin, fr.out as Vector3, Vector3.UP, fr.along as Vector3, pieces[pk], th)
+				n += 1
+	g.counts["glazing" if glass else "plywood"] += n
+	return n
+
+
+static func _poly_area(p: PackedVector2Array) -> float:
+	var a := 0.0
+	for i in p.size():
+		var q := p[(i + 1) % p.size()]
+		a += p[i].x * q.y - q.x * p[i].y
+	return absf(a) * 0.5
+
+
+## A flat polygon (`poly` in the plane origin + eu·x + ev·y) as a sheet `th`
+## thick along `n`: both faces and the cut edges.
+static func _emit_slab_2d(st: SurfaceTool, origin: Vector3, eu: Vector3, ev: Vector3, n: Vector3,
+		poly: PackedVector2Array, th: float) -> void:
+	var m := poly.size()
+	if m < 3:
+		return
+	var h := n.normalized() * th * 0.5
+	var pts: Array = []
+	for p in poly:
+		pts.append(origin + eu * p.x + ev * p.y)
+	var idx := Geometry2D.triangulate_polygon(poly)
+	for t in idx.size() / 3:
+		var a: Vector3 = pts[idx[t * 3]]
+		var b: Vector3 = pts[idx[t * 3 + 1]]
+		var c: Vector3 = pts[idx[t * 3 + 2]]
+		_emit_tri_facing(st, a + h, b + h, c + h, h)
+		_emit_tri_facing(st, a - h, b - h, c - h, -h)
+	var ccw := not Geometry2D.is_polygon_clockwise(poly)
+	for i in m:
+		var d := poly[(i + 1) % m] - poly[i]
+		var o2 := Vector2(d.y, -d.x) if ccw else Vector2(-d.y, d.x)
+		var want := eu * o2.x + ev * o2.y
+		var pa: Vector3 = pts[i]
+		var pb: Vector3 = pts[(i + 1) % m]
+		_emit_tri_facing(st, pa + h, pb + h, pb - h, want)
+		_emit_tri_facing(st, pa + h, pb - h, pa - h, want)
+
+
+## A triangle whose face points along `want` (the corners are put in the
+## order _emit_tri wants for that).
+static func _emit_tri_facing(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, want: Vector3) -> void:
+	if (b - a).cross(c - a).dot(want) < 0.0:
+		_emit_tri(st, a, c, b)
+	else:
+		_emit_tri(st, a, b, c)
+
+
+## A slope's end door: its casing and leaf, in the end's own frame ("along"
+## runs out from the face, "out" points away from the slope's middle).
+static func _emit_end_door(g: _Geom, G: Dictionary, a_end: float, door: Dictionary, e: Dictionary) -> void:
 	var fr: Dictionary = G.fr
 	var o0: float = door["o0"]
 	var o1: float = door["o1"]
 	var h: float = door["h"]
-	var cuts: Array = [o_wall, o0, o1, float(G.o_top), float(G.o_bot)]
-	cuts = _sorted_unique(cuts.filter(func(v): return float(v) >= o_wall - 1e-4 and float(v) <= float(G.o_bot) + 1e-4))
-	for i in range(cuts.size() - 1):
-		var oa := float(cuts[i])
-		var ob := float(cuts[i + 1])
-		if ob - oa < 0.005:
-			continue
-		var ya := _end_wall_top(G, oa)
-		var yb := _end_wall_top(G, ob)
-		var y_lo := h if (oa >= o0 - 1e-4 and ob <= o1 + 1e-4) else 0.0
-		if ya <= y_lo + 0.005 and yb <= y_lo + 0.005:
-			continue
-		_emit_quad(st, _fp(fr, a_end, y_lo, oa), _fp(fr, a_end, y_lo, ob),
-			_fp(fr, a_end, maxf(yb, y_lo), ob), _fp(fr, a_end, maxf(ya, y_lo), oa))
-	# The door itself, in the end's own frame: "along" runs out from the face,
-	# "out" points away from the slope's middle.
 	var out_n: Vector3 = (fr.along as Vector3) * float(door.get("sign", 1.0))
 	var efr := {"face": "end", "base": _fp(fr, a_end, 0.0, 0.0), "along": fr.out, "out": out_n,
 		"len": float(G.o_bot)}
@@ -4549,45 +4650,70 @@ static func _emit_end_wall_with_door(g: _Geom, st: SurfaceTool, G: Dictionary, a
 ## An offset slope's link back to the structure: a ledger on the face, a joist
 ## from it to the slope's top edge at every rafter, posts under the top edge
 ## when the gap is wide, and (bridge "plywood" / "glazing") a cover over the
-## strip, flush with the slope's top. One part, "<el>:bridge".
+## strip, flush with the slope's top. A group, "<el>:bridge", each member its own part.
 static func _emit_lean_bridge(g: _Geom, G: Dictionary, raf: Array, amin: float, amax: float,
 		e: Dictionary, eid: String, elab: String) -> void:
-	var ov := g.begin([eid, eid + ":bridge"], [elab, "Joists to the structure"])
+	var bpath: Array = [eid, eid + ":bridge"]
+	var blab: Array = [elab, "Joists to the structure"]
+	var ov := g.begin(bpath, blab)
 	if bool(ov.get("hidden", false)):
 		return
 	var fr: Dictionary = G.fr
 	var top_y: float = G.top_y
 	var cover := str(e.get("bridge", "open"))
 	var th := 0.0 if cover == "open" else (GLAZING_T if cover == "glazing" else PLY_T)
-	var lum := g.surf(ov, g.lumber)
 	var o_face := POST_W * 0.5 + 0.02
 	var o_end: float = G.o_top
 	var jy := top_y - th - RAFTER_D * 0.5
 	var span_o := o_end - o_face
 	var span_a := amax - amin
-	# Ledger on the face, a rim at the slope's top edge.
-	for o in [o_face + RAFTER_W * 0.5, o_end - RAFTER_W * 0.5]:
-		_emit_face_box(lum, fr, (amin + amax) * 0.5, jy, o, Vector3(span_a, RAFTER_D, RAFTER_W))
+	# Member by member (each its own part, so a crew fits them one by one):
+	# the ledger on the face, a rim at the slope's top edge, the joists.
+	var ledger_o := [o_face + RAFTER_W * 0.5, o_end - RAFTER_W * 0.5]
+	for li in ledger_o.size():
+		var lov := g.begin(bpath + ["%s:bridge:%s" % [eid, "ledger" if li == 0 else "rim"]],
+			blab + ["Ledger" if li == 0 else "Rim"])
+		if not bool(lov.get("hidden", false)):
+			_emit_face_box(g.surf(lov, g.lumber), fr, (amin + amax) * 0.5, jy, float(ledger_o[li]),
+				Vector3(span_a, RAFTER_D, RAFTER_W))
 		g.counts["lumber"] += 1
-	for ra in raf:
-		var a := clampf(float(ra), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
-		_emit_face_box(lum, fr, a, jy, o_face + span_o * 0.5, Vector3(RAFTER_W, RAFTER_D, span_o))
+	for ri in raf.size():
+		var jov := g.begin(bpath + ["%s:bridge:j%d" % [eid, ri]], blab + ["Joist %d" % (ri + 1)])
+		if not bool(jov.get("hidden", false)):
+			var a := clampf(float(raf[ri]), amin + RAFTER_W * 0.5, amax - RAFTER_W * 0.5)
+			_emit_face_box(g.surf(jov, g.lumber), fr, a, jy, o_face + span_o * 0.5,
+				Vector3(RAFTER_W, RAFTER_D, span_o))
 		g.counts["lumber"] += 1
 	# A wide gap stands on posts under its outer rim, at most 8' apart.
 	if float(G.offset) > 4.0 * FT:
 		var post_h := jy - RAFTER_D * 0.5
 		var n := maxi(1, int(ceil(span_a / (8.0 * FT))))
 		for k in range(n + 1):
-			var a := lerpf(amin + LEG_W * 0.5, amax - LEG_W * 0.5, float(k) / float(n))
-			_emit_face_box(lum, fr, a, post_h * 0.5, o_end - RAFTER_W - LEG_W * 0.5,
-				Vector3(LEG_W, post_h, LEG_W))
+			var pov := g.begin(bpath + ["%s:bridge:p%d" % [eid, k]], blab + ["Post %d" % (k + 1)])
+			if not bool(pov.get("hidden", false)):
+				var a := lerpf(amin + LEG_W * 0.5, amax - LEG_W * 0.5, float(k) / float(n))
+				_emit_face_box(g.surf(pov, g.lumber), fr, a, post_h * 0.5, o_end - RAFTER_W - LEG_W * 0.5,
+					Vector3(LEG_W, post_h, LEG_W))
 			g.counts["lumber"] += 1
 	if th > 0.0:
-		var st: SurfaceTool = g.glass if cover == "glazing" else g.surf(ov, g.ply)
-		_emit_face_box(st, fr, (amin + amax) * 0.5, top_y - th * 0.5, o_face + span_o * 0.5,
-			Vector3(span_a, th, span_o))
-		g.counts["glazing" if cover == "glazing" else "plywood"] += maxi(1,
-			int(ceil(span_a * span_o / (SHEET_LONG * SHEET_SHORT) - 0.05)))
+		# The cover in 4x8 sheets, the long way across the gap.
+		var na := maxi(1, int(ceil(span_a / SHEET_SHORT - 0.001)))
+		var no := maxi(1, int(ceil(span_o / SHEET_LONG - 0.001)))
+		for ia in na:
+			var sa := amin + float(ia) * SHEET_SHORT
+			var sw := minf(SHEET_SHORT, amax - sa) - SEAM
+			for io in no:
+				var so := o_face + float(io) * SHEET_LONG
+				var sl := minf(SHEET_LONG, o_end - so) - SEAM
+				if sw <= 0.01 or sl <= 0.01:
+					continue
+				var cov := g.begin(bpath + ["%s:bridge:c%d,%d" % [eid, ia, io]],
+					blab + ["Cover sheet %d" % (io * na + ia + 1)])
+				if bool(cov.get("hidden", false)):
+					continue
+				var st: SurfaceTool = g.glass if cover == "glazing" else g.surf(cov, g.ply)
+				_emit_face_box(st, fr, sa + sw * 0.5, top_y - th * 0.5, so + sl * 0.5, Vector3(sw, th, sl))
+				g.counts["glazing" if cover == "glazing" else "plywood"] += 1
 
 
 ## Seal a solar bay: plywood or glazing over every part of the bay the modules

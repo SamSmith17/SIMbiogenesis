@@ -14070,7 +14070,13 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 		var deploy2: Node = prop2.get_node_or_null("LinkageDeployRuntime") \
 			if prop2 != null else null
 		if deploy2 != null and not bool(deploy2.call("is_animating")):
-			if bool(deploy2.call("is_deployed")):
+			var b2: Node = prop2.get_node_or_null("ModelRoot")
+			if rec.get(PalletRackBuildSite.RECORD_KEY) is Dictionary and b2 is LinkageStructureBuilder:
+				# A crew built it part-open (the build site's pieces stood at
+				# the crew pose): it opens from there.
+				(b2 as LinkageStructureBuilder).set_fold_angle(
+					LinkageStructureBuilder.crew_pose_angle((b2 as LinkageStructureBuilder).params))
+			elif bool(deploy2.call("is_deployed")):
 				# The crate's DESIGN was saved at the deployed fold (the common
 				# case — the Lab shows designs deployed), so from here there is
 				# no sweep to play and _settle would never run: linkage_deployed

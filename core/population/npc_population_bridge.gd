@@ -857,7 +857,7 @@ func _ensure_project_store(iid: String, specs: Dictionary) -> SiteProjectStore:
 	return store
 
 
-## A linkage build project as a LinkageBuildSite (labour mode) reads it:
+## A build project as a crew build site (PalletRackBuildSite, labour mode) reads it:
 ## {found, state, progress 0..1 (labour-weighted, SiteProject.rollup),
 ## present: [{id, pos: Vector2, color}] — the people DOING one of the
 ## project's chores within `radius_m` of `center`}. Read-only.
@@ -1161,8 +1161,8 @@ func _push_build_progress(store: SiteProjectStore, board, main: Node) -> void:
 		var builder := _linkage_builder_for(main, str(project.get("prop_id", "")))
 		if builder == null:
 			continue
-		# A labour-mode build site (per-worker timeline) stages the parts itself.
-		var site: Node = builder.get_parent().get_node_or_null("LinkageBuildSite") \
+		# A crew build site draws the parts itself.
+		var site: Node = builder.get_parent().get_node_or_null(PalletRackBuildSite.NODE_NAME) \
 			if builder.get_parent() != null else null
 		if site != null and site.has_method("owns_visuals") and bool(site.call("owns_visuals")):
 			continue

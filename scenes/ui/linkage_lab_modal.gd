@@ -2798,46 +2798,31 @@ func _fab_counts(s: Dictionary) -> Dictionary:
 	return LinkageBom.fab_counts(LinkageBom.compute(params), s)
 
 
-## Drop this design's fabrication plan onto the site's NPC crew
-## (PACKING_PLAN.md Phase 6.5 step 0 payoff). The board's dependency gates
-## + quorum rules take it from here: people swarm the parallel phases,
-## gather for the raise, and the Site Plan shows the work sites live.
+## Hand this design to the site's crew: the same crew build every structure
+## gets (SiteDeployDirector.queue_item — the deploy schedule's path). The
+## nearest camp with board room takes it ALL HANDS; on the build site
+## (PalletRackBuildSite) the kit is laid out in a yard, the frame goes up
+## folded in the Lab's own step order (bottom ring, V modules, top ring,
+## supports) as the crew's labour is credited, and the finish unpacks it and
+## the deploy sweep opens it about its own middle.
 func _on_queue_crew_build() -> void:
 	if _builder == null or _crew_status == null:
 		return
 	var sgv: Node = ServiceLocator.graph()
-	var bridge: Variant = sgv.call("npc_population_bridge") \
-		if sgv != null and sgv.has_method("npc_population_bridge") else null
-	if bridge == null:
+	var sd: Object = sgv.call("site_deploy") if sgv != null and sgv.has_method("site_deploy") else null
+	if sd == null:
 		_crew_status.text = "No population running — load a map first."
 		return
-	var iid := str(bridge.call("first_crewable_habitat"))
-	if iid.is_empty():
-		_crew_status.text = "Needs a pop-driven habitat (Inspector → Population Simulation) with people on site."
-		return
-	var board: Variant = bridge.call("chore_board_for", iid)
-	if board == null:
-		_crew_status.text = "The habitat's crew hasn't ticked yet — give it a moment."
-		return
-	var tasks := NpcCrewPlan.linkage_fab_tasks(_fab_counts(_builder.get_stats()))
-	var roster := maxi(int(bridge.call("roster_size_for", iid)), 1)
-	var sched := NpcCrewPlan.schedule(tasks, roster)
-	if not bool(sched["feasible"]):
-		# Too few people to RAISE it — queue anyway (the board's roster
-		# filter holds the raise until the camp grows), ordered by a crew
-		# that could.
-		sched = NpcCrewPlan.schedule(tasks, NpcCrewPlan.ERECT_MIN_WORKERS * 2)
 	var scene := get_tree().current_scene
-	# The build site needs a PACKED KIT CRATE — the thing the crew builds
-	# FROM, whose record carries the growing ghost structure and whose unpack
-	# (the erect phase's effect) IS the raise. Use the edited prop when it is
-	# still packed; otherwise deliver a fresh crate where the player stands.
+	# The crew builds FROM a packed kit crate: the edited prop when it is
+	# still packed; otherwise a fresh crate where the player stands.
 	var crate_id := ""
 	if not _bound_prop_id.is_empty():
 		var brec: Dictionary = PlacedPropService.get_prop_record(scene, _bound_prop_id)
 		if bool(brec.get("packed", false)):
 			crate_id = _bound_prop_id
-	if crate_id.is_empty():
+	var fresh := crate_id.is_empty()
+	if fresh:
 		var player := scene.find_child("Player", true, false) as Node3D \
 			if scene != null else null
 		var px := player.global_position.x + 8.0 if player != null else 0.0
@@ -2849,85 +2834,26 @@ func _on_queue_crew_build() -> void:
 			_crew_status.text = "Couldn't place the kit crate — %s" % str(placed.get("error", ""))
 			return
 		crate_id = str(placed.get("prop_id", ""))
-	# Flip the crate into build-site rendering from the start (crate + empty
-	# ghost footprint; phases fill it in as their effects land).
-	PlacedPropService.update_prop_record(scene, crate_id,
-		{"build_state": {"phase": "", "ghost": 0.12}}, true)
-	# Per-phase world effects: each fabrication phase stamps itself as the
-	# last-completed build phase (coarse reload state), the raise unpacks
-	# (deploy sweep), the panel mount seeds the graph array.
-	# Per-phase WORK SITES spread the yard out: cutting happens at a saw
-	# bench, bracket fitting at its own table, everything structural at the
-	# frame — so the build reads as a working yard, not one dot pile.
-	var site0 := _crate_site(scene, crate_id)
-	var bench := {"kind": "pos", "x": site0.x + 7.0, "z": site0.y + 6.0}
-	var fit_yard := {"kind": "pos", "x": site0.x - 7.0, "z": site0.y + 5.0}
-	var overrides: Dictionary = {}
-	for t in tasks:
-		var tid := str((t as Dictionary).get("id", ""))
-		match tid:
-			"erect":
-				overrides[tid] = {"effect": {"op": "unpack_prop", "prop_id": crate_id}}
-			"panels":
-				overrides[tid] = {"effect": {"op": "seed_graph", "prop_id": crate_id}}
-			"cut", "drill":
-				overrides[tid] = {"effect": {"op": "set_build_phase",
-					"prop_id": crate_id, "phase": tid}, "target": bench}
-			"brackets":
-				overrides[tid] = {"effect": {"op": "set_build_phase",
-					"prop_id": crate_id, "phase": tid}, "target": fit_yard}
-			_:
-				overrides[tid] = {"effect": {"op": "set_build_phase",
-					"prop_id": crate_id, "phase": tid}}
-	var target := {"kind": "prop", "id": crate_id}
-	var project_id: String = str(bridge.call("create_site_project", iid,
-		SiteProject.KIND_LINKAGE_BUILD, "Build: %s" % _design_label(),
-		crate_id, _crate_site(scene, crate_id),
-		NpcCrewPlan.chore_specs(tasks, sched, overrides),
-		{"start_h": 7.0, "end_h": 19.0}, target,
-		{"crew": roster, "makespan_s": float(sched.get("makespan_s", 0.0)),
-			"feasible": bool(sched.get("feasible", false)),
-			# Compact planned Gantt + the counts the Project panel's what-if
-			# table re-schedules from (records must stay lean — never the
-			# full schedule dump).
-			"timeline": _compact_timeline(sched),
-			"fab_counts": _fab_counts(_builder.get_stats())}))
-	if project_id.is_empty():
-		_crew_status.text = "Chore board is full — clear some chores first."
+	var q: Dictionary = sd.call("queue_item", "prop", crate_id, SiteDeploySchedule.ACTION_DEPLOY)
+	if not bool(q.get("ok", false)):
+		_crew_status.text = "The crew can't take it — %s." % str(q.get("error", ""))
+		var loader := TerrainSurfaceQuery.find_terrain_loader(scene) if fresh else null
+		if loader != null and loader.has_method("delete_prop_by_id"):
+			loader.call("delete_prop_by_id", crate_id)
 		return
-	# The structure goes up as the crew's labour does: the per-worker build
-	# timeline stages it, and the people working it are drawn on their lanes.
-	PlacedPropService.update_prop_record(scene, crate_id, {LinkageBuildSite.RECORD_KEY: {
-		"mode": "labour", "iid": iid, "project_id": project_id,
-		"crew_n": mini(roster, LinkageBuildSite.MAX_LABOUR_LANES)}}, true)
-	var eta_txt := "%.1f h of crew time" % (float(sched["makespan_s"]) / 3600.0) \
-		if bool(sched["feasible"]) else "raise waits for a bigger crew"
+	var pspec := LinkageStructureBuilder.packed_spec_for(params)
+	var hours := SiteDeployPlanner.labour_hours(float(pspec.get("mass_kg", -1.0)))
+	var eta_txt := "about %s of crew work" % UiText.duration(hours)
 	# No auto-jump: close the Lab and offer a Watch chip (opens the settlement
 	# view over the build site). notify_crew_queued also nudges a paused clock
 	# — a frozen sim was the #1 "nothing is happening" report.
 	var watch := _crate_site(scene, crate_id)
 	close()
 	if sgv.has_method("notify_crew_queued"):
-		sgv.call("notify_crew_queued", watch,
-			"👷 Build queued — %d-person crew" % roster, eta_txt)
-
-
-static func _compact_timeline(sched: Dictionary) -> Array:
-	var out: Array = []
-	for row in sched.get("timeline", []):
-		var r := row as Dictionary
-		out.append({"task_id": str(r.get("id", "")),
-			"start_s": snappedf(float(r.get("start_s", 0.0)), 1.0),
-			"end_s": snappedf(float(r.get("end_s", 0.0)), 1.0)})
-	return out
+		sgv.call("notify_crew_queued", watch, "👷 Build queued for the crew", eta_txt)
 
 
 func _crate_site(scene: Node, crate_id: String) -> Vector2:
 	var rec: Dictionary = PlacedPropService.get_prop_record(scene, crate_id) \
 		if scene != null else {}
 	return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-
-
-func _design_label() -> String:
-	var n := params.design_name if params != null else ""
-	return n if not n.is_empty() else "Linkage structure"

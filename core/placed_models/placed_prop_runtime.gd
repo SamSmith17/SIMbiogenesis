@@ -189,7 +189,6 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pp_beam_extruder(prop, rec)
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
-		LinkageBuildSite.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
@@ -376,6 +375,7 @@ static func _build_construction_prop(rec: Dictionary, build_state: Dictionary,
 	var builder := LinkageStructureBuilder.new()
 	builder.name = "ModelRoot"
 	builder.collision_mesh_enabled = false   # walk-through while it grows
+	builder.centre_fixed = true              # as the placed structure stands
 	builder.set_params(params)
 	if preview:
 		# A queued REBUILD: the parts exist, so the promise is the whole
@@ -419,9 +419,9 @@ static func _build_construction_prop(rec: Dictionary, build_state: Dictionary,
 	prop.set_collision_enabled(false)
 	if bool(rec.get("hidden_3d", false)):
 		prop.visible = false
-	# A crew build queued from the Lab carries a labour-mode build_run: the
-	# per-worker timeline draws it (LinkageBuildSite), not the coarse reveal.
-	LinkageBuildSite.attach(prop, rec)
+	# A crew build carries a labour-mode build_run: the crew build site draws
+	# it piece by piece (PalletRackBuildSite), not the coarse reveal.
+	PalletRackBuildSite.attach(prop, rec)
 	return prop
 
 

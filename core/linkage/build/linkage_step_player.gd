@@ -277,7 +277,7 @@ func bench_transform(fr: Dictionary) -> Transform3D:
 
 ## The structure frame: inches -> metres plus the builder's ground offset.
 func structure_point(p_in: Vector3) -> Vector3:
-	return p_in * IN_TO_M + Vector3(0, builder.ground_offset(), 0)
+	return p_in * IN_TO_M + builder.frame_offset()
 
 
 ## Where the frame's focus is, in this node's PARENT frame (the Lab's

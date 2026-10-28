@@ -12,7 +12,7 @@ extends SceneTree
 ## trip, the fabrication files and every built-in design without an error.
 ##   Godot --headless --path . --script core/toroidlab/toroidlab_selftest.gd
 
-const EXPECTED_CHECKS := 84
+const EXPECTED_CHECKS := 85
 
 var _checks := 0
 var _fails := 0
@@ -80,7 +80,14 @@ func _test_reference_frame() -> void:
 	for c in fr["classes"]:
 		counts[str(c["kind"])] = int(counts.get(str(c["kind"]), 0)) + int(c["count"])
 	_ok(int(counts.get("rib", 0)) == 48, "24 ribs of two arcs each")
-	_ok(int(counts.get("inner", 0)) == 10 and int(counts.get("post", 0)) == 10, "ten inner arcs and ten posts")
+	_ok(int(counts.get("inner", 0)) == 10 and int(counts.get("post", 0)) == 0, "ten inner arcs and no straight posts")
+	var posted := ToroidLabSpec.resolve(d["spec"])
+	posted["ribs"]["inner_posts"] = true
+	var pc := 0
+	for m in (ToroidLabDesign.solve(posted)["frame"] as Dictionary)["members"]:
+		if str(m["kind"]) == "post":
+			pc += 1
+	_ok(pc == 10, "the centre posts switch on: one beside each inner arc (%d)" % pc)
 	var rib_cls := ToroidLabDesign.member_class(d, "A1")
 	_near(float(rib_cls["bend_deg"]), 90.0, 0.5, "each rib arc is a quarter circle")
 	_near(float(rib_cls["bend_r_m"]), 1.825, 1e-6, "rib arcs bend to the minor radius")
@@ -107,7 +114,9 @@ func _test_reference_frame() -> void:
 			var rr := Vector2(p.x, p.z).length()
 			worst = maxf(worst, absf(Vector2(rr - 2.205, p.y - 1.352).length() - 1.825))
 	_ok(worst < 1e-4, "every rib point is on the rib circle (worst %.6f m)" % worst)
-	var fits: Dictionary = d["bom"]["fittings"]
+	# The reference model's fittings were counted with its straight centre
+	# posts (inner_posts, off in the preset since the real build has none).
+	var fits: Dictionary = ToroidLabDesign.solve(posted)["bom"]["fittings"]
 	_ok(int(fits.get("tee", 0)) == 38, "tees: 24 at the outer ground + 14 at the inner top")
 	_ok(int(fits.get("crossover", 0)) == 24, "a crossover clamp where the crown ring meets each rib")
 	_ok(int(fits.get("cross5", 0)) == 10 and int(fits.get("cross", 0)) == 10, "inner column fittings (5-way at the top, cross at the ground)")

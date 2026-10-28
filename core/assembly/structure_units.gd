@@ -14,6 +14,19 @@ extends RefCounted
 ##   - small bits (bolts, nuts, washers — under SMALL_M) ride with the
 ##     nearest real piece, the way a hub's bolts go up with its strut;
 ##   - more than MAX_UNITS pieces are gathered by place into that many.
+## A builder that knows its own parts draws them as whole pieces when asked
+## (build option `pieces`: DomeLabBuilder, ToroidLabBuilder): one
+## MeshInstance3D per part, tagged with tag_piece. Such a node is ONE piece,
+## never cut by its connectivity — a folded plate and its flanges, an
+## origami canopy panel and its six triangles — and may say its pile kind,
+## its words ("a plate", "plates") and an assembly `order` the stages follow
+## before height (a covering after the frame it covers). A part that is a
+## different shape off the structure carries a `packed` mesh too: a folded
+## canopy panel is flat cut sheets in the yard, a bent flexible solar panel a
+## flat one. The piece's flat frame then takes the packed shape's size (the
+## yard stacks it as that), and the units node holds both ("Installed",
+## "Packed"; PalletRackBuildSite shows the packed one whenever the piece is
+## not on the structure).
 ## Each piece gets a `flat` frame (PalletRackBuilder.flat_frame: thinnest way
 ## up, long way along, so a yard lays it flat), a pile `kind` (frames = long
 ## and upright, beams = long, sheets = thin and wide, parts = the rest) and a
@@ -34,6 +47,10 @@ const WELD := 2000.0           # vertex weld grid: 0.5 mm
 const BAND_M := 1.2            # height band of one stage
 const MAX_FLAT_PTS := 240
 const KIND_RANK := {"frames": 0, "beams": 1, "parts": 2, "sheets": 3}
+## Stages per assembly order (bands x kinds fit well inside).
+const ORDER_STRIDE := 1000
+## Bumped when the cut changes (the cache key).
+const CUT_VERSION := 5
 
 ## look key -> {pieces: [{arrays: [[surface arrays, Material]], aabb}], shift}
 static var _cache: Dictionary = {}
@@ -70,24 +87,41 @@ static func units_node(rec: Dictionary, model_scale: Vector3 = Vector3.ONE, host
 ## What decides the cut: the model and everything its look is built from.
 static func look_key(rec: Dictionary, model_scale: Vector3) -> String:
 	var extras := PlacedPropRuntime.model_extras(rec)
-	return "%s|%d|%s" % [str(rec.get("model_id", "")), hash(JSON.stringify(extras, "", true)),
-		str(model_scale.snapped(Vector3.ONE * 0.0001))]
+	return "%s|%d|%s|v%d" % [str(rec.get("model_id", "")), hash(JSON.stringify(extras, "", true)),
+		str(model_scale.snapped(Vector3.ONE * 0.0001)), CUT_VERSION]
+
+
+## Mark a builder's MeshInstance3D as one whole piece (see the header).
+## kind "" = from its shape; words = [singular, plural] or []; packed = the
+## piece packed for transport, flat (thin along y, centred; metres) or null.
+static func tag_piece(mi: MeshInstance3D, kind: String = "", words: Array = [], order: int = 0,
+		packed: ArrayMesh = null) -> void:
+	mi.set_meta("structure_piece", true)
+	if packed != null and packed.get_surface_count() > 0:
+		mi.set_meta("piece_packed", packed)
+	if not kind.is_empty():
+		mi.set_meta("piece_kind", kind)
+	if words.size() == 2:
+		mi.set_meta("piece_words", words)
+	mi.set_meta("piece_order", order)
 
 
 static func _instantiate(rec: Dictionary) -> Node3D:
 	var mid := str(rec.get("model_id", ""))
-	var model := ModelCatalog.instantiate(mid, PlacedPropRuntime.model_extras(rec))
+	# Builders that know their parts draw them as whole pieces.
+	var extras := PlacedPropRuntime.model_extras(rec).duplicate()
+	extras["pieces"] = true
+	var model := ModelCatalog.instantiate(mid, extras)
 	if model == null:
 		return null
 	PlacedPropRuntime._disable_embedded_physics(model)
-	# A Linkage Lab frame is put together FOLDED (stowed): the crew bolts the
-	# scissor frame up compact and the raise unfolds it — which is what the
-	# unpack plays once the last piece is on.
+	# A Linkage Lab frame is put together part-open (the Lab's build pose,
+	# LinkageStructureBuilder.crew_pose_angle) and the deploy opens it the
+	# rest of the way once the last piece is on.
 	if model is LinkageStructureBuilder:
 		var lb := model as LinkageStructureBuilder
 		lb.collision_mesh_enabled = false
-		lb.set_fold_angle(maxf(LinkageKinematics.effective_min_fold_angle(lb.params),
-			LinkageKinematics.MIN_FOLD_ANGLE))
+		lb.set_fold_angle(LinkageStructureBuilder.crew_pose_angle(lb.params))
 	return model
 
 
@@ -103,8 +137,10 @@ static func cut_model(model: Node3D, model_scale: Vector3 = Vector3.ONE) -> Dict
 	# A builder that keeps its instance poses on the CPU (the linkage frame)
 	# says where each MultiMesh instance is.
 	var inst_xfs: Dictionary = model.call("instance_transforms") if model.has_method("instance_transforms") else {}
+	# ... and, when it knows them, what each instance is (order, words, kind).
+	var inst_info: Dictionary = model.call("instance_piece_info") if model.has_method("instance_piece_info") else {}
 	for c in model.get_children():
-		_collect(c, root_xf, raw, inst_xfs)
+		_collect(c, root_xf, raw, inst_xfs, inst_info)
 	# Ground: the lowest piece at y = 0.
 	var low := INF
 	for p in raw:
@@ -131,7 +167,8 @@ static func cut_model(model: Node3D, model_scale: Vector3 = Vector3.ONE) -> Dict
 	return {"pieces": pieces, "shift": low}
 
 
-static func _collect(node: Node, parent_xf: Transform3D, out: Array, inst_xfs: Dictionary = {}) -> void:
+static func _collect(node: Node, parent_xf: Transform3D, out: Array, inst_xfs: Dictionary = {},
+		inst_info: Dictionary = {}) -> void:
 	if node is Node3D and not (node as Node3D).visible:
 		return
 	var xf := parent_xf
@@ -145,6 +182,7 @@ static func _collect(node: Node, parent_xf: Transform3D, out: Array, inst_xfs: D
 			var known: Array = inst_xfs.get(mmi, [])
 			if not known.is_empty():
 				n = mini(n, known.size())
+			var infos: Array = inst_info.get(mmi, [])
 			for i in n:
 				var ixf := xf * ((known[i] as Transform3D) if not known.is_empty() else mm.get_instance_transform(i))
 				if ixf.basis.determinant() == 0.0:
@@ -158,7 +196,33 @@ static func _collect(node: Node, parent_xf: Transform3D, out: Array, inst_xfs: D
 						else mm.mesh.surface_get_material(s)
 					_add_arrays(piece, arr, mat)
 				if not (piece["arrays"] as Array).is_empty():
+					if i < infos.size():
+						var inf: Dictionary = infos[i]
+						piece["kind"] = str(inf.get("kind", ""))
+						piece["words"] = inf.get("words", [])
+						piece["order"] = int(inf.get("order", 0))
 					out.append(piece)
+	elif node is MeshInstance3D and (node as MeshInstance3D).mesh != null \
+			and bool(node.get_meta("structure_piece", false)):
+		# A builder's whole part: every surface, uncut.
+		var mi := node as MeshInstance3D
+		var piece := {"arrays": [], "aabb": AABB(), "pts": PackedVector3Array()}
+		for s in mi.mesh.get_surface_count():
+			var mat: Material = mi.material_override
+			if mat == null:
+				mat = mi.mesh.surface_get_material(s)
+			var arr := _transformed(mi.mesh.surface_get_arrays(s), xf)
+			if not arr.is_empty():
+				_add_arrays(piece, arr, mat)
+		if not (piece["arrays"] as Array).is_empty():
+			piece["kind"] = str(mi.get_meta("piece_kind", ""))
+			piece["words"] = mi.get_meta("piece_words", [])
+			piece["order"] = int(mi.get_meta("piece_order", 0))
+			# (get_meta with a null default still errors when the key is missing.)
+			var pk: Variant = mi.get_meta("piece_packed") if mi.has_meta("piece_packed") else null
+			if pk is ArrayMesh:
+				piece["packed"] = _packed_arrays(pk as ArrayMesh, xf.basis.get_scale())
+			out.append(piece)
 	elif node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
 		var mi := node as MeshInstance3D
 		for s in mi.mesh.get_surface_count():
@@ -175,7 +239,7 @@ static func _collect(node: Node, parent_xf: Transform3D, out: Array, inst_xfs: D
 				_add_arrays(piece, comp, mat)
 				out.append(piece)
 	for c in node.get_children():
-		_collect(c, xf, out, inst_xfs)
+		_collect(c, xf, out, inst_xfs, inst_info)
 
 
 ## Surface arrays into the build frame (positions, normals, tangents).
@@ -412,8 +476,44 @@ static func _cap(pieces: Array) -> Array:
 		var head: Dictionary = g[0]
 		for i in range(1, g.size()):
 			_absorb(head, g[i])
+		if g.size() > 1:
+			head.erase("packed")
 		out.append(head)
 	return out
+
+
+## A packed mesh's surfaces as [[arrays, Material]], scaled with the model and
+## turned so its long side runs along z (the flat frame's convention), centred.
+static func _packed_arrays(m: ArrayMesh, sc: Vector3) -> Array:
+	var bb := AABB()
+	var first := true
+	var surfs: Array = []
+	for i in m.get_surface_count():
+		var arr := m.surface_get_arrays(i)
+		var vs: PackedVector3Array = (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).duplicate()
+		for j in vs.size():
+			vs[j] *= sc
+			bb = AABB(vs[j], Vector3.ZERO) if first else bb.expand(vs[j])
+			first = false
+		arr[Mesh.ARRAY_VERTEX] = vs
+		surfs.append([arr, m.surface_get_material(i)])
+	if first:
+		return []
+	var turn := bb.size.x > bb.size.z
+	var c := bb.get_center()
+	for sa in surfs:
+		var arr: Array = sa[0]
+		var vs: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var ns: PackedVector3Array = arr[Mesh.ARRAY_NORMAL] if arr[Mesh.ARRAY_NORMAL] != null else PackedVector3Array()
+		for j in vs.size():
+			var v := vs[j] - c
+			vs[j] = Vector3(v.z, v.y, -v.x) if turn else v
+		for j in ns.size():
+			ns[j] = Vector3(ns[j].z, ns[j].y, -ns[j].x) if turn else ns[j]
+		arr[Mesh.ARRAY_VERTEX] = vs
+		if not ns.is_empty():
+			arr[Mesh.ARRAY_NORMAL] = ns
+	return surfs
 
 
 # ---------------------------------------------------------------------------
@@ -433,10 +533,12 @@ static func _nodes_for(cut: Dictionary, node_name: String) -> Node3D:
 	var recs: Array = []
 	for p in pieces:
 		var flat := _flat(p)
-		var kind := kind_of(flat, p["aabb"])
+		var kind := str(p.get("kind", ""))
+		if not KIND_RANK.has(kind):
+			kind = kind_of(flat, p["aabb"])
 		var bb: AABB = p["aabb"]
 		var band := floori(bb.position.y / BAND_M + 0.001)
-		var stage := band * 4 + int(KIND_RANK[kind])
+		var stage := int(p.get("order", 0)) * ORDER_STRIDE + band * 4 + int(KIND_RANK[kind])
 		var pc := bb.get_center()
 		var ang := atan2(pc.z - c.z, pc.x - c.x)
 		recs.append({"p": p, "flat": flat, "kind": kind, "stage": stage, "ang": ang})
@@ -472,11 +574,49 @@ static func _nodes_for(cut: Dictionary, node_name: String) -> Node3D:
 			if mesh.get_surface_count() >= 255:
 				break
 		var mi := MeshInstance3D.new()
+		mi.name = "Installed"
 		mi.mesh = mesh
 		node.add_child(mi)
+		var flat: Dictionary = r["flat"]
+		var packed: Array = p.get("packed", [])
+		if not packed.is_empty() and flat.has("basis"):
+			# The packed shape in the piece's flat frame: a point L of the
+			# packed (flat-frame) geometry sits at basis * L + centre, so the
+			# yard's pose (which lays the flat frame flat) lays it flat.
+			var bas: Basis = flat["basis"]
+			var cen: Vector3 = flat["centre"]
+			var lo := Vector3(INF, INF, INF)
+			var hi := -lo
+			var pmesh := ArrayMesh.new()
+			for sa in packed:
+				var arr: Array = (sa[0] as Array).duplicate()
+				var vs: PackedVector3Array = (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).duplicate()
+				for j in vs.size():
+					lo = lo.min(vs[j])
+					hi = hi.max(vs[j])
+					vs[j] = bas * vs[j] + cen
+				arr[Mesh.ARRAY_VERTEX] = vs
+				if arr[Mesh.ARRAY_NORMAL] != null:
+					var ns: PackedVector3Array = (arr[Mesh.ARRAY_NORMAL] as PackedVector3Array).duplicate()
+					for j in ns.size():
+						ns[j] = (bas * ns[j]).normalized()
+					arr[Mesh.ARRAY_NORMAL] = ns
+				pmesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+				if sa[1] is Material:
+					pmesh.surface_set_material(pmesh.get_surface_count() - 1, sa[1])
+			var pmi := MeshInstance3D.new()
+			pmi.name = "Packed"
+			pmi.mesh = pmesh
+			pmi.visible = false
+			node.add_child(pmi)
+			flat = flat.duplicate()
+			flat["size"] = hi - lo
+			flat["packed"] = true
 		root.add_child(node)
-		info[id] = {"aabb": p["aabb"], "kind": r["kind"], "flat": r["flat"], "stage": r["stage"],
+		info[id] = {"aabb": p["aabb"], "kind": r["kind"], "flat": flat, "stage": r["stage"],
 			"node": node.name}
+		if (p.get("words", []) as Array).size() == 2:
+			info[id]["words"] = p["words"]
 	root.set_meta("units", info)
 	root.set_meta("ground_shift", float(cut.get("shift", 0.0)))
 	return root

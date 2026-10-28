@@ -231,6 +231,92 @@ func _checked_build(main: Node, tree: SceneTree, sd: SiteDeployDirector, at: Vec
 	_aim(main, at, 45.0)
 	await tree.create_timer(1.0).timeout
 	await _shot(main, "05_done")
+	if done and OS.get_environment("TCV_PACKUP") != "0":
+		await _checked_packup(main, tree, sd, at, pid)
+
+
+## The same rack taken down by the crew: the fit-out (decks, roof, walls,
+## benches, stairs) comes off AND goes back to the yard before the first
+## beam or upright frame comes down; the racking is the last thing struck.
+func _checked_packup(main: Node, tree: SceneTree, sd: SiteDeployDirector, at: Vector2, pid: String) -> void:
+	main.set("time_scale", 0.001)
+	var q: Dictionary = sd.queue_item("prop", pid, SiteDeploySchedule.ACTION_PACKUP)
+	_ok(bool(q.get("ok", false)), "pack-up handed to the crew (%s)" % str(q.get("error", "")))
+	await _settle(tree, 10)
+	var site := PalletRackBuildSite.site_for(main, pid)
+	var t_wait := 0.0
+	while site == null and t_wait < 30.0:
+		await tree.create_timer(0.25).timeout
+		t_wait += 0.25
+		site = PalletRackBuildSite.site_for(main, pid)
+	_ok(site != null, "a labour site takes the rack down")
+	if site == null:
+		return
+	await tree.create_timer(1.0).timeout
+	var c0 := _census(site)
+	_ok(int(c0["installed"]) == int(c0["total"]) and int(c0["total"]) > 0,
+		"everything stands at the start of the pack-up (%d of %d)" % [int(c0["installed"]), int(c0["total"])])
+	main.set("time_scale", 0.4)
+	var racking_ids := {}
+	var fit_ids := {}
+	for id in (site.timeline()["unit"] as Dictionary):
+		var leaf := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
+		if leaf.get_slice(":", 0) in ["post", "beam"]:
+			racking_ids[id] = true
+		else:
+			fit_ids[id] = true
+	var fit_up_while_racking := 0
+	var fit_out_while_racking := 0
+	var first_racking_t := -1.0
+	var shots := {0.25: "06_strip", 0.5: "07_strip", 0.8: "08_racking"}
+	var t := 0.0
+	var packed := false
+	while t < 1500.0:
+		await tree.create_timer(0.5).timeout
+		t += 0.5
+		if bool(PlacedPropService.get_prop_record(main, pid).get("packed", false)):
+			packed = true
+			break
+		site = PalletRackBuildSite.site_for(main, pid)
+		if site == null:
+			continue
+		var st := site.last_state()
+		var units: Dictionary = st.get("units", {})
+		var tl := site.timeline()
+		var racking_moved := false
+		for id in racking_ids:
+			var s: Dictionary = units.get(id, {})
+			if not s.is_empty() and not (float(s["g"]) <= 0.001 and (s["xf"] as Transform3D).is_equal_approx(Transform3D())):
+				racking_moved = true
+				break
+		if racking_moved:
+			if first_racking_t < 0.0:
+				first_racking_t = t
+				print("tool-camp-packup: first beam / frame off at %.1f s · %s" % [t, site.progress_line()])
+			var up := 0
+			var out := 0
+			for id in fit_ids:
+				var s: Dictionary = units.get(id, {})
+				if s.is_empty():
+					continue
+				var xf: Transform3D = s["xf"]
+				if float(s["g"]) <= 0.001 and xf.is_equal_approx(Transform3D()):
+					up += 1
+				elif not xf.is_equal_approx((tl["unit"][id] as Dictionary)["pile"]):
+					out += 1
+			fit_up_while_racking = maxi(fit_up_while_racking, up)
+			fit_out_while_racking = maxi(fit_out_while_racking, out)
+		var c := _census(site)
+		var frac := 1.0 - float(c["installed"]) / maxf(float(c["total"]), 1.0)
+		for f in shots.keys():
+			if frac >= float(f) and not str(shots[f]).is_empty():
+				_aim(main, at, 45.0)
+				print("tool-camp-packup %s: %s · %s" % [shots[f], str(c["heads"]), site.progress_line()])
+				await _shot(main, str(shots[f]))
+				shots[f] = ""
+	_ok(fit_up_while_racking == 0, "no deck, roof, wall or bench still up once the racking starts coming down (%d)" % fit_up_while_racking)
+	_ok(fit_out_while_racking == 0, "the fit-out is back in the yard before the racking comes down (%d not yet)" % fit_out_while_racking)
+	_ok(packed, "the crew packed the rack (%.0f s real)" % t)
 
 
 func _filmed_build(main: Node, tree: SceneTree, sd: SiteDeployDirector, loader: Node, at: Vector2) -> void:

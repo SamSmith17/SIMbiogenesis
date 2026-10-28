@@ -1520,7 +1520,7 @@ func _on_edit_linkage() -> void:
 ## following the world clock (speed it up to watch it go up quickly; scrub
 ## back to see it again). The record rides the prop (build_run).
 func _build_rehearsal_row() -> void:
-	var run = _rec.get(LinkageBuildSite.RECORD_KEY)
+	var run = _rec.get(PalletRackBuildSite.RECORD_KEY)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	_model_btns.add_child(row)
@@ -1532,17 +1532,17 @@ func _build_rehearsal_row() -> void:
 	var crew := SpinBox.new()
 	crew.min_value = 1
 	crew.max_value = 40
-	var crew_n0: int = LinkageBuildSite.DEFAULT_CREW
+	var crew_n0: int = PalletRackBuildSite.LINKAGE_DEFAULT_CREW
 	if run is Dictionary:
-		crew_n0 = int((run as Dictionary).get("crew_n", LinkageBuildSite.DEFAULT_CREW))
+		crew_n0 = int((run as Dictionary).get("crew_n", PalletRackBuildSite.LINKAGE_DEFAULT_CREW))
 	crew.value = crew_n0
 	crew.tooltip_text = "How many people build it"
 	row.add_child(crew)
 	var go := _button("Rehearse build" if not (run is Dictionary) else "Restart build",
-		"Watch a crew cut, drill, place, bolt, lift and deploy it, on the world clock", row,
+		"Watch a crew lay out the kit, put the frame up folded in the Lab's step order and deploy it, on the world clock", row,
 		func() -> void:
 			_resolve_main()
-			if _main != null and LinkageBuildSite.start_rehearsal(_main, _prop_id, int(crew.value)):
+			if _main != null and PalletRackBuildSite.start_rehearsal(_main, _prop_id, int(crew.value)):
 				open_for_prop(_prop_id))
 	go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if run is Dictionary:
@@ -1553,7 +1553,7 @@ func _build_rehearsal_row() -> void:
 		_model_btns.add_child(line)
 		var tick := func() -> void:
 			_resolve_main()
-			var site := LinkageBuildSite.site_for(_main, _prop_id) if _main != null else null
+			var site := PalletRackBuildSite.site_for(_main, _prop_id) if _main != null else null
 			line.text = site.progress_line() if site != null else ""
 		tick.call()
 		var timer := Timer.new()
@@ -1565,7 +1565,7 @@ func _build_rehearsal_row() -> void:
 			func() -> void:
 				_resolve_main()
 				if _main != null:
-					LinkageBuildSite.clear_rehearsal(_main, _prop_id)
+					PalletRackBuildSite.clear_rehearsal(_main, _prop_id)
 					open_for_prop(_prop_id))
 
 

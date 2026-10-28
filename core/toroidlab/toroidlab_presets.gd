@@ -8,8 +8,9 @@ extends RefCounted
 ## of 1" × 0.065" mild steel, every rib the same circle — a least-squares fit
 ## of the rib tubes gives a minor circle of r 1.825 m centred 2.205 m out and
 ## 1.352 m up, cut by the ground at R 0.93 / 3.47 m — in two 90° arcs (outer
-## wall and top, coupled at 44°), twelve inner-wall arcs with a straight post
-## beside each and two left open as a doorway, rings at the outer and inner
+## wall and top, coupled at 44°), twelve inner-wall arcs with two left open as
+## a doorway (the model also draws a straight post beside each inner arc; the
+## real build has none, so inner_posts is off), rings at the outer and inner
 ## ground, the inner top (0.92 m) and a crown ring at 77° (Ø 5.22 m, clamped
 ## under the ribs); a diamond-pleat canopy of 10 mm correx, one 4' × 8' sheet
 ## per half-bay with 2" flanges bolted three to a seam; 24 × 100 W flexible
@@ -44,7 +45,7 @@ static func overview_spec() -> Dictionary:
 		"torus": {"major_r_m": 2.205, "minor_r_m": 1.825, "centre_h_m": 1.352, "base_y_m": 0.04, "segments": 24,
 			"inner_top_deg": -1.0, "rotation_deg": 0.5},
 		"tube": {"material": "steel_1_065"},
-		"ribs": {"pieces": 2, "inner_every": 2, "inner_offset": 1, "inner_skip": [17, 19], "inner_posts": true,
+		"ribs": {"pieces": 2, "inner_every": 2, "inner_offset": 1, "inner_skip": [17, 19], "inner_posts": false,
 			"feet": false},
 		"rings": {"ground_out": true, "ground_in": true, "inner_top": true, "crown": true, "crown_deg": 77.0,
 			"extra_deg": [], "piece_bays": 3},

@@ -32,6 +32,15 @@ var _rec: Dictionary = {}
 var _animating := false
 var _target_rad := 0.0
 var _rate := 1.0   # rad/s, sign gives direction
+## The sweep's own angle (advances every frame) and the time since the
+## builder last re-solved: a heavy design (fold_cost_ms) is re-solved at most
+## every MAX_FOLD_GAP_S x its cost / HEAVY_FOLD_MS, never more than ~13 times
+## a second apart — the fold still keeps time, it is drawn in fewer steps.
+var _fold := 0.0
+var _since := 0.0
+const HEAVY_FOLD_MS := 3.0
+const FOLD_GAP_PER_MS := 0.004
+const MAX_FOLD_GAP_S := 0.08
 
 
 func configure(rec: Dictionary) -> void:
@@ -68,12 +77,34 @@ func is_animating() -> bool:
 	return _animating
 
 
+## Fold to `angle` with the same sweep (the crew's build pose before a
+## pack-up). deploy_state_changed fires when it settles; at the pose already
+## it settles at once.
+func fold_to(angle: float) -> void:
+	if _builder == null:
+		return
+	if not _animating:
+		_fold = _builder.get_fold_angle()
+		_since = 0.0
+	_target_rad = angle
+	if absf(_fold - angle) < 1e-4:
+		_animating = false
+		_builder.set_fold_angle(angle)
+		_settle.call_deferred()
+		return
+	var span := maxf(_builder.closed_angle() - maxf(_builder.min_fold_angle(), LinkageKinematics.MIN_FOLD_ANGLE), 0.01)
+	_rate = (span / FULL_CYCLE_S) * (1.0 if angle > _fold else -1.0)
+	_animating = true
+	set_process(true)
+	_update_prompt()
+
+
 ## Interact entry point: deploy when stowed (or mid-stow), stow when deployed.
 func toggle_deploy() -> void:
 	if _builder == null:
 		return
 	# A build rehearsal owns the fold while its crew works.
-	var site := _prop.get_node_or_null(LinkageBuildSite.NODE_NAME) as LinkageBuildSite if _prop != null else null
+	var site := _prop.get_node_or_null(PalletRackBuildSite.NODE_NAME) as PalletRackBuildSite if _prop != null else null
 	if site != null and site.is_running():
 		return
 	var closed := _builder.closed_angle()
@@ -84,6 +115,9 @@ func toggle_deploy() -> void:
 	else:
 		deploying = not is_deployed()
 	_target_rad = closed if deploying else stowed
+	if not _animating:
+		_fold = _builder.get_fold_angle()
+		_since = 0.0
 	var span := maxf(closed - stowed, 0.01)
 	_rate = (span / FULL_CYCLE_S) * (1.0 if deploying else -1.0)
 	_animating = true
@@ -102,11 +136,17 @@ func _perf_tick(delta: float) -> void:
 	if not _animating or _builder == null:
 		set_process(false)
 		return
-	var fold := _builder.get_fold_angle() + _rate * delta
-	var done := (_rate > 0.0 and fold >= _target_rad) or (_rate < 0.0 and fold <= _target_rad)
+	_fold += _rate * delta
+	_since += delta
+	var done := (_rate > 0.0 and _fold >= _target_rad) or (_rate < 0.0 and _fold <= _target_rad)
 	if done:
-		fold = _target_rad
-	_builder.set_fold_angle(fold)
+		_fold = _target_rad
+	var gap := 0.0
+	if _builder.fold_cost_ms > HEAVY_FOLD_MS:
+		gap = minf(_builder.fold_cost_ms * FOLD_GAP_PER_MS, MAX_FOLD_GAP_S)
+	if done or _since >= gap:
+		_since = 0.0
+		_builder.set_fold_angle(_fold)
 	if done:
 		_animating = false
 		set_process(false)

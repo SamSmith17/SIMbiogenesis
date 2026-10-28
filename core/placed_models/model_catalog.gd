@@ -150,11 +150,13 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == DomeLabBuilder.MODEL_ID:
 		var dl_spec: Dictionary = extras.get("domelab_spec", extras) as Dictionary
 		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
-			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
+			"pieces": bool(extras.get("pieces", false))})
 	if model_id == ToroidLabBuilder.MODEL_ID:
 		var tl_spec: Dictionary = extras.get("toroid_spec", extras) as Dictionary
 		return ToroidLabBuilder.build_node(tl_spec, "ToroidStructure",
-			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
+			"pieces": bool(extras.get("pieces", false))})
 	if model_id == GantryLabBuilder.MODEL_ID:
 		var gl_spec: Dictionary = extras.get("gantry_spec", extras) as Dictionary
 		return GantryLabBuilder.build_node(gl_spec, "GantryMachine",

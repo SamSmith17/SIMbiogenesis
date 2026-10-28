@@ -821,7 +821,8 @@ func _build_settings_rows() -> void:
 	skip.focus_exited.connect(func(): _edit("ribs", "inner_skip", ToroidLabSpec._int_list(skip.text)))
 	_row(_tube_box, "Leave open (rib numbers)", skip, "Ribs whose inner arc is left out — a doorway into the throat")
 	_bindings.append({"ctl": skip, "group": "ribs", "key": "inner_skip", "scale": 1.0})
-	_bind_check(_tube_box, "Straight post beside each inner arc", "ribs", "inner_posts")
+	_bind_check(_tube_box, "Straight centre posts (beside the inner arcs)", "ribs", "inner_posts",
+		"The vertical uprights round the throat, one beside each inner-wall arc. Off for a build without them.")
 	_bind_check(_tube_box, "Base foot under every ground end", "ribs", "feet")
 	# --- rings -----------------------------------------------------------------
 	_bind_check(_ring_box, "Outer ground ring", "rings", "ground_out")

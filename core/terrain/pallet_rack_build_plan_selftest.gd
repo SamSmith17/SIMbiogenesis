@@ -15,7 +15,7 @@ extends SceneTree
 ## down rests on the ground (or its own pieces) clear of the rack, and is
 ## carried at hand height.
 
-const EXPECTED_CHECKS := 39
+const EXPECTED_CHECKS := 54
 
 var _checks := 0
 var _failures := 0
@@ -217,11 +217,223 @@ func _initialize() -> void:
 			first_fit = minf(first_fit, float(j["t0"]))
 	_check("tool camp 26: the racking stands before the first deck, roof, wall or bench",
 		first_fit >= last_racking - 0.01, "racking done %.0f s, first fit-out %.0f s" % [last_racking, first_fit])
+	# Taking it down is the plan backwards: the fit-out is also CARRIED back
+	# to the yard before the first beam or frame comes off (the first fit-out
+	# carry is after the last racking job).
+	var first_fit_carry := INF
+	for id in tc["unit"]:
+		var leaf2 := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
+		var ci := int(tc["unit"][id]["carry"])
+		if ci >= 0 and not (leaf2.get_slice(":", 0) in ["post", "beam"]):
+			first_fit_carry = minf(first_fit_carry, float(tc["jobs"][ci]["t0"]))
+	_check("tool camp 26: struck, the fit-out is in the yard before the racking comes down",
+		first_fit_carry >= last_racking - 0.01, "racking done %.0f s, first fit-out carry %.0f s" % [last_racking, first_fit_carry])
+	_test_slopes_in_pieces()
+	_test_structure_pieces()
+	_test_linkage_crew_build()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
 	print("RACK BUILD PLAN SELFTEST %s  (%d checks)" % ["PASS" if _failures == 0 else "FAIL", _checks])
 	quit(0 if _failures == 0 else 1)
+
+
+## A slope is built (and struck) member by member: its end walls are 4x8
+## sheets, some cut to the slope's angle (they were one zero-thickness quad
+## per end, both ends ONE piece that stood upright in the yard), the frame
+## is rafters, the roof packing is blocks; and a slope goes up rafters →
+## purlins → cover → ends.
+func _test_slopes_in_pieces() -> void:
+	var P := PalletRackBuildPlan
+	var spec: Dictionary = PalletRackBuilder.design_preset("chiba_2024")["spec"]
+	var n := PalletRackBuilder.build_units_node(spec)
+	var units: Dictionary = n.get_meta("units", {})
+	n.free()
+	var ends := 0
+	var cut := 0
+	var thick := ""
+	var rafters := 0
+	for id in units:
+		var sid := str(id)
+		var sz: Vector3 = (units[id].get("flat", {}) as Dictionary).get("size", Vector3.ZERO)
+		if sid.contains(":ends:") and not sid.contains(":ends:d"):
+			ends += 1
+			if sz.x < PalletRackBuilder.SHEET_SHORT - 0.02 or sz.z < PalletRackBuilder.SHEET_LONG - 0.02:
+				cut += 1
+			if sz.x > PalletRackBuilder.SHEET_SHORT + 0.01 or sz.z > PalletRackBuilder.SHEET_LONG + 0.01 \
+					or sz.y > 0.05:
+				thick = "%s %s" % [sid, sz]
+		if sid.contains(":frame:"):
+			rafters += 1
+		# Only a stair or a ladder (a prefab) is not a flat piece.
+		var etype := ""
+		if sid.begins_with("el:") or sid.contains("|el:"):
+			var leaf := sid.get_slice("|", 1) if sid.contains("|") else sid
+			if leaf.split(":").size() == 2:
+				etype = "whole element"
+		if sz.y > 0.3 and etype.is_empty():
+			thick = "%s %s" % [sid, sz]
+	_check("chiba 2024: slope end walls are 4x8 sheets, some cut to the slope", ends >= 6 and cut >= 2,
+		"%d sheets, %d cut" % [ends, cut])
+	_check("chiba 2024: every slope piece lies flat (no whole-slope composites)", thick.is_empty(), thick)
+	_check("chiba 2024: a slope frame is its rafters", rafters >= 8, "%d" % rafters)
+	var tl := P.plan(spec, 8, units)
+	var ok := true
+	var why := ""
+	var by_el := {}
+	for id in tl["unit"]:
+		var leaf := str(id).get_slice("|", 1) if str(id).contains("|") else str(id)
+		if not leaf.begins_with("el:"):
+			continue
+		var ii := int(tl["unit"][id]["install"])
+		if ii < 0:
+			continue
+		var key := str(id).get_slice(":", 0) + ":" + leaf.get_slice(":", 1)
+		if not by_el.has(key):
+			by_el[key] = {}
+		var st := P._el_stage(leaf)
+		var j: Dictionary = tl["jobs"][ii]
+		var d: Dictionary = by_el[key]
+		var r: Array = d.get(st, [INF, -INF])
+		d[st] = [minf(float(r[0]), float(j["t0"])), maxf(float(r[1]), float(j["t1"]))]
+	for key in by_el:
+		var d: Dictionary = by_el[key]
+		for a in d:
+			for b in d:
+				if int(a) < int(b) and float(d[b][0]) < float(d[a][1]) - 0.01:
+					ok = false
+					why = "%s stage %d starts before %d ends" % [key, int(b), int(a)]
+	_check("chiba 2024: a slope goes up rafters, purlins, cover, then its ends", ok and not by_el.is_empty(), why)
+	var tc := PalletRackBuilder.build_units_node(PalletRackBuilder.tool_camp_26_spec())
+	var pk := 0
+	for id in (tc.get_meta("units", {}) as Dictionary):
+		if str(id).begins_with("packing:"):
+			pk += 1
+	tc.free()
+	_check("tool camp 26: the roof packing is its blocks and purlins", pk > 4, "%d" % pk)
+
+
+## Designer structures cut by StructureUnits come apart as the parts a crew
+## handles: a folded-plate zome is its plates (no struts or hubs — the
+## flanges were cut off the plates and planned as "struts"), the overview
+## toroid's canopy is 24 panels of six triangles each, put up after the
+## frame.
+func _test_structure_pieces() -> void:
+	var rd := {}
+	var tor := {}
+	for p in DomeLabPresets.builtins():
+		if str(p.get("id", "")) == "helical_rd":
+			rd = p.get("spec", p)
+	for p in ToroidLabPresets.builtins():
+		if str(p.get("id", "")) == "overview_toroid":
+			tor = p.get("spec", p)
+	var dn := StructureUnits.units_node({"model_id": DomeLabBuilder.MODEL_ID, "domelab_spec": rd})
+	var du: Dictionary = dn.get_meta("units", {})
+	dn.free()
+	var plates: int = ((DomeLabDesign.solve(rd)["panels"] as Dictionary).get("panels", []) as Array).size()
+	var not_plate := 0
+	for id in du:
+		if str(du[id].get("kind", "")) != "sheets" or (du[id].get("words", []) as Array) != ["a plate", "plates"]:
+			not_plate += 1
+	_check("helical zome: one piece per folded plate, nothing else", du.size() == plates and not_plate == 0,
+		"%d pieces, %d plates, %d not plates" % [du.size(), plates, not_plate])
+	var dtl := PalletRackBuildPlan.plan_units(du, 8)
+	var strut_words := ""
+	for j in dtl["jobs"]:
+		if str(j.get("label", "")).contains("strut") or str(j.get("label", "")).contains("hub"):
+			strut_words = str(j["label"])
+	_check("helical zome: the crew handles plates, never struts or hubs", strut_words.is_empty(), strut_words)
+	var tn := StructureUnits.units_node({"model_id": ToroidLabBuilder.MODEL_ID, "toroid_spec": tor})
+	var tu: Dictionary = tn.get_meta("units", {})
+	# Packed, a canopy fold is flat cut sheets (two corrugated sheets, ~20 mm)
+	# and a bent flexible solar panel a flat one: the yard sizes them so and
+	# the units node carries the packed shape beside the installed one.
+	var sheet_mm: Dictionary = (ToroidLabDesign.solve(tor)["canopy"] as Dictionary)["sheet"]
+	var long_m := maxf(float(sheet_mm["w"]), float(sheet_mm["h"])) * 0.001
+	var bad_flat := ""
+	for c in tn.get_children():
+		var uid := str(c.get_meta("unit_id", ""))
+		var w: Array = tu[uid].get("words", [])
+		if w != ["a canopy panel", "canopy panels"] and w != ["a solar panel", "solar panels"]:
+			continue
+		var f: Dictionary = tu[uid]["flat"]
+		var sz: Vector3 = f["size"]
+		var lim := 0.03 if w[0] == "a canopy panel" else 0.01
+		if not bool(f.get("packed", false)) or c.get_node_or_null("Packed") == null or sz.y > lim \
+				or sz.z > long_m + 0.01:
+			bad_flat = "%s %s %s" % [uid, w[0], sz]
+	tn.free()
+	_check("overview toroid: canopy folds and flexible panels pack flat", bad_flat.is_empty(), bad_flat)
+	var canopy: Array = []
+	var frame_stage := -1
+	for id in tu:
+		if (tu[id].get("words", []) as Array) == ["a canopy panel", "canopy panels"]:
+			canopy.append(id)
+		elif str(tu[id].get("kind", "")) != "sheets":
+			frame_stage = maxi(frame_stage, int(tu[id]["stage"]))
+	var bays: int = ((ToroidLabDesign.solve(tor)["canopy"] as Dictionary).get("sectors", []) as Array).size()
+	var after := true
+	for id in canopy:
+		if int(tu[id]["stage"]) <= frame_stage:
+			after = false
+	_check("overview toroid: the canopy is one folded panel per bay (24)", canopy.size() == bays and bays == 24,
+		"%d panels, %d bays" % [canopy.size(), bays])
+	_check("overview toroid: the canopy goes on after the frame", after)
+
+
+## A Linkage Lab structure on the crew build site: a placed structure folds
+## about its own middle (centre_fixed — the solver hangs the ring off module
+## 0, and its middle used to swing round as it folded, so the crew's folded
+## frame and the opened structure stood in different places); the deployed
+## pose is where it always was; the folded cut stands on the deployed ring's
+## middle; and the pieces go up in the Lab's step order.
+func _test_linkage_crew_build() -> void:
+	var worst := 0.0
+	var worst_dep := 0.0
+	var worst_cut := 0.0
+	var order_ok := true
+	var why := ""
+	for f in ["starshade_default.json", "ll_constellation.json"]:
+		var cfg: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/linkage/presets/" + f))
+		var b := LinkageStructureBuilder.build_node(cfg) as LinkageStructureBuilder
+		root.add_child(b)
+		var closed := b.closed_angle()
+		var lo := maxf(b.min_fold_angle(), LinkageKinematics.MIN_FOLD_ANGLE)
+		b.set_fold_angle(closed)
+		var ref := LinkageStructureBuilder.plan_centre_of(b.last_frame()) + b.frame_offset() * Vector3(1, 0, 1)
+		worst_dep = maxf(worst_dep, (b.frame_offset() * Vector3(1, 0, 1)).length())
+		for u in [0.0, 0.3, 0.7]:
+			b.set_fold_angle(lerpf(lo, closed, u))
+			var c := LinkageStructureBuilder.plan_centre_of(b.last_frame()) + b.frame_offset() * Vector3(1, 0, 1)
+			worst = maxf(worst, c.distance_to(ref))
+		# The crew's folded cut, in the same frame.
+		var n := StructureUnits.units_node({"model_id": LinkageStructureBuilder.MODEL_ID, "linkage_spec": cfg})
+		var units: Dictionary = n.get_meta("units", {})
+		n.free()
+		var bb := PalletRackBuildPlan.units_bounds(units)
+		var cc := bb.get_center() * Vector3(1, 0, 1)
+		worst_cut = maxf(worst_cut, cc.distance_to(ref))
+		# Step order: bottom ring, V modules, top ring, supports.
+		var first := {}
+		var last := {}
+		for id in units:
+			var w: Array = units[id].get("words", [])
+			if w.is_empty():
+				continue
+			var k := str(w[1])
+			first[k] = mini(int(first.get(k, 1 << 30)), int(units[id]["stage"]))
+			last[k] = maxi(int(last.get(k, -1)), int(units[id]["stage"]))
+		var seq := ["bottom-ring beams", "V-module beams", "top-ring beams", "support beams"]
+		for i in range(1, seq.size()):
+			if first.has(seq[i]) and last.has(seq[i - 1]) and f == "starshade_default.json" \
+					and int(first[seq[i]]) < int(last[seq[i - 1]]):
+				order_ok = false
+				why = "%s: %s before %s are all up" % [f, seq[i], seq[i - 1]]
+		b.free()
+	_check("linkage: the ring folds about its own middle", worst < 0.002, "%.4f m" % worst)
+	_check("linkage: the deployed pose stands where it always did", worst_dep < 0.002, "%.4f m" % worst_dep)
+	_check("linkage: the crew's part-open frame stands on the deployed ring's middle", worst_cut < 0.05, "%.3f m" % worst_cut)
+	_check("linkage: pieces go up bottom ring, V modules, top ring, supports", order_ok, why)
 
 
 ## A piece's box (world-aligned: every pose in the yard or set down is a

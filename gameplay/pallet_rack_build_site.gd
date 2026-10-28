@@ -8,7 +8,7 @@ extends Node3D
 ## climbing onto the new deck at the end.
 ##
 ## A rehearsal is ONE record on the prop, `build_run = {start_h, crew_n}`
-## (LinkageBuildSite's pattern): build time = (clock − start_h) in seconds, so
+## (the fire's pattern): build time = (clock − start_h) in seconds, so
 ## the build follows the world clock at any speed, scrubs backwards, and is
 ## where it was after a reload. Nothing here integrates.
 ##
@@ -20,7 +20,7 @@ extends Node3D
 ## carrying, seating and laying). After the last job and a minute's linger the
 ## pieces go and the rack's own mesh comes back.
 ##
-## Two modes, one record (LinkageBuildSite's contract):
+## Two modes, one record:
 ##   - REHEARSAL (`build_run = {start_h, crew_n}`): build time = the clock;
 ##     the figures are actors.
 ##   - LABOUR (`build_run = {mode: "labour", iid, project_id, crew_n}`, set by
@@ -44,8 +44,20 @@ extends Node3D
 ## pieces come from StructureUnits (the real model cut into its pieces, small
 ## hardware riding with them) and PalletRackBuildPlan.plan_units schedules
 ## them bottom up, skeleton before skin, carried from the yard and fitted one
-## by one; a pack-up plays it backwards. Only a rack has rehearsals and the
-## visitor.
+## by one; a pack-up plays it backwards. Only a rack has the visitor.
+##
+## A LINKAGE LAB structure (2026-10-27) is the one crew build for every way
+## in: the deploy schedule, the Lab's "Queue build for crew" (both labour
+## runs through SiteDeployDirector) and the prop editor's rehearsal. It is cut
+## part-open (StructureUnits; the builder's centre_fixed keeps that ring on
+## the deployed one's middle) and fitted in the Lab's own step order (bottom
+## ring, V modules, top ring, supports, panels — LinkageStructureBuilder.
+## instance_piece_info), at the Lab's part-open build pose (crew_pose_angle).
+## A labour run's finish unpacks it and the deploy sweep opens it from that
+## pose; a pack-up folds it to that pose first; a rehearsal opens it here, on
+## the real structure, over
+## LINKAGE_DEPLOY_S of build time after the last piece (and folds it back
+## when scrubbed there).
 ##
 ## Coordinates: this node takes ModelRoot's local transform every frame, so its
 ## children live in the rack's build frame (metres, grounded). For any other
@@ -60,8 +72,12 @@ const LABOUR_EASE_S := 1.2
 const SITE_MARGIN_M := 16.0
 ## The build lab's crew: two frames held at once + two seating the beams.
 const DEFAULT_CREW := 6
+## A Linkage Lab rehearsal's crew (the prop editor's default).
+const LINKAGE_DEFAULT_CREW := 9
 const MIN_CREW := 6
 const LINGER_S := 60.0
+## A Linkage rehearsal: build seconds the unfold takes after the last piece.
+const LINKAGE_DEPLOY_S := 120.0
 const CULL_M := 160.0
 const PHASE_SPREAD_S := 0.731
 
@@ -111,6 +127,18 @@ var _labour := false
 var _packup := false
 var _t_disp := 0.0
 var _t_target := 0.0
+## The drawn time starts at the first readable target (a pack-up starts at
+## the makespan; easing up to it from 0 replayed the whole build first).
+var _t_seeded := false
+## unit id -> [installed MeshInstance3D, packed MeshInstance3D]
+var _packed_of: Dictionary = {}
+## A Linkage rehearsal's unfold (LINKAGE_DEPLOY_S of build time, 0 = none):
+## the structure is shown and opened from `_fold_from` to `_fold_to` (the
+## pose it stands in).
+var _tail_s := 0.0
+var _fold_from := 0.0
+var _fold_to := 0.0
+var _fold_ms := 0
 var _status: Dictionary = {}
 var _status_accum := 0.0
 var _lane_of: Dictionary = {}     # agent id -> lane (worker index)
@@ -127,11 +155,15 @@ var _suspended := false
 ## `start_h` (absolute sim hours; NAN = now). Returns false for other props.
 static func start_rehearsal(main: Node, prop_id: String, crew_n: int = DEFAULT_CREW, start_h: float = NAN) -> bool:
 	var rec := PlacedPropService.get_prop_record(main, prop_id)
-	if rec.is_empty() or str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID:
+	var mid := str(rec.get("model_id", ""))
+	if rec.is_empty() or (mid != PalletRackBuilder.MODEL_ID and mid != LinkageStructureBuilder.MODEL_ID):
+		return false
+	if bool(rec.get("packed", false)):
 		return false
 	if is_nan(start_h):
 		start_h = float(main.call("get_absolute_hours")) if main.has_method("get_absolute_hours") else 0.0
-	var run := {"start_h": start_h, "crew_n": maxi(MIN_CREW, crew_n)}
+	var run := {"start_h": start_h,
+		"crew_n": maxi(MIN_CREW if mid == PalletRackBuilder.MODEL_ID else 1, crew_n)}
 	if not PlacedPropService.update_prop_record(main, prop_id, {RECORD_KEY: run}):
 		return false
 	var prop := PlacedPropService._find_prop_node(main, prop_id) as PlacedProp
@@ -159,14 +191,16 @@ static func clear_rehearsal(main: Node, prop_id: String) -> void:
 		site.queue_free()
 
 
-## PlacedPropRuntime's hook: a pallet rack with a build_run gets a site, and
-## so does ANY structure the site deployment schedule hands to a crew (a
-## labour-mode run with an `action`).
+## PlacedPropRuntime's hook: a pallet rack or a Linkage Lab structure with a
+## build_run gets a site, and so does ANY structure the site deployment
+## schedule hands to a crew (a labour-mode run with an `action`).
 static func attach(prop: PlacedProp, rec: Dictionary) -> void:
 	var run: Variant = rec.get(RECORD_KEY)
 	if not (run is Dictionary):
 		return
-	if str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID and not is_schedule_run(run as Dictionary):
+	var mid := str(rec.get("model_id", ""))
+	if mid != PalletRackBuilder.MODEL_ID and mid != LinkageStructureBuilder.MODEL_ID \
+			and not is_schedule_run(run as Dictionary):
 		return
 	var site := PalletRackBuildSite.new()
 	site.name = NODE_NAME
@@ -271,6 +305,11 @@ func _ready() -> void:
 	add_child(_units_root)
 	for c in _units_root.get_children():
 		_unit_nodes[str(c.get_meta("unit_id", ""))] = c
+		# A piece that packs to another shape (StructureUnits "Packed": a
+		# canopy fold as flat sheets, a bent panel flat).
+		var pk := c.get_node_or_null("Packed") as Node3D
+		if pk != null:
+			_packed_of[str(c.get_meta("unit_id", ""))] = [c.get_node_or_null("Installed"), pk]
 	transform = _site_xf()
 	# The yard goes on the flattest side of the rack.
 	var units: Dictionary = _units_root.get_meta("units", {})
@@ -286,15 +325,20 @@ func _ready() -> void:
 		_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
 	_model.visible = false
 	_set_crate_visible(false)
+	if _generic and not _labour and _model is LinkageStructureBuilder:
+		var lb := _model as LinkageStructureBuilder
+		_tail_s = LINKAGE_DEPLOY_S
+		_fold_to = lb.get_fold_angle()
+		_fold_from = LinkageStructureBuilder.crew_pose_angle(lb.params)
 	if _labour:
 		_poll_status()
-		_t_disp = _t_target
 		# The prop was just rebuilt under a running site (a chore effect, the
 		# finish unpacking it): pick up the drawn build where it was.
 		var c: Dictionary = _carry.get(_prop.prop_id, {})
 		_carry.erase(_prop.prop_id)
 		if not c.is_empty() and Time.get_ticks_msec() - int(c["ms"]) < 2000:
 			_carried = true
+			_t_seeded = true
 			_t_disp = float(c["t"])
 	_build_piles()
 	_build_crew()
@@ -353,6 +397,8 @@ func dispose() -> void:
 	set_process(false)
 	NpcStandIns.set_for(_stand_key(), {})
 	if is_instance_valid(_model):
+		if _tail_s > 0.0:
+			_drive_fold(_fold_to, true)
 		_show_model()
 	if is_instance_valid(_units_root):
 		_units_root.visible = false
@@ -416,8 +462,11 @@ func _poll_status() -> void:
 				# A reload of a long-finished build skips the linger; the
 				# finished prop's own site, rebuilt the moment the crew's
 				# last job unpacked it, carries on from where the pieces
-				# were drawn (_carry) so the last ones still go up.
-				if not _carried:
+				# were drawn (_carry) so the last ones still go up. Only on
+				# a site's FIRST read: a running site that sees "done" (the
+				# labour finished between reads, a short build at speed)
+				# jumped to the end and the last pieces never went on.
+				if not _carried and not _t_seeded:
 					_t_disp = maxf(_t_disp, _t_target - 0.5)
 		"active":
 			var pr := clampf(float(_status.get("progress", 0.0)), 0.0, 1.0)
@@ -425,6 +474,10 @@ func _poll_status() -> void:
 		_:
 			# Cancelled: the crew stopped; the rack is the record's again.
 			dispose()
+			return
+	if not _t_seeded:
+		_t_seeded = true
+		_t_disp = _t_target
 
 
 ## Assign the people on site to lanes: busiest lanes first, an agent keeps
@@ -486,12 +539,30 @@ func unit_node(id: String) -> Node3D:
 	return _unit_nodes.get(id) as Node3D
 
 
+## Fold a Linkage structure to `angle` (a rehearsal's unfold). A heavy
+## design (radial copies, coverings) is re-solved at most every few frames
+## (its fold_cost_ms), like the deploy runtime's sweep; `force` lands it.
+func _drive_fold(angle: float, force: bool = false) -> void:
+	var lb := _model as LinkageStructureBuilder
+	if lb == null or absf(lb.get_fold_angle() - angle) < 1e-4:
+		return
+	if not force and lb.fold_cost_ms > LinkageDeployRuntime.HEAVY_FOLD_MS:
+		var gap_ms := int(minf(lb.fold_cost_ms * LinkageDeployRuntime.FOLD_GAP_PER_MS,
+			LinkageDeployRuntime.MAX_FOLD_GAP_S) * 1000.0)
+		if Time.get_ticks_msec() - _fold_ms < gap_ms:
+			return
+	_fold_ms = Time.get_ticks_msec()
+	lb.set_fold_angle(angle)
+
+
 ## "Building · 41 % · crew 6 · 9 min left · seat beam …"
 func progress_line() -> String:
 	if _tl.is_empty():
 		return "No build plan"
 	var t := build_time()
 	var mk := float(_tl["makespan"])
+	if _tail_s > 0.0 and t > mk and t <= mk + _tail_s:
+		return "Deploying · %d %% open · crew %d" % [int(100.0 * clampf((t - mk) / _tail_s, 0.0, 1.0)), int(_tl["crew"])]
 	if not (_tl["blocked"] as Array).is_empty():
 		return "The crew can't finish this rack (%d jobs can't start)" % (_tl["blocked"] as Array).size()
 	if t < 0.0:
@@ -499,7 +570,8 @@ func progress_line() -> String:
 	if _packup:
 		# The plan runs backwards: t falls from the makespan to zero.
 		return "Taking down · %d %% down · crew %d · %s left · %s" % [int(100.0 * (1.0 - t / maxf(mk, 1.0))),
-			int(_tl["crew"]), _fmt_s(maxf(t, 0.0)), str(_last_state.get("stage", ""))]
+			int(_tl["crew"]), _fmt_s(maxf(t, 0.0)),
+			PalletRackBuildPlan.strike_label(str(_last_state.get("stage", "")))]
 	if t >= mk:
 		return "Built in %s by a crew of %d" % [_fmt_s(mk), int(_tl["crew"])]
 	return "Building · %d %% · crew %d · %s left · %s" % [int(100.0 * t / maxf(mk, 1.0)), int(_tl["crew"]),
@@ -516,6 +588,12 @@ static func _fmt_s(s: float) -> String:
 # ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("build_site")
+	_tick(delta)
+	PerfSpan.end("build_site")
+
+
+func _tick(delta: float) -> void:
 	if _disposed or not is_instance_valid(_model):
 		set_process(false)
 		return
@@ -579,9 +657,11 @@ func _update(delta: float) -> void:
 		# The ghost is never the picture: hold the finished (or fully
 		# struck) rack as pieces until the prop is rebuilt for real.
 		t = clampf(t, 0.0, mk + LINGER_S)
-	if t > mk + LINGER_S or t < -5.0:
+	if t > mk + _tail_s + LINGER_S or t < -5.0:
 		if not _finished:
 			_finished = true
+			if _tail_s > 0.0:
+				_drive_fold(_fold_to, true)
 			_show_model()
 			_finish_run()
 			_units_root.visible = false
@@ -611,7 +691,16 @@ func _update(delta: float) -> void:
 	# tree at the END of the frame, after the new site has started.
 	if _labour and _prop != null:
 		_carry[_prop.prop_id] = {"t": _t_disp, "ms": Time.get_ticks_msec()}
-	_apply_units(st["units"])
+	# A Linkage rehearsal past its last piece: the real structure, opening.
+	var unfolding := _tail_s > 0.0 and t > mk
+	if _tail_s > 0.0:
+		_units_root.visible = not unfolding
+		_model.visible = unfolding
+		if unfolding:
+			var u := smoothstep(0.0, 1.0, clampf((t - mk) / _tail_s, 0.0, 1.0))
+			_drive_fold(lerpf(_fold_from, _fold_to, u))
+	if not unfolding:
+		_apply_units(st["units"])
 	_apply_crew(st, delta)
 	if Time.get_ticks_msec() - _label_ms > 500:
 		_label_ms = Time.get_ticks_msec()
@@ -631,13 +720,21 @@ func _apply_units(units: Dictionary) -> void:
 		var g := float(s.get("g", 0.0))
 		if g > 0.0:
 			xf = _ground_xf(g, float(s.get("rest", g)), s.get("gxz", Vector2.ZERO)) * xf
+		# Off the structure (in the yard, carried, set down, and the first
+		# half of being fitted) a piece that packs flat shows its packed shape.
+		var packed := g >= 0.5
 		var h := hash([(xf.origin * 200.0).round(), (xf.basis.x * 200.0).round(), (xf.basis.y * 200.0).round(),
-			bool(s["visible"])])
+			bool(s["visible"]), packed])
 		if int(_unit_sig.get(id, 0)) == h:
 			continue
 		_unit_sig[id] = h
 		n.transform = xf
 		n.visible = bool(s["visible"])
+		var pair: Array = _packed_of.get(id, [])
+		if not pair.is_empty():
+			if pair[0] != null:
+				(pair[0] as Node3D).visible = not packed
+			(pair[1] as Node3D).visible = packed
 
 
 func _apply_crew(st: Dictionary, delta: float) -> void:

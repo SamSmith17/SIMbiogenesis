@@ -13,6 +13,13 @@ extends Node3D
 ##
 ## Local origin: ground center — the structure's lowest beam corner sits at
 ## local Y = 0 (matches how imported GLB props seat in the world today).
+## The solver chains the modules from module 0 AT the origin, so the ring's
+## middle is off to one side and MOVES as the ring folds. With
+## `centre_fixed` (every placed structure: build_node, the construction
+## ghost) each pose is slid sideways so the ring's middle in plan stays where
+## it is DEPLOYED (`_shift`, frame_offset()): a deployed structure stands
+## exactly where it always did, and it folds and unfolds about its own middle
+## instead of swinging round module 0. The Lab's studio centres itself.
 ## Beam/bracket/bolt COUNTS are a function of params only (not fold angle),
 ## so set_fold_angle() never reallocates.
 
@@ -36,6 +43,8 @@ var params: LinkageParams = LinkageParams.new()
 ## MeshInstance3D geometry and this renderer is otherwise pure MultiMesh.
 ## Off by default (the designer studio doesn't need it).
 var collision_mesh_enabled := false
+## Keep the ring's middle in plan fixed as it folds (see the header).
+var centre_fixed := false
 
 var _beam_mm: MultiMeshInstance3D
 var _bracket_mm: MultiMeshInstance3D
@@ -77,6 +86,23 @@ var _last_floor: Array = []
 var _last_walls: Array = []
 var _last_schedule: Dictionary = {}
 var _fold_angle := -1.0
+## The sideways slide of the current pose (centre_fixed), metres, y = 0.
+var _shift := Vector3.ZERO
+## The deployed pose's ring middle in plan, keyed on the design.
+var _ref_centre := Vector3.ZERO
+var _ref_key := ""
+## A sequential fold re-solves each copy's own angle every pose; the copies
+## parked at the folded or the open angle repeat from pose to pose, so their
+## geometry is kept (angle key -> _geo_at), cleared with the design.
+var _geo_cache: Dictionary = {}
+const GEO_CACHE_MAX := 8
+## The design minus its fold (set by rebuild(): every design change rebuilds).
+var _design_key := ""
+var _radial_plan: Dictionary = {}
+var _radial_key := "-"
+## The last set_fold_angle's cost (ms, smoothed): a sweep driving a heavy
+## design (radial copies, coverings) re-solves less often (LinkageDeployRuntime).
+var fold_cost_ms := 0.0
 var _closed_angle_cache := NAN
 var _closed_angle_key := ""
 var _min_fold_cache := NAN
@@ -127,6 +153,7 @@ static func build_node(spec: Dictionary = {}, node_name: String = "LinkageStruct
 	var builder := LinkageStructureBuilder.new()
 	builder.name = node_name
 	builder.collision_mesh_enabled = true
+	builder.centre_fixed = true
 	var p := LinkageParams.new()
 	if not spec.is_empty():
 		p.from_config(spec)
@@ -150,11 +177,16 @@ func set_params(p: LinkageParams) -> void:
 func rebuild() -> void:
 	_ensure_materials()
 	_free_multimeshes()
+	var c2 := params.to_config()
+	c2.erase("foldAngle")
+	_design_key = str(hash(JSON.stringify(c2)))
+	_geo_cache.clear()
 	_fold_angle = clampf(params.fold_angle, LinkageKinematics.MIN_FOLD_ANGLE, LinkageKinematics.MAX_FOLD_ANGLE)
 	var frame := LinkageSolver.solve(params, _fold_angle)
 	_compute_extras(frame)
 	frame = _apply_radial(frame)
 	_last_frame = frame
+	_update_shift(frame)
 	_allocate_from_frame(frame)
 	_write_frame_transforms(frame)
 	if collision_mesh_enabled:
@@ -165,6 +197,7 @@ func rebuild() -> void:
 ## Support/RCP/panel visibility angles can change counts mid-fold, in which
 ## case the affected MultiMeshes reallocate (still no ArrayMesh rebuild).
 func set_fold_angle(angle_rad: float) -> void:
+	var t_us := Time.get_ticks_usec()
 	_ensure_materials()
 	var clamped := clampf(angle_rad, LinkageKinematics.MIN_FOLD_ANGLE, LinkageKinematics.MAX_FOLD_ANGLE)
 	_fold_angle = clamped
@@ -173,10 +206,13 @@ func set_fold_angle(angle_rad: float) -> void:
 	_compute_extras(frame)
 	frame = _apply_radial(frame)
 	_last_frame = frame
+	_update_shift(frame)
 	if _beam_mm == null or _count_mismatch(frame):
 		_free_multimeshes()
 		_allocate_from_frame(frame)
 	_write_frame_transforms(frame)
+	var ms := float(Time.get_ticks_usec() - t_us) * 0.001
+	fold_cost_ms = ms if fold_cost_ms <= 0.0 else lerpf(fold_cost_ms, ms, 0.3)
 
 
 ## The radial array (LinkageRadialArray, A3): every part of the single
@@ -184,7 +220,12 @@ func set_fold_angle(angle_rad: float) -> void:
 ## copied into each visible slot of the plan measured on the DEPLOYED pose,
 ## so the copies fold in place. A frame unchanged when the array is off.
 func _apply_radial(frame: Dictionary) -> Dictionary:
-	var pl := LinkageRadialArray.deployed_plan(params)
+	# deployed_plan keys its own cache on a JSON dump of the whole config
+	# (~2.5 ms a call on Constellation): keep it per design here.
+	if _radial_key != _design_key or _design_key.is_empty():
+		_radial_key = _design_key
+		_radial_plan = LinkageRadialArray.deployed_plan(params)
+	var pl := _radial_plan
 	if pl.is_empty():
 		return frame
 	var geo := {"beams": frame.get("beams", []),
@@ -220,8 +261,75 @@ func _apply_radial(frame: Dictionary) -> Dictionary:
 	return out
 
 
-## One structure's parts at `angle` (a sequential-fold copy's own pose).
+## The pose a crew puts the frame together in: part-open, CREW_POSE_FRAC of
+## the way from stowed to deployed — the Lab's own build pose
+## (LinkageBuildTimeline), where the rings read as rings. Folded flat a
+## StarShade is a 2.5 x 1.1 x 0.35 m bundle. The crew build site cuts the
+## pieces here; the unfold after a crew build starts here; a pack-up folds to
+## here before the pieces come off.
+const CREW_POSE_FRAC := 0.45
+
+
+static func crew_pose_angle(p: LinkageParams) -> float:
+	var lo := maxf(LinkageKinematics.effective_min_fold_angle(p), LinkageKinematics.MIN_FOLD_ANGLE)
+	return lerpf(lo, LinkageKinematics.optimal_closed_angle(p), CREW_POSE_FRAC)
+
+
+## The ring's middle in plan (metres, y 0): the middle of the beams' corners.
+static func plan_centre_of(frame: Dictionary) -> Vector3:
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for b in frame.get("beams", []):
+		for c in b["corners"]:
+			var v := c as Vector3
+			lo = Vector2(minf(lo.x, v.x), minf(lo.y, v.z))
+			hi = Vector2(maxf(hi.x, v.x), maxf(hi.y, v.z))
+	if lo.x == INF:
+		return Vector3.ZERO
+	return Vector3((lo.x + hi.x) * 0.5, 0.0, (lo.y + hi.y) * 0.5) * INCH_TO_M
+
+
+## The current pose's sideways slide: the deployed ring's middle minus this
+## pose's (centre_fixed), else none.
+func _update_shift(frame: Dictionary) -> void:
+	if not centre_fixed:
+		_shift = Vector3.ZERO
+		return
+	var key := _design_key
+	if key.is_empty() or key != _ref_key:
+		_ref_key = key
+		var closed := closed_angle()
+		var fr := LinkageSolver.solve(params, closed)
+		var pl := LinkageRadialArray.deployed_plan(params)
+		if not pl.is_empty():
+			var geo := {"beams": fr.get("beams", []), "brackets": [], "bolts": [], "washers": [], "supports": [],
+				"panels": [], "floor": [], "walls": []}
+			fr = {"beams": (LinkageRadialArray.apply(pl, geo, {})["geo"] as Dictionary)["beams"]}
+		_ref_centre = plan_centre_of(fr)
+	_shift = _ref_centre - plan_centre_of(frame)
+	_shift.y = 0.0
+
+
+## The offset every solver point (inches x 0.0254) takes in this node's
+## frame: the slide (centre_fixed) and the grounding.
+func frame_offset() -> Vector3:
+	return Vector3(_shift.x, _ground_offset_m(), _shift.z)
+
+
+## One structure's parts at `angle` (a sequential-fold copy's own pose),
+## kept per angle (the copies parked at a fixed angle repeat).
 func _geo_at(angle: float) -> Dictionary:
+	var ak := "%.9f" % angle
+	if _geo_cache.has(ak):
+		return _geo_cache[ak]
+	var g := _geo_at_uncached(angle)
+	if _geo_cache.size() >= GEO_CACHE_MAX:
+		_geo_cache.erase(_geo_cache.keys()[0])
+	_geo_cache[ak] = g
+	return g
+
+
+func _geo_at_uncached(angle: float) -> Dictionary:
 	var fr := LinkageSolver.solve(params, angle)
 	var fl := LinkageFloor.floor_beams(fr.get("beams", []), params, angle)
 	var sup := LinkageGeometry.support_beams(fr, params, angle)
@@ -488,12 +596,12 @@ func frame_aabb() -> AABB:
 	var beams: Array = _last_frame["beams"]
 	if beams.is_empty():
 		return AABB()
-	var ground := _ground_offset_m()
-	var first: Vector3 = (beams[0]["corners"] as Array)[0] * INCH_TO_M + Vector3(0, ground, 0)
+	var off := frame_offset()
+	var first: Vector3 = (beams[0]["corners"] as Array)[0] * INCH_TO_M + off
 	var aabb := AABB(first, Vector3.ZERO)
 	for b in beams + _last_support:
 		for c in b["corners"]:
-			aabb = aabb.expand((c as Vector3) * INCH_TO_M + Vector3(0, ground, 0))
+			aabb = aabb.expand((c as Vector3) * INCH_TO_M + off)
 	return aabb
 
 
@@ -884,6 +992,7 @@ static func panel_transform(panel: Dictionary, ground_offset_m: float) -> Transf
 
 func _write_frame_transforms(frame: Dictionary) -> void:
 	var ground := _ground_offset_m()
+	var sh := _shift
 	# Per-part state is looked up only when some part has one: the ordinary
 	# fold scrub writes every instance and must not pay a key lookup each.
 	var keyed := not _part_state.is_empty()
@@ -894,6 +1003,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keys: PackedStringArray = _instance_keys.get("Beams", PackedStringArray())
 		for i in range(beams.size()):
 			var t := beam_transform(beams[i], ground)
+			t.origin += sh
 			mm.set_instance_transform(i, _apply_part_state(t, keys[i]) if keyed and i < keys.size() else t)
 
 	var brackets: Array = frame["brackets"]
@@ -902,13 +1012,14 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keys2: PackedStringArray = _instance_keys.get("Brackets", PackedStringArray())
 		for i in range(brackets.size()):
 			var t2 := bracket_transform(brackets[i], ground)
+			t2.origin += sh
 			mm2.set_instance_transform(i, _apply_part_state(t2, keys2[i]) if keyed and i < keys2.size() else t2)
 
 	var bolts: Array = frame["bolts"]
 	if _bolt_mm != null:
 		var mm3: MultiMesh = _bolt_mm.multimesh
 		var mm4: MultiMesh = _bolt_head_mm.multimesh
-		var ground_v := Vector3(0.0, ground, 0.0)
+		var ground_v := Vector3(0.0, ground, 0.0) + sh
 		var keys3: PackedStringArray = _instance_keys.get("Bolts", PackedStringArray())
 		for i in range(bolts.size()):
 			var bo: Dictionary = bolts[i]
@@ -918,6 +1029,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 			var head_h := float(bo["radius"]) * 1.2 * INCH_TO_M
 			var head_basis := _cylinder_basis(dir, head_r, head_h)
 			var t3 := bolt_transform(bo, ground)
+			t3.origin += sh
 			var h0 := Transform3D(head_basis, (bo["start"] as Vector3) * INCH_TO_M + ground_v)
 			var h1 := Transform3D(head_basis, (bo["end"] as Vector3) * INCH_TO_M + ground_v)
 			if keyed and i < keys3.size():
@@ -934,6 +1046,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keysw: PackedStringArray = _instance_keys.get("Washers", PackedStringArray())
 		for i in range(mini(washers.size(), mmw.instance_count)):
 			var tw := washer_transform(washers[i], ground)
+			tw.origin += sh
 			mmw.set_instance_transform(i, _apply_part_state(tw, keysw[i]) if keyed and i < keysw.size() else tw)
 
 	if _support_mm != null:
@@ -941,6 +1054,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keys5: PackedStringArray = _instance_keys.get("SupportBeams", PackedStringArray())
 		for i in range(_last_support.size()):
 			var t5 := beam_transform(_last_support[i], ground)
+			t5.origin += sh
 			mm5.set_instance_transform(i, _apply_part_state(t5, keys5[i]) if keyed and i < keys5.size() else t5)
 
 	if _floor_mm != null:
@@ -948,6 +1062,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keysf: PackedStringArray = _instance_keys.get("FloorBeams", PackedStringArray())
 		for i in range(mini(_last_floor.size(), mmf.instance_count)):
 			var tf := beam_transform(_last_floor[i], ground)
+			tf.origin += sh
 			mmf.set_instance_transform(i, _apply_part_state(tf, keysf[i]) if keyed and i < keysf.size() else tf)
 		_floor_mm.visible = bool(LinkageFloor.config(params)["visibility"]["beams"])
 
@@ -958,6 +1073,7 @@ func _write_frame_transforms(frame: Dictionary) -> void:
 		var keys6: PackedStringArray = _instance_keys.get("SolarPanels", PackedStringArray())
 		for i in range(_last_panels.size()):
 			var t6 := panel_transform(_last_panels[i], ground)
+			t6.origin += sh
 			mm6.set_instance_transform(i, _apply_part_state(t6, keys6[i]) if keyed and i < keys6.size() else t6)
 
 
@@ -972,14 +1088,17 @@ func instance_transforms() -> Dictionary:
 	if _last_frame.is_empty():
 		return out
 	var g := _ground_offset_m()
-	var gv := Vector3(0.0, g, 0.0)
+	var sh := _shift
+	var gv := Vector3(0.0, g, 0.0) + sh
+	var at := func(t: Transform3D) -> Transform3D:
+		return Transform3D(t.basis, t.origin + sh)
 	if _beam_mm != null:
-		out[_beam_mm] = (_last_frame.get("beams", []) as Array).map(func(b): return beam_transform(b, g))
+		out[_beam_mm] = (_last_frame.get("beams", []) as Array).map(func(b): return at.call(beam_transform(b, g)))
 	if _bracket_mm != null:
-		out[_bracket_mm] = (_last_frame.get("brackets", []) as Array).map(func(b): return bracket_transform(b, g))
+		out[_bracket_mm] = (_last_frame.get("brackets", []) as Array).map(func(b): return at.call(bracket_transform(b, g)))
 	if _bolt_mm != null:
 		var bolts: Array = _last_frame.get("bolts", [])
-		out[_bolt_mm] = bolts.map(func(b): return bolt_transform(b, g))
+		out[_bolt_mm] = bolts.map(func(b): return at.call(bolt_transform(b, g)))
 		if _bolt_head_mm != null:
 			var heads: Array = []
 			for bo in bolts:
@@ -992,15 +1111,65 @@ func instance_transforms() -> Dictionary:
 	if _washer_mm != null:
 		var ws: Array = _last_frame.get("washers", [])
 		out[_washer_mm] = ws.slice(0, mini(ws.size(), _washer_mm.multimesh.instance_count)).map(
-			func(w): return washer_transform(w, g))
+			func(w): return at.call(washer_transform(w, g)))
 	if _support_mm != null:
-		out[_support_mm] = _last_support.map(func(b): return beam_transform(b, g))
+		out[_support_mm] = _last_support.map(func(b): return at.call(beam_transform(b, g)))
 	if _floor_mm != null and _floor_mm.visible:
 		out[_floor_mm] = _last_floor.slice(0, mini(_last_floor.size(), _floor_mm.multimesh.instance_count)).map(
-			func(b): return beam_transform(b, g))
+			func(b): return at.call(beam_transform(b, g)))
 	if _panel_mm != null:
-		out[_panel_mm] = _last_panels.map(func(pn): return panel_transform(pn, g))
+		out[_panel_mm] = _last_panels.map(func(pn): return at.call(panel_transform(pn, g)))
 	return out
+
+
+## What a crew carries for every instance (StructureUnits cuts a placed
+## structure into its pieces): MultiMeshInstance3D -> [{order, words, kind}],
+## one per instance. The order is the Lab's own build sequence
+## (LinkageBuildSteps): the bottom ring, the V modules, the top ring, then
+## the supports, the floor, the panels; radial copies one after another.
+## Hardware is small and rides with the beam it is nearest.
+func instance_piece_info() -> Dictionary:
+	var out := {}
+	for entry in [[_beam_mm, "Beams"], [_bracket_mm, "Brackets"], [_bolt_mm, "Bolts"],
+			[_washer_mm, "Washers"], [_support_mm, "SupportBeams"], [_floor_mm, "FloorBeams"],
+			[_panel_mm, "SolarPanels"]]:
+		var mmi: MultiMeshInstance3D = entry[0]
+		if mmi == null:
+			continue
+		var keys: PackedStringArray = _instance_keys.get(entry[1], PackedStringArray())
+		var infos: Array = []
+		for k in keys:
+			infos.append(piece_info_for_key(str(k)))
+		out[mmi] = infos
+	return out
+
+
+## Build order step of a part key (see instance_piece_info).
+const PIECE_STEP := {"beam:horizontal-bottom": 0, "beam:vertical": 1, "beam:horizontal-top": 2,
+	"beam:support-beam": 3, "beam:support-beam-reciprocal": 4, "panel": 6}
+const PIECE_STEP_WORDS := {0: ["a bottom-ring beam", "bottom-ring beams"], 1: ["a V-module beam", "V-module beams"],
+	2: ["a top-ring beam", "top-ring beams"], 3: ["a support beam", "support beams"],
+	4: ["a support beam", "support beams"], 5: ["a floor beam", "floor beams"],
+	6: ["a solar panel", "solar panels"], 7: ["a covering", "coverings"]}
+
+
+static func piece_info_for_key(key: String) -> Dictionary:
+	var bits := key.split(":")
+	var copy := 0
+	for b in bits:
+		if b.length() > 1 and b[0] == "a" and b.substr(1).is_valid_int():
+			copy = int(b.substr(1))
+			break
+	var head := bits[0] + (":" + bits[1] if bits.size() > 1 and bits[0] == "beam" else "")
+	var step := int(PIECE_STEP.get(head, -1))
+	if bits[0] in ["bracket", "bolt", "washer"]:
+		# Joint hardware goes on with the V modules it joins.
+		return {"order": copy * 10 + 1, "words": ["a bracket", "brackets"] if bits[0] == "bracket" \
+			else ["a bolt", "bolts"], "kind": "parts"}
+	if step < 0:
+		step = 5 if head.begins_with("beam:floor") else (7 if bits[0] == "wall" else 1)
+	return {"order": copy * 10 + step, "words": PIECE_STEP_WORDS[step],
+		"kind": "sheets" if step == 6 or step == 7 else ""}
 
 
 ## Metric instance transform for a solver washer (unit cylinder mesh): a disc
@@ -1125,16 +1294,17 @@ func refresh_collision_mesh() -> void:
 	if _last_frame.is_empty():
 		return
 	var ground := _ground_offset_m()
+	var sh := _shift
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var beams: Array = _last_frame["beams"]
 	for b in beams + _last_support + _last_floor:
-		_add_corner_box(st, b["corners"], ground)
+		_add_corner_box(st, b["corners"], ground, sh)
 	for panel in _last_panels:
-		_add_corner_box(st, _panel_corners(panel), ground)
+		_add_corner_box(st, _panel_corners(panel), ground, sh)
 	# The deck is walked on: its slab goes in the collision mesh too.
 	for w in _last_walls:
-		_add_slab(st, w.get("slab_corners", []), ground)
+		_add_slab(st, w.get("slab_corners", []), ground, sh)
 	var mesh := st.commit()
 	var mi := get_node_or_null("CollisionMesh") as MeshInstance3D
 	if mi == null:
@@ -1148,13 +1318,13 @@ func refresh_collision_mesh() -> void:
 ## A covering slab (bottom ring then top ring, n + n points, inches): caps
 ## fanned from the first vertex plus the side quads. Convex outlines only —
 ## every covering the web builds is convex.
-static func _add_slab(st: SurfaceTool, slab: Array, ground_m: float) -> void:
+static func _add_slab(st: SurfaceTool, slab: Array, ground_m: float, sh: Vector3 = Vector3.ZERO) -> void:
 	var n := slab.size() / 2
 	if n < 3:
 		return
 	var v: Array = []
 	for c in slab:
-		v.append((c as Vector3) * INCH_TO_M + Vector3(0, ground_m, 0))
+		v.append((c as Vector3) * INCH_TO_M + Vector3(0, ground_m, 0) + sh)
 	for i in range(1, n - 1):
 		for tri in [[0, i, i + 1], [n, n + i + 1, n + i]]:
 			for k in tri:
@@ -1188,10 +1358,12 @@ func _sync_walls(ground: float) -> void:
 			mi.name = "Wall_%d" % i
 			_cover_root.add_child(mi)
 			_wall_nodes[key] = mi
+			var wi := piece_info_for_key(key)
+			StructureUnits.tag_piece(mi, "sheets", wi["words"], int(wi["order"]))
 		mi.material_override = _wall_material(w)
 		var c: Vector3 = w.get("center", Vector3.ZERO)
 		mi.mesh = _slab_mesh(w.get("slab_corners", []), c)
-		var t := Transform3D(Basis(), c * INCH_TO_M + Vector3(0, ground, 0))
+		var t := Transform3D(Basis(), c * INCH_TO_M + Vector3(0, ground, 0) + _shift)
 		var st = _part_state.get(key)
 		var shown := bool(vis.get(_wall_vis_key(w), true))
 		if st is Dictionary and not bool((st as Dictionary).get("visible", true)):
@@ -1268,12 +1440,12 @@ static func _slab_mesh(slab: Array, center_in: Vector3) -> ArrayMesh:
 
 ## Solver corner order (per _make_beam): 4 corners around p1 then 4 around p2,
 ## both wound -w-t, +w-t, +w+t, -w+t in the beam's cross-section plane.
-static func _add_corner_box(st: SurfaceTool, corners: Array, ground_m: float) -> void:
+static func _add_corner_box(st: SurfaceTool, corners: Array, ground_m: float, sh: Vector3 = Vector3.ZERO) -> void:
 	if corners.size() != 8:
 		return
 	var v: Array = []
 	for c in corners:
-		v.append((c as Vector3) * INCH_TO_M + Vector3(0, ground_m, 0))
+		v.append((c as Vector3) * INCH_TO_M + Vector3(0, ground_m, 0) + sh)
 	# End caps + 4 side quads (two triangles each); winding is irrelevant for
 	# ConcavePolygonShape3D and the mesh is never rendered.
 	var quads := [

@@ -1,20 +1,20 @@
 extends TourStop
 
-## A StarShade built by a crew of twelve: the build plan from the design's own
-## parts (cut and drill at the benches, carry and place each beam, fasten every
-## joint, lift the ring, deploy the fold), played on the clock as a rehearsal
-## on a freshly placed structure, which is removed again afterwards.
+## A StarShade built by a crew of twelve on the shared crew build site
+## (PalletRackBuildSite): the kit laid out in a yard, the frame put up folded
+## in the Lab's own step order (bottom ring, V modules, top ring, supports),
+## then opened about its own middle — played on the clock as a rehearsal on a
+## freshly placed structure, which is removed again afterwards.
 
 const DESIGN := "res://core/linkage/presets/ll_starshade_v1_soak_2026.json"
 const CREW := 12
-## The phases the camera stops on, in build order, with their caption.
+## The moments the camera stops on: [a job label pattern (String.match), caption].
 const PHASES := [
-	["cut", "Cutting the beams to length at the saw bench"],
-	["drill", "Drilling the bolt holes from the design's own hole map"],
-	["place", "Carrying each beam out and setting it in place"],
-	["fasten", "Fastening every joint — brackets, bolts, washers"],
-	["lift", "A raising crew lifts the ring"],
-	["deploy", "…and the StarShade unfolds"],
+	["carry*", "The kit laid out in the yard, carried to the frame piece by piece"],
+	["fit*bottom-ring*", "The bottom ring first, folded, as the Lab's steps put it"],
+	["fit*V-module*", "Then the V modules, their brackets and bolts"],
+	["fit*top-ring*", "The top ring goes on"],
+	["fit*support*", "…and the supports"],
 ]
 
 var _pid := ""
@@ -25,7 +25,7 @@ func _init() -> void:
 	id = "starshade_crew"
 	title = "StarShade: built by the crew"
 	chapter = "People"
-	summary = "Twelve people cut, drill, carry, bolt, lift and deploy a StarShade from its real parts."
+	summary = "Twelve people put a StarShade up from its real parts, folded, then open it."
 	how = PackedStringArray(["Place a StarShade (Linkage Lab → Place in world)",
 		"Click it → Crew → Rehearse build, or queue the build for the camp's crew",
 		"Scrub the timeline: the build runs forwards and backwards with the clock"])
@@ -33,19 +33,18 @@ func _init() -> void:
 	world = "mtvernon"
 	budget_s = 60.0
 	hour = 11.0
-	blurb = ("The build plan comes from the structure's own bill of materials: every " +
-		"beam is cut and drilled at a bench, carried to its seat and placed, every " +
-		"joint fastened, then a raising crew lifts the ring and the fold deploys. " +
-		"Named workers walk between jobs with the tool for each in hand, the structure " +
-		"only grows, and the whole build is a pure function of the clock — scrub it " +
-		"back and it comes apart again. Queued for a camp, the real crew builds it as " +
-		"fast as their credited work allows.")
+	blurb = ("Every structure a crew builds runs on the same site: the kit is laid out " +
+		"in a yard, and each piece of the real structure is carried out and fitted in " +
+		"the Lab's own order — bottom ring, V modules, top ring, supports — with the " +
+		"frame folded, then the StarShade opens about its own middle. The build is a " +
+		"pure function of the clock — scrub it back and it comes apart again. Queued " +
+		"for a camp, the real crew builds it as fast as their credited work allows.")
 
 
 func run(ctx: TourContext) -> void:
 	var m := ctx.main
 	var pps := ctx.klass("PlacedPropService")
-	var lbs := ctx.klass("LinkageBuildSite")
+	var lbs := ctx.klass("PalletRackBuildSite")
 	var f := FileAccess.open(DESIGN, FileAccess.READ)
 	var cfg: Variant = JSON.parse_string(f.get_as_text()) if f != null else null
 	if not ctx.require(pps != null and lbs != null and cfg is Dictionary, "the StarShade design and the build site load"):
@@ -72,7 +71,7 @@ func run(ctx: TourContext) -> void:
 	var mk := float(tl.get("makespan", 0.0))
 	if not ctx.require(mk > 0.0, "the crew has a build plan"):
 		return
-	var lbt := ctx.klass("LinkageBuildTimeline")
+	var lbt := ctx.klass("PalletRackBuildPlan")
 	ctx.note(str(lbt.call("summary", tl)) if lbt != null else "plan %.0f s" % mk)
 	var dir := Vector3(at.x, 0.0, at.z) - Vector3(ctx.player.global_position.x, 0.0, ctx.player.global_position.z)
 	dir = dir.normalized() if dir.length() > 0.5 else fwd
@@ -96,26 +95,25 @@ func run(ctx: TourContext) -> void:
 		t = mid
 		var orbit_a := float(PHASES.find(ph)) * 14.0 - 30.0
 		await ctx.orbit(look, 16.0, 6.0, orbit_a, orbit_a + 10.0, 1.2)
-		await ctx.shot("phase_%s" % str(ph[0]), true)
-		if str(ph[0]) == "deploy" and not shot:
-			shot = true
-			await ctx.hero(true)
-	await _sweep(ctx, m, h0, t, mk + 20.0, 2.0)
-	if not shot:
-		await ctx.hero(true)
+		await ctx.shot("phase_%d" % PHASES.find(ph), true)
+	# The unfold: the real structure opens about its own middle.
+	var dep := float(lbs.get("LINKAGE_DEPLOY_S")) if lbs != null else 120.0
+	ctx.caption("…and the StarShade opens", 3.0)
+	await _sweep(ctx, m, h0, t, mk + dep * 0.5, 2.0)
+	await ctx.shot("phase_deploy", true)
+	await _sweep(ctx, m, h0, mk + dep * 0.5, mk + dep + 10.0, 1.6)
+	await ctx.hero(true)
 	ctx.caption(str(site.call("progress_line")), 2.5)
 	await ctx.orbit(look, 22.0, 9.0, 60.0, 100.0, 3.0)
 
 
-## Middle of the earliest job of a kind (long enough to see) that is still
-## to come after build time `after` (s), or NAN. Jobs of every kind overlap —
-## the first place starts before the last drill — so "first of its kind" can
-## lie behind the camera's clock.
-func _phase_mid(tl: Dictionary, kind: String, after: float) -> float:
+## Middle of the earliest job whose label matches `pattern` (long enough to
+## see) that is still to come after build time `after` (s), or NAN.
+func _phase_mid(tl: Dictionary, pattern: String, after: float) -> float:
 	var best := NAN
 	for j in tl.get("jobs", []):
 		var jd: Dictionary = j
-		if str(jd.get("kind", "")) != kind or float(jd["t1"]) - float(jd["t0"]) <= 1.0:
+		if not str(jd.get("label", "")).match(pattern) or float(jd["t1"]) - float(jd["t0"]) <= 1.0:
 			continue
 		var mid := (float(jd["t0"]) + float(jd["t1"])) * 0.5
 		if mid > after + 1.0 and (is_nan(best) or mid < best):
@@ -136,7 +134,7 @@ func _sweep(ctx: TourContext, m: Node, h0: float, t0: float, t1: float, seconds:
 
 
 func teardown(ctx: TourContext) -> void:
-	var lbs := ctx.klass("LinkageBuildSite")
+	var lbs := ctx.klass("PalletRackBuildSite")
 	if not _pid.is_empty():
 		if lbs != null:
 			lbs.call("clear_rehearsal", ctx.main, _pid)

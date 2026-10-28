@@ -405,9 +405,9 @@ func _create_project(iid: String, item: Dictionary, action: String, roster: int)
 		"crew_n": clampi(roster, PalletRackBuildSite.MIN_CREW if model_id == PalletRackBuilder.MODEL_ID
 			else MIN_PIECE_CREW, PalletRackBuildSite.MAX_LABOUR_LANES)}
 	var patch := {"build_state": {"phase": "", "ghost": 0.14}, PalletRackBuildSite.RECORD_KEY: run}
-	# A Linkage Lab frame comes down FOLDED: the crew stows it first (the
-	# fold sweep), then takes it apart piece by piece — its pieces are cut at
-	# the stowed fold, the same pose a deploy puts it together in.
+	# A Linkage Lab frame comes down from its build pose: the crew folds it
+	# there first (the fold sweep), then takes it apart piece by piece — its
+	# pieces are cut at that pose, the one a deploy puts it together in.
 	if model_id == LinkageStructureBuilder.MODEL_ID and not deploy:
 		var prop := PlacedPropRuntime.find_by_prop_id(_main, pid_prop)
 		var dep: Node = prop.get_node_or_null("LinkageDeployRuntime") if prop != null else null
@@ -418,11 +418,14 @@ func _create_project(iid: String, item: Dictionary, action: String, roster: int)
 	return pid
 
 
-## Fold a deployed linkage frame, then hand it to the build site.
+## Fold a deployed linkage frame to the crew's build pose, then hand it to
+## the build site.
 func _stow_then_stamp(dep: Node, pid_prop: String, patch: Dictionary) -> void:
-	if not bool(dep.call("is_animating")):
-		dep.call("toggle_deploy")
-	elif float(dep.get("_rate")) > 0.0:
+	var b := dep.get_parent().get_node_or_null("ModelRoot") as LinkageStructureBuilder \
+		if dep.get_parent() != null else null
+	if b != null:
+		dep.call("fold_to", LinkageStructureBuilder.crew_pose_angle(b.params))
+	elif not bool(dep.call("is_animating")) or float(dep.get("_rate")) > 0.0:
 		dep.call("toggle_deploy")
 	await dep.deploy_state_changed
 	if _main == null or not is_instance_valid(_main) or not _main.is_inside_tree():

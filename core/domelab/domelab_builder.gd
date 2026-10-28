@@ -11,7 +11,11 @@ extends RefCounted
 ## opts: explode (0..1, parts move out along the surface normal), assembly
 ## (0..1, rings appear from the base up), highlight (a strut class, hub type,
 ## panel type, slat class or rib label), record (keep pick data on the node),
-## ghost_highlight (the placement ghost's tint).
+## ghost_highlight (the placement ghost's tint), pieces (one MeshInstance3D
+## per part a crew carries — a strut, a hub, a rib length, a slat, a panel
+## with its pane; a folded plate WITH its flanges and bolts, since a plate
+## system has no struts or hubs — tagged for StructureUnits instead of the
+## one "Mesh").
 
 const MODEL_ID := "domelab_structure"
 const EXPLODE_M := 0.35
@@ -36,6 +40,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 	var highlight := str(opts.get("highlight", ""))
 	var record := bool(opts.get("record", false))
 	var ghost := bool(opts.get("ghost_highlight", false))
+	var pieces := bool(opts.get("pieces", false))
 	var geo: Dictionary = d["geo"]
 	var verts: PackedVector3Array = geo["verts"]
 	var normals: PackedVector3Array = geo["normals"]
@@ -58,14 +63,28 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 
 	var sts := {}   # material key → SurfaceTool
 	var picks: Array = []
-	var any := {}
+	# Pieces mode: the part being drawn collects in pc and is committed as
+	# its own node by flush.
+	var pc := {"sts": {}, "accs": {}}
+	var piece_nodes: Array = []
 	var add_prism := func(key: String, a: Vector3, b: Vector3, across: Vector3, w: float, t: float, round_: bool) -> void:
-		if not sts.has(key):
+		var into: Dictionary = pc["sts"] if pieces else sts
+		if not into.has(key):
 			var st0 := SurfaceTool.new()
 			st0.begin(Mesh.PRIMITIVE_TRIANGLES)
-			sts[key] = st0
-		_prism(sts[key], a, b, across, w, t, round_)
-		any[key] = true
+			into[key] = st0
+		_prism(into[key], a, b, across, w, t, round_)
+	var flush := func(kind: String, words: Array, order: int) -> void:
+		if not pieces:
+			return
+		var pm := _commit(pc["sts"], pc["accs"], d, ghost)
+		pc["sts"] = {}
+		pc["accs"] = {}
+		if pm.get_surface_count() > 0:
+			var pmi := MeshInstance3D.new()
+			pmi.mesh = pm
+			StructureUnits.tag_piece(pmi, kind, words, order)
+			piece_nodes.append(pmi)
 
 	# --- struts -------------------------------------------------------------
 	var strut_mat_key := "strut"
@@ -103,6 +122,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 		if record:
 			picks.append({"kind": "strut", "id": str(st["label"]), "a": pa, "b": pb, "r": maxf(w, t) * 0.6,
 				"edge": int(st["edge"])})
+		flush.call("", ["a strut", "struts"], 0)
 	# --- helix ribs ---------------------------------------------------------
 	for rb in d["ribs"]:
 		var fam := str(rb["fam"])
@@ -132,6 +152,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 					picks.append({"kind": "rib", "id": str(rb.get("label", "")), "a": prev + off, "b": p + off,
 						"r": float(mat.get("w_mm", 90.0)) * 0.0006, "edge": int(sg["edge"])})
 				prev = p
+			flush.call("", ["a rib length", "rib lengths"], 0)
 	# --- nexors -------------------------------------------------------------
 	var nx: Dictionary = d["nexorade"]
 	if not nx.is_empty():
@@ -150,6 +171,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 			if record:
 				picks.append({"kind": "slat", "id": str(n.get("label", "")), "a": (n["p0"] as Vector3) + off,
 					"b": (n["p1"] as Vector3) + off, "r": w * 0.6, "edge": int(n["edge"])})
+			flush.call("", ["a slat", "slats"], 0)
 	# --- hubs ---------------------------------------------------------------
 	if sys != "plate":
 		var hub: Dictionary = s["hub"]
@@ -189,6 +211,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 					r = maxf(r * 4.0, strut_w * 0.6)
 			if record:
 				picks.append({"kind": "hub", "id": str(h["type"]), "c": p, "r": maxf(r, 0.04), "vertex": vid})
+			flush.call("parts", ["a hub", "hubs"], 0)
 	# --- panels -------------------------------------------------------------
 	# Faces go into packed arrays (accs), not SurfaceTool: a folded-plate
 	# tower is a few hundred thousand vertices and SurfaceTool's per-vertex
@@ -214,7 +237,8 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 			var nm := fr.basis.z.normalized()
 			var off: Vector3 = nm * (EXPLODE_M * radius * 0.6 * explode) + lift.call(k)
 			var key := "hl" if str(p.get("type", "")) == highlight else "panel"
-			var acc := _acc(accs, key)
+			var pac: Dictionary = pc["accs"] if pieces else accs
+			var acc := _acc(pac, key)
 			var tris := PackedVector3Array()
 			var oculus: PackedVector2Array = p.get("oculus", PackedVector2Array())
 			var z_under := 0.0
@@ -233,15 +257,17 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 				z_under = -sink - t_cov * 0.5
 			var pane: PackedVector2Array = p.get("pane", PackedVector2Array())
 			if not pane.is_empty():
-				_plate_slab(_acc(accs, "glass"), pane, PackedVector2Array(), fr, z_under - 0.5, z_under - 0.5 - pane_t, off)
+				_plate_slab(_acc(pac, "glass"), pane, PackedVector2Array(), fr, z_under - 0.5, z_under - 0.5 - pane_t, off)
 			if record:
 				picks.append({"kind": "panel", "id": str(p.get("type", "")), "tris": tris, "label": str(p.get("label", ""))})
+			# A plate system's plates ARE the structure (order 0, bottom up);
+			# a covering goes on once the frame stands.
+			flush.call("sheets", ["a plate", "plates"] if plate else ["a panel", "panels"], 0 if plate else 1)
 		# Bolts through each flange pair (hidden while the plates are pulled apart).
 		if plate and bool(s["face"]["bolts"]) and explode < 0.01:
 			var bolt := DomeLabMaterials.bolt(str(s["hub"]["bolt"]))
 			var bd := float(bolt["d_mm"]) * 0.001
 			var reach := (float(pn.get("gap_mm", 0.0)) * 0.5 + t_mm) * 0.001
-			var acc := _acc(accs, "hub")
 			for bt in pn.get("bolts3d", []):
 				var e: Dictionary = d["edges"][int(bt["edge"])]
 				var kk := minf(shown.call(int(e["a"])), shown.call(int(e["b"])))
@@ -250,21 +276,44 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 				var c: Vector3 = bt["p"]
 				var ax: Vector3 = bt["axis"]
 				var side := ax.cross(Vector3.UP if absf(ax.y) < 0.9 else Vector3.RIGHT).normalized()
+				# Pieces mode: each bolt its own small piece, which StructureUnits
+				# hands to the plate it is nearest.
+				var acc := _acc(pc["accs"] if pieces else accs, "hub")
 				_hex(acc, c + ax * reach, c + ax * (reach + bd * 0.65), side, bd * 1.7)
 				_hex(acc, c - ax * reach, c - ax * (reach + bd * 0.85), side, bd * 1.6)
 				_hex(acc, c - ax * (reach + bd * 0.85), c - ax * (reach + bd * 1.25), side, bd * 0.95)
+				flush.call("", ["a bolt", "bolts"], 0)
 	# --- commit -------------------------------------------------------------
+	if pieces:
+		for i in piece_nodes.size():
+			var pn_i: MeshInstance3D = piece_nodes[i]
+			pn_i.name = "P%d" % i
+			root.add_child(pn_i)
+	else:
+		var mi := MeshInstance3D.new()
+		mi.name = "Mesh"
+		mi.mesh = _commit(sts, accs, d, ghost)
+		root.add_child(mi)
+	if record:
+		root.set_meta("picks", picks)
+	var st_: Dictionary = d["stats"]
+	root.set_meta("size_m", Vector3(float(st_["radius_max_m"]) * 2.0, float(st_["height_m"]), float(st_["radius_max_m"]) * 2.0))
+	return root
+
+
+## The SurfaceTools (prisms) and packed accumulators (faces) of one build
+## as a mesh, a surface per material.
+static func _commit(sts: Dictionary, accs: Dictionary, d: Dictionary, ghost: bool) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	var order := ["strut", "slat", "hub", "panel", "glass", "hl"]
-	for key in order:
+	for key in ["strut", "slat", "hub", "panel", "glass", "hl"]:
 		var verts_k := PackedVector3Array()
 		var norms_k := PackedVector3Array()
-		if sts.has(key) and any.has(key):
+		if sts.has(key):
 			var st: SurfaceTool = sts[key]
 			# ⚠ Never generate_normals() here: SurfaceTool's default smooth group
 			# merges every vertex by position, so a dome's flat panels and the
 			# prisms' crisp edges rendered as one rounded "bubble". Every emitter
-			# below writes the normal it means.
+			# writes the normal it means.
 			var arrays := st.commit_to_arrays()
 			if arrays[Mesh.ARRAY_VERTEX] != null:
 				verts_k.append_array(arrays[Mesh.ARRAY_VERTEX])
@@ -280,15 +329,7 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 		arr[Mesh.ARRAY_NORMAL] = norms_k
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, _material_for(key, d, ghost))
-	var mi := MeshInstance3D.new()
-	mi.name = "Mesh"
-	mi.mesh = mesh
-	root.add_child(mi)
-	if record:
-		root.set_meta("picks", picks)
-	var st_: Dictionary = d["stats"]
-	root.set_meta("size_m", Vector3(float(st_["radius_max_m"]) * 2.0, float(st_["height_m"]), float(st_["radius_max_m"]) * 2.0))
-	return root
+	return mesh
 
 
 # ---------------------------------------------------------------------------

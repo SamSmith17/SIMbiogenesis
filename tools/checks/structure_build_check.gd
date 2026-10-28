@@ -2,7 +2,7 @@ extends RefCounted
 ## Every kind of structure put up and taken down by the crew, piece by piece
 ## (sandbox, Walton):
 ##   tools\harness.ps1 -World walton -RunScript res://tools/checks/structure_build_check.gd -Label structure_build -Timeout 3000
-## Packed kits of a geodesic dome, a toroid, a Linkage Lab frame, a gantry, a
+## Packed kits of a geodesic dome, a folded-plate helical zome, a toroid, a Linkage Lab frame, a gantry, a
 ## flat-pack daybed and a shiftpod (a GLB) on open ground by the festival
 ## field, each handed to the nearest crew (queue_item). For every one, while
 ## the crew builds: the shared build site draws it (PalletRackBuildSite over
@@ -90,6 +90,10 @@ func _kits() -> Dictionary:
 	var out := {}
 	var dome: Dictionary = DomeLabPresets.builtins()[0]
 	out["dome"] = {"model_id": DomeLabBuilder.MODEL_ID, "extra": {"domelab_spec": dome.get("spec", dome)}}
+	# A folded-plate helical zome: plates only, no struts or hubs.
+	for z in DomeLabPresets.builtins():
+		if str(z.get("id", "")) == "helical_rd":
+			out["zome"] = {"model_id": DomeLabBuilder.MODEL_ID, "extra": {"domelab_spec": z.get("spec", z)}}
 	var tor: Dictionary = ToroidLabPresets.builtins()[0]
 	out["toroid"] = {"model_id": ToroidLabBuilder.MODEL_ID, "extra": {"toroid_spec": tor.get("spec", tor)}}
 	var cfg: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/linkage/presets/starshade_default.json"))
@@ -262,7 +266,7 @@ func _phase(main: Node, tree: SceneTree, sd: SiteDeployDirector, placed: Diction
 				s["shot"] = true
 				var keep_ts := float(main.get("time_scale"))
 				main.set("time_scale", 0.001)
-				_look_at_site(main, placed[label]["at"], 11.0 if label in ["toroid", "dome", "linkage"] else 6.0)
+				_look_at_site(main, placed[label]["at"], 11.0 if label in ["toroid", "dome", "zome", "linkage"] else 6.0)
 				await tree.create_timer(1.2).timeout
 				await _shot(main, "%s_%s_half" % [label, word])
 				main.set("time_scale", keep_ts)
@@ -292,6 +296,6 @@ func _phase(main: Node, tree: SceneTree, sd: SiteDeployDirector, placed: Diction
 			_ok(bool(rec.get("packed", false)) and prop != null and not bool(prop.get_meta("under_construction", false)),
 				"%s: packed back into its crate" % label)
 	for label in placed:
-		_look_at_site(main, placed[label]["at"], 11.0 if label in ["toroid", "dome", "linkage"] else 6.0)
+		_look_at_site(main, placed[label]["at"], 11.0 if label in ["toroid", "dome", "zome", "linkage"] else 6.0)
 		await tree.create_timer(0.8).timeout
 		await _shot(main, "%s_after_%s" % [label, word])

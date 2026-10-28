@@ -61,7 +61,7 @@ const TORUS_DEFAULTS := {"major_r_m": 2.205, "minor_r_m": 1.825, "centre_h_m": 1
 	"segments": 24, "inner_top_deg": -1.0, "rotation_deg": 0.0}
 const TUBE_DEFAULTS := {"material": "steel_1_065"}
 const RIB_DEFAULTS := {"pieces": 2, "inner_every": 2, "inner_offset": 1, "inner_skip": [],
-	"inner_posts": true, "feet": false}
+	"inner_posts": false, "feet": false}
 const RING_DEFAULTS := {"ground_out": true, "ground_in": true, "inner_top": true, "crown": true,
 	"crown_deg": 77.0, "extra_deg": [], "piece_bays": 3}
 const BRACE_DEFAULTS := {"from": 0, "to": 1, "pattern": "x", "member": "cable", "cable": "cable_18",
