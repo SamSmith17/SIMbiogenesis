@@ -5244,6 +5244,8 @@ func _build_compound_section(item: Dictionary) -> void:
 	_readonly_field("Child nodes", str(int(specs.get("child_count", 0))))
 	_readonly_field("Input ports", str(int(specs.get("port_in_count", 0))))
 	_readonly_field("Output ports", str(int(specs.get("port_out_count", 0))))
+	if kind == "array" or kind == "pv_design":
+		_build_array_layout_row(item)
 	if kind == "array":
 		_readonly_field("Kind", "Solar Array")
 		_readonly_field("Topology", str(specs.get("array_topology", "-")))
@@ -5273,7 +5275,7 @@ func _build_compound_section(item: Dictionary) -> void:
 		or not str(specs.get("starshade_tag", "")).is_empty() \
 		or (bool(specs.get("node_banner", false)) and not str(specs.get("model_id", "")).is_empty())
 	var enter_label := "Expand"
-	if kind == "array":
+	if kind == "array" or kind == "pv_design":
 		enter_label = "Expand → Panels"
 	elif kind == "battery_bank" or bool(specs.get("display_as_battery", false)) \
 			or def_id.contains("battery_bank"):
@@ -5753,11 +5755,39 @@ func _remove_exposed_port(compound_id: String, handle_id: String) -> void:
 	_notify_boundary_edit(compound_id)
 
 
+## Show the panels inside the array, or put them back where they sit on the
+## rack after they were dragged about (the inside is laid out like the rack).
+func _build_array_layout_row(item: Dictionary) -> void:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var inside := str(specs.get("array_interior", "panels" if str(specs.get("compound_kind", "")) == "pv_design" else ""))
+	if inside == "strings":
+		_readonly_field("Inside", "one node per string (over %d panels)" % GraphSolarArrays.MATERIALIZE_MAX_PANELS)
+	var row := _row_container()
+	var hbox: HBoxContainer = row.get_child(0)
+	var btn := Button.new()
+	btn.text = "Reset panels to layout"
+	btn.tooltip_text = "Put the panels inside this array back where they sit on the rack"
+	btn.focus_mode = Control.FOCUS_NONE
+	btn.flat = true
+	btn.add_theme_color_override("font_color", C_PRIMARY)
+	var arr_id := str(item.get("id", ""))
+	btn.pressed.connect(func() -> void:
+		var gv := _find_owner_graph_view()
+		if gv != null and gv.has_method("rebuild_array_interior"):
+			gv.call("rebuild_array_interior", arr_id)
+			_toast("Panels back on the rack layout")
+	)
+	hbox.add_child(btn)
+	_form_vbox.add_child(row)
+
+
 func _build_array_module_dims_editor(item: Dictionary) -> void:
-	## Leaf OSM-style arrays (no nested panel children) expose module geometry so
-	## the player can re-tile by area. Nested arrays keep the bulk panel editor.
+	## Imported / placed arrays (their panels generated from these numbers)
+	## expose module geometry so the player can re-tile by area. A grouped
+	## array keeps the bulk panel editor.
 	var panel_ids := _collect_compound_panel_ids(item)
-	if not panel_ids.is_empty():
+	if not panel_ids.is_empty() \
+			and not bool((item.get("specs", {}) as Dictionary).get("array_generated", false)):
 		return
 	_section("Module Dimensions (Auto-tile)")
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
@@ -5853,6 +5883,10 @@ func _retile_array_from_dims(item: Dictionary, dims: Dictionary) -> void:
 		float(equiv.get("array_equiv_imp", 0.0)),
 	]
 	_model.update_item(item_id, {"specs": sp})
+	# The panels inside are generated from these numbers: rebuild them.
+	var gv := _find_owner_graph_view()
+	if gv != null and gv.has_method("rebuild_array_interior"):
+		gv.call("rebuild_array_interior", item_id)
 	_toast("Retiled array: %s @ %.0f W" % [UiText.count(count, "panel"), float(spec["panel_watts"])])
 	_rebuild_current_item()
 
@@ -5973,6 +6007,10 @@ func _apply_panel_template_to_array(compound_item: Dictionary, template: Diction
 		var panel_isc: float = float(template.get("isc", 0.0))
 		var panel_imp: float = float(template.get("imp", 0.0))
 		csp["array_panel_units"] = panel_units
+		# A generated array rebuilds its panels from its own module numbers.
+		if bool(csp.get("array_generated", false)):
+			for mk in ["wmp", "voc", "vmp", "isc", "imp"]:
+				csp[mk] = float(template.get(mk, csp.get(mk, 0.0)))
 		csp["array_equiv_wmp"] = panel_wmp * float(panel_units)
 		csp["array_equiv_vmp"] = panel_vmp * float(series)
 		csp["array_equiv_voc"] = panel_voc * float(series)

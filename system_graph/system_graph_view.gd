@@ -5105,6 +5105,8 @@ func sync_site_from_prop(prop_id: String) -> void:
 				specs["azimuth_deg"] = float(o["azimuth_deg"])
 				specs["mount_style"] = str(pspec["mount_style"])
 				patch["specs"] = specs
+				model.update_item(str(item.get("id", "")), {"specs": specs})
+				GraphSolarArrays.propagate_state(model, str(item.get("id", "")))
 		# Siphon start/break track the 3D turbine via offsets → absolutes.
 		if str(specs.get("role", "")) == "siphon_hydro":
 			specs["module_elev_m"] = world.y
@@ -5163,6 +5165,7 @@ func resolve_site_elevations_after_load() -> void:
 	reconcile_world_bindings()
 	_backfill_site_from_world()
 	_refresh_item_elevations()
+	_upgrade_designed_array_layouts()
 	var mgr := _get_conduit_manager()
 	if mgr != null:
 		if mgr.has_method("invalidate_obstacle_cache"):
@@ -6210,12 +6213,31 @@ func bind_pv_array_prop(prop_id: String) -> String:
 	sp["tilt_deg"] = float(o["tilt_deg"])
 	sp["azimuth_deg"] = float(o["azimuth_deg"])
 	sp["mount_style"] = str(spec["mount_style"])
+	# The graph array draws the rack's own cols × rows.
+	var relayout := int(sp.get("array_cols", 0)) != int(spec["cols"]) \
+		or int(sp.get("array_rows", 0)) != int(spec["rows"])
+	sp["array_cols"] = int(spec["cols"])
+	sp["array_rows"] = int(spec["rows"])
+	sp["panel_w_m"] = float(spec["panel_w_m"])
+	sp["panel_h_m"] = float(spec["panel_h_m"])
 	var soi := get_node_or_null("/root/SoiService")
 	var center := Vector3.ZERO
 	if soi != null and soi.has_method("world_center"):
 		center = soi.call("world_center")
 	var site := GraphSiteLayout.world_xz_to_site(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))), center)
 	model.update_item(iid, {"specs": sp, "site_x_m": site.x, "site_z_m": site.y})
+	if relayout:
+		var was := _history_suppress
+		_history_suppress = true
+		if bool(sp.get("array_generated", false)):
+			_refresh_generated_array(iid)
+		else:
+			var sp3 := sp.duplicate(true)
+			sp3["array_cells"] = GraphSolarArrays.cells_for_specs(sp)
+			model.update_item(iid, {"specs": sp3})
+			_fit_array_card(iid)
+		_history_suppress = was
+	GraphSolarArrays.propagate_state(model, iid)
 	if str(rec.get("graph_item_id", "")) != iid:
 		PlacedPropService.update_prop_record(main, prop_id, {"graph_item_id": iid}, false)
 	_sync_solar_ui_from_graph()
@@ -7166,6 +7188,7 @@ func add_imported_solar_panels(count: int, watts: float, label: String = "OSM So
 	var child_scope_id := "scope_%s" % array_id
 	model.ensure_scope(child_scope_id, _active_scope_id, array_id, label)
 	model.update_item(array_id, {"child_scope_id": child_scope_id})
+	_materialize_array(array_id)
 	_history_suppress = false
 
 	var auto_wire := bool(opts.get("auto_wire", true))
@@ -7236,6 +7259,8 @@ func set_item_packed_3d(item_id: String, packed: bool) -> bool:
 	else:
 		specs.erase("packed_3d")
 	model.update_item(item_id, {"specs": specs})
+	GraphSolarArrays.propagate_state(model, item_id)
+	_sync_solar_ui_from_graph()
 	_schedule_graph_autosave()
 	if _graph_canvas != null:
 		_graph_canvas.queue_redraw()
@@ -7261,6 +7286,7 @@ func set_imported_array_stowed(tag: String, stowed: bool) -> bool:
 		var summary := str(specs0.get("summary", "")).trim_prefix(_STOWED_PREFIX)
 		specs0["summary"] = (_STOWED_PREFIX + summary) if stowed else summary
 		model.update_item(str((it as Dictionary).get("id", "")), {"specs": specs0})
+		GraphSolarArrays.propagate_state(model, str((it as Dictionary).get("id", "")))
 		changed = true
 	if changed:
 		_sync_solar_ui_from_graph()
@@ -7498,6 +7524,7 @@ func _apply_array_controller_choice(array_id: String, controller_id: String,
 	]
 	_history_suppress = true
 	model.update_item(array_id, {"specs": sp})
+	_refresh_generated_array(array_id)
 	SolarArrayIntelligence.wire_array_to_controller(model, array_id, ctrl_id, _active_scope_id)
 	_history_suppress = false
 	_push_history()
@@ -10938,6 +10965,9 @@ func _make_special_compound(kind: String, title: String, _allowed_types: Array[S
 		extra_specs = _compute_array_equivalent_from_selection(selected)
 	var new_compound_id := _group_selected_items(true, kind, title, extra_specs)
 	if kind == "array" and not new_compound_id.is_empty():
+		_history_suppress = true
+		_materialize_array(new_compound_id)
+		_history_suppress = false
 		var comp := model.get_item(new_compound_id)
 		if not comp.is_empty():
 			var sp := (comp.get("specs", {}) as Dictionary).duplicate(true)
@@ -11427,7 +11457,7 @@ func _array_unit_equivalent(item: Dictionary) -> Dictionary:
 		var imp := float(sp.get("imp", wmp / maxf(vmp, 0.001)))
 		var isc := float(sp.get("isc", imp))
 		return {"valid": true, "series": 1, "parallel": 1, "panel_units": 1, "wmp": wmp, "vmp": vmp, "voc": voc, "imp": imp, "isc": isc}
-	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
+	if ty == "compound" and GraphSolarArrays.kind(item) == "array":
 		return {
 			"valid": true,
 			"series": int(sp.get("array_series", 1)),
@@ -12031,34 +12061,119 @@ func _group_selected_items(allow_virtual: bool = false, compound_kind: String = 
 func _sync_array_compound_layouts() -> void:
 	if model == null:
 		return
-	for item: Dictionary in model.items:
-		if str(item.get("type", "")) != "compound":
-			continue
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		if str(specs.get("compound_kind", "")) != "array":
+	for item: Dictionary in model.items.duplicate():
+		if not GraphSolarArrays.is_solar_array(item):
 			continue
 		var item_id := str(item.get("id", ""))
 		if item_id.is_empty():
 			continue
-		var want_sz := GraphArrayLayout.compound_size(specs)
+		# A hollow array (saved before arrays had their panels inside) gets them
+		# now: one-off, idempotent (array_interior marks it done).
+		if GraphSolarArrays.is_aggregate_array(item):
+			GraphSolarArrays.materialize(model, item_id)
+		var it2 := model.get_item(item_id)
+		var specs: Dictionary = it2.get("specs", {}) as Dictionary
 		var updates: Dictionary = {}
-		if absf(float(item.get("width", 0.0)) - want_sz.x) > 1.0 \
-				or absf(float(item.get("height", 0.0)) - want_sz.y) > 1.0:
+		if not (specs.get("array_cells") is Dictionary) and GraphSolarArrays.kind(it2) == "array":
+			var sp2 := specs.duplicate(true)
+			sp2["array_cells"] = GraphSolarArrays.cells_for_specs(specs)
+			updates["specs"] = sp2
+			specs = sp2
+		var want_sz := GraphArrayLayout.compound_size(specs)
+		if absf(float(it2.get("width", 0.0)) - want_sz.x) > 1.0 \
+				or absf(float(it2.get("height", 0.0)) - want_sz.y) > 1.0:
+			updates["x"] = float(it2.get("x", 0.0)) + (float(it2.get("width", want_sz.x)) - want_sz.x) * 0.5
+			updates["y"] = float(it2.get("y", 0.0)) + (float(it2.get("height", want_sz.y)) - want_sz.y) * 0.5
 			updates["width"] = want_sz.x
 			updates["height"] = want_sz.y
-		var handles: Array = item.get("handles", []) as Array
-		var needs_handles := handles.is_empty()
-		if not needs_handles:
-			for h: Dictionary in handles:
-				var hid := str(h.get("id", ""))
-				if hid != "positive" and hid != "negative":
-					needs_handles = true
-					break
+		var handles: Array = it2.get("handles", []) as Array
+		var needs_handles := handles.size() != 2
+		for h: Dictionary in handles:
+			var hid := str(h.get("id", ""))
+			if hid != "positive" and hid != "negative":
+				needs_handles = true
+				break
+			# + on the left (the old array bus had it on the right).
+			if hid == "positive" and float(h.get("rx", 0.33)) > 0.5:
+				needs_handles = true
 		if needs_handles:
 			updates["handles"] = GraphArrayLayout.default_handles()
-		if updates.is_empty():
-			continue
-		model.update_item(item_id, updates)
+		if not updates.is_empty():
+			model.update_item(item_id, updates)
+
+
+## Give an "array" its panels (GraphSolarArrays.materialize) and fit its card
+## to its layout. Callers hold _history_suppress.
+func _materialize_array(array_id: String) -> void:
+	if model != null and GraphSolarArrays.materialize(model, array_id):
+		_fit_array_card(array_id)
+
+
+## Rebuild a generated array's inside after its strings or layout changed.
+func _refresh_generated_array(array_id: String) -> void:
+	if model != null and GraphSolarArrays.rebuild_generated(model, array_id):
+		_fit_array_card(array_id)
+
+
+## The array card framed round its layout, kept centred where it was.
+func _fit_array_card(array_id: String) -> void:
+	var it := model.get_item(array_id)
+	if it.is_empty():
+		return
+	var sz := GraphArrayLayout.compound_size(it.get("specs", {}) as Dictionary)
+	var cx := float(it.get("x", 0.0)) + float(it.get("width", sz.x)) * 0.5
+	var cy := float(it.get("y", 0.0)) + float(it.get("height", sz.y)) * 0.5
+	model.update_item(array_id, {"width": sz.x, "height": sz.y, "x": cx - sz.x * 0.5, "y": cy - sz.y * 0.5})
+
+
+## Inspector: rebuild an imported array's panels from its specs (after a
+## re-tile), or put a grouped / designed array's panels back on their rack
+## positions. One undo step.
+func rebuild_array_interior(array_id: String) -> void:
+	var it := model.get_item(array_id) if model != null else {}
+	if it.is_empty() or not GraphSolarArrays.is_solar_array(it):
+		return
+	_history_suppress = true
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	if GraphSolarArrays.kind(it) == "array" and (bool(sp.get("array_generated", false))
+			or GraphSolarArrays.is_aggregate_array(it)):
+		_refresh_generated_array(array_id)
+	elif sp.get("array_cells") is Dictionary:
+		GraphSolarArrays.relayout_children(model, array_id, sp["array_cells"] as Dictionary)
+	_history_suppress = false
+	_push_history()
+	_queue_electrical_fault_check()
+	_sync_solar_ui_from_graph()
+	_schedule_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+
+
+## Designed arrays seeded before the layout picture existed: give each its
+## picture and put its panels on their rack positions (strings and wires kept).
+func _upgrade_designed_array_layouts() -> void:
+	if model == null:
+		return
+	var need := false
+	for it in model.items:
+		var d: Dictionary = it
+		if GraphSolarArrays.kind(d) == GraphPvLabArrays.KIND \
+				and not ((d.get("specs", {}) as Dictionary).get("array_cells") is Dictionary):
+			need = true
+			break
+	if not need:
+		return
+	var changed := false
+	_history_suppress = true
+	for a in _pvlab_arrays():
+		for cid in (a as Dictionary)["comps"] as Array:
+			var ci := model.get_item(str(cid))
+			if ci.is_empty() or ((ci.get("specs", {}) as Dictionary).get("array_cells") is Dictionary):
+				continue
+			changed = GraphPvLabArrays.apply_layout(model, str(cid), (a as Dictionary)["design"]) or changed
+	_history_suppress = false
+	if changed:
+		_schedule_graph_autosave()
 
 
 ## Battery-bank supernodes draw as one tall SOC cell. Legacy StarShade banks
@@ -13799,6 +13914,12 @@ func invalidate_sim_render_all() -> void:
 
 
 func _process(delta: float) -> void:
+	PerfMonitor.begin("gv_process")
+	_process_frame(delta)
+	PerfMonitor.end("gv_process")
+
+
+func _process_frame(delta: float) -> void:
 	# Water/catchment/siphon/culvert physics must progress even while the 2D
 	# graph screen is closed — rain fills ponds and the siphon drains them
 	# ambiently, the same way weather/solar keep running with no UI open.
@@ -15066,18 +15187,29 @@ func _flush_sim_bulk_update(force_telemetry: bool = true) -> void:
 	if not _pending_canvas_redraw and not _pending_telemetry_refresh \
 			and not _pending_library_populate:
 		return
+	# Sim writes redraw on the canvas's own cadence (request_sim_redraw), not
+	# every frame the clock runs.
 	if _pending_canvas_redraw and _graph_canvas != null:
-		_graph_canvas.call("queue_redraw")
+		if _graph_canvas.has_method("request_sim_redraw"):
+			_graph_canvas.call("request_sim_redraw")
+		else:
+			_graph_canvas.call("queue_redraw")
 	_pending_canvas_redraw = false
 	if _pending_telemetry_refresh:
 		_pending_library_populate = true
 		if force_telemetry:
+			PerfMonitor.begin("gv_flush_tel")
 			_refresh_telemetry()
+			PerfMonitor.end("gv_flush_tel")
+			PerfMonitor.begin("gv_flush_solar")
 			_sync_solar_ui_from_graph()
+			PerfMonitor.end("gv_flush_solar")
 			_sync_graph_controller_ac_fault()
 			_pending_telemetry_refresh = false
 	if force_telemetry and _pending_library_populate:
+		PerfMonitor.begin("gv_flush_inv")
 		_queue_world_inventory()
+		PerfMonitor.end("gv_flush_inv")
 		_pending_library_populate = false
 
 
@@ -15254,7 +15386,7 @@ func _refresh_telemetry() -> void:
 			"panel":
 				cost_panels += cost
 			"compound":
-				if str(specs.get("compound_kind", "")) == "array":
+				if GraphSolarArrays.is_aggregate_array(item):
 					cost_panels += cost
 
 			"battery", "smartbattery":
@@ -15352,14 +15484,34 @@ func _refresh_telemetry() -> void:
 
 
 ## Public API for TimelineUI Needs strip / challenges.
+## Asked for by the dashboard (5 Hz), the closure refresh and the timeline
+## needs strip, often in the same frame; ~3 ms a compute on Mount Vernon. A
+## result younger than CLOSURE_MEMO_MS at the same clock instant is reused
+## (a copy). A player edit (user_rev) always recomputes.
+const CLOSURE_MEMO_MS := 200
+var _closure_memo: Dictionary = {}
+var _closure_memo_ms := -100000
+var _closure_memo_key := ""
+
+
 func compute_closure_metrics() -> Dictionary:
 	var abs_h := _closure_abs_hours()
+	# The instant to the thousandth of an hour (3.6 sim-s): a challenge bake
+	# stepping minutes inside one frame still gets a fresh compute per step.
+	var key := "%.3f|%d|%d" % [abs_h, int(model.user_rev) if model != null else -1,
+		int(model.struct_rev) if model != null else -1]
+	var now_ms := Time.get_ticks_msec()
+	if key == _closure_memo_key and now_ms - _closure_memo_ms < CLOSURE_MEMO_MS:
+		return _closure_memo.duplicate(true)
 	var etl: RefCounted = null
 	if is_instance_valid(_solar_ui):
 		var et: Variant = _solar_ui.get("energy_timeline")
 		if et is RefCounted:
 			etl = et as RefCounted
-	return _CLOSURE_METRICS_SCRIPT.compute(model, _resource_flow, etl, abs_h)
+	_closure_memo = _CLOSURE_METRICS_SCRIPT.compute(model, _resource_flow, etl, abs_h)
+	_closure_memo_ms = now_ms
+	_closure_memo_key = key
+	return _closure_memo.duplicate(true)
 
 
 ## Idempotent puzzle starter (habitat + tanks + SoI catchments). Called on challenge start.
@@ -15435,7 +15587,25 @@ func _controller_power_limits() -> Dictionary:
 	return {"pv_w": pv_w, "ac_w": ac_w}
 
 
+## The PV aggregate SolarUI reads is a function of the graph's wiring and the
+## player's edits only (sim writes move neither revision), so it is cached on
+## them: it was computed twice a second-long flush and on every SolarUI sync,
+## ~5 ms each on Mount Vernon. Callers get their own copy.
+var _agg_cache: Dictionary = {}
+var _agg_cache_key := ""
+
+
 func _collect_root_array_aggregate() -> Dictionary:
+	if model == null:
+		return _collect_root_array_aggregate_now()
+	var key := "%d|%d|%d|%s" % [model.struct_rev, model.user_rev, model.connections.size(), str(_sandbox_active)]
+	if key != _agg_cache_key:
+		_agg_cache = _collect_root_array_aggregate_now()
+		_agg_cache_key = key
+	return _agg_cache.duplicate(true)
+
+
+func _collect_root_array_aggregate_now() -> Dictionary:
 	var panel_wmp: float = 0.0
 	var panel_imp: float = 0.0
 	var panel_count: int = 0
@@ -15469,6 +15639,8 @@ func _collect_root_array_aggregate() -> Dictionary:
 		# rule as stowed linkage arrays below.
 		if bool(specs.get("packed_3d", false)):
 			continue
+		if itype == "panel" and GraphSolarArrays.panel_off(specs):
+			continue
 		if wired_only and itype == "panel":
 			var pid := str(item.get("id", ""))
 			if not (wired_ports.has(pid + "|positive") and wired_ports.has(pid + "|negative")):
@@ -15479,6 +15651,14 @@ func _collect_root_array_aggregate() -> Dictionary:
 			panel_count += int(specs.get("panel_count", 1.0))
 			# A designed array's panel carries its own plane (or tracker):
 			# the energy model sums each plane's light (SolarUI planes).
+			# A panel inside an imported / placed array steers the plane of array
+			# as its array did (the watt-weighted orientation below).
+			if specs.has("array_owner") and specs.has("azimuth_deg") and float(specs.get("wmp", 0.0)) > 0.0:
+				var aw0 := float(specs.get("wmp", 0.0))
+				var az0 := deg_to_rad(float(specs.get("azimuth_deg", 180.0)))
+				orient_vec += Vector2(sin(az0), cos(az0)) * aw0
+				orient_tilt_w += float(specs.get("tilt_deg", 0.0)) * aw0
+				orient_w += aw0
 			if specs.has("pvlab_tag"):
 				var pk := "%s|%s" % [str(specs.get("pvlab_tag", "")), str(specs.get("pvlab_group", 0))]
 				if not plane_by_key.has(pk):
@@ -15493,7 +15673,7 @@ func _collect_root_array_aggregate() -> Dictionary:
 					plane_by_key[pk] = pl
 				plane_by_key[pk]["wmp"] = float(plane_by_key[pk]["wmp"]) + float(specs.get("wmp", 0.0))
 				designed_wmp += float(specs.get("wmp", 0.0))
-		elif itype == "compound" and str(specs.get("compound_kind", "")) == "array":
+		elif itype == "compound" and GraphSolarArrays.is_aggregate_array(item):
 			# Stowed (folded) linkage structures keep their node/wiring but
 			# contribute no capacity until redeployed.
 			if bool(specs.get("array_stowed", false)):
@@ -15517,7 +15697,7 @@ func _collect_root_array_aggregate() -> Dictionary:
 	# actually feeding any controller right now — i.e. the number that would
 	# blow one up.
 	var panel_voc_max: float = 0.0
-	var flat_conns := GraphNesting.flat_connections(model)
+	var flat_conns := GraphNesting.flat_connections_cached(model)
 	for ctrl_item: Dictionary in GraphNesting.walk_items(model, "root"):
 		if str(ctrl_item.get("type", "")) != "controller":
 			continue
@@ -16568,11 +16748,16 @@ func _publish_live_circuits(entries: Array) -> void:
 			continue
 		var bank: Dictionary = ed.get("bank", {}) as Dictionary
 		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		# The strings are a function of the wiring (cached with the topology);
+		# only their Voc moves with the temperature.
+		var voc := 0.0
+		var t_c := _ambient_temp_c_for_voc()
+		for comp in _circuit_strings(cid, ed.get("sources", []) as Array):
+			voc = maxf(voc, PvElectrical.component_string_voc(comp as Array, model, t_c))
 		live[cid] = {
 			"bus_v": float(bank.get("bus_voltage", 0.0)),
 			"delivered_w": float(sp.get("dc_delivered_w", 0.0)),
-			"array_voc": PvElectrical.max_string_voc_for_controller_flat(
-				model, cid, _dc_flat_conns, _ambient_temp_c_for_voc()),
+			"array_voc": voc,
 		}
 		for sid in (ed.get("sources", []) as Array):
 			members[str(sid)] = cid
@@ -16584,12 +16769,29 @@ func _publish_live_circuits(entries: Array) -> void:
 	_graph_canvas.set("live_power_hint", hint)
 
 
+## A controller's PV strings (series components of its sources), cached until
+## the DC topology changes. Was a full flat-graph walk per controller per
+## throttle pass (10 Hz), most of the pass's ~5 ms.
+var _circuit_strings_cache: Dictionary = {}
+var _circuit_strings_key := ""
+
+
+func _circuit_strings(cid: String, sources: Array) -> Array:
+	if _circuit_strings_key != _dc_topo_key:
+		_circuit_strings_cache = {}
+		_circuit_strings_key = _dc_topo_key
+	if not _circuit_strings_cache.has(cid):
+		_circuit_strings_cache[cid] = PvElectrical.connected_components(sources, _dc_flat_conns, true) \
+			if not sources.is_empty() else []
+	return _circuit_strings_cache[cid]
+
+
 static func _pv_item_wmp(item: Dictionary) -> float:
 	if item.is_empty():
 		return 0.0
 	var sp: Dictionary = item.get("specs", {}) as Dictionary
-	# Crated panels deliver nothing (Phase 5 packed gate).
-	if bool(sp.get("packed_3d", false)):
+	# Crated panels (and the panels of a folded array) deliver nothing.
+	if GraphSolarArrays.panel_off(sp):
 		return 0.0
 	if str(item.get("type", "")) == "compound":
 		var units := float(sp.get("array_panel_units", 0.0))
@@ -16603,6 +16805,10 @@ static func _pv_item_wmp(item: Dictionary) -> float:
 ## _tick_graph_solar_shading). 1 for anything the tick does not ray-cast, and
 ## always 1 in the bootcamp sandbox, whose panels are not in this world.
 func _pv_sun_factor(item: Dictionary) -> float:
+	# A panel of a crated or folded array makes nothing (its array is out of
+	# SolarUI's capacity, so it takes no share of what the site makes).
+	if GraphSolarArrays.panel_off(item.get("specs", {}) as Dictionary):
+		return 0.0
 	if _sandbox_active or not _pv_is_shade_receiver(item):
 		return 1.0
 	return clampf(float((item.get("specs", {}) as Dictionary).get("sunlight_factor", 1.0)), 0.0, 1.0)

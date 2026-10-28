@@ -37,7 +37,13 @@ static func compound_kind(item: Dictionary) -> String:
 static func is_transparent_compound(item: Dictionary) -> bool:
 	if not is_compound(item):
 		return false
-	return not (compound_kind(item) in OPAQUE_KINDS)
+	var k := compound_kind(item)
+	# A solar array with its panels inside (GraphSolarArrays.materialize) is a
+	# real group: the sim walks its strings. Only a hollow one is an aggregate.
+	if k == "array":
+		var mode := str((item.get("specs", {}) as Dictionary).get("array_interior", ""))
+		return mode == "panels" or mode == "strings"
+	return not (k in OPAQUE_KINDS)
 
 
 static func exposed_ports(item: Dictionary) -> Array:

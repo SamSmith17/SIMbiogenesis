@@ -5,9 +5,11 @@ extends RefCounted
 ##
 ## At the level it sits in, each MPPT input of the design is ONE compound
 ## (`compound_kind` "pv_design") with a single + / − pair: the combined
-## output of its strings in parallel. Zoom into it and the strings are there
-## as real `panel` items wired + to − in series, the strings joined in
-## parallel at the compound's boundary — so GraphNesting.flat_connections,
+## output of its strings in parallel, drawn as a picture of its modules on
+## the rack (`array_cells`, GraphSolarArrays). Zoom into it and the strings
+## are there as real `panel` items where they sit on the rack, wired + to −
+## in series, the strings joined in parallel at the compound's boundary
+## (GraphSolarArrays.build_interior) — so GraphNesting.flat_connections,
 ## PvElectrical's string Voc checks, GraphDcElectrical and the panel cards all
 ## see the actual strings, unchanged. Re-seeding the same design (Apply in
 ## the designer) rebuilds the INTERIOR in place: the compound and every wire
@@ -75,12 +77,19 @@ static func upsert(view: Node, design: Dictionary, tag: String, opts: Dictionary
 				_kw(float(g["wmp"]) * int(g["count"])), float(g["voc"]) * int(g["series"])],
 		}
 		_plane_keys(specs, opts)
+		var cells := GraphSolarArrays.cells_for_design(design, g["strings"] as Array)
+		if cells.is_empty():
+			cells = GraphSolarArrays.cells_grid(int(g["series"]), int(g["parallel"]), int(g["count"]),
+				GraphSolarArrays.DEFAULT_MODULE_W_M, GraphSolarArrays.DEFAULT_MODULE_H_M,
+				GraphSolarArrays.DEFAULT_GAP_M, -1.0, int(g["series"]))
+		specs["array_cells"] = cells
+		var card := GraphSolarArrays.card_size(cells)
 		if cid.is_empty():
 			cid = model.generate_item_id()
 			var child_scope := "scope_%s" % cid
 			model.add_item({"id": cid, "type": "compound", "x": -80.0, "y": float(placed + gi) * 170.0,
-				"width": 220.0, "height": 132.0, "scope_id": scope, "child_scope_id": child_scope,
-				"handles": [], "specs": specs, "is_virtual": false})
+				"width": card.x, "height": card.y, "scope_id": scope, "child_scope_id": child_scope,
+				"handles": GraphArrayLayout.default_handles(), "specs": specs, "is_virtual": false})
 			model.ensure_scope(child_scope, scope, cid, label)
 			created.append(cid)
 		else:
@@ -88,9 +97,13 @@ static func upsert(view: Node, design: Dictionary, tag: String, opts: Dictionary
 			var merged: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
 			for k in specs:
 				merged[k] = specs[k]
-			model.update_item(cid, {"specs": merged})
+			# Keep the card where the player put it, centred on its old middle.
+			var cx := float(item.get("x", 0.0)) + float(item.get("width", card.x)) * 0.5
+			var cy := float(item.get("y", 0.0)) + float(item.get("height", card.y)) * 0.5
+			model.update_item(cid, {"specs": merged, "width": card.x, "height": card.y,
+				"x": cx - card.x * 0.5, "y": cy - card.y * 0.5})
 			_clear_interior(model, cid)
-		_build_interior(model, cid, g, mod_specs, gi, tag, opts)
+		_build_interior(model, cid, g, mod_specs, gi, tag, opts, cells)
 		ids.append(cid)
 	# A design that now has fewer MPPT inputs drops the extra compounds.
 	for gk in existing:
@@ -152,65 +165,59 @@ static func _clear_interior(model: GraphModel, cid: String) -> void:
 		model.remove_item(str(k))
 
 
-## The strings of one MPPT input as panels inside the compound: one row per
-## string, + to − along it, the strings' ends joined at the first string's
-## ends, which the compound's + / − ports lead out of.
+## The strings of one MPPT input as panels inside the compound, each where it
+## sits on the rack (GraphSolarArrays.build_interior: + to − along a string,
+## the strings joined at the first string's ends, the compound's + / − ports
+## leading out of them).
 static func _build_interior(model: GraphModel, cid: String, g: Dictionary, mod_specs: Dictionary, gi: int,
-		tag: String, opts: Dictionary) -> void:
-	var child_scope := str(model.get_item(cid).get("child_scope_id", "scope_%s" % cid))
-	var strings: Array = g["strings"]
-	var dims := ComponentPresets.spawn_dimensions({"type": "panel"})
-	var longest := 1
-	for st in strings:
-		longest = maxi(longest, (st as Array).size())
-	var off_x := float(longest - 1) * 0.5 * STEP_X
-	var off_y := float(strings.size() - 1) * 0.5 * STEP_Y
-	var id_rows: Array = []
-	for si in strings.size():
-		var row: Array = []
-		var st: Array = strings[si]
-		for k in st.size():
-			var pid := model.generate_item_id()
-			var ps := mod_specs.duplicate(true)
-			ps["name"] = "S%d·M%d" % [si + 1, int(st[k]) + 1]
-			ps["pvlab_tag"] = tag
-			ps["pvlab_group"] = gi
-			ps["pvlab_panel"] = int(st[k])
-			ps["pvlab_string"] = si
-			ps["bound_prop_id"] = str(opts.get("prop_id", ""))
-			_plane_keys(ps, opts)
-			model.add_item({"id": pid, "type": "panel", "x": float(k) * STEP_X - off_x,
-				"y": float(si) * STEP_Y - off_y, "width": dims.x, "height": dims.y,
-				"scope_id": child_scope, "parent_compound_id": cid, "specs": ps, "is_virtual": false})
-			if k > 0:
-				GraphPvWiring.add_pv_connection(model, "positive", str(row[k - 1]), "positive", pid, "negative",
-					child_scope)
-			row.append(pid)
-		id_rows.append(row)
-	if id_rows.is_empty():
-		return
-	var first: Array = id_rows[0]
-	for si in range(1, id_rows.size()):
-		var r: Array = id_rows[si]
-		if r.is_empty():
-			continue
-		GraphPvWiring.add_pv_connection(model, "positive", str(r[r.size() - 1]), "positive",
-			str(first[first.size() - 1]), "positive", child_scope)
-		GraphPvWiring.add_pv_connection(model, "negative", str(r[0]), "negative", str(first[0]), "negative",
-			child_scope)
-	var id_map := {"plus": str(first[first.size() - 1]), "minus": str(first[0])}
-	GraphComponentDefs._apply_exposed_ports(model, cid, [
-		{"handle_id": "positive", "child": "plus", "child_handle": "positive", "direction": "out",
-			"polarity": "positive", "label": "PV +"},
-		{"handle_id": "negative", "child": "minus", "child_handle": "negative", "direction": "out",
-			"polarity": "negative", "label": "PV −"},
-	], id_map)
+		tag: String, opts: Dictionary, cells: Dictionary) -> void:
+	var module := mod_specs.duplicate(true)
+	module["pvlab_tag"] = tag
+	module["pvlab_group"] = gi
+	module["bound_prop_id"] = str(opts.get("prop_id", ""))
+	_plane_keys(module, opts)
+	var res := GraphSolarArrays.build_interior(model, cid, g["strings"] as Array, module, cells, {
+		"index_key": "pvlab_panel", "string_key": "pvlab_string",
+		"name_fn": func(si: int, _k: int, idx: int) -> String: return "S%d·M%d" % [si + 1, idx + 1],
+	})
 	var sp: Dictionary = (model.get_item(cid).get("specs", {}) as Dictionary).duplicate(true)
-	var n := 0
-	for r2 in id_rows:
-		n += (r2 as Array).size()
-	sp["child_count"] = n
+	sp["child_count"] = int(res.get("count", 0))
 	model.update_item(cid, {"specs": sp})
+
+
+## Put a designed array's panels back on their rack positions and give it its
+## layout picture — for compounds seeded before the picture existed (their
+## panels sat one row per string). The strings and every wire are kept.
+static func apply_layout(model: GraphModel, cid: String, design: Dictionary) -> bool:
+	var item := model.get_item(cid)
+	if item.is_empty():
+		return false
+	var strings := {}
+	for it in model.get_items_in_scope(str(item.get("child_scope_id", ""))):
+		var ps: Dictionary = (it as Dictionary).get("specs", {}) as Dictionary
+		if str((it as Dictionary).get("type", "")) != "panel":
+			continue
+		var si := int(ps.get("pvlab_string", 0))
+		if not strings.has(si):
+			strings[si] = []
+		(strings[si] as Array).append(int(ps.get("pvlab_panel", -1)))
+	var keys := strings.keys()
+	keys.sort()
+	var st: Array = []
+	for k in keys:
+		st.append(strings[k])
+	var cells := GraphSolarArrays.cells_for_design(design, st)
+	if cells.is_empty():
+		return false
+	var sp: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	sp["array_cells"] = cells
+	var card := GraphSolarArrays.card_size(cells)
+	var cx := float(item.get("x", 0.0)) + float(item.get("width", card.x)) * 0.5
+	var cy := float(item.get("y", 0.0)) + float(item.get("height", card.y)) * 0.5
+	model.update_item(cid, {"specs": sp, "width": card.x, "height": card.y, "x": cx - card.x * 0.5,
+		"y": cy - card.y * 0.5, "handles": GraphArrayLayout.default_handles()})
+	GraphSolarArrays.relayout_children(model, cid, cells)
+	return true
 
 
 static func _wire_to_controller(model: GraphModel, cid: String, prefer: String, scope: String) -> void:
@@ -253,10 +260,13 @@ static func strings_from_model(model: GraphModel, tag: String) -> Array:
 			var t := str(cd.get("target_item_id", ""))
 			wired[s] = true
 			wired[t] = true
-			if str(cd.get("source_handle_id", "")) == "positive" and str(cd.get("target_handle_id", "")) == "negative":
+			var sh := str(cd.get("source_handle_id", ""))
+			var th := str(cd.get("target_handle_id", ""))
+			# A series link (one + one −) runs from the earlier panel to the
+			# later: interiors are wired − → + between neighbours since the
+			# layout pass; older saves + → −, which reads the same way.
+			if (sh == "positive" and th == "negative") or (sh == "negative" and th == "positive"):
 				next_of[s] = t
-			elif str(cd.get("source_handle_id", "")) == "negative" and str(cd.get("target_handle_id", "")) == "positive":
-				next_of[t] = s
 		# The compound's exposed ports lead out of a panel: count it wired.
 		for ep in (model.get_item(cid).get("specs", {}) as Dictionary).get("exposed_ports", []):
 			wired[str((ep as Dictionary).get("child_item_id", ""))] = true

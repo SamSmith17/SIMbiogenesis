@@ -244,9 +244,14 @@ const VALUE_EPS      := 0.0005
 const REDRAW_INTERVAL := 0.05
 ## At high sim speeds, full-canvas redraw + chase trails dominate CPU; drop to
 ## ~6–8 fps and force wire simplify so 1440×/Max stay interactive.
-const REDRAW_INTERVAL_HIGH_SPEED := 0.15
-## flow_mult units = sim× over realtime (see tick()); ≥300× triggers high-speed LOD.
+const REDRAW_INTERVAL_HIGH_SPEED := 0.1
+## Sim speed (× real time, see tick()) from which the high-speed LOD applies.
 const HIGH_SPEED_FLOW_MULT := 300.0
+## A sim tick that changed what the cards show asks for a redraw
+## (request_sim_redraw); it is drawn at most this often. Telemetry used to
+## queue a full redraw on nearly every frame the clock ran (gv_draw 0.5
+## calls a frame, ~7 ms each on Mount Vernon), on top of the flow cadence.
+const SIM_REDRAW_INTERVAL := 0.1
 ## ~1 sim-hour per real-hour; used to scale flow-dot speed with simulation time_scale.
 const REALTIME_SCALE_REF := 1.0 / 3600.0
 
@@ -615,6 +620,12 @@ func _pbi_pinned_active() -> bool:
 
 var _flow_phase:   float = 0.0
 var _redraw_accum: float = 0.0
+## Set by request_sim_redraw (sim telemetry); cleared when tick() redraws.
+var _sim_redraw_pending := false
+## Benches only: when on, each card's draw time accumulates in draw_profile
+## by "type/compound_kind" (µs, and "#n" draws).
+var draw_profile_on := false
+var draw_profile: Dictionary = {}
 
 # ---------------------------------------------------------------------------
 # Shared styleboxes
@@ -682,6 +693,9 @@ var _handles_cache: Dictionary = {}
 var _hinfo_cache: Dictionary = {}
 var _wired_cache: Dictionary = {}
 var _wired_cache_ready := false
+## Solar arrays' panels by layout index + live watts, per draw (the card's
+## miniature tints each cell by its panel).
+var _array_draw_cache: Dictionary = {}
 static var _touchscreen := -1
 ## True while a pre-baked run plays back (the tutorial / challenge engines).
 var flow_playback: bool = false
@@ -701,7 +715,10 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		flow_mult = 1.0
 	_flow_live = current_mode == "test" or flow_when_paused or flow_playback
 	_sim_flow_mult = flow_mult
-	_high_speed_lod = flow_mult >= HIGH_SPEED_FLOW_MULT
+	# The LOD keys on the real speed: flow_mult is clamped to 80, so comparing
+	# it with 300 never turned the LOD on at all.
+	_high_speed_lod = sim_time_scale > 0.0 \
+		and sim_time_scale / REALTIME_SCALE_REF >= HIGH_SPEED_FLOW_MULT
 	if _flow_live and (flow_mult > 0.0 or _ac_shed_active):
 		var vis_speed := 2.5 * clampf(pow(maxf(flow_mult, 0.2), 0.45), 0.15, 5.0)
 		if _ac_shed_active and flow_mult <= 0.0:
@@ -742,6 +759,8 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		interval = REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else REDRAW_INTERVAL
 	elif _alert_nodes_present:
 		interval = ALERT_REDRAW_INTERVAL
+	if _sim_redraw_pending:
+		interval = minf(interval, REDRAW_INTERVAL_HIGH_SPEED if _high_speed_lod else SIM_REDRAW_INTERVAL)
 	# Site Plan dot motion: while people are on the plan and the sim is
 	# running, hold the ~20 Hz cadence so the render-side dot interpolation
 	# actually animates between 2-4 Hz population ticks. Paused
@@ -752,6 +771,7 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		interval = minf(interval, REDRAW_INTERVAL)
 	if _redraw_accum >= interval:
 		_redraw_accum = 0.0
+		_sim_redraw_pending = false
 		queue_redraw()
 		if not _flow_live and not fx_alive:
 			_needs_continuous_redraw = false
@@ -760,6 +780,13 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 # ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
+
+## The sim changed something the cards show: redraw on the tick cadence
+## (SIM_REDRAW_INTERVAL) rather than this frame. Player edits and view moves
+## still queue_redraw() directly.
+func request_sim_redraw() -> void:
+	_sim_redraw_pending = true
+
 
 func get_view_pan() -> Vector2:
 	return _pan
@@ -1691,7 +1718,12 @@ func _try_emit_touch_double_tap(screen_pos: Vector2, item_id: String) -> bool:
 	if (now - _last_tap_time) <= TOUCH_DOUBLE_TAP_SEC \
 			and item_id == _last_tap_item_id \
 			and screen_pos.distance_to(_last_tap_pos) <= TOUCH_DOUBLE_TAP_DIST:
-		item_double_tapped.emit(item_id)
+		# A double tap opens a super-node, as a double click does.
+		var tapped := model.get_item(item_id) if model != null else {}
+		if str(tapped.get("type", "")) == "compound":
+			compound_open_requested.emit(item_id)
+		else:
+			item_double_tapped.emit(item_id)
 		_reset_tap_tracking()
 		return true
 	_last_tap_time = now
@@ -1766,11 +1798,7 @@ func _maybe_zoom_drill_in(screen_pos: Vector2) -> void:
 	if model == null:
 		return
 	var hit := _item_at_screen(screen_pos)
-	if hit.is_empty() or str(hit.get("type", "")) != "compound":
-		return
-	if str((hit.get("specs", {}) as Dictionary).get("compound_kind", "")) != "":
-		return
-	if str(hit.get("child_scope_id", "")).is_empty():
+	if hit.is_empty() or not GraphSolarArrays.zoom_enterable(model, hit):
 		return
 	var center := size * 0.5
 	var tl := _item_screen_tl(hit, center)
@@ -1789,11 +1817,7 @@ func prepare_and_try_zoom_drill(item_id: String) -> bool:
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
 		return false
 	var it := model.get_item(item_id)
-	if it.is_empty() or str(it.get("type", "")) != "compound":
-		return false
-	if str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) != "":
-		return false
-	if str(it.get("child_scope_id", "")).is_empty():
+	if it.is_empty() or not GraphSolarArrays.zoom_enterable(model, it):
 		return false
 	var gw := maxf(float(it.get("width", 120.0)), 8.0)
 	var gh := maxf(float(it.get("height", 90.0)), 8.0)
@@ -2516,8 +2540,7 @@ func _physical_prefer_body(screen_pos: Vector2, item: Dictionary) -> bool:
 	# drag/resize so clicks aren't swallowed into wire-drag.
 	var rim := maxf(4.0, minf(hit.size.x, hit.size.y) * 0.16)
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
-	if str(item.get("type", "")) == "compound" \
-			and str(specs.get("compound_kind", "")) == "array":
+	if GraphSolarArrays.is_solar_array(item):
 		rim = maxf(rim, minf(10.0, hit.size.y * 0.22))
 	var body := hit.grow(-rim)
 	if body.size.x < 8.0 or body.size.y < 8.0:
@@ -2845,8 +2868,7 @@ var _pv_snap_guides: Array = []
 
 static func _is_pv_card(it: Dictionary) -> bool:
 	var t := str(it.get("type", ""))
-	return t == "panel" or (t == "compound" \
-		and str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array")
+	return t == "panel" or GraphSolarArrays.is_solar_array(it)
 
 
 func _pv_snap_delta(delta_gr: Vector2) -> Vector2:
@@ -3606,9 +3628,7 @@ func _resolved_handles(item: Dictionary) -> Array:
 	# hit-testing / wire-snapping / connection routing all agree with what's
 	# drawn — otherwise the grabbable ports sit on the side edges (generic
 	# compound AC/DC) and the visible bottom dots can't be grabbed.
-	if str(item.get("type", "")) == "compound" \
-			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array" \
-			and (item.get("handles", []) as Array).is_empty():
+	if GraphSolarArrays.is_solar_array(item) and (item.get("handles", []) as Array).is_empty():
 		return GraphArrayLayout.default_handles()
 	if _draw_cache_active:
 		var iid := str(item.get("id", ""))
@@ -3946,8 +3966,7 @@ func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	# Array compounds expose exactly the two bus ports from _resolved_handles;
 	# they must all stay interactive (the generic "compound" primary filter would
 	# otherwise drop them since their ids are "positive"/"negative").
-	if itype == "compound" \
-			and str((item.get("specs", {}) as Dictionary).get("compound_kind", "")) == "array":
+	if GraphSolarArrays.is_solar_array(item):
 		return all
 	# Generic super-node: all promoted ports are interactive (their ids like
 	# "in_positive_1" are not in _PRIMARY_HANDLES, so the filter would wrongly
@@ -5773,16 +5792,15 @@ func _draw_bezier_stroke_dashed(from: Vector2, c1: Vector2, c2: Vector2, to: Vec
 func _array_compound_handle_override(item: Dictionary, handle_id: String) -> Dictionary:
 	if item.is_empty() or str(item.get("type", "")) != "compound":
 		return {}
-	var specs: Dictionary = item.get("specs", {}) as Dictionary
-	if str(specs.get("compound_kind", "")) != "array":
+	if not GraphSolarArrays.is_solar_array(item):
 		return {}
 	if handle_id in ["positive", "negative"]:
 		return {}
-	# Legacy multi-port handles collapse to one bus per polarity.
+	# Legacy multi-port handles collapse to one bus per polarity (+ left).
 	if handle_id.contains("negative"):
-		return {"rx": 0.33, "ry": 1.0}
-	if handle_id.contains("positive") or handle_id.contains("pv"):
 		return {"rx": 0.67, "ry": 1.0}
+	if handle_id.contains("positive") or handle_id.contains("pv"):
+		return {"rx": 0.33, "ry": 1.0}
 	return {}
 
 
@@ -6968,6 +6986,7 @@ func _draw() -> void:
 	_hinfo_cache.clear()
 	_wired_cache.clear()
 	_wired_cache_ready = false
+	_array_draw_cache.clear()
 	_label_rects.clear()
 	_string_w_cache.clear()
 	if not _path_focus_src.is_empty() and model != null and model.get_item(_path_focus_src).is_empty():
@@ -7001,8 +7020,17 @@ func _draw() -> void:
 		if pm != null:
 			pm.end("gv_wires")
 			pm.begin("gv_cards")
-		for item: Dictionary in _visible_items():
-			_render_item(item)
+		if draw_profile_on:
+			# Benches: card draw time by type (and compound kind), in µs.
+			for item_p: Dictionary in _visible_items():
+				var t0 := Time.get_ticks_usec()
+				_render_item(item_p)
+				var pk := str(item_p.get("type", "")) + "/" + str((item_p.get("specs", {}) as Dictionary).get("compound_kind", ""))
+				draw_profile[pk] = int(draw_profile.get(pk, 0)) + (Time.get_ticks_usec() - t0)
+				draw_profile[pk + "#n"] = int(draw_profile.get(pk + "#n", 0)) + 1
+		else:
+			for item: Dictionary in _visible_items():
+				_render_item(item)
 		if pm != null:
 			pm.end("gv_cards")
 		for item: Dictionary in _visible_items():
@@ -8805,7 +8833,7 @@ func _draw_item_handles(item: Dictionary, tl: Vector2, sz: Vector2) -> void:
 	var hub := GraphHubPorts.is_hub_type(itype)
 
 	# Solar arrays expose one consolidated +/- pair on the bottom edge.
-	if compound_kind == "array":
+	if compound_kind == "array" or compound_kind == GraphSolarArrays.KIND_DESIGN:
 		_draw_array_compound_handles(tl, sz)
 		return
 
@@ -10803,10 +10831,9 @@ func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 			draw_rect(rect, fill, true)
 		draw_rect(rect, border, false, stroke)
 		# Solar-array packs: light module grid so the footprint reads as panels.
-		if not see_through and itype == "compound" \
-				and str(specs.get("compound_kind", "")) == "array" \
+		if not see_through and GraphSolarArrays.is_solar_array(item) \
 				and rect.size.x >= 10.0 and rect.size.y >= 8.0:
-			_draw_site_array_grid(rect, specs, border)
+			_draw_site_array_grid(rect, specs, border, item)
 	var title := _site_plan_chip_title(item, specs, itype)
 	_draw_site_plan_chip_label(rect, title, is_sel)
 
@@ -10895,32 +10922,131 @@ func _draw_site_plan_chip_label(rect: Rect2, title: String, is_sel: bool) -> voi
 
 
 func _site_plan_chip_title(item: Dictionary, specs: Dictionary, itype: String) -> String:
-	if itype == "compound" and str(specs.get("compound_kind", "")) == "array":
-		var n := int(specs.get("array_panel_units", specs.get("child_count", 0)))
+	if itype == "compound" and str(specs.get("compound_kind", "")) in ["array", "pv_design"]:
+		var n := int(specs.get("array_panel_units", specs.get("panel_count", specs.get("child_count", 0))))
 		if n > 0:
 			return "Array · %d" % n
 		return "Solar Array"
 	return str(specs.get("name", itype.capitalize()))
 
 
-func _draw_site_array_grid(rect: Rect2, specs: Dictionary, accent: Color) -> void:
-	var grid: Vector2i = GraphArrayLayout.grid_dims(specs)
-	var cols := maxi(grid.x, 1)
-	var rows := maxi(grid.y, 1)
+func _draw_site_array_grid(rect: Rect2, specs: Dictionary, accent: Color, item: Dictionary = {}) -> void:
 	var pad := maxf(1.0, minf(rect.size.x, rect.size.y) * 0.06)
-	var gap := maxf(0.5, pad * 0.35)
-	var cell_w := (rect.size.x - pad * 2.0 - gap * float(maxi(cols - 1, 0))) / float(cols)
-	var cell_h := (rect.size.y - pad * 2.0 - gap * float(maxi(rows - 1, 0))) / float(rows)
-	if cell_w < 2.0 or cell_h < 2.0:
-		return
-	var origin := rect.position + Vector2(pad, pad)
-	for r in range(rows):
-		for c in range(cols):
-			var cell := Rect2(
-				origin + Vector2(float(c) * (cell_w + gap), float(r) * (cell_h + gap)),
-				Vector2(cell_w, cell_h))
-			draw_rect(cell, Color(0.05, 0.16, 0.28, 0.85), true)
-			draw_rect(cell, Color(accent.r, accent.g, accent.b, 0.45), false, 0.8)
+	draw_array_cells(rect.grow(-pad), specs, item, accent, false)
+
+
+## The panels of a solar array as they sit on the rack (its `array_cells`),
+## fitted into `zone` with their aspect kept: each cell tinted by what its
+## panel makes right now, edged in its string's colour, the shared + / − bus
+## under the grid. Used by the array card's picture and the Site Plan chip.
+## Returns the fitted grid rect (empty when nothing was drawn).
+func draw_array_cells(zone: Rect2, specs: Dictionary, item: Dictionary, accent: Color,
+		bus: bool = true) -> Rect2:
+	var cells: Dictionary = specs.get("array_cells", {}) if specs.get("array_cells") is Dictionary else {}
+	if cells.is_empty():
+		cells = GraphSolarArrays.cells_for_specs(specs)
+	var bus_h := maxf(4.0, 5.0 * _zoom) if bus else 0.0
+	var area := Rect2(zone.position, zone.size - Vector2(0.0, bus_h))
+	var w_m := float(cells.get("w_m", 0.0))
+	var h_m := float(cells.get("h_m", 0.0))
+	if w_m <= 0.0 or h_m <= 0.0 or area.size.x <= 1.0 or area.size.y <= 1.0:
+		return Rect2()
+	# The cells straight off the snapshot (no per-cell dicts: this runs for
+	# every array card on every redraw); fills one rect each, every string's
+	# outlines batched into ONE multiline draw.
+	var sc := minf(area.size.x / w_m, area.size.y / h_m)
+	var origin := area.position + (area.size - Vector2(w_m, h_m) * sc) * 0.5
+	var info := _array_info(item)
+	var frac_of: Dictionary = info.get("frac_by_idx", {}) as Dictionary
+	var whole := float(info.get("frac", -1.0))
+	var list: Array = cells.get("cells", []) as Array
+	var dense := list.size() > 400
+	var edge_w := maxf(0.6, minf(1.4, 0.9 * _zoom))
+	var base := Color(0.05, 0.14, 0.27, 0.96)
+	var lit := Color(0.20, 0.52, 0.92, 0.98)
+	var unknown := Color(0.08, 0.22, 0.40, 0.96)
+	var edges: Dictionary = {}   # string -> PackedVector2Array of segment pairs
+	var lines := PackedVector2Array()
+	for c in list:
+		var a: Array = c
+		var r := Rect2(origin + Vector2(float(a[0]), float(a[1])) * sc, Vector2(float(a[2]), float(a[3])) * sc)
+		if r.size.x < 0.6 or r.size.y < 0.6:
+			continue
+		var frac := float(frac_of.get(int(a[4]), whole))
+		draw_rect(r, base.lerp(lit, sqrt(frac)) if frac >= 0.0 else unknown, true)
+		if dense or r.size.x < 6.0 or r.size.y < 6.0:
+			continue
+		# A module's cell lines only once the cell is big enough that they
+		# cannot be read as more modules.
+		if r.size.x >= 40.0 and r.size.y >= 40.0:
+			for k in range(1, 3):
+				var x := r.position.x + r.size.x * float(k) / 3.0
+				lines.append(Vector2(x, r.position.y + 1.0))
+				lines.append(Vector2(x, r.end.y - 1.0))
+			var y := r.position.y + r.size.y * 0.5
+			lines.append(Vector2(r.position.x + 1.0, y))
+			lines.append(Vector2(r.end.x - 1.0, y))
+		var si := int(a[5])
+		if not edges.has(si):
+			edges[si] = PackedVector2Array()
+		var e: PackedVector2Array = edges[si]
+		var p0 := r.position
+		var p1 := Vector2(r.end.x, r.position.y)
+		var p2 := r.end
+		var p3 := Vector2(r.position.x, r.end.y)
+		e.append_array([p0, p1, p1, p2, p2, p3, p3, p0])
+		edges[si] = e
+	if not lines.is_empty():
+		draw_multiline(lines, Color(0.62, 0.82, 0.98, 0.10), 1.0)
+	for si2 in edges:
+		var sc2 := GraphSolarArrays.string_color(int(si2))
+		draw_multiline(edges[si2] as PackedVector2Array, Color(sc2.r, sc2.g, sc2.b, 0.75), edge_w)
+	var fit := {"grid": Rect2(origin, Vector2(w_m, h_m) * sc)}
+	var grid: Rect2 = fit["grid"]
+	if bus:
+		var bus_y := grid.end.y + bus_h * 0.6
+		draw_line(Vector2(grid.position.x + 2.0, bus_y), Vector2(grid.end.x - 2.0, bus_y),
+			Color(accent.r, accent.g, accent.b, 0.55), maxf(1.5, 2.0 * _zoom))
+	return grid
+
+
+## A solar array's panels by layout index, and what fraction of its peak the
+## array makes when its panels carry no live reading (a hollow array).
+## Cached per draw.
+func _array_info(item: Dictionary) -> Dictionary:
+	var iid := str(item.get("id", ""))
+	if iid.is_empty() or model == null:
+		return {}
+	if _draw_cache_active and _array_draw_cache.has(iid):
+		return _array_draw_cache[iid]
+	var by_idx := {}
+	if GraphSolarArrays.is_materialized(item):
+		for it in model.get_items_in_scope(str(item.get("child_scope_id", ""))):
+			var d: Dictionary = it
+			if str(d.get("type", "")) != "panel":
+				continue
+			var sp: Dictionary = d.get("specs", {}) as Dictionary
+			var members: Array = sp.get("proxy_panels", []) as Array
+			if members.is_empty():
+				members = [int(sp.get("array_panel", sp.get("pvlab_panel", -1)))]
+			for m in members:
+				by_idx[int(m)] = d
+	var frac_by_idx := {}
+	for ix in by_idx:
+		var cs: Dictionary = (by_idx[ix] as Dictionary).get("specs", {}) as Dictionary
+		if GraphSolarArrays.panel_off(cs):
+			frac_by_idx[ix] = 0.0
+		elif cs.has("current_output_kw"):
+			frac_by_idx[ix] = clampf(float(cs.get("current_output_kw", 0.0)) * 1000.0
+				/ maxf(float(cs.get("wmp", 1.0)), 1.0), 0.0, 1.0)
+	var sum := GraphSolarArrays.live_summary(model, item)
+	var peak := float(sum.get("peak_w", 0.0))
+	var live := float(sum.get("live_w", -1.0))
+	var out := {"by_idx": by_idx, "frac_by_idx": frac_by_idx, "frac": clampf(live / peak, 0.0, 1.0) if live >= 0.0 and peak > 0.0 else -1.0,
+		"live_w": live, "peak_w": peak, "count": int(sum.get("count", 0))}
+	if _draw_cache_active:
+		_array_draw_cache[iid] = out
+	return out
 
 
 func _type_title(itype: String, specs: Dictionary) -> String:

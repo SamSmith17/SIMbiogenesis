@@ -52,6 +52,15 @@ const PROJECTION_EVERY_SIM_H := 0.25
 var _proj_lines: Array = []
 var _proj_ms := -1000000
 var _proj_abs_h := -1.0e12
+## The projection's solar at each WHOLE sim hour (kW), interpolated between
+## hours: a re-run 0.25 sim-h later needs about one new evaluation instead of
+## 192 (the full run was ~13 ms, and at 7200x it ran 8 times a second).
+## Keyed on what the evaluator reads (the graph's revisions, SolarUI's array)
+## and dropped every SOLAR_CACHE_MS so new weather data reaches it.
+var _solar_hours: Dictionary = {}
+var _solar_hours_key := ""
+var _solar_hours_ms := 0
+const SOLAR_CACHE_MS := 60000
 var _slow_last_ms := 0
 ## Rolling strip of the latest notable settlement-log lines (own named cursor,
 ## so this never races the toast drain or the challenge bake's watcher).
@@ -92,16 +101,22 @@ func refresh(force: bool = false) -> void:
 	if not force and _refresh_acc < REFRESH_INTERVAL:
 		return
 	_refresh_acc = 0.0
+	PerfSpan.begin("gv_dash_power")
 	_refresh_power()
+	PerfSpan.end("gv_dash_power")
+	PerfSpan.begin("gv_dash_closure")
 	_refresh_closure()
+	PerfSpan.end("gv_dash_closure")
 	# Stores + Settlement walk model/roster arrays — 1 Hz is plenty, and the
 	# signature diffs inside them make even that mostly free.
 	var now_ms := Time.get_ticks_msec()
 	if now_ms - _slow_last_ms >= REFRESH_SLOW_MS:
 		_slow_last_ms = now_ms
+		PerfSpan.begin("gv_dash_slow")
 		_refresh_stores()
 		_refresh_settlement()
 		_refresh_balance()
+		PerfSpan.end("gv_dash_slow")
 
 
 func _process(delta: float) -> void:
@@ -119,8 +134,10 @@ func _process(delta: float) -> void:
 	var sv: Variant = su.get("sim_tick_serial")
 	if sv != null and int(sv) != _solar_serial:
 		_solar_serial = int(sv)
+		PerfSpan.begin("gv_dash_tick")
 		_refresh_power()
 		_refresh_balance()
+		PerfSpan.end("gv_dash_tick")
 
 
 func _build_ui() -> void:
@@ -704,14 +721,22 @@ func _projection_lines(su: Node, snap: Dictionary) -> Array:
 		return _proj_lines
 	_proj_ms = now_ms
 	_proj_abs_h = now_h
+	PerfSpan.begin("gv_dash_proj")
+	var out_lines := _projection_compute(su, snap, now_h)
+	PerfSpan.end("gv_dash_proj")
+	return out_lines
+
+
+func _projection_compute(su: Node, snap: Dictionary, now_h: float) -> Array:
 	var cap := float(snap.get("cap_kwh", 0.0))
 	if cap <= 0.0:
 		_proj_lines = []
 		return _proj_lines
 	var aux := float(snap.get("graph_dc_kw", 0.0)) + float(snap.get("aux_kw", 0.0))
 	var demand := maxf(float(snap.get("demand_kw", 0.0)), float(snap.get("load_kw", 0.0)))
+	_check_solar_cache(su)
 	var fn := func(abs_h: float) -> Dictionary:
-		return {"solar_kw": float(su.call("evaluate_solar_at", abs_h)), "aux_kw": aux, "load_kw": demand}
+		return {"solar_kw": _solar_at(su, abs_h), "aux_kw": aux, "load_kw": demand}
 	var floor_pct := float(snap.get("floor_pct", 10.0))
 	var resume_pct := float(su.get("battery_soc_resume_pct")) if su.get("battery_soc_resume_pct") != null else 20.0
 	var out: Array = []
@@ -720,7 +745,41 @@ func _projection_lines(su: Node, snap: Dictionary) -> Array:
 				float(snap.get("stored_kwh", 0.0)), 0.95, 0.95, floor_pct, resume_pct)
 		out.append(SiteProjection.summary_line(p, cap))
 	_proj_lines = out
+	# Hours behind the clock are never asked for again.
+	for hk in _solar_hours.keys():
+		if int(hk) < int(floor(now_h)) - 1:
+			_solar_hours.erase(hk)
 	return _proj_lines
+
+
+func _check_solar_cache(su: Node) -> void:
+	var m: GraphModel = _graph_view.get("model") as GraphModel if _graph_view != null else null
+	var key := "%d|%d|%s|%s|%s|%s" % [int(m.struct_rev) if m != null else -1, int(m.user_rev) if m != null else -1,
+		str(su.get("PANEL_COUNT")), str(su.get("PANEL_WATTAGE")), str(su.get("panel_tilt_degrees")),
+		str(su.get("panel_azimuth_degrees"))]
+	var now_ms := Time.get_ticks_msec()
+	if key != _solar_hours_key or now_ms - _solar_hours_ms > SOLAR_CACHE_MS:
+		_solar_hours.clear()
+		_solar_hours_key = key
+		_solar_hours_ms = now_ms
+
+
+## SolarUI's solar at `abs_h`, linear between whole-hour evaluations.
+func _solar_at(su: Node, abs_h: float) -> float:
+	var h0 := int(floor(abs_h))
+	var f := abs_h - float(h0)
+	var a := _solar_hour(su, h0)
+	if f < 1e-6:
+		return a
+	return lerpf(a, _solar_hour(su, h0 + 1), f)
+
+
+func _solar_hour(su: Node, h: int) -> float:
+	if _solar_hours.has(h):
+		return float(_solar_hours[h])
+	var v := float(su.call("evaluate_solar_at", float(h)))
+	_solar_hours[h] = v
+	return v
 
 
 func _refresh_stores() -> void:

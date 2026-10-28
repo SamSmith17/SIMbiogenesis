@@ -116,7 +116,11 @@ static func physical_footprint_m(item: Dictionary) -> Vector2:
 
 static func _compound_footprint_m(specs: Dictionary) -> Vector2:
 	var kind := str(specs.get("compound_kind", ""))
-	if kind == "array":
+	if kind == "array" or kind == "pv_design":
+		# The rack's own layout, face-on, when the array has one.
+		var cells: Dictionary = specs.get("array_cells", {}) if specs.get("array_cells") is Dictionary else {}
+		if not cells.is_empty():
+			return Vector2(maxf(float(cells.get("w_m", 1.0)), 1.0), maxf(float(cells.get("h_m", 1.0)), 1.0))
 		var grid: Vector2i = GraphArrayLayout.grid_dims(specs)
 		var cols := maxi(grid.x, 1)
 		var rows := maxi(grid.y, 1)
@@ -150,7 +154,7 @@ static func uses_circular_plan_chip(item: Dictionary, view_mode: String = "") ->
 		return is_abstract_type(itype)
 	var kind := str((item.get("specs", {}) as Dictionary).get("compound_kind", ""))
 	# Arrays / battery banks are physical packs — rectangular footprints.
-	return kind != "array" and kind != "battery_bank"
+	return kind != "array" and kind != "pv_design" and kind != "battery_bank"
 
 
 ## Circular plan symbols (hub tanks / PBI) — use right-edge resize, not BR corner.

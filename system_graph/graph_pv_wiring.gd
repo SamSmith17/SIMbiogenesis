@@ -125,6 +125,14 @@ static func array_keys(model: GraphModel, scope_id: String = "root") -> Dictiona
 		for sid in PvElectrical.pv_sources_for_controller(model, cid, scope_id):
 			if not out.has(str(sid)):
 				out[str(sid)] = cid
+		# An array with its panels inside is a group, not a source: the panels
+		# behind its ports feed the controller, so key the array card by them.
+		for pid in PvElectrical.pv_sources_for_controller_flat(model, cid,
+				GraphNesting.flat_connections_cached(model)):
+			var owner := str(model.get_item(str(pid)).get("parent_compound_id", ""))
+			if not owner.is_empty() and not out.has(owner) \
+					and GraphSolarArrays.is_solar_array(model.get_item(owner)):
+				out[owner] = cid
 	return out
 
 

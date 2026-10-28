@@ -416,22 +416,32 @@ static func _group(spec: Dictionary, specs: Dictionary, ctx: Dictionary) -> void
 			spec["footer"] = "⚠ " + ", ".join(names)
 			spec["footer_color"] = GraphTheme.WARN
 		return
-	if kind == "array":
+	# Every solar array — imported, placed, grouped or from the Solar designer —
+	# reads the same: topology chip, live watts against its peak, its panels.
+	if kind == "array" or kind == "pv_design":
 		spec["icon"] = "sun"
 		spec["accent"] = GraphTheme.accent("panel")
-		var units := int(specs.get("array_panel_units", children))
+		var units := int(ctx.get("array_count", specs.get("array_panel_units", specs.get("panel_count", children))))
 		spec["title"] = str(specs.get("name", "")) if not str(specs.get("name", "")).is_empty() \
 			else "Solar array"
-		spec["chip"] = str(specs.get("array_topology", "ARRAY")).replace(" x ", "×").replace(" X ", "×")
-		var peak := float(specs.get("array_equiv_wmp", 0.0))
-		var live := float(specs.get("current_output_kw", -1.0)) * 1000.0
+		var topo := str(specs.get("array_topology", ""))
+		if kind == "pv_design" or topo.is_empty():
+			var s := int(specs.get("design_series", specs.get("array_series", 0)))
+			var p := int(specs.get("design_parallel", specs.get("array_parallel", 0)))
+			topo = "%dS×%dP" % [s, p] if s > 0 and p > 0 else "ARRAY"
+		spec["chip"] = topo.replace(" x ", "×").replace(" X ", "×")
+		var peak := float(ctx.get("array_peak_w", specs.get("array_equiv_wmp", 0.0)))
+		var live := float(ctx.get("array_live_w", float(specs.get("current_output_kw", -1.0)) * 1000.0))
 		if live >= 0.0:
 			_generator_hero(spec, live, peak, "panel")
 		else:
 			spec["hero"] = UiText.num(peak, "W")
 			spec["sub"] = "peak"
 		spec["footer"] = UiText.count(units, "panel")
-		if bool(specs.get("array_stowed", false)):
+		if bool(specs.get("packed_3d", false)):
+			spec["footer"] = "Packed · " + str(spec["footer"])
+			spec["dim"] = true
+		elif bool(specs.get("array_stowed", false)):
 			spec["footer"] = "Stowed · " + str(spec["footer"])
 			spec["dim"] = true
 		spec["media"] = "array"

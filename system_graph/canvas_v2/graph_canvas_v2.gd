@@ -309,6 +309,15 @@ func _render_card_v2(item: Dictionary) -> void:
 				if itype == "compound" else GraphAcLoad.item_draw_watts(model, item, tree, _find_sim_load_host())
 	elif itype == "compound" and _compound_displays_as_battery(specs):
 		_card_ctx["agg_soc"] = _aggregate_child_battery_soc(item)
+	_card_ctx.erase("array_live_w")
+	_card_ctx.erase("array_peak_w")
+	_card_ctx.erase("array_count")
+	if GraphSolarArrays.is_materialized(item):
+		var ai := _array_info(item)
+		_card_ctx["array_peak_w"] = float(ai.get("peak_w", 0.0))
+		_card_ctx["array_count"] = int(ai.get("count", 0))
+		if float(ai.get("live_w", -1.0)) >= 0.0:
+			_card_ctx["array_live_w"] = float(ai.get("live_w", 0.0))
 	var spec := GraphCardSpecs.for_item(item, _card_ctx)
 	spec["selected"] = (iid == selected_item_id) or selected_item_ids.has(iid)
 	if bool(item.get("is_ghost", false)) or (not _path_items.is_empty() and not _path_items.has(iid)):
@@ -408,45 +417,11 @@ func _draw_card_media(item: Dictionary, specs: Dictionary, kind: String, zone: R
 		"banner":
 			drawn = _draw_compound_banner(zone, specs)
 		"array":
-			_draw_array_media(zone, specs)
-			drawn = true
+			drawn = draw_array_cells(zone, specs, item, accent).size.x > 0.0
 	if not drawn:
 		var px := minf(zone.size.x, zone.size.y) * 0.5
 		if px >= 10.0:
 			GraphCard._draw_icon(self, icon, zone.get_center(), px, Color(accent.r, accent.g, accent.b, 0.35))
-
-
-## The array's panels as a grid fitted into the media zone (cells keep their
-## module aspect), with the shared bus bar under them.
-func _draw_array_media(zone: Rect2, specs: Dictionary) -> void:
-	var grid := GraphArrayLayout.grid_dims(specs)
-	var cols := maxi(1, grid.x)
-	var rows := maxi(1, grid.y)
-	var units := maxi(1, int(specs.get("array_panel_units", cols * rows)))
-	var aspect := GraphArrayLayout.PANEL_W / maxf(GraphArrayLayout.PANEL_H, 1.0)
-	var gap_frac := 0.08
-	var cw := zone.size.x / (float(cols) + gap_frac * float(cols - 1))
-	var ch := cw / aspect
-	var bus_h := maxf(4.0, 5.0 * _zoom)
-	var avail_h := zone.size.y - bus_h
-	if ch * (float(rows) + gap_frac * float(rows - 1)) > avail_h:
-		ch = avail_h / (float(rows) + gap_frac * float(rows - 1))
-		cw = ch * aspect
-	var gap := cw * gap_frac
-	var gw := cw * float(cols) + gap * float(cols - 1)
-	var gh := ch * float(rows) + gap * float(rows - 1)
-	var origin := zone.position + Vector2((zone.size.x - gw) * 0.5, (avail_h - gh) * 0.5)
-	var idx := 0
-	for r in range(rows):
-		for c in range(cols):
-			if idx >= units:
-				break
-			_draw_array_panel_cell_v2(Rect2(origin + Vector2(float(c) * (cw + gap), float(r) * (ch + gap)),
-				Vector2(cw, ch)))
-			idx += 1
-	var bus_y := origin.y + gh + bus_h * 0.6
-	draw_line(Vector2(origin.x + cw * 0.15, bus_y), Vector2(origin.x + gw - cw * 0.15, bus_y),
-		Color(0.42, 0.90, 0.98, 0.55), maxf(1.5, 2.0 * _zoom))
 
 
 func _build_card_ctx() -> Dictionary:
@@ -1107,9 +1082,9 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 	var kind := str(specs.get("compound_kind", ""))
 	var accent := Color(0.56, 0.48, 0.90, 1.0)
 	var title := str(specs.get("name", "Compound"))
-	if kind == "array":
+	if kind == "array" or kind == "pv_design":
 		accent = Color(0.15, 0.76, 0.95, 1.0)
-		var n := int(specs.get("array_panel_units", specs.get("child_count", 0)))
+		var n := int(specs.get("array_panel_units", specs.get("panel_count", specs.get("child_count", 0))))
 		title = "Solar Array · %d panels" % n if n > 0 else "Solar Array"
 	elif kind == "battery_bank":
 		accent = Color(0.17, 0.84, 0.52, 1.0)
@@ -1120,8 +1095,8 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 	_draw_title_band(rect, title_h, title, accent)
 	var body := Rect2(tl + Vector2(0.0, title_h), sz - Vector2(0.0, title_h))
 
-	if kind == "array":
-		_draw_array_compound_body_v2(body, specs)
+	if kind == "array" or kind == "pv_design":
+		_draw_array_compound_body_v2(body, specs, item, accent)
 	elif kind == "battery_bank":
 		_draw_battery_bank_compound_body_v2(body, specs)
 	else:
@@ -1133,75 +1108,23 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 		draw_rect(rect.grow(0.8), Color(0.13, 0.83, 0.93, 0.85), false, 1.2)
 
 
-func _draw_array_compound_body_v2(rect: Rect2, specs: Dictionary) -> void:
-	var grid := GraphArrayLayout.grid_dims(specs)
-	var cols := grid.x
-	var rows := grid.y
-	var panel_count := maxi(1, int(specs.get("array_panel_units", cols * rows)))
-	var s_count := cols
-	var p_count := rows
-	var topo := str(specs.get("array_topology", "%dS x %dP" % [s_count, p_count]))
-	var total_w := float(specs.get("array_equiv_wmp", 0.0))
-
-	var gap := GraphArrayLayout.CELL_GAP * _zoom
-	var cell_sz := Vector2(GraphArrayLayout.PANEL_W, GraphArrayLayout.PANEL_H) * _zoom
+## The pre-card array body: the panels as they sit on the rack, then a meta
+## line. Both array kinds draw through draw_array_cells.
+func _draw_array_compound_body_v2(rect: Rect2, specs: Dictionary, item: Dictionary, accent: Color) -> void:
 	var pad := GraphArrayLayout.BODY_PAD * _zoom
 	var footer_h := GraphArrayLayout.FOOTER_H * _zoom
-	var origin := rect.position + Vector2(pad, pad)
-	var grid_h := float(rows) * cell_sz.y + float(maxi(0, rows - 1)) * gap
-
-	var idx := 0
-	for r in range(rows):
-		for c in range(cols):
-			if idx >= panel_count:
-				break
-			var p := origin + Vector2(
-				float(c) * (cell_sz.x + gap),
-				float(r) * (cell_sz.y + gap))
-			_draw_array_panel_cell_v2(Rect2(p, cell_sz))
-			idx += 1
-
-	# Shared bottom bus bar across the array width.
-	var bus_y := origin.y + grid_h + maxf(2.0, gap)
-	draw_line(
-		Vector2(origin.x + cell_sz.x * 0.15, bus_y),
-		Vector2(origin.x + float(cols) * cell_sz.x + float(maxi(0, cols - 1)) * gap - cell_sz.x * 0.15, bus_y),
-		Color(0.42, 0.90, 0.98, 0.55), maxf(1.5, 2.0 * _zoom))
-	draw_line(
-		Vector2(origin.x + cell_sz.x * 0.28, bus_y + maxf(2.0, 3.0 * _zoom)),
-		Vector2(origin.x + float(cols) * cell_sz.x + float(maxi(0, cols - 1)) * gap - cell_sz.x * 0.28, bus_y + maxf(2.0, 3.0 * _zoom)),
-		Color(0.30, 0.32, 0.40, 0.65), maxf(1.2, 1.6 * _zoom))
-
+	draw_array_cells(Rect2(rect.position + Vector2(pad, pad),
+		Vector2(rect.size.x - pad * 2.0, maxf(1.0, rect.size.y - pad * 2.0 - footer_h))), specs, item, accent)
+	var info := _array_info(item)
+	var topo := str(specs.get("array_topology", ""))
+	if topo.is_empty():
+		topo = "%dS x %dP" % [int(specs.get("design_series", 1)), int(specs.get("design_parallel", 1))]
 	var fnt := ThemeDB.fallback_font
-	var meta_y := rect.end.y - footer_h * 0.35
 	var fs_meta := maxi(GraphNodeLabel.BODY_FONT_MIN, int(round(10.0 * _zoom)))
-	var fs_hint := maxi(GraphNodeLabel.BODY_FONT_MIN, int(round(9.0 * _zoom)))
-	draw_string(fnt, rect.position + Vector2(pad, meta_y),
-			"%s  ·  %d panels  ·  %.0f W" % [topo, panel_count, total_w],
+	draw_string(fnt, rect.position + Vector2(pad, rect.end.y - footer_h * 0.35),
+			"%s  ·  %s  ·  %.0f W" % [topo, UiText.count(int(info.get("count", 0)), "panel"),
+				float(info.get("peak_w", 0.0))],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fs_meta, Color(0.82, 0.94, 1.0, 0.92))
-	draw_string(fnt, rect.position + Vector2(pad, rect.end.y - maxf(6.0, pad * 0.5)),
-			"Drag to move · single +/- bus",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, fs_hint, Color(0.68, 0.82, 0.96, 0.82))
-
-
-func _draw_array_panel_cell_v2(cell: Rect2) -> void:
-	if cell.size.x < 6.0 or cell.size.y < 6.0:
-		return
-	draw_rect(cell, Color(0.03, 0.06, 0.12, 0.96), true)
-	draw_rect(cell, Color(0.20, 0.67, 0.90, 0.62), false, maxf(0.8, 1.0 * _zoom))
-	var face := cell.grow(-maxf(2.0, 3.0 * _zoom))
-	draw_rect(face, Color(0.05, 0.18, 0.33, 0.95), true)
-	for c in range(1, 4):
-		var x := face.position.x + face.size.x * (float(c) / 4.0)
-		draw_line(Vector2(x, face.position.y), Vector2(x, face.end.y),
-				Color(0.56, 0.79, 0.95, 0.28), maxf(0.6, 0.8 * _zoom))
-	for r in range(1, 4):
-		var y := face.position.y + face.size.y * (float(r) / 4.0)
-		draw_line(Vector2(face.position.x, y), Vector2(face.end.x, y),
-				Color(0.56, 0.79, 0.95, 0.22), maxf(0.6, 0.8 * _zoom))
-	var sheen := Rect2(face.position + Vector2(0.0, 1.0),
-			Vector2(face.size.x, maxf(2.0, face.size.y * 0.14)))
-	draw_rect(sheen, Color(0.74, 0.89, 1.0, 0.10), true)
 
 
 func _draw_battery_bank_compound_body_v2(rect: Rect2, specs: Dictionary) -> void:

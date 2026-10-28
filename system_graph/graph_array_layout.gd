@@ -21,7 +21,19 @@ static func grid_dims(specs: Dictionary) -> Vector2i:
 	return Vector2i(s, p)
 
 
+## The card that frames the array's real layout (its `array_cells`, else the
+## series × parallel grid GraphSolarArrays makes from its specs).
 static func compound_size(specs: Dictionary) -> Vector2:
+	var cells: Dictionary = specs.get("array_cells", {}) if specs.get("array_cells") is Dictionary else {}
+	if cells.is_empty():
+		cells = GraphSolarArrays.cells_for_specs(specs)
+	if not cells.is_empty():
+		return GraphSolarArrays.card_size(cells)
+	return legacy_compound_size(specs)
+
+
+## The old panel-sized tile grid (the pre-card renderer still lays out by it).
+static func legacy_compound_size(specs: Dictionary) -> Vector2:
 	var grid := grid_dims(specs)
 	var cols := grid.x
 	var rows := grid.y
@@ -35,10 +47,12 @@ static func compound_size(specs: Dictionary) -> Vector2:
 	return Vector2(body_w, TITLE_BAND_GRAPH + body_h)
 
 
+## One + / − pair on the bottom edge, + on the LEFT like every other DC
+## terminal pair (graph_canvas.gd HANDLES).
 static func default_handles() -> Array:
 	return [
-		{"id": "positive", "polarity": "positive", "rx": 0.67, "ry": 1.0},
-		{"id": "negative", "polarity": "negative", "rx": 0.33, "ry": 1.0},
+		{"id": "positive", "polarity": "positive", "direction": "out", "rx": 0.33, "ry": 1.0},
+		{"id": "negative", "polarity": "negative", "direction": "out", "rx": 0.67, "ry": 1.0},
 	]
 
 

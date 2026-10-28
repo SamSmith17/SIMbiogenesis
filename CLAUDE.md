@@ -1236,6 +1236,31 @@ Godot.exe.exe --headless --path . --script system_graph/graph_domain_filter_self
 # array beats a nearer foreign rack, grid_layout, GraphPvWiring's 9S×2P string
 # grid). EXPECTED_CHECKS:
 Godot.exe.exe --headless --path . --script core/placed_models/pv_grid_snap_selftest.gd
+# Solar arrays on the graph (offline — GraphSolarArrays: a hollow 9S×2P gets
+# 18 panels in two strings with peak W, string Voc, controller sources and
+# ports unchanged; 300 panels → 30 string proxies; layout pictures from a
+# grid, a placed rack and a Solar designer preset; zoom-in rule; packed /
+# stowed / plane propagation; legacy port ids; Make-array groups; save round
+# trip; card size). EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script system_graph/graph_solar_array_selftest.gd
+# The same with REAL input (sandbox): an imported and a designed array — one
+# + / − pair, + left, both grabbable; wheel zoom opens it, the inside shaped
+# like its picture; wheel out pops back; double click opens. Shots of each
+# card at three zooms and the inside:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/solar_array_graph_check.gd -Label solar_arrays
+# GRAPH-OPEN frame bench (sandbox): the world's own graph in freeform at 1x /
+# 60x / 450x / 1440x / 7200x / paused — every section, render CPU / GPU, SoI
+# preview captures a second, and every frame over 30 ms with what it spent
+# (`gvbench … slow frame spends …`). GVBENCH_LENS=site|elevation|globe:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/graph_view_bench.gd
+# Which graph function costs what (median of 15 calls each: the PV aggregate,
+# telemetry, SolarUI sync, DC throttle, closure, dashboard parts) and card
+# draw time by node type over 30 redraws:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/graph_fn_timing.gd
+# Numbers to diff before / after an array change (read-only): per array,
+# the aggregate SolarUI reads, SolarUI's evaluator at five hours of one day,
+# each controller's string window:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/solar_array_parity_probe.gd
 # Timeline info row must not move while the clock runs (24 h in 7-min steps +
 # a lunar month; FAILs on > 0.5 px drift or a right-cluster refold):
 tools\harness.ps1 -World mtvernon -Capture timeline -UserArgs @("--window-size=1280x720")
@@ -2448,6 +2473,126 @@ Each piece has its own harness gate (Validation list).
   from it. Pond / stream / PBI nodes are refused with the reason.
   `--capture=graphtools` drives all of it with real clicks.
 - Not built: clickable legend toggles.
+
+## Solar arrays on the graph (system_graph/graph_solar_arrays.gd, 2026-10-27)
+
+Every solar array is ONE model, whatever made it: "array" (imported OSM,
+the placed `pv_array` rack via `bind_pv_array_prop`, Make array) and
+"pv_design" (an MPPT input of a Solar designer array, GraphPvLabArrays).
+`GraphSolarArrays` owns what an array is.
+- **Outside: one card**, the array branch of `GraphCardSpecs._group` for
+  both kinds (topology chip, live watts summed from its panels through the
+  card ctx `array_live_w` / `array_peak_w`, "Packed · " / "Stowed · "),
+  ONE + / − pair on the bottom edge with **+ on the left**
+  (`GraphArrayLayout.default_handles`, rx 0.33 / 0.67, the DC terminal
+  convention; the old array bus had + on the right). Its picture is the
+  real layout: `specs.array_cells` = {w_m, h_m, cells: [[x, y, w, h, idx,
+  string]]} in METRES, face-on, north up (`cells_for_design` from the
+  solved PvLab layout with tables a short gap apart, `cells_for_specs` from
+  the placed rack's `array_cols` / `array_rows` or series × parallel).
+  `canvas.draw_array_cells` draws it (card media, the pre-card body, the
+  Site Plan chip): each cell tinted by its panel's live output, edged in its
+  string's colour (`STRING_COLORS`). The card size frames that picture
+  (`card_size`); `GraphArrayLayout.legacy_compound_size` is the old tiles.
+- **Inside: the real panels**, placed at their cells (`interior_rects`: one
+  scale, a node takes its cell's shape, the shortest side NODE_MIN_SIDE),
+  so the inside has the picture's aspect and the existing zoom-through
+  (`_view_for_bbox_in_rect`) grows the panels out of the picture.
+  `build_interior` is shared by both kinds: series links are − → + between
+  neighbours (short hops; the string's + is its first panel's, its − its
+  last's), strings joined in parallel at the first string's ends, the
+  compound's ports promoted from them. `strings_from_model` reads any + / −
+  link as source-before-target (older saves wired + → −).
+- **Hollow arrays are gone.** `materialize` gives an "array" its panels
+  (`array_interior` "panels", `array_generated` true, `array_owner` on each
+  panel) or, above `MATERIALIZE_MAX_PANELS` (120), one STRING-PROXY panel
+  per string (`string_proxy`, `panel_count` = the string, voc / vmp / wmp
+  × the string). `GraphNesting.is_transparent_compound` treats a
+  materialized array as transparent, so flow, PvElectrical and the energy
+  sum walk its panels; `is_aggregate_array` (a hollow one) is what the old
+  `== "array"` sim readers check now (PvElectrical source / Voc / Vmp,
+  `_collect_root_array_aggregate`'s compound branch, the cost sum).
+  `_sync_array_compound_layouts` migrates on load (idempotent), renames
+  legacy outer port ids to positive / negative and resizes the card round
+  its centre; `_upgrade_designed_array_layouts` (after the map load, needs
+  the props) gives older designed arrays their picture and moves their
+  panels onto the rack without touching wires. A Make-array group is
+  ADOPTED: panels that each left through the same port are joined in
+  parallel inside, duplicate outside wires collapse.
+- **Parity is pinned**: the selftest checks peak W, string Voc and
+  controller sources before / after; `solar_array_parity_probe.gd` on Mount
+  Vernon matched everything but 7 am solar, which FELL from 0.237 to 0.069
+  kW because the old DC topology counted a STOWED 6 kW Linkage array in
+  `total_wmp` (`_pv_item_wmp` ignored `array_stowed`) and so diluted the
+  morning tree shade on the placed panel 3×. Panels of a packed / stowed
+  array carry the flag (`propagate_state`, also the rack's tilt / azimuth)
+  and `GraphSolarArrays.panel_off` zeroes them in `_pv_item_wmp`,
+  `_pv_sun_factor` and the aggregate. Child panels carry no site coords, so
+  they are not shade receivers (a follow-up).
+- **Zoom in**: `GraphSolarArrays.zoom_enterable` replaced the
+  `compound_kind != ""` gate in `_maybe_zoom_drill_in` /
+  `prepare_and_try_zoom_drill` — that gate (there since July) is why arrays
+  never opened on the wheel. Generic groups as before; arrays when they hold
+  something; battery banks / load groups still do not. A touch double tap
+  opens a compound like a double click. Inspector: "Expand → Panels" for both
+  kinds, "Reset panels to layout" (`SystemGraphView.rebuild_array_interior`:
+  regenerates a generated array, re-lays a designed / grouped one), and
+  Retile rebuilds a generated array's panels.
+- ⚠ Heredoc trap again: a `\\` line continuation inside a Python heredoc
+  edit came out as a JOINED line in GDScript (two places this pass). Write
+  edit scripts with the Write tool.
+
+## Graph view at speed (perf pass, 2026-10-27)
+
+"The graph view moves very slowly at high speeds." Measured with
+`graph_view_bench` on Mount Vernon (graph open, freeform). The median frame
+was vsync-bound up to 1440× but ~7 % of frames ran 37–48 ms at every speed,
+and at 7200× the median was 27.6 ms with the graph's sections summing to
+32 ms. After the pass: 7200× median 16.7 ms, sections ~9.5 ms. Frames over
+budget are mostly frames a few ms past 16.7 ms that wait a whole vsync, so
+the fix was taking steady cost out. In order of size:
+- **PV string walk.** `PvElectrical._pv_sources_reachable` rescanned every
+  wire for every node it visited. It now builds `pv_adjacency(conns)` once
+  per walk. On top of that:
+  - `_collect_root_array_aggregate` is cached on (struct_rev, user_rev, wire
+    count, sandbox); callers get a copy. It was 5.5 ms, computed twice in
+    the 1 Hz flush and on every SolarUI sync.
+  - The DC throttle's live circuit Voc reuses each controller's strings
+    (`_circuit_strings`, cached with `_dc_topo_key`). It was a full flat
+    walk per controller at 10 Hz.
+  - Net: SolarUI sync 10.8 → 1.3 ms, telemetry 9.7 → 0.75 ms, throttle
+    pass 4.9 → 0.3 ms.
+- **Redraw cadence.**
+  - Sim telemetry no longer `queue_redraw()`s every frame the clock runs. It
+    calls `canvas.request_sim_redraw()`, drawn by the canvas tick at most
+    every `SIM_REDRAW_INTERVAL` (0.1 s).
+  - ⚠ The high-speed LOD could never engage: `_high_speed_lod` compared the
+    flow multiple, which is clamped to 80, with `HIGH_SPEED_FLOW_MULT` 300.
+    It now compares the real speed (sim_time_scale / REALTIME_SCALE_REF),
+    and `REDRAW_INTERVAL_HIGH_SPEED` is 0.1 s.
+- **Closure metrics.** `compute_closure_metrics` is memoised for
+  `CLOSURE_MEMO_MS` (200 ms) at the same thousandth of a sim-hour. A
+  challenge bake stepping minutes inside one frame still recomputes per
+  step. The dashboard (5 Hz), the closure refresh and the timeline used to
+  compute it separately, ~3 ms each.
+- **High scores.** `HighScoreStore.load_scores` keeps parsed files in
+  memory while the file's modified time is unchanged. The dashboard read
+  and parsed the score file five times a second.
+- **Dashboard projection.** The 24 h / 7 d projection evaluates SolarUI's
+  solar once per WHOLE sim hour and interpolates (`_solar_hours`, dropped on
+  a graph or array change or every 60 s). It used to make 192 fresh
+  evaluations (~13 ms) every 0.25 sim-h, which is eight times a second at
+  7200×.
+- **Array card picture.** `draw_array_cells` draws straight off the
+  snapshot: no per-cell dicts, `frac_by_idx` once per draw, outlines
+  batched per string through `draw_multiline`. That took it 0.95 → 0.52 ms
+  for 60 cells and dropped draw calls from 1115 to about 1000.
+- **New spans.** `gv_process` (the view's whole frame), `gv_flush_tel` /
+  `_solar` / `_inv`, and `gv_dash_power` / `closure` / `tick` / `slow` /
+  `proj`. `canvas.draw_profile_on` times each card by type.
+- **What remains** in slow frames is mostly outside graph code: the stream
+  network's `water_*` (it runs while the graph hides the world), SolarUI at
+  7200×, and engine time.
 
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 

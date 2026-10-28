@@ -57,7 +57,7 @@ static func unit_vmp(item: Dictionary) -> float:
 		return 0.0
 	if ty == "panel":
 		return float(sp.get("vmp", 0.0))
-	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
+	if ty == "compound" and GraphSolarArrays.is_aggregate_array(item):
 		return float(sp.get("array_equiv_vmp", 0.0))
 	return 0.0
 
@@ -146,8 +146,9 @@ static func is_pv_source_item(item: Dictionary) -> bool:
 	if ty == "panel":
 		return true
 	if ty == "compound":
-		var sp: Dictionary = item.get("specs", {}) as Dictionary
-		return str(sp.get("compound_kind", "")) == "array"
+		# A hollow array is one unit; an array with its panels inside is a
+		# group — its panels are the sources.
+		return GraphSolarArrays.is_aggregate_array(item)
 	return false
 
 
@@ -160,7 +161,7 @@ static func unit_voc(item: Dictionary) -> float:
 		return 0.0
 	if ty == "panel":
 		return float(sp.get("voc", 37.5))
-	if ty == "compound" and str(sp.get("compound_kind", "")) == "array":
+	if ty == "compound" and GraphSolarArrays.is_aggregate_array(item):
 		return float(sp.get("array_equiv_voc", 0.0))
 	return 0.0
 
@@ -278,7 +279,9 @@ static func leg_neighbors(item_id: String, conns: Array, handle_prefix: String,
 ## treated as already-visited (so a walk out one leg cannot loop back through
 ## the device it started from and arrive at the other leg).
 static func _pv_sources_reachable(model: GraphModel, seeds: Array, conns: Array,
-		blocked: Dictionary) -> Dictionary:
+		blocked: Dictionary, adj: Dictionary = {}) -> Dictionary:
+	if adj.is_empty():
+		adj = pv_adjacency(conns)
 	var found: Dictionary = {}
 	var visited: Dictionary = blocked.duplicate()
 	var q: Array[String] = []
@@ -295,22 +298,37 @@ static func _pv_sources_reachable(model: GraphModel, seeds: Array, conns: Array,
 			continue
 		if is_pv_source_item(cur_it):
 			found[cur] = true
-		for conn in conns:
-			if not (conn is Dictionary):
-				continue
-			var c: Dictionary = conn
-			if str(c.get("polarity", "")) not in PV_WALK_POLARITIES:
-				continue
-			var other := ""
-			if str(c.get("source_item_id", "")) == cur:
-				other = str(c.get("target_item_id", ""))
-			elif str(c.get("target_item_id", "")) == cur:
-				other = str(c.get("source_item_id", ""))
+		for nv in (adj.get(cur, []) as Array):
+			var other := str(nv)
 			if other.is_empty() or visited.has(other):
 				continue
 			visited[other] = true
 			q.append(other)
 	return found
+
+
+## Each item's neighbours over PV / DC wires, built once per walk: the walk
+## used to rescan every wire for every item it visited (O(items × wires), a
+## few ms a call on a site with arrays of real panels, several calls a frame).
+static func pv_adjacency(conns: Array) -> Dictionary:
+	var adj: Dictionary = {}
+	for conn in conns:
+		if not (conn is Dictionary):
+			continue
+		var c: Dictionary = conn
+		if str(c.get("polarity", "")) not in PV_WALK_POLARITIES:
+			continue
+		var a := str(c.get("source_item_id", ""))
+		var b := str(c.get("target_item_id", ""))
+		if a.is_empty() or b.is_empty():
+			continue
+		if not adj.has(a):
+			adj[a] = []
+		if not adj.has(b):
+			adj[b] = []
+		(adj[a] as Array).append(b)
+		(adj[b] as Array).append(a)
+	return adj
 
 
 ## PV sources feeding `controller_id` over `conns`.
@@ -332,10 +350,11 @@ static func _pv_sources_over(model: GraphModel, controller_id: String,
 	if neg_seeds.is_empty():
 		return out
 	var blocked: Dictionary = {controller_id: true}
-	var via_pos := _pv_sources_reachable(model, pos_seeds, conns, blocked)
+	var adj := pv_adjacency(conns)
+	var via_pos := _pv_sources_reachable(model, pos_seeds, conns, blocked, adj)
 	if via_pos.is_empty():
 		return out
-	var via_neg := _pv_sources_reachable(model, neg_seeds, conns, blocked)
+	var via_neg := _pv_sources_reachable(model, neg_seeds, conns, blocked, adj)
 	for sid in via_pos:
 		if via_neg.has(sid):
 			out.append(str(sid))
