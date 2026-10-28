@@ -17,7 +17,7 @@ func _init() -> void:
 		"Simulate: a sample program or your own .gcode plays through the planner at real speed; send it to the placed machine",
 		"Checks: step rate, torque, belt stretch, gantry sag, screw whip, delta reach; Files: printer.cfg, Configuration.h, grbl $, BOM, cut list"])
 	button = "CNC gantry designer…"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 50.0
 	hour = 14.0
 	blurb = ("A parametric designer for CNC gantries in the OpenBuilds / RepRap vocabulary: V-slot 2020 to " +

@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Press Tab to take off from your current view",
 		"WASD to fly, Space / Ctrl to climb and descend, Tab or X to land"])
 	action = "drone_view"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("The drone lifts off from the player's own camera, so the view starts " +

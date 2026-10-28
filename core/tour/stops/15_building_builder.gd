@@ -10,7 +10,7 @@ func _init() -> void:
 		"Click the preview walls to place doors and windows",
 		"The Library tab swaps the building for a placed model"])
 	action = "building_builder"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("OSM footprints become buildings with level eaves and real roof geometry " +

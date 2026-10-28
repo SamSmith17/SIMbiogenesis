@@ -112,9 +112,10 @@ Each planet's position is solved from its orbital elements (JPL's Keplerian set)
 **How to open:** **Click the timeline**
 
 - Scrub the timeline across a month
+- 🎬 Video export → Analemma: moon, for a lunation like this one
 - Settings → Sky: moon size and phase offset
 
-The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon, so crescents, quarters and the full moon rise, transit and set on the dates and at the bearings they do outside.
+The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon. Stepping one lunar day at a time keeps it on the meridian while it waxes and wanes, and the sky behind it turns from day at new moon to deep night at full, exactly as it does outside.
 
 <a id="analemma"></a>
 
@@ -335,15 +336,17 @@ Additive machines are placed in the world and bound to a node on the systems gra
 
 ![Pallet rack builder](tour/pallet_rack.jpg)
 
-*Design warehouse racking — bays, levels, stepped and U layouts — and place it.*
+*Design pallet-rack buildings — decks, walls, doors, stairs, railings and solar slopes — and place them.*
 
 **How to open:** **Press P**
 
 - Press the pallet-rack key, or Library → Structures → Pallet Rack
 - Change bays, columns, levels and beams; click parts in the preview to edit them
+- Add to the structure: pick Door, Window, Stairs, Solar slope, Greenhouse, Railing or Courtyard, then click where it goes
+- Load a built-in design or save your own; save single elements as presets
 - Place in world; click a placed rack → Edit rack… to change it in place
 
-A parametric racking designer with real upright, beam and decking sizes. Layouts can be stepped or U-shaped, single parts can be picked and changed in the preview, and the finished rack is placed as one prop with collision, a packed shipping size and an NPC space tag.
+A parametric racking designer with real upright, beam and decking sizes. Doors and windows cut their own holes in the plywood walls, stairs climb to any deck, railings follow every open deck edge, and a sloped array of solar panels or greenhouse glazing can lean on any face, bay by bay. Designs and single elements save to a library. The finished rack is placed as one prop with collision, and its solar panels join the system graph.
 
 <a id="flatpack"></a>
 
@@ -369,18 +372,19 @@ A parametric designer for the slot-together plywood furniture seen all over Burn
 
 ![Dome & zome designer](tour/domelab.jpg)
 
-*Design geodesic domes, zomes and helix zomes in conduit, hubs, flat bars, rotegrity slats or folded plates; get the strut schedule, hub templates and cut files.*
+*Design geodesic domes, zomes and helical zomes in conduit, hubs, flat bars, rotegrity slats or folded, bolted plates with windows; get the strut schedule, hub templates and cut files.*
 
 **How to open:** **Click Dome & zome designer…**
 
 - Library → Structures → Dome & zome designer…
-- Pick Geodesic or Zome, a connector system, or a built-in design
+- Pick Geodesic, Zome or Helical zome, a connector system, or a built-in design
+- Plates fold their flanges in to meet the neighbour's back to back; set the bend radius, the openings and their glazing
 - Set the class, frequency, truncation, radius, the strut stock, the hubs and the covering
 - Parts lists every strut, hub and panel type; the schedule carries chord factors, cut lengths, bends and hub arm angles
 - Export writes DXF / SVG per sheet and hub template, the strut and BOM CSVs and the whole design as JSON
 - Place in world: a dome people can shelter under, which packs to its strut bundle
 
-A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; polar-zonohedron zomes of any order; and the helix zome, the zonohedron's smooth limit built from continuous curved ribs. Five ways to join them — flattened conduit on a bolt, rigid struts into socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, arc lengths, flange folds. The chord factors match the published tables, the bill of materials counts stock lengths and bolts, and the files go straight to a saw, a drill press or a CNC.
+A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; polar-zonohedron zomes of any order; the helix zome, the zonohedron's smooth limit built from continuous curved ribs; and helical zomes, the zonohedron swept round a helix like stacked cubes. Five ways to join them — flattened conduit on a bolt, rigid struts into socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, arc lengths, flange folds. The chord factors match the published tables, the bill of materials counts stock lengths and bolts, and the files go straight to a saw, a drill press or a CNC.
 
 <a id="gantrylab"></a>
 
@@ -400,6 +404,44 @@ A parametric designer for nearly any dome: Class I, II and III geodesic subdivis
 - Checks: step rate, torque, belt stretch, gantry sag, screw whip, delta reach; Files: printer.cfg, Configuration.h, grbl $, BOM, cut list
 
 A parametric designer for CNC gantries in the OpenBuilds / RepRap vocabulary: V-slot 2020 to C-Beam, V-wheels or linear rails, GT2 belts, lead and ball screws, NEMA 17 to 34, the boards from RAMPS to Klipper, hotends, pellet and clay extruders, spindles and lasers. Seven kinematic patterns each with their reasons, and the maths behind them made visible: jog the tool and watch the CoreXY motors turn against each other, the delta carriages climb their towers. Real G-code — a calibration cube, a spiral vase, a router pocket, your own file — runs through a trapezoid motion planner at true speed, with every corner slow-down, so the machine's limits can be seen before it is built. The checks are the engineering: step rate against the board, torque against the moving mass, belt stretch, gantry sag, screw whip, delta reach. The bill of materials prices every part and packs the cut list into stock lengths; the exported printer.cfg, Configuration.h and grbl settings carry the same numbers the simulation ran on. Placed in the world, the machine runs the job on the site's clock, drawing filament, flake or clay and power on the systems graph.
+
+<a id="toroidlab"></a>
+
+### Toroid designer
+
+![Toroid designer](tour/toroidlab.jpg)
+
+*Design bent-tube toroids on pipe fittings: size, ribs, rings, bracing and tension lines, a pleated correx canopy and a ring of solar panels; get the cut list with every bend, bend templates and the canopy's cut sheets.*
+
+**How to open:** **Click Toroid designer…**
+
+- Library → Structures → Toroid designer…
+- Set the inner and outer radius, the height, the rib count and the tube
+- Add rings by their angle on the rib circle, and X, diagonal or zigzag bracing or tension lines between any two
+- Shape the origami canopy (edges, peak, pleat depths, flange, bolts) and see its pieces nested on 4' × 8' sheets
+- Pick the panels and their wiring (series × parallel); placed in the world they join the graph
+- Export writes the canopy sheets as DXF / SVG, a full-size bend template per tube, the CSVs and the cut sheet
+
+A parametric designer for ring-shaped shade structures. Every rib is the same circle swept round the axis and cut by the ground, bent from tube in a few equal arcs and joined with tees, crosses, couplers and crossover clamps; rings run round it at any angle, and braces or tension lines tie any two rings together. Under the ribs hangs an origami canopy: each bay a diamond pleat folded from scored corrugated plastic, flanged and bolted to its neighbours. Over the crown, flexible panels bend to the frame and wire into strings that land on the systems graph. The reference build — 24 ribs of 1" mild steel, 48 sheets of 10 mm correx and 24 × 100 W panels in 6S × 4P — is a built-in design.
+
+<a id="pvlab"></a>
+
+### Solar designer
+
+![Solar designer](tour/pvlab.jpg)
+
+*Build an exact twin of your real solar panels — cells, size in mm, frame, backsheet, junction box, leads and connector — then rack them (2x4s, Unistrut, aluminium rail or a tracker), wire the strings and watch the amps, volts and watts, shade included.*
+
+**How to open:** **Click Solar designer…**
+
+- Library → Structures → Solar designer…
+- Cell tab: technology, wafer size, half-cut or full, busbars, colour
+- Panel tab: size in mm, frame, backsheet, glass, junction box, leads, the data sheet's numbers
+- Array tab: rows, mount, rack material, tilt or tracker; click modules to paint strings
+- Pick the controller and each string's cold-morning Voc and hot-noon Vmp are checked against it
+- Place it on the ground, a roof or a structure; on the graph each MPPT input is one node with its strings inside
+
+A parametric designer for the solar you actually own. Every cell is drawn to the millimetre by a shader — mono or poly, half-cut or full, busbars and fingers — and the module's electrics come from its cells or from the data sheet you type in. Arrays sit on racks of real members (2x4s, Unistrut, aluminium rail) with a span check, or on single-axis trackers that follow the sun and backtrack. Shade is checked substring by substring and run through a bypass-diode I–V model, so one leaf on one cell costs what it really does. Placed on the ground, a roof or a structure, the array lands on the systems graph as one node per MPPT input with every string of panels inside.
 
 <a id="systems"></a>
 
@@ -438,6 +480,22 @@ The graph is the core game surface: a schematic of the resource flows on the sit
 - Library → In the world: what is built but not on the graph yet
 
 Tidy is a force layout whose direction comes from the ports — inputs on top, outputs below — so sources settle above controllers above storage above loads, solar arrays move as one block, and pinned nodes stay put. Show-only views hide every node and wire outside the chosen kinds of flow without removing anything, and the library's In the world drawer lists what is placed on the site but not yet on the graph.
+
+<a id="render_sim"></a>
+
+### Render the simulation ahead
+
+![Render the simulation ahead](tour/render_sim.jpg)
+
+*Pre-compute the next day of the whole site, then play it back from the cache.*
+
+**How to open:** **Click 📈**
+
+- Ctrl-drag a range on the timeline (or leave it: the next 24 h)
+- Click 📈 Render on the timeline bar
+- The green strip above the clips is what plays back without computing
+
+The simulation is a deterministic function of sim time, so a stretch of it can be rendered ahead — battery, tanks, hydro, camp power and the people's supplies — and then scrubbed or played back from the cache while you explore in first person. A green strip above the clips marks what is rendered; editing the graph cuts it at the playhead, as Premiere drops a stale preview.
 
 <a id="site_plan"></a>
 
@@ -681,7 +739,7 @@ A fire is a pure function of the clock: it climbs the structure's real surface, 
 
 ![StarShade: built by the crew](tour/starshade_crew.jpg)
 
-*Twelve people cut, drill, carry, bolt, lift and deploy a StarShade from its real parts.*
+*Twelve people put a StarShade up from its real parts, folded, then open it.*
 
 **How to open:** **Click Rehearse build (prop editor)**
 
@@ -689,7 +747,7 @@ A fire is a pure function of the clock: it climbs the structure's real surface, 
 - Click it → Crew → Rehearse build, or queue the build for the camp's crew
 - Scrub the timeline: the build runs forwards and backwards with the clock
 
-The build plan comes from the structure's own bill of materials: every beam is cut and drilled at a bench, carried to its seat and placed, every joint fastened, then a raising crew lifts the ring and the fold deploys. Named workers walk between jobs with the tool for each in hand, the structure only grows, and the whole build is a pure function of the clock — scrub it back and it comes apart again. Queued for a camp, the real crew builds it as fast as their credited work allows.
+Every structure a crew builds runs on the same site: the kit is laid out in a yard, and each piece of the real structure is carried out and fitted in the Lab's own order — bottom ring, V modules, top ring, supports — with the frame folded, then the StarShade opens about its own middle. The build is a pure function of the clock — scrub it back and it comes apart again. Queued for a camp, the real crew builds it as fast as their credited work allows.
 
 <a id="npc_anim_editor"></a>
 
@@ -761,4 +819,4 @@ A listen server with no servers of ours: the host's world, clock and simulation 
 
 ---
 
-<sub>Generated by `tools/tour_docs.py` from tour run tour_20261025-215938 (2026-10-25T22:01:31, commit f886c8a; 1/1 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>
+<sub>Generated by `tools/tour_docs.py` from tour run tour_20261028c (2026-10-28T15:04:16, commit ad3e00e; 49/49 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>

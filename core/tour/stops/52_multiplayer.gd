@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Click the Multiplayer chip on the timeline",
 		"Host to get a join code, or paste one to join; Enter opens chat"])
 	button = "Multiplayer"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	hour = 14.0
 	blurb = ("A listen server with no servers of ours: the host's world, clock and " +

@@ -2135,8 +2135,19 @@ clean hero screenshot, and `docs/FEATURES.md` + the README gallery generated
 from the same metadata. **A new player-facing feature gets a tour stop.**
 - **One stop = one file**, `core/tour/stops/NN_<id>.gd` extending `TourStop`
   (metadata in `_init`: id, title, chapter World/Build/Systems/People/Labs,
-  summary, how[], action and/or button, world mtvernon|walton, budget_s,
+  summary, how[], action and/or button, world, budget_s,
   hour, optional, blurb; hooks `setup` / `run` / `teardown`, all may await).
+  World by feature (user, 2026-10-28): `mtvernon` for terrain, vegetation,
+  water, hydro and the graph lenses (its trees block everything else);
+  `walton` for people, the festival, the light studio and the crew build;
+  `burningman` (alias in HarnessRegistry, the open playa) for everything
+  else. `TourDirector.WORLD_STARTS` moves BM's start 110 m off the art ring
+  at the site centre, and the director lands a drone the world was saved with.
+  ⚠ `TourContext.hud(false/true)` NESTS: a `shot(..., true)` inside a stop's
+  own `hud(false)` used to empty the saved list, and every layer the baseline
+  does not re-show (the designers' own CanvasLayers) stayed hidden for the
+  rest of the run: six designer heroes were empty sky. The director runs
+  `hud_restore()` after each teardown.
   `TourCatalog` finds stops by scanning the folder in file order — copy
   `stops/_template.gd`, no other file changes. Keep chapters contiguous in
   the numbering (the selftest checks it).

@@ -16,7 +16,7 @@ func _init() -> void:
 		"Live links: pick a value, click the sensor that measures it",
 		"Turn on Live mode and linked values follow your real system"])
 	button = "HA"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 13.0
 	blurb = ("Type your Home Assistant's address the way a browser shows it and paste a " +

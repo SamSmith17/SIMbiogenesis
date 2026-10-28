@@ -24,7 +24,7 @@ func _init() -> void:
 	how = PackedStringArray(["Press X", "Then do Y"])
 	action = ""                  # InputMap action, e.g. "system_graph_toggle"
 	button = ""                  # or the on-screen button label
-	world = "mtvernon"           # or "walton"
+	world = "burningman"         # or "mtvernon" (terrain/water/veg/hydro), "walton" (people/festival)
 	budget_s = 40.0
 	hour = 11.0
 	blurb = "Two to four sentences for docs/FEATURES.md."

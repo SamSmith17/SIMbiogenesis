@@ -18,7 +18,7 @@ func _init() -> void:
 		"Export writes DXF / SVG per sheet and hub template, the strut and BOM CSVs and the whole design as JSON",
 		"Place in world: a dome people can shelter under, which packs to its strut bundle"])
 	button = "Dome & zome designer…"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 45.0
 	hour = 14.0
 	blurb = ("A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the " +

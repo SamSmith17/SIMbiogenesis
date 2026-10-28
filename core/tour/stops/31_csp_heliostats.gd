@@ -21,7 +21,7 @@ func _init() -> void:
 		"G shows its node: tracking angle, DNI, thermal output, water in → steam out",
 		"Scrub the timeline: the trough tilts and the heliostat turns with the sun"])
 	action = "toggle_library"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 45.0
 	hour = 9.0
 	blurb = ("A parabolic trough tilts on a single east–west axis to follow the sun's " +

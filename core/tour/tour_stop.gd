@@ -34,7 +34,9 @@ var how: PackedStringArray = PackedStringArray()
 var action := ""
 ## Or (also) the on-screen button that opens it, as the player sees it.
 var button := ""
-## The world the demo runs on: "mtvernon" or "walton".
+## The world the demo runs on: "mtvernon" (terrain, water, vegetation, hydro),
+## "walton" (people and the festival) or "burningman" (the open playa: every
+## other feature, where nothing stands between the camera and the subject).
 var world := "mtvernon"
 ## Seconds of tour time the stop may take (title card included) before the
 ## director gives up on it and moves on.

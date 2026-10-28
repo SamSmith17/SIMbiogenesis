@@ -154,6 +154,10 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#domelab"><img src="docs/tour/domelab.jpg" width="260" alt="Dome & zome designer"></a><br><b>Dome & zome designer</b><br><sub>Dome & zome designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#gantrylab"><img src="docs/tour/gantrylab.jpg" width="260" alt="CNC gantry designer"></a><br><b>CNC gantry designer</b><br><sub>CNC gantry designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#toroidlab"><img src="docs/tour/toroidlab.jpg" width="260" alt="Toroid designer"></a><br><b>Toroid designer</b><br><sub>Toroid designer…</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pvlab"><img src="docs/tour/pvlab.jpg" width="260" alt="Solar designer"></a><br><b>Solar designer</b><br><sub>Solar designer…</sub></td>
 </tr>
 </table>
 
@@ -163,24 +167,25 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_freeform"><img src="docs/tour/graph_freeform.jpg" width="260" alt="The systems graph"></a><br><b>The systems graph</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_tools"><img src="docs/tour/graph_tools.jpg" width="260" alt="Graph tools: Tidy and show-only views"></a><br><b>Graph tools: Tidy and show-only views</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#render_sim"><img src="docs/tour/render_sim.jpg" width="260" alt="Render the simulation ahead"></a><br><b>Render the simulation ahead</b><br><sub>📈</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#elevation"><img src="docs/tour/elevation.jpg" width="260" alt="Elevation lens"></a><br><b>Elevation lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe"><img src="docs/tour/globe.jpg" width="260" alt="Globe lens"></a><br><b>Globe lens</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#snowglobe"><img src="docs/tour/snowglobe.jpg" width="260" alt="Full-screen globe"></a><br><b>Full-screen globe</b><br><sub>SoI marker / full globe</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#snowglobe"><img src="docs/tour/snowglobe.jpg" width="260" alt="Full-screen globe"></a><br><b>Full-screen globe</b><br><sub>SoI marker / full globe</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_report"><img src="docs/tour/site_report.jpg" width="260" alt="Site Report"></a><br><b>Site Report</b><br><sub>K</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp"><img src="docs/tour/bootcamp.jpg" width="260" alt="Solar Bootcamp"></a><br><b>Solar Bootcamp</b><br><sub>🎓 Bootcamp</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp"><img src="docs/tour/bootcamp.jpg" width="260" alt="Solar Bootcamp"></a><br><b>Solar Bootcamp</b><br><sub>🎓 Bootcamp</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#challenges"><img src="docs/tour/challenges.jpg" width="260" alt="Challenges"></a><br><b>Challenges</b><br><sub>🎯</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D wire and pipe routing"></a><br><b>3D wire and pipe routing</b><br><sub>a device's port (press and drag)</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#home_assistant"><img src="docs/tour/home_assistant.jpg" width="260" alt="Home Assistant live links"></a><br><b>Home Assistant live links</b><br><sub>HA</sub></td>
 </tr>

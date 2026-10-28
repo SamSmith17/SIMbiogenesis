@@ -15,7 +15,7 @@ func _init() -> void:
 		"Load a built-in design or save your own; save single elements as presets",
 		"Place in world; click a placed rack → Edit rack… to change it in place"])
 	action = "toggle_pallet_rack"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("A parametric racking designer with real upright, beam and decking sizes. " +

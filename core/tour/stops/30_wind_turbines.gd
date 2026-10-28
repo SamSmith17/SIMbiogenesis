@@ -16,7 +16,7 @@ func _init() -> void:
 		"G shows its node: live wind at hub height and output",
 		"Click a placed turbine to move it or swap its model"])
 	action = "toggle_library"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("Turbine output is P = ½ρAC_p·v³ under the Betz limit, with air density " +

@@ -30,7 +30,7 @@ func _init() -> void:
 		"Click it → Crew → Rehearse build, or queue the build for the camp's crew",
 		"Scrub the timeline: the build runs forwards and backwards with the clock"])
 	button = "Rehearse build (prop editor)"
-	world = "mtvernon"
+	world = "walton"
 	budget_s = 60.0
 	hour = 11.0
 	blurb = ("Every structure a crew builds runs on the same site: the kit is laid out " +

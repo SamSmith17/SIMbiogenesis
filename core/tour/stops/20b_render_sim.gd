@@ -31,6 +31,19 @@ func run(ctx: TourContext) -> void:
 		return
 	var sr: Node = sgv.call("sim_renderer")
 	await ctx.wait(0.6)
+	# Straight after the graph stops, the first click sometimes never reaches
+	# the button (the bar is still re-laying itself out as the graph closes):
+	# click once more, then press it through its own handler, and say so.
+	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
+		await ctx.wait(0.8)
+		await ctx.click_button("📈")
+		await ctx.wait(0.6)
+	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
+		var tl0: Node = ctx.main.find_child("TimelineUI", true, false)
+		if tl0 != null and tl0.has_method("_on_render_pressed"):
+			ctx.note("the 📈 click did not land twice; pressed through the button's handler")
+			tl0.call("_on_render_pressed")
+			await ctx.wait(0.6)
 	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
 		# The button's own refusal only reaches a toast: name it in the log. An
 		# empty refusal with the button enabled means the CLICK never reached

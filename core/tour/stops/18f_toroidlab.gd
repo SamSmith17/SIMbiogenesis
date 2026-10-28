@@ -17,7 +17,7 @@ func _init() -> void:
 		"Pick the panels and their wiring (series × parallel); placed in the world they join the graph",
 		"Export writes the canopy sheets as DXF / SVG, a full-size bend template per tube, the CSVs and the cut sheet"])
 	button = "Toroid designer…"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("A parametric designer for ring-shaped shade structures. Every rib is the same circle swept round " +

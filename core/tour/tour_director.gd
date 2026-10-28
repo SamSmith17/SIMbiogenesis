@@ -55,6 +55,14 @@ var _tour_t0 := 0.0
 var _home := Transform3D()
 var _home_cam_pitch := 0.0
 var _has_home := false
+## Where a world's tour starts, when the saved player position does not suit
+## it (site metres, yaw in degrees, 0 = facing -Z). Burning Man's player stands
+## inside a ring of placed art at the site centre, which filled every shot of
+## a thing placed in front of them; 110 m south, facing the centre, puts the
+## new things on open playa with the art as a backdrop.
+const WORLD_STARTS := {
+	"burningman": {"x": 0.0, "z": 110.0, "yaw_deg": 0.0},
+}
 
 
 func _ready() -> void:
@@ -146,6 +154,23 @@ func run() -> Dictionary:
 	var f0 := Engine.get_frames_drawn()
 	var ctx := _make_ctx()
 	ctx.refresh_handles()
+	# A world saved with the survey drone up loads flying it: land it first,
+	# so the tour's home is where the player stands, seen from their eyes.
+	if ctx.player != null and bool(ctx.player.get("is_fpv_drone_mode")):
+		ctx.player.call("toggle_remote_drone_view")
+		await ctx.frames(3)
+	if ctx.player != null and WORLD_STARTS.has(world_alias):
+		var ws: Dictionary = WORLD_STARTS[world_alias]
+		var sx := float(ws["x"])
+		var sz := float(ws["z"])
+		ctx.player.global_transform = Transform3D(Basis(Vector3.UP, deg_to_rad(float(ws["yaw_deg"]))),
+			Vector3(sx, ctx.ground_y(sx, sz) + 0.1, sz))
+		if ctx.player is CharacterBody3D:
+			(ctx.player as CharacterBody3D).velocity = Vector3.ZERO
+		var pc0 := ctx.player.get_node_or_null("CameraArm/Camera3D") as Camera3D
+		if pc0 != null:
+			pc0.rotation.x = 0.0
+		await ctx.frames(3)
 	if ctx.player != null:
 		_home = ctx.player.global_transform
 		var pc := ctx.player.get_node_or_null("CameraArm/Camera3D") as Camera3D
@@ -252,6 +277,7 @@ func _run_stop(stop: TourStop) -> void:
 		await get_tree().process_frame
 	if not tdone[0]:
 		ctx.failures.append("teardown did not finish")
+	ctx.hud_restore()
 	if ctx.hero_png.is_empty():
 		ctx.failures.append("no hero screenshot")
 	if not ctx.ui_audit.is_empty():
@@ -336,6 +362,8 @@ func _baseline(ctx: TourContext, hour: float) -> void:
 		sv.call("close")
 	var p := ctx.player
 	if p != null:
+		if bool(p.get("is_fpv_drone_mode")) and p.has_method("toggle_remote_drone_view"):
+			p.call("toggle_remote_drone_view")
 		if bool(p.get("is_riding")) and p.has_method("_dismount_vehicle"):
 			p.call("_dismount_vehicle")
 		if _has_home and not bool(p.get("is_riding")):

@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Press F5 to switch between first and third person",
 		"Settings → Player for distance, shoulder and body"])
 	action = "toggle_third_person"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	hour = 14.0
 	blurb = ("Third person keeps every tool working: the crosshair, interaction and " +

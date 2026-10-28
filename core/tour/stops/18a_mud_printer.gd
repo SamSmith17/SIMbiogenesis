@@ -23,7 +23,7 @@ func _init() -> void:
 		"Aim at the printer + Interact: the 3D print setup",
 		"Design building… draws rooms, walls and doorways; Print starts the job, Export GRBL writes the G-code"])
 	action = "toggle_library"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 70.0
 	hour = 13.0
 	blurb = ("Additive machines are placed in the world and bound to a node on the " +

@@ -29,11 +29,13 @@ const BUILTIN_SCENES := [
 const WORLD_ALIASES := {
 	"mtvernon": ["mount vernon", "mt. vernon", "mt vernon", "mcmurray"],
 	"walton": ["pataha creek", "walton"],
+	"burningman": ["black rock city", "burning man"],
 }
 const ALIAS_SYNONYMS := {
 	"mt_vernon": "mtvernon", "mt-vernon": "mtvernon", "mountvernon": "mtvernon",
 	"mount_vernon": "mtvernon", "mount-vernon": "mtvernon",
 	"walton_or": "walton", "walton-or": "walton", "pataha": "walton",
+	"burning_man": "burningman", "burning-man": "burningman", "brc": "burningman",
 }
 
 ## kind "scene" = the classic orbit/street/hero sets driven by _await_and_run;

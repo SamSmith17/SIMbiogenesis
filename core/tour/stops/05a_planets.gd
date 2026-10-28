@@ -19,7 +19,7 @@ func _init() -> void:
 	how = PackedStringArray(["Scrub the timeline to night",
 		"Settings → Planets: name tags (off / when you look at one / always), colours, sizes"])
 	button = "Settings → Planets"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 21.0
 	blurb = ("Each planet's position is solved from its orbital elements (JPL's " +

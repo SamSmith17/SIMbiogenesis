@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["In the graph (G), click 🎓 Bootcamp",
 		"Each level runs in a sandbox — your real graph is put back on exit"])
 	button = "🎓 Bootcamp"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	hour = 14.0
 	blurb = ("The tutorial starts with a short circuit and works up through overcharging, " +

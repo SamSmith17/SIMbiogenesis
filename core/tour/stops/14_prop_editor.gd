@@ -10,7 +10,7 @@ func _init() -> void:
 		"Click a placed thing to open its editor: move / rotate gizmo, fire, model tools",
 		"M toggles placed-props mode"])
 	action = "toggle_library"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("Turbines, shade structures, tanks, vehicles and imported models are placed " +

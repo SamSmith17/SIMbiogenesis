@@ -25,7 +25,7 @@ func _init() -> void:
 		"Space plays; ∞×2 steps two days a frame",
 		"Settings → Sky: solar or lunar analemma, sun / moon / planet paths, stars through daylight"])
 	button = "∞ on the timeline speed control"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 120.0
 	hour = 12.0
 	blurb = ("The ∞ preset steps the calendar one day per frame to the site's mean " +

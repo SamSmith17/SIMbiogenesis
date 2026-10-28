@@ -16,7 +16,7 @@ func _init() -> void:
 		"Sheets shows the parts nested as they will be cut; Export DXF + SVG writes the files",
 		"Place in world: people sit on benches and sleep on the daybed"])
 	button = "Flat-pack furniture designer…"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("A parametric designer for the slot-together plywood furniture seen all over Burning " +

@@ -17,7 +17,7 @@ func _init() -> void:
 		"Pick the controller and each string's cold-morning Voc and hot-noon Vmp are checked against it",
 		"Place it on the ground, a roof or a structure; on the graph each MPPT input is one node with its strings inside"])
 	button = "Solar designer…"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 13.0
 	blurb = ("A parametric designer for the solar you actually own. Every cell is drawn to the millimetre by a " +

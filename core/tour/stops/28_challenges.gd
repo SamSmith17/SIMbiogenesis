@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Click 🎯 on the timeline and pick a challenge",
 		"A pre-baked run plays back; retry replays the same days against your edits"])
 	button = "🎯"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	hour = 14.0
 	blurb = ("Pre-baked challenges simulate the whole span — energy, water and people — " +

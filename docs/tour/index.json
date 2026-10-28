@@ -16,14 +16,14 @@
       "open_hints": [
         "Click Play → pick a world"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Every world stands on a real map: an elevation model, aerial imagery draped at up to native county resolution, and the buildings, roads, water and forests from OpenStreetMap. The sun, sky and weather follow the site's real latitude, date and archived weather.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "arrival.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "drone_view": {
       "id": "drone_view",
@@ -40,14 +40,14 @@
       "open_hints": [
         "Press Tab"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The drone lifts off from the player's own camera, so the view starts exactly where you were looking. It is the quickest way to read a site's layout before building on it.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "drone_view.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "third_person": {
       "id": "third_person",
@@ -64,14 +64,14 @@
       "open_hints": [
         "Press F5"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Third person keeps every tool working: the crosshair, interaction and vehicles all read the same camera. The player's figure is posed procedurally for walking, running, jumping, driving and using tools.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "third_person.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "day_night": {
       "id": "day_night",
@@ -88,14 +88,14 @@
       "open_hints": [
         "Click the timeline"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The clock is reversible: sun, moon, sky, weather and even the battery scrub backwards along exactly the curve they followed forwards. The sunlight, skylight and colour all come from one daylight model, so a sunrise fades in instead of switching on.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "day_night.jpg",
-      "image_run": "2026-10-13T19:55:21",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "night_sky": {
       "id": "night_sky",
@@ -113,14 +113,14 @@
       "open_hints": [
         "Press Home"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The star field is a registered Stellarium map turned by the computed sidereal time for the site's latitude, so constellations rise and set where they do outside. Planets, the moon's phase, an optional zodiac overlay and analemma planet paths all come from the same astronomy code.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "night_sky.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "weather": {
       "id": "weather",
@@ -138,14 +138,14 @@
       "open_hints": [
         "Click ⚙ → Extreme Weather"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Clouds, wind, temperature and rain come from the real hourly record for the site, so solar output and the look of the day match what happened. Wildfire smoke, dust storms, damaging wind and heatwaves are resolved from alert and air-quality data — and can be previewed on demand.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "weather.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "location_picker": {
       "id": "location_picker",
@@ -163,14 +163,14 @@
       "open_hints": [
         "Press L"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The picker shows the NASA POWER solar-irradiance grid over a world map. Any coordinate becomes a playable map: elevation, imagery and OSM content are fetched and cached for it, and the world's sun and weather follow it.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "location_picker.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "terrain_sculpt": {
       "id": "terrain_sculpt",
@@ -194,8 +194,8 @@
       "status": "PASS",
       "failures": [],
       "image": "terrain_sculpt.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "vegetation": {
       "id": "vegetation",
@@ -219,8 +219,8 @@
       "status": "PASS",
       "failures": [],
       "image": "vegetation.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "camps": {
       "id": "camps",
@@ -238,14 +238,14 @@
       "open_hints": [
         "Press C"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Camps are households on a world-anchored lattice — an RV with its awning and car, tents round a canopy — kept clear of buildings, roads, water and steep ground. Painting a camp bigger adds households without moving any already standing.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "camps.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "water": {
       "id": "water",
@@ -270,8 +270,8 @@
       "status": "PASS",
       "failures": [],
       "image": "water.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "prop_editor": {
       "id": "prop_editor",
@@ -289,14 +289,14 @@
       "open_hints": [
         "Press U"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Turbines, shade structures, tanks, vehicles and imported models are placed in the world and bound to their nodes on the systems graph. One editor handles every placed thing: a world/local gumball, duplicate and delete, and the model's own tools.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "prop_editor.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "building_builder": {
       "id": "building_builder",
@@ -314,14 +314,14 @@
       "open_hints": [
         "Press B"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Each building can be restyled in a studio preview and the change is saved per site.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "building_builder.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "light_studio": {
       "id": "light_studio",
@@ -345,8 +345,8 @@
       "status": "PASS",
       "failures": [],
       "image": "light_studio.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "vehicles": {
       "id": "vehicles",
@@ -365,14 +365,14 @@
         "Press O",
         "Click Library → Vehicles"
       ],
-      "world": "walton",
+      "world": "burningman",
       "blurb": "Placed vehicles use the same riding code as the scene vehicles, with a real collision footprint, a chase camera in third person, and an electric battery that drains with distance and trickle-charges while parked.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "vehicles.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "scad_store": {
       "id": "scad_store",
@@ -389,14 +389,14 @@
       "open_hints": [
         "Press H"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A catalogue of licence-checked OpenSCAD designs with their Customizer parameters exposed as controls. Parts render through headless OpenSCAD to STL meshes that can be placed like any other model.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "scad_store.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "graph_freeform": {
       "id": "graph_freeform",
@@ -420,8 +420,8 @@
       "status": "PASS",
       "failures": [],
       "image": "graph_freeform.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "site_plan": {
       "id": "site_plan",
@@ -445,8 +445,8 @@
       "status": "PASS",
       "failures": [],
       "image": "site_plan.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "elevation": {
       "id": "elevation",
@@ -470,8 +470,8 @@
       "status": "PASS",
       "failures": [],
       "image": "elevation.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "globe": {
       "id": "globe",
@@ -495,8 +495,8 @@
       "status": "PASS",
       "failures": [],
       "image": "globe.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "snowglobe": {
       "id": "snowglobe",
@@ -519,8 +519,8 @@
       "status": "PASS",
       "failures": [],
       "image": "snowglobe.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "hydro_lab": {
       "id": "hydro_lab",
@@ -543,8 +543,8 @@
       "status": "PASS",
       "failures": [],
       "image": "hydro_lab.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "site_report": {
       "id": "site_report",
@@ -567,8 +567,8 @@
       "status": "PASS",
       "failures": [],
       "image": "site_report.jpg",
-      "image_run": "2026-10-15T12:26:16",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "bootcamp": {
       "id": "bootcamp",
@@ -585,14 +585,14 @@
       "open_hints": [
         "Click 🎓 Bootcamp"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The tutorial starts with a short circuit and works up through overcharging, PWM vs MPPT limits, series/parallel banks, string sizing and 24-hour runs. Goals are judged on the circuit itself, and run levels on a pre-baked day.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "bootcamp.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "challenges": {
       "id": "challenges",
@@ -609,14 +609,14 @@
       "open_hints": [
         "Click 🎯"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Pre-baked challenges simulate the whole span — energy, water and people — before you watch it, then play it back to the moment it failed. Fix the system and retry the same segment to see whether it holds.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "challenges.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "festival_mode": {
       "id": "festival_mode",
@@ -640,8 +640,8 @@
       "status": "PASS",
       "failures": [],
       "image": "festival_mode.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "settlement_view": {
       "id": "settlement_view",
@@ -665,8 +665,8 @@
       "status": "PASS",
       "failures": [],
       "image": "settlement_view.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "effigy_burn": {
       "id": "effigy_burn",
@@ -689,8 +689,8 @@
       "status": "PASS",
       "failures": [],
       "image": "effigy_burn.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "npc_anim_editor": {
       "id": "npc_anim_editor",
@@ -713,8 +713,8 @@
       "status": "PASS",
       "failures": [],
       "image": "npc_anim_editor.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "linkage_lab": {
       "id": "linkage_lab",
@@ -732,14 +732,14 @@
       "open_hints": [
         "Press N"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A native port of the LinkageLab designer: compound scissor mechanisms solved in closed form, with solar panels, hardware assemblies, coverings and a full bill of materials, cut list and drill templates. A placed structure folds and deploys in the world and its panels join the solar graph.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "linkage_lab.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "packing_lab": {
       "id": "packing_lab",
@@ -757,14 +757,14 @@
       "open_hints": [
         "Press Q"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Everything on the site has a packed shipping size and mass. The Lab packs the site's cargo into U-Haul, trailer and ISO container interiors with door apertures and payload limits, and reports the load's centre of mass.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "packing_lab.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "multiplayer": {
       "id": "multiplayer",
@@ -781,14 +781,14 @@
       "open_hints": [
         "Click Multiplayer"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A listen server with no servers of ours: the host's world, clock and simulation are authoritative, guests see the people and the graph streamed live, can possess an NPC, and a Discord community file handles identity, discovery and an optional chat mirror.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "multiplayer.jpg",
-      "image_run": "2026-10-13T19:53:27",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "planets": {
       "id": "planets",
@@ -805,14 +805,14 @@
       "open_hints": [
         "Click Settings → Planets"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Each planet's position is solved from its orbital elements (JPL's Keplerian set) for the clock's own instant and drawn into the sky shader as a point of light. Name tags can follow the view or stay on, and the same solve draws the planets' paths in analemma mode.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "planets.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "moon_phases": {
       "id": "moon_phases",
@@ -821,6 +821,7 @@
       "summary": "The real moon: where it stands and how much of it is lit, for any date.",
       "how": [
         "Scrub the timeline across a month",
+        "🎬 Video export → Analemma: moon, for a lunation like this one",
         "Settings → Sky: moon size and phase offset"
       ],
       "action": "",
@@ -829,14 +830,14 @@
       "open_hints": [
         "Click the timeline"
       ],
-      "world": "mtvernon",
-      "blurb": "The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon, so crescents, quarters and the full moon rise, transit and set on the dates and at the bearings they do outside.",
+      "world": "burningman",
+      "blurb": "The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon. Stepping one lunar day at a time keeps it on the meridian while it waxes and wanes, and the sky behind it turns from day at new moon to deep night at full, exactly as it does outside.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "moon_phases.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "analemma": {
       "id": "analemma",
@@ -854,14 +855,14 @@
       "open_hints": [
         "Click ∞ on the timeline speed control"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "The ∞ preset steps the calendar one day per frame to the site's mean solar noon, so the sun traces the analemma for the real latitude while years go by and the forest runs through its seasons — leaf-out, autumn colour and leaf drop — at the same pace. The stars stay visible through daylight, the planets' paths are sampled at the same instants (Mercury and Venus loop round the sun's figure-eight), and the lunar mode catches the moon at each transit to draw its own analemma.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "analemma.jpg",
-      "image_run": "2026-10-14T20:26:09",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "mud_printer": {
       "id": "mud_printer",
@@ -879,23 +880,25 @@
       "open_hints": [
         "Press U"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Additive machines are placed in the world and bound to a node on the systems graph. The print setup previews a part on the bed with its toolpath layer by layer; the building designer turns a floor plan into cambered, infilled walls and exports volumetric GRBL G-code. A started print rises bead by bead in the world on the sim clock — scrub the timeline and it builds or un-builds — and dries from wet to dry colour in place.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "mud_printer.jpg",
-      "image_run": "2026-10-14T20:21:33",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "pallet_rack": {
       "id": "pallet_rack",
       "title": "Pallet rack builder",
       "chapter": "Build",
-      "summary": "Design warehouse racking — bays, levels, stepped and U layouts — and place it.",
+      "summary": "Design pallet-rack buildings — decks, walls, doors, stairs, railings and solar slopes — and place them.",
       "how": [
         "Press the pallet-rack key, or Library → Structures → Pallet Rack",
         "Change bays, columns, levels and beams; click parts in the preview to edit them",
+        "Add to the structure: pick Door, Window, Stairs, Solar slope, Greenhouse, Railing or Courtyard, then click where it goes",
+        "Load a built-in design or save your own; save single elements as presets",
         "Place in world; click a placed rack → Edit rack… to change it in place"
       ],
       "action": "toggle_pallet_rack",
@@ -904,14 +907,14 @@
       "open_hints": [
         "Press P"
       ],
-      "world": "mtvernon",
-      "blurb": "A parametric racking designer with real upright, beam and decking sizes. Layouts can be stepped or U-shaped, single parts can be picked and changed in the preview, and the finished rack is placed as one prop with collision, a packed shipping size and an NPC space tag.",
+      "world": "burningman",
+      "blurb": "A parametric racking designer with real upright, beam and decking sizes. Doors and windows cut their own holes in the plywood walls, stairs climb to any deck, railings follow every open deck edge, and a sloped array of solar panels or greenhouse glazing can lean on any face, bay by bay. Designs and single elements save to a library. The finished rack is placed as one prop with collision, and its solar panels join the system graph.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "pallet_rack.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "graph_tools": {
       "id": "graph_tools",
@@ -935,8 +938,8 @@
       "status": "PASS",
       "failures": [],
       "image": "graph_tools.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "conduit_routing": {
       "id": "conduit_routing",
@@ -960,8 +963,8 @@
       "status": "PASS",
       "failures": [],
       "image": "conduit_routing.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "wind_turbines": {
       "id": "wind_turbines",
@@ -979,14 +982,14 @@
       "open_hints": [
         "Press U"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Turbine output is P = ½ρAC_p·v³ under the Betz limit, with air density from altitude and temperature and the 10 m wind sheared to hub height. The wind is the site's archived or forecast weather for the clock's hour, the same wind the trees and the dust blow in, and the rotors spin and yaw to it.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "wind_turbines.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "csp_heliostats": {
       "id": "csp_heliostats",
@@ -1004,20 +1007,20 @@
       "open_hints": [
         "Press U"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A parabolic trough tilts on a single east–west axis to follow the sun's altitude; a dual-axis heliostat points its whole dish at the sun. Both use the real sun position and the clear-sky or measured direct irradiance, and on the graph they turn water into steam at the rate their optics and receiver allow. The focal line glows with the live concentrated flux.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "csp_heliostats.jpg",
-      "image_run": "2026-10-14T20:08:36",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "starshade_crew": {
       "id": "starshade_crew",
       "title": "StarShade: built by the crew",
       "chapter": "People",
-      "summary": "Twelve people cut, drill, carry, bolt, lift and deploy a StarShade from its real parts.",
+      "summary": "Twelve people put a StarShade up from its real parts, folded, then open it.",
       "how": [
         "Place a StarShade (Linkage Lab → Place in world)",
         "Click it → Crew → Rehearse build, or queue the build for the camp's crew",
@@ -1029,14 +1032,14 @@
       "open_hints": [
         "Click Rehearse build (prop editor)"
       ],
-      "world": "mtvernon",
-      "blurb": "The build plan comes from the structure's own bill of materials: every beam is cut and drilled at a bench, carried to its seat and placed, every joint fastened, then a raising crew lifts the ring and the fold deploys. Named workers walk between jobs with the tool for each in hand, the structure only grows, and the whole build is a pure function of the clock — scrub it back and it comes apart again. Queued for a camp, the real crew builds it as fast as their credited work allows.",
+      "world": "walton",
+      "blurb": "Every structure a crew builds runs on the same site: the kit is laid out in a yard, and each piece of the real structure is carried out and fitted in the Lab's own order — bottom ring, V modules, top ring, supports — with the frame folded, then the StarShade opens about its own middle. The build is a pure function of the clock — scrub it back and it comes apart again. Queued for a camp, the real crew builds it as fast as their credited work allows.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "starshade_crew.jpg",
-      "image_run": "2026-10-14T20:27:56",
-      "image_commit": "27831f5"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "home_assistant": {
       "id": "home_assistant",
@@ -1054,14 +1057,14 @@
       "open_hints": [
         "Click HA"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "Type your Home Assistant's address the way a browser shows it and paste a long-lived token; the status card shows each step as it happens and offers the right address when the port is wrong. Live links ties any HA sensor to any value the simulation tracks — the battery, solar, a load, a tank, the weather — with the units converted. In Live mode the simulation follows your real system; at any speed the readings are recorded beside it on the timeline.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "home_assistant.jpg",
-      "image_run": "2026-10-22T15:50:15",
-      "image_commit": "327a083"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "flatpack": {
       "id": "flatpack",
@@ -1081,23 +1084,24 @@
       "open_hints": [
         "Click Flat-pack furniture designer…"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A parametric designer for the slot-together plywood furniture seen all over Burning Man. Each piece is a set of flat parts; the designer intersects them in 3D and cuts the half-lap slots, mortises and wedge holes where they meet, sized to the plywood's real thickness plus clearance, with dogbones for the router bit. The parts nest onto sheets, the cut list gives every size, and one DXF and SVG per sheet goes straight to a CNC. The sample sofa sets up upright, reclined or flat as a daybed from the same twelve parts.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "flatpack.jpg",
-      "image_run": "2026-10-23T21:17:36",
-      "image_commit": "d0e0149"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "domelab": {
       "id": "domelab",
       "title": "Dome & zome designer",
       "chapter": "Build",
-      "summary": "Design geodesic domes, zomes and helix zomes in conduit, hubs, flat bars, rotegrity slats or folded plates; get the strut schedule, hub templates and cut files.",
+      "summary": "Design geodesic domes, zomes and helical zomes in conduit, hubs, flat bars, rotegrity slats or folded, bolted plates with windows; get the strut schedule, hub templates and cut files.",
       "how": [
         "Library → Structures → Dome & zome designer…",
-        "Pick Geodesic or Zome, a connector system, or a built-in design",
+        "Pick Geodesic, Zome or Helical zome, a connector system, or a built-in design",
+        "Plates fold their flanges in to meet the neighbour's back to back; set the bend radius, the openings and their glazing",
         "Set the class, frequency, truncation, radius, the strut stock, the hubs and the covering",
         "Parts lists every strut, hub and panel type; the schedule carries chord factors, cut lengths, bends and hub arm angles",
         "Export writes DXF / SVG per sheet and hub template, the strut and BOM CSVs and the whole design as JSON",
@@ -1109,14 +1113,14 @@
       "open_hints": [
         "Click Dome & zome designer…"
       ],
-      "world": "mtvernon",
-      "blurb": "A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; polar-zonohedron zomes of any order; and the helix zome, the zonohedron's smooth limit built from continuous curved ribs. Five ways to join them — flattened conduit on a bolt, rigid struts into socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, arc lengths, flange folds. The chord factors match the published tables, the bill of materials counts stock lengths and bolts, and the files go straight to a saw, a drill press or a CNC.",
+      "world": "burningman",
+      "blurb": "A parametric designer for nearly any dome: Class I, II and III geodesic subdivisions of the icosahedron, octahedron and tetrahedron, truncated at any ring and stretched into ellipsoids; polar-zonohedron zomes of any order; the helix zome, the zonohedron's smooth limit built from continuous curved ribs; and helical zomes, the zonohedron swept round a helix like stacked cubes. Five ways to join them — flattened conduit on a bolt, rigid struts into socket or star-plate hubs, flat bars bent to the curve, hubless rotegrity slats, or folded plates with no struts at all — each worked out from the geometry alone: dips, bends, hub arm patterns, arc lengths, flange folds. The chord factors match the published tables, the bill of materials counts stock lengths and bolts, and the files go straight to a saw, a drill press or a CNC.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "domelab.jpg",
-      "image_run": "2026-10-25T16:34:02",
-      "image_commit": "d374786"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     },
     "gantrylab": {
       "id": "gantrylab",
@@ -1137,22 +1141,103 @@
       "open_hints": [
         "Click CNC gantry designer…"
       ],
-      "world": "mtvernon",
+      "world": "burningman",
       "blurb": "A parametric designer for CNC gantries in the OpenBuilds / RepRap vocabulary: V-slot 2020 to C-Beam, V-wheels or linear rails, GT2 belts, lead and ball screws, NEMA 17 to 34, the boards from RAMPS to Klipper, hotends, pellet and clay extruders, spindles and lasers. Seven kinematic patterns each with their reasons, and the maths behind them made visible: jog the tool and watch the CoreXY motors turn against each other, the delta carriages climb their towers. Real G-code — a calibration cube, a spiral vase, a router pocket, your own file — runs through a trapezoid motion planner at true speed, with every corner slow-down, so the machine's limits can be seen before it is built. The checks are the engineering: step rate against the board, torque against the moving mass, belt stretch, gantry sag, screw whip, delta reach. The bill of materials prices every part and packs the cut list into stock lengths; the exported printer.cfg, Configuration.h and grbl settings carry the same numbers the simulation ran on. Placed in the world, the machine runs the job on the site's clock, drawing filament, flake or clay and power on the systems graph.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "gantrylab.jpg",
-      "image_run": "2026-10-25T22:01:31",
-      "image_commit": "f886c8a"
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
+    },
+    "toroidlab": {
+      "id": "toroidlab",
+      "title": "Toroid designer",
+      "chapter": "Build",
+      "summary": "Design bent-tube toroids on pipe fittings: size, ribs, rings, bracing and tension lines, a pleated correx canopy and a ring of solar panels; get the cut list with every bend, bend templates and the canopy's cut sheets.",
+      "how": [
+        "Library → Structures → Toroid designer…",
+        "Set the inner and outer radius, the height, the rib count and the tube",
+        "Add rings by their angle on the rib circle, and X, diagonal or zigzag bracing or tension lines between any two",
+        "Shape the origami canopy (edges, peak, pleat depths, flange, bolts) and see its pieces nested on 4' × 8' sheets",
+        "Pick the panels and their wiring (series × parallel); placed in the world they join the graph",
+        "Export writes the canopy sheets as DXF / SVG, a full-size bend template per tube, the CSVs and the cut sheet"
+      ],
+      "action": "",
+      "button": "Toroid designer…",
+      "key": "",
+      "open_hints": [
+        "Click Toroid designer…"
+      ],
+      "world": "burningman",
+      "blurb": "A parametric designer for ring-shaped shade structures. Every rib is the same circle swept round the axis and cut by the ground, bent from tube in a few equal arcs and joined with tees, crosses, couplers and crossover clamps; rings run round it at any angle, and braces or tension lines tie any two rings together. Under the ribs hangs an origami canopy: each bay a diamond pleat folded from scored corrugated plastic, flanged and bolted to its neighbours. Over the crown, flexible panels bend to the frame and wire into strings that land on the systems graph. The reference build — 24 ribs of 1\" mild steel, 48 sheets of 10 mm correx and 24 × 100 W panels in 6S × 4P — is a built-in design.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "toroidlab.jpg",
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
+    },
+    "pvlab": {
+      "id": "pvlab",
+      "title": "Solar designer",
+      "chapter": "Build",
+      "summary": "Build an exact twin of your real solar panels — cells, size in mm, frame, backsheet, junction box, leads and connector — then rack them (2x4s, Unistrut, aluminium rail or a tracker), wire the strings and watch the amps, volts and watts, shade included.",
+      "how": [
+        "Library → Structures → Solar designer…",
+        "Cell tab: technology, wafer size, half-cut or full, busbars, colour",
+        "Panel tab: size in mm, frame, backsheet, glass, junction box, leads, the data sheet's numbers",
+        "Array tab: rows, mount, rack material, tilt or tracker; click modules to paint strings",
+        "Pick the controller and each string's cold-morning Voc and hot-noon Vmp are checked against it",
+        "Place it on the ground, a roof or a structure; on the graph each MPPT input is one node with its strings inside"
+      ],
+      "action": "",
+      "button": "Solar designer…",
+      "key": "",
+      "open_hints": [
+        "Click Solar designer…"
+      ],
+      "world": "burningman",
+      "blurb": "A parametric designer for the solar you actually own. Every cell is drawn to the millimetre by a shader — mono or poly, half-cut or full, busbars and fingers — and the module's electrics come from its cells or from the data sheet you type in. Arrays sit on racks of real members (2x4s, Unistrut, aluminium rail) with a span check, or on single-axis trackers that follow the sun and backtrack. Shade is checked substring by substring and run through a bypass-diode I–V model, so one leaf on one cell costs what it really does. Placed on the ground, a roof or a structure, the array lands on the systems graph as one node per MPPT input with every string of panels inside.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "pvlab.jpg",
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
+    },
+    "render_sim": {
+      "id": "render_sim",
+      "title": "Render the simulation ahead",
+      "chapter": "Systems",
+      "summary": "Pre-compute the next day of the whole site, then play it back from the cache.",
+      "how": [
+        "Ctrl-drag a range on the timeline (or leave it: the next 24 h)",
+        "Click 📈 Render on the timeline bar",
+        "The green strip above the clips is what plays back without computing"
+      ],
+      "action": "",
+      "button": "📈",
+      "key": "",
+      "open_hints": [
+        "Click 📈"
+      ],
+      "world": "mtvernon",
+      "blurb": "The simulation is a deterministic function of sim time, so a stretch of it can be rendered ahead — battery, tanks, hydro, camp power and the people's supplies — and then scrubbed or played back from the cache while you explore in first person. A green strip above the clips marks what is rendered; editing the graph cuts it at the playhead, as Premiere drops a stale preview.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "render_sim.jpg",
+      "image_run": "2026-10-28T15:04:16",
+      "image_commit": "ad3e00e"
     }
   },
   "last_run": {
-    "label": "tour_20261025-215938",
-    "generated": "2026-10-25T22:01:31",
-    "git_commit": "f886c8a",
-    "passed": 1,
-    "total": 1,
+    "label": "tour_20261028c",
+    "generated": "2026-10-28T15:04:16",
+    "git_commit": "ad3e00e",
+    "passed": 49,
+    "total": 49,
     "video_secs": null
   }
 }

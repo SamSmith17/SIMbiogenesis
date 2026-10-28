@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Settings ⚙ → Window Wall to lay out the monitors",
 		"Press F11 to open it; Esc to close"])
 	action = "toggle_window_wall"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	# Opens native fullscreen windows on every monitor — not for a normal run.
 	optional = true

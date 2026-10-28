@@ -12,7 +12,7 @@ func _init() -> void:
 		"Camp: brush, rectangle, lasso or polygon; Erase; Plots; Edit",
 		"Tune look… authors a camp style and its layouts"])
 	action = "camp_scatter"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("Camps are households on a world-anchored lattice — an RV with its awning " +

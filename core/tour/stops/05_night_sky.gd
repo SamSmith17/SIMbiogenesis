@@ -20,7 +20,7 @@ func _init() -> void:
 		"Press Home to show the reference-star markers",
 		"The ∞ speed preset turns on analemma mode (stars through daylight)"])
 	action = "toggle_star_calibration"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 22.0
 	blurb = ("The star field is a registered Stellarium map turned by the computed " +

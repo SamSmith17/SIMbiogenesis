@@ -48,6 +48,7 @@ var audit_mode := "report"
 
 var _cam: Camera3D = null
 var _hud_saved: Dictionary = {}
+var _hud_depth := 0
 var _held: PackedStringArray = PackedStringArray()
 var _class_cache: Dictionary = {}
 
@@ -245,10 +246,18 @@ func _grab(hide_hud: bool) -> Image:
 
 
 ## Show / hide Main's CanvasLayers (the HUD), remembering what was visible.
+## Calls NEST: a shot(..., true) inside a stop's own hud(false) used to clear
+## the saved list, so the stop's hud(true) restored nothing and every layer
+## the baseline does not re-show (the designers' own layers) stayed hidden for
+## the rest of the run. Only the outermost hide saves; only the matching
+## outermost show restores.
 func hud(show: bool) -> void:
 	if main == null:
 		return
 	if not show:
+		_hud_depth += 1
+		if _hud_depth > 1:
+			return
 		_hud_saved.clear()
 		# Nested CanvasLayers (UILayer/InteractionPromptUI, toasts…) are not
 		# hidden by their parent layer, so take every one under Main.
@@ -257,11 +266,23 @@ func hud(show: bool) -> void:
 				_hud_saved[c.get_instance_id()] = true
 				(c as CanvasLayer).visible = false
 	else:
-		for iid in _hud_saved:
-			var c := instance_from_id(int(iid)) as CanvasLayer
-			if c != null and is_instance_valid(c):
-				c.visible = true
-		_hud_saved.clear()
+		if _hud_depth == 0:
+			return
+		_hud_depth -= 1
+		if _hud_depth > 0:
+			return
+		hud_restore()
+
+
+## Put back every layer a hud(false) hid, however deep the calls went (the
+## director runs this after each stop's teardown).
+func hud_restore() -> void:
+	for iid in _hud_saved:
+		var c := instance_from_id(int(iid)) as CanvasLayer
+		if c != null and is_instance_valid(c):
+			c.visible = true
+	_hud_saved.clear()
+	_hud_depth = 0
 
 
 # -- clock --------------------------------------------------------------------

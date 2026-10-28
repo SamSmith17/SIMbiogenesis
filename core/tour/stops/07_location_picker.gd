@@ -10,7 +10,7 @@ func _init() -> void:
 		"Click the map, search an address or type coordinates",
 		"\"Create map here\" builds a new world on that spot"])
 	action = "toggle_location_picker"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 30.0
 	hour = 11.0
 	blurb = ("The picker shows the NASA POWER solar-irradiance grid over a world map. " +

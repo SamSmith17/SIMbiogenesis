@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Pick or create a world in the launch hub",
 		"Walk with WASD, look with the mouse"])
 	button = "Play → pick a world"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("Every world stands on a real map: an elevation model, aerial imagery " +

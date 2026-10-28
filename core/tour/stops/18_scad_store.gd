@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Press H for the store",
 		"Pick a part, adjust its parameters, render, place"])
 	action = "toggle_scad_store"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 50.0
 	hour = 14.0
 	blurb = ("A catalogue of licence-checked OpenSCAD designs with their Customizer " +

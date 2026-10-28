@@ -10,7 +10,7 @@ func _init() -> void:
 		"Fold / Unfold animates the mechanism; 📋 opens the build guide and BOM",
 		"Place in world puts the live, foldable structure on the site"])
 	action = "toggle_linkage_lab"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("A native port of the LinkageLab designer: compound scissor mechanisms " +

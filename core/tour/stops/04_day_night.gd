@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Drag the timeline at the bottom of the screen",
 		"Space plays and pauses; the speed buttons run time faster"])
 	button = "the timeline"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 15.0
 	blurb = ("The clock is reversible: sun, moon, sky, weather and even the battery " +

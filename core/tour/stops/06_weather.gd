@@ -10,7 +10,7 @@ func _init() -> void:
 		"Settings ⚙ → Extreme Weather → Preview a hazard",
 		"🌫 on the timeline calibrates local fog and wind"])
 	button = "⚙ → Extreme Weather"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("Clouds, wind, temperature and rain come from the real hourly record for " +

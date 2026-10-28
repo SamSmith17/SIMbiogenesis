@@ -13,7 +13,7 @@ func _init() -> void:
 		"F5 for the chase camera"])
 	action = "interact"
 	button = "Library → Vehicles"
-	world = "walton"
+	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0
 	blurb = ("Placed vehicles use the same riding code as the scene vehicles, with a " +

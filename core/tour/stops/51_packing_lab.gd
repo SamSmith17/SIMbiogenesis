@@ -12,7 +12,7 @@ func _init() -> void:
 		"Pick a truck, trailer or container; Auto-pack, or place boxes by hand",
 		"🚚 Deliver kit drops the packed crates on the site"])
 	action = "toggle_packing_lab"
-	world = "mtvernon"
+	world = "burningman"
 	budget_s = 35.0
 	hour = 14.0
 	blurb = ("Everything on the site has a packed shipping size and mass. The Lab packs " +

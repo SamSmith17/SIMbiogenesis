@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Each tour stop is one file in core/tour/stops/ and names the world it runs
-  on (Mount Vernon or Walton). This script runs one harness pass per world
+  on (Mount Vernon, Walton or Burning Man). This script runs one harness pass per world
   through tools/harness.ps1 (so every run is sandboxed - the real worlds are
   never changed), then merges the passes into one manifest in FILE order.
 
