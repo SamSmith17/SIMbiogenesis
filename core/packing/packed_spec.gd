@@ -114,6 +114,10 @@ const CURATED_MODELS := {
 	# HomeBiogas 2.0 ships folded in cartons, ~37 kg total (manufacturer).
 	"home_biogas_2": {"w_m": 1.20, "d_m": 0.42, "h_m": 0.42, "mass_kg": 37.0,
 		"form": "crate", "source": "curated"},
+	# Drum biochar retort: ships as it stands (a 55-gallon drum, ~20 kg, plus
+	# its inner retort and lid).
+	"biochar_reactor": {"w_m": 0.62, "d_m": 0.62, "h_m": 0.85, "mass_kg": 40.0,
+		"form": "crate", "source": "estimated"},
 	"cnc_router": {"w_m": 1.60, "d_m": 1.40, "h_m": 0.55, "mass_kg": 180.0,
 		"form": "pallet", "source": "estimated"},
 	"trash_printer": {"w_m": 1.10, "d_m": 0.80, "h_m": 0.60, "mass_kg": 80.0,

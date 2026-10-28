@@ -21,9 +21,8 @@ built on, so it opens exactly as you left it.
 | `SIMbiogenesis-<v>-windows.zip` | `SIMbiogenesis.exe` (game data embedded) and the DLLs of its native addons |
 | `SIMbiogenesis-<v>-macos.zip` | `SIMbiogenesis.app`, universal (Intel + Apple Silicon), ad-hoc signed |
 | `SIMbiogenesis-<v>-linux.zip` | `SIMbiogenesis.x86_64` (game data embedded) and its `.so` files |
-| `simbiogenesis-art-starshade.pck` | Art add-on: the Starshade models |
-| `simbiogenesis-art-models.pck` | Art add-on: every other imported model (the camp components too), the player and NPC rigs |
-| `simbiogenesis-art-mars.pck`, `simbiogenesis-art-soak.pck` | Only with `--art-groups mars,soak`: the Mars aerial and SOAK festival maps and their scenes. Releases leave them out by default (since 0.3.0 they are shared separately) |
+| `simbiogenesis-art-models.pck` | Art add-on: the imported models (vehicles, turbines, CSP, workshop machines, the biochar reactor, the camp components), the player and NPC rigs |
+| `simbiogenesis-art-mars.pck`, `-soak.pck`, `-starshade.pck`, `-trees.pck` | Only with `--art-groups mars,soak,starshade,trees`. Since 0.3.0 a release leaves them out: the Mars and SOAK maps are shared separately, the StarShade GLBs are superseded by the Linkage Lab's parametric structures, and the hero tree GLBs are large and scale badly. The library hides a model whose art is not installed (`ModelCatalog.listed_models`), and H keeps a plant when its hero model is missing |
 | `ART_CONTENTS.md` | Every model file each art pack carries, where each library model's file ships, and the author's own `user://models/` library, which no release carries |
 | `SHA256SUMS.txt`, `RELEASE_NOTES.md` | Checksums, and the install steps to paste on the release page |
 

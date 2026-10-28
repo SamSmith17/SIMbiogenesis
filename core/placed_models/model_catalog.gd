@@ -117,9 +117,27 @@ static func starshade_designs() -> Array[Dictionary]:
 
 
 ## Shipped models filtered by their "category" key ("structures", "nature", …).
-static func models_in_category(category: String) -> Array[Dictionary]:
+## Is this entry's model on disk? Procedural entries always are. A shipped
+## entry whose art is not installed (a release without that art pack: the
+## StarShade GLBs, the hero trees) is not.
+static func is_installed(m: Dictionary) -> bool:
+	var path := str(m.get("path", ""))
+	return not path.begins_with("res://") or ResourceLoader.exists(path)
+
+
+## The models the library lists: every entry whose model is installed. find()
+## still knows the others, so a saved prop of one loads with its stand-in.
+static func listed_models() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for m in all_models():
+		if is_installed(m):
+			out.append(m)
+	return out
+
+
+static func models_in_category(category: String) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for m in listed_models():
 		if str(m.get("category", "")) == category:
 			out.append(m)
 	return out
@@ -669,6 +687,13 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "home_biogas_2", "label": "HomeBiogas 2.0",
 			"path": "res://Imported Models/Biogas/home_biogas_2.glb",
 			"preserve_scale": true, "reference_height_m": 1.3,
+			"category": "structures", "forced_yaw_deg": 0.0},
+		# Drum biochar retort (SimLab export, already in true metres: 0.61 x
+		# 0.62 m, 0.85 m tall — a 55-gallon drum). The graph's Biochar Reactor
+		# preset places it.
+		{"id": "biochar_reactor", "label": "Biochar Reactor (drum retort)",
+			"path": "res://Imported Models/Biochar/biochar_reactor.glb",
+			"preserve_scale": true,
 			"category": "structures", "forced_yaw_deg": 0.0},
 		# ---- Tools: Cartesian CNC machines (X/Y/Z kinematics) ----
 		# CAD-export GLBs in arbitrary internal units → preserve_scale + a

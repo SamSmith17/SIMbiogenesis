@@ -820,7 +820,7 @@ func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 func _open_library() -> void:
 	_library_models.clear()
 	_library_list.clear()
-	for m in ModelCatalog.all_models():
+	for m in ModelCatalog.listed_models():
 		# Only models with a file can be merged into one instanced mesh.
 		if str(m.get("path", "")).is_empty():
 			continue

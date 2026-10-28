@@ -249,7 +249,7 @@ func _shortcut_input(event: InputEvent) -> void:
 
 func _refresh_models() -> void:
 	_model_option.clear()
-	for m in ModelCatalog.all_models():
+	for m in ModelCatalog.listed_models():
 		_model_option.add_item(str(m.get("label", m.get("id", "?"))))
 		_model_option.set_item_metadata(_model_option.item_count - 1, str(m.get("id", "")))
 

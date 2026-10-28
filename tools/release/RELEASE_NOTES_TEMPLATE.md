@@ -10,10 +10,11 @@ SIMbiogenesis {version} (commit {commit})
    - **Linux:** `SIMbiogenesis-{version}-linux.zip`. Unzip it and run `./SIMbiogenesis.x86_64`.
 2. **Optional: the art add-on.** Download the `simbiogenesis-art-*.pck` files and put them in the
    **same folder as the game** (on macOS: next to `SIMbiogenesis.app`). They add the detailed
-   models, the camp tents and shade structures, the Starshade and the animated people.
-   `ART_CONTENTS.md` lists every model each one carries. The same files work on every OS. Without
-   them the game still runs; anything that needs the art uses a simple stand-in. The built-in
-   SOAK festival and Mars maps are not part of this release; they are shared separately.
+   models (vehicles, turbines, workshop machines, the biochar reactor), the camp tents and shade
+   structures, and the animated people. `ART_CONTENTS.md` lists every model each one carries. The
+   same files work on every OS. Without them the game still runs; anything that needs the art uses
+   a simple stand-in. The built-in SOAK festival and Mars maps are not part of this release; they
+   are shared separately. StarShades are built in the Linkage Lab.
 3. **Optional: a friend's worlds.** Drop their `.simpack.zip` onto the game window (or press
    **Share… → Install a pack** in the launch hub). Their worlds arrive with the map data they need,
    so they open looking the way they did on your friend's computer.

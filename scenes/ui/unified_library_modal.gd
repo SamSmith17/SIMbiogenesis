@@ -314,7 +314,7 @@ func _populate() -> void:
 	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true,
 		ModelCatalog.GENERIC_BOX_ID: true}
 	var vehicles: Array = []
-	for m in ModelCatalog.all_models():
+	for m in ModelCatalog.listed_models():
 		var mid := str(m.get("id", ""))
 		if mid.is_empty() or seen.has(mid):
 			continue

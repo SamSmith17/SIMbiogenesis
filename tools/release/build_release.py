@@ -69,13 +69,18 @@ ART_PACKS = [
               "maps/soak_camp_map.tres", "scenes/gameplay/Tree.tscn",
               "Imported Models/Soak Terrain/Camps/Camp Components/SOAK barn*"]),
     ("starshade", ["StarShade FBX/", "Starshade Pretty Version/", "Imported Models/StarShades/"]),
+    # The hero tree GLBs: large, and they scale badly next to the procedural
+    # forest. Not in a release by default.
+    ("trees", ["Imported Models/Trees/"]),
     ("models", ["Imported Models/", "Player Character/",
                 "Imported Models/Soak Terrain/Camps/Camp Components/"]),
 ]
-# The groups a release builds when --art-groups is not given. SOAK and Mars
-# are the author's own festival maps and ship separately (user, 2026-10-28);
-# `--art-groups mars,soak` builds them.
-DEFAULT_ART_GROUPS = ["starshade", "models"]
+# The groups a release builds when --art-groups is not given (user,
+# 2026-10-28): SOAK and Mars are the author's own festival maps and ship
+# separately; the StarShade GLBs are superseded by the parametric Linkage Lab
+# structures; the hero trees are left out. `--art-groups mars,soak,starshade,
+# trees` builds any of them.
+DEFAULT_ART_GROUPS = ["models"]
 # Model file types listed in ART_CONTENTS.md.
 MODEL_EXTS = {"glb", "gltf", "fbx", "obj", "blend", "dae", "stl"}
 ART_ROOTS = ["Imported Models", "StarShade FBX", "Starshade Pretty Version", "Player Character"]
@@ -470,7 +475,7 @@ def main() -> None:
     ap.add_argument("--no-art", action="store_true", help="skip the art add-on")
     ap.add_argument("--art-only", action="store_true", help="only build the art add-on")
     ap.add_argument("--art-groups", default="", help="comma list of art groups to build "
-                    "(default: %s; also mars, soak)" % ",".join(DEFAULT_ART_GROUPS))
+                    "(default: %s; also mars, soak, starshade, trees)" % ",".join(DEFAULT_ART_GROUPS))
     ap.add_argument("--debug", action="store_true", help="export debug builds (console + asserts)")
     ap.add_argument("--out", default="", help="output folder (default release/<version>)")
     args = ap.parse_args()

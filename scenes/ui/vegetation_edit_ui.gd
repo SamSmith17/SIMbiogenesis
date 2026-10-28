@@ -578,7 +578,11 @@ func _build_ui() -> void:
 	_hero_section.add_child(hero_lbl)
 	var opt := OptionButton.new()
 	opt.custom_minimum_size = Vector2(120, 0)
-	for p in HeroTreeCatalog.all_presets():
+	var heroes := HeroTreeCatalog.installed_presets()
+	_hero_section.visible = not heroes.is_empty()
+	if not heroes.is_empty():
+		_hero_preset = str(heroes[0].get("id", _hero_preset))
+	for p in heroes:
 		opt.add_item(str(p.get("label", p.get("id", ""))))
 		opt.set_item_metadata(opt.item_count - 1, str(p.get("id", "")))
 	opt.item_selected.connect(func(idx: int) -> void: _hero_preset = str(opt.get_item_metadata(idx)))

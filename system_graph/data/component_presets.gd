@@ -342,6 +342,7 @@ const PROCESSORS: Array = [
 				{"kind": "hot_water", "rate": 30.0, "unit": "L/h"},
 				{"kind": "woodgas", "rate": 4.0, "unit": "m³/h"},
 			],
+			"model_id": "biochar_reactor",
 		},
 	},
 	{

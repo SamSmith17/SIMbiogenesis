@@ -41,6 +41,22 @@ static func find(preset_id: String) -> Dictionary:
 	return {}
 
 
+## Is this preset's model on disk? The hero GLBs are imported art that the
+## releases leave out (large, and they scale badly), so a release has none.
+static func is_installed(preset_id: String) -> bool:
+	var path := str(find(preset_id).get("path", ""))
+	return not path.is_empty() and ResourceLoader.exists(path)
+
+
+## The presets whose model is on disk.
+static func installed_presets() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for p in all_presets():
+		if is_installed(str(p.get("id", ""))):
+			out.append(p)
+	return out
+
+
 static func load_scene(preset_id: String) -> PackedScene:
 	var preset := find(preset_id)
 	var path := str(preset.get("path", ""))

@@ -11059,6 +11059,9 @@ func place_hero_tree(preset: String, x: float, z: float, scale: float,
 		ground_y: float = NAN) -> bool:
 	if _vegetation_layer == null:
 		return false
+	if not HeroTreeCatalog.is_installed(preset):
+		_toast("That hero tree model is not installed", ToastUI.Level.WARN)
+		return false
 	var rng := RandomNumberGenerator.new()
 	var yaw := rng.randf() * TAU
 	var gy := ground_y
@@ -11121,6 +11124,11 @@ func convert_plant_to_hero_at(world_xz: Vector2, radius_m: float = 6.0) -> Dicti
 		return {}
 	var species := str(desc.get("species", ""))
 	var preset := HeroTreeCatalog.preset_for_species(species)
+	# Without the hero model (a release ships none) the plant would be swapped
+	# for a hero that never draws: keep the plant.
+	if not HeroTreeCatalog.is_installed(preset):
+		_toast("Hero tree models are not installed", ToastUI.Level.WARN)
+		return {}
 	# Match the apparent height of the card being replaced: its draw scale times
 	# the species' nominal card height (the same table the generator sizes
 	# scattered trees with), expressed as a hero user-scale.

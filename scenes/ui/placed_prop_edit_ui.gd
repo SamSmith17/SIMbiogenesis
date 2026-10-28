@@ -792,6 +792,10 @@ func _sync_widgets() -> void:
 	_shadow_option.selected = maxi(_SHADOW_MODES.find(str(_rec.get("shadow_mode", ""))), 0)
 	_model_option.clear()
 	for m in ModelCatalog.all_models():
+		# Models whose art is not installed are not offered, but this prop's
+		# own model stays in the list.
+		if not ModelCatalog.is_installed(m) and str(m.get("id", "")) != mid:
+			continue
 		_model_option.add_item(str(m.get("label", m.get("id", "?"))))
 		_model_option.set_item_metadata(_model_option.item_count - 1, str(m.get("id", "")))
 		if str(m.get("id", "")) == mid:
