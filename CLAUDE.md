@@ -936,6 +936,26 @@ Godot.exe.exe --headless --path . --script core/gantrylab/assembly/gantrylab_ass
 # run on the world clock (drivers in true mm, beads on the placed bed),
 # packed → bundle, Edit gantry… rebinds, Apply re-syncs the graph node:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/gantrylab_designer_check.gd -Label gantrylab
+# Print pipeline (offline — core/machines/: StlSlicer on a cube / a tube
+# with a hole / a vase / a placed-and-turned box (every layer closes, walls
+# ½ w in, infill density near the dial, top and bottom solid, the hole kept,
+# the spiral monotone, E × bore area = w·h·road), PrintGcodeWriter round
+# trips through GantryLabGcode in the RepRap and the mud printer's GRBL
+# relay dialects, PrintJob on a sliced parse and on an old point list (the
+# planner's time beats length / feed, speed_factor scales the sim only,
+# derive_job reads the same material), MachineJobStore v2 (binary moves,
+# written to the real jobs folder and removed), PrintJobPlayer sampling and
+# PrintRoads growing a road under the nozzle. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/machines/print_pipeline_selftest.gd
+# The same on a real world (sandbox): a Trash Printer and a Mud Printer
+# placed, the print setup opened through the graph view, a dome hub STL
+# sliced ×4 in the modal, the studio scrubbed (the REAL machine's tool
+# follows), G-code exported and read back, the print started and run on the
+# clock — the roads grow move by move, the nozzle in WORLD space sits on
+# the road being laid (trash: the bed drops under the fixed nozzle; mud: the
+# head rises), the planned time is the job's duration, completion credits
+# the part (trash) / leaves a printed object on the map (mud):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/print_pipeline_check.gd -Label print_pipeline -Timeout 900
 # Solar designer (offline — core/pvlab/): the JA JAM60S20-380 data sheet
 # derived from its 120 half-cut M6 cells, substrings / sample points, the
 # single-diode fit passing through Vmp / Imp, bypass diodes (one shaded path =
@@ -3180,12 +3200,12 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   chain from LOCAL transforms (a studio node is picked before it is in a
   tree).
 - **In the world** a placed gantry's record carries `gantry_spec` and kind
-  `gantry_machine` — NOT `cartesian_machine`, whose `CncMachineRuntime`
-  stretches a path over the GLB's axis window and draws the ghost at 40 %
-  of the footprint. `GantryRuntime` (gameplay/) attaches by MODEL ID, reads
-  the same `get_cnc_job_state` + `MachineJobStore` job and moves the
-  drivers in true mm (eased, snapping on a clock jump), beads on the bed
-  by progress. `PlacedPropService.seed_gantry_graph` (deferred on
+  `gantry_machine` — NOT `cartesian_machine` (the GLB machines' record
+  kind, whose `CncMachineRuntime` maps a profile's tagged sub-nodes).
+  `GantryRuntime` (gameplay/) attaches by MODEL ID and plays the graph's
+  job through `PrintJobPlayer` (see "One print pipeline"), moving the
+  drivers in true mm along the PLANNED motion and growing the roads under
+  the nozzle move by move. `PlacedPropService.seed_gantry_graph` (deferred on
   placement) makes a `cartesian_machine` processor from
   `GantryLabDesign.graph_preset` through `create_bound_generator_node`
   (machine_role fdm_printer for an extruder, cnc_router otherwise;
@@ -3194,8 +3214,9 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   `sync_gantry_graph` after Apply. The TOOLS preset "CNC Gantry
   (designed)" carries an empty `gantry_spec` (placing it from the graph
   builds the default bed-slinger). Modal Simulate → "Send to placed
-  machine" = `start_machine_job` with `to_toolpath` + the planner's time,
-  so the job's duration is the simulated one.
+  machine" = `start_machine_job` with the PrintJob of the parsed program
+  (the move list + the design's limits), so the placed machine replays the
+  very plan the tab showed.
 - Gates: `gantrylab_selftest` (227), `tools/checks/gantrylab_designer_check.gd`
   (41), tour stop `18e_gantrylab`.
 - **High-detail parts (2026-10-26).** Modelled on
@@ -3211,12 +3232,11 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   teeth (`gantry_belt.gdshader` `offset_m`); screws / couplers / springs are
   plain cylinders under `gantry_thread.gdshader` (UV = angle, metres).
   Still open: the look pass by eye (belt wrap signs, the i3 bed belt), the
-  print-setup hookup for placed gantries (GantryRuntime must speak
-  CncMachineRuntime's preview / reveal API), the modal pass. ⚠ Loop node
-  key `s` is the wrap sign — a clamp's extent travels as `size`. Not built: an NPC crew assembling it,
-  SCAD part models for pulleys / brackets (the scad_library has them),
-  the print-setup STL slicer on a gantry (the inspector's Load G-code / STL
-  works through the graph node), multi-tool heads.
+  modal pass. ⚠ Loop node key `s` is the wrap sign — a clamp's extent
+  travels as `size`. Not built: an NPC crew assembling it, SCAD part models
+  for pulleys / brackets (the scad_library has them), multi-tool heads. The
+  print setup (STL slicer, G-code, the studio) opens on a placed gantry
+  since 2026-10-28 (the prop editor's "Print…", GantryRuntime's preview).
 - **Parts that MATE (core/gantrylab/assembly/, 2026-10-26).** The V-slot
   machines (bed-slinger, Cartesian XY, CoreXY, H-bot; `GantryLabAssembly
   .KINEMATICS`) are no longer hand-placed offsets: each generator
@@ -3384,6 +3404,109 @@ library `user://gantrylab_library.json`, exports `user://gantrylab_designs/`.
   (0, -0.1597, 0)), 6 mm beads, 3 mm layers, PP / PETE flake; preset
   `trash_flake_600`. Hopper tools (material not "filament") get no Bowden
   extruder.
+
+## One print pipeline — slicer, planner, the machine in the world (2026-10-28)
+
+The Trash Printer, the Mud Printer, the CNC router, a designed gantry and
+any machine the player imports and tags all print through ONE pipeline.
+Before this the GLB printers ran a point list at constant speed, STLs were
+"sliced" as a raster over the bounding box, the mud printer clipped the STL
+mesh with a shader, and only the gantry designer's Simulate tab had the
+planner. Now:
+- **A job is a move list** ({p0, p1, feed_mm_s, e_mm, rapid, line} in work
+  mm, the shape `GantryLabGcode.parse` makes) plus the machine's motion
+  limits (`PrintJob.limits_for_specs`: the specs' `max_feed_mm_s` /
+  `accel_mm_s2` / `junction_mm_s`, a designed gantry's own, else
+  `PrintJob.LIMIT_DEFAULTS` by machine_kind). `PrintJob.from_parse`
+  (`core/machines/print_job.gd`) plans it with `GantryLabMotion.plan` and
+  the plan's `total_s` IS the job's duration (`est_time_hr`, then the
+  graph's `speed_factor`). `PrintJob.from_toolpath` turns an old point list
+  (`Toolpath`, `StlLoader`'s router raster, `MudWallSlicer`'s dense slice)
+  into one: travels where the flag is 0, roads at the print speed, an
+  optional `shift_xy` onto a corner-origin bed. `start_machine_job` takes
+  either and converts.
+- **Work frame**: X / Y across the bed with (0, 0) at the bed's front-left
+  corner, Z = 0 at the bed top (the gantry designer's convention); the
+  model is centred at `centre_xy` (work / 2 + the offset). The mud
+  designer's plan is centred on 0 and shifted by work / 2.
+- **`StlSlicer`** (`core/machines/slicer/stl_slicer.gd`, pure): the
+  triangles cut at each layer's MID height, each segment oriented
+  solid-left from the triangle's winding (travel = up × n), chained by
+  welded end points into loops (outer CCW, holes CW); perimeters by
+  `Geometry2D.offset_polygon` (a SIGNED distance that keeps orientation:
+  −d shrinks an outer, +d grows a hole — measured, not assumed), inner
+  walls first; infill as parallel lines clipped by an even-odd scan over
+  every loop (holes fall out of the parity), ±45° turning a quarter each
+  layer or a grid, top / bottom layers solid; spiral vase after the solid
+  bottom (Z ramps along one wall); travels with an optional Z hop; E =
+  w·h·L / (π d² / 4) in mm of the feedstock bore d (`filament_mm`), so the
+  job's `volume_mm3` IS the road laid and the graph bills w·h·L. Capped at
+  `max_moves` (160 k; a warning). Not done: skin detection over overhangs
+  beyond the top / bottom counts, support, bridging, retraction tuning.
+  ⚠ Per-layer segment buffers are plain Arrays: a PackedVector2Array
+  fetched from an Array / Dictionary is a copy-on-write VALUE and appending
+  to it in place fills nothing (the first cut hung the whole engine).
+- **`PrintGcodeWriter`**: the move list as real G-code — RepRap (M82, G92
+  E0, G1 X Y Z E F, ;LAYER:n, temperatures) or the mud printer's GRBL
+  relay dialect ("M3 S1000" / M5 round the roads, hops on travels, no E).
+  `GantryLabGcode.parse` reads both back to the same moves (the S word on
+  M3 is what flags the roads; `PrintJob.from_parse` re-derives w·h·L for
+  a printer reading a relay program). The parser's `temps` are the HOTTEST
+  the program asks for (a cool-down at the end used to zero them).
+- **`MachineJobStore` v2**: a job with `moves` is written as
+  `<id>.job` (binary, `store_var`: p0 / p1 / feed / e / rapid packed
+  arrays + limits + road size + totals); v1 `<id>.json` point lists still
+  load. **`PrintJobPlayer`** loads by id, plans (or re-plans an old point
+  list through `from_toolpath` with the specs' speeds) and `sample(p)` →
+  the nozzle at p × total_s: pos, move i, s, v, extruding, layer / layers,
+  remaining_s. Both runtimes read it, so the machine in the world
+  decelerates into corners and rapids between islands exactly as the
+  studio did, and scrubs with the timeline.
+- **`PrintRoads`** (`core/machines/print_roads.gd`, a MultiMeshInstance3D)
+  is THE print: one rounded bead per extruding move (straight runs merged),
+  line wide, layer tall, top at the nozzle, laid at true scale in a frame
+  whose origin is work (0, 0, 0) — road local = origin + (x, z, y) · 0.001.
+  `set_progress_move(i, s)` grows the current road to the nozzle;
+  `set_wet(color, mm)` tints the last mm of road (mud dries behind the
+  nozzle); `bake_mesh(color, offset)` → one ArrayMesh (a finished mud print
+  becomes a placed object). `GantryLabBuilder.set_print_preview` and
+  friends delegate to it (`roads()`), the pinned road transforms unchanged.
+- **`CncMachineRuntime`** (rewritten): the profile's tagged axes move in
+  TRUE millimetres. `_calibrate_frame` snaps the axes to rest, measures the
+  tool tip (the tool node's AABB bottom) against the bed (the Z bed's plate
+  top for a lowering bed, the frame's base centre for a fixed one) and
+  keeps per axis `metres per local unit` + the local units that put the
+  tool over the bed centre (z: at the bed, or the bed's home); an
+  uncalibrated axis takes its window from the work volume. The roads'
+  frame = the x / y axes' world directions + up, origin at the bed's
+  front-left corner, parented to the Z bed when it drops (the print rides
+  it). A finished `print_persist` job is baked to a mesh + STL and handed
+  to `register_printed_object`; anything else stays on the bed until the
+  next job. A `Label3D` over the machine reads the progress, layer, speed
+  and time left. `begin_print_preview(job)` ghosts the roads on the bed and
+  `preview_tool_mm` follows the studio's scrub. The old STL reveal shader,
+  print-span travel calibration and 40 %-footprint bead ghost are gone.
+- **Print setup** (`scenes/ui/print_setup_modal.gd`, the prop editor's
+  "Print…" / Interact on a printer, any cartesian_machine with a runtime,
+  the gantry too): Load STL (sliced here: layer, line, walls, infill % +
+  pattern, top / bottom, speeds, Z hop, scale, turn, offsets; a 0.3 s
+  debounce), Load G-code (run as written), part presets (trash dome
+  parts), Design building (mud). The studio shows the bed, the roads and a
+  nozzle marker with the Simulate tab's transport (Play / Restart / speed /
+  scrub / the HUD: time, move, position, speed, layer, feed-cap shares);
+  the real machine's ghost and tool follow. Export G-code (relay dialect
+  for mud), Start print. The estimate line: layers, moves, size, "OFF THE
+  BED", material (g / kg, L for mud), the planned time and the sim time.
+- The inspector's "Load G-code / STL" slices an STL on an additive node at
+  the machine's own settings and parses G-code with `GantryLabGcode`.
+- ⚠ **Machine jobs tick with the graph CLOSED now.** `_tick_graph_tools`
+  (and the PP extruder / sheet press ticks) sat below `_process_frame`'s
+  `if not visible: return`, so a print the player stood watching never
+  advanced until G was pressed; the first sandbox run read 0 % with every
+  road laid (the runtime's own clock-derived progress had long passed the
+  end). They run in the ambient block too, inside the sim-write bracket.
+- Gates: `print_pipeline_selftest` (82) and `tools/checks/print_pipeline_check.gd`
+  (Validation list).
 
 ## Toroid designer (core/toroidlab/, 2026-10-26)
 

@@ -3799,7 +3799,9 @@ func _build_cartesian_machine_section(item: Dictionary, specs: Dictionary) -> vo
 			var pj := _pending_job_parse
 			_readonly_field("Loaded", "%s • %d pts" % [
 				str(pj.get("kind", "job")).to_upper(), int(pj.get("point_count", 0))])
-			_readonly_field("Est. time", "%.2f h @ 1×" % float(pj.get("est_time_hr", 0.0)))
+			_readonly_field("Est. time", "%s @ 1×" % GantryLabMotion.fmt_duration(float(pj.get("est_time_hr", 0.0)) * 3600.0))
+			if int(pj.get("layers", 0)) > 0:
+				_readonly_field("Layers", str(int(pj.get("layers", 0))))
 			var bmin: Vector3 = pj.get("bounds_min", Vector3.ZERO)
 			var bmax: Vector3 = pj.get("bounds_max", Vector3.ZERO)
 			var sz := bmax - bmin
@@ -3966,10 +3968,30 @@ func _ensure_machine_file_dialog() -> void:
 func _on_machine_file_selected(path: String) -> void:
 	var ext := path.get_extension().to_lower()
 	var parse: Dictionary
+	var specs: Dictionary = {}
+	if _model != null and not _pending_job_item_id.is_empty():
+		var it0 := _model.get_item(_pending_job_item_id)
+		if not it0.is_empty():
+			specs = (it0.get("specs", {}) as Dictionary)
+	var additive := str(specs.get("machine_role", "")) == "fdm_printer"
 	if ext == "stl":
-		parse = StlLoader.parse_file(path)
+		if additive:
+			# A printer slices it: real walls and infill at the machine's own
+			# line width, centred on its bed.
+			var caps := FdmPrinterCaps.from_specs(specs)
+			parse = StlSlicer.slice_file(path, {
+				"layer_height_mm": caps.layer_height_mm, "line_width_mm": caps.line_width_mm,
+				"print_speed_mm_s": caps.print_speed_mm_s, "travel_speed_mm_s": caps.print_speed_mm_s * 2.5,
+				"mode": caps.default_print_mode, "filament_mm": PrintJob.filament_mm(specs),
+				"centre_xy": Vector2(caps.work_x_mm * 0.5, caps.work_y_mm * 0.5),
+			})
+		else:
+			parse = StlLoader.parse_file(path)
 	else:
-		parse = Toolpath.parse_file(path)
+		var f := FileAccess.open(path, FileAccess.READ)
+		parse = GantryLabGcode.parse(f.get_as_text()) if f != null else {"ok": false, "error": "cannot open"}
+	if bool(parse.get("ok", false)) and parse.has("moves"):
+		parse = PrintJob.from_parse(parse, specs, {"name": path.get_file().get_basename()})
 	if not bool(parse.get("ok", false)):
 		_toast("Could not parse job: %s" % str(parse.get("error", "unknown")))
 		return

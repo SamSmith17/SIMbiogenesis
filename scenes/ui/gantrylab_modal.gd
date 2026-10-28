@@ -1663,8 +1663,14 @@ func _on_send_job() -> void:
 	if sgv == null or iid.is_empty():
 		_status("The placed machine has no graph node yet.")
 		return
-	var tp := GantryLabGcode.to_toolpath(_parse, float(_plan["total_s"]) / 3600.0)
-	var ok := bool(sgv.call("start_machine_job", iid, tp, "gantry_%s" % GantryLabExport.safe_name(_gcode_name), _gcode_name, 1, {}))
+	# The job is the planned move list itself: the placed machine replays
+	# this plan on the world clock (PrintJobPlayer), not a decimated path.
+	var tool := GantryLabParts.tool(str(_spec["tool"]["id"]))
+	var item := sgv.model.get_item(iid) as Dictionary
+	var specs: Dictionary = item.get("specs", {}) if not item.is_empty() else {}
+	var job := PrintJob.from_parse(_parse, specs, {"limits": _design["limits"], "name": _gcode_name,
+		"line_width_mm": float(tool["nozzle_mm"]), "layer_height_mm": GantryLabBuilder.layer_guess_mm(_plan["moves"], float(tool["nozzle_mm"]))})
+	var ok := bool(job.get("ok", false)) and bool(sgv.call("start_machine_job", iid, job, "gantry_%s" % GantryLabExport.safe_name(_gcode_name), _gcode_name, 1, {}))
 	if ok:
 		_status("Job sent: %s runs %s on the world clock." % [_gcode_name, GantryLabMotion.fmt_duration(float(_plan["total_s"]))])
 		close()

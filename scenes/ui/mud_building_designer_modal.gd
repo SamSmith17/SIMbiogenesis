@@ -63,6 +63,7 @@ var _panning := false
 var _rebuild_timer := 0.0
 var _rebuild_pending := false
 var _last_parse: Dictionary = {}
+var _last_full: Dictionary = {}
 var _last_mesh: ArrayMesh = null
 var _camber_mode: int = MudBuildingSpec.CamberMode.NONE
 ## Survives close/reopen so the designer remembers the last plan + wall settings.
@@ -689,6 +690,7 @@ func _begin_async_build() -> void:
 	var val := MudPlanOps.validate_spec(_spec)
 	if not bool(val.get("ok", false)):
 		_last_parse = {}
+		_last_full = {}
 		_last_mesh = null
 		_clear_preview()
 		_est_lbl.text = "—"
@@ -757,6 +759,7 @@ func _apply_build(build: Dictionary) -> void:
 	var preview: Dictionary = build.get("preview", {})
 	var full: Dictionary = build.get("full", {})
 	_last_parse = preview
+	_last_full = full
 	_last_mesh = null
 	if bool(full.get("ok", false)):
 		_last_mesh = MudWallMesher.build_mesh_from_parse(full)
@@ -1106,10 +1109,19 @@ func _on_print_pressed() -> void:
 	if stl_path.is_empty():
 		_status.text = "Could not write print mesh."
 		return
-	if _runtime != null and _last_mesh != null:
-		_runtime.begin_print_preview(_last_mesh, stl_path)
 	var wet: Variant = _specs.get("wet_color", [0.36, 0.26, 0.17])
 	var dry: Variant = _specs.get("dry_color", [0.68, 0.56, 0.42])
+	# The dense slice (every station the wall mesher used) becomes the job's
+	# move list: the planner times it, the printer in the world runs it.
+	var full: Dictionary = _last_full if not _last_full.is_empty() else _last_parse
+	var job := PrintJob.from_toolpath(full, _specs, {
+		"print_speed_mm_s": _spec.print_speed_mm_s, "travel_speed_mm_s": _spec.print_speed_mm_s * 2.0,
+		"line_width_mm": _spec.line_width_mm, "layer_height_mm": _spec.layer_height_mm, "additive": true,
+		"shift_xy": Vector2(_spec.work_x_mm * 0.5, _spec.work_y_mm * 0.5), "name": "Mud Building",
+	})
+	if not bool(job.get("ok", false)):
+		_status.text = str(job.get("error", "could not plan the print"))
+		return
 	var extra := {
 		"machine_kind": "mud",
 		"print_persist": true,
@@ -1126,7 +1138,7 @@ func _on_print_pressed() -> void:
 		"dry_color": dry,
 		"job_material_kind": "mud",
 	}
-	var ok: bool = _view.call("start_machine_job", _item_id, _last_parse,
+	var ok: bool = _view.call("start_machine_job", _item_id, job,
 		"mud_building", "Mud Building", 1, extra)
 	if ok:
 		_status.text = "Print started"

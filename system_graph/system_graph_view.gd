@@ -13968,6 +13968,18 @@ func _process_frame(delta: float) -> void:
 	if not visible:
 		if _lens_strip != null and _lens_strip.visible:
 			_lens_strip.visible = false
+		# Machine jobs (the printers, the router, the PP machines) run with
+		# the graph CLOSED: their progress, feedstock draw and part credits
+		# used to tick only below this gate, so a print the player stood
+		# watching in the world never finished until G was pressed. The
+		# ticks throttle themselves; the sim-write bracket keeps their
+		# progress stamps out of the undo history and the render cache.
+		if not _mp_is_replica():
+			_begin_sim_writes()
+			_tick_graph_tools(delta)
+			_tick_graph_pp_extruder(delta)
+			_tick_graph_pp_sheet_press(delta)
+			_end_sim_writes()
 		return
 	_update_lens_strip(delta)
 	_tick_layout(delta)
@@ -17383,11 +17395,28 @@ func get_cnc_job_state(item_id: String) -> Dictionary:
 		"layer_height_mm": float(specs.get("layer_height_mm", 50.0)),
 		"line_width_mm": float(specs.get("line_width_mm",
 			specs.get("nozzle_diameter_mm", 76.2))),
+		"work_x_mm": float(specs.get("work_x_mm", 300.0)),
+		"work_y_mm": float(specs.get("work_y_mm", specs.get("work_x_mm", 300.0))),
+		"work_z_mm": float(specs.get("work_z_mm", specs.get("work_x_mm", 300.0))),
+		"name": str(specs.get("name", "Printer")),
+		"job_name": str(specs.get("job_name", "")),
+		"speed_factor": float(specs.get("speed_factor", 1.0)),
+		"job_total_s": float(specs.get("job_total_s", 0.0)),
+		"job_duration_hr": float(specs.get("job_duration_hr", 0.0)),
+		"machine_role": str(specs.get("machine_role", "")),
+		"filament_diameter_mm": float(specs.get("filament_diameter_mm", specs.get("nozzle_diameter_mm", 1.75))),
+		"print_speed_mm_s": float(specs.get("print_speed_mm_s", 40.0)),
+		"max_feed_mm_s": specs.get("max_feed_mm_s", null),
+		"accel_mm_s2": specs.get("accel_mm_s2", null),
+		"junction_mm_s": specs.get("junction_mm_s", null),
+		"gantry_spec": specs.get("gantry_spec", {}),
 	}
 
 
-## Schedule a parsed G-code/STL job on a cartesian_machine node. `parse` is the
-## dict from Toolpath/StlLoader. Returns true on success.
+## Schedule a job on a cartesian_machine node. `parse` is a PrintJob dict (a
+## move list the planner timed: StlSlicer / GantryLabGcode through
+## PrintJob.from_parse) or an old point-list parse (Toolpath / StlLoader /
+## MudWallSlicer), which is turned into one here. Returns true on success.
 ## Optional extra_specs keys: job_consume_part_id / job_consume_qty — inventory
 ## already debited by the caller (e.g. CNC cut presets); cancel restores them.
 func start_machine_job(item_id: String, parse: Dictionary, part_id: String,
@@ -17402,8 +17431,25 @@ func start_machine_job(item_id: String, parse: Dictionary, part_id: String,
 		return false
 	for k: String in extra_specs.keys():
 		specs[k] = extra_specs[k]
-	var job := _CartesianMachineSource.derive_job(parse, specs)
-	var job_id := MachineJobStore.save(parse)
+	var pj := parse
+	if not parse.has("moves"):
+		var shift := Vector2.ZERO
+		if bool(extra_specs.get("centre_toolpath", false)):
+			shift = Vector2(float(specs.get("work_x_mm", 300.0)) * 0.5,
+				float(specs.get("work_y_mm", specs.get("work_x_mm", 300.0))) * 0.5)
+		pj = PrintJob.from_toolpath(parse, specs, {"shift_xy": shift})
+		if not bool(pj.get("ok", false)):
+			return false
+	elif not pj.has("total_s"):
+		pj = PrintJob.from_parse(parse, specs)
+		if not bool(pj.get("ok", false)):
+			return false
+	var job := _CartesianMachineSource.derive_job(pj, specs)
+	var job_id := MachineJobStore.save(pj)
+	if job_id.is_empty():
+		return false
+	specs["job_total_s"] = float(pj.get("total_s", 0.0))
+	specs["job_layers"] = int(pj.get("layers", 0))
 	var m := _get_scene_main_node()
 	var abs_hours := 0.0
 	if m != null and m.has_method("get_absolute_hours"):
@@ -18072,10 +18118,12 @@ func _on_connection_ports_saved(_model_id: String, prop_id: String) -> void:
 	_schedule_graph_autosave()
 
 
-## Open the shared FDM Print Setup modal for a placed additive printer (aimed
-## via the crosshair). Returns true if handled — any machine_role=fdm_printer
-## (mud, trash, or future). The modal drives CncMachineRuntime's STL ghost live
-## and starts the job with placement/scale/color/slicer params.
+## Open the print setup for a placed machine (aimed via the crosshair, or the
+## prop editor's button): any cartesian_machine with an in-world runtime —
+## the GLB printers' CncMachineRuntime (mud, trash, an imported machine) or
+## the designed gantry's GantryRuntime. The modal slices an STL / loads
+## G-code, plays the planned motion in its studio and on the real bed, and
+## starts the job. Returns true if handled.
 func open_print_setup_for_prop(prop_id: String) -> bool:
 	if model == null or prop_id.is_empty():
 		return false
@@ -18086,6 +18134,8 @@ func open_print_setup_for_prop(prop_id: String) -> bool:
 	if prop == null:
 		return false
 	var runtime := prop.get_node_or_null("CncMachineRuntime")
+	if runtime == null:
+		runtime = prop.get_node_or_null("GantryRuntime")
 	if runtime == null:
 		return false
 	var item_id := str(runtime.get("graph_item_id"))
@@ -18098,10 +18148,14 @@ func open_print_setup_for_prop(prop_id: String) -> bool:
 			return false
 		item = model.get_item(item_id)
 		runtime.set("graph_item_id", item_id)
+	elif item.is_empty() and mid == GantryLabBuilder.MODEL_ID:
+		PlacedPropService.seed_gantry_graph(main, prop_id)
+		item_id = str(PlacedPropService.get_prop_record(main, prop_id).get("graph_item_id", ""))
+		item = model.get_item(item_id) if not item_id.is_empty() else {}
 	if item.is_empty():
 		return false
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-	if str(specs.get("machine_role", "")) != "fdm_printer":
+	if str(specs.get("role", "")) != "cartesian_machine":
 		return false
 	if str(specs.get("model_id", "")).is_empty():
 		specs["model_id"] = mid

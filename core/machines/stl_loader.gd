@@ -266,6 +266,30 @@ static func _synth_vase_path(bmin: Vector3, bmax: Vector3, layer_h := LAYER_HEIG
 	return {"points": pts, "extruding": ext}
 
 
+## The raw triangles of an STL ([[a, b, c] ...] in the file's own units,
+## mm by convention) for the slicer. Binary or ASCII; [] when unreadable.
+static func load_triangles(path: String) -> Array:
+	if path.is_empty() or not FileAccess.file_exists(path):
+		return []
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return []
+	var bytes := f.get_buffer(f.get_length())
+	f.close()
+	return triangles_from_bytes(bytes)
+
+
+static func triangles_from_bytes(bytes: PackedByteArray) -> Array:
+	if bytes.size() < 15:
+		return []
+	var tris: Array = []
+	if _looks_ascii(bytes):
+		tris = _parse_ascii(bytes.get_string_from_utf8())
+	if tris.is_empty():
+		tris = _parse_binary(bytes)
+	return tris
+
+
 static func _looks_ascii(bytes: PackedByteArray) -> bool:
 	var head := bytes.slice(0, min(256, bytes.size())).get_string_from_ascii().to_lower()
 	if not head.begins_with("solid"):

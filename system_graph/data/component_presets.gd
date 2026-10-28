@@ -1621,6 +1621,9 @@ const TOOLS: Array = [
 			"cost": 3200.0,
 			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"watts": 900.0, "speed_factor": 1.0,
+			# Motion limits for the planner: NEMA 23 belt axes carrying a 4.5 kg
+			# flake extruder (PrintJob.LIMIT_DEFAULTS has the same numbers).
+			"max_feed_mm_s": 60.0, "accel_mm_s2": 400.0, "junction_mm_s": 6.0,
 			# 6 mm flake nozzle; practical layer band 0.3–1.5 mm (default 0.8).
 			"filament_diameter_mm": 6.0, "line_width_mm": 6.0,
 			"layer_height_mm": 0.8, "print_speed_mm_s": 40.0,
@@ -1652,7 +1655,11 @@ const TOOLS: Array = [
 			"cost": 9000.0,
 			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"watts": 2400.0, "speed_factor": 1.0,
+			# Motion limits for the planner: the real GRBL settings (7200 mm/min)
+			# and a heavy gantry's acceleration.
+			"max_feed_mm_s": 120.0, "accel_mm_s2": 150.0, "junction_mm_s": 4.0,
 			# 3" (76.2 mm) nozzle; mud/clay/concrete bulk density ~1.8 g/cm3.
+			"line_width_mm": 76.2, "layer_height_mm": 50.0, "print_speed_mm_s": 120.0,
 			"filament_diameter_mm": 76.2, "flake_density_g_cm3": 1.8,
 			# ~10' cube print volume inside a 12'×12' gantry.
 			"work_x_mm": 3048.0, "work_y_mm": 3048.0, "work_z_mm": 3048.0,
@@ -1683,6 +1690,7 @@ const TOOLS: Array = [
 			"cost": 5400.0,
 			"energy_source": "ac", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"watts": 1800.0, "speed_factor": 1.0,
+			"max_feed_mm_s": 80.0, "accel_mm_s2": 600.0, "junction_mm_s": 5.0,
 			"work_x_mm": 1220.0, "work_y_mm": 1524.0, "work_z_mm": 150.0,
 			"job_active": false, "job_completed": false, "job_name": "",
 			"job_id": "", "job_start_abs_hours": 0.0, "job_duration_hr": 0.0,

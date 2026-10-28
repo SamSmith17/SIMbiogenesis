@@ -124,13 +124,14 @@ static func parse(text: String) -> Dictionary:
 					r_w = val * units
 				"S":
 					s_w = val
+		# The hottest the program asks for (a cool-down at the end sets 0).
 		if m == 104 or m == 109:
 			if not is_nan(s_w):
-				temps["hotend_c"] = s_w
+				temps["hotend_c"] = maxf(float(temps["hotend_c"]), s_w)
 			continue
 		if m == 140 or m == 190:
 			if not is_nan(s_w):
-				temps["bed_c"] = s_w
+				temps["bed_c"] = maxf(float(temps["bed_c"]), s_w)
 			continue
 		if m == 3 or m == 4:
 			if not is_nan(s_w):

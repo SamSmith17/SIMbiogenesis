@@ -2,16 +2,13 @@ class_name GantryRuntime
 extends Node3D
 
 ## The designed gantry running a job in the world. Attached by
-## PlacedPropRuntime to a placed `gantry_machine` prop (never the shared
-## CncMachineRuntime: that one stretches a toolpath over the GLB's axis
-## window and shrinks the ghost to 40 % of the footprint, which is right
-## for an imported model with unknown travel and wrong for a machine whose
-## travel we designed). It reads the SAME job the graph scheduled —
-## SystemGraphView.get_cnc_job_state + MachineJobStore — and moves the
-## builder's drivers in TRUE millimetres, laying the extruding points as
-## beads on the bed at true scale. Progress is the clock-derived fraction
-## the graph computes, so it scrubs and survives a reload; the carriages
-## ease toward the sampled point so a 0.2 s poll never reads as stepping.
+## PlacedPropRuntime to a placed `gantry_machine` prop (never the GLB
+## machines' CncMachineRuntime, which maps a profile's tagged sub-nodes;
+## this one moves the builder's drivers directly). It plays the SAME job
+## the graph scheduled through PrintJobPlayer — the planner's own time
+## line, so the head accelerates and brakes as the Simulate tab showed —
+## at the graph's clock-derived progress, laying the roads on the bed under
+## the nozzle move by move. Scrubs and survives a reload.
 
 const _POS_TAU_REAL := 0.10
 const _POS_TAU_SIM := 0.02
@@ -19,16 +16,15 @@ const _SNAP_SIM_HOURS := 0.4
 
 var graph_item_id := ""
 var _builder: GantryLabBuilder = null
+var _player: PrintJobPlayer = null
 var _job_id := ""
-var _path := PackedVector3Array()
-var _ext := PackedInt32Array()
-var _cum := PackedFloat32Array()
-var _path_total := 0.0
 var _pos_mm := Vector3.ZERO
 var _last_abs_hours := INF
 var _park := Vector3.ZERO
 var _line_mm := 0.4
 var _bead_color := Color(0.85, 0.55, 0.2)
+var _mottle := 0.0
+var _material := "filament"
 
 
 func configure(item_id: String) -> void:
@@ -56,11 +52,18 @@ func _bind() -> void:
 	var spec := _builder.spec()
 	var v: Dictionary = spec["volume"]
 	var kin := str(spec["kinematics"])
-	_park = Vector3(0.0 if kin == "delta" else 0.0, 0.0, float(v["z_mm"]) * 0.3) if kin == "delta" else Vector3(0.0, 0.0, minf(float(v["z_mm"]), 20.0))
-	if kin == "delta":
-		_park = Vector3(0.0, 0.0, float(v["z_mm"]) * 0.3)
+	_park = Vector3(0.0, 0.0, float(v["z_mm"]) * 0.3) if kin == "delta" else Vector3(0.0, 0.0, minf(float(v["z_mm"]), 20.0))
 	var tool := GantryLabParts.tool(str(spec["tool"]["id"]))
-	_line_mm = maxf(float(tool["nozzle_mm"]), 0.4)
+	_line_mm = maxf(float(tool["nozzle_mm"]), 0.1)
+	_material = str(tool["material"])
+	match _material:
+		"plastic_flake":
+			_bead_color = Color(0.16, 0.34, 0.55)
+			_mottle = 0.45
+		"mud":
+			_bead_color = Color(0.55, 0.38, 0.26)
+	if str(tool["process"]) != "additive":
+		_bead_color = Color(0.35, 0.3, 0.25)
 	_pos_mm = _park
 	_builder.set_drivers_mm(_pos_mm)
 
@@ -84,18 +87,22 @@ func _process(delta: float) -> void:
 		else:
 			_load_job(new_job, state)
 	var target := _park
-	if (active or (completed and progress < 1.0)) and not _path.is_empty():
-		target = _sample_path(progress)
-	elif completed and not _path.is_empty():
-		target = _sample_path(1.0)
-		target.z += 10.0
+	var smp: Dictionary = {}
+	if _player != null and _player.is_loaded() and (active or completed):
+		smp = _player.sample(progress if active else 1.0)
+		target = smp["pos"]
+		if completed and not active:
+			target.z += 10.0
 	var snap := absf(sim_dh) > _SNAP_SIM_HOURS
 	var x := delta / _POS_TAU_REAL + absf(sim_dh) / _POS_TAU_SIM
 	var k := 1.0 if snap else clampf(1.0 - exp(-x), 0.0, 1.0)
 	_pos_mm = _pos_mm.lerp(target, k)
 	_builder.set_drivers_mm(_pos_mm)
-	if not _path.is_empty():
-		_builder.set_preview_progress(progress if active or completed else 0.0)
+	if not smp.is_empty():
+		if active:
+			_builder.set_print_progress(int(smp["i"]), float(smp["s"]))
+		else:
+			_builder.set_preview_progress(1.0)
 
 
 func _job_state() -> Dictionary:
@@ -108,62 +115,25 @@ func _job_state() -> Dictionary:
 
 
 func _load_job(job_id: String, state: Dictionary) -> void:
+	_clear_job()
 	_job_id = job_id
-	_path = PackedVector3Array()
-	_ext = PackedInt32Array()
-	_cum = PackedFloat32Array()
-	_path_total = 0.0
-	_builder.clear_toolpath_preview()
-	var data := MachineJobStore.load(job_id)
-	if data.is_empty():
+	_player = PrintJobPlayer.new()
+	if not _player.load(job_id, state):
+		_player = null
 		return
-	_path = data.get("points", PackedVector3Array())
-	_ext = data.get("extruding", PackedInt32Array())
-	var n := _path.size()
-	if n < 2:
-		return
-	_cum.resize(n)
-	_cum[0] = 0.0
-	for i in range(1, n):
-		_cum[i] = _cum[i - 1] + _path[i].distance_to(_path[i - 1])
-	_path_total = _cum[n - 1]
-	if bool(state.get("additive", false)):
-		var wc: Variant = state.get("wet_color", [0.85, 0.55, 0.2])
-		if wc is Array and (wc as Array).size() >= 3:
-			_bead_color = Color(float(wc[0]), float(wc[1]), float(wc[2]))
-		_builder.set_toolpath_preview(_path, _ext, maxf(float(state.get("line_width_mm", _line_mm)), _line_mm), _bead_color)
+	var wc: Variant = state.get("wet_color", null)
+	var col := _bead_color
+	if _material == "filament" and wc is Array and (wc as Array).size() >= 3:
+		col = Color(float(wc[0]), float(wc[1]), float(wc[2]))
+	var line := maxf(float(state.get("line_width_mm", _line_mm)), _line_mm) * 1.12
+	_builder.set_print_preview(_player.moves(), line, _player.layer_mm, col, _mottle)
 
 
 func _clear_job() -> void:
 	_job_id = ""
-	_path = PackedVector3Array()
-	_ext = PackedInt32Array()
-	_cum = PackedFloat32Array()
-	_path_total = 0.0
+	_player = null
 	if _builder != null:
 		_builder.clear_toolpath_preview()
-
-
-func _sample_path(progress: float) -> Vector3:
-	var n := _path.size()
-	if n == 0:
-		return _park
-	if n == 1 or _path_total <= 0.0:
-		return _path[n - 1]
-	var target_len := _path_total * progress
-	var lo := 1
-	var hi := n - 1
-	while lo < hi:
-		var mid := (lo + hi) >> 1
-		if _cum[mid] < target_len:
-			lo = mid + 1
-		else:
-			hi = mid
-	var i := lo
-	var a := i - 1
-	var span := _cum[i] - _cum[a]
-	var t := 0.0 if span <= 0.0 else (target_len - _cum[a]) / span
-	return _path[a].lerp(_path[i], clampf(t, 0.0, 1.0))
 
 
 func _read_abs_hours() -> float:
@@ -173,6 +143,49 @@ func _read_abs_hours() -> float:
 	return 0.0
 
 
+# ---------------------------------------------------------------------------
+# Preview (the print setup's ghost on the bed, while no job runs)
+# ---------------------------------------------------------------------------
+
+var _previewing := false
+
+
+func begin_print_preview(job: Dictionary, _wet: Color = Color.WHITE) -> void:
+	if _builder == null or job.is_empty() or not bool(job.get("ok", false)):
+		return
+	if not _job_id.is_empty():
+		return
+	var line := maxf(float(job.get("line_width_mm", _line_mm)), 0.05) * 1.12
+	var layer := float(job.get("layer_height_mm", -1.0))
+	if layer <= 0.0:
+		layer = PrintRoads.layer_guess_mm(job["moves"], line)
+	_builder.set_print_preview(job["moves"], line, layer, Color(_bead_color, 0.5), _mottle)
+	_builder.set_preview_progress(1.0)
+	var r := _builder.roads()
+	if r != null and r.material_override is StandardMaterial3D:
+		(r.material_override as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_previewing = true
+
+
+func preview_tool_mm(mm: Vector3) -> void:
+	if _builder == null or not _job_id.is_empty():
+		return
+	_pos_mm = mm
+	_builder.set_drivers_mm(mm)
+
+
+func clear_print_preview() -> void:
+	if _previewing and _builder != null and _job_id.is_empty():
+		_builder.clear_toolpath_preview()
+	_previewing = false
+
+
+func has_print_preview() -> bool:
+	return _previewing
+
+
 ## For probes: where the tool is now (work mm) and the job loaded.
 func debug_state() -> Dictionary:
-	return {"job_id": _job_id, "points": _path.size(), "pos_mm": _pos_mm, "total_mm": _path_total}
+	var n := (_player.moves().size() + 1) if _player != null else 0
+	return {"job_id": _job_id, "points": n, "pos_mm": _pos_mm, "total_mm": 0.0,
+		"total_s": _player.total_s if _player != null else 0.0, "roads": _builder.road_count() if _builder != null else 0}

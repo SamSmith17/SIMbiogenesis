@@ -838,8 +838,8 @@ func _rebuild_dynamic_sections() -> void:
 			_model_btns, _on_pv_array_convert)
 	if mid == GantryLabBuilder.MODEL_ID:
 		_button("Edit gantry…", "The CNC gantry designer, bound to this machine (simulate and send jobs there)", _model_btns, _on_gantrylab)
-	if prop != null and prop.get_node_or_null("CncMachineRuntime") != null:
-		_button("Print setup…", "Part, slicer, bed preview, start", _model_btns, _on_print_setup)
+	if prop != null and (prop.get_node_or_null("CncMachineRuntime") != null or prop.get_node_or_null("GantryRuntime") != null):
+		_button("Print…", "Slice an STL or load G-code, watch the planned motion on the bed, export G-code, start the print", _model_btns, _on_print_setup)
 	if mid == LinkageStructureBuilder.MODEL_ID:
 		var deployed := bool(_rec.get("linkage_deployed", false))
 		_button("Stow" if deployed else "Deploy", "Fold / unfold the structure (3 s)", _model_btns, _on_linkage_toggle)
