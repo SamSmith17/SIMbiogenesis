@@ -181,6 +181,15 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
 			"pieces": bool(extras.get("pieces", false)),
 			"tracker_deg": float(extras.get("tracker_deg", 0.0))})
+	if model_id == PeltonLabBuilder.MODEL_ID:
+		var pl_spec: Dictionary = extras.get("pelton_spec", extras) as Dictionary
+		return PeltonLabBuilder.build_node(pl_spec, "PeltonTurbine",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
+			"nozzles": bool(extras.get("nozzles", true))})
+	if model_id == WindLabBuilder.MODEL_ID:
+		var wl_spec: Dictionary = extras.get("windlab_spec", extras) as Dictionary
+		return WindLabBuilder.build_node(wl_spec, "WindTurbine",
+			{"ghost_highlight": bool(extras.get("ghost_highlight", false))})
 	if model_id == GantryLabBuilder.MODEL_ID:
 		var gl_spec: Dictionary = extras.get("gantry_spec", extras) as Dictionary
 		return GantryLabBuilder.build_node(gl_spec, "GantryMachine",
@@ -648,6 +657,21 @@ static func _shipped_models() -> Array[Dictionary]:
 		# an empty "Active View" camera marker, all metres away from the
 		# machine — they would pollute the foot / AABB and draw as cardboard
 		# people. ModelCatalog.instantiate frees them on every instantiate.
+		# Procedural Pelton turbine (PeltonLabBuilder): the wheel designer's
+		# machine — the shipped cup STL round a designed wheel, its shaft,
+		# bearings, drive, generator and housing. The runner node is "Runner";
+		# its axis depends on the design (horizontal "x" / vertical "y"), so
+		# the record carries spin_axis and the catalogue leaves it to measure.
+		{"id": "peltonlab_turbine", "label": "Pelton turbine (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"turbine_node": "Runner", "spin_axis": "",
+			"hydro_turbine": true},
+		# Procedural wind turbine (WindLabBuilder): the wind turbine designer's
+		# machine — Ugrinsky / Savonius / Lenz2 / Darrieus / helical / propeller
+		# / farm rotors, hub, drive, generator, mast. Its own runtime
+		# (WindLabRuntime) spins the "Rotor" node and yaws a propeller's "Yaw".
+		{"id": "windlab_turbine", "label": "Wind turbine (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "ali_pelton", "label": "Micro Pelton 8\u2033 (vertical shaft)",
 			"path": "res://Imported Models/Hydro/ali_pelton.glb",
 			"preserve_scale": true, "category": "structures",

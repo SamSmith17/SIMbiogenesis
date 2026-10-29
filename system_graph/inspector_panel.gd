@@ -402,6 +402,22 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_num_field("Unit Cost ($)",      specs.get("cost", 0.0),             "specs/cost", 0, 99999, 1.0)
 
 		"wind":
+			var wl_btn := Button.new()
+			wl_btn.text = "Design wind turbine…"
+			wl_btn.tooltip_text = ("Choose a rotor (Ugrinsky, Savonius, Lenz2, Darrieus, helical, propeller), size it, "
+					+ "match the gearing and generator and see the power curve. Apply writes it onto this turbine.")
+			var wl_id := str(item.get("id", ""))
+			wl_btn.pressed.connect(func() -> void:
+				var gv := ServiceLocator.graph()
+				if gv != null and gv.has_method("open_wind_designer"):
+					gv.call("open_wind_designer", wl_id))
+			_form_vbox.add_child(wl_btn)
+			if specs.get("power_curve_w", null) is Array and not (specs.get("power_curve_w") as Array).is_empty():
+				_section("Designed")
+				_readonly_field("Generator", str(specs.get("generator", "—")))
+				_readonly_field("Year's energy", "%.1f kWh at a %.1f m/s mean" % [float(specs.get("aep_kwh", 0.0)), float(specs.get("site_mean_wind_ms", 0.0))])
+				_readonly_field("Charges from", "%.1f m/s" % float(specs.get("cut_in_ms", 0.0)))
+				_hint_label("Its output follows the designed power curve; the rated / Cp fields below are the design's summary.")
 			_section("Turbine")
 			_text_field("Name",               specs.get("name", ""),              "specs/name")
 			_text_field("Kind (hawt/vawt)",   specs.get("kind", "hawt"),          "specs/kind")

@@ -124,6 +124,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		prop.prompt = "Edit solar array (click) / Move (drag)"
 	elif model_id == GantryLabBuilder.MODEL_ID:
 		prop.prompt = "Edit gantry (click) / Move (drag)"
+	elif model_id == PeltonLabBuilder.MODEL_ID:
+		prop.prompt = "Edit Pelton turbine (click) / Move (drag)"
 	elif model_id == GrowBed.MODEL_ID:
 		prop.prompt = "Edit grow bed (click) / Move (drag)"
 	elif model_id == MudBuildingStructureBuilder.MODEL_ID:
@@ -192,6 +194,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pp_sheet_press(prop, rec)
 		_maybe_attach_linkage_deploy(prop, rec)
 		_maybe_attach_pv_tracker(prop, rec)
+		WindLabRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
@@ -271,6 +274,14 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var tl := ToroidLabDesign.packed_spec(ToroidLabDesign.solve(rec.get("toroid_spec") as Dictionary))
 		if not tl.is_empty():
 			return tl
+	if rec.get("pelton_spec") is Dictionary:
+		var pe := PeltonLabDesign.packed_spec(PeltonLabDesign.solve(rec.get("pelton_spec") as Dictionary))
+		if not pe.is_empty():
+			return pe
+	if rec.get("windlab_spec") is Dictionary:
+		var we := WindLabDesign.packed_spec(WindLabDesign.solve(rec.get("windlab_spec") as Dictionary))
+		if not we.is_empty():
+			return we
 	if rec.get("gantry_spec") is Dictionary:
 		var gl := GantryLabDesign.packed_spec(GantryLabDesign.solve(rec.get("gantry_spec") as Dictionary))
 		if not gl.is_empty():
@@ -446,7 +457,7 @@ static func _maybe_attach_linkage_deploy(prop: PlacedProp, rec: Dictionary) -> v
 
 ## Attach the rotor-spin controller for a placed VAWT (record kind == "vawt").
 static func _maybe_attach_wind_spin(prop: PlacedProp, rec: Dictionary) -> void:
-	if str(rec.get("kind", "")) != "vawt":
+	if str(rec.get("kind", "")) != "vawt" or str(rec.get("model_id", "")) == WindLabBuilder.MODEL_ID:
 		return
 	var specs: Dictionary = rec.get("wind_specs", {}) as Dictionary
 	if specs.is_empty():
@@ -563,7 +574,7 @@ static func _maybe_attach_siphon_dip_tube(prop: PlacedProp, rec: Dictionary) -> 
 ## (record kind == "hawt"). See hawt_tracker.gd for the yaw-to-wind-direction
 ## + blade-RPM-from-wind-speed physics.
 static func _maybe_attach_hawt_tracker(prop: PlacedProp, rec: Dictionary) -> void:
-	if str(rec.get("kind", "")) != "hawt":
+	if str(rec.get("kind", "")) != "hawt" or str(rec.get("model_id", "")) == WindLabBuilder.MODEL_ID:
 		return
 	var specs: Dictionary = rec.get("wind_specs", {}) as Dictionary
 	if specs.is_empty():
@@ -785,6 +796,10 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["container_spec"] = rec.get("container_spec", {})
 	if rec.has("pv_array_spec"):
 		extras["pv_array_spec"] = rec.get("pv_array_spec", {})
+	if rec.has("pelton_spec"):
+		extras["pelton_spec"] = rec.get("pelton_spec", {})
+	if rec.has("windlab_spec"):
+		extras["windlab_spec"] = rec.get("windlab_spec", {})
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = {}
 		if rec.has("grow_bed_spec"):

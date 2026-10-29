@@ -917,6 +917,10 @@ var linkage_build_guide_ui : Control = null
 const LINKAGE_BUILD_GUIDE_SCRIPT := preload( "res://scenes/ui/linkage_build_guide_modal.gd" )
 var linkage_hardware_ui : Control = null
 var npc_anim_editor_ui : Control = null
+var peltonlab_ui : Control = null
+const PELTONLAB_MODAL_SCRIPT := preload( "res://scenes/ui/peltonlab_modal.gd" )
+var windlab_ui : Control = null
+const WINDLAB_MODAL_SCRIPT := preload( "res://scenes/ui/windlab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -4951,6 +4955,70 @@ func _setup_npc_anim_editor_ui() -> void :
 	ui.set_script( NPC_ANIM_EDITOR_SCRIPT )
 	layer.add_child( ui )
 	npc_anim_editor_ui = ui
+
+
+## The Pelton wheel designer (scenes/ui/peltonlab_modal.gd), on its own
+## CanvasLayer above the graph and the Hydro Lab — it opens from both.
+func _setup_peltonlab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "PeltonLabLayer" )
+	if existing_layer != null :
+		peltonlab_ui = existing_layer.get_node_or_null( "PeltonLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "PeltonLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "PeltonLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( PELTONLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	peltonlab_ui = ui
+
+
+## The wind turbine designer (scenes/ui/windlab_modal.gd), on its own
+## CanvasLayer above the graph — it opens from the graph's wind nodes too.
+func _setup_windlab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "WindLabLayer" )
+	if existing_layer != null :
+		windlab_ui = existing_layer.get_node_or_null( "WindLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "WindLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "WindLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( WINDLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	windlab_ui = ui
+
+
+## Open the wind turbine designer. opts: {spec, turbine_id, graph_view, prop_id}.
+func open_windlab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( windlab_ui ) :
+		_setup_windlab_ui()
+	if not is_instance_valid( windlab_ui ) :
+		return null
+	windlab_ui.call( "open", opts )
+	return windlab_ui
+
+
+## Open the Pelton wheel designer. opts: {spec, turbine_id, graph_view, prop_id}.
+func open_peltonlab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( peltonlab_ui ) :
+		_setup_peltonlab_ui()
+	if not is_instance_valid( peltonlab_ui ) :
+		return null
+	peltonlab_ui.call( "open", opts )
+	return peltonlab_ui
 
 
 ## Open the NPC animation editor on a clip id ("" = the first clip).

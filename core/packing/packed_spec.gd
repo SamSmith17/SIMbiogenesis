@@ -167,6 +167,16 @@ const DYNAMIC_MODELS := {
 		"mass_kg": 420.0, "form": "bundle", "source": "estimated"},
 	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,
 		"mass_kg": 140.0, "form": "bundle", "source": "estimated"},
+	# A designed Pelton turbine ships assembled in a crate round its box; the
+	# real spec is PeltonLabDesign.packed_spec (the record's pelton_spec).
+	# This fallback is the classic 350 mm wheel with its belt and PMA.
+	"peltonlab_turbine": {"w_m": 0.95, "d_m": 0.62, "h_m": 0.75,
+		"mass_kg": 45.0, "form": "crate", "this_side_up": true, "source": "estimated"},
+	# A designed wind turbine ships knocked down — its cut sheets flat, the
+	# mast alongside; the real spec is WindLabDesign.packed_spec (the record's
+	# windlab_spec). This fallback is the default 0.6 x 0.9 m Ugrinsky kit.
+	"windlab_turbine": {"w_m": 3.05, "d_m": 1.27, "h_m": 0.12,
+		"mass_kg": 10.0, "form": "crate", "source": "estimated"},
 	# A designed gantry packs as its extrusion bundle plus boxed parts; the
 	# real spec is GantryLabDesign.packed_spec (the record's gantry_spec).
 	# This fallback is the default 220 mm bed-slinger (~12 kg).

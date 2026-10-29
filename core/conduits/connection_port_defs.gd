@@ -100,6 +100,22 @@ static func default_ports_for_model(model_id: String, dims: Dictionary = {}) -> 
 	# housing's mid height); tailwater falls out of the open housing bottom,
 	# clear of the stepper generator hung underneath; DC comes off that
 	# generator's flank.
+	# A designed Pelton: its first nozzle's inlet, the housing's open bottom,
+	# the generator's terminals — from the design itself.
+	if model_id == "windlab_turbine":
+		var wd := WindLabDesign.solve(dims.get("windlab_spec", {}) as Dictionary)
+		var wp: Array = []
+		for p in WindLabDesign.ports(wd):
+			wp.append(make_port(str(p["id"]), str(p["label"]), p["pos"], p["normal"], str(p["handle"]),
+				str(p["role"]), str(p["kind"]), "", DEFAULT_APPROACH_M, str(p["conduit"])))
+		return _normalize_ports(wp)
+	if model_id == "peltonlab_turbine":
+		var pd := PeltonLabDesign.solve(dims.get("pelton_spec", {}) as Dictionary)
+		var pp: Array = []
+		for p in PeltonLabDesign.ports(pd):
+			pp.append(make_port(str(p["id"]), str(p["label"]), p["pos"], p["normal"], str(p["handle"]),
+				str(p["role"]), str(p["kind"]), "", DEFAULT_APPROACH_M, str(p["conduit"])))
+		return _normalize_ports(pp)
 	if model_id == "ali_pelton":
 		return _normalize_ports([
 			make_port("penstock_in", "Nozzle inlet (1/4\u2033 NPT barb)",
@@ -198,7 +214,11 @@ static func resolve_ports_for_prop(main: Node, prop_id: String, model_id: String
 		var inst: Array = rec.get("connection_ports", []) as Array
 		if not inst.is_empty():
 			return _normalize_ports(inst)
-		if rec.has("box_spec"):
+		if rec.has("pelton_spec"):
+			dims = {"pelton_spec": rec.get("pelton_spec", {})}
+		elif rec.has("windlab_spec"):
+			dims = {"windlab_spec": rec.get("windlab_spec", {})}
+		elif rec.has("box_spec"):
 			dims = rec.get("box_spec", {}) as Dictionary
 		elif rec.has("tank_spec"):
 			dims = rec.get("tank_spec", {}) as Dictionary

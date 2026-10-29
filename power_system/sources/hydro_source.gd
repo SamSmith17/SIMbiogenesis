@@ -214,6 +214,22 @@ const KINDS := {
 		"runner_pcd_m": 0.168,
 		"model_id": "ali_pelton",
 	},
+	# A Pelton wheel designed in the wheel designer (PeltonLabDesign): the
+	# shipped cup round a wheel the player sized, its own generator. Nozzle-
+	# governed; the designer writes runner_pcd_m, turbine_efficiency (the
+	# design rules' penalty applied), generator_efficiency (drive × generator
+	# at its speed) and max_power_w (the generator's rating) onto the specs,
+	# so these are only the defaults of an undesigned one.
+	"designed_pelton": {
+		"display": "Pelton (designed wheel)", "eta_t": 0.78,
+		"head_band": [3.0, 300.0], "has_penstock": true, "pond_drawdown": true,
+		"max_power_w": 400.0,
+		"uses_nozzle_model": true,
+		"nozzle_count_max": 6,
+		"default_nozzle_mm": 22.0,
+		"runner_pcd_m": 0.28,
+		"model_id": "peltonlab_turbine",
+	},
 	"turgo": {
 		"display": "Turgo", "eta_t": 0.80,
 		"head_band": [10.0, 30.0], "has_penstock": true, "pond_drawdown": true,

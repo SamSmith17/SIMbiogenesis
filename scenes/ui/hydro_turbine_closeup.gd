@@ -77,6 +77,10 @@ var _studio: Node3D
 var _camera: Camera3D
 var _model_root: Node3D
 var _model_id := DEFAULT_MODEL_ID
+## A designed Pelton's wheel (the turbine's pelton_spec): the close-up builds
+## that machine, not the designer's default.
+var _pelton_spec: Dictionary = {}
+var _pelton_key := ""
 var _runner: Node3D
 ## Every mesh that is NOT the runner — derived, not name-matched (see _build_model).
 var _housing_meshes: Array[MeshInstance3D] = []
@@ -415,7 +419,11 @@ func _restyle_buttons() -> void:
 
 
 func _build_model() -> void:
-	var inst: Node3D = ModelCatalog.instantiate(_model_id)
+	var extras := {}
+	if _model_id == PeltonLabBuilder.MODEL_ID:
+		# Its own nozzles stay out: the close-up draws the one it aims.
+		extras = {"pelton_spec": _pelton_spec, "nozzles": false}
+	var inst: Node3D = ModelCatalog.instantiate(_model_id, extras)
 	if inst == null:
 		return
 	_model_root = Node3D.new()
@@ -489,6 +497,8 @@ func _measure_inlet_port(inst: Node3D) -> void:
 	# load_catalog_ports prefers the player's saved layout and falls back to the
 	# built-in defaults — the same resolution the 3D conduit uses.
 	var ports: Array = ConnectionPortDefs.load_catalog_ports(_model_id)
+	if _model_id == PeltonLabBuilder.MODEL_ID:
+		ports = ConnectionPortDefs.default_ports_for_model(_model_id, {"pelton_spec": _pelton_spec})
 	for p_v: Variant in ports:
 		var p: Dictionary = p_v as Dictionary
 		if str(p.get("handle_id", "")) != "res_in_0":
@@ -564,6 +574,10 @@ func _model_aabb() -> AABB:
 ## global_transform can be stale in a deferred build.
 func _measure_runner() -> void:
 	var axis_key := ModelCatalog.spin_axis_for(_model_id)
+	var pel_d: Dictionary = {}
+	if _model_id == PeltonLabBuilder.MODEL_ID:
+		pel_d = PeltonLabDesign.solve(_pelton_spec)
+		axis_key = str(pel_d["spin_axis"])
 	match axis_key:
 		"x": _runner_axis_local = Vector3.RIGHT
 		"y": _runner_axis_local = Vector3.UP
@@ -613,6 +627,11 @@ func _measure_runner() -> void:
 	comps.sort()
 	_runner_radius = maxf(float(comps[2]) * 0.5, 0.02)
 	_runner_thickness = maxf(float(comps[0]), 0.005)
+	if not pel_d.is_empty():
+		# The cups are a MultiMesh, so the first mesh is the rotor disc: the
+		# wheel's real size is the design's.
+		_runner_radius = float(pel_d["runner"]["tip_r_mm"]) * 0.001
+		_runner_thickness = float(pel_d["runner"]["cup_w_mm"]) * 0.001
 	# Tailwater leaves at the bottom of the machine, under the wheel.
 	var whole := _model_aabb()
 	_housing_bottom = Vector3(_runner_centre.x, whole.position.y, _runner_centre.z)
@@ -916,8 +935,12 @@ func set_state(s: Dictionary) -> void:
 	if _siphon != was_siphon:
 		_last = {}
 	var want := str(s.get("model_id", _model_id))
-	if not want.is_empty() and want != _model_id:
+	var ps: Dictionary = s.get("pelton_spec", {}) if s.get("pelton_spec", {}) is Dictionary else {}
+	var pk := PeltonLabSpec.geometry_key(ps) if want == PeltonLabBuilder.MODEL_ID else ""
+	if not want.is_empty() and (want != _model_id or pk != _pelton_key):
 		_model_id = want
+		_pelton_spec = ps
+		_pelton_key = pk
 		if _built:
 			_rebuild_model()
 

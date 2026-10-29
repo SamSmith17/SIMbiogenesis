@@ -841,6 +841,11 @@ func _rebuild_dynamic_sections() -> void:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
 	if mid == ToroidLabBuilder.MODEL_ID:
 		_button("Edit toroid…", "The toroid designer, bound to this structure", _model_btns, _on_toroidlab)
+	if mid == PeltonLabBuilder.MODEL_ID:
+		_button("Edit Pelton wheel…", "The Pelton wheel designer, bound to this turbine", _model_btns, _on_peltonlab)
+	if mid == WindLabBuilder.MODEL_ID or mid == "vawt" or mid == "small_hawt":
+		_button("Design wind turbine…", "The wind turbine designer, bound to this turbine: rotor, gearing, generator, power curve",
+			_model_btns, _on_windlab)
 	if mid == PvLabBuilder.MODEL_ID:
 		_button("Edit solar array…", "The Solar designer, bound to this array: modules, rack, strings", _model_btns,
 			_on_pvlab)
@@ -1601,6 +1606,42 @@ func _on_pv_array_convert() -> void:
 	close()
 	if _loader != null and _loader.has_method("open_pvlab_for_prop"):
 		_loader.call("open_pvlab_for_prop", pid)
+
+
+## The wheel designer bound to this turbine's graph node (Apply writes the
+## wheel onto it), else on its own with this prop's design.
+func _on_peltonlab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return
+	var rec := PlacedPropService.get_prop_record(main, pid)
+	var gid := str(rec.get("graph_item_id", ""))
+	var gv := main.find_child("SystemGraphView", true, false)
+	close()
+	if not gid.is_empty() and gv != null and gv.has_method("open_pelton_designer"):
+		gv.call("open_pelton_designer", gid)
+	elif main.has_method("open_peltonlab"):
+		main.call("open_peltonlab", {"prop_id": pid})
+
+
+## The wind turbine designer bound to this turbine's graph node (Apply writes
+## the design onto it), else on its own with this prop's design.
+func _on_windlab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null:
+		return
+	var rec := PlacedPropService.get_prop_record(main, pid)
+	var gid := str(rec.get("graph_item_id", ""))
+	var gv := main.find_child("SystemGraphView", true, false)
+	close()
+	if not gid.is_empty() and gv != null and gv.has_method("open_wind_designer"):
+		gv.call("open_wind_designer", gid)
+	elif main.has_method("open_windlab"):
+		main.call("open_windlab", {"prop_id": pid})
 
 
 func _on_toroidlab() -> void:

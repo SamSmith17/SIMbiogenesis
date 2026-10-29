@@ -20,6 +20,43 @@ static func preset_with_turbine_kind(turbine_kind: String) -> Dictionary:
 	return {}
 
 
+## The "Pelton (designed wheel)" preset carrying a design: the wheel's specs
+## (PeltonLabDesign.turbine_patch) and its name.
+static func designed_pelton_preset(spec: Dictionary) -> Dictionary:
+	var p := find_preset_by_label("Pelton (designed wheel)")
+	if p.is_empty():
+		return {}
+	var d := PeltonLabDesign.solve(spec)
+	var sp: Dictionary = p["specs"]
+	var patch := PeltonLabDesign.turbine_patch(d)
+	for k in patch:
+		sp[k] = patch[k]
+	sp["name"] = str(d["spec"]["name"])
+	sp["gross_head_m"] = float(d["spec"]["site"]["gross_head_m"])
+	sp["penstock_length_m"] = float(d["spec"]["site"]["pipe_len_m"])
+	sp["penstock_diameter_mm"] = float(d["spec"]["site"]["pipe_d_mm"])
+	p["specs"] = sp
+	return p
+
+
+## The "Wind turbine (designed)" preset carrying a design: its solved power
+## and speed curves and summary (WindLabDesign.graph_patch) and its name.
+static func designed_wind_preset(spec: Dictionary) -> Dictionary:
+	var p := find_preset_by_label("Wind turbine (designed)")
+	if p.is_empty():
+		return {}
+	var d := WindLabDesign.solve(spec)
+	var sp: Dictionary = p["specs"]
+	var patch := WindLabDesign.graph_patch(d)
+	for k in patch:
+		sp[k] = patch[k]
+	sp["name"] = str(d["spec"]["name"])
+	sp["cost"] = float(WindLabDesign.bom_total(d)["cost"])
+	p["specs"] = sp
+	p["icon"] = "🌀" if bool(d["vawt"]) else "🌬"
+	return p
+
+
 static func spawn_dimensions(preset: Dictionary) -> Vector2:
 	var t := str(preset.get("type", ""))
 	return Vector2(_GraphCanvas.default_width(t), _GraphCanvas.default_height(t))
@@ -1210,6 +1247,27 @@ const WIND_TURBINES: Array = [
 			"tip_speed_ratio": 2.6, "rotor_radius_m": 1.0,
 		},
 	},
+	# A turbine from the wind turbine designer: its specs are written by
+	# designed_wind_preset() / SystemGraphView.apply_wind_design — the solved
+	# power curve (power_curve_w) the wind source reads directly, the rotor's
+	# speed curve the 3D spin follows. These defaults are the default design's
+	# summary so a bare drop from the library still makes sense.
+	{
+		"type": "wind", "label": "Wind turbine (designed)", "icon": "🌀",
+		"width": 124.0, "height": 112.0,
+		"specs": {
+			"name": "Designed turbine", "kind": "vawt",
+			"rated_w": 40.0, "rotor_diameter_m": 0.6, "cp_peak": 0.29,
+			"cut_in_ms": 4.5, "rated_ms": 10.0, "cut_out_ms": 10.0,
+			"hub_height_m": 3.0, "anemometer_height_m": 10.0,
+			"surface_roughness_m": 0.03, "site_altitude_m": 0.0,
+			"site_mean_wind_ms": 4.5, "generator_efficiency": 0.7,
+			"current_output_kw": 0.0, "cost": 130.0,
+			"daily_note": "Designed in the wind turbine designer: press Design wind turbine… in the inspector to change the rotor, gearing and generator. DC +/- → a controller or battery.",
+			"windlab_spec": {},
+			"model_id": "windlab_turbine",
+		},
+	},
 	# 3D-linked small HAWT: manufacturer specs for a Primus-style "Air 30"
 	# class turbine (500 W nominal). Swept area 1.07 m² ≈ π·(1.17/2)² checks
 	# out against the datasheet's rotor diameter (1.17 m); rated_ms sits at
@@ -1374,6 +1432,39 @@ const HYDRO_TURBINES: Array = [
 				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
 			],
 			"model_id": "ali_pelton",
+		},
+	},
+	# A Pelton wheel designed in the wheel designer (turbine_kind
+	# "designed_pelton"): the shipped cup round a wheel the player sizes, with
+	# its own bearings, drive and generator. The specs here are the classic
+	# 350 mm wheel's; designed_pelton_preset() stamps a real design onto them,
+	# and the Hydro Lab's "Design Pelton wheel…" edits it in place.
+	{
+		"type": "processor", "label": "Pelton (designed wheel)", "icon": "💦",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Pelton wheel", "role": "siphon_hydro",
+			"kind": "siphon_hydro", "turbine_kind": "designed_pelton",
+			"cost": 650.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"gross_head_m": 15.0,
+			"penstock_length_m": 80.0, "penstock_diameter_mm": 63.0,
+			"pipe_roughness_mm": 0.0015,
+			"intake_diameter_mm": 63.0, "outlet_diameter_mm": 110.0,
+			"nozzle_count": 1, "nozzle_diameter_mm": 22.0,
+			"design_flow_lps": 0.0, "runner_pcd_m": 0.280,
+			"turbine_efficiency": 0.78, "generator_efficiency": 0.70,
+			"max_power_w": 400.0,
+			"siphon_primed": false, "live_q_lps": 0.0, "live_head_m": 0.0,
+			"live_pe_w": 0.0, "live_rpm": 0.0, "current_output_kw": 0.0,
+			"daily_note": "A Pelton you size yourself: open the Hydro Lab and press Design Pelton wheel… to change the cups, wheel, hub, housing, drive and generator. Route a Poly Penstock uphill or tap a stream; DC +/- → battery.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h", "direct_intake": true}],
+			"outputs": [
+				{"kind": "water", "rate": 0.0, "unit": "L/h"},
+				{"kind": "dc_electricity", "rate": 0.0, "unit": "kW"},
+			],
+			"pelton_spec": {},
+			"model_id": "peltonlab_turbine",
 		},
 	},
 	# Estimator-style turbines, unified onto the same processor node (Phase B of

@@ -60,6 +60,7 @@ var _net_lbl: Label
 ## Generalized turbine controls (Phase C).
 var _kind_opt: OptionButton
 var _kind_hint_lbl: Label
+var _pelton_btn: Button = null
 var _siphon_group: VBoxContainer
 var _penstock_group: VBoxContainer
 var _penstock_len_spin: SpinBox
@@ -668,6 +669,16 @@ func _build_ui() -> void:
 		_kind_opt.set_item_metadata(_kind_opt.item_count - 1, k)
 	_kind_opt.item_selected.connect(_on_kind_selected)
 	kind_row.add_child(_kind_opt)
+	_pelton_btn = Button.new()
+	_pelton_btn.text = "Design Pelton wheel…"
+	_pelton_btn.tooltip_text = ("Size the wheel round the standard cup — cups, diameter, hub and bolt pattern, "
+			+ "housing, bearings, drive and generator — and see what it does to the speed and the power. "
+			+ "Apply writes it onto this turbine.")
+	UITheme.style_button(_pelton_btn)
+	_pelton_btn.pressed.connect(func() -> void:
+		if _graph_view != null and _graph_view.has_method("open_pelton_designer"):
+			_graph_view.call("open_pelton_designer", _item_id))
+	_side.add_child(_pelton_btn)
 	_kind_hint_lbl = Label.new()
 	_kind_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_kind_hint_lbl.add_theme_color_override("font_color", C_MUTED)
@@ -1572,6 +1583,8 @@ func _apply_kind_visibility(kind: String) -> void:
 	# Nozzle-governed kinds: the nozzle IS the flow control — swap the knob.
 	if _design_flow_spin != null and _design_flow_spin.get_parent() != null:
 		(_design_flow_spin.get_parent() as Control).visible = penstock and not nozzle
+	if _pelton_btn != null:
+		_pelton_btn.visible = penstock and nozzle
 	if _nozzle_count_spin != null and _nozzle_count_spin.get_parent() != null:
 		(_nozzle_count_spin.get_parent() as Control).visible = penstock and nozzle
 	if _nozzle_d_spin != null and _nozzle_d_spin.get_parent() != null:
@@ -1598,6 +1611,14 @@ func _apply_kind_visibility(kind: String) -> void:
 
 
 ## Currently-selected turbine kind (dropdown metadata), defaulting to siphon.
+## The bound turbine's specs ({} without one).
+func _lab_specs() -> Dictionary:
+	var m := _model()
+	if m == null or _item_id.is_empty():
+		return {}
+	return m.get_item(_item_id).get("specs", {}) as Dictionary
+
+
 func _current_kind() -> String:
 	if _kind_opt != null and _kind_opt.selected >= 0:
 		return str(_kind_opt.get_item_metadata(_kind_opt.selected))
@@ -3895,7 +3916,9 @@ func _push_closeup_state() -> void:
 		"nozzle_d_m": maxf(float(_nozzle_d_spin.value)
 				if _nozzle_d_spin != null else 10.0, 1.0) / 1000.0,
 		"nozzle_n": int(_nozzle_count_spin.value) if _nozzle_count_spin != null else 1,
-		"runner_pcd_m": float(meta.get("runner_pcd_m", 0.28)),
+		# The turbine's own PCD wins (a designed wheel writes it), else its kind's.
+		"runner_pcd_m": float(_lab_specs().get("runner_pcd_m", meta.get("runner_pcd_m", 0.28))),
+		"pelton_spec": _lab_specs().get("pelton_spec", {}),
 		"load_frac": load,
 		# Matched-load output — the close-up derates it by the speed-ratio's
 		# runner efficiency so shedding load visibly costs watts.

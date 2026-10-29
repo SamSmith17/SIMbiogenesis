@@ -4176,6 +4176,139 @@ func sync_turbine_model_to_kind(item_id: String) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# The Pelton wheel designer (scenes/ui/peltonlab_modal.gd, hosted by Main)
+# ---------------------------------------------------------------------------
+
+## Open the wheel designer bound to a turbine (the Hydro Lab's "Design Pelton
+## wheel…"): its site is the turbine's head and pipe, Apply writes onto it.
+func open_pelton_designer(item_id: String) -> bool:
+	var main := _get_scene_main_node()
+	if main == null or not main.has_method("open_peltonlab"):
+		return false
+	return main.call("open_peltonlab", {"turbine_id": item_id, "graph_view": self}) != null
+
+
+## Write a designed wheel onto a turbine: the specs the physics reads
+## (PeltonLabDesign.turbine_patch — PCD, runner and generator efficiency,
+## the generator's rating, the jets) and, when it has a 3D twin, its model
+## (the designed machine with the record's runner axis). Returns what
+## happened, in words.
+func apply_pelton_design(item_id: String, spec: Dictionary) -> String:
+	if model == null:
+		return ""
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return "That turbine is gone."
+	var d := PeltonLabDesign.solve(spec)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var patch := PeltonLabDesign.turbine_patch(d)
+	for k in patch:
+		specs[k] = patch[k]
+	model.update_item(item_id, {"specs": specs})
+	var swapped := false
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	var main := _get_scene_main_node()
+	if not prop_id.is_empty() and main != null:
+		var rec := PlacedPropService.get_prop_record(main, prop_id)
+		if not rec.is_empty():
+			PlacedPropService.update_prop_record(main, prop_id, {
+				"model_id": PeltonLabBuilder.MODEL_ID,
+				"pelton_spec": PeltonLabSpec.to_json_safe(d["spec"]),
+				"turbine_node": "Runner",
+				"spin_axis": str(d["spin_axis"]),
+			}, true)
+			swapped = true
+			var mgr := _get_conduit_manager()
+			if mgr != null and mgr.has_method("sync_all"):
+				mgr.call("sync_all")
+	if _siphon_lab_modal != null and is_instance_valid(_siphon_lab_modal) \
+			and _siphon_lab_modal.has_method("_load_from_model"):
+		_siphon_lab_modal.call("_load_from_model")
+	var perf: Dictionary = d["perf"]
+	var msg := "Applied %s: PCD %.0f mm, %d rpm, %s%s." % [str(d["spec"]["name"]),
+		float(d["runner"]["pcd_mm"]), int(round(float(perf["rpm"]))), UiText.num(float(perf["p_elec_w"]), "W"),
+		" — the 3D model is the designed machine" if swapped else ""]
+	_show_toast(msg)
+	return msg
+
+
+# ---------------------------------------------------------------------------
+# The wind turbine designer (scenes/ui/windlab_modal.gd, hosted by Main)
+# ---------------------------------------------------------------------------
+
+## Open the wind turbine designer bound to a wind node (its inspector's
+## "Design wind turbine…"): Apply writes the design's power curve onto it.
+func open_wind_designer(item_id: String) -> bool:
+	var main := _get_scene_main_node()
+	if main == null or not main.has_method("open_windlab"):
+		return false
+	return main.call("open_windlab", {"turbine_id": item_id, "graph_view": self}) != null
+
+
+## Write a designed turbine onto a wind node: the solved power and rotor
+## speed curves and the summary numbers (WindLabDesign.graph_patch). Its 3D
+## twin becomes the designed machine when it already is one or `swap_model`;
+## a shipped GLB turbine (VAWT, small HAWT) otherwise keeps its model and
+## just turns at the designed speed. Returns what happened, in words.
+func apply_wind_design(item_id: String, spec: Dictionary, swap_model: bool = true) -> String:
+	if model == null:
+		return ""
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return "That turbine is gone."
+	var d := WindLabDesign.solve(spec)
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var patch := WindLabDesign.graph_patch(d)
+	var keep_model := str(specs.get("model_id", ""))
+	for k in patch:
+		specs[k] = patch[k]
+	var swapped := false
+	var prop_id := str(specs.get("bound_prop_id", ""))
+	var main := _get_scene_main_node()
+	if not prop_id.is_empty() and main != null:
+		var rec := PlacedPropService.get_prop_record(main, prop_id)
+		if not rec.is_empty():
+			if swap_model or str(rec.get("model_id", "")) == WindLabBuilder.MODEL_ID:
+				PlacedPropService.update_prop_record(main, prop_id, {
+					"model_id": WindLabBuilder.MODEL_ID,
+					"kind": "windlab",
+					"windlab_spec": WindLabSpec.to_json_safe(d["spec"]),
+					"wind_specs": specs,
+				}, true)
+				swapped = true
+			else:
+				specs["model_id"] = keep_model
+				PlacedPropService.update_prop_record(main, prop_id, {"wind_specs": specs}, true)
+	elif not swap_model and not keep_model.is_empty():
+		specs["model_id"] = keep_model
+	model.update_item(item_id, {"specs": specs})
+	var msg := "Applied %s: %s peak, %s a year at a %.1f m/s mean%s." % [str(d["spec"]["name"]),
+		UiText.num(float(d["peak_w"]), "W"), "%.1f kWh" % float(d["aep_kwh"]), float(d["spec"]["site"]["mean_wind_ms"]),
+		" — the 3D model is the designed machine" if swapped else ""]
+	_show_toast(msg)
+	return msg
+
+
+## Place a new turbine built to a design, with its graph node.
+func place_designed_wind(spec: Dictionary) -> bool:
+	var preset := ComponentPresets.designed_wind_preset(spec)
+	if preset.is_empty():
+		return false
+	_on_lib_place_model_requested(preset)
+	return true
+
+
+## Place a new turbine built to a design, with its graph node (the library's
+## "Pelton (designed)" preset carrying the wheel).
+func place_designed_pelton(spec: Dictionary) -> bool:
+	var preset := ComponentPresets.designed_pelton_preset(spec)
+	if preset.is_empty():
+		return false
+	_on_lib_place_model_requested(preset)
+	return true
+
+
+# ---------------------------------------------------------------------------
 # Hydro-source routing — intakes, penstocks, stream taps (GraphHydroRouting,
 # system_graph/graph_hydro_routing.gd). The ONE water-source model lives
 # there; these delegates keep every call site (the Hydro Lab, the route
@@ -5974,6 +6107,18 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 		# A designed gantry placed from its graph preset carries its design.
 		record_extra["kind"] = "gantry_machine"
 		record_extra["gantry_spec"] = specs.get("gantry_spec", GantryLabSpec.to_json_safe({}))
+	if model_id == WindLabBuilder.MODEL_ID:
+		# A designed wind turbine carries its design; its own runtime
+		# (WindLabRuntime) spins it, not the GLB turbines' spin / tracker.
+		record_extra["kind"] = "windlab"
+		record_extra["windlab_spec"] = WindLabSpec.to_json_safe(specs.get("windlab_spec", {}) as Dictionary)
+	if model_id == PeltonLabBuilder.MODEL_ID:
+		# A designed Pelton carries its wheel; its runner's axis follows the
+		# design (horizontal "x", vertical "y").
+		var pel: Dictionary = specs.get("pelton_spec", {}) as Dictionary
+		record_extra["pelton_spec"] = PeltonLabSpec.to_json_safe(pel)
+		record_extra["spin_axis"] = str(PeltonLabDesign.solve(pel)["spin_axis"])
+		record_extra["turbine_node"] = "Runner"
 	if kind == "pp_beam_extruder" or model_id == "pp_beam_extruder":
 		record_extra["kind"] = "pp_beam_extruder"
 		record_extra["beam_mesh_name"] = str(specs.get("beam_mesh_name",

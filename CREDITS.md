@@ -266,6 +266,18 @@ asset pack — see [`docs/ASSETS.md`](docs/ASSETS.md). Record each third-party m
 origin + license here as it's added (the PBR set
 `Imported Models/Materials/Wood034_1K-JPG/`, imported GLBs, StarShade FBX, etc.).
 
+- **Pelton turbine cup (pelton-cup-stl)** — the one cup model every Pelton
+  wheel in the wheel designer is built from (`assets/hydro/pelton_cup.stl`,
+  binary STL in millimetres: 79 mm wide split bucket with a single root tab).
+  - Author: unknown (supplied by the project owner as `pelton_turbine_bucket.stl`)
+  - Source: pending — confirm where the file came from (Thingiverse / Printables / own model)
+  - License: pending  ·  Added: 2026-10-28
+  - Attribution required: unknown  ·  Share-alike: unknown  ·  Commercial OK: unknown
+  - Notes: used unmodified; scaled uniformly in game for larger or smaller cups.
+    If it cannot be redistributed, move it under the gitignored art and the
+    designer falls back to its drawn cup.
+  - Status: pending-verification
+
 - **Ground088** — tiling ground PBR texture set (`assets/materials/ground088/`:
   colour, normal, roughness, AO + the `Ground088_1K-JPG.tres` material), used by
   the Mars terrain (`scenes/gameplay/Terrain.tscn`) and the gravel road.

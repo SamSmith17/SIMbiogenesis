@@ -1005,6 +1005,43 @@ Godot.exe.exe --headless --path . --script core/toroidlab/toroidlab_selftest.gd
 # collision, a 24 x 100 W 6S x 4P graph array), packed (array gone) and
 # unpacked, Apply with 20 ribs re-seeding 20 panels, delete removing it:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/toroidlab_designer_check.gd -Label toroidlab
+# Pelton wheel designer (offline — core/peltonlab/): the cup STL read into the
+# cup frame (every facet, 79.04 mm, outward winding), seated cups proper with
+# the open face to the jet, the runner circles / jet ratio / 15 + m/2 / max
+# cups by hand, rpm = 2·0.46·v/PCD (twice the PCD: half the rpm, same power,
+# twice the torque), rotor / hub / bolt-pattern geometry, drive ratios + belt
+# length, the generator curve, housing + nozzles, HydroSource's power from the
+# applied specs == the designer's, every built-in clean, builder nodes + spin,
+# ports, cut files, packing. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/peltonlab/peltonlab_selftest.gd
+# The designer on a real world (sandbox): every built-in shot, the Wheel and
+# Performance tabs, UiAudit, its controls, then bound to a nozzle turbine on
+# the graph (as the Hydro Lab opens it) and applied: the kind, PCD and
+# efficiencies, graph power == designer power, the prop rebuilt as the designed
+# machine with its runner spinning, the Hydro Lab close-up wearing it:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/peltonlab_designer_check.gd -Label peltonlab
+# A design's numbers, headless (--preset=<id>):
+Godot.exe.exe --headless --path . --script tools/diag/peltonlab_probe.gd -- --preset=classic_350
+# Wind turbine designer (offline — core/windlab/): the spec + JSON key, the
+# Cp curves (drag line peaking at λopt, lift curve + dead band, Betz), the
+# Ugrinsky paper's tables, Wilson–Lissaman Cp and the Schmitz chord by hand,
+# the lawn-sign build's measured Ugrinsky shape, the generator (stepper K,
+# current ceiling, cut-in, brushed DC by hand, MPPT), the operating point's
+# torque balance, start-up, Rayleigh + the year's energy, gearing and
+# generator ranking, the lawn sign on ONE 18 x 24 in sign with the NEMA 17
+# pattern, corrugation direction, STL winding / bytes, builder nodes + spin
+# + pick, cut files, the graph's wind node reading the designed curve, every
+# built-in error-free. EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/windlab/windlab_selftest.gd
+# A design's numbers, headless (--preset=<id> | all; --rank ranks generators):
+Godot.exe.exe --headless --path . --script tools/diag/windlab_probe.gd -- --preset=lawn_sign --rank
+# The designer on a real world (sandbox): every built-in shot, the tabs,
+# UiAudit, a bigger rotor makes more, Match the gearing, Rank, the files;
+# a lawn-sign turbine and a printed propeller placed through the graph
+# (WindLabRuntime, graph watts == the curve at its wind), Apply from the
+# graph's side, a shipped small HAWT keeping its GLB on a designed curve,
+# a blade STL handed to a placed machine's print setup:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/windlab_designer_check.gd -Label windlab -Timeout 900
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -3684,6 +3721,142 @@ and DomeLabCam's DXF / SVG writers). Record key `toroid_spec`, model id
 - Not built: tube splice positions on rings longer than a stick (counted,
   not placed), the canopy's hanger hardware drawn, an NPC crew, per-panel
   azimuths on the graph (one flat array).
+
+## Pelton wheel designer (core/peltonlab/, 2026-10-28)
+
+Library → Structures → "Pelton wheel designer…" (Main hosts it, so it opens
+on every map), the Hydro Lab's "Design Pelton wheel…" (nozzle kinds; bound
+to that turbine), or the prop editor's "Edit Pelton wheel…". Modal
+`scenes/ui/peltonlab_modal.gd` on Main's `PeltonLabLayer` (LAYER_MODAL + 1,
+above the graph and the Lab). Model id `peltonlab_turbine`, record key
+`pelton_spec`, turbine kind `designed_pelton`, graph preset "Pelton (designed
+wheel)", library `user://peltonlab_library.json`, exports
+`user://peltonlab_designs/`.
+- **One cup for every wheel**: `assets/hydro/pelton_cup.stl` (the user's
+  `pelton_turbine_bucket.stl`; licence PENDING in CREDITS), measured into
+  `PeltonLabParts.CUP`: 79.04 mm wide, splitter x = 39.52, open face +y,
+  tip z 4.6 → bowl to 77 → root tab (34 mm thick along the shaft) to 114.8,
+  pitch point at z = 40 (widest), 63.1 cm³. Scaled whole by `cup_width_mm`.
+  `PeltonLabCup` reads the STL into the CUP frame (origin = the pitch point,
+  emitted a, c, b for Godot's winding, normals smoothed below a 50° crease)
+  and seats cups: runner frame shaft +Y, open face toward −t (the jet
+  arrives along +t), width along −Y (the cup is symmetric, a mirror would
+  flip facing). The tab is clamped between TWO side discs with axial bolts
+  (two stations: M6 at full size, one: M10), a spacer ring the tab's
+  thickness inside them, a flanged hub with an N-bolt pattern through it all.
+- **Frames**: runner → CANONICAL (shaft +X, drive end +X, window = the −Z
+  wall) → model (vertical turns +X up). The record's `spin_axis` is the
+  design's ("x" / "y"); the catalog leaves it "" because it varies.
+- **Physics** (`PeltonLabDesign.performance`): the PeltonPhysics operating
+  point at the site (or a bound turbine's head / penstock / supply), rpm at
+  x = 0.46, runaway at 2× from the gross head. Runner η = 0.78 × design-rule
+  penalties (jet ratio m, B/d ≈ 3.1–3.4, Z = 15 + m/2: Thake, Nasir 2013 —
+  the penalty sizes are the game's). Generator η peaks at its rated rpm (a
+  log-speed parabola, an estimate); drive × bearings; capped at the rating.
+  Checks: crowding (tabs touching at the bowl root / root), discs vs bolts and
+  bowls, hub pattern between boss and spacer, cup pull mω²r at runaway on the
+  bolts (double shear) and tabs, disc bearing, hub bolts and coupler at the
+  STALL torque, shaft max-shear (bending from the stalled jet + rotor weight,
+  torsion) vs 40 MPa, bearing L10, belt wrap / speed / minimum pulley,
+  generator speed, runaway past its limit, open-circuit volts vs the bank.
+- **Apply** (`SystemGraphView.apply_pelton_design`): `turbine_patch` writes
+  turbine_kind, pelton_spec, runner_pcd_m, nozzles, turbine_efficiency (the
+  runner η), generator_efficiency (drive × generator at its speed),
+  max_power_w; the bound prop becomes the designed machine. HydroSource then
+  makes exactly the designer's watts (selftest + harness pin). The close-up
+  builds the turbine's own design (`pelton_spec` in its state, nozzles off,
+  axis + tip radius from the design — the cups are a MultiMesh, so mesh
+  measuring sees only the disc). "Place in world" goes through the graph's
+  library placement with that preset.
+- Builder nodes: Machine/Runner (cups MultiMesh + rotor; what spins),
+  ShaftSpin (follows Runner), GenSpin (× the ratio, reversed for gears),
+  Static, Housing, Window, Jets. Base = plates on 40 mm tube legs.
+- Reused from the gantry lab: GantryLabDetail's primitives and its NEMA
+  motor emitter (steppers as generators); the DXF / SVG writers from DomeLab.
+- Not built: a cup-shape editor (on purpose — one cup), true belt / gear
+  meshing animation beyond the ratio, flow through the housing in the close-up
+  for vertical wheels, per-jet valves.
+
+## Wind turbine designer (core/windlab/, 2026-10-28)
+
+Library → Structures → "Wind turbine designer…" (Main hosts it, every map),
+the wind node inspector's "Design wind turbine…", or the prop editor's
+"Design wind turbine…" (on a designed turbine AND on the shipped `vawt` /
+`small_hawt` GLBs). Modal `scenes/ui/windlab_modal.gd` on Main's
+`WindLabLayer` (LAYER_MODAL + 1). Model id `windlab_turbine`, record key
+`windlab_spec`, record kind `windlab`, graph preset "Wind turbine
+(designed)" (type `wind`), library `user://windlab_library.json`, exports
+`user://windlab_designs/`.
+- **Rotors** (`WindLabParts.TYPES`): ugrinsky, savonius, lenz2 (sheet, drag /
+  hybrid), darrieus_h, helical (airfoil blades on arms), hawt (propeller),
+  multiblade (farm windmill). `WindLabAero.cp_model` gives Cp_max, λopt,
+  the torque line and the WORST static torque `cq_start` (what decides
+  starting). Drag rotors: Cq = Cq0·(1 − λ/2λopt); lift: Cp = Cp_max·x(2−x)
+  with a Darrieus dead band plus the static torque fading out under it
+  (`cp_at`) — without that a helical started and then hung at λ ≈ 0.
+  Sources in the file: Savonius 0.19 @ λ 0.85 (Blackwell et al. SAND76-0131,
+  Akwa 2012); Ugrinsky = that × 1.43 × the Sakamoto et al. 2021 tables
+  (S/D table 2, L/R table 3 — a 2-D Re-1000 study, so the RELATIVE gain is
+  used); Lenz2 0.19 @ 0.85 (claims 0.38, small tests 0.06–0.09); Darrieus
+  0.34 × solidity / Re / tip-loss factors; propeller = Wilson–Lissaman–Walker
+  with L/D at the blade's own Re; blades by Schmitz (chord, twist). Penalty
+  SIZES are estimates.
+- **The lawn-sign build** (`WindLabPresets.lawn_sign_spec`, measured off the
+  user's `Lawn sign wind turbine.glb` in Documents — not committed; its flat
+  cut pattern was SketchUp edges and SimLab dropped it): Ø 181 mm × 455.5,
+  S = 0.36 D, L = 0.84 R, 72° tail; two 8 in MID discs 2 in apart clamping a
+  40 mm NEMA 17's face (22 mm boss, 4 × M3 on 31 mm); the motor's SHAFT is
+  in a coupler on a 24 in rod and its BODY turns with the rotor (`mount`
+  "body_spins" — the check says the leads need a slip ring). Each blade
+  unrolls to ~7.8 in, so the 24 in sign = 2 blades + an 8 in strip for the
+  two discs; kerf 1 mm, margin 0 or the 18 in blades do not fit.
+  Ugrinsky geometry (`ugrinsky_geom`): semicircle S radially from the rim
+  to e = R − S, then a tail arc of radius L tangent to it with its centre
+  L − e out on the far side (an S-bend), `sweep` degrees.
+- **The operating point** (`WindLabDesign.op_point`): rotor torque
+  Cq(λ)·½ρv²AR against G·T_gen(Gω)/η + bearings, from rest (no start if the
+  cogging `start_torque_nm` beats Cq_start·q·A·R; `start_assist` takes the
+  fastest stable crossing). An MPPT load picks the rotor speed that puts
+  the most into the battery (`_mppt_point`, capped by what the magnets take
+  at the controller's lowest voltage). `WindLabGen`: steppers K = T/(√2 I),
+  phasor E² = (U + RI)² + (XI)² into a bridge (U = 4/π Vc per stepper
+  phase, 2/π Vc six-pulse), current ceiling K/(pL); 3-phase from rectified
+  V/rpm; brushed DC. Generator tables are cached per generator on a
+  QUADRATIC rpm grid to 4 × max rpm, the same for every ratio, so ranking
+  (`rank_generators`, ~0.5 s) reuses them.
+- **Power curve** 0.5–30 m/s; auto cut-out at the generator's top speed or
+  1.5 × its rating; the year's energy over a Rayleigh spread at the HUB's
+  mean (10 m mean shear-corrected — a lawn sign at 0.84 m sees 2.6 m/s of
+  a 4.5 m/s site). `best_ratio` / `drive_for_ratio` (stock GT2 / HTD tooth
+  pairs, planetary ratios); a rotor without its own shaft is ranked 1 : 1.
+- **Graph**: `WindTurbineSource.power_kw_from_graph_specs` returns the
+  designed `power_curve_w` when a node has one (plain nodes unchanged);
+  `rpm_curve` drives `WindTurbineSpin` / `HawtTracker` too, so Apply with
+  "Keep its 3D model" gives a shipped GLB the designed curve.
+  `SystemGraphView.open_wind_designer / apply_wind_design / place_designed_wind`.
+  A placed designed turbine runs `WindLabRuntime` (gameplay/), NOT the GLB
+  spin / tracker (both guarded on model id): same hub wind as the graph,
+  spins `Machine/…/Rotor` at the solved rpm (display compressed past 150),
+  yaws a propeller's `Yaw`, refreshes the bound node with the graph closed.
+- **Making it**: parts are cut / scored (`d["parts"]`, FlatpackProfile
+  rings, score lines on the FOLD layer — facet spacing 2r·acos(1 − tol/r)
+  for radii under the sheet's free bend radius), nested by FlatpackNesting.
+  ⚠ A corrugated sheet's flutes: along a sign's SHORT side, along a 4 × 8's
+  LENGTH (`SHEET_SIZES.flutes`) — blades stand on a sign and are laid
+  TURNED on a 4 × 8 (`nest.turned`; WindLabCam pre-rotates them).
+  `WindLabMesh` is the ONE triangle source (mm, Z up, CCW outside) for the
+  builder (mapped (x, z, −y)·0.001, winding reversed) and the STL files.
+  `WindLabCam.write_all`: sheet + per-part DXF/SVG, STLs (propeller blades,
+  airfoil sections, hub, a sheet blade as a solid), power-curve CSV, BOM,
+  JSON, summary. "Make on a machine…" writes the STL and opens the nearest
+  printer / router / gantry's print setup with it (`load_stl`).
+- ⚠ The spec key goes through JSON.stringify: var_to_str kept 609.5999999 vs
+  609.6 apart after a save, so a saved design missed its own cache.
+- ⚠ GantryLabDetail's emitters set a UV on every vertex; `add_tris` must
+  too, or SurfaceTool errors on mixed formats.
+- Not built: furling / yaw dynamics, gusts and turbulence in the curve,
+  blade bending stiffness, a Savonius's swept end-plate tip vortices, tower
+  shadow, an NPC crew building one.
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 

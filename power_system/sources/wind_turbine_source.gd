@@ -236,6 +236,22 @@ static func hub_wind_speed_ms_from_specs(specs: Dictionary, hour: float,
 		float(specs.get("surface_roughness_m", 0.03)))
 
 
+## Linear read of a [[wind m/s, value], …] curve (a designed turbine's power
+## or rotor-speed curve); zero below the first point's ramp and past the end.
+static func curve_at(curve: Array, v: float) -> float:
+	if curve.is_empty():
+		return 0.0
+	var first: Array = curve[0]
+	if v <= float(first[0]):
+		return float(first[1]) * clampf(v / maxf(float(first[0]), 1e-6), 0.0, 1.0)
+	for i in range(1, curve.size()):
+		var b: Array = curve[i]
+		if v <= float(b[0]):
+			var a: Array = curve[i - 1]
+			return lerpf(float(a[1]), float(b[1]), (v - float(a[0])) / maxf(float(b[0]) - float(a[0]), 1e-9))
+	return 0.0
+
+
 static func power_kw_from_graph_specs(specs: Dictionary, hour: float,
 		real_wind_10m_ms: float = NAN) -> float:
 	var rated_ms := maxf(float(specs.get("rated_ms", 11.0)), 0.1)
@@ -244,6 +260,15 @@ static func power_kw_from_graph_specs(specs: Dictionary, hour: float,
 	var rated_w := maxf(float(specs.get("rated_w", 1000.0)), 0.0)
 
 	var v_hub := hub_wind_speed_ms_from_specs(specs, hour, real_wind_10m_ms)
+
+	# A turbine from the wind turbine designer (WindLabDesign.graph_patch)
+	# carries its own solved power curve — the rotor's Cp, the drive and the
+	# generator into its load at every wind speed — and that IS its output.
+	var pc: Variant = specs.get("power_curve_w", null)
+	if pc is Array and not (pc as Array).is_empty():
+		if v_hub > cut_out:
+			return 0.0
+		return maxf(curve_at(pc as Array, v_hub), 0.0) / 1000.0
 
 	if v_hub < cut_in or v_hub > cut_out:
 		return 0.0

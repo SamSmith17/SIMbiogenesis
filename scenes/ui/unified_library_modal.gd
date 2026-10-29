@@ -284,6 +284,16 @@ func _populate() -> void:
 			"detail": "Bent-tube toroids on pipe fittings: rings, bracing and tension lines, a pleated correx canopy, a solar ring → cut list, bend templates, sheets.",
 		},
 		{
+			"kind": "windlab",
+			"label": "Wind turbine designer…",
+			"detail": "Ugrinsky, Savonius, Lenz2, Darrieus, helical, propeller and farm rotors — incl. one cut from a single 18 × 24 in lawn sign → power curve, start-up, gearing and motor matching, cut/score files, printable STLs.",
+		},
+		{
+			"kind": "peltonlab",
+			"label": "Pelton wheel designer…",
+			"detail": "Micro-hydro Pelton turbines round the standard cup: cups, wheel size, hub and bolt pattern, housing, bearings, belt or gears, generator → speed, power, strength checks, cut files.",
+		},
+		{
 			"kind": "gantrylab",
 			"label": "CNC gantry designer…",
 			"detail": "Printers, routers, lasers, plotters on V-slot: CoreXY, delta, bed-slinger… → kinematics sim, G-code, BOM, firmware config.",
@@ -451,7 +461,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab", "pvlab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -530,6 +540,22 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "The Solar designer needs a location map (TerrainLoader)."
+		"windlab":
+			# Hosted by Main, so it opens on every map (no location needed).
+			var main_wl := get_tree().current_scene if get_tree() != null else null
+			if main_wl != null and main_wl.has_method("open_windlab"):
+				close()
+				main_wl.call("open_windlab", {})
+			else:
+				_status.text = "The wind turbine designer needs a world."
+		"peltonlab":
+			# Hosted by Main, so it opens on every map (no location needed).
+			var main_pl := get_tree().current_scene if get_tree() != null else null
+			if main_pl != null and main_pl.has_method("open_peltonlab"):
+				close()
+				main_pl.call("open_peltonlab", {})
+			else:
+				_status.text = "The Pelton wheel designer needs a world."
 		"toroidlab":
 			if _loader != null and _loader.has_method("open_toroidlab"):
 				_loader.call("open_toroidlab")

@@ -127,7 +127,12 @@ func _refresh_target() -> void:
 	var radius := maxf(float(wind_specs.get("rotor_radius_m",
 		float(wind_specs.get("rotor_diameter_m", 2.0)) * 0.5)), 0.05)
 
-	if v_hub < cut_in or v_hub > cut_out:
+	var rc: Variant = wind_specs.get("rpm_curve", null)
+	if rc is Array and not (rc as Array).is_empty():
+		# A designed rotor (the wind turbine designer) turns at its solved speed.
+		_target_omega = 0.0 if v_hub > cut_out else clampf(
+			_WIND_SOURCE.curve_at(rc as Array, v_hub) * TAU / 60.0, 0.0, _MAX_OMEGA)
+	elif v_hub < cut_in or v_hub > cut_out:
 		_target_omega = 0.0
 	else:
 		# Above rated wind the rotor is regulated to (roughly) constant speed.

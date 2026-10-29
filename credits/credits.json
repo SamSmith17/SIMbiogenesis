@@ -1384,6 +1384,24 @@
       "modifications": "stroke colour set to white at load for tinting; compiled into scenes/ui/ui_icon_data.gd",
       "notes": "Keep the ISC notice with the icons.",
       "status": "verified"
+    },
+    {
+      "id": "pelton-cup-stl",
+      "name": "Pelton turbine cup (STL)",
+      "category": "model",
+      "author": null,
+      "source": null,
+      "license": "pending",
+      "license_file": "",
+      "local_path": "assets/hydro/pelton_cup.stl",
+      "role": "the cup model every designed Pelton wheel is built from",
+      "attribution_required": null,
+      "share_alike": null,
+      "commercial_ok": null,
+      "added": "2026-10-28",
+      "modifications": "none; scaled uniformly at runtime",
+      "notes": "Supplied by the project owner as pelton_turbine_bucket.stl; origin and licence still to be confirmed.",
+      "status": "pending-verification"
     }
   ],
   "field_guide": {
