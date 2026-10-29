@@ -21,6 +21,11 @@ static var _ghost_model_id := ""
 static var _ghost_valid := false
 static var _ghost_ground_y := 0.0
 static var _ghost_yaw_deg := 0.0
+## The yaw a solar collector starts at (SolarAim: equator-facing racks,
+## north–south tracker axes). A designed array on a pitched roof ignores it:
+## there it faces down the slope and only R / Shift+R turn it.
+static var _ghost_base_yaw_deg := 0.0
+static var _ghost_aim: Dictionary = {}
 ## A designed solar array's aim (PvSurfaceAim: position, normal, host, the
 ## pose `xf`) and the mount its spec had when placement began (a pitched
 ## surface switches the ghost to a roof-flush mount, a level one back).
@@ -242,6 +247,7 @@ static func begin_placement(main: Node, model_id: String, prep: Dictionary = {})
 	_placement_prop_id = ""
 	_ghost_model_id = model_id
 	_ghost_valid = false
+	_seed_solar_aim(main, model_id)
 	var ghost := _build_ghost(main, model_id)
 	if ghost == null:
 		_clear_placement()
@@ -258,6 +264,37 @@ static func begin_placement(main: Node, model_id: String, prep: Dictionary = {})
 		"prop_id": "",
 		"model_id": model_id,
 	}
+
+
+## Start the ghost at the collector's best orientation for this site
+## (SolarAim). A yaw the caller put in the record extras (Graph → "Place array
+## in 3D" faces the graph array's azimuth) is taken as the start instead and
+## dropped from the extras, so turning the ghost with R is what gets placed.
+## A designed array is re-stamped with this world's latitude (its row spacing
+## and, with "Best tilt" on, its tilt follow it).
+static func _seed_solar_aim(main: Node, model_id: String) -> void:
+	var lat := site_latitude(main)
+	var rx: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+	if model_id == PvLabBuilder.MODEL_ID and rx.get("pvlab_spec") is Dictionary and not is_nan(lat):
+		var spec: Dictionary = rx["pvlab_spec"]
+		if spec.get("array") is Dictionary:
+			(spec["array"] as Dictionary)["site_lat"] = lat
+	var spec_for: Dictionary = rx.get("pvlab_spec", {}) if rx.get("pvlab_spec") is Dictionary else {}
+	_ghost_aim = SolarAim.for_model(model_id, spec_for, 45.0 if is_nan(lat) else lat)
+	_ghost_base_yaw_deg = float(_ghost_aim["yaw_deg"])
+	if rx.has("yaw"):
+		_ghost_base_yaw_deg = float(rx["yaw"])
+		rx.erase("yaw")
+	# A rack turns in one number; a designed array keeps R's turn apart from
+	# the base so a pitched roof can drop the base.
+	_ghost_yaw_deg = _ghost_base_yaw_deg if model_id == PvArrayBuilder.MODEL_ID else 0.0
+
+
+## The world's latitude (Main.latitude), NAN when there is no Main.
+static func site_latitude(main: Node) -> float:
+	if main != null and main.get("latitude") != null:
+		return float(main.get("latitude"))
+	return NAN
 
 
 static func placement_is_valid() -> bool:
@@ -326,7 +363,8 @@ static func _update_pvlab_aim(main: Node, camera: Camera3D) -> void:
 		var g := _build_ghost(main, PvLabBuilder.MODEL_ID)
 		if g != null:
 			_ghost_node = g
-	var xf := PvSurfaceAim.mount_transform(aim, _ghost_yaw_deg)
+	var yaw := _ghost_yaw_deg + (0.0 if bool(aim.get("pitched", false)) else _ghost_base_yaw_deg)
+	var xf := PvSurfaceAim.mount_transform(aim, yaw)
 	_ghost_node.global_transform = xf
 	_pv_aim = aim.duplicate()
 	_pv_aim["xf"] = xf
@@ -350,12 +388,40 @@ static func rotate_placement(delta_deg: float) -> void:
 
 ## What the crosshair prompt says while placing this model.
 static func placement_hint() -> String:
+	var aim_line := _solar_aim_line()
 	if _ghost_model_id == PvLabBuilder.MODEL_ID:
 		var host := str((_pv_aim.get("host", {}) as Dictionary).get("kind", ""))
 		var on := str({"building": "on the roof", "prop": "on the structure", "terrain": "on the ground"}.get(host, ""))
-		return "Aim at the ground, a roof or a structure%s — R / Shift+R turn, click to place, Esc to cancel" % (
-			(" (%s)" % on) if not str(on).is_empty() else "")
+		if bool(_pv_aim.get("pitched", false)):
+			aim_line = "faces down the roof"
+		return "Aim at the ground, a roof or a structure%s%s — R / Shift+R turn, click to place, Esc to cancel" % [
+			(" (%s)" % on) if not str(on).is_empty() else "",
+			(" · " + aim_line) if not aim_line.is_empty() else ""]
+	if not aim_line.is_empty():
+		return "Aim at terrain · %s — Left click to place, Esc to cancel" % aim_line
 	return "Aim at terrain — Left click to place, Esc to cancel"
+
+
+## What the ghost's solar orientation is, for the prompt ("" for anything that
+## is not a collector, or once it is turned off the best facing).
+static func _solar_aim_line() -> String:
+	if _ghost_aim.is_empty() or str(_ghost_aim.get("kind", "")).is_empty():
+		return ""
+	var lat := site_latitude(_placement_main)
+	if is_nan(lat):
+		return ""
+	var turned := fposmod(_ghost_yaw_deg + (0.0 if _ghost_model_id == PvArrayBuilder.MODEL_ID else _ghost_base_yaw_deg)
+		- float(_ghost_aim["yaw_deg"]) + 180.0, 360.0) - 180.0
+	var kind := str(_ghost_aim["kind"])
+	if absf(turned) > 1.0 and kind in [SolarAim.KIND_FIXED, SolarAim.KIND_TRACKER, SolarAim.KIND_FLUSH]:
+		return "turned %.0f° off the best facing" % turned
+	var tilt_now := NAN
+	var rx: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+	if _ghost_model_id == PvArrayBuilder.MODEL_ID:
+		tilt_now = float(PvArrayBuilder.resolve_spec(rx.get("pv_array_spec", {}) as Dictionary)["tilt_deg"])
+	elif _ghost_model_id == PvLabBuilder.MODEL_ID and rx.get("pvlab_spec") is Dictionary:
+		tilt_now = float(PvLabSpec.resolve(rx["pvlab_spec"])["array"]["tilt_deg"])
+	return SolarAim.describe(_ghost_aim, lat, tilt_now)
 
 
 static func confirm_placement() -> bool:
@@ -1310,6 +1376,8 @@ static func _player_camera(main: Node) -> Camera3D:
 static func _clear_placement() -> void:
 	_destroy_ghost()
 	_ghost_yaw_deg = 0.0
+	_ghost_base_yaw_deg = 0.0
+	_ghost_aim = {}
 	_pv_aim = {}
 	_pv_mount_base = ""
 	if _ghost_guides != null and is_instance_valid(_ghost_guides):

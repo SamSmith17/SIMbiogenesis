@@ -551,8 +551,9 @@ func _build_pv_section() -> void:
 	_pv_tilt.value_changed.connect(_on_pv_tilt)
 	row.add_child(_pv_tilt)
 	var face := Button.new()
-	face.text = "Face the equator"
-	face.tooltip_text = "Turn the rack to face due south (north in the southern hemisphere)"
+	face.text = "Best angle for the site"
+	face.tooltip_text = ("Turn the rack to face due south (north in the southern hemisphere) and tilt it "
+		+ "to the latitude's annual optimum")
 	UITheme.style_button(face)
 	face.pressed.connect(_on_pv_face_equator)
 	_pv_section.add_child(face)
@@ -653,15 +654,21 @@ func _on_pv_face_equator() -> void:
 	if _prop_id.is_empty():
 		return
 	_resolve_main()
-	var lat := 45.0
-	if _main != null and _main.get("latitude") != null:
-		lat = float(_main.get("latitude"))
-	_tf["yaw"] = PvArrayBuilder.yaw_for_azimuth(180.0 if lat >= 0.0 else 0.0)
+	var lat := PlacedPropService.site_latitude(_main)
+	if is_nan(lat):
+		lat = 45.0
+	var aim := SolarAim.for_model(PvArrayBuilder.MODEL_ID, {}, lat)
+	_tf["yaw"] = float(aim["yaw_deg"])
 	_dirty_tf = true
 	_flush_transform()
 	if _spins.has("yaw"):
 		(_spins["yaw"] as SpinBox).set_value_no_signal(float(_tf["yaw"]))
+	var best := snappedf(float(aim["tilt_deg"]), 0.5)
+	if absf(float(PvArrayBuilder.resolve_spec(_rec.get("pv_array_spec", {}) as Dictionary)["tilt_deg"]) - best) > 0.01:
+		_on_pv_tilt(best)
 	_sync_pv()
+	_hint("Faces %s at %.0f° — the best all-year angle at %s" % [
+		SolarAim.compass_word(SolarAim.equator_azimuth_deg(lat)), best, SolarAim.latitude_text(lat)])
 
 
 func _build_fire_section() -> void:

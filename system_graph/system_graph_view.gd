@@ -6257,9 +6257,15 @@ func place_array_in_world(item_id: String) -> bool:
 	if str(sp.get("compound_kind", "")) != "array":
 		return false
 	var count := int(sp.get("panel_count", sp.get("array_panel_units", 9)))
+	# An array with no plane of its own goes up at the site's best angle
+	# (SolarAim): facing the equator at the latitude's optimal tilt.
+	var lat := PlacedPropService.site_latitude(main)
+	if is_nan(lat):
+		lat = 45.0
+	var az := float(sp["azimuth_deg"]) if sp.has("azimuth_deg") else SolarAim.equator_azimuth_deg(lat)
 	var spec := {
 		"count": count, "cols": int(sp.get("array_series", count)) if count <= 12 else 0,
-		"tilt_deg": float(sp.get("tilt_deg", 0.0)) if float(sp.get("tilt_deg", 0.0)) > 0.0 else PvArrayBuilder.DEFAULT_TILT_DEG,
+		"tilt_deg": float(sp.get("tilt_deg", 0.0)) if float(sp.get("tilt_deg", 0.0)) > 0.0 else SolarAim.best_tilt_deg(lat),
 		"panel_w_m": float(sp.get("panel_w_m", PvArrayBuilder.DEFAULT_PANEL_W_M)),
 		"panel_h_m": float(sp.get("panel_h_m", PvArrayBuilder.DEFAULT_PANEL_H_M)),
 		"mount_style": SolarArrayBuilder.MOUNT_GROUND,
@@ -6271,14 +6277,14 @@ func place_array_in_world(item_id: String) -> bool:
 		"ok": true, "model_id": PvArrayBuilder.MODEL_ID,
 		"pv_array_spec": spec,
 		"record_extra": {"pv_array_spec": spec, "graph_item_id": item_id,
-			"yaw": PvArrayBuilder.yaw_for_azimuth(float(sp.get("azimuth_deg", 180.0)))},
+			"yaw": PvArrayBuilder.yaw_for_azimuth(az)},
 	})
 	if not bool(r.get("ok", false)):
 		_show_toast("Could not start placing the array")
 		return false
 	visible = false
-	_show_toast("Place the array — it faces %s (%.0f°); turn it with the gizmo after placing" % [
-			_compass_point(float(sp.get("azimuth_deg", 180.0))), float(sp.get("azimuth_deg", 180.0))])
+	_show_toast("Place the array — it faces %s (%.0f°) at %.0f°; R turns it" % [
+			_compass_point(az), az, float(spec["tilt_deg"])])
 	return true
 
 

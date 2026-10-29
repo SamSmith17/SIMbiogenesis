@@ -725,6 +725,9 @@ func _edit(path: String, key: String, value: Variant) -> void:
 		_built_key = ""
 	else:
 		_group(path)[key] = value
+		# A tilt typed by hand is the player's; the latitude rule stands down.
+		if path == "array" and key == "tilt_deg":
+			_group(path)["tilt_auto"] = false
 	_queue_rebuild()
 
 
@@ -993,6 +996,9 @@ func _build_settings_rows() -> void:
 	_bind_spin(_arr_box, "Gap between modules", "array", "gap_mm", 0.0, 500.0, 1.0, " mm")
 	if mount in ["ground", "roof_tilt", "ballast", "pole"]:
 		_bind_spin(_arr_box, "Tilt", "array", "tilt_deg", 0.0, 75.0, 0.5, "°")
+		_bind_check(_arr_box, "Best tilt for the latitude", "array", "tilt_auto",
+			"Stand the tables at the site's annual-optimal tilt (about 0.76 × latitude + 3°). "
+			+ "Placing the array stamps this world's latitude; typing a tilt turns this off.")
 	if mount in ["ground", "roof_tilt", "ballast"]:
 		_bind_spin(_arr_box, "Front edge height", "array", "clearance_m", 0.0, 6.0, 0.01, " m")
 	if mount == "tracker":

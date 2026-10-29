@@ -10164,8 +10164,28 @@ no phantom watts, stage curve, surface rain, spill, SiteBalance),
   the array's azimuth (`orientation_for`: azimuth = 180 − yaw,
   `yaw_for_azimuth` the inverse); `update_prop_record` notifies the graph on
   x/z/yaw/y_offset/pv_array_spec and `sync_site_from_prop` re-orients. Prop
-  editor "Solar array" section: tilt + "Face the equator". The panel COUNT
-  is the graph array's (the electrical string); the rack only draws it.
+  editor "Solar array" section: tilt + "Best angle for the site". The panel
+  COUNT is the graph array's (the electrical string); the rack only draws it.
+- **Collectors are placed at their type's best angle** (`SolarAim`,
+  `core/placed_models/solar_aim.gd`, pure; 2026-10-28). `begin_placement`
+  seeds the ghost from it (`_seed_solar_aim`): a rack / designed fixed array
+  (ground, roof_tilt, ballast, pole) faces the EQUATOR (yaw 180 in the south)
+  at `SolarArrayBuilder.default_tilt_deg(lat)`; a designed tracker lays its
+  axis north–south; a flush mount follows the surface (on a pitched roof the
+  base yaw is dropped — `_ghost_base_yaw_deg` is kept apart from R's turn for
+  that); the trough keeps its forced east–west axis, the heliostat tracks on
+  both axes. A `yaw` in the prep's record extras (Graph → "Place array in 3D")
+  becomes the ghost's start and is REMOVED from the extras, so turning the
+  ghost is what gets placed (it used to overwrite it). A designed array is
+  re-stamped with the world's latitude at placement; its new
+  `array.tilt_auto` ("Best tilt for the latitude" in the designer, default
+  ON for a new design, OFF for every spec saved before it and for the
+  presets, whose blurbs name their tilt) makes `resolve_array` take the
+  latitude's tilt; typing a tilt turns it off. The placement prompt says
+  where it faces ("faces south at 40° (best for 48°N)"), or how far R turned
+  it off that. Gates: `pvlab_selftest._test_solar_aim` and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/solar_aim_placement_check.gd`
+  (both hemispheres, Main.latitude set in memory).
 - **String design check** (`PvElectrical.string_window_report`, inspector
   "PV string check" on a controller): cold-morning Voc (−10 °C) vs max_voc,
   STC Voc vs `startup_v`, hot-noon Vmp (NOCT cell, 40 °C air → 71 °C) vs

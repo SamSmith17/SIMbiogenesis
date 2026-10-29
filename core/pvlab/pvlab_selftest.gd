@@ -13,7 +13,7 @@ extends SceneTree
 ## error; the BOM, packed spec, graph preset and the JSON round trip.
 ##   Godot --headless --path . --script core/pvlab/pvlab_selftest.gd
 
-const EXPECTED_CHECKS := 132
+const EXPECTED_CHECKS := 147
 
 var _checks := 0
 var _fails := 0
@@ -49,6 +49,7 @@ func _initialize() -> void:
 	_test_type_patch()
 	_test_frame_lip()
 	_test_hardware()
+	_test_solar_aim()
 	print("pvlab selftest: %d checks, %d failures" % [_checks, _fails])
 	if _checks != EXPECTED_CHECKS:
 		print("FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -583,3 +584,41 @@ func _test_hardware() -> void:
 	var top: Vector3 = (mid["xf"] as Transform3D) * Vector3(0, 0.05, 0)
 	var hit := PvLabBuilder.pick_any(d, top + Vector3(0, 1, 0), Vector3.DOWN, 0.0, false)
 	_ok(str(hit.get("kind", "")) == "part" and int(hit.get("index", -1)) == mi, "picking a mid clamp from above (%s)" % str(hit))
+
+
+## SolarAim: every collector is placed at its type's best orientation. A fixed
+## rack faces the equator at the latitude's optimal tilt (0.76 x |lat| + 3.1,
+## the Lave & Kleissl fit SolarArrayBuilder uses), a tracker's axis runs
+## north-south in either hemisphere, the trough's axis stays east-west.
+func _test_solar_aim() -> void:
+	var mv := SolarAim.for_model(PvArrayBuilder.MODEL_ID, {}, 48.3)
+	_ok(str(mv["kind"]) == SolarAim.KIND_FIXED, "aim: a rack is a fixed collector")
+	_near(float(mv["tilt_deg"]), 48.3 * 0.76 + 3.1, 1e-4, "aim: best tilt at 48.3 N")
+	_near(float(PvArrayBuilder.orientation_for(float(mv["yaw_deg"]), 30.0)["azimuth_deg"]), 180.0, 1e-3,
+		"aim: a northern rack faces south")
+	var syd := SolarAim.for_model(PvArrayBuilder.MODEL_ID, {}, -33.9)
+	_near(fposmod(float(PvArrayBuilder.orientation_for(float(syd["yaw_deg"]), 30.0)["azimuth_deg"]) + 180.0, 360.0) - 180.0,
+		0.0, 1e-3, "aim: a southern rack faces north")
+	_near(float(syd["tilt_deg"]), 33.9 * 0.76 + 3.1, 1e-4, "aim: best tilt at 33.9 S")
+	var trk := {"array": {"mount": "tracker"}}
+	_ok(str(SolarAim.for_model(PvLabBuilder.MODEL_ID, trk, 48.3)["kind"]) == SolarAim.KIND_TRACKER
+		and is_nan(float(SolarAim.for_model(PvLabBuilder.MODEL_ID, trk, 48.3)["tilt_deg"])), "aim: a tracker has no fixed tilt")
+	_near(float(SolarAim.for_model(PvLabBuilder.MODEL_ID, trk, -33.9)["yaw_deg"]), 0.0, 1e-6,
+		"aim: a tracker's axis runs north-south in the south too")
+	_ok(str(SolarAim.for_model(PvLabBuilder.MODEL_ID, {"array": {"mount": "roof_flush"}}, 48.3)["kind"]) == SolarAim.KIND_FLUSH,
+		"aim: a flush mount follows the surface")
+	_near(float(SolarAim.for_model(PvLabBuilder.MODEL_ID, {"array": {"mount": "ground"}}, -33.9)["yaw_deg"]),
+		float(syd["yaw_deg"]), 1e-6, "aim: a designed ground array faces like a rack")
+	_ok(str(SolarAim.for_model("csp_trough", {}, 48.3)["kind"]) == SolarAim.KIND_TROUGH
+		and absf(float(SolarAim.for_model("csp_trough", {}, 48.3)["yaw_deg"]) - ModelCatalog.forced_yaw_deg("csp_trough")) < 1e-6,
+		"aim: the trough keeps its east-west axis")
+	_ok(str(SolarAim.for_model("vawt", {}, 48.3)["kind"]).is_empty(), "aim: a wind turbine is not a solar collector")
+	_ok(SolarAim.describe(mv, 48.3, float(mv["tilt_deg"])).contains("south"), "aim: the prompt names the facing")
+	# "Best tilt for the latitude" on a designed array.
+	var fresh := PvLabSpec.default_spec()
+	_ok(bool(fresh["array"]["tilt_auto"]), "a new design takes the latitude's best tilt")
+	var a := PvLabArray.resolve_array({"mount": "ground", "tilt_auto": true, "site_lat": -33.9})
+	_near(float(a["tilt_deg"]), 33.9 * 0.76 + 3.1, 1e-4, "best tilt follows the stamped latitude")
+	var old := PvLabArray.resolve_array({"mount": "ground", "tilt_deg": 30.0, "site_lat": 10.0})
+	_ok(not bool(old["tilt_auto"]) and absf(float(old["tilt_deg"]) - 30.0) < 1e-6,
+		"a design saved before the switch keeps its tilt")

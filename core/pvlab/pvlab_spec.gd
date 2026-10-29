@@ -9,7 +9,8 @@ extends RefCounted
 ##   module:  PvLabModule spec
 ##   array:   PvLabArray.ARRAY_DEFAULTS — mount, rows, cols, stack,
 ##            orientation, gap_mm, pitch_m (0 = no winter shade), tilt_deg,
-##            clearance_m, site_lat (stamped where it is placed), gcr
+##            clearance_m, site_lat (stamped where it is placed), gcr,
+##            tilt_auto (tilt = the latitude's best, SolarAim)
 ##   rack:    PvLabRack.DEFAULTS — material, leg_spacing_m, rail_overhang_mm,
 ##            design_load_kpa, brace, pole_h_m, hub_h_m, standoff_mm
 ##   tracker: PvLabTracker.DEFAULTS — axis_tilt_deg, max_deg, backtrack,
@@ -29,7 +30,7 @@ const COLOR_DEFAULTS := {"lumber": Color(0.72, 0.56, 0.38), "galv": Color(0.66, 
 
 
 static func default_spec() -> Dictionary:
-	return resolve({"name": "Solar array"})
+	return resolve({"name": "Solar array", "array": {"tilt_auto": true}})
 
 
 static func resolve(spec: Dictionary) -> Dictionary:

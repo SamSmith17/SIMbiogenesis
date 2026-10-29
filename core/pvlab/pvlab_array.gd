@@ -28,7 +28,8 @@ const CLAMP_LIFT_M := 0.004
 const TRACKER_DECK_M := 0.10
 
 const ARRAY_DEFAULTS := {"mount": "ground", "rows": 1, "cols": 6, "stack": 2, "orientation": "portrait",
-	"gap_mm": 20.0, "pitch_m": 0.0, "tilt_deg": 30.0, "clearance_m": 0.6, "site_lat": 45.0, "gcr": 0.35}
+	"gap_mm": 20.0, "pitch_m": 0.0, "tilt_deg": 30.0, "clearance_m": 0.6, "site_lat": 45.0, "gcr": 0.35,
+	"tilt_auto": false}
 const STRING_DEFAULTS := {"mode": "rows", "size": 0, "custom": [], "inputs": 1, "groups": []}
 const TARGET_DEFAULTS := {"name": "Generic MPPT 150 V", "max_voc": 150.0, "mppt_min_v": 0.0,
 	"mppt_max_v": 0.0, "startup_v": 0.0, "max_isc": 0.0, "max_pv_watts": 0.0, "cold_c": -10.0, "hot_c": 40.0}
@@ -53,6 +54,12 @@ static func resolve_array(a: Dictionary) -> Dictionary:
 	out["clearance_m"] = clampf(float(out["clearance_m"]), 0.0, 6.0)
 	out["site_lat"] = clampf(float(out["site_lat"]), -89.0, 89.0)
 	out["gcr"] = clampf(float(out["gcr"]), 0.1, 0.9)
+	# "Best tilt for the latitude": the tables stand at the site's annual
+	# optimum (SolarAim), re-derived whenever site_lat is stamped. Off for
+	# every spec saved before the switch existed, so they keep their tilt.
+	out["tilt_auto"] = bool(out["tilt_auto"])
+	if bool(out["tilt_auto"]) and str(out["mount"]) in SolarAim.TILTED_MOUNTS:
+		out["tilt_deg"] = clampf(SolarAim.best_tilt_deg(float(out["site_lat"])), 0.0, 75.0)
 	return out
 
 
