@@ -2634,10 +2634,13 @@ func save_chore_ledger() -> void:
 
 
 # ---------------------------------------------------------------------------
-# Persistent printed objects (mud/clay/concrete prints). Unlike fabricated
-# parts (which go to the crafting inventory), a completed mud print dries in
-# place and stays on the map. Records store the source STL path + world
-# transform + dry color, keyed by job_id so re-completion/reload never dupes.
+# Persistent printed objects. A completed mud/clay print dries in place and
+# stays on the map; a finished bed print (Trash Printer, a designed FDM
+# gantry) is credited to the parts inventory by the graph AND left on its
+# bed as one of these (`on_bed`, `machine_item`): the player can pick it up
+# and set it anywhere, and the next print on that machine clears whatever is
+# still on the bed. Records store the source STL path + world transform +
+# colour, keyed by job_id so re-completion/reload never dupes.
 # ---------------------------------------------------------------------------
 func _printed_objects_path() -> String:
 	return WorldPaths.site_file("printed_objects", _lat, _lon)
@@ -2682,6 +2685,11 @@ func register_printed_object(rec: Dictionary) -> void:
 		"source": str(rec.get("source", "")),
 		"basis": [b.x.x, b.x.y, b.x.z, b.y.x, b.y.y, b.y.z, b.z.x, b.z.y, b.z.z],
 		"origin": [xf.origin.x, xf.origin.y, xf.origin.z],
+		# A part left on its printer's bed: the next print on that machine
+		# clears it from the world (the part stays in the inventory).
+		"on_bed": bool(rec.get("on_bed", false)),
+		"machine_item": str(rec.get("machine_item", "")),
+		"label": str(rec.get("label", "")),
 	}
 	_printed_objects.append(stored)
 	_save_printed_objects()
@@ -2749,14 +2757,15 @@ func _spawn_printed_object(rec: Dictionary, live_mesh: ArrayMesh = null) -> void
 	var prop := PlacedProp.new()
 	prop.name = "Print_%s" % job_id
 	prop.prop_id = "print_%s" % job_id
-	# Distinct from the mud_printer machine so selection / grab treat this as an
-	# independent placed model once the print has dried and handed off.
-	prop.model_id = "mud_print"
+	# Distinct from the printer machine so selection / grab treat this as an
+	# independent placed model once the print has handed off.
+	prop.model_id = "printed_part" if bool(rec.get("on_bed", false)) or not str(rec.get("machine_item", "")).is_empty() else "mud_print"
 	prop.set_meta("printed_job_id", job_id)
 	prop.set_meta("independent_print", true)
 	prop.add_child(model_root)
 	root.add_child(prop)   # PlacedProp._ready runs here (sets a default prompt)
-	prop.prompt = "Inspect · Move (drag)"
+	var label := str(rec.get("label", ""))
+	prop.prompt = ("%s · Move (drag)" % label) if not label.is_empty() else "Inspect · Move (drag)"
 	prop.max_distance = 40.0
 	prop.global_position = origin
 	# Walk-through inspect: no solid wall, but a pick Area3D so the crosshair
@@ -2813,9 +2822,50 @@ func update_printed_object_transform(job_id: String, xf: Transform3D) -> void:
 			var b := xf.basis
 			(rec as Dictionary)["basis"] = [b.x.x, b.x.y, b.x.z, b.y.x, b.y.y, b.y.z, b.z.x, b.z.y, b.z.z]
 			(rec as Dictionary)["origin"] = [xf.origin.x, xf.origin.y, xf.origin.z]
+			# Taken off the bed: it is the player's now, and the next print on
+			# that machine leaves it where it stands.
+			(rec as Dictionary)["on_bed"] = false
 			_printed_objects[i] = rec
 			_save_printed_objects()
 			return
+
+
+## True when a finished print with this job id is in the world (a reload must
+## not lay the same print on the bed a second time).
+func has_printed_object(job_id: String) -> bool:
+	if job_id.is_empty():
+		return false
+	for rec in _printed_objects:
+		if rec is Dictionary and str((rec as Dictionary).get("job_id", "")) == job_id:
+			return true
+	return false
+
+
+## A new print is starting on `machine_item`: take every finished part still
+## on its bed out of the world. The inventory keeps them (credited when each
+## print finished). Returns how many were cleared.
+func clear_printed_objects_on_bed(machine_item: String) -> int:
+	if machine_item.is_empty():
+		return 0
+	var gone: Array = []
+	var kept: Array = []
+	for rec in _printed_objects:
+		if rec is Dictionary and bool((rec as Dictionary).get("on_bed", false)) \
+				and str((rec as Dictionary).get("machine_item", "")) == machine_item:
+			gone.append(str((rec as Dictionary).get("job_id", "")))
+		else:
+			kept.append(rec)
+	if gone.is_empty():
+		return 0
+	_printed_objects = kept
+	_save_printed_objects()
+	var root := _printed_objects_root()
+	if root != null:
+		for c in root.get_children():
+			if c.has_meta("printed_job_id") and gone.has(str(c.get_meta("printed_job_id"))):
+				root.remove_child(c)
+				c.queue_free()
+	return gone.size()
 
 
 ## Free + respawn every printed object from the sidecar — used to snap a
@@ -2824,6 +2874,7 @@ func reload_printed_objects() -> void:
 	var root := _printed_objects_root()
 	if root != null:
 		for c in root.get_children():
+			root.remove_child(c)
 			c.queue_free()
 	for rec in _printed_objects:
 		if rec is Dictionary:

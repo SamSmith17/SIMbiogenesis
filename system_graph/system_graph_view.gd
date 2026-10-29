@@ -17448,6 +17448,11 @@ func start_machine_job(item_id: String, parse: Dictionary, part_id: String,
 	var job_id := MachineJobStore.save(pj)
 	if job_id.is_empty():
 		return false
+	# The last print still on this machine's bed leaves the world (it is in
+	# the inventory since it finished); one the player took off stays put.
+	var bed_loader := _find_terrain_loader(_get_scene_main_node())
+	if bed_loader != null and bed_loader.has_method("clear_printed_objects_on_bed"):
+		bed_loader.call("clear_printed_objects_on_bed", item_id)
 	specs["job_total_s"] = float(pj.get("total_s", 0.0))
 	specs["job_layers"] = int(pj.get("layers", 0))
 	var m := _get_scene_main_node()
@@ -17466,6 +17471,10 @@ func start_machine_job(item_id: String, parse: Dictionary, part_id: String,
 	specs["job_progress"] = 0.0
 	specs["job_part_id"] = part_id if not part_id.is_empty() else part_label.to_snake_case()
 	specs["job_part_label"] = part_label if not part_label.is_empty() else part_id
+	if str(specs["job_part_id"]).is_empty():
+		# A job with no name still makes something the inventory can count.
+		specs["job_part_id"] = "printed_part"
+		specs["job_part_label"] = "Printed part"
 	specs["job_part_count"] = maxi(part_count, 1)
 	specs["requested_state"] = "on"
 	model.update_item(item_id, {"specs": specs})

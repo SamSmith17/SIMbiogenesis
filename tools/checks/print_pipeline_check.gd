@@ -11,8 +11,10 @@ extends RefCounted
 ## the road being laid (trash: the bed drops and carries the print under
 ## the fixed nozzle; mud: the head rises), the planned time is the job's
 ## duration, completion credits the part (trash) or leaves a printed object
-## on the map (mud). Shots under screenshots\print_pipeline\. Deletes what it
-## placed.
+## on the map (mud). On the trash printer: the bed drops to its bottom, the
+## print becomes an object of its own on the bed, a new print clears it (the
+## inventory keeps it), and one the player moved off stays. Shots under
+## screenshots\print_pipeline\. Deletes what it placed.
 
 var _fails: Array = []
 const SHOT_DIR := "user://screenshots/print_pipeline"
@@ -190,10 +192,55 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	var inv: PartInventory = loader.call("get_part_inventory")
 	var part_id := str(specs.get("job_part_id", ""))
 	_ok(done and inv != null and inv.count(part_id) >= 1, "trash: the print completed and credited '%s' to the inventory" % part_id)
+	# The bed drops to the bottom of its travel, then the print is handed off
+	# as an object of its own, still on the bed.
+	var job1 := str(ds["job_id"])
+	var handed := await _until(tree, 20.0, func() -> bool: return bool(trt.debug_state().get("handed_off", false)))
 	ds = trt.debug_state()
-	_ok(int(ds["roads_shown"]) == int(ds["roads"]), "trash: the finished part stays on the bed, every road laid")
+	var bottom: float = trt._bed_bottom_mm(0.0)
+	_ok(handed and absf(float((ds["pos_mm"] as Vector3).z) - bottom) <= 0.6, "trash: the bed dropped to its bottom (z %.1f of %.1f mm) before the hand-off" % [float((ds["pos_mm"] as Vector3).z), bottom])
+	_ok(trt.roads() == null, "trash: the runtime handed its roads over")
+	var pobj := _printed_node(main, job1)
+	var prec := _printed_rec(loader, job1)
+	_ok(pobj != null and bool(prec.get("on_bed", false)) and str(prec.get("machine_item", "")) == iid, "trash: the finished print is an object of its own, marked on the bed")
+	if pobj != null:
+		var plate: Vector3 = trt._bed_plate_world_origin()
+		_ok(absf(pobj.global_position.y - plate.y) < 0.03 and Vector2(pobj.global_position.x - plate.x, pobj.global_position.z - plate.z).length() < 0.3,
+			"trash: it sits on the lowered bed (%.1f cm above the plate)" % ((pobj.global_position.y - plate.y) * 100.0))
+		_ok(pobj.get_node_or_null("PrintPickArea") != null and pobj.has_meta("printed_job_id"), "trash: it is selectable on its own (pick area)")
+	await _look_at(main, trt._bed_plate_world_origin(), tprop.global_position + Vector3(1.6, 1.5, 1.6))
 	await _shot(main, "03_trash_done")
 	main.set("time_scale", 0.0)
+
+	# A new print with the old one still on the bed: it leaves the world, the
+	# inventory keeps it.
+	var n_inv := inv.count(part_id)
+	var printed_n := _printed_count(main)
+	var ok2: bool = sgv.call("start_machine_job", iid, job, part_id, "Second hub", 1, {})
+	await _settle(tree, 5)
+	_ok(ok2 and _printed_node(main, job1) == null and _printed_rec(loader, job1).is_empty() and _printed_count(main) == printed_n - 1,
+		"trash: a new print cleared the old one off the bed")
+	_ok(inv.count(part_id) == n_inv, "trash: the cleared print is still in the inventory (%d)" % inv.count(part_id))
+	# Let it finish, take it off the bed, start a third: the moved one stays.
+	main.set("time_scale", total_s / 3600.0 / 12.0)
+	var done2 := await _until(tree, 30.0, func() -> bool:
+		var it := sgv.model.get_item(iid) as Dictionary
+		return bool((it.get("specs", {}) as Dictionary).get("job_completed", false)))
+	var job2 := str(trt.debug_state()["job_id"])
+	var handed2 := await _until(tree, 20.0, func() -> bool: return bool(trt.debug_state().get("handed_off", false)))
+	main.set("time_scale", 0.0)
+	var p2 := _printed_node(main, job2)
+	_ok(done2 and handed2 and p2 != null, "trash: the second print finished and was handed off")
+	if p2 != null:
+		p2.global_position = tprop.global_position + Vector3(2.5, 0.0, -1.5)
+		var mr := p2.get_node_or_null("ModelRoot") as Node3D
+		loader.call("update_printed_object_transform", job2, mr.global_transform if mr != null else p2.global_transform)
+		_ok(not bool(_printed_rec(loader, job2).get("on_bed", true)), "trash: moving it took it off the bed")
+		var ok3: bool = sgv.call("start_machine_job", iid, job, part_id, "Third hub", 1, {})
+		await _settle(tree, 5)
+		_ok(ok3 and _printed_node(main, job2) != null, "trash: a print the player moved stays where it was put")
+		sgv.call("cancel_machine_job", iid)
+		await _settle(tree, 3)
 
 	# ---- Mud printer --------------------------------------------------------
 	var mud := _place(main, "mud_printer", px - 10.0, pz + 8.0)
@@ -266,6 +313,24 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	await _settle(tree, 5)
 	print("print-pipeline RESULT: %s (%d fails)" % ["PASS" if _fails.is_empty() else "FAIL", _fails.size()])
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+func _printed_node(main: Node, job_id: String) -> Node3D:
+	var terrain := main.get_node_or_null("Terrain")
+	var root := terrain.get_node_or_null("PrintedObjects") if terrain != null else null
+	if root == null:
+		return null
+	for c in root.get_children():
+		if c.has_meta("printed_job_id") and str(c.get_meta("printed_job_id")) == job_id and not c.is_queued_for_deletion():
+			return c as Node3D
+	return null
+
+
+func _printed_rec(loader: Node, job_id: String) -> Dictionary:
+	for r in loader.get("_printed_objects"):
+		if r is Dictionary and str((r as Dictionary).get("job_id", "")) == job_id:
+			return r
+	return {}
 
 
 func _printed_count(main: Node) -> int:

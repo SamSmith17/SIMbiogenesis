@@ -3501,9 +3501,21 @@ planner. Now:
   uncalibrated axis takes its window from the work volume. The roads'
   frame = the x / y axes' world directions + up, origin at the bed's
   front-left corner, parented to the Z bed when it drops (the print rides
-  it). A finished `print_persist` job is baked to a mesh + STL and handed
-  to `register_printed_object`; anything else stays on the bed until the
-  next job. A `Label3D` over the machine reads the progress, layer, speed
+  it). A finished additive job is baked (`PrintRoads.bake_object`) to a
+  mesh + STL and handed to `register_printed_object` — a `print_persist`
+  (mud / clay) print stays on the map; a bed print is credited to the
+  parts inventory by the graph and handed off `on_bed` + `machine_item`
+  ONLY after a lowering bed has dropped to the bottom of its travel
+  (`_bed_bottom_mm`: the calibrated Z window, else the work volume;
+  `FINISH_DROP_MM_S`). It is a printed object the player can grab and set
+  anywhere (`update_printed_object_transform` clears `on_bed`);
+  `start_machine_job` calls `clear_printed_objects_on_bed(item)`, so a new
+  print takes the old one off the bed and out of the world (the inventory
+  keeps it). A reload of a handed-off job lays nothing
+  (`has_printed_object`). GantryRuntime does the same (a cube's Z bed is
+  the bead assembly with axis "z"). A cut job's roads stay on the bed
+  until the next job. Gate: the trash half of `print_pipeline_check`.
+  A `Label3D` over the machine reads the progress, layer, speed
   and time left. `begin_print_preview(job)` ghosts the roads on the bed and
   `preview_tool_mm` follows the studio's scrub. The old STL reveal shader,
   print-span travel calibration and 40 %-footprint bead ghost are gone.

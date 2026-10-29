@@ -624,3 +624,28 @@ func bake_mesh(color: Color, offset: Vector3 = Vector3.ZERO, post: Basis = Basis
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh.surface_set_material(0, mat)
 	return mesh
+
+
+## The finished print as a free object: every road baked into one mesh whose
+## origin is the middle of the print's footprint at its base, and the world
+## transform that stands it where the roads are now. Both runtimes hand this
+## to TerrainLoader.register_printed_object. {} when nothing is laid.
+func bake_object(color: Color) -> Dictionary:
+	if _total == 0 or not is_inside_tree():
+		return {}
+	show_all()
+	var box := bounds_local()
+	# The bounds are padded by (w + h) and a road's top is at its point, so
+	# the lowest bead's underside is pad − h above the box: the object's
+	# origin goes there, and a print set down on the ground sits ON it.
+	var base_y := box.position.y + _road_w
+	var centre := Vector3(box.position.x + box.size.x * 0.5, base_y, box.position.z + box.size.z * 0.5)
+	# The roads' frame is a reflection (see work_basis); the object is baked
+	# through one more so it is placed with a proper turn.
+	var post := work_basis()
+	var mesh := bake_mesh(color, centre, post)
+	if mesh == null:
+		return {}
+	var xf := global_transform * Transform3D(post.inverse(), centre)
+	xf.basis = xf.basis.orthonormalized()
+	return {"mesh": mesh, "xform": xf}

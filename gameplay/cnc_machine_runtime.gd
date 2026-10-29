@@ -23,15 +23,23 @@ extends Node3D
 ## (mud) lifts the head in Z; a lowering bed (trash) drops the bed and the
 ## print rides it (the roads are a child of the bed node).
 ##
-## A mud print (print_persist) is handed to the terrain loader as a placed
-## object when the job completes, baked from its roads; a trash print stays
-## on the bed until the next job (the graph credits the part).
+## When a job completes its print is baked from the roads and handed to the
+## terrain loader as a placed object the player can pick up and move. A mud
+## print (print_persist) stays on the map for good. A bed print (the graph
+## credits the part to the inventory) is handed off once a lowering bed has
+## dropped to the bottom of its travel, marked `on_bed`: the next print on
+## this machine clears it from the world unless the player took it off.
 
 const _POS_TAU_REAL := 0.10
 const _POS_TAU_SIM := 0.02
 const _SNAP_SIM_HOURS := 0.4
 const _LABEL_FADE_M := 60.0
 const PREVIEW_ALPHA := 0.35
+## How fast a lowering bed drops to the bottom when a print is done (mm per
+## second of sim time, never slower than this in real time).
+const FINISH_DROP_MM_S := 120.0
+## The bed counts as at the bottom within this (mm).
+const FINISH_AT_MM := 0.5
 
 var model_id: String = ""
 var graph_item_id: String = ""
@@ -69,6 +77,9 @@ var _pos_mm := Vector3(NAN, NAN, NAN)
 var _park_mm := Vector3.ZERO
 var _last_abs_hours := INF
 var _persisted_job := ""
+## Pose straight to the target on the next frame (a reload of a print that
+## was already handed off: the bed is at the bottom, not dropping again).
+var _snap_next := false
 var _last_state: Dictionary = {}
 var _ready_ok := false
 var _label_acc := 0.0
@@ -336,18 +347,31 @@ func _process(delta: float) -> void:
 
 	var target := _park_mm
 	var smp: Dictionary = {}
+	var finishing := false
 	if _player != null and _player.is_loaded() and (active or completed):
 		smp = _player.sample(progress if active else 1.0)
 		target = smp["pos"]
 		if completed and not active:
-			target.z = minf(float(target.z) + maxf(_work.z * 0.05, 5.0), _work.z)
+			finishing = true
+			if _bed_lowering:
+				# Done: the bed drops to the bottom of its travel.
+				target.z = _bed_bottom_mm(float(target.z))
+			else:
+				target.z = minf(float(target.z) + maxf(_work.z * 0.05, 5.0), _work.z)
 	if _ghost != null and not active and not is_nan(_preview_mm.x):
 		# The print setup's studio is scrubbing: the real tool follows it.
 		target = _preview_mm
-	var snap := absf(sim_dh) > _SNAP_SIM_HOURS
+		finishing = false
+	var snap := absf(sim_dh) > _SNAP_SIM_HOURS or _snap_next
+	_snap_next = false
 	var x := delta / _POS_TAU_REAL + absf(sim_dh) / _POS_TAU_SIM
 	var k := 1.0 if snap else clampf(1.0 - exp(-x), 0.0, 1.0)
-	_pos_mm = _pos_mm.lerp(target, k)
+	var next := _pos_mm.lerp(target, k)
+	if finishing and _bed_lowering and not snap:
+		# A bed lowers at a machine's pace, not in one smoothing step.
+		var step := FINISH_DROP_MM_S * maxf(delta, absf(sim_dh) * 3600.0)
+		next.z = move_toward(float(_pos_mm.z), float(target.z), step)
+	_pos_mm = next
 	_pose_tool(_pos_mm)
 
 	if _roads != null and not smp.is_empty():
@@ -356,7 +380,10 @@ func _process(delta: float) -> void:
 		else:
 			_roads.show_all()
 	if completed and progress >= 0.99 and _persisted_job != _job_id and not _job_id.is_empty():
-		_finish_job(state)
+		var at_bottom := not finishing or not _bed_lowering \
+			or absf(float(_pos_mm.z) - float(target.z)) <= FINISH_AT_MM
+		if at_bottom:
+			_finish_job(state)
 	_label_acc += delta
 	if _label_acc >= 0.25:
 		_label_acc = 0.0
@@ -382,6 +409,14 @@ func _load_job(job_id: String, state: Dictionary) -> void:
 		_player = null
 		return
 	_free_ghost()
+	var loader := _terrain_loader()
+	if loader != null and loader.has_method("has_printed_object") \
+			and bool(loader.call("has_printed_object", job_id)):
+		# Finished and handed off before (a reload): the print is a world
+		# object already, so nothing is laid and the bed is at its bottom.
+		_persisted_job = job_id
+		_snap_next = true
+		return
 	_lay_roads(state)
 
 
@@ -433,33 +468,50 @@ func _free_roads() -> void:
 	_roads = null
 
 
-## The job is done: a mud print becomes a placed object on the map (once);
-## anything else stays on the bed until the next job.
+## The job is done: the print becomes a placed object (once). A mud print
+## stays on the map; a bed print is left on the bed (`on_bed`) for the
+## player to take, and the next job clears it. A cut (subtractive) job's
+## roads stay on the bed until the next job, as before.
 func _finish_job(state: Dictionary) -> void:
 	_persisted_job = _job_id
-	if not bool(state.get("print_persist", false)) or _roads == null:
+	if _roads == null:
+		return
+	var persist := bool(state.get("print_persist", false))
+	if not persist and (_player == null or not _player.additive):
 		return
 	var loader := _terrain_loader()
 	if loader == null or not loader.has_method("register_printed_object"):
 		return
-	_roads.show_all()
-	var dry := _color_from(state.get("dry_color"), Color(0.68, 0.56, 0.42))
-	var box := _roads.bounds_local()
-	var centre := Vector3(box.position.x + box.size.x * 0.5, box.position.y, box.position.z + box.size.z * 0.5)
-	# The roads' frame is a reflection (see PrintRoads.work_basis); the
-	# object is baked through one more so it is placed with a proper turn.
-	var post := PrintRoads.work_basis()
-	var mesh := _roads.bake_mesh(dry, centre, post)
-	if mesh == null:
+	var col := _color_from(state.get("dry_color"), Color(0.68, 0.56, 0.42)) if persist \
+		else _color_from(state.get("wet_color"), Color(0.85, 0.55, 0.2))
+	var obj := _roads.bake_object(col)
+	if obj.is_empty():
 		return
-	var xf := _roads.global_transform * Transform3D(post.inverse(), centre)
-	xf.basis = xf.basis.orthonormalized()
+	var mesh := obj["mesh"] as ArrayMesh
 	var stl := _write_print_stl(mesh, _job_id)
 	loader.call("register_printed_object", {
-		"job_id": _job_id, "mesh_path": stl, "xform": xf, "mesh": mesh,
-		"dry_color": [dry.r, dry.g, dry.b], "source": model_id,
+		"job_id": _job_id, "mesh_path": stl, "xform": obj["xform"], "mesh": mesh,
+		"dry_color": [col.r, col.g, col.b], "source": model_id,
+		"on_bed": not persist, "machine_item": graph_item_id,
+		"label": str(state.get("job_name", "")),
 	})
 	_free_roads()
+
+
+## Where a lowering bed stops when a print is done (work mm): the bottom of
+## the Z travel — the calibrated soft window when Machine Setup has one,
+## else the work volume — and never above the print's own top.
+func _bed_bottom_mm(print_top_mm: float) -> float:
+	var bottom := _work.z
+	var lo := float(_soft_min.get("z", NAN))
+	var hi := float(_soft_max.get("z", NAN))
+	if is_finite(lo) and is_finite(hi) and hi > lo:
+		var c := float(_centre_u.get("z", 0.0))
+		var mpl := float(_mpl.get("z", 1.0))
+		var far := maxf(lo - c, hi - c) * mpl * 1000.0
+		if far > 1.0:
+			bottom = minf(bottom, far)
+	return maxf(bottom, print_top_mm)
 
 
 func _write_print_stl(mesh: ArrayMesh, job_id: String) -> String:
@@ -544,6 +596,7 @@ func debug_state() -> Dictionary:
 		"pos_mm": _pos_mm, "roads": _roads.road_count() if _roads != null else 0,
 		"roads_shown": _roads.roads_shown() if _roads != null else 0,
 		"bed_lowering": _bed_lowering, "work": _work, "frame_valid": _frame_valid,
+		"handed_off": not _job_id.is_empty() and _persisted_job == _job_id,
 		"total_s": _player.total_s if _player != null else 0.0,
 		"mpl": _mpl.duplicate(), "centre_u": _centre_u.duplicate(), "soft_min": _soft_min.duplicate(), "soft_max": _soft_max.duplicate(),
 		"tip": _tool_tip_world(), "work_xf": _work_xf, "axes": _debug_axes(),

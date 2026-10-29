@@ -9,10 +9,18 @@ extends Node3D
 ## line, so the head accelerates and brakes as the Simulate tab showed —
 ## at the graph's clock-derived progress, laying the roads on the bed under
 ## the nozzle move by move. Scrubs and survives a reload.
+##
+## When an additive job completes the print is baked into a placed object
+## (TerrainLoader.register_printed_object), as CncMachineRuntime does: a
+## machine whose bed is the Z axis (a cube) first drops it to the bottom,
+## and a bed print is marked `on_bed` so the next job clears it from the
+## world (the graph credited it to the inventory). A clay print stays.
 
 const _POS_TAU_REAL := 0.10
 const _POS_TAU_SIM := 0.02
 const _SNAP_SIM_HOURS := 0.4
+const FINISH_DROP_MM_S := CncMachineRuntime.FINISH_DROP_MM_S
+const FINISH_AT_MM := CncMachineRuntime.FINISH_AT_MM
 
 var graph_item_id := ""
 var _builder: GantryLabBuilder = null
@@ -30,6 +38,13 @@ var _material := "filament"
 ## the volume on the way to the machine — `_y_mid` (0 on a delta, whose work
 ## frame is centred) — for the drivers and the roads alike.
 var _y_mid := 0.0
+var _z_mm := 300.0
+## True when the bed is the Z axis (it drops as the print grows).
+var _bed_lowering := false
+var _additive := true
+var _handed_off := ""
+var _snap_next := false
+var _job_color := Color.WHITE
 
 
 func configure(item_id: String) -> void:
@@ -59,7 +74,14 @@ func _bind() -> void:
 	var kin := str(spec["kinematics"])
 	_y_mid = 0.0 if kin == "delta" else float(v["y_mm"]) * 0.5
 	_park = Vector3(0.0, 0.0, float(v["z_mm"]) * 0.3) if kin == "delta" else Vector3(0.0, 0.0, minf(float(v["z_mm"]), 20.0))
+	_z_mm = float(v["z_mm"])
+	var lay := _builder.layout()
+	var bead_asm := str(lay.get("bead_parent", ""))
+	var asms: Dictionary = lay.get("assemblies", {})
+	_bed_lowering = kin != "delta" and not bead_asm.is_empty() and asms.has(bead_asm) \
+		and str((asms[bead_asm] as Dictionary).get("axis", "")) == "z"
 	var tool := GantryLabParts.tool(str(spec["tool"]["id"]))
+	_additive = str(tool["process"]) == "additive"
 	_line_mm = maxf(float(tool["nozzle_mm"]), 0.1)
 	_material = str(tool["material"])
 	match _material:
@@ -108,21 +130,35 @@ func _process(delta: float) -> void:
 			_load_job(new_job, state)
 	var target := _park
 	var smp: Dictionary = {}
+	var finishing := false
 	if _player != null and _player.is_loaded() and (active or completed):
 		smp = _player.sample(progress if active else 1.0)
 		target = smp["pos"]
 		if completed and not active:
-			target.z += 10.0
-	var snap := absf(sim_dh) > _SNAP_SIM_HOURS
+			finishing = true
+			if _bed_lowering:
+				# Done: the bed drops to the bottom of its travel.
+				target.z = maxf(_z_mm, float(target.z))
+			else:
+				target.z += 10.0
+	var snap := absf(sim_dh) > _SNAP_SIM_HOURS or _snap_next
+	_snap_next = false
 	var x := delta / _POS_TAU_REAL + absf(sim_dh) / _POS_TAU_SIM
 	var k := 1.0 if snap else clampf(1.0 - exp(-x), 0.0, 1.0)
-	_pos_mm = _pos_mm.lerp(target, k)
+	var next := _pos_mm.lerp(target, k)
+	if finishing and _bed_lowering and not snap:
+		var step := FINISH_DROP_MM_S * maxf(delta, absf(sim_dh) * 3600.0)
+		next.z = move_toward(float(_pos_mm.z), float(target.z), step)
+	_pos_mm = next
 	_drive(_pos_mm)
-	if not smp.is_empty():
+	if not smp.is_empty() and _builder.roads() != null:
 		if active:
 			_builder.set_print_progress(int(smp["i"]), float(smp["s"]))
 		else:
 			_builder.set_preview_progress(1.0)
+	if finishing and progress >= 0.99 and _handed_off != _job_id and not _job_id.is_empty():
+		if not _bed_lowering or absf(float(_pos_mm.z) - float(target.z)) <= FINISH_AT_MM:
+			_finish_job(state)
 
 
 func _job_state() -> Dictionary:
@@ -145,6 +181,15 @@ func _load_job(job_id: String, state: Dictionary) -> void:
 	var col := _bead_color
 	if _material == "filament" and wc is Array and (wc as Array).size() >= 3:
 		col = Color(float(wc[0]), float(wc[1]), float(wc[2]))
+	_job_color = col
+	var loader := _terrain_loader()
+	if loader != null and loader.has_method("has_printed_object") \
+			and bool(loader.call("has_printed_object", job_id)):
+		# Finished and handed off before (a reload): the print is a world
+		# object already, so nothing is laid and the bed is at its bottom.
+		_handed_off = job_id
+		_snap_next = true
+		return
 	var line := maxf(float(_player.line_mm), 0.05)
 	_builder.set_print_preview(_player.moves(), line, _player.layer_mm, col, _mottle)
 	_mirror_roads()
@@ -155,6 +200,48 @@ func _clear_job() -> void:
 	_player = null
 	if _builder != null:
 		_builder.clear_toolpath_preview()
+
+
+## The job is done: bake the print into a placed object the player can move
+## (once per job). A clay print stays; a bed print is `on_bed`.
+func _finish_job(state: Dictionary) -> void:
+	_handed_off = _job_id
+	var r := _builder.roads()
+	if r == null or not _additive:
+		return
+	var loader := _terrain_loader()
+	if loader == null or not loader.has_method("register_printed_object"):
+		return
+	var persist := bool(state.get("print_persist", false))
+	var obj := r.bake_object(Color(_job_color, 1.0))
+	if obj.is_empty():
+		return
+	var mesh := obj["mesh"] as ArrayMesh
+	var stl := _write_print_stl(mesh, _job_id)
+	loader.call("register_printed_object", {
+		"job_id": _job_id, "mesh_path": stl, "xform": obj["xform"], "mesh": mesh,
+		"dry_color": [_job_color.r, _job_color.g, _job_color.b], "source": "gantry_machine",
+		"on_bed": not persist, "machine_item": graph_item_id,
+		"label": str(state.get("job_name", "")),
+	})
+	_builder.clear_toolpath_preview()
+
+
+func _write_print_stl(mesh: ArrayMesh, job_id: String) -> String:
+	var dir := "user://machines/prints"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var path := "%s/%s.stl" % [dir, job_id]
+	return path if MudWallMesher._write_mesh_as_stl_mm(mesh, path) else ""
+
+
+func _terrain_loader() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var m := tree.get_first_node_in_group("main_scene")
+	if m == null:
+		m = tree.current_scene
+	return m.find_child("TerrainLoader", true, false) if m != null else null
 
 
 func _read_abs_hours() -> float:

@@ -1113,7 +1113,7 @@ func _update_ui() -> void:
 						lbl = "📦 %s — %s" % [contents, pp.get_prompt_text()] \
 							if not contents.is_empty() else pp.get_prompt_text()
 					elif pp.has_meta("printed_job_id"):
-						lbl = "Inspect · Move (drag)"
+						lbl = pp.prompt if not str(pp.prompt).is_empty() else "Inspect · Move (drag)"
 					elif pp.get_node_or_null("CncMachineRuntime") != null \
 							and _is_fdm_printer_prop(pp):
 						lbl = "Print setup"
