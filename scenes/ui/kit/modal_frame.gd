@@ -30,6 +30,9 @@ var footer: HBoxContainer = null
 
 var modal_name := "modal_frame"
 var close_on_backdrop := true
+## Stop above the timeline bar instead of covering it (a modal about time,
+## such as the video export, that wants the bar in view).
+var keep_timeline := false
 
 var _want_size := Vector2(900, 640)
 var _backdrop: ColorRect = null
@@ -179,7 +182,7 @@ func _fit() -> void:
 	if _panel == null or not is_inside_tree():
 		return
 	var vp := get_viewport().get_visible_rect().size
-	var bottom := vp.y - HudLayout.timeline_height()
+	var bottom := vp.y - UiFit.timeline_clearance(self, keep_timeline)
 	var avail := Vector2(vp.x - SCREEN_MARGIN * 2.0, bottom - SCREEN_MARGIN * 2.0)
 	var s := Vector2(minf(_want_size.x, avail.x), minf(_want_size.y, avail.y))
 	_panel.size = s

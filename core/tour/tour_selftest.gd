@@ -18,7 +18,7 @@ extends SceneTree
 ## function leaves the count short and fails the suite even though PASS lines
 ## printed (the trap EXPECTED_CHECKS exists for elsewhere).
 
-const FIXED_CHECKS := 19
+const FIXED_CHECKS := 27
 const PER_STOP_CHECKS := 10
 
 var _checks := 0
@@ -30,6 +30,7 @@ func _initialize() -> void:
 	_test_select(stops)
 	_test_labels()
 	_test_template()
+	_test_path()
 	var expected := FIXED_CHECKS + PER_STOP_CHECKS * stops.size()
 	_check(_checks + 1 == expected, "check count %d == expected %d" % [_checks + 1, expected])
 	print("tour_selftest: %d checks, %d failed — %s" % [_checks, _fails, "PASS" if _fails == 0 else "FAIL"])
@@ -140,3 +141,49 @@ func _test_template() -> void:
 		if p.get_file() == TourCatalog.TEMPLATE_FILE:
 			listed = true
 	_check(not listed, "the template is not a stop")
+
+
+## TourPath: the camera's fly (ends exact, through every waypoint, even speed
+## in the cruise, no overshoot past a sharp corner, the ease curve's shape).
+func _test_path() -> void:
+	var pts := PackedVector3Array([Vector3(0, 0, 0), Vector3(10, 0, 0), Vector3(10, 0, 2), Vector3(30, 5, 2)])
+	_check(TourPath.at(pts, 0.0).is_equal_approx(pts[0]) and TourPath.at(pts, 3.0).is_equal_approx(pts[3]),
+		"the path starts and ends on its end points")
+	var through := true
+	for i in pts.size():
+		through = through and TourPath.at(pts, float(i)).distance_to(pts[i]) < 1e-4
+	_check(through, "the path passes through every waypoint")
+	# Centripetal: a short hop between long legs never loops past the corner.
+	var max_x := -INF
+	for k in 101:
+		max_x = maxf(max_x, TourPath.at(pts, 1.0 + k / 100.0).x)
+	_check(max_x < 10.6, "no overshoot round the tight corner (max x %.2f)" % max_x)
+	var table := TourPath.arc_table(pts)
+	var dd: PackedFloat64Array = table["d"]
+	var total := dd[dd.size() - 1]
+	_check(total > 32.0 and total < 40.0, "arc length is the path's length (%.1f m)" % total)
+	# Even speed in the cruise: equal time steps cover equal distances.
+	var steps := PackedFloat64Array()
+	var prev := TourPath.at(pts, TourPath.param_at(table, total * TourPath.ease_trapezoid(0.3)))
+	for k in range(1, 9):
+		var u := 0.3 + 0.05 * k
+		var p := TourPath.at(pts, TourPath.param_at(table, total * TourPath.ease_trapezoid(u)))
+		steps.append(p.distance_to(prev))
+		prev = p
+	var lo := 1e9
+	var hi := 0.0
+	for d in steps:
+		lo = minf(lo, d)
+		hi = maxf(hi, d)
+	_check(hi / maxf(lo, 1e-6) < 1.15, "constant speed in the cruise (step ratio %.2f)" % (hi / maxf(lo, 1e-6)))
+	_check(is_zero_approx(TourPath.ease_trapezoid(0.0)) and is_equal_approx(TourPath.ease_trapezoid(1.0), 1.0),
+		"the ease runs 0 → 1")
+	_check(is_equal_approx(TourPath.ease_trapezoid(0.5), 0.5) and is_equal_approx(TourPath.ease_trapezoid(0.5, 0.5), 0.5),
+		"the ease is symmetric")
+	var mono := true
+	var last := 0.0
+	for k in 101:
+		var e := TourPath.ease_trapezoid(k / 100.0, 0.25)
+		mono = mono and e >= last - 1e-9
+		last = e
+	_check(mono and TourPath.ease_trapezoid(0.05) < 0.05, "the ease never goes back and starts slow")

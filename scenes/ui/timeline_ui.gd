@@ -178,12 +178,136 @@ var _shading_btn: Button = null
 
 signal stack_height_changed(height: float)
 
+## Bar size (the ▲ ▼ buttons at the right end of the bar, toggle_timeline_size
+## (F2) cycles; ui_prefs.cfg [timeline] bar_mode). FULL = every track;
+## COMPACT = the ruler and the clips lane only (the waveform tracks stay
+## enabled and come back in FULL); HIDDEN = only a small "Timeline" tab at the
+## bottom of the screen, which brings it back.
+const BAR_FULL := 0
+const BAR_COMPACT := 1
+const BAR_HIDDEN := 2
+const HIDDEN_TAB_H := 24.0
+var _bar_mode := BAR_FULL
+## The size the hidden tab restores.
+var _bar_last_shown := BAR_FULL
+var _bar_bg : Control = null
+var _bar_tab : Button = null
+var _bar_up_btn : Button = null
+var _bar_down_btn : Button = null
+
 func get_stack_height() -> float:
 	return _bar_height() + float(BAR_BOTTOM_PAD)
 
 
 func _bar_height() -> float:
+	if _bar_mode == BAR_HIDDEN:
+		return HIDDEN_TAB_H
 	return float(BAR_CHROME_HEIGHT + _track_layout.content_height())
+
+
+func get_bar_mode() -> int:
+	return _bar_mode
+
+
+func set_bar_mode(mode: int, save: bool = true) -> void:
+	_bar_mode = clampi(mode, BAR_FULL, BAR_HIDDEN)
+	if _bar_mode != BAR_HIDDEN:
+		_bar_last_shown = _bar_mode
+	_track_layout.compact = _bar_mode == BAR_COMPACT
+	if _bar_bg != null:
+		_bar_bg.visible = _bar_mode != BAR_HIDDEN
+	if _bar_tab != null:
+		_bar_tab.visible = _bar_mode == BAR_HIDDEN
+	if _bar_mode == BAR_HIDDEN and _wx_tooltip_panel != null:
+		_wx_tooltip_panel.visible = false
+	_resize_track_idx = -1
+	_refresh_bar_mode_buttons()
+	_sync_scrubber_row_height()
+	_request_bar_layout()
+	if _track != null:
+		_track.queue_redraw()
+	if save:
+		_save_ui_prefs()
+
+
+## F2: full → compact → hidden → full.
+func cycle_bar_mode() -> void:
+	set_bar_mode((_bar_mode + 1) % 3)
+
+
+func _shrink_bar() -> void:
+	set_bar_mode(mini(_bar_mode + 1, BAR_HIDDEN))
+
+
+func _grow_bar() -> void:
+	set_bar_mode(maxi(_bar_mode - 1, BAR_FULL))
+
+
+func _refresh_bar_mode_buttons() -> void:
+	if _bar_up_btn != null:
+		_bar_up_btn.disabled = _bar_mode == BAR_FULL
+	if _bar_down_btn != null:
+		_bar_down_btn.tooltip_text = "Hide the timeline (%s)" % _bar_size_key() if _bar_mode == BAR_COMPACT \
+			else "Compact timeline: hide the data tracks (%s)" % _bar_size_key()
+
+
+func _bar_size_key() -> String:
+	if not InputMap.has_action("toggle_timeline_size"):
+		return "F2"
+	for ev in InputMap.action_get_events("toggle_timeline_size"):
+		if ev is InputEventKey:
+			return (ev as InputEventKey).as_text_physical_keycode()
+	return "F2"
+
+
+## The size buttons: ▲ grows the bar a step, ▼ shrinks it (full → compact →
+## hidden). They sit after the ⋯ menu and never fold.
+func _build_bar_size_buttons() -> Control:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_bar_up_btn = IconButton.make("chevron-up", "Full timeline: every track", _grow_bar, "", 14)
+	_bar_down_btn = IconButton.make("chevron-down", "", _shrink_bar, "", 14)
+	for b: Button in [_bar_up_btn, _bar_down_btn]:
+		b.custom_minimum_size = Vector2(26, 24)
+		col.add_child(b)
+	_refresh_bar_mode_buttons()
+	return col
+
+
+## The tab left at the bottom of the screen while the bar is hidden.
+func _build_hidden_tab() -> void:
+	_bar_tab = Button.new()
+	_bar_tab.name = "TimelineShowTab"
+	IconButton.style(_bar_tab, "chevron-up", "", "Timeline", 14)
+	_bar_tab.custom_minimum_size = Vector2(112, HIDDEN_TAB_H)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.040, 0.058, 0.110, 0.92)
+	sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.55)
+	sb.set_border_width_all(1)
+	sb.border_width_bottom = 0
+	sb.corner_radius_top_left = 8
+	sb.corner_radius_top_right = 8
+	sb.set_content_margin_all(3)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 12
+	var hover := sb.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(UITheme.C_PANEL_RAISED, 0.95)
+	_bar_tab.add_theme_stylebox_override("normal", sb)
+	_bar_tab.add_theme_stylebox_override("hover", hover)
+	_bar_tab.add_theme_stylebox_override("pressed", hover)
+	_bar_tab.add_theme_font_size_override("font_size", UITheme.FONT_XS + 1)
+	_bar_tab.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_bar_tab.offset_left = -56.0
+	_bar_tab.offset_right = 56.0
+	_bar_tab.offset_top = -HIDDEN_TAB_H
+	_bar_tab.offset_bottom = 0.0
+	_bar_tab.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_bar_tab.mouse_filter = Control.MOUSE_FILTER_STOP
+	_bar_tab.pressed.connect(func() -> void: set_bar_mode(_bar_last_shown))
+	_bar_tab.visible = _bar_mode == BAR_HIDDEN
+	add_child(_bar_tab)
+	_bar_tab.tooltip_text = "Show the timeline (%s)" % _bar_size_key()
 
 
 func _sync_scrubber_row_height() -> void:
@@ -603,7 +727,11 @@ func _input(event: InputEvent) -> void:
 	var _fo := get_viewport().gui_get_focus_owner() if get_viewport() != null else null
 	if _fo is LineEdit or _fo is TextEdit:
 		return
-	if event.is_action_pressed("sim_speed_up"):
+	if InputMap.has_action("toggle_timeline_size") and not event.is_echo() \
+			and event.is_action_pressed("toggle_timeline_size"):
+		cycle_bar_mode()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("sim_speed_up"):
 		_on_dpad_right()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("sim_speed_down"):
@@ -796,6 +924,8 @@ func _load_ui_prefs() -> void:
 		var raw_tracks : Variant = cfg.get_value("timeline", "tracks", [])
 		if raw_tracks is Array and not (raw_tracks as Array).is_empty():
 			_track_layout.load_from_array(raw_tracks as Array)
+		set_bar_mode(int(cfg.get_value("timeline", "bar_mode", BAR_FULL)), false)
+		_bar_last_shown = clampi(int(cfg.get_value("timeline", "bar_last_shown", _bar_last_shown)), BAR_FULL, BAR_COMPACT)
 	_sync_scrubber_row_height()
 	_request_bar_layout()
 
@@ -806,10 +936,28 @@ func _save_ui_prefs() -> void:
 	cfg.set_value("units", "imperial", _use_imperial)
 	cfg.set_value("timeline", "view_span_hours", _track_view.span)
 	cfg.set_value("timeline", "tracks", _track_layout.to_array())
+	cfg.set_value("timeline", "bar_mode", _bar_mode)
+	cfg.set_value("timeline", "bar_last_shown", _bar_last_shown)
 	cfg.save("user://ui_prefs.cfg")
 
 
 func _save_track_layout_prefs() -> void:
+	_save_ui_prefs()
+
+
+## One prefs write after a burst of Ctrl+wheel notches, not one per notch.
+var _track_prefs_save_queued := false
+
+
+func _queue_track_prefs_save() -> void:
+	if _track_prefs_save_queued:
+		return
+	_track_prefs_save_queued = true
+	get_tree().create_timer(0.6).timeout.connect(_flush_track_prefs_save)
+
+
+func _flush_track_prefs_save() -> void:
+	_track_prefs_save_queued = false
 	_save_ui_prefs()
 
 
@@ -1489,7 +1637,7 @@ func _draw_microclimate_strip(win_start : float, span : float, w : float, groove
 func _draw_track_lanes(win_start : float, span : float, w : float, fnt : Font,
 		solar : Node, y_start : float) -> float:
 	var y := y_start
-	for t_v in _track_layout.enabled_tracks():
+	for t_v in _track_layout.shown_tracks():
 		if not (t_v is TimelineTrackDef):
 			continue
 		var td : TimelineTrackDef = t_v as TimelineTrackDef
@@ -2232,7 +2380,20 @@ func _on_track_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+		if mb.pressed and mb.ctrl_pressed and (mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) \
+				and _track_layout.track_index_at(mb.position.y) >= 0:
+			# Ctrl+wheel over a data track = make that track taller / shorter.
+			var notch := mb.factor if mb.factor > 0.0 else 1.0
+			var dir := 1.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0
+			_track_layout.apply_resize(_track_layout.track_index_at(mb.position.y),
+				dir * notch * TimelineTrackLayout.WHEEL_STEP_PX)
+			_sync_scrubber_row_height()
+			_request_bar_layout()
+			_track.queue_redraw()
+			_queue_track_prefs_save()
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_track_view.zoom_at_cursor(TimelineViewScript.ZOOM_IN_FACTOR, mb.position.x)
 			_save_ui_prefs()
 			_track.queue_redraw()
@@ -2559,6 +2720,7 @@ func _build_bar() -> void:
 	bg_sb.set_corner_radius_all(0)
 	bg.add_theme_stylebox_override("panel", bg_sb)
 	add_child(bg)
+	_bar_bg = bg
 
 	# ── Master VBox ────────────────────────────────────────────────────────
 	var vbox := VBoxContainer.new()
@@ -2571,6 +2733,8 @@ func _build_bar() -> void:
 
 	_build_scrubber_row(vbox)
 	_build_info_row(vbox)
+	_build_hidden_tab()
+	bg.visible = _bar_mode != BAR_HIDDEN
 	_sync_scrubber_row_height()
 	_request_bar_layout()
 
@@ -2607,7 +2771,7 @@ func _enforce_bar_layout() -> void:
 	grow_horizontal = Control.GROW_DIRECTION_BOTH
 	grow_vertical = Control.GROW_DIRECTION_BEGIN
 	clip_contents = true
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE if _bar_mode == BAR_HIDDEN else Control.MOUSE_FILTER_STOP
 
 	_bar_layout_guard = false
 	if height_changed:
@@ -2635,7 +2799,7 @@ func _build_scrubber_row(parent: VBoxContainer) -> void:
 	_track.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_track.size_flags_vertical   = Control.SIZE_EXPAND_FILL
 	_track.mouse_filter          = Control.MOUSE_FILTER_STOP
-	_track.tooltip_text          = "Drag: scrub  •  Ctrl-drag: render range  •  Wheel: zoom  •  Alt/MMB-drag: pan"
+	_track.tooltip_text          = "Drag: scrub  •  Ctrl-drag: render range  •  Wheel: zoom  •  Ctrl+wheel on a track: taller / shorter  •  Alt/MMB-drag: pan"
 	_track.draw.connect(_draw_track)
 	if not Engine.is_editor_hint():
 		_track.gui_input.connect(_on_track_input)
@@ -3746,6 +3910,7 @@ func _build_right_cluster() -> Control:
 	_right_overflow.visible = false
 	_right_overflow.get_popup().id_pressed.connect(_on_right_overflow_id)
 	right.add_child(_right_overflow)
+	right.add_child(_build_bar_size_buttons())
 
 	# Fold order: least-used first. Save, Sound, Settings and the Library never fold.
 	_right_fold_items.clear()

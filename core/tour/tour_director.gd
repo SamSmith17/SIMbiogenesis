@@ -22,6 +22,18 @@ const CARD_HOLD_S := 2.6
 ## Time the title card gets to itself before the demo starts moving.
 const CARD_LEAD_S := 0.7
 const TEARDOWN_BUDGET_S := 20.0
+## The curtain between stops (TourCaptions.dip_to_black / reveal): a stop ends
+## by fading to black, its teardown and the next stop's reset and setup happen
+## out of sight, and the next stop lifts it on its first wait or move
+## (TourContext.reveal) — at the latest REVEAL_MAX_S after it started. Before
+## this every stop opened on the same reset view (Burning Man: the effigy and
+## the camp) and cut to the demo.
+const DIP_S := 0.45
+const REVEAL_MAX_S := 2.2
+## The timeline bar during the tour: compact (the ruler + clips lane). The
+## sandbox copies the player's tracks, and a full bar of seven data tracks
+## took 27 % of the frame. TimelineUI.BAR_COMPACT.
+const TOUR_BAR_MODE := 1
 
 ## Options (set before run()):
 var shots_dir := "user://screenshots/tour"
@@ -45,6 +57,16 @@ var intro_count := 0
 var audit_mode := "report"
 
 var captions: TourCaptions = null
+## The graph view's side panels (dashboard left, library / inspector right)
+## while the tour has the graph up: collapsed, so the canvas fills the frame.
+## A stop that shows the inspector asks for the right one
+## (TourContext.graph_sidebars / graph_select). Reset by every baseline; the
+## player's own state comes back when the tour ends.
+var sidebars_open := [false, false]
+var _graph: Node = null
+var _sidebars_was := []
+var _timeline: Node = null
+var _bar_mode_was := -1
 var _results: Array = []
 ## Tour time in seconds (game frames' delta, so a Movie Maker recording, whose
 ## frames are a fixed 1/fps apart however slowly they render, keeps budgets
@@ -60,8 +82,17 @@ var _has_home := false
 ## inside a ring of placed art at the site centre, which filled every shot of
 ## a thing placed in front of them; 110 m south, facing the centre, puts the
 ## new things on open playa with the art as a backdrop.
+## Mount Vernon's saved player stands under the pavilion roof pitched at the
+## ground, and its site marker is on a bare hillside outside the detailed
+## patch: 5 m south of the pavilion, facing south, looks across the forest to
+## the fence and the deck. Walton's saved player stands in the festival
+## crowd (21 people within 15 m filled every shot with bodies): 35 m back,
+## facing the field, shows the buses, the art, the camps and the forest.
+## Chosen with tools/diag/tour_start_probe.gd (2026-10-29).
 const WORLD_STARTS := {
 	"burningman": {"x": 0.0, "z": 110.0, "yaw_deg": 0.0},
+	"mtvernon": {"x": -16.0, "z": -7.6, "yaw_deg": 180.0},
+	"walton": {"x": 808.5, "z": 214.0, "yaw_deg": 180.0},
 }
 
 
@@ -93,6 +124,18 @@ func _process(delta: float) -> void:
 		_release_clear_sky()
 	if _prompt != null and is_instance_valid(_prompt) and _prompt.visible:
 		_prompt.visible = false
+	_hold_sidebars()
+
+
+func _hold_sidebars() -> void:
+	if _graph == null or not is_instance_valid(_graph) or _sidebars_was.is_empty() \
+			or not bool(_graph.get("visible")):
+		return
+	if bool(_graph.get("_sidebar_l_open")) != bool(sidebars_open[0]) \
+			or bool(_graph.get("_sidebar_r_open")) != bool(sidebars_open[1]):
+		_graph.set("_sidebar_l_open", bool(sidebars_open[0]))
+		_graph.set("_sidebar_r_open", bool(sidebars_open[1]))
+		_graph.call("_apply_layout")
 
 
 func _apply_clear_sky() -> void:
@@ -181,20 +224,38 @@ func run() -> Dictionary:
 	if ctx.main != null:
 		_prompt = ctx.main.get_node_or_null("UILayer/InteractionPromptUI") as CanvasLayer
 	_prompt_was = _prompt != null and _prompt.visible
+	if ctx.main != null:
+		_timeline = ctx.main.get_node_or_null("UILayer/TimelineUI")
+	_graph = ctx.graph
+	if _graph != null and "_sidebar_l_open" in _graph and _graph.has_method("_apply_layout"):
+		_sidebars_was = [bool(_graph.get("_sidebar_l_open")), bool(_graph.get("_sidebar_r_open"))]
+	if _timeline != null and _timeline.has_method("set_bar_mode"):
+		_bar_mode_was = int(_timeline.call("get_bar_mode"))
+		_timeline.call("set_bar_mode", TOUR_BAR_MODE, false)
+	if cards_on:
+		captions.dip_to_black(0.0)
 	_baseline(ctx, NAN)
 	var n_intro := intro_count if intro_count > 0 else chosen.size()
 	if cards_on and not chosen.is_empty():
 		captions.show_full("SIMbiogenesis", "A quick tour of what it can do — %s" % UiText.count(n_intro, "feature"), INTRO_HOLD_S * pace)
-		await ctx.wait(INTRO_HOLD_S + 1.1)
+		await _hold((INTRO_HOLD_S + 1.1) * pace)
 	for s0 in chosen:
 		await _run_stop(s0 as TourStop)
 	if cards_on and not chosen.is_empty():
 		ctx.refresh_handles()
 		captions.show_full("That's the tour", "SIMbiogenesis · %s · docs/FEATURES.md" % UiText.count(n_intro, "feature"), OUTRO_HOLD_S * pace)
-		await ctx.wait(OUTRO_HOLD_S + 1.1)
+		await _hold((OUTRO_HOLD_S + 1.1) * pace)
 	if _prompt != null and is_instance_valid(_prompt):
 		_prompt.visible = _prompt_was
 	_prompt = null
+	if _timeline != null and is_instance_valid(_timeline) and _bar_mode_was >= 0:
+		_timeline.call("set_bar_mode", _bar_mode_was, false)
+	if _graph != null and is_instance_valid(_graph) and not _sidebars_was.is_empty():
+		_graph.set("_sidebar_l_open", bool(_sidebars_was[0]))
+		_graph.set("_sidebar_r_open", bool(_sidebars_was[1]))
+		_graph.call("_apply_layout")
+	_sidebars_was = []
+	captions.clear_all()
 	var passed := _results.filter(func(r: Dictionary) -> bool: return r["status"] == "PASS").size()
 	var manifest := {
 		"version": MANIFEST_VERSION,
@@ -248,12 +309,14 @@ func _run_stop(stop: TourStop) -> void:
 	print("tour: ▶ %s — %s" % [stop.id, stop.title])
 	if cards_on:
 		captions.show_card(stop.chapter, stop.title, stop.summary, hints, CARD_HOLD_S * pace)
-	await ctx.wait(CARD_LEAD_S)
+	await _hold(CARD_LEAD_S * pace)
 	var done := [false]
 	_body(stop, ctx, done)
 	var budget := stop.budget_s * maxf(pace, 0.5)
 	var timed_out := false
 	while not done[0]:
+		if not ctx.revealed and _clock - t0 > REVEAL_MAX_S:
+			ctx.reveal()
 		if _script_error_count() > err0:
 			ctx.failures.append("a script error was raised during the stop")
 			break
@@ -268,6 +331,18 @@ func _run_stop(stop: TourStop) -> void:
 		var grace := _clock + 3.0
 		while not done[0] and _clock < grace:
 			await get_tree().process_frame
+	# Into the curtain: the teardown, the reset and the next stop's setup
+	# happen out of sight.
+	if cards_on:
+		if not ctx.revealed:
+			ctx.reveal()
+		captions.fade_words(DIP_S)
+		captions.dip_to_black(DIP_S)
+		var dip_end := _clock + DIP_S + 0.05
+		while _clock < dip_end:
+			await get_tree().process_frame
+	else:
+		ctx.revealed = true
 	# Teardown runs un-cancelled: it is what puts the game back.
 	ctx.cancelled = false
 	var tdone := [false]
@@ -317,6 +392,14 @@ func _run_stop(stop: TourStop) -> void:
 		print("tour FAIL %s (%.1f s) — %s" % [stop.id, secs, "; ".join(ctx.failures)])
 
 
+## The director's own pauses (the opening card, the card's lead-in). Not
+## ctx.wait(): that lifts the curtain, and the stop has not framed its shot yet.
+func _hold(seconds: float) -> void:
+	var end := _clock + seconds
+	while _clock < end:
+		await get_tree().process_frame
+
+
 func _body(stop: TourStop, ctx: TourContext, done: Array) -> void:
 	await stop.setup(ctx)
 	if not ctx.cancelled:
@@ -341,6 +424,7 @@ func _script_error_count() -> int:
 ## running at real time (people walk, clouds move) at `hour` if given.
 func _baseline(ctx: TourContext, hour: float) -> void:
 	clear_sky_hold = false
+	sidebars_open = [false, false]
 	ctx.release_held()
 	ctx.release_camera()
 	var main := ctx.main
@@ -388,6 +472,9 @@ func _baseline(ctx: TourContext, hour: float) -> void:
 	for c in main.get_children():
 		if c is CanvasLayer and c.name == "UILayer":
 			(c as CanvasLayer).visible = true
+	if _timeline != null and is_instance_valid(_timeline) and _bar_mode_was >= 0 \
+			and int(_timeline.call("get_bar_mode")) != TOUR_BAR_MODE:
+		_timeline.call("set_bar_mode", TOUR_BAR_MODE, false)
 	ctx.run_clock(1.0)
 	if not is_nan(hour):
 		ctx.set_hour(hour)

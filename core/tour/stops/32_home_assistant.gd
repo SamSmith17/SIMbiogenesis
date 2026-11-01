@@ -50,7 +50,7 @@ func run(ctx: TourContext) -> void:
 	while not bool(svc.call("is_authed")) and Time.get_ticks_msec() - t0 < 5000:
 		await ctx.wait(0.1)
 	ctx.require(bool(svc.call("is_authed")), "connected")
-	var g: Node = ctx.main.get_node_or_null("UILayer/SystemGraphView")
+	var g: Node = ctx.graph
 	_linker = g.get("_ha_linker") if g != null else null
 	if not ctx.require(_linker != null, "the link runtime exists"):
 		return

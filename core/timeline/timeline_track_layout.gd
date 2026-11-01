@@ -6,10 +6,15 @@ extends RefCounted
 const RULER_HEIGHT := 14.0
 const TRACK_GAP := 1.0
 const RESIZE_HIT_PX := 5.0
-const MIN_WAVE_HEIGHT := 18.0
-const MAX_WAVE_HEIGHT := 96.0
+const MIN_WAVE_HEIGHT := 12.0
+const MAX_WAVE_HEIGHT := 180.0
+## One Ctrl+wheel notch over a track grows or shrinks it this much.
+const WHEEL_STEP_PX := 6.0
 
 var tracks : Array = []   # TimelineTrackDef
+## The timeline's compact mode: only the clips lane is laid out (the ruler
+## always is); waveform tracks stay enabled and come back in the full bar.
+var compact := false
 
 
 func reset_defaults() -> void:
@@ -41,9 +46,19 @@ func enabled_tracks() -> Array:
 	return out
 
 
+## The tracks laid out right now: the enabled ones, minus every waveform
+## track while `compact`.
+func shown_tracks() -> Array:
+	var out : Array = []
+	for t in enabled_tracks():
+		if not compact or (t as TimelineTrackDef).kind == TimelineTrackDef.KIND_CLIPS:
+			out.append(t)
+	return out
+
+
 func content_height() -> float:
 	var h := RULER_HEIGHT
-	for t in enabled_tracks():
+	for t in shown_tracks():
 		if t is TimelineTrackDef:
 			h += TRACK_GAP + (t as TimelineTrackDef).height
 	return h
@@ -51,7 +66,7 @@ func content_height() -> float:
 
 func lane_at_y(local_y : float) -> Dictionary:
 	var y := RULER_HEIGHT
-	for t in enabled_tracks():
+	for t in shown_tracks():
 		if not (t is TimelineTrackDef):
 			continue
 		var td : TimelineTrackDef = t as TimelineTrackDef
@@ -70,12 +85,30 @@ func resize_hit_at(local_y : float) -> int:
 		if not (t is TimelineTrackDef):
 			continue
 		var td : TimelineTrackDef = t as TimelineTrackDef
-		if not td.enabled:
+		if not td.enabled or (compact and td.kind != TimelineTrackDef.KIND_CLIPS):
 			continue
 		y += TRACK_GAP + td.height
 		if td.kind != TimelineTrackDef.KIND_CLIPS:
 			if absf(local_y - y) <= RESIZE_HIT_PX:
 				return i
+	return -1
+
+
+## Index in `tracks` of the resizable (waveform) track under `local_y`, or -1
+## (the ruler, the clips lane, a gap).
+func track_index_at(local_y : float) -> int:
+	var y := RULER_HEIGHT
+	for i in tracks.size():
+		var t : Variant = tracks[i]
+		if not (t is TimelineTrackDef):
+			continue
+		var td : TimelineTrackDef = t as TimelineTrackDef
+		if not td.enabled or (compact and td.kind != TimelineTrackDef.KIND_CLIPS):
+			continue
+		y += TRACK_GAP
+		if local_y >= y and local_y < y + td.height:
+			return -1 if td.kind == TimelineTrackDef.KIND_CLIPS else i
+		y += td.height
 	return -1
 
 

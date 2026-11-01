@@ -36,7 +36,7 @@ func run(ctx: TourContext) -> void:
 	if not ctx.require(ui != null, "the prop editor exists"):
 		return
 	ui.call("open_for_prop", str(rec.get("id", "")))
-	ctx.caption("%s — move, rotate, duplicate, delete" % str(rec.get("name", rec.get("model_id", "Prop"))), 3.5)
+	ctx.caption("%s — move, rotate, duplicate, delete" % _display_name(ctx, rec), 3.5)
 	await ctx.fly([[eye, at + Vector3.UP], [at - f.rotated(Vector3.UP, 0.5) * 8.0 + Vector3.UP * 3.5, at + Vector3.UP]], 4.0)
 	await ctx.hero()
 	await ctx.wait(1.0)
@@ -46,3 +46,18 @@ func teardown(ctx: TourContext) -> void:
 	var ui: Node = ctx.main.get_node_or_null("UILayer/PlacedPropEditUI")
 	if ui != null:
 		ui.call("close")
+
+
+## What the player calls the thing: the catalog's label ("Constellation"),
+## never a record or model id ("user_1790544498_56540").
+func _display_name(ctx: TourContext, rec: Dictionary) -> String:
+	var mc := ctx.klass("ModelCatalog")
+	if mc != null:
+		var entry: Dictionary = mc.call("find", str(rec.get("model_id", "")))
+		var label := str(entry.get("label", ""))
+		if not label.is_empty():
+			return label
+	var name := str(rec.get("name", ""))
+	if not name.is_empty() and not name.begins_with("user_"):
+		return name
+	return "A placed model"

@@ -305,11 +305,12 @@ func _layout_panel() -> void:
 func show_picker() -> void:
 	visible = true
 	if not _is_launch_mode():
-		# In a world: the HUD hides under the picker, and the picker stops
-		# above the timeline instead of drawing its footer over it.
+		# In a world: the HUD hides under the picker, and the picker covers
+		# the timeline like every modal (UiFit.timeline_clearance is 0 unless
+		# it would draw under the bar).
 		HudLayout.claim_modal("location_picker")
 		if _panel != null:
-			_panel.offset_bottom = -(HudLayout.timeline_height() + 10.0)
+			_panel.offset_bottom = -(UiFit.timeline_clearance(_panel) + 10.0)
 	_legend_picked = -1
 	_sel_lat = NAN
 	_sel_lng = NAN

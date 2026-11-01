@@ -5,7 +5,9 @@ extends RefCounted
 ## the game's plumbing:
 ##   handles   main, player, graph, loader, timeline (resolved per stop)
 ##   pacing    wait(s) × the run's pace; hold(actions, s) presses actions
-##   words     caption(text) — lower-third; the title card is the director's
+##   words     caption(text) — in the title card's slot; the card is the director's
+##   curtain   a stop starts on black and reveal()s on its first wait / move /
+##             caption / shot (see REVEAL_S)
 ##   shots     hero() = the README image (captions hidden), shot(name) = extras
 ##   camera    a tour camera through Main's camera-claim stack: place / fly /
 ##             orbit, released by the director after every stop
@@ -51,6 +53,23 @@ var _hud_saved: Dictionary = {}
 var _hud_depth := 0
 var _held: PackedStringArray = PackedStringArray()
 var _class_cache: Dictionary = {}
+
+## The curtain (2026-10-29). Each stop starts on black, under its title card,
+## so its setup (a modal opening, the camera placed, the clock set) happens
+## out of sight; it lifts the first time the stop lets time pass (a wait of
+## REVEAL_MIN_WAIT_S or more, a camera move, a caption, a hero shot), or after
+## TourDirector.REVEAL_MAX_S at the latest.
+const REVEAL_S := 0.5
+const REVEAL_MIN_WAIT_S := 0.3
+var revealed := false
+
+
+func reveal() -> void:
+	if revealed:
+		return
+	revealed = true
+	if captions != null:
+		captions.reveal(REVEAL_S)
 
 
 func tree() -> SceneTree:
@@ -99,6 +118,8 @@ func klass(name: String) -> Script:
 func wait(seconds: float) -> void:
 	if cancelled or seconds <= 0.0:
 		return
+	if seconds >= REVEAL_MIN_WAIT_S:
+		reveal()
 	await tree().create_timer(seconds * pace, true, false, true).timeout
 
 
@@ -130,6 +151,7 @@ func release_held() -> void:
 func caption(text: String, seconds: float = 3.0) -> void:
 	if cancelled or captions == null:
 		return
+	reveal()
 	captions.show_caption(text, seconds * pace)
 
 
@@ -227,6 +249,11 @@ func shot(name: String, hide_hud: bool = false) -> void:
 
 
 func _grab(hide_hud: bool) -> Image:
+	# The shot hides the caption layer (the curtain with it): lift it first,
+	# or the video flashes the scene for the grab's two frames.
+	if not revealed:
+		reveal()
+		await wait(REVEAL_S)
 	# A camera that just stopped moving is still smeared by TAA for a few
 	# frames; let it converge before the README image is taken.
 	await wait(0.35)
@@ -308,6 +335,7 @@ func scrub(h0: float, h1: float, seconds: float) -> void:
 	var day0 := float(main.call("get_absolute_hours")) - float(main.get("day_time"))
 	var a := day0 + h0
 	var b := day0 + (h1 if h1 >= h0 else h1 + 24.0)
+	reveal()
 	var saved_scale := float(main.get("time_scale"))
 	main.set("time_scale", 0.0)
 	var dur := maxf(seconds * pace, 0.05)
@@ -466,34 +494,75 @@ func place_camera(pos: Vector3, look: Vector3) -> void:
 		cam.look_at(look, Vector3.UP if absf((look - pos).normalized().y) < 0.99 else Vector3.FORWARD)
 
 
-## Fly the tour camera through [pos, look] pairs over `seconds`, eased.
+## Fly the tour camera through [pos, look] pairs over `seconds`: a smooth
+## spline through the points at an even speed, easing in and out (TourPath).
+## Once the stop is on screen it starts from the view being shown (the
+## player's eyes, or where the last move left the camera), so a fly never
+## cuts.
 func fly(points: Array, seconds: float) -> void:
-	if cancelled or points.size() < 2:
-		if points.size() == 1:
-			place_camera(points[0][0], points[0][1])
+	if cancelled or points.is_empty():
 		return
+	var pos := PackedVector3Array()
+	var look := PackedVector3Array()
+	for pt in points:
+		pos.append(pt[0] as Vector3)
+		look.append(pt[1] as Vector3)
+	if revealed:
+		var cur := _view_pose(pos[0].distance_to(look[0]))
+		if not cur.is_empty() and ((cur[0] as Vector3).distance_to(pos[0]) > 0.05
+				or (cur[1] as Vector3).distance_to(look[0]) > 0.5):
+			pos.insert(0, cur[0])
+			look.insert(0, cur[1])
+	if pos.size() == 1:
+		place_camera(pos[0], look[0])
+		return
+	reveal()
+	var table := TourPath.arc_table(pos)
+	var dd: PackedFloat64Array = table["d"]
+	var total := dd[dd.size() - 1]
+	var accel := 0.5 if pos.size() == 2 else 0.25
 	var dur := maxf(seconds * pace, 0.05)
 	var t := 0.0
-	var segs := points.size() - 1
 	while t < dur and not cancelled:
-		var u := smoothstep(0.0, 1.0, t / dur) * segs
-		var i := mini(int(u), segs - 1)
-		var f := u - i
-		var p: Vector3 = (points[i][0] as Vector3).lerp(points[i + 1][0], f)
-		var l: Vector3 = (points[i][1] as Vector3).lerp(points[i + 1][1], f)
-		place_camera(p, l)
+		var s := TourPath.param_at(table, total * TourPath.ease_trapezoid(t / dur, accel))
+		place_camera(TourPath.at(pos, s), TourPath.at(look, s))
 		await tree().process_frame
 		t += host.get_process_delta_time()
-	place_camera(points[segs][0], points[segs][1])
+	place_camera(pos[pos.size() - 1], look[look.size() - 1])
+
+
+## [eye, look point `look_dist` ahead] of the camera on screen now, or [].
+func _view_pose(look_dist: float) -> Array:
+	var vp := tree().root.get_viewport()
+	var cam := vp.get_camera_3d() if vp != null else null
+	if cam == null:
+		return []
+	var eye := cam.global_position
+	return [eye, eye - cam.global_transform.basis.z * maxf(look_dist, 2.0)]
 
 
 ## Orbit the tour camera round `center` (radius, height above it) from deg_a
-## to deg_b (compass-ish, 0 = north / −Z) over `seconds`.
+## to deg_b (compass-ish, 0 = north / −Z) over `seconds`. Once the stop is on
+## screen, the first ORBIT_BLEND_S blend from the view being shown into the
+## orbit instead of cutting to its first pose.
+const ORBIT_BLEND_S := 0.8
+
+
 func orbit(center: Vector3, radius: float, height: float, deg_a: float, deg_b: float,
 		seconds: float) -> void:
 	if cancelled:
 		return
+	var from := Transform3D()
+	var blend := false
+	if revealed:
+		var vp := tree().root.get_viewport()
+		var cur := vp.get_camera_3d() if vp != null else null
+		if cur != null:
+			from = cur.global_transform
+			blend = true
+	reveal()
 	var dur := maxf(seconds * pace, 0.05)
+	var blend_s := minf(ORBIT_BLEND_S, dur * 0.5)
 	var t := 0.0
 	while not cancelled:
 		var u := clampf(t / dur, 0.0, 1.0)
@@ -503,6 +572,11 @@ func orbit(center: Vector3, radius: float, height: float, deg_a: float, deg_b: f
 		if p.y < gy:
 			p.y = gy
 		place_camera(p, center)
+		if blend and t < blend_s:
+			var w := smoothstep(0.0, 1.0, t / blend_s)
+			var to := _cam.global_transform
+			var q := from.basis.get_rotation_quaternion().slerp(to.basis.get_rotation_quaternion(), w)
+			_cam.global_transform = Transform3D(Basis(q), from.origin.lerp(to.origin, w))
 		if u >= 1.0:
 			break
 		await tree().process_frame
@@ -522,6 +596,7 @@ func release_camera() -> void:
 func turn_player(deg: float, seconds: float, pitch_deg: float = NAN) -> void:
 	if cancelled or player == null:
 		return
+	reveal()
 	var cam := player.get_node_or_null("CameraArm/Camera3D") as Camera3D
 	var y0 := player.rotation.y
 	var p0 := cam.rotation.x if cam != null else 0.0
@@ -566,20 +641,87 @@ func click_button(text: String, partial: bool = false) -> bool:
 	var b := HarnessInput.find_button(tree().root, text, partial)
 	if b == null:
 		return false
-	await HarnessInput.click(b.get_viewport(), HarnessInput.center_of(b))
+	await click_at(HarnessInput.center_of(b))
 	return true
 
 
+## Click at a viewport point: the tour's pointer glides there first (the
+## video shows where the click lands), then a real press and release.
 func click_at(pos: Vector2) -> void:
 	if cancelled:
 		return
+	await pointer_to(pos)
+	if captions != null:
+		captions.pointer_at(pos, true)
 	await HarnessInput.click(tree().root.get_viewport(), pos)
+	if captions != null:
+		captions.pointer_at(pos, false)
 
 
 func drag(a: Vector2, b: Vector2, steps: int = 16) -> void:
 	if cancelled:
 		return
-	await HarnessInput.drag(tree().root.get_viewport(), a, b, steps)
+	await drag_to(a, b, maxf(float(steps) / 30.0, 0.2))
+
+
+## Press at `a`, move to `b` over `seconds` (eased), release: real input,
+## with the tour's pointer following it.
+func drag_to(a: Vector2, b: Vector2, seconds: float) -> void:
+	if cancelled:
+		return
+	var vp := tree().root.get_viewport()
+	await pointer_to(a)
+	if captions != null:
+		captions.pointer_at(a, true)
+	await HarnessInput.mouse_press(vp, a, true)
+	var dur := maxf(seconds * pace, 0.05)
+	var t := 0.0
+	while t < dur and not cancelled:
+		var p := a.lerp(b, TourPath.ease_trapezoid(t / dur, 0.3))
+		if captions != null:
+			captions.pointer_at(p, true)
+		await HarnessInput.mouse_move(vp, p, false, false, true)
+		t += host.get_process_delta_time()
+	if captions != null:
+		captions.pointer_at(b, true)
+	await HarnessInput.mouse_move(vp, b, false, false, true)
+	# The last held motion and the release in one frame (HarnessInput.click).
+	HarnessInput._push_motion(vp, b, false, false, true)
+	await HarnessInput.mouse_press(vp, b, false)
+	_pointer_pos = b
+	if captions != null:
+		captions.pointer_at(b, false)
+
+
+## Glide the tour's pointer (and the real mouse, so hovers happen) to `pos`.
+## It appears a little below-right of the first target.
+const POINTER_GLIDE_S := 0.5
+var _pointer_pos := Vector2.INF
+
+
+func pointer_to(pos: Vector2, seconds: float = POINTER_GLIDE_S) -> void:
+	if cancelled:
+		return
+	reveal()
+	var vp := tree().root.get_viewport()
+	var from := _pointer_pos if _pointer_pos != Vector2.INF else pos + Vector2(160.0, 110.0)
+	var dur := maxf(seconds * pace, 0.05)
+	var t := 0.0
+	while t < dur and not cancelled:
+		var p := from.lerp(pos, smoothstep(0.0, 1.0, t / dur))
+		if captions != null:
+			captions.pointer_at(p)
+		await HarnessInput.mouse_move(vp, p)
+		t += host.get_process_delta_time()
+	if captions != null:
+		captions.pointer_at(pos)
+	_pointer_pos = pos
+
+
+func hide_pointer() -> void:
+	_pointer_pos = Vector2.INF
+	if captions != null:
+		captions.pointer_hide()
 
 
 # -- systems graph ------------------------------------------------------------
@@ -628,10 +770,19 @@ func reset_graph_orbit() -> void:
 		svc.call("reset_phys_orbit")
 
 
-## Select a graph item through the canvas's own click handler (inspector opens).
+## The graph's side panels for the rest of this stop (the tour keeps both
+## collapsed unless a stop asks: TourDirector.sidebars_open).
+func graph_sidebars(left: bool, right: bool) -> void:
+	if host != null and "sidebars_open" in host:
+		host.set("sidebars_open", [left, right])
+
+
+## Select a graph item through the canvas's own click handler (inspector opens,
+## so the right-hand panel opens with it).
 func graph_select(item_id: String) -> void:
 	if graph == null or item_id.is_empty():
 		return
+	graph_sidebars(false, true)
 	var canvas: Variant = graph.get("_graph_canvas")
 	if canvas != null:
 		canvas.set("selected_item_id", item_id)

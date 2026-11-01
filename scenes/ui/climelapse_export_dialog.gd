@@ -92,6 +92,7 @@ func _build() -> void:
 	_frame = ModalFrame.create("Export video",
 		"Renders the range one frame at a time with the clock held, then encodes an MP4 with ffmpeg.",
 		Vector2(780, 760), "climelapse_export")
+	_frame.keep_timeline = true   # the range it exports is the one on the bar
 	add_child(_frame)
 	_frame.closed.connect(_on_frame_closed)
 	var b := _frame.body

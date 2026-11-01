@@ -1553,6 +1553,10 @@ Godot.exe.exe --headless --path . --script power_system/automation/automation_si
 # arrives exact in SolarUI, the video-export range + dialog, the render end,
 # and the track window is the view's own start:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_abs_precision_probe.gd
+# Timeline sizes + modals over the bar (sandbox, REAL input): Ctrl+wheel
+# resizes a track and does not zoom, ▼ compact / hidden, the tab, ▲, F2,
+# and Settings covering the bar; shots under screenshots\tl_modes\:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_bar_modes_check.gd -Label tl_modes -UserArgs @("--window-size=1280x720")
 # Would / did save end to end (sandbox, fake HA): reality = the world's own
 # sim with a nightly shutdown, served as history; "did" with a fork without
 # it — the window's span exact to the hour, the estimate = the fork's sim,
@@ -2178,8 +2182,14 @@ from the same metadata. **A new player-facing feature gets a tour stop.**
   water, hydro and the graph lenses (its trees block everything else);
   `walton` for people, the festival, the light studio and the crew build;
   `burningman` (alias in HarnessRegistry, the open playa) for everything
-  else. `TourDirector.WORLD_STARTS` moves BM's start 110 m off the art ring
-  at the site centre, and the director lands a drone the world was saved with.
+  else. `TourDirector.WORLD_STARTS` sets each world's start (level camera):
+  BM 110 m off the art ring at the site centre; Mount Vernon 5 m out from
+  under the pavilion facing the forest (its saved player stared at a shed
+  wall, pitched down); Walton 35 m back from the festival crowd facing the
+  field. Pick new ones with `tools/diag/tour_start_probe.gd` (RunScript:
+  shots + clear view / slope / people near per candidate; `--probe-mode=
+  out|in --probe-d=…` refines round the saved spot). The director lands a
+  drone the world was saved with.
   ⚠ `TourContext.hud(false/true)` NESTS: a `shot(..., true)` inside a stop's
   own `hud(false)` used to empty the saved list, and every layer the baseline
   does not re-show (the designers' own CanvasLayers) stayed hidden for the
@@ -2225,6 +2235,36 @@ from the same metadata. **A new player-facing feature gets a tour stop.**
   full-video link comes from `docs/tour/video.json` (edited by hand after
   uploading; nothing is uploaded).
 - Iterate on one stop: `tools\tour.ps1 -Mode stills -Stops <id>`.
+- **Words, curtain, camera (2026-10-29).**
+  - `TourCaptions` has ONE slot for the title card and the captions:
+    centred, just above the timeline bar's LIVE top (`get_stack_height`, 0
+    when the bar or the HUD is hidden), eased every frame, one style, a fade
+    + short rise. Long captions wrap at 62 % of the width.
+  - The tour runs with the timeline COMPACT (`TourDirector.TOUR_BAR_MODE`,
+    restored at the end).
+  - The curtain: every stop starts on black under its card, and the
+    teardown / reset / setup happen out of sight. `TourContext.reveal()`
+    lifts it on the stop's first `wait` ≥ 0.3 s, camera move, caption or
+    shot, or at `REVEAL_MAX_S` at the latest; a stop ends with
+    `dip_to_black`.
+  - ⚠ The director's own pauses use `_hold`, never `ctx.wait` (that
+    reveals: the intro and the card lead-in lifted the curtain on the reset
+    view).
+  - `fly` is a centripetal Catmull–Rom spline at constant speed with a
+    trapezoid ease (`TourPath`, pinned in tour_selftest). Once revealed, it
+    starts from the view on screen, and `orbit` blends in, so neither cuts.
+  - The graph view's side panels are held collapsed while a stop has the
+    graph up (`TourDirector.sidebars_open`, reset by every baseline, the
+    player's state put back at the end); `ctx.graph_sidebars(l, r)` opens
+    one, and `graph_select` opens the right one for the inspector.
+  - Movie Maker does not record the OS cursor, so `click_at` / `drag_to` /
+    `click_button` glide a drawn pointer (`TourCaptions.pointer_at`) along
+    with the real input.
+  - Solar Bootcamp levels 1–3 are three stops (27, 27a, 27b) on
+    `TourBootcamp`: start a level, real "Let's go" click, `frame_circuit`
+    (zoom onto the seeded nodes, ≤ 2.2×), real port-to-port drags (a drag
+    that makes no wire is added through the model and noted), wait for the
+    debrief.
 - **The site's address never reaches a screenshot** (`SitePrivacy`,
   `core/site_privacy.gd`).
   - A world's place label is the reverse-geocoded street address. These
@@ -2318,6 +2358,17 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
   - An untuckable bottom-left panel outranks the top-left column: the
     column tucks (lowest priority first) until it fits.
   - A dragged Fun Meter unregisters (its saved position wins).
+- **Timeline size** (2026-10-29): Ctrl+wheel over a data track makes it
+  taller / shorter (`TimelineTrackLayout.track_index_at`, `WHEEL_STEP_PX`
+  6, 12–180 px; elsewhere Ctrl+wheel still zooms; the drag on a track's
+  bottom edge still works). The bar has three sizes (`set_bar_mode`:
+  FULL / COMPACT = ruler + clips lane only, waveform tracks stay enabled /
+  HIDDEN = a "Timeline" tab at the bottom centre, the bar's empty strip
+  `MOUSE_FILTER_IGNORE`), from the ▲ ▼ buttons after the ⋯ menu (never
+  folded), the tab, or `toggle_timeline_size` (F2, cycles). Saved in
+  `ui_prefs.cfg [timeline] bar_mode / bar_last_shown`. `get_stack_height`
+  follows, so the HUD, toasts and docks move with it. Gate:
+  `tools/checks/timeline_bar_modes_check.gd` (real wheel / clicks / F2).
 - **Timeline info row** (`timeline_ui._layout_info_clusters`): measured —
   the centre (clock / transport / date / sun-moon) sits centred when it
   fits and slides into the gap between the side clusters when not; the
@@ -2386,8 +2437,17 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
     it hung 12 px off the right edge. `--capture=poi` caught it; that capture
     now turns pins ON for its own checks, since the player's `show_pois` pref
     may hide them.
-- **Modals (`UiFit`, `scenes/ui/kit/ui_fit.gd`).** Every modal panel sits
-  in the area ABOVE the timeline and never larger than it:
+- **Modals (`UiFit`, `scenes/ui/kit/ui_fit.gd`).** Every modal panel is
+  centred on the screen and COVERS the timeline bar (2026-10-29, the user's
+  call: most modals have nothing to do with time, and stopping above a
+  288 px bar at 720p made them needlessly small). Exceptions:
+  `keep_timeline` (`keep_fitted` / `adopt` argument, `ModalFrame.
+  keep_timeline`; the video export dialog sets it), and a panel that would
+  draw UNDER the bar (`UiFit.draws_over_timeline`: an earlier sibling on the
+  bar's own canvas layer) still stops above it. `UiFit.timeline_clearance(n)`
+  is the one rule (0 or the bar's height); `UiScreenLayout.clamped_center`,
+  ModalFrame, the HA links window and the location picker use it. Docks
+  and drawers (prop editor, Light Studio, toasts) still clear the bar.
   `UiFit.keep_fitted(panel, want)` (re-fits on resize / show / content
   growth, and claims the HUD while visible unless `claim_hud` false) or
   `UiFit.adopt(panel)` for an existing modal (reads the intended size off
@@ -3733,7 +3793,7 @@ above the graph and the Lab). Model id `peltonlab_turbine`, record key
 wheel)", library `user://peltonlab_library.json`, exports
 `user://peltonlab_designs/`.
 - **One cup for every wheel**: `assets/hydro/pelton_cup.stl` (the user's
-  `pelton_turbine_bucket.stl`; licence PENDING in CREDITS), measured into
+  `pelton_turbine_bucket.stl` = "Pelton wheel bucket" by hydro, Thingiverse thing:16628, CC BY-SA, credited in CREDITS), measured into
   `PeltonLabParts.CUP`: 79.04 mm wide, splitter x = 39.52, open face +y,
   tip z 4.6 → bowl to 77 → root tab (34 mm thick along the shaft) to 114.8,
   pitch point at z = 40 (widest), 63.1 cm³. Scaled whole by `cup_width_mm`.
@@ -8385,7 +8445,37 @@ and a stored null reads back as `"<null>"`, so a stale `stowed_in` silently
 blocked an erect-phase deploy until this was fixed. The container mesh is a
 solid box with no cavity, so the stack is invisible in-world — the Packing
 Lab (`--capture=packing`) is its visual surface.
-Selftest: `core/packing/packing_selftest.gd` (511 checks; --import first).
+**Real shipping logistics (2026-10-30).**
+- **Handling units** (`PackKitter`, pure): designer parts (`parts_for_packing`)
+ become what a crew actually moves. `handling_for(kg)`: "hand" ≤ 23 kg
+ (ONE_PERSON_KG), "team" ≤ 60, "forklift" beyond; like parts bundle up to
+ BUNDLE_MAX_KG 500 with strap / interleaf / crate allowances (STRAP_KG,
+ INTERLEAF_KG_M2, CRATE_KG_M2). CampManifest, PackDefs and UnpackScenario
+ work on per-record unit lists from it.
+- **Intermodal units** (`IntermodalUnits`): parametric templates (ISO
+ containers, pallets, IBC totes, gaylords, drums, rack bays) plus a user
+ library `user://intermodal_units.json`; `templates()` / `templates_of` /
+ `template(id)`. Drawn by `IntermodalUnitBuilder` (+ `IntermodalMeshKit`,
+ `PalletBuilder`, `IbcBuilder`, `GaylordBuilder`, `DrumBuilder`). Modal
+ `scenes/ui/intermodal_unit_modal.gd` (Library → Structures →
+ "Intermodal unit designer…"; modal audit id `intermodal_units`).
+- **The Lab palletizes, then stuffs** (`PackPalletizer.palletize(units,
+ pallet, opts)`): forklift units go loose, the rest onto pallets, the
+ pallets into the container (`--capture=packing` step
+ `06_palletized_in_20ft`). `PackingList.to_html(doc)` writes a printable
+ per-space packing list with labels to `user://packing_lists/`.
+- **Forklift** (`ForkliftBuilder`, model id `vehicle_forklift`, the
+ player's `Imported Models/Vehicles/forklift.glb` with a procedural
+ fallback): a PlacedVehicle plus `ForkliftRig` (mast + forks; PgUp/PgDn
+ while driving, record keys `fork_lift_m` / `fork_load_id`, rated 2500 kg,
+ footprint ≤ `MAX_FOOTPRINT_M`). Crates from 200 kg
+ (`SiteProject.crate_needs_forklift`) are moved by NPC forklift chores:
+ `ForkliftPlanner`, the `fork_move` effect, `unload_spec_rows(...,
+ forklift_id)`; scenario `workshop_pallets`. Gate:
+ `tools\harness.ps1 -World walton -RunScript res://tools/checks/forklift_unload_check.gd -Label forklift_unload -Timeout 900`.
+ Tour stops `17a_forklift`, `51a_intermodal_units`.
+
+Selftest: `core/packing/packing_selftest.gd` (745 checks; --import first).
 
 ## NPC population simulation (core/population/)
 

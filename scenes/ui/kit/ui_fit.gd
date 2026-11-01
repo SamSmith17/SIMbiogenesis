@@ -7,10 +7,15 @@ extends RefCounted
 ## solves each once:
 ##   - SIZING. A modal centred on the whole screen at a fixed 1160 × 740 lands
 ##     on the timeline at 1080p and runs off the screen at 720p (UI scale 125 %
-##     leaves a 1536 × 864 canvas). `keep_fitted(panel, want)` places the panel
-##     in the area ABOVE the timeline, never bigger than it, and re-fits on
-##     every resize. The panel's content must scroll — this cannot shrink a
-##     container below its children's minimum.
+##     leaves a 1536 × 864 canvas). `keep_fitted(panel, want)` centres the panel
+##     on the screen, never bigger than it, and re-fits on every resize. The
+##     panel's content must scroll — this cannot shrink a container below its
+##     children's minimum.
+##     A modal COVERS the timeline bar (2026-10-29: most modals have nothing to
+##     do with time, and stopping above the bar made them needlessly small);
+##     pass `keep_timeline` for one that wants the bar in view. A panel that
+##     would draw UNDER the bar (an earlier sibling on the bar's own canvas
+##     layer) still keeps clear of it, or its bottom would be hidden.
 ##   - WIDTH. One label or option button whose minimum width is wider than its
 ##     column stretches the whole column past its parent (the graph inspector
 ##     was 20 px past its sidebar, the Site Report's header 240 px past the
@@ -21,23 +26,54 @@ extends RefCounted
 const MARGIN := 24.0
 
 
-## The rectangle a modal may use: the visible canvas minus the timeline bar,
-## minus a margin on every side.
-static func area(ci: CanvasItem, margin: float = MARGIN) -> Rect2:
+## The rectangle a modal may use: the visible canvas minus a margin on every
+## side, and minus the timeline bar when `keep_timeline` or when the panel
+## would draw under it.
+static func area(ci: CanvasItem, margin: float = MARGIN, keep_timeline: bool = false) -> Rect2:
 	var vp := ci.get_viewport()
 	if vp == null:
 		return Rect2()
 	var r := vp.get_visible_rect()
-	var bottom := r.size.y - HudLayout.timeline_height()
+	var bottom := r.size.y - timeline_clearance(ci, keep_timeline)
 	return Rect2(r.position + Vector2(margin, margin),
 		Vector2(maxf(r.size.x - margin * 2.0, 0.0), maxf(bottom - margin * 2.0, 0.0)))
 
 
+## How much of the screen bottom a modal must leave for the timeline: none
+## when it draws over the bar (the usual case), the bar's height otherwise.
+static func timeline_clearance(n: Node, keep_timeline: bool = false) -> float:
+	if keep_timeline or not draws_over_timeline(n):
+		return HudLayout.timeline_height()
+	return 0.0
+
+
+## True when `n` (a CanvasItem, or a CanvasLayer such as ModalFrame) is drawn
+## over the timeline bar: on a higher canvas layer, or after the bar on the
+## same one. True when there is no bar.
+static func draws_over_timeline(n: Node) -> bool:
+	var tl := ServiceLocator.timeline_ui() as CanvasItem
+	if tl == null or not is_instance_valid(tl) or n == null or not tl.is_inside_tree() \
+			or not n.is_inside_tree():
+		return true
+	var la: CanvasLayer = n as CanvasLayer
+	if la == null and n is CanvasItem:
+		la = (n as CanvasItem).get_canvas_layer_node()
+	var lb := tl.get_canvas_layer_node()
+	var a := la.layer if la != null else 0
+	var b := lb.layer if lb != null else 0
+	if a != b:
+		return a > b
+	if la != lb:
+		return la != null and lb != null and la.is_greater_than(lb)
+	return n.is_greater_than(tl)
+
+
 ## Centre `panel` (anchored top-left) in `area()`, `want` or smaller.
-static func fit(panel: Control, want: Vector2, margin: float = MARGIN) -> void:
+static func fit(panel: Control, want: Vector2, margin: float = MARGIN,
+		keep_timeline: bool = false) -> void:
 	if panel == null or not panel.is_inside_tree():
 		return
-	var a := area(panel, margin)
+	var a := area(panel, margin, keep_timeline)
 	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	panel.custom_minimum_size = Vector2.ZERO
 	# A size of 0 on an axis = "as big as its content" (a content-sized panel).
@@ -53,14 +89,16 @@ static func fit(panel: Control, want: Vector2, margin: float = MARGIN) -> void:
 ## `fit` now and again whenever the window or the timeline changes size, or
 ## the panel is shown. While the panel is visible it also claims the HUD
 ## (`HudLayout.claim_modal`: the first-person HUD hides under a modal) unless
-## `claim_hud` is false. Safe to call more than once.
+## `claim_hud` is false. It covers the timeline unless `keep_timeline`.
+## Safe to call more than once.
 static func keep_fitted(panel: Control, want: Vector2, margin: float = MARGIN,
-		claim_hud: bool = true) -> void:
+		claim_hud: bool = true, keep_timeline: bool = false) -> void:
 	if panel == null:
 		return
 	panel.set_meta("ui_fit_want", want)
 	panel.set_meta("ui_fit_margin", margin)
 	panel.set_meta("ui_fit_claim", claim_hud)
+	panel.set_meta("ui_fit_keep_timeline", keep_timeline)
 	if panel.has_meta("ui_fit_wired"):
 		_refit.call_deferred(panel)
 		return
@@ -94,7 +132,8 @@ static func keep_fitted(panel: Control, want: Vector2, margin: float = MARGIN,
 ## a panel parked in a CenterContainer is lifted out of it — the container
 ## would re-centre it on the whole screen every sort. Call after the panel is
 ## parented.
-static func adopt(panel: Control, margin: float = MARGIN, claim_hud: bool = true) -> void:
+static func adopt(panel: Control, margin: float = MARGIN, claim_hud: bool = true,
+		keep_timeline: bool = false) -> void:
 	if panel == null:
 		return
 	var want := panel.custom_minimum_size
@@ -106,7 +145,7 @@ static func adopt(panel: Control, margin: float = MARGIN, claim_hud: bool = true
 		p.remove_child(panel)
 		host.add_child(panel)
 		host.move_child(panel, p.get_index() + 1)
-	keep_fitted(panel, want, margin, claim_hud)
+	keep_fitted(panel, want, margin, claim_hud, keep_timeline)
 
 
 static func _claim_owner(panel: Control) -> String:
@@ -125,7 +164,8 @@ static func _refit(panel: Control) -> void:
 			HudLayout.release(owner)
 	if not shown:
 		return
-	fit(panel, panel.get_meta("ui_fit_want", panel.size), float(panel.get_meta("ui_fit_margin", MARGIN)))
+	fit(panel, panel.get_meta("ui_fit_want", panel.size), float(panel.get_meta("ui_fit_margin", MARGIN)),
+		bool(panel.get_meta("ui_fit_keep_timeline", false)))
 
 
 ## Make every text control under `root` shrinkable (see the header). Run it

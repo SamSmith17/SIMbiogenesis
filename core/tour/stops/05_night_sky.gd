@@ -56,6 +56,11 @@ func run(ctx: TourContext) -> void:
 	await ctx.hero()
 	if stars != null:
 		stars.call("set_reference_stars_visible", true)
+		# The markers only: the legend is a calibration readout (LST, fit, a
+		# row of altitudes), not something to read in a tour.
+		var legend: Variant = stars.get("_legend")
+		if legend is CanvasLayer:
+			(legend as CanvasLayer).visible = false
 		ctx.caption("Home: reference-star markers sit on the catalogue positions", 3.0)
 		await ctx.wait(3.0)
 		stars.call("set_reference_stars_visible", false)

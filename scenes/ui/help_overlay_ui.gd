@@ -69,6 +69,7 @@ const _GROUPS := [
 		["mp_chat", "Multiplayer chat"],
 	]],
 	["Views", [
+		["toggle_timeline_size", "Timeline: full / compact / hidden (also the arrows at its right end)"],
 		["toggle_third_person", "First person / third-person follow camera (Settings > Player)"],
 		["toggle_window_wall", "Window wall - the world across your monitor row (Settings > Window Wall)"],
 		["key:U", "...toggle UI while the window wall is up"],

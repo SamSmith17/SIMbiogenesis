@@ -92,7 +92,8 @@ static func clamped_center(panel: Control, desired: Vector2) -> void:
 	# Centred in the area ABOVE the timeline (the live bar height): centred on
 	# the whole window, a tall panel sat on the timeline at 720p.
 	var screen := _viewport_size(panel)
-	var tl := HudLayout.timeline_height()
+	# Covers the timeline (UiFit's rule) unless the panel would draw under it.
+	var tl := UiFit.timeline_clearance(panel)
 	var w := minf(desired.x, screen.x - UiFit.MARGIN * 2.0)
 	var h := minf(desired.y, maxf(screen.y - tl - UiFit.MARGIN * 2.0, 120.0))
 	panel.set_anchors_preset(Control.PRESET_CENTER)

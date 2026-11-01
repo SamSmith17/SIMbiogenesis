@@ -188,7 +188,7 @@ func _fit_columns() -> void:
 	if _left_scroll == null or not is_inside_tree():
 		return
 	var vp := get_viewport().get_visible_rect().size
-	var h := clampf(vp.y - HudLayout.timeline_height() - 260.0, 240.0, 640.0)
+	var h := clampf(vp.y - UiFit.timeline_clearance(self) - 260.0, 240.0, 820.0)
 	_left_scroll.custom_minimum_size.y = h
 	_right_scroll.custom_minimum_size.y = h
 
