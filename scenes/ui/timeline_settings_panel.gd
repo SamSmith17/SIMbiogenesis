@@ -1062,15 +1062,21 @@ func _refresh_extreme_weather_tab() -> void:
 	else:
 		_xw_zone_lbl.text = "Extreme weather service unavailable."
 
-	# Re-order rows by risk so the site's real dangers are at the top.
+	# Re-order rows by risk so the site's real dangers are at the top — within
+	# each list: the simulated hazards' box and the "not simulated yet" fold
+	# keep their own order (a row only moves inside its own parent).
 	if ready and not profile.is_empty() and _xw_rows_box != null:
 		var order := HazardRiskProfile.sorted_ids(profile)
+		var slot: Dictionary = {}   # parent -> next index
 		for i in order.size():
 			var r: Variant = _xw_rows.get(order[i], null)
 			if r is Dictionary:
 				var row_node := (r as Dictionary)["check"].get_parent() as Control
-				if row_node != null:
-					_xw_rows_box.move_child(row_node, i)
+				var parent := row_node.get_parent() if row_node != null else null
+				if parent != null:
+					var k := int(slot.get(parent, 0))
+					parent.move_child(row_node, k)
+					slot[parent] = k + 1
 
 	for id: String in _xw_rows.keys():
 		var r: Dictionary = _xw_rows[id]
