@@ -15152,10 +15152,18 @@ func _maybe_schedule_fps_autodrop() -> void:
 	var new_q := q - 1
 	if _main.has_method("set_graphics_quality_level"):
 		_main.call("set_graphics_quality_level", new_q)
+	# A hand-picked MSAA above the new preset's comes down with it: 8x alone
+	# was 12 ms of Mount Vernon's frame.
+	var msaa_note := ""
+	var preset_msaa := int(RenderProfile.graphics_profile(new_q).get("msaa", 0))
+	if _main.get("msaa_level") != null and int(_main.get("msaa_level")) > preset_msaa \
+			and _main.has_method("set_msaa_level"):
+		_main.call("set_msaa_level", preset_msaa)
+		msaa_note = " and MSAA to %s" % ["off", "2x", "4x", "8x"][clampi(preset_msaa, 0, 3)]
 	cfg.set_value("render", _VEG_AUTODROP_FLAG, true)
 	cfg.save(RenderProfile.PERF_PREFS_CFG)
-	_toast("Frame rate under %d fps — graphics preset lowered to %s (Settings → Lighting to change back)." % [
-		int(_VEG_AUTODROP_MIN_FPS), RenderProfile.quality_name(new_q)], ToastUI.Level.WARN)
+	_toast("Frame rate under %d fps — graphics preset lowered to %s%s (Settings → Lighting to change back)." % [
+		int(_VEG_AUTODROP_MIN_FPS), RenderProfile.quality_name(new_q), msaa_note], ToastUI.Level.WARN)
 	print("TerrainLoader: FPS auto-drop -> %s (avg %.0f fps)" % [
 		RenderProfile.quality_name(new_q), sum / float(n)])
 

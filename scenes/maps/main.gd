@@ -863,6 +863,10 @@ var msaa_level : int = 0 :
 	set( value ) :
 		msaa_level = clampi( value, 0, 3 )
 		_apply_msaa_level()
+## While true the preset's MSAA (RenderProfile.graphics_profile "msaa") is
+## applied with the preset; a level picked in Settings → Lighting turns it
+## off (set_msaa_level) and that level stays through preset changes.
+var msaa_follows_preset : bool = true
 
 ## 3D render resolution scale (0.5–1.0). Below 1.0 the 3D world renders at a
 ## fraction of window resolution and is upscaled — the single biggest GPU lever
@@ -2491,7 +2495,16 @@ func _apply_msaa_level() -> void :
 		vp.msaa_3d = msaa_level as Viewport.MSAA
 
 func set_msaa_level( level: int ) -> void :
+	msaa_follows_preset = false
 	msaa_level = level
+
+func set_msaa_follows_preset( on: bool ) -> void :
+	msaa_follows_preset = on
+	if on :
+		msaa_level = int( RenderProfile.graphics_profile( graphics_quality ).get( "msaa", msaa_level ) )
+
+func get_msaa_follows_preset() -> bool :
+	return msaa_follows_preset
 
 func get_msaa_level() -> int :
 	return msaa_level
@@ -2532,6 +2545,8 @@ func _apply_graphics_quality() -> void :
 	var vp := get_viewport()
 	if vp != null :
 		vp.use_taa = bool( p[ "taa" ] )
+	if msaa_follows_preset :
+		msaa_level = int( p.get( "msaa", msaa_level ) )
 	# Veg overhaul Phase 4: the preset also carries the vegetation tier —
 	# canopy shadow casting here, ring radii/shell counts/instance caps via
 	# the terrain loader (which re-scatters or rebuilds as needed).

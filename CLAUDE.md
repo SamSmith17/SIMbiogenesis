@@ -1553,6 +1553,20 @@ Godot.exe.exe --headless --path . --script power_system/automation/automation_si
 # arrives exact in SolarUI, the video-export range + dialog, the render end,
 # and the track window is the view's own start:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_abs_precision_probe.gd
+# The gameplay spine (sandbox, Walton): the needs strip's four chips read
+# live statuses, the mission chip follows a running challenge and idles after
+# an abort, offer_first_mission opens the picker, the starter seed is
+# idempotent and refused on a world with a habitat, the guided-start
+# hand-off round-trips through MapContext, the live tour picks the world's
+# own stops and cancel() ends it:
+tools\harness.ps1 -World walton -RunScript res://tools/checks/first_run_probe.gd -Label first_run -Timeout 900
+# One site, one ledger (sandbox, Mount Vernon): a placed dome is a sleep
+# space sized by its floor, an EUC's charger is a graph load bound to it
+# (500 W while charging with AC up, 0 switched off or full, gone with the
+# prop), a vegetable bed makes FOOD into a food store and refuses a biomass
+# tank, the cost rows reach SiteBalance, packing a placed rack stows its
+# array and unpacking brings it back:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/site_ledger_probe.gd -Label site_ledger -Timeout 900
 # Timeline sizes + modals over the bar (sandbox, REAL input): Ctrl+wheel
 # resizes a track and does not zoom, ▼ compact / hidden, the tab, ▲, F2,
 # and Settings covering the bar; shots under screenshots\tl_modes\:
@@ -2503,6 +2517,75 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
   still fails becomes a CAPTION beside the circle. Ports are on the top and
   bottom edges, so the sides are free. The circle then keeps just the
   quantity. The tour at 720 strict is at 0 findings across all 32 stops.
+
+## Integration pass (2026-10-31) — the spine, one ledger, presets
+
+Plan: `~/.claude/plans/i-want-you-to-hashed-bunny.md` (the whole-project gap
+assessment: what was declared but never built, what stopped at the prop,
+what leaked). Three tranches, each its own commit and gate.
+- **The gameplay spine.** The timeline's **needs strip** (`_needs_chips`,
+  one chip per closure channel at the head of the left cluster, refreshed
+  once a second from `compute_closure_metrics`; a click opens the System
+  Review) and the **mission chip** (`_challenge_chip`, "🎯 Mission" idle,
+  the running challenge's name + hours amber; replaces the 🎯 icon button in
+  the right cluster) were declared, updated and named by the F1 help for
+  months but never built. The launch hub has **Start here (guided)** —
+  `MapContext.starter_kit` through `WorldSession.launch` opts → the loader
+  seeds the starter site after `map_load_complete` (`_seed_starter_site`,
+  the challenges' own `PuzzleStarterGraphSeeder`, idempotent) → `Main.
+  offer_first_mission` opens the picker once the loading overlay and the
+  first-run help are gone — and **Show me around**, the feature tour live on
+  the most recent world (`MapContext.tour_on_load` → `Main.start_feature_tour`,
+  also the F1 overlay's button). `TourDirector.live`: Esc / `cancel()` ends
+  it after the current stop; the stops are the world's own when it is one
+  of the tour's three (HarnessRegistry alias), else the open-ground set, and
+  a stop whose feature is not on the site simply moves on. Settings lost its
+  dead handlers (a drone pitch-invert calling a function that did not exist,
+  Solar panel count / wattage with no controls, a no-op HA save hook).
+- **One site, one ledger.**
+  - **Food.** A plant with `food_fraction` (the `Vegetable Bed (10 m²)` /
+    `Market Garden (50 m²)` presets, 0.6 = a vegetable crop's harvest index)
+    makes FOOD: `GraphPortService.resolved_handles` gives its `biomass_out`
+    port the food kind, `_process_plant` credits rate × fraction into a FOOD
+    store and refuses a biomass tank ("need food tank"), `food_kg_h` is
+    stamped, and `CampLoopClosure` closes the food loop with those presets
+    (`apply` wires a plant's fixed ports by hand). The old Grow Bed / Garden
+    Plot still make biomass (firewood); nothing saved changes meaning.
+  - **Energy leaks.** A placed electric vehicle's charger is a graph
+    appliance bound to the prop (`SystemGraphView.add_placed_vehicle_load`,
+    `scene_device_path` = the PlacedVehicle, whose `get_current_power()` is
+    the charger's draw) — it charges only while the load is on and AC is up
+    (`PlacedLightPower.graph_item_on / ac_available`), and without a graph as
+    before. New J lights join the graph as loads whenever the site has a
+    controller or battery (`PlacedLightService.lights_join_graph`, Settings →
+    Gameplay); the dock says "Lit for free" in amber otherwise.
+  - **Cost.** `SiteCost` (core/site_cost.gd): a placed record's bill of
+    materials where the design carries one (Linkage, Solar designer, CNC
+    gantry; cached per record + spec), else "unpriced" and counted as such.
+    `SiteBalance.compute(items, solar, extra)` carries a `cost` block (graph
+    total + placed) → Cost rows on the dashboard's Site balance card; the
+    Site Report's new "The site now" card shows people + camps, ponds in /
+    out, labour hours and the cost. Dome / toroid / flat-pack / rack /
+    Pelton / wind BOMs still carry no cost (a follow-up).
+  - **A dome is shelter**: placing one tags a `sleep` space of floor ÷ 3.5 m²
+    (1–12; `PlacedPropService.dome_sleepers`). ⚠ `place_model` (near the
+    player) used to skip every post-placement hook but the StarShade seed —
+    a harness-placed bed, firepit, dome or rack was never tagged / bound. It
+    now goes through `place_model_at_xz`.
+  - Machines inside camp compounds get crews (`_service_machine_chores`
+    walks every scope); packing a placed rack, toroid, pv_array or designed
+    array stows its graph array (`set_designed_array_stowed` for PvLab).
+- **Presets and polish.** MSAA is part of the graphics preset
+  (`RenderProfile.graphics_profile` `msaa`: off / 2x / 4x / 8x — 8x alone was
+  12 of Mount Vernon's 23 GPU ms) while `Main.msaa_follows_preset`; a level
+  picked in Settings → Lighting ("Preset's" is the fifth choice) is the
+  player's and stays, and the <45 fps auto-drop lowers a hand-picked MSAA
+  above the new preset's. An older sim_settings.cfg with MSAA off follows
+  the preset; one with MSAA raised keeps it. The seven hazards nothing
+  simulates sit under a closed "Not simulated yet" fold. Every designer
+  (dome, toroid, solar, gantry, flat-pack) has **👷 Build with a crew**
+  (`CrewBuildRequest.queue_design`: a packed kit 8 m ahead of the player
+  handed to `SiteDeployDirector.queue_item`, the Lab's own path).
 
 ## Graph tools, solar grids, settings, 3D routing (2026-10-14, later)
 

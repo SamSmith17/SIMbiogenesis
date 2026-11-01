@@ -48,6 +48,10 @@ static func quality_name(quality: int) -> String:
 ##                 rendering_method.mobile)
 ## Unknown levels fall back to HIGH rather than returning empty — a bad saved
 ## index should degrade to "looks right", not to "renders with nothing set".
+## `msaa` is Main's msaa_level (0 off, 1 = 2x, 2 = 4x, 3 = 8x), followed while
+## the player has not picked one themselves (Main.msaa_follows_preset).
+## MSAA 8x was measured at 12 of Mount Vernon's 23 GPU ms (gpu_toggle_bench,
+## 2026-10-18); it is Ultra's, not High's.
 static func graphics_profile(quality: int) -> Dictionary:
 	match quality:
 		QUALITY_LOW:
@@ -55,24 +59,28 @@ static func graphics_profile(quality: int) -> Dictionary:
 				"atlas_size": 1024,
 				"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_LOW,
 				"taa": false,
+				"msaa": 0,
 			}
 		QUALITY_MEDIUM:
 			return {
 				"atlas_size": 1536,
 				"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM,
 				"taa": true,
+				"msaa": 1,
 			}
 		QUALITY_ULTRA:
 			return {
 				"atlas_size": 4096,
 				"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_ULTRA,
 				"taa": true,
+				"msaa": 3,
 			}
 	# HIGH, and the fallback: matches the project.godot baseline.
 	return {
 		"atlas_size": 2048,
 		"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_HIGH,
 		"taa": true,
+		"msaa": 2,
 	}
 
 

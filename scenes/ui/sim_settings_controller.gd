@@ -231,6 +231,7 @@ func get_state_snapshot() -> Dictionary:
 		"volumetric_fog_enabled": _main_bool("get_volumetric_fog_enabled", false),
 		"tonemap_mode": _main_int("get_tonemap_mode", Environment.TONE_MAPPER_ACES),
 		"msaa_level": _main_int("get_msaa_level", 0),
+		"msaa_follows_preset": _main_bool("get_msaa_follows_preset", true),
 		"tonemap_exposure": _main_float("get_tonemap_exposure", 1.0),
 		"tonemap_white": _main_float("get_tonemap_white", 1.0),
 		"fog_amount": _main_float("get_fog_amount", 0.2),
@@ -475,6 +476,12 @@ func apply_tonemap_mode(mode: int) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_tonemap_mode"):
 		main.call("set_tonemap_mode", mode)
+
+
+func apply_msaa_follows_preset(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_msaa_follows_preset"):
+		main.call("set_msaa_follows_preset", on)
 
 
 func apply_msaa_level(level: int) -> void:
@@ -1036,6 +1043,7 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "volumetric_fog_enabled", main_node.call("get_volumetric_fog_enabled"))
 		cfg.set_value("rendering_adv", "tonemap_mode", main_node.call("get_tonemap_mode"))
 		cfg.set_value("rendering_adv", "msaa_level", main_node.call("get_msaa_level"))
+		cfg.set_value("rendering_adv", "msaa_follows_preset", main_node.call("get_msaa_follows_preset"))
 		cfg.set_value("rendering_adv", "tonemap_exposure", main_node.call("get_tonemap_exposure"))
 		cfg.set_value("rendering_adv", "tonemap_white", main_node.call("get_tonemap_white"))
 		cfg.set_value("rendering_adv", "fog_amount", main_node.call("get_fog_amount"))
@@ -1156,7 +1164,14 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 	if cfg.has_section_key("rendering_adv", "tonemap_mode"):
 		apply_tonemap_mode(int(cfg.get_value("rendering_adv", "tonemap_mode")))
 	if cfg.has_section_key("rendering_adv", "msaa_level"):
-		apply_msaa_level(int(cfg.get_value("rendering_adv", "msaa_level")))
+		# A file from before the preset carried MSAA: a level the player had
+		# raised is theirs, the old default (off) means "follow the preset".
+		var saved_msaa := int(cfg.get_value("rendering_adv", "msaa_level"))
+		var follows := bool(cfg.get_value("rendering_adv", "msaa_follows_preset", saved_msaa == 0))
+		if follows:
+			apply_msaa_follows_preset(true)
+		else:
+			apply_msaa_level(saved_msaa)
 	if cfg.has_section_key("rendering_adv", "tonemap_exposure"):
 		apply_tonemap_exposure(float(cfg.get_value("rendering_adv", "tonemap_exposure")))
 	if cfg.has_section_key("rendering_adv", "tonemap_white"):

@@ -595,6 +595,12 @@ func _build_footer() -> Control:
 	_place_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 	_place_btn.pressed.connect(_on_place)
 	row.add_child(_place_btn)
+	var crew_b := Button.new()
+	crew_b.text = "👷 Build with a crew"
+	crew_b.tooltip_text = "Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece"
+	UITheme.style_button(crew_b)
+	crew_b.pressed.connect(_on_crew_build)
+	row.add_child(crew_b)
 	var close_b := Button.new()
 	close_b.text = "Close"
 	UITheme.style_button(close_b)
@@ -1631,6 +1637,14 @@ func _status(text: String) -> void:
 	_status_text = text
 	if _export_status != null:
 		_export_status.text = text
+
+
+func _on_crew_build() -> void:
+	var r := CrewBuildRequest.queue_design(_main_node(), DomeLabBuilder.MODEL_ID, {"domelab_spec": DomeLabSpec.to_json_safe(_spec)})
+	if bool(r.get("ok", false)):
+		close()
+	else:
+		_status("The crew can't take it — %s." % str(r.get("error", "")))
 
 
 func _main_node() -> Node:

@@ -852,8 +852,18 @@ func _build_extreme_weather_tab(tabs: TabContainer) -> void:
 	_xw_rows_box.add_theme_constant_override("separation", 4)
 	_xw_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(_xw_rows_box)
+	# The hazards the game simulates first; the ones it only tracks for the
+	# risk profile under a closed fold, so a box that changes nothing on
+	# screen is not sitting beside the ones that do.
+	var later := Collapsible.make("Not simulated yet — tracked for the risk profile only", false,
+		"These show in your site's risk profile; their weather, light and energy effects are not built.")
+	later.body.add_theme_constant_override("separation", 4)
 	for id: String in HazardCatalog.ids():
-		_xw_add_hazard_row(_xw_rows_box, id)
+		if HazardCatalog.is_simulated(id):
+			_xw_add_hazard_row(_xw_rows_box, id)
+		else:
+			_xw_add_hazard_row(later.body, id)
+	v.add_child(later)
 
 	v.add_child(HSeparator.new())
 	_add_section_lbl(v, "Wind-blown dust")
@@ -1918,7 +1928,7 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_tonemap_mode = _add_option(v, "Tonemap", ["Linear", "Reinhard", "Filmic", "ACES", "AgX"], _on_tonemap_mode)
 	_tonemap_exposure = _add_slider(v, "Exposure", 0.1, 4.0, 0.05, _on_tonemap_exposure)
 	_tonemap_white = _add_slider(v, "Tonemap white", 0.1, 16.0, 0.1, _on_tonemap_white)
-	_msaa_mode = _add_option(v, "MSAA", ["Off", "2x", "4x", "8x"], _on_msaa_mode)
+	_msaa_mode = _add_option(v, "MSAA", ["Off", "2x", "4x", "8x", "Preset's"], _on_msaa_mode)
 	var msaa_hint := Label.new()
 	msaa_hint.text = "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."
 	msaa_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2320,7 +2330,8 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 	if _tonemap_mode:
 		_tonemap_mode.selected = clampi(int(snap.get("tonemap_mode", Environment.TONE_MAPPER_ACES)), 0, 4)
 	if _msaa_mode:
-		_msaa_mode.selected = clampi(int(snap.get("msaa_level", 0)), 0, 3)
+		_msaa_mode.selected = 4 if bool(snap.get("msaa_follows_preset", false)) \
+			else clampi(int(snap.get("msaa_level", 0)), 0, 3)
 	if _tonemap_exposure:
 		_tonemap_exposure.value = snap.get("tonemap_exposure", 1.0)
 	if _tonemap_white:
@@ -2736,7 +2747,10 @@ func _on_tonemap_mode(idx: int) -> void:
 
 func _on_msaa_mode(idx: int) -> void:
 	if _syncing: return
-	SimSettingsController.apply_msaa_level(idx)
+	if idx >= 4:
+		SimSettingsController.apply_msaa_follows_preset(true)
+	else:
+		SimSettingsController.apply_msaa_level(idx)
 
 func _on_tonemap_exposure(v: float) -> void:
 	if _syncing: return
