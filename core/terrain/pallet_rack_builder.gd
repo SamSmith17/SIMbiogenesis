@@ -1501,6 +1501,70 @@ static func bom(spec: Dictionary = {}) -> Dictionary:
 	return g.counts.duplicate()
 
 
+## The rack as the parts that ship, in metres and kg (PackKitter rows).
+## Counts come from bom(), so every drawn piece is shipped. Masses are
+## estimates: a 42" x 16' teardrop frame ~3.2 kg/m of height, a 12' beam
+## pair half ~20 kg, SPF 2x lumber ~1.0 kg/m, 3/4" plywood 4x8 ~28 kg.
+static func parts_for_packing(spec: Dictionary = {}) -> Array:
+	var s := resolve_spec(spec)
+	var c := bom(spec)
+	var m := _metrics(s)
+	var out: Array = []
+	var height := float(m["height"])
+	var depth := float(m["frame_depth"])
+	var span := float(s.get("beam_span_ft", 12)) * FT
+	var lum := float(s.get("lumber_len_ft", 12)) * FT
+	var n := int(c.get("uprights", 0))
+	if n > 0:
+		out.append(PackKitter.part("upright frame", "stick", height, depth, POST_W,
+			3.2 * height, n, {"group": "frames"}))
+	n = int(c.get("beams", 0))
+	if n > 0:
+		out.append(PackKitter.part("step beam", "stick", span, BEAM_H, BEAM_T,
+			1.6 * span, n, {"group": "beams"}))
+	n = int(c.get("lumber", 0))
+	if n > 0:
+		out.append(PackKitter.part("2x lumber", "stick", lum, 0.14, 0.038,
+			1.0 * lum, n, {"group": "lumber"}))
+	n = int(c.get("plywood", 0)) + int(c.get("glazing", 0))
+	if n > 0:
+		out.append(PackKitter.part("4x8 sheet", "sheet", SHEET_LONG, SHEET_SHORT, 0.018,
+			28.0, n, {"group": "sheets"}))
+	n = int(c.get("solar_panels", 0))
+	if n > 0:
+		out.append(PackKitter.part("solar module", "sheet", 1.76, 1.05, 0.035,
+			21.0, n, {"group": "pv", "fragile": true}))
+	n = int(c.get("doors", 0))
+	if n > 0:
+		out.append(PackKitter.part("door", "sheet", 2.1, 0.9, 0.05, 25.0, n,
+			{"group": "doors"}))
+	n = int(c.get("windows", 0))
+	if n > 0:
+		out.append(PackKitter.part("window", "piece", 1.2, 0.9, 0.08, 15.0, n,
+			{"fragile": true}))
+	n = int(c.get("stairs", 0))
+	if n > 0:
+		out.append(PackKitter.part("stair kit", "piece", 3.0, 1.0, 0.4, 80.0, n,
+			{"own_crate": true}))
+	n = int(c.get("ladders", 0))
+	if n > 0:
+		out.append(PackKitter.part("ladder", "stick", 3.0, 0.45, 0.08, 12.0, n))
+	var rail := float(c.get("railing_ft", 0.0))
+	if rail > 0.0:
+		out.append(PackKitter.part("railing lumber", "stick", lum, 0.09, 0.038,
+			0.8 * lum, int(ceil(rail * FT / lum)) * 2, {"group": "lumber"}))
+	var hw := float(c.get("beams", 0)) * 0.5 + float(c.get("lumber", 0)) * 0.3
+	if hw > 0.0:
+		var bags := maxi(1, int(ceil(hw / 20.0)))
+		out.append(PackKitter.part("fasteners + clips", "loose", 0.4, 0.3, 0.25,
+			hw / float(bags), bags))
+	return out
+
+
+static func packed_spec_for(spec: Dictionary = {}) -> Dictionary:
+	return PackKitter.envelope(PackKitter.kit(parts_for_packing(spec)), "bundle")
+
+
 # ---------------------------------------------------------------------------
 # Fused racks — several racks built as one, sharing the uprights where they meet
 # ---------------------------------------------------------------------------

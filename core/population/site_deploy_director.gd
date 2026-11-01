@@ -561,6 +561,10 @@ func _inventory(action: String) -> Array:
 				var door := _container_door_near(item["pos"] as Vector2)
 				if not door.is_empty():
 					item["loadout"] = door
+					if _loader.has_method("nearest_forklift_id"):
+						var fid := str(_loader.call("nearest_forklift_id", item["pos"] as Vector2))
+						if not fid.is_empty():
+							item["forklift_id"] = fid
 			if model_id == LinkageStructureBuilder.MODEL_ID and rec.get("linkage_spec") is Dictionary:
 				var p := LinkageParams.new()
 				p.from_config(rec.get("linkage_spec") as Dictionary)

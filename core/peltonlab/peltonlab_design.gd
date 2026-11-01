@@ -1013,7 +1013,56 @@ static func bom_csv(d: Dictionary) -> String:
 # ---------------------------------------------------------------------------
 
 ## A crate round the assembled machine.
+## The machine as it ships: the runner bolted up on its hub (one fragile
+## piece), the shaft, the housing panels flat, the generator, and the small
+## parts in a box.
+static func parts_for_packing(d: Dictionary) -> Array:
+	var s: Dictionary = d["spec"]
+	var ro: Dictionary = d["rotor"]
+	var rn: Dictionary = d["runner"]
+	var sh: Dictionary = d["shaft"]
+	var ms: Dictionary = d["mass"]
+	var out: Array = []
+	var tip_d := (float(ro["disc_r_mm"]) * 2.0 + float(rn.get("cup_w_mm", 80.0)) * 2.0) * 0.001
+	var width := maxf(float(rn.get("cup_w_mm", 80.0)) * 0.001, (float(ro["gap_mm"]) + 2.0 * float(ro["disc_t_mm"])) * 0.001) + 0.04
+	out.append(PackKitter.part("Runner (assembled)", "piece", tip_d, tip_d, width,
+		float(ms["rotating"]), 1, {"group": "runner", "fragile": true, "own_crate": tip_d > 0.6}))
+	var slen := (float(sh["x1_mm"]) - float(sh["x0_mm"])) * 0.001
+	var sd := float(sh["d_mm"]) * 0.001
+	out.append(PackKitter.part("Shaft", "stick", maxf(slen, 0.05), sd, sd, float(ms["shaft"]), 1,
+		{"group": "shaft", "round": true}))
+	var hsg: Dictionary = d["housing"]
+	var ax := float(hsg["axial_mm"]) * 0.001
+	var hy := float(hsg["hy_mm"]) * 0.002
+	var hz := float(hsg["hz_mm"]) * 0.002
+	var t := maxf(float(hsg["wall_mm"]) * 0.001, 0.002)
+	var area := 2.0 * (hy * hz) + ax * hz + 2.0 * ax * hy
+	var kg_m2 := float(ms["housing"]) / maxf(area, 1e-4)
+	out.append(PackKitter.part("Housing end wall", "sheet", maxf(hy, hz), minf(hy, hz), t, hy * hz * kg_m2, 2, {"group": "housing"}))
+	out.append(PackKitter.part("Housing top", "sheet", maxf(ax, hz), minf(ax, hz), t, ax * hz * kg_m2, 1, {"group": "housing"}))
+	out.append(PackKitter.part("Housing side", "sheet", maxf(ax, hy), minf(ax, hy), t, ax * hy * kg_m2, 2, {"group": "housing"}))
+	var gen: Dictionary = d["generator"]["spec"]
+	var gkg := float(gen["mass_kg"])
+	var gside := clampf(pow(maxf(gkg, 0.5) / 3000.0, 1.0 / 3.0) * 1.3, 0.08, 0.6)
+	out.append(PackKitter.part(str(gen.get("label", "Generator")), "piece", gside * 1.4, gside, gside, gkg, 1,
+		{"group": "generator", "this_side_up": true}))
+	var nb := (sh["bearings_x_mm"] as Array).size()
+	if nb > 0:
+		out.append(PackKitter.part("Bearing", "loose", 0.15, 0.1, 0.08, 2.5, nb, {"group": "hardware"}))
+	var jets := int(s["jets"]["count"])
+	if jets > 0:
+		out.append(PackKitter.part("Nozzle", "loose", 0.15, 0.06, 0.06, 0.4, jets, {"group": "hardware"}))
+	return out
+
+
 static func packed_spec(d: Dictionary) -> Dictionary:
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(d)), "crate")
+	if not env.is_empty():
+		return env
+	return _legacy_packed_spec(d)
+
+
+static func _legacy_packed_spec(d: Dictionary) -> Dictionary:
 	var a: AABB = d["aabb"]
 	var ext := a.size + Vector3.ONE * 0.08
 	return {"w_m": ext.x, "d_m": ext.z, "h_m": ext.y, "mass_kg": float(d["mass"]["total"]) + 8.0,

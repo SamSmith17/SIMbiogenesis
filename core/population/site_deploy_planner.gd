@@ -120,7 +120,27 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 		"effect": {"op": "pack_prop", "prop_id": pid},
 	}]
 	var lo: Dictionary = item.get("loadout", {})
-	if lo.has("x") and lo.has("z"):
+	var fid := str(item.get("forklift_id", lo.get("forklift_id", "")))
+	if lo.has("x") and lo.has("z") and not fid.is_empty() and item.get("pos") is Vector2 \
+			and SiteProject.crate_needs_forklift({"mass_kg": float(item.get("mass_kg", -1.0)),
+				"handling": str(item.get("handling", ""))}):
+		var src: Vector2 = item["pos"]
+		var door := Vector2(float(lo["x"]), float(lo["z"]))
+		var park := ForkliftPlanner.park_beside(door, src)
+		rows_p.append({
+			"task_id": "load_out", "label": "Forklift to the container — %s" % label,
+			"chore_hours": ForkliftPlanner.trip_hours(src.distance_to(door), 0.0), "priority": 3,
+			"min_workers": 1, "max_workers": 1, "exposure": "outdoor",
+			"depends_on": ["pack"], "target": target,
+			"carry_to": {"x": door.x, "z": door.y},
+			"forklift_id": fid,
+			"effect": {"op": "fork_move", "prop_id": pid, "forklift_id": fid,
+				"x": door.x, "z": door.y, "y_offset": 0.0, "collision_enabled": true,
+				"from_x": src.x, "from_z": src.y,
+				"park_x": park.x, "park_z": park.y,
+				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, door)},
+		})
+	elif lo.has("x") and lo.has("z"):
 		rows_p.append({
 			"task_id": "load_out", "label": "Carry to the container — %s" % label,
 			"chore_hours": 0.15, "priority": 3,

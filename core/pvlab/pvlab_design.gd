@@ -307,8 +307,49 @@ static func _kw(w: float) -> String:
 	return "%.0f W" % w if w < 1000.0 else "%.2f kW" % (w / 1000.0)
 
 
-## How it ships: the modules on edge in a crate plus the rack bundle.
+## What a crew handles: modules (fragile sheets), each rack member as a
+## stick, hardware / fasteners / cable as loose boxes. Masses from the BOM.
+static func parts_for_packing(d: Dictionary) -> Array:
+	var out: Array = []
+	var m: Dictionary = d["module"]
+	var n := (d["layout"]["panels"] as Array).size()
+	if n > 0:
+		var dm: Dictionary = m["dims_mm"]
+		out.append(PackKitter.part(str(m["name"]), "sheet", float(dm["h"]) * 0.001, float(dm["w"]) * 0.001,
+			maxf(float(dm["t"]), 2.0) * 0.001, PvLabModule.mass_kg(m), n,
+			{"group": "modules", "fragile": true, "own_crate": true}))
+	for mb in d["members"]:
+		var p := PvLabRack.profile(str(mb["profile"]))
+		var l := float(mb["len_m"])
+		if float(p["stock_m"]) <= 0.0:
+			var ballast := str(mb["profile"]) == "ballast"
+			out.append(PackKitter.part(str(p["label"]), "piece", 0.4 if ballast else 0.15, 0.2 if ballast else 0.1,
+				0.1 if ballast else 0.1, 16.0 if ballast else 0.4, 1, {"group": str(mb["profile"])}))
+			continue
+		if l <= 0.0:
+			continue
+		out.append(PackKitter.part(str(p["label"]), "stick", minf(l, 6.5), maxf(float(p["w"]) * 0.001, 0.02),
+			maxf(float(p["h"]) * 0.001, 0.02), l * float(p["kg_m"]), 1, {"group": str(mb["profile"])}))
+	var loose_kg := 0.0
+	for r in d["bom"]["rows"]:
+		var g := str(r["group"])
+		if g == "Hardware" or g == "Fasteners" or g == "Wiring":
+			loose_kg += float(r["kg"])
+	if loose_kg > 0.0:
+		out.append(PackKitter.part("Hardware, fasteners and cable", "loose", 0.4, 0.3, 0.25, loose_kg, 1, {}))
+	return out
+
+
+## How it ships: the kitter's handling units, or the old single crate.
 static func packed_spec(d: Dictionary) -> Dictionary:
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(d)), "crate")
+	if not env.is_empty():
+		return env
+	return _legacy_packed_spec(d)
+
+
+## The modules on edge in a crate plus the rack bundle (pre-kitter).
+static func _legacy_packed_spec(d: Dictionary) -> Dictionary:
 	var m: Dictionary = d["module"]
 	var n := (d["layout"]["panels"] as Array).size()
 	var w := float(m["dims_mm"]["h"]) * 0.001 + 0.1

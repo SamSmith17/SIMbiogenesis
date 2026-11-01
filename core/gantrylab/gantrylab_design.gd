@@ -381,8 +381,48 @@ static func graph_preset(s: Dictionary, d: Dictionary) -> Dictionary:
 		"width": 150.0, "height": 130.0, "specs": specs}
 
 
-## The shipping spec: the extrusion bundle plus the boxed parts.
+## What the machine ships as: every cut extrusion as a stick, the motors,
+## boards, tool and plates as pieces, fasteners loose (PackKitter kits them).
+static func parts_for_packing(d: Dictionary) -> Array:
+	var out: Array = []
+	var bom: Dictionary = d.get("bom", {})
+	for c in bom.get("cut_list", []):
+		var pf: Dictionary = GantryLabParts.profile(str(c.get("profile", "")))
+		var l := float(c.get("len_mm", 0.0)) * 0.001
+		var q := int(c.get("qty", 0))
+		if l <= 0.0 or q <= 0:
+			continue
+		var w := maxf(float(pf.get("w_mm", 20.0)) * 0.001, 0.01)
+		var h := maxf(float(pf.get("h_mm", 20.0)) * 0.001, 0.01)
+		out.append(PackKitter.part("%s × %d mm" % [str(pf.get("label", "Extrusion")), int(c["len_mm"])],
+			"stick", l, w, h, float(pf.get("kg_m", 0.5)) * l, q, {"group": "extrusion"}))
+	for r in bom.get("rows", []):
+		var cat := str(r.get("cat", ""))
+		var kg := float(r.get("kg", 0.0))
+		var q := int(maxf(float(r.get("qty", 1)), 1.0))
+		var item := str(r.get("item", ""))
+		if cat == "Frame" and str(r.get("unit", "")) == "pc" and item.ends_with(" m"):
+			continue
+		if kg <= 0.0:
+			continue
+		if cat == "Fasteners" or kg < 0.05:
+			out.append(PackKitter.part(item, "loose", 0.05, 0.03, 0.02, kg, q, {}))
+			continue
+		var side := clampf(pow(kg / 1500.0, 1.0 / 3.0), 0.05, 0.6)
+		out.append(PackKitter.part(item, "piece", side * 1.4, side, side * 0.8, kg, q,
+			{"fragile": cat == "Electronics"}))
+	return out
+
+
+## The shipping spec: the kit's units, else the old single bundle.
 static func packed_spec(d: Dictionary) -> Dictionary:
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(d)), "bundle")
+	if not env.is_empty():
+		return env
+	return _legacy_packed_spec(d)
+
+
+static func _legacy_packed_spec(d: Dictionary) -> Dictionary:
 	var bom: Dictionary = d["bom"]
 	var longest := 0.0
 	var n := 0

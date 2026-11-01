@@ -119,6 +119,8 @@ var _spotlight: Dictionary = {}
 ## completion effect); never the persisted hidden_3d key either, which
 ## belongs to the placeholder-twins feature.
 var _carried_state: Dictionary = {}
+# Forklift prop id -> {xf} snapshot taken when an operator first drove it.
+var _forked_state: Dictionary = {}
 ## In-world work-site markers (Site Projects): an amber disc + readout at each
 ## ACTIVE crew site, mirroring the Site Plan's crew markers so a build is
 ## legible from the ground too. Pooled, refreshed on a coarse cadence.
@@ -191,7 +193,14 @@ func _process_avatars(delta: float) -> void:
 	# REAL prop is in hand (suppress the generic chest box) and whether this is
 	# a team lift (low-hold posture).
 	var carry_group_of: Dictionary = {}   # agent_id -> group size
+	var forked: Dictionary = {}   # forklift prop_id -> {aid, load}
 	for dot_v in dots:
+		if dot_v is Dictionary and not str((dot_v as Dictionary).get("fork_id", "")).is_empty():
+			var fd := dot_v as Dictionary
+			forked[str(fd.get("fork_id", ""))] = {
+				"aid": str(fd.get("id", "")),
+				"load": str(fd.get("carry_prop", "")) if bool(fd.get("carrying", false)) else ""}
+			continue
 		if dot_v is Dictionary and bool((dot_v as Dictionary).get("carrying", false)):
 			var cp0 := str((dot_v as Dictionary).get("carry_prop", ""))
 			if not cp0.is_empty():
@@ -400,7 +409,7 @@ func _process_avatars(delta: float) -> void:
 				"color": dot.get("color", Color.WHITE), "morale": float(dot.get("morale", 0.7)),
 				"hidden": bool(dot.get("stood_in", false))})
 		_crowd_renderer.call("set_full_people", crowd_entries, now_h)
-	_follow_carried_props(carried)
+	_follow_carried_props(carried, _follow_forklifts(forked))
 	_crew_marker_accum += delta
 	if _crew_marker_accum >= CREW_MARKER_REFRESH_S:
 		_crew_marker_accum = 0.0
@@ -580,6 +589,10 @@ const CARRY_BASE_SOLO_M := 0.72
 const CARRY_BASE_TEAM_M := 0.40
 ## Solo: the load is held out in front of the carrier.
 const CARRY_AHEAD_M := 0.32
+## A forklift's centre sits this far ahead of its operator (who stands in the
+## cab at the rear), and the forks ride this high while loaded.
+const FORK_OPERATOR_AHEAD_M := 1.0
+const FORK_CARRY_LIFT_M := 0.15
 
 
 ## Carried props RIDE THE CARRIERS' HANDS. The real prop node (not a proxy
@@ -596,9 +609,23 @@ const CARRY_AHEAD_M := 0.32
 ## moved the record and rebuilt the node at its new home — snapping THAT back
 ## to the container would undo the delivery). Re-asserted every frame, so a
 ## prop rebuild mid-carry self-heals next frame.
-func _follow_carried_props(carried: Dictionary) -> void:
-	if carried.is_empty() and _carried_state.is_empty():
+func _follow_carried_props(carried: Dictionary, fork_loads: Dictionary = {}) -> void:
+	if carried.is_empty() and fork_loads.is_empty() and _carried_state.is_empty():
 		return
+	for fpid in fork_loads:
+		var lnode := _find_prop_node(str(fpid))
+		if lnode == null:
+			continue
+		if not _carried_state.has(fpid):
+			_carried_state[fpid] = {"xf": lnode.global_transform}
+		var anchor: Transform3D = fork_loads[fpid]
+		lnode.visible = true
+		if lnode.has_method("set_collision_enabled"):
+			lnode.set_collision_enabled(false)
+		lnode.global_position = anchor.origin
+		var lmr := lnode.get_node_or_null("ModelRoot")
+		var lmodel_yaw := (lmr as Node3D).rotation.y if lmr is Node3D else 0.0
+		lnode.rotation = Vector3(0.0, anchor.basis.get_euler().y - lmodel_yaw, 0.0)
 	for pid in carried:
 		var node := _find_prop_node(str(pid))
 		if node == null:
@@ -639,7 +666,7 @@ func _follow_carried_props(carried: Dictionary) -> void:
 		var model_yaw := (mr as Node3D).rotation.y if mr is Node3D else 0.0
 		node.rotation = Vector3(0.0, want_yaw - model_yaw, 0.0)
 	for pid in _carried_state.keys():
-		if carried.has(pid):
+		if carried.has(pid) or fork_loads.has(pid):
 			continue
 		var st: Dictionary = _carried_state[pid]
 		var node2 := _find_prop_node(str(pid))
@@ -659,10 +686,66 @@ func _follow_carried_props(carried: Dictionary) -> void:
 		_carried_state.erase(pid)
 
 
+## A forklift on a `fork_move` chore follows its operator: the operator stands
+## at the rear, the forks point the way they face, the mast lifts while
+## loaded. Returns {load prop_id: fork-top Transform3D} for the load to ride.
+## Released forklifts go back to their snapshot unless the completion effect
+## already parked them (same rule as carried props).
+func _follow_forklifts(forked: Dictionary) -> Dictionary:
+	var loads: Dictionary = {}
+	if forked.is_empty() and _forked_state.is_empty():
+		return loads
+	for fid in forked:
+		var node := _find_prop_node(str(fid))
+		if node == null:
+			continue
+		var info: Dictionary = forked[fid]
+		var av: NpcAvatar = _avatars.get(str(info.get("aid", "")))
+		if av == null or not is_instance_valid(av) or not av.visible:
+			continue
+		if not _forked_state.has(fid):
+			_forked_state[fid] = {"xf": node.global_transform}
+		if node.has_method("set_collision_enabled"):
+			node.set_collision_enabled(false)
+		var yaw := av.rotation.y
+		var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		node.global_position = av.global_position + fwd * FORK_OPERATOR_AHEAD_M
+		var mr := node.get_node_or_null("ModelRoot")
+		var model_yaw := (mr as Node3D).rotation.y if mr is Node3D else 0.0
+		node.rotation = Vector3(0.0, yaw - model_yaw, 0.0)
+		var load_id := str(info.get("load", ""))
+		var rig := node.find_child("ForkliftRig", true, false)
+		if rig != null and rig.has_method("set_operated"):
+			rig.call("set_operated", FORK_CARRY_LIFT_M if not load_id.is_empty() else 0.0,
+				not load_id.is_empty())
+			if not load_id.is_empty() and rig.has_method("load_anchor"):
+				var anchor_v: Variant = rig.call("load_anchor")
+				if anchor_v is Node3D:
+					loads[load_id] = (anchor_v as Node3D).global_transform
+	for fid in _forked_state.keys():
+		if forked.has(fid):
+			continue
+		var st: Dictionary = _forked_state[fid]
+		var node2 := _find_prop_node(str(fid))
+		if node2 != null and is_instance_valid(node2):
+			var rig2 := node2.find_child("ForkliftRig", true, false)
+			if rig2 != null and rig2.has_method("release_operated"):
+				rig2.call("release_operated")
+			var rec := PlacedPropService.get_prop_record(_main, str(fid))
+			var xf: Transform3D = st.get("xf", Transform3D.IDENTITY)
+			var rec_at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+			if rec.is_empty() or (rec_at - Vector2(xf.origin.x, xf.origin.z)).length() < 0.5:
+				node2.global_transform = xf
+				if node2.has_method("set_collision_enabled"):
+					node2.set_collision_enabled(bool(rec.get("collision_enabled", true)))
+		_forked_state.erase(fid)
+	return loads
+
+
 func _exit_tree() -> void:
 	# The host dying mid-carry (view closed, map change) must not leave crates
 	# floating in mid-air or non-colliding until the next full prop rebuild.
-	_follow_carried_props({})
+	_follow_carried_props({}, _follow_forklifts({}))
 
 
 func _find_prop_node(prop_id: String) -> Node3D:
@@ -1079,6 +1162,9 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 	# The per-agent cache only re-queries when the body moved 0.35 m.
 	if cur != Vector3.ZERO and Vector2(next.x, next.z).distance_to(sim_pos) > GROUND_MOVE_EPS_M:
 		next.y = _ground_y(aid + "|draw", Vector2(next.x, next.z)) + elev
+	# An operator on a forklift drives it; the load rides the forks, not
+	# the operator's arms.
+	var on_fork := str(dot.get("fork_id", "")) != ""
 	av.apply_pose(next, yaw, {
 		"dt": delta,
 		"paused": scale <= 0.0,
@@ -1096,15 +1182,16 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		"morale": float(dot.get("morale", 1.0)),
 		"dwell_left_s": _dwell_left_s(dot),
 		"teleported": teleported,
-		"carrying": bool(dot.get("carrying", false)),
+		# A forklift operator's load rides the forks, not their arms.
+		"carrying": bool(dot.get("carrying", false)) and not on_fork,
 		# The REAL prop rides the carriers' hands (see _follow_carried_props)
 		# — the avatar suppresses its generic chest box so the load is not
 		# drawn twice. Brigade station workers have no carry_prop and keep
 		# the generic box.
-		"carry_prop_live": bool(dot.get("carrying", false))
+		"carry_prop_live": bool(dot.get("carrying", false)) and not on_fork
 			and not str(dot.get("carry_prop", "")).is_empty(),
 		# Two or more sets of hands on one load = the low team-lift posture.
-		"carry_heavy": int(_carry_group_of.get(aid, 0)) >= 2,
+		"carry_heavy": int(_carry_group_of.get(aid, 0)) >= 2 and not on_fork,
 		"work_pose": str(dot.get("work_pose", "")),
 	})
 

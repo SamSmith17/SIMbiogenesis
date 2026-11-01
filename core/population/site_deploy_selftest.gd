@@ -12,7 +12,7 @@ extends SceneTree
 ## prints). Run --import first.
 ##   godot --headless --path . --script core/population/site_deploy_selftest.gd
 
-const EXPECTED_CHECKS := 78
+const EXPECTED_CHECKS := 80
 
 var _failures := 0
 var _checks := 0
@@ -212,6 +212,19 @@ func _test_planner_rows() -> void:
 		and (lrows2[2]["depends_on"] as Array) == ["pack"]
 		and str((lrows2[2]["effect"] as Dictionary).get("op", "")) == "move_prop"
 		and absf(float((lrows2[2]["carry_to"] as Dictionary)["x"]) - 12.0) < 1e-9)
+	# A heavy kit with a forklift in reach goes out on the forks.
+	var heavy := _item("p_heavy", "shiftpod", 900.0)
+	heavy["loadout"] = {"x": 12.0, "z": -3.0}
+	heavy["forklift_id"] = "p_fork"
+	var hrows := SiteDeployPlanner.rows_for(heavy, SiteDeploySchedule.ACTION_PACKUP, 6)
+	var heff: Dictionary = hrows[hrows.size() - 1]["effect"]
+	_check("a heavy pack-up goes to the door on the forklift",
+		str(heff.get("op", "")) == "fork_move" and str(heff.get("forklift_id", "")) == "p_fork"
+		and absf(float(heff["x"]) - 12.0) < 1e-9 and heff.has("park_yaw"))
+	pod2["forklift_id"] = "p_fork"
+	var lrows3 := SiteDeployPlanner.rows_for(pod2, SiteDeploySchedule.ACTION_PACKUP, 6)
+	_check("a light kit is still carried by hand with a forklift around",
+		str((lrows3[2]["effect"] as Dictionary).get("op", "")) == "move_prop")
 	link["loadout"] = {"x": 1.0, "z": 2.0}
 	_check("a linkage pack-up carries its crate out too",
 		_ids(SiteDeployPlanner.rows_for(link, SiteDeploySchedule.ACTION_PACKUP, 8)).has("load_out"))

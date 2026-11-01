@@ -41,6 +41,16 @@ const SCENARIOS := {
 			{"model_id": "linkage_structure", "count": 1, "linkage_default": true},
 		],
 	},
+	"workshop_pallets": {
+		"label": "Workshop Machines Delivery",
+		"notes": "The plastic workshop on pallets: the sheet press needs a forklift.",
+		"container_id": "container_20",
+		"units": [
+			{"model_id": "pp_sheet_press", "count": 1},
+			{"model_id": "pp_beam_extruder", "count": 1},
+			{"model_id": "pp_shredder", "count": 1},
+		],
+	},
 }
 
 ## Crates land in a tight stack at the container DOOR; each carries the

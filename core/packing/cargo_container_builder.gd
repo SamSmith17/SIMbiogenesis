@@ -47,6 +47,59 @@ static func build_node(spec: Dictionary = {}, node_name: String = "CargoContaine
 	return root
 
 
+## An IntermodalUnits container entry (any size, open top, flat rack).
+static func build_from_entry(entry: Dictionary, node_name: String = "IntermodalUnit") -> Node3D:
+	var e: Dictionary = entry.get("exterior", {})
+	var l := float(e.get("l_m", 6.058))
+	var w := float(e.get("w_m", 2.438))
+	var h := float(e.get("h_m", 2.591))
+	var p: Dictionary = entry.get("params", {})
+	var root := Node3D.new()
+	root.name = node_name
+	var mesh := ArrayMesh.new()
+	if bool(p.get("flat_rack", false)):
+		_build_flat_rack_surface(mesh, l, w, h)
+	else:
+		_build_shell_surface(mesh, l, w, h)
+		if bool(p.get("open_top", false)):
+			_build_tarp_surface(mesh, l, w, h)
+		_build_door_surface(mesh, l, w, h)
+	var mi := MeshInstance3D.new()
+	mi.name = "Mesh"
+	mi.mesh = mesh
+	root.add_child(mi)
+	return root
+
+
+## Open top: a canvas tarp roped over the top rails.
+static func _build_tarp_surface(mesh: ArrayMesh, l: float, w: float, h: float) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_box(st, Vector3(0.0, h + 0.03, 0.0), Vector3(w - 0.06, 0.06, l - 0.06))
+	st.commit(mesh)
+	var m := _make_material(Color(0.20, 0.32, 0.22))
+	m.metallic = 0.0
+	m.roughness = 0.95
+	mesh.surface_set_material(mesh.get_surface_count() - 1, m)
+
+
+## Flat rack: a deep steel deck with a folding end wall at each end.
+static func _build_flat_rack_surface(mesh: ArrayMesh, l: float, w: float, h: float) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var deck := 0.62
+	_add_box(st, Vector3(0.0, deck * 0.5, 0.0), Vector3(w, deck, l))
+	for sz in [-1.0, 1.0]:
+		var zc: float = sz * (l * 0.5 - 0.12)
+		_add_box(st, Vector3(0.0, deck + (h - deck) * 0.5, zc),
+			Vector3(w, h - deck, 0.24))
+		for sx in [-1.0, 1.0]:
+			_add_box(st, Vector3(sx * (w - CASTING_M) * 0.5, h - CASTING_M * 0.5, zc),
+				Vector3(CASTING_M, CASTING_M, 0.26))
+	st.commit(mesh)
+	mesh.surface_set_material(mesh.get_surface_count() - 1, _make_material(SHELL_COLOR))
+
+
 static func _make_material(color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color

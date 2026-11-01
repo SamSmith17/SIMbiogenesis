@@ -56,12 +56,12 @@ static func from_prop_records(props: Array) -> Array:
 			continue
 		var d := rec as Dictionary
 		var model_id := str(d.get("model_id", ""))
-		var spec: Dictionary = {}
-		if d.get("linkage_spec") is Dictionary:
+		var spec: Dictionary = PlacedPropRuntime.packed_spec_for_record(d)
+		if spec.is_empty() and d.get("linkage_spec") is Dictionary:
 			var p := LinkageParams.new()
 			p.from_config(d.get("linkage_spec") as Dictionary)
 			spec = LinkageStructureBuilder.packed_spec_for(p)
-		elif d.get("container_spec") is Dictionary:
+		elif spec.is_empty() and d.get("container_spec") is Dictionary:
 			spec = ContainerCatalog.packed_spec_for(
 				str((d.get("container_spec") as Dictionary).get("container_id", "")))
 		if spec.is_empty():
@@ -69,8 +69,15 @@ static func from_prop_records(props: Array) -> Array:
 		if spec.is_empty():
 			continue
 		var entry := ModelCatalog.find(model_id)
-		out.append({"label": str(entry.get("label", model_id)), "spec": spec,
-			"qty": 1})
+		var base := str(entry.get("label", model_id))
+		var kit := PackKitter.is_kit(spec)
+		for u in PackKitter.units_of(spec):
+			var ud := u as Dictionary
+			var label := base
+			if kit:
+				label = "%s · %s" % [base, str(ud.get("label", "unit"))]
+			out.append({"label": label, "spec": ud,
+				"qty": maxi(1, int(ud.get("qty", 1)))})
 	return out
 
 

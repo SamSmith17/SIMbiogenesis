@@ -12,7 +12,7 @@ extends SceneTree
 ## trip, the fabrication files and every built-in design without an error.
 ##   Godot --headless --path . --script core/toroidlab/toroidlab_selftest.gd
 
-const EXPECTED_CHECKS := 85
+const EXPECTED_CHECKS := 86
 
 var _checks := 0
 var _fails := 0
@@ -252,7 +252,12 @@ func _test_builder() -> void:
 	_ok(me.get_aabb().end.y > aabb.end.y + 0.3, "explode lifts the panels off")
 	ne.free()
 	var ps := ToroidLabDesign.packed_spec(d)
-	_ok(float(ps["w_m"]) > 2.0 and float(ps["w_m"]) < 3.0 and float(ps["mass_kg"]) > 300.0, "packs to a bundle (%s)" % str(ps))
+	_ok(float(ps["w_m"]) > 2.0 and float(ps["w_m"]) < 4.5 and float(ps["mass_kg"]) > 300.0, "packs to a kit (%s)" % str(ps))
+	var heavy_box := false
+	for u in ps.get("contains", []):
+		if str(u.get("label", "")).begins_with("Hardware") and float(u["mass_kg"]) > 26.0:
+			heavy_box = true
+	_ok(int(ps.get("units", 0)) > 3 and not heavy_box, "kit splits into units, hardware boxes ≤ 25 kg")
 
 
 func _test_spec_and_files() -> void:

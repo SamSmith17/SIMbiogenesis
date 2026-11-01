@@ -265,9 +265,14 @@ const BRIGADE_MIN_CRATES := 4
 const BRIGADE_MIN_CREW := 4
 
 static func unload_spec_rows(crates: Array, from: Vector2, roster: int,
-		force_strategy: String = "") -> Dictionary:
+		force_strategy: String = "", forklift_id: String = "") -> Dictionary:
 	if crates.is_empty():
 		return {"rows": [], "strategy": "none", "plan": {}}
+	if not forklift_id.is_empty():
+		var forked := _unload_with_forklift(crates, from, roster,
+			force_strategy, forklift_id)
+		if not forked.is_empty():
+			return forked
 	var mean_route := 0.0
 	var centre := Vector2.ZERO
 	for c in crates:
@@ -357,6 +362,105 @@ static func unload_spec_rows(crates: Array, from: Vector2, roster: int,
 	})
 	return {"rows": rows, "strategy": "brigade" if brigade else "round_trip",
 		"plan": plan, "centre": centre}
+
+
+## True when a crate goes by forklift: too heavy for a team lift (or a
+## pallet / IBC), and inside the truck's rated capacity.
+static func crate_needs_forklift(cd: Dictionary) -> bool:
+	var m := float(cd.get("mass_kg", 0.0))
+	var by_mass := PackKitter.handling_for(m) == "forklift"
+	var flagged := str(cd.get("handling", "")) == "forklift"
+	return (by_mass or flagged) and ForkliftPlanner.can_carry(maxf(m, 1.0))
+
+
+## The unload with a forklift on site: every unit too heavy to lift is one
+## operator trip (in order — there is one machine), the rest go by hand as
+## before. {} when nothing needs the truck, so the caller's path is unchanged.
+static func _unload_with_forklift(crates: Array, from: Vector2, roster: int,
+		force_strategy: String, forklift_id: String) -> Dictionary:
+	var fork_idx: Array = []
+	var hand: Array = []
+	for i in crates.size():
+		var cd := crates[i] as Dictionary
+		if crate_needs_forklift(cd):
+			fork_idx.append(i)
+		else:
+			hand.append(cd)
+	if fork_idx.is_empty():
+		return {}
+	var rows: Array = []
+	var gate_deps: Array = []
+	var hand_strategy := "none"
+	var plan: Dictionary = {}
+	if not hand.is_empty():
+		var hr := unload_spec_rows(hand, from, roster, force_strategy)
+		hand_strategy = str(hr.get("strategy", "round_trip"))
+		plan = hr.get("plan", {})
+		for r in hr.get("rows", []):
+			var row := r as Dictionary
+			if str(row.get("task_id", "")) == "unloaded":
+				continue
+			var tid0 := "hand_" + str(row.get("task_id", ""))
+			var row2 := row.duplicate(true)
+			row2["task_id"] = tid0
+			var deps: Array = []
+			for d in row.get("depends_on", []):
+				deps.append("hand_" + str(d))
+			if not deps.is_empty():
+				row2["depends_on"] = deps
+			rows.append(row2)
+			gate_deps.append(tid0)
+	var centre := Vector2.ZERO
+	for c in crates:
+		centre += (c as Dictionary).get("stage", Vector2.ZERO)
+	centre /= float(crates.size())
+	var prev := ""
+	var max_pri := 1
+	for r2 in rows:
+		max_pri = maxi(max_pri, int((r2 as Dictionary).get("priority", 1)))
+	for k in fork_idx.size():
+		var i: int = fork_idx[k]
+		var cd2 := crates[i] as Dictionary
+		var pid := str(cd2.get("pid", ""))
+		var stg: Vector2 = cd2.get("stage", Vector2.ZERO)
+		var park := ForkliftPlanner.park_beside(stg, from)
+		var tid := "fork_%d" % i
+		var row3 := {
+			"task_id": tid,
+			"label": "Forklift — %s" % str(cd2.get("label", "unit")),
+			"chore_hours": ForkliftPlanner.trip_hours(from.distance_to(stg),
+				float(cd2.get("lift_m", 0.0))),
+			"priority": 1 + i,
+			"min_workers": 1, "max_workers": 1,
+			"exposure": "outdoor",
+			"target": {"kind": "prop", "id": pid},
+			"carry_to": {"x": stg.x, "z": stg.y},
+			"forklift_id": forklift_id,
+			"effect": {"op": "fork_move", "prop_id": pid,
+				"forklift_id": forklift_id, "x": stg.x, "z": stg.y,
+				"y_offset": 0.0, "collision_enabled": true,
+				"from_x": from.x, "from_z": from.y,
+				"park_x": park.x, "park_z": park.y,
+				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, stg)},
+		}
+		if not prev.is_empty():
+			row3["depends_on"] = [prev]
+		rows.append(row3)
+		gate_deps.append(tid)
+		prev = tid
+		max_pri = maxi(max_pri, 1 + i)
+	rows.append({
+		"task_id": "unloaded",
+		"label": "Delivery unloaded",
+		"chore_hours": 0.05,
+		"priority": max_pri + 1,
+		"min_workers": 1, "max_workers": 1,
+		"exposure": "outdoor",
+		"depends_on": gate_deps,
+	})
+	return {"rows": rows,
+		"strategy": "forklift" if hand.is_empty() else hand_strategy,
+		"plan": plan, "centre": centre, "forklift_units": fork_idx.size()}
 
 
 ## Breakdown plan (the reverse lifecycle): strip panels → unbolt → fold &

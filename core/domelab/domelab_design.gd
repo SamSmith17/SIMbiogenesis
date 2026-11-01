@@ -487,10 +487,114 @@ static func _checks(d: Dictionary, warnings: Array) -> Array:
 # Queries
 # ---------------------------------------------------------------------------
 
-## Where everything packs: a strut bundle (longest strut × the bundle's
-## square section), the panel stack and the hub box, as ONE envelope. Metres
-## and kg (PackedSpec units).
+## Every part the crew handles, as PackKitter rows: struts / slats / rib
+## segments as sticks, panels (and glazing panes) as sheets, hubs as pieces,
+## fasteners loose. Masses split the BOM's own totals, so the kit weighs
+## what the bill of materials says.
+static func parts_for_packing(design: Dictionary) -> Array:
+	var s: Dictionary = design["spec"]
+	var bom: Dictionary = design.get("bom", {})
+	var mat := DomeLabMaterials.strut(str(s["strut"]["material"]))
+	var w_m := maxf(DomeLabMaterials.strut_width_mm(mat), 5.0) / 1000.0
+	var sticks: Array = []
+	var stick_len := 0.0
+	for st in design.get("struts", []):
+		var L := float(st["cut"])
+		if L > 0.0:
+			sticks.append([str(st.get("class", st.get("label", "Strut"))), L, w_m])
+			stick_len += L
+	var nex: Dictionary = design.get("nexorade", {})
+	if not (nex.get("nexors", []) as Array).is_empty():
+		var sw := maxf(DomeLabMaterials.strut_width_mm(nex.get("slat", mat)), 5.0) / 1000.0
+		for nx in nex["nexors"]:
+			var L := float(nx["len"])
+			if L > 0.0:
+				sticks.append(["Slat", L, sw])
+				stick_len += L
+	for rb in design.get("ribs", []):
+		for sg in rb["segs"]:
+			var L := float(sg["arc"])
+			if L > 0.0:
+				sticks.append(["Rib segment", L, w_m])
+				stick_len += L
+	var parts: Array = []
+	var stick_kg := maxf(float(bom.get("strut_mass_kg", 0.0)), 0.0)
+	var pn: Dictionary = design.get("panels", {})
+	var panels: Array = pn.get("panels", [])
+	var t_mm := float(pn.get("t_mm", (pn.get("material", {}) as Dictionary).get("t_mm", 3.0)))
+	var flange := float(pn.get("flange_mm", 0.0))
+	var sheet_t := (t_mm + flange * 0.5) / 1000.0 if str(s["system"]) == "plate" else t_mm / 1000.0
+	var glaze_kg_m2 := float((pn.get("glazing", {}) as Dictionary).get("kg_m2", 0.0))
+	var pane_area := float(pn.get("pane_area_m2", 0.0))
+	var glaze_kg := glaze_kg_m2 * pane_area
+	var panel_kg := maxf(float(bom.get("panel_mass_kg", pn.get("mass_kg", 0.0))) - glaze_kg, 0.0)
+	var hub_kg := maxf(float(bom.get("hub_mass_kg", 0.0)), 0.0)
+	var fast_kg := maxf(float(bom.get("fastener_mass_kg", 0.0)), 0.0)
+	var total := maxf(float(bom.get("mass_kg", 0.0)), 0.0)
+	var leftover := total - stick_kg - panel_kg - glaze_kg - hub_kg - fast_kg
+	if leftover > 0.0:
+		if not sticks.is_empty():
+			stick_kg += leftover
+		elif not panels.is_empty():
+			panel_kg += leftover
+		else:
+			hub_kg += leftover
+	for st in sticks:
+		var kg: float = stick_kg * float(st[1]) / maxf(stick_len, 1e-6)
+		parts.append(PackKitter.part(str(st[0]), "stick", float(st[1]), float(st[2]),
+			float(st[2]), kg, 1, {"group": "frame"}))
+	var sheet_area := 0.0
+	for p in panels:
+		var bb: Rect2 = p["bbox"]
+		sheet_area += bb.size.x * bb.size.y / 1e6
+	for p in panels:
+		var bb: Rect2 = p["bbox"]
+		var a := bb.size.x * bb.size.y / 1e6
+		parts.append(PackKitter.part(str(p.get("label", "Panel")), "sheet",
+			maxf(bb.size.x, bb.size.y) / 1000.0, minf(bb.size.x, bb.size.y) / 1000.0,
+			maxf(sheet_t, 0.001), panel_kg * a / maxf(sheet_area, 1e-6), 1, {"group": "panels"}))
+	if glaze_kg > 0.0:
+		var n_pane := 0
+		for p in panels:
+			if p.get("pane", null) != null:
+				n_pane += 1
+		n_pane = maxi(n_pane, int(pn.get("panes", 0)))
+		if n_pane > 0:
+			var side := sqrt(pane_area / float(n_pane))
+			parts.append(PackKitter.part("Glazing pane", "sheet", side, side, 0.006,
+				glaze_kg / float(n_pane), n_pane, {"group": "glazing", "fragile": true}))
+	var hub_n := 0
+	for h in design.get("hub_types", []):
+		hub_n += int(h.get("count", 0))
+	if hub_n > 0 and hub_kg > 0.0:
+		var hs := clampf(w_m * 3.0, 0.06, 0.4)
+		for h in design["hub_types"]:
+			var c := int(h.get("count", 0))
+			if c > 0:
+				parts.append(PackKitter.part("Hub " + str(h.get("label", "")), "piece",
+					hs, hs, hs * 0.6, hub_kg / float(hub_n), c, {"group": "hubs"}))
+	var fq := int(bom.get("bolts", 0)) + int(bom.get("washers", 0)) + int(bom.get("screws", 0)) \
+		+ int(bom.get("nuts", 0))
+	if fq > 0 and fast_kg > 0.0:
+		parts.append(PackKitter.part("Fasteners", "loose", 0.05, 0.02, 0.02,
+			fast_kg / float(fq), fq, {"group": "hardware"}))
+	return parts
+
+
+## Where everything packs: the kit PackKitter makes from parts_for_packing,
+## as one envelope whose `contains` lists the handling units. Metres and kg.
 static func packed_spec(design: Dictionary) -> Dictionary:
+	var s: Dictionary = design["spec"]
+	var form0 := "panel_stack" if str(s["system"]) == "plate" else "bundle"
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(design)), form0)
+	if not env.is_empty():
+		env["source"] = "computed"
+		env["count"] = 1
+		return env
+	return _legacy_packed_spec(design)
+
+
+static func _legacy_packed_spec(design: Dictionary) -> Dictionary:
 	var s: Dictionary = design["spec"]
 	var mat := DomeLabMaterials.strut(str(s["strut"]["material"]))
 	var longest := 0.0

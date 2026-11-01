@@ -513,6 +513,19 @@ static func packed_spec_for(p: LinkageParams) -> Dictionary:
 	})
 
 
+## The parts a crew handles when this design is packed (PackKitter input):
+## one strapped folded bundle per radial copy. The bundle IS the handling
+## unit (no crate), so the kitted envelope matches packed_spec_for.
+static func parts_for_packing(p: LinkageParams) -> Array:
+	var spec := packed_spec_for(p)
+	if spec.is_empty():
+		return []
+	return [PackKitter.part("Folded frame", "piece", float(spec["w_m"]),
+		float(spec["d_m"]), float(spec["h_m"]), float(spec["mass_kg"]),
+		int(spec.get("count", 1)),
+		{"own_crate": true, "no_crate": true, "form": "folded"})]
+
+
 ## Stats for the designer HUD (imperial from the frame; metric convenience).
 func get_stats() -> Dictionary:
 	if _last_frame.is_empty():

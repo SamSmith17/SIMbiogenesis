@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_test_container_builder()
 	_test_solver_known_answers()
 	_test_solver_constraints()
+	_test_solver_load_rules()
 	_test_manifest()
 	_test_pack_tree()
 	_test_pack_defs()
@@ -44,6 +45,12 @@ func _initialize() -> void:
 	_test_stow_plan()
 	_test_crew_plan()
 	_test_manifest_export()
+	_test_kitter()
+	_test_rack_kit()
+	_test_intermodal()
+	_test_palletizer()
+	_test_packing_list()
+	_test_forklift_planner()
 	if _fails == 0:
 		print("PACKING SELFTEST PASS  (%d checks)" % _checks)
 	else:
@@ -51,10 +58,387 @@ func _initialize() -> void:
 	quit(1 if _fails > 0 else 0)
 
 
+## ForkliftPlanner: trip time by hand, the forks face the target, the truck
+## parks clear of a set-down unit, the pickup stance holds the unit mid-fork.
+func _test_forklift_planner() -> void:
+	var t0 := ForkliftPlanner.trip_s(0.0)
+	var lift_t := 2.0 * ForkliftPlanner.CARRY_LIFT_M / ForkliftPlanner.LIFT_SPEED_MS
+	_check("fork trip: zero route = handling + lift",
+		absf(t0 - (ForkliftPlanner.T_ENGAGE_S + ForkliftPlanner.T_SETDOWN_S + lift_t)) < 1e-6, str(t0))
+	var t30 := ForkliftPlanner.trip_s(30.0)
+	var want30 := t0 + 30.0 / ForkliftPlanner.SPEED_LOADED_MS + 30.0 / ForkliftPlanner.SPEED_EMPTY_MS
+	_check("fork trip: 30 m by hand", absf(t30 - want30) < 1e-6, "%.3f vs %.3f" % [t30, want30])
+	_check("fork trip: a stack costs lift time",
+		ForkliftPlanner.trip_s(30.0, 1.2) > t30)
+	_check("fork trip: hours = seconds / 3600",
+		absf(ForkliftPlanner.trip_hours(30.0) * 3600.0 - t30) < 1e-6)
+	_check("fork trip: a negative route is no route",
+		absf(ForkliftPlanner.trip_s(-5.0) - t0) < 1e-6)
+	# Facing: local -Z turned by the yaw must point at the target.
+	for d in [Vector2(1, 0), Vector2(0, 1), Vector2(-3, 4), Vector2(0, -2)]:
+		var at := Vector2(2, -1)
+		var yaw := deg_to_rad(ForkliftPlanner.facing_yaw_deg(at, at + d))
+		var fwd := Basis(Vector3.UP, yaw) * Vector3(0, 0, -1)
+		var got := Vector2(fwd.x, fwd.z)
+		_check("fork facing toward %s" % str(d), got.distance_to(d.normalized()) < 1e-4,
+			"%s vs %s" % [str(got), str(d.normalized())])
+	_check("fork facing: no direction = 0",
+		ForkliftPlanner.facing_yaw_deg(Vector2(1, 1), Vector2(1, 1)) == 0.0)
+	# Parking: on the approach side, the fork reach plus the gap away.
+	var reach := absf(ForkliftBuilder.fork_reach_z())
+	_check("fork reach is positive and past the fork length",
+		reach > ForkliftBuilder.FORK_LEN_M, str(reach))
+	var drop := Vector2(10, 5)
+	var from := Vector2(10, 25)
+	var park := ForkliftPlanner.park_beside(drop, from)
+	_check("fork park: reach + gap from the drop",
+		absf(park.distance_to(drop) - (reach + ForkliftPlanner.PARK_GAP_M)) < 1e-4,
+		str(park.distance_to(drop)))
+	_check("fork park: on the approach side", (park - drop).dot(from - drop) > 0.0)
+	var park0 := ForkliftPlanner.park_beside(drop, drop)
+	_check("fork park: a zero approach still parks clear",
+		park0.distance_to(drop) > reach)
+	var stance := ForkliftPlanner.pickup_stance(drop, from)
+	_check("fork stance: the unit sits mid-fork",
+		absf(stance.distance_to(drop) - (reach - ForkliftBuilder.FORK_LEN_M * 0.5)) < 1e-4)
+	_check("fork stance: on the approach side", (stance - drop).dot(from - drop) > 0.0)
+	_check("fork stance: nearer than the park spot",
+		stance.distance_to(drop) < park.distance_to(drop))
+	_check("fork capacity: a pallet", ForkliftPlanner.can_carry(800.0))
+	_check("fork capacity: over the rating", not ForkliftPlanner.can_carry(ForkliftBuilder.CAPACITY_KG + 1.0))
+	_check("fork capacity: an unknown mass", not ForkliftPlanner.can_carry(-1.0))
+
+
+## PackingList: IDs by space in load order, unload order the reverse, a
+## pallet's boxes bottom layer first, crate contents, handling marks, files.
+func _test_packing_list() -> void:
+	var entry := {"label": "Test box", "payload_kg": 1000.0}
+	var raw := [
+		{"label": "A", "mass_kg": 20.0, "handling": "hand"},
+		{"label": "B", "mass_kg": 40.0, "parts": [{"label": "strut", "qty": 2}]},
+	]
+	var units := [
+		{"pallet": true, "label": "Pallet", "mass_kg": 300.0, "placements": [
+			{"unit": 1, "label": "B", "pos": Vector3(0, 0.5, 0), "size": Vector3(0.5, 0.5, 0.5)},
+			{"unit": 0, "label": "A", "pos": Vector3(0, 0, 0), "size": Vector3(0.5, 0.5, 0.5)},
+		]},
+		{"label": "Crate", "mass_kg": 30.0, "this_side_up": true,
+			"parts": [{"label": "bolt", "qty": 4}]},
+		{"label": "Spare", "mass_kg": 5.0, "w_m": 0.3, "h_m": 0.3, "d_m": 0.3},
+	]
+	var placed := [
+		{"unit_idx": 1, "pos": Vector3(0, 0, 1.2), "size": Vector3(0.6, 0.6, 0.6)},
+		{"unit_idx": 0, "pos": Vector3(0, 0, 0), "size": Vector3(1.2, 1.0, 0.8)},
+	]
+	var doc := PackingList.build(entry, units, placed, raw, "Selftest list")
+	var spaces: Array = doc["spaces"]
+	var cont: Dictionary = spaces[0]
+	var rows: Array = cont["rows"]
+	_check("plist: container rows", rows.size() == 2, str(rows.size()))
+	_check("plist: pallet loaded first gets C1-P01",
+		str(rows[0]["id"]) == "C1-P01" and int(rows[0]["load_seq"]) == 1)
+	_check("plist: loose crate C1-U01 unloads first",
+		str(rows[1]["id"]) == "C1-U01" and int(rows[1]["unload_seq"]) == 1)
+	_check("plist: unload reverses load", int(rows[0]["unload_seq"]) == 2)
+	var nl: Array = cont["not_loaded"]
+	_check("plist: unplaced unit listed as not loaded",
+		nl.size() == 1 and str(nl[0]["id"]).begins_with("X-U"), str(nl))
+	_check("plist: container mass", is_equal_approx(float(cont["total_kg"]), 330.0))
+	var by_id := {}
+	for s: Variant in spaces:
+		by_id[str((s as Dictionary)["kind"]) + ":" + str((s as Dictionary)["id"])] = s
+	_check("plist: pallet space", by_id.has("pallet:C1-P01"))
+	if by_id.has("pallet:C1-P01"):
+		var prows: Array = (by_id["pallet:C1-P01"] as Dictionary)["rows"]
+		_check("plist: bottom box first on the pallet",
+			prows.size() == 2 and str(prows[0]["label"]) == "A"
+			and str(prows[0]["id"]) == "C1-P01-B01" and str(prows[1]["id"]) == "C1-P01-B02",
+			str(prows))
+		_check("plist: 40 kg box is a 2-person lift",
+			(prows[1]["notes"] as Array).has("2-PERSON LIFT"))
+		_check("plist: 20 kg hand box has no lift mark",
+			not (prows[0]["notes"] as Array).has("2-PERSON LIFT"))
+	_check("plist: box on pallet lists its parts", by_id.has("crate:C1-P01-B02"))
+	_check("plist: loose crate lists its parts", by_id.has("crate:C1-U01"))
+	if by_id.has("crate:C1-U01"):
+		var cr: Array = (by_id["crate:C1-U01"] as Dictionary)["rows"]
+		_check("plist: crate rows", cr.size() == 1 and int(cr[0]["qty"]) == 4)
+	_check("plist: pallet marked FORKLIFT", (rows[0]["notes"] as Array).has("FORKLIFT"))
+	var cnotes: Array = rows[1]["notes"]
+	_check("plist: crate THIS SIDE UP + 2-PERSON LIFT",
+		cnotes.has("THIS SIDE UP") and cnotes.has("2-PERSON LIFT"), str(cnotes))
+	var cards: Array = doc["cards"]
+	_check("plist: a card per container row and pallet box", cards.size() == 4, str(cards.size()))
+	var on_pallet := false
+	for c: Variant in cards:
+		if str((c as Dictionary)["id"]) == "C1-P01-B01":
+			on_pallet = str((c as Dictionary)["where"]) == "C1-P01 in Test box"
+	_check("plist: pallet box card says where it lives", on_pallet)
+	var csv := PackingList.to_csv(doc)
+	var html := PackingList.to_html(doc)
+	_check("plist: csv carries ids", csv.contains("C1-P01-B02") and csv.contains("NOT LOADED"))
+	_check("plist: html carries ids + cards", html.contains("C1-U01") and html.contains("class=\"card\""))
+	_check("plist: safe_name", PackingList.safe_name("Box 20' #1") == "box_20___1")
+	var dir := "user://packing_list_selftest_tmp"
+	var out := PackingList.write_folder(doc, dir)
+	_check("plist: write_folder", out == dir)
+	for f: String in ["packing_list.csv", "packing_list.json", "packing_list.html"]:
+		var p := dir.path_join(f)
+		_check("plist: wrote " + f, FileAccess.file_exists(p))
+		DirAccess.remove_absolute(p)
+	DirAccess.remove_absolute(dir)
+
+
+## PackPalletizer: every unit lands on exactly one pallet or stays loose,
+## loads stay under the stack height, masses add up, a fragile box makes the
+## pallet top-only, and an oversized unit is stuffed loose.
+func _test_palletizer() -> void:
+	var pal := IntermodalUnits.resolve("pallet_eur1")
+	_check("palletizer: EUR1 resolves", not pal.is_empty())
+	var units: Array = []
+	for i in 30:
+		units.append(_cube(0.4, 12.0, {"label": "box %d" % i}))
+	units.append(_cube(2.5, 50.0, {"label": "too big"}))
+	units.append(_cube(0.3, 5.0, {"label": "eggs", "stackable": false}))
+	var res := PackPalletizer.palletize(units, pal)
+	var seen: Dictionary = {}
+	var dup := false
+	for p in res["pallets"]:
+		for c in p["contents"]:
+			if seen.has(int(c)):
+				dup = true
+			seen[int(c)] = true
+	for c in res["loose"]:
+		if seen.has(int(c)):
+			dup = true
+		seen[int(c)] = true
+	_check("palletizer: every unit placed once", seen.size() == units.size() and not dup,
+		"%d of %d" % [seen.size(), units.size()])
+	_check("palletizer: oversized stays loose", (res["loose"] as Array).has(30))
+	var deck := float(pal.get("deck_h_m", 0.144))
+	var stack_h := float((pal.get("interior", {}) as Dictionary).get("h_m", 1.6))
+	var tare := float(pal.get("tare_kg", 0.0))
+	var heights_ok := true
+	var mass_ok := true
+	var fragile_top_only := false
+	for p in res["pallets"]:
+		if float(p["h_m"]) > deck + stack_h + 1e-4:
+			heights_ok = false
+		var m := tare
+		for c in p["contents"]:
+			m += float(units[int(c)]["mass_kg"])
+		if absf(m - float(p["mass_kg"])) > 1e-3:
+			mass_ok = false
+		if (p["contents"] as Array).has(31):
+			fragile_top_only = bool(p.get("top_only", false)) and not bool(p["stackable"])
+	_check("palletizer: load under stack height", heights_ok)
+	_check("palletizer: mass = tare + contents", mass_ok)
+	_check("palletizer: fragile box makes pallet top-only", fragile_top_only)
+	_check("palletizer: footprint is the pallet's",
+		(res["pallets"] as Array).size() > 0
+		and is_equal_approx(float(res["pallets"][0]["w_m"]),
+			float((pal["exterior"] as Dictionary)["w_m"])))
+	var items := PackPalletizer.stuffing_items(units, res)
+	_check("palletizer: stuffing list = pallets + loose",
+		items.size() == (res["pallets"] as Array).size() + (res["loose"] as Array).size()
+		and bool(items[0].get("pallet", false)))
+	var heavy: Array = [_cube(0.5, 900.0), _cube(0.5, 900.0)]
+	var hres := PackPalletizer.palletize(heavy, pal)
+	var over := false
+	for p in hres["pallets"]:
+		if bool(p.get("overweight", false)):
+			over = true
+	_check("palletizer: overweight flagged", over)
+	var none := PackPalletizer.palletize(units, {})
+	_check("palletizer: no pallet = all loose", (none["loose"] as Array).size() == units.size())
+
+
+## IntermodalUnits: every template resolves to a usable ContainerCatalog
+## entry, the standard numbers hold, the user library round-trips on a TEMP
+## path, and the solver / catalog take the entries unchanged.
+func _test_intermodal() -> void:
+	for t in IntermodalUnits.templates():
+		var id := str(t["id"])
+		var e := IntermodalUnits.resolve(id)
+		var inn: Dictionary = e.get("interior", {})
+		var ext: Dictionary = e.get("exterior", {})
+		_check("intermodal %s resolves" % id, not e.is_empty()
+			and float(inn.get("l_m", 0.0)) > 0.0 and float(inn.get("w_m", 0.0)) > 0.0
+			and float(inn.get("h_m", 0.0)) > 0.0 and float(ext.get("h_m", 0.0)) > 0.0
+			and float(e.get("payload_kg", 0.0)) > 0.0
+			and float(e.get("tare_kg", 0.0)) > 0.0, str(e))
+		var ps := IntermodalUnits.packed_spec_for(e)
+		_check("intermodal %s packed spec" % id, not ps.is_empty()
+			and float(ps.get("mass_kg", 0.0)) > 0.0
+			and str(ps.get("form", "")) in PackedSpec.FORMS, str(ps))
+	var eur := IntermodalUnits.resolve("pallet_eur1")
+	_check("EUR1 is 1200 x 800", absf(float(eur["exterior"]["l_m"]) - 1.2) < 1e-6
+		and absf(float(eur["exterior"]["w_m"]) - 0.8) < 1e-6)
+	_check("EUR1 forks 4-way, payload = dynamic", str(eur["fork_entry"]) == "4-way"
+		and absf(float(eur["payload_kg"]) - 1500.0) < 1e-6)
+	var c20 := IntermodalUnits.resolve("iso_20")
+	_check("20' payload = max gross - tare",
+		absf(float(c20["payload_kg"]) - (30480.0 - 2300.0)) < 1e-6)
+	_check("20' has a door", c20["door"] is Dictionary)
+	_check("20' open top has no door", IntermodalUnits.resolve("iso_20_ot")["door"] == null)
+	var gl3 := IntermodalUnits.resolve("gaylord_48", {"walls": 3})
+	var gl5 := IntermodalUnits.resolve("gaylord_48", {"walls": 5})
+	_check("more gaylord walls carry more",
+		float(gl5["payload_kg"]) > float(gl3["payload_kg"]))
+	var rack := IntermodalUnits.resolve("rack_bay_96")
+	_check("rack payload capped by frame",
+		float(rack["payload_kg"]) <= 9072.0 + 1e-6)
+	# Edited numbers reach the entry; unknown keys are dropped.
+	var big := IntermodalUnits.resolve("pallet_eur1", {"ext_l_m": 1.5, "junk": 3})
+	_check("edited pallet length", absf(float(big["exterior"]["l_m"]) - 1.5) < 1e-6
+		and not (big["params"] as Dictionary).has("junk"))
+	# User library on a TEMP path.
+	var tmp := "user://_intermodal_selftest_%d.json" % Time.get_ticks_usec()
+	var uid := IntermodalUnits.save_user_unit("pallet_gma", "My Pallet",
+		{"dynamic_kg": 999.0}, "", tmp)
+	_check("user unit id", uid == "u_my_pallet", uid)
+	var uid2 := IntermodalUnits.save_user_unit("pallet_gma", "My Pallet", {}, "", tmp)
+	_check("user unit id unique", uid2 != uid, uid2)
+	var found := IntermodalUnits.find(uid, tmp)
+	_check("user unit found", not found.is_empty()
+		and absf(float(found["payload_kg"]) - 999.0) < 1e-6
+		and str(found["label"]) == "My Pallet")
+	_check("user entries listed", IntermodalUnits.user_entries(tmp).size() == 2)
+	_check("user unit removed", IntermodalUnits.remove_user_unit(uid, tmp)
+		and IntermodalUnits.find(uid, tmp).is_empty())
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+	# Catalog fallback + solver accept the entries.
+	_check("catalog finds intermodal", str(ContainerCatalog.find("pallet_eur1")
+		.get("id", "")) == "pallet_eur1")
+	var r := PackSolver.solve(c20, [_cube(1.0), _cube(1.0)])
+	_check("solver packs a 20' intermodal", bool(r["fit"]), str(r["overflow"]))
+	var ro := PackSolver.solve(IntermodalUnits.resolve("iso_20_ot"), [_cube(1.0)])
+	_check("solver packs an open top", bool(ro["fit"]))
+
+
 ## PackManifestExport (Phase 7): load order is nose-first / floor-first (the
 ## physical order — never asks a crew to stack onto a box not yet placed),
 ## totals are mass-exact, unplaced items are reported with a door verdict,
 ## and the CSV round-trips the same numbers.
+## Parts list -> handling units: every part shipped exactly once, mass kept,
+## no unit smaller than what it holds.
+func _test_kitter() -> void:
+	var parts: Array = [
+		PackKitter.part("Strut A", "stick", 1.20, 0.019, 0.019, 0.9, 120),
+		PackKitter.part("Strut B", "stick", 1.16, 0.019, 0.019, 0.85, 90),
+		PackKitter.part("Rib", "stick", 4.8, 0.05, 0.05, 6.0, 60),
+		PackKitter.part("Plywood", "sheet", 2.44, 1.22, 0.012, 18.0, 70),
+		PackKitter.part("Glass pane", "sheet", 1.2, 0.8, 0.006, 14.0, 6, {"fragile": true}),
+		PackKitter.part("Hub", "piece", 0.12, 0.12, 0.05, 0.6, 61),
+		PackKitter.part("Motor", "piece", 0.30, 0.20, 0.20, 9.0, 2),
+		PackKitter.part("Inverter", "piece", 0.70, 0.50, 0.25, 60.0, 1, {"own_crate": true}),
+		PackKitter.part("Battery", "piece", 0.6, 0.45, 0.4, 230.0, 2),
+		PackKitter.part("Bolt M8x60", "loose", 0.06, 0.013, 0.013, 0.035, 900),
+		PackKitter.part("Nut M8", "loose", 0.013, 0.013, 0.007, 0.005, 900),
+	]
+	var units := PackKitter.kit(parts)
+	_check("kitter: makes units", units.size() > 4, "%d" % units.size())
+	# Every part qty accounted exactly once.
+	var shipped := {}
+	for u in units:
+		for c in (u as Dictionary).get("parts", []):
+			var lbl := str((c as Dictionary)["label"])
+			shipped[lbl] = int(shipped.get(lbl, 0)) + int((c as Dictionary)["qty"])
+	var all_ok := true
+	for p in parts:
+		var d: Dictionary = p
+		if int(shipped.get(str(d["label"]), 0)) != int(d["qty"]):
+			all_ok = false
+			_check("kitter: %s shipped %d of %d" % [d["label"], int(shipped.get(str(d["label"]), 0)), d["qty"]], false)
+	_check("kitter: every part shipped exactly once", all_ok)
+	# Mass conserved (plus packaging).
+	var s := PackKitter.summary(units)
+	var pm := PackKitter.parts_mass_kg(parts)
+	var pack := 0.0
+	for u in units:
+		pack += float((u as Dictionary).get("packaging_kg", 0.0))
+	_check("kitter: mass = parts + packaging",
+		absf(float(s["mass_kg"]) - (pm + pack)) < 0.01 * pm,
+		"%.1f vs %.1f + %.1f" % [float(s["mass_kg"]), pm, pack])
+	var pv := 0.0
+	var longest := 0.0
+	for p in parts:
+		pv += PackKitter.part_volume_m3(p)
+		longest = maxf(longest, float((p as Dictionary)["len_m"]))
+	_check("kitter: units hold at least the parts' volume", float(s["volume_m3"]) >= pv,
+		"%.3f vs %.3f" % [float(s["volume_m3"]), pv])
+	_check("kitter: longest unit >= longest part", float(s["longest_m"]) >= longest)
+	var bundles_ok := true
+	var hw_ok := true
+	var handling_ok := true
+	var in_container := 0
+	var own_inverter := false
+	for u in units:
+		var d: Dictionary = u
+		var m := float(d["mass_kg"])
+		if str(d.get("form", "")) == "bundle" and m > PackKitter.BUNDLE_MAX_KG + PackKitter.STRAP_KG + 1e-3:
+			bundles_ok = false
+		if str(d.get("label", "")).begins_with("Hardware") \
+				and m > float(PackKitter.HARDWARE_BOX["max_kg"]) + float(PackKitter.HARDWARE_BOX["tare_kg"]) + 1e-3:
+			hw_ok = false
+		if str(d.get("handling", "")) != PackKitter.handling_for(m):
+			handling_ok = false
+		if d.has("container_id"):
+			in_container += 1
+		if str(d.get("label", "")) == "Crate: Inverter":
+			own_inverter = true
+	_check("kitter: bundles under the forklift cap", bundles_ok)
+	_check("kitter: hardware boxes under 25 kg", hw_ok)
+	_check("kitter: handling matches mass", handling_ok)
+	_check("kitter: small pieces go into sub-containers", in_container > 0)
+	_check("kitter: own_crate pieces crated alone", own_inverter)
+	_check("kitter: handling classes", PackKitter.handling_for(20.0) == "hand"
+		and PackKitter.handling_for(40.0) == "team" and PackKitter.handling_for(200.0) == "forklift")
+	var env := PackKitter.envelope(units)
+	var tallest := 0.0
+	for u in units:
+		var d: Dictionary = u
+		var dims := [float(d["w_m"]), float(d["d_m"]), float(d["h_m"])]
+		dims.sort()
+		tallest = maxf(tallest, dims[0])
+	_check("kitter: envelope volume >= units", PackedSpec.volume_m3(env) >= float(s["volume_m3"]) - 1e-6)
+	_check("kitter: envelope mass = units", absf(float(env["mass_kg"]) - float(s["mass_kg"])) < 1e-3)
+	_check("kitter: deterministic", str(PackKitter.kit(parts)) == str(units))
+	_check("kitter: empty list", PackKitter.kit([]).is_empty() and PackKitter.envelope([]).is_empty())
+
+
+## A pallet rack ships as its own parts (uprights, beams, decking), sized from
+## the spec: a bigger rack packs bigger and heavier.
+func _test_rack_kit() -> void:
+	var specs := {"default": {}, "chiba_2024": PalletRackBuilder.chiba_2024_spec()}
+	var vols := {}
+	for key in specs:
+		var spec: Dictionary = specs[key]
+		var parts: Array = PalletRackBuilder.parts_for_packing(spec)
+		_check("rack kit %s: has parts" % key, parts.size() > 0)
+		var units := PackKitter.kit(parts)
+		var s := PackKitter.summary(units)
+		var pv := 0.0
+		var longest := 0.0
+		var qty := 0
+		for p in parts:
+			pv += PackKitter.part_volume_m3(p)
+			longest = maxf(longest, float((p as Dictionary)["len_m"]))
+			qty += int((p as Dictionary)["qty"])
+		var shipped := 0
+		for u in units:
+			for c in (u as Dictionary).get("parts", []):
+				shipped += int((c as Dictionary)["qty"])
+		_check("rack kit %s: every part shipped once" % key, shipped == qty, "%d vs %d" % [shipped, qty])
+		_check("rack kit %s: volume >= parts" % key, float(s["volume_m3"]) >= pv)
+		_check("rack kit %s: longest unit >= longest part" % key, float(s["longest_m"]) >= longest - 1e-4)
+		_check("rack kit %s: mass >= parts" % key, float(s["mass_kg"]) >= PackKitter.parts_mass_kg(parts) - 1e-3)
+		var env := PalletRackBuilder.packed_spec_for(spec)
+		_check("rack kit %s: packed spec resolves" % key, not env.is_empty() and float(env.get("mass_kg", 0.0)) > 0.0)
+		vols[key] = float(s["volume_m3"])
+	_check("rack kit: Chiba 2024 packs bigger than the default", float(vols["chiba_2024"]) > float(vols["default"]))
+
+
 func _test_manifest_export() -> void:
 	var entry := ContainerCatalog.find("uhaul_15")
 	_check("manifest: uhaul_15 entry resolves", not entry.is_empty())
@@ -509,6 +893,81 @@ func _test_solver_constraints() -> void:
 	_check("payload flag trips", not bool(heavy["payload_ok"]))
 
 
+func _reason0(res: Dictionary) -> String:
+	var ov: Array = res.get("overflow", [])
+	return "" if ov.is_empty() else str((ov[0] as Dictionary).get("reason", ""))
+
+
+func _test_solver_load_rules() -> void:
+	# A bottom rated for 5 kg refuses a 50 kg box on top.
+	var tower := _box_container(1.0, 2.0, 1.0)
+	var base := _cube(1.0, 20.0, {"max_stack_kg": 5.0})
+	var r_cap := PackSolver.solve(tower, [base, _cube(0.9, 50.0)])
+	_check("stack rating refuses heavy top", _reason0(r_cap) == "stack", str(r_cap["overflow"]))
+	var r_ok := PackSolver.solve(tower, [base, _cube(0.9, 4.0)])
+	_check("stack rating takes a light top", bool(r_ok["fit"]))
+	var bottom_load := 0.0
+	for pl: Dictionary in r_ok["placements"]:
+		if (pl["pos"] as Vector3).y < 0.01:
+			bottom_load = float(pl.get("load_kg", 0.0))
+	_check("load_kg carried by the bottom", absf(bottom_load - 4.0) < 1e-4, str(bottom_load))
+	# Top-only items are placed last and carry nothing.
+	var glass := _cube(1.0, 5.0, {"top_only": true, "label": "glass"})
+	var r_top := PackSolver.solve(_box_container(1.0, 3.0, 1.0),
+		[glass, _cube(0.9, 5.0), _cube(0.8, 5.0)])
+	var glass_y := -1.0
+	var max_y := 0.0
+	for pl: Dictionary in r_top["placements"]:
+		var y := (pl["pos"] as Vector3).y
+		max_y = maxf(max_y, y)
+		if str(pl["label"]) == "glass":
+			glass_y = y
+	_check("top-only goes on top", glass_y >= max_y - 1e-4 and glass_y > 0.0,
+		"glass %.2f top %.2f" % [glass_y, max_y])
+	# Forks from the door: the fork axis runs along the load length.
+	var pal := {"w_m": 1.2, "d_m": 0.8, "h_m": 1.0, "mass_kg": 300.0,
+		"stackable": false, "this_side_up": true, "fork_axis": "w", "label": "pallet"}
+	var r_fork := PackSolver.solve(_box_container(2.0, 2.0, 3.0), [pal],
+		{"forks_from_door": true})
+	_check("forks align along the length", bool(r_fork["fit"])
+		and absf(((r_fork["placements"][0] as Dictionary)["size"] as Vector3).z - 1.2) < 1e-4)
+	var narrow := _box_container(1.0, 2.0, 3.0)
+	narrow["forks_from"] = "door"
+	_check("container forks_from honoured", bool(PackSolver.solve(narrow, [pal])["fit"]))
+	# Floor rating.
+	var floored := _box_container(2.0, 2.0, 2.0)
+	floored["floor_kg_m2"] = 100.0
+	_check("floor rating refuses", _reason0(PackSolver.solve(floored, [_cube(1.0, 500.0)])) == "floor")
+	_check("floor rating takes light", bool(PackSolver.solve(floored, [_cube(1.0, 50.0)])["fit"]))
+	# Fill height cap.
+	var three := [_cube(1.0), _cube(1.0), _cube(1.0)]
+	var r_fill := PackSolver.solve(_box_container(1.0, 3.0, 1.0), three, {"max_fill_h_m": 2.0})
+	_check("fill height caps the stack", (r_fill["placements"] as Array).size() == 2)
+	# Retry pass never places fewer.
+	var mix: Array = []
+	for i in 6:
+		mix.append(_cube(0.7, 10.0))
+	for i in 10:
+		mix.append(_cube(0.3, 2.0))
+	var b := _box_container(1.5, 1.0, 1.5)
+	var a0 := (PackSolver.solve(b, mix)["placements"] as Array).size()
+	var a1 := (PackSolver.solve(b, mix, {"retry_pass": true})["placements"] as Array).size()
+	_check("retry pass never places fewer", a1 >= a0, "%d vs %d" % [a0, a1])
+	# Centre of gravity, axle split, warnings.
+	var front := PackSolver.solve(_box_container(2.0, 2.0, 6.0, 50.0), [_cube(1.0, 80.0)])
+	_check("width CoG reported", front.has("com_width_frac"))
+	var ax: Dictionary = front["axle_split"]
+	_check("axle split sums to 1", absf(float(ax["front"]) + float(ax["rear"]) - 1.0) < 1e-6)
+	var codes: Array = []
+	for w: Dictionary in front["warnings"]:
+		codes.append(str(w["code"]))
+	_check("warns on lengthwise CoG", codes.has("cog_length"), str(codes))
+	_check("warns on payload", codes.has("payload"), str(codes))
+	var centred := PackSolver.solve(_box_container(1.0, 1.0, 1.0), [_cube(1.0, 10.0)])
+	_check("centred load has no CoG warning", (centred["warnings"] as Array).is_empty(),
+		str(centred["warnings"]))
+
+
 func _test_manifest() -> void:
 	var graph_items: Array = [
 		{"type": "panel", "is_virtual": true,
@@ -538,6 +997,17 @@ func _test_manifest() -> void:
 	var forty := (p[1] as Dictionary)["spec"] as Dictionary
 	_check("container prop uses its variant dims",
 		absf(float(forty.get("w_m", 0.0)) - 12.192) < 0.01, str(forty))
+	var dome_rec := {"model_id": "domelab_structure", "domelab_spec": {}}
+	var dome_spec := PlacedPropRuntime.packed_spec_for_record(dome_rec)
+	var dome_units := PackKitter.units_of(dome_spec)
+	var dl := CampManifest.from_prop_records([dome_rec])
+	var dl_labelled := true
+	for line in dl:
+		if not str((line as Dictionary).get("label", "")).contains(" · "):
+			dl_labelled = false
+	_check("a designed kit sweeps as one line per handling unit",
+		PackKitter.is_kit(dome_spec) and dl.size() == dome_units.size()
+		and dl.size() >= 2 and dl_labelled, "%d lines, %d units" % [dl.size(), dome_units.size()])
 	var units := CampManifest.expand_for_solver(merged)
 	_check("expand honours qty", units.size() == 3, str(units.size()))
 	var mass := CampManifest.total_mass_kg(merged)

@@ -45,6 +45,8 @@ func run() -> Dictionary:
 	entries.append({"id": "scad_store", "open": func() -> void: main.call("open_scad_store")})
 	entries.append({"id": "packing_lab", "open": func() -> void:
 		load("res://scenes/ui/packing_lab_modal.gd").call("open_site_cargo", get_tree())})
+	entries.append({"id": "intermodal_units", "open": func() -> void:
+		load("res://scenes/ui/intermodal_unit_modal.gd").call("open", get_tree())})
 	entries.append({"id": "anim_editor", "open": func() -> void: main.call("open_npc_anim_editor", "")})
 	if gv != null and gv.has_method("open_inventory_panel"):
 		entries.append({"id": "inventory", "open": func() -> void: gv.call("open_inventory_panel")})

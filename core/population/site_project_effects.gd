@@ -16,6 +16,8 @@ extends RefCounted
 ## Effect vocabulary v1 (each op is a Dictionary; unknown ops are a warning,
 ## not an error — an old save with a newer effect must not crash the tick):
 ##   {op:"move_prop",   prop_id, x, z}   crate set-down at its staging slot
+##   {op:"fork_move",   prop_id, forklift_id, x, z}  a forklift set it down;
+##       the forklift parks beside the drop
 ##   {op:"unpack_prop", prop_id}         deploy — plays the linkage raise sweep
 ##   {op:"pack_prop",   prop_id}         breakdown — plays the stow sweep
 ##   {op:"remove_prop", prop_id}         consume an emptied crate
@@ -51,6 +53,26 @@ static func execute(main: Node, op: Dictionary) -> bool:
 				PlacedPropService.update_prop_record(main, prop_id,
 					{"collision_enabled": bool(op["collision_enabled"])}, true)
 			return moved
+		"fork_move":
+			# A forklift operator set the load down: the load goes where
+			# move_prop puts it and the forklift parks beside the drop, forks
+			# down and empty, so the next fork row starts from there.
+			var fx := float(op.get("x", 0.0))
+			var fz := float(op.get("z", 0.0))
+			var ok := PlacedPropService.move_prop_at(main, prop_id, fx, fz, NAN,
+				float(op.get("y_offset", 0.0)), 0.9)
+			if ok and op.has("collision_enabled"):
+				PlacedPropService.update_prop_record(main, prop_id,
+					{"collision_enabled": bool(op["collision_enabled"])}, true)
+			var fid := str(op.get("forklift_id", ""))
+			if ok and not fid.is_empty():
+				var park := ForkliftPlanner.park_beside(Vector2(fx, fz),
+					Vector2(float(op.get("from_x", fx)), float(op.get("from_z", fz))))
+				if PlacedPropService.move_prop_at(main, fid, park.x, park.y):
+					PlacedPropService.update_prop_record(main, fid,
+						{"yaw": float(op.get("park_yaw", 0.0)),
+						"fork_lift_m": 0.0, "fork_load_id": ""}, true)
+			return ok
 		"unpack_prop", "pack_prop":
 			var loader := _loader(main)
 			if loader == null or not loader.has_method("set_prop_packed"):

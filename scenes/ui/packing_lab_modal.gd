@@ -75,7 +75,14 @@ const EXPORT_DIR := "user://exports"
 var _restoring := false
 
 var _entry: Dictionary = {}          # ContainerCatalog entry
-var _units: Array = []               # all solver items (source manifest)
+var _units: Array = []               # all solver items (what is being stuffed)
+var _raw_units: Array = []           # the source manifest, before palletizing
+var _mode := "loose"                 # "loose" | "pallets"
+var _pallet_id := "pallet_gma"
+var _palletized: Dictionary = {}     # PackPalletizer.palletize result (pallets mode)
+var _last_solve: Dictionary = {}     # the last auto-pack's PackSolver result
+var _level_combo: OptionButton = null
+var _pallet_combo: OptionButton = null
 var _remaining: Array = []           # indices into _units, not yet placed
 var _placed: Array = []              # {unit_idx, pos, size, mesh}
 var _source_label := ""
@@ -137,8 +144,9 @@ func _ready() -> void:
 ## PackTree.flatten output).
 func open_with_units(units: Array, source_label: String,
 		container_id := "uhaul_15") -> void:
-	_units = units.duplicate()
+	_raw_units = units.duplicate()
 	_source_label = source_label
+	_rebuild_units(false)
 	_set_container(container_id)
 	_update_delivery_ui()
 	visible = true
@@ -158,12 +166,69 @@ func close() -> void:
 ## Solver-seeded layout (also the harness entry point).
 func autopack() -> void:
 	_clear_placements()
-	var res := PackSolver.solve(_entry, _units)
+	var res := PackSolver.solve(_entry, _units, solve_opts())
 	for pl in res["placements"]:
 		var d := pl as Dictionary
 		_place(int(d["item_index"]), d["pos"] as Vector3, d["size"] as Vector3)
+	_last_solve = res
 	_refresh_lists()
 	_save_layout()
+
+
+## Solver options for the current load level and container: a second pass
+## for what overflowed, and fork access from the door whenever pallets are
+## going in by forklift (a palletized load, or any ISO box).
+func solve_opts() -> Dictionary:
+	var iso := str(_entry.get("id", "")).begins_with("iso_")
+	return {"retry_pass": true, "forks_from_door": _mode == "pallets" or iso}
+
+
+## Switch between stuffing the loose manifest and palletizing it first.
+## Harness entry point too.
+func set_load_level(mode: String, pallet_id := "") -> void:
+	_mode = "pallets" if mode == "pallets" else "loose"
+	if not pallet_id.is_empty():
+		_pallet_id = pallet_id
+	_sync_level_ui()
+	_rebuild_units(true)
+
+
+func load_level() -> String:
+	return _mode
+
+
+func pallet_count() -> int:
+	return (_palletized.get("pallets", []) as Array).size() if _mode == "pallets" else 0
+
+
+func last_solve() -> Dictionary:
+	return _last_solve
+
+
+## `_units` from the source manifest at the current load level.
+func _rebuild_units(refresh: bool) -> void:
+	_palletized = {}
+	if _mode == "pallets":
+		var pallet := IntermodalUnits.resolve(_pallet_id)
+		_palletized = PackPalletizer.palletize(_raw_units, pallet)
+		_units = PackPalletizer.stuffing_items(_raw_units, _palletized)
+	else:
+		_units = _raw_units.duplicate()
+	if refresh:
+		_clear_placements()
+		_try_restore_layout()
+		_refresh_lists()
+
+
+func _sync_level_ui() -> void:
+	if _level_combo != null:
+		_level_combo.select(1 if _mode == "pallets" else 0)
+	if _pallet_combo != null:
+		_pallet_combo.visible = _mode == "pallets"
+		for i in _pallet_combo.item_count:
+			if str(_pallet_combo.get_item_metadata(i)) == _pallet_id:
+				_pallet_combo.select(i)
+				break
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +259,11 @@ func _set_container(container_id: String) -> void:
 ## Site token from the live map (lat/lon), else the scene name — layouts are
 ## a property of the site, like every other per-site artifact.
 func _layout_key() -> String:
-	return "%s|%s|%s" % [_site_token_for(get_tree().current_scene),
+	var key := "%s|%s|%s" % [_site_token_for(get_tree().current_scene),
 		str(_entry.get("id", "")), _kit_id]
+	if _mode == "pallets":
+		key += "|pal:" + _pallet_id
+	return key
 
 
 static func _site_token_for(scene: Node) -> String:
@@ -342,6 +410,7 @@ func _clear_placements() -> void:
 		if is_instance_valid(m):
 			m.queue_free()
 	_placed.clear()
+	_last_solve = {}
 	_remaining.clear()
 	for i in _units.size():
 		_remaining.append(i)
@@ -351,6 +420,27 @@ func _on_container_selected(idx: int) -> void:
 	_set_container(str(_container_combo.get_item_metadata(idx)))
 
 
+func _refill_container_combo() -> void:
+	if _container_combo == null:
+		return
+	var cur := str(_entry.get("id", ""))
+	_container_combo.clear()
+	for entry in ContainerCatalog.all_with_intermodal():
+		var e := entry as Dictionary
+		var id := str(e.get("id", ""))
+		_container_combo.add_item("%s %s" % [str(e.get("icon", "")), str(e.get("label", id))])
+		_container_combo.set_item_metadata(_container_combo.item_count - 1, id)
+		if id == cur:
+			_container_combo.select(_container_combo.item_count - 1)
+
+
+func _on_units_pressed() -> void:
+	var script: GDScript = load("res://scenes/ui/intermodal_unit_modal.gd")
+	var m: Node = script.call("open", get_tree(), str(_entry.get("id", "")))
+	if m != null and m.has_signal("closed"):
+		m.connect("closed", _refill_container_combo)
+
+
 func _on_kit_selected(idx: int) -> void:
 	var kit_id := str(_kit_combo.get_item_metadata(idx))
 	_kit_id = kit_id
@@ -358,10 +448,9 @@ func _on_kit_selected(idx: int) -> void:
 	if kit_id.is_empty():
 		return
 	var flat := PackTree.flatten(PackDefs.realize(kit_id))
-	_units = flat["items"]
+	_raw_units = (flat["items"] as Array).duplicate()
 	_source_label = str(_kit_combo.get_item_text(idx))
-	_clear_placements()
-	_refresh_lists()
+	_rebuild_units(true)
 
 
 ## Delivery scenario for the current kit selection. Mapped through the
@@ -873,6 +962,24 @@ func _refresh_stats() -> void:
 			if frac > 0.55:
 				lines += "  [color=#%s]⚠ tail-heavy — sway risk[/color]" \
 					% UITheme.C_WARN.to_html(false)
+		var side := clampf(com.x / maxf(dims.x, 0.001), 0.0, 1.0)
+		lines += "\nSide balance [b]%.0f%%[/b] toward the right" % (side * 100.0)
+	if _mode == "pallets":
+		var heavy := 0
+		for u: Dictionary in _units:
+			if bool(u.get("pallet", false)) and bool(u.get("overweight", false)):
+				heavy += 1
+		lines += "\n%s, then stuffed" % UiText.count(pallet_count(), "pallet")
+		if heavy > 0:
+			lines += "  [color=#%s]⚠ %s over the pallet's rating[/color]" % [
+				UITheme.C_WARN.to_html(false), UiText.count(heavy, "pallet")]
+	if not _last_solve.is_empty():
+		var axle: Dictionary = _last_solve.get("axle_split", {})
+		if not axle.is_empty():
+			lines += "\nAxles: front [b]%.0f%%[/b] · rear [b]%.0f%%[/b]" % [
+				float(axle.get("front", 0.0)) * 100.0, float(axle.get("rear", 0.0)) * 100.0]
+		for w: Dictionary in _last_solve.get("warnings", []):
+			lines += "\n[color=#%s]⚠ %s[/color]" % [UITheme.C_WARN.to_html(false), str(w.get("text", ""))]
 	_stats.text = lines
 
 
@@ -913,6 +1020,25 @@ func _on_save_path_chosen(path: String) -> void:
 		_hint.text = "Manifest saved: %s" % path
 
 
+func _on_export_lists() -> void:
+	var path := export_packing_lists()
+	if _hint != null:
+		_hint.text = ("Packing lists saved: %s" % ProjectSettings.globalize_path(path)) \
+			if not path.is_empty() else "Packing lists could not be written"
+
+
+## Writes packing_list.csv / .json / .html for the current load and returns
+## the folder ("" on failure). Used by the button and the harness.
+func export_packing_lists(dir: String = "") -> String:
+	var list_name := "%s %s" % [str(_entry.get("label", _entry.get("id", "container"))),
+		Time.get_datetime_string_from_system(false, true).replace(":", "-")]
+	var doc := PackingList.build(_entry, _units, _placed,
+		_raw_units if not _palletized.is_empty() else [], list_name)
+	if dir.is_empty():
+		dir = PackingList.DEFAULT_DIR.path_join(PackingList.safe_name(list_name))
+	return PackingList.write_folder(doc, dir)
+
+
 # ---------------------------------------------------------------------------
 # Custom-item entry (Phase 7) — cover the gear the game doesn't model
 # ---------------------------------------------------------------------------
@@ -950,9 +1076,14 @@ func _on_add_custom() -> void:
 		unit["label"] = label
 		unit["custom"] = true
 		unit["count"] = 1
-		_units.append(unit)
-		_remaining.append(_units.size() - 1)
-	_refresh_lists()
+		_raw_units.append(unit)
+		if _mode != "pallets":
+			_units.append(unit)
+			_remaining.append(_units.size() - 1)
+	if _mode == "pallets":
+		_rebuild_units(true)
+	else:
+		_refresh_lists()
 	if _hint != null:
 		_hint.text = "Added %s — saved for this site" % label
 
@@ -1064,14 +1195,15 @@ func _build_ui() -> void:
 	side.add_child(_labeled("Container"))
 	_container_combo = OptionButton.new()
 	_container_combo.focus_mode = Control.FOCUS_NONE
-	# Subs are listed too — packing a tote is as real a task as packing a truck.
-	for entry in ContainerCatalog.all_containers():
-		var e := entry as Dictionary
-		_container_combo.add_item("%s %s" % [str(e.get("icon", "")), str(e.get("label", "?"))])
-		_container_combo.set_item_metadata(_container_combo.item_count - 1,
-			str(e.get("id", "")))
+	_refill_container_combo()
 	_container_combo.item_selected.connect(_on_container_selected)
 	side.add_child(_container_combo)
+	var units_btn := Button.new()
+	units_btn.text = "📦 Design units…"
+	units_btn.tooltip_text = "Design shipping containers, pallets, totes and other handling units"
+	units_btn.focus_mode = Control.FOCUS_NONE
+	units_btn.pressed.connect(_on_units_pressed)
+	side.add_child(units_btn)
 
 	side.add_child(_labeled("Load a kit"))
 	_kit_combo = OptionButton.new()
@@ -1084,6 +1216,25 @@ func _build_ui() -> void:
 		_kit_combo.set_item_metadata(_kit_combo.item_count - 1, str(dd.get("id", "")))
 	_kit_combo.item_selected.connect(_on_kit_selected)
 	side.add_child(_kit_combo)
+
+	side.add_child(_labeled("Load level"))
+	_level_combo = OptionButton.new()
+	_level_combo.focus_mode = Control.FOCUS_NONE
+	_level_combo.add_item("Loose items")
+	_level_combo.add_item("Palletize, then stuff")
+	_level_combo.item_selected.connect(func(i: int) -> void:
+		set_load_level("pallets" if i == 1 else "loose", _pallet_id))
+	side.add_child(_level_combo)
+	_pallet_combo = OptionButton.new()
+	_pallet_combo.focus_mode = Control.FOCUS_NONE
+	for pid in ["pallet_gma", "pallet_eur1"]:
+		var pu: Dictionary = IntermodalUnits.resolve(pid)
+		_pallet_combo.add_item(str(pu.get("label", pid)))
+		_pallet_combo.set_item_metadata(_pallet_combo.item_count - 1, pid)
+	_pallet_combo.item_selected.connect(func(i: int) -> void:
+		set_load_level("pallets", str(_pallet_combo.get_item_metadata(i))))
+	side.add_child(_pallet_combo)
+	_sync_level_ui()
 
 	# Delivery: spawn the scenario's container + packed crates in the world
 	# (PACKING_PLAN.md Phase 6) with a crew estimate from NpcHaulModel.
@@ -1114,10 +1265,12 @@ func _build_ui() -> void:
 	btns2.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	side.add_child(btns2)
 	for spec2: Array in [
-			["📄 Manifest CSV", "_on_export_csv",
+			["📄 CSV", "_on_export_csv",
 				"Save the load order + totals as a printable spreadsheet"],
 			["💾 JSON", "_on_export_json",
 				"Save the full manifest data (positions, masses, container)"],
+			["🏷 Lists", "_on_export_lists",
+				"Write packing lists for the container, each pallet and each crate, plus printable labels"],
 			["➕ Item", "_on_custom_item_pressed",
 				"Add a custom item the game doesn't model — saved for this site"]]:
 		var b2 := Button.new()

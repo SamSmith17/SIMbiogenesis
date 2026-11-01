@@ -1252,6 +1252,10 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		var rec_extra_fp: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_fp.has("flatpack_spec"):
 			extras["flatpack_spec"] = rec_extra_fp["flatpack_spec"]
+	elif model_id == IntermodalUnitBuilder.MODEL_ID:
+		var rec_extra_iu: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_iu.has("intermodal_spec"):
+			extras["intermodal_spec"] = rec_extra_iu["intermodal_spec"]
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		var rec_extra_dl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_dl.has("domelab_spec"):

@@ -75,8 +75,6 @@ const CURATED_MODELS := {
 		"mass_kg": 300.0, "form": "folded", "source": "estimated"},
 	# Pallet racking knocks down flat: upright frames + beam bundle + plywood
 	# stack. TODO(Phase 2): compute from the rack_spec part counts instead.
-	"pallet_rack": {"w_m": 2.70, "d_m": 1.00, "h_m": 0.75, "mass_kg": 350.0,
-		"form": "bundle", "source": "estimated"},
 	"grow_bed": {"w_m": 1.25, "d_m": 0.65, "h_m": 0.35, "mass_kg": 30.0,
 		"form": "crate", "source": "estimated"},
 	# Single bed knocks down: frame flat-pack + rolled mattress.
@@ -141,6 +139,10 @@ const CURATED_MODELS := {
 ## owning builder, not this table (for_model returns its catalog fallback only
 ## when no live spec is available).
 const DYNAMIC_MODELS := {
+	# Computed from the record's rack_spec (PalletRackBuilder.packed_spec_for);
+	# this is the fallback for a rack with no spec on its record.
+	"pallet_rack": {"w_m": 2.70, "d_m": 1.00, "h_m": 0.75, "mass_kg": 350.0,
+		"form": "bundle", "source": "estimated"},
 	# A palletised module stack + racking for the default 9-module array
 	# (1.77 × 1.05 m modules, ~21 kg each, plus ~60 kg of rails and legs).
 	"pv_array": {"w_m": 1.80, "d_m": 1.10, "h_m": 0.55,
@@ -152,6 +154,10 @@ const DYNAMIC_MODELS := {
 	# fallback is the default sofa: 12 parts of 1/2" ply, ~62 kg.
 	"flatpack_furniture": {"w_m": 2.44, "d_m": 0.90, "h_m": 0.15,
 		"mass_kg": 62.0, "form": "panel_stack", "source": "estimated"},
+	# A designed house ships as a kit of framing, sheathing and trim. The
+	# live mass comes from the placed spec; this fallback is a small cottage.
+	"parametric_building": {"w_m": 2.4, "d_m": 1.2, "h_m": 1.2,
+		"mass_kg": 800.0, "form": "bundle", "source": "estimated"},
 	# Domes and zomes pack as a strut bundle + hub box + panel stack; the real
 	# spec is DomeLabDesign.packed_spec (the record's domelab_spec). This
 	# fallback is the default 3V 5/8 conduit dome (165 struts of 3/4" EMT).
@@ -187,6 +193,15 @@ const DYNAMIC_MODELS := {
 	# 20' box (ISO 668 exterior + tare).
 	"cargo_container": {"w_m": 6.058, "d_m": 2.438, "h_m": 2.591,
 		"mass_kg": 2300.0, "form": "container", "source": "curated",
+		"this_side_up": true},
+	# Real spec comes from IntermodalUnits.packed_spec_for (the record's
+	# intermodal_spec); this fallback is a GMA pallet.
+	"intermodal_unit": {"w_m": 1.219, "d_m": 1.016, "h_m": 0.140,
+		"mass_kg": 20.0, "form": "pallet", "source": "estimated",
+		"this_side_up": true},
+	# ForkliftBuilder: a 2.5 t electric counterbalance truck (service mass).
+	"vehicle_forklift": {"w_m": 3.6, "d_m": 1.15, "h_m": 2.1,
+		"mass_kg": 4100.0, "form": "folded", "source": "curated",
 		"this_side_up": true},
 }
 

@@ -151,7 +151,16 @@ static func find(container_id: String) -> Dictionary:
 	for c in CONTAINERS:
 		if str(c.get("id", "")) == container_id:
 			return c
-	return {}
+	return IntermodalUnits.find(container_id)
+
+
+## The fixed catalog followed by every intermodal template and the player's
+## saved units — what the Packing Lab offers as targets.
+static func all_with_intermodal() -> Array:
+	var out: Array = CONTAINERS.duplicate()
+	out.append_array(IntermodalUnits.builtin_entries())
+	out.append_array(IntermodalUnits.user_entries())
+	return out
 
 
 static func containers_of_kind(kind: String) -> Array:

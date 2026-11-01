@@ -103,7 +103,11 @@ static func family_for(chore: Dictionary) -> String:
 		if all_moves:
 			return HAUL_HOLD
 
-	# 3. A round-trip carry leg: pick it up, put it down.
+	# 3. A forklift operator drives the load; the hands are on the controls.
+	if str((chore.get("effect", {}) as Dictionary).get("op", "")) == "fork_move":
+		return INSPECT
+
+	# 4. A round-trip carry leg: pick it up, put it down.
 	if chore.has("carry_to"):
 		return LIFT
 

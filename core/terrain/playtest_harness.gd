@@ -1244,6 +1244,27 @@ func _run_packing_capture() -> void:
 	await get_tree().create_timer(0.4).timeout
 	await _graph_shot(dir, "05_starshade_kit_in_20ft", manifest, "packing")
 
+	# Palletize, stuff the pallets, write the packing lists. The StarShade
+	# crate and panel stack are bigger than a GMA deck and stay loose; the
+	# starter kit's totes are what goes onto pallets.
+	var mixed: Array = kit_units.duplicate()
+	mixed.append_array(PackTree.flatten(PackDefs.realize("solar_starter_kit"))["items"])
+	modal.call("open_with_units", mixed, "StarShade + Solar Starter", "container_20")
+	modal.call("set_load_level", "pallets", "pallet_gma")
+	modal.call("autopack")
+	await get_tree().create_timer(0.4).timeout
+	await _graph_shot(dir, "06_palletized_in_20ft", manifest, "packing")
+	var n_pallets: int = int(modal.call("pallet_count"))
+	print("packing capture: palletized into %d pallet(s) %s" % [
+			n_pallets, "PASS" if n_pallets > 0 else "FAIL"])
+	var list_dir: String = str(modal.call("export_packing_lists",
+			ProjectSettings.globalize_path(dir).path_join("packing_list")))
+	var html_ok: bool = not list_dir.is_empty() \
+			and FileAccess.file_exists(list_dir.path_join("packing_list.html"))
+	print("packing capture: packing lists written to %s %s" % [
+			list_dir, "PASS" if html_ok else "FAIL"])
+	modal.call("set_load_level", "loose")
+
 	modal.call("close")
 	modal.queue_free()
 

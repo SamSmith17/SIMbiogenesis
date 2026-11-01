@@ -1221,8 +1221,71 @@ static func ports(d: Dictionary) -> Array:
 	return out
 
 
-## A crate for the knocked-down kit: the sheets flat, the mast alongside.
+## The kit as the parts a crew handles: cut sheets flat, printed parts,
+## pipe blades, the mast, the generator and a bag of hardware.
+static func parts_for_packing(d: Dictionary) -> Array:
+	var s: Dictionary = d["spec"]
+	var out: Array = []
+	var sheet := WindLabParts.sheet(str(s["build"]["sheet"]))
+	var t_m := maxf(float(d.get("sheet_t_mm", 4.0)) * 0.001, 0.001)
+	for p in d.get("parts", []):
+		if str(p["id"]) == "pipe_template":
+			continue
+		var a := float(p["w"]) * float(p["h"]) * 1e-6
+		if str(p["id"]) == "hub":
+			a *= PI / 4.0
+		var l := maxf(float(p["w"]), float(p["h"])) * 0.001
+		var w := minf(float(p["w"]), float(p["h"])) * 0.001
+		out.append(PackKitter.part(str(p.get("label", p["id"])), "sheet", l, w, t_m,
+			a * float(sheet["kg_m2"]), int(p["qty"]), {"group": "sheets"}))
+	var m: Dictionary = d["mass"]
+	var solid := WindLabParts.solid(str(s["build"]["solid"]))
+	var built_kg := 0.0
+	for r in out:
+		built_kg += float(r["mass_kg"]) * int(r["qty"])
+	for p in d.get("prints", []):
+		var q := maxi(int(p["qty"]), 1)
+		var vol := absf(float(p["volume_cm3"])) * 1e-6
+		var kg := vol * float(solid["density"]) * 0.45
+		var l := maxf(float(p.get("length_mm", 100.0)) * 0.001, 0.03)
+		var side := clampf(sqrt(maxf(vol, 1e-6) / l) * 2.0, 0.02, l)
+		out.append(PackKitter.part(str(p.get("label", p["id"])), "piece", l, side, side, kg, q,
+			{"group": "prints", "fragile": true}))
+		built_kg += kg * q
+	var pipe_kg := maxf(float(m["rotor"]) - built_kg, 0.0)
+	if pipe_kg > 0.001 and str(s["type"]) == "hawt" and str(s["rotor"]["construction"]) == "pvc_pipe":
+		var st: Array = d["stations"]
+		var span := float(st[st.size() - 1]["r_m"]) - float(st[0]["r_m"]) if st.size() > 1 else 0.5
+		var chord := 0.0
+		for e in st:
+			chord = maxf(chord, float(e["c_m"]))
+		var nb := maxi(int(s["rotor"]["blades"]), 1)
+		out.append(PackKitter.part("Pipe blade", "sheet", maxf(span, 0.1), maxf(chord, 0.03), 0.03,
+			pipe_kg / nb, nb, {"group": "blades"}))
+	var mast := WindLabParts.mast(str(s["mount"]["mast"]))
+	var mast_len := float(s["mount"]["mast_h_mm"]) * 0.001
+	if mast_len > 0.05 and float(m["mast"]) > 0.0:
+		var od := maxf(float(mast["od"]) * 0.001, 0.01)
+		out.append(PackKitter.part("Mast", "stick", mast_len, od, od, float(m["mast"]), 1, {"round": true}))
+	var gen: Dictionary = d["gen"]
+	var gn := maxi(int(d.get("gen_count", 1)), 1)
+	var gs := maxf(float(gen.get("frame_mm", gen.get("dia_mm", 100.0))) * 0.001, 0.04)
+	out.append(PackKitter.part(str(gen.get("label", "Generator")), "piece", gs * 1.4, gs, gs,
+		float(gen["mass_kg"]), gn, {"group": "generator"}))
+	if float(m["misc"]) > 0.0:
+		out.append(PackKitter.part("Hardware", "loose", 0.3, 0.2, 0.1, float(m["misc"]), 1, {}))
+	return out
+
+
+## The knocked-down kit, kitted into the units a crew carries.
 static func packed_spec(d: Dictionary) -> Dictionary:
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(d)), "crate")
+	if not env.is_empty():
+		return env
+	return _legacy_packed_spec(d)
+
+
+static func _legacy_packed_spec(d: Dictionary) -> Dictionary:
 	var s: Dictionary = d["spec"]
 	var sz := WindLabParts.sheet_size(str(s["build"]["sheet_size"]))
 	var n := maxi((d["nest"]["sheets"] as Array).size(), 1)

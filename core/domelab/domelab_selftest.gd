@@ -19,7 +19,7 @@ extends SceneTree
 ## error, and the 3D builder's picking. Carries EXPECTED_CHECKS: a runtime
 ## error aborts a test function while PASS still prints.
 
-const EXPECTED_CHECKS := 196
+const EXPECTED_CHECKS := 197
 
 var _pass := 0
 var _fail := 0
@@ -756,8 +756,10 @@ func _test_bom_and_packing() -> void:
 	var longest := 0.0
 	for c in d["strut_classes"]:
 		longest = maxf(longest, float(c["cut"]))
-	_check("bundle as long as the longest strut", _approx(float(norm["w_m"]), longest, 1e-6), str(norm))
-	_check("bundle carries the mass", _approx(float(norm["mass_kg"]), float(bom["mass_kg"]), 1e-6))
+	_check("kit as long as the longest strut", float(norm["w_m"]) >= longest - 1e-6, str(norm))
+	_check("kit carries the mass", float(norm["mass_kg"]) >= float(bom["mass_kg"]) - 1e-3,
+		"%s vs %s" % [norm["mass_kg"], bom["mass_kg"]])
+	_check("kit lists its handling units", (ps.get("contains", []) as Array).size() >= 2, str(ps.get("units", 0)))
 	# A 3V "5/8" keeps the ring below the equator: really ~0.59 of the sphere.
 	_check("stats: 3V 5/8 height ~1.18 R", _approx(float(d["stats"]["height_m"]), 4.5 * 1.177, 0.05), str(d["stats"]["height_m"]))
 	_check("stats: floor area", float(d["stats"]["floor_area_m2"]) > 50.0 and float(d["stats"]["floor_area_m2"]) < 75.0,

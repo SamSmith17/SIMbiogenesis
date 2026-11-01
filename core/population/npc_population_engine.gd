@@ -1043,6 +1043,14 @@ func agent_dots() -> Array:
 		# so the hosts stay dumb consumers of the dot payload.
 		var carrying := a.is_carrying()
 		var carry_prop := ""
+		# A forklift operator: the truck follows them and the crate rides
+		# the forks, not their hands.
+		var fork_id := ""
+		if chore_board != null and not a.chore_id.is_empty():
+			var fch: Dictionary = chore_board.find(a.chore_id)
+			var feff: Dictionary = fch.get("effect", {})
+			if str(feff.get("op", "")) == "fork_move":
+				fork_id = str(fch.get("forklift_id", feff.get("forklift_id", "")))
 		if carrying and chore_board != null:
 			var tgt: Dictionary = (chore_board.find(a.chore_id) as Dictionary).get("target", {})
 			if str(tgt.get("kind", "")) == "prop":
@@ -1065,6 +1073,7 @@ func agent_dots() -> Array:
 			"work_pose": NpcWorkPose.family_for(chore_board.find(a.chore_id))
 				if (chore_board != null and not a.chore_id.is_empty()) else "",
 			"carry_prop": carry_prop,
+			"fork_id": fork_id,
 			"color": color_for_agent(a.id),
 			"morale": a.morale,
 			"morale_color": NpcMorale.color(a.morale),

@@ -286,11 +286,20 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var gl := GantryLabDesign.packed_spec(GantryLabDesign.solve(rec.get("gantry_spec") as Dictionary))
 		if not gl.is_empty():
 			return gl
+	if rec.get("rack_spec") is Dictionary:
+		var rk := PalletRackBuilder.packed_spec_for(rec.get("rack_spec") as Dictionary)
+		if not rk.is_empty():
+			return rk
 	if rec.get("container_spec") is Dictionary:
 		var c := ContainerCatalog.packed_spec_for(
 			str((rec.get("container_spec") as Dictionary).get("container_id", "")))
 		if not c.is_empty():
 			return c
+	if rec.get("intermodal_spec") is Dictionary:
+		var iu := IntermodalUnits.packed_spec_for(
+			IntermodalUnitBuilder.entry_for_spec(rec.get("intermodal_spec") as Dictionary))
+		if not iu.is_empty():
+			return iu
 	return PackedSpec.for_model(str(rec.get("model_id", "")))
 
 
@@ -495,6 +504,11 @@ static func _maybe_attach_vehicle(prop: PlacedProp, model: Node3D, rec: Dictiona
 	v.name = "PlacedVehicle"
 	v.setup(prop, model, rec, pid)
 	prop.add_child(v)
+	if pid == "forklift":
+		var rig := ForkliftRig.new()
+		rig.name = "ForkliftRig"
+		rig.configure(v, model)
+		prop.add_child(rig)
 
 
 ## The firepit's own small fire (FirepitFire): lit at night when it is cold.
@@ -794,6 +808,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 	# interior would then put crates through the walls.
 	if rec.has("container_spec"):
 		extras["container_spec"] = rec.get("container_spec", {})
+	if rec.has("intermodal_spec"):
+		extras["intermodal_spec"] = rec.get("intermodal_spec", {})
 	if rec.has("pv_array_spec"):
 		extras["pv_array_spec"] = rec.get("pv_array_spec", {})
 	if rec.has("pelton_spec"):

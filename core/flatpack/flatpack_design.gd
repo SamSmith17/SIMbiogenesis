@@ -276,7 +276,40 @@ static func seats_in_pose(design: Dictionary, pose_id: String) -> Array:
 
 ## The flat stack the parts pack into: the largest part's bounding box, one
 ## sheet thickness per part, plus the mass. Metres + kg (PackedSpec units).
+static func parts_for_packing(design: Dictionary) -> Array:
+	var IN := 0.0254
+	var bom: Dictionary = design.get("bom", {})
+	var t := float(bom.get("thickness", 0.5))
+	var parts: Array = design.get("parts", [])
+	var area := 0.0
+	for p in parts:
+		var bb: Rect2 = p["bbox"]
+		area += bb.size.x * bb.size.y
+	var mass := float(bom.get("mass_kg", 0.0))
+	var out: Array = []
+	for p in parts:
+		var bb: Rect2 = p["bbox"]
+		var a := bb.size.x * bb.size.y
+		var kg := mass * a / area if area > 0.0 else 0.0
+		var th := float(p.get("thickness", t))
+		var label := str(p.get("label", p.get("name", "panel")))
+		if maxf(bb.size.x, bb.size.y) * IN < 0.3:
+			out.append(PackKitter.part(label, "loose", maxf(bb.size.x, bb.size.y) * IN,
+				minf(bb.size.x, bb.size.y) * IN, th * IN, kg, 1))
+		else:
+			out.append(PackKitter.part(label, "sheet", maxf(bb.size.x, bb.size.y) * IN,
+				minf(bb.size.x, bb.size.y) * IN, th * IN, kg, 1, {"group": "plywood", "mixed": true}))
+	return out
+
+
 static func packed_spec(design: Dictionary) -> Dictionary:
+	var spec := PackKitter.envelope(PackKitter.kit(parts_for_packing(design)), "panel_stack")
+	if spec.is_empty():
+		return _legacy_packed_spec(design)
+	return spec
+
+
+static func _legacy_packed_spec(design: Dictionary) -> Dictionary:
 	var big := Vector2.ZERO
 	var n := 0
 	for p in design.get("parts", []):

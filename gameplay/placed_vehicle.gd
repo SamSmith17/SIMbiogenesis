@@ -88,6 +88,18 @@ const PROFILES := {
 		"yaw_deg": 0.0, "radius": 4.5, "battery_wh": 0.0, "wh_per_mile": 0.0,
 		"charge_w": 0.0, "chase_m": 8.0, "chase_h": 2.8,
 	},
+	# A 2.5 t electric counterbalance forklift: walking pace on a loaded site,
+	# rear-wheel steer (tight turns), the forks toward the model's -Z.
+	# ForkliftRig drives the mast and the forks while it is ridden.
+	"forklift": {
+		"display_name": "Forklift", "prompt": "Drive the forklift",
+		"speed_multiplier": 0.6, "max_speed": 3.5, "max_camera_tilt": 0.0,
+		"tilt_speed": 0.0, "camera_shake_intensity": 0.006, "camera_shake_speed": 7.0,
+		"min_shake_speed": 0.3, "camera_offset": Vector3(0.0, 0.55, 0.35), "is_golf_cart": true,
+		"use_cart_steering": true, "min_turn_radius": 1.8, "max_turn_rate": 80.0,
+		"yaw_deg": 0.0, "radius": 3.0, "battery_wh": 20000.0, "wh_per_mile": 600.0,
+		"charge_w": 3000.0, "chase_m": 6.0, "chase_h": 2.6,
+	},
 }
 
 const RECORD_EVERY_S := 0.5

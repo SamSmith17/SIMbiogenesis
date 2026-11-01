@@ -209,7 +209,7 @@ func _populate() -> void:
 		{
 			"kind": "building_key",
 			"label": "Edit focused building (B)",
-			"detail": "Customize the building under the crosshair (or open the library if none).",
+			"detail": "Customize the building under the crosshair, or start a new house.",
 		},
 	]
 	_entries["Building"] = buildings
@@ -259,6 +259,11 @@ func _populate() -> void:
 
 	var structs: Array = [
 		{
+			"kind": "building_designer",
+			"label": "Building designer…",
+			"detail": "A house from a footprint: walls, roof, doors, windows, porch and lights.",
+		},
+		{
 			"kind": "pallet_rack",
 			"label": "Pallet rack builder…",
 			"detail": "Parametric rack → place as a structure.",
@@ -267,6 +272,11 @@ func _populate() -> void:
 			"kind": "flatpack",
 			"label": "Flat-pack furniture designer…",
 			"detail": "Slotted plywood sofas, benches, stools, tables and chairs → CNC cut files.",
+		},
+		{
+			"kind": "intermodal",
+			"label": "Intermodal unit designer…",
+			"detail": "Containers, pallets, IBC totes, gaylords, drums, rack bays → place or pack into.",
 		},
 		{
 			"kind": "domelab",
@@ -461,7 +471,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "building_designer"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -516,12 +526,26 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 			_open_veg_paint()
 		"veg_tune", "veg_species":
 			_open_veg_tune(str(e.get("species", "")))
+		"building_designer":
+			if _loader != null and _loader.has_method("open_building_builder"):
+				_loader.call("open_building_builder", -1)
+				close()
+			else:
+				_status.text = "Building designer needs a location map (TerrainLoader)."
 		"pallet_rack":
 			if _loader != null and _loader.has_method("open_pallet_rack_builder"):
 				_loader.call("open_pallet_rack_builder")
 				close()
 			else:
 				_status.text = "Pallet rack builder needs a location map (TerrainLoader)."
+		"intermodal":
+			var ims: GDScript = load("res://scenes/ui/intermodal_unit_modal.gd")
+			if ims != null:
+				var tree: SceneTree = get_tree()
+				close()
+				ims.call("open", tree)
+			else:
+				_status.text = "Intermodal unit designer is missing."
 		"flatpack":
 			if _loader != null and _loader.has_method("open_flatpack_designer"):
 				_loader.call("open_flatpack_designer")

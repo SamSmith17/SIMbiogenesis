@@ -165,6 +165,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == FlatpackBuilder.MODEL_ID:
 		var fp_spec: Dictionary = extras.get("flatpack_spec", extras) as Dictionary
 		return FlatpackBuilder.build_node(fp_spec)
+	if model_id == BuildingFeatures.MODEL_ID:
+		var bld_spec: Dictionary = extras.get("building_spec", {}) as Dictionary
+		return BuildingBuilder.build_node(bld_spec)
 	if model_id == DomeLabBuilder.MODEL_ID:
 		var dl_spec: Dictionary = extras.get("domelab_spec", extras) as Dictionary
 		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
@@ -212,6 +215,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == CargoContainerBuilder.MODEL_ID:
 		var container_spec: Dictionary = extras.get("container_spec", extras) as Dictionary
 		return CargoContainerBuilder.build_node(container_spec)
+	if model_id == IntermodalUnitBuilder.MODEL_ID:
+		var unit_spec: Dictionary = extras.get("intermodal_spec", extras) as Dictionary
+		return IntermodalUnitBuilder.build_node(unit_spec)
 	if model_id == PvArrayBuilder.MODEL_ID:
 		var pv_spec: Dictionary = extras.get("pv_array_spec", extras) as Dictionary
 		return PvArrayBuilder.build_node(pv_spec)
@@ -221,6 +227,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return StreamIntakeBuilder.build_node(extras)
 	if model_id == FirepitBuilder.MODEL_ID:
 		return FirepitBuilder.build_node(extras)
+	if model_id == ForkliftBuilder.MODEL_ID:
+		return ForkliftBuilder.build_node(extras)
 	if VehicleModelBuilder.handles(model_id):
 		return VehicleModelBuilder.build_node(model_id)
 	if model_id == GENERIC_BOX_ID:
@@ -475,6 +483,9 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "flatpack_furniture", "label": "Flat-pack furniture (parametric)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.9},
+		{"id": "parametric_building", "label": "Building (parametric)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 3.0},
 		# Procedural geodesic domes and zomes (DomeLabBuilder): the dome & zome
 		# designer's strut / hub / plate structures with their fabrication data.
 		{"id": "domelab_structure", "label": "Dome or zome (parametric)",
@@ -507,6 +518,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "cargo_container", "label": "Shipping Container",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.6},
+		# Any intermodal unit (container, pallet, IBC, gaylord, drum, rack bay)
+		# from IntermodalUnits via `intermodal_spec` {unit_id | template, params}.
+		{"id": "intermodal_unit", "label": "Intermodal unit",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 1.2},
 		# Procedural single bed. Placing one AUTO-TAGS it as a capacity-1 sleep
 		# space (PlacedPropService), and a sleeper aligns to its long axis —
 		# see BedBuilder's orientation contract (long axis = local Z, head -Z).
@@ -545,6 +561,9 @@ static func _shipped_models() -> Array[Dictionary]:
 			"procedural": true, "preserve_scale": true, "category": "vehicles",
 			"vehicle": "van", "vehicle_name": "Camper Van",
 			"source_path": "res://Imported Models/GMC camper van.glb", "length_m": 5.6},
+		{"id": "vehicle_forklift", "label": "Forklift (2.5 t)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "forklift", "vehicle_name": "Forklift"},
 		# Procedural stream / spring intake — minted where a player drops the
 		# uphill end of a penstock (conduits have no free endpoints, so the
 		# water source has to be a real prop + graph node).

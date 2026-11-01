@@ -462,8 +462,12 @@ func _test_builder() -> void:
 func _test_packing() -> void:
 	var d := FlatpackDesign.solve(FlatpackSpec.default_spec("sofa"))
 	var ps := FlatpackDesign.packed_spec(d)
-	_ok(_near(float(ps["mass_kg"]), float(d["bom"]["mass_kg"]), 1e-6) and float(ps["mass_kg"]) > 40.0,
-		"the flat stack weighs what the parts do (%.1f kg)" % float(ps["mass_kg"]))
-	_ok(_near(float(ps["h_m"]), 12 * 0.46875 * 0.0254, 1e-4), "twelve sheets of 15/32\" stack %.3f m high" % float(ps["h_m"]))
-	_ok(_near(float(ps["w_m"]), 96.0 * 0.0254, 1e-3), "as long as the longest part")
+	var pack_kg := 0.0
+	for u in ps.get("contains", []):
+		pack_kg += float((u as Dictionary).get("packaging_kg", 0.0))
+	var bom_kg := float(d["bom"]["mass_kg"])
+	_ok(float(ps["mass_kg"]) >= bom_kg - 1e-6 and float(ps["mass_kg"]) <= bom_kg + pack_kg + 1e-6 and float(ps["mass_kg"]) > 40.0,
+		"the stack weighs the parts plus straps and interleaf (%.1f kg, parts %.1f)" % [float(ps["mass_kg"]), bom_kg])
+	_ok(float(ps["h_m"]) >= 12 * (0.46875 * 0.0254 + 0.002) - 1e-4, "twelve sheets of 15/32\" with interleaf stack %.3f m high" % float(ps["h_m"]))
+	_ok(_near(float(ps["w_m"]), 96.0 * 0.0254 + 0.04, 2e-3), "as long as the longest part plus the strap pad (%.3f m)" % float(ps["w_m"]))
 	_ok(PackedSpec.DYNAMIC_MODELS.has(FlatpackBuilder.MODEL_ID), "flat-pack furniture is a computed packed model")

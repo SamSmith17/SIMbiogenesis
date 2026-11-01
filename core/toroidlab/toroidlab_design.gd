@@ -136,9 +136,72 @@ static func _checks(d: Dictionary) -> Array:
 	return out
 
 
-## How it ships: the bent tube bundle (longest chord × its rise + the
-## bundle's section), the canopy stack and the panel stack, as ONE envelope.
+## What the toroid is made of, as PackKitter parts: the bent tubes per class
+## (a chord long, as deep as its rise), the canopy sheets laid flat, the
+## solar panels in their own crate, and the fittings and lines loose.
+static func parts_for_packing(d: Dictionary) -> Array:
+	var s: Dictionary = d["spec"]
+	var tube := ToroidLabMaterials.tube(str(s["tube"]["material"]))
+	var od := float(tube["od_mm"]) * 0.001
+	var kg_by_group := {}
+	for r in (d["bom"] as Dictionary).get("rows", []):
+		var g := str(r.get("group", ""))
+		kg_by_group[g] = float(kg_by_group.get(g, 0.0)) + float(r.get("kg", 0.0))
+	var parts: Array = []
+	var tube_len := 0.0
+	var classes: Array = []
+	for c in (d["frame"] as Dictionary)["classes"]:
+		if str(c["kind"]) == "cable" or int(c["count"]) <= 0:
+			continue
+		classes.append(c)
+		tube_len += float(c["cut_m"]) * int(c["count"])
+	var tube_kg := float(kg_by_group.get("tube", 0.0))
+	for c in classes:
+		var each := tube_kg * float(c["cut_m"]) / maxf(tube_len, 1e-6) if tube_kg > 0.0 \
+			else float(c["cut_m"]) * float(tube.get("kg_m", 1.0))
+		parts.append(PackKitter.part(str(c["label"]), "stick", maxf(float(c["chord_m"]), 0.2),
+			od + float(c["rise_m"]), od, each, int(c["count"]), {"group": "frame"}))
+	var cn: Dictionary = d["canopy"]
+	var t := float((cn.get("material", {}) as Dictionary).get("t_mm", 4.0)) * 0.001
+	var area := 0.0
+	for c in cn.get("classes", []):
+		area += float(c.get("area_m2", 0.0)) * int(c.get("count", 0))
+	var canopy_kg := float(kg_by_group.get("canopy", 0.0))
+	for c in cn.get("classes", []):
+		if int(c.get("count", 0)) <= 0:
+			continue
+		var each := canopy_kg * float(c.get("area_m2", 0.0)) / maxf(area, 1e-6)
+		parts.append(PackKitter.part(str(c.get("label", "canopy piece")), "sheet",
+			float(c.get("h_mm", 1000.0)) * 0.001, float(c.get("w_mm", 1000.0)) * 0.001,
+			maxf(t, 0.002), each, int(c["count"]), {"group": "canopy"}))
+	var so: Dictionary = d["solar"]
+	var npan := int(so.get("count", 0))
+	if npan > 0:
+		var m: Dictionary = so.get("model", {})
+		var each := float(kg_by_group.get("solar", 0.0)) / npan
+		parts.append(PackKitter.part(str(m.get("label", "solar panel")), "sheet",
+			float(m.get("long_mm", 1000.0)) * 0.001, float(m.get("short_mm", 500.0)) * 0.001,
+			0.004, maxf(each, float(m.get("kg", 2.0))), npan,
+			{"group": "solar", "fragile": true, "own_crate": true}))
+	var loose := float(kg_by_group.get("fitting", 0.0)) + float(kg_by_group.get("cable", 0.0)) \
+		+ float(kg_by_group.get("stock", 0.0))
+	if loose > 0.0:
+		var n := maxi(1, ceili(loose))
+		parts.append(PackKitter.part("Fittings, clamps and lines", "loose", 0.12, 0.08, 0.06, loose / n, n,
+			{"group": "hardware"}))
+	return parts
+
+
+## How it ships: the parts kitted into handling units (PackKitter), as one
+## envelope; the old single bundle estimate when there are no parts.
 static func packed_spec(d: Dictionary) -> Dictionary:
+	var env := PackKitter.envelope(PackKitter.kit(parts_for_packing(d)), "bundle")
+	if not env.is_empty():
+		return env
+	return _legacy_packed_spec(d)
+
+
+static func _legacy_packed_spec(d: Dictionary) -> Dictionary:
 	var s: Dictionary = d["spec"]
 	var tube := ToroidLabMaterials.tube(str(s["tube"]["material"]))
 	var od := float(tube["od_mm"]) * 0.001
