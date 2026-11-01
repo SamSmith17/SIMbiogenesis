@@ -13914,10 +13914,29 @@ func open_building_builder(building_idx: int) -> void:
 	if _building_builder_ui == null:
 		return
 	if building_idx < 0:
-		if _building_builder_ui.has_method("open_library"):
-			_building_builder_ui.call("open_library")
+		if _building_builder_ui.has_method("open_designer"):
+			_building_builder_ui.call("open_designer")
 	elif _building_builder_ui.has_method("open"):
 		_building_builder_ui.call("open", building_idx)
+
+
+func open_building_builder_for_prop(prop_id: String) -> void:
+	if _building_builder_ui != null and _building_builder_ui.has_method("open_for_prop"):
+		_building_builder_ui.call("open_for_prop", prop_id)
+
+
+func begin_building_placement(building_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var spec := building_spec.duplicate(true)
+	var r: Dictionary = PlacedPropService.begin_placement(_main, BuildingFeatures.MODEL_ID, {
+		"record_extra": {"building_spec": spec},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
 
 
 func get_building_record(building_idx: int) -> Dictionary:
@@ -14373,6 +14392,8 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
 			"rank": int(rec.get("unload_rank", rec.get("delivery_slot", 0))),
 			"mass_kg": float(pspec.get("mass_kg", -1.0)),
 			"long_m": long_m,
+			"handling": str(pspec.get("handling", "")),
+			"lift_m": float(rec.get("y_offset", 0.0)),
 			"label": str(entry.get("label", rec.get("model_id", "crate")))})
 	# LIFO. This ONE sort serves both strategies: the brigade's stage effects
 	# fire in list order, and the round-trip rows take an ascending priority
@@ -14382,7 +14403,8 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
 	# Strategy + rows are pure (SiteProject.unload_spec_rows): round trips =
 	# one carry chore per crate; bucket brigade = ONE crew chore with the
 	# crates flowing through as stage effects along the relay line.
-	var built: Dictionary = SiteProject.unload_spec_rows(crates, from, roster)
+	var built: Dictionary = SiteProject.unload_spec_rows(crates, from, roster,
+		"", nearest_forklift_id(from))
 	var rows: Array = built.get("rows", [])
 	var centre: Vector2 = built.get("centre", from)
 	var project_id := ""
@@ -14394,6 +14416,26 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
 			{"kind": "pos", "x": centre.x, "z": centre.y}, {}))
 	if project_id.is_empty():
 		push_warning("Delivery unload plan refused — chore board full")
+
+
+## The placed forklift nearest `at` within `max_m`, "" when there is none.
+func nearest_forklift_id(at: Vector2, max_m: float = 150.0) -> String:
+	if _placed_prop_layer == null:
+		return ""
+	var best := ""
+	var best_d := max_m
+	for r in _placed_prop_layer.props:
+		if not (r is Dictionary):
+			continue
+		var rec: Dictionary = r
+		if str(rec.get("model_id", "")) != ForkliftBuilder.MODEL_ID:
+			continue
+		var d := at.distance_to(Vector2(float(rec.get("x", 0.0)),
+			float(rec.get("z", 0.0))))
+		if d < best_d:
+			best_d = d
+			best = str(rec.get("id", ""))
+	return best
 
 
 func is_prop_packed(prop_id: String) -> bool:

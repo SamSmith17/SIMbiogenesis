@@ -72,6 +72,9 @@ const WINDOW_COLOR := Color(0.52, 0.64, 0.74)
 const FACADE_SELECT_TINT := Color(1.0, 0.85, 0.3)
 ## Clear metre gap kept between adjacent facade elements on one wall.
 const FACADE_LAYOUT_GAP_M := 0.5
+const AREA_LIGHT_CAP := 8
+const AREA_RANGE_M := 4.0
+const WARM_LIGHT := Color(1.0, 0.72, 0.42)
 
 ## Per-batch build diagnostics — enabled only while build_buildings_node runs so
 ## build_single_building (the modal preview) never spams. Records why footprints
@@ -324,6 +327,10 @@ static func resolve_building_params(d: Dictionary, style: Dictionary) -> Diction
 			TerrainBuilder.dict_float(style, "roof_pitch_deg", 30.0), 5.0, 60.0)
 		roof["roof_height_m"] = 0.0
 		roof["source"] = "user"
+	if str(style.get("ridge_axis", "")) == "across":
+		roof["orientation"] = "across"
+	if style.has("skillion_flip") and bool(style["skillion_flip"]):
+		roof["skillion_flip"] = true
 	var stable_tag := building_tag(poly)
 	var colors := resolve_building_colors(tags, stable_tag)
 	if style.has("wall_color"):
@@ -340,9 +347,14 @@ static func resolve_building_params(d: Dictionary, style: Dictionary) -> Diction
 		"colors": colors,
 		"base_offset_m": clampf(
 			TerrainBuilder.dict_float(style, "base_y_offset_m", 0.0), -5.0, 5.0),
-		"elements": style.get("elements", []),
+		"elements": BuildingFeatures.resolve_list(style.get("elements", [])),
 		"wall_mode": wall_mode,
 		"wall_seed": float(stable_tag.hash() % 1024) / 1024.0,
+		"foundation": str(style.get("foundation", "slab")),
+		"overhang_m": float(style.get("overhang_m", 0.0)),
+		"corner_trim": bool(style.get("corner_trim", false)),
+		"light_windows": bool(style.get("light_windows", false)),
+		"preview_night": bool(style.get("_preview_night", false)),
 	}
 
 
@@ -582,6 +594,266 @@ static func _record_centre_dist2(item: Variant) -> float:
 	return c.length_squared()
 
 
+static func _edge_frame(poly: PackedVector2Array, edge: int) -> Dictionary:
+	var n := poly.size()
+	if n < 3:
+		return {"ok": false}
+	var i := posmod(edge, n)
+	var p0: Vector2 = poly[i]
+	var p1: Vector2 = poly[(i + 1) % n]
+	var length := p0.distance_to(p1)
+	if length < 0.05:
+		return {"ok": false}
+	var dir := (p1 - p0) / length
+	return {
+		"ok": true, "p0": p0, "dir": dir, "out": Vector2(dir.y, -dir.x), "len": length,
+		"dir3": Vector3(dir.x, 0.0, dir.y), "out3": Vector3(dir.y, 0.0, -dir.x),
+	}
+
+
+static func _trim_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, col: Color) -> void:
+	var nrm := (b - a).cross(c - a)
+	if nrm.length_squared() < 1e-10:
+		return
+	nrm = nrm.normalized()
+	for p in [a, b, c]:
+		st.set_normal(nrm)
+		st.set_color(col)
+		st.add_vertex(p)
+
+
+## A face whose stored normal is cross(right, up), centred on origin.
+static func _trim_quad(st: SurfaceTool, origin: Vector3, right: Vector3, up: Vector3,
+		hx: float, hy: float, col: Color) -> void:
+	var bl := origin - right * hx - up * hy
+	var br := origin + right * hx - up * hy
+	var tr := origin + right * hx + up * hy
+	var tl := origin - right * hx + up * hy
+	_trim_tri(st, bl, tr, tl, col)
+	_trim_tri(st, bl, br, tr, col)
+
+
+static func _trim_box(st: SurfaceTool, center: Vector3, ax: Vector3, ay: Vector3, az: Vector3,
+		hx: float, hy: float, hz: float, col: Color) -> void:
+	_trim_quad(st, center + az * hz, ax, ay, hx, hy, col)
+	_trim_quad(st, center - az * hz, -ax, ay, hx, hy, col)
+	_trim_quad(st, center + ax * hx, -az, ay, hz, hy, col)
+	_trim_quad(st, center - ax * hx, az, ay, hz, hy, col)
+	_trim_quad(st, center + ay * hy, ax, -az, hx, hz, col)
+	_trim_quad(st, center - ay * hy, ax, az, hx, hz, col)
+
+
+static func _trim_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.82
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
+	return mat
+
+
+static func _append_trim(st: SurfaceTool, poly: PackedVector2Array, params: Dictionary,
+		base_y: float, height_m: float) -> bool:
+	var wrote := [false]
+	var roof: Dictionary = params["roof"] if params["roof"] is Dictionary else {}
+	var eave_y := base_y + _wall_height_m(height_m, roof, poly)
+	var wood := Color(0.55, 0.42, 0.30)
+	var trim_col := Color(0.90, 0.88, 0.84)
+	var n := poly.size()
+	if bool(params.get("corner_trim", false)):
+		for i in n:
+			var fr: Dictionary = _edge_frame(poly, i)
+			if not fr["ok"]:
+				continue
+			var dir3: Vector3 = fr["dir3"]
+			var out3: Vector3 = fr["out3"]
+			var p0: Vector2 = fr["p0"]
+			var edge_len: float = fr["len"]
+			var band := Vector3(p0.x, base_y + 0.1, p0.y) \
+				+ dir3 * (edge_len * 0.5) + out3 * 0.025
+			_trim_box(st, band, dir3, Vector3.UP, out3, edge_len * 0.5, 0.1, 0.012, trim_col)
+			wrote[0] = true
+			var hy := maxf((eave_y - base_y) * 0.5, 0.2)
+			for end_u in [0.06, edge_len - 0.06]:
+				var c: Vector3 = Vector3(p0.x, base_y + hy, p0.y) + dir3 * float(end_u) + out3 * 0.02
+				_trim_box(st, c, dir3, Vector3.UP, out3, 0.06, hy, 0.012, trim_col)
+	var overhang := float(params.get("overhang_m", 0.0))
+	if overhang > 0.02:
+		for i in n:
+			var fr2: Dictionary = _edge_frame(poly, i)
+			if not fr2["ok"]:
+				continue
+			var dir3b: Vector3 = fr2["dir3"]
+			var out3b: Vector3 = fr2["out3"]
+			var p0b: Vector2 = fr2["p0"]
+			var edge_len2: float = fr2["len"]
+			var along := Vector3(p0b.x, eave_y, p0b.y) + dir3b * (edge_len2 * 0.5)
+			_trim_box(st, along + out3b * overhang + Vector3(0, -0.08, 0),
+				dir3b, Vector3.UP, out3b, edge_len2 * 0.5, 0.075, 0.015, trim_col)
+			_trim_box(st, along + out3b * (overhang * 0.5) + Vector3(0, -0.02, 0),
+				dir3b, Vector3.UP, out3b, edge_len2 * 0.5, 0.012, overhang * 0.5, wood)
+			wrote[0] = true
+	if str(params.get("foundation", "slab")) == "piers":
+		for i in n:
+			var p: Vector2 = poly[i]
+			_trim_box(st, Vector3(p.x, base_y - 0.45, p.y),
+				Vector3.RIGHT, Vector3.UP, Vector3.FORWARD, 0.15, 0.45, 0.15, Color(0.62, 0.60, 0.56))
+			wrote[0] = true
+	var elements: Array = params["elements"] if params["elements"] is Array else []
+	for el in elements:
+		if el is Dictionary and _append_feature_trim(st, poly, el, base_y, height_m, wood, trim_col):
+			wrote[0] = true
+	return wrote[0]
+
+
+static func _append_feature_trim(st: SurfaceTool, poly: PackedVector2Array, el: Dictionary,
+		base_y: float, height_m: float, wood: Color, trim_col: Color) -> bool:
+	var typ := BuildingFeatures.element_type(el)
+	if typ not in ["porch", "steps", "column", "light"]:
+		return false
+	var fr: Dictionary = _edge_frame(poly, int(el.get("edge", 0)))
+	if not fr["ok"]:
+		return false
+	var dir3: Vector3 = fr["dir3"]
+	var out3: Vector3 = fr["out3"]
+	var p0: Vector2 = fr["p0"]
+	var edge_len: float = fr["len"]
+	var u := float(el.get("u_m", edge_len * 0.5))
+	if typ == "porch":
+		var depth := clampf(float(el.get("depth_m", 2.0)), 0.6, 4.0)
+		var span := float(el.get("w_m", 0.0))
+		if span < 0.3:
+			span = maxf(edge_len - 1.0, 0.8)
+		span = minf(span, edge_len - 0.2)
+		var deck_y := base_y + 0.48
+		var centre := Vector3(p0.x, deck_y, p0.y) + dir3 * u + out3 * (depth * 0.5)
+		_trim_box(st, centre, dir3, Vector3.UP, out3, span * 0.5, 0.02, depth * 0.5, wood)
+		var spacing := maxf(float(el.get("post_spacing", 2.4)), 0.8)
+		var posts := maxi(2, int(span / spacing) + 1)
+		for k in posts:
+			var uu := u - span * 0.5 + span * float(k) / float(posts - 1)
+			var foot := Vector3(p0.x, base_y + 0.24, p0.y) + dir3 * uu + out3 * (depth - 0.08)
+			_trim_box(st, foot, dir3, Vector3.UP, out3, 0.06, 0.24, 0.06, trim_col)
+		if bool(el.get("roof", true)):
+			var roof_y := base_y + minf(2.6, height_m - 0.3)
+			var slab := Vector3(p0.x, roof_y, p0.y) + dir3 * u + out3 * (depth * 0.5)
+			_trim_box(st, slab, dir3, Vector3.UP, out3, span * 0.5, 0.025, depth * 0.5, wood)
+			for k in posts:
+				var uu2 := u - span * 0.5 + span * float(k) / float(posts - 1)
+				var post_h := (roof_y - deck_y) * 0.5
+				var post := Vector3(p0.x, deck_y + post_h, p0.y) + dir3 * uu2 + out3 * (depth - 0.08)
+				_trim_box(st, post, dir3, Vector3.UP, out3, 0.05, post_h, 0.05, trim_col)
+		if bool(el.get("rail", true)):
+			var rail_y := deck_y + 0.9
+			var outer := Vector3(p0.x, rail_y, p0.y) + dir3 * u + out3 * (depth - 0.06)
+			_trim_box(st, outer, dir3, Vector3.UP, out3, span * 0.5, 0.03, 0.02, trim_col)
+		return true
+	if typ == "steps":
+		var width := clampf(float(el.get("width_m", 1.0)), 0.6, 3.0)
+		var run := clampf(float(el.get("run_m", 1.2)), 0.4, 3.0)
+		var deck_y2 := base_y + 0.48
+		var rise_total := maxf(deck_y2 - base_y, 0.16)
+		var count := maxi(1, int(ceil(rise_total / 0.18)))
+		var rise := rise_total / float(count)
+		var tread := run / float(count)
+		for k in count:
+			var y := base_y + rise * (float(k) + 0.5)
+			var dist := tread * (float(count - k) - 0.5)
+			var c := Vector3(p0.x, y, p0.y) + dir3 * u + out3 * dist
+			_trim_box(st, c, dir3, Vector3.UP, out3, width * 0.5, rise * 0.5, tread * 0.5, wood)
+		return true
+	if typ == "column":
+		var h := clampf(float(el.get("h_m", 2.4)), 1.2, height_m)
+		var c2 := Vector3(p0.x, base_y + h * 0.5, p0.y) + dir3 * u + out3 * 0.16
+		_trim_box(st, c2, dir3, Vector3.UP, out3, 0.08, h * 0.5, 0.08, trim_col)
+		return true
+	var v := float(el.get("v_m", 1.8))
+	var fix := Vector3(p0.x, base_y + v, p0.y) + dir3 * u + out3 * 0.06
+	_trim_box(st, fix, dir3, Vector3.UP, out3, 0.06, 0.1, 0.04, Color(0.25, 0.24, 0.22))
+	return true
+
+
+static func _attach_openings(host: MeshInstance3D, poly: PackedVector2Array, elements: Array,
+		base_y: float, height_m: float, _windows_on: bool) -> void:
+	var area_n := 0
+	for el in elements:
+		if not (el is Dictionary):
+			continue
+		var item: Dictionary = el
+		var typ := BuildingFeatures.element_type(item)
+		var fr: Dictionary = _edge_frame(poly, int(item.get("edge", 0)))
+		if not fr["ok"]:
+			continue
+		var dir3: Vector3 = fr["dir3"]
+		var out3: Vector3 = fr["out3"]
+		var p0: Vector2 = fr["p0"]
+		var u := float(item.get("u_m", 0.0))
+		if typ == "window":
+			var w := float(item.get("w_m", 0.9))
+			var h := float(item.get("h_m", 1.4))
+			var v := float(item.get("v_m", 0.9))
+			var centre := Vector3(p0.x, base_y + v + h * 0.5, p0.y) + dir3 * u + out3 * 0.055
+			var pane := MeshInstance3D.new()
+			pane.name = "Glass"
+			var box := BoxMesh.new()
+			box.size = Vector3(w * 0.85, h * 0.85, 0.01)
+			pane.mesh = box
+			var basis := Basis()
+			basis.x = dir3
+			basis.y = Vector3.UP
+			basis.z = out3
+			pane.transform = Transform3D(basis, centre)
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = Color(0.15, 0.18, 0.22, 0.35)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat.emission_enabled = false
+			mat.emission = WARM_LIGHT
+			pane.material_override = mat
+			pane.set_meta("bld_glass", true)
+			pane.set_meta("bld_lit", str(item.get("lit", "auto")))
+			host.add_child(pane)
+			var mode := str(item.get("lit", "auto"))
+			if mode != "off" and area_n < AREA_LIGHT_CAP:
+				var area := AreaLight3D.new()
+				area.name = "WindowLight"
+				area.area_size = Vector2(w * 0.85, h * 0.85)
+				area.area_range = AREA_RANGE_M
+				area.area_normalize_energy = true
+				area.shadow_enabled = false
+				area.light_energy = 1.4
+				area.light_color = WARM_LIGHT
+				area.transform = Transform3D(Basis.looking_at(out3, Vector3.UP), centre + out3 * 0.01)
+				area.set_meta("bld_light_mode", mode)
+				host.add_child(area)
+				area_n += 1
+		elif typ == "light":
+			var vv := float(item.get("v_m", 1.8))
+			var style_name := str(item.get("style", "sconce"))
+			var at := Vector3(p0.x, base_y + vv, p0.y) + dir3 * u + out3 * 0.12
+			if style_name == "hanging":
+				at = Vector3(p0.x, base_y + minf(2.45, height_m - 0.45), p0.y) + dir3 * u + out3 * 0.8
+			var col := style_color(item.get("color", WARM_LIGHT), WARM_LIGHT)
+			var energy := clampf(float(item.get("energy", 1.0)), 0.05, 8.0)
+			var lamp: Light3D
+			if style_name == "down":
+				var spot := SpotLight3D.new()
+				spot.spot_angle = 35.0
+				spot.spot_range = 6.0
+				spot.transform = Transform3D(Basis.looking_at(Vector3.DOWN, dir3), at)
+				lamp = spot
+			else:
+				var omni := OmniLight3D.new()
+				omni.omni_range = 6.0
+				omni.position = at
+				lamp = omni
+			lamp.name = "PorchLight"
+			lamp.shadow_enabled = false
+			lamp.light_energy = energy
+			lamp.light_color = col
+			lamp.set_meta("bld_light_mode", str(item.get("lit", "auto")))
+			host.add_child(lamp)
+
+
 ## One styled building as its own MeshInstance3D. Styled buildings are
 ## excluded from the merged mesh and rebuilt individually; the Building
 ## Builder studio calls this with a flat 2×2 zero DEM so the preview and the
@@ -600,35 +872,46 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 	var st_roof := SurfaceTool.new()
 	st_roof.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var detail_foot_extent := detail_extent_m if not detail_elev.is_empty() else 0.0
+	var elements: Array = params["elements"] if params["elements"] is Array else []
+	var openings: Array = []
+	for item in elements:
+		if item is Dictionary and BuildingFeatures.element_type(item) in ["door", "window"]:
+			openings = elements
+			break
 	if not _append_footprint(st_walls, st_roof, poly, params["height_m"],
 			params["roof"], params["colors"], elev, res, height_extent_m, center_elev,
 			detail_elev, detail_cols, detail_rows, detail_foot_extent,
 			float(params["base_offset_m"]), int(params["wall_mode"]),
-			float(params["wall_seed"])):
+			float(params["wall_seed"]), str(params["foundation"]), openings):
 		return null
 	var mi := MeshInstance3D.new()
 	mi.name = "BuildingMesh"
 	var mesh: ArrayMesh = st_walls.commit()
 	mesh = st_roof.commit(mesh)
 
+	var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
+		detail_elev, detail_cols, detail_rows, detail_foot_extent) \
+		+ float(params["base_offset_m"])
+	var height_m := float(params["height_m"])
 	# Facade elements (doors/windows) ride on a third surface with their own
 	# flat-color material — only styled buildings pay for it.
-	var elements: Array = params["elements"] if params["elements"] is Array else []
 	var has_facade := false
 	if not elements.is_empty():
-		var base_y := footprint_base_y(poly, elev, res, height_extent_m, center_elev,
-			detail_elev, detail_cols, detail_rows, detail_foot_extent) \
-			+ float(params["base_offset_m"])
 		var selected := int(TerrainBuilder.dict_float(style, "selected_element", -1.0))
 		var st_fac := SurfaceTool.new()
 		st_fac.begin(Mesh.PRIMITIVE_TRIANGLES)
 		for e_i in elements.size():
 			if elements[e_i] is Dictionary:
 				if _append_facade_element(st_fac, poly, base_y,
-						float(params["height_m"]), elements[e_i], e_i == selected):
+						height_m, elements[e_i], e_i == selected):
 					has_facade = true
 		if has_facade:
 			mesh = st_fac.commit(mesh)
+	var st_trim := SurfaceTool.new()
+	st_trim.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var has_trim := _append_trim(st_trim, poly, params, base_y, height_m)
+	if has_trim:
+		mesh = st_trim.commit(mesh)
 
 	# Assign every surface override AFTER mi.mesh so the internal override array
 	# is sized to the surface count first — setting surface 2 before the mesh
@@ -636,11 +919,38 @@ static func build_single_building(d: Dictionary, style: Dictionary,
 	mi.mesh = mesh
 	mi.set_surface_override_material(0, make_wall_material())
 	mi.set_surface_override_material(1, make_roof_material())
+	var extra := 2
 	if has_facade:
-		mi.set_surface_override_material(2, make_facade_material())
+		mi.set_surface_override_material(extra, make_facade_material())
+		extra += 1
+	if has_trim:
+		mi.set_surface_override_material(extra, _trim_material())
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows \
 		else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.set_meta("light_windows", bool(params["light_windows"]))
+	mi.set_meta("night_override", 1 if bool(params["preview_night"]) else -1)
+	_attach_openings(mi, poly, elements, base_y, height_m, bool(params["light_windows"]))
+	var rig := BuildingLightRig.new()
+	rig.name = "BuildingLightRig"
+	mi.add_child(rig)
 	return mi
+
+
+## Placed house. An empty spec builds the cottage so a catalog instantiate
+## with no extras still has a mesh.
+static func build_node(spec: Dictionary, node_name: String = "ParametricBuilding") -> Node3D:
+	var use := spec
+	if use.is_empty():
+		use = BuildingPresets.cottage()
+	var rec := BuildingFeatures.record_for(use)
+	var elev := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	var root := Node3D.new()
+	root.name = node_name
+	var mi := build_single_building(rec, use, elev, 2, 400.0, 0.0)
+	if mi != null:
+		mi.name = "Mesh"
+		root.add_child(mi)
+	return root
 
 
 ## Lowest corner ground sample — the Y the whole building seats at (before the
@@ -789,7 +1099,11 @@ static func _append_facade_element(st: SurfaceTool, poly: PackedVector2Array,
 		return false
 	var dir := (p_j - p_i) / edge_len
 	var out := Vector2(dir.y, -dir.x)  # outward for the CCW-normalized footprint
-	var kind := str(elem.get("kind", "window"))
+	var kind := str(elem.get("kind", ""))
+	if kind == "":
+		kind = str(elem.get("type", ""))
+	if kind != "door" and kind != "window":
+		return false
 	# Clamp the element inside its wall rectangle.
 	var w := clampf(TerrainBuilder.dict_float(elem, "w_m", 1.2), 0.2,
 		maxf(edge_len - 0.1, 0.2))
@@ -817,6 +1131,17 @@ static func _append_facade_element(st: SurfaceTool, poly: PackedVector2Array,
 		base_y + v, base_y + v + h, FACADE_FRAME_PROUD_M, frame_col, nrm)
 	_facade_quad(st, p_i, dir, out, u + w * 0.5, u + w * 0.5 + fw,
 		base_y + v, base_y + v + h, FACADE_FRAME_PROUD_M, frame_col, nrm)
+	var look := str(elem.get("style", ""))
+	if kind == "door" and look in ["double", "sliding", "garage"]:
+		_facade_quad(st, p_i, dir, out, u - 0.03, u + 0.03,
+			base_y + v, base_y + v + h, 0.05, frame_col, nrm)
+	elif kind == "window" and look in ["double_hung", "pair"]:
+		_facade_quad(st, p_i, dir, out, u - 0.02, u + 0.02,
+			base_y + v, base_y + v + h, 0.05, frame_col, nrm)
+		if look == "double_hung":
+			var mid := base_y + v + h * 0.5
+			_facade_quad(st, p_i, dir, out, u - w * 0.5 + 0.02, u + w * 0.5 - 0.02,
+				mid - 0.02, mid + 0.02, 0.05, frame_col, nrm)
 	return true
 
 
@@ -856,7 +1181,8 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 		detail_elev: PackedFloat32Array = PackedFloat32Array(),
 		detail_cols: int = 0, detail_rows: int = 0, detail_extent_m: float = 0.0,
 		base_offset_m: float = 0.0, wall_mode: int = WallMode.LAP,
-		wall_seed: float = 0.0) -> bool:
+		wall_seed: float = 0.0, foundation: String = "slab",
+		openings: Array = []) -> bool:
 	var n := poly.size()
 	if n < 3:
 		_bump("too_few")
@@ -900,6 +1226,10 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 	# house onto an absurd plinth (the skirt just embeds at the cap instead).
 	if base_y - skirt_y > MAX_FOUNDATION_STEP_M:
 		skirt_y = base_y - MAX_FOUNDATION_STEP_M
+	if foundation == "stem":
+		skirt_y = minf(skirt_y, base_y - 0.85)
+	elif foundation == "piers":
+		skirt_y = base_y - 0.06
 
 	# OSM `height` is top-of-structure above local ground — roof must not exceed it.
 	var wall_h := _wall_height_m(height_m, roof, poly)
@@ -948,10 +1278,10 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 			_bump("flat_fallback")
 		else:
 			roof_faces.append_array(pitched_roof)
-			_emit_pitched_walls(wall_faces, poly, frame, skirt_y, base_y)
+			_emit_pitched_walls(wall_faces, poly, frame, skirt_y, base_y, openings)
 	if used_flat:
 		_emit_flat_walls_roof(wall_faces, roof_faces, poly, tri_indices,
-			skirt_y, top_y, base_y)
+			skirt_y, top_y, base_y, openings)
 
 	var wall_col: Color = colors.get("wall", Color(0.74, 0.71, 0.67))
 	wall_col.a = 1.0
@@ -1007,13 +1337,19 @@ static func _append_footprint(st_walls: SurfaceTool, st_roof: SurfaceTool,
 ## broken ridge geometry still renders a solid (if flat) roof instead of a hole.
 static func _emit_flat_walls_roof(wall_faces: Array, roof_faces: Array,
 		poly: PackedVector2Array, tri_indices: PackedInt32Array,
-		skirt_y: float, top_y: float, base_y: float) -> void:
+		skirt_y: float, top_y: float, base_y: float, openings: Array = []) -> void:
 	var n := poly.size()
 	for i in n:
 		var j := (i + 1) % n
 		var dir := (poly[j] - poly[i]).normalized()
-		_wall_quad(wall_faces, poly[i], dir, poly[i], poly[j],
-			skirt_y, top_y, top_y, base_y)
+		if openings.is_empty():
+			_wall_quad(wall_faces, poly[i], dir, poly[i], poly[j],
+				skirt_y, top_y, top_y, base_y)
+		else:
+			var holes := BuildingFeatures.holes_on_edge(openings, i,
+				poly[i].distance_to(poly[j]), base_y)
+			_wall_span(wall_faces, poly[i], dir, poly[i], poly[j],
+				skirt_y, top_y, top_y, base_y, holes)
 	for t in range(0, tri_indices.size(), 3):
 		var r0 := tri_indices[t]
 		var r1 := tri_indices[t + 1]
@@ -1031,18 +1367,26 @@ static func _emit_flat_walls_roof(wall_faces: Array, roof_faces: Array,
 ## where a roof crease crosses it, then extruded up to the roof height field.
 ## Sharing _roof_height_at with the roof surface keeps wall tops watertight.
 static func _emit_pitched_walls(wall_faces: Array, poly: PackedVector2Array,
-		frame: Dictionary, skirt_y: float, base_y: float) -> void:
+		frame: Dictionary, skirt_y: float, base_y: float, openings: Array = []) -> void:
 	var n := poly.size()
 	var creases := _crease_lines(frame)
 	for i in n:
 		var j := (i + 1) % n
 		var dir := (poly[j] - poly[i]).normalized()
+		var holes: Array = []
+		if not openings.is_empty():
+			holes = BuildingFeatures.holes_on_edge(openings, i,
+				poly[i].distance_to(poly[j]), base_y)
 		var edge_pts := _split_edge_at_creases(poly[i], poly[j], frame, creases)
 		for k in edge_pts.size() - 1:
 			var q0: Vector2 = edge_pts[k]
 			var q1: Vector2 = edge_pts[k + 1]
-			_wall_quad(wall_faces, poly[i], dir, q0, q1, skirt_y,
-				_roof_height_at(q0, frame), _roof_height_at(q1, frame), base_y)
+			var h0 := _roof_height_at(q0, frame)
+			var h1 := _roof_height_at(q1, frame)
+			if holes.is_empty():
+				_wall_quad(wall_faces, poly[i], dir, q0, q1, skirt_y, h0, h1, base_y)
+			else:
+				_wall_span(wall_faces, poly[i], dir, q0, q1, skirt_y, h0, h1, base_y, holes)
 
 
 ## Pitched roof faces: footprint triangulation split along every crease line so
@@ -1099,6 +1443,111 @@ static func _wall_quad(faces: Array, edge_start: Vector2, edge_dir: Vector2,
 		Vector2(u0, vb), Vector2(u0, h0 - base_y), Vector2(u1, h1 - base_y)])
 	faces.append([b0, t1, b1,
 		Vector2(u0, vb), Vector2(u1, h1 - base_y), Vector2(u1, vb)])
+
+
+## Same quad as _wall_quad when no hole overlaps the span. A hole splits the
+## span into columns and cuts a rectangle out of each, leaving the skirt under
+## a door and the roof above a window.
+static func _wall_span(faces: Array, edge_start: Vector2, edge_dir: Vector2,
+		q0: Vector2, q1: Vector2, skirt_y: float, h0: float, h1: float,
+		base_y: float, holes: Array) -> void:
+	var u0 := (q0 - edge_start).dot(edge_dir)
+	var u1 := (q1 - edge_start).dot(edge_dir)
+	if holes.is_empty() or u1 < u0 + 0.0001:
+		_wall_quad(faces, edge_start, edge_dir, q0, q1, skirt_y, h0, h1, base_y)
+		return
+	var cuts: Array[float] = [u0, u1]
+	var hit := false
+	for hole in holes:
+		var hu0 := float(hole["u0"])
+		var hu1 := float(hole["u1"])
+		if hu1 <= u0 + 0.0001 or hu0 >= u1 - 0.0001:
+			continue
+		hit = true
+		cuts.append(clampf(hu0, u0, u1))
+		cuts.append(clampf(hu1, u0, u1))
+	if not hit:
+		_wall_quad(faces, edge_start, edge_dir, q0, q1, skirt_y, h0, h1, base_y)
+		return
+	cuts.sort()
+	var us: Array[float] = []
+	for c in cuts:
+		if us.is_empty() or absf(c - us[us.size() - 1]) > 0.001:
+			us.append(c)
+	var span := u1 - u0
+	for i in us.size() - 1:
+		var ua: float = us[i]
+		var ub: float = us[i + 1]
+		if ub - ua < 0.001:
+			continue
+		var ta := (ua - u0) / span
+		var tb := (ub - u0) / span
+		var ya := lerpf(h0, h1, ta)
+		var yb := lerpf(h0, h1, tb)
+		var roof_hi := maxf(ya, yb)
+		var blocks: Array = []
+		for hole in holes:
+			if float(hole["u1"]) <= ua + 0.0001 or float(hole["u0"]) >= ub - 0.0001:
+				continue
+			var y_lo := float(hole["y0"])
+			var y_hi := float(hole["y1"])
+			if y_hi <= skirt_y or y_lo >= roof_hi:
+				continue
+			blocks.append([maxf(y_lo, skirt_y), minf(y_hi, roof_hi)])
+		var qa := edge_start + edge_dir * ua
+		var qb := edge_start + edge_dir * ub
+		if blocks.is_empty():
+			_wall_quad(faces, edge_start, edge_dir, qa, qb, skirt_y, ya, yb, base_y)
+			continue
+		blocks.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
+		var merged: Array = []
+		for b in blocks:
+			if merged.is_empty() or float(b[0]) > float(merged[merged.size() - 1][1]) + 0.001:
+				merged.append([float(b[0]), float(b[1])])
+			else:
+				merged[merged.size() - 1][1] = maxf(float(merged[merged.size() - 1][1]), float(b[1]))
+		var cursor := skirt_y
+		var roof_lo := minf(ya, yb)
+		for b in merged:
+			var y_cut0 := float(b[0])
+			if y_cut0 > cursor + 0.001:
+				_wall_column_solid(faces, edge_start, edge_dir, qa, qb,
+					cursor, y_cut0, ya, yb, base_y, roof_lo)
+			cursor = maxf(cursor, float(b[1]))
+		if cursor < roof_hi - 0.001:
+			_wall_column_solid(faces, edge_start, edge_dir, qa, qb,
+				cursor, roof_hi, ya, yb, base_y, roof_lo)
+
+
+static func _wall_column_solid(faces: Array, edge_start: Vector2, edge_dir: Vector2,
+		qa: Vector2, qb: Vector2, y_bot: float, y_top: float,
+		ya: float, yb: float, base_y: float, roof_lo: float) -> void:
+	if y_top >= roof_lo - 0.001 and y_bot <= roof_lo + 0.001:
+		_wall_band(faces, edge_start, edge_dir, qa, qb, y_bot, y_bot, ya, yb, base_y)
+	elif y_top >= maxf(ya, yb) - 0.001 and y_bot > roof_lo:
+		_wall_band(faces, edge_start, edge_dir, qa, qb,
+			minf(y_bot, ya), minf(y_bot, yb), ya, yb, base_y)
+	else:
+		_wall_band(faces, edge_start, edge_dir, qa, qb, y_bot, y_bot, y_top, y_top, base_y)
+
+
+static func _wall_band(faces: Array, edge_start: Vector2, edge_dir: Vector2,
+		q0: Vector2, q1: Vector2, yb0: float, yb1: float, yt0: float, yt1: float,
+		base_y: float) -> void:
+	yt0 = maxf(yt0, yb0)
+	yt1 = maxf(yt1, yb1)
+	if yt0 <= yb0 + 0.0001 and yt1 <= yb1 + 0.0001:
+		return
+	var u0 := (q0 - edge_start).dot(edge_dir)
+	var u1 := (q1 - edge_start).dot(edge_dir)
+	var b0 := Vector3(q0.x, yb0, q0.y)
+	var b1 := Vector3(q1.x, yb1, q1.y)
+	var t0 := Vector3(q0.x, yt0, q0.y)
+	var t1 := Vector3(q1.x, yt1, q1.y)
+	faces.append([b0, t0, t1,
+		Vector2(u0, yb0 - base_y), Vector2(u0, yt0 - base_y), Vector2(u1, yt1 - base_y)])
+	faces.append([b0, t1, b1,
+		Vector2(u0, yb0 - base_y), Vector2(u1, yt1 - base_y), Vector2(u1, yb1 - base_y)])
 
 
 ## Geo-registered UV2 for a roof vertex: plan position normalized against the
@@ -1179,7 +1628,10 @@ static func _roof_frame(poly: PackedVector2Array, roof: Dictionary, base_y: floa
 	elif shape == "pyramidal":
 		frame["ridge_half_len"] = 0.0
 	elif shape in ["skillion", "lean_to"]:
-		frame["slope"] = tan(deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0)))
+		var slope := tan(deg_to_rad(TerrainBuilder.dict_float(roof, "angle_deg", 30.0)))
+		if bool(roof.get("skillion_flip", false)):
+			slope = -slope
+		frame["slope"] = slope
 	return frame
 
 

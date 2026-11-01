@@ -834,6 +834,8 @@ func _rebuild_dynamic_sections() -> void:
 		_button("StarShade design…", "Swap the design and reseed its graph", _model_btns, _on_starshade)
 	if mid == PalletRackBuilder.MODEL_ID:
 		_button("Edit rack…", "The parametric pallet-rack builder, bound to this rack", _model_btns, _on_pallet_rack)
+	if mid == BuildingFeatures.MODEL_ID:
+		_button("Edit building…", "The building designer, bound to this house", _model_btns, _on_building)
 	if mid == FlatpackBuilder.MODEL_ID:
 		_button("Edit furniture…", "The flat-pack furniture designer, bound to this piece", _model_btns,
 			_on_flatpack)
@@ -1575,6 +1577,13 @@ func _on_pallet_rack() -> void:
 	if _loader != null and _loader.has_method("open_pallet_rack_builder_for_prop"):
 		close()
 		_loader.call("open_pallet_rack_builder_for_prop", pid)
+
+
+func _on_building() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_building_builder_for_prop"):
+		close()
+		_loader.call("open_building_builder_for_prop", pid)
 
 
 func _on_flatpack() -> void:

@@ -36,6 +36,7 @@ func _initialize() -> void:
 	_test_building_sort()
 	_test_default_colors()
 	_test_model_catalog()
+	_test_designer()
 	_test_roof_ortho_uv2()
 	_test_roof_ortho_uv_scale()
 	_test_wall_modes()
@@ -1132,3 +1133,177 @@ func _test_model_catalog() -> void:
 	var s := ModelCatalog.resolved_scale("starshade", 1.0)
 	var h := float(ModelCatalog.mesh_metrics("starshade").unit_height) * s
 	_check("catalog: starshade height sane", h > 1.5 and h < 12.0, "h=%.2f m" % h)
+
+
+func _test_designer() -> void:
+	_check("light: auto by day is off",
+		not BuildingFeatures.light_on("auto", true, false))
+	_check("light: auto at night with the switch is on",
+		BuildingFeatures.light_on("auto", true, true))
+	_check("light: forced on ignores the clock",
+		BuildingFeatures.light_on("on", false, false))
+	_check("light: off stays off at night",
+		not BuildingFeatures.light_on("off", true, true))
+	_check("light: auto with windows off stays dark",
+		not BuildingFeatures.light_on("auto", false, true))
+	var legacy := BuildingFeatures.resolve_element({
+		"kind": "door", "edge": 0, "u_m": 5.0, "w_m": 1.0, "h_m": 2.05,
+	})
+	_check("legacy door keeps its width", is_equal_approx(float(legacy["w_m"]), 1.0))
+	_check("legacy door keeps its height", is_equal_approx(float(legacy["h_m"]), 2.05))
+	_check("legacy door gains a type", str(legacy.get("type", "")) == "door")
+	_check("empty element list stays empty",
+		BuildingFeatures.resolve_list([]).is_empty())
+	var cottage := BuildingPresets.cottage()
+	var poly := BuildingFeatures.footprint_of(cottage)
+	var edge_len := poly[0].distance_to(poly[1])
+	var elems := BuildingFeatures.resolve_list(cottage.get("elements", []))
+	var door_id := ""
+	for item in elems:
+		if str((item as Dictionary).get("type", "")) == "door":
+			door_id = str((item as Dictionary).get("id", ""))
+			break
+	_check("cottage door does not overlap its windows",
+		not BuildingFeatures.overlaps(elems, 0, 4.0, 0.9, door_id))
+	_check("a second door on the same spot is refused",
+		BuildingFeatures.overlaps(elems, 0, 4.0, 0.9))
+	var holes: Array = BuildingFeatures.holes_on_edge(elems, 0, edge_len, 0.0)
+	var inside := not holes.is_empty()
+	for hole in holes:
+		var h: Dictionary = hole
+		if float(h["u0"]) < -0.01 or float(h["u1"]) > edge_len + 0.01:
+			inside = false
+	_check("cottage openings stay inside the front wall", inside,
+		"edge %.2f holes %d" % [edge_len, holes.size()])
+	_check("clamp keeps a door off the corner",
+		is_equal_approx(BuildingFeatures.clamp_u(0.0, 1.0, 10.0), 1.0))
+	var elev := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	var names: Array = BuildingPresets.builtins()
+	for entry in names:
+		var row: Dictionary = entry
+		var spec: Dictionary = row["spec"]
+		var node := BuildingBuilder.build_node(spec)
+		var mi := node.get_node_or_null("Mesh") as MeshInstance3D
+		var surfaces := 0 if mi == null or mi.mesh == null else mi.mesh.get_surface_count()
+		_check("preset %s builds" % str(row.get("id", "")), surfaces >= 2,
+			"surfaces %d" % surfaces)
+		node.free()
+	var each := cottage.duplicate(true)
+	var list: Array = each.get("elements", [])
+	list.append({"type": "column", "edge": 0, "u_m": 2.2, "h_m": 2.4})
+	list.append({"type": "light", "edge": 0, "u_m": 6.6, "style": "hanging", "lit": "on"})
+	list.append({"type": "light", "edge": 0, "u_m": 3.2, "v_m": 2.2, "style": "down", "lit": "on"})
+	each["elements"] = list
+	var house := BuildingBuilder.build_node(each)
+	var mesh := house.get_node_or_null("Mesh") as MeshInstance3D
+	_check("a house with every feature builds", mesh != null and mesh.mesh != null)
+	if mesh != null:
+		_check("porch sconce is an omni", _count_lights(mesh, "omni") >= 1)
+		_check("a down light is a spot", _count_lights(mesh, "spot") >= 1)
+		_check("trim is its own surface", mesh.mesh.get_surface_count() >= 4,
+			"surfaces %d" % mesh.mesh.get_surface_count())
+		_check("south wall faces outward", _south_wall_outward(mesh))
+	house.free()
+	var one := {
+		"width_m": 8.0, "depth_m": 6.0, "height_m": 3.2,
+		"roof_shape": "flat", "light_windows": true,
+		"elements": [{"type": "window", "edge": 0, "u_m": 4.0,
+			"w_m": 0.9, "h_m": 1.4, "lit": "on", "style": "picture"}],
+	}
+	var lit := BuildingBuilder.build_node(one)
+	var lit_mesh := lit.get_node_or_null("Mesh") as MeshInstance3D
+	var area: AreaLight3D = null
+	var glass_n := 0
+	if lit_mesh != null:
+		for ch in lit_mesh.get_children():
+			if ch is AreaLight3D and area == null:
+				area = ch
+			if ch is MeshInstance3D and bool(ch.get_meta("bld_glass", false)):
+				glass_n += 1
+	_check("one lit window makes one area light", area != null and glass_n == 1,
+		"glass %d" % glass_n)
+	if area != null:
+		var aim := -_composed_basis(area).z
+		_check("the area light aims out of the wall", aim.dot(Vector3(0, 0, -1)) > 0.7,
+			"aim %s" % aim)
+		_check("the area light matches the glass",
+			is_equal_approx(area.area_size.x, 0.9 * 0.85)
+			and is_equal_approx(area.area_size.y, 1.4 * 0.85),
+			"size %s" % area.area_size)
+	lit.free()
+	var many_el: Array = []
+	for i in 12:
+		many_el.append({"type": "window", "edge": 0, "u_m": 1.6 + float(i) * 2.3,
+			"w_m": 0.9, "h_m": 1.2, "v_m": 0.9, "lit": "on"})
+	var many := BuildingBuilder.build_node({
+		"width_m": 30.0, "depth_m": 6.0, "height_m": 3.4,
+		"roof_shape": "flat", "light_windows": true, "elements": many_el,
+	})
+	var many_mesh := many.get_node_or_null("Mesh") as MeshInstance3D
+	var area_n := 0
+	var panes := 0
+	if many_mesh != null:
+		area_n = _count_lights(many_mesh, "area")
+		for ch in many_mesh.get_children():
+			if ch is MeshInstance3D and bool(ch.get_meta("bld_glass", false)):
+				panes += 1
+	_check("area lights cap at 8", area_n == 8, "got %d" % area_n)
+	_check("every window still has glass", panes == 12, "got %d" % panes)
+	many.free()
+	var rec := BuildingFeatures.record_for(BuildingPresets.cabin())
+	var designed := BuildingBuilder.build_single_building(
+		rec, BuildingPresets.cabin(), elev, 2, 400.0, 0.0)
+	var osm := BuildingBuilder.build_single_building(
+		{"points": _square_poly(5.0), "height_m": 4.0, "tags": {}}, {},
+		_flat_grid(), GRID_RES, EXTENT_M, 0.0)
+	var designed_n := 0
+	var osm_n := 0
+	if designed != null and designed.mesh != null:
+		designed_n = (designed.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	if osm != null and osm.mesh != null:
+		osm_n = (osm.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	_check("a generated footprint and an OSM polygon both mesh",
+		designed_n > 0 and osm_n > 0, "designed %d osm %d" % [designed_n, osm_n])
+	if designed != null:
+		designed.free()
+	if osm != null:
+		osm.free()
+
+
+func _composed_basis(n: Node3D) -> Basis:
+	var b := n.transform.basis
+	var p := n.get_parent()
+	while p is Node3D:
+		b = (p as Node3D).transform.basis * b
+		p = p.get_parent()
+	return b
+
+
+func _count_lights(host: Node, kind: String) -> int:
+	var n := 0
+	for ch in host.get_children():
+		if kind == "area" and ch is AreaLight3D:
+			n += 1
+		elif kind == "omni" and ch is OmniLight3D:
+			n += 1
+		elif kind == "spot" and ch is SpotLight3D:
+			n += 1
+	return n
+
+
+func _south_wall_outward(mi: MeshInstance3D) -> bool:
+	var arrays: Array = mi.mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var facing := 0
+	var wrong := 0
+	for i in verts.size():
+		if absf(verts[i].z + 3.0) > 0.2:
+			continue
+		if absf(normals[i].z) < 0.5:
+			continue
+		if normals[i].z < -0.5:
+			facing += 1
+		else:
+			wrong += 1
+	return facing > 0 and wrong == 0

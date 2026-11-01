@@ -51,13 +51,35 @@ var _tex_w_spin: SpinBox = null
 var _tex_h_spin: SpinBox = null
 var _prov_label: Label = null
 var _title_label: Label = null
-var _kind_opt: OptionButton = null
 var _space_opt: OptionButton = null
 var _space_cap_spin: SpinBox = null
 var _elem_list: ItemList = null
-var _elem_spins: Dictionary = {}   # "u_m"/"v_m"/"w_m"/"h_m" -> SpinBox
 var _elem_delete: Button = null
+var _inspector: VBoxContainer = null
+var _apply_btn: Button = null
+var _reset_btn: Button = null
+var _foundation_opt: OptionButton = null
+var _wing_opt: OptionButton = null
+var _light_windows: CheckButton = null
+var _corner_trim: CheckButton = null
+var _overhang_slider: HSlider = null
+var _stories_slider: HSlider = null
+var _width_slider: HSlider = null
+var _depth_slider: HSlider = null
 var _selected_elem := -1
+var _designer := false
+var _prop_id := ""
+var _armed_tool := ""
+var _tool_buttons: Dictionary = {}
+var _ghost: MeshInstance3D = null
+var _dragging := false
+var _undo: Array = []
+var _redo: Array = []
+var _orbit_az := deg_to_rad(35.0)
+var _orbit_el := deg_to_rad(28.0)
+var _cam_dist := 16.0
+var _cam_target_y := 2.0
+var _rmb := false
 var _tabs: TabContainer = null
 var _ref_list: VBoxContainer = null
 var _ref_status: Label = null
@@ -75,6 +97,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	set_process(false)
+	set_process_input(true)
 	_build_ui()
 
 
@@ -91,6 +114,11 @@ func open(building_idx: int) -> void:
 	if rec.is_empty():
 		return
 	_building_idx = building_idx
+	_designer = false
+	_prop_id = ""
+	_armed_tool = ""
+	_undo.clear()
+	_redo.clear()
 	_record = _centered_record(rec)
 	if _record.is_empty():
 		return
@@ -164,7 +192,54 @@ func _on_space_capacity_changed(v: float) -> void:
 		_loader.call("save_npc_spaces")
 
 
-## Open straight to the structure library (B with no building focused).
+## A new house, or a saved design, with no OSM footprint.
+func open_designer(spec: Dictionary = {}) -> void:
+	if _active or _loader == null:
+		return
+	_designer = true
+	_prop_id = ""
+	_building_idx = -1
+	_armed_tool = ""
+	_undo.clear()
+	_redo.clear()
+	_working_style = spec.duplicate(true) if not spec.is_empty() else BuildingPresets.cottage()
+	_working_style.erase("selected_element")
+	_record = _centered_record(BuildingFeatures.record_for(_working_style))
+	_selected_elem = -1
+	_sync_controls_from_style()
+	_sync_element_list()
+	_activate()
+	_tabs.current_tab = 0
+	_fit_camera()
+	_queue_rebuild(true)
+
+
+func open_for_prop(prop_id: String) -> void:
+	if _active or _loader == null or prop_id.is_empty():
+		return
+	var rec := PlacedPropService.get_prop_record(_loader.get_parent(), prop_id)
+	var spec: Dictionary = rec.get("building_spec", {}) if rec.get("building_spec") is Dictionary else {}
+	if spec.is_empty():
+		spec = BuildingPresets.cottage()
+	_designer = false
+	_prop_id = prop_id
+	_building_idx = -1
+	_armed_tool = ""
+	_undo.clear()
+	_redo.clear()
+	_working_style = spec.duplicate(true)
+	_working_style.erase("selected_element")
+	_record = _centered_record(BuildingFeatures.record_for(_working_style))
+	_selected_elem = -1
+	_sync_controls_from_style()
+	_sync_element_list()
+	_activate()
+	_tabs.current_tab = 0
+	_fit_camera()
+	_queue_rebuild(true)
+
+
+## Open straight to the structure library.
 func open_library() -> void:
 	if _active or _loader == null:
 		return
@@ -185,6 +260,7 @@ func _activate() -> void:
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
 	if _lib_replace_btn != null:
 		_lib_replace_btn.disabled = _building_idx < 0
+	_refresh_action_labels()
 
 
 func close() -> void:
@@ -211,7 +287,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if idx >= 0:
 		open(idx)
 	else:
-		open_library()
+		open_designer()
 	get_viewport().set_input_as_handled()
 
 
@@ -287,15 +363,15 @@ func _build_ui() -> void:
 	_panel = PanelContainer.new()
 	_panel.add_theme_stylebox_override("panel", _panel_style())
 	_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_panel.custom_minimum_size = Vector2(980, 620)
+	_panel.custom_minimum_size = Vector2(1120, 680)
 	_panel.anchor_left = 0.5
 	_panel.anchor_right = 0.5
 	_panel.anchor_top = 0.5
 	_panel.anchor_bottom = 0.5
-	_panel.offset_left = -490
-	_panel.offset_right = 490
-	_panel.offset_top = -310
-	_panel.offset_bottom = 310
+	_panel.offset_left = -560
+	_panel.offset_right = 560
+	_panel.offset_top = -340
+	_panel.offset_bottom = 340
 	add_child(_panel)
 
 	var margin := MarginContainer.new()
@@ -319,7 +395,9 @@ func _build_ui() -> void:
 	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root_v.add_child(hbox)
 
-	# Left: studio viewport.
+	_build_palette(hbox)
+
+	# Centre: studio viewport.
 	_vp_container = SubViewportContainer.new()
 	_vp_container.stretch = true
 	_vp_container.custom_minimum_size = Vector2(420, 360)
@@ -413,6 +491,19 @@ func _build_ui() -> void:
 		func(v: float) -> void:
 			_working_style["base_y_offset_m"] = v
 			_queue_rebuild())
+	_width_slider = _labeled_slider(side, "Width m", 3.0, 24.0, 8.0, 0.1,
+		func(v: float) -> void:
+			_working_style["width_m"] = v
+			_refresh_designed_footprint())
+	_depth_slider = _labeled_slider(side, "Depth m", 2.4, 16.0, 6.0, 0.1,
+		func(v: float) -> void:
+			_working_style["depth_m"] = v
+			_refresh_designed_footprint())
+	_overhang_slider = _labeled_slider(side, "Eave m", 0.0, 1.2, 0.0, 0.05,
+		func(v: float) -> void:
+			_working_style["overhang_m"] = v
+			_queue_rebuild())
+	_add_massing_options(side)
 
 	_wall_picker = _color_row(side, "Walls", func(c: Color) -> void:
 		_working_style["wall_color"] = c
@@ -461,60 +552,47 @@ func _build_ui() -> void:
 
 	side.add_child(HSeparator.new())
 
-	# Details: click a wall in the preview to add a door/window. Elements on a
-	# wall auto-arrange — the door centers, windows flank it symmetrically.
 	var det_lbl := Label.new()
-	det_lbl.text = "Details — click a wall to add (auto-centered)"
+	det_lbl.text = "Features"
 	det_lbl.add_theme_font_size_override("font_size", 12)
-	det_lbl.modulate = Color(0.7, 0.8, 0.9)
 	side.add_child(det_lbl)
 
-	var kind_row := HBoxContainer.new()
-	side.add_child(kind_row)
-	var kind_lbl := Label.new()
-	kind_lbl.text = "Place"
-	kind_lbl.custom_minimum_size = Vector2(90, 0)
-	kind_row.add_child(kind_lbl)
-	_kind_opt = OptionButton.new()
-	_kind_opt.add_item("Door", 0)
-	_kind_opt.add_item("Window", 1)
-	_kind_opt.select(1)
-	_kind_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	kind_row.add_child(_kind_opt)
-
 	_elem_list = ItemList.new()
-	_elem_list.custom_minimum_size = Vector2(0, 92)
+	_elem_list.custom_minimum_size = Vector2(0, 72)
 	_elem_list.item_selected.connect(_on_element_selected)
 	side.add_child(_elem_list)
 
-	# Only size controls remain — horizontal placement is auto-centered, so the
-	# old "Along m" / "Up m" nudges are gone.
-	var grid := GridContainer.new()
-	grid.columns = 2
-	side.add_child(grid)
-	_elem_spins["w_m"] = _nudge_spin(grid, "Width m", 0.2, 10.0)
-	_elem_spins["h_m"] = _nudge_spin(grid, "Height m", 0.2, 10.0)
+	_inspector = VBoxContainer.new()
+	_inspector.add_theme_constant_override("separation", 4)
+	side.add_child(_inspector)
 
 	_elem_delete = Button.new()
-	_elem_delete.text = "Delete element"
+	_elem_delete.text = "Delete"
 	_elem_delete.add_theme_stylebox_override("normal", _secondary_btn_style())
 	_elem_delete.pressed.connect(_delete_selected_element)
 	side.add_child(_elem_delete)
+
+	var line_btn := Button.new()
+	line_btn.text = "Line up this wall"
+	line_btn.tooltip_text = "Centre the doors and windows already on the selected wall"
+	line_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	line_btn.pressed.connect(_line_up_wall)
+	side.add_child(line_btn)
 
 	side.add_child(HSeparator.new())
 
 	var btn_row := VBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 4)
 	side.add_child(btn_row)
-	var apply_btn := Button.new()
-	apply_btn.text = "Apply to map"
-	apply_btn.pressed.connect(_apply_to_map)
-	btn_row.add_child(apply_btn)
-	var reset_btn := Button.new()
-	reset_btn.text = "Reset to OSM"
-	reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	reset_btn.pressed.connect(_reset_to_osm)
-	btn_row.add_child(reset_btn)
+	_apply_btn = Button.new()
+	_apply_btn.text = "Apply to map"
+	_apply_btn.pressed.connect(_apply_to_map)
+	btn_row.add_child(_apply_btn)
+	_reset_btn = Button.new()
+	_reset_btn.text = "Reset to OSM"
+	_reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_reset_btn.pressed.connect(_reset_to_osm)
+	btn_row.add_child(_reset_btn)
 	var close_btn := Button.new()
 	close_btn.text = "Close"
 	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
@@ -522,7 +600,7 @@ func _build_ui() -> void:
 	btn_row.add_child(close_btn)
 	# Above the timeline and inside the screen at any size (a fixed 980 x 620
 	# centred on the window sat on the timeline at 720p).
-	UiFit.keep_fitted(_panel, Vector2(980, 620))
+	UiFit.keep_fitted(_panel, Vector2(1120, 680))
 
 
 func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
@@ -545,6 +623,7 @@ func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
 	val_lbl.text = "%.2f" % value
 	val_lbl.custom_minimum_size = Vector2(48, 0)
 	row.add_child(val_lbl)
+	slider.focus_entered.connect(_snapshot_style)
 	slider.value_changed.connect(func(v: float) -> void:
 		val_lbl.text = "%.2f" % v
 		if not _syncing:
@@ -568,22 +647,6 @@ func _plain_spin(grid: GridContainer, label: String, minv: float, maxv: float,
 	spin.value_changed.connect(func(v: float) -> void:
 		if not _syncing:
 			on_change.call(v))
-	return spin
-
-
-func _nudge_spin(grid: GridContainer, label: String, minv: float, maxv: float) -> SpinBox:
-	var lbl := Label.new()
-	lbl.text = label
-	grid.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = minv
-	spin.max_value = maxv
-	spin.step = 0.05
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_child(spin)
-	spin.value_changed.connect(func(_v: float) -> void:
-		if not _syncing:
-			_on_nudge_changed())
 	return spin
 
 
@@ -669,13 +732,11 @@ func _fit_camera() -> void:
 func _fit_camera_size(size: float, target_y: float) -> void:
 	if _camera == null:
 		return
-	var dist := clampf(size * 1.8, 8.0, 400.0)
-	var az := deg_to_rad(35.0)
-	var el := deg_to_rad(28.0)
-	var target := Vector3(0, target_y, 0)
-	_camera.position = target + Vector3(
-		sin(az) * cos(el), sin(el), cos(az) * cos(el)) * dist
-	_camera.look_at(target)
+	_cam_dist = clampf(size * 1.8, 8.0, 400.0)
+	_cam_target_y = target_y
+	_orbit_az = deg_to_rad(35.0)
+	_orbit_el = deg_to_rad(28.0)
+	_apply_orbit()
 
 
 func _rebuild_preview() -> void:
@@ -693,7 +754,7 @@ func _rebuild_preview() -> void:
 	if mi != null:
 		_apply_facade_texture_preview(mi)
 		_holder.add_child(mi)
-	_fit_camera()
+	_ensure_ghost()
 
 
 ## Mirror the loader's styled-wall texture application in the studio so the
@@ -740,13 +801,38 @@ func _sync_controls_from_style() -> void:
 	_facade_tex_opt.select(tex_idx + 1 if tex_idx >= 0 else 0)
 	_tex_w_spin.value = float(_working_style.get("wall_tex_w_m", 4.0))
 	_tex_h_spin.value = float(_working_style.get("wall_tex_h_m", 3.0))
+	if _width_slider != null:
+		_width_slider.value = float(_working_style.get("width_m", 8.0))
+	if _depth_slider != null:
+		_depth_slider.value = float(_working_style.get("depth_m", 6.0))
+	if _overhang_slider != null:
+		_overhang_slider.value = float(_working_style.get("overhang_m", 0.0))
+	if _stories_slider != null:
+		_stories_slider.value = clampf(round(float(_working_style.get("height_m", 2.8)) / BuildingBuilder.LEVELS_TO_METRES), 1.0, 3.0)
+	if _foundation_opt != null:
+		_foundation_opt.select(maxi(BuildingFeatures.FOUNDATIONS.find(
+			str(_working_style.get("foundation", "slab"))), 0))
+	if _wing_opt != null:
+		_wing_opt.select(maxi(BuildingFeatures.WINGS.find(
+			str(_working_style.get("wing", "none"))), 0))
+	if _light_windows != null:
+		_light_windows.button_pressed = bool(_working_style.get("light_windows", false))
+	if _corner_trim != null:
+		_corner_trim.button_pressed = bool(_working_style.get("corner_trim", false))
 
 	var src := str(roof.get("source", "default"))
 	var src_txt := "OSM tag" if src == "osm" else ("your override" if src == "user" else "default")
 	_prov_label.text = "Roof: %s (%s)" % [str(roof.get("shape", "flat")), src_txt]
 	var tags: Dictionary = _record.get("tags", {})
-	_title_label.text = "Building Builder — %s" % str(tags.get("building", "building"))
+	if _prop_id != "":
+		_title_label.text = "Edit building"
+	elif _designer:
+		_title_label.text = "Building designer"
+	else:
+		_title_label.text = "Building Builder — %s" % str(tags.get("building", "building"))
 	_syncing = false
+	_refresh_action_labels()
+	_rebuild_inspector()
 
 
 func _refresh_facade_tex_options() -> void:
@@ -794,16 +880,31 @@ func _on_shape_selected(index: int) -> void:
 
 
 func _apply_to_map() -> void:
-	if _loader == null or _building_idx < 0:
+	if _loader == null:
 		return
-	_working_style.erase("selected_element")
-	if _loader.has_method("apply_building_style"):
-		_loader.call("apply_building_style", _building_idx, _working_style)
+	var style := BuildingFeatures.public_style(_working_style)
+	if _prop_id != "":
+		PlacedPropService.update_prop_record(_loader.get_parent(), _prop_id,
+			{"building_spec": style}, true)
+	elif _building_idx >= 0:
+		if _loader.has_method("apply_building_style"):
+			_loader.call("apply_building_style", _building_idx, style)
+	elif _loader.has_method("begin_building_placement"):
+		_loader.call("begin_building_placement", style)
 	applied.emit()
 	close()
 
 
 func _reset_to_osm() -> void:
+	if _designer or _prop_id != "":
+		_snapshot_style()
+		_working_style = BuildingPresets.cottage()
+		_selected_elem = -1
+		_refresh_designed_footprint()
+		_sync_controls_from_style()
+		_sync_element_list()
+		_fit_camera()
+		return
 	if _loader != null and _building_idx >= 0 \
 			and _loader.has_method("clear_building_style"):
 		_loader.call("clear_building_style", _building_idx)
@@ -1135,48 +1236,54 @@ func _elements() -> Array:
 	return v
 
 
-## Click on the preview → ray-pick which wall face was hit (pure math, no studio
-## physics) → add the selected element kind to that wall. Horizontal position is
-## then auto-arranged (door centered, windows flanking) by layout_elements_on_edge.
 func _on_preview_input(event: InputEvent) -> void:
 	if not _active or _camera == null or _record.is_empty():
+		return
+	if event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if _rmb:
+			_orbit_az -= mm.relative.x * 0.008
+			_orbit_el = clampf(_orbit_el + mm.relative.y * 0.006, -0.2, 1.2)
+			_apply_orbit()
+		elif _dragging:
+			_drag_to(mm.position)
+		else:
+			_update_ghost(mm.position)
 		return
 	if not (event is InputEventMouseButton):
 		return
 	var mb := event as InputEventMouseButton
-	if not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+	if mb.button_index == MOUSE_BUTTON_RIGHT:
+		_rmb = mb.pressed
 		return
-	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
-	var poly: PackedVector2Array = params["poly"]
-	# Studio DEM is flat zero, so the building base sits at the Raise offset.
-	var base_y := float(params["base_offset_m"])
-	var vp_pos := _to_viewport_pos(mb.position)
-	var origin := _camera.project_ray_origin(vp_pos)
-	var dir := _camera.project_ray_normal(vp_pos)
-	var pick := BuildingBuilder.pick_wall_point(
-		poly, base_y, float(params["height_m"]), origin, dir)
+	if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+		_cam_dist = clampf(_cam_dist * 0.9, 4.0, 400.0)
+		_apply_orbit()
+		return
+	if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+		_cam_dist = clampf(_cam_dist * 1.1, 4.0, 400.0)
+		_apply_orbit()
+		return
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if not mb.pressed:
+		_dragging = false
+		_ghost_visible(false)
+		return
+	var pick := _pick_at(mb.position)
 	if not bool(pick.get("valid", false)):
 		return
 	var edge := int(pick["edge"])
-	var is_door := _kind_opt != null and _kind_opt.selected == 0
-	var height_m := float(params["height_m"])
-	var elem: Dictionary
-	if is_door:
-		elem = {"kind": "door", "edge": edge,
-			"u_m": 0.0, "v_m": 0.0, "w_m": 1.0, "h_m": 2.05}
-	else:
-		var h := 1.4
-		# Windows sit at a standard sill height, clamped inside the wall.
-		var v := clampf(0.9, 0.0, maxf(height_m - h, 0.0))
-		elem = {"kind": "window", "edge": edge,
-			"u_m": 0.0, "v_m": v, "w_m": 1.2, "h_m": h}
-	var elems := _elements()
-	elems.append(elem)
-	BuildingBuilder.layout_elements_on_edge(poly, edge, elems)
-	_working_style["elements"] = elems
-	_select_element(elems.size() - 1)
-	_sync_element_list()
-	_queue_rebuild()
+	var u := float(pick["u_m"])
+	var hit := _opening_at(edge, u)
+	if hit >= 0:
+		_select_element(hit)
+		_snapshot_style()
+		_dragging = true
+		_sync_element_list()
+		_queue_rebuild()
+	elif _armed_tool != "":
+		place_feature(_armed_tool, edge, u)
 	accept_event()
 
 
@@ -1199,10 +1306,12 @@ func _select_element(idx: int) -> void:
 		_working_style["selected_element"] = idx
 	else:
 		_working_style.erase("selected_element")
-	_sync_nudge_spins()
+	_rebuild_inspector()
 
 
 func _on_element_selected(idx: int) -> void:
+	if _syncing:
+		return
 	_select_element(idx)
 	_queue_rebuild()
 
@@ -1210,61 +1319,547 @@ func _on_element_selected(idx: int) -> void:
 func _sync_element_list() -> void:
 	if _elem_list == null:
 		return
+	_syncing = true
 	_elem_list.clear()
 	for e in _elements():
 		if not (e is Dictionary):
 			continue
 		var d: Dictionary = e
-		_elem_list.add_item("%s — wall %d, %.2f m along, %.2f m up" % [
-			str(d.get("kind", "?")).capitalize(), int(d.get("edge", 0)),
-			float(d.get("u_m", 0.0)), float(d.get("v_m", 0.0))])
+		var typ := BuildingFeatures.element_type(d)
+		_elem_list.add_item("%s — wall %d, %.2f m along" % [
+			typ.capitalize(), int(d.get("edge", 0)), float(d.get("u_m", 0.0))])
 	if _selected_elem >= 0 and _selected_elem < _elem_list.item_count:
 		_elem_list.select(_selected_elem)
-	_sync_nudge_spins()
-
-
-func _sync_nudge_spins() -> void:
-	_syncing = true
-	var elems := _elements()
-	var have := _selected_elem >= 0 and _selected_elem < elems.size()
-	for key in _elem_spins:
-		var spin: SpinBox = _elem_spins[key]
-		spin.editable = have
-		if have:
-			spin.value = float((elems[_selected_elem] as Dictionary).get(key, 0.0))
 	if _elem_delete != null:
-		_elem_delete.disabled = not have
+		_elem_delete.disabled = _selected_elem < 0
 	_syncing = false
-
-
-func _on_nudge_changed() -> void:
-	var elems := _elements()
-	if _selected_elem < 0 or _selected_elem >= elems.size():
-		return
-	var d: Dictionary = elems[_selected_elem]
-	for key in _elem_spins:
-		d[key] = (_elem_spins[key] as SpinBox).value
-	elems[_selected_elem] = d
-	# A wider door/window changes the spacing, so re-run the auto-layout.
-	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
-	BuildingBuilder.layout_elements_on_edge(
-		params["poly"], int(d.get("edge", 0)), elems)
-	_working_style["elements"] = elems
-	_sync_element_list()
-	_queue_rebuild()
 
 
 func _delete_selected_element() -> void:
 	var elems := _elements()
 	if _selected_elem < 0 or _selected_elem >= elems.size():
 		return
-	var edge := int((elems[_selected_elem] as Dictionary).get("edge", -1))
+	_snapshot_style()
 	elems.remove_at(_selected_elem)
-	# Re-center whatever remains on that wall.
-	if edge >= 0:
-		var params := BuildingBuilder.resolve_building_params(_record, _working_style)
-		BuildingBuilder.layout_elements_on_edge(params["poly"], edge, elems)
 	_working_style["elements"] = elems
 	_select_element(-1)
 	_sync_element_list()
 	_queue_rebuild()
+
+
+func _input(event: InputEvent) -> void:
+	if not _active or not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return
+	if key.keycode == KEY_ESCAPE:
+		if _dragging:
+			_dragging = false
+			_pop_undo()
+			get_viewport().set_input_as_handled()
+		elif _armed_tool != "":
+			_arm_tool("")
+			get_viewport().set_input_as_handled()
+		return
+	if key.keycode == KEY_Z and key.ctrl_pressed:
+		undo_style()
+		get_viewport().set_input_as_handled()
+	elif key.keycode == KEY_Y and key.ctrl_pressed:
+		_redo_style()
+		get_viewport().set_input_as_handled()
+
+
+func _build_palette(hbox: HBoxContainer) -> void:
+	var col := VBoxContainer.new()
+	col.custom_minimum_size = Vector2(168, 0)
+	col.add_theme_constant_override("separation", 4)
+	hbox.add_child(col)
+	var title := Label.new()
+	title.text = "Add"
+	title.add_theme_font_size_override("font_size", 12)
+	col.add_child(title)
+	for tool in BuildingFeatures.TOOL_PRESETS:
+		var id := str(tool.get("id", ""))
+		var btn := Button.new()
+		btn.text = str(tool.get("label", id))
+		btn.tooltip_text = str(tool.get("tip", ""))
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		btn.toggle_mode = true
+		btn.pressed.connect(_arm_tool.bind(id))
+		col.add_child(btn)
+		_tool_buttons[id] = btn
+	var night := Button.new()
+	night.text = "Day / Night"
+	night.tooltip_text = "Preview the windows and porch lights after dusk"
+	night.pressed.connect(_toggle_night_preview)
+	col.add_child(night)
+	col.add_child(HSeparator.new())
+	var presets := Label.new()
+	presets.text = "Presets"
+	presets.add_theme_font_size_override("font_size", 12)
+	col.add_child(presets)
+	for entry in BuildingPresets.builtins():
+		var pb := Button.new()
+		pb.text = str(entry.get("name", ""))
+		pb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		pb.pressed.connect(_apply_named_preset.bind(str(entry.get("id", ""))))
+		col.add_child(pb)
+
+
+func _add_massing_options(side: VBoxContainer) -> void:
+	_stories_slider = _labeled_slider(side, "Stories", 1.0, 3.0, 1.0, 1.0,
+		func(v: float) -> void:
+			_working_style["height_m"] = v * BuildingBuilder.LEVELS_TO_METRES
+			if _height_slider != null:
+				_syncing = true
+				_height_slider.value = float(_working_style["height_m"])
+				_syncing = false
+			_queue_rebuild())
+	var found := HBoxContainer.new()
+	side.add_child(found)
+	var fl := Label.new()
+	fl.text = "Foundation"
+	fl.custom_minimum_size = Vector2(90, 0)
+	found.add_child(fl)
+	_foundation_opt = OptionButton.new()
+	for f in BuildingFeatures.FOUNDATIONS:
+		_foundation_opt.add_item(str(f).capitalize())
+	_foundation_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_foundation_opt.item_selected.connect(func(i: int) -> void:
+		if _syncing:
+			return
+		_snapshot_style()
+		_working_style["foundation"] = BuildingFeatures.FOUNDATIONS[i]
+		_queue_rebuild())
+	found.add_child(_foundation_opt)
+	var wing := HBoxContainer.new()
+	side.add_child(wing)
+	var wl := Label.new()
+	wl.text = "Wing"
+	wl.custom_minimum_size = Vector2(90, 0)
+	wing.add_child(wl)
+	_wing_opt = OptionButton.new()
+	for w in BuildingFeatures.WINGS:
+		_wing_opt.add_item(str(w).capitalize())
+	_wing_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wing_opt.item_selected.connect(func(i: int) -> void:
+		if _syncing:
+			return
+		_snapshot_style()
+		_working_style["wing"] = BuildingFeatures.WINGS[i]
+		_refresh_designed_footprint())
+	wing.add_child(_wing_opt)
+	_light_windows = CheckButton.new()
+	_light_windows.text = "Light the windows"
+	_light_windows.toggled.connect(func(on: bool) -> void:
+		if _syncing:
+			return
+		_snapshot_style()
+		_working_style["light_windows"] = on
+		_queue_rebuild())
+	side.add_child(_light_windows)
+	_corner_trim = CheckButton.new()
+	_corner_trim.text = "Corner boards"
+	_corner_trim.toggled.connect(func(on: bool) -> void:
+		if _syncing:
+			return
+		_snapshot_style()
+		_working_style["corner_trim"] = on
+		_queue_rebuild())
+	side.add_child(_corner_trim)
+
+
+func _refresh_action_labels() -> void:
+	if _apply_btn != null:
+		if _prop_id != "":
+			_apply_btn.text = "Apply to building"
+		elif _designer:
+			_apply_btn.text = "Place in world"
+		else:
+			_apply_btn.text = "Apply to map"
+	if _reset_btn != null:
+		if _prop_id != "":
+			_reset_btn.visible = false
+		elif _designer:
+			_reset_btn.visible = true
+			_reset_btn.text = "New cottage"
+		else:
+			_reset_btn.visible = true
+			_reset_btn.text = "Reset to OSM"
+	var designed := _designer or _prop_id != ""
+	if _width_slider != null:
+		_width_slider.get_parent().visible = designed
+	if _depth_slider != null:
+		_depth_slider.get_parent().visible = designed
+	if _wing_opt != null:
+		_wing_opt.get_parent().visible = designed
+
+
+func _refresh_designed_footprint() -> void:
+	if _building_idx >= 0:
+		_queue_rebuild()
+		return
+	_record = _centered_record(BuildingFeatures.record_for(_working_style))
+	_queue_rebuild()
+
+
+func _arm_tool(tool_id: String) -> void:
+	if _armed_tool == tool_id:
+		tool_id = ""
+	_armed_tool = tool_id
+	for id in _tool_buttons:
+		var btn: Button = _tool_buttons[id]
+		btn.set_pressed_no_signal(id == _armed_tool)
+	if _armed_tool == "":
+		_ghost_visible(false)
+
+
+func _toggle_night_preview() -> void:
+	_working_style["_preview_night"] = not bool(_working_style.get("_preview_night", false))
+	_queue_rebuild()
+
+
+func _apply_named_preset(preset_id: String) -> void:
+	var spec := BuildingPresets.by_id(preset_id)
+	if spec.is_empty():
+		return
+	_snapshot_style()
+	if _building_idx >= 0:
+		_working_style["roof"] = spec.get("roof", {})
+		_working_style["pitch_deg"] = spec.get("pitch_deg", 30.0)
+		_working_style["height_m"] = spec.get("height_m", 4.0)
+		_working_style["foundation"] = spec.get("foundation", "slab")
+		_working_style["overhang_m"] = spec.get("overhang_m", 0.0)
+		_working_style["corner_trim"] = spec.get("corner_trim", false)
+		_working_style["light_windows"] = spec.get("light_windows", false)
+		if spec.has("wall_mode"):
+			_working_style["wall_mode"] = spec["wall_mode"]
+		for key in ["wall_color", "roof_color", "foundation_color"]:
+			if spec.has(key):
+				_working_style[key] = spec[key]
+		var dest: PackedVector2Array = _record.get("points", PackedVector2Array())
+		_working_style["elements"] = BuildingFeatures.fit_elements(spec, dest)
+	else:
+		_working_style = spec.duplicate(true)
+		_refresh_designed_footprint()
+	_selected_elem = -1
+	_sync_controls_from_style()
+	_sync_element_list()
+	_fit_camera()
+
+
+func _snapshot_style() -> void:
+	if _syncing:
+		return
+	_undo.append(_working_style.duplicate(true))
+	if _undo.size() > 40:
+		_undo.pop_front()
+	_redo.clear()
+
+
+func undo_style() -> void:
+	_pop_undo()
+
+
+func _pop_undo() -> void:
+	if _undo.is_empty():
+		return
+	_redo.append(_working_style.duplicate(true))
+	_working_style = _undo.pop_back()
+	_selected_elem = int(_working_style.get("selected_element", -1))
+	if _building_idx < 0:
+		_record = _centered_record(BuildingFeatures.record_for(_working_style))
+	_sync_controls_from_style()
+	_sync_element_list()
+	_queue_rebuild()
+
+
+func _redo_style() -> void:
+	if _redo.is_empty():
+		return
+	_undo.append(_working_style.duplicate(true))
+	_working_style = _redo.pop_back()
+	_selected_elem = int(_working_style.get("selected_element", -1))
+	if _building_idx < 0:
+		_record = _centered_record(BuildingFeatures.record_for(_working_style))
+	_sync_controls_from_style()
+	_sync_element_list()
+	_queue_rebuild()
+
+
+func place_feature(tool_id: String, edge: int, u: float) -> void:
+	var tmpl := BuildingFeatures.tool_template(tool_id)
+	if tmpl.is_empty() or _record.is_empty():
+		return
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var poly: PackedVector2Array = params["poly"]
+	if edge < 0 or edge >= poly.size():
+		return
+	var edge_len := poly[edge].distance_to(poly[(edge + 1) % poly.size()])
+	var w := float(tmpl.get("w_m", tmpl.get("width_m", 0.9)))
+	var uu := BuildingFeatures.clamp_u(u, maxf(w, 0.2), edge_len)
+	var elems := _elements()
+	var typ := BuildingFeatures.element_type(tmpl)
+	if (typ == "door" or typ == "window") and BuildingFeatures.overlaps(elems, edge, uu, w):
+		return
+	_snapshot_style()
+	tmpl["id"] = BuildingFeatures.fresh_id(elems)
+	tmpl["edge"] = edge
+	tmpl["u_m"] = uu
+	if typ == "door" or typ == "steps":
+		tmpl["v_m"] = 0.0
+	elems.append(tmpl)
+	_working_style["elements"] = elems
+	_select_element(elems.size() - 1)
+	_sync_element_list()
+	_queue_rebuild()
+
+
+func set_selected_width(w: float) -> void:
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	_snapshot_style()
+	var d: Dictionary = elems[_selected_elem]
+	if float(d.get("w_m", 0.0)) <= 0.0 and float(d.get("width_m", 0.0)) > 0.0:
+		d["width_m"] = w
+	else:
+		d["w_m"] = w
+	elems[_selected_elem] = d
+	_working_style["elements"] = elems
+	_rebuild_inspector()
+	_queue_rebuild()
+
+
+func _line_up_wall() -> void:
+	var elems := _elements()
+	if elems.is_empty() or _record.is_empty():
+		return
+	_snapshot_style()
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var poly: PackedVector2Array = params["poly"]
+	var edge := 0
+	if _selected_elem >= 0 and _selected_elem < elems.size():
+		edge = int((elems[_selected_elem] as Dictionary).get("edge", 0))
+		BuildingBuilder.layout_elements_on_edge(poly, edge, elems)
+	else:
+		for i in poly.size():
+			BuildingBuilder.layout_elements_on_edge(poly, i, elems)
+	_working_style["elements"] = elems
+	_sync_element_list()
+	_queue_rebuild()
+
+
+func _rebuild_inspector() -> void:
+	if _inspector == null:
+		return
+	_syncing = true
+	var kids := _inspector.get_children()
+	for c in kids:
+		_inspector.remove_child(c)
+		c.free()
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	var el: Dictionary = elems[_selected_elem]
+	var typ := BuildingFeatures.element_type(el)
+	var fields: Array = BuildingFeatures.ELEMENT_FIELDS.get(typ, [])
+	for field in fields:
+		if not BuildingFeatures.field_visible(field, el):
+			continue
+		var key := str(field.get("key", ""))
+		var kind := str(field.get("kind", "float"))
+		var label := str(field.get("label", key))
+		if kind == "float":
+			var spin := SpinBox.new()
+			spin.min_value = float(field.get("min", 0.0))
+			spin.max_value = float(field.get("max", 10.0))
+			spin.step = float(field.get("step", 0.05))
+			spin.value = float(el.get(key, field.get("min", 0.0)))
+			spin.prefix = label + " "
+			spin.focus_entered.connect(_snapshot_style)
+			spin.value_changed.connect(_on_field_float.bind(key))
+			_inspector.add_child(spin)
+		elif kind == "bool":
+			var box := CheckButton.new()
+			box.text = label
+			box.button_pressed = bool(el.get(key, false))
+			box.toggled.connect(_on_field_bool.bind(key))
+			_inspector.add_child(box)
+		elif kind == "option":
+			var opt := OptionButton.new()
+			var choices: Array = field.get("options", [])
+			var cur := str(el.get(key, ""))
+			var sel := 0
+			for i in choices.size():
+				opt.add_item(str(choices[i]).capitalize())
+				if str(choices[i]) == cur:
+					sel = i
+			opt.select(sel)
+			opt.item_selected.connect(_on_field_option.bind(key, choices))
+			_inspector.add_child(opt)
+		elif kind == "color":
+			var picker := ColorPickerButton.new()
+			var raw: Variant = el.get(key, Color.WHITE)
+			picker.color = raw if raw is Color else Color.WHITE
+			picker.color_changed.connect(_on_field_color.bind(key))
+			_inspector.add_child(picker)
+	_syncing = false
+
+
+func _on_field_float(value: float, key: String) -> void:
+	if _syncing:
+		return
+	_write_field(key, value)
+
+
+func _on_field_bool(on: bool, key: String) -> void:
+	if _syncing:
+		return
+	_snapshot_style()
+	_write_field(key, on)
+
+
+func _on_field_option(index: int, key: String, choices: Array) -> void:
+	if _syncing or index < 0 or index >= choices.size():
+		return
+	_snapshot_style()
+	_write_field(key, choices[index])
+	_rebuild_inspector()
+
+
+func _on_field_color(col: Color, key: String) -> void:
+	if _syncing:
+		return
+	_write_field(key, col)
+
+
+func _write_field(key: String, value: Variant) -> void:
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	var d: Dictionary = elems[_selected_elem]
+	d[key] = value
+	elems[_selected_elem] = d
+	_working_style["elements"] = elems
+	_queue_rebuild()
+
+
+func _apply_orbit() -> void:
+	if _camera == null:
+		return
+	var target := Vector3(0.0, _cam_target_y, 0.0)
+	_camera.position = target + Vector3(
+		sin(_orbit_az) * cos(_orbit_el), sin(_orbit_el),
+		cos(_orbit_az) * cos(_orbit_el)) * _cam_dist
+	_camera.look_at(target)
+
+
+func _pick_at(screen_pos: Vector2) -> Dictionary:
+	if _camera == null or _record.is_empty():
+		return {"valid": false}
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var origin := _camera.project_ray_origin(_to_viewport_pos(screen_pos))
+	var dir := _camera.project_ray_normal(_to_viewport_pos(screen_pos))
+	return BuildingBuilder.pick_wall_point(params["poly"], float(params["base_offset_m"]),
+		float(params["height_m"]), origin, dir)
+
+
+func _opening_at(edge: int, u: float) -> int:
+	var elems := _elements()
+	var best := -1
+	var best_d := 0.35
+	for i in elems.size():
+		var d: Dictionary = elems[i]
+		if BuildingFeatures.element_type(d) != "door" and BuildingFeatures.element_type(d) != "window":
+			continue
+		if int(d.get("edge", -1)) != edge:
+			continue
+		var dist := absf(float(d.get("u_m", 0.0)) - u)
+		var reach := float(d.get("w_m", 0.9)) * 0.5 + 0.3
+		if dist < reach and dist < best_d + reach:
+			best = i
+			best_d = dist
+	return best
+
+
+func _drag_to(screen_pos: Vector2) -> void:
+	var pick := _pick_at(screen_pos)
+	if not bool(pick.get("valid", false)):
+		return
+	var elems := _elements()
+	if _selected_elem < 0 or _selected_elem >= elems.size():
+		return
+	var d: Dictionary = elems[_selected_elem]
+	if int(pick["edge"]) != int(d.get("edge", -1)):
+		return
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var poly: PackedVector2Array = params["poly"]
+	var edge := int(d.get("edge", 0))
+	var edge_len := poly[edge].distance_to(poly[(edge + 1) % poly.size()])
+	var w := float(d.get("w_m", 0.9))
+	d["u_m"] = BuildingFeatures.clamp_u(float(pick["u_m"]), maxf(w, 0.2), edge_len)
+	elems[_selected_elem] = d
+	_working_style["elements"] = elems
+	_queue_rebuild()
+
+
+func _ensure_ghost() -> void:
+	if _studio == null:
+		return
+	if _ghost != null and is_instance_valid(_ghost):
+		return
+	_ghost = MeshInstance3D.new()
+	_ghost.name = "FeatureGhost"
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.35, 0.9, 1.0, 0.45)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ghost.material_override = mat
+	_ghost.visible = false
+	_studio.add_child(_ghost)
+
+
+func _ghost_visible(on: bool) -> void:
+	if _ghost != null and is_instance_valid(_ghost):
+		_ghost.visible = on
+
+
+func _update_ghost(screen_pos: Vector2) -> void:
+	if _armed_tool == "" or _ghost == null:
+		return
+	var pick := _pick_at(screen_pos)
+	if not bool(pick.get("valid", false)):
+		_ghost_visible(false)
+		return
+	var tmpl := BuildingFeatures.tool_template(_armed_tool)
+	if tmpl.is_empty():
+		return
+	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
+	var poly: PackedVector2Array = params["poly"]
+	var edge := int(pick["edge"])
+	var p0: Vector2 = poly[edge]
+	var p1: Vector2 = poly[(edge + 1) % poly.size()]
+	var edge_len := p0.distance_to(p1)
+	if edge_len < 0.05:
+		return
+	var dir2 := (p1 - p0) / edge_len
+	var out := Vector2(dir2.y, -dir2.x)
+	var w := float(tmpl.get("w_m", tmpl.get("width_m", 0.9)))
+	var h := float(tmpl.get("h_m", 1.2))
+	var depth := float(tmpl.get("depth_m", 0.08))
+	var u := BuildingFeatures.clamp_u(float(pick["u_m"]), maxf(w, 0.2), edge_len)
+	var v := float(tmpl.get("v_m", 0.0))
+	if BuildingFeatures.element_type(tmpl) == "porch" or BuildingFeatures.element_type(tmpl) == "steps":
+		h = 0.12
+		depth = maxf(depth, 1.2)
+		v = 0.2
+	var centre := Vector3(p0.x, float(params["base_offset_m"]) + v + h * 0.5, p0.y)
+	centre += Vector3(dir2.x, 0, dir2.y) * u + Vector3(out.x, 0, out.y) * (depth * 0.5)
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(maxf(w, 0.3), maxf(h, 0.08), maxf(depth, 0.06))
+	_ghost.mesh = mesh
+	_ghost.position = centre
+	_ghost.basis = Basis.looking_at(Vector3(out.x, 0, out.y), Vector3.UP)
+	_ghost_visible(true)
