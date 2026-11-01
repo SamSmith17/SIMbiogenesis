@@ -18,6 +18,11 @@ extends Control
 ## Everything reads one solved DomeLabDesign, so the 3D model, the sheets,
 ## the schedule and the files always agree. Undo / redo keep whole spec
 ## snapshots (Ctrl+Z / Ctrl+Y).
+##
+## The chrome is the kit's: `DesignerShell` (backdrop, header, three
+## columns, footer, the cursor modal + HUD claim, the 720 fold) holding a
+## `StudioViewport` (the one 3D studio: lights, orbit, picking) and
+## `FormRow`s on the right. This file owns only what is a dome.
 
 const MODAL_NAME := "domelab_designer"
 const WANT := Vector2(1600, 960)
@@ -46,7 +51,9 @@ var _library: Array = []
 var _status_text := ""
 var _hover_frame := 0
 
-# UI
+# UI (the chrome is the shell's; these are aliases the rest of the file and
+# the harness read)
+var _shell: DesignerShell
 var _panel: PanelContainer
 var _name_edit: LineEdit
 var _subtitle: Label
@@ -58,9 +65,8 @@ var _design_list: ItemList
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
-var _vp_container: SubViewportContainer
+var _studio_view: StudioViewport
 var _viewport: SubViewport
-var _studio: Node3D
 var _holder: Node3D
 var _camera: Camera3D
 var _sheet_canvas: Control
@@ -86,15 +92,6 @@ var _export_status: Label
 var _apply_btn: Button
 var _place_btn: Button
 var _file_dialog: FileDialog
-
-# Studio camera
-var _yaw := 0.8
-var _pitch := 0.35
-var _dist := 12.0
-var _target := Vector3(0, 1.5, 0)
-var _orbiting := false
-var _press_pos := Vector2.ZERO
-var _moved := false
 
 
 func bind_loader(loader: Node) -> void:
@@ -147,8 +144,7 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	UiFit.keep_fitted(_panel, WANT)
+	_shell.open()
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
 	_refresh_design_list()
@@ -165,7 +161,7 @@ func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -204,26 +200,23 @@ func _input(e: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	add_child(_panel)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_panel.add_child(root)
-	root.add_child(_build_header())
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	root.add_child(body)
-	body.add_child(_build_left())
-	body.add_child(_build_centre())
-	body.add_child(_build_right())
-	root.add_child(_build_footer())
+	_shell = DesignerShell.create("Dome & zome designer", "tent", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
+		"left_label": "Structure & designs", "left_w": 240.0, "right_w": 390.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_name_edit = _shell.name_edit
+	_subtitle = _shell.subtitle
+	_undo_btn = _shell.undo_btn
+	_redo_btn = _shell.redo_btn
+	_shell.undo_requested.connect(_undo_step)
+	_shell.redo_requested.connect(_redo_step)
+	_shell.name_submitted.connect(func(_t: String) -> void: _on_name_changed())
+	_shell.closed.connect(close)
+	_build_left()
+	_build_centre()
+	_build_right()
+	_build_footer()
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -233,54 +226,8 @@ func _build_ui() -> void:
 	add_child(_file_dialog)
 
 
-func _build_header() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var icon := TextureRect.new()
-	icon.texture = UiIcons.icon("tent", 22)
-	icon.modulate = UITheme.C_AMBER
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	row.add_child(icon)
-	var title := Label.new()
-	title.text = "Dome & zome designer"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	row.add_child(title)
-	_name_edit = LineEdit.new()
-	_name_edit.custom_minimum_size = Vector2(260, 0)
-	_name_edit.placeholder_text = "Design name"
-	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
-	_name_edit.focus_exited.connect(_on_name_changed)
-	row.add_child(_name_edit)
-	_subtitle = Label.new()
-	_subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_subtitle.clip_text = true
-	_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_subtitle)
-	_undo_btn = IconButton.make("undo-2", "Undo (Ctrl+Z)", _undo_step)
-	row.add_child(_undo_btn)
-	_redo_btn = IconButton.make("redo-2", "Redo (Ctrl+Y)", _redo_step)
-	row.add_child(_redo_btn)
-	row.add_child(IconButton.close(close))
-	return row
-
-
-func _scroll_column(width: float) -> Array:
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(width, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var box := VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	scroll.add_child(box)
-	return [scroll, box]
-
-
-func _build_left() -> Control:
-	var col := _scroll_column(240)
-	var box: VBoxContainer = col[1]
+func _build_left() -> void:
+	var box := _shell.left
 	box.add_child(SectionHeader.make("Structure", "tent"))
 	_family_box = VBoxContainer.new()
 	_family_box.add_theme_constant_override("separation", 2)
@@ -329,14 +276,10 @@ func _build_left() -> Control:
 	forget.pressed.connect(_on_forget_design)
 	lib.add_child(forget)
 	box.add_child(lib)
-	return col[0]
 
 
-func _build_centre() -> Control:
-	var col := VBoxContainer.new()
-	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	col.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	col.add_theme_constant_override("separation", UITheme.SPACE_XS)
+func _build_centre() -> void:
+	var col := _shell.centre
 	_tabs = TabBar.new()
 	_tabs.add_tab("Structure")
 	_tabs.add_tab("Sheets")
@@ -349,18 +292,15 @@ func _build_centre() -> Control:
 	_view_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_view_stack.clip_contents = true
 	col.add_child(_view_stack)
-	_vp_container = SubViewportContainer.new()
-	_vp_container.stretch = true
-	_vp_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_vp_container.gui_input.connect(_on_studio_input)
-	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
-	_view_stack.add_child(_vp_container)
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.msaa_3d = Viewport.MSAA_4X
-	_viewport.size = Vector2i(900, 640)
-	_vp_container.add_child(_viewport)
-	_build_studio_world()
+	_studio_view = StudioViewport.create({"ground": true, "person": true})
+	_studio_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_studio_view.set_home(0.8, 0.35)
+	_studio_view.clicked.connect(_on_studio_click)
+	_studio_view.hovered.connect(_on_studio_hover)
+	_view_stack.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_holder = _studio_view.holder
+	_camera = _studio_view.camera
 	_sheet_scroll = ScrollContainer.new()
 	_sheet_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_sheet_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -389,9 +329,8 @@ func _build_centre() -> Control:
 	_schedule_text.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
 	_schedule_text.add_theme_color_override("default_color", UITheme.C_TEXT)
 	_schedule_scroll.add_child(_schedule_text)
-	# Controls under the view.
-	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	# Controls under the view, in the studio's strip (hidden with it).
+	var bar := _studio_view.strip
 	var el := Label.new()
 	el.text = "Explode"
 	bar.add_child(el)
@@ -400,6 +339,7 @@ func _build_centre() -> Control:
 	_explode_slider.max_value = 1.0
 	_explode_slider.step = 0.01
 	_explode_slider.custom_minimum_size = Vector2(120, 0)
+	_explode_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_explode_slider.value_changed.connect(func(v): _explode = v; _rebuild_studio())
 	bar.add_child(_explode_slider)
 	var bl := Label.new()
@@ -411,6 +351,7 @@ func _build_centre() -> Control:
 	_assembly_slider.step = 0.005
 	_assembly_slider.value = 1.0
 	_assembly_slider.custom_minimum_size = Vector2(140, 0)
+	_assembly_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_assembly_slider.value_changed.connect(func(v): _assembly = v; _playing = false; _rebuild_studio())
 	bar.add_child(_assembly_slider)
 	_play_btn = Button.new()
@@ -424,7 +365,7 @@ func _build_centre() -> Control:
 	UITheme.style_button(clear)
 	clear.pressed.connect(func(): _set_highlight(""))
 	bar.add_child(clear)
-	var reset_view := IconButton.make("scan", "Frame the structure", func(): _yaw = 0.8; _pitch = 0.35; _frame_camera())
+	var reset_view := IconButton.make("scan", "Frame the structure", func(): _studio_view.reset_orbit(); _frame_camera())
 	bar.add_child(reset_view)
 	_hover_lbl = Label.new()
 	_hover_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -433,93 +374,10 @@ func _build_centre() -> Control:
 	_hover_lbl.clip_text = true
 	_hover_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	bar.add_child(_hover_lbl)
-	col.add_child(bar)
-	return col
 
 
-func _build_studio_world() -> void:
-	_studio = Node3D.new()
-	_studio.name = "Studio"
-	_viewport.add_child(_studio)
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	# A dark backdrop, but the AMBIENT and the reflections come from a soft
-	# overcast sky: a flat ambient colour lit every face of a dome the same,
-	# which is what made facets read as one smooth bubble. The sky grades
-	# brighter overhead, so the top faces, the sides and the undersides each
-	# take a different tone, and SSAO darkens the hub corners.
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.035, 0.043, 0.063)
-	var skymat := ProceduralSkyMaterial.new()
-	skymat.sky_top_color = Color(0.62, 0.68, 0.78)
-	skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
-	skymat.ground_horizon_color = Color(0.22, 0.21, 0.20)
-	skymat.ground_bottom_color = Color(0.08, 0.08, 0.08)
-	skymat.sun_angle_max = 10.0
-	skymat.sun_curve = 0.2
-	var sky := Sky.new()
-	sky.sky_material = skymat
-	sky.radiance_size = Sky.RADIANCE_SIZE_128
-	e.sky = sky
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	e.ambient_light_sky_contribution = 1.0
-	e.ambient_light_energy = 0.9
-	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
-	e.ssao_enabled = true
-	e.ssao_radius = 0.5
-	e.ssao_intensity = 1.6
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	e.tonemap_exposure = 1.05
-	env.environment = e
-	_studio.add_child(env)
-	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-48, 35, 0)
-	key.light_energy = 1.5
-	key.light_color = Color(1.0, 0.96, 0.9)
-	key.shadow_enabled = true
-	key.light_angular_distance = 1.2
-	key.directional_shadow_max_distance = 80.0
-	key.shadow_normal_bias = 1.5
-	_studio.add_child(key)
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-20, -140, 0)
-	fill.light_energy = 0.25
-	fill.light_color = Color(0.8, 0.88, 1.0)
-	_studio.add_child(fill)
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(200, 200)
-	ground.mesh = plane
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.13, 0.125, 0.12)
-	gmat.roughness = 0.95
-	ground.material_override = gmat
-	_studio.add_child(ground)
-	# A person for scale.
-	var person := MeshInstance3D.new()
-	var cap := CapsuleMesh.new()
-	cap.radius = 0.2
-	cap.height = 1.75
-	person.mesh = cap
-	person.position = Vector3(0, 0.875, 0)
-	var pm := StandardMaterial3D.new()
-	pm.albedo_color = Color(0.45, 0.48, 0.55)
-	person.material_override = pm
-	person.name = "ScalePerson"
-	_studio.add_child(person)
-	_holder = Node3D.new()
-	_holder.name = "Holder"
-	_studio.add_child(_holder)
-	_camera = Camera3D.new()
-	_camera.fov = 45.0
-	_camera.far = 500.0
-	_studio.add_child(_camera)
-	_update_camera()
-
-
-func _build_right() -> Control:
-	var col := _scroll_column(390)
-	var box: VBoxContainer = col[1]
+func _build_right() -> void:
+	var box := _shell.right
 	var sec := Collapsible.make("Geometry", true)
 	box.add_child(sec)
 	_geo_box = sec.body
@@ -572,41 +430,15 @@ func _build_right() -> Control:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
-	return col[0]
 
 
-func _build_footer() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var hint := Label.new()
-	hint.text = "Drag to orbit · wheel to zoom · click a strut, hub or panel to highlight its class"
-	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(hint)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to placed structure"
-	UITheme.style_button(_apply_btn)
-	_apply_btn.pressed.connect(_on_apply)
-	row.add_child(_apply_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	UITheme.style_button(_place_btn)
-	_place_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-	var crew_b := Button.new()
-	crew_b.text = "👷 Build with a crew"
-	crew_b.tooltip_text = "Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece"
-	UITheme.style_button(crew_b)
-	crew_b.pressed.connect(_on_crew_build)
-	row.add_child(crew_b)
-	var close_b := Button.new()
-	close_b.text = "Close"
-	UITheme.style_button(close_b)
-	close_b.pressed.connect(close)
-	row.add_child(close_b)
-	return row
+func _build_footer() -> void:
+	_shell.set_hint("Drag to orbit · wheel to zoom · click a strut, hub or panel to highlight its class · Esc closes")
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
+	_shell.add_button("👷 Build with a crew", DesignerShell.SECONDARY, _on_crew_build,
+		"Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece")
+	_apply_btn = _shell.add_button("Apply to placed structure", DesignerShell.SECONDARY, _on_apply)
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 # ---------------------------------------------------------------------------
@@ -775,22 +607,7 @@ func _clear(box: Container) -> void:
 
 
 func _row(parent: Container, label: String, control: Control, tip: String = "") -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var l := Label.new()
-	l.text = label
-	l.custom_minimum_size = Vector2(160, 0)
-	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	l.clip_text = true
-	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	l.tooltip_text = tip if not tip.is_empty() else label
-	l.mouse_filter = Control.MOUSE_FILTER_PASS
-	row.add_child(l)
-	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if not tip.is_empty():
-		control.tooltip_text = tip
-	row.add_child(control)
-	parent.add_child(row)
+	parent.add_child(FormRow.make(label, control, tip))
 
 
 func _spin(min_v: float, max_v: float, step: float, suffix: String, cb: Callable) -> SpinBox:
@@ -821,14 +638,7 @@ func _option(items: Array, cb: Callable) -> OptionButton:
 
 
 func _select_meta(o: OptionButton, value: Variant) -> void:
-	for i in o.item_count:
-		var m: Variant = o.get_item_metadata(i)
-		if typeof(m) == typeof(value) and m == value:
-			o.select(i)
-			return
-		if (m is float or m is int) and (value is float or value is int) and absf(float(m) - float(value)) < 1e-6:
-			o.select(i)
-			return
+	FormRow.select_meta(o, value)
 
 
 func _opt_list(ids: Array, labels: Dictionary) -> Array:
@@ -1470,77 +1280,36 @@ func _on_forget_design() -> void:
 
 func _show_view() -> void:
 	var t := _tabs.current_tab
-	_vp_container.visible = t == 0
+	_studio_view.visible = t == 0
 	_sheet_scroll.visible = t == 1
 	_hub_canvas.visible = t == 2
 	_schedule_scroll.visible = t == 3
-	_explode_slider.get_parent().visible = t == 0
 
 
 func _rebuild_studio() -> void:
 	if _holder == null or _design.is_empty():
 		return
-	for c in _holder.get_children():
-		_holder.remove_child(c)
-		c.queue_free()
 	var node := DomeLabBuilder.build_from_design(_design, "Dome", {"explode": _explode,
 		"assembly": _assembly, "highlight": _highlight, "record": true})
-	_holder.add_child(node)
-	var person := _studio.get_node_or_null("ScalePerson") as Node3D
-	if person != null:
-		var r := float(_design["stats"]["radius_max_m"])
-		person.position = Vector3(r + 0.6, 0.875, 0.0)
+	_studio_view.show_node(node)
+	_studio_view.place_person(float(_design["stats"]["radius_max_m"]))
 
 
 func _frame_camera() -> void:
 	var st: Dictionary = _design.get("stats", {})
 	var r := float(st.get("radius_max_m", 3.0))
 	var h := float(st.get("height_m", 3.0))
-	_target = Vector3(0, h * 0.45, 0)
-	_dist = clampf(maxf(r * 2.0, h) * 1.6 + 1.0, 2.0, 160.0)
-	_update_camera()
+	_studio_view.frame_sphere(Vector3(0, h * 0.45, 0), maxf(r * 2.0, h))
 
 
-func _update_camera() -> void:
-	if _camera == null:
-		return
-	var cp := Vector3(_dist * cos(_pitch) * sin(_yaw), _dist * sin(_pitch), _dist * cos(_pitch) * cos(_yaw))
-	_camera.look_at_from_position(_target + cp, _target, Vector3.UP)
+func _on_studio_click(pos: Vector2, button: int) -> void:
+	if button == MOUSE_BUTTON_LEFT:
+		var hit := _pick_at(pos)
+		_set_highlight(str(hit.get("id", "")))
 
 
-func _on_studio_input(e: InputEvent) -> void:
-	if e is InputEventMouseButton:
-		var mb := e as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_dist = maxf(1.0, _dist * 0.9)
-			_update_camera()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_dist = minf(200.0, _dist * 1.1)
-			_update_camera()
-		elif mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
-			if mb.pressed:
-				_orbiting = true
-				_moved = false
-				_press_pos = mb.position
-			else:
-				_orbiting = false
-				if not _moved and mb.button_index == MOUSE_BUTTON_LEFT:
-					var hit := _pick_at(mb.position)
-					_set_highlight(str(hit.get("id", "")))
-	elif e is InputEventMouseMotion:
-		var mm := e as InputEventMouseMotion
-		if _orbiting:
-			if mm.position.distance_to(_press_pos) > 4.0:
-				_moved = true
-			if _moved:
-				_yaw -= mm.relative.x * 0.01
-				_pitch = clampf(_pitch - mm.relative.y * 0.01, -0.3, 1.45)
-				_update_camera()
-		else:
-			_hover_frame += 1
-			if _hover_frame % 4 == 0:
-				var hit := _pick_at(mm.position)
-				_hover_lbl.text = _describe_hit(hit)
+func _on_studio_hover(pos: Vector2) -> void:
+	_hover_lbl.text = _describe_hit(_pick_at(pos))
 
 
 func _describe_hit(hit: Dictionary) -> String:
@@ -1573,16 +1342,13 @@ func _describe_hit(hit: Dictionary) -> String:
 
 
 func _pick_at(pos: Vector2) -> Dictionary:
-	if _camera == null or _holder.get_child_count() == 0:
+	if _holder == null or _holder.get_child_count() == 0:
 		return {}
-	var vp_size := Vector2(_viewport.size)
-	var cs := _vp_container.size
-	var p := pos * (vp_size / cs) if cs.x > 0.0 and cs.y > 0.0 else pos
-	var o := _camera.project_ray_origin(p)
-	var d := _camera.project_ray_normal(p)
 	var node := _holder.get_child(0) as Node3D
-	var inv := node.global_transform.affine_inverse()
-	return DomeLabBuilder.pick(node, inv * o, (inv.basis * d).normalized())
+	var ray := _studio_view.pick_ray_local(node, pos)
+	if ray.is_empty():
+		return {}
+	return DomeLabBuilder.pick(node, ray["origin"], ray["dir"])
 
 
 func _on_play_build() -> void:

@@ -13601,8 +13601,9 @@ func _setup_pond_edit_ui() -> void:
 	layer.name = "PondEditLayer"
 	layer.layer = 26
 	ui_layer.add_child(layer)
-	var ui := PanelContainer.new()
+	var ui := Control.new()
 	ui.name = "PondEditModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.set_script(POND_EDIT_MODAL_SCRIPT)
 	layer.add_child(ui)
 	ui.call("bind_loader", self)

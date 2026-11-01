@@ -2445,6 +2445,33 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
   - **No `Pill` class:** `HudLayout` owns the one pill and `UITheme.chip_style`
     the chips.
   - **No `StatTile`:** the Hydro Lab deck is its only user.
+  - **Added 2026-11-01 (modal polish Phase 1, `plans/MODAL_POLISH_PLAN.md`):**
+    - **`DesignerShell`:** THE three-column designer frame (header with
+      icon / title / name edit / undo-redo / mode chip / breadcrumb / close,
+      `left` / `centre` / `right` columns, footer hint + buttons;
+      `open()` = `CursorController.request_modal` + `UiFit.keep_fitted` +
+      the layout rule). **The 720 rule** lives here and nowhere else: below
+      `FOLD_W` 1600 px of canvas the left column folds into a header button
+      whose flyout holds it (a `ui_modal` PanelContainer on its own
+      CanvasLayer one above the shell's, with a click catcher — not a
+      Window, whose position runs through the window scale) and the right
+      column narrows to 340; below `SHORT_H` 900 the hint hides and the
+      footer joins the header row. The dome designer is on it; every other
+      designer follows in Phase 3.
+    - **`StudioViewport`:** the one SubViewport studio (own world, the
+      dome's lights / sky / SSAO / filmic env, ground + person for scale,
+      orbit / zoom / pan, `frame_sphere`, `pick_ray_local`, `clicked` /
+      `hovered`, a `strip` for the view's buttons).
+    - **`FormRow`:** `label · control · unit`, label fixed at 140 px;
+      `make` / `spin` / `option` / `check` / `text_edit` / `slider` /
+      `value`, `set_value` (no signal), `with_revert` + `set_dirty`. Pass
+      `id` and the control is named it for the harness.
+    - **`Drawer`:** the bottom strip (pond settings): title, columns across
+      the body, actions on the right, pinned above the timeline, sized to
+      its rows, a HudLayout bottom inset. NO `ui_modal` meta on purpose.
+    - Gates: `domelab_designer_check.gd` at 1080 AND at 720 (the fold is
+      asserted from the canvas width and the flyout is opened, audited and
+      shot), `--capture=modals` at both sizes.
   - **Panels registered with `HudLayout` report their REAL minimum width**
     through the `size` callable (`maxf(design_w, get_combined_minimum_size().x)`).
     Terrain options declared a fixed 260 px while its content needed 284, so

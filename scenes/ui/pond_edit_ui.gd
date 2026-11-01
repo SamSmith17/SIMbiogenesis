@@ -1,32 +1,35 @@
-extends PanelContainer
+extends Control
 
-## Pond settings modal (Ctrl-click a pond → open). Level scrub, Auto/Manual
-## capacity & fill, graph toggle, delete. Ponds are never auto-added to the graph.
+## Pond settings (Ctrl-click a pond → open): a `Drawer` above the timeline
+## bar for the one pond. Level scrub, Auto / Manual capacity & fill, the max
+## fill level (a dam above the rim), the watershed catchment, add to / remove
+## from the graph, delete. Ponds are never auto-added to the graph.
+##
+## The chrome is the kit's: the drawer pins itself above the bar's live
+## height, sizes itself to its rows, claims the HUD's bottom region and the
+## cursor modal; the rows are `FormRow`s. This file owns only what is a pond.
 
-const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
-const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
-const C_MUTED := Color(0.62, 0.68, 0.78, 1.0)
-const C_ACCENT := Color(0.24, 0.62, 1.0, 1.0)
-
-const DRAWER_HEIGHT := 168.0
+const DRAWER_NAME := "pond_edit"
 
 var _loader: Node = null
 var _idx: int = -1
 var _syncing := false
 
-var _title_lbl: Label
-var _meta_lbl: Label
-var _hint_lbl: Label
+var _drawer: Drawer
+var _level_row: FormRow
 var _level_slider: HSlider
 var _level_lbl: Label
+var _max_row: FormRow
+var _max_spin: SpinBox
+var _max_lbl: Label
+var _cap_row: FormRow
 var _cap_mode_opt: OptionButton
+var _vol_row: FormRow
 var _vol_spin: SpinBox
 var _terrain_cap_lbl: Label
 var _recalc_btn: Button
+var _fill_row: FormRow
 var _fill_mode_opt: OptionButton
-var _max_spin: SpinBox
-var _max_lbl: Label
 var _graph_btn: Button
 var _del_btn: Button
 var _ws_lbl: Label
@@ -38,35 +41,13 @@ var _ws_remove_btn: Button
 
 func _ready() -> void:
 	visible = false
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build_ui()
-	_layout_drawer()
 
 
 func bind_loader(loader: Node) -> void:
 	_loader = loader
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED and visible:
-		_layout_drawer()
-
-
-func _layout_drawer() -> void:
-	var clearance := UiScreenLayout.timeline_stack_height()
-	var main := get_tree().current_scene
-	var timeline: Node = null
-	if main != null:
-		timeline = main.get_node_or_null("UILayer/TimelineUI")
-	if timeline != null and timeline.has_method("get_stack_height"):
-		clearance = float(timeline.call("get_stack_height"))
-	# The rows can need more than DRAWER_HEIGHT (the map-pond note, the
-	# watershed row); a PanelContainer anchored to the bottom then grew DOWN
-	# over the bar by the difference. Size the drawer to what it holds.
-	var h := maxf(DRAWER_HEIGHT, get_combined_minimum_size().y)
-	UiScreenLayout.pin_above_timeline(self, h, clearance)
-	if visible:
-		HudLayout.claim("pond_edit", {"inset": {"bottom": h + 8.0}})
 
 
 func open_for_pond(idx: int) -> void:
@@ -74,210 +55,138 @@ func open_for_pond(idx: int) -> void:
 	if not _load_from_loader():
 		return
 	visible = true
-	_layout_drawer()
-	CursorController.request_modal("pond_edit", Callable(self, "close"))
+	_drawer.open()
 
 
 func close() -> void:
-	if not visible:
+	if not visible and not _drawer.is_open():
 		return
 	visible = false
 	_idx = -1
-	CursorController.release_modal("pond_edit")
-	HudLayout.release("pond_edit")
+	_drawer.close()
+
+
+func is_open() -> bool:
+	return _drawer != null and _drawer.is_open()
 
 
 func _build_ui() -> void:
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = C_PANEL
-	panel_style.border_color = C_BORDER
-	panel_style.set_border_width_all(1)
-	panel_style.set_corner_radius_all(8)
-	panel_style.content_margin_left = 14
-	panel_style.content_margin_right = 14
-	panel_style.content_margin_top = 8
-	panel_style.content_margin_bottom = 8
-	add_theme_stylebox_override("panel", panel_style)
+	_drawer = Drawer.create("Pond settings", DRAWER_NAME)
+	add_child(_drawer)
+	_drawer.closed.connect(close)
 
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 4)
-	add_child(root)
-
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 10)
-	root.add_child(header)
-	_title_lbl = Label.new()
-	_title_lbl.text = "Pond settings"
-	_title_lbl.add_theme_color_override("font_color", C_TEXT)
-	_title_lbl.add_theme_font_size_override("font_size", 14)
-	header.add_child(_title_lbl)
-	_meta_lbl = Label.new()
-	_meta_lbl.add_theme_color_override("font_color", C_MUTED)
-	_meta_lbl.add_theme_font_size_override("font_size", 11)
-	_meta_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_meta_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	header.add_child(_meta_lbl)
-	var close_btn := Button.new()
-	IconButton.as_close(close_btn, "Close (Esc)")
-	close_btn.pressed.connect(close)
-	header.add_child(close_btn)
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	root.add_child(row)
-
-	# Fill level -----------------------------------------------------------
-	var level_col := VBoxContainer.new()
-	level_col.add_theme_constant_override("separation", 0)
-	level_col.custom_minimum_size.x = 280.0
-	row.add_child(level_col)
-	var level_head := HBoxContainer.new()
-	level_col.add_child(level_head)
-	level_head.add_child(_field_label("Water fill level"))
-	_level_lbl = Label.new()
-	_level_lbl.add_theme_color_override("font_color", C_ACCENT)
-	_level_lbl.add_theme_font_size_override("font_size", 11)
-	_level_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	level_head.add_child(_level_lbl)
+	# Water level ---------------------------------------------------------
+	var level_col := Drawer.column(300.0)
+	_drawer.body.add_child(level_col)
 	_level_slider = HSlider.new()
 	_level_slider.step = 0.05
-	_level_slider.custom_minimum_size = Vector2(280, 20)
+	_level_slider.custom_minimum_size = Vector2(140, 0)
 	_level_slider.value_changed.connect(_on_level_changed)
-	level_col.add_child(_level_slider)
-	_hint_lbl = Label.new()
-	_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_hint_lbl.add_theme_font_size_override("font_size", 10)
-	_hint_lbl.text = "T → Rain/Drain to scrub level in-world"
-	level_col.add_child(_hint_lbl)
-
-	# Capacity -------------------------------------------------------------
-	var vol_col := VBoxContainer.new()
-	vol_col.add_theme_constant_override("separation", 2)
-	row.add_child(vol_col)
-	vol_col.add_child(_field_label("Capacity"))
-	var cap_row := HBoxContainer.new()
-	cap_row.add_theme_constant_override("separation", 6)
-	vol_col.add_child(cap_row)
-	_cap_mode_opt = OptionButton.new()
-	_cap_mode_opt.add_item("Auto (terrain)", 0)
-	_cap_mode_opt.add_item("Manual (L)", 1)
-	_cap_mode_opt.custom_minimum_size.x = 120.0
-	_cap_mode_opt.item_selected.connect(_on_cap_mode_selected)
-	cap_row.add_child(_cap_mode_opt)
-	_vol_spin = SpinBox.new()
-	_vol_spin.step = 100.0
-	_vol_spin.min_value = 1.0
-	_vol_spin.max_value = 1.0e9
-	_vol_spin.allow_greater = true
-	_vol_spin.custom_minimum_size.x = 110.0
-	_vol_spin.value_changed.connect(_on_volume_changed)
-	cap_row.add_child(_vol_spin)
-	var terr_row := HBoxContainer.new()
-	terr_row.add_theme_constant_override("separation", 6)
-	vol_col.add_child(terr_row)
-	_terrain_cap_lbl = Label.new()
-	_terrain_cap_lbl.add_theme_color_override("font_color", C_MUTED)
-	_terrain_cap_lbl.add_theme_font_size_override("font_size", 10)
-	_terrain_cap_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	terr_row.add_child(_terrain_cap_lbl)
+	_level_row = FormRow.make("Water level", _level_slider,
+		"The pond's surface. T → Rain / Drain scrubs it in the world too", "", "level_m")
+	_level_lbl = Label.new()
+	_level_lbl.add_theme_font_override("font", UITheme.font("medium", true))
+	_level_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_level_lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	_level_lbl.custom_minimum_size = Vector2(60, 0)
+	_level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_level_row.add_child(_level_lbl)
+	level_col.add_child(_level_row)
 	# Max fill level: a dam above the basin's natural rim. Map ponds take it
 	# too — it is the one thing a player can set on a pond they did not carve.
-	var max_row := HBoxContainer.new()
-	max_row.add_theme_constant_override("separation", 6)
-	terr_row.add_child(max_row)
-	max_row.add_child(_field_label("Max fill level (m)"))
-	_max_spin = SpinBox.new()
-	_max_spin.step = 0.05
-	_max_spin.min_value = -1000.0
-	_max_spin.max_value = 9000.0
-	_max_spin.custom_minimum_size.x = 110.0
-	_max_spin.tooltip_text = "The highest the pond may fill (world metres). Above the basin rim it is a dam: capacity grows as a wall over the footprint, inflow can raise the pond past the rim, and a siphon crest above the rim becomes reachable. Or Ctrl-aim the pond surface in 3D and drag it up."
-	_max_spin.value_changed.connect(_on_max_level_changed)
-	max_row.add_child(_max_spin)
+	_max_row = FormRow.spin("Max fill level", -1000.0, 9000.0, 0.05, "m", _on_max_level_changed,
+		"The highest the pond may fill (world metres). Above the basin rim it is a dam: capacity grows as a wall over the footprint, inflow can raise the pond past the rim, and a siphon crest above the rim becomes reachable. Or Ctrl-aim the pond surface in 3D and drag it up.",
+		"max_level_m")
+	_max_spin = _max_row.control as SpinBox
 	var max_reset := Button.new()
 	max_reset.text = "Rim"
 	max_reset.tooltip_text = "Back to the basin's natural rim"
+	max_reset.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(max_reset)
 	max_reset.pressed.connect(func() -> void: _on_max_level_changed(NAN))
-	max_row.add_child(max_reset)
-	_max_lbl = Label.new()
-	_max_lbl.add_theme_color_override("font_color", C_MUTED)
-	_max_lbl.add_theme_font_size_override("font_size", 10)
-	terr_row.add_child(_max_lbl)
+	_max_row.add_child(max_reset)
+	level_col.add_child(_max_row)
+	_max_lbl = _note()
+	level_col.add_child(_max_lbl)
+
+	# Capacity ------------------------------------------------------------
+	var cap_col := Drawer.column(300.0)
+	_drawer.body.add_child(cap_col)
+	_cap_row = FormRow.option("Capacity", [[0, "Auto (terrain)"], [1, "Manual"]],
+		func(_m): _on_cap_mode_selected(_cap_mode_opt.selected),
+		"Auto integrates the basin's bathymetry; Manual is a volume you type", "capacity_mode")
+	_cap_mode_opt = _cap_row.control as OptionButton
+	cap_col.add_child(_cap_row)
+	_vol_row = FormRow.spin("Volume", 1.0, 1.0e9, 100.0, "L", _on_volume_changed,
+		"The pond's capacity when Manual", "capacity_l")
+	_vol_spin = _vol_row.control as SpinBox
+	_vol_spin.allow_greater = true
+	cap_col.add_child(_vol_row)
+	var terr_row := HBoxContainer.new()
+	terr_row.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	cap_col.add_child(terr_row)
+	_terrain_cap_lbl = _note()
+	_terrain_cap_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	terr_row.add_child(_terrain_cap_lbl)
 	_recalc_btn = Button.new()
 	_recalc_btn.text = "Recalculate"
-	_recalc_btn.tooltip_text = "Recompute Auto capacity from terrain bathymetry"
-	_recalc_btn.custom_minimum_size = Vector2(90, 24)
+	_recalc_btn.tooltip_text = "Recompute Auto capacity from the terrain's bathymetry"
+	_recalc_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(_recalc_btn)
 	_recalc_btn.pressed.connect(_on_recalc)
 	terr_row.add_child(_recalc_btn)
 
-	# Fill mode + actions --------------------------------------------------
-	var act_col := VBoxContainer.new()
-	act_col.add_theme_constant_override("separation", 2)
-	act_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(act_col)
-	act_col.add_child(_field_label("Fill"))
-	_fill_mode_opt = OptionButton.new()
-	_fill_mode_opt.add_item("Auto (water surface)", 0)
-	_fill_mode_opt.add_item("Manual (%)", 1)
-	_fill_mode_opt.item_selected.connect(_on_fill_mode_selected)
-	act_col.add_child(_fill_mode_opt)
-	var act := HBoxContainer.new()
-	act.add_theme_constant_override("separation", 6)
-	act.alignment = BoxContainer.ALIGNMENT_END
-	act_col.add_child(act)
-	_graph_btn = Button.new()
-	_graph_btn.custom_minimum_size = Vector2(150, 30)
-	_graph_btn.pressed.connect(_on_graph_toggle)
-	act.add_child(_graph_btn)
-	_del_btn = Button.new()
-	_del_btn.text = "Delete pond"
-	_del_btn.custom_minimum_size = Vector2(100, 30)
-	_del_btn.add_theme_color_override("font_color", Color(1.0, 0.62, 0.62, 1.0))
-	_del_btn.pressed.connect(_on_delete)
-	act.add_child(_del_btn)
-
-	# Watershed (hillside → pond rain catchment) --------------------------------
+	# Fill + watershed ----------------------------------------------------
+	var fill_col := Drawer.column(0.0)
+	fill_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_drawer.body.add_child(fill_col)
+	_fill_row = FormRow.option("Fill", [[0, "Auto (water surface)"], [1, "Manual"]],
+		func(_m): _on_fill_mode_selected(_fill_mode_opt.selected),
+		"Auto follows the 3D water surface; Manual holds the level you set", "fill_mode")
+	_fill_mode_opt = _fill_row.control as OptionButton
+	fill_col.add_child(_fill_row)
+	fill_col.add_child(SectionHeader.make("Watershed", "waves"))
+	_ws_lbl = _note()
+	_ws_lbl.text = "The hillside that drains into this pond"
+	fill_col.add_child(_ws_lbl)
 	var ws_row := HBoxContainer.new()
-	ws_row.add_theme_constant_override("separation", 8)
-	root.add_child(ws_row)
-	ws_row.add_child(_field_label("Watershed"))
-	_ws_lbl = Label.new()
-	_ws_lbl.add_theme_color_override("font_color", C_MUTED)
-	_ws_lbl.add_theme_font_size_override("font_size", 11)
-	_ws_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ws_lbl.text = "Analyze hillside that drains into this pond"
-	ws_row.add_child(_ws_lbl)
-	_ws_preview_btn = Button.new()
-	_ws_preview_btn.text = "Preview"
-	_ws_preview_btn.tooltip_text = "Run local D8 analysis and outline the upstream basin"
-	_ws_preview_btn.custom_minimum_size = Vector2(72, 26)
-	_ws_preview_btn.pressed.connect(_on_ws_preview)
+	ws_row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	fill_col.add_child(ws_row)
+	_ws_preview_btn = _small_button("Preview", "Trace the ground uphill of the pond and outline the basin that drains into it", _on_ws_preview)
 	ws_row.add_child(_ws_preview_btn)
-	_ws_clear_btn = Button.new()
-	_ws_clear_btn.text = "Clear"
-	_ws_clear_btn.custom_minimum_size = Vector2(56, 26)
-	_ws_clear_btn.pressed.connect(_on_ws_clear)
+	_ws_clear_btn = _small_button("Clear", "Hide the outline", _on_ws_clear)
 	ws_row.add_child(_ws_clear_btn)
-	_ws_designate_btn = Button.new()
-	_ws_designate_btn.text = "Designate"
-	_ws_designate_btn.tooltip_text = "Add graph catchment wired to this pond (adds pond to graph if needed)"
-	_ws_designate_btn.custom_minimum_size = Vector2(88, 26)
-	_ws_designate_btn.pressed.connect(_on_ws_designate)
+	_ws_designate_btn = _small_button("Designate", "Add a graph catchment wired to this pond (adds the pond to the graph if needed)", _on_ws_designate)
 	ws_row.add_child(_ws_designate_btn)
-	_ws_remove_btn = Button.new()
-	_ws_remove_btn.text = "Remove WS"
-	_ws_remove_btn.custom_minimum_size = Vector2(88, 26)
-	_ws_remove_btn.pressed.connect(_on_ws_remove)
+	_ws_remove_btn = _small_button("Remove", "Take the catchment off the graph", _on_ws_remove)
 	ws_row.add_child(_ws_remove_btn)
 
+	# Actions -------------------------------------------------------------
+	_graph_btn = _drawer.add_action("Add to graph", Drawer.PRIMARY, _on_graph_toggle,
+		"A pond on the graph is a tank the site's water flows through")
+	_del_btn = _drawer.add_action("Delete pond", Drawer.DESTRUCTIVE, _on_delete,
+		"Remove this pond and its water record")
 
-func _field_label(text: String) -> Label:
+
+func _note() -> Label:
 	var l := Label.new()
-	l.text = text
-	l.add_theme_color_override("font_color", C_MUTED)
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
+	l.mouse_entered.connect(func() -> void: l.tooltip_text = l.text)
 	return l
+
+
+func _small_button(text: String, tip: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(0, 26)
+	UITheme.style_button(b)
+	b.pressed.connect(cb)
+	return b
 
 
 func _load_from_loader() -> bool:
@@ -288,16 +197,16 @@ func _load_from_loader() -> bool:
 		return false
 	_syncing = true
 	var is_user := bool(info.get("user", false))
-	_title_lbl.text = str(info.get("label", "Pond")) if is_user else "Pond (map)"
 	var stock := float(info.get("stock_l", 0.0))
 	var fill_pct := float(info.get("fill_frac", 0.0)) * 100.0
-	_meta_lbl.text = "%.0f m²  ·  rim %.1f m  ·  floor %.1f m  ·  %.0f L (%.0f%%)" % [
-		float(info.get("area_m2", 0.0)), float(info.get("rim_m", 0.0)),
-		float(info.get("floor_m", 0.0)), stock, fill_pct]
+	var meta := "%s · rim %.1f m · floor %.1f m · %s (%s)" % [
+		UiText.num(float(info.get("area_m2", 0.0)), "m²"), float(info.get("rim_m", 0.0)),
+		float(info.get("floor_m", 0.0)), UiText.num(stock, "L"), UiText.pct(fill_pct / 100.0)]
 	if not is_user:
-		# Map ponds are read-only (all the controls below are disabled); say why so
-		# the greyed-out slider/capacity/fill don't look broken.
-		_meta_lbl.text += "\nMap pond — read-only. Carve a pond with the terrain tool to edit level & capacity."
+		# Map ponds are read-only (the level, capacity and fill controls are
+		# disabled); say why so the greyed-out rows don't look broken.
+		meta += " · a map pond: carve one with the terrain tool to set its level and capacity"
+	_drawer.set_title(str(info.get("label", "Pond")) if is_user else "Pond (map)", meta)
 
 	var rim := float(info.get("rim_m", 1.0))
 	var floor_y := float(info.get("floor_m", 0.0))
@@ -319,7 +228,7 @@ func _load_from_loader() -> bool:
 	_vol_spin.value = float(info.get("capacity_l", 1000.0))
 	_vol_spin.editable = is_user and cap_mode == "manual"
 	var terrain_cap := float(info.get("terrain_capacity_l", info.get("default_capacity_l", 0.0)))
-	_terrain_cap_lbl.text = "Terrain volume ≈ %.0f L (Auto)" % terrain_cap
+	_terrain_cap_lbl.text = "Terrain volume ≈ %s (Auto)" % UiText.num(terrain_cap, "L")
 	_recalc_btn.disabled = not is_user
 
 	var fill_mode := str(info.get("fill_mode", "auto"))
@@ -332,13 +241,11 @@ func _load_from_loader() -> bool:
 		_max_spin.value = basin_rim if is_nan(mx) else mx
 	if _max_lbl != null:
 		_max_lbl.text = "Basin rim %.2f m — at the rim (inflow spills there)" % basin_rim if (is_nan(mx) or mx <= basin_rim + 0.005) \
-				else "Basin rim %.2f m — dammed +%.2f m (capacity +%.0f L over the footprint)" % [
-					basin_rim, mx - basin_rim, (mx - basin_rim) * float(info.get("area_m2", 0.0)) * 1000.0]
+				else "Basin rim %.2f m — dammed +%.2f m (capacity +%s over the footprint)" % [
+					basin_rim, mx - basin_rim, UiText.num((mx - basin_rim) * float(info.get("area_m2", 0.0)) * 1000.0, "L")]
 
 	var on_graph := bool(info.get("on_graph", false))
 	_graph_btn.text = "Remove from graph" if on_graph else "Add to graph"
-
-	_del_btn.text = "Delete pond"
 	_del_btn.visible = is_user
 	_refresh_watershed_row(info)
 	_syncing = false
@@ -357,13 +264,13 @@ func _refresh_watershed_row(info: Dictionary) -> void:
 	var tag := str(info.get("tag", ""))
 	if bool(preview.get("valid", false)) and str(preview.get("pond_tag", "")) == tag:
 		var ha := float(preview.get("area_m2", 0.0)) / 10000.0
-		_ws_lbl.text = "Upstream ~%.2f ha (%d cells)%s" % [
-			ha, int(preview.get("cell_count", 0)),
-			" · on graph" if has_ws else ""]
+		_ws_lbl.text = "Upstream ~%.2f ha (%s)%s" % [
+			ha, UiText.count(int(preview.get("cell_count", 0)), "cell"),
+			" · on the graph" if has_ws else ""]
 	elif has_ws:
-		_ws_lbl.text = "Watershed catchment on graph — Preview to refresh outline"
+		_ws_lbl.text = "A watershed catchment is on the graph — Preview refreshes the outline"
 	else:
-		_ws_lbl.text = "Analyze hillside that drains into this pond"
+		_ws_lbl.text = "The hillside that drains into this pond"
 	if _ws_remove_btn != null:
 		_ws_remove_btn.disabled = not has_ws
 
@@ -451,11 +358,11 @@ func _on_ws_preview() -> void:
 	_load_from_loader()
 	if _ws_lbl != null:
 		if bool(result.get("valid", false)):
-			_ws_lbl.text = "Upstream ~%.2f ha (%d cells) — teal outline on ground + Elev/Site Plan" % [
+			_ws_lbl.text = "Upstream ~%.2f ha (%s) — a teal outline on the ground and in the Elevation and Site Plan lenses" % [
 				float(result.get("area_m2", 0.0)) / 10000.0,
-				int(result.get("cell_count", 0))]
+				UiText.count(int(result.get("cell_count", 0)), "cell")]
 		else:
-			_ws_lbl.text = "Watershed failed: %s" % str(result.get("reason", "unknown"))
+			_ws_lbl.text = "The watershed could not be traced: %s" % str(result.get("reason", "unknown"))
 
 
 func _on_ws_clear() -> void:
@@ -474,7 +381,7 @@ func _on_ws_designate() -> void:
 		ok = bool(_loader.call("designate_pond_watershed", _idx))
 	_load_from_loader()
 	if _ws_lbl != null and not ok:
-		_ws_lbl.text = "Designate failed — try Preview first / Add to graph"
+		_ws_lbl.text = "Could not designate — Preview the watershed first, or add the pond to the graph"
 
 
 func _on_ws_remove() -> void:

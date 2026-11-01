@@ -87,6 +87,29 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var audit := UiAudit.run(main.get_viewport())
 	print("domelab: ui audit — %s" % UiAudit.summary_line(audit))
 	_ok(int(audit.get("errors", 0)) == 0, "the open modal has no UI audit errors")
+	# The shell's 720 rule: below DesignerShell.FOLD_W of canvas the left
+	# column is a header button whose flyout holds it; above, a column.
+	var shell: DesignerShell = ui.get("_shell")
+	var canvas := main.get_viewport().get_visible_rect().size
+	var want_fold := canvas.x < DesignerShell.FOLD_W
+	_ok(shell != null and shell.is_folded() == want_fold,
+		"the left column is %s on a %d px canvas" % ["folded" if want_fold else "a column", int(canvas.x)])
+	var family_box: Control = ui.get("_family_box")
+	if shell != null and shell.is_folded():
+		_ok(family_box != null and not family_box.is_visible_in_tree(), "the folded column is off screen until asked")
+		shell.show_left_popup()
+		await _settle(tree, 4)
+		_ok(shell.left_popup_shown() and family_box != null and family_box.is_visible_in_tree(),
+			"the header button opens the column as a flyout")
+		main.get_viewport().get_texture().get_image().save_png("%s/modal_folded_flyout.png" % dir)
+		var audit_f := UiAudit.run(main.get_viewport())
+		print("domelab: flyout ui audit — %s" % UiAudit.summary_line(audit_f))
+		_ok(int(audit_f.get("errors", 0)) == 0, "the flyout has no UI audit errors")
+		shell.hide_left_popup()
+		await _settle(tree, 2)
+		_ok(not shell.left_popup_shown(), "and closes again")
+	elif family_box != null:
+		_ok(family_box.is_visible_in_tree(), "the left column shows in the body")
 	# The chord factors on the schedule are the published ones.
 	var d3: Dictionary = ui.call("design")
 	var cf: Dictionary = d3["stats"]["chord_factors"]
