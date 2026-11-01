@@ -694,6 +694,13 @@ func join_addresses() -> Array:
 		out.append({"h": lan, "p": host_port, "k": "lan"})
 	if not wan_address.is_empty() and wan_address != lan:
 		out.append({"h": wan_address, "p": host_port, "k": "pub"})
+	# A VPN overlay (Tailscale / ZeroTier-style 100.64.0.0/10 address) reaches
+	# players with no router changes: add it so Play together works over it.
+	for a in IP.get_local_addresses():
+		var s := str(a)
+		if MpReachability.is_cgnat(s) and s != wan_address:
+			out.append({"h": s, "p": host_port, "k": "pub"})
+			break
 	return out
 
 
@@ -727,6 +734,13 @@ func _on_reachability_done(result: Dictionary) -> void:
 	# private or CGNAT "external" address would just cost every joiner a
 	# pointless connect timeout.
 	wan_address = external if MpReachability.is_routable_public(external) else ""
+	# Manual override for routers where UPnP fails: after forwarding the port by
+	# hand, put your public IP (or DDNS name) under [mp] public_address in
+	# user://mp_prefs.cfg so it goes into the join code.
+	if wan_address.is_empty():
+		var prefs := ConfigFile.new()
+		if prefs.load("user://mp_prefs.cfg") == OK:
+			wan_address = str(prefs.get_value("mp", "public_address", "")).strip_edges()
 	_refresh_join_code()
 	MpHardeningScript.log_event("reachability", {
 		"gateway": bool(result.get("gateway", false)),

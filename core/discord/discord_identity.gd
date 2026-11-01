@@ -102,6 +102,10 @@ func present_token() -> String:
 ## Which application this build authenticates as. "" means sign-in is not
 ## offered at all (no community imported and no dev override configured).
 func client_id(community: Dictionary = {}) -> String:
+	# Callers (the lobby's Sign in button) pass {}; without this fallback the
+	# application id in the imported community file was never found.
+	if community.is_empty():
+		community = SimCommunity.active()
 	var resolved := DiscordConfig.resolve_client_id(community)
 	if not resolved.is_empty():
 		_client_id = resolved

@@ -133,6 +133,16 @@ func refresh(on_done: Callable = Callable()) -> void:
 	if http == null:
 		_fail("Discord client unavailable", on_done)
 		return
+	# A brand-new community has no status message yet (it is minted by the first
+	# claim). Reading ".../messages/" would 404 and read as "message is gone",
+	# which also aborted the very first Play together. Nothing to read = nobody
+	# hosting.
+	if not DiscordConfig.is_snowflake(str(community.get("directory_message_id", ""))):
+		record = {}
+		last_error = ""
+		directory_changed.emit(record)
+		_finish(on_done, {"ok": true, "record": record, "fresh": true})
+		return
 	if state == State.IDLE:
 		state = State.READING
 	http.call("get_json", _message_url(), func(res: Dictionary) -> void:
