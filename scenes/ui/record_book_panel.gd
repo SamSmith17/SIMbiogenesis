@@ -16,14 +16,14 @@ extends Control
 # ---------------------------------------------------------------------------
 # Palette — mirrors TimelineUI
 # ---------------------------------------------------------------------------
-const C_BG      := Color(0.039, 0.055, 0.098, 0.97)
-const C_PANEL   := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER  := Color(0.227, 0.290, 0.420, 1.0)
-const C_PRIMARY := Color(0.133, 0.827, 0.933, 1.0)
-const C_AMBER   := Color(0.961, 0.620, 0.043, 1.0)
-const C_TEXT    := Color(0.886, 0.910, 0.941, 1.0)
-const C_TEXT_S  := Color(0.580, 0.639, 0.722, 1.0)
-const C_TEXT_M  := Color(0.392, 0.447, 0.545, 1.0)
+const C_BG      := UITheme.C_BG
+const C_PANEL   := UITheme.C_PANEL
+const C_BORDER  := UITheme.C_BORDER
+const C_PRIMARY := UITheme.C_PRIMARY
+const C_AMBER   := UITheme.C_AMBER
+const C_TEXT    := UITheme.C_TEXT
+const C_TEXT_S  := UITheme.C_TEXT_S
+const C_TEXT_M  := UITheme.C_TEXT_M
 const C_RED     := Color(0.90,  0.20, 0.20, 1.0)
 const C_BLUE    := Color(0.25,  0.45, 1.00, 1.0)
 const C_CYAN    := Color(0.10,  0.88, 0.88, 1.0)
@@ -531,7 +531,7 @@ func _build_header(parent: VBoxContainer) -> void:
 	_header_lbl = Label.new()
 	_header_lbl.text = "🌡 Climate Record Book"
 	_header_lbl.add_theme_color_override("font_color", C_PRIMARY)
-	_header_lbl.add_theme_font_size_override("font_size", 15)
+	_header_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_header_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(_header_lbl)
 
@@ -553,7 +553,7 @@ func _build_legend(parent: VBoxContainer) -> void:
 	var sc_lbl := Label.new()
 	sc_lbl.text = "Warming"
 	sc_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	sc_lbl.add_theme_font_size_override("font_size", 10)
+	sc_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	hbox.add_child(sc_lbl)
 	_scenario_opt = OptionButton.new()
 	_scenario_opt.focus_mode = Control.FOCUS_NONE
@@ -582,7 +582,7 @@ func _build_legend(parent: VBoxContainer) -> void:
 	_progress_lbl = Label.new()
 	_progress_lbl.text = ""
 	_progress_lbl.add_theme_color_override("font_color", C_TEXT_M)
-	_progress_lbl.add_theme_font_size_override("font_size", 10)
+	_progress_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_progress_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hbox.add_child(_progress_lbl)
 
@@ -595,7 +595,7 @@ func _build_weather_controls(parent: VBoxContainer) -> void:
 	var seed_lbl := Label.new()
 	seed_lbl.text = "Seed"
 	seed_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	seed_lbl.add_theme_font_size_override("font_size", 10)
+	seed_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	row.add_child(seed_lbl)
 
 	_gen_seed_spin = SpinBox.new()
@@ -610,7 +610,7 @@ func _build_weather_controls(parent: VBoxContainer) -> void:
 	var yrs_lbl := Label.new()
 	yrs_lbl.text = "Years"
 	yrs_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	yrs_lbl.add_theme_font_size_override("font_size", 10)
+	yrs_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	row.add_child(yrs_lbl)
 
 	_gen_years_spin = SpinBox.new()
@@ -628,7 +628,7 @@ func _build_weather_controls(parent: VBoxContainer) -> void:
 	var engine_lbl := Label.new()
 	engine_lbl.text = "Engine"
 	engine_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	engine_lbl.add_theme_font_size_override("font_size", 10)
+	engine_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	row.add_child(engine_lbl)
 
 	_gen_engine_opt = OptionButton.new()
@@ -671,7 +671,7 @@ func _mk_legend_item(parent: HBoxContainer, col: Color, label: String) -> void:
 	var lbl := Label.new()
 	lbl.text = label
 	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 10)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	parent.add_child(lbl)
 
 

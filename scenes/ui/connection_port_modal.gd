@@ -37,10 +37,14 @@ var _selected_handle_id: String = ""
 var _selected_port_idx: int = -1
 
 var _built := false
+## The kit: DesignerShell (the graph's ports on the left, the model's studio
+## with the aim strip in the centre, the selected port's style on the right)
+## and the one StudioViewport.
+var _shell: DesignerShell = null
+var _studio_view: StudioViewport = null
 var _vp_container: SubViewportContainer = null
 var _viewport: SubViewport = null
 var _studio: Node3D = null
-var _pivot: Node3D = null
 var _camera: Camera3D = null
 var _model_inst: Node3D = null
 var _gizmo_root: Node3D = null
@@ -48,17 +52,11 @@ var _wire_root: Node3D = null
 var _graph_model: GraphModel = null
 var _preview_type_id: String = "conceptual_flow"
 
-var _orbiting := false
-var _yaw := 0.6
-var _pitch := -0.35
-var _distance := 2.5
 
 var _handle_list: VBoxContainer = null
 var _status_lbl: Label = null
 var _save_catalog_chk: CheckBox = null
 var _save_instance_chk: CheckBox = null
-var _hint_lbl: Label = null
-var _pending_banner: Label = null
 var _wire_type_opt: OptionButton = null
 var _pipe_size_opt: OptionButton = null
 var _pipe_size_row: Control = null
@@ -100,13 +98,13 @@ func open(model_id: String, item_id: String, prop_id: String,
 	_refresh_handle_list()
 	_update_pending_banner()
 	visible = true
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	_shell.open()
 
 
 func close() -> void:
 	_end_drag(false)
 	visible = false
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _normalize_handles(handles: Variant) -> Array:
@@ -185,235 +183,129 @@ func _handle_display_name(h: Dictionary) -> String:
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_shell = DesignerShell.create("Connection ports", "plug", {
+		"name_id": MODAL_NAME, "want": Vector2(1400, 860),
+		"left_label": "Graph ports", "left_w": 260.0, "right_w": 380.0})
+	add_child(_shell)
+	_shell.closed.connect(close)
 
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
+	# Left: the 2D graph's ports, each a chip to select or drag onto the model.
+	_shell.left.add_child(SectionHeader.make("Graph ports", "plug", "drag one onto the model"))
+	_handle_list = VBoxContainer.new()
+	_handle_list.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_shell.left.add_child(_handle_list)
+	var unbind_btn := Button.new()
+	unbind_btn.text = "Clear 3D bind"
+	unbind_btn.tooltip_text = "Forget where the selected port sits on the model"
+	unbind_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(unbind_btn)
+	unbind_btn.pressed.connect(_on_clear_selected_bind)
+	_shell.left.add_child(unbind_btn)
 
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(1040, 680)
-	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	center.add_child(panel)
-	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
+	# Centre: the model, with the socket's approach controls under it.
+	_studio_view = StudioViewport.create({"ground": false, "size": Vector2i(900, 700), "fov": 45.0})
+	_studio_view.name = "Studio"
+	_studio_view.input_hook = _on_viewport_input
+	_studio_view.set_home(0.6, 0.35)
+	_shell.centre.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_vp_container = _studio_view.container
+	_studio = _studio_view.world
+	_camera = _studio_view.camera
+	var strip := _studio_view.strip
+	strip.add_child(_mini_label("Outward"))
+	for axis_name: String in ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]:
+		var ab := Button.new()
+		ab.text = axis_name
+		ab.tooltip_text = "Aim the selected socket along the model's %s" % axis_name
+		ab.focus_mode = Control.FOCUS_NONE
+		ab.custom_minimum_size.x = 36
+		UITheme.style_button(ab)
+		var captured := axis_name
+		ab.pressed.connect(func() -> void: _set_selected_outward_axis(captured))
+		strip.add_child(ab)
+	var flip_btn := Button.new()
+	flip_btn.text = "Flip"
+	flip_btn.tooltip_text = "Turn the selected socket's approach round"
+	flip_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(flip_btn)
+	flip_btn.pressed.connect(_flip_selected_outward)
+	strip.add_child(flip_btn)
+	strip.add_child(_mini_label("Approach"))
+	_approach_slider = HSlider.new()
+	_approach_slider.min_value = 0.15
+	_approach_slider.max_value = 1.0
+	_approach_slider.step = 0.05
+	_approach_slider.value = ConnectionPortDefs.DEFAULT_APPROACH_M
+	_approach_slider.custom_minimum_size.x = 120
+	_approach_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_approach_slider.tooltip_text = "How far the pipe runs straight out of the socket before it turns"
+	_approach_slider.value_changed.connect(_on_approach_m_changed)
+	strip.add_child(_approach_slider)
+	_approach_lbl = _mini_label("")
+	_approach_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_approach_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	strip.add_child(_approach_lbl)
 
-	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 8)
-	panel.add_child(root_v)
+	# Right: the selected port's wire style, the preview, where to save.
+	var side := _shell.right
+	_status_lbl = Label.new()
+	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_status_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	side.add_child(_status_lbl)
+	_io_settings_box = VBoxContainer.new()
+	_io_settings_box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	side.add_child(_io_settings_box)
+	_io_settings_box.add_child(SectionHeader.make("Selected port", "", "its wire or pipe"))
+	_wire_type_opt = OptionButton.new()
+	OPTS.fill_types(_wire_type_opt, "")
+	_wire_type_opt.item_selected.connect(_on_selected_type_changed)
+	_io_settings_box.add_child(FormRow.make(OPTS.LABEL_TYPE, _wire_type_opt, "", "", "wire_type"))
+	_pipe_size_opt = OptionButton.new()
+	OPTS.fill_sizes(_pipe_size_opt, "")
+	_pipe_size_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
+	_pipe_size_row = FormRow.make(OPTS.LABEL_SIZE, _pipe_size_opt, "", "", "pipe_size")
+	_io_settings_box.add_child(_pipe_size_row)
+	_route_mode_opt = OptionButton.new()
+	OPTS.fill_route_modes(_route_mode_opt)
+	_route_mode_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
+	_io_settings_box.add_child(FormRow.make(OPTS.LABEL_ROUTE, _route_mode_opt, "", "", "route_mode"))
+	_fitting_step_opt = OptionButton.new()
+	OPTS.fill_fittings(_fitting_step_opt)
+	_fitting_step_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
+	_io_settings_box.add_child(FormRow.make(OPTS.LABEL_FITTING, _fitting_step_opt, "", "", "fitting_step"))
+	var apply_btn := Button.new()
+	apply_btn.text = "Apply to its connections"
+	apply_btn.tooltip_text = "Give every wire on this port this type and style"
+	apply_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(apply_btn)
+	apply_btn.pressed.connect(_apply_selected_to_connections)
+	_io_settings_box.add_child(apply_btn)
 
-	var title := Label.new()
-	title.text = "Connection Ports — bind 2D graph ports to 3D plugs"
-	title.add_theme_font_size_override("font_size", 18)
-	root_v.add_child(title)
-
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 12)
-	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root_v.add_child(hbox)
-
-	var vp_wrap := VBoxContainer.new()
-	vp_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vp_wrap.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vp_wrap.add_theme_constant_override("separation", 4)
-	hbox.add_child(vp_wrap)
-
-	_pending_banner = Label.new()
-	_pending_banner.add_theme_font_size_override("font_size", 12)
-	_pending_banner.modulate = Color(1.0, 0.9, 0.45)
-	vp_wrap.add_child(_pending_banner)
-
-	_vp_container = SubViewportContainer.new()
-	_vp_container.stretch = true
-	_vp_container.custom_minimum_size = Vector2(600, 560)
-	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_vp_container.gui_input.connect(_on_viewport_input)
-	vp_wrap.add_child(_vp_container)
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.transparent_bg = false
-	_viewport.msaa_3d = Viewport.MSAA_2X
-	_viewport.size = Vector2i(600, 560)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
-	_vp_container.add_child(_viewport)
-
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(380, 560)
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	hbox.add_child(scroll)
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(360, 0)
-	side.add_theme_constant_override("separation", 8)
-	scroll.add_child(side)
-
-	_hint_lbl = Label.new()
-	_hint_lbl.text = "Select a 2D port, then click the mesh to bind. Drag the orange approach arrow tip to aim the socket outward (pipe arrives along −outward). Axis presets / Flip / length tune the approach."
-	_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hint_lbl.add_theme_font_size_override("font_size", 12)
-	_hint_lbl.modulate = Color(0.75, 0.82, 0.9)
-	side.add_child(_hint_lbl)
-
-	var wire_hdr := Label.new()
-	wire_hdr.text = "Wire preview"
-	wire_hdr.add_theme_font_size_override("font_size", 13)
-	wire_hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	side.add_child(wire_hdr)
+	side.add_child(SectionHeader.make("Preview"))
 	_show_wires_chk = CheckBox.new()
 	_show_wires_chk.text = "Show preview wires from bound ports"
 	_show_wires_chk.button_pressed = true
 	_show_wires_chk.toggled.connect(func(_on: bool) -> void: _rebuild_wire_previews())
 	side.add_child(_show_wires_chk)
 
-	_io_settings_box = VBoxContainer.new()
-	_io_settings_box.add_theme_constant_override("separation", 6)
-	side.add_child(_io_settings_box)
-	var io_hdr := Label.new()
-	io_hdr.text = "Selected I/O settings"
-	io_hdr.add_theme_font_size_override("font_size", 13)
-	io_hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_io_settings_box.add_child(io_hdr)
-
-	var type_row := HBoxContainer.new()
-	type_row.add_theme_constant_override("separation", 8)
-	_io_settings_box.add_child(type_row)
-	var type_lbl := Label.new()
-	type_lbl.text = OPTS.LABEL_TYPE
-	type_lbl.custom_minimum_size.x = 90
-	type_row.add_child(type_lbl)
-	_wire_type_opt = OptionButton.new()
-	_wire_type_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	OPTS.fill_types(_wire_type_opt, "")
-	_wire_type_opt.item_selected.connect(_on_selected_type_changed)
-	type_row.add_child(_wire_type_opt)
-
-	var size_row := HBoxContainer.new()
-	size_row.add_theme_constant_override("separation", 8)
-	_io_settings_box.add_child(size_row)
-	_pipe_size_row = size_row
-	var size_lbl := Label.new()
-	size_lbl.text = OPTS.LABEL_SIZE
-	size_lbl.custom_minimum_size.x = 90
-	size_row.add_child(size_lbl)
-	_pipe_size_opt = OptionButton.new()
-	_pipe_size_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	OPTS.fill_sizes(_pipe_size_opt, "")
-	_pipe_size_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
-	size_row.add_child(_pipe_size_opt)
-
-	var rm_row := HBoxContainer.new()
-	rm_row.add_theme_constant_override("separation", 8)
-	_io_settings_box.add_child(rm_row)
-	var rm_lbl := Label.new()
-	rm_lbl.text = OPTS.LABEL_ROUTE
-	rm_lbl.custom_minimum_size.x = 90
-	rm_row.add_child(rm_lbl)
-	_route_mode_opt = OptionButton.new()
-	_route_mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	OPTS.fill_route_modes(_route_mode_opt)
-	_route_mode_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
-	rm_row.add_child(_route_mode_opt)
-
-	var fs_row := HBoxContainer.new()
-	fs_row.add_theme_constant_override("separation", 8)
-	_io_settings_box.add_child(fs_row)
-	var fs_lbl := Label.new()
-	fs_lbl.text = OPTS.LABEL_FITTING
-	fs_lbl.custom_minimum_size.x = 90
-	fs_row.add_child(fs_lbl)
-	_fitting_step_opt = OptionButton.new()
-	_fitting_step_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	OPTS.fill_fittings(_fitting_step_opt)
-	_fitting_step_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
-	fs_row.add_child(_fitting_step_opt)
-
-	var apply_btn := Button.new()
-	apply_btn.text = "Apply type/style to connections"
-	apply_btn.focus_mode = Control.FOCUS_NONE
-	apply_btn.pressed.connect(_apply_selected_to_connections)
-	_io_settings_box.add_child(apply_btn)
-
-	var ap_hdr := Label.new()
-	ap_hdr.text = "Approach vector (socket outward)"
-	ap_hdr.add_theme_font_size_override("font_size", 13)
-	ap_hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_io_settings_box.add_child(ap_hdr)
-	_approach_lbl = Label.new()
-	_approach_lbl.add_theme_font_size_override("font_size", 11)
-	_approach_lbl.modulate = Color(0.75, 0.8, 0.85)
-	_io_settings_box.add_child(_approach_lbl)
-	_approach_slider = HSlider.new()
-	_approach_slider.min_value = 0.15
-	_approach_slider.max_value = 1.0
-	_approach_slider.step = 0.05
-	_approach_slider.value = ConnectionPortDefs.DEFAULT_APPROACH_M
-	_approach_slider.value_changed.connect(_on_approach_m_changed)
-	_io_settings_box.add_child(_approach_slider)
-	var axis_row := HBoxContainer.new()
-	axis_row.add_theme_constant_override("separation", 4)
-	_io_settings_box.add_child(axis_row)
-	for axis_name: String in ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]:
-		var ab := Button.new()
-		ab.text = axis_name
-		ab.focus_mode = Control.FOCUS_NONE
-		ab.custom_minimum_size.x = 40
-		var captured := axis_name
-		ab.pressed.connect(func() -> void: _set_selected_outward_axis(captured))
-		axis_row.add_child(ab)
-	var flip_btn := Button.new()
-	flip_btn.text = "Flip"
-	flip_btn.focus_mode = Control.FOCUS_NONE
-	flip_btn.pressed.connect(_flip_selected_outward)
-	_io_settings_box.add_child(flip_btn)
-
-	var list_hdr := Label.new()
-	list_hdr.text = "2D graph ports"
-	list_hdr.add_theme_font_size_override("font_size", 13)
-	list_hdr.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	side.add_child(list_hdr)
-
-	_handle_list = VBoxContainer.new()
-	_handle_list.add_theme_constant_override("separation", 6)
-	side.add_child(_handle_list)
-
-	var unbind_btn := Button.new()
-	unbind_btn.text = "Clear 3D bind for selected"
-	unbind_btn.focus_mode = Control.FOCUS_NONE
-	unbind_btn.pressed.connect(_on_clear_selected_bind)
-	side.add_child(unbind_btn)
-
+	side.add_child(SectionHeader.make("Save to"))
 	_save_catalog_chk = CheckBox.new()
-	_save_catalog_chk.text = "Save as catalog default for this model"
+	_save_catalog_chk.text = "The model's catalog default"
+	_save_catalog_chk.tooltip_text = "Every copy of this model placed from now on"
 	_save_catalog_chk.button_pressed = true
 	side.add_child(_save_catalog_chk)
-
 	_save_instance_chk = CheckBox.new()
-	_save_instance_chk.text = "Save on this placed prop only"
+	_save_instance_chk.text = "This placed prop only"
 	_save_instance_chk.button_pressed = true
 	side.add_child(_save_instance_chk)
 
-	_status_lbl = Label.new()
-	_status_lbl.add_theme_font_size_override("font_size", 12)
-	_status_lbl.modulate = Color(0.7, 0.85, 0.7)
-	side.add_child(_status_lbl)
-
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 8)
-	side.add_child(btn_row)
-	var save_btn := Button.new()
-	save_btn.text = "Save"
-	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	save_btn.pressed.connect(_on_save)
-	btn_row.add_child(save_btn)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close_btn.pressed.connect(close)
-	btn_row.add_child(close_btn)
+	_shell.set_hint("Select a port and click the model to bind it · drag the orange tip to aim the " +
+		"socket outward · right-drag orbits · wheel zooms · Esc")
+	_shell.add_button("Save", DesignerShell.PRIMARY, _on_save, "Write the bindings where the boxes say")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 	_bind_popup = PopupMenu.new()
 	_bind_popup.id_pressed.connect(_on_bind_popup_picked)
@@ -427,6 +319,15 @@ func _build_ui() -> void:
 	_drag_ghost.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_drag_ghost.draw.connect(_draw_drag_ghost)
 	add_child(_drag_ghost)
+
+
+func _mini_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return l
 
 
 func _load_ports() -> void:
@@ -472,7 +373,8 @@ func _refresh_handle_list() -> void:
 		var empty := Label.new()
 		empty.text = "No 2D ports on this node.\nOpen from a graph item that has handles."
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		empty.modulate = Color(0.85, 0.55, 0.45)
+		empty.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		empty.add_theme_color_override("font_color", UITheme.C_WARN)
 		_handle_list.add_child(empty)
 		return
 
@@ -489,17 +391,13 @@ func _refresh_handle_list() -> void:
 		var arr: Array = groups[dir_key] as Array
 		if arr.is_empty():
 			continue
-		var section := Label.new()
+		var section_title := "Ports"
 		match dir_key:
 			"in":
-				section.text = "Inputs"
+				section_title = "Inputs"
 			"out":
-				section.text = "Outputs"
-			_:
-				section.text = "Ports"
-		section.add_theme_font_size_override("font_size", 11)
-		section.modulate = Color(0.65, 0.7, 0.78)
-		_handle_list.add_child(section)
+				section_title = "Outputs"
+		_handle_list.add_child(SectionHeader.make(section_title))
 		for h: Variant in arr:
 			_handle_list.add_child(_make_handle_row(h as Dictionary))
 
@@ -510,14 +408,12 @@ func _make_handle_row(h: Dictionary) -> Control:
 	var selected := hid == _selected_handle_id
 
 	var row := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.14, 0.17, 0.22, 0.95) if not selected \
-			else Color(0.18, 0.28, 0.34, 1.0)
-	sb.set_corner_radius_all(8)
-	sb.set_content_margin_all(8)
+	var sb := UITheme.card_style()
 	if selected:
+		sb.bg_color = UITheme.C_PRIMARY.darkened(0.6)
 		sb.border_color = UITheme.C_PRIMARY
 		sb.set_border_width_all(2)
+	sb.set_content_margin_all(UITheme.SPACE_SM)
 	row.add_theme_stylebox_override("panel", sb)
 	row.mouse_filter = Control.MOUSE_FILTER_STOP
 	row.gui_input.connect(func(ev: InputEvent) -> void:
@@ -550,7 +446,8 @@ func _make_handle_row(h: Dictionary) -> Control:
 
 	var name_lbl := Label.new()
 	name_lbl.text = str(h.get("label", hid))
-	name_lbl.add_theme_font_size_override("font_size", 13)
+	name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	text_col.add_child(name_lbl)
 
 	var meta := Label.new()
@@ -558,10 +455,10 @@ func _make_handle_row(h: Dictionary) -> Control:
 	var dir_txt := "IN" if dir == "in" else ("OUT" if dir == "out" else "—")
 	var type_txt := _type_label(h)
 	var bind_txt := "bound" if not bound.is_empty() else "unbound"
-	meta.text = "%s  ·  %s  ·  %s" % [dir_txt, type_txt, bind_txt]
-	meta.add_theme_font_size_override("font_size", 11)
-	meta.modulate = Color(0.7, 0.85, 0.7) if not bound.is_empty() \
-			else Color(0.7, 0.72, 0.78)
+	meta.text = "%s · %s · %s" % [dir_txt, type_txt, bind_txt]
+	meta.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	meta.add_theme_color_override("font_color", UITheme.C_OK if not bound.is_empty() else UITheme.C_TEXT_S)
+	meta.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	text_col.add_child(meta)
 
 	return row
@@ -851,20 +748,16 @@ func _resolve_preview_type_for_handle(handle_id: String) -> String:
 
 
 func _update_pending_banner() -> void:
-	if _pending_banner == null:
+	if _shell == null:
 		return
 	if _selected_handle_id.is_empty():
-		_pending_banner.text = "Select a 2D port (or drag one onto the model)"
-		_pending_banner.modulate = Color(0.7, 0.75, 0.82)
+		_shell.set_mode("")
 		return
 	var h := _handle_by_id(_selected_handle_id)
 	var name_ := str(h.get("label", _selected_handle_id))
 	var bound := not _port_for_handle(_selected_handle_id).is_empty()
-	if bound:
-		_pending_banner.text = "Selected: %s — click mesh to move its 3D plug" % name_
-	else:
-		_pending_banner.text = "Selected: %s — click mesh to place its 3D plug" % name_
-	_pending_banner.modulate = Color(1.0, 0.9, 0.45)
+	_shell.set_mode(("%s · click the model to move its plug" if bound
+		else "%s · click the model to place its plug") % name_)
 
 
 func _handle_by_id(handle_id: String) -> Dictionary:
@@ -934,62 +827,28 @@ func _end_drag(_commit: bool) -> void:
 
 
 func _rebuild_studio() -> void:
-	if _viewport == null:
+	if _studio_view == null:
 		return
-	for c in _viewport.get_children():
-		c.queue_free()
-	_studio = Node3D.new()
-	_studio.name = "Studio"
-	_viewport.add_child(_studio)
-
-	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-40, 35, 0)
-	light.light_energy = 1.1
-	_studio.add_child(light)
-	var fill := OmniLight3D.new()
-	fill.position = Vector3(-1.5, 1.2, 1.5)
-	fill.light_energy = 0.4
-	_studio.add_child(fill)
-
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.12, 0.14, 0.18)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.45, 0.48, 0.55)
-	e.ambient_light_energy = 0.55
-	env.environment = e
-	_studio.add_child(env)
-
-	_pivot = Node3D.new()
-	_pivot.name = "Pivot"
-	_studio.add_child(_pivot)
-	_camera = Camera3D.new()
-	_camera.current = true
-	_pivot.add_child(_camera)
-
+	_studio_view.clear()
 	_model_inst = ModelCatalog.instantiate(_model_id)
 	if _model_inst == null:
 		_status_lbl.text = "Could not load model '%s'" % _model_id
 		return
 	_model_inst.name = "ModelRoot"
-	_studio.add_child(_model_inst)
-
+	_studio_view.holder.add_child(_model_inst)
 	_gizmo_root = Node3D.new()
 	_gizmo_root.name = "PortGizmos"
-	_studio.add_child(_gizmo_root)
+	_studio_view.holder.add_child(_gizmo_root)
 	_wire_root = Node3D.new()
 	_wire_root.name = "WirePreviews"
-	_studio.add_child(_wire_root)
-
+	_studio_view.holder.add_child(_wire_root)
 	_fit_camera_to_model()
-	_update_camera()
 	_rebuild_gizmos()
 	_rebuild_wire_previews()
 
 
 func _fit_camera_to_model() -> void:
-	if _model_inst == null:
+	if _model_inst == null or _studio_view == null:
 		return
 	var aabb := AABB()
 	var any := false
@@ -1006,71 +865,40 @@ func _fit_camera_to_model() -> void:
 		else:
 			aabb = aabb.merge(box)
 	if not any:
-		_distance = 2.5
+		_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch, 2.5)
 		return
 	var radius := aabb.size.length() * 0.5
-	_distance = clampf(radius * 2.4, ZOOM_MIN, ZOOM_MAX)
-	_pivot.position = aabb.get_center()
+	_studio_view.target = aabb.get_center()
+	_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch, clampf(radius * 2.4, ZOOM_MIN, ZOOM_MAX))
 
 
-func _update_camera() -> void:
-	if _camera == null:
-		return
-	_pitch = clampf(_pitch, -1.35, 1.35)
-	_distance = clampf(_distance, ZOOM_MIN, ZOOM_MAX)
-	var offset := Vector3(
-		_distance * cos(_pitch) * sin(_yaw),
-		_distance * sin(_pitch),
-		_distance * cos(_pitch) * cos(_yaw))
-	_camera.position = offset
-	_camera.look_at(_pivot.global_position, Vector3.UP)
+
 
 
 func _to_viewport_pos(local_pos: Vector2) -> Vector2:
-	if _vp_container == null or _viewport == null:
-		return local_pos
-	var sz := _vp_container.size
-	if sz.x < 1.0 or sz.y < 1.0:
-		return local_pos
-	return local_pos * (Vector2(_viewport.size) / sz)
+	return _studio_view.to_viewport(local_pos) if _studio_view != null else local_pos
 
 
-func _on_viewport_input(event: InputEvent) -> void:
+func _on_viewport_input(event: InputEvent) -> bool:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_RIGHT:
-			_orbiting = mb.pressed
-			_aiming_outward = false
-			_vp_container.accept_event()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_distance *= 0.9
-			_update_camera()
-			_vp_container.accept_event()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_distance *= 1.1
-			_update_camera()
-			_vp_container.accept_event()
-		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				if _hit_approach_tip(mb.position):
-					_aiming_outward = true
-				elif not _selected_handle_id.is_empty():
-					_bind_handle_at_screen(_selected_handle_id, mb.position)
-				else:
-					_prompt_bind_at_screen(mb.position)
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false  # right-drag orbits, the wheel zooms: the studio's
+		if mb.pressed:
+			if _hit_approach_tip(mb.position):
+				_aiming_outward = true
+			elif not _selected_handle_id.is_empty():
+				_bind_handle_at_screen(_selected_handle_id, mb.position)
 			else:
-				_aiming_outward = false
-			_vp_container.accept_event()
+				_prompt_bind_at_screen(mb.position)
+		else:
+			_aiming_outward = false
+		return true
 	elif event is InputEventMouseMotion:
-		var mm := event as InputEventMouseMotion
 		if _aiming_outward:
-			_aim_outward_at_screen(mm.position)
-			_vp_container.accept_event()
-		elif _orbiting:
-			_yaw -= mm.relative.x * ORBIT_SENS
-			_pitch -= mm.relative.y * ORBIT_SENS
-			_update_camera()
-			_vp_container.accept_event()
+			_aim_outward_at_screen((event as InputEventMouseMotion).position)
+			return true
+	return false
 
 
 func _hit_approach_tip(local_pos: Vector2) -> bool:
@@ -1313,7 +1141,7 @@ func _rebuild_wire_previews() -> void:
 		var world_port: Vector3 = ConnectionPortDefs.world_pos_for_port(port, _model_inst)
 		var world_approach: Vector3 = world_port + (_model_inst.global_transform.basis * n) \
 				.normalized() * approach_m
-		var ground_y := _pivot.position.y - _distance * 0.15 if _pivot != null else -0.2
+		var ground_y := _studio_view.target.y - _studio_view.dist * 0.15 if _studio_view != null else -0.2
 		var peers: Array = peer_ends.get(hid, []) as Array
 		var type_for_h := _resolve_preview_type_for_handle(hid)
 		# Selected I/O uses the sidebar type picker for live audition.

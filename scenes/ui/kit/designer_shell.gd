@@ -379,6 +379,14 @@ func is_open() -> bool:
 	return _is_open
 
 
+## Both columns back to the top (a reopen on another subject).
+func scroll_top() -> void:
+	if _left_scroll != null:
+		_left_scroll.set_deferred("scroll_vertical", 0)
+	if _right_scroll != null:
+		_right_scroll.set_deferred("scroll_vertical", 0)
+
+
 func is_folded() -> bool:
 	return _folded
 

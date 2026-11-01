@@ -1,11 +1,13 @@
 extends Control
 
 ## Building Builder modal — customize one OSM building parametrically with a
-## live studio preview (SubViewport + right sidebar), the building-flavored
-## sibling of vegetation_preview_editor.gd. Opens via Interact on a
-## crosshair-focused building or the B key. The preview rebuilds through
-## BuildingBuilder.build_single_building on a flat DEM, the exact code path
-## the world uses, so what you see is what gets built.
+## live studio preview, on the designer kit (DesignerShell: the palette and
+## presets on the left, the StudioViewport under Studio / Library / Reference
+## tabs in the centre, the settings in FormRow sections on the right), the
+## building-flavored sibling of vegetation_preview_editor.gd. Opens via
+## Interact on a crosshair-focused building or the B key. The preview
+## rebuilds through BuildingBuilder.build_single_building on a flat DEM, the
+## exact code path the world uses, so what you see is what gets built.
 
 signal applied
 
@@ -31,7 +33,11 @@ var _record: Dictionary = {}          # centered copy of the building record
 var _working_style: Dictionary = {}
 var _syncing := false
 
-var _dim: ColorRect = null
+## The kit: the three-column shell (left = the palette + presets, centre =
+## the studio under a Studio / Library / Reference tab bar, right = the
+## settings) and the one studio.
+var _shell: DesignerShell = null
+var _studio_view: StudioViewport = null
 var _panel: PanelContainer = null
 var _vp_container: SubViewportContainer = null
 var _viewport: SubViewport = null
@@ -75,11 +81,6 @@ var _ghost: MeshInstance3D = null
 var _dragging := false
 var _undo: Array = []
 var _redo: Array = []
-var _orbit_az := deg_to_rad(35.0)
-var _orbit_el := deg_to_rad(28.0)
-var _cam_dist := 16.0
-var _cam_target_y := 2.0
-var _rmb := false
 var _tabs: TabContainer = null
 var _ref_list: VBoxContainer = null
 var _ref_status: Label = null
@@ -256,8 +257,7 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	move_to_front()
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	_shell.open()
 	if _lib_replace_btn != null:
 		_lib_replace_btn.disabled = _building_idx < 0
 	_refresh_action_labels()
@@ -271,7 +271,7 @@ func close() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rebuild_pending = false
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -333,337 +333,200 @@ func _centered_record(rec: Dictionary) -> Dictionary:
 # UI
 # ---------------------------------------------------------------------------
 
-func _panel_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.1, 0.14, 0.98)
-	sb.set_corner_radius_all(10)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(0.2, 0.4, 0.6, 0.9)
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 8
-	return sb
 
 
-func _secondary_btn_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.16, 0.22, 1.0)
-	sb.border_color = Color(0.25, 0.4, 0.55, 0.7)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	return sb
+
+
 
 
 func _build_ui() -> void:
-	_dim = ColorRect.new()
-	_dim.color = Color(0, 0, 0, 0.55)
-	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(_dim)
+	_shell = DesignerShell.create("Building builder", "house", {
+		"name_id": MODAL_NAME, "want": Vector2(1500, 900), "undo": true,
+		"left_label": "Add & presets", "left_w": 230.0, "right_w": 400.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_title_label = _shell.title_label
+	_shell.closed.connect(close)
+	_shell.undo_requested.connect(undo_style)
+	_shell.redo_requested.connect(_redo_style)
+	_build_palette(_shell.left)
+	_build_centre(_shell.centre)
+	_build_right(_shell.right)
+	_shell.set_hint("Right-drag to orbit · wheel to zoom · pick a tool and click a wall · " +
+		"drag an opening along its wall · Ctrl+Z undo · Esc")
+	_apply_btn = _shell.add_button("Apply to map", DesignerShell.PRIMARY, _apply_to_map)
+	_reset_btn = _shell.add_button("Reset to OSM", DesignerShell.SECONDARY, _reset_to_osm)
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", _panel_style())
-	_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_panel.custom_minimum_size = Vector2(1120, 680)
-	_panel.anchor_left = 0.5
-	_panel.anchor_right = 0.5
-	_panel.anchor_top = 0.5
-	_panel.anchor_bottom = 0.5
-	_panel.offset_left = -560
-	_panel.offset_right = 560
-	_panel.offset_top = -340
-	_panel.offset_bottom = 340
-	add_child(_panel)
 
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_bottom", 10)
-	_panel.add_child(margin)
-
-	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 6)
-	margin.add_child(root_v)
-
-	_title_label = Label.new()
-	_title_label.text = "Building Builder"
-	_title_label.add_theme_font_size_override("font_size", 17)
-	root_v.add_child(_title_label)
-
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 10)
-	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root_v.add_child(hbox)
-
-	_build_palette(hbox)
-
-	# Centre: studio viewport.
-	_vp_container = SubViewportContainer.new()
-	_vp_container.stretch = true
-	_vp_container.custom_minimum_size = Vector2(420, 360)
-	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_vp_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
-	_vp_container.gui_input.connect(_on_preview_input)
-	hbox.add_child(_vp_container)
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.transparent_bg = false
-	_viewport.msaa_3d = Viewport.MSAA_2X
-	# Match the veg-editor pattern: a real size + always-update so the preview
-	# renders and the click coordinates map cleanly into camera ray space.
-	_viewport.size = Vector2i(590, 550)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
-	_vp_container.add_child(_viewport)
-	_build_studio_world()
-
-	# Right: tabs — parametric customization + the structure library.
+## Centre: the studio, with the Library and Reference pages as tabs over it.
+func _build_centre(col: VBoxContainer) -> void:
 	_tabs = TabContainer.new()
-	_tabs.custom_minimum_size = Vector2(340, 360)
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tabs.tab_changed.connect(_on_tab_changed)
-	hbox.add_child(_tabs)
-
-	var scroll := ScrollContainer.new()
-	scroll.name = "Customize"
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_tabs.add_child(scroll)
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(300, 0)
-	side.add_theme_constant_override("separation", 6)
-	scroll.add_child(side)
-
+	col.add_child(_tabs)
+	_studio_view = StudioViewport.create({"ground": true, "size": Vector2i(960, 720), "fov": 48.0})
+	_studio_view.name = "Studio"
+	_studio_view.input_hook = _on_preview_input
+	_studio_view.set_home(deg_to_rad(35.0), deg_to_rad(28.0))
+	_tabs.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_vp_container = _studio_view.container
+	_studio = _studio_view.world
+	_holder = _studio_view.holder
+	_camera = _studio_view.camera
+	_studio_view.strip.add_child(IconButton.make("moon",
+		"Preview the windows and porch lights after dusk", _toggle_night_preview, "Day / night"))
 	_build_library_tab()
 
+
+## Right: the building's settings in sections.
+func _build_right(side: VBoxContainer) -> void:
 	_prov_label = Label.new()
-	_prov_label.add_theme_font_size_override("font_size", 12)
-	_prov_label.modulate = Color(0.7, 0.8, 0.9)
+	_prov_label.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_prov_label.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	side.add_child(_prov_label)
 
-	# NPC space tag: writes SpaceRegistry (NOT the style layer — tagging must
-	# not de-merge the building from the merged OSM mesh).
-	var space_row := HBoxContainer.new()
-	side.add_child(space_row)
-	var space_lbl := Label.new()
-	space_lbl.text = "NPC space"
-	space_lbl.custom_minimum_size = Vector2(90, 0)
-	space_row.add_child(space_lbl)
-	_space_opt = OptionButton.new()
-	_space_opt.tooltip_text = "Tag this building as a space people wayfind to (restroom, kitchen, …)"
-	_space_opt.add_item("None", 0)
-	for i in SpaceTypes.TYPES.size():
-		_space_opt.add_item(SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
-	_space_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_space_opt.item_selected.connect(_on_space_type_selected)
-	space_row.add_child(_space_opt)
-	_space_cap_spin = SpinBox.new()
-	_space_cap_spin.min_value = 1
-	_space_cap_spin.max_value = 5000
-	_space_cap_spin.step = 1
-	_space_cap_spin.custom_minimum_size = Vector2(64, 0)
-	_space_cap_spin.tooltip_text = "How many people can use this space at once"
-	_space_cap_spin.value_changed.connect(_on_space_capacity_changed)
-	_space_cap_spin.visible = false
-	space_row.add_child(_space_cap_spin)
-
-	var shape_row := HBoxContainer.new()
-	side.add_child(shape_row)
-	var shape_lbl := Label.new()
-	shape_lbl.text = "Roof"
-	shape_lbl.custom_minimum_size = Vector2(90, 0)
-	shape_row.add_child(shape_lbl)
+	side.add_child(SectionHeader.make("Roof"))
 	_shape_opt = OptionButton.new()
-	_shape_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for i in ROOF_SHAPE_LABELS.size():
 		_shape_opt.add_item(ROOF_SHAPE_LABELS[i], i)
 	_shape_opt.item_selected.connect(_on_shape_selected)
-	shape_row.add_child(_shape_opt)
-
-	_pitch_slider = _labeled_slider(side, "Pitch °", 10.0, 55.0, 28.0, 1.0,
+	side.add_child(FormRow.make("Shape", _shape_opt, "The roof form (OSM's tag, or yours)", "", "roof_shape"))
+	_pitch_slider = _labeled_slider(side, "Pitch", 10.0, 55.0, 28.0, 1.0,
 		func(v: float) -> void:
 			_working_style["roof_pitch_deg"] = v
-			_queue_rebuild())
-	_height_slider = _labeled_slider(side, "Height m", 2.0, 30.0, 8.0, 0.1,
-		func(v: float) -> void:
-			_working_style["height_m"] = v
-			_queue_rebuild())
-	_offset_slider = _labeled_slider(side, "Raise m", -3.0, 3.0, 0.0, 0.05,
-		func(v: float) -> void:
-			_working_style["base_y_offset_m"] = v
-			_queue_rebuild())
-	_width_slider = _labeled_slider(side, "Width m", 3.0, 24.0, 8.0, 0.1,
-		func(v: float) -> void:
-			_working_style["width_m"] = v
-			_refresh_designed_footprint())
-	_depth_slider = _labeled_slider(side, "Depth m", 2.4, 16.0, 6.0, 0.1,
-		func(v: float) -> void:
-			_working_style["depth_m"] = v
-			_refresh_designed_footprint())
-	_overhang_slider = _labeled_slider(side, "Eave m", 0.0, 1.2, 0.0, 0.05,
+			_queue_rebuild(), "°")
+	_overhang_slider = _labeled_slider(side, "Eave", 0.0, 1.2, 0.0, 0.05,
 		func(v: float) -> void:
 			_working_style["overhang_m"] = v
-			_queue_rebuild())
+			_queue_rebuild(), "m")
+
+	side.add_child(SectionHeader.make("Massing"))
+	_height_slider = _labeled_slider(side, "Height", 2.0, 30.0, 8.0, 0.1,
+		func(v: float) -> void:
+			_working_style["height_m"] = v
+			_queue_rebuild(), "m")
+	_offset_slider = _labeled_slider(side, "Raise", -3.0, 3.0, 0.0, 0.05,
+		func(v: float) -> void:
+			_working_style["base_y_offset_m"] = v
+			_queue_rebuild(), "m")
+	_width_slider = _labeled_slider(side, "Width", 3.0, 24.0, 8.0, 0.1,
+		func(v: float) -> void:
+			_working_style["width_m"] = v
+			_refresh_designed_footprint(), "m")
+	_depth_slider = _labeled_slider(side, "Depth", 2.4, 16.0, 6.0, 0.1,
+		func(v: float) -> void:
+			_working_style["depth_m"] = v
+			_refresh_designed_footprint(), "m")
 	_add_massing_options(side)
 
+	side.add_child(SectionHeader.make("Walls & facade"))
 	_wall_picker = _color_row(side, "Walls", func(c: Color) -> void:
 		_working_style["wall_color"] = c
 		_queue_rebuild())
 	_roof_picker = _color_row(side, "Roof", func(c: Color) -> void:
 		_working_style["roof_color"] = c
 		_queue_rebuild())
-
-	var mat_row := HBoxContainer.new()
-	side.add_child(mat_row)
-	var mat_lbl := Label.new()
-	mat_lbl.text = "Material"
-	mat_lbl.custom_minimum_size = Vector2(90, 0)
-	mat_row.add_child(mat_lbl)
 	_wall_mode_opt = OptionButton.new()
-	_wall_mode_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for i in WALL_MODE_LABELS.size():
 		_wall_mode_opt.add_item(WALL_MODE_LABELS[i], i)
 	_wall_mode_opt.item_selected.connect(_on_wall_mode_selected)
-	mat_row.add_child(_wall_mode_opt)
-
+	side.add_child(FormRow.make("Material", _wall_mode_opt, "The wall finish the shader draws", "", "wall_mode"))
 	# Facade texture (hero buildings): PNG/JPG strips from
 	# user://maps/facade_textures/ tiled at real-world size on the walls.
-	var ftex_row := HBoxContainer.new()
-	side.add_child(ftex_row)
-	var ftex_lbl := Label.new()
-	ftex_lbl.text = "Facade tex"
-	ftex_lbl.custom_minimum_size = Vector2(90, 0)
-	ftex_row.add_child(ftex_lbl)
 	_facade_tex_opt = OptionButton.new()
-	_facade_tex_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_facade_tex_opt.item_selected.connect(_on_facade_tex_selected)
-	ftex_row.add_child(_facade_tex_opt)
-
-	var tsize := GridContainer.new()
-	tsize.columns = 2
-	side.add_child(tsize)
-	_tex_w_spin = _plain_spin(tsize, "Tile W m", 0.5, 50.0, 4.0,
+	side.add_child(FormRow.make("Facade texture", _facade_tex_opt,
+		"A photo strip from user://maps/facade_textures/, tiled on the walls at real size", "", "facade_tex"))
+	_tex_w_spin = _plain_spin(side, "Tile width", 0.5, 50.0, 4.0,
 		func(v: float) -> void:
 			_working_style["wall_tex_w_m"] = v
 			_queue_rebuild())
-	_tex_h_spin = _plain_spin(tsize, "Tile H m", 0.5, 50.0, 3.0,
+	_tex_h_spin = _plain_spin(side, "Tile height", 0.5, 50.0, 3.0,
 		func(v: float) -> void:
 			_working_style["wall_tex_h_m"] = v
 			_queue_rebuild())
 
-	side.add_child(HSeparator.new())
-
-	var det_lbl := Label.new()
-	det_lbl.text = "Features"
-	det_lbl.add_theme_font_size_override("font_size", 12)
-	side.add_child(det_lbl)
-
+	side.add_child(SectionHeader.make("Features", "", "doors, windows, porch, lights"))
 	_elem_list = ItemList.new()
 	_elem_list.custom_minimum_size = Vector2(0, 72)
 	_elem_list.item_selected.connect(_on_element_selected)
 	side.add_child(_elem_list)
-
 	_inspector = VBoxContainer.new()
-	_inspector.add_theme_constant_override("separation", 4)
+	_inspector.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	side.add_child(_inspector)
-
+	var feat_row := HBoxContainer.new()
+	feat_row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	side.add_child(feat_row)
 	_elem_delete = Button.new()
 	_elem_delete.text = "Delete"
-	_elem_delete.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_elem_delete.tooltip_text = "Remove the selected feature"
+	UITheme.style_button(_elem_delete)
 	_elem_delete.pressed.connect(_delete_selected_element)
-	side.add_child(_elem_delete)
-
+	feat_row.add_child(_elem_delete)
 	var line_btn := Button.new()
 	line_btn.text = "Line up this wall"
 	line_btn.tooltip_text = "Centre the doors and windows already on the selected wall"
-	line_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	UITheme.style_button(line_btn)
 	line_btn.pressed.connect(_line_up_wall)
-	side.add_child(line_btn)
+	feat_row.add_child(line_btn)
 
-	side.add_child(HSeparator.new())
-
-	var btn_row := VBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 4)
-	side.add_child(btn_row)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to map"
-	_apply_btn.pressed.connect(_apply_to_map)
-	btn_row.add_child(_apply_btn)
-	_reset_btn = Button.new()
-	_reset_btn.text = "Reset to OSM"
-	_reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	_reset_btn.pressed.connect(_reset_to_osm)
-	btn_row.add_child(_reset_btn)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	close_btn.pressed.connect(close)
-	btn_row.add_child(close_btn)
-	# Above the timeline and inside the screen at any size (a fixed 980 x 620
-	# centred on the window sat on the timeline at 720p).
-	UiFit.keep_fitted(_panel, Vector2(1120, 680))
+	# NPC space tag: writes SpaceRegistry (NOT the style layer — tagging must
+	# not de-merge the building from the merged OSM mesh).
+	side.add_child(SectionHeader.make("People", "", "a space they walk to"))
+	_space_opt = OptionButton.new()
+	_space_opt.add_item("None", 0)
+	for i in SpaceTypes.TYPES.size():
+		_space_opt.add_item(SpaceTypes.label(SpaceTypes.TYPES[i]), i + 1)
+	_space_opt.item_selected.connect(_on_space_type_selected)
+	side.add_child(FormRow.make("Space", _space_opt,
+		"Tag this building as a space people wayfind to (restroom, kitchen, …)", "", "npc_space"))
+	_space_cap_spin = SpinBox.new()
+	_space_cap_spin.min_value = 1
+	_space_cap_spin.max_value = 5000
+	_space_cap_spin.step = 1
+	_space_cap_spin.value_changed.connect(_on_space_capacity_changed)
+	var cap_row := FormRow.make("Capacity", _space_cap_spin,
+		"How many people can use this space at once", "people", "npc_capacity")
+	side.add_child(cap_row)
+	_space_cap_spin.visibility_changed.connect(func() -> void:
+		cap_row.visible = _space_cap_spin.visible)
+	_space_cap_spin.visible = false
 
 
 func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
-		value: float, step: float, on_change: Callable) -> HSlider:
-	var row := HBoxContainer.new()
-	parent.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.custom_minimum_size = Vector2(90, 0)
-	row.add_child(lbl)
-	var slider := HSlider.new()
-	slider.min_value = minv
-	slider.max_value = maxv
-	slider.step = step
-	slider.value = value
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.custom_minimum_size = Vector2(150, 0)
-	row.add_child(slider)
-	var val_lbl := Label.new()
-	val_lbl.text = "%.2f" % value
-	val_lbl.custom_minimum_size = Vector2(48, 0)
-	row.add_child(val_lbl)
-	slider.focus_entered.connect(_snapshot_style)
-	slider.value_changed.connect(func(v: float) -> void:
-		val_lbl.text = "%.2f" % v
-		if not _syncing:
-			on_change.call(v))
-	return slider
+		value: float, step: float, on_change: Callable, unit: String = "") -> HSlider:
+	var r := FormRow.slider(label, minv, maxv, value, step, unit,
+		func(v: float) -> void:
+			if not _syncing:
+				on_change.call(v))
+	parent.add_child(r)
+	(r.control as HSlider).focus_entered.connect(_snapshot_style)
+	return r.control as HSlider
 
 
 ## Labeled SpinBox with its own change callback (no element-nudge coupling).
-func _plain_spin(grid: GridContainer, label: String, minv: float, maxv: float,
+func _plain_spin(parent: Control, label: String, minv: float, maxv: float,
 		value: float, on_change: Callable) -> SpinBox:
-	var lbl := Label.new()
-	lbl.text = label
-	grid.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = minv
-	spin.max_value = maxv
-	spin.step = 0.05
-	spin.value = value
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid.add_child(spin)
-	spin.value_changed.connect(func(v: float) -> void:
-		if not _syncing:
-			on_change.call(v))
-	return spin
+	var r := FormRow.spin(label, minv, maxv, 0.05, "m",
+		func(v: float) -> void:
+			if not _syncing:
+				on_change.call(v))
+	(r.control as SpinBox).value = value
+	parent.add_child(r)
+	return r.control as SpinBox
 
 
 func _color_row(parent: Control, label: String, on_change: Callable) -> ColorPickerButton:
-	var row := HBoxContainer.new()
-	parent.add_child(row)
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.custom_minimum_size = Vector2(90, 0)
-	row.add_child(lbl)
 	var picker := ColorPickerButton.new()
 	picker.custom_minimum_size = Vector2(64, 24)
 	picker.edit_alpha = false
-	row.add_child(picker)
 	picker.color_changed.connect(func(c: Color) -> void:
 		if not _syncing:
 			on_change.call(c))
+	parent.add_child(FormRow.make(label, picker))
 	return picker
 
 
@@ -671,50 +534,7 @@ func _color_row(parent: Control, label: String, on_change: Callable) -> ColorPic
 # Studio world
 # ---------------------------------------------------------------------------
 
-func _build_studio_world() -> void:
-	_studio = Node3D.new()
-	_studio.name = "Studio"
-	_viewport.add_child(_studio)
 
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.42, 0.46, 0.50)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.58, 0.62)
-	env.ambient_light_energy = 0.35
-	var world_env := WorldEnvironment.new()
-	world_env.environment = env
-	_studio.add_child(world_env)
-
-	var key := DirectionalLight3D.new()
-	key.rotation_degrees = Vector3(-42, 38, 0)
-	key.light_energy = 1.15
-	key.shadow_enabled = true
-	_studio.add_child(key)
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-18, -135, 0)
-	fill.light_energy = 0.28
-	_studio.add_child(fill)
-
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(400, 400)
-	ground.mesh = plane
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.30, 0.32, 0.28)
-	gmat.roughness = 0.95
-	ground.material_override = gmat
-	ground.position.y = 0.0
-	_studio.add_child(ground)
-
-	_holder = Node3D.new()
-	_holder.name = "Building"
-	_studio.add_child(_holder)
-
-	_camera = Camera3D.new()
-	_camera.fov = 48.0
-	_camera.current = true
-	_studio.add_child(_camera)
 
 
 func _fit_camera() -> void:
@@ -730,13 +550,10 @@ func _fit_camera() -> void:
 
 
 func _fit_camera_size(size: float, target_y: float) -> void:
-	if _camera == null:
+	if _studio_view == null:
 		return
-	_cam_dist = clampf(size * 1.8, 8.0, 400.0)
-	_cam_target_y = target_y
-	_orbit_az = deg_to_rad(35.0)
-	_orbit_el = deg_to_rad(28.0)
-	_apply_orbit()
+	_studio_view.target = Vector3(0.0, target_y, 0.0)
+	_studio_view.set_orbit(deg_to_rad(35.0), deg_to_rad(28.0), clampf(size * 1.8, 8.0, 400.0))
 
 
 func _rebuild_preview() -> void:
@@ -825,11 +642,11 @@ func _sync_controls_from_style() -> void:
 	_prov_label.text = "Roof: %s (%s)" % [str(roof.get("shape", "flat")), src_txt]
 	var tags: Dictionary = _record.get("tags", {})
 	if _prop_id != "":
-		_title_label.text = "Edit building"
+		_shell.set_title("Building builder", "a placed building")
 	elif _designer:
-		_title_label.text = "Building designer"
+		_shell.set_title("Building builder", "a new building")
 	else:
-		_title_label.text = "Building Builder — %s" % str(tags.get("building", "building"))
+		_shell.set_title("Building builder", "OSM %s" % str(tags.get("building", "building")))
 	_syncing = false
 	_refresh_action_labels()
 	_rebuild_inspector()
@@ -925,14 +742,10 @@ func _build_library_tab() -> void:
 	lib.add_theme_constant_override("separation", 6)
 	_tabs.add_child(lib)
 
-	var hint := Label.new()
-	hint.text = "Preset structures + your imported models"
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.modulate = Color(0.7, 0.8, 0.9)
-	lib.add_child(hint)
-
+	lib.add_child(SectionHeader.make("Structures", "", "presets and your imported models"))
 	var upload_btn := Button.new()
-	upload_btn.text = "Upload GLB/GLTF…"
+	upload_btn.text = "Upload GLB / GLTF…"
+	UITheme.style_button(upload_btn)
 	upload_btn.pressed.connect(_on_library_upload)
 	lib.add_child(upload_btn)
 
@@ -948,22 +761,26 @@ func _build_library_tab() -> void:
 	_lib_list.item_selected.connect(func(_i: int) -> void: _preview_library_model())
 	lib.add_child(_lib_list)
 
+	var lib_btns := HBoxContainer.new()
+	lib_btns.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	lib.add_child(lib_btns)
 	var place_btn := Button.new()
 	place_btn.text = "Place in world"
+	UITheme.style_button(place_btn)
 	place_btn.pressed.connect(_on_library_place)
-	lib.add_child(place_btn)
-
+	lib_btns.add_child(place_btn)
 	var starshade_btn := Button.new()
 	starshade_btn.text = "Add StarShade"
 	starshade_btn.tooltip_text = "Place the V1 StarShade model in the world"
+	UITheme.style_button(starshade_btn)
 	starshade_btn.pressed.connect(_on_add_starshade)
-	lib.add_child(starshade_btn)
-
+	lib_btns.add_child(starshade_btn)
 	_lib_replace_btn = Button.new()
 	_lib_replace_btn.text = "Replace this building"
-	_lib_replace_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	_lib_replace_btn.tooltip_text = "Swap the OSM building for the selected structure"
+	UITheme.style_button(_lib_replace_btn)
 	_lib_replace_btn.pressed.connect(_on_library_replace)
-	lib.add_child(_lib_replace_btn)
+	lib_btns.add_child(_lib_replace_btn)
 
 	_build_reference_tab()
 
@@ -978,8 +795,8 @@ func _build_reference_tab() -> void:
 	_tabs.add_child(tab)
 
 	_ref_status = Label.new()
-	_ref_status.add_theme_font_size_override("font_size", 12)
-	_ref_status.modulate = Color(0.7, 0.8, 0.9)
+	_ref_status.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_ref_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_ref_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tab.add_child(_ref_status)
 
@@ -994,8 +811,8 @@ func _build_reference_tab() -> void:
 	var attr := Label.new()
 	var svc := get_node_or_null("/root/MapillaryService")
 	attr.text = svc.attribution() if svc != null else "Photos © Mapillary contributors, CC BY-SA 4.0"
-	attr.add_theme_font_size_override("font_size", 10)
-	attr.modulate = Color(0.6, 0.65, 0.7)
+	attr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	attr.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	tab.add_child(attr)
 
 	if svc != null:
@@ -1236,43 +1053,28 @@ func _elements() -> Array:
 	return v
 
 
-func _on_preview_input(event: InputEvent) -> void:
+func _on_preview_input(event: InputEvent) -> bool:
 	if not _active or _camera == null or _record.is_empty():
-		return
+		return false
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _rmb:
-			_orbit_az -= mm.relative.x * 0.008
-			_orbit_el = clampf(_orbit_el + mm.relative.y * 0.006, -0.2, 1.2)
-			_apply_orbit()
-		elif _dragging:
+		if _dragging:
 			_drag_to(mm.position)
-		else:
-			_update_ghost(mm.position)
-		return
+			return true
+		_update_ghost(mm.position)
+		return false
 	if not (event is InputEventMouseButton):
-		return
+		return false
 	var mb := event as InputEventMouseButton
-	if mb.button_index == MOUSE_BUTTON_RIGHT:
-		_rmb = mb.pressed
-		return
-	if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-		_cam_dist = clampf(_cam_dist * 0.9, 4.0, 400.0)
-		_apply_orbit()
-		return
-	if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-		_cam_dist = clampf(_cam_dist * 1.1, 4.0, 400.0)
-		_apply_orbit()
-		return
 	if mb.button_index != MOUSE_BUTTON_LEFT:
-		return
+		return false
 	if not mb.pressed:
 		_dragging = false
 		_ghost_visible(false)
-		return
+		return false
 	var pick := _pick_at(mb.position)
 	if not bool(pick.get("valid", false)):
-		return
+		return false  # off the walls: the studio orbits
 	var edge := int(pick["edge"])
 	var u := float(pick["u_m"])
 	var hit := _opening_at(edge, u)
@@ -1284,20 +1086,14 @@ func _on_preview_input(event: InputEvent) -> void:
 		_queue_rebuild()
 	elif _armed_tool != "":
 		place_feature(_armed_tool, edge, u)
-	accept_event()
+	return true
 
 
 ## Map a click in the SubViewportContainer's local space into the SubViewport's
 ## pixel space so Camera3D.project_ray_* aims where the user actually clicked.
 ## With stretch=true and shrink=1 this ratio is ~1, but staying explicit keeps
 ## picking correct if the container and viewport sizes ever diverge.
-func _to_viewport_pos(local_pos: Vector2) -> Vector2:
-	if _vp_container == null or _viewport == null:
-		return local_pos
-	var cont := _vp_container.size
-	if cont.x <= 0.0 or cont.y <= 0.0:
-		return local_pos
-	return local_pos * (Vector2(_viewport.size) / cont)
+
 
 
 func _select_element(idx: int) -> void:
@@ -1370,15 +1166,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _build_palette(hbox: HBoxContainer) -> void:
-	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(168, 0)
-	col.add_theme_constant_override("separation", 4)
-	hbox.add_child(col)
-	var title := Label.new()
-	title.text = "Add"
-	title.add_theme_font_size_override("font_size", 12)
-	col.add_child(title)
+func _build_palette(col: VBoxContainer) -> void:
+	col.add_child(SectionHeader.make("Add to a wall", "plus"))
 	for tool in BuildingFeatures.TOOL_PRESETS:
 		var id := str(tool.get("id", ""))
 		var btn := Button.new()
@@ -1386,23 +1175,16 @@ func _build_palette(hbox: HBoxContainer) -> void:
 		btn.tooltip_text = str(tool.get("tip", ""))
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		btn.toggle_mode = true
+		UITheme.style_button(btn)
 		btn.pressed.connect(_arm_tool.bind(id))
 		col.add_child(btn)
 		_tool_buttons[id] = btn
-	var night := Button.new()
-	night.text = "Day / Night"
-	night.tooltip_text = "Preview the windows and porch lights after dusk"
-	night.pressed.connect(_toggle_night_preview)
-	col.add_child(night)
-	col.add_child(HSeparator.new())
-	var presets := Label.new()
-	presets.text = "Presets"
-	presets.add_theme_font_size_override("font_size", 12)
-	col.add_child(presets)
+	col.add_child(SectionHeader.make("Presets", "house"))
 	for entry in BuildingPresets.builtins():
 		var pb := Button.new()
 		pb.text = str(entry.get("name", ""))
 		pb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		UITheme.style_button(pb)
 		pb.pressed.connect(_apply_named_preset.bind(str(entry.get("id", ""))))
 		col.add_child(pb)
 
@@ -1416,58 +1198,44 @@ func _add_massing_options(side: VBoxContainer) -> void:
 				_height_slider.value = float(_working_style["height_m"])
 				_syncing = false
 			_queue_rebuild())
-	var found := HBoxContainer.new()
-	side.add_child(found)
-	var fl := Label.new()
-	fl.text = "Foundation"
-	fl.custom_minimum_size = Vector2(90, 0)
-	found.add_child(fl)
 	_foundation_opt = OptionButton.new()
 	for f in BuildingFeatures.FOUNDATIONS:
 		_foundation_opt.add_item(str(f).capitalize())
-	_foundation_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_foundation_opt.item_selected.connect(func(i: int) -> void:
 		if _syncing:
 			return
 		_snapshot_style()
 		_working_style["foundation"] = BuildingFeatures.FOUNDATIONS[i]
 		_queue_rebuild())
-	found.add_child(_foundation_opt)
-	var wing := HBoxContainer.new()
-	side.add_child(wing)
-	var wl := Label.new()
-	wl.text = "Wing"
-	wl.custom_minimum_size = Vector2(90, 0)
-	wing.add_child(wl)
+	side.add_child(FormRow.make("Foundation", _foundation_opt, "", "", "foundation"))
 	_wing_opt = OptionButton.new()
 	for w in BuildingFeatures.WINGS:
 		_wing_opt.add_item(str(w).capitalize())
-	_wing_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_wing_opt.item_selected.connect(func(i: int) -> void:
 		if _syncing:
 			return
 		_snapshot_style()
 		_working_style["wing"] = BuildingFeatures.WINGS[i]
 		_refresh_designed_footprint())
-	wing.add_child(_wing_opt)
+	side.add_child(FormRow.make("Wing", _wing_opt, "An ell off the main block", "", "wing"))
 	_light_windows = CheckButton.new()
-	_light_windows.text = "Light the windows"
+	_light_windows.text = "Glow after dusk"
 	_light_windows.toggled.connect(func(on: bool) -> void:
 		if _syncing:
 			return
 		_snapshot_style()
 		_working_style["light_windows"] = on
 		_queue_rebuild())
-	side.add_child(_light_windows)
+	side.add_child(FormRow.make("Lit windows", _light_windows, "Windows glow after dusk", "", "light_windows"))
 	_corner_trim = CheckButton.new()
-	_corner_trim.text = "Corner boards"
+	_corner_trim.text = "Trim the corners"
 	_corner_trim.toggled.connect(func(on: bool) -> void:
 		if _syncing:
 			return
 		_snapshot_style()
 		_working_style["corner_trim"] = on
 		_queue_rebuild())
-	side.add_child(_corner_trim)
+	side.add_child(FormRow.make("Corner boards", _corner_trim, "Trim boards on the corners", "", "corner_trim"))
 
 
 func _refresh_action_labels() -> void:
@@ -1513,6 +1281,9 @@ func _arm_tool(tool_id: String) -> void:
 		btn.set_pressed_no_signal(id == _armed_tool)
 	if _armed_tool == "":
 		_ghost_visible(false)
+	if _shell != null:
+		var label := str((_tool_buttons[_armed_tool] as Button).text) if _tool_buttons.has(_armed_tool) else ""
+		_shell.set_mode("Placing %s · click a wall · Esc" % label.to_lower() if _armed_tool != "" else "")
 
 
 func _toggle_night_preview() -> void:
@@ -1661,6 +1432,7 @@ func _rebuild_inspector() -> void:
 		c.free()
 	var elems := _elements()
 	if _selected_elem < 0 or _selected_elem >= elems.size():
+		_syncing = false
 		return
 	var el: Dictionary = elems[_selected_elem]
 	var typ := BuildingFeatures.element_type(el)
@@ -1672,21 +1444,16 @@ func _rebuild_inspector() -> void:
 		var kind := str(field.get("kind", "float"))
 		var label := str(field.get("label", key))
 		if kind == "float":
-			var spin := SpinBox.new()
-			spin.min_value = float(field.get("min", 0.0))
-			spin.max_value = float(field.get("max", 10.0))
-			spin.step = float(field.get("step", 0.05))
-			spin.value = float(el.get(key, field.get("min", 0.0)))
-			spin.prefix = label + " "
-			spin.focus_entered.connect(_snapshot_style)
-			spin.value_changed.connect(_on_field_float.bind(key))
-			_inspector.add_child(spin)
+			var r := FormRow.spin(label, float(field.get("min", 0.0)), float(field.get("max", 10.0)),
+				float(field.get("step", 0.05)), str(field.get("unit", "")), _on_field_float.bind(key))
+			(r.control as SpinBox).value = float(el.get(key, field.get("min", 0.0)))
+			(r.control as SpinBox).focus_entered.connect(_snapshot_style)
+			_inspector.add_child(r)
 		elif kind == "bool":
 			var box := CheckButton.new()
-			box.text = label
 			box.button_pressed = bool(el.get(key, false))
 			box.toggled.connect(_on_field_bool.bind(key))
-			_inspector.add_child(box)
+			_inspector.add_child(FormRow.make(label, box))
 		elif kind == "option":
 			var opt := OptionButton.new()
 			var choices: Array = field.get("options", [])
@@ -1698,13 +1465,14 @@ func _rebuild_inspector() -> void:
 					sel = i
 			opt.select(sel)
 			opt.item_selected.connect(_on_field_option.bind(key, choices))
-			_inspector.add_child(opt)
+			_inspector.add_child(FormRow.make(label, opt))
 		elif kind == "color":
 			var picker := ColorPickerButton.new()
 			var raw: Variant = el.get(key, Color.WHITE)
 			picker.color = raw if raw is Color else Color.WHITE
+			picker.custom_minimum_size = Vector2(64, 24)
 			picker.color_changed.connect(_on_field_color.bind(key))
-			_inspector.add_child(picker)
+			_inspector.add_child(FormRow.make(label, picker))
 	_syncing = false
 
 
@@ -1746,24 +1514,18 @@ func _write_field(key: String, value: Variant) -> void:
 	_queue_rebuild()
 
 
-func _apply_orbit() -> void:
-	if _camera == null:
-		return
-	var target := Vector3(0.0, _cam_target_y, 0.0)
-	_camera.position = target + Vector3(
-		sin(_orbit_az) * cos(_orbit_el), sin(_orbit_el),
-		cos(_orbit_az) * cos(_orbit_el)) * _cam_dist
-	_camera.look_at(target)
+
 
 
 func _pick_at(screen_pos: Vector2) -> Dictionary:
-	if _camera == null or _record.is_empty():
+	if _studio_view == null or _record.is_empty():
 		return {"valid": false}
 	var params := BuildingBuilder.resolve_building_params(_record, _working_style)
-	var origin := _camera.project_ray_origin(_to_viewport_pos(screen_pos))
-	var dir := _camera.project_ray_normal(_to_viewport_pos(screen_pos))
+	var ray := _studio_view.pick_ray(screen_pos)
+	if ray.is_empty():
+		return {"valid": false}
 	return BuildingBuilder.pick_wall_point(params["poly"], float(params["base_offset_m"]),
-		float(params["height_m"]), origin, dir)
+		float(params["height_m"]), ray["origin"], ray["dir"])
 
 
 func _opening_at(edge: int, u: float) -> int:

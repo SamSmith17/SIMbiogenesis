@@ -2472,6 +2472,24 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
     - Gates: `domelab_designer_check.gd` at 1080 AND at 720 (the fold is
       asserted from the canvas width and the flyout is opened, audited and
       shot), `--capture=modals` at both sizes.
+  - **Phase 2 (2026-11-01): every Generation 1 modal is on a kit shape.**
+    Veg Tune look, building builder, connection ports, machine setup, camp
+    Tune look and the pallet rack builder are on `DesignerShell` (+
+    `StudioViewport` + `FormRow`; the rack keeps its OWN viewport under the
+    shell's centre because its picking, drags and the seven rack checks read
+    `_vp_container` / `_camera` / `_update_camera`); StarShade editor,
+    recipe editor and inventory are `ModalFrame`s; the veg area fill is a
+    `Drawer`; the Linkage guide / hardware got the Gen 2 header; record
+    book, location picker and Hydro Lab are theme sweeps. Rules that came
+    out of it: a tool's armed state is the shell's mode chip
+    (`set_mode`), never a hint sentence; a studio owner that needs its own
+    clicks sets `StudioViewport.input_hook` and returns true for what it
+    took (an off-subject left drag then orbits); `pick_element`-style
+    functions the harness feeds from `Camera3D.unproject_position` take
+    VIEWPORT pixels, so a container click converts through `to_viewport`
+    first; a CheckBox / CheckButton inside a FormRow needs its own text or
+    it draws as a bare dot; a table label's trailing unit becomes the spin
+    box suffix (`split_unit`). The modal audit has a `machine_setup` entry.
   - **Panels registered with `HudLayout` report their REAL minimum width**
     through the `size` callable (`maxf(design_w, get_combined_minimum_size().x)`).
     Terrain options declared a fixed 260 px while its content needed 284, so

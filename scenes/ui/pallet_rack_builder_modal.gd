@@ -56,7 +56,12 @@ var _loader: Node = null
 var _active := false
 var _spec: Dictionary = {}
 
-var _dim: ColorRect = null
+## The kit chrome (DesignerShell: designs + the add-to-the-structure palette
+## on the left, the breadcrumb + the builder's OWN viewport in the centre —
+## its picking, drags and the harness read _vp_container / _camera — the
+## selected part, the element list and every parameter section on the right,
+## Place / Apply / Delete / New in the footer).
+var _shell: DesignerShell = null
 var _panel: PanelContainer = null
 var _vp_container: SubViewportContainer = null
 var _viewport: SubViewport = null
@@ -68,11 +73,8 @@ var _depth_opt: OptionButton = null
 var _height_opt: OptionButton = null
 var _beam_opt: OptionButton = null
 var _bay_slider: HSlider = null
-var _bay_val: Label = null
 var _col_slider: HSlider = null
-var _col_val: Label = null
 var _spacing_slider: HSlider = null
-var _spacing_val: Label = null
 var _levels_spin: SpinBox = null
 var _level_box: VBoxContainer = null
 var _level_spins: Array = []
@@ -150,7 +152,6 @@ var _status_lbl: Label = null
 ## Element to select once the rebuild that adds it lands (its pick ids exist then).
 var _pending_select := ""
 var _bom_lbl: Label = null
-var _title_lbl: Label = null
 var _place_btn: Button = null
 var _apply_btn: Button = null
 var _delete_btn: Button = null
@@ -327,16 +328,14 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	set_meta("ui_modal", true)  # UiAudit.MODAL_META
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	HudLayout.claim_modal(MODAL_NAME)
+	_shell.open()
 	_queue_rebuild(true)
 
 
 func _apply_edit_mode_ui() -> void:
 	var editing := not _bound_prop_id.is_empty()
-	if _title_lbl != null:
-		_title_lbl.text = "Edit Pallet Rack" if editing else "Pallet Rack Structure Builder"
+	if _shell != null:
+		_shell.set_title("Pallet rack builder", "a placed rack" if editing else "a new rack")
 	if _apply_btn != null:
 		_apply_btn.visible = editing
 	if _delete_btn != null:
@@ -360,8 +359,7 @@ func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
-	HudLayout.release(MODAL_NAME)
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -380,65 +378,67 @@ func _process(delta: float) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	# Full-screen modal (mirrors the Linkage Lab layout): dim backdrop, a top bar
-	# with the title + primary actions, then a large 3D viewport beside a scrollable
-	# parameter sidebar.
-	_dim = ColorRect.new()
-	_dim.color = C_BG
-	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(_dim)
+	_shell = DesignerShell.create("Pallet rack builder", "layers", {
+		"name_id": MODAL_NAME, "want": Vector2(1600, 960), "undo": true,
+		"left_label": "Designs & add", "left_w": 260.0, "right_w": 400.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_shell.closed.connect(close)
+	_shell.undo_requested.connect(_undo)
+	_undo_btn = _shell.undo_btn
+	_shell.redo_btn.visible = false  # the rack keeps a one-way undo stack
 
-	var root := VBoxContainer.new()
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 10)
-	root.add_theme_constant_override("separation", 8)
-	add_child(root)
-
-	root.add_child(_build_topbar())
-
-	var main_row := HBoxContainer.new()
-	main_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	main_row.add_theme_constant_override("separation", 8)
-	root.add_child(main_row)
-
-	var vp_frame := PanelContainer.new()
-	vp_frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vp_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vp_frame.add_theme_stylebox_override("panel", _card_style())
-	main_row.add_child(vp_frame)
-	var vp_col := VBoxContainer.new()
-	vp_col.add_theme_constant_override("separation", 6)
-	vp_frame.add_child(vp_col)
-	vp_col.add_child(_build_crumb_bar())
+	# Centre: the breadcrumb over the builder's own viewport.
+	_shell.centre.add_child(_build_crumb_bar())
 	_vp_container = SubViewportContainer.new()
 	_vp_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_vp_container.stretch = true
 	_vp_container.gui_input.connect(_on_viewport_input)
-	vp_col.add_child(_vp_container)
+	_shell.centre.add_child(_vp_container)
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(960, 720)
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
 	_viewport.own_world_3d = true
 	_vp_container.add_child(_viewport)
 	_build_studio_world()
+	# What is selected / armed, in the strip under the viewport.
+	_sel_hud = Label.new()
+	_sel_hud.text = ""
+	_sel_hud.add_theme_color_override("font_color", UITheme.C_AMBER)
+	_sel_hud.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_sel_hud.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_sel_hud.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_sel_hud.mouse_filter = Control.MOUSE_FILTER_PASS
+	_sel_hud.mouse_entered.connect(func() -> void: _sel_hud.tooltip_text = _sel_hud.text)
+	_shell.centre.add_child(_sel_hud)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(340, 0)
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var side_frame := PanelContainer.new()
-	side_frame.add_theme_stylebox_override("panel", _card_style())
-	side_frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	main_row.add_child(side_frame)
-	side_frame.add_child(scroll)
-	var side := VBoxContainer.new()
-	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	side.custom_minimum_size.x = 300
-	side.add_theme_constant_override("separation", 6)
-	scroll.add_child(side)
+	var side := _shell.right
+	_build_element_ui(_shell.left, side)
+	_build_right(side)
 
-	_build_element_ui(side)
+	_shell.set_hint("Right-drag orbits · click selects · drag moves · Alt-drag raises · " +
+		"double-click opens · Shift adds · Del removes · Esc")
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place,
+		"Put this rack on the ground in front of you")
+	_apply_btn = _shell.add_button("Apply changes", DesignerShell.PRIMARY, _on_apply_to_prop,
+		"Rebuild the placed rack from these edits")
+	_apply_btn.visible = false
+	_delete_btn = _shell.add_button("Delete", DesignerShell.DESTRUCTIVE, _on_delete_prop,
+		"Remove the placed rack from the world")
+	_delete_btn.visible = false
+	_new_btn = _shell.add_button("New", DesignerShell.SECONDARY, _on_new_or_revert)
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
+	_rebuild_level_spins()
+
+
+## Right: the rack's parameters, in sections.
+func _build_right(side: VBoxContainer) -> void:
+	# Pallet racks route here rather than to the generic prop drawer, so the
+	# tag control lives in this modal too (see npc_space_tag_row.gd). Only
+	# meaningful when editing a placed rack, so it hides itself for a fresh one.
+	_space_row = NpcSpaceTagRow.new()
+	side.add_child(_space_row)
 
 	_section(side, "Rack system")
 	_depth_opt = _add_option(side, "Upright depth", PalletRackBuilder.DEPTH_OPTIONS_IN,
@@ -449,53 +449,29 @@ func _build_ui() -> void:
 		"'", int(_spec["beam_span_ft"]))
 
 	_section(side, "Layout")
-	var bay_pack := _add_slider(side, "Bays across", 1, 10, int(_spec["bay_count"]))
-	_bay_slider = bay_pack[0]
-	_bay_val = bay_pack[1]
-	var col_pack := _add_slider(side, "Columns (decked spans)", 1, 10, int(_spec["column_count"]))
-	_col_slider = col_pack[0]
-	_col_val = col_pack[1]
-	var gap_pack := _add_float_slider(side, "Assembly spacing", PalletRackBuilder.ROW_GAP_MIN_FT, 20.0,
-		PalletRackBuilder.ROW_GAP_STEP_FT, float(_spec["row_gap_ft"]), "'")
-	_spacing_slider = gap_pack[0]
-	_spacing_val = gap_pack[1]
-	_spacing_slider.tooltip_text = "Clear space between rack rows. 4', 8', 12' and so on tile the plywood with no cut sheets."
+	_bay_slider = _add_slider(side, "Bays across", 1, 10, int(_spec["bay_count"]))
+	_col_slider = _add_slider(side, "Columns", 1, 10, int(_spec["column_count"]),
+		"Decked spans, front to back")
+	_spacing_slider = _add_float_slider(side, "Assembly spacing", PalletRackBuilder.ROW_GAP_MIN_FT, 20.0,
+		PalletRackBuilder.ROW_GAP_STEP_FT, float(_spec["row_gap_ft"]), "ft",
+		"Clear space between rack rows. 4', 8', 12' and so on tile the plywood with no cut sheets.")
 
 	_section(side, "Levels")
 	_levels_spin = _add_spin(side, "Deck levels", 1, 3, 1, float(_spec["deck_levels"]))
 	_levels_spin.value_changed.connect(func(_v: float) -> void: _rebuild_level_spins())
 	_level_box = VBoxContainer.new()
-	_level_box.add_theme_constant_override("separation", 4)
+	_level_box.add_theme_constant_override("separation", 2)
 	side.add_child(_level_box)
 	_roof_chk = _add_check(side, "Rooftop deck", bool(_spec["roof_deck"]))
-	var roof_row := HBoxContainer.new()
-	roof_row.add_theme_constant_override("separation", 8)
-	side.add_child(roof_row)
-	var rp := VBoxContainer.new()
-	rp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	roof_row.add_child(rp)
-	_pitch_spin = _add_spin(rp, "Roof pitch (°)", 0.0, 35.0, 0.5, float(_spec.get("roof_pitch_deg", 0.0)))
-	_pitch_spin.tooltip_text = "0 = a flat roof deck. Pitched, the roof falls to the low side on packing over the top beams."
-	var rl := VBoxContainer.new()
-	rl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	roof_row.add_child(rl)
-	rl.add_child(_small_label("Falls toward"))
+	_pitch_spin = _add_spin(side, "Roof pitch", 0.0, 35.0, 0.5, float(_spec.get("roof_pitch_deg", 0.0)), "°",
+		"0 = a flat roof deck. Pitched, the roof falls to the low side on packing over the top beams.")
 	_low_opt = _insp_option(PalletRackBuilder.ROOF_LOW_SIDES, str(_spec.get("roof_low_side", "back")))
 	_low_opt.item_selected.connect(func(_i: int) -> void: _on_control_changed())
-	rl.add_child(_low_opt)
-	var oh_row := HBoxContainer.new()
-	oh_row.add_theme_constant_override("separation", 8)
-	side.add_child(oh_row)
-	var oe := VBoxContainer.new()
-	oe.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	oh_row.add_child(oe)
-	_eave_spin = _add_spin(oe, "Eaves overhang (ft)", 0.0, 8.0, 0.25, float(_spec.get("roof_eave_ft", 0.0)))
-	_eave_spin.tooltip_text = "How far the roof runs past the structure at its high and low edges"
-	var os := VBoxContainer.new()
-	os.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	oh_row.add_child(os)
-	_side_spin = _add_spin(os, "Sides overhang (ft)", 0.0, 8.0, 0.25, float(_spec.get("roof_side_ft", 0.0)))
-	_side_spin.tooltip_text = "How far the roof runs past the structure at its two sloping sides"
+	side.add_child(FormRow.make("Falls toward", _low_opt, "The low side of a pitched roof", "", "roof_low_side"))
+	_eave_spin = _add_spin(side, "Eaves overhang", 0.0, 8.0, 0.25, float(_spec.get("roof_eave_ft", 0.0)), "ft",
+		"How far the roof runs past the structure at its high and low edges")
+	_side_spin = _add_spin(side, "Sides overhang", 0.0, 8.0, 0.25, float(_spec.get("roof_side_ft", 0.0)), "ft",
+		"How far the roof runs past the structure at its two sloping sides")
 
 	_section(side, "Decking")
 	_decked_chk = _add_check(side, "Deck the columns (2x4 + plywood)", bool(_spec["decked"]))
@@ -514,48 +490,20 @@ func _build_ui() -> void:
 	ub.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_u_row.add_child(ub)
 	_u_bays_spin = _add_spin(ub, "Open bays", 1, 10, 1, float(_spec["u_open_bays"]))
-	var uc := VBoxContainer.new()
-	uc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_u_row.add_child(uc)
-	_u_cols_spin = _add_spin(uc, "Open cols", 1, 10, 1, float(_spec["u_open_cols"]))
+	_u_cols_spin = _add_spin(ub, "Open columns", 1, 10, 1, float(_spec["u_open_cols"]))
 
 	_section(side, "Sections (joined racks)")
 	side.add_child(_small_label("Add a section onto a face of the rack you are editing: it carries on the rows (or shares the end frame) and becomes its own rack to edit."))
-	var sec_grid := GridContainer.new()
-	sec_grid.columns = 2
-	sec_grid.add_theme_constant_override("h_separation", 8)
-	side.add_child(sec_grid)
-	var sf := VBoxContainer.new()
-	sf.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sec_grid.add_child(sf)
-	sf.add_child(_small_label("On the face"))
 	_sec_face_opt = _insp_option(PalletRackBuilder.FACES, "back")
-	sf.add_child(_sec_face_opt)
-	var sj := VBoxContainer.new()
-	sj.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sec_grid.add_child(sj)
-	sj.add_child(_small_label("Joined"))
+	side.add_child(FormRow.make("On the face", _sec_face_opt, "", "", "section_face"))
 	_sec_join_opt = _insp_option(["gap", "share"], "gap",
 		["With the row spacing", "Sharing the end frame"])
-	sj.add_child(_sec_join_opt)
-	var sb_box := VBoxContainer.new()
-	sb_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sec_grid.add_child(sb_box)
-	_sec_bays_spin = _add_spin(sb_box, "Bays", 1, 10, 1, 1)
-	var sc_box := VBoxContainer.new()
-	sc_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sec_grid.add_child(sc_box)
-	_sec_cols_spin = _add_spin(sc_box, "Columns", 1, 10, 1, 2)
-	var sa_box := VBoxContainer.new()
-	sa_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sec_grid.add_child(sa_box)
-	_sec_align_spin = _add_spin(sa_box, "Starting at bay / row", 1, 11, 1, 1)
-	_sec_align_spin.tooltip_text = "Front / back: the bay of this rack the section's first bay lines up with. Left / right: the rack row."
-	var sbtn_box := VBoxContainer.new()
-	sbtn_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sbtn_box.alignment = BoxContainer.ALIGNMENT_END
-	sec_grid.add_child(sbtn_box)
-	sbtn_box.add_child(_small_button("Add section", "Add the section and edit it", _on_add_section))
+	side.add_child(FormRow.make("Joined", _sec_join_opt, "", "", "section_join"))
+	_sec_bays_spin = _add_spin(side, "Bays", 1, 10, 1, 1)
+	_sec_cols_spin = _add_spin(side, "Columns", 1, 10, 1, 2)
+	_sec_align_spin = _add_spin(side, "Starting at bay / row", 1, 11, 1, 1, "",
+		"Front / back: the bay of this rack the section's first bay lines up with. Left / right: the rack row.")
+	side.add_child(_small_button("Add section", "Add the section and edit it", _on_add_section))
 	_mod_box = VBoxContainer.new()
 	_mod_box.add_theme_constant_override("separation", 4)
 	side.add_child(_mod_box)
@@ -574,18 +522,9 @@ func _build_ui() -> void:
 	for face in ["front", "back", "left", "right"]:
 		_wall_chks[face] = _add_check(wall_row, face.capitalize(),
 			bool((_spec["walls"] as Dictionary).get(face, false)))
-	var band_row := HBoxContainer.new()
-	band_row.add_theme_constant_override("separation", 8)
-	side.add_child(band_row)
-	var bb := VBoxContainer.new()
-	bb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	band_row.add_child(bb)
-	_wall_bottom_spin = _add_spin(bb, "Walls from (ft)", 0.0, 20.0, 0.25, 0.0)
-	var bt := VBoxContainer.new()
-	bt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	band_row.add_child(bt)
-	_wall_top_spin = _add_spin(bt, "up to (ft, 0 = top)", 0.0, 20.0, 0.25, 0.0)
-	_wall_top_spin.tooltip_text = "Where the walls stop. 0 runs them to the top of the frame; 8 walls in just the ground floor."
+	_wall_bottom_spin = _add_spin(side, "Walls from", 0.0, 20.0, 0.25, 0.0, "ft")
+	_wall_top_spin = _add_spin(side, "Walls up to", 0.0, 20.0, 0.25, 0.0, "ft",
+		"Where the walls stop. 0 runs them to the top of the frame; 8 walls in just the ground floor.")
 
 	_section(side, "Build it with a crew")
 	_crew_box = VBoxContainer.new()
@@ -594,99 +533,17 @@ func _build_ui() -> void:
 
 	_section(side, "Bill of materials")
 	_bom_lbl = Label.new()
-	_bom_lbl.add_theme_color_override("font_color", C_TEXT_S)
-	_bom_lbl.add_theme_font_size_override("font_size", 11)
+	_bom_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_bom_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_bom_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	side.add_child(_bom_lbl)
 
-	_rebuild_level_spins()
 
 
-func _build_topbar() -> Control:
-	var bar := PanelContainer.new()
-	bar.add_theme_stylebox_override("panel", _card_style())
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	bar.add_child(row)
-
-	_title_lbl = Label.new()
-	_title_lbl.text = "Pallet Rack Structure Builder"
-	_title_lbl.add_theme_color_override("font_color", C_TEXT)
-	_title_lbl.add_theme_font_size_override("font_size", 18)
-	_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_title_lbl)
-
-	_sel_hud = Label.new()
-	_sel_hud.text = ""
-	_sel_hud.add_theme_color_override("font_color", C_PRIMARY)
-	_sel_hud.add_theme_font_size_override("font_size", 11)
-	_sel_hud.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(_sel_hud)
-
-	var hint := Label.new()
-	hint.text = "RMB orbit  •  LMB select / drag to move  •  Alt-drag raise  •  Double-click open  •  Shift multi  •  Del remove"
-	hint.add_theme_color_override("font_color", C_TEXT_S)
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	row.add_child(hint)
-
-	# Pallet racks route here rather than to the generic prop drawer, so the tag
-	# control has to live in this modal too (see npc_space_tag_row.gd). Only
-	# meaningful when editing a placed rack, so it hides itself for a fresh one.
-	_space_row = NpcSpaceTagRow.new()
-	row.add_child(_space_row)
-
-	_new_btn = Button.new()
-	_new_btn.text = "New"
-	_new_btn.focus_mode = Control.FOCUS_NONE
-	_new_btn.pressed.connect(_on_new_or_revert)
-	row.add_child(_new_btn)
-
-	_undo_btn = Button.new()
-	_undo_btn.text = "Undo"
-	_undo_btn.focus_mode = Control.FOCUS_NONE
-	_undo_btn.disabled = true
-	_undo_btn.pressed.connect(_undo)
-	row.add_child(_undo_btn)
-
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply changes"
-	_apply_btn.focus_mode = Control.FOCUS_NONE
-	_apply_btn.add_theme_color_override("font_color", C_PRIMARY)
-	_apply_btn.visible = false
-	_apply_btn.pressed.connect(_on_apply_to_prop)
-	row.add_child(_apply_btn)
-
-	_delete_btn = Button.new()
-	_delete_btn.text = "Delete"
-	_delete_btn.focus_mode = Control.FOCUS_NONE
-	_delete_btn.add_theme_color_override("font_color", Color(0.94, 0.45, 0.45))
-	_delete_btn.visible = false
-	_delete_btn.pressed.connect(_on_delete_prop)
-	row.add_child(_delete_btn)
-
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	_place_btn.focus_mode = Control.FOCUS_NONE
-	_place_btn.add_theme_color_override("font_color", C_PRIMARY)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.focus_mode = Control.FOCUS_NONE
-	close_btn.pressed.connect(close)
-	row.add_child(close_btn)
-	return bar
 
 
 func _card_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = C_PANEL
-	sb.border_color = C_BORDER
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(8)
+	var sb := UITheme.card_style()
 	sb.content_margin_left = 12
 	sb.content_margin_right = 12
 	sb.content_margin_top = 10
@@ -695,25 +552,12 @@ func _card_style() -> StyleBoxFlat:
 
 
 func _section(parent: Control, text: String) -> void:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_color_override("font_color", C_PRIMARY)
-	lbl.add_theme_font_size_override("font_size", 12)
-	var m := MarginContainer.new()
-	m.add_theme_constant_override("margin_top", 6)
-	m.add_child(lbl)
-	parent.add_child(m)
+	parent.add_child(SectionHeader.make(text))
 
 
 func _add_option(parent: Control, label: String, values: Array, suffix: String,
 		current: int) -> OptionButton:
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 11)
-	parent.add_child(lbl)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	opt.focus_mode = Control.FOCUS_NONE
 	for i in values.size():
 		var v := int(values[i])
@@ -722,86 +566,33 @@ func _add_option(parent: Control, label: String, values: Array, suffix: String,
 		if v == current:
 			opt.select(i)
 	opt.item_selected.connect(func(_i: int) -> void: _on_control_changed())
-	parent.add_child(opt)
+	parent.add_child(FormRow.make(label, opt))
 	return opt
 
 
 func _add_slider(parent: Control, label: String, mn: int, mx: int,
-		val: int) -> Array:
-	var head := HBoxContainer.new()
-	head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 11)
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(lbl)
-	var val_lbl := Label.new()
-	val_lbl.text = str(val)
-	val_lbl.add_theme_color_override("font_color", C_TEXT)
-	val_lbl.add_theme_font_size_override("font_size", 11)
-	head.add_child(val_lbl)
-	parent.add_child(head)
-	var sl := HSlider.new()
-	sl.min_value = mn
-	sl.max_value = mx
-	sl.step = 1
-	sl.value = val
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.focus_mode = Control.FOCUS_NONE
-	sl.value_changed.connect(func(v: float) -> void:
-		val_lbl.text = str(int(v))
-		_on_layout_changed())
-	parent.add_child(sl)
-	return [sl, val_lbl]
+		val: int, tip: String = "") -> HSlider:
+	var row := FormRow.slider(label, mn, mx, val, 1.0, "",
+		func(_v: float) -> void: _on_layout_changed(), tip)
+	parent.add_child(row)
+	return row.control as HSlider
 
 
 func _add_float_slider(parent: Control, label: String, mn: float, mx: float,
-		step: float, val: float, suffix: String = "") -> Array:
-	var head := HBoxContainer.new()
-	head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 11)
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(lbl)
-	var val_lbl := Label.new()
-	val_lbl.text = _fmt_num(val) + suffix
-	val_lbl.add_theme_color_override("font_color", C_TEXT)
-	val_lbl.add_theme_font_size_override("font_size", 11)
-	head.add_child(val_lbl)
-	parent.add_child(head)
-	var sl := HSlider.new()
-	sl.min_value = mn
-	sl.max_value = mx
-	sl.step = step
-	sl.value = val
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sl.focus_mode = Control.FOCUS_NONE
-	sl.value_changed.connect(func(v: float) -> void:
-		val_lbl.text = _fmt_num(v) + suffix
-		_on_control_changed())
-	parent.add_child(sl)
-	return [sl, val_lbl]
+		step: float, val: float, unit: String = "", tip: String = "") -> HSlider:
+	var row := FormRow.slider(label, mn, mx, val, step, unit,
+		func(_v: float) -> void: _on_control_changed(), tip)
+	parent.add_child(row)
+	return row.control as HSlider
 
 
 func _add_spin(parent: Control, label: String, mn: float, mx: float,
-		step: float, val: float) -> SpinBox:
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 11)
-	parent.add_child(lbl)
-	var spin := SpinBox.new()
-	spin.min_value = mn
-	spin.max_value = mx
-	spin.step = step
-	spin.value = val
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spin.value_changed.connect(func(_v: float) -> void: _on_control_changed())
-	parent.add_child(spin)
-	return spin
+		step: float, val: float, unit: String = "", tip: String = "") -> SpinBox:
+	var row := FormRow.spin(label, mn, mx, step, unit,
+		func(_v: float) -> void: _on_control_changed(), tip)
+	(row.control as SpinBox).value = val
+	parent.add_child(row)
+	return row.control as SpinBox
 
 
 func _add_check(parent: Control, label: String, on: bool) -> CheckBox:
@@ -809,8 +600,7 @@ func _add_check(parent: Control, label: String, on: bool) -> CheckBox:
 	chk.text = label
 	chk.button_pressed = on
 	chk.focus_mode = Control.FOCUS_NONE
-	chk.add_theme_color_override("font_color", C_TEXT)
-	chk.add_theme_font_size_override("font_size", 11)
+	chk.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	chk.toggled.connect(func(_p: bool) -> void: _on_control_changed())
 	parent.add_child(chk)
 	return chk
@@ -2009,13 +1799,10 @@ func _sync_controls() -> void:
 	_select_meta(_joist_opt, int(_spec["joist_spacing_in"]))
 	if _bay_slider:
 		_bay_slider.value = int(_spec["bay_count"])
-		_bay_val.text = str(int(_spec["bay_count"]))
 	if _col_slider:
 		_col_slider.value = int(_spec["column_count"])
-		_col_val.text = str(int(_spec["column_count"]))
 	if _spacing_slider:
 		_spacing_slider.value = float(_spec["row_gap_ft"])
-		_spacing_val.text = _fmt_num(float(_spec["row_gap_ft"])) + "'"
 	if _levels_spin:
 		_levels_spin.value = int(_spec["deck_levels"])
 	if _roof_chk:
@@ -2285,8 +2072,8 @@ func _prop_record(prop_id: String) -> Dictionary:
 func _small_label(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
-	l.add_theme_color_override("font_color", C_TEXT_S)
-	l.add_theme_font_size_override("font_size", 11)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return l
 
@@ -2296,24 +2083,30 @@ func _small_button(text: String, tip: String, cb: Callable) -> Button:
 	b.text = text
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 11)
+	UITheme.style_button(b)
 	b.pressed.connect(cb)
 	return b
 
 
-func _build_element_ui(side: VBoxContainer) -> void:
-	# The selected element's card sits on top, so it is in view the moment
-	# something is clicked; hidden while nothing is selected.
+func _build_element_ui(left: VBoxContainer, side: VBoxContainer) -> void:
+	# The selected element's card sits on top of the right column, so it is
+	# in view the moment something is clicked; hidden while nothing is selected.
 	_insp_frame = PanelContainer.new()
 	var sb := _card_style()
-	sb.border_color = C_PRIMARY
+	sb.border_color = UITheme.C_PRIMARY
 	_insp_frame.add_theme_stylebox_override("panel", sb)
 	_insp_frame.visible = false
 	side.add_child(_insp_frame)
 	_insp_box = VBoxContainer.new()
 	_insp_box.add_theme_constant_override("separation", 4)
 	_insp_frame.add_child(_insp_box)
+	_section(side, "In this design")
+	_el_list_box = VBoxContainer.new()
+	_el_list_box.add_theme_constant_override("separation", 2)
+	side.add_child(_el_list_box)
 
+	# The left column: what you add, and the saved designs.
+	side = left
 	_section(side, "Add to the structure")
 	side.add_child(_small_label("Pick one, then click the preview where it goes."))
 	var grid := GridContainer.new()
@@ -2327,7 +2120,7 @@ func _build_element_ui(side: VBoxContainer) -> void:
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.add_theme_font_size_override("font_size", 11)
+		UITheme.style_button(b)
 		var tid := str(tp["id"])
 		b.toggled.connect(func(on: bool) -> void: _set_tool(tid if on else ""))
 		grid.add_child(b)
@@ -2344,11 +2137,6 @@ func _build_element_ui(side: VBoxContainer) -> void:
 	prow.add_child(_small_button("Place", "Place the saved element (click where it goes)",
 		_arm_element_preset))
 	side.add_child(prow)
-
-	_section(side, "In this design")
-	_el_list_box = VBoxContainer.new()
-	_el_list_box.add_theme_constant_override("separation", 2)
-	side.add_child(_el_list_box)
 
 	_section(side, "Designs")
 	_design_opt = OptionButton.new()
@@ -2374,7 +2162,7 @@ func _build_element_ui(side: VBoxContainer) -> void:
 	srow.add_child(_small_button("Save design", "Save the whole rack to your library", _on_save_design))
 	side.add_child(srow)
 	_status_lbl = _small_label("")
-	_status_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	_status_lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 	side.add_child(_status_lbl)
 	_refresh_design_list()
 	_refresh_element_presets()
@@ -3266,8 +3054,8 @@ func _build_crumb_bar() -> Control:
 	_crumb_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.add_child(_crumb_row)
 	_crumb_hint = Label.new()
-	_crumb_hint.add_theme_color_override("font_color", C_TEXT_S)
-	_crumb_hint.add_theme_font_size_override("font_size", 11)
+	_crumb_hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_crumb_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_crumb_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	bar.add_child(_crumb_hint)
 	_show_hidden_btn = _small_button("Show hidden", "Bring back the parts hidden in here",

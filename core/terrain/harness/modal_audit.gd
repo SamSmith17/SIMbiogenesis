@@ -69,6 +69,10 @@ func run() -> Dictionary:
 					and gv.has_method("open_connection_ports"):
 				var iid := str((it as Dictionary).get("id", ""))
 				entries.append({"id": "connection_ports", "open": func() -> void: gv.call("open_connection_ports", iid)})
+				# Its sibling on the same layout: the axis tagger, on the same model.
+				var mid := str(((it as Dictionary).get("specs", {}) as Dictionary).get("model_id", ""))
+				if not mid.is_empty() and gv.has_method("open_machine_setup"):
+					entries.append({"id": "machine_setup", "open": func() -> void: gv.call("open_machine_setup", mid, iid)})
 				break
 	var hab := _first_habitat(gv)
 	if not hab.is_empty():

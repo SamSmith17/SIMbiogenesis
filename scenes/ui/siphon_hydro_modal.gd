@@ -4,10 +4,10 @@ extends Control
 ## slot + 2D overlays (pond bathymetry fill, level ticks, labels). Params dock
 ## on the right.
 
-const C_PANEL := Color(0.07, 0.10, 0.18, 1.0)
-const C_BORDER := Color(0.22, 0.30, 0.44, 1.0)
-const C_TEXT := Color(0.90, 0.93, 0.96, 1.0)
-const C_MUTED := Color(0.62, 0.68, 0.78, 1.0)
+const C_PANEL := UITheme.C_PANEL
+const C_BORDER := UITheme.C_BORDER
+const C_TEXT := UITheme.C_TEXT
+const C_MUTED := UITheme.C_TEXT_S
 const C_ACCENT := Color(0.30, 0.70, 1.0, 1.0)
 const C_WATER := Color(0.22, 0.52, 0.92, 0.62)
 const C_WATER_LINE := Color(0.45, 0.85, 1.0, 0.95)
@@ -16,7 +16,7 @@ const _UI_HZ := 12.0
 const _PHYS_HZ := 6.0
 const _DEM_SAMPLES := 64
 const _CHART_SCRIPT := preload("res://scenes/ui/hydro_power_chart.gd")
-const C_WARN := Color(0.98, 0.75, 0.35, 1.0)
+const C_WARN := UITheme.C_WARN
 ## Poly-pipe-size palette for the power-curve families (1″ → 2″).
 const _CHART_SIZE_COLORS: Array = [
 	Color(0.55, 0.75, 1.00), Color(0.45, 0.95, 0.75),
@@ -490,7 +490,7 @@ func _build_ui() -> void:
 	_title_lbl = Label.new()
 	_title_lbl.text = "Hydro Lab"
 	_title_lbl.add_theme_color_override("font_color", C_TEXT)
-	_title_lbl.add_theme_font_size_override("font_size", 18)
+	_title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(_title_lbl)
 	var close_btn := Button.new()
@@ -576,7 +576,7 @@ func _build_ui() -> void:
 	_preview_col.add_child(status_row)
 	_status_lbl = Label.new()
 	_status_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_status_lbl.add_theme_font_size_override("font_size", 11)
+	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_status_lbl.add_theme_color_override("font_color", C_MUTED)
 	_status_lbl.text = "—"
 	status_row.add_child(_status_lbl)
@@ -588,7 +588,7 @@ func _build_ui() -> void:
 	status_row.add_child(_load_row)
 	var load_key := Label.new()
 	load_key.text = "Load"
-	load_key.add_theme_font_size_override("font_size", 11)
+	load_key.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	load_key.add_theme_color_override("font_color", C_MUTED)
 	_load_row.add_child(load_key)
 	_load_slider = HSlider.new()
@@ -610,7 +610,7 @@ func _build_ui() -> void:
 	_load_row.add_child(_load_slider)
 	_load_lbl = Label.new()
 	_load_lbl.text = "100%"
-	_load_lbl.add_theme_font_size_override("font_size", 11)
+	_load_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_load_lbl.add_theme_color_override("font_color", C_MUTED)
 	_load_row.add_child(_load_lbl)
 
@@ -660,7 +660,7 @@ func _build_ui() -> void:
 	kind_lbl.text = "Kind"
 	kind_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	kind_lbl.add_theme_color_override("font_color", C_TEXT)
-	kind_lbl.add_theme_font_size_override("font_size", 12)
+	kind_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	kind_row.add_child(kind_lbl)
 	_kind_opt = OptionButton.new()
 	_kind_opt.focus_mode = Control.FOCUS_NONE
@@ -682,7 +682,7 @@ func _build_ui() -> void:
 	_kind_hint_lbl = Label.new()
 	_kind_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_kind_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_kind_hint_lbl.add_theme_font_size_override("font_size", 11)
+	_kind_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_side.add_child(_kind_hint_lbl)
 
 	# Shared geometry — turbine/module elevation, outlet (tailrace) invert, and
@@ -717,7 +717,7 @@ func _build_ui() -> void:
 	var levels_hint := Label.new()
 	levels_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	levels_hint.add_theme_color_override("font_color", C_MUTED)
-	levels_hint.add_theme_font_size_override("font_size", 11)
+	levels_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	levels_hint.text = ("A dip tube hangs from the turbine into the pond; the draft pipe "
 			+ "runs from the runner down the hill. The pond primes the siphon by rising "
 			+ "to the crest (or a vacuum pump does), and it breaks when the surface "
@@ -731,7 +731,7 @@ func _build_ui() -> void:
 	_show_dip_check = CheckBox.new()
 	_show_dip_check.text = "Show dip tube in the world"
 	_show_dip_check.focus_mode = Control.FOCUS_NONE
-	_show_dip_check.add_theme_font_size_override("font_size", 12)
+	_show_dip_check.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_show_dip_check.tooltip_text = ("Draw the dip tube on the placed turbine in 3D: one vertical length "
 			+ "of 6″ PVC straight down from the machine's intake fitting. Off by default — the real "
 			+ "tube is under water. The cut and the close-up always draw it.")
@@ -747,7 +747,7 @@ func _build_ui() -> void:
 	prime_lbl.text = "Priming"
 	prime_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	prime_lbl.add_theme_color_override("font_color", C_TEXT)
-	prime_lbl.add_theme_font_size_override("font_size", 12)
+	prime_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	prime_row.add_child(prime_lbl)
 	_prime_opt = OptionButton.new()
 	_prime_opt.focus_mode = Control.FOCUS_NONE
@@ -806,7 +806,7 @@ func _build_ui() -> void:
 	var pen_hint := Label.new()
 	pen_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pen_hint.add_theme_color_override("font_color", C_MUTED)
-	pen_hint.add_theme_font_size_override("font_size", 11)
+	pen_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	pen_hint.text = "Q is the turbine's design flow, capped by what the penstock can gravity-deliver at the current head."
 	_penstock_group.add_child(pen_hint)
 	_penstock_len_spin = _spin(_penstock_group, "Penstock length (m)", 1.0, 2000.0, 1.0,
@@ -835,7 +835,7 @@ func _build_ui() -> void:
 	var np_hint := Label.new()
 	np_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	np_hint.add_theme_color_override("font_color", C_MUTED)
-	np_hint.add_theme_font_size_override("font_size", 11)
+	np_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	np_hint.text = ("Where the jet comes from and lands on the cups — the close-up's "
 			+ "Jet's eye view shows it. Picture only: the head and flow do not change.")
 	_penstock_group.add_child(np_hint)
@@ -878,7 +878,7 @@ func _build_ui() -> void:
 	np_reset.focus_mode = Control.FOCUS_NONE
 	np_reset.size_flags_horizontal = Control.SIZE_SHRINK_END
 	UITheme.style_button(np_reset)
-	np_reset.add_theme_font_size_override("font_size", 11)
+	np_reset.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	np_reset.pressed.connect(_on_reset_nozzle_placement)
 	_penstock_group.add_child(np_reset)
 	_nozzle_pose_extras.append(np_reset)
@@ -903,13 +903,13 @@ func _build_ui() -> void:
 	_source_lbl = Label.new()
 	_source_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_source_lbl.add_theme_color_override("font_color", C_TEXT)
-	_source_lbl.add_theme_font_size_override("font_size", 12)
+	_source_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_source_lbl.text = ""
 	_penstock_group.add_child(_source_lbl)
 	var route_hint := Label.new()
 	route_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	route_hint.add_theme_color_override("font_color", C_MUTED)
-	route_hint.add_theme_font_size_override("font_size", 11)
+	route_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	route_hint.text = ("A pond on the graph, a stream, or bare ground (a spring) can feed the "
 			+ "turbine. Drag the intake, auto-route, or route from the bound pond — the "
 			+ "drop point decides which; the poly run follows the ground and its measured "
@@ -975,7 +975,7 @@ func _build_ui() -> void:
 	stock_lbl.text = "Pipe on hand (ft)"
 	stock_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stock_lbl.add_theme_color_override("font_color", C_MUTED)
-	stock_lbl.add_theme_font_size_override("font_size", 12)
+	stock_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stock_row.add_child(stock_lbl)
 	_stock_spin = SpinBox.new()
 	_stock_spin.min_value = 0.0
@@ -989,7 +989,7 @@ func _build_ui() -> void:
 	_route_status_lbl = Label.new()
 	_route_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_route_status_lbl.add_theme_color_override("font_color", C_MUTED)
-	_route_status_lbl.add_theme_font_size_override("font_size", 11)
+	_route_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_route_status_lbl.text = ""
 	_penstock_group.add_child(_route_status_lbl)
 	var goto_btn := Button.new()
@@ -1018,7 +1018,7 @@ func _build_ui() -> void:
 	var ws_hint := Label.new()
 	ws_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ws_hint.add_theme_color_override("font_color", C_MUTED)
-	ws_hint.add_theme_font_size_override("font_size", 11)
+	ws_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	ws_hint.text = "Preview paints a temporary hillside ghost (3D + Site). Clear removes it. Designate wires a graph catchment so weather rain fills the tank — that node stays on the freeform graph, not as a Site outline."
 	ws_body.add_child(ws_hint)
 	var ws_row := HBoxContainer.new()
@@ -1048,13 +1048,13 @@ func _build_ui() -> void:
 	_ws_status_lbl = Label.new()
 	_ws_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_ws_status_lbl.add_theme_color_override("font_color", C_MUTED)
-	_ws_status_lbl.add_theme_font_size_override("font_size", 11)
+	_ws_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_ws_status_lbl.text = "Bind a pond first, then Preview."
 	ws_body.add_child(_ws_status_lbl)
 	_ws_season_lbl = Label.new()
 	_ws_season_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_ws_season_lbl.add_theme_color_override("font_color", C_MUTED)
-	_ws_season_lbl.add_theme_font_size_override("font_size", 11)
+	_ws_season_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_ws_season_lbl.text = ""
 	ws_body.add_child(_ws_season_lbl)
 
@@ -1062,7 +1062,7 @@ func _build_ui() -> void:
 	_drive_hint_lbl = Label.new()
 	_drive_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_drive_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_drive_hint_lbl.add_theme_font_size_override("font_size", 11)
+	_drive_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_side.add_child(_drive_hint_lbl)
 	_sim_inflow_btn = CheckButton.new()
 	_sim_inflow_btn.toggled.connect(_on_sim_inflow_toggled)
@@ -1099,7 +1099,7 @@ func _build_ui() -> void:
 	_net_lbl = Label.new()
 	_net_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_net_lbl.add_theme_color_override("font_color", C_MUTED)
-	_net_lbl.add_theme_font_size_override("font_size", 11)
+	_net_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_net_lbl.text = ""
 	_side.add_child(_net_lbl)
 	var fill_btn := Button.new()
@@ -1116,7 +1116,7 @@ func _build_ui() -> void:
 	var live_hint := Label.new()
 	live_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	live_hint.add_theme_color_override("font_color", C_MUTED)
-	live_hint.add_theme_font_size_override("font_size", 10)
+	live_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	live_hint.text = "The machine's operating point at the matched load — the same numbers as the strip under the section. The close-up's own readout shows this scaled to whatever load you set there."
 	_side.add_child(live_hint)
 	_rpm_lbl = _ro(_side, "RPM", true)
@@ -1130,7 +1130,7 @@ func _build_ui() -> void:
 	_warn_lbl = Label.new()
 	_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_warn_lbl.add_theme_color_override("font_color", C_WARN)
-	_warn_lbl.add_theme_font_size_override("font_size", 11)
+	_warn_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_warn_lbl.visible = false
 	_side.add_child(_warn_lbl)
 	# The oversized-nozzle warning already knows the diameter that would match the
@@ -1153,14 +1153,14 @@ func _build_ui() -> void:
 	_chart_stats_lbl = Label.new()
 	_chart_stats_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_chart_stats_lbl.add_theme_color_override("font_color", C_MUTED)
-	_chart_stats_lbl.add_theme_font_size_override("font_size", 11)
+	_chart_stats_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_chart_body.add_child(_chart_stats_lbl)
 
 	var intake_body := _fold_section(_side, "Intake works", false)
 	_intake_lbl = Label.new()
 	_intake_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_intake_lbl.add_theme_color_override("font_color", C_TEXT)
-	_intake_lbl.add_theme_font_size_override("font_size", 11)
+	_intake_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_intake_lbl.text = ""
 	intake_body.add_child(_intake_lbl)
 	var est_body := _fold_section(_side, "Estimate", false)
@@ -1174,7 +1174,7 @@ func _build_ui() -> void:
 	_design_lbl = Label.new()
 	_design_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_design_lbl.add_theme_color_override("font_color", C_TEXT)
-	_design_lbl.add_theme_font_size_override("font_size", 11)
+	_design_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_design_lbl.text = ""
 	est_body.add_child(_design_lbl)
 	var copy_btn := Button.new()
@@ -1185,19 +1185,19 @@ func _build_ui() -> void:
 	_estimate_hint_lbl = Label.new()
 	_estimate_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_estimate_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_estimate_hint_lbl.add_theme_font_size_override("font_size", 11)
+	_estimate_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_estimate_hint_lbl.text = ""
 	est_body.add_child(_estimate_hint_lbl)
 	_hint_lbl = Label.new()
 	_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_hint_lbl.add_theme_font_size_override("font_size", 11)
+	_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_hint_lbl.text = "CT: green = prime · red = air break · drag water / levels on the cut."
 	_side.add_child(_hint_lbl)
 	_nav_hint_lbl = Label.new()
 	_nav_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_nav_hint_lbl.add_theme_color_override("font_color", C_MUTED)
-	_nav_hint_lbl.add_theme_font_size_override("font_size", 10)
+	_nav_hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_nav_hint_lbl.text = "Right-drag pans · wheel zooms at the cursor (Ctrl = fine) · F frames the turbine, Home the whole run · heading locked to source→outlet"
 	_side.add_child(_nav_hint_lbl)
 
@@ -1227,7 +1227,7 @@ func _spin(parent: Control, label: String, mn: float, mx: float, step: float,
 	lbl.clip_text = true
 	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	lbl.add_theme_color_override("font_color", C_TEXT)
-	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	row.add_child(lbl)
 	var sb := SpinBox.new()
 	sb.min_value = mn
@@ -1252,12 +1252,12 @@ func _ro(parent: Control, label: String, big: bool = false) -> Label:
 	k.text = label
 	k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	k.add_theme_color_override("font_color", C_MUTED)
-	k.add_theme_font_size_override("font_size", 12)
+	k.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	row.add_child(k)
 	var v := Label.new()
 	v.text = "—"
 	v.add_theme_color_override("font_color", C_TEXT)
-	v.add_theme_font_size_override("font_size", 14 if big else 12)
+	v.add_theme_font_size_override("font_size", UITheme.FONT_MD if big else UITheme.FONT_SM)
 	row.add_child(v)
 	return v
 

@@ -21,6 +21,10 @@ extends Control
 ## CampAreaRuntime the map uses — so what is tuned here is what gets painted.
 ## Closing without saving puts the saved styles back.
 ##
+## On the designer kit: the style and its layouts on the left, the preview
+## in a StudioViewport in the centre (click an element to pick it), the
+## sliders in sections on the right, the three save scopes in the footer.
+##
 ## Performance is a WARNING, never a refusal.
 
 const MODAL_NAME := "camp_style"
@@ -40,15 +44,20 @@ var _delta: Dictionary = {}        # unsaved slider edits (a sparse entry)
 var _edits: Dictionary = {}        # camp mode: per-element hand edits
 var _selected_key := ""
 
+var _shell: DesignerShell = null
+var _studio_view: StudioViewport = null
 var _viewport: SubViewport = null
 var _holder: SubViewportContainer = null
 var _camera: Camera3D = null
 var _runtime: CampAreaRuntime = null
 var _ground: MeshInstance3D = null
 var _marker: MeshInstance3D = null
-var _title: Label = null
 var _style_opt: OptionButton = null
 var _rows_box: VBoxContainer = null
+var _left_box: VBoxContainer = null
+## Where _section / _note / _slider add their rows (the right column, or the
+## left one while the layout rows build).
+var _target: VBoxContainer = null
 var _stats_lbl: Label = null
 var _warn_lbl: Label = null
 var _save_row: HBoxContainer = null
@@ -63,18 +72,12 @@ var _preview_density := 0.8
 var _preview_size_m := 70.0
 # Orbit camera.
 var _focus := Vector3.ZERO
-var _yaw := 0.7
-var _pitch := 0.75
-var _dist := 80.0
-var _press_pos := Vector2.ZERO
-var _pressed := false
-var _dragged := false
 
 
 func _ready() -> void:
 	visible = false
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rebuild_timer = Timer.new()
 	_rebuild_timer.one_shot = true
 	_rebuild_timer.wait_time = 0.12
@@ -111,10 +114,7 @@ func open(style_id: String = "", camp_id: String = "") -> void:
 	_style_opt.disabled = is_camp_mode()
 	_frame_camera()
 	visible = true
-	move_to_front()
-	set_meta("ui_modal", true)  # UiAudit.MODAL_META
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	HudLayout.claim_modal(MODAL_NAME)
+	_shell.open()
 	_rebuild_all()
 
 
@@ -128,8 +128,7 @@ func close() -> void:
 	# Whatever was being tried out, the game goes back to the SAVED styles.
 	CampStyleStore.apply(_saved)
 	CampMeshLibrary.clear_cache()
-	CursorController.release_modal(MODAL_NAME)
-	HudLayout.release(MODAL_NAME)
+	_shell.close()
 
 
 func is_panel_open() -> bool:
@@ -145,81 +144,64 @@ func is_camp_mode() -> bool:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(dim)
+	_shell = DesignerShell.create("Camp look", "tent", {
+		"name_id": MODAL_NAME, "want": Vector2(1500, 900),
+		"left_label": "Style & layouts", "left_w": 250.0, "right_w": 400.0})
+	add_child(_shell)
+	_shell.closed.connect(close)
 
-	var frame := PanelContainer.new()
-	frame.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
-	frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	frame.offset_left = 40.0
-	frame.offset_top = 36.0
-	frame.offset_right = -40.0
-	frame.offset_bottom = -36.0
-	add_child(frame)
-	var split := HBoxContainer.new()
-	split.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	frame.add_child(split)
-
-	# Preview studio — its own world, so nothing here touches the map.
-	_holder = SubViewportContainer.new()
-	_holder.stretch = true
-	_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_holder.mouse_filter = Control.MOUSE_FILTER_STOP
-	_holder.gui_input.connect(_on_preview_input)
-	split.add_child(_holder)
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.msaa_3d = Viewport.MSAA_4X
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
-	_holder.add_child(_viewport)
-	_build_studio()
-
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(SIDEBAR_W, 0)
-	side.add_theme_constant_override("separation", 6)
-	split.add_child(side)
-
-	_title = Label.new()
-	_title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-	_title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_title.clip_text = true
-	side.add_child(_title)
-
+	# Left: the style and its layouts.
+	_shell.left.add_child(SectionHeader.make("Style", "tent"))
 	_style_opt = OptionButton.new()
+	_style_opt.name = "camp_style"
+	_style_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_opt.fit_to_longest_item = false
+	_style_opt.clip_text = true
 	for sid in CampStyles.STYLE_ORDER:
 		_style_opt.add_item(CampStyles.label(str(sid)))
 		_style_opt.set_item_metadata(_style_opt.item_count - 1, str(sid))
 	_style_opt.item_selected.connect(_on_style_selected)
-	side.add_child(_style_opt)
+	_shell.left.add_child(_style_opt)
+	_left_box = VBoxContainer.new()
+	_left_box.add_theme_constant_override("separation", 3)
+	_shell.left.add_child(_left_box)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	side.add_child(scroll)
-	_rows_box = VBoxContainer.new()
-	_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_rows_box.add_theme_constant_override("separation", 3)
-	scroll.add_child(_rows_box)
-
+	# Centre: the preview studio — its own world, so nothing here touches the map.
+	_studio_view = StudioViewport.create({"ground": false, "size": Vector2i(960, 680),
+		"fov": 45.0, "far": 4000.0, "msaa": Viewport.MSAA_4X})
+	_studio_view.name = "Studio"
+	_studio_view.dist_max = 1200.0
+	_studio_view.pitch_min = 0.08
+	_studio_view.pitch_max = 1.5
+	_studio_view.set_home(0.7, 0.75)
+	_studio_view.clicked.connect(func(pos: Vector2, button: int) -> void:
+		if button == MOUSE_BUTTON_LEFT:
+			_pick_element_at(_studio_view.to_viewport(pos)))
+	_shell.centre.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_holder = _studio_view.container
+	_camera = _studio_view.camera
+	_build_studio()
 	_stats_lbl = Label.new()
 	_stats_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_stats_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_stats_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	side.add_child(_stats_lbl)
+	_shell.centre.add_child(_stats_lbl)
 	_warn_lbl = Label.new()
 	_warn_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_warn_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 	_warn_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	side.add_child(_warn_lbl)
+	_shell.centre.add_child(_warn_lbl)
 
-	side.add_child(SectionHeader.make("Save changes to…"))
-	_save_row = HBoxContainer.new()
-	_save_row.add_theme_constant_override("separation", 6)
-	side.add_child(_save_row)
+	# Right: the sliders, rebuilt per mode.
+	_rows_box = VBoxContainer.new()
+	_rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_rows_box.add_theme_constant_override("separation", 3)
+	_shell.right.add_child(_rows_box)
+	_target = _rows_box
+
+	_shell.set_hint("Drag to orbit · wheel to zoom · click an element to pick it · R turns · [ ] size · Del removes · Esc")
+	_save_row = _shell.footer
 
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -232,9 +214,7 @@ func _build_ui() -> void:
 	var pv := VBoxContainer.new()
 	pv.custom_minimum_size = Vector2(340, 420)
 	_library_popup.add_child(pv)
-	var ph := Label.new()
-	ph.text = "Add a model from the library"
-	pv.add_child(ph)
+	pv.add_child(SectionHeader.make("Add a model from the library"))
 	_library_list = ItemList.new()
 	_library_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_library_list.item_activated.connect(_on_library_pick)
@@ -258,19 +238,7 @@ func _button(parent: Control, text: String, tip: String, handler: Callable) -> B
 
 
 func _build_studio() -> void:
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.52, 0.66, 0.82)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.72, 0.76, 0.82)
-	e.ambient_light_energy = 0.75
-	env.environment = e
-	_viewport.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52.0, 35.0, 0.0)
-	sun.shadow_enabled = true
-	_viewport.add_child(sun)
+	var world := _studio_view.world
 	_ground = MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(1200.0, 1200.0)
@@ -279,14 +247,10 @@ func _build_studio() -> void:
 	gm.albedo_color = Color(0.62, 0.57, 0.46)
 	gm.roughness = 1.0
 	_ground.material_override = gm
-	_viewport.add_child(_ground)
-	_camera = Camera3D.new()
-	_camera.far = 4000.0
-	_camera.fov = 45.0
-	_viewport.add_child(_camera)
+	world.add_child(_ground)
 	_runtime = CampAreaRuntime.new()
 	_runtime.setup(null, true)
-	_viewport.add_child(_runtime)
+	world.add_child(_runtime)
 	# Selection marker: a translucent box round the picked element.
 	_marker = MeshInstance3D.new()
 	_marker.mesh = BoxMesh.new()
@@ -297,7 +261,7 @@ func _build_studio() -> void:
 	mm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_marker.material_override = mm
 	_marker.visible = false
-	_viewport.add_child(_marker)
+	world.add_child(_marker)
 
 
 ## Put the camera on the thing being tuned: the camp's own outline, or the
@@ -316,48 +280,20 @@ func _frame_camera() -> void:
 			_focus = Vector3((lo.x + hi.x) * 0.5, 0.0, (lo.y + hi.y) * 0.5)
 			span = maxf((hi - lo).length(), 20.0)
 	_ground.position = _focus
-	_dist = clampf(span * 1.15, 12.0, 900.0)
-	_update_camera()
+	_studio_view.target = _focus + Vector3(0, 1.5, 0)
+	_studio_view.set_orbit(0.7, 0.75, clampf(span * 1.15, 12.0, 900.0))
 
 
 func _update_camera() -> void:
-	if _camera == null:
-		return
-	var dir := Vector3(sin(_yaw) * cos(_pitch), sin(_pitch), cos(_yaw) * cos(_pitch))
-	var target := _focus + Vector3(0, 1.5, 0)
-	_camera.look_at_from_position(target + dir * _dist, target, Vector3.UP)
+	if _studio_view != null:
+		_studio_view.update_camera()
 
 
 # ---------------------------------------------------------------------------
 # Preview input: drag orbits, wheel zooms, a CLICK picks an element.
 # ---------------------------------------------------------------------------
 
-func _on_preview_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
-			if mb.pressed:
-				_pressed = true
-				_dragged = false
-				_press_pos = mb.position
-			else:
-				if _pressed and not _dragged and mb.button_index == MOUSE_BUTTON_LEFT:
-					_pick_element_at(mb.position)
-				_pressed = false
-		elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_dist = maxf(_dist / 1.12, 5.0)
-			_update_camera()
-		elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_dist = minf(_dist * 1.12, 1200.0)
-			_update_camera()
-	elif event is InputEventMouseMotion and _pressed:
-		var mm := event as InputEventMouseMotion
-		if not _dragged and mm.position.distance_to(_press_pos) < CLICK_SLOP_PX:
-			return
-		_dragged = true
-		_yaw -= mm.relative.x * 0.008
-		_pitch = clampf(_pitch + mm.relative.y * 0.006, 0.08, 1.5)
-		_update_camera()
+
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -381,13 +317,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	_rebuild_rows()
 
 
-## Which element does this preview pixel hit? Pure ray-vs-oriented-box over the
-## items the last build placed — the studio has no physics to ask.
-func pick_element(screen_pos: Vector2) -> String:
+## Which element does this preview pixel (in the SubViewport's own pixels, as
+## Camera3D.unproject_position gives them) hit? Pure ray-vs-oriented-box over
+## the items the last build placed — the studio has no physics to ask.
+func pick_element(vp_pos: Vector2) -> String:
 	if _camera == null or _runtime == null:
 		return ""
 	return CampLayoutGenerator.pick_item_on_ray(_runtime.area_items(PREVIEW_ID),
-		_camera.project_ray_origin(screen_pos), _camera.project_ray_normal(screen_pos))
+		_camera.project_ray_origin(vp_pos), _camera.project_ray_normal(vp_pos))
 
 
 func _pick_element_at(screen_pos: Vector2) -> void:
@@ -502,43 +439,47 @@ func _rebuild_rows() -> void:
 		c.queue_free()
 	CampStyleStore.apply(_draft)
 	var res := _resolved()
-	_title.text = ("%s — this camp" % str(_camp.get("name", "Camp"))) if is_camp_mode() \
-		else "Camp style — tune look"
+	_shell.set_title("Camp look", ("%s — this camp" % str(_camp.get("name", "Camp"))) if is_camp_mode()
+		else CampStyles.label(_style_id))
+	for c in _left_box.get_children():
+		_left_box.remove_child(c)
+		c.queue_free()
+	_target = _left_box
+	_build_layout_rows()
+	_target = _rows_box
 
 	if is_camp_mode():
 		_build_selection_rows()
 		_section("This camp")
 		_slider("Density", 0.2, 1.0, float(_camp.get("density", 0.8)), 0.05, _camp_setter("density"))
-		_slider("Heading°", 0.0, 179.0, maxf(float(_camp.get("heading_deg", 0.0)), 0.0), 1.0,
-			_camp_setter("heading_deg"), "Compass bearing the rows run along")
-		_slider("Align ±°", 0.0, 30.0, float(_camp.get("align_jitter_deg", 5.0)), 0.5,
-			_camp_setter("align_jitter_deg"), "How far vehicles sit off the camp heading")
+		_slider("Heading", 0.0, 179.0, maxf(float(_camp.get("heading_deg", 0.0)), 0.0), 1.0,
+			_camp_setter("heading_deg"), "Compass bearing the rows run along", "°")
+		_slider("Align ±", 0.0, 30.0, float(_camp.get("align_jitter_deg", 5.0)), 0.5,
+			_camp_setter("align_jitter_deg"), "How far vehicles sit off the camp heading", "°")
 	else:
 		_section("Preview")
 		_slider("Density", 0.2, 1.0, _preview_density, 0.05, func(v: float) -> void:
 			_preview_density = v
 			_queue_rebuild())
-		_slider("Patch m", 30.0, 160.0, _preview_size_m, 5.0, func(v: float) -> void:
+		_slider("Patch", 30.0, 160.0, _preview_size_m, 5.0, func(v: float) -> void:
 			_preview_size_m = v
-			_queue_rebuild())
-
-	_build_layout_rows()
+			_queue_rebuild(), "", "m")
 
 	_section("Layout")
-	_slider("Spacing ×", CampStyles.SPACING_MIN, CampStyles.SPACING_MAX, float(res["spacing"]),
-		0.05, _setter("spacing"), "Room between households (1 = as shipped)")
+	_slider("Spacing", CampStyles.SPACING_MIN, CampStyles.SPACING_MAX, float(res["spacing"]),
+		0.05, _setter("spacing"), "Room between households (1 = as shipped)", "×")
 	_slider("Fill", 0.3, 1.0, float(res["fill"]), 0.02, _setter("fill"),
 		"Share of plots that are occupied")
-	_slider("Lane m", 0.0, 14.0, float(res["lane_w"]), 0.5, _setter("lane_w"),
-		"Width of the lane between blocks of rows")
-	_slider("Rows/block", 1.0, 5.0, float(res["rows_per_block"]), 1.0, _setter("rows_per_block"),
+	_slider("Lane", 0.0, 14.0, float(res["lane_w"]), 0.5, _setter("lane_w"),
+		"Width of the lane between blocks of rows", "m")
+	_slider("Rows per block", 1.0, 5.0, float(res["rows_per_block"]), 1.0, _setter("rows_per_block"),
 		"Rows parked back-to-back before the next lane")
 
 	_section("Variation")
 	_slider("Placement", 0.0, 1.0, float(res["pos_jitter"]), 0.05, _setter("pos_jitter"),
 		"How far each household wanders inside its plot (0 = a strict grid)")
-	_slider("Tent turn ±°", 0.0, 60.0, float(res["loose_jitter_deg"]), 1.0,
-		_setter("loose_jitter_deg"), "How far tents and pods are pitched off square")
+	_slider("Tent turn ±", 0.0, 60.0, float(res["loose_jitter_deg"]), 1.0,
+		_setter("loose_jitter_deg"), "How far tents and pods are pitched off square", "°")
 	_slider("Size spread", 0.0, 2.0, float(res["scale_var"]), 0.05, _setter("scale_var"),
 		"How much sizes vary from one element to the next (1 = as shipped)")
 
@@ -549,7 +490,7 @@ func _rebuild_rows() -> void:
 		return float(mix.get(a, 0.0)) > float(mix.get(b, 0.0)))
 	for tid in ids:
 		_slider(str(CampStyles.TEMPLATE_LABELS.get(tid, tid)), 0.0, 8.0, float(mix.get(tid, 0.0)),
-			0.25, _mix_setter(str(tid)), "", 150)
+			0.25, _mix_setter(str(tid)))
 
 	_section("Your models")
 	var models: Dictionary = _draft["models"]
@@ -559,7 +500,7 @@ func _rebuild_rows() -> void:
 		_model_row(str(cid), models[cid], mix)
 	var add_row := HBoxContainer.new()
 	add_row.add_theme_constant_override("separation", 6)
-	_rows_box.add_child(add_row)
+	_target.add_child(add_row)
 	_button(add_row, "Add from library…", "Use a model already in the model library", _open_library)
 	_button(add_row, "Import GLB…", "Bring in a new .glb / .gltf file", func() -> void:
 		_file_dialog.popup_centered_ratio(0.6))
@@ -576,7 +517,7 @@ func _build_selection_rows() -> void:
 			+ "Keys: R / Shift+R turn · [ ] size · Del remove.")
 	else:
 		var head := HBoxContainer.new()
-		_rows_box.add_child(head)
+		_target.add_child(head)
 		var name_lbl := Label.new()
 		name_lbl.text = _class_label(str(it["cls"]))
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -589,10 +530,10 @@ func _build_selection_rows() -> void:
 			_edits.erase(_selected_key)
 			_queue_rebuild()
 			_rebuild_rows())
-		_slider("Turn°", -180.0, 180.0, _edit_value("yaw_deg", 0.0), 1.0, func(v: float) -> void:
-			_edit_selected("yaw_deg", v))
-		_slider("Size ×", 0.4, 2.5, _edit_value("scale", 1.0), 0.05, func(v: float) -> void:
-			_edit_selected("scale", v))
+		_slider("Turn", -180.0, 180.0, _edit_value("yaw_deg", 0.0), 1.0, func(v: float) -> void:
+			_edit_selected("yaw_deg", v), "", "°")
+		_slider("Size", 0.4, 2.5, _edit_value("scale", 1.0), 0.05, func(v: float) -> void:
+			_edit_selected("scale", v), "", "×")
 	var removed := 0
 	for k in _edits.keys():
 		if bool((_edits[k] as Dictionary).get("removed", false)):
@@ -600,7 +541,7 @@ func _build_selection_rows() -> void:
 	if not _edits.is_empty():
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
-		_rows_box.add_child(row)
+		_target.add_child(row)
 		if removed > 0:
 			_button(row, "Restore removed (%d)" % removed, "Bring back every removed element",
 				func() -> void:
@@ -622,6 +563,10 @@ func _build_layout_rows() -> void:
 	_section("Layouts in %s" % CampStyles.label(_style_id))
 	var list := CampStyles.variants(_style_id)
 	var opt := OptionButton.new()
+	opt.name = "camp_layout"
+	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.fit_to_longest_item = false
+	opt.clip_text = true
 	opt.add_item("Default")
 	opt.set_item_metadata(0, "")
 	for v: Dictionary in list:
@@ -640,10 +585,10 @@ func _build_layout_rows() -> void:
 		_selected_key = ""
 		_rebuild_rows()
 		_queue_rebuild())
-	_rows_box.add_child(opt)
+	_target.add_child(opt)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	_rows_box.add_child(row)
+	_target.add_child(row)
 	_button(row, "+ New layout", "Save what is on screen as a new named layout of this style",
 		_on_new_layout)
 	if not _variant_id.is_empty():
@@ -662,7 +607,7 @@ func _build_layout_rows() -> void:
 			if not ve.is_empty() and not t.strip_edges().is_empty():
 				ve["name"] = t.strip_edges()
 				_rebuild_rows())
-		_rows_box.add_child(name_edit)
+		_target.add_child(name_edit)
 	var weight := float((_draft["styles"] as Dictionary).get(_style_id, {}).get("default_weight", 1.0))
 	if not _variant_id.is_empty():
 		weight = float(_draft_variant().get("weight", 1.0))
@@ -717,7 +662,7 @@ func _class_label(cls: String) -> String:
 
 
 func _section(text: String, note: String = "") -> void:
-	_rows_box.add_child(SectionHeader.make(text, "", note))
+	_target.add_child(SectionHeader.make(text, "", note))
 
 
 func _note(text: String) -> void:
@@ -726,22 +671,16 @@ func _note(text: String) -> void:
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	_rows_box.add_child(l)
+	_target.add_child(l)
 
 
 func _slider(label: String, lo: float, hi: float, value: float, step: float,
-		handler: Callable, tip: String = "", label_w: int = 96) -> void:
-	var pair := SliderSpinRow.add(_rows_box, label, lo, hi, clampf(value, lo, hi), handler,
-		Callable(self, "_style_row_label"), label_w, 120, 62, step)
-	if not tip.is_empty():
-		(pair["row"] as Control).tooltip_text = tip
+		handler: Callable, tip: String = "", unit: String = "") -> void:
+	var r := FormRow.slider(label, lo, hi, clampf(value, lo, hi), step, unit, handler, tip)
+	_target.add_child(r)
 
 
-func _style_row_label(lbl: Label, text: String) -> void:
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	lbl.clip_text = true
+
 
 
 func _setter(key: String) -> Callable:
@@ -769,7 +708,7 @@ func _mix_setter(template_id: String) -> Callable:
 func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 	var box := PanelContainer.new()
 	box.add_theme_stylebox_override("panel", UITheme.card_style())
-	_rows_box.add_child(box)
+	_target.add_child(box)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 2)
 	box.add_child(v)
@@ -802,10 +741,8 @@ func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 		_rebuild_all())
 	IconButton.style(rm_btn, "trash-2", "Remove this model from every camp style")
 	var tid := CampStyles.MODEL_TEMPLATE_PREFIX + class_id
-	var pair := SliderSpinRow.add(v, "Share", 0.0, 8.0, float(mix.get(tid, 0.0)), _mix_setter(tid),
-		Callable(self, "_style_row_label"), 60, 140, 62, 0.25)
-	(pair["row"] as Control).tooltip_text = "This model's weight in the %s mix (0 = not used here)" \
-		% CampStyles.label(_style_id)
+	v.add_child(FormRow.slider("Share", 0.0, 8.0, float(mix.get(tid, 0.0)), 0.25, "", _mix_setter(tid),
+		"This model's weight in the %s mix (0 = not used here)" % CampStyles.label(_style_id)))
 	for w in CampStyleStore.model_warnings(Vector3(float(sz[0]), float(sz[1]), float(sz[2])),
 			int(model["tris"])):
 		var wl := Label.new()
@@ -938,25 +875,24 @@ func _rebuild_preview() -> void:
 # ---------------------------------------------------------------------------
 
 func _rebuild_save_row() -> void:
-	if _save_row == null:
+	if _save_row == null or _shell == null:
 		return
 	for c in _save_row.get_children():
 		_save_row.remove_child(c)
 		c.queue_free()
 	var mark := " •" if _has_changes() else ""
 	if is_camp_mode():
-		_button(_save_row, "This camp" + mark,
-			"Keep these settings and hand edits on this one camp", _save_to_camp)
+		_shell.add_button("This camp" + mark, DesignerShell.PRIMARY, _save_to_camp,
+			"Keep these settings and hand edits on this one camp")
 	if _loader != null and _loader.has_method("save_map_camp_style"):
-		_button(_save_row, "All %s here" % CampStyles.label(_style_id),
-			"Apply the changed settings to every %s camp on THIS map" % CampStyles.label(_style_id),
-			_save_to_map)
-	_button(_save_row, "Global baseline",
+		_shell.add_button("All %s here" % CampStyles.label(_style_id),
+			DesignerShell.SECONDARY if is_camp_mode() else DesignerShell.PRIMARY, _save_to_map,
+			"Apply the changed settings to every %s camp on THIS map" % CampStyles.label(_style_id))
+	_shell.add_button("Global baseline", DesignerShell.SECONDARY, _save_to_global,
 		"Make this the %s look for every map (the starting point for new camps)" \
 			% CampStyles.variant_name(_style_id, _variant_id) if not _variant_id.is_empty() \
-			else "Make this the baseline for every map (the starting point for new camps)",
-		_save_to_global)
-	_button(_save_row, "Close", "Close; unsaved changes are dropped (Esc)", close)
+			else "Make this the baseline for every map (the starting point for new camps)")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close, "Close; unsaved changes are dropped (Esc)")
 
 
 ## Models and layouts live in the global file whichever scope the sliders go

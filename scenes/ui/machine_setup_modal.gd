@@ -8,7 +8,10 @@ extends Control
 ## kinematics engine (CncMachineRuntime) then animates that machine — and any
 ## other machine the player imports and tags the same way.
 ##
-## Mirrors the building_builder_modal SubViewport-studio + dim-backdrop pattern.
+## On the designer kit, the same layout as the connection ports modal (its
+## sibling: that one tags a GLB's ports, this one its axes): the machine and
+## its tool on the left, the StudioViewport in the centre, one section per
+## axis on the right, Save in the footer.
 
 const MODAL_NAME := "machine_setup"
 
@@ -27,6 +30,8 @@ var _item_id: String = ""
 var _profile: CartesianMachineProfile = null
 
 var _built := false
+var _shell: DesignerShell = null
+var _studio_view: StudioViewport = null
 var _viewport: SubViewport = null
 var _studio: Node3D = null
 var _holder: Node3D = null
@@ -59,229 +64,130 @@ func open(model_id: String, item_id: String) -> void:
 	_rebuild_studio()
 	_populate_controls()
 	visible = true
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	_shell.open()
 
 
 func close() -> void:
 	visible = false
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_shell = DesignerShell.create("Machine setup", "cpu", {
+		"name_id": MODAL_NAME, "want": Vector2(1400, 860),
+		"left_label": "Machine", "left_w": 240.0, "right_w": 400.0})
+	add_child(_shell)
+	_shell.closed.connect(close)
 
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.6)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(980, 640)
-	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	center.add_child(panel)
-	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
-
-	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 8)
-	panel.add_child(root_v)
-
-	var title := Label.new()
-	title.text = "Machine Setup — tag X / Y / Z axes"
-	title.add_theme_font_size_override("font_size", 18)
-	root_v.add_child(title)
-
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 12)
-	hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root_v.add_child(hbox)
-
-	var vpc := SubViewportContainer.new()
-	vpc.stretch = true
-	vpc.custom_minimum_size = Vector2(580, 560)
-	vpc.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	hbox.add_child(vpc)
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.transparent_bg = false
-	_viewport.msaa_3d = Viewport.MSAA_2X
-	_viewport.size = Vector2i(580, 560)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
-	vpc.add_child(_viewport)
-
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(360, 560)
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	hbox.add_child(scroll)
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(340, 0)
-	side.add_theme_constant_override("separation", 8)
-	scroll.add_child(side)
-
+	# Left: the machine, its tool, the auto-detect.
+	var left := _shell.left
+	left.add_child(SectionHeader.make("Machine", "cpu"))
 	var hint := Label.new()
-	hint.text = "Pick the sub-node for each axis, jog to the rail ends, then Set min / Set max. Set home for the park/origin pose. Invert flips direction."
+	hint.text = "Pick the sub-node for each axis, jog to the rail ends, then Set min and Set max. " \
+		+ "Set home for the park pose. Invert flips the direction."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 12)
-	hint.modulate = Color(0.75, 0.82, 0.9)
-	side.add_child(hint)
-
-	for key: String in CartesianMachineProfile.AXIS_KEYS:
-		side.add_child(_build_axis_row(key))
-
-	var tool_row := HBoxContainer.new()
-	var tool_lbl := Label.new()
-	tool_lbl.text = "Tool node"
-	tool_lbl.custom_minimum_size = Vector2(70, 0)
-	tool_row.add_child(tool_lbl)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	left.add_child(hint)
+	left.add_child(SectionHeader.make("Tool", "", "the node that cuts or prints"))
 	_tool_opt = OptionButton.new()
+	_tool_opt.name = "tool_node"
 	_tool_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tool_row.add_child(_tool_opt)
-	side.add_child(tool_row)
-
+	_tool_opt.fit_to_longest_item = false
+	_tool_opt.clip_text = true
+	left.add_child(_tool_opt)
 	var auto_btn := Button.new()
-	auto_btn.text = "✨ Auto-detect axes"
+	auto_btn.text = "Auto-detect axes"
+	auto_btn.tooltip_text = "Guess the axis nodes from how the model's parts can move"
+	UITheme.style_button(auto_btn)
 	auto_btn.pressed.connect(_on_auto_detect)
-	side.add_child(auto_btn)
-
+	left.add_child(auto_btn)
 	_status_lbl = Label.new()
-	_status_lbl.add_theme_font_size_override("font_size", 12)
-	_status_lbl.modulate = Color(0.7, 0.85, 0.7)
-	side.add_child(_status_lbl)
+	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_status_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_status_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	left.add_child(_status_lbl)
 
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 8)
-	side.add_child(btn_row)
-	var save_btn := Button.new()
-	save_btn.text = "💾 Save"
-	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	save_btn.pressed.connect(_on_save)
-	btn_row.add_child(save_btn)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close_btn.pressed.connect(close)
-	btn_row.add_child(close_btn)
+	# Centre: the studio (the kit orbits and zooms it).
+	_studio_view = StudioViewport.create({"ground": true, "size": Vector2i(900, 700), "fov": 50.0})
+	_studio_view.name = "Studio"
+	_studio_view.set_home(0.7, 0.3)
+	_shell.centre.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_studio = _studio_view.world
+	_holder = _studio_view.holder
+	_camera = _studio_view.camera
+
+	# Right: one section per axis.
+	for key: String in CartesianMachineProfile.AXIS_KEYS:
+		_shell.right.add_child(_build_axis_row(key))
+
+	_shell.set_hint("Drag to orbit · wheel to zoom · jog an axis to see it move · Esc")
+	_shell.add_button("Save", DesignerShell.PRIMARY, _on_save,
+		"Write the profile and apply it to every placed machine of this model")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 func _build_axis_row(key: String) -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 3)
-	var hdr := HBoxContainer.new()
-	var lbl := Label.new()
-	lbl.text = "%s axis" % key.to_upper()
-	lbl.custom_minimum_size = Vector2(70, 0)
-	lbl.add_theme_font_size_override("font_size", 14)
-	hdr.add_child(lbl)
+	var sec := Collapsible.make("%s axis" % key.to_upper(), true)
+	var box := sec.body
+	box.add_theme_constant_override("separation", 2)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.fit_to_longest_item = false
+	opt.clip_text = true
 	opt.item_selected.connect(func(_i): _apply_all_jogs())
-	hdr.add_child(opt)
-	box.add_child(hdr)
+	box.add_child(FormRow.make("Node", opt, "The model sub-node that slides along this axis", "", "%s_node" % key))
 	_node_opt[key] = opt
-
-	var dir_row := HBoxContainer.new()
-	var dir_lbl := Label.new()
-	dir_lbl.text = "Travels"
-	dir_lbl.custom_minimum_size = Vector2(70, 0)
-	dir_row.add_child(dir_lbl)
 	var dir := OptionButton.new()
-	dir.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for i in AXIS_CHOICES.size():
 		dir.add_item(str((AXIS_CHOICES[i] as Dictionary).get("label", "")), i)
 	dir.item_selected.connect(func(_i): _apply_all_jogs())
-	dir_row.add_child(dir)
-	box.add_child(dir_row)
+	box.add_child(FormRow.make("Travels", dir, "The node's local direction of travel", "", "%s_dir" % key))
 	_dir_opt[key] = dir
-
 	var inv := CheckBox.new()
-	inv.text = "Invert"
+	inv.text = "Flip the direction"
 	inv.toggled.connect(func(_v): _apply_all_jogs())
-	box.add_child(inv)
+	box.add_child(FormRow.make("Invert", inv, "Flip the direction", "", "%s_invert" % key))
 	_invert_chk[key] = inv
-
-	# Min / Max / Home spinboxes (local displacement from GLB rest pose).
-	var lim := GridContainer.new()
-	lim.columns = 2
-	lim.add_theme_constant_override("h_separation", 6)
-	lim.add_theme_constant_override("v_separation", 2)
-	lim.add_child(_cap("Min"))
+	# Min / Max / Home (local displacement from the GLB's rest pose).
 	var min_s := _limit_spin()
 	min_s.value_changed.connect(func(_v): _on_limit_changed(key))
-	lim.add_child(min_s)
+	box.add_child(FormRow.make("Min", min_s, "Soft minimum, in the model's own units", "", "%s_min" % key))
 	_min_spin[key] = min_s
-	lim.add_child(_cap("Max"))
 	var max_s := _limit_spin()
 	max_s.value_changed.connect(func(_v): _on_limit_changed(key))
-	lim.add_child(max_s)
+	box.add_child(FormRow.make("Max", max_s, "Soft maximum", "", "%s_max" % key))
 	_max_spin[key] = max_s
-	lim.add_child(_cap("Home"))
 	var home_s := _limit_spin()
 	home_s.value_changed.connect(func(_v): _apply_all_jogs())
-	lim.add_child(home_s)
+	box.add_child(FormRow.make("Home", home_s, "The park / origin pose", "", "%s_home" % key))
 	_home_spin[key] = home_s
-	box.add_child(lim)
-
-	var jog_hdr := HBoxContainer.new()
-	var jl := Label.new()
-	jl.text = "Jog"
-	jl.custom_minimum_size = Vector2(40, 0)
-	jog_hdr.add_child(jl)
-	var jv := Label.new()
-	jv.text = "0.00"
-	jv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	jv.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	jv.add_theme_font_size_override("font_size", 12)
-	jv.modulate = Color(0.75, 0.85, 0.95)
-	jog_hdr.add_child(jv)
-	_jog_lbl[key] = jv
-	box.add_child(jog_hdr)
-
-	var jog := HSlider.new()
-	jog.min_value = 0.0
-	jog.max_value = 1.0
-	jog.step = 0.005
-	jog.value = 0.0
-	jog.value_changed.connect(func(_v): _apply_all_jogs())
+	var jog := FormRow.slider("Jog", 0.0, 1.0, 0.0, 0.005, "",
+		func(_v: float) -> void: _apply_all_jogs(), "Slide the axis between its min and max", "%s_jog" % key)
 	box.add_child(jog)
-	_jog_slider[key] = jog
-
+	_jog_slider[key] = jog.control as HSlider
+	var pos := FormRow.value("Position", "0.00", "Where the node is now (its home in brackets)")
+	box.add_child(pos)
+	_jog_lbl[key] = pos.control as Label
 	var set_row := HBoxContainer.new()
-	set_row.add_theme_constant_override("separation", 4)
-	var bmin := Button.new()
-	bmin.text = "Set min"
-	bmin.tooltip_text = "Capture the current jog pose as the soft minimum."
-	bmin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bmin.pressed.connect(func(): _capture_limit(key, "min"))
-	set_row.add_child(bmin)
-	var bmax := Button.new()
-	bmax.text = "Set max"
-	bmax.tooltip_text = "Capture the current jog pose as the soft maximum."
-	bmax.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bmax.pressed.connect(func(): _capture_limit(key, "max"))
-	set_row.add_child(bmax)
-	var bhome := Button.new()
-	bhome.text = "Set home"
-	bhome.tooltip_text = "Capture the current jog pose as home / origin."
-	bhome.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bhome.pressed.connect(func(): _capture_limit(key, "home"))
-	set_row.add_child(bhome)
+	set_row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	for which: String in ["min", "max", "home"]:
+		var b := Button.new()
+		b.text = "Set %s" % which
+		b.tooltip_text = "Capture the current jog pose as the soft %s" % which if which != "home" \
+			else "Capture the current jog pose as home / origin"
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UITheme.style_button(b)
+		var captured := which
+		b.pressed.connect(func(): _capture_limit(key, captured))
+		set_row.add_child(b)
 	box.add_child(set_row)
-
-	var sep := HSeparator.new()
-	box.add_child(sep)
-	return box
+	return sec
 
 
-func _cap(text: String) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.custom_minimum_size = Vector2(48, 0)
-	return l
+
 
 
 func _limit_spin() -> SpinBox:
@@ -291,44 +197,14 @@ func _limit_spin() -> SpinBox:
 	spin.step = 0.01
 	spin.allow_greater = true
 	spin.allow_lesser = true
-	spin.custom_minimum_size = Vector2(110, 0)
-	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spin.select_all_on_focus = true
 	return spin
 
 
 func _rebuild_studio() -> void:
-	if _studio != null:
-		_studio.queue_free()
-	_studio = Node3D.new()
-	_viewport.add_child(_studio)
-
-	var key_light := DirectionalLight3D.new()
-	key_light.rotation_degrees = Vector3(-42, 40, 0)
-	key_light.light_energy = 1.1
-	_studio.add_child(key_light)
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-18, -135, 0)
-	fill.light_energy = 0.3
-	_studio.add_child(fill)
-
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(60, 60)
-	ground.mesh = plane
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.28, 0.30, 0.34)
-	gmat.roughness = 0.95
-	ground.material_override = gmat
-	_studio.add_child(ground)
-
-	_holder = Node3D.new()
-	_studio.add_child(_holder)
-
-	_camera = Camera3D.new()
-	_camera.fov = 50.0
-	_camera.current = true
-	_studio.add_child(_camera)
-
+	if _studio_view == null:
+		return
+	_studio_view.clear()
 	_model_inst = ModelCatalog.instantiate(_model_id)
 	_node_names = PackedStringArray()
 	_rest_by_name = {}
@@ -345,7 +221,7 @@ func _rebuild_studio() -> void:
 
 
 func _fit_camera() -> void:
-	if _camera == null or _model_inst == null:
+	if _studio_view == null or _model_inst == null:
 		return
 	var aabb := AABB()
 	var found := false
@@ -361,9 +237,8 @@ func _fit_camera() -> void:
 			aabb = aabb.merge(box)
 	var center := aabb.get_center() if found else Vector3(0, 1, 0)
 	var msize := maxf(aabb.size.length(), 2.0) if found else 4.0
-	var dist := clampf(msize * 1.1, 3.0, 200.0)
-	_camera.position = center + Vector3(sin(0.7) * dist, msize * 0.4, cos(0.7) * dist)
-	_camera.look_at(center)
+	_studio_view.target = center
+	_studio_view.set_orbit(0.7, 0.3, clampf(msize * 1.1, 3.0, 200.0))
 
 
 func _populate_controls() -> void:
@@ -431,7 +306,7 @@ func _apply_all_jogs() -> void:
 		node.position = (_rest_by_name[node_name] as Vector3) + dir * along
 		var jv := _jog_lbl.get(key) as Label
 		if jv != null:
-			jv.text = "%.3f  (home %.3f)" % [along, float((_home_spin[key] as SpinBox).value)]
+			jv.text = "%s  (home %s)" % [String.num(along, 2), String.num(float((_home_spin[key] as SpinBox).value), 2)]
 
 
 func _on_limit_changed(key: String) -> void:
@@ -455,16 +330,16 @@ func _capture_limit(key: String, which: String) -> void:
 			if along > hi:
 				(_max_spin[key] as SpinBox).set_value_no_signal(along)
 			(_jog_slider[key] as HSlider).set_value_no_signal(0.0)
-			_status_lbl.text = "%s min ← %.3f" % [key.to_upper(), along]
+			_status_lbl.text = "%s min ← %s" % [key.to_upper(), String.num(along, 2)]
 		"max":
 			(_max_spin[key] as SpinBox).set_value_no_signal(along)
 			if along < lo:
 				(_min_spin[key] as SpinBox).set_value_no_signal(along)
 			(_jog_slider[key] as HSlider).set_value_no_signal(1.0)
-			_status_lbl.text = "%s max ← %.3f" % [key.to_upper(), along]
+			_status_lbl.text = "%s max ← %s" % [key.to_upper(), String.num(along, 2)]
 		"home":
 			(_home_spin[key] as SpinBox).set_value_no_signal(along)
-			_status_lbl.text = "%s home ← %.3f" % [key.to_upper(), along]
+			_status_lbl.text = "%s home ← %s" % [key.to_upper(), String.num(along, 2)]
 	_on_limit_changed(key)
 
 

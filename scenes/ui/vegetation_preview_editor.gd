@@ -10,6 +10,9 @@ const PREVIEW_SEED := 4242
 const STUDIO_SUN := Vector3(0.35, 0.88, 0.32)
 
 const SliderSpinRowScript := preload("res://scenes/ui/slider_spin_row.gd")
+## A trailing unit in a slider's table label becomes the value box's suffix
+## ("Height m" → "Height" + "m"), so the label reads as a name.
+const UNIT_SUFFIXES: Array = [[" (yr)", "yr"], [" (m)", "m"], [" cm", "cm"], [" m", "m"], [" %", "%"]]
 
 const SPECIES_IDS: Array[String] = [
 	"pine", "deciduous", "shrub", "mix", "grass_lawn", "grass_field",
@@ -207,6 +210,14 @@ const SHADER_SLIDERS := [
 var _loader: Node = null
 var _dock: Control = null
 var _active := false
+## The kit: the three-column shell (left = type / subspecies / presets,
+## centre = the studio patch with the brush under it, right = colours,
+## shape sections, shader, forest age, OSM), and the one studio.
+var _shell: DesignerShell = null
+var _studio_view: StudioViewport = null
+## The footer's edit verbs (hidden in one-tree mode, where "Apply to" is a
+## section of its own).
+var _footer_btns: Array = []
 ## One-tree mode (the V toolbar's Select → click a tree): the TerrainLoader
 ## pick descriptor of that plant, {} otherwise. The sliders then edit that
 ## tree, and the footer offers three scopes — this tree, every one of its
@@ -229,7 +240,6 @@ var _inst_reset_btn: Button = null
 var _top_rows: Array = []
 var _btn_row: HBoxContainer = null
 var _type_rows: Array = []
-var _adv_toggle: CheckButton = null
 static var _last_species := "shrub"
 var _species := "shrub"
 var _density := 1.0
@@ -258,7 +268,6 @@ var _height_label: Label = null
 ## Live seasonal uniforms snapshotted per rebuild (see _live_season_uniforms).
 var _season_uniforms: Dictionary = {}
 
-var _scroll_container: ScrollContainer
 ## Player OSM-kind → species override (e.g. {"wood": "pine"}). "auto" = biome.
 var _osm_species_map: Dictionary = {}
 var _osm_opts: Dictionary = {}
@@ -266,7 +275,6 @@ var _osm_opts: Dictionary = {}
 var _local_mix: Dictionary = {}
 var _local_mix_checks: Dictionary = {}
 
-var _dim: ColorRect = null
 var _panel: PanelContainer = null
 var _viewport: SubViewport = null
 var _studio: Node3D = null
@@ -323,11 +331,7 @@ var _apply_btn: Button = null
 var _shader_advanced: VBoxContainer = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
-var _cam_yaw: float = PI / 4.0
-var _cam_pitch: float = -0.35
 var _cam_dist_mult: float = 1.0
-var _cam_drag: bool = false
-var _cam_last_pos: Vector2
 
 
 func _ready() -> void:
@@ -391,12 +395,8 @@ func open(initial_preset: int = -1, species_id: String = "") -> void:
 	set_process(true)
 	_update_ground_and_camera()
 	_queue_rebuild(true)
-	move_to_front()
-	
-	if _scroll_container != null:
-		_scroll_container.set_deferred("scroll_vertical", 0)
-		
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	_shell.open()
+	_shell.scroll_top()
 
 
 func close() -> void:
@@ -412,7 +412,7 @@ func close() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_rebuild_pending = false
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -438,153 +438,93 @@ func _queue_rebuild(immediate: bool = false) -> void:
 # UI
 # ---------------------------------------------------------------------------
 
-func _panel_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.1, 0.14, 0.98)
-	sb.set_corner_radius_all(10)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(0.2, 0.4, 0.6, 0.9)
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 8
-	return sb
 
 
-func _secondary_btn_style() -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.16, 0.22, 1.0)
-	sb.border_color = Color(0.25, 0.4, 0.55, 0.7)
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(4)
-	return sb
 
 
-func _style_section(lbl: Label, text: String) -> void:
-	lbl.text = text
-	lbl.add_theme_color_override("font_color", Color(0.5, 0.65, 0.8))
-	lbl.add_theme_font_size_override("font_size", 11)
+
+
+
 
 
 func _build_ui() -> void:
-	_dim = ColorRect.new()
-	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_dim.color = Color(0, 0, 0, 0.55)
-	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	_dim.gui_input.connect(func(ev: InputEvent) -> void:
-		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
-			close())
-	add_child(_dim)
+	_shell = DesignerShell.create("Tune look", "trees", {
+		"name_id": MODAL_NAME, "want": Vector2(1500, 900),
+		"left_label": "Type & presets", "left_w": 250.0, "right_w": 400.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_shell.closed.connect(close)
+	_build_left(_shell.left)
+	_build_centre(_shell.centre)
+	_build_right(_shell.right)
+	_build_footer()
+	_refresh_apply_state()
 
-	_panel = PanelContainer.new()
-	_panel.name = "PreviewPanel"
-	_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_panel.custom_minimum_size = Vector2(920, 580)
-	_panel.offset_left = -460
-	_panel.offset_top = -290
-	_panel.offset_right = 460
-	_panel.offset_bottom = 290
-	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	_panel.add_theme_stylebox_override("panel", _panel_style())
-	add_child(_panel)
-	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
 
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_top", 10)
-	margin.add_theme_constant_override("margin_bottom", 10)
-	_panel.add_child(margin)
-
-	var root_row := HBoxContainer.new()
-	root_row.add_theme_constant_override("separation", 12)
-	margin.add_child(root_row)
-
-	# Left: 3D preview
-	var preview_col := VBoxContainer.new()
-	preview_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	preview_col.custom_minimum_size = Vector2(500, 0)
-	root_row.add_child(preview_col)
-
-	preview_col.add_child(SectionHeader.make("Preview patch"))
-
-	var vp_container := SubViewportContainer.new()
-	vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vp_container.custom_minimum_size = Vector2(480, 460)
-	vp_container.stretch = true
-	vp_container.gui_input.connect(_on_vp_gui_input)
-	preview_col.add_child(vp_container)
-
-	_viewport = SubViewport.new()
-	_viewport.size = Vector2i(640, 480)
-	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
-	vp_container.add_child(_viewport)
-	_build_studio_world()
-
-	_height_label = Label.new()
-	_height_label.add_theme_font_size_override("font_size", 11)
-	_height_label.add_theme_color_override("font_color", Color(0.55, 0.62, 0.70))
-	_height_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	preview_col.add_child(_height_label)
-
-	# Right: controls
-	_scroll_container = ScrollContainer.new()
-	_scroll_container.custom_minimum_size = Vector2(360, 520)
-	_scroll_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll_container.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	root_row.add_child(_scroll_container)
-
-	var sidebar := VBoxContainer.new()
-	sidebar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sidebar.add_theme_constant_override("separation", 6)
-	_scroll_container.add_child(sidebar)
-
-	var type_row := HBoxContainer.new()
-	sidebar.add_child(type_row)
-	var type_lbl := Label.new()
-	_style_section(type_lbl, "Type")
-	type_lbl.custom_minimum_size = Vector2(44, 0)
-	type_row.add_child(type_lbl)
+## Left: what is being tuned — the family, the named species, its presets.
+func _build_left(col: VBoxContainer) -> void:
+	var type_hdr := SectionHeader.make("Type", "trees")
+	col.add_child(type_hdr)
 	_species_opt = OptionButton.new()
+	_species_opt.name = "veg_type"
 	_species_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_species_opt.tooltip_text = "The plant family, or the mixed woodland the Mix brush paints"
 	for i in SPECIES_LABELS.size():
 		_species_opt.add_item(SPECIES_LABELS[i], i)
 	_species_opt.item_selected.connect(_on_species_selected)
-	type_row.add_child(_species_opt)
-	_type_rows.append(type_row)
-
-	var sub_row := HBoxContainer.new()
-	sidebar.add_child(sub_row)
-	var sub_lbl := Label.new()
-	_style_section(sub_lbl, "Subsp.")
-	sub_lbl.custom_minimum_size = Vector2(44, 0)
-	sub_row.add_child(sub_lbl)
+	col.add_child(_species_opt)
+	var sub_hdr := SectionHeader.make("Subspecies")
+	col.add_child(sub_hdr)
 	_subspecies_opt = OptionButton.new()
+	_subspecies_opt.name = "veg_subspecies"
 	_subspecies_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_subspecies_opt.fit_to_longest_item = false
+	_subspecies_opt.clip_text = true
+	_subspecies_opt.tooltip_text = "A named species of the family, with its own shape and colours"
 	_subspecies_opt.item_selected.connect(_on_subspecies_selected)
-	sub_row.add_child(_subspecies_opt)
-	_type_rows.append(sub_row)
+	col.add_child(_subspecies_opt)
+	_type_rows.append_array([type_hdr, _species_opt, sub_hdr, _subspecies_opt])
+	_build_preset_row(col)
 
-	_build_preset_row(sidebar)
 
-	var dens := _labeled_slider(sidebar, "Density", 0.25, 3.0, _density,
+## Centre: the studio patch, with the brush it is painted with under it.
+func _build_centre(col: VBoxContainer) -> void:
+	_studio_view = StudioViewport.create({"ground": false, "person": false, "ssao": false,
+		"size": Vector2i(960, 640)})
+	_studio_view.set_home(0.8, 0.35)
+	_studio_view.pitch_min = 0.05
+	col.add_child(_studio_view)
+	_viewport = _studio_view.viewport
+	_studio = _studio_view.world
+	_camera = _studio_view.camera
+	_studio_view.view_changed.connect(_on_studio_view_changed)
+	_build_studio_world()
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", UITheme.SPACE_LG)
+	grid.add_theme_constant_override("v_separation", 0)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_studio_view.strip.add_child(grid)
+	var dens := _labeled_slider(grid, "Density", 0.25, 3.0, _density,
 		func(v: float) -> void:
 			_density = v
 			_queue_rebuild())
 	_density_slider = dens.get("slider")
 	_density_spin = dens.get("spin")
-	var dia := _labeled_slider(sidebar, "Patch Ø m", 4.0, 60.0, _patch_diameter,
+	var dia := _labeled_slider(grid, "Patch Ø m", 4.0, 60.0, _patch_diameter,
 		func(v: float) -> void:
 			_patch_diameter = v
 			_update_ground_and_camera()
 			_queue_rebuild())
 	_diameter_slider = dia.get("slider")
 	_diameter_spin = dia.get("spin")
-	var svar := _labeled_slider(sidebar, "Size var %", 0.0, 50.0, _size_var * 100.0,
+	var svar := _labeled_slider(grid, "Size var %", 0.0, 50.0, _size_var * 100.0,
 		func(v: float) -> void:
 			_size_var = clampf(v / 100.0, 0.0, 0.5)
 			_queue_rebuild(), 1.0)
 	_size_var_slider = svar.get("slider")
 	_size_var_spin = svar.get("spin")
-	var psc := _labeled_slider(sidebar, "Plant scale", 0.25, 3.0, _plant_scale,
+	var psc := _labeled_slider(grid, "Plant scale", 0.25, 3.0, _plant_scale,
 		func(v: float) -> void:
 			_plant_scale = v
 			_queue_rebuild(), 0.05)
@@ -593,61 +533,60 @@ func _build_ui() -> void:
 	for pair in [dens, dia, svar, psc]:
 		if (pair as Dictionary).get("row") is Control:
 			_top_rows.append((pair as Dictionary)["row"])
+	_height_label = Label.new()
+	_height_label.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_height_label.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_height_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(_height_label)
 
-	_species_section = VBoxContainer.new()
-	_species_section.add_theme_constant_override("separation", 4)
-	sidebar.add_child(_species_section)
 
-	var tint_row := HBoxContainer.new()
-	tint_row.add_theme_constant_override("separation", 6)
-	sidebar.add_child(tint_row)
-	var tint_lbl := Label.new()
-	_style_section(tint_lbl, "Tint")
-	tint_lbl.custom_minimum_size = Vector2(44, 0)
-	tint_row.add_child(tint_lbl)
+## Right: colours, the species' shape sections, the map-wide knobs.
+func _build_right(col: VBoxContainer) -> void:
+	_apply_status = Label.new()
+	_apply_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_apply_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_apply_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(_apply_status)
+	var colours := HBoxContainer.new()
+	colours.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_tint_picker = ColorPickerButton.new()
-	_tint_picker.custom_minimum_size = Vector2(52, 24)
+	_tint_picker.custom_minimum_size = Vector2(44, 24)
 	_tint_picker.tooltip_text = "Overall foliage colour for this species"
 	_tint_picker.color_changed.connect(_on_tint_changed)
-	tint_row.add_child(_tint_picker)
-	var hi_lbl := Label.new()
-	_style_section(hi_lbl, "Highlight")
-	tint_row.add_child(hi_lbl)
+	colours.add_child(_tint_picker)
+	colours.add_child(_mini_label("Highlight"))
 	_hi_picker = ColorPickerButton.new()
-	_hi_picker.custom_minimum_size = Vector2(52, 24)
+	_hi_picker.custom_minimum_size = Vector2(44, 24)
 	_hi_picker.tooltip_text = "Sun-lit leaf accent colour (maple's orange, olive's silver…)"
 	_hi_picker.color_changed.connect(func(c: Color) -> void:
 		if not _instance.is_empty():
 			_inst_colors["highlight_tint"] = c
 		_hi_tints[_species] = c
 		_queue_rebuild())
-	tint_row.add_child(_hi_picker)
-	_bark_lbl = Label.new()
-	_style_section(_bark_lbl, "Bark")
-	tint_row.add_child(_bark_lbl)
+	colours.add_child(_hi_picker)
+	_bark_lbl = _mini_label("Bark")
+	colours.add_child(_bark_lbl)
 	_bark_picker = ColorPickerButton.new()
-	_bark_picker.custom_minimum_size = Vector2(52, 24)
+	_bark_picker.custom_minimum_size = Vector2(44, 24)
 	_bark_picker.tooltip_text = "Trunk + limb bark colour (birch white, redwood rust…)"
 	_bark_picker.color_changed.connect(func(c: Color) -> void:
 		if not _instance.is_empty():
 			_inst_colors["bark_tint"] = c
 		_bark_tints[_species] = c
 		_queue_rebuild())
-	tint_row.add_child(_bark_picker)
+	colours.add_child(_bark_picker)
+	col.add_child(FormRow.make("Colours", colours, "Foliage tint · sun-lit highlight · bark"))
 
-	var general_from := sidebar.get_child_count()
-	var adv_toggle := CheckButton.new()
-	_adv_toggle = adv_toggle
-	adv_toggle.text = "Advanced shader"
-	adv_toggle.button_pressed = false
-	adv_toggle.toggled.connect(func(on: bool) -> void:
-		if _shader_advanced != null:
-			_shader_advanced.visible = on)
-	sidebar.add_child(adv_toggle)
-	_shader_advanced = VBoxContainer.new()
-	_shader_advanced.visible = false
-	_shader_advanced.add_theme_constant_override("separation", 4)
-	sidebar.add_child(_shader_advanced)
+	_species_section = VBoxContainer.new()
+	_species_section.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	col.add_child(_species_section)
+
+	var general_from := col.get_child_count()
+	var shader_sec := Collapsible.make("Advanced shader", false,
+		"Lighting and surface knobs shared by every plant on the map")
+	_shader_advanced = shader_sec.body
+	_shader_advanced.add_theme_constant_override("separation", 2)
+	col.add_child(shader_sec)
 	for spec in SHADER_SLIDERS:
 		var sd: Dictionary = spec
 		var key := str(sd["key"])
@@ -655,104 +594,83 @@ func _build_ui() -> void:
 			float(sd["max"]),
 			float(_values.get(key, VegetationStyleConfig.defaults().get(key, 0.0))))
 		_shader_sliders[key] = sl
+	_build_forest_age_section(col)
+	_build_osm_section(col)
+	# Everything from the shader section down is MAP-wide (shader, forest
+	# age, OSM binding): hidden while one tree is being tuned.
+	for i in range(general_from, col.get_child_count()):
+		_general_nodes.append(col.get_child(i))
+	_build_instance_bar(col)
 
-	_build_forest_age_section(sidebar)
-	_build_osm_section(sidebar)
-	# Everything from the shader toggle down is MAP-wide (shader, forest age,
-	# OSM binding): hidden while one tree is being tuned.
-	for i in range(general_from, sidebar.get_child_count()):
-		_general_nodes.append(sidebar.get_child(i))
 
-	_build_instance_bar(sidebar)
-	var btn_row := HBoxContainer.new()
-	btn_row.add_theme_constant_override("separation", 8)
-	sidebar.add_child(btn_row)
-	_btn_row = btn_row
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to map"
-	_apply_btn.custom_minimum_size = Vector2(104, 30)
-	_apply_btn.tooltip_text = "Push this look to the map — the editor stays open so you can keep iterating"
-	_apply_btn.pressed.connect(_apply_to_map)
-	btn_row.add_child(_apply_btn)
-	var brush_btn := Button.new()
-	brush_btn.text = "Apply to brush"
-	brush_btn.custom_minimum_size = Vector2(108, 30)
-	brush_btn.tooltip_text = "Paint the next trees with this look only (map unchanged)"
-	brush_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	brush_btn.pressed.connect(_apply_to_brush)
-	btn_row.add_child(brush_btn)
-	var default_btn := Button.new()
-	default_btn.text = "Save as species default"
-	default_btn.custom_minimum_size = Vector2(150, 30)
-	default_btn.tooltip_text = "Persist this look as the default for this subspecies"
-	default_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	default_btn.pressed.connect(_save_species_default)
-	btn_row.add_child(default_btn)
-	var reset_btn := Button.new()
-	reset_btn.text = "Reset"
-	reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	reset_btn.pressed.connect(_reset_values)
-	btn_row.add_child(reset_btn)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	close_btn.pressed.connect(close)
-	btn_row.add_child(close_btn)
-	_apply_status = Label.new()
-	_apply_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	_apply_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_apply_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sidebar.add_child(_apply_status)
-	_refresh_apply_state()
+func _build_footer() -> void:
+	_shell.set_hint("Drag to orbit · wheel to zoom · move a slider and the patch rebuilds · Esc closes")
+	_apply_btn = _shell.add_button("Apply to map", DesignerShell.PRIMARY, _apply_to_map,
+		"Push this look to the map — the editor stays open so you can keep iterating")
+	var brush_btn := _shell.add_button("Apply to brush", DesignerShell.SECONDARY, _apply_to_brush,
+		"Paint the next plants with this look only (map unchanged)")
+	var default_btn := _shell.add_button("Save as species default", DesignerShell.SECONDARY,
+		_save_species_default, "Persist this look as the default for this subspecies")
+	var reset_btn := _shell.add_button("Reset", DesignerShell.SECONDARY, _reset_values,
+		"Back to the map's current look")
+	_footer_btns = [_apply_btn, brush_btn, default_btn, reset_btn]
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
+
+
+func _mini_label(text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return l
+
+
+## A table label's trailing unit → [label, unit].
+static func split_unit(label: String) -> Array:
+	for su in UNIT_SUFFIXES:
+		if label.ends_with(str(su[0])):
+			return [label.trim_suffix(str(su[0])), str(su[1])]
+	return [label, ""]
 
 
 func _labeled_slider(parent: Control, label: String, min_v: float, max_v: float,
 		start: float, handler: Callable, step: float = -1.0) -> Dictionary:
-	return SliderSpinRowScript.add(parent, label, min_v, max_v, start, handler,
-		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
-		72, 120, 64, step)
+	var lu := split_unit(label)
+	var r := FormRow.slider(str(lu[0]), min_v, max_v, start, step, str(lu[1]), handler)
+	parent.add_child(r)
+	return {"row": r, "slider": r.control, "spin": r.spin_box, "form": r}
 
 
-## A slider bound to a `_values` KEY: same row, plus a per-slider revert button
-## and a label that goes amber while the value differs from the baseline.
+## A slider bound to a `_values` KEY: a FormRow with a per-slider revert
+## (shown while the value differs from the baseline) and an amber label.
 ##
 ## Phase 8: the modal dumps ~32 sliders per species with no way to tell which
 ## ones you have actually moved, and "Reset" was all-or-nothing — so a single
 ## bad experiment cost the whole session's tuning.
 func _keyed_slider(parent: Control, key: String, label: String, min_v: float,
 		max_v: float, start: float, step: float = -1.0) -> Dictionary:
-	var pair := SliderSpinRowScript.add(parent, label, min_v, max_v, start,
+	var pair := _labeled_slider(parent, label, min_v, max_v, start,
 		func(v: float) -> void:
 			_record_slider_edit(key, v)
 			_refresh_slider_diff(key)
 			_refresh_apply_state()
 			_queue_rebuild(),
-		func(lbl: Label, txt: String) -> void: _style_section(lbl, txt),
-		72, 108, 60, step)
-	var row: HBoxContainer = pair.get("row")
-	# Hover help: the terse row label can't explain itself. Labels ignore the
-	# mouse by default, so opt the whole row in.
-	if SLIDER_TIPS.has(key) and row != null:
+		step)
+	var row: FormRow = pair["form"]
+	# Hover help: the terse row label can't explain itself.
+	if SLIDER_TIPS.has(key):
 		row.tooltip_text = str(SLIDER_TIPS[key])
 		row.mouse_filter = Control.MOUSE_FILTER_PASS
-		if row.get_child_count() > 0 and row.get_child(0) is Label:
-			(row.get_child(0) as Label).mouse_filter = Control.MOUSE_FILTER_STOP
-			(row.get_child(0) as Label).tooltip_text = str(SLIDER_TIPS[key])
-	var revert := Button.new()
-	revert.text = "↺"
-	revert.tooltip_text = "Revert this one slider to %s" % (
-		"the last applied value" if _applied_once else "the map's current value")
-	revert.custom_minimum_size = Vector2(24, 20)
-	revert.focus_mode = Control.FOCUS_NONE
-	revert.add_theme_font_size_override("font_size", 10)
-	revert.pressed.connect(_revert_key.bind(key))
-	if row != null:
-		row.add_child(revert)
+		row.label.tooltip_text = str(SLIDER_TIPS[key])
+	row.with_revert(_revert_key.bind(key), "Revert this one slider to %s" % (
+		"the last applied value" if _applied_once else "the map's current value"))
 	_keyed_sliders[key] = {
 		"pair": pair,
-		"label": row.get_child(0) if row != null and row.get_child_count() > 0 else null,
-		"revert": revert,
-		"text": label,
+		"label": row.label,
+		"revert": row.revert_btn,
+		"text": row.label.text,
+		"form": row,
 	}
 	_refresh_slider_diff(key)
 	return pair
@@ -799,15 +717,11 @@ func _refresh_slider_diff(key: String) -> void:
 	if entry.is_empty():
 		return
 	var changed := _key_differs(key)
-	var lbl: Label = entry.get("label")
-	if lbl != null:
-		lbl.add_theme_color_override("font_color",
-			UITheme.C_AMBER if changed else UITheme.C_TEXT_S)
-		lbl.text = ("• " + str(entry.get("text", ""))) if changed else str(entry.get("text", ""))
-	var revert: Button = entry.get("revert")
-	if revert != null:
-		revert.disabled = not changed
-		revert.modulate = Color(1, 1, 1, 1.0 if changed else 0.35)
+	var form: FormRow = entry.get("form")
+	if form == null or not is_instance_valid(form):
+		return
+	form.set_dirty(changed)
+	form.set_label(("• " + str(entry.get("text", ""))) if changed else str(entry.get("text", "")))
 
 
 func _key_differs(key: String) -> bool:
@@ -859,6 +773,8 @@ func _rebuild_species_section() -> void:
 	for key in _keyed_sliders.keys():
 		if not _shader_sliders.has(key):
 			_keyed_sliders.erase(key)
+	if _shell != null:
+		_shell.set_subtitle("Mixed woodland" if _species == "mix" else VegSpeciesCatalog.label_for(_species))
 	if _species == "mix":
 		_build_mix_section()
 		return
@@ -874,23 +790,15 @@ func _rebuild_species_section() -> void:
 			% VegSpeciesCatalog.label_for(_species)
 		if not _instance.is_empty():
 			scope_hint.text = "Edits preview on this tree — choose below where they apply"
-		scope_hint.add_theme_font_size_override("font_size", 9)
-		scope_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
+		scope_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		scope_hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		scope_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_species_section.add_child(scope_hint)
 	# Shape archetype dropdown (tree families): the single strongest shape
 	# choice, above every slider.
 	if fam == "pine" or fam == "deciduous":
-		var arch_row := HBoxContainer.new()
-		arch_row.add_theme_constant_override("separation", 6)
-		_species_section.add_child(arch_row)
-		var arch_lbl := Label.new()
-		_style_section(arch_lbl, "Shape")
-		arch_lbl.custom_minimum_size = Vector2(44, 0)
-		arch_row.add_child(arch_lbl)
 		var arch_opt := OptionButton.new()
-		arch_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		arch_opt.tooltip_text = "Overall growth habit — round oak, spreading chestnut, columnar poplar, vase elm, weeping willow, conical fir"
+		var arch_tip := "Overall growth habit — round oak, spreading chestnut, columnar poplar, vase elm, weeping willow, conical fir"
 		var arch_key := "%s_archetype" % fam
 		var current := str(_resolved_active().get(arch_key, "round"))
 		for i in VegTreeArchetypes.IDS.size():
@@ -909,7 +817,7 @@ func _rebuild_species_section() -> void:
 				_values[arch_key] = aid
 			_refresh_apply_state()
 			_queue_rebuild())
-		arch_row.add_child(arch_opt)
+		_species_section.add_child(FormRow.make("Shape", arch_opt, arch_tip, "", "archetype"))
 		# The leaf / branch builder is how a whole FAMILY is built — not a
 		# per-tree choice, so one-tree mode leaves it out.
 		if _instance.is_empty():
@@ -961,16 +869,8 @@ func _rebuild_species_section() -> void:
 ## the older leaf-shell crowns. Family-wide — it is how every broadleaf is
 ## built, not a per-species look.
 func _build_leaf_builder_row() -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	_species_section.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, "Leaves")
-	lbl.custom_minimum_size = Vector2(44, 0)
-	row.add_child(lbl)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	opt.tooltip_text = "Leaf sprays: twigs carrying each species' own leaves, with " \
+	var tip := "Leaf sprays: twigs carrying each species' own leaves, with " \
 		+ "gaps and visible limbs. Leaf shells: the older rounded leaf crowns. " \
 		+ "Applies to every broadleaf species."
 	opt.add_item("Leaf sprays (by species)", 0)
@@ -985,22 +885,14 @@ func _build_leaf_builder_row() -> void:
 		# The slider set depends on the builder (shells-only sliders hide).
 		_rebuild_species_section.call_deferred()
 		_queue_rebuild())
-	row.add_child(opt)
+	_species_section.add_child(FormRow.make("Leaves", opt, tip, "", "leaf_builder"))
 
 
 ## Conifers: needle sprays (each species' own habit) or the older whorl
 ## cards. Family-wide, like Leaves.
 func _build_branch_builder_row() -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	_species_section.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, "Branches")
-	lbl.custom_minimum_size = Vector2(44, 0)
-	row.add_child(lbl)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	opt.tooltip_text = "Needle sprays: a real trunk with each species' branches and " \
+	var tip := "Needle sprays: a real trunk with each species' branches and " \
 		+ "foliage. Whorl cards: the older stacked cards (the only look the fur " \
 		+ "sliders change). Applies to every conifer species."
 	opt.add_item("Needle sprays (by species)", 0)
@@ -1013,7 +905,7 @@ func _build_branch_builder_row() -> void:
 		_refresh_apply_state()
 		_rebuild_species_section.call_deferred()
 		_queue_rebuild())
-	row.add_child(opt)
+	_species_section.add_child(FormRow.make("Branches", opt, tip, "", "pine_builder"))
 
 
 ## Shape sliders the family's CURRENT builder does not read — hidden so every
@@ -1148,7 +1040,8 @@ func _build_mix_section() -> void:
 	hint.text = "The preview is the brush: Mix in the V toolbar paints exactly this. " \
 		+ "Edit each tree's shape on its own Type page."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_species_section.add_child(hint)
 
 
@@ -1211,8 +1104,8 @@ func _legacy_build_mix_section() -> void:
 	var local_hint := Label.new()
 	local_hint.text = "Include named sub-types / crops in the mixed blend."
 	local_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	local_hint.add_theme_font_size_override("font_size", 10)
-	local_hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
+	local_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	local_hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_species_section.add_child(local_hint)
 	_local_mix_checks.clear()
 	var grid := GridContainer.new()
@@ -1245,40 +1138,27 @@ func _legacy_build_mix_section() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_preset_row(sidebar: VBoxContainer) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	sidebar.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, "Preset")
-	lbl.custom_minimum_size = Vector2(44, 0)
-	row.add_child(lbl)
+	var hdr := SectionHeader.make("Presets", "", "this species' saved looks")
+	sidebar.add_child(hdr)
 	_preset_opt = OptionButton.new()
+	_preset_opt.name = "veg_preset"
 	_preset_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_opt.fit_to_longest_item = false
+	_preset_opt.clip_text = true
+	_preset_opt.tooltip_text = "Load a saved look for this species"
 	_preset_opt.item_selected.connect(_on_preset_selected)
-	row.add_child(_preset_opt)
-
+	sidebar.add_child(_preset_opt)
 	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 4)
+	row2.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	sidebar.add_child(row2)
 	_preset_name_edit = LineEdit.new()
-	_preset_name_edit.placeholder_text = "Preset name…"
+	_preset_name_edit.placeholder_text = "Save this look as…"
 	_preset_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_preset_name_edit.text_submitted.connect(func(_t: String) -> void: _on_preset_save())
 	row2.add_child(_preset_name_edit)
-	var save_btn := Button.new()
-	save_btn.text = "Save"
-	save_btn.custom_minimum_size = Vector2(52, 26)
-	save_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	save_btn.tooltip_text = "Save current %s look as a named preset" % _species
-	save_btn.pressed.connect(_on_preset_save)
-	row2.add_child(save_btn)
-	var del_btn := Button.new()
-	del_btn.text = "Del"
-	del_btn.custom_minimum_size = Vector2(40, 26)
-	del_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	del_btn.tooltip_text = "Delete the selected preset"
-	del_btn.pressed.connect(_on_preset_delete)
-	row2.add_child(del_btn)
+	row2.add_child(IconButton.make("save", "Save the current look as a named preset", _on_preset_save))
+	row2.add_child(IconButton.make("trash-2", "Delete the selected preset", _on_preset_delete))
+	_type_rows.append_array([hdr, _preset_opt, row2])
 
 
 ## Refresh the preset dropdown for the current species. Item 0 is a placeholder.
@@ -1419,18 +1299,10 @@ const LOD_CHAIN_PRESETS: Array = [
 ## FAR tier. Same override routing as the archetype dropdown (named
 ## subspecies → per-species override, family → _values).
 func _build_lod_chain_row(fam: String) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	_species_section.add_child(row)
-	var lbl := Label.new()
-	_style_section(lbl, "LOD")
-	lbl.custom_minimum_size = Vector2(44, 0)
-	row.add_child(lbl)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var has_photo := VegSpeciesRegistry.photocard_texture(_species) != null \
 			or VegSpeciesRegistry.photocard_texture(fam) != null
-	opt.tooltip_text = ("Which tree representations render, near → far. " +
+	var tip := ("Which tree representations render, near → far. " +
 		"Distances: the Tree detail / Photocard sliders under Advanced. " +
 		"Photo card needs a texture at assets/vegetation/photocards/<id>.png " +
 		"or user://veg_photocards/<id>.png." +
@@ -1463,7 +1335,7 @@ func _build_lod_chain_row(fam: String) -> void:
 			_values[chain_key] = chain
 		_refresh_apply_state()
 		_queue_rebuild())
-	row.add_child(opt)
+	_species_section.add_child(FormRow.make("Detail ladder", opt, tip, "", "lod_chain"))
 
 
 ## Which section a shape-slider key belongs to. Derived from the key so adding a
@@ -1504,23 +1376,15 @@ func _add_collapsible_section(parent: Control, title: String) -> VBoxContainer:
 ## stand starts — the difference between dropping a mature forest and dropping a
 ## clear-cut that grows back while you watch.
 func _build_forest_age_section(sidebar: VBoxContainer) -> void:
-	sidebar.add_child(SectionHeader.make("Forest age"))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	sidebar.add_child(row)
+	sidebar.add_child(SectionHeader.make("Forest age", "", "generated forest only"))
 	_forest_age_opt = OptionButton.new()
-	_forest_age_opt.custom_minimum_size.x = 150.0
 	for spec in FOREST_AGE_OPTIONS:
 		_forest_age_opt.add_item(str(spec[1]))
 		_forest_age_opt.set_item_metadata(_forest_age_opt.item_count - 1, str(spec[0]))
 	_forest_age_opt.item_selected.connect(_on_forest_age_selected)
-	row.add_child(_forest_age_opt)
-	var hint := Label.new()
-	hint.text = "Generated forest only"
-	hint.add_theme_font_size_override("font_size", 10)
-	hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(hint)
+	sidebar.add_child(FormRow.make("Stand age", _forest_age_opt,
+		"Where in its life a freshly seeded stand starts: a mature forest, or a " +
+		"clear-cut that grows back while you watch", "", "forest_age"))
 	_sync_forest_age_opt()
 
 
@@ -1543,33 +1407,21 @@ func _on_forest_age_selected(idx: int) -> void:
 
 
 func _build_osm_section(sidebar: VBoxContainer) -> void:
-	sidebar.add_child(SectionHeader.make("OSM → tree type"))
-	var hint := Label.new()
-	hint.text = "Which shader type fills each OpenStreetMap area."
-	hint.add_theme_color_override("font_color", Color(0.5, 0.58, 0.66))
-	hint.add_theme_font_size_override("font_size", 9)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sidebar.add_child(hint)
+	var sec := Collapsible.make("OSM → tree type", false,
+		"Which plant type fills each OpenStreetMap area")
+	sec.body.add_theme_constant_override("separation", 2)
+	sidebar.add_child(sec)
 	for entry in BiomePalette.MAPPABLE_KINDS:
 		var kind := str((entry as Array)[0])
 		var label := str((entry as Array)[1])
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 4)
-		sidebar.add_child(row)
-		var lbl := Label.new()
-		_style_section(lbl, label)
-		lbl.custom_minimum_size = Vector2(96, 0)
-		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		row.add_child(lbl)
 		var opt := OptionButton.new()
-		opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var opts := BiomePalette.override_options()
 		var labels := BiomePalette.override_labels()
 		for i in opts.size():
 			opt.add_item(str(labels[i]), i)
 		opt.item_selected.connect(func(idx: int) -> void:
 			_osm_species_map[kind] = str(BiomePalette.override_options()[idx]))
-		row.add_child(opt)
+		sec.body.add_child(FormRow.make(label, opt, "", "", "osm_" + kind))
 		_osm_opts[kind] = opt
 
 
@@ -1588,38 +1440,6 @@ func _sync_osm_opts() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_studio_world() -> void:
-	var world := World3D.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.42, 0.46, 0.50)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.55, 0.58, 0.62)
-	env.ambient_light_energy = 0.35
-	world.environment = env
-	_viewport.world_3d = world
-
-	_studio = Node3D.new()
-	_studio.name = "Studio"
-	_viewport.add_child(_studio)
-
-	_camera = Camera3D.new()
-	_camera.name = "Camera"
-	_camera.fov = 48.0
-	_studio.add_child(_camera)
-
-	var key := DirectionalLight3D.new()
-	key.name = "KeyLight"
-	key.rotation_degrees = Vector3(-42.0, 38.0, 0.0)
-	key.light_energy = 1.15
-	key.shadow_enabled = true
-	_studio.add_child(key)
-
-	var fill := DirectionalLight3D.new()
-	fill.name = "FillLight"
-	fill.rotation_degrees = Vector3(-18.0, -135.0, 0.0)
-	fill.light_energy = 0.28
-	_studio.add_child(fill)
-
 	_ground = MeshInstance3D.new()
 	_ground.name = "Ground"
 	var ground_mat := StandardMaterial3D.new()
@@ -1627,16 +1447,14 @@ func _build_studio_world() -> void:
 	ground_mat.roughness = 0.95
 	_ground.material_override = ground_mat
 	_studio.add_child(_ground)
-
 	_veg_root = Node3D.new()
 	_veg_root.name = "Vegetation"
-	_studio.add_child(_veg_root)
-
+	_studio_view.show_node(_veg_root)
 	_update_ground_and_camera()
 
 
 func _update_ground_and_camera() -> void:
-	if _ground == null or _camera == null:
+	if _ground == null or _studio_view == null:
 		return
 	var cyl := CylinderMesh.new()
 	var r := _patch_diameter * 0.55
@@ -1645,35 +1463,20 @@ func _update_ground_and_camera() -> void:
 	cyl.height = 0.06
 	_ground.mesh = cyl
 	_ground.position.y = -0.03
-	var dist := _patch_diameter * 1.2 * _cam_dist_mult
-	var target := Vector3(0.0, _patch_diameter * 0.12, 0.0)
-	var dir := Vector3(cos(_cam_yaw) * cos(_cam_pitch), sin(_cam_pitch), sin(_cam_yaw) * cos(_cam_pitch))
-	_camera.position = target - dir * dist
-	_camera.look_at(target)
+	_studio_view.target = Vector3(0.0, _patch_diameter * 0.12, 0.0)
+	_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch,
+		_patch_diameter * 1.2 * _cam_dist_mult)
 
-func _on_vp_gui_input(ev: InputEvent) -> void:
-	if ev is InputEventMouseButton:
-		var emb = ev as InputEventMouseButton
-		if emb.button_index == MOUSE_BUTTON_LEFT or emb.button_index == MOUSE_BUTTON_MIDDLE or emb.button_index == MOUSE_BUTTON_RIGHT:
-			if emb.pressed:
-				_cam_drag = true
-				_cam_last_pos = emb.position
-			else:
-				_cam_drag = false
-		elif emb.button_index == MOUSE_BUTTON_WHEEL_UP and emb.pressed:
-			_cam_dist_mult = clampf(_cam_dist_mult * 0.85, 0.1, 5.0)
-			_update_ground_and_camera()
-		elif emb.button_index == MOUSE_BUTTON_WHEEL_DOWN and emb.pressed:
-			_cam_dist_mult = clampf(_cam_dist_mult * 1.15, 0.1, 5.0)
-			_update_ground_and_camera()
-	elif ev is InputEventMouseMotion and _cam_drag:
-		var emm = ev as InputEventMouseMotion
-		var d = emm.position - _cam_last_pos
-		_cam_last_pos = emm.position
-		_cam_yaw -= d.x * 0.01
-		_cam_pitch += d.y * 0.01
-		_cam_pitch = clampf(_cam_pitch, -PI/2.0 + 0.1, PI/2.0 - 0.1)
-		_update_ground_and_camera()
+
+## The wheel zoom is kept as a multiple of the patch, so a resized patch is
+## framed the way the player left it.
+func _on_studio_view_changed() -> void:
+	var base := _patch_diameter * 1.2
+	if base > 0.0 and _studio_view != null:
+		_cam_dist_mult = clampf(_studio_view.dist / base, 0.1, 5.0)
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -2670,10 +2473,10 @@ func _instance_look_now() -> Dictionary:
 
 func _build_instance_bar(sidebar: VBoxContainer) -> void:
 	_inst_bar = VBoxContainer.new()
-	_inst_bar.add_theme_constant_override("separation", 6)
+	_inst_bar.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	_inst_bar.visible = false
 	sidebar.add_child(_inst_bar)
-	_inst_bar.add_child(SectionHeader.make("Apply to"))
+	_inst_bar.add_child(SectionHeader.make("Apply to", "", "where this tree's edits land"))
 	_inst_this_btn = Button.new()
 	_inst_this_btn.text = "This tree only"
 	_inst_this_btn.tooltip_text = "Give just this tree its own look. Others of its species are unchanged."
@@ -2690,35 +2493,21 @@ func _build_instance_bar(sidebar: VBoxContainer) -> void:
 	UITheme.style_button(_inst_all_btn)
 	_inst_all_btn.pressed.connect(_apply_instance_scope.bind("all"))
 	_inst_bar.add_child(_inst_all_btn)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	_inst_bar.add_child(row)
 	_inst_reset_btn = Button.new()
 	_inst_reset_btn.text = "Give back to species"
 	_inst_reset_btn.tooltip_text = "Remove this tree's own look so it follows its species again"
-	_inst_reset_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
+	UITheme.style_button(_inst_reset_btn)
 	_inst_reset_btn.pressed.connect(_apply_instance_scope.bind("reset"))
-	row.add_child(_inst_reset_btn)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.add_theme_stylebox_override("normal", _secondary_btn_style())
-	close_btn.pressed.connect(close)
-	row.add_child(close_btn)
+	_inst_bar.add_child(_inst_reset_btn)
 
 
 func _set_instance_ui(on: bool) -> void:
-	for n in _general_nodes + _top_rows:
+	for n in _general_nodes + _top_rows + _type_rows:
 		if n is Control and is_instance_valid(n):
 			(n as Control).visible = not on
-	# The shader sliders follow their own toggle, not this mode.
-	if not on and _shader_advanced != null and _adv_toggle != null:
-		_shader_advanced.visible = _adv_toggle.button_pressed
-	# The shader rows are children of a hidden container; the toggle hides them.
-	for n in _type_rows:
-		if n is Control and is_instance_valid(n):
-			(n as Control).visible = not on
-	if _btn_row != null:
-		_btn_row.visible = not on
+	for b in _footer_btns:
+		if b is Control and is_instance_valid(b):
+			(b as Control).visible = not on
 	if _inst_bar != null:
 		_inst_bar.visible = on
 	if _inst_header == null and _species_section != null:
@@ -2731,6 +2520,8 @@ func _set_instance_ui(on: bool) -> void:
 		parent.move_child(_inst_header, 0)
 	if _inst_header != null:
 		_inst_header.visible = on
+	if _shell != null:
+		_shell.set_mode("One tree · edits preview here · pick where they apply under \"Apply to\"" if on else "")
 	if on:
 		_refresh_instance_labels()
 

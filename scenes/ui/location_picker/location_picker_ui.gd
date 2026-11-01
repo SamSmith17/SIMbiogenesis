@@ -100,10 +100,10 @@ const _USER_MAPS_DIR := "user://maps"
 const PANEL_INSET := 32.0
 const PANEL_MARGIN := 16
 const PANEL_MARGIN_V := 12
-const _LAUNCH_BG := Color(0.039, 0.055, 0.098, 1.0)
-const _TEXT := Color(0.886, 0.910, 0.941, 1.0)
-const _TEXT_M := Color(0.392, 0.447, 0.545, 1.0)
-const _PRIMARY := Color(0.133, 0.827, 0.933, 1.0)
+const _LAUNCH_BG := UITheme.C_BG
+const _TEXT := UITheme.C_TEXT
+const _TEXT_M := UITheme.C_TEXT_M
+const _PRIMARY := UITheme.C_PRIMARY
 const ZONE_DIFFICULTY: Array[String] = [
 	"",
 	"Extremely Difficult",
@@ -203,7 +203,7 @@ func _solar_panel_style(bg: Color = Color(0.08, 0.1, 0.14, 0.92), bordered: bool
 	sb.set_corner_radius_all(8)
 	if bordered:
 		sb.set_border_width_all(1)
-		sb.border_color = Color(0.227, 0.290, 0.420, 0.85)
+		sb.border_color = Color(UITheme.C_BORDER, 0.85)
 		sb.shadow_color = Color(0, 0, 0, 0.25)
 		sb.shadow_size = 3
 	return sb
@@ -211,7 +211,7 @@ func _solar_panel_style(bg: Color = Color(0.08, 0.1, 0.14, 0.92), bordered: bool
 func _style_line_edit(ed: LineEdit) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.05, 0.07, 0.11, 0.96)
-	sb.border_color = Color(0.227, 0.290, 0.420, 0.75)
+	sb.border_color = Color(UITheme.C_BORDER, 0.75)
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(5)
 	sb.content_margin_left = 10
@@ -253,15 +253,16 @@ func _apply_panel_style(n: Control, bg: Color) -> void:
 func _style_title_label(lbl: Label, text: String) -> void:
 	lbl.text = text
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.add_theme_color_override("font_color", _PRIMARY)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
+	lbl.add_theme_font_override("font", UITheme.font("semibold"))
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
 	lbl.add_theme_constant_override("outline_size", 2)
-	lbl.add_theme_font_size_override("font_size", 20)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 
 func _style_section_label(lbl: Label, text: String) -> void:
 	lbl.text = text
-	lbl.add_theme_color_override("font_color", Color(0.55, 0.68, 0.82, 1))
-	lbl.add_theme_font_size_override("font_size", 11)
+	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 
 func _style_muted_label(lbl: Label) -> void:
 	lbl.add_theme_color_override("font_color", _TEXT_M)
@@ -270,7 +271,7 @@ func _style_value_label(lbl: Label, accent: Color = _TEXT) -> void:
 	lbl.add_theme_color_override("font_color", accent)
 
 func _style_primary_button(btn: Button) -> void:
-	btn.add_theme_color_override("font_color", Color(0.45, 0.95, 0.55, 1))
+	btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 
 func _make_separator() -> HSeparator:
 	var sep := HSeparator.new()

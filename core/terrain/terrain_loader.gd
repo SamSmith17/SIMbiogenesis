@@ -13583,8 +13583,11 @@ func _setup_veg_area_fill_ui() -> void:
 	layer.name = "VegAreaFillLayer"
 	layer.layer = 26
 	ui_layer.add_child(layer)
-	var ui := PanelContainer.new()
+	# A plain full-rect host: the script builds a Drawer inside it (a
+	# PanelContainer host would draw a panel over the whole screen).
+	var ui := Control.new()
 	ui.name = "VegAreaFillModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.set_script(VEG_AREA_FILL_UI_SCRIPT)
 	layer.add_child(ui)
 	ui.call("bind_loader", self)

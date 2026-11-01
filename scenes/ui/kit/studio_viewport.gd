@@ -53,6 +53,8 @@ var target := Vector3(0, 1.5, 0)
 var pitch_min := -0.3
 var pitch_max := 1.45
 var zoom_step := 0.1
+## The orbit's far limit (a camp preview stands 900 m out; a cup 2 m).
+var dist_max := DIST_MAX
 ## Set to intercept input before the orbit (return true = consumed).
 var input_hook: Callable = Callable()
 ## The orbit can be switched off (a 2D plan view) without losing the signals.
@@ -213,7 +215,7 @@ func place_person(r: float, side: float = 0.6) -> void:
 ## some air round it. Keeps the current yaw / pitch.
 func frame_sphere(centre: Vector3, r: float, pad: float = 1.6) -> void:
 	target = centre
-	dist = clampf(maxf(r, 0.5) * pad + 1.0, DIST_MIN, DIST_MAX)
+	dist = clampf(maxf(r, 0.5) * pad + 1.0, DIST_MIN, dist_max)
 	update_camera()
 
 
@@ -243,7 +245,7 @@ func set_orbit(y: float, p: float, d: float = -1.0) -> void:
 	yaw = y
 	pitch = clampf(p, pitch_min, pitch_max)
 	if d > 0.0:
-		dist = clampf(d, DIST_MIN, DIST_MAX)
+		dist = clampf(d, DIST_MIN, dist_max)
 	update_camera()
 
 
@@ -295,7 +297,7 @@ func _on_gui_input(e: InputEvent) -> void:
 				update_camera()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			if orbit_enabled:
-				dist = minf(DIST_MAX, dist * (1.0 + zoom_step))
+				dist = minf(dist_max, dist * (1.0 + zoom_step))
 				update_camera()
 		elif mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT \
 				or mb.button_index == MOUSE_BUTTON_MIDDLE:

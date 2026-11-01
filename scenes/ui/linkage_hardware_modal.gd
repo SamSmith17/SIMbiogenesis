@@ -230,10 +230,16 @@ func _build_topbar() -> Control:
 	bar.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	wrap.add_child(bar)
 
+	var icon := TextureRect.new()
+	icon.texture = UiIcons.icon("wrench", 18)
+	icon.modulate = UITheme.C_PRIMARY
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	bar.add_child(icon)
 	var title := Label.new()
-	title.text = "🔩  HARDWARE DETAIL"
-	title.add_theme_color_override("font_color", C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	title.text = "Hardware detail"
+	title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	title.add_theme_font_override("font", UITheme.font("semibold"))
+	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	bar.add_child(title)
 
 	for id in LinkageHardware.ASSEMBLY_IDS:
@@ -976,8 +982,8 @@ func _add_part_row(part: Dictionary, axis: String) -> void:
 	sel.add_theme_color_override("font_color",
 		C_PRIMARY if pid == _selected else C_TEXT)
 	var qty := LinkageHardware.part_qty(part)
-	sel.text = "%s   %.3f\"%s" % [str(part.get("label", pid)),
-		LinkageHwLayout.part_axial_length(part),
+	sel.text = "%s · %s%s" % [str(part.get("label", pid)),
+		_mm(LinkageHwLayout.part_axial_length(part)),
 		"  ×%d" % qty if qty > 1 else ""]
 	sel.tooltip_text = "%s · %d/module · $%.2f" % [str(part.get("type", "")),
 		int(part.get("perModule", 0)), float(part.get("cost", 0.0))]
@@ -1020,12 +1026,12 @@ func _update_readout() -> void:
 	var gap := LinkageHwLayout.assembly_sandwich_gap(asm)
 	var lines: Array = []
 	lines.append("[b]%s[/b]" % str(asm.get("label", _active_id)))
-	lines.append("Sandwich gap  [b]%.4f\"[/b]" % gap)
+	lines.append("Sandwich gap  [b]%s[/b]" % _mm(gap))
 	if params.show_hardware_full_detail:
 		var sp := LinkageHardwareSpacing.resolve(params)
 		if not sp.is_empty():
-			lines.append("→ V stack gap  [b]%.4f\"[/b]" % float(sp["v_stack_gap"]))
-			lines.append("→ H stack gap  [b]%.4f\"[/b]" % float(sp["h_stack_gap"]))
+			lines.append("→ V stack gap  [b]%s[/b]" % _mm(float(sp["v_stack_gap"])))
+			lines.append("→ H stack gap  [b]%s[/b]" % _mm(float(sp["h_stack_gap"])))
 			var br: Dictionary = sp.get("bracket", {})
 			if not br.is_empty():
 				lines.append("→ bracket %.2f x %.2f x %.2f\"" % [
@@ -1046,9 +1052,9 @@ func _update_readout() -> void:
 		if not part.is_empty():
 			lines.append("")
 			lines.append("[b]Selected[/b] %s" % str(part.get("label", _selected)))
-			lines.append("axis %s · seq %d · offset %.3f\"" % [
+			lines.append("axis %s · seq %d · offset %s" % [
 				str(part.get("axis", "")), int(part.get("seq", 0)),
-				float(part.get("posAssembled", 0.0))])
+				_mm(float(part.get("posAssembled", 0.0)))])
 	_readout.text = "\n".join(lines)
 
 
@@ -1525,6 +1531,13 @@ func _renumber(asm: Dictionary, axis: String) -> void:
 	var ordered := LinkageHardware.parts_on_axis(asm, axis)
 	for i in ordered.size():
 		(ordered[i] as Dictionary)["seq"] = i
+
+
+## A hardware length for the screen: the editor works in inches to the
+## thousandth (a washer is 0.063"), which reads as raw data; millimetres to
+## a tenth say the same thing.
+func _mm(inches: float) -> String:
+	return UiText.num(inches * 25.4, "mm", 3)
 
 
 func _short_label(id: String) -> String:

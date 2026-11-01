@@ -1,23 +1,17 @@
 extends Control
 
 ## StarShade-specific editor — swap design (catalog family), edit panel/watts
-## specs, and re-seed the system graph via StarShadeGraphSeeder.
+## specs, and re-seed the system graph via StarShadeGraphSeeder. A ModalFrame
+## form (the kit's dialog shape): FormRows in the body, Apply / Re-seed /
+## Close in the footer, the NPC space tag row under them.
 
 const MODAL_NAME := "starshade_edit"
-
-const C_BG := Color(0.039, 0.055, 0.098, 0.85)
-const C_PANEL := Color(0.082, 0.114, 0.208, 1.0)
-const C_BORDER := Color(0.227, 0.290, 0.420, 1.0)
-const C_PRIMARY := Color(0.133, 0.827, 0.933, 1.0)
-const C_TEXT := Color(0.886, 0.910, 0.941, 1.0)
-const C_TEXT_S := Color(0.580, 0.639, 0.722, 1.0)
 
 var _loader: Node = null
 var _prop_id: String = ""
 var _space_row: NpcSpaceTagRow
 var _active := false
-var _dim: ColorRect = null
-var _panel: PanelContainer = null
+var _frame: ModalFrame = null
 var _design_opt: OptionButton = null
 var _designs: Array = []
 var _count_spin: SpinBox = null
@@ -52,133 +46,57 @@ func close() -> void:
 		return
 	_active = false
 	visible = false
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	CursorController.release_modal(MODAL_NAME)
+	_frame.close()
 	_prop_id = ""
 
 
 func _activate() -> void:
 	_active = true
 	visible = true
-	mouse_filter = Control.MOUSE_FILTER_STOP
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	_frame.open()
 
 
 func _build_ui() -> void:
-	_dim = ColorRect.new()
-	_dim.color = C_BG
-	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_dim.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and (e as InputEventMouseButton).pressed:
-			close())
-	add_child(_dim)
+	_frame = ModalFrame.create("StarShade", "swap the design, set the PV specs, re-seed the graph",
+		Vector2(560, 440), MODAL_NAME)
+	add_child(_frame)
+	_frame.closed.connect(close)
+	var body := _frame.body
+	body.add_theme_constant_override("separation", UITheme.SPACE_XS)
 
-	_panel = PanelContainer.new()
-	_panel.custom_minimum_size = Vector2(420, 320)
-	_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = C_PANEL
-	sb.border_color = C_BORDER
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 16
-	sb.content_margin_right = 16
-	sb.content_margin_top = 14
-	sb.content_margin_bottom = 14
-	_panel.add_theme_stylebox_override("panel", sb)
-	add_child(_panel)
-	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
-
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	_panel.add_child(v)
-
-	var title := Label.new()
-	title.text = "StarShade Editor"
-	title.add_theme_color_override("font_color", C_TEXT)
-	title.add_theme_font_size_override("font_size", 18)
-	v.add_child(title)
-
-	var hint := Label.new()
-	hint.text = "Swap design, set PV specs, then re-seed the system graph."
-	hint.add_theme_color_override("font_color", C_TEXT_S)
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(hint)
-
-	v.add_child(_labeled_row("Design", func() -> Control:
-		_design_opt = OptionButton.new()
-		_design_opt.focus_mode = Control.FOCUS_NONE
-		_design_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		return _design_opt))
-
-	v.add_child(_labeled_row("Panel count", func() -> Control:
-		_count_spin = SpinBox.new()
-		_count_spin.min_value = 1
-		_count_spin.max_value = 48
-		_count_spin.step = 1
-		_count_spin.value = StarShadeGraphSeeder.DEFAULT_PANEL_COUNT
-		_count_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		return _count_spin))
-
-	v.add_child(_labeled_row("Watts / panel", func() -> Control:
-		_watts_spin = SpinBox.new()
-		_watts_spin.min_value = 50
-		_watts_spin.max_value = 600
-		_watts_spin.step = 10
-		_watts_spin.value = StarShadeGraphSeeder.DEFAULT_PANEL_WATTS
-		_watts_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		return _watts_spin))
+	_design_opt = OptionButton.new()
+	_design_opt.focus_mode = Control.FOCUS_NONE
+	body.add_child(FormRow.make("Design", _design_opt, "The StarShade model family this prop is built from",
+		"", "starshade_design"))
+	var count_row := FormRow.spin("Panel count", 1, 48, 1, "", Callable(),
+		"How many PV panels the graph seeds for this structure", "panel_count")
+	_count_spin = count_row.control as SpinBox
+	_count_spin.value = StarShadeGraphSeeder.DEFAULT_PANEL_COUNT
+	body.add_child(count_row)
+	var watts_row := FormRow.spin("Watts per panel", 50, 600, 10, "W", Callable(),
+		"Each panel's nameplate", "panel_watts")
+	_watts_spin = watts_row.control as SpinBox
+	_watts_spin.value = StarShadeGraphSeeder.DEFAULT_PANEL_WATTS
+	body.add_child(watts_row)
 
 	_status = Label.new()
-	_status.add_theme_color_override("font_color", C_TEXT_S)
-	_status.add_theme_font_size_override("font_size", 11)
+	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	v.add_child(_status)
+	body.add_child(_status)
 
 	# StarShades route here instead of the generic prop drawer, so without this
 	# row they would be the one kind of prop that can never be tagged as an NPC
 	# space (see npc_space_tag_row.gd).
+	body.add_child(SectionHeader.make("People", "", "a space they walk to"))
 	_space_row = NpcSpaceTagRow.new()
-	v.add_child(_space_row)
+	body.add_child(_space_row)
 
-	var btns := HBoxContainer.new()
-	btns.add_theme_constant_override("separation", 8)
-	btns.alignment = BoxContainer.ALIGNMENT_END
-	v.add_child(btns)
-
-	var apply_design := Button.new()
-	apply_design.text = "Apply design"
-	apply_design.focus_mode = Control.FOCUS_NONE
-	apply_design.pressed.connect(_on_apply_design)
-	btns.add_child(apply_design)
-
-	var reseed := Button.new()
-	reseed.text = "Re-seed graph"
-	reseed.focus_mode = Control.FOCUS_NONE
-	reseed.add_theme_color_override("font_color", C_PRIMARY)
-	reseed.pressed.connect(_on_reseed)
-	btns.add_child(reseed)
-
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.focus_mode = Control.FOCUS_NONE
-	close_btn.pressed.connect(close)
-	btns.add_child(close_btn)
-
-
-func _labeled_row(label: String, make_ctl: Callable) -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	var lbl := Label.new()
-	lbl.text = label
-	lbl.custom_minimum_size.x = 110
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	row.add_child(lbl)
-	row.add_child(make_ctl.call())
-	return row
+	_frame.add_button("Apply design", ModalFrame.SECONDARY, _on_apply_design,
+		"Rebuild the prop with the chosen design and specs")
+	_frame.add_button("Re-seed graph", ModalFrame.PRIMARY, _on_reseed,
+		"Apply, then replace the structure's panels on the graph")
+	_frame.add_button("Close", ModalFrame.SECONDARY, close)
 
 
 func _refresh_designs() -> void:
@@ -210,7 +128,7 @@ func _load_from_prop() -> void:
 		solar = (rec.get("record_extra", {}) as Dictionary).get("solar", {}) as Dictionary
 	_count_spin.value = int(solar.get("panelCount", StarShadeGraphSeeder.DEFAULT_PANEL_COUNT))
 	_watts_spin.value = float(solar.get("panelWatts", StarShadeGraphSeeder.DEFAULT_PANEL_WATTS))
-	_status.text = "Prop %s" % _prop_id
+	_status.text = "%s on the graph" % UiText.count(int(_count_spin.value), "panel")
 
 
 func _on_apply_design() -> void:
@@ -232,7 +150,7 @@ func _on_apply_design() -> void:
 	})
 	if _loader.has_method("rebuild_placed_props"):
 		_loader.call("rebuild_placed_props")
-	_status.text = "Design set to %s" % mid
+	_status.text = "Design set to %s" % str((_designs[idx] as Dictionary).get("label", mid))
 
 
 func _on_reseed() -> void:
@@ -258,6 +176,6 @@ func _on_reseed() -> void:
 			sgv.call("_sync_solar_ui_from_graph")
 		if sgv.has_method("_schedule_graph_autosave"):
 			sgv.call("_schedule_graph_autosave")
-		_status.text = "Re-seeded graph: %d × %.0f W" % [n, w]
+		_status.text = "Re-seeded the graph: %s × %s" % [UiText.count(n, "panel"), UiText.num(w, "W")]
 	else:
 		_status.text = "Re-seed failed"

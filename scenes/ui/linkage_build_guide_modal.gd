@@ -167,10 +167,16 @@ func _build_topbar() -> Control:
 	bar.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	wrap.add_child(bar)
 
+	var icon := TextureRect.new()
+	icon.texture = UiIcons.icon("list", 18)
+	icon.modulate = UITheme.C_PRIMARY
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	bar.add_child(icon)
 	var title := Label.new()
-	title.text = "📋  BUILD GUIDE"
-	title.add_theme_color_override("font_color", C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	title.text = "Build guide"
+	title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	title.add_theme_font_override("font", UITheme.font("semibold"))
+	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	bar.add_child(title)
 
 	var spacer := Control.new()
@@ -180,8 +186,8 @@ func _build_topbar() -> Control:
 	_unit_btn = _bar_btn("Units: in / kg", _on_toggle_units)
 	_unit_btn.tooltip_text = "Switch lengths between inches and millimetres. Mass is metric either way — see the footnote."
 	bar.add_child(_unit_btn)
-	bar.add_child(_bar_btn("📊 Export CSV", _on_export_csv))
-	bar.add_child(_bar_btn("💾 Export JSON", _on_export_json))
+	bar.add_child(IconButton.make("download", "Write the bill of materials as a CSV file", _on_export_csv, "Export CSV"))
+	bar.add_child(IconButton.make("download", "Write the whole guide as a JSON file", _on_export_json, "Export JSON"))
 	bar.add_child(IconButton.close(close))
 	return wrap
 
