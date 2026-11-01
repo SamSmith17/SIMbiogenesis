@@ -930,7 +930,10 @@ func _add_graph_row(rec: Dictionary) -> void:
 	var res := _layer().resolved(rec)
 	var watts := PlacedLightService.estimate_watts(_main, rec, res)
 	if gid.is_empty():
-		_label(row, "Not a load (~%.0f W if added)" % watts, UITheme.C_TEXT_M, UITheme.FONT_XS) \
+		# With a battery on the site a light that is not a load is lit for free.
+		var free := PlacedLightPower.graph_has_power_hardware()
+		_label(row, ("Lit for free — not a load (~%.0f W)" if free else "Not a load (~%.0f W if added)") % watts,
+			UITheme.C_AMBER if free else UITheme.C_TEXT_M, UITheme.FONT_XS) \
 			.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_small_btn(row, "Add to graph", "Track it as an AC load; it then lights only when the graph item is on and AC is available",
 			func() -> void:

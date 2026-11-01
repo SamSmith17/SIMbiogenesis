@@ -10,7 +10,7 @@ extends SceneTree
 ## greywater loop closes). Offline. Carries EXPECTED_CHECKS; --import first.
 ##   godot --headless --path . --script core/population/camp_flow_meter_selftest.gd
 
-const EXPECTED_CHECKS := 18
+const EXPECTED_CHECKS := 22
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 var _failures := 0
@@ -117,3 +117,27 @@ func _test_closure() -> void:
 	_check("closure: greywater is closed now", float((sc2["kinds"] as Dictionary).get("greywater", 0.0)) >= 0.999,
 		str(sc2["kinds"]))
 	_check("closure: and water partly", float((sc2["kinds"] as Dictionary).get("water", 0.0)) > 0.0)
+	# Food has a closer now: a vegetable bed lands inside the camp, drinks
+	# from its water store and crops into its FOOD store (the port carries
+	# food, not biomass).
+	_check("closure: food has closers", not (CampLoopClosure.CLOSERS["food"] as Array).is_empty())
+	var bed := CampLoopClosure.apply(model, cid, "Vegetable Bed (10 m²)")
+	_check("closure: the vegetable bed lands inside the camp", not bed.is_empty()
+		and str(model.get_item(bed).get("scope_id", "")) == scope)
+	var bed_water := false
+	var bed_food := false
+	for c2 in model.get_connections_in_scope(scope):
+		var cd2: Dictionary = c2
+		if str(cd2.get("target", "")) == bed and str(cd2.get("resource_type", "")) == "water":
+			bed_water = true
+		if str(cd2.get("source", "")) == bed and str(cd2.get("resource_type", "")) == "food":
+			bed_food = true
+	_check("closure: the bed is wired from water and into the food store", bed_water and bed_food)
+	var bed_ports := GraphPortService.resolved_handles(model.get_item(bed),
+		{"plant": [{"id": "water_in", "polarity": "resource", "resource_kind": "water"},
+			{"id": "biomass_out", "polarity": "resource", "resource_kind": "biomass"}]})
+	var food_port := false
+	for h in bed_ports:
+		if str((h as Dictionary).get("id", "")) == "biomass_out" and str((h as Dictionary).get("resource_kind", "")) == "food":
+			food_port = true
+	_check("closure: the bed's output port carries food", food_port)

@@ -14,7 +14,10 @@ extends RefCounted
 const DC_KINDS := ["dc_electricity"]
 
 
-static func compute(items: Array, solar: Dictionary) -> Dictionary:
+## `extra` (optional): graph_usd (GraphModel.total_cost()), placed_usd /
+## placed_priced / placed_unpriced (SiteCost.placed_total over the placed
+## props) — the site's cost rows.
+static func compute(items: Array, solar: Dictionary, extra: Dictionary = {}) -> Dictionary:
 	var gens: Array = []
 	var hydro_kw := 0.0
 	for it_v in items:
@@ -95,7 +98,14 @@ static func compute(items: Array, solar: Dictionary) -> Dictionary:
 			"draw_lph": draw, "net_lph": net_l,
 			"hours_to_full": to_full, "hours_to_empty": to_low,
 			"spill_to": str(ps.get("spill_outlet_id", ""))})
-	return {"energy": energy, "ponds": ponds}
+	var cost := {}
+	if not extra.is_empty():
+		cost = {"graph_usd": maxf(float(extra.get("graph_usd", 0.0)), 0.0),
+			"placed_usd": maxf(float(extra.get("placed_usd", 0.0)), 0.0),
+			"placed_priced": int(extra.get("placed_priced", 0)),
+			"placed_unpriced": int(extra.get("placed_unpriced", 0))}
+		cost["total_usd"] = float(cost["graph_usd"]) + float(cost["placed_usd"])
+	return {"energy": energy, "ponds": ponds, "cost": cost}
 
 
 ## Compact human durations: "40 min", "6.5 h", "3.2 d", "—" for never.
@@ -167,6 +177,15 @@ static func rows(b: Dictionary) -> Array:
 					fmt_hours(float(p.get("hours_to_full", INF)))], "tone": "ok"})
 		elif nl < -1.0:
 			out.append({"t": "kv", "k": "Falling", "v": "%s m³/h" % UiText.num(-nl / 1000.0), "tone": "muted"})
+	var c: Dictionary = b.get("cost", {}) as Dictionary
+	if not c.is_empty() and (float(c.get("total_usd", 0.0)) > 0.5 or int(c.get("placed_unpriced", 0)) > 0):
+		out.append({"t": "sub", "text": "Cost"})
+		out.append({"t": "kv", "k": "Graph components", "v": SiteCost.format_usd(float(c.get("graph_usd", 0.0))), "tone": "muted"})
+		var pv := SiteCost.format_usd(float(c.get("placed_usd", 0.0)))
+		if int(c.get("placed_unpriced", 0)) > 0:
+			pv += " · %s unpriced" % UiText.count(int(c.get("placed_unpriced", 0)), "structure")
+		out.append({"t": "kv", "k": "Placed structures", "v": pv, "tone": "muted"})
+		out.append({"t": "kv", "k": "Site total", "v": SiteCost.format_usd(float(c.get("total_usd", 0.0))), "tone": "ok"})
 	return out
 
 

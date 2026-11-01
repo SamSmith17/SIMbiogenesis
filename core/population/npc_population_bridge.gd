@@ -3454,7 +3454,8 @@ func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
 	var board := engine.chore_board
 	if board == null or model == null:
 		return
-	for item in model.get_items_in_scope("root"):
+	# Every scope: a machine inside a camp compound waits for hands too.
+	for item in GraphNesting.walk_items(model, "root"):
 		var d: Dictionary = item
 		var specs: Dictionary = d.get("specs", {})
 		if not bool(specs.get("recipe_waiting_chore", false)):

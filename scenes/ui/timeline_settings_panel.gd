@@ -1476,6 +1476,10 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	v.add_child(loss_hint)
 	_conduits_3d_visible = _add_check(v, "Show 3D wires (world)", _on_conduits_3d_visible)
 	_conduit_flow_glow = _add_check(v, "Flow glow on 3D wires", _on_conduit_flow_glow)
+	var lights_chk := _add_check(v, "New lights join the graph as loads", func(on: bool) -> void:
+		PlacedLightService.set_lights_join_graph(on))
+	lights_chk.set_pressed_no_signal(PlacedLightService.lights_join_graph())
+	lights_chk.tooltip_text = "A light placed in the Light Studio (J) becomes an AC load on the graph when the site has a controller or battery; off, it is lit for free until you add it yourself."
 	var len_chk := _add_check(v, "Show run lengths on 3D wires", func(on: bool) -> void:
 		RunLengthLabels.set_enabled(on)
 		var mn := SimSettingsController.main_node if is_instance_valid(SimSettingsController) else null

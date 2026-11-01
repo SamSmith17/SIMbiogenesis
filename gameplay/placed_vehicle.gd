@@ -135,6 +135,11 @@ var _dy := 0.0
 var _last_pos := Vector3.ZERO
 var _record_accum := 0.0
 var _charge_accum := 0.0
+## Watts the charger draws right now (0 parked-full, driving, or with the
+## graph's AC off). GraphAcLoad reads it through the load's scene_device_path.
+var _charging_w := 0.0
+var _load_gid := ""
+var _load_gid_accum := 9.0
 var _area: Area3D = null
 var _freeing_for_handover := false
 
@@ -159,6 +164,41 @@ func setup(prop: Node3D, model: Node3D, rec: Dictionary, pid: String) -> void:
 	wh_per_mile = float(profile.get("wh_per_mile", 0.0))
 	battery_wh = clampf(float(rec.get("vehicle_battery_wh", battery_capacity_wh)), 0.0, battery_capacity_wh)
 	distance_traveled_meters = float(rec.get("vehicle_odo_m", 0.0))
+	_load_gid = str(rec.get("graph_item_id", ""))
+	if battery_capacity_wh > 0.0 and float(profile.get("charge_w", 0.0)) > 0.0:
+		call_deferred("_ensure_graph_load")
+
+
+## An electric vehicle's charger is an AC load on the graph (an appliance
+## bound to this prop, drawing what the charger draws), made once on
+## placement; without a graph it keeps charging for free, as before.
+func _ensure_graph_load() -> void:
+	if not _load_gid.is_empty() or _prop == null or prop_id.is_empty():
+		return
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("add_placed_vehicle_load"):
+		return
+	var gid := str(gv.call("add_placed_vehicle_load", prop_id, display_name,
+		float(profile.get("charge_w", 0.0)), str(get_path()), _prop.global_position))
+	if gid.is_empty():
+		return
+	_load_gid = gid
+	var main := _main()
+	if main != null:
+		PlacedPropService.update_prop_record(main, prop_id, {"graph_item_id": gid}, false)
+
+
+## What the charger draws right now, for the graph's AC load.
+func get_current_power() -> float:
+	return _charging_w
+
+
+## With a graph load the charger runs only while that load is on and the
+## site's AC is up (the same rule a placed light follows).
+func _charger_powered() -> bool:
+	if _load_gid.is_empty():
+		return true
+	return PlacedLightPower.graph_item_on(_load_gid) and PlacedLightPower.ac_available(_main())
 
 
 func _ready() -> void:
@@ -242,12 +282,22 @@ func _perf_tick(delta: float) -> void:
 			_patch_record(false)
 	elif battery_capacity_wh > 0.0 and battery_wh < battery_capacity_wh:
 		# Parked: on the charger at camp. Sim time, so a fast clock charges fast.
-		var hours := delta * _time_scale()
-		battery_wh = minf(battery_wh + float(profile.get("charge_w", 0.0)) * hours, battery_capacity_wh)
-		_charge_accum += hours
-		if _charge_accum >= 0.25:
-			_charge_accum = 0.0
-			_patch_record(false)
+		_load_gid_accum += delta
+		if _load_gid_accum >= 3.0:
+			_load_gid_accum = 0.0
+			_load_gid = str(_record().get("graph_item_id", _load_gid))
+		if _charger_powered():
+			var hours := delta * _time_scale()
+			_charging_w = float(profile.get("charge_w", 0.0))
+			battery_wh = minf(battery_wh + _charging_w * hours, battery_capacity_wh)
+			_charge_accum += hours
+			if _charge_accum >= 0.25:
+				_charge_accum = 0.0
+				_patch_record(false)
+		else:
+			_charging_w = 0.0
+	else:
+		_charging_w = 0.0
 
 
 func _time_scale() -> float:

@@ -578,6 +578,22 @@ static func store_rows(items: Array) -> Array:
 ## The whole site's energy + water balance right now (SiteBalance): each
 ## generator by name, make vs use, how long the battery lasts, and each pond's
 ## inflows / outflows / spill.
+## The site's cost for SiteBalance: the graph's own total + every placed
+## structure's bill of materials (SiteCost caches the solves).
+func _cost_extra(model: GraphModel) -> Dictionary:
+	var out := {"graph_usd": model.total_cost()}
+	var main: Node = null
+	if _graph_view != null and _graph_view.has_method("_get_scene_main_node"):
+		main = _graph_view.call("_get_scene_main_node") as Node
+	var loader: Node = main.find_child("TerrainLoader", true, false) if main != null else null
+	if loader != null and loader.has_method("placed_prop_records"):
+		var pt := SiteCost.placed_total(loader.call("placed_prop_records"))
+		out["placed_usd"] = pt["usd"]
+		out["placed_priced"] = pt["priced"]
+		out["placed_unpriced"] = pt["unpriced"]
+	return out
+
+
 func _refresh_balance() -> void:
 	if _balance_vbox == null:
 		return
@@ -601,7 +617,7 @@ func _refresh_balance() -> void:
 		snap["demand_kw"] = GraphAcLoad.demand_watts(model) / 1000.0
 	var rows: Array = []
 	if model != null:
-		rows = SiteBalance.rows(SiteBalance.compute(GraphNesting.walk_items(model, "root"), snap))
+		rows = SiteBalance.rows(SiteBalance.compute(GraphNesting.walk_items(model, "root"), snap, _cost_extra(model)))
 		# The forward projection runs the REAL site's loads and weather — in
 		# the bootcamp sandbox it described a world the player is not in.
 		var proj := [] if _sandboxed() else _projection_lines(su, snap)

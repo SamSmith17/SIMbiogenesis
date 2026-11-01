@@ -7447,6 +7447,35 @@ func set_imported_array_stowed(tag: String, stowed: bool) -> bool:
 	return changed
 
 
+## A designed (Solar designer) array's MPPT compounds, stowed or not — the
+## PvLab counterpart of set_imported_array_stowed (a packed rack makes no
+## power; its panels take the flag through propagate_state).
+func set_designed_array_stowed(tag: String, stowed: bool) -> bool:
+	if model == null or tag.is_empty():
+		return false
+	var changed := false
+	for it in model.items:
+		if not (it is Dictionary):
+			continue
+		var specs0: Dictionary = (it as Dictionary).get("specs", {})
+		if str(specs0.get("compound_kind", "")) != GraphPvLabArrays.KIND \
+				or str(specs0.get("pvlab_tag", "")) != tag:
+			continue
+		if bool(specs0.get("array_stowed", false)) == stowed:
+			continue
+		specs0 = specs0.duplicate(true)
+		specs0["array_stowed"] = stowed
+		model.update_item(str((it as Dictionary).get("id", "")), {"specs": specs0})
+		GraphSolarArrays.propagate_state(model, str((it as Dictionary).get("id", "")))
+		changed = true
+	if changed:
+		_sync_solar_ui_from_graph()
+		_schedule_graph_autosave()
+		if _graph_canvas != null:
+			_graph_canvas.queue_redraw()
+	return changed
+
+
 ## True if an imported solar array with this tag is on the graph.
 func has_array_with_tag(tag: String) -> bool:
 	if model == null or tag.is_empty():
@@ -9793,6 +9822,64 @@ func remove_placed_light_load(light_id: String) -> void:
 	_schedule_graph_autosave()
 	_autosave_pending = true
 	_flush_graph_autosave()
+
+
+## An electric vehicle's charger as an AC load bound to its prop: an
+## appliance whose scene_device_path is the PlacedVehicle node, so
+## GraphAcLoad bills what the charger draws right now (0 once the battery is
+## full). Idempotent per prop; deleting the prop removes it with every other
+## item bound to it.
+func add_placed_vehicle_load(prop_id: String, label: String, watts: float,
+		node_path: String, world_pos: Vector3) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	var existing := placed_vehicle_item_id(prop_id)
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(Vector2(world_pos.x, world_pos.z),
+			soi.call("world_center") as Vector3)
+	var specs := {
+		"name": "%s charger" % label,
+		"max_watts": maxf(watts, 0.1),
+		"avg_watts": maxf(watts, 0.1),
+		"requested_state": "on",
+		"placed_vehicle_id": prop_id,
+		"bound_prop_id": prop_id,
+		"scene_device_path": node_path,
+	}
+	if not existing.is_empty():
+		var it := model.get_item(existing)
+		var s0: Dictionary = it.get("specs", {})
+		for k in specs.keys():
+			s0[k] = specs[k]
+		_schedule_graph_autosave()
+		return existing
+	var iid := model.generate_item_id()
+	model.add_item({
+		"id": iid,
+		"type": "appliance",
+		"x": 0.0, "y": 0.0,
+		"width": 160.0, "height": 104.0,
+		"scope_id": "root",
+		"site_x_m": site.x,
+		"site_z_m": site.y,
+		"elevation_m": world_pos.y,
+		"specs": specs,
+		"is_virtual": false,
+	})
+	_schedule_graph_autosave()
+	return iid
+
+
+func placed_vehicle_item_id(prop_id: String) -> String:
+	if model == null:
+		return ""
+	for it in model.items:
+		if it is Dictionary and str(((it as Dictionary).get("specs", {}) as Dictionary) \
+				.get("placed_vehicle_id", "")) == prop_id:
+			return str((it as Dictionary).get("id", ""))
+	return ""
 
 
 func placed_light_item_id(light_id: String) -> String:

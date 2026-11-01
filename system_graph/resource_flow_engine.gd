@@ -907,6 +907,11 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		_process_food_forest(item, specs, net_rates, dt_hours, abs_h)
 		return
 
+	# A plant with an edible share (food_fraction) makes FOOD on its output
+	# port; the rest of the library's plants make biomass (firewood).
+	var food_frac := clampf(float(specs.get("food_fraction", 0.0)), 0.0, 1.0)
+	var out_kind := "food" if food_frac > 0.0 else "biomass"
+	specs["food_kg_h"] = 0.0
 	var ghi := _sun_ghi_wm2()
 	var par := SolarIrradiance.par_wm2_from_ghi(ghi)
 	var area := PlantGrowthScript.effective_area_m2(specs, _soi_area_m2())
@@ -980,13 +985,13 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	var bio_item := _model.get_item(bio_id)
 	var bio_specs: Dictionary = (bio_item.get("specs", {}) as Dictionary).duplicate(true)
 	_rk.migrate_resource_specs(bio_specs)
-	if ResourceKinds.normalize_kind(str(bio_specs.get("resource_kind", ""))) != "biomass":
-		# Allow any tank but prefer biomass; still credit if kind mismatches
-		# only when the tank is biomass (strict).
+	if ResourceKinds.normalize_kind(str(bio_specs.get("resource_kind", ""))) != out_kind:
+		# Strict: the output tank must hold what the plant makes (a food
+		# store for a vegetable bed, a biomass store for everything else).
 		specs["biomass_kg_h"] = 0.0
-		specs["display_value"] = "need biomass tank"
+		specs["display_value"] = "need %s tank" % out_kind
 		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
-				GraphNodeState.REASON_OUTPUT_UNWIRED, ["biomass"])
+				GraphNodeState.REASON_OUTPUT_UNWIRED, [out_kind])
 		_model.update_item(iid, {"specs": specs})
 		return
 	var bio_tl: ResourceTimeline = _timelines.get(bio_id) as ResourceTimeline
@@ -1007,6 +1012,8 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 
 	var rate := PlantGrowthScript.biomass_kg_per_hour(
 			par, area, lue, month, water_factor, nutrient_factor, sun_f)
+	if out_kind == "food":
+		rate *= food_frac   # the edible share of what grew
 	# Cap by remaining biomass headroom so we don't overflow.
 	if not _tank_is_unlimited(bio_specs) and dt_hours > 0.001:
 		var lvl: float = bio_tl.level_at(abs_h) if bio_tl != null else float(bio_specs.get("level", 0.0))
@@ -1051,9 +1058,10 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 			# Radiant wire is informational — animate at PAR×area (kW of PAR).
 			_cache_conn_flow(str(conn.get("id", "")), par * area / 1000.0, "sunlight")
 	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
-		_cache_conn_flow(str(conn.get("id", "")), rate, "biomass")
+		_cache_conn_flow(str(conn.get("id", "")), rate, out_kind)
 
 	specs["biomass_kg_h"] = rate
+	specs["food_kg_h"] = rate if out_kind == "food" else 0.0
 	specs["water_lph"] = water_lph
 	specs["nutrient_kgph"] = nut_kgph
 	if rate >= 0.01:

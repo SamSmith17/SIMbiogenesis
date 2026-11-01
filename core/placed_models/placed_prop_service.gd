@@ -50,23 +50,17 @@ static func placement_prop_id() -> String:
 	return _placement_prop_id
 
 
+## Place near the player (or at an offset): the same record + post-placement
+## hooks as place_model_at_xz — a bed, dome, firepit or rack placed this way
+## is tagged / bound exactly as one placed through the ghost. (It used to
+## skip every hook but the StarShade seed, so a harness-placed dome was no
+## shelter and a harness-placed rack had no graph array.)
 static func place_model(main: Node, model_id: String, near_player: bool = true,
 		offset_xz: Vector2 = Vector2.ZERO) -> Dictionary:
 	if main == null or model_id.is_empty():
 		return {"ok": false, "error": "Missing main or model_id"}
 	var xz := TerrainSurfaceQuery.placement_xz(main, near_player, offset_xz)
-	var gy := TerrainSurfaceQuery.ground_height_at(main, xz.x, xz.y)
-	var layer := _layer_for_main(main)
-	if layer == null:
-		return {"ok": false, "error": "Could not resolve placed-prop layer"}
-	var prop_id := layer.add_free_prop(model_id, xz.x, NAN, xz.y, 0.0, 0.0, 0.0, 1.0, gy)
-	if prop_id.is_empty():
-		return {"ok": false, "error": "Failed to add prop record"}
-	_save_layer(main, layer)
-	_rebuild_scene_props(main, layer)
-	if ModelCatalog.is_starshade_model(model_id):
-		_trigger_starshade_graph_seed(main, {}, prop_id)
-	return {"ok": true, "prop_id": prop_id, "x": xz.x, "z": xz.y, "ground_y": gy}
+	return place_model_at_xz(main, model_id, xz.x, xz.y)
 
 
 static func place_model_at_hit(main: Node, model_id: String, hit: Dictionary) -> Dictionary:
@@ -101,6 +95,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == DomeLabBuilder.MODEL_ID:
+		_auto_tag_dome_space(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		# Bind (or create) its graph array — deferred so the record is settled.
 		var sgv_pv := _system_graph_view(main)
@@ -612,6 +608,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == DomeLabBuilder.MODEL_ID:
+		_auto_tag_dome_space(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		# Bind (or create) its graph array — deferred so the record is settled.
 		var sgv_pv := _system_graph_view(main)
@@ -637,6 +635,21 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 ## deleting the prop is cleaned by prune_dangling on the next save.
 static func _auto_tag_bed_space(main: Node, prop_id: String) -> void:
 	_auto_tag_space(main, prop_id, "sleep", 1, "Bed")
+
+
+## A placed dome is a shelter: it sleeps one person per ~3.5 m² of floor
+## (CampStyles sleeps four in a camp-style geodesic dome), at least one and
+## at most a dozen, so a camp's people route to it with no tagging step.
+static func dome_sleepers(spec: Variant) -> int:
+	var area := 0.0
+	if spec is Dictionary:
+		area = float((DomeLabDesign.solve(spec as Dictionary).get("stats", {}) as Dictionary).get("floor_area_m2", 0.0))
+	return clampi(int(floor(area / 3.5)), 1, 12)
+
+
+static func _auto_tag_dome_space(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	_auto_tag_space(main, prop_id, "sleep", dome_sleepers(rec.get("domelab_spec", null)), "Dome")
 
 
 ## Flat-pack furniture is a place to be: a daybed set flat is somewhere to

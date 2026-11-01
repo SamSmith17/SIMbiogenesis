@@ -373,6 +373,7 @@ static func add_point_light(main: Node, kind: String, pos: Vector3, rot: Vector3
 	var id := layer.add_light(kind, pos, rot, style_for_new(main, kind))
 	if not id.is_empty():
 		refresh_light(main, id)
+		_maybe_join_graph(main, id)
 	return id
 
 
@@ -383,7 +384,33 @@ static func add_string(main: Node, points: Array) -> String:
 	var id := layer.add_string(points, style_for_new(main, "string"))
 	if not id.is_empty():
 		refresh_light(main, id)
+		_maybe_join_graph(main, id)
 	return id
+
+
+## New lights join the graph as loads (Settings → Gameplay) whenever the
+## site has power hardware: a light that is not a load is lit for free.
+const UI_PREFS_CFG := "user://ui_prefs.cfg"
+
+
+static func lights_join_graph() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(UI_PREFS_CFG) != OK:
+		return true
+	return bool(cfg.get_value("lights", "join_graph", true))
+
+
+static func set_lights_join_graph(on: bool) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(UI_PREFS_CFG)
+	cfg.set_value("lights", "join_graph", on)
+	cfg.save(UI_PREFS_CFG)
+
+
+static func _maybe_join_graph(main: Node, id: String) -> void:
+	if not lights_join_graph() or not PlacedLightPower.graph_has_power_hardware():
+		return
+	add_to_graph(main, id)
 
 
 static func delete_ids(main: Node, ids: Array) -> void:

@@ -53,6 +53,7 @@ var _hover: Dictionary = {}   # canvas instance id -> month/sector idx
 
 var _builder: SiteReportBuilder = null
 var _packing_stat: RichTextLabel = null
+var _site_now_stat: RichTextLabel = null
 var _data: SiteReportData = null
 var _building: bool = false
 var _waiting_weather: bool = false
@@ -307,6 +308,27 @@ func _build_cards(parent: VBoxContainer) -> void:
 	lab_btn.pressed.connect(_open_packing_lab)
 	pack_vb.add_child(lab_btn)
 
+	# The site as it stands: people and camps, the ponds, labour, cost —
+	# everything the year-round charts above do not carry. Live at populate
+	# time, like the packing card.
+	var row6 := HBoxContainer.new()
+	row6.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(row6)
+	var now_card := PanelContainer.new()
+	now_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	now_card.add_theme_stylebox_override("panel", UITheme.card_style())
+	row6.add_child(now_card)
+	var now_vb := VBoxContainer.new()
+	now_vb.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	now_card.add_child(now_vb)
+	var now_title := Label.new()
+	now_title.text = "🏕 The site now — people, water, labour, cost"
+	now_title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	now_title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	now_vb.add_child(now_title)
+	_site_now_stat = _mk_stat()
+	now_vb.add_child(_site_now_stat)
+
 
 func _add_card(parent: Control, title: String, canvas: Control, stat: RichTextLabel,
 		draw_cb: Callable, chart_h: int = 150) -> Control:
@@ -551,6 +573,7 @@ func _on_recompute_pressed() -> void:
 
 func _populate() -> void:
 	_refresh_packing_card()
+	_refresh_site_now_card()
 	if _data == null:
 		return
 	var d := _data
@@ -717,6 +740,83 @@ func _month_at_x(canvas: Control, x: float) -> int:
 ## Live "will it fit" readout — PACKING_PLAN.md Phase 2. Sweeps the graph
 ## (nesting-aware, virtual mirrors skipped) + placed props, resolves packed
 ## specs, and solves against the standard fleet smallest-first.
+func _refresh_site_now_card() -> void:
+	if _site_now_stat == null:
+		return
+	var refs := _resolve_refs()
+	var model: Object = refs["model"]
+	var sgv: Node = refs["sgv"]
+	var main: Node = refs["main"]
+	var muted := UITheme.C_TEXT_M.to_html(false)
+	var lines: Array = []
+	# People and camps.
+	var people := 0
+	var vibe_txt := ""
+	if sgv != null and sgv.has_method("npc_population_bridge"):
+		var bridge: Variant = sgv.call("npc_population_bridge")
+		if bridge != null and bridge.has_method("vibe_summaries"):
+			var vibe: Dictionary = FestivalVibe.compute(bridge.call("vibe_summaries"))
+			people = int(vibe.get("people", 0))
+			if people > 0:
+				vibe_txt = " · mood [b]%s[/b]" % str(vibe.get("label", ""))
+				if float(vibe.get("blocked_share", 0.0)) > 0.0:
+					vibe_txt += " · [color=#%s]%d%% blocked on a need[/color]" % [
+						UITheme.C_WARN.to_html(false), roundi(float(vibe.get("blocked_share", 0.0)) * 100.0)]
+	var camps := 0
+	var camp_people := 0
+	if model != null:
+		var fest: Dictionary = CampLedger.festival(model)
+		camps = (fest.get("camps", []) as Array).size()
+		camp_people = int(fest.get("people", 0))
+	if people > 0 or camps > 0:
+		lines.append("👥 [b]%s[/b] simulated%s · %s (%s planned)" % [UiText.count(people, "person", "people"),
+			vibe_txt, UiText.count(camps, "camp"), UiText.count(camp_people, "person", "people")])
+	else:
+		lines.append("[color=#%s]👥 Nobody is simulated yet — add a Population node or start Festival mode.[/color]" % muted)
+	# Water.
+	if model != null:
+		var bal := SiteBalance.compute(GraphNesting.walk_items(model, "root"), {})
+		var ponds: Array = bal.get("ponds", []) as Array
+		if ponds.is_empty():
+			lines.append("[color=#%s]💧 No pond on the graph.[/color]" % muted)
+		else:
+			var in_lph := 0.0
+			var out_lph := 0.0
+			var spill := 0.0
+			for p_v in ponds:
+				var p: Dictionary = p_v
+				in_lph += float(p.get("stream_lph", 0.0)) + float(p.get("rain_lph", 0.0))
+				out_lph += float(p.get("draw_lph", 0.0))
+				spill += float(p.get("spill_lph", 0.0))
+			lines.append("💧 %s · in [b]%s[/b] m³/h · out [b]%s[/b] m³/h%s" % [UiText.count(ponds.size(), "pond"),
+				UiText.num(in_lph / 1000.0), UiText.num(out_lph / 1000.0),
+				(" · spilling %s m³/h" % UiText.num(spill / 1000.0)) if spill > 1.0 else ""])
+	# Labour.
+	var loader: Node = main.find_child("TerrainLoader", true, false) if main != null else null
+	if loader != null and loader.has_method("get_chore_ledger"):
+		var led: Object = loader.call("get_chore_ledger")
+		if led != null:
+			var total := float(led.get("chore_hours_consumed_total"))
+			var ytd := float(led.get("chore_hours_consumed_ytd"))
+			lines.append("🔧 Labour: [b]%s[/b] worked, %s this year%s" % [UiText.duration(total),
+				UiText.duration(ytd),
+				(" · [color=#%s]infinite labour on[/color]" % muted) if bool(led.get("infinite_labor")) else ""])
+	# Cost.
+	var graph_usd := 0.0
+	if model != null and model.has_method("total_cost"):
+		graph_usd = float(model.call("total_cost"))
+	var placed := {"usd": 0.0, "priced": 0, "unpriced": 0}
+	if loader != null and loader.has_method("placed_prop_records"):
+		placed = SiteCost.placed_total(loader.call("placed_prop_records"))
+	var cost_line := "💲 Site cost [b]%s[/b] — graph %s · placed structures %s" % [
+		SiteCost.format_usd(graph_usd + float(placed["usd"])), SiteCost.format_usd(graph_usd),
+		SiteCost.format_usd(float(placed["usd"]))]
+	if int(placed["unpriced"]) > 0:
+		cost_line += " [color=#%s](%s unpriced)[/color]" % [muted, UiText.count(int(placed["unpriced"]), "structure")]
+	lines.append(cost_line)
+	_site_now_stat.text = "\n".join(lines)
+
+
 func _refresh_packing_card() -> void:
 	if _packing_stat == null:
 		return

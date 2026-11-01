@@ -1096,6 +1096,32 @@ const PLANTS: Array = [
 		},
 	},
 	{
+		"type": "plant", "label": "Vegetable Bed (10 m²)", "icon": "🥕",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "Vegetable Bed", "area_m2": 10.0, "use_soi_area": false,
+			"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+			"sunlight_factor": 1.0, "cost": 250.0,
+			# The edible share of the dry biomass the bed grows (a vegetable
+			# crop's harvest index, ~0.5–0.7: Hay & Porter, The Physiology of
+			# Crop Yield, 2006). With it the bed's output port is FOOD and the
+			# flow engine credits a food store, not the firewood pile.
+			"food_fraction": 0.6,
+			"model_id": "grow_bed",
+		},
+	},
+	{
+		"type": "plant", "label": "Market Garden (50 m²)", "icon": "🥕",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "Market Garden", "area_m2": 50.0, "use_soi_area": false,
+			"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+			"sunlight_factor": 1.0, "cost": 600.0,
+			"food_fraction": 0.6,
+			"model_id": "grow_bed",
+		},
+	},
+	{
 		"type": "plant", "label": "SoI Canopy Bed", "icon": "🌳",
 		"width": 160.0, "height": 130.0,
 		"specs": {

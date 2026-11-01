@@ -21,9 +21,9 @@ const WASTE_KINDS: Array = ["greywater", "blackwater"]
 ## The presets that close each loop (ComponentPresets labels), best first.
 const CLOSERS := {
 	"water": ["Greywater Filter", "SoI Rain Catchment"],
-	# Nothing in the library makes FOOD yet: a plant node credits a biomass
-	# tank (ResourceFlowEngine._process_plant), which is the camp's firewood.
-	"food": [],
+	# A plant with a food_fraction credits the camp's FOOD store (the
+	# vegetable beds); a plain plant credits biomass, the camp's firewood.
+	"food": ["Vegetable Bed (10 m²)", "Market Garden (50 m²)"],
 	"biomass": ["Garden Plot (50 m²)"],
 	"greywater": ["Greywater Filter"],
 	"blackwater": ["Compost Digester", "IBC Biodigester"],
@@ -74,7 +74,8 @@ static func score(model, comp_id: String) -> Dictionary:
 		# engine stamps (a garden's biomass_kg_h, a roof's live_capture_lph),
 		# not as an output list.
 		if ty == "plant":
-			local["biomass"] = float(local.get("biomass", 0.0)) + maxf(float(specs.get("biomass_kg_h", 0.0)), 0.0)
+			var out_k := "food" if float(specs.get("food_fraction", 0.0)) > 0.0 else "biomass"
+			local[out_k] = float(local.get(out_k, 0.0)) + maxf(float(specs.get("biomass_kg_h", 0.0)), 0.0)
 		elif ty == "catchment":
 			local["water"] = float(local.get("water", 0.0)) + maxf(float(specs.get("live_capture_lph", 0.0)), 0.0)
 	var kinds: Dictionary = {}
@@ -162,4 +163,14 @@ static func apply(model, comp_id: String, label: String) -> String:
 		if tanks.has(k3):
 			model.add_connection({"scope_id": scope, "source": iid, "source_handle": "res_out_%d" % j,
 				"target": tanks[k3], "target_handle": "input", "polarity": "resource", "resource_type": k3})
+	if str(preset.get("type", "")) == "plant":
+		# A plant's ports are fixed (water_in / biomass_out): water from the
+		# camp's water store, the crop into its food or firewood store.
+		if tanks.has("water"):
+			model.add_connection({"scope_id": scope, "source": tanks["water"], "source_handle": "output",
+				"target": iid, "target_handle": "water_in", "polarity": "resource", "resource_type": "water"})
+		var out_k := "food" if float(specs.get("food_fraction", 0.0)) > 0.0 else "biomass"
+		if tanks.has(out_k):
+			model.add_connection({"scope_id": scope, "source": iid, "source_handle": "biomass_out",
+				"target": tanks[out_k], "target_handle": "input", "polarity": "resource", "resource_type": out_k})
 	return iid

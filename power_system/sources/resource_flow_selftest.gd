@@ -985,6 +985,23 @@ func _test_site_balance() -> void:
 		if str((r_v as Dictionary).get("tone", "")) == "warn":
 			any_warn = true
 	_check("site balance: the uncovered load reads as a warning line", any_warn)
+	# Cost: the graph's own total + the placed structures', with the unpriced
+	# ones counted, as one Cost section of the rows.
+	var bc := SiteBalance.compute(items, {"graph_dc_kw": 0.0}, {"graph_usd": 1200.0, "placed_usd": 3450.0,
+		"placed_priced": 2, "placed_unpriced": 1})
+	_check("site balance: cost total = graph + placed", absf(float(bc["cost"]["total_usd"]) - 4650.0) < 1e-6)
+	var cost_rows := 0
+	for r2 in SiteBalance.rows(bc):
+		var rd: Dictionary = r2
+		if str(rd.get("k", "")) in ["Graph components", "Placed structures", "Site total"]:
+			cost_rows += 1
+		if str(rd.get("k", "")) == "Placed structures":
+			_check("site balance: unpriced structures are named", str(rd.get("v", "")).find("1 structure unpriced") >= 0, str(rd.get("v", "")))
+	_check("site balance: three cost rows", cost_rows == 3)
+	_check("site balance: no cost rows without the extra", (SiteBalance.compute(items, {})["cost"] as Dictionary).is_empty())
+	# SiteCost: a record with no design is unpriced; the sum counts both.
+	var pt := SiteCost.placed_total([{"id": "a", "model_id": "shiftpod"}, {"id": "b", "model_id": "x"}])
+	_check("site cost: records with no bill of materials are unpriced", int(pt["unpriced"]) == 2 and float(pt["usd"]) == 0.0)
 
 
 ## Placed PV array: its facing IS the plane of array (yaw 0 faces south,

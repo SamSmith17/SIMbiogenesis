@@ -51,6 +51,22 @@ static func graph_item_on(gid: String) -> bool:
 	return req != "off"
 
 
+## Does the graph have power hardware at all (a controller or a battery)?
+## A light on a site with none is simply lit; on a site with a battery a
+## light that is not a load is lit for free, which the dock points out.
+static func graph_has_power_hardware() -> bool:
+	var gv := ServiceLocator.graph()
+	if gv == null or not is_instance_valid(gv):
+		return false
+	var model: Variant = gv.get("model")
+	if model == null or not ("items" in model):
+		return false
+	for it in model.get("items"):
+		if it is Dictionary and str((it as Dictionary).get("type", "")) in ["controller", "battery"]:
+			return true
+	return false
+
+
 static func ac_available(main: Node) -> bool:
 	var tree := main.get_tree() if main != null and main.is_inside_tree() else null
 	if tree == null:

@@ -14321,6 +14321,16 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 		if sgv != null and sgv.has_method("set_imported_array_stowed"):
 			var stowed := packed or not bool(rec.get("linkage_deployed", false))
 			sgv.call("set_imported_array_stowed", "linkage_%s" % prop_id, stowed)
+	# Every other per-prop graph array follows the crate: a packed rack,
+	# toroid, placed rack or designed array makes no power.
+	if sgv != null and sgv.has_method("set_imported_array_stowed"):
+		for pair in [["rack_spec", "rack_%s"], ["toroid_spec", "toroid_%s"]]:
+			if rec.get(pair[0]) is Dictionary:
+				sgv.call("set_imported_array_stowed", (pair[1] as String) % prop_id, packed)
+		if str(rec.get("model_id", "")) == PvArrayBuilder.MODEL_ID:
+			sgv.call("set_imported_array_stowed", "pv_%s" % prop_id, packed)
+		if rec.get("pvlab_spec") is Dictionary and sgv.has_method("set_designed_array_stowed"):
+			sgv.call("set_designed_array_stowed", PlacedPropService.pvlab_array_tag(prop_id), packed)
 	# Any prop bound to a graph item: flag/unflag the twin so every producer
 	# gate (renewables/CSP/heliostat ticks, flow-engine processors) sees it.
 	var gid := str(rec.get("graph_item_id", ""))

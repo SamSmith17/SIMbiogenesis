@@ -128,6 +128,16 @@ static func resolved_handles(item: Dictionary, static_handles: Dictionary) -> Ar
 	if itype == "pbi":
 		var kind: String = str(specs.get("resource_kind", "water"))
 		return GraphHubPorts.default_pbi_handles(kind)
+	if itype == "plant" and float(specs.get("food_fraction", 0.0)) > 0.0:
+		# A kitchen garden's product is FOOD: its output port takes a food
+		# store (ResourceFlowEngine._process_plant credits the edible share).
+		var out: Array = []
+		for h in (static_handles.get("plant", []) as Array):
+			var hd: Dictionary = (h as Dictionary).duplicate()
+			if str(hd.get("id", "")) == "biomass_out":
+				hd["resource_kind"] = "food"
+			out.append(hd)
+		return out
 	return static_handles.get(itype, []) as Array
 
 
