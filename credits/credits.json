@@ -1389,19 +1389,20 @@
       "id": "pelton-cup-stl",
       "name": "Pelton turbine cup (STL)",
       "category": "model",
-      "author": null,
-      "source": null,
-      "license": "pending",
+      "author": "hydro",
+      "source": "https://www.thingiverse.com/thing:16628",
+      "license": "CC-BY-SA-3.0",
       "license_file": "",
       "local_path": "assets/hydro/pelton_cup.stl",
       "role": "the cup model every designed Pelton wheel is built from",
-      "attribution_required": null,
-      "share_alike": null,
-      "commercial_ok": null,
+      "attribution_required": true,
+      "attribution_string": "\"Pelton wheel bucket\" by hydro (https://www.thingiverse.com/thing:16628), licensed CC BY-SA",
+      "share_alike": true,
+      "commercial_ok": true,
       "added": "2026-10-28",
       "modifications": "none; scaled uniformly at runtime",
-      "notes": "Supplied by the project owner as pelton_turbine_bucket.stl; origin and licence still to be confirmed.",
-      "status": "pending-verification"
+      "notes": "Thingiverse thing:16628 'Pelton wheel bucket', supplied by the project owner as pelton_turbine_bucket.stl. The page states CC BY-SA without a version; Thingiverse things of that age (2012) carry CC BY-SA 3.0. Share-alike applies to the STL itself and to any adapted copy of it; the designer's cut files (discs, spacer, hub) do not contain the cup geometry.",
+      "status": "verified"
     }
   ],
   "field_guide": {

@@ -269,14 +269,18 @@ origin + license here as it's added (the PBR set
 - **Pelton turbine cup (pelton-cup-stl)** — the one cup model every Pelton
   wheel in the wheel designer is built from (`assets/hydro/pelton_cup.stl`,
   binary STL in millimetres: 79 mm wide split bucket with a single root tab).
-  - Author: unknown (supplied by the project owner as `pelton_turbine_bucket.stl`)
-  - Source: pending — confirm where the file came from (Thingiverse / Printables / own model)
-  - License: pending  ·  Added: 2026-10-28
-  - Attribution required: unknown  ·  Share-alike: unknown  ·  Commercial OK: unknown
+  - Author: hydro ("Pelton wheel bucket"; supplied by the project owner as
+    `pelton_turbine_bucket.stl`)
+  - Source: https://www.thingiverse.com/thing:16628
+  - License: CC-BY-SA-3.0  ·  Added: 2026-10-28
+  - Attribution required: yes  ·  Share-alike: yes  ·  Commercial OK: yes
+  - Attribution: "Pelton wheel bucket" by hydro
+    (https://www.thingiverse.com/thing:16628), licensed CC BY-SA
   - Notes: used unmodified; scaled uniformly in game for larger or smaller cups.
-    If it cannot be redistributed, move it under the gitignored art and the
-    designer falls back to its drawn cup.
-  - Status: pending-verification
+    The Thingiverse page says CC BY-SA without a version; things of that age
+    (2012) carry 3.0. Share-alike covers the STL and any adapted copy of it;
+    the designer's cut files (discs, spacer, hub) do not contain the cup.
+  - Status: verified
 
 - **Ground088** — tiling ground PBR texture set (`assets/materials/ground088/`:
   colour, normal, roughness, AO + the `Ground088_1K-JPG.tres` material), used by
