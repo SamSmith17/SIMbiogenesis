@@ -275,6 +275,8 @@ static func launch(rec: Dictionary, opts: Dictionary = {}) -> Error:
 			ctx.call("set_pending", float(map.get("lat", 0.0)), float(map.get("lon", 0.0)),
 				str(map.get("label", "")), he, has_snap, dhe, ohe, bool(opts.get("force_refetch", false)))
 			ctx.set("terrain_imagery", imagery_record(rec, snap))
+			ctx.set("starter_kit", bool(opts.get("starter", false)))
+			ctx.set("tour_on_load", bool(opts.get("tour", false)))
 	return switch_scene(MapDefinition.resolve_playable_scene_path(scene), rec, cfg)
 
 

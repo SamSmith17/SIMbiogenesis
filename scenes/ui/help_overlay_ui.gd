@@ -10,7 +10,7 @@ extends CanvasLayer
 const _PROMPT_SCRIPT := preload("res://scenes/ui/interaction_prompt_ui.gd")
 
 const _TIPS := [
-	"Press G to open the system graph. Add a Habitat, wire water/food/energy, then start a Challenge (🎯).",
+	"Press G to open the system graph. Add a Habitat, wire water/food/energy, then start a mission (🎯 on the timeline, which shows the running one's progress).",
 	"Press U (or 📦 on the timeline) for the Library — place structures, grow beds, graph nodes, and veg tools.",
 	"Interact with the SoI map pin (O) to open Snowglobe — drag the Radius slider to expand your stewardship volume.",
 	"Needs chips (⚡💧🍎♻) show closure health: ● OK · ▲ warn · ■ critical. Click any chip for System Review.",
@@ -187,6 +187,13 @@ func _build_ui() -> void:
 	title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	title_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	title_row.add_child(title_lbl)
+	var tour_btn := Button.new()
+	tour_btn.text = "Show me around ▶"
+	tour_btn.tooltip_text = "A guided tour of this world's features: title cards, a short demo of each, Esc ends it"
+	tour_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(tour_btn)
+	tour_btn.pressed.connect(_on_tour_pressed)
+	title_row.add_child(tour_btn)
 	var close_btn := IconButton.close(close)
 	title_row.add_child(close_btn)
 
@@ -201,6 +208,13 @@ func _build_ui() -> void:
 	_rows_container.add_theme_constant_override("separation", UITheme.SPACE_MD)
 	_rows_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_rows_container)
+
+
+func _on_tour_pressed() -> void:
+	close()
+	var main := get_tree().current_scene
+	if main != null and main.has_method("start_feature_tour"):
+		main.call("start_feature_tour")
 
 
 func _rebuild_rows() -> void:

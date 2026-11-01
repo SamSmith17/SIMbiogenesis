@@ -55,6 +55,10 @@ var intro_count := 0
 ## UI audit at every hero shot: "off", "report" (findings logged, never a
 ## FAIL) or "strict" (any ERROR finding fails the stop).
 var audit_mode := "report"
+## In-game "Show me around": no harness, Esc ends the tour after the current
+## stop (ui_cancel reaches the director only when no modal took it).
+var live := false
+var _cancelled := false
 
 var captions: TourCaptions = null
 ## The graph view's side panels (dashboard left, library / inspector right)
@@ -114,6 +118,16 @@ var _clear_mc_was := true
 ## frame, so it is held hidden every frame while the tour runs.
 var _prompt: CanvasLayer = null
 var _prompt_was := false
+
+
+func cancel() -> void:
+	_cancelled = true
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if live and not _cancelled and event.is_action_pressed("ui_cancel"):
+		cancel()
+		get_viewport().set_input_as_handled()
 
 
 func _process(delta: float) -> void:
@@ -240,10 +254,12 @@ func run() -> Dictionary:
 		captions.show_full("SIMbiogenesis", "A quick tour of what it can do — %s" % UiText.count(n_intro, "feature"), INTRO_HOLD_S * pace)
 		await _hold((INTRO_HOLD_S + 1.1) * pace)
 	for s0 in chosen:
+		if _cancelled:
+			break
 		await _run_stop(s0 as TourStop)
 	if cards_on and not chosen.is_empty():
 		ctx.refresh_handles()
-		captions.show_full("That's the tour", "SIMbiogenesis · %s · docs/FEATURES.md" % UiText.count(n_intro, "feature"), OUTRO_HOLD_S * pace)
+		captions.show_full("That's the tour" if not _cancelled else "Tour ended", "SIMbiogenesis · %s · docs/FEATURES.md" % UiText.count(n_intro, "feature"), OUTRO_HOLD_S * pace)
 		await _hold((OUTRO_HOLD_S + 1.1) * pace)
 	if _prompt != null and is_instance_valid(_prompt):
 		_prompt.visible = _prompt_was
@@ -323,6 +339,9 @@ func _run_stop(stop: TourStop) -> void:
 		if _clock - t0 > budget:
 			timed_out = true
 			ctx.failures.append("ran past its %.0f s budget" % budget)
+			break
+		if _cancelled:
+			ctx.failures.append("ended by the player")
 			break
 		await get_tree().process_frame
 	if not done[0]:

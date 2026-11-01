@@ -25,6 +25,12 @@ var force_refetch: bool = false
 ## TerrainImageryPlan / TerrainLoader "Per-world imagery"). {} = this computer's
 ## quality with no fallback. Set by WorldSession.launch after set_pending.
 var terrain_imagery: Dictionary = {}
+## "Start here (guided)" on the launch hub: once the map has loaded, seed the
+## starter site (a habitat + tanks + the PBI nodes, PuzzleStarterGraphSeeder)
+## and offer the first mission. Set by WorldSession.launch after set_pending.
+var starter_kit: bool = false
+## "Show me around": run the feature tour on this world once it has loaded.
+var tour_on_load: bool = false
 
 
 func set_pending(lat: float, lon: float, place_label: String,
@@ -40,6 +46,8 @@ func set_pending(lat: float, lon: float, place_label: String,
 	from_resume = resume
 	force_refetch = force_refetch_in
 	terrain_imagery = {}
+	starter_kit = false
+	tour_on_load = false
 	has_pending = true
 
 
@@ -54,10 +62,14 @@ func consume() -> Dictionary:
 		"from_resume": from_resume,
 		"force_refetch": force_refetch,
 		"terrain_imagery": terrain_imagery.duplicate(),
+		"starter_kit": starter_kit,
+		"tour_on_load": tour_on_load,
 		"has_pending": has_pending,
 	}
 	has_pending = false
 	from_resume = false
+	starter_kit = false
+	tour_on_load = false
 	force_refetch = false
 	terrain_imagery = {}
 	return d

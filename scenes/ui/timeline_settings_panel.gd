@@ -187,8 +187,6 @@ var _scenario_opt:   OptionButton = null
 var _opentopo_input: LineEdit     = null
 var _cds_input:      LineEdit     = null
 var _keys_status:    Label        = null
-var _solar_panel_count: HSlider = null
-var _solar_panel_wattage: HSlider = null
 var _solar_panel_tilt: HSlider = null
 var _solar_panel_azimuth: HSlider = null
 var _solar_battery_capacity: HSlider = null
@@ -1346,10 +1344,6 @@ func _build_ha_tab(tabs: TabContainer) -> void:
 
 
 func _sync_solar_from_snapshot(snap: Dictionary) -> void:
-	if _solar_panel_count:
-		_solar_panel_count.value = float(snap.get("panel_count", 18))
-	if _solar_panel_wattage:
-		_solar_panel_wattage.value = float(snap.get("panel_wattage", 220.0))
 	if _solar_panel_tilt:
 		_solar_panel_tilt.value = float(snap.get("panel_tilt", 0.0))
 	if _solar_panel_azimuth:
@@ -1369,18 +1363,6 @@ func _sync_solar_from_snapshot(snap: Dictionary) -> void:
 func _sync_ha_from_snapshot(_snap: Dictionary) -> void:
 	if _ha_tab != null and is_instance_valid(_ha_tab):
 		_ha_tab.call("refresh")
-
-
-func _on_solar_panel_count(v: float) -> void:
-	if _syncing:
-		return
-	SimSettingsController.apply_solar_panel_setting("panel_count", int(v))
-
-
-func _on_solar_panel_wattage(v: float) -> void:
-	if _syncing:
-		return
-	SimSettingsController.apply_solar_panel_setting("panel_wattage", v)
 
 
 func _on_solar_panel_tilt(v: float) -> void:
@@ -1476,6 +1458,13 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Gameplay")
 	_survival        = _add_check(v, "Survival mechanics active", _on_survival)
 	_survival_status = _add_status_label(v, "")
+	var survival_hint := Label.new()
+	survival_hint.text = "Random fires and survival rules run only while time is at or below realtime speed."
+	survival_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	survival_hint.custom_minimum_size = Vector2(420, 0)
+	survival_hint.add_theme_color_override("font_color", C_TEXT_S)
+	survival_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(survival_hint)
 	_plant_growth    = _add_check(v, "Plant growth (vegetation aging)", _on_plant_growth)
 	_connector_losses = _add_check(v, "Connector losses (wire/pipe loss + burnout)", _on_connector_losses)
 	var loss_hint := Label.new()
@@ -1585,14 +1574,6 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	_analemma_thickness = _add_slider(v, "Path thickness", 0.1, 20.0, 0.1, _on_analemma_thickness)
 	_analemma_solar_col = _add_color_picker(v, "Solar path color", _on_analemma_solar_col)
 	_analemma_lunar_col = _add_color_picker(v, "Lunar path color", _on_analemma_lunar_col)
-	
-	var hint := Label.new()
-	hint.text = "Random fires and survival rules when time is at or below realtime speed."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(420, 0)
-	hint.add_theme_color_override("font_color", C_TEXT_S)
-	hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(hint)
 
 
 ## Interface: the UI scale (UiThemeBuilder). Auto boosts small windows, where
@@ -2832,10 +2813,6 @@ func _on_drone_tilt_intensity(v: float) -> void:
 func _on_drone_tilt_speed(v: float) -> void:
 	if _syncing: return
 	SimSettingsController.apply_drone_flight_setting("tilt_speed", v)
-
-func _on_drone_controller_pitch_inverted(on: bool) -> void:
-	if _syncing: return
-	SimSettingsController.apply_drone_bool_setting("controller_pitch_inverted", on)
 
 func _on_cirrus_amount(v: float) -> void:
 	if _syncing: return

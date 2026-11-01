@@ -85,6 +85,8 @@ var _nw_warn_lbl: Label = null
 var _nw_name: LineEdit = null
 var _nw_refetch: CheckBox = null
 var _nw_start_btn: Button = null
+var _nw_guided_btn: Button = null
+var _nw_tour_btn: Button = null
 
 const BUNDLE_IMPORTER_SCRIPT := preload("res://core/linkagelab/bundle_importer.gd")
 const PLACED_PROP_SERVICE_SCRIPT := preload("res://core/placed_models/placed_prop_service.gd")
@@ -973,7 +975,22 @@ func _confirm() -> void:
 
 ## Persist a MapDefinition for the selected site and launch the generated world
 ## scene, which builds real terrain + satellite imagery from open data.
-func _create_map() -> void:
+## "Start here (guided)": the world is created as below, then the loader seeds
+## the starter site and Main offers the first mission (MapContext.starter_kit).
+func _create_guided_world() -> void:
+	_create_map({"starter": true})
+
+
+## "Show me around": the feature tour on the most recent world; with no world
+## yet, a guided one at the picked spot that opens on the tour.
+func _show_me_around() -> void:
+	if not _world_recs.is_empty():
+		_launch_world(_world_recs[0], {"tour": true})
+		return
+	_create_map({"starter": true, "tour": true})
+
+
+func _create_map(opts: Dictionary = {}) -> void:
 	# Typed-but-uncommitted coordinates win over the old selection.
 	if _nw_builtin_idx < 0 and _coord_fields_differ():
 		_use_coords()
@@ -997,7 +1014,9 @@ func _create_map() -> void:
 	if _bundle_status != null:
 		_bundle_status.text = ""
 	var refetch := _nw_refetch != null and _nw_refetch.visible and _nw_refetch.button_pressed
-	_launch_world(rec, {"force_refetch": refetch})
+	var launch_opts := opts.duplicate()
+	launch_opts["force_refetch"] = refetch
+	_launch_world(rec, launch_opts)
 
 
 ## The MAP registry: one loc_<lat>_<lon>.tres per site (label + extents), shared
@@ -1761,13 +1780,31 @@ func _build_new_world_panel(parent: Control) -> void:
 	_nw_warn_lbl.add_theme_font_size_override("font_size", 11)
 	_nw_warn_lbl.add_theme_color_override("font_color", Color(0.95, 0.72, 0.35))
 	v.add_child(_nw_warn_lbl)
+	var start_row := HBoxContainer.new()
+	start_row.add_theme_constant_override("separation", 6)
+	v.add_child(start_row)
+	_nw_guided_btn = Button.new()
+	_nw_guided_btn.text = "Start here (guided)  ▶"
+	_nw_guided_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_primary_button(_nw_guided_btn)
+	_nw_guided_btn.tooltip_text = ("A new world at this spot with a starter site already on the graph "
+		+ "(a habitat, its tanks, the site's sun, wind and rain) and the first mission offered.")
+	_nw_guided_btn.pressed.connect(_create_guided_world)
+	start_row.add_child(_nw_guided_btn)
 	_nw_start_btn = Button.new()
-	_nw_start_btn.text = "Start new world  ⊕"
+	_nw_start_btn.text = "Start empty  ⊕"
+	_nw_start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_primary_button(_nw_start_btn)
 	_nw_start_btn.tooltip_text = ("A new world starts EMPTY on this map. Existing worlds on the same "
 		+ "map are not touched.")
 	_nw_start_btn.pressed.connect(_create_map)
-	v.add_child(_nw_start_btn)
+	start_row.add_child(_nw_start_btn)
+	_nw_tour_btn = Button.new()
+	_nw_tour_btn.text = "Show me around"
+	_nw_tour_btn.tooltip_text = ("A guided tour of the game's features on your most recent world "
+		+ "(or a new guided world at this spot). Esc ends it.")
+	_nw_tour_btn.pressed.connect(_show_me_around)
+	v.add_child(_nw_tour_btn)
 	_refresh_new_world_panel()
 
 
@@ -1806,8 +1843,16 @@ func _refresh_new_world_panel() -> void:
 		_nw_refetch.visible = false
 		_nw_warn_lbl.text = ""
 		_nw_start_btn.disabled = true
+		if _nw_guided_btn != null:
+			_nw_guided_btn.disabled = true
+		if _nw_tour_btn != null:
+			_nw_tour_btn.disabled = _world_recs.is_empty()
 		return
 	_nw_start_btn.disabled = false
+	if _nw_guided_btn != null:
+		_nw_guided_btn.disabled = false
+	if _nw_tour_btn != null:
+		_nw_tour_btn.disabled = false
 	var map: Dictionary = src["map"]
 	_nw_source_lbl.text = SitePrivacy.place(str(src["label"]))
 	_nw_name.placeholder_text = "World name (default: %s)" % str(src["label"])

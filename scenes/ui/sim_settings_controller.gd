@@ -1068,7 +1068,6 @@ func persist_settings() -> void:
 		cfg.set_value("camera", "drone_fov", main_node.call("get_drone_fov"))
 	save_star_calibration()
 	save_planet_prefs()
-	save_ha_connection_from_panel()
 	cfg.save(SETTINGS_CFG)
 
 
@@ -1289,15 +1288,6 @@ func get_ha_connection_snapshot() -> Dictionary:
 		"ha_connected": bool(svc.call("is_ws_open")),
 		"ha_authenticated": bool(svc.call("is_authed")),
 	}
-
-
-## Old settings-panel hooks: the new page saves on Connect, so these are no-ops.
-func set_pending_ha_connection(_url: String, _token: String, _entities: String) -> void:
-	pass
-
-
-func save_ha_connection_from_panel() -> void:
-	pass
 
 
 func connect_ha(url: String, token: String, _entities: String = "") -> void:

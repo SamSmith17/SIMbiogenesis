@@ -928,6 +928,8 @@ func _resolve_location() -> void:
 		var d: Dictionary = ctx.consume()
 		_lat = float(d["latitude"])
 		_lon = float(d["longitude"])
+		_starter_kit_pending = bool(d.get("starter_kit", false)) and not bool(d.get("from_resume", false))
+		_tour_pending = bool(d.get("tour_on_load", false))
 		var ti: Dictionary = d.get("terrain_imagery", {})
 		_imagery_saved_tier = clampi(int(ti.get("saved_tier", -1)), -1, QUALITY_TIER_COUNT - 1)
 		_imagery_mode = "saved" if str(ti.get("mode", "local")) == "saved" and _imagery_saved_tier >= 0 else "local"
@@ -1301,6 +1303,31 @@ func _run_load_sequence() -> void:
 	_resolve_graph_site_elevations()
 	map_load_complete.emit()
 	_on_shoreline_changed_for_veg.call_deferred()
+	if _starter_kit_pending:
+		_starter_kit_pending = false
+		call_deferred("_seed_starter_site")
+	if _tour_pending:
+		_tour_pending = false
+		var main_t := get_tree().current_scene
+		if main_t != null and main_t.has_method("start_feature_tour"):
+			main_t.call_deferred("start_feature_tour")
+
+
+## "Start here (guided)": the starter site on the graph (a habitat, its tanks,
+## the PBI nodes — the same seed the challenges use, idempotent) and the first
+## mission offered once the loading overlay and the first-run help are gone.
+var _starter_kit_pending := false
+var _tour_pending := false
+
+
+func _seed_starter_site() -> void:
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("try_seed_puzzle_starter"):
+		return
+	var seeded := bool(gv.call("try_seed_puzzle_starter", 1))
+	var main_s := get_tree().current_scene
+	if main_s != null and main_s.has_method("offer_first_mission"):
+		main_s.call("offer_first_mission", seeded)
 
 
 ## A DEM that arrived after its phase timed out (see _late_base_dem).

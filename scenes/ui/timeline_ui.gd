@@ -97,6 +97,10 @@ var _update_accum : float = 0.0
 var _ready_done   : bool  = false
 
 const UPDATE_INTERVAL := 0.1
+## The needs strip and the mission chip read the closure metrics (memoised
+## 200 ms in the graph view) once a second; they are status, not a readout.
+const NEEDS_INTERVAL := 1.0
+var _needs_accum := 0.0
 
 ## _draw_waveform_lane's TimelineBinning bins (exact over every sample) and
 ## the per-day WeatherService temperature-record loop in _draw_track both
@@ -718,6 +722,11 @@ func _perf_tick(delta: float) -> void:
 	if _update_accum >= UPDATE_INTERVAL:
 		_update_accum = 0.0
 		_update_display()
+	_needs_accum += delta
+	if _needs_accum >= NEEDS_INTERVAL:
+		_needs_accum = 0.0
+		_update_needs_strip()
+		_update_challenge_chip()
 
 
 func _input(event: InputEvent) -> void:
@@ -2825,6 +2834,24 @@ func _build_left_cluster() -> Control:
 	left.alignment = BoxContainer.ALIGNMENT_BEGIN
 	left.add_theme_constant_override("separation", 4)
 
+	# The needs strip: one chip per closure channel, the always-on read of
+	# whether the site's Energy / Water / Food / Waste loops close. Text and
+	# colour come from _update_needs_strip (ClosureMetrics); a click opens
+	# the System Review. It leads the row because it is the game's score.
+	var needs := HBoxContainer.new()
+	needs.name = "NeedsStrip"
+	needs.add_theme_constant_override("separation", 2)
+	for kind: String in ["energy", "water", "food", "waste"]:
+		var chip := _mk_chip_btn("", _on_needs_chip_pressed.bind(kind),
+				"%s — place a Habitat and tanks to track it" % kind.capitalize())
+		chip.add_theme_font_size_override("font_size", 11)
+		chip.name = "Needs_%s" % kind
+		needs.add_child(chip)
+		_needs_chips[kind] = chip
+	left.add_child(needs)
+	left.add_child(_mk_vsep())
+	call_deferred("_update_needs_strip")
+
 	_import_btn = _mk_icon_btn("📥", _on_import_pressed,
 			"Import datastream — load a Home Assistant CSV as an observed comparison clip")
 	left.add_child(_import_btn)
@@ -3550,7 +3577,7 @@ func _build_info_row(parent: VBoxContainer) -> void:
 	_info_row.add_child(_right_cluster)
 	# A label whose text changes width (sunset time, moon phase, the
 	# multiplayer status, "3D wires ●") re-runs the measured layout.
-	for c: Control in [_left_cluster, _center_time_cluster, _mp_chip, _conduits_chip]:
+	for c: Control in [_left_cluster, _center_time_cluster, _mp_chip, _conduits_chip, _challenge_chip]:
 		if c != null:
 			c.minimum_size_changed.connect(_queue_info_layout)
 
@@ -3895,8 +3922,15 @@ func _build_right_cluster() -> Control:
 	var lib_btn := _mk_icon_btn("📦", _on_library_pressed,
 		"Library — buildings, graph nodes, vegetation & structures")
 	right.add_child(lib_btn)
-	var challenge_btn := _mk_icon_btn("🎯", _on_challenge_pressed, "Challenges — structured survival missions")
-	right.add_child(challenge_btn)
+	# One control for both states: "🎯 Mission" idle, "🎯 <name> 12/72h" amber
+	# while a challenge runs (_update_challenge_chip, driven by the runner's
+	# signals through Main and the 1 s refresh below).
+	_challenge_chip = _mk_chip_btn("🎯 Mission", _on_challenge_chip_pressed,
+			"Challenges — structured survival missions")
+	_challenge_chip.name = "MissionChip"
+	_challenge_chip.add_theme_font_size_override("font_size", 11)
+	right.add_child(_challenge_chip)
+	call_deferred("_update_challenge_chip")
 	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Map select — return to the map chooser")
 	right.add_child(map_btn)
 
@@ -3916,7 +3950,7 @@ func _build_right_cluster() -> Control:
 	_right_fold_items.clear()
 	for pair in [[csv_btn, "Open datastream CSV"], [_linkagelab_btn, "Import LinkageLab bundle"],
 			[_shading_btn, "Solar shading"], [mc_btn, "Microclimate"],
-			[record_btn, "Climate Record Book"], [challenge_btn, "Challenges"],
+			[record_btn, "Climate Record Book"], [_challenge_chip, "Challenges"],
 			[report_btn, "Site Report"], [map_btn, "Map select"],
 			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
 			[_festival_chip, "Festival mode"], [_deploy_chip, "Site deployment"],

@@ -5135,12 +5135,70 @@ func _maybe_show_first_run_help( attempts_left: int = 120 ) -> void :
 	_queue_first_run_hint_toasts()
 
 
+## "Start here (guided)" landed: once the loading overlay and the first-run
+## help are out of the way, open the mission picker on Challenge 1. `seeded`
+## is false when the world already had a habitat (a second guided start).
+func offer_first_mission( seeded: bool = true, attempts_left: int = 120 ) -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	var loading := ui_layer != null and ui_layer.get_node_or_null( "TerrainLoadOverlay" ) != null
+	var help_open := is_instance_valid( help_overlay_ui ) and help_overlay_ui.visible
+	if ( loading or help_open ) and attempts_left > 0 :
+		get_tree().create_timer( 1.0 ).timeout.connect(
+			offer_first_mission.bind( seeded, attempts_left - 1 ), CONNECT_ONE_SHOT )
+		return
+	var tl := _timeline_ui()
+	if seeded :
+		show_toast( "Starter site ready: a habitat, its tanks and the site's sun, wind and rain are on the graph (G).", ToastUI.Level.INFO, 8.0 )
+	if tl != null and tl.has_method( "ensure_challenge_picker" ) :
+		var picker : Control = tl.call( "ensure_challenge_picker" ) as Control
+		if picker != null and picker.has_method( "open" ) :
+			picker.call( "open" )
+
+
+## "Show me around": the feature tour (core/tour/) on THIS world, live — title
+## cards and captions, no screenshots kept apart from the heroes, Esc ends it
+## after the current stop. The stops are the ones authored for this world
+## when it is one of the tour's three (HarnessRegistry aliases); any other
+## world gets the open-ground set, and a stop whose feature is not on this
+## site simply moves on.
+var _feature_tour : Node = null
+
+
+func is_feature_tour_running() -> bool :
+	return is_instance_valid( _feature_tour )
+
+
+func start_feature_tour() -> void :
+	if is_feature_tour_running() :
+		return
+	var director := TourDirector.new()
+	director.name = "FeatureTour"
+	director.live = true
+	director.shots_dir = "user://screenshots/tour_live"
+	director.audit_mode = "off"
+	var rec := WorldSession.active_record()
+	var alias := ""
+	for a in HarnessRegistry.WORLD_ALIASES.keys() :
+		var picked := HarnessRegistry.pick_world( str( a ), [ rec ] )
+		if not picked.is_empty() :
+			alias = str( a )
+			break
+	director.world_alias = alias if not alias.is_empty() else "burningman"
+	director.world_label = SitePrivacy.place( WorldStore.display_name( rec ) ) if not rec.is_empty() else ""
+	_feature_tour = director
+	add_child( director )
+	await director.run()
+	if is_instance_valid( director ) :
+		director.queue_free()
+	_feature_tour = null
+
+
 func _queue_first_run_hint_toasts() -> void :
 	var hints := [
-		"Press G, add a Habitat, then start Challenge 1 (🎯 Mission).",
+		"Press G for the systems graph; 🎯 Mission on the timeline starts Challenge 1.",
 		"Interact with the SoI pin (O) to open Snowglobe and resize your radius.",
-		"Needs chips show Energy / Water / Food / Waste — click for System Review.",
-		"Press F1 anytime for controls and tips.",
+		"The ⚡💧🍎♻ chips on the timeline show whether each loop closes — click one for the System Review.",
+		"Press F1 for controls and tips, or Show me around for a guided tour.",
 	]
 	for i in hints.size() :
 		var delay : float = 4.0 + float( i ) * 5.0
