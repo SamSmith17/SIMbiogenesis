@@ -295,7 +295,7 @@ func _build_left() -> Control:
 		_type_box.add_child(b)
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
 	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 300)
+	_design_list.custom_minimum_size = Vector2(0, 200)
 	_design_list.auto_height = true
 	_design_list.item_activated.connect(_on_design_activated)
 	_design_list.item_selected.connect(_on_design_activated)

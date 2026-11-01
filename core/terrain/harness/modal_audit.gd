@@ -73,6 +73,85 @@ func run() -> Dictionary:
 	var hab := _first_habitat(gv)
 	if not hab.is_empty():
 		entries.append({"id": "npc_routines", "open": func() -> void: gv.call("open_npc_routines", hab)})
+	# The designers, labs, dialogs and docks the first list left out
+	# (2026-11-01, the modal polish pass). A dock is not a modal — it reports
+	# "(no modal claim seen)" and is still audited and shot.
+	if loader != null:
+		for d in [["flatpack", "open_flatpack_designer"], ["domelab", "open_domelab"],
+				["toroidlab", "open_toroidlab"], ["pvlab", "open_pvlab"], ["gantrylab", "open_gantrylab"]]:
+			var fn := str(d[1])
+			if loader.has_method(fn):
+				entries.append({"id": str(d[0]), "open": func() -> void: loader.call(fn)})
+		if loader.has_method("open_pallet_rack_builder"):
+			entries.append({"id": "pallet_rack", "open": func() -> void: loader.call("open_pallet_rack_builder")})
+		if loader.has_method("open_camp_style_modal"):
+			entries.append({"id": "camp_tune", "open": func() -> void: loader.call("open_camp_style_modal", "", "")})
+		var pond_idx := _first_pond(loader)
+		if pond_idx >= 0:
+			var pe: Node = loader.get("_pond_edit_ui")
+			entries.append({"id": "pond_settings", "open": func() -> void: loader.call("open_pond_editor", pond_idx),
+				"close": func() -> void:
+					if pe != null and pe.has_method("close"):
+						pe.call("close")})
+		var polys: Variant = (loader.get("_auto_veg_data") as Dictionary).get("polygons", [])
+		if polys is Array and not (polys as Array).is_empty():
+			entries.append({"id": "veg_area_fill", "open": func() -> void: loader.call("open_veg_area_modal", 0),
+				"close": func() -> void:
+					var ui: Node = loader.get("_veg_area_fill_ui")
+					if ui != null and ui.has_method("close"):
+						ui.call("close")})
+		var prop_id := _first_prop(loader, [])
+		if not prop_id.is_empty():
+			var ped: Node = loader.get("_placed_prop_edit_ui")
+			if ped != null:
+				entries.append({"id": "prop_editor", "open": func() -> void: ped.call("open_for_prop", prop_id),
+					"close": func() -> void: ped.call("close")})
+		var printer := _first_prop(loader, ["trash_printer", "mud_printer", "cnc_router", "gantry_machine"])
+		if not printer.is_empty() and gv != null and gv.has_method("open_print_setup_for_prop"):
+			entries.append({"id": "print_setup", "open": func() -> void: gv.call("open_print_setup_for_prop", printer)})
+		var shade := _first_prop(loader, ["starshade"])
+		if not shade.is_empty() and loader.has_method("open_starshade_editor"):
+			entries.append({"id": "starshade_edit", "open": func() -> void: loader.call("open_starshade_editor", shade)})
+	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["ha_links", "open_ha_links"],
+			["ha_presets", "open_ha_presets"], ["compare", "open_compare_view"],
+			["linkage_guide", "open_linkage_build_guide"]]:
+		var fn := str(d[1])
+		if main.has_method(fn):
+			entries.append({"id": str(d[0]), "open": func() -> void: main.call(fn)})
+	if main.has_method("open_linkage_hardware_editor"):
+		entries.append({"id": "linkage_hardware", "open": func() -> void:
+			main.call("open_linkage_hardware_editor", load("res://core/linkage/linkage_params.gd").new())})
+	if gv != null:
+		if gv.has_method("open_process_recipe_editor"):
+			entries.append({"id": "recipe_editor", "open": func() -> void: gv.call("open_process_recipe_editor", "", "")})
+		if gv.has_method("open_camps_panel"):
+			entries.append({"id": "camps_panel", "open": func() -> void: gv.call("open_camps_panel")})
+	if tl != null and tl.has_method("_on_export_clim_mp4_pressed"):
+		entries.append({"id": "video_export", "open": func() -> void: tl.call("_on_export_clim_mp4_pressed")})
+	if tl != null:
+		entries.append({"id": "share", "open": func() -> void:
+			tl.call("_on_save_load_pressed")
+			var wp := main.get_node_or_null("UILayer/WorldPanel")
+			if wp != null and wp.has_method("_on_share_pressed"):
+				wp.call("_on_share_pressed")})
+	entries.append({"id": "light_dock", "open": func() -> void: PlacedLightService.toggle_studio(main),
+		"close": func() -> void:
+			var dock := PlacedLightService.ensure_dock(main)
+			if dock != null and dock.has_method("close"):
+				dock.call("close")})
+	# The Hydro Lab is a graph lens, not a modal: it opens the G view on the
+	# first siphon-kind turbine and is closed with the graph.
+	var turbine := _first_item(gv, "siphon_hydro")
+	if not turbine.is_empty() and gv.has_method("open_siphon_lab"):
+		entries.append({"id": "hydro_lab", "open": func() -> void:
+			if gv.has_method("open_graph_view"):
+				gv.call("open_graph_view")
+			gv.call("open_siphon_lab", turbine),
+			"close": func() -> void:
+				if gv.has_method("close_hydro_lab"):
+					gv.call("close_hydro_lab")
+				if gv.has_method("close_graph_view"):
+					gv.call("close_graph_view")})
 	for e in entries:
 		await _audit_one(e)
 	var errors := 0
@@ -205,3 +284,43 @@ func _clip_rect(c: Control) -> Rect2:
 			return (n as Control).get_global_rect()
 		n = n.get_parent()
 	return get_viewport().get_visible_rect()
+
+
+func _first_pond(loader: Node) -> int:
+	if loader == null or not loader.has_method("get_pond_info"):
+		return -1
+	for i in 64:
+		var info: Dictionary = loader.call("get_pond_info", i)
+		if info.is_empty():
+			continue
+		if bool(info.get("valid", false)):
+			return i
+	return -1
+
+
+## The first placed prop (any, or one whose model id starts with one of `prefixes`).
+func _first_prop(loader: Node, prefixes: Array) -> String:
+	if loader == null or not loader.has_method("placed_prop_records"):
+		return ""
+	for r in (loader.call("placed_prop_records") as Array):
+		var rec: Dictionary = r
+		var mid := str(rec.get("model_id", ""))
+		if prefixes.is_empty():
+			return str(rec.get("id", ""))
+		for pf in prefixes:
+			if mid == str(pf) or mid.begins_with(str(pf)):
+				return str(rec.get("id", ""))
+	return ""
+
+
+func _first_item(gv: Node, role: String) -> String:
+	if gv == null:
+		return ""
+	var model: Variant = gv.get("model")
+	if model == null:
+		return ""
+	for it in GraphNesting.walk_items(model, "root"):
+		var item: Dictionary = it
+		if str((item.get("specs", {}) as Dictionary).get("role", "")) == role:
+			return str(item.get("id", ""))
+	return ""

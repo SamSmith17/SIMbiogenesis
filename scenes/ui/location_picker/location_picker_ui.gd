@@ -311,6 +311,7 @@ func show_picker() -> void:
 		# the timeline like every modal (UiFit.timeline_clearance is 0 unless
 		# it would draw under the bar).
 		HudLayout.claim_modal("location_picker")
+		set_meta("ui_modal", true)  # UiAudit.MODAL_META: it covers the bar on purpose
 		if _panel != null:
 			_panel.offset_bottom = -(UiFit.timeline_clearance(_panel) + 10.0)
 	_legend_picked = -1

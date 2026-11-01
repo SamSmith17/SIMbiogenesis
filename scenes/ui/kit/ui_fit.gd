@@ -99,6 +99,10 @@ static func keep_fitted(panel: Control, want: Vector2, margin: float = MARGIN,
 	panel.set_meta("ui_fit_margin", margin)
 	panel.set_meta("ui_fit_claim", claim_hud)
 	panel.set_meta("ui_fit_keep_timeline", keep_timeline)
+	# A fitted panel that claims the HUD is a modal: the UI audit lets it cover
+	# the timeline bar and the HUD (UiAudit.MODAL_META).
+	if claim_hud:
+		panel.set_meta("ui_modal", true)
 	if panel.has_meta("ui_fit_wired"):
 		_refit.call_deferred(panel)
 		return

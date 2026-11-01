@@ -67,6 +67,7 @@ func _build(title: String, subtitle: String) -> void:
 	_panel = PanelContainer.new()
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	add_child(_panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)

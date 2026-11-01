@@ -329,7 +329,7 @@ func _build_left() -> Control:
 	_search_count.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	box.add_child(_search_count)
 	_list = ItemList.new()
-	_list.custom_minimum_size = Vector2(0, 320)
+	_list.custom_minimum_size = Vector2(0, 200)
 	_list.auto_height = true
 	_list.item_activated.connect(_on_entry_activated)
 	_list.item_selected.connect(_on_entry_activated)
@@ -377,7 +377,7 @@ func _build_centre() -> Control:
 	_vp_container = SubViewportContainer.new()
 	_vp_container.stretch = true
 	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_vp_container.custom_minimum_size = Vector2(0, 420)
+	_vp_container.custom_minimum_size = Vector2(0, 260)
 	_vp_container.gui_input.connect(_on_studio_input)
 	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
 	split.add_child(_vp_container)
@@ -388,7 +388,7 @@ func _build_centre() -> Control:
 	_vp_container.add_child(_viewport)
 	_build_studio_world()
 	_chart = IvChart.new()
-	_chart.custom_minimum_size = Vector2(0, 200)
+	_chart.custom_minimum_size = Vector2(0, 160)
 	split.add_child(_chart)
 	# Tab bars.
 	_bar_cell = HBoxContainer.new()

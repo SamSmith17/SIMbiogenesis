@@ -233,6 +233,7 @@ func _layout_center_panel() -> void:
 		return
 	# The HUD claim is made by open()/close() under its own owner id.
 	UiFit.keep_fitted(_center_panel, PANEL_DESIRED_SIZE, UiFit.MARGIN, false)
+	_center_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META (the HUD claim is made by hand below)
 
 
 func bind_timeline(timeline: Control) -> void:

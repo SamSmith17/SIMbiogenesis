@@ -2494,6 +2494,20 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
   into FAILs. `tools\harness.ps1 -World mtvernon -Capture modals -UserArgs
   @("--window-size=1280x720")` checks the small screen (any capture honours
   `--window-size`). 0 errors at 1536×864 and 1920×1080 on 2026-10-13.
+  **2026-11-01:** 50 entries — the designers (dome, toroid, solar, Pelton,
+  wind, flat-pack, gantry, pallet rack), the Hydro Lab, both Tune looks,
+  pond settings, the veg fill drawer, the prop editor and Light Studio docks
+  (reported "no modal claim seen", still audited), video export, Share,
+  Compare, Live links, HA presets, the Linkage guide + hardware editor, the
+  recipe editor, the camps panel. **A modal is told apart by the `ui_modal`
+  meta** (`UiAudit.MODAL_META`), not only by its CanvasLayer: most older
+  modals are UILayer children on the SAME layer as the timeline bar they
+  cover by design, and the layer test alone counted every one as an
+  overlap. `UiFit.keep_fitted` (with the HUD claim), `ModalFrame` and the
+  full-screen tools set it; a new hand-built modal must set it on its panel
+  or it fails the audit. Docks and drawers do NOT carry it, so a drawer
+  that grows into the bar (pond settings did) still fails. Plan + per-modal
+  assessment: `plans/MODAL_POLISH_PLAN.md`.
 - **Harness window size.** project.godot opens MAXIMIZED, which overrides
   `--resolution`: every "720p" capture was really shot at the monitor's
   size. `tour.ps1` passes `--window-size=WxH` and the harness resizes the

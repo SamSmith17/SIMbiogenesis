@@ -112,7 +112,9 @@ func open(style_id: String = "", camp_id: String = "") -> void:
 	_frame_camera()
 	visible = true
 	move_to_front()
+	set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 	_rebuild_all()
 
 
@@ -127,6 +129,7 @@ func close() -> void:
 	CampStyleStore.apply(_saved)
 	CampMeshLibrary.clear_cache()
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 
 
 func is_panel_open() -> bool:

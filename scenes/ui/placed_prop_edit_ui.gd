@@ -142,9 +142,17 @@ func open_for_prop(prop_id: String) -> void:
 		set_process(true)
 		CursorController.request_tool_overlay(OVERLAY_NAME, Callable(self, "_escape_step"))
 		_ensure_gizmo()
-		HudLayout.claim_right_dock("prop_editor", self, DOCK_W)
+		HudLayout.claim_right_dock("prop_editor", self, _dock_width())
 	_update_gizmo()
 	_hint("Drag the arrows to move, the rings to turn. Shift snaps. Esc closes.")
+
+
+## The dock's real width: DOCK_W, or what its widest section needs — it used
+## to stay at DOCK_W while the content pushed it 100 px past the screen edge.
+func _dock_width() -> float:
+	var w := maxf(DOCK_W, get_combined_minimum_size().x)
+	offset_left = -w - 10.0
+	return w
 
 
 func close() -> void:
@@ -378,7 +386,10 @@ func _build_placement_section() -> void:
 	_spin("pitch", 1.0, -90.0, 90.0, "°", grid)
 	_small_label("Roll", grid)
 	_spin("roll", 1.0, -180.0, 180.0, "°", grid)
-	var quick := _row(box)
+	var quick := HFlowContainer.new()
+	quick.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+	quick.add_theme_constant_override("v_separation", UITheme.SPACE_XS)
+	box.add_child(quick)
 	_button("Level", "Pitch and roll back to zero", quick, func() -> void:
 		_tf["pitch"] = 0.0
 		_tf["roll"] = 0.0

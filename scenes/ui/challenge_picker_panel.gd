@@ -128,6 +128,7 @@ func _build_ui() -> void:
 	add_child(_backdrop)
 
 	_panel = PanelContainer.new()
+	_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	_panel.visible = false
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
@@ -191,6 +192,7 @@ func _build_ui() -> void:
 	add_child(_result_backdrop)
 
 	_result_panel = PanelContainer.new()
+	_result_panel.set_meta("ui_modal", true)
 	_result_panel.visible = false
 	_result_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_result_panel.custom_minimum_size = Vector2(420.0, 0.0)

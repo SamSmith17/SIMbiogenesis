@@ -409,6 +409,14 @@ var _right_cluster  : Control = null
 var _right_fold_items: Array = []
 var _sfx_btn: Button = null
 var _right_overflow: MenuButton = null
+## The left cluster folds too (its icon buttons, least used first) once the
+## right cluster has nothing left to fold: at 1280x720 (a 1536 px row) the
+## needs strip + eleven icons + the centre's clock, date and moon readout
+## could not fit however far the right folded, and the readout clipped.
+var _left_overflow: MenuButton = null
+var _left_fold_items: Array = []
+var _left_folded := -1
+var _left_video_sep: Control = null
 var _right_folded := -1
 const INFO_ROW_EDGE_PAD : float = 8.0
 const CENTER_CLUSTER_GAP : float = 18.0
@@ -2888,7 +2896,8 @@ func _build_left_cluster() -> Control:
 	_setup_tracks_menu()
 
 	# Visual break before video/live tools.
-	left.add_child(_mk_vsep())
+	_left_video_sep = _mk_vsep()
+	left.add_child(_left_video_sep)
 
 	_load_video_btn = _mk_icon_btn("📹", _on_load_video_pressed,
 			"Load video — open a timelapse file for the TR panel (auto-synced to timecode)")
@@ -2911,6 +2920,26 @@ func _build_left_cluster() -> Control:
 	_render_progress_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	_render_progress_lbl.custom_minimum_size = Vector2(52, 0)
 	left.add_child(_render_progress_lbl)
+
+	_left_overflow = MenuButton.new()
+	_left_overflow.text = "⋯"
+	_left_overflow.flat = false
+	_left_overflow.focus_mode = Control.FOCUS_NONE
+	_left_overflow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_left_overflow.custom_minimum_size = Vector2(38, 38)
+	_left_overflow.add_theme_font_size_override("font_size", 18)
+	_left_overflow.visible = false
+	_left_overflow.get_popup().id_pressed.connect(_on_left_overflow_id)
+	left.add_child(_left_overflow)
+	# Fold order: least used first. The needs strip never folds.
+	_left_fold_items.clear()
+	for pair in [[_live_feed_btn, "Live camera feed"], [_snap_video_btn, "Snapshot video"],
+			[_load_video_btn, "Load timelapse video"], [_loadmode_btn, "Render load mode"],
+			[_import_btn, "Import datastream"], [path_clr, "Clear camera keyframes"],
+			[path_add, "Camera keyframe"], [_compare_btn, "Compare sim with reality"],
+			[_tracks_btn, "Tracks"], [_export_mp4_btn, "Export video"], [_render_btn, "Render the sim"]]:
+		var b: Button = pair[0]
+		_left_fold_items.append({"btn": b, "label": "%s  %s" % [b.text, str(pair[1])]})
 
 	return left
 
@@ -3616,8 +3645,8 @@ func _layout_info_clusters() -> void:
 		if c == null:
 			continue
 		var cs: Vector2 = c.get_combined_minimum_size()
-		if c == _right_cluster:
-			cs.x = _right_cluster_width()
+		if c == _right_cluster or c == _left_cluster:
+			cs.x = _cluster_visible_width(c)
 		c.size = cs
 		c.position.y = maxf(0.0, (usable_h - cs.y) * 0.5)
 	var lo := INFO_ROW_EDGE_PAD
@@ -3638,15 +3667,15 @@ func _layout_info_clusters() -> void:
 		_center_time_cluster.position.x = x
 
 
-## The right cluster's width from its VISIBLE children — the container's own
+## A side cluster's width from its VISIBLE children — the container's own
 ## cached minimum size lags a frame behind a visibility change.
-func _right_cluster_width() -> float:
-	if _right_cluster == null:
+func _cluster_visible_width(cluster: Control) -> float:
+	if cluster == null:
 		return 0.0
-	var sep := float(_right_cluster.get_theme_constant("separation"))
+	var sep := float(cluster.get_theme_constant("separation"))
 	var w := 0.0
 	var n := 0
-	for ch in _right_cluster.get_children():
+	for ch in cluster.get_children():
 		var c := ch as Control
 		if c == null or not c.visible:
 			continue
@@ -3655,51 +3684,90 @@ func _right_cluster_width() -> float:
 	return w + sep * maxf(n - 1, 0)
 
 
+## A side cluster's width with every foldable button SHOWN (the fold decision
+## needs no visibility churn): every visible child plus the folded buttons,
+## minus the overflow button itself.
+func _cluster_full_width(cluster: Control, overflow: Control, fold_items: Array) -> float:
+	if cluster == null:
+		return 0.0
+	var sep := float(cluster.get_theme_constant("separation"))
+	var foldable := {}
+	for it in fold_items:
+		foldable[it["btn"]] = true
+	var w := 0.0
+	var n := 0
+	for ch in cluster.get_children():
+		var c := ch as Control
+		if c == null or c == overflow:
+			continue
+		if not c.visible and not foldable.has(c):
+			continue
+		w += c.get_combined_minimum_size().x
+		n += 1
+	return w + sep * maxf(n - 1, 0)
+
+
 ## Folds buttons in fold order (least used first) while the three clusters
-## do not fit the row. Widths are measured off every button whether shown or
-## not, so the decision needs no visibility churn; visibility and the menu are
-## rewritten only when the fold COUNT changes (this runs as the clock text
-## changes, and hiding a hovered button every frame would flicker it).
-## Folded buttons live on in the ⋯ menu with the same action.
+## do not fit the row: the right cluster first, then the left. Widths are
+## measured off every button whether shown or not, so the decision needs no
+## visibility churn; visibility and the menus are rewritten only when a fold
+## COUNT changes (this runs as the clock text changes, and hiding a hovered
+## button every frame would flicker it). Folded buttons live on in the ⋯
+## menus with the same action.
 func _fold_right_cluster(row_w: float) -> void:
 	if _right_cluster == null or _right_overflow == null:
 		return
-	var sep := float(_right_cluster.get_theme_constant("separation"))
-	var folded_set := {}
-	for it in _right_fold_items:
-		folded_set[it["btn"]] = true
-	var right_w := 0.0
-	var n := 0
-	for ch in _right_cluster.get_children():
-		var c := ch as Control
-		if c == null or c == _right_overflow:
-			continue
-		right_w += c.get_combined_minimum_size().x
-		n += 1
-	right_w += sep * maxf(n - 1, 0)
-	var left_w := _left_cluster.get_combined_minimum_size().x if _left_cluster != null else 0.0
+	var sep_r := float(_right_cluster.get_theme_constant("separation"))
+	var sep_l := float(_left_cluster.get_theme_constant("separation")) if _left_cluster != null else 0.0
+	var right_w := _cluster_full_width(_right_cluster, _right_overflow, _right_fold_items)
+	var left_w := _cluster_full_width(_left_cluster, _left_overflow, _left_fold_items)
 	var center_w := _center_time_cluster.get_combined_minimum_size().x if _center_time_cluster != null else 0.0
-	var fixed := INFO_ROW_EDGE_PAD * 2.0 + left_w + center_w + CENTER_CLUSTER_GAP * 2.0
-	var over_w := _right_overflow.get_combined_minimum_size().x + sep
-	var count := 0
-	while count < _right_fold_items.size():
-		var w := right_w + (over_w if count > 0 else 0.0)
+	var fixed := INFO_ROW_EDGE_PAD * 2.0 + center_w + CENTER_CLUSTER_GAP * 2.0
+	var over_r := _right_overflow.get_combined_minimum_size().x + sep_r
+	var over_l := (_left_overflow.get_combined_minimum_size().x + sep_l) if _left_overflow != null else 0.0
+	var rc := 0
+	var lc := 0
+	while true:
+		var w := right_w + (over_r if rc > 0 else 0.0) + left_w + (over_l if lc > 0 else 0.0)
 		if fixed + w <= row_w:
 			break
-		right_w -= (_right_fold_items[count]["btn"] as Control).get_combined_minimum_size().x + sep
-		count += 1
-	if count == _right_folded:
-		return
-	_right_folded = count
-	var pop := _right_overflow.get_popup()
+		if rc < _right_fold_items.size():
+			right_w -= (_right_fold_items[rc]["btn"] as Control).get_combined_minimum_size().x + sep_r
+			rc += 1
+		elif _left_overflow != null and lc < _left_fold_items.size():
+			left_w -= (_left_fold_items[lc]["btn"] as Control).get_combined_minimum_size().x + sep_l
+			lc += 1
+		else:
+			break
+	if rc != _right_folded:
+		_right_folded = rc
+		_apply_fold(_right_fold_items, rc, _right_overflow)
+	if _left_overflow != null and lc != _left_folded:
+		_left_folded = lc
+		_apply_fold(_left_fold_items, lc, _left_overflow)
+		# The video group's divider goes with its three buttons.
+		if _left_video_sep != null:
+			_left_video_sep.visible = lc < 3
+
+
+func _apply_fold(items: Array, count: int, overflow: MenuButton) -> void:
+	var pop := overflow.get_popup()
 	pop.clear()
-	for i in _right_fold_items.size():
+	for i in items.size():
 		var fold := i < count
-		(_right_fold_items[i]["btn"] as Control).visible = not fold
+		(items[i]["btn"] as Control).visible = not fold
 		if fold:
-			pop.add_item(str(_right_fold_items[i]["label"]), i)
-	_right_overflow.visible = count > 0
-	_right_overflow.tooltip_text = "More — %s" % UiText.count(count, "tool")
+			pop.add_item(str(items[i]["label"]), i)
+	overflow.visible = count > 0
+	overflow.tooltip_text = "More — %s" % UiText.count(count, "tool")
+
+
+func _on_left_overflow_id(id: int) -> void:
+	if id < 0 or id >= _left_fold_items.size():
+		return
+	var btn := _left_fold_items[id]["btn"] as Button
+	if btn != null:
+		btn.pressed.emit()
 
 
 func _on_right_overflow_id(id: int) -> void:

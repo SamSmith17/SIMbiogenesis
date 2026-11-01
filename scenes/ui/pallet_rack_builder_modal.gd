@@ -327,7 +327,9 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
+	set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 	_queue_rebuild(true)
 
 
@@ -358,6 +360,7 @@ func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
+	HudLayout.release(MODAL_NAME)
 	CursorController.release_modal(MODAL_NAME)
 
 

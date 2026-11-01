@@ -152,7 +152,9 @@ func open(p: LinkageParams) -> void:
 	_selected = ""
 	_refresh_all()
 	visible = true
+	set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 
 
 func close() -> void:
@@ -160,6 +162,7 @@ func close() -> void:
 		return
 	visible = false
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
 
@@ -382,6 +385,7 @@ func _build_center() -> Control:
 
 	var overlay := VBoxContainer.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	overlay.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hint = Label.new()
 	_hint.text = HINT_IDLE

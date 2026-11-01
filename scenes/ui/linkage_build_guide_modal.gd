@@ -71,7 +71,9 @@ func open(p: LinkageParams, name_hint := "") -> void:
 	_bound_prop_id = ""
 	_refresh()
 	visible = true
+	set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+	HudLayout.claim_modal(MODAL_NAME)
 
 
 ## Open for a linkage structure already standing in the world.
@@ -91,6 +93,7 @@ func close() -> void:
 		return
 	visible = false
 	CursorController.release_modal(MODAL_NAME)
+	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
 

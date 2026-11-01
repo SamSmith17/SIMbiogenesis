@@ -60,15 +60,21 @@ func _layout_drawer() -> void:
 		timeline = main.get_node_or_null("UILayer/TimelineUI")
 	if timeline != null and timeline.has_method("get_stack_height"):
 		clearance = float(timeline.call("get_stack_height"))
-	UiScreenLayout.pin_above_timeline(self, DRAWER_HEIGHT, clearance)
+	# The rows can need more than DRAWER_HEIGHT (the map-pond note, the
+	# watershed row); a PanelContainer anchored to the bottom then grew DOWN
+	# over the bar by the difference. Size the drawer to what it holds.
+	var h := maxf(DRAWER_HEIGHT, get_combined_minimum_size().y)
+	UiScreenLayout.pin_above_timeline(self, h, clearance)
+	if visible:
+		HudLayout.claim("pond_edit", {"inset": {"bottom": h + 8.0}})
 
 
 func open_for_pond(idx: int) -> void:
 	_idx = idx
 	if not _load_from_loader():
 		return
-	_layout_drawer()
 	visible = true
+	_layout_drawer()
 	CursorController.request_modal("pond_edit", Callable(self, "close"))
 
 
@@ -78,6 +84,7 @@ func close() -> void:
 	visible = false
 	_idx = -1
 	CursorController.release_modal("pond_edit")
+	HudLayout.release("pond_edit")
 
 
 func _build_ui() -> void:

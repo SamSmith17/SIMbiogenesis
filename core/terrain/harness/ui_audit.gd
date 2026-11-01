@@ -30,6 +30,12 @@ const EDGE_TOL := 2.0
 const MAX_PANEL_AREA_FRAC := 0.6
 ## Layers at or above this are modal: covering the HUD is the point.
 const MODAL_LAYER := 50
+## A panel (or an ancestor) carrying this meta is a modal wherever it lives:
+## most of the older modals are UILayer children on the SAME layer as the
+## timeline bar they cover by design (2026-10-29), and the layer test alone
+## counted every one of them as an overlap. UiFit.keep_fitted (claim_hud),
+## ModalFrame and the full-screen tools set it.
+const MODAL_META := "ui_modal"
 const IGNORE_LAYERS := ["TourCaptions"]
 const CELL := 96.0
 
@@ -86,7 +92,7 @@ static func run(vp: Viewport) -> Dictionary:
 			continue
 		var owner := _owner_of(c)
 		var info := {"c": c, "r": r, "vis": vis, "owner": owner,
-			"layer": layer.layer if layer != null else 0, "modal": _is_modal_layer(layer)}
+			"layer": layer.layer if layer != null else 0, "modal": _is_modal_layer(layer) or _has_modal_meta(c)}
 		# --- overhang: visible part leaves the viewport ---------------------------
 		if _is_leaf(c) or _is_surface(c, vrect):
 			if vis.position.x < vrect.position.x - EDGE_TOL or vis.position.y < vrect.position.y - EDGE_TOL \
@@ -177,6 +183,15 @@ static func _layer_of(c: Node) -> CanvasLayer:
 
 static func _is_modal_layer(layer: CanvasLayer) -> bool:
 	return layer != null and layer.layer >= MODAL_LAYER
+
+
+static func _has_modal_meta(c: Node) -> bool:
+	var n: Node = c
+	while n != null and not (n is CanvasLayer):
+		if n.has_meta(MODAL_META) and bool(n.get_meta(MODAL_META)):
+			return true
+		n = n.get_parent()
+	return false
 
 
 ## The HUD-level node a control belongs to: the ancestor directly under its
@@ -370,8 +385,11 @@ static func _panel_overlaps(panels: Array) -> Array:
 					continue
 				if (a["c"] as Node).is_ancestor_of(b["c"]) or (b["c"] as Node).is_ancestor_of(a["c"]):
 					continue
-				# A modal layer covering the HUD below it is the point of a modal.
-				if int(a["layer"]) != int(b["layer"]) and (bool(a["modal"]) or bool(b["modal"])):
+				# A modal covering what is under it is the point of a modal — the
+				# HUD on a lower layer, or the timeline bar beside it on UILayer.
+				if bool(a["modal"]) != bool(b["modal"]):
+					continue
+				if int(a["layer"]) != int(b["layer"]) and bool(a["modal"]):
 					continue
 				var pair := "%d|%d" % [mini(cell[i], cell[j]), maxi(cell[i], cell[j])]
 				if seen.has(pair):
@@ -403,7 +421,9 @@ static func _text_overlaps(leaves: Array) -> Array:
 				# A SpinBox owns its LineEdit; an OptionButton its popup text.
 				if ca.get_parent() == cb or cb.get_parent() == ca:
 					continue
-				if int(a["layer"]) != int(b["layer"]) and (bool(a["modal"]) or bool(b["modal"])):
+				if bool(a["modal"]) != bool(b["modal"]):
+					continue
+				if int(a["layer"]) != int(b["layer"]) and bool(a["modal"]):
 					continue
 				var pair := "%d|%d" % [mini(cell[i], cell[j]), maxi(cell[i], cell[j])]
 				if seen.has(pair):
