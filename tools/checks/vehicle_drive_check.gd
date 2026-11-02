@@ -7,7 +7,8 @@ extends RefCounted
 ## travel trailer whose coupler stands just behind the van's hitch is hitched
 ## as the driver gets in (backing up to it); driven round a circle the trailer's
 ## coupler stays on the hitch and it swings in behind; driven 1 km in a straight
-## line, the litres burned equal the energy model's within 2 %; the dashboard
+## line towing, the litres burned equal the energy model's (trailer included)
+## within 2 % and exceed the solo figure; the dashboard
 ## shows litres and range; getting out leaves the trailer saved where it stands;
 ## the prop editor's unhitch clears both records. Everything it places is
 ## removed again.
@@ -124,7 +125,8 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(max_art > 5.0 and max_art < VehicleTow.MAX_ARTICULATION_DEG + 0.5,
 		"the trailer swings in behind the turn (up to %.1f°)" % max_art)
 	await _shot(main, "towing")
-	# 1 km straight at 10 m/s: litres burned == the energy model's.
+	# 1 km straight at 10 m/s: litres burned == the energy model's — with the
+	# trailer on the hitch (its rolling load and its drag in the wake).
 	var used0 := float(veh.get("fuel_used_l"))
 	var roll0 := float(veh.get("_roll_m"))
 	var start := Vector2(vprop.global_position.x, vprop.global_position.z)
@@ -139,8 +141,11 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await tree.process_frame
 	await tree.process_frame
 	var burned := float(veh.get("fuel_used_l")) - used0
-	var want := float(VehicleDesign.energy_for_distance(vd, 1000.0, 10.0)["litres"])
-	_ok(absf(burned - want) <= want * 0.02, "1 km at 10 m/s burns the model's litres (%.3f vs %.3f L)" % [burned, want])
+	var want := float(VehicleDesign.energy_for_distance(vd, 1000.0, 10.0, td)["litres"])
+	var solo := float(VehicleDesign.energy_for_distance(vd, 1000.0, 10.0)["litres"])
+	_ok(absf(burned - want) <= want * 0.02,
+		"1 km at 10 m/s towing burns the model's litres (%.3f vs %.3f L; %.3f solo)" % [burned, want, solo])
+	_ok(want > solo * 1.1, "towing the trailer costs more fuel than running solo (%.3f vs %.3f L)" % [want, solo])
 	var rolled := float(veh.get("_roll_m")) - roll0
 	_ok(absf(rolled - 1000.0) < 5.0, "the wheels rolled the kilometre (%.1f m)" % rolled)
 	# Out: the trailer stays saved where it stands.

@@ -24,6 +24,21 @@ extends RefCounted
 ##   Freightliner M2 106 (212" WB box truck, 26,000 lb, 50–70 gal).
 ##   Isuzu NPR gas (150" WB, 14,500 lb, 30 gal).
 ##   Freightliner Cascadia day cab (~180" WB tractor, 2 × 100 gal tanks).
+##   Mercedes Sprinter 3500 cab chassis 170" (11,030 lb GVWR, dual rear
+##     wheels) — what a Class C is really built on.
+## `curb_kg` is the BARE chassis (cab, frame, axles, a full tank is counted
+## separately) for a cab-chassis / stripped chassis, and the whole vehicle for
+## an integral one (a cargo van, a school bus): the body sheet's own
+## estimate adds the box. `gawr_f_kg` / `gawr_r_kg` are the gross axle
+## weight ratings the same sheets publish (the rear figure covers every rear
+## axle together); `tow_kg` the conventional (ball hitch) tow rating and
+## `gcwr_kg` the gross combination rating; `roof_kg` the roof load a van
+## maker allows (a body's own `roof_kg` where the roof is the body's);
+## `brakes` on a trailer chassis = it has its own (electric) brakes; `cg_wb`
+## where the curb mass sits along the wheelbase (0 = the front axle) from
+## the sheet's empty axle weights — a cab-chassis is engine-heavy (0.38),
+## a cargo van even, a school bus rear-heavy (VehicleDesign.CHASSIS_CG_WB
+## is the cab-chassis default).
 ## Real-world fuel economy bands (`mpg`): owner / fleet reported ranges at a
 ## 55 mph cruise — vehicles over 8,500 lb GVWR carry no EPA rating. They are
 ## what VehicleEnergy is calibrated against (vehiclelab_selftest pins it).
@@ -49,7 +64,8 @@ const CHASSIS := {
 		"wheelbase_m": 176.0 * IN, "track_m": 1.75, "front_overhang_m": 0.95,
 		"tyre_d_m": 0.75, "tyre_w_m": 0.225, "dually": true, "rear_axles": 1,
 		"frame_h_m": 0.72, "hood_len_m": 1.05, "cab_len_m": 2.15, "cab_h_m": 2.25,
-		"cab_w_m": 2.03, "curb_kg": 3150.0, "gvwr_kg": 14500.0 * LB,
+		"cab_w_m": 2.03, "curb_kg": 2650.0, "gvwr_kg": 14500.0 * LB,
+		"gawr_f_kg": 5000.0 * LB, "gawr_r_kg": 9600.0 * LB, "tow_kg": 10000.0 * LB, "gcwr_kg": 22000.0 * LB,
 		"fuel": "gasoline", "tank_l": 55.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 38.0, "top_speed_mps": 33.0, "mpg": [7.0, 11.0],
 	},
@@ -58,7 +74,8 @@ const CHASSIS := {
 		"wheelbase_m": 159.0 * IN, "track_m": 1.73, "front_overhang_m": 0.98,
 		"tyre_d_m": 0.75, "tyre_w_m": 0.225, "dually": true, "rear_axles": 1,
 		"frame_h_m": 0.72, "hood_len_m": 1.0, "cab_len_m": 2.1, "cab_h_m": 2.2,
-		"cab_w_m": 2.01, "curb_kg": 2950.0, "gvwr_kg": 14200.0 * LB,
+		"cab_w_m": 2.01, "curb_kg": 2500.0, "gvwr_kg": 14200.0 * LB,
+		"gawr_f_kg": 4600.0 * LB, "gawr_r_kg": 9600.0 * LB, "tow_kg": 10000.0 * LB, "gcwr_kg": 20000.0 * LB,
 		"fuel": "gasoline", "tank_l": 31.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 36.0, "top_speed_mps": 33.0, "mpg": [7.5, 12.0],
 	},
@@ -68,6 +85,8 @@ const CHASSIS := {
 		"tyre_d_m": 0.71, "tyre_w_m": 0.235, "dually": false, "rear_axles": 1,
 		"frame_h_m": 0.62, "hood_len_m": 0.95, "cab_len_m": 2.6, "cab_h_m": 2.0,
 		"cab_w_m": 2.07, "curb_kg": 2450.0, "gvwr_kg": 9070.0 * LB,
+		"gawr_f_kg": 4130.0 * LB, "gawr_r_kg": 5360.0 * LB, "tow_kg": 7500.0 * LB, "gcwr_kg": 13500.0 * LB,
+		"roof_kg": 300.0, "shell_h_m": 2.78, "cg_wb": 0.5,
 		"fuel": "gasoline", "tank_l": 25.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 40.0, "top_speed_mps": 38.0, "mpg": [13.0, 18.0],
 	},
@@ -77,6 +96,8 @@ const CHASSIS := {
 		"tyre_d_m": 0.71, "tyre_w_m": 0.225, "dually": false, "rear_axles": 1,
 		"frame_h_m": 0.55, "hood_len_m": 0.85, "cab_len_m": 2.25, "cab_h_m": 1.95,
 		"cab_w_m": 2.1, "curb_kg": 2350.0, "gvwr_kg": 9350.0 * LB,
+		"gawr_f_kg": 4630.0 * LB, "gawr_r_kg": 5860.0 * LB, "tow_kg": 6910.0 * LB, "gcwr_kg": 16220.0 * LB,
+		"roof_kg": 150.0, "shell_h_m": 2.52, "cg_wb": 0.5,
 		"fuel": "gasoline", "tank_l": 24.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 40.0, "top_speed_mps": 38.0, "mpg": [14.0, 18.0],
 	},
@@ -86,8 +107,20 @@ const CHASSIS := {
 		"tyre_d_m": 0.72, "tyre_w_m": 0.235, "dually": false, "rear_axles": 1,
 		"frame_h_m": 0.6, "hood_len_m": 0.95, "cab_len_m": 3.0, "cab_h_m": 2.0,
 		"cab_w_m": 2.02, "curb_kg": 2600.0, "gvwr_kg": 9050.0 * LB,
+		"gawr_f_kg": 3748.0 * LB, "gawr_r_kg": 5360.0 * LB, "tow_kg": 5000.0 * LB, "gcwr_kg": 13550.0 * LB,
+		"roof_kg": 300.0, "shell_h_m": 2.75, "cg_wb": 0.5,
 		"fuel": "diesel", "tank_l": 24.5 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 40.0, "top_speed_mps": 38.0, "mpg": [16.0, 22.0],
+	},
+	"sprinter_cab_chassis": {
+		"label": "Mercedes Sprinter 3500 cab chassis, 170\" (diesel, duals)", "cab": "cutaway",
+		"wheelbase_m": 170.0 * IN, "track_m": 1.73, "front_overhang_m": 1.0,
+		"tyre_d_m": 0.72, "tyre_w_m": 0.215, "dually": true, "rear_axles": 1,
+		"frame_h_m": 0.62, "hood_len_m": 0.95, "cab_len_m": 2.3, "cab_h_m": 2.0,
+		"cab_w_m": 2.02, "curb_kg": 2500.0, "gvwr_kg": 11030.0 * LB,
+		"gawr_f_kg": 4080.0 * LB, "gawr_r_kg": 7720.0 * LB, "tow_kg": 5000.0 * LB, "gcwr_kg": 15250.0 * LB,
+		"fuel": "diesel", "tank_l": 24.5 * GAL, "battery_kwh": 0.0,
+		"max_steer_deg": 40.0, "top_speed_mps": 36.0, "mpg": [10.0, 15.0],
 	},
 	"ford_etransit": {
 		"label": "Ford E-Transit high roof (electric, 89 kWh)", "cab": "full_van",
@@ -95,6 +128,8 @@ const CHASSIS := {
 		"tyre_d_m": 0.71, "tyre_w_m": 0.235, "dually": false, "rear_axles": 1,
 		"frame_h_m": 0.62, "hood_len_m": 0.95, "cab_len_m": 2.6, "cab_h_m": 2.0,
 		"cab_w_m": 2.07, "curb_kg": 2950.0, "gvwr_kg": 9500.0 * LB,
+		"gawr_f_kg": 4130.0 * LB, "gawr_r_kg": 5500.0 * LB, "tow_kg": 0.0, "gcwr_kg": 9500.0 * LB,
+		"roof_kg": 300.0, "shell_h_m": 2.78, "cg_wb": 0.52,
 		"fuel": "electric", "tank_l": 0.0, "battery_kwh": 89.0,
 		"max_steer_deg": 40.0, "top_speed_mps": 36.0, "mpg": [],
 	},
@@ -103,7 +138,8 @@ const CHASSIS := {
 		"wheelbase_m": 178.0 * IN, "track_m": 1.88, "front_overhang_m": 0.85,
 		"tyre_d_m": 0.86, "tyre_w_m": 0.245, "dually": true, "rear_axles": 1,
 		"frame_h_m": 0.85, "hood_len_m": 0.0, "cab_len_m": 1.6, "cab_h_m": 2.9,
-		"cab_w_m": 2.3, "curb_kg": 4300.0, "gvwr_kg": 22000.0 * LB,
+		"cab_w_m": 2.3, "curb_kg": 2900.0, "gvwr_kg": 22000.0 * LB,
+		"gawr_f_kg": 7000.0 * LB, "gawr_r_kg": 15000.0 * LB, "tow_kg": 5000.0 * LB, "gcwr_kg": 30000.0 * LB,
 		"fuel": "gasoline", "tank_l": 60.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 40.0, "top_speed_mps": 30.0, "mpg": [7.0, 10.5],
 	},
@@ -112,7 +148,8 @@ const CHASSIS := {
 		"wheelbase_m": 232.0 * IN, "track_m": 2.0, "front_overhang_m": 0.95,
 		"tyre_d_m": 0.95, "tyre_w_m": 0.25, "dually": true, "rear_axles": 1,
 		"frame_h_m": 0.95, "hood_len_m": 0.0, "cab_len_m": 1.4, "cab_h_m": 3.3,
-		"cab_w_m": 2.54, "curb_kg": 3700.0, "gvwr_kg": 24000.0 * LB,
+		"cab_w_m": 2.54, "curb_kg": 3350.0, "gvwr_kg": 24000.0 * LB,
+		"gawr_f_kg": 8000.0 * LB, "gawr_r_kg": 17000.0 * LB, "tow_kg": 5000.0 * LB, "gcwr_kg": 30000.0 * LB,
 		"fuel": "gasoline", "tank_l": 80.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 45.0, "top_speed_mps": 33.0, "mpg": [6.0, 10.0],
 	},
@@ -121,16 +158,20 @@ const CHASSIS := {
 		"wheelbase_m": 276.0 * IN, "track_m": 2.0, "front_overhang_m": 1.0,
 		"tyre_d_m": 1.0, "tyre_w_m": 0.25, "dually": true, "rear_axles": 1,
 		"frame_h_m": 1.0, "hood_len_m": 1.6, "cab_len_m": 2.2, "cab_h_m": 3.0,
-		"cab_w_m": 2.44, "curb_kg": 10400.0, "gvwr_kg": 29000.0 * LB,
+		"cab_w_m": 2.44, "curb_kg": 8400.0, "gvwr_kg": 29000.0 * LB,
+		"gawr_f_kg": 10000.0 * LB, "gawr_r_kg": 19000.0 * LB, "tow_kg": 10000.0 * LB, "gcwr_kg": 40000.0 * LB,
+		"cg_wb": 0.57,
 		"fuel": "diesel", "tank_l": 60.0 * GAL, "battery_kwh": 0.0,
-		"max_steer_deg": 45.0, "top_speed_mps": 29.0, "mpg": [6.0, 9.0],
+		"max_steer_deg": 45.0, "top_speed_mps": 29.0, "mpg": [6.0, 10.0],
 	},
 	"intl_ce_short": {
 		"label": "IC CE school bus, short (diesel, 25 ft)", "cab": "cowl",
 		"wheelbase_m": 189.0 * IN, "body_len_m": 7.0, "track_m": 2.0, "front_overhang_m": 1.0,
 		"tyre_d_m": 0.98, "tyre_w_m": 0.25, "dually": true, "rear_axles": 1,
 		"frame_h_m": 1.0, "hood_len_m": 1.5, "cab_len_m": 2.1, "cab_h_m": 3.0,
-		"cab_w_m": 2.44, "curb_kg": 7900.0, "gvwr_kg": 23500.0 * LB,
+		"cab_w_m": 2.44, "curb_kg": 6400.0, "gvwr_kg": 23500.0 * LB,
+		"gawr_f_kg": 8000.0 * LB, "gawr_r_kg": 15500.0 * LB, "tow_kg": 10000.0 * LB, "gcwr_kg": 33500.0 * LB,
+		"cg_wb": 0.52,
 		"fuel": "diesel", "tank_l": 60.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 45.0, "top_speed_mps": 29.0, "mpg": [7.0, 10.0],
 	},
@@ -139,7 +180,8 @@ const CHASSIS := {
 		"wheelbase_m": 212.0 * IN, "track_m": 2.03, "front_overhang_m": 1.05,
 		"tyre_d_m": 1.0, "tyre_w_m": 0.25, "dually": true, "rear_axles": 1,
 		"frame_h_m": 1.05, "hood_len_m": 1.45, "cab_len_m": 2.5, "cab_h_m": 2.75,
-		"cab_w_m": 2.4, "curb_kg": 6900.0, "gvwr_kg": 26000.0 * LB,
+		"cab_w_m": 2.4, "curb_kg": 4800.0, "gvwr_kg": 26000.0 * LB,
+		"gawr_f_kg": 10000.0 * LB, "gawr_r_kg": 19000.0 * LB, "tow_kg": 10000.0 * LB, "gcwr_kg": 35000.0 * LB,
 		"fuel": "diesel", "tank_l": 70.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 45.0, "top_speed_mps": 30.0, "mpg": [7.5, 11.0],
 	},
@@ -148,7 +190,9 @@ const CHASSIS := {
 		"wheelbase_m": 150.0 * IN, "track_m": 1.67, "front_overhang_m": 1.0,
 		"tyre_d_m": 0.78, "tyre_w_m": 0.215, "dually": true, "rear_axles": 1,
 		"frame_h_m": 0.8, "hood_len_m": 0.0, "cab_len_m": 1.75, "cab_h_m": 2.3,
-		"cab_w_m": 2.0, "curb_kg": 3600.0, "gvwr_kg": 14500.0 * LB,
+		"cab_w_m": 2.0, "curb_kg": 2850.0, "gvwr_kg": 14500.0 * LB,
+		"gawr_f_kg": 6830.0 * LB, "gawr_r_kg": 9880.0 * LB, "tow_kg": 6000.0 * LB, "gcwr_kg": 20500.0 * LB,
+		"cg_wb": 0.35,
 		"fuel": "gasoline", "tank_l": 30.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 45.0, "top_speed_mps": 31.0, "mpg": [6.5, 10.0],
 	},
@@ -158,6 +202,9 @@ const CHASSIS := {
 		"tyre_d_m": 1.04, "tyre_w_m": 0.28, "dually": true, "rear_axles": 2,
 		"frame_h_m": 1.1, "hood_len_m": 1.9, "cab_len_m": 3.2, "cab_h_m": 3.3,
 		"cab_w_m": 2.48, "curb_kg": 8400.0 + 3100.0, "gvwr_kg": 36287.0,
+		# US bridge-law axle limits: 12,000 lb on the steer, 34,000 lb on each
+		# tandem (the tractor's and the chassis'), 80,000 lb gross.
+		"gawr_f_kg": 12000.0 * LB, "gawr_r_kg": 68000.0 * LB, "tow_kg": 0.0, "gcwr_kg": 36287.0,
 		"fuel": "diesel", "tank_l": 200.0 * GAL, "battery_kwh": 0.0,
 		"max_steer_deg": 45.0, "top_speed_mps": 30.0, "mpg": [5.5, 9.0],
 	},
@@ -167,6 +214,7 @@ const CHASSIS := {
 		"tyre_d_m": 0.72, "tyre_w_m": 0.205, "dually": false, "rear_axles": 2,
 		"frame_h_m": 0.55, "hood_len_m": 0.0, "cab_len_m": 0.0, "cab_h_m": 0.0,
 		"cab_w_m": 0.0, "curb_kg": 600.0, "gvwr_kg": 7000.0 * LB,
+		"gawr_f_kg": 0.0, "gawr_r_kg": 7000.0 * LB, "tow_kg": 0.0, "gcwr_kg": 0.0, "brakes": true,
 		"fuel": "none", "tank_l": 0.0, "battery_kwh": 0.0,
 		"max_steer_deg": 0.0, "top_speed_mps": 29.0, "mpg": [],
 	},
@@ -176,6 +224,7 @@ const CHASSIS := {
 		"tyre_d_m": 0.68, "tyre_w_m": 0.205, "dually": false, "rear_axles": 1,
 		"frame_h_m": 0.5, "hood_len_m": 0.0, "cab_len_m": 0.0, "cab_h_m": 0.0,
 		"cab_w_m": 0.0, "curb_kg": 350.0, "gvwr_kg": 3500.0 * LB,
+		"gawr_f_kg": 0.0, "gawr_r_kg": 3500.0 * LB, "tow_kg": 0.0, "gcwr_kg": 0.0, "brakes": false,
 		"fuel": "none", "tank_l": 0.0, "battery_kwh": 0.0,
 		"max_steer_deg": 0.0, "top_speed_mps": 29.0, "mpg": [],
 	},
@@ -195,25 +244,34 @@ const CHASSIS := {
 ## is then the whole vehicle from the front. `in_curb`: the chassis curb mass
 ## already includes this body (a cargo van, a whole school bus). `mass_kg`
 ## replaces the skin estimate (an ISO container's published tare).
+## `wall_t_m` / `ceiling_t_m` = what the living space loses to the finished
+## wall and ceiling: a converted van's ribs + insulation + panelling take
+## ~0.12 m a side and 0.15 m of headroom, a bus ~0.08, a dry box's plywood
+## liner 0.05. `roof_kg` = the load the roof carries (racks, modules, an AC).
+## The ISO container sits on a GOOSENECK chassis (deck ~1.2 m at the tunnel):
+## a high cube on a flat deck would stand over 13' 6".
 const BODIES := {
 	"van_shell": {
 		"label": "Van shell (as built)", "length_m": 0.0, "width_m": 2.03,
 		"height_m": 2.75, "floor_h_m": 0.55, "roof": "high_top", "cd": 0.42,
 		"wall_kg_m2": 9.0, "windows": "few", "rear_door": "barn", "side_door": "slider",
 		"corner_r_m": 0.18, "integral": true, "in_curb": true,
+		"wall_t_m": 0.12, "ceiling_t_m": 0.15, "roof_kg": 300.0,
 		"color": [0.92, 0.93, 0.94],
 	},
 	"shuttle_aerotech": {
 		"label": "Fiberglass \"aerotech\" shuttle body", "length_m": 4.9, "width_m": 2.36,
 		"height_m": 3.05, "floor_h_m": 0.82, "roof": "crown", "cd": 0.6,
 		"wall_kg_m2": 14.0, "windows": "band", "rear_door": "none", "side_door": "bus",
-		"corner_r_m": 0.22, "color": [0.95, 0.95, 0.95],
+		"corner_r_m": 0.22, "wall_t_m": 0.08, "ceiling_t_m": 0.1, "roof_kg": 250.0,
+		"color": [0.95, 0.95, 0.95],
 	},
 	"skoolie": {
 		"label": "School bus body (Blue Bird / Thomas)", "length_m": 8.4, "width_m": 2.44,
 		"height_m": 3.15, "floor_h_m": 1.0, "roof": "arched", "cd": 0.65,
 		"wall_kg_m2": 18.0, "windows": "bus", "rear_door": "barn", "side_door": "bus",
 		"corner_r_m": 0.12, "integral": true, "in_curb": true,
+		"wall_t_m": 0.08, "ceiling_t_m": 0.12, "roof_kg": 500.0,
 		"color": [0.98, 0.72, 0.06],
 	},
 	"step_van_alu": {
@@ -221,50 +279,57 @@ const BODIES := {
 		"height_m": 3.15, "floor_h_m": 0.75, "roof": "flat", "cd": 0.72,
 		"wall_kg_m2": 12.0, "windows": "none", "rear_door": "roll_up", "side_door": "sliding_step",
 		"corner_r_m": 0.08, "integral": true,
+		"wall_t_m": 0.06, "ceiling_t_m": 0.08, "roof_kg": 300.0,
 		"color": [0.9, 0.9, 0.88],
 	},
 	"ambulance_type3": {
 		"label": "Ambulance module (Type III)", "length_m": 4.0, "width_m": 2.36,
 		"height_m": 2.95, "floor_h_m": 0.82, "roof": "flat", "cd": 0.66,
 		"wall_kg_m2": 16.0, "windows": "few", "rear_door": "barn", "side_door": "hinged",
-		"corner_r_m": 0.06, "color": [0.97, 0.97, 0.97],
+		"corner_r_m": 0.06, "wall_t_m": 0.06, "ceiling_t_m": 0.08, "roof_kg": 250.0,
+		"color": [0.97, 0.97, 0.97],
 	},
 	"class_c_rv": {
 		"label": "Class C RV body (cab-over)", "length_m": 5.4, "width_m": 2.44,
 		"height_m": 3.4, "floor_h_m": 0.9, "roof": "cabover", "cd": 0.62,
 		"wall_kg_m2": 13.0, "windows": "few", "rear_door": "none", "side_door": "hinged",
-		"corner_r_m": 0.18, "color": [0.94, 0.93, 0.9],
+		"corner_r_m": 0.18, "wall_t_m": 0.06, "ceiling_t_m": 0.08, "roof_kg": 150.0,
+		"color": [0.94, 0.93, 0.9],
 	},
 	"class_a_motorhome": {
 		"label": "Class A motorhome body", "length_m": 9.6, "width_m": 2.54,
 		"height_m": 3.75, "floor_h_m": 1.0, "roof": "crown", "cd": 0.58,
 		"wall_kg_m2": 20.0, "windows": "few", "rear_door": "none", "side_door": "hinged",
 		"corner_r_m": 0.25, "integral": true,
+		"wall_t_m": 0.08, "ceiling_t_m": 0.1, "roof_kg": 250.0,
 		"color": [0.9, 0.88, 0.84],
 	},
 	"dry_box_16": {
 		"label": "Dry van box (16 ft)", "length_m": 4.88, "width_m": 2.44,
 		"height_m": 3.35, "floor_h_m": 1.05, "roof": "flat", "cd": 0.72,
 		"wall_kg_m2": 11.0, "windows": "none", "rear_door": "roll_up", "side_door": "none",
-		"corner_r_m": 0.03, "color": [0.96, 0.96, 0.96],
+		"corner_r_m": 0.03, "wall_t_m": 0.05, "ceiling_t_m": 0.06, "roof_kg": 300.0,
+		"color": [0.96, 0.96, 0.96],
 	},
 	"travel_trailer": {
 		"label": "Travel trailer (fiberglass, 20 ft)", "length_m": 6.1, "width_m": 2.4,
 		"height_m": 3.1, "floor_h_m": 0.7, "roof": "crown", "cd": 0.55,
 		"wall_kg_m2": 11.0, "windows": "few", "rear_door": "none", "side_door": "hinged",
-		"corner_r_m": 0.35, "color": [0.95, 0.95, 0.93],
+		"corner_r_m": 0.35, "wall_t_m": 0.06, "ceiling_t_m": 0.08, "roof_kg": 150.0,
+		"color": [0.95, 0.95, 0.93],
 	},
 	"cargo_trailer": {
-		"label": "Enclosed cargo trailer (V-nose, 16 ft)", "length_m": 4.9, "width_m": 2.3,
+		"label": "Enclosed cargo trailer (V-nose, 16 ft)", "length_m": 4.9, "width_m": 7.0 * 12.0 * IN,
 		"height_m": 2.85, "floor_h_m": 0.55, "roof": "crown", "cd": 0.6,
 		"wall_kg_m2": 9.0, "windows": "none", "rear_door": "lift", "side_door": "hinged",
-		"corner_r_m": 0.1, "color": [0.1, 0.1, 0.11],
+		"corner_r_m": 0.1, "wall_t_m": 0.05, "ceiling_t_m": 0.06, "roof_kg": 150.0,
+		"color": [0.1, 0.1, 0.11],
 	},
 	"iso_40hc": {
 		"label": "ISO 40 ft high-cube container", "length_m": 12.19, "width_m": 2.44,
 		"height_m": 4.1, "floor_h_m": 1.35, "roof": "flat", "cd": 0.62,
 		"wall_kg_m2": 50.0, "windows": "few", "rear_door": "barn", "side_door": "hinged",
-		"corner_r_m": 0.0, "mass_kg": 3900.0,
+		"corner_r_m": 0.0, "mass_kg": 3900.0, "wall_t_m": 0.1, "ceiling_t_m": 0.1, "roof_kg": 1000.0,
 		"color": [0.55, 0.16, 0.12],
 	},
 }
@@ -276,8 +341,8 @@ const BODIES := {
 ## combination to a rear overhang of 0.6 m to two thirds of the wheelbase
 ## and the box behind the cab. The Freightliner M2 ambulance (its 212" WB
 ## puts the rear axle at the back wall of a 4 m module) and a Class C box on
-## the Sprinter VAN shell (a Class C needs the cab-chassis, not in the
-## catalog yet) failed it and were dropped.
+## the Sprinter VAN shell failed it and were dropped; the Class C is offered
+## on the Sprinter CAB CHASSIS instead, which is what it is built on.
 const TYPES := {
 	"van": {"label": "Van (camper conversion)", "chassis": "sprinter_170", "body": "van_shell",
 		"chassis_ok": ["sprinter_170", "ford_transit_250_hr", "ram_promaster_3500", "ford_etransit"]},
@@ -292,13 +357,15 @@ const TYPES := {
 	"ambulance": {"label": "Ambulance (Type III)", "chassis": "ford_e450_drw", "body": "ambulance_type3",
 		"chassis_ok": ["ford_e450_drw", "chevy_express_3500"]},
 	"rv": {"label": "RV (Class C)", "chassis": "ford_e450_drw", "body": "class_c_rv",
-		"chassis_ok": ["ford_e450_drw", "chevy_express_3500"]},
+		"chassis_ok": ["ford_e450_drw", "chevy_express_3500", "sprinter_cab_chassis"]},
 	"motorhome": {"label": "Motorhome (Class A)", "chassis": "ford_f53_class_a", "body": "class_a_motorhome",
 		"chassis_ok": ["ford_f53_class_a"]},
 	"box_truck": {"label": "Box truck", "chassis": "isuzu_npr", "body": "dry_box_16",
 		"chassis_ok": ["isuzu_npr", "freightliner_m2", "ford_e450_drw"]},
+	# (A 20 ft travel trailer weighs more than a 3,500 lb single axle carries,
+	# so that chassis is offered as "other" — pick it under a cargo box.)
 	"trailer": {"label": "Trailer (travel / cargo)", "chassis": "trailer_tandem", "body": "travel_trailer",
-		"chassis_ok": ["trailer_tandem", "trailer_single"]},
+		"chassis_ok": ["trailer_tandem"]},
 	"semi_container": {"label": "Semi truck with container", "chassis": "cascadia_day_cab", "body": "iso_40hc",
 		"chassis_ok": ["cascadia_day_cab"]},
 }
@@ -313,7 +380,21 @@ const TYPE_ORDER := ["van", "cargo_van", "shuttle_bus", "school_bus", "step_van"
 ## `load_w` is a load's average draw (a 12 V compressor fridge ~45 W over a
 ## day, an LED ceiling light ~8 W, a 24" monitor ~25 W — typical nameplate
 ## figures, estimates): the vehicle's graph node bills them.
+## A battery's mass and box follow its kWh (LiFePO4 ~12 kg/kWh and
+## ~0.018 m³/kWh with the case — a 100 Ah 12.8 V drop-in is ~13 kg), a tank's
+## shell its litres (a rotomoulded tank ~0.065 kg/L of capacity), scaled from
+## the type's default size (VehicleDesign.resolve_interior_element); the
+## water itself is counted when the vehicle is laden. A propane element is
+## bottles of `lb` of gas (a 20 lb bottle: 8 kg tare + 9 kg of propane).
 const BED_SLEEPER_W := 0.62
+const BATTERY_KG_PER_KWH := 12.0
+const BATTERY_M3_PER_KWH := 0.018
+const TANK_KG_PER_L := 0.065
+const PROPANE_TARE_KG_PER_LB := 0.4
+const PROPANE_KG_PER_LB := 0.4536
+## What the water and fuel weigh (kg/L): water 1.0, gasoline 0.74, diesel
+## 0.84 (US DOE AFDC fuel properties).
+const FUEL_KG_L := {"gasoline": 0.74, "diesel": 0.84}
 const INTERIOR_TYPES := {
 	"bed": {"label": "Bed (platform)", "w": 1.37, "l": 1.9, "h": 0.62, "mass_kg": 45.0,
 		"provides": ["sleep"], "color": [0.55, 0.42, 0.28]},
@@ -355,6 +436,16 @@ const INTERIOR_TYPES := {
 		"provides": ["water"], "color": [0.85, 0.88, 0.9], "litres": 120.0},
 	"grey_tank": {"label": "Grey water tank", "w": 0.45, "l": 0.7, "h": 0.35, "mass_kg": 7.0,
 		"provides": ["grey"], "color": [0.45, 0.47, 0.5], "litres": 90.0},
+	"black_tank": {"label": "Black / cassette tank", "w": 0.45, "l": 0.6, "h": 0.3, "mass_kg": 6.0,
+		"provides": ["black"], "color": [0.3, 0.3, 0.32], "litres": 60.0},
+	"propane": {"label": "Propane bottles (2 × 20 lb)", "w": 0.32, "l": 0.64, "h": 0.5, "mass_kg": 34.0,
+		"provides": ["propane"], "color": [0.9, 0.9, 0.88], "lb": 40.0},
+	"heater": {"label": "Air heater (diesel / propane)", "w": 0.15, "l": 0.35, "h": 0.15, "mass_kg": 3.0,
+		"provides": ["heat"], "color": [0.2, 0.2, 0.22], "load_w": 25.0},
+	"water_heater": {"label": "Water heater (propane)", "w": 0.35, "l": 0.35, "h": 0.5, "mass_kg": 12.0,
+		"provides": ["hot_water"], "color": [0.88, 0.88, 0.86]},
+	"shore_inlet": {"label": "Shore-power inlet (15 A)", "w": 0.1, "l": 0.12, "h": 0.15, "mass_kg": 1.0,
+		"provides": ["shore"], "color": [0.2, 0.22, 0.25], "wall_hung": 0.5, "supply_w": 1800.0},
 	"light": {"label": "Ceiling light", "w": 0.2, "l": 0.2, "h": 0.03, "mass_kg": 0.3,
 		"provides": [], "color": [1.0, 0.96, 0.85], "ceiling": true, "load_w": 8.0},
 	"monitor": {"label": "Monitor", "w": 0.06, "l": 0.6, "h": 0.35, "mass_kg": 4.0,

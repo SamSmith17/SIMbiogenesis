@@ -20,15 +20,16 @@ static func _el(id: String, type: String, x: float, z: float, extra: Dictionary 
 
 static func builtins() -> Array:
 	return [
-		{"id": "van", "spec": _spec("van", "Camper van (Sprinter 170)", {}, {}, [
+		# A couple's camper: two travelling seats, both up front.
+		{"id": "van", "spec": _seats(_spec("van", "Camper van (Sprinter 170)", {}, {}, [
 			_el("bed", "bed", 0.0, -0.95, {"w": 1.5, "h": 0.95}),
 			_el("galley", "galley", -0.66, 0.9),
 			_el("fridge", "fridge", -0.68, 1.95),
 			_el("bench", "bench", 0.7, 1.0, {"l": 1.0}),
 			_el("toilet", "toilet", 0.68, 2.0),
 			_el("cubby", "cubby", -0.75, 2.75),
-			_el("battery", "battery", 0.45, -0.6),
-			_el("water", "water_tank", -0.4, -1.2),
+			_el("battery", "battery", 0.45, -0.4),
+			_el("water", "water_tank", -0.4, -0.5),
 			_el("inverter", "inverter", 0.8, 2.75),
 			_el("light", "light", 0.0, 2.0),
 		], [
@@ -36,7 +37,7 @@ static func builtins() -> Array:
 			_x("solar", "solar", "roof", 0.0, 1.9, {"module": "rigid_400", "rows": 1, "cols": 1}),
 			_x("starlink", "starlink", "roof", 0.0, 0.7),
 			_x("gland", "gland", "roof", 0.6, 1.0),
-		])},
+		]), 2)},
 		{"id": "cargo_van", "spec": _spec("cargo_van", "Cargo van (Transit high roof)", {}, {}, [
 			_el("bed", "bed", -0.48, -1.0, {"w": 0.9, "l": 1.95, "h": 0.9}),
 			_el("cabinet", "cabinet", 0.72, -1.0, {"l": 1.2}),
@@ -55,6 +56,7 @@ static func builtins() -> Array:
 			_el("battery", "battery", 0.3, -0.6),
 			_el("water", "water_tank", 0.7, -1.5),
 			_el("grey", "grey_tank", -0.1, -1.6),
+			_el("black", "black_tank", -0.2, -0.9),
 			_el("cubby", "cubby", 0.9, 3.0),
 			_el("inverter", "inverter", -0.9, 3.6),
 			_el("light", "light", 0.0, 2.4),
@@ -77,7 +79,7 @@ static func builtins() -> Array:
 			_el("battery", "battery", 0.3, -0.7),
 			_el("water", "water_tank", -0.4, -1.3),
 			_el("grey", "grey_tank", 0.35, -1.6),
-			_el("inverter", "inverter", -0.9, 4.8),
+			_el("inverter", "inverter", -0.9, 4.6),
 			_el("light", "light", 0.0, 2.0),
 			_el("light2", "light", 0.0, 4.5),
 		], [
@@ -115,9 +117,10 @@ static func builtins() -> Array:
 			_el("galley", "galley", -0.82, 2.2, {"l": 1.2}),
 			_el("fridge", "fridge", -0.85, 1.25),
 			_el("dinette", "dinette", 0.65, 1.6),
-			_el("battery", "battery", 0.45, -0.6),
+			_el("battery", "battery", 0.4, -0.6),
 			_el("water", "water_tank", 0.6, -1.6),
 			_el("grey", "grey_tank", 0.1, -1.5),
+			_el("black", "black_tank", 0.9, -0.6),
 			_el("light", "light", 0.0, 2.5),
 		], [
 			_x("ac", "ac", "roof", 0.0, 0.8),
@@ -131,11 +134,12 @@ static func builtins() -> Array:
 			_el("bath", "shoilet", 0.75, -2.9),
 			_el("galley", "galley", -0.8, 3.0, {"l": 1.8}),
 			_el("fridge", "fridge", -0.85, 4.3),
-			_el("dinette", "dinette", 0.7, 1.3),
-			_el("sofa", "sofa", -0.8, 1.0),
+			_el("dinette", "dinette", 0.7, 2.2),
+			_el("sofa", "sofa", -0.8, 1.2),
 			_el("battery", "battery", 0.4, -0.7),
 			_el("water", "water_tank", -0.4, -1.2),
 			_el("grey", "grey_tank", 0.4, -1.5),
+			_el("black", "black_tank", -0.3, -0.35),
 			_el("light", "light", 0.0, 3.0),
 			_el("light2", "light", 0.0, 5.5),
 		])},
@@ -158,6 +162,7 @@ static func builtins() -> Array:
 			_el("fridge", "fridge", -0.8, 4.2),
 			_el("battery", "battery", 0.0, 0.8),
 			_el("water", "water_tank", 0.4, 1.5),
+			_el("black", "black_tank", -0.4, 1.5),
 			_el("light", "light", 0.0, 3.0),
 		]), {"door_at_m": 4.0})},
 		{"id": "semi_container", "spec": _spec("semi_container", "Semi + 40 ft container home", {}, {}, [
@@ -193,6 +198,12 @@ static func _spec(type: String, name: String, chassis: Dictionary, paint: Dictio
 ## The same spec with body overrides (VehicleSpec.BODY_KEYS).
 static func _body(s: Dictionary, over: Dictionary) -> Dictionary:
 	s["body"] = over
+	return s
+
+
+## The same spec with its travelling seats set (incl. the driver).
+static func _seats(s: Dictionary, n: int) -> Dictionary:
+	s["seats"] = n
 	return s
 
 

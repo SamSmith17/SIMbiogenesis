@@ -369,13 +369,22 @@ static func totals(els: Array) -> Dictionary:
 	for e in els:
 		var el: Dictionary = e
 		var t := type_info(str(el["type"]))
+		kg += mass_of(el)
 		if str(el["type"]) == "solar":
 			var m: Dictionary = MODULES[str(el["module"])]
 			var n := int(el["rows"]) * int(el["cols"])
 			modules += n
 			solar += float(m["watts"]) * float(n)
-			kg += float(m["kg"]) * float(n) + (2.0 * float(n) if str(el["module"]) != "flex_100" else 0.0)
 		else:
-			kg += float(t.get("kg", 0.0))
 			load += float(t.get("load_w", 0.0))
 	return {"kg": kg, "solar_w": solar, "load_w": load, "modules": modules}
+
+
+## One item's mass: its type's, or the modules (+ 2 kg of mounts per rigid
+## module) for a solar item.
+static func mass_of(el: Dictionary) -> float:
+	if str(el.get("type", "")) == "solar":
+		var m: Dictionary = MODULES.get(str(el.get("module", "rigid_400")), MODULES["rigid_400"])
+		var n := int(el.get("rows", 1)) * int(el.get("cols", 1))
+		return float(m["kg"]) * float(n) + (2.0 * float(n) if str(el.get("module", "")) != "flex_100" else 0.0)
+	return float(type_info(str(el.get("type", ""))).get("kg", 0.0))

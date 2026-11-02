@@ -69,12 +69,17 @@ static func placed_total(records: Array) -> Dictionary:
 ## miles (VehicleEnergy.trip) plus every litre poured in from a can on site
 ## (`vehicle_fuel_bought_l`, at the trip's fuel price). {usd, trip_usd,
 ## fuel_usd, miles}; {} for anything that is not a living vehicle.
-static func running_for_record(rec: Dictionary) -> Dictionary:
+static func running_for_record(rec: Dictionary, by_id: Dictionary = {}) -> Dictionary:
 	if not (rec.get("vehicle_spec") is Dictionary) and not VehicleBuilder.handles(str(rec.get("model_id", ""))):
 		return {}
 	var spec := VehicleBuilder.spec_for_record(rec)
 	var d := VehicleDesign.solve(spec)
 	var t: Dictionary = d.get("trip_estimate", {})
+	# Towing a trailer here (`towing` on the record): the trip burns for both.
+	var tow_id := str(rec.get("towing", ""))
+	if not tow_id.is_empty() and by_id.has(tow_id):
+		var td := VehicleDesign.solve(VehicleBuilder.spec_for_record(by_id[tow_id]))
+		t = VehicleEnergy.trip(d, float((spec.get("trip", {}) as Dictionary).get("one_way_mi", 0.0)), true, td)
 	var trip_usd := maxf(float(t.get("cost", 0.0)), 0.0)
 	var price := float((spec.get("trip", {}) as Dictionary).get("fuel_price_per_gal", 4.5))
 	var fuel_usd := maxf(float(rec.get("vehicle_fuel_bought_l", 0.0)), 0.0) / 3.78541 * price
@@ -87,10 +92,14 @@ static func running_total(records: Array) -> Dictionary:
 	var usd := 0.0
 	var n := 0
 	var miles := 0.0
+	var by_id := {}
+	for r_v in records:
+		if r_v is Dictionary:
+			by_id[str((r_v as Dictionary).get("id", ""))] = r_v
 	for r_v in records:
 		if not (r_v is Dictionary):
 			continue
-		var c := running_for_record(r_v as Dictionary)
+		var c := running_for_record(r_v as Dictionary, by_id)
 		if c.is_empty():
 			continue
 		n += 1

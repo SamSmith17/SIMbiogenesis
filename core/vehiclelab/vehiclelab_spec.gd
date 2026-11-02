@@ -32,9 +32,11 @@ const PAINT_DEFAULTS := {
 
 const CHASSIS_KEYS := ["wheelbase_m", "track_m", "front_overhang_m", "tyre_d_m", "tyre_w_m",
 	"dually", "rear_axles", "frame_h_m", "hood_len_m", "cab_len_m", "cab_h_m", "cab_w_m",
-	"rear_overhang_m", "curb_kg", "gvwr_kg", "fuel", "tank_l", "battery_kwh", "max_steer_deg", "top_speed_mps"]
+	"rear_overhang_m", "curb_kg", "gvwr_kg", "fuel", "tank_l", "battery_kwh", "max_steer_deg", "top_speed_mps",
+	"gawr_f_kg", "gawr_r_kg", "tow_kg", "gcwr_kg", "roof_kg", "brakes", "shell_h_m", "body_len_m", "cg_wb"]
 const BODY_KEYS := ["length_m", "width_m", "height_m", "floor_h_m", "roof", "cd",
-	"wall_kg_m2", "windows", "rear_door", "side_door", "corner_r_m", "door_at_m"]
+	"wall_kg_m2", "windows", "rear_door", "side_door", "corner_r_m", "door_at_m",
+	"wall_t_m", "ceiling_t_m", "roof_kg"]
 
 
 static func default_spec(type: String = "van") -> Dictionary:
@@ -78,6 +80,11 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	if str(ch.get("cab", "")) == "full_van" and float(bd.get("length_m", 0.0)) <= 0.0:
 		bd["length_m"] = float(ch["front_overhang_m"]) + float(ch["wheelbase_m"]) \
 			+ float(ch.get("rear_overhang_m", float(ch["wheelbase_m"]) * 0.45))
+	# ... and as tall as that van's own high roof (a ProMaster is 2.52 m, a
+	# Transit 2.78), unless the player typed a height.
+	if str(ch.get("cab", "")) == "full_van" and bool(bd.get("in_curb", false)) \
+			and float(ch.get("shell_h_m", 0.0)) > 0.0 and not bdo.has("height_m"):
+		bd["height_m"] = float(ch["shell_h_m"])
 	_clamp_body(bd, ch)
 	s["ch"] = ch
 	s["bd"] = bd

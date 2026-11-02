@@ -898,9 +898,20 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designe
 # GVWR > curb, wheelbase, tyres, cab style, fuel vs tank / pack; every body
 # within 102" and roomed; every type x listed chassis solved with a rear
 # overhang of 0.6 m to 2/3 of the wheelbase and the box behind the cab —
-# the guard for every catalog number. EXPECTED_CHECKS; --import first:
+# the guard for every catalog number; and the MASSES (polish Phase 1): laden
+# = curb + fuel + water + propane + gear + a person per seat by hand, payload
+# = GVWR − laden, a battery's / tank's mass and box from its kWh / litres,
+# the lever-rule axle loads summing to the laden mass with a sane front
+# share on every preset, 800 L at a Sprinter's tail tripping the rear-GAWR
+# warn, the trailer's tongue at 10–15 % and sway under it, the single axle
+# overloaded by a 20 ft trailer, wall thickness, the ProMaster's own roof,
+# the 13' 6" and roof-load warns, the new elements, series strings on the
+# graph node, towing's fuel / range / trip and VehicleTow.tow_check's
+# ratings. EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.gd
-# The same combinations as a table (length, WB, overhang, box start, payload):
+# The same combinations as a table (length, WB, overhang, box start,
+# payload), then every preset's masses, axle split / tongue, roof load,
+# height with the roof items, mpg and checks:
 Godot.exe.exe --headless --path . --script tools/diag/vehicle_catalog_probe.gd
 # The same on a real world (sandbox): every preset placed (drivable on its
 # design, the trailer not), the shuttle's sleep + kitchen + shower +
@@ -11606,7 +11617,7 @@ driver's view out of the cab). All eight are done.
     (placement, Apply) and returns the fresh-water tank, which becomes the
     shower and kitchen spaces' `graph_item_id` — the light tier bills those
     visits to the vehicle's own tank (the full tier still bills its habitat).
-  - Gates: `vehiclelab_selftest` (493 with the catalog test of 2026-11-02; 323 with Phases 5–8; 275 at Phase 4: floor hits, picking incl. nesting and
+  - Gates: `vehiclelab_selftest` (657 with polish Phase 1; 493 with the catalog test of 2026-11-02; 323 with Phases 5–8; 275 at Phase 4: floor hits, picking incl. nesting and
     the ceiling rule, doors, access on every preset + a walled-off and a
     too-narrow layout, the graph definition / signature / merge / realize) and
     `vehiclelab_designer_check.gd` (55 at 1080 and 720: a REAL click on the
@@ -11642,7 +11653,8 @@ driver's view out of the cab). All eight are done.
   - Gate: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/vehicle_drive_check.gd -Label vehicle_drive -Timeout 900`
     (16/0: refuel from a tote, hitch on backing up, coupler on the hitch round
     a circle, fuel over 1 km == the model, unhitch; 19/0 with Phase 8's
-    wheels and cab view).
+    wheels and cab view; 20/0 with Phase 1's towed fuel: the kilometre is
+    driven with the trailer on the hitch and burns the towed figure).
 - **Cargo bays (Phase 6).** `VehicleCargo` (pure): the
   largest clear floor rectangle (histogram method over a 0.1 m occupancy grid)
   under the full inside height, loaded through the rear door (else a side
@@ -11736,6 +11748,56 @@ driver's view out of the cab). All eight are done.
   - Not done: door-open poses during an unload, multiplayer review of the
     drive (records already sync as prop ops; the pose is a function of the
     clock), a tour stop for the drive-in.
+- **Mass and ratings realism (polish Phase 1, 2026-11-02;
+  `plans/VEHICLES_TRANSPORT_POLISH_PLAN.md`).** Every number a sheet gives
+  is on the chassis: `gawr_f_kg` / `gawr_r_kg`, `tow_kg`, `gcwr_kg`,
+  `roof_kg` (van shells; bodies carry their own), `brakes` (trailers),
+  `shell_h_m` (a van shell is as tall as ITS van: ProMaster 2.52, Transit
+  2.78), `cg_wb` (where the curb mass sits on the wheelbase, from the
+  sheet's empty axle weights — a cab-chassis 0.38, a van 0.5, a 35 ft bus
+  0.57) and bare-chassis curb masses (F-59 2900, NPR 2850, M2 4800, E-450
+  2650, F-53 3350, a 35 ft bus 8400). Bodies carry `wall_t_m` /
+  `ceiling_t_m` (a converted van loses 0.12 m a side and 0.15 m of
+  headroom) and `roof_kg`. `VehicleDesign._masses`: laden = curb + a full
+  tank (0.74 / 0.84 kg/L) + fresh water + propane + GEAR_KG + a person per
+  seat; `laden_out_kg` adds the grey and black tanks (the way home);
+  payload = GVWR − laden (`payload_dry_kg` = GVWR − curb). A battery's mass
+  and box follow its kWh (12 kg/kWh, 0.018 m³/kWh), a tank's shell its
+  litres (0.065 kg/L), propane its lb (`resolve_interior_element`; a typed
+  size wins). `_axle_loads` is the lever rule over every mass at its own z
+  (the chassis at `cg_wb`, the body at its middle, each piece inside, the
+  water in its tanks, the fuel at mid-wheelbase, the driver at the wheel
+  and the rest in the seats, roof items on the roof, the gear in the box):
+  `axle_f_kg` / `axle_r_kg` (every rear axle together), a trailer's
+  `tongue_kg` / `tongue_pct` at the coupler, `cg_z` / `cg_y` and the roof
+  load's `cg_rise_m`. A tractor + container is three axle groups on two
+  frames, so the semi gets no axle check (`axle_check` false). Checks:
+  over the GVWR loaded (error) or only with grey + black full (warn), a
+  rear / front axle over its rating, under 20 % on the front, a tongue
+  under 10 % (sway) or over 15 %, a trailer over 3,000 lb with no brakes,
+  over 13' 6" with the roof items (`overall_h_m`), over 102" with
+  side-mounted items (an awning or ladder is an appurtenance: 6" a side is
+  allowed, 49 CFR 658.16), the roof load over `roof_kg_max`, a wet bath
+  with no black tank (info). New elements: `black_tank`, `propane`
+  (bottles of lb), `heater`, `water_heater`, `shore_inlet` (reported as
+  `systems.shore_w`; the graph's controller type has no AC-in handle, so
+  it is not wired yet). `VehicleGraph` wires each solar item's modules in
+  SERIES STRINGS (`string_len`: the longest of 3 / 2 / 1 under the 150 V
+  cap with cold headroom that divides the count) in parallel on the MPPT;
+  past MAX_PANEL_NODES one node per string. Towing: `VehicleEnergy
+  .at_speed(d, v, trailer)` adds the trailer's rolling load and its drag at
+  `TRAILER_DRAFT` 0.7 (range_mi / energy_for_distance / trip take it;
+  PlacedVehicle and SiteCost.running_for_record pass the hitched trailer);
+  `VehicleTow.tow_check(tow, trailer)` = the trailer vs `tow_kg`, the pair
+  vs `gcwr_kg`, the tongue vs the hitch class (SAE J684 II–V by tow
+  rating), brakes, and the ball vs coupler height (from `frame_h_m`; a
+  drop / rise hitch past 8 cm) — `hitch_to` toasts its first two notes.
+  Trailer axles sit at 0.58 of the box (a tenth on the tongue). Presets
+  were re-laid for it (black tanks, the van's water forward, two seats on
+  the camper van, the motorhome's dinette back) and the skoolie's mpg band
+  widened to 6–10 (the old 10.4 t curb had held it at 9). Catalog: the
+  Sprinter 3500 cab chassis (the Class C's real base); a 20 ft travel
+  trailer overloads a 3,500 lb single axle, so that chassis is "other".
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch

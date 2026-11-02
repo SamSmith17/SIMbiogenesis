@@ -12,8 +12,10 @@ extends RefCounted
 ## Module electricals are the typical data-sheet figures of each class
 ## (estimates): a 400 W 108-half-cell module Voc 37.5 / Vmp 31.4 V; a
 ## "12 V" 200 W module Voc 24.3 / Vmp 20.4 V; a 100 W flexible module
-## Voc 21.6 / Vmp 18.0 V. Panels are wired in parallel onto the controller
-## (Voc stays one module's), the way small vehicle arrays usually are.
+## Voc 21.6 / Vmp 18.0 V. Each solar item's modules are wired in SERIES
+## STRINGS of up to STRING_MAX under the controller's Voc cap (strings in
+## parallel onto its PV terminals), the way a van builder keeps the roof
+## current down: 20 × 400 W all in parallel would be 260 A.
 
 const DEF_PREFIX := "vehicle_"
 const MODULE_EL := {
@@ -21,9 +23,26 @@ const MODULE_EL := {
 	"rigid_200": {"voc": 24.3, "vmp": 20.4},
 	"flex_100": {"voc": 21.6, "vmp": 18.0},
 }
-## Above this many modules each solar item is drawn as ONE panel of the
-## item's total (the same Voc, the summed current) so the node stays readable.
+## Above this many modules each solar item is drawn as ONE panel per string
+## of the item's total (the string's Voc, the summed current) so the node
+## stays readable.
 const MAX_PANEL_NODES := 16
+## The controller's open-circuit limit and the headroom a cold morning
+## takes (Voc rises ~0.3 %/°C below 25 °C: −10 °C adds ~10 %).
+const CC_MAX_VOC := 150.0
+const COLD_VOC_HEADROOM := 0.85
+const STRING_MAX := 3
+
+
+## Modules per series string for `n` modules of a module class: the longest
+## of 3 / 2 / 1 that keeps the string's Voc under the cold cap AND divides n,
+## so every string is the same length (unequal strings in parallel fight).
+static func string_len(n: int, voc: float) -> int:
+	var cap := int(floor(CC_MAX_VOC * COLD_VOC_HEADROOM / maxf(voc, 1.0)))
+	for s in range(mini(STRING_MAX, cap), 0, -1):
+		if n % s == 0:
+			return s
+	return 1
 ## Battery state of charge a freshly placed vehicle starts at.
 const START_SOC := 0.8
 
@@ -57,8 +76,10 @@ static func definition(d: Dictionary, def_id: String) -> Dictionary:
 	var solar_w := float(sys["solar_w"])
 	var loads: Array = sys["loads"]
 	var has_bat := kwh > 0.0
-	# Panels, one row across the top.
+	# Panels, one row across the top, grouped into series strings: `strings`
+	# is a list of panel-index lists, each one string in chain order.
 	var panels: Array = []
+	var strings: Array = []
 	var total_modules := 0
 	for s in sys["solar"]:
 		total_modules += int((s as Dictionary)["count"])
@@ -67,15 +88,26 @@ static func definition(d: Dictionary, def_id: String) -> Dictionary:
 		var el: Dictionary = MODULE_EL.get(str(sd["module"]), MODULE_EL["rigid_400"])
 		var w := float(sd["watts"])
 		var n := int(sd["count"])
+		var slen := string_len(n, float(el["voc"]))
+		var n_strings := n / slen
 		var merge := total_modules > MAX_PANEL_NODES
-		var k := 1 if merge else n
-		var per := n if merge else 1
-		for i in k:
-			var wmp := w * float(per)
-			panels.append({"name": "Roof solar %s" % UiText.num(w, "W") if per == 1 else
-					"Roof solar (%d × %s)" % [per, UiText.num(w, "W")],
-				"wmp": wmp, "voc": float(el["voc"]), "vmp": float(el["vmp"]),
-				"imp": wmp / float(el["vmp"]), "isc": wmp / float(el["vmp"]) * 1.07, "cost": 0.0})
+		for k in n_strings:
+			if merge:
+				# One node per string: the string's voltages, its watts.
+				var wmp := w * float(slen)
+				panels.append({"name": "Roof solar (%d × %s)" % [slen, UiText.num(w, "W")] if slen > 1
+						else "Roof solar %s" % UiText.num(w, "W"),
+					"wmp": wmp, "voc": float(el["voc"]) * float(slen), "vmp": float(el["vmp"]) * float(slen),
+					"imp": w / float(el["vmp"]), "isc": w / float(el["vmp"]) * 1.07, "cost": 0.0})
+				strings.append([panels.size() - 1])
+				continue
+			var chain: Array = []
+			for i in slen:
+				panels.append({"name": "Roof solar %s" % UiText.num(w, "W"),
+					"wmp": w, "voc": float(el["voc"]), "vmp": float(el["vmp"]),
+					"imp": w / float(el["vmp"]), "isc": w / float(el["vmp"]) * 1.07, "cost": 0.0})
+				chain.append(panels.size() - 1)
+			strings.append(chain)
 	var step := 220.0
 	var off := (float(panels.size()) - 1.0) * 0.5 * step
 	for i in panels.size():
@@ -86,13 +118,20 @@ static func definition(d: Dictionary, def_id: String) -> Dictionary:
 	if has_cc:
 		var amps := clampf(ceilf(solar_w / v * 1.25 / 5.0) * 5.0, 10.0, 150.0)
 		items.append({"local_id": "cc", "type": "controller", "dx": -150.0, "dy": -120.0,
-			"specs": {"name": "MPPT charge controller", "max_voc": 150.0,
+			"specs": {"name": "MPPT charge controller", "max_voc": CC_MAX_VOC,
 				"max_charge_amps": amps, "max_pv_watts": maxf(solar_w * 1.1, 200.0),
 				"system_voltage": v, "cost": 0.0}})
-		for i in panels.size():
-			conns.append({"source": "pv_%d" % i, "source_handle": "positive",
+		# Series inside a string (+ of one to − of the next, the convention
+		# GraphPvWiring.wire_series writes), the string's ends on the
+		# controller, strings in parallel.
+		for chain in strings:
+			var ch: Array = chain
+			for i in range(ch.size() - 1):
+				conns.append({"source": "pv_%d" % int(ch[i]), "source_handle": "positive",
+					"target": "pv_%d" % int(ch[i + 1]), "target_handle": "negative", "polarity": "positive"})
+			conns.append({"source": "pv_%d" % int(ch[ch.size() - 1]), "source_handle": "positive",
 				"target": "cc", "target_handle": "pvPositive", "polarity": "positive"})
-			conns.append({"source": "pv_%d" % i, "source_handle": "negative",
+			conns.append({"source": "pv_%d" % int(ch[0]), "source_handle": "negative",
 				"target": "cc", "target_handle": "pvNegative", "polarity": "negative"})
 	if has_bat:
 		items.append({"local_id": "bat", "type": "battery", "dx": 150.0, "dy": -120.0,

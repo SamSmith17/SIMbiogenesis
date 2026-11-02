@@ -1334,8 +1334,19 @@ func _refresh_summary() -> void:
 		float(d["width_m"]), float(d["height_m"]), float(d["turn_radius_m"]) * 2.0])
 	lines.append("Sleeps %d · seats %d · %s inside" % [int(d["sleeps"]), int(d["seats"]),
 		"%.1f m × %.2f m" % [float(d["house"]["len"]), float(d["house"]["w"])]])
-	lines.append("Weighs %.1f t empty · payload left %.0f kg" % [float(d["curb_kg"]) / 1000.0,
-		float(d["payload_kg"])])
+	lines.append("Weighs %.1f t empty · %.1f t loaded (%d aboard, tanks full, gear) · payload left %.0f kg" % [
+		float(d["curb_kg"]) / 1000.0, float(d["laden_kg"]) / 1000.0, int(d["seats"]), float(d["payload_kg"])])
+	if bool(d.get("drivable", false)):
+		var af := float(d.get("axle_f_kg", 0.0))
+		var ar := float(d.get("axle_r_kg", 0.0))
+		lines.append("Axles: front %.0f kg (%d %%) · rear %.0f kg of %.0f rated" % [af,
+			int(round(100.0 * af / maxf(af + ar, 1.0))), ar, float(d.get("gawr_r_kg", 0.0))])
+	else:
+		lines.append("Tongue weight %.0f kg (%d %%) · axles %.0f kg" % [float(d.get("tongue_kg", 0.0)),
+			int(round(100.0 * float(d.get("tongue_pct", 0.0)))), float(d.get("axle_r_kg", 0.0))])
+	if float(d.get("overall_h_m", 0.0)) > float(d["height_m"]) + 0.01:
+		lines.append("%.2f m tall with the roof items · %.0f kg on the roof" % [float(d["overall_h_m"]),
+			float(d.get("roof_load_kg", 0.0))])
 	var bay := VehicleCargo.bay(d)
 	if not bay.is_empty():
 		var bi: Dictionary = bay["interior"]

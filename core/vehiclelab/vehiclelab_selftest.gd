@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 492
+const EXPECTED_CHECKS := 656
 
 var _passed := 0
 var _failed := 0
@@ -33,6 +33,9 @@ func _initialize() -> void:
 	_test_cargo()
 	_test_drive_in()
 	_test_driver_view()
+	_test_masses_and_loads()
+	_test_limits_and_elements()
+	_test_tow_ratings()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
@@ -72,12 +75,26 @@ func _test_catalog() -> void:
 			electric == (float(ch["battery_kwh"]) > 0.0)
 			and (trailer or electric or float(ch["tank_l"]) > 0.0)
 			and (trailer == (str(ch["fuel"]) == "none")))
+		# The ratings every sheet publishes: axles that together carry the
+		# GVWR, a tow and combination rating, the curb's place on the wheelbase.
+		_check("%s carries axle, tow and combination ratings" % cid,
+			ch.has("gawr_f_kg") and ch.has("gawr_r_kg") and ch.has("tow_kg") and ch.has("gcwr_kg"))
+		_check("%s axle ratings cover the GVWR" % cid,
+			float(ch.get("gawr_f_kg", 0.0)) + float(ch.get("gawr_r_kg", 0.0)) >= float(ch["gvwr_kg"]) * 0.95,
+			"%.0f + %.0f vs %.0f" % [float(ch.get("gawr_f_kg", 0.0)), float(ch.get("gawr_r_kg", 0.0)), float(ch["gvwr_kg"])])
+		_check("%s combination rating holds the vehicle and its tow" % cid,
+			trailer or float(ch.get("gcwr_kg", 0.0)) >= float(ch["gvwr_kg"]) - 1.0)
+		_check("%s curb sits on the wheelbase" % cid,
+			float(ch.get("cg_wb", VehicleDesign.CHASSIS_CG_WB)) > 0.3 and float(ch.get("cg_wb", 0.5)) < 0.65)
 	for bid in VehicleCatalog.BODIES:
 		var bd := VehicleCatalog.body(str(bid))
 		_check("%s width within 102 in" % bid, float(bd["width_m"]) >= 1.8 and float(bd["width_m"]) <= 2.6,
 			"%.2f" % float(bd["width_m"]))
 		_check("%s room between floor and roof" % bid,
 			float(bd["height_m"]) - float(bd["floor_h_m"]) >= 1.6 and float(bd["height_m"]) <= 4.4)
+		_check("%s walls 3-15 cm thick, a roof rating" % bid,
+			float(bd.get("wall_t_m", 0.0)) >= 0.03 and float(bd.get("wall_t_m", 0.0)) <= 0.15
+			and float(bd.get("ceiling_t_m", 0.0)) >= 0.03 and float(bd.get("roof_kg", 0.0)) > 0.0)
 	for t in VehicleCatalog.TYPE_ORDER:
 		var ti := VehicleCatalog.type_info(t)
 		_check("type %s chassis known" % t, VehicleCatalog.CHASSIS.has(str(ti["chassis"])))
@@ -113,6 +130,242 @@ func _errors_of(d: Dictionary) -> Array:
 		if str((c as Dictionary)["level"]) == "error":
 			out.append((c as Dictionary)["text"])
 	return out
+
+
+## Every check text at `level` ("" = any) that contains `needle`.
+func _checks_with(d: Dictionary, needle: String, level: String = "") -> Array:
+	var out: Array = []
+	for c in d["checks"]:
+		var cd: Dictionary = c
+		if (level.is_empty() or str(cd["level"]) == level) and str(cd["text"]).contains(needle):
+			out.append(cd["text"])
+	return out
+
+
+# --- Phase 1: physics and mass realism ---------------------------------------------
+
+## Laden and payload by hand, masses that follow what you typed, the lever
+## rule over the axles, the trailer's tongue, the walls' thickness.
+func _test_masses_and_loads() -> void:
+	# The camper van: Sprinter diesel, 120 L of water, two seats, the gear.
+	var van := _solve("van")
+	var ch: Dictionary = (van["spec"] as Dictionary)["ch"]
+	var fuel_kg := float(ch["tank_l"]) * 0.84
+	var want_laden := float(van["curb_kg"]) + fuel_kg + 120.0 + VehicleDesign.GEAR_KG + 2.0 * VehicleDesign.OCCUPANT_KG
+	_check("laden = curb + diesel + water + gear + two aboard", absf(float(van["laden_kg"]) - want_laden) < 0.5,
+		"%.1f vs %.1f" % [float(van["laden_kg"]), want_laden])
+	_check("payload = GVWR - laden", absf(float(van["payload_kg"]) - (float(van["gvwr_kg"]) - float(van["laden_kg"]))) < 1e-6)
+	_check("dry payload = GVWR - curb", absf(float(van["payload_dry_kg"]) - (float(van["gvwr_kg"]) - float(van["curb_kg"]))) < 1e-6)
+	_check("fuel weighs 0.84 kg/L of diesel", absf(float(van["fuel_kg"]) - fuel_kg) < 1e-6)
+	var sh := _solve("shuttle_bus")
+	_check("the way home adds the grey and black tanks", absf(float(sh["laden_out_kg"]) - float(sh["laden_kg"])
+		- (float(sh["grey_l"]) + float(sh["black_l"]))) < 1e-6, "%.1f" % (float(sh["laden_out_kg"]) - float(sh["laden_kg"])))
+	var tr := _solve("trailer")
+	_check("a trailer carries nobody", absf(float(tr["occupants_kg"])) < 1e-6)
+	# Masses that follow what you typed.
+	var s := VehicleSpec.default_spec("box_truck")
+	s["interior"] = {"elements": [{"id": "b5", "type": "battery", "x": -0.6, "z": 1.0},
+		{"id": "b40", "type": "battery", "x": 0.6, "z": 1.0, "kwh": 40.0},
+		{"id": "t120", "type": "water_tank", "x": -0.6, "z": 3.0},
+		{"id": "t800", "type": "water_tank", "x": 0.6, "z": 3.0, "litres": 800.0},
+		{"id": "wide", "type": "water_tank", "x": 0.0, "z": 4.2, "litres": 800.0, "w": 0.3},
+		{"id": "gas", "type": "propane", "x": 0.0, "z": 0.4}]}
+	var d := VehicleDesign.solve(s)
+	var b5 := VehicleInterior.element(d, "b5")
+	var b40 := VehicleInterior.element(d, "b40")
+	_check("a 5 kWh battery weighs 60 kg, 40 kWh 480", absf(float(b5["mass_kg"]) - 60.0) < 1e-6
+		and absf(float(b40["mass_kg"]) - 480.0) < 1e-6, "%.1f / %.1f" % [float(b5["mass_kg"]), float(b40["mass_kg"])])
+	var v5 := float(b5["w"]) * float(b5["l"]) * float(b5["h"])
+	var v40 := float(b40["w"]) * float(b40["l"]) * float(b40["h"])
+	_check("40 kWh is eight times the box of 5", absf(v40 / v5 - 8.0) < 0.05, "%.2f" % (v40 / v5))
+	_check("40 kWh is 0.72 m3 of battery", absf(v40 - 40.0 * VehicleCatalog.BATTERY_M3_PER_KWH) < 0.01, "%.3f" % v40)
+	var t800 := VehicleInterior.element(d, "t800")
+	var t120 := VehicleInterior.element(d, "t120")
+	_check("an 800 L tank's shell weighs 52 kg, bigger than 120 L", absf(float(t800["mass_kg"]) - 52.0) < 1e-6
+		and float(t800["w"]) > float(t120["w"]) * 1.5)
+	_check("a typed size wins over the scaled default", absf(float(VehicleInterior.element(d, "wide")["w"]) - 0.3) < 1e-6)
+	_check("two 20 lb bottles weigh 34 kg", absf(float(VehicleInterior.element(d, "gas")["mass_kg"]) - 40.0 * 0.8536) < 0.01)
+	_check("the interior mass is the elements' own", absf(float(d["interior_kg"]) - (60.0 + 480.0 + 52.0 * 2.0 + 7.8 + 40.0 * 0.8536)) < 0.1,
+		"%.1f" % float(d["interior_kg"]))
+	_check("the water aboard is 1720 L", absf(float(d["water_kg"]) - 1720.0) < 1e-6)
+	_check("the propane aboard is 40 lb of gas", absf(float(d["propane_kg"]) - 40.0 * 0.4536) < 1e-3)
+	# Axle loads: they sum to the laden mass, the front share is sane, and
+	# moving mass back moves it to the rear axle.
+	for b in VehiclePresets.builtins():
+		var id := str((b as Dictionary)["id"])
+		var pd := VehicleDesign.solve((b as Dictionary)["spec"])
+		var sum := float(pd["axle_f_kg"]) + float(pd["axle_r_kg"]) + float(pd.get("tongue_kg", 0.0))
+		_check("%s axle loads sum to the laden mass" % id, absf(sum - float(pd["laden_kg"])) < 0.5,
+			"%.1f vs %.1f" % [sum, float(pd["laden_kg"])])
+		if bool(pd["drivable"]):
+			var share := float(pd["axle_f_kg"]) / float(pd["laden_kg"])
+			_check("%s front share 25-65 %%" % id, share > 0.25 and share < 0.65, "%.2f" % share)
+	var rv := VehiclePresets.builtin("rv")
+	var rv_d := VehicleDesign.solve(rv)
+	for e in rv["interior"]["elements"]:
+		if str((e as Dictionary)["id"]) == "battery":
+			(e as Dictionary)["kwh"] = 20.0
+			(e as Dictionary)["z"] = -0.3
+	var rv_back := VehicleDesign.solve(rv)
+	_check("a bigger battery at the back loads the rear axle", float(rv_back["axle_r_kg"]) > float(rv_d["axle_r_kg"]) + 150.0
+		and float(rv_back["axle_f_kg"]) < float(rv_d["axle_f_kg"]), "%.0f -> %.0f" % [float(rv_d["axle_r_kg"]), float(rv_back["axle_r_kg"])])
+	# A Sprinter with 800 L of water over the rear axle: the rear GAWR warn.
+	var heavy := VehiclePresets.builtin("van")
+	for e in heavy["interior"]["elements"]:
+		if str((e as Dictionary)["id"]) == "water":
+			(e as Dictionary)["litres"] = 800.0
+	var hd := VehicleDesign.solve(heavy)
+	_check("800 L at the back of a Sprinter trips the rear axle warn", not _checks_with(hd, "rear axle carries", "warn").is_empty(),
+		str(hd["checks"]))
+	_check("...and the GVWR error", not _errors_of(hd).is_empty())
+	# A trailer: the tongue a tenth or so of its mass; weight moved back lightens it.
+	var pct := float(tr["tongue_pct"])
+	_check("the trailer's tongue carries 10-15 %%", pct >= VehicleDesign.TONGUE_MIN and pct <= VehicleDesign.TONGUE_MAX, "%.3f" % pct)
+	_check("tongue + axles = the trailer's mass", absf(float(tr["tongue_kg"]) + float(tr["axle_r_kg"]) - float(tr["laden_kg"])) < 0.5)
+	var ts := VehiclePresets.builtin("trailer")
+	for e in ts["interior"]["elements"]:
+		if str((e as Dictionary)["id"]) == "water":
+			(e as Dictionary)["z"] = -0.6
+			(e as Dictionary)["litres"] = 600.0
+	var td := VehicleDesign.solve(ts)
+	_check("water at the trailer's tail takes weight off the tongue", float(td["tongue_pct"]) < pct)
+	_check("...below %d %% it warns of sway" % int(VehicleDesign.TONGUE_MIN * 100.0),
+		not _checks_with(td, "sways", "warn").is_empty(), str(td["checks"]))
+	# A 20 ft travel trailer is more than a 3,500 lb axle carries.
+	var single := VehicleSpec.default_spec("trailer")
+	single["chassis_id"] = "trailer_single"
+	var sd := VehicleDesign.solve(single)
+	_check("a 20 ft trailer overloads a single 3,500 lb axle", float(sd["payload_kg"]) < 0.0 and not _errors_of(sd).is_empty())
+	_check("...and wants brakes it has not got", not _checks_with(sd, "brakes", "warn").is_empty())
+	_check("the tandem trailer has brakes", bool(tr["brakes"]))
+	# Walls have thickness: the van's inside is 2.03 - 2 x 0.12 across and
+	# loses 0.15 m of headroom to the ceiling.
+	var house: Dictionary = van["house"]
+	_check("a converted van loses 12 cm a side to its walls", absf(float(house["w"]) - (2.03 - 0.24)) < 1e-6, "%.3f" % float(house["w"]))
+	_check("and 15 cm of headroom", absf(float(house["height"]) - (2.75 - 0.08 - 0.15 - 0.55)) < 1e-6, "%.3f" % float(house["height"]))
+	_check("a dry box's plywood liner is 5 cm", absf(float((_solve("box_truck")["house"] as Dictionary)["wall_t"]) - 0.05) < 1e-6)
+	# A van shell is as tall as its van: the ProMaster's 2.52 m, unless typed.
+	var pm := VehicleSpec.default_spec("van")
+	pm["chassis_id"] = "ram_promaster_3500"
+	_check("a ProMaster shell is 2.52 m tall", absf(float(VehicleDesign.solve(pm)["height_m"]) - 2.52) < 1e-6)
+	pm["body"] = {"height_m": 2.9}
+	_check("a typed roof height wins", absf(float(VehicleDesign.solve(pm)["height_m"]) - 2.9) < 1e-6)
+	var sp := VehicleSpec.default_spec("van")
+	_check("the Sprinter shell keeps 2.75", absf(float(VehicleDesign.solve(sp)["height_m"]) - 2.75) < 1e-6)
+	_check("the semi's steer axle is not judged by the lever rule", not bool(_solve("semi_container")["axle_check"]))
+
+
+## Height and width limits, the roof load, and the new elements: black
+## tank, propane, heater, water heater, shore inlet.
+func _test_limits_and_elements() -> void:
+	var iso := VehiclePresets.builtin("semi_container")
+	(iso["exterior"]["elements"] as Array).append({"id": "dish", "type": "starlink", "face": "roof"})
+	var d := VehicleDesign.solve(iso)
+	_check("a dish on a high cube stands over 13 ft 6", float(d["overall_h_m"]) > VehicleDesign.MAX_HEIGHT_M
+		and not _checks_with(d, "13' 6", "warn").is_empty(), "%.2f" % float(d["overall_h_m"]))
+	var rv := _solve("rv")
+	_check("the RV's AC stays under the limit", float(rv["overall_h_m"]) > float(rv["height_m"])
+		and float(rv["overall_h_m"]) < VehicleDesign.MAX_HEIGHT_M and _checks_with(rv, "13' 6").is_empty())
+	# The roof load: the skoolie's rack + 6 modules on a 500 kg bus roof is
+	# fine; 16 modules on a Sprinter's 300 kg roof is not.
+	var bus := _solve("school_bus")
+	_check("the skoolie's roof load is counted", float(bus["roof_load_kg"]) > 150.0 and float(bus["roof_kg_max"]) == 500.0
+		and _checks_with(bus, "on the roof").is_empty())
+	var van := VehiclePresets.builtin("van")
+	for x in van["exterior"]["elements"]:
+		if str((x as Dictionary)["type"]) == "solar":
+			(x as Dictionary)["rows"] = 4
+			(x as Dictionary)["cols"] = 4
+	(van["exterior"]["elements"] as Array).append({"id": "rack", "type": "rack", "face": "roof", "l": 4.0})
+	var vd := VehicleDesign.solve(van)
+	_check("16 modules + a rack overload a Sprinter roof", float(vd["roof_load_kg"]) > 300.0
+		and not _checks_with(vd, "on the roof", "warn").is_empty(), "%.0f" % float(vd["roof_load_kg"]))
+	_check("...and the roof load raises the centre of mass", float(vd["cg_rise_m"]) > 0.02
+		and float(vd["cg_y"]) > float(_solve("van")["cg_y"]), "%.3f" % float(vd["cg_rise_m"]))
+	# Width: an awning is an appurtenance, not body width.
+	var sh := _solve("shuttle_bus")
+	_check("an awning does not make the shuttle over-wide", float(sh["overall_w_m"]) > float(sh["width_m"])
+		and _checks_with(sh, "wide").is_empty())
+	# New elements.
+	var s := VehicleSpec.default_spec("box_truck")
+	s["interior"] = {"elements": [
+		{"id": "bath", "type": "shoilet", "x": -0.6, "z": 1.0},
+		{"id": "heat", "type": "heater", "x": 0.9, "z": 2.0},
+		{"id": "hw", "type": "water_heater", "x": 0.6, "z": 3.0},
+		{"id": "shore", "type": "shore_inlet", "x": 1.0, "z": 3.5},
+		{"id": "gas", "type": "propane", "x": -0.6, "z": 3.5}]}
+	var nd := VehicleDesign.solve(s)
+	_check("a wet bath with no black tank says so", not _checks_with(nd, "black / cassette", "info").is_empty())
+	var sys: Dictionary = nd["systems"]
+	_check("the shore inlet is reported at 1800 W", absf(float(sys["shore_w"]) - 1800.0) < 1e-6)
+	_check("the heater's fan is a load", (sys["loads"] as Array).any(func(l): return str((l as Dictionary)["id"]) == "heat"))
+	var shore := VehicleInterior.element(nd, "shore")
+	_check("the shore inlet hangs on the wall", float(shore["base_y"]) > float((nd["house"] as Dictionary)["floor_y"]) + 0.4
+		and absf(absf(float(shore["x"])) - (float((nd["house"] as Dictionary)["w"]) * 0.5 - float(shore["fx"]) * 0.5)) < 1e-4)
+	(s["interior"]["elements"] as Array).append({"id": "black", "type": "black_tank", "x": 0.0, "z": 1.0})
+	var bd := VehicleDesign.solve(s)
+	_check("with a black tank the note goes", _checks_with(bd, "black / cassette", "info").is_empty())
+	_check("the black tank is 60 L aboard", absf(float(bd["black_l"]) - 60.0) < 1e-6)
+	_check("the palette lists the new elements", VehicleInterior.tools().any(func(t): return str((t as Dictionary)["id"]) == "propane")
+		and VehicleInterior.tools().any(func(t): return str((t as Dictionary)["id"]) == "shore_inlet"))
+	_check("a wet bath flushes into a black tank in every preset that has one",
+		VehiclePresets.builtins().all(func(b):
+			var pd := VehicleDesign.solve((b as Dictionary)["spec"])
+			return _checks_with(pd, "black / cassette").is_empty()))
+
+
+## Towing: the trailer's load on the tow vehicle's engine, and what the
+## ratings say about a pair.
+func _test_tow_ratings() -> void:
+	var van := _solve("van")
+	var tr := _solve("trailer")
+	var alone := VehicleEnergy.at_speed(van, VehicleEnergy.MPS_55MPH)
+	var towing := VehicleEnergy.at_speed(van, VehicleEnergy.MPS_55MPH, tr)
+	_check("towing burns more", float(towing["l_per_km"]) > float(alone["l_per_km"]) * 1.3,
+		"%.3f vs %.3f" % [float(towing["l_per_km"]), float(alone["l_per_km"])])
+	_check("the dashboard range shrinks with a trailer", VehicleDesign.range_mi(van, 50.0, 0.0, tr) < VehicleDesign.range_mi(van, 50.0))
+	_check("the trip costs more with a trailer", float(VehicleEnergy.trip(van, 300.0, true, tr)["litres"])
+		> float(VehicleEnergy.trip(van, 300.0)["litres"]))
+	# The 20 ft travel trailer loaded (2.36 t) is past a Sprinter 2500's
+	# 5,000 lb rating by a hundred kilos — a real finding; an E-450 pulls it.
+	var notes := VehicleTow.tow_check(van, tr)
+	_check("the loaded trailer is just past the Sprinter's tow rating",
+		notes.any(func(n): return str((n as Dictionary)["text"]).contains("rated to tow"))
+		and float(tr["laden_out_kg"]) < float(van["tow_kg"]) + 150.0, str(notes))
+	var full := tr.duplicate()
+	full["laden_out_kg"] = float(tr["gvwr_kg"])
+	full["tongue_kg"] = float(tr["gvwr_kg"]) * 0.12
+	var over := VehicleTow.tow_check(van, full)
+	_check("a trailer at 7,000 lb is over the Sprinter's tow rating",
+		over.any(func(n): return str((n as Dictionary)["text"]).contains("rated to tow")), str(over))
+	_check("...and over its hitch class's tongue weight",
+		over.any(func(n): return str((n as Dictionary)["text"]).contains("on the tongue")), str(over))
+	_check("hitch classes by tow rating", str(VehicleTow.hitch_class_for(5000.0 * 0.4536)["name"]) == "Class III"
+		and str(VehicleTow.hitch_class_for(10000.0 * 0.4536)["name"]) == "Class IV"
+		and str(VehicleTow.hitch_class_for(1500.0)["name"]) == "Class II")
+	var e450 := _solve("shuttle_bus")
+	_check("the E-450 tows it with no note on the rating",
+		VehicleTow.tow_check(e450, full).all(func(n): return not str((n as Dictionary)["text"]).contains("rated to tow")))
+	var ev := VehicleSpec.default_spec("van")
+	ev["chassis_id"] = "ford_etransit"
+	_check("the E-Transit is not rated to tow", VehicleTow.tow_check(VehicleDesign.solve(ev), tr).any(
+		func(n): return str((n as Dictionary)["text"]).contains("not rated")))
+	_check("hitch heights follow the frames", absf((van["hitch"] as Vector3).y - 0.5) < 1e-6
+		and absf((tr["coupler"] as Vector3).y - 0.55) < 1e-6)
+	var box := _solve("box_truck")
+	_check("a high frame's ball wants a drop hitch", VehicleTow.tow_check(box, tr).any(
+		func(n): return str((n as Dictionary)["text"]).contains("drop")), str(VehicleTow.tow_check(box, tr)))
+	_check("no notes for nothing", VehicleTow.tow_check({}, tr).is_empty() and VehicleTow.tow_check(van, {}).is_empty())
+	# The site's running cost takes the trailer along.
+	var vrec := {"id": "v1", "model_id": "vehiclelab_vehicle", "vehicle_spec": VehiclePresets.builtin("van")}
+	(vrec["vehicle_spec"] as Dictionary)["trip"] = {"one_way_mi": 200.0, "fuel_price_per_gal": 4.0, "kwh_price": 0.3}
+	var trec := {"id": "t1", "model_id": "vehiclelab_vehicle", "vehicle_spec": VehiclePresets.builtin("trailer")}
+	var solo := SiteCost.running_for_record(vrec)
+	vrec["towing"] = "t1"
+	var pair := SiteCost.running_for_record(vrec, {"v1": vrec, "t1": trec})
+	_check("the trip's cost rises with a trailer behind", float(pair["usd"]) > float(solo["usd"]) * 1.3,
+		"%.0f vs %.0f" % [float(pair["usd"]), float(solo["usd"])])
+	_check("the total takes the pair as one trip", absf(float(SiteCost.running_total([vrec, trec])["usd"]) - float(pair["usd"])) < 0.01)
 
 
 func _test_spec_round_trip() -> void:
@@ -414,8 +667,11 @@ func _test_interior() -> void:
 	var bed := VehicleInterior.element(d, "bed")
 	_check("a ray down through the bed onto its battery picks the battery",
 		VehicleInterior.pick(d, Vector3(float(bat["x"]), fy + 3.0, float(bat["z"])), Vector3.DOWN) == "battery")
-	var off_bat := Vector3(float(bed["x"]) - float(bed["fx"]) * 0.4, fy + 3.0, float(bed["z"]) + float(bed["fz"]) * 0.4)
-	_check("a ray down onto the bed away from it picks the bed", VehicleInterior.pick(d, off_bat, Vector3.DOWN) == "bed")
+	# (toward the front, right of the middle: nothing is stored under the
+	# bed there and no wall-hung cubby or inverter is over it)
+	var off_bat := Vector3(float(bed["x"]) + float(bed["fx"]) * 0.25, fy + 3.0, float(bed["z"]) - float(bed["fz"]) * 0.4)
+	_check("a ray down onto the bed away from it picks the bed", VehicleInterior.pick(d, off_bat, Vector3.DOWN) == "bed",
+		VehicleInterior.pick(d, off_bat, Vector3.DOWN))
 	# A ray across a cabinet toward a smaller battery behind it picks the cabinet.
 	var spn := VehicleSpec.default_spec("box_truck")
 	spn["interior"] = {"elements": [
@@ -528,9 +784,20 @@ func _test_vehicle_graph() -> void:
 		if str((it as Dictionary)["local_id"]) == "bat":
 			bat = (it as Dictionary)["specs"]
 	_check("the battery holds the design's kWh", absf(float(bat.get("kwh", 0.0)) - kwh) < 1e-4)
+	# Four 400 W modules (Voc 37.5) = two series strings of two under the
+	# 150 V cap: one series link inside each string, each string's ends on
+	# the controller — six panel-sourced links, four of them to the controller.
 	var pv_links := conns.filter(func(c): return str((c as Dictionary)["source"]).begins_with("pv_"))
-	_check("every panel wired + and - to the controller", pv_links.size() == 8
-		and pv_links.all(func(c): return str((c as Dictionary)["target"]) == "cc"))
+	var to_cc := pv_links.filter(func(c): return str((c as Dictionary)["target"]) == "cc")
+	var series := pv_links.filter(func(c): return str((c as Dictionary)["target"]).begins_with("pv_"))
+	_check("two strings of two: 4 links to the controller, 2 in series", to_cc.size() == 4 and series.size() == 2,
+		"%d to cc, %d series" % [to_cc.size(), series.size()])
+	_check("a series link runs + of one panel to - of the next", series.all(func(c):
+		return str((c as Dictionary)["source_handle"]) == "positive" and str((c as Dictionary)["target_handle"]) == "negative"))
+	_check("string length: 3 × 37.5 V fits 150 V cold, 4 × does not", VehicleGraph.string_len(3, 37.5) == 3
+		and VehicleGraph.string_len(4, 37.5) == 2 and VehicleGraph.string_len(5, 37.5) == 1
+		and VehicleGraph.string_len(6, 37.5) == 3 and VehicleGraph.string_len(2, 60.0) == 2
+		and VehicleGraph.string_len(4, 70.0) == 1)
 	var ac_links := conns.filter(func(c): return str((c as Dictionary).get("polarity", "")) == "ac")
 	_check("every load on the inverter's AC", ac_links.size() == int(by.get("appliance", 0))
 		and ac_links.all(func(c): return str((c as Dictionary)["source"]) == "inv"))
@@ -543,7 +810,8 @@ func _test_vehicle_graph() -> void:
 			(e as Dictionary)["kwh"] = kwh + 2.0
 	_check("a bigger battery changes the signature",
 		VehicleGraph.signature(VehicleDesign.solve(s2)["systems"]) != VehicleGraph.signature(sys))
-	# Many modules: one panel node per solar item.
+	# Many modules: one panel node per STRING (20 flexible modules = 10
+	# strings of two), each carrying the string's voltages and watts.
 	var s3 := VehiclePresets.builtin("shuttle_bus")
 	for x in s3["exterior"]["elements"]:
 		if str((x as Dictionary)["type"]) == "solar":
@@ -553,13 +821,15 @@ func _test_vehicle_graph() -> void:
 	var d3 := VehicleDesign.solve(s3)
 	var def3 := VehicleGraph.definition(d3, "vehicle_p3")
 	var panels3 := ((def3["subgraph"] as Dictionary)["items"] as Array).filter(func(i): return str((i as Dictionary)["type"]) == "panel")
-	var solar_items := (d3["systems"]["solar"] as Array).size()
-	_check("past %d modules each solar item is one panel" % VehicleGraph.MAX_PANEL_NODES,
-		panels3.size() == solar_items and panels3.size() >= 1, "%d vs %d" % [panels3.size(), solar_items])
+	_check("past %d modules each string is one panel node" % VehicleGraph.MAX_PANEL_NODES,
+		panels3.size() == 20 / VehicleGraph.string_len(20, 21.6) and panels3.size() < 20, str(panels3.size()))
 	var wmp := 0.0
 	for pn in panels3:
-		wmp += float(((pn as Dictionary)["specs"] as Dictionary)["wmp"])
+		var sp: Dictionary = (pn as Dictionary)["specs"]
+		wmp += float(sp["wmp"])
 	_check("merged panels keep the array's watts", absf(wmp - float(d3["systems"]["solar_w"])) < 0.5)
+	_check("a merged string node carries the string's Voc", absf(float(((panels3[0] as Dictionary)["specs"] as Dictionary)["voc"])
+		- 21.6 * float(VehicleGraph.string_len(20, 21.6))) < 1e-4)
 	# Nothing to put on the graph: no node.
 	var s4 := VehicleSpec.default_spec("cargo_van")
 	s4["interior"] = {"elements": []}

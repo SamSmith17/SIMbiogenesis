@@ -20,6 +20,59 @@ const HITCH_MAX_SPEED := 1.5
 ## Never let a trailer fold back onto the tow vehicle (a jackknife) further
 ## than this between the two headings.
 const MAX_ARTICULATION_DEG := 80.0
+## Receiver hitch classes (SAE J684): the gross trailer weight each is rated
+## for and the tongue weight it takes (a tenth of it). A chassis' tow
+## rating picks the class a builder would fit.
+const HITCH_CLASSES := [
+	{"name": "Class II", "gtw_kg": 3500.0 * 0.45359237, "tongue_kg": 350.0 * 0.45359237},
+	{"name": "Class III", "gtw_kg": 8000.0 * 0.45359237, "tongue_kg": 800.0 * 0.45359237},
+	{"name": "Class IV", "gtw_kg": 10000.0 * 0.45359237, "tongue_kg": 1000.0 * 0.45359237},
+	{"name": "Class V", "gtw_kg": 20000.0 * 0.45359237, "tongue_kg": 2000.0 * 0.45359237},
+]
+## A ball more than this above or below the coupler wants a drop / rise hitch.
+const HITCH_HEIGHT_TOL_M := 0.08
+
+
+## The hitch class a chassis rated to tow `tow_kg` carries.
+static func hitch_class_for(tow_kg: float) -> Dictionary:
+	for hc in HITCH_CLASSES:
+		if tow_kg <= float((hc as Dictionary)["gtw_kg"]) + 1.0:
+			return hc
+	return HITCH_CLASSES[HITCH_CLASSES.size() - 1]
+
+
+## Can this vehicle tow that trailer? Every rating the sheets give, as
+## {level, text} notes (empty = nothing to say): the trailer's loaded mass
+## against the tow rating, the pair against the GCWR, the tongue against the
+## hitch class, the trailer's brakes, and the ball vs coupler heights.
+static func tow_check(tow: Dictionary, trailer: Dictionary) -> Array:
+	var out: Array = []
+	if tow.is_empty() or trailer.is_empty():
+		return out
+	var tow_kg := float(tow.get("tow_kg", 0.0))
+	var t_mass := float(trailer.get("laden_out_kg", trailer.get("laden_kg", 0.0)))
+	if tow_kg <= 0.0:
+		out.append({"level": "warn", "text": "%s is not rated to tow." % str(tow.get("name", "The tow vehicle"))})
+	elif t_mass > tow_kg:
+		out.append({"level": "warn", "text": "The trailer weighs %d kg loaded; %s is rated to tow %d." %
+			[int(t_mass), str(tow.get("name", "the tow vehicle")), int(tow_kg)]})
+	var gcwr := float(tow.get("gcwr_kg", 0.0))
+	var pair := float(tow.get("laden_kg", 0.0)) + t_mass
+	if gcwr > 0.0 and pair > gcwr:
+		out.append({"level": "warn", "text": "Together %d kg, over the %d kg combination rating." % [int(pair), int(gcwr)]})
+	var hc := hitch_class_for(tow_kg)
+	var tongue := float(trailer.get("tongue_kg", 0.0))
+	if tow_kg > 0.0 and tongue > float(hc["tongue_kg"]):
+		out.append({"level": "warn", "text": "%d kg on the tongue: a %s hitch takes %d." %
+			[int(tongue), str(hc["name"]), int(float(hc["tongue_kg"]))]})
+	if t_mass > VehicleDesign.TRAILER_BRAKES_KG and not bool(trailer.get("brakes", false)):
+		out.append({"level": "warn", "text": "A trailer this heavy needs its own brakes."})
+	if tow.has("hitch") and trailer.has("coupler"):
+		var dh := (tow["hitch"] as Vector3).y - (trailer["coupler"] as Vector3).y
+		if absf(dh) > HITCH_HEIGHT_TOL_M:
+			out.append({"level": "info", "text": "The ball sits %d cm %s the coupler: use a %s hitch." %
+				[int(round(absf(dh) * 100.0)), "above" if dh > 0.0 else "below", "drop" if dh > 0.0 else "rise"]})
+	return out
 
 
 ## Coupler to axle centre: the trailer's effective tongue length.

@@ -341,7 +341,8 @@ func _perf_tick(delta: float) -> void:
 		_tick_tow(delta)
 		_tick_cargo(delta)
 		if fuel_capacity_l > 0.0 and step > 0.0:
-			var burned := float(VehicleDesign.energy_for_distance(_design, step, current_speed_mps)["litres"])
+			var burned := float(VehicleDesign.energy_for_distance(_design, step, current_speed_mps,
+				_tow_design if not _tow_id.is_empty() else {})["litres"])
 			fuel_l = maxf(fuel_l - burned, 0.0)
 			fuel_used_l += burned
 		_record_accum += delta
@@ -503,7 +504,8 @@ func get_fuel_litres() -> Vector2:
 func get_range_mi() -> float:
 	if _design.is_empty():
 		return -1.0
-	return VehicleDesign.range_mi(_design, fuel_l, battery_wh / 1000.0)
+	return VehicleDesign.range_mi(_design, fuel_l, battery_wh / 1000.0,
+		_tow_design if not _tow_id.is_empty() else {})
 
 
 ## Top the tank up from a fuel store of the right kind within reach (the graph's
@@ -747,7 +749,13 @@ func hitch_to(trailer_id: String) -> void:
 	if main.has_method("show_toast"):
 		var rec := PlacedPropService.get_prop_record(main, trailer_id)
 		var nm := str(VehicleBuilder.spec_for_record(rec).get("name", "the trailer"))
-		main.call("show_toast", "Hitched: %s" % nm)
+		# What the ratings say about the pair (VehicleTow.tow_check): the
+		# first two notes ride the toast.
+		var notes := VehicleTow.tow_check(_design, VehicleDesign.solve(VehicleBuilder.spec_for_record(rec)))
+		var text := "Hitched: %s" % nm
+		for i in mini(notes.size(), 2):
+			text += "\n" + str((notes[i] as Dictionary)["text"])
+		main.call("show_toast", text)
 
 
 ## Leave the trailer standing where it is.

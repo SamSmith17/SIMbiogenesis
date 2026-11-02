@@ -40,7 +40,8 @@ const GROUPS := [
 	["Sit & eat", ["dinette", "bench", "sofa", "table"]],
 	["Kitchen & bath", ["galley", "fridge", "shower", "toilet", "shoilet"]],
 	["Storage & work", ["cabinet", "cubby", "workbench"]],
-	["Power & water", ["battery", "inverter", "water_tank", "grey_tank"]],
+	["Power & water", ["battery", "inverter", "shore_inlet", "water_tank", "grey_tank", "black_tank",
+		"water_heater", "propane", "heater"]],
 	["Fittings", ["wall", "light", "monitor", "mirror"]],
 ]
 
@@ -49,7 +50,8 @@ const GROUPS := [
 const NEEDS_ACCESS := ["bed", "bunk", "dinette", "bench", "sofa", "galley", "fridge",
 	"shower", "toilet", "shoilet", "workbench"]
 ## Things carried in whole: they have to fit through a door.
-const CARRIED_WHOLE := ["fridge", "shower", "shoilet", "water_tank", "grey_tank", "battery"]
+const CARRIED_WHOLE := ["fridge", "shower", "shoilet", "water_tank", "grey_tank", "black_tank",
+	"battery", "water_heater", "propane"]
 
 ## The per-type fields of the selected element's card: [key, label, kind,
 ## min, max, step, unit]. Size and turn are on every card.
@@ -57,6 +59,9 @@ const FIELDS := {
 	"battery": [["kwh", "Capacity", "float", 0.5, 40.0, 0.1, " kWh"]],
 	"water_tank": [["litres", "Holds", "float", 10.0, 800.0, 5.0, " L"]],
 	"grey_tank": [["litres", "Holds", "float", 10.0, 800.0, 5.0, " L"]],
+	"black_tank": [["litres", "Holds", "float", 10.0, 400.0, 5.0, " L"]],
+	"propane": [["lb", "Propane", "float", 20.0, 200.0, 20.0, " lb"]],
+	"heater": [["watts", "Fan draw", "float", 1.0, 200.0, 1.0, " W"]],
 	"fridge": [["watts", "Average draw", "float", 1.0, 400.0, 1.0, " W"]],
 	"light": [["watts", "Draw", "float", 1.0, 100.0, 1.0, " W"]],
 	"monitor": [["watts", "Draw", "float", 1.0, 300.0, 1.0, " W"]],
@@ -352,9 +357,14 @@ static func checks(d: Dictionary) -> Array:
 				c.append({"level": "warn", "ids": [id],
 					"text": "No way in to the %s from a door: leave a %d cm aisle." %
 						[_short(el), int(round(AISLE_M * 100.0))]})
+	# A wet bath's toilet flushes into a tank; a composting toilet needs none.
+	var has_black := els.any(func(e): return str((e as Dictionary)["type"]) == "black_tank")
 	for e in els:
 		var el: Dictionary = e
 		var type := str(el["type"])
+		if type == "shoilet" and not has_black:
+			c.append({"level": "info", "ids": [str(el["id"])],
+				"text": "The wet bath's toilet has no black / cassette tank to flush into."})
 		if type == "bed" or type == "bunk" or type == "cabover_bed":
 			var top := float(el["top_y"])
 			var lid := ceil_y
@@ -405,8 +415,8 @@ static func label_of(el: Dictionary) -> String:
 static func info_line(d: Dictionary, el: Dictionary) -> String:
 	var t := VehicleCatalog.interior_type(str(el["type"]))
 	var bits: Array = ["%.2f × %.2f × %.2f m" % [float(el["fx"]), float(el["fz"]), float(el["top_y"]) - float(el["base_y"])]]
-	if float(t.get("mass_kg", 0.0)) > 0.0:
-		bits.append("%.0f kg" % float(t["mass_kg"]))
+	if float(el.get("mass_kg", t.get("mass_kg", 0.0))) > 0.0:
+		bits.append("%.0f kg" % float(el.get("mass_kg", t.get("mass_kg", 0.0))))
 	var sleeps := 0
 	for b in d.get("beds", []):
 		if str((b as Dictionary).get("bed", "")) == str(el["id"]):
@@ -450,6 +460,9 @@ static func systems(d: Dictionary) -> Dictionary:
 			loads.append({"id": str(el["id"]), "name": VehicleExterior.label_of(el), "watts": lw})
 	for l in d.get("house_loads", []):
 		loads.append((l as Dictionary).duplicate())
+	# (`shore_w` is a shore-power inlet's rating: the graph's controller type
+	# has no AC-in handle yet, so it is reported, not wired.)
 	return {"battery_kwh": kwh, "voltage": v, "solar": solar,
 		"solar_w": float(d.get("solar_w", 0.0)), "loads": loads,
-		"water_l": float(d.get("water_l", 0.0)), "grey_l": float(d.get("grey_l", 0.0))}
+		"water_l": float(d.get("water_l", 0.0)), "grey_l": float(d.get("grey_l", 0.0)),
+		"black_l": float(d.get("black_l", 0.0)), "shore_w": float(d.get("shore_w", 0.0))}

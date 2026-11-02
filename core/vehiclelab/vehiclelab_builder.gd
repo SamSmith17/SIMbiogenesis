@@ -1062,12 +1062,22 @@ static func _element(e: Dictionary, g: Dictionary, fy: float) -> void:
 			dark.box(Vector3(front_x, hy, z), Vector3(0.006, 0.012, fz * 0.9))
 		"wall":
 			wood.box(Vector3(x, (y0 + y1) * 0.5, z), Vector3(fx, y1 - y0, fz))
-		"battery":
+		"battery", "heater":
 			dark.box(Vector3(x, (y0 + y1) * 0.5, z), Vector3(fx, y1 - y0, fz))
-		"inverter":
+		"inverter", "shore_inlet":
 			(g["trim"] as _K).box(Vector3(x, (y0 + y1) * 0.5, z), Vector3(fx, y1 - y0, fz))
-		"water_tank", "grey_tank":
+		"water_tank", "grey_tank", "water_heater":
 			white.box(Vector3(x, (y0 + y1) * 0.5, z), Vector3(fx, y1 - y0, fz))
+		"black_tank":
+			dark.box(Vector3(x, (y0 + y1) * 0.5, z), Vector3(fx, y1 - y0, fz))
+		"propane":
+			# Two upright bottles side by side along the element's long side.
+			var along := fz >= fx
+			var rr := minf(fx, fz) * 0.45
+			for k in [-1.0, 1.0]:
+				var c := Vector3(x, (y0 + y1) * 0.5, z + k * fz * 0.25) if along \
+					else Vector3(x + k * fx * 0.25, (y0 + y1) * 0.5, z)
+				white.cylinder(c, rr, y1 - y0, Vector3.UP, 14)
 		"light":
 			(g["lamp"] as _K).cylinder(Vector3(x, y0 + 0.015, z), maxf(fx, fz) * 0.5, 0.03, Vector3.UP, 12)
 		"monitor":

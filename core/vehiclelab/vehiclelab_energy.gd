@@ -24,6 +24,10 @@ extends RefCounted
 const G := 9.80665
 const RHO_AIR := 1.225
 const SHAPE_FILL := 0.88
+## A towed trailer's drag counts at this share of its own: it runs in the
+## tow vehicle's wake (a box trailer behind a van, wind-tunnel figures are
+## 0.6–0.8 of the trailer alone; an estimate here).
+const TRAILER_DRAFT := 0.7
 const LHV_GASOLINE_MJ_L := 32.0
 const LHV_DIESEL_MJ_L := 35.8
 const ETA_GASOLINE := 0.215
@@ -65,13 +69,22 @@ static func source_j_per_m(mass_kg: float, cd: float, area_m2: float, v: float, 
 
 
 ## {l_per_km, kwh_per_km, mpg, mi_per_kwh} at `v` for a solved design
-## (VehicleDesign.solve): the laden mass, its drag and its fuel.
-static func at_speed(d: Dictionary, v: float) -> Dictionary:
+## (VehicleDesign.solve): the laden mass, its drag and its fuel. With a
+## hitched `trailer` (its solved design) the trailer's rolling load rides on
+## the same engine and its drag joins at TRAILER_DRAFT.
+static func at_speed(d: Dictionary, v: float, trailer: Dictionary = {}) -> Dictionary:
 	var mass := float(d.get("laden_kg", 3000.0))
 	var cd := float(d.get("cd", 0.6))
 	var area := float(d.get("frontal_m2", 6.0))
 	var fuel := str(d.get("fuel", "gasoline"))
 	var j := source_j_per_m(mass, cd, area, v, fuel)
+	if not trailer.is_empty() and fuel != "none":
+		var tm := float(trailer.get("laden_out_kg", trailer.get("laden_kg", 0.0)))
+		var vv := maxf(v, 4.0)
+		var f_t := tm * G * crr_for(tm) + 0.5 * RHO_AIR * float(trailer.get("cd", 0.6)) \
+			* float(trailer.get("frontal_m2", 5.0)) * TRAILER_DRAFT * vv * vv
+		var eta := ETA_DIESEL if fuel == "diesel" else (ETA_EV if fuel == "electric" else ETA_GASOLINE)
+		j += f_t / eta
 	var out := {"fuel": fuel, "l_per_km": 0.0, "kwh_per_km": 0.0, "mpg": 0.0, "mi_per_kwh": 0.0}
 	if fuel == "electric":
 		var kwh_km := j * 1000.0 / 3.6e6
@@ -87,9 +100,10 @@ static func at_speed(d: Dictionary, v: float) -> Dictionary:
 
 
 ## The cost of getting it to site: one-way miles typed by the player, there
-## and back at a 55 mph cruise, at the spec's fuel / electricity price.
-static func trip(d: Dictionary, one_way_mi: float, round_trip: bool = true) -> Dictionary:
-	var e := at_speed(d, MPS_55MPH)
+## and back at a 55 mph cruise, at the spec's fuel / electricity price,
+## towing `trailer` if one is hitched.
+static func trip(d: Dictionary, one_way_mi: float, round_trip: bool = true, trailer: Dictionary = {}) -> Dictionary:
+	var e := at_speed(d, MPS_55MPH, trailer)
 	var km := maxf(one_way_mi, 0.0) * MI_M / 1000.0 * (2.0 if round_trip else 1.0)
 	var trip_d: Dictionary = d.get("trip", {})
 	var out := {"km": km, "mi": km * 1000.0 / MI_M, "fuel": e["fuel"], "litres": 0.0,

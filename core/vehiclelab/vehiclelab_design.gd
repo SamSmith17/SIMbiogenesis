@@ -18,16 +18,39 @@ extends RefCounted
 ## NPC convention, a body lies along (-sin yaw, -cos yaw)), length_m, bed}.
 
 const CACHE_MAX := 64
+## What a body loses to its finished walls and ceiling when the catalog says
+## nothing (VehicleCatalog BODIES `wall_t_m` / `ceiling_t_m`).
 const WALL_T := 0.06
+const CEILING_T := 0.05
 const OCCUPANT_KG := 80.0
 const FLOOR_KG_M2 := 30.0
 ## Travelling seats by type (incl. the driver), when the spec says -1.
 const SEATS := {"van": 3, "cargo_van": 2, "shuttle_bus": 6, "school_bus": 8, "step_van": 2,
 	"ambulance": 3, "rv": 6, "motorhome": 6, "box_truck": 3, "trailer": 0, "semi_container": 2}
-## The gear a camp brings in a living vehicle on a typical trip, for the laden
-## mass the energy model and the mpg bands use.
+## The gear a camp brings in a living vehicle on a typical trip: clothes,
+## food, tools, the camp's share of the kit. Part of the laden mass the energy
+## model and the mpg bands use, and of the payload it uses up.
 const GEAR_KG := 250.0
 const MATTRESS_T := 0.15
+## Where a chassis' own curb mass sits along the wheelbase (0 = over the
+## front axle) when its sheet gives no `cg_wb`: an engine-forward cab-chassis
+## carries ~62 % on the front axle empty (Ford's E-450 cutaway base weights:
+## 3,296 lb front of 5,374). A whole vehicle whose curb mass includes its
+## body carries its own figure (a cargo van ~50 / 50, a 35 ft school bus
+## ~43 % front — the body behind the rear axle).
+const CHASSIS_CG_WB := 0.38
+## US width law lets an RV's appurtenances (an awning, a ladder, mirrors)
+## stand this far out past the 102" body on each side (49 CFR 658.16).
+const APPURTENANCE_M := 6.0 * 0.0254
+## The legal height on US roads, 13' 6", and the width, 102".
+const MAX_HEIGHT_M := 13.5 * 12.0 * 0.0254
+const MAX_WIDTH_M := 102.0 * 0.0254
+## A trailer this heavy (3,000 lb) needs its own brakes in most US states.
+const TRAILER_BRAKES_KG := 3000.0 * 0.45359237
+## A trailer's tongue weight as a share of its mass: under ~10 % it sways,
+## over ~15 % it loads the hitch and lifts the tow vehicle's front axle.
+const TONGUE_MIN := 0.10
+const TONGUE_MAX := 0.15
 
 static var _cache := {}
 
@@ -99,19 +122,22 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	var floor_y := float(bd["floor_h_m"])
 	var roof := str(bd.get("roof", "flat"))
 	var roof_t := 0.1 if roof != "high_top" else 0.08
-	# The living box: behind the driver (a van, a bus) or the whole box.
-	var house_z0 := body_z0 + WALL_T
+	# The living box: behind the driver (a van, a bus) or the whole box, less
+	# the finished walls and ceiling (ribs, insulation, panelling).
+	var wall_t := float(bd.get("wall_t_m", WALL_T))
+	var ceil_t := float(bd.get("ceiling_t_m", CEILING_T))
+	var house_z0 := body_z0 + wall_t
 	if cab == "full_van":
 		house_z0 = cab_len
 	elif integral:
 		house_z0 = body_z0 + maxf(cab_len - body_z0, 1.2)
 	elif cab == "cutaway":
 		house_z0 = body_z0 + 0.05
-	var house_z1 := body_z1 - WALL_T
-	var inner_w := float(bd["width_m"]) - 2.0 * WALL_T
-	var ceil_y := height - roof_t
+	var house_z1 := body_z1 - wall_t
+	var inner_w := float(bd["width_m"]) - 2.0 * wall_t
+	var ceil_y := height - roof_t - ceil_t
 	if roof == "crown" or roof == "arched":
-		ceil_y = height - roof_t - 0.05
+		ceil_y -= 0.05
 	# Axles (zf) + wheels.
 	var axles: Array = []
 	var fo := float(ch.get("front_overhang_m", 1.0))
@@ -122,7 +148,9 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	var dually := bool(ch.get("dually", false))
 	var n_rear := maxi(int(ch.get("rear_axles", 1)), 1)
 	if cab == "none":
-		var c := body_z0 + body_len * 0.55
+		# A trailer's axles sit ~58 % of the way back along the box so the
+		# load ahead of them puts a tenth of the weight on the tongue.
+		var c := body_z0 + body_len * 0.58
 		if n_rear == 2:
 			axles.append({"zf": c - 0.45, "steer": false, "dual": false})
 			axles.append({"zf": c + 0.45, "steer": false, "dual": false})
@@ -213,23 +241,26 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 		"h": float(ch.get("cab_h_m", 2.2)), "w": float(ch.get("cab_w_m", width)),
 		"frame_h": float(ch.get("frame_h_m", 0.7)), "integral": integral}
 	d["house"] = {"z0": house_z0 - half, "z1": house_z1 - half, "len": house_z1 - house_z0,
-		"w": inner_w, "floor_y": floor_y, "ceil_y": ceil_y, "height": ceil_y - floor_y}
+		"w": inner_w, "floor_y": floor_y, "ceil_y": ceil_y, "height": ceil_y - floor_y,
+		"wall_t": wall_t, "ceiling_t": ceil_t}
 	d["axles"] = axles
 	d["wheels"] = wheels
 	d["drivable"] = drivable
 	d["driver_seat"] = Vector3(seat.x, seat.y, seat.z - half) if drivable else Vector3.ZERO
-	d["frame"] = {"y": float(ch.get("frame_h_m", 0.7)), "track": track}
+	var frame_h := float(ch.get("frame_h_m", 0.7))
+	d["frame"] = {"y": frame_h, "track": track}
 	# Towing (VehicleTow): a ball hitch just behind a drivable vehicle's rear
-	# (none on the semi, whose fifth wheel already carries the box), and a
-	# trailer's coupler at its tongue tip with its axles' middle.
+	# (none on the semi, whose fifth wheel already carries the box) at a
+	# receiver's height under the frame, and a trailer's coupler at its
+	# tongue tip, at its own frame height, with its axles' middle.
 	if drivable and cab != "tractor":
-		d["hitch"] = Vector3(0.0, 0.5, half + 0.15)
+		d["hitch"] = Vector3(0.0, clampf(frame_h - 0.1, 0.4, 0.8), half + 0.15)
 	if cab == "none":
 		var az := 0.0
 		for a in axles:
 			az += float((a as Dictionary)["zf"])
 		d["axle_z"] = az / maxf(float(axles.size()), 1.0) - half
-		d["coupler"] = Vector3(0.0, 0.5, -half)
+		d["coupler"] = Vector3(0.0, clampf(frame_h, 0.4, 0.8), -half)
 	var steer := deg_to_rad(maxf(float(ch.get("max_steer_deg", 40.0)), 1.0))
 	# The outer front wheel's turning radius (what a spec sheet quotes as the
 	# turning circle / 2): rear-axle centre radius WB / tan δ, then out to the
@@ -255,9 +286,14 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	var battery_kwh := 0.0
 	var water_l := 0.0
 	var grey_l := 0.0
+	var black_l := 0.0
+	var propane_lb := 0.0
+	var shore_w := 0.0
 	var mass := 0.0
 	var n := 0
 	var loads: Array = []
+	# Where the liquids ride (the axle-load split): {kind, l, z, y}.
+	var fluids: Array = []
 	for e in (s["interior"] as Dictionary).get("elements", []):
 		if not (e is Dictionary):
 			continue
@@ -272,7 +308,8 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 		var lz := float(el["z"])
 		var fx := float(el["fx"])
 		els.append(el)
-		mass += float(t.get("mass_kg", 0.0))
+		mass += float(el.get("mass_kg", 0.0))
+		var el_y := (float(el["base_y"]) + float(el["top_y"])) * 0.5
 		var lw := float(ed.get("watts", t.get("load_w", 0.0)))
 		if lw > 0.0:
 			loads.append({"id": str(el["id"]), "name": str(t.get("label", type)).split(" (")[0],
@@ -298,11 +335,20 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 			(roles["restroom"] as Array).append({"pos": Vector3(xc, fy, lz), "yaw": 0.0,
 				"kind": "stand"})
 		if provides.has("battery"):
-			battery_kwh += float(ed.get("kwh", t.get("kwh", 5.0)))
+			battery_kwh += float(el.get("kwh", 5.0))
 		if provides.has("water"):
-			water_l += float(ed.get("litres", t.get("litres", 100.0)))
+			water_l += float(el.get("litres", 100.0))
+			fluids.append({"kind": "water", "l": float(el.get("litres", 100.0)), "z": lz, "y": el_y})
 		if provides.has("grey"):
-			grey_l += float(ed.get("litres", t.get("litres", 80.0)))
+			grey_l += float(el.get("litres", 80.0))
+			fluids.append({"kind": "grey", "l": float(el.get("litres", 80.0)), "z": lz, "y": el_y})
+		if provides.has("black"):
+			black_l += float(el.get("litres", 60.0))
+			fluids.append({"kind": "black", "l": float(el.get("litres", 60.0)), "z": lz, "y": el_y})
+		if provides.has("propane"):
+			propane_lb += float(el.get("lb", 40.0))
+		if provides.has("shore"):
+			shore_w += float(el.get("supply_w", t.get("supply_w", 1800.0)))
 	d["interior"] = els
 	d["beds"] = beds
 	d["sleeps"] = sleeps
@@ -311,6 +357,10 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	d["house_battery_kwh"] = battery_kwh
 	d["water_l"] = water_l
 	d["grey_l"] = grey_l
+	d["black_l"] = black_l
+	d["propane_lb"] = propane_lb
+	d["shore_w"] = shore_w
+	d["fluids"] = fluids
 	d["interior_kg"] = mass
 	d["house_loads"] = loads
 	var st := int(s.get("seats", -1))
@@ -334,9 +384,28 @@ static func resolve_interior_element(d: Dictionary, ed: Dictionary, n: int = 0) 
 	var hw := float(house["w"])
 	var fy := float(house["floor_y"])
 	var cy := float(house["ceil_y"])
-	var w := clampf(float(ed.get("w", t["w"])), 0.02, hw)
-	var l := clampf(float(ed.get("l", t["l"])), 0.02, maxf(hlen, 0.5))
-	var h := clampf(float(ed.get("h", t["h"])), 0.02, maxf(cy - fy, 0.5))
+	# A battery, a tank or the propane is as big and as heavy as what it
+	# holds: the type's default box scaled by the cube root of the ratio to
+	# its default capacity (a typed size still wins), its mass from the
+	# capacity (VehicleCatalog's per-kWh / per-litre figures).
+	var mass_kg := float(t.get("mass_kg", 0.0))
+	var scale := 1.0
+	if type == "battery":
+		var kwh := maxf(float(ed.get("kwh", t.get("kwh", 5.0))), 0.1)
+		mass_kg = VehicleCatalog.BATTERY_KG_PER_KWH * kwh
+		var box := float(t["w"]) * float(t["l"]) * float(t["h"])
+		scale = pow(kwh * VehicleCatalog.BATTERY_M3_PER_KWH / maxf(box, 1e-6), 1.0 / 3.0)
+	elif t.has("litres"):
+		var litres := maxf(float(ed.get("litres", t["litres"])), 1.0)
+		mass_kg = VehicleCatalog.TANK_KG_PER_L * litres
+		scale = pow(litres / maxf(float(t["litres"]), 1.0), 1.0 / 3.0)
+	elif t.has("lb"):
+		var lb := maxf(float(ed.get("lb", t["lb"])), 1.0)
+		mass_kg = lb * (VehicleCatalog.PROPANE_TARE_KG_PER_LB + VehicleCatalog.PROPANE_KG_PER_LB)
+		scale = pow(lb / maxf(float(t["lb"]), 1.0), 1.0 / 3.0)
+	var w := clampf(float(ed.get("w", float(t["w"]) * scale)), 0.02, hw)
+	var l := clampf(float(ed.get("l", float(t["l"]) * scale)), 0.02, maxf(hlen, 0.5))
+	var h := clampf(float(ed.get("h", float(t["h"]) * scale)), 0.02, maxf(cy - fy, 0.5))
 	var yaw90 := absf(float(ed.get("yaw", 0.0))) > 45.0
 	var fx := l if yaw90 else w       # footprint across
 	var fz := w if yaw90 else l       # footprint along
@@ -357,9 +426,9 @@ static func resolve_interior_element(d: Dictionary, ed: Dictionary, n: int = 0) 
 	var lz := float(house["z0"]) + zc
 	var el := {"id": str(ed.get("id", "i%d" % n)), "type": type, "x": xc, "z": lz,
 		"zc": zc, "fx": fx, "fz": fz, "base_y": base_y, "top_y": top, "yaw90": yaw90,
-		"w": w, "l": l, "h": h,
+		"w": w, "l": l, "h": h, "mass_kg": mass_kg,
 		"color": t.get("color", [0.6, 0.5, 0.4]), "label": str(t.get("label", type))}
-	for k in ["kwh", "litres", "watts"]:
+	for k in ["kwh", "litres", "watts", "lb", "supply_w"]:
 		if ed.has(k):
 			el[k] = float(ed[k])
 		elif t.has(k if k != "watts" else "load_w"):
@@ -502,15 +571,187 @@ static func _masses(d: Dictionary, ch: Dictionary, bd: Dictionary, s: Dictionary
 		else:
 			var skin := 2.0 * L * H + 2.0 * W * H + L * W
 			body_kg = skin * float(bd.get("wall_kg_m2", 12.0)) + L * W * FLOOR_KG_M2
-	var curb := float(ch.get("curb_kg", 3000.0)) + body_kg + float(d["interior_kg"]) \
-		+ float((d.get("exterior_totals", {}) as Dictionary).get("kg", 0.0))
+	var ext_kg := float((d.get("exterior_totals", {}) as Dictionary).get("kg", 0.0))
+	var curb := float(ch.get("curb_kg", 3000.0)) + body_kg + float(d["interior_kg"]) + ext_kg
 	var gvwr := float(ch.get("gvwr_kg", curb * 1.3))
-	var occupants := float(maxi(int(d["seats"]), 1)) * OCCUPANT_KG
+	# Laden = as it arrives: a full tank, full fresh water and propane, the
+	# camp's gear, a person in every seat. Grey and black ride home full.
+	var fuel := str(d["fuel"])
+	var fuel_kg := float(d["tank_l"]) * float(VehicleCatalog.FUEL_KG_L.get(fuel, 0.0))
+	var water_kg := float(d["water_l"])
+	var grey_kg := float(d["grey_l"]) + float(d.get("black_l", 0.0))
+	var propane_kg := float(d.get("propane_lb", 0.0)) * VehicleCatalog.PROPANE_KG_PER_LB
+	var occupants := float(maxi(int(d["seats"]), 0)) * OCCUPANT_KG
+	var laden := curb + fuel_kg + water_kg + propane_kg + GEAR_KG + occupants
 	d["body_kg"] = body_kg
 	d["curb_kg"] = curb
 	d["gvwr_kg"] = gvwr
-	d["laden_kg"] = curb + minf(occupants, 2.0 * OCCUPANT_KG) + GEAR_KG
-	d["payload_kg"] = gvwr - curb - occupants
+	d["fuel_kg"] = fuel_kg
+	d["water_kg"] = water_kg
+	d["propane_kg"] = propane_kg
+	d["occupants_kg"] = occupants
+	d["laden_kg"] = laden
+	d["laden_out_kg"] = laden + grey_kg
+	d["payload_kg"] = gvwr - laden
+	d["payload_dry_kg"] = gvwr - curb
+	# Ratings the chassis sheet publishes.
+	d["gawr_f_kg"] = float(ch.get("gawr_f_kg", 0.0))
+	d["gawr_r_kg"] = float(ch.get("gawr_r_kg", 0.0))
+	d["tow_kg"] = float(ch.get("tow_kg", 0.0))
+	d["gcwr_kg"] = float(ch.get("gcwr_kg", 0.0))
+	d["brakes"] = bool(ch.get("brakes", str(ch.get("cab", "")) != "none"))
+	_axle_loads(d, ch, bd, body_kg, fuel_kg, occupants)
+	_envelope(d, ch, bd)
+
+
+## The laden mass split over the axles by the lever rule: every mass at its
+## own z (the chassis along the wheelbase, the body at its middle, each
+## piece inside where it stands, the water in its tanks, the fuel in the
+## tank on the frame, the driver at the wheel and the others in the seats,
+## the roof load on the roof, the gear in the living box). A drivable vehicle
+## gets {axle_f_kg, axle_r_kg} (the rear = every rear axle together); a
+## trailer gets its tongue weight instead, at the coupler. Also the centre
+## of mass {cg_z, cg_y} and how much the roof load raised it.
+static func _axle_loads(d: Dictionary, ch: Dictionary, bd: Dictionary,
+		body_kg: float, fuel_kg: float, occupants: float) -> void:
+	var half := float(d["half_len"])
+	var b: Dictionary = d["body"]
+	var house: Dictionary = d["house"]
+	var axles: Array = d["axles"]
+	var cab := str(ch.get("cab", "cutaway"))
+	var frame_h := float(ch.get("frame_h_m", 0.7))
+	var fo := float(ch.get("front_overhang_m", 1.0))
+	var wb := float(ch.get("wheelbase_m", 0.0))
+	var masses: Array = []   # [kg, z, y]
+	# The chassis: along the wheelbase, or at the box's middle on a trailer.
+	var body_mid := (float(b["z0"]) + float(b["z1"])) * 0.5
+	var curb := float(ch.get("curb_kg", 0.0))
+	if cab == "none" or wb <= 0.0:
+		masses.append([curb, body_mid, frame_h])
+	else:
+		var k := float(ch.get("cg_wb", CHASSIS_CG_WB))
+		masses.append([curb, fo + wb * k - half, frame_h + 0.2])
+	if body_kg > 0.0:
+		masses.append([body_kg, body_mid, (float(b["floor_y"]) + float(b["h"])) * 0.5])
+	for e in d["interior"]:
+		var el: Dictionary = e
+		masses.append([float(el.get("mass_kg", 0.0)), float(el["z"]),
+			(float(el["base_y"]) + float(el["top_y"])) * 0.5])
+	for f in d.get("fluids", []):
+		var fd: Dictionary = f
+		if str(fd["kind"]) == "water":
+			masses.append([float(fd["l"]), float(fd["z"]), float(fd["y"])])
+	if fuel_kg > 0.0 and axles.size() >= 2:
+		var z_tank := (float((axles[0] as Dictionary)["zf"]) + float((axles[1] as Dictionary)["zf"])) * 0.5 - half
+		masses.append([fuel_kg, z_tank, frame_h - 0.3])
+	# Propane: where its bottles stand inside (an element), else on the tongue.
+	var propane_kg := float(d.get("propane_kg", 0.0))
+	if propane_kg > 0.0:
+		var pz := body_mid
+		for e in d["interior"]:
+			if str((e as Dictionary)["type"]) == "propane":
+				pz = float((e as Dictionary)["z"])
+		masses.append([propane_kg, pz, float(b["floor_y"]) + 0.25])
+	var roof_kg := 0.0
+	var ext_y_sum := 0.0
+	for e in d.get("exterior", []):
+		var el: Dictionary = e
+		var fr := VehicleExterior.frame(d, el)
+		if fr.is_empty():
+			continue
+		var m := VehicleExterior.mass_of(el)
+		var c: Vector3 = fr["centre"]
+		masses.append([m, c.z, c.y])
+		if str(el["face"]) == "roof":
+			roof_kg += m
+			ext_y_sum += m * c.y
+	# People: the driver at the wheel, the rest in the seats (or the box).
+	var n_people := int(round(occupants / OCCUPANT_KG))
+	var seat_spots: Array = d.get("seat_spots", [])
+	var house_mid := (float(house["z0"]) + float(house["z1"])) * 0.5
+	var floor_y := float(house["floor_y"])
+	for i in n_people:
+		if i == 0 and bool(d.get("drivable", false)):
+			var ds: Vector3 = d["driver_seat"]
+			masses.append([OCCUPANT_KG, ds.z, ds.y - 0.35])
+		elif not seat_spots.is_empty():
+			var sp: Vector3 = (seat_spots[(i - 1) % seat_spots.size()] as Dictionary)["pos"]
+			masses.append([OCCUPANT_KG, sp.z, sp.y + 0.3])
+		else:
+			masses.append([OCCUPANT_KG, house_mid, floor_y + 0.75])
+	masses.append([GEAR_KG, house_mid, floor_y + 0.4])
+	var total := 0.0
+	var mz := 0.0
+	var my := 0.0
+	for m in masses:
+		var arr: Array = m
+		total += float(arr[0])
+		mz += float(arr[0]) * float(arr[1])
+		my += float(arr[0]) * float(arr[2])
+	if total <= 0.0:
+		return
+	var cg_z := mz / total
+	var cg_y := my / total
+	d["cg_z"] = cg_z
+	d["cg_y"] = cg_y
+	d["roof_load_kg"] = roof_kg
+	# How far the roof load alone raised the centre of mass.
+	d["cg_rise_m"] = cg_y - (my - ext_y_sum) / maxf(total - roof_kg, 1.0) if roof_kg > 0.0 else 0.0
+	# A tractor + container is three axle groups on two frames: the lever
+	# rule over one rear group says nothing true about its steer axle, so
+	# it gets the split for the summary and no axle check.
+	d["axle_check"] = cab != "none" and cab != "tractor"
+	if cab == "none" or axles.is_empty():
+		# A trailer: the load the axles do not carry sits on the coupler.
+		var za := float(d.get("axle_z", body_mid))
+		var zc: float = (d.get("coupler", Vector3(0, 0, -half)) as Vector3).z
+		var tongue := total * (za - cg_z) / maxf(za - zc, 0.1)
+		d["tongue_kg"] = tongue
+		d["tongue_pct"] = tongue / total
+		d["axle_f_kg"] = 0.0
+		d["axle_r_kg"] = total - tongue
+		return
+	var zf := float((axles[0] as Dictionary)["zf"]) - half
+	var zr := 0.0
+	var nr := 0
+	for i in range(1, axles.size()):
+		zr += float((axles[i] as Dictionary)["zf"]) - half
+		nr += 1
+	zr = zr / maxf(float(nr), 1.0) if nr > 0 else zf + 1.0
+	var front := total * (zr - cg_z) / maxf(zr - zf, 0.1)
+	d["axle_f_kg"] = front
+	d["axle_r_kg"] = total - front
+	d["tongue_kg"] = 0.0
+	d["tongue_pct"] = 0.0
+
+
+## The whole vehicle's outside: how tall with the roof items, how wide with
+## the side items (a folded awning, a ladder), and the roof's rating.
+static func _envelope(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
+	var top := float(d["height_m"])
+	var side := 0.0
+	var appurt := 0.0
+	for e in d.get("exterior", []):
+		var el: Dictionary = e
+		var fr := VehicleExterior.frame(d, el)
+		if fr.is_empty():
+			continue
+		match str(el["face"]):
+			"roof":
+				top = maxf(top, (fr["base"] as Vector3).y + float(el["h"]))
+			"left", "right":
+				# An awning or a ladder is an appurtenance the width law
+				# allows past the body; a side-mounted module is not.
+				if str(el["type"]) in ["awning", "ladder"]:
+					appurt = maxf(appurt, float(el["h"]))
+				else:
+					side = maxf(side, float(el["h"]))
+	d["overall_h_m"] = top
+	d["overall_w_m"] = float(d["width_m"]) + 2.0 * maxf(side, appurt)
+	d["body_w_m"] = float(d["width_m"]) + 2.0 * side
+	var integral_van := str(ch.get("cab", "")) == "full_van" and bool(bd.get("in_curb", false))
+	d["roof_kg_max"] = float(ch.get("roof_kg", 0.0)) if integral_van and ch.has("roof_kg") \
+		else float(bd.get("roof_kg", 0.0))
 
 
 static func _cargo(d: Dictionary, bd: Dictionary) -> void:
@@ -540,9 +781,54 @@ static func _cargo(d: Dictionary, bd: Dictionary) -> void:
 static func _checks(d: Dictionary) -> void:
 	var c: Array = d["checks"]
 	var house: Dictionary = d["house"]
+	var trailer := str(d["type"]) == "trailer" or not bool(d.get("drivable", false))
 	if float(d["payload_kg"]) < 0.0:
-		c.append({"level": "error", "text": "Over the GVWR by %d kg with %d aboard — lighten the build." %
-			[int(-float(d["payload_kg"])), int(d["seats"])]})
+		c.append({"level": "error", "text": "Over the GVWR by %d kg loaded (%d aboard, tanks full, %d kg of gear) — lighten the build." %
+			[int(-float(d["payload_kg"])), int(d["seats"]), int(GEAR_KG)]})
+	elif float(d.get("laden_out_kg", 0.0)) > float(d["gvwr_kg"]):
+		c.append({"level": "warn", "text": "Over the GVWR by %d kg once the grey and black tanks are full." %
+			int(float(d["laden_out_kg"]) - float(d["gvwr_kg"]))})
+	# Axle loads (the lever rule in _axle_loads).
+	if not trailer and bool(d.get("axle_check", true)):
+		var rear := float(d.get("axle_r_kg", 0.0))
+		var front := float(d.get("axle_f_kg", 0.0))
+		var gawr_r := float(d.get("gawr_r_kg", 0.0))
+		if gawr_r > 0.0 and rear > gawr_r:
+			c.append({"level": "warn", "text": "The rear axle carries %d kg, rated %d: move the battery and water forward." %
+				[int(rear), int(gawr_r)]})
+		var gawr_f := float(d.get("gawr_f_kg", 0.0))
+		if gawr_f > 0.0 and front > gawr_f:
+			c.append({"level": "warn", "text": "The front axle carries %d kg, rated %d." % [int(front), int(gawr_f)]})
+		var share := front / maxf(front + rear, 1.0)
+		if share < 0.2 and front + rear > 0.0:
+			c.append({"level": "warn", "text": "Only %d %% of the weight is on the front axle: it steers and brakes badly. Move weight forward." %
+				int(round(share * 100.0))})
+	elif trailer:
+		var pct := float(d.get("tongue_pct", 0.0))
+		if pct < TONGUE_MIN:
+			c.append({"level": "warn", "text": "Tongue weight %d %% (%d kg): under %d %% a trailer sways. Move weight ahead of the axles." %
+				[int(round(pct * 100.0)), int(float(d.get("tongue_kg", 0.0))), int(TONGUE_MIN * 100.0)]})
+		elif pct > TONGUE_MAX:
+			c.append({"level": "info", "text": "Tongue weight %d %% (%d kg): heavy on the hitch; a weight-distributing hitch helps." %
+				[int(round(pct * 100.0)), int(float(d.get("tongue_kg", 0.0)))]})
+		if float(d["gvwr_kg"]) > TRAILER_BRAKES_KG and not bool(d.get("brakes", false)):
+			c.append({"level": "warn", "text": "A %s lb trailer needs its own brakes." %
+				UiText.thousands(int(round(float(d["gvwr_kg"]) / 0.45359237)))})
+	# Height, width and the roof load.
+	var oh := float(d.get("overall_h_m", d["height_m"]))
+	if oh > MAX_HEIGHT_M:
+		c.append({"level": "warn", "text": "%.2f m tall with the roof items: over 13' 6\", the limit on most roads." % oh})
+	if float(d.get("body_w_m", d["width_m"])) > MAX_WIDTH_M + 0.01:
+		c.append({"level": "warn", "text": "%.2f m wide with the side items: over 102\"." % float(d["body_w_m"])})
+	elif float(d.get("overall_w_m", d["width_m"])) > MAX_WIDTH_M + 2.0 * APPURTENANCE_M + 0.01:
+		c.append({"level": "warn", "text": "%.2f m wide: the awning or ladder stands more than 6\" past the body." %
+			float(d["overall_w_m"])})
+	var roof_max := float(d.get("roof_kg_max", 0.0))
+	var roof_load := float(d.get("roof_load_kg", 0.0))
+	if roof_max > 0.0 and roof_load > roof_max:
+		c.append({"level": "warn", "text": "%d kg on the roof, rated %d." % [int(roof_load), int(roof_max)]})
+	if float(d.get("cg_rise_m", 0.0)) > 0.08:
+		c.append({"level": "info", "text": "The roof load raises the centre of mass %d cm." % int(round(float(d["cg_rise_m"]) * 100.0))})
 	if float(house["height"]) < 1.7 and str(d["type"]) != "trailer":
 		c.append({"level": "warn", "text": "Only %.2f m of headroom inside — most people stoop." %
 			float(house["height"])})
@@ -562,7 +848,7 @@ static func _checks(d: Dictionary) -> void:
 
 
 ## Stored under a bed platform: a battery, a tank, an inverter.
-const UNDER_BED_OK := ["battery", "water_tank", "grey_tank", "inverter"]
+const UNDER_BED_OK := ["battery", "water_tank", "grey_tank", "black_tank", "inverter", "heater", "water_heater", "propane"]
 
 
 static func _overlap(a: Dictionary, b: Dictionary) -> bool:
@@ -632,9 +918,10 @@ static func yaw_rate_limit_deg(v: float, turn_radius_m: float) -> float:
 
 
 ## Miles left at a steady 55 mph from `litres` of fuel (or `kwh` for an
-## electric chassis): the dashboard's range.
-static func range_mi(d: Dictionary, litres: float, kwh: float = 0.0) -> float:
-	var e := VehicleEnergy.at_speed(d, VehicleEnergy.MPS_55MPH)
+## electric chassis): the dashboard's range. `trailer` = the solved design
+## of a hitched trailer, towed along.
+static func range_mi(d: Dictionary, litres: float, kwh: float = 0.0, trailer: Dictionary = {}) -> float:
+	var e := VehicleEnergy.at_speed(d, VehicleEnergy.MPS_55MPH, trailer)
 	var km := 0.0
 	if str(d.get("fuel", "")) == "electric":
 		km = kwh / maxf(float(e["kwh_per_km"]), 1e-6)
@@ -644,9 +931,9 @@ static func range_mi(d: Dictionary, litres: float, kwh: float = 0.0) -> float:
 
 
 ## Litres (or kWh) drawn over `metres` at `v` m/s — what the dashboard bills
-## while it is driven.
-static func energy_for_distance(d: Dictionary, metres: float, v: float) -> Dictionary:
-	var e := VehicleEnergy.at_speed(d, v)
+## while it is driven, with a hitched trailer's load when one is given.
+static func energy_for_distance(d: Dictionary, metres: float, v: float, trailer: Dictionary = {}) -> Dictionary:
+	var e := VehicleEnergy.at_speed(d, v, trailer)
 	return {"litres": metres / 1000.0 * float(e["l_per_km"]),
 		"kwh": metres / 1000.0 * float(e["kwh_per_km"])}
 
