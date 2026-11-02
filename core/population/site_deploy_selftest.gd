@@ -12,7 +12,7 @@ extends SceneTree
 ## prints). Run --import first.
 ##   godot --headless --path . --script core/population/site_deploy_selftest.gd
 
-const EXPECTED_CHECKS := 80
+const EXPECTED_CHECKS := 84
 
 var _failures := 0
 var _checks := 0
@@ -228,6 +228,22 @@ func _test_planner_rows() -> void:
 	link["loadout"] = {"x": 1.0, "z": 2.0}
 	_check("a linkage pack-up carries its crate out too",
 		_ids(SiteDeployPlanner.rows_for(link, SiteDeploySchedule.ACTION_PACKUP, 8)).has("load_out"))
+	_check("the carry to the door remembers where it stood",
+		bool((lrows2[2]["effect"] as Dictionary).get("store_home", false)) and bool(heff.get("store_home", false)))
+
+	# A kit that was carried away deploys back where it stood.
+	var away := _item("p_away", "shiftpod", 34.0, Vector2(12.0, -3.0))
+	away["home"] = {"x": 0.0, "z": 0.0}
+	var arows := SiteDeployPlanner.rows_for(away, SiteDeploySchedule.ACTION_DEPLOY, 6)
+	var aeff: Dictionary = arows[0].get("effect", {})
+	_check("a moved kit is carried home first", _ids(arows) == ["return", "lay_out", "assemble", "finish"]
+		and str(aeff.get("op", "")) == "move_prop" and bool(aeff.get("clear_home", false))
+		and absf(float(aeff.get("x", 9.0))) < 1e-9 and absf(float(aeff.get("z", 9.0))) < 1e-9)
+	_check("the build waits for the carry home", (arows[1]["depends_on"] as Array) == ["return"]
+		and (arows[2]["depends_on"] as Array) == ["lay_out"])
+	away["home"] = {"x": 12.3, "z": -3.0}
+	_check("a home within a metre is no carry", _ids(SiteDeployPlanner.rows_for(away,
+		SiteDeploySchedule.ACTION_DEPLOY, 6)) == ["lay_out", "assemble", "finish"])
 
 
 # ---------------------------------------------------------------------------

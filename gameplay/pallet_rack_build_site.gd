@@ -66,6 +66,8 @@ extends Node3D
 
 const NODE_NAME := "RackBuildSite"
 const RECORD_KEY := "build_run"
+## The player's fine-tuning of the crew plan (PalletRackBuildPlan "tuning").
+const TUNING_KEY := "crew_tuning"
 const MAX_LABOUR_LANES := 12
 const STATUS_EVERY_S := 0.25
 const LABOUR_EASE_S := 1.2
@@ -83,6 +85,8 @@ const PHASE_SPREAD_S := 0.731
 
 ## sig -> {tl, units}. A prop rebuild re-attaches the site; the plan is reused.
 static var _plan_cache: Dictionary = {}
+## Pieces cut for a preview with no running site, keyed by the look.
+static var _preview_units: Dictionary = {}
 ## prop id -> {t, ms}: the drawn build time of a site whose prop was rebuilt
 ## under it, picked up by the site of the rebuilt prop.
 static var _carry: Dictionary = {}
@@ -220,14 +224,16 @@ static func site_for(main: Node, prop_id: String) -> PalletRackBuildSite:
 
 
 ## The plan for a rack + crew, cached by the spec.
-static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard_side: String = "-z") -> Dictionary:
+static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard_side: String = "-z",
+		tuning: Dictionary = {}) -> Dictionary:
 	var s := PalletRackBuilder.resolve_spec(spec)
 	s.erase("_stepped_cells")
 	s.erase("_open_cells")
-	var sig := "%d|%d|%s" % [hash(JSON.stringify(s, "", true)), crew_n, yard_side]
+	var sig := "%d|%d|%s|%d" % [hash(JSON.stringify(s, "", true)), crew_n, yard_side,
+		hash(JSON.stringify(tuning, "", true))]
 	if _plan_cache.has(sig):
 		return _plan_cache[sig]
-	var tl := PalletRackBuildPlan.plan(s, crew_n, units, {"yard_side": yard_side})
+	var tl := PalletRackBuildPlan.plan(s, crew_n, units, {"yard_side": yard_side, "tuning": tuning})
 	if _plan_cache.size() > 6:
 		_plan_cache.clear()
 	_plan_cache[sig] = tl
@@ -235,15 +241,115 @@ static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard
 
 
 ## The plan for any other structure's pieces, cached by its look + crew.
-static func plan_units_for(look: String, crew_n: int, units: Dictionary, yard_side: String) -> Dictionary:
-	var sig := "units|%s|%d|%s" % [look, crew_n, yard_side]
+static func plan_units_for(look: String, crew_n: int, units: Dictionary, yard_side: String,
+		tuning: Dictionary = {}) -> Dictionary:
+	var sig := "units|%s|%d|%s|%d" % [look, crew_n, yard_side, hash(JSON.stringify(tuning, "", true))]
 	if _plan_cache.has(sig):
 		return _plan_cache[sig]
-	var tl := PalletRackBuildPlan.plan_units(units, crew_n, {"yard_side": yard_side})
+	var tl := PalletRackBuildPlan.plan_units(units, crew_n, {"yard_side": yard_side, "tuning": tuning})
 	if _plan_cache.size() > 6:
 		_plan_cache.clear()
 	_plan_cache[sig] = tl
 	return tl
+
+
+## The crew a prop's build is planned for: its run's, else the default.
+static func crew_for_record(rec: Dictionary) -> int:
+	var run: Variant = rec.get(RECORD_KEY)
+	if run is Dictionary and (run as Dictionary).has("crew_n"):
+		return maxi(1, int((run as Dictionary)["crew_n"]))
+	if str(rec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID:
+		return LINKAGE_DEFAULT_CREW
+	return DEFAULT_CREW
+
+
+## The plan a prop's crew would follow with `tuning` (the prop editor's
+## fine-tune panel reads its processes, phases and time from it). A running
+## site's own pieces and yard are reused; otherwise the structure is cut
+## once per look (`_preview_units`) and the yard taken in front.
+## Empty for something with no pieces.
+static func preview_plan(main: Node, prop_id: String, tuning: Dictionary, crew_n: int = -1) -> Dictionary:
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return {}
+	if crew_n <= 0:
+		crew_n = crew_for_record(rec)
+	var generic := str(rec.get("model_id", "")) != PalletRackBuilder.MODEL_ID
+	var site := site_for(main, prop_id)
+	if site != null and not site._tl.is_empty() and is_instance_valid(site._units_root):
+		var u: Dictionary = site._units_root.get_meta("units", {})
+		var side := str(site._tl.get("yard_side", "-z"))
+		var n := int(site._run.get("crew_n", crew_n))
+		if site._generic:
+			return plan_units_for(StructureUnits.look_key(site._rec, site._model.transform.basis.get_scale()),
+				n, u, side, tuning)
+		return plan_for(_rec_spec(site._rec), n, u, side, tuning)
+	var scale := Vector3.ONE
+	if generic:
+		scale = Vector3.ONE * ModelCatalog.resolved_scale(str(rec.get("model_id", "")),
+			float(rec.get("scale", 1.0)))
+	var ukey := StructureUnits.look_key(rec, scale) if generic \
+		else "rack|%d" % hash(JSON.stringify(_rec_spec(rec), "", true))
+	var units: Dictionary = _preview_units.get(ukey, {})
+	if units.is_empty():
+		var root: Node3D = StructureUnits.units_node(rec, scale, null) if generic \
+			else PalletRackBuilder.build_units_node(_rec_spec(rec))
+		if root == null:
+			return {}
+		units = root.get_meta("units", {})
+		root.free()
+		if units.is_empty():
+			return {}
+		if _preview_units.size() > 4:
+			_preview_units.clear()
+		_preview_units[ukey] = units
+	if generic:
+		return plan_units_for(StructureUnits.look_key(rec, scale), crew_n, units, "-z", tuning)
+	return plan_for(_rec_spec(rec), crew_n, units, "-z", tuning)
+
+
+## Apply a new tuning to the running site: re-plan with the same pieces,
+## yard and crew size and redraw at the current build time (no prop rebuild).
+func retune(tuning: Dictionary) -> void:
+	if _disposed or _tl.is_empty() or not is_instance_valid(_units_root):
+		return
+	_rec[TUNING_KEY] = tuning.duplicate(true)
+	var units: Dictionary = _units_root.get_meta("units", {})
+	var side := str(_tl.get("yard_side", "-z"))
+	var n := int(_run.get("crew_n", DEFAULT_CREW))
+	var tl: Dictionary
+	if _generic:
+		tl = plan_units_for(StructureUnits.look_key(_rec, _model.transform.basis.get_scale()),
+			n, units, side, tuning)
+	else:
+		tl = plan_for(_rec_spec(_rec), n, units, side, tuning)
+	if tl.is_empty():
+		return
+	var crew_changed := int(tl.get("crew", 0)) != int(_tl.get("crew", 0))
+	_tl = tl
+	if is_instance_valid(_label):
+		var b: AABB = _tl.get("bounds", AABB())
+		_label.position = Vector3(b.get_center().x, b.end.y + 1.2, b.get_center().z)
+	if is_instance_valid(_piles):
+		remove_child(_piles)
+		_piles.queue_free()
+	_planes.clear()
+	_build_piles()
+	if crew_changed:
+		for c in _crew:
+			for t in (c["tools"] as Dictionary).values():
+				if is_instance_valid(t):
+					(t as Node).queue_free()
+			var fig := c["fig"] as Node
+			if is_instance_valid(fig):
+				remove_child(fig)
+				fig.queue_free()
+		_crew.clear()
+		_build_crew()
+	_unit_sig.clear()
+	_lane_of.clear()
+	_last_state = {}
+	_update(0.0)
 
 
 ## The build frame: the ModelRoot's own for a rack; for anything else its
@@ -318,11 +424,12 @@ func _ready() -> void:
 		dispose()
 		return
 	var side := PalletRackBuildPlan.yard_side(PalletRackBuildPlan.units_bounds(units), _ground_raw)
+	var tuning: Dictionary = _rec.get(TUNING_KEY, {}) as Dictionary
 	if _generic:
 		_tl = plan_units_for(StructureUnits.look_key(_rec, _model.transform.basis.get_scale()),
-			int(_run.get("crew_n", DEFAULT_CREW)), units, side)
+			int(_run.get("crew_n", DEFAULT_CREW)), units, side, tuning)
 	else:
-		_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side)
+		_tl = plan_for(spec, int(_run.get("crew_n", DEFAULT_CREW)), units, side, tuning)
 	_model.visible = false
 	_set_crate_visible(false)
 	if _generic and not _labour and _model is LinkageStructureBuilder:
@@ -788,9 +895,10 @@ func _pose_worker(c: Dictionary, w: Dictionary, rate: float, delta: float) -> vo
 		return
 	var phase := fposmod(_fx_t + float(w["id"]) * PHASE_SPREAD_S, clip.length_s) if clip.loop \
 		else float(w["u"]) * clip.length_s
+	var grips := _world_grips(w)
 	var rig_kind := str(w["rig"])
 	if rig_kind.is_empty():
-		_drive(fig, clip, phase, Transform3D(), {}, dt)
+		_drive(fig, clip, phase, Transform3D(), {}, dt, grips)
 		return
 	var rig := _rig(rig_kind)
 	var tp := FabContextRig.tool_at(rig, phase / maxf(clip.length_s, 0.01))
@@ -805,12 +913,30 @@ func _pose_worker(c: Dictionary, w: Dictionary, rate: float, delta: float) -> vo
 		tool.transform = xf
 		FabToolCatalog.set_spin(tool, float(tp["spin"]))
 		socks = tool.get_meta("sockets", {})
-	_drive(fig, clip, phase, xf, socks, dt)
+	_drive(fig, clip, phase, xf, socks, dt, grips)
 
 
-func _drive(fig: NpcSimpleFigure, clip: NpcAnimClip, t: float, tool_xf: Transform3D, socks: Dictionary, dt: float) -> void:
+# The plan's grips are in the held piece's own frame; the piece's node is
+# already posed this frame (units are applied before the crew).
+func _world_grips(w: Dictionary) -> Array:
+	var g: Array = w.get("grips", [])
+	if g.is_empty():
+		return []
+	var n: Node3D = _unit_nodes.get(str(w.get("grip_unit", "")))
+	if n == null or not n.is_inside_tree():
+		return []
+	var out: Array = []
+	for x in g:
+		out.append(n.global_transform * (x as Transform3D) if x is Transform3D else null)
+	return out
+
+
+func _drive(fig: NpcSimpleFigure, clip: NpcAnimClip, t: float, tool_xf: Transform3D, socks: Dictionary, dt: float, grips: Array = []) -> void:
 	fig.set_clip(clip, t, 1.0)
 	for i in 2:
+		if i < grips.size() and grips[i] is Transform3D:
+			fig.set_hand_target(i, grips[i])
+			continue
 		var sock := str(clip.ik.get("hand_r" if i == 0 else "hand_l", "none"))
 		if sock != "none" and socks.get(sock) is Transform3D:
 			fig.set_hand_target(i, global_transform * tool_xf * (socks[sock] as Transform3D))

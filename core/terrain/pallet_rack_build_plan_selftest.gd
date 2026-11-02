@@ -15,7 +15,7 @@ extends SceneTree
 ## down rests on the ground (or its own pieces) clear of the rack, and is
 ## carried at hand height.
 
-const EXPECTED_CHECKS := 54
+const EXPECTED_CHECKS := 60
 
 var _checks := 0
 var _failures := 0
@@ -228,6 +228,7 @@ func _initialize() -> void:
 			first_fit_carry = minf(first_fit_carry, float(tc["jobs"][ci]["t0"]))
 	_check("tool camp 26: struck, the fit-out is in the yard before the racking comes down",
 		first_fit_carry >= last_racking - 0.01, "racking done %.0f s, first fit-out carry %.0f s" % [last_racking, first_fit_carry])
+	_test_carry_frames(tc)
 	_test_slopes_in_pieces()
 	_test_structure_pieces()
 	_test_linkage_crew_build()
@@ -236,6 +237,85 @@ func _initialize() -> void:
 		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
 	print("RACK BUILD PLAN SELFTEST %s  (%d checks)" % ["PASS" if _failures == 0 else "FAIL", _checks])
 	quit(0 if _failures == 0 else 1)
+
+
+## Loose bundles are carried the LONG way: turned so their long side runs
+## along the walk, the crew outside their long sides (both sides of a sheet),
+## hands within reach of the grips under the edge, no jump in anyone's
+## position between lifting, carrying and setting down, and the bundle lands
+## exactly where it is staged. (Tool Camp's plywood used to be carried
+## crossways with the crew at its short ends, floating between them.)
+func _test_carry_frames(tc: Dictionary) -> void:
+	var P := PalletRackBuildPlan
+	var n_cf := 0
+	var along_ok := true
+	var along_bad := ""
+	var sides_ok := true
+	var outside_ok := true
+	var reach_ok := true
+	var reach_bad := ""
+	var smooth_ok := true
+	var smooth_bad := ""
+	var land_ok := true
+	for j in tc["jobs"]:
+		var cf: Dictionary = j.get("cframe", {})
+		if cf.is_empty() or str(j["kind"]) != "carry" or float(j["t0"]) < 0.0:
+			continue
+		n_cf += 1
+		var crew: Array = j["crew"]
+		var hd: Vector3 = P._flat(cf["bc"]) - P._flat(j["pick"])
+		if hd.length() > 0.5:
+			var dot := absf((P._ry(P._cf_theta(cf, 0.5)) * (cf["a_s"] as Vector3)).dot(hd.normalized()))
+			if dot <= 0.98:
+				along_ok = false
+				along_bad = "%s: long side %.2f off the walk" % [str(j.get("label", "")), dot]
+		var offs := P._cf_offsets(cf, crew.size())
+		if float(cf["half_b"]) >= P.CARRY_WIDE_M and crew.size() >= 2:
+			var plus := false
+			var minus := false
+			for off in offs:
+				plus = plus or float(off["side"]) > 0.0
+				minus = minus or float(off["side"]) < 0.0
+			if not (plus and minus):
+				sides_ok = false
+		for off in offs:
+			if absf((off["o"] as Vector3).dot(cf["bv"])) <= float(cf["half_b"]):
+				outside_ok = false
+		var lifted := float(j["t_lifted"])
+		var moved := float(j["t_moved"])
+		var tm := (lifted + moved) * 0.5
+		var bxf: Transform3D = P.unit_pose(tc, str(cf["ref"]), tm)["xf"]
+		for wid in crew:
+			var w: Dictionary = tc["workers"][wid]
+			var ws := P._worker_at(w, tc["jobs"], tm)
+			var pos: Vector3 = ws["pos"]
+			if not ws.has("grips"):
+				reach_ok = false
+				reach_bad = "worker %d holds nothing mid-carry" % int(wid)
+			else:
+				for g: Transform3D in ws["grips"]:
+					var gp: Vector3 = (bxf * g).origin
+					var dxz := Vector2(gp.x - pos.x, gp.z - pos.z).length()
+					if dxz >= 0.8:
+						reach_ok = false
+						reach_bad = "worker %d: a grip %.2f m away" % [int(wid), dxz]
+			for tb in [lifted, moved]:
+				var pa: Vector3 = P._worker_at(w, tc["jobs"], tb - 1e-3)["pos"]
+				var pb: Vector3 = P._worker_at(w, tc["jobs"], tb + 1e-3)["pos"]
+				if pa.distance_to(pb) >= 0.05:
+					smooth_ok = false
+					smooth_bad = "worker %d jumps %.2f m at %.0f s" % [int(wid), pa.distance_to(pb), tb]
+		var end_xf: Transform3D = P.unit_pose(tc, str(cf["ref"]), float(j["t1"]) - 1e-3)["xf"]
+		var staged: Transform3D = tc["unit"][str(cf["ref"])]["staged"]
+		if end_xf.origin.distance_to(staged.origin) >= 0.05:
+			land_ok = false
+	_check("carry: loose bundles carried the long way along the walk", n_cf > 0 and along_ok,
+		"%d carried bundles; %s" % [n_cf, along_bad])
+	_check("carry: a sheet is carried from both long sides", sides_ok)
+	_check("carry: carriers stand outside the bundle", outside_ok)
+	_check("carry: hands are on grips within reach mid-carry", reach_ok, reach_bad)
+	_check("carry: nobody jumps between lift, carry and set-down", smooth_ok, smooth_bad)
+	_check("carry: the bundle lands where it is staged", land_ok)
 
 
 ## A slope is built (and struck) member by member: its end walls are 4x8

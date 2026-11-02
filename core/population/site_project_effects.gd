@@ -18,6 +18,9 @@ extends RefCounted
 ##   {op:"move_prop",   prop_id, x, z}   crate set-down at its staging slot
 ##   {op:"fork_move",   prop_id, forklift_id, x, z}  a forklift set it down;
 ##       the forklift parks beside the drop
+##   both moves take `store_home` (a load-out: the record keeps
+##       `deploy_home` {x, z, yaw, y_offset} of where it stood) and
+##       `clear_home` (a deploy's carry back: restore that yaw, drop it)
 ##   {op:"unpack_prop", prop_id}         deploy — plays the linkage raise sweep
 ##   {op:"pack_prop",   prop_id}         breakdown — plays the stow sweep
 ##   {op:"remove_prop", prop_id}         consume an emptied crate
@@ -46,12 +49,15 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			# glide is presentation: a round-trip set-down settles from the
 			# carriers' hands, a brigade stage move slides down the relay
 			# instead of teleporting.
+			_store_home(main, prop_id, op)
 			var moved := PlacedPropService.move_prop_at(main, prop_id,
 				float(op.get("x", 0.0)), float(op.get("z", 0.0)), NAN,
 				float(op.get("y_offset", 0.0)), 0.9)
 			if moved and op.has("collision_enabled"):
 				PlacedPropService.update_prop_record(main, prop_id,
 					{"collision_enabled": bool(op["collision_enabled"])}, true)
+			if moved:
+				_clear_home(main, prop_id, op)
 			return moved
 		"fork_move":
 			# A forklift operator set the load down: the load goes where
@@ -59,11 +65,14 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			# down and empty, so the next fork row starts from there.
 			var fx := float(op.get("x", 0.0))
 			var fz := float(op.get("z", 0.0))
+			_store_home(main, prop_id, op)
 			var ok := PlacedPropService.move_prop_at(main, prop_id, fx, fz, NAN,
 				float(op.get("y_offset", 0.0)), 0.9)
 			if ok and op.has("collision_enabled"):
 				PlacedPropService.update_prop_record(main, prop_id,
 					{"collision_enabled": bool(op["collision_enabled"])}, true)
+			if ok:
+				_clear_home(main, prop_id, op)
 			var fid := str(op.get("forklift_id", ""))
 			if ok and not fid.is_empty():
 				var park := ForkliftPlanner.park_beside(Vector2(fx, fz),
@@ -165,6 +174,33 @@ static func execute(main: Node, op: Dictionary) -> bool:
 			push_warning("SiteProjectEffects: unknown op '%s' (skipped)" % kind)
 			return true
 	return false
+
+
+## A load-out remembers where the structure stood, so the next deploy can
+## carry the kit back and build it there. An existing home is kept: a crate
+## hauled twice still belongs where it was first built.
+static func _store_home(main: Node, prop_id: String, op: Dictionary) -> void:
+	if not bool(op.get("store_home", false)):
+		return
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	if rec.is_empty() or rec.get("deploy_home") is Dictionary:
+		return
+	PlacedPropService.update_prop_record(main, prop_id, {"deploy_home": {
+		"x": float(rec.get("x", 0.0)), "z": float(rec.get("z", 0.0)),
+		"yaw": float(rec.get("yaw", 0.0)),
+		"y_offset": float(rec.get("y_offset", 0.0))}}, false)
+
+
+## The kit is back at its home: face it the way it stood and forget the home.
+static func _clear_home(main: Node, prop_id: String, op: Dictionary) -> void:
+	if not bool(op.get("clear_home", false)):
+		return
+	var rec := PlacedPropService.get_prop_record(main, prop_id)
+	var patch := {"deploy_home": null}
+	var home: Variant = rec.get("deploy_home")
+	if home is Dictionary and (home as Dictionary).has("yaw"):
+		patch["yaw"] = float((home as Dictionary)["yaw"])
+	PlacedPropService.update_prop_record(main, prop_id, patch, true)
 
 
 ## Resume a labour-gated recipe step whose chore the crew has finished.

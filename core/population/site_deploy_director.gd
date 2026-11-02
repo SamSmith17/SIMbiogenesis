@@ -518,6 +518,13 @@ func _instant(item: Dictionary, action: String) -> void:
 	# on the loader — the linkage fold sweep) rebuilds the prop itself, so
 	# only a prop that stays as it is needs the rebuild here.
 	var toggle := bool(rec.get("packed", false)) != (not deploy)
+	var home: Variant = rec.get("deploy_home")
+	if deploy and home is Dictionary:
+		var h := home as Dictionary
+		PlacedPropService.move_prop_at(_main, id, float(h.get("x", 0.0)), float(h.get("z", 0.0)),
+			NAN, float(h.get("y_offset", 0.0)))
+		PlacedPropService.update_prop_record(_main, id,
+			{"deploy_home": null, "yaw": float(h.get("yaw", 0.0))}, false)
 	PlacedPropService.update_prop_record(_main, id,
 		{"build_state": null, PalletRackBuildSite.RECORD_KEY: null}, not toggle)
 	if toggle and _loader.has_method("set_prop_packed"):
@@ -557,14 +564,19 @@ func _inventory(action: String) -> Array:
 			var item := {"kind": "prop", "id": str(rec.get("id", "")), "label": label,
 				"pos": Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))),
 				"mass_kg": float(pspec.get("mass_kg", -1.0)), "model_id": model_id}
+			var fork_check := false
 			if want_packed:
 				var door := _container_door_near(item["pos"] as Vector2)
 				if not door.is_empty():
 					item["loadout"] = door
-					if _loader.has_method("nearest_forklift_id"):
-						var fid := str(_loader.call("nearest_forklift_id", item["pos"] as Vector2))
-						if not fid.is_empty():
-							item["forklift_id"] = fid
+					fork_check = true
+			elif rec.get("deploy_home") is Dictionary:
+				item["home"] = (rec["deploy_home"] as Dictionary).duplicate()
+				fork_check = true
+			if fork_check and _loader.has_method("nearest_forklift_id"):
+				var fid := str(_loader.call("nearest_forklift_id", item["pos"] as Vector2))
+				if not fid.is_empty():
+					item["forklift_id"] = fid
 			if model_id == LinkageStructureBuilder.MODEL_ID and rec.get("linkage_spec") is Dictionary:
 				var p := LinkageParams.new()
 				p.from_config(rec.get("linkage_spec") as Dictionary)

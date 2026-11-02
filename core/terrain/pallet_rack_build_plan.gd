@@ -88,6 +88,13 @@ const CARRY_LOW := 0.8
 const DROP_CLEAR := 0.3
 ## Workers stand this far off a piece.
 const STAND_OFF_M := 0.6
+## A carried bundle at least this wide (half-width, m) is carried by its two
+## long sides; a narrower one is carried end to end along its length.
+const CARRY_WIDE_M := 0.35
+## How far a carrier's feet stand off the bundle's edge.
+const CARRY_STAND_M := 0.22
+## Hands go this far under the bundle's bottom edge.
+const GRIP_UNDER_M := 0.015
 
 ## Activity -> clip (core/population/anims/) and the FabContextRig kind its
 ## tool / hands follow.
@@ -97,6 +104,32 @@ const CLIP_FOR := {"carry": "carry_beam", "lift": "place_beam", "set": "place_be
 const RIG_FOR := {"carry": "carry", "lift": "place", "set": "place", "raise": "lift",
 	"hold": "", "seat": "place", "fix": "fasten", "lay": "place", "hang": "fasten",
 	"assemble": "fasten", "give": "place"}
+## A clip the player picks for a process -> the rig its tool / hands follow.
+const CLIP_RIG := {"place_beam": "place", "lift_ring": "lift", "carry_beam": "carry", "hold_brace": "",
+	"fasten_bolt": "fasten", "wrench_nut": "fasten", "drill_hole": "drill", "saw_cut": "cut"}
+
+## The fit-out's phases in their default order. with_prev: starts with the
+## phase before it instead of after it; free: nothing waits for it.
+const FITOUT_ORDER := [
+	{"group": "decks", "with_prev": false},
+	{"group": "steps", "with_prev": true, "free": true},
+	{"group": "roof", "with_prev": false},
+	{"group": "walls", "with_prev": true},
+	{"group": "elements", "with_prev": true},
+	{"group": "misc", "with_prev": true},
+]
+const FITOUT_GROUP_LABELS := {"decks": "Decks", "steps": "Steps", "roof": "Roof", "walls": "Walls",
+	"elements": "Doors, slopes and fittings", "misc": "Everything else"}
+## A process = a job's `proc` (else its kind): what the player tunes.
+const PROC_LABELS := {
+	"carry_frames": "Carry uprights", "carry_beams": "Carry beams", "carry_lumber": "Carry lumber",
+	"carry_sheets": "Carry sheets", "carry_walls": "Carry wall sheets", "carry_parts": "Carry parts",
+	"raise": "Raise and hold frames", "seat": "Seat low beams", "seat_high": "Seat high beams (from the frames)",
+	"fix": "Fix joists, rafters and steps", "lay": "Lay deck and roof sheets", "hang": "Hang walls",
+	"assemble": "Assemble fittings",
+}
+## Tuned offsets are clamped to this (m).
+const TUNE_OFFSET_MAX_M := 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +156,8 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 		first = false
 	var P := {"jobs": [], "unit": {}, "units": units, "bounds": bounds, "piles": {},
 		"stacks": [], "rec_order": [], "rests": {}, "spec": s,
-		"yard_side": str(opts.get("yard_side", "-z"))}
+		"yard_side": str(opts.get("yard_side", "-z")),
+		"tuning": opts.get("tuning", {}) as Dictionary, "order_used": [], "group_labels": {}}
 	# Modules in order: a fused rack's racks go up one after another.
 	var mods := {}
 	for id in units:
@@ -140,6 +174,7 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 	# still lying in the yard.
 	var prev_end: Array = []
 	var mods_planned: Array = []
+	P["group"] = "racking"
 	for pre in keys:
 		var mi := 0 if str(pre).is_empty() else int(str(pre).trim_prefix("m").trim_suffix("|"))
 		var ms: Dictionary = mod_specs[mini(mi, mod_specs.size() - 1)]["spec"]
@@ -154,14 +189,18 @@ static func plan(spec: Dictionary, crew_n: int, units: Dictionary = {}, opts: Di
 		prev_end = []
 		for m in mods_planned:
 			prev_end.append_array(_plan_fitout(P, m, racking))
-	if bool(opts.get("visit", true)):
+	if bool(opts.get("visit", true)) and bool((P["tuning"] as Dictionary).get("visit", true)):
+		P["group"] = "visit"
 		_plan_visit(P, prev_end)
+	_apply_tuning_pre(P, crew_n)
 	_layout_yard(P)
 	_finish_carries(P)
+	_apply_tuning_post(P)
 	var sched := _schedule(P["jobs"], crew_n)
 	var tl := {"jobs": P["jobs"], "unit": P["unit"], "workers": sched["workers"],
 		"makespan": sched["makespan"], "blocked": sched["blocked"], "crew": crew_n,
 		"bounds": bounds, "piles": P["piles"], "stacks": P["stacks"], "rests": P["rests"], "yard_side": P["yard_side"], "radius_m": bounds.size.length() * 0.5}
+	_tuning_summary(P, tl)
 	return tl
 
 
@@ -191,7 +230,8 @@ static func _job(P: Dictionary, kind: String, units: Array, deps: Array, crew_mi
 	var id := jobs.size()
 	var j := {"id": id, "kind": kind, "units": units, "deps": deps.filter(func(d): return int(d) >= 0),
 		"min": crew_min, "max": maxi(crew_min, crew_max), "work_s": work_s, "stands": stands,
-		"t0": -1.0, "t1": -1.0, "crew": [], "hold": false, "release_of": [], "face": Vector3.ZERO}
+		"t0": -1.0, "t1": -1.0, "crew": [], "hold": false, "release_of": [], "face": Vector3.ZERO,
+		"group": str(P.get("group", ""))}
 	j.merge(opts, true)
 	jobs.append(j)
 	return id
@@ -221,7 +261,8 @@ static func _stands_round(bb: AABB, k: int, y: float = 0.0, away: Vector3 = Vect
 ## out (_finish_carries). Returns the job id.
 static func _carry(P: Dictionary, ids: Array, crew: int, drop: Vector3, deps: Array, label: String) -> int:
 	var jid := _job(P, "carry", ids, deps, crew, crew, T_LIFT_S + T_SET_S, [],
-		{"pick": Vector3.ZERO, "drop": Vector3(drop.x, 0.0, drop.z), "label": label})
+		{"pick": Vector3.ZERO, "drop": Vector3(drop.x, 0.0, drop.z), "label": label,
+		"proc": "carry_" + str(P["unit"][ids[0]]["kind"]) if P["unit"].has(ids[0]) else "carry_parts"})
 	for id in ids:
 		(P["unit"][id] as Dictionary)["carry"] = jid
 	return jid
@@ -431,6 +472,7 @@ static func _plan_racking(P: Dictionary, ids: Array, prev_end: Array) -> Diction
 				var climb := maxf(0.0, hc.y - 1.5)
 				var st: Array = _stands_round(hbb, 2, climb, -out2) + _stands_round(hbb, 2, 0.0, out2)
 				var sj2 := _install(P, "seat", [hid], 4, 4, T_SEAT_HIGH_S, [h[1]] + hi_chain, st, "seat " + _beam_name(hid) + " from the frames")
+				P["jobs"][sj2]["proc"] = "seat_high"
 				seat_of[hid] = sj2
 				hi_chain = [sj2]
 			all_seats.append_array(low_jobs)
@@ -458,7 +500,12 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 	var elems: Dictionary = m["elems"]
 	var misc: Array = m["misc"]
 	var structure_done: Array = racking.duplicate()
+	var first_id: int = (P["jobs"] as Array).size()
+	# Every phase's jobs depend on the racking only; the ORDER of the phases
+	# (decks before the roof, walls and elements) is laid on afterwards by
+	# _apply_order, which the player can change (crew_tuning.order).
 	# ---- Decks: per cell, low levels first ----
+	P["group"] = "decks"
 	var cells := {}
 	for k in joists:
 		cells[k] = true
@@ -506,19 +553,19 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 			last = _install(P, "lay", ss, 2, 2, T_SHEET_S, [cj2, last] + deps, _stands_round(cbb, 2, stand_y),
 				"deck " + _cell_name(ck))
 		deck_jobs.append(last)
-	var after_decks: Array = deck_jobs + structure_done
 	# ---- A pitched roof: the packing on the top beams, the rafters, then
 	# the sheets a run at a time ----
+	P["group"] = "roof"
 	var finish: Array = []
-	var roof_dep: Array = after_decks.duplicate()
+	var roof_dep: Array = structure_done.duplicate()
 	var packing: Array = m["roof_packing"]
 	packing.sort_custom(func(a, c): return str(a).naturalnocasecmp_to(str(c)) < 0)
 	if not packing.is_empty():
 		var pbb := _bounds_of(P, packing)
 		for id in packing:
 			_unit_rec(P, id, "lumber")
-		var cjp := _carry(P, packing, 2, Vector3(pbb.get_center().x, 0, pbb.position.z - 0.8), after_decks, "carry the roof packing")
-		roof_dep = [_install(P, "fix", packing, 2, 2, T_JOIST_S, [cjp] + after_decks,
+		var cjp := _carry(P, packing, 2, Vector3(pbb.get_center().x, 0, pbb.position.z - 0.8), structure_done, "carry the roof packing")
+		roof_dep = [_install(P, "fix", packing, 2, 2, T_JOIST_S, [cjp] + structure_done,
 			_stands_round(pbb, 2, maxf(0.0, pbb.get_center().y - 1.5)), "fix the roof packing")]
 	var rafters: Array = m["roof_joists"]
 	rafters.sort_custom(func(a, c): return _leaf_num(a) < _leaf_num(c))
@@ -543,6 +590,7 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 	finish.append_array(raft_jobs)
 	finish.append_array(roof_dep)
 	# ---- Steps, walls, elements, the rest ----
+	P["group"] = "steps"
 	var tk: Array = treads.keys()
 	tk.sort()
 	for k in tk:
@@ -556,6 +604,7 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 		var cj := _carry(P, ts, 2, Vector3(tbb.get_center().x, 0, tbb.position.z - 0.8), structure_done, "carry the steps")
 		finish.append(_install(P, "fix", ts, 1, 2, T_TREAD_S, [cj] + structure_done,
 			_stands_round(tbb, 2, maxf(0.0, tbb.get_center().y - 1.5)), "set the steps"))
+	P["group"] = "walls"
 	var wk: Array = walls.keys()
 	wk.sort()
 	for k in wk:
@@ -569,9 +618,10 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 			wf = false
 		var outw := wbb.get_center() * Vector3(1, 0, 1)
 		var cj := _carry(P, ws, 2, Vector3(wbb.get_center().x, 0, wbb.get_center().z) + outw.normalized() * 1.2,
-			after_decks, "carry the sheets for " + _wall_name(k))
-		finish.append(_install(P, "hang", ws, 2, 2, T_WALL_S, [cj] + after_decks,
+			structure_done, "carry the sheets for " + _wall_name(k))
+		finish.append(_install(P, "hang", ws, 2, 2, T_WALL_S, [cj] + structure_done,
 			_stands_round(wbb, 2, 0.0, outw), "hang " + _wall_name(k)))
+	P["group"] = "elements"
 	var ek: Array = elems.keys()
 	ek.sort()
 	for k in ek:
@@ -587,7 +637,7 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 			(by_stage[st] as Array).append(id)
 		var stages: Array = by_stage.keys()
 		stages.sort()
-		var prev_el: Array = after_decks
+		var prev_el: Array = structure_done
 		for st in stages:
 			var es: Array = by_stage[st]
 			es.sort_custom(func(a, c): return str(a).naturalnocasecmp_to(str(c)) < 0)
@@ -603,7 +653,8 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 			var ij := _install(P, "assemble" if int(st) == 2 else ("hang" if int(st) == 3 else "fix"), es, 2, 2,
 				T_ELEMENT_S, [cj] + prev_el, _stands_round(ebb, 2, 0.0, oute), str(words[1]) % what)
 			finish.append(ij)
-			prev_el = [ij] + after_decks
+			prev_el = [ij] + structure_done
+	P["group"] = "misc"
 	if not misc.is_empty():
 		var mbb := AABB()
 		var mf := true
@@ -611,10 +662,226 @@ static func _plan_fitout(P: Dictionary, m: Dictionary, racking: Array) -> Array:
 			_unit_rec(P, id, "parts")
 			mbb = units[id]["aabb"] if mf else mbb.merge(units[id]["aabb"])
 			mf = false
-		var cjm := _carry(P, misc, 2, mbb.get_center() * Vector3(1, 0, 1), after_decks, "carry the rest")
-		finish.append(_install(P, "assemble", misc, 2, 2, T_ELEMENT_S, [cjm] + after_decks,
+		var cjm := _carry(P, misc, 2, mbb.get_center() * Vector3(1, 0, 1), structure_done, "carry the rest")
+		finish.append(_install(P, "assemble", misc, 2, 2, T_ELEMENT_S, [cjm] + structure_done,
 			_stands_round(mbb, 2), "finish"))
-	return finish + after_decks
+	var tuned_order: Array = (P["tuning"] as Dictionary).get("order", []) if P.has("tuning") else []
+	_add_order_used(P, _apply_order(P, first_id, resolve_order(FITOUT_ORDER, tuned_order)))
+	var labels: Dictionary = P.get("group_labels", {})
+	labels.merge(FITOUT_GROUP_LABELS)
+	P["group_labels"] = labels
+	return finish + deck_jobs + structure_done
+
+
+# ---------------------------------------------------------------------------
+# Tuning (a placed record's crew_tuning): phase order, crew, clip, stands
+# ---------------------------------------------------------------------------
+
+## The phase order to plan with: the player's entries for groups this build
+## has, in their order, then any group they did not list in its default place.
+static func resolve_order(defaults: Array, tuned: Array) -> Array:
+	var known := {}
+	for e in defaults:
+		known[str(e["group"])] = e
+	var out: Array = []
+	var seen := {}
+	for e in tuned:
+		if not e is Dictionary:
+			continue
+		var g := str((e as Dictionary).get("group", ""))
+		if not known.has(g) or seen.has(g):
+			continue
+		out.append({"group": g, "with_prev": bool(e.get("with_prev", false)), "free": bool(e.get("free", false))})
+		seen[g] = true
+	for e in defaults:
+		if not seen.has(str(e["group"])):
+			out.append((e as Dictionary).duplicate())
+	return out
+
+
+## Lay the phase order onto the jobs from `first_id` on: each phase waits for
+## the phases before it (with_prev: starts with the one before; free: nothing
+## waits for it). Returns the entries for the groups that have jobs.
+static func _apply_order(P: Dictionary, first_id: int, entries: Array) -> Array:
+	var by := {}
+	for j in P["jobs"]:
+		if int(j["id"]) < first_id:
+			continue
+		var g := str(j.get("group", ""))
+		if not by.has(g):
+			by[g] = []
+		(by[g] as Array).append(j)
+	var used: Array = []
+	var gate: Array = []
+	var phase_sinks: Array = []
+	for e in entries:
+		var g := str(e["group"])
+		if not by.has(g):
+			continue
+		if not bool(e.get("with_prev", false)) and not phase_sinks.is_empty():
+			gate = phase_sinks
+			phase_sinks = []
+		for j in by[g]:
+			var deps: Array = j["deps"]
+			for d in gate:
+				if not deps.has(d):
+					deps.append(d)
+		if not bool(e.get("free", false)):
+			phase_sinks.append_array(_group_sinks(by[g]))
+		used.append(e)
+	return used
+
+
+## The jobs of a group no other job of it waits for.
+static func _group_sinks(jobs: Array) -> Array:
+	var ids := {}
+	for j in jobs:
+		ids[int(j["id"])] = true
+	var waited := {}
+	for j in jobs:
+		for d in j["deps"]:
+			if ids.has(int(d)):
+				waited[int(d)] = true
+	var out: Array = []
+	for j in jobs:
+		if not waited.has(int(j["id"])):
+			out.append(int(j["id"]))
+	return out
+
+
+static func _add_order_used(P: Dictionary, used: Array) -> void:
+	var acc: Array = P["order_used"]
+	for e in used:
+		var g := str(e["group"])
+		if not acc.any(func(x): return str(x["group"]) == g):
+			acc.append(e)
+
+
+## The process a job is tuned under.
+static func _proc_of(j: Dictionary) -> String:
+	return str(j.get("proc", j["kind"]))
+
+
+static func _tunable(j: Dictionary) -> bool:
+	return not str(j["kind"]) in ["release", "visit"]
+
+
+## Crew sizes and times, before the yard is laid out (carry stands are
+## worked out from the crew there). An install keeps its time at the new crew.
+static func _apply_tuning_pre(P: Dictionary, crew_n: int) -> void:
+	var procs: Dictionary = (P.get("tuning", {}) as Dictionary).get("process", {})
+	for j in P["jobs"]:
+		if not _tunable(j):
+			continue
+		j["crew_auto"] = int(j["min"])
+		var t: Dictionary = procs.get(_proc_of(j), {})
+		if t.is_empty():
+			continue
+		var n := int(t.get("crew", 0))
+		if n > 0:
+			n = clampi(n, 1, maxi(crew_n, 1))
+			if str(j["kind"]) != "carry":
+				j["work_s"] = float(j["work_s"]) * float(n) / float(maxi(int(j["min"]), 1))
+			j["min"] = n
+			j["max"] = n
+			j["stands"] = _widen_stands(j["stands"], n)
+		var tx := clampf(float(t.get("time_x", 1.0)), 0.25, 4.0)
+		if not is_equal_approx(tx, 1.0):
+			j["time_x"] = tx
+			if str(j["kind"]) != "carry":
+				j["work_s"] = float(j["work_s"]) * tx
+
+
+## n stand points from `stands`: the ends kept, the rest spaced between them
+## (one point: side by side round it).
+static func _widen_stands(stands: Array, n: int) -> Array:
+	if stands.size() >= n or stands.is_empty():
+		return stands
+	if stands.size() == 1:
+		var p: Vector3 = stands[0]
+		var out: Array = []
+		for i in n:
+			out.append(p + Vector3.RIGHT * 0.7 * ceilf(i / 2.0) * (1.0 if i % 2 == 1 else -1.0))
+		return out
+	var a: Vector3 = stands[0]
+	var b: Vector3 = stands[-1]
+	var out2: Array = []
+	for i in n:
+		out2.append(a.lerp(b, float(i) / float(n - 1)))
+	return out2
+
+
+## The clip and where the crew stand, once every job's stands are known.
+static func _apply_tuning_post(P: Dictionary) -> void:
+	var procs: Dictionary = (P.get("tuning", {}) as Dictionary).get("process", {})
+	if procs.is_empty():
+		return
+	for j in P["jobs"]:
+		if not _tunable(j):
+			continue
+		var t: Dictionary = procs.get(_proc_of(j), {})
+		if t.is_empty():
+			continue
+		var clip := str(t.get("clip", ""))
+		if not clip.is_empty() and str(j["kind"]) != "carry":
+			j["clip"] = clip
+			j["rig"] = str(CLIP_RIG.get(clip, ""))
+		var out_m := clampf(float(t.get("out_m", 0.0)), -TUNE_OFFSET_MAX_M, TUNE_OFFSET_MAX_M)
+		var side_m := clampf(float(t.get("side_m", 0.0)), -TUNE_OFFSET_MAX_M, TUNE_OFFSET_MAX_M)
+		var height_m := clampf(float(t.get("height_m", 0.0)), -TUNE_OFFSET_MAX_M, TUNE_OFFSET_MAX_M)
+		if is_zero_approx(out_m) and is_zero_approx(side_m) and is_zero_approx(height_m):
+			continue
+		var cf: Dictionary = j.get("cframe", {})
+		if not cf.is_empty():
+			cf["stand_m"] = maxf(0.02, CARRY_STAND_M + out_m)
+			cf["along_m"] = side_m
+			j["lift_y"] = maxf(0.2, float(j.get("lift_y", CARRY_H)) + height_m)
+			j["stands"] = _cf_stands(j, int(j["min"]))
+			continue
+		j["stands"] = _shift_stands(j["stands"], j.get("pick", j["face"]) if str(j["kind"]) == "carry" else j["face"],
+			out_m, side_m, height_m)
+
+
+## Stands moved out from (or in toward) `focus`, along the crew's line and up.
+static func _shift_stands(stands: Array, focus: Vector3, out_m: float, side_m: float, height_m: float) -> Array:
+	if stands.is_empty():
+		return stands
+	var c := Vector3.ZERO
+	for p in stands:
+		c += p as Vector3
+	c /= float(stands.size())
+	if focus == Vector3.ZERO:
+		focus = c
+	var axis := _flat((stands[-1] as Vector3) - (stands[0] as Vector3))
+	if axis.length() < 0.05:
+		var o := _flat(c - focus)
+		axis = Vector3.UP.cross(o) if o.length() > 0.05 else Vector3.RIGHT
+	axis = axis.normalized()
+	var out: Array = []
+	for p: Vector3 in stands:
+		var d := _flat(p - focus)
+		d = d.normalized() if d.length() > 0.05 else axis.cross(Vector3.UP).normalized()
+		var q := p + d * out_m + axis * side_m
+		q.y = maxf(0.0, p.y + height_m)
+		out.append(q)
+	return out
+
+
+## What the tuning panel lists: tl.procs {key: {label, count, crew, auto,
+## kind}}, tl.order (the phases, in the order used) and tl.group_labels.
+static func _tuning_summary(P: Dictionary, tl: Dictionary) -> void:
+	var procs := {}
+	for j in P["jobs"]:
+		if not _tunable(j):
+			continue
+		var k := _proc_of(j)
+		if not procs.has(k):
+			procs[k] = {"label": str(PROC_LABELS.get(k, k.capitalize())), "count": 0,
+				"crew": int(j["min"]), "auto": int(j.get("crew_auto", j["min"])), "kind": str(j["kind"])}
+		procs[k]["count"] = int(procs[k]["count"]) + 1
+	tl["procs"] = procs
+	tl["order"] = (P.get("order_used", []) as Array).duplicate(true)
+	tl["group_labels"] = (P.get("group_labels", {}) as Dictionary).duplicate()
 
 
 ## An element's part in its build order: 0 a slope's rafters, legs and the
@@ -684,7 +951,8 @@ static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) ->
 		first = false
 	var P := {"jobs": [], "unit": {}, "units": units, "bounds": bounds, "piles": {},
 		"stacks": [], "rec_order": [], "rests": {}, "spec": {},
-		"yard_side": str(opts.get("yard_side", "-z"))}
+		"yard_side": str(opts.get("yard_side", "-z")),
+		"tuning": opts.get("tuning", {}) as Dictionary, "order_used": [], "group_labels": {}}
 	var stages := {}
 	var ids_all: Array = units.keys()
 	ids_all.sort()
@@ -696,15 +964,22 @@ static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) ->
 	var keys: Array = stages.keys()
 	keys.sort()
 	var c := bounds.get_center()
-	var prev: Array = []
-	for sk in keys:
+	# Each stage is a phase group; _apply_order makes a stage wait for the
+	# one before (or not, as the player orders them).
+	var defaults: Array = []
+	var labels: Dictionary = P["group_labels"]
+	for si in keys.size():
+		var sk: int = keys[si]
 		var ids: Array = stages[sk]
 		var kind := str(units[ids[0]].get("kind", "parts"))
 		var per := int(PIECES_PER_JOB.get(kind, 4))
 		var crew_min := 1 if kind == "parts" else 2
 		var act := str(PIECE_ACT.get(kind, "assemble"))
 		var per_s := float(PIECE_S.get(kind, T_ELEMENT_S))
-		var stage_jobs: Array = []
+		var group := "stage:%d" % sk
+		P["group"] = group
+		defaults.append({"group": group, "with_prev": false})
+		labels[group] = "Stage %d · %s" % [si + 1, _piece_words(kind, ids.size(), units[ids[0]].get("words", []))]
 		for g in _chunks(ids, per):
 			for id in g:
 				_unit_rec(P, id, kind)
@@ -714,18 +989,22 @@ static func plan_units(units: Dictionary, crew_n: int, opts: Dictionary = {}) ->
 			var drop := Vector3(bb.get_center().x, 0.0, bb.get_center().z) \
 				+ out * (maxf(bb.size.x, bb.size.z) * 0.5 + 1.0)
 			var words := _piece_words(kind, g.size(), units[g[0]].get("words", []))
-			var cj := _carry(P, g, 2 if kind != "parts" else 1, drop, prev, "carry " + words)
-			stage_jobs.append(_install(P, act, g, crew_min, 2, per_s, [cj] + prev,
-				_stands_round(bb, crew_min, 0.0, out), "fit " + words))
-		if not stage_jobs.is_empty():
-			prev = stage_jobs
+			var cj := _carry(P, g, 2 if kind != "parts" else 1, drop, [], "carry " + words)
+			_install(P, act, g, crew_min, 2, per_s, [cj],
+				_stands_round(bb, crew_min, 0.0, out), "fit " + words)
+	var tuned_order: Array = (P["tuning"] as Dictionary).get("order", [])
+	_add_order_used(P, _apply_order(P, 0, resolve_order(defaults, tuned_order)))
+	_apply_tuning_pre(P, crew_n)
 	_layout_yard(P)
 	_finish_carries(P)
+	_apply_tuning_post(P)
 	var sched := _schedule(P["jobs"], crew_n)
-	return {"jobs": P["jobs"], "unit": P["unit"], "workers": sched["workers"],
+	var tl := {"jobs": P["jobs"], "unit": P["unit"], "workers": sched["workers"],
 		"makespan": sched["makespan"], "blocked": sched["blocked"], "crew": crew_n,
 		"bounds": bounds, "piles": P["piles"], "stacks": P["stacks"], "rests": P["rests"],
 		"yard_side": P["yard_side"], "radius_m": bounds.size.length() * 0.5}
+	_tuning_summary(P, tl)
+	return tl
 
 
 ## `own` = the piece's own [singular, plural] (a builder's tag), else the
@@ -1066,6 +1345,146 @@ static func _finish_carries(P: Dictionary) -> void:
 			staged_low = minf(staged_low, _bottom_y(u, u["staged"]))
 		# Carried at hand height, but lifted clear of what stays in the stack.
 		j["lift_y"] = maxf(CARRY_LOW, pile_low + 0.03) - staged_low
+		if loose.size() == ids.size():
+			_carry_frame(P, j)
+
+
+static func _ry(th: float) -> Basis:
+	return Basis(Vector3.UP, th)
+
+
+## The carried bundle's pose as a transform of its STAGED pose: turned by th
+## about the vertical through its middle, that middle at p, h up.
+static func _cf_xf(cf: Dictionary, th: float, p: Vector3, h: float) -> Transform3D:
+	var r := _ry(th)
+	return Transform3D(r, p + Vector3(0.0, h, 0.0) - r * (cf["bc"] as Vector3))
+
+
+## The turn on the way: the long way along the walk, squared back to how it
+## is set down over the last stretch.
+static func _cf_theta(cf: Dictionary, e2: float) -> float:
+	return float(cf["theta"]) * (1.0 - _ease(clampf((e2 - 0.6) / 0.4, 0.0, 1.0)))
+
+
+## A loose bundle is carried the LONG way: picked up turned so its long side
+## runs along the walk, the crew along its long sides facing forward, turned
+## back to how it is laid down over the last of the walk. Everything is in the
+## staged bundle's own frame; j["cframe"] keeps it, j["stands"] the crew's
+## places at the pick-up.
+static func _carry_frame(P: Dictionary, j: Dictionary) -> void:
+	var ids: Array = j["units"]
+	var ref_id: Variant = ids[0]
+	var best := -1.0
+	for id in ids:
+		var sz: Vector3 = P["unit"][id]["flat"]["size"]
+		if sz.x * sz.z > best:
+			best = sz.x * sz.z
+			ref_id = id
+	var ru: Dictionary = P["unit"][ref_id]
+	var S: Transform3D = ru["staged"]
+	var fb: Basis = ru["flat"]["basis"]
+	var a_s := _flat(S.basis * fb.z)
+	if a_s.length() < 1e-3:
+		a_s = _flat(S.basis * fb.x)
+	a_s = a_s.normalized() if a_s.length() > 1e-3 else Vector3.RIGHT
+	var bv := Vector3.UP.cross(a_s).normalized()
+	var amin := INF
+	var amax := -INF
+	var bmin := INF
+	var bmax := -INF
+	var low := INF
+	for id in ids:
+		var u: Dictionary = P["unit"][id]
+		var f: Dictionary = u["flat"]
+		var sx: Transform3D = u["staged"]
+		var hs: Vector3 = (f["size"] as Vector3) * 0.5
+		for k in 8:
+			var lc := Vector3(hs.x * (1.0 if k & 1 else -1.0), hs.y * (1.0 if k & 2 else -1.0),
+				hs.z * (1.0 if k & 4 else -1.0))
+			var p: Vector3 = sx * ((f["centre"] as Vector3) + (f["basis"] as Basis) * lc)
+			amin = minf(amin, p.dot(a_s))
+			amax = maxf(amax, p.dot(a_s))
+			bmin = minf(bmin, p.dot(bv))
+			bmax = maxf(bmax, p.dot(bv))
+			low = minf(low, p.y)
+	var bc := a_s * (amin + amax) * 0.5 + bv * (bmin + bmax) * 0.5
+	var hn := _flat(bc) - _flat(j["pick"])
+	var th := 0.0
+	var fwd := a_s
+	if hn.length() > 0.05:
+		var hd := hn.normalized()
+		th = atan2(a_s.cross(hd).y, a_s.dot(hd))
+		if absf(th) > PI * 0.5:
+			th -= signf(th) * PI
+		fwd = (_ry(-th) * hd).normalized()
+	var cf := {"ref": str(ref_id), "ref_inv": S.affine_inverse(), "a_s": a_s, "bv": bv, "bc": bc,
+		"half_a": (amax - amin) * 0.5, "half_b": (bmax - bmin) * 0.5, "bottom_y": low,
+		"theta": th, "fwd_s": fwd}
+	j["cframe"] = cf
+	j["stands"] = _cf_stands(j, int(j["min"]))
+
+
+## Where a crew of n stands to lift the bundle at the pick-up.
+static func _cf_stands(j: Dictionary, n: int) -> Array:
+	var cf: Dictionary = j["cframe"]
+	var r := _ry(float(cf["theta"]))
+	var out: Array = []
+	for off in _cf_offsets(cf, n):
+		out.append(_flat(j["pick"]) + r * (off["o"] as Vector3))
+	return out
+
+
+## The crew round a carried bundle, in its staged frame from its middle: a
+## sheet or anything wide has people down both long sides (two take opposite
+## corners), a beam or a narrow bundle has them along it, sides alternating.
+## Each: {along, side, o}.
+static func _cf_offsets(cf: Dictionary, n: int) -> Array:
+	var a: Vector3 = cf["a_s"]
+	var bv: Vector3 = cf["bv"]
+	var ha := float(cf["half_a"])
+	var hb := float(cf["half_b"])
+	var out: Array = []
+	for i in n:
+		var s := 1.0 if i % 2 == 0 else -1.0
+		var along := 0.0
+		if hb >= CARRY_WIDE_M:
+			var m := int(ceil(n / 2.0))
+			if m <= 1:
+				along = (0.35 * s * ha) if n >= 2 else 0.0
+			else:
+				along = lerpf(-0.6, 0.6, float(i / 2) / float(m - 1)) * ha
+		elif n > 1:
+			along = lerpf(-0.75, 0.75, float(i) / float(n - 1)) * ha
+		along = clampf(along + float(cf.get("along_m", 0.0)), -ha, ha)
+		var stand_m := float(cf.get("stand_m", CARRY_STAND_M))
+		out.append({"along": along, "side": s, "o": a * along + bv * s * (hb + stand_m)})
+	return out
+
+
+## Where one carrier's hands hold the bundle, palms up under its edge: the
+## hand on the bundle's side a little behind, the other reaching across ahead.
+## [right hand, left hand], each in the reference piece's own frame.
+static func _cf_grips(cf: Dictionary, off: Dictionary) -> Array:
+	var a: Vector3 = cf["a_s"]
+	var bv: Vector3 = cf["bv"]
+	var bc: Vector3 = cf["bc"]
+	var fwd: Vector3 = cf["fwd_s"]
+	var s := float(off["side"])
+	var e := bc + a * float(off["along"]) + bv * s * float(cf["half_b"])
+	e.y = float(cf["bottom_y"]) - GRIP_UNDER_M
+	var inward := -bv * s
+	var stand := bc + (off["o"] as Vector3)
+	var near_right := inward.dot(fwd.cross(Vector3.UP)) > 0.0
+	var near := e - fwd * 0.12 + inward * 0.06
+	var far := e + fwd * 0.28 + inward * 0.06
+	var ref_inv: Transform3D = cf["ref_inv"]
+	var out: Array = []
+	for pt: Vector3 in ([near, far] if near_right else [far, near]):
+		var y := _flat(stand - pt)
+		y = y.normalized() if y.length() > 1e-3 else -inward
+		var z := Vector3.UP
+		out.append(ref_inv * Transform3D(Basis(y.cross(z), y, z), pt))
+	return out
 
 
 ## A bundle set down at its drop: the pieces of each stack it came from
@@ -1256,6 +1675,10 @@ static func _assign(j: Dictionary, crew: Array, now: float, holders: Dictionary,
 				w["free_at"] = float(j["t1"])
 			holders.erase(rj)
 		return
+	var cf: Dictionary = j.get("cframe", {}) if kind == "carry" else {}
+	if not cf.is_empty():
+		j["stands"] = _cf_stands(j, crew.size())
+	var offs: Array = _cf_offsets(cf, crew.size()) if not cf.is_empty() else []
 	var stands: Array = j["stands"]
 	var arrive := now
 	var legs: Array = []
@@ -1267,10 +1690,12 @@ static func _assign(j: Dictionary, crew: Array, now: float, holders: Dictionary,
 		arrive = maxf(arrive, now + t_walk)
 	var t1 := arrive + float(j["work_s"]) / float(maxi(crew.size(), 1))
 	if kind == "carry":
-		var dist := _flat(j["pick"]).distance_to(_flat(j["drop"]))
-		j["t_lifted"] = arrive + T_LIFT_S
-		j["t_moved"] = arrive + T_LIFT_S + dist / CARRY_MPS
-		t1 = float(j["t_moved"]) + T_SET_S
+		var dest: Vector3 = cf["bc"] if not cf.is_empty() else j["drop"]
+		var dist := _flat(j["pick"]).distance_to(_flat(dest))
+		var tx := float(j.get("time_x", 1.0))
+		j["t_lifted"] = arrive + T_LIFT_S * tx
+		j["t_moved"] = float(j["t_lifted"]) + dist / CARRY_MPS
+		t1 = float(j["t_moved"]) + T_SET_S * tx
 	elif kind == "visit":
 		var path: Array = j["path"]
 		var tt := arrive
@@ -1292,7 +1717,18 @@ static func _assign(j: Dictionary, crew: Array, now: float, holders: Dictionary,
 			segs.append({"kind": "walk", "t0": now, "t1": walk_end, "from": w["pos"], "to": st, "job": j["id"]})
 		if arrive > walk_end + 1e-6:
 			segs.append({"kind": "wait", "t0": walk_end, "t1": arrive, "from": st, "to": st, "job": j["id"]})
-		if kind == "carry":
+		if kind == "carry" and not cf.is_empty():
+			var off: Dictionary = offs[i]
+			var o: Vector3 = off["o"]
+			var dst := _flat(cf["bc"]) + o
+			var grips := _cf_grips(cf, off)
+			for sk in [["lift", arrive, float(j["t_lifted"]), st, st],
+					["carry", float(j["t_lifted"]), float(j["t_moved"]), st, dst],
+					["set", float(j["t_moved"]), t1, dst, dst]]:
+				segs.append({"kind": sk[0], "t0": sk[1], "t1": sk[2], "from": sk[3], "to": sk[4], "job": j["id"],
+					"cf_o": o, "grips": grips})
+			w["pos"] = dst
+		elif kind == "carry":
 			var d := _flat(j["drop"]) - _flat(j["pick"])
 			var dst: Vector3 = st + d
 			segs.append({"kind": "lift", "t0": arrive, "t1": float(j["t_lifted"]), "from": st, "to": st, "job": j["id"]})
@@ -1329,13 +1765,38 @@ static func _priorities(jobs: Array) -> Dictionary:
 			if not succ.has(d):
 				succ[d] = []
 			(succ[d] as Array).append(j["id"])
+	# A re-ordered phase can depend on a job with a HIGHER id, so the jobs are
+	# walked successors-first (Kahn), not by id.
+	var by_id := {}
+	var pending := {}
+	for j in jobs:
+		by_id[j["id"]] = j
+		pending[j["id"]] = (succ.get(j["id"], []) as Array).size()
+	var ready: Array = []
+	for j in jobs:
+		if int(pending[j["id"]]) == 0:
+			ready.append(j["id"])
+	var order: Array = []
+	while not ready.is_empty():
+		var id = ready.pop_back()
+		order.append(id)
+		for d in (by_id[id] as Dictionary)["deps"]:
+			if not pending.has(d):
+				continue
+			pending[d] = int(pending[d]) - 1
+			if int(pending[d]) == 0:
+				ready.append(d)
+	if order.size() < jobs.size():
+		order.clear()
+		for i in range(jobs.size() - 1, -1, -1):
+			order.append(jobs[i]["id"])
 	var memo := {}
-	for i in range(jobs.size() - 1, -1, -1):
-		var j: Dictionary = jobs[i]
+	for id in order:
+		var j: Dictionary = by_id[id]
 		var best := 0.0
-		for s in succ.get(j["id"], []):
+		for s in succ.get(id, []):
 			best = maxf(best, float(memo.get(s, 0.0)))
-		memo[j["id"]] = float(j["work_s"]) / float(maxi(int(j["max"]), 1)) + best
+		memo[id] = float(j["work_s"]) / float(maxi(int(j["max"]), 1)) + best
 	return memo
 
 
@@ -1403,6 +1864,20 @@ static func unit_pose(tl: Dictionary, id: String, t: float) -> Dictionary:
 		var lifted := float(c["t_lifted"])
 		var moved := float(c["t_moved"])
 		var c1 := float(c["t1"])
+		var cf: Dictionary = c.get("cframe", {})
+		if not cf.is_empty() and t < c1:
+			var h := float(c.get("lift_y", CARRY_H))
+			var pk := _flat(c["pick"])
+			var bcf := _flat(cf["bc"])
+			var thc := float(cf["theta"])
+			if t < lifted:
+				var e := _ease((t - c0) / maxf(lifted - c0, 1e-6))
+				return _pose(_blend(pile, _cf_xf(cf, thc, pk, h) * staged, cen, e), 1.0, gp, 1.0 - e)
+			if t < moved:
+				var e2 := (t - lifted) / maxf(moved - lifted, 1e-6)
+				return _pose(_cf_xf(cf, _cf_theta(cf, e2), pk.lerp(bcf, e2), h) * staged, 1.0, gp.lerp(gs, e2), 0.0)
+			var e3 := _ease((t - moved) / maxf(c1 - moved, 1e-6))
+			return _pose(_blend(_cf_xf(cf, 0.0, bcf, h) * staged, staged, cen, e3), 1.0, gs, e3)
 		var up := Vector3(0.0, float(c.get("lift_y", CARRY_H)), 0.0)
 		var back := _flat(c["pick"]) - _flat(c["drop"])
 		if t < lifted:
@@ -1474,6 +1949,8 @@ static func _worker_at(w: Dictionary, jobs: Array, t: float) -> Dictionary:
 			hi = mid - 1
 	var s: Dictionary = segs[lo]
 	var job: Dictionary = jobs[int(s["job"])]
+	if s.has("cf_o") and not (job.get("cframe", {}) as Dictionary).is_empty():
+		return _cf_worker_at(out, s, job, t)
 	if t >= float(s["t1"]):
 		var p: Vector3 = s["to"]
 		out["pos"] = p
@@ -1488,6 +1965,9 @@ static func _worker_at(w: Dictionary, jobs: Array, t: float) -> Dictionary:
 	out["pos"] = (s["from"] as Vector3).lerp(s["to"], u)
 	out["clip"] = str(CLIP_FOR.get(kind, ""))
 	out["rig"] = str(RIG_FOR.get(kind, ""))
+	if job.has("clip") and not kind in ["walk", "wait", "look", "hold", "carry", "lift", "set"]:
+		out["clip"] = str(job["clip"])
+		out["rig"] = str(job.get("rig", CLIP_RIG.get(str(job["clip"]), "")))
 	match kind:
 		"walk":
 			out["face"] = s["to"]
@@ -1510,6 +1990,46 @@ static func _worker_at(w: Dictionary, jobs: Array, t: float) -> Dictionary:
 				if st.size() <= 1:
 					focus = (s["to"] as Vector3) + Vector3(0, 0, 1)
 			out["face"] = focus
+	return out
+
+
+## A carrier of a bundle carried the long way: placed at their spot on the
+## turning bundle, facing the way it goes, hands on their grips. A finished
+## segment holds the pose it ended in (no snap in facing between segments).
+static func _cf_worker_at(out: Dictionary, s: Dictionary, job: Dictionary, t: float) -> Dictionary:
+	var cf: Dictionary = job["cframe"]
+	var kind := str(s["kind"])
+	var o: Vector3 = s["cf_o"]
+	var pk := _flat(job["pick"])
+	var bcf := _flat(cf["bc"])
+	var done := t >= float(s["t1"])
+	var u := 1.0 if done else clampf((t - float(s["t0"])) / maxf(float(s["t1"]) - float(s["t0"]), 1e-6), 0.0, 1.0)
+	var th := 0.0
+	var c := bcf
+	match kind:
+		"lift":
+			th = float(cf["theta"])
+			c = pk
+		"carry":
+			th = _cf_theta(cf, u)
+			c = pk.lerp(bcf, u)
+	var r := _ry(th)
+	var pos := c + r * o
+	out["pos"] = pos
+	out["face"] = pos + r * (cf["fwd_s"] as Vector3)
+	if done:
+		return out
+	out["activity"] = kind
+	out["job"] = job["id"]
+	out["u"] = u
+	out["clip"] = str(CLIP_FOR.get(kind, ""))
+	out["rig"] = str(RIG_FOR.get(kind, ""))
+	var ids: Array = job["units"]
+	out["carrying"] = str(ids.front()) if not ids.is_empty() else ""
+	var holding := kind == "carry" or (kind == "lift" and u >= 0.35) or (kind == "set" and u < 0.85)
+	if holding and s.has("grips"):
+		out["grips"] = s["grips"]
+		out["grip_unit"] = str(cf["ref"])
 	return out
 
 

@@ -31,6 +31,8 @@ const CAMP_HOURS_MIN := 0.3
 const ALL_HANDS_MAX_PEOPLE := 320
 ## The whole day: a deploy set for 20:00 starts at 20:00. Sleep still wins.
 const WORK_WINDOW := {"start_h": 0.0, "end_h": 24.0}
+## A crate this close to where its structure stood is built where it is.
+const RETURN_MIN_M := 1.0
 
 
 static func labour_hours(mass_kg: float) -> float:
@@ -62,50 +64,109 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 	var target := {"kind": "prop", "id": pid}
 	var r := maxi(roster, 1)
 	if action == SiteDeploySchedule.ACTION_DEPLOY:
-		if model_id == PalletRackBuilder.MODEL_ID:
-			return [{
-				"task_id": "unpack", "label": "Lay out the bundles — %s" % label,
-				"chore_hours": maxf(h * 0.2, 0.1), "priority": 1,
-				"min_workers": 1, "max_workers": mini(3, r), "exposure": "outdoor",
-				"target": target,
-			}, {
-				"task_id": "frames", "label": "Raise the frames — %s" % label,
-				"chore_hours": maxf(h * 0.45, 0.15), "priority": 2,
-				"min_workers": mini(4, r), "max_workers": mini(8, maxi(r, 1)),
-				"exposure": "outdoor", "depends_on": ["unpack"], "target": target,
-			}, {
-				"task_id": "decks", "label": "Decks, walls and stairs — %s" % label,
-				"chore_hours": maxf(h * 0.25, 0.1), "priority": 3,
-				"min_workers": 1, "max_workers": mini(6, r), "exposure": "outdoor",
-				"depends_on": ["frames"], "target": target,
-			}, {
-				"task_id": "finish", "label": "Finish — %s" % label,
-				"chore_hours": maxf(h * 0.1, 0.05), "priority": 4,
-				"min_workers": 1, "max_workers": mini(2, r), "exposure": "outdoor",
-				"depends_on": ["decks"], "target": target,
-				"effect": {"op": "unpack_prop", "prop_id": pid},
-			}]
+		return _with_return_home(item, _deploy_rows(item, model_id, pid, h, label, target, r))
+	return _packup_rows(item, pid, h, label, target, r)
+
+
+## A crate a pack-up carried to a container (`item.home` = where the
+## structure stood, recorded by the load-out) is carried back there before
+## anything is laid out, so it rebuilds where it was.
+static func _with_return_home(item: Dictionary, rows: Array) -> Array:
+	var home: Variant = item.get("home")
+	if not (home is Dictionary) or not (home as Dictionary).has("x") or not (home as Dictionary).has("z"):
+		return rows
+	var hd := home as Dictionary
+	var dest := Vector2(float(hd["x"]), float(hd["z"]))
+	var src: Vector2 = item.get("pos", dest)
+	if src.distance_to(dest) < RETURN_MIN_M:
+		return rows
+	var pid := str(item.get("id", ""))
+	var label := str(item.get("label", "structure"))
+	var target := {"kind": "prop", "id": pid}
+	var row := {}
+	var fid := str(item.get("forklift_id", ""))
+	if not fid.is_empty() and SiteProject.crate_needs_forklift({"mass_kg": float(item.get("mass_kg", -1.0)),
+			"handling": str(item.get("handling", ""))}):
+		var park := ForkliftPlanner.park_beside(dest, src)
+		row = {
+			"task_id": "return", "label": "Forklift back to its spot — %s" % label,
+			"chore_hours": ForkliftPlanner.trip_hours(src.distance_to(dest), 0.0), "priority": 0,
+			"min_workers": 1, "max_workers": 1, "exposure": "outdoor", "target": target,
+			"carry_to": {"x": dest.x, "z": dest.y}, "forklift_id": fid,
+			"effect": {"op": "fork_move", "prop_id": pid, "forklift_id": fid,
+				"x": dest.x, "z": dest.y, "y_offset": 0.0, "collision_enabled": true,
+				"from_x": src.x, "from_z": src.y, "park_x": park.x, "park_z": park.y,
+				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, dest), "clear_home": true},
+		}
+	else:
+		row = {
+			"task_id": "return", "label": "Carry back to its spot — %s" % label,
+			"chore_hours": clampf(src.distance_to(dest) / 4000.0 + 0.1, 0.1, 0.6), "priority": 0,
+			"min_workers": 1, "max_workers": 2, "exposure": "outdoor", "target": target,
+			"carry_to": {"x": dest.x, "z": dest.y},
+			"effect": {"op": "move_prop", "prop_id": pid, "x": dest.x, "z": dest.y,
+				"y_offset": 0.0, "clear_home": true},
+		}
+	var out: Array = [row]
+	for rr in rows:
+		var d := (rr as Dictionary).duplicate(true)
+		var deps: Array = d.get("depends_on", [])
+		if deps.is_empty():
+			d["depends_on"] = ["return"]
+		out.append(d)
+	return out
+
+
+static func _deploy_rows(_item: Dictionary, model_id: String, pid: String, h: float,
+		label: String, target: Dictionary, r: int) -> Array:
+	if model_id == PalletRackBuilder.MODEL_ID:
 		return [{
-			"task_id": "lay_out", "label": "Unpack and lay out — %s" % label,
-			"chore_hours": maxf(h * 0.25, 0.1), "priority": 1,
-			"min_workers": 1, "max_workers": mini(2, r), "exposure": "outdoor",
+			"task_id": "unpack", "label": "Lay out the bundles — %s" % label,
+			"chore_hours": maxf(h * 0.2, 0.1), "priority": 1,
+			"min_workers": 1, "max_workers": mini(3, r), "exposure": "outdoor",
 			"target": target,
 		}, {
-			"task_id": "assemble", "label": "Assemble — %s" % label,
-			"chore_hours": maxf(h * 0.6, 0.1), "priority": 2,
-			"min_workers": 2 if (h > 3.0 and r >= 2) else 1,
-			"max_workers": clampi(r, 2, 6) if r >= 2 else 1, "exposure": "outdoor",
-			"depends_on": ["lay_out"], "target": target,
+			"task_id": "frames", "label": "Raise the frames — %s" % label,
+			"chore_hours": maxf(h * 0.45, 0.15), "priority": 2,
+			"min_workers": mini(4, r), "max_workers": mini(8, maxi(r, 1)),
+			"exposure": "outdoor", "depends_on": ["unpack"], "target": target,
 		}, {
-			"task_id": "finish", "label": "Raise and finish — %s" % label,
-			"chore_hours": maxf(h * 0.15, 0.05), "priority": 3,
-			"min_workers": 1, "max_workers": mini(4, r), "exposure": "outdoor",
-			"depends_on": ["assemble"], "target": target,
+			"task_id": "decks", "label": "Decks, walls and stairs — %s" % label,
+			"chore_hours": maxf(h * 0.25, 0.1), "priority": 3,
+			"min_workers": 1, "max_workers": mini(6, r), "exposure": "outdoor",
+			"depends_on": ["frames"], "target": target,
+		}, {
+			"task_id": "finish", "label": "Finish — %s" % label,
+			"chore_hours": maxf(h * 0.1, 0.05), "priority": 4,
+			"min_workers": 1, "max_workers": mini(2, r), "exposure": "outdoor",
+			"depends_on": ["decks"], "target": target,
 			"effect": {"op": "unpack_prop", "prop_id": pid},
 		}]
-	# Pack-up (rack and generic alike): take it down, then pack it, then —
-	# with a container in reach (`item.loadout` = its door) — carry the
-	# crate to the door.
+	return [{
+		"task_id": "lay_out", "label": "Unpack and lay out — %s" % label,
+		"chore_hours": maxf(h * 0.25, 0.1), "priority": 1,
+		"min_workers": 1, "max_workers": mini(2, r), "exposure": "outdoor",
+		"target": target,
+	}, {
+		"task_id": "assemble", "label": "Assemble — %s" % label,
+		"chore_hours": maxf(h * 0.6, 0.1), "priority": 2,
+		"min_workers": 2 if (h > 3.0 and r >= 2) else 1,
+		"max_workers": clampi(r, 2, 6) if r >= 2 else 1, "exposure": "outdoor",
+		"depends_on": ["lay_out"], "target": target,
+	}, {
+		"task_id": "finish", "label": "Raise and finish — %s" % label,
+		"chore_hours": maxf(h * 0.15, 0.05), "priority": 3,
+		"min_workers": 1, "max_workers": mini(4, r), "exposure": "outdoor",
+		"depends_on": ["assemble"], "target": target,
+		"effect": {"op": "unpack_prop", "prop_id": pid},
+	}]
+
+
+## Pack-up (rack and generic alike): take it down, then pack it, then —
+## with a container in reach (`item.loadout` = its door) — carry the crate
+## to the door, remembering where the structure stood (`store_home`).
+static func _packup_rows(item: Dictionary, pid: String, h: float,
+		label: String, target: Dictionary, r: int) -> Array:
 	var p := h * PACKUP_SCALE
 	var rows_p: Array = [{
 		"task_id": "strip", "label": "Take down — %s" % label,
@@ -138,7 +199,7 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 				"x": door.x, "z": door.y, "y_offset": 0.0, "collision_enabled": true,
 				"from_x": src.x, "from_z": src.y,
 				"park_x": park.x, "park_z": park.y,
-				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, door)},
+				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, door), "store_home": true},
 		})
 	elif lo.has("x") and lo.has("z"):
 		rows_p.append({
@@ -147,7 +208,8 @@ static func rows_for(item: Dictionary, action: String, roster: int = 4) -> Array
 			"min_workers": 1, "max_workers": 1, "exposure": "outdoor",
 			"depends_on": ["pack"], "target": target,
 			"carry_to": {"x": float(lo["x"]), "z": float(lo["z"])},
-			"effect": {"op": "move_prop", "prop_id": pid, "x": float(lo["x"]), "z": float(lo["z"])},
+			"effect": {"op": "move_prop", "prop_id": pid, "x": float(lo["x"]), "z": float(lo["z"]),
+				"store_home": true},
 		})
 	return rows_p
 

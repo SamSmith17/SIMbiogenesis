@@ -508,7 +508,7 @@ static func breakdown_spec_rows(counts: Dictionary, prop_id: String,
 			"target": {"kind": "prop", "id": prop_id},
 			"carry_to": {"x": float(loadout["x"]), "z": float(loadout["z"])},
 			"effect": {"op": "move_prop", "prop_id": prop_id,
-				"x": float(loadout["x"]), "z": float(loadout["z"])},
+				"x": float(loadout["x"]), "z": float(loadout["z"]), "store_home": true},
 		})
 	return rows
 
