@@ -6137,6 +6137,9 @@ func camp_lot_polygon(lot_id: String) -> PackedVector2Array:
 ## the caller falls back to the ground.
 func camp_shelters_in_polygon(poly: PackedVector2Array) -> Array:
 	var out: Array = []
+	# Living vehicles first: a camp's people sleep in their own vehicles before
+	# its tents (bed k goes to person k in the light tier).
+	var veh: Array = []
 	if poly.size() < 3:
 		return out
 	if is_instance_valid(_camp_area_runtime):
@@ -6144,10 +6147,22 @@ func camp_shelters_in_polygon(poly: PackedVector2Array) -> Array:
 			var sd: Dictionary = s
 			if Geometry2D.is_point_in_polygon(sd["pos"], poly):
 				out.append({"pos": sd["pos"], "yaw": float(sd.get("yaw", 0.0)),
-					"sleeps": int(sd.get("sleeps", 2))})
+					"sleeps": int(sd.get("sleeps", 2)), "cls": str(sd.get("cls", "")),
+					"size": sd.get("size", Vector3.ONE)})
 	for r in placed_prop_records():
 		var rec: Dictionary = r
 		var mid := str(rec.get("model_id", ""))
+		# A living vehicle brings its own beds, each with its height and the
+		# way a sleeper lies on it (VehicleDesign.beds, in world space).
+		if VehicleBuilder.handles(mid):
+			var vp := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+			if bool(rec.get("packed", false)) or not Geometry2D.is_point_in_polygon(vp, poly):
+				continue
+			var vbeds := vehicle_beds_world(rec)
+			if not vbeds.is_empty():
+				veh.append({"pos": vp, "yaw": deg_to_rad(float(rec.get("yaw", 0.0))),
+					"sleeps": vbeds.size(), "beds": vbeds})
+			continue
 		var sleeps := int(CampStyles.SHELTER_SLEEPS.get(mid, 0))
 		if sleeps <= 0 and mid == "shiftpod":
 			sleeps = 2
@@ -6156,6 +6171,24 @@ func camp_shelters_in_polygon(poly: PackedVector2Array) -> Array:
 		var p := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
 		if Geometry2D.is_point_in_polygon(p, poly):
 			out.append({"pos": p, "yaw": deg_to_rad(float(rec.get("yaw", 0.0))), "sleeps": sleeps})
+	veh.append_array(out)
+	return veh
+
+
+## A placed living vehicle's beds in world space: one {pos (XZ), yaw (the
+## lying direction, NPC convention), elev (mattress top over the ground)} per
+## sleeper, from its record (position, yaw, scale) and its design.
+static func vehicle_beds_world(rec: Dictionary) -> Array:
+	var out: Array = []
+	var d := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+	var yaw := deg_to_rad(float(rec.get("yaw", 0.0)))
+	var sc := float(rec.get("scale", 1.0))
+	var o := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	for b in d.get("beds", []):
+		var bd: Dictionary = b
+		var lp: Vector3 = bd["pos"]
+		var w := Vector3(lp.x, 0.0, lp.z).rotated(Vector3.UP, yaw) * sc
+		out.append({"pos": o + Vector2(w.x, w.z), "yaw": float(bd["yaw"]) + yaw, "elev": lp.y * sc})
 	return out
 
 

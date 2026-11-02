@@ -100,6 +100,11 @@ const MAX_EVENT_PASSES := 12
 var seed_key := ""
 var home := Vector2.ZERO
 var home_slots := PackedVector2Array()
+## Per home slot: the way its sleeper lies (NPC convention: a body along
+## (-sin, -cos) of the yaw) and how high its mattress is (a van's bed, an
+## RV's) — empty when the bridge has not set them (all on the ground).
+var home_yaws := PackedFloat32Array()
+var home_elevs := PackedFloat32Array()
 var routine: NpcRoutine = null
 var consequence: String = NpcConsequence.DEFAULT
 ## Is there work on this camp's board? Without it a WORK block falls through
@@ -404,6 +409,14 @@ func _resize() -> void:
 	for k in _perform.keys():
 		if int(k) >= _n:
 			_perform.erase(k)
+
+
+## The home bed person i is asleep in (-1 when they are not asleep at home,
+## or are one of the extras piled in beside a bed's owner on the ground).
+func _home_bed_index(i: int) -> int:
+	if home_slots.is_empty() or state[i] != S_DOING or act[i] != A_SLEEP or not space_id[i].is_empty():
+		return -1
+	return i if i < home_slots.size() else -1
 
 
 func _slot_for(i: int) -> Vector2:
@@ -1165,6 +1178,9 @@ func _take_seat(i: int, sid: String, slot_i: int, ctx: Dictionary) -> Dictionary
 
 
 func elev_of(i: int) -> float:
+	var hb := _home_bed_index(i)
+	if hb >= 0 and hb < home_elevs.size():
+		return float(home_elevs[hb])
 	if _seat.has(i) and state[i] == S_DOING and space_id[i] == str((_seat[i] as Dictionary)["sid"]):
 		return float((_seat[i] as Dictionary)["elev"])
 	if act[i] == A_PERFORM and state[i] == S_DOING and _perform.has(i):
@@ -2069,6 +2085,11 @@ func _pose_code_base(i: int) -> int:
 ## Which way a standing person faces (radians, atan2(x, z) convention of the
 ## crowd shader): toward where they were going, else toward home.
 func face_yaw(i: int) -> float:
+	# Asleep in their own bed: along it (the crowd shader faces +Z, the NPC
+	# yaw -Z — half a turn apart).
+	var hb := _home_bed_index(i)
+	if hb >= 0 and hb < home_yaws.size():
+		return float(home_yaws[hb]) + PI
 	var p := Vector2(ax[i], az[i])
 	var dest := Vector2(bx[i], bz[i])
 	if dest.distance_squared_to(p) > 1e-4:

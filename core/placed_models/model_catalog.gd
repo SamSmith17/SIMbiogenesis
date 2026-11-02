@@ -231,6 +231,10 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return ForkliftBuilder.build_node(extras)
 	if VehicleModelBuilder.handles(model_id):
 		return VehicleModelBuilder.build_node(model_id)
+	if VehicleBuilder.handles(model_id):
+		var veh_spec: Dictionary = extras.get("vehicle_spec", {}) as Dictionary
+		return VehicleBuilder.build_node(veh_spec, model_id,
+			{"cutaway": bool(extras.get("cutaway", false))})
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -564,6 +568,47 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "vehicle_forklift", "label": "Forklift (2.5 t)",
 			"procedural": true, "preserve_scale": true, "category": "vehicles",
 			"vehicle": "forklift", "vehicle_name": "Forklift"},
+		# Living vehicles (core/vehiclelab/): parametric vans, buses, RVs,
+		# trucks and trailers people live in. One entry per built-in preset
+		# ("vehiclelab_<preset>"), plus the designer's own id; a placed record
+		# carries its `vehicle_spec`, and without one the id's preset builds.
+		# PlacedVehicle takes its driving profile from the design ("living").
+		{"id": "vehiclelab_vehicle", "label": "Living vehicle (designed)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_van", "label": "Living vehicle: camper van (Sprinter 170)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_cargo_van", "label": "Living vehicle: cargo van (Transit high roof)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_shuttle_bus", "label": "Living vehicle: shuttle bus (E-450 + aerotech body)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_school_bus", "label": "Living vehicle: skoolie (35 ft school bus)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_step_van", "label": "Living vehicle: step van (P1000)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_ambulance", "label": "Living vehicle: ambulance (Type III)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_rv", "label": "Living vehicle: RV (Class C)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_motorhome", "label": "Living vehicle: motorhome (Class A)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_box_truck", "label": "Living vehicle: box truck (16 ft)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_trailer", "label": "Living vehicle: travel trailer (20 ft)",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
+		{"id": "vehiclelab_semi_container", "label": "Living vehicle: semi + 40 ft container home",
+			"procedural": true, "preserve_scale": true, "category": "vehicles",
+			"vehicle": "living"},
 		# Procedural stream / spring intake — minted where a player drops the
 		# uphill end of a penstock (conduits have no free endpoints, so the
 		# water source has to be a real prop + graph node).

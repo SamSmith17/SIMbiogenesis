@@ -97,6 +97,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
+	elif VehicleBuilder.handles(model_id):
+		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		# Bind (or create) its graph array — deferred so the record is settled.
 		var sgv_pv := _system_graph_view(main)
@@ -610,6 +612,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
+	elif VehicleBuilder.handles(model_id):
+		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		# Bind (or create) its graph array — deferred so the record is settled.
 		var sgv_pv := _system_graph_view(main)
@@ -682,7 +686,48 @@ static func tag_flatpack_space(main: Node, prop_id: String) -> void:
 ## firepit is a fire circle the evening gathers round). "" removes the tag.
 static func _auto_tag_space(main: Node, prop_id: String, space_type: String, capacity: int,
 		label: String) -> void:
-	var target := {"kind": "prop", "prop_id": prop_id}
+	_tag_target(main, {"kind": "prop", "prop_id": prop_id}, space_type, capacity, label)
+
+
+## A living vehicle is a home: its beds are a sleep space (people lie ON them,
+## along each bed, at its height — the builder's seat_spots), and its galley,
+## shower and toilet are spaces of their own on the same prop (a `role` and a
+## local `anchor` on the target, SpaceRegistry.prop_point). Stamps the preset
+## spec onto a record placed from the library, so the vehicle keeps its build
+## if the preset changes later. Idempotent; re-run after the design changes.
+static func tag_vehicle_spaces(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return
+	var stored: Variant = rec.get("vehicle_spec", {})
+	if not (stored is Dictionary) or (stored as Dictionary).is_empty():
+		update_prop_record(main, prop_id,
+			{"vehicle_spec": VehicleSpec.to_json_safe(VehicleBuilder.spec_for_record(rec))}, false)
+		rec = get_prop_record(main, prop_id)
+	var d := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+	var label := str(d.get("name", "Vehicle"))
+	var offered := {}
+	for sp in VehicleDesign.spaces(d):
+		var sd: Dictionary = sp
+		var role := str(sd["role"])
+		var target := {"kind": "prop", "prop_id": prop_id}
+		if not role.is_empty():
+			var a: Vector3 = sd["anchor"]
+			target["role"] = role
+			target["anchor"] = [snappedf(a.x, 0.001), snappedf(a.z, 0.001)]
+		offered[role] = true
+		var nice := label if role.is_empty() else "%s %s" % [label, role]
+		_tag_target(main, target, str(sd["space_type"]), int(sd["capacity"]), nice)
+	for role in ["", "kitchen", "shower", "restroom"]:
+		if not offered.has(role):
+			var t := {"kind": "prop", "prop_id": prop_id}
+			if not role.is_empty():
+				t["role"] = role
+			_tag_target(main, t, "", 0, "")
+
+
+static func _tag_target(main: Node, target: Dictionary, space_type: String, capacity: int,
+		label: String) -> void:
 	var reg: SpaceRegistry = null
 	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
@@ -694,7 +739,10 @@ static func _auto_tag_space(main: Node, prop_id: String, space_type: String, cap
 		reg = loader.get("npc_spaces") as SpaceRegistry
 	if reg == null:
 		return
-	reg.set_space_type(target, space_type, capacity, label)
+	var sid := reg.set_space_type(target, space_type, capacity, label)
+	# An upsert keeps the record's old target: carry a moved anchor over.
+	if not sid.is_empty() and target.has("anchor"):
+		reg.set_space_target(sid, target)
 	if loader != null and loader.has_method("save_npc_spaces"):
 		loader.call("save_npc_spaces")
 	elif main != null and not str(main.scene_file_path).is_empty():

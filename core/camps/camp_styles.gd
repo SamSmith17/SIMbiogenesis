@@ -27,6 +27,11 @@ const SHELTER_SLEEPS := {
 	"rv": 4, "van": 2, "popup_tent": 2, "camping_tent": 2, "shift_pod": 2,
 	"geodesic_dome": 4, "hexayurt": 3, "lotus_tent": 3,
 }
+## Where the mattress top is in a vehicle a camp sleeps in (metres over the
+## ground): a camper van's platform bed over its 0.55 m floor, an RV's rear
+## bed over its ~0.9 m floor. Its sleepers lie ALONG the vehicle there, side
+## by side across it — not on the ground under it.
+const BED_H := {"van": 0.95, "rv": 1.3}
 ## Structures a person cannot walk THROUGH (the nav grid blocks their
 ## footprint). Tents and pods are enterable — people sleep in them — and
 ## shade is walked under, so only the vehicles block.

@@ -500,6 +500,9 @@ static func _maybe_attach_vehicle(prop: PlacedProp, model: Node3D, rec: Dictiona
 	var pid := PlacedVehicle.profile_for_model(str(rec.get("model_id", "")))
 	if pid.is_empty() or prop.get_node_or_null("PlacedVehicle") != null:
 		return
+	# A living vehicle drives on its design's profile; a trailer has none.
+	if pid == PlacedVehicle.LIVING and PlacedVehicle.living_profile(rec).is_empty():
+		return
 	var v := PlacedVehicle.new()
 	v.name = "PlacedVehicle"
 	v.setup(prop, model, rec, pid)
@@ -816,6 +819,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["pelton_spec"] = rec.get("pelton_spec", {})
 	if rec.has("windlab_spec"):
 		extras["windlab_spec"] = rec.get("windlab_spec", {})
+	if rec.has("vehicle_spec"):
+		extras["vehicle_spec"] = rec.get("vehicle_spec", {})
 	if model_id == GrowBed.MODEL_ID:
 		var bed_spec: Dictionary = {}
 		if rec.has("grow_bed_spec"):

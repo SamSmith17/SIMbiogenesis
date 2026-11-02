@@ -433,7 +433,9 @@ func _targets_equal(a: Dictionary, b: Dictionary) -> bool:
 		return false
 	match str(a.get("kind", "")):
 		"prop":
-			return str(a.get("prop_id", "")) == str(b.get("prop_id", ""))
+			# One prop can hold several spaces, told apart by `role` (a living
+			# vehicle's sleep space has none; its kitchen is role "kitchen").
+			return str(a.get("prop_id", "")) == str(b.get("prop_id", "")) 				and str(a.get("role", "")) == str(b.get("role", ""))
 		"building":
 			return str(a.get("building_tag", "")) == str(b.get("building_tag", ""))
 		"area":
@@ -519,7 +521,7 @@ func resolve_position(space: Dictionary, main: Node) -> Variant:
 			var rec: Dictionary = PlacedPropService.get_prop_record(main, str(target.get("prop_id", "")))
 			if rec.is_empty():
 				return null
-			return Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+			return prop_point(rec, target.get("anchor", null))
 		"building":
 			var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 			if loader == null or not loader.has_method("building_centroid_by_tag"):
@@ -528,6 +530,19 @@ func resolve_position(space: Dictionary, main: Node) -> Variant:
 		"area":
 			return area_interior_point(target.get("poly", []) as Array)
 	return null
+
+
+## A prop target's world XZ: the record's position, plus the target's local
+## `anchor` ([x, z] in the model's frame, the record's yaw applied) when it
+## names a point ON the prop — a living vehicle's galley, its wet bath.
+static func prop_point(rec: Dictionary, anchor: Variant) -> Vector2:
+	var p := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	if anchor is Array and (anchor as Array).size() >= 2:
+		var a := anchor as Array
+		var local := Vector3(float(a[0]), 0.0, float(a[1])) * float(rec.get("scale", 1.0))
+		var w := local.rotated(Vector3.UP, deg_to_rad(float(rec.get("yaw", 0.0))))
+		p += Vector2(w.x, w.z)
+	return p
 
 
 ## World yaw (RADIANS) of a space's target, NAN when it has no orientation.

@@ -102,6 +102,10 @@ const PROFILES := {
 	},
 }
 
+## A living vehicle (core/vehiclelab/): its profile comes from its design
+## (VehicleDesign.riding_profile), not from PROFILES.
+const LIVING := "living"
+
 const RECORD_EVERY_S := 0.5
 ## Where a dismounting rider steps to: beside the vehicle, this far past its
 ## half-width (its left, the driver's door on a bus or a van).
@@ -128,6 +132,14 @@ var battery_capacity_wh := 0.0
 var wh_per_mile := 0.0
 var distance_traveled_meters := 0.0
 var current_speed_mps := 0.0
+## Liquid fuel (a living vehicle on a gasoline / diesel chassis). An empty tank
+## is filled from a can on the next get-in — never a dead end — and every
+## litre burned is counted (`vehicle_fuel_used_l`) so the cost of driving it
+## round the site is known.
+var fuel_l := 0.0
+var fuel_capacity_l := 0.0
+var fuel_used_l := 0.0
+var _design: Dictionary = {}
 
 var _prop: Node3D = null
 var _model: Node3D = null
@@ -147,7 +159,15 @@ var _freeing_for_handover := false
 ## Which profile a catalog model drives with ("" = not a vehicle).
 static func profile_for_model(mid: String) -> String:
 	var p := str(ModelCatalog.find(mid).get("vehicle", ""))
+	if p == LIVING:
+		return p
 	return p if PROFILES.has(p) else ""
+
+
+## A living vehicle's riding profile from its record ({} = it cannot be
+## driven: a trailer).
+static func living_profile(rec: Dictionary) -> Dictionary:
+	return VehicleDesign.riding_profile(VehicleDesign.solve(VehicleBuilder.spec_for_record(rec)))
 
 
 func setup(prop: Node3D, model: Node3D, rec: Dictionary, pid: String) -> void:
@@ -155,6 +175,12 @@ func setup(prop: Node3D, model: Node3D, rec: Dictionary, pid: String) -> void:
 	_model = model
 	profile_id = pid
 	profile = PROFILES.get(pid, {})
+	if pid == LIVING:
+		_design = VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+		profile = VehicleDesign.riding_profile(_design)
+		fuel_capacity_l = float(profile.get("fuel_l", 0.0))
+		fuel_l = clampf(float(rec.get("vehicle_fuel_l", fuel_capacity_l)), 0.0, fuel_capacity_l)
+		fuel_used_l = float(rec.get("vehicle_fuel_used_l", 0.0))
 	prop_id = str(rec.get("id", ""))
 	model_id = str(rec.get("model_id", ""))
 	var entry := ModelCatalog.find(model_id)
@@ -225,6 +251,8 @@ func _ready() -> void:
 
 func _range_radius() -> float:
 	var r := float(profile.get("radius", 3.0))
+	if profile_id == LIVING:
+		return r
 	if _prop != null and not model_id.is_empty():
 		var rec := _record()
 		var fp := PlacedPropService.footprint_from_model(model_id, float(rec.get("scale", 1.0)))
@@ -276,6 +304,10 @@ func _perf_tick(delta: float) -> void:
 		distance_traveled_meters += step
 		if battery_capacity_wh > 0.0:
 			battery_wh = maxf(battery_wh - step / 1609.344 * wh_per_mile, 0.0)
+		if fuel_capacity_l > 0.0 and step > 0.0:
+			var burned := float(VehicleDesign.energy_for_distance(_design, step, current_speed_mps)["litres"])
+			fuel_l = maxf(fuel_l - burned, 0.0)
+			fuel_used_l += burned
 		_record_accum += delta
 		if _record_accum >= RECORD_EVERY_S:
 			_record_accum = 0.0
@@ -332,6 +364,8 @@ func mount(player: CharacterBody3D) -> bool:
 		return false
 	is_mounted = true
 	current_rider = player
+	if fuel_capacity_l > 0.0 and fuel_l <= 0.01:
+		fuel_l = fuel_capacity_l   # filled from a can: see the fuel note above
 	if _prop.has_method("set_collision_enabled"):
 		_prop.call("set_collision_enabled", false)
 	# Get IN where it is parked, facing its way.
@@ -407,6 +441,11 @@ func get_speed_mph() -> float:
 	return current_speed_mps * 2.237
 
 
+## Litres left and the tank's size (0 / 0 for anything that does not burn fuel).
+func get_fuel_litres() -> Vector2:
+	return Vector2(fuel_l, fuel_capacity_l)
+
+
 func get_battery_percent() -> float:
 	return 100.0 * battery_wh / battery_capacity_wh if battery_capacity_wh > 0.0 else 100.0
 
@@ -434,6 +473,8 @@ func _user_scale() -> float:
 
 
 func _half_width() -> float:
+	if profile.has("half_width"):
+		return clampf(float(profile["half_width"]) * _user_scale(), 0.2, 2.0)
 	var fp := PlacedPropService.footprint_from_model(model_id, _user_scale())
 	return clampf(minf(fp.x, fp.y) * 0.5, 0.2, 2.0)
 
@@ -460,6 +501,9 @@ func _patch_record(save: bool) -> void:
 		patch["yaw"] = fposmod(rad_to_deg(_model.rotation.y), 360.0)
 	if battery_capacity_wh > 0.0:
 		patch["vehicle_battery_wh"] = battery_wh
+	if fuel_capacity_l > 0.0:
+		patch["vehicle_fuel_l"] = fuel_l
+		patch["vehicle_fuel_used_l"] = fuel_used_l
 	if save:
 		PlacedPropService.update_prop_record(main, prop_id, patch, false)
 		return

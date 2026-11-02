@@ -164,6 +164,9 @@ var desire_texture_wanted := false
 ## spots use: _home_beds rebuilt every camp's shelters and scanned every placed
 ## prop for EVERY light camp on EVERY tick (camps x shelters).
 var _home_beds_cache: Dictionary = {}
+## _prop_revision is asked many times a tick (per camp): once per frame.
+var _prop_rev_frame := -1
+var _prop_rev_val := 0
 var _home_beds_rev := -1
 var _dots_cache_valid := false
 var _dots_full: Array = []
@@ -700,10 +703,14 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		"comfort_spot": func(kind: String, from: Vector2, aid: String) -> Dictionary:
 			return _comfort_spot(kind, from, aid),
 	}
-	# Home beds: the shelters of the camp this habitat stands in.
-	var beds := _home_beds(main, cohort.home)
-	if beds.size() > 0 and beds != cohort.home_slots:
+	# Home beds: the shelters of the camp this habitat stands in (positions,
+	# plus the way each sleeper lies and how high — a van's bed).
+	var hb := _home_beds(main, cohort.home)
+	var beds: PackedVector2Array = hb["slots"]
+	if beds.size() > 0 and (beds != cohort.home_slots or hb["elevs"] != cohort.home_elevs):
 		cohort.home_slots = beds
+		cohort.home_yaws = hb["yaws"]
+		cohort.home_elevs = hb["elevs"]
 	PerfMonitor.begin("crowd_sim")
 	var demand: Dictionary = cohort.tick(abs_h, ctx)
 	PerfMonitor.end("crowd_sim")
@@ -1663,11 +1670,55 @@ func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
 		if str(tgt.get("kind", "")) != "prop":
 			continue
 		var prop := PlacedPropRuntime.find_by_prop_id(main, str(tgt.get("prop_id", "")))
-		if prop == null or prop.model_id != FlatpackBuilder.MODEL_ID:
+		if prop == null:
 			continue
-		var spots := furniture_spots(prop)
+		var spots: Array = []
+		if prop.model_id == FlatpackBuilder.MODEL_ID:
+			spots = furniture_spots(prop)
+		elif VehicleBuilder.handles(prop.model_id):
+			spots = vehicle_spots(prop, str(tgt.get("role", "")), str(space.get("space_type", "")))
 		if not spots.is_empty():
 			_seat_spots[str(space.get("id", ""))] = spots
+
+
+## A living vehicle's spots for ONE of its spaces: its sleep space lies on
+## the beds, a role space (kitchen / shower / restroom) stands at that
+## fixture on the vehicle's floor, anything else sits on its benches.
+static func vehicle_spots(prop: Node3D, role: String, space_type: String) -> Array:
+	var out: Array = []
+	if not role.is_empty():
+		var node := _meta_node(prop.get_node_or_null("ModelRoot") as Node3D, "role_spots")
+		if node == null:
+			return out
+		var roles: Dictionary = node.get_meta("role_spots", {})
+		return _spots_world(node, roles.get(role, []))
+	var want := "lie" if space_type == "sleep" else "sit"
+	for sp in furniture_spots(prop):
+		if str((sp as Dictionary).get("kind", "")) == want:
+			out.append(sp)
+	return out
+
+
+static func _meta_node(model: Node3D, key: String) -> Node3D:
+	if model == null:
+		return null
+	if model.has_meta(key):
+		return model
+	for c in model.get_children():
+		if c is Node3D and (c as Node3D).has_meta(key):
+			return c
+	return null
+
+
+static func _spots_world(node: Node3D, spots: Array) -> Array:
+	var out: Array = []
+	var xf := node.global_transform
+	var yaw0 := xf.basis.get_euler().y
+	for st in spots:
+		var w: Vector3 = xf * (st["pos"] as Vector3)
+		out.append({"pos": Vector2(w.x, w.z), "yaw": float(st["yaw"]) + yaw0,
+			"elev": maxf(w.y - xf.origin.y, 0.0), "kind": str(st.get("kind", "sit"))})
+	return out
 
 
 ## A placed furniture piece's seats in world space.
@@ -1718,13 +1769,30 @@ func seat_spot(sid: String, k: int) -> Dictionary:
 
 ## One entry per sleeper per shelter, scattered inside its footprint, so a
 ## tent of two shows two people lying in it rather than one point.
+##
+## A living vehicle hands over its own beds (`beds`: pos, yaw, elev); a camp's
+## van or RV (CampStyles.BED_H) puts its sleepers ALONG it, side by side
+## across it, at its bed height — never on the ground under it.
 static func _expand_beds(shelters: Array) -> Array:
 	var out: Array = []
 	for s in shelters:
 		var sd: Dictionary = s
+		if sd.has("beds"):
+			out.append_array(sd["beds"])
+			continue
 		var n := maxi(int(sd.get("sleeps", 2)), 1)
 		var yaw := float(sd.get("yaw", 0.0))
 		var p: Vector2 = sd["pos"]
+		var cls := str(sd.get("cls", ""))
+		if CampStyles.BED_H.has(cls):
+			# Long axis local +X -> world (cos, -sin): a body along it lies at
+			# yaw - PI/2 (a body lies along (-sin, -cos) of its yaw).
+			var across := Vector2(sin(yaw), cos(yaw))
+			for k in n:
+				var off := (float(k) - float(n - 1) * 0.5) * 0.62
+				out.append({"pos": p + across * off, "yaw": yaw - PI * 0.5,
+					"elev": float(CampStyles.BED_H[cls])})
+			continue
 		# Along the shelter's long axis (local +X -> world (cos, -sin)).
 		var axis := Vector2(cos(yaw), -sin(yaw))
 		for k in n:
@@ -1745,13 +1813,15 @@ func _bed_spot(sid: String, k: int) -> Dictionary:
 	# More sleepers than beds: they PILE IN beside the bed's owner, inside the
 	# same shelter (a short step across its long axis), not on the ground.
 	var yaw := float(bed.get("yaw", 0.0))
+	# A sleeper piled in beside a raised bed's owner has no mattress under
+	# them: they lie on the ground beside it (no elev).
 	return {"pos": (bed["pos"] as Vector2) + SpaceRegistry.pile_offset(round_n, yaw), "yaw": yaw}
 
 
 ## The expanded beds of the camp standing at `home` (the light tier's home
 ## slots), or an empty array when there is no camp there.
-func _home_beds(main: Node, home: Vector2) -> PackedVector2Array:
-	var out := PackedVector2Array()
+func _home_beds(main: Node, home: Vector2) -> Dictionary:
+	var out := {"slots": PackedVector2Array(), "yaws": PackedFloat32Array(), "elevs": PackedFloat32Array()}
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader == null or not loader.has_method("camp_area_at") or not loader.has_method("camp_shelters_in_polygon"):
 		return out
@@ -1767,8 +1837,11 @@ func _home_beds(main: Node, home: Vector2) -> PackedVector2Array:
 	return out
 
 
-func _home_beds_uncached(loader: Node, home: Vector2) -> PackedVector2Array:
-	var out := PackedVector2Array()
+func _home_beds_uncached(loader: Node, home: Vector2) -> Dictionary:
+	var slots := PackedVector2Array()
+	var yaws := PackedFloat32Array()
+	var elevs := PackedFloat32Array()
+	var out := {"slots": slots, "yaws": yaws, "elevs": elevs}
 	var cid := str(loader.call("camp_area_at", home))
 	if cid.is_empty():
 		return out
@@ -1778,8 +1851,11 @@ func _home_beds_uncached(loader: Node, home: Vector2) -> PackedVector2Array:
 	var rec: Dictionary = layer.get_area(cid)
 	var poly: PackedVector2Array = rec.get("polygon", PackedVector2Array())
 	for b in _expand_beds(loader.call("camp_shelters_in_polygon", poly)):
-		out.append((b as Dictionary)["pos"])
-	return out
+		var bd: Dictionary = b
+		slots.append(bd["pos"])
+		yaws.append(float(bd.get("yaw", 0.0)))
+		elevs.append(float(bd.get("elev", 0.0)))
+	return {"slots": slots, "yaws": yaws, "elevs": elevs}
 
 
 # --- the fire perimeter on the nav grid ----------------------------------------
@@ -1858,10 +1934,25 @@ func _prop_revision(main: Node) -> int:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader == null:
 		return 0
+	var f := Engine.get_process_frames()
+	if f == _prop_rev_frame:
+		return _prop_rev_val
+	_prop_rev_frame = f
+	_prop_rev_val = 0
 	var layer: Variant = loader.get("_placed_prop_layer")
 	if layer != null and layer.get("props") != null:
-		return (layer.get("props") as Array).size()
-	return 0
+		var props: Array = layer.get("props")
+		var sig: Array = [props.size()]
+		# A living vehicle's beds go where it is parked: moving or driving one
+		# into (or out of) a camp must re-resolve the beds, which a count of
+		# props alone never noticed.
+		for r in props:
+			if r is Dictionary and VehicleBuilder.handles(str((r as Dictionary).get("model_id", ""))):
+				var rd: Dictionary = r
+				sig.append(Vector3i(roundi(float(rd.get("x", 0.0)) * 2.0), roundi(float(rd.get("z", 0.0)) * 2.0),
+					roundi(float(rd.get("yaw", 0.0)))))
+		_prop_rev_val = props.size() if sig.size() == 1 else absi(hash(sig)) % 1000003
+	return _prop_rev_val
 
 
 ## Bump when world geometry moves so the grid re-bakes (terrain sculpt, prop
@@ -2831,7 +2922,7 @@ func _comfort_spot(kind: String, from: Vector2, agent_id: String) -> Dictionary:
 ## This person's own bed in the camp at `home` (sheltering / warming up in
 ## the tent), or null.
 func _home_bed_of(main: Node, home: Vector2, agent_id: String) -> Variant:
-	var beds := _home_beds(main, home)
+	var beds: PackedVector2Array = _home_beds(main, home)["slots"]
 	if beds.is_empty():
 		return null
 	var cut := agent_id.rfind("_npc_")

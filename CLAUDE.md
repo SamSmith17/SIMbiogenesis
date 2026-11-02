@@ -886,6 +886,23 @@ Godot.exe.exe --headless --path . --script core/flatpack/flatpack_selftest.gd
 # exported and read back, a bench and a daybed placed — tagged quiet / sleep
 # with seat spots ON them at seat height — packed and unpacked, removed:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designer_check.gd -Label flatpack
+# Living vehicles (offline — core/vehiclelab/): the eleven types' chassis +
+# body pairs solve with no error and no interior overlaps, beds inside the
+# living box and raised, lying along an axis, bunks stacking, the RV's
+# cab-over over the cab, the E-450 turning radius by hand, every preset's
+# 55 mph mpg inside its chassis' owner-reported band (the road-load model),
+# the trip cost, riding profiles (driver ahead-left, trailer none), mesh
+# winding, the builder's seat_spots / role_spots / Shell metas, and
+# SpaceRegistry role targets (two spaces on one prop, the anchor turned with
+# the prop). EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.gd
+# The same on a real world (sandbox): every preset placed (drivable on its
+# design, the trailer not), the shuttle's sleep + kitchen + shower +
+# restroom spaces on one prop, the bridge's spots (sleepers at the mattress,
+# along the bed; the cook on the floor), shots of each preset front and rear
+# and a cutaway, then festival mode with three vehicles parked in a camp:
+# its people sleep in the vehicle beds at bed height, along each bed:
+tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_housing_probe.gd -Label vehicle_housing -Timeout 1200
 # Dome & zome designer (offline — core/domelab/): the Goldberg–Coxeter
 # construction against the published chord-factor tables (2V A 0.54653 /
 # B 0.61803; 3V 0.34862 / 0.40355 / 0.41241; 4V six values) and strut /
@@ -11424,6 +11441,76 @@ camp shares a name until the camp outgrows the pool; other ids hash. The id is
 the unique key everywhere, never the name. The population and cohort
 selftests clear custom names in `_init` (`reset_custom_names_for_test`) so a
 player's friends never move a pin.
+
+## Living vehicles (core/vehiclelab/, 2026-11-01)
+
+Plan: `~/.claude/plans/pasted-content-id-e788-living-vehicles-vectorized-thimble.md`
+(8 phases; the user chose: arrive through a gate, typed trip miles,
+procedural bodies with a GLB override, HOUSING FIRST). Landed: Phase 1
+(parametric vehicles you can place and drive) and Phase 2 (housing). Not
+built yet: the designer modal (exterior / interior drag-and-drop, solar,
+paint), fuel kinds + refuelling + trailers, cargo bays, arrival through a
+gate.
+- **Pure core.** `VehicleCatalog` (chassis + bodies + the 11 types +
+  interior element types, sources in the header), `VehicleSpec` (record key
+  `vehicle_spec`; `resolve` adds `ch` / `bd`, `key_of` = JSON.stringify of
+  rounded values with integral floats as ints — JSON hands every number
+  back as a float), `VehicleDesign.solve` (cached: layout, axles, wheels,
+  driver seat, living box, interior elements, beds, seats, role spots,
+  masses, payload, cargo, checks, turning radius = the outer front wheel's),
+  `VehicleEnergy` (road load F = m·g·C_rr + ½ρC_dA v², η and LHV cited,
+  every preset inside its chassis' mpg band at 55 mph), `VehiclePresets`
+  (one per type with a lived-in interior), `VehicleBuilder`.
+- **Frame:** origin on the ground under the middle of the overall length,
+  -Z = the front (the rider's forward, profile yaw_deg 0), +X = the right /
+  curb side. Interior positions are in the living box's frame: x across, z
+  from the box's FRONT, < 0 counts from its rear. Chassis and body are
+  independent (`chassis_id` + `body_id`, each with overrides); `integral`
+  bodies run over the cab (van shell, bus, step van, Class A), `in_curb`
+  bodies are already in the chassis curb mass.
+- **Builder:** one "Mesh" (chassis, wheels, cab per style as a side profile
+  extruded across, floor, interior) + "Shell" (the living box: a rounded
+  cross-section swept along it, raked at the front where the vehicle's front
+  is, windows, doors, stripe) — a cutaway hides Shell. Every tri goes
+  through `_K.tri` (Godot's clockwise front face) with hand-written normals.
+  Metas: `seat_spots` (beds as kind "lie" at the mattress top, yaw = the
+  bed's long axis; then seats), `role_spots` {kitchen, shower, restroom:
+  stand spots on the floor}, `living_vehicle`.
+- **World:** catalog ids `vehiclelab_<preset>` (library Vehicles tab) +
+  `vehiclelab_vehicle`, `"vehicle": "living"`; a record without a spec builds
+  its id's preset, and placement stamps the spec on
+  (`PlacedPropService.tag_vehicle_spaces`, also in the ghost commit
+  dispatch). `PlacedVehicle.LIVING`: the profile comes from
+  `VehicleDesign.riding_profile` (speed by length, turn radius by wheelbase,
+  camera at the driver's eye); a trailer has none and gets no runtime. Fuel:
+  litres drawn by the energy model at the driven speed (`vehicle_fuel_l`,
+  `vehicle_fuel_used_l` on the record); an empty tank refills from a can on
+  the next get-in (never a dead end) — real refuelling is Phase 5.
+- **Housing.**
+  - One prop, several spaces: a prop target may carry `role` + `anchor`
+    ([x, z] local); `_targets_equal` compares the role (none = the old single
+    space), `SpaceRegistry.prop_point` turns the anchor with the record.
+    A vehicle gets a sleep space (capacity = its sleepers) and kitchen /
+    shower / restroom spaces.
+  - `NpcPopulationBridge.vehicle_spots`: the sleep space lies on the beds,
+    a role space stands at its fixture on the vehicle floor (elev), a quiet
+    space sits — never all the furniture spots for every space (the flat-pack
+    rule would have put the cook on the bed).
+  - Camps: `TerrainLoader.camp_shelters_in_polygon` lists living vehicles
+    FIRST with their world beds (`vehicle_beds_world`: pos, yaw, elev), so
+    bed k is person k's in the light tier and a friend group (consecutive
+    indices) shares a vehicle. A camp's own `van` / `rv` shelters now sleep
+    ALONG the vehicle at `CampStyles.BED_H` (were across it on the ground).
+  - Both tiers lie at bed height: the full tier sets `seat_elev` from the
+    bed's `elev` when no seat took it; the light tier carries `home_yaws` /
+    `home_elevs` beside `home_slots` (`elev_of` / `face_yaw` while asleep at
+    home; extras piled in beside an owner lie on the ground).
+  - ⚠ `_prop_revision` used to be the prop COUNT, so a vehicle moved or
+    driven into a camp never re-resolved the beds; it now folds living
+    vehicles' positions in (once per frame).
+- **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
+  `newline=''`; a bash heredoc can choke on a long Python patch, write the
+  script with the Write tool.
 
 ## Site deployment schedule — "set a time, everyone builds / packs" (2026-10-26)
 

@@ -1272,6 +1272,7 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	target_pos = _standing_spot(registry, sid, p, ctx)
 	# A sleep AREA with shelters in it (a camp): lie down INSIDE a tent, pod,
 	# van or RV — slot k wraps round the beds — rather than on the ground.
+	var bed_elev := 0.0
 	if need == "sleep":
 		var bed_of: Callable = ctx.get("bed_spot_of", Callable())
 		var bed: Variant = null
@@ -1280,6 +1281,8 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		if bed is Dictionary and not (bed as Dictionary).is_empty():
 			target_pos = (bed as Dictionary).get("pos", target_pos)
 			lie_yaw = float((bed as Dictionary).get("yaw", lie_yaw))
+			# A van's or an RV's bed is up off the ground: lie ON it.
+			bed_elev = float((bed as Dictionary).get("elev", 0.0))
 		elif str((space.get("target", {}) as Dictionary).get("kind", "")) == "area":
 			# A bare sleep AREA (no shelters): lie in rows along one axis
 			# (SpaceRegistry.lying_offset_for_index) rather than 0.9 m apart
@@ -1297,7 +1300,8 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	# unwalkable-slot fallback (which returns the plain centre) degrades to the
 	# projection path rather than to a meaningless zero-length vector.
 	face_anchor = p
-	_take_seat(ctx, sid, registry.slot_index_for(sid, id))
+	if not _take_seat(ctx, sid, registry.slot_index_for(sid, id)) and bed_elev > 0.0:
+		seat_elev = bed_elev
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
 	_request_path(ctx, p, from_key, sid)
 	state = State.TRAVELING
