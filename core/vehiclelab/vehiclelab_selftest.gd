@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 656
+const EXPECTED_CHECKS := 718
 
 var _passed := 0
 var _failed := 0
@@ -36,6 +36,8 @@ func _initialize() -> void:
 	_test_masses_and_loads()
 	_test_limits_and_elements()
 	_test_tow_ratings()
+	_test_design_rules()
+	_test_geometry()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
@@ -267,18 +269,26 @@ func _test_limits_and_elements() -> void:
 	_check("the RV's AC stays under the limit", float(rv["overall_h_m"]) > float(rv["height_m"])
 		and float(rv["overall_h_m"]) < VehicleDesign.MAX_HEIGHT_M and _checks_with(rv, "13' 6").is_empty())
 	# The roof load: the skoolie's rack + 6 modules on a 500 kg bus roof is
-	# fine; 16 modules on a Sprinter's 300 kg roof is not.
+	# fine; two modules, a rack, an AC and two cargo boxes on a ProMaster's
+	# 150 kg roof are not (an array that would hang off the roof is cut to
+	# what fits — Phase 2 — so the overload is built from what does).
 	var bus := _solve("school_bus")
 	_check("the skoolie's roof load is counted", float(bus["roof_load_kg"]) > 150.0 and float(bus["roof_kg_max"]) == 500.0
 		and _checks_with(bus, "on the roof").is_empty())
 	var van := VehiclePresets.builtin("van")
+	van["chassis_id"] = "ram_promaster_3500"
 	for x in van["exterior"]["elements"]:
 		if str((x as Dictionary)["type"]) == "solar":
-			(x as Dictionary)["rows"] = 4
-			(x as Dictionary)["cols"] = 4
-	(van["exterior"]["elements"] as Array).append({"id": "rack", "type": "rack", "face": "roof", "l": 4.0})
+			(x as Dictionary)["rows"] = 2
+			(x as Dictionary)["cols"] = 1
+			(x as Dictionary)["v"] = 0.9
+	(van["exterior"]["elements"] as Array).append({"id": "rack", "type": "rack", "face": "roof", "v": 0.9, "l": 5.0})
+	(van["exterior"]["elements"] as Array).append({"id": "acu", "type": "ac", "face": "roof", "v": -1.0})
+	(van["exterior"]["elements"] as Array).append({"id": "box", "type": "cargo_box", "face": "roof", "u": 0.6, "v": 1.5})
+	(van["exterior"]["elements"] as Array).append({"id": "box2", "type": "cargo_box", "face": "roof", "u": -0.6, "v": 1.5})
 	var vd := VehicleDesign.solve(van)
-	_check("16 modules + a rack overload a Sprinter roof", float(vd["roof_load_kg"]) > 300.0
+	_check("two modules, a rack, an AC and two boxes overload a ProMaster roof", float(vd["roof_load_kg"]) > 150.0
+		and float(vd["roof_kg_max"]) == 150.0
 		and not _checks_with(vd, "on the roof", "warn").is_empty(), "%.0f" % float(vd["roof_load_kg"]))
 	_check("...and the roof load raises the centre of mass", float(vd["cg_rise_m"]) > 0.02
 		and float(vd["cg_y"]) > float(_solve("van")["cg_y"]), "%.3f" % float(vd["cg_rise_m"]))
@@ -326,12 +336,13 @@ func _test_tow_ratings() -> void:
 	_check("the dashboard range shrinks with a trailer", VehicleDesign.range_mi(van, 50.0, 0.0, tr) < VehicleDesign.range_mi(van, 50.0))
 	_check("the trip costs more with a trailer", float(VehicleEnergy.trip(van, 300.0, true, tr)["litres"])
 		> float(VehicleEnergy.trip(van, 300.0)["litres"]))
-	# The 20 ft travel trailer loaded (2.36 t) is past a Sprinter 2500's
-	# 5,000 lb rating by a hundred kilos — a real finding; an E-450 pulls it.
+	# The 20 ft travel trailer loaded (2.42 t, grey tank full on the way
+	# home) is past a Sprinter 2500's 5,000 lb rating by ~150 kg — a real
+	# finding; an E-450 pulls it.
 	var notes := VehicleTow.tow_check(van, tr)
 	_check("the loaded trailer is just past the Sprinter's tow rating",
 		notes.any(func(n): return str((n as Dictionary)["text"]).contains("rated to tow"))
-		and float(tr["laden_out_kg"]) < float(van["tow_kg"]) + 150.0, str(notes))
+		and float(tr["laden_out_kg"]) < float(van["tow_kg"]) + 200.0, str(notes))
 	var full := tr.duplicate()
 	full["laden_out_kg"] = float(tr["gvwr_kg"])
 	full["tongue_kg"] = float(tr["gvwr_kg"]) * 0.12
@@ -811,13 +822,12 @@ func _test_vehicle_graph() -> void:
 	_check("a bigger battery changes the signature",
 		VehicleGraph.signature(VehicleDesign.solve(s2)["systems"]) != VehicleGraph.signature(sys))
 	# Many modules: one panel node per STRING (20 flexible modules = 10
-	# strings of two), each carrying the string's voltages and watts.
-	var s3 := VehiclePresets.builtin("shuttle_bus")
-	for x in s3["exterior"]["elements"]:
-		if str((x as Dictionary)["type"]) == "solar":
-			(x as Dictionary)["module"] = "flex_100"
-			(x as Dictionary)["rows"] = 4
-			(x as Dictionary)["cols"] = 5
+	# strings of two), each carrying the string's voltages and watts. On
+	# the container's roof, the one wide and long enough for 4 x 5 flexible
+	# modules (an array that hangs off a roof is cut to what fits).
+	var s3 := VehiclePresets.builtin("semi_container")
+	(s3["exterior"]["elements"] as Array).append({"id": "solar", "type": "solar", "face": "roof",
+		"module": "flex_100", "rows": 5, "cols": 4})
 	var d3 := VehicleDesign.solve(s3)
 	var def3 := VehicleGraph.definition(d3, "vehicle_p3")
 	var panels3 := ((def3["subgraph"] as Dictionary)["items"] as Array).filter(func(i): return str((i as Dictionary)["type"]) == "panel")
@@ -1140,3 +1150,310 @@ func _test_driver_view() -> void:
 		root.free()
 	_check("from every driver's seat the road ahead is clear (one-sided panels)", blocked.is_empty(), str(blocked))
 	_check("no driver's eye is pressed against the windshield", pressed.is_empty(), str(pressed))
+
+
+# --- Phase 2: design rules and geometry ---------------------------------------------
+
+## The rules a real conversion is held to: rear overhang, an array that
+## hangs off its roof, items over each other / the door / a window, seats
+## for the sleepers, water for a shower, a battery for the loads, an
+## inverter for the AC, a bed long enough, water for the days, headroom;
+## the cab walk-through as an entry; the walkway flood cached; windows
+## where people sit and lie; the cargo bay's doors from the one door rule.
+func _test_design_rules() -> void:
+	# Every built-in solves clean (presets_solve pins that); every warning
+	# here carries its reason.
+	for b in VehiclePresets.builtins():
+		var pd := VehicleDesign.solve((b as Dictionary)["spec"])
+		_check("%s: rear overhang inside two thirds of the wheelbase" % str((b as Dictionary)["id"]),
+			float(pd.get("wheelbase_m", 0.0)) <= 0.0 or not bool(pd.get("axle_check", true))
+			or float(pd["rear_overhang_m"]) <= float(pd["wheelbase_m"]) * VehicleDesign.OVERHANG_MAX_WB + 0.01,
+			"%.2f on %.2f" % [float(pd["rear_overhang_m"]), float(pd.get("wheelbase_m", 0.0))])
+	# Rear overhang: a 16 ft box stretched to 8 m on the NPR's 150" wheelbase.
+	var long := VehiclePresets.builtin("box_truck")
+	long["body"] = {"length_m": 8.0}
+	var ld := VehicleDesign.solve(long)
+	_check("a stretched box hangs past two thirds of the wheelbase",
+		float(ld["rear_overhang_m"]) > float(ld["wheelbase_m"]) * VehicleDesign.OVERHANG_MAX_WB
+		and not _checks_with(ld, "behind the rear axle", "warn").is_empty(), "%.2f" % float(ld["rear_overhang_m"]))
+	# A roof array wider than the roof loses whole columns, keeps whole modules.
+	var wide := VehiclePresets.builtin("van")
+	for x in wide["exterior"]["elements"]:
+		if str((x as Dictionary)["type"]) == "solar":
+			(x as Dictionary)["cols"] = 3
+	var wd := VehicleDesign.solve(wide)
+	var arr := {}
+	for e in wd["exterior"]:
+		if str((e as Dictionary)["type"]) == "solar":
+			arr = e
+	_check("three 1.13 m modules across a van roof come down to one", int(arr.get("cols", 0)) == 1
+		and int(arr.get("cut_cols", 0)) == 3, str(arr))
+	_check("the array's watts follow the modules kept", absf(float((wd["systems"] as Dictionary)["solar_w"]) - 400.0) < 0.5)
+	_check("and it says 2 of 3 modules were dropped", not _checks_with(wd, "2 of 3 modules", "warn").is_empty())
+	_check("the module kept is still whole", absf(float(arr["w"]) - VehicleExterior.MODULES["rigid_400"]["short"]) < 1e-6)
+	# Two roof items on one patch of skin; a rack is mounted on.
+	var two := VehiclePresets.builtin("van")
+	(two["exterior"]["elements"] as Array).append({"id": "fan2", "type": "fan", "face": "roof", "u": 0.0, "v": -0.3})
+	var td := VehicleDesign.solve(two)
+	var ov := (td["checks"] as Array).filter(func(c): return str((c as Dictionary)["text"]).contains("overlap on the roof"))
+	_check("two fans on one spot overlap", ov.size() == 1 and ((ov[0] as Dictionary)["ids"] as Array).has("fan2"), str(ov))
+	_check("a rack under the skoolie's modules is not an overlap", _checks_with(_solve("school_bus"), "overlap on the roof").is_empty())
+	# A side item across the side door, or over a window.
+	var van := _solve("van")
+	var door := {}
+	for sp in VehicleDesign.door_spans(van):
+		if str((sp as Dictionary)["where"]) == "side":
+			door = sp
+	var over_door := VehiclePresets.builtin("van")
+	(over_door["exterior"]["elements"] as Array).append({"id": "win", "type": "window", "face": "right",
+		"u": (float(door["z0"]) + float(door["z1"])) * 0.5, "v": float(van["house"]["floor_y"]) + 1.2})
+	_check("a window cut across the slider says so",
+		not _checks_with(VehicleDesign.solve(over_door), "across the side door", "warn").is_empty())
+	var panes := VehicleDesign.window_spans(van)
+	var left_pane := {}
+	for w in panes:
+		if float((w as Dictionary)["sx"]) < 0.0:
+			left_pane = w
+	var over_win := VehiclePresets.builtin("van")
+	(over_win["exterior"]["elements"] as Array).append({"id": "lad", "type": "ladder", "face": "left",
+		"u": (float(left_pane["z0"]) + float(left_pane["z1"])) * 0.5, "v": (float(left_pane["y0"]) + float(left_pane["y1"])) * 0.5})
+	_check("a ladder over the bed's window says so",
+		not _checks_with(VehicleDesign.solve(over_win), "covers a window", "warn").is_empty())
+	_check("the RV's awning over its door is fine", _checks_with(_solve("rv"), "across the side door").is_empty())
+	# Seats for the sleepers; a trailer's people ride up front.
+	var few := VehiclePresets.builtin("van")
+	few["seats"] = 1
+	_check("two sleepers on one seat: no seat belt", not _checks_with(VehicleDesign.solve(few), "no seat belt", "warn").is_empty())
+	_check("a trailer sleeps more than it seats and says nothing", _checks_with(_solve("trailer"), "no seat belt").is_empty())
+	# A shower needs fresh and grey water.
+	var dry := VehiclePresets.builtin("cargo_van")
+	(dry["interior"]["elements"] as Array).append({"id": "sh", "type": "shower", "x": 0.6, "z": 2.4})
+	var dd := VehicleDesign.solve(dry)
+	_check("a shower with no grey tank needs one", not _checks_with(dd, "needs a grey tank", "warn").is_empty(), str(dd["checks"]))
+	# Loads with no house battery; an EV's pack counts.
+	var nobat := VehiclePresets.builtin("cargo_van")
+	nobat["interior"]["elements"] = (nobat["interior"]["elements"] as Array).filter(
+		func(e): return str((e as Dictionary)["type"]) != "battery")
+	_check("a light with no house battery says so", not _checks_with(VehicleDesign.solve(nobat), "no house battery", "warn").is_empty())
+	nobat["chassis_id"] = "ford_etransit"
+	_check("on an E-Transit the pack runs them", _checks_with(VehicleDesign.solve(nobat), "no house battery").is_empty())
+	# A rooftop AC needs an inverter rated for it, or shore power.
+	var rv := VehiclePresets.builtin("rv")
+	rv["interior"]["elements"] = (rv["interior"]["elements"] as Array).filter(
+		func(e): return str((e as Dictionary)["type"]) != "inverter")
+	_check("an AC with no inverter says so", not _checks_with(VehicleDesign.solve(rv), "no inverter", "warn").is_empty())
+	(rv["interior"]["elements"] as Array).append({"id": "inv", "type": "inverter", "x": -0.9, "z": 0.5, "supply_w": 1000.0})
+	var small := VehicleDesign.solve(rv)
+	_check("a 1 kW inverter under a 1.4 kW AC says so", not _checks_with(small, "rated 1 kW", "warn").is_empty()
+		and absf(float(small["inverter_w"]) - 1000.0) < 1e-6, str(small["checks"]))
+	(rv["interior"]["elements"] as Array).pop_back()
+	(rv["interior"]["elements"] as Array).append({"id": "shore", "type": "shore_inlet", "x": 1.0, "z": 0.5})
+	_check("shore power carries the AC instead", _checks_with(VehicleDesign.solve(rv), "inverter").is_empty())
+	_check("the RV preset's 2 kW inverter carries its AC", absf(float(_solve("rv")["inverter_w"]) - 2000.0) < 1e-6)
+	# A short bed.
+	var short := VehiclePresets.builtin("van")
+	for e in short["interior"]["elements"]:
+		if str((e as Dictionary)["id"]) == "bed":
+			(e as Dictionary)["l"] = 1.6
+	_check("a 1.6 m bed is too short to stretch out", not _checks_with(VehicleDesign.solve(short), "stretch out", "warn").is_empty())
+	# Water for the days: the van's 120 L is 1.2 days for two (a note); 60 L
+	# is under a day (a warning).
+	_check("the van's water is noted at 1.2 days", not _checks_with(van, "1.2 days", "info").is_empty())
+	var thirsty := VehiclePresets.builtin("van")
+	for e in thirsty["interior"]["elements"]:
+		if str((e as Dictionary)["type"]) == "water_tank":
+			(e as Dictionary)["litres"] = 60.0
+	_check("60 L for two is under a day", not _checks_with(VehicleDesign.solve(thirsty), "0.6 days", "warn").is_empty())
+	# Headroom: a stoop is a warning, a crawl-in a note; a trailer too.
+	var low := VehiclePresets.builtin("box_truck")
+	low["body"] = {"height_m": 2.72}
+	var lo := VehicleDesign.solve(low)
+	_check("1.8 m inside is a stoop", float(lo["house"]["height"]) < VehicleInterior.STAND_M
+		and not _checks_with(lo, "stoop", "warn").is_empty(), "%.2f" % float(lo["house"]["height"]))
+	low["body"] = {"height_m": 2.3}
+	var crawl := VehicleDesign.solve(low)
+	_check("1.4 m inside is a crawl-in", float(crawl["house"]["height"]) < VehicleInterior.CROUCH_M
+		and not _checks_with(crawl, "crawl-in", "info").is_empty() and _checks_with(crawl, "stoop").is_empty())
+	var low_tr := VehiclePresets.builtin("trailer")
+	low_tr["body"] = {"door_at_m": 4.0, "height_m": 2.75}
+	_check("a low trailer stoops too", not _checks_with(VehicleDesign.solve(low_tr), "stoop", "warn").is_empty())
+	_check("the skoolie's 1.88 m stands (a stock bus's 6' 2\")", _checks_with(_solve("school_bus"), "stoop").is_empty())
+	# Every warning and error says why (the banner's tooltip).
+	var all_why := true
+	var missing: Array = []
+	for dx in [ld, wd, td, dd, small, lo, crawl, VehicleDesign.solve(nobat), VehicleDesign.solve(short)]:
+		for c in dx["checks"]:
+			var cd: Dictionary = c
+			if str(cd["level"]) != "info" and str(cd.get("why", "")).is_empty():
+				all_why = false
+				missing.append(cd["text"])
+	_check("every warning carries its reason", all_why, str(missing))
+	# The walkway flood is cached on the design.
+	_check("the access flood rides the design", van.has("access") and is_same(VehicleInterior.access(van), van["access"]))
+	# Entries: the van's walk-through is a strip between the seats, the
+	# skoolie's beside the driver, the step van's cab door is its side door.
+	var cab_v := {}
+	for en in VehicleInterior.entries(van):
+		if str((en as Dictionary)["where"]) == "cab":
+			cab_v = en
+	_check("the van's walk-through is a 0.6 m strip on the centre line", not cab_v.is_empty()
+		and absf(((cab_v["a"] as Vector2) + (cab_v["b"] as Vector2)).x * 0.5) < 1e-6
+		and absf((cab_v["b"] as Vector2).x - (cab_v["a"] as Vector2).x - VehicleInterior.CAB_WALK_M) < 1e-6, str(cab_v))
+	var cab_b := {}
+	for en in VehicleInterior.entries(_solve("school_bus")):
+		if str((en as Dictionary)["where"]) == "cab":
+			cab_b = en
+	_check("the skoolie's walk-through is on the curb side of the driver", not cab_b.is_empty()
+		and ((cab_b["a"] as Vector2) + (cab_b["b"] as Vector2)).x * 0.5 > 0.1, str(cab_b))
+	var sv_entries := VehicleInterior.entries(_solve("step_van"))
+	_check("the step van's cab door is a side entry on the right, no walk-through",
+		sv_entries.all(func(e): return str((e as Dictionary)["where"]) != "cab")
+		and sv_entries.any(func(e): return (str((e as Dictionary)["where"]) == "side" and ((e as Dictionary)["a"] as Vector2).x > 0.0)))
+	_check("a trailer has no cab entry", VehicleInterior.entries(_solve("trailer")).all(
+		func(e): return str((e as Dictionary)["where"]) != "cab"))
+	# Windows: over the places people sit and lie, never the door.
+	var bed := VehicleInterior.element(van, "bed")
+	var over_bed := panes.filter(func(w): return (float((w as Dictionary)["z0"]) < float(bed["z"]) + float(bed["fz"]) * 0.5
+		and float((w as Dictionary)["z1"]) > float(bed["z"]) - float(bed["fz"]) * 0.5))
+	_check("the van's panes sit beside its bed on both sides", over_bed.size() == 2, str(panes))
+	var clear_door := panes.all(func(w): return (float((w as Dictionary)["sx"]) < 0.0
+		or float((w as Dictionary)["z1"]) <= float(door["z0"]) + 1e-6 or float((w as Dictionary)["z0"]) >= float(door["z1"]) - 1e-6))
+	_check("no pane across the slider", clear_door)
+	var motor := _solve("motorhome")
+	var bath := VehicleInterior.element(motor, "bath")
+	var over_bath := VehicleDesign.window_spans(motor).filter(func(w): return (float((w as Dictionary)["sx"]) > 0.0
+		and float((w as Dictionary)["z0"]) < float(bath["z"]) + float(bath["fz"]) * 0.5 - 0.05
+		and float((w as Dictionary)["z1"]) > float(bath["z"]) - float(bath["fz"]) * 0.5 + 0.05))
+	_check("no pane through the motorhome's wet bath", over_bath.is_empty(), str(over_bath))
+	_check("a bus body carries a run of panes", VehicleDesign.window_spans(_solve("school_bus")).size() >= 10)
+	_check("a windowless body has none", VehicleDesign.window_spans(_solve("step_van")).is_empty())
+	# The cargo bay's doors are the one door rule's.
+	var bt := _solve("box_truck")
+	var rear := {}
+	for sp in VehicleDesign.door_spans(bt):
+		if str((sp as Dictionary)["where"]) == "rear":
+			rear = sp
+	var cdoors: Array = (bt["cargo"] as Dictionary)["doors"]
+	_check("the box truck's cargo door is its roll-up span", cdoors.size() == 1
+		and absf(float((cdoors[0] as Dictionary)["w_m"]) - minf(float(rear["x1"]) - float(rear["x0"]), float(bt["house"]["w"]) - 0.1)) < 1e-6
+		and absf(float((cdoors[0] as Dictionary)["h_m"]) - minf(float(rear["y1"]) - float(rear["y0"]), float(bt["house"]["height"]))) < 1e-6,
+		str(cdoors))
+
+
+## What the builder draws: lugs by hub class, one wheel mesh per size,
+## dually pairs kept apart, wheel arches on the shell, a trailer's propane
+## on its tongue.
+func _test_geometry() -> void:
+	_check("lugs: 5 on a van, 8 on an E-450, 10 on a bus", int(_solve("van")["lug_count"]) == 5
+		and int(_solve("rv")["lug_count"]) == 8 and int(_solve("school_bus")["lug_count"]) == 10
+		and int(_solve("trailer")["lug_count"]) == 5)
+	for pair in [["van", 2], ["school_bus", 2], ["semi_container", 2]]:
+		var root := VehicleBuilder.build_node(VehiclePresets.builtin(str(pair[0])))
+		var meshes := {}
+		var n := 0
+		for w in root.get_node("Wheels").get_children():
+			meshes[((w as Node3D).get_node("Mesh") as MeshInstance3D).mesh.get_instance_id()] = true
+			n += 1
+		_check("%s: %d wheels share %d meshes" % [str(pair[0]), n, int(pair[1])], meshes.size() == int(pair[1]), str(meshes.size()))
+		# The hub face's lugs: 12 triangles a box on the "frame" surface.
+		var d := _solve(str(pair[0]))
+		var w0 := (root.get_node("Wheels").get_child(0) as Node3D).get_node("Mesh") as MeshInstance3D
+		var frame_tris := _surface_tris(w0.mesh as ArrayMesh, 2)
+		_check("%s: the hub shows its lugs" % str(pair[0]), frame_tris == int(d["lug_count"]) * 12,
+			"%d tris" % frame_tris)
+		root.free()
+	# A dually pair sits DUAL_GAP_M apart, pushed inside the body together.
+	var bus := _solve("school_bus")
+	var broot := VehicleBuilder.build_node(VehiclePresets.builtin("school_bus"))
+	var pos := {}
+	for w in broot.get_node("Wheels").get_children():
+		pos[str(w.name)] = (w as Node3D).position
+	var duals := 0
+	var kept := true
+	var ws: Array = bus["wheels"]
+	for i in ws.size():
+		for j in range(i + 1, ws.size()):
+			var a: Vector3 = (ws[i] as Dictionary)["pos"]
+			var b: Vector3 = (ws[j] as Dictionary)["pos"]
+			if absf(a.z - b.z) < 1e-6 and a.x * b.x > 0.0:
+				duals += 1
+				var want := float((ws[i] as Dictionary)["w"]) + VehicleDesign.DUAL_GAP_M
+				var drawn := absf((pos["W%d" % i] as Vector3).x - (pos["W%d" % j] as Vector3).x)
+				if absf(absf(a.x - b.x) - want) > 1e-6 or absf(drawn - want) > 1e-6:
+					kept = false
+	_check("the skoolie's two dually pairs keep their gap as drawn", duals == 2 and kept)
+	var hw := float(bus["body"]["w"]) * 0.5
+	var inside := true
+	for w in broot.get_node("Wheels").get_children():
+		var p: Vector3 = (w as Node3D).position
+		var wd: Dictionary = ws[int(str(w.name).substr(1))]
+		if absf(p.x) + float(wd["w"]) * 0.5 > hw:
+			inside = false
+	_check("every wheel inside the body", inside)
+	broot.free()
+	# Arches: the shell carries a dark surface with a box pair per outer wheel.
+	var van_root := VehicleBuilder.build_node(VehiclePresets.builtin("van"))
+	var shell := van_root.get_node("Shell") as MeshInstance3D
+	var dark_tris := 0
+	for si in shell.mesh.get_surface_count():
+		var m := shell.mesh.surface_get_material(si) as StandardMaterial3D
+		if m != null and m.albedo_color.is_equal_approx(Color(0.14, 0.15, 0.17)):
+			dark_tris += _surface_tris(shell.mesh as ArrayMesh, si)
+	_check("the van's shell wears its rear wheel arches", dark_tris >= 2 * 24, "%d dark tris" % dark_tris)
+	var cab := van_root.get_node("Cab") as MeshInstance3D
+	var cab_dark := 0
+	for si in cab.mesh.get_surface_count():
+		var m := cab.mesh.surface_get_material(si) as StandardMaterial3D
+		if m != null and m.albedo_color.is_equal_approx(Color(0.14, 0.15, 0.17)):
+			cab_dark += _surface_tris(cab.mesh as ArrayMesh, si)
+	_check("the van's cab wears its front arches and grille slats", cab_dark >= 2 * 24 + 3 * 12, "%d" % cab_dark)
+	van_root.free()
+	# A trailer's propane rides the tongue: drawn by the chassis, not inside.
+	var tr := VehiclePresets.builtin("trailer")
+	var plain := VehicleBuilder.build_node(tr)
+	(tr["interior"]["elements"] as Array).append({"id": "gas", "type": "propane", "x": 0.0, "z": 0.2})
+	var gassed := VehicleBuilder.build_node(tr)
+	var ch_plain := _mesh_tris((plain.get_node("Chassis") as MeshInstance3D).mesh as ArrayMesh)
+	var ch_gas := _mesh_tris((gassed.get_node("Chassis") as MeshInstance3D).mesh as ArrayMesh)
+	var in_plain := _mesh_tris((plain.get_node("Interior") as MeshInstance3D).mesh as ArrayMesh)
+	var in_gas := _mesh_tris((gassed.get_node("Interior") as MeshInstance3D).mesh as ArrayMesh)
+	_check("a trailer's bottles are drawn on the tongue, not in the box", ch_gas > ch_plain and in_gas == in_plain,
+		"chassis %d -> %d, interior %d -> %d" % [ch_plain, ch_gas, in_plain, in_gas])
+	plain.free()
+	gassed.free()
+	# The windshield of a Class A starts ~0.9 m over the body's bottom edge.
+	var mh := _solve("motorhome")
+	var mroot := VehicleBuilder.build_node(VehiclePresets.builtin("motorhome"))
+	var mshell := mroot.get_node("Shell") as MeshInstance3D
+	var glass_lo := INF
+	var glass_hi := -INF
+	var zf := float(mh["body"]["z0"])
+	for si in mshell.mesh.get_surface_count():
+		var m := mshell.mesh.surface_get_material(si) as StandardMaterial3D
+		if m == null or not m.albedo_color.is_equal_approx(VehicleBuilder.C_GLASS):
+			continue
+		var v: PackedVector3Array = mshell.mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+		for p in v:
+			if p.z < zf + 0.6:
+				glass_lo = minf(glass_lo, p.y)
+				glass_hi = maxf(glass_hi, p.y)
+	_check("the Class A windshield runs from ~0.9 m over the body's edge", absf(glass_lo - (float(mh["body"]["y0"]) + 0.9)) < 0.02
+		and glass_hi - glass_lo <= 1.31, "%.2f..%.2f" % [glass_lo, glass_hi])
+	mroot.free()
+
+
+func _surface_tris(mesh: ArrayMesh, si: int) -> int:
+	if mesh == null or si >= mesh.get_surface_count():
+		return 0
+	var arr := mesh.surface_get_arrays(si)
+	var idx = arr[Mesh.ARRAY_INDEX]
+	if idx != null and (idx as PackedInt32Array).size() > 0:
+		return (idx as PackedInt32Array).size() / 3
+	return (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+
+
+func _mesh_tris(mesh: ArrayMesh) -> int:
+	var n := 0
+	for si in mesh.get_surface_count():
+		n += _surface_tris(mesh, si)
+	return n

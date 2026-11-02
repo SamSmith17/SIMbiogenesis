@@ -1384,17 +1384,25 @@ func _refresh_summary() -> void:
 		_checks_box.add_child(banner)
 		banner.show_alert(AlertBanner.ERROR if lvl == "error" else (AlertBanner.WARN if lvl == "warn"
 			else AlertBanner.INFO), str(cd["text"]))
+		# The reason, a sentence, on hover.
+		if not str(cd.get("why", "")).is_empty():
+			banner.tooltip_text = str(cd["why"])
+		# "Show it" selects the first named thing: an interior element (the
+		# skin comes off) or a roof / side item.
 		var ids: Array = cd.get("ids", [])
-		if not ids.is_empty() and _in_index(str(ids[0])) >= 0:
+		var first := str(ids[0]) if not ids.is_empty() else ""
+		var kind := "int" if _in_index(first) >= 0 else ("ext" if _has_element(first) else "")
+		if not kind.is_empty():
 			var show := Button.new()
 			show.text = "Show it"
-			show.tooltip_text = "Select it in the preview (the skin comes off)"
+			show.tooltip_text = "Select it in the preview" + (" (the skin comes off)" if kind == "int" else "")
 			UITheme.style_button(show)
-			var first := str(ids[0])
 			show.pressed.connect(func() -> void:
-				if not _cutaway:
+				if kind == "int" and not _cutaway:
 					_cut_btn.button_pressed = true
-				_select(first, "int"))
+				elif kind == "ext" and _cutaway:
+					_cut_btn.button_pressed = false
+				_select(first, kind))
 			_checks_box.add_child(show)
 
 

@@ -70,8 +70,8 @@ static func build_from_design(d: Dictionary, opts: Dictionary = {}) -> Node3D:
 	root.name = "LivingVehicle"
 	var paint: Dictionary = (d["spec"] as Dictionary)["paint"]
 	var gc := _kits(["frame", "tyre", "rim", "white"])
-	var gb := _kits(["body", "trim", "glass", "head", "rim", "frame"])
-	var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail"])
+	var gb := _kits(["body", "trim", "glass", "head", "rim", "frame", "dark"])
+	var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail", "dark"])
 	var gx := _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
 	var gi := _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
 	_chassis(d, gc)
@@ -382,17 +382,25 @@ static func _chassis(d: Dictionary, g: Dictionary) -> void:
 			fk.obox(mid, ax, ay, az)
 		fk.box(tip + Vector3(0, 0.05, 0.05), Vector3(0.16, 0.12, 0.25))
 		fk.cylinder(Vector3(0, fy * 0.5, -half + 0.45), 0.04, fy, Vector3.UP, 8)
-		# A travel trailer's propane bottles on the tongue.
-		if str((d["body"] as Dictionary)["id"]) == "travel_trailer":
+		# A trailer's propane bottles ride the tongue (the element inside the
+		# box is where the design counts them; the builder draws them here).
+		if float(d.get("propane_lb", 0.0)) > 0.0:
 			var wk: _K = g["white"]
-			for sx2 in [-0.2, 0.2]:
+			var bottles := maxi(int(round(float(d["propane_lb"]) / 20.0)), 1)
+			var n_draw := mini(bottles, 2)
+			for k in n_draw:
+				var sx2 := (float(k) - float(n_draw - 1) * 0.5) * 0.4
 				wk.cylinder(Vector3(sx2, fy + 0.35, bz0 - 0.45), 0.16, 0.6, Vector3.UP, 14)
+			fk.box(Vector3(0, fy + 0.04, bz0 - 0.45), Vector3(0.9, 0.04, 0.4))
 
 
 ## Each wheel its own node under "Wheels", pivoting at its hub (local +X =
 ## the axle), so it turns as the vehicle rolls and the front ones steer
-## (`spin_wheels`). Five lug bolts on the hub face are what show it turning.
-## The root's `wheel_nodes` meta lists them: [{name, r, steer}].
+## (`spin_wheels`). The lug bolts on the hub face are what show it turning:
+## 5 / 8 / 10 by the chassis' weight class (VehicleDesign.lug_count). One
+## ArrayMesh per (radius, width, side) is SHARED by every wheel of that size
+## — a semi's ten wheels are two meshes, not ten. A dually pair is pushed
+## inside the body together, so the gap between its tyres stays.
 static func _wheel_nodes(root: Node3D, d: Dictionary, paint: Dictionary) -> void:
 	var hw := float((d["body"] as Dictionary)["w"]) * 0.5
 	var cab_w := float((d["cab_geo"] as Dictionary)["w"]) * 0.5
@@ -401,30 +409,45 @@ static func _wheel_nodes(root: Node3D, d: Dictionary, paint: Dictionary) -> void
 	holder.name = "Wheels"
 	root.add_child(holder)
 	var listed: Array = []
+	var lugs := int(d.get("lug_count", 5))
+	var meshes := {}
+	# How far each (axle z, side) group must come in: the outermost tyre's
+	# overhang past the body, applied to the whole group.
+	var push := {}
+	for w in d["wheels"]:
+		var wd: Dictionary = w
+		var p: Vector3 = wd["pos"]
+		var tw := float(wd["w"])
+		var key := "%.3f|%d" % [p.z, 1 if p.x >= 0.0 else -1]
+		var over := absf(p.x) + tw * 0.5 - (lim - 0.005)
+		push[key] = maxf(float(push.get(key, 0.0)), over)
 	var i := 0
 	for w in d["wheels"]:
 		var wd: Dictionary = w
 		var p: Vector3 = wd["pos"]
 		var r := float(wd["r"])
 		var tw := float(wd["w"])
-		# Never stick out past the body.
 		var side := 1.0 if p.x >= 0.0 else -1.0
-		if absf(p.x) + tw * 0.5 > lim - 0.005:
-			p.x -= side * (absf(p.x) + tw * 0.5 - (lim - 0.005))
-		var g := _kits(["tyre", "rim", "frame"])
-		var tk: _K = g["tyre"]
-		var rk: _K = g["rim"]
-		var bk: _K = g["frame"]
-		tk.cylinder(Vector3.ZERO, r, tw, Vector3.RIGHT, 22)
-		rk.cylinder(Vector3(side * 0.006, 0, 0), r * 0.58, tw, Vector3.RIGHT, 16)
-		rk.cylinder(Vector3(side * (tw * 0.5 + 0.01), 0, 0), r * 0.18, 0.04, Vector3.RIGHT, 10)
-		for k in 5:
-			var a := TAU * float(k) / 5.0
-			bk.box(Vector3(side * (tw * 0.5 + 0.02), cos(a) * r * 0.27, sin(a) * r * 0.27),
-				Vector3(0.03, r * 0.07, r * 0.07))
-		var mesh := ArrayMesh.new()
-		for kk in g:
-			_commit(g[kk], mesh, _material(str(kk), paint, d, "Chassis"))
+		var key := "%.3f|%d" % [p.z, 1 if p.x >= 0.0 else -1]
+		p.x -= side * float(push.get(key, 0.0))
+		var mkey := "%.3f|%.3f|%d" % [r, tw, int(side)]
+		if not meshes.has(mkey):
+			var g := _kits(["tyre", "rim", "frame"])
+			var tk: _K = g["tyre"]
+			var rk: _K = g["rim"]
+			var bk: _K = g["frame"]
+			tk.cylinder(Vector3.ZERO, r, tw, Vector3.RIGHT, 22)
+			rk.cylinder(Vector3(side * 0.006, 0, 0), r * 0.58, tw, Vector3.RIGHT, 16)
+			rk.cylinder(Vector3(side * (tw * 0.5 + 0.01), 0, 0), r * 0.18, 0.04, Vector3.RIGHT, 10)
+			for k in lugs:
+				var a := TAU * float(k) / float(lugs)
+				bk.box(Vector3(side * (tw * 0.5 + 0.02), cos(a) * r * 0.27, sin(a) * r * 0.27),
+					Vector3(0.03, r * 0.07, r * 0.07))
+			var m := ArrayMesh.new()
+			for kk in g:
+				_commit(g[kk], m, _material(str(kk), paint, d, "Chassis"))
+			meshes[mkey] = m
+		var mesh: ArrayMesh = meshes[mkey]
 		var node := Node3D.new()
 		node.name = "W%d" % i
 		node.position = p
@@ -554,6 +577,13 @@ static func _cab(d: Dictionary, g: Dictionary) -> void:
 			_glass_slope(gk, Vector2(z0 + hood + 0.05, hood_top + 0.14),
 				Vector2(z0 + hood + 0.8, cab_h - 0.05), cab_w * 0.9)
 			_side_windows(gk, z0 + hood + 0.25, z0 + hood + 1.05, hood_top + 0.25, cab_h - 0.12, cab_w)
+			# The grille between the headlights, with its slats.
+			var gy0 := yb + 0.5
+			var gy1 := hood_top - 0.02
+			(g["trim"] as _K).box(Vector3(0, (gy0 + gy1) * 0.5, z0 - 0.004), Vector3(cab_w * 0.42, gy1 - gy0, 0.02))
+			for k in 3:
+				(g["dark"] as _K).box(Vector3(0, gy0 + (gy1 - gy0) * (0.25 + 0.25 * float(k)), z0 - 0.016),
+					Vector3(cab_w * 0.38, 0.03, 0.01))
 		"cowl":
 			hood_top = fy + 0.75
 			var hp := PackedVector2Array([Vector2(z0, yb), Vector2(z0, yb + 0.7),
@@ -601,11 +631,48 @@ static func _cab(d: Dictionary, g: Dictionary) -> void:
 	var hk: _K = g["head"]
 	var hl_y := yb + 0.42 if style != "forward" else fy + 0.45
 	for sx in [-1.0, 1.0]:
-		hk.box(Vector3(sx * (bw * 0.5 - 0.2), hl_y, z0 - 0.006), Vector3(0.24, 0.13, 0.03))
+		# A real headlamp: a 30 x 16 cm lens in a bezel standing 6 cm proud.
+		tk.box(Vector3(sx * (bw * 0.5 - 0.22), hl_y, z0 - 0.03), Vector3(0.34, 0.2, 0.06))
+		hk.box(Vector3(sx * (bw * 0.5 - 0.22), hl_y, z0 - 0.062), Vector3(0.3, 0.16, 0.01))
 		var mz := z0 + hood + 0.3 if style != "forward" else z0 + 0.25
 		var my := maxf(cab_h - 0.6, hood_top + 0.3) if style != "forward" else float(b["h"]) * 0.62
 		tk.box(Vector3(sx * (bw * 0.5 + 0.2), my, mz), Vector3(0.05, 0.32, 0.18))
 		tk.box(Vector3(sx * (bw * 0.5 + 0.1), my, mz + 0.02), Vector3(0.2, 0.025, 0.03))
+	# Arches round the wheels under the cab's own panels (the cab extrusion
+	# runs to cab_len whether or not the shell takes over behind it).
+	_wheel_arches(d, g["dark"], cab_w * 0.5, z0, z0 + cab_len, yb)
+
+
+## A dark fender box round each wheel that sits under a panel between
+## `za` and `zb` (vehicle-local z) whose bottom edge `panel_y0` is below the
+## tyre's top: the arch the tyre would otherwise poke through. Dually pairs
+## share one arch (the outermost wheel of a side at that axle).
+static func _wheel_arches(d: Dictionary, dk: _K, half_w: float, za: float, zb: float, panel_y0: float) -> void:
+	var outer := {}
+	for w in d["wheels"]:
+		var wd: Dictionary = w
+		var p: Vector3 = wd["pos"]
+		var key := "%.3f|%d" % [p.z, 1 if p.x >= 0.0 else -1]
+		if not outer.has(key) or absf(p.x) > absf((outer[key] as Dictionary)["pos"].x):
+			outer[key] = wd
+	for key in outer:
+		var wd: Dictionary = outer[key]
+		var p: Vector3 = wd["pos"]
+		var r := float(wd["r"])
+		if p.z < za + 0.05 or p.z > zb - 0.05:
+			continue
+		var top := r + ARCH_CLEAR_M
+		if top <= panel_y0 + 0.02:
+			continue
+		var side := 1.0 if p.x >= 0.0 else -1.0
+		var yc := (panel_y0 - 0.02 + top) * 0.5
+		dk.box(Vector3(side * (half_w + 0.012), yc, p.z), Vector3(0.03, top - panel_y0 + 0.02, 2.0 * (r + ARCH_CLEAR_M)))
+		# The lip of the arch over the tyre.
+		dk.box(Vector3(side * (half_w + 0.03), top, p.z), Vector3(0.07, 0.025, 2.0 * (r + ARCH_CLEAR_M) + 0.02))
+
+
+## The arch stands this far clear of the tyre all round.
+const ARCH_CLEAR_M := 0.08
 
 
 # --- the living box ---------------------------------------------------------------------
@@ -671,11 +738,17 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 	var wall_top := H - crown - r
 	_windows(d, sh["glass"], hw, floor_y, wall_top, z0, z1, style, integral, rake_top)
 	_doors(d, sh, hw, floor_y, y0, wall_top, z0, z1, style, integral)
-	# Integral bodies carry the windshield in their front face.
+	# Arches round the wheels under the shell (a van's rears, a bus's).
+	_wheel_arches(d, sh["dark"], hw, z0 + rake_top, z1, y0)
+	# Integral bodies carry the windshield in their front face: a Class A's
+	# runs from ~0.9 m over the body's bottom edge (the real 1.6 m), a bus's
+	# from above its hood line.
 	if integral and style != "full_van":
-		var wz := z0 + _rake(floor_y + 0.9, rake_from, H, rake_top) - 0.006
-		var wz2 := z0 + _rake(wall_top - 0.2, rake_from, H, rake_top) - 0.006
-		_glass_slope(sh["glass"], Vector2(wz, floor_y + 0.85), Vector2(wz2, wall_top - 0.2), hw * 1.8)
+		var ws_lo := y0 + 0.9 if style == "forward" else floor_y + 0.85
+		var ws_hi := minf(wall_top - 0.2, ws_lo + 1.3)
+		var wz := z0 + _rake(ws_lo + 0.05, rake_from, H, rake_top) - 0.006
+		var wz2 := z0 + _rake(ws_hi, rake_from, H, rake_top) - 0.006
+		_glass_slope(sh["glass"], Vector2(wz, ws_lo), Vector2(wz2, ws_hi), hw * 1.8)
 	# Stripe band down both sides.
 	var paint: Dictionary = (d["spec"] as Dictionary)["paint"]
 	if bool(paint.get("stripe_on", false)):
@@ -692,10 +765,11 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 		for ry in [floor_y - 0.2, floor_y + 0.55]:
 			for sx in [-1.0, 1.0]:
 				tk.box(Vector3(sx * (hw + 0.012), ry, (z0 + z1) * 0.5), Vector3(0.02, 0.07, z1 - z0 - 0.1))
-	# Rear lights + bumper.
+	# Rear lights (a 12 x 34 cm lamp in a bezel, 5 cm proud) + bumper.
 	var tl: _K = g["tail"]
 	for sx in [-1.0, 1.0]:
-		tl.box(Vector3(sx * (hw - 0.14), y0 + 0.35, z1 + 0.012), Vector3(0.18, 0.28, 0.02))
+		(g["trim"] as _K).box(Vector3(sx * (hw - 0.16), y0 + 0.4, z1 + 0.025), Vector3(0.16, 0.38, 0.05))
+		tl.box(Vector3(sx * (hw - 0.16), y0 + 0.4, z1 + 0.055), Vector3(0.12, 0.34, 0.01))
 	(g["trim"] as _K).box(Vector3(0, y0 + 0.02, z1 + 0.07), Vector3(hw * 1.9, 0.16, 0.14))
 
 
@@ -750,35 +824,22 @@ static func _rake(y: float, from_y: float, H: float, top: float) -> float:
 	return top * clampf((y - from_y) / (H - from_y), 0.0, 1.0)
 
 
+## The side panes are VehicleDesign.window_spans — the one window rule,
+## which the exterior checks read too — plus a rear window on bus / band
+## bodies (not on a barn-door van: its doors have them).
 static func _windows(d: Dictionary, gk: _K, hw: float, floor_y: float, wall_top: float,
-		z0: float, z1: float, style: String, integral: bool, rake: float) -> void:
+		_z0: float, z1: float, _style: String, _integral: bool, _rake: float) -> void:
 	var kind := str((d["body"] as Dictionary)["windows"])
 	if kind == "none":
 		return
-	var house: Dictionary = d["house"]
-	var hz0 := maxf(float(house["z0"]), z0 + rake + 0.25)
-	var hz1 := minf(float(house["z1"]), z1) - 0.35
-	var y_lo := floor_y + 0.85
-	var y_hi := minf(wall_top - 0.18, floor_y + 1.75)
-	if y_hi - y_lo < 0.25:
-		return
+	for w in VehicleDesign.window_spans(d):
+		var wd: Dictionary = w
+		_pane(gk, float(wd["sx"]), hw, float(wd["z0"]), float(wd["z1"]), float(wd["y0"]), float(wd["y1"]))
 	if kind == "bus" or kind == "band":
-		var pane := 0.78 if kind == "bus" else 1.05
-		var gap := 0.11
-		var z := hz0 if kind == "band" else maxf(z0 + 0.95, hz0 - 0.9)
-		while z + pane <= hz1:
-			for sx in [-1.0, 1.0]:
-				_pane(gk, sx, hw, z, z + pane, y_lo, y_hi)
-			z += pane + gap
-	else:
-		# A few: one each side mid-box, one more on the curb side forward.
-		var mz := (hz0 + hz1) * 0.5
-		for sx in [-1.0, 1.0]:
-			_pane(gk, sx, hw, mz - 0.45, mz + 0.45, y_lo + 0.1, y_hi - 0.05)
-		if hz1 - hz0 > 3.0:
-			_pane(gk, -1.0, hw, hz1 - 0.9, hz1 - 0.2, y_lo + 0.15, y_hi - 0.1)
-	# A rear window on buses / RVs (not on a barn-door van: its doors have them).
-	if kind == "bus" or kind == "band":
+		var y_lo := floor_y + 0.85
+		var y_hi := minf(wall_top - 0.18, floor_y + 1.75)
+		if y_hi - y_lo < 0.25:
+			return
 		gk.quad(Vector3(-hw * 0.7, y_lo + 0.1, z1 + 0.006), Vector3(hw * 0.7, y_lo + 0.1, z1 + 0.006),
 			Vector3(hw * 0.7, y_hi, z1 + 0.006), Vector3(-hw * 0.7, y_hi, z1 + 0.006), Vector3.BACK)
 
@@ -788,8 +849,12 @@ static func _pane(gk: _K, sx: float, hw: float, za: float, zb: float, ya: float,
 	gk.quad(Vector3(x, ya, za), Vector3(x, ya, zb), Vector3(x, yb, zb), Vector3(x, yb, za), Vector3(sx, 0, 0))
 
 
+## The step under a bus door hangs this far below its sill.
+const BUS_STEP_M := 0.25
+
+
 static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0: float,
-		wall_top: float, z0: float, z1: float, style: String, integral: bool) -> void:
+		wall_top: float, _z0: float, z1: float, _style: String, _integral: bool) -> void:
 	var b: Dictionary = d["body"]
 	var dk: _K = sh["door"]
 	var tk: _K = sh["trim"]
@@ -813,6 +878,12 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 			(sh["glass"] as _K).quad(Vector3(x + 0.002, floor_y + 0.9, dz0 + 0.06),
 				Vector3(x + 0.002, floor_y + 0.9, dz1 - 0.06), Vector3(x + 0.002, dy1 - 0.1, dz1 - 0.06),
 				Vector3(x + 0.002, dy1 - 0.1, dz0 + 0.06), Vector3.RIGHT)
+			# A step down from the door: a 25 cm tread hung under the sill.
+			tk.box(Vector3(hw + 0.14, dy0 - BUS_STEP_M, (dz0 + dz1) * 0.5), Vector3(0.3, 0.05, dz1 - dz0 - 0.04))
+			tk.box(Vector3(hw + 0.02, dy0 - BUS_STEP_M * 0.5, (dz0 + dz1) * 0.5), Vector3(0.03, BUS_STEP_M, dz1 - dz0 - 0.04))
+		elif side == "slider" or side == "hinged":
+			# A running board under the door, a hand's width out from the sill.
+			tk.box(Vector3(hw + 0.1, y0 - 0.06, (dz0 + dz1) * 0.5), Vector3(0.22, 0.04, dz1 - dz0 + 0.3))
 	var rear := str(b["rear_door"])
 	if rear == "none":
 		return
@@ -820,6 +891,12 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 	var ry0 := floor_y - 0.05
 	var ry1 := minf(wall_top - 0.08, floor_y + (2.2 if rear == "barn" else 2.4))
 	var rw := hw - 0.08
+	for sp in spans:
+		var sd: Dictionary = sp
+		if str(sd["where"]) == "rear":
+			ry0 = float(sd["y0"])
+			ry1 = float(sd["y1"])
+			rw = (float(sd["x1"]) - float(sd["x0"])) * 0.5
 	dk.quad(Vector3(-rw, ry0, rz), Vector3(rw, ry0, rz), Vector3(rw, ry1, rz), Vector3(-rw, ry1, rz), Vector3.BACK)
 	match rear:
 		"barn":
@@ -975,7 +1052,11 @@ static func _floor_and_interior(d: Dictionary, g: Dictionary) -> void:
 	(g["floor"] as _K).box(Vector3(0, fy - 0.03, (hz0 + hz1) * 0.5), Vector3(hw * 2.0, 0.06, hz1 - hz0))
 	# Under the floor, the body's sill down to its bottom (no see-through gap
 	# over the frame on a box body).
+	var trailer := str(d["cab"]) == "none"
 	for e in d["interior"]:
+		# A trailer's propane bottles ride its tongue (drawn by _chassis).
+		if trailer and str((e as Dictionary)["type"]) == "propane":
+			continue
 		_element(e as Dictionary, g, fy)
 
 

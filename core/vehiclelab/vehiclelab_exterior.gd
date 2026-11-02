@@ -17,6 +17,7 @@ extends RefCounted
 ## (u, v) is the element's CENTRE on that face.
 
 const FACES := ["roof", "left", "right", "rear"]
+const ROOF_CORNER_SHARE := 0.6
 
 ## Solar modules a van builder buys (data sheets as published, rounded):
 ## a 400 W rigid 108-half-cell module (1722 x 1134 mm, ~21 kg), a 200 W rigid
@@ -38,7 +39,8 @@ const TYPES := {
 	"vent": {"label": "Roof vent", "icon": "wind", "faces": ["roof"], "w": 0.38, "l": 0.38, "h": 0.1,
 		"kg": 2.0, "load_w": 0.0, "tip": "A passive 14 in roof vent"},
 	"ac": {"label": "Rooftop AC", "icon": "snowflake", "faces": ["roof"], "w": 0.76, "l": 1.02, "h": 0.32,
-		"kg": 40.0, "load_w": 1400.0, "tip": "A 13,500 BTU rooftop air conditioner (~1.4 kW running)"},
+		"kg": 40.0, "load_w": 1400.0, "ac_load": true,
+		"tip": "A 13,500 BTU rooftop air conditioner (~1.4 kW running, 120 V: an inverter or shore power)"},
 	"starlink": {"label": "Starlink dish", "icon": "satellite-dish", "faces": ["roof"], "w": 0.6, "l": 0.6, "h": 0.5,
 		"kg": 4.0, "load_w": 75.0, "tip": "A satellite internet dish on a short mast (~75 W)"},
 	"antenna": {"label": "Antenna", "icon": "radio", "faces": ["roof"], "w": 0.08, "l": 0.08, "h": 1.0,
@@ -108,13 +110,16 @@ static func label_of(el: Dictionary) -> String:
 	return str(t.get("label", str(el.get("type", ""))))
 
 
-## The four faces' extents on a solved design (local metres).
+## The four faces' extents on a solved design (local metres). The roof
+## reaches ROOF_CORNER_SHARE of the way into the corner radius: a module's
+## edge may overhang the start of the curve (two 1.134 m modules across a
+## 2.44 m bus roof is how skoolies are built), not the wall.
 static func faces(d: Dictionary) -> Dictionary:
 	var b: Dictionary = d["body"]
 	var hw := float(b["w"]) * 0.5
 	var z0 := float(b["z0"]) + float(b.get("rake_top", 0.0)) + 0.05
 	var z1 := float(b["z1"])
-	var top_hw := maxf(hw - float(b.get("corner_r", 0.1)), 0.2)
+	var top_hw := maxf(hw - float(b.get("corner_r", 0.1)) * (1.0 - ROOF_CORNER_SHARE), 0.2)
 	return {
 		"roof": {"u0": -top_hw, "u1": top_hw, "v0": z0, "v1": z1 - 0.05},
 		"left": {"u0": float(b["z0"]) + 0.1, "u1": z1 - 0.05, "v0": float(b["y0"]) + 0.05, "v1": float(b["wall_top"]), "x": -hw},
@@ -166,6 +171,28 @@ static func resolve_element(d: Dictionary, e: Dictionary) -> Dictionary:
 	var f: Dictionary = faces(d)[face]
 	var span_u := float(f["u1"]) - float(f["u0"])
 	var span_v := float(f["v1"]) - float(f["v0"])
+	if type == "solar":
+		# An array that hangs off the face loses whole modules, never part
+		# of one: the columns (then the rows) come down until it fits, and
+		# the item says how many it asked for (`cut_cols` / `cut_rows`).
+		var mu := float(el["mod_u"])
+		var mv := float(el["mod_v"])
+		var cols := int(el["cols"])
+		var rows := int(el["rows"])
+		var want_cols := cols
+		var want_rows := rows
+		while cols > 1 and float(cols) * mu + float(cols - 1) * MODULE_GAP > span_u + 1e-6:
+			cols -= 1
+		while rows > 1 and float(rows) * mv + float(rows - 1) * MODULE_GAP > span_v + 1e-6:
+			rows -= 1
+		el["cols"] = cols
+		el["rows"] = rows
+		if cols < want_cols:
+			el["cut_cols"] = want_cols
+		if rows < want_rows:
+			el["cut_rows"] = want_rows
+		el["w"] = float(cols) * mu + float(cols - 1) * MODULE_GAP
+		el["l"] = float(rows) * mv + float(rows - 1) * MODULE_GAP
 	el["w"] = minf(float(el["w"]), span_u)
 	el["l"] = minf(float(el["l"]), span_v) if type != "ladder" else float(el["l"])
 	var mid_u := (float(f["u0"]) + float(f["u1"])) * 0.5
@@ -187,6 +214,86 @@ static func resolve_element(d: Dictionary, e: Dictionary) -> Dictionary:
 			if float(el["l"]) < span_v else mid_v
 	el["id"] = str(el.get("id", ""))
 	return el
+
+
+# --- checks -----------------------------------------------------------------------
+
+## The outside's checks, {level, text, ids, why}: an array that lost
+## modules to fit its face, two items on one face overlapping, a side item
+## across the side door or a window. VehicleDesign adds them to its own.
+static func checks(d: Dictionary) -> Array:
+	var c: Array = []
+	var els: Array = d.get("exterior", [])
+	if els.is_empty():
+		return c
+	for e in els:
+		var el: Dictionary = e
+		if str(el["type"]) != "solar":
+			continue
+		var cut := el.has("cut_cols") or el.has("cut_rows")
+		if cut:
+			var want := int(el.get("cut_cols", el["cols"])) * int(el.get("cut_rows", el["rows"]))
+			var got := int(el["cols"]) * int(el["rows"])
+			c.append({"level": "warn", "ids": [str(el["id"])],
+				"text": "The solar array does not fit the %s: %d of %d modules dropped." %
+					[str(el["face"]), want - got, want],
+				"why": "A module hanging past the edge has nothing to mount to; the array keeps whole modules only. A smaller module or the long side across fits more."})
+	# Two items on one face: their (u, v) rectangles overlap.
+	for i in els.size():
+		for j in range(i + 1, els.size()):
+			var a: Dictionary = els[i]
+			var b: Dictionary = els[j]
+			if str(a["face"]) != str(b["face"]):
+				continue
+			# Things are mounted ON a rack: a module or a box over it is the point.
+			if str(a["type"]) == "rack" or str(b["type"]) == "rack":
+				continue
+			if _rect_overlap(float(a["u"]), float(a["v"]), float(a["w"]), float(a["l"]),
+					float(b["u"]), float(b["v"]), float(b["w"]), float(b["l"])):
+				c.append({"level": "warn", "ids": [str(a["id"]), str(b["id"])],
+					"text": "%s and %s overlap on the %s." % [label_of(a), label_of(b), str(a["face"])],
+					"why": "Two things cannot share the same patch of skin; slide one along the face."})
+	# A side item across the side door or a window.
+	var hw := float((d["body"] as Dictionary)["w"]) * 0.5
+	for e in els:
+		var el: Dictionary = e
+		var face := str(el["face"])
+		if face != "left" and face != "right":
+			continue
+		if str(el["type"]) == "awning":
+			continue   # it hangs above the wall, over the door by design
+		var sx := 1.0 if face == "right" else -1.0
+		var eu := float(el["u"])
+		var ev := float(el["v"])
+		var ew := float(el["w"])
+		var el_l := float(el["l"])
+		if sx > 0.0:
+			for sp in VehicleDesign.door_spans(d):
+				var sd: Dictionary = sp
+				if str(sd["where"]) != "side":
+					continue
+				var dz := (float(sd["z0"]) + float(sd["z1"])) * 0.5
+				var dy := (float(sd["y0"]) + float(sd["y1"])) * 0.5
+				if _rect_overlap(eu, ev, ew, el_l, dz, dy, float(sd["z1"]) - float(sd["z0"]), float(sd["y1"]) - float(sd["y0"])):
+					c.append({"level": "warn", "ids": [str(el["id"])],
+						"text": "The %s sits across the side door." % label_of(el).to_lower(),
+						"why": "The door has to open and people step through it; move the item along the wall."})
+		for w in VehicleDesign.window_spans(d):
+			var wd: Dictionary = w
+			if float(wd["sx"]) != sx:
+				continue
+			var wz := (float(wd["z0"]) + float(wd["z1"])) * 0.5
+			var wy := (float(wd["y0"]) + float(wd["y1"])) * 0.5
+			if _rect_overlap(eu, ev, ew, el_l, wz, wy, float(wd["z1"]) - float(wd["z0"]), float(wd["y1"]) - float(wd["y0"])):
+				c.append({"level": "warn", "ids": [str(el["id"])],
+					"text": "The %s covers a window on the %s side." % [label_of(el).to_lower(), face],
+					"why": "The body's own window is there (over the bed or the dinette); mount the item beside it."})
+	return c
+
+
+static func _rect_overlap(au: float, av: float, aw: float, al: float,
+		bu: float, bv: float, bw: float, bl: float) -> bool:
+	return absf(au - bu) < (aw + bw) * 0.5 - 0.01 and absf(av - bv) < (al + bl) * 0.5 - 0.01
 
 
 ## Where an element sits in the vehicle's frame: {centre, basis (x = u,

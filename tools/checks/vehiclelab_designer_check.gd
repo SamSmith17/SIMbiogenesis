@@ -133,8 +133,16 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await HarnessInput.mouse_move(vp, spot)
 		await HarnessInput.click(vp, spot)
 		await _settle(tree, 8)
-	var w1 := float((ui.call("design") as Dictionary)["exterior_totals"]["solar_w"])
-	_ok(w1 >= w0 + 799.0, "two more 400 W modules reach the totals (%.0f -> %.0f W)" % [w0, w1])
+	# The palette's item asks for two 400 W modules across; a roof narrower
+	# than that keeps whole modules only (Phase 2), so what landed is what
+	# fits, and every module kept reaches the totals.
+	var d3: Dictionary = ui.call("design")
+	var w1 := float(d3["exterior_totals"]["solar_w"])
+	var placed := _find_type(d3, "solar", 0)
+	var kept := int(placed.get("cols", 0)) * int(placed.get("rows", 0))
+	var asked := int(placed.get("cut_cols", placed.get("cols", 0))) * int(placed.get("cut_rows", placed.get("rows", 0)))
+	_ok(not placed.is_empty() and kept >= 1 and absf(w1 - w0 - 400.0 * float(kept)) < 0.5,
+		"the modules the roof holds reach the totals (%d of %d asked, %.0f -> %.0f W)" % [kept, asked, w0, w1])
 	# Paint and chassis / body through the rows.
 	var picker := ui.find_child("vl_paint_body", true, false) as ColorPickerButton
 	if picker != null:

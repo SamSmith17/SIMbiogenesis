@@ -51,6 +51,17 @@ const TRAILER_BRAKES_KG := 3000.0 * 0.45359237
 ## over ~15 % it loads the hitch and lifts the tow vehicle's front axle.
 const TONGUE_MIN := 0.10
 const TONGUE_MAX := 0.15
+## The gap between a dually's two tyres (the wheels dish apart): wide enough
+## to read as two wheels from ten metres.
+const DUAL_GAP_M := 0.05
+## Rear overhang past two thirds of the wheelbase drags in dips and lifts the
+## front axle (the body builders' guides' rule of thumb; Phase 0's catalog
+## test holds every combination to it, this is the player's own warning).
+const OVERHANG_MAX_WB := 2.0 / 3.0
+## Wheel lugs by weight class: 5 on a light truck or trailer hub, 8 on a
+## medium-duty dually (E-450, NPR), 10 on a heavy hub (bus, M2, tractor).
+const LUG_MEDIUM_KG := 5000.0
+const LUG_HEAVY_KG := 12000.0
 
 static var _cache := {}
 
@@ -76,6 +87,8 @@ static func _solve(s: Dictionary) -> Dictionary:
 	_layout(d, ch, bd)
 	_interior(d, s)
 	_exterior(d, s)
+	# The walkway flood once, for the checks, the cargo bay and the designer.
+	d["access"] = VehicleInterior.access(d)
 	d["systems"] = VehicleInterior.systems(d)
 	_masses(d, ch, bd, s)
 	_cargo(d, bd)
@@ -202,7 +215,7 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 			var x: float = side * (track * 0.5)
 			wheels.append({"pos": Vector3(x, r, z), "r": r, "w": tw, "steer": ad["steer"]})
 			if bool(ad["dual"]):
-				wheels.append({"pos": Vector3(x + side * (tw + 0.03), r, z), "r": r, "w": tw,
+				wheels.append({"pos": Vector3(x + side * (tw + DUAL_GAP_M), r, z), "r": r, "w": tw,
 					"steer": false})
 	d["length_m"] = length
 	d["width_m"] = width
@@ -246,6 +259,13 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	d["axles"] = axles
 	d["wheels"] = wheels
 	d["drivable"] = drivable
+	d["wheelbase_m"] = wb
+	# The box behind the last axle (a trailer's rear: behind its axle group).
+	var last_zf := 0.0
+	for a in axles:
+		last_zf = maxf(last_zf, float((a as Dictionary)["zf"]))
+	d["rear_overhang_m"] = length - last_zf
+	d["lug_count"] = lug_count(float(ch.get("gvwr_kg", 0.0)), cab == "none")
 	d["driver_seat"] = Vector3(seat.x, seat.y, seat.z - half) if drivable else Vector3.ZERO
 	var frame_h := float(ch.get("frame_h_m", 0.7))
 	d["frame"] = {"y": frame_h, "track": track}
@@ -289,6 +309,7 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	var black_l := 0.0
 	var propane_lb := 0.0
 	var shore_w := 0.0
+	var inverter_w := 0.0
 	var mass := 0.0
 	var n := 0
 	var loads: Array = []
@@ -349,6 +370,8 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 			propane_lb += float(el.get("lb", 40.0))
 		if provides.has("shore"):
 			shore_w += float(el.get("supply_w", t.get("supply_w", 1800.0)))
+		if provides.has("inverter"):
+			inverter_w += float(el.get("supply_w", t.get("supply_w", 2000.0)))
 	d["interior"] = els
 	d["beds"] = beds
 	d["sleeps"] = sleeps
@@ -360,6 +383,7 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	d["black_l"] = black_l
 	d["propane_lb"] = propane_lb
 	d["shore_w"] = shore_w
+	d["inverter_w"] = inverter_w
 	d["fluids"] = fluids
 	d["interior_kg"] = mass
 	d["house_loads"] = loads
@@ -482,6 +506,121 @@ static func door_spans(d: Dictionary) -> Array:
 		out.append({"where": "rear", "x0": -rw, "x1": rw, "z": z1, "y0": floor_y - 0.05,
 			"y1": minf(float(b["wall_top"]) - 0.08, floor_y + (2.2 if rear == "barn" else 2.4))})
 	return out
+
+
+## The side windows as the body draws them, vehicle-local: [{sx (-1 left /
+## +1 right), z0, z1, y0, y1}]. "bus" / "band" bodies carry a run of panes
+## down each side; a "few"-window body gets one pane over each bed, dinette,
+## sofa or bench on the wall it stands against (where someone sits or lies
+## and wants to look out), never over the side door or a tall fixture (a
+## shower, a cabinet, a fridge) and never past the living box; with nothing
+## to look out from, one pane mid-box each side. The builder draws these and
+## VehicleExterior.checks keeps side items off them.
+static func window_spans(d: Dictionary) -> Array:
+	var out: Array = []
+	var b: Dictionary = d["body"]
+	var kind := str(b.get("windows", "few"))
+	if kind == "none":
+		return out
+	var house: Dictionary = d["house"]
+	var floor_y := float(b["floor_y"])
+	var wall_top := float(b["wall_top"])
+	var z0 := float(b["z0"])
+	var z1 := float(b["z1"])
+	var rake := float(b.get("rake_top", 0.0))
+	var hz0 := maxf(float(house["z0"]), z0 + rake + 0.25)
+	var hz1 := minf(float(house["z1"]), z1) - 0.35
+	var y_lo := floor_y + 0.85
+	var y_hi := minf(wall_top - 0.18, floor_y + 1.75)
+	if y_hi - y_lo < 0.25 or hz1 - hz0 < 0.5:
+		return out
+	if kind == "bus" or kind == "band":
+		var pane := 0.78 if kind == "bus" else 1.05
+		var gap := 0.11
+		var z := hz0 if kind == "band" else maxf(z0 + 0.95, hz0 - 0.9)
+		while z + pane <= hz1:
+			for sx in [-1.0, 1.0]:
+				out.append({"sx": sx, "z0": z, "z1": z + pane, "y0": y_lo, "y1": y_hi})
+			z += pane + gap
+		return out
+	# "few": over the places people sit and lie, on the wall they are against.
+	var hw := float(house["w"]) * 0.5
+	var door_z: Array = []
+	for sp in door_spans(d):
+		if str((sp as Dictionary)["where"]) == "side":
+			door_z.append([float((sp as Dictionary)["z0"]) - 0.08, float((sp as Dictionary)["z1"]) + 0.08])
+	var tall: Array = []
+	var wants: Array = []
+	for e in d.get("interior", []):
+		var el: Dictionary = e
+		if bool(el.get("cabover", false)):
+			continue
+		var type := str(el["type"])
+		var against := absf(float(el["x"])) + float(el["fx"]) * 0.5 > hw - 0.35
+		var sx := 1.0 if float(el["x"]) > 0.0 else -1.0
+		var ez0 := float(el["z"]) - float(el["fz"]) * 0.5
+		var ez1 := float(el["z"]) + float(el["fz"]) * 0.5
+		if WINDOW_SEATS.has(type):
+			# A bed across the box looks out of both sides.
+			var sides: Array = [sx] if against else ([-1.0, 1.0] if float(el["fx"]) > hw * 1.2 else [])
+			for s2 in sides:
+				wants.append({"sx": s2, "z0": ez0, "z1": ez1})
+		elif float(el["top_y"]) - floor_y > 1.2 and against:
+			tall.append({"sx": sx, "z0": ez0, "z1": ez1})
+	for w in wants:
+		var wd: Dictionary = w
+		var a := maxf(float(wd["z0"]) + 0.08, hz0)
+		var bb := minf(float(wd["z1"]) - 0.08, hz1)
+		if float(wd["sx"]) > 0.0:
+			for dz in door_z:
+				# Trim the pane back from the door's edge.
+				if a < float(dz[1]) and bb > float(dz[0]):
+					if float(dz[0]) - a > bb - float(dz[1]):
+						bb = minf(bb, float(dz[0]))
+					else:
+						a = maxf(a, float(dz[1]))
+		for t in tall:
+			var td: Dictionary = t
+			if float(td["sx"]) == float(wd["sx"]) and a < float(td["z1"]) and bb > float(td["z0"]):
+				if float(td["z0"]) - a > bb - float(td["z1"]):
+					bb = minf(bb, float(td["z0"]) - 0.05)
+				else:
+					a = maxf(a, float(td["z1"]) + 0.05)
+		# Cap a long run (a 2 m bed gets a 1.1 m pane, centred).
+		if bb - a > WINDOW_MAX_M:
+			var m := (a + bb) * 0.5
+			a = m - WINDOW_MAX_M * 0.5
+			bb = m + WINDOW_MAX_M * 0.5
+		if bb - a < 0.45:
+			continue
+		# Merge with a pane already on that wall that it touches.
+		var merged := false
+		for o in out:
+			var od: Dictionary = o
+			if float(od["sx"]) == float(wd["sx"]) and a < float(od["z1"]) + 0.1 and bb > float(od["z0"]) - 0.1:
+				od["z0"] = minf(float(od["z0"]), a)
+				od["z1"] = maxf(float(od["z1"]), bb)
+				merged = true
+				break
+		if not merged:
+			out.append({"sx": float(wd["sx"]), "z0": a, "z1": bb, "y0": y_lo + 0.1, "y1": y_hi - 0.05})
+	if out.is_empty():
+		var mz := (hz0 + hz1) * 0.5
+		for sx in [-1.0, 1.0]:
+			out.append({"sx": sx, "z0": mz - 0.45, "z1": mz + 0.45, "y0": y_lo + 0.1, "y1": y_hi - 0.05})
+	return out
+
+
+## Interior types a window is cut beside.
+const WINDOW_SEATS := ["bed", "bunk", "dinette", "sofa", "bench"]
+const WINDOW_MAX_M := 1.1
+
+
+## Wheel lugs by weight class (see LUG_MEDIUM_KG / LUG_HEAVY_KG).
+static func lug_count(gvwr_kg: float, trailer: bool) -> int:
+	if trailer or gvwr_kg < LUG_MEDIUM_KG:
+		return 5
+	return 8 if gvwr_kg < LUG_HEAVY_KG else 10
 
 
 ## One spot per sleeper on a bed: side by side across its short side, lying
@@ -765,15 +904,18 @@ static func _cargo(d: Dictionary, bd: Dictionary) -> void:
 		used += float(ed["fx"]) * float(ed["fz"])
 	var free := maxf(floor_area - used, 0.0)
 	var h := float(house["height"])
+	# The doors are door_spans' (the one door rule the builder draws from):
+	# the opening's width and height, capped at the box inside.
 	var doors: Array = []
-	var rd := str(bd.get("rear_door", "none"))
-	if rd != "none":
-		doors.append({"where": "rear", "kind": rd, "w_m": float(house["w"]) - 0.1,
-			"h_m": minf(h - 0.05, 2.2 if rd == "barn" else h - 0.05)})
-	var sd := str(bd.get("side_door", "none"))
-	if sd != "none":
-		var sw := 1.25 if sd == "slider" else (0.85 if sd == "bus" else 0.75)
-		doors.append({"where": "side", "kind": sd, "w_m": sw, "h_m": minf(h, 1.9)})
+	for sp in door_spans(d):
+		var sd: Dictionary = sp
+		var dh := minf(float(sd["y1"]) - float(sd["y0"]), h)
+		if str(sd["where"]) == "rear":
+			doors.append({"where": "rear", "kind": str(bd.get("rear_door", "none")),
+				"w_m": minf(float(sd["x1"]) - float(sd["x0"]), float(house["w"]) - 0.1), "h_m": dh})
+		else:
+			doors.append({"where": "side", "kind": str(bd.get("side_door", "none")),
+				"w_m": float(sd["z1"]) - float(sd["z0"]), "h_m": dh})
 	d["cargo"] = {"floor_free_m2": free, "volume_m3": free * h * 0.7, "doors": doors,
 		"payload_kg": maxf(float(d["payload_kg"]), 0.0)}
 
@@ -784,10 +926,12 @@ static func _checks(d: Dictionary) -> void:
 	var trailer := str(d["type"]) == "trailer" or not bool(d.get("drivable", false))
 	if float(d["payload_kg"]) < 0.0:
 		c.append({"level": "error", "text": "Over the GVWR by %d kg loaded (%d aboard, tanks full, %d kg of gear) — lighten the build." %
-			[int(-float(d["payload_kg"])), int(d["seats"]), int(GEAR_KG)]})
+			[int(-float(d["payload_kg"])), int(d["seats"]), int(GEAR_KG)],
+			"why": "The gross vehicle weight rating is what the axles, brakes and tyres are built for; over it the vehicle is unsafe and uninsurable."})
 	elif float(d.get("laden_out_kg", 0.0)) > float(d["gvwr_kg"]):
 		c.append({"level": "warn", "text": "Over the GVWR by %d kg once the grey and black tanks are full." %
-			int(float(d["laden_out_kg"]) - float(d["gvwr_kg"]))})
+			int(float(d["laden_out_kg"]) - float(d["gvwr_kg"])),
+			"why": "Waste water rides home full; dump before the drive or carry less fresh water."})
 	# Axle loads (the lever rule in _axle_loads).
 	if not trailer and bool(d.get("axle_check", true)):
 		var rear := float(d.get("axle_r_kg", 0.0))
@@ -795,53 +939,78 @@ static func _checks(d: Dictionary) -> void:
 		var gawr_r := float(d.get("gawr_r_kg", 0.0))
 		if gawr_r > 0.0 and rear > gawr_r:
 			c.append({"level": "warn", "text": "The rear axle carries %d kg, rated %d: move the battery and water forward." %
-				[int(rear), int(gawr_r)]})
+				[int(rear), int(gawr_r)],
+				"why": "An axle over its rating overloads its tyres and springs; the heavy things behind it lever the load onto it."})
 		var gawr_f := float(d.get("gawr_f_kg", 0.0))
 		if gawr_f > 0.0 and front > gawr_f:
-			c.append({"level": "warn", "text": "The front axle carries %d kg, rated %d." % [int(front), int(gawr_f)]})
+			c.append({"level": "warn", "text": "The front axle carries %d kg, rated %d." % [int(front), int(gawr_f)],
+				"why": "An axle over its rating overloads its tyres and springs; move weight back from the nose."})
 		var share := front / maxf(front + rear, 1.0)
 		if share < 0.2 and front + rear > 0.0:
 			c.append({"level": "warn", "text": "Only %d %% of the weight is on the front axle: it steers and brakes badly. Move weight forward." %
-				int(round(share * 100.0))})
+				int(round(share * 100.0)),
+				"why": "The steered wheels need weight on them to grip; under a fifth of it the nose goes light."})
 	elif trailer:
 		var pct := float(d.get("tongue_pct", 0.0))
 		if pct < TONGUE_MIN:
 			c.append({"level": "warn", "text": "Tongue weight %d %% (%d kg): under %d %% a trailer sways. Move weight ahead of the axles." %
-				[int(round(pct * 100.0)), int(float(d.get("tongue_kg", 0.0))), int(TONGUE_MIN * 100.0)]})
+				[int(round(pct * 100.0)), int(float(d.get("tongue_kg", 0.0))), int(TONGUE_MIN * 100.0)],
+				"why": "A light tongue lets the trailer's mass swing behind its axles; 10–15 % on the hitch keeps it tracking."})
 		elif pct > TONGUE_MAX:
 			c.append({"level": "info", "text": "Tongue weight %d %% (%d kg): heavy on the hitch; a weight-distributing hitch helps." %
 				[int(round(pct * 100.0)), int(float(d.get("tongue_kg", 0.0)))]})
 		if float(d["gvwr_kg"]) > TRAILER_BRAKES_KG and not bool(d.get("brakes", false)):
 			c.append({"level": "warn", "text": "A %s lb trailer needs its own brakes." %
-				UiText.thousands(int(round(float(d["gvwr_kg"]) / 0.45359237)))})
+				UiText.thousands(int(round(float(d["gvwr_kg"]) / 0.45359237))),
+				"why": "Most US states require trailer brakes over 3,000 lb; the tow vehicle's alone cannot stop the pair."})
 	# Height, width and the roof load.
 	var oh := float(d.get("overall_h_m", d["height_m"]))
 	if oh > MAX_HEIGHT_M:
-		c.append({"level": "warn", "text": "%.2f m tall with the roof items: over 13' 6\", the limit on most roads." % oh})
+		c.append({"level": "warn", "text": "%.2f m tall with the roof items: over 13' 6\", the limit on most roads." % oh,
+			"why": "Bridges and signs are set for 13' 6\"; a taller vehicle needs a permit and a route."})
 	if float(d.get("body_w_m", d["width_m"])) > MAX_WIDTH_M + 0.01:
-		c.append({"level": "warn", "text": "%.2f m wide with the side items: over 102\"." % float(d["body_w_m"])})
+		c.append({"level": "warn", "text": "%.2f m wide with the side items: over 102\"." % float(d["body_w_m"]),
+			"why": "102\" is the legal body width; side-mounted modules count as body, unlike an awning or a ladder."})
 	elif float(d.get("overall_w_m", d["width_m"])) > MAX_WIDTH_M + 2.0 * APPURTENANCE_M + 0.01:
 		c.append({"level": "warn", "text": "%.2f m wide: the awning or ladder stands more than 6\" past the body." %
-			float(d["overall_w_m"])})
+			float(d["overall_w_m"]),
+			"why": "The width law allows an appurtenance 6\" a side past the 102\" body; this one stands further out."})
 	var roof_max := float(d.get("roof_kg_max", 0.0))
 	var roof_load := float(d.get("roof_load_kg", 0.0))
 	if roof_max > 0.0 and roof_load > roof_max:
-		c.append({"level": "warn", "text": "%d kg on the roof, rated %d." % [int(roof_load), int(roof_max)]})
+		c.append({"level": "warn", "text": "%d kg on the roof, rated %d." % [int(roof_load), int(roof_max)],
+			"why": "The roof skin and its bows carry only so much; past the rating it dishes and leaks."})
 	if float(d.get("cg_rise_m", 0.0)) > 0.08:
 		c.append({"level": "info", "text": "The roof load raises the centre of mass %d cm." % int(round(float(d["cg_rise_m"]) * 100.0))})
-	if float(house["height"]) < 1.7 and str(d["type"]) != "trailer":
-		c.append({"level": "warn", "text": "Only %.2f m of headroom inside — most people stoop." %
-			float(house["height"])})
+	# The box behind the rear axle (not a trailer: its axles are placed for
+	# the tongue weight, and not the semi: the container rides its own tandem).
+	var wb := float(d.get("wheelbase_m", 0.0))
+	var ovh := float(d.get("rear_overhang_m", 0.0))
+	if not trailer and wb > 0.0 and bool(d.get("axle_check", true)) and ovh > wb * OVERHANG_MAX_WB + 0.01:
+		c.append({"level": "warn", "text": "%.1f m of body behind the rear axle on a %.1f m wheelbase (two thirds, %.1f m, is the usual limit)." %
+			[ovh, wb, wb * OVERHANG_MAX_WB],
+			"why": "A long rear overhang drags in dips and driveways and levers weight off the front axle; a longer wheelbase or a shorter box fixes it."})
+	# Headroom, trailers included.
+	var hh := float(house["height"])
+	if hh < VehicleInterior.CROUCH_M:
+		c.append({"level": "info", "text": "%.2f m inside: a crawl-in, not a stand-up." % hh,
+			"why": "Below 1.5 m nobody stands; a teardrop or a low-roof van is lived in sitting and lying."})
+	elif hh < VehicleInterior.STAND_M:
+		c.append({"level": "warn", "text": "%.2f m of headroom inside — most adults stoop." % hh,
+			"why": "A 1.75 m adult stands under 1.9 m with the finished ceiling; a high roof or a thinner ceiling gains it."})
 	if int(d["sleeps"]) == 0:
-		c.append({"level": "warn", "text": "No bed: nobody can sleep in it."})
+		c.append({"level": "warn", "text": "No bed: nobody can sleep in it.",
+			"why": "A living vehicle houses people by its beds; without one it is cargo space."})
 	var els: Array = d["interior"]
 	for i in els.size():
 		for j in range(i + 1, els.size()):
 			if _overlap(els[i], els[j]):
 				c.append({"level": "warn", "text": "%s and %s overlap." %
 					[str((els[i] as Dictionary)["label"]), str((els[j] as Dictionary)["label"])],
-					"ids": [str((els[i] as Dictionary)["id"]), str((els[j] as Dictionary)["id"])]})
+					"ids": [str((els[i] as Dictionary)["id"]), str((els[j] as Dictionary)["id"])],
+					"why": "Two things in one place; only a tank, a battery or an inverter may hide under a bed platform."})
 	c.append_array(VehicleInterior.checks(d))
+	c.append_array(VehicleExterior.checks(d))
 	var drag := float(d["length_m"])
 	if drag > 13.0:
 		c.append({"level": "info", "text": "%.1f m long: it needs a wide road and room to turn." % drag})

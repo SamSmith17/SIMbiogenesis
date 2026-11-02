@@ -907,8 +907,22 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designe
 # overloaded by a 20 ft trailer, wall thickness, the ProMaster's own roof,
 # the 13' 6" and roof-load warns, the new elements, series strings on the
 # graph node, towing's fuel / range / trip and VehicleTow.tow_check's
-# ratings. EXPECTED_CHECKS; --import first:
+# ratings; and the DESIGN RULES + GEOMETRY (polish Phase 2): the rear
+# overhang warn, an array hanging off its roof cut to whole modules, two
+# items on one patch, a side item across the door / over a window, seats
+# for the sleepers, a shower's tanks, a battery for the loads, an inverter
+# for the AC, a short bed, water days, headroom bars (trailers too), every
+# warning with its `why`, the cab walk-through strip, the cached access
+# flood, windows over beds and dinettes, the cargo doors from door_spans,
+# lugs by hub class on shared wheel meshes, dually gaps, wheel arches on
+# cab and shell, a trailer's propane on the tongue, the Class A
+# windshield's height. EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.gd
+# Every preset front / curb side / rear in one PNG (WINDOWED, not a
+# selftest; APPDATA at a scratch folder; --out=<png>, --only=van,rv): the
+# look pass — wheels in their arches, the grille and lights, the step under
+# a bus door, windows over the beds, propane on a trailer's tongue:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script tools/diag/vehicle_preset_grid_diag.gd
 # The same combinations as a table (length, WB, overhang, box start,
 # payload), then every preset's masses, axle split / tongue, roof load,
 # height with the roof items, mpg and checks:
@@ -11798,6 +11812,50 @@ driver's view out of the cab). All eight are done.
   widened to 6–10 (the old 10.4 t curb had held it at 9). Catalog: the
   Sprinter 3500 cab chassis (the Class C's real base); a 20 ft travel
   trailer overloads a 3,500 lb single axle, so that chassis is "other".
+- **Design rules and geometry (polish Phase 2, 2026-11-02).** Every check
+  carries `why` (the banner's tooltip) and `ids` ("Show it" selects an
+  interior element with the skin off, or a roof / side item with it on).
+  Rules: rear overhang past 2/3 of the wheelbase (`rear_overhang_m`,
+  `OVERHANG_MAX_WB`; the catalog test holds every combination, this is the
+  player's warn); a solar array that hangs off its face loses whole
+  COLUMNS then rows (`cut_cols` / `cut_rows`, the watts follow — the roof
+  face reaches `ROOF_CORNER_SHARE` 0.6 of the corner radius, since two
+  1.134 m modules across a 2.44 m bus roof is how skoolies are built);
+  `VehicleExterior.checks`: two items on one face overlap (a `rack` is
+  mounted on, never an overlap), a side item across the side door or over
+  a window; `VehicleInterior.checks`: seats ≥ sleepers (not trailers), a
+  shower needs fresh + grey, loads need a house battery (an EV's pack
+  counts), AC loads (`ac_load` types) need an inverter rated for them
+  (`inverter_w`, the inverter type's `supply_w` 2 kW) or a shore inlet, a
+  bed under `BED_MIN_M` 1.85, water days at CampProvisioning's 50 L
+  (warn under a day, note under three), headroom `STAND_M` 1.85 (a stock
+  school bus's 6' 2" — the plan's 1.9 flagged every unraised skoolie) warn
+  / `CROUCH_M` 1.5 note, trailers included. Access: the cab walk-through
+  is a `CAB_WALK_M` strip between a van's seats or beside a bus's driver
+  (`cab_walk_x`); a step van has none — its curb-side cab door is its side
+  door (`sliding_step`), an entry on the right only. `VehicleInterior
+  .access` is cached on `d["access"]` (one flood per solve). Windows:
+  `VehicleDesign.window_spans` is the ONE window rule — bus / band runs,
+  and a "few" body gets a pane over each bed, dinette, sofa or bench on
+  the wall it stands against (a bed across the box looks out both sides),
+  trimmed back from the side door and from tall fixtures, capped at
+  `WINDOW_MAX_M`, merged when touching, one mid-box pane each side with
+  nothing to look out from; the builder draws them, the side-item checks
+  read them. `_cargo` and the builder's rear door read `door_spans`.
+  Geometry: wheel arches (`_wheel_arches`, a dark fender box + lip at
+  each outer wheel under the cab's and the shell's panels, `ARCH_CLEAR_M`),
+  lugs by weight class (`lug_count`: 5 under 5 t, 8 under 12 t, else 10),
+  ONE wheel ArrayMesh per (r, w, side) shared by every wheel of that size,
+  a dually pair `DUAL_GAP_M` 0.05 apart and pushed inside the body
+  together, a grille with slats on van / cutaway noses, headlamps 30 × 16
+  cm in a 6 cm bezel, tail lamps 12 × 34 cm, a `BUS_STEP_M` tread under a
+  bus door and a running board under a van's, the Class A windshield from
+  `y0 + 0.9` (the real 1.6 m), a trailer's propane on the tongue (drawn by
+  `_chassis` from `propane_lb`, not inside). The look gate is
+  `tools/diag/vehicle_preset_grid_diag.gd`. ⚠ A multi-line lambda body
+  inside call arguments needs its expression in parentheses
+  (`func(w): return (a\n and b)`), or GDScript reads the second line as a
+  stray argument.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch

@@ -33,6 +33,23 @@ const LOW_TOP_M := 1.0
 const SIT_UP_M := 0.6
 ## Standing to shower: a 1.75 m adult needs ~1.85 m.
 const SHOWER_STAND_M := 1.85
+## Headroom: under STAND_M most adults stoop (a warning); under CROUCH_M it
+## is a crawl-in (a note — a teardrop or a low-roof van is built that way on
+## purpose). Trailers are held to the same bars. 1.85 m is a stock school
+## bus's 6' 2" inside, which a 1.75 m adult stands under; a bar at 1.9 would
+## flag every unraised skoolie.
+const STAND_M := 1.85
+const CROUCH_M := 1.5
+## A bed shorter than this leaves most adults curled up (a 1.75 m adult
+## stretched out needs ~1.85 m).
+const BED_MIN_M := 1.85
+## The cab walk-through: the strip between the front seats a person steps
+## through into the living box, as wide as an aisle.
+const CAB_WALK_M := 0.6
+## Water on board per sleeper per day, the camp's own planning rate
+## (CampProvisioning: 50 L); under WATER_DAYS_NOTE days it is noted, under
+## one day it is a warning.
+const WATER_DAYS_NOTE := 3.0
 
 ## The palette, grouped as the designer shows it.
 const GROUPS := [
@@ -61,6 +78,7 @@ const FIELDS := {
 	"grey_tank": [["litres", "Holds", "float", 10.0, 800.0, 5.0, " L"]],
 	"black_tank": [["litres", "Holds", "float", 10.0, 400.0, 5.0, " L"]],
 	"propane": [["lb", "Propane", "float", 20.0, 200.0, 20.0, " lb"]],
+	"inverter": [["supply_w", "Rated", "float", 300.0, 6000.0, 100.0, " W"]],
 	"heater": [["watts", "Fan draw", "float", 1.0, 200.0, 1.0, " W"]],
 	"fridge": [["watts", "Average draw", "float", 1.0, 400.0, 1.0, " W"]],
 	"light": [["watts", "Draw", "float", 1.0, 100.0, 1.0, " W"]],
@@ -175,8 +193,11 @@ static func blocks_floor(d: Dictionary, el: Dictionary) -> bool:
 
 
 ## Where people come in, vehicle-local xz points on the floor's edge: the
-## side and rear doors, and the front of the box when you walk through from
-## the cab (a van shell, a bus, a step van, a Class A or a Class C).
+## side and rear doors, and the cab walk-through — a CAB_WALK_M strip at the
+## box's front where the driver steps back between the seats (a van shell,
+## a bus, a Class A or a Class C). A step van has no walk-through: its
+## curb-side cab door IS its side door (`sliding_step`), an entry on the
+## right only.
 static func entries(d: Dictionary) -> Array:
 	var out: Array = []
 	var house: Dictionary = d["house"]
@@ -193,17 +214,45 @@ static func entries(d: Dictionary) -> Array:
 			out.append({"where": "side", "a": Vector2(hw, a), "b": Vector2(hw, b)})
 		else:
 			out.append({"where": "rear", "a": Vector2(float(sd["x0"]), z1), "b": Vector2(float(sd["x1"]), z1)})
-	var roof := str((d["body"] as Dictionary).get("roof", ""))
-	if bool(d.get("drivable", false)) and (bool(d.get("integral", false)) or roof == "cabover"):
-		out.append({"where": "cab", "a": Vector2(-hw, z0), "b": Vector2(hw, z0)})
+	var body: Dictionary = d["body"]
+	var roof := str(body.get("roof", ""))
+	var walk_through := bool(d.get("drivable", false)) and (bool(d.get("integral", false)) or roof == "cabover") \
+		and str(body.get("side_door", "")) != "sliding_step"
+	if walk_through:
+		var wx := cab_walk_x(d)
+		var half := minf(CAB_WALK_M * 0.5, hw - 0.05)
+		out.append({"where": "cab", "a": Vector2(wx - half, z0), "b": Vector2(wx + half, z0)})
 	return out
+
+
+## Where the cab walk-through runs, across (x): between the two front seats
+## of a van (the centre line), beside the driver on a bus or a Class A (the
+## aisle is on the curb side of the seat).
+static func cab_walk_x(d: Dictionary) -> float:
+	var style := str((d["cab_geo"] as Dictionary).get("style", ""))
+	var hw := float((d["house"] as Dictionary)["w"]) * 0.5
+	if style == "full_van" or style == "cutaway":
+		return 0.0
+	var seat: Vector3 = d.get("driver_seat", Vector3.ZERO)
+	return clampf(seat.x + 0.85, -hw + CAB_WALK_M * 0.5, hw - CAB_WALK_M * 0.5)
 
 
 ## The walkway analysis: a grid over the living floor, cells a person fits
 ## in (AISLE_M clear of the walls and of everything standing on the floor),
 ## flooded from the entries. {reachable: {id: bool}, entries, cells, walk,
 ## nx, nz} — `walk` is a PackedByteArray (0 blocked, 1 walkable, 2 reached).
+## Cached on the design (`d["access"]`): the checks, the designer's info
+## line and the cargo bay all ask, and the flood is the dearest thing in a
+## solve.
 static func access(d: Dictionary) -> Dictionary:
+	if d.has("access"):
+		return d["access"]
+	var out := _access(d)
+	d["access"] = out
+	return out
+
+
+static func _access(d: Dictionary) -> Dictionary:
 	var house: Dictionary = d["house"]
 	var hw := float(house["w"])
 	var z0 := float(house["z0"])
@@ -347,7 +396,8 @@ static func checks(d: Dictionary) -> Array:
 	var ceil_y := float(house["ceil_y"])
 	var ac := access(d)
 	if int(ac["entries"]) == 0:
-		c.append({"level": "warn", "text": "No door into the living space: add a side or rear door."})
+		c.append({"level": "warn", "text": "No door into the living space: add a side or rear door.",
+			"why": "Nobody can get in: the body has no side or rear door and no cab to walk through from."})
 	else:
 		var reach: Dictionary = ac["reachable"]
 		for e in els:
@@ -356,15 +406,33 @@ static func checks(d: Dictionary) -> Array:
 			if reach.has(id) and not bool(reach[id]):
 				c.append({"level": "warn", "ids": [id],
 					"text": "No way in to the %s from a door: leave a %d cm aisle." %
-						[_short(el), int(round(AISLE_M * 100.0))]})
+						[_short(el), int(round(AISLE_M * 100.0))],
+					"why": "A person needs a 50 cm aisle (40 cm past low furniture) from a door to reach it; something stands across the way."})
 	# A wet bath's toilet flushes into a tank; a composting toilet needs none.
 	var has_black := els.any(func(e): return str((e as Dictionary)["type"]) == "black_tank")
+	var water_l := float(d.get("water_l", 0.0))
+	var grey_l := float(d.get("grey_l", 0.0))
 	for e in els:
 		var el: Dictionary = e
 		var type := str(el["type"])
 		if type == "shoilet" and not has_black:
 			c.append({"level": "info", "ids": [str(el["id"])],
-				"text": "The wet bath's toilet has no black / cassette tank to flush into."})
+				"text": "The wet bath's toilet has no black / cassette tank to flush into.",
+				"why": "A flush toilet holds its waste in a tank until a dump station; without one the bath is a shower."})
+		if (type == "shower" or type == "shoilet") and (water_l <= 0.0 or grey_l <= 0.0):
+			var missing := "a fresh-water tank" if water_l <= 0.0 else "a grey tank"
+			if water_l <= 0.0 and grey_l <= 0.0:
+				missing = "fresh and grey water tanks"
+			c.append({"level": "warn", "ids": [str(el["id"])],
+				"text": "The %s needs %s." % [_short(el), missing],
+				"why": "A shower draws from the fresh tank and drains into the grey tank; with either missing it cannot run."})
+		if type == "bed" or type == "bunk" or type == "cabover_bed":
+			var long := maxf(float(el["fx"]), float(el["fz"]))
+			if long < BED_MIN_M - 1e-6:
+				c.append({"level": "warn", "ids": [str(el["id"])],
+					"text": "The %s is %.2f m long: under %.2f m most adults can't stretch out." %
+						[_short(el), long, BED_MIN_M],
+					"why": "A 1.75 m adult lying flat needs about 1.85 m; shorter beds are slept in curled up."})
 		if type == "bed" or type == "bunk" or type == "cabover_bed":
 			var top := float(el["top_y"])
 			var lid := ceil_y
@@ -378,6 +446,56 @@ static func checks(d: Dictionary) -> Array:
 		if (type == "shower" or type == "shoilet") and float(house["height"]) < SHOWER_STAND_M:
 			c.append({"level": "info", "ids": [str(el["id"])],
 				"text": "%.2f m of standing room in the shower." % float(house["height"])})
+	# Everybody aboard needs a seat on the road (a trailer's people ride in
+	# the tow vehicle).
+	var sleeps := int(d.get("sleeps", 0))
+	var seats := int(d.get("seats", 0))
+	if bool(d.get("drivable", false)) and sleeps > seats:
+		c.append({"level": "warn",
+			"text": "Sleeps %d but seats %d: %d %s no seat belt on the road." %
+				[sleeps, seats, sleeps - seats, "has" if sleeps - seats == 1 else "have"],
+			"why": "Everyone riding needs a belted seat; add seats or carry the rest in another vehicle."})
+	# Anything that draws power needs a house battery (an EV's pack counts).
+	var loads: Array = d.get("house_loads", [])
+	var draw := 0.0
+	var load_ids: Array = []
+	for l in loads:
+		draw += float((l as Dictionary).get("watts", 0.0))
+		load_ids.append(str((l as Dictionary).get("id", "")))
+	if draw > 0.0 and float(d.get("house_battery_kwh", 0.0)) <= 0.0 and float(d.get("battery_kwh", 0.0)) <= 0.0:
+		c.append({"level": "warn", "ids": load_ids,
+			"text": "%s of loads and no house battery to run them from." % UiText.num(draw, "W"),
+			"why": "The fridge and lights run off a house battery; the engine's starter battery is not one."})
+	# AC loads (a rooftop AC) need an inverter that carries them, or shore power.
+	var ac_w := 0.0
+	var ac_ids: Array = []
+	for e in d.get("exterior", []):
+		var el: Dictionary = e
+		var t := VehicleExterior.type_info(str(el["type"]))
+		if bool(t.get("ac_load", false)):
+			ac_w += float(t.get("load_w", 0.0))
+			ac_ids.append(str(el["id"]))
+	var inv_w := float(d.get("inverter_w", 0.0))
+	if ac_w > 0.0 and inv_w <= 0.0 and float(d.get("shore_w", 0.0)) <= 0.0:
+		c.append({"level": "warn", "ids": ac_ids,
+			"text": "%s of AC loads and no inverter or shore-power inlet to run them." % UiText.num(ac_w, "W"),
+			"why": "A rooftop AC runs on 120 V; off the battery that takes an inverter rated for it."})
+	elif ac_w > 0.0 and inv_w > 0.0 and inv_w < ac_w:
+		c.append({"level": "warn", "ids": ac_ids,
+			"text": "The inverter is rated %s; the AC loads ask for %s." % [UiText.num(inv_w, "W"), UiText.num(ac_w, "W")],
+			"why": "An inverter under the load trips off; size it above the biggest AC load's running watts."})
+	# Water for the sleepers at the camp's planning rate.
+	if sleeps > 0 and water_l > 0.0:
+		var lpd := float(CampProvisioning.RATES_PER_PERSON_DAY.get("water", 50.0))
+		var days := water_l / (float(sleeps) * lpd)
+		if days < 1.0:
+			c.append({"level": "warn",
+				"text": "%d L of water is %.1f days for %d at %d L a day." % [int(round(water_l)), days, sleeps, int(lpd)],
+				"why": "Camp planning counts 50 L a person a day (drinking, cooking, washing); under a day means a daily fill."})
+		elif days < WATER_DAYS_NOTE:
+			c.append({"level": "info",
+				"text": "%d L of water is %.1f days for %d at %d L a day." % [int(round(water_l)), days, sleeps, int(lpd)],
+				"why": "Camp planning counts 50 L a person a day; a weekend away wants three."})
 	# Carried in whole: the smallest face must pass through the biggest door.
 	var door_w := 0.0
 	var door_h := 0.0
