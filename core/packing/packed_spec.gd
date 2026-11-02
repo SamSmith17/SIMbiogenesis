@@ -99,6 +99,10 @@ const CURATED_MODELS := {
 	# (~5 kg on its own) hung underneath; ships boxed at ~8 kg.
 	"ali_pelton": {"w_m": 0.32, "d_m": 0.32, "h_m": 0.24, "mass_kg": 8.0,
 		"form": "crate", "source": "estimated"},
+	# Site gate: two 4.2 m 10 in posts, a 6.5 m beam and a sign — a timber
+	# bundle (~0.24 m³ of pine at 470 kg/m³ + the sign).
+	"site_gate": {"w_m": 6.6, "d_m": 0.6, "h_m": 0.4, "mass_kg": 130.0,
+		"form": "bundle", "source": "estimated"},
 	# Firepit: a 1.1 m steel ring, ~35 kg, ships as itself (logs not included).
 	"firepit": {"w_m": 1.12, "d_m": 1.12, "h_m": 0.38, "mass_kg": 35.0,
 		"form": "crate", "source": "estimated"},

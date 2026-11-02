@@ -706,6 +706,9 @@ static func tag_vehicle_spaces(main: Node, prop_id: String) -> void:
 		rec = get_prop_record(main, prop_id)
 	var d := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
 	var label := str(d.get("name", "Vehicle"))
+	# The vehicle's own power and water node first: its fresh-water tank is
+	# what the vehicle's shower and galley draw from.
+	var water_tank := sync_vehicle_graph(main, prop_id, d)
 	var offered := {}
 	for sp in VehicleDesign.spaces(d):
 		var sd: Dictionary = sp
@@ -717,7 +720,8 @@ static func tag_vehicle_spaces(main: Node, prop_id: String) -> void:
 			target["anchor"] = [snappedf(a.x, 0.001), snappedf(a.z, 0.001)]
 		offered[role] = true
 		var nice := label if role.is_empty() else "%s %s" % [label, role]
-		_tag_target(main, target, str(sd["space_type"]), int(sd["capacity"]), nice)
+		var bind := water_tank if (role == "shower" or role == "kitchen") else ""
+		_tag_target(main, target, str(sd["space_type"]), int(sd["capacity"]), nice, bind)
 	for role in ["", "kitchen", "shower", "restroom"]:
 		if not offered.has(role):
 			var t := {"kind": "prop", "prop_id": prop_id}
@@ -726,8 +730,34 @@ static func tag_vehicle_spaces(main: Node, prop_id: String) -> void:
 			_tag_target(main, t, "", 0, "")
 
 
+## Push a placed living vehicle's power + water system into the graph (one
+## super-node, VehicleGraph) and return its fresh-water tank's id ("" without
+## one or without a graph). Re-run on Apply; the node follows the prop.
+static func sync_vehicle_graph(main: Node, prop_id: String, d: Dictionary = {}) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var sgv := _system_graph_view(main)
+	if sgv == null or not sgv.has_method("sync_vehicle_system"):
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	if d.is_empty():
+		d = VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+	var world := Vector3(float(rec.get("x", 0.0)), float(rec.get("y_offset", 0.0)), float(rec.get("z", 0.0)))
+	var node := _find_prop_node(main, prop_id)
+	if node is Node3D:
+		world = (node as Node3D).global_position
+	var cid := str(sgv.call("sync_vehicle_system", prop_id, d, world))
+	if cid.is_empty():
+		return ""
+	if str(rec.get("graph_item_id", "")) != cid:
+		update_prop_record(main, prop_id, {"graph_item_id": cid}, false)
+	return str(sgv.call("vehicle_tank_id", prop_id, "water"))
+
+
 static func _tag_target(main: Node, target: Dictionary, space_type: String, capacity: int,
-		label: String) -> void:
+		label: String, graph_item_id: String = "") -> void:
 	var reg: SpaceRegistry = null
 	var sgv := ServiceLocator.graph()
 	if sgv != null and sgv.has_method("npc_population_bridge"):
@@ -743,6 +773,8 @@ static func _tag_target(main: Node, target: Dictionary, space_type: String, capa
 	# An upsert keeps the record's old target: carry a moved anchor over.
 	if not sid.is_empty() and target.has("anchor"):
 		reg.set_space_target(sid, target)
+	if not sid.is_empty() and not space_type.is_empty():
+		reg.set_space_fields(sid, {"graph_item_id": graph_item_id})
 	if loader != null and loader.has_method("save_npc_spaces"):
 		loader.call("save_npc_spaces")
 	elif main != null and not str(main.scene_file_path).is_empty():
@@ -1337,6 +1369,10 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 		if rec_extra_gl.has("gantry_spec"):
 			extras["gantry_spec"] = rec_extra_gl["gantry_spec"]
 		extras["ghost_highlight"] = true
+	elif VehicleBuilder.handles(model_id):
+		var rec_extra_vl: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+		if rec_extra_vl.has("vehicle_spec"):
+			extras["vehicle_spec"] = rec_extra_vl["vehicle_spec"]
 	elif model_id == PvArrayBuilder.MODEL_ID:
 		var rec_extra_pv: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
 		if rec_extra_pv.has("pv_array_spec"):

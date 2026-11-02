@@ -227,6 +227,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return StreamIntakeBuilder.build_node(extras)
 	if model_id == FirepitBuilder.MODEL_ID:
 		return FirepitBuilder.build_node(extras)
+	if model_id == SiteGateBuilder.MODEL_ID:
+		return SiteGateBuilder.build_node(extras)
 	if model_id == ForkliftBuilder.MODEL_ID:
 		return ForkliftBuilder.build_node(extras)
 	if VehicleModelBuilder.handles(model_id):
@@ -539,6 +541,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "firepit", "label": "Firepit",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.36},
+		# Procedural SITE GATE: where the camp's living vehicles drive in
+		# (VehicleDrive, TerrainLoader.schedule_vehicle_arrivals). Vehicles
+		# pass through it heading its forward (-Z).
+		{"id": "site_gate", "label": "Site gate",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 4.2},
 		# Driveable vehicles (category "vehicles" — the library's Vehicles
 		# tab). `vehicle` names a PlacedVehicle.PROFILES entry; Interact gets
 		# in. The first three are the scene vehicles' own art at its native

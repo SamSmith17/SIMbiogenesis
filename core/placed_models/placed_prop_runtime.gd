@@ -199,6 +199,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
 		_maybe_attach_vehicle(prop, model, rec)
+		VehicleDriveRuntime.attach(prop, model, rec)
 	prop.set_burnable(bool(rec.get("burnable", false)))
 	var prop_id := str(rec.get("id", ""))
 	# Spawn ConnectionPort markers so ConduitManager can snap conduits to tagged plugs.

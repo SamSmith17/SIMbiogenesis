@@ -9872,6 +9872,175 @@ func add_placed_vehicle_load(prop_id: String, label: String, watts: float,
 	return iid
 
 
+## A placed living vehicle's own power and water system as one super-node
+## (VehicleGraph.definition), realized and made unique like a camp compound,
+## bound to the prop. Idempotent: an unchanged design only follows the prop's
+## position; a changed one is rebuilt where the old node stood (its battery
+## keeps its charge). A design with nothing for the graph removes the node.
+## Returns the compound's id, or "".
+func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	var existing := vehicle_system_item_id(prop_id)
+	var sys: Dictionary = d.get("systems", VehicleInterior.systems(d))
+	var def_id := VehicleGraph.def_id_for(prop_id)
+	var def := VehicleGraph.definition(d, def_id)
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(Vector2(world_pos.x, world_pos.z),
+			soi.call("world_center") as Vector3)
+	if def.is_empty():
+		if not existing.is_empty():
+			remove_vehicle_system(prop_id)
+		return ""
+	var sig := VehicleGraph.signature(sys)
+	var pos := Vector2(-900.0 + 260.0 * float(_vehicle_system_count() % 6), 1150.0)
+	var soc := -1.0
+	if not existing.is_empty():
+		var it := model.get_item(existing)
+		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("vehicle_sig", "")) == sig:
+			if GraphSiteLayout.site_xz(it).distance_to(site) > 0.05 \
+					or str(specs.get("name", "")) != str(def["name"]):
+				specs["name"] = str(def["name"])
+				_history_suppress = true
+				model.update_item(existing, {"specs": specs, "site_x_m": site.x, "site_z_m": site.y})
+				_history_suppress = false
+			return existing
+		pos = Vector2(float(it.get("x", pos.x)), float(it.get("y", pos.y)))
+		soc = _vehicle_battery_soc(existing)
+		remove_vehicle_system(prop_id)
+	_history_suppress = true
+	model.put_definition(def)
+	var cid := GraphComponentDefs.realize(model, def_id, "root", pos, {
+		"name": str(def["name"]), "vehicle_prop_id": prop_id, "bound_prop_id": prop_id,
+		"vehicle_sig": sig, "node_banner": false,
+	})
+	if not cid.is_empty():
+		GraphComponentDefs.make_unique(model, cid)
+		model.update_item(cid, {"site_x_m": site.x, "site_z_m": site.y, "elevation_m": world_pos.y})
+		if soc >= 0.0:
+			_set_vehicle_battery_soc(cid, soc)
+	_history_suppress = false
+	_on_model_changed("vehicle_synced")
+	_schedule_graph_autosave()
+	return cid
+
+
+## Fill a vehicle at a fuel store: the nearest tank of `kind` ("gasoline" /
+## "diesel") within `reach_m` of `world_pos` gives up to `litres`.
+## {litres, tank_id, name}; {} with nothing in reach. The level is moved on the
+## tank's timeline too, so the flow engine carries on from it.
+func draw_fuel_near(world_pos: Vector3, kind: String, litres: float, reach_m: float = 12.0) -> Dictionary:
+	if model == null or litres <= 0.0 or kind.is_empty():
+		return {}
+	var best := {}
+	var best_d := reach_m
+	for it in GraphNesting.walk_items(model):
+		var item: Dictionary = it
+		if str(item.get("type", "")) != "resource":
+			continue
+		var sp: Dictionary = item.get("specs", {})
+		if ResourceKinds.normalize_kind(str(sp.get("resource_kind", ""))) != kind:
+			continue
+		var xz := _item_world_xz(item)
+		if not is_finite(xz.x):
+			continue
+		var dd := xz.distance_to(Vector2(world_pos.x, world_pos.z))
+		if dd <= best_d:
+			best_d = dd
+			best = item
+	if best.is_empty():
+		return {}
+	var tid := str(best["id"])
+	var sp2: Dictionary = (best.get("specs", {}) as Dictionary).duplicate(true)
+	var name := str(sp2.get("name", ResourceKinds.display_name(kind)))
+	if bool(sp2.get("unlimited_capacity", false)):
+		return {"litres": litres, "tank_id": tid, "name": name}
+	var cap := maxf(float(sp2.get("capacity_qty", 0.0)), 0.0)
+	if cap <= 0.0:
+		return {}
+	var h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		h = float(main.call("get_absolute_hours"))
+	var tl: ResourceTimeline = _resource_flow.get_timeline(tid) if _resource_flow != null else null
+	var lvl := tl.level_at(h) if tl != null else float(sp2.get("level", 0.0))
+	var take := minf(litres, maxf(lvl, 0.0) * cap)
+	if take <= 0.0:
+		return {"litres": 0.0, "tank_id": tid, "name": name}
+	var nl := maxf(lvl - take / cap, 0.0)
+	sp2["level"] = nl
+	model.update_item(tid, {"specs": sp2})
+	if tl != null:
+		tl.set_current_level(h, nl)
+	_schedule_graph_autosave()
+	return {"litres": take, "tank_id": tid, "name": name}
+
+
+func remove_vehicle_system(prop_id: String) -> void:
+	var cid := vehicle_system_item_id(prop_id)
+	if cid.is_empty():
+		return
+	_history_suppress = true
+	model.remove_item(cid)
+	_history_suppress = false
+	_on_model_changed("vehicle_removed")
+	_schedule_graph_autosave()
+
+
+func vehicle_system_item_id(prop_id: String) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		if str((d.get("specs", {}) as Dictionary).get("vehicle_prop_id", "")) == prop_id:
+			return str(d.get("id", ""))
+	return ""
+
+
+## The vehicle node's tank holding `kind` ("water" / "greywater"), or "".
+func vehicle_tank_id(prop_id: String, kind: String) -> String:
+	var cid := vehicle_system_item_id(prop_id)
+	if cid.is_empty():
+		return ""
+	var scope := str(model.get_item(cid).get("child_scope_id", ""))
+	for it in model.get_items_in_scope(scope):
+		var d: Dictionary = it
+		var specs: Dictionary = d.get("specs", {})
+		if str(d.get("type", "")) == "resource" and str(specs.get("resource_kind", "")) == kind:
+			return str(d.get("id", ""))
+	return ""
+
+
+func _vehicle_system_count() -> int:
+	var n := 0
+	for it in model.get_items_in_scope("root"):
+		if (((it as Dictionary).get("specs", {}) as Dictionary)).has("vehicle_prop_id"):
+			n += 1
+	return n
+
+
+func _vehicle_battery_soc(cid: String) -> float:
+	var scope := str(model.get_item(cid).get("child_scope_id", ""))
+	for it in model.get_items_in_scope(scope):
+		var d: Dictionary = it
+		if str(d.get("type", "")) == "battery":
+			return float((d.get("specs", {}) as Dictionary).get("soc", -1.0))
+	return -1.0
+
+
+func _set_vehicle_battery_soc(cid: String, soc: float) -> void:
+	var scope := str(model.get_item(cid).get("child_scope_id", ""))
+	for it in model.get_items_in_scope(scope):
+		var d: Dictionary = it
+		if str(d.get("type", "")) == "battery":
+			var specs: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)
+			specs["soc"] = clampf(soc, 0.0, 1.0)
+			model.update_item(str(d.get("id", "")), {"specs": specs})
+
+
 func placed_vehicle_item_id(prop_id: String) -> String:
 	if model == null:
 		return ""
@@ -19826,9 +19995,12 @@ func festival_camp_rows() -> Array:
 	var out: Array = []
 	if model == null:
 		return out
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	var vehicles: Dictionary = loader.call("vehicles_by_camp") if loader != null and loader.has_method("vehicles_by_camp") else {}
 	for c in festival_camps():
 		var cid := str(c["id"])
 		var specs: Dictionary = (model.get_item(cid) as Dictionary).get("specs", {})
+		var area := str(loader.call("camp_area_for_lot", str(c["lot_id"]))) if loader != null and loader.has_method("camp_area_for_lot") else ""
 		var m: CampFlowMeter = _camp_meters.get(cid)
 		if m == null:
 			m = CampFlowMeter.from_dict(specs.get("camp_meter", {}) if specs.get("camp_meter", {}) is Dictionary else {})
@@ -19836,7 +20008,8 @@ func festival_camp_rows() -> Array:
 			"headcount": int(c["headcount"]), "present": int(specs.get("camp_present", c["headcount"])),
 			"morale": float(specs.get("camp_morale", -1.0)), "soc": float(specs.get("camp_soc", -1.0)),
 			"supply": _supply_from_specs(specs), "meter": m.summary(), "hours": m.hours(),
-			"closure": CampLoopClosure.score(model, cid)})
+			"closure": CampLoopClosure.score(model, cid),
+			"vehicles": vehicles.get(area, {}) if not area.is_empty() else {}})
 	return out
 
 

@@ -103,7 +103,9 @@ static func compute(items: Array, solar: Dictionary, extra: Dictionary = {}) -> 
 		cost = {"graph_usd": maxf(float(extra.get("graph_usd", 0.0)), 0.0),
 			"placed_usd": maxf(float(extra.get("placed_usd", 0.0)), 0.0),
 			"placed_priced": int(extra.get("placed_priced", 0)),
-			"placed_unpriced": int(extra.get("placed_unpriced", 0))}
+			"placed_unpriced": int(extra.get("placed_unpriced", 0)),
+			"running_usd": maxf(float(extra.get("running_usd", 0.0)), 0.0),
+			"vehicles": int(extra.get("vehicles", 0))}
 		cost["total_usd"] = float(cost["graph_usd"]) + float(cost["placed_usd"])
 	return {"energy": energy, "ponds": ponds, "cost": cost}
 
@@ -186,6 +188,10 @@ static func rows(b: Dictionary) -> Array:
 			pv += " · %s unpriced" % UiText.count(int(c.get("placed_unpriced", 0)), "structure")
 		out.append({"t": "kv", "k": "Placed structures", "v": pv, "tone": "muted"})
 		out.append({"t": "kv", "k": "Site total", "v": SiteCost.format_usd(float(c.get("total_usd", 0.0))), "tone": "ok"})
+		if int(c.get("vehicles", 0)) > 0:
+			out.append({"t": "kv", "k": "Getting here",
+				"v": "%s · %s, trips and fuel" % [SiteCost.format_usd(float(c.get("running_usd", 0.0))),
+					UiText.count(int(c["vehicles"]), "vehicle")], "tone": "muted"})
 	return out
 
 

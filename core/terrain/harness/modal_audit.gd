@@ -82,6 +82,7 @@ func run() -> Dictionary:
 	# "(no modal claim seen)" and is still audited and shot.
 	if loader != null:
 		for d in [["flatpack", "open_flatpack_designer"], ["domelab", "open_domelab"],
+				["vehiclelab", "open_vehiclelab"],
 				["toroidlab", "open_toroidlab"], ["pvlab", "open_pvlab"], ["gantrylab", "open_gantrylab"]]:
 			var fn := str(d[1])
 			if loader.has_method(fn):

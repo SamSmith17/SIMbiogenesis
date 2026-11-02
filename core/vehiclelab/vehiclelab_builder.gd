@@ -69,70 +69,276 @@ static func build_from_design(d: Dictionary, opts: Dictionary = {}) -> Node3D:
 	var root := Node3D.new()
 	root.name = "LivingVehicle"
 	var paint: Dictionary = (d["spec"] as Dictionary)["paint"]
-	var body_c := VehicleSpec.color(paint["body"])
-	var roof_c := VehicleSpec.color(paint["roof"])
-	var trim_c := VehicleSpec.color(paint["trim"])
-	var g := {
-		"body": _K.new(), "roof": _K.new(), "trim": _K.new(), "glass": _K.new(),
-		"tyre": _K.new(), "rim": _K.new(), "head": _K.new(), "tail": _K.new(),
-		"frame": _K.new(), "stripe": _K.new(),
-		"floor": _K.new(), "wood": _K.new(), "fabric": _K.new(), "white": _K.new(),
-		"dark": _K.new(), "pillow": _K.new(), "lamp": _K.new(), "mirror": _K.new(),
-	}
-	var shell := {"body": _K.new(), "roof": _K.new(), "glass": _K.new(), "trim": _K.new(),
-		"stripe": _K.new(), "door": _K.new()}
-	_chassis(d, g)
-	_wheels(d, g)
-	_cab(d, g)
-	_body(d, shell, g)
-	_floor_and_interior(d, g)
-	var mesh := ArrayMesh.new()
-	_commit(g["body"], mesh, StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, body_c))
-	_commit(g["roof"], mesh, StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, roof_c))
-	_commit(g["trim"], mesh, _plain(trim_c, 0.1, 0.7))
-	_commit(g["glass"], mesh, _plain(C_GLASS, 0.3, 0.08))
-	_commit(g["tyre"], mesh, _plain(C_TYRE, 0.0, 0.9))
-	_commit(g["rim"], mesh, _plain(VehicleSpec.color(paint["wheels"]), 0.7, 0.35))
-	_commit(g["head"], mesh, _emissive(C_HEAD, 0.6))
-	_commit(g["tail"], mesh, _emissive(C_TAIL, 0.4))
-	_commit(g["frame"], mesh, _plain(C_FRAME, 0.3, 0.6))
-	_commit(g["stripe"], mesh, _plain(VehicleSpec.color(paint["stripe"]), 0.1, 0.5))
-	_commit(g["floor"], mesh, StructureMaterials.make(StructureMaterials.Kind.PLYWOOD, C_FLOOR))
-	_commit(g["wood"], mesh, StructureMaterials.make(StructureMaterials.Kind.WOOD, Color(0.62, 0.49, 0.33)))
-	_commit(g["fabric"], mesh, StructureMaterials.make(StructureMaterials.Kind.FABRIC, C_FABRIC))
-	_commit(g["white"], mesh, _plain(Color(0.9, 0.91, 0.92), 0.0, 0.4))
-	_commit(g["dark"], mesh, _plain(Color(0.14, 0.15, 0.17), 0.2, 0.5))
-	_commit(g["pillow"], mesh, StructureMaterials.make(StructureMaterials.Kind.FABRIC, C_PILLOW))
-	_commit(g["lamp"], mesh, _emissive(Color(1.0, 0.95, 0.82), 1.2))
-	_commit(g["mirror"], mesh, _plain(Color(0.7, 0.75, 0.8), 0.9, 0.05))
-	var mi := MeshInstance3D.new()
-	mi.name = "Mesh"
-	mi.mesh = mesh
-	root.add_child(mi)
-	if not bool(opts.get("cutaway", false)):
-		var smesh := ArrayMesh.new()
-		_commit(shell["body"], smesh, StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, body_c))
-		_commit(shell["roof"], smesh, StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, roof_c))
-		_commit(shell["glass"], smesh, _plain(C_GLASS, 0.3, 0.08))
-		_commit(shell["trim"], smesh, _plain(trim_c, 0.1, 0.7))
-		_commit(shell["stripe"], smesh, _plain(VehicleSpec.color(paint["stripe"]), 0.1, 0.5))
-		_commit(shell["door"], smesh, StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL,
-			body_c.darkened(0.12)))
-		var smi := MeshInstance3D.new()
-		smi.name = "Shell"
-		smi.mesh = smesh
-		root.add_child(smi)
+	var gc := _kits(["frame", "tyre", "rim", "white"])
+	var gb := _kits(["body", "trim", "glass", "head", "rim", "frame"])
+	var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail"])
+	var gx := _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
+	var gi := _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
+	_chassis(d, gc)
+	_cab(d, gb)
+	_body(d, sh, sh)
+	_exterior(d, gx)
+	_floor_and_interior(d, gi)
+	var cutaway := bool(opts.get("cutaway", false))
+	_node(root, "Chassis", gc, paint, d)
+	_node(root, "Cab", gb, paint, d)
+	if not cutaway:
+		_node(root, "Shell", sh, paint, d)
+		_node(root, "Exterior", gx, paint, d)
+	_node(root, "Interior", gi, paint, d)
+	_wheel_nodes(root, d, paint)
+	_apply_glb_override(root, d)
 	root.set_meta("living_vehicle", true)
 	root.set_meta("vehicle_key", VehicleSpec.key_of(d["spec"]))
 	var spots: Array = []
-	for b in d["beds"]:
-		var bd: Dictionary = b
+	for bd0 in d["beds"]:
+		var bd: Dictionary = bd0
 		spots.append({"pos": bd["pos"], "yaw": float(bd["yaw"]), "kind": "lie",
 			"length_m": float(bd["length_m"])})
 	spots.append_array(d["seat_spots"])
 	root.set_meta("seat_spots", spots)
 	root.set_meta("role_spots", d["role_spots"])
 	return root
+
+
+static func _kits(names: Array) -> Dictionary:
+	var g := {}
+	for n in names:
+		g[str(n)] = _K.new()
+	return g
+
+
+## One MeshInstance3D per part group, a surface per material.
+static func _node(root: Node3D, node_name: String, kits: Dictionary, paint: Dictionary, d: Dictionary) -> void:
+	var mesh := ArrayMesh.new()
+	for k in kits:
+		_commit(kits[k], mesh, _material(str(k), paint, d, node_name))
+	if mesh.get_surface_count() == 0:
+		return
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = mesh
+	root.add_child(mi)
+
+
+static func _material(kind: String, paint: Dictionary, d: Dictionary, node_name: String) -> Material:
+	var body_c := VehicleSpec.color(paint["body"])
+	match kind:
+		"body":
+			if node_name == "Shell":
+				var wrap := wrap_material(str(paint.get("wrap", "")), d)
+				if wrap != null:
+					return wrap
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, body_c)
+		"roof":
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, VehicleSpec.color(paint["roof"]))
+		"door":
+			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, body_c.darkened(0.12))
+		"trim":
+			return _plain(VehicleSpec.color(paint["trim"]), 0.1, 0.7)
+		"glass":
+			return _plain(C_GLASS, 0.3, 0.08)
+		"tyre":
+			return _plain(C_TYRE, 0.0, 0.9)
+		"rim":
+			return _plain(VehicleSpec.color(paint["wheels"]), 0.7, 0.35)
+		"head":
+			return _emissive(C_HEAD, 0.6)
+		"tail":
+			return _emissive(C_TAIL, 0.4)
+		"frame":
+			return _plain(C_FRAME, 0.3, 0.6)
+		"stripe":
+			return _plain(VehicleSpec.color(paint["stripe"]), 0.1, 0.5)
+		"floor":
+			return StructureMaterials.make(StructureMaterials.Kind.PLYWOOD, C_FLOOR)
+		"wood":
+			return StructureMaterials.make(StructureMaterials.Kind.WOOD, Color(0.62, 0.49, 0.33))
+		"fabric":
+			return StructureMaterials.make(StructureMaterials.Kind.FABRIC, C_FABRIC)
+		"white":
+			return _plain(Color(0.9, 0.91, 0.92), 0.0, 0.4)
+		"dark":
+			return _plain(Color(0.14, 0.15, 0.17), 0.2, 0.5)
+		"pillow":
+			return StructureMaterials.make(StructureMaterials.Kind.FABRIC, C_PILLOW)
+		"lamp":
+			return _emissive(Color(1.0, 0.95, 0.82), 1.2)
+		"mirror":
+			return _plain(Color(0.7, 0.75, 0.8), 0.9, 0.05)
+		"metal":
+			return _plain(Color(0.66, 0.67, 0.69), 0.6, 0.4)
+		"solar":
+			return _plain(Color(0.05, 0.08, 0.17), 0.35, 0.12)
+	return _plain(Color(0.6, 0.6, 0.6), 0.0, 0.6)
+
+
+# --- paint wraps ------------------------------------------------------------------------
+
+## Where the player's wrap images live (a PNG / JPG per wrap). A spec's
+## `paint.wrap` is a file name in it, or a full path.
+const WRAP_DIR := "user://vehicle_wraps"
+static var _wrap_cache := {}
+
+
+static func wrap_path(name: String) -> String:
+	if name.is_empty():
+		return ""
+	if name.begins_with("user://") or name.begins_with("res://") or name.is_absolute_path():
+		return name
+	return "%s/%s" % [WRAP_DIR, name]
+
+
+static func list_wraps() -> Array:
+	var out: Array = []
+	var dir := DirAccess.open(WRAP_DIR)
+	if dir == null:
+		return out
+	for f in dir.get_files():
+		var ext := f.get_extension().to_lower()
+		if ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "webp":
+			out.append(f)
+	out.sort()
+	return out
+
+
+## A wrap image stretched once along each side of the body (object-space
+## triplanar: a side samples (z, y)), nothing tiled. null when the file is
+## missing or unreadable — the body keeps its paint.
+static func wrap_material(name: String, d: Dictionary) -> Material:
+	var path := wrap_path(name)
+	if path.is_empty():
+		return null
+	var tex: Texture2D = _wrap_cache.get(path, null)
+	if tex == null:
+		if path.begins_with("res://") and ResourceLoader.exists(path):
+			tex = load(path) as Texture2D
+		elif FileAccess.file_exists(path):
+			var img := Image.load_from_file(path)
+			if img != null and not img.is_empty():
+				img.generate_mipmaps()
+				tex = ImageTexture.create_from_image(img)
+		if tex == null:
+			return null
+		_wrap_cache[path] = tex
+	var b: Dictionary = d["body"]
+	var L := maxf(float(b["z1"]) - float(b["z0"]), 0.5)
+	var H := maxf(float(b["h"]) - float(b["y0"]), 0.5)
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = tex
+	m.uv1_triplanar = true
+	m.uv1_triplanar_sharpness = 8.0
+	m.uv1_scale = Vector3(1.0 / L, -1.0 / H, 1.0 / L)
+	m.uv1_offset = Vector3(0.5 - (float(b["z0"]) + float(b["z1"])) * 0.5 / L,
+		float(b["h"]) / H, 0.5 - (float(b["z0"]) + float(b["z1"])) * 0.5 / L)
+	m.roughness = 0.45
+	return m
+
+
+# --- a model of the real thing over the parametric one ------------------------------------
+
+## `glb_override` {path, mode "whole" | "body", flip}: a GLB / glTF of the
+## player's real vehicle (or the shipped bus / van art), turned so its long
+## axis runs along Z, stretched onto the design's box and stood on the
+## ground. "whole" replaces the chassis, cab and shell; "body" replaces only
+## the cab and shell (the parametric wheels stay). The interior, the exterior
+## items and every NPC spot stay the design's.
+static var _glb_cache := {}
+
+
+static func _apply_glb_override(root: Node3D, d: Dictionary) -> void:
+	var ov: Variant = (d["spec"] as Dictionary).get("glb_override", {})
+	if not (ov is Dictionary) or str((ov as Dictionary).get("path", "")).is_empty():
+		return
+	var o: Dictionary = ov
+	var art := load_glb(str(o["path"]))
+	if art == null:
+		return
+	var whole := str(o.get("mode", "whole")) != "body"
+	var b: Dictionary = d["body"]
+	var target := AABB()
+	if whole:
+		target = AABB(Vector3(-float(d["width_m"]) * 0.5, 0.0, -float(d["half_len"])),
+			Vector3(float(d["width_m"]), float(d["height_m"]), float(d["length_m"])))
+	else:
+		var front := -float(d["half_len"])
+		target = AABB(Vector3(-float(b["w"]) * 0.5, float(b["y0"]), front),
+			Vector3(float(b["w"]), float(b["h"]) - float(b["y0"]), float(b["z1"]) - front))
+	var holder := Node3D.new()
+	holder.name = "GlbOverride"
+	holder.add_child(art)
+	var bb := _measure(art)
+	if bb.size.length() < 0.01:
+		holder.free()
+		return
+	var yaw := 0.0
+	if bb.size.x > bb.size.z:
+		yaw = PI * 0.5
+	if bool(o.get("flip", false)):
+		yaw += PI
+	art.rotation.y = yaw
+	bb = _measure_in(holder, art)
+	var sc := Vector3(target.size.x / maxf(bb.size.x, 0.01), target.size.y / maxf(bb.size.y, 0.01),
+		target.size.z / maxf(bb.size.z, 0.01))
+	holder.scale = sc
+	var c := bb.get_center()
+	holder.position = target.get_center() - Vector3(c.x * sc.x, (bb.position.y + bb.size.y * 0.5) * sc.y, c.z * sc.z)
+	root.add_child(holder)
+	for n in (["Chassis", "Wheels", "Cab", "Shell"] if whole else ["Cab", "Shell"]):
+		var node := root.get_node_or_null(n)
+		if node != null:
+			root.remove_child(node)
+			node.free()
+
+
+## The art at `path` as a fresh node (cached: a res:// scene once, a user
+## file parsed once and duplicated after).
+static func load_glb(path: String) -> Node3D:
+	if _glb_cache.has(path):
+		var cached: Node = _glb_cache[path]
+		return cached.duplicate() as Node3D if is_instance_valid(cached) else null
+	var node: Node3D = null
+	if path.begins_with("res://"):
+		if ResourceLoader.exists(path):
+			var ps := load(path) as PackedScene
+			if ps != null:
+				node = ps.instantiate() as Node3D
+	elif FileAccess.file_exists(path):
+		var doc := GLTFDocument.new()
+		var state := GLTFState.new()
+		if doc.append_from_file(path, state) == OK:
+			node = doc.generate_scene(state) as Node3D
+	if node == null:
+		return null
+	_glb_cache[path] = node
+	return node.duplicate() as Node3D
+
+
+static func _measure(n: Node3D) -> AABB:
+	return _measure_in(n, n)
+
+
+## The meshes under `n`, in `frame`'s space.
+static func _measure_in(frame: Node3D, n: Node3D) -> AABB:
+	var out := AABB()
+	var found := false
+	for mi0 in n.find_children("*", "MeshInstance3D", true, false):
+		var mi := mi0 as MeshInstance3D
+		if mi.mesh == null or not mi.visible:
+			continue
+		var xf := Transform3D.IDENTITY
+		var cur: Node = mi
+		while cur != null and cur != frame:
+			if cur is Node3D:
+				xf = (cur as Node3D).transform * xf
+			cur = cur.get_parent()
+		var box := xf * mi.mesh.get_aabb()
+		out = box if not found else out.merge(box)
+		found = true
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		var box2 := (n as MeshInstance3D).mesh.get_aabb()
+		out = box2 if not found else out.merge(box2)
+	return out
 
 
 # --- chassis + wheels ----------------------------------------------------------------
@@ -183,12 +389,19 @@ static func _chassis(d: Dictionary, g: Dictionary) -> void:
 				wk.cylinder(Vector3(sx2, fy + 0.35, bz0 - 0.45), 0.16, 0.6, Vector3.UP, 14)
 
 
-static func _wheels(d: Dictionary, g: Dictionary) -> void:
+## Each wheel its own node under "Wheels", pivoting at its hub (local +X =
+## the axle), so it turns as the vehicle rolls and the front ones steer
+## (`spin_wheels`). Five lug bolts on the hub face are what show it turning.
+## The root's `wheel_nodes` meta lists them: [{name, r, steer}].
+static func _wheel_nodes(root: Node3D, d: Dictionary, paint: Dictionary) -> void:
 	var hw := float((d["body"] as Dictionary)["w"]) * 0.5
 	var cab_w := float((d["cab_geo"] as Dictionary)["w"]) * 0.5
 	var lim := maxf(hw, cab_w)
-	var tk: _K = g["tyre"]
-	var rk: _K = g["rim"]
+	var holder := Node3D.new()
+	holder.name = "Wheels"
+	root.add_child(holder)
+	var listed: Array = []
+	var i := 0
 	for w in d["wheels"]:
 		var wd: Dictionary = w
 		var p: Vector3 = wd["pos"]
@@ -198,9 +411,116 @@ static func _wheels(d: Dictionary, g: Dictionary) -> void:
 		var side := 1.0 if p.x >= 0.0 else -1.0
 		if absf(p.x) + tw * 0.5 > lim - 0.005:
 			p.x -= side * (absf(p.x) + tw * 0.5 - (lim - 0.005))
-		tk.cylinder(p, r, tw, Vector3.RIGHT, 22)
-		rk.cylinder(p + Vector3(side * 0.006, 0, 0), r * 0.58, tw, Vector3.RIGHT, 16)
-		rk.cylinder(p + Vector3(side * (tw * 0.5 + 0.01), 0, 0), r * 0.18, 0.04, Vector3.RIGHT, 10)
+		var g := _kits(["tyre", "rim", "frame"])
+		var tk: _K = g["tyre"]
+		var rk: _K = g["rim"]
+		var bk: _K = g["frame"]
+		tk.cylinder(Vector3.ZERO, r, tw, Vector3.RIGHT, 22)
+		rk.cylinder(Vector3(side * 0.006, 0, 0), r * 0.58, tw, Vector3.RIGHT, 16)
+		rk.cylinder(Vector3(side * (tw * 0.5 + 0.01), 0, 0), r * 0.18, 0.04, Vector3.RIGHT, 10)
+		for k in 5:
+			var a := TAU * float(k) / 5.0
+			bk.box(Vector3(side * (tw * 0.5 + 0.02), cos(a) * r * 0.27, sin(a) * r * 0.27),
+				Vector3(0.03, r * 0.07, r * 0.07))
+		var mesh := ArrayMesh.new()
+		for kk in g:
+			_commit(g[kk], mesh, _material(str(kk), paint, d, "Chassis"))
+		var node := Node3D.new()
+		node.name = "W%d" % i
+		node.position = p
+		var mi := MeshInstance3D.new()
+		mi.name = "Mesh"
+		mi.mesh = mesh
+		node.add_child(mi)
+		holder.add_child(node)
+		listed.append({"name": node.name, "r": r, "steer": bool(wd.get("steer", false))})
+		i += 1
+	root.set_meta("wheel_nodes", listed)
+
+
+## Turn the wheels for `roll_m` metres rolled (since the build) and steer the
+## front ones by `steer_rad` (+ = to the left). Finds the wheel list on the
+## vehicle's model node or the node under it.
+static func spin_wheels(model: Node3D, roll_m: float, steer_rad: float = 0.0) -> void:
+	var root := _wheel_root(model)
+	if root == null:
+		return
+	var holder := root.get_node_or_null("Wheels") as Node3D
+	if holder == null:
+		return
+	for e in root.get_meta("wheel_nodes", []):
+		var ed: Dictionary = e
+		var n := holder.get_node_or_null(str(ed["name"])) as Node3D
+		if n == null:
+			continue
+		# Forward is -Z: rolling forward turns the top of the wheel toward -Z,
+		# i.e. a negative turn about +X.
+		var spin := Basis(Vector3.RIGHT, -roll_m / maxf(float(ed["r"]), 0.05))
+		n.basis = (Basis(Vector3.UP, steer_rad) * spin) if bool(ed["steer"]) else spin
+
+
+## The driver's view: the body panels are drawn double-sided (StructureMaterials),
+## so from the seat their inside faces would wall the driver in. While someone
+## drives, the cab, the shell and the roof items draw one-sided (every
+## triangle here winds clockwise from outside, pinned by the selftest), so the
+## driver sees the road over the hood and out of the sides; from outside the
+## vehicle looks the same. `on` false puts the shared materials back.
+static func set_inside_view(model: Node3D, on: bool) -> void:
+	var root := _wheel_root(model)
+	if root == null:
+		return
+	for nn in ["Cab", "Shell", "Exterior", "Interior"]:
+		var mi := root.get_node_or_null(nn) as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		for si in mi.mesh.get_surface_count():
+			if not on:
+				mi.set_surface_override_material(si, null)
+				continue
+			var m := mi.mesh.surface_get_material(si)
+			if m is BaseMaterial3D:
+				var one := (m as BaseMaterial3D).duplicate() as BaseMaterial3D
+				one.cull_mode = BaseMaterial3D.CULL_BACK
+				mi.set_surface_override_material(si, one)
+
+
+## Front (steering) axle to the rear axles' middle, metres; 3.5 when unknown.
+static func wheelbase_of(d: Dictionary) -> float:
+	var zf := 0.0
+	var nf := 0
+	var zr := 0.0
+	var nr := 0
+	for w in d.get("wheels", []):
+		var wd: Dictionary = w
+		var z := float((wd["pos"] as Vector3).z)
+		if bool(wd.get("steer", false)):
+			zf += z
+			nf += 1
+		else:
+			zr += z
+			nr += 1
+	if nf == 0 or nr == 0:
+		return 3.5
+	return absf(zr / float(nr) - zf / float(nf))
+
+
+## The steering angle (rad, + = left) that turns `dyaw` over `ds` metres of
+## forward travel on a bicycle model: tan(δ) = L · κ.
+static func steer_for(wheelbase_m: float, dyaw: float, ds: float) -> float:
+	if absf(ds) < 0.002:
+		return 0.0
+	return clampf(atan(wheelbase_m * dyaw / ds), -0.6, 0.6)
+
+
+static func _wheel_root(model: Node3D) -> Node3D:
+	if model == null:
+		return null
+	if model.has_meta("wheel_nodes"):
+		return model
+	for c in model.get_children():
+		if c is Node3D and (c as Node3D).has_meta("wheel_nodes"):
+			return c
+	return null
 
 
 # --- cab ------------------------------------------------------------------------------
@@ -302,32 +622,13 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 	var H := float(b["h"])
 	var floor_y := float(b["floor_y"])
 	var roof := str(b["roof"])
-	var r := clampf(float(b["corner_r"]), 0.0, minf(hw * 0.6, 0.4))
-	var crown := 0.0
-	match roof:
-		"high_top": crown = 0.03
-		"crown": crown = 0.1
-		"arched": crown = 0.3
-		"cabover": crown = 0.07
-	var y0 := floor_y - 0.12
-	if integral:
-		y0 = clampf(floor_y - 0.45, 0.32, 0.6)
+	var r := float(b["corner_r"])
+	var crown := float(b["crown"])
+	var y0 := float(b["y0"])
 	var z0 := float(b["z0"])
 	var z1 := float(b["z1"])
-	var rake_top := 0.0
-	var rake_from := y0
-	if style == "full_van":
-		# The cab covers the van's front to the windshield top; the shell
-		# starts there and its high roof leans back.
-		z0 = float(cg["z0"]) + float(cg["hood"]) + 0.8
-		rake_from = float(cg["h"])
-		rake_top = 0.4
-	elif style == "forward" and integral:
-		rake_top = 0.45 if str(b["id"]) == "class_a_motorhome" else 0.12
-		rake_from = y0 + 0.3
-	elif style == "none":
-		rake_top = 0.3
-		rake_from = (y0 + H) * 0.5
+	var rake_top := float(b["rake_top"])
+	var rake_from := float(b["rake_from"])
 	var prof := _profile(hw, y0, H, r, crown)
 	var roof_y := H - crown - r - 0.01
 	var bk: _K = sh["body"]
@@ -492,18 +793,16 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 	var b: Dictionary = d["body"]
 	var dk: _K = sh["door"]
 	var tk: _K = sh["trim"]
-	var house: Dictionary = d["house"]
 	var side := str(b["side_door"])
-	if side != "none":
-		var w := 1.25 if side == "slider" else (0.85 if side == "bus" else 0.72)
-		var dz0 := float(house["z0"]) + 0.2
-		if side == "bus":
-			dz0 = z0 + 0.1 if integral else float(house["z0"]) + 0.1
-		elif style == "full_van":
-			dz0 = float(house["z0"]) - 0.25
-		var dz1 := minf(dz0 + w, z1 - 0.3)
-		var dy0 := y0 + 0.03
-		var dy1 := minf(wall_top - 0.05, floor_y + 1.95)
+	var spans := VehicleDesign.door_spans(d)
+	for sp in spans:
+		var sd: Dictionary = sp
+		if str(sd["where"]) != "side":
+			continue
+		var dz0 := float(sd["z0"])
+		var dz1 := float(sd["z1"])
+		var dy0 := float(sd["y0"])
+		var dy1 := float(sd["y1"])
 		var x := hw + 0.006
 		dk.quad(Vector3(x, dy0, dz0), Vector3(x, dy0, dz1), Vector3(x, dy1, dz1), Vector3(x, dy1, dz0), Vector3.RIGHT)
 		# Its outline + handle.
@@ -536,6 +835,133 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 				y += 0.16
 		"lift":
 			tk.box(Vector3(0, ry1 - 0.02, rz + 0.004), Vector3(rw * 2.0, 0.03, 0.006))
+
+
+# --- exterior items ------------------------------------------------------------------
+
+static func _exterior(d: Dictionary, g: Dictionary) -> void:
+	for e in d.get("exterior", []):
+		_ext_element(d, e as Dictionary, g)
+
+
+## One element, drawn in its own face frame (VehicleExterior.frame): x along
+## u, y out of the face, z along v.
+static func _ext_element(d: Dictionary, el: Dictionary, g: Dictionary) -> void:
+	var fr := VehicleExterior.frame(d, el)
+	if fr.is_empty():
+		return
+	var bas: Basis = fr["basis"]
+	var base: Vector3 = fr["base"]
+	var w := float(el["w"])
+	var l := float(el["l"])
+	var h := float(el["h"])
+	var bx := bas.x.normalized()
+	var by := bas.y.normalized()
+	var bz := bas.z.normalized()
+	var white: _K = g["white"]
+	var dark: _K = g["dark"]
+	var metal: _K = g["metal"]
+	# A box in face coordinates: centre (cu across, cy out, cv along), size.
+	var put := func(k: _K, cu: float, cy: float, cv: float, sw: float, sh: float, sl: float) -> void:
+		k.obox(base + bx * cu + by * cy + bz * cv, bx * (sw * 0.5), by * (sh * 0.5), bz * (sl * 0.5))
+	match str(el["type"]):
+		"fan":
+			put.call(white, 0.0, 0.04, 0.0, w, 0.08, l)
+			# The lid, propped open toward the back.
+			var lid_c := base + by * 0.14 + bz * (l * 0.08)
+			var tilt := Basis(bx, -0.35)
+			white.obox(lid_c, tilt * (bx * w * 0.48), tilt * (by * 0.025), tilt * (bz * l * 0.48))
+			dark.obox(base + by * 0.085, bx * (w * 0.4), by * 0.006, bz * (l * 0.4))
+		"vent":
+			put.call(white, 0.0, 0.03, 0.0, w, 0.06, l)
+			dark.obox(base + by * 0.08, bx * (w * 0.4), by * 0.025, bz * (l * 0.4))
+		"ac":
+			put.call(white, 0.0, h * 0.5, 0.0, w, h, l)
+			for k in 4:
+				var z := -l * 0.3 + float(k) * l * 0.2
+				put.call(dark, 0.0, h * 0.65, z, w * 1.002, h * 0.35, 0.03)
+		"starlink":
+			metal.cylinder(base + by * (h * 0.4), 0.03, h * 0.8, by, 10)
+			var dish := Basis(bx, -0.6)
+			white.cylinder(base + by * (h * 0.85), w * 0.42, 0.04, dish * by, 20)
+		"antenna":
+			dark.cylinder(base + by * (h * 0.5), 0.008, h, by, 6)
+			dark.cylinder(base + by * 0.03, 0.035, 0.06, by, 10)
+		"gland":
+			put.call(dark, 0.0, h * 0.5, 0.0, w, h, l)
+		"rack":
+			for su in [-1.0, 1.0]:
+				put.call(metal, su * (w * 0.5 - 0.03), h * 0.75, 0.0, 0.05, 0.05, l)
+				put.call(metal, su * (w * 0.5 - 0.03), h * 0.35, -l * 0.5 + 0.05, 0.04, h * 0.7, 0.04)
+				put.call(metal, su * (w * 0.5 - 0.03), h * 0.35, l * 0.5 - 0.05, 0.04, h * 0.7, 0.04)
+			var n := maxi(int(l / 0.6), 2)
+			for i in n + 1:
+				put.call(metal, 0.0, h * 0.75, -l * 0.5 + l * float(i) / float(n), w, 0.03, 0.04)
+		"cargo_box":
+			put.call(dark, 0.0, h * 0.45, 0.0, w, h * 0.9, l)
+			put.call(dark, 0.0, h * 0.92, 0.0, w * 0.86, h * 0.1, l * 0.94)
+		"solar":
+			var kit_cells: _K = g["solar"]
+			var mu := float(el["mod_u"])
+			var mv := float(el["mod_v"])
+			var cols := int(el["cols"])
+			var rows := int(el["rows"])
+			var flex := str(el["module"]) == "flex_100"
+			var lift := 0.012 if flex else 0.07
+			if not flex:
+				# Two mounting rails under each row.
+				for r0 in rows:
+					var cv := -l * 0.5 + mv * 0.5 + float(r0) * (mv + VehicleExterior.MODULE_GAP)
+					for sv in [-0.3, 0.3]:
+						put.call(metal, 0.0, lift * 0.45, cv + sv * mv, w, lift * 0.9, 0.04)
+			for r1 in rows:
+				for c1 in cols:
+					var cu := -w * 0.5 + mu * 0.5 + float(c1) * (mu + VehicleExterior.MODULE_GAP)
+					var cv2 := -l * 0.5 + mv * 0.5 + float(r1) * (mv + VehicleExterior.MODULE_GAP)
+					var t := 0.004 if flex else 0.035
+					put.call(kit_cells, cu, lift + t * 0.5, cv2, mu - 0.01, t, mv - 0.01)
+					if not flex:
+						put.call(metal, cu, lift + t * 0.5, cv2, mu, t * 0.9, mv)
+		"awning":
+			# The roll along the top of the wall; rolled out, the canvas slopes
+			# away and two legs hold its front edge.
+			metal.cylinder(base + by * 0.09, 0.08, w, bx, 12)
+			if bool(el.get("open", false)):
+				var ext := float(el.get("ext", 2.4))
+				var fab: _K = g["fabric"]
+				var a0 := base + by * 0.1 - bx * (w * 0.5)
+				var a1 := base + by * 0.1 + bx * (w * 0.5)
+				var b0 := a0 + by * ext - bz * 0.35
+				var b1 := a1 + by * ext - bz * 0.35
+				fab.quad(a0, a1, b1, b0, (by * 0.35 + bz * ext).normalized())
+				fab.quad(a0, b0, b1, a1, -(by * 0.35 + bz * ext).normalized())
+				var foot := 0.0   # the ground under the vehicle
+				for p in [b0, b1]:
+					var pp: Vector3 = p
+					metal.cylinder(Vector3(pp.x, (pp.y + foot) * 0.5, pp.z), 0.02, pp.y - foot, Vector3.UP, 8)
+		"ladder":
+			var top := float(d["body"]["h"]) - base.y
+			var bottom := float(d["body"]["y0"]) - base.y
+			for su in [-1.0, 1.0]:
+				put.call(metal, su * w * 0.5, 0.06, (top + bottom) * 0.5, 0.03, 0.03, top - bottom)
+			var rungs := maxi(int((top - bottom) / 0.3), 2)
+			for i in rungs + 1:
+				put.call(metal, 0.0, 0.06, bottom + (top - bottom) * float(i) / float(rungs), w, 0.025, 0.025)
+		"light_bar":
+			put.call(dark, 0.0, h * 0.5, 0.0, w, h, l)
+			put.call(g["lamp"], 0.0, h * 0.5, -l * 0.5 - 0.004, w * 0.95, h * 0.6, 0.008)
+		"bike_rack":
+			put.call(metal, 0.0, 0.25, 0.0, 0.06, 0.5, 0.06)
+			put.call(metal, 0.0, h, 0.0, w, 0.05, 0.05)
+			put.call(metal, 0.0, h * 0.6, l * 0.35, w * 0.9, 0.04, 0.04)
+		"window":
+			put.call(g["glass"], 0.0, 0.012, 0.0, w, 0.01, l)
+			put.call(g["trim"], 0.0, 0.006, 0.0, w + 0.06, 0.008, l + 0.06)
+		"hitch":
+			put.call(dark, 0.0, h * 0.5, 0.0, w, h, l)
+			put.call(metal, 0.0, h + 0.03, 0.0, 0.03, 0.06, 0.03)
+		_:
+			put.call(dark, 0.0, h * 0.5, 0.0, w, h, l)
 
 
 # --- floor + interior ------------------------------------------------------------------

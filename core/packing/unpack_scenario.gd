@@ -99,14 +99,17 @@ static func scenario_for_kit(kit_id: String) -> String:
 ##   • The LIFO sort ends on `item_index` because Godot's sort_custom is not
 ##     stable; without a total order the same scenario could stow differently
 ##     between runs.
-static func stow_plan(scenario_id: String) -> Dictionary:
+##
+## `host` (optional): a ContainerCatalog-shaped entry to stow into instead of
+## the scenario's own container — a living vehicle's bay (VehicleCargo.bay).
+static func stow_plan(scenario_id: String, host: Dictionary = {}) -> Dictionary:
 	var sc := find(scenario_id)
 	var out := {"ok": false, "container_id": "", "interior": {},
 		"items": [], "placements": [], "order": [], "overflow": []}
 	if sc.is_empty():
 		return out
-	var container_id := str(sc.get("container_id", "container_20"))
-	var entry := ContainerCatalog.find(container_id)
+	var container_id := str(host.get("id", "")) if not host.is_empty() else str(sc.get("container_id", "container_20"))
+	var entry := host if not host.is_empty() else ContainerCatalog.find(container_id)
 	if entry.is_empty():
 		return out
 	out["container_id"] = container_id

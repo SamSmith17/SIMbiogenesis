@@ -65,5 +65,39 @@ static func placed_total(records: Array) -> Dictionary:
 	return {"usd": usd, "priced": priced, "unpriced": unpriced, "rows": rows}
 
 
+## What a living vehicle costs to RUN: the round trip to site from the typed
+## miles (VehicleEnergy.trip) plus every litre poured in from a can on site
+## (`vehicle_fuel_bought_l`, at the trip's fuel price). {usd, trip_usd,
+## fuel_usd, miles}; {} for anything that is not a living vehicle.
+static func running_for_record(rec: Dictionary) -> Dictionary:
+	if not (rec.get("vehicle_spec") is Dictionary) and not VehicleBuilder.handles(str(rec.get("model_id", ""))):
+		return {}
+	var spec := VehicleBuilder.spec_for_record(rec)
+	var d := VehicleDesign.solve(spec)
+	var t: Dictionary = d.get("trip_estimate", {})
+	var trip_usd := maxf(float(t.get("cost", 0.0)), 0.0)
+	var price := float((spec.get("trip", {}) as Dictionary).get("fuel_price_per_gal", 4.5))
+	var fuel_usd := maxf(float(rec.get("vehicle_fuel_bought_l", 0.0)), 0.0) / 3.78541 * price
+	return {"usd": trip_usd + fuel_usd, "trip_usd": trip_usd, "fuel_usd": fuel_usd,
+		"miles": float(t.get("mi", 0.0))}
+
+
+## Every living vehicle's running cost summed: {usd, vehicles, miles}.
+static func running_total(records: Array) -> Dictionary:
+	var usd := 0.0
+	var n := 0
+	var miles := 0.0
+	for r_v in records:
+		if not (r_v is Dictionary):
+			continue
+		var c := running_for_record(r_v as Dictionary)
+		if c.is_empty():
+			continue
+		n += 1
+		usd += float(c["usd"])
+		miles += float(c["miles"])
+	return {"usd": usd, "vehicles": n, "miles": miles}
+
+
 static func format_usd(usd: float) -> String:
 	return "$%s" % UiText.thousands(int(round(usd)))

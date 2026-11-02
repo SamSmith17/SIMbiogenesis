@@ -236,7 +236,7 @@ func _sync_level_ui() -> void:
 # ---------------------------------------------------------------------------
 
 func _set_container(container_id: String) -> void:
-	var entry := ContainerCatalog.find(container_id)
+	var entry := _vehicle_bay_entry(container_id) if container_id.begins_with("vehicle_bay:") 		else ContainerCatalog.find(container_id)
 	if entry.is_empty():
 		entry = ContainerCatalog.find("uhaul_15")
 	_entry = entry
@@ -432,6 +432,39 @@ func _refill_container_combo() -> void:
 		_container_combo.set_item_metadata(_container_combo.item_count - 1, id)
 		if id == cur:
 			_container_combo.select(_container_combo.item_count - 1)
+	# The placed living vehicles' cargo bays ("load my van").
+	for vb in _vehicle_bays():
+		var e2: Dictionary = vb
+		_container_combo.add_item("%s %s" % [str(e2.get("icon", "")), str(e2.get("label", ""))])
+		_container_combo.set_item_metadata(_container_combo.item_count - 1, str(e2["id"]))
+		if str(e2["id"]) == cur:
+			_container_combo.select(_container_combo.item_count - 1)
+
+
+## Every placed living vehicle's cargo bay as a container entry
+## (id "vehicle_bay:<prop id>").
+func _vehicle_bays() -> Array:
+	var out: Array = []
+	var loader := _find_loader()
+	if loader == null or not loader.has_method("placed_prop_records"):
+		return out
+	for r in loader.call("placed_prop_records"):
+		var rec: Dictionary = r
+		if not VehicleBuilder.handles(str(rec.get("model_id", ""))):
+			continue
+		var b := VehicleCargo.bay(VehicleDesign.solve(VehicleBuilder.spec_for_record(rec)))
+		if b.is_empty():
+			continue
+		b["id"] = "vehicle_bay:%s" % str(rec.get("id", ""))
+		out.append(b)
+	return out
+
+
+func _vehicle_bay_entry(id: String) -> Dictionary:
+	for b in _vehicle_bays():
+		if str((b as Dictionary)["id"]) == id:
+			return b
+	return {}
 
 
 func _on_units_pressed() -> void:

@@ -61,6 +61,32 @@ func _update_display() -> void:
 	var current_speed_mps : float = euc_vehicle.get("current_speed_mps") if "current_speed_mps" in euc_vehicle else 0.0
 	var wh_per_mile : float = euc_vehicle.get("wh_per_mile") if "wh_per_mile" in euc_vehicle else 30.0
 	
+	# A living vehicle on liquid fuel: the tank and its range.
+	var head := get_node_or_null("Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryLabel") as Label
+	var icon := get_node_or_null("Panel/MarginContainer/VBoxContainer/TitleContainer/EUCIcon") as Label
+	if head != null:
+		head.text = "BATTERY"
+	if icon != null:
+		icon.text = "⚡"
+	if battery_capacity <= 0.0 and euc_vehicle.has_method("get_fuel_litres"):
+		var fl: Vector2 = euc_vehicle.call("get_fuel_litres")
+		if fl.y > 0.0:
+			if head != null:
+				head.text = "FUEL"
+			if icon != null:
+				icon.text = "⛽"
+			var pct := 100.0 * fl.x / fl.y
+			battery_bar.value = pct
+			var col := UITheme.C_OK if pct > 25.0 else (UITheme.C_WARN if pct > 10.0 else UITheme.C_ERROR)
+			battery_bar.modulate = col
+			battery_percent_label.text = "%.0f%%" % pct
+			battery_percent_label.add_theme_color_override("font_color", col)
+			battery_wh_label.text = "%.0f / %.0f L" % [fl.x, fl.y]
+			distance_value.text = "%.1f mi" % (distance_meters / 1609.344)
+			speed_value.text = "%.0f mph" % (current_speed_mps * 2.23694)
+			var rmi := float(euc_vehicle.call("get_range_mi")) if euc_vehicle.has_method("get_range_mi") else -1.0
+			range_value.text = "%.0f mi" % rmi if rmi >= 0.0 else "—"
+			return
 	# A fuel vehicle (a placed bus, van or skid steer reports no battery).
 	if battery_capacity <= 0.0:
 		battery_bar.value = 100.0

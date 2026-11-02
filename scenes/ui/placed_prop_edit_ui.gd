@@ -852,6 +852,10 @@ func _rebuild_dynamic_sections() -> void:
 			_on_flatpack)
 	if mid == DomeLabBuilder.MODEL_ID:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
+	if VehicleBuilder.handles(mid):
+		_button("Edit vehicle…", "The living-vehicle designer, bound to this vehicle", _model_btns, _on_vehiclelab)
+		if not str(_rec.get("towing", "")).is_empty() or not str(_rec.get("hitched_to", "")).is_empty():
+			_button("Unhitch trailer", "Leave the trailer standing where it is", _model_btns, _on_unhitch)
 	if mid == ToroidLabBuilder.MODEL_ID:
 		_button("Edit toroid…", "The toroid designer, bound to this structure", _model_btns, _on_toroidlab)
 	if mid == PeltonLabBuilder.MODEL_ID:
@@ -1604,6 +1608,22 @@ func _on_flatpack() -> void:
 		_loader.call("open_flatpack_designer_for_prop", pid)
 
 
+func _on_vehiclelab() -> void:
+	var pid := _prop_id
+	if _loader != null and _loader.has_method("open_vehiclelab_for_prop"):
+		close()
+		_loader.call("open_vehiclelab_for_prop", pid)
+
+
+func _on_unhitch() -> void:
+	var main := _loader.get_parent() if _loader != null else null
+	while main != null and not main.has_method("get_absolute_hours"):
+		main = main.get_parent()
+	if main != null:
+		PlacedVehicle.unhitch_prop(main, _prop_id)
+		_rec = PlacedPropService.get_prop_record(main, _prop_id)
+
+
 func _on_domelab() -> void:
 	var pid := _prop_id
 	if _loader != null and _loader.has_method("open_domelab_for_prop"):
@@ -1861,18 +1881,8 @@ func _on_crew_breakdown() -> void:
 	var site := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
 	var loadout: Dictionary = {}
 	if _loader != null and _loader.has_method("placed_prop_records"):
-		var best_d := 200.0
-		for r in (_loader.call("placed_prop_records") as Array):
-			var cr := r as Dictionary
-			if str(cr.get("model_id", "")) != "cargo_container":
-				continue
-			var cpos := Vector2(float(cr.get("x", 0.0)), float(cr.get("z", 0.0)))
-			var dist := site.distance_to(cpos)
-			if dist < best_d:
-				best_d = dist
-				var yaw := deg_to_rad(float(cr.get("yaw", 0.0)))
-				var door := cpos + Vector2(sin(yaw), cos(yaw)) * 5.0
-				loadout = {"x": door.x, "z": door.y}
+		# A shipping container's door, or a living vehicle's cargo-bay door.
+		loadout = VehicleCargo.door_near(_loader.call("placed_prop_records") as Array, site, 200.0)
 	var rows := SiteProject.breakdown_spec_rows(counts, _prop_id, loadout)
 	var project_id := str(bridge.call("create_site_project", iid,
 		SiteProject.KIND_LINKAGE_BREAKDOWN, "Breakdown: linkage structure",

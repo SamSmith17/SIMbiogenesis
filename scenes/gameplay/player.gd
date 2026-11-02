@@ -170,6 +170,8 @@ var is_golf_cart_mode : bool = false
 var use_cart_steering : bool = false
 var cart_min_turn_radius : float = 3.0
 var cart_max_turn_rate : float = 60.0
+## A living vehicle turns no tighter than its own turning circle (v / R).
+var cart_turn_by_radius : bool = false
 var cart_current_speed : float = 0.0  # Current forward speed for cart
 var current_camera_tilt : float = 0.0
 var is_fpv_drone_mode : bool = false  # Special mode: player body stays, camera goes to drone
@@ -1747,6 +1749,7 @@ func _mount_vehicle(vehicle: Node3D) -> void:
 			use_cart_steering = params.get("use_cart_steering", false)
 			cart_min_turn_radius = params.get("min_turn_radius", 3.0)
 			cart_max_turn_rate = params.get("max_turn_rate", 60.0)
+			cart_turn_by_radius = bool(params.get("turn_by_radius", false))
 			is_fpv_drone_mode = params.get("is_fpv_drone", false)
 			_ride_chase_m = float(params.get("chase_m", 0.0))
 			_ride_chase_h = float(params.get("chase_h", 0.0))
@@ -1935,6 +1938,9 @@ func _handle_cart_movement(input_dir: Vector2, delta: float) -> void:
 		
 		# Clamp turn rate to prevent spinning
 		turn_rate = clampf(turn_rate, -cart_max_turn_rate, cart_max_turn_rate)
+		if cart_turn_by_radius:
+			var lim := VehicleDesign.yaw_rate_limit_deg(cart_current_speed, cart_min_turn_radius)
+			turn_rate = clampf(turn_rate, -lim, lim)
 		
 		# Reverse steering direction when going backwards
 		if cart_current_speed < 0:

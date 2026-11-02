@@ -303,6 +303,9 @@ const TYPE_ORDER := ["van", "cargo_van", "shuttle_bus", "school_bus", "step_van"
 ## Interior element types: their default size (w across, l along, h = the
 ## TOP above the inside floor), what they provide and their mass. A bed
 ## sleeps floor(w / BED_SLEEPER_W) people (1–2) along its own long axis.
+## `load_w` is a load's average draw (a 12 V compressor fridge ~45 W over a
+## day, an LED ceiling light ~8 W, a 24" monitor ~25 W — typical nameplate
+## figures, estimates): the vehicle's graph node bills them.
 const BED_SLEEPER_W := 0.62
 const INTERIOR_TYPES := {
 	"bed": {"label": "Bed (platform)", "w": 1.37, "l": 1.9, "h": 0.62, "mass_kg": 45.0,
@@ -320,7 +323,7 @@ const INTERIOR_TYPES := {
 	"galley": {"label": "Galley (sink + range)", "w": 0.6, "l": 1.3, "h": 0.92, "mass_kg": 55.0,
 		"provides": ["kitchen"], "color": [0.65, 0.52, 0.36]},
 	"fridge": {"label": "Fridge (12 V)", "w": 0.55, "l": 0.55, "h": 1.2, "mass_kg": 25.0,
-		"provides": [], "color": [0.86, 0.87, 0.88]},
+		"provides": [], "color": [0.86, 0.87, 0.88], "load_w": 45.0},
 	"shower": {"label": "Shower", "w": 0.8, "l": 0.8, "h": 2.0, "mass_kg": 30.0,
 		"provides": ["shower"], "color": [0.9, 0.92, 0.93]},
 	"toilet": {"label": "Toilet (composting)", "w": 0.5, "l": 0.6, "h": 0.5, "mass_kg": 12.0,
@@ -346,9 +349,9 @@ const INTERIOR_TYPES := {
 	"grey_tank": {"label": "Grey water tank", "w": 0.45, "l": 0.7, "h": 0.35, "mass_kg": 7.0,
 		"provides": ["grey"], "color": [0.45, 0.47, 0.5], "litres": 90.0},
 	"light": {"label": "Ceiling light", "w": 0.2, "l": 0.2, "h": 0.03, "mass_kg": 0.3,
-		"provides": [], "color": [1.0, 0.96, 0.85], "ceiling": true},
+		"provides": [], "color": [1.0, 0.96, 0.85], "ceiling": true, "load_w": 8.0},
 	"monitor": {"label": "Monitor", "w": 0.06, "l": 0.6, "h": 0.35, "mass_kg": 4.0,
-		"provides": [], "color": [0.08, 0.08, 0.09], "wall_hung": 1.2},
+		"provides": [], "color": [0.08, 0.08, 0.09], "wall_hung": 1.2, "load_w": 25.0},
 	"mirror": {"label": "Mirror", "w": 0.02, "l": 0.4, "h": 0.6, "mass_kg": 2.0,
 		"provides": [], "color": [0.75, 0.8, 0.85], "wall_hung": 1.1},
 }

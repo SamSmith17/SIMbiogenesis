@@ -52,6 +52,8 @@ static func _solve(s: Dictionary) -> Dictionary:
 		"trip": s["trip"], "checks": []}
 	_layout(d, ch, bd)
 	_interior(d, s)
+	_exterior(d, s)
+	d["systems"] = VehicleInterior.systems(d)
 	_masses(d, ch, bd, s)
 	_cargo(d, bd)
 	d["energy_55"] = VehicleEnergy.at_speed(d, VehicleEnergy.MPS_55MPH)
@@ -135,7 +137,18 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	var drivable := cab != "none"
 	match cab:
 		"full_van", "cutaway":
-			seat = Vector3(-0.42, float(ch.get("frame_h_m", 0.6)) + 1.28, hood + 0.75)
+			var fy0 := float(ch.get("frame_h_m", 0.6))
+			seat = Vector3(-0.42, fy0 + 1.28, hood + 0.75)
+			# The eye sits ~0.55 m behind the windshield at its own height
+			# (the cab profile's slope from the hood's top to the roof, as
+			# VehicleBuilder._cab draws it), not pressed against the glass.
+			var ws_lo := fy0 + 0.65
+			var ws_hi := float(ch.get("cab_h_m", 2.2))
+			var frac := clampf((seat.y - ws_lo) / maxf(ws_hi - ws_lo, 0.1), 0.0, 1.0)
+			seat.z = maxf(seat.z, hood + 0.85 * frac + 0.55)
+			# A cutaway's cab is short: never behind its own back wall.
+			if cab_len > 0.0:
+				seat.z = minf(seat.z, cab_len - 0.25)
 		"cowl":
 			var eye := floor_y + 1.3 if integral else float(ch.get("frame_h_m", 1.0)) + 1.45
 			seat = Vector3(-0.55, eye, hood + 0.7)
@@ -160,10 +173,34 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	d["height_m"] = height
 	d["half_len"] = half
 	d["integral"] = integral
-	d["body"] = {"z0": body_z0 - half, "z1": body_z1 - half, "w": float(bd["width_m"]),
-		"h": height, "floor_y": floor_y, "roof": roof, "corner_r": float(bd.get("corner_r_m", 0.1)),
+	# The shell's cross-section and front rake (VehicleBuilder draws it from
+	# these; VehicleExterior puts things on it): crown over straight walls
+	# with a rounded corner, a bottom edge, and the front's lean-back.
+	var hw := float(bd["width_m"]) * 0.5
+	var corner := clampf(float(bd.get("corner_r_m", 0.1)), 0.0, minf(hw * 0.6, 0.4))
+	var crown := float({"high_top": 0.03, "crown": 0.1, "arched": 0.3, "cabover": 0.07}.get(roof, 0.0))
+	var y0 := clampf(floor_y - 0.45, 0.32, 0.6) if integral else floor_y - 0.12
+	var shell_z0 := body_z0
+	var rake_top := 0.0
+	var rake_from := y0
+	if cab == "full_van":
+		# The cab covers the van's front to the windshield top; the shell
+		# starts there and its high roof leans back.
+		shell_z0 = hood + 0.8
+		rake_from = float(ch.get("cab_h_m", 2.0))
+		rake_top = 0.4
+	elif cab == "forward" and integral:
+		rake_top = 0.45 if str(d["spec"].get("body_id", "")) == "class_a_motorhome" else 0.12
+		rake_from = y0 + 0.3
+	elif cab == "none":
+		rake_top = 0.3
+		rake_from = (y0 + height) * 0.5
+	d["body"] = {"z0": shell_z0 - half, "z1": body_z1 - half, "w": float(bd["width_m"]),
+		"h": height, "floor_y": floor_y, "roof": roof, "corner_r": corner, "crown": crown,
+		"y0": y0, "wall_top": height - crown - corner, "rake_top": rake_top, "rake_from": rake_from,
 		"windows": str(bd.get("windows", "few")), "rear_door": str(bd.get("rear_door", "none")),
-		"side_door": str(bd.get("side_door", "hinged")), "id": str(d["spec"].get("body_id", ""))}
+		"side_door": str(bd.get("side_door", "hinged")), "id": str(d["spec"].get("body_id", "")),
+		"door_at": float(bd.get("door_at_m", -1.0))}
 	d["cab_geo"] = {"style": cab, "hood": hood, "cab_len": cab_len, "z0": -half,
 		"h": float(ch.get("cab_h_m", 2.2)), "w": float(ch.get("cab_w_m", width)),
 		"frame_h": float(ch.get("frame_h_m", 0.7)), "integral": integral}
@@ -174,6 +211,17 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	d["drivable"] = drivable
 	d["driver_seat"] = Vector3(seat.x, seat.y, seat.z - half) if drivable else Vector3.ZERO
 	d["frame"] = {"y": float(ch.get("frame_h_m", 0.7)), "track": track}
+	# Towing (VehicleTow): a ball hitch just behind a drivable vehicle's rear
+	# (none on the semi, whose fifth wheel already carries the box), and a
+	# trailer's coupler at its tongue tip with its axles' middle.
+	if drivable and cab != "tractor":
+		d["hitch"] = Vector3(0.0, 0.5, half + 0.15)
+	if cab == "none":
+		var az := 0.0
+		for a in axles:
+			az += float((a as Dictionary)["zf"])
+		d["axle_z"] = az / maxf(float(axles.size()), 1.0) - half
+		d["coupler"] = Vector3(0.0, 0.5, -half)
 	var steer := deg_to_rad(maxf(float(ch.get("max_steer_deg", 40.0)), 1.0))
 	# The outer front wheel's turning radius (what a spec sheet quotes as the
 	# turning circle / 2): rear-axle centre radius WB / tan δ, then out to the
@@ -189,10 +237,8 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 
 static func _interior(d: Dictionary, s: Dictionary) -> void:
 	var house: Dictionary = d["house"]
-	var hlen := float(house["len"])
 	var hw := float(house["w"])
 	var fy := float(house["floor_y"])
-	var cy := float(house["ceil_y"])
 	var els: Array = []
 	var beds: Array = []
 	var seats: Array = []
@@ -203,55 +249,26 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	var grey_l := 0.0
 	var mass := 0.0
 	var n := 0
+	var loads: Array = []
 	for e in (s["interior"] as Dictionary).get("elements", []):
 		if not (e is Dictionary):
 			continue
 		var ed: Dictionary = e
-		var type := str(ed.get("type", ""))
-		var t := VehicleCatalog.interior_type(type)
-		if t.is_empty():
-			continue
 		n += 1
-		var w := clampf(float(ed.get("w", t["w"])), 0.02, hw)
-		var l := clampf(float(ed.get("l", t["l"])), 0.02, maxf(hlen, 0.5))
-		var h := clampf(float(ed.get("h", t["h"])), 0.02, maxf(cy - fy, 0.5))
-		var yaw90 := absf(float(ed.get("yaw", 0.0))) > 45.0
-		var fx := l if yaw90 else w       # footprint across
-		var fz := w if yaw90 else l       # footprint along
-		var zc := float(ed.get("z", hlen * 0.5))
-		if zc < 0.0:
-			zc = hlen + zc
-		var xc := float(ed.get("x", 0.0))
-		xc = clampf(xc, -hw * 0.5 + fx * 0.5, hw * 0.5 - fx * 0.5) if fx < hw else 0.0
-		zc = clampf(zc, fz * 0.5, hlen - fz * 0.5) if fz < hlen else hlen * 0.5
-		var base_y := fy
-		if t.has("wall_hung"):
-			base_y = fy + float(t["wall_hung"])
-			var side := 1.0 if xc >= 0.0 else -1.0
-			xc = side * (hw * 0.5 - fx * 0.5)
-		elif bool(t.get("ceiling", false)):
-			base_y = cy - h
-		var top := base_y + h
-		var lz := float(house["z0"]) + zc
-		var el := {"id": str(ed.get("id", "i%d" % n)), "type": type, "x": xc, "z": lz,
-			"fx": fx, "fz": fz, "base_y": base_y, "top_y": top, "yaw90": yaw90,
-			"color": t.get("color", [0.6, 0.5, 0.4]), "label": str(t.get("label", type))}
-		# The cab-over bunk sits over the cab, not on the floor.
-		if type == "cabover_bed":
-			var cg: Dictionary = d["cab_geo"]
-			var bunk_floor := float(cg["h"]) + 0.08
-			var z_back := float(house["z0"]) + 0.3
-			var z_front := maxf(float(cg["z0"]) + float(cg["hood"]) * 0.45, z_back - fz)
-			el["z"] = (z_front + z_back) * 0.5
-			el["fz"] = z_back - z_front
-			fz = el["fz"]
-			el["x"] = 0.0
-			xc = 0.0
-			el["base_y"] = bunk_floor
-			el["top_y"] = bunk_floor + 0.2
-			el["cabover"] = true
+		var el := resolve_interior_element(d, ed, n)
+		if el.is_empty():
+			continue
+		var type := str(el["type"])
+		var t := VehicleCatalog.interior_type(type)
+		var xc := float(el["x"])
+		var lz := float(el["z"])
+		var fx := float(el["fx"])
 		els.append(el)
 		mass += float(t.get("mass_kg", 0.0))
+		var lw := float(ed.get("watts", t.get("load_w", 0.0)))
+		if lw > 0.0:
+			loads.append({"id": str(el["id"]), "name": str(t.get("label", type)).split(" (")[0],
+				"watts": lw, "type": type})
 		var provides: Array = t.get("provides", [])
 		if provides.has("sleep"):
 			var made := _bed_spots(el, type)
@@ -287,8 +304,107 @@ static func _interior(d: Dictionary, s: Dictionary) -> void:
 	d["water_l"] = water_l
 	d["grey_l"] = grey_l
 	d["interior_kg"] = mass
+	d["house_loads"] = loads
 	var st := int(s.get("seats", -1))
 	d["seats"] = st if st >= 0 else int(SEATS.get(str(s["type"]), 2))
+
+
+## One interior element as the design draws it: {id, type, x (across, from
+## the centre line), z (vehicle-local), fx / fz (footprint across / along),
+## base_y / top_y, yaw90, color, label}, clamped inside the living box,
+## wall-hung things on the nearer wall, a ceiling light on the ceiling, the
+## cab-over bunk over the cab. The spec's own z is from the box's FRONT
+## (< 0 counts from its rear). {} for an unknown type. The designer's ghost
+## goes through this too, so a placed element lands where its ghost stood.
+static func resolve_interior_element(d: Dictionary, ed: Dictionary, n: int = 0) -> Dictionary:
+	var type := str(ed.get("type", ""))
+	var t := VehicleCatalog.interior_type(type)
+	if t.is_empty():
+		return {}
+	var house: Dictionary = d["house"]
+	var hlen := float(house["len"])
+	var hw := float(house["w"])
+	var fy := float(house["floor_y"])
+	var cy := float(house["ceil_y"])
+	var w := clampf(float(ed.get("w", t["w"])), 0.02, hw)
+	var l := clampf(float(ed.get("l", t["l"])), 0.02, maxf(hlen, 0.5))
+	var h := clampf(float(ed.get("h", t["h"])), 0.02, maxf(cy - fy, 0.5))
+	var yaw90 := absf(float(ed.get("yaw", 0.0))) > 45.0
+	var fx := l if yaw90 else w       # footprint across
+	var fz := w if yaw90 else l       # footprint along
+	var zc := float(ed.get("z", hlen * 0.5))
+	if zc < 0.0:
+		zc = hlen + zc
+	var xc := float(ed.get("x", 0.0))
+	xc = clampf(xc, -hw * 0.5 + fx * 0.5, hw * 0.5 - fx * 0.5) if fx < hw else 0.0
+	zc = clampf(zc, fz * 0.5, hlen - fz * 0.5) if fz < hlen else hlen * 0.5
+	var base_y := fy
+	if t.has("wall_hung"):
+		base_y = fy + float(t["wall_hung"])
+		var side := 1.0 if xc >= 0.0 else -1.0
+		xc = side * (hw * 0.5 - fx * 0.5)
+	elif bool(t.get("ceiling", false)):
+		base_y = cy - h
+	var top := base_y + h
+	var lz := float(house["z0"]) + zc
+	var el := {"id": str(ed.get("id", "i%d" % n)), "type": type, "x": xc, "z": lz,
+		"zc": zc, "fx": fx, "fz": fz, "base_y": base_y, "top_y": top, "yaw90": yaw90,
+		"w": w, "l": l, "h": h,
+		"color": t.get("color", [0.6, 0.5, 0.4]), "label": str(t.get("label", type))}
+	for k in ["kwh", "litres", "watts"]:
+		if ed.has(k):
+			el[k] = float(ed[k])
+		elif t.has(k if k != "watts" else "load_w"):
+			el[k] = float(t[k if k != "watts" else "load_w"])
+	# The cab-over bunk sits over the cab, not on the floor.
+	if type == "cabover_bed":
+		var cg: Dictionary = d["cab_geo"]
+		var bunk_floor := float(cg["h"]) + 0.08
+		var z_back := float(house["z0"]) + 0.3
+		var z_front := maxf(float(cg["z0"]) + float(cg["hood"]) * 0.45, z_back - fz)
+		el["z"] = (z_front + z_back) * 0.5
+		el["fz"] = z_back - z_front
+		el["x"] = 0.0
+		el["base_y"] = bunk_floor
+		el["top_y"] = bunk_floor + 0.2
+		el["cabover"] = true
+	return el
+
+
+## The doors people walk in by, vehicle-local: side doors on the curb side
+## (+X), a rear door across the back. {where, x, z0, z1, y0, y1}. The builder
+## draws them from these and the interior's access check starts from them.
+static func door_spans(d: Dictionary) -> Array:
+	var out: Array = []
+	var b: Dictionary = d["body"]
+	var house: Dictionary = d["house"]
+	var cg: Dictionary = d["cab_geo"]
+	var hw := float(b["w"]) * 0.5
+	var floor_y := float(b["floor_y"])
+	var z0 := float(b["z0"])
+	var z1 := float(b["z1"])
+	var side := str(b["side_door"])
+	if side != "none":
+		var w := 1.25 if side == "slider" else (0.85 if side == "bus" else 0.72)
+		var dz0 := float(house["z0"]) + 0.2
+		if side == "bus":
+			dz0 = z0 + 0.1 if bool(d["integral"]) else float(house["z0"]) + 0.1
+		elif str(cg["style"]) == "full_van":
+			dz0 = float(house["z0"]) - 0.25
+		# A body override: the door's front edge this far back from the
+		# front of the living box (a travel trailer's door is mid-curbside).
+		var at := float(b.get("door_at", -1.0))
+		if at >= 0.0:
+			dz0 = clampf(float(house["z0"]) + at, z0 + 0.1, z1 - 0.3 - w)
+		var dz1 := minf(dz0 + w, z1 - 0.3)
+		out.append({"where": "side", "x": hw, "z0": dz0, "z1": dz1, "y0": float(b["y0"]) + 0.03,
+			"y1": minf(float(b["wall_top"]) - 0.05, floor_y + 1.95)})
+	var rear := str(b["rear_door"])
+	if rear != "none":
+		var rw := hw - 0.08
+		out.append({"where": "rear", "x0": -rw, "x1": rw, "z": z1, "y0": floor_y - 0.05,
+			"y1": minf(float(b["wall_top"]) - 0.08, floor_y + (2.2 if rear == "barn" else 2.4))})
+	return out
 
 
 ## One spot per sleeper on a bed: side by side across its short side, lying
@@ -342,6 +458,28 @@ static func _seat_spots(el: Dictionary, type: String, floor_y: float) -> Array:
 	return out
 
 
+# --- exterior ---------------------------------------------------------------------
+
+## The roof / side / rear items, resolved onto their faces (VehicleExterior),
+## with ids filled in, plus their totals (mass, solar watts, loads).
+static func _exterior(d: Dictionary, s: Dictionary) -> void:
+	var out: Array = []
+	var n := 0
+	for e in (s.get("exterior", {}) as Dictionary).get("elements", []):
+		if not (e is Dictionary):
+			continue
+		n += 1
+		var el := VehicleExterior.resolve_element(d, e as Dictionary)
+		if el.is_empty():
+			continue
+		if str(el["id"]).is_empty():
+			el["id"] = "x%d" % n
+		out.append(el)
+	d["exterior"] = out
+	d["exterior_totals"] = VehicleExterior.totals(out)
+	d["solar_w"] = float((d["exterior_totals"] as Dictionary)["solar_w"])
+
+
 # --- masses, cargo, checks ---------------------------------------------------------
 
 static func _masses(d: Dictionary, ch: Dictionary, bd: Dictionary, s: Dictionary) -> void:
@@ -356,7 +494,8 @@ static func _masses(d: Dictionary, ch: Dictionary, bd: Dictionary, s: Dictionary
 		else:
 			var skin := 2.0 * L * H + 2.0 * W * H + L * W
 			body_kg = skin * float(bd.get("wall_kg_m2", 12.0)) + L * W * FLOOR_KG_M2
-	var curb := float(ch.get("curb_kg", 3000.0)) + body_kg + float(d["interior_kg"])
+	var curb := float(ch.get("curb_kg", 3000.0)) + body_kg + float(d["interior_kg"]) \
+		+ float((d.get("exterior_totals", {}) as Dictionary).get("kg", 0.0))
 	var gvwr := float(ch.get("gvwr_kg", curb * 1.3))
 	var occupants := float(maxi(int(d["seats"]), 1)) * OCCUPANT_KG
 	d["body_kg"] = body_kg
@@ -406,7 +545,9 @@ static func _checks(d: Dictionary) -> void:
 		for j in range(i + 1, els.size()):
 			if _overlap(els[i], els[j]):
 				c.append({"level": "warn", "text": "%s and %s overlap." %
-					[str((els[i] as Dictionary)["label"]), str((els[j] as Dictionary)["label"])]})
+					[str((els[i] as Dictionary)["label"]), str((els[j] as Dictionary)["label"])],
+					"ids": [str((els[i] as Dictionary)["id"]), str((els[j] as Dictionary)["id"])]})
+	c.append_array(VehicleInterior.checks(d))
 	var drag := float(d["length_m"])
 	if drag > 13.0:
 		c.append({"level": "info", "text": "%.1f m long: it needs a wide road and room to turn." % drag})
@@ -422,7 +563,9 @@ static func _overlap(a: Dictionary, b: Dictionary) -> bool:
 	for pair in [[a, b], [b, a]]:
 		var bed: Dictionary = pair[0]
 		var other: Dictionary = pair[1]
-		if (str(bed["type"]) == "bed" or str(bed["type"]) == "bunk") 				and UNDER_BED_OK.has(str(other["type"])) 				and float(other["top_y"]) <= float(bed["top_y"]) - MATTRESS_T - 0.05:
+		if (str(bed["type"]) == "bed" or str(bed["type"]) == "bunk") \
+				and UNDER_BED_OK.has(str(other["type"])) \
+				and float(other["top_y"]) <= float(bed["top_y"]) - MATTRESS_T - 0.05:
 			return false
 	var ya0 := float(a["base_y"])
 	var ya1 := float(a["top_y"])
@@ -459,7 +602,7 @@ static func riding_profile(d: Dictionary) -> Dictionary:
 		# The player's eye sits ~1.65 m over the prop origin; the offset puts it
 		# at the driver's eye.
 		"camera_offset": Vector3(seat.x, seat.y - 1.65, seat.z),
-		"is_golf_cart": true, "use_cart_steering": true, "min_turn_radius": R,
+		"is_golf_cart": true, "use_cart_steering": true, "min_turn_radius": R, "turn_by_radius": true,
 		"max_turn_rate": clampf(rad_to_deg(max_speed * 0.35 / R), 12.0, 40.0),
 		"yaw_deg": 0.0, "radius": maxf(L, float(d["width_m"])) * 0.5 + 1.2,
 		"battery_wh": float(d["battery_kwh"]) * 1000.0 if fuel == "electric" else 0.0,
@@ -469,6 +612,27 @@ static func riding_profile(d: Dictionary) -> Dictionary:
 		"chase_m": clampf(L * 1.25, 6.0, 22.0), "chase_h": clampf(float(d["height_m"]) * 0.9 + 0.8, 2.2, 5.5),
 		"half_width": float(d["width_m"]) * 0.5,
 	}
+
+
+## The fastest a vehicle turning on its tightest circle can swing round, in
+## degrees a second: yaw rate = v / R (kinematic, no slip), so a bus at walking
+## pace barely turns and nothing pivots on the spot.
+static func yaw_rate_limit_deg(v: float, turn_radius_m: float) -> float:
+	if turn_radius_m <= 0.0:
+		return INF
+	return rad_to_deg(absf(v) / turn_radius_m)
+
+
+## Miles left at a steady 55 mph from `litres` of fuel (or `kwh` for an
+## electric chassis): the dashboard's range.
+static func range_mi(d: Dictionary, litres: float, kwh: float = 0.0) -> float:
+	var e := VehicleEnergy.at_speed(d, 24.6)
+	var km := 0.0
+	if str(d.get("fuel", "")) == "electric":
+		km = kwh / maxf(float(e["kwh_per_km"]), 1e-6)
+	else:
+		km = litres / maxf(float(e["l_per_km"]), 1e-6)
+	return km * 1000.0 / VehicleEnergy.MI_M
 
 
 ## Litres (or kWh) drawn over `metres` at `v` m/s — what the dashboard bills

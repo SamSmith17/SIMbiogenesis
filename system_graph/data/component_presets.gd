@@ -873,6 +873,25 @@ const RESOURCES: Array = [
 			"level": 0.7, "cost": 120.0,
 		},
 	},
+	# Fuel stores: living vehicles parked within reach fill up from them.
+	{
+		"type": "resource", "label": "Fuel Store (Gasoline, 55 gal)", "icon": "⛽",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Gasoline", "resource_kind": "gasoline",
+			"capacity": "55 gal", "capacity_qty": 208.0, "capacity_unit": "L",
+			"level": 1.0, "cost": 180.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Fuel Store (Diesel, 275 gal tote)", "icon": "⛽",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Diesel", "resource_kind": "diesel",
+			"capacity": "275 gal", "capacity_qty": 1041.0, "capacity_unit": "L",
+			"level": 1.0, "cost": 450.0,
+		},
+	},
 	{
 		"type": "resource", "label": "Thermal Storage",      "icon": "♨",
 		"width": 90.0, "height": 100.0,

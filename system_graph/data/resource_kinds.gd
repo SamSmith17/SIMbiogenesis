@@ -220,6 +220,23 @@ const BUILTIN: Dictionary = {
 		"abbrev": "ðŸ›¢",
 		"flow_ref_rate": 5.0,
 	},
+	# Road fuels, for living vehicles that fill up at a fuel store on site.
+	"gasoline": {
+		"display": "Gasoline",
+		"color": Color(0.93, 0.36, 0.30, 1.0),
+		"unit": "L",
+		"abbrev": "⛽",
+		"flow_ref_rate": 40.0,
+		"aliases": ["petrol", "gas"],
+	},
+	"diesel": {
+		"display": "Diesel",
+		"color": Color(0.85, 0.72, 0.25, 1.0),
+		"unit": "L",
+		"abbrev": "⛽",
+		"flow_ref_rate": 40.0,
+		"aliases": ["biodiesel"],
+	},
 	"thermal": {
 		"display": "Heat",
 		"color": Color(0.847, 0.329, 0.329, 1.0),

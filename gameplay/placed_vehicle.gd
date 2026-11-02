@@ -139,12 +139,35 @@ var current_speed_mps := 0.0
 var fuel_l := 0.0
 var fuel_capacity_l := 0.0
 var fuel_used_l := 0.0
+## Litres poured in from a can because no fuel store was in reach (bought off
+## site: the trip's running cost).
+var fuel_bought_l := 0.0
+## How far a fuel store may stand from the vehicle to fill it.
+const REFUEL_REACH_M := 12.0
+## Towing (VehicleTow): the trailer's prop id (record key `towing`, the
+## trailer's `hitched_to`), its design, where its axle is, its height over the
+## ground, and the half-second scan for a trailer to back up to.
+var _tow_id := ""
+var _tow_node: Node3D = null
+var _tow_design: Dictionary = {}
+var _tow_axle := Vector2.ZERO
+var _tow_dy := 0.0
+var _tow_ready := false
+var _hitch_scan := 0.0
+## Crates stowed in the cargo bay (record `stowed_in` = this vehicle, with
+## `stow_local`): they ride along. Re-scanned every couple of seconds.
+var _cargo_ids: Array = []
+var _cargo_scan := 9.0
 var _design: Dictionary = {}
 
 var _prop: Node3D = null
 var _model: Node3D = null
 var _dy := 0.0
 var _last_pos := Vector3.ZERO
+## Wheels: metres rolled (signed) and the smoothed steering angle.
+var _roll_m := 0.0
+var _steer := 0.0
+var _last_yaw := 0.0
 var _record_accum := 0.0
 var _charge_accum := 0.0
 ## Watts the charger draws right now (0 parked-full, driving, or with the
@@ -181,6 +204,8 @@ func setup(prop: Node3D, model: Node3D, rec: Dictionary, pid: String) -> void:
 		fuel_capacity_l = float(profile.get("fuel_l", 0.0))
 		fuel_l = clampf(float(rec.get("vehicle_fuel_l", fuel_capacity_l)), 0.0, fuel_capacity_l)
 		fuel_used_l = float(rec.get("vehicle_fuel_used_l", 0.0))
+		fuel_bought_l = float(rec.get("vehicle_fuel_bought_l", 0.0))
+		_tow_id = str(rec.get("towing", ""))
 	prop_id = str(rec.get("id", ""))
 	model_id = str(rec.get("model_id", ""))
 	var entry := ModelCatalog.find(model_id)
@@ -298,12 +323,23 @@ func _perf_tick(delta: float) -> void:
 		if _model != null:
 			_model.rotation.y = current_rider.rotation.y + deg_to_rad(float(profile.get("yaw_deg", 0.0)))
 		var p := _prop.global_position
-		var step := Vector2(p.x - _last_pos.x, p.z - _last_pos.z).length()
+		var mv := Vector2(p.x - _last_pos.x, p.z - _last_pos.z)
+		var step := mv.length()
+		if profile_id == LIVING:
+			var yw := _yaw()
+			var ds := mv.dot(VehicleDrive.forward(yw))
+			_roll_m += ds
+			var want := VehicleBuilder.steer_for(VehicleBuilder.wheelbase_of(_design), angle_difference(_last_yaw, yw), ds)
+			_last_yaw = yw
+			_steer = lerpf(_steer, want, clampf(delta * 6.0, 0.0, 1.0))
+			VehicleBuilder.spin_wheels(_model, _roll_m, _steer)
 		_last_pos = p
 		current_speed_mps = step / delta if delta > 0.0 else 0.0
 		distance_traveled_meters += step
 		if battery_capacity_wh > 0.0:
 			battery_wh = maxf(battery_wh - step / 1609.344 * wh_per_mile, 0.0)
+		_tick_tow(delta)
+		_tick_cargo(delta)
 		if fuel_capacity_l > 0.0 and step > 0.0:
 			var burned := float(VehicleDesign.energy_for_distance(_design, step, current_speed_mps)["litres"])
 			fuel_l = maxf(fuel_l - burned, 0.0)
@@ -364,7 +400,14 @@ func mount(player: CharacterBody3D) -> bool:
 		return false
 	is_mounted = true
 	current_rider = player
+	# Driven by the player, it is simply here: its drive in through the gate
+	# (VehicleDrive) is over and forgotten.
+	var main_m := _main()
+	if main_m != null and _record().has("arrival"):
+		PlacedPropService.update_prop_record(main_m, prop_id, {"arrival": null}, false)
+	refuel()
 	if fuel_capacity_l > 0.0 and fuel_l <= 0.01:
+		fuel_bought_l += fuel_capacity_l - fuel_l
 		fuel_l = fuel_capacity_l   # filled from a can: see the fuel note above
 	if _prop.has_method("set_collision_enabled"):
 		_prop.call("set_collision_enabled", false)
@@ -380,7 +423,10 @@ func mount(player: CharacterBody3D) -> bool:
 	if _model != null:
 		player.rotation.y = _model.rotation.y - deg_to_rad(float(profile.get("yaw_deg", 0.0)))
 	_last_pos = p
+	_last_yaw = _yaw()
 	current_speed_mps = 0.0
+	if profile_id == LIVING:
+		VehicleBuilder.set_inside_view(_model, true)
 	mounted.emit(player)
 	return true
 
@@ -392,6 +438,8 @@ func dismount() -> void:
 	is_mounted = false
 	current_rider = null
 	current_speed_mps = 0.0
+	if profile_id == LIVING:
+		VehicleBuilder.set_inside_view(_model, false)
 	if _freeing_for_handover:
 		dismounted.emit(rider)
 		return
@@ -405,7 +453,9 @@ func dismount() -> void:
 		out.y = _ground_at(out.x, out.z, rider.global_position.y) + 0.05
 		rider.global_position = out
 		rider.velocity = Vector3.ZERO
+	refuel()
 	_patch_record(true)
+	_park_trailer()
 	if _prop != null and _prop.has_method("setup_collision"):
 		_prop.call_deferred("setup_collision")
 	dismounted.emit(rider)
@@ -430,6 +480,9 @@ func get_interaction_prompt() -> String:
 
 
 func can_mount() -> bool:
+	# Not while it is still on its way in through the gate (VehicleDriveRuntime).
+	if _prop != null and _prop.has_meta(VehicleDriveRuntime.META_BUSY):
+		return false
 	return not is_mounted and (battery_capacity_wh <= 0.0 or battery_wh > 0.0)
 
 
@@ -444,6 +497,38 @@ func get_speed_mph() -> float:
 ## Litres left and the tank's size (0 / 0 for anything that does not burn fuel).
 func get_fuel_litres() -> Vector2:
 	return Vector2(fuel_l, fuel_capacity_l)
+
+
+## Miles left at 55 mph (-1 when the profile does not know: the old vehicles).
+func get_range_mi() -> float:
+	if _design.is_empty():
+		return -1.0
+	return VehicleDesign.range_mi(_design, fuel_l, battery_wh / 1000.0)
+
+
+## Top the tank up from a fuel store of the right kind within reach (the graph's
+## "Fuel Store" tanks). Returns the litres taken.
+func refuel() -> float:
+	if fuel_capacity_l <= 0.0 or _prop == null or _design.is_empty():
+		return 0.0
+	var want := fuel_capacity_l - fuel_l
+	if want < 0.5:
+		return 0.0
+	var main := _main()
+	if main == null:
+		return 0.0
+	var sgv := PlacedPropService._system_graph_view(main)
+	if sgv == null or not sgv.has_method("draw_fuel_near"):
+		return 0.0
+	var r: Dictionary = sgv.call("draw_fuel_near", _prop.global_position, str(_design.get("fuel", "")), want, REFUEL_REACH_M)
+	var got := float(r.get("litres", 0.0))
+	if got <= 0.0:
+		return 0.0
+	fuel_l = minf(fuel_l + got, fuel_capacity_l)
+	if main.has_method("show_toast"):
+		main.call("show_toast", "Filled up: %.0f L of %s from %s" % [got, str(_design.get("fuel", "fuel")), str(r.get("name", "the fuel store"))])
+	_patch_record(false)
+	return got
 
 
 func get_battery_percent() -> float:
@@ -504,9 +589,214 @@ func _patch_record(save: bool) -> void:
 	if fuel_capacity_l > 0.0:
 		patch["vehicle_fuel_l"] = fuel_l
 		patch["vehicle_fuel_used_l"] = fuel_used_l
+		patch["vehicle_fuel_bought_l"] = fuel_bought_l
+	var layer0 := PlacedPropService._layer_for_main(main)
+	var cargo_patches := {}
+	if layer0 != null and not _cargo_ids.is_empty():
+		var vrec := {"id": prop_id, "x": p.x, "z": p.z, "yaw": float(patch.get("yaw", 0.0))}
+		cargo_patches = VehicleCargo.reseat_patches(layer0.props, vrec)
+	var tpatch := {}
+	if _tow_ready and _tow_node != null and is_instance_valid(_tow_node):
+		var tp := _tow_node.global_position
+		tpatch = {"x": tp.x, "z": tp.z, "ground_y": tp.y - _tow_dy}
+		var tm := _tow_node.get_node_or_null("ModelRoot") as Node3D
+		if tm != null:
+			tpatch["yaw"] = fposmod(rad_to_deg(tm.rotation.y), 360.0)
 	if save:
 		PlacedPropService.update_prop_record(main, prop_id, patch, false)
+		if not tpatch.is_empty():
+			PlacedPropService.update_prop_record(main, _tow_id, tpatch, false)
+		for cid in cargo_patches:
+			PlacedPropService.update_prop_record(main, str(cid), cargo_patches[cid], false)
 		return
 	var layer := PlacedPropService._layer_for_main(main)
 	if layer != null:
 		layer.update_prop(prop_id, patch)
+		if not tpatch.is_empty():
+			layer.update_prop(_tow_id, tpatch)
+		for cid2 in cargo_patches:
+			layer.update_prop(str(cid2), cargo_patches[cid2])
+
+
+# --- cargo ----------------------------------------------------------------------
+
+## Stowed crates move with the vehicle (their nodes every frame; their records
+## with the vehicle's own, in _patch_record).
+func _tick_cargo(delta: float) -> void:
+	_cargo_scan += delta
+	var main := _main()
+	if main == null:
+		return
+	if _cargo_scan >= 2.0:
+		_cargo_scan = 0.0
+		_cargo_ids.clear()
+		var layer := PlacedPropService._layer_for_main(main)
+		if layer != null:
+			for r in layer.props:
+				var rec: Dictionary = r
+				if str(rec.get("stowed_in", "")) == prop_id and rec.get("stow_local") is Array:
+					_cargo_ids.append(str(rec.get("id", "")))
+	if _cargo_ids.is_empty() or _prop == null:
+		return
+	var origin := Vector2(_prop.global_position.x, _prop.global_position.z)
+	var base_y := _prop.global_position.y - _dy
+	for cid in _cargo_ids:
+		var node := PlacedPropRuntime.find_by_prop_id(main, str(cid)) as Node3D
+		var rec2 := PlacedPropService.get_prop_record(main, str(cid))
+		if node == null or not (rec2.get("stow_local") is Array):
+			continue
+		var sl: Array = rec2["stow_local"]
+		var w := VehicleTow.world_xz(Vector3(float(sl[0]), float(sl[1]), float(sl[2])), origin, _yaw())
+		node.global_position = Vector3(w.x, base_y + float(sl[1]), w.y)
+		var m := node.get_node_or_null("ModelRoot") as Node3D
+		if m != null:
+			m.rotation.y = _yaw() + deg_to_rad(float(sl[3]))
+
+
+# --- towing --------------------------------------------------------------------
+
+func _yaw() -> float:
+	return _model.rotation.y if _model != null else 0.0
+
+
+## The trailer's prop node (re-found after a prop rebuild).
+func _tow_prop() -> Node3D:
+	if _tow_node != null and is_instance_valid(_tow_node) and _tow_node.is_inside_tree():
+		return _tow_node
+	_tow_node = null
+	var main := _main()
+	if main == null or _tow_id.is_empty():
+		return null
+	_tow_node = PlacedPropRuntime.find_by_prop_id(main, _tow_id)
+	_tow_ready = false
+	return _tow_node
+
+
+## Move the hitched trailer behind the hitch; with none, hitch one the
+## driver has backed up to.
+func _tick_tow(delta: float) -> void:
+	if _design.is_empty() or not _design.has("hitch") or _prop == null:
+		return
+	var origin := Vector2(_prop.global_position.x, _prop.global_position.z)
+	var hitch := VehicleTow.world_xz(_design["hitch"], origin, _yaw())
+	if _tow_id.is_empty():
+		_hitch_scan += delta
+		if _hitch_scan >= 0.25 and current_speed_mps < VehicleTow.HITCH_MAX_SPEED:
+			_hitch_scan = 0.0
+			_try_hitch(hitch)
+		return
+	var node := _tow_prop()
+	if node == null:
+		return
+	if not _tow_ready:
+		var rec := PlacedPropService.get_prop_record(_main(), _tow_id)
+		if rec.is_empty():
+			_tow_id = ""
+			return
+		_tow_design = VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+		var p := node.global_position
+		_tow_axle = VehicleTow.axle_at(_tow_design, Vector2(p.x, p.z), deg_to_rad(float(rec.get("yaw", 0.0))))
+		_tow_dy = p.y - _ground_at(p.x, p.z, p.y)
+		if node.has_method("set_collision_enabled"):
+			node.call("set_collision_enabled", false)
+		_tow_ready = true
+	var fwd := Vector2(-sin(_yaw()), -cos(_yaw()))
+	_tow_axle = VehicleTow.step_axle_limited(hitch, _tow_axle, VehicleTow.tongue_m(_tow_design), fwd)
+	var pose := VehicleTow.trailer_pose(_tow_design, hitch, _tow_axle)
+	var o: Vector2 = pose["origin"]
+	node.global_position = Vector3(o.x, _ground_at(o.x, o.y, node.global_position.y) + _tow_dy, o.y)
+	var m := node.get_node_or_null("ModelRoot") as Node3D
+	if m != null:
+		m.rotation.y = float(pose["yaw"])
+
+
+## A parked trailer whose coupler is within reach of the hitch ball.
+func _try_hitch(hitch: Vector2) -> void:
+	var main := _main()
+	var layer := PlacedPropService._layer_for_main(main) if main != null else null
+	if layer == null:
+		return
+	for r in layer.props:
+		var rec: Dictionary = r
+		var id := str(rec.get("id", ""))
+		if id == prop_id or not VehicleBuilder.handles(str(rec.get("model_id", ""))):
+			continue
+		if not str(rec.get("hitched_to", "")).is_empty():
+			continue
+		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		if at.distance_to(hitch) > 20.0:
+			continue
+		var td := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+		if bool(td.get("drivable", true)) or not td.has("coupler"):
+			continue
+		var c := VehicleTow.world_xz(td["coupler"], at, deg_to_rad(float(rec.get("yaw", 0.0))))
+		if c.distance_to(hitch) <= VehicleTow.HITCH_TOL_M:
+			hitch_to(id)
+			return
+
+
+## Hitch the trailer with this prop id.
+func hitch_to(trailer_id: String) -> void:
+	var main := _main()
+	if main == null or trailer_id.is_empty():
+		return
+	_tow_id = trailer_id
+	_tow_ready = false
+	PlacedPropService.update_prop_record(main, prop_id, {"towing": trailer_id}, false)
+	PlacedPropService.update_prop_record(main, trailer_id, {"hitched_to": prop_id}, false)
+	if main.has_method("show_toast"):
+		var rec := PlacedPropService.get_prop_record(main, trailer_id)
+		var nm := str(VehicleBuilder.spec_for_record(rec).get("name", "the trailer"))
+		main.call("show_toast", "Hitched: %s" % nm)
+
+
+## Leave the trailer standing where it is.
+func unhitch() -> void:
+	if _tow_id.is_empty():
+		return
+	_park_trailer()
+	var main := _main()
+	var tid := _tow_id
+	_tow_id = ""
+	_tow_ready = false
+	_tow_node = null
+	if main != null:
+		PlacedPropService.update_prop_record(main, prop_id, {"towing": null}, false)
+		PlacedPropService.update_prop_record(main, tid, {"hitched_to": null}, false)
+
+
+## The trailer stops: its record saved and its collision baked again.
+func _park_trailer() -> void:
+	if _tow_id.is_empty():
+		return
+	var node := _tow_prop() if _tow_ready or _tow_node != null else null
+	if node != null and _tow_ready:
+		var main := _main()
+		var tp := node.global_position
+		var tpatch := {"x": tp.x, "z": tp.z, "ground_y": tp.y - _tow_dy}
+		var tm := node.get_node_or_null("ModelRoot") as Node3D
+		if tm != null:
+			tpatch["yaw"] = fposmod(rad_to_deg(tm.rotation.y), 360.0)
+		if main != null:
+			PlacedPropService.update_prop_record(main, _tow_id, tpatch, false)
+		if node.has_method("setup_collision"):
+			node.call_deferred("setup_collision")
+	_tow_ready = false
+
+
+## Unhitch whatever `pid` tows or is hitched to (the prop editor's button).
+static func unhitch_prop(main: Node, pid: String) -> void:
+	var rec := PlacedPropService.get_prop_record(main, pid)
+	var tow_id := pid if not str(rec.get("towing", "")).is_empty() else str(rec.get("hitched_to", ""))
+	if tow_id.is_empty():
+		return
+	var tow := PlacedPropRuntime.find_by_prop_id(main, tow_id)
+	var pv := tow.get_node_or_null("PlacedVehicle") if tow != null else null
+	if pv != null and pv.has_method("unhitch"):
+		pv.call("unhitch")
+		return
+	var trec := PlacedPropService.get_prop_record(main, tow_id)
+	var tid := str(trec.get("towing", ""))
+	PlacedPropService.update_prop_record(main, tow_id, {"towing": null}, false)
+	if not tid.is_empty():
+		PlacedPropService.update_prop_record(main, tid, {"hitched_to": null}, false)

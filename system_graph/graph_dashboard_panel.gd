@@ -591,6 +591,9 @@ func _cost_extra(model: GraphModel) -> Dictionary:
 		out["placed_usd"] = pt["usd"]
 		out["placed_priced"] = pt["priced"]
 		out["placed_unpriced"] = pt["unpriced"]
+		var rt := SiteCost.running_total(loader.call("placed_prop_records"))
+		out["running_usd"] = rt["usd"]
+		out["vehicles"] = rt["vehicles"]
 	return out
 
 

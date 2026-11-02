@@ -24,6 +24,19 @@ var _engines: Dictionary = {}          # item_id -> NpcPopulationEngine
 ## Camps the site deployment director has pinned as ALL HANDS (iid -> true):
 ## forced to the full tier, their boards beating the routine's leisure.
 var _all_hands: Dictionary = {}
+## Camps pinned ALL HANDS until a project finishes (iid -> [project ids]): a
+## delivery that arrives in a vehicle is unloaded by its camp NOW, whatever
+## the routine says. Released by _prune_project_pins once every project on
+## the list has left the "active" state (or is gone).
+var _project_pins: Dictionary = {}
+## Camps whose people have not arrived yet (iid -> the hour their first
+## vehicle parks): a camp whose living vehicles are still driving in through
+## the gate (VehicleDrive) is not on site. It is not stepped, consumes
+## nothing, and draws nobody. A pure function of the clock, so a rewind sends
+## them away again.
+var _away: Dictionary = {}
+## A vehicle belongs to the camp whose home is nearest it, within this.
+const ARRIVAL_CAMP_M := 300.0
 ## Last tick's camps [{id, home, count}], both tiers (crew_summary).
 var _camp_homes: Array = []
 ## The LIGHT tier (festival scale): one CrowdCohort per camp that is not in
@@ -312,6 +325,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	# Every camp's home + headcount this tick, both tiers (the site deployment
 	# director picks crews off it before they have a board).
 	_camp_homes = camps
+	_update_away(main, abs_h, camps)
 	var ts_mult := 0.0
 	if main != null and "time_scale" in main and NpcDisplayPrefs.speed_shed():
 		ts_mult = absf(float(main.get("time_scale"))) * 3600.0
@@ -323,7 +337,8 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		# ALL HANDS: a camp with a site deploy / pack-up on runs FULL whatever
 		# the focus policy says — only a full engine has a board, and the
 		# board is where the work is.
-		for iid in _all_hands:
+		_prune_project_pins()
+		for iid in _all_hands.keys() + _project_pins.keys():
 			if _tiers.has(iid):
 				_tiers[iid] = CrowdFocus.TIER_FULL
 
@@ -333,6 +348,11 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		var iid := str(d.get("id", ""))
 		seen[iid] = true
 		_model_item_cache[iid] = d
+		if _away.has(iid):
+			# Not here yet: nobody to feed (their vehicle is on the road).
+			if flow_engine != null and flow_engine.has_method("set_habitat_demand"):
+				flow_engine.set_habitat_demand(iid, {})
+			continue
 		if str(_tiers.get(iid, CrowdFocus.TIER_FULL)) == CrowdFocus.TIER_LIGHT:
 			if _defer_light:
 				if not _light_queued.has(iid):
@@ -380,7 +400,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			"camp_home": home_xz,
 			"camp_seed": iid,
 			# The site deployment schedule has this camp's hands on deck.
-			"all_hands": _all_hands.has(iid),
+			"all_hands": is_all_hands(iid),
 			"time_mult": absf(float(main.get("time_scale"))) * 3600.0 if "time_scale" in main else 0.0,
 			# A bed INSIDE a shelter for slot `k` at a sleep area ({} = none).
 			"bed_spot_of": func(sid: String, k: int) -> Dictionary:
@@ -657,8 +677,54 @@ func cohort_for(item_id: String) -> CrowdCohort:
 
 
 ## Every light-tier camp: {item_id: CrowdCohort}. The crowd renderer's input.
+## A camp still on its way in is left out (nobody to draw).
 func light_cohorts() -> Dictionary:
-	return _cohorts
+	if _away.is_empty():
+		return _cohorts
+	var out := {}
+	for iid in _cohorts:
+		if not _away.has(iid):
+			out[iid] = _cohorts[iid]
+	return out
+
+
+## True while the camp's people are still on the road in (their first
+## vehicle has not parked).
+func is_away(iid: String) -> bool:
+	return _away.has(iid)
+
+
+## The hour each away camp arrives: {iid: park hour}.
+func away_camps() -> Dictionary:
+	return _away.duplicate()
+
+
+func _update_away(main: Node, abs_h: float, camps: Array) -> void:
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	var arrivals: Array = loader.call("vehicle_arrivals") 		if loader != null and loader.has_method("vehicle_arrivals") else []
+	var first: Dictionary = {}
+	for a in arrivals:
+		var ad := a as Dictionary
+		var at := Vector2(float(ad.get("x", 0.0)), float(ad.get("z", 0.0)))
+		var best := ""
+		var best_d := ARRIVAL_CAMP_M
+		for c in camps:
+			var cd := c as Dictionary
+			var dd := (cd.get("home", Vector2.ZERO) as Vector2).distance_to(at)
+			if dd < best_d:
+				best_d = dd
+				best = str(cd.get("id", ""))
+		if best.is_empty():
+			continue
+		var ph := float(ad.get("park_h", 0.0))
+		first[best] = minf(float(first.get(best, INF)), ph)
+	var away := {}
+	for iid in first:
+		if abs_h < float(first[iid]):
+			away[iid] = first[iid]
+	if away.keys() != _away.keys():
+		_invalidate_dots()
+	_away = away
 
 
 func last_abs_h() -> float:
@@ -675,6 +741,8 @@ func take_light_work_hours(item_id: String) -> float:
 
 func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		registry: SpaceRegistry, abs_h: float, hour_of_day: float) -> void:
+	if _away.has(iid):
+		return
 	var cohort := _ensure_cohort(iid, specs, main, registry)
 	cohort.set_starved(specs.get("starved_kinds", []) as Array)
 	var parked: NpcPopulationEngine = _parked.get(iid)
@@ -1250,7 +1318,8 @@ func agent_dots_full() -> Array:
 	var out: Array = []
 	PerfMonitor.begin("npc_dots")
 	for iid in _engines:
-		out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
+		if not _away.has(iid):
+			out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
 	PerfMonitor.end("npc_dots")
 	_dots_full = out
 	_dots_full_valid = true
@@ -1269,9 +1338,11 @@ func agent_dots() -> Array:
 	# own — the festival-scale bench needs to see it apart from the agent steps.
 	PerfMonitor.begin("npc_dots")
 	for iid in _engines:
-		out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
+		if not _away.has(iid):
+			out.append_array((_engines[iid] as NpcPopulationEngine).agent_dots())
 	for iid in _cohorts:
-		out.append_array((_cohorts[iid] as CrowdCohort).agent_dots())
+		if not _away.has(iid):
+			out.append_array((_cohorts[iid] as CrowdCohort).agent_dots())
 	PerfMonitor.end("npc_dots")
 	_dots_cache = out
 	_dots_cache_valid = true
@@ -2187,7 +2258,7 @@ func crew_summary() -> Array:
 		out.append({"iid": iid, "home": cd.get("home", Vector2.ZERO),
 			"roster": engine.agents.size() if engine != null else int(cd.get("count", 0)),
 			"board": board != null, "free_chores": free_chores,
-			"free_projects": free_projects, "all_hands": _all_hands.has(iid)})
+			"free_projects": free_projects, "all_hands": is_all_hands(iid)})
 	return out
 
 
@@ -2202,6 +2273,54 @@ func set_all_hands(iid: String, on: bool) -> void:
 
 func all_hands_ids() -> Array:
 	return _all_hands.keys()
+
+
+## True while the camp is pinned by the deploy director or by a project.
+func is_all_hands(iid: String) -> bool:
+	return _all_hands.has(iid) or _project_pins.has(iid)
+
+
+## Pin the camp ALL HANDS until `project_id` is no longer active.
+func pin_crew_until_done(iid: String, project_id: String) -> void:
+	if iid.is_empty() or project_id.is_empty():
+		return
+	var ids: Array = _project_pins.get(iid, [])
+	if not ids.has(project_id):
+		ids.append(project_id)
+	_project_pins[iid] = ids
+
+
+func _prune_project_pins() -> void:
+	for iid in _project_pins.keys():
+		var store := project_store_for(str(iid))
+		var keep: Array = []
+		for pid in _project_pins[iid]:
+			var p := store.find(str(pid))
+			if not p.is_empty() and str(p.get("state", "")) == "active":
+				keep.append(pid)
+		if keep.is_empty():
+			_project_pins.erase(iid)
+		else:
+			_project_pins[iid] = keep
+
+
+## The camp whose home is nearest `pos` with people and a board ("" none):
+## the crew that unloads a vehicle parked in or near its camp.
+func nearest_crew_habitat(pos: Vector2) -> String:
+	var best := ""
+	var best_d := INF
+	for c in _camp_homes:
+		var cd := c as Dictionary
+		var iid := str(cd.get("id", ""))
+		var engine: NpcPopulationEngine = _engines.get(iid)
+		if engine == null or engine.chore_board == null or engine.agents.is_empty():
+			continue
+		var home: Vector2 = cd.get("home", Vector2.ZERO)
+		var d := home.distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = iid
+	return best if not best.is_empty() else first_crewable_habitat()
 
 
 ## First habitat with a live engine, people, and a board — where a queued

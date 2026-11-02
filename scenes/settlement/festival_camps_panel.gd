@@ -24,6 +24,7 @@ var _cards: Dictionary = {}   # comp_id -> {table: GridContainer, head: Label, c
 var _sig := "<unbuilt>"
 var _accum := 0.0
 var _on_look: Callable = Callable()
+var _arrival_lbl: Label = null
 
 
 func open(on_look: Callable = Callable()) -> void:
@@ -70,6 +71,43 @@ func _build() -> void:
 			_sig = "<unbuilt>"
 			_refresh())
 		all_row.add_child(b)
+	# Living vehicles drive in through the site gate (VehicleDrive): each
+	# camp's people arrive with its first vehicle.
+	var arr_row := HBoxContainer.new()
+	arr_row.add_theme_constant_override("separation", 6)
+	_frame.body.add_child(arr_row)
+	var cap2 := Label.new()
+	cap2.text = "Vehicles:"
+	cap2.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	arr_row.add_child(cap2)
+	var drive_in := Button.new()
+	drive_in.name = "vehicles_drive_in"
+	drive_in.text = "Drive in from the gate"
+	drive_in.tooltip_text = "Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy on the timeline (or now). Each camp's people arrive with its first vehicle."
+	UITheme.style_button(drive_in)
+	drive_in.pressed.connect(func() -> void:
+		var loader := _loader()
+		if loader != null:
+			loader.call("schedule_vehicle_arrivals_auto")
+		_refresh())
+	arr_row.add_child(drive_in)
+	var here := Button.new()
+	here.name = "vehicles_here"
+	here.text = "Already here"
+	here.tooltip_text = "Forget the drive in: every vehicle simply stands where it is parked."
+	UITheme.style_button(here)
+	here.pressed.connect(func() -> void:
+		var loader := _loader()
+		if loader != null:
+			loader.call("clear_vehicle_arrivals")
+		_refresh())
+	arr_row.add_child(here)
+	_arrival_lbl = Label.new()
+	_arrival_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_arrival_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_arrival_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_arrival_lbl.clip_text = true
+	arr_row.add_child(_arrival_lbl)
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 10)
 	_frame.body.add_child(_list)
@@ -86,6 +124,36 @@ func _process(delta: float) -> void:
 	_refresh()
 
 
+func _loader() -> Node:
+	var t := get_tree()
+	return TerrainSurfaceQuery.find_terrain_loader(t.current_scene) if t != null else null
+
+
+## "3 vehicles driving in · the last parks at 14:22", or "already here".
+func _arrival_text() -> String:
+	var loader := _loader()
+	if loader == null or not loader.has_method("vehicle_arrivals"):
+		return ""
+	var arr: Array = loader.call("vehicle_arrivals")
+	if arr.is_empty():
+		return "Every vehicle is already here."
+	var t := get_tree()
+	var main := t.current_scene if t != null else null
+	var now := float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0
+	var coming := 0
+	var last := -INF
+	for a in arr:
+		var ph := float((a as Dictionary).get("park_h", 0.0))
+		if ph > now:
+			coming += 1
+		last = maxf(last, ph)
+	if coming == 0:
+		return "%s came in through the gate." % UiText.count(arr.size(), "vehicle")
+	var hh := fposmod(last, 24.0)
+	return "%s on the way in · the last parks at %02d:%02d" % [UiText.count(coming, "vehicle"),
+		int(hh), int(fposmod(hh * 60.0, 60.0))]
+
+
 func _rows() -> Array:
 	var sgv := ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("festival_camp_rows"):
@@ -96,6 +164,8 @@ func _rows() -> Array:
 func _refresh() -> void:
 	if _frame == null:
 		return
+	if _arrival_lbl != null:
+		_arrival_lbl.text = _arrival_text()
 	var rows := _rows()
 	var sig := ""
 	for r in rows:
@@ -248,6 +318,11 @@ func _update_card(d: Dictionary) -> void:
 			int(round(float(cl["kinds"][k]) * 100.0))])
 	(c["closure"] as Label).text = "Loops closed: %d %%   (%s)" % [int(round(float(cl.get("score", 0.0)) * 100.0)),
 		", ".join(parts)] if not parts.is_empty() else "Loops closed: —"
+	var veh: Dictionary = d.get("vehicles", {})
+	if int(veh.get("count", 0)) > 0:
+		(c["closure"] as Label).text += "\n%s here (%s) · getting here: %s in trips and fuel" % [
+			UiText.count(int(veh["count"]), "vehicle"), ", ".join(PackedStringArray(veh.get("names", []))),
+			SiteCost.format_usd(float(veh.get("usd", 0.0)))]
 	# The fixes for the worst loop, rebuilt only when it changes.
 	var sgv := ServiceLocator.graph()
 	var model: Variant = sgv.get("model") if sgv != null else null

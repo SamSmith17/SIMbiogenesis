@@ -132,6 +132,7 @@ const STARSHADE_EDIT_MODAL_SCRIPT := preload("res://scenes/ui/starshade_edit_mod
 const PALLET_RACK_BUILDER_MODAL_SCRIPT := preload("res://scenes/ui/pallet_rack_builder_modal.gd")
 const FLATPACK_DESIGNER_MODAL_SCRIPT := preload("res://scenes/ui/flatpack_designer_modal.gd")
 const DOMELAB_MODAL_SCRIPT := preload("res://scenes/ui/domelab_modal.gd")
+const VEHICLELAB_MODAL_SCRIPT := preload("res://scenes/ui/vehiclelab_modal.gd")
 const TOROIDLAB_MODAL_SCRIPT := preload("res://scenes/ui/toroidlab_modal.gd")
 const PVLAB_MODAL_SCRIPT := preload("res://scenes/ui/pvlab_modal.gd")
 const GANTRYLAB_MODAL_SCRIPT := preload("res://scenes/ui/gantrylab_modal.gd")
@@ -351,6 +352,7 @@ var _veg_area_fill_ui: Control = null
 var _pallet_rack_builder_ui: Control = null
 var _flatpack_designer_ui: Control = null
 var _domelab_ui: Control = null
+var _vehiclelab_ui: Control = null
 var _toroidlab_ui: Control = null
 var _pvlab_ui: Control = null
 var _gantrylab_ui: Control = null
@@ -3641,6 +3643,39 @@ func _find_system_graph_view() -> Node:
 
 ## All placed-prop records (the layer's live array — treat as read-only).
 ## Used by CampManifest's packing sweep (PACKING_PLAN.md Phase 2).
+## The living vehicles standing in each painted camp: {camp area id:
+## {count, usd (their running cost: SiteCost), names}}.
+func vehicles_by_camp() -> Dictionary:
+	var out := {}
+	if not _camp_layer_ready():
+		return out
+	for r in placed_prop_records():
+		var rec: Dictionary = r
+		if not VehicleBuilder.handles(str(rec.get("model_id", ""))):
+			continue
+		var cid := camp_area_at(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
+		if cid.is_empty():
+			continue
+		var e: Dictionary = out.get(cid, {"count": 0, "usd": 0.0, "names": []})
+		e["count"] = int(e["count"]) + 1
+		e["usd"] = float(e["usd"]) + float(SiteCost.running_for_record(rec).get("usd", 0.0))
+		(e["names"] as Array).append(str(VehicleBuilder.spec_for_record(rec).get("name", "vehicle")))
+		out[cid] = e
+	return out
+
+
+## The painted camp a festival lot key points at ("camp:<id>" or a lot id).
+func camp_area_for_lot(lot_id: String) -> String:
+	if lot_id.begins_with("camp:"):
+		return lot_id.substr(5)
+	if not _placement_ready():
+		return ""
+	for raw in placement.lots:
+		if str((raw as Dictionary).get("lot_id", "")) == lot_id:
+			return str((raw as Dictionary).get("camp_area_id", ""))
+	return ""
+
+
 func placed_prop_records() -> Array:
 	if _placed_prop_layer == null:
 		return []
@@ -13079,6 +13114,7 @@ func _setup_placed_props() -> void:
 	_setup_pallet_rack_builder_ui()
 	_setup_flatpack_designer_ui()
 	_setup_domelab_ui()
+	_setup_vehiclelab_ui()
 	_setup_toroidlab_ui()
 	_setup_pvlab_ui()
 	_setup_gantrylab_ui()
@@ -13784,6 +13820,55 @@ func begin_domelab_placement(domelab_spec: Dictionary) -> bool:
 	return true
 
 
+## The living-vehicle designer (scenes/ui/vehiclelab_modal.gd), on its own
+## CanvasLayer like the dome designer.
+func _setup_vehiclelab_ui() -> void:
+	if _main == null:
+		return
+	var ui_layer := _main.get_node_or_null("UILayer")
+	if ui_layer == null:
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "VehicleLabLayer"
+	layer.layer = 27
+	ui_layer.add_child(layer)
+	var ui := Control.new()
+	ui.name = "VehicleLabModal"
+	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	ui.set_script(VEHICLELAB_MODAL_SCRIPT)
+	layer.add_child(ui)
+	ui.bind_loader(self)
+	_vehiclelab_ui = ui
+
+
+func open_vehiclelab(spec: Dictionary = {}) -> void:
+	if _vehiclelab_ui != null and _vehiclelab_ui.has_method("open"):
+		_vehiclelab_ui.call("open", spec)
+
+
+## The designer bound to a placed living vehicle ("Apply to placed vehicle").
+func open_vehiclelab_for_prop(prop_id: String) -> void:
+	if _vehiclelab_ui != null and _vehiclelab_ui.has_method("open_for_prop"):
+		_vehiclelab_ui.call("open_for_prop", prop_id)
+
+
+func vehiclelab_designer() -> Control:
+	return _vehiclelab_ui
+
+
+func begin_vehiclelab_placement(vehicle_spec: Dictionary) -> bool:
+	if _main == null:
+		return false
+	var r: Dictionary = PlacedPropService.begin_placement(_main, VehicleBuilder.MODEL_ID, {
+		"record_extra": {"vehicle_spec": VehicleSpec.to_json_safe(vehicle_spec), "collision_enabled": true},
+	})
+	if not bool(r.get("ok", false)):
+		return false
+	if _placed_props_ui != null and _placed_props_ui.has_method("notify_bundle_imported"):
+		_placed_props_ui.call("notify_bundle_imported", r)
+	return true
+
+
 ## The toroid designer (scenes/ui/toroidlab_modal.gd), on its own
 ## CanvasLayer like the dome designer.
 func _setup_toroidlab_ui() -> void:
@@ -14423,6 +14508,139 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 	return res
 
 
+## Where the camp's vehicles come in: a placed site gate ({pos, yaw_deg,
+## entry, placed: true}), else the end of a festival road farthest from the
+## site's centre (heading in toward the centre), else 180 m south of it.
+func site_gate() -> Dictionary:
+	if _placed_prop_layer != null:
+		for r in _placed_prop_layer.props:
+			var rec: Dictionary = r
+			if str(rec.get("model_id", "")) == SiteGateBuilder.MODEL_ID:
+				var p := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+				var yd := float(rec.get("yaw", 0.0))
+				return {"pos": p, "yaw_deg": yd, "entry": SiteGateBuilder.approach_xz(p, yd),
+					"placed": true, "id": str(rec.get("id", ""))}
+	var centre := SiteCentre.xz(self)
+	var roads: Array = placement.road_dicts() if _placement_ready() else []
+	var g := VehicleDrive.default_gate(centre, roads)
+	var into := (centre - g)
+	var yd2 := rad_to_deg(VehicleDrive.yaw_for(into)) if into.length() > 0.1 else 0.0
+	return {"pos": g, "yaw_deg": yd2, "entry": SiteGateBuilder.approach_xz(g, yd2), "placed": false}
+
+
+## Every living vehicle that can drive itself in (not a trailer on its own),
+## nearest the gate first: [record].
+func _arriving_vehicles(gate: Vector2) -> Array:
+	var out: Array = []
+	if _placed_prop_layer == null:
+		return out
+	for r in _placed_prop_layer.props:
+		var rec: Dictionary = r
+		if not VehicleBuilder.handles(str(rec.get("model_id", ""))):
+			continue
+		if not str(rec.get("hitched_to", "")).is_empty():
+			continue  # a towed trailer comes in behind its vehicle
+		if PlacedVehicle.living_profile(rec).is_empty():
+			continue  # a trailer standing on its own has no driver
+		out.append(rec)
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return gate.distance_to(Vector2(float(a.get("x", 0.0)), float(a.get("z", 0.0)))) 			< gate.distance_to(Vector2(float(b.get("x", 0.0)), float(b.get("z", 0.0)))))
+	return out
+
+
+## Every living vehicle on site drives in through the gate, one every
+## `spacing_h` from `start_h` (records get `arrival`; VehicleDriveRuntime
+## draws it, the population bridge keeps each camp's people away until its
+## first vehicle parks). Returns how many.
+func schedule_vehicle_arrivals(start_h: float, spacing_h: float = VehicleDrive.DEFAULT_SPACING_H) -> int:
+	if _placed_prop_layer == null:
+		return 0
+	var gate := site_gate()
+	var gp: Vector2 = gate["pos"]
+	var roads: Array = placement.road_dicts() if _placement_ready() else []
+	var n := 0
+	for rec in _arriving_vehicles(gp):
+		var park := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		var arr := VehicleDrive.make(gp, park, float(rec.get("yaw", 0.0)),
+			start_h + spacing_h * float(n), roads, gate["entry"])
+		_placed_prop_layer.update_prop(str(rec.get("id", "")), {"arrival": arr})
+		n += 1
+	if n > 0:
+		_save_props_and_share()
+	return n
+
+
+## The player's "drive in from the gate": from the next DEPLOY event on the
+## timeline when one is ahead (the camp arrives for its build), else from a
+## couple of minutes from now. {count, start_h}.
+func schedule_vehicle_arrivals_auto() -> Dictionary:
+	var main_now := get_tree().current_scene
+	var now := float(main_now.call("get_absolute_hours")) 		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
+	var start := now + 2.0 / 60.0
+	var sgv := ServiceLocator.graph()
+	var dep: Variant = sgv.call("site_deploy") if sgv != null and sgv.has_method("site_deploy") else null
+	if dep != null:
+		var best := INF
+		for e in dep.call("events"):
+			var ed := e as Dictionary
+			var at := float(ed.get("at_h", 0.0))
+			if str(ed.get("action", "")) == SiteDeploySchedule.ACTION_DEPLOY and at > now and at < best:
+				best = at
+		if best < INF:
+			start = best
+	return {"count": schedule_vehicle_arrivals(start), "start_h": start}
+
+
+## The vehicles are simply here again (arrivals forgotten).
+func clear_vehicle_arrivals() -> int:
+	if _placed_prop_layer == null:
+		return 0
+	var n := 0
+	for r in _placed_prop_layer.props:
+		var rec: Dictionary = r
+		if rec.has("arrival"):
+			_placed_prop_layer.update_prop(str(rec.get("id", "")), {"arrival": null})
+			n += 1
+	if n > 0:
+		_save_props_and_share()
+	return n
+
+
+## Every scheduled arrival: [{id, x, z (parked), start_h, park_h}].
+func vehicle_arrivals() -> Array:
+	var out: Array = []
+	if _placed_prop_layer == null:
+		return out
+	for r in _placed_prop_layer.props:
+		var rec: Dictionary = r
+		var arr: Variant = rec.get("arrival", null)
+		if not (arr is Dictionary) or (arr as Dictionary).is_empty():
+			continue
+		out.append({"id": str(rec.get("id", "")), "x": float(rec.get("x", 0.0)),
+			"z": float(rec.get("z", 0.0)), "start_h": float((arr as Dictionary).get("start_h", 0.0)),
+			"park_h": VehicleDrive.park_h(arr)})
+	return out
+
+
+## Deliver a kit STOWED in a placed living vehicle's cargo bay (VehicleCargo):
+## the crates ride in it until the crew unloads them out of its door. {} when
+## the vehicle has no bay.
+func deliver_kit_in_vehicle(scenario_id: String, vehicle_id: String) -> Dictionary:
+	if _placed_prop_layer == null:
+		return {}
+	var main_now := get_tree().current_scene
+	var abs_h := float(main_now.call("get_absolute_hours")) \
+		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
+	var res := VehicleCargo.spawn_in_vehicle(_placed_prop_layer, scenario_id, vehicle_id, abs_h)
+	if res.is_empty():
+		return {}
+	_save_props_and_share()
+	_rebuild_placed_props()
+	var door: Dictionary = res.get("door", {})
+	res["project_id"] = _queue_unload_chore(res, float(door.get("x", 0.0)), float(door.get("z", 0.0)), true)
+	return res
+
+
 ## A delivery is WORK: queue ONE HAUL CHORE PER CRATE (target = the crate
 ## prop, carry_to = its stamped staging slot, effect = the move_prop that
 ## actually relocates the record on completion) plus a zero-effect "Delivery
@@ -14432,22 +14650,27 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 ## between the door and the staging rows, visibly carrying. Total labour is
 ## priced by NpcHaulModel over the real route and split per crate. Silent
 ## no-op with no population — the player just unpacks by hand.
-func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
+## `nearest_crew`: the camp nearest the door unloads it and is pinned ALL
+## HANDS until it is done (a vehicle arriving at its camp); otherwise the first
+## camp with a crew, on its routine (the classic container delivery).
+func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
+		nearest_crew: bool = false) -> String:
 	var sgv: Node = ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("npc_population_bridge"):
-		return
+		return ""
 	var bridge: Variant = sgv.call("npc_population_bridge")
 	if bridge == null:
-		return
-	var iid := str(bridge.call("first_crewable_habitat"))
+		return ""
+	var iid := str(bridge.call("nearest_crew_habitat", Vector2(cx, cz))) if nearest_crew \
+		and bridge.has_method("nearest_crew_habitat") else str(bridge.call("first_crewable_habitat"))
 	if iid.is_empty():
-		return
+		return ""
 	var board: Variant = bridge.call("chore_board_for", iid)
 	if board == null:
-		return
+		return ""
 	var crate_ids: Array = spawn_res.get("crate_ids", [])
 	if crate_ids.is_empty():
-		return
+		return ""
 	var from := Vector2(cx, cz)
 	var roster := maxi(int(bridge.call("roster_size_for", iid)), 1)
 	var crates: Array = []
@@ -14490,6 +14713,9 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float) -> void:
 			{"kind": "pos", "x": centre.x, "z": centre.y}, {}))
 	if project_id.is_empty():
 		push_warning("Delivery unload plan refused — chore board full")
+	elif nearest_crew and bridge.has_method("pin_crew_until_done"):
+		bridge.call("pin_crew_until_done", iid, project_id)
+	return project_id
 
 
 ## The placed forklift nearest `at` within `max_m`, "" when there is none.

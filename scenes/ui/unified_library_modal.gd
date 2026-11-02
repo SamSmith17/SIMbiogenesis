@@ -333,7 +333,11 @@ func _populate() -> void:
 	]
 	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true,
 		ModelCatalog.GENERIC_BOX_ID: true}
-	var vehicles: Array = []
+	var vehicles: Array = [{
+		"kind": "vehiclelab",
+		"label": "Living vehicle designer…",
+		"detail": "Vans, buses, RVs, trucks and trailers people live in: chassis + body, paint, roof fans, AC, solar, awning → place and drive.",
+	}]
 	for m in ModelCatalog.listed_models():
 		var mid := str(m.get("id", ""))
 		if mid.is_empty() or seen.has(mid):
@@ -471,7 +475,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "building_designer"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "building_designer", "vehiclelab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -558,6 +562,12 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "The dome designer needs a location map (TerrainLoader)."
+		"vehiclelab":
+			if _loader != null and _loader.has_method("open_vehiclelab"):
+				_loader.call("open_vehiclelab")
+				close()
+			else:
+				_status.text = "The vehicle designer needs a location map (TerrainLoader)."
 		"pvlab":
 			if _loader != null and _loader.has_method("open_pvlab"):
 				_loader.call("open_pvlab")

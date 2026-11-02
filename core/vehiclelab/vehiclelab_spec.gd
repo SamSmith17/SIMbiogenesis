@@ -34,7 +34,7 @@ const CHASSIS_KEYS := ["wheelbase_m", "track_m", "front_overhang_m", "tyre_d_m",
 	"dually", "rear_axles", "frame_h_m", "hood_len_m", "cab_len_m", "cab_h_m", "cab_w_m",
 	"rear_overhang_m", "curb_kg", "gvwr_kg", "fuel", "tank_l", "battery_kwh", "max_steer_deg", "top_speed_mps"]
 const BODY_KEYS := ["length_m", "width_m", "height_m", "floor_h_m", "roof", "cd",
-	"wall_kg_m2", "windows", "rear_door", "side_door", "corner_r_m"]
+	"wall_kg_m2", "windows", "rear_door", "side_door", "corner_r_m", "door_at_m"]
 
 
 static func default_spec(type: String = "van") -> Dictionary:
@@ -91,7 +91,11 @@ static func resolve(spec: Dictionary) -> Dictionary:
 			p[k] = _color_arr(paint.get(k, PAINT_DEFAULTS[k]))
 	if not paint.has("roof"):
 		p["roof"] = p["body"]
+	# A wrap image over the body's paint (VehicleBuilder.WRAP_DIR), "" = none.
+	p["wrap"] = str(paint.get("wrap", ""))
 	s["paint"] = p
+	var ov: Variant = s.get("glb_override", {})
+	s["glb_override"] = ov if ov is Dictionary else {}
 	if not (s.get("interior", {}) is Dictionary):
 		s["interior"] = {"elements": []}
 	if not ((s["interior"] as Dictionary).get("elements", []) is Array):

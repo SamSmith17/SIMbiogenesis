@@ -903,6 +903,14 @@ Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.g
 # and a cutaway, then festival mode with three vehicles parked in a camp:
 # its people sleep in the vehicle beds at bed height, along each bed:
 tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_housing_probe.gd -Label vehicle_housing -Timeout 1200
+# The designer with REAL input (sandbox, mtvernon; run it at 1080 AND with
+# -UserArgs @("--window-size=1280x720") for the left-column fold): every
+# built-in shot, UiAudit 0 errors, a real click on the fan tool + the roof
+# places a fan, a real drag slides it, Delete / Ctrl+Z, solar through the
+# palette reaches the totals, paint + chassis / body swaps reach the spec,
+# the cutaway, a shipped GLB laid over the body, place / reopen / Apply.
+# ⚠ From bash pass the array through -Command, or -UserArgs arrives literal:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/vehiclelab_designer_check.gd -Label vehiclelab
 # Dome & zome designer (offline — core/domelab/): the Goldberg–Coxeter
 # construction against the published chord-factor tables (2V A 0.54653 /
 # B 0.61803; 3V 0.34862 / 0.40355 / 0.41241; 4V six values) and strut /
@@ -11447,10 +11455,13 @@ player's friends never move a pin.
 Plan: `~/.claude/plans/pasted-content-id-e788-living-vehicles-vectorized-thimble.md`
 (8 phases; the user chose: arrive through a gate, typed trip miles,
 procedural bodies with a GLB override, HOUSING FIRST). Landed: Phase 1
-(parametric vehicles you can place and drive) and Phase 2 (housing). Not
-built yet: the designer modal (exterior / interior drag-and-drop, solar,
-paint), fuel kinds + refuelling + trailers, cargo bays, arrival through a
-gate.
+(parametric vehicles you can place and drive), Phase 2 (housing),
+Phase 3 (the designer modal, exterior), Phase 4 (the interior + the
+vehicle's own graph node), Phase 5 (turning circle, fuel kinds +
+refuelling, towed trailers, trip cost in the ledger), Phase 6 (cargo bays,
+crew unload verified), Phase 7 (driving in through the site gate, camps
+arriving with their vehicles) and Phase 8 (wheels that roll and steer, the
+driver's view out of the cab). All eight are done.
 - **Pure core.** `VehicleCatalog` (chassis + bodies + the 11 types +
   interior element types, sources in the header), `VehicleSpec` (record key
   `vehicle_spec`; `resolve` adds `ch` / `bd`, `key_of` = JSON.stringify of
@@ -11508,9 +11519,222 @@ gate.
   - ⚠ `_prop_revision` used to be the prop COUNT, so a vehicle moved or
     driven into a camp never re-resolved the beds; it now folds living
     vehicles' positions in (once per frame).
+- **The designer** (`scenes/ui/vehiclelab_modal.gd`, TerrainLoader
+  `open_vehiclelab` / `open_vehiclelab_for_prop` / `begin_vehiclelab_placement`
+  on CanvasLayer 27; library Vehicles tab "Living vehicle designer…"; prop
+  editor "Edit vehicle…"; modal audit id `vehiclelab`; tour stop
+  `18j_vehiclelab`). DesignerShell + StudioViewport + FormRow: types and
+  designs (built-ins + `user://vehiclelab_library.json`) left; chassis
+  (the type's first, then any of the same kind), body, fuel, wheelbase,
+  duals, tank / pack; body size, roof, corners, windows, doors; paint
+  pickers + a wrap image (`VehicleBuilder.WRAP_DIR` = `user://vehicle_wraps`,
+  object-space triplanar stretched once along each side); "Roof & sides"
+  palette + the selected item's card; the player's own model
+  (`glb_override` {path, mode whole | body, flip}: shipped art or a file
+  copied into `user://vehicle_models`, stretched onto the design's box,
+  replacing Chassis + Cab + Shell or just Cab + Shell); the trip; summary +
+  checks. A chassis or body swap drops the old one's overrides.
+- **Exterior items** (`VehicleExterior`, pure): roof / left / right / rear
+  faces, an element = {id, type, face, u, v, …}; `resolve_element` clamps it
+  onto its face, `frame` gives its oriented box, `face_hit` the ray against
+  the body (the roof found by marching down the crown's slab and bisecting —
+  a fixed-point refinement did not converge on grazing rays), `candidate`
+  the armed template at a hit, `pick` the smallest item among near-equal hits
+  (a fan on a solar array, not the array's flat box), `plane_hit` the ray
+  against ONE face's plane — what a drag slides on: from a low camera a ray
+  aimed at an item standing on a crowned roof passes over the roof
+  altogether. Solar = modules (`MODULES`: rigid 400 / 200 W, flexible 100 W)
+  in rows × columns; masses go into the curb, `exterior_totals` carries
+  solar W and the items' loads for Phase 4. The builder's nodes are now
+  Chassis / Cab / Shell / Exterior / Interior (a cutaway drops Shell and
+  Exterior). Body profile numbers (crown, y0, wall_top, rake) live in
+  `VehicleDesign` once and both the builder and the exterior read them.
+- **Inside** (`VehicleInterior`, pure; Phase 4). The designer's "Inside"
+  section is a grouped palette (`GROUPS`: Sleep / Sit & eat / Kitchen & bath /
+  Storage & work / Power & water / Fittings); arming a piece takes the skin
+  off, the ghost follows `floor_hit` + `candidate`, a click appends to
+  `spec.interior.elements` ({id, type, x across, z from the box's front,
+  w / l / h, yaw 0|90, kwh / litres / watts}). With the cutaway on, inside
+  pieces are picked BEFORE roof items (`VehicleInterior.pick`: the nearest box,
+  a smaller box INSIDE it instead — a battery under a bed — and a ceiling piece
+  only when nothing else is hit, since in cutaway you look through the
+  ceiling); a drag slides it on the floor plane keeping the grab offset, R
+  turns it, Del removes. "Plan" looks straight down (front at the top). The
+  selection knows its kind (`_sel_kind` "ext" | "int"; ids can repeat across
+  the two lists). `VehicleDesign.resolve_interior_element` is public (wall-hung
+  pieces snap to the nearer wall, ceiling pieces hang from it, the cab-over
+  bunk sits over the cab).
+  - **The aisle check** (`VehicleInterior.access`): a 0.1 m grid of the floor,
+    a cell walkable when it is half a clear width from the side walls and from
+    every piece standing on the floor — `AISLE_M` 0.5 m (shoulders) beside
+    anything taller than `LOW_TOP_M` 1 m, `HIP_M` 0.4 m beside a bed, bench or
+    counter (only hips pass there; ANSUR II) — flooded with EIGHT neighbours
+    from the entries (`entries`: side / rear doors from `VehicleDesign
+    .door_spans`, the one door rule the builder draws from too, plus the front
+    of the box when you walk through from the cab). Seeds are a step in from a
+    doorway (r + 0.2 m): the first version seeded 0.75 m in and jumped a wall
+    across the door. Every bed / fixture in `NEEDS_ACCESS` must have a reached
+    cell within an arm's reach (`REACH_M`) or the checks say "No way in to the
+    X…" (with `ids`, so the check row offers "Show it"). Also: less than 60 cm
+    over a bed, shower standing room, carried-whole pieces vs the biggest door
+    (info). The built-ins were laid out again to pass: the box truck's bed
+    moved to the front (it blocked the roll-up, its only door), the trailer's
+    door is mid-curbside (body override `door_at_m` 4.0 m: the side door's
+    front edge from the box's front), the shuttle's wet bath and dinette and
+    the RV's galley shrank / moved off a 0.3 m corner pinch.
+    `tools/diag/vehicle_access_diag.gd [-- --preset=<id>]` prints the grid.
+  - **The vehicle's graph node** (`VehicleGraph`, pure, + `SystemGraphView
+    .sync_vehicle_system`): `VehicleInterior.systems(d)` (house battery kWh,
+    bank voltage 12.8 / 25.6 / 51.2 V by size, roof solar per item, loads from
+    the exterior items' `load_w` + interior `watts`, water / grey litres) →
+    a component definition → `GraphComponentDefs.realize` + `make_unique` at
+    root (the camp-compound way): panels in parallel onto an MPPT controller
+    (module Voc / Vmp per class, estimates; past `MAX_PANEL_NODES` 16 modules
+    one panel per solar item), the house battery, an inverter feeding one
+    appliance per load (AC), fresh + grey tanks with fill / dump ports.
+    Identity `vehicle_prop_id` + `bound_prop_id` (so the prop's delete removes
+    it), `vehicle_sig` = hash of the systems: an unchanged signature only moves
+    the node's site coords; a changed one rebuilds it keeping its canvas spot
+    and battery SOC. Site coords are TOP-LEVEL item keys, never specs.
+    `PlacedPropService.sync_vehicle_graph` runs first in `tag_vehicle_spaces`
+    (placement, Apply) and returns the fresh-water tank, which becomes the
+    shower and kitchen spaces' `graph_item_id` — the light tier bills those
+    visits to the vehicle's own tank (the full tier still bills its habitat).
+  - Gates: `vehiclelab_selftest` (now 323 with Phases 5–8; 275 at Phase 4: floor hits, picking incl. nesting and
+    the ceiling rule, doors, access on every preset + a walled-off and a
+    too-narrow layout, the graph definition / signature / merge / realize) and
+    `vehiclelab_designer_check.gd` (55 at 1080 and 720: a REAL click on the
+    fridge tool and the floor, a drag in plan view, Delete / Ctrl+Z, R on the
+    galley, the node on the graph with battery + panels + tanks, both spaces
+    on its water tank, Apply with a bigger battery rebuilding the node, delete
+    removing it).
+- **Driving, fuel, trailers (Phase 5).**
+  - Steering follows the turning circle: `riding_profile` sets
+    `turn_by_radius`, and `player._handle_cart_movement` caps the yaw rate at
+    `VehicleDesign.yaw_rate_limit_deg(v, R)` (v / R) — only for living
+    vehicles; the EUC / skid steer / golf cart keep their old feel.
+  - `ResourceKinds` `gasoline` / `diesel` (L) + library tanks "Fuel Store
+    (Gasoline, 55 gal)" / "(Diesel, 275 gal tote)". `PlacedVehicle.refuel()`
+    on getting in and out takes from the nearest tank of its fuel within
+    `REFUEL_REACH_M` 12 m (`SystemGraphView.draw_fuel_near`: moves the level
+    on the tank's ResourceTimeline too). With none, an empty tank still fills
+    "from a can", counted in `vehicle_fuel_bought_l`.
+  - The ride dashboard (euc_ui) shows FUEL, litres and range
+    (`VehicleDesign.range_mi`, 55 mph).
+  - Towing (`VehicleTow`, pure): the one-axle trailer model (the axle is
+    pulled toward the hitch at tongue length each step — off-tracking settles
+    on sqrt(R² − L²), pinned) with a jackknife limit (80°). Drivable designs
+    carry `hitch`, trailers `coupler` + `axle_z`. Backing a vehicle's hitch to
+    within 0.8 m of a parked trailer's coupler below 1.5 m/s hitches it
+    (records `towing` / `hitched_to`); the trailer prop is moved every frame,
+    its collision off while towed and re-baked when parked; the prop editor
+    has "Unhitch trailer". The semi stays one rigid unit.
+  - Running cost: `SiteCost.running_for_record` (the round trip from the
+    typed miles + fuel bought on site) → Site balance "Getting here" row and
+    each festival camp's card ("N vehicles here · getting here: $X";
+    `TerrainLoader.vehicles_by_camp` / `camp_area_for_lot`).
+  - Gate: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/vehicle_drive_check.gd -Label vehicle_drive -Timeout 900`
+    (16/0: refuel from a tote, hitch on backing up, coupler on the hitch round
+    a circle, fuel over 1 km == the model, unhitch; 19/0 with Phase 8's
+    wheels and cab view).
+- **Cargo bays (Phase 6).** `VehicleCargo` (pure): the
+  largest clear floor rectangle (histogram method over a 0.1 m occupancy grid)
+  under the full inside height, loaded through the rear door (else a side
+  door, the load then running across), as a ContainerCatalog-shaped entry with
+  a `frame` into the vehicle. `UnpackScenario.stow_plan(id, host)` packs into
+  it; `VehicleCargo.spawn_in_vehicle` / `TerrainLoader.deliver_kit_in_vehicle`
+  stow a kit's crates in it (`stowed_in`, `stow_local`, staging outside the
+  door) and queue the usual unload project from the door.
+  `PlacedVehicle._tick_cargo` moves stowed crates with the vehicle and
+  `_patch_record` re-seats their records. `VehicleCargo.door_near` replaced
+  the container-only loadout lookups (site_deploy_director, prop editor); the
+  Packing Lab lists placed vehicles' bays ("vehicle_bay:<id>"); the designer
+  summary prints the bay. Verified: `vehiclelab_selftest` cargo tests and
+  `tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_cargo_check.gd -Label vehicle_cargo -Timeout 1200`
+  (11/0: 7 crates stowed in the bay, ride along driven + turned, records
+  follow, the camp pinned, every crate carried out, the camp released).
+  - ⚠ **Why the crew never unloaded (fixed):** the unload went to
+    `first_crewable_habitat` on its ROUTINE. In festival mode that camp is
+    usually a light camp, whose full engine is PARKED (it has a board,
+    nobody works it), and a festival day has no work block at all. A
+    vehicle delivery now goes to the camp nearest the door
+    (`NpcPopulationBridge.nearest_crew_habitat`) and pins it ALL HANDS
+    until the project leaves "active" (`pin_crew_until_done`,
+    `_project_pins`, pruned each tick; `is_all_hands` = director OR
+    project pin). Container deliveries are unchanged (first camp, own
+    routine) — they have the same festival-mode gap.
+- **Arrival through the gate (Phase 7).** `VehicleDrive` (pure): a record
+  key `arrival` = {start_h, route [[x, z]…], park [x, z, yaw_deg]};
+  `pose_at(arrival, abs_h)` → {state away | driving | parked, pos, yaw,
+  speed, u, s}. Route = outside the gate → the gate → along the one
+  festival road nearest both ends (`ROAD_SNAP_M` 120) → `APPROACH_M` 14
+  behind the spot along its heading → the spot, centripetal Catmull-Rom at
+  2 m; speed 6 m/s cruise, v = sqrt(1.2·r) in bends, 1.5 m/s creep on the
+  approach, 0.8 / 0.6 m/s² accelerate / brake (comfort figures). Nothing is
+  integrated, so it scrubs backwards and survives a reload.
+  - `SiteGateBuilder` (model `site_gate`, Library → Structures, two posts +
+    beam + "WELCOME HOME"; PackedSpec curated). Vehicles pass through
+    heading its forward (-Z) and appear `OUTSIDE_M` 12 behind it.
+    `TerrainLoader.site_gate()`: a placed gate, else the festival road end
+    farthest from the site centre, else 180 m south of it.
+  - `TerrainLoader.schedule_vehicle_arrivals(start_h, spacing)` (every
+    self-driving living vehicle, nearest the gate first, 4 min apart; a
+    towed trailer comes behind its vehicle, a lone trailer stays) /
+    `schedule_vehicle_arrivals_auto()` (from the next DEPLOY flag ahead,
+    else 2 min from now) / `clear_vehicle_arrivals()` / `vehicle_arrivals()`.
+    UI: Camps & calculator → "Vehicles: Drive in from the gate / Already
+    here" + a status line.
+  - `VehicleDriveRuntime` (gameplay/, on every living vehicle, polls its
+    record at 2 Hz): away = prop hidden, driving = placed on the road
+    (ground + the parked lift, collision off), parked = back at the pose it
+    was built at. A hitched trailer follows: coupler on the hitch, axle
+    `VehicleDrive.point_behind` on the road. Stowed crates ride in it
+    (their transform in the parked frame, taken when the drive starts).
+    While away / driving the prop carries `META_BUSY` and
+    `PlacedVehicle.can_mount` refuses; the player getting in erases
+    `arrival` (it is simply here now).
+  - **People arrive with their camp's first vehicle**
+    (`NpcPopulationBridge._update_away`, each tick): each arrival maps to
+    the nearest camp home within `ARRIVAL_CAMP_M` 300; before its first
+    park hour the camp is AWAY: not stepped (either tier), demand override
+    {} (nothing consumed), left out of `agent_dots` / `agent_dots_full` /
+    `light_cohorts` (nothing drawn). `is_away` / `away_camps`. Camp
+    granularity, not per person: everybody of a camp appears when its first
+    vehicle parks, wherever they were (no teleport into the vehicle). Not
+    gated: DJ / burn-role casting (could cast an away person).
+  - Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_arrival_check.gd -Label vehicle_arrival -Timeout 1200`
+    (19/0: placed gate is the way in, away before, on the road mid-drive
+    and not mountable, parked at the spot, camp away → home, scrub back
+    sends both away, "Already here"). Selftest `_test_drive_in` pins the
+    road, the approach, timing bounds, monotone + no jumps, the arrival
+    heading, scrub purity, `point_behind`, the default gate.
+- **Polish (Phase 8).**
+  - Wheels are their own nodes (`Wheels/W<i>`, pivot at the hub, five lug
+    bolts so a turn shows; meta `wheel_nodes` [{name, r, steer}]).
+    `VehicleBuilder.spin_wheels(model, roll_m, steer)`; `steer_for` (bicycle
+    model, tan δ = L·κ) and `wheelbase_of`. Driven: `PlacedVehicle` rolls
+    them by signed distance and steers from the yaw rate; driving in: the
+    route's arc length and its bends. A whole-vehicle GLB override removes
+    "Wheels" with "Chassis".
+  - The driver's view: body panels are double-sided (StructureMaterials),
+    so from the seat the cab and shell walled the driver in (the first
+    surface 0.04–0.85 m from the eye). While driven, `set_inside_view`
+    gives the Cab / Shell / Exterior / Interior surfaces one-sided
+    duplicates (winding is pinned clockwise, so the outside is unchanged)
+    and dismount clears them. The van's eye also sat 4 cm behind its
+    windshield: a full-van / cutaway seat is now ≥ 0.55 m behind the cab
+    profile at eye height, never behind a cutaway's back wall.
+    `tools/diag/vehicle_cab_view_diag.gd` prints the first hit per preset;
+    selftest `_test_driver_view` pins a clear road ahead and no eye pressed
+    to the glass.
+  - Not done: door-open poses during an unload, multiplayer review of the
+    drive (records already sync as prop ops; the pose is a function of the
+    clock), a tour stop for the drive-in.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
-  `newline=''`; a bash heredoc can choke on a long Python patch, write the
-  script with the Write tool.
+  `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
+  match their endings; a bash heredoc collapses backslashes — write patch
+  scripts with the Write tool and use raw strings for GDScript `\`
+  continuations.
 
 ## Site deployment schedule — "set a time, everyone builds / packs" (2026-10-26)
 

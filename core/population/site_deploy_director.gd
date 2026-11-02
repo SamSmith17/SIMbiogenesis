@@ -600,20 +600,8 @@ const LOADOUT_REACH_M := 200.0
 func _container_door_near(pos: Vector2) -> Dictionary:
 	if _loader == null or not _loader.has_method("placed_prop_records"):
 		return {}
-	var best_d := LOADOUT_REACH_M
-	var out := {}
-	for r in _loader.call("placed_prop_records"):
-		var cr: Dictionary = r
-		if str(cr.get("model_id", "")) != "cargo_container":
-			continue
-		var cpos := Vector2(float(cr.get("x", 0.0)), float(cr.get("z", 0.0)))
-		var dist := pos.distance_to(cpos)
-		if dist < best_d:
-			best_d = dist
-			var yaw := deg_to_rad(float(cr.get("yaw", 0.0)))
-			var door := cpos + Vector2(sin(yaw), cos(yaw)) * 5.0
-			out = {"x": door.x, "z": door.y}
-	return out
+	# A shipping container's door, or a living vehicle's cargo-bay door.
+	return VehicleCargo.door_near(_loader.call("placed_prop_records"), pos, LOADOUT_REACH_M)
 
 
 # ---------------------------------------------------------------------------
