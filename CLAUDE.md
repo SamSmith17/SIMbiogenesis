@@ -894,8 +894,14 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flatpack_designe
 # the trip cost, riding profiles (driver ahead-left, trailer none), mesh
 # winding, the builder's seat_spots / role_spots / Shell metas, and
 # SpaceRegistry role targets (two spaces on one prop, the anchor turned with
-# the prop). EXPECTED_CHECKS; --import first:
+# the prop); and THE CATALOG HELD TO ITSELF (2026-11-02): every chassis'
+# GVWR > curb, wheelbase, tyres, cab style, fuel vs tank / pack; every body
+# within 102" and roomed; every type x listed chassis solved with a rear
+# overhang of 0.6 m to 2/3 of the wheelbase and the box behind the cab —
+# the guard for every catalog number. EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.gd
+# The same combinations as a table (length, WB, overhang, box start, payload):
+Godot.exe.exe --headless --path . --script tools/diag/vehicle_catalog_probe.gd
 # The same on a real world (sandbox): every preset placed (drivable on its
 # design, the trailer not), the shuttle's sleep + kitchen + shower +
 # restroom spaces on one prop, the bridge's spots (sleepers at the mattress,
@@ -11600,7 +11606,7 @@ driver's view out of the cab). All eight are done.
     (placement, Apply) and returns the fresh-water tank, which becomes the
     shower and kitchen spaces' `graph_item_id` — the light tier bills those
     visits to the vehicle's own tank (the full tier still bills its habitat).
-  - Gates: `vehiclelab_selftest` (now 323 with Phases 5–8; 275 at Phase 4: floor hits, picking incl. nesting and
+  - Gates: `vehiclelab_selftest` (493 with the catalog test of 2026-11-02; 323 with Phases 5–8; 275 at Phase 4: floor hits, picking incl. nesting and
     the ceiling rule, doors, access on every preset + a walled-off and a
     too-narrow layout, the graph definition / signature / merge / realize) and
     `vehiclelab_designer_check.gd` (55 at 1080 and 720: a REAL click on the

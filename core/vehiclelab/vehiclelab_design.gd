@@ -68,12 +68,20 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	var cab := str(ch.get("cab", "cutaway"))
 	var integral := bool(bd.get("integral", false)) or cab == "full_van"
 	var body_len := float(bd["length_m"])
+	# An integral body runs the length its chassis was built for (a 25 ft
+	# bus is not a 35 ft bus with the same shell): a chassis `body_len_m`
+	# beats the body's own length, and a length the player typed beats both.
+	var body_ov: Dictionary = (d["spec"] as Dictionary).get("body", {})
+	if integral and float(ch.get("body_len_m", 0.0)) > 0.0 and not body_ov.has("length_m"):
+		body_len = float(ch["body_len_m"])
 	var hood := float(ch.get("hood_len_m", 0.0))
 	var cab_len := float(ch.get("cab_len_m", 0.0))
 	var body_z0 := 0.0
 	match cab:
 		"full_van":
-			body_z0 = 0.0
+			# The shell IS the van; a separate box (a cutaway build on a
+			# van chassis) sits behind the cab, never at the bumper.
+			body_z0 = 0.0 if integral else cab_len
 		"cutaway":
 			body_z0 = cab_len - 0.05
 		"cowl":
@@ -626,7 +634,7 @@ static func yaw_rate_limit_deg(v: float, turn_radius_m: float) -> float:
 ## Miles left at a steady 55 mph from `litres` of fuel (or `kwh` for an
 ## electric chassis): the dashboard's range.
 static func range_mi(d: Dictionary, litres: float, kwh: float = 0.0) -> float:
-	var e := VehicleEnergy.at_speed(d, 24.6)
+	var e := VehicleEnergy.at_speed(d, VehicleEnergy.MPS_55MPH)
 	var km := 0.0
 	if str(d.get("fuel", "")) == "electric":
 		km = kwh / maxf(float(e["kwh_per_km"]), 1e-6)

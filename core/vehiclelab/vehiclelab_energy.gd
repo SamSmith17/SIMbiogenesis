@@ -31,7 +31,6 @@ const ETA_DIESEL := 0.27
 const ETA_EV := 0.82
 const MPS_55MPH := 24.587
 const MI_M := 1609.344
-const GAL_L := 3.785411784
 
 
 static func crr_for(mass_kg: float) -> float:
@@ -83,7 +82,7 @@ static func at_speed(d: Dictionary, v: float) -> Dictionary:
 		var l_km := j * 1000.0 / (lhv * 1.0e6)
 		out["l_per_km"] = l_km
 		# miles per km over gallons per km.
-		out["mpg"] = (1000.0 / MI_M) / (l_km / GAL_L) if l_km > 0.0 else 0.0
+		out["mpg"] = (1000.0 / MI_M) / (l_km / VehicleCatalog.GAL) if l_km > 0.0 else 0.0
 	return out
 
 
@@ -102,7 +101,7 @@ static func trip(d: Dictionary, one_way_mi: float, round_trip: bool = true) -> D
 			out["range_km"] = float(d.get("battery_kwh", 0.0)) / float(e["kwh_per_km"])
 	elif float(e["l_per_km"]) > 0.0:
 		out["litres"] = km * float(e["l_per_km"])
-		out["gallons"] = float(out["litres"]) / GAL_L
+		out["gallons"] = float(out["litres"]) / VehicleCatalog.GAL
 		out["cost"] = float(out["gallons"]) * float(trip_d.get("fuel_price_per_gal", 4.5))
 		out["range_km"] = float(d.get("tank_l", 0.0)) / float(e["l_per_km"])
 	return out

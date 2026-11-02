@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 322
+const EXPECTED_CHECKS := 492
 
 var _passed := 0
 var _failed := 0
@@ -48,12 +48,71 @@ func _check(name: String, ok: bool, detail: String = "") -> void:
 		print("  FAIL %s %s" % [name, detail])
 
 
+## The catalog held to itself: every chassis and body carries numbers a
+## spec sheet would, and every type x listed chassis solves as a vehicle
+## that could exist — rear overhang between 0.6 m and two thirds of the
+## wheelbase, the box behind the cab. The cheapest guard for the numbers:
+## the short skoolie's 4.9 m overhang (a fixed 8.4 m body on a 157" WB)
+## and a Class C box at the Sprinter's front bumper both passed every
+## other test here.
 func _test_catalog() -> void:
 	_check("eleven types", VehicleCatalog.TYPE_ORDER.size() == 11)
+	for cid in VehicleCatalog.CHASSIS:
+		var ch := VehicleCatalog.chassis(str(cid))
+		var trailer := str(ch["cab"]) == "none"
+		var electric := str(ch["fuel"]) == "electric"
+		_check("%s GVWR above the curb" % cid, float(ch["gvwr_kg"]) > float(ch["curb_kg"]) * 1.1,
+			"curb %.0f gvwr %.0f" % [float(ch["curb_kg"]), float(ch["gvwr_kg"])])
+		_check("%s wheelbase" % cid, trailer or (float(ch["wheelbase_m"]) > 2.5 and float(ch["wheelbase_m"]) < 8.0),
+			"%.2f" % float(ch["wheelbase_m"]))
+		_check("%s tyres and track" % cid, float(ch["tyre_d_m"]) > 0.5 and float(ch["tyre_d_m"]) < 1.2
+			and float(ch["track_m"]) > 1.5 and float(ch["track_m"]) < 2.2)
+		_check("%s cab style" % cid, VehicleCatalog.CAB_STYLES.has(str(ch["cab"])))
+		_check("%s fuel agrees with the tank and pack" % cid,
+			electric == (float(ch["battery_kwh"]) > 0.0)
+			and (trailer or electric or float(ch["tank_l"]) > 0.0)
+			and (trailer == (str(ch["fuel"]) == "none")))
+	for bid in VehicleCatalog.BODIES:
+		var bd := VehicleCatalog.body(str(bid))
+		_check("%s width within 102 in" % bid, float(bd["width_m"]) >= 1.8 and float(bd["width_m"]) <= 2.6,
+			"%.2f" % float(bd["width_m"]))
+		_check("%s room between floor and roof" % bid,
+			float(bd["height_m"]) - float(bd["floor_h_m"]) >= 1.6 and float(bd["height_m"]) <= 4.4)
 	for t in VehicleCatalog.TYPE_ORDER:
 		var ti := VehicleCatalog.type_info(t)
 		_check("type %s chassis known" % t, VehicleCatalog.CHASSIS.has(str(ti["chassis"])))
 		_check("type %s body known" % t, VehicleCatalog.BODIES.has(str(ti["body"])))
+		var listed: Array = ti.get("chassis_ok", [ti["chassis"]])
+		_check("type %s default chassis is listed" % t, listed.has(ti["chassis"]))
+		for cid in listed:
+			var combo := "%s on %s" % [t, cid]
+			if not VehicleCatalog.CHASSIS.has(str(cid)):
+				_check("%s: chassis exists" % combo, false)
+				continue
+			var s := VehicleSpec.default_spec(t)
+			s["chassis_id"] = str(cid)
+			var d := VehicleDesign.solve(s)
+			var ch := VehicleCatalog.chassis(str(cid))
+			var last_axle := -INF
+			for a in d["axles"]:
+				last_axle = maxf(last_axle, float((a as Dictionary)["zf"]))
+			var ovh := float(d["length_m"]) - last_axle
+			var wb := float(ch.get("wheelbase_m", 0.0))
+			_check("%s: rear overhang 0.6 m to 2/3 of the wheelbase" % combo,
+				ovh >= 0.6 and (wb <= 0.0 or ovh <= wb * 2.0 / 3.0), "%.2f m on a %.2f m WB" % [ovh, wb])
+			if not bool(d["integral"]):
+				var box_z0 := float((d["body"] as Dictionary)["z0"]) + float(d["half_len"])
+				_check("%s: the box sits behind the cab" % combo, box_z0 >= float(ch.get("cab_len_m", 0.0)) - 0.1,
+					"box at %.2f, cab %.2f" % [box_z0, float(ch.get("cab_len_m", 0.0))])
+			_check("%s: no error" % combo, _errors_of(d).is_empty(), str(_errors_of(d)))
+
+
+func _errors_of(d: Dictionary) -> Array:
+	var out: Array = []
+	for c in d["checks"]:
+		if str((c as Dictionary)["level"]) == "error":
+			out.append((c as Dictionary)["text"])
+	return out
 
 
 func _test_spec_round_trip() -> void:
@@ -549,7 +608,7 @@ func _test_driving() -> void:
 	_check("full lock drives the %.1f m turning circle" % R, absf(rr - R) < 0.05 * R, "%.2f" % rr)
 	# Range: a full tank at 55 mph.
 	var van := _solve("van")
-	var e := VehicleEnergy.at_speed(van, 24.6)
+	var e := VehicleEnergy.at_speed(van, VehicleEnergy.MPS_55MPH)
 	var want := float(van["tank_l"]) / float(e["l_per_km"]) * 1000.0 / VehicleEnergy.MI_M
 	_check("range from a full tank", absf(VehicleDesign.range_mi(van, float(van["tank_l"])) - want) < 1e-3)
 	_check("an empty tank goes nowhere", VehicleDesign.range_mi(van, 0.0) == 0.0)

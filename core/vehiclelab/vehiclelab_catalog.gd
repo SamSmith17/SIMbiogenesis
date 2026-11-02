@@ -19,7 +19,8 @@ extends RefCounted
 ##   Ford F-59 stripped chassis (step vans: 158–190" WB, 22,000 lb, 60 gal).
 ##   Ford F-53 motorhome stripped chassis (208–252" WB, 26,000 lb, 80 gal).
 ##   International 3800 / IC CE school bus chassis (~276" WB on a 35 ft bus,
-##     25,000–30,000 lb, 60–100 gal diesel).
+##     189" on a 25 ft, 25,000–30,000 lb, 60–100 gal diesel). `body_len_m`
+##     on an integral chassis is the length its body is built to.
 ##   Freightliner M2 106 (212" WB box truck, 26,000 lb, 50–70 gal).
 ##   Isuzu NPR gas (150" WB, 14,500 lb, 30 gal).
 ##   Freightliner Cascadia day cab (~180" WB tractor, 2 × 100 gal tanks).
@@ -126,7 +127,7 @@ const CHASSIS := {
 	},
 	"intl_ce_short": {
 		"label": "IC CE school bus, short (diesel, 25 ft)", "cab": "cowl",
-		"wheelbase_m": 157.0 * IN, "track_m": 2.0, "front_overhang_m": 1.0,
+		"wheelbase_m": 189.0 * IN, "body_len_m": 7.0, "track_m": 2.0, "front_overhang_m": 1.0,
 		"tyre_d_m": 0.98, "tyre_w_m": 0.25, "dually": true, "rear_axles": 1,
 		"frame_h_m": 1.0, "hood_len_m": 1.5, "cab_len_m": 2.1, "cab_h_m": 3.0,
 		"cab_w_m": 2.44, "curb_kg": 7900.0, "gvwr_kg": 23500.0 * LB,
@@ -270,7 +271,13 @@ const BODIES := {
 
 ## The eleven vehicle types: their default chassis + body and the bodies /
 ## chassis that fit them (the designer offers these first, any combination
-## of a compatible cab is allowed).
+## of a compatible cab is allowed). A chassis is listed only where the
+## solved vehicle is a real one: vehiclelab_selftest holds every listed
+## combination to a rear overhang of 0.6 m to two thirds of the wheelbase
+## and the box behind the cab. The Freightliner M2 ambulance (its 212" WB
+## puts the rear axle at the back wall of a 4 m module) and a Class C box on
+## the Sprinter VAN shell (a Class C needs the cab-chassis, not in the
+## catalog yet) failed it and were dropped.
 const TYPES := {
 	"van": {"label": "Van (camper conversion)", "chassis": "sprinter_170", "body": "van_shell",
 		"chassis_ok": ["sprinter_170", "ford_transit_250_hr", "ram_promaster_3500", "ford_etransit"]},
@@ -283,9 +290,9 @@ const TYPES := {
 	"step_van": {"label": "Step van", "chassis": "ford_f59_stripped", "body": "step_van_alu",
 		"chassis_ok": ["ford_f59_stripped", "isuzu_npr"]},
 	"ambulance": {"label": "Ambulance (Type III)", "chassis": "ford_e450_drw", "body": "ambulance_type3",
-		"chassis_ok": ["ford_e450_drw", "chevy_express_3500", "freightliner_m2"]},
+		"chassis_ok": ["ford_e450_drw", "chevy_express_3500"]},
 	"rv": {"label": "RV (Class C)", "chassis": "ford_e450_drw", "body": "class_c_rv",
-		"chassis_ok": ["ford_e450_drw", "chevy_express_3500", "sprinter_170"]},
+		"chassis_ok": ["ford_e450_drw", "chevy_express_3500"]},
 	"motorhome": {"label": "Motorhome (Class A)", "chassis": "ford_f53_class_a", "body": "class_a_motorhome",
 		"chassis_ok": ["ford_f53_class_a"]},
 	"box_truck": {"label": "Box truck", "chassis": "isuzu_npr", "body": "dry_box_16",
