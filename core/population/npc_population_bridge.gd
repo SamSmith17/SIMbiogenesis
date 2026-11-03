@@ -1172,7 +1172,13 @@ func create_site_project(iid: String, kind: String, label: String,
 	SiteProject.bind_tasks(project, spec_rows, made)
 	project_store_for(iid).add(project)
 	_last_persist_h.erase(iid)   # persist on the next tick, not in half an hour
-	return str(project.get("id", ""))
+	var pid := str(project.get("id", ""))
+	# A camp that would not work a board on its own (light tier, a festival
+	# day with no work block) is pinned ALL HANDS until this is done — or the
+	# project sits on its board and nobody ever comes.
+	if needs_pin_to_work(iid):
+		pin_crew_until_done(iid, pid)
+	return pid
 
 
 ## Pause/resume: holds every still-pending task's chore out of available_for
@@ -2363,6 +2369,22 @@ func nearest_crew_habitat(pos: Vector2) -> String:
 			best_d = d
 			best = iid
 	return best if not best.is_empty() else first_crewable_habitat()
+
+
+## True when the camp would NOT work a board on its own: it is in the light
+## tier (its full engine parked) or its routine has no work block (a
+## festival day). A delivery handed to such a camp must pin it ALL HANDS or
+## nobody ever unloads it.
+func needs_pin_to_work(iid: String) -> bool:
+	if tier_of(iid) == CrowdFocus.TIER_LIGHT or _parked.has(iid):
+		return true
+	var engine: NpcPopulationEngine = _engines.get(iid)
+	if engine == null or engine.routine == null:
+		return false
+	for b in engine.routine.blocks:
+		if str((b as Dictionary).get("kind", "")) == NpcRoutine.WORK:
+			return false
+	return true
 
 
 ## First habitat with a live engine, people, and a board — where a queued

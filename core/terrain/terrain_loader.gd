@@ -14866,12 +14866,48 @@ func _tick_vehicle_logistics(delta: float) -> void:
 		return
 	_logistics_accum = 0.0
 	var now := _abs_hours_now()
+	var open_now: Dictionary = {}
 	for r in _placed_prop_layer.props:
 		var hrec: Dictionary = r
 		var dv: Variant = hrec.get("delivery")
 		if not (dv is Dictionary) or (dv as Dictionary).is_empty():
 			continue
 		_service_unload(hrec, dv as Dictionary, now)
+		if _unload_active(dv as Dictionary):
+			open_now[str(hrec.get("id", ""))] = true
+	_sync_cargo_doors(open_now)
+
+
+## Hosts whose cargo door stands open (an unload project at work).
+var _doors_open: Dictionary = {}
+
+
+func _unload_active(dl: Dictionary) -> bool:
+	var proj := str(dl.get("unload_project", ""))
+	if proj.is_empty():
+		return false
+	var sgv: Node = ServiceLocator.graph()
+	var bridge: Variant = sgv.call("npc_population_bridge") \
+		if sgv != null and sgv.has_method("npc_population_bridge") else null
+	if bridge == null:
+		return false
+	var iid := str(dl.get("unload_iid", ""))
+	if iid.is_empty():
+		return true
+	var p: Dictionary = (bridge.call("project_store_for", iid) as SiteProjectStore).find(proj)
+	return not p.is_empty() and str(p.get("state", "")) == "active"
+
+
+## Open the door of every host being unloaded, shut the rest. Re-asserted
+## each poll, so a prop rebuilt mid-unload gets its open door back.
+func _sync_cargo_doors(open_now: Dictionary) -> void:
+	for hid: String in _doors_open.keys():
+		if not open_now.has(hid):
+			CargoDoors.set_open(PlacedPropRuntime.find_by_prop_id(_main, hid), {}, false)
+	for hid: String in open_now.keys():
+		CargoDoors.set_open(PlacedPropRuntime.find_by_prop_id(_main, hid),
+			_placed_prop_layer.find_by_id(hid), true)
+	_doors_open = open_now
 
 
 ## The record whose drive moves a host: its tow vehicle's for a hitched
@@ -15053,8 +15089,11 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
 	if bridge == null:
 		return ""
 	var crew_pos := crew_at if crew_at.is_finite() else Vector2(cx, cz)
-	var iid := str(bridge.call("nearest_crew_habitat", crew_pos)) if nearest_crew \
-		and bridge.has_method("nearest_crew_habitat") else str(bridge.call("first_crewable_habitat"))
+	# The camp nearest the work unloads it (it falls back to the first camp
+	# with a crew). A vehicle's crew is always pinned ALL HANDS; any other camp
+	# only when it would not work the board on its own (create_site_project).
+	var iid := str(bridge.call("nearest_crew_habitat", crew_pos)) \
+		if bridge.has_method("nearest_crew_habitat") else str(bridge.call("first_crewable_habitat"))
 	if iid.is_empty():
 		return ""
 	var board: Variant = bridge.call("chore_board_for", iid)

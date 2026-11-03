@@ -14231,6 +14231,7 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 	if is_nan(replay_now):
 		PerfMonitor.begin("camp_power")
 		_tick_camp_power(pop_abs_h)
+		_tick_vehicle_power(pop_abs_h)
 		_tick_camp_meters(pop_abs_h)
 		PerfMonitor.end("camp_power")
 	_ensure_feed_strip()
@@ -20210,7 +20211,7 @@ func _tick_camp_power(abs_h: float) -> void:
 	_camp_power_last_h = abs_h
 	if dt <= 0.0 or dt > 6.0:
 		return   # scrub-back or a jump: hold (the SOC is a forward integrator)
-	var yield_kw := _site_pv_yield(abs_h)
+	var yield_kw := _pv_yield_at(abs_h)
 	var hour := fposmod(abs_h, 24.0)
 	var seen: Dictionary = {}
 	for c in camps:
@@ -20252,6 +20253,140 @@ func _tick_camp_power(abs_h: float) -> void:
 ## The per-camp power states (the dashboard / harness read them).
 func camp_power_states() -> Dictionary:
 	return _camp_power
+
+
+# ---------------------------------------------------------------------------
+# Living vehicles' own power: each vehicle's house battery, roof solar and
+# inverter stepped with the camp model (CampPowerModel, no headcount, the
+# load = the vehicle's appliances that are switched on). Its loads follow
+# THIS AC, not the site's (GraphSimLoadHost.set_vehicle_ac); the battery
+# node's SOC is written back so the card reads it.
+# ---------------------------------------------------------------------------
+
+var _veh_power: Dictionary = {}       # comp_id -> CampPowerModel state
+var _veh_power_last_h := NAN
+var _veh_power_written: Dictionary = {}   # comp_id -> {soc, h, ac}
+var _veh_power_index: Array = []      # [{cid, scope, bat, loads, spec}]
+var _veh_power_index_key := -1
+var _pv_yield_h := NAN
+var _pv_yield_v := 0.0
+
+
+func _vehicle_power_index() -> Array:
+	var key := int(model.struct_rev)
+	if key == _veh_power_index_key:
+		return _veh_power_index
+	_veh_power_index_key = key
+	_veh_power_index = []
+	for it in model.items:
+		var comp: Dictionary = it
+		if not ((comp.get("specs", {}) as Dictionary)).has("vehicle_prop_id"):
+			continue
+		var scope := str(comp.get("child_scope_id", ""))
+		if scope.is_empty():
+			continue
+		var bat := ""
+		var kwh := 0.0
+		var pv_wp := 0.0
+		var inv_w := 0.0
+		var loads: Array = []
+		for ch in model.get_items_in_scope(scope):
+			var d: Dictionary = ch
+			var sp: Dictionary = d.get("specs", {})
+			match str(d.get("type", "")):
+				"battery":
+					bat = str(d.get("id", ""))
+					kwh = float(sp.get("kwh", 0.0))
+				"panel":
+					pv_wp += float(sp.get("wmp", 0.0))
+				"controller":
+					inv_w = maxf(inv_w, float(sp.get("overload_watts", 0.0)))
+				"appliance":
+					loads.append(str(d.get("id", "")))
+		_veh_power_index.append({"cid": str(comp.get("id", "")), "scope": scope, "bat": bat,
+			"loads": loads, "spec": {"pv_wp": pv_wp, "battery_kwh": kwh, "inverter_w": inv_w,
+				"base_load_w": 0.0}})
+	return _veh_power_index
+
+
+## The site PV yield at an instant, asked once per instant (camps and
+## vehicles both read it on the same tick).
+func _pv_yield_at(abs_h: float) -> float:
+	if abs_h != _pv_yield_h:
+		_pv_yield_h = abs_h
+		_pv_yield_v = _site_pv_yield(abs_h)
+	return _pv_yield_v
+
+
+func _vehicle_load_w(ids: Array) -> float:
+	var w := 0.0
+	for id: String in ids:
+		var sp: Dictionary = model.get_item(id).get("specs", {})
+		if str(sp.get("requested_state", "on")) == "on":
+			w += float(sp.get("avg_watts", sp.get("max_watts", 0.0)))
+	return w
+
+
+func _tick_vehicle_power(abs_h: float) -> void:
+	if model == null or is_nan(abs_h):
+		return
+	var idx := _vehicle_power_index()
+	if idx.is_empty():
+		if not _veh_power.is_empty():
+			_veh_power = {}
+			if _sim_load_host != null and _sim_load_host.has_method("set_vehicle_ac"):
+				_sim_load_host.call("set_vehicle_ac", {})
+		_veh_power_last_h = abs_h
+		return
+	if is_nan(_veh_power_last_h):
+		_veh_power_last_h = abs_h
+	var dt := abs_h - _veh_power_last_h
+	_veh_power_last_h = abs_h
+	var stepping := dt > 0.0 and dt <= 6.0   # scrub-back or a jump: hold
+	var yield_kw := _pv_yield_at(abs_h) if stepping else 0.0
+	var hour := fposmod(abs_h, 24.0)
+	var scope_ac: Dictionary = {}
+	var seen: Dictionary = {}
+	for e: Dictionary in idx:
+		var cid := str(e["cid"])
+		seen[cid] = true
+		var spec: Dictionary = e["spec"]
+		var st: Dictionary = _veh_power.get(cid, {})
+		if st.is_empty():
+			var soc0 := 0.8
+			if str(e["bat"]) != "":
+				soc0 = float((model.get_item(str(e["bat"])).get("specs", {}) as Dictionary).get("soc", 0.8))
+			st = CampPowerModel.make_state(spec, soc0)
+			st["ac_available"] = float(spec["battery_kwh"]) > 0.0
+			_veh_power[cid] = st
+		if stepping:
+			CampPowerModel.step(spec, st, 0, hour, yield_kw, dt, _vehicle_load_w(e["loads"]))
+		var ac := bool(st.get("ac_available", true))
+		scope_ac[str(e["scope"])] = ac
+		if _resource_flow != null and _resource_flow.has_method("set_scope_ac_available"):
+			_resource_flow.call("set_scope_ac_available", str(e["scope"]), ac)
+		if str(e["bat"]) == "" or float(spec["battery_kwh"]) <= 0.0:
+			continue
+		var soc := CampPowerModel.soc_frac(spec, st)
+		var last: Dictionary = _veh_power_written.get(cid, {})
+		var due := last.is_empty() or absf(abs_h - float(last.get("h", -INF))) >= _CAMP_POWER_PERSIST_H \
+			or absf(soc - float(last.get("soc", -1.0))) >= 0.01 or bool(last.get("ac", true)) != ac
+		if not due:
+			continue
+		_veh_power_written[cid] = {"soc": soc, "h": abs_h, "ac": ac}
+		_set_vehicle_battery_soc(cid, snappedf(soc, 0.001))
+	for cid in _veh_power.keys():
+		if not seen.has(cid):
+			_veh_power.erase(cid)
+			_veh_power_written.erase(cid)
+	if _sim_load_host != null and _sim_load_host.has_method("set_vehicle_ac"):
+		_sim_load_host.call("set_vehicle_ac", scope_ac)
+
+
+## Each living vehicle's own power state (comp_id -> {soc_kwh, pv_kw,
+## load_kw, ac_available, hours_left}); the harness reads it.
+func vehicle_power_states() -> Dictionary:
+	return _veh_power
 
 
 # ---------------------------------------------------------------------------

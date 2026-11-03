@@ -183,12 +183,19 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	if iid.is_empty():
 		return {"ok": false, "failures": _fails}
 	bridge.call("set_all_hands", iid, true)
+	var pinned_iid := iid
 	await _settle(tree, 10)
 	var res: Dictionary = loader.call("deliver_packed_kit", "workshop_pallets",
 		spot.x + 8.0, spot.y, 0.0)
 	var crates: Array = res.get("crate_ids", [])
 	_ok(crates.size() == 3, "three crates delivered (%d)" % crates.size())
 	await _settle(tree, 10)
+	# The unload goes to the camp nearest the container's door, which need not
+	# be the first one: read it off the container's delivery record.
+	var crec := _rec(main, str(res.get("container_prop_id", "")))
+	var uiid := str((crec.get("delivery", {}) as Dictionary).get("unload_iid", ""))
+	if not uiid.is_empty():
+		iid = uiid
 	# The unload rows: the heavy crate on a fork_move bound to OUR forklift.
 	var board: Variant = bridge.call("chore_board_for", iid)
 	var fork_rows: Array = []
@@ -259,5 +266,5 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	await _shot(main, "04_unloaded")
 	await _bay_phase(main, loader, bridge, fid, spot)
 	main.set("time_scale", 0.001)
-	bridge.call("set_all_hands", iid, false)
+	bridge.call("set_all_hands", pinned_iid, false)
 	return {"ok": _fails.is_empty(), "failures": _fails}

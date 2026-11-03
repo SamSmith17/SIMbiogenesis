@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 740
+const EXPECTED_CHECKS := 743
 
 var _passed := 0
 var _failed := 0
@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_design_rules()
 	_test_geometry()
 	_test_transport_lifecycle()
+	_test_cargo_doors()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
@@ -1462,6 +1463,74 @@ func _mesh_tris(mesh: ArrayMesh) -> int:
 
 ## Transport polish Phase 3: leaving through the gate, one host model, one
 ## door rule, one stowed-crate rule, re-stowing, the handling table.
+## An open cargo door (CargoDoors): every host with a bay gets an overlay,
+## the dark opening sits on its door face, and every leaf stands OUTSIDE the
+## body (swung round, slid back or raised) — never through the cargo.
+func _test_cargo_doors() -> void:
+	var hosts: Array = [{"name": "20 ft container", "rec": {"model_id": "cargo_container",
+		"container_spec": {"container_id": "container_20"}}}]
+	for p in VehiclePresets.builtins():
+		hosts.append({"name": str((p as Dictionary)["id"]), "rec": {"model_id": VehicleBuilder.MODEL_ID,
+			"vehicle_spec": (p as Dictionary)["spec"]}})
+	var planned := 0
+	var outside := true
+	var bad := ""
+	for h in hosts:
+		var rec: Dictionary = h["rec"]
+		var bay := VehicleCargo.host_bay(rec)
+		var pl := CargoDoors.plan(rec)
+		if bay.is_empty():
+			continue
+		if pl.is_empty():
+			bad = "%s: a bay and no door plan" % h["name"]
+			outside = false
+			continue
+		planned += 1
+		var node := CargoDoors.build(pl)
+		# The body's plan rectangle the leaves must keep out of.
+		var bx0 := -INF
+		var bx1 := INF
+		var bz0 := -INF
+		var bz1 := INF
+		if str(pl["where"]) == "rear":
+			bx0 = float(pl["x0"]) - 0.1
+			bx1 = float(pl["x1"]) + 0.1
+			bz1 = float(pl["z"]) - 0.02
+			bz0 = bz1 - 2.0
+		else:
+			bx1 = float(pl["x"]) - 0.02
+			bx0 = bx1 - 1.5
+			bz0 = float(pl["z0"])
+			bz1 = float(pl["z1"])
+		for mi in _meshes_under(node, Transform3D.IDENTITY):
+			var xf: Transform3D = mi[0]
+			var m: MeshInstance3D = mi[1]
+			if m.material_override is StandardMaterial3D \
+					and (m.material_override as StandardMaterial3D).shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED:
+				continue   # the dark opening
+			var c := xf * Vector3.ZERO
+			if c.y > float(pl["y1"]):
+				continue   # a roll-up's curtain, rolled up under the roof over the opening
+			if c.x > bx0 and c.x < bx1 and c.z > bz0 and c.z < bz1:
+				outside = false
+				bad = "%s: a %s leaf at %s inside the body" % [h["name"], pl["kind"], c]
+		node.free()
+	_check("every host with a bay has an open-door plan", planned >= 4, "planned %d" % planned)
+	_check("open door leaves stand outside the body", outside, bad)
+	_check("no bay, no door", CargoDoors.plan({"model_id": "shiftpod"}).is_empty())
+
+
+func _meshes_under(n: Node, xf: Transform3D) -> Array:
+	var out: Array = []
+	for ch in n.get_children():
+		if ch is Node3D:
+			var cxf: Transform3D = xf * (ch as Node3D).transform
+			if ch is MeshInstance3D:
+				out.append([cxf, ch])
+			out.append_array(_meshes_under(ch, cxf))
+	return out
+
+
 func _test_transport_lifecycle() -> void:
 	# --- departures ---------------------------------------------------------
 	var road := {"points": PackedVector2Array([Vector2(0, 200), Vector2(0, 60), Vector2(40, 20), Vector2(140, 20)])}

@@ -18,7 +18,7 @@ If you need to share structure with collaborators, use the examples in [`config-
 |------------------------|---------|
 | `ha_profiles.cfg` | **Saved Home Assistant instances: address + long-lived token each**, the default one and the auto-connect switch (Settings → **Home Assistant**; [`core/ha/ha_profiles.gd`](../core/ha/ha_profiles.gd)). Never put in a world or a shared pack |
 | `ha_connection.cfg` | The old single HA connection. Migrated once into `ha_profiles.cfg` and then left alone |
-| `uisp_settings.cfg` | UISP URL and API token ([`uisp/uisp_connection_ui.gd`](../uisp/uisp_connection_ui.gd)) |
+| `uisp_settings.cfg` | UISP URL and API token ([`parked/uisp/uisp_connection_ui.gd`](../parked/uisp/uisp_connection_ui.gd), parked) |
 | `terrain_config.cfg` | OpenTopography API key — `[opentopography] api_key=` (or the `OPENTOPOGRAPHY_API_KEY` env var) — for 30 m global DEM, 10 m USGS DEM in the US, and (academic-tier OpenTopography accounts only — see [`core/terrain/elevation_service.gd`](../core/terrain/elevation_service.gd)) 1 m USGS lidar; same key, no separate one needed. Set it from **Settings → Keys** rather than hand-editing this file. Mapillary access token ([`core/terrain/mapillary_service.gd`](../core/terrain/mapillary_service.gd)); Gemini image API key for the AI spawn-area "hero patch" — `[gemini] api_key=` / `ai_hero_enabled` / `ai_hero_half_extent_m` / `ai_image_size` (or the `GEMINI_API_KEY` env var), see [`core/terrain/ai_imagery_service.gd`](../core/terrain/ai_imagery_service.gd) |
 | `keys_config.cfg` | Copernicus CDS API key ([`core/climate_projection_service.gd`](../core/climate_projection_service.gd)) |
 | `weather_gen_engine.cfg` | Weather generation engine prefs ([`core/weather_service.gd`](../core/weather_service.gd)) |
@@ -122,7 +122,7 @@ device in one step.
 ## Code defaults
 
 - No Home Assistant address or token is in the code; [`core/ha/ha_profiles.gd`](../core/ha/ha_profiles.gd) only recognises the old placeholders (`YOUR_LONG_LIVED_TOKEN`) so it never migrates them.
-- [`uisp/uisp_api_client.gd`](../uisp/uisp_api_client.gd) uses placeholder `YOUR_API_TOKEN` for `@export var api_token`. The in-game UI saves real values to `user://uisp_settings.cfg`. Before pushing to GitHub, confirm no scene or resource overrides embed a real token.
+- [`parked/uisp/uisp_api_client.gd`](../parked/uisp/uisp_api_client.gd) (parked) uses placeholder `YOUR_API_TOKEN` for `@export var api_token`. The in-game UI saves real values to `user://uisp_settings.cfg`. Before pushing to GitHub, confirm no scene or resource overrides embed a real token.
 
 ## `.gitignore`
 

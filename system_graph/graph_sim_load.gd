@@ -128,7 +128,9 @@ func _connect_to_power_system() -> void:
 	# camp of vehicles on the graph that was ~180 x 130 ms, a 47 s stall.
 	var host := get_parent()
 	if host != null and host.has_method("fan_ac_available"):
-		if apb != null and "power_available" in apb:
+		if host.has_method("ac_for"):
+			_ac_power_available = bool(host.call("ac_for", item_id))
+		elif apb != null and "power_available" in apb:
 			_ac_power_available = bool(apb.get("power_available"))
 		_recompute_effective_state(false)
 		return

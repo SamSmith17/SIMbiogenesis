@@ -27,7 +27,10 @@ commit URLs or tokens).
 - **Moving a file:** move its `.uid` / `.import` sidecar with it, rewrite every
   `res://` reference (including the gitignored local map scenes), then run
   `python tools/checks/res_path_audit.py` — it lists every `res://` path and
-  relative Markdown link whose target is missing.
+  relative Markdown link whose target is missing. Gate on
+  `--baseline tools/checks/res_path_baseline.json` (only NEW misses fail);
+  the baseline holds the deliberate ones (fixtures, examples, parked scenes
+  pointing at their old home). `--write-baseline` re-writes it.
 
 ## Releases + fresh clones (2026-10-20, docs/RELEASES.md)
 
@@ -11720,8 +11723,20 @@ driver's view out of the cab). All eight are done.
     (`NpcPopulationBridge.nearest_crew_habitat`) and pins it ALL HANDS
     until the project leaves "active" (`pin_crew_until_done`,
     `_project_pins`, pruned each tick; `is_all_hands` = director OR
-    project pin). Container deliveries are unchanged (first camp, own
-    routine) — they have the same festival-mode gap.
+    project pin). Every other site project now gets the same pin when it
+    needs it (`NpcPopulationBridge.needs_pin_to_work`: the camp is light,
+    its engine parked, or its routine has no WORK block — checked in
+    `create_site_project`), so container deliveries and the Linkage
+    rebuild / breakdown queues get a working crew in festival mode too;
+    a container's unload goes to the camp nearest its door as well.
+  - **The door opens while unloading** (`CargoDoors`,
+    core/vehiclelab/cargo_doors.gd): the doors are baked into the host's
+    mesh, so an overlay `ModelRoot/DoorsOpen` draws a dark opening on the
+    door face and the leaves swung / slid / rolled / lifted out of it
+    (barn and container leaves 250°, hinged 100°, lift 80°, a slider back
+    by its width, a roll-up rolled at the head). `plan(rec)` reads
+    `VehicleCargo.bay` + `door_spans`; `TerrainLoader._sync_cargo_doors`
+    shows it on every host whose unload project is active.
 - **Arrival through the gate (Phase 7).** `VehicleDrive` (pure): a record
   key `arrival` = {start_h, route [[x, z]…], park [x, z, yaw_deg]};
   `pose_at(arrival, abs_h)` → {state away | driving | parked, pos, yaw,
@@ -11786,7 +11801,7 @@ driver's view out of the cab). All eight are done.
     `tools/diag/vehicle_cab_view_diag.gd` prints the first hit per preset;
     selftest `_test_driver_view` pins a clear road ahead and no eye pressed
     to the glass.
-  - Not done: door-open poses during an unload, multiplayer review of the
+  - Not done: multiplayer review of the
     drive (records already sync as prop ops; the pose is a function of the
     clock), a tour stop for the drive-in.
 - **Mass and ratings realism (polish Phase 1, 2026-11-02;
@@ -12041,6 +12056,20 @@ driver's view out of the cab). All eight are done.
     `GraphSimLoadHost` hears the AC bus ONCE and fans the change out in one
     bulk write (`fan_ac_available`); proxies under the host no longer hook
     the bus themselves. One flip now costs one refresh.
+  - **A vehicle's loads run on its own battery** (refinement pass,
+    2026-11-03). `SystemGraphView._tick_vehicle_power` (ambient, inside the
+    sim-write bracket, beside `_tick_camp_power`) steps each vehicle
+    compound with `CampPowerModel.step` (pv = its panels' Wmp × the site's
+    yield at the instant, battery = its house bank, inverter = its
+    controller's overload watts, load = its appliances that are on), sets
+    `set_scope_ac_available` per vehicle scope, writes the battery card's
+    SOC (every 0.5 h or a 1 % move) and hands the per-scope AC to
+    `GraphSimLoadHost.set_vehicle_ac`. The site's `fan_ac_available` skips
+    proxies in vehicle scopes (`ac_for(item_id)` is the one answer). A
+    scrub back or a > 6 h jump holds. `vehicle_power_states()` for probes.
+    Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_power_doors_check.gd -Label vehicle_power_doors -Timeout 900`
+    (13: site inverter down leaves the van's loads on, a flat van battery at
+    night switches them off, a box truck's door open while unloading).
   - **`npc_population` was 40 ms per tick on the festival alone (133 with
     the vehicles)**, almost all in `_service_machine_chores`: every full-
     tier camp re-walked the whole graph with `GraphNesting.walk_items`, which

@@ -20,6 +20,11 @@ var _syncing: bool = false
 ## `_sync_all` per write.
 var _bulk_suppress: bool = false
 var _pending_telemetry_sync: bool = false
+## A living vehicle's loads run off its OWN house battery (the view steps it,
+## SystemGraphView._tick_vehicle_power): vehicle scope id -> AC up. A proxy in
+## one of these scopes never takes the site inverter's state.
+var _vehicle_ac: Dictionary = {}
+var _site_ac: bool = true
 
 
 func setup(model: RefCounted) -> void:
@@ -46,15 +51,61 @@ func _hook_ac_bus() -> void:
 ## Hand every proxy the inverter's state inside ONE bulk write: the owning
 ## view coalesces the model changes into one telemetry / SolarUI refresh.
 func fan_ac_available(available: bool) -> void:
+	_site_ac = available
+	_fan(func(item_id: String) -> Variant:
+		return null if _vehicle_scope_of(item_id) != "" else available)
+
+
+## The view's vehicle power step: each vehicle scope's AC. Only the proxies
+## whose AC actually moved are touched, in one bulk write.
+func set_vehicle_ac(scope_ac: Dictionary) -> void:
+	var changed := false
+	for s: String in scope_ac.keys():
+		if not _vehicle_ac.has(s) or bool(_vehicle_ac[s]) != bool(scope_ac[s]):
+			changed = true
+			break
+	if not changed:
+		for s: String in _vehicle_ac.keys():
+			if not scope_ac.has(s):
+				changed = true
+				break
+	_vehicle_ac = scope_ac.duplicate()
+	if not changed:
+		return
+	_fan(func(item_id: String) -> Variant:
+		var s := _vehicle_scope_of(item_id)
+		return null if s == "" else bool(_vehicle_ac.get(s, true)))
+
+
+## The AC a proxy runs on: its vehicle's when it is in one, else the site's.
+func ac_for(item_id: String) -> bool:
+	var s := _vehicle_scope_of(item_id)
+	return bool(_vehicle_ac.get(s, true)) if s != "" else _site_ac
+
+
+func _vehicle_scope_of(item_id: String) -> String:
+	if _vehicle_ac.is_empty() or _model == null:
+		return ""
+	var it: Dictionary = _model.call("get_item", item_id)
+	var s := str(it.get("scope_id", "root"))
+	return s if _vehicle_ac.has(s) else ""
+
+
+## Hand each proxy the AC `pick` gives it (null = leave it) inside ONE bulk
+## write: the owning view coalesces the model changes into one refresh.
+func _fan(pick: Callable) -> void:
 	var view := get_parent()
 	var bulk_ok := view != null and "_sim_bulk_update" in view
 	var was_bulk := bool(view.get("_sim_bulk_update")) if bulk_ok else false
 	if bulk_ok:
 		view.set("_sim_bulk_update", true)
 	begin_bulk_sync()
-	for node_v in _loads.values():
+	for id_v in _loads.keys():
+		var node_v: Variant = _loads[id_v]
 		if node_v != null and is_instance_valid(node_v) and (node_v as Node).get_parent() == self and (node_v as Node).has_method("_on_power_availability_changed"):
-			(node_v as Node).call("_on_power_availability_changed", available)
+			var v: Variant = pick.call(str(id_v))
+			if v != null:
+				(node_v as Node).call("_on_power_availability_changed", bool(v))
 	end_bulk_sync()
 	if bulk_ok:
 		view.set("_sim_bulk_update", was_bulk)

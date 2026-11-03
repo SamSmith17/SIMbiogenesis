@@ -1,0 +1,14 @@
+[
+ " patterns for everything this pack must NOT carry: the other",
+ "...gd",
+ "Imported Models/Soak Terrain/Camps/Shiftpod.glb",
+ "definitely_missing_starmap.png",
+ "path",
+ "scad_library/gizmo.scad",
+ "tools/fixes/my_fix.gd",
+ "uisp/uisp_connection_ui.gd",
+ "uisp/uisp_device.gd",
+ "uisp/uisp_network_visualizer.gd",
+ "vase_20160822.scad",
+ "x.gd:1 \u2014 boom"
+]
