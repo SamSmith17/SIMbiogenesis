@@ -1,6 +1,6 @@
 extends RefCounted
 ## The site deployment schedule end to end on a REAL festival world (sandbox):
-##   tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 1500
+##   tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 2100
 ##
 ## 1. festival mode populates the camps; four packed kits are placed by the
 ##    player (shiftpod, EZ-up, pallet rack, a dome) beside a cargo container;
@@ -13,11 +13,14 @@ extends RefCounted
 ## 4. the clock scrubbed back past the event puts it all back at once and
 ##    clears the stamp;
 ## 5. a PACK-UP event does the reverse with the crew — the packed crates are
-##    carried to the container's door — and the schedule file round-trips
-##    through the director;
+##    carried to the container's door and stowed in it — and the schedule
+##    file round-trips through the director;
 ## 6. the prop editor's path: one crate handed to the crew on its own
-##    (queue_item), built with the generic staging site (parts laid out,
-##    then seated), a dome staged by its own builder.
+##    (queue_item).
+## Every structure (shiftpod, dome, rack) is built piece by piece on the
+## shared crew site (PalletRackBuildSite, its pieces cut by StructureUnits);
+## the per-part AssemblyBuildSite this probe used to check was retired on
+## 2026-10-27.
 ## Shots under screenshots\site_deploy\. Writes only the sandbox.
 
 var _fails: Array = []
@@ -42,6 +45,19 @@ func _shot(main: Node, name: String) -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(SHOT_DIR))
 	img.save_png("%s/%s.png" % [SHOT_DIR, name])
 	print("site-deploy shot: %s" % name)
+
+
+## How far a crew site's build has got (0..1).
+func _site_frac(ss: PalletRackBuildSite) -> float:
+	var tl: Dictionary = ss.timeline()
+	if tl.is_empty():
+		return 0.0
+	return clampf(ss.build_time() / maxf(float(tl.get("makespan", 1.0)), 1.0), 0.0, 1.0)
+
+
+func _site_line(main: Node, pid: String) -> String:
+	var ss := PalletRackBuildSite.site_for(main, pid)
+	return ss.progress_line() if ss != null else "no site"
 
 
 func _now(main: Node) -> float:
@@ -200,22 +216,23 @@ func run(main: Node, _harness: Node) -> Dictionary:
 				return true
 		return false)
 	_ok(partial, "a camp seen half-pitched (live fraction)")
-	var dome_staged := await _until(tree, 240.0, func() -> bool:
-		var ds := AssemblyBuildSite.site_for(main, dome_id)
-		return (ds != null and ds.get_node_or_null("Staged") != null) or not _packed(main, dome_id))
-	_ok(dome_staged, "the dome is staged by its own builder (a Staged node) or already up")
+	# Both are built on the shared crew site: it owns the picture (no ghost),
+	# cuts the model into pieces and puts them up as the labour comes in.
+	var dome_site := await _until(tree, 240.0, func() -> bool:
+		var ds := PalletRackBuildSite.site_for(main, dome_id)
+		return (ds != null and ds.owns_visuals()) or not _packed(main, dome_id))
+	_ok(dome_site, "the dome is built on a crew site that owns its picture (or already up)")
 	var site_up := await _until(tree, 120.0, func() -> bool:
-		var ss := AssemblyBuildSite.site_for(main, pod_id)
+		var ss := PalletRackBuildSite.site_for(main, pod_id)
 		return ss != null and ss.owns_visuals())
-	_ok(site_up, "the shiftpod has a staging site that owns its picture")
-	var pod_site := AssemblyBuildSite.site_for(main, pod_id)
-	_ok(pod_site != null and (pod_site.get_node_or_null("Parts") as Node) != null
-		and (pod_site.get_node("Parts") as Node).get_child_count() > 0,
-		"split mode cut the shiftpod into parts (%d)" % ((pod_site.get_node("Parts") as Node).get_child_count() if pod_site != null and pod_site.get_node_or_null("Parts") != null else 0))
-	var staged := await _until(tree, 240.0, func() -> bool:
-		var ss := AssemblyBuildSite.site_for(main, pod_id)
-		return ss != null and float(ss.get("_laid_t")) > 0.05)
-	_ok(staged, "the shiftpod's parts are being laid out (%s)" % (str(AssemblyBuildSite.site_for(main, pod_id).progress_line()) if AssemblyBuildSite.site_for(main, pod_id) != null else "no site"))
+	_ok(site_up, "the shiftpod has a crew site that owns its picture")
+	var pod_site := PalletRackBuildSite.site_for(main, pod_id)
+	var pieces := (pod_site.get("_unit_nodes") as Dictionary).size() if pod_site != null else 0
+	_ok(pieces > 1, "the shiftpod is cut into pieces (%d)" % pieces)
+	var going_up := await _until(tree, 240.0, func() -> bool:
+		var ss := PalletRackBuildSite.site_for(main, pod_id)
+		return ss != null and _site_frac(ss) > 0.05)
+	_ok(going_up, "the shiftpod's pieces are going up (%s)" % _site_line(main, pod_id))
 	# Close-ups of the staging: the settlement camera low over the shiftpod
 	# while its parts are laid out, then once they are going up.
 	var pod_rec0 := PlacedPropService.get_prop_record(main, pod_id)
@@ -230,9 +247,9 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	await _settle(tree, 12)
 	await _shot(main, "01b_staging_laid_out")
 	var seating := await _until(tree, 240.0, func() -> bool:
-		var ss := AssemblyBuildSite.site_for(main, pod_id)
-		return ss != null and float(ss.get("_assembled_t")) > 0.3)
-	_ok(seating, "the shiftpod's parts are being seated (%s)" % (str(AssemblyBuildSite.site_for(main, pod_id).progress_line()) if AssemblyBuildSite.site_for(main, pod_id) != null else "no site"))
+		var ss := PalletRackBuildSite.site_for(main, pod_id)
+		return (ss != null and _site_frac(ss) > 0.3) or not _packed(main, pod_id))
+	_ok(seating, "the shiftpod is a third built or more (%s)" % _site_line(main, pod_id))
 	if cam != null:
 		cam.call("look_at_xz", pod_pos)
 	await _settle(tree, 12)
@@ -251,7 +268,10 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	var rack_rec := PlacedPropService.get_prop_record(main, str(kits.get(PalletRackBuilder.MODEL_ID, "")))
 	_ok(not (rack_rec.get("build_state") is Dictionary) and not (rack_rec.get(PalletRackBuildSite.RECORD_KEY) is Dictionary),
 		"the rack's construction state is cleared")
-	_ok(AssemblyBuildSite.site_for(main, pod_id) == null, "the deployed shiftpod carries no staging site")
+	var site_gone := await _until(tree, 30.0, func() -> bool:
+		var ss := PalletRackBuildSite.site_for(main, pod_id)
+		return ss == null or not ss.owns_visuals())
+	_ok(site_gone, "the deployed shiftpod's crew site has let go of it")
 	_ok((bridge.call("all_hands_ids") as Array).is_empty(), "ALL HANDS released")
 	await _shot(main, "02_deployed")
 
@@ -305,7 +325,11 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	_ok(packed2 == kits.size(), "every kit packed by the crew (%d of %d)" % [packed2, kits.size()])
 	var pod_rec := PlacedPropService.get_prop_record(main, pod_id)
 	var pod_at := Vector2(float(pod_rec.get("x", 0.0)), float(pod_rec.get("z", 0.0)))
-	_ok(pod_at.distance_to(door) < 3.0, "the packed shiftpod was carried to the container's door (%.1f m off)" % pod_at.distance_to(door))
+	# Carried to the door, then stowed in the container (transport polish
+	# Phase 3): a stowed crate stands inside the container's footprint.
+	_ok(pod_at.distance_to(door) < 8.0, "the packed shiftpod was carried to the container (%.1f m from its door)" % pod_at.distance_to(door))
+	_ok(str(pod_rec.get("stowed_in", "")) == str(cont.get("prop_id", "")) and pod_rec.get("stow_local") is Array,
+		"and stowed in it")
 	# The record round-trips through the director's own file.
 	var fresh := SiteDeployDirector.new()
 	fresh.bind(main, bridge)

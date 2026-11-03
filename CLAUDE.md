@@ -675,7 +675,7 @@ Godot.exe.exe --headless --path . --script core/population/site_deploy_selftest.
 # puts it all back and re-crossing fires it again; a PACK-UP event with the
 # crew carries the crates to the container's door; the file; one crate
 # handed to the crew on its own (queue_item):
-tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 1500
+tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 2100
 # The LOOK of per-part staging, close up (sandbox, ~2.5 min): three kits on
 # open ground near the marker handed to the crew one by one (queue_item), the
 # settlement camera 40-55 m over them, shots of the yard laid out, the dome
