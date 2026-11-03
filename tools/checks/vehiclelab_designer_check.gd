@@ -54,6 +54,8 @@ func run(main: Node, harness: Node) -> Dictionary:
 		return {"ok": false, "fails": _fails}
 	var vp := main.get_viewport()
 	var studio: StudioViewport = ui.call("studio")
+	UnitsPref.set_metric(false)
+	await _phase4_layout(ui, tree, vp)
 
 	# Every built-in in the studio.
 	for b in VehiclePresets.builtins():
@@ -320,11 +322,94 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var kwh1 := _battery_kwh(sgv, cid2)
 	_ok(not cid2.is_empty() and absf(kwh1 - (kwh0 + 3.0)) < 0.01,
 		"the graph node follows the bigger battery (%.1f -> %.1f kWh)" % [kwh0, kwh1])
+	await _load_via_lab(main, loader, pid, tree, vp)
 	loader.call("delete_prop_by_id", pid)
 	await _settle(tree, 4)
 	_ok(sgv == null or str(sgv.call("vehicle_system_item_id", pid)).is_empty(), "deleting the vehicle removes its node")
 	print("vehiclelab: %d failure(s)" % _fails.size())
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+## Transport polish Phase 4: the checks at the top with a badge, factory
+## wheelbases, fuel from the chassis, the units toggle (a REAL click).
+func _phase4_layout(ui: Control, tree: SceneTree, vp: Viewport) -> void:
+	ui.call("load_builtin", "van")
+	await _settle(tree, 10)
+	var ds: DesignerShell = ui.get("_shell")
+	var right: Control = ds.right
+	var summary: Control = ui.get("_summary")
+	var chassis := ui.find_child("vl_chassis", true, false) as Control
+	var first := -1
+	var ch_at := -1
+	for i in right.get_child_count():
+		var c := right.get_child(i)
+		if c == summary:
+			first = i
+		if chassis != null and c.is_ancestor_of(chassis):
+			ch_at = i
+	_ok(first >= 0 and ch_at > first, "the summary and checks come first in the right column (%d < %d)" % [first, ch_at])
+	_ok(ds.badge != null and ds.badge.visible and not ds.badge.text.is_empty(),
+		"the header carries the checks badge (%s)" % (ds.badge.text if ds.badge != null else ""))
+	var wb := ui.find_child("vl_wheelbase", true, false) as OptionButton
+	_ok(wb != null and wb.item_count == 2 and not wb.disabled,
+		"the Sprinter offers its factory wheelbases (%d)" % (wb.item_count if wb != null else 0))
+	var fuel := ui.find_child("vl_fuel", true, false) as Label
+	_ok(fuel != null and fuel.text.begins_with("Diesel"), "the fuel is the chassis' (%s)" % (fuel.text if fuel != null else ""))
+	var units := ui.find_child("vl_units", true, false) as CheckBox
+	var trip := ui.find_child("vl_trip_mi", true, false) as SpinBox
+	if units != null and trip != null:
+		trip.value = 100.0
+		await _settle(tree, 8)
+		_scroll_into_view(units, tree)
+		await _settle(tree, 4)
+		await HarnessInput.click(vp, HarnessInput.center_of(units))
+		await _settle(tree, 8)
+		_ok(UnitsPref.metric() and trip.suffix.strip_edges() == "km" and absf(trip.value - 160.9) < 0.2,
+			"a real click on the units box shows km (%.1f %s)" % [trip.value, trip.suffix])
+		_ok(absf(float(((ui.call("spec") as Dictionary)["trip"] as Dictionary)["one_way_mi"]) - 100.0) < 0.05,
+			"the trip stays 100 mi underneath")
+		await HarnessInput.click(vp, HarnessInput.center_of(units))
+		await _settle(tree, 6)
+		_ok(not UnitsPref.metric(), "and a second click puts miles back")
+	else:
+		_ok(false, "the units box and the trip field exist")
+	ds.scroll_top()
+	await _settle(tree, 4)
+
+
+## The Packing Lab loads a kit into the placed vehicle's bay: its host list
+## carries the bay and the button reads "Load into …" (a REAL click).
+func _load_via_lab(main: Node, loader: Node, pid: String, tree: SceneTree, vp: Viewport) -> void:
+	var lab_script: GDScript = load("res://scenes/ui/packing_lab_modal.gd")
+	lab_script.call("open_site_cargo", tree)
+	await _settle(tree, 12)
+	var lab: Node = null
+	for c in tree.root.get_children():
+		if c.get_script() == lab_script:
+			lab = c
+	_ok(lab != null and bool(lab.get("visible")), "the Packing Lab opened")
+	if lab == null:
+		return
+	lab.call("_set_container", "vehicle_bay:%s" % pid)
+	lab.call("_update_delivery_ui")
+	await _settle(tree, 6)
+	var btn := HarnessInput.find_button(lab, "Load into", true)
+	_ok(btn != null and not btn.disabled, "with the vehicle's bay picked the button reads \"%s\"" % (btn.text if btn != null else "?"))
+	if btn != null:
+		await HarnessInput.click(vp, HarnessInput.center_of(btn))
+		await _settle(tree, 12)
+	var stowed := 0
+	for r in loader.call("placed_prop_records"):
+		if str((r as Dictionary).get("stowed_in", "")) == pid:
+			stowed += 1
+	_ok(stowed > 0, "a real click loads the kit into the vehicle (%d crates in its bay)" % stowed)
+	_ok(bool(lab.get("visible")), "the Lab stays open after loading")
+	await _shot(main, "packing_lab_loaded")
+	lab.call("close")
+	await _settle(tree, 4)
+	for r2 in (loader.call("placed_prop_records") as Array).duplicate():
+		if str((r2 as Dictionary).get("delivery_id", "")) == pid:
+			loader.call("delete_prop_by_id", str((r2 as Dictionary).get("id", "")))
 
 
 func _scroll_into_view(c: Control, tree: SceneTree) -> void:

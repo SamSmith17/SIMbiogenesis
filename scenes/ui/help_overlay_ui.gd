@@ -35,6 +35,12 @@ const _GROUPS := [
 	["Interaction", [
 		["interact", "Interact / pick up / use"],
 		["dismount", "Exit vehicle"],
+		["key:Back up", "Hitch a trailer: back the vehicle's hitch slowly onto its coupler"],
+		["key:Get in", "Refuel: a vehicle tops up from a fuel tank within 12 m when you get in or out"],
+		["fork_raise", "Forklift: raise the forks (lift a load as they rise)"],
+		["fork_lower", "Forklift: lower the forks (set a load down)"],
+		["key:Deploy chip", "Vehicles drive in / out through the site gate (Deploy chip menu)"],
+		["key:Packing Lab", "Load a kit into a placed vehicle's cargo bay (pick its bay, then Load)"],
 		["drone_view", "Drone view from here (again to land)"],
 		["charge", "Charge battery at station"],
 		["repair", "Repair structure"],

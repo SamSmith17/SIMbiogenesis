@@ -50,6 +50,28 @@ func hide_ui() -> void:
 	visible = false
 	euc_vehicle = null
 
+## One line under the gauges: what the vehicle can do here (a trailer to
+## hitch, the forks), from the vehicle itself (`dashboard_hint()`).
+var _hint: Label = null
+
+
+func _update_hint() -> void:
+	var text := str(euc_vehicle.call("dashboard_hint")) if euc_vehicle != null \
+		and euc_vehicle.has_method("dashboard_hint") else ""
+	if _hint == null:
+		var box := get_node_or_null("Panel/MarginContainer/VBoxContainer") as VBoxContainer
+		if box == null:
+			return
+		_hint = Label.new()
+		_hint.name = "DashboardHint"
+		_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		_hint.add_theme_color_override("font_color", UITheme.C_INFO)
+		box.add_child(_hint)
+	_hint.text = text
+	_hint.visible = not text.is_empty()
+
+
 func _update_display() -> void:
 	if euc_vehicle == null:
 		return
@@ -81,11 +103,12 @@ func _update_display() -> void:
 			battery_bar.modulate = col
 			battery_percent_label.text = "%.0f%%" % pct
 			battery_percent_label.add_theme_color_override("font_color", col)
-			battery_wh_label.text = "%.0f / %.0f L" % [fl.x, fl.y]
-			distance_value.text = "%.1f mi" % (distance_meters / 1609.344)
-			speed_value.text = "%.0f mph" % (current_speed_mps * 2.23694)
+			battery_wh_label.text = "%s / %s" % [UnitsPref.fuel_l(fl.x, 0), UnitsPref.fuel_l(fl.y, 0)]
+			distance_value.text = UnitsPref.dist_m(distance_meters, 1)
+			speed_value.text = UnitsPref.speed(current_speed_mps)
 			var rmi := float(euc_vehicle.call("get_range_mi")) if euc_vehicle.has_method("get_range_mi") else -1.0
-			range_value.text = "%.0f mi" % rmi if rmi >= 0.0 else "—"
+			range_value.text = UnitsPref.dist_mi(rmi) if rmi >= 0.0 else "—"
+			_update_hint()
 			return
 	# A fuel vehicle (a placed bus, van or skid steer reports no battery).
 	if battery_capacity <= 0.0:
@@ -94,9 +117,10 @@ func _update_display() -> void:
 		battery_percent_label.text = "fuel"
 		battery_percent_label.add_theme_color_override("font_color", UITheme.C_INFO)
 		battery_wh_label.text = ""
-		distance_value.text = "%.1f mi" % (distance_meters / 1609.344)
-		speed_value.text = "%.0f mph" % (current_speed_mps * 2.23694)
+		distance_value.text = UnitsPref.dist_m(distance_meters, 1)
+		speed_value.text = UnitsPref.speed(current_speed_mps)
 		range_value.text = "—"
+		_update_hint()
 		return
 	# Calculate values
 	var battery_percent : float = (battery_wh / battery_capacity) * 100.0
@@ -124,13 +148,14 @@ func _update_display() -> void:
 		battery_bar.modulate = UITheme.C_ERROR
 	
 	# Update distance
-	distance_value.text = "%.1f mi" % distance_miles
+	distance_value.text = UnitsPref.dist_mi(distance_miles, 1)
 	
 	# Update speed
-	speed_value.text = "%.0f mph" % speed_mph
+	speed_value.text = UnitsPref.speed(current_speed_mps)
 	
 	# Update range
-	range_value.text = "%.0f mi" % range_miles
+	range_value.text = UnitsPref.dist_mi(range_miles)
+	_update_hint()
 	
 	# Color code range based on remaining
 	if range_miles > 10.0:

@@ -57,9 +57,10 @@ func _process(delta: float) -> void:
 		return
 	var before := lift_m
 	if vehicle.is_mounted:
-		if Input.is_physical_key_pressed(KEY_PAGEUP):
+		# InputMap actions (rebindable in Settings -> Controls, listed in F1).
+		if Input.is_action_pressed("fork_raise"):
 			lift_m += LIFT_SPEED_MPS * delta
-		if Input.is_physical_key_pressed(KEY_PAGEDOWN):
+		if Input.is_action_pressed("fork_lower"):
 			lift_m -= LIFT_SPEED_MPS * delta
 	lift_m = clampf(lift_m, 0.0, ForkliftBuilder.MAX_LIFT_M)
 	_apply_pose()

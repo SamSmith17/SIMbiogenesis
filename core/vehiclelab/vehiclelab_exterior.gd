@@ -105,6 +105,24 @@ static func type_info(t: String) -> Dictionary:
 	return TYPES.get(t, {})
 
 
+## The roof / side palette's groups, in order (the designer's buttons):
+## [group, [tool preset ids]].
+const TOOL_GROUPS := [
+	["Power", ["solar_roof", "solar_flex", "gland", "light_bar"]],
+	["Comfort", ["fan", "vent", "ac", "awning", "window", "starlink", "antenna"]],
+	["Access", ["ladder", "hitch"]],
+	["Carry", ["rack", "cargo_box", "bike_rack"]],
+]
+
+## Faces and doors in words.
+const FACE_WORDS := {"roof": "roof", "left": "left side", "right": "right side", "rear": "rear",
+	"side": "side", "front": "front"}
+
+
+static func face_word(f: String) -> String:
+	return str(FACE_WORDS.get(f, f.replace("_", " ")))
+
+
 static func label_of(el: Dictionary) -> String:
 	var t := type_info(str(el.get("type", "")))
 	return str(t.get("label", str(el.get("type", ""))))

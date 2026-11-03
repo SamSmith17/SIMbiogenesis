@@ -28,6 +28,7 @@ const SHIPPED_ART := [
 	["res://Imported Models/Mars Aerial/Motorhome/motorhome.glb", "Motorhome art"],
 ]
 const C_GHOST := Color(0.2, 0.75, 1.0, 0.42)
+const FUEL_WORDS := {"gasoline": "Gasoline", "diesel": "Diesel", "electric": "Electric (its pack)", "none": "None (towed)"}
 const C_SELECT := Color(1.0, 0.72, 0.18, 0.45)
 
 var _loader: Node = null
@@ -84,6 +85,8 @@ var _checks_box: VBoxContainer
 var _apply_btn: Button
 var _place_btn: Button
 var _image_dialog: FileDialog
+var _replace_dialog: ConfirmationDialog
+var _units_gen := -1
 var _model_dialog: FileDialog
 
 
@@ -143,6 +146,10 @@ func _activate() -> void:
 	_shell.open()
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
+	var can_place := _loader != null and _loader.has_method("begin_vehiclelab_placement")
+	_place_btn.disabled = not can_place
+	_place_btn.tooltip_text = "Place it near you, then click where it parks" if can_place \
+		else "Placing needs a location map (this scene has no terrain)"
 	_refresh_design_list()
 	_refresh_wraps()
 	_refresh_models()
@@ -199,7 +206,7 @@ func _input(e: InputEvent) -> void:
 # --- layout -------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	_shell = DesignerShell.create("Living vehicle designer", "truck", {
+	_shell = DesignerShell.create("Vehicle designer", "truck", {
 		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
 		"left_label": "Vehicle & designs", "left_w": 240.0, "right_w": 400.0})
 	add_child(_shell)
@@ -212,9 +219,20 @@ func _build_ui() -> void:
 	_build_centre()
 	_build_right()
 	_shell.set_hint("Drag to orbit · wheel to zoom · arm an item, then click the roof, a side or (cutaway) the floor · drag an item to move it · R turns an inside item · Del removes · Esc disarms")
+	_shell.add_button("Save design", DesignerShell.SECONDARY, _on_save_design,
+		"Keep this vehicle in your library (every world)")
 	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
 	_apply_btn = _shell.add_button("Apply to placed vehicle", DesignerShell.SECONDARY, _on_apply)
 	_shell.add_button("Close", DesignerShell.SECONDARY, close)
+	if _shell.undo_btn != null:
+		_shell.undo_btn.tooltip_text = "Undo (Ctrl+Z)"
+	if _shell.redo_btn != null:
+		_shell.redo_btn.tooltip_text = "Redo (Ctrl+Y)"
+	_replace_dialog = ConfirmationDialog.new()
+	_replace_dialog.title = "Replace a saved design?"
+	_replace_dialog.ok_button_text = "Replace"
+	_replace_dialog.confirmed.connect(func() -> void: _save_design(true))
+	add_child(_replace_dialog)
 	_image_dialog = _file_dialog("Choose a wrap image", PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"]),
 		_on_wrap_file)
 	_model_dialog = _file_dialog("Choose your vehicle's model", PackedStringArray(["*.glb, *.gltf ; glTF models"]),
@@ -247,7 +265,7 @@ func _build_left() -> void:
 		b.custom_minimum_size = Vector2(0, 28)
 		b.name = "type_%s" % t
 		b.set_meta("type", t)
-		b.tooltip_text = "Start from the built-in %s" % str(VehicleCatalog.type_info(t)["label"]).to_lower()
+		b.tooltip_text = "Start over from the built-in %s (Ctrl+Z undoes)" % str(VehicleCatalog.type_info(t)["label"]).to_lower()
 		b.pressed.connect(_on_type_pressed.bind(t))
 		_type_box.add_child(b)
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
@@ -257,8 +275,7 @@ func _build_left() -> void:
 	_design_list.item_selected.connect(_on_design_selected)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
-	for spec_btn in [["Save design", "Keep this vehicle in your library (every world)", _on_save_design],
-			["Forget", "Remove the selected saved design", _on_forget_design]]:
+	for spec_btn in [["Forget", "Remove the selected saved design (built-ins stay)", _on_forget_design]]:
 		var b2 := Button.new()
 		b2.text = str(spec_btn[0])
 		b2.tooltip_text = str(spec_btn[1])
@@ -313,16 +330,25 @@ func _section(title: String, open: bool) -> VBoxContainer:
 
 
 func _build_right() -> void:
+	# What it is and what is wrong with it, first: the checks used to sit two
+	# screens down. The header's badge counts them and scrolls here.
+	_shell.right.add_child(SectionHeader.make("This vehicle", "info"))
+	_summary = Label.new()
+	_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_summary.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_shell.right.add_child(_summary)
+	_checks_box = VBoxContainer.new()
+	_shell.right.add_child(_checks_box)
 	# Chassis & body.
 	var cb := _section("Chassis & body", true)
 	_add_row(cb, "chassis", FormRow.option("Chassis", [], func(v): _on_chassis(str(v)),
 		"What is under it: the cab, axles, tyres and fuel", "vl_chassis"))
 	_add_row(cb, "body", FormRow.option("Body", [], func(v): _on_body(str(v)),
 		"The box people live in, picked on its own", "vl_body"))
-	_add_row(cb, "fuel", FormRow.option("Fuel", [["gasoline", "Gasoline"], ["diesel", "Diesel"],
-		["electric", "Electric"]], func(v): _edit(["chassis", "fuel"], str(v)), "", "vl_fuel"))
-	_add_row(cb, "wheelbase_m", FormRow.spin("Wheelbase", 2.0, 8.0, 0.01, " m",
-		func(v): _edit(["chassis", "wheelbase_m"], v), "Front axle to rear axle", "vl_wheelbase"))
+	_add_row(cb, "fuel", FormRow.value("Fuel", "",
+		"Set by the chassis: pick another chassis for another fuel (an electric chassis carries its pack)", "vl_fuel"))
+	_add_row(cb, "wheelbase_m", FormRow.option("Wheelbase", [], func(v): _edit(["chassis", "wheelbase_m"], float(v)),
+		"Front axle to rear axle, in the wheelbases this chassis is sold in", "vl_wheelbase"))
 	_add_row(cb, "dually", FormRow.check("Rear wheels", "Dual (dually)",
 		func(on): _edit(["chassis", "dually"], on), "", "vl_dually"))
 	_add_row(cb, "tank_l", FormRow.spin("Fuel tank", 0.0, 800.0, 1.0, " L",
@@ -341,25 +367,27 @@ func _build_right() -> void:
 		func(v): _edit(["body", "floor_h_m"], v), "The inside floor above the ground", "vl_floor"))
 	_add_row(sb, "roof", FormRow.option("Roof", [["flat", "Flat"], ["crown", "Crowned"],
 		["high_top", "High top"], ["arched", "Arched (bus)"], ["cabover", "Cab-over (Class C)"]],
-		func(v): _edit(["body", "roof"], str(v)), "", "vl_roof"))
+		func(v): _edit(["body", "roof"], str(v)), "The roof's shape (a cab-over reaches over the cab for a bed)", "vl_roof"))
 	_add_row(sb, "corner_r_m", FormRow.spin("Roof corners", 0.0, 0.4, 0.01, " m",
 		func(v): _edit(["body", "corner_r_m"], v), "How round the roof's edges are", "vl_corner"))
 	_add_row(sb, "windows", FormRow.option("Windows", [["none", "None"], ["few", "A few"],
-		["band", "A band"], ["bus", "Bus row"]], func(v): _edit(["body", "windows"], str(v)), "", "vl_windows"))
+		["band", "A band"], ["bus", "Bus row"]], func(v): _edit(["body", "windows"], str(v)),
+		"A few = a pane over each bed, dinette and sofa; a band runs the length; a bus row is the bus's own", "vl_windows"))
 	_add_row(sb, "side_door", FormRow.option("Side door", [["none", "None"], ["hinged", "Hinged"],
 		["slider", "Slider"], ["bus", "Bus door"], ["sliding_step", "Step-van slider"]],
-		func(v): _edit(["body", "side_door"], str(v)), "", "vl_side_door"))
+		func(v): _edit(["body", "side_door"], str(v)), "The curb-side door: how people (and cargo) get in", "vl_side_door"))
 	_add_row(sb, "rear_door", FormRow.option("Rear door", [["none", "None"], ["barn", "Barn doors"],
-		["roll_up", "Roll-up"], ["lift", "Lift gate"]], func(v): _edit(["body", "rear_door"], str(v)), "", "vl_rear_door"))
+		["roll_up", "Roll-up"], ["lift", "Lift gate"]], func(v): _edit(["body", "rear_door"], str(v)),
+		"The rear door: a cargo bay loads through it when there is one", "vl_rear_door"))
 	# Paint.
-	var pb := _section("Paint", true)
+	var pb := _section("Paint", false)
 	for key in [["body", "Body"], ["roof", "Roof"], ["trim", "Trim"], ["wheels", "Wheels"], ["stripe", "Stripe"]]:
 		var k := str(key[0])
 		var picker := ColorPickerButton.new()
 		picker.edit_alpha = false
 		picker.custom_minimum_size = Vector2(0, 24)
 		picker.color_changed.connect(func(c: Color) -> void: _edit(["paint", k], [c.r, c.g, c.b], "paint." + k))
-		_add_row(pb, "paint_" + k, FormRow.make(str(key[1]), picker, "", "", "vl_paint_" + k))
+		_add_row(pb, "paint_" + k, FormRow.make(str(key[1]), picker, "The %s colour" % str(key[1]).to_lower(), "", "vl_paint_" + k))
 	_add_row(pb, "stripe_on", FormRow.check("Stripe", "Down both sides",
 		func(on): _edit(["paint", "stripe_on"], on), "", "vl_stripe_on"))
 	_wrap_opt = OptionButton.new()
@@ -369,7 +397,8 @@ func _build_right() -> void:
 		"An image stretched along each side over the paint (files in %s)" % VehicleBuilder.WRAP_DIR, "", "vl_wrap"))
 	var wb := HBoxContainer.new()
 	for spec_btn in [["Add image…", "Copy an image into your wraps and use it", func() -> void: _image_dialog.popup_centered()],
-			["Open folder", "Show the wraps folder", func() -> void: _open_folder(VehicleBuilder.WRAP_DIR)]]:
+			["Open folder", "Show the wraps folder in your file browser (%s)" % VehicleBuilder.WRAP_DIR,
+				func() -> void: _open_folder(VehicleBuilder.WRAP_DIR)]]:
 		var b := Button.new()
 		b.text = str(spec_btn[0])
 		b.tooltip_text = str(spec_btn[1])
@@ -386,20 +415,34 @@ func _build_right() -> void:
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	xb.add_child(hint)
 	_tool_box = HFlowContainer.new()
-	_tool_box.add_theme_constant_override("h_separation", UITheme.SPACE_XS)
-	_tool_box.add_theme_constant_override("v_separation", UITheme.SPACE_XS)
 	xb.add_child(_tool_box)
+	_tool_box.visible = false
+	var by_id := {}
 	for preset in VehicleExterior.TOOL_PRESETS:
-		var pd: Dictionary = preset
-		var t := VehicleExterior.type_info(str((pd["element"] as Dictionary)["type"]))
-		var b3 := Button.new()
-		b3.text = str(pd.get("label", t["label"]))
-		b3.tooltip_text = str(t.get("tip", ""))
-		b3.toggle_mode = true
-		b3.name = "tool_%s" % str(pd["id"])
-		UITheme.style_button(b3)
-		b3.pressed.connect(func() -> void: _arm_tool(pd if _tool.get("id", "") != pd["id"] else {}))
-		_tool_box.add_child(b3)
+		by_id[str((preset as Dictionary)["id"])] = preset
+	for grp in VehicleExterior.TOOL_GROUPS:
+		var gl2 := Label.new()
+		gl2.text = str(grp[0])
+		gl2.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		gl2.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		xb.add_child(gl2)
+		var flow2 := HFlowContainer.new()
+		flow2.add_theme_constant_override("h_separation", UITheme.SPACE_XS)
+		flow2.add_theme_constant_override("v_separation", UITheme.SPACE_XS)
+		xb.add_child(flow2)
+		for pid in grp[1]:
+			if not by_id.has(pid):
+				continue
+			var pd: Dictionary = by_id[pid]
+			var t := VehicleExterior.type_info(str((pd["element"] as Dictionary)["type"]))
+			var b3 := Button.new()
+			b3.text = str(pd.get("label", t["label"]))
+			b3.tooltip_text = "%s\nShift-click to place several · Esc stops" % str(t.get("tip", ""))
+			b3.toggle_mode = true
+			b3.name = "tool_%s" % str(pd["id"])
+			UITheme.style_button(b3)
+			b3.pressed.connect(func() -> void: _arm_tool(pd if _tool.get("id", "") != pd["id"] else {}))
+			flow2.add_child(b3)
 	_item_box = VBoxContainer.new()
 	_item_box.add_theme_constant_override("separation", 2)
 	xb.add_child(_item_box)
@@ -434,7 +477,7 @@ func _build_right() -> void:
 		preset["id"] = "in_" + str(td["id"])
 		var b4 := Button.new()
 		b4.text = str(td["label"])
-		b4.tooltip_text = str(td.get("tip", ""))
+		b4.tooltip_text = "%s\nShift-click to place several · R turns it · Esc stops" % str(td.get("tip", ""))
 		b4.toggle_mode = true
 		b4.name = "tool_%s" % str(preset["id"])
 		UITheme.style_button(b4)
@@ -466,24 +509,27 @@ func _build_right() -> void:
 	mb.add_child(add_model)
 	# The trip.
 	var tb := _section("The trip to site", true)
-	_add_row(tb, "one_way_mi", FormRow.spin("One way", 0.0, 5000.0, 1.0, " mi",
-		func(v): _edit(["trip", "one_way_mi"], v), "How far it drives to get to the site", "vl_trip_mi"))
-	_add_row(tb, "fuel_price", FormRow.spin("Fuel price", 0.0, 20.0, 0.05, " $/gal",
-		func(v): _edit(["trip", "fuel_price_per_gal"], v), "", "vl_fuel_price"))
+	_add_row(tb, "units", FormRow.check("Units", "Kilometres and litres",
+		func(on): _set_metric(on), "Shared with the ride dashboard", "vl_units"))
+	_add_row(tb, "one_way_mi", FormRow.spin("One way", 0.0, 8000.0, 1.0, " mi",
+		func(v): _edit(["trip", "one_way_mi"], UnitsPref.shown_to_mi(v)), "How far it drives to get to the site", "vl_trip_mi"))
+	_add_row(tb, "fuel_price", FormRow.spin("Fuel price", 0.0, 20.0, 0.01, " $/gal",
+		func(v): _edit(["trip", "fuel_price_per_gal"], UnitsPref.shown_to_price(v)), "", "vl_fuel_price"))
 	_add_row(tb, "kwh_price", FormRow.spin("Charging", 0.0, 2.0, 0.01, " $/kWh",
 		func(v): _edit(["trip", "kwh_price"], v), "", "vl_kwh_price"))
 	_trip_lbl = Label.new()
 	_trip_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_trip_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	tb.add_child(_trip_lbl)
-	# Summary + checks.
-	_shell.right.add_child(SectionHeader.make("This vehicle", "info"))
-	_summary = Label.new()
-	_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_summary.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_shell.right.add_child(_summary)
-	_checks_box = VBoxContainer.new()
-	_shell.right.add_child(_checks_box)
+
+
+func _set_metric(on: bool) -> void:
+	if _suppress:
+		return
+	UnitsPref.set_metric(on)
+	_units_gen = UnitsPref.generation
+	_sync_rows()
+	_refresh_summary()
 
 
 func _add_row(parent: Container, key: String, row: FormRow) -> void:
@@ -628,7 +674,7 @@ func _sync_rows() -> void:
 	for id in VehicleCatalog.CHASSIS:
 		if ok.has(id) or (str(id).begins_with("trailer") != trailer):
 			continue
-		ch_items.append([id, "%s (other)" % str(VehicleCatalog.chassis(id)["label"])])
+		ch_items.append([id, "%s · another type's" % str(VehicleCatalog.chassis(id)["label"])])
 	_fill_option((_rows["chassis"] as FormRow).control as OptionButton, ch_items, str(_spec["chassis_id"]))
 	var b_items: Array = []
 	for id in VehicleCatalog.BODIES:
@@ -636,9 +682,23 @@ func _sync_rows() -> void:
 	_fill_option((_rows["body"] as FormRow).control as OptionButton, b_items, str(_spec["body_id"]))
 	var ch: Dictionary = _spec["ch"]
 	var bd: Dictionary = _spec["bd"]
-	(_rows["fuel"] as FormRow).set_value(str(ch.get("fuel", "gasoline")))
+	(_rows["fuel"] as FormRow).set_value(FUEL_WORDS.get(str(ch.get("fuel", "gasoline")), str(ch.get("fuel", ""))))
 	(_rows["fuel"] as FormRow).visible = not trailer
-	(_rows["wheelbase_m"] as FormRow).set_value(float(ch.get("wheelbase_m", 0.0)))
+	var wb_items: Array = []
+	var wbs := VehicleCatalog.wheelbases_m(str(_spec["chassis_id"]))
+	var wb_now := float(ch.get("wheelbase_m", 0.0))
+	var have := false
+	for w in wbs:
+		have = have or absf(float(w) - wb_now) < 0.005
+	if not have and wb_now > 0.0:
+		wbs.append(wb_now)   # an older design's own number stays choosable
+	for w in wbs:
+		wb_items.append([float(w), "%.0f in (%.2f m)" % [float(w) / VehicleCatalog.IN, float(w)]])
+	var wb_opt := (_rows["wheelbase_m"] as FormRow).control as OptionButton
+	_fill_option(wb_opt, wb_items, str(wb_now))
+	FormRow.select_meta(wb_opt, wb_now)
+	wb_opt.disabled = wb_items.size() <= 1
+	wb_opt.tooltip_text = "This chassis comes in one wheelbase" if wb_items.size() <= 1 else ""
 	(_rows["wheelbase_m"] as FormRow).visible = not trailer
 	(_rows["dually"] as FormRow).set_value(bool(ch.get("dually", false)))
 	(_rows["tank_l"] as FormRow).set_value(float(ch.get("tank_l", 0.0)))
@@ -660,8 +720,14 @@ func _sync_rows() -> void:
 	(_rows["glb_mode"] as FormRow).set_value(str(ov.get("mode", "whole")))
 	(_rows["glb_flip"] as FormRow).set_value(bool(ov.get("flip", false)))
 	var trip: Dictionary = _spec["trip"]
-	(_rows["one_way_mi"] as FormRow).set_value(float(trip.get("one_way_mi", 0.0)))
-	(_rows["fuel_price"] as FormRow).set_value(float(trip.get("fuel_price_per_gal", 4.5)))
+	_units_gen = UnitsPref.generation
+	(_rows["units"] as FormRow).set_value(UnitsPref.metric())
+	var mi_sb := (_rows["one_way_mi"] as FormRow).control as SpinBox
+	mi_sb.suffix = " " + UnitsPref.dist_unit()
+	(_rows["one_way_mi"] as FormRow).set_value(UnitsPref.mi_to_shown(float(trip.get("one_way_mi", 0.0))))
+	var fp_sb := (_rows["fuel_price"] as FormRow).control as SpinBox
+	fp_sb.suffix = " $/L" if UnitsPref.metric() else " $/gal"
+	(_rows["fuel_price"] as FormRow).set_value(UnitsPref.price_to_shown(float(trip.get("fuel_price_per_gal", 4.5))))
 	(_rows["kwh_price"] as FormRow).set_value(float(trip.get("kwh_price", 0.35)))
 	_suppress = false
 
@@ -714,14 +780,15 @@ func _draw_marks() -> void:
 			_mark_box(e as Dictionary, C_SELECT)
 
 
-func _mark_box(el: Dictionary, c: Color, xf: Variant = null, size: Vector3 = Vector3.ZERO) -> void:
-	var fr := {}
-	if xf == null:
-		fr = VehicleExterior.frame(_design, el)
-		if fr.is_empty():
-			return
-		size = fr["size"]
-		xf = Transform3D(fr["basis"], fr["centre"])
+## A roof / side item's oriented box.
+func _mark_box(el: Dictionary, c: Color) -> void:
+	var fr := VehicleExterior.frame(_design, el)
+	if not fr.is_empty():
+		_mark_xf(Transform3D(fr["basis"], fr["centre"]), fr["size"], c)
+
+
+## One see-through box at `xf`.
+func _mark_xf(xf: Transform3D, size: Vector3, c: Color) -> void:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size + Vector3(0.04, 0.04, 0.04)
@@ -740,7 +807,7 @@ func _mark_box(el: Dictionary, c: Color, xf: Variant = null, size: Vector3 = Vec
 ## An inside element's box (axis-aligned, vehicle-local).
 func _mark_aabb(el: Dictionary, c: Color) -> void:
 	var bx := VehicleInterior.box_of(el)
-	_mark_box({}, c, Transform3D(Basis(), bx["centre"]), (bx["size"] as Vector3))
+	_mark_xf(Transform3D(Basis(), bx["centre"]), (bx["size"] as Vector3), c)
 
 
 func _frame_camera() -> void:
@@ -985,17 +1052,12 @@ func _select(id: String, kind: String = "ext") -> void:
 	_draw_marks()
 
 
-func _on_studio_click(pos: Vector2, button: int) -> void:
+## A click that reached the studio hit nothing (the input hook takes every
+## press on an item and selects it there): it clears the selection.
+func _on_studio_click(_pos: Vector2, button: int) -> void:
 	if button != MOUSE_BUTTON_LEFT or not _tool.is_empty():
 		return
-	var r := _local_ray(pos)
-	if not r.is_empty() and _cutaway:
-		var iid := VehicleInterior.pick(_design, r["origin"], r["dir"])
-		if not iid.is_empty():
-			_select(iid, "int")
-			return
-	var id := VehicleExterior.pick(_design, r["origin"], r["dir"]) if not r.is_empty() else ""
-	_select(id)
+	_select("")
 
 
 func _on_studio_hover(pos: Vector2) -> void:
@@ -1014,10 +1076,11 @@ func _on_studio_hover(pos: Vector2) -> void:
 	if not id.is_empty():
 		for e in _design.get("exterior", []):
 			if str((e as Dictionary)["id"]) == id:
-				_hover_lbl.text = "%s on the %s · click to select, drag to move" % [VehicleExterior.label_of(e), str(e["face"])]
+				_hover_lbl.text = "%s on the %s · click to select, drag to move" % [VehicleExterior.label_of(e),
+					VehicleExterior.face_word(str(e["face"]))]
 				return
 	var hit := VehicleExterior.face_hit(_design, r["origin"], r["dir"])
-	_hover_lbl.text = "The %s" % str(hit["face"]) if not hit.is_empty() else ""
+	_hover_lbl.text = "The %s" % VehicleExterior.face_word(str(hit["face"])) if not hit.is_empty() else ""
 
 
 func _remove_selected() -> void:
@@ -1070,7 +1133,7 @@ func _refresh_items() -> void:
 	var t := VehicleExterior.type_info(str(el["type"]))
 	var faces: Array = []
 	for f in t["faces"]:
-		faces.append([f, str(f).capitalize()])
+		faces.append([f, VehicleExterior.face_word(str(f)).capitalize()])
 	_item_box.add_child(FormRow.option("Face", faces, func(v): _item_edit("face", str(v)), "", "vl_item_face"))
 	var fr: Dictionary = VehicleExterior.faces(_design)[str(el["face"])]
 	var u_label := "Across" if str(el["face"]) in ["roof", "rear"] else "Along"
@@ -1102,6 +1165,7 @@ func _refresh_items() -> void:
 	var rm := Button.new()
 	rm.text = "Remove"
 	rm.name = "vl_item_remove"
+	rm.tooltip_text = "Remove it (Del or Backspace)"
 	UITheme.style_button(rm)
 	rm.pressed.connect(_remove_selected)
 	_item_box.add_child(rm)
@@ -1109,7 +1173,6 @@ func _refresh_items() -> void:
 
 
 func _sync_item_values() -> void:
-	_sync_inside_values()
 	var el := {}
 	for e in _design.get("exterior", []):
 		if _sel_kind == "ext" and str((e as Dictionary)["id"]) == _sel:
@@ -1226,7 +1289,7 @@ func _drag_interior(pos: Vector2) -> void:
 		_spec = VehicleSpec.resolve(_spec)
 		_design = VehicleDesign.solve(_spec)
 		_rebuild_studio()
-		_sync_item_values()
+		_sync_inside_values()
 
 
 ## Turn the selected inside element a quarter turn.
@@ -1352,31 +1415,45 @@ func _refresh_summary() -> void:
 		var bi: Dictionary = bay["interior"]
 		var bdr: Dictionary = bay["door"]
 		lines.append("Cargo bay %.1f × %.1f × %.1f m through a %.2f × %.2f m %s door" % [float(bi["l_m"]), float(bi["w_m"]),
-			float(bi["h_m"]), float(bdr["w_m"]), float(bdr["h_m"]), str(bay["door_where"])])
+			float(bi["h_m"]), float(bdr["w_m"]), float(bdr["h_m"]), VehicleExterior.face_word(str(bay["door_where"]))])
 	var tot: Dictionary = d.get("exterior_totals", {})
 	if float(tot.get("solar_w", 0.0)) > 0.0:
 		lines.append("Solar %s on %s" % [UiText.num(float(tot["solar_w"]), "W"), UiText.count(int(tot["modules"]), "module")])
 	if str(d["fuel"]) == "electric":
-		lines.append("%.2f kWh/mi at 55 mph" % (float(e["kwh_per_km"]) * VehicleEnergy.MI_M / 1000.0))
+		lines.append(("%.2f kWh/km at 90 km/h" % float(e["kwh_per_km"])) if UnitsPref.metric()
+			else ("%.2f kWh/mi at 55 mph" % (float(e["kwh_per_km"]) * VehicleEnergy.MI_M / 1000.0)))
 	elif float(e["mpg"]) > 0.0:
-		lines.append("%.1f mpg at 55 mph (%s)" % [float(e["mpg"]), str(d["fuel"])])
+		lines.append("%s at %s (%s)" % [UnitsPref.economy_mpg(float(e["mpg"])),
+			"90 km/h" if UnitsPref.metric() else "55 mph", FUEL_WORDS.get(str(d["fuel"]), str(d["fuel"]))])
 	else:
 		lines.append("Towed: no engine of its own")
 	_summary.text = "\n".join(PackedStringArray(lines))
 	var t: Dictionary = d["trip_estimate"]
 	if float(t["mi"]) <= 0.0:
-		_trip_lbl.text = "Type the one-way miles to see what getting it there costs."
+		_trip_lbl.text = "Type how far it drives one way to see what getting it there costs."
 	elif str(t["fuel"]) == "electric":
-		_trip_lbl.text = "There and back: %.0f mi, %.0f kWh, $%.0f. Range %.0f mi." % [float(t["mi"]), float(t["kwh"]),
-			float(t["cost"]), float(t["range_km"]) * 1000.0 / VehicleEnergy.MI_M]
+		_trip_lbl.text = "There and back: %s, %.0f kWh, $%.0f. Range %s." % [UnitsPref.dist_mi(float(t["mi"])),
+			float(t["kwh"]), float(t["cost"]), UnitsPref.dist_m(float(t["range_km"]) * 1000.0)]
 	elif float(t["gallons"]) > 0.0:
-		_trip_lbl.text = "There and back: %.0f mi, %.1f gal (%.0f L), $%.0f. Range %.0f mi a tank." % [float(t["mi"]),
-			float(t["gallons"]), float(t["litres"]), float(t["cost"]), float(t["range_km"]) * 1000.0 / VehicleEnergy.MI_M]
+		_trip_lbl.text = "There and back: %s, %s, $%.0f. Range %s a tank." % [UnitsPref.dist_mi(float(t["mi"])),
+			UnitsPref.fuel_l(float(t["litres"])), float(t["cost"]), UnitsPref.dist_m(float(t["range_km"]) * 1000.0)]
 	else:
 		_trip_lbl.text = "Towed: its fuel is the tow vehicle's."
 	for c in _checks_box.get_children():
 		_checks_box.remove_child(c)
 		c.queue_free()
+	var n_err := 0
+	var n_warn := 0
+	for chk0 in d["checks"]:
+		var l0 := str((chk0 as Dictionary)["level"])
+		n_err += 1 if l0 == "error" else 0
+		n_warn += 1 if l0 == "warn" else 0
+	if n_err > 0:
+		_shell.set_badge("%s to fix" % UiText.count(n_err, "problem"), "error", "Click to see the checks")
+	elif n_warn > 0:
+		_shell.set_badge(UiText.count(n_warn, "warning"), "warn", "Click to see the checks")
+	else:
+		_shell.set_badge("Checks pass", "ok", "Nothing to fix")
 	for chk in d["checks"]:
 		var cd: Dictionary = chk
 		var lvl := str(cd["level"])
@@ -1431,6 +1508,16 @@ func _on_design_selected(idx: int) -> void:
 
 
 func _on_save_design() -> void:
+	var nm := str(_spec.get("name", ""))
+	for s in _library:
+		if str((s as Dictionary).get("name", "")) == nm:
+			_replace_dialog.dialog_text = "Your vehicles already have a design called \"%s\". Replace it with this one?" % nm
+			_replace_dialog.popup_centered()
+			return
+	_save_design(false)
+
+
+func _save_design(_replacing: bool) -> void:
 	var safe := VehicleSpec.to_json_safe(_spec)
 	var kept: Array = []
 	for s in _library:
@@ -1450,9 +1537,11 @@ func _on_forget_design() -> void:
 	var idx := int(sel[0]) - VehiclePresets.builtins().size()
 	if idx < 0 or idx >= _library.size():
 		return
+	var gone := str((_library[idx] as Dictionary).get("name", "design"))
 	_library.remove_at(idx)
 	VehiclePresets.save_library(_library)
 	_refresh_design_list()
+	_toast("Forgot \"%s\"" % gone)
 
 
 func _refresh_wraps() -> void:
@@ -1548,6 +1637,7 @@ func _on_apply() -> void:
 		PlacedPropService.update_prop_record(main, _bound_prop_id,
 			{"vehicle_spec": VehicleSpec.to_json_safe(_spec)}, true)
 		PlacedPropService.tag_vehicle_spaces(main, _bound_prop_id)
+		_toast("Applied to %s" % str(_spec.get("name", "the vehicle")))
 	close()
 
 

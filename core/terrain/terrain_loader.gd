@@ -3657,10 +3657,12 @@ func vehicles_by_camp() -> Dictionary:
 		var cid := camp_area_at(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
 		if cid.is_empty():
 			continue
-		var e: Dictionary = out.get(cid, {"count": 0, "usd": 0.0, "names": []})
+		var e: Dictionary = out.get(cid, {"count": 0, "usd": 0.0, "names": [], "ids": [], "pos": []})
 		e["count"] = int(e["count"]) + 1
 		e["usd"] = float(e["usd"]) + float(SiteCost.running_for_record(rec).get("usd", 0.0))
 		(e["names"] as Array).append(str(VehicleBuilder.spec_for_record(rec).get("name", "vehicle")))
+		(e["ids"] as Array).append(str(rec.get("id", "")))
+		(e["pos"] as Array).append(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
 		out[cid] = e
 	return out
 

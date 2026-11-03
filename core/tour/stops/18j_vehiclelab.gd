@@ -7,10 +7,10 @@ extends TourStop
 
 func _init() -> void:
 	id = "vehiclelab"
-	title = "Living vehicle designer"
+	title = "Vehicle designer"
 	chapter = "Build"
 	summary = "Build a twin of your van, skoolie, RV or box truck from its real chassis and body, paint it, bolt fans, AC, Starlink and solar onto it, and park it at camp: people sleep in its beds and cook in its galley."
-	how = PackedStringArray(["Library → Vehicles → Living vehicle designer…",
+	how = PackedStringArray(["Library → Vehicles → Vehicle designer…",
 		"Pick a type, then its chassis and its body on their own (an E-450 dually under a fiberglass shuttle box)",
 		"Set the body's length, width, roof height and roof shape, its windows and doors, its paint or a wrap image",
 		"Arm a roof fan, an AC unit, solar panels or an awning and click where it goes; drag it to move it, Del removes it",
@@ -19,7 +19,7 @@ func _init() -> void:
 		"Its battery, solar, loads and water tanks become one node on the system graph; its shower and galley draw on its own tank",
 		"Type the one-way miles: the round trip in gallons (or kWh) and dollars from a road-load model",
 		"Place in world: drive it, and the camp's people sleep in its beds"])
-	button = "Living vehicle designer…"
+	button = "Vehicle designer…"
 	world = "burningman"
 	budget_s = 46.0
 	hour = 14.0

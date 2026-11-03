@@ -1119,7 +1119,14 @@ func _update_ui() -> void:
 						lbl = "Print setup"
 					else:
 						lbl = "Edit prop"
-				if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+				var veh: Node = (_focused as Node).get_node_or_null("PlacedVehicle") if _focused is PlacedProp else null
+				if veh != null and not bool((_focused as Node).get_meta("packed", false)) and _prompt_ui != null \
+						and _prompt_ui.has_method("get_action_label"):
+					# A vehicle: Interact drives, a click edits (two verbs).
+					var nm := str(veh.get("display_name"))
+					lbl = "[%s] Drive %s · [Click] Edit" % [_prompt_ui.get_action_label(_focused.get_action_name()), nm] \
+						if bool(veh.call("can_mount")) else "%s — on the road · [Click] Edit" % nm
+				elif _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 					lbl = "[%s / Click] %s" % [_prompt_ui.get_action_label(_focused.get_action_name()), lbl]
 				_crosshair.set_prompt_text(lbl)
 			else:

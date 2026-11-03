@@ -436,6 +436,26 @@ func _deploy_header() -> Control:
 		if main != null and main.has_method("open_settlement_view"):
 			main.call("open_settlement_view", best))
 	hb.add_child(watch)
+	# The vehicles come in for a deploy and leave after a pack-up: the same
+	# two actions as the Deploy chip's menu, here where the work is watched.
+	var tl := TerrainSurfaceQuery.find_terrain_loader(get_tree().current_scene)
+	if tl != null and tl.has_method("schedule_vehicle_arrivals_auto"):
+		for spec in [["Drive in", "Every living vehicle drives in through the site gate, from the next Deploy (or now)",
+				"schedule_vehicle_arrivals_auto"],
+				["Drive out", "Every living vehicle drives out through the site gate, the one nearest it last",
+				"schedule_vehicle_departures_auto"]]:
+			var vb := Button.new()
+			UITheme.style_button(vb)
+			vb.text = str(spec[0])
+			vb.tooltip_text = str(spec[1])
+			var method := str(spec[2])
+			vb.pressed.connect(func() -> void:
+				var r: Dictionary = tl.call(method)
+				var sgv := ServiceLocator.graph()
+				if sgv != null and sgv.has_method("_show_toast"):
+					sgv.call("_show_toast", "%s %s" % [UiText.count(int(r.get("count", 0)), "vehicle"),
+						"driving in" if method.contains("arrivals") else "driving out"]))
+			hb.add_child(vb)
 	return card
 
 

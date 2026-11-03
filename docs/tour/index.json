@@ -1230,14 +1230,40 @@
       "image": "render_sim.jpg",
       "image_run": "2026-10-28T15:04:16",
       "image_commit": "ad3e00e"
+    },
+    "arrive_at_camp": {
+      "id": "arrive_at_camp",
+      "title": "Arrive at camp",
+      "chapter": "People",
+      "summary": "Vehicles drive in through the site gate with their cargo; the camp's crew unloads them.",
+      "how": [
+        "Library → Structures → Site gate (optional: else the far end of a road)",
+        "Deploy chip → Vehicles drive in from the gate",
+        "Packing Lab → pick a vehicle's bay → Load into <vehicle>",
+        "Back up slowly onto a trailer's coupler to hitch it; a fuel tank within 12 m refuels"
+      ],
+      "action": "",
+      "button": "Deploy chip → Vehicles drive in from the gate",
+      "key": "",
+      "open_hints": [
+        "Click Deploy chip → Vehicles drive in from the gate"
+      ],
+      "world": "walton",
+      "blurb": "Living vehicles arrive the way a real camp does: one by one through the site gate, along the festival road, nose first into their spot. Whatever was loaded in the cargo bay rides along, and once the vehicle is parked the camp's crew carries the crates out of its door. After a pack-up they drive out again.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "arrive_at_camp.jpg",
+      "image_run": "2026-11-02T22:00:23",
+      "image_commit": "7208a4e"
     }
   },
   "last_run": {
-    "label": "tour_20261028c",
-    "generated": "2026-10-28T15:04:16",
-    "git_commit": "ad3e00e",
-    "passed": 49,
-    "total": 49,
+    "label": "tour_20261102-215805",
+    "generated": "2026-11-02T22:00:23",
+    "git_commit": "7208a4e",
+    "passed": 1,
+    "total": 1,
     "video_secs": null
   }
 }

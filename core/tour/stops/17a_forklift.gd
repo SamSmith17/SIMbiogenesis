@@ -11,7 +11,7 @@ func _init() -> void:
 	summary = "Drive a forklift, lift pallets and crates; crews use it to unload heavy deliveries."
 	how = PackedStringArray(["Library (U) → Vehicles tab → Forklift",
 		"Aim at it and Interact to get in; PgUp / PgDn raise and lower the forks",
-		"Crews unload anything over 200 kg with it"])
+		"Crews unload anything over 60 kg (forklift class) with it"])
 	action = "interact"
 	button = "Library → Vehicles"
 	world = "burningman"

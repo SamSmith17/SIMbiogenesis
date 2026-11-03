@@ -11553,7 +11553,7 @@ driver's view out of the cab). All eight are done.
     vehicles' positions in (once per frame).
 - **The designer** (`scenes/ui/vehiclelab_modal.gd`, TerrainLoader
   `open_vehiclelab` / `open_vehiclelab_for_prop` / `begin_vehiclelab_placement`
-  on CanvasLayer 27; library Vehicles tab "Living vehicle designer…"; prop
+  on CanvasLayer 27; library Vehicles tab "Vehicle designer…"; prop
   editor "Edit vehicle…"; modal audit id `vehiclelab`; tour stop
   `18j_vehiclelab`). DesignerShell + StudioViewport + FormRow: types and
   designs (built-ins + `user://vehiclelab_library.json`) left; chassis
@@ -11939,6 +11939,60 @@ driver's view out of the cab). All eight are done.
     camp away, scrub back), `vehicle_arrival_check` (28: a cargo trailer
     following both ways), `forklift_unload_check` (22: the box-truck bay
     phase), new `vehicle_delete_check` (9).
+- **UX (polish Phase 4, 2026-11-02).**
+  - **Designer:** the summary and checks lead the right column, and the
+    header's badge ("2 problems to fix" / "1 warning" / "Checks pass",
+    `DesignerShell.set_badge`, a click scrolls to them) counts them. Paint
+    and "Your vehicle's model" start folded. Wheelbase is a choice of the
+    chassis' factory wheelbases (`VehicleCatalog.WHEELBASES_IN`, only the
+    published ones; one = disabled, an older design's own number stays
+    choosable); Fuel is read-only from the chassis. Words, not ids
+    (`VehicleExterior.face_word`, `FUEL_WORDS`, "another type's" chassis).
+    Save design is in the footer (reachable at 720 without the flyout); a
+    name clash asks "Replace?"; Forget and Apply toast; Place is disabled
+    with a reason on a scene with no loader; type buttons say they start
+    over (Ctrl+Z undoes); shortcuts ride the tooltips (undo / redo, Remove
+    = Del / Backspace, Shift-click keeps a tool, R turns). The roof / side
+    palette is grouped (`VehicleExterior.TOOL_GROUPS`: Power / Comfort /
+    Access / Carry). Code: the studio's click only deselects (the input
+    hook selects), `_mark_box` / `_mark_xf` split, the inside card is synced
+    once per refresh. The window is titled "Vehicle designer".
+  - **One units setting** (`UnitsPref`, core/units_pref.gd, ui_prefs.cfg
+    [units] metric): miles / gallons or km / litres for the designer's
+    trip, range and economy and the ride dashboard's speed, distance, range
+    and fuel. Toggle: the designer's trip section.
+  - **Transport surfaces:** the Packing Lab with a vehicle's bay picked
+    reads "Load into <vehicle>" and stows the kit there
+    (`deliver_kit_in_vehicle`); Deliver and Load keep the Lab open and
+    toast. Deploy chip menu → Vehicles: drive in / drive out / simply here
+    (with the gate rule in the separator); the Site Projects deploy header
+    has Drive in / Drive out. The camps panel's arrival line has its own
+    wrapped row and a "place a Site gate" hint; each camp lists its
+    vehicles as chips with Look and a "Getting here" line
+    (`vehicles_by_camp` now carries ids and positions). The ride dashboard
+    has a hint line (`PlacedVehicle.dashboard_hint`: a trailer within 20 m
+    to back onto, the fork keys on a forklift). The prop editor shows
+    "Fuel 42 / 80 L · Diesel tote 31 m (out of reach)" with Refuel
+    (`SystemGraphView.fuel_store_near`) and "Hitch nearest trailer"
+    (`PlacedVehicle.hitch_nearest`). The crosshair on a vehicle reads
+    "[E] Drive <name> · [Click] Edit". The forks are InputMap actions
+    `fork_raise` / `fork_lower` (PgUp / PgDn, rebindable), and the F1
+    overlay lists drive / hitch / refuel / forks / load.
+  - **Packing Lab on the kit:** `ui_modal` meta (the modal audit sees it:
+    0 errors at 1080 and 720), Lucide icons instead of emoji, `CoordToken`
+    site keys (the old "%.4f" keys are still read), empty states, "4
+    people: bucket brigade", Empty asks first. NOT done: its own orbit →
+    `StudioViewport` (and the intermodal designer's) — a larger refactor
+    left for later.
+  - Vocabulary: Vehicle designer · Deliver (a kit arrives) · Load / Unload
+    (crates into / out of a bay) · Pack up / Unpack (a prop's shipping
+    form); the Pack-up button's tooltip says one verb.
+  - Tour stop `40a_arrive_at_camp` (Walton): a box truck with a kit in its
+    bay drives in through a site gate, parks, and the crew unloads it.
+  - Gates: `vehiclelab_designer_check` 66/0 at 1080 and 720 (the new
+    order, the badge, factory wheelbases, a REAL click on the units box, a
+    REAL click on "Load into" in the Packing Lab), `--capture=modals` at
+    both sizes, the tour stop PASS.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch

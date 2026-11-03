@@ -335,7 +335,7 @@ func _populate() -> void:
 		ModelCatalog.GENERIC_BOX_ID: true}
 	var vehicles: Array = [{
 		"kind": "vehiclelab",
-		"label": "Living vehicle designer…",
+		"label": "Vehicle designer…",
 		"detail": "Vans, buses, RVs, trucks and trailers people live in: chassis + body, paint, roof fans, AC, solar, awning → place and drive.",
 	}]
 	for m in ModelCatalog.listed_models():

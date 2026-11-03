@@ -83,7 +83,7 @@ func _build() -> void:
 	var drive_in := Button.new()
 	drive_in.name = "vehicles_drive_in"
 	drive_in.text = "Drive in from the gate"
-	drive_in.tooltip_text = "Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy on the timeline (or now). Each camp's people arrive with its first vehicle."
+	drive_in.tooltip_text = "Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy on the timeline (or now). Each camp's people arrive with its first vehicle. The gate is a placed Site gate, else the end of a festival road farthest from the site's centre."
 	UITheme.style_button(drive_in)
 	drive_in.pressed.connect(func() -> void:
 		var loader := _loader()
@@ -114,12 +114,12 @@ func _build() -> void:
 			loader.call("schedule_vehicle_departures_auto")
 		_refresh())
 	arr_row.add_child(drive_out)
+	# The status line gets its own row and wraps (it used to clip).
 	_arrival_lbl = Label.new()
 	_arrival_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_arrival_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_arrival_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_arrival_lbl.clip_text = true
-	arr_row.add_child(_arrival_lbl)
+	_arrival_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_frame.body.add_child(_arrival_lbl)
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 10)
 	_frame.body.add_child(_list)
@@ -148,8 +148,12 @@ func _arrival_text() -> String:
 	if loader == null or not loader.has_method("vehicle_arrivals"):
 		return ""
 	var arr: Array = loader.call("vehicle_arrivals")
+	var gate_hint := ""
+	var g: Dictionary = loader.call("site_gate") if loader.has_method("site_gate") else {}
+	if not bool(g.get("placed", true)):
+		gate_hint = " Place a Site gate (Library → Structures) to choose where they come in."
 	if arr.is_empty():
-		return "Every vehicle is already here."
+		return "Every vehicle is already here." + gate_hint
 	var t := get_tree()
 	var main := t.current_scene if t != null else null
 	var now := float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0
@@ -234,6 +238,47 @@ func _refresh() -> void:
 			UiText.num(water, "L"), UiText.num(food, "kg"), UiText.num(grey, "L"), UiText.num(black, "L")]
 
 
+## A camp's vehicles: one chip each (Look flies the view there) and a
+## "Getting here" line with the trips and fuel. Rebuilt only when they change.
+func _update_vehicle_row(c: Dictionary, veh: Dictionary) -> void:
+	var vrow: HFlowContainer = c.get("vrow")
+	if vrow == null:
+		return
+	var sig := "%s|%.0f" % [str(veh.get("ids", [])), float(veh.get("usd", 0.0))]
+	if sig == str(c.get("vsig", "")):
+		return
+	c["vsig"] = sig
+	for ch in vrow.get_children():
+		vrow.remove_child(ch)
+		ch.queue_free()
+	var names: Array = veh.get("names", [])
+	var pos: Array = veh.get("pos", [])
+	if names.is_empty():
+		return
+	var cap := Label.new()
+	cap.text = "Vehicles:"
+	cap.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	cap.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	vrow.add_child(cap)
+	for i in names.size():
+		var b := Button.new()
+		b.text = "%s · Look" % str(names[i])
+		b.tooltip_text = "Fly the view to this vehicle"
+		UITheme.style_button(b)
+		var at: Vector2 = pos[i] if i < pos.size() else Vector2.INF
+		b.pressed.connect(func() -> void:
+			var main := get_tree().current_scene
+			_frame.close()
+			if main != null and main.has_method("open_settlement_view"):
+				main.call("open_settlement_view", at))
+		vrow.add_child(b)
+	var cost := Label.new()
+	cost.text = "Getting here: %s in trips and fuel" % SiteCost.format_usd(float(veh.get("usd", 0.0)))
+	cost.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	cost.tooltip_text = "Both legs of each vehicle's trip, plus fuel bought on site"
+	vrow.add_child(cost)
+
+
 func _rebuild(rows: Array) -> void:
 	for c in _list.get_children():
 		_list.remove_child(c)
@@ -307,8 +352,13 @@ func _rebuild(rows: Array) -> void:
 		var fix := HBoxContainer.new()
 		fix.add_theme_constant_override("separation", 6)
 		v.add_child(fix)
+		# Its vehicles as chips (each with Look) and what getting here cost.
+		var vrow := HFlowContainer.new()
+		vrow.add_theme_constant_override("h_separation", 6)
+		vrow.add_theme_constant_override("v_separation", 4)
+		v.add_child(vrow)
 		_cards[cid] = {"table": table, "head": head, "closure": closure, "fix": fix, "fix_sig": "",
-			"opts": opts}
+			"opts": opts, "vrow": vrow, "vsig": ""}
 
 
 func _update_card(d: Dictionary) -> void:
@@ -350,11 +400,7 @@ func _update_card(d: Dictionary) -> void:
 			int(round(float(cl["kinds"][k]) * 100.0))])
 	(c["closure"] as Label).text = "Loops closed: %d %%   (%s)" % [int(round(float(cl.get("score", 0.0)) * 100.0)),
 		", ".join(parts)] if not parts.is_empty() else "Loops closed: —"
-	var veh: Dictionary = d.get("vehicles", {})
-	if int(veh.get("count", 0)) > 0:
-		(c["closure"] as Label).text += "\n%s here (%s) · getting here: %s in trips and fuel" % [
-			UiText.count(int(veh["count"]), "vehicle"), ", ".join(PackedStringArray(veh.get("names", []))),
-			SiteCost.format_usd(float(veh.get("usd", 0.0)))]
+	_update_vehicle_row(c, d.get("vehicles", {}))
 	# The fixes for the worst loop, rebuilt only when it changes.
 	var sgv := ServiceLocator.graph()
 	var model: Variant = sgv.get("model") if sgv != null else null

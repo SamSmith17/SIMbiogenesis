@@ -9932,6 +9932,42 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 ## "diesel") within `reach_m` of `world_pos` gives up to `litres`.
 ## {litres, tank_id, name}; {} with nothing in reach. The level is moved on the
 ## tank's timeline too, so the flow engine carries on from it.
+## The nearest fuel store of `kind` to a world xz, read only (the prop
+## editor's fuel row): {name, d (m), litres (what it holds, INF unlimited)}
+## or {} when there is none on the graph.
+func fuel_store_near(kind: String, xz: Vector2) -> Dictionary:
+	if model == null or kind.is_empty():
+		return {}
+	var best := {}
+	var best_d := INF
+	for it in GraphNesting.walk_items(model):
+		var item: Dictionary = it
+		if str(item.get("type", "")) != "resource":
+			continue
+		var sp: Dictionary = item.get("specs", {})
+		if ResourceKinds.normalize_kind(str(sp.get("resource_kind", ""))) != kind:
+			continue
+		var p := _item_world_xz(item)
+		if not is_finite(p.x):
+			continue
+		var dd := p.distance_to(xz)
+		if dd < best_d:
+			best_d = dd
+			best = item
+	if best.is_empty():
+		return {}
+	var sp2: Dictionary = best.get("specs", {})
+	var held := INF
+	if not bool(sp2.get("unlimited_capacity", false)):
+		var lvl := float(sp2.get("level", 0.0))
+		var tl: ResourceTimeline = _resource_flow.get_timeline(str(best["id"])) if _resource_flow != null else null
+		var main := _get_scene_main_node()
+		if tl != null and main != null and main.has_method("get_absolute_hours"):
+			lvl = tl.level_at(float(main.call("get_absolute_hours")))
+		held = maxf(lvl, 0.0) * maxf(float(sp2.get("capacity_qty", 0.0)), 0.0)
+	return {"name": str(sp2.get("name", ResourceKinds.display_name(kind))), "d": best_d, "litres": held}
+
+
 func draw_fuel_near(world_pos: Vector3, kind: String, litres: float, reach_m: float = 12.0) -> Dictionary:
 	if model == null or litres <= 0.0 or kind.is_empty():
 		return {}

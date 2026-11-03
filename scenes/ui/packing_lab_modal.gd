@@ -56,6 +56,8 @@ static func open_site_cargo(tree: SceneTree) -> void:
 	# Player-entered custom items (gear the game doesn't model) ride along
 	# with the site cargo — they are part of what the truck must hold.
 	units.append_array(_load_custom_units(_site_token_for(tree.current_scene)))
+	if _legacy_token_for(tree.current_scene) != _site_token_for(tree.current_scene):
+		units.append_array(_load_custom_units(_legacy_token_for(tree.current_scene)))
 	var modal: CanvasLayer = load("res://scenes/ui/packing_lab_modal.gd").new()
 	tree.root.add_child(modal)
 	modal.call("open_with_units", units, "Site cargo (%s)" % UiText.count(units.size(), "unit"),
@@ -99,6 +101,7 @@ var _container_combo: OptionButton = null
 var _kit_combo: OptionButton = null
 var _kit_id := ""
 var _deliver_btn: Button = null
+var _clear_dialog: ConfirmationDialog = null
 var _deliver_lbl: Label = null
 var _item_list: ItemList = null
 var _stats: RichTextLabel = null
@@ -272,6 +275,18 @@ static func _site_token_for(scene: Node) -> String:
 	var lat: Variant = scene.get("latitude")
 	var lon: Variant = scene.get("longitude")
 	if lat != null and lon != null:
+		return "%s_%s" % [CoordToken.token(float(lat)), CoordToken.token(float(lon))]
+	return str(scene.name)
+
+
+## The key layouts and custom items were saved under before CoordToken
+## (read, never written).
+static func _legacy_token_for(scene: Node) -> String:
+	if scene == null:
+		return "global"
+	var lat: Variant = scene.get("latitude")
+	var lon: Variant = scene.get("longitude")
+	if lat != null and lon != null:
 		return "%.4f_%.4f" % [float(lat), float(lon)]
 	return str(scene.name)
 
@@ -374,7 +389,11 @@ func _save_layout() -> void:
 ## saved size, and only lands if the solver's own validity rules still
 ## agree (manifest changes since the save simply skip the stale rows).
 func _try_restore_layout() -> void:
-	var rows: Variant = _load_layouts().get(_layout_key())
+	var all := _load_layouts()
+	var rows: Variant = all.get(_layout_key())
+	if rows == null:
+		rows = all.get(_layout_key().replace(_site_token_for(get_tree().current_scene),
+			_legacy_token_for(get_tree().current_scene)))
 	if not (rows is Array) or (rows as Array).is_empty():
 		return
 	_restoring = true
@@ -506,14 +525,18 @@ func _update_delivery_ui() -> void:
 	var sid := _scenario_id()
 	var sc := UnpackScenario.find(sid)
 	var loader := _find_loader()
+	var vid := _bay_vehicle_id()
 	if _deliver_btn != null:
 		_deliver_btn.disabled = loader == null or sid.is_empty()
+		_deliver_btn.text = "Load into %s" % _bay_vehicle_name(vid) if not vid.is_empty() else "Deliver kit to site"
 		if loader == null:
 			_deliver_btn.tooltip_text = "Needs a generated location map (no TerrainLoader here)"
 		elif sid.is_empty():
 			_deliver_btn.tooltip_text = "No delivery scenario exists for this kit yet"
+		elif not vid.is_empty():
+			_deliver_btn.tooltip_text = "Load the kit's crates into this vehicle's cargo bay; the crew unloads them when it is parked"
 		else:
-			_deliver_btn.tooltip_text = "Spawns the container + packed crates near you"
+			_deliver_btn.tooltip_text = "A container with the kit's crates arrives 14 m ahead of you; the crew unloads it"
 	if sid.is_empty():
 		_deliver_lbl.text = ""
 		return
@@ -522,7 +545,7 @@ func _update_delivery_ui() -> void:
 	if e4.is_empty():
 		_deliver_lbl.text = ""
 		return
-	_deliver_lbl.text = "%s — unload 20 m:\n4 ppl → %s, ~%.0f s · 12 ppl → %s, ~%.0f s" % [
+	_deliver_lbl.text = "%s — unloading over 20 m:\n4 people: %s, about %.0f s · 12 people: %s, about %.0f s" % [
 		str(sc.get("label", sid)),
 		str(e4["strategy"]).replace("_", " "), float(e4["eta_s"]),
 		str(e12["strategy"]).replace("_", " "), float(e12["eta_s"])]
@@ -538,9 +561,32 @@ func _find_loader() -> Node:
 	return null
 
 
+## The placed vehicle whose bay is the selected host ("" = a container).
+func _bay_vehicle_id() -> String:
+	var id := str(_entry.get("id", ""))
+	return id.trim_prefix("vehicle_bay:") if id.begins_with("vehicle_bay:") else ""
+
+
+func _bay_vehicle_name(vid: String) -> String:
+	var loader := _find_loader()
+	var rec: Dictionary = loader.call("get_prop_record", vid) if loader != null and loader.has_method("get_prop_record") else {}
+	return str(VehicleBuilder.spec_for_record(rec).get("name", "the vehicle")) if not rec.is_empty() else "the vehicle"
+
+
 func _on_deliver() -> void:
 	var loader := _find_loader()
 	if loader == null or _scenario_id().is_empty():
+		return
+	var vid := _bay_vehicle_id()
+	if not vid.is_empty():
+		# Load: the crates go into this vehicle's bay. The Lab stays open.
+		var vres: Dictionary = loader.call("deliver_kit_in_vehicle", _scenario_id(), vid)
+		if vres.is_empty():
+			_hint.text = "Could not load it — does this vehicle have a cargo bay?"
+			return
+		var nv := (vres.get("crate_ids", []) as Array).size()
+		_toast("Loaded %s into %s — the crew unloads it when it is parked" % [UiText.count(nv, "crate"), _bay_vehicle_name(vid)])
+		_hint.text = "Loaded %s into %s" % [UiText.count(nv, "crate"), _bay_vehicle_name(vid)]
 		return
 	var scene := get_tree().current_scene
 	var player: Node3D = scene.find_child("Player", true, false) as Node3D
@@ -566,11 +612,14 @@ func _on_deliver() -> void:
 	# the player where the action is — here that's the 3D world (the crates
 	# are 14 m in front of them), with the toast noting the crew job.
 	var n_crates := (res.get("crate_ids", []) as Array).size()
-	close()
+	_toast("%s delivered ahead of you — the crew unloads them; Interact on a crate unpacks it" % UiText.count(n_crates, "crate"))
+	_hint.text = "Delivered %s 14 m ahead of you" % UiText.count(n_crates, "crate")
+
+
+func _toast(text: String) -> void:
 	var sgv: Node = ServiceLocator.graph()
 	if sgv != null and sgv.has_method("_show_toast"):
-		sgv.call("_show_toast",
-			"🚚 %s delivered ahead of you — Interact to unpack; the crew's unload job is on the board" % UiText.count(n_crates, "crate"))
+		sgv.call("_show_toast", text)
 
 
 # ---------------------------------------------------------------------------
@@ -940,6 +989,14 @@ func _refresh_lists() -> void:
 	if _item_list == null:
 		return
 	_item_list.clear()
+	if _units.is_empty():
+		_item_list.add_item("Nothing on site is packable yet — place a kit or add an item")
+		_item_list.set_item_disabled(0, true)
+		_item_list.set_item_selectable(0, false)
+	elif _remaining.is_empty():
+		_item_list.add_item("Everything is packed")
+		_item_list.set_item_disabled(0, true)
+		_item_list.set_item_selectable(0, false)
 	for idx in _remaining:
 		var unit: Dictionary = _units[idx]
 		var txt := "%s  (%s)" % [str(unit.get("label", "?")),
@@ -1123,6 +1180,7 @@ func _on_add_custom() -> void:
 
 func _on_clear_custom() -> void:
 	_clear_custom_specs(_site_token_for(get_tree().current_scene))
+	_clear_custom_specs(_legacy_token_for(get_tree().current_scene))
 	# Already-placed customs keep their boxes this session (indices stay
 	# valid); unplaced ones leave the to-pack list now.
 	var keep: Array = []
@@ -1170,6 +1228,8 @@ func _build_ui() -> void:
 	frame.offset_right = -28
 	frame.offset_bottom = -28
 	frame.add_theme_stylebox_override("panel", UITheme.panel_style())
+	# A modal for the audit (UiAudit tells modals apart by this meta).
+	frame.set_meta("ui_modal", true)
 	_root.add_child(frame)
 
 	var hbox := HBoxContainer.new()
@@ -1272,7 +1332,8 @@ func _build_ui() -> void:
 	# Delivery: spawn the scenario's container + packed crates in the world
 	# (PACKING_PLAN.md Phase 6) with a crew estimate from NpcHaulModel.
 	_deliver_btn = Button.new()
-	_deliver_btn.text = "🚚 Deliver kit to site"
+	_deliver_btn.text = "Deliver kit to site"
+	_deliver_btn.icon = UiIcons.icon("truck", 16)
 	_deliver_btn.focus_mode = Control.FOCUS_NONE
 	_deliver_btn.pressed.connect(_on_deliver)
 	side.add_child(_deliver_btn)
@@ -1285,29 +1346,39 @@ func _build_ui() -> void:
 	var btns := HBoxContainer.new()
 	btns.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	side.add_child(btns)
-	for spec in [["Auto-pack", "_on_autopack"], ["Empty", "_on_clear"], ["Close", "close"]]:
+	for spec in [["Auto-pack", "_on_autopack", "Let the solver load everything that fits"],
+			["Empty", "_ask_clear", "Take everything out (asks first: it is saved at once)"],
+			["Close", "close", ""]]:
 		var b := Button.new()
 		b.text = str(spec[0])
+		b.tooltip_text = str(spec[2])
 		b.focus_mode = Control.FOCUS_NONE
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.pressed.connect(Callable(self, str(spec[1])))
 		btns.add_child(b)
+	_clear_dialog = ConfirmationDialog.new()
+	_clear_dialog.title = "Empty the load?"
+	_clear_dialog.dialog_text = "Take every placed item back out? The saved layout for this site is replaced."
+	_clear_dialog.ok_button_text = "Empty it"
+	_clear_dialog.confirmed.connect(_on_clear)
+	_root.add_child(_clear_dialog)
 
 	# Phase 7 row: the printable manifest + player-entered cargo.
 	var btns2 := HBoxContainer.new()
 	btns2.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	side.add_child(btns2)
 	for spec2: Array in [
-			["📄 CSV", "_on_export_csv",
-				"Save the load order + totals as a printable spreadsheet"],
-			["💾 JSON", "_on_export_json",
-				"Save the full manifest data (positions, masses, container)"],
-			["🏷 Lists", "_on_export_lists",
-				"Write packing lists for the container, each pallet and each crate, plus printable labels"],
-			["➕ Item", "_on_custom_item_pressed",
-				"Add a custom item the game doesn't model — saved for this site"]]:
+			["CSV", "_on_export_csv",
+				"Save the load order + totals as a printable spreadsheet", "download"],
+			["JSON", "_on_export_json",
+				"Save the full manifest data (positions, masses, container)", "save"],
+			["Lists", "_on_export_lists",
+				"Write packing lists for the container, each pallet and each crate, plus printable labels", "list"],
+			["Item", "_on_custom_item_pressed",
+				"Add a custom item the game doesn't model — saved for this site", "plus"]]:
 		var b2 := Button.new()
 		b2.text = str(spec2[0])
+		b2.icon = UiIcons.icon(str(spec2[3]), 16)
 		b2.focus_mode = Control.FOCUS_NONE
 		b2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b2.tooltip_text = str(spec2[2])
@@ -1431,6 +1502,12 @@ func _ci_spin(parent: Control, label: String, value: float, min_v: float,
 
 func _on_autopack() -> void:
 	autopack()
+
+
+func _ask_clear() -> void:
+	if _placed.is_empty():
+		return
+	_clear_dialog.popup_centered()
 
 
 func _on_clear() -> void:

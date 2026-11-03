@@ -455,6 +455,38 @@ const INTERIOR_TYPES := {
 }
 
 
+## The factory wheelbases a chassis is sold in (inches, from the makers'
+## order guides): the designer offers these, never a free number. A chassis
+## not listed is built in one wheelbase, its own `wheelbase_m`.
+##   E-450 cutaway 138 / 158 / 176; Express 3500 cutaway 139 / 159 / 177;
+##   ProMaster 3500 high roof 136 / 159; Sprinter 144 / 170 (van and cab
+##   chassis); Isuzu NPR 132 / 150 / 176.
+const WHEELBASES_IN := {
+	"ford_e450_drw": [138.0, 158.0, 176.0],
+	"chevy_express_3500": [139.0, 159.0, 177.0],
+	"ram_promaster_3500": [136.0, 159.0],
+	"sprinter_170": [144.0, 170.0],
+	"sprinter_cab_chassis": [144.0, 170.0],
+	"isuzu_npr": [132.0, 150.0, 176.0],
+}
+
+
+## The wheelbases (m) a chassis is offered in, its own first when it is not
+## a factory one.
+static func wheelbases_m(id: String) -> Array:
+	var own := float(chassis(id).get("wheelbase_m", 0.0))
+	var out: Array = []
+	for wi in WHEELBASES_IN.get(id, []):
+		out.append(float(wi) * IN)
+	var has_own := false
+	for w in out:
+		if absf(float(w) - own) < 0.005:
+			has_own = true
+	if not has_own and own > 0.0:
+		out.push_front(own)
+	return out
+
+
 static func chassis(id: String) -> Dictionary:
 	return CHASSIS.get(id, CHASSIS["ford_e450_drw"])
 

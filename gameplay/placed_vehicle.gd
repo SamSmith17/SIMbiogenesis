@@ -724,6 +724,81 @@ func _tick_tow(delta: float) -> void:
 		m.rotation.y = float(pose["yaw"])
 
 
+## The dashboard's hint line: the forks' keys on a forklift; with nothing on
+## the hitch, a parked trailer close behind ("back up slowly to hitch").
+func dashboard_hint() -> String:
+	if _prop != null and _prop.get_node_or_null("ForkliftRig") != null:
+		return "%s / %s raise and lower the forks" % [_action_key("fork_raise"), _action_key("fork_lower")]
+	if not _tow_id.is_empty() or _design.is_empty() or not _design.has("hitch") or _prop == null:
+		return ""
+	var hitch := VehicleTow.world_xz(_design["hitch"], Vector2(_prop.global_position.x, _prop.global_position.z), _yaw())
+	var near := nearest_coupler(hitch, 20.0)
+	if near.is_empty():
+		return ""
+	return "Trailer %.0f m behind — back up slowly to hitch" % float(near["d"])
+
+
+static func _action_key(action: String) -> String:
+	for ev in InputMap.action_get_events(action) if InputMap.has_action(action) else []:
+		if ev is InputEventKey:
+			var k := ev as InputEventKey
+			return OS.get_keycode_string(k.physical_keycode if k.physical_keycode != 0 else k.keycode)
+	return action
+
+
+## The nearest unhitched trailer's coupler within `reach` of `hitch`:
+## {id, d} or {}.
+func nearest_coupler(hitch: Vector2, reach: float) -> Dictionary:
+	var main := _main()
+	var layer := PlacedPropService._layer_for_main(main) if main != null else null
+	if layer == null:
+		return {}
+	var best := {}
+	var best_d := reach
+	for r in layer.props:
+		var rec: Dictionary = r
+		var id := str(rec.get("id", ""))
+		if id == prop_id or not VehicleBuilder.handles(str(rec.get("model_id", ""))) \
+				or not str(rec.get("hitched_to", "")).is_empty():
+			continue
+		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		if at.distance_to(hitch) > reach + 12.0:
+			continue
+		var td := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
+		if bool(td.get("drivable", true)) or not td.has("coupler"):
+			continue
+		var c := VehicleTow.world_xz(td["coupler"], at, deg_to_rad(float(rec.get("yaw", 0.0))))
+		var d := c.distance_to(hitch)
+		if d < best_d:
+			best_d = d
+			best = {"id": id, "d": d}
+	return best
+
+
+## Hitch the nearest trailer whose coupler is within `reach` of the hitch
+## ball, wherever it stands (the prop editor's "Hitch nearest trailer").
+## Returns its id or "".
+func hitch_nearest(reach: float = 20.0) -> String:
+	if not _tow_id.is_empty() or _design.is_empty() or not _design.has("hitch") or _prop == null:
+		return ""
+	var hitch := VehicleTow.world_xz(_design["hitch"], Vector2(_prop.global_position.x, _prop.global_position.z), _yaw())
+	var near := nearest_coupler(hitch, reach)
+	if near.is_empty():
+		return ""
+	hitch_to(str(near["id"]))
+	return str(near["id"])
+
+
+## The nearest fuel store of this vehicle's fuel: {name, d, litres, reach_m}
+## or {} (the prop editor's fuel row).
+func nearest_fuel() -> Dictionary:
+	var sgv := ServiceLocator.graph()
+	if sgv == null or not sgv.has_method("fuel_store_near") or _prop == null:
+		return {}
+	return sgv.call("fuel_store_near", str(_design.get("fuel", "")),
+		Vector2(_prop.global_position.x, _prop.global_position.z))
+
+
 ## A parked trailer whose coupler is within reach of the hitch ball.
 func _try_hitch(hitch: Vector2) -> void:
 	var main := _main()

@@ -1934,6 +1934,19 @@ func _open_deploy_menu(sd : SiteDeployDirector, flag_id : String, screen_at : Ve
 		_deploy_menu.add_item("Pack everything now, no crew (%s)" % UiText.count(inv_p, "item"), 3)
 		_deploy_menu.add_item("Deploy everything now, no crew (%s)" % UiText.count(inv_d, "item"), 4)
 		_deploy_menu.add_item("Open the crew's projects…", 6)
+		# The vehicles: in and out through the site gate (TerrainLoader).
+		var tl := _get_terrain_loader()
+		if tl != null and tl.has_method("schedule_vehicle_arrivals_auto"):
+			var gate: Dictionary = tl.call("site_gate")
+			_deploy_menu.add_separator("Vehicles" if bool(gate.get("placed", false))
+				else "Vehicles (no Site gate placed: the farthest road end)")
+			_deploy_menu.add_item("Vehicles drive in from the gate", 20)
+			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+				"Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy (or now); each camp arrives with its first vehicle")
+			_deploy_menu.add_item("Vehicles drive out through the gate", 21)
+			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+				"Every living vehicle drives out, the one nearest the gate last (a Pack-up does this when its crews finish)")
+			_deploy_menu.add_item("Vehicles are simply here", 22)
 		if not evs.is_empty():
 			_deploy_menu.add_separator()
 			_deploy_menu.add_item("Clear the schedule", 5)
@@ -2009,6 +2022,22 @@ func _on_deploy_menu(id : int) -> void:
 			_notify("Deployment schedule cleared.")
 		6:
 			_on_projects_chip_pressed()
+		20, 21, 22:
+			var tl2 := _get_terrain_loader()
+			if tl2 == null:
+				return
+			if id == 20:
+				var r: Dictionary = tl2.call("schedule_vehicle_arrivals_auto")
+				_notify("%s driving in from %s." % [UiText.count(int(r.get("count", 0)), "vehicle"),
+					ClimelapseExportOptions.timecode_at(float(r.get("start_h", now)))])
+			elif id == 21:
+				var r2: Dictionary = tl2.call("schedule_vehicle_departures_auto")
+				_notify("%s driving out from %s." % [UiText.count(int(r2.get("count", 0)), "vehicle"),
+					ClimelapseExportOptions.timecode_at(float(r2.get("start_h", now)))])
+			else:
+				tl2.call("clear_vehicle_arrivals")
+				tl2.call("clear_vehicle_departures")
+				_notify("The vehicles are simply here.")
 		10, 11, 12:
 			if _deploy_menu_ids.is_empty():
 				return

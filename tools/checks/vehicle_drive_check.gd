@@ -98,8 +98,16 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _frames(tree, 3)
 		var wh := ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/BatteryContainer/BatteryWh") as Label
 		var rg := ui.get_node_or_null("Panel/MarginContainer/VBoxContainer/StatsContainer/RangeContainer/RangeValue") as Label
-		_ok(wh != null and wh.text.ends_with(" L") and rg != null and rg.text.ends_with(" mi"),
-			"the dashboard shows litres and range (%s · %s)" % [wh.text if wh else "", rg.text if rg else ""])
+		# The fuel and range follow the one units setting (UnitsPref).
+		var fu := " L" if UnitsPref.metric() else " gal"
+		var du := " km" if UnitsPref.metric() else " mi"
+		_ok(wh != null and wh.text.ends_with(fu) and rg != null and rg.text.ends_with(du),
+			"the dashboard shows the tank and range in the player's units (%s · %s)" % [wh.text if wh else "", rg.text if rg else ""])
+		UnitsPref.set_metric(not UnitsPref.metric())
+		await _frames(tree, 3)
+		var fu2 := " L" if UnitsPref.metric() else " gal"
+		_ok(wh != null and wh.text.ends_with(fu2), "and switch with the setting (%s)" % (wh.text if wh else ""))
+		UnitsPref.set_metric(not UnitsPref.metric())
 	# Round a 14 m circle: the coupler rides on the hitch, the trailer swings in.
 	var tprop := PlacedPropRuntime.find_by_prop_id(main, tid)
 	var R := 14.0

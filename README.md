@@ -196,10 +196,11 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <table>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#festival_mode"><img src="docs/tour/festival_mode.jpg" width="260" alt="Festival mode"></a><br><b>Festival mode</b><br><sub>Festival</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#arrive_at_camp"><img src="docs/tour/arrive_at_camp.jpg" width="260" alt="Arrive at camp"></a><br><b>Arrive at camp</b><br><sub>Deploy chip → Vehicles drive in from the gate</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#settlement_view"><img src="docs/tour/settlement_view.jpg" width="260" alt="Settlement view"></a><br><b>Settlement view</b><br><sub>Settlement</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#effigy_burn"><img src="docs/tour/effigy_burn.jpg" width="260" alt="The burn"></a><br><b>The burn</b><br><sub>Prop editor → Fire</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#effigy_burn"><img src="docs/tour/effigy_burn.jpg" width="260" alt="The burn"></a><br><b>The burn</b><br><sub>Prop editor → Fire</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#starshade_crew"><img src="docs/tour/starshade_crew.jpg" width="260" alt="StarShade: built by the crew"></a><br><b>StarShade: built by the crew</b><br><sub>Rehearse build (prop editor)</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#npc_anim_editor"><img src="docs/tour/npc_anim_editor.jpg" width="260" alt="NPC animation editor"></a><br><b>NPC animation editor</b><br><sub>⚙ → NPC → Animation editor…</sub></td>
 </tr>

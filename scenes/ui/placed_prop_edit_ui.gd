@@ -853,9 +853,35 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == DomeLabBuilder.MODEL_ID:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
 	if VehicleBuilder.handles(mid):
-		_button("Edit vehicle…", "The living-vehicle designer, bound to this vehicle", _model_btns, _on_vehiclelab)
+		_button("Edit vehicle…", "The vehicle designer, bound to this vehicle", _model_btns, _on_vehiclelab)
+		var pv := prop.get_node_or_null("PlacedVehicle") if prop != null else null
+		# Fuel: the tank, the nearest store of its fuel and whether it is in
+		# reach (a vehicle tops up from one within 12 m on getting in / out).
+		if pv != null and pv.has_method("get_fuel_litres"):
+			var fl: Vector2 = pv.call("get_fuel_litres")
+			if fl.y > 0.0:
+				var near: Dictionary = pv.call("nearest_fuel")
+				var line := "Fuel %s / %s" % [UnitsPref.fuel_l(fl.x, 0), UnitsPref.fuel_l(fl.y, 0)]
+				if near.is_empty():
+					line += " · no fuel store on the graph"
+				else:
+					var reach := float(near["d"]) <= PlacedVehicle.REFUEL_REACH_M
+					line += " · %s %.0f m%s" % [str(near["name"]), float(near["d"]), "" if reach else " (out of reach)"]
+				var fuel_lbl := Label.new()
+				fuel_lbl.name = "VehicleFuel"
+				fuel_lbl.text = line
+				fuel_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				fuel_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+				fuel_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+				_model_btns.add_child(fuel_lbl)
+				var rb := _button("Refuel", "Top up from the nearest store of its fuel within %.0f m" % PlacedVehicle.REFUEL_REACH_M,
+					_model_btns, _on_refuel)
+				rb.disabled = near.is_empty() or float(near["d"]) > PlacedVehicle.REFUEL_REACH_M or fl.x >= fl.y - 0.5
 		if not str(_rec.get("towing", "")).is_empty() or not str(_rec.get("hitched_to", "")).is_empty():
 			_button("Unhitch trailer", "Leave the trailer standing where it is", _model_btns, _on_unhitch)
+		elif pv != null and pv.has_method("hitch_nearest"):
+			_button("Hitch nearest trailer", "Hitch the nearest unhitched trailer whose coupler is within 20 m of this vehicle's hitch",
+				_model_btns, _on_hitch_nearest)
 	if mid == ToroidLabBuilder.MODEL_ID:
 		_button("Edit toroid…", "The toroid designer, bound to this structure", _model_btns, _on_toroidlab)
 	if mid == PeltonLabBuilder.MODEL_ID:
@@ -893,7 +919,8 @@ func _rebuild_dynamic_sections() -> void:
 	var spec := PlacedPropRuntime.packed_spec_for_record(_rec)
 	if not spec.is_empty() and str(_rec.get("stowed_in", "")).is_empty():
 		_pack_btn = _button("Unpack" if bool(_rec.get("packed", false)) else "Pack up",
-			"Pack into its shipping form, or deploy it", _model_btns, _on_pack_toggled)
+			"Unpack it into what it is" if bool(_rec.get("packed", false)) else "Pack it into its shipping form",
+			_model_btns, _on_pack_toggled)
 		_pack_btn.icon = UiIcons.icon("package", 14)
 		# The crew's version of the same two verbs, for every packable thing
 		# (a linkage has its own richer pair above). The site deployment
@@ -1613,6 +1640,38 @@ func _on_vehiclelab() -> void:
 	if _loader != null and _loader.has_method("open_vehiclelab_for_prop"):
 		close()
 		_loader.call("open_vehiclelab_for_prop", pid)
+
+
+func _vehicle_rt() -> Node:
+	var main := _loader.get_parent() if _loader != null else null
+	while main != null and not main.has_method("get_absolute_hours"):
+		main = main.get_parent()
+	var prop := PlacedPropRuntime.find_by_prop_id(main, _prop_id) if main != null else null
+	return prop.get_node_or_null("PlacedVehicle") if prop != null else null
+
+
+func _on_refuel() -> void:
+	var pv := _vehicle_rt()
+	if pv != null:
+		pv.call("refuel")
+		_refresh_after_vehicle_action()
+
+
+func _on_hitch_nearest() -> void:
+	var pv := _vehicle_rt()
+	if pv == null:
+		return
+	if str(pv.call("hitch_nearest")).is_empty():
+		var main := pv.get_tree().current_scene if pv.get_tree() != null else null
+		if main != null and main.has_method("show_toast"):
+			main.call("show_toast", "No unhitched trailer within 20 m of the hitch")
+	_refresh_after_vehicle_action()
+
+
+func _refresh_after_vehicle_action() -> void:
+	if _loader != null and _loader.has_method("get_prop_record"):
+		_rec = _loader.call("get_prop_record", _prop_id)
+	_rebuild_dynamic_sections()
 
 
 func _on_unhitch() -> void:

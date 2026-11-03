@@ -60,6 +60,7 @@ var panel: PanelContainer = null
 var name_edit: LineEdit = null
 var subtitle: Label = null
 var title_label: Label = null
+var badge: Button = null
 var undo_btn: Button = null
 var redo_btn: Button = null
 var strip: HBoxContainer = null
@@ -144,6 +145,15 @@ func _build(title: String, icon: String, opts: Dictionary) -> void:
 		name_edit.text_submitted.connect(func(t: String) -> void: name_submitted.emit(t))
 		name_edit.focus_exited.connect(func() -> void: name_submitted.emit(name_edit.text))
 		_header.add_child(name_edit)
+	# The checks' count ("2 to fix"), a button that scrolls the right column
+	# to its top, where a designer keeps its checks. Hidden until set.
+	badge = Button.new()
+	badge.name = "ChecksBadge"
+	badge.visible = false
+	badge.focus_mode = Control.FOCUS_NONE
+	badge.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	badge.pressed.connect(scroll_top)
+	_header.add_child(badge)
 	subtitle = Label.new()
 	subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -276,6 +286,20 @@ func set_subtitle(text: String) -> void:
 func set_hint(text: String) -> void:
 	_hint.text = text
 	_hint.visible = not text.is_empty() and not _short
+
+
+## The header's checks badge: `text` "" hides it; `level` "error" | "warn" |
+## "ok" colours it. A click scrolls the right column to the checks.
+func set_badge(text: String, level: String = "warn", tip: String = "") -> void:
+	if badge == null:
+		return
+	badge.visible = not text.is_empty()
+	badge.text = text
+	badge.tooltip_text = tip
+	var c := UITheme.C_ERROR if level == "error" else (UITheme.C_WARN if level == "warn" else UITheme.C_OK)
+	UITheme.style_button(badge)
+	badge.add_theme_color_override("font_color", c)
+	badge.add_theme_color_override("font_hover_color", c)
 
 
 ## An amber chip in the strip while a tool is armed; "" clears it.
