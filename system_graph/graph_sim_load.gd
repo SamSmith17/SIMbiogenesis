@@ -122,6 +122,16 @@ func sync_from_model(target_is_on: bool, rated_w: float, avg_w: float,
 
 func _connect_to_power_system() -> void:
 	var apb := get_node_or_null("/root/AcPowerBus")
+	# Under a GraphSimLoadHost the HOST hears the bus once and fans the change
+	# out in one bulk write (fan_ac_available). Each proxy hooking the bus
+	# itself made an AC shed one full graph change cascade PER LOAD: with a
+	# camp of vehicles on the graph that was ~180 x 130 ms, a 47 s stall.
+	var host := get_parent()
+	if host != null and host.has_method("fan_ac_available"):
+		if apb != null and "power_available" in apb:
+			_ac_power_available = bool(apb.get("power_available"))
+		_recompute_effective_state(false)
+		return
 	if apb != null and apb.has_method("hook_availability_deferred"):
 		apb.call("hook_availability_deferred", self, Callable(self, "_on_power_availability_changed"))
 		return
@@ -160,6 +170,8 @@ func _find_solar_ui(node: Node) -> Node:
 
 
 func _on_power_availability_changed(available: bool) -> void:
+	if available == _ac_power_available:
+		return
 	_ac_power_available = available
 	_recompute_effective_state(true)
 

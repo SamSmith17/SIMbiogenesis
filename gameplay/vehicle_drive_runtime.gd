@@ -57,8 +57,20 @@ static func attach(prop: Node3D, model: Node3D, rec: Dictionary) -> void:
 	prop.add_child(r)
 
 
+const GROUP := "vehicle_drive_runtimes"
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	add_to_group(GROUP)
+
+
+## Asleep until a drive is scheduled: the loader's schedule / clear calls
+## wake every runtime (`get_tree().call_group(GROUP, "wake")`). A living
+## vehicle with nothing scheduled costs nothing a frame.
+func wake() -> void:
+	_poll = POLL_S
+	set_process(true)
 
 
 func _main() -> Node:
@@ -67,13 +79,20 @@ func _main() -> Node:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("vehicle_drive")
+	_tick(delta)
+	PerfSpan.end("vehicle_drive")
+
+
+func _tick(delta: float) -> void:
 	if _prop == null or not is_instance_valid(_prop):
 		return
 	var main := _main()
 	if main == null or not main.has_method("get_absolute_hours"):
 		return
 	_poll += delta
-	if _poll >= POLL_S:
+	var polled := _poll >= POLL_S
+	if polled:
 		_poll = 0.0
 		_refresh(main)
 	var trailer := not _tow_id.is_empty() and (not _tow_arrival.is_empty() or not _tow_departure.is_empty())
@@ -81,6 +100,11 @@ func _process(delta: float) -> void:
 	var dep := _tow_departure if trailer else _departure
 	if arr.is_empty() and dep.is_empty():
 		_settle(STATE_IDLE)
+		set_process(false)
+		return
+	# Standing in its spot: the pose is asked only on the poll (a scrub back
+	# shows within half a second), not every frame.
+	if not polled and (_state == STATE_IDLE or _state == ""):
 		return
 	var veh := _prop.get_node_or_null("PlacedVehicle")
 	if veh != null and bool(veh.get("is_mounted")):

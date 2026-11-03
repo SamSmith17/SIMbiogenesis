@@ -250,11 +250,17 @@ static func _reachable_ac_load_ids(model: GraphModel, flat_conns: Array = []) ->
 
 	# Controllers anywhere in the tree seed reachability (model.items spans every
 	# scope; flat edges tunnel generic super-nodes so interior loads are reached).
+	# A living vehicle's own controller is NOT the site's: its fridge and fans
+	# run off the vehicle's house battery, so they never count toward the
+	# site inverter (forty vehicles' loads tripped its overload).
+	var own := vehicle_scopes(model)
 	for item: Dictionary in model.items:
 		if str(item.get("type", "")) != "controller":
 			continue
 		var cid := str(item.get("id", ""))
 		if cid.is_empty():
+			continue
+		if not own.is_empty() and own.has(str(item.get("scope_id", "root"))):
 			continue
 		var csp: Dictionary = item.get("specs", {}) as Dictionary
 		if bool(csp.get("destroyed", false)):
@@ -283,6 +289,36 @@ static func _reachable_ac_load_ids(model: GraphModel, flat_conns: Array = []) ->
 			_enqueue_ac_neighbors(model, nid, queue, flat_conns)
 
 	return loads
+
+
+## Every scope inside a living vehicle's graph node (a compound carrying
+## specs.vehicle_prop_id), at any depth. One pass over the items.
+static func vehicle_scopes(model: GraphModel) -> Dictionary:
+	var out: Dictionary = {}
+	if model == null:
+		return out
+	var parent_of: Dictionary = {}   # child scope id -> the compound that opens it
+	var roots: Array = []
+	for item: Dictionary in model.items:
+		var cs := str(item.get("child_scope_id", ""))
+		if cs.is_empty():
+			continue
+		parent_of[cs] = item
+		if ((item.get("specs", {}) as Dictionary)).has("vehicle_prop_id"):
+			roots.append(cs)
+	if roots.is_empty():
+		return out
+	for cs: String in parent_of.keys():
+		var s := cs
+		for _depth in 16:
+			if roots.has(s):
+				out[cs] = true
+				break
+			var up: Variant = parent_of.get(s)
+			if up == null:
+				break
+			s = str((up as Dictionary).get("scope_id", "root"))
+	return out
 
 
 static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Array[String],

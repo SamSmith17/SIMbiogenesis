@@ -251,7 +251,17 @@ func get_current_power() -> float:
 func _charger_powered() -> bool:
 	if _load_gid.is_empty():
 		return true
-	return PlacedLightPower.graph_item_on(_load_gid) and PlacedLightPower.ac_available(_main())
+	# Asked on the 3 s cadence (graph lookups); between, the last answer.
+	var now := Time.get_ticks_msec()
+	if now - _charger_at_ms >= 3000:
+		_charger_at_ms = now
+		_charger_on = PlacedLightPower.graph_item_on(_load_gid) and PlacedLightPower.ac_available(_main())
+	return _charger_on
+
+
+var _charger_at_ms := -100000
+var _charger_on := true
+var _main_cache: Node = null
 
 
 func _ready() -> void:
@@ -542,6 +552,13 @@ func get_battery_percent() -> float:
 # --- helpers -------------------------------------------------------------------
 
 func _main() -> Node:
+	if _main_cache != null and is_instance_valid(_main_cache) and _main_cache.is_inside_tree():
+		return _main_cache
+	_main_cache = _find_main()
+	return _main_cache
+
+
+func _find_main() -> Node:
 	var n: Node = self
 	while n != null:
 		if n.has_method("get_absolute_hours"):
@@ -610,11 +627,12 @@ func _patch_record(save: bool) -> void:
 			var trec := {"id": _tow_id, "x": tp.x, "z": tp.z, "yaw": float(tpatch.get("yaw", 0.0))}
 			cargo_patches.merge(VehicleCargo.reseat_patches(layer0.props, trec), true)
 	if save:
+		# The vehicle's and the trailer's records; their stowed crates follow
+		# inside the same update (PlacedPropService._reseat_cargo) — one save
+		# each, not one per crate.
 		PlacedPropService.update_prop_record(main, prop_id, patch, false)
 		if not tpatch.is_empty():
 			PlacedPropService.update_prop_record(main, _tow_id, tpatch, false)
-		for cid in cargo_patches:
-			PlacedPropService.update_prop_record(main, str(cid), cargo_patches[cid], false)
 		return
 	var layer := PlacedPropService._layer_for_main(main)
 	if layer != null:
@@ -630,6 +648,12 @@ func _patch_record(save: bool) -> void:
 ## Stowed crates move with the vehicle (their nodes every frame; their records
 ## with the vehicle's own, in _patch_record).
 func _tick_cargo(delta: float) -> void:
+	PerfSpan.begin("vehicle_cargo")
+	_tick_cargo_inner(delta)
+	PerfSpan.end("vehicle_cargo")
+
+
+func _tick_cargo_inner(delta: float) -> void:
 	_cargo_scan += delta
 	var main := _main()
 	if main == null:
@@ -762,7 +786,7 @@ func nearest_coupler(hitch: Vector2, reach: float) -> Dictionary:
 				or not str(rec.get("hitched_to", "")).is_empty():
 			continue
 		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-		if at.distance_to(hitch) > reach + 12.0:
+		if at.distance_to(hitch) > reach + 12.0 or not _is_trailer_rec(rec):
 			continue
 		var td := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
 		if bool(td.get("drivable", true)) or not td.has("coupler"):
@@ -813,7 +837,7 @@ func _try_hitch(hitch: Vector2) -> void:
 		if not str(rec.get("hitched_to", "")).is_empty():
 			continue
 		var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-		if at.distance_to(hitch) > 20.0:
+		if at.distance_to(hitch) > 20.0 or not _is_trailer_rec(rec):
 			continue
 		var td := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
 		if bool(td.get("drivable", true)) or not td.has("coupler"):
@@ -822,6 +846,16 @@ func _try_hitch(hitch: Vector2) -> void:
 		if c.distance_to(hitch) <= VehicleTow.HITCH_TOL_M:
 			hitch_to(id)
 			return
+
+
+## A trailer by its spec's chassis (no design solve): what the hitch tests
+## ask before solving a candidate.
+static func _is_trailer_rec(rec: Dictionary) -> bool:
+	var spec: Variant = rec.get("vehicle_spec")
+	var cid := str((spec as Dictionary).get("chassis_id", "")) if spec is Dictionary else ""
+	if cid.is_empty():
+		cid = str(VehicleBuilder.spec_for_record(rec).get("chassis_id", ""))
+	return cid.begins_with("trailer")
 
 
 ## Hitch the trailer with this prop id.

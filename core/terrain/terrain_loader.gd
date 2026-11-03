@@ -14509,9 +14509,22 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 	if res.is_empty():
 		return {}
 	_save_props_and_share()
-	_rebuild_placed_props()
+	# Only what arrived is built (the container and its crates): a full
+	# rebuild of every placed prop per delivery was the cost of a camp.
+	var new_ids: Array = [str(res.get("container_prop_id", ""))]
+	new_ids.append_array(res.get("crate_ids", []))
+	_show_props(new_ids)
 	res["project_id"] = _request_unload(str(res.get("container_prop_id", "")))
 	return res
+
+
+## Build (or re-place) just these props' nodes from their records.
+func _show_props(ids: Array) -> void:
+	if _main == null or _placed_prop_layer == null:
+		return
+	for pid in ids:
+		if not str(pid).is_empty():
+			PlacedPropService._reposition_scene_prop(_main, _placed_prop_layer, str(pid))
 
 
 ## Mark a host's delivery for unloading and try at once (_service_unload:
@@ -14592,7 +14605,16 @@ func schedule_vehicle_arrivals(start_h: float, spacing_h: float = VehicleDrive.D
 		n += 1
 	if n > 0:
 		_save_props_and_share()
+	_wake_drive_runtimes()
 	return n
+
+
+## The drive runtimes sleep while nothing is scheduled; a schedule or a clear
+## wakes them to read their records again.
+func _wake_drive_runtimes() -> void:
+	_arrivals_at_ms = -100000
+	if is_inside_tree():
+		get_tree().call_group(VehicleDriveRuntime.GROUP, "wake")
 
 
 ## The player's "drive in from the gate": from the next DEPLOY event on the
@@ -14629,6 +14651,7 @@ func clear_vehicle_arrivals() -> int:
 			n += 1
 	if n > 0:
 		_save_props_and_share()
+	_wake_drive_runtimes()
 	return n
 
 
@@ -14637,6 +14660,21 @@ func clear_vehicle_arrivals() -> int:
 ## arrival: here from the start), leave_h / gone_h (INF without a
 ## departure), camp_id}]. A towed trailer is not listed (it follows).
 func vehicle_arrivals() -> Array:
+	# The population bridge asks every tick: the answer is kept half a second
+	# (and dropped by every schedule / clear).
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _arrivals_at_ms < 500:
+		return _arrivals_cache
+	_arrivals_at_ms = now_ms
+	_arrivals_cache = _vehicle_arrivals_uncached()
+	return _arrivals_cache
+
+
+var _arrivals_cache: Array = []
+var _arrivals_at_ms := -100000
+
+
+func _vehicle_arrivals_uncached() -> Array:
 	var out: Array = []
 	if _placed_prop_layer == null:
 		return out
@@ -14689,6 +14727,7 @@ func schedule_vehicle_departures(start_h: float, spacing_h: float = VehicleDrive
 		n += 1
 	if n > 0:
 		_save_props_and_share()
+	_wake_drive_runtimes()
 	return n
 
 
@@ -14718,6 +14757,7 @@ func clear_vehicle_departures(by: String = "") -> int:
 		n += 1
 	if n > 0:
 		_save_props_and_share()
+	_wake_drive_runtimes()
 	return n
 
 
@@ -14925,7 +14965,7 @@ func _rewind_unload(hrec: Dictionary, dl: Dictionary) -> void:
 		_placed_prop_layer.update_prop(str(cid), patch)
 	_patch_delivery(hid, {"unload_pending": true, "unload_project": "", "unload_iid": ""})
 	_save_props_and_share()
-	_rebuild_placed_props()
+	_show_props(pt.keys())
 
 
 func _patch_delivery(hid: String, patch: Dictionary) -> void:
@@ -14986,7 +15026,7 @@ func deliver_kit_in_vehicle(scenario_id: String, vehicle_id: String) -> Dictiona
 		return {}
 	_placed_prop_layer.update_prop(vehicle_id, {"camp_id": camp_of_vehicle(_placed_prop_layer.find_by_id(vehicle_id))})
 	_save_props_and_share()
-	_rebuild_placed_props()
+	_show_props(res.get("crate_ids", []))
 	# Unloaded once it stands in its spot (now, or when it has driven in).
 	res["project_id"] = _request_unload(vehicle_id)
 	return res

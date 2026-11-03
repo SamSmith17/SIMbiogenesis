@@ -1031,10 +1031,22 @@ func _drag_to(pos: Vector2) -> void:
 		el.erase("v")
 	if _drag_timer <= 0.0:
 		_drag_timer = DRAG_REBUILD_S
-		_spec = VehicleSpec.resolve(_spec)
-		_design = VehicleDesign.solve(_spec)
-		_rebuild_studio()
+		_drag_rebuild("Exterior" if str(el["type"]) != "window" else "")
 		_sync_item_values()
+
+
+## A drag step: a design that is not cached (VehicleDesign.solve_transient)
+## and only the moved part rebuilt (`part` "" = the whole vehicle, for an
+## item that changes the body, a window). The release rebuilds it all.
+func _drag_rebuild(part: String) -> void:
+	_spec = VehicleSpec.resolve(_spec)
+	_design = VehicleDesign.solve_transient(_spec)
+	if part.is_empty() or _vehicle_node == null or not is_instance_valid(_vehicle_node) \
+			or _spec.get("glb_override") is Dictionary and not (_spec["glb_override"] as Dictionary).is_empty():
+		_rebuild_studio()
+		return
+	VehicleBuilder.rebuild_part(_vehicle_node, _design, part)
+	_draw_marks()
 
 
 ## The resolved (on-face, defaulted) element with this id, from the design.
@@ -1286,9 +1298,7 @@ func _drag_interior(pos: Vector2) -> void:
 	ed["z"] = snappedf(float(fh["zc"]) + _drag_grab.y, 0.05)
 	if _drag_timer <= 0.0:
 		_drag_timer = DRAG_REBUILD_S
-		_spec = VehicleSpec.resolve(_spec)
-		_design = VehicleDesign.solve(_spec)
-		_rebuild_studio()
+		_drag_rebuild("Interior")
 		_sync_inside_values()
 
 

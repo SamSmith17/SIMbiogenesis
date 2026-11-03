@@ -48,6 +48,12 @@ func configure(v: PlacedVehicle, model: Node3D) -> void:
 
 
 func _process(delta: float) -> void:
+	PerfSpan.begin("forklift")
+	_tick(delta)
+	PerfSpan.end("forklift")
+
+
+func _tick(delta: float) -> void:
 	if vehicle == null or not is_instance_valid(vehicle) or _carriage == null:
 		return
 	if not _restored:

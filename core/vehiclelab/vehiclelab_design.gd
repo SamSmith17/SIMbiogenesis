@@ -64,17 +64,43 @@ const LUG_MEDIUM_KG := 5000.0
 const LUG_HEAVY_KG := 12000.0
 
 static var _cache := {}
+## Counters for the vehicle bench: solves asked for and solves computed.
+static var solve_calls := 0
+static var solve_misses := 0
+
+
+## spec.hash() -> key_of(spec): the key's JSON build is the expensive part
+## of a hit, and the same record dicts are asked for every frame.
+static var _key_of_hash := {}
 
 
 static func solve(spec: Dictionary) -> Dictionary:
-	var key := VehicleSpec.key_of(spec)
+	solve_calls += 1
+	var h := spec.hash()
+	var key: String = _key_of_hash.get(h, "")
+	if key.is_empty():
+		key = VehicleSpec.key_of(spec)
+		if _key_of_hash.size() >= CACHE_MAX * 4:
+			_key_of_hash.clear()
+		_key_of_hash[h] = key
 	if _cache.has(key):
-		return _cache[key]
+		# Least recently used goes first: a hit moves to the back.
+		var hit: Dictionary = _cache[key]
+		_cache.erase(key)
+		_cache[key] = hit
+		return hit
+	solve_misses += 1
 	var d := _solve(VehicleSpec.resolve(spec))
 	if _cache.size() >= CACHE_MAX:
-		_cache.clear()
+		_cache.erase(_cache.keys()[0])
 	_cache[key] = d
 	return d
+
+
+## A solve that is not kept: the designer's drag steps (a fresh spec every
+## 50 ms) must not push every placed vehicle's design out of the cache.
+static func solve_transient(spec: Dictionary) -> Dictionary:
+	return _solve(VehicleSpec.resolve(spec))
 
 
 static func _solve(s: Dictionary) -> Dictionary:

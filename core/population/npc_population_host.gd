@@ -714,7 +714,7 @@ func _follow_forklifts(forked: Dictionary) -> Dictionary:
 		var model_yaw := (mr as Node3D).rotation.y if mr is Node3D else 0.0
 		node.rotation = Vector3(0.0, yaw - model_yaw, 0.0)
 		var load_id := str(info.get("load", ""))
-		var rig := node.find_child("ForkliftRig", true, false)
+		var rig := node.get_node_or_null("ForkliftRig")   # a direct child (PlacedPropRuntime)
 		if rig != null and rig.has_method("set_operated"):
 			rig.call("set_operated", FORK_CARRY_LIFT_M if not load_id.is_empty() else 0.0,
 				not load_id.is_empty())
@@ -728,7 +728,7 @@ func _follow_forklifts(forked: Dictionary) -> Dictionary:
 		var st: Dictionary = _forked_state[fid]
 		var node2 := _find_prop_node(str(fid))
 		if node2 != null and is_instance_valid(node2):
-			var rig2 := node2.find_child("ForkliftRig", true, false)
+			var rig2 := node2.get_node_or_null("ForkliftRig")
 			if rig2 != null and rig2.has_method("release_operated"):
 				rig2.call("release_operated")
 			var rec := PlacedPropService.get_prop_record(_main, str(fid))

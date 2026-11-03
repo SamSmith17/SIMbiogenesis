@@ -202,7 +202,8 @@ static func make(gate: Vector2, park_xz: Vector2, park_yaw_deg: float, start_h: 
 ## yaws, t (seconds from the start), v, dur_s, length}.
 static func plan(arrival: Dictionary) -> Dictionary:
 	var out_bound := bool(arrival.get("out", false))
-	var key := JSON.stringify([arrival.get("route", []), arrival.get("park", []), out_bound])
+	# A hash, not a JSON string: this is asked twice a frame per driving vehicle.
+	var key := [arrival.get("route", []), arrival.get("park", []), out_bound].hash()
 	if _plans.has(key):
 		return _plans[key]
 	if _plans.size() >= PLAN_CACHE_MAX:

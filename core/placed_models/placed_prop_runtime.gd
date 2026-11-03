@@ -60,10 +60,37 @@ static func find_by_prop_id(main: Node, prop_id: String) -> PlacedProp:
 	var root := terrain.get_node_or_null("PlacedProps")
 	if root == null:
 		return null
+	# id -> node, re-validated on every hit (freed, moved, or a rebuilt prop
+	# with the same id). A miss rebuilds the whole index in one pass, at most
+	# once a frame: cargo followers and the forklift ask for every crate every
+	# frame, and a scan of every placed prop each was the cost.
+	var hit: Variant = _node_index.get(prop_id)
+	if hit != null and is_instance_valid(hit) and (hit as Node).get_parent() == root \
+			and str((hit as PlacedProp).prop_id) == prop_id:
+		return hit as PlacedProp
+	var f := Engine.get_process_frames()
+	if f == _node_index_frame and _node_index_root == root:
+		# Rebuilt this frame already: a prop added since is found by a plain
+		# scan (the old way), without rebuilding again.
+		for child in root.get_children():
+			if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id \
+					and not child.is_queued_for_deletion():
+				_node_index[prop_id] = child
+				return child as PlacedProp
+		return null
+	_node_index_frame = f
+	_node_index_root = root
+	_node_index = {}
 	for child in root.get_children():
-		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
-			return child as PlacedProp
-	return null
+		if child is PlacedProp and not child.is_queued_for_deletion():
+			_node_index[str((child as PlacedProp).prop_id)] = child
+	hit = _node_index.get(prop_id)
+	return hit as PlacedProp if hit != null else null
+
+
+static var _node_index: Dictionary = {}
+static var _node_index_frame := -1
+static var _node_index_root: Node = null
 
 
 static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:

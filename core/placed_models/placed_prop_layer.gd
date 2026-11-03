@@ -79,9 +79,39 @@ func deserialize(data: Dictionary) -> void:
 			props.append(item)
 
 
+## id -> record, rebuilt when `props` is replaced or changes size (a few
+## callers outside this class append to or reassign `props` directly), and
+## dropped by every mutator here. Cargo followers ask for each crate every
+## frame: a linear scan of 500 records each was the cost.
+var _index: Dictionary = {}
+var _index_of: Array = []
+var _index_n := -1
+
+
+func _ensure_index() -> void:
+	if is_same(_index_of, props) and _index_n == props.size():
+		return
+	_index = {}
+	for item in props:
+		if item is Dictionary:
+			_index[str((item as Dictionary).get("id", ""))] = item
+	_index_of = props
+	_index_n = props.size()
+
+
+func _drop_index() -> void:
+	_index_n = -1
+
+
 func find_by_id(prop_id: String) -> Dictionary:
+	_ensure_index()
+	var rec: Variant = _index.get(prop_id)
+	if rec is Dictionary and str((rec as Dictionary).get("id", "")) == prop_id:
+		return rec
+	# A stale index (a record swapped in place by an outside writer): scan.
 	for item in props:
 		if item is Dictionary and str(item.get("id", "")) == prop_id:
+			_drop_index()
 			return item
 	return {}
 
@@ -121,24 +151,23 @@ func add_osm_prop(building_idx: int, model_id: String, x: float, y_offset: float
 ## and the second silently works by accident. Erasing makes both correct, and
 ## keeps dead keys out of the saved JSON.
 func update_prop(prop_id: String, patch: Dictionary) -> bool:
-	for i in props.size():
-		var d: Dictionary = props[i]
-		if str(d.get("id", "")) != prop_id:
-			continue
-		for k in patch.keys():
-			if patch[k] == null:
-				d.erase(k)
-			else:
-				d[k] = patch[k]
-		props[i] = d
-		return true
-	return false
+	var d := find_by_id(prop_id)
+	if d.is_empty():
+		return false
+	# The record is a reference into `props`: merging into it is the update.
+	for k in patch.keys():
+		if patch[k] == null:
+			d.erase(k)
+		else:
+			d[k] = patch[k]
+	return true
 
 
 func remove_prop(prop_id: String) -> bool:
 	for i in props.size():
 		if str((props[i] as Dictionary).get("id", "")) == prop_id:
 			props.remove_at(i)
+			_drop_index()
 			return true
 	return false
 
@@ -156,6 +185,7 @@ func remove_nearest(world_xz: Vector2, radius_m: float = 3.0) -> bool:
 	if best_i < 0:
 		return false
 	props.remove_at(best_i)
+	_drop_index()
 	return true
 
 
@@ -169,6 +199,7 @@ func remove_osm_for_building(building_idx: int) -> void:
 			continue
 		kept.append(d)
 	props = kept
+	_drop_index()
 
 
 func get_replaced_building_indices() -> Array[int]:

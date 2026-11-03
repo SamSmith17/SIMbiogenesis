@@ -134,24 +134,39 @@ static func flat_connections(model: GraphModel) -> Array:
 ## recursion aggregates use so nested capacity is counted at any depth.
 static func walk_items(model: GraphModel, scope_id: String = "root") -> Array:
 	var out: Array = []
-	if model == null:
+	if model == null or scope_id.is_empty():
 		return out
-	_walk_items_into(model, scope_id, out, {})
+	# Items grouped by scope in ONE pass (model.items order kept inside each
+	# scope): get_items_in_scope is a linear scan, and calling it per scope made
+	# the walk scopes x items — forty vehicle nodes made it the population
+	# tick's biggest cost.
+	var by_scope: Dictionary = {}
+	for item_v in model.items:
+		var it := item_v as Dictionary
+		var sid := str(it.get("scope_id", GraphModel.ROOT_SCOPE_ID))
+		if sid.is_empty():
+			sid = GraphModel.ROOT_SCOPE_ID
+		var bucket: Variant = by_scope.get(sid)
+		if bucket == null:
+			bucket = []
+			by_scope[sid] = bucket
+		(bucket as Array).append(it)
+	_walk_items_into(by_scope, scope_id, out, {})
 	return out
 
 
-static func _walk_items_into(model: GraphModel, scope_id: String, out: Array,
+static func _walk_items_into(by_scope: Dictionary, scope_id: String, out: Array,
 		seen: Dictionary) -> void:
 	if scope_id.is_empty() or seen.has(scope_id):
 		return
 	seen[scope_id] = true
-	for item_v in model.get_items_in_scope(scope_id):
+	for item_v in by_scope.get(scope_id, []):
 		var item := item_v as Dictionary
 		out.append(item)
 		if is_transparent_compound(item):
 			var cs := str(item.get("child_scope_id", ""))
 			if not cs.is_empty():
-				_walk_items_into(model, cs, out, seen)
+				_walk_items_into(by_scope, cs, out, seen)
 
 
 ## Every scope id at/below `scope_id` (inclusive), following child_scope_id of

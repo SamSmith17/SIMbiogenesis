@@ -69,27 +69,42 @@ static func build_from_design(d: Dictionary, opts: Dictionary = {}) -> Node3D:
 	var root := Node3D.new()
 	root.name = "LivingVehicle"
 	var paint: Dictionary = (d["spec"] as Dictionary)["paint"]
-	var gc := _kits(["frame", "tyre", "rim", "white"])
-	var gb := _kits(["body", "trim", "glass", "head", "rim", "frame", "dark"])
-	var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail", "dark"])
-	var gx := _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
-	var gi := _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
-	_chassis(d, gc)
-	_cab(d, gb)
-	_body(d, sh, sh)
-	_exterior(d, gx)
-	_floor_and_interior(d, gi)
 	var cutaway := bool(opts.get("cutaway", false))
-	_node(root, "Chassis", gc, paint, d)
-	_node(root, "Cab", gb, paint, d)
-	if not cutaway:
-		_node(root, "Shell", sh, paint, d)
-		_node(root, "Exterior", gx, paint, d)
-	_node(root, "Interior", gi, paint, d)
+	# The merged meshes of a design are built once and shared: a camp of the
+	# same preset (or a map reload) does not rebuild them per vehicle.
+	var key := VehicleSpec.key_of(d["spec"])
+	var cached: Dictionary = _mesh_cache.get(key, {})
+	if cached.is_empty():
+		var gc := _kits(["frame", "tyre", "rim", "white"])
+		var gb := _kits(["body", "trim", "glass", "head", "rim", "frame", "dark"])
+		var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail", "dark"])
+		var gx := _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
+		var gi := _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
+		_chassis(d, gc)
+		_cab(d, gb)
+		_body(d, sh, sh)
+		_exterior(d, gx)
+		_floor_and_interior(d, gi)
+		cached = {"Chassis": _mesh_of(gc, paint, d, "Chassis"), "Cab": _mesh_of(gb, paint, d, "Cab"),
+			"Shell": _mesh_of(sh, paint, d, "Shell"), "Exterior": _mesh_of(gx, paint, d, "Exterior"),
+			"Interior": _mesh_of(gi, paint, d, "Interior")}
+		if _mesh_cache.size() >= MESH_CACHE_MAX:
+			_mesh_cache.erase(_mesh_cache.keys()[0])
+		_mesh_cache[key] = cached
+	for part in ["Chassis", "Cab", "Shell", "Exterior", "Interior"]:
+		if cutaway and (part == "Shell" or part == "Exterior"):
+			continue
+		var mesh: ArrayMesh = cached[part]
+		if mesh == null:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.name = part
+		mi.mesh = mesh
+		root.add_child(mi)
 	_wheel_nodes(root, d, paint)
 	_apply_glb_override(root, d)
 	root.set_meta("living_vehicle", true)
-	root.set_meta("vehicle_key", VehicleSpec.key_of(d["spec"]))
+	root.set_meta("vehicle_key", key)
 	var spots: Array = []
 	for bd0 in d["beds"]:
 		var bd: Dictionary = bd0
@@ -101,11 +116,52 @@ static func build_from_design(d: Dictionary, opts: Dictionary = {}) -> Node3D:
 	return root
 
 
+## Rebuild ONE part of a built vehicle ("Exterior" or "Interior") from a new
+## design, leaving the chassis, cab, shell and wheels as they are: what a
+## furniture or roof-item drag changes. A part that was not there (the
+## Exterior in a cutaway) stays absent.
+static func rebuild_part(root: Node3D, d: Dictionary, part: String) -> void:
+	if root == null:
+		return
+	var old := root.get_node_or_null(part)
+	if old == null and part == "Exterior":
+		return
+	var paint: Dictionary = (d["spec"] as Dictionary)["paint"]
+	var kits: Dictionary
+	if part == "Exterior":
+		kits = _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
+		_exterior(d, kits)
+	else:
+		kits = _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
+		_floor_and_interior(d, kits)
+	var at := old.get_index() if old != null else -1
+	if old != null:
+		root.remove_child(old)
+		old.queue_free()
+	_node(root, part, kits, paint, d)
+	var fresh := root.get_node_or_null(part)
+	if fresh != null and at >= 0:
+		root.move_child(fresh, at)
+
+
 static func _kits(names: Array) -> Dictionary:
 	var g := {}
 	for n in names:
 		g[str(n)] = _K.new()
 	return g
+
+
+## Built part meshes per design key (build_from_design), oldest dropped.
+const MESH_CACHE_MAX := 32
+static var _mesh_cache: Dictionary = {}
+
+
+## A part group's merged mesh (a surface per material), null when empty.
+static func _mesh_of(kits: Dictionary, paint: Dictionary, d: Dictionary, node_name: String) -> ArrayMesh:
+	var mesh := ArrayMesh.new()
+	for k in kits:
+		_commit(kits[k], mesh, _material(str(k), paint, d, node_name))
+	return mesh if mesh.get_surface_count() > 0 else null
 
 
 ## One MeshInstance3D per part group, a surface per material.
@@ -465,21 +521,43 @@ static func _wheel_nodes(root: Node3D, d: Dictionary, paint: Dictionary) -> void
 ## front ones by `steer_rad` (+ = to the left). Finds the wheel list on the
 ## vehicle's model node or the node under it.
 static func spin_wheels(model: Node3D, roll_m: float, steer_rad: float = 0.0) -> void:
-	var root := _wheel_root(model)
-	if root == null:
-		return
-	var holder := root.get_node_or_null("Wheels") as Node3D
-	if holder == null:
-		return
-	for e in root.get_meta("wheel_nodes", []):
-		var ed: Dictionary = e
-		var n := holder.get_node_or_null(str(ed["name"])) as Node3D
-		if n == null:
+	# The wheel nodes are found once and kept on the model (`wheel_refs`):
+	# this runs every frame for every vehicle on the move.
+	var refs: Array = model.get_meta("wheel_refs", []) if model != null else []
+	if refs.is_empty() or not is_instance_valid((refs[0] as Array)[0]):
+		refs = _wheel_refs(model)
+		if model != null:
+			model.set_meta("wheel_refs", refs)
+	for r in refs:
+		var n: Node3D = r[0]
+		if not is_instance_valid(n):
 			continue
 		# Forward is -Z: rolling forward turns the top of the wheel toward -Z,
 		# i.e. a negative turn about +X.
-		var spin := Basis(Vector3.RIGHT, -roll_m / maxf(float(ed["r"]), 0.05))
-		n.basis = (Basis(Vector3.UP, steer_rad) * spin) if bool(ed["steer"]) else spin
+		var spin := Basis(Vector3.RIGHT, -roll_m / maxf(float(r[1]), 0.05))
+		n.basis = (Basis(Vector3.UP, steer_rad) * spin) if bool(r[2]) else spin
+
+
+## [[node, radius, steers]] for a model's wheels.
+static func _wheel_refs(model: Node3D) -> Array:
+	var out: Array = []
+	var root := _wheel_root(model)
+	if root == null:
+		return out
+	var holder := root.get_node_or_null("Wheels") as Node3D
+	if holder == null:
+		return out
+	for e in root.get_meta("wheel_nodes", []):
+		var ed: Dictionary = e
+		var n := holder.get_node_or_null(str(ed["name"])) as Node3D
+		if n != null:
+			out.append([n, float(ed["r"]), bool(ed["steer"])])
+	return out
+
+
+## One one-sided twin per shared material (the driver's view), kept: a
+## duplicate per mount was made and never freed.
+static var _one_sided: Dictionary = {}
 
 
 ## The driver's view: the body panels are drawn double-sided (StructureMaterials),
@@ -502,8 +580,17 @@ static func set_inside_view(model: Node3D, on: bool) -> void:
 				continue
 			var m := mi.mesh.surface_get_material(si)
 			if m is BaseMaterial3D:
-				var one := (m as BaseMaterial3D).duplicate() as BaseMaterial3D
-				one.cull_mode = BaseMaterial3D.CULL_BACK
+				# Keyed by the source's id, checked against a weak reference (a
+				# freed material's id can be reused).
+				var key := m.get_instance_id()
+				var hit: Array = _one_sided.get(key, [])
+				var one: BaseMaterial3D = hit[1] if not hit.is_empty() and (hit[0] as WeakRef).get_ref() == m else null
+				if one == null:
+					one = (m as BaseMaterial3D).duplicate() as BaseMaterial3D
+					one.cull_mode = BaseMaterial3D.CULL_BACK
+					if _one_sided.size() > 256:
+						_one_sided.clear()
+					_one_sided[key] = [weakref(m), one]
 				mi.set_surface_override_material(si, one)
 
 

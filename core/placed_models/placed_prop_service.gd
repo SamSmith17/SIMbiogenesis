@@ -137,7 +137,6 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 		return false
 	if not layer.update_prop(prop_id, patch.duplicate(true)):
 		return false
-	_save_layer(main, layer)
 	if rebuild_prop:
 		var parent := _props_parent(main)
 		var root := parent.get_node_or_null("PlacedProps")
@@ -163,6 +162,12 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 				Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
 			_reseat_cargo(main, layer, prop_id)
 			break
+	# A drive scheduled or forgotten on a record: the sleeping drive runtimes
+	# read their records again.
+	if (patch.has("arrival") or patch.has("departure") or patch.has("hitched_to")) and main.is_inside_tree():
+		main.get_tree().call_group(VehicleDriveRuntime.GROUP, "wake")
+	# One save for the record and everything that moved with it (its cargo).
+	_save_layer(main, layer)
 	_notify_mp_props_edited()
 	return true
 
@@ -179,7 +184,6 @@ static func _reseat_cargo(main: Node, layer: PlacedPropLayer, host_id: String) -
 	for cid in cp:
 		layer.update_prop(str(cid), cp[cid])
 		_reposition_scene_prop(main, layer, str(cid))
-	_save_layer(main, layer)
 
 
 ## Move an existing prop to a new world XZ and reground.

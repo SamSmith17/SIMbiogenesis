@@ -226,6 +226,45 @@ static func host_ready(rec: Dictionary, abs_h: float = NAN, drive_rec: Dictionar
 	return VehicleDrive.parked_at(drive_rec if not drive_rec.is_empty() else rec, abs_h)
 
 
+## Every ready cargo host's door among placed records, worked out once:
+## [{x, z, host_id, at: the host's own position}]. door_near over a list of
+## items asks this once and then `door_near_in` per item.
+static func host_doors(records: Array, abs_h: float = NAN) -> Array:
+	var out: Array = []
+	var by_id := {}
+	if not is_nan(abs_h):
+		for r0 in records:
+			by_id[str((r0 as Dictionary).get("id", ""))] = r0
+	for r in records:
+		var rec: Dictionary = r
+		if not is_host(rec):
+			continue
+		var tow_id := str(rec.get("hitched_to", ""))
+		if not host_ready(rec, abs_h, by_id.get(tow_id, {}) if not tow_id.is_empty() else {}):
+			continue
+		if not is_container(rec) and host_bay(rec).is_empty():
+			continue
+		var dd := door_xz(rec)
+		if dd.is_empty():
+			continue
+		out.append({"x": float(dd["x"]), "z": float(dd["z"]), "host_id": str(rec.get("id", "")),
+			"at": Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))})
+	return out
+
+
+## The nearest host (by the host's position, as door_near) in a host_doors list.
+static func door_near_in(doors: Array, pos: Vector2, reach: float) -> Dictionary:
+	var best_d := reach
+	var out := {}
+	for d in doors:
+		var dd: Dictionary = d
+		var dist := pos.distance_to(dd["at"] as Vector2)
+		if dist < best_d:
+			best_d = dist
+			out = {"x": float(dd["x"]), "z": float(dd["z"]), "host_id": str(dd["host_id"])}
+	return out
+
+
 ## The nearest cargo host's door to `pos` within `reach` among placed records:
 ## {x, z, host_id} or {}. A vehicle away, on the road or packed is no host
 ## (with `abs_h` given).

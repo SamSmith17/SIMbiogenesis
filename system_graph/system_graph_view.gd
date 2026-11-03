@@ -9911,6 +9911,11 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 		pos = Vector2(float(it.get("x", pos.x)), float(it.get("y", pos.y)))
 		soc = _vehicle_battery_soc(existing)
 		remove_vehicle_system(prop_id)
+	# A vehicle's node is a dozen items and wires: under bulk mode the view's
+	# change cascade (telemetry, SolarUI sync, inventory) runs ONCE at the end,
+	# not per item — that cascade was 2.5 s of every placement.
+	var was_bulk := _sim_bulk_update
+	_sim_bulk_update = true
 	_history_suppress = true
 	model.put_definition(def)
 	var cid := GraphComponentDefs.realize(model, def_id, "root", pos, {
@@ -9923,7 +9928,8 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 		if soc >= 0.0:
 			_set_vehicle_battery_soc(cid, soc)
 	_history_suppress = false
-	_on_model_changed("vehicle_synced")
+	_sim_bulk_update = was_bulk
+	_on_model_changed("add_item")
 	_schedule_graph_autosave()
 	return cid
 
@@ -10019,10 +10025,13 @@ func remove_vehicle_system(prop_id: String) -> void:
 	var cid := vehicle_system_item_id(prop_id)
 	if cid.is_empty():
 		return
+	var was_bulk := _sim_bulk_update
+	_sim_bulk_update = true
 	_history_suppress = true
 	model.remove_item(cid)
 	_history_suppress = false
-	_on_model_changed("vehicle_removed")
+	_sim_bulk_update = was_bulk
+	_on_model_changed("remove_item")
 	_schedule_graph_autosave()
 
 

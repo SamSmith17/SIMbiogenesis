@@ -28,6 +28,38 @@ func setup(model: RefCounted) -> void:
 		if not _model.changed.is_connected(_on_model_changed):
 			_model.changed.connect(_on_model_changed)
 	_sync_all()
+	call_deferred("_hook_ac_bus")
+
+
+## The AC bus is heard ONCE here and fanned out to every proxy (see
+## GraphSimLoad._connect_to_power_system for why).
+func _hook_ac_bus() -> void:
+	var apb := get_node_or_null("/root/AcPowerBus")
+	if apb == null or not apb.has_signal("power_availability_changed"):
+		return
+	var cb := Callable(self, "fan_ac_available")
+	if not apb.power_availability_changed.is_connected(cb):
+		apb.power_availability_changed.connect(cb)
+	fan_ac_available(bool(apb.get("power_available")))
+
+
+## Hand every proxy the inverter's state inside ONE bulk write: the owning
+## view coalesces the model changes into one telemetry / SolarUI refresh.
+func fan_ac_available(available: bool) -> void:
+	var view := get_parent()
+	var bulk_ok := view != null and "_sim_bulk_update" in view
+	var was_bulk := bool(view.get("_sim_bulk_update")) if bulk_ok else false
+	if bulk_ok:
+		view.set("_sim_bulk_update", true)
+	begin_bulk_sync()
+	for node_v in _loads.values():
+		if node_v != null and is_instance_valid(node_v) and (node_v as Node).get_parent() == self and (node_v as Node).has_method("_on_power_availability_changed"):
+			(node_v as Node).call("_on_power_availability_changed", available)
+	end_bulk_sync()
+	if bulk_ok:
+		view.set("_sim_bulk_update", was_bulk)
+		if not was_bulk and view.has_method("_flush_sim_bulk_update"):
+			view.call("_flush_sim_bulk_update")
 
 
 func teardown() -> void:

@@ -164,6 +164,9 @@ var _dots_cache: Array = []
 ## prop_id -> {node: instance id, size: {height_m, footprint_r_m}} (unlit effigies)
 var _effigy_sizes: Dictionary = {}
 var _persist_budget := PERSIST_PER_TICK
+## Graph items with a recipe step waiting for hands, listed once per tick by
+## tick_at's walk and read by every camp's _service_machine_chores.
+var _waiting_machines: Array = []
 ## Light camps waiting for their slice of a frame (see _drain_light_queue).
 ## Ticking ~37 camps in the one tick frame was the 15-18 ms crowd_sim spike.
 var _light_queue: Array = []
@@ -312,8 +315,12 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	# festival camp is a super-node), and the tier each one runs in this tick.
 	var habitats: Array = []
 	var camps: Array = []
+	_waiting_machines.clear()
 	for item in GraphNesting.walk_items(model, "root"):
 		var d0: Dictionary = item
+		var sp_w: Dictionary = d0.get("specs", {})
+		if bool(sp_w.get("recipe_waiting_chore", false)):
+			_waiting_machines.append(d0)
 		if str(d0.get("type", "")) != "processor":
 			continue
 		var specs0: Dictionary = d0.get("specs", {})
@@ -1710,6 +1717,12 @@ func _camp_revision(main: Node) -> int:
 ## sleeper and ordered so slot k wraps round the shelters. Refreshed when
 ## the camps or props change.
 func _resolve_sleep_spots(main: Node, registry: SpaceRegistry) -> void:
+	PerfSpan.begin("npc_beds")
+	_resolve_sleep_spots_inner(main, registry)
+	PerfSpan.end("npc_beds")
+
+
+func _resolve_sleep_spots_inner(main: Node, registry: SpaceRegistry) -> void:
 	if registry == null:
 		return
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
@@ -1901,6 +1914,13 @@ func _bed_spot(sid: String, k: int) -> Dictionary:
 ## The expanded beds of the camp standing at `home` (the light tier's home
 ## slots), or an empty array when there is no camp there.
 func _home_beds(main: Node, home: Vector2) -> Dictionary:
+	PerfSpan.begin("npc_beds")
+	var r := _home_beds_inner(main, home)
+	PerfSpan.end("npc_beds")
+	return r
+
+
+func _home_beds_inner(main: Node, home: Vector2) -> Dictionary:
 	var out := {"slots": PackedVector2Array(), "yaws": PackedFloat32Array(), "elevs": PackedFloat32Array()}
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader == null or not loader.has_method("camp_area_at") or not loader.has_method("camp_shelters_in_polygon"):
@@ -2017,6 +2037,20 @@ func _prop_revision(main: Node) -> int:
 	var f := Engine.get_process_frames()
 	if f == _prop_rev_frame:
 		return _prop_rev_val
+	PerfSpan.begin("prop_rev")
+	var before := _prop_rev_val
+	_prop_revision_compute(loader, f)
+	if _prop_rev_val != before:
+		prop_rev_changes += 1
+	PerfSpan.end("prop_rev")
+	return _prop_rev_val
+
+
+## How often the prop revision has moved (the vehicle bench's rate).
+var prop_rev_changes := 0
+
+
+func _prop_revision_compute(loader: Node, f: int) -> void:
 	_prop_rev_frame = f
 	_prop_rev_val = 0
 	var layer: Variant = loader.get("_placed_prop_layer")
@@ -2032,7 +2066,6 @@ func _prop_revision(main: Node) -> int:
 				sig.append(Vector3i(roundi(float(rd.get("x", 0.0)) * 2.0), roundi(float(rd.get("z", 0.0)) * 2.0),
 					roundi(float(rd.get("yaw", 0.0)))))
 		_prop_rev_val = props.size() if sig.size() == 1 else absi(hash(sig)) % 1000003
-	return _prop_rev_val
 
 
 ## Bump when world geometry moves so the grid re-bakes (terrain sculpt, prop
@@ -3673,8 +3706,10 @@ func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
 	var board := engine.chore_board
 	if board == null or model == null:
 		return
-	# Every scope: a machine inside a camp compound waits for hands too.
-	for item in GraphNesting.walk_items(model, "root"):
+	# Every scope: a machine inside a camp compound waits for hands too. The
+	# waiting machines are listed ONCE per tick (tick_at's walk), not walked
+	# again for every camp.
+	for item in _waiting_machines.duplicate():
 		var d: Dictionary = item
 		var specs: Dictionary = d.get("specs", {})
 		if not bool(specs.get("recipe_waiting_chore", false)):

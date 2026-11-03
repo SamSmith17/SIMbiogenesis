@@ -2019,17 +2019,23 @@ func _perf_tick(delta: float) -> void:
 		_update_weather(sim_step)
 		if not _open_meteo_active and not _weather_live_mode:
 			_generate_simulated_weather_data()
+		PerfSpan.begin("sui_solar")
 		_calculate_solar_power()
 		_apply_graph_pv_shade()
+		PerfSpan.end("sui_solar")
 		_poll_aux_generation()
 		_apply_soc_protection_before_load()
+		PerfSpan.begin("sui_load")
 		_calculate_load_power()
+		PerfSpan.end("sui_load")
 		_apply_battery_full_throttle()
 		# Graph DC current-limit throttle (charge controllers × battery bus V) —
 		# applied last so neither solar path nor the battery-full lerp can
 		# raise delivery back above the wiring's real cap.
 		_apply_graph_dc_limit()
+		PerfSpan.begin("sui_battery")
 		_update_battery(sim_step)
+		PerfSpan.end("sui_battery")
 		sim_tick_serial += 1
 
 	if _ui_accumulator >= _UI_UPDATE_INTERVAL:
@@ -2037,10 +2043,12 @@ func _perf_tick(delta: float) -> void:
 		# Scoreboard + 24h history are read-only views over the energy
 		# timeline (dropped from the 10 Hz sim tick to this 4 Hz UI tick —
 		# the underlying SOC integration above is unaffected).
+		PerfSpan.begin("sui_board")
 		if main_node != null and main_node.has_method("get_absolute_hours"):
 			_recompute_scoreboard_from_timeline(float(main_node.call("get_absolute_hours")))
 		if not _csv_playback_active:
 			_update_solar_history()
+		PerfSpan.end("sui_board")
 		_update_display()
 		_update_graph()
 		_update_weather_data_display()
@@ -2049,7 +2057,9 @@ func _perf_tick(delta: float) -> void:
 	if main_node != null:
 		var _ts: Variant = main_node.get("time_scale")
 		if _ts != null and float(_ts) > 0.0:
+			PerfSpan.begin("sui_over")
 			_update_inverter_overload(delta)
+			PerfSpan.end("sui_over")
 
 	# Smooth lighting every frame near realtime; at high speed, UI-rate is enough
 	# (targets still update on the 10 Hz weather tick).

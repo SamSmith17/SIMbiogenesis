@@ -553,8 +553,16 @@ func _inventory(action: String) -> Array:
 	if _loader == null:
 		return out
 	var want_packed := action == SiteDeploySchedule.ACTION_PACKUP   # pack-up takes STANDING things
+	# The doors and the forklifts once per inventory, not once per item (each
+	# door is a vehicle design solve).
+	var all_recs: Array = _loader.call("placed_prop_records") if _loader.has_method("placed_prop_records") else []
+	var doors: Array = VehicleCargo.host_doors(all_recs, _now_h()) if want_packed else []
+	var forks: Array = []
+	for fr in all_recs:
+		if str((fr as Dictionary).get("model_id", "")) == ForkliftBuilder.MODEL_ID:
+			forks.append(fr)
 	if _loader.has_method("placed_prop_records"):
-		for r in _loader.call("placed_prop_records"):
+		for r in all_recs:
 			var rec: Dictionary = r
 			var model_id := str(rec.get("model_id", ""))
 			# Hosts and the machines that move the work are not packed by it:
@@ -592,15 +600,15 @@ func _inventory(action: String) -> Array:
 				"mass_kg": float(pspec.get("mass_kg", -1.0)), "model_id": model_id}
 			var fork_check := false
 			if want_packed:
-				var door := _container_door_near(item["pos"] as Vector2)
+				var door := VehicleCargo.door_near_in(doors, item["pos"] as Vector2, LOADOUT_REACH_M)
 				if not door.is_empty():
 					item["loadout"] = door
 					fork_check = true
 			elif rec.get("deploy_home") is Dictionary:
 				item["home"] = (rec["deploy_home"] as Dictionary).duplicate()
 				fork_check = true
-			if fork_check and _loader.has_method("nearest_forklift_id"):
-				var fid := str(_loader.call("nearest_forklift_id", item["pos"] as Vector2))
+			if fork_check:
+				var fid := _nearest_fork(forks, item["pos"] as Vector2)
 				if not fid.is_empty():
 					item["forklift_id"] = fid
 			if model_id == LinkageStructureBuilder.MODEL_ID and rec.get("linkage_spec") is Dictionary:
@@ -628,6 +636,20 @@ func _inventory(action: String) -> Array:
 			out.append({"kind": "camp", "id": cid, "label": str(area.get("name", cid)),
 				"pos": c, "structures": n})
 	return out
+
+
+## The nearest forklift within 150 m (the loader's nearest_forklift_id rule)
+## in a list gathered once.
+static func _nearest_fork(forks: Array, at: Vector2, max_m: float = 150.0) -> String:
+	var best := ""
+	var best_d := max_m
+	for f in forks:
+		var rec: Dictionary = f
+		var d := at.distance_to(Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
+		if d < best_d:
+			best_d = d
+			best = str(rec.get("id", ""))
+	return best
 
 
 ## The door of the nearest cargo container within LOADOUT_REACH_M of `pos`

@@ -11993,6 +11993,59 @@ driver's view out of the cab). All eight are done.
     order, the badge, factory wheelbases, a REAL click on the units box, a
     REAL click on "Load into" in the Packing Lab), `--capture=modals` at
     both sizes, the tour stop PASS.
+- **Performance (polish Phase 5, 2026-11-02).** Measured with
+  `tools/bench/vehicle_site_bench.gd` (Walton, festival mode, 40 vehicles
+  with kits stowed, idle / 1x / 60x / 450x through an arrival window;
+  `VSB_QUICK=1` stops after idle) and two probes,
+  `tools/diag/vehicle_place_cost_probe.gd` (what a placement costs, step by
+  step) and `tools/diag/ac_shed_cost_probe.gd` (each AC-bus listener timed).
+  What it found, largest first:
+  - **Every placement took 2.5 s in the graph sync.**
+    `sync_vehicle_system` / `remove_vehicle_system` set `_history_suppress`
+    but not `_sim_bulk_update`, so each of the dozen items and wires the
+    realize / make_unique wrote ran the view's whole change cascade. Both
+    now write in bulk mode and fire ONE `_on_model_changed`. Result: 137 ms
+    a vehicle; 40 vehicles + kits placed in 11 s instead of 276 s.
+  - **A 47 s stall whenever the site's AC shed.** The vehicles' own loads
+    counted toward the SITE inverter (`GraphAcLoad` seeded from every
+    controller, the vehicles' own included), so 40 vehicles tripped its
+    overload, and the shed made ~180 `GraphSimLoad` proxies each write their
+    own `update_item` (one full cascade per load, ~130 ms each). Now
+    `GraphAcLoad.vehicle_scopes` keeps a vehicle's controller out of the
+    site's reachability (its loads run off its own house battery), and
+    `GraphSimLoadHost` hears the AC bus ONCE and fans the change out in one
+    bulk write (`fan_ac_available`); proxies under the host no longer hook
+    the bus themselves. One flip now costs one refresh.
+  - **`npc_population` was 40 ms per tick on the festival alone (133 with
+    the vehicles)**, almost all in `_service_machine_chores`: every full-
+    tier camp re-walked the whole graph with `GraphNesting.walk_items`, which
+    called the linear `get_items_in_scope` once per scope. `walk_items` now
+    groups items by scope in one pass (same order), and the bridge lists
+    the waiting machines once per tick (`_waiting_machines`). 4.5 ms festival
+    only, 6.5 ms with 40 vehicles; this predated the vehicles.
+  - The plan's own items, all landed: the design cache is LRU on a hashed
+    pre-key with a solve-miss counter and `solve_transient` for designer
+    drags; `VehicleDriveRuntime` sleeps (`set_process(false)`) until an
+    arrival / departure / hitch wakes it (group `vehicle_drive_runtimes`,
+    `TerrainLoader._wake_drive_runtimes`), and its plan key is an Array
+    hash; PlacedVehicle caches Main, checks the charger every 3 s, tests the
+    trailer chassis prefix before any solve and saves once per move; the
+    builder caches wheel refs, one-sided materials (weakref-checked) and
+    part meshes by design key (`MESH_CACHE_MAX` 32) and can rebuild only
+    Exterior or Interior (`rebuild_part`, the designer's drags); id indices
+    on `PlacedPropLayer.find_by_id` and `PlacedPropRuntime.find_by_prop_id`;
+    the director precomputes doors and the forklift once per inventory;
+    `_show_props(ids)` replaces full prop rebuilds when a kit is delivered or
+    an unload rewinds; `vehicle_arrivals()` is cached 500 ms. PerfSpan
+    sections `vehicle_drive`, `vehicle_cargo`, `forklift`, `npc_beds`,
+    `prop_rev`, `sui_solar` / `sui_load` / `sui_battery` / `sui_board` /
+    `sui_over`.
+  - `_prop_revision` never moved during the bench (0/s): the plan's premise
+    that it churned while vehicles drive was wrong, so it was only measured.
+  - Bench (Walton, before → after, frame median): festival only 78 → 51 ms;
+    40 vehicles idle 98 → 69 ms; 1x 85 → 61; 450x 90 → 71. `vehicle_drive`
+    0.02 ms idle, ~1.5 ms with 40 on the road. What remains is ~1300 more
+    draw calls for 40 vehicles and the GPU.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch
