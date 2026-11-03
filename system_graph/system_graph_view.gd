@@ -4289,6 +4289,30 @@ func apply_wind_design(item_id: String, spec: Dictionary, swap_model: bool = tru
 	return msg
 
 
+## Place a new concentrator built to a design, with its graph node.
+func place_designed_csp(spec: Dictionary) -> bool:
+	var preset := ComponentPresets.designed_csp_preset(spec)
+	if preset.is_empty():
+		return false
+	_on_lib_place_model_requested(preset)
+	return true
+
+
+## Write a design onto a placed concentrator's graph node.
+func apply_csp_design(item_id: String, spec: Dictionary) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var patch := CspLabDesign.graph_patch(CspLabDesign.solve(spec))
+	for k in patch:
+		specs[k] = patch[k]
+	specs["name"] = str(spec.get("name", specs.get("name", "")))
+	model.update_item(item_id, {"specs": specs})
+
+
 ## Place a new turbine built to a design, with its graph node.
 func place_designed_wind(spec: Dictionary) -> bool:
 	var preset := ComponentPresets.designed_wind_preset(spec)
@@ -6112,6 +6136,11 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 		# (WindLabRuntime) spins it, not the GLB turbines' spin / tracker.
 		record_extra["kind"] = "windlab"
 		record_extra["windlab_spec"] = WindLabSpec.to_json_safe(specs.get("windlab_spec", {}) as Dictionary)
+	if model_id == CspLabBuilder.MODEL_ID:
+		# A designed concentrator carries its design; CspLabRuntime turns it
+		# to the sun.
+		record_extra["kind"] = "csplab"
+		record_extra["csplab_spec"] = CspLabSpec.to_json_safe(specs.get("csplab_spec", {}) as Dictionary)
 	if model_id == PeltonLabBuilder.MODEL_ID:
 		# A designed Pelton carries its wheel; its runner's axis follows the
 		# design (horizontal "x", vertical "y").
@@ -14432,6 +14461,7 @@ func _process_frame(delta: float) -> void:
 			_tick_graph_tools(delta)
 			_tick_graph_pp_extruder(delta)
 			_tick_graph_pp_sheet_press(delta)
+			_tick_graph_csplab(delta)
 			_end_sim_writes()
 		return
 	_update_lens_strip(delta)
@@ -14474,6 +14504,7 @@ func _process_frame(delta: float) -> void:
 	PerfMonitor.begin("gv_ticks")
 	_tick_graph_renewables(delta)
 	_tick_graph_csp(delta)
+	_tick_graph_csplab(delta)
 	_tick_graph_heliostat(delta)
 	_tick_graph_biodigester(delta)
 	_tick_graph_tools(delta)
@@ -17541,6 +17572,81 @@ func _tick_graph_csp(delta: float) -> void:
 			specs["outputs"] = outputs
 
 		model.update_item(iid, {"specs": specs})
+
+
+const _CSPLAB_POLL_INTERVAL := 0.5
+var _csplab_acc: float = _CSPLAB_POLL_INTERVAL
+
+
+## Live heat + steam for "processor" items with specs.role == "csplab" (a
+## concentrator from the designer, core/csplab/) — with the graph open OR
+## closed (a concentrator boils water while the player watches it). The site's DIRECT beam
+## (CspTroughSource.dni_wm2 — never the global light PV uses) through the
+## design's optical efficiency at the sun's angle (CspLabSite.output_now),
+## minus the receiver's losses at its working temperature. Drives the water
+## in / steam out rates like the trough.
+func _tick_graph_csplab(delta: float) -> void:
+	if model == null:
+		return
+	_csplab_acc += delta
+	if _csplab_acc < _CSPLAB_POLL_INTERVAL:
+		return
+	_csplab_acc = 0.0
+	var items: Array = []
+	for item: Dictionary in model.items_of_type("processor"):
+		if str((item.get("specs", {}) as Dictionary).get("role", "")) == "csplab":
+			items.append(item)
+	if items.is_empty():
+		return
+	var m := _get_scene_main_node()
+	if m == null:
+		return
+	var clock_obj: Variant = m.get("clock")
+	if clock_obj == null or not (clock_obj as Object).has_method("get_julian_day_utc"):
+		return
+	var lat_v: Variant = m.get("latitude")
+	var lon_v: Variant = m.get("longitude")
+	var lat: float = float(lat_v) if lat_v != null else 33.36
+	var lon: float = float(lon_v) if lon_v != null else -115.74
+	var sp := SolarPosition.get_position(lat, lon, float((clock_obj as Object).call("get_julian_day_utc")))
+	var s_world := CspLabSite.sun_world(float(sp.get("azimuth_deg", 180.0)), float(sp.get("elevation_deg", 0.0)))
+	var hour: float = float(m.get("day_time")) if m.get("day_time") != null else 12.0
+	var month: int = clampi(int(m.get("month")), 1, 12) if m.get("month") != null else 6
+	var day: int = clampi(int(m.get("day")), 1, 31) if m.get("day") != null else 15
+	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, get_node_or_null("/root/WeatherService"))
+	# Telemetry is a sim write: inside the bracket it neither records undo
+	# history nor invalidates the pre-rendered range (the bracket nests).
+	_begin_sim_writes()
+	for item2: Dictionary in items:
+		var specs_ref: Dictionary = item2.get("specs", {})
+		var cs: Dictionary = specs_ref.get("csplab_spec", {}) as Dictionary
+		var spec := CspLabSpec.resolve(cs)
+		(spec["site"] as Dictionary)["lat_deg"] = lat
+		var result: Dictionary = {}
+		if not bool(specs_ref.get("packed_3d", false)):
+			result = CspLabSite.output_now(CspLabDesign.solve(spec, {"rays": 2000}), s_world, weather, lat)
+		var kw := float(result.get("thermal_kw", 0.0))
+		if absf(float(specs_ref.get("thermal_output_kw", 0.0)) - kw) < 0.001 \
+				and absf(float(specs_ref.get("dni_wm2", 0.0)) - float(result.get("dni", 0.0))) < 1.0:
+			continue
+		var specs: Dictionary = specs_ref.duplicate(false)
+		specs["dni_wm2"] = float(result.get("dni", 0.0))
+		specs["thermal_output_kw"] = kw
+		specs["steam_kg_h"] = float(result.get("steam_kg_h", 0.0))
+		var inputs: Array = (specs.get("inputs", []) as Array).duplicate(true)
+		if not inputs.is_empty():
+			var inp0: Dictionary = (inputs[0] as Dictionary).duplicate(true)
+			inp0["rate"] = float(result.get("water_lph", 0.0))
+			inputs[0] = inp0
+			specs["inputs"] = inputs
+		var outputs: Array = (specs.get("outputs", []) as Array).duplicate(true)
+		if not outputs.is_empty():
+			var out0: Dictionary = (outputs[0] as Dictionary).duplicate(true)
+			out0["rate"] = float(result.get("steam_kg_h", 0.0))
+			outputs[0] = out0
+			specs["outputs"] = outputs
+		model.update_item(str(item2.get("id", "")), {"specs": specs})
+	_end_sim_writes()
 
 
 const _HomeBiogasSource := preload("res://power_system/sources/home_biogas_source.gd")

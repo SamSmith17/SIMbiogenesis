@@ -189,6 +189,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return PeltonLabBuilder.build_node(pl_spec, "PeltonTurbine",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
 			"nozzles": bool(extras.get("nozzles", true))})
+	if model_id == CspLabBuilder.MODEL_ID:
+		var cs_spec: Dictionary = extras.get("csplab_spec", extras) as Dictionary
+		return CspLabBuilder.build_node(cs_spec, "Concentrator", {})
 	if model_id == WindLabBuilder.MODEL_ID:
 		var wl_spec: Dictionary = extras.get("windlab_spec", extras) as Dictionary
 		return WindLabBuilder.build_node(wl_spec, "WindTurbine",
@@ -743,6 +746,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		# / farm rotors, hub, drive, generator, mast. Its own runtime
 		# (WindLabRuntime) spins the "Rotor" node and yaws a propeller's "Yaw".
 		{"id": "windlab_turbine", "label": "Wind turbine (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		# Procedural solar concentrator (CspLabBuilder): the concentrator
+		# designer's lens / mirror / heliostat field with its structure. Its
+		# runtime (CspLabRuntime) turns it to the sun.
+		{"id": "csplab_concentrator", "label": "Solar concentrator (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "ali_pelton", "label": "Micro Pelton 8\u2033 (vertical shaft)",
 			"path": "res://Imported Models/Hydro/ali_pelton.glb",

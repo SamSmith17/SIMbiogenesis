@@ -1,0 +1,383 @@
+class_name CspLabSite
+extends RefCounted
+
+## Where a concentrator meets its site: the sun's direction, how the tracker
+## turns to face it (and so where the sun sits in the optic's own frame),
+## how much of the sky's light a concentrator can actually use, and the
+## heat it makes.
+##
+## Concentrators are NOT solar panels. A flat PV panel takes the global
+## light — the direct beam AND the diffuse sky (SolarUI's plane-of-array
+## model). A concentrator only images the sun's disc, so it lives on the
+## direct normal irradiance (DNI): CspTroughSource.dni_wm2, the project's one
+## DNI model (Kasten–Young clear sky with aerosol, scaled by the measured
+## clearness kt² where WeatherService has data, by cloud cover otherwise).
+## The diffuse sky reaches the receiver only through étendue: an ideal
+## concentrator of geometric ratio C accepts at most 1/C of isotropic sky
+## light (Winston et al. 2005 ch. 2) — a tenth for a C = 10 lens, nothing
+## for a dish. A hazy day that costs PV a third can cost a dish everything.
+##
+## World frame: +Y up, -Z north, +X east; azimuth clockwise from north.
+
+const POLL_EFF_RAYS := 1200
+const SIGMA := 5.670374419e-8
+
+
+static func sun_world(az_deg: float, el_deg: float) -> Vector3:
+	var az := deg_to_rad(az_deg)
+	var el := deg_to_rad(el_deg)
+	return Vector3(sin(az) * cos(el), sin(el), -cos(az) * cos(el))
+
+
+static func az_el(s: Vector3) -> Vector2:
+	var el := rad_to_deg(asin(clampf(s.y, -1.0, 1.0)))
+	var az := rad_to_deg(atan2(s.x, -s.z))
+	if az < 0.0:
+		az += 360.0
+	return Vector2(az, el)
+
+
+## The sun at a calendar instant (local clock time, the project's zone rule).
+static func sun_at(lat: float, lon: float, year: int, month: int, day: int, hour: float) -> Dictionary:
+	var clk := CelestialClock.new()
+	clk.latitude = lat
+	clk.longitude = lon
+	var jd: float = clk._julian_day_utc_for(year, month, day, hour)
+	var sp := SolarPosition.get_position(lat, lon, jd)
+	var el := float(sp.get("elevation_deg", -90.0))
+	var az := float(sp.get("azimuth_deg", 180.0))
+	return {"az": az, "el": el, "s": sun_world(az, el)}
+
+
+## The design sun: solar noon at an equinox (elevation 90° − |lat|, facing
+## the equator). Ground-fixed fields (a tower, a linear Fresnel field) quote
+## their headline numbers here; tracked optics at normal incidence.
+static func design_sun(lat: float) -> Vector3:
+	var el := clampf(90.0 - absf(lat), 5.0, 90.0)
+	return sun_world(180.0 if lat >= 0.0 else 0.0, el)
+
+
+## The polar axis: toward the celestial pole, tilted up by |latitude|.
+static func polar_axis(lat: float) -> Vector3:
+	var la := deg_to_rad(absf(lat))
+	return Vector3(0, sin(la), -cos(la)) if lat >= 0.0 else Vector3(0, sin(la), cos(la))
+
+
+## The ground frame of a ground-fixed field: N–S rows keep the world axes,
+## E–W rows turn the frame so the rows (local Z) run east.
+static func field_basis(spec: Dictionary) -> Basis:
+	var mode := str((spec["tracking"] as Dictionary)["mode"])
+	if str(spec["type"]) == "linear_fresnel" and mode == "ew_horizontal":
+		return Basis(Vector3(0, 0, -1), Vector3.UP, Vector3(1, 0, 0))
+	return Basis.IDENTITY
+
+
+static func is_field(spec: Dictionary) -> bool:
+	return str(spec["type"]) == "tower" or str(spec["type"]) == "linear_fresnel"
+
+
+## How the tracker faces the sun `s` (world). Returns:
+##   basis      optic frame → world (columns = the optic's X, Y, Z)
+##   stage      the first moving stage's basis (yaw / hour angle / the
+##              one axis), world
+##   sun_local  the sun in the optic frame
+##   axes       [{dir, label, color}] the tracking axes (for the views)
+##   angles     {name: degrees} for the readouts
+##   up         false when the sun is below the horizon (stowed)
+static func pose(spec: Dictionary, s: Vector3, lat: float) -> Dictionary:
+	var t := str(spec["type"])
+	var tk: Dictionary = spec["tracking"]
+	var mode := str(tk["mode"])
+	var mount := str((spec["structure"] as Dictionary)["mount"])
+	var up := s.y > 0.0
+	var out := {"up": up}
+	if is_field(spec):
+		var fb := field_basis(spec)
+		out["basis"] = fb
+		out["stage"] = fb
+		out["sun_local"] = fb.transposed() * s
+		var ae := az_el(s)
+		out["angles"] = {"Sun azimuth": ae.x, "Sun elevation": ae.y}
+		if t == "linear_fresnel":
+			var st := (fb.transposed() * s)
+			out["angles"]["Row tilt (centre)"] = rad_to_deg(atan2(st.x, maxf(st.y, 1e-6))) * 0.5
+			out["axes"] = [{"dir": fb.z, "label": "Row axes (each mirror turns)", "color": Color(0.3, 0.85, 1.0)}]
+		else:
+			out["axes"] = [{"dir": Vector3.UP, "label": "Heliostat azimuth", "color": Color(0.3, 1.0, 0.45)},
+				{"dir": Vector3.RIGHT, "label": "Heliostat elevation", "color": Color(1.0, 0.35, 0.3)}]
+		return out
+	var sv := s if up else Vector3(0, 1, 0)
+	if mode == "two_axis":
+		if mount == "polar_mount":
+			var a := polar_axis(lat)
+			var dec := asin(clampf(sv.dot(a), -1.0, 1.0))
+			var perp := sv - a * sv.dot(a)
+			var m := perp.normalized() if perp.length() > 1e-6 else Vector3.UP
+			var stage := Basis(m.cross(a), m, a)
+			var b := stage * Basis(Vector3.RIGHT, dec)
+			out["stage"] = stage
+			out["basis"] = b
+			var m0 := (Vector3.UP - a * a.y).normalized()
+			var ha := rad_to_deg(m0.signed_angle_to(m, a))
+			out["angles"] = {"Hour angle": ha, "Declination": rad_to_deg(dec)}
+			out["axes"] = [{"dir": a, "label": "Polar axis", "color": Color(0.85, 0.4, 1.0)},
+				{"dir": stage.x, "label": "Declination axis", "color": Color(1.0, 0.35, 0.3)}]
+		else:
+			var ae2 := az_el(sv)
+			var yaw := Basis(Vector3.UP, -deg_to_rad(ae2.x))
+			var b2 := yaw * Basis(Vector3.RIGHT, -deg_to_rad(90.0 - ae2.y))
+			out["stage"] = yaw
+			out["basis"] = b2
+			out["angles"] = {"Azimuth": ae2.x, "Elevation": ae2.y}
+			out["axes"] = [{"dir": Vector3.UP, "label": "Azimuth axis", "color": Color(0.3, 1.0, 0.45)},
+				{"dir": yaw.x, "label": "Elevation axis", "color": Color(1.0, 0.35, 0.3)}]
+		out["sun_local"] = (out["basis"] as Basis).transposed() * s
+		return out
+	if mode == "fixed":
+		var tilt := float(tk["fixed_tilt_deg"])
+		if tilt < 0.0:
+			tilt = absf(lat)
+		var tr := deg_to_rad(tilt)
+		var eq := 1.0 if lat >= 0.0 else -1.0
+		var yv := Vector3(0, cos(tr), sin(tr) * eq)
+		var zv := Vector3(1, 0, 0)
+		var b3 := Basis(yv.cross(zv), yv, zv)
+		out["stage"] = b3
+		out["basis"] = b3
+		out["sun_local"] = b3.transposed() * s
+		var c := maxf((b3.transposed() * s).y, 0.0)
+		out["angles"] = {"Tilt": tilt, "Incidence": rad_to_deg(acos(c))}
+		out["axes"] = []
+		return out
+	# One axis: horizontal N–S, horizontal E–W, or polar.
+	var ax := Vector3(0, 0, 1)
+	var label := "Tracking axis (N–S)"
+	if mode == "ew_horizontal":
+		ax = Vector3(1, 0, 0)
+		label = "Tracking axis (E–W)"
+	elif mode == "polar":
+		ax = polar_axis(lat)
+		label = "Tracking axis (polar)"
+	var perp2 := sv - ax * sv.dot(ax)
+	var nrm := perp2.normalized() if perp2.length() > 1e-6 else (Vector3.UP - ax * ax.y).normalized()
+	var b4 := Basis(nrm.cross(ax), nrm, ax)
+	out["stage"] = b4
+	out["basis"] = b4
+	out["sun_local"] = b4.transposed() * s
+	var rest := (Vector3.UP - ax * ax.y).normalized()
+	out["angles"] = {"Rotation": rad_to_deg(rest.signed_angle_to(nrm, ax)),
+		"Incidence": rad_to_deg(asin(clampf(absf(s.dot(ax)), 0.0, 1.0)))}
+	out["axes"] = [{"dir": ax, "label": label, "color": Color(0.3, 0.85, 1.0)}]
+	return out
+
+
+## The optical efficiency (captured / DNI·A_ap, before the receiver's
+## absorptance) for a world sun. Two-axis optics always see the design
+## value; one-axis, fixed and ground-fixed fields are traced at the sun's
+## direction quantised to a few degrees and cached on the solved design.
+static func optical_eff_at(d: Dictionary, s_world: Vector3, lat: float) -> float:
+	if s_world.y <= 0.0:
+		return 0.0
+	var spec: Dictionary = d["spec"]
+	var mode := str((spec["tracking"] as Dictionary)["mode"])
+	if mode == "two_axis" and not is_field(spec):
+		return float(d["eta_capture"])
+	var p := pose(spec, s_world, lat)
+	var sl: Vector3 = p["sun_local"]
+	var key := ""
+	var q: Vector3
+	if mode == "fixed" or is_field(spec):
+		var ae := az_el(s_world)
+		var qa := snappedf(ae.x, 7.5)
+		var qe := snappedf(ae.y, 2.5)
+		key = "%d|%d" % [int(qa * 10.0), int(qe * 10.0)]
+		q = (p["basis"] as Basis).transposed() * sun_world(qa, maxf(qe, 1.0))
+	else:
+		# One axis: only the longitudinal incidence matters.
+		var th := snappedf(rad_to_deg(asin(clampf(sl.z, -1.0, 1.0))), 2.5)
+		key = "L%d" % int(th * 10.0)
+		var tr := deg_to_rad(th)
+		q = Vector3(0, cos(tr), sin(tr))
+	var cache: Dictionary = d["eff_cache"]
+	if cache.has(key):
+		return float(cache[key])
+	var n := mini(int((spec["trace"] as Dictionary)["rays"]), POLL_EFF_RAYS)
+	var r := CspLabOptics.trace(d["geo"] as Dictionary, q, n, {"seed": 3})
+	var e := float(r["captured"])
+	cache[key] = e
+	return e
+
+
+## Receiver heat loss (W) at `t_c` in air `ta_c`: radiation from its hot
+## area plus convection (an evacuated envelope keeps 5 % of it).
+static func q_loss_w(d: Dictionary, t_c: float, ta_c: float) -> float:
+	var g: Dictionary = d["geo"]
+	var a := float(g["A_loss"])
+	var tk := t_c + 273.15
+	var ta := ta_c + 273.15
+	var h := float(g["h_conv"]) * (0.05 if bool(g.get("envelope", false)) else 1.0)
+	return float(g["eps"]) * SIGMA * a * (tk * tk * tk * tk - ta * ta * ta * ta) + h * a * (tk - ta)
+
+
+## The heat for one instant: direct beam through the optic (the efficiency
+## at this sun), plus the sky light étendue lets in, minus the receiver's
+## losses at the working temperature. W.
+static func heat_w(d: Dictionary, dni: float, dhi: float, eta_capture: float, ta_c: float) -> Dictionary:
+	var g: Dictionary = d["geo"]
+	var a := float(g["A_ap"])
+	var alpha := float(g["alpha"])
+	var c_g := maxf(float(g["C_g"]), 1.0)
+	var trans := float(g["rho"])
+	var beam := dni * a * eta_capture * alpha
+	var diffuse := dhi * a * minf(1.0 / c_g, 1.0) * trans * alpha
+	var op := float((d["spec"]["site"] as Dictionary)["op_temp_c"])
+	var loss := q_loss_w(d, op, ta_c)
+	return {"absorbed_w": beam + diffuse, "beam_w": beam, "diffuse_w": diffuse, "loss_w": loss,
+		"useful_w": maxf(beam + diffuse - loss, 0.0)}
+
+
+## What the placed concentrator does now (the graph tick and the modal's
+## "at the site" line): {up, dni, dhi, eta, thermal_kw, steam_kg_h, angles}.
+static func output_now(d: Dictionary, s_world: Vector3, weather: Dictionary, lat: float) -> Dictionary:
+	var ae := az_el(s_world)
+	var el := ae.y
+	var out := {"up": el > 0.0, "az": ae.x, "el": el, "dni": 0.0, "ghi": 0.0, "dhi": 0.0, "eta": 0.0,
+		"thermal_kw": 0.0, "steam_kg_h": 0.0, "water_lph": 0.0}
+	if el <= 0.0:
+		return out
+	var dni := CspTroughSource.dni_wm2(el, weather)
+	var ghi := float(weather.get("ghi", 0.0)) if bool(weather.get("has_real", false)) \
+		else dni * sin(deg_to_rad(el)) + SolarIrradiance.dhi_clear_sky_wm2(el, dni, float(weather.get("aod", SolarIrradiance.AOD_BASELINE)))
+	var dhi := maxf(ghi - dni * sin(deg_to_rad(el)), 0.0)
+	var eta := optical_eff_at(d, s_world, lat)
+	var ta := float(weather.get("temp", (d["spec"]["site"] as Dictionary)["ambient_c"]))
+	var h := heat_w(d, dni, dhi, eta, ta)
+	out["dni"] = dni
+	out["ghi"] = ghi
+	out["dhi"] = dhi
+	out["eta"] = eta
+	out["thermal_kw"] = float(h["useful_w"]) / 1000.0
+	out["absorbed_kw"] = float(h["absorbed_w"]) / 1000.0
+	var steam := steam_kg_h(d, float(h["useful_w"]) / 1000.0)
+	out["steam_kg_h"] = steam
+	out["water_lph"] = steam
+	return out
+
+
+## Water at 20 °C boiled off at 1 atm by `kw` of heat (sensible heat to
+## 100 °C + the latent heat, the same budget CspTroughSource uses). Zero
+## when the working temperature is below boiling.
+static func steam_kg_h(d: Dictionary, kw: float) -> float:
+	var op := float((d["spec"]["site"] as Dictionary)["op_temp_c"])
+	if op < 100.0 or kw <= 0.0:
+		return 0.0
+	var kj_per_kg := CspTroughSource.CP_WATER_KJ_PER_KG_K * (100.0 - 20.0) + CspTroughSource.H_FG_KJ_PER_KG
+	return kw * 3600.0 / kj_per_kg
+
+
+# ---------------------------------------------------------------------------
+# A year at the site, stepped a few milliseconds at a time
+# ---------------------------------------------------------------------------
+
+class Year:
+	var design: Dictionary
+	var lat := 35.0
+	var lon := -115.0
+	var year := 2026
+	var ws: Node = null
+	var day_step := 2
+	var month := 1
+	var day := 1
+	var hour := 0.5
+	var done := false
+	var thermal_kwh := PackedFloat64Array()
+	var dni_kwh_m2 := PackedFloat64Array()
+	var ghi_kwh_m2 := PackedFloat64Array()
+	var beam_h_kwh_m2 := PackedFloat64Array()
+	var run_hours := PackedFloat64Array()
+	var peak_kw := 0.0
+	var samples := 0
+
+	func _init(d: Dictionary, la: float, lo: float, yr: int, w: Node) -> void:
+		design = d
+		lat = la
+		lon = lo
+		year = yr
+		ws = w
+		for _i in 12:
+			thermal_kwh.append(0.0)
+			dni_kwh_m2.append(0.0)
+			ghi_kwh_m2.append(0.0)
+			beam_h_kwh_m2.append(0.0)
+			run_hours.append(0.0)
+
+	func progress() -> float:
+		return clampf((float(month - 1) + float(day - 1) / 31.0) / 12.0, 0.0, 1.0)
+
+	## Work for at most `budget_ms`; true once the year is done.
+	func step(budget_ms: float) -> bool:
+		var t0 := Time.get_ticks_usec()
+		while not done:
+			_sample()
+			_advance()
+			if float(Time.get_ticks_usec() - t0) / 1000.0 >= budget_ms:
+				break
+		return done
+
+	func _sample() -> void:
+		var sun := CspLabSite.sun_at(lat, lon, year, month, day, hour)
+		var el := float(sun["el"])
+		if el <= 0.0:
+			return
+		var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+		var o := CspLabSite.output_now(design, sun["s"] as Vector3, weather, lat)
+		# Each sampled day stands for its share of the month.
+		var dim := CspLabSite.days_in_month(year, month)
+		var k := float(dim) / ceilf(float(dim) / float(day_step))
+		var mi := month - 1
+		thermal_kwh[mi] += float(o["thermal_kw"]) * k
+		dni_kwh_m2[mi] += float(o["dni"]) / 1000.0 * k
+		ghi_kwh_m2[mi] += float(o["ghi"]) / 1000.0 * k
+		beam_h_kwh_m2[mi] += float(o["dni"]) * sin(deg_to_rad(el)) / 1000.0 * k
+		if float(o["thermal_kw"]) > 0.0:
+			run_hours[mi] += k
+		peak_kw = maxf(peak_kw, float(o["thermal_kw"]))
+		samples += 1
+
+	func _advance() -> void:
+		hour += 1.0
+		if hour < 24.0:
+			return
+		hour = 0.5
+		day += day_step
+		var dim := CspLabSite.days_in_month(year, month)
+		if day > dim:
+			day = 1
+			month += 1
+			if month > 12:
+				done = true
+
+	func result() -> Dictionary:
+		var tot := 0.0
+		var dni := 0.0
+		var ghi := 0.0
+		var bh := 0.0
+		var hrs := 0.0
+		for i in 12:
+			tot += thermal_kwh[i]
+			dni += dni_kwh_m2[i]
+			ghi += ghi_kwh_m2[i]
+			bh += beam_h_kwh_m2[i]
+			hrs += run_hours[i]
+		return {"monthly_kwh": thermal_kwh, "monthly_dni": dni_kwh_m2, "monthly_ghi": ghi_kwh_m2,
+			"annual_kwh": tot, "annual_dni": dni, "annual_ghi": ghi, "run_hours": hrs,
+			"direct_share": bh / ghi if ghi > 0.0 else 0.0, "peak_kw": peak_kw, "samples": samples}
+
+
+static func days_in_month(y: int, m: int) -> int:
+	match m:
+		2:
+			return 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28
+		4, 6, 9, 11:
+			return 30
+	return 31

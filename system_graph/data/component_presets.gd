@@ -57,6 +57,22 @@ static func designed_wind_preset(spec: Dictionary) -> Dictionary:
 	return p
 
 
+## The "Solar concentrator (designed)" preset carrying a design from the
+## concentrator designer (CspLabDesign.graph_patch) and its name.
+static func designed_csp_preset(spec: Dictionary) -> Dictionary:
+	var p := find_preset_by_label("Solar concentrator (designed)")
+	if p.is_empty():
+		return {}
+	var d := CspLabDesign.solve(spec)
+	var sp: Dictionary = p["specs"]
+	var patch := CspLabDesign.graph_patch(d)
+	for k in patch:
+		sp[k] = patch[k]
+	sp["name"] = str(d["spec"]["name"])
+	p["specs"] = sp
+	return p
+
+
 static func spawn_dimensions(preset: Dictionary) -> Vector2:
 	var t := str(preset.get("type", ""))
 	return Vector2(_GraphCanvas.default_width(t), _GraphCanvas.default_height(t))
@@ -1599,6 +1615,25 @@ const HYDRO_TURBINES: Array = [
 # that drops the linked GLB and binds this node to it — same VAWT pattern.
 # ---------------------------------------------------------------------------
 const CSP_CONCENTRATORS: Array = [
+	# Designed in the solar concentrator designer (core/csplab/): any lens or
+	# mirror type, traced ray by ray. Its own tick (_tick_graph_csplab) turns
+	# the site's DIRECT beam into heat through the design's efficiency at the
+	# sun's angle and boils feedwater into steam like the trough.
+	{
+		"type": "processor", "label": "Solar concentrator (designed)", "icon": "☀",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Designed concentrator", "role": "csplab", "kind": "csplab", "cost": 0.0,
+			"energy_source": "", "efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"csplab_spec": {}, "aperture_m2": 0.0, "concentration_x": 0.0,
+			"rated_thermal_kw": 0.0, "optical_efficiency": 0.0, "op_temp_c": 250.0,
+			"dni_wm2": 0.0, "thermal_output_kw": 0.0, "steam_kg_h": 0.0,
+			"daily_note": "Water in -> steam out, from the direct beam only (DNI): open Design concentrator… on its prop to change the optic, receiver or structure.",
+			"inputs": [{"kind": "water", "rate": 0.0, "unit": "L/h"}],
+			"outputs": [{"kind": "steam", "rate": 0.0, "unit": "kg/h"}],
+			"model_id": "csplab_concentrator",
+		},
+	},
 	{
 		"type": "processor", "label": "Parabolic Trough CSP", "icon": "🛰",
 		"width": 150.0, "height": 130.0,

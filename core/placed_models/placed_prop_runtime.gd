@@ -222,6 +222,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_linkage_deploy(prop, rec)
 		_maybe_attach_pv_tracker(prop, rec)
 		WindLabRuntime.attach(prop, rec)
+		CspLabRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)

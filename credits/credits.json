@@ -1403,6 +1403,25 @@
       "modifications": "none; scaled uniformly at runtime",
       "notes": "Thingiverse thing:16628 'Pelton wheel bucket', supplied by the project owner as pelton_turbine_bucket.stl. The page states CC BY-SA without a version; Thingiverse things of that age (2012) carry CC BY-SA 3.0. Share-alike applies to the STL itself and to any adapted copy of it; the designer's cut files (discs, spacer, hub) do not contain the cup geometry.",
       "status": "verified"
+    },
+    {
+      "id": "inspiration-nighthawkinlight-cpc",
+      "name": "NightHawkInLight — compound parabolic mirror video (string method)",
+      "category": "inspiration",
+      "author": "Ben, NightHawkInLight",
+      "source": "https://www.youtube.com/watch?v=8zlAI32MSsQ",
+      "license": "n/a",
+      "license_file": "",
+      "local_path": "core/csplab/csplab_cpc.gd",
+      "role": "inspiration for the solar concentrator designer's compound parabolic trough profiles (round tube 'W' and flat absorber)",
+      "attribution_required": false,
+      "attribution_string": "Compound parabolic troughs inspired by NightHawkInLight (https://www.youtube.com/watch?v=8zlAI32MSsQ)",
+      "share_alike": false,
+      "commercial_ok": true,
+      "added": "2026-11-03",
+      "modifications": "none of the video is used; its string-and-square drawing was reimplemented from the published closed forms (Rabl 1976; Welford & Winston 1989)",
+      "notes": "Credited as thanks; nothing redistributed.",
+      "status": "informational"
     }
   ],
   "field_guide": {
@@ -1410,7 +1429,7 @@
     "attribution_required": "true | false | null(unknown)",
     "attribution_string": "verbatim required credit line, if any",
     "author": "name/handle, or null if unknown",
-    "category": "tool | engine | addon | ported-code | scad-part | data-source | model | texture | font",
+    "category": "tool | engine | addon | ported-code | scad-part | data-source | model | texture | font | inspiration",
     "commercial_ok": "true | false | null",
     "id": "stable kebab-case key",
     "license": "SPDX id, or 'pending'",

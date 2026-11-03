@@ -889,6 +889,9 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == WindLabBuilder.MODEL_ID or mid == "vawt" or mid == "small_hawt":
 		_button("Design wind turbine…", "The wind turbine designer, bound to this turbine: rotor, gearing, generator, power curve",
 			_model_btns, _on_windlab)
+	if mid == CspLabBuilder.MODEL_ID:
+		_button("Design concentrator…", "The solar concentrator designer, bound to this concentrator: optic, receiver, tracking, structure",
+			_model_btns, _on_csplab)
 	if mid == PvLabBuilder.MODEL_ID:
 		_button("Edit solar array…", "The Solar designer, bound to this array: modules, rack, strings", _model_btns,
 			_on_pvlab)
@@ -1741,6 +1744,16 @@ func _on_windlab() -> void:
 		gv.call("open_wind_designer", gid)
 	elif main.has_method("open_windlab"):
 		main.call("open_windlab", {"prop_id": pid})
+
+
+func _on_csplab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("open_csplab"):
+		return
+	close()
+	main.call("open_csplab", {"prop_id": pid})
 
 
 func _on_toroidlab() -> void:

@@ -185,6 +185,10 @@ const DYNAMIC_MODELS := {
 	# A designed wind turbine ships knocked down — its cut sheets flat, the
 	# mast alongside; the real spec is WindLabDesign.packed_spec (the record's
 	# windlab_spec). This fallback is the default 0.6 x 0.9 m Ugrinsky kit.
+	# A designed concentrator ships as its optic in a crate and its structure
+	# as a tube bundle; this fallback is the default 2 m dish (estimate).
+	"csplab_concentrator": {"w_m": 2.2, "d_m": 1.2, "h_m": 0.9,
+		"mass_kg": 190.0, "form": "crate", "source": "estimated"},
 	"windlab_turbine": {"w_m": 3.05, "d_m": 1.27, "h_m": 0.12,
 		"mass_kg": 10.0, "form": "crate", "source": "estimated"},
 	# A designed gantry packs as its extrusion bundle plus boxed parts; the

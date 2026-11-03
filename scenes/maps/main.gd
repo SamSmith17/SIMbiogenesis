@@ -925,6 +925,8 @@ var peltonlab_ui : Control = null
 const PELTONLAB_MODAL_SCRIPT := preload( "res://scenes/ui/peltonlab_modal.gd" )
 var windlab_ui : Control = null
 const WINDLAB_MODAL_SCRIPT := preload( "res://scenes/ui/windlab_modal.gd" )
+var csplab_ui : Control = null
+const CSPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/csplab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -5024,6 +5026,38 @@ func open_windlab( opts: Dictionary = {} ) -> Control :
 		return null
 	windlab_ui.call( "open", opts )
 	return windlab_ui
+
+
+## The solar concentrator designer (scenes/ui/csplab_modal.gd), on its own
+## CanvasLayer above the graph — it opens from the graph's concentrators too.
+func _setup_csplab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "CspLabLayer" )
+	if existing_layer != null :
+		csplab_ui = existing_layer.get_node_or_null( "CspLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "CspLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "CspLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( CSPLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	csplab_ui = ui
+
+
+## Open the solar concentrator designer. opts: {spec, prop_id}.
+func open_csplab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( csplab_ui ) :
+		_setup_csplab_ui()
+	if not is_instance_valid( csplab_ui ) :
+		return null
+	csplab_ui.call( "open", opts )
+	return csplab_ui
 
 
 ## Open the Pelton wheel designer. opts: {spec, turbine_id, graph_view, prop_id}.

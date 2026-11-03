@@ -155,6 +155,26 @@ only for provenance/completeness.
     the file is absent.
   - Status: verified
 
+## Inspiration & methods
+
+Ideas, techniques and teaching that shaped a feature, where nothing of the
+source's is copied or redistributed. Owed: a thank-you and a pointer back.
+
+- **`inspiration-nighthawkinlight-cpc`** — the compound parabolic trough
+  profiles in the solar concentrator designer (`core/csplab/csplab_cpc.gd`):
+  the "W"-shaped trough round a pipe and the flat-absorber trough, drawn the
+  way his video draws them with a string and a speed square.
+  - Author: **Ben, NightHawkInLight** (YouTube)
+  - Source: https://www.youtube.com/watch?v=8zlAI32MSsQ
+  - License: n/a (inspiration only — no footage, drawings or text are used)  ·  Added: 2026-11-03
+  - Attribution required: no (credited as thanks)  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: His string method was turned into its closed forms — the involute
+    + parabola round a tube (Rabl 1976) and the tilted-parabola flat CPC
+    (Welford & Winston 1989) — and his 20–40° acceptance rule of thumb is the
+    designer's guidance. The designer's presets "Compound parabolic trough on
+    a pipe (string method)" and "…, flat absorber" follow his builds.
+  - Status: informational
+
 ## Parametric parts — OpenSCAD hardware store
 
 Every `.scad` generator we bundle. Most come from Thingiverse/Printables and

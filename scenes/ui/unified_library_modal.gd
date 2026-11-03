@@ -299,6 +299,11 @@ func _populate() -> void:
 			"detail": "Ugrinsky, Savonius, Lenz2, Darrieus, helical, propeller and farm rotors — incl. one cut from a single 18 × 24 in lawn sign → power curve, start-up, gearing and motor matching, cut/score files, printable STLs.",
 		},
 		{
+			"kind": "csplab",
+			"label": "Solar concentrator designer…",
+			"detail": "Lenses (glass, ball, Fresnel, water) and mirrors (trough, dish, linear Fresnel, heliostat tower) → ray trace, suns, optical + thermal efficiency, tracking structure, a year of heat from the site's direct sunlight.",
+		},
+		{
 			"kind": "peltonlab",
 			"label": "Pelton wheel designer…",
 			"detail": "Micro-hydro Pelton turbines round the standard cup: cups, wheel size, hub and bolt pattern, housing, bearings, belt or gears, generator → speed, power, strength checks, cut files.",
@@ -475,7 +480,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "building_designer", "vehiclelab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "building_designer", "vehiclelab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -582,6 +587,14 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				main_wl.call("open_windlab", {})
 			else:
 				_status.text = "The wind turbine designer needs a world."
+		"csplab":
+			# Hosted by Main, so it opens on every map (no location needed).
+			var main_cs := get_tree().current_scene if get_tree() != null else null
+			if main_cs != null and main_cs.has_method("open_csplab"):
+				close()
+				main_cs.call("open_csplab", {})
+			else:
+				_status.text = "The solar concentrator designer needs a world."
 		"peltonlab":
 			# Hosted by Main, so it opens on every map (no location needed).
 			var main_pl := get_tree().current_scene if get_tree() != null else null

@@ -1101,6 +1101,43 @@ Godot.exe.exe --headless --path . --script tools/diag/windlab_probe.gd -- --pres
 # graph's side, a shipped small HAWT keeping its GLB on a designed curve,
 # a blade STL handed to a placed machine's print setup:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/windlab_designer_check.gd -Label windlab -Timeout 900
+# Solar concentrator designer (offline — core/csplab/): Snell, Fresnel R at
+# normal incidence, TIR, a Fresnel facet aiming at its focus, the paraxial
+# focus of a plano-convex lens (BFL = f − t/n) and a ball lens (f = nR/2(n−1)),
+# spherical aberration, a water lens drinking the infrared, a Fresnel lens's
+# infrared focusing long, the ideal dish intercepting everything, the sun's
+# disc and slope error spilling, one-axis efficiency falling with incidence +
+# the end loss, the tower field poleward with the better cosine, tighter rows
+# shading/blocking more, losses + captured = 1 for every type, thermal
+# (stagnation, selective vs paint, steam per kW), the site (poses face the
+# sun, DNI only — overcast starves it, diffuse ≤ 1/C), structure sums by
+# hand, the optimizer improving deterministically, every preset clean, every
+# builder triangle wound clockwise; the compound parabolic (CPC) profiles —
+# involute meets parabola, aperture 2πr / sin θa and a / sin θa, acceptance
+# by tracing, the gap loss, diffuse share, the SVG template; the supports
+# (a dish balanced by its counterweights, which clear the ground; ribs behind
+# the mirror; a lens tilting about its centre of gravity; a fixed trough's
+# pylons along its tube; concrete counted apart from the steel and left out of
+# the BOM's lift total; every built-in on footings). EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/csplab/csplab_selftest.gd
+# Every built-in's numbers, headless (-- --preset=<id>):
+Godot.exe.exe --headless --path . --script tools/diag/csplab_probe.gd
+# Every built-in's support structure: mount, pivot, steel / concrete /
+# counterweight, stress, drive, member labels, structure checks:
+Godot.exe.exe --headless --path . --script tools/diag/csplab_struct_probe.gd
+# The designer on a real world (sandbox): every built-in in the studio with
+# its rays at the site's noon sun, UiAudit, the type buttons, the 2D section
+# (rays on the tube, wavelengths, a tower slice), the structure view turning
+# from morning to afternoon with its axes, a site year, the optimizer
+# shrinking a too-big receiver, the CPC pipe trough (section rays on the pipe,
+# a 20° sun bouncing out, the profile switch, the 1:1 template), every mount's
+# structure seen from behind, a member named under the pointer, the headline
+# tiles, month names, the sun marker, the section's wheel zoom, the CPC credit
+# (run it with -UserArgs @("--window-size=1280x720") too), a dish and a
+# trough placed through the graph
+# (role csplab node, CspLabRuntime facing the sun, heat from the direct beam):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/csplab_designer_check.gd -Label csplab -Timeout 900
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -4118,6 +4155,140 @@ the wind node inspector's "Design wind turbine…", or the prop editor's
 - Not built: furling / yaw dynamics, gusts and turbulence in the curve,
   blade bending stiffness, a Savonius's swept end-plate tip vortices, tower
   shadow, an NPC crew building one.
+
+## Solar concentrator designer (core/csplab/, 2026-11-03)
+
+Library → Structures → "Solar concentrator designer…" (Main hosts it, every
+map; `Main.open_csplab({spec, prop_id})`), or the prop editor's "Design
+concentrator…" on a placed one. Modal `scenes/ui/csplab_modal.gd` on Main's
+`CspLabLayer` (LAYER_MODAL + 1), on the kit (DesignerShell + StudioViewport +
+FormRow + Collapsible). Model id `csplab_concentrator`, record key
+`csplab_spec`, record kind `csplab`, graph preset "Solar concentrator
+(designed)" (processor role `csplab`, water in → steam out), library
+`user://csplab_library.json`. First draft: no tour stop, no modal-audit
+entry, no CAD export yet.
+- **Eight types, one tracer** (`CspLabOptics`): lens (plano-convex, convex
+  side up), ball lens (glass / water globe), Fresnel lens (grooves down, round
+  or square), water lens (water on a sagging membrane), parabolic trough,
+  parabolic dish, linear Fresnel rows, a heliostat tower field. A ray is born
+  ON the optic (uniform over the aperture's projection; a field samples a
+  mirror row / heliostat face) with weight = the cosine of its incidence, one
+  spectral band (`CspLabParts.BANDS`, ASTM G173 direct fractions), a sun
+  direction from the pillbox disc (`sun_half`) + Gaussian tracking error, and
+  every loss is booked to its cause (shading, reflectance, Fresnel at each
+  interface, Beer–Lambert absorption per band, groove tips/draft ESTIMATE,
+  glazing, blocking, air attenuation Schmitz 2006, spill, end loss). Losses +
+  captured = 1 exactly (pinned per type); the reference is DNI × aperture.
+  `trace_section` is the same code with a fan of rays in the z = 0 plane
+  (tower: the vertical plane through the tower along the pole).
+- **Frames**: the optic frame has +Y the optical axis, +Z a line focus's
+  length; mirrors at the bottom with the receiver above, lenses above the
+  receiver at the origin. A field's frame is the ground (an E–W linear
+  Fresnel turns it so rows run along local Z). `CspLabSite.pose(spec, s, lat)`
+  is THE tracker: az-el (yaw −az then tilt), polar (hour angle about the pole,
+  declination), one axis (N–S, E–W, polar: normal = the sun projected off the
+  axis), fixed (tilted to the equator); sun_local = basisᵀ·s. The builder,
+  the runtime, the studio and the year all read it.
+- **CSP is not PV**: a concentrator lives on DNI (`CspTroughSource.dni_wm2`,
+  the project's one DNI model) and takes diffuse light only through étendue,
+  at most 1/C of it (`CspLabSite.heat_w`). The site year (`CspLabSite.Year`,
+  stepped; hourly, every other day, WeatherService where it covers the site,
+  clear sky otherwise) shows the DNI and the global light side by side.
+  Efficiency at a sun: two-axis optics are their design value; one-axis,
+  fixed and fields are traced at the sun quantised (2.5° / 7.5°) and cached
+  on the solved design (`eff_cache`).
+- **Heat** at the design DNI and working temperature: absorbed = DNI·A·
+  captured·α (a cavity's apparent α/ε from Duffie & Beckman), losses =
+  εσA(T⁴ − Ta⁴) + hA(T − Ta) (an evacuated envelope keeps 5 % of h),
+  stagnation by HeliostatSource.stagnation_temp_k, steam with the trough's
+  budget. Concentration is reported as × DNI and as suns (1 kW/m²) beside the
+  thermodynamic limit 1/sin θs (line) / 1/sin²θs (point).
+- **Structure** (`CspLabStructure`): members by frame (base / stage / optic)
+  for each mount (az-el or polar fork pedestal, torque tube on pylons, row
+  frame + A-frame receiver masts, lattice tower or monopole + heliostat
+  pedestals); wind ESTIMATES after Peterka et al. 1989 (Cd 1.2 face-on, Cm
+  0.25; stowed 0.3 / 0.05); post / pylon / leg stress at ×1.5, pointing sag
+  and torque-tube twist against the surface error, the drive picked from
+  `CspLabParts.DRIVES` by turning and holding torque, the swing radius vs the
+  axis height.
+  - **Built the way real ones are (polish pass 2026-11-03).** A dish:
+    curved ribs + rim and mid rings behind the mirror (`_par_back`: the
+    profile offset along its normal), a hub, the elevation axis BEHIND the
+    vertex on a headframe over the azimuth slew drive, a screw jack, a
+    quadripod to the receiver, and two counterweights on arms behind the
+    axis sized so their moment equals the dish + receiver's
+    (`optic_cg`, `receiver_kg`), the arm short enough to clear the ground
+    pointing straight up. A lens: the tilt axis through the lens + receiver's
+    centre of gravity, trunnions out to a fork, receiver legs tied by a mid
+    ring. A trough: ribs at every pylon and half-way that follow the back of
+    the mirror (parabola or CPC profile), rib arms out from a torque tube
+    behind the vertex, purlins, bearings and the drive at the middle pylon;
+    a FIXED trough's pylons run east–west along its tube (they stood across
+    it). Rows: posts on footings, cranks and a link bar to one drive, A-frame
+    masts with ties and longitudinal braces. Tower: X-braced lattice, a work
+    platform + rail inside the tower's footprint (no shade on the light),
+    heliostats on piers with a back frame (`_back_frame`).
+  - Members may carry `"mat"`: "concrete" (footings: counted as
+    `concrete_kg` / `concrete_m3`, never in `mass_kg`) or "counterweight"
+    (`counterweight_kg`, moves with the optic, in the drive's moving mass).
+    The builder groups surfaces by frame + material. The BOM lists
+    "Concrete footings" with `foundation: true`; `bom_mass` (the lift
+    total) leaves it out.
+- **UI (polish pass 2026-11-03).** Headline tiles (useful heat, optical
+  efficiency, suns, stagnation) top the right column; the left column says
+  what the chosen type is for (TYPE_WHY); months by name; a ray-colour
+  legend over the 3D view and in the 2D section; the 2D section zooms on the
+  wheel about the pointer, drags to pan, double-click resets
+  (`SectionCanvas.zoom` / `pan`, reset on a new design); the 3D view marks
+  the sun (`CspLabBuilder.show_sun_marker`, the designer only); the
+  Structure tab orbits to the back of the optic (`_view_from_behind`) and
+  names + highlights the member under the pointer (`pick_member`: capsule
+  per member in world space; `describe_member`); the scale figure stands
+  beyond the subject from the camera (`_place_person`); a CPC shows
+  NightHawkInLight's credit with "Watch the video" (OS.shell_open on a
+  click; CREDITS.md entry `inspiration-nighthawkinlight-cpc`).
+- **Optimizer** (`CspLabOptimizer`): golden-section per ticked parameter
+  (`CspLabSpec.OPT_PARAMS`), two passes, fixed seed (common random numbers),
+  objectives net heat / optical efficiency / mean suns / kW per m². Stepped
+  in the modal's frames; Ctrl+Z undoes its answer.
+- **World**: `SystemGraphView.place_designed_csp(spec)` /
+  `apply_csp_design(gid, spec)`; `_tick_graph_csplab` (0.5 s) writes dni,
+  thermal kW, steam and the water / steam port rates; `CspLabRuntime`
+  (gameplay/, attached by PlacedPropRuntime) turns the builder to the sun
+  twice a second (a field re-meshes its mirrors).
+- **Compound parabolic troughs** (`CspLabCpc`, 2026-11-03, from
+  NightHawkInLight's string-and-speed-square drawing). The trough's
+  `optic.profile` is "parabola" | "cpc_tube" | "cpc_flat", with
+  `accept_deg` (the FULL angle between the drawing's two lines, 20–40° as a
+  rule of thumb), `truncate` (share of the full height cut off) and
+  `receiver.gap_mm` (tube only: the wall is drawn round tube + gap; light
+  through the gap is lost). The string drawing IS the math:
+  - round tube (Rabl 1976): contact angle θ from the tube's bottom, string
+    length ρ = rθ while it unwraps (involute, θ ≤ θa + π/2), then
+    ρ = r(θ + θa + π/2 − cos(θ−θa)) / (1 + sin(θ−θa)) while the square
+    moves (parabola, to 3π/2 − θa); mirror = tangent point − ρ·tangent.
+    The halves meet in a cusp under the tube — the "W". Full aperture
+    2πr / sin θa, so C = 1 / sin θa.
+  - flat absorber (Welford & Winston): each wall a parabola, focus at the
+    OPPOSITE absorber edge, axis tilted θa, f = a(1 + sin θa), up to a
+    vertical tangent; aperture a / sin θa.
+  - Rays enter across the aperture and may bounce several times
+    (`_ray_cpc`: 2D segment hits with boxed runs, ≤ 16 bounces); a ray
+    beyond ±θa turns back out ("spill"). `CspLabDesign.across(d, deg)` is
+    the efficiency with the sun tilted ACROSS the trough. Diffuse sky
+    reaches it through `heat_w`'s 1/C — a CPC (C ≈ 3–4) keeps a quarter of
+    a cloudy sky. The 2D section draws the acceptance lines and the
+    mirror's circle; "Export profile template" writes a 1:1 SVG
+    (user://csplab_designs/<name>_profile.svg) to cut ribs from. Presets
+    `cpc_pipe`, `cpc_flat` (fixed, tilted to the latitude — at the solstices
+    a ±15° trough rightly sees nothing: re-tilt with the seasons). The
+    selftest proves acceptance by tracing (everything inside ±θa lands,
+    most at 25° is rejected); the faceted 120-segment wall softens the
+    edge, so it is tested at 0.8 θa.
+- Traps found building it: heliostats aimed at an external cylinder's AXIS
+  put a fat receiver's beams under it (more receiver caught LESS) — aim at
+  the skin facing each heliostat (`aim_r`); a missing `--script` file makes
+  Godot open the project's main scene and run forever.
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 
