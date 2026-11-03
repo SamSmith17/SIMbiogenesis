@@ -11494,6 +11494,31 @@ refuelling, towed trailers, trip cost in the ledger), Phase 6 (cargo bays,
 crew unload verified), Phase 7 (driving in through the site gate, camps
 arriving with their vehicles) and Phase 8 (wheels that roll and steer, the
 driver's view out of the cab). All eight are done.
+- **A vehicle's life at a glance (polish plan
+  `plans/VEHICLES_TRANSPORT_POLISH_PLAN.md`, Phases 0–6 done 2026-11-02).**
+  Each stage has ONE rule, named here so nobody writes a second:
+  - **Arrive**: `VehicleDrive.pose_for(arrival, departure, h)`, a pure
+    function of the clock (scrubs, reloads); the gate is
+    `TerrainLoader.site_gate()`; a camp is away until its first vehicle parks.
+  - **Unload**: gated on `VehicleCargo.host_ready` (parked, not packed; a
+    trailer's tow vehicle parked), retried every 5 s, rewound if the clock
+    goes back before the arrival.
+  - **Strike / load**: a Pack-up's load-out row stows crates back through
+    `TerrainLoader.stow_prop_in` (`VehicleCargo.restow_patches`).
+  - **Leave**: `departure` record, scheduled when a Pack-up's crews finish,
+    nearest the gate last; scrubbing back past the event takes it back.
+  - **The handling table**: `PackKitter.HANDLING` (hand ≤ 23 kg, team ≤ 60,
+    forklift beyond). Haul model, forklift rig, packing labels and labour
+    all read it.
+  - **The door rule**: `VehicleCargo.door_xz(rec)` for containers and
+    vehicles alike (`door_near` finds the nearest usable one); stowed
+    crates are placed by `place_stowed` / `place_stowed_node`, never by hand.
+  - **Whose vehicle**: `TerrainLoader.camp_of_vehicle` (the painted camp it
+    stands in, else the nearest camp middle within 300 m), stored as
+    `camp_id`; that camp's crew unloads it and is away while it is.
+  - **Cost at scale**: `tools/bench/vehicle_site_bench.gd` (40 vehicles on
+    Walton; `VSB_QUICK=1` stops after the idle sample) — see the Phase 5
+    bullet below for the numbers to beat.
 - **Pure core.** `VehicleCatalog` (chassis + bodies + the 11 types +
   interior element types, sources in the header), `VehicleSpec` (record key
   `vehicle_spec`; `resolve` adds `ch` / `bd`, `key_of` = JSON.stringify of
