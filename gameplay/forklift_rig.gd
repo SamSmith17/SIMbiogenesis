@@ -134,7 +134,8 @@ static func liftable(rec: Dictionary) -> bool:
 	var form := str(spec.get("form", ""))
 	return form == "pallet" or bool(rec.get("packed", false)) \
 		or str(rec.get("model_id", "")) == "intermodal_unit" \
-		or str(spec.get("handling", "")) == "forklift" or mass >= 40.0
+		or str(spec.get("handling", "")) == "forklift" \
+		or PackKitter.handling_for(mass) != "hand"   # the one handling table
 
 
 func _try_pick() -> void:
@@ -221,14 +222,24 @@ func _restore_from_record() -> void:
 	var main := vehicle._main()
 	if main != null and PlacedPropRuntime.find_by_prop_id(main, lid) != null:
 		load_id = lid
+		# Where it sat on the forks, saved with the load ([x, y, z, yaw]).
+		var off: Variant = rec.get("fork_load_off")
 		_carry_offset = Transform3D.IDENTITY
+		if off is Array and (off as Array).size() >= 4:
+			_carry_offset = Transform3D(Basis(Vector3.UP, float(off[3])),
+				Vector3(float(off[0]), float(off[1]), float(off[2])))
 
 
 func _persist(save: bool) -> void:
 	var main := vehicle._main()
 	if main == null or vehicle.prop_id.is_empty():
 		return
-	var patch := {"fork_lift_m": lift_m, "fork_load_id": load_id}
+	# null erases a key (the record convention), "" would linger as a load.
+	var patch := {"fork_lift_m": lift_m, "fork_load_id": load_id if not load_id.is_empty() else null,
+		"fork_load_off": null}
+	if not load_id.is_empty():
+		var o := _carry_offset.origin
+		patch["fork_load_off"] = [o.x, o.y, o.z, _carry_offset.basis.get_euler().y]
 	if save:
 		PlacedPropService.update_prop_record(main, vehicle.prop_id, patch, false)
 		return

@@ -13,7 +13,8 @@ extends RefCounted
 ##
 ## Labour is priced in PERSON-HOURS from the packed mass (NpcChoreBoard
 ## credits every worker's hours into one chore): a 34 kg shiftpod is ~1.2 h
-## for one person, a 350 kg pallet rack ~9 h for its crew of four. Pack-up is
+## for one person, a 350 kg pallet rack ~4.8 h (forklift class: the machine
+## lifts, PackKitter.HANDLING labour_scale). Pack-up is
 ## PACKUP_SCALE of a deploy. These are estimates, not measurements — nobody
 ## has timed a festival build; the knobs are here to be tuned.
 
@@ -38,7 +39,9 @@ const RETURN_MIN_M := 1.0
 static func labour_hours(mass_kg: float) -> float:
 	if mass_kg <= 0.0:
 		return UNKNOWN_MASS_HOURS
-	return clampf(HOURS_BASE + mass_kg / KG_PER_HOUR, HOURS_MIN, HOURS_MAX)
+	# The handling class scales the lifting (PackKitter.HANDLING).
+	var scale := float(PackKitter.handling(PackKitter.handling_for(mass_kg)).get("labour_scale", 1.0))
+	return clampf(HOURS_BASE + mass_kg / KG_PER_HOUR * scale, HOURS_MIN, HOURS_MAX)
 
 
 static func camp_hours(structures: int) -> float:
@@ -163,8 +166,9 @@ static func _deploy_rows(_item: Dictionary, model_id: String, pid: String, h: fl
 
 
 ## Pack-up (rack and generic alike): take it down, then pack it, then —
-## with a container in reach (`item.loadout` = its door) — carry the crate
-## to the door, remembering where the structure stood (`store_home`).
+## with a container or vehicle in reach (`item.loadout` = its door, `host_id`
+## the host) — carry the crate to the door and stow it in the bay
+## (`stow_in`), remembering where the structure stood (`store_home`).
 static func _packup_rows(item: Dictionary, pid: String, h: float,
 		label: String, target: Dictionary, r: int) -> Array:
 	var p := h * PACKUP_SCALE
@@ -199,7 +203,8 @@ static func _packup_rows(item: Dictionary, pid: String, h: float,
 				"x": door.x, "z": door.y, "y_offset": 0.0, "collision_enabled": true,
 				"from_x": src.x, "from_z": src.y,
 				"park_x": park.x, "park_z": park.y,
-				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, door), "store_home": true},
+				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, door), "store_home": true,
+				"stow_in": str(lo.get("host_id", ""))},
 		})
 	elif lo.has("x") and lo.has("z"):
 		rows_p.append({
@@ -209,7 +214,7 @@ static func _packup_rows(item: Dictionary, pid: String, h: float,
 			"depends_on": ["pack"], "target": target,
 			"carry_to": {"x": float(lo["x"]), "z": float(lo["z"])},
 			"effect": {"op": "move_prop", "prop_id": pid, "x": float(lo["x"]), "z": float(lo["z"]),
-				"store_home": true},
+				"store_home": true, "stow_in": str(lo.get("host_id", ""))},
 		})
 	return rows_p
 

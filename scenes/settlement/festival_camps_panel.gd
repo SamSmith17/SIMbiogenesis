@@ -100,8 +100,20 @@ func _build() -> void:
 		var loader := _loader()
 		if loader != null:
 			loader.call("clear_vehicle_arrivals")
+			loader.call("clear_vehicle_departures")
 		_refresh())
 	arr_row.add_child(here)
+	var drive_out := Button.new()
+	drive_out.name = "vehicles_drive_out"
+	drive_out.text = "Drive out"
+	drive_out.tooltip_text = "Every living vehicle drives out through the site gate, one every few minutes, the one nearest the gate last; each camp is away again once its last vehicle has gone. A Pack-up on the timeline does this by itself when the crews finish."
+	UITheme.style_button(drive_out)
+	drive_out.pressed.connect(func() -> void:
+		var loader := _loader()
+		if loader != null and loader.has_method("schedule_vehicle_departures_auto"):
+			loader.call("schedule_vehicle_departures_auto")
+		_refresh())
+	arr_row.add_child(drive_out)
 	_arrival_lbl = Label.new()
 	_arrival_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_arrival_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -129,7 +141,8 @@ func _loader() -> Node:
 	return TerrainSurfaceQuery.find_terrain_loader(t.current_scene) if t != null else null
 
 
-## "3 vehicles driving in · the last parks at 14:22", or "already here".
+## "3 vehicles driving in · the last parks at 14:22", "2 vehicles leaving ·
+## the last is gone at 18:40", or "already here".
 func _arrival_text() -> String:
 	var loader := _loader()
 	if loader == null or not loader.has_method("vehicle_arrivals"):
@@ -142,16 +155,35 @@ func _arrival_text() -> String:
 	var now := float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0
 	var coming := 0
 	var last := -INF
+	var leaving := 0
+	var gone := 0
+	var last_out := -INF
 	for a in arr:
-		var ph := float((a as Dictionary).get("park_h", 0.0))
+		var ad := a as Dictionary
+		var ph := float(ad.get("park_h", -INF))
 		if ph > now:
 			coming += 1
-		last = maxf(last, ph)
-	if coming == 0:
-		return "%s came in through the gate." % UiText.count(arr.size(), "vehicle")
-	var hh := fposmod(last, 24.0)
-	return "%s on the way in · the last parks at %02d:%02d" % [UiText.count(coming, "vehicle"),
-		int(hh), int(fposmod(hh * 60.0, 60.0))]
+		if ph > -INF:
+			last = maxf(last, ph)
+		var gh := float(ad.get("gone_h", INF))
+		if gh < INF:
+			if gh > now:
+				leaving += 1
+				last_out = maxf(last_out, gh)
+			else:
+				gone += 1
+	if coming > 0:
+		return "%s on the way in · the last parks at %s" % [UiText.count(coming, "vehicle"), _hhmm(last)]
+	if leaving > 0:
+		return "%s leaving · the last is gone at %s" % [UiText.count(leaving, "vehicle"), _hhmm(last_out)]
+	if gone > 0:
+		return "%s left through the gate." % UiText.count(gone, "vehicle")
+	return "%s came in through the gate." % UiText.count(arr.size(), "vehicle")
+
+
+static func _hhmm(abs_h: float) -> String:
+	var hh := fposmod(abs_h, 24.0)
+	return "%02d:%02d" % [int(hh), int(fposmod(hh * 60.0, 60.0))]
 
 
 func _rows() -> Array:

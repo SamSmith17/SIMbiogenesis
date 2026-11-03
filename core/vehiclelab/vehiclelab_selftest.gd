@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 718
+const EXPECTED_CHECKS := 740
 
 var _passed := 0
 var _failed := 0
@@ -38,6 +38,7 @@ func _initialize() -> void:
 	_test_tow_ratings()
 	_test_design_rules()
 	_test_geometry()
+	_test_transport_lifecycle()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
@@ -1457,3 +1458,137 @@ func _mesh_tris(mesh: ArrayMesh) -> int:
 	for si in mesh.get_surface_count():
 		n += _surface_tris(mesh, si)
 	return n
+
+
+## Transport polish Phase 3: leaving through the gate, one host model, one
+## door rule, one stowed-crate rule, re-stowing, the handling table.
+func _test_transport_lifecycle() -> void:
+	# --- departures ---------------------------------------------------------
+	var road := {"points": PackedVector2Array([Vector2(0, 200), Vector2(0, 60), Vector2(40, 20), Vector2(140, 20)])}
+	var gate := Vector2(0, 200)
+	var park := Vector2(120, 26)
+	var dep := VehicleDrive.make_out(gate, park, 90.0, 100.0, [road], Vector2(0, 212))
+	var route: Array = dep["route"]
+	_check("a departure starts at the spot and ends outside the gate",
+		Vector2(float(route[0][0]), float(route[0][1])).distance_to(park) < 0.02
+		and Vector2(float(route[route.size() - 1][0]), float(route[route.size() - 1][1])).distance_to(Vector2(0, 212)) < 0.02
+		and bool(dep.get("out", false)))
+	var ex := VehicleDrive.exit_point(park, 90.0)
+	_check("it pulls out nose first (the second point is ahead of the spot)",
+		Vector2(float(route[1][0]), float(route[1][1])).distance_to(ex) < 0.02
+		and absf(ex.distance_to(park) - VehicleDrive.APPROACH_M) < 1e-3)
+	var dur := VehicleDrive.duration_h(dep)
+	var rec := {"x": park.x, "z": park.y, "yaw": 90.0, "departure": dep}
+	var p0 := VehicleDrive.pose_of(rec, 99.0)
+	var p1 := VehicleDrive.pose_of(rec, 100.0 + dur * 0.5)
+	var p2 := VehicleDrive.pose_of(rec, 100.0 + dur + 0.01)
+	_check("before it sets off it stands in its spot",
+		str(p0["state"]) == VehicleDrive.STATE_PARKED and (p0["pos"] as Vector2).distance_to(park) < 1e-3)
+	_check("half way it is on the road", str(p1["state"]) == VehicleDrive.STATE_DRIVING)
+	_check("after the gate it is gone", str(p2["state"]) == VehicleDrive.STATE_AWAY)
+	_check("parked_at / leave_h / gone_h agree with the poses",
+		VehicleDrive.parked_at(rec, 99.0) and not VehicleDrive.parked_at(rec, 100.0 + dur * 0.5)
+		and absf(VehicleDrive.leave_h(rec) - 100.0) < 1e-9 and absf(VehicleDrive.gone_h(rec) - 100.0 - dur) < 1e-9)
+	var start := VehicleDrive.pose_of(rec, 100.0 + 1.0 / 3600.0)
+	_check("it creeps out of the spot", float(start["speed"]) <= VehicleDrive.APPROACH_MS + 1e-3)
+	var arr := VehicleDrive.make(gate, park, 90.0, 90.0, [road], Vector2(0, 212))
+	var both := {"x": park.x, "z": park.y, "yaw": 90.0, "arrival": arr, "departure": dep}
+	_check("in, parked, out: one record carries both legs",
+		str(VehicleDrive.pose_of(both, 89.0)["state"]) == VehicleDrive.STATE_AWAY
+		and VehicleDrive.parked_at(both, VehicleDrive.park_h(arr) + 0.1)
+		and str(VehicleDrive.pose_of(both, 100.0 + dur + 0.1)["state"]) == VehicleDrive.STATE_AWAY)
+	var monotone := true
+	var prev_s := -1.0
+	for k in 41:
+		var pp := VehicleDrive.pose_at(dep, 100.0 + dur * float(k) / 40.0)
+		if float(pp["s"]) < prev_s - 1e-6:
+			monotone = false
+		prev_s = float(pp["s"])
+	_check("the way out only goes forward", monotone)
+	for k2 in VehicleDrive.PLAN_CACHE_MAX + 10:
+		VehicleDrive.plan(VehicleDrive.make(gate, park + Vector2(float(k2), 0.0), 0.0, 0.0, [road]))
+	_check("the plan cache stays bounded", VehicleDrive._plans.size() <= VehicleDrive.PLAN_CACHE_MAX)
+
+	# --- one host model: a container and a vehicle --------------------------
+	var layer := PlacedPropLayer.new()
+	var cid := layer.add_free_prop("cargo_container", 0.0, 0.0, 0.0, 30.0)
+	layer.update_prop(cid, {"container_spec": {"container_id": "container_20"}})
+	var crec := layer.find_by_id(cid)
+	var cdoor := VehicleCargo.door_xz(crec)
+	var cext: Dictionary = ContainerCatalog.find("container_20").get("exterior", {})
+	var want_door := VehicleTow.world_xz(Vector3(0, 0, float(cext.get("l_m", 6.0)) * 0.5 + VehicleCargo.CONTAINER_DOOR_OUT_M),
+		Vector2.ZERO, deg_to_rad(30.0))
+	_check("a container's door is its local +Z end, a metre out",
+		not cdoor.is_empty() and Vector2(float(cdoor["x"]), float(cdoor["z"])).distance_to(want_door) < 1e-4)
+	_check("UnpackScenario.door_xz is the same rule", UnpackScenario.door_xz(crec) == cdoor)
+	var res := VehicleCargo.spawn_into(layer, "starter_camp", cid, 5.0)
+	var all_local := not res.is_empty()
+	var poses_ok := true
+	for c in res.get("crate_ids", []):
+		var r := layer.find_by_id(str(c))
+		if str(r.get("stowed_in", "")) != cid:
+			continue
+		if not (r.get("stow_local") is Array):
+			all_local = false
+			continue
+		var ps := VehicleCargo.place_stowed(layer.find_by_id(cid), r)
+		if Vector2(float(ps["x"]), float(ps["z"])).distance_to(Vector2(float(r["x"]), float(r["z"]))) > 1e-3 \
+				or absf(float(ps["y_offset"]) - float(r.get("y_offset", 0.0))) > 1e-4:
+			poses_ok = false
+	_check("a container's crates carry stow_local too (one spawn path)", all_local)
+	_check("place_stowed reproduces every spawned crate's pose", poses_ok)
+	var staging_ok := true
+	var dpos := Vector2(float(cdoor["x"]), float(cdoor["z"]))
+	var outv: Vector2 = cdoor["out"]
+	for c2 in res.get("crate_ids", []):
+		var st: Dictionary = layer.find_by_id(str(c2)).get("staging", {})
+		var sp := Vector2(float(st.get("x", 0.0)), float(st.get("z", 0.0)))
+		if (sp - dpos).dot(outv) < VehicleCargo.STAGE_GAP_M - 1e-3:
+			staging_ok = false
+	_check("staging is outside the door, past the gap", staging_ok)
+	# Move the host by hand: the crates follow.
+	var moved := layer.find_by_id(cid).duplicate()
+	moved["x"] = 40.0
+	moved["yaw"] = 120.0
+	var pt := VehicleCargo.reseat_patches(layer.props, moved)
+	_check("a moved container re-seats its crates", pt.size() == (res["crate_ids"] as Array).size())
+	# Re-stow: the load plus one more crate.
+	var stowed: Array = VehicleCargo.stowed_in(layer.props, cid)
+	var entries: Array = []
+	for s in stowed:
+		entries.append({"id": str((s as Dictionary)["id"]), "spec": PlacedPropRuntime.packed_spec_for_record(s)})
+	entries.append({"id": "extra", "spec": PackedSpec.for_model("shiftpod")})
+	var rs := VehicleCargo.restow_patches(layer.find_by_id(cid), entries)
+	_check("a pack-up's crate is stowed with the load already in it",
+		(rs["patches"] as Dictionary).has("extra")
+		and str(((rs["patches"] as Dictionary)["extra"] as Dictionary).get("stowed_in", "")) == cid)
+	var too_many: Array = []
+	for k3 in 60:
+		too_many.append({"id": "x%d" % k3, "spec": PackedSpec.for_model("shiftpod")})
+	var rs2 := VehicleCargo.restow_patches(layer.find_by_id(cid), too_many)
+	_check("what does not fit is handed back", not (rs2["left"] as Array).is_empty())
+	# A vehicle away is no loadout host.
+	var vid := layer.add_free_prop(VehicleBuilder.MODEL_ID, 300.0, 0.0, 0.0, 0.0)
+	layer.update_prop(vid, {"vehicle_spec": VehicleSpec.to_json_safe(VehiclePresets.builtin("box_truck")),
+		"departure": VehicleDrive.make_out(gate, Vector2(300, 0), 0.0, 10.0, [road])})
+	var near_parked := VehicleCargo.door_near(layer.props, Vector2(300, 0), 30.0, 9.0)
+	var near_gone := VehicleCargo.door_near(layer.props, Vector2(300, 0), 30.0, 500.0)
+	_check("a parked vehicle is a loadout host, a departed one is not",
+		str(near_parked.get("host_id", "")) == vid and near_gone.is_empty())
+
+	# --- forks through a vehicle door, one handling table ---------------------
+	_check("the forks fit a wide door, not a narrow one",
+		SiteProject.fork_fits_door({"pull_to": Vector2.ZERO, "door_w_m": 2.3, "load_w_m": 1.2})
+		and not SiteProject.fork_fits_door({"pull_to": Vector2.ZERO, "door_w_m": 0.7, "load_w_m": 0.6})
+		and SiteProject.fork_fits_door({}))
+	_check("one handling table: hand to 23 kg, team to 60, then the forklift",
+		PackKitter.handling_for(23.0) == "hand" and PackKitter.handling_for(24.0) == "team"
+		and PackKitter.handling_for(61.0) == "forklift"
+		and is_equal_approx(NpcHaulModel.SOLO_LIFT_KG, PackKitter.ONE_PERSON_KG)
+		and PackingList._notes({"mass_kg": 40.0}).has("2-PERSON LIFT")
+		and PackingList._notes({"mass_kg": 200.0}).has("FORKLIFT"))
+	var bay := VehicleCargo.bay(VehicleDesign.solve(VehiclePresets.builtin("box_truck")))
+	var pl := PackingList.build(bay, [{"label": "crate", "w_m": 1.0, "d_m": 1.0, "h_m": 1.0, "mass_kg": 30.0}],
+		[{"unit_idx": 0, "pos": Vector3.ZERO, "size": Vector3.ONE}])
+	_check("a vehicle bay's labels say V1, not C1",
+		str(((pl.get("spaces", []) as Array)[0] as Dictionary).get("id", "")) == "V1")

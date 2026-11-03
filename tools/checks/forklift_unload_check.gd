@@ -8,6 +8,10 @@ extends RefCounted
 ## person drives it (the rig reports operated), that the heavy crate lands on
 ## the ground at its staging slot, and that the forklift is parked with its
 ## forks down and empty after. Shots at each stage. Writes only the sandbox.
+## Transport polish Phase 3: the same kit delivered into a BOX TRUCK's bay —
+## the forks cannot drive in, so the crew slides the press to the door first
+## (a "Slide to the door" row the forklift trip waits for) and the forklift
+## takes it from there to its staging slot.
 
 var _fails: Array = []
 const SHOT_DIR := "user://screenshots/forklift_unload"
@@ -79,6 +83,66 @@ func _rec(main: Node, pid: String) -> Dictionary:
 func _rig(main: Node, fid: String) -> Node:
 	var n: Node = PlacedPropRuntime.find_by_prop_id(main, fid)
 	return n.get_node_or_null("ForkliftRig") if n != null else null
+
+
+## The kit in a box truck's bay: slide to the door, then the forks.
+func _bay_phase(main: Node, loader: Node, bridge: Variant, fid: String, spot: Vector2) -> void:
+	var tree := main.get_tree()
+	var at := spot + Vector2(0.0, 22.0)
+	var vid := PlacedPropService.place_prepped_at(main, VehicleBuilder.MODEL_ID,
+		{"record_extra": {"vehicle_spec": VehicleSpec.to_json_safe(VehiclePresets.builtin("box_truck")),
+			"collision_enabled": true}}, at.x, at.y, 0.0)
+	await _settle(tree, 10)
+	var res: Dictionary = loader.call("deliver_kit_in_vehicle", "workshop_pallets", vid)
+	var crates: Array = res.get("crate_ids", [])
+	_ok(crates.size() == 3, "the kit is delivered into the box truck (%d crates)" % crates.size())
+	var press := ""
+	for c in crates:
+		if str(_rec(main, str(c)).get("model_id", "")) == "pp_sheet_press":
+			press = str(c)
+	_ok(str(_rec(main, press).get("stowed_in", "")) == vid, "the press rides inside the truck")
+	await _settle(tree, 10)
+	var pull := {}
+	var fork := {}
+	for e in bridge.call("all_site_projects"):
+		var pd: Dictionary = (e as Dictionary)["project"]
+		if str(pd.get("prop_id", "")) != vid:
+			continue
+		var board: Variant = bridge.call("chore_board_for", str((e as Dictionary)["iid"]))
+		if board == null:
+			continue
+		for ch in board.get("chores"):
+			if not (ch is Dictionary):
+				continue
+			var eff: Dictionary = ch.get("effect", {})
+			if str(eff.get("prop_id", "")) != press:
+				continue
+			if str(ch.get("label", "")).begins_with("Slide to the door"):
+				pull = ch
+			elif str(eff.get("op", "")) == "fork_move":
+				fork = ch
+	_ok(not pull.is_empty() and not fork.is_empty(),
+		"the press is slid to the door by the crew, then forked (rows %s / %s)"
+		% [str(not pull.is_empty()), str(not fork.is_empty())])
+	if pull.is_empty() or fork.is_empty():
+		loader.call("delete_prop_by_id", vid)
+		return
+	var door := VehicleCargo.door_xz(_rec(main, vid))
+	var feff: Dictionary = fork.get("effect", {})
+	_ok(Vector2(float(feff.get("from_x", 0.0)), float(feff.get("from_z", 0.0))).distance_to(
+		Vector2(float(door["x"]), float(door["z"]))) < 0.5, "the forks pick it up at the truck's door")
+	var goal := Vector2(float(feff.get("x", 0.0)), float(feff.get("z", 0.0)))
+	var landed := await _until(tree, 600.0, func() -> bool:
+		var r := _rec(main, press)
+		return str(r.get("stowed_in", "")).is_empty() \
+			and Vector2(float(r.get("x", 0.0)), float(r.get("z", 0.0))).distance_to(goal) < 0.6)
+	_ok(landed, "out of the truck, the press reaches its staging slot")
+	_aim(main, at, 26.0)
+	await tree.create_timer(0.8).timeout
+	await _shot(main, "05_bay_unloaded")
+	for c2 in crates:
+		loader.call("delete_prop_by_id", str(c2))
+	loader.call("delete_prop_by_id", vid)
 
 
 func run(main: Node, _harness: Node) -> Dictionary:
@@ -193,6 +257,7 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		return true)
 	_ok(all_off, "every crate is out of the container")
 	await _shot(main, "04_unloaded")
+	await _bay_phase(main, loader, bridge, fid, spot)
 	main.set("time_scale", 0.001)
 	bridge.call("set_all_hands", iid, false)
 	return {"ok": _fails.is_empty(), "failures": _fails}

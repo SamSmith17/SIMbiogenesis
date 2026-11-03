@@ -493,6 +493,7 @@ func _process(delta: float) -> void:
 		return
 	if _reposition_prop != null:
 		_tick_prop_reposition(delta)
+	_tick_vehicle_logistics(delta)
 	PerfMonitor.begin("terrain_tick")
 	if _veg_hidden:
 		_veg_hide_poll -= delta
@@ -14364,6 +14365,9 @@ func delete_prop_by_id(prop_id: String) -> bool:
 	# Anything mounted on this prop (a solar array on its roof) comes down.
 	if _main != null:
 		PlacedPropService.release_hosted(_main, prop_id)
+	# Crates in its bay are set down at its door, a hitch is undone, a
+	# forklift's load is let go of.
+	_release_vehicle_ties(rec)
 	if not _placed_prop_layer.remove_prop(prop_id):
 		return false
 	# 2D/3D twin consistency: a graph node bound to this prop is the same object
@@ -14504,8 +14508,23 @@ func deliver_packed_kit(scenario_id: String, at_x: float, at_z: float,
 		return {}
 	_save_props_and_share()
 	_rebuild_placed_props()
-	_queue_unload_chore(res, at_x, at_z)
+	res["project_id"] = _request_unload(str(res.get("container_prop_id", "")))
 	return res
+
+
+## Mark a host's delivery for unloading and try at once (_service_unload:
+## queued when the host stands in its spot, retried while the board is full).
+## The project id when it was queued now, else "".
+func _request_unload(host_id: String) -> String:
+	if host_id.is_empty():
+		return ""
+	_patch_delivery(host_id, {"unload_pending": true, "unload_project": ""})
+	_unload_retry.erase(host_id)
+	var hrec := _placed_prop_layer.find_by_id(host_id)
+	var dv: Variant = hrec.get("delivery")
+	if dv is Dictionary:
+		_service_unload(hrec, dv as Dictionary, _abs_hours_now())
+	return str((_placed_prop_layer.find_by_id(host_id).get("delivery", {}) as Dictionary).get("unload_project", ""))
 
 
 ## Where the camp's vehicles come in: a placed site gate ({pos, yaw_deg,
@@ -14542,9 +14561,12 @@ func _arriving_vehicles(gate: Vector2) -> Array:
 			continue  # a towed trailer comes in behind its vehicle
 		if PlacedVehicle.living_profile(rec).is_empty():
 			continue  # a trailer standing on its own has no driver
+		if _vehicle_mounted(str(rec.get("id", ""))):
+			continue  # somebody is driving it
 		out.append(rec)
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return gate.distance_to(Vector2(float(a.get("x", 0.0)), float(a.get("z", 0.0)))) 			< gate.distance_to(Vector2(float(b.get("x", 0.0)), float(b.get("z", 0.0)))))
+		return gate.distance_to(Vector2(float(a.get("x", 0.0)), float(a.get("z", 0.0)))) \
+			< gate.distance_to(Vector2(float(b.get("x", 0.0)), float(b.get("z", 0.0)))))
 	return out
 
 
@@ -14563,7 +14585,8 @@ func schedule_vehicle_arrivals(start_h: float, spacing_h: float = VehicleDrive.D
 		var park := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
 		var arr := VehicleDrive.make(gp, park, float(rec.get("yaw", 0.0)),
 			start_h + spacing_h * float(n), roads, gate["entry"])
-		_placed_prop_layer.update_prop(str(rec.get("id", "")), {"arrival": arr})
+		_placed_prop_layer.update_prop(str(rec.get("id", "")), {"arrival": arr,
+			"camp_id": camp_of_vehicle(rec)})
 		n += 1
 	if n > 0:
 		_save_props_and_share()
@@ -14575,7 +14598,8 @@ func schedule_vehicle_arrivals(start_h: float, spacing_h: float = VehicleDrive.D
 ## couple of minutes from now. {count, start_h}.
 func schedule_vehicle_arrivals_auto() -> Dictionary:
 	var main_now := get_tree().current_scene
-	var now := float(main_now.call("get_absolute_hours")) 		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
+	var now := float(main_now.call("get_absolute_hours")) \
+		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
 	var start := now + 2.0 / 60.0
 	var sgv := ServiceLocator.graph()
 	var dep: Variant = sgv.call("site_deploy") if sgv != null and sgv.has_method("site_deploy") else null
@@ -14606,20 +14630,344 @@ func clear_vehicle_arrivals() -> int:
 	return n
 
 
-## Every scheduled arrival: [{id, x, z (parked), start_h, park_h}].
+## Every scheduled drive (an arrival, a departure, or both): [{id, x, z
+## (parked), start_h (the arrival's, NAN without), park_h (-INF without an
+## arrival: here from the start), leave_h / gone_h (INF without a
+## departure), camp_id}]. A towed trailer is not listed (it follows).
 func vehicle_arrivals() -> Array:
 	var out: Array = []
 	if _placed_prop_layer == null:
 		return out
 	for r in _placed_prop_layer.props:
 		var rec: Dictionary = r
+		if not str(rec.get("hitched_to", "")).is_empty():
+			continue
 		var arr: Variant = rec.get("arrival", null)
-		if not (arr is Dictionary) or (arr as Dictionary).is_empty():
+		var has_arr := arr is Dictionary and not (arr as Dictionary).is_empty()
+		var leave := VehicleDrive.leave_h(rec)
+		if not has_arr and leave == INF:
 			continue
 		out.append({"id": str(rec.get("id", "")), "x": float(rec.get("x", 0.0)),
-			"z": float(rec.get("z", 0.0)), "start_h": float((arr as Dictionary).get("start_h", 0.0)),
-			"park_h": VehicleDrive.park_h(arr)})
+			"z": float(rec.get("z", 0.0)),
+			"start_h": float((arr as Dictionary).get("start_h", 0.0)) if has_arr else NAN,
+			"park_h": VehicleDrive.park_h(arr) if has_arr else -INF,
+			"leave_h": leave, "gone_h": VehicleDrive.gone_h(rec),
+			"camp_id": str(rec.get("camp_id", ""))})
 	return out
+
+
+# --- leaving through the gate (transport polish Phase 3) -------------------------
+
+## Every living vehicle that can drive itself drives OUT through the gate, one
+## every `spacing_h` from `start_h`, the one nearest the gate last (it would
+## be in the others' way). A vehicle still arriving leaves no sooner than it
+## parks. `by` tags who scheduled it (a pack-up event id, "manual"), so that
+## caller can take its departures back. Returns how many.
+func schedule_vehicle_departures(start_h: float, spacing_h: float = VehicleDrive.DEFAULT_SPACING_H,
+		by: String = "") -> int:
+	if _placed_prop_layer == null:
+		return 0
+	var gate := site_gate()
+	var gp: Vector2 = gate["pos"]
+	var roads: Array = placement.road_dicts() if _placement_ready() else []
+	var list := _arriving_vehicles(gp)
+	list.reverse()
+	var n := 0
+	for rec in list:
+		var park := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+		var at := start_h + spacing_h * float(n)
+		var arr: Variant = rec.get("arrival")
+		if arr is Dictionary and not (arr as Dictionary).is_empty():
+			at = maxf(at, VehicleDrive.park_h(arr) + 1.0 / 60.0)
+		var dep := VehicleDrive.make_out(gp, park, float(rec.get("yaw", 0.0)), at, roads, gate["entry"])
+		if not by.is_empty():
+			dep["by"] = by
+		_placed_prop_layer.update_prop(str(rec.get("id", "")), {"departure": dep,
+			"camp_id": camp_of_vehicle(rec)})
+		n += 1
+	if n > 0:
+		_save_props_and_share()
+	return n
+
+
+## The player's "drive out": a couple of minutes from now. {count, start_h}.
+func schedule_vehicle_departures_auto() -> Dictionary:
+	var main_now := get_tree().current_scene
+	var now := float(main_now.call("get_absolute_hours")) \
+		if main_now != null and main_now.has_method("get_absolute_hours") else 0.0
+	var start := now + 2.0 / 60.0
+	return {"count": schedule_vehicle_departures(start, VehicleDrive.DEFAULT_SPACING_H, "manual"),
+		"start_h": start}
+
+
+## Forget departures (all, or only those `by` scheduled): the vehicles stay.
+func clear_vehicle_departures(by: String = "") -> int:
+	if _placed_prop_layer == null:
+		return 0
+	var n := 0
+	for r in _placed_prop_layer.props:
+		var rec: Dictionary = r
+		var dp: Variant = rec.get("departure")
+		if not (dp is Dictionary):
+			continue
+		if not by.is_empty() and str((dp as Dictionary).get("by", "")) != by:
+			continue
+		_placed_prop_layer.update_prop(str(rec.get("id", "")), {"departure": null})
+		n += 1
+	if n > 0:
+		_save_props_and_share()
+	return n
+
+
+## THE camp a vehicle belongs to: the painted camp it stands in, else the
+## nearest camp whose middle is within ARRIVAL_CAMP_M ("" none).
+const ARRIVAL_CAMP_M := 300.0
+
+func camp_of_vehicle(rec: Dictionary) -> String:
+	var at := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	var cid := camp_area_at(at)
+	if not cid.is_empty() or not _camp_layer_ready():
+		return cid
+	var best_d := ARRIVAL_CAMP_M
+	for a in camp_areas.areas:
+		var ad: Dictionary = a
+		var poly: PackedVector2Array = ad.get("polygon", PackedVector2Array())
+		if poly.is_empty():
+			continue
+		var c := Vector2.ZERO
+		for p in poly:
+			c += p
+		c /= float(poly.size())
+		var d := c.distance_to(at)
+		if d < best_d:
+			best_d = d
+			cid = str(ad.get("id", ""))
+	return cid
+
+
+## The middle of a painted camp (INF when unknown).
+func _camp_middle(cid: String) -> Vector2:
+	if cid.is_empty() or not _camp_layer_ready():
+		return Vector2.INF
+	var poly: PackedVector2Array = camp_areas.get_area(cid).get("polygon", PackedVector2Array())
+	if poly.is_empty():
+		return Vector2.INF
+	var c := Vector2.ZERO
+	for p in poly:
+		c += p
+	return c / float(poly.size())
+
+
+func _vehicle_mounted(pid: String) -> bool:
+	if _main == null:
+		return false
+	var node := PlacedPropRuntime.find_by_prop_id(_main, pid)
+	var pv := node.get_node_or_null("PlacedVehicle") if node != null else null
+	return pv != null and bool(pv.get("is_mounted"))
+
+
+# --- stowing, unload gating -------------------------------------------------------
+
+## Stow a crate in a host's bay (a pack-up's load-out): the whole load is
+## packed again with it (VehicleCargo.restow_patches). False, crate left
+## where it stands, when the host is gone, away or the bay is full.
+func stow_prop_in(pid: String, host_id: String) -> bool:
+	if _placed_prop_layer == null or _main == null:
+		return false
+	var hrec := _placed_prop_layer.find_by_id(host_id)
+	if hrec.is_empty() or not VehicleCargo.host_ready(hrec, _abs_hours_now(), _drive_rec(hrec)):
+		return false
+	var entries: Array = []
+	for crec in VehicleCargo.stowed_in(_placed_prop_layer.props, host_id):
+		if str((crec as Dictionary).get("id", "")) != pid:
+			entries.append({"id": str((crec as Dictionary).get("id", "")),
+				"spec": PlacedPropRuntime.packed_spec_for_record(crec)})
+	var me := _placed_prop_layer.find_by_id(pid)
+	if me.is_empty():
+		return false
+	entries.append({"id": pid, "spec": PlacedPropRuntime.packed_spec_for_record(me)})
+	var res := VehicleCargo.restow_patches(hrec, entries)
+	if (res["left"] as Array).has(pid):
+		return false
+	var pt: Dictionary = res["patches"]
+	for cid in pt:
+		var patch: Dictionary = (pt[cid] as Dictionary).duplicate()
+		patch["ground_y"] = TerrainSurfaceQuery.ground_height_at(_main, float(patch["x"]), float(patch["z"]))
+		PlacedPropService.update_prop_record(_main, str(cid), patch, true)
+	return true
+
+
+func _abs_hours_now() -> float:
+	return float(_main.call("get_absolute_hours")) if _main != null and _main.has_method("get_absolute_hours") else 0.0
+
+
+## The habitat that took the last queued unload ("" none).
+var _last_unload_iid := ""
+var _logistics_accum := 0.0
+## Host id -> real seconds until an unload refused by a full board is tried
+## again.
+var _unload_retry: Dictionary = {}
+const UNLOAD_RETRY_S := 5.0
+const LOGISTICS_POLL_S := 1.0
+
+
+## A delivery is unloaded when its host stands in its spot: a vehicle that is
+## still on the road (or not here yet) holds its crates until it parks, and a
+## board too full to take the work is asked again every few seconds. A clock
+## scrubbed back past a vehicle's arrival cancels its unload and puts the
+## crates back in it.
+func _tick_vehicle_logistics(delta: float) -> void:
+	_logistics_accum += delta
+	for k in _unload_retry.keys():
+		_unload_retry[k] = float(_unload_retry[k]) - delta
+	if _logistics_accum < LOGISTICS_POLL_S or _placed_prop_layer == null:
+		return
+	_logistics_accum = 0.0
+	var now := _abs_hours_now()
+	for r in _placed_prop_layer.props:
+		var hrec: Dictionary = r
+		var dv: Variant = hrec.get("delivery")
+		if not (dv is Dictionary) or (dv as Dictionary).is_empty():
+			continue
+		_service_unload(hrec, dv as Dictionary, now)
+
+
+## The record whose drive moves a host: its tow vehicle's for a hitched
+## trailer, else its own.
+func _drive_rec(hrec: Dictionary) -> Dictionary:
+	var tow := str(hrec.get("hitched_to", ""))
+	if tow.is_empty():
+		return hrec
+	var t := _placed_prop_layer.find_by_id(tow)
+	return t if not t.is_empty() else hrec
+
+
+func _service_unload(hrec: Dictionary, dl: Dictionary, now: float) -> void:
+	var hid := str(hrec.get("id", ""))
+	var drive := _drive_rec(hrec)
+	var arr: Variant = drive.get("arrival")
+	var before_arrival := arr is Dictionary and not (arr as Dictionary).is_empty() \
+		and now < VehicleDrive.park_h(arr)
+	var proj := str(dl.get("unload_project", ""))
+	if before_arrival:
+		if not proj.is_empty() or _delivery_out_crates(dl, hid).size() > 0:
+			_rewind_unload(hrec, dl)
+		return
+	if not bool(dl.get("unload_pending", false)) or not proj.is_empty():
+		return
+	if not VehicleCargo.host_ready(hrec, now, drive) or float(_unload_retry.get(hid, 0.0)) > 0.0:
+		return
+	var res := {"scenario_id": str(dl.get("scenario_id", "")), "container_prop_id": hid,
+		"crate_ids": []}
+	for cid in dl.get("crate_ids", []):
+		var crec := _placed_prop_layer.find_by_id(str(cid))
+		if str(crec.get("stowed_in", "")) == hid:
+			(res["crate_ids"] as Array).append(str(cid))
+	if (res["crate_ids"] as Array).is_empty():
+		_patch_delivery(hid, {"unload_pending": false})
+		return
+	var door := VehicleCargo.door_xz(hrec)
+	var vehicle := not VehicleCargo.is_container(hrec)
+	var crew_at := Vector2(float(door.get("x", hrec.get("x", 0.0))), float(door.get("z", hrec.get("z", 0.0))))
+	if vehicle:
+		var mid := _camp_middle(str(hrec.get("camp_id", camp_of_vehicle(hrec))))
+		if mid.is_finite():
+			crew_at = mid
+	_last_unload_iid = ""
+	var pid := _queue_unload_chore(res, float(door.get("x", 0.0)), float(door.get("z", 0.0)),
+		vehicle, crew_at)
+	if pid.is_empty():
+		_unload_retry[hid] = UNLOAD_RETRY_S
+		return
+	_unload_retry.erase(hid)
+	_patch_delivery(hid, {"unload_pending": false, "unload_project": pid,
+		"unload_iid": _last_unload_iid})
+
+
+## Crates of this delivery standing outside, still packed (carried out).
+func _delivery_out_crates(dl: Dictionary, hid: String) -> Array:
+	var out: Array = []
+	for cid in dl.get("crate_ids", []):
+		var crec := _placed_prop_layer.find_by_id(str(cid))
+		if crec.is_empty() or not bool(crec.get("packed", false)):
+			continue
+		if str(crec.get("stowed_in", "")) != hid:
+			out.append(crec)
+	return out
+
+
+## Scrubbed back before the vehicle came: the unload is called off and every
+## crate that is still a crate goes back in the bay.
+func _rewind_unload(hrec: Dictionary, dl: Dictionary) -> void:
+	var hid := str(hrec.get("id", ""))
+	var proj := str(dl.get("unload_project", ""))
+	if not proj.is_empty():
+		var sgv: Node = ServiceLocator.graph()
+		var bridge: Variant = sgv.call("npc_population_bridge") \
+			if sgv != null and sgv.has_method("npc_population_bridge") else null
+		if bridge != null and bridge.has_method("cancel_project"):
+			bridge.call("cancel_project", str(dl.get("unload_iid", "")), proj, _main)
+	var entries: Array = []
+	for crec in VehicleCargo.stowed_in(_placed_prop_layer.props, hid):
+		entries.append({"id": str((crec as Dictionary).get("id", "")),
+			"spec": PlacedPropRuntime.packed_spec_for_record(crec)})
+	for crec2 in _delivery_out_crates(dl, hid):
+		entries.append({"id": str((crec2 as Dictionary).get("id", "")),
+			"spec": PlacedPropRuntime.packed_spec_for_record(crec2)})
+	var res := VehicleCargo.restow_patches(hrec, entries)
+	var pt: Dictionary = res["patches"]
+	for cid in pt:
+		var patch: Dictionary = (pt[cid] as Dictionary).duplicate()
+		patch["ground_y"] = TerrainSurfaceQuery.ground_height_at(_main, float(patch["x"]), float(patch["z"])) \
+			if _main != null else 0.0
+		_placed_prop_layer.update_prop(str(cid), patch)
+	_patch_delivery(hid, {"unload_pending": true, "unload_project": "", "unload_iid": ""})
+	_save_props_and_share()
+	_rebuild_placed_props()
+
+
+func _patch_delivery(hid: String, patch: Dictionary) -> void:
+	var hrec := _placed_prop_layer.find_by_id(hid)
+	var dv: Variant = hrec.get("delivery")
+	if not (dv is Dictionary):
+		return
+	var d := (dv as Dictionary).duplicate(true)
+	d.merge(patch, true)
+	_placed_prop_layer.update_prop(hid, {"delivery": d})
+	_schedule_prop_layer_save()
+
+
+## Deleting a cargo host or a vehicle: its crates are set down at its door
+## (un-stowed, collision back on), a hitched partner is unhitched, a
+## forklift's load is let go of. Runs before the record is removed.
+func _release_vehicle_ties(rec: Dictionary) -> void:
+	if _main == null or rec.is_empty():
+		return
+	var pid := str(rec.get("id", ""))
+	if not str(rec.get("towing", "")).is_empty() or not str(rec.get("hitched_to", "")).is_empty():
+		PlacedVehicle.unhitch_prop(_main, pid)
+	if VehicleCargo.is_host(rec):
+		var door := VehicleCargo.door_xz(rec)
+		var k := 0
+		var span := Vector2(1.2, 1.2)
+		for crec in VehicleCargo.stowed_in(_placed_prop_layer.props, pid):
+			var at := VehicleCargo.overflow_xz(door, k, span) if not door.is_empty() \
+				else Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+			k += 1
+			var cid := str((crec as Dictionary).get("id", ""))
+			_placed_prop_layer.update_prop(cid, {"x": at.x, "z": at.y, "y_offset": 0.0,
+				"ground_y": TerrainSurfaceQuery.ground_height_at(_main, at.x, at.y),
+				"stowed_in": null, "stow_local": null, "collision_enabled": true})
+	var load_id := str(rec.get("fork_load_id", ""))
+	if not load_id.is_empty():
+		var lrec := _placed_prop_layer.find_by_id(load_id)
+		if not lrec.is_empty():
+			_placed_prop_layer.update_prop(load_id, {"y_offset": 0.0, "collision_enabled": true})
+	for r2 in _placed_prop_layer.props:
+		var other: Dictionary = r2
+		if str(other.get("fork_load_id", "")) == pid:
+			_placed_prop_layer.update_prop(str(other.get("id", "")), {"fork_load_id": null,
+				"fork_load_off": null, "fork_lift_m": 0.0})
 
 
 ## Deliver a kit STOWED in a placed living vehicle's cargo bay (VehicleCargo):
@@ -14634,10 +14982,11 @@ func deliver_kit_in_vehicle(scenario_id: String, vehicle_id: String) -> Dictiona
 	var res := VehicleCargo.spawn_in_vehicle(_placed_prop_layer, scenario_id, vehicle_id, abs_h)
 	if res.is_empty():
 		return {}
+	_placed_prop_layer.update_prop(vehicle_id, {"camp_id": camp_of_vehicle(_placed_prop_layer.find_by_id(vehicle_id))})
 	_save_props_and_share()
 	_rebuild_placed_props()
-	var door: Dictionary = res.get("door", {})
-	res["project_id"] = _queue_unload_chore(res, float(door.get("x", 0.0)), float(door.get("z", 0.0)), true)
+	# Unloaded once it stands in its spot (now, or when it has driven in).
+	res["project_id"] = _request_unload(vehicle_id)
 	return res
 
 
@@ -14654,14 +15003,15 @@ func deliver_kit_in_vehicle(scenario_id: String, vehicle_id: String) -> Dictiona
 ## HANDS until it is done (a vehicle arriving at its camp); otherwise the first
 ## camp with a crew, on its routine (the classic container delivery).
 func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
-		nearest_crew: bool = false) -> String:
+		nearest_crew: bool = false, crew_at: Vector2 = Vector2.INF) -> String:
 	var sgv: Node = ServiceLocator.graph()
 	if sgv == null or not sgv.has_method("npc_population_bridge"):
 		return ""
 	var bridge: Variant = sgv.call("npc_population_bridge")
 	if bridge == null:
 		return ""
-	var iid := str(bridge.call("nearest_crew_habitat", Vector2(cx, cz))) if nearest_crew \
+	var crew_pos := crew_at if crew_at.is_finite() else Vector2(cx, cz)
+	var iid := str(bridge.call("nearest_crew_habitat", crew_pos)) if nearest_crew \
 		and bridge.has_method("nearest_crew_habitat") else str(bridge.call("first_crewable_habitat"))
 	if iid.is_empty():
 		return ""
@@ -14673,6 +15023,12 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
 		return ""
 	var from := Vector2(cx, cz)
 	var roster := maxi(int(bridge.call("roster_size_for", iid)), 1)
+	# A vehicle's bay is reached only through its door (SiteProject
+	# .fork_fits_door / the slide-to-the-door row).
+	var hrec0 := _placed_prop_layer.find_by_id(str(spawn_res.get("container_prop_id", "")))
+	var in_vehicle := not hrec0.is_empty() and not VehicleCargo.is_container(hrec0)
+	var door_w := float((VehicleCargo.host_bay(hrec0).get("door", {}) as Dictionary).get("w_m", INF)) \
+		if in_vehicle else INF
 	var crates: Array = []
 	for pid in crate_ids:
 		var rec := _placed_prop_layer.find_by_id(str(pid))
@@ -14692,6 +15048,9 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
 			"handling": str(pspec.get("handling", "")),
 			"lift_m": float(rec.get("y_offset", 0.0)),
 			"label": str(entry.get("label", rec.get("model_id", "crate")))})
+		if in_vehicle:
+			(crates[crates.size() - 1] as Dictionary).merge({"pull_to": from, "door_w_m": door_w,
+				"load_w_m": minf(float(pspec.get("w_m", 0.0)), float(pspec.get("d_m", 0.0)))})
 	# LIFO. This ONE sort serves both strategies: the brigade's stage effects
 	# fire in list order, and the round-trip rows take an ascending priority
 	# from it — so nobody pulls a crate out from under the one stacked on it.
@@ -14712,8 +15071,10 @@ func _queue_unload_chore(spawn_res: Dictionary, cx: float, cz: float,
 			{"start_h": 7.0, "end_h": 19.0},
 			{"kind": "pos", "x": centre.x, "z": centre.y}, {}))
 	if project_id.is_empty():
-		push_warning("Delivery unload plan refused — chore board full")
-	elif nearest_crew and bridge.has_method("pin_crew_until_done"):
+		push_warning("Delivery unload plan refused — chore board full; asking again shortly")
+	else:
+		_last_unload_iid = iid
+	if not project_id.is_empty() and nearest_crew and bridge.has_method("pin_crew_until_done"):
 		bridge.call("pin_crew_until_done", iid, project_id)
 	return project_id
 
@@ -14796,7 +15157,10 @@ func duplicate_prop_record(copy: Dictionary) -> String:
 		return ""
 	var patch := copy.duplicate(true)
 	for k in ["id", "type", "model_id", "x", "y_offset", "z", "yaw", "pitch", "roll", "scale",
-			"y", "ground_y", "building_idx"]:
+			"y", "ground_y", "building_idx",
+			# A copy is its own thing: no delivery, hitch, schedule or load.
+			"delivery", "towing", "hitched_to", "arrival", "departure", "fork_load_id",
+			"stowed_in", "stow_local", "unload_rank", "delivery_id", "delivery_slot", "camp_id"]:
 		patch.erase(k)
 	if not patch.is_empty():
 		_placed_prop_layer.update_prop(new_id, patch)

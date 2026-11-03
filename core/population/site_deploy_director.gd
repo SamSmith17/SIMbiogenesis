@@ -312,17 +312,18 @@ func _fire(ev: Dictionary, abs_h: float) -> void:
 ## every fired event and the manual (one-structure) stamp alike.
 func _service(abs_h: float) -> void:
 	var crews_all: Array = []
-	var runs: Array = []   # [[action, info]]
+	var runs: Array = []   # [[action, info, event id ("" = manual)]]
 	for ev in events():
 		var info0 := SiteDeploySchedule.fired_info(_rec, str((ev as Dictionary).get("id", "")))
 		if not info0.is_empty() and not bool(info0.get("done", false)):
-			runs.append([str((ev as Dictionary).get("action", "")), info0])
+			runs.append([str((ev as Dictionary).get("action", "")), info0, str((ev as Dictionary).get("id", ""))])
 	var manual: Dictionary = _rec.get("manual", {})
 	if not manual.is_empty() and not bool(manual.get("done", false)):
-		runs.append([str(manual.get("action", SiteDeploySchedule.ACTION_DEPLOY)), manual])
+		runs.append([str(manual.get("action", SiteDeploySchedule.ACTION_DEPLOY)), manual, ""])
 	for run in runs:
 		var action := str(run[0])
 		var info: Dictionary = run[1]
+		var ev_id := str(run[2])
 		var pending: Array = info.get("pending", [])
 		if not pending.is_empty() and abs_h - _last_retry_h >= RETRY_EVERY_H:
 			_last_retry_h = abs_h
@@ -375,6 +376,14 @@ func _service(abs_h: float) -> void:
 				_toast("Crew work done — %s" % _count_text(_items_of(info)), Vector2.INF)
 			else:
 				_toast("%s — done" % SiteDeploySchedule.action_label(action), Vector2.INF)
+				# Everything is packed and loaded: the vehicles drive out
+				# through the gate, the one nearest it last.
+				if action == SiteDeploySchedule.ACTION_PACKUP and _loader != null \
+						and _loader.has_method("schedule_vehicle_departures"):
+					var n := int(_loader.call("schedule_vehicle_departures", abs_h + DEPART_AFTER_H,
+						VehicleDrive.DEFAULT_SPACING_H, ev_id))
+					if n > 0:
+						_toast("%s leaving through the gate" % UiText.count(n, "vehicle"), Vector2.INF)
 
 
 func _create_project(iid: String, item: Dictionary, action: String, roster: int) -> String:
@@ -458,6 +467,10 @@ func _undo(ev: Dictionary) -> void:
 		else SiteDeploySchedule.ACTION_DEPLOY
 	for it in info.get("items", []):
 		_instant(it as Dictionary, inverse)
+	# The vehicles this pack-up sent home stay.
+	if action == SiteDeploySchedule.ACTION_PACKUP and _loader != null \
+			and _loader.has_method("clear_vehicle_departures"):
+		_loader.call("clear_vehicle_departures", id)
 	SiteDeploySchedule.unmark(_rec, id)
 	_dirty = true
 	_toast("Scrubbed back past “%s” — put back as it was" % SiteDeploySchedule.action_label(action), Vector2.INF)
@@ -544,10 +557,23 @@ func _inventory(action: String) -> Array:
 		for r in _loader.call("placed_prop_records"):
 			var rec: Dictionary = r
 			var model_id := str(rec.get("model_id", ""))
+			# Hosts and the machines that move the work are not packed by it:
+			# a container, the forklift, a living vehicle (it drives out).
 			if model_id.is_empty() or model_id == "cargo_container" \
-					or not str(rec.get("stowed_in", "")).is_empty() \
+					or model_id == ForkliftBuilder.MODEL_ID or VehicleBuilder.handles(model_id) \
 					or bool(rec.get("hidden_3d", false)):
 				continue
+			var host := str(rec.get("stowed_in", ""))
+			if not host.is_empty():
+				# A kit a pack-up stowed comes back out for the next deploy
+				# (its home is recorded) once its host stands in its spot; a
+				# delivery's crate is the unload's.
+				if want_packed or not (rec.get("deploy_home") is Dictionary):
+					continue
+				var hrec := PlacedPropService.get_prop_record(_main, host)
+				var tow := PlacedPropService.get_prop_record(_main, str(hrec.get("hitched_to", "")))
+				if not hrec.is_empty() and not VehicleCargo.host_ready(hrec, _now_h(), tow):
+					continue
 			var packed := bool(rec.get("packed", false))
 			if packed == want_packed:
 				continue
@@ -608,12 +634,14 @@ func _inventory(action: String) -> Array:
 ## ({} = none): where a packed crate is carried after a pack-up (the same
 ## door the prop editor's linkage breakdown used).
 const LOADOUT_REACH_M := 200.0
+## A pack-up's vehicles set off this long after the last crate is loaded.
+const DEPART_AFTER_H := 2.0 / 60.0
 
 func _container_door_near(pos: Vector2) -> Dictionary:
 	if _loader == null or not _loader.has_method("placed_prop_records"):
 		return {}
 	# A shipping container's door, or a living vehicle's cargo-bay door.
-	return VehicleCargo.door_near(_loader.call("placed_prop_records"), pos, LOADOUT_REACH_M)
+	return VehicleCargo.door_near(_loader.call("placed_prop_records"), pos, LOADOUT_REACH_M, _now_h())
 
 
 # ---------------------------------------------------------------------------

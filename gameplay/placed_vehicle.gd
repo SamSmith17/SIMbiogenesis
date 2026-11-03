@@ -155,8 +155,10 @@ var _tow_dy := 0.0
 var _tow_ready := false
 var _hitch_scan := 0.0
 ## Crates stowed in the cargo bay (record `stowed_in` = this vehicle, with
-## `stow_local`): they ride along. Re-scanned every couple of seconds.
+## `stow_local`) or in the trailer it tows: they ride along. Re-scanned every
+## couple of seconds; `_cargo_host` = crate id -> the host it rides in.
 var _cargo_ids: Array = []
+var _cargo_host: Dictionary = {}
 var _cargo_scan := 9.0
 var _design: Dictionary = {}
 
@@ -604,6 +606,9 @@ func _patch_record(save: bool) -> void:
 		var tm := _tow_node.get_node_or_null("ModelRoot") as Node3D
 		if tm != null:
 			tpatch["yaw"] = fposmod(rad_to_deg(tm.rotation.y), 360.0)
+		if layer0 != null and _cargo_host.values().has(_tow_id):
+			var trec := {"id": _tow_id, "x": tp.x, "z": tp.z, "yaw": float(tpatch.get("yaw", 0.0))}
+			cargo_patches.merge(VehicleCargo.reseat_patches(layer0.props, trec), true)
 	if save:
 		PlacedPropService.update_prop_record(main, prop_id, patch, false)
 		if not tpatch.is_empty():
@@ -632,27 +637,34 @@ func _tick_cargo(delta: float) -> void:
 	if _cargo_scan >= 2.0:
 		_cargo_scan = 0.0
 		_cargo_ids.clear()
+		_cargo_host.clear()
 		var layer := PlacedPropService._layer_for_main(main)
 		if layer != null:
 			for r in layer.props:
 				var rec: Dictionary = r
-				if str(rec.get("stowed_in", "")) == prop_id and rec.get("stow_local") is Array:
+				var host := str(rec.get("stowed_in", ""))
+				if (host == prop_id or (host == _tow_id and not _tow_id.is_empty())) \
+						and rec.get("stow_local") is Array:
 					_cargo_ids.append(str(rec.get("id", "")))
+					_cargo_host[str(rec.get("id", ""))] = host
 	if _cargo_ids.is_empty() or _prop == null:
 		return
-	var origin := Vector2(_prop.global_position.x, _prop.global_position.z)
-	var base_y := _prop.global_position.y - _dy
+	var own_ground := _prop.global_position - Vector3(0.0, _dy, 0.0)
+	var tow_ground := Vector3.INF
+	var tow_yaw := 0.0
+	if _tow_ready and _tow_node != null and is_instance_valid(_tow_node):
+		tow_ground = _tow_node.global_position - Vector3(0.0, _tow_dy, 0.0)
+		var tm := _tow_node.get_node_or_null("ModelRoot") as Node3D
+		tow_yaw = tm.rotation.y if tm != null else 0.0
 	for cid in _cargo_ids:
 		var node := PlacedPropRuntime.find_by_prop_id(main, str(cid)) as Node3D
 		var rec2 := PlacedPropService.get_prop_record(main, str(cid))
-		if node == null or not (rec2.get("stow_local") is Array):
+		if node == null:
 			continue
-		var sl: Array = rec2["stow_local"]
-		var w := VehicleTow.world_xz(Vector3(float(sl[0]), float(sl[1]), float(sl[2])), origin, _yaw())
-		node.global_position = Vector3(w.x, base_y + float(sl[1]), w.y)
-		var m := node.get_node_or_null("ModelRoot") as Node3D
-		if m != null:
-			m.rotation.y = _yaw() + deg_to_rad(float(sl[3]))
+		if str(_cargo_host.get(cid, prop_id)) == prop_id:
+			VehicleCargo.place_stowed_node(node, own_ground, _yaw(), rec2)
+		elif tow_ground.is_finite():
+			VehicleCargo.place_stowed_node(node, tow_ground, tow_yaw, rec2)
 
 
 # --- towing --------------------------------------------------------------------
@@ -787,6 +799,12 @@ func _park_trailer() -> void:
 			tpatch["yaw"] = fposmod(rad_to_deg(tm.rotation.y), 360.0)
 		if main != null:
 			PlacedPropService.update_prop_record(main, _tow_id, tpatch, false)
+			var layer := PlacedPropService._layer_for_main(main)
+			if layer != null:
+				var trec := {"id": _tow_id, "x": tp.x, "z": tp.z, "yaw": float(tpatch.get("yaw", 0.0))}
+				var cp := VehicleCargo.reseat_patches(layer.props, trec)
+				for cid in cp:
+					PlacedPropService.update_prop_record(main, str(cid), cp[cid], false)
 		if node.has_method("setup_collision"):
 			node.call_deferred("setup_collision")
 	_tow_ready = false
@@ -800,9 +818,11 @@ static func unhitch_prop(main: Node, pid: String) -> void:
 		return
 	var tow := PlacedPropRuntime.find_by_prop_id(main, tow_id)
 	var pv := tow.get_node_or_null("PlacedVehicle") if tow != null else null
-	if pv != null and pv.has_method("unhitch"):
+	if pv != null and pv.has_method("unhitch") and not str(pv.get("_tow_id")).is_empty():
 		pv.call("unhitch")
 		return
+	# No live runtime holding the hitch (a record hitched since it was
+	# built, a deleted vehicle): the records alone.
 	var trec := PlacedPropService.get_prop_record(main, tow_id)
 	var tid := str(trec.get("towing", ""))
 	PlacedPropService.update_prop_record(main, tow_id, {"towing": null}, false)

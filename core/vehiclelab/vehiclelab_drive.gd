@@ -1,8 +1,8 @@
 class_name VehicleDrive
 extends RefCounted
 
-## A living vehicle DRIVING IN through the site gate — a pure function of sim
-## time, the fire timeline's rule. The prop record carries `arrival` =
+## A living vehicle DRIVING IN through the site gate, and DRIVING OUT again —
+## a pure function of sim time, the fire timeline's rule. The prop record carries `arrival` =
 ## {start_h, route: [[x, z], …] control points from the gate to the parking
 ## spot, park: [x, z, yaw_deg]}; `pose_at(arrival, abs_h)` says where the
 ## vehicle is. Nothing is integrated, so a drive scrubs backwards, survives a
@@ -11,6 +11,11 @@ extends RefCounted
 ## The record's own x / z / yaw stay the PARKED pose; before `start_h` the
 ## vehicle is not on site yet (AWAY), then it drives the route (DRIVING), then
 ## it stands where it was placed (PARKED).
+##
+## Leaving: the record carries `departure` = {start_h, route: [park spot,
+## the pull-out point ahead of it, the road, the gate, outside], park, out:
+## true}; before `start_h` the vehicle is PARKED, then it drives out
+## (DRIVING), then it is gone (AWAY). `pose_of(rec, abs_h)` reads both.
 ##
 ## Speed: a festival road at ~13 mph, slowed through bends to v = sqrt(a·r)
 ## with a comfortable lateral acceleration, a creep over the last straight
@@ -37,6 +42,8 @@ const DEFAULT_SPACING_H := 4.0 / 60.0
 ## close to it.
 const ROAD_SNAP_M := 120.0
 
+## Cached plans, oldest dropped past PLAN_CACHE_MAX.
+const PLAN_CACHE_MAX := 64
 static var _plans: Dictionary = {}
 
 
@@ -87,6 +94,99 @@ static func route_points(gate: Vector2, park_xz: Vector2, park_yaw_deg: float,
 	return pts
 
 
+## The pull-out point: APPROACH_M ahead of the parking spot along its
+## heading (a vehicle leaves nose first, the way it came in).
+static func exit_point(park_xz: Vector2, park_yaw_deg: float) -> Vector2:
+	return park_xz + forward(deg_to_rad(park_yaw_deg)) * APPROACH_M
+
+
+## The way out: the spot, the pull-out point, along the road nearest both the
+## pull-out and the gate, the gate, then outside it.
+static func route_points_out(gate: Vector2, park_xz: Vector2, park_yaw_deg: float,
+		roads: Array = [], exit_to: Vector2 = Vector2.INF) -> Array:
+	var ex := exit_point(park_xz, park_yaw_deg)
+	var pts: Array = [park_xz, ex]
+	var best_cost := INF
+	var best_road: PackedVector2Array = PackedVector2Array()
+	var best_a := {}
+	var best_b := {}
+	for r in roads:
+		var poly: PackedVector2Array = PackedVector2Array((r as Dictionary).get("points", PackedVector2Array()))
+		if poly.size() < 2:
+			continue
+		var a := _nearest_on(poly, ex)
+		var b := _nearest_on(poly, gate)
+		var cost := float(a["d"]) + float(b["d"])
+		if float(a["d"]) <= ROAD_SNAP_M and float(b["d"]) <= ROAD_SNAP_M and cost < best_cost:
+			best_cost = cost
+			best_road = poly
+			best_a = a
+			best_b = b
+	if not best_road.is_empty():
+		for p in _sub_polyline(best_road, float(best_a["s"]), float(best_b["s"])):
+			if (pts[pts.size() - 1] as Vector2).distance_to(p) > 3.0:
+				pts.append(p)
+	if (pts[pts.size() - 1] as Vector2).distance_to(gate) > 3.0:
+		pts.append(gate)
+	if exit_to.is_finite() and gate.distance_to(exit_to) > 1.0:
+		pts.append(exit_to)
+	return pts
+
+
+## The departure record (`exit_to`: where the vehicle is gone, outside the
+## gate; INF = at the gate itself).
+static func make_out(gate: Vector2, park_xz: Vector2, park_yaw_deg: float, start_h: float,
+		roads: Array = [], exit_to: Vector2 = Vector2.INF) -> Dictionary:
+	var route: Array = []
+	for p in route_points_out(gate, park_xz, park_yaw_deg, roads, exit_to):
+		route.append([snappedf((p as Vector2).x, 0.01), snappedf((p as Vector2).y, 0.01)])
+	return {"start_h": start_h, "route": route,
+		"park": [park_xz.x, park_xz.y, park_yaw_deg], "out": true}
+
+
+## Where a placed vehicle record is at `abs_h` through its arrival and its
+## departure (either may be missing): the pose_at dict. With neither, or
+## between the two, it is PARKED at the record's own pose.
+static func pose_of(rec: Dictionary, abs_h: float) -> Dictionary:
+	var a: Variant = rec.get("arrival")
+	var dp: Variant = rec.get("departure")
+	var arr: Dictionary = a if a is Dictionary else {}
+	var dep: Dictionary = dp if dp is Dictionary else {}
+	return pose_for(arr, dep, abs_h, Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))),
+		deg_to_rad(float(rec.get("yaw", 0.0))))
+
+
+static func pose_for(arr: Dictionary, dep: Dictionary, abs_h: float,
+		park_pos: Vector2 = Vector2.ZERO, park_yaw: float = 0.0) -> Dictionary:
+	if not dep.is_empty() and abs_h >= float(dep.get("start_h", INF)):
+		return pose_at(dep, abs_h)
+	if not arr.is_empty():
+		return pose_at(arr, abs_h)
+	return {"state": STATE_PARKED, "pos": park_pos, "yaw": park_yaw, "speed": 0.0, "u": 1.0, "s": 0.0}
+
+
+## Whether the vehicle stands in its spot at `abs_h` (the hours it can be
+## loaded, unloaded, got into, and its camp is home).
+static func parked_at(rec: Dictionary, abs_h: float) -> bool:
+	return str(pose_of(rec, abs_h)["state"]) == STATE_PARKED
+
+
+## The hour it leaves its spot, INF when no departure is set.
+static func leave_h(rec: Dictionary) -> float:
+	var dp: Variant = rec.get("departure")
+	if not (dp is Dictionary) or (dp as Dictionary).is_empty():
+		return INF
+	return float((dp as Dictionary).get("start_h", INF))
+
+
+## The hour it is gone through the gate, INF when no departure is set.
+static func gone_h(rec: Dictionary) -> float:
+	var dp: Variant = rec.get("departure")
+	if not (dp is Dictionary) or (dp as Dictionary).is_empty():
+		return INF
+	return float((dp as Dictionary).get("start_h", 0.0)) + duration_h(dp)
+
+
 ## The arrival record. `entry`: where the vehicle appears, outside the gate
 ## (SiteGateBuilder.approach_xz); INF = at the gate itself.
 static func make(gate: Vector2, park_xz: Vector2, park_yaw_deg: float, start_h: float,
@@ -101,9 +201,12 @@ static func make(gate: Vector2, park_xz: Vector2, park_yaw_deg: float, start_h: 
 ## The densified path + time table (cached by the record's route): {pts,
 ## yaws, t (seconds from the start), v, dur_s, length}.
 static func plan(arrival: Dictionary) -> Dictionary:
-	var key := JSON.stringify([arrival.get("route", []), arrival.get("park", [])])
+	var out_bound := bool(arrival.get("out", false))
+	var key := JSON.stringify([arrival.get("route", []), arrival.get("park", []), out_bound])
 	if _plans.has(key):
 		return _plans[key]
+	if _plans.size() >= PLAN_CACHE_MAX:
+		_plans.erase(_plans.keys()[0])
 	var ctrl: Array = []
 	for p in arrival.get("route", []):
 		if p is Array and (p as Array).size() >= 2:
@@ -131,7 +234,9 @@ static func plan(arrival: Dictionary) -> Dictionary:
 		if i > 0 and i < n - 1:
 			var r := _circumradius(pts[i - 1], pts[i], pts[i + 1])
 			cap = minf(cap, sqrt(CORNER_LAT_MS2 * r))
-		if total - s[i] <= APPROACH_M:
+		# The creep: the last straight into the spot, or the first one out.
+		var creep := s[i] <= APPROACH_M if out_bound else total - s[i] <= APPROACH_M
+		if creep:
 			cap = minf(cap, APPROACH_MS)
 		v[i] = maxf(cap, 0.5)
 	v[0] = 0.0
@@ -155,7 +260,10 @@ static func plan(arrival: Dictionary) -> Dictionary:
 	for i in n:
 		var d := (pts[mini(i + 1, n - 1)] - pts[maxi(i - 1, 0)])
 		yaws[i] = yaw_for(d) if d.length() > 1e-4 else park_yaw
-	yaws[n - 1] = park_yaw
+	if out_bound:
+		yaws[0] = park_yaw
+	else:
+		yaws[n - 1] = park_yaw
 	out = {"pts": pts, "yaws": yaws, "t": t, "v": v, "s": s, "dur_s": t[n - 1], "length": total}
 	_plans[key] = out
 	return out
@@ -183,11 +291,19 @@ static func pose_at(arrival: Dictionary, abs_h: float) -> Dictionary:
 		return {"state": STATE_PARKED, "pos": park_pos, "yaw": park_yaw, "speed": 0.0, "u": 1.0}
 	var ts: PackedFloat64Array = pl["t"]
 	var el := (abs_h - t0) * 3600.0
-	if el < 0.0:
+	var dur := float(pl["dur_s"])
+	if bool(arrival.get("out", false)):
+		# Leaving: parked until it sets off, gone once through the gate.
+		if el < 0.0:
+			return {"state": STATE_PARKED, "pos": park_pos, "yaw": park_yaw, "speed": 0.0, "u": 0.0, "s": 0.0}
+		if el >= dur:
+			return {"state": STATE_AWAY, "pos": pts[pts.size() - 1],
+				"yaw": float((pl["yaws"] as PackedFloat32Array)[pts.size() - 1]),
+				"speed": 0.0, "u": 1.0, "s": float(pl["length"])}
+	elif el < 0.0:
 		return {"state": STATE_AWAY, "pos": pts[0], "yaw": float((pl["yaws"] as PackedFloat32Array)[0]),
 			"speed": 0.0, "u": 0.0, "s": 0.0}
-	var dur := float(pl["dur_s"])
-	if el >= dur:
+	elif el >= dur:
 		return {"state": STATE_PARKED, "pos": park_pos, "yaw": park_yaw, "speed": 0.0, "u": 1.0,
 			"s": float(pl["length"])}
 	# Binary search the time table.

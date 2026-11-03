@@ -8,8 +8,11 @@ extends RefCounted
 ## people are away (the bridge does not step or draw them). Mid-drive: the
 ## van is on the road between the gate and its spot and cannot be got into.
 ## After: it stands in its spot and its camp is home. Scrubbing the clock back
-## before the start sends it (and them) away again. Everything placed is
-## removed and the arrivals forgotten.
+## before the start sends it (and them) away again. Then (transport polish
+## Phase 3) a travel trailer with a kit stowed in it is hitched behind the
+## van: driving in and driving out, the trailer's coupler rides on the van's
+## hitch and its crates ride in it. Everything placed is removed and the
+## arrivals / departures forgotten.
 
 var _fails: Array = []
 var _dir := ""
@@ -134,7 +137,99 @@ func run(main: Node, harness: Node) -> Dictionary:
 	vprop = PlacedPropRuntime.find_by_prop_id(main, vid) as Node3D
 	_ok(vprop != null and vprop.visible and not bool(bridge.call("is_away", iid)),
 		"and the van and its camp are simply here")
-	return _finish(main, loader, [vid, gid])
+	var extra: Array = await _trailer_phase(main, loader, vid, park)
+	var pids: Array = [vid, gid]
+	pids.append_array(extra)
+	return _finish(main, loader, pids)
+
+
+## A trailer with cargo hitched behind the van: it follows on the way in and
+## on the way out, its crates inside it.
+func _trailer_phase(main: Node, loader: Node, vid: String, park: Vector2) -> Array:
+	var tree := main.get_tree()
+	var vd := VehicleDesign.solve(VehiclePresets.builtin("van"))
+	var td := VehicleDesign.solve(VehiclePresets.builtin("trailer"))
+	var hitch := VehicleTow.world_xz(vd.get("hitch", Vector3.ZERO), park, 0.0)
+	var axle := hitch + Vector2(0.0, VehicleTow.tongue_m(td))
+	var tp := VehicleTow.trailer_pose(td, hitch, axle)
+	var to: Vector2 = tp["origin"]
+	var tid := PlacedPropService.place_prepped_at(main, VehicleBuilder.MODEL_ID,
+		{"record_extra": {"vehicle_spec": VehicleSpec.to_json_safe(VehiclePresets.builtin("trailer")),
+			"collision_enabled": true}}, to.x, to.y, rad_to_deg(float(tp["yaw"])))
+	await _frames(tree, 8)
+	PlacedPropService.update_prop_record(main, vid, {"towing": tid}, false)
+	PlacedPropService.update_prop_record(main, tid, {"hitched_to": vid}, false)
+	var res: Dictionary = loader.call("deliver_kit_in_vehicle", "starter_camp", tid)
+	await _frames(tree, 10)
+	var stowed: Array = []
+	for c in res.get("crate_ids", []):
+		if str(PlacedPropService.get_prop_record(main, str(c)).get("stowed_in", "")) == tid:
+			stowed.append(str(c))
+	var out: Array = [tid]
+	out.append_array(res.get("crate_ids", []))
+	_ok(not tid.is_empty() and stowed.size() > 0, "a trailer hitched behind the van carries a kit (%d stowed)" % stowed.size())
+	if stowed.is_empty():
+		return out
+	var now := float(main.call("get_absolute_hours"))
+	loader.call("schedule_vehicle_arrivals", now + 1.0 / 60.0)
+	var arr: Dictionary = PlacedPropService.get_prop_record(main, vid).get("arrival", {})
+	_ok(not arr.is_empty() and not PlacedPropService.get_prop_record(main, tid).has("arrival"),
+		"the van is given the arrival, the towed trailer follows it")
+	# Not here yet: whatever the crew carried out goes back in the trailer.
+	await tree.create_timer(2.5).timeout
+	var back := 0
+	for c in stowed:
+		if str(PlacedPropService.get_prop_record(main, str(c)).get("stowed_in", "")) == tid:
+			back += 1
+	_ok(back == stowed.size(), "before the van arrives the trailer's crates are in it (%d of %d)" % [back, stowed.size()])
+	if arr.is_empty():
+		return out
+	var t_mid := float(arr["start_h"]) + VehicleDrive.duration_h(arr) * 0.5
+	main.call("set_absolute_hours", t_mid)
+	await _settle(tree)
+	_check_train(main, vid, tid, stowed[0], "driving in")
+	main.call("set_absolute_hours", VehicleDrive.park_h(arr) + 2.0 / 60.0)
+	await _settle(tree)
+	loader.call("schedule_vehicle_departures", float(main.call("get_absolute_hours")) + 1.0 / 60.0,
+		VehicleDrive.DEFAULT_SPACING_H, "vehiclearrival")
+	var vrec := PlacedPropService.get_prop_record(main, vid)
+	var leave := VehicleDrive.leave_h(vrec)
+	var gone := VehicleDrive.gone_h(vrec)
+	_ok(leave < INF, "the van is given a departure")
+	main.call("set_absolute_hours", (leave + gone) * 0.5)
+	await _settle(tree)
+	_check_train(main, vid, tid, stowed[0], "driving out")
+	main.call("set_absolute_hours", gone + 0.05)
+	await _settle(tree)
+	var tprop := PlacedPropRuntime.find_by_prop_id(main, tid) as Node3D
+	_ok(tprop != null and not tprop.visible, "the trailer is gone with the van")
+	main.call("set_absolute_hours", leave - 0.05)
+	await _settle(tree)
+	loader.call("clear_vehicle_departures", "vehiclearrival")
+	return out
+
+
+func _check_train(main: Node, vid: String, tid: String, crate: String, leg: String) -> void:
+	var vprop := PlacedPropRuntime.find_by_prop_id(main, vid) as Node3D
+	var tprop := PlacedPropRuntime.find_by_prop_id(main, tid) as Node3D
+	var cnode := PlacedPropRuntime.find_by_prop_id(main, crate) as Node3D
+	if vprop == null or tprop == null:
+		_ok(false, "%s: the van and the trailer exist" % leg)
+		return
+	var vd := VehicleDesign.solve(VehiclePresets.builtin("van"))
+	var td := VehicleDesign.solve(VehiclePresets.builtin("trailer"))
+	var vyaw := (vprop.get_node("ModelRoot") as Node3D).rotation.y
+	var tyaw := (tprop.get_node("ModelRoot") as Node3D).rotation.y
+	var hitch := VehicleTow.world_xz(vd.get("hitch", Vector3.ZERO), Vector2(vprop.global_position.x, vprop.global_position.z), vyaw)
+	var coupler := VehicleTow.world_xz(td.get("coupler", Vector3.ZERO), Vector2(tprop.global_position.x, tprop.global_position.z), tyaw)
+	_ok(tprop.visible and hitch.distance_to(coupler) < 0.3,
+		"%s: the trailer's coupler is on the van's hitch (%.2f m)" % [leg, hitch.distance_to(coupler)])
+	var crec := PlacedPropService.get_prop_record(main, crate)
+	var sl: Array = crec.get("stow_local", [0, 0, 0, 0])
+	var want := VehicleTow.world_xz(Vector3(float(sl[0]), 0.0, float(sl[2])),
+		Vector2(tprop.global_position.x, tprop.global_position.z), tyaw)
+	var got := Vector2(cnode.global_position.x, cnode.global_position.z) if cnode != null else Vector2.INF
+	_ok(got.distance_to(want) < 0.1, "%s: a crate rides at its place in the trailer (%.2f m)" % [leg, got.distance_to(want)])
 
 
 func _shot(main: Node, player: CharacterBody3D, target: Node3D, name: String) -> void:
@@ -158,6 +253,7 @@ func _shot(main: Node, player: CharacterBody3D, target: Node3D, name: String) ->
 
 func _finish(main: Node, loader: Node, pids: Array) -> Dictionary:
 	loader.call("clear_vehicle_arrivals")
+	loader.call("clear_vehicle_departures", "vehiclearrival")
 	for pid in pids:
 		if not str(pid).is_empty():
 			loader.call("delete_prop_by_id", str(pid))

@@ -18,7 +18,10 @@ extends RefCounted
 ##   {op:"move_prop",   prop_id, x, z}   crate set-down at its staging slot
 ##   {op:"fork_move",   prop_id, forklift_id, x, z}  a forklift set it down;
 ##       the forklift parks beside the drop
-##   both moves take `store_home` (a load-out: the record keeps
+##   both moves take `stow_in` (a load-out into a container or a vehicle:
+##       the crate is stowed in that host's bay, TerrainLoader.stow_prop_in;
+##       one that does not fit stays at the door),
+##   `store_home` (a load-out: the record keeps
 ##       `deploy_home` {x, z, yaw, y_offset} of where it stood) and
 ##       `clear_home` (a deploy's carry back: restore that yaw, drop it)
 ##   {op:"unpack_prop", prop_id}         deploy — plays the linkage raise sweep
@@ -58,6 +61,7 @@ static func execute(main: Node, op: Dictionary) -> bool:
 					{"collision_enabled": bool(op["collision_enabled"])}, true)
 			if moved:
 				_clear_home(main, prop_id, op)
+				_stow(main, prop_id, op)
 			return moved
 		"fork_move":
 			# A forklift operator set the load down: the load goes where
@@ -80,7 +84,9 @@ static func execute(main: Node, op: Dictionary) -> bool:
 				if PlacedPropService.move_prop_at(main, fid, park.x, park.y):
 					PlacedPropService.update_prop_record(main, fid,
 						{"yaw": float(op.get("park_yaw", 0.0)),
-						"fork_lift_m": 0.0, "fork_load_id": ""}, true)
+						"fork_lift_m": 0.0, "fork_load_id": null}, true)
+			if ok:
+				_stow(main, prop_id, op)
 			return ok
 		"unpack_prop", "pack_prop":
 			var loader := _loader(main)
@@ -189,6 +195,17 @@ static func _store_home(main: Node, prop_id: String, op: Dictionary) -> void:
 		"x": float(rec.get("x", 0.0)), "z": float(rec.get("z", 0.0)),
 		"yaw": float(rec.get("yaw", 0.0)),
 		"y_offset": float(rec.get("y_offset", 0.0))}}, false)
+
+
+## A load-out into a host's bay: stow the crate (it stays at the door when
+## the bay is full or the host has gone).
+static func _stow(main: Node, prop_id: String, op: Dictionary) -> void:
+	var host := str(op.get("stow_in", ""))
+	if host.is_empty():
+		return
+	var loader := _loader(main)
+	if loader != null and loader.has_method("stow_prop_in"):
+		loader.call("stow_prop_in", prop_id, host)
 
 
 ## The kit is back at its home: face it the way it stood and forget the home.

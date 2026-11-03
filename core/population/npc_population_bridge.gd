@@ -701,8 +701,13 @@ func away_camps() -> Dictionary:
 
 func _update_away(main: Node, abs_h: float, camps: Array) -> void:
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
-	var arrivals: Array = loader.call("vehicle_arrivals") 		if loader != null and loader.has_method("vehicle_arrivals") else []
-	var first: Dictionary = {}
+	var arrivals: Array = loader.call("vehicle_arrivals") \
+		if loader != null and loader.has_method("vehicle_arrivals") else []
+	# A camp with scheduled vehicles is home while any of them stands on site
+	# (parked in, not yet gone out); away before the first parks and after the
+	# last has left through the gate.
+	var present: Dictionary = {}   # iid -> bool
+	var next_h: Dictionary = {}    # iid -> when it is next home (the HUD's hour)
 	for a in arrivals:
 		var ad := a as Dictionary
 		var at := Vector2(float(ad.get("x", 0.0)), float(ad.get("z", 0.0)))
@@ -716,12 +721,16 @@ func _update_away(main: Node, abs_h: float, camps: Array) -> void:
 				best = str(cd.get("id", ""))
 		if best.is_empty():
 			continue
-		var ph := float(ad.get("park_h", 0.0))
-		first[best] = minf(float(first.get(best, INF)), ph)
+		var ph := float(ad.get("park_h", -INF))
+		var gh := float(ad.get("gone_h", INF))
+		var here := abs_h >= ph and abs_h < gh
+		present[best] = bool(present.get(best, false)) or here
+		if abs_h < ph:
+			next_h[best] = minf(float(next_h.get(best, INF)), ph)
 	var away := {}
-	for iid in first:
-		if abs_h < float(first[iid]):
-			away[iid] = first[iid]
+	for iid in present:
+		if not bool(present[iid]):
+			away[iid] = float(next_h.get(iid, INF))
 	if away.keys() != _away.keys():
 		_invalidate_dots()
 	_away = away

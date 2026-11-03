@@ -6,7 +6,8 @@ extends RefCounted
 ## layer first) and every crate / bundle with parts (what is inside it). Each
 ## handling unit gets an ID that names where it lives — `C1-P03` is pallet 3
 ## in the container, `C1-P03-B02` the second box on it, `C1-U07` a loose unit
-## — which is what goes on the printed label stuck to the box. Pure static so
+## — which is what goes on the printed label stuck to the box. A vehicle's
+## cargo bay is `V1` (`V1-U02`) so a label never claims a container. Pure static so
 ## packing_selftest pins it offline; the Packing Lab hands the data in and
 ## writes the files (CSV + JSON + a printable HTML page with label cards).
 
@@ -21,6 +22,7 @@ const DEFAULT_DIR := "user://packing_lists"
 static func build(entry: Dictionary, units: Array, placed: Array,
 		raw_units: Array = [], list_name: String = "") -> Dictionary:
 	var cname := str(entry.get("label", "Container"))
+	var sid := "V1" if str(entry.get("kind", "")) == "vehicle" else "C1"
 	var rows: Array = []
 	var placed_idx: Dictionary = {}
 	for p: Variant in placed:
@@ -50,10 +52,10 @@ static func build(entry: Dictionary, units: Array, placed: Array,
 		var u: Dictionary = units[idx] as Dictionary
 		if bool(u.get("pallet", false)):
 			n_p += 1
-			ids[idx] = "C1-P%02d" % n_p
+			ids[idx] = "%s-P%02d" % [sid, n_p]
 		else:
 			n_u += 1
-			ids[idx] = "C1-U%02d" % n_u
+			ids[idx] = "%s-U%02d" % [sid, n_u]
 	var not_loaded: Array = []
 	for i: int in units.size():
 		if placed_idx.has(i):
@@ -82,7 +84,7 @@ static func build(entry: Dictionary, units: Array, placed: Array,
 		total_kg += maxf(float(u.get("mass_kg", 0.0)), 0.0)
 		cards.append(_card(row, cname, ""))
 	spaces.append({
-		"kind": "container", "id": "C1", "label": cname,
+		"kind": "container", "id": sid, "label": cname,
 		"rows": c_rows, "not_loaded": not_loaded,
 		"total_kg": total_kg,
 		"payload_kg": float(entry.get("payload_kg", 0.0)),
@@ -173,11 +175,13 @@ static func _notes(u: Dictionary) -> Array:
 	if bool(u.get("overweight", false)):
 		n.append("OVERWEIGHT")
 	var h := str(u.get("handling", ""))
-	var m := float(u.get("mass_kg", 0.0))
-	if h == "forklift" or bool(u.get("pallet", false)):
-		n.append("FORKLIFT")
-	elif h == "team" or (h.is_empty() and m > 23.0):
-		n.append("2-PERSON LIFT")
+	if h.is_empty():
+		h = PackKitter.handling_for(float(u.get("mass_kg", 0.0)))
+	if bool(u.get("pallet", false)):
+		h = "forklift"
+	var lab := str(PackKitter.handling(h).get("label", ""))
+	if not lab.is_empty():
+		n.append(lab)
 	return n
 
 

@@ -8,6 +8,11 @@ extends RefCounted
 ## turned a quarter: every crate rides at its place in the bay, records too.
 ## Then the clock runs and the crew carries crates out of its door to staging:
 ## an unloaded crate is no longer stowed and stands on the ground outside.
+## Transport polish Phase 3: an arrival set ahead of the clock (a scrub back
+## past the truck's arrival) puts every crate back in the bay; a pack-up's
+## load-out effect stows a crate in it again; the truck drives out through
+## the gate with its crates (gone, its door no longer a loadout point, its
+## camp away if it has one); scrubbing back stands it in its spot again.
 
 var _fails: Array = []
 
@@ -138,11 +143,91 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(not crew_iid.is_empty() and not bool(bridge.call("is_all_hands", crew_iid)),
 		"the camp is released when the unload is done")
 	print("vehiclecargo: project %s" % str(proj2))
+	await _phase3(main, loader, bridge, vid, stowed, dir)
 	for c5 in crates:
 		loader.call("delete_prop_by_id", str(c5))
 	loader.call("delete_prop_by_id", vid)
 	print("vehiclecargo: %d failure(s)" % _fails.size())
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+func _now(main: Node) -> float:
+	return float(main.call("get_absolute_hours"))
+
+
+## Rewind restow, the load-out stow, the drive out and back.
+func _phase3(main: Node, loader: Node, bridge: Variant, vid: String, stowed: Array, dir: String) -> void:
+	var tree := main.get_tree()
+	var now := _now(main)
+	var vrec := PlacedPropService.get_prop_record(main, vid)
+	var park := Vector2(float(vrec.get("x", 0.0)), float(vrec.get("z", 0.0)))
+	# 1. The clock is before the truck's arrival: the unload is called off
+	#    and the crates go back in.
+	var gate: Dictionary = loader.call("site_gate")
+	var arr := VehicleDrive.make(gate["pos"], park, float(vrec.get("yaw", 0.0)), now + 0.5, [], gate["entry"])
+	PlacedPropService.update_prop_record(main, vid, {"arrival": arr}, false)
+	await tree.create_timer(2.5).timeout
+	var back := 0
+	for c in stowed:
+		if str(PlacedPropService.get_prop_record(main, str(c)).get("stowed_in", "")) == vid:
+			back += 1
+	_ok(back == stowed.size(), "scrubbed back before its arrival, every crate is back in the truck (%d of %d)" % [back, stowed.size()])
+	var dl: Dictionary = PlacedPropService.get_prop_record(main, vid).get("delivery", {})
+	_ok(str(dl.get("unload_project", "x")).is_empty() and bool(dl.get("unload_pending", false)),
+		"and the unload waits for it to arrive again (project forgotten, pending)")
+	PlacedPropService.update_prop_record(main, vid, {"arrival": null, "delivery": null}, false)
+	await _frames(tree, 4)
+	# 2. A pack-up's load-out: carried to the door and stowed.
+	var c0 := str(stowed[0])
+	var door := VehicleCargo.door_xz(PlacedPropService.get_prop_record(main, vid))
+	PlacedPropService.move_prop_at(main, c0, float(door["x"]) + 3.0, float(door["z"]), NAN, 0.0)
+	var out_ok := str(PlacedPropService.get_prop_record(main, c0).get("stowed_in", "")).is_empty()
+	SiteProjectEffects.execute(main, {"op": "move_prop", "prop_id": c0, "x": float(door["x"]),
+		"z": float(door["z"]), "store_home": true, "stow_in": vid})
+	await _frames(tree, 4)
+	var c0r := PlacedPropService.get_prop_record(main, c0)
+	_ok(out_ok and str(c0r.get("stowed_in", "")) == vid and c0r.get("stow_local") is Array,
+		"a pack-up's load-out stows the crate back in the truck")
+	# 3. Drive out through the gate.
+	var n := int(loader.call("schedule_vehicle_departures", _now(main) + 1.0 / 60.0,
+		VehicleDrive.DEFAULT_SPACING_H, "vehiclecargo"))
+	vrec = PlacedPropService.get_prop_record(main, vid)
+	var leave := VehicleDrive.leave_h(vrec)
+	var gone := VehicleDrive.gone_h(vrec)
+	_ok(n >= 1 and leave < INF and gone > leave, "the truck is given a departure (%d leaving)" % n)
+	var vprop := PlacedPropRuntime.find_by_prop_id(main, vid)
+	main.call("set_absolute_hours", (leave + gone) * 0.5)
+	await _frames(tree, 30)
+	var mid := Vector2(vprop.global_position.x, vprop.global_position.z) if vprop != null else park
+	var cnode := PlacedPropRuntime.find_by_prop_id(main, c0) as Node3D
+	var rides := cnode != null and Vector2(cnode.global_position.x, cnode.global_position.z).distance_to(mid) < 8.0
+	_ok(mid.distance_to(park) > 3.0, "half way out it is on the road (%.0f m from its spot)" % mid.distance_to(park))
+	_ok(rides, "a stowed crate rides out with it")
+	await RenderingServer.frame_post_draw
+	main.get_viewport().get_texture().get_image().save_png("%s/truck_leaving.png" % dir)
+	main.call("set_absolute_hours", gone + 0.05)
+	await _frames(tree, 30)
+	await tree.create_timer(1.2).timeout
+	_ok(vprop != null and not vprop.visible, "through the gate it is gone")
+	var near := VehicleCargo.door_near(loader.call("placed_prop_records"), park, 60.0, _now(main))
+	_ok(str(near.get("host_id", "")) != vid, "a departed truck is no loadout point")
+	var camp := str(bridge.call("nearest_crew_habitat", park)) if bridge != null else ""
+	var arrivals: Array = loader.call("vehicle_arrivals")
+	var mapped := false
+	for a in arrivals:
+		if str((a as Dictionary).get("id", "")) == vid and not str((a as Dictionary).get("camp_id", "")).is_empty():
+			mapped = true
+	if mapped and not camp.is_empty():
+		_ok(bool(bridge.call("is_away", camp)) or not (bridge.call("away_camps") as Dictionary).is_empty(),
+			"its camp is away once it has gone")
+	else:
+		print("vehiclecargo SKIP: the truck stands in no camp, no camp to send away")
+	# 4. Scrub back: it stands in its spot again.
+	main.call("set_absolute_hours", leave - 0.05)
+	await _frames(tree, 30)
+	var at := Vector2(vprop.global_position.x, vprop.global_position.z) if vprop != null else Vector2.INF
+	_ok(vprop != null and vprop.visible and at.distance_to(park) < 0.2, "scrubbed back, it stands in its spot again")
+	loader.call("clear_vehicle_departures", "vehiclecargo")
 
 
 func _drive(main: Node, player: CharacterBody3D, xz: Vector2, yaw: float) -> void:

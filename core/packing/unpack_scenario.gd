@@ -53,16 +53,6 @@ const SCENARIOS := {
 	},
 }
 
-## Crates land in a tight stack at the container DOOR; each carries the
-## staging slot it is destined for, so the unload is a real haul the crew
-## (or the player) actually performs. Geometry in metres from the container
-## centre along its forward (+door) axis.
-const DOOR_STACK_OFFSET_M := 1.5     # first stack row past the door end
-const DOOR_STACK_PITCH_M := 1.4      # row pitch inside the stack
-const STAGING_OFFSET_M := 9.0        # first staging row — the haul destination
-const STAGING_PITCH_M := 3.0         # walking-aisle staging rows
-
-
 static func scenario_ids() -> Array:
 	var out: Array = SCENARIOS.keys()
 	out.sort()
@@ -181,112 +171,27 @@ static func stow_plan(scenario_id: String, host: Dictionary = {}) -> Dictionary:
 ##
 ## Note the container mesh is a SOLID box with no cavity, so stowed crates are
 ## not visible in-world; the Packing Lab is the surface that shows the load.
+##
+## Phase 3 (transport polish): the container is placed here and the load goes
+## through THE spawn path, VehicleCargo.spawn_into, which a living vehicle's
+## delivery uses too (one staging rule sized from the crates, one door rule,
+## `stow_local` on every stowed crate).
 static func spawn(layer: PlacedPropLayer, scenario_id: String,
 		cx: float, cz: float, yaw_deg: float = 0.0, abs_h: float = 0.0) -> Dictionary:
 	var sc := find(scenario_id)
 	if layer == null or sc.is_empty():
 		return {}
-	var container_id := str(sc.get("container_id", "container_20"))
 	var cid := layer.add_free_prop("cargo_container", cx, 0.0, cz, yaw_deg)
 	if cid.is_empty():
 		return {}
-	var fwd := Vector2(sin(deg_to_rad(yaw_deg)), cos(deg_to_rad(yaw_deg)))
-	var side := Vector2(fwd.y, -fwd.x)
-	var entry := ContainerCatalog.find(container_id)
-	var half_l: float = float((entry.get("exterior", {}) as Dictionary).get("l_m", 6.0)) * 0.5
+	layer.update_prop(cid, {"container_spec": {"container_id": str(sc.get("container_id", "container_20"))}})
+	return VehicleCargo.spawn_into(layer, scenario_id, cid, abs_h)
 
-	var plan := stow_plan(scenario_id)
-	var interior: Dictionary = plan.get("interior", {})
-	var cw := float(interior.get("w_m", 0.0))
-	var cl := float(interior.get("l_m", 0.0))
-	# item_index -> placement, and item_index -> LIFO rank.
-	var placed_by_item: Dictionary = {}
-	for pl in plan.get("placements", []):
-		placed_by_item[int((pl as Dictionary)["item_index"])] = pl
-	var rank_of: Dictionary = {}
-	var order: Array = plan.get("order", [])
-	for r in order.size():
-		rank_of[int(order[r])] = r
 
-	# Staging slots are addressed by UNLOAD rank, so the first crate out takes
-	# the nearest slot and the yard fills in the order the crew works.
-	var staging_for := func(rank: int) -> Vector2:
-		var row := floori(rank / 2.0)
-		var col := rank % 2
-		return Vector2(cx, cz) \
-			+ fwd * (half_l + STAGING_OFFSET_M + row * STAGING_PITCH_M) \
-			+ side * (col * 3.0 - 1.5)
-
-	var by_slot: Dictionary = {}   # delivery slot -> prop id
-	var slot := 0
-	var spill := 0
-	for unit in sc.get("units", []):
-		var u := unit as Dictionary
-		var model_id := str(u.get("model_id", ""))
-		for _i in maxi(int(u.get("count", 1)), 1):
-			var patch := {"packed": true, "delivery_id": cid, "delivery_slot": slot}
-			var pos := Vector2.ZERO
-			var crate_yaw := yaw_deg
-			var rank := int(rank_of.get(slot, -1))
-			if placed_by_item.has(slot) and cw > 0.0 and cl > 0.0:
-				var pl: Dictionary = placed_by_item[slot]
-				var p3: Vector3 = pl["pos"]
-				var s3: Vector3 = pl["size"]
-				# Solver frame: x = interior width, y = height, z = load length
-				# with the DOOR at high z; origin is the interior floor at the
-				# nose corner. Container local +Z is the door direction (world
-				# `fwd`) and local +X is world `side`.
-				var c3 := p3 + s3 * 0.5
-				pos = Vector2(cx, cz) + fwd * (c3.z - cl * 0.5) + side * (c3.x - cw * 0.5)
-				# y_offset is EXACT, no deck fudge: PackedFormBuilder puts a
-				# crate's origin at its own floor and the container's floor is
-				# local Y = 0.
-				patch["y_offset"] = p3.y
-				patch["stowed_in"] = cid
-				patch["unload_rank"] = maxi(rank, 0)
-				# Crates inside a closed box are neither walkable-into nor
-				# clickable; the crew has to bring them out first.
-				patch["collision_enabled"] = false
-				# The solver may have turned the box a quarter turn — the only
-				# other orientation a yaw-only renderer can express.
-				if absf(s3.x - float((plan["items"] as Array)[slot].get("d_m", s3.x))) < 0.001 \
-						and absf(s3.x - float((plan["items"] as Array)[slot].get("w_m", -1.0))) > 0.001:
-					crate_yaw = yaw_deg + 90.0
-			else:
-				# Overflow (or no plan): the pre-v3 door stack, so a unit that
-				# does not fit still arrives and is visibly outside the box.
-				var row := floori(spill / 2.0)
-				var col := spill % 2
-				pos = Vector2(cx, cz) \
-					+ fwd * (half_l + DOOR_STACK_OFFSET_M + row * DOOR_STACK_PITCH_M) \
-					+ side * (col * 2.0 - 1.0)
-				spill += 1
-			var stage: Vector2 = staging_for.call(rank if rank >= 0 else slot)
-			patch["staging"] = {"x": stage.x, "z": stage.y}
-			var pid := layer.add_free_prop(model_id, pos.x, 0.0, pos.y, crate_yaw)
-			if pid.is_empty():
-				continue
-			if bool(u.get("linkage_default", false)):
-				patch["linkage_spec"] = LinkageParams.new().to_config()
-			layer.update_prop(pid, patch)
-			by_slot[slot] = pid
-			slot += 1
-
-	# Emit in UNLOAD order so every consumer inherits LIFO for free.
-	var crate_ids: Array = []
-	for oi in order:
-		if by_slot.has(int(oi)):
-			crate_ids.append(by_slot[int(oi)])
-	for s in by_slot:
-		if not crate_ids.has(by_slot[s]):
-			crate_ids.append(by_slot[s])
-	layer.update_prop(cid, {
-		"container_spec": {"container_id": container_id},
-		"delivery": {"scenario_id": scenario_id,
-			"crate_ids": crate_ids.duplicate(), "delivered_h": abs_h},
-	})
-	return {"scenario_id": scenario_id, "container_prop_id": cid,
-		"crate_ids": crate_ids}
+## THE door rule for any cargo host (a container or a living vehicle): where
+## the crew stands, {x, z, out}.
+static func door_xz(rec: Dictionary) -> Dictionary:
+	return VehicleCargo.door_xz(rec)
 
 
 ## The persisted delivery blob for a container prop, or {} — the reload-safe

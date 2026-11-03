@@ -1,16 +1,17 @@
 class_name VehicleDriveRuntime
 extends Node
 
-## Puts a living vehicle where its ARRIVAL says it is (VehicleDrive): not on
-## site before it sets off, on the road while it drives in, in its spot after.
-## Attached to every living vehicle prop; idle while the record carries no
-## `arrival`. The record is never written — the pose is a function of the
+## Puts a living vehicle where its ARRIVAL and DEPARTURE say it is
+## (VehicleDrive.pose_for): not on site before it sets off, on the road while
+## it drives in, in its spot, on the road again while it drives out, gone
+## after. Attached to every living vehicle prop; idle while the record carries
+## neither. The record is never written — the pose is a function of the
 ## clock, so the drive scrubs backwards and survives a reload.
 ##
 ## A trailer hitched to an arriving vehicle follows it: its coupler on the
 ## vehicle's hitch, its axle on the road behind (VehicleDrive.point_behind).
-## Crates stowed in either ride along (their nodes; the records already hold
-## the parked slots).
+## Crates stowed in either ride along (their nodes, placed by
+## VehicleCargo.place_stowed_node; the records already hold the parked slots).
 ##
 ## While the vehicle is away or on the road it cannot be got into
 ## (`META_BUSY` on the prop, read by PlacedVehicle.can_mount).
@@ -23,8 +24,12 @@ var prop_id := ""
 var _prop: Node3D = null
 var _model: Node3D = null
 var _arrival: Dictionary = {}
-## The tow vehicle's arrival when this is a trailer hitched to one.
+var _departure: Dictionary = {}
+## The tow vehicle's arrival / departure when this is a trailer hitched to one.
 var _tow_arrival: Dictionary = {}
+var _tow_departure: Dictionary = {}
+var _tow_park := Vector2.ZERO
+var _tow_park_yaw := 0.0
 var _tow_id := ""
 var _design: Dictionary = {}
 var _tow_design: Dictionary = {}
@@ -36,9 +41,6 @@ var _have_home := false
 var _lift := 0.0
 var _state := ""
 var _cargo_ids: Array = []
-## Each stowed crate's transform in the vehicle's parked frame (prop id ->
-## Transform3D), taken when the drive starts.
-var _cargo_local: Dictionary = {}
 var _wheelbase := 3.5
 
 
@@ -74,15 +76,20 @@ func _process(delta: float) -> void:
 	if _poll >= POLL_S:
 		_poll = 0.0
 		_refresh(main)
-	var arr := _tow_arrival if not _tow_arrival.is_empty() else _arrival
-	if arr.is_empty():
+	var trailer := not _tow_id.is_empty() and (not _tow_arrival.is_empty() or not _tow_departure.is_empty())
+	var arr := _tow_arrival if trailer else _arrival
+	var dep := _tow_departure if trailer else _departure
+	if arr.is_empty() and dep.is_empty():
 		_settle(STATE_IDLE)
 		return
 	var veh := _prop.get_node_or_null("PlacedVehicle")
 	if veh != null and bool(veh.get("is_mounted")):
 		_settle(STATE_IDLE)
 		return
-	var pose := VehicleDrive.pose_at(arr, float(main.call("get_absolute_hours")))
+	var now := float(main.call("get_absolute_hours"))
+	var pose := VehicleDrive.pose_for(arr, dep, now, _tow_park, _tow_park_yaw)
+	# The leg it is on (the departure once it has set off).
+	var leg := dep if not dep.is_empty() and now >= float(dep.get("start_h", INF)) else arr
 	var st := str(pose["state"])
 	if st == VehicleDrive.STATE_PARKED:
 		_settle(STATE_IDLE)
@@ -96,10 +103,10 @@ func _process(delta: float) -> void:
 	_prop.visible = true
 	var pos: Vector2 = pose["pos"]
 	var yaw := float(pose["yaw"])
-	if not _tow_arrival.is_empty():
+	if trailer:
 		# A trailer: coupler on the tow vehicle's hitch, axle on the road.
 		var hitch := VehicleTow.world_xz(_tow_design.get("hitch", Vector3.ZERO), pos, yaw)
-		var axle := VehicleDrive.point_behind(_tow_arrival, hitch, float(pose["s"]), VehicleTow.tongue_m(_design))
+		var axle := VehicleDrive.point_behind(leg, hitch, float(pose["s"]), VehicleTow.tongue_m(_design))
 		var tp := VehicleTow.trailer_pose(_design, hitch, axle)
 		pos = tp["origin"]
 		yaw = float(tp["yaw"])
@@ -111,10 +118,10 @@ func _process(delta: float) -> void:
 		# The wheels: rolled the route's arc length, steering into its bends
 		# (a trailer's turn with it, unsteered).
 		var s_now := float(pose["s"])
-		var ahead := VehicleDrive.pose_at(arr, float(main.call("get_absolute_hours")) + 1.0 / 3600.0)
+		var ahead := VehicleDrive.pose_at(leg, now + 1.0 / 3600.0)
 		var ds := float(ahead.get("s", s_now)) - s_now
 		var steer := VehicleBuilder.steer_for(_wheelbase,
-			angle_difference(float(pose["yaw"]), float(ahead["yaw"])), ds) if _tow_arrival.is_empty() else 0.0
+			angle_difference(float(pose["yaw"]), float(ahead["yaw"])), ds) if not trailer else 0.0
 		VehicleBuilder.spin_wheels(_model, s_now, steer)
 	_move_cargo(main, true)
 
@@ -159,22 +166,10 @@ func _capture_home() -> void:
 	_home_pos = _prop.global_position
 	_home_yaw = _model.rotation.y if _model != null else 0.0
 	_have_home = true
-	_cargo_local.clear()
 	var main := _main()
 	if main == null:
 		return
 	_lift = _home_pos.y - _ground(main, _home_pos.x, _home_pos.z)
-	var inv := _frame().affine_inverse()
-	for cid in _cargo_ids:
-		var node := PlacedPropRuntime.find_by_prop_id(main, str(cid)) as Node3D
-		if node != null:
-			_cargo_local[str(cid)] = inv * node.global_transform
-
-
-## The vehicle's frame now: its position and the model's yaw.
-func _frame() -> Transform3D:
-	var yaw := _model.rotation.y if _model != null else 0.0
-	return Transform3D(Basis(Vector3.UP, yaw), _prop.global_position)
 
 
 func _record() -> Dictionary:
@@ -186,18 +181,26 @@ func _refresh(main: Node) -> void:
 	var rec := PlacedPropService.get_prop_record(main, prop_id)
 	var a: Variant = rec.get("arrival", {})
 	_arrival = a if a is Dictionary else {}
+	var dp: Variant = rec.get("departure", {})
+	_departure = dp if dp is Dictionary else {}
 	if _design.is_empty():
 		_design = VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))
 		_wheelbase = VehicleBuilder.wheelbase_of(_design)
 	_tow_arrival = {}
+	_tow_departure = {}
 	_tow_id = str(rec.get("hitched_to", ""))
 	if not _tow_id.is_empty():
 		var trec := PlacedPropService.get_prop_record(main, _tow_id)
 		var ta: Variant = trec.get("arrival", {})
-		if ta is Dictionary and not (ta as Dictionary).is_empty():
+		var td: Variant = trec.get("departure", {})
+		if ta is Dictionary:
 			_tow_arrival = ta
-			if _tow_design.is_empty():
-				_tow_design = VehicleDesign.solve(VehicleBuilder.spec_for_record(trec))
+		if td is Dictionary:
+			_tow_departure = td
+		_tow_park = Vector2(float(trec.get("x", 0.0)), float(trec.get("z", 0.0)))
+		_tow_park_yaw = deg_to_rad(float(trec.get("yaw", 0.0)))
+		if _tow_design.is_empty() and not (_tow_arrival.is_empty() and _tow_departure.is_empty()):
+			_tow_design = VehicleDesign.solve(VehicleBuilder.spec_for_record(trec))
 	if _state == STATE_IDLE or _state == "":
 		_cargo_ids.clear()
 		var layer := PlacedPropService._layer_for_main(main)
@@ -215,16 +218,19 @@ func _ground(main: Node, x: float, z: float) -> float:
 
 
 ## Stowed crates ride in the vehicle: hidden while it is away, carried at
-## their place in it while it drives and when it parks.
+## their place in it while it drives and when it parks (VehicleCargo's one
+## stowed-crate rule, off the prop's ground point and the model's yaw).
 func _move_cargo(main: Node, shown: bool) -> void:
-	var f := _frame()
-	for cid in _cargo_local:
+	var ground := _prop.global_position - Vector3(0.0, _lift, 0.0)
+	var yaw := _model.rotation.y if _model != null else 0.0
+	for cid in _cargo_ids:
 		var node := PlacedPropRuntime.find_by_prop_id(main, str(cid)) as Node3D
 		if node == null:
 			continue
+		var crec := PlacedPropService.get_prop_record(main, str(cid))
 		# A crate the crew has carried out is no longer the vehicle's.
-		if str(PlacedPropService.get_prop_record(main, str(cid)).get("stowed_in", "")) != prop_id:
+		if str(crec.get("stowed_in", "")) != prop_id:
 			continue
-		node.visible = shown
+		node.visible = shown and not bool(crec.get("hidden_3d", false))
 		if shown:
-			node.global_transform = f * (_cargo_local[cid] as Transform3D)
+			VehicleCargo.place_stowed_node(node, ground, yaw, crec)

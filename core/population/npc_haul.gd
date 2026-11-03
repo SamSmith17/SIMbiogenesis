@@ -87,7 +87,7 @@ static func best_plan(workers: int, length_m: float, units: int) -> Dictionary:
 ## One-person lift ceiling. 23 kg is the NIOSH lifting-equation load constant
 ## (RWL ceiling for a routine two-handed lift under ideal conditions —
 ## Waters et al. 1993); heavier loads are team lifts.
-const SOLO_LIFT_KG := 23.0
+const SOLO_LIFT_KG := PackKitter.ONE_PERSON_KG
 ## A team's usable capacity is LESS than the sum of its members — hands get in
 ## each other's way and the load is shared unevenly. ~0.85 per the two-person
 ## team-lift literature (Karwowski & Mital 1986 report 68-91% of summed

@@ -62,12 +62,33 @@ static func part(label: String, kind: String, len_m: float, w_m: float, h_m: flo
 	return row
 
 
+## THE handling table: how a unit of a given mass is moved. Every reader —
+## the kitter, the haul crew size (NpcHaulModel.carriers_for), the forklift
+## rule (SiteProject.crate_needs_forklift, ForkliftRig.liftable), packing-list
+## labels and the deploy planner's labour — asks this one table.
+##   max_kg: the class's upper mass (INF = anything the forklift rates).
+##   label: what the packing list prints.
+##   labour_scale: person-hours per kg relative to carrying by hand (a
+##     forklift lifts the weight; the crew only steadies and guides it —
+##     an estimate, like the planner's KG_PER_HOUR).
+const HANDLING := {
+	"hand": {"max_kg": ONE_PERSON_KG, "label": "", "labour_scale": 1.0},
+	"team": {"max_kg": TEAM_LIFT_KG, "label": "2-PERSON LIFT", "labour_scale": 1.0},
+	"forklift": {"max_kg": INF, "label": "FORKLIFT", "labour_scale": 0.5},
+}
+
+
 static func handling_for(mass_kg: float) -> String:
-	if mass_kg <= ONE_PERSON_KG:
+	if mass_kg <= float(HANDLING["hand"]["max_kg"]):
 		return "hand"
-	if mass_kg <= TEAM_LIFT_KG:
+	if mass_kg <= float(HANDLING["team"]["max_kg"]):
 		return "team"
 	return "forklift"
+
+
+## A handling class's row (hand when unknown).
+static func handling(cls: String) -> Dictionary:
+	return HANDLING.get(cls, HANDLING["hand"])
 
 
 static func part_volume_m3(p: Dictionary) -> float:

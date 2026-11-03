@@ -8666,14 +8666,15 @@ Lab (`--capture=packing`) is its visual surface.
  player's `Imported Models/Vehicles/forklift.glb` with a procedural
  fallback): a PlacedVehicle plus `ForkliftRig` (mast + forks; PgUp/PgDn
  while driving, record keys `fork_lift_m` / `fork_load_id`, rated 2500 kg,
- footprint ≤ `MAX_FOOTPRINT_M`). Crates from 200 kg
- (`SiteProject.crate_needs_forklift`) are moved by NPC forklift chores:
+ footprint ≤ `MAX_FOOTPRINT_M`). Crates in the handling table's forklift
+ class (over 60 kg, `PackKitter.HANDLING`; `SiteProject.crate_needs_forklift`)
+ are moved by NPC forklift chores:
  `ForkliftPlanner`, the `fork_move` effect, `unload_spec_rows(...,
  forklift_id)`; scenario `workshop_pallets`. Gate:
  `tools\harness.ps1 -World walton -RunScript res://tools/checks/forklift_unload_check.gd -Label forklift_unload -Timeout 900`.
  Tour stops `17a_forklift`, `51a_intermodal_units`.
 
-Selftest: `core/packing/packing_selftest.gd` (745 checks; --import first).
+Selftest: `core/packing/packing_selftest.gd` (752 checks; --import first).
 
 ## NPC population simulation (core/population/)
 
@@ -11683,6 +11684,7 @@ driver's view out of the cab). All eight are done.
   Packing Lab lists placed vehicles' bays ("vehicle_bay:<id>"); the designer
   summary prints the bay. Verified: `vehiclelab_selftest` cargo tests and
   `tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_cargo_check.gd -Label vehicle_cargo -Timeout 1200`
+  and (Phase 3) `tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_delete_check.gd -Label vehicle_delete -Timeout 600`
   (11/0: 7 crates stowed in the bay, ride along driven + turned, records
   follow, the camp pinned, every crate carried out, the camp released).
   - ⚠ **Why the crew never unloaded (fixed):** the unload went to
@@ -11856,6 +11858,87 @@ driver's view out of the cab). All eight are done.
   inside call arguments needs its expression in parentheses
   (`func(w): return (a\n and b)`), or GDScript reads the second line as a
   stray argument.
+- **Transport lifecycle (polish Phase 3, 2026-11-02).** Vehicles leave,
+  crates go back in, and every place that moves cargo uses ONE rule:
+  - **Leaving.** A record's `departure` = {start_h, route [spot, the
+    pull-out point `APPROACH_M` ahead, the road, the gate, outside], park,
+    out: true, by}: PARKED before `start_h`, DRIVING (creeping out first),
+    then AWAY. `VehicleDrive.make_out` / `pose_of(rec, h)` / `pose_for(arr,
+    dep, h, ...)` / `parked_at` / `leave_h` / `gone_h`; plans are cached,
+    oldest dropped past `PLAN_CACHE_MAX` 64. `VehicleDriveRuntime` draws
+    both legs; a hitched trailer follows its tow vehicle's arrival AND
+    departure. `TerrainLoader.schedule_vehicle_departures(start, spacing,
+    by)` (the one nearest the gate LAST, no sooner than it parked) /
+    `_auto` / `clear_vehicle_departures(by)`. A Pack-up event whose crews
+    finish schedules them (`SiteDeployDirector.DEPART_AFTER_H` 2 min,
+    `by` = the event id); scrubbing back past that event takes them back.
+    Camps panel: "Drive out" beside "Drive in"; "Already here" clears both.
+    `vehicle_arrivals()` lists every scheduled drive with park_h (−INF =
+    here from the start), leave_h / gone_h (INF = staying) and `camp_id`;
+    the bridge's camp is home while any of its scheduled vehicles stands
+    on site, away before the first parks and after the last is gone. Both
+    legs were already billed (`VehicleEnergy.trip` is a round trip).
+  - **One host model** (`VehicleCargo`): `is_host` / `host_bay(rec)` (a
+    container's interior in the same solver frame as a vehicle's bay) /
+    `door_xz(rec)` (THE door rule; `UnpackScenario.door_xz` delegates; a
+    container's door is local +Z, 1 m out) / `host_ready(rec, h,
+    drive_rec)` (not packed, the vehicle — or a trailer's tow vehicle —
+    parked) / `door_near(records, pos, reach, h)` returns {x, z,
+    host_id}, skipping a packed, away or driving vehicle.
+  - **One spawn path**: `VehicleCargo.spawn_into(layer, scenario, host_id,
+    h)`; `UnpackScenario.spawn` places the container then calls it,
+    `spawn_in_vehicle` too. Every stowed crate carries `stow_local`
+    [x, y, z, yaw_rel]; staging is sized from the crates (`staging_xz`:
+    `STAGE_GAP_M` 2.5 past the door, rows a crate + `STAGE_AISLE_M`
+    apart), overflow beside the door (`overflow_xz`). The old door-stack
+    constants are gone.
+  - **One stowed-crate rule**: `place_stowed(host_rec, crate_rec)`
+    (records) and `place_stowed_node(node, host_ground, host_yaw, crate)`
+    (nodes). PlacedVehicle (its own bay and the trailer it tows), the drive
+    runtime and a hand move of any host (`PlacedPropService._reseat_cargo`
+    from `update_prop_record`) all use them. `move_prop_at` clears
+    `stow_local` with `stowed_in`.
+  - **Pack-up stows crates back**: `door_near`'s `host_id` becomes the
+    load-out effect's `stow_in`; `SiteProjectEffects` then calls
+    `TerrainLoader.stow_prop_in(pid, host)`, which packs the whole load
+    again with the new crate (`VehicleCargo.restow_patches`; what does not
+    fit stays at the door). The next deploy takes a stowed kit that has a
+    `deploy_home` back out once its host is parked. The pack-up inventory
+    skips the forklift and every living vehicle (they drive out).
+  - **Unloads are gated and retried** (`_tick_vehicle_logistics`, 1 Hz):
+    a delivery is `unload_pending` on the host's `delivery` blob until the
+    host stands in its spot (a vehicle still driving in holds its crates),
+    a board too full to take it is asked again every `UNLOAD_RETRY_S` 5 s,
+    and a vehicle's crew is the camp nearest the camp it belongs to
+    (`camp_of_vehicle`: the painted camp it stands in, else the nearest
+    camp middle within 300 m; stored as `camp_id`). A clock before the
+    host's (or its tow's) arrival cancels the unload and re-stows every
+    crate still a crate (`_rewind_unload`).
+  - **Forks and a vehicle's bay**: the forks cannot drive in. A heavy
+    crate in a vehicle gets a "Slide to the door" row (2–4 people) the
+    fork trip waits for, picked up at the door on the ground;
+    `SiteProject.fork_fits_door` refuses the forklift when the door is
+    narrower than max(forks, load) + 0.1 m.
+  - **One handling table**: `PackKitter.HANDLING` (hand ≤ 23 kg, team ≤ 60,
+    forklift beyond; `label`, `labour_scale` — the forklift class's lifting
+    labour is halved, an estimate). `NpcHaulModel.SOLO_LIFT_KG`,
+    `crate_needs_forklift`, `ForkliftRig.liftable`, PackingList labels and
+    `SiteDeployPlanner.labour_hours` all read it.
+  - **Hygiene**: deleting a host sets its crates down beside its door
+    (un-stowed, collision on), unhitches a partner (`PlacedVehicle
+    .unhitch_prop` now clears the records when no live runtime holds the
+    hitch), empties a forklift whose load is deleted; a duplicate drops
+    delivery / towing / hitched_to / arrival / departure / fork_load_id /
+    stow keys / camp_id. A vehicle somebody is driving is not scheduled.
+    The forklift saves its load's place on the forks (`fork_load_off`) and
+    writes null, never "", for an empty fork. A vehicle bay's packing-list
+    labels are `V1-…`.
+  - Gates: `vehiclelab_selftest` `_test_transport_lifecycle` (740),
+    `site_deploy_selftest` (85), and with real input on Walton:
+    `vehicle_cargo_check` (22: rewind restow, load-out stow, drive out,
+    camp away, scrub back), `vehicle_arrival_check` (28: a cargo trailer
+    following both ways), `forklift_unload_check` (22: the box-truck bay
+    phase), new `vehicle_delete_check` (9).
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch

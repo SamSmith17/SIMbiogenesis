@@ -370,7 +370,21 @@ static func crate_needs_forklift(cd: Dictionary) -> bool:
 	var m := float(cd.get("mass_kg", 0.0))
 	var by_mass := PackKitter.handling_for(m) == "forklift"
 	var flagged := str(cd.get("handling", "")) == "forklift"
-	return (by_mass or flagged) and ForkliftPlanner.can_carry(maxf(m, 1.0))
+	return (by_mass or flagged) and ForkliftPlanner.can_carry(maxf(m, 1.0)) \
+		and fork_fits_door(cd)
+
+
+## A crate in a vehicle's bay (`pull_to` = its door) is reached by the forks
+## only through the door: the door must take the forks and the load's width
+## with a little play. Anywhere else (a container's full-width doors, the
+## ground) the forks fit.
+const FORK_DOOR_PLAY_M := 0.1
+
+static func fork_fits_door(cd: Dictionary) -> bool:
+	if not (cd.get("pull_to") is Vector2):
+		return true
+	var need := maxf(ForkliftBuilder.FORK_SPREAD_M, float(cd.get("load_w_m", 0.0))) + FORK_DOOR_PLAY_M
+	return float(cd.get("door_w_m", INF)) >= need
 
 
 ## The unload with a forklift on site: every unit too heavy to lift is one
@@ -423,13 +437,34 @@ static func _unload_with_forklift(crates: Array, from: Vector2, roster: int,
 		var cd2 := crates[i] as Dictionary
 		var pid := str(cd2.get("pid", ""))
 		var stg: Vector2 = cd2.get("stage", Vector2.ZERO)
-		var park := ForkliftPlanner.park_beside(stg, from)
+		var pick := from
+		var lift := float(cd2.get("lift_m", 0.0))
+		var pull_tid := ""
+		if cd2.get("pull_to") is Vector2:
+			# Inside a vehicle: the crew slides it to the door first, where
+			# the forks can reach it on the ground.
+			pick = cd2["pull_to"]
+			lift = 0.0
+			pull_tid = "pull_%d" % i
+			var pull := {
+				"task_id": pull_tid,
+				"label": "Slide to the door — %s" % str(cd2.get("label", "unit")),
+				"chore_hours": 0.15, "priority": 1 + i,
+				"min_workers": 2, "max_workers": 4, "exposure": "outdoor",
+				"target": {"kind": "prop", "id": pid},
+				"carry_to": {"x": pick.x, "z": pick.y},
+				"effect": {"op": "move_prop", "prop_id": pid, "x": pick.x, "z": pick.y,
+					"y_offset": 0.0},
+			}
+			if not prev.is_empty():
+				pull["depends_on"] = [prev]
+			rows.append(pull)
+		var park := ForkliftPlanner.park_beside(stg, pick)
 		var tid := "fork_%d" % i
 		var row3 := {
 			"task_id": tid,
 			"label": "Forklift — %s" % str(cd2.get("label", "unit")),
-			"chore_hours": ForkliftPlanner.trip_hours(from.distance_to(stg),
-				float(cd2.get("lift_m", 0.0))),
+			"chore_hours": ForkliftPlanner.trip_hours(pick.distance_to(stg), lift),
 			"priority": 1 + i,
 			"min_workers": 1, "max_workers": 1,
 			"exposure": "outdoor",
@@ -439,11 +474,13 @@ static func _unload_with_forklift(crates: Array, from: Vector2, roster: int,
 			"effect": {"op": "fork_move", "prop_id": pid,
 				"forklift_id": forklift_id, "x": stg.x, "z": stg.y,
 				"y_offset": 0.0, "collision_enabled": true,
-				"from_x": from.x, "from_z": from.y,
+				"from_x": pick.x, "from_z": pick.y,
 				"park_x": park.x, "park_z": park.y,
 				"park_yaw": ForkliftPlanner.facing_yaw_deg(park, stg)},
 		}
-		if not prev.is_empty():
+		if not pull_tid.is_empty():
+			row3["depends_on"] = [pull_tid]
+		elif not prev.is_empty():
 			row3["depends_on"] = [prev]
 		rows.append(row3)
 		gate_deps.append(tid)

@@ -161,9 +161,25 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 			_reseat_hosted(main, prop_id, depth)
 			if str(layer.find_by_id(prop_id).get("model_id", "")) == PvLabBuilder.MODEL_ID:
 				Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
+			_reseat_cargo(main, layer, prop_id)
 			break
 	_notify_mp_props_edited()
 	return true
+
+
+## A cargo host (container, living vehicle) moved or turned by hand: the
+## crates stowed in it follow (VehicleCargo's one stowed-crate rule).
+static func _reseat_cargo(main: Node, layer: PlacedPropLayer, host_id: String) -> void:
+	var hrec := layer.find_by_id(host_id)
+	if not VehicleCargo.is_host(hrec):
+		return
+	var cp := VehicleCargo.reseat_patches(layer.props, hrec)
+	if cp.is_empty():
+		return
+	for cid in cp:
+		layer.update_prop(str(cid), cp[cid])
+		_reposition_scene_prop(main, layer, str(cid))
+	_save_layer(main, layer)
 
 
 ## Move an existing prop to a new world XZ and reground.
@@ -197,7 +213,7 @@ static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
 		gy = TerrainSurfaceQuery.ground_height_at(main, x, z)
 	# Moving a crate is exactly what un-stows it, whoever moved it — a chore
 	# effect or the player dragging it out. One unconditional key covers both.
-	var patch := {"x": x, "z": z, "ground_y": gy, "stowed_in": null}
+	var patch := {"x": x, "z": z, "ground_y": gy, "stowed_in": null, "stow_local": null}
 	if not is_nan(y_offset):
 		patch["y_offset"] = y_offset
 	if not layer.update_prop(prop_id, patch):

@@ -12,7 +12,7 @@ extends SceneTree
 ## prints). Run --import first.
 ##   godot --headless --path . --script core/population/site_deploy_selftest.gd
 
-const EXPECTED_CHECKS := 84
+const EXPECTED_CHECKS := 85
 
 var _failures := 0
 var _checks := 0
@@ -139,10 +139,11 @@ func _effect_ops(rows: Array) -> Array:
 
 
 func _test_planner_rows() -> void:
-	_check("labour from mass: unknown = 1 h, 34 kg ≈ 1.25 h, 350 kg ≈ 9.15 h, clamped at 24",
+	_check("labour from mass: unknown = 1 h, 34 kg ≈ 1.25 h, 350 kg ≈ 4.8 h (forklift class), clamped at 24",
 		absf(SiteDeployPlanner.labour_hours(-1.0) - 1.0) < 1e-9
 		and absf(SiteDeployPlanner.labour_hours(34.0) - 1.25) < 1e-9
-		and absf(SiteDeployPlanner.labour_hours(350.0) - 9.15) < 1e-9
+		# 350 kg is forklift class: the machine does the lifting (x0.5).
+		and absf(SiteDeployPlanner.labour_hours(350.0) - 4.775) < 1e-9
 		and absf(SiteDeployPlanner.labour_hours(5000.0) - 24.0) < 1e-9)
 	_check("camp hours: 0.12 per structure, floored", absf(SiteDeployPlanner.camp_hours(20) - 2.4) < 1e-9
 		and absf(SiteDeployPlanner.camp_hours(1) - 0.3) < 1e-9)
@@ -230,6 +231,15 @@ func _test_planner_rows() -> void:
 		_ids(SiteDeployPlanner.rows_for(link, SiteDeploySchedule.ACTION_PACKUP, 8)).has("load_out"))
 	_check("the carry to the door remembers where it stood",
 		bool((lrows2[2]["effect"] as Dictionary).get("store_home", false)) and bool(heff.get("store_home", false)))
+	# The load-out stows the crate back in the host the door belongs to.
+	var pod3 := _item("p_pod3", "shiftpod", 34.0)
+	pod3["loadout"] = {"x": 12.0, "z": -3.0, "host_id": "p_van"}
+	var lrows4 := SiteDeployPlanner.rows_for(pod3, SiteDeploySchedule.ACTION_PACKUP, 6)
+	heavy["loadout"] = {"x": 12.0, "z": -3.0, "host_id": "p_box"}
+	var hrows2 := SiteDeployPlanner.rows_for(heavy, SiteDeploySchedule.ACTION_PACKUP, 6)
+	_check("a pack-up's load-out stows the crate in its host (hand and forks)",
+		str((lrows4[2]["effect"] as Dictionary).get("stow_in", "")) == "p_van"
+		and str((hrows2[hrows2.size() - 1]["effect"] as Dictionary).get("stow_in", "")) == "p_box")
 
 	# A kit that was carried away deploys back where it stood.
 	var away := _item("p_away", "shiftpod", 34.0, Vector2(12.0, -3.0))
