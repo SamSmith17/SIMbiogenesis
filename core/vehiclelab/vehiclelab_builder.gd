@@ -33,6 +33,7 @@ const C_TYRE := Color(0.06, 0.06, 0.065)
 const C_GLASS := Color(0.08, 0.11, 0.14)
 const C_HEAD := Color(0.95, 0.93, 0.82)
 const C_TAIL := Color(0.7, 0.05, 0.04)
+const C_AMBER := Color(0.95, 0.55, 0.08)
 const C_FRAME := Color(0.08, 0.08, 0.09)
 const C_FLOOR := Color(0.52, 0.42, 0.3)
 const C_FABRIC := Color(0.78, 0.76, 0.7)
@@ -77,7 +78,7 @@ static func build_from_design(d: Dictionary, opts: Dictionary = {}) -> Node3D:
 	if cached.is_empty():
 		var gc := _kits(["frame", "tyre", "rim", "white"])
 		var gb := _kits(["body", "trim", "glass", "head", "rim", "frame", "dark"])
-		var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail", "dark"])
+		var sh := _kits(["body", "roof", "glass", "trim", "stripe", "door", "tail", "dark", "amber"])
 		var gx := _kits(["white", "dark", "metal", "solar", "glass", "fabric", "trim", "lamp"])
 		var gi := _kits(["floor", "wood", "fabric", "white", "dark", "pillow", "lamp", "mirror", "trim"])
 		_chassis(d, gc)
@@ -185,6 +186,9 @@ static func _material(kind: String, paint: Dictionary, d: Dictionary, node_name:
 				var wrap := wrap_material(str(paint.get("wrap", "")), d)
 				if wrap != null:
 					return wrap
+				var lv := livery_material(paint, d)
+				if lv != null:
+					return lv
 			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, body_c)
 		"roof":
 			return StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, VehicleSpec.color(paint["roof"]))
@@ -202,6 +206,8 @@ static func _material(kind: String, paint: Dictionary, d: Dictionary, node_name:
 			return _emissive(C_HEAD, 0.6)
 		"tail":
 			return _emissive(C_TAIL, 0.4)
+		"amber":
+			return _emissive(C_AMBER, 0.5)
 		"frame":
 			return _plain(C_FRAME, 0.3, 0.6)
 		"stripe":
@@ -277,6 +283,14 @@ static func wrap_material(name: String, d: Dictionary) -> Material:
 		if tex == null:
 			return null
 		_wrap_cache[path] = tex
+	return _triplanar_body(tex, d)
+
+
+## A texture laid over the body by object-space triplanar: a side samples
+## (z, y) — the image's left edge at the rear, its right edge at the front,
+## its top row at the roof, its bottom row at the body's bottom edge — and
+## the ends sample (x, y) from the image's middle.
+static func _triplanar_body(tex: Texture2D, d: Dictionary) -> Material:
 	var b: Dictionary = d["body"]
 	var L := maxf(float(b["z1"]) - float(b["z0"]), 0.5)
 	var H := maxf(float(b["h"]) - float(b["y0"]), 0.5)
@@ -284,11 +298,82 @@ static func wrap_material(name: String, d: Dictionary) -> Material:
 	m.albedo_texture = tex
 	m.uv1_triplanar = true
 	m.uv1_triplanar_sharpness = 8.0
-	m.uv1_scale = Vector3(1.0 / L, -1.0 / H, 1.0 / L)
+	# Godot's triplanar already flips the vertical (it samples -pos.y), so
+	# +1/H here puts the image's top row on the roof. (-1/H put every wrap
+	# on upside down until 2026-11-03.)
+	m.uv1_scale = Vector3(1.0 / L, 1.0 / H, 1.0 / L)
 	m.uv1_offset = Vector3(0.5 - (float(b["z0"]) + float(b["z1"])) * 0.5 / L,
-		float(b["h"]) / H, 0.5 - (float(b["z0"]) + float(b["z1"])) * 0.5 / L)
+		-float(b["h"]) / H, 0.5 - (float(b["z0"]) + float(b["z1"])) * 0.5 / L)
 	m.roughness = 0.45
 	return m
+
+
+# --- liveries ----------------------------------------------------------------------------
+
+static var _livery_cache := {}
+
+
+## The paint's livery (VehicleSpec.LIVERIES) as a material over the body:
+## an image painted from the scheme and laid on like a wrap. null = none.
+static func livery_material(paint: Dictionary, d: Dictionary) -> Material:
+	var kind := str(paint.get("livery", ""))
+	if kind.is_empty():
+		return null
+	var b: Dictionary = d["body"]
+	var y0 := float(b["y0"])
+	var span := maxf(float(b["h"]) - y0, 0.5)
+	# The window line (where a transit scheme's top colour stops at the rear,
+	# and a two-tone's lower colour reaches), as a share of the side's height.
+	var line := clampf((float(b["floor_y"]) + 0.55 - y0) / span, 0.15, 0.85)
+	var key := "%s|%s|%s|%s|%.3f" % [kind, str(paint.get("body")), str(paint.get("livery_a")),
+		str(paint.get("livery_b")), line]
+	var tex: Texture2D = _livery_cache.get(key, null)
+	if tex == null:
+		var img := livery_image(kind, VehicleSpec.color(paint["body"]),
+			VehicleSpec.color(paint.get("livery_a", [0.1, 0.3, 0.6])),
+			VehicleSpec.color(paint.get("livery_b", [0.9, 0.8, 0.4])), line)
+		tex = ImageTexture.create_from_image(img)
+		if _livery_cache.size() > 16:
+			_livery_cache.clear()
+		_livery_cache[key] = tex
+	return _triplanar_body(tex, d)
+
+
+## The livery painted column by column (x = 0 the rear, the right edge the
+## front; row 0 the roof). transit: colour A over the rear's top down to the
+## window line, sweeping up to the roof over the front third (TriMet's
+## diagonal through the lift doors), and a colour B swoosh along the bottom
+## of the rear that thins out toward the front. two_tone: B below the line
+## with a thin A pinstripe over it.
+static func livery_image(kind: String, base: Color, a: Color, b: Color, line: float) -> Image:
+	var W := 1024
+	var Hh := 256
+	var img := Image.create(W, Hh, false, Image.FORMAT_RGBA8)
+	img.fill(base)
+	for x in W:
+		var f := (float(x) + 0.5) / float(W)
+		match kind:
+			"transit":
+				var ha := 2.0
+				if f <= 0.57:
+					ha = line
+				elif f <= 0.81:
+					ha = line + (1.0 - line) * (f - 0.57) / 0.24
+				if ha < 1.0:
+					img.fill_rect(Rect2i(x, 0, 1, int(round((1.0 - ha) * Hh))), a)
+				var hb := line * 0.62 * (1.0 - smoothstep(0.45, 0.8, f))
+				var rb := int(round(hb * Hh))
+				if rb > 0:
+					img.fill_rect(Rect2i(x, Hh - rb, 1, rb), b)
+			"two_tone":
+				var lo := line * 0.75
+				var rb2 := int(round(lo * Hh))
+				img.fill_rect(Rect2i(x, Hh - rb2, 1, rb2), b)
+				var p0 := int(round((1.0 - lo - 0.045) * Hh))
+				var p1 := int(round((1.0 - lo - 0.02) * Hh))
+				img.fill_rect(Rect2i(x, p0, 1, maxi(p1 - p0, 1)), a)
+	img.generate_mipmaps()
+	return img
 
 
 # --- a model of the real thing over the parametric one ------------------------------------
@@ -656,21 +741,7 @@ static func _cab(d: Dictionary, g: Dictionary) -> void:
 	var hood_top := fy + 0.55
 	match style:
 		"full_van", "cutaway":
-			var prof := PackedVector2Array([
-				Vector2(z0, yb), Vector2(z0, yb + 0.5), Vector2(z0 + 0.22, hood_top),
-				Vector2(z0 + hood, hood_top + 0.1), Vector2(z0 + hood + 0.85, cab_h),
-				Vector2(z0 + cab_len, cab_h), Vector2(z0 + cab_len, yb)])
-			_extrude_side(bk, prof, cab_w)
-			_glass_slope(gk, Vector2(z0 + hood + 0.05, hood_top + 0.14),
-				Vector2(z0 + hood + 0.8, cab_h - 0.05), cab_w * 0.9)
-			_side_windows(gk, z0 + hood + 0.25, z0 + hood + 1.05, hood_top + 0.25, cab_h - 0.12, cab_w)
-			# The grille between the headlights, with its slats.
-			var gy0 := yb + 0.5
-			var gy1 := hood_top - 0.02
-			(g["trim"] as _K).box(Vector3(0, (gy0 + gy1) * 0.5, z0 - 0.004), Vector3(cab_w * 0.42, gy1 - gy0, 0.02))
-			for k in 3:
-				(g["dark"] as _K).box(Vector3(0, gy0 + (gy1 - gy0) * (0.25 + 0.25 * float(k)), z0 - 0.016),
-					Vector3(cab_w * 0.38, 0.03, 0.01))
+			_van_cab(d, g)
 		"cowl":
 			hood_top = fy + 0.75
 			var hp := PackedVector2Array([Vector2(z0, yb), Vector2(z0, yb + 0.7),
@@ -717,7 +788,10 @@ static func _cab(d: Dictionary, g: Dictionary) -> void:
 	tk.box(Vector3(0, yb + 0.12, z0 - 0.06), Vector3(bw * 0.98, 0.22, 0.14))
 	var hk: _K = g["head"]
 	var hl_y := yb + 0.42 if style != "forward" else fy + 0.45
+	var van_nose := style == "full_van" or style == "cutaway"
 	for sx in [-1.0, 1.0]:
+		if van_nose:
+			break   # _van_cab draws its own lamps and mirrors
 		# A real headlamp: a 30 x 16 cm lens in a bezel standing 6 cm proud.
 		tk.box(Vector3(sx * (bw * 0.5 - 0.22), hl_y, z0 - 0.03), Vector3(0.34, 0.2, 0.06))
 		hk.box(Vector3(sx * (bw * 0.5 - 0.22), hl_y, z0 - 0.062), Vector3(0.3, 0.16, 0.01))
@@ -726,8 +800,269 @@ static func _cab(d: Dictionary, g: Dictionary) -> void:
 		tk.box(Vector3(sx * (bw * 0.5 + 0.2), my, mz), Vector3(0.05, 0.32, 0.18))
 		tk.box(Vector3(sx * (bw * 0.5 + 0.1), my, mz + 0.02), Vector3(0.2, 0.025, 0.03))
 	# Arches round the wheels under the cab's own panels (the cab extrusion
-	# runs to cab_len whether or not the shell takes over behind it).
-	_wheel_arches(d, g["dark"], cab_w * 0.5, z0, z0 + cab_len, yb)
+	# runs to cab_len whether or not the shell takes over behind it); a van
+	# nose cuts its own.
+	if not van_nose:
+		_wheel_arches(d, g["dark"], cab_w * 0.5, z0, z0 + cab_len, yb)
+
+
+## A van's nose and cab (an E-series cutaway, a Sprinter, a Transit) lofted
+## through rounded cross-sections: the grille face, the hood falling to it,
+## the cowl, the windshield's rake, the roof and the cab's back. The
+## sections' bottom rises round the front wheel (the arch, lined in dark).
+## Proportions follow an E-450 cutaway (a SketchUp model of a shuttle on
+## one): the grille top ~0.36 m over the frame, the cowl ~0.6 m, the
+## windshield raked over ~0.78 m to the roof.
+static func _van_cab(d: Dictionary, g: Dictionary) -> void:
+	var cg: Dictionary = d["cab_geo"]
+	var z0 := float(cg["z0"])
+	var hood := float(cg["hood"])
+	var cab_len := float(cg["cab_len"])
+	var ch := float(cg["h"])
+	var W := float(cg["w"])
+	var fy := float(cg["frame_h"])
+	var yb := maxf(fy - 0.32, 0.28)
+	var gt := fy + 0.36
+	var ct := fy + 0.6
+	var ws_end := minf(hood + 0.64, cab_len - 0.2)
+	var roof_u := minf(hood + 0.78, cab_len - 0.06)
+	# Key sections: [u from the front, half width, bottom, top, top corner r,
+	# bottom corner r].
+	var keys := [
+		[0.0, W * 0.4, yb + 0.06, gt - 0.03, 0.08, 0.05],
+		[0.07, W * 0.45, yb, gt, 0.15, 0.06],
+		[0.4, W * 0.49, yb, gt + (ct - gt) * 0.35, 0.22, 0.06],
+		[hood, W * 0.5, yb, ct, 0.2, 0.06],
+		[ws_end, W * 0.5, yb, ch - 0.04, 0.16, 0.06],
+		[roof_u, W * 0.5, yb, ch, 0.12, 0.06],
+		[cab_len, W * 0.5, yb, ch, 0.12, 0.06]]
+	var fo := -1.0
+	var r := 0.0
+	var axles: Array = d["axles"]
+	if not axles.is_empty() and not (d["wheels"] as Array).is_empty():
+		fo = float((axles[0] as Dictionary)["zf"])
+		r = float((d["wheels"] as Array)[0]["r"])
+	var R := r + VehicleDesign.ARCH_CLEAR_M
+	var us: Array = []
+	for kd in keys:
+		us.append(float(kd[0]))
+	if fo > 0.0:
+		for m in 11:
+			us.append(fo + R * cos(PI * float(m) / 10.0))
+	us.sort()
+	var rings: Array = []
+	var last := -1.0
+	for u0 in us:
+		var u := clampf(float(u0), 0.0, cab_len)
+		if u - last < 0.01:
+			continue
+		last = u
+		var kp := _key_lerp(keys, u)
+		var ybot := float(kp[2])
+		if fo > 0.0 and absf(u - fo) < R:
+			ybot = maxf(ybot, r + sqrt(R * R - (u - fo) * (u - fo)))
+		rings.append(_rr_ring(float(kp[1]), ybot, float(kp[3]), float(kp[4]), float(kp[5]), z0 + u))
+	_loft(rings, func(_k, _i): return g["body"], Callable(), g["body"])
+	var hw := W * 0.5
+	if fo > 0.0:
+		_well(g["dark"], hw, z0 + fo, r, R, yb, 0.42)
+	# The windshield on the rake between the cowl and the roof.
+	var slope := (ch - 0.04 - ct) / maxf(ws_end - hood, 0.1)
+	_glass_slope(g["glass"], Vector2(z0 + hood + 0.04, ct + slope * 0.04),
+		Vector2(z0 + ws_end - 0.05, ch - 0.04 - slope * 0.05), W - 0.5)
+	# The door windows: the front edge follows the A-pillar.
+	var wlo := fy + 0.8
+	var whi := ch - 0.17
+	var zr := z0 + minf(cab_len - 0.08, hood + 1.0)
+	var u_at := func(y: float) -> float:
+		return hood + clampf((y - ct) / maxf(slope, 0.1), 0.0, ws_end - hood)
+	var gk: _K = g["glass"]
+	var tk: _K = g["trim"]
+	for sx in [-1.0, 1.0]:
+		var x: float = sx * (hw + 0.004)
+		var za: float = z0 + float(u_at.call(wlo + 0.08)) + 0.06
+		var zb: float = z0 + float(u_at.call(minf(whi + 0.06, ch - 0.04))) + 0.06
+		if zr - zb > 0.1:
+			gk.quad(Vector3(x, wlo, za), Vector3(x, wlo, zr), Vector3(x, whi, zr), Vector3(x, whi, zb), Vector3(sx, 0, 0))
+		# The door's back seam and its handle.
+		tk.box(Vector3(sx * (hw + 0.003), (yb + whi) * 0.5 + 0.06, zr + 0.06), Vector3(0.008, whi - yb - 0.05, 0.014))
+		tk.box(Vector3(sx * (hw + 0.012), wlo - 0.12, zr - 0.08), Vector3(0.02, 0.035, 0.14))
+		# A west-coast mirror on its arm.
+		var mz := z0 + hood + 0.28
+		var my := fy + 0.95
+		tk.box(Vector3(sx * (hw + 0.13), my, mz), Vector3(0.26, 0.03, 0.03))
+		tk.box(Vector3(sx * (hw + 0.27), my + 0.06, mz + 0.02), Vector3(0.05, 0.4, 0.2))
+	# Grille (with slats) between the headlamps, and the lamps in bezels.
+	var gy0 := yb + 0.2
+	var gy1 := gt - 0.08
+	tk.box(Vector3(0, (gy0 + gy1) * 0.5, z0 - 0.004), Vector3(W * 0.36, gy1 - gy0, 0.02))
+	for k in 4:
+		(g["dark"] as _K).box(Vector3(0, gy0 + (gy1 - gy0) * (0.2 + 0.2 * float(k)), z0 - 0.016),
+			Vector3(W * 0.32, 0.025, 0.01))
+	var hk: _K = g["head"]
+	for sx in [-1.0, 1.0]:
+		var hx: float = sx * W * 0.29
+		tk.box(Vector3(hx, gt - 0.2, z0 - 0.01), Vector3(0.3, 0.22, 0.05))
+		hk.box(Vector3(hx, gt - 0.2, z0 - 0.038), Vector3(0.26, 0.17, 0.01))
+
+
+## Linear blend of key sections ([u, …] rows sorted by u) at u.
+static func _key_lerp(keys: Array, u: float) -> Array:
+	if u <= float(keys[0][0]):
+		return keys[0]
+	for i in keys.size() - 1:
+		var a: Array = keys[i]
+		var b: Array = keys[i + 1]
+		if u <= float(b[0]):
+			var t := (u - float(a[0])) / maxf(float(b[0]) - float(a[0]), 1e-5)
+			var out: Array = []
+			for j in a.size():
+				out.append(lerpf(float(a[j]), float(b[j]), t))
+			return out
+	return keys[keys.size() - 1]
+
+
+## A rounded rectangle cross-section at z: half width hw, bottom yb, top yt,
+## top corners of radius rt, bottom ones rb. Starts at the bottom middle and
+## runs round; the same vertex count whatever the sizes, so rings loft.
+static func _rr_ring(hw: float, yb: float, yt: float, rt: float, rb: float, z: float) -> PackedVector3Array:
+	var lim := maxf(minf(hw, (yt - yb) * 0.5) - 0.002, 0.003)
+	rt = clampf(rt, 0.003, lim)
+	rb = clampf(rb, 0.003, lim)
+	var nc := 4
+	var pts := PackedVector3Array()
+	pts.append(Vector3(0, yb, z))
+	for m in nc + 1:
+		var a := -PI * 0.5 + PI * 0.5 * float(m) / float(nc)
+		pts.append(Vector3(hw - rb + cos(a) * rb, yb + rb + sin(a) * rb, z))
+	for m in nc + 1:
+		var a := PI * 0.5 * float(m) / float(nc)
+		pts.append(Vector3(hw - rt + cos(a) * rt, yt - rt + sin(a) * rt, z))
+	pts.append(Vector3(0, yt, z))
+	for m in nc + 1:
+		var a := PI * 0.5 + PI * 0.5 * float(m) / float(nc)
+		pts.append(Vector3(-hw + rt + cos(a) * rt, yt - rt + sin(a) * rt, z))
+	for m in nc + 1:
+		var a := PI + PI * 0.5 * float(m) / float(nc)
+		pts.append(Vector3(-hw + rb + cos(a) * rb, yb + rb + sin(a) * rb, z))
+	return pts
+
+
+## A wheel well behind an arch cut in a side at |x| = hw: the arc of radius
+## R round (zc, yc) above `y_cut`, lined in dark `depth` inward, its back
+## closed — so the opening reads as a well round the tyre, not a hole.
+static func _well(dk: _K, hw: float, zc: float, yc: float, R: float, y_cut: float, depth: float) -> void:
+	var arc := _arch_arc(zc, yc, R, y_cut)
+	if arc.size() < 2:
+		return
+	for sx in [-1.0, 1.0]:
+		var x: float = sx * hw
+		var xi: float = sx * (hw - depth)
+		for m in arc.size() - 1:
+			var p := arc[m]
+			var q := arc[m + 1]
+			var mid := (p + q) * 0.5
+			var inward := Vector3(0, yc - mid.y, zc - mid.x).normalized()
+			dk.quad(Vector3(x, p.y, p.x), Vector3(x, q.y, q.x), Vector3(xi, q.y, q.x), Vector3(xi, p.y, p.x), inward)
+			dk.tri(Vector3(xi, y_cut, zc), Vector3(xi, p.y, p.x), Vector3(xi, q.y, q.x), Vector3(sx, 0, 0))
+
+
+## The arch's edge in (z, y), front to rear over the top, from where the
+## circle meets y_cut on one side to the other. [] when the cut is above it.
+static func _arch_arc(zc: float, yc: float, R: float, y_cut: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if y_cut >= yc + R - 0.01:
+		return out
+	var s := clampf((y_cut - yc) / R, -1.0, 1.0)
+	var t0 := PI - asin(s)
+	var t1 := asin(s)
+	var steps := 14
+	for m in steps + 1:
+		var t := lerpf(t0, t1, float(m) / float(steps))
+		out.append(Vector2(zc + R * cos(t), yc + R * sin(t)))
+	return out
+
+
+## A surface lofted through `rings` (closed loops of one vertex count; ring k
+## joined to ring k + 1 by quads). Each face turns away from the line through
+## the rings' centres (Godot's front face is clockwise); a vertex's normal is
+## the mean of the faces round it that bend less than ~53° from the face being
+## drawn, so a crease stays crisp. `kit_of(k, i)` picks the surface for edge i
+## between rings k and k + 1,
+## `skip(k, i)` leaves a quad out, and `cap` (null = open) closes the first
+## and last rings with a fan.
+static func _loft(rings: Array, kit_of: Callable, skip: Callable = Callable(), cap: _K = null) -> void:
+	var nk := rings.size()
+	if nk < 2:
+		return
+	var n := (rings[0] as PackedVector3Array).size()
+	var cen: Array = []
+	for rr in rings:
+		var c := Vector3.ZERO
+		for p in (rr as PackedVector3Array):
+			c += p
+		cen.append(c / float(maxi(n, 1)))
+	var fn: Array = []
+	for k in nk - 1:
+		var row: Array = []
+		var ra: PackedVector3Array = rings[k]
+		var rb: PackedVector3Array = rings[k + 1]
+		var axis_c: Vector3 = (cen[k] + cen[k + 1]) * 0.5
+		for i in n:
+			var j := (i + 1) % n
+			var nn := (rb[j] - ra[i]).cross(rb[i] - ra[j])
+			if nn.length_squared() < 1e-14:
+				row.append(Vector3.ZERO)
+				continue
+			nn = nn.normalized()
+			var fc := (ra[i] + ra[j] + rb[j] + rb[i]) * 0.25
+			if nn.dot(fc - axis_c) < 0.0:
+				nn = -nn
+			row.append(nn)
+		fn.append(row)
+	for k in nk - 1:
+		var ra: PackedVector3Array = rings[k]
+		var rb: PackedVector3Array = rings[k + 1]
+		for i in n:
+			if skip.is_valid() and bool(skip.call(k, i)):
+				continue
+			var f0: Vector3 = fn[k][i]
+			if f0 == Vector3.ZERO:
+				continue
+			var j := (i + 1) % n
+			var kk: _K = kit_of.call(k, i)
+			kk.quad_n(ra[i], ra[j], rb[j], rb[i], _loft_n(fn, nk, n, k, i, f0), _loft_n(fn, nk, n, k, j, f0),
+				_loft_n(fn, nk, n, k + 1, j, f0), _loft_n(fn, nk, n, k + 1, i, f0), f0)
+	if cap == null:
+		return
+	for e in [[0, 1], [nk - 1, nk - 2]]:
+		var rr: PackedVector3Array = rings[int(e[0])]
+		var c: Vector3 = cen[int(e[0])]
+		var away: Vector3 = (cen[int(e[0])] - cen[int(e[1])]).normalized()
+		for i in n:
+			var a := rr[i]
+			var b := rr[(i + 1) % n]
+			var nn := (a - c).cross(b - c)
+			if nn.length_squared() < 1e-14:
+				continue
+			nn = nn.normalized()
+			if nn.dot(away) < 0.0:
+				nn = -nn
+			cap.tri(c, a, b, nn)
+
+
+## A loft vertex's normal: the faces round vertex (vk, vi) that bend less
+## than ~53° from f0, averaged.
+static func _loft_n(fn: Array, nk: int, n: int, vk: int, vi: int, f0: Vector3) -> Vector3:
+	var sum := Vector3.ZERO
+	for qk in [vk - 1, vk]:
+		if qk < 0 or qk > nk - 2:
+			continue
+		for qi in [(vi - 1 + n) % n, vi]:
+			var f: Vector3 = fn[qk][qi]
+			if f.dot(f0) > 0.6:
+				sum += f
+	return sum.normalized() if sum.length_squared() > 1e-10 else f0
 
 
 ## A dark fender box round each wheel that sits under a panel between
@@ -783,37 +1118,90 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 	var z1 := float(b["z1"])
 	var rake_top := float(b["rake_top"])
 	var rake_from := float(b["rake_from"])
-	var prof := _profile(hw, y0, H, r, crown)
-	var roof_y := H - crown - r - 0.01
 	var bk: _K = sh["body"]
 	var rk: _K = sh["roof"]
+	var er := float(b.get("end_r", 0.0))
+	var arches := VehicleDesign.side_arches(d)
+	# A skirt (the panels below the floor, a shuttle's) is drawn as flat
+	# panels with the wheel arches cut out; the profile gets a vertex at its
+	# top so the sweep above it carries on.
+	var ya := -1.0
+	if bool(b.get("skirt", false)):
+		ya = y0 + 0.12
+		for a in arches:
+			ya = maxf(ya, float((a as Dictionary)["top"]) + 0.05)
+		ya = minf(ya, H - crown - r - 0.1)
+	var prof := _profile(hw, y0, H, r, crown, ya)
+	var roof_y := H - crown - r - 0.01
 	var n := prof.size()
-	for i in n:
-		var a: Vector2 = prof[i]
-		var c: Vector2 = prof[(i + 1) % n]
-		var f2 := Vector2(c.y - a.y, -(c.x - a.x)).normalized()
-		var na := _vnormal(prof, i)
-		var nc := _vnormal(prof, (i + 1) % n)
-		# A hard corner (the floor's edges) keeps this face's own normal.
-		if na.dot(f2) < 0.8:
-			na = f2
-		if nc.dot(f2) < 0.8:
-			nc = f2
-		var za := z0 + _rake(a.y, rake_from, H, rake_top)
-		var zc := z0 + _rake(c.y, rake_from, H, rake_top)
-		var k: _K = rk if a.y >= roof_y and c.y >= roof_y else bk
-		var face := Vector3(f2.x, f2.y, 0.0)
-		k.quad_n(Vector3(a.x, a.y, za), Vector3(c.x, c.y, zc), Vector3(c.x, c.y, z1), Vector3(a.x, a.y, z1),
-			Vector3(na.x, na.y, 0), Vector3(nc.x, nc.y, 0), Vector3(nc.x, nc.y, 0), Vector3(na.x, na.y, 0), face)
-	# End caps: a fan from the profile's middle (the profile is convex).
+	var front_round := er > 0.0 and rake_top <= 0.0
+	var droop_from := H - crown - r - 0.25
+	# Stations along the box: [z, inset, drop]. A rounded end is a quarter
+	# circle in plan of radius `er` (the box narrows by `inset`), and the roof
+	# edge rounds down with it (`drop`, over the top of the wall only).
+	var st: Array = []
+	var seg := 6
+	if front_round:
+		for j in range(seg, -1, -1):
+			var a := PI * 0.5 * float(j) / float(seg)
+			st.append([z0 + er - er * sin(a), er * (1.0 - cos(a)), er * 0.6 * (1.0 - cos(a))])
+	else:
+		st.append([z0, 0.0, 0.0])
+	var kf := st.size() - 1
+	if er > 0.0:
+		for j in seg + 1:
+			var a := PI * 0.5 * float(j) / float(seg)
+			st.append([z1 - er + er * sin(a), er * (1.0 - cos(a)), er * 0.6 * (1.0 - cos(a))])
+	else:
+		st.append([z1, 0.0, 0.0])
+	var rings: Array = []
+	for k in st.size():
+		var sz := float(st[k][0])
+		var sxs := (hw - float(st[k][1])) / hw
+		var drop := float(st[k][2])
+		var ring := PackedVector3Array()
+		for p in prof:
+			var y := p.y - drop * clampf((p.y - droop_from) / maxf(H - droop_from, 0.01), 0.0, 1.0)
+			var z := sz + (_rake(p.y, rake_from, H, rake_top) if k == 0 and not front_round else 0.0)
+			ring.append(Vector3(p.x * sxs, y, z))
+		rings.append(ring)
+	# A transit livery is white at the front: the rounded front corners keep
+	# the plain paint (triplanar would paint them from the image's middle).
+	var paint_d: Dictionary = (d["spec"] as Dictionary)["paint"]
+	var plain_front := str(paint_d.get("livery", "")) == "transit" and str(paint_d.get("wrap", "")).is_empty()
+	var kit_of := func(k: int, i: int) -> _K:
+		if plain_front and front_round and k < kf:
+			return rk
+		return rk if prof[i].y >= roof_y and prof[(i + 1) % n].y >= roof_y else bk
+	# The flat stretch's lower walls (both sides) are the skirt panels.
+	var skip := Callable()
+	if ya > 0.0:
+		skip = func(k: int, i: int) -> bool:
+			return k == kf and (i == 1 or i == n - 1)
+	_loft(rings, kit_of, skip)
+	# End caps: a fan from the profile's middle, on the raked face at the
+	# front (the vertex centroid sits high — the crown and the corners carry
+	# most of the points — and a fan from it cut through a van's cab).
 	var mid := Vector2(0.0, (y0 + H) * 0.5)
-	var zm := z0 + _rake(mid.y, rake_from, H, rake_top)
+	var fr: PackedVector3Array = rings[0]
+	var br: PackedVector3Array = rings[rings.size() - 1]
+	var mf := Vector3(0.0, mid.y, float(st[0][0]) + (_rake(mid.y, rake_from, H, rake_top) if not front_round else 0.0))
+	var mb := Vector3(0.0, mid.y, float(st[st.size() - 1][0]))
 	for i in n:
-		var a2: Vector2 = prof[i]
-		var c2: Vector2 = prof[(i + 1) % n]
-		bk.tri(Vector3(mid.x, mid.y, zm), Vector3(a2.x, a2.y, z0 + _rake(a2.y, rake_from, H, rake_top)),
-			Vector3(c2.x, c2.y, z0 + _rake(c2.y, rake_from, H, rake_top)), Vector3.FORWARD)
-		bk.tri(Vector3(mid.x, mid.y, z1), Vector3(a2.x, a2.y, z1), Vector3(c2.x, c2.y, z1), Vector3.BACK)
+		bk.tri(mf, fr[i], fr[(i + 1) % n], Vector3.FORWARD)
+		bk.tri(mb, br[i], br[(i + 1) % n], Vector3.BACK)
+	if ya > 0.0:
+		var za := float(st[kf][0])
+		var zb := float(st[kf + 1][0])
+		_skirt(bk, sh["dark"], hw, y0, ya, za, zb, arches)
+	# Clearance lamps on a bus body: red across the rear's top, amber on
+	# the front cap (VehicleBuilder._front_cap).
+	if bool(b.get("skirt", false)):
+		var ly := H - crown - r - 0.1
+		for lx in [-0.18, 0.0, 0.18, -(hw - er - 0.12), hw - er - 0.12]:
+			(g["tail"] as _K).box(Vector3(lx, ly, z1 + 0.012), Vector3(0.07, 0.035, 0.02))
+	if bool(b.get("front_cap", false)):
+		_front_cap(d, sh)
 	# The Class C's bunk over the cab.
 	if roof == "cabover":
 		var cz0 := float(cg["z0"]) + float(cg["hood"]) * 0.45
@@ -823,10 +1211,12 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 			Vector2(cz0 + 0.38, cy1), Vector2(z0 + 0.2, cy1), Vector2(z0 + 0.2, cy0)])
 		_extrude_side(bk, cp, hw * 2.0 - 0.06)
 	var wall_top := H - crown - r
-	_windows(d, sh["glass"], hw, floor_y, wall_top, z0, z1, style, integral, rake_top)
+	_windows(d, sh["glass"], sh["trim"], hw, floor_y, wall_top, z0, z1, style, integral, rake_top)
 	_doors(d, sh, hw, floor_y, y0, wall_top, z0, z1, style, integral)
-	# Arches round the wheels under the shell (a van's rears, a bus's).
-	_wheel_arches(d, sh["dark"], hw, z0 + rake_top, z1, y0)
+	# Arches round the wheels under the shell (a van's rears, a bus's); a
+	# skirt cuts its own.
+	if not bool(b.get("skirt", false)):
+		_wheel_arches(d, sh["dark"], hw, z0 + rake_top, z1, y0)
 	# Integral bodies carry the windshield in their front face: a Class A's
 	# runs from ~0.9 m over the body's bottom edge (the real 1.6 m), a bus's
 	# from above its hood line.
@@ -842,10 +1232,33 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 		var sk: _K = sh["stripe"]
 		var sy0 := floor_y + 0.18
 		var sy1 := sy0 + 0.16
+		var sa := z0 + 0.05 + (er if front_round else 0.0)
+		var sb := z1 - 0.05 - er
+		# On the curb side the stripe stops at a glass entry door.
+		var gaps: Array = []
+		for sp in VehicleDesign.door_spans(d):
+			if str((sp as Dictionary)["where"]) == "side" and str(sp.get("kind", "")) == "bus":
+				gaps.append([float(sp["z0"]), float(sp["z1"])])
 		for sx in [-1.0, 1.0]:
 			var x: float = sx * (hw + 0.004)
-			sk.quad(Vector3(x, sy0, z0 + 0.05), Vector3(x, sy0, z1 - 0.05), Vector3(x, sy1, z1 - 0.05),
-				Vector3(x, sy1, z0 + 0.05), Vector3(sx, 0, 0))
+			var runs: Array = [[sa, sb]]
+			if sx > 0.0:
+				for gp in gaps:
+					var next: Array = []
+					for ru in runs:
+						if float(gp[1]) <= float(ru[0]) or float(gp[0]) >= float(ru[1]):
+							next.append(ru)
+							continue
+						if float(gp[0]) > float(ru[0]):
+							next.append([float(ru[0]), float(gp[0])])
+						if float(gp[1]) < float(ru[1]):
+							next.append([float(gp[1]), float(ru[1])])
+					runs = next
+			for ru in runs:
+				var a := float(ru[0])
+				var c := float(ru[1])
+				sk.quad(Vector3(x, sy0, a), Vector3(x, sy0, c), Vector3(x, sy1, c),
+					Vector3(x, sy1, a), Vector3(sx, 0, 0))
 	# School-bus rub rails.
 	if str(b["id"]) == "skoolie":
 		var tk: _K = sh["trim"]
@@ -855,18 +1268,24 @@ static func _body(d: Dictionary, sh: Dictionary, g: Dictionary) -> void:
 	# Rear lights (a 12 x 34 cm lamp in a bezel, 5 cm proud) + bumper.
 	var tl: _K = g["tail"]
 	for sx in [-1.0, 1.0]:
-		(g["trim"] as _K).box(Vector3(sx * (hw - 0.16), y0 + 0.4, z1 + 0.025), Vector3(0.16, 0.38, 0.05))
-		tl.box(Vector3(sx * (hw - 0.16), y0 + 0.4, z1 + 0.055), Vector3(0.12, 0.34, 0.01))
+		var lx: float = sx * (hw - er - 0.16)
+		var lyy := maxf(y0 + 0.4, floor_y - 0.05) if bool(b.get("skirt", false)) else y0 + 0.4
+		(g["trim"] as _K).box(Vector3(lx, lyy, z1 + 0.025), Vector3(0.16, 0.38, 0.05))
+		tl.box(Vector3(lx, lyy, z1 + 0.055), Vector3(0.12, 0.34, 0.01))
 	(g["trim"] as _K).box(Vector3(0, y0 + 0.02, z1 + 0.07), Vector3(hw * 1.9, 0.16, 0.14))
 
 
 ## The body's cross-section, counter-clockwise from the bottom left: straight
 ## walls, a rounded corner of radius r, a crown rising to the centre.
-static func _profile(hw: float, y0: float, H: float, r: float, crown: float) -> PackedVector2Array:
+static func _profile(hw: float, y0: float, H: float, r: float, crown: float,
+		ya: float = -1.0) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	pts.append(Vector2(-hw, y0))
 	pts.append(Vector2(hw, y0))
 	var yw := H - crown - r
+	# A vertex up the wall at `ya` (the top of a skirt), mirrored on the left.
+	if ya > y0 and ya < yw - 0.01:
+		pts.append(Vector2(hw, ya))
 	var seg := 6
 	if r > 0.005:
 		for i in seg + 1:
@@ -889,20 +1308,77 @@ static func _profile(hw: float, y0: float, H: float, r: float, crown: float) -> 
 	return pts
 
 
-## A smooth vertex normal on the profile: the mean of its two edges' outward
-## normals, except at the bottom corners (a crisp edge reads as a box).
-static func _vnormal(prof: PackedVector2Array, i: int) -> Vector2:
-	var n := prof.size()
-	var a := prof[(i - 1 + n) % n]
-	var p := prof[i]
-	var c := prof[(i + 1) % n]
-	var e1 := (p - a)
-	var e2 := (c - p)
-	var n1 := Vector2(e1.y, -e1.x).normalized()
-	var n2 := Vector2(e2.y, -e2.x).normalized()
-	if n1.dot(n2) < 0.6:
-		return n2   # a hard corner: take the following edge's normal
-	return (n1 + n2).normalized()
+## A skirt: a flat panel each side from y0 to ya between za and zb, with a
+## half-round arch cut over each wheel and the wheel well behind it.
+static func _skirt(bk: _K, dk: _K, hw: float, y0: float, ya: float, za: float, zb: float, arches: Array) -> void:
+	var outline := PackedVector2Array()
+	outline.append(Vector2(za, y0))
+	var sorted := arches.duplicate()
+	sorted.sort_custom(func(a, c): return float(a["z"]) < float(c["z"]))
+	var wells: Array = []
+	for a in sorted:
+		var ad: Dictionary = a
+		var zc := float(ad["z"])
+		var R := float(ad["r"])
+		var yc := float(ad["top"]) - R
+		if zc - R < za + 0.03 or zc + R > zb - 0.03:
+			continue
+		var arc := _arch_arc(zc, yc, R, y0)
+		if arc.is_empty():
+			continue
+		outline.append_array(arc)
+		wells.append([zc, yc, R])
+	outline.append(Vector2(zb, y0))
+	outline.append(Vector2(zb, ya))
+	outline.append(Vector2(za, ya))
+	var idx := Geometry2D.triangulate_polygon(outline)
+	for sx in [-1.0, 1.0]:
+		var x: float = sx * hw
+		for m in range(0, idx.size(), 3):
+			var p := outline[idx[m]]
+			var q := outline[idx[m + 1]]
+			var u := outline[idx[m + 2]]
+			bk.tri(Vector3(x, p.y, p.x), Vector3(x, q.y, q.x), Vector3(x, u.y, u.x), Vector3(sx, 0, 0))
+	for w in wells:
+		_well(dk, hw, float(w[0]), float(w[1]), float(w[2]), y0, ARCH_DEPTH)
+
+
+## How far a skirted body's wheel well reaches in (clear of a dually pair).
+const ARCH_DEPTH := 0.55
+
+
+## The fiberglass cap over a cutaway's cab (an Aerotech-style shuttle): a
+## wedge lofted forward from the box's front between the cab roof and the
+## box's top, narrowing to a rounded nose, with amber clearance lamps on its
+## brow.
+static func _front_cap(d: Dictionary, sh: Dictionary) -> void:
+	var b: Dictionary = d["body"]
+	var cg: Dictionary = d["cab_geo"]
+	var hw := float(b["w"]) * 0.5
+	var H := float(b["h"])
+	var er := float(b.get("end_r", 0.0))
+	var zf := float(b["z0"])
+	var L := float(b.get("cap_len", 0.7))
+	var ch := float(cg["h"]) + 0.01
+	if H - ch < 0.25:
+		return
+	var ny := ch + (H - ch) * 0.42
+	var keys := [
+		[-0.06, hw - er * 0.35, ch, H - 0.05, 0.14, 0.05],
+		[L * 0.35, hw * 0.97 - er * 0.2, ch + 0.015, H - 0.07 - (H - ny) * 0.12, 0.14, 0.05],
+		[L * 0.78, hw * 0.92 - er * 0.1, ch + 0.05, ny + (H - ny) * 0.45, 0.12, 0.05],
+		[L, hw * 0.86, ny - 0.045, ny + 0.045, 0.044, 0.044]]
+	var rings: Array = []
+	for kd in keys:
+		rings.append(_rr_ring(float(kd[1]), float(kd[2]), float(kd[3]), float(kd[4]), float(kd[5]), zf - float(kd[0])))
+	_loft(rings, func(_k, _i): return sh["roof"], Callable(), sh["roof"])
+	var u := L * 0.56
+	var k1: Array = keys[1]
+	var k2: Array = keys[2]
+	var t := (u - float(k1[0])) / maxf(float(k2[0]) - float(k1[0]), 0.01)
+	var ly := lerpf(float(k1[3]), float(k2[3]), t)
+	for lx in [-0.62, -0.18, 0.0, 0.18, 0.62]:
+		(sh["amber"] as _K).box(Vector3(lx, ly + 0.01, zf - u), Vector3(0.09, 0.035, 0.06))
 
 
 static func _rake(y: float, from_y: float, H: float, top: float) -> float:
@@ -914,14 +1390,38 @@ static func _rake(y: float, from_y: float, H: float, top: float) -> float:
 ## The side panes are VehicleDesign.window_spans — the one window rule,
 ## which the exterior checks read too — plus a rear window on bus / band
 ## bodies (not on a barn-door van: its doors have them).
-static func _windows(d: Dictionary, gk: _K, hw: float, floor_y: float, wall_top: float,
+static func _windows(d: Dictionary, gk: _K, tk: _K, hw: float, floor_y: float, wall_top: float,
 		_z0: float, z1: float, _style: String, _integral: bool, _rake: float) -> void:
 	var kind := str((d["body"] as Dictionary)["windows"])
 	if kind == "none":
 		return
-	for w in VehicleDesign.window_spans(d):
+	var spans := VehicleDesign.window_spans(d)
+	for w in spans:
 		var wd: Dictionary = w
 		_pane(gk, float(wd["sx"]), hw, float(wd["z0"]), float(wd["z1"]), float(wd["y0"]), float(wd["y1"]))
+	if kind == "band":
+		# A transit band: each run of panes set in one dark surround (the
+		# frames between the panes are its mullions).
+		for sx in [-1.0, 1.0]:
+			var side: Array = spans.filter(func(w): return float((w as Dictionary)["sx"]) == sx)
+			side.sort_custom(func(a, c): return float(a["z0"]) < float(c["z0"]))
+			var run: Array = []
+			for w in side + [{}]:
+				var wd: Dictionary = w
+				if not run.is_empty() and (wd.is_empty() or float(wd["z0"]) - float(run[1]) > 0.25):
+					var x: float = sx * (hw + 0.002)
+					var ra := float(run[0]) - 0.05
+					var rb := float(run[1]) + 0.05
+					var y0 := float(run[2]) - 0.05
+					var y1 := float(run[3]) + 0.05
+					tk.quad(Vector3(x, y0, ra), Vector3(x, y0, rb), Vector3(x, y1, rb), Vector3(x, y1, ra), Vector3(sx, 0, 0))
+					run = []
+				if wd.is_empty():
+					break
+				if run.is_empty():
+					run = [float(wd["z0"]), float(wd["z1"]), float(wd["y0"]), float(wd["y1"])]
+				else:
+					run[1] = float(wd["z1"])
 	if kind == "bus" or kind == "band":
 		var y_lo := floor_y + 0.85
 		var y_hi := minf(wall_top - 0.18, floor_y + 1.75)
@@ -956,19 +1456,18 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 		var dy0 := float(sd["y0"])
 		var dy1 := float(sd["y1"])
 		var x := hw + 0.006
+		if str(sd.get("kind", side)) == "lift":
+			_lift_door(sh, hw, dz0, dz1, dy0, dy1, floor_y)
+			continue
+		if side == "bus":
+			_bifold_door(sh, hw, dz0, dz1, dy0, dy1)
+			continue
 		dk.quad(Vector3(x, dy0, dz0), Vector3(x, dy0, dz1), Vector3(x, dy1, dz1), Vector3(x, dy1, dz0), Vector3.RIGHT)
 		# Its outline + handle.
 		for zz in [dz0, dz1]:
 			tk.box(Vector3(x + 0.002, (dy0 + dy1) * 0.5, zz), Vector3(0.006, dy1 - dy0, 0.03))
 		tk.box(Vector3(x + 0.015, floor_y + 0.95, dz1 - 0.12), Vector3(0.02, 0.04, 0.14))
-		if side == "bus":
-			(sh["glass"] as _K).quad(Vector3(x + 0.002, floor_y + 0.9, dz0 + 0.06),
-				Vector3(x + 0.002, floor_y + 0.9, dz1 - 0.06), Vector3(x + 0.002, dy1 - 0.1, dz1 - 0.06),
-				Vector3(x + 0.002, dy1 - 0.1, dz0 + 0.06), Vector3.RIGHT)
-			# A step down from the door: a 25 cm tread hung under the sill.
-			tk.box(Vector3(hw + 0.14, dy0 - BUS_STEP_M, (dz0 + dz1) * 0.5), Vector3(0.3, 0.05, dz1 - dz0 - 0.04))
-			tk.box(Vector3(hw + 0.02, dy0 - BUS_STEP_M * 0.5, (dz0 + dz1) * 0.5), Vector3(0.03, BUS_STEP_M, dz1 - dz0 - 0.04))
-		elif side == "slider" or side == "hinged":
+		if side == "slider" or side == "hinged":
 			# A running board under the door, a hand's width out from the sill.
 			tk.box(Vector3(hw + 0.1, y0 - 0.06, (dz0 + dz1) * 0.5), Vector3(0.22, 0.04, dz1 - dz0 + 0.3))
 	var rear := str(b["rear_door"])
@@ -999,6 +1498,51 @@ static func _doors(d: Dictionary, sh: Dictionary, hw: float, floor_y: float, y0:
 				y += 0.16
 		"lift":
 			tk.box(Vector3(0, ry1 - 0.02, rz + 0.004), Vector3(rw * 2.0, 0.03, 0.006))
+
+
+## A bus's entry door: two tall glass leaves folding in the middle, in black
+## frames, and (when the sill stands high) a step hung under it — a skirted
+## shuttle's stepwell is inside.
+static func _bifold_door(sh: Dictionary, hw: float, z0: float, z1: float, y0: float, y1: float) -> void:
+	var tk: _K = sh["trim"]
+	var gk: _K = sh["glass"]
+	var x := hw + 0.004
+	tk.quad(Vector3(x, y0, z0), Vector3(x, y0, z1), Vector3(x, y1, z1), Vector3(x, y1, z0), Vector3.RIGHT)
+	var zm := (z0 + z1) * 0.5
+	for leaf in [[z0, zm], [zm, z1]]:
+		var a := float(leaf[0]) + 0.045
+		var b := float(leaf[1]) - 0.025
+		gk.quad(Vector3(x + 0.003, y0 + 0.07, a), Vector3(x + 0.003, y0 + 0.07, b),
+			Vector3(x + 0.003, y1 - 0.06, b), Vector3(x + 0.003, y1 - 0.06, a), Vector3.RIGHT)
+	if y0 > 0.45:
+		tk.box(Vector3(hw + 0.14, y0 - BUS_STEP_M, zm), Vector3(0.3, 0.05, z1 - z0 - 0.04))
+		tk.box(Vector3(hw + 0.02, y0 - BUS_STEP_M * 0.5, zm), Vector3(0.03, BUS_STEP_M, z1 - z0 - 0.04))
+
+
+## A wheelchair lift's double doors: the leaves' seams over the paint (the
+## livery runs across them, as on a real bus), a tall window high in each
+## leaf in a dark frame, and the handle by the middle seam.
+static func _lift_door(sh: Dictionary, hw: float, z0: float, z1: float, y0: float, y1: float, floor_y: float) -> void:
+	var tk: _K = sh["trim"]
+	var gk: _K = sh["glass"]
+	var x := hw + 0.004
+	var zm := (z0 + z1) * 0.5
+	for zz in [z0, zm, z1]:
+		tk.box(Vector3(x, (y0 + y1) * 0.5, zz), Vector3(0.008, y1 - y0, 0.02))
+	for yy in [y0, y1]:
+		tk.box(Vector3(x, yy, zm), Vector3(0.008, 0.02, z1 - z0))
+	var wy1 := y1 - 0.14
+	var wy0 := maxf(wy1 - 0.62, floor_y + 0.9)
+	for leaf in [[z0, zm], [zm, z1]]:
+		var c := (float(leaf[0]) + float(leaf[1])) * 0.5
+		var ww := minf(0.32, float(leaf[1]) - float(leaf[0]) - 0.18) * 0.5
+		if ww < 0.06:
+			continue
+		tk.quad(Vector3(x + 0.001, wy0 - 0.03, c - ww - 0.03), Vector3(x + 0.001, wy0 - 0.03, c + ww + 0.03),
+			Vector3(x + 0.001, wy1 + 0.03, c + ww + 0.03), Vector3(x + 0.001, wy1 + 0.03, c - ww - 0.03), Vector3.RIGHT)
+		gk.quad(Vector3(x + 0.003, wy0, c - ww), Vector3(x + 0.003, wy0, c + ww),
+			Vector3(x + 0.003, wy1, c + ww), Vector3(x + 0.003, wy1, c - ww), Vector3.RIGHT)
+	tk.box(Vector3(hw + 0.02, floor_y + 1.0, zm + 0.12), Vector3(0.025, 0.05, 0.16))
 
 
 # --- exterior items ------------------------------------------------------------------

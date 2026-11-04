@@ -9,12 +9,14 @@ extends SceneTree
 ## at a real height. Prints each preset's size and the number of wheel
 ## meshes shared.
 ##   godot --path . --windowed --resolution 1280x720 --script tools/diag/vehicle_preset_grid_diag.gd
-##     [-- --out=<png>] [-- --only=van,rv]
+##     [-- --out=<png>] [-- --only=van,rv] [-- --cell=960x540]
+##     [-- --views=front,side,rear,left,top,low,cab]  (a column per view)
 ## Writes user://vehicle_preset_grid.png (run with APPDATA at a scratch
 ## folder, or the PNG lands in the player's user data).
 
-const CW := 360
-const CH := 240
+var CW := 360
+var CH := 240
+const VIEWS := ["front", "side", "rear"]
 
 
 func _initialize() -> void:
@@ -90,33 +92,51 @@ func _run() -> void:
 			(d["wheels"] as Array).size(), meshes.size(), int(d.get("lug_count", 0)),
 			str((d["axles"] as Array).map(func(a): return "%.1f" % (float((a as Dictionary)["zf"]) - float(d["half_len"]))))])
 	await process_frame
-	var grid := Image.create(CW * 3, CH * maxi(ids.size(), 1), false, Image.FORMAT_RGBA8)
+	var cell := _arg("cell", "")
+	if cell.contains("x"):
+		CW = int(cell.get_slice("x", 0))
+		CH = int(cell.get_slice("x", 1))
+	var views: Array = Array(_arg("views", ",".join(PackedStringArray(VIEWS))).split(","))
+	var grid := Image.create(CW * views.size(), CH * maxi(ids.size(), 1), false, Image.FORMAT_RGBA8)
 	for k in ids.size():
 		var c: Vector3 = (holders[k] as Node3D).position
 		var sz: Vector3 = sizes[k]
 		var target := c + Vector3(0.0, sz.y * 0.45, 0.0)
-		for v in 3:
+		for v in views.size():
 			var reach := 0.0
 			var from := Vector3.ZERO
-			match v:
-				0:   # the front, a little from the curb side and above
+			var look := target
+			match str(views[v]):
+				"front":   # the front, a little from the curb side and above
 					reach = maxf(sz.x, sz.y) * 1.3 + 3.5 + sz.z * 0.15
 					from = target + Vector3(reach * 0.35, reach * 0.3, -reach)
-				1:   # the curb side (forward = -Z = screen LEFT)
+				"side":   # the curb side (forward = -Z = screen LEFT)
 					reach = sz.z * 1.05 + 3.0
 					from = target + Vector3(reach, reach * 0.22, 0.0)
-				2:   # the rear
+				"left":   # the road side, level (forward = screen RIGHT)
+					reach = sz.z * 1.05 + 3.0
+					from = target + Vector3(-reach, 0.15, 0.0)
+				"top":   # above the curb-side front corner
+					reach = sz.z * 0.9 + 3.0
+					from = target + Vector3(reach * 0.45, reach * 0.75, -reach * 0.35)
+				"low":   # the curb side at eye height, three quarters from the front
+					reach = sz.z * 0.8 + 2.5
+					from = c + Vector3(reach * 0.7, 1.6, -reach * 0.55)
+				"cab":   # close on the nose
+					look = c + Vector3(0.0, 1.3, -sz.z * 0.5 + 1.2)
+					from = look + Vector3(3.2, 0.6, -3.6)
+				_:   # the rear
 					reach = maxf(sz.x, sz.y) * 1.3 + 3.5 + sz.z * 0.15
 					from = target + Vector3(-reach * 0.35, reach * 0.3, reach)
 			cam.global_position = from
-			cam.look_at(target, Vector3.UP)
+			cam.look_at(look, Vector3.UP)
 			for i in 3:
 				await process_frame
 			grid.blit_rect(_grab(CW, CH), Rect2i(0, 0, CW, CH), Vector2i(v * CW, k * CH))
 	var out := _arg("out", "user://vehicle_preset_grid.png")
 	grid.save_png(out)
-	print("VehiclePresetGrid: wrote %s  (columns: front / curb side (forward = LEFT) / rear; rows: %s)" % [
-		ProjectSettings.globalize_path(out), ", ".join(PackedStringArray(ids))])
+	print("VehiclePresetGrid: wrote %s  (columns: %s; rows: %s)" % [
+		ProjectSettings.globalize_path(out), " / ".join(PackedStringArray(views)), ", ".join(PackedStringArray(ids))])
 	quit(0)
 
 

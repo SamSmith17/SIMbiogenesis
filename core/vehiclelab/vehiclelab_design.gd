@@ -255,6 +255,11 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 	var corner := clampf(float(bd.get("corner_r_m", 0.1)), 0.0, minf(hw * 0.6, 0.4))
 	var crown := float({"high_top": 0.03, "crown": 0.1, "arched": 0.3, "cabover": 0.07}.get(roof, 0.0))
 	var y0 := clampf(floor_y - 0.45, 0.32, 0.6) if integral else floor_y - 0.12
+	# A skirted body (a shuttle) hangs its side panels below the floor, with
+	# wheel arches cut round the tyres (side_arches).
+	var skirt := float(bd.get("skirt_h_m", 0.0))
+	if skirt > 0.0:
+		y0 = clampf(skirt, 0.15, floor_y - 0.05)
 	var shell_z0 := body_z0
 	var rake_top := 0.0
 	var rake_from := y0
@@ -275,7 +280,15 @@ static func _layout(d: Dictionary, ch: Dictionary, bd: Dictionary) -> void:
 		"y0": y0, "wall_top": height - crown - corner, "rake_top": rake_top, "rake_from": rake_from,
 		"windows": str(bd.get("windows", "few")), "rear_door": str(bd.get("rear_door", "none")),
 		"side_door": str(bd.get("side_door", "hinged")), "id": str(d["spec"].get("body_id", "")),
-		"door_at": float(bd.get("door_at_m", -1.0))}
+		"door_at": float(bd.get("door_at_m", -1.0)), "door_w": float(bd.get("door_w_m", 0.0)),
+		"skirt": skirt > 0.0,
+		# Plan rounding of the box's vertical corners (a raked front keeps
+		# its rake and is not rounded) and the fiberglass cap over a cutaway.
+		"end_r": clampf(float(bd.get("end_r_m", 0.0)), 0.0, minf(hw * 0.7, body_len * 0.12)),
+		"front_cap": bool(bd.get("front_cap", false)) and cab == "cutaway" and not integral,
+		"cap_len": float(bd.get("cap_len_m", 0.7)),
+		"lift_door": str(bd.get("lift_door", "none")), "lift_w": float(bd.get("lift_door_w_m", 1.15)),
+		"lift_at": float(bd.get("lift_door_at_m", -1.0))}
 	d["cab_geo"] = {"style": cab, "hood": hood, "cab_len": cab_len, "z0": -half,
 		"h": float(ch.get("cab_h_m", 2.2)), "w": float(ch.get("cab_w_m", width)),
 		"frame_h": float(ch.get("frame_h_m", 0.7)), "integral": integral}
@@ -513,6 +526,8 @@ static func door_spans(d: Dictionary) -> Array:
 	var side := str(b["side_door"])
 	if side != "none":
 		var w := 1.25 if side == "slider" else (0.85 if side == "bus" else 0.72)
+		if float(b.get("door_w", 0.0)) > 0.0:
+			w = float(b["door_w"])
 		var dz0 := float(house["z0"]) + 0.2
 		if side == "bus":
 			dz0 = z0 + 0.1 if bool(d["integral"]) else float(house["z0"]) + 0.1
@@ -524,13 +539,118 @@ static func door_spans(d: Dictionary) -> Array:
 		if at >= 0.0:
 			dz0 = clampf(float(house["z0"]) + at, z0 + 0.1, z1 - 0.3 - w)
 		var dz1 := minf(dz0 + w, z1 - 0.3)
-		out.append({"where": "side", "x": hw, "z0": dz0, "z1": dz1, "y0": float(b["y0"]) + 0.03,
+		out.append({"where": "side", "kind": side, "x": hw, "z0": dz0, "z1": dz1, "y0": float(b["y0"]) + 0.03,
 			"y1": minf(float(b["wall_top"]) - 0.05, floor_y + 1.95)})
+	var lift := lift_door_span(d, out)
+	if not lift.is_empty():
+		out.append(lift)
 	var rear := str(b["rear_door"])
 	if rear != "none":
 		var rw := hw - 0.08
 		out.append({"where": "rear", "x0": -rw, "x1": rw, "z": z1, "y0": floor_y - 0.05,
 			"y1": minf(float(b["wall_top"]) - 0.08, floor_y + (2.2 if rear == "barn" else 2.4))})
+	return out
+
+
+## A wheelchair lift's double doors on the curb side ({} when the body has
+## none): from the floor to the wall's top, `lift_w` wide. "front" stands
+## right behind the entry door, "rear" just ahead of the rounded rear corner,
+## "mid" half way between; a typed `lift_at` (from the living box's front)
+## beats them. Never over a wheel arch (the leaves would open over the wheel):
+## a door that would be is moved to the near side of the arch, and never
+## onto the entry door.
+static func lift_door_span(d: Dictionary, entry: Array = []) -> Dictionary:
+	var b: Dictionary = d["body"]
+	var kind := str(b.get("lift_door", "none"))
+	if not ["front", "mid", "rear"].has(kind):
+		return {}
+	var house: Dictionary = d["house"]
+	var lw := float(b.get("lift_w", 1.15))
+	var er := float(b.get("end_r", 0.0))
+	var lo := float(b["z0"]) + float(b.get("rake_top", 0.0)) + er + 0.08
+	var hi := float(b["z1"]) - er - 0.08
+	if hi - lo < lw + 0.1:
+		return {}
+	var entry_end := lo
+	for sp in entry:
+		if str((sp as Dictionary)["where"]) == "side":
+			entry_end = maxf(entry_end, float((sp as Dictionary)["z1"]) + 0.12)
+	var y0 := float(b["floor_y"]) - 0.03
+	var arches: Array = []
+	for a in side_arches(d):
+		var ad: Dictionary = a
+		if y0 < float(ad["top"]):
+			arches.append([float(ad["z"]) - float(ad["r"]) - 0.06, float(ad["z"]) + float(ad["r"]) + 0.06])
+	var dz0 := 0.0
+	if float(b.get("lift_at", -1.0)) >= 0.0:
+		dz0 = float(house["z0"]) + float(b["lift_at"])
+	else:
+		match kind:
+			"front":
+				dz0 = entry_end
+			"rear":
+				dz0 = hi - lw
+			_:
+				var back := hi
+				for ar in arches:
+					if float(ar[0]) > entry_end:
+						back = minf(back, float(ar[0]))
+				dz0 = (entry_end + back) * 0.5 - lw * 0.5
+	# Where it may stand: inside [lo, hi], clear of the entry door and of
+	# every arch. The asked-for spot if it is free, else the nearest free
+	# spot just before or after whatever it hit.
+	var blocks: Array = arches.duplicate()
+	for sp in entry:
+		var sd: Dictionary = sp
+		if str(sd["where"]) == "side":
+			blocks.append([float(sd["z0"]) - 0.12, float(sd["z1"]) + 0.12])
+	var want := clampf(dz0, lo, hi - lw)
+	var cands: Array = [want]
+	for bl in blocks:
+		cands.append(float(bl[0]) - lw)
+		cands.append(float(bl[1]))
+	cands.sort_custom(func(a, c): return absf(float(a) - want) < absf(float(c) - want))
+	dz0 = INF
+	for c in cands:
+		var z := float(c)
+		if z < lo - 1e-4 or z + lw > hi + 1e-4:
+			continue
+		var free := true
+		for bl in blocks:
+			if z < float(bl[1]) - 1e-4 and z + lw > float(bl[0]) + 1e-4:
+				free = false
+		if free:
+			dz0 = z
+			break
+	if dz0 == INF:
+		return {}
+	return {"where": "side", "kind": "lift", "x": float(b["w"]) * 0.5, "z0": dz0, "z1": dz0 + lw,
+		"y0": y0, "y1": float(b["wall_top"]) - 0.04}
+
+
+## How far a wheel arch stands clear of the tyre all round.
+const ARCH_CLEAR_M := 0.08
+
+
+## The wheel arches a skirted body's side panels are cut round (vehicle
+## local): [{z, r (the arch's radius), top}] for each axle under the box —
+## a dually pair shares one arch. [] for a body whose panels stop above the
+## tyres.
+static func side_arches(d: Dictionary) -> Array:
+	var out: Array = []
+	var b: Dictionary = d["body"]
+	if not bool(b.get("skirt", false)):
+		return out
+	var half := float(d["half_len"])
+	var r := 0.0
+	for w in d["wheels"]:
+		r = maxf(r, float((w as Dictionary)["r"]))
+	for a in d["axles"]:
+		var z := float((a as Dictionary)["zf"]) - half
+		var ra := r + ARCH_CLEAR_M
+		if z - ra < float(b["z0"]) or z + ra > float(b["z1"]):
+			continue
+		out.append({"z": z, "r": ra, "top": r + ra})
 	return out
 
 
@@ -554,8 +674,9 @@ static func window_spans(d: Dictionary) -> Array:
 	var z0 := float(b["z0"])
 	var z1 := float(b["z1"])
 	var rake := float(b.get("rake_top", 0.0))
-	var hz0 := maxf(float(house["z0"]), z0 + rake + 0.25)
-	var hz1 := minf(float(house["z1"]), z1) - 0.35
+	var er := float(b.get("end_r", 0.0))
+	var hz0 := maxf(float(house["z0"]), z0 + rake + maxf(0.25, er + 0.06))
+	var hz1 := minf(float(house["z1"]), z1) - maxf(0.35, er + 0.06)
 	var y_lo := floor_y + 0.85
 	var y_hi := minf(wall_top - 0.18, floor_y + 1.75)
 	if y_hi - y_lo < 0.25 or hz1 - hz0 < 0.5:
@@ -564,9 +685,30 @@ static func window_spans(d: Dictionary) -> Array:
 		var pane := 0.78 if kind == "bus" else 1.05
 		var gap := 0.11
 		var z := hz0 if kind == "band" else maxf(z0 + 0.95, hz0 - 0.9)
+		# The curb side skips a pane a door stands in (the entry door, a
+		# lift's doors), and either side one a side-mounted solar array
+		# covers: a blacked-out window under the modules is not a window.
+		var skip: Array = []
+		for sp in door_spans(d):
+			var sd: Dictionary = sp
+			if str(sd["where"]) == "side":
+				skip.append([1.0, float(sd["z0"]) - 0.05, float(sd["z1"]) + 0.05, -INF, INF])
+		for e in d.get("exterior", []):
+			var el: Dictionary = e
+			if str(el.get("type", "")) == "solar" and (str(el["face"]) == "left" or str(el["face"]) == "right"):
+				skip.append([1.0 if str(el["face"]) == "right" else -1.0,
+					float(el["u"]) - float(el["w"]) * 0.5, float(el["u"]) + float(el["w"]) * 0.5,
+					float(el["v"]) - float(el["l"]) * 0.5, float(el["v"]) + float(el["l"]) * 0.5])
+		var ym := (y_lo + y_hi) * 0.5
 		while z + pane <= hz1:
 			for sx in [-1.0, 1.0]:
-				out.append({"sx": sx, "z0": z, "z1": z + pane, "y0": y_lo, "y1": y_hi})
+				var free := true
+				for sk in skip:
+					if float(sk[0]) == sx and z < float(sk[2]) and z + pane > float(sk[1]) \
+							and ym > float(sk[3]) and ym < float(sk[4]):
+						free = false
+				if free:
+					out.append({"sx": sx, "z0": z, "z1": z + pane, "y0": y_lo, "y1": y_hi})
 			z += pane + gap
 		return out
 	# "few": over the places people sit and lie, on the wall they are against.
@@ -940,7 +1082,7 @@ static func _cargo(d: Dictionary, bd: Dictionary) -> void:
 			doors.append({"where": "rear", "kind": str(bd.get("rear_door", "none")),
 				"w_m": minf(float(sd["x1"]) - float(sd["x0"]), float(house["w"]) - 0.1), "h_m": dh})
 		else:
-			doors.append({"where": "side", "kind": str(bd.get("side_door", "none")),
+			doors.append({"where": "side", "kind": str(sd.get("kind", bd.get("side_door", "none"))),
 				"w_m": float(sd["z1"]) - float(sd["z0"]), "h_m": dh})
 	d["cargo"] = {"floor_free_m2": free, "volume_m3": free * h * 0.7, "doors": doors,
 		"payload_kg": maxf(float(d["payload_kg"]), 0.0)}

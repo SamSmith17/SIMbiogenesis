@@ -64,6 +64,35 @@ static func builtins() -> Array:
 			_x("solar", "solar", "roof", 0.0, 1.05, {"module": "rigid_400", "rows": 4, "cols": 1, "portrait": true}),
 			_x("awning", "awning", "right", 1.6),
 		])},
+		# The Magic Tool Bus: a 25 ft 2008 Ford E-450 shuttle, ex-Portland
+		# TriMet (an Aerotech-class fiberglass body), still in TriMet's blue /
+		# white / yellow, its lift doors right behind the entry door, four
+		# 400 W modules across the roof and six 100 W modules over the
+		# curb-side windows. Measured off the owner's photos (the front
+		# tyre, LT225/75R16, is the scale: ~187 px a metre): bumper to body
+		# 1.92 m, body 5.7 m, roof edge ~2.65 m.
+		{"id": "magic_tool_bus", "spec": _seats(_body(_spec("shuttle_bus", "The Magic Tool Bus (25 ft E-450, ex-TriMet)",
+			{"wheelbase_m": 176.0 * VehicleCatalog.IN, "cab_len_m": 1.97}, {
+			"body": [0.96, 0.96, 0.95], "roof": [0.95, 0.95, 0.94], "livery": "transit",
+			"livery_a": [0.11, 0.3, 0.66], "livery_b": [0.93, 0.85, 0.44], "wheels": [0.56, 0.46, 0.38]}, [
+			_el("workbench", "workbench", -0.79, 1.0, {"l": 1.6}),
+			_el("cubby", "cubby", -0.9, 1.0, {"l": 1.6}),
+			_el("tools", "cabinet", -0.89, 2.4),
+			_el("fridge", "fridge", -0.84, 3.3),
+			_el("galley", "galley", 0.8, 3.25, {"l": 1.2}),
+			_el("bed", "bed", 0.0, -0.69, {"l": 1.9, "h": 0.75, "yaw": 90.0}),
+			_el("battery", "battery", 0.35, -0.65),
+			_el("water", "water_tank", -0.45, -0.7),
+			_el("inverter", "inverter", -0.95, 4.1),
+			_el("light", "light", 0.0, 1.6),
+			_el("light2", "light", 0.0, 3.8),
+		], [
+			_x("solar", "solar", "roof", 0.0, 1.4, {"module": "rigid_400", "rows": 4, "cols": 1, "portrait": true}),
+			_x("side_solar", "solar", "right", 2.18, 1.78, {"module": "rigid_100", "rows": 1, "cols": 6, "portrait": true}),
+			_x("fan", "fan", "roof", 0.35, -1.3),
+			_x("hitch", "hitch", "rear", 0.0),
+		]), {"length_m": 5.7, "height_m": 2.8, "floor_h_m": 0.74, "ceiling_t_m": 0.04, "cap_len_m": 0.45,
+			"end_r_m": 0.2, "lift_door": "front", "lift_door_w_m": 1.25, "door_w_m": 0.95}), 3)},
 		{"id": "school_bus", "spec": _spec("school_bus", "Skoolie (35 ft school bus)", {}, {
 			"stripe_on": true, "stripe": [0.06, 0.06, 0.07]}, [
 			_el("bed", "bed", 0.0, -1.05, {"w": 1.52, "l": 2.03, "h": 0.7}),

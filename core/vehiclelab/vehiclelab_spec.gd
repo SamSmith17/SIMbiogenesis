@@ -8,7 +8,7 @@ extends RefCounted
 ##   chassis_id   a VehicleCatalog.CHASSIS key; `chassis` = overrides of it
 ##   body_id      a VehicleCatalog.BODIES key;  `body`    = overrides of it
 ##   paint        body / roof / stripe / trim / wheels colours ([r, g, b]),
-##                stripe_on
+##                stripe_on, wrap (an image), livery (LIVERIES) + livery_a / _b
 ##   interior     {elements: [...]} — see VehicleDesign.interior_elements:
 ##                {id, type, x (across, + = the curb / right side), z (along
 ##                the living box from its FRONT; < 0 counts from the rear),
@@ -36,7 +36,14 @@ const CHASSIS_KEYS := ["wheelbase_m", "track_m", "front_overhang_m", "tyre_d_m",
 	"gawr_f_kg", "gawr_r_kg", "tow_kg", "gcwr_kg", "roof_kg", "brakes", "shell_h_m", "body_len_m", "cg_wb"]
 const BODY_KEYS := ["length_m", "width_m", "height_m", "floor_h_m", "roof", "cd",
 	"wall_kg_m2", "windows", "rear_door", "side_door", "corner_r_m", "door_at_m",
-	"wall_t_m", "ceiling_t_m", "roof_kg"]
+	"wall_t_m", "ceiling_t_m", "roof_kg", "front_cap", "cap_len_m", "end_r_m", "skirt_h_m",
+	"lift_door", "lift_door_w_m", "lift_door_at_m", "door_w_m"]
+## Liveries painted over the body colour (VehicleBuilder.livery_material):
+## two_tone = `livery_b` below the window line; transit = `livery_a` over the
+## rear's top and the windows, sweeping up to the roof ahead of them, and a
+## `livery_b` swoosh along the bottom of the rear (TriMet's own scheme).
+const LIVERIES := ["", "two_tone", "transit"]
+const LIVERY_DEFAULTS := {"livery_a": [0.11, 0.3, 0.64], "livery_b": [0.93, 0.84, 0.42]}
 
 
 static func default_spec(type: String = "van") -> Dictionary:
@@ -100,6 +107,10 @@ static func resolve(spec: Dictionary) -> Dictionary:
 		p["roof"] = p["body"]
 	# A wrap image over the body's paint (VehicleBuilder.WRAP_DIR), "" = none.
 	p["wrap"] = str(paint.get("wrap", ""))
+	var lv := str(paint.get("livery", ""))
+	p["livery"] = lv if LIVERIES.has(lv) else ""
+	for k in LIVERY_DEFAULTS:
+		p[k] = _color_arr(paint.get(k, LIVERY_DEFAULTS[k]))
 	s["paint"] = p
 	var ov: Variant = s.get("glb_override", {})
 	s["glb_override"] = ov if ov is Dictionary else {}
@@ -129,6 +140,11 @@ static func _clamp_body(bd: Dictionary, ch: Dictionary) -> void:
 	bd["height_m"] = clampf(float(bd.get("height_m", 3.0)),
 		float(bd["floor_h_m"]) + 1.4, 4.2)
 	bd["corner_r_m"] = clampf(float(bd.get("corner_r_m", 0.1)), 0.0, 0.4)
+	bd["end_r_m"] = clampf(float(bd.get("end_r_m", 0.0)), 0.0, 0.6)
+	bd["cap_len_m"] = clampf(float(bd.get("cap_len_m", 0.7)), 0.2, 1.4)
+	bd["skirt_h_m"] = clampf(float(bd.get("skirt_h_m", 0.0)), 0.0, float(bd["floor_h_m"]) - 0.05)
+	bd["lift_door_w_m"] = clampf(float(bd.get("lift_door_w_m", 1.15)), 0.8, 1.8)
+	bd["door_w_m"] = clampf(float(bd.get("door_w_m", 0.0)), 0.0, 1.4)
 	bd["cd"] = clampf(float(bd.get("cd", 0.6)), 0.25, 1.0)
 
 

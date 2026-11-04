@@ -97,7 +97,11 @@ static func bay(d: Dictionary) -> Dictionary:
 			door = dr
 	var rear := not door.is_empty()
 	if not rear:
-		door = doors[0]
+		# Loaded through the widest side door (a lift's doors over the
+		# entry door); CargoDoors.plan opens the same one.
+		for dr in doors:
+			if door.is_empty() or float((dr as Dictionary)["w_m"]) > float(door["w_m"]) + 1e-4:
+				door = dr
 	var fy := float(house["floor_y"])
 	var frame := {}
 	var interior := {}

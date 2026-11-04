@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 743
+const EXPECTED_CHECKS := 791
 
 var _passed := 0
 var _failed := 0
@@ -40,6 +40,7 @@ func _initialize() -> void:
 	_test_geometry()
 	_test_transport_lifecycle()
 	_test_cargo_doors()
+	_test_shuttle_body()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
@@ -722,7 +723,8 @@ func _test_interior() -> void:
 			side = sp
 	_check("the trailer's door is 4 m back", not side.is_empty()
 		and absf(float(side["z0"]) - (float((tr["house"] as Dictionary)["z0"]) + 4.0)) < 1e-4, str(side))
-	_check("a bus door on the shuttle", VehicleDesign.door_spans(_solve("shuttle_bus")).size() == 1)
+	_check("a bus door and a lift's doors on the shuttle", VehicleDesign.door_spans(_solve("shuttle_bus")).map(
+		func(sp): return str((sp as Dictionary).get("kind", ""))) == ["bus", "lift"])
 	_check("the box truck's only way in is the rear", VehicleInterior.entries(_solve("box_truck")).size() == 1
 		and str((VehicleInterior.entries(_solve("box_truck"))[0] as Dictionary)["where"]) == "rear")
 	_check("a walk-through cab is an entry", VehicleInterior.entries(_solve("school_bus")).any(
@@ -1661,3 +1663,101 @@ func _test_transport_lifecycle() -> void:
 		[{"unit_idx": 0, "pos": Vector3.ZERO, "size": Vector3.ONE}])
 	_check("a vehicle bay's labels say V1, not C1",
 		str(((pl.get("spaces", []) as Array)[0] as Dictionary).get("id", "")) == "V1")
+
+
+func _side_span(d: Dictionary, kind: String) -> Dictionary:
+	for sp in VehicleDesign.door_spans(d):
+		if str((sp as Dictionary).get("kind", "")) == kind:
+			return sp
+	return {}
+
+
+## The shuttle body (an Aerotech-class fiberglass box on an E-450, shaped off
+## a SketchUp model of one, 2026-11-03): the skirt cut round the wheels, the
+## lift's doors wherever they are asked for but never over an arch or the
+## entry door, the band of windows round the doors, the livery image, and
+## the Magic Tool Bus held to its owner's photos.
+func _test_shuttle_body() -> void:
+	var d := _solve("shuttle_bus")
+	_check("the shuttle's skirt is cut round the rear wheels (the front ones are under the cab)",
+		VehicleDesign.side_arches(d).size() == 1,
+		str(VehicleDesign.side_arches(d)))
+	_check("a van's body hangs no skirt", VehicleDesign.side_arches(_solve("van")).is_empty())
+	_check("the cap rides a cutaway only", bool(d["body"]["front_cap"])
+		and not bool(_solve("school_bus")["body"].get("front_cap", false)))
+	for pos in ["front", "mid", "rear"]:
+		var sp := VehiclePresets.builtin("shuttle_bus")
+		sp["body"] = {"lift_door": pos}
+		var sd := VehicleDesign.solve(sp)
+		var lift := _side_span(sd, "lift")
+		var entry := _side_span(sd, "bus")
+		_check("a %s lift door is placed" % pos, not lift.is_empty())
+		if lift.is_empty():
+			continue
+		var clear := true
+		for a in VehicleDesign.side_arches(sd):
+			if float(lift["z0"]) < float(a["z"]) + float(a["r"]) and float(lift["z1"]) > float(a["z"]) - float(a["r"]):
+				clear = false
+		_check("a %s lift door stays off the wheel arches" % pos, clear, str(lift))
+		_check("a %s lift door stays off the entry door" % pos, float(lift["z0"]) >= float(entry["z1"]) + 0.1)
+		var rear_z := float((sd["axles"][1] as Dictionary)["zf"]) - float(sd["half_len"])
+		match pos:
+			"front":
+				_check("a front lift door is right behind the entry door", float(lift["z0"]) - float(entry["z1"]) < 0.2)
+			"rear":
+				_check("a rear lift door is behind the rear axle", float(lift["z0"]) > rear_z)
+			_:
+				_check("a mid lift door is between the doors and the rear axle", float(lift["z1"]) < rear_z)
+		# The band's curb-side panes never run across a door.
+		var across := false
+		for w in VehicleDesign.window_spans(sd):
+			var wd: Dictionary = w
+			if float(wd["sx"]) > 0.0:
+				for door in [lift, entry]:
+					if float(wd["z0"]) < float(door["z1"]) and float(wd["z1"]) > float(door["z0"]):
+						across = true
+		_check("no curb-side pane across a door (%s lift)" % pos, not across)
+	var typed := VehiclePresets.builtin("shuttle_bus")
+	typed["body"] = {"lift_door": "front", "lift_door_at_m": 1.5}
+	var td := VehicleDesign.solve(typed)
+	_check("a typed lift door position is where it was typed",
+		absf(float(_side_span(td, "lift")["z0"]) - (float(td["house"]["z0"]) + 1.5)) < 1e-4)
+	var none := VehiclePresets.builtin("shuttle_bus")
+	none["body"] = {"lift_door": "none"}
+	_check("no lift: one door", VehicleDesign.door_spans(VehicleDesign.solve(none)).size() == 1)
+	# The Magic Tool Bus.
+	var m := _solve("magic_tool_bus")
+	_check("the Magic Tool Bus is 25 ft long", absf(float(m["length_m"]) - 25.0 * 12.0 * VehicleCatalog.IN) < 0.05,
+		"%.2f" % float(m["length_m"]))
+	_check("on the E-450's 176 in wheelbase", absf(float(m["wheelbase_m"]) - 176.0 * VehicleCatalog.IN) < 1e-3)
+	var ml := _side_span(m, "lift")
+	var me := _side_span(m, "bus")
+	_check("its lift doors stand right behind the entry door", not ml.is_empty()
+		and float(ml["z0"]) - float(me["z1"]) > 0.05 and float(ml["z0"]) - float(me["z1"]) < 0.2)
+	var side_el := {}
+	for e in m["exterior"]:
+		if str((e as Dictionary)["id"]) == "side_solar":
+			side_el = e
+	var covered := false
+	for w in VehicleDesign.window_spans(m):
+		var wd: Dictionary = w
+		if float(wd["sx"]) > 0.0 and float(wd["z1"]) > float(side_el["u"]) - float(side_el["w"]) * 0.5 \
+				and float(wd["z0"]) < float(side_el["u"]) + float(side_el["w"]) * 0.5:
+			covered = true
+	_check("the side array covers the curb-side windows", not covered)
+	_check("1.6 kW on the roof and 600 W on the side", absf(float(m["solar_w"]) - 2200.0) < 1e-3,
+		"%.0f" % float(m["solar_w"]))
+	_check("it wears TriMet's livery", str(m["spec"]["paint"]["livery"]) == "transit")
+	# The livery image: rear-top colour A, the swoosh B at the rear's bottom,
+	# plain paint at the front; a two-tone's B under the line.
+	var img := VehicleBuilder.livery_image("transit", Color.WHITE, Color.BLUE, Color.YELLOW, 0.4)
+	_check("transit: A over the rear's top", img.get_pixel(10, 10).is_equal_approx(Color.BLUE))
+	_check("transit: B along the rear's bottom", img.get_pixel(10, 250).is_equal_approx(Color.YELLOW))
+	_check("transit: plain paint at the front", img.get_pixel(1010, 10).is_equal_approx(Color.WHITE)
+		and img.get_pixel(1010, 250).is_equal_approx(Color.WHITE))
+	_check("transit: the top colour sweeps up through the front third",
+		img.get_pixel(700, 60).is_equal_approx(Color.BLUE) and img.get_pixel(700, 120).is_equal_approx(Color.WHITE))
+	var tt := VehicleBuilder.livery_image("two_tone", Color.WHITE, Color.BLUE, Color.YELLOW, 0.4)
+	_check("two-tone: B under the line, paint over it", tt.get_pixel(500, 250).is_equal_approx(Color.YELLOW)
+		and tt.get_pixel(500, 20).is_equal_approx(Color.WHITE))
+	_check("a livery that is not one is none", VehicleSpec.resolve({"type": "van", "paint": {"livery": "zebra"}})["paint"]["livery"] == "")

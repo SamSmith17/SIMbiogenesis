@@ -379,6 +379,26 @@ func _build_right() -> void:
 	_add_row(sb, "rear_door", FormRow.option("Rear door", [["none", "None"], ["barn", "Barn doors"],
 		["roll_up", "Roll-up"], ["lift", "Lift gate"]], func(v): _edit(["body", "rear_door"], str(v)),
 		"The rear door: a cargo bay loads through it when there is one", "vl_rear_door"))
+	# Bus shaping (a shuttle's fiberglass body; any body may take them).
+	_add_row(sb, "door_w_m", FormRow.spin("Entry door width", 0.0, 1.4, 0.01, " m",
+		func(v): _edit(["body", "door_w_m"], v), "The curb-side door's width (0 = the door style's own)", "vl_door_w"))
+	_add_row(sb, "lift_door", FormRow.option("Lift doors", [["none", "None"], ["front", "Behind the entry door"],
+		["mid", "Middle"], ["rear", "Behind the rear wheels"]], func(v): _on_lift_door(str(v)),
+		"A wheelchair lift's double doors on the curb side; they keep off the wheel arches", "vl_lift_door"))
+	_add_row(sb, "lift_door_w_m", FormRow.spin("Lift door width", 0.8, 1.8, 0.01, " m",
+		func(v): _edit(["body", "lift_door_w_m"], v), "Both leaves together", "vl_lift_w"))
+	_add_row(sb, "lift_door_at_m", FormRow.spin("Lift doors at", 0.0, 14.0, 0.01, " m",
+		func(v): _edit(["body", "lift_door_at_m"], v),
+		"Their front edge from the front of the living box (type to slide them; picking a place above resets it)", "vl_lift_at"))
+	_add_row(sb, "front_cap", FormRow.check("Front cap", "Fiberglass cap over the cab",
+		func(on): _edit(["body", "front_cap"], on), "A shuttle's wedge over a cutaway's cab", "vl_front_cap"))
+	_add_row(sb, "cap_len_m", FormRow.spin("Cap reach", 0.2, 1.4, 0.01, " m",
+		func(v): _edit(["body", "cap_len_m"], v), "How far the cap reaches forward over the windshield", "vl_cap_len"))
+	_add_row(sb, "end_r_m", FormRow.spin("Rounded ends", 0.0, 0.6, 0.01, " m",
+		func(v): _edit(["body", "end_r_m"], v), "How round the box's vertical corners are (0 = square)", "vl_end_r"))
+	_add_row(sb, "skirt_h_m", FormRow.spin("Skirt down to", 0.0, 1.0, 0.01, " m",
+		func(v): _edit(["body", "skirt_h_m"], v),
+		"The side panels hang down to this height, with arches cut round the wheels (0 = they stop at the floor)", "vl_skirt"))
 	# Paint.
 	var pb := _section("Paint", false)
 	for key in [["body", "Body"], ["roof", "Roof"], ["trim", "Trim"], ["wheels", "Wheels"], ["stripe", "Stripe"]]:
@@ -390,6 +410,16 @@ func _build_right() -> void:
 		_add_row(pb, "paint_" + k, FormRow.make(str(key[1]), picker, "The %s colour" % str(key[1]).to_lower(), "", "vl_paint_" + k))
 	_add_row(pb, "stripe_on", FormRow.check("Stripe", "Down both sides",
 		func(on): _edit(["paint", "stripe_on"], on), "", "vl_stripe_on"))
+	_add_row(pb, "livery", FormRow.option("Livery", [["", "None (paint)"], ["two_tone", "Two-tone"],
+		["transit", "Transit swoosh"]], func(v): _edit(["paint", "livery"], str(v)),
+		"A scheme painted over the body colour (a wrap image goes over it)", "vl_livery"))
+	for key in [["livery_a", "Livery top"], ["livery_b", "Livery bottom"]]:
+		var lk := str(key[0])
+		var lp := ColorPickerButton.new()
+		lp.edit_alpha = false
+		lp.custom_minimum_size = Vector2(0, 24)
+		lp.color_changed.connect(func(c: Color) -> void: _edit(["paint", lk], [c.r, c.g, c.b], "paint." + lk))
+		_add_row(pb, "paint_" + lk, FormRow.make(str(key[1]), lp, "The livery's %s colour" % str(key[1]).to_lower().replace("livery ", ""), "", "vl_paint_" + lk))
 	_wrap_opt = OptionButton.new()
 	_wrap_opt.item_selected.connect(func(i: int) -> void:
 		_edit(["paint", "wrap"], str(_wrap_opt.get_item_metadata(i))))
@@ -602,6 +632,18 @@ func _edit(path: Array, value: Variant, coalesce: String = "") -> void:
 	_rebuild_timer = REBUILD_DELAY
 
 
+## Picking where the lift's doors go forgets a typed position.
+func _on_lift_door(pos: String) -> void:
+	if _suppress or not _active:
+		return
+	_push_undo("body.lift_door")
+	var g: Dictionary = _spec.get("body", {})
+	g["lift_door"] = pos
+	g.erase("lift_door_at_m")
+	_spec["body"] = g
+	_rebuild_timer = REBUILD_DELAY
+
+
 func _on_type_pressed(t: String) -> void:
 	if not _active:
 		return
@@ -714,6 +756,32 @@ func _sync_rows() -> void:
 		var picker := (_rows["paint_" + k] as FormRow).control as ColorPickerButton
 		picker.color = VehicleSpec.color(paint[k])
 	(_rows["stripe_on"] as FormRow).set_value(bool(paint.get("stripe_on", false)))
+	(_rows["livery"] as FormRow).set_value(str(paint.get("livery", "")))
+	for lk in ["livery_a", "livery_b"]:
+		var lrow := _rows["paint_" + lk] as FormRow
+		(lrow.control as ColorPickerButton).color = VehicleSpec.color(paint.get(lk, [0.5, 0.5, 0.5]))
+		lrow.visible = not str(paint.get("livery", "")).is_empty()
+	# Bus shaping.
+	var cutaway := str(ch.get("cab", "")) == "cutaway"
+	(_rows["door_w_m"] as FormRow).set_value(float(bd.get("door_w_m", 0.0)))
+	(_rows["door_w_m"] as FormRow).visible = str(bd.get("side_door", "none")) != "none"
+	var lift := str(bd.get("lift_door", "none"))
+	(_rows["lift_door"] as FormRow).set_value(lift)
+	(_rows["lift_door_w_m"] as FormRow).set_value(float(bd.get("lift_door_w_m", 1.15)))
+	var lspan := {}
+	if not _design.is_empty():
+		lspan = VehicleDesign.lift_door_span(_design, VehicleDesign.door_spans(_design).filter(
+			func(sp): return str((sp as Dictionary).get("kind", "")) != "lift"))
+	(_rows["lift_door_at_m"] as FormRow).set_value(float(lspan["z0"]) - float(_design["house"]["z0"])
+		if not lspan.is_empty() else float(bd.get("lift_door_at_m", 0.0)))
+	for k in ["lift_door_w_m", "lift_door_at_m"]:
+		(_rows[k] as FormRow).visible = lift != "none"
+	(_rows["front_cap"] as FormRow).set_value(bool(bd.get("front_cap", false)))
+	(_rows["front_cap"] as FormRow).visible = cutaway
+	(_rows["cap_len_m"] as FormRow).set_value(float(bd.get("cap_len_m", 0.7)))
+	(_rows["cap_len_m"] as FormRow).visible = cutaway and bool(bd.get("front_cap", false))
+	(_rows["end_r_m"] as FormRow).set_value(float(bd.get("end_r_m", 0.0)))
+	(_rows["skirt_h_m"] as FormRow).set_value(float(bd.get("skirt_h_m", 0.0)))
 	FormRow.select_meta(_wrap_opt, str(paint.get("wrap", "")))
 	var ov: Dictionary = _spec.get("glb_override", {})
 	FormRow.select_meta(_glb_opt, str(ov.get("path", "")))

@@ -248,6 +248,18 @@ const CHASSIS := {
 ## wall and ceiling: a converted van's ribs + insulation + panelling take
 ## ~0.12 m a side and 0.15 m of headroom, a bus ~0.08, a dry box's plywood
 ## liner 0.05. `roof_kg` = the load the roof carries (racks, modules, an AC).
+## Shuttle-bus shaping (an E-450 cutaway under a fiberglass body, measured
+## off a SketchUp model of an Aerotech-class bus and a 25 ft TriMet one):
+## `front_cap` = the fiberglass wedge over the cab, `cap_len_m` how far it
+## reaches forward of the box; `end_r_m` = how round the box's vertical
+## corners are in plan (the roof edge rounds down over the same radius);
+## `skirt_h_m` = the side panels hang down to this height above the ground
+## (wheel arches are cut round the tyres), 0 = they stop at the floor;
+## `lift_door` = a wheelchair lift's double doors on the curb side: none |
+## front (right behind the entry door) | mid | rear (behind the rear axle),
+## `lift_door_w_m` their width and `lift_door_at_m` their front edge from
+## the living box's front when typed (beats `lift_door`'s position);
+## `door_w_m` = the entry door's width (0 = by style).
 ## The ISO container sits on a GOOSENECK chassis (deck ~1.2 m at the tunnel):
 ## a high cube on a flat deck would stand over 13' 6".
 const BODIES := {
@@ -260,10 +272,12 @@ const BODIES := {
 		"color": [0.92, 0.93, 0.94],
 	},
 	"shuttle_aerotech": {
-		"label": "Fiberglass \"aerotech\" shuttle body", "length_m": 4.9, "width_m": 2.36,
-		"height_m": 3.05, "floor_h_m": 0.82, "roof": "crown", "cd": 0.6,
+		"label": "Fiberglass \"aerotech\" shuttle body", "length_m": 5.6, "width_m": 2.39,
+		"height_m": 2.85, "floor_h_m": 0.74, "roof": "crown", "cd": 0.6,
 		"wall_kg_m2": 14.0, "windows": "band", "rear_door": "none", "side_door": "bus",
-		"corner_r_m": 0.22, "wall_t_m": 0.08, "ceiling_t_m": 0.1, "roof_kg": 250.0,
+		"corner_r_m": 0.18, "wall_t_m": 0.08, "ceiling_t_m": 0.1, "roof_kg": 250.0,
+		"front_cap": true, "cap_len_m": 0.7, "end_r_m": 0.3, "skirt_h_m": 0.33,
+		"lift_door": "rear", "lift_door_w_m": 1.15, "door_w_m": 0.85,
 		"color": [0.95, 0.95, 0.95],
 	},
 	"skoolie": {

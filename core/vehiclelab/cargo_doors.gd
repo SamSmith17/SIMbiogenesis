@@ -43,15 +43,17 @@ static func plan(rec: Dictionary) -> Dictionary:
 		return {}
 	var where := str(bay.get("door_where", "rear"))
 	var b: Dictionary = d["body"]
-	for sp in VehicleDesign.door_spans(d):
+	# The bay's door: the rear one, or the widest side one (VehicleCargo.bay).
+	var spans: Array = VehicleDesign.door_spans(d).filter(func(sp): return str((sp as Dictionary)["where"]) == where)
+	if where == "side":
+		spans.sort_custom(func(a, c): return float(a["z1"]) - float(a["z0"]) > float(c["z1"]) - float(c["z0"]) + 1e-4)
+	for sp in spans:
 		var sd: Dictionary = sp
-		if str(sd["where"]) != where:
-			continue
 		if where == "rear":
 			return {"kind": str(b.get("rear_door", "barn")), "where": "rear", "z": float(sd["z"]),
 				"x0": float(sd["x0"]), "x1": float(sd["x1"]), "y0": float(sd["y0"]),
 				"y1": float(sd["y1"]), "color": VEHICLE_DOOR_COLOR}
-		var side := str(b.get("side_door", "slider"))
+		var side := str(sd.get("kind", b.get("side_door", "slider")))
 		return {"kind": "slider" if side == "slider" or side == "sliding_step" else "hinged",
 			"where": "side", "x": float(sd["x"]), "z0": float(sd["z0"]), "z1": float(sd["z1"]),
 			"y0": float(sd["y0"]), "y1": float(sd["y1"]), "color": VEHICLE_DOOR_COLOR}

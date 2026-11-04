@@ -11,7 +11,8 @@ extends RefCounted
 ##
 ## Module electricals are the typical data-sheet figures of each class
 ## (estimates): a 400 W 108-half-cell module Voc 37.5 / Vmp 31.4 V; a
-## "12 V" 200 W module Voc 24.3 / Vmp 20.4 V; a 100 W flexible module
+## "12 V" 200 W module Voc 24.3 / Vmp 20.4 V; a "12 V" 100 W rigid module
+## Voc 22.5 / Vmp 18.6 V; a 100 W flexible module
 ## Voc 21.6 / Vmp 18.0 V. Each solar item's modules are wired in SERIES
 ## STRINGS of up to STRING_MAX under the controller's Voc cap (strings in
 ## parallel onto its PV terminals), the way a van builder keeps the roof
@@ -21,6 +22,7 @@ const DEF_PREFIX := "vehicle_"
 const MODULE_EL := {
 	"rigid_400": {"voc": 37.5, "vmp": 31.4},
 	"rigid_200": {"voc": 24.3, "vmp": 20.4},
+	"rigid_100": {"voc": 22.5, "vmp": 18.6},
 	"flex_100": {"voc": 21.6, "vmp": 18.0},
 }
 ## Above this many modules each solar item is drawn as ONE panel per string

@@ -21,11 +21,13 @@ const ROOF_CORNER_SHARE := 0.6
 
 ## Solar modules a van builder buys (data sheets as published, rounded):
 ## a 400 W rigid 108-half-cell module (1722 x 1134 mm, ~21 kg), a 200 W rigid
-## 12 V-class module (1480 x 670 mm, ~12 kg), a 100 W flexible ETFE module
+## 12 V-class module (1480 x 670 mm, ~12 kg), a compact 100 W rigid 12 V
+## module (~1200 x 500 mm, ~7 kg), a 100 W flexible ETFE module
 ## (1050 x 540 mm, ~2 kg).
 const MODULES := {
 	"rigid_400": {"label": "Rigid 400 W", "long": 1.722, "short": 1.134, "watts": 400.0, "kg": 21.0, "t": 0.035},
 	"rigid_200": {"label": "Rigid 200 W", "long": 1.48, "short": 0.67, "watts": 200.0, "kg": 12.0, "t": 0.035},
+	"rigid_100": {"label": "Rigid 100 W", "long": 1.2, "short": 0.5, "watts": 100.0, "kg": 7.0, "t": 0.035},
 	"flex_100": {"label": "Flexible 100 W", "long": 1.05, "short": 0.54, "watts": 100.0, "kg": 2.0, "t": 0.004},
 }
 const MODULE_GAP := 0.02
