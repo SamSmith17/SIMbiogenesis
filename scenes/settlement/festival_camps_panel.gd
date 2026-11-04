@@ -80,23 +80,31 @@ func _build() -> void:
 	cap2.text = "Vehicles:"
 	cap2.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	arr_row.add_child(cap2)
+	# The three buttons are the timeline's ARRIVE / LEAVE events (the Deploy
+	# chip's menu has the same), placed a couple of minutes ahead of now.
 	var drive_in := Button.new()
 	drive_in.name = "vehicles_drive_in"
-	drive_in.text = "Drive in from the gate"
-	drive_in.tooltip_text = "Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy on the timeline (or now). Each camp's people arrive with its first vehicle. The gate is a placed Site gate, else the end of a festival road farthest from the site's centre."
+	drive_in.text = "Arrive from the gate"
+	drive_in.tooltip_text = "Puts an ARRIVE event on the timeline a couple of minutes from now: every living vehicle drives in through the site gate, one every few minutes, and each camp's people are away until it comes (a camp with no vehicle arrives at the event). Drag the flag on the timeline to retime it."
 	UITheme.style_button(drive_in)
 	drive_in.pressed.connect(func() -> void:
-		var loader := _loader()
-		if loader != null:
-			loader.call("schedule_vehicle_arrivals_auto")
+		var sd := _site_deploy()
+		if sd != null:
+			sd.add_event(SiteDeploySchedule.ACTION_ARRIVE, _now_h() + 2.0 / 60.0)
 		_refresh())
 	arr_row.add_child(drive_in)
 	var here := Button.new()
 	here.name = "vehicles_here"
 	here.text = "Already here"
-	here.tooltip_text = "Forget the drive in: every vehicle simply stands where it is parked."
+	here.tooltip_text = "Remove the Arrive and Leave events: every vehicle stands where it is parked and everyone is here."
 	UITheme.style_button(here)
 	here.pressed.connect(func() -> void:
+		var sd := _site_deploy()
+		if sd != null:
+			for action in [SiteDeploySchedule.ACTION_ARRIVE, SiteDeploySchedule.ACTION_LEAVE]:
+				var ev: Dictionary = sd.event_of(action)
+				if not ev.is_empty():
+					sd.remove_event(str(ev.get("id", "")))
 		var loader := _loader()
 		if loader != null:
 			loader.call("clear_vehicle_arrivals")
@@ -105,15 +113,29 @@ func _build() -> void:
 	arr_row.add_child(here)
 	var drive_out := Button.new()
 	drive_out.name = "vehicles_drive_out"
-	drive_out.text = "Drive out"
-	drive_out.tooltip_text = "Every living vehicle drives out through the site gate, one every few minutes, the one nearest the gate last; each camp is away again once its last vehicle has gone. A Pack-up on the timeline does this by itself when the crews finish."
+	drive_out.text = "Leave through the gate"
+	drive_out.tooltip_text = "Puts a LEAVE event on the timeline a couple of minutes from now: every living vehicle drives out through the site gate, the one nearest it last, and each camp is away again once its vehicles are gone. A Pack-up adds one by itself when the crews finish."
 	UITheme.style_button(drive_out)
 	drive_out.pressed.connect(func() -> void:
-		var loader := _loader()
-		if loader != null and loader.has_method("schedule_vehicle_departures_auto"):
-			loader.call("schedule_vehicle_departures_auto")
+		var sd := _site_deploy()
+		if sd != null:
+			sd.add_event(SiteDeploySchedule.ACTION_LEAVE, _now_h() + 2.0 / 60.0)
 		_refresh())
 	arr_row.add_child(drive_out)
+	var gate_btn := Button.new()
+	gate_btn.name = "vehicles_gate_here"
+	gate_btn.text = "Set the gate here"
+	gate_btn.tooltip_text = "Put the site gate a few metres ahead of the player, facing the way the player looks: the vehicles drive through it that way, into the site."
+	UITheme.style_button(gate_btn)
+	gate_btn.pressed.connect(func() -> void:
+		var loader := _loader()
+		var t := get_tree()
+		var main := t.current_scene if t != null else null
+		var pose := SiteGateBuilder.pose_from_player(main)
+		if loader != null and not pose.is_empty() and loader.has_method("set_site_gate_here"):
+			loader.call("set_site_gate_here", float(pose["x"]), float(pose["z"]), float(pose["yaw_deg"]))
+		_refresh())
+	arr_row.add_child(gate_btn)
 	# The status line gets its own row and wraps (it used to clip).
 	_arrival_lbl = Label.new()
 	_arrival_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -141,6 +163,19 @@ func _loader() -> Node:
 	return TerrainSurfaceQuery.find_terrain_loader(t.current_scene) if t != null else null
 
 
+func _site_deploy() -> SiteDeployDirector:
+	var sgv := ServiceLocator.graph()
+	if sgv == null or not sgv.has_method("site_deploy"):
+		return null
+	return sgv.call("site_deploy")
+
+
+func _now_h() -> float:
+	var t := get_tree()
+	var main := t.current_scene if t != null else null
+	return float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0
+
+
 ## "3 vehicles driving in · the last parks at 14:22", "2 vehicles leaving ·
 ## the last is gone at 18:40", or "already here".
 func _arrival_text() -> String:
@@ -151,9 +186,20 @@ func _arrival_text() -> String:
 	var gate_hint := ""
 	var g: Dictionary = loader.call("site_gate") if loader.has_method("site_gate") else {}
 	if not bool(g.get("placed", true)):
-		gate_hint = " Place a Site gate (Library → Structures) to choose where they come in."
+		gate_hint = " No site gate is placed (they use the farthest road end): stand where it should be and press “Set the gate here”."
+	var sd := _site_deploy()
+	var ev_hint := ""
+	if sd != null:
+		var ev_a: Dictionary = sd.event_of(SiteDeploySchedule.ACTION_ARRIVE)
+		var ev_l: Dictionary = sd.event_of(SiteDeploySchedule.ACTION_LEAVE)
+		if not ev_a.is_empty():
+			ev_hint += " Arrive at %s." % _hhmm(float(ev_a.get("at_h", 0.0)))
+		if not ev_l.is_empty():
+			ev_hint += " Leave at %s." % _hhmm(float(ev_l.get("at_h", 0.0)))
+		if not ev_a.is_empty() and not bool(sd.people_present_at(_now_h())):
+			ev_hint += " Everyone is away until then."
 	if arr.is_empty():
-		return "Every vehicle is already here." + gate_hint
+		return "Every vehicle is already here." + ev_hint + gate_hint
 	var t := get_tree()
 	var main := t.current_scene if t != null else null
 	var now := float(main.call("get_absolute_hours")) if main != null and main.has_method("get_absolute_hours") else 0.0

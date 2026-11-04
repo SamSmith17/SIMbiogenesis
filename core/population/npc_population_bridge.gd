@@ -738,6 +738,17 @@ func _update_away(main: Node, abs_h: float, camps: Array) -> void:
 	for iid in present:
 		if not bool(present[iid]):
 			away[iid] = float(next_h.get(iid, INF))
+	# A camp with no scheduled vehicle follows the timeline's ARRIVE / LEAVE
+	# events (SiteDeploySchedule.people_present): away before everyone
+	# arrives, away again once everyone has left.
+	var sgv: Node = ServiceLocator.graph()
+	var sd: Variant = sgv.call("site_deploy") if sgv != null and sgv.has_method("site_deploy") else null
+	if sd != null and not bool(sd.call("people_present_at", abs_h)):
+		var when := float(sd.call("next_present_h", abs_h))
+		for c in camps:
+			var iid := str((c as Dictionary).get("id", ""))
+			if not present.has(iid):
+				away[iid] = when
 	if away.keys() != _away.keys():
 		_invalidate_dots()
 	_away = away

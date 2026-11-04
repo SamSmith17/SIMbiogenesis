@@ -935,6 +935,19 @@ func _rebuild_dynamic_sections() -> void:
 			else:
 				_button("Crew: pack up", "Hand it to the nearest crew: taken down part by part, packed, carried to a container in reach",
 					_model_btns, func() -> void: _on_crew_item(SiteDeploySchedule.ACTION_PACKUP))
+	# A crew is on it (or was — a job whose camp vanished leaves the ghost):
+	# the way out is always here. Cancel leaves it as its record says; Finish
+	# jumps it to the job's end with no crew.
+	if _rec.get("build_state") is Dictionary or _rec.get(PalletRackBuildSite.RECORD_KEY) is Dictionary:
+		var run_v: Variant = _rec.get(PalletRackBuildSite.RECORD_KEY)
+		var action := str((run_v as Dictionary).get("action", "")) if run_v is Dictionary else ""
+		if action.is_empty():
+			action = SiteDeploySchedule.ACTION_DEPLOY if bool(_rec.get("packed", false)) else SiteDeploySchedule.ACTION_PACKUP
+		var verb := "build" if action == SiteDeploySchedule.ACTION_DEPLOY else "pack-up"
+		_button("Crew: cancel the %s" % verb, "Stop the crew's job on this one; it stays as it is now (a crate, or standing)",
+			_model_btns, func() -> void: _on_crew_abandon(false, action))
+		_button("Finish the %s now (no crew)" % verb, "Jump this one to the end of the job at once — a deploy stands it up at its home, a pack-up packs it",
+			_model_btns, func() -> void: _on_crew_abandon(true, action))
 
 
 ## User-imported models only: how SketchUp's invented gloss values are
@@ -1966,6 +1979,24 @@ func _on_crew_breakdown() -> void:
 		return
 	if sgv.has_method("notify_crew_queued"):
 		sgv.call("notify_crew_queued", site, "👷 Breakdown queued — %s" % UiText.count(rows.size(), "phase"))
+
+
+## Stop the crew's job on this prop (and, `finish`, jump it to the job's
+## end): SiteDeployDirector.abandon_prop / finish_prop_now.
+func _on_crew_abandon(finish: bool, action: String) -> void:
+	if _prop_id.is_empty():
+		return
+	var sgv: Node = _graph()
+	if sgv == null or not sgv.has_method("site_deploy"):
+		return
+	var sd: SiteDeployDirector = sgv.call("site_deploy")
+	if finish:
+		sd.finish_prop_now(_prop_id, action)
+	else:
+		sd.abandon_prop(_prop_id)
+	if sgv.has_method("_show_toast"):
+		sgv.call("_show_toast", "👷 %s" % ("Finished at once, no crew" if finish else "Crew job cancelled — left as it stands"))
+	close()
 
 
 ## One structure to the crew through the site deployment director (the

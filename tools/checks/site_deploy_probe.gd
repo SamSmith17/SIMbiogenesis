@@ -333,7 +333,10 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	# The record round-trips through the director's own file.
 	var fresh := SiteDeployDirector.new()
 	fresh.bind(main, bridge)
-	_ok(fresh.events().size() == 1 and fresh.is_fired(ev2), "the schedule file carries the event and its stamp")
+	# The pack-up added a LEAVE event (the vehicles drive out) beside its own.
+	_ok(fresh.events().size() == 2 and fresh.is_fired(ev2)
+		and not fresh.event_of(SiteDeploySchedule.ACTION_LEAVE).is_empty(),
+		"the schedule file carries the event, its stamp and the LEAVE it added")
 	await _shot(main, "04_packed_by_crew")
 
 	# --- 6. one structure on its own (the prop editor's Crew: build) ------

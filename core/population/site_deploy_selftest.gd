@@ -12,7 +12,7 @@ extends SceneTree
 ## prints). Run --import first.
 ##   godot --headless --path . --script core/population/site_deploy_selftest.gd
 
-const EXPECTED_CHECKS := 85
+const EXPECTED_CHECKS := 105
 
 var _failures := 0
 var _checks := 0
@@ -20,6 +20,8 @@ var _checks := 0
 
 func _init() -> void:
 	_test_schedule()
+	_test_drive_events()
+	_test_replay_helpers()
 	_test_planner_rows()
 	_test_planner_assign()
 	_test_board_round_trip()
@@ -136,6 +138,85 @@ func _effect_ops(rows: Array) -> Array:
 		if not e.is_empty():
 			out.append(str(e.get("op", "")))
 	return out
+
+
+# ---------------------------------------------------------------------------
+
+## ARRIVE / LEAVE: declarative drive events that never fire, one of each,
+## and the people's presence read off them.
+func _test_drive_events() -> void:
+	var rec := SiteDeploySchedule.empty()
+	var base := 17_000_000.0
+	_check("no arrive event = everyone has always been here",
+		SiteDeploySchedule.people_present(rec, base) and SiteDeploySchedule.next_present_h(rec, base) == INF)
+	var a := SiteDeploySchedule.add_event(rec, SiteDeploySchedule.ACTION_ARRIVE, base + 10.0)
+	var d := SiteDeploySchedule.add_event(rec, SiteDeploySchedule.ACTION_DEPLOY, base + 12.0)
+	var l := SiteDeploySchedule.add_event(rec, SiteDeploySchedule.ACTION_LEAVE, base + 60.0)
+	_check("arrive / deploy / leave ids", a == "ev_1" and d == "ev_2" and l == "ev_3")
+	_check("a second ARRIVE retimes the one there is",
+		SiteDeploySchedule.add_event(rec, SiteDeploySchedule.ACTION_ARRIVE, base + 8.0) == a
+		and absf(float(SiteDeploySchedule.event_of(rec, SiteDeploySchedule.ACTION_ARRIVE)["at_h"]) - (base + 8.0)) < 1e-9
+		and SiteDeploySchedule.events_sorted(rec).size() == 3)
+	_check("away before the arrive, here after it",
+		not SiteDeploySchedule.people_present(rec, base + 7.0)
+		and SiteDeploySchedule.people_present(rec, base + 8.0)
+		and SiteDeploySchedule.people_present(rec, base + 30.0))
+	_check("next present = the arrive ahead, INF once past it",
+		absf(SiteDeploySchedule.next_present_h(rec, base) - (base + 8.0)) < 1e-9
+		and SiteDeploySchedule.next_present_h(rec, base + 9.0) == INF)
+	_check("away again from the leave", not SiteDeploySchedule.people_present(rec, base + 60.0)
+		and not SiteDeploySchedule.people_present(rec, base + 999.0))
+	_check("drive events never fire",
+		SiteDeploySchedule.due(rec, base, base + 11.0).is_empty()
+		and SiteDeploySchedule.due(rec, base, base + 13.0).size() == 1
+		and str(SiteDeploySchedule.due(rec, base, base + 13.0)[0]["id"]) == d)
+	SiteDeploySchedule.mark_fired(rec, d, base + 12.0)
+	_check("crew events only in rewound and phase",
+		SiteDeploySchedule.rewound(rec, base + 70.0, base).size() == 1
+		and str(SiteDeploySchedule.phase_at(rec, base + 70.0)["phase"]) == SiteDeploySchedule.PHASE_DEPLOYED
+		and (SiteDeploySchedule.phase_at(rec, base + 70.0)["next"] as Dictionary).is_empty())
+	_check("ties sort arrive < deploy < packup < leave",
+		SiteDeploySchedule.add_event(rec, SiteDeploySchedule.ACTION_PACKUP, base + 8.0) != ""
+		and str(SiteDeploySchedule.events_sorted(rec)[0]["action"]) == SiteDeploySchedule.ACTION_ARRIVE
+		and str(SiteDeploySchedule.events_sorted(rec)[1]["action"]) == SiteDeploySchedule.ACTION_PACKUP)
+	_check("labels", SiteDeploySchedule.action_label(SiteDeploySchedule.ACTION_ARRIVE) == "Everyone arrives"
+		and SiteDeploySchedule.action_name(SiteDeploySchedule.ACTION_LEAVE) == "Leave"
+		and SiteDeploySchedule.is_drive_action("arrive") and not SiteDeploySchedule.is_crew_action("leave")
+		and SiteDeploySchedule.describe({"action": "arrive", "at_h": 1.0}) == "Arrive")
+	var back := SiteDeploySchedule.normalize(JSON.parse_string(JSON.stringify(rec)))
+	_check("drive events survive the file", SiteDeploySchedule.event_of(back, SiteDeploySchedule.ACTION_LEAVE).size() > 0
+		and SiteDeploySchedule.events_sorted(back).size() == 4)
+
+
+## The replay's data: progress traces and transport snapshots.
+func _test_replay_helpers() -> void:
+	var tr: Array = []
+	_check("first sample always kept", SiteDeploySchedule.trace_push(tr, 10.0, 0.0) and tr.size() == 1)
+	_check("a tiny move is dropped", not SiteDeploySchedule.trace_push(tr, 10.1, 0.01) and tr.size() == 1)
+	_check("a real move is kept", SiteDeploySchedule.trace_push(tr, 10.5, 0.5) and tr.size() == 2)
+	_check("an older sample is refused", not SiteDeploySchedule.trace_push(tr, 10.2, 0.9))
+	_check("the finish is kept however small the step", SiteDeploySchedule.trace_push(tr, 11.0, 0.99)
+		and SiteDeploySchedule.trace_push(tr, 11.001, 1.0) and tr.size() == 4)
+	_check("trace_frac: held before, interpolated between, held after, 0 for none",
+		SiteDeploySchedule.trace_frac(tr, 9.0) == 0.0
+		and absf(SiteDeploySchedule.trace_frac(tr, 10.25) - 0.25) < 1e-9
+		and absf(SiteDeploySchedule.trace_frac(tr, 10.75) - 0.745) < 1e-9
+		and SiteDeploySchedule.trace_frac(tr, 12.0) == 1.0
+		and SiteDeploySchedule.trace_frac([], 5.0) == 0.0)
+	var rec := {"id": "p1", "model_id": "shiftpod", "x": 3.0, "z": -4.0, "yaw": 90.0, "packed": true,
+		"stowed_in": "host_1", "stow_local": [0.5, 0.0, 1.0, 0.0], "deploy_home": {"x": 1.0, "z": 2.0},
+		"burn": {"ignited_h": 1.0}, "graph_item_id": "g1"}
+	var snap := SiteDeploySchedule.snapshot(rec)
+	_check("a snapshot takes the transport keys only", snap.has("x") and snap.has("stowed_in") and snap.has("deploy_home")
+		and snap.has("packed") and not snap.has("burn") and not snap.has("graph_item_id") and not snap.has("y_offset"))
+	var patch := SiteDeploySchedule.restore_patch(snap)
+	_check("the restore patch erases what the snapshot lacks (null) and keeps what it has",
+		patch["y_offset"] == null and patch["x"] == 3.0 and patch["stowed_in"] == "host_1"
+		and (patch["deploy_home"] as Dictionary)["x"] == 1.0 and patch.has("linkage_deployed"))
+	var standing := SiteDeploySchedule.snapshot({"id": "p2", "x": 1.0, "z": 1.0, "yaw": 0.0, "y_offset": 0.0})
+	_check("a standing structure's snapshot has no packed / stowed keys",
+		not standing.has("packed") and not standing.has("stowed_in")
+		and SiteDeploySchedule.restore_patch(standing)["packed"] == null)
 
 
 func _test_planner_rows() -> void:

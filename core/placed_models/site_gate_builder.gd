@@ -75,6 +75,30 @@ static func approach_xz(pos: Vector2, yaw_deg: float) -> Vector2:
 	return pos - Vector2(-sin(yaw), -cos(yaw)) * OUTSIDE_M
 
 
+## The gate stands this far ahead of the player who sets it where they stand.
+const AHEAD_OF_PLAYER_M := 3.0
+
+
+## The gate pose "where I stand": a few metres ahead of the player, facing
+## the way the player looks — the vehicles drive through it that way, into
+## the site. {x, z, yaw_deg}, or {} without a player.
+static func pose_from_player(main: Node) -> Dictionary:
+	if main == null:
+		return {}
+	var player := main.get_node_or_null("Player") as Node3D
+	if player == null:
+		player = main.find_child("Player", true, false) as Node3D
+	if player == null:
+		return {}
+	var fwd := -player.global_transform.basis.z
+	var dir := Vector2(fwd.x, fwd.z)
+	if dir.length() < 1e-3:
+		dir = Vector2(0.0, -1.0)
+	dir = dir.normalized()
+	var at := Vector2(player.global_position.x, player.global_position.z) + dir * AHEAD_OF_PLAYER_M
+	return {"x": at.x, "z": at.y, "yaw_deg": fposmod(rad_to_deg(atan2(-dir.x, -dir.y)), 360.0)}
+
+
 static func _mat(c: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c

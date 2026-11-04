@@ -679,6 +679,18 @@ Godot.exe.exe --headless --path . --script core/population/site_deploy_selftest.
 # crew carries the crates to the container's door; the file; one crate
 # handed to the crew on its own (queue_item):
 tools\harness.ps1 -World walton -RunScript res://tools/checks/site_deploy_probe.gd -Label site_deploy -Timeout 2100
+# The schedule's ROUND TRIP (sandbox, Walton; the 2026-11-04 pass): a kit
+# deployed where it stands, packed up INTO a cargo container by the crew
+# (home remembered, a LEAVE event added), a stale delivery blob naming the
+# stowed kit queues no unload, a second deploy builds it AT HOME out of the
+# container; the clock scrubbed into the finished deploy's window REPLAYS
+# the build (construction state + replay fraction on the crew site), past
+# it the finished state, before the event the EXACT before-state (crate
+# stowed again, home kept); a stale build_state with no job is counted
+# stuck and healed by the inventory; an ARRIVE event writes a parked van's
+# arrival and keeps vehicle-less camps away, a LEAVE its departure; "Set
+# the gate where I stand" places then MOVES the one gate:
+tools\harness.ps1 -World walton -RunScript res://tools/checks/deploy_roundtrip_check.gd -Label deploy_roundtrip -Timeout 2400
 # The LOOK of per-part staging, close up (sandbox, ~2.5 min): three kits on
 # open ground near the marker handed to the crew one by one (queue_item), the
 # settlement camera 40-55 m over them, shots of the yard laid out, the dome
@@ -924,7 +936,8 @@ Godot.exe.exe --headless --path . --script core/vehiclelab/vehiclelab_selftest.g
 # Every preset front / curb side / rear in one PNG (WINDOWED, not a
 # selftest; APPDATA at a scratch folder; --out=<png>, --only=van,rv): the
 # look pass — wheels in their arches, the grille and lights, the step under
-# a bus door, windows over the beds, propane on a trailer's tongue:
+# a bus door, windows over the beds, propane on a trailer's tongue.
+# --cell=960x540 for big cells, --views=front,side,rear,left,top,low,cab:
 Godot.exe.exe --path . --windowed --resolution 1280x720 --script tools/diag/vehicle_preset_grid_diag.gd
 # The same combinations as a table (length, WB, overhang, box start,
 # payload), then every preset's masses, axle split / tongue, roof load,
@@ -12271,6 +12284,44 @@ driver's view out of the cab). All eight are done.
     40 vehicles idle 98 → 69 ms; 1x 85 → 61; 450x 90 → 71. `vehicle_drive`
     0.02 ms idle, ~1.5 ms with 40 on the road. What remains is ~1300 more
     draw calls for 40 vehicles and the GPU.
+- **Shuttle bodies (2026-11-03, from a SketchUp model of an Aerotech-class
+  E-450 shuttle and the owner's photos of the Magic Tool Bus).**
+  - Body keys (VehicleSpec.BODY_KEYS): `front_cap` + `cap_len_m` (the
+    fiberglass wedge over a cutaway's cab, `_front_cap`), `end_r_m` (the
+    box's vertical corners rounded in plan; the roof edge rounds down with
+    them; a raked front is never rounded), `skirt_h_m` (side panels down to
+    that height with real arches cut round the wheels and a dark well behind,
+    `VehicleDesign.side_arches` / `_skirt`), `door_w_m` (the entry door),
+    `lift_door` none | front | mid | rear + `lift_door_w_m` +
+    `lift_door_at_m` (a typed front edge from the living box's front; the
+    designer's position pick erases it).
+  - `VehicleDesign.lift_door_span` is the ONE lift rule: the asked-for spot
+    if it is clear, else the nearest spot clear of every wheel arch and of
+    the entry door; {} when none fits. It is a side door span with
+    `kind: "lift"` (every span now carries `kind`), so entries, the
+    exterior checks and windows see it. The cargo bay loads through the
+    WIDEST side door, and CargoDoors opens that same one.
+  - A band of windows skips curb-side panes a door stands in, and panes a
+    side-mounted solar array covers (blacked-out windows); each run of
+    panes sits in a dark surround.
+  - The van / cutaway nose is a loft (`_van_cab`) through rounded sections
+    (`_rr_ring`), the arch cut into the sections' bottom; `_loft` is the
+    generic helper (normals smoothed under ~53°, faces turned outward). The
+    body is lofted too: stations along z, flat in the middle, a quarter
+    circle at a rounded end. Its end caps fan from the profile's middle, NOT
+    the ring centroid (the crown carries most points; a centroid fan cut
+    through a Sprinter's cab, `_test_driver_view` caught it).
+  - Liveries (`paint.livery` two_tone | transit + `livery_a` / `_b`):
+    `VehicleBuilder.livery_image` paints an image column by column, laid on
+    like a wrap. ⚠ Godot's triplanar already flips Y: `_triplanar_body`
+    scales +1/H. Every wrap image had been drawn upside down before.
+  - Bus doors draw as bifold glass leaves; the outside step only where the
+    sill stands over 0.45 m (a skirted shuttle's stepwell is inside).
+  - Preset `magic_tool_bus` (catalog `vehiclelab_magic_tool_bus`): 25 ft,
+    176" E-450, ex-TriMet livery, lift doors behind the entry door, 4 ×
+    400 W on the roof, 6 × 100 W (`rigid_100`, added) over the curb-side
+    windows, a hitch. Its numbers come from the photos (the front tyre as
+    scale) — `_test_shuttle_body` holds them.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch
@@ -12537,6 +12588,75 @@ duplicated.
 - Not built: per-camp schedules, the light tier working (only pinned full
   camps do), a tour stop, the gantry's own assembly order (it splits by
   mesh like a GLB).
+- **Improvement pass (2026-11-04): arrive / leave events, exact undo,
+  replay, stuck builds, the gate.** From the Bombay Beach report (a build
+  stuck half-built that could neither be packed nor unpacked, no way to
+  set the gate, structures rebuilt in the wrong place).
+  - **Why a redeployed structure went up in the wrong place.** A pack-up's
+    load-out stowed the crate in the nearest host — often the VEHICLE that
+    delivered it — whose `delivery.crate_ids` still named it. On that
+    vehicle's next arrival `_service_unload` queued an UNLOAD, which set the
+    crate down at its old staging slot by the door, and the deploy then
+    built it there. Now `stow_prop_in` takes the crate off every host's
+    delivery blob (`_forget_delivery_crate`) and the unload skips any crate
+    with a `deploy_home` (it is the schedule's). The second cause: an undo
+    of a deploy packed the crate where it STOOD instead of putting it back
+    in its container.
+  - **Exact undo.** `_fire` snapshots every item (`SiteDeploySchedule
+    .snapshot`: x / z / yaw / y_offset / ground_y / packed / stowed_in /
+    stow_local / unload_rank / deploy_home / collision / fold; a camp's
+    `built`) into the stamp's `before`; completion snapshots `after`.
+    `_undo` restores `before` (`_restore_snapshot`: a stowed crate re-seated
+    at its host's CURRENT pose, the packed flag through `set_prop_packed`
+    so the graph arrays follow). `queue_item` keeps a `before` too.
+  - **Scrubbable work.** Every project's progress is traced
+    (`pd.trace` [[h, frac]], `trace_push` every 2 %; `done_h` per project
+    and per event). Inside a finished event's window [at, done_h] the
+    director REPLAYS: `_replay_enter` puts each prop under construction at
+    the place it was built (a deploy's `after` pose from the crate, a
+    pack-up's `before` pose standing), `_replay_frame` pushes
+    `trace_frac` to the crew site (`PalletRackBuildSite.set_replay_frac`;
+    a run with `replay_frac` reads no project) and to the camps
+    (`set_camp_built`), `_replay_exit` restores `after`. Scrubbing back
+    before the event is still the undo, and crossing it forward again runs
+    the real crew (the traces are gone with the stamp). `status().replaying`.
+    `apply_instant` drops a finished event's replay.
+  - **ARRIVE / LEAVE events** (`SiteDeploySchedule.ACTION_ARRIVE` /
+    `ACTION_LEAVE`, `DRIVE_ACTIONS`): DECLARATIVE — never fire. The
+    director writes the vehicles' records from them (`apply_drive_events`:
+    `schedule_vehicle_arrivals(at_h)` / `schedule_vehicle_departures(at_h,
+    spacing, "schedule")`, cleared when the event goes), re-applied when a
+    vehicle lacks one (`TerrainLoader.drive_schedule_gap`, checked twice a
+    second) and when the gate moves. ONE of each: a second ARRIVE retimes
+    the first. Camps with no scheduled vehicle follow
+    `SiteDeploySchedule.people_present` (away before the ARRIVE, away from
+    the LEAVE on) through `NpcPopulationBridge._update_away`. A pack-up
+    that finishes adds a LEAVE at + 2 min when none exists
+    (`info.auto_leave`; undone with the pack-up). Flags on the clips lane:
+    teal "▶ ARRIVE", grey "◀ LEAVE"; the Deploy chip's menu runs Arrive /
+    Deploy / Pack up / Leave at the playhead. The camps panel's and the
+    Projects panel's buttons add the same events; the loader's
+    `schedule_vehicle_*_auto` stay for the harness.
+  - **Stuck builds.** A prop with `build_state` or a schedule run and NO
+    live project behind it (the director's stamps, the manual stamp, every
+    camp's project store — `_live_prop_ids`) is healed by the inventory
+    (`_heal_stale`: state off, rebuilt as its record says) and counted by
+    `stuck_count()`; the chip's menu shows "Fix stuck builds (N)". A
+    project that goes missing mid-run is marked `lost`, its item cleared
+    and counted done (toast). `_cancel_projects` clears construction state.
+    A crew-less fire is no longer marked done: `_service` picks crews up
+    when a camp is on site; a fire whose crews are all away says when they
+    arrive. The prop editor shows "Crew: cancel the build / pack-up" and
+    "Finish the … now (no crew)" on any prop under construction
+    (`abandon_prop` / `finish_prop_now`).
+  - **The gate.** `TerrainLoader.set_site_gate_here(x, z, yaw)` moves the
+    placed gate or places one and re-routes every drive;
+    `SiteGateBuilder.pose_from_player` = 3 m ahead of the player facing the
+    way they look (the vehicles drive through it that way). Deploy chip →
+    "Set the gate where I stand" / "Look at the gate"; the camps panel's
+    "Set the gate here"; its status line names the gate and the events.
+  - Gates: `site_deploy_selftest` (105) and
+    `tools/checks/deploy_roundtrip_check.gd` (Validation list).
 
 ## NPC realism pass — spacing, sliding, moving between spaces (2026-10-25)
 

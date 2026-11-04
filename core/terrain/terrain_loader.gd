@@ -14836,7 +14836,83 @@ func stow_prop_in(pid: String, host_id: String) -> bool:
 		var patch: Dictionary = (pt[cid] as Dictionary).duplicate()
 		patch["ground_y"] = TerrainSurfaceQuery.ground_height_at(_main, float(patch["x"]), float(patch["z"]))
 		PlacedPropService.update_prop_record(_main, str(cid), patch, true)
+	# The crate is the deploy schedule's now, not a delivery's: taken off
+	# every host's `delivery.crate_ids` (a vehicle that delivered it would
+	# otherwise UNLOAD it to a staging slot on its next arrival, and the next
+	# deploy built the structure there instead of at its home).
+	_forget_delivery_crate(pid)
 	return true
+
+
+## Remove a crate from every host's delivery blob (an empty blob is erased).
+func _forget_delivery_crate(pid: String) -> void:
+	if _placed_prop_layer == null or pid.is_empty():
+		return
+	for r in _placed_prop_layer.props:
+		var hrec: Dictionary = r
+		var dv: Variant = hrec.get("delivery")
+		if not (dv is Dictionary):
+			continue
+		var ids: Array = (dv as Dictionary).get("crate_ids", [])
+		if not ids.has(pid):
+			continue
+		var d := (dv as Dictionary).duplicate(true)
+		(d["crate_ids"] as Array).erase(pid)
+		var hid := str(hrec.get("id", ""))
+		if (d["crate_ids"] as Array).is_empty():
+			_placed_prop_layer.update_prop(hid, {"delivery": null})
+		else:
+			_placed_prop_layer.update_prop(hid, {"delivery": d})
+		_schedule_prop_layer_save()
+
+
+## Self-driving vehicles the drive events have not reached yet (the
+## director re-applies them when any is missing): {no_arrival, no_departure,
+## arrivals, departures} over the vehicles that drive themselves in.
+func drive_schedule_gap() -> Dictionary:
+	var out := {"no_arrival": 0, "no_departure": 0, "arrivals": 0, "departures": 0}
+	if _placed_prop_layer == null:
+		return out
+	var gate := site_gate()
+	for rec in _arriving_vehicles(gate["pos"]):
+		var arr: Variant = rec.get("arrival")
+		if arr is Dictionary and not (arr as Dictionary).is_empty():
+			out["arrivals"] = int(out["arrivals"]) + 1
+		else:
+			out["no_arrival"] = int(out["no_arrival"]) + 1
+		var dep: Variant = rec.get("departure")
+		if dep is Dictionary and not (dep as Dictionary).is_empty():
+			out["departures"] = int(out["departures"]) + 1
+		else:
+			out["no_departure"] = int(out["no_departure"]) + 1
+	return out
+
+
+## Put THE site gate here, facing `yaw_deg` (the way the vehicles drive
+## through it, into the site): the placed gate is moved, or one is placed.
+## Every scheduled drive is re-routed through it. Returns the gate record's
+## id ("" when there is no world to place it in).
+func set_site_gate_here(x: float, z: float, yaw_deg: float) -> String:
+	if _placed_prop_layer == null or _main == null:
+		return ""
+	var gid := ""
+	for r in _placed_prop_layer.props:
+		var rec: Dictionary = r
+		if str(rec.get("model_id", "")) == SiteGateBuilder.MODEL_ID:
+			gid = str(rec.get("id", ""))
+			break
+	var yaw := fposmod(yaw_deg, 360.0)
+	if gid.is_empty():
+		gid = PlacedPropService.place_prepped_at(_main, SiteGateBuilder.MODEL_ID, {}, x, z, yaw)
+	else:
+		PlacedPropService.update_prop_record(_main, gid, {"x": x, "z": z, "yaw": yaw,
+			"ground_y": TerrainSurfaceQuery.ground_height_at(_main, x, z)}, true)
+	if gid.is_empty():
+		return ""
+	var sgv: Node = ServiceLocator.graph()
+	if sgv != null and sgv.has_method("site_deploy"):
+		(sgv.call("site_deploy") as SiteDeployDirector).apply_drive_events(true)
+	return gid
 
 
 func _abs_hours_now() -> float:
@@ -14939,7 +15015,11 @@ func _service_unload(hrec: Dictionary, dl: Dictionary, now: float) -> void:
 		"crate_ids": []}
 	for cid in dl.get("crate_ids", []):
 		var crec := _placed_prop_layer.find_by_id(str(cid))
-		if str(crec.get("stowed_in", "")) == hid:
+		# A crate a pack-up stowed back in here belongs to the deploy
+		# schedule (it carries its home); the unload must not drop it at a
+		# staging slot — that is how a redeployed structure went up in the
+		# wrong place.
+		if str(crec.get("stowed_in", "")) == hid and not (crec.get("deploy_home") is Dictionary):
 			(res["crate_ids"] as Array).append(str(cid))
 	if (res["crate_ids"] as Array).is_empty():
 		_patch_delivery(hid, {"unload_pending": false})
@@ -14969,6 +15049,8 @@ func _delivery_out_crates(dl: Dictionary, hid: String) -> Array:
 		var crec := _placed_prop_layer.find_by_id(str(cid))
 		if crec.is_empty() or not bool(crec.get("packed", false)):
 			continue
+		if crec.get("deploy_home") is Dictionary:
+			continue   # the deploy schedule's kit, not this delivery's any more
 		if str(crec.get("stowed_in", "")) != hid:
 			out.append(crec)
 	return out

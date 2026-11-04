@@ -172,6 +172,8 @@ var _deploy_chip_sig := ""
 const DEPLOY_FLAG_HIT_PX := 7.0
 const FLAG_DEPLOY_COL := Color(0.45, 0.85, 0.45)
 const FLAG_PACKUP_COL := Color(0.95, 0.70, 0.30)
+const FLAG_ARRIVE_COL := Color(0.40, 0.80, 0.90)
+const FLAG_LEAVE_COL := Color(0.72, 0.72, 0.78)
 
 var _solar_analyzer: SolarShadingAnalyzer = null
 var _shading_overlay: PanelContainer = null
@@ -1767,17 +1769,27 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 		if x < -40.0 or x > w + 40.0:
 			continue
 		var is_burn := id.begins_with(BURN_FLAG_PREFIX)
-		var deploy := str(ev.get("action", "")) == SiteDeploySchedule.ACTION_DEPLOY
+		var action := str(ev.get("action", ""))
+		var deploy := action == SiteDeploySchedule.ACTION_DEPLOY
 		var col := FLAG_DEPLOY_COL if deploy else FLAG_PACKUP_COL
+		var txt := "▲ DEPLOY" if deploy else "▼ PACK UP"
+		var drive := SiteDeploySchedule.is_drive_action(action)
+		if action == SiteDeploySchedule.ACTION_ARRIVE:
+			col = FLAG_ARRIVE_COL
+			txt = "▶ ARRIVE"
+		elif action == SiteDeploySchedule.ACTION_LEAVE:
+			col = FLAG_LEAVE_COL
+			txt = "◀ LEAVE"
 		if is_burn:
 			col = Color(1.0, 0.45, 0.15)
 		if id == _deploy_drag:
 			col = Color(1.0, 0.85, 0.35)
-		var fired : bool = (_playhead_abs() >= t) if is_burn else sd.is_fired(id)
+		# A drive event is "fired" once the clock is past it (it never fires:
+		# the vehicles follow the clock).
+		var fired : bool = (_playhead_abs() >= t) if (is_burn or drive) else sd.is_fired(id)
 		var a := 0.95 if fired else 0.6
 		_track.draw_line(Vector2(x, lane_y), Vector2(x, lane_rect.end.y),
 			Color(col.r, col.g, col.b, a), 1.5 if fired else 1.0)
-		var txt := "▲ DEPLOY" if deploy else "▼ PACK UP"
 		if is_burn:
 			txt = "🔥 BURN %s" % str(ev.get("label", ""))
 		var tw := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 7).x + 6.0
@@ -1915,8 +1927,16 @@ func _open_deploy_menu(sd : SiteDeployDirector, flag_id : String, screen_at : Ve
 		_deploy_menu.add_separator()
 		_deploy_menu.add_item("Remove this event", 12)
 	else:
+		# The order of a festival: everyone arrives, the site is deployed,
+		# the site is packed up, everyone leaves. Each at the playhead.
+		_deploy_menu.add_item("Everyone arrives at the playhead (%s)" % tc, 7)
+		_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+			"The vehicles drive in through the site gate from this hour (one every few minutes) and every camp's people are away until then; a camp with a vehicle arrives with it. One ARRIVE on the timeline: setting another retimes it.")
 		_deploy_menu.add_item("Deploy the site at the playhead (%s)" % tc, 1)
 		_deploy_menu.add_item("Pack up the site at the playhead (%s)" % tc, 2)
+		_deploy_menu.add_item("Everyone leaves at the playhead (%s)" % tc, 8)
+		_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+			"The vehicles drive out through the gate from this hour, the one nearest it last, and the camps are away once they are gone. A Pack-up adds one by itself when its crews finish.")
 		var evs : Array = sd.events()
 		if not evs.is_empty():
 			_deploy_menu.add_separator("Scheduled")
@@ -1934,19 +1954,25 @@ func _open_deploy_menu(sd : SiteDeployDirector, flag_id : String, screen_at : Ve
 		_deploy_menu.add_item("Pack everything now, no crew (%s)" % UiText.count(inv_p, "item"), 3)
 		_deploy_menu.add_item("Deploy everything now, no crew (%s)" % UiText.count(inv_d, "item"), 4)
 		_deploy_menu.add_item("Open the crew's projects…", 6)
-		# The vehicles: in and out through the site gate (TerrainLoader).
+		var stuck : int = sd.stuck_count()
+		if stuck > 0:
+			_deploy_menu.add_item("Fix stuck builds (%s)" % UiText.count(stuck, "structure"), 30)
+			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+				"A structure left half-built with no crew job behind it (its camp cleared, the schedule cleared, an older save) becomes a plain crate or a standing structure again, so it can be packed and deployed.")
+		# The gate the vehicles drive through (TerrainLoader.site_gate).
 		var tl := _get_terrain_loader()
-		if tl != null and tl.has_method("schedule_vehicle_arrivals_auto"):
+		if tl != null and tl.has_method("set_site_gate_here"):
 			var gate: Dictionary = tl.call("site_gate")
-			_deploy_menu.add_separator("Vehicles" if bool(gate.get("placed", false))
-				else "Vehicles (no Site gate placed: the farthest road end)")
-			_deploy_menu.add_item("Vehicles drive in from the gate", 20)
+			_deploy_menu.add_separator("Site gate" if bool(gate.get("placed", false))
+				else "Site gate (none placed: the farthest road end)")
+			_deploy_menu.add_item("Set the gate where I stand", 23)
 			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
-				"Every living vehicle drives in through the site gate, one every few minutes, from the next Deploy (or now); each camp arrives with its first vehicle")
-			_deploy_menu.add_item("Vehicles drive out through the gate", 21)
-			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
-				"Every living vehicle drives out, the one nearest the gate last (a Pack-up does this when its crews finish)")
+				"Put the site gate a few metres ahead of you, facing the way you look (the vehicles drive through it that way, into the site). Every scheduled drive is re-routed through it.")
+			if bool(gate.get("placed", false)):
+				_deploy_menu.add_item("Look at the gate", 24)
 			_deploy_menu.add_item("Vehicles are simply here", 22)
+			_deploy_menu.set_item_tooltip(_deploy_menu.item_count - 1,
+				"Remove the Arrive and Leave events: every vehicle stands where it is parked and everyone is here.")
 		if not evs.is_empty():
 			_deploy_menu.add_separator()
 			_deploy_menu.add_item("Clear the schedule", 5)
@@ -2022,22 +2048,44 @@ func _on_deploy_menu(id : int) -> void:
 			_notify("Deployment schedule cleared.")
 		6:
 			_on_projects_chip_pressed()
-		20, 21, 22:
+		7:
+			sd.add_event(SiteDeploySchedule.ACTION_ARRIVE, now)
+			var gap : Dictionary = {}
+			var tl7 := _get_terrain_loader()
+			if tl7 != null and tl7.has_method("drive_schedule_gap"):
+				gap = tl7.call("drive_schedule_gap")
+			_notify("Everyone arrives at %s — %s drive in through the gate; each camp is away until then." % [
+				ClimelapseExportOptions.timecode_at(now), UiText.count(int(gap.get("arrivals", 0)), "vehicle")])
+		8:
+			sd.add_event(SiteDeploySchedule.ACTION_LEAVE, now)
+			_notify("Everyone leaves at %s — the vehicles drive out through the gate from then." % ClimelapseExportOptions.timecode_at(now))
+		22, 23, 24:
 			var tl2 := _get_terrain_loader()
 			if tl2 == null:
 				return
-			if id == 20:
-				var r: Dictionary = tl2.call("schedule_vehicle_arrivals_auto")
-				_notify("%s driving in from %s." % [UiText.count(int(r.get("count", 0)), "vehicle"),
-					ClimelapseExportOptions.timecode_at(float(r.get("start_h", now)))])
-			elif id == 21:
-				var r2: Dictionary = tl2.call("schedule_vehicle_departures_auto")
-				_notify("%s driving out from %s." % [UiText.count(int(r2.get("count", 0)), "vehicle"),
-					ClimelapseExportOptions.timecode_at(float(r2.get("start_h", now)))])
+			if id == 23:
+				var pose : Dictionary = SiteGateBuilder.pose_from_player(_main)
+				if pose.is_empty():
+					_notify("No player to stand at — the gate stays where it is.")
+				else:
+					var gid := str(tl2.call("set_site_gate_here", float(pose["x"]), float(pose["z"]), float(pose["yaw_deg"])))
+					_notify("Site gate set here, facing the way you look." if not gid.is_empty()
+						else "Could not place the gate here.")
+			elif id == 24:
+				var gate2 : Dictionary = tl2.call("site_gate")
+				if bool(gate2.get("placed", false)) and _main != null and _main.has_method("open_settlement_view"):
+					_main.call("open_settlement_view", gate2["pos"] as Vector2)
 			else:
+				for action in [SiteDeploySchedule.ACTION_ARRIVE, SiteDeploySchedule.ACTION_LEAVE]:
+					var ev22 : Dictionary = sd.event_of(action)
+					if not ev22.is_empty():
+						sd.remove_event(str(ev22.get("id", "")))
 				tl2.call("clear_vehicle_arrivals")
 				tl2.call("clear_vehicle_departures")
-				_notify("The vehicles are simply here.")
+				_notify("The vehicles are simply here, and so is everyone.")
+		30:
+			var n30 : int = sd.fix_stuck()
+			_notify("%s put back as a crate or a standing structure." % UiText.count(n30, "stuck structure"))
 		10, 11, 12:
 			if _deploy_menu_ids.is_empty():
 				return

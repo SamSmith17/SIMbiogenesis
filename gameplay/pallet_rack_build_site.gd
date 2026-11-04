@@ -223,6 +223,14 @@ static func site_for(main: Node, prop_id: String) -> PalletRackBuildSite:
 	return prop.get_node_or_null(NODE_NAME) as PalletRackBuildSite if prop != null else null
 
 
+## The deploy schedule's replay: show the build at this fraction of its
+## labour (the site reads no project while a replay fraction is set).
+func set_replay_frac(f: float) -> void:
+	_run["replay_frac"] = clampf(f, 0.0, 1.0)
+	_status_accum = 1e9
+	_poll_status()
+
+
 ## The plan for a rack + crew, cached by the spec.
 static func plan_for(spec: Dictionary, crew_n: int, units: Dictionary = {}, yard_side: String = "-z",
 		tuning: Dictionary = {}) -> Dictionary:
@@ -548,13 +556,20 @@ func _bridge() -> Object:
 ## plan's work is spread evenly over its makespan here (a rack's jobs are all
 ## short), so progress maps straight onto time.
 func _poll_status() -> void:
-	var bridge := _bridge()
-	if bridge == null or not bridge.has_method("linkage_build_status"):
-		_status = {"found": false}
-		return
-	var c3 := global_transform.origin if is_inside_tree() else Vector3.ZERO
-	_status = bridge.call("linkage_build_status", str(_run.get("iid", "")), str(_run.get("project_id", "")),
-		Vector2(c3.x, c3.z), float(_tl.get("radius_m", 8.0)) + SITE_MARGIN_M)
+	# A REPLAY (the deploy schedule scrubbing through a finished event): the
+	# progress is the trace's, nobody is on site, the run never finishes on
+	# its own — the director takes the stamp off when the clock leaves.
+	if _run.has("replay_frac"):
+		_status = {"found": true, "state": "active",
+			"progress": clampf(float(_run.get("replay_frac", 0.0)), 0.0, 1.0), "present": [], "tasks": {}}
+	else:
+		var bridge := _bridge()
+		if bridge == null or not bridge.has_method("linkage_build_status"):
+			_status = {"found": false}
+			return
+		var c3 := global_transform.origin if is_inside_tree() else Vector3.ZERO
+		_status = bridge.call("linkage_build_status", str(_run.get("iid", "")), str(_run.get("project_id", "")),
+			Vector2(c3.x, c3.z), float(_tl.get("radius_m", 8.0)) + SITE_MARGIN_M)
 	if not bool(_status.get("found", false)):
 		return
 	var mk := float(_tl.get("makespan", 0.0))
