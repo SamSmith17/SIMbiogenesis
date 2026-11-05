@@ -578,8 +578,15 @@ var _twin_badge_rects: Dictionary = {}
 var _inset_rect := Rect2()
 var _inset_dots: Array = []      # [[id, Vector2]] ("" = the site's own system)
 var _hover_emit_id := ""
-const SYSTEM_LEVEL_COLORS := {"ok": Color(0.36, 0.86, 0.52), "warn": Color(0.98, 0.72, 0.28),
-	"crit": Color(0.98, 0.36, 0.36), "idle": Color(0.55, 0.60, 0.68)}
+const SYSTEM_LEVEL_COLORS := GraphTheme.LEVELS
+## System id -> [battery 0..1 (-1 none), net kW], pushed with system_status.
+var system_live: Dictionary = {}
+
+
+## Seconds of allowed status motion (the alert phase; frozen with the clock
+## unless "animate flow when paused" is on).
+func _status_t() -> float:
+	return _alert_phase / 1.6
 
 
 ## Tell the view which node the pointer is over (change-gated).
@@ -1279,6 +1286,10 @@ func _is_pond_twin_hidden(item: Dictionary) -> bool:
 
 
 func _gui_input(event: InputEvent) -> void:
+	# The player's own hand stops a camera fly (a long one runs up to 0.9 s and
+	# would otherwise pull the view back from under the wheel or a drag).
+	if (event is InputEventMouseButton and (event as InputEventMouseButton).pressed) 			or event is InputEventScreenTouch or event is InputEventMagnifyGesture 			or event is InputEventPanGesture:
+		stop_fly()
 	# Native touch — Sharp / Windows touchscreens often omit drag motion in emulated mouse.
 	if event is InputEventScreenTouch:
 		_handle_screen_touch(event as InputEventScreenTouch)
@@ -2239,7 +2250,7 @@ func finish_enter_transition() -> void:
 		_zoom = float(start["zoom"])
 		_pan = start["pan"] as Vector2
 		queue_redraw()
-	_animate_view(float(fit["zoom"]), fit["pan"] as Vector2, 0.26)
+	_fly_view(float(fit["zoom"]), fit["pan"] as Vector2, 0.26, true)
 	_play_content_fade()
 
 
@@ -2312,13 +2323,66 @@ func _play_content_fade() -> void:
 ## Smoothly tween _zoom + _pan to the given targets (short, so scope changes feel
 ## like a continuous zoom rather than a jump).
 func _animate_view(target_zoom: float, target_pan: Vector2, dur: float = 0.22) -> void:
+	_fly_view(target_zoom, target_pan, dur, false)
+
+
+## ONE camera path for every view move (Phase 5). A short move eases out as
+## before. A long one (the target more than ~a screen away at the closer
+## zoom) zooms out on the way and back in, so the eye keeps the context: the
+## smooth-zoom path of van Wijk & Nuij (2003), simplified — the view centre
+## moves in a straight line while the log-zoom dips by ln(distance / 0.6 screen)
+## at the middle, the duration growing with that dip. `settle` ends with a
+## small lens settle (1.5 % past the fit, then back), for scope commits.
+## The centre is -pan / zoom in freeform and (scaled) in Site Plan, so the
+## same path serves both lenses.
+const FLY_SETTLE := 0.015
+
+
+## Stop a camera move where it is (player input, or code that sets the view).
+func stop_fly() -> void:
 	if _view_tween != null and _view_tween.is_valid():
 		_view_tween.kill()
+var last_fly_dip := 0.0
+
+
+func _fly_view(target_zoom: float, target_pan: Vector2, dur: float, settle: bool) -> void:
+	if _view_tween != null and _view_tween.is_valid():
+		_view_tween.kill()
+	var z0 := maxf(_zoom, 1e-6)
+	var z1 := maxf(target_zoom, 1e-6)
+	var c0 := -_pan / z0
+	var c1 := -target_pan / z1
+	var span := maxf(minf(size.x, size.y), 1.0)
+	var dist_px := c0.distance_to(c1) * minf(z0, z1)
+	# Zoom out far enough that start and end share the middle of the move
+	# (both within ~60 % of the screen).
+	var dip := 0.0
+	if dist_px > span * 0.6:
+		dip = log(dist_px / (span * 0.6))
+	last_fly_dip = dip
+	var d := dur if dip <= 0.0 else clampf(dur + 0.2 * dip, dur, 0.9)
+	var lz0 := log(z0)
+	var lz1 := log(z1)
+	var long_move := dip > 0.0
 	_view_tween = create_tween()
-	_view_tween.set_parallel(true)
-	_view_tween.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	_view_tween.tween_method(func(z: float): _zoom = z; queue_redraw(), _zoom, target_zoom, dur)
-	_view_tween.tween_method(func(p: Vector2): _pan = p; queue_redraw(), _pan, target_pan, dur)
+	_view_tween.tween_method(func(u: float) -> void:
+		var e := (u * u * (3.0 - 2.0 * u)) if long_move else (1.0 - pow(1.0 - u, 3.0))
+		var lz := lerpf(lz0, lz1, e) - dip * sin(PI * e)
+		if settle:
+			lz += log(1.0 + FLY_SETTLE) * e
+		var z := exp(lz)
+		var c := c0.lerp(c1, e)
+		_zoom = z
+		_pan = -c * z
+		queue_redraw(), 0.0, 1.0, d)
+	if settle:
+		var zs := z1 * (1.0 + FLY_SETTLE)
+		_view_tween.tween_method(func(u: float) -> void:
+			var e := 1.0 - pow(1.0 - u, 2.0)
+			var z := lerpf(zs, z1, e)
+			_zoom = z
+			_pan = -c1 * z
+			queue_redraw(), 0.0, 1.0, 0.18)
 
 
 func _scope_of_item(item: Dictionary) -> String:
@@ -2641,6 +2705,7 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 	for bid in _twin_badge_rects:
 		if (_twin_badge_rects[bid] as Rect2).grow(3.0).has_point(screen_pos):
+			_consume_press()
 			twin_badge_pressed.emit(str(bid))
 			return
 	if _inset_rect.has_area() and _inset_rect.has_point(screen_pos):
@@ -2653,6 +2718,7 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 				best_d = dd
 				best = str(d[0])
 				hit = true
+		_consume_press()
 		if hit:
 			inset_system_pressed.emit(best)
 		return
@@ -2973,7 +3039,24 @@ func _touch_point_in_item_body(screen_pos: Vector2, item: Dictionary) -> bool:
 
 
 # Left-button release: finalise wire/item drag or treat as click.
+## A press an overlay took (a twin badge, the site inset): clear any drag /
+## marquee state an earlier press left (a lost release) and let the matching
+## release do nothing, or it would act on that stale state and undo the click.
+var _press_consumed := false
+
+
+func _consume_press() -> void:
+	_press_consumed = true
+	_item_dragging = false
+	_item_drag_id = ""
+	_item_drag_ids.clear()
+	_marquee_selecting = false
+
+
 func _on_lmb_release(screen_pos: Vector2) -> void:
+	if _press_consumed:
+		_press_consumed = false
+		return
 	if _resize_dragging:
 		_end_resize_drag()
 		return
@@ -4871,8 +4954,22 @@ func _draw_connections() -> void:
 			or _high_speed_lod
 	_bundle_plan = _build_bundle_plan(visible, center)
 	_flowing_drawn = false
+	var trunked := _plan_trunks(visible, center, solar_w, load_w)
 	for conn: Dictionary in visible:
+		if trunked.has(str(conn.get("id", ""))):
+			continue
 		_render_connection(conn, center, solar_w, load_w)
+	_draw_trunks()
+
+
+## Festival trunks (Phase 5, V2 canvas): wires the canvas draws as one
+## trunk instead of one by one. {conn id: true}; the base draws every wire.
+func _plan_trunks(_visible: Array, _center: Vector2, _solar_w: float, _load_w: float) -> Dictionary:
+	return {}
+
+
+func _draw_trunks() -> void:
+	pass
 
 
 ## GraphWireBundles input for the visible wires (bezier style, freeform only —

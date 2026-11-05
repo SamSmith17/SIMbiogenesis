@@ -377,10 +377,10 @@ const TILE_MIN_R := 11.0
 const PEEK_MIN_PX := 340.0
 ## A group with more inside than this keeps its plain card (cost).
 const PEEK_MAX_ITEMS := 80
-const RING_COLORS := {
-	"ok": Color(0.36, 0.86, 0.52), "warn": Color(0.98, 0.72, 0.28),
-	"crit": Color(0.98, 0.36, 0.36), "idle": Color(0.42, 0.48, 0.58),
-}
+const RING_COLORS := GraphTheme.LEVELS
+## Ring arc -> channel (GraphSystems.RING_KEYS order): a calm arc wears its
+## channel's colour, a troubled one its level's.
+const RING_CHANNELS := ["power", "water", "food", "people"]
 const RING_RANK := {"crit": 3, "warn": 2, "ok": 1, "idle": 0}
 var _tile_labels: Array = []
 ## "Colour systems by" (Phase 3): {mode, values: {system id: float}, hidden:
@@ -401,6 +401,96 @@ func _overlay_for(id: String) -> Dictionary:
 	var hidden: Dictionary = system_overlay.get("hidden", {}) as Dictionary
 	return {"on": true, "color": GraphSystemBoard.overlay_color(mode, v),
 		"hidden": b >= 0 and hidden.has(b)}
+
+
+## Festival trunks (Phase 5): at the site level, when one node (a water
+## depot, a shared battery) is wired to three or more systems drawn as tiles,
+## its wires become ONE trunk to the middle of those tiles and thin branches
+## from there, in the channel's colour, with one bead stream scaled by the
+## total flow. Per channel, so water and power to the same camps stay apart.
+const TRUNK_MIN := 3
+var _trunks: Array = []      # [{src, hub, tiles: [Vector2], col, n, flow}]
+var trunks_drawn := 0
+
+
+func _plan_trunks(visible: Array, center: Vector2, solar_w: float, load_w: float) -> Dictionary:
+	_trunks.clear()
+	var out: Dictionary = {}
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM or active_scope_id != GraphModel.ROOT_SCOPE_ID \
+			or model == null or visible.size() < TRUNK_MIN:
+		return out
+	var groups: Dictionary = {}   # "hub|channel" -> {hub, ch, conns: [], tiles: []}
+	for conn: Dictionary in visible:
+		var sid := str(conn.get("source_item_id", ""))
+		var tid := str(conn.get("target_item_id", ""))
+		var a := model.get_item(sid)
+		var b := model.get_item(tid)
+		if a.is_empty() or b.is_empty():
+			continue
+		var a_tile := _is_tile(a)
+		var b_tile := _is_tile(b)
+		if a_tile == b_tile:
+			continue
+		var hub: Dictionary = b if a_tile else a
+		var tile: Dictionary = a if a_tile else b
+		var ch := "power" if str(conn.get("polarity", "")) != "resource" \
+			else GraphTheme.channel_of_kind(str(conn.get("resource_type", "")))
+		var key := "%s|%s" % [str(hub.get("id", "")), ch]
+		var g: Dictionary = groups.get(key, {})
+		if g.is_empty():
+			g = {"hub": hub, "ch": ch, "conns": [], "tiles": []}
+			groups[key] = g
+		(g["conns"] as Array).append(conn)
+		(g["tiles"] as Array).append(tile)
+	for key: String in groups.keys():
+		var g: Dictionary = groups[key]
+		if (g["conns"] as Array).size() < TRUNK_MIN:
+			continue
+		var hub: Dictionary = g["hub"]
+		var src := _item_screen_tl(hub, center) + _item_screen_size(hub) * 0.5
+		var pts: Array = []
+		var mid := Vector2.ZERO
+		for t: Dictionary in (g["tiles"] as Array):
+			var p := _item_screen_tl(t, center) + _item_screen_size(t) * 0.5
+			pts.append(p)
+			mid += p
+		mid /= float(pts.size())
+		var flow := 0.0
+		for conn: Dictionary in (g["conns"] as Array):
+			out[str(conn.get("id", ""))] = true
+			flow += absf(float(_estimate_connection_flow(conn, solar_w, load_w).get("watts", 0.0)))
+		_trunks.append({"src": src, "hub": src.lerp(mid, 0.72), "tiles": pts,
+			"col": GraphTheme.channel(str(g["ch"])), "n": pts.size(), "flow": flow})
+	return out
+
+
+func _is_tile(item: Dictionary) -> bool:
+	return str(item.get("type", "")) == "compound" and not GraphSystems.island_kind(item).is_empty() \
+		and _item_screen_size(item).x < TILE_MAX_PX
+
+
+func _draw_trunks() -> void:
+	trunks_drawn = _trunks.size()
+	for t: Dictionary in _trunks:
+		var col: Color = t["col"]
+		var src: Vector2 = t["src"]
+		var hub: Vector2 = t["hub"]
+		var n := int(t["n"])
+		var w := clampf(2.0 + log(float(n)) * 1.6, 2.5, 9.0)
+		draw_line(src, hub, Color(col, 0.22), w + 4.0, true)
+		draw_line(src, hub, Color(col, 0.85), w, true)
+		GraphFastDraw.disc(self, hub, w * 0.7, Color(col, 0.9))
+		for p: Variant in (t["tiles"] as Array):
+			draw_line(hub, p as Vector2, Color(col, 0.38), 1.2, true)
+		# One bead stream along the trunk, as many beads as the flow carries
+		# (log scale); they move with the flow animation (the clock rule).
+		if _flow_live and float(t["flow"]) > 0.0:
+			_flowing_drawn = true
+			var beads := clampi(2 + int(log(1.0 + float(t["flow"])) * 1.2), 2, 14)
+			var length := src.distance_to(hub)
+			for i in beads:
+				var u := fposmod(_flow_phase / TAU * maxf(1.0, length / 120.0) + float(i) / float(beads), 1.0)
+				GraphFastDraw.disc(self, src.lerp(hub, u), maxf(2.0, w * 0.45), Color(1, 1, 1, 0.85))
 
 
 ## The twin badge (Phase 4): a small chip on a card's top edge saying what
@@ -584,6 +674,13 @@ func _draw_system_tile(item: Dictionary, rect: Rect2, selected: bool) -> void:
 	var own := minf(rect.size.x, rect.size.y) * 0.5
 	var r := maxf(own, minf(TILE_MIN_R, _tile_room_for(str(item.get("id", "")))))
 	r = maxf(r, 4.0)
+	# Breathing (Phase 5): a system that is charging swells a little, slowly,
+	# each on its own beat; still when the clock is (motion rule).
+	var live: Array = system_live.get(str(item.get("id", "")), []) as Array
+	if live.size() >= 2 and float(live[1]) > 0.02 and _sim_flow_mult > 0.0:
+		var seed := float(hash(str(item.get("id", ""))) % 997) / 997.0
+		r *= 1.0 + 0.035 * sin(_alert_phase * 0.8 + seed * TAU)
+		_alert_seen_this_draw = true
 	var kind := GraphSystems.island_kind(item)
 	var power: Dictionary = (live_power_hint.get("vehicles", {}) as Dictionary).get(str(item.get("id", "")), {})
 	var ring := GraphSystems.ring(model, item, power)
@@ -600,7 +697,20 @@ func _draw_system_tile(item: Dictionary, rect: Rect2, selected: bool) -> void:
 			worst = lvl
 		# Quarter arcs from the top, clockwise, a small gap between.
 		var a0 := -PI * 0.5 + i * PI * 0.5 + 0.12
-		draw_arc(c, r - w * 0.5, a0, a0 + PI * 0.5 - 0.24, 10, RING_COLORS[lvl] as Color, w, true)
+		var acol: Color = RING_COLORS[lvl]
+		if lvl == "ok":
+			acol = GraphTheme.channel(RING_CHANNELS[i])
+		elif lvl in ["warn", "crit"]:
+			var m := GraphTheme.level_motion(lvl, _status_t()) if _sim_flow_mult > 0.0 else 1.0
+			acol = Color(acol, m)
+			if _sim_flow_mult > 0.0:
+				_alert_seen_this_draw = true
+		draw_arc(c, r - w * 0.5, a0, a0 + PI * 0.5 - 0.24, 10, acol, w, true)
+	# The battery's charge as a thin inner arc in the power channel's colour.
+	if live.size() >= 1 and float(live[0]) >= 0.0 and r >= 9.0:
+		var rr := r - w - 1.5
+		draw_arc(c, rr, PI * 0.5, PI * 0.5 + TAU * clampf(float(live[0]), 0.0, 1.0), 20,
+			Color(GraphTheme.channel("power"), 0.75), maxf(1.0, w * 0.45), true)
 	var accent := Color(0.94, 0.62, 0.36) if kind == GraphSystems.KIND_CAMP else Color(0.45, 0.75, 0.95)
 	GraphCard._draw_icon(self, "tent" if kind == GraphSystems.KIND_CAMP else "truck", c, r * 0.95, accent)
 	if selected:

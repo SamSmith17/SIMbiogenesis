@@ -68,6 +68,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var gc := Vector2(float(camp.get("x", 0.0)) + float(camp.get("width", 220.0)) * 0.5,
 		float(camp.get("y", 0.0)) + float(camp.get("height", 150.0)) * 0.5)
 	var z := 220.0 / float(camp.get("width", 220.0))
+	canvas.call("stop_fly")
 	canvas.set("_zoom", z)
 	canvas.set("_pan", -gc * z)
 	canvas.queue_redraw()
@@ -109,6 +110,10 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var at: Vector2 = sgv.call("_item_world_xz_for_handoff", kid)
 	_ok(at != Vector2.INF, "and Locate / Walk have somewhere to go for it")
 	var rects: Dictionary = canvas.get("_twin_badge_rects")
+	print("graphtwin: at the badge check zoom %.3f pan %s (set %.3f %s), card %s, scope %s, %d badges" % [
+		float(canvas.get("_zoom")), str(canvas.get("_pan")), z, str(-gc * z),
+		str(Rect2(canvas.call("_item_screen_tl", camp, canvas.size * 0.5) as Vector2, canvas.call("_item_screen_size", camp) as Vector2)),
+		str(sgv.get("_active_scope_id")), rects.size()])
 	_ok(rects.has(cid), "the camp card draws its badge")
 	_shot(vp, dir, "02_badge")
 	if rects.has(cid):
@@ -174,10 +179,15 @@ func run(main: Node, harness: Node) -> Dictionary:
 				target = str(d[0])
 				tpos = d[1]
 				break
+	var hits: Array = []
+	canvas.connect("inset_system_pressed", func(id: String) -> void: hits.append(id))
 	if not target.is_empty():
 		await HarnessInput.mouse_move(vp, cglob + tpos)
 		await HarnessInput.click(vp, cglob + tpos)
 		await _wait(tree, 0.8)
+	print("graphtwin: inset signal hits %s" % str(hits))
+	print("graphtwin: inset click on %s at %s (canvas %s): selected %s, scope %s, coach %s" % [target, str(tpos),
+		str(cglob), str(sgv.get("_selected_item_ids")), str(sgv.get("_active_scope_id")), str(sgv.call("coach_mark_visible"))])
 	_ok(not target.is_empty() and (sgv.get("_selected_item_ids") as Array).has(target),
 		"a real click on an inset dot flies to that system")
 	sgv.call("_on_view_menu_id", int(sgv.get_script().get_script_constant_map()["VIEW_SITE_INSET"]))

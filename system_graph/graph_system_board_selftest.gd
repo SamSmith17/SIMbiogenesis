@@ -5,7 +5,7 @@ extends SceneTree
 ## Phase 3. Pure / offline. Run --import first.
 ##   godot --headless --path . --script system_graph/graph_system_board_selftest.gd
 
-const EXPECTED_CHECKS := 46
+const EXPECTED_CHECKS := 50
 
 var _failures := 0
 var _checks := 0
@@ -16,6 +16,7 @@ func _init() -> void:
 	_test_sort_filter_totals()
 	_test_overlays()
 	_test_alerts()
+	_test_grammar()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -185,3 +186,20 @@ func _test_alerts() -> void:
 	# A system that disappears drops its entry.
 	al.update([_row("b", "crit"), _row("c", "ok")], 26.0)
 	_check("a removed system leaves the rail", al.entries().is_empty())
+
+
+## Phase 5: one colour grammar and the status motion.
+func _test_grammar() -> void:
+	_check("channels by kind", GraphTheme.channel_of_kind("greywater") == "water"
+		and GraphTheme.channel_of_kind("food_waste") == "food" and GraphTheme.channel_of_kind("propane") == "fuel"
+		and GraphTheme.channel_of_kind("") == "power")
+	_check("the board's colours are the grammar's", GraphFestivalBoard.LEVEL_COLORS["crit"] == GraphTheme.LEVEL_CRIT
+		and GraphSystemBoard.BIN_COLORS[0] == GraphTheme.LEVEL_CRIT)
+	var lo := 9.0
+	var hi := -9.0
+	for i in 200:
+		var m := GraphTheme.level_motion("crit", float(i) * 0.01)
+		lo = minf(lo, m)
+		hi = maxf(hi, m)
+	_check("crit beats between 0.55 and 1", lo >= 0.549 and hi > 0.95 and lo < 0.6, "%.2f..%.2f" % [lo, hi])
+	_check("ok and idle hold still", GraphTheme.level_motion("ok", 0.37) == 1.0 and GraphTheme.level_motion("idle", 1.2) == 1.0)

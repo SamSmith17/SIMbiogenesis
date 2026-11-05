@@ -294,9 +294,9 @@ static func totals(rows: Array) -> Dictionary:
 const OVERLAYS := ["none", "soc", "water", "morale", "margin"]
 const OVERLAY_LABELS := {"none": "Nothing", "soc": "Battery", "water": "Water days",
 	"morale": "Morale", "margin": "Power margin"}
-const BIN_COLORS := [Color(0.93, 0.33, 0.30), Color(0.96, 0.66, 0.25),
-	Color(0.80, 0.84, 0.36), Color(0.36, 0.80, 0.50)]
-const NO_DATA_COLOR := Color(0.45, 0.50, 0.58)
+const BIN_COLORS := [GraphTheme.LEVEL_CRIT, GraphTheme.LEVEL_WARN,
+	Color(0.80, 0.84, 0.36), GraphTheme.LEVEL_OK]
+const NO_DATA_COLOR := GraphTheme.LEVEL_IDLE
 
 
 static func overlay_value(r: Dictionary, mode: String) -> float:

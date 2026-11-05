@@ -1112,6 +1112,7 @@ func _build_system_tabs() -> void:
 		b.clip_text = true
 		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size = Vector2(0, 26)
 		b.pressed.connect(set_tab.bind(t))
 		_tab_bar.add_child(b)
 		_tab_btns[t] = b

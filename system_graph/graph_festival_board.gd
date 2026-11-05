@@ -13,8 +13,7 @@ extends VBoxContainer
 signal expand_pressed
 
 const ROW_LIMIT := 80
-const LEVEL_COLORS := {"idle": Color(0.45, 0.50, 0.58), "ok": Color(0.36, 0.80, 0.50),
-	"warn": Color(0.96, 0.66, 0.25), "crit": Color(0.93, 0.33, 0.30)}
+const LEVEL_COLORS := GraphTheme.LEVELS
 
 var wide := false
 var _view: Node = null

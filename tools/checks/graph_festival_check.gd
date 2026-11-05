@@ -141,6 +141,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var gc := Vector2(float(camp.get("x", 0.0)) + float(camp.get("width", 220.0)) * 0.5,
 		float(camp.get("y", 0.0)) + float(camp.get("height", 150.0)) * 0.5)
 	var z := canvas.size.x * 0.4 / float(camp.get("width", 220.0))
+	canvas.call("stop_fly")
 	canvas.set("_zoom", z)
 	canvas.set("_pan", -gc * z)
 	canvas.queue_redraw()
@@ -167,6 +168,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	sgv.call("_jump_to_scope_index", 0)
 	await _wait(tree, 0.6)
 	# A real wheel zoom from the peek all the way in commits into the camp.
+	canvas.call("stop_fly")
 	canvas.set("_zoom", z)
 	canvas.set("_pan", -gc * z)
 	canvas.queue_redraw()

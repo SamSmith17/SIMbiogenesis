@@ -13827,44 +13827,85 @@ func _build_hints_panel() -> Control:
 	div.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(div)
 
-	var shortcuts: Array = [
-		["G",                      "Toggle graph view"],
-		["Del",                    "Delete selected node / wire"],
-		["Scroll wheel",           "Zoom canvas"],
-		["Middle / Right drag",    "Pan canvas"],
-		["Left-click node",        "Select & open Inspector"],
-		["Drag from port dot",     "Create wire connection"],
-		["Left-click wire",        "Select wire"],
-		["Click library item",     "Spawn at canvas center"],
-		["Drag library item",      "Drag-drop onto canvas"],
-		["Double-click a group",   "Open it (camp, vehicle, array…)"],
-		["Scroll into a group",    "Open it; keep scrolling out to leave"],
-		["Esc  /  Alt+←",          "Up one level"],
-		["Home",                   "Back to the whole site"],
-		["Ctrl+F",                 "Search every node and system"],
-		["F  /  A",                "Frame the selection / everything here"],
-		["Ctrl+Z  /  Ctrl+Y",      "Undo / redo"],
-		["Ctrl+G  /  Ctrl+Shift+G", "Group / ungroup"],
-		["C",                      "Connect tool (Globe, Site Plan)"],
+	# In sections (Phase 5): find your way first, then editing, the lenses,
+	# the festival tools, and the colour grammar the canvas speaks.
+	var sections: Array = [
+		["Find your way", [
+			["Scroll wheel", "Zoom; scroll INTO a camp, vehicle or group to open it"],
+			["Keep scrolling out", "Leave it (three pushes at the edge)"],
+			["Double-click a group", "Open it"],
+			["Esc  /  Alt+Left", "Up one level"],
+			["Home", "Back to the whole site"],
+			["Ctrl+F", "Search every node, camp and vehicle"],
+			["F  /  A", "Frame the selection / everything here"],
+			["Breadcrumb ▾", "Jump to a sibling camp or vehicle"],
+			["Middle / right drag", "Pan"],
+		]],
+		["Edit", [
+			["Drag from a port dot", "Make a wire"],
+			["Click / Ctrl-click", "Select / add to the selection"],
+			["Del", "Delete the selected node or wire"],
+			["Ctrl+Z  /  Ctrl+Y", "Undo / redo"],
+			["Ctrl+G  /  Ctrl+Shift+G", "Group / ungroup"],
+			["Library item", "Click to add at the centre, or drag it on"],
+		]],
+		["Lenses", [
+			["Lens chips", "Freeform · Site Plan · Elevation · Globe"],
+			["C", "Connect tool (Globe, Site Plan)"],
+			["Drag a pin", "Move the thing on the map"],
+			["Hover a card or pin", "Lights its twin in the 3D world"],
+			["Badge beside a card", "Look at its 3D twin"],
+		]],
+		["Festival", [
+			["Dashboard tabs", "Whole festival · Your system · Board"],
+			["View ▾ Festival board", "Every system, sortable; Esc closes"],
+			["View ▾ Colour systems by", "Battery, water days, morale, power margin"],
+			["Alerts (top right)", "A system that just got worse; click to fly"],
+			["Site map (bottom right)", "Every system where it stands; click to fly"],
+		]],
 	]
-
-	for pair: Array in shortcuts:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		vbox.add_child(row)
-
-		var key_lbl := Label.new()
-		key_lbl.text               = pair[0]
-		key_lbl.custom_minimum_size = Vector2(160.0, 0.0)
-		key_lbl.add_theme_color_override("font_color", C_AMBER)
-		key_lbl.add_theme_font_size_override("font_size", 11)
-		row.add_child(key_lbl)
-
-		var desc_lbl := Label.new()
-		desc_lbl.text = pair[1]
-		desc_lbl.add_theme_color_override("font_color", C_TEXT_S)
-		desc_lbl.add_theme_font_size_override("font_size", 11)
-		row.add_child(desc_lbl)
+	# Two columns: it has to fit above the timeline at every size.
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 28)
+	vbox.add_child(cols)
+	var col_l := VBoxContainer.new()
+	col_l.add_theme_constant_override("separation", 6)
+	cols.add_child(col_l)
+	var col_r := VBoxContainer.new()
+	col_r.add_theme_constant_override("separation", 6)
+	cols.add_child(col_r)
+	for si in sections.size():
+		var sec: Array = sections[si]
+		var col := col_l if si < 2 else col_r
+		col.add_child(SectionHeader.make(str(sec[0])))
+		for pair: Array in (sec[1] as Array):
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 12)
+			col.add_child(row)
+			var key_lbl := Label.new()
+			key_lbl.text = str(pair[0])
+			key_lbl.custom_minimum_size = Vector2(190.0, 0.0)
+			key_lbl.add_theme_color_override("font_color", C_AMBER)
+			key_lbl.add_theme_font_size_override("font_size", 11)
+			row.add_child(key_lbl)
+			var desc_lbl := Label.new()
+			desc_lbl.text = str(pair[1])
+			desc_lbl.add_theme_color_override("font_color", C_TEXT_S)
+			desc_lbl.add_theme_font_size_override("font_size", 11)
+			row.add_child(desc_lbl)
+	col_r.add_child(SectionHeader.make("Colours"))
+	var swatches := HFlowContainer.new()
+	swatches.add_theme_constant_override("h_separation", 14)
+	col_r.add_child(swatches)
+	for pair: Array in [["power", "Electricity"], ["water", "Water"], ["food", "Food"],
+			["fuel", "Fuel & heat"], ["people", "People"]]:
+		swatches.add_child(_hint_swatch(GraphTheme.channel(str(pair[0])), str(pair[1])))
+	var levels := HFlowContainer.new()
+	levels.add_theme_constant_override("h_separation", 14)
+	col_r.add_child(levels)
+	for pair: Array in [["ok", "Fine"], ["warn", "Needs attention (breathes)"],
+			["crit", "Critical (beats)"], ["idle", "Nobody / nothing"]]:
+		levels.add_child(_hint_swatch(GraphTheme.level_color(str(pair[0])), str(pair[1])))
 
 	var close_btn := Button.new()
 	close_btn.text       = "Close"
@@ -13880,6 +13921,22 @@ func _build_hints_panel() -> Control:
 	pc.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 
 	return pc
+
+
+func _hint_swatch(col: Color, text: String) -> Control:
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 5)
+	var sw := ColorRect.new()
+	sw.color = col
+	sw.custom_minimum_size = Vector2(10, 10)
+	sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(sw)
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 11)
+	l.add_theme_color_override("font_color", C_TEXT_S)
+	hb.add_child(l)
+	return hb
 
 
 func _on_build_mode() -> void:
@@ -21369,13 +21426,16 @@ func _push_system_overlay() -> void:
 	if "system_status" in _graph_canvas:
 		var st: Dictionary = {}
 		var why: Dictionary = {}
+		var live: Dictionary = {}
 		for r: Dictionary in _board_rows:
 			if not str(r["id"]).is_empty():
 				st[str(r["id"])] = str(r["level"])
 				var rs: Array = r["reasons"]
 				why[str(r["id"])] = ", ".join(PackedStringArray(rs))
+				live[str(r["id"])] = [float(r["soc"]), float(r["pv_kw"]) - float(r["load_kw"])]
 		_graph_canvas.set("system_status", st)
 		_graph_canvas.set("system_reasons", why)
+		_graph_canvas.set("system_live", live)
 	_graph_canvas.queue_redraw()
 	_refresh_overlay_legend()
 
@@ -21583,12 +21643,89 @@ func board_fullscreen_widget() -> GraphFestivalBoard:
 	return _board_full_widget
 
 
+## The first-time coach mark at the site level (Phase 5): "Scroll into a camp
+## to see its system". Shown once camps or vehicles exist, until the player
+## goes into one or dismisses it (ui_prefs.cfg [graph_systems] coach_seen).
+var _coach: PanelContainer = null
+var _coach_seen := -1
+
+
+func coach_mark_seen() -> bool:
+	if _coach_seen < 0:
+		_coach_seen = 1 if _display_pref_systems("coach_seen", false) else 0
+	return _coach_seen == 1
+
+
+func dismiss_coach_mark() -> void:
+	_coach_seen = 1
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	cfg.set_value("graph_systems", "coach_seen", true)
+	cfg.save(_UI_PREFS_CFG)
+	if _coach != null:
+		_coach.visible = false
+
+
+func coach_mark_visible() -> bool:
+	return _coach != null and _coach.visible
+
+
+func _update_coach_mark(cpos: Vector2, csz: Vector2) -> void:
+	if coach_mark_seen():
+		return
+	if not active_system_id().is_empty():
+		dismiss_coach_mark()   # they found it
+		return
+	var want := visible and _active_scope_id == GraphModel.ROOT_SCOPE_ID \
+		and _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _board_rows.size() > 1 \
+		and not board_fullscreen_open()
+	if not want:
+		if _coach != null:
+			_coach.visible = false
+		return
+	if _coach == null:
+		_coach = PanelContainer.new()
+		_coach.name = "GraphCoachMark"
+		_coach.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(UITheme.C_BG, 0.94)
+		sb.border_color = Color(UITheme.C_PRIMARY, 0.8)
+		sb.set_border_width_all(1)
+		sb.border_width_left = 3
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 12.0
+		sb.content_margin_right = 6.0
+		sb.content_margin_top = 6.0
+		sb.content_margin_bottom = 6.0
+		_coach.add_theme_stylebox_override("panel", sb)
+		var hb := HBoxContainer.new()
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb.add_theme_constant_override("separation", 8)
+		_coach.add_child(hb)
+		var l := Label.new()
+		l.text = "Scroll into a camp or vehicle to see its own system. Esc comes back out."
+		l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		l.add_theme_color_override("font_color", UITheme.C_TEXT)
+		hb.add_child(l)
+		var ok := Button.new()
+		ok.name = "GotIt"
+		ok.text = "Got it"
+		UITheme.style_button(ok)
+		ok.pressed.connect(dismiss_coach_mark, CONNECT_DEFERRED)
+		hb.add_child(ok)
+		add_child(_coach)
+	_coach.visible = true
+	_coach.reset_size()
+	_coach.position = cpos + Vector2((csz.x - _coach.size.x) * 0.5, csz.y - _coach.size.y - 64.0)
+
+
 ## The canvas overlays follow the canvas (the sidebars open and close).
 func _layout_board_overlays() -> void:
 	if _graph_canvas == null:
 		return
 	var cpos: Vector2 = _graph_canvas.position
 	var csz: Vector2 = _graph_canvas.size
+	_update_coach_mark(cpos, csz)
 	if _alerts_rail != null:
 		var show := visible and not _system_alerts.entries().is_empty() and not board_fullscreen_open()
 		_alerts_rail.visible = show

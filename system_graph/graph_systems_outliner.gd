@@ -17,10 +17,10 @@ const REFRESH_S := 0.5
 const TREE_H := 300.0
 const MAX_RESULTS := 200
 
-const C_OK := Color(0.45, 0.85, 0.55)
-const C_WARN := Color(0.98, 0.75, 0.3)
-const C_CRIT := Color(1.0, 0.42, 0.38)
-const C_IDLE := Color(0.6, 0.64, 0.7)
+const C_OK := GraphTheme.LEVEL_OK
+const C_WARN := GraphTheme.LEVEL_WARN
+const C_CRIT := GraphTheme.LEVEL_CRIT
+const C_IDLE := GraphTheme.LEVEL_IDLE
 
 const TYPE_ICON := {
 	"panel": "☀", "battery": "🔋", "smartbattery": "🔋", "controller": "🎛",

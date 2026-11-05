@@ -3270,6 +3270,64 @@ The Walton check covers:
   and a click on one, the View toggle). Selftests: graph_systems 47
   (`_test_twin_kind`), graph_card_specs 45.
 
+**One visual language (Phase 5, 2026-11-05):**
+- **Colour grammar** (`GraphTheme`): channels say WHAT flows (`CHANNELS`:
+  electricity amber, water cyan, food green, fuel and heat orange, people
+  violet; `channel_of_kind` through GraphDomainFilter), levels say HOW IT IS
+  GOING (`LEVEL_OK` / `WARN` / `CRIT` / `IDLE`, `LEVELS`). The tiles, the
+  pins, the site inset, the board, the overlay bins and the outliner all use
+  them. Wires keep their per-kind ResourceKinds colours (finer than a
+  channel).
+- **Status motion** (`GraphTheme.level_motion`): ok and idle hold still;
+  warn breathes about once a second; crit beats twice then rests. Tiles show
+  it in their ring arcs: a calm arc wears its CHANNEL's colour, a troubled
+  one its level's, moving. The ring has an inner arc for the battery, and a
+  charging system swells slightly on its own beat (`system_live`, pushed with
+  the board). Motion keeps the existing alert cadence (`_alert_phase`,
+  `_alert_seen_this_draw`) and stops when the clock does unless "animate flow
+  when paused" is on (`_sim_flow_mult`).
+- **Festival trunks** (V2 `_plan_trunks` / `_draw_trunks`, hooked in the
+  base `_draw_connections`): at the site level, when one node is wired to
+  `TRUNK_MIN` (3) or more systems drawn as tiles, those wires draw as ONE
+  trunk to the middle of the tiles (thickness ∝ log count) with thin
+  branches from there. Per channel, in its colour, with a bead stream
+  scaled by the total flow on the flow animation's phase. `trunks_drawn`
+  for checks.
+- **One camera path** (`graph_canvas._fly_view`; `_animate_view` calls it):
+  a short move eases out as before. A long one (more than ~0.6 screen at the
+  closer zoom) zooms out on the way and back in. This is the smooth-zoom of
+  van Wijk & Nuij 2003, simplified: the centre moves in a straight line while
+  the log-zoom dips by ln(distance / 0.6 screen), and the move takes longer
+  the bigger the dip (`last_fly_dip`). It works in freeform and Site Plan
+  alike (the centre is −pan / zoom in both). Entering a scope ends with a
+  1.5 % lens settle (`FLY_SETTLE`).
+  - Any mouse press, wheel, touch or gesture on the canvas stops a running
+    fly (`stop_fly()`, top of `_gui_input`). A long fly runs up to 0.9 s and
+    would otherwise pull the view back from under the player's own zoom.
+    Code that sets `_zoom` / `_pan` directly (the checks) calls `stop_fly()`
+    first.
+- ⚠ A press an overlay takes (a twin badge, the site inset:
+  `_consume_press`) clears any drag / marquee state an earlier press left
+  and swallows its own release. Otherwise a stale `_item_dragging` from a
+  lost release re-selected an old node or deselected on release, so the
+  inset click only worked some of the time.
+- **Hints & shortcuts**, rewritten in two columns: Find your way, Edit,
+  Lenses, Festival, and a colour key (channels + levels). It fits above the
+  timeline at every size.
+- **Coach mark** at the site level the first time camps or vehicles exist:
+  "Scroll into a camp or vehicle to see its own system". It goes away for
+  good when the player enters one or clicks Got it (ui_prefs.cfg
+  `[graph_systems] coach_seen`).
+- **Tour stop** `20c_festival_systems` (Walton): tiles, into a camp, Esc
+  out, the Festival board. UiAudit strict: 0 errors at 1080 and 720.
+- Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_motion_check.gd -Label graph_motion -Timeout 900`
+  (11: the coach mark and a real click on Got it, a depot wired to four
+  camps as one trunk, critical tiles keeping the canvas beating and nothing
+  moving with the clock and the pref off, a long fly-to zooming out on the
+  way and a short one not, the hints panel inside the canvas with the
+  festival tools and colour key). graph_system_board_selftest is now 50
+  (`_test_grammar`).
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a
