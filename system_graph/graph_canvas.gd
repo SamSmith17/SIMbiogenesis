@@ -1752,8 +1752,18 @@ func _reset_tap_tracking() -> void:
 
 
 ## Drill-in / pop-out thresholds (fraction of viewport a super-node must cover).
+## Pop-out (plans/GRAPH_SYSTEMS_UX_PLAN.md Phase 1): entry fits the content to
+## ~68 % of the view, and at 42 % a couple of wheel notches threw the player
+## back out. Now the content must be under 30 % of the view AND the
+## wheel must keep pushing out POP_PUSH_NOTCHES more times (each within
+## POP_PUSH_WINDOW_S of the last) — a resistance the hint at the bottom shows.
 const ZOOM_DRILL_COVER := 0.82
-const ZOOM_POP_COVER := 0.42
+const ZOOM_POP_COVER := 0.3
+const POP_PUSH_NOTCHES := 3
+const POP_PUSH_WINDOW_S := 0.8
+var _pop_push := 0
+var _pop_push_ms := 0
+var _pop_hint: Label = null
 
 
 func _zoom_at(factor: float, screen_pos: Vector2) -> void:
@@ -1774,6 +1784,9 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 		hold_w = _zoom_hold_point(screen_pos)
 	_zoom = clampf(_zoom * factor, ZOOM_MIN, ZOOM_MAX)
 	if is_equal_approx(_zoom, old_zoom):
+		# At the zoom floor the wheel still pushes against the pop-out.
+		if factor < 1.0 and view_mode == GraphSiteLayout.VIEW_FREEFORM:
+			_maybe_zoom_pop_out()
 		return
 	# Keep world point under the cursor stable. In Site Plan the SoI disc and
 	# top-down SubViewport both scale with `_zoom` (4 px/m × zoom), so 2D and
@@ -1798,6 +1811,7 @@ func _zoom_at(factor: float, screen_pos: Vector2) -> void:
 	# (soi_live_preview). Shift+wheel already owns 3D bubble orbit/zoom.
 	if view_mode == GraphSiteLayout.VIEW_FREEFORM:
 		if factor > 1.0:
+			_reset_pop_push()
 			_maybe_zoom_drill_in(screen_pos)
 		elif factor < 1.0:
 			_maybe_zoom_pop_out()
@@ -1856,12 +1870,70 @@ func prepare_and_try_zoom_drill(item_id: String) -> bool:
 ## pop up to the parent scope (mirrors drilling back out).
 func _maybe_zoom_pop_out() -> void:
 	if model == null or active_scope_id == "root":
+		_reset_pop_push()
 		return
 	var bbox := _scope_content_screen_bbox(active_scope_id)
 	if bbox.size == Vector2.ZERO:
 		return
-	if bbox.size.x <= size.x * ZOOM_POP_COVER and bbox.size.y <= size.y * ZOOM_POP_COVER:
+	if not (bbox.size.x <= size.x * ZOOM_POP_COVER and bbox.size.y <= size.y * ZOOM_POP_COVER):
+		_reset_pop_push()
+		return
+	var now := Time.get_ticks_msec()
+	if _pop_push > 0 and now - _pop_push_ms > int(POP_PUSH_WINDOW_S * 1000.0):
+		_pop_push = 0
+	_pop_push += 1
+	_pop_push_ms = now
+	if _pop_push > POP_PUSH_NOTCHES:
+		_reset_pop_push()
 		scope_pop_requested.emit()
+		return
+	_show_pop_hint(_pop_push)
+
+
+## The pop-out resistance, shown: "Keep scrolling out to leave <scope>".
+func _show_pop_hint(push: int) -> void:
+	if _pop_hint == null:
+		_pop_hint = Label.new()
+		_pop_hint.name = "PopOutHint"
+		_pop_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_pop_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_pop_hint.add_theme_font_size_override("font_size", 14)
+		_pop_hint.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
+		_pop_hint.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		_pop_hint.add_theme_constant_override("outline_size", 5)
+		add_child(_pop_hint)
+	var title := "this group"
+	if model != null:
+		var sc := model.get_scope(active_scope_id)
+		title = str(sc.get("title", title))
+		# The compound's own name ("Camp 1"), not its template's ("Mixed camp").
+		var ow := model.get_item(str(sc.get("owner_compound_id", "")))
+		var on := str((ow.get("specs", {}) as Dictionary).get("name", ""))
+		if not on.is_empty():
+			title = on
+	var dots := ""
+	for i in POP_PUSH_NOTCHES:
+		dots += "●" if i < push else "○"
+	_pop_hint.text = "Keep scrolling out to leave %s  %s" % [title, dots]
+	_pop_hint.reset_size()
+	# Above the bottom row of portal pills (the scope's output ports).
+	_pop_hint.position = Vector2((size.x - _pop_hint.size.x) * 0.5, size.y - _pop_hint.size.y - 96.0)
+	_pop_hint.modulate.a = 1.0
+	_pop_hint.visible = true
+	var tw := create_tween()
+	tw.tween_interval(POP_PUSH_WINDOW_S)
+	tw.tween_property(_pop_hint, "modulate:a", 0.0, 0.25)
+
+
+func _reset_pop_push() -> void:
+	_pop_push = 0
+	if _pop_hint != null:
+		_pop_hint.visible = false
+
+
+## How far the wheel has pushed against the pop-out floor (harness / tests).
+func pop_push_count() -> int:
+	return _pop_push
 
 
 ## Screen-space bounding box of every item currently in `scope_id` (empty rect
@@ -1974,9 +2046,82 @@ var _enter_from_rect: Rect2 = Rect2()
 var _pop_from_rect: Rect2 = Rect2()
 
 
+## Per-scope camera (Phase 1): the camera the player had in a scope when they
+## went DOWN out of it, keyed "<lens>|<scope>". Popping back out, or jumping
+## up the breadcrumb, returns to that camera framed on the compound they
+## left, instead of re-fitting the whole parent (a far zoom-out at festival
+## scale). Only parents are remembered: a child's camera at the moment it is
+## left is by definition zoomed out to the pop threshold.
+var _scope_cam: Dictionary = {}
+
+
+func remember_scope_cam(scope_id: String = "") -> void:
+	var sid := scope_id if not scope_id.is_empty() else active_scope_id
+	_scope_cam["%s|%s" % [view_mode, sid]] = {"zoom": _zoom, "pan": _pan}
+
+
+func scope_cam(scope_id: String) -> Dictionary:
+	return _scope_cam.get("%s|%s" % [view_mode, scope_id], {}) as Dictionary
+
+
+## Animate to the remembered camera for the ACTIVE scope; when `focus_id` is
+## given and would be off screen there, keep the zoom and centre on it.
+## False when nothing is remembered (caller fits).
+func restore_scope_cam(focus_id: String = "") -> bool:
+	var cam := scope_cam(active_scope_id)
+	if cam.is_empty():
+		return false
+	var z := float(cam["zoom"])
+	var p: Vector2 = cam["pan"]
+	if not focus_id.is_empty() and model != null:
+		var it := model.get_item(focus_id)
+		if not it.is_empty():
+			var r := Rect2(Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))),
+				Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))))
+			var sr := Rect2(size * 0.5 + p + r.position * z, r.size * z)
+			if not Rect2(Vector2.ZERO, size).encloses(sr):
+				p = -(r.position + r.size * 0.5) * z
+	_animate_view(z, p, 0.26)
+	return true
+
+
+## Frame a set of items (F = frame selection). Empty or unknown ids: nothing.
+func fit_items_to_view(ids: Array, pad_frac: float = 0.18) -> bool:
+	if model == null or ids.is_empty():
+		return false
+	var min_p := Vector2(1e20, 1e20)
+	var max_p := Vector2(-1e20, -1e20)
+	var n := 0
+	for id_v in ids:
+		var it := model.get_item(str(id_v))
+		if it.is_empty():
+			continue
+		var p := Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
+		var s := Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0)))
+		min_p = min_p.min(p)
+		max_p = max_p.max(p + s)
+		n += 1
+	if n == 0:
+		return false
+	var gb := Rect2(min_p, max_p - min_p)
+	var avail := size * (1.0 - pad_frac * 2.0)
+	# A single card is framed at a readable zoom, not blown up to the screen.
+	var z := clampf(minf(avail.x / maxf(gb.size.x, 1.0), avail.y / maxf(gb.size.y, 1.0)),
+		ZOOM_MIN, 1.6 if n == 1 else ZOOM_MAX)
+	_animate_view(z, -(gb.position + gb.size * 0.5) * z)
+	return true
+
+
+## Public form of the scope-swap fade (the view's animated breadcrumb jumps).
+func play_content_fade() -> void:
+	_play_content_fade()
+
+
 ## Called by the view BEFORE it swaps into `compound_id`'s child scope: remember
 ## where the collapsed body currently sits on screen.
 func begin_enter_transition(compound_id: String) -> void:
+	remember_scope_cam()
+	_reset_pop_push()
 	_enter_from_rect = Rect2()
 	if model == null:
 		return
@@ -2008,6 +2153,7 @@ func finish_enter_transition() -> void:
 ## Called by the view BEFORE it pops out of the active child scope: remember the
 ## child content's current on-screen bbox.
 func begin_pop_transition() -> void:
+	_reset_pop_push()
 	_pop_from_rect = _scope_content_screen_bbox(active_scope_id)
 
 
@@ -2016,6 +2162,18 @@ func begin_pop_transition() -> void:
 ## then tween to a comfortable parent framing.
 func finish_pop_transition(owner_compound_id: String) -> void:
 	var target := _scope_fit_view(active_scope_id)
+	# Back to the camera the player had here, framed on the compound they left.
+	var cam := scope_cam(active_scope_id)
+	if not cam.is_empty():
+		target = {"ok": true, "zoom": float(cam["zoom"]), "pan": cam["pan"]}
+		var ow := model.get_item(owner_compound_id) if model != null else {}
+		if not ow.is_empty():
+			var orr := Rect2(Vector2(float(ow.get("x", 0.0)), float(ow.get("y", 0.0))),
+				Vector2(float(ow.get("width", 120.0)), float(ow.get("height", 90.0))))
+			var cz := float(cam["zoom"])
+			var sr := Rect2(size * 0.5 + (cam["pan"] as Vector2) + orr.position * cz, orr.size * cz)
+			if not Rect2(Vector2.ZERO, size).encloses(sr):
+				target["pan"] = -(orr.position + orr.size * 0.5) * cz
 	var owner := model.get_item(owner_compound_id) if model != null else {}
 	if not owner.is_empty():
 		var center := size * 0.5

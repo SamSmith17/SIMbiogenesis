@@ -5666,6 +5666,13 @@ func _build_left_sidebar() -> Control:
 	vbox.add_theme_constant_override("separation", 0)
 	scroll.add_child(vbox)
 
+	# The systems outliner first: on a festival site it is how anything is
+	# found (plans/GRAPH_SYSTEMS_UX_PLAN.md Phase 1).
+	_systems_outliner = GraphSystemsOutliner.new()
+	_systems_outliner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_systems_outliner.bind(self)
+	vbox.add_child(_systems_outliner)
+
 	_graph_dashboard = _DASHBOARD_SCRIPT.new() as GraphDashboardPanel
 	_graph_dashboard.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_graph_dashboard)
@@ -10896,6 +10903,23 @@ func _on_left_toggle() -> void:
 	_apply_layout()
 
 
+var _systems_outliner: GraphSystemsOutliner = null
+
+
+## Ctrl+F: open the left sidebar if it is folded and put the cursor in the
+## systems search.
+func focus_systems_search() -> void:
+	if not _sidebar_l_open:
+		_sidebar_l_open = true
+		_apply_layout()
+	if _systems_outliner != null:
+		_systems_outliner.call_deferred("focus_search")
+
+
+func systems_outliner() -> GraphSystemsOutliner:
+	return _systems_outliner
+
+
 func _on_right_toggle() -> void:
 	_sidebar_r_open = not _sidebar_r_open
 	_apply_layout()
@@ -12220,9 +12244,20 @@ func _update_scope_breadcrumb() -> void:
 		c.queue_free()
 	for i in _scope_trail.size():
 		var sid: String = _scope_trail[i]
-		var title := "Root"
+		var title := "Site"
+		var owner_item: Dictionary = {}
 		if sid != "root" and model != null and model.has_method("get_scope"):
-			title = str(model.get_scope(sid).get("title", sid))
+			var sc := model.get_scope(sid)
+			title = str(sc.get("title", sid))
+			owner_item = model.get_item(str(sc.get("owner_compound_id", "")))
+			var oname := str((owner_item.get("specs", {}) as Dictionary).get("name", ""))
+			if not oname.is_empty():
+				title = oname
+			var kind := GraphSystems.island_kind(owner_item) if not owner_item.is_empty() else ""
+			if kind == GraphSystems.KIND_CAMP:
+				title = "⛺ " + title
+			elif kind == GraphSystems.KIND_VEHICLE:
+				title = "🚐 " + title
 		if i > 0:
 			var sep := Label.new()
 			sep.text = " › "
@@ -12241,6 +12276,30 @@ func _update_scope_breadcrumb() -> void:
 		var idx := i
 		seg.pressed.connect(func(): _jump_to_scope_index(idx))
 		_scope_breadcrumb.add_child(seg)
+		# Siblings: jump Camp A -> Camp B without climbing back to the site.
+		if i > 0 and not owner_item.is_empty():
+			var sibs := _breadcrumb_siblings(_scope_trail[i - 1], owner_item)
+			if sibs.size() > 1:
+				var mb := MenuButton.new()
+				mb.text = "▾"
+				mb.flat = true
+				mb.focus_mode = Control.FOCUS_NONE
+				mb.tooltip_text = "Go to another %s at this level" % (
+					"camp" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_CAMP
+					else "vehicle" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_VEHICLE
+					else "group")
+				mb.add_theme_font_size_override("font_size", 12)
+				mb.add_theme_color_override("font_color", C_TEXT_M)
+				var pm := mb.get_popup()
+				for k in sibs.size():
+					var sd: Dictionary = sibs[k]
+					pm.add_item(str(sd["name"]), k)
+					if str(sd["id"]) == str(owner_item.get("id", "")):
+						pm.set_item_disabled(k, true)
+				var level := i
+				pm.id_pressed.connect(func(k: int):
+					_jump_to_sibling(level, str((sibs[k] as Dictionary)["id"])))
+				_scope_breadcrumb.add_child(mb)
 
 
 ## Breadcrumb click — jump straight to an ancestor scope in the trail.
@@ -12249,13 +12308,125 @@ func _jump_to_scope_index(index: int) -> void:
 		return
 	if index == _scope_trail.size() - 1:
 		return
-	_scope_trail.resize(index + 1)
-	_active_scope_id = _scope_trail[index]
+	# The compound we came out through, one level below the target: select it
+	# and land framed on it (the camera the player had there, if any).
+	var focus := ""
+	if model != null:
+		focus = str(model.get_scope(_scope_trail[index + 1]).get("owner_compound_id", ""))
+	var trail: Array[String] = []
+	for k in index + 1:
+		trail.append(_scope_trail[k])
+	_set_scope_trail(trail, focus)
+
+
+## Compounds at `parent_scope` like `owner` (camps with camps, vehicles with
+## vehicles, else every compound), by name: the breadcrumb's sibling menu.
+func _breadcrumb_siblings(parent_scope: String, owner: Dictionary) -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	var kind := GraphSystems.island_kind(owner)
+	for it in model.get_items_in_scope(parent_scope):
+		var d: Dictionary = it
+		if str(d.get("type", "")) != "compound" or str(d.get("child_scope_id", "")).is_empty():
+			continue
+		if GraphSystems.island_kind(d) != kind:
+			continue
+		out.append({"id": str(d.get("id", "")),
+			"name": str((d.get("specs", {}) as Dictionary).get("name", d.get("label", "Group")))})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a["name"]).naturalnocasecmp_to(str(b["name"])) < 0)
+	return out
+
+
+func _jump_to_sibling(level: int, compound_id: String) -> void:
+	if model == null or level <= 0 or level > _scope_trail.size() - 1:
+		return
+	var it := model.get_item(compound_id)
+	var cs := str(it.get("child_scope_id", ""))
+	if cs.is_empty():
+		return
+	var trail: Array[String] = []
+	for k in level:
+		trail.append(_scope_trail[k])
+	trail.append(cs)
+	_set_scope_trail(trail, "")
+
+
+## The breadcrumb trail from the site down to `scope_id` (root first).
+func _trail_to_scope(scope_id: String) -> Array[String]:
+	var out: Array[String] = []
+	var s := scope_id if not scope_id.is_empty() else "root"
+	for _depth in 64:
+		out.push_front(s)
+		if s == "root" or model == null:
+			break
+		var parent := str(model.get_scope(s).get("parent_scope_id", "root"))
+		if parent.is_empty():
+			parent = "root"
+		s = parent
+	if out.is_empty() or out[0] != "root":
+		out.push_front("root")
+	return out
+
+
+## THE way to move the view to another scope that is not one step in or out:
+## breadcrumb jumps, sibling jumps, the systems outliner, search. Remembers
+## the camera of the scope being left, fades, selects `focus_id` (an item IN
+## the new scope) and lands on the remembered camera framed on it, or on it
+## / the whole scope when nothing is remembered.
+func _set_scope_trail(trail: Array[String], focus_id: String = "") -> void:
+	if model == null or trail.is_empty():
+		return
+	var old := _active_scope_id
+	if _graph_canvas != null and _graph_canvas.has_method("remember_scope_cam"):
+		_graph_canvas.call("remember_scope_cam", old)
+	_scope_trail = trail
+	_active_scope_id = trail[trail.size() - 1]
+	for sid: String in trail:
+		if sid == "root":
+			continue
+		var ow := model.get_item(str(model.get_scope(sid).get("owner_compound_id", "")))
+		var okey := _scope_owner_key(ow)
+		if not okey.is_empty():
+			_scope_owner_keys[sid] = okey
 	_selected_item_ids.clear()
+	if not focus_id.is_empty():
+		_selected_item_ids.append(focus_id)
 	_update_special_group_buttons()
 	_apply_scope_to_canvas()
-	if _graph_canvas != null and _graph_canvas.has_method("fit_scope_to_view"):
-		_graph_canvas.call("fit_scope_to_view")
+	if _graph_canvas == null:
+		return
+	_graph_canvas.set("selected_item_ids", _selected_item_ids)
+	_graph_canvas.set("selected_item_id", focus_id)
+	if old != _active_scope_id and _graph_canvas.has_method("play_content_fade"):
+		_graph_canvas.call("play_content_fade")
+	var restored := false
+	if old != _active_scope_id and _graph_canvas.has_method("restore_scope_cam"):
+		restored = bool(_graph_canvas.call("restore_scope_cam", focus_id))
+	if not restored:
+		if not focus_id.is_empty() and _graph_canvas.has_method("fit_items_to_view"):
+			_graph_canvas.call("fit_items_to_view", [focus_id])
+		elif _graph_canvas.has_method("fit_scope_to_view"):
+			_graph_canvas.call("fit_scope_to_view")
+	if not focus_id.is_empty():
+		_on_canvas_item_selected(focus_id)
+
+
+## Fly to any item on the graph, entering whatever scopes it sits in (the
+## systems outliner and search). With `enter` and a compound, opens it.
+func focus_graph_item(item_id: String, enter: bool = false) -> void:
+	if model == null or item_id.is_empty():
+		return
+	var it := model.get_item(item_id)
+	if it.is_empty():
+		return
+	if not visible:
+		open_graph_view()
+	_set_scope_trail(_trail_to_scope(str(it.get("scope_id", "root"))), item_id)
+	if enter and str(it.get("type", "")) == "compound" \
+			and not str(it.get("child_scope_id", "")).is_empty():
+		_enter_compound_animated(item_id)
 
 
 func _apply_scope_to_canvas() -> void:
@@ -13548,6 +13719,15 @@ func _build_hints_panel() -> Control:
 		["Left-click wire",        "Select wire"],
 		["Click library item",     "Spawn at canvas center"],
 		["Drag library item",      "Drag-drop onto canvas"],
+		["Double-click a group",   "Open it (camp, vehicle, array…)"],
+		["Scroll into a group",    "Open it; keep scrolling out to leave"],
+		["Esc  /  Alt+←",          "Up one level"],
+		["Home",                   "Back to the whole site"],
+		["Ctrl+F",                 "Search every node and system"],
+		["F  /  A",                "Frame the selection / everything here"],
+		["Ctrl+Z  /  Ctrl+Y",      "Undo / redo"],
+		["Ctrl+G  /  Ctrl+Shift+G", "Group / ungroup"],
+		["C",                      "Connect tool (Globe, Site Plan)"],
 	]
 
 	for pair: Array in shortcuts:
@@ -14705,6 +14885,31 @@ func _input(event: InputEvent) -> void:
 					return
 				if visible and ke.ctrl_pressed and ke.keycode == KEY_Y:
 					_do_redo()
+					get_viewport().set_input_as_handled()
+					return
+				# Ctrl+F: search every node and system (the systems outliner).
+				if visible and ke.ctrl_pressed and ke.keycode == KEY_F:
+					focus_systems_search()
+					get_viewport().set_input_as_handled()
+					return
+				var plain := not ke.ctrl_pressed and not ke.alt_pressed \
+						and not ke.meta_pressed and not ke.shift_pressed
+				# F frames the selection, A everything in this scope (freeform).
+				if visible and plain and (ke.keycode == KEY_F or ke.keycode == KEY_A) \
+						and _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM and _graph_canvas != null:
+					if ke.keycode == KEY_F and not _selected_item_ids.is_empty():
+						_graph_canvas.call("fit_items_to_view", _selected_item_ids)
+					else:
+						_graph_canvas.call("fit_scope_to_view")
+					get_viewport().set_input_as_handled()
+					return
+				# Home: back to the site; Alt+Left: up one level.
+				if visible and ke.keycode == KEY_HOME and _scope_trail.size() > 1:
+					_jump_to_scope_index(0)
+					get_viewport().set_input_as_handled()
+					return
+				if visible and ke.alt_pressed and ke.keycode == KEY_LEFT and _scope_trail.size() > 1:
+					_collapse_active_scope(true)
 					get_viewport().set_input_as_handled()
 					return
 				# Esc collapses one nesting level (keeps StarShade / component identity).

@@ -108,6 +108,46 @@ static func walk_site_power(model: GraphModel) -> Array:
 	return out
 
 
+## One system's state at a glance: {level: "ok" | "warn" | "crit" | "idle",
+## text}. Camps read what the camp card already stamps (camp_ac, camp_soc,
+## camp_open, camp_present / camp_headcount); vehicles read their own power
+## state from SystemGraphView.vehicle_power_states() (`power`, may be {}).
+## Pure: the outliner, breadcrumbs and (later) the festival board share it.
+static func status(model: GraphModel, item: Dictionary, power: Dictionary = {}) -> Dictionary:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	match island_kind(item):
+		KIND_CAMP:
+			var people := int(sp.get("camp_present", sp.get("camp_headcount", 0)))
+			var open: Array = sp.get("camp_open", []) as Array
+			var soc := float(sp.get("camp_soc", -1.0))
+			if not bool(sp.get("camp_ac", true)):
+				return {"level": "crit", "text": "no power"}
+			if not open.is_empty():
+				return {"level": "warn", "text": "%d open" % open.size()}
+			if soc >= 0.0 and soc < 0.2:
+				return {"level": "warn", "text": "%d%%" % int(round(soc * 100.0))}
+			return {"level": "ok" if people > 0 else "idle", "text": "%d ppl" % people}
+		KIND_VEHICLE:
+			var kwh := 0.0
+			var cap := 0.0
+			if model != null:
+				for it in model.get_items_in_scope(str(item.get("child_scope_id", ""))):
+					var d: Dictionary = it
+					if str(d.get("type", "")) == "battery":
+						cap += float((d.get("specs", {}) as Dictionary).get("kwh", 0.0))
+			if not power.is_empty():
+				kwh = float(power.get("soc_kwh", 0.0))
+				if not bool(power.get("ac_available", true)):
+					return {"level": "crit", "text": "no power"}
+			if cap <= 0.0:
+				return {"level": "idle", "text": "no battery"}
+			var frac := kwh / cap if not power.is_empty() else -1.0
+			if frac < 0.0:
+				return {"level": "idle", "text": "parked"}
+			return {"level": "warn" if frac < 0.2 else "ok", "text": "%d%%" % int(round(frac * 100.0))}
+	return {"level": "idle", "text": ""}
+
+
 ## Every island at or under `scope_id`, as {id, kind, scope, child_scope,
 ## name}. Nested islands are listed too (a vehicle parked inside a camp's
 ## compound is its own system).

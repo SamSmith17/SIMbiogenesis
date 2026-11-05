@@ -9,7 +9,7 @@ extends SceneTree
 ## Pure / offline. Run --import first.
 ##   godot --headless --path . --script system_graph/graph_systems_selftest.gd
 
-const EXPECTED_CHECKS := 22
+const EXPECTED_CHECKS := 28
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 var _failures := 0
@@ -20,6 +20,7 @@ func _init() -> void:
 	_test_vehicle_island()
 	_test_camp_island_and_nesting()
 	_test_ac_reach_and_losses()
+	_test_status()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -178,3 +179,35 @@ func _test_ac_reach_and_losses() -> void:
 		if str(cd.get("scope_id", "")) == scope and cd.has("loss_w"):
 			stamped += 1
 	_check("the site's loss pass skips every wire inside the vehicle", stamped == 0, str(stamped))
+
+
+func _test_status() -> void:
+	var model = GraphModelScript.new()
+	var def := CampTemplates.definition("theme_camp", 12)
+	model.put_definition(def)
+	var camp: String = GraphComponentDefs.realize(model, str(def["id"]), "root", Vector2.ZERO,
+		{"camp_lot_id": "lot_s", "camp_headcount": 12, "name": "Camp S"})
+	var set_specs := func(patch: Dictionary) -> Dictionary:
+		var sp: Dictionary = (model.get_item(camp).get("specs", {}) as Dictionary).duplicate(true)
+		for k in patch.keys():
+			sp[k] = patch[k]
+		model.update_item(camp, {"specs": sp})
+		return GraphSystems.status(model, model.get_item(camp))
+	_check("a camp with people and power is ok",
+		str(set_specs.call({"camp_ac": true, "camp_open": [], "camp_soc": 0.8})["level"]) == "ok")
+	_check("a camp with an open loop warns",
+		str(set_specs.call({"camp_open": ["water"]})["level"]) == "warn")
+	_check("a camp with no power is critical",
+		str(set_specs.call({"camp_ac": false})["level"]) == "crit")
+	var veh := _vehicle(model, "prop_s")
+	var cap := 0.0
+	for it in model.get_items_in_scope(str(model.get_item(veh).get("child_scope_id", ""))):
+		if str((it as Dictionary).get("type", "")) == "battery":
+			cap += float(((it as Dictionary).get("specs", {}) as Dictionary).get("kwh", 0.0))
+	var vi: Dictionary = model.get_item(veh)
+	_check("a vehicle with no power state reads parked",
+		str(GraphSystems.status(model, vi, {})["level"]) == "idle")
+	_check("a vehicle at 10 % warns",
+		str(GraphSystems.status(model, vi, {"soc_kwh": cap * 0.1, "ac_available": true})["level"]) == "warn")
+	_check("a vehicle whose AC is down is critical",
+		str(GraphSystems.status(model, vi, {"soc_kwh": cap * 0.5, "ac_available": false})["level"]) == "crit")

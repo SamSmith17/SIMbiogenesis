@@ -3056,6 +3056,53 @@ The Walton check covers:
 - a rebuilt vehicle keeping the player inside it, and a deleted one returning
   them to root.
 
+**Finding your way (Phase 1, 2026-11-04):**
+- **Systems outliner.** `GraphSystemsOutliner` (`system_graph/graph_systems_outliner.gd`)
+  sits at the top of the left sidebar. It holds a tree:
+  - Site ▸ Camps / Vehicles / Groups & structures / Nodes;
+  - inside each compound, what is in it;
+  - on each system row, a status (`GraphSystems.status`: ok / warn / crit /
+    idle, from the stamped `camp_*` keys or `vehicle_power_states`).
+
+  Filter chips: All · Attention · Camps · Vehicles. The search matches every
+  word against name, type and the system the node is in, and lists results
+  flat. Click = `focus_graph_item(id)`, which flies there and enters the
+  scopes on the way; double-click = open it; Enter in the search = the first
+  result; Down = into the tree. The tree is rebuilt only on struct_rev /
+  user_rev / filter changes; the status column refreshes at 2 Hz.
+  ⚠ A click on a row's fold arrow only expands it: harness clicks go on the
+  row's text.
+- **Keys** (graph open, not typing):
+  - Ctrl+F = search (opens the left sidebar);
+  - F = frame the selection, A = frame the scope (freeform;
+    `fit_items_to_view`);
+  - Home = the site;
+  - Alt+Left / Esc = up one level.
+
+  The Hints & shortcuts panel lists them all.
+- **Breadcrumb.** Crumbs show the compound's own name with ⛺ / 🚐. A ▾ after
+  a crumb lists its siblings of the same kind (`_breadcrumb_siblings`) and
+  jumps camp to camp.
+- **`_set_scope_trail(trail, focus_id)`** is THE way to move more than one
+  level: breadcrumb jumps, sibling jumps, the outliner and search all go
+  through it. It remembers the camera of the scope being left, fades, selects
+  `focus_id`, and lands on the remembered camera framed on it, else frames
+  it.
+- **Per-scope camera.** The canvas keeps `_scope_cam["<lens>|<scope>"]`,
+  captured on enter (`begin_enter_transition`) and on every trail move. A pop
+  or jump up returns there, re-centred on the compound left if it would be
+  off screen. Only parents are restored on a pop: a child's camera at the
+  moment it is left is at the pop threshold.
+- **Pop-out resists.** Content must be under `ZOOM_POP_COVER` 0.3 of the view
+  (was 0.42) AND the wheel must push out `POP_PUSH_NOTCHES` 3 more times,
+  each within 0.8 s. The hint "Keep scrolling out to leave <name> ●○○" shows
+  above the bottom portal pills. At the zoom floor the wheel still pushes.
+  Measured on a Walton camp: 11 notches to reach the floor, then 3.
+- Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_navigation_check.gd -Label graph_nav -Timeout 900`
+  (17 checks, REAL input: Ctrl+F, typing, Enter, F, a row double-click, Esc
+  back to the same camera, the sibling menu, Home, Alt+Left, the wheel
+  resistance); the selftest is now 28 checks (status rules).
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a
