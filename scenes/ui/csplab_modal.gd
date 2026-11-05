@@ -116,6 +116,11 @@ var _template_btn: Button
 var _type_why: Label
 var _kpi: Dictionary = {}
 var _cpc_credit: Control
+const _MOTORS_PANEL := preload("res://scenes/ui/csplab_motors_panel.gd")
+## Motors & Home Assistant: the drives' angles, and where they are sent.
+var _motors: VBoxContainer = null
+var _motors_sec: Collapsible = null
+var _motors_t := 0.0
 var _legend3d: RichTextLabel
 var _member_lbl: Label
 var _last_tab := 0
@@ -170,6 +175,11 @@ func open(opts: Dictionary = {}) -> void:
 	_sync_time_controls()
 	_rebuild_now()
 	_frame_camera()
+	_motors.call("reload")
+	# A placed concentrator that tracks opens on its drives: that is what
+	# is linked to the real motors.
+	var mode := str((_spec["tracking"] as Dictionary)["mode"])
+	_motors_sec.set_open(not _bound_prop_id.is_empty() and mode != "fixed" and mode != "level")
 
 
 func close() -> void:
@@ -177,6 +187,8 @@ func close() -> void:
 		return
 	_active = false
 	_playing = false
+	if _motors != null:
+		_motors.call("flush")
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
@@ -250,6 +262,10 @@ func _process(delta: float) -> void:
 			_play_btn.text = "Play the day"
 		_sync_time_controls()
 		_sun_dirty = true
+	_motors_t -= delta
+	if _motors_t <= 0.0 and _motors != null and _motors.is_visible_in_tree():
+		_motors_t = 0.4
+		_motors.call("refresh")
 	_ray_timer -= delta
 	if _sun_dirty and _ray_timer <= 0.0:
 		_ray_timer = 0.12
@@ -382,6 +398,8 @@ func _build_centre() -> void:
 	_view_stack.add_child(_studio)
 	_builder = CspLabBuilder.new()
 	_builder.name = "Concentrator"
+	# The studio has its own sun: its own copy of the mirror material.
+	_builder.private_mirror = true
 	_builder.show_sun_marker = true
 	_studio.holder.add_child(_builder)
 	_legend3d = RichTextLabel.new()
@@ -577,6 +595,14 @@ func _build_right() -> void:
 		if str(gr[0]) == "structure":
 			_struct_box = VBoxContainer.new()
 			sec.body.add_child(_struct_box)
+	var mot := Collapsible.make("Motors & Home Assistant", false,
+		"Every drive's angle now, in degrees, and the Home Assistant entity a real motor follows")
+	box.add_child(mot)
+	_motors_sec = mot
+	_motors = _MOTORS_PANEL.new()
+	_motors.name = "MotorsPanel"
+	_motors.call("setup", self)
+	mot.body.add_child(_motors)
 	var opt := Collapsible.make("Optimize", false, "Search a few numbers for the best design")
 	box.add_child(opt)
 	_build_optimize(opt.body)
@@ -1498,12 +1524,53 @@ func _prop_record(prop_id: String) -> Dictionary:
 	var main := _main_node()
 	if main == null:
 		return {}
+	var rec0 := PlacedPropService.get_prop_record(main, prop_id)
+	if not rec0.is_empty():
+		return rec0.duplicate(true)
 	var loader := main.find_child("TerrainLoader", true, false)
 	if loader != null and loader.has_method("get_prop_record"):
 		var r: Variant = loader.call("get_prop_record", prop_id)
 		if r is Dictionary:
 			return (r as Dictionary).duplicate(true)
 	return {}
+
+
+## The motors panel's data: the bound placed concentrator's live drives
+## (its runtime, on the world's clock) or the studio's at the chosen moment.
+func motors_source() -> Dictionary:
+	var out := {"prop_id": _bound_prop_id, "name": str(_spec.get("name", "concentrator")), "live": false,
+		"status": "", "chans": []}
+	var rt := bound_runtime()
+	if rt != null:
+		out["live"] = true
+		out["chans"] = rt.channels
+		out["status"] = rt.ha_status
+		return out
+	if _builder != null and not _design.is_empty():
+		out["chans"] = CspLabActuators.channels(_design, _builder.last_pose)
+	return out
+
+
+func motors_main() -> Node:
+	return _main_node()
+
+
+## The runtime on the bound placed concentrator (null when unbound).
+func bound_runtime() -> CspLabRuntime:
+	if _bound_prop_id.is_empty():
+		return null
+	var main := _main_node()
+	if main == null:
+		return null
+	return CspLabRuntime.of(PlacedPropRuntime.find_by_prop_id(main, _bound_prop_id))
+
+
+func motors_panel() -> VBoxContainer:
+	return _motors
+
+
+func motors_section() -> Collapsible:
+	return _motors_sec
 
 
 ## The trough's profile as a 1:1 SVG template (user://csplab_designs/).

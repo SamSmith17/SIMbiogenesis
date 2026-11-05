@@ -20,6 +20,22 @@ extends RefCounted
 ## World frame: +Y up, -Z north, +X east; azimuth clockwise from north.
 
 const POLL_EFF_RAYS := 1200
+## Live lookups (the world's runtimes and the graph's heat tick, `live`
+## true) never trace a new sun angle in one go: a trace costs 5–40 ms
+## (a CPC trough's many bounces, a 150-heliostat field), and at high speed
+## the sun crosses a new 2.5° cell every second. Instead the trace is done
+## in chunks of rays inside ONE budget per frame shared by every caller,
+## and until it is done the lookup answers with the partial estimate or the
+## nearest angle already traced. The finished value goes in the design's
+## table like any other.
+const LIVE_TRACE_BUDGET_US := 2500
+const LIVE_CHUNK_MIN := 60
+## A partial estimate is used once this many rays are in.
+const LIVE_PARTIAL_MIN := 300
+## Cells being traced live per design (older ones are dropped).
+const LIVE_PENDING_MAX := 3
+static var _live_frame := -1
+static var _live_used_us := 0
 const SIGMA := 5.670374419e-8
 
 
@@ -53,8 +69,34 @@ static func sun_at(lat: float, lon: float, year: int, month: int, day: int, hour
 ## the equator). Ground-fixed fields (a tower, a linear Fresnel field) quote
 ## their headline numbers here; tracked optics at normal incidence.
 static func design_sun(lat: float) -> Vector3:
-	var el := clampf(90.0 - absf(lat), 5.0, 90.0)
-	return sun_world(180.0 if lat >= 0.0 else 0.0, el)
+	return noon_sun(lat, 0.0)
+
+
+## Solar noon at a declination (deg, + = northern summer): facing the
+## equator unless the sun passes north of the zenith (or south of it in the
+## southern hemisphere).
+static func noon_sun(lat: float, decl: float) -> Vector3:
+	var el := 90.0 - absf(lat - decl)
+	var az := 180.0 if lat >= decl else 0.0
+	return sun_world(az, clampf(el, 5.0, 90.0))
+
+
+## The sun at a declination and hour angle (deg, + = afternoon), as a world
+## direction (+X east, +Y up, −Z north): the textbook spherical triangle.
+static func sun_at_decl(lat: float, decl: float, hour_angle: float) -> Vector3:
+	var p := deg_to_rad(lat)
+	var dl := deg_to_rad(decl)
+	var h := deg_to_rad(hour_angle)
+	var east := -cos(dl) * sin(h)
+	var north := cos(p) * sin(dl) - sin(p) * cos(dl) * cos(h)
+	var up := sin(p) * sin(dl) + cos(p) * cos(dl) * cos(h)
+	return Vector3(east, up, -north).normalized()
+
+
+## The summer-solstice noon sun at a latitude: the highest the sun gets,
+## the best moment for a level optic.
+static func solstice_noon_sun(lat: float) -> Vector3:
+	return noon_sun(lat, 23.44 if lat >= 0.0 else -23.44)
 
 
 ## The polar axis: toward the celestial pole, tilted up by |latitude|.
@@ -133,6 +175,15 @@ static func pose(spec: Dictionary, s: Vector3, lat: float) -> Dictionary:
 				{"dir": yaw.x, "label": "Elevation axis", "color": Color(1.0, 0.35, 0.3)}]
 		out["sun_local"] = (out["basis"] as Basis).transposed() * s
 		return out
+	if mode == "level":
+		# A water lens: the optical axis is plumb, always. It focuses only
+		# what comes down near the vertical.
+		out["stage"] = Basis.IDENTITY
+		out["basis"] = Basis.IDENTITY
+		out["sun_local"] = s
+		out["angles"] = {"Incidence": rad_to_deg(acos(clampf(maxf(s.y, 0.0), 0.0, 1.0)))}
+		out["axes"] = []
+		return out
 	if mode == "fixed":
 		var tilt := float(tk["fixed_tilt_deg"])
 		if tilt < 0.0:
@@ -175,7 +226,7 @@ static func pose(spec: Dictionary, s: Vector3, lat: float) -> Dictionary:
 ## absorptance) for a world sun. Two-axis optics always see the design
 ## value; one-axis, fixed and ground-fixed fields are traced at the sun's
 ## direction quantised to a few degrees and cached on the solved design.
-static func optical_eff_at(d: Dictionary, s_world: Vector3, lat: float) -> float:
+static func optical_eff_at(d: Dictionary, s_world: Vector3, lat: float, live: bool = false) -> float:
 	if s_world.y <= 0.0:
 		return 0.0
 	var spec: Dictionary = d["spec"]
@@ -186,7 +237,7 @@ static func optical_eff_at(d: Dictionary, s_world: Vector3, lat: float) -> float
 	var sl: Vector3 = p["sun_local"]
 	var key := ""
 	var q: Vector3
-	if mode == "fixed" or is_field(spec):
+	if mode == "fixed" or mode == "level" or is_field(spec):
 		var ae := az_el(s_world)
 		var qa := snappedf(ae.x, 7.5)
 		var qe := snappedf(ae.y, 2.5)
@@ -202,10 +253,109 @@ static func optical_eff_at(d: Dictionary, s_world: Vector3, lat: float) -> float
 	if cache.has(key):
 		return float(cache[key])
 	var n := mini(int((spec["trace"] as Dictionary)["rays"]), POLL_EFF_RAYS)
+	if live:
+		return _live_eff(d, cache, key, q, n)
 	var r := CspLabOptics.trace(d["geo"] as Dictionary, q, n, {"seed": 3})
 	var e := float(r["captured"])
 	cache[key] = e
+	_eff_points(cache)[key] = q
 	return e
+
+
+static func _eff_points(cache: Dictionary) -> Dictionary:
+	if not cache.has("@pts"):
+		cache["@pts"] = {}
+	return cache["@pts"] as Dictionary
+
+
+static func _eff_pending(cache: Dictionary) -> Dictionary:
+	if not cache.has("@pending"):
+		cache["@pending"] = {}
+	return cache["@pending"] as Dictionary
+
+
+## A live lookup that is not in the table yet (see LIVE_TRACE_BUDGET_US).
+static func _live_eff(d: Dictionary, cache: Dictionary, key: String, q: Vector3, n: int) -> float:
+	var pend := _eff_pending(cache)
+	if not pend.has(key):
+		pend[key] = {"q": q, "n": n, "done": 0, "sum": 0.0, "order": Engine.get_process_frames()}
+		while pend.size() > LIVE_PENDING_MAX:
+			var oldest := ""
+			var o_min := 1 << 62
+			for k in pend:
+				if int((pend[k] as Dictionary)["order"]) < o_min:
+					o_min = int((pend[k] as Dictionary)["order"])
+					oldest = str(k)
+			pend.erase(oldest)
+	advance_live(d, key)
+	if cache.has(key):
+		return float(cache[key])
+	var p: Dictionary = pend.get(key, {})
+	var done := int(p.get("done", 0))
+	if done >= LIVE_PARTIAL_MIN:
+		return float(p["sum"]) / float(done)
+	# The nearest sun angle already traced (one-axis keys "L…" apart).
+	var best := -2.0
+	var val := -1.0
+	var one_axis := key.begins_with("L")
+	var pts := _eff_points(cache)
+	for k in pts:
+		if str(k).begins_with("L") != one_axis or not cache.has(k):
+			continue
+		var dt := (pts[k] as Vector3).dot(q)
+		if dt > best:
+			best = dt
+			val = float(cache[k])
+	if val >= 0.0:
+		return val
+	if done > 0:
+		return float(p["sum"]) / float(done)
+	return float(d.get("eta_capture", 0.0))
+
+
+## Work through a design's live traces (`first` before the others) inside
+## this frame's shared budget. The world's runtimes call it every frame, so
+## a trace started at one poll is finished within a few frames.
+static func advance_live(d: Dictionary, first: String = "") -> void:
+	var cache: Dictionary = d.get("eff_cache", {}) as Dictionary
+	if not cache.has("@pending"):
+		return
+	var pend: Dictionary = cache["@pending"]
+	if pend.is_empty():
+		return
+	var f := Engine.get_process_frames()
+	if f != _live_frame:
+		_live_frame = f
+		_live_used_us = 0
+	var keys: Array = pend.keys()
+	if not first.is_empty() and pend.has(first):
+		keys.erase(first)
+		keys.push_front(first)
+	var geo: Dictionary = d["geo"]
+	for k in keys:
+		if cache.has(k):
+			# Traced in full meanwhile (the designer's own lookups).
+			pend.erase(k)
+			continue
+		var p: Dictionary = pend[k]
+		var us_ray := float(cache.get("@us_ray", 15.0))
+		while _live_used_us < LIVE_TRACE_BUDGET_US and int(p["done"]) < int(p["n"]):
+			var left := float(LIVE_TRACE_BUDGET_US - _live_used_us)
+			var chunk := clampi(int(left / maxf(us_ray, 0.5)), LIVE_CHUNK_MIN, int(p["n"]) - int(p["done"]))
+			var t0 := Time.get_ticks_usec()
+			var r := CspLabOptics.trace(geo, p["q"] as Vector3, chunk, {"seed": 3 + int(p["done"])})
+			var dt := Time.get_ticks_usec() - t0
+			_live_used_us += dt
+			us_ray = lerpf(us_ray, float(dt) / float(chunk), 0.6)
+			cache["@us_ray"] = us_ray
+			p["sum"] = float(p["sum"]) + float(r["captured"]) * float(chunk)
+			p["done"] = int(p["done"]) + chunk
+		if int(p["done"]) >= int(p["n"]):
+			cache[k] = float(p["sum"]) / float(p["done"])
+			_eff_points(cache)[k] = p["q"]
+			pend.erase(k)
+		if _live_used_us >= LIVE_TRACE_BUDGET_US:
+			return
 
 
 ## Receiver heat loss (W) at `t_c` in air `ta_c`: radiation from its hot
@@ -238,7 +388,7 @@ static func heat_w(d: Dictionary, dni: float, dhi: float, eta_capture: float, ta
 
 ## What the placed concentrator does now (the graph tick and the modal's
 ## "at the site" line): {up, dni, dhi, eta, thermal_kw, steam_kg_h, angles}.
-static func output_now(d: Dictionary, s_world: Vector3, weather: Dictionary, lat: float) -> Dictionary:
+static func output_now(d: Dictionary, s_world: Vector3, weather: Dictionary, lat: float, live: bool = false) -> Dictionary:
 	var ae := az_el(s_world)
 	var el := ae.y
 	var out := {"up": el > 0.0, "az": ae.x, "el": el, "dni": 0.0, "ghi": 0.0, "dhi": 0.0, "eta": 0.0,
@@ -249,7 +399,7 @@ static func output_now(d: Dictionary, s_world: Vector3, weather: Dictionary, lat
 	var ghi := float(weather.get("ghi", 0.0)) if bool(weather.get("has_real", false)) \
 		else dni * sin(deg_to_rad(el)) + SolarIrradiance.dhi_clear_sky_wm2(el, dni, float(weather.get("aod", SolarIrradiance.AOD_BASELINE)))
 	var dhi := maxf(ghi - dni * sin(deg_to_rad(el)), 0.0)
-	var eta := optical_eff_at(d, s_world, lat)
+	var eta := optical_eff_at(d, s_world, lat, live)
 	var ta := float(weather.get("temp", (d["spec"]["site"] as Dictionary)["ambient_c"]))
 	var h := heat_w(d, dni, dhi, eta, ta)
 	out["dni"] = dni

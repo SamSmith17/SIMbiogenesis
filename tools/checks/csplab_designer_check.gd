@@ -245,36 +245,135 @@ func run(main: Node, harness: Node) -> Dictionary:
 	main.set("time_scale", 1.0 / 3600.0)
 	var player := ServiceLocator.player() as Node3D
 	var at0 := player.global_position + Vector3(5.0, 0.0, -4.0) if player != null else Vector3(5.0, 0.0, -4.0)
-	for pv in [["dish_cooker", Vector3.ZERO], ["diy_trough", Vector3(-7.0, 0.0, 3.0)]]:
+	var placed: Dictionary = {}
+	for pv in [["dish_cooker", Vector3.ZERO], ["diy_trough", Vector3(-7.0, 0.0, 3.0)],
+			["water_lens", Vector3(6.0, 0.0, 6.0)], ["lfr_small", Vector3(-12.0, 0.0, -10.0)]]:
 		var id2 := str(pv[0])
+		var src := CspLabPresets.by_id(id2)
+		if src.is_empty():
+			continue
+		var want_type := str(CspLabSpec.resolve(src)["type"])
 		var before_ids := _prop_ids(main)
-		var preset := ComponentPresets.designed_csp_preset(CspLabPresets.by_id(id2))
+		var preset := ComponentPresets.designed_csp_preset(src)
 		_ok(not preset.is_empty(), "%s: the designed preset" % id2)
 		sgv.call("_on_lib_place_model_requested", preset, "", at0 + (pv[1] as Vector3))
 		var pid := _new_prop(main, before_ids)
 		await _settle(tree, 90)
 		_ok(not pid.is_empty(), "%s is placed (%s)" % [id2, pid])
+		placed[id2] = pid
 		var rec := PlacedPropService.get_prop_record(main, pid)
 		var gid := str(rec.get("graph_item_id", ""))
 		var item := model.get_item(gid)
 		var sp: Dictionary = item.get("specs", {}) as Dictionary
 		_ok(str(sp.get("role", "")) == "csplab" and str(rec.get("kind", "")) == "csplab", "%s: a csplab graph node, bound" % id2)
 		var prop := PlacedPropRuntime.find_by_prop_id(main, pid)
-		_ok(prop != null and prop.get_node_or_null("CspLabRuntime") != null, "%s: CspLabRuntime turns it" % id2)
-		var b3: CspLabBuilder = null
-		if prop != null:
-			for n in prop.find_children("*", "Node3D", true, false):
-				if n is CspLabBuilder:
-					b3 = n as CspLabBuilder
+		var rt := CspLabRuntime.of(prop)
+		_ok(rt != null, "%s: CspLabRuntime turns it" % id2)
+		var b3 := rt.builder() if rt != null else null
+		# THE bug: every placed concentrator used to be the default dish.
+		_ok(b3 != null and str(b3.spec["type"]) == want_type,
+			"%s is placed as a %s (built %s)" % [id2, want_type, str(b3.spec["type"]) if b3 != null else "nothing"])
 		_ok(b3 != null and bool(b3.last_pose.get("up", false)), "%s faces the noon sun" % id2)
-		print("csplab: %s in the world — DNI %.0f W/m², %.3f kW, steam %.2f kg/h" % [id2, float(sp.get("dni_wm2", 0.0)),
-			float(sp.get("thermal_output_kw", 0.0)), float(sp.get("steam_kg_h", 0.0))])
-		# The world is saved on a clear October noon: the graph is closed, and
-		# its concentrator tick must still have run (DNI read, heat made).
+		if b3 != null and CspLabSpec.OPTIC[want_type] == "mirror":
+			var mm: Material = b3.mirror_material()
+			var drawn := false
+			var mir := b3.find_child("Mirror", true, false) as MeshInstance3D
+			if mir != null:
+				drawn = mir.get_surface_override_material(0) == mm
+			var mmi := b3.find_child("Mirrors", true, false) as MultiMeshInstance3D
+			if mmi != null and mmi.multimesh != null and mmi.multimesh.mesh != null:
+				drawn = mmi.multimesh.mesh.surface_get_material(0) == mm
+			_ok(mm is ShaderMaterial and drawn and mm == CspLabBuilder.shared_mirror(),
+				"%s: its mirrors draw with the shared mirror material" % id2)
+		print("csplab: %s in the world — DNI %.0f W/m², %.3f kW, steam %.2f kg/h, glow %.2f, drives %s" % [id2,
+			float(sp.get("dni_wm2", 0.0)), float(sp.get("thermal_output_kw", 0.0)), float(sp.get("steam_kg_h", 0.0)),
+			rt.focus if rt != null else -1.0, rt.angles_line() if rt != null else "?"])
 		_ok(float(sp.get("dni_wm2", 0.0)) > 0.0, "%s: the tick ran with the graph closed (DNI %.0f)" % [id2, float(sp.get("dni_wm2", 0.0))])
-		_ok(float(sp.get("dni_wm2", 0.0)) <= 0.0 or float(sp.get("thermal_output_kw", 0.0)) > 0.0, "%s makes heat whenever there is direct sun" % id2)
+		if want_type == "water_lens":
+			# Level: it only works with the sun near overhead; an October
+			# noon sun at 48°N is ~57° off the vertical.
+			var el_now := 90.0 - rad_to_deg(acos(clampf(b3.sun.y, -1.0, 1.0))) if b3 != null else 0.0
+			_ok(el_now > 65.0 or float(sp.get("thermal_output_kw", 0.0)) < 0.05,
+				"%s: a level lens makes ~nothing with the sun %.0f° up (%.3f kW)" % [id2, el_now, float(sp.get("thermal_output_kw", 0.0))])
+		else:
+			_ok(float(sp.get("dni_wm2", 0.0)) <= 0.0 or float(sp.get("thermal_output_kw", 0.0)) > 0.0, "%s makes heat whenever there is direct sun" % id2)
+		if rt != null and float(sp.get("dni_wm2", 0.0)) > 300.0 and want_type != "water_lens":
+			_ok(rt.focus > 0.25 and b3 != null and b3.glow_focus > 0.25, "%s: the receiver glows in the noon sun (%.2f)" % [id2, rt.focus])
+		if rt != null:
+			var mode := str(CspLabSpec.resolve(src)["tracking"]["mode"])
+			_ok((mode == "level" or mode == "fixed") == rt.channels.is_empty(),
+				"%s: %d live drive angles" % [id2, rt.channels.size()])
 		if prop != null:
-			await _world_shot(main, tree, prop, Vector3(3.5, 2.4, 4.0), Vector3(0, 1.2, 0), "%s/world_%s.png" % [dir, id2])
+			var cam_off := Vector3(3.5, 2.4, 4.0)
+			var look := Vector3(0, 1.2, 0)
+			if want_type == "water_lens":
+				cam_off = Vector3(4.0, 3.0, 5.0)
+				look = Vector3(0, 1.8, 0)
+			elif want_type == "tower":
+				cam_off = Vector3(24.0, 14.0, 30.0)
+				look = Vector3(0, 6.0, 0)
+			await _world_shot(main, tree, prop, cam_off, look, "%s/world_%s.png" % [dir, id2])
+	# --- The trough close up: polished mirror, the tube glowing.
+	var tprop := PlacedPropRuntime.find_by_prop_id(main, str(placed.get("diy_trough", "")))
+	if tprop != null:
+		await _world_shot(main, tree, tprop, Vector3(1.6, 1.4, 2.4), Vector3(0, 1.0, 0), "%s/world_diy_trough_close.png" % dir)
+	# --- Apply: the designer bound to the placed dish, turned into a trough.
+	var dish_pid := str(placed.get("dish_cooker", ""))
+	if not dish_pid.is_empty():
+		ui = main.call("open_csplab", {"prop_id": dish_pid})
+		await _settle(tree, 20)
+		var ms: Dictionary = ui.call("motors_source")
+		_ok(bool(ms.get("live", false)) and (ms.get("chans", []) as Array).size() == 2,
+			"bound to the placed dish: two live drives in the motors panel")
+		var panel: Node = ui.call("motors_panel")
+		panel.call("_set_cfg", "enabled", true)
+		panel.call("_set_link", "azimuth", "entity_id", "input_number.dish_azimuth")
+		panel.call("_set_link", "elevation", "entity_id", "input_number.dish_elevation")
+		panel.call("flush")
+		var hrec := PlacedPropService.get_prop_record(main, dish_pid)
+		var hcfg: Dictionary = hrec.get("csplab_ha", {}) as Dictionary
+		_ok(bool(hcfg.get("enabled", false)) and str(((hcfg.get("channels", {}) as Dictionary).get("azimuth", {}) as Dictionary).get("entity_id", "")) == "input_number.dish_azimuth",
+			"the motors panel saves its links on the placed prop")
+		await _settle(tree, 40)
+		var drt := CspLabRuntime.of(PlacedPropRuntime.find_by_prop_id(main, dish_pid))
+		print("csplab: dish Home Assistant status — %s" % (drt.ha_status if drt != null else "?"))
+		_ok(drt != null and not drt.ha_status.is_empty(), "the runtime says what it does with Home Assistant")
+		ui.call("set_tab", 0)
+		var msec: Collapsible = ui.call("motors_section")
+		_ok(msec != null and msec.is_open(), "the motors section opens for a placed tracker")
+		await _settle(tree, 20)
+		var shell: DesignerShell = ui.call("shell")
+		var rscroll := shell.right.get_parent() as ScrollContainer if shell != null else null
+		if rscroll != null and msec != null:
+			rscroll.ensure_control_visible(msec)
+			rscroll.scroll_vertical = int(msec.global_position.y - rscroll.global_position.y + rscroll.scroll_vertical - 20.0)
+		await _settle(tree, 10)
+		_shoot(main, "%s/motors_panel.png" % dir)
+		ui.call("set_spec", CspLabPresets.by_id("eurotrough"))
+		await _settle(tree, 12)
+		ui.call("_on_apply")
+		await _settle(tree, 60)
+		var nprop := PlacedPropRuntime.find_by_prop_id(main, dish_pid)
+		var nrt := CspLabRuntime.of(nprop)
+		var nb := nrt.builder() if nrt != null else null
+		_ok(nb != null and str(nb.spec["type"]) == "parabolic_trough", "Apply rebuilds the placed concentrator as the designed trough (got %s)" % (str(nb.spec["type"]) if nb != null else "nothing"))
+		_ok(nrt != null and nrt.channels.size() == 1, "and its drives follow (one rotation)")
+		var nrec := PlacedPropService.get_prop_record(main, dish_pid)
+		_ok(not (nrec.get("csplab_ha", {}) as Dictionary).is_empty(), "Apply keeps the Home Assistant links")
+		if nprop != null:
+			await _world_shot(main, tree, nprop, Vector3(-5.0, 2.6, 6.5), Vector3(0, 1.2, 0), "%s/world_applied_trough.png" % dir)
+	# --- The water lens: level, receiver carried into the spot.
+	var wprop := PlacedPropRuntime.find_by_prop_id(main, str(placed.get("water_lens", "")))
+	var wrt := CspLabRuntime.of(wprop)
+	if wrt != null and wrt.builder() != null:
+		var wb := wrt.builder()
+		_ok((wb.find_child("Optic", true, false) as Node3D).global_transform.basis.y.dot(Vector3.UP) > 0.999, "the water lens stays level")
+		var cart := wb.find_child("ReceiverCart", true, false) as Node3D
+		_ok(cart != null, "its receiver rides a cart")
+		if cart != null:
+			print("csplab: water lens cart at %s (rise %.2f m), glow %.2f" % [str(cart.position), (cart.get_child(0) as Node3D).position.y, wrt.focus])
+			_ok(absf((cart.get_child(0) as Node3D).position.y) <= CspLabOptics.FOLLOW_MAX_RISE_M + 1e-4, "its receiver stays on its stand")
+		_ok(wb.glow_focus < 0.04, "with the October sun far off the vertical it does not glow (%.3f)" % wb.glow_focus)
 	return {"ok": _fails.is_empty(), "fails": _fails}
 
 

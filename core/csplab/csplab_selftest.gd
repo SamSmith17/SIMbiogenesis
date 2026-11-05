@@ -12,7 +12,7 @@ extends SceneTree
 ## optimizer improving, every preset solving with no error-level check, and
 ## every builder triangle wound clockwise from its normal side.
 
-const EXPECTED_CHECKS := 161
+const EXPECTED_CHECKS := 234
 
 var _pass := 0
 var _fail := 0
@@ -45,6 +45,11 @@ func _initialize() -> void:
 	_test_optimizer()
 	_test_presets()
 	_test_builder()
+	_test_placed_type()
+	_test_water_lens_level()
+	_test_actuators()
+	_test_mirror_and_glow()
+	_test_perf_paths()
 	print("csplab selftest: %d passed, %d failed (%d expected)" % [_pass, _fail, EXPECTED_CHECKS])
 	if _fail == 0 and _pass == EXPECTED_CHECKS:
 		print("PASS csplab_selftest")
@@ -549,3 +554,288 @@ func _test_builder() -> void:
 		node.free()
 	_ok(total > 1000, "the builders make triangles (%d)" % total)
 	_ok(bad == 0, "every triangle is wound clockwise from its normal (%d bad)" % bad)
+
+
+## The placed prop is built from ITS design: the record's csplab_spec reaches
+## the builder (it used to be dropped, and every concentrator came out the
+## default dish).
+func _test_placed_type() -> void:
+	for id in ["diy_trough", "cpc_pipe", "water_lens", "eurotrough"]:
+		var sp := CspLabSpec.to_json_safe(CspLabPresets.by_id(id))
+		var rec := {"model_id": CspLabBuilder.MODEL_ID, "csplab_spec": sp}
+		var ex := PlacedPropRuntime.model_extras(rec)
+		_ok(ex.has("csplab_spec"), "%s: the record's design reaches the model's extras" % id)
+		var model := ModelCatalog.instantiate(CspLabBuilder.MODEL_ID, ex)
+		var b: CspLabBuilder = null
+		if model != null:
+			if model is CspLabBuilder:
+				b = model as CspLabBuilder
+			else:
+				for n in model.find_children("*", "Node3D", true, false):
+					if n is CspLabBuilder:
+						b = n as CspLabBuilder
+						break
+		_ok(b != null and str(b.spec["type"]) == str(sp["type"]),
+			"%s: placed as a %s (got %s)" % [id, str(sp["type"]), str(b.spec["type"]) if b != null else "nothing"])
+		if model != null:
+			model.free()
+
+
+## A water lens is water lying on a film: it never tilts, the receiver is
+## moved into the spot, and it works best around noon near the solstice.
+func _test_water_lens_level() -> void:
+	var r := CspLabSpec.resolve({"type": "water_lens", "tracking": {"mode": "two_axis"}, "structure": {"mount": "pedestal_azel"}})
+	_ok(str(r["tracking"]["mode"]) == "level" and str(r["structure"]["mount"]) == "suspended_frame",
+		"a water lens is always level, hung in a frame")
+	_ok(str(CspLabSpec.resolve({"type": "lens", "tracking": {"mode": "level"}})["tracking"]["mode"]) == "fixed",
+		"only a water lens is level")
+	var tm := CspLabSpec.items_for("tracking_modes", "water_lens")
+	_ok(tm.size() == 1 and str((tm[0] as Array)[0]) == "level", "the water lens offers only Level")
+	var has_level := false
+	for it in CspLabSpec.items_for("tracking_modes", "parabolic_dish"):
+		if str((it as Array)[0]) == "level":
+			has_level = true
+	_ok(not has_level, "nothing else offers Level")
+	var p := CspLabSite.pose(r, CspLabSite.sun_world(120.0, 40.0), 35.0)
+	_ok((p["basis"] as Basis).is_equal_approx(Basis.IDENTITY), "a level lens's axis stays plumb whatever the sun")
+	_ok(CspLabActuators.channels(CspLabDesign.solve(r), p).is_empty(), "nothing on it to drive")
+	# The spot lands f·tan θ off the axis; the receiver is carried there.
+	var g := CspLabOptics.geometry(r)
+	var th := deg_to_rad(20.0)
+	var rc := CspLabOptics.focus_follow(g, Vector3(sin(th), cos(th), 0.0))
+	var h := float(g["y_bot"]) - float(g["rec_y"])
+	_ok(rc.x < -0.8 * tan(th) * h and rc.x > -1.05 * tan(th) * h, "the receiver follows the spot along the chief ray (%.3f m)" % rc.x)
+	_ok(rc.y > 0.0, "and rises to the smallest spot (%.3f m)" % rc.y)
+	_ok(CspLabOptics.focus_follow(g, Vector3.UP).is_zero_approx(), "with the sun overhead it stays put")
+	_ok(CspLabOptics.focus_follow(CspLabOptics.geometry(CspLabSpec.resolve({"type": "lens"})), Vector3(0.3, 0.9, 0).normalized()) == Vector3.ZERO,
+		"a tracked lens's receiver stays on its axis")
+	# The design point is the summer-solstice noon; the year falls away from it.
+	var lat := 35.0
+	var spec := CspLabPresets.by_id("water_lens")
+	(spec["site"] as Dictionary)["lat_deg"] = lat
+	var d := CspLabDesign.solve(spec)
+	_ok(CspLabDesign.design_sun_local(d["spec"] as Dictionary).is_equal_approx(CspLabSite.solstice_noon_sun(lat)),
+		"its headline numbers are at noon on the summer solstice")
+	var e_sol := CspLabSite.optical_eff_at(d, CspLabSite.solstice_noon_sun(lat), lat)
+	var e_eq := CspLabSite.optical_eff_at(d, CspLabSite.noon_sun(lat, 0.0), lat)
+	var e_win := CspLabSite.optical_eff_at(d, CspLabSite.noon_sun(lat, -23.44), lat)
+	var e_2h := CspLabSite.optical_eff_at(d, CspLabSite.sun_at_decl(lat, 23.44, 30.0), lat)
+	print("  water lens at 35°N: solstice noon %.2f, ±2 h %.2f, equinox noon %.2f, midwinter noon %.2f" % [e_sol, e_2h, e_eq, e_win])
+	var e_vert := float(CspLabOptics.trace(d["geo"] as Dictionary, Vector3.UP, CspLabSite.POLL_EFF_RAYS, {"seed": 3})["captured"])
+	_ok(e_sol > 0.8 * e_vert and e_sol > 0.15, "at noon on the solstice it does about as well as with the sun overhead (%.2f vs %.2f)" % [e_sol, e_vert])
+	_ok(e_sol > e_eq and e_eq > e_win, "noon efficiency falls from the solstice to midwinter")
+	_ok(e_2h < e_sol, "and away from noon")
+	var errs := 0
+	var note := false
+	for cv in (d["checks"] as Array):
+		if str((cv as Dictionary)["level"]) == "error":
+			errs += 1
+		if str((cv as Dictionary)["text"]).contains("can't follow the sun"):
+			note = true
+	_ok(errs == 0, "the hanging water lens preset has no error")
+	_ok(note, "the checks say when it works")
+	var st: Dictionary = d["structure"]
+	var posts := 0
+	var cart := false
+	for mv in (st["members"] as Array):
+		var m: Dictionary = mv
+		if str(m.get("label", "")) == "Corner post":
+			posts += 1
+		if str(m["frame"]) == "cart":
+			cart = true
+	_ok(posts == 4 and cart, "four posts and a receiver cart")
+	_ok(float(st.get("receiver_height_m", 0.0)) > 0.12, "the receiver stands above the ground (%.2f m)" % float(st.get("receiver_height_m", 0.0)))
+	var low := CspLabPresets.by_id("water_lens")
+	(low["structure"] as Dictionary)["pedestal_h_m"] = 1.5
+	var dl := CspLabDesign.solve(low)
+	var low_err := false
+	for cv in (dl["checks"] as Array):
+		if str((cv as Dictionary)["level"]) == "error" and str((cv as Dictionary)["text"]).contains("Raise the frame"):
+			low_err = true
+	_ok(low_err, "a frame lower than the focal length is an error")
+	_ok(not CspLabSpec.field_shown({"g": "tracking", "k": "fixed_tilt_deg", "skip_types": ["water_lens"]}, "water_lens"),
+		"no tilt row for a water lens")
+
+
+## Every tracking drive as degrees, off the pose the builder draws; the
+## mapping onto a Home Assistant entity.
+func _test_actuators() -> void:
+	var sun := CspLabSite.sun_world(135.0, 40.0)
+	var dish := CspLabSpec.resolve({"type": "parabolic_dish"})
+	var cd := CspLabActuators.channels(CspLabDesign.solve(dish), CspLabSite.pose(dish, sun, 35.0))
+	_ok(cd.size() == 2 and str((cd[0] as Dictionary)["id"]) == "azimuth" and str((cd[1] as Dictionary)["id"]) == "elevation",
+		"a dish has an azimuth and an elevation drive")
+	if cd.size() == 2:
+		_near(float((cd[0] as Dictionary)["deg"]), 135.0, 0.01, "the azimuth drive faces the sun")
+		_near(float((cd[1] as Dictionary)["deg"]), 40.0, 0.01, "the elevation drive faces the sun")
+	var stow := CspLabActuators.channels(CspLabDesign.solve(dish), CspLabSite.pose(dish, CspLabSite.sun_world(300.0, -10.0), 35.0))
+	_near(float((stow[1] as Dictionary)["deg"]), 90.0, 0.01, "at night the dish stows face up")
+	var polar := CspLabSpec.resolve({"type": "parabolic_dish", "structure": {"mount": "polar_mount"}})
+	var cp := CspLabActuators.channels(CspLabDesign.solve(polar), CspLabSite.pose(polar, sun, 35.0))
+	_ok(cp.size() == 2 and str((cp[0] as Dictionary)["id"]) == "hour_angle", "a polar mount has hour angle + declination")
+	var trough := CspLabSpec.resolve({"type": "parabolic_trough"})
+	var pt := CspLabSite.pose(trough, sun, 35.0)
+	var ct := CspLabActuators.channels(CspLabDesign.solve(trough), pt)
+	_ok(ct.size() == 1 and is_equal_approx(float((ct[0] as Dictionary)["deg"]), float((pt["angles"] as Dictionary)["Rotation"])),
+		"a trough has one rotation drive, the pose's own angle")
+	var fixed := CspLabPresets.by_id("cpc_flat")
+	_ok(CspLabActuators.channels(CspLabDesign.solve(fixed), CspLabSite.pose(CspLabSpec.resolve(fixed), sun, 35.0)).is_empty(),
+		"a fixed trough has nothing to drive")
+	var lfr := CspLabSpec.resolve({"type": "linear_fresnel"})
+	var dlf := CspLabDesign.solve(lfr)
+	var cl := CspLabActuators.channels(dlf, CspLabSite.pose(lfr, sun, 35.0))
+	_ok(cl.size() == int((lfr["optic"] as Dictionary)["rows"]), "one tilt drive per Fresnel row")
+	var tw := CspLabSpec.resolve({"type": "tower"})
+	var dtw := CspLabDesign.solve(tw)
+	var ctw := CspLabActuators.channels(dtw, CspLabSite.pose(tw, sun, 35.0))
+	_ok(ctw.size() == int((dtw["geo"] as Dictionary)["count"]) * 2, "two drives per heliostat (%d)" % ctw.size())
+	var h_el := float((ctw[1] as Dictionary)["deg"])
+	_ok(h_el > 0.0 and h_el < 90.0, "a heliostat's elevation is above the horizon")
+	# Mapping onto an entity.
+	var ch := {"id": "elevation", "min": 0.0, "max": 90.0, "deg": 30.0}
+	_near(CspLabActuators.value_for(30.0, {"entity_id": "number.m", "invert": true, "scale": 2.0, "offset": 10.0}), -50.0, 1e-6,
+		"invert, then scale, then offset")
+	_near(CspLabActuators.value_for(30.0, {"entity_id": "number.m", "min": 0.0, "max": 20.0}), 20.0, 1e-6, "clamped to the link's range")
+	_near(CspLabActuators.value_for(45.0, {"entity_id": "cover.actuator"}, ch), 50.0, 1e-6, "a cover gets a percentage of the range")
+	var sv := CspLabActuators.service_for("input_number.dish_az", 12.345)
+	_ok(str(sv["domain"]) == "input_number" and str(sv["service"]) == "set_value" and is_equal_approx(float(sv["data"]["value"]), 12.35),
+		"input_number.set_value")
+	var cv := CspLabActuators.service_for("cover.actuator", 49.6)
+	_ok(str(cv["service"]) == "set_cover_position" and int(cv["data"]["position"]) == 50, "cover.set_cover_position")
+	_ok(CspLabActuators.service_for("sensor.x", 1.0).is_empty() and not CspLabActuators.supported("sensor.x"),
+		"a sensor can't be driven")
+	var cfg := {"enabled": true, "deadband_deg": 0.5, "min_interval_s": 2.0,
+		"channels": {"azimuth": {"entity_id": "input_number.az"}, "elevation": {"entity_id": "sensor.bad"}}}
+	var chans := [{"id": "azimuth", "deg": 100.0, "min": 0.0, "max": 360.0}, {"id": "elevation", "deg": 40.0, "min": 0.0, "max": 90.0}]
+	var due := CspLabActuators.due(cfg, chans, {}, 10.0)
+	_ok(due.size() == 1 and str((due[0] as Dictionary)["entity_id"]) == "input_number.az", "a never-sent drive goes out; an unsupported entity doesn't")
+	_ok(CspLabActuators.due(cfg, chans, {"input_number.az": 100.3}, 10.0).is_empty(), "inside the deadband: nothing")
+	_ok(CspLabActuators.due(cfg, chans, {"input_number.az": 99.0}, 1.0).is_empty(), "sooner than the interval: nothing")
+	_ok(CspLabActuators.due(cfg, chans, {"input_number.az": 99.0}, 3.0).size() == 1, "moved past the deadband: sent")
+	var off := cfg.duplicate(true)
+	off["enabled"] = false
+	_ok(CspLabActuators.due(off, chans, {}, 10.0).is_empty(), "switched off: nothing")
+	_ok(CspLabActuators.slug("Dish cooker 1.5 m") == "dish_cooker_1_5_m", "an entity-safe name")
+	var y := CspLabActuators.ha_yaml("Dish cooker", chans)
+	_ok(y.contains("input_number:") and y.contains("dish_cooker_azimuth:") and y.contains("number.set_value"),
+		"the YAML declares the helpers and an example automation")
+
+
+## The placed mirror reads as a mirror and the receiver glows with the flux.
+func _test_mirror_and_glow() -> void:
+	var a := CspLabBuilder.build_node(CspLabPresets.by_id("dish_cooker"), "A", {})
+	var b := CspLabBuilder.build_node(CspLabPresets.by_id("diy_trough"), "B", {})
+	var ma: Material = null
+	var mb: Material = null
+	var mia := a.find_child("Mirror", true, false) as MeshInstance3D
+	var mib := b.find_child("Mirror", true, false) as MeshInstance3D
+	if mia != null:
+		ma = mia.get_surface_override_material(0)
+	if mib != null:
+		mb = mib.get_surface_override_material(0)
+	_ok(ma is ShaderMaterial and (ma as ShaderMaterial).shader.resource_path.ends_with("csplab_mirror.gdshader"),
+		"the mirror is drawn with the mirror shader")
+	_ok(ma != null and mb != null and ma == mb, "every concentrator in the world shares one mirror material")
+	var studio := CspLabBuilder.build_node(CspLabPresets.by_id("dish_cooker"), "S", {"private_mirror": true})
+	_ok(studio.mirror_material() != ma, "the designer's studio has its own (its own sun)")
+	studio.free()
+	a.set_glow_focus(1.0)
+	var rec := a.find_child("Receiver", true, false) as MeshInstance3D
+	var em := 0.0
+	if rec != null and rec.mesh != null:
+		var sm := rec.mesh.surface_get_material(0) as StandardMaterial3D
+		if sm != null:
+			em = sm.emission_energy_multiplier
+	_ok(em > 10.0, "at its working flux the receiver glows (emission %.1f)" % em)
+	var card := a.find_child("ReceiverGlow0", true, false) as MeshInstance3D
+	var light := a.find_child("ReceiverLight0", true, false) as OmniLight3D
+	_ok(card != null and card.visible and light != null and light.visible and light.light_energy > 1.0,
+		"a glow card and a light on the receiver")
+	a.set_glow_focus(0.0)
+	_ok(card != null and not card.visible and light != null and not light.visible, "dark at night")
+	var n_cards := b.glow_card_count()
+	var line := b.find_child("ReceiverGlow", true, false) as MultiMeshInstance3D
+	_ok(n_cards >= 2 and line != null and line.multimesh.instance_count == n_cards,
+		"a line focus glows along its length (%d cards, one MultiMesh)" % n_cards)
+	var wl := CspLabBuilder.build_node(CspLabPresets.by_id("water_lens"), "W", {"sun": CspLabSite.sun_world(180.0, 60.0)})
+	var cart := wl.find_child("ReceiverCart", true, false) as Node3D
+	_ok(cart != null and cart.find_child("Receiver", true, false) != null, "the water lens's receiver rides a cart")
+	_ok(cart != null and cart.position.z < -0.1, "the cart sits north of the lens when the sun is south (z %.2f)" % (cart.position.z if cart != null else 0.0))
+	a.free()
+	b.free()
+	wl.free()
+
+
+## The performance paths: a field's mirrors turn without re-meshing, a new
+## sun angle is traced live in chunks (never in one go) and lands near the
+## full trace, designs of one spec share one efficiency table, and the
+## world's shared mirror is only rewritten when the sun moved.
+func _test_perf_paths() -> void:
+	var tw := CspLabBuilder.build_node(CspLabPresets.by_id("tower_surround"), "T", {})
+	var mmi := tw.find_child("Mirrors", true, false) as MultiMeshInstance3D
+	var g: Dictionary = tw.design["geo"]
+	var n_h := (g["centres"] as PackedVector3Array).size()
+	_ok(mmi != null and mmi.multimesh.instance_count == n_h, "a field's mirrors are one MultiMesh (%d heliostats)" % n_h)
+	var mesh0: Mesh = mmi.multimesh.mesh if mmi != null else null
+	tw.set_sun(CspLabSite.sun_world(120.0, 30.0))
+	_ok(mmi != null and mmi.multimesh.mesh == mesh0, "a new sun turns them without re-meshing")
+	var xfs := tw.field_mirror_transforms()
+	var sl: Vector3 = tw.last_pose["sun_local"]
+	var fp := CspLabOptics.field_pose(g, sl)
+	var ns: PackedVector3Array = fp["n"]
+	var ok_xf := xfs.size() == n_h
+	for i in xfs.size():
+		var t := xfs[i] as Transform3D
+		if t.basis.determinant() <= 0.0 or t.basis.z.dot(ns[i]) < 0.999:
+			ok_xf = false
+	_ok(ok_xf, "each heliostat faces its own normal, right-handed")
+	tw.free()
+	var lf := CspLabBuilder.build_node(CspLabPresets.by_id("lfr_small"), "L", {})
+	var lmm := lf.find_child("Mirrors", true, false) as MultiMeshInstance3D
+	_ok(lmm != null and lmm.multimesh.instance_count == (lf.design["geo"]["xs"] as PackedFloat64Array).size(),
+		"a linear Fresnel field's rows are one MultiMesh too")
+	lf.free()
+	# One efficiency table per design, whatever the ray count.
+	var sp := CspLabSpec.resolve(CspLabPresets.by_id("cpc_pipe"))
+	var d1 := CspLabDesign.solve(sp, {"rays": 1500})
+	var d2 := CspLabDesign.solve(sp, {"rays": 2500})
+	_ok(is_same(d1["eff_cache"], d2["eff_cache"]), "two solves of one design share one efficiency table")
+	# A live lookup at a new sun traces in chunks.
+	var s_new := CspLabSite.sun_world(137.0, 33.0)
+	var lat := CspLabDesign.lat_of(sp)
+	var p := CspLabSite.pose(sp, s_new, lat)
+	var full_d := CspLabDesign.solve(sp, {"rays": 1500, "no_cache": true})
+	(full_d as Dictionary)["eff_cache"] = {}
+	var e_full := CspLabSite.optical_eff_at(full_d, s_new, lat)
+	var cache: Dictionary = d1["eff_cache"]
+	var before := cache.size()
+	CspLabSite._live_frame = -1
+	var t0 := Time.get_ticks_usec()
+	var e_first := CspLabSite.optical_eff_at(d1, s_new, lat, true)
+	var first_ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	var pend: Dictionary = cache.get("@pending", {})
+	_ok(not pend.is_empty(), "a live lookup at a new sun does not trace it in one go (%.1f ms, answer %.3f)" % [first_ms, e_first])
+	_ok(e_first >= 0.0 and e_first <= 1.0, "and still answers something sensible meanwhile")
+	var frames := 0
+	while not pend.is_empty() and frames < 400:
+		CspLabSite._live_frame = -1
+		CspLabSite.advance_live(d1)
+		frames += 1
+	var e_live := CspLabSite.optical_eff_at(d1, s_new, lat, true)
+	_ok(pend.is_empty() and cache.size() > before, "it is finished a chunk a frame (%d frames)" % frames)
+	_near(e_live, e_full, 0.05, "the chunked trace lands on the full one (%.3f vs %.3f)" % [e_live, e_full])
+	_ok(p.has("sun_local"), "the pose is there to trace from")
+	# The shared mirror is only rewritten when the sun moved.
+	var m := CspLabBuilder.shared_mirror()
+	CspLabBuilder.push_world_sun(Vector3(0.3, 0.8, 0.2))
+	var v1: Vector3 = m.get_shader_parameter("sun_dir")
+	CspLabBuilder.push_world_sun(Vector3(0.3, 0.8, 0.2001))
+	var v2: Vector3 = m.get_shader_parameter("sun_dir")
+	_ok(v1 == v2, "a tiny sun move leaves the shared mirror alone")
+	CspLabBuilder.push_world_sun(Vector3(0.6, 0.6, 0.2))
+	var v3: Vector3 = m.get_shader_parameter("sun_dir")
+	_ok(v3 != v1, "a real move updates it")
+	# Read off the shader's source (headless has no renderer to ask).
+	var re := RegEx.create_from_string("metallic_v[^=]*=[ ]*([0-9.]+)")
+	var hit := re.search(m.shader.code)
+	_ok(hit != null and float(hit.get_string(1)) < 0.9, "the mirror keeps some diffuse (never black)")

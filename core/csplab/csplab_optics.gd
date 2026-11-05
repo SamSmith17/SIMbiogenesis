@@ -74,6 +74,9 @@ class Acc:
 	var ideal := false
 	var cur := PackedVector3Array()
 	var cur_band := 0
+	## Where the receiver stands off its design spot (x, rise, z): a level
+	## water lens's receiver is moved into the focal spot (focus_follow).
+	var rec_c := Vector3.ZERO
 
 	func _init() -> void:
 		for k in CspLabOptics.LOSS_KEYS:
@@ -310,6 +313,9 @@ static func geometry(spec: Dictionary) -> Dictionary:
 			g["pivot"] = Vector3(0, f_eff + sag * 0.5, 0)
 			g["bins"] = [-g["rec_r"], g["rec_r"], -g["rec_r"], g["rec_r"], 13, 13]
 			g["l_in"] = maxf(f_eff * 0.35, 0.4)
+			# The lens can't tilt (it is water on a film), so the receiver
+			# is moved on the ground into the spot (focus_follow).
+			g["follow_focus"] = true
 		"fresnel_lens":
 			var side := float(o["aperture_m"])
 			var a := side * 0.5
@@ -585,6 +591,7 @@ static func trace(g: Dictionary, sun_local: Vector3, n: int, opts: Dictionary = 
 	var e2 := s0.cross(e1).normalized()
 	var pose := field_pose(g, s0)
 	var t := str(g["type"])
+	acc.rec_c = focus_follow(g, s0)
 	for i in n:
 		var band := _pick_band(rng)
 		var s := _sample_sun(s0, e1, e2, float(g["sun_half"]), float(g["track_err"]), rng, acc.ideal)
@@ -614,6 +621,7 @@ static func trace_section(g: Dictionary, sun_local: Vector3, count: int, opts: D
 	var e2 := s0.cross(e1).normalized()
 	var pose := field_pose(g, s0)
 	var t := str(g["type"])
+	acc.rec_c = focus_follow(g, s0)
 	var bands: Array = opts.get("bands", [0]) as Array
 	var spread := bool(opts.get("spread", false))
 	var half := float(g["sun_half"])
@@ -1252,9 +1260,48 @@ static func _ray_tower(g: Dictionary, pose: Dictionary, s: Vector3, rng: RandomN
 		acc.finish("spill")
 
 
-## The lens types' receiver: a disc facing up at y = rec_y.
+## Where a level lens's spot is for the sun `s` (optic frame), as an offset
+## from the receiver's design spot (x, rise, z). The chief ray leaves the
+## lens's rear principal point — the curved vertex of a flat-topped lens —
+## at the sun's angle θ; an oblique beam focuses astigmatically along it
+## (Coddington, thin lens): sagittal f_s = f(1 − sin²θ / 2n), tangential
+## f_t = f_s cos²θ, and the smallest spot lies half-way. The receiver is
+## carried there (a person moves the pot on its stand, or a cart rides a
+## rail), raised at most FOLLOW_MAX_RISE_M on its stand; past
+## FOLLOW_MAX_ZENITH_DEG off the vertical the spot is too smeared to chase
+## and the receiver is parked under the lens. Zero for every other optic.
+const FOLLOW_MAX_RISE_M := 0.5
+const FOLLOW_MAX_ZENITH_DEG := 40.0
+
+
+static func focus_follow(g: Dictionary, s: Vector3) -> Vector3:
+	if not bool(g.get("follow_focus", false)) or s.y <= 0.05:
+		return Vector3.ZERO
+	var su := s.normalized()
+	if su.y < cos(deg_to_rad(FOLLOW_MAX_ZENITH_DEG)):
+		return Vector3.ZERO
+	var y_p := float(g.get("y_bot", 0.0))
+	var y_r := float(g["rec_y"])
+	var f := y_p - y_r
+	var s2 := 1.0 - su.y * su.y
+	var nv := CspLabParts.n_of(str(g.get("material", "water")), 0)
+	var f_s := f * (1.0 - s2 / (2.0 * nv))
+	var L := f_s * (1.0 + su.y * su.y) * 0.5
+	var spot := Vector3(0, y_p, 0) - su * L
+	var off := spot - Vector3(0, y_r, 0)
+	if absf(off.y) > FOLLOW_MAX_RISE_M:
+		# The stand tops out: put it where the chief ray crosses that height.
+		off.y = clampf(off.y, -FOLLOW_MAX_RISE_M, FOLLOW_MAX_RISE_M)
+		var drop := y_p - (y_r + off.y)
+		off.x = -su.x / su.y * drop
+		off.z = -su.z / su.y * drop
+	return off
+
+
+## The lens types' receiver: a disc facing up at y = rec_y, `acc.rec_c` off
+## the axis.
 static func _lens_receiver(g: Dictionary, acc: Acc, p: Vector3, d: Vector3, w: float) -> void:
-	var yr := float(g["rec_y"])
+	var yr := float(g["rec_y"]) + acc.rec_c.y
 	if d.y >= -1e-6:
 		acc.lose("spill", w)
 		acc.pt(p + d * 0.3)
@@ -1263,8 +1310,10 @@ static func _lens_receiver(g: Dictionary, acc: Acc, p: Vector3, d: Vector3, w: f
 	var t := (yr - p.y) / d.y
 	var q := p + d * t
 	var rr := float(g["rec_r"])
-	if t > 0.0 and q.x * q.x + q.z * q.z <= rr * rr:
-		_capture(acc, w, q.x, q.z)
+	var qx := q.x - acc.rec_c.x
+	var qz := q.z - acc.rec_c.z
+	if t > 0.0 and qx * qx + qz * qz <= rr * rr:
+		_capture(acc, w, qx, qz)
 		acc.pt(q)
 		acc.finish("captured")
 	else:
@@ -1630,6 +1679,15 @@ static func section_profile(g: Dictionary, sun_local: Vector3) -> Array:
 					pts5.append(Vector2(x5 + sgn * a4 / float(steps), yg - gh * tan(al) / maxf(tan(facet_angle(a4, f2, nd)), 1e-3)))
 			out.append({"kind": "lens", "pts": pts5, "closed": true})
 			out.append(_rec_outline(g))
+	# A level lens's receiver stands where the spot falls.
+	var rc := focus_follow(g, sun_local.normalized())
+	if rc != Vector3.ZERO:
+		for sh in out:
+			if str((sh as Dictionary)["kind"]) == "receiver":
+				var pts: PackedVector2Array = (sh as Dictionary)["pts"]
+				for i in pts.size():
+					pts[i] = pts[i] + Vector2(rc.x, rc.y)
+				(sh as Dictionary)["pts"] = pts
 	return out
 
 

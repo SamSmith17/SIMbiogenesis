@@ -32,7 +32,7 @@ const TYPE_WHY := {
 	"lens": "A plano-convex lens: simple and exact near the axis, but heavy — a 50 cm glass lens is ~20 kg and its rim focuses short (spherical aberration).",
 	"ball_lens": "A glass or water-filled sphere: focuses from any direction (no tracking for a coarse spot), but blurs badly — the edge rays cross far before the paraxial focus.",
 	"fresnel_lens": "A lens collapsed into flat grooves: light and cheap, a few percent lost on the groove tips and draft faces, and colours split (the focus is a rainbow).",
-	"water_lens": "Water lying on a sagging clear membrane: almost free to build, but water absorbs the infrared (a fifth of the sun is lost in 15 cm) and the frame must carry the water.",
+	"water_lens": "Clear plastic film hung level in a frame above the ground, sagging into a lens when water is poured on it: almost free to build, but it can't tilt (the water would run off), so it only focuses well when the sun is high — around noon, near the summer solstice. Water drinks the infrared (a fifth of the sun in 15 cm) and the frame carries the water.",
 	"parabolic_trough": "A curved mirror strip that focuses on a tube along its length; one tracking axis. The workhorse of solar thermal plants (C ≈ 20–80).",
 	"parabolic_dish": "A mirror bowl that focuses to a point; two-axis tracking. The highest concentration of any practical collector (C ≈ 1000–4000).",
 	"linear_fresnel": "Flat mirror strips near the ground, each turned to bounce the sun onto one fixed receiver above them. Cheap and wind-light; loses to cosine and row shading at low sun.",
@@ -57,6 +57,7 @@ const TRACKING_MODES := {
 	"ew_horizontal": "One-axis, horizontal E–W axis",
 	"polar": "One-axis, polar (axis at latitude)",
 	"fixed": "Fixed (tilted to the equator)",
+	"level": "Level (water stays flat — no tilting)",
 }
 
 const MOUNTS := {
@@ -66,6 +67,7 @@ const MOUNTS := {
 	"row_frame": "Mirror rows on a frame + receiver mast",
 	"lattice_tower": "Lattice tower + heliostat pedestals",
 	"monopole": "Monopole tower + heliostat pedestals",
+	"suspended_frame": "Film hung in a frame on four posts",
 }
 
 ## A trough's cross-section: the classic parabola (sun must stay on its
@@ -191,9 +193,9 @@ const FIELDS := [
 	# Tracking
 	{"g": "tracking", "k": "mode", "label": "Tracking", "kind": "option", "items": "tracking_modes",
 		"types": ["lens", "ball_lens", "fresnel_lens", "water_lens", "parabolic_trough", "parabolic_dish", "linear_fresnel"]},
-	{"g": "tracking", "k": "error_mrad", "label": "Tracking error", "kind": "spin", "min": 0.0, "max": 20.0, "step": 0.1, "unit": "mrad",
+	{"g": "tracking", "k": "error_mrad", "skip_types": ["water_lens"], "label": "Tracking error", "kind": "spin", "min": 0.0, "max": 20.0, "step": 0.1, "unit": "mrad",
 		"tip": "RMS pointing error of the drive and its sensor"},
-	{"g": "tracking", "k": "fixed_tilt_deg", "label": "Fixed tilt", "kind": "spin", "min": 0.0, "max": 90.0, "step": 1.0, "unit": "°",
+	{"g": "tracking", "k": "fixed_tilt_deg", "skip_types": ["water_lens"], "label": "Fixed tilt", "kind": "spin", "min": 0.0, "max": 90.0, "step": 1.0, "unit": "°",
 		"tip": "For a fixed mount; −1 = the latitude"},
 	# Structure
 	{"g": "structure", "k": "mount", "label": "Mount", "kind": "option", "items": "mounts"},
@@ -202,12 +204,15 @@ const FIELDS := [
 		"tip": "Pedestal, torque tube or tower leg outside diameter"},
 	{"g": "structure", "k": "wall_mm", "label": "Wall", "kind": "spin", "min": 1.0, "max": 40.0, "step": 0.1, "unit": "mm"},
 	{"g": "structure", "k": "pedestal_h_m", "label": "Axis height", "kind": "spin", "min": 0.3, "max": 20.0, "step": 0.05, "unit": "m",
-		"types": ["lens", "ball_lens", "fresnel_lens", "water_lens", "parabolic_trough", "parabolic_dish"],
+		"types": ["lens", "ball_lens", "fresnel_lens", "parabolic_trough", "parabolic_dish"],
 		"tip": "Ground to the tracking axis"},
+	{"g": "structure", "k": "pedestal_h_m", "label": "Frame height", "kind": "spin", "min": 1.0, "max": 12.0, "step": 0.05, "unit": "m",
+		"types": ["water_lens"],
+		"tip": "Ground to the film's rim. The receiver stands under it at the focus, so the frame must be taller than the focal length"},
 	{"g": "structure", "k": "pylon_spacing_m", "label": "Pylon spacing", "kind": "spin", "min": 1.0, "max": 20.0, "step": 0.1, "unit": "m",
 		"types": ["parabolic_trough", "linear_fresnel"]},
-	{"g": "structure", "k": "drive", "label": "Drive", "kind": "option", "items": "drives"},
-	{"g": "structure", "k": "wind_op_ms", "label": "Tracking wind", "kind": "spin", "min": 2.0, "max": 30.0, "step": 0.5, "unit": "m/s",
+	{"g": "structure", "k": "drive", "skip_types": ["water_lens"], "label": "Drive", "kind": "option", "items": "drives"},
+	{"g": "structure", "k": "wind_op_ms", "skip_types": ["water_lens"], "label": "Tracking wind", "kind": "spin", "min": 2.0, "max": 30.0, "step": 0.5, "unit": "m/s",
 		"tip": "The highest wind it keeps tracking in"},
 	{"g": "structure", "k": "wind_survival_ms", "label": "Survival wind", "kind": "spin", "min": 10.0, "max": 70.0, "step": 0.5, "unit": "m/s",
 		"tip": "The gust it must survive parked (stowed face-up)"},
@@ -295,9 +300,12 @@ static func default_spec(type: String = "parabolic_dish") -> Dictionary:
 			r["kind"] = "flat"
 			r["size_m"] = 0.1
 			tc["slope_err_mrad"] = 4.0
-			st["member_mm"] = 114.3
-			st["wall_mm"] = 4.0
-			st["pedestal_h_m"] = 3.4
+			tr["mode"] = "level"
+			tr["error_mrad"] = 0.0
+			st["mount"] = "suspended_frame"
+			st["member_mm"] = 60.3
+			st["wall_mm"] = 3.0
+			st["pedestal_h_m"] = 3.6
 			si["op_temp_c"] = 120.0
 		"parabolic_trough":
 			o["aperture_m"] = 1.5
@@ -388,6 +396,14 @@ static func resolve(spec: Dictionary) -> Dictionary:
 		o["accept_deg"] = clampf(float(o.get("accept_deg", 30.0)), 2.0, 170.0)
 		o["truncate"] = clampf(float(o.get("truncate", 0.0)), 0.0, 0.95)
 	var tk: Dictionary = out["tracking"]
+	# A water lens is water lying on a film: gravity keeps it level, so it
+	# never tilts and never tracks; a level mode means nothing to anything
+	# else (an optic you can tilt is better tilted).
+	if t == "water_lens":
+		tk["mode"] = "level"
+		(out["structure"] as Dictionary)["mount"] = "suspended_frame"
+	elif str(tk["mode"]) == "level":
+		tk["mode"] = "fixed"
 	if t == "tower":
 		tk["mode"] = "two_axis"
 	elif t == "linear_fresnel" and not ["ns_horizontal", "ew_horizontal"].has(str(tk["mode"])):
@@ -399,6 +415,8 @@ static func resolve(spec: Dictionary) -> Dictionary:
 static func field_shown(f: Dictionary, type: String, spec: Dictionary = {}) -> bool:
 	var ts: Array = f.get("types", []) as Array
 	if not ts.is_empty() and not ts.has(type):
+		return false
+	if (f.get("skip_types", []) as Array).has(type):
 		return false
 	var ps: Array = f.get("profiles", []) as Array
 	if ps.is_empty() or spec.is_empty():
@@ -448,6 +466,8 @@ static func items_for(table: String, type: String) -> Array:
 			for k in TRACKING_MODES:
 				if type == "linear_fresnel" and not ["ns_horizontal", "ew_horizontal"].has(k):
 					continue
+				if (type == "water_lens") != (k == "level"):
+					continue
 				out.append([k, str(TRACKING_MODES[k])])
 			return out
 		"mounts":
@@ -479,6 +499,8 @@ static func mounts_for(type: String) -> Array:
 			return ["row_frame"]
 		"tower":
 			return ["lattice_tower", "monopole"]
+		"water_lens":
+			return ["suspended_frame"]
 	return ["pedestal_azel", "polar_mount"]
 
 

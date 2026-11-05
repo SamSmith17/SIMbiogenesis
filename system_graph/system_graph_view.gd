@@ -18080,6 +18080,11 @@ func _tick_graph_csp(delta: float) -> void:
 
 const _CSPLAB_POLL_INTERVAL := 0.5
 var _csplab_acc: float = _CSPLAB_POLL_INTERVAL
+## item id -> {h: hash of its csplab_spec, lat, d: the solved design}: the
+## spec is resolved and solved again only when it changes. Solved at the
+## same ray count as the placed model's builder, so the two share one
+## design and one efficiency table.
+var _csplab_designs := {}
 
 
 ## Live heat + steam for "processor" items with specs.role == "csplab" (a
@@ -18092,6 +18097,9 @@ var _csplab_acc: float = _CSPLAB_POLL_INTERVAL
 func _tick_graph_csplab(delta: float) -> void:
 	if model == null:
 		return
+	# A new sun angle's efficiency is traced a chunk a frame (shared budget).
+	for c in _csplab_designs.values():
+		CspLabSite.advance_live((c as Dictionary)["d"] as Dictionary)
 	_csplab_acc += delta
 	if _csplab_acc < _CSPLAB_POLL_INTERVAL:
 		return
@@ -18120,15 +18128,16 @@ func _tick_graph_csplab(delta: float) -> void:
 	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, get_node_or_null("/root/WeatherService"))
 	# Telemetry is a sim write: inside the bracket it neither records undo
 	# history nor invalidates the pre-rendered range (the bracket nests).
+	PerfSpan.begin("csp_graph")
 	_begin_sim_writes()
+	var seen := {}
 	for item2: Dictionary in items:
 		var specs_ref: Dictionary = item2.get("specs", {})
-		var cs: Dictionary = specs_ref.get("csplab_spec", {}) as Dictionary
-		var spec := CspLabSpec.resolve(cs)
-		(spec["site"] as Dictionary)["lat_deg"] = lat
+		var iid := str(item2.get("id", ""))
+		seen[iid] = true
 		var result: Dictionary = {}
 		if not bool(specs_ref.get("packed_3d", false)):
-			result = CspLabSite.output_now(CspLabDesign.solve(spec, {"rays": 2000}), s_world, weather, lat)
+			result = CspLabSite.output_now(_csplab_design_for(iid, specs_ref, lat), s_world, weather, lat, true)
 		var kw := float(result.get("thermal_kw", 0.0))
 		if absf(float(specs_ref.get("thermal_output_kw", 0.0)) - kw) < 0.001 \
 				and absf(float(specs_ref.get("dni_wm2", 0.0)) - float(result.get("dni", 0.0))) < 1.0:
@@ -18151,6 +18160,25 @@ func _tick_graph_csplab(delta: float) -> void:
 			specs["outputs"] = outputs
 		model.update_item(str(item2.get("id", "")), {"specs": specs})
 	_end_sim_writes()
+	for k in _csplab_designs.keys():
+		if not seen.has(k):
+			_csplab_designs.erase(k)
+	PerfSpan.end("csp_graph")
+
+
+## The solved design behind a concentrator node, resolved and solved only
+## when its spec (or the world's latitude) changed.
+func _csplab_design_for(iid: String, specs_ref: Dictionary, lat: float) -> Dictionary:
+	var cs: Dictionary = specs_ref.get("csplab_spec", {}) as Dictionary
+	var h := cs.hash()
+	var c: Dictionary = _csplab_designs.get(iid, {})
+	if not c.is_empty() and int(c["h"]) == h and absf(float(c["lat"]) - lat) < 1e-6:
+		return c["d"] as Dictionary
+	var spec := CspLabSpec.resolve(cs)
+	(spec["site"] as Dictionary)["lat_deg"] = lat
+	var d := CspLabDesign.solve(spec, {"rays": mini(int((spec["trace"] as Dictionary)["rays"]), 3000)})
+	_csplab_designs[iid] = {"h": h, "lat": lat, "d": d}
+	return d
 
 
 const _HomeBiogasSource := preload("res://power_system/sources/home_biogas_source.gd")

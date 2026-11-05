@@ -848,6 +848,10 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["pelton_spec"] = rec.get("pelton_spec", {})
 	if rec.has("windlab_spec"):
 		extras["windlab_spec"] = rec.get("windlab_spec", {})
+	# Without this every placed concentrator was built from an empty spec —
+	# the default dish — whatever type the designer placed or applied.
+	if rec.has("csplab_spec"):
+		extras["csplab_spec"] = rec.get("csplab_spec", {})
 	if rec.has("vehicle_spec"):
 		extras["vehicle_spec"] = rec.get("vehicle_spec", {})
 	if model_id == GrowBed.MODEL_ID:

@@ -1428,6 +1428,13 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 				mud_spec = (rec_extra6["mud_spec"] as Dictionary).duplicate(true)
 		mud_spec["ghost_highlight"] = true
 		extras["mud_spec"] = mud_spec
+	# Designed machines carry their design in the record extras; the ghost
+	# must build THAT design, not the builder's default (a concentrator's
+	# ghost was always the default dish).
+	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
+	for dk in ["csplab_spec", "windlab_spec", "pelton_spec"]:
+		if rec_extra_d.has(dk) and not extras.has(dk):
+			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)
 	if model == null:
 		return null

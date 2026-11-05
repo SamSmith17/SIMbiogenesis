@@ -16,6 +16,12 @@ const CACHE_MAX := 24
 
 static var _cache := {}
 static var _order: Array = []
+## The traced efficiencies at other suns, one table per DESIGN (spec key,
+## whatever ray count it was solved at): the world's runtime, the graph's
+## heat tick and the designer all read and fill the same table.
+static var _eff_tables := {}
+static var _eff_order: Array = []
+const EFF_TABLES_MAX := 48
 
 
 ## opts: rays (override), light (skip structure / checks / BOM — the
@@ -40,6 +46,20 @@ static func solve(spec: Dictionary, opts: Dictionary = {}) -> Dictionary:
 static func clear_cache() -> void:
 	_cache.clear()
 	_order.clear()
+	_eff_tables.clear()
+	_eff_order.clear()
+
+
+## The shared efficiency table of a design (see _eff_tables).
+static func eff_table(spec_key: String) -> Dictionary:
+	if _eff_tables.has(spec_key):
+		return _eff_tables[spec_key] as Dictionary
+	var t := {}
+	_eff_tables[spec_key] = t
+	_eff_order.append(spec_key)
+	while _eff_order.size() > EFF_TABLES_MAX:
+		_eff_tables.erase(_eff_order.pop_front())
+	return t
 
 
 static func lat_of(spec: Dictionary) -> float:
@@ -50,12 +70,16 @@ static func lat_of(spec: Dictionary) -> float:
 static func design_sun_local(spec: Dictionary) -> Vector3:
 	if CspLabSite.is_field(spec):
 		return CspLabSite.field_basis(spec).transposed() * CspLabSite.design_sun(lat_of(spec))
+	# A level water lens can't face the sun: its best moment is the highest
+	# sun of the year, noon at the summer solstice.
+	if str((spec["tracking"] as Dictionary)["mode"]) == "level":
+		return CspLabSite.solstice_noon_sun(lat_of(spec))
 	return Vector3.UP
 
 
 static func _solve(s: Dictionary, rays: int, light: bool, max_paths: int) -> Dictionary:
 	var g := CspLabOptics.geometry(s)
-	var d := {"spec": s, "geo": g, "eff_cache": {}, "type": str(s["type"])}
+	var d := {"spec": s, "geo": g, "eff_cache": eff_table(CspLabSpec.key_of(s)), "type": str(s["type"])}
 	var sl := design_sun_local(s)
 	var tr := CspLabOptics.trace(g, sl, rays, {"seed": int((s["trace"] as Dictionary)["seed"]), "max_paths": max_paths})
 	d["trace"] = tr
@@ -188,7 +212,9 @@ static func _checks(d: Dictionary) -> Array:
 		var nv := CspLabParts.n_of(str(g["material"]), 0)
 		out.append({"level": "error", "text": "The focal length is too short for this diameter: its surface would be more than a hemisphere. The shortest is about %.2f m." % (float(g["a"]) * 1.02 / (nv - 1.0)),
 			"why": "A plano-convex lens has f = R / (n − 1); the surface radius R can't be smaller than the lens's radius."})
-	if focus == "point" and mode != "two_axis" and t != "ball_lens" and t != "tower":
+	if mode == "level":
+		out.append(level_lens_note(d))
+	elif focus == "point" and mode != "two_axis" and t != "ball_lens" and t != "tower":
 		out.append({"level": "warn", "text": "A point focus on %s spills most of the day: the sun leaves the focus as it moves. Use two-axis tracking." % str(CspLabSpec.TRACKING_MODES[mode]).to_lower(),
 			"why": "A point-focus optic only focuses light that arrives along its axis."})
 	if focus == "line" and mode == "two_axis":
@@ -353,11 +379,27 @@ static func _bom(d: Dictionary) -> Array:
 			n_drv = int(g["rows"])
 		elif mode == "two_axis":
 			n_drv = 2
-		elif mode == "fixed":
+		elif mode == "fixed" or mode == "level":
 			n_drv = 0
 		if n_drv > 0:
 			rows.append({"item": str(drv["label"]), "qty": float(n_drv), "unit": "", "kg": float(drv["kg"]) * n_drv})
 	return rows
+
+
+## A level water lens through the year: how much of the direct sun it puts
+## on the receiver at noon on the summer solstice, at the equinox and in
+## midwinter, and two hours either side of the solstice noon.
+static func level_lens_note(d: Dictionary) -> Dictionary:
+	var lat := lat_of(d["spec"] as Dictionary)
+	var hemi := 1.0 if lat >= 0.0 else -1.0
+	var e_sol := CspLabSite.optical_eff_at(d, CspLabSite.solstice_noon_sun(lat), lat)
+	var e_eq := CspLabSite.optical_eff_at(d, CspLabSite.noon_sun(lat, 0.0), lat)
+	var e_win := CspLabSite.optical_eff_at(d, CspLabSite.noon_sun(lat, -23.44 * hemi), lat)
+	var e_2h := CspLabSite.optical_eff_at(d, CspLabSite.sun_at_decl(lat, 23.44 * hemi, 30.0), lat)
+	return {"level": "warn" if e_eq < e_sol * 0.5 else "info",
+		"text": "A level water lens can't follow the sun. On the receiver: %.0f %% at noon on the summer solstice, %.0f %% two hours either side of it, %.0f %% at noon at the equinox, %.0f %% at midwinter noon. It works best within a couple of hours of noon, late spring to late summer." % [
+			e_sol * 100.0, e_2h * 100.0, e_eq * 100.0, e_win * 100.0],
+		"why": "Off the vertical the focus slides sideways (a lens's focus moves f·tan θ) and leaves the receiver; the sun is only near the vertical around noon in summer."}
 
 
 ## What it weighs to ship and lift: everything but the poured footings.

@@ -1151,6 +1151,9 @@ Godot.exe.exe --headless --path . --script tools/diag/csplab_struct_probe.gd
 # trough placed through the graph
 # (role csplab node, CspLabRuntime facing the sun, heat from the direct beam):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/csplab_designer_check.gd -Label csplab -Timeout 900
+# What placed concentrators cost (one of each kind; csp_* sections at 1x /
+# 60x / 1440x, GPU shown vs hidden vs plain mirrors; CSPB_QUICK=1 skips GPU):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/csplab_bench.gd -Timeout 900
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -4717,6 +4720,107 @@ entry, no CAD export yet.
   put a fat receiver's beams under it (more receiver caught LESS) — aim at
   the skin facing each heliostat (`aim_r`); a missing `--script` file makes
   Godot open the project's main scene and run forever.
+- **Fix + polish pass (2026-11-04).**
+  - ⚠ **Every placed concentrator was the default dish.** The ghost and
+    `PlacedPropRuntime.model_extras` never passed `csplab_spec` to
+    `ModelCatalog`, so placing and Apply built from an empty spec.
+    Both carry it now; the ghost also forwards `windlab_spec` / `pelton_spec`.
+    The designer check asserts the built type for a dish, a trough, the
+    water lens and a Fresnel field, plus Apply turning a dish into a trough.
+    Before, it placed a "trough" without checking what came out.
+  - **Mirrors** use `csplab_mirror.gdshader`, one copy per builder
+    (`_mirror_mat`). It adds the sky gradient in the reflected direction,
+    the ground and the sun's glint over the engine's reflection, because the
+    world's sky radiance often left a metallic 1.0 dish black.
+  - **Receiver glow** (the GLB trough's recipe): emission, OmniLights and
+    additive `csp_focal_glow` cards, all driven by `set_glow_focus(f)`.
+    - f = (DNI now / design DNI) × (optical efficiency at this sun / design
+      efficiency).
+    - `CspLabRuntime` computes it twice a second from real weather.
+    - Below 4 % of the design flux the glow is off.
+    - A line focus gets many small overlapping cards: spaced a card apart
+      they read as pearls.
+  - **The water lens is level, always.** `tracking.mode` "level" and mount
+    `suspended_frame`: four posts and a top frame, the film ring hung under
+    it. `resolve` forces both on a water lens and turns "level" into "fixed"
+    on anything else.
+    - The receiver rides a cart (frame "cart", node `ReceiverCart` /
+      `ReceiverLift`) into the spot: `CspLabOptics.focus_follow` puts it on
+      the chief ray from the curved vertex, at the Coddington
+      least-confusion distance.
+    - The stand lifts at most `FOLLOW_MAX_RISE_M`. Past
+      `FOLLOW_MAX_ZENITH_DEG` (40°) the cart is parked under the lens.
+    - The tracer uses the same offset (`Acc.rec_c`), so the 3D and the
+      numbers agree.
+    - The design point is noon at the summer solstice
+      (`CspLabSite.solstice_noon_sun`).
+    - At 35°N: 28 % at solstice noon, 21 % two hours either side, 3 % at the
+      equinox, 0 in winter. That year line is in the checks
+      (`level_lens_note`).
+    - A frame lower than the focus is an error.
+  - **Drives as degrees for real motors** (`CspLabActuators`, pure).
+    - Channels per mount: azimuth + elevation, hour angle + declination,
+      one-axis rotation, `row<k>`, `h<k>_az` / `h<k>_el`; none when fixed or
+      level. They come from the same pose the builder draws, in the prop's
+      own frame.
+    - The record's `csplab_ha` = {enabled, mode live | always, deadband_deg,
+      min_interval_s, channels: {id: {entity_id, scale, offset, invert,
+      min, max}}}.
+    - `CspLabRuntime` sends through HomeAssistant `call_service`:
+      `input_number` / `number` set_value; `cover` / `valve` take a
+      position as a percentage of the range.
+    - It sends only past the deadband and the interval. In "live" mode it
+      waits for `should_run_realworld_actions`.
+    - UI: the designer's "Motors & Home Assistant" section
+      (`scenes/ui/csplab_motors_panel.gd`). It opens by default for a
+      placed tracker and offers "Name the helpers" and "Copy Home Assistant
+      YAML" (input_number helpers plus an example automation).
+  - Gates: selftest 234 checks, designer check 141.
+- **Performance pass (2026-11-05).** Measured with
+  `tools/bench/csplab_bench.gd` (ten placed concentrators, every kind).
+  The mirror shader was never the cost (0.13 ms GPU for all ten); the CPU
+  was.
+  - **Fields turn, never re-mesh.** A tower / linear Fresnel field's mirrors
+    are ONE MultiMesh of a unit heliostat (or row), and `set_sun` rewrites
+    the instance transforms (`_field_transforms`, a left-handed frame is made
+    right-handed by flipping the symmetric width axis). A 150-heliostat
+    re-mesh was 14–34 ms on every sun move; now 0.1 ms.
+    `field_mirror_transforms()` reads them back (a headless MultiMesh keeps
+    none).
+  - **Efficiency is traced live in chunks.** `CspLabSite.optical_eff_at(...,
+    live = true)` (the runtime's glow and the graph's heat tick) never traces
+    a new sun cell in one go: it queues it, `advance_live(d)` (called every
+    frame by the runtimes and the graph tick) traces chunks of rays inside
+    ONE budget a frame shared by every caller (`LIVE_TRACE_BUDGET_US`
+    2.5 ms), and meanwhile the lookup answers with the partial estimate
+    (≥ 300 rays) or the nearest angle already traced. Designer calls stay
+    whole and deterministic.
+  - **One efficiency table per design.** `CspLabDesign.eff_table(key_of)`:
+    the builder's design, the graph's and the designer's share one table
+    whatever their ray counts. The graph tick caches each node's solved
+    design (`_csplab_designs`, by the spec's hash + latitude) and solves at
+    the builder's ray count.
+  - **One mirror material.** Every placed concentrator shares
+    `CspLabBuilder.shared_mirror()`; the runtimes push the world sun with
+    `push_world_sun` (change-gated, ≤ 2 Hz). The designer's studio builder
+    sets `private_mirror`. The shader is no longer a full mirror (METALLIC
+    0.72, a light albedo, a night floor), so it is lit like any bright
+    surface and never reads black; past `detail_far` (90 m) the painted
+    reflection is one flat sky colour and the glint is skipped.
+  - **Glow and drives.** A line focus's glow cards are one MultiMesh (one
+    draw, one material; `glow_card_count()`). Drive angles are re-derived
+    only when the pose moved (`pose_serial`); Home Assistant is serviced
+    once a second and sends at most `MAX_HA_SENDS` 16 calls a pass, biggest
+    change first, the rest a second later.
+  - Result, ten concentrators at 1440x: frame median 50.8 → 34.4 ms (the
+    world's own), `csp_runtime` 11.0 → 0.2 ms avg (peak 55 → 3.7),
+    `csp_graph` peak 102 → 4.7 ms; F3 sections `csp_runtime` / `csp_pose` /
+    `csp_drives` / `csp_glow` / `csp_ha` / `csp_graph`.
+  - Not done:
+    - The graph tick ignores the prop's yaw.
+    - The prop editor shows no angles.
+    - An inbound HA link (a real tracker's angle driving the sim) is not
+      built.
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 

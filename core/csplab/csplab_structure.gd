@@ -79,6 +79,8 @@ static func solve(d: Dictionary) -> Dictionary:
 			_row_frame(d, out, members, dm, wall)
 		"lattice_tower", "monopole":
 			_tower(d, out, members, dm, wall, mount)
+		"suspended_frame":
+			_suspended_frame(d, out, members, dm, wall, ped)
 	# Mass of every member.
 	var mass := 0.0
 	var conc := 0.0
@@ -269,6 +271,72 @@ static func _lens_frame(d: Dictionary, out: Dictionary, members: Array, dm: floa
 		members.append(_tube(Vector3(s * xl, pv.y, 0), Vector3(s * yw, pv.y, 0), fd * 0.8, wall, "optic", "Trunnion"))
 	out["yoke_half"] = yw
 	out["drop"] = drop
+
+
+## A water lens: a clear film hung LEVEL in a ring under a square top frame
+## on four posts, the water poured on it sagging it into a lens; the
+## receiver stands on the ground under it at the focus. Nothing turns:
+## gravity keeps the water flat. The ring sits at the frame height (the
+## optic frame's rim is pinned there), so the receiver is `ped − rim` up.
+static func _suspended_frame(d: Dictionary, out: Dictionary, members: Array, dm: float, wall: float, ped: float) -> void:
+	var g: Dictionary = d["geo"]
+	var a := float(g["a"])
+	var rim := float(g["y_bot"]) + float(g["sag"])
+	var pl := Vector3(0, rim, 0)
+	out["pivot_local"] = pl
+	out["pivot_world"] = Vector3(0, ped, 0)
+	out["swing_r"] = 0.0
+	var rr := a + 0.04
+	var half := rr + 0.12 + dm
+	var top := ped + 0.05
+	out["frame_span_m"] = half * 2.0
+	var sd := maxf(dm * 0.5, 0.025)
+	var st2 := maxf(wall * 0.7, 0.0015)
+	var corners: Array = [Vector3(-half, 0, -half), Vector3(half, 0, -half), Vector3(half, 0, half), Vector3(-half, 0, half)]
+	for k in 4:
+		var c: Vector3 = corners[k]
+		members.append(_concrete(c, clampf(dm * 4.0, 0.25, 0.6), clampf(ped * 0.25, 0.5, 1.2), "base", "Post footing"))
+		members.append(_tube(c + Vector3(0, 0.1, 0), c + Vector3(0, top, 0), dm, wall, "base", "Corner post"))
+	for k in 4:
+		var c0: Vector3 = corners[k]
+		var c1: Vector3 = corners[(k + 1) % 4]
+		members.append(_tube(c0 + Vector3(0, top, 0), c1 + Vector3(0, top, 0), dm, wall, "base", "Top beam"))
+		# Knee braces at each post, and an X brace low on two opposite sides.
+		var along := (c1 - c0).normalized()
+		var knee := minf(0.5, ped * 0.2)
+		members.append(_tube(c0 + Vector3(0, top - knee, 0), c0 + along * knee + Vector3(0, top, 0), sd, st2, "base", "Knee brace"))
+		members.append(_tube(c1 + Vector3(0, top - knee, 0), c1 - along * knee + Vector3(0, top, 0), sd, st2, "base", "Knee brace"))
+		if k % 2 == 0:
+			var lo := minf(0.35, ped * 0.1)
+			var hi := maxf(ped - knee - 0.1, lo + 0.3)
+			members.append(_tube(c0 + Vector3(0, lo, 0), c1 + Vector3(0, hi, 0), sd * 0.8, st2, "base", "Cross brace"))
+			members.append(_tube(c1 + Vector3(0, lo, 0), c0 + Vector3(0, hi, 0), sd * 0.8, st2, "base", "Cross brace"))
+	# The ring the film is clamped in, hung from the top frame's mid-spans.
+	var nseg := 24
+	var y_ring := ped
+	for k in nseg:
+		var a0 := TAU * k / float(nseg)
+		var a1 := TAU * (k + 1) / float(nseg)
+		members.append(_tube(Vector3(cos(a0) * rr, y_ring, sin(a0) * rr), Vector3(cos(a1) * rr, y_ring, sin(a1) * rr),
+			sd, st2, "base", "Film ring"))
+	for k in 4:
+		var mid: Vector3 = ((corners[k] as Vector3) + (corners[(k + 1) % 4] as Vector3)) * 0.5
+		var dir := Vector3(mid.x, 0, mid.z).normalized()
+		members.append(_tube(dir * rr + Vector3(0, y_ring, 0), mid + Vector3(0, top, 0), sd * 0.6, st2, "base", "Ring hanger"))
+		var cn: Vector3 = corners[k]
+		var cdir := Vector3(cn.x, 0, cn.z).normalized()
+		members.append(_tube(cdir * rr + Vector3(0, y_ring, 0), cn + Vector3(0, top, 0), sd * 0.6, st2, "base", "Ring hanger"))
+	# The receiver on a wheeled stand at the focus, under the lens: the lens
+	# can't follow the sun, so the stand is rolled into the spot (frame
+	# "cart": the optic frame, moved with the spot by the builder).
+	var y_rec := ped - rim + float(g["rec_y"])
+	out["receiver_height_m"] = y_rec
+	var pw := float(g["rec_r"]) * 2.2 + 0.06
+	if y_rec > 0.12:
+		var o := pl - Vector3(0, ped, 0)
+		members.append(_box(o + Vector3(0, 0.02, 0), o + Vector3(0, 0.12, 0), maxf(pw * 1.6, 0.5), maxf(pw * 1.6, 0.5), "cart", 8.0, "Receiver cart"))
+		members.append(_tube(o + Vector3(0, 0.12, 0), o + Vector3(0, y_rec - 0.07, 0), maxf(dm * 0.8, 0.04), wall, "cart", "Receiver stand"))
+		members.append(_box(o + Vector3(0, y_rec - 0.07, 0), o + Vector3(0, y_rec - 0.03, 0), pw, pw, "cart", 2.0, "Receiver plate"))
 
 
 ## A dish, built the way large dishes are: curved ribs and two rings behind
@@ -655,6 +723,29 @@ static func _loads(d: Dictionary, out: Dictionary, mat: Dictionary, dm: float, w
 			loads = {"wind_force_n": f_rec, "base_moment_nm": m_m, "stress_mpa": sig_m / 1e6, "utilisation": util_m,
 				"row_torque_nm": m_row, "drive_turn_nm": turn3, "drive_hold_nm": hold3}
 			_stress_check(checks, util_m, "Receiver mast", sig_m, fy)
+		"suspended_frame":
+			# The water hangs from the ring on the four top beams; each beam
+			# carries a quarter of it as a point load at mid-span (M = PL/4).
+			var water_kg := optic_kg + float(out["mass_kg"]) * 0.25
+			var span := float(out.get("frame_span_m", 1.0))
+			var p_beam := water_kg * G * 0.25
+			var m_beam := p_beam * span / 4.0
+			var sig_b := m_beam / float(tp["Z"])
+			var post_n := water_kg * G * 0.25
+			var post_area := float(tp["A"])
+			var sig_p2 := post_n / post_area
+			var area2 := float(g["A_ap"])
+			var f_w := q_s * 0.6 * area2
+			loads = {"water_kg": water_kg, "beam_moment_nm": m_beam, "stress_mpa": maxf(sig_b, sig_p2) / 1e6,
+				"utilisation": maxf(sig_b, sig_p2) / (fy / SAFETY), "wind_force_n": f_w}
+			_stress_check(checks, sig_b / (fy / SAFETY), "Top beam", sig_b, fy)
+			var y_rec2 := float(out.get("receiver_height_m", 0.0))
+			if y_rec2 < 0.12:
+				checks.append({"level": "error", "text": "The focus is %.2f m below the frame: with the frame %.2f m high the receiver would be under the ground. Raise the frame to at least %.2f m." % [
+					ped - y_rec2, ped, ped - y_rec2 + 0.4],
+					"why": "A level lens focuses straight down, a focal length under the film."})
+			checks.append({"level": "info", "text": "Holds %.0f kg of water %.2f m up; the receiver stands %.2f m above the ground under it." % [optic_kg, ped, y_rec2],
+				"why": "Pour the water slowly and evenly: the film sags into the lens as it fills."})
 		"lattice_tower", "monopole":
 			var H2 := float(g["H"])
 			var a_rec := float(g["panel_w"]) * float(g["panel_h"])
