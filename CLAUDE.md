@@ -3103,6 +3103,56 @@ The Walton check covers:
   back to the same camera, the sibling menu, Home, Alt+Left, the wheel
   resistance); the selftest is now 28 checks (status rules).
 
+**Festival to wire on one wheel (Phase 2, 2026-11-04):**
+- **Tiles.** A camp or vehicle card narrower than `TILE_MAX_PX` (96 px) on
+  screen is drawn as a festival tile (`graph_canvas_v2._draw_system_tile`):
+  - a status ring, one quarter arc each for power, water, food and people
+    (`GraphSystems.ring`, read from the stamped `camp_*` keys or the
+    vehicle's power state and tank levels; the vehicles' power reaches the
+    canvas as `live_power_hint.vehicles`);
+  - the tent or truck icon;
+  - a name under it.
+
+  A tile grows to at least `TILE_MIN_R` but never past half the distance to
+  its nearest neighbour (`_tile_room_for`). Names are placed after every item
+  has drawn (`_draw_tile_labels`): the most urgent first, and none that would
+  land on another name or tile.
+- **Peek.** A group card at least `PEEK_MIN_PX` (340 px) wide (generic groups,
+  camps and vehicles; not arrays, banks or banners; at most `PEEK_MAX_ITEMS`
+  inside) keeps its header and draws its real interior in the body
+  (`_draw_card_peek`): child cards through GraphCard at their true layout,
+  with wires from the bottom edge to the top.
+  - The mapping is `_view_for_bbox_in_rect(child bbox, card_peek_rect(rect))`.
+  - `begin_enter_transition` starts the child canvas from that same rect
+    (`draws_peek`), so entering is not a jump. The check measures the same
+    pixel before and after.
+- **Arrange by site** (Layout ▾, `arrange_systems_by_site`, one undo step):
+  - every system card goes where its system stands, with the site's own nodes
+    in the middle (`GraphSystems.arrange_by_site`: nearest the centre placed
+    first, then pushed out on a spiral);
+  - the scale comes from `auto_px_per_m`, so the median nearest neighbour is
+    a card apart.
+- **Lenses inside a system.**
+  - An island's contents with no map place get one round the island
+    (`GraphSystems.derived_child_sites`, radius `island_radius_m`), in their
+    canvas shape, flagged `site_derived`, and they follow when it moves.
+  - They are written as sim writes (`_derive_island_sites`, from the camp
+    sync, the vehicle sync and `_apply_scope_to_canvas`).
+  - A derived place is never a shade receiver.
+  - In Site Plan, every scope change frames the map on where the items stand
+    (`frame_site_items`). The freeform fits used to push graph coordinates
+    into the map camera.
+  - The Globe stays on the site marker, so a camp far from it is outside the
+    sphere.
+- **Inside cue.** Every lens draws a frame in the system's colour and
+  "Inside <name>" low on the canvas (`_draw_inside_cue`).
+- Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_festival_check.gd -Label graph_festival -Timeout 900`
+  (12 checks: arrange with no overlaps and the map's east–west order, every
+  camp a tile, the peek, the enter starting on the peek's pixel, a real wheel
+  zoom through the peek into the camp, Site Plan inside with every item
+  placed and on screen, Esc back out with the camp in view). The selftest is
+  now 42 checks.
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a

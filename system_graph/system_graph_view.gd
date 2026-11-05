@@ -259,6 +259,7 @@ const LAYOUT_LIVE := 11
 const LAYOUT_PIN := 12
 const LAYOUT_UNPIN := 13
 const LAYOUT_SETTINGS := 14
+const LAYOUT_BY_SITE := 15
 var _ctrl_picker_dialog: AcceptDialog = null
 var _ctrl_picker_list: ItemList = null
 var _ctrl_picker_array_id: String = ""
@@ -2461,6 +2462,9 @@ func _build_topbar() -> Control:
 		+ "Tidy keeps each array as one grid, one row per series string. Alt drags freely.")
 	lp.set_item_checked(lp.get_item_index(LAYOUT_PV_SNAP), PvGridSnap.enabled())
 	lp.add_separator()
+	lp.add_item("Arrange systems by site", LAYOUT_BY_SITE)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_BY_SITE),
+		"Put every camp and vehicle card where it stands on the map, around the site's own nodes")
 	lp.add_item("Only remove overlaps", LAYOUT_ARRANGE)
 	lp.add_item("Spawn 3D placeholder", LAYOUT_PLACEHOLDER)
 	lp.id_pressed.connect(_on_layout_menu_id)
@@ -9945,6 +9949,7 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 				_history_suppress = true
 				model.update_item(existing, {"specs": specs, "site_x_m": site.x, "site_z_m": site.y})
 				_history_suppress = false
+			_derive_island_sites(existing)
 			return existing
 		pos = Vector2(float(it.get("x", pos.x)), float(it.get("y", pos.y)))
 		soc = _vehicle_battery_soc(existing)
@@ -9967,6 +9972,7 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 			_set_vehicle_battery_soc(cid, soc)
 	_history_suppress = false
 	_sim_bulk_update = was_bulk
+	_derive_island_sites(cid)
 	_on_model_changed("add_item")
 	_schedule_graph_autosave()
 	return cid
@@ -11581,6 +11587,7 @@ func _on_layout_menu_id(id: int) -> void:
 		LAYOUT_PIN:         _pin_selection(true)
 		LAYOUT_UNPIN:       _pin_selection(false)
 		LAYOUT_SETTINGS:    _open_layout_settings()
+		LAYOUT_BY_SITE:     arrange_systems_by_site()
 		LAYOUT_PV_SNAP:
 			var on := not PvGridSnap.enabled()
 			PvGridSnap.set_pref("enabled", on)
@@ -12430,6 +12437,9 @@ func focus_graph_item(item_id: String, enter: bool = false) -> void:
 
 
 func _apply_scope_to_canvas() -> void:
+	if model != null and _active_scope_id != "root":
+		var ow := str(model.get_scope(_active_scope_id).get("owner_compound_id", ""))
+		_derive_island_sites(ow)
 	if _graph_canvas != null:
 		_graph_canvas.set("active_scope_id", _active_scope_id)
 		_graph_canvas.call("queue_redraw")
@@ -16593,6 +16603,8 @@ func _sync_graph_energy_from_solar() -> void:
 			# island compound id: a battery card inside a vehicle reads its
 			# own bus, never the site battery's flow.
 			"islands": island_battery_flows(),
+			# The festival tiles' power arc for vehicles (GraphSystems.ring).
+			"vehicles": _veh_power,
 		})
 
 	# Bootcamp sandbox: only panels with both terminals wired make power (the
@@ -17761,7 +17773,7 @@ func designed_array_shade(tag: String) -> float:
 
 func _pv_is_shade_receiver(item: Dictionary) -> bool:
 	return GraphSolarShading.is_receiver_type(str(item.get("type", ""))) \
-		and GraphSiteLayout.has_site_coords(item)
+		and GraphSiteLayout.has_site_coords(item) and not bool(item.get("site_derived", false))
 
 
 ## World sample origin of a placed PV source, cached on its site + elevation
@@ -19163,7 +19175,9 @@ func _tick_graph_solar_shading(delta: float) -> void:
 			continue
 		if not GraphSolarShading.is_receiver_type(str(item.get("type", ""))):
 			continue
-		if not GraphSiteLayout.has_site_coords(item):
+		# A place made up for the lenses (an island's contents) is no place
+		# to cast shade rays from.
+		if not GraphSiteLayout.has_site_coords(item) or bool(item.get("site_derived", false)):
 			continue
 		receivers.append(item)
 	if receivers.is_empty():
@@ -20173,6 +20187,7 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 	out["unstacked"] = _unstack_system_cards()
 	_sim_bulk_update = false
 	_history_suppress = false
+	out["derived"] = _derive_all_island_sites()
 	if int(out["added"]) + int(out["updated"]) + int(out["removed"]) + int(out["unstacked"]) > 0:
 		_on_model_changed("camps_synced")
 	return out
@@ -20247,6 +20262,95 @@ func _unstack_system_cards() -> int:
 			moved += 1
 		placed.append(r)
 	_history_suppress = was_hist
+	return moved
+
+
+## Site positions for an island's contents (Phase 2): a camp's tanks and a
+## vehicle's panels have no place on the map, so Site Plan / Globe /
+## Elevation showed an empty sub-graph. They are laid round the island's own
+## site point in their canvas shape (GraphSystems.derived_child_sites),
+## flagged `site_derived` (never a shade receiver), and follow the island
+## when it moves. Written as sim writes: a made-up layout must not drop a
+## rendered sim range. Returns how many moved.
+func _derive_island_sites(compound_id: String) -> int:
+	if model == null or compound_id.is_empty():
+		return 0
+	var comp := model.get_item(compound_id)
+	if comp.is_empty() or not GraphSystems.is_power_island(comp):
+		return 0
+	var want := GraphSystems.derived_child_sites(model, comp, GraphSystems.island_radius_m(comp))
+	var n := 0
+	_begin_sim_writes()
+	for kid_id: String in want.keys():
+		var p: Vector2 = want[kid_id]
+		var kid := model.get_item(kid_id)
+		if bool(kid.get("site_derived", false)) and GraphSiteLayout.site_xz(kid).distance_to(p) < 0.05:
+			continue
+		model.update_item(kid_id, {"site_x_m": p.x, "site_z_m": p.y, "site_derived": true})
+		n += 1
+	_end_sim_writes()
+	if n > 0 and _graph_canvas != null:
+		_graph_canvas.queue_redraw()
+	return n
+
+
+## Every island at root (camp sync, vehicle sync).
+func _derive_all_island_sites() -> int:
+	var n := 0
+	if model == null:
+		return 0
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		if GraphSystems.is_power_island(d):
+			n += _derive_island_sites(str(d.get("id", "")))
+	return n
+
+
+## Layout ▾ → "Arrange systems by site": every camp and vehicle card where its
+## system stands on the map, around the site's own nodes, no two overlapping
+## (GraphSystems.arrange_by_site). One undo step. Returns how many moved.
+func arrange_systems_by_site() -> int:
+	if model == null:
+		return 0
+	var cards: Array = []
+	var sites: Array = []
+	var home := Rect2()
+	var have_home := false
+	var card := Vector2(220.0, 150.0)
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		var r := Rect2(float(d.get("x", 0.0)), float(d.get("y", 0.0)),
+			float(d.get("width", 150.0)), float(d.get("height", 120.0)))
+		if GraphSystems.is_power_island(d) and GraphSiteLayout.has_site_coords(d):
+			cards.append({"id": str(d.get("id", "")), "site": GraphSiteLayout.site_xz(d), "size": r.size})
+			sites.append(GraphSiteLayout.site_xz(d))
+			card = card.max(r.size)
+		elif not bool(d.get("is_virtual", false)):
+			home = r if not have_home else home.merge(r)
+			have_home = true
+	if cards.is_empty():
+		_show_toast("No camps or vehicles with a place on the map")
+		return 0
+	var origin := home.get_center() if have_home else Vector2.ZERO
+	var ppm := GraphSystems.auto_px_per_m(sites, card)
+	var obstacles: Array = [home] if have_home else []
+	var pos := GraphSystems.arrange_by_site(cards, obstacles, origin, ppm)
+	var moved := 0
+	_history_suppress = true
+	for id: String in pos.keys():
+		var p: Vector2 = pos[id]
+		var it2 := model.get_item(id)
+		if Vector2(float(it2.get("x", 0.0)), float(it2.get("y", 0.0))).distance_to(p) < 0.5:
+			continue
+		model.update_item(id, {"x": p.x, "y": p.y})
+		moved += 1
+	_history_suppress = false
+	if moved > 0:
+		_push_history()
+		_schedule_graph_autosave()
+	if _graph_canvas != null and _graph_canvas.has_method("fit_scope_to_view") and _active_scope_id == "root":
+		_graph_canvas.call("fit_scope_to_view")
+	_show_toast("%s placed by where they stand" % UiText.count(cards.size(), "system"))
 	return moved
 
 

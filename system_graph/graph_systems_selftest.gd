@@ -9,7 +9,7 @@ extends SceneTree
 ## Pure / offline. Run --import first.
 ##   godot --headless --path . --script system_graph/graph_systems_selftest.gd
 
-const EXPECTED_CHECKS := 28
+const EXPECTED_CHECKS := 42
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 var _failures := 0
@@ -21,6 +21,9 @@ func _init() -> void:
 	_test_camp_island_and_nesting()
 	_test_ac_reach_and_losses()
 	_test_status()
+	_test_ring()
+	_test_arrange_by_site()
+	_test_derived_sites()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -211,3 +214,78 @@ func _test_status() -> void:
 		str(GraphSystems.status(model, vi, {"soc_kwh": cap * 0.1, "ac_available": true})["level"]) == "warn")
 	_check("a vehicle whose AC is down is critical",
 		str(GraphSystems.status(model, vi, {"soc_kwh": cap * 0.5, "ac_available": false})["level"]) == "crit")
+
+
+func _test_ring() -> void:
+	var model = GraphModelScript.new()
+	var def := CampTemplates.definition("theme_camp", 12)
+	model.put_definition(def)
+	var camp: String = GraphComponentDefs.realize(model, str(def["id"]), "root", Vector2.ZERO,
+		{"camp_lot_id": "lot_r", "camp_headcount": 12, "name": "Camp R"})
+	var sp: Dictionary = (model.get_item(camp).get("specs", {}) as Dictionary).duplicate(true)
+	sp["camp_ac"] = true
+	sp["camp_soc"] = 0.8
+	sp["camp_open"] = ["greywater"]
+	sp["camp_morale"] = 0.3
+	model.update_item(camp, {"specs": sp})
+	var r := GraphSystems.ring(model, model.get_item(camp))
+	_check("ring: power ok with charge", r["power"] == "ok", str(r))
+	_check("ring: an open greywater loop warns on water", r["water"] == "warn")
+	_check("ring: food closed is ok", r["food"] == "ok")
+	_check("ring: low morale is critical", r["people"] == "crit")
+	sp["camp_ac"] = false
+	model.update_item(camp, {"specs": sp})
+	_check("ring: no power is critical", GraphSystems.ring(model, model.get_item(camp))["power"] == "crit")
+	var veh := _vehicle(model, "prop_ring")
+	var vr := GraphSystems.ring(model, model.get_item(veh))
+	_check("ring: a parked vehicle with no power state is idle", vr["power"] == "idle", str(vr))
+	_check("ring: a vehicle has a water arc from its tanks", vr["water"] != "idle", str(vr))
+
+
+func _test_arrange_by_site() -> void:
+	var cards: Array = []
+	for i in 12:
+		# A tight festival: twelve camps 10 m apart in a row.
+		cards.append({"id": "c%02d" % i, "site": Vector2(float(i) * 10.0 - 55.0, 40.0), "size": Vector2(220, 150)})
+	var home := Rect2(-200, -150, 400, 300)
+	var ppm := GraphSystems.auto_px_per_m(cards.map(func(c): return c["site"]), Vector2(220, 150))
+	_check("auto scale spreads 10 m neighbours a card apart", ppm * 10.0 >= 220.0, str(ppm))
+	var pos := GraphSystems.arrange_by_site(cards, [home], Vector2.ZERO, ppm)
+	var rects: Array[Rect2] = []
+	for c: Dictionary in cards:
+		rects.append(Rect2(pos[c["id"]] as Vector2, c["size"] as Vector2))
+	var overlaps := 0
+	for i in rects.size():
+		if rects[i].intersects(home):
+			overlaps += 1
+		for j in range(i + 1, rects.size()):
+			if rects[i].intersects(rects[j]):
+				overlaps += 1
+	_check("no two system cards overlap, none on the site's nodes", overlaps == 0, str(overlaps))
+	var ordered := true
+	for i in range(1, rects.size()):
+		if rects[i].get_center().x < rects[i - 1].get_center().x - 1.0:
+			ordered = false
+	_check("west to east on the map stays west to east on the canvas", ordered)
+	var again := GraphSystems.arrange_by_site(cards, [home], Vector2.ZERO, ppm)
+	_check("arrange by site is deterministic", again == pos)
+
+
+func _test_derived_sites() -> void:
+	var model = GraphModelScript.new()
+	var def := CampTemplates.definition("theme_camp", 12)
+	model.put_definition(def)
+	var camp: String = GraphComponentDefs.realize(model, str(def["id"]), "root", Vector2.ZERO,
+		{"camp_lot_id": "lot_d", "camp_headcount": 12, "name": "Camp D"})
+	model.update_item(camp, {"site_x_m": 100.0, "site_z_m": -40.0})
+	var comp: Dictionary = model.get_item(camp)
+	var kids := model.get_items_in_scope(str(comp.get("child_scope_id", "")))
+	var keep := str((kids[0] as Dictionary).get("id", ""))
+	model.update_item(keep, {"site_x_m": 1.0, "site_z_m": 2.0})
+	var want := GraphSystems.derived_child_sites(model, model.get_item(camp), 14.0)
+	_check("every unplaced camp item gets a map place", want.size() == kids.size() - 1, "%d of %d" % [want.size(), kids.size()])
+	_check("an item with its own place keeps it", not want.has(keep))
+	var far := 0.0
+	for id in want.keys():
+		far = maxf(far, (want[id] as Vector2).distance_to(Vector2(100.0, -40.0)))
+	_check("the places sit round the camp, inside its radius", far <= 14.0 * 1.42 + 0.01, str(far))

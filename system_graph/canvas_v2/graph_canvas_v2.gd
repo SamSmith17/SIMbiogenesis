@@ -95,7 +95,10 @@ func _hover_port_identity() -> String:
 
 func _draw() -> void:
 	_card_ctx = _build_card_ctx()
+	_tile_labels.clear()
 	super._draw()
+	_draw_tile_labels()
+	_draw_inside_cue()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		return
 	# Reuse the per-draw visible cache (still populated by super._draw) for the
@@ -322,6 +325,16 @@ func _render_card_v2(item: Dictionary) -> void:
 	spec["selected"] = (iid == selected_item_id) or selected_item_ids.has(iid)
 	if bool(item.get("is_ghost", false)) or (not _path_items.is_empty() and not _path_items.has(iid)):
 		spec["dim"] = true
+	# Semantic zoom for systems (Phase 2): a camp / vehicle far out is a
+	# festival TILE; close in, the card shows its real interior (the peek).
+	if itype == "compound":
+		if not GraphSystems.island_kind(item).is_empty() and sz.x < TILE_MAX_PX:
+			_draw_system_tile(item, Rect2(tl, sz), bool(spec["selected"]))
+			return
+		if draws_peek(item, Rect2(tl, sz)):
+			_draw_card_peek(item, Rect2(tl, sz), spec)
+			_draw_item_handles(item, tl, sz)
+			return
 	if bool(spec.get("hub", false)):
 		GraphCard.draw_hub(self, Rect2(tl, sz), _zoom, spec)
 		var r := GraphHubPorts.circle_radius(sz)
@@ -337,6 +350,244 @@ func _render_card_v2(item: Dictionary) -> void:
 			spec.get("accent", GraphTheme.TEXT_DIM) as Color, str(spec.get("icon", "box")))
 	_draw_item_handles(item, tl, sz)
 	_draw_port_annotations(item)
+
+
+# ---------------------------------------------------------------------------
+# Systems at festival scale (plans/GRAPH_SYSTEMS_UX_PLAN.md Phase 2).
+# Far out a camp or vehicle card is a TILE: a status ring (power / water /
+# food / people, GraphSystems.ring), its icon and a decluttered name. Close
+# in, any group card draws its real interior inside itself at its true
+# layout (the PEEK), with exactly the mapping the scope swap starts from.
+# ---------------------------------------------------------------------------
+## On-screen card width below which a system card is a tile.
+const TILE_MAX_PX := 96.0
+## A tile never shrinks below this radius (a festival stays readable).
+const TILE_MIN_R := 11.0
+## On-screen card width from which a group card shows its live interior.
+const PEEK_MIN_PX := 340.0
+## A group with more inside than this keeps its plain card (cost).
+const PEEK_MAX_ITEMS := 80
+const RING_COLORS := {
+	"ok": Color(0.36, 0.86, 0.52), "warn": Color(0.98, 0.72, 0.28),
+	"crit": Color(0.98, 0.36, 0.36), "idle": Color(0.42, 0.48, 0.58),
+}
+const RING_RANK := {"crit": 3, "warn": 2, "ok": 1, "idle": 0}
+var _tile_labels: Array = []
+## Per draw: system card id -> half the screen distance to its nearest
+## system card, so the minimum tile size never makes neighbours overlap.
+var _tile_room: Dictionary = {}
+var _tile_room_key := ""
+
+
+func _tile_room_for(item_id: String) -> float:
+	var key := "%d|%.5f|%s" % [Engine.get_frames_drawn(), _zoom, str(_pan)]
+	if key != _tile_room_key:
+		_tile_room_key = key
+		_tile_room.clear()
+		var pts: Array = []
+		for it in model.get_items_in_scope(active_scope_id):
+			var d: Dictionary = it
+			if GraphSystems.is_power_island(d):
+				pts.append([str(d.get("id", "")), Vector2(float(d.get("x", 0.0)) + float(d.get("width", 220.0)) * 0.5,
+					float(d.get("y", 0.0)) + float(d.get("height", 150.0)) * 0.5) * _zoom])
+		for i in pts.size():
+			var best := INF
+			for j in pts.size():
+				if i != j:
+					best = minf(best, (pts[i][1] as Vector2).distance_to(pts[j][1] as Vector2))
+			_tile_room[pts[i][0]] = best * 0.5 - 1.0
+	return float(_tile_room.get(item_id, INF))
+
+
+func draws_peek(item: Dictionary, screen_rect: Rect2) -> bool:
+	if not unified_cards or view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		return false
+	if screen_rect.size.x < PEEK_MIN_PX or str(item.get("type", "")) != "compound":
+		return false
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	if str(sp.get("compound_kind", "")) != "" or _compound_displays_as_battery(sp):
+		return false
+	if bool(sp.get("node_banner", false)) and not str(sp.get("model_id", "")).is_empty():
+		return false
+	var cs := str(item.get("child_scope_id", ""))
+	if cs.is_empty() or model == null:
+		return false
+	var n := model.get_items_in_scope(cs).size()
+	return n > 0 and n <= PEEK_MAX_ITEMS
+
+
+func _draw_system_tile(item: Dictionary, rect: Rect2, selected: bool) -> void:
+	var c := rect.get_center()
+	var own := minf(rect.size.x, rect.size.y) * 0.5
+	var r := maxf(own, minf(TILE_MIN_R, _tile_room_for(str(item.get("id", "")))))
+	r = maxf(r, 4.0)
+	var kind := GraphSystems.island_kind(item)
+	var power: Dictionary = (live_power_hint.get("vehicles", {}) as Dictionary).get(str(item.get("id", "")), {})
+	var ring := GraphSystems.ring(model, item, power)
+	GraphFastDraw.disc(self, c + Vector2(0.0, 2.0), r, GraphTheme.CARD_SHADOW)
+	GraphFastDraw.disc(self, c, r, GraphTheme.CARD_BG)
+	var w := maxf(2.0, r * 0.2)
+	var worst := "idle"
+	for i in GraphSystems.RING_KEYS.size():
+		var lvl := str(ring.get(GraphSystems.RING_KEYS[i], "idle"))
+		if int(RING_RANK[lvl]) > int(RING_RANK[worst]):
+			worst = lvl
+		# Quarter arcs from the top, clockwise, a small gap between.
+		var a0 := -PI * 0.5 + i * PI * 0.5 + 0.12
+		draw_arc(c, r - w * 0.5, a0, a0 + PI * 0.5 - 0.24, 10, RING_COLORS[lvl] as Color, w, true)
+	var accent := Color(0.94, 0.62, 0.36) if kind == GraphSystems.KIND_CAMP else Color(0.45, 0.75, 0.95)
+	GraphCard._draw_icon(self, "tent" if kind == GraphSystems.KIND_CAMP else "truck", c, r * 0.95, accent)
+	if selected:
+		GraphFastDraw.ring(self, c, r + 3.0, GraphTheme.SELECTED, 2.0)
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	_tile_labels.append({"name": str(sp.get("name", item.get("label", ""))), "c": c, "r": r,
+		"rank": int(RING_RANK[worst]) + (10 if selected else 0), "color": RING_COLORS[worst]})
+
+
+## Names under the tiles, most urgent first; a name that would land on
+## another name or another tile is left out (hover / the outliner name it).
+func _draw_tile_labels() -> void:
+	if _tile_labels.is_empty():
+		return
+	var discs: Array[Rect2] = []
+	for t: Dictionary in _tile_labels:
+		discs.append(Rect2(t["c"] - Vector2(t["r"], t["r"]), Vector2(t["r"], t["r"]) * 2.0))
+	var order := _tile_labels.duplicate()
+	order.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["rank"]) != int(b["rank"]):
+			return int(a["rank"]) > int(b["rank"])
+		return float(a["r"]) > float(b["r"]))
+	var fnt := UITheme.font("semibold")
+	var fs := 11
+	var placed: Array[Rect2] = []
+	var view := Rect2(Vector2.ZERO, size)
+	for t: Dictionary in order:
+		var nm := UiText.fit(fnt, str(t["name"]), fs, 140.0, "festival tile name")
+		if nm.is_empty():
+			continue
+		var tw := fnt.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var c: Vector2 = t["c"]
+		var lr := Rect2(Vector2(c.x - tw * 0.5 - 4.0, c.y + float(t["r"]) + 3.0), Vector2(tw + 8.0, fs + 6.0))
+		if not view.encloses(lr):
+			continue
+		var clash := false
+		for p: Rect2 in placed:
+			if p.intersects(lr):
+				clash = true
+				break
+		if not clash:
+			for d: Rect2 in discs:
+				if d.intersects(lr) and not d.has_point(c):
+					clash = true
+					break
+		if clash:
+			continue
+		placed.append(lr)
+		GraphFastDraw.rrect(self, lr, lr.size.y * 0.5, Color(0.04, 0.06, 0.10, 0.82))
+		var col: Color = t["color"]
+		var tc := Color(0.9, 0.93, 0.98) if int(t["rank"]) % 10 <= 1 else col
+		draw_string(fnt, Vector2(lr.position.x + 4.0, lr.end.y - 5.0), nm,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, tc)
+
+
+## The group card with its real interior drawn inside it: the header stays
+## (name, chip), the body is the child canvas at its true layout, mapped
+## exactly as finish_enter_transition will start it.
+func _draw_card_peek(item: Dictionary, rect: Rect2, spec: Dictionary) -> void:
+	var head := spec.duplicate()
+	for k in ["hero", "sub", "footer", "bar", "fill", "media", "alert"]:
+		head.erase(k)
+	GraphCard.draw(self, rect, _zoom, head)
+	var pr := card_peek_rect(rect)
+	var cs := str(item.get("child_scope_id", ""))
+	var gb := _scope_content_graph_bbox(cs)
+	var m := _view_for_bbox_in_rect(gb, pr)
+	if not bool(m.get("ok", false)):
+		return
+	var zc := float(m["zoom"])
+	var origin := size * 0.5 + (m["pan"] as Vector2)
+	GraphFastDraw.rrect(self, pr.grow(2.0), maxf(3.0, 6.0 * _zoom), Color(0.02, 0.035, 0.06, 0.55))
+	var kids: Array = model.get_items_in_scope(cs)
+	var rects: Dictionary = {}
+	for k_v in kids:
+		var k: Dictionary = k_v
+		rects[str(k.get("id", ""))] = Rect2(origin + Vector2(float(k.get("x", 0.0)), float(k.get("y", 0.0))) * zc,
+			Vector2(float(k.get("width", 120.0)), float(k.get("height", 90.0))) * zc)
+	# Wires first: outputs leave the bottom edge, inputs arrive on the top.
+	for c_v in model.get_connections_in_scope(cs):
+		var cd: Dictionary = c_v
+		var a: Variant = rects.get(str(cd.get("source_item_id", "")))
+		var b: Variant = rects.get(str(cd.get("target_item_id", "")))
+		if not (a is Rect2 and b is Rect2):
+			continue
+		var p0 := Vector2((a as Rect2).get_center().x, (a as Rect2).end.y)
+		var p3 := Vector2((b as Rect2).get_center().x, (b as Rect2).position.y)
+		var bend := maxf(30.0 * zc, absf(p3.y - p0.y) * 0.4)
+		var rk := str(cd.get("resource_kind", ""))
+		var col: Color = ResourceKinds.wire_color(rk) if not rk.is_empty() \
+			else PORT_COLORS.get(str(cd.get("polarity", "")), C_PRIMARY) as Color
+		col.a = 0.85 if bool(cd.get("flow_active", false)) else 0.45
+		var pts := PackedVector2Array()
+		for i in 13:
+			var t := float(i) / 12.0
+			var u := 1.0 - t
+			pts.append(p0 * u * u * u + (p0 + Vector2(0, bend)) * 3.0 * u * u * t
+				+ (p3 - Vector2(0, bend)) * 3.0 * u * t * t + p3 * t * t * t)
+		draw_polyline(pts, col, maxf(1.0, 2.0 * zc), true)
+	for k_v in kids:
+		var k: Dictionary = k_v
+		var kr: Rect2 = rects[str(k.get("id", ""))]
+		if not kr.intersects(Rect2(Vector2.ZERO, size)):
+			continue
+		var kt := str(k.get("type", ""))
+		if GraphCardSpecs.handles(kt):
+			_card_ctx["live_w"] = -1.0
+			_card_ctx["agg_soc"] = -1.0
+			var ks := GraphCardSpecs.for_item(k, _card_ctx)
+			if bool(ks.get("hub", false)):
+				GraphCard.draw_hub(self, kr, zc, ks)
+			else:
+				GraphCard.draw(self, kr, zc, ks)
+		else:
+			var acc := NODE_BORDER_COLORS.get(kt, C_BORDER) as Color
+			GraphFastDraw.rrect_box(self, kr, maxf(2.0, 8.0 * zc), GraphTheme.CARD_BG,
+				Color(acc.r, acc.g, acc.b, 0.8), 1)
+			GraphCard._draw_icon(self, GraphTheme.icon(kt), kr.get_center(),
+				minf(kr.size.x, kr.size.y) * 0.5, acc)
+
+
+## "You are inside X" in every lens: a soft frame in the system's colour and
+## its name low on the canvas. Only the breadcrumb used to say where you were.
+func _draw_inside_cue() -> void:
+	if model == null or active_scope_id == "root":
+		return
+	var sc := model.get_scope(active_scope_id)
+	var owner := model.get_item(str(sc.get("owner_compound_id", "")))
+	if owner.is_empty():
+		return
+	var kind := GraphSystems.island_kind(owner)
+	var accent := C_PRIMARY
+	var icon := "box"
+	if kind == GraphSystems.KIND_CAMP:
+		accent = Color(0.94, 0.62, 0.36)
+		icon = "tent"
+	elif kind == GraphSystems.KIND_VEHICLE:
+		accent = Color(0.45, 0.75, 0.95)
+		icon = "truck"
+	draw_rect(Rect2(Vector2(3.0, 3.0), size - Vector2(6.0, 6.0)),
+		Color(accent.r, accent.g, accent.b, 0.30), false, 4.0)
+	var nm := str((owner.get("specs", {}) as Dictionary).get("name", sc.get("title", "")))
+	if nm.is_empty():
+		return
+	var fnt := UITheme.font("semibold")
+	var fs := 22
+	var text := "Inside %s" % nm
+	var tw := fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var y := size.y - 118.0
+	GraphCard._draw_icon(self, icon, Vector2(30.0, y - fs * 0.35), float(fs) + 4.0,
+		Color(accent.r, accent.g, accent.b, 0.55))
+	draw_string(fnt, Vector2(48.0, y), text, HORIZONTAL_ALIGNMENT_LEFT, minf(tw + 4.0, size.x - 60.0), fs,
+		Color(accent.r, accent.g, accent.b, 0.55))
 
 
 ## Port names beside the dots (zoomed in) and a wire count on any port that

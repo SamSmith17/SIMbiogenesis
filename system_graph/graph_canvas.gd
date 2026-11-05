@@ -2005,9 +2005,50 @@ func _view_for_bbox_in_rect(graph_bbox: Rect2, screen_rect: Rect2) -> Dictionary
 	return {"ok": true, "zoom": z, "pan": rc - center - gc * z}
 
 
+## Site Plan framing (Phase 2): the map zoomed onto where `ids` stand (their
+## site coords), at least `min_r_m` across. The freeform fits below map GRAPH
+## coords into _zoom / _pan, which in a map lens threw the camera somewhere
+## meaningless whenever a scope changed. False when nothing has a place.
+func frame_site_items(ids: Array, min_r_m: float = 12.0) -> bool:
+	if view_mode != GraphSiteLayout.VIEW_SITE or model == null:
+		return false
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	var n := 0
+	for id_v in ids:
+		var it := model.get_item(str(id_v))
+		if it.is_empty() or not GraphSiteLayout.has_site_coords(it):
+			continue
+		var p := GraphSiteLayout.site_xz(it)
+		lo = lo.min(p)
+		hi = hi.max(p)
+		n += 1
+	if n == 0:
+		return false
+	var mid := (lo + hi) * 0.5
+	var r_m := maxf((hi - lo).length() * 0.5 + 6.0, min_r_m)
+	var ppm := minf(size.x, size.y) * 0.42 / r_m
+	var z := clampf(ppm / GraphSiteLayout.SOI_PX_PER_M, ZOOM_MIN, ZOOM_MAX)
+	_animate_view(z, -mid * GraphSiteLayout.px_per_m(z), 0.3)
+	return true
+
+
+## Every item in a scope (frame_site_items over the scope).
+func frame_site_scope(scope_id: String) -> bool:
+	if model == null:
+		return false
+	var ids: Array = []
+	for it in model.get_items_in_scope(scope_id):
+		ids.append(str((it as Dictionary).get("id", "")))
+	return frame_site_items(ids)
+
+
 ## Fit the active scope's contents to the viewport (used after a scope switch so
 ## the drill-in / pop-out lands on a comfortable, centered framing).
 func fit_scope_to_view(pad_frac: float = 0.16) -> void:
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		frame_site_scope(active_scope_id)
+		return
 	var fit := _scope_fit_view(active_scope_id, pad_frac)
 	if not bool(fit.get("ok", false)):
 		# Empty scope (e.g. hollow imported array) — neutral centered zoom.
@@ -2073,7 +2114,7 @@ func restore_scope_cam(focus_id: String = "") -> bool:
 		return false
 	var z := float(cam["zoom"])
 	var p: Vector2 = cam["pan"]
-	if not focus_id.is_empty() and model != null:
+	if not focus_id.is_empty() and model != null and view_mode == GraphSiteLayout.VIEW_FREEFORM:
 		var it := model.get_item(focus_id)
 		if not it.is_empty():
 			var r := Rect2(Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))),
@@ -2089,6 +2130,8 @@ func restore_scope_cam(focus_id: String = "") -> bool:
 func fit_items_to_view(ids: Array, pad_frac: float = 0.18) -> bool:
 	if model == null or ids.is_empty():
 		return false
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		return frame_site_items(ids)
 	var min_p := Vector2(1e20, 1e20)
 	var max_p := Vector2(-1e20, -1e20)
 	var n := 0
@@ -2117,6 +2160,24 @@ func play_content_fade() -> void:
 	_play_content_fade()
 
 
+## Live peek (Phase 2): a big system card draws its real interior inside
+## itself, mapped into this rect, and the scope swap starts the child canvas
+## from EXACTLY that mapping, so the commit is not a jump. The rect is the
+## card below its header (GraphCard.layout), inset by the card's padding.
+func card_peek_rect(rect: Rect2) -> Rect2:
+	var lay := GraphCard.layout(rect, _zoom)
+	var header: Rect2 = lay["header"]
+	var pad: float = lay["pad"]
+	return Rect2(Vector2(rect.position.x + pad, header.end.y + pad * 0.5),
+		Vector2(maxf(1.0, rect.size.x - pad * 2.0), maxf(1.0, rect.end.y - header.end.y - pad * 1.5)))
+
+
+## Whether `item`, drawn at `screen_rect`, shows its live peek (the V2 canvas
+## overrides; the base canvas has no peek).
+func draws_peek(_item: Dictionary, _screen_rect: Rect2) -> bool:
+	return false
+
+
 ## Called by the view BEFORE it swaps into `compound_id`'s child scope: remember
 ## where the collapsed body currently sits on screen.
 func begin_enter_transition(compound_id: String) -> void:
@@ -2130,11 +2191,17 @@ func begin_enter_transition(compound_id: String) -> void:
 		return
 	var center := size * 0.5
 	_enter_from_rect = Rect2(_item_screen_tl(it, center), _item_screen_size(it))
+	if draws_peek(it, _enter_from_rect):
+		_enter_from_rect = card_peek_rect(_enter_from_rect)
 
 
 ## Called by the view AFTER the swap: start the child content mapped onto the
 ## saved body rect, then tween to the comfortable fit. Falls back to a plain fit.
 func finish_enter_transition() -> void:
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		frame_site_scope(active_scope_id)
+		_play_content_fade()
+		return
 	var fit := _scope_fit_view(active_scope_id)
 	if not bool(fit.get("ok", false)):
 		fit_scope_to_view()
@@ -2161,6 +2228,13 @@ func begin_pop_transition() -> void:
 ## left. Start framed so that compound's body fills where the child content was,
 ## then tween to a comfortable parent framing.
 func finish_pop_transition(owner_compound_id: String) -> void:
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		# Back on the map: the remembered camera here, else framed on the
+		# system just left.
+		if not restore_scope_cam():
+			frame_site_items([owner_compound_id], 30.0)
+		_play_content_fade()
+		return
 	var target := _scope_fit_view(active_scope_id)
 	# Back to the camera the player had here, framed on the compound they left.
 	var cam := scope_cam(active_scope_id)
