@@ -15,6 +15,10 @@ const REFRESH_SLOW_MS := 1000
 var _graph_view: Node = null
 var _mode := "build"
 var _refresh_acc := 0.0
+var _tick_last_ms := 0
+const TICK_REFRESH_MS := 100
+var _closure_last_ms := 0
+const CLOSURE_REFRESH_MS := 500
 
 var _solar_lbl: Label = null
 var _aux_lbl: Label = null
@@ -106,12 +110,15 @@ func refresh(force: bool = false) -> void:
 	PerfSpan.begin("gv_dash_power")
 	_refresh_power()
 	PerfSpan.end("gv_dash_power")
-	PerfSpan.begin("gv_dash_closure")
-	_refresh_closure()
-	PerfSpan.end("gv_dash_closure")
+	# The closure metrics walk the whole model (2-12 ms on a festival): 2 Hz.
+	var now_ms := Time.get_ticks_msec()
+	if force or now_ms - _closure_last_ms >= CLOSURE_REFRESH_MS:
+		_closure_last_ms = now_ms
+		PerfSpan.begin("gv_dash_closure")
+		_refresh_closure()
+		PerfSpan.end("gv_dash_closure")
 	# Stores + Settlement walk model/roster arrays — 1 Hz is plenty, and the
 	# signature diffs inside them make even that mostly free.
-	var now_ms := Time.get_ticks_msec()
 	if now_ms - _slow_last_ms >= REFRESH_SLOW_MS:
 		_slow_last_ms = now_ms
 		PerfSpan.begin("gv_dash_slow")
@@ -129,16 +136,20 @@ func _process(delta: float) -> void:
 		return
 	_refresh_acc += delta
 	if _refresh_acc >= REFRESH_INTERVAL:
-		refresh(true)
+		refresh()
 	var su := _solar_ui()
 	if su == null or not is_instance_valid(su):
 		return
 	var sv: Variant = su.get("sim_tick_serial")
-	if sv != null and int(sv) != _solar_serial:
+	# The power numbers follow SolarUI's tick, at most TICK_REFRESH_MS apart
+	# (at speed SolarUI ticks every frame). The site balance walks the model
+	# and stays on the 1 Hz slow path in refresh().
+	var now_ms := Time.get_ticks_msec()
+	if sv != null and int(sv) != _solar_serial and now_ms - _tick_last_ms >= TICK_REFRESH_MS:
 		_solar_serial = int(sv)
+		_tick_last_ms = now_ms
 		PerfSpan.begin("gv_dash_tick")
 		_refresh_power()
-		_refresh_balance()
 		PerfSpan.end("gv_dash_tick")
 
 

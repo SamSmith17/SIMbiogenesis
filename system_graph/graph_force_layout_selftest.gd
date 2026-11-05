@@ -10,7 +10,7 @@ extends SceneTree
 ## function while the suite still prints PASS.
 ##   godot --headless --path . --script system_graph/graph_force_layout_selftest.gd
 
-const EXPECTED_CHECKS := 23
+const EXPECTED_CHECKS := 26
 
 ## Vertical port positions (0 top, 1 bottom) — the shape of graph_canvas HANDLES.
 const PORT_RY := {
@@ -35,6 +35,7 @@ func _init() -> void:
 	_test_unwired_keeps_shape()
 	_test_random_bounded()
 	_test_large_budget()
+	_test_tidy_over_frames()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		print("FAIL check count %d != EXPECTED_CHECKS %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -227,3 +228,44 @@ func _test_large_budget() -> void:
 	_ok(_overlaps(items, pos, GraphForceLayout.new().spacing) == 0, "120 nodes: no overlap at rest")
 	_ok(ms < 8000, "120 nodes settle within the CPU budget (%d ms)" % ms)
 	print("  120-node tidy: %d ms" % ms)
+
+
+## Phase 6: a big scope's Tidy settles over frames (GraphLayoutDriver,
+## TIDY_BUDGET_USEC each) and lands EXACTLY where the one-shot Tidy does;
+## a small one still settles at once.
+func _driver_model(n: int) -> GraphModel:
+	var m := GraphModel.new()
+	for k in n:
+		m.add_item(_item("t%d" % k, ["panel", "battery", "controller", "appliance"][k % 4],
+			float(k % 8) * 30.0, float(k / 8) * 25.0, 120.0, 90.0))
+		if k > 0 and k % 3 != 0:
+			m.add_connection(_wire("t%d" % (k - 1), "positive", "t%d" % k, "negative"))
+	return m
+
+
+func _test_tidy_over_frames() -> void:
+	var n := GraphLayoutDriver.TIDY_SYNC_MAX + 16
+	var a := GraphLayoutDriver.new()
+	a.model = _driver_model(n)
+	a.port_side = Callable(self, "_port_side")
+	a.tidy("root", false)
+	var b := GraphLayoutDriver.new()
+	b.model = _driver_model(n)
+	b.port_side = Callable(self, "_port_side")
+	b.tidy("root", true)
+	_ok(b.is_tidying(), "a %d-card Tidy settles over frames, not at once" % n)
+	var frames := 0
+	while b.is_animating() and frames < 2000:
+		b.process(1.0 / 60.0, "root", true)
+		frames += 1
+	var worst := 0.0
+	for it in a.model.items:
+		var d: Dictionary = it
+		var o := b.model.get_item(str(d["id"]))
+		worst = maxf(worst, Vector2(float(d["x"]) - float(o["x"]), float(d["y"]) - float(o["y"])).length())
+	_ok(worst < 0.01, "it lands where the one-shot Tidy does (worst %.4f px, %d frames)" % [worst, frames])
+	var c := GraphLayoutDriver.new()
+	c.model = _driver_model(GraphLayoutDriver.TIDY_SYNC_MAX - 4)
+	c.port_side = Callable(self, "_port_side")
+	c.tidy("root", true)
+	_ok(not c.is_tidying(), "a small Tidy settles at once (its glide starts this frame)")

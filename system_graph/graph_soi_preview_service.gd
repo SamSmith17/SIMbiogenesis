@@ -799,6 +799,26 @@ func world_to_canvas(world: Vector3) -> Variant:
 	return (_container.position + (host_local as Vector2)) - _canvas.position
 
 
+## A number that changes whenever world_to_canvas would answer differently
+## for the same world point: the camera's pose and lens, the viewport and
+## container sizes, where the container and canvas sit. The canvas caches
+## projections of points that do not move (pins, space outlines, the SoI
+## ring) under it, so a still view projects them once.
+func projection_key() -> int:
+	if not is_projection_authority():
+		return 0
+	# Rounded: the camera is re-posed from the same numbers on every capture,
+	# and float noise in the last bits must not read as a moved view.
+	var cam_t := _camera.global_transform
+	var q := func(v: Vector3) -> Vector3i:
+		return Vector3i(roundi(v.x * 1000.0), roundi(v.y * 1000.0), roundi(v.z * 1000.0))
+	return hash([q.call(cam_t.origin), q.call(cam_t.basis.x * 100.0), q.call(cam_t.basis.y * 100.0),
+		q.call(cam_t.basis.z * 100.0), snappedf(_camera.fov, 0.001), snappedf(_camera.size, 0.001),
+		_camera.projection, _camera.frustum_offset.snapped(Vector2(0.001, 0.001)),
+		_viewport.size, _container.size, _container.position,
+		_canvas.position if _canvas != null and is_instance_valid(_canvas) else Vector2.ZERO])
+
+
 ## Project a world position into the SubViewportContainer's local pixels
 ## (works for Elev canvas host and Siphon Lab embed).
 func world_to_host_local(world: Vector3) -> Variant:

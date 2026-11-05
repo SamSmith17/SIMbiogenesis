@@ -98,6 +98,14 @@ func _hover_port_identity() -> String:
 
 
 func _draw() -> void:
+	# The WHOLE draw, base + V2 passes, one call per redraw (gv_draw stops
+	# before the V2 overlays): per-draw cost = avg / calls.
+	PerfSpan.begin("gv_draw_all")
+	_draw_v2_all()
+	PerfSpan.end("gv_draw_all")
+
+
+func _draw_v2_all() -> void:
 	_card_ctx = _build_card_ctx()
 	_tile_labels.clear()
 	super._draw()

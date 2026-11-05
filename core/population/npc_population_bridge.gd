@@ -1417,14 +1417,34 @@ func space_markers(main: Node) -> Array:
 	var reg := _find_registry(main)
 	if reg == null:
 		return []
+	# The static part of every marker (an area's interior point and outline,
+	# a building's centroid) is cached per registry revision: an area's
+	# interior point can grid-sample its polygon, and Site Plan asks for the
+	# markers on every redraw (measured 35 ms a redraw on Walton's festival).
+	# Prop targets are re-read each call (props move); occupancy is live.
+	if _marker_rev != reg.revision or _marker_reg != reg or _marker_static.size() != reg.spaces.size():
+		_marker_rev = reg.revision
+		_marker_reg = reg
+		_marker_static.clear()
+		for item in reg.spaces:
+			var space: Dictionary = item
+			var target: Dictionary = space.get("target", {})
+			var kind := str(target.get("kind", ""))
+			var st := {"id": str(space.get("id", "")), "kind": kind, "space": space,
+				"pos": null, "poly": PackedVector2Array()}
+			if kind != "prop":
+				st["pos"] = reg.resolve_position(space, main)
+			if kind == "area":
+				st["poly"] = SpaceRegistry.poly_points(target.get("poly", []) as Array)
+			_marker_static.append(st)
 	var out: Array = []
-	for item in reg.spaces:
-		var space: Dictionary = item
-		var p: Variant = reg.resolve_position(space, main)
+	for st_v in _marker_static:
+		var st: Dictionary = st_v
+		var space: Dictionary = st["space"]
+		var p: Variant = st["pos"] if str(st["kind"]) != "prop" else reg.resolve_position(space, main)
 		if not (p is Vector2):
 			continue
-		var sid := str(space.get("id", ""))
-		var target: Dictionary = space.get("target", {})
+		var sid := str(st["id"])
 		out.append({
 			"id": sid,
 			"pos": p,
@@ -1434,10 +1454,14 @@ func space_markers(main: Node) -> Array:
 			"capacity": maxi(int(space.get("capacity", SpaceRegistry.DEFAULT_CAPACITY)), 1),
 			# Area spaces carry their outline so Site Plan can show the REGION
 			# rather than a marker floating at its interior point.
-			"poly": SpaceRegistry.poly_points(target.get("poly", []) as Array) \
-					if str(target.get("kind", "")) == "area" else PackedVector2Array(),
+			"poly": st["poly"],
 		})
 	return out
+
+
+var _marker_rev := -1
+var _marker_reg: Object = null
+var _marker_static: Array = []
 
 
 # --- navigation --------------------------------------------------------------

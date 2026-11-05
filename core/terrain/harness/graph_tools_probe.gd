@@ -89,8 +89,14 @@ func _test_world_drawer(gv: Node) -> void:
 	var player := main.get_node_or_null("Player") as Node3D
 	if player != null:
 		p = player.global_position + Vector3(3, 2, 0)
+	# New lights join the graph by themselves on a site with power hardware
+	# (Settings → Gameplay, since 2026-10-31); this test is about the drawer,
+	# so they are placed with that off (sandbox prefs) and it is put back.
+	var joined := PlacedLightService.lights_join_graph()
+	PlacedLightService.set_lights_join_graph(false)
 	var a := PlacedLightService.add_point_light(main, "omni", p, Vector3.ZERO)
 	var b := PlacedLightService.add_point_light(main, "omni", p + Vector3(2, 0, 0), Vector3.ZERO)
+	PlacedLightService.set_lights_join_graph(joined)
 	PlacedLightService.notify()
 	await _wait(1.2)
 	var rows := GraphWorldInventory.collect(gv)

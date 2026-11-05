@@ -1288,7 +1288,9 @@ func _is_pond_twin_hidden(item: Dictionary) -> bool:
 func _gui_input(event: InputEvent) -> void:
 	# The player's own hand stops a camera fly (a long one runs up to 0.9 s and
 	# would otherwise pull the view back from under the wheel or a drag).
-	if (event is InputEventMouseButton and (event as InputEventMouseButton).pressed) 			or event is InputEventScreenTouch or event is InputEventMagnifyGesture 			or event is InputEventPanGesture:
+	if (event is InputEventMouseButton and (event as InputEventMouseButton).pressed) \
+			or event is InputEventScreenTouch or event is InputEventMagnifyGesture \
+			or event is InputEventPanGesture:
 		stop_fly()
 	# Native touch — Sharp / Windows touchscreens often omit drag motion in emulated mouse.
 	if event is InputEventScreenTouch:
@@ -5037,6 +5039,30 @@ func _adaptive_segments(pixel_len: float, base: int, floor_segs: int = 8) -> int
 	return maxi(floor_segs, int(round(lerpf(float(floor_segs), float(base), frac))))
 
 
+## Viewport culling (Phase 6): a wire whose ends, bends and bezier bulge
+## all lie off the canvas is not drawn. The pad covers the curve's bulge
+## (a bezier never leaves the hull of its control points, which sit at most
+## about half the span past the ends), the pill and the glow.
+func _wire_on_screen(a: Vector2, b: Vector2, wps: Array) -> bool:
+	var r := Rect2(a, Vector2.ZERO).expand(b)
+	for w in wps:
+		if w is Vector2:
+			r = r.expand(w as Vector2)
+	var pad := maxf(CULL_PAD_PX, a.distance_to(b) * 0.5)
+	return r.grow(pad).intersects(Rect2(Vector2.ZERO, size))
+
+
+## A card's screen rect overlaps the canvas (with room for its ports, port
+## names, badges, tile names and captions drawn outside it).
+func _item_on_screen(item: Dictionary, center: Vector2) -> bool:
+	var tl := _item_screen_tl(item, center)
+	var sz := _item_screen_size(item)
+	return Rect2(tl, sz).grow(CULL_PAD_PX).intersects(Rect2(Vector2.ZERO, size))
+
+
+const CULL_PAD_PX := 90.0
+
+
 func _render_connection(
 		conn: Dictionary, center: Vector2, solar_w: float, load_w: float) -> void:
 	var sid: String = conn.get("source_item_id", "") as String
@@ -5123,6 +5149,8 @@ func _render_connection(
 	var curve_t := _conn_curve_tension(conn)
 	var src_pos: Vector2 = src.get("pos", Vector2.ZERO) as Vector2
 	var tgt_pos: Vector2 = tgt.get("pos", Vector2.ZERO) as Vector2
+	if not _wire_on_screen(src_pos, tgt_pos, wps):
+		return
 	
 	if bool(src.get("hub", false)):
 		var next_pt: Vector2
@@ -6703,10 +6731,33 @@ func _phys_item_world_center(item: Dictionary) -> Vector3:
 	var id := str(item.get("id", ""))
 	if _draw_cache_active and _conn_anchor_cache.has(id):
 		return _conn_anchor_cache[id] as Vector3
-	var out := _phys_item_world_center_uncached(item)
+	# Across draws too (Site Plan redraws at 20 Hz; a bound item's anchor is
+	# a conduit-manager lookup): kept until a person edits the model (a pin
+	# drag writes every motion) or ANCHOR_TTL_MS passes (a driven vehicle).
+	var now := Time.get_ticks_msec()
+	var rev := 0
+	if model != null:
+		rev = hash([model.struct_rev, model.user_rev])
+	if rev != _anchor_rev or now - _anchor_stamp_ms > ANCHOR_TTL_MS:
+		_anchor_rev = rev
+		_anchor_stamp_ms = now
+		_anchor_cache.clear()
+	var out: Vector3
+	if _anchor_cache.has(id):
+		out = _anchor_cache[id]
+	else:
+		out = _phys_item_world_center_uncached(item)
+		if not id.is_empty():
+			_anchor_cache[id] = out
 	if _draw_cache_active and not id.is_empty():
 		_conn_anchor_cache[id] = out
 	return out
+
+
+var _anchor_cache: Dictionary = {}
+var _anchor_rev := 0
+var _anchor_stamp_ms := 0
+const ANCHOR_TTL_MS := 500
 
 
 func _phys_item_world_center_uncached(item: Dictionary) -> Vector3:
@@ -6870,13 +6921,15 @@ func _draw_world_pins() -> void:
 	var fnt := ThemeDB.fallback_font
 	var labels: Array = []
 	var drag_anchor := Vector2.INF
+	PerfSpan.begin("gv_d_runs")
 	_draw_lens_runs()   # under the pins; their pills go on after the pins
+	PerfSpan.end("gv_d_runs")
 	for item: Dictionary in _cached_visible_items:
 		if not GraphSiteLayout.has_site_coords(item):
 			continue
 		var iid := str(item.get("id", ""))
 		var w := _phys_item_world_center(item)
-		var proj: Variant = soi_preview_service.call("world_to_canvas", w)
+		var proj: Variant = world_to_canvas_cached(w)
 		if not (proj is Vector2):
 			continue
 		var p := proj as Vector2
@@ -6901,15 +6954,15 @@ func _draw_world_pins() -> void:
 			draw_arc(p, 9.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.85), 1.5, true)
 			draw_arc(p, 14.0, 0.0, TAU, 32, Color(col.r, col.g, col.b, 0.55), 1.0, true)
 		draw_line(p, head, Color(col.r, col.g, col.b, 0.75), 1.5, true)
-		draw_circle(p, 2.0, Color(col.r, col.g, col.b, 0.9))
+		GraphFastDraw.disc(self, p, 2.0, Color(col.r, col.g, col.b, 0.9))
 		var r := GLOBE_PIN_R * (1.35 if (sel or hov or dragging) else (1.2 if is_system else 1.0))
-		draw_circle(head, r + 1.5, Color(0.02, 0.04, 0.08, 0.85))
-		draw_circle(head, r, col)
+		GraphFastDraw.disc(self, head, r + 1.5, Color(0.02, 0.04, 0.08, 0.85))
+		GraphFastDraw.disc(self, head, r, col)
 		if locked:
 			# A hollow centre: this pin follows something else.
-			draw_circle(head, r * 0.45, Color(0.02, 0.04, 0.08, 0.9))
+			GraphFastDraw.disc(self, head, r * 0.45, Color(0.02, 0.04, 0.08, 0.9))
 		if sel:
-			draw_arc(head, r + 4.0, 0.0, TAU, 32, Color(1.0, 1.0, 1.0, 0.9), 1.5, true)
+			GraphFastDraw.ring(self, head, r + 4.0, Color(1.0, 1.0, 1.0, 0.9), 1.5)
 		_globe_pin_px[iid] = head
 		var text := str((item.get("specs", {}) as Dictionary).get("name", item.get("label", "")))
 		if text.is_empty():
@@ -7447,8 +7500,10 @@ func _draw() -> void:
 		_draw_soi_reveal_fade(fill)
 	else:
 		draw_rect(Rect2(Vector2.ZERO, size), fill)
+	PerfSpan.begin("gv_d_bg")
 	_draw_dot_grid()
 	_draw_soi_background()
+	PerfSpan.end("gv_d_bg")
 	# Site Plan lost its unplaced tray (nodes are auto-seated on entry and on
 	# add — see _compute_visible_items); Elevation keeps it.
 	if view_mode != GraphSiteLayout.VIEW_SITE:
@@ -7467,22 +7522,30 @@ func _draw() -> void:
 		if pm != null:
 			pm.end("gv_wires")
 			pm.begin("gv_cards")
+		# Cull off-screen cards (Phase 6): the visible-items cache stays whole
+		# for hit-testing and the V2 passes; only drawing skips them.
+		var on_screen: Array = []
+		var cul_c := size * 0.5
+		for item_c: Dictionary in _visible_items():
+			if _item_on_screen(item_c, cul_c):
+				on_screen.append(item_c)
+		cards_drawn = on_screen.size()
 		if draw_profile_on:
 			# Benches: card draw time by type (and compound kind), in µs.
-			for item_p: Dictionary in _visible_items():
+			for item_p: Dictionary in on_screen:
 				var t0 := Time.get_ticks_usec()
 				_render_item(item_p)
 				var pk := str(item_p.get("type", "")) + "/" + str((item_p.get("specs", {}) as Dictionary).get("compound_kind", ""))
 				draw_profile[pk] = int(draw_profile.get(pk, 0)) + (Time.get_ticks_usec() - t0)
 				draw_profile[pk + "#n"] = int(draw_profile.get(pk + "#n", 0)) + 1
 		else:
-			for item: Dictionary in _visible_items():
+			for item: Dictionary in on_screen:
 				_render_item(item)
 		if pm != null:
 			pm.end("gv_cards")
-		for item: Dictionary in _visible_items():
+		for item: Dictionary in on_screen:
 			_draw_item_overlays(item)
-		for item2: Dictionary in _visible_items():
+		for item2: Dictionary in on_screen:
 			_draw_resize_handle(item2)
 	elif model != null and not _is_physical_view() and not soi_live_preview:
 		_draw_empty_state_prompt()
@@ -7503,18 +7566,28 @@ func _draw() -> void:
 	if view_mode == GraphSiteLayout.VIEW_SITE:
 		var npc_r := _npc_renderer()
 		npc_r.set("center3", _soi_world_center())
+		PerfSpan.begin("gv_d_desire")
 		npc_r.call("draw_desire")     # worn-in paths beneath everything…
+		PerfSpan.end("gv_d_desire")
+		PerfSpan.begin("gv_d_water")
 		_draw_watershed_overlays_site()
 		_draw_water_network_site(npc_r)
+		PerfSpan.end("gv_d_water")
+		PerfSpan.begin("gv_d_spaces")
 		npc_r.call("draw_spaces")     # …destinations above them…
 		_draw_poi_site(npc_r)         # …the player's imported KML pins…
 		npc_r.call("draw_crew_sites") # …active work sites (crews gather ON these)…
+		PerfSpan.end("gv_d_spaces")
+		PerfSpan.begin("gv_d_agents")
 		npc_r.call("draw_agents")     # …and the people walking between them
+		PerfSpan.end("gv_d_agents")
 		_draw_prop_radial_preview()
 	if view_mode == GraphSiteLayout.VIEW_ELEVATION:
 		_draw_elev_soil_probe_on_top()
 	if _pins_mode_active():
+		PerfSpan.begin("gv_d_pins")
 		_draw_world_pins()
+		PerfSpan.end("gv_d_pins")
 	_draw_destroy_fx()
 	_draw_temp_wire()                # always on top of everything
 	if _marquee_selecting:
@@ -9712,6 +9785,54 @@ func site_editor_ground_at(pos: Vector2) -> Variant:
 
 ## A site point (metres from the SoI centre) on screen: through the lens camera
 ## on the ground when it is the authority, else the flat plan mapping.
+## world_to_canvas through the preview camera, cached while the view holds
+## still (GraphSoiPreviewService.projection_key): Site Plan projects the same
+## static points (pins, space outlines, the SoI ring) on every 20 Hz redraw.
+## Moving points may use it too; the cache empties when the view moves and
+## past PROJ_CACHE_MAX entries.
+var _proj_cache: Dictionary = {}
+var _ring_runs_cache: Dictionary = {}
+var _proj_key := 0
+var _proj_key_frame := -1
+const PROJ_CACHE_MAX := 20000
+
+
+func world_to_canvas_cached(w: Vector3) -> Variant:
+	if soi_preview_service == null or not is_instance_valid(soi_preview_service):
+		return null
+	var f := Engine.get_frames_drawn()
+	if f != _proj_key_frame:
+		_proj_key_frame = f
+		var k := int(soi_preview_service.call("projection_key"))
+		if k != _proj_key or _proj_cache.size() > PROJ_CACHE_MAX:
+			_proj_key = k
+			_proj_cache.clear()
+	if _proj_key == 0:
+		return soi_preview_service.call("world_to_canvas", w)
+	if _proj_cache.has(w):
+		return _proj_cache[w]
+	var v: Variant = soi_preview_service.call("world_to_canvas", w)
+	_proj_cache[w] = v
+	return v
+
+
+## A number that changes whenever the Site Plan / lens mapping from world to
+## canvas would: the camera's projection key under a live lens, else the flat
+## plan's zoom / pan / size. Caches of projected static geometry key on it.
+func proj_view_key() -> int:
+	if _phys_camera_projection_active() and soi_preview_service != null \
+			and is_instance_valid(soi_preview_service):
+		var f := Engine.get_frames_drawn()
+		if f != _proj_key_frame:
+			_proj_key_frame = f
+			var k := int(soi_preview_service.call("projection_key"))
+			if k != _proj_key or _proj_cache.size() > PROJ_CACHE_MAX:
+				_proj_key = k
+				_proj_cache.clear()
+		return _proj_key
+	return hash([_zoom, _pan, size, view_mode])
+
+
 func _site_point_canvas(origin: Vector2, site: Vector2) -> Variant:
 	if not _site_ring_projected():
 		return origin + site * GraphSiteLayout.px_per_m(_zoom)
@@ -9722,7 +9843,7 @@ func _site_point_canvas(origin: Vector2, site: Vector2) -> Variant:
 	var w := Vector3(c3.x + site.x, c3.y, c3.z + site.y)
 	if soi.has_method("ground_y_at"):
 		w.y = _ring_ground_y(soi, w.x, w.z)
-	return soi_preview_service.call("world_to_canvas", w)
+	return world_to_canvas_cached(w)
 
 
 ## A ground circle around `centre_site`. Flat plan: a screen arc. Camera lens:
@@ -9736,19 +9857,30 @@ func _draw_site_ring(origin: Vector2, centre_site: Vector2, radius_m: float,
 		draw_arc(origin + centre_site * GraphSiteLayout.px_per_m(_zoom),
 				radius_m * GraphSiteLayout.px_per_m(_zoom), 0.0, TAU, segments, col, width, true)
 		return
-	var run := PackedVector2Array()
-	for i in range(segments + 1):
-		var a := TAU * float(i) / float(segments)
-		var cv: Variant = _site_point_canvas(origin,
-				centre_site + Vector2(cos(a), sin(a)) * radius_m)
-		if cv is Vector2:
-			run.append(cv as Vector2)
-		else:
-			if run.size() >= 2:
-				draw_polyline(run, col, width, true)
-			run = PackedVector2Array()
-	if run.size() >= 2:
-		draw_polyline(run, col, width, true)
+	# The projected runs are cached while the view holds still (the ring is
+	# re-drawn on every 20 Hz Site Plan redraw; each point is a ground lookup
+	# and a camera projection).
+	var ck := hash([proj_view_key(), origin, centre_site, radius_m, segments])
+	var runs: Array = _ring_runs_cache.get(ck, [])
+	if runs.is_empty():
+		var run := PackedVector2Array()
+		for i in range(segments + 1):
+			var a := TAU * float(i) / float(segments)
+			var cv: Variant = _site_point_canvas(origin,
+					centre_site + Vector2(cos(a), sin(a)) * radius_m)
+			if cv is Vector2:
+				run.append(cv as Vector2)
+			else:
+				if run.size() >= 2:
+					runs.append(run)
+				run = PackedVector2Array()
+		if run.size() >= 2:
+			runs.append(run)
+		if _ring_runs_cache.size() > 64:
+			_ring_runs_cache.clear()
+		_ring_runs_cache[ck] = runs
+	for r in runs:
+		draw_polyline(r as PackedVector2Array, col, width, true)
 
 
 ## Live radial-placement feedback while Shift+dragging a 3D prop in Site Plan: a
@@ -10508,21 +10640,49 @@ func _draw_poi_site(npc_r: Object) -> void:
 
 
 func _draw_site_line(npc_r: Object, pts: PackedVector2Array, modes: Array, col: Color, w: float) -> void:
-	var prev: Variant = null
-	for i in pts.size():
-		var sp: Variant = npc_r.call("project", pts[i])
-		if prev is Vector2 and sp is Vector2:
-			var c := col
-			if i - 1 < modes.size():
-				var m := str(modes[i - 1])
-				if m == "culvert":
-					c = Color(1.0, 0.62, 0.25, 0.95)
-				elif m == "pipe":
-					c = Color(0.95, 0.45, 0.95, 0.95)
-				elif m == "penstock":
-					c = Color(0.30, 0.95, 0.95, 0.95)
-			draw_line(prev, sp, c, w, true)
-		prev = sp
+	# Projected once per view (streams run to hundreds of points and Site
+	# Plan redraws at 20 Hz), drawn as one polyline per run of one mode.
+	var ck := hash([proj_view_key(), pts, modes])
+	var runs: Array = _site_line_cache.get(ck, [])
+	if runs.is_empty() and not _site_line_cache.has(ck):
+		var run := PackedVector2Array()
+		var run_mode := ""
+		var prev: Variant = null
+		for i in pts.size():
+			var sp: Variant = npc_r.call("project", pts[i])
+			if prev is Vector2 and sp is Vector2:
+				var m := str(modes[i - 1]) if i - 1 < modes.size() else ""
+				if m != "culvert" and m != "pipe" and m != "penstock":
+					m = ""
+				if run.is_empty() or m != run_mode:
+					if run.size() >= 2:
+						runs.append([run, run_mode])
+					run = PackedVector2Array([prev as Vector2])
+					run_mode = m
+				run.append(sp as Vector2)
+			elif run.size() >= 2:
+				runs.append([run, run_mode])
+				run = PackedVector2Array()
+			prev = sp
+		if run.size() >= 2:
+			runs.append([run, run_mode])
+		if _site_line_cache.size() > 512:
+			_site_line_cache.clear()
+		_site_line_cache[ck] = runs
+	for r_v in runs:
+		var r: Array = r_v
+		var c := col
+		match str(r[1]):
+			"culvert":
+				c = Color(1.0, 0.62, 0.25, 0.95)
+			"pipe":
+				c = Color(0.95, 0.45, 0.95, 0.95)
+			"penstock":
+				c = Color(0.30, 0.95, 0.95, 0.95)
+		draw_polyline(r[0] as PackedVector2Array, c, w, true)
+
+
+var _site_line_cache: Dictionary = {}
 
 
 ## Site Plan: live NPC population dots. The view installs a provider Callable
@@ -10532,6 +10692,8 @@ var npc_agents_provider: Callable = Callable()
 ## Site Plan: player-tagged NPC spaces — [{pos, space_type, label, occupied,
 ## capacity}] from NpcPopulationBridge.space_markers.
 var npc_spaces_provider: Callable = Callable()
+## Cards drawn on the last pass (after culling), for checks and benches.
+var cards_drawn := 0
 ## Site Plan active work sites (claimed chores with positions) — see
 ## NpcPopulationBridge.crew_site_markers.
 var npc_crew_provider: Callable = Callable()

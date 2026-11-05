@@ -3328,6 +3328,76 @@ The Walton check covers:
   festival tools and colour key). graph_system_board_selftest is now 50
   (`_test_grammar`).
 
+**Festival scale (Phase 6, 2026-11-05).** Measured first with
+`tools/bench/graph_festival_bench.gd`: the Walton graph at 60x in six views
+(root framed, root zoomed in, Site Plan whole and zoomed, inside a camp) plus
+an animated root Tidy. `GFBENCH_FESTIVAL=1` opens festival mode at the camps'
+natural headcount (1,053 people; the sandbox's population target is a test
+value of 60). `GFBENCH_ONLY=site,site_zoom` limits the views,
+`GFBENCH_SPEED` sets the speed. It prints draw ms PER REDRAW (`gv_draw_all`,
+the whole V2 draw, avg ÷ calls), cards drawn, people drawn / grouped, and
+per-card-type draw cost. Sub-spans: `gv_d_*` (Site Plan passes),
+`gv_ambient`, `gv_dcthrottle`, `gv_chrome`, `gv_closure_m`,
+`gv_camp_cards`, `gv_cc_*`.
+- **Site Plan** went from 55 ms a redraw (with 80 people) to ~15 ms (with
+  1,053). What it took:
+  - **Projections are cached while the view holds still.**
+    `GraphSoiPreviewService.projection_key()` (the camera pose rounded,
+    lens, viewport and container) and `canvas.proj_view_key()` (that key, or
+    zoom/pan on the flat plan) key:
+    - `world_to_canvas_cached` (pins, the SoI ring);
+    - each space's outline (`_screen_ring`: projected ring, world-space
+      triangulation, thinned closed line), 4,319 vertices on Walton;
+    - streams (`_site_line_cache`, one polyline per run of one mode);
+    - the ring runs (`_ring_runs_cache`);
+    - the world anchors of pins (`_anchor_cache`, cleared on
+      struct_rev / user_rev or after `ANCHOR_TTL_MS`).
+  - **People.**
+    - Culled per 8 m cell before any per-person work (`_cell_on_screen`).
+    - Projected with `project_moving` (2 m ground grid, no cache).
+    - Drawn as ONE textured triangle array (`_batch_disc`), with interp
+      records as Arrays.
+    - Zoomed out past `AGG_PX_PER_M` (2 px/m) with 250 or more people, they
+      are count discs binned in world space (`_draw_agent_groups`).
+    - The provider hands the canvas a new payload at most every
+      `SITE_DOTS_MS` (150 ms).
+  - Space markers' static parts (area interior points can grid-sample a
+    concave outline) are cached per registry revision in
+    `NpcPopulationBridge.space_markers`.
+  - Spaces, pins and people draw through GraphFastDraw (no `draw_circle`).
+- **Culling.** Cards (`_item_on_screen`) and wires (`_wire_on_screen`,
+  the bezier's hull padded) off the canvas are not drawn (`CULL_PAD_PX` 90).
+  The visible-items cache stays whole for hit-testing. `cards_drawn` is for
+  checks. Root zoomed in: 25.7 → 11.5 ms a redraw.
+- **Once-a-second work.**
+  - `CampLedger.boundary_ports` scanned every wire per camp port; it now uses
+    an index of wire ends (`_wired_ends`).
+  - Camp cards compute each camp's ledger once and the system board reuses
+    it (`_camp_ledgers`). Peak 32 ms → 3 ms.
+  - The closure refresh no longer forces a full dashboard refresh.
+- **Dashboard.**
+  - Power numbers follow SolarUI's tick at most every 100 ms; the site
+    balance stays on the 1 Hz path (it ran every SolarUI tick).
+  - The closure card refreshes at 2 Hz.
+- **Tidy.** Over `TIDY_SYNC_MAX` (24) cards, Tidy settles over frames
+  (`TIDY_BUDGET_USEC` 6 ms each, `is_tidying()`), then glides. It lands
+  exactly where the one-shot Tidy does (selftest). The festival root was one
+  155 ms block; it is now about 25 frames.
+- The "In the world" drawer: `GraphEmbodiment.find_item_by_bound_prop_id` is
+  indexed (it copied the item list per prop), and the drawer rebuilds only
+  when the graph, the props or the lights change (`_world_inventory_sig`).
+- **What is left** is not graph code. On Walton's festival at 60x the frame
+  median is ~45–70 ms: people (`npc_population`, `npc_host`, `npc_dots`), the
+  water network, the nav bake, the timeline, and render. The plan's 60 fps
+  target is not reachable from the graph alone. The camp tiles cost ~130 µs
+  each (four AA arcs and an icon; 5 ms for 40 at the root).
+- ⚠ The Bash tool joins a heredoc's `\` line continuation into one line with
+  stray tabs. It still parses, but use the Write tool for patch scripts
+  (`fix_joins` found five such lines, two from Phase 5).
+- Gate: `tools\harness.ps1 -World walton -RunScript res://tools/bench/graph_festival_bench.gd -Timeout 900`
+  (with `GFBENCH_FESTIVAL=1`); graph_force_layout_selftest is now 26
+  (`_test_tidy_over_frames`).
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a

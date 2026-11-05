@@ -34,6 +34,12 @@ var _dirty := true
 var _moved_since_commit := false
 var _drag_pins: Dictionary = {}
 
+var _tidy_job: Dictionary = {}
+## Tidy settles at once up to this many cards; above it, over frames.
+const TIDY_SYNC_MAX := 24
+const TIDY_BUDGET_USEC := 6000
+const TIDY_MAX_STEPS := 400
+
 var _anim_from: Dictionary = {}
 var _anim_to: Dictionary = {}
 var _anim_t := -1.0
@@ -41,7 +47,7 @@ var _anim_commit := false
 
 
 func is_animating() -> bool:
-	return _anim_t >= 0.0
+	return _anim_t >= 0.0 or not _tidy_job.is_empty()
 
 
 ## Where a running Tidy is taking each node ({} when nothing animates).
@@ -125,16 +131,49 @@ func tidy(scope_id: String, animate: bool = true) -> bool:
 	if items.size() < 2:
 		return false
 	var conns: Array = _conns_between(scope_id, items)
-	var target: Dictionary
 	var groups := pv_groups(scope_id, items)
-	if groups.is_empty():
-		target = GraphForceLayout.tidy(items, conns, port_side, params, pinned_ids(items))
-	else:
+	var sim_items: Array = items
+	var sim_conns: Array = conns
+	var side := port_side
+	var col := {}
+	if not groups.is_empty():
 		# A solar array's panels move as ONE block: collapse each array to its
 		# bounding box, lay that out, then put every panel back at its offset.
-		var col := _collapse_groups(items, conns, groups, scope_id)
-		target = GraphForceLayout.tidy(col["items"], col["conns"], Callable(self, "_group_port_side"),
-			params, pinned_ids(col["items"]))
+		col = _collapse_groups(items, conns, groups, scope_id)
+		sim_items = col["items"]
+		sim_conns = col["conns"]
+		side = Callable(self, "_group_port_side")
+	var f := GraphForceLayout.new()
+	f.configure(params)
+	f.setup(sim_items, sim_conns, side, pinned_ids(sim_items))
+	_tidy_job = {"sim": f, "steps": 0, "groups": groups, "col": col, "items": items,
+		"animate": animate}
+	# A big scope settles over a few frames (TIDY_BUDGET_USEC each) instead of
+	# one long hitch (155 ms for the 46 systems of a festival root); a small
+	# one, or a caller that wants the result now, settles at once.
+	if not animate or items.size() <= TIDY_SYNC_MAX:
+		_step_tidy_job(INF)
+	_dirty = true
+	return true
+
+
+## Step the pending Tidy for up to `budget_usec`; when it is at rest, start
+## the move to it (or write it, for a Tidy that does not animate).
+func _step_tidy_job(budget_usec: float) -> void:
+	var job := _tidy_job
+	var f: GraphForceLayout = job["sim"]
+	var t0 := Time.get_ticks_usec()
+	while int(job["steps"]) < TIDY_MAX_STEPS and not f.is_settled() \
+			and float(Time.get_ticks_usec() - t0) < budget_usec:
+		f.step()
+		job["steps"] = int(job["steps"]) + 1
+	if int(job["steps"]) < TIDY_MAX_STEPS and not f.is_settled():
+		return
+	f.run_to_rest(0)   # the closing overlap pass
+	var target := f.positions()
+	var groups: Dictionary = job["groups"]
+	if not groups.is_empty():
+		var col: Dictionary = job["col"]
 		for gid in groups:
 			if not target.has(gid):
 				continue
@@ -142,25 +181,32 @@ func tidy(scope_id: String, animate: bool = true) -> bool:
 			for mid in groups[gid]:
 				target[mid] = base + (col["offsets"][mid] as Vector2)
 			target.erase(gid)
+	_tidy_job = {}
 	_anim_from = {}
 	_anim_to = target
-	for it in items:
+	for it in job["items"]:
 		var d: Dictionary = it
 		_anim_from[str(d["id"])] = Vector2(float(d.get("x", 0.0)), float(d.get("y", 0.0)))
 	_anim_commit = true
-	if animate:
+	if bool(job["animate"]):
 		_anim_t = 0.0
 	else:
 		_write_positions(_anim_to)
 		_anim_t = -1.0
 		_moved_since_commit = true
-	_dirty = true
-	return true
+
+
+## True while a Tidy is still settling (before its move starts).
+func is_tidying() -> bool:
+	return not _tidy_job.is_empty()
 
 
 ## Per frame. Returns true when a finished layout change should be committed.
 func process(delta: float, scope_id: String, freeform: bool) -> bool:
 	if model == null:
+		return false
+	if not _tidy_job.is_empty():
+		_step_tidy_job(TIDY_BUDGET_USEC)
 		return false
 	if _anim_t >= 0.0:
 		_anim_t += delta

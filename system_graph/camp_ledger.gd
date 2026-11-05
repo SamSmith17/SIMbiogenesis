@@ -153,19 +153,34 @@ static func boundary_ports(model, comp_id: String) -> Dictionary:
 	var item: Dictionary = model.get_item(comp_id)
 	if item.is_empty():
 		return out
-	var conns: Array = model.get("connections") if model.get("connections") is Array else []
+	var wired_ends := _wired_ends(model)
 	for ep in (item.get("specs", {}) as Dictionary).get("exposed_ports", []):
 		var e: Dictionary = ep
 		var hid := str(e.get("handle_id", ""))
-		var wired := false
-		for c in conns:
-			var cd: Dictionary = c
-			if (str(cd.get("source_item_id", "")) == comp_id and str(cd.get("source_handle_id", "")) == hid) \
-					or (str(cd.get("target_item_id", "")) == comp_id and str(cd.get("target_handle_id", "")) == hid):
-				wired = true
-				break
+		var wired := wired_ends.has(comp_id + "|" + hid)
 		out[hid] = {"kind": str(e.get("kind", "")), "direction": str(e.get("direction", "in")), "wired": wired}
 	return out
+
+
+## {"item|handle": true} for every wire end in the model, rebuilt when the
+## connections change (a festival asks for 40 camps x 5 ports a second; a
+## scan of every wire per port cost ~20 ms).
+static var _ends: Dictionary = {}
+static var _ends_key := 0
+
+
+static func _wired_ends(model) -> Dictionary:
+	var conns: Array = model.get("connections") if model.get("connections") is Array else []
+	var key := hash([model.get_instance_id(), model.get("struct_rev"), model.get("user_rev"), conns.size()])
+	if key == _ends_key:
+		return _ends
+	_ends_key = key
+	_ends.clear()
+	for c in conns:
+		var cd: Dictionary = c
+		_ends[str(cd.get("source_item_id", "")) + "|" + str(cd.get("source_handle_id", ""))] = true
+		_ends[str(cd.get("target_item_id", "")) + "|" + str(cd.get("target_handle_id", ""))] = true
+	return _ends
 
 
 ## The loops a camp has not closed AND has not wired out — the badge text.
@@ -177,6 +192,13 @@ static func open_kinds(model, comp_id: String, demand_overrides: Dictionary = {}
 	var cs := str(item.get("child_scope_id", ""))
 	var ledger := compute(model, cs, demand_overrides,
 		GraphNesting.walk_in_index(by_scope as Dictionary, cs) if by_scope != null else null)
+	return open_from_ledger(model, comp_id, ledger)
+
+
+## open_kinds over a ledger the caller already computed for the camp's scope.
+static func open_from_ledger(model, comp_id: String, ledger: Dictionary) -> Array:
+	if ledger.is_empty():
+		return []
 	var ports := boundary_ports(model, comp_id)
 	var wired_kinds: Dictionary = {}
 	for hid in ports:

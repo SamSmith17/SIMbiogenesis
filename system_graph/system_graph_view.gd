@@ -14403,6 +14403,11 @@ func _community_chip_action(kind: String, iid: String, agent_id: String) -> Call
 ## The space/crew/desire layers stay bridge-only: none of them are replicated,
 ## and a provider that quietly returned [] would read as "this camp has no
 ## tagged spaces" rather than "you are a guest".
+var _site_dots: Array = []
+var _site_dots_ms := -100000
+const SITE_DOTS_MS := 150
+
+
 func _wire_npc_providers() -> void:
 	if _graph_canvas == null or _npc_providers_wired:
 		return
@@ -14410,8 +14415,16 @@ func _wire_npc_providers() -> void:
 	_graph_canvas.set("npc_agents_provider", func() -> Array:
 		if not npcs_enabled():
 			return []
+		# At most every SITE_DOTS_MS: the canvas glides each dot between the
+		# positions it is handed, and rebuilding a festival's payload (one
+		# dict per person) on every sim tick cost ~5 ms a Site Plan redraw.
+		var now := Time.get_ticks_msec()
+		if now - _site_dots_ms < SITE_DOTS_MS and not _site_dots.is_empty():
+			return _site_dots
 		var src = _npc_dot_source()
-		return src.call("agent_dots") if src != null else [])
+		_site_dots = src.call("agent_dots") if src != null else []
+		_site_dots_ms = now
+		return _site_dots)
 	var main_for_spaces := _get_scene_main_node()
 	_graph_canvas.set("npc_spaces_provider", func() -> Array:
 		return _npc_population.space_markers(main_for_spaces) if _npc_population != null else [])
@@ -14847,7 +14860,9 @@ func _process_frame(delta: float) -> void:
 	# left the graph (reported as "rain doesn't fill the pond" / "the siphon
 	# never flows" — its specs were a stale snapshot from the last time the
 	# graph happened to be open, not a live simulation).
+	PerfSpan.begin("gv_ambient")
 	_tick_resource_flow_ambient(delta)
+	PerfSpan.end("gv_ambient")
 	# Between ticks: keep the NPC nav bake moving in a small time-boxed slice
 	# per frame (it used to land as one lump per 2 Hz tick, for minutes).
 	if _npc_population != null and not _mp_is_replica() and not _ambient_flow_suspended \
@@ -14872,7 +14887,9 @@ func _process_frame(delta: float) -> void:
 	# bake / playback — and inside a pre-rendered range — it runs DISPLAY-ONLY:
 	# the cards follow what plays back, but the battery's charge cap belongs
 	# to the bake / the render.
+	PerfSpan.begin("gv_dcthrottle")
 	_tick_dc_throttle(delta, _ambient_flow_suspended or _replaying)
+	PerfSpan.end("gv_dcthrottle")
 	# Graph DC generation (hydro, graph-only wind, fuel generators wired into a
 	# battery) must reach SolarUI with the graph CLOSED and while the Hydro Lab
 	# owns the view — both early-return below, and the battery then never saw a
@@ -14901,9 +14918,11 @@ func _process_frame(delta: float) -> void:
 			_tick_graph_csplab(delta)
 			_end_sim_writes()
 		return
+	PerfSpan.begin("gv_chrome")
 	_update_lens_strip(delta)
 	_layout_board_overlays()
 	_tick_layout(delta)
+	PerfSpan.end("gv_chrome")
 	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
 	# ResourceFlowEngine (above) still runs so test inflow + siphon drain work.
 	if _graph_view_mode == GraphSiteLayout.VIEW_SIPHON:
@@ -14961,8 +14980,12 @@ func _process_frame(delta: float) -> void:
 	if _closure_refresh_acc >= _CLOSURE_REFRESH_INTERVAL:
 		_closure_refresh_acc = 0.0
 		PerfMonitor.begin("gv_closure")
+		PerfSpan.begin("gv_closure_m")
 		_refresh_closure_telemetry()
+		PerfSpan.end("gv_closure_m")
+		PerfSpan.begin("gv_camp_cards")
 		_refresh_camp_cards()
+		PerfSpan.end("gv_camp_cards")
 		PerfMonitor.end("gv_closure")
 		PerfSpan.begin("gv_board")
 		_refresh_system_board()
@@ -16519,8 +16542,9 @@ func _refresh_closure_telemetry() -> void:
 		"mean_closure_pct": float(m.get("mean_closure_pct", 0.0)),
 		"autonomy_person_days": float(m.get("autonomy_person_days", 0.0)),
 	})
-	if is_instance_valid(_graph_dashboard):
-		_graph_dashboard.refresh(true)
+	# (The dashboard refreshes on its own cadence and reads the same memoised
+	# metrics; forcing it here re-ran its whole refresh — stores, settlement,
+	# balance — once a second on top of that.)
 
 
 func _set_score(key: String, value: String) -> void:
@@ -20859,6 +20883,11 @@ func camp_meter(comp_id: String) -> CampFlowMeter:
 ## Stamp what the camp card draws onto each camp compound — its open loops
 ## (CampLedger) and its people's morale (the bridge) — once a second, inside
 ## the bulk/history-suppressed window, so the canvas never walks the model.
+## Each camp's CampLedger from the last camp-card refresh (once a second),
+## reused by the system board in the same pass.
+var _camp_ledgers: Dictionary = {}
+
+
 func _refresh_camp_cards() -> void:
 	if model == null:
 		return
@@ -20871,13 +20900,22 @@ func _refresh_camp_cards() -> void:
 	var summaries: Array = []
 	var queueing := 0
 	var by_scope := GraphNesting.scope_index(model)
+	_camp_ledgers.clear()
 	for c in camps:
 		var cid := str(c["id"])
 		var comp: Dictionary = model.get_item(cid)
 		if comp.is_empty():
 			continue
 		var specs: Dictionary = comp.get("specs", {})
-		var open := CampLedger.open_kinds(model, cid, {}, by_scope)
+		PerfSpan.begin("gv_cc_open")
+		# One ledger per camp a second, shared with the system board (which
+		# runs right after this and reads _camp_ledgers).
+		var cs := str(comp.get("child_scope_id", ""))
+		var ledger: Dictionary = CampLedger.compute(model, cs, {},
+			GraphNesting.walk_in_index(by_scope, cs)) if not cs.is_empty() else {}
+		_camp_ledgers[cid] = ledger
+		var open := CampLedger.open_from_ledger(model, cid, ledger)
+		PerfSpan.end("gv_cc_open")
 		var morale := -1.0
 		var present := int(specs.get("camp_headcount", 0))
 		if _npc_population != null and npcs_enabled():
@@ -20885,7 +20923,9 @@ func _refresh_camp_cards() -> void:
 				var d: Dictionary = it
 				if str((d.get("specs", {}) as Dictionary).get("role", "")) != "habitat":
 					continue
+				PerfSpan.begin("gv_cc_summ")
 				var summ: Dictionary = _npc_population.summary_for(str(d.get("id", "")))
+				PerfSpan.end("gv_cc_summ")
 				if not summ.is_empty():
 					morale = float(summ.get("mean_morale", -1.0))
 					present = int(summ.get("count", present))
@@ -20903,8 +20943,12 @@ func _refresh_camp_cards() -> void:
 		patched["camp_open"] = open
 		patched["camp_morale"] = snappedf(morale, 0.01)
 		patched["camp_present"] = present
+		PerfSpan.begin("gv_cc_upd")
 		model.update_item(cid, {"specs": patched})
+		PerfSpan.end("gv_cc_upd")
+	PerfSpan.begin("gv_cc_vibe")
 	_refresh_festival_vibe_from(summaries, queueing)
+	PerfSpan.end("gv_cc_vibe")
 
 
 # ---------------------------------------------------------------------------
@@ -21271,8 +21315,12 @@ func _refresh_system_board() -> void:
 				if not power.is_empty():
 					power["cap_kwh"] = cap
 			var scope := str(sys["child_scope"])
-			var ledger: Dictionary = CampLedger.compute(model, scope, {},
-				GraphNesting.walk_in_index(by_scope, scope)) if not scope.is_empty() else {}
+			var ledger: Dictionary
+			if _camp_ledgers.has(id):
+				ledger = _camp_ledgers[id]
+			else:
+				ledger = CampLedger.compute(model, scope, {},
+					GraphNesting.walk_in_index(by_scope, scope)) if not scope.is_empty() else {}
 			rows.append(GraphSystemBoard.row(item, power, ledger))
 	rows.push_front(GraphSystemBoard.row({}, {}, {}, _site_board_info()))
 	_board_rows = rows
@@ -22047,6 +22095,29 @@ func _on_legend_pill_pressed(domain: String) -> void:
 # ---------------------------------------------------------------------------
 
 var _world_inv_pending := false
+var _world_inv_sig := 0
+
+
+func _world_inventory_sig() -> int:
+	var n_props := 0
+	var loader := _terrain_loader_for_inventory()
+	if loader != null:
+		var lay: Variant = loader.get("_placed_prop_layer")
+		if lay is Object and (lay as Object).get("props") is Array:
+			n_props = ((lay as Object).get("props") as Array).size()
+	var n_lights := 0
+	var main_n := _get_scene_main_node()
+	if main_n != null:
+		var lay2: Object = PlacedLightService.get_layer(main_n)
+		if lay2 != null and lay2.get("lights") is Array:
+			n_lights = (lay2.get("lights") as Array).size()
+	return hash([model.struct_rev if model != null else -1, model.user_rev if model != null else -1,
+		model.items.size() if model != null else 0, n_props, n_lights])
+
+
+func _terrain_loader_for_inventory() -> Node:
+	var main := _get_scene_main_node()
+	return main.get_node_or_null("TerrainLoader") if main != null else null
 var _world_inv_listening := false
 
 
@@ -22068,6 +22139,14 @@ func _queue_world_inventory() -> void:
 func _populate_world_inventory() -> void:
 	if _lib_panel == null or not _lib_panel.has_method("populate_world_inventory"):
 		return
+	# Only when something it lists can have changed: the graph's structure or
+	# a person's edit, or the world's props / lights (the queue fires on every
+	# telemetry flush).
+	var sig := _world_inventory_sig()
+	var box: Variant = _lib_panel.get("_world_box")
+	if sig == _world_inv_sig and is_instance_valid(box) and box is Node:
+		return
+	_world_inv_sig = sig
 	var rows := GraphWorldInventory.collect(self)
 	for r in rows:
 		var d: Dictionary = r
