@@ -99,6 +99,11 @@ func _ready() -> void:
 	_tree.add_theme_font_size_override("font_size", 12)
 	_tree.item_selected.connect(_on_selected)
 	_tree.item_activated.connect(_on_activated)
+	# Hovering a row lights its 3D twin (Phase 4).
+	_tree.gui_input.connect(_on_tree_input)
+	_tree.mouse_exited.connect(func() -> void:
+		if _view != null and _view.has_method("preview_item_hover"):
+			_view.call("preview_item_hover", ""))
 	col.add_child(_tree)
 
 
@@ -422,6 +427,17 @@ func _refresh_status() -> void:
 		ti.set_text(1, "● %s" % str(st["text"]))
 		ti.set_custom_color(1, col)
 		ti.set_text_alignment(1, HORIZONTAL_ALIGNMENT_RIGHT)
+
+
+func _on_tree_input(ev: InputEvent) -> void:
+	if not (ev is InputEventMouseMotion) or _view == null or not _view.has_method("preview_item_hover"):
+		return
+	var ti := _tree.get_item_at_position((ev as InputEventMouseMotion).position)
+	var md: Variant = ti.get_metadata(0) if ti != null else null
+	var id := str(md) if md != null else ""
+	if id.begins_with("@"):
+		id = ""
+	_view.call("preview_item_hover", id)
 
 
 func _on_selected() -> void:

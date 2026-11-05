@@ -336,3 +336,50 @@ static func list(model: GraphModel) -> Array:
 			"name": str(sp.get("name", item.get("label", ""))),
 		})
 	return out
+
+
+## What ties a node to the world (Phase 4 twin badges): "3d" = a prop, a
+## vehicle, a scene device or an OSM feature it stands for; "map" = only a
+## place on the map; "owner" = no place of its own, it is inside a camp or
+## vehicle that has one (Locate and Walk go there); "none" = graph only.
+const TWIN_KEYS := ["bound_prop_id", "vehicle_prop_id", "scene_device_path", "device_path",
+	"osm_tag", "osm_water_tag"]
+
+
+static func twin_kind(model: GraphModel, item: Dictionary) -> String:
+	var own := _own_twin(item)
+	if not own.is_empty():
+		return own
+	if not owner_with_place(model, item).is_empty():
+		return "owner"
+	return "none"
+
+
+static func _own_twin(item: Dictionary) -> String:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	for k: String in TWIN_KEYS:
+		if not str(sp.get(k, item.get(k, ""))).is_empty():
+			return "3d"
+	if GraphSiteLayout.has_site_coords(item) and not bool(item.get("site_derived", false)):
+		return "map"
+	return ""
+
+
+## The nearest compound above `item` that has a place of its own ({} = none).
+static func owner_with_place(model: GraphModel, item: Dictionary) -> Dictionary:
+	if model == null:
+		return {}
+	var scope := str(item.get("scope_id", GraphModel.ROOT_SCOPE_ID))
+	for _depth in 16:
+		if scope == GraphModel.ROOT_SCOPE_ID or scope.is_empty():
+			return {}
+		var oid := str(model.get_scope(scope).get("owner_compound_id", ""))
+		if oid.is_empty():
+			return {}
+		var owner := model.get_item(oid)
+		if owner.is_empty():
+			return {}
+		if not _own_twin(owner).is_empty():
+			return owner
+		scope = str(owner.get("scope_id", GraphModel.ROOT_SCOPE_ID))
+	return {}

@@ -518,6 +518,11 @@ signal controller_reset_pressed(item_id: String)
 ## The "Watch" pill on a festival camp card: open the settlement view over
 ## that camp (the project panel's Watch, from the graph).
 signal camp_watch_pressed(item_id: String)
+## Phase 4 (graph <-> 3D): the node under the pointer changed ("" = none);
+## a card's twin badge was clicked; a dot on the freeform site inset.
+signal item_hovered(item_id: String)
+signal twin_badge_pressed(item_id: String)
+signal inset_system_pressed(item_id: String)
 var _camp_watch_rects: Dictionary = {}
 ## SoI live preview camera — Shift+drag orbit, Shift+wheel zoom.
 signal soi_preview_orbit(relative: Vector2)
@@ -562,6 +567,27 @@ var elev_show_schematic_wires: bool = false
 var elev_show_projected_pipes: bool = false
 ## Current visible graph scope. Root matches historical behavior.
 var active_scope_id: String  = "root"
+## System id -> board level ("ok" | "warn" | "crit" | "idle"), pushed by the
+## view once a second: pins and the site inset colour systems by it.
+var system_status: Dictionary = {}
+## System id -> the board's first reason ("" when fine), for the camp card.
+var system_reasons: Dictionary = {}
+## The freeform corner map of every system (View ▾ → Site map inset).
+var site_inset: bool = true
+var _twin_badge_rects: Dictionary = {}
+var _inset_rect := Rect2()
+var _inset_dots: Array = []      # [[id, Vector2]] ("" = the site's own system)
+var _hover_emit_id := ""
+const SYSTEM_LEVEL_COLORS := {"ok": Color(0.36, 0.86, 0.52), "warn": Color(0.98, 0.72, 0.28),
+	"crit": Color(0.98, 0.36, 0.36), "idle": Color(0.55, 0.60, 0.68)}
+
+
+## Tell the view which node the pointer is over (change-gated).
+func _set_hover_item(item_id: String) -> void:
+	if item_id == _hover_emit_id:
+		return
+	_hover_emit_id = item_id
+	item_hovered.emit(item_id)
 
 ## Global wire-style override (set by the toolbar "Wire style" control). Empty
 ## string = use each connection's own `line_style`; otherwise this value
@@ -2612,6 +2638,23 @@ func request_continuous_redraw() -> void:
 # Left-button press: port hit → wire drag; item hit → item drag.
 func _on_lmb_press(screen_pos: Vector2) -> void:
 	if model == null:
+		return
+	for bid in _twin_badge_rects:
+		if (_twin_badge_rects[bid] as Rect2).grow(3.0).has_point(screen_pos):
+			twin_badge_pressed.emit(str(bid))
+			return
+	if _inset_rect.has_area() and _inset_rect.has_point(screen_pos):
+		var best := ""
+		var best_d := 12.0
+		var hit := false
+		for d: Array in _inset_dots:
+			var dd := (d[1] as Vector2).distance_to(screen_pos)
+			if dd < best_d:
+				best_d = dd
+				best = str(d[0])
+				hit = true
+		if hit:
+			inset_system_pressed.emit(best)
 		return
 	for wid in _camp_watch_rects:
 		var wr: Rect2 = _camp_watch_rects[wid]
@@ -6747,6 +6790,9 @@ func _draw_world_pins() -> void:
 		var state_col := _pin_state_color(item)
 		if state_col.a > 0.0:
 			col = state_col
+		var is_system := system_status.has(iid)
+		if is_system:
+			col = SYSTEM_LEVEL_COLORS.get(str(system_status[iid]), col)
 		var sel := iid == selected_item_id or selected_item_ids.has(iid)
 		var hov := iid == _globe_hover_id
 		var dragging := iid == _pin_drag_id and _pin_drag_moved
@@ -6759,7 +6805,7 @@ func _draw_world_pins() -> void:
 			draw_arc(p, 14.0, 0.0, TAU, 32, Color(col.r, col.g, col.b, 0.55), 1.0, true)
 		draw_line(p, head, Color(col.r, col.g, col.b, 0.75), 1.5, true)
 		draw_circle(p, 2.0, Color(col.r, col.g, col.b, 0.9))
-		var r := GLOBE_PIN_R * (1.35 if (sel or hov or dragging) else 1.0)
+		var r := GLOBE_PIN_R * (1.35 if (sel or hov or dragging) else (1.2 if is_system else 1.0))
 		draw_circle(head, r + 1.5, Color(0.02, 0.04, 0.08, 0.85))
 		draw_circle(head, r, col)
 		if locked:
@@ -6768,26 +6814,27 @@ func _draw_world_pins() -> void:
 		if sel:
 			draw_arc(head, r + 4.0, 0.0, TAU, 32, Color(1.0, 1.0, 1.0, 0.9), 1.5, true)
 		_globe_pin_px[iid] = head
+		var text := str((item.get("specs", {}) as Dictionary).get("name", item.get("label", "")))
+		if text.is_empty():
+			text = _type_title(itype, item.get("specs", {}) as Dictionary)
 		if sel or hov or dragging:
-			var text := str(item.get("label", _type_title(itype, item.get("specs", {}) as Dictionary)))
+			text = str(item.get("label", text)) if text.is_empty() else text
 			if locked and hov and not dragging:
 				text += "  · follows its " + _pin_lock_reason(item)
 			elif dragging:
 				text += _pin_drag_readout(item)
-			labels.append([head, text, col])
+			labels.append([head, text, col, 9])
+		else:
+			# Names at rest, decluttered below: systems first, then the big
+			# machines, then the rest.
+			var prio := 3 if is_system else (2 if itype in ["compound", "processor", "controller",
+				"battery", "smartbattery", "hydro", "wind"] else 1)
+			labels.append([head, text, col, prio])
 	if not was_cached:
 		_draw_cache_active = false
 	_draw_lens_run_pills()
 	_draw_connect_tool()
-	for l in labels:
-		var at: Vector2 = l[0]
-		var text: String = l[1]
-		var tw := fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		var box := Rect2(at + Vector2(10.0, -11.0), Vector2(tw + 12.0, 20.0))
-		draw_rect(box, Color(0.03, 0.06, 0.11, 0.86))
-		draw_rect(box, Color((l[2] as Color).r, (l[2] as Color).g, (l[2] as Color).b, 0.7), false, 1.0)
-		draw_string(fnt, box.position + Vector2(6.0, 15.0), text,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.92, 0.96, 1.0))
+	_draw_pin_labels(labels, fnt)
 	if _pin_drag_locked and _pin_drag_moved and not _pin_drag_id.is_empty():
 		var it := model.get_item(_pin_drag_id)
 		var hint := "Locked — move its %s in 3D" % _pin_lock_reason(it)
@@ -6795,6 +6842,62 @@ func _draw_world_pins() -> void:
 		var hp := _pin_press_pos + Vector2(14.0, 22.0)
 		draw_rect(Rect2(hp - Vector2(6.0, 14.0), Vector2(hw + 12.0, 20.0)), Color(0.25, 0.08, 0.05, 0.9))
 		draw_string(fnt, hp, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.8, 0.7))
+
+
+## Pin names (Phase 4): the selected / hovered / dragged pin's always, the
+## rest at rest by priority (systems, big machines, everything else), each
+## only where it lands on no other name or pin head; at most PIN_LABELS_MAX.
+const PIN_LABELS_MAX := 60
+var pin_labels_drawn := 0
+
+
+func _draw_pin_labels(labels: Array, fnt: Font) -> void:
+	labels.sort_custom(func(a: Array, b: Array) -> bool: return int(a[3]) > int(b[3]))
+	var heads: Array[Rect2] = []
+	for l in labels:
+		heads.append(Rect2((l[0] as Vector2) - Vector2(GLOBE_PIN_R, GLOBE_PIN_R),
+			Vector2(GLOBE_PIN_R, GLOBE_PIN_R) * 2.0))
+	var placed: Array[Rect2] = []
+	var view := Rect2(Vector2.ZERO, size)
+	var shown := 0
+	pin_labels_drawn = 0
+	for l in labels:
+		var at: Vector2 = l[0]
+		var text: String = l[1]
+		var prio := int(l[3])
+		var big := prio >= 9
+		var fs := 13 if big else 11
+		if not big:
+			if shown >= PIN_LABELS_MAX:
+				continue
+			text = UiText.fit(fnt, text, fs, 150.0, "pin name")
+			if text.is_empty():
+				continue
+		var tw := fnt.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var box := Rect2(at + Vector2(10.0, -float(fs) + 2.0), Vector2(tw + 12.0, float(fs) + 7.0))
+		if not big:
+			if not view.encloses(box):
+				continue
+			var clash := false
+			for p: Rect2 in placed:
+				if p.intersects(box):
+					clash = true
+					break
+			if not clash:
+				for h: Rect2 in heads:
+					if h.intersects(box) and not h.has_point(at):
+						clash = true
+						break
+			if clash:
+				continue
+			shown += 1
+		placed.append(box)
+		pin_labels_drawn = placed.size()
+		var c: Color = l[2]
+		draw_rect(box, Color(0.03, 0.06, 0.11, 0.86 if big else 0.72))
+		draw_rect(box, Color(c.r, c.g, c.b, 0.7 if big else 0.45), false, 1.0)
+		draw_string(fnt, box.position + Vector2(6.0, float(fs) + 2.0), text,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.92, 0.96, 1.0) if big else Color(0.82, 0.87, 0.94))
 
 
 ## Live telemetry colour for a pin head (a siphon / hydro turbine's regime);
@@ -6994,6 +7097,7 @@ func _handle_pin_input(event: InputEvent) -> bool:
 		var hid2 := _globe_pin_at(mm.position)
 		if hid2 != _globe_hover_id:
 			_globe_hover_id = hid2
+			_set_hover_item(hid2)
 			queue_redraw()
 		return false
 	return false
@@ -7209,6 +7313,9 @@ func _draw() -> void:
 		return
 	_controller_reset_rects.clear()
 	_camp_watch_rects.clear()
+	_twin_badge_rects.clear()
+	_inset_rect = Rect2()
+	_inset_dots.clear()
 	_poi_heads.clear()
 	_refresh_ambient_wired_ports()
 	_alert_seen_this_draw = false
@@ -11599,6 +11706,7 @@ func _handle_connect_tool_input(event: InputEvent) -> bool:
 		var hid := _globe_pin_at((event as InputEventMouseMotion).position)
 		if hid != _globe_hover_id:
 			_globe_hover_id = hid
+			_set_hover_item(hid)
 			queue_redraw()
 		return false
 	if not (event is InputEventMouseButton):

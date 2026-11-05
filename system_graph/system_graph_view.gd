@@ -122,6 +122,7 @@ const VIEW_PBI_BAR := 103
 ## GraphSystemBoard.OVERLAYS; the full-screen Festival board.
 const VIEW_OVERLAY_BASE := 110
 const VIEW_BOARD_FULL := 120
+const VIEW_SITE_INSET := 121
 
 ## Wire-style control popup ids.
 const WIRE_STYLE_BEZIER := 300
@@ -457,6 +458,10 @@ var _lab_conduit_prefs_saved: bool = false
 var _selected_item_ids: Array[String] = []
 var _embodiment_prop_id: String = ""
 var _embodiment_solar_tag: String = ""
+var _embodiment_camp_id: String = ""
+## The node the pointer is over (cards, pins, outliner rows): its 3D twin is
+## lit while hovered, the selection's again after (Phase 4).
+var _hover_twin_id: String = ""
 var _active_scope_id: String = "root"
 var _scope_trail: Array[String] = ["root"]
 
@@ -1907,6 +1912,15 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("camp_watch_pressed"):
 		if not gc.is_connected("camp_watch_pressed", _on_camp_watch_pressed):
 			gc.connect("camp_watch_pressed", _on_camp_watch_pressed)
+	if gc.has_signal("item_hovered"):
+		if not gc.is_connected("item_hovered", preview_item_hover):
+			gc.connect("item_hovered", preview_item_hover)
+	if gc.has_signal("twin_badge_pressed"):
+		if not gc.is_connected("twin_badge_pressed", _on_twin_badge_pressed):
+			gc.connect("twin_badge_pressed", _on_twin_badge_pressed)
+	if gc.has_signal("inset_system_pressed"):
+		if not gc.is_connected("inset_system_pressed", _on_inset_system_pressed):
+			gc.connect("inset_system_pressed", _on_inset_system_pressed)
 	if gc.has_signal("site_background_clicked"):
 		if not gc.is_connected("site_background_clicked", _on_site_background_clicked):
 			gc.connect("site_background_clicked", _on_site_background_clicked)
@@ -2788,6 +2802,8 @@ func _build_topbar() -> Control:
 	vp.add_submenu_node_item("Colour systems by", ovp)
 	_overlay_popup = ovp
 	vp.add_item("Festival board (full screen)", VIEW_BOARD_FULL)
+	vp.add_check_item("Site map inset (freeform)", VIEW_SITE_INSET)
+	vp.set_item_checked(vp.get_item_index(VIEW_SITE_INSET), _display_pref_systems("inset", true))
 	vp.add_separator()
 	vp.add_item("Hints & shortcuts", VIEW_HINTS)
 	vp.id_pressed.connect(_on_view_menu_id)
@@ -2902,6 +2918,9 @@ func _on_view_menu_id(id: int) -> void:
 		return
 	if id == VIEW_BOARD_FULL:
 		toggle_board_fullscreen()
+		return
+	if id == VIEW_SITE_INSET:
+		set_site_inset(not _display_pref_systems("inset", true))
 		return
 	match id:
 		VIEW_LEGEND:  _on_legend_toggle()
@@ -10559,9 +10578,31 @@ func open_node_in_graph(item_id: String) -> bool:
 		_show_toast("That prop has no node on the graph")
 		return false
 	open_graph_view()
-	select_item_by_id(item_id)
+	# The node may be inside a camp or a vehicle: go into its scope first
+	# (focus_graph_item walks the trail and selects it).
+	var it := model.get_item(item_id)
+	if str(it.get("scope_id", "root")) != _active_scope_id:
+		focus_graph_item(item_id)
+	else:
+		select_item_by_id(item_id)
 	_frame_item_in_lens(item_id)
 	return true
+
+
+## A painted camp or a festival lot from the world (the camp Tune look's
+## "Open in graph"): its compound, framed at the site level.
+func open_camp_in_graph(camp_id: String) -> bool:
+	if model == null or camp_id.is_empty():
+		return false
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	for c: Dictionary in festival_camps():
+		var lot := str(c["lot_id"])
+		var area := lot.substr(5) if lot.begins_with("camp:") else \
+			(str(loader.call("camp_area_for_lot", lot)) if loader != null and loader.has_method("camp_area_for_lot") else "")
+		if area == camp_id or lot == camp_id:
+			return open_node_in_graph(str(c["id"]))
+	_show_toast("That camp has no system on the graph yet (it needs people: Festival mode or a headcount)")
+	return false
 
 
 ## Centre a node in whatever lens is up: the card in freeform, its pin in
@@ -10596,6 +10637,10 @@ func _item_world_xz_for_handoff(it: Dictionary) -> Vector2:
 		if soi != null and soi.has_method("world_center"):
 			center = soi.call("world_center")
 		return GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(it), center)
+	# No place of its own: the camp or vehicle it is inside (Phase 4).
+	var owner := GraphSystems.owner_with_place(model, it)
+	if not owner.is_empty():
+		return _item_world_xz_for_handoff(owner)
 	return Vector2.INF
 
 
@@ -10676,18 +10721,7 @@ func locate_item_in_world(item_id: String) -> bool:
 	var main := _get_scene_main_node()
 	if it.is_empty() or main == null:
 		return false
-	var pid := str((it.get("specs", {}) as Dictionary).get("bound_prop_id", ""))
-	var at := Vector2.INF
-	if not pid.is_empty():
-		var rec := PlacedPropService.get_prop_record(main, pid)
-		if not rec.is_empty():
-			at = Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
-	if at == Vector2.INF and GraphSiteLayout.has_site_coords(it):
-		var soi := get_node_or_null("/root/SoiService")
-		var center := Vector3.ZERO
-		if soi != null and soi.has_method("world_center"):
-			center = soi.call("world_center")
-		at = GraphSiteLayout.site_to_world_xz(GraphSiteLayout.site_xz(it), center)
+	var at := _item_world_xz_for_handoff(it)
 	if at == Vector2.INF or not main.has_method("open_settlement_view"):
 		_show_toast("This node has no place in the 3D world yet")
 		return false
@@ -10733,6 +10767,9 @@ func _clear_embodiment_highlight() -> void:
 	_embodiment_prop_id = ""
 	_embodiment_solar_tag = ""
 	var loader := _find_terrain_loader(main)
+	if not _embodiment_camp_id.is_empty() and loader != null and loader.has_method("clear_camp_highlight"):
+		loader.call("clear_camp_highlight")
+	_embodiment_camp_id = ""
 	if loader != null:
 		if loader.has_method("clear_graph_solar_highlight"):
 			loader.call("clear_graph_solar_highlight")
@@ -10749,6 +10786,15 @@ func _apply_embodiment_highlight(item: Dictionary) -> void:
 	var main := _get_scene_main_node()
 	var loader := _find_terrain_loader(main)
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	# A festival camp: its painted outline (the crosshair's camp highlight).
+	var lot := str(specs.get("camp_lot_id", ""))
+	if not lot.is_empty() and loader != null and loader.has_method("set_camp_focus"):
+		var area := lot.substr(5) if lot.begins_with("camp:") else \
+			(str(loader.call("camp_area_for_lot", lot)) if loader.has_method("camp_area_for_lot") else "")
+		if not area.is_empty():
+			_embodiment_camp_id = area
+			loader.call("set_camp_focus", area)
+			return
 	var prop_id := str(specs.get("bound_prop_id", ""))
 	if not prop_id.is_empty() and main != null:
 		_embodiment_prop_id = prop_id
@@ -10776,6 +10822,44 @@ func _apply_embodiment_highlight(item: Dictionary) -> void:
 			node = get_tree().root.get_node_or_null(NodePath(scene_path))
 		if node != null and loader != null and loader.has_method("highlight_scene_node_for_graph"):
 			loader.call("highlight_scene_node_for_graph", node)
+
+
+## Hovering a card, pin or outliner row lights its 3D twin (the lens
+## previews draw it); leaving it puts the selection's highlight back. Change-
+## gated: motion events arrive every frame.
+func preview_item_hover(item_id: String) -> void:
+	if item_id == _hover_twin_id or model == null:
+		return
+	_hover_twin_id = item_id
+	var it := model.get_item(item_id) if not item_id.is_empty() else {}
+	if it.is_empty():
+		var sel := model.get_item(_selected_item_ids[0]) if not _selected_item_ids.is_empty() else {}
+		if sel.is_empty():
+			_clear_embodiment_highlight()
+		else:
+			_apply_embodiment_highlight(sel)
+		return
+	_apply_embodiment_highlight(it)
+
+
+func hovered_twin_id() -> String:
+	return _hover_twin_id
+
+
+## The twin badge on a card: Locate its 3D twin (or its owner's place).
+func _on_twin_badge_pressed(item_id: String) -> void:
+	var it := model.get_item(item_id) if model != null else {}
+	if it.is_empty():
+		return
+	if GraphSystems.twin_kind(model, it) == "none":
+		_show_toast("Graph only: give it a place by dragging its pin in Site Plan, or bind it to a prop")
+		return
+	locate_item_in_world(item_id)
+
+
+## A dot on the freeform site inset ("" = the site's own system).
+func _on_inset_system_pressed(item_id: String) -> void:
+	board_fly_to(item_id, false)
 
 
 func _on_canvas_item_selected(item_id: String) -> void:
@@ -11761,6 +11845,8 @@ func _apply_display_prefs() -> void:
 	for key in _DISPLAY_PREFS:
 		if str(key) in _graph_canvas:
 			_graph_canvas.set(str(key), _display_pref(str(key)))
+	if "site_inset" in _graph_canvas:
+		_graph_canvas.set("site_inset", _display_pref_systems("inset", true))
 	_graph_canvas.call("queue_redraw")
 
 
@@ -21201,6 +21287,29 @@ func board_fly_to(id: String, enter: bool = false) -> void:
 
 # --- overlays ---------------------------------------------------------------
 
+## ui_prefs.cfg [graph_systems] (overlay mode, the site inset).
+func _display_pref_systems(key: String, def: bool) -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(_UI_PREFS_CFG) == OK:
+		return bool(cfg.get_value("graph_systems", key, def))
+	return def
+
+
+func set_site_inset(on: bool) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	cfg.set_value("graph_systems", "inset", on)
+	cfg.save(_UI_PREFS_CFG)
+	if _view_menu != null:
+		var vp := _view_menu.get_popup()
+		var idx := vp.get_item_index(VIEW_SITE_INSET)
+		if idx >= 0:
+			vp.set_item_checked(idx, on)
+	if _graph_canvas != null and "site_inset" in _graph_canvas:
+		_graph_canvas.set("site_inset", on)
+		_graph_canvas.queue_redraw()
+
+
 func system_overlay_mode() -> String:
 	if _overlay_mode.is_empty():
 		var cfg := ConfigFile.new()
@@ -21257,6 +21366,16 @@ func _push_system_overlay() -> void:
 	var ov := {"mode": mode, "values": GraphSystemBoard.overlay_values(_board_rows, mode),
 		"hidden": _overlay_hidden.duplicate()}
 	_graph_canvas.set("system_overlay", ov)
+	if "system_status" in _graph_canvas:
+		var st: Dictionary = {}
+		var why: Dictionary = {}
+		for r: Dictionary in _board_rows:
+			if not str(r["id"]).is_empty():
+				st[str(r["id"])] = str(r["level"])
+				var rs: Array = r["reasons"]
+				why[str(r["id"])] = ", ".join(PackedStringArray(rs))
+		_graph_canvas.set("system_status", st)
+		_graph_canvas.set("system_reasons", why)
 	_graph_canvas.queue_redraw()
 	_refresh_overlay_legend()
 

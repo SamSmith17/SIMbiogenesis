@@ -404,6 +404,19 @@ static func _group(spec: Dictionary, specs: Dictionary, ctx: Dictionary) -> void
 			bits.append("⚡ " + UiText.pct(float(specs.get("camp_soc", 0.0))))
 		spec["sub"] = " · ".join(bits)
 		var open: Array = specs.get("camp_open", []) as Array
+		# The Festival board's verdict when the canvas has it (Phase 4): it
+		# knows the stores' days, so a camp living off a week of water reads
+		# fine here as on the board.
+		var lvl := str(ctx.get("sys_level", ""))
+		if not lvl.is_empty():
+			var why := str(ctx.get("sys_reason", ""))
+			if lvl in ["warn", "crit"] and not why.is_empty():
+				spec["footer"] = "⚠ " + why
+				spec["footer_color"] = GraphTheme.WARN if lvl == "warn" else Color(0.98, 0.36, 0.36)
+			else:
+				spec["footer"] = "All loops closed" if open.is_empty() else "Fine: its stores cover it"
+				spec["footer_color"] = GraphTheme.OK
+			return
 		if open.is_empty():
 			spec["footer"] = "All loops closed"
 			spec["footer_color"] = GraphTheme.OK

@@ -4,7 +4,7 @@ extends SceneTree
 ## GraphCard.layout). Offline; carries EXPECTED_CHECKS.
 ##   godot --headless --path . --script system_graph/graph_card_specs_selftest.gd
 
-const EXPECTED_CHECKS := 44
+const EXPECTED_CHECKS := 45
 
 var _checks := 0
 var _fails := 0
@@ -210,6 +210,13 @@ func _test_groups() -> void:
 		"camp_headcount": 24, "camp_present": 20, "camp_morale": 0.8, "camp_open": ["water", "blackwater"]}}, {})
 	_ok(camp["hero"] == "20 people" and str(camp["footer"]).contains("blackwater out"),
 		"a camp: who is there, and the loops it has not closed (%s)" % camp["footer"])
+	var camp_specs := {"camp_lot_id": "A1", "camp_headcount": 24, "camp_open": ["water"]}
+	var fine := GraphCardSpecs.for_item({"id": "cp", "type": "compound", "specs": camp_specs},
+		{"sys_level": "ok", "sys_reason": ""})
+	var dark := GraphCardSpecs.for_item({"id": "cp", "type": "compound", "specs": camp_specs},
+		{"sys_level": "crit", "sys_reason": "no power"})
+	_ok(str(fine["footer"]).begins_with("Fine") and str(dark["footer"]).contains("no power"),
+		"with the board's verdict the camp card says what the board says (%s / %s)" % [fine["footer"], dark["footer"]])
 	var grp := GraphCardSpecs.for_item({"id": "g", "type": "compound", "specs": {"name": "Pump house",
 		"child_count": 5, "port_in_count": 2, "port_out_count": 1}}, {})
 	_ok(grp["title"] == "Pump house" and grp.get("media", "") == "miniature" and grp["hero"] == "5 nodes",

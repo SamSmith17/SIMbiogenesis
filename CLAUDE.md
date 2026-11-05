@@ -3213,6 +3213,63 @@ The Walton check covers:
   the cost). The Walton world as saved has 24 camps with no power at its
   hour, so those are on the rail from the start.
 
+**Always know what a node is (Phase 4, 2026-11-04):**
+- **Twin kind** (`GraphSystems.twin_kind(model, item)`, pure):
+  - "3d": a prop, vehicle, scene device or OSM feature (`TWIN_KEYS`);
+  - "map": only a place on the map (a `site_derived` place does not count);
+  - "owner": no place of its own, but inside a camp or vehicle that has one
+    (`owner_with_place`);
+  - "none": graph only.
+
+  `_item_world_xz_for_handoff` falls back to the owner, so Locate and Walk
+  work for every node inside a camp or vehicle; `locate_item_in_world` now
+  uses it too.
+- **Twin badges:** every card at least `TWIN_BADGE_MIN_PX` (120 px) wide
+  carries a small chip just outside its right edge at the header (the top and
+  bottom edges carry the ports and their names; `_draw_twin_badge`,
+  freeform): a box
+  for 3D, a pin for the map or its owner's place, a struck circle for graph
+  only. A click Locates (`twin_badge_pressed`); graph only explains how to
+  place it.
+- **Hover, both ways:**
+  - The canvas emits `item_hovered` (cards, and pins in the lens views). The
+    outliner rows do the same through `preview_item_hover`.
+  - `_apply_embodiment_highlight` lights the twin while hovered and puts the
+    selection's highlight back after. It gained camps: a camp compound lights
+    its painted outline through `loader.set_camp_focus`
+    (`_embodiment_camp_id`). Vehicles light through their `bound_prop_id`.
+    The lens previews share the world, so they draw it.
+- **Open in graph enters scopes:** `open_node_in_graph` goes into the
+  node's camp or vehicle first (`focus_graph_item`). The camp Tune look (camp
+  mode) has "Open its system in the graph" (`open_camp_in_graph(camp id)`:
+  a painted camp or a lot's camp).
+- **Pins that read** (`_draw_pin_labels`):
+  - names at rest, at most `PIN_LABELS_MAX`, by priority: selected / hovered
+    / dragged, then systems, then big machines, then the rest;
+  - a name is drawn only where it lands on no other name or pin head
+    (`pin_labels_drawn` for checks);
+  - a system's pin is coloured by its board level (`system_status`, pushed
+    with the overlay) and drawn a little larger.
+  - Grouping pins per system needed nothing new: a camp's contents live in
+    its scope, so at the site level a camp is already one pin.
+- **The camp card says what the board says:** the canvas gets each
+  system's level and reasons (`system_status`, `system_reasons`) and passes
+  them to `GraphCardSpecs` as ctx `sys_level` / `sys_reason`. A camp living
+  off its stores reads "Fine: its stores cover it" instead of a warning per
+  open loop. Without the ctx (selftests) the old footer stays.
+- **Freeform site inset** (`_draw_site_inset`, bottom right of the canvas,
+  View ▾ → Site map inset, ui_prefs.cfg `[graph_systems] inset`): every
+  system a dot where it stands, coloured by level, the site's own system at
+  home in cyan, systems on screen ringed, the one you are inside (or have
+  selected) ringed bright. A click flies there (`inset_system_pressed` →
+  `board_fly_to`).
+- Gate: `tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_twin_check.gd -Label graph_twin -Timeout 900`
+  (real input: hover lights and clears the camp outline, badge kinds, a badge
+  click looks at the camp and Esc returns to it, Open in graph into a camp's
+  scope, the camp's own Open in graph, Site Plan pin names, the inset's dots
+  and a click on one, the View toggle). Selftests: graph_systems 47
+  (`_test_twin_kind`), graph_card_specs 45.
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a

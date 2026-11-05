@@ -9,7 +9,7 @@ extends SceneTree
 ## Pure / offline. Run --import first.
 ##   godot --headless --path . --script system_graph/graph_systems_selftest.gd
 
-const EXPECTED_CHECKS := 42
+const EXPECTED_CHECKS := 47
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 var _failures := 0
@@ -24,6 +24,7 @@ func _init() -> void:
 	_test_ring()
 	_test_arrange_by_site()
 	_test_derived_sites()
+	_test_twin_kind()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -289,3 +290,25 @@ func _test_derived_sites() -> void:
 	for id in want.keys():
 		far = maxf(far, (want[id] as Vector2).distance_to(Vector2(100.0, -40.0)))
 	_check("the places sit round the camp, inside its radius", far <= 14.0 * 1.42 + 0.01, str(far))
+
+
+## Phase 4: what ties a node to the world, and its owner's place.
+func _test_twin_kind() -> void:
+	var model = GraphModelScript.new()
+	var def := CampTemplates.definition("theme_camp", 12)
+	model.put_definition(def)
+	var camp: String = GraphComponentDefs.realize(model, str(def["id"]), "root", Vector2.ZERO,
+		{"camp_lot_id": "lot_t", "camp_headcount": 12, "name": "Camp T"})
+	var kids := model.get_items_in_scope(str(model.get_item(camp).get("child_scope_id", "")))
+	var kid: Dictionary = kids[0]
+	_check("a camp with no place and a child: graph only", GraphSystems.twin_kind(model, kid) == "none")
+	model.update_item(camp, {"site_x_m": 10.0, "site_z_m": 5.0})
+	_check("a camp with a map place reads map", GraphSystems.twin_kind(model, model.get_item(camp)) == "map")
+	_check("its child follows its place", GraphSystems.twin_kind(model, model.get_item(str(kid["id"]))) == "owner"
+		and str(GraphSystems.owner_with_place(model, model.get_item(str(kid["id"]))).get("id", "")) == camp)
+	model.update_item(str(kid["id"]), {"site_x_m": 11.0, "site_z_m": 6.0, "site_derived": true})
+	_check("a derived place is still its owner's", GraphSystems.twin_kind(model, model.get_item(str(kid["id"]))) == "owner")
+	var sp: Dictionary = (model.get_item(str(kid["id"])).get("specs", {}) as Dictionary).duplicate()
+	sp["bound_prop_id"] = "prop_9"
+	model.update_item(str(kid["id"]), {"specs": sp})
+	_check("a bound prop is a 3D twin", GraphSystems.twin_kind(model, model.get_item(str(kid["id"]))) == "3d")

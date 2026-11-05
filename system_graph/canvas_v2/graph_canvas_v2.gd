@@ -64,7 +64,9 @@ func _gui_input(event: InputEvent) -> void:
 		# is never read anywhere.
 		# Path highlight: the node under the pointer (not while dragging).
 		if not _item_dragging and not _wire_dragging and mm.button_mask == 0:
-			set_path_focus(str(_item_at_screen(mm.position).get("id", "")))
+			var hov_id := str(_item_at_screen(mm.position).get("id", ""))
+			set_path_focus(hov_id)
+			_set_hover_item(hov_id)
 		var port := _port_at_screen(mm.position, "", "", _port_grab_radius())
 		var before := _hover_port_identity()
 		_hover_port = port
@@ -77,6 +79,8 @@ func _notification(what: int) -> void:
 	super._notification(what)
 	# The pointer left the canvas: drop the port tooltip (it lingered over the
 	# graph after the pointer moved onto the timeline or a panel).
+	if what == NOTIFICATION_MOUSE_EXIT:
+		_set_hover_item("")
 	if what == NOTIFICATION_MOUSE_EXIT and not _hover_port.is_empty():
 		_hover_port = {}
 		queue_redraw()
@@ -99,6 +103,7 @@ func _draw() -> void:
 	super._draw()
 	_draw_system_overlay_site()
 	_draw_tile_labels()
+	_draw_site_inset()
 	_draw_inside_cue()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		return
@@ -266,6 +271,7 @@ func _render_item(item: Dictionary) -> void:
 		if itype0 not in ["controller", "appliance", "acload"] or not _icon_replaces_frame(sp0):
 			_render_card_v2(item)
 			_draw_overlay_outline(item)
+			_draw_twin_badge(item)
 			return
 	# Full-bleed icon/model preview (skip frame + title); keep ports + selection.
 	var specs_early: Dictionary = item.get("specs", {}) as Dictionary
@@ -314,6 +320,8 @@ func _render_card_v2(item: Dictionary) -> void:
 				if itype == "compound" else GraphAcLoad.item_draw_watts(model, item, tree, _find_sim_load_host())
 	elif itype == "compound" and _compound_displays_as_battery(specs):
 		_card_ctx["agg_soc"] = _aggregate_child_battery_soc(item)
+	_card_ctx["sys_level"] = str(system_status.get(iid, ""))
+	_card_ctx["sys_reason"] = str(system_reasons.get(iid, ""))
 	_card_ctx.erase("array_live_w")
 	_card_ctx.erase("array_peak_w")
 	_card_ctx.erase("array_count")
@@ -393,6 +401,100 @@ func _overlay_for(id: String) -> Dictionary:
 	var hidden: Dictionary = system_overlay.get("hidden", {}) as Dictionary
 	return {"on": true, "color": GraphSystemBoard.overlay_color(mode, v),
 		"hidden": b >= 0 and hidden.has(b)}
+
+
+## The twin badge (Phase 4): a small chip on a card's top edge saying what
+## ties the node to the world — a 3D twin, a place on the map, its camp's or
+## vehicle's place, or nothing (graph only). Clicking it Locates the twin.
+const TWIN_BADGE_MIN_PX := 120.0
+const TWIN_BADGE := {
+	"3d": ["box", Color(0.40, 0.82, 0.95), "Has a 3D twin: click to look at it"],
+	"map": ["map-pin", Color(0.98, 0.78, 0.40), "Placed on the map (no 3D object): click to look there"],
+	"owner": ["map-pin", Color(0.70, 0.74, 0.82), "Inside a camp or vehicle: click to look at it"],
+	"none": ["", Color(0.50, 0.54, 0.62), "Graph only: it has no place in the world yet"],
+}
+
+
+func _draw_twin_badge(item: Dictionary) -> void:
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM or bool(item.get("is_virtual", false)):
+		return
+	var sz := _item_screen_size(item)
+	if sz.x < TWIN_BADGE_MIN_PX:
+		return
+	var kind := GraphSystems.twin_kind(model, item)
+	var meta: Array = TWIN_BADGE[kind]
+	var tl := _item_screen_tl(item, size * 0.5)
+	# Just outside the card's right edge at the header: the top and bottom
+	# edges carry the ports and their names.
+	var r := Rect2(Vector2(tl.x + sz.x + 3.0, tl.y + 8.0), Vector2(20.0, 16.0))
+	var col: Color = meta[1]
+	GraphFastDraw.rrect(self, r, 6.0, Color(0.04, 0.06, 0.10, 0.94))
+	draw_rect(r, Color(col, 0.75), false, 1.0)
+	if str(meta[0]).is_empty():
+		draw_arc(r.get_center(), 4.0, 0.0, TAU, 14, Color(col, 0.9), 1.2, true)
+		draw_line(r.get_center() + Vector2(-3.0, 3.0), r.get_center() + Vector2(3.0, -3.0), Color(col, 0.9), 1.2)
+	else:
+		var tex := UiIcons.icon(str(meta[0]), 12)
+		draw_texture_rect(tex, Rect2(r.get_center() - Vector2(6.0, 6.0), Vector2(12.0, 12.0)), false, col)
+	_twin_badge_rects[str(item.get("id", ""))] = r
+
+
+## Freeform site inset (Phase 4): every system as a dot where it stands on the
+## map, the site's own system at home, the ones on screen ringed. A click
+## flies there. Only while systems exist and the inset is on.
+const INSET_SIZE := Vector2(210.0, 150.0)
+
+
+func _draw_site_inset() -> void:
+	if not site_inset or view_mode != GraphSiteLayout.VIEW_FREEFORM or model == null or system_status.is_empty():
+		return
+	var pts: Array = [["", Vector2.ZERO]]
+	var lo := Vector2.ZERO
+	var hi := Vector2.ZERO
+	for id: String in system_status.keys():
+		var it := model.get_item(id)
+		if it.is_empty() or not GraphSiteLayout.has_site_coords(it):
+			continue
+		var p := GraphSiteLayout.site_xz(it)
+		pts.append([id, p])
+		lo = lo.min(p)
+		hi = hi.max(p)
+	if pts.size() < 2:
+		return
+	var box := Rect2(Vector2(size.x - INSET_SIZE.x - 14.0, size.y - INSET_SIZE.y - 62.0), INSET_SIZE)
+	if _legend_visible:
+		box.position.y -= 210.0
+	_inset_rect = box
+	GraphFastDraw.rrect(self, box, 8.0, Color(0.03, 0.05, 0.09, 0.88))
+	draw_rect(box, Color(0.30, 0.38, 0.52, 0.8), false, 1.0)
+	var fnt := UITheme.font("semibold")
+	draw_string(fnt, box.position + Vector2(8.0, 14.0), "Site map", HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+		Color(0.62, 0.68, 0.78))
+	var inner := Rect2(box.position + Vector2(12.0, 22.0), box.size - Vector2(24.0, 32.0))
+	var span := (hi - lo).max(Vector2(20.0, 20.0))
+	var k := minf(inner.size.x / span.x, inner.size.y / span.y)
+	var off := inner.get_center() - (lo + hi) * 0.5 * k
+	var view := Rect2(Vector2.ZERO, size)
+	var here := ""
+	if active_scope_id != GraphModel.ROOT_SCOPE_ID:
+		here = str(GraphSystems.island_scopes(model).get(active_scope_id, ""))
+	for d: Array in pts:
+		var id := str(d[0])
+		var q := off + (d[1] as Vector2) * k
+		_inset_dots.append([id, q])
+		if id.is_empty():
+			GraphFastDraw.disc(self, q, 4.5, Color(0.40, 0.82, 0.95))
+			continue
+		var col: Color = SYSTEM_LEVEL_COLORS.get(str(system_status.get(id, "idle")), Color.WHITE)
+		GraphFastDraw.disc(self, q, 3.0, col)
+		var on_screen := false
+		if active_scope_id == GraphModel.ROOT_SCOPE_ID:
+			var it := model.get_item(id)
+			on_screen = view.intersects(Rect2(_item_screen_tl(it, size * 0.5), _item_screen_size(it)))
+		if on_screen:
+			GraphFastDraw.ring(self, q, 5.0, Color(1, 1, 1, 0.55), 1.0)
+		if id == here or id == selected_item_id:
+			GraphFastDraw.ring(self, q, 6.5, Color(1, 1, 1, 0.95), 1.5)
 
 
 ## A system card (not a tile) under an overlay: a thick outline in its colour.

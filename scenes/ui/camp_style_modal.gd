@@ -118,6 +118,16 @@ func open(style_id: String = "", camp_id: String = "") -> void:
 	_rebuild_all()
 
 
+## The camp's system on the graph (Phase 4): close, then open the graph on
+## its compound.
+func _open_in_graph() -> void:
+	var cid := _camp_id
+	close()
+	var gv := ServiceLocator.graph()
+	if gv != null and gv.has_method("open_camp_in_graph"):
+		gv.call("open_camp_in_graph", cid)
+
+
 func close() -> void:
 	if not visible:
 		return
@@ -456,6 +466,13 @@ func _rebuild_rows() -> void:
 			_camp_setter("heading_deg"), "Compass bearing the rows run along", "°")
 		_slider("Align ±", 0.0, 30.0, float(_camp.get("align_jitter_deg", 5.0)), 0.5,
 			_camp_setter("align_jitter_deg"), "How far vehicles sit off the camp heading", "°")
+		var og := Button.new()
+		og.name = "OpenInGraph"
+		og.text = "Open its system in the graph"
+		og.tooltip_text = "Close this and show the camp's power, water and people on the graph (G)"
+		UITheme.style_button(og)
+		og.pressed.connect(_open_in_graph)
+		_target.add_child(og)
 	else:
 		_section("Preview")
 		_slider("Density", 0.2, 1.0, _preview_density, 0.05, func(v: float) -> void:
