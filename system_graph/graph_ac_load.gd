@@ -108,10 +108,15 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 	if flat_conns.is_empty():
 		flat_conns = GraphNesting.flat_connections(model)
 	var total := 0.0
+	# A wire inside a vehicle or camp carries THAT system's power: its loss is
+	# not a load on the site's inverter.
+	var islands := GraphSystems.island_scopes(model)
 	# Loss + telemetry stays on the REAL wires the player sees; only the load-side
 	# reachability BFS uses the flattened graph (via _connection_delivered_watts).
 	for conn: Dictionary in model.connections:
 		if not _is_ac_power_connection(conn):
+			continue
+		if not islands.is_empty() and islands.has(str(conn.get("scope_id", "root"))):
 			continue
 		var enabled: bool = bool(conn.get("simulate_losses", global_on))
 		var type_id: String = ConduitKinds.derive_type_for_connection(conn)
@@ -253,7 +258,9 @@ static func _reachable_ac_load_ids(model: GraphModel, flat_conns: Array = []) ->
 	# A living vehicle's own controller is NOT the site's: its fridge and fans
 	# run off the vehicle's house battery, so they never count toward the
 	# site inverter (forty vehicles' loads tripped its overload).
-	var own := vehicle_scopes(model)
+	# Camps too (GraphSystems): every power island runs its loads off its own
+	# bus.
+	var own := GraphSystems.island_scopes(model)
 	for item: Dictionary in model.items:
 		if str(item.get("type", "")) != "controller":
 			continue

@@ -6362,7 +6362,7 @@ func bind_pv_array_prop(prop_id: String) -> String:
 	var it := model.get_item(iid) if not iid.is_empty() else {}
 	if it.is_empty() or str((it.get("specs", {}) as Dictionary).get("compound_kind", "")) != "array":
 		var ctrl_id := ""
-		for c: Dictionary in GraphNesting.walk_items(model, "root"):
+		for c: Dictionary in GraphSystems.walk_site_power(model):
 			if str(c.get("type", "")) == "controller" and not bool(c.get("is_virtual", false)) \
 					and not bool((c.get("specs", {}) as Dictionary).get("destroyed", false)):
 				ctrl_id = str(c.get("id", ""))
@@ -9924,7 +9924,9 @@ func sync_vehicle_system(prop_id: String, d: Dictionary, world_pos: Vector3) -> 
 			remove_vehicle_system(prop_id)
 		return ""
 	var sig := VehicleGraph.signature(sys)
-	var pos := Vector2(-900.0 + 260.0 * float(_vehicle_system_count() % 6), 1150.0)
+	# Where the vehicle is parked, on a free spot (the old single row put
+	# the 7th vehicle on the 1st, over the camps' third row).
+	var pos := _free_system_card_pos(site) if existing.is_empty() else Vector2.ZERO
 	var soc := -1.0
 	if not existing.is_empty():
 		var it := model.get_item(existing)
@@ -12274,7 +12276,87 @@ func _enter_compound(item_id: String) -> void:
 		return
 	_active_scope_id = child_scope_id
 	_scope_trail.append(child_scope_id)
+	var okey := _scope_owner_key(item)
+	if not okey.is_empty():
+		_scope_owner_keys[child_scope_id] = okey
 	_selected_item_ids.clear()
+	_apply_scope_to_canvas()
+
+
+## Scope id -> the identity of the compound that opened it ("veh:<prop>",
+## "camp:<lot>"), so a vehicle rebuilt under a new child scope (or a camp
+## re-stamped) keeps the player inside it.
+var _scope_owner_keys: Dictionary = {}
+
+
+static func _scope_owner_key(item: Dictionary) -> String:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	if sp.has("vehicle_prop_id"):
+		return "veh:%s" % str(sp["vehicle_prop_id"])
+	if not str(sp.get("camp_lot_id", "")).is_empty():
+		return "camp:%s" % str(sp["camp_lot_id"])
+	return ""
+
+
+func _scope_for_owner_key(key: String) -> String:
+	if key.is_empty() or model == null:
+		return ""
+	for it in model.items:
+		var d: Dictionary = it
+		if str(d.get("type", "")) == "compound" and _scope_owner_key(d) == key:
+			return str(d.get("child_scope_id", ""))
+	return ""
+
+
+## After any structural change (undo / redo, a load, a camp removed by the
+## placement sync, a vehicle rebuilt): every scope on the breadcrumb trail
+## must still exist, or the canvas shows an empty scope with a raw id in the
+## breadcrumb. A gone scope is followed to its owner's new scope when the
+## owner is a vehicle or camp; otherwise the trail stops at the deepest
+## scope still standing.
+## Checked once at the end of the frame: a vehicle rebuild removes its old
+## node and realizes the new one in one go, and checking between the two
+## would drop the player to root instead of following them in.
+var _scope_validation_queued := false
+
+
+func _queue_scope_validation() -> void:
+	if _scope_validation_queued:
+		return
+	_scope_validation_queued = true
+	call_deferred("_run_queued_scope_validation")
+
+
+func _run_queued_scope_validation() -> void:
+	_scope_validation_queued = false
+	_validate_active_scope()
+
+
+func _validate_active_scope() -> void:
+	if model == null:
+		return
+	var intact := true
+	for sid: String in _scope_trail:
+		if sid != "root" and model.get_scope(sid).is_empty():
+			intact = false
+			break
+	if intact and _active_scope_id == _scope_trail[_scope_trail.size() - 1]:
+		return
+	var fixed: Array[String] = ["root"]
+	for i in range(1, _scope_trail.size()):
+		var sid: String = _scope_trail[i]
+		if model.get_scope(sid).is_empty():
+			var follow := _scope_for_owner_key(str(_scope_owner_keys.get(sid, "")))
+			if follow.is_empty() or model.get_scope(follow).is_empty():
+				break
+			_scope_owner_keys[follow] = _scope_owner_keys[sid]
+			_scope_owner_keys.erase(sid)
+			sid = follow
+		fixed.append(sid)
+	_scope_trail = fixed
+	_active_scope_id = fixed[fixed.size() - 1]
+	_selected_item_ids.clear()
+	_update_special_group_buttons()
 	_apply_scope_to_canvas()
 
 
@@ -12878,7 +12960,7 @@ func _build_review_modal() -> Control:
 	var total_cost:     float = 0.0
 	var user_items:     int   = 0
 	if model != null:
-		for item: Dictionary in GraphNesting.walk_items(model, "root"):
+		for item: Dictionary in GraphSystems.walk_site_power(model):
 			if bool(item.get("is_virtual", false)):
 				continue
 			var sp := item.get("specs", {}) as Dictionary
@@ -15637,6 +15719,8 @@ func _on_model_changed(reason: String) -> void:
 		_sync_solar_ui_from_graph()
 		_sync_graph_controller_ac_fault()
 		_queue_world_inventory()
+		if reason != "update_item":
+			_queue_scope_validation()
 	if _layout_driver != null and not _sim_bulk_update \
 			and reason in ["add_item", "remove_item", "add_connection", "remove_connection", "reset"]:
 		_layout_driver.mark_dirty()
@@ -15869,7 +15953,7 @@ func _refresh_telemetry() -> void:
 	var cost_batteries:   float = 0.0
 	var cost_components:  float = 0.0
 
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype: String    = item.get("type",  "") as String
@@ -15924,7 +16008,7 @@ func _refresh_telemetry() -> void:
 
 	# Battery config: count × voltage (or kWh if voltages differ)
 	var bat_count: int = 0
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		if item.get("type", "") in ["battery", "smartbattery"]:
@@ -16070,7 +16154,7 @@ func _controller_power_limits() -> Dictionary:
 	var pv_w := 0.0
 	var ac_w := 0.0
 	var flat := GraphNesting.flat_connections(model)
-	for it: Dictionary in GraphNesting.walk_items(model, "root"):
+	for it: Dictionary in GraphSystems.walk_site_power(model):
 		if str(it.get("type", "")) != "controller" or bool(it.get("is_virtual", false)):
 			continue
 		var sp: Dictionary = it.get("specs", {}) as Dictionary
@@ -16126,7 +16210,7 @@ func _collect_root_array_aggregate_now() -> Dictionary:
 			var cd: Dictionary = c
 			wired_ports["%s|%s" % [cd.get("source_item_id", ""), cd.get("source_handle_id", "")]] = true
 			wired_ports["%s|%s" % [cd.get("target_item_id", ""), cd.get("target_handle_id", "")]] = true
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -16194,7 +16278,7 @@ func _collect_root_array_aggregate_now() -> Dictionary:
 	# blow one up.
 	var panel_voc_max: float = 0.0
 	var flat_conns := GraphNesting.flat_connections_cached(model)
-	for ctrl_item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for ctrl_item: Dictionary in GraphSystems.walk_site_power(model):
 		if str(ctrl_item.get("type", "")) != "controller":
 			continue
 		var cid := str(ctrl_item.get("id", ""))
@@ -16238,7 +16322,7 @@ func _collect_battery_aggregate() -> Dictionary:
 	var bat_count: int = 0
 	if model == null:
 		return {"total_kwh": 0.0, "count": 0}
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -16259,7 +16343,7 @@ func _average_graph_battery_soc() -> float:
 		return -1.0
 	var weighted := 0.0
 	var total_kwh := 0.0
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -16300,6 +16384,10 @@ func _sync_graph_energy_from_solar() -> void:
 			"solar_w": solar_kw * 1000.0,
 			"load_w": load_kw * 1000.0,
 			"valid": true,
+			# Each vehicle's / camp's OWN battery flow (W, + charging), by
+			# island compound id: a battery card inside a vehicle reads its
+			# own bus, never the site battery's flow.
+			"islands": island_battery_flows(),
 		})
 
 	# Bootcamp sandbox: only panels with both terminals wired make power (the
@@ -16317,7 +16405,7 @@ func _sync_graph_energy_from_solar() -> void:
 	# what makes a shaded panel's card read less while the cards still sum to
 	# what the array delivered.
 	var total_wmp := 0.0
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		if str(item.get("type", "")) != "panel":
@@ -16384,7 +16472,7 @@ func _sync_graph_energy_from_solar() -> void:
 			specs_w["pv_curtail"] = curtail
 			model.update_item(iid, {"specs": specs_w})
 
-	for item: Dictionary in GraphNesting.walk_items(model, "root"):
+	for item: Dictionary in GraphSystems.walk_site_power(model):
 		if bool(item.get("is_virtual", false)):
 			continue
 		var itype := str(item.get("type", ""))
@@ -16680,6 +16768,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 			_scope_trail.append(sid)
 	if _scope_trail.is_empty():
 		_scope_trail.append("root")
+	_validate_active_scope()
 
 	_apply_layout()
 
@@ -16935,7 +17024,7 @@ func _dc_throttle_topology() -> Dictionary:
 	var total_wmp := 0.0
 	var routed_wmp := 0.0
 	var shade_ids: Array = []
-	for item in GraphNesting.walk_items(model, "root"):
+	for item in GraphSystems.walk_site_power(model):
 		if not (item is Dictionary):
 			continue
 		var it: Dictionary = item
@@ -19093,7 +19182,7 @@ func _apply_reverse_polarity() -> void:
 func _any_controller_destroyed() -> bool:
 	if model == null:
 		return false
-	for item in GraphNesting.walk_items(model, "root"):
+	for item in GraphSystems.walk_site_power(model):
 		if not (item is Dictionary):
 			continue
 		if str((item as Dictionary).get("type", "")) != "controller":
@@ -19815,7 +19904,6 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		if not want.has(lot_id):
 			model.remove_item(str(have[lot_id]))
 			out["removed"] = int(out["removed"]) + 1
-	var col := 0
 	for lot_id in want.keys():
 		var lot: Dictionary = want[lot_id]
 		var ac: Dictionary = lot["assigned_camp"]
@@ -19832,8 +19920,14 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			var comp: Dictionary = model.get_item(cid)
 			var cspecs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
 			var changed := int(cspecs.get("camp_headcount", -1)) != n or str(cspecs.get("name", "")) != name
+			# Top-level site_x_m / site_z_m are what Site Plan, the world pins,
+			# Locate and Watch read (GraphSiteLayout.has_site_coords); older
+			# camps carried them in specs only, or got an invented top-level
+			# spot from the Site Plan auto-seed. Either reads as "moved".
 			var moved := absf(float(cspecs.get("site_x_m", INF)) - site.x) > 0.01 \
-				or absf(float(cspecs.get("site_z_m", INF)) - site.y) > 0.01
+				or absf(float(cspecs.get("site_z_m", INF)) - site.y) > 0.01 \
+				or absf(float(comp.get("site_x_m", INF)) - site.x) > 0.01 \
+				or absf(float(comp.get("site_z_m", INF)) - site.y) > 0.01
 			if not changed and not moved:
 				# Nothing this sync owns moved: leave the compound and its
 				# habitat alone (every write here is a user_rev move, which
@@ -19843,7 +19937,7 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 			cspecs["name"] = name
 			cspecs["site_x_m"] = site.x
 			cspecs["site_z_m"] = site.y
-			model.update_item(cid, {"specs": cspecs})
+			model.update_item(cid, {"specs": cspecs, "site_x_m": site.x, "site_z_m": site.y})
 			_sync_camp_habitat(cid, n, centre, name)
 			if changed:
 				# The stores were sized for the OLD headcount (the population
@@ -19854,8 +19948,9 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		var preset := str(lot.get("provision", PopTestPrefs.provision_preset()))
 		var def := CampTemplates.definition(style, n, preset)
 		model.put_definition(def)
-		var pos := Vector2(-600.0 + 260.0 * float(col % 6), 700.0 + 220.0 * float(col / 6))
-		col += 1
+		# Laid out where the camp IS on the site, on a free spot: the old grid
+		# restarted at column 0 on every sync and stacked new camps on old.
+		var pos := _free_system_card_pos(site)
 		var power := CampPowerModel.defaults_for(style)
 		var cid2 := GraphComponentDefs.realize(model, str(def["id"]), "root", pos, {
 			"camp_lot_id": lot_id, "camp_headcount": n, "name": name,
@@ -19867,13 +19962,87 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 		if cid2.is_empty():
 			continue
 		GraphComponentDefs.make_unique(model, cid2)
+		model.update_item(cid2, {"site_x_m": site.x, "site_z_m": site.y})
 		_sync_camp_habitat(cid2, n, centre, name)
 		out["added"] = int(out["added"]) + 1
+	out["unstacked"] = _unstack_system_cards()
 	_sim_bulk_update = false
 	_history_suppress = false
-	if int(out["added"]) + int(out["updated"]) + int(out["removed"]) > 0:
+	if int(out["added"]) + int(out["updated"]) + int(out["removed"]) + int(out["unstacked"]) > 0:
 		_on_model_changed("camps_synced")
 	return out
+
+
+## Freeform spot for a new system card (a camp or a vehicle): the site
+## position mapped into the canvas below the player's own system, then the
+## nearest free cell on a spiral, so cards never land on each other.
+const SYSTEM_CARD_ORIGIN := Vector2(0.0, 900.0)
+const SYSTEM_CARD_PX_PER_M := 4.0
+const SYSTEM_CARD_CELL := Vector2(240.0, 170.0)
+
+
+func _free_system_card_pos(site: Vector2, card: Vector2 = Vector2(220.0, 150.0),
+		skip_id: String = "") -> Vector2:
+	var want := SYSTEM_CARD_ORIGIN + site * SYSTEM_CARD_PX_PER_M
+	var taken: Array[Rect2] = []
+	if model != null:
+		for it in model.get_items_in_scope("root"):
+			var d: Dictionary = it
+			if not skip_id.is_empty() and str(d.get("id", "")) == skip_id:
+				continue
+			taken.append(Rect2(float(d.get("x", 0.0)), float(d.get("y", 0.0)),
+				float(d.get("width", 150.0)), float(d.get("height", 120.0))).grow(12.0))
+	for r in 48:
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if maxi(absi(dx), absi(dy)) != r:
+					continue
+				var p := want + Vector2(dx, dy) * SYSTEM_CARD_CELL
+				var rr := Rect2(p, card)
+				var free := true
+				for t: Rect2 in taken:
+					if t.intersects(rr):
+						free = false
+						break
+				if free:
+					return p
+	return want
+
+
+## Older saves stacked camp and vehicle cards on the fixed grids (a later sync
+## restarted at column 0; the 7th vehicle sat on the 1st). Move only a system
+## card that OVERLAPS another system card, to the nearest free spot by its
+## site position; every other card keeps the place the player gave it.
+## Returns how many moved.
+func _unstack_system_cards() -> int:
+	if model == null:
+		return 0
+	var cards: Array = []
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		if GraphSystems.is_power_island(d):
+			cards.append(d)
+	var moved := 0
+	var placed: Array[Rect2] = []
+	var was_hist := _history_suppress
+	_history_suppress = true
+	for d: Dictionary in cards:
+		var r := Rect2(float(d.get("x", 0.0)), float(d.get("y", 0.0)),
+			float(d.get("width", 220.0)), float(d.get("height", 150.0)))
+		var hit := false
+		for p: Rect2 in placed:
+			if p.intersects(r.grow(-4.0)):
+				hit = true
+				break
+		if hit:
+			var site := GraphSiteLayout.site_xz(d) if GraphSiteLayout.has_site_coords(d) else Vector2.ZERO
+			var pos := _free_system_card_pos(site, r.size, str(d.get("id", "")))
+			model.update_item(str(d.get("id", "")), {"x": pos.x, "y": pos.y})
+			r.position = pos
+			moved += 1
+		placed.append(r)
+	_history_suppress = was_hist
+	return moved
 
 
 ## The camp's habitat carries the headcount and the lot centre (its people's
@@ -19896,7 +20065,8 @@ func _sync_camp_habitat(comp_id: String, n: int, centre: Vector2, camp_name: Str
 		var site := SiteCentre.to_site(centre, self)
 		patched["site_x_m"] = site.x
 		patched["site_z_m"] = site.y
-		model.update_item(str(d.get("id", "")), {"specs": patched})
+		model.update_item(str(d.get("id", "")), {"specs": patched,
+			"site_x_m": site.x, "site_z_m": site.y})
 		return
 
 
@@ -20058,11 +20228,14 @@ func set_all_camp_supply(mode: String) -> int:
 func _ensure_festival_depots() -> void:
 	var y := 420.0
 	var x := -620.0
+	# Depots stand at the site centre (the marker): without a site spot the
+	# Site Plan auto-seed invented one from the freeform position.
 	for kind in DEPOT_ITEMS.keys():
 		var d: Array = DEPOT_ITEMS[kind]
 		if not model.get_item(str(d[0])).is_empty():
 			continue
 		model.add_item({"id": str(d[0]), "type": "resource", "x": x, "y": y, "width": 150.0, "height": 120.0,
+			"site_x_m": 0.0, "site_z_m": 0.0,
 			"specs": {"name": str(d[1]), "resource_kind": str(kind),
 				"capacity": "%.0f %s" % [float(d[3]), str(d[2])], "capacity_qty": float(d[3]),
 				"capacity_unit": str(d[2]), "level": float(d[4]), "cost": 0.0, "festival_depot": true}})
@@ -20269,7 +20442,10 @@ var _camp_power_written: Dictionary = {}   # comp_id -> {soc, h}
 ## back (CLAUDE.md "Sim pre-render + playback").
 func camp_power_state_snapshot() -> Dictionary:
 	return {"power": _camp_power.duplicate(true), "last_h": _camp_power_last_h,
-		"written": _camp_power_written.duplicate(true)}
+		"written": _camp_power_written.duplicate(true),
+		# Vehicles' own batteries ride the same snapshot (a render steps them).
+		"veh_power": _veh_power.duplicate(true), "veh_last_h": _veh_power_last_h,
+		"veh_written": _veh_power_written.duplicate(true)}
 
 
 func restore_camp_power_state(snap: Dictionary) -> void:
@@ -20278,6 +20454,10 @@ func restore_camp_power_state(snap: Dictionary) -> void:
 	_camp_power = (snap.get("power", {}) as Dictionary).duplicate(true)
 	_camp_power_last_h = float(snap.get("last_h", NAN))
 	_camp_power_written = (snap.get("written", {}) as Dictionary).duplicate(true)
+	if snap.has("veh_power"):
+		_veh_power = (snap.get("veh_power", {}) as Dictionary).duplicate(true)
+		_veh_power_last_h = float(snap.get("veh_last_h", NAN))
+		_veh_power_written = (snap.get("veh_written", {}) as Dictionary).duplicate(true)
 const _CAMP_POWER_PERSIST_H := 0.5
 
 
@@ -20288,12 +20468,13 @@ func _site_pv_yield(abs_h: float) -> float:
 		var root := get_tree().root if get_tree() != null else null
 		_solar_ui_cache = root.find_child("SolarUI", true, false) if root != null else null
 	var sui: Node = _solar_ui_cache
-	if sui == null or not sui.has_method("evaluate_solar_at"):
+	# kW per kWp of plain array under this instant's sky: camps and vehicles
+	# are their own power systems, so they never inherit the SITE array's
+	# shade, wiring caps or inverter clipping (and still see the sun on a
+	# site with no PV of its own).
+	if sui == null or not sui.has_method("evaluate_yield_per_kwp_at"):
 		return 0.0
-	var peak := float(sui.get("PEAK_CAPACITY_KW")) if sui.get("PEAK_CAPACITY_KW") != null else 0.0
-	if peak <= 1e-6:
-		return 0.0
-	return maxf(float(sui.call("evaluate_solar_at", abs_h)), 0.0) / peak
+	return maxf(float(sui.call("evaluate_yield_per_kwp_at", abs_h)), 0.0)
 
 
 var _solar_ui_cache: Node = null
@@ -20305,9 +20486,14 @@ func _tick_camp_power(abs_h: float) -> void:
 	var camps := festival_camps()
 	if camps.is_empty():
 		if not _camp_power.is_empty():
-			_camp_power = {}
+			# Clear only the camps' own scopes: vehicles keep theirs (a blanket
+			# clear wiped every vehicle's AC until its next tick).
 			if _resource_flow != null and _resource_flow.has_method("clear_scope_ac_available"):
-				_resource_flow.call("clear_scope_ac_available")
+				for cid_g in _camp_power.keys():
+					var cs_g := str((_camp_power[cid_g] as Dictionary).get("_scope", ""))
+					if not cs_g.is_empty():
+						_resource_flow.call("clear_scope_ac_available", cs_g)
+			_camp_power = {}
 		_camp_power_last_h = abs_h
 		return
 	if is_nan(_camp_power_last_h):
@@ -20331,6 +20517,7 @@ func _tick_camp_power(abs_h: float) -> void:
 		if st.is_empty():
 			st = CampPowerModel.make_state(spec, float(specs.get("camp_soc", 0.8)))
 			_camp_power[cid] = st
+		st["_scope"] = str(c["scope"])
 		var n := int(specs.get("camp_present", specs.get("camp_headcount", 0)))
 		CampPowerModel.step(spec, st, n, hour, yield_kw, dt)
 		if _resource_flow != null and _resource_flow.has_method("set_scope_ac_available"):
@@ -20352,6 +20539,10 @@ func _tick_camp_power(abs_h: float) -> void:
 		model.update_item(cid, {"specs": patched})
 	for cid in _camp_power.keys():
 		if not seen.has(cid):
+			var gone_scope := str((_camp_power[cid] as Dictionary).get("_scope", ""))
+			if not gone_scope.is_empty() and _resource_flow != null \
+					and _resource_flow.has_method("clear_scope_ac_available"):
+				_resource_flow.call("clear_scope_ac_available", gone_scope)
 			_camp_power.erase(cid)
 			_camp_power_written.erase(cid)
 
@@ -20373,13 +20564,15 @@ var _veh_power: Dictionary = {}       # comp_id -> CampPowerModel state
 var _veh_power_last_h := NAN
 var _veh_power_written: Dictionary = {}   # comp_id -> {soc, h, ac}
 var _veh_power_index: Array = []      # [{cid, scope, bat, loads, spec}]
-var _veh_power_index_key := -1
+var _veh_power_index_key := ""
 var _pv_yield_h := NAN
 var _pv_yield_v := 0.0
 
 
 func _vehicle_power_index() -> Array:
-	var key := int(model.struct_rev)
+	# user_rev too: an inspector edit to a vehicle's battery kWh or panel
+	# watts is a specs change, not a structural one.
+	var key := "%d|%d" % [model.struct_rev, model.user_rev]
 	if key == _veh_power_index_key:
 		return _veh_power_index
 	_veh_power_index_key = key
@@ -20396,7 +20589,8 @@ func _vehicle_power_index() -> Array:
 		var pv_wp := 0.0
 		var inv_w := 0.0
 		var loads: Array = []
-		for ch in model.get_items_in_scope(scope):
+		var ctrls: Array = []
+		for ch in GraphNesting.walk_items(model, scope):
 			var d: Dictionary = ch
 			var sp: Dictionary = d.get("specs", {})
 			match str(d.get("type", "")):
@@ -20407,10 +20601,11 @@ func _vehicle_power_index() -> Array:
 					pv_wp += float(sp.get("wmp", 0.0))
 				"controller":
 					inv_w = maxf(inv_w, float(sp.get("overload_watts", 0.0)))
+					ctrls.append(str(d.get("id", "")))
 				"appliance":
 					loads.append(str(d.get("id", "")))
 		_veh_power_index.append({"cid": str(comp.get("id", "")), "scope": scope, "bat": bat,
-			"loads": loads, "spec": {"pv_wp": pv_wp, "battery_kwh": kwh, "inverter_w": inv_w,
+			"loads": loads, "ctrls": ctrls, "spec": {"pv_wp": pv_wp, "battery_kwh": kwh, "inverter_w": inv_w,
 				"base_load_w": 0.0}})
 	return _veh_power_index
 
@@ -20468,6 +20663,13 @@ func _tick_vehicle_power(abs_h: float) -> void:
 		if stepping:
 			CampPowerModel.step(spec, st, 0, hour, yield_kw, dt, _vehicle_load_w(e["loads"]))
 		var ac := bool(st.get("ac_available", true))
+		# A destroyed controller in the vehicle sheds the VEHICLE's loads
+		# only (the site's own fault check no longer sees vehicle gear).
+		for ctrl_id: String in (e.get("ctrls", []) as Array):
+			if bool((model.get_item(ctrl_id).get("specs", {}) as Dictionary).get("destroyed", false)):
+				ac = false
+				break
+		st["_scope"] = str(e["scope"])
 		scope_ac[str(e["scope"])] = ac
 		if _resource_flow != null and _resource_flow.has_method("set_scope_ac_available"):
 			_resource_flow.call("set_scope_ac_available", str(e["scope"]), ac)
@@ -20483,6 +20685,10 @@ func _tick_vehicle_power(abs_h: float) -> void:
 		_set_vehicle_battery_soc(cid, snappedf(soc, 0.001))
 	for cid in _veh_power.keys():
 		if not seen.has(cid):
+			var gone_scope := str((_veh_power[cid] as Dictionary).get("_scope", ""))
+			if not gone_scope.is_empty() and _resource_flow != null \
+					and _resource_flow.has_method("clear_scope_ac_available"):
+				_resource_flow.call("clear_scope_ac_available", gone_scope)
 			_veh_power.erase(cid)
 			_veh_power_written.erase(cid)
 	if _sim_load_host != null and _sim_load_host.has_method("set_vehicle_ac"):
@@ -20493,6 +20699,17 @@ func _tick_vehicle_power(abs_h: float) -> void:
 ## load_kw, ac_available, hours_left}); the harness reads it.
 func vehicle_power_states() -> Dictionary:
 	return _veh_power
+
+
+## Island compound id -> its own battery flow in W (+ charging), for the
+## canvas's battery cards and wires inside a vehicle or camp.
+func island_battery_flows() -> Dictionary:
+	var out: Dictionary = {}
+	for src: Dictionary in [_veh_power, _camp_power]:
+		for cid in src.keys():
+			var st: Dictionary = src[cid]
+			out[cid] = (float(st.get("pv_kw", 0.0)) - float(st.get("load_kw", 0.0))) * 1000.0
+	return out
 
 
 # ---------------------------------------------------------------------------

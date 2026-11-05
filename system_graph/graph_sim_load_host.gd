@@ -88,7 +88,16 @@ func _vehicle_scope_of(item_id: String) -> String:
 		return ""
 	var it: Dictionary = _model.call("get_item", item_id)
 	var s := str(it.get("scope_id", "root"))
-	return s if _vehicle_ac.has(s) else ""
+	if _vehicle_ac.has(s):
+		return s
+	# A load in a group nested inside the vehicle: its island's top scope.
+	if _model is GraphModel:
+		var isl := str(GraphSystems.island_scopes(_model as GraphModel).get(s, ""))
+		if not isl.is_empty():
+			var cs := str((_model as GraphModel).get_item(isl).get("child_scope_id", ""))
+			if _vehicle_ac.has(cs):
+				return cs
+	return ""
 
 
 ## Hand each proxy the AC `pick` gives it (null = leave it) inside ONE bulk

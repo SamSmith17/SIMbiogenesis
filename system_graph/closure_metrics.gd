@@ -137,7 +137,9 @@ static func _compute_energy(model: GraphModel, energy_timeline: RefCounted,
 			stock_kwh = maxf(float(energy_timeline.call("soc_at", t1)), 0.0)
 
 	if stock_kwh <= 0.0 and model != null:
-		for item: Dictionary in model.items:
+		# The site's own batteries: a vehicle's house battery or a camp's is
+		# its own system's (GraphSystems), not the site's stock.
+		for item: Dictionary in GraphSystems.walk_site_power(model):
 			var ty: String = str(item.get("type", ""))
 			if ty != "battery" and ty != "smartbattery":
 				continue

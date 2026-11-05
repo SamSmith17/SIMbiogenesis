@@ -3562,6 +3562,45 @@ func evaluate_potential_solar_at(abs_hours: float) -> float:
 	return kw
 
 
+## AC kW per kWp of a plain array at an instant: the sky only — the sun, the
+## weather and the system losses on one plane at the site's panel tilt and
+## azimuth, with NO shade, NO graph DC caps, NO inverter clamp and none of
+## this site's own array size. Camps and living vehicles are their own power
+## systems: they take the sky from here, never the site array's delivered
+## output (that carried the player's clipping and shade into every camp, and
+## was 0 on a site with no PV of its own).
+func evaluate_yield_per_kwp_at(abs_hours: float) -> float:
+	if main_node == null:
+		return 0.0
+	var clock_obj = main_node.get("clock")
+	if clock_obj == null or not clock_obj.has_method("abs_hours_to_julian_day_utc"):
+		return 0.0
+	var lat_v = main_node.get("latitude")
+	var lon_v = main_node.get("longitude")
+	var lat : float = float(lat_v) if lat_v != null else 33.36
+	var lon : float = float(lon_v) if lon_v != null else -115.74
+	var jd_utc : float = float(clock_obj.call("abs_hours_to_julian_day_utc", abs_hours))
+	var sp := SolarPosition.get_position(lat, lon, jd_utc)
+	var el : float = float(sp.get("elevation_deg", 0.0))
+	if el < -2.0:
+		return 0.0
+	var az : float = float(sp.get("azimuth_deg", 180.0))
+	var wx := _weather_at_abs(abs_hours)
+	var saved_peak := PEAK_CAPACITY_KW
+	var saved_max := INVERTER_MAX_SOLAR_KW
+	var saved_planes := _graph_planes
+	PEAK_CAPACITY_KW = 1.0
+	INVERTER_MAX_SOLAR_KW = 1.0e6
+	_graph_planes = []
+	var kw := _compute_solar_kw(el, az, bool(wx["has_real"]), float(wx["ghi"]),
+		float(wx["cloud"]), float(wx["temp"]),
+		float(wx.get("aod", SolarIrradiance.AOD_BASELINE)))
+	PEAK_CAPACITY_KW = saved_peak
+	INVERTER_MAX_SOLAR_KW = saved_max
+	_graph_planes = saved_planes
+	return maxf(kw, 0.0)
+
+
 ## Battery inputs at an arbitrary absolute-hours instant.
 func evaluate_inputs_at(abs_hours: float) -> Dictionary:
 	var pair := _evaluate_solar_pair(abs_hours)

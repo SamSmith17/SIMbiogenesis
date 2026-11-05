@@ -2983,6 +2983,79 @@ the fix was taking steady cost out. In order of size:
   network's `water_*` (it runs while the graph hides the world), SolarUI at
   7200×, and engine time.
 
+## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
+
+Plan: `plans/GRAPH_SYSTEMS_UX_PLAN.md` (Phase 0 landed; Phases 1–6 are the
+navigation / seamless-zoom / festival-board / 3D-link / perf work).
+
+**Power islands.** A living vehicle's node (`specs.vehicle_prop_id`) and a
+festival camp's compound (`specs.camp_lot_id`) are power ISLANDS: their
+contents are that system's, never the site's. `GraphSystems`:
+- `is_power_island(item)`;
+- `island_scopes(model)`: every scope inside an island, nested groups
+  included, mapped to the island id; memoised on struct_rev + user_rev;
+- `island_of(model, item)`;
+- `walk_site_power(model)`;
+- `list(model)`.
+
+⚠ **Every site-energy aggregate walks `GraphSystems.walk_site_power`, never
+`GraphNesting.walk_items(model, "root")`.** The plain walk descends into
+vehicles (their compound has no `compound_kind`), and that leaked:
+- vehicle panels into SolarUI's peak, which also turned SolarUI on for a site
+  with no PV;
+- vehicle batteries into the site bank, so the site SOC jumped on every vehicle
+  add or rebuild;
+- the site SOC written over every vehicle battery at 10 Hz;
+- vehicle MPPTs as site controllers (`INVERTER_MAX_SOLAR_KW`, DC throttle
+  entries);
+- a destroyed vehicle controller shedding the site's AC.
+
+The flow engine still walks INTO islands (tanks, habitats), so never make them
+opaque in `GraphNesting`.
+
+Other rules:
+- `GraphAcLoad` seeds reach from non-island controllers only, and its loss pass
+  skips wires inside an island.
+- A destroyed controller inside a vehicle drops that vehicle's scope AC only
+  (`_tick_vehicle_power`).
+- Removing a camp or vehicle clears its own scope AC, never all of them.
+- Camps and vehicles take their sun from `SolarUI.evaluate_yield_per_kwp_at`
+  (the sky on 1 kWp: no site shade, caps or clamp). The site's delivered output
+  over `PEAK` carried the player's clipping into every camp and was 0 on a site
+  with no PV.
+- Battery cards and wires inside an island read that island's own flow:
+  `live_power_hint.islands`, through `graph_canvas.hint_battery_w`.
+- A sim render steps and snapshots vehicle power with camp power.
+- Dashboard stores and the ClosureMetrics battery fallback count the site's own
+  system; the stores card says camps and vehicles keep their own.
+
+**Placement and scope:**
+- Camp compounds, their habitats, festival depots and festival-mode fallback
+  habitats carry TOP-LEVEL `site_x_m` / `site_z_m`, which is what
+  `GraphSiteLayout.has_site_coords` reads. The specs copy alone gave a camp no
+  pin and no Locate / Watch, and then an invented spot from the Site Plan
+  auto-seed. The camp sync rewrites a stale top-level value.
+- New camp and vehicle cards go to `_free_system_card_pos(site)`: the site
+  position × 4 px/m below the player's system, then the nearest free cell on a
+  spiral.
+- `_unstack_system_cards` (run by the camp sync) moves only a system card that
+  overlaps another one.
+- After every structural change the breadcrumb trail is checked at the end of
+  the frame (`_queue_scope_validation`). A gone vehicle or camp scope follows
+  its owner by identity (`_scope_owner_keys`); anything else falls back to the
+  deepest scope still standing.
+- PVLab arrays are never seeded inside an island scope.
+
+Gates: `system_graph/graph_systems_selftest.gd` (offline, 22 checks) and
+`tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_systems_check.gd -Label graph_systems -Timeout 900`.
+The Walton check covers:
+- the site's peak, capacity, stored kWh and clamp unchanged by a placed tool
+  bus;
+- the vehicle card reading its own SOC;
+- 40 camps with top-level coords and no overlapping system cards;
+- a rebuilt vehicle keeping the player inside it, and a deleted one returning
+  them to root.
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a

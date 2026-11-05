@@ -54,6 +54,10 @@ static func upsert(view: Node, design: Dictionary, tag: String, opts: Dictionary
 	var mod_specs: Dictionary = preset["module"]
 	var existing := find(model, tag)
 	var scope := str(view.get("_active_scope_id")) if view.get("_active_scope_id") != null else "root"
+	# A placed array feeds the SITE's controllers: never seed it inside a
+	# vehicle's or camp's own power system just because that one is open.
+	if GraphSystems.island_scopes(model).has(scope):
+		scope = GraphModel.ROOT_SCOPE_ID
 	var arr_name := str(opts.get("name", design.get("name", "Solar array")))
 	var created: Array = []
 	var ids: Array = []

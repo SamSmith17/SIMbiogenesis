@@ -404,6 +404,19 @@ var resource_flow_engine: RefCounted = null
 ## {battery_w: float (+charge / −discharge), valid: bool}. Wire animation
 ## prefers this real number over the |net| heuristic when valid.
 var live_power_hint: Dictionary = {}
+
+
+## The battery flow (W, + charging) for the system the open scope belongs to:
+## the site's from live_power_hint, or a vehicle's / camp's own from its
+## "islands" map (plans/GRAPH_SYSTEMS_UX_PLAN.md Phase 0).
+func hint_battery_w(fallback: float = 0.0) -> float:
+	if not bool(live_power_hint.get("valid", false)):
+		return fallback
+	if model != null:
+		var island := str(GraphSystems.island_scopes(model).get(active_scope_id, ""))
+		if not island.is_empty():
+			return float((live_power_hint.get("islands", {}) as Dictionary).get(island, 0.0))
+	return float(live_power_hint.get("battery_w", fallback))
 ## Set by SystemGraphView — GraphModelPreviewService for GLB card thumbnails.
 var model_preview_service: Node = null
 var _wire_src_handle_id: String     = ""
@@ -4407,9 +4420,7 @@ func _estimate_connection_flow(
 	if bat_ctrl:
 		# Prefer the real battery flow published by SolarUI (via SystemGraphView)
 		# over the |net|*0.95 heuristic.
-		var bat_w := net
-		if bool(live_power_hint.get("valid", false)):
-			bat_w = float(live_power_hint.get("battery_w", net))
+		var bat_w := hint_battery_w(net)
 		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(bat_w)))
 		var rev:  bool  = (bat_w < 0.0) # discharge: power runs battery → controller
 		var virtual_pair := sid.begins_with("virtual_") or tid.begins_with("virtual_")

@@ -84,6 +84,10 @@ func step(cursor: float) -> Dictionary:
 
 	if camp_power and gv != null and gv.has_method("_tick_camp_power"):
 		gv.call("_tick_camp_power", cursor)
+	# Living vehicles run their own house batteries (GraphSystems islands):
+	# a render steps them too, so a replayed range carries their SOC.
+	if camp_power and gv != null and gv.has_method("_tick_vehicle_power"):
+		gv.call("_tick_vehicle_power", cursor)
 
 	var t_flow0 := Time.get_ticks_usec()
 	flow.call("render_step", cursor, step_h, ac)

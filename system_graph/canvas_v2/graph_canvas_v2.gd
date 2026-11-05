@@ -442,9 +442,7 @@ func _build_card_ctx() -> Dictionary:
 		for it in model.get_items_in_scope(active_scope_id):
 			if str((it as Dictionary).get("type", "")) in ["battery", "smartbattery"]:
 				batteries += 1
-	var bw := 0.0
-	if bool(live_power_hint.get("valid", false)):
-		bw = float(live_power_hint.get("battery_w", 0.0))
+	var bw := hint_battery_w(0.0)
 	return {"wired": wired, "multi": multi, "battery_w": bw, "battery_count": batteries}
 
 

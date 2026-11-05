@@ -806,8 +806,13 @@ func _refresh_stores() -> void:
 	if _graph_view != null:
 		model = _graph_view.get("model") as GraphModel
 	var rows: Array = []
+	var islands := 0
 	if model != null:
-		rows = store_rows(model.get_items_in_scope("root"))
+		# The SITE's own stores at any depth (a tank in a group of the
+		# player's used to be missed); camps and vehicles keep their own,
+		# and say so below instead of flooding this list with 200 tanks.
+		rows = store_rows(GraphSystems.walk_site_power(model))
+		islands = GraphSystems.list(model).size()
 
 	# Rebuild only when content changes. The old free-then-add pattern used
 	# queue_free(), which is deferred — any frame where refresh(true) ran more
@@ -816,6 +821,7 @@ func _refresh_stores() -> void:
 	var sig_parts := PackedStringArray()
 	if model == null:
 		sig_parts.append("<no-model>")
+	sig_parts.append("islands=%d" % islands)
 	for row: Dictionary in rows:
 		sig_parts.append("%s|%s|%d|%.1f|%.0f" % [str(row["kind"]), str(row["name"]),
 				int(row["count"]), float(row["stock"]), float(row["cap"])])
@@ -839,6 +845,7 @@ func _refresh_stores() -> void:
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		_stores_vbox.add_child(hint)
+		_add_island_stores_note(islands)
 		return
 
 	for row_data: Dictionary in rows:
@@ -863,6 +870,20 @@ func _refresh_stores() -> void:
 			var tank: Dictionary = tank_v
 			_add_store_row(str(tank["name"]), float(tank["stock"]),
 					float(tank["cap"]), str(tank["unit"]), true)
+	_add_island_stores_note(islands)
+
+
+## Says what the store list covers when camps / vehicles exist: they are
+## their own systems with their own tanks.
+func _add_island_stores_note(islands: int) -> void:
+	if islands <= 0:
+		return
+	var note := Label.new()
+	note.text = "Site stores only. Camps and vehicles (%d) keep their own: open one to see its tanks." % islands
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	note.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_stores_vbox.add_child(note)
 
 
 func _add_store_row(name: String, stock: float, cap_qty: float,

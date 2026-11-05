@@ -460,6 +460,7 @@ func _seed_fallback_habitats(sgv: Node, main: Node) -> void:
 		model.add_item({
 			"id": hab_id, "type": "processor", "x": 200.0 * h, "y": 900.0,
 			"width": 150.0, "height": 150.0,
+			"site_x_m": home.x - origin.x, "site_z_m": home.y - origin.y,
 			"specs": {
 				"name": "Festival camp %d" % (h + 1), "role": "habitat", "occupants": per,
 				"pop_driven": true, "watts": 0.0, "energy_source": "", "efficiency": 1.0,
