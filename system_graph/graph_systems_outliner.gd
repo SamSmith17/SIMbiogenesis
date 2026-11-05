@@ -229,7 +229,7 @@ func _attention_sig(model: GraphModel) -> String:
 	var power := _power_states()
 	for sysd in GraphSystems.list(model):
 		var it := model.get_item(str((sysd as Dictionary)["id"]))
-		var st := GraphSystems.status(model, it, power.get(str(it.get("id", "")), {}) as Dictionary)
+		var st := _status_of(model, it, power.get(str(it.get("id", "")), {}) as Dictionary)
 		if str(st["level"]) in ["warn", "crit"]:
 			ids.append(str(it.get("id", "")))
 	return ",".join(ids)
@@ -274,7 +274,7 @@ func _build_tree(model: GraphModel, root: TreeItem) -> void:
 		if _filter == "attention":
 			if kind.is_empty():
 				continue
-			var st := GraphSystems.status(model, d, power.get(str(d.get("id", "")), {}) as Dictionary)
+			var st := _status_of(model, d, power.get(str(d.get("id", "")), {}) as Dictionary)
 			if not str(st["level"]) in ["warn", "crit"]:
 				continue
 		elif _filter == "camp" and kind != GraphSystems.KIND_CAMP:
@@ -385,6 +385,24 @@ func _build_results(model: GraphModel, root: TreeItem, q: String) -> void:
 			ti.set_text(0, "%s  %s  — in %s" % [_icon_of(d), _name_of(d), where])
 
 
+## A system's status: the Festival board's verdict when the view has one
+## (it knows the stores' days, so a camp living off a week of water is fine),
+## else GraphSystems.status.
+func _status_of(model: GraphModel, it: Dictionary, power: Dictionary) -> Dictionary:
+	if _view != null and _view.has_method("system_board_row"):
+		var r: Dictionary = _view.call("system_board_row", str(it.get("id", "")))
+		if not r.is_empty():
+			var reasons: Array = r["reasons"]
+			var text := str(reasons[0]) if not reasons.is_empty() else ""
+			if text.is_empty():
+				if int(r["people"]) > 0:
+					text = "%d ppl" % int(r["people"])
+				elif float(r["soc"]) >= 0.0:
+					text = "%d%%" % int(round(float(r["soc"]) * 100.0))
+			return {"level": str(r["level"]), "text": text}
+	return GraphSystems.status(model, it, power)
+
+
 func _refresh_status() -> void:
 	var model := _model()
 	if model == null:
@@ -397,7 +415,7 @@ func _refresh_status() -> void:
 		var it := model.get_item(id)
 		if it.is_empty():
 			continue
-		var st := GraphSystems.status(model, it, power.get(id, {}) as Dictionary)
+		var st := _status_of(model, it, power.get(id, {}) as Dictionary)
 		var level := str(st["level"])
 		var col := C_OK if level == "ok" else C_WARN if level == "warn" \
 			else C_CRIT if level == "crit" else C_IDLE

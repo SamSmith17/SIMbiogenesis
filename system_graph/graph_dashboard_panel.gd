@@ -75,6 +75,7 @@ func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 0)
 	_build_ui()
+	_build_system_tabs()
 	set_process(true)
 	visibility_changed.connect(_on_visibility_changed)
 
@@ -101,6 +102,7 @@ func refresh(force: bool = false) -> void:
 	if not force and _refresh_acc < REFRESH_INTERVAL:
 		return
 	_refresh_acc = 0.0
+	_refresh_tabs()
 	PerfSpan.begin("gv_dash_power")
 	_refresh_power()
 	PerfSpan.end("gv_dash_power")
@@ -1047,3 +1049,412 @@ func _refresh_settlement() -> void:
 			hl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 			hl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 			_settlement_vbox.add_child(hl)
+
+
+# ---------------------------------------------------------------------------
+# The dashboard follows the active system (plans/GRAPH_SYSTEMS_UX_PLAN.md
+# Phase 3). At the site's own level with camps or vehicles on the site the
+# tabs are Whole festival · Your system · Board; inside a camp or vehicle they
+# are <that system> · Board. Everything here READS the view's board rows
+# (GraphSystemBoard, rebuilt once a second); the site's own cards are the
+# "Your system" tab, unchanged.
+# ---------------------------------------------------------------------------
+
+const TAB_FESTIVAL := "festival"
+const TAB_SITE := "site"
+const TAB_SYSTEM := "system"
+const TAB_BOARD := "board"
+
+var _tab_bar: HBoxContainer = null
+var _tab_btns: Dictionary = {}
+var _tab_root := ""        # the player's pick at the site level ("" = default)
+var _tab_inside := ""      # … and inside a system
+var _tab_now := ""
+var _tabs_sig := "<unset>"
+var _site_nodes: Array = []
+var _settle_nodes: Array = []
+var _system_wrap: Control = null
+var _system_vbox: VBoxContainer = null
+var _system_sig := "<unset>"
+var _festival_wrap: Control = null
+var _festival_vbox: VBoxContainer = null
+var _festival_sig := "<unset>"
+var _board_wrap: Control = null
+var _board: GraphFestivalBoard = null
+
+
+func _build_system_tabs() -> void:
+	# The cards _build_ui made, in order: power, balance, closure, settlement,
+	# stores (title + body each). Settlement also shows on the festival tab.
+	var kids := get_children()
+	for i in kids.size():
+		if i == 6 or i == 7:
+			_settle_nodes.append(kids[i])
+		else:
+			_site_nodes.append(kids[i])
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_left", 12)
+	m.add_theme_constant_override("margin_right", 12)
+	m.add_theme_constant_override("margin_top", 8)
+	m.add_theme_constant_override("margin_bottom", 2)
+	_tab_bar = HBoxContainer.new()
+	_tab_bar.name = "SystemTabs"
+	_tab_bar.add_theme_constant_override("separation", 4)
+	m.add_child(_tab_bar)
+	add_child(m)
+	move_child(m, 0)
+	_tab_bar.set_meta("wrap", m)
+	for t: String in [TAB_FESTIVAL, TAB_SITE, TAB_SYSTEM, TAB_BOARD]:
+		var b := Button.new()
+		b.name = "Tab_" + t
+		b.toggle_mode = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.clip_text = true
+		b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.pressed.connect(set_tab.bind(t))
+		_tab_bar.add_child(b)
+		_tab_btns[t] = b
+
+	_system_wrap = _card_body()
+	_system_wrap.name = "SystemCard"
+	_system_vbox = _card_inner(_system_wrap)
+	add_child(_system_wrap)
+	move_child(_system_wrap, 1)
+	_festival_wrap = _card_body()
+	_festival_wrap.name = "FestivalCard"
+	_festival_vbox = _card_inner(_festival_wrap)
+	add_child(_festival_wrap)
+	move_child(_festival_wrap, 2)
+	_board_wrap = _card_body()
+	_board_wrap.name = "BoardCard"
+	_board = GraphFestivalBoard.new()
+	_card_inner(_board_wrap).add_child(_board)
+	_board.expand_pressed.connect(func() -> void:
+		if _graph_view != null and _graph_view.has_method("toggle_board_fullscreen"):
+			_graph_view.call("toggle_board_fullscreen"))
+	add_child(_board_wrap)
+	move_child(_board_wrap, 3)
+	_refresh_tabs()
+
+
+## Pick a tab ("festival" | "site" | "system" | "board"); remembered per level.
+func set_tab(t: String) -> void:
+	if _inside_system():
+		_tab_inside = t
+	else:
+		_tab_root = t
+	_tabs_sig = "<unset>"
+	_refresh_tabs()
+	refresh(true)
+
+
+func current_tab() -> String:
+	return _tab_now
+
+
+func board() -> GraphFestivalBoard:
+	return _board
+
+
+func _rows() -> Array:
+	if _graph_view == null or not _graph_view.has_method("system_board_rows"):
+		return []
+	return _graph_view.call("system_board_rows") as Array
+
+
+func _inside_system() -> bool:
+	return _graph_view != null and _graph_view.has_method("active_system_id") \
+		and not str(_graph_view.call("active_system_id")).is_empty()
+
+
+func _refresh_tabs() -> void:
+	if _tab_bar == null:
+		return
+	var rows := _rows()
+	var inside := _inside_system()
+	var sys_id := str(_graph_view.call("active_system_id")) if inside else ""
+	var row: Dictionary = _graph_view.call("system_board_row", sys_id) if inside else {}
+	var opts: Array = []
+	var tab := ""
+	if inside:
+		opts = [TAB_SYSTEM, TAB_BOARD]
+		tab = _tab_inside if _tab_inside in opts else TAB_SYSTEM
+	elif rows.size() > 1:
+		opts = [TAB_FESTIVAL, TAB_SITE, TAB_BOARD]
+		# Decision #3 (plan): the whole festival by default when camps exist.
+		tab = _tab_root if _tab_root in opts else TAB_FESTIVAL
+	else:
+		tab = TAB_SITE
+	_tab_now = tab
+	var name := str(row.get("name", "This system"))
+	var sig := "%s|%s|%s" % [str(opts), tab, name]
+	if sig != _tabs_sig:
+		_tabs_sig = sig
+		(_tab_bar.get_meta("wrap") as Control).visible = not opts.is_empty()
+		for t: String in _tab_btns.keys():
+			var b: Button = _tab_btns[t]
+			b.visible = t in opts
+			match t:
+				TAB_FESTIVAL:
+					b.text = "Whole festival"
+				TAB_SITE:
+					b.text = "Your system"
+				TAB_SYSTEM:
+					var icon := "🚐 " if str(row.get("kind", "")) == GraphSystems.KIND_VEHICLE else "⛺ "
+					b.text = icon + name
+					b.tooltip_text = name
+				TAB_BOARD:
+					b.text = "Board"
+			b.set_pressed_no_signal(t == tab)
+			UITheme.style_toggle(b, t == tab, UITheme.FONT_XS)
+		for n: Control in _site_nodes:
+			n.visible = tab == TAB_SITE
+		for n: Control in _settle_nodes:
+			n.visible = tab == TAB_SITE or tab == TAB_FESTIVAL
+		_system_wrap.visible = tab == TAB_SYSTEM
+		_festival_wrap.visible = tab == TAB_FESTIVAL
+		_board_wrap.visible = tab == TAB_BOARD
+		if tab == TAB_BOARD and _board != null and _graph_view != null:
+			_board.bind(_graph_view)
+	match tab:
+		TAB_SYSTEM:
+			_refresh_system_card(row)
+		TAB_FESTIVAL:
+			_refresh_festival_card(rows)
+
+
+func _small(text: String, col: Color, fs: int = UITheme.FONT_XS, wrap: bool = false) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", fs)
+	l.add_theme_color_override("font_color", col)
+	if wrap:
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	else:
+		l.clip_text = true
+		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	return l
+
+
+static func _fmt_h(h: float) -> String:
+	if h < 1.0:
+		return "%d min" % int(round(h * 60.0))
+	if h < 48.0:
+		return "%.1f h" % h
+	return "%.1f days" % (h / 24.0)
+
+
+## One system's balance: battery, solar, loads, time to empty / full,
+## stores and open loops.
+func _refresh_system_card(r: Dictionary) -> void:
+	if r.is_empty():
+		var sig0 := "<none>"
+		if sig0 == _system_sig:
+			return
+		_system_sig = sig0
+		for c in _system_vbox.get_children():
+			_system_vbox.remove_child(c)
+			c.free()
+		_system_vbox.add_child(_small("Reading this system…", UITheme.C_TEXT_M))
+		return
+	var parts := PackedStringArray([str(r["name"]), str(r["level"]), ",".join(PackedStringArray(r["reasons"])),
+		"%.2f|%.2f|%.2f|%.1f|%s|%d|%.2f" % [float(r["soc"]), float(r["pv_kw"]), float(r["load_kw"]),
+		minf(float(r["hours_left"]), 9999.0), str(r["ac"]), int(r["people"]), float(r["morale"])]])
+	for st: Dictionary in (r["stores"] as Array):
+		parts.append("%s|%.0f|%.0f|%.2f" % [st["kind"], float(st["stock"]), float(st["capacity"]),
+			minf(float(st["days"]), 9999.0)])
+	parts.append(str(r["open"]))
+	var sig := "\n".join(parts)
+	if sig == _system_sig:
+		return
+	_system_sig = sig
+	for c in _system_vbox.get_children():
+		_system_vbox.remove_child(c)
+		c.free()
+	var lvl := str(r["level"])
+	var lcol: Color = GraphFestivalBoard.LEVEL_COLORS.get(lvl, UITheme.C_TEXT_M)
+	var head := _small(("🚐 " if str(r["kind"]) == GraphSystems.KIND_VEHICLE else "⛺ ") + str(r["name"]),
+		UITheme.C_TEXT, UITheme.FONT_MD)
+	head.name = "SystemTitle"
+	_system_vbox.add_child(head)
+	var reasons: Array = r["reasons"]
+	var verdict := "Everything is fine." if reasons.is_empty() else "Needs: " + ", ".join(PackedStringArray(reasons))
+	if lvl == "idle":
+		verdict = "Nobody here and nothing running."
+	var v := _small(verdict, lcol if not reasons.is_empty() else UITheme.C_GREEN, UITheme.FONT_XS, true)
+	v.name = "SystemVerdict"
+	_system_vbox.add_child(v)
+	var cap := float(r["cap_kwh"])
+	if cap > 0.0:
+		var bar_row := HBoxContainer.new()
+		bar_row.add_theme_constant_override("separation", 8)
+		_system_vbox.add_child(bar_row)
+		var bar := ProgressBar.new()
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bar.custom_minimum_size = Vector2(0, 14)
+		bar.max_value = 100.0
+		bar.value = clampf(float(r["soc"]), 0.0, 1.0) * 100.0
+		bar.show_percentage = false
+		UITheme.style_progress(bar, lcol if float(r["soc"]) < GraphSystemBoard.SOC_WARN else UITheme.C_PRIMARY)
+		bar_row.add_child(bar)
+		bar_row.add_child(_small("%d %%" % int(round(float(r["soc"]) * 100.0)), UITheme.C_TEXT, UITheme.FONT_SM))
+		_system_vbox.add_child(_small("Battery %.1f / %.1f kWh" % [float(r["kwh"]), cap], UITheme.C_TEXT_S))
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 6)
+	_system_vbox.add_child(grid)
+	var net := float(r["pv_kw"]) - float(r["load_kw"])
+	_stat_cell(grid, "SOLAR", "%.2f kW" % float(r["pv_kw"]), UITheme.C_GOLD)
+	_stat_cell(grid, "LOAD", "%.2f kW" % float(r["load_kw"]), UITheme.C_TEXT)
+	var net_lbl := _stat_cell(grid, "NET", "%+.2f kW" % net, UITheme.C_PRIMARY)
+	net_lbl.add_theme_color_override("font_color", UITheme.C_GREEN if net >= 0.0 else UITheme.C_WARN)
+	var when := "—"
+	if cap > 0.0 and is_finite(float(r["hours_left"])):
+		when = "empty " + _fmt_h(float(r["hours_left"]))
+	elif cap > 0.0 and net > 0.01 and float(r["kwh"]) < cap - 0.01:
+		when = "full " + _fmt_h((cap - float(r["kwh"])) / net)
+	elif cap > 0.0 and float(r["kwh"]) >= cap - 0.01:
+		when = "full"
+	_stat_cell(grid, "TIME", when, UITheme.C_TEXT_S)
+	if not bool(r["ac"]):
+		_system_vbox.add_child(_small("Its loads are OFF: the battery is empty. They come back when it recharges.",
+			GraphFestivalBoard.LEVEL_COLORS["crit"], UITheme.FONT_XS, true))
+	if int(r["people"]) >= 0:
+		var ppl := UiText.count(int(r["people"]), "person", "people")
+		if float(r["morale"]) >= 0.0:
+			ppl += " · morale %d %%" % int(round(float(r["morale"]) * 100.0))
+		_system_vbox.add_child(_small(ppl, UITheme.C_TEXT_S))
+	var stores: Array = r["stores"]
+	if not stores.is_empty():
+		_system_vbox.add_child(SectionHeader.make("Stores"))
+		for st: Dictionary in stores:
+			var frac := clampf(float(st["stock"]) / float(st["capacity"]), 0.0, 1.0) if float(st["capacity"]) > 0.0 else 0.0
+			var hb := HBoxContainer.new()
+			hb.add_theme_constant_override("separation", 6)
+			_system_vbox.add_child(hb)
+			var b2 := ProgressBar.new()
+			b2.custom_minimum_size = Vector2(56, 10)
+			b2.max_value = 100.0
+			b2.value = frac * 100.0
+			b2.show_percentage = false
+			var waste := CampLedger.WASTE_KINDS.has(str(st["kind"]))
+			var days := float(st["days_full"] if waste else st["days"])
+			var scol := UITheme.C_PRIMARY
+			if days < GraphSystemBoard.DAYS_CRIT:
+				scol = GraphFestivalBoard.LEVEL_COLORS["crit"]
+			elif days < GraphSystemBoard.DAYS_WARN:
+				scol = GraphFestivalBoard.LEVEL_COLORS["warn"]
+			UITheme.style_progress(b2, scol)
+			hb.add_child(b2)
+			var st_when := GraphSystemBoard.fmt_days(days)
+			if waste:
+				st_when = GraphSystemBoard.fmt_full(days)
+			var l := _small("%s  %s / %s %s · %s" % [ResourceKinds.display_name(str(st["kind"])),
+				_fmt_qty(float(st["stock"])), _fmt_qty(float(st["capacity"])),
+				str(st["unit"]).trim_suffix("/h").trim_suffix("/day"), st_when], UITheme.C_TEXT_S)
+			l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			hb.add_child(l)
+	var used := PackedStringArray()
+	var kept := PackedStringArray()
+	for k: Variant in (r["open"] as Array):
+		if CampLedger.WASTE_KINDS.has(str(k)):
+			kept.append(ResourceKinds.display_name(str(k)))
+		else:
+			used.append(ResourceKinds.display_name(str(k)))
+	if not used.is_empty():
+		_system_vbox.add_child(_small("Brought in, not made here: %s." % ", ".join(used),
+			UITheme.C_TEXT_M, UITheme.FONT_XS, true))
+	if not kept.is_empty():
+		_system_vbox.add_child(_small("Kept here, not taken away: %s." % ", ".join(kept),
+			UITheme.C_TEXT_M, UITheme.FONT_XS, true))
+	_system_vbox.add_child(_small("Esc goes back out to the site.", UITheme.C_TEXT_M))
+
+
+## The whole festival: systems by state, people, power, the worst few.
+func _refresh_festival_card(rows: Array) -> void:
+	var t := GraphSystemBoard.totals(rows)
+	var worst := GraphSystemBoard.sorted(GraphSystemBoard.filtered(rows, "attention"), "attention")
+	var site: Dictionary = rows[0] if not rows.is_empty() else {}
+	var vibe: Dictionary = {}
+	if _graph_view != null and _graph_view.has_method("festival_vibe"):
+		vibe = _graph_view.call("festival_vibe") as Dictionary
+	var parts := PackedStringArray([str(t), str(vibe.get("headline", "")),
+		"%.2f|%.2f" % [float(site.get("soc", -1.0)), float(site.get("pv_kw", 0.0))]])
+	for i in mini(worst.size(), 5):
+		var w: Dictionary = worst[i]
+		parts.append("%s|%s|%s" % [w["id"], w["name"], ",".join(PackedStringArray(w["reasons"]))])
+	var sig := "\n".join(parts)
+	if sig == _festival_sig:
+		return
+	_festival_sig = sig
+	for c in _festival_vbox.get_children():
+		_festival_vbox.remove_child(c)
+		c.free()
+	var kinds := PackedStringArray()
+	if int(t["camps"]) > 0:
+		kinds.append(UiText.count(int(t["camps"]), "camp"))
+	if int(t["vehicles"]) > 0:
+		kinds.append(UiText.count(int(t["vehicles"]), "vehicle"))
+	if int(t["people"]) > 0:
+		kinds.append(UiText.count(int(t["people"]), "person", "people"))
+	var head := _small(" · ".join(kinds), UITheme.C_TEXT, UITheme.FONT_MD)
+	head.name = "FestivalTitle"
+	_festival_vbox.add_child(head)
+	if not str(vibe.get("headline", "")).is_empty():
+		_festival_vbox.add_child(_small(str(vibe["headline"]), UITheme.C_TEXT_S, UITheme.FONT_XS, true))
+	var crit := int(t["crit"])
+	var warn := int(t["warn"])
+	var att := "Nothing needs attention." if crit + warn == 0 else \
+		"Needs attention: %d critical, %d warning" % [crit, warn]
+	_festival_vbox.add_child(_small(att, GraphFestivalBoard.LEVEL_COLORS["crit" if crit > 0 else ("warn" if warn > 0 else "ok")]))
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 6)
+	_festival_vbox.add_child(grid)
+	_stat_cell(grid, "SOLAR", "%.1f kW" % float(t["pv_kw"]), UITheme.C_GOLD)
+	_stat_cell(grid, "LOAD", "%.1f kW" % float(t["load_kw"]), UITheme.C_TEXT)
+	var stored := "—" if float(t["cap_kwh"]) <= 0.0 else "%d %%" % int(round(float(t["kwh"]) / float(t["cap_kwh"]) * 100.0))
+	_stat_cell(grid, "STORED", stored, UITheme.C_PRIMARY)
+	var np := _stat_cell(grid, "NO POWER", str(int(t["no_power"])), UITheme.C_TEXT)
+	if int(t["no_power"]) > 0:
+		np.add_theme_color_override("font_color", GraphFestivalBoard.LEVEL_COLORS["crit"])
+	if int(t["short_water"]) + int(t["short_food"]) > 0:
+		_festival_vbox.add_child(_small("Short of water: %d · short of food: %d (under 3 days)" % [
+			int(t["short_water"]), int(t["short_food"])], GraphFestivalBoard.LEVEL_COLORS["warn"]))
+	if not worst.is_empty():
+		_festival_vbox.add_child(SectionHeader.make("Worst first"))
+		for i in mini(worst.size(), 5):
+			var w: Dictionary = worst[i]
+			var b := Button.new()
+			b.name = "Worst_" + str(w["id"])
+			b.flat = true
+			b.focus_mode = Control.FOCUS_NONE
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.clip_text = true
+			b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			b.text = "%s · %s" % [str(w["name"]), ", ".join(PackedStringArray(w["reasons"]))]
+			b.tooltip_text = b.text + "\nClick to fly there."
+			b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			b.add_theme_color_override("font_color", GraphFestivalBoard.LEVEL_COLORS[str(w["level"])])
+			b.pressed.connect(func() -> void: _graph_view.call("board_fly_to", str(w["id"]), false))
+			_festival_vbox.add_child(b)
+		if worst.size() > 5:
+			var more := Button.new()
+			more.text = "All %d on the board" % worst.size()
+			UITheme.style_button(more)
+			more.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			more.pressed.connect(func() -> void:
+				set_tab(TAB_BOARD)
+				_board.set_filter("attention"))
+			_festival_vbox.add_child(more)
+	if not site.is_empty() and float(site.get("cap_kwh", 0.0)) > 0.0:
+		var own := Button.new()
+		own.flat = true
+		own.focus_mode = Control.FOCUS_NONE
+		own.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		own.text = "🏠 Your system: %d %% · %.2f kW solar  ›" % [int(round(float(site["soc"]) * 100.0)), float(site["pv_kw"])]
+		own.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		own.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		own.pressed.connect(set_tab.bind(TAB_SITE))
+		_festival_vbox.add_child(own)

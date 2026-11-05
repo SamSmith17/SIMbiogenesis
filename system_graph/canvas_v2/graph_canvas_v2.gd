@@ -97,6 +97,7 @@ func _draw() -> void:
 	_card_ctx = _build_card_ctx()
 	_tile_labels.clear()
 	super._draw()
+	_draw_system_overlay_site()
 	_draw_tile_labels()
 	_draw_inside_cue()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
@@ -264,6 +265,7 @@ func _render_item(item: Dictionary) -> void:
 		# media zone.
 		if itype0 not in ["controller", "appliance", "acload"] or not _icon_replaces_frame(sp0):
 			_render_card_v2(item)
+			_draw_overlay_outline(item)
 			return
 	# Full-bleed icon/model preview (skip frame + title); keep ports + selection.
 	var specs_early: Dictionary = item.get("specs", {}) as Dictionary
@@ -373,6 +375,65 @@ const RING_COLORS := {
 }
 const RING_RANK := {"crit": 3, "warn": 2, "ok": 1, "idle": 0}
 var _tile_labels: Array = []
+## "Colour systems by" (Phase 3): {mode, values: {system id: float}, hidden:
+## {bin: true}}, pushed by the view once a second. {} or mode "none" = off.
+var system_overlay: Dictionary = {}
+
+
+## {on, color, hidden} for one system under the current overlay.
+func _overlay_for(id: String) -> Dictionary:
+	var mode := str(system_overlay.get("mode", "none"))
+	if mode == "none":
+		return {"on": false}
+	var vals: Dictionary = system_overlay.get("values", {}) as Dictionary
+	if not vals.has(id):
+		return {"on": false}
+	var v := float(vals[id])
+	var b := GraphSystemBoard.overlay_bin(mode, v)
+	var hidden: Dictionary = system_overlay.get("hidden", {}) as Dictionary
+	return {"on": true, "color": GraphSystemBoard.overlay_color(mode, v),
+		"hidden": b >= 0 and hidden.has(b)}
+
+
+## A system card (not a tile) under an overlay: a thick outline in its colour.
+func _draw_overlay_outline(item: Dictionary) -> void:
+	if str(item.get("type", "")) != "compound" or GraphSystems.island_kind(item).is_empty():
+		return
+	var o := _overlay_for(str(item.get("id", "")))
+	if not bool(o.get("on", false)):
+		return
+	var r := Rect2(_item_screen_tl(item, size * 0.5), _item_screen_size(item))
+	if r.size.x < TILE_MAX_PX:
+		return
+	var col: Color = o["color"]
+	if bool(o["hidden"]):
+		GraphFastDraw.rrect(self, r, 10.0, Color(0.03, 0.04, 0.07, 0.62))
+		return
+	draw_rect(r.grow(3.0), Color(col, 0.95), false, 4.0)
+
+
+## Site Plan under an overlay: a tinted disc where each system stands.
+func _draw_system_overlay_site() -> void:
+	if view_mode != GraphSiteLayout.VIEW_SITE or str(system_overlay.get("mode", "none")) == "none":
+		return
+	if model == null or active_scope_id != GraphModel.ROOT_SCOPE_ID:
+		return
+	var origin: Vector2 = get_soi_disc_layout().get("origin", size * 0.5) as Vector2
+	var ppm := GraphSiteLayout.px_per_m(_zoom)
+	for it in model.get_items_in_scope(GraphModel.ROOT_SCOPE_ID):
+		var d: Dictionary = it
+		if GraphSystems.island_kind(d).is_empty() or not GraphSiteLayout.has_site_coords(d):
+			continue
+		var o := _overlay_for(str(d.get("id", "")))
+		if not bool(o.get("on", false)) or bool(o["hidden"]):
+			continue
+		var p: Variant = _site_point_canvas(origin, GraphSiteLayout.site_xz(d))
+		if p == null:
+			continue
+		var rad := clampf(GraphSystems.island_radius_m(d) * ppm, 9.0, 160.0)
+		var col: Color = o["color"]
+		GraphFastDraw.disc(self, p as Vector2, rad, Color(col, 0.28))
+		GraphFastDraw.ring(self, p as Vector2, rad, Color(col, 0.9), 2.0)
 ## Per draw: system card id -> half the screen distance to its nearest
 ## system card, so the minimum tile size never makes neighbours overlap.
 var _tile_room: Dictionary = {}
@@ -426,6 +487,9 @@ func _draw_system_tile(item: Dictionary, rect: Rect2, selected: bool) -> void:
 	var ring := GraphSystems.ring(model, item, power)
 	GraphFastDraw.disc(self, c + Vector2(0.0, 2.0), r, GraphTheme.CARD_SHADOW)
 	GraphFastDraw.disc(self, c, r, GraphTheme.CARD_BG)
+	var ov := _overlay_for(str(item.get("id", "")))
+	if bool(ov.get("on", false)):
+		GraphFastDraw.disc(self, c, r * 0.86, Color(ov["color"] as Color, 0.62))
 	var w := maxf(2.0, r * 0.2)
 	var worst := "idle"
 	for i in GraphSystems.RING_KEYS.size():
@@ -439,6 +503,11 @@ func _draw_system_tile(item: Dictionary, rect: Rect2, selected: bool) -> void:
 	GraphCard._draw_icon(self, "tent" if kind == GraphSystems.KIND_CAMP else "truck", c, r * 0.95, accent)
 	if selected:
 		GraphFastDraw.ring(self, c, r + 3.0, GraphTheme.SELECTED, 2.0)
+	if bool(ov.get("on", false)) and bool(ov["hidden"]):
+		# Filtered out on the legend: the tile stays (where it is matters)
+		# but goes dark, and its name is not drawn.
+		GraphFastDraw.disc(self, c, r + 1.0, Color(0.03, 0.04, 0.07, 0.72))
+		return
 	var sp: Dictionary = item.get("specs", {}) as Dictionary
 	_tile_labels.append({"name": str(sp.get("name", item.get("label", ""))), "c": c, "r": r,
 		"rank": int(RING_RANK[worst]) + (10 if selected else 0), "color": RING_COLORS[worst]})

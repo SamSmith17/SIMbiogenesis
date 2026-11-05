@@ -3153,6 +3153,66 @@ The Walton check covers:
   placed and on screen, Esc back out with the camp in view). The selftest is
   now 42 checks.
 
+**What is wrong at my festival (Phase 3, 2026-11-04):**
+- **One row per system.** `GraphSystemBoard.row(item, power, ledger, site)` is
+  pure. It reads data already stamped or stepped:
+  - the camp_* keys;
+  - the camp or vehicle CampPowerModel state, which wins over the stamps;
+  - CampLedger over the system's own scope.
+
+  It gives battery, solar, load, hours left, people, morale, stores with days
+  to empty (wastes: days to full), a level (ok / warn / crit / idle), the
+  reasons in words, and an attention score.
+  - An OPEN loop alone is not news: a camp living off a week of stored water
+    is fine. Only a kind with no store at all warns ("no water here").
+  - Water or food under 1 day is critical, under 3 days a warning; a waste
+    tank filling up is judged the same way.
+  - `SystemGraphView._refresh_system_board` rebuilds every row once a second
+    (the closure block, `gv_board` span), the site's own row first. The
+    board, the dashboard, the tile overlay, the alerts rail and the outliner's
+    status all READ them (`system_board_rows / _row`, `active_system_id`).
+  - Cost on Walton's 40 camps: 3.3 ms a second. It was 17 ms until
+    `GraphNesting.scope_index` / `walk_in_index` (one pass for every camp's
+    ledger; `CampLedger.compute` / `open_kinds` take the items) and the
+    `ResourceKinds.normalize_kind` memo (it scanned every kind's alias list
+    per call, which every ledger and the flow engine call per port). The camp
+    card refresh got the same index.
+- **The dashboard follows the active system** (`graph_dashboard_panel`
+  tabs):
+  - At the site level with camps or vehicles, the tabs are Whole festival
+    (the default: decision #3), Your system (the old cards) and Board.
+  - Inside a camp or vehicle, the tabs are that system (its battery, solar,
+    load, time to empty / full, people, stores with days, what it brings in
+    and keeps) and Board.
+  - With no islands there are no tabs: the old cards, as before.
+- **Festival board** (`GraphFestivalBoard`): filter chips, sortable columns,
+  rows with a level stripe and the reasons; a click flies there, a double
+  click goes inside (`board_fly_to`). The same widget sits in the Board tab
+  and full screen over the canvas (View ▾ → Festival board, ⤢; Esc closes).
+- **Colour systems by** (View ▾): battery, water days, morale, power margin.
+  - Values come from `GraphSystemBoard.overlay_value`; there are four bins,
+    and no data draws grey.
+  - Tiles are tinted, big cards outlined, Site Plan gets a disc where each
+    system stands.
+  - The legend (bottom-left of the canvas) hides a bin on click.
+  - The mode is saved in ui_prefs.cfg `[graph_systems] overlay`.
+- **Alerts rail** (canvas top-right, `GraphSystemAlerts`, pure latch):
+  - a system shows once it has been WORSE than its baseline for 2 s;
+  - a level a system already has when first seen is its baseline, except
+    critical, which is always news;
+  - it leaves after 5 s fine; a dismissed entry returns only if it gets worse;
+  - 6 shown, then "+N more on the board".
+- ⚠ A button whose press rebuilds the panel it sits in (the legend bins, a
+  rail entry's ×) must connect CONNECT_DEFERRED or defer the rebuild: freeing
+  the emitter mid-signal is an engine error.
+- Gates: `system_graph/graph_system_board_selftest.gd` (offline, 46) and
+  `tools\harness.ps1 -World walton -RunScript res://tools/checks/graph_board_check.gd -Label graph_board -Timeout 900`
+  (18, real clicks: a fine camp loses its power and reaches the rail, the
+  click flies there, the system tab inside it, the Board tab and its filter
+  and row, the full-screen board and Esc, battery colours and a legend bin,
+  the cost). The Walton world as saved has 24 camps with no power at its
+  hour, so those are on the rail from the start.
+
 ## Video export + camera keyframes (core/climelapse/, 2026-10-22)
 
 The timeline's 🎬 renders a range to an MP4: it steps the world one frame at a

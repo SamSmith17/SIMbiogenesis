@@ -155,6 +155,33 @@ static func walk_items(model: GraphModel, scope_id: String = "root") -> Array:
 	return out
 
 
+## Items grouped by scope in one pass, for callers that walk many scopes in
+## one go (the Festival board walks every camp): pair with walk_in_index.
+static func scope_index(model: GraphModel) -> Dictionary:
+	var by_scope: Dictionary = {}
+	if model == null:
+		return by_scope
+	for item_v in model.items:
+		var it := item_v as Dictionary
+		var sid := str(it.get("scope_id", GraphModel.ROOT_SCOPE_ID))
+		if sid.is_empty():
+			sid = GraphModel.ROOT_SCOPE_ID
+		var bucket: Variant = by_scope.get(sid)
+		if bucket == null:
+			bucket = []
+			by_scope[sid] = bucket
+		(bucket as Array).append(it)
+	return by_scope
+
+
+## walk_items over a scope_index: the same items, the same order.
+static func walk_in_index(by_scope: Dictionary, scope_id: String) -> Array:
+	var out: Array = []
+	if not scope_id.is_empty():
+		_walk_items_into(by_scope, scope_id, out, {})
+	return out
+
+
 static func _walk_items_into(by_scope: Dictionary, scope_id: String, out: Array,
 		seen: Dictionary) -> void:
 	if scope_id.is_empty() or seen.has(scope_id):

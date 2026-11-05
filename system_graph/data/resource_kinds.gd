@@ -283,6 +283,10 @@ const BUILTIN: Dictionary = {
 
 static var _extra: Dictionary = {}
 static var _loaded: bool = false
+## normalize_kind's answers: it scanned every kind's alias list per call and
+## runs for every tank and port of every ledger (the Festival board walks
+## forty camps a second). Cleared whenever the user kinds change.
+static var _norm_cache: Dictionary = {}
 
 
 static func _ensure_loaded() -> void:
@@ -290,6 +294,7 @@ static func _ensure_loaded() -> void:
 		return
 	_loaded = true
 	_extra.clear()
+	_norm_cache.clear()
 	if not FileAccess.file_exists(CONFIG_PATH):
 		return
 	var cfg := ConfigFile.new()
@@ -358,6 +363,7 @@ static func add_custom_kind(display: String, unit: String, abbrev: String,
 		"flow_ref_rate": 10.0,
 	}
 	_extra[kid] = entry
+	_norm_cache.clear()
 
 	var cfg := ConfigFile.new()
 	if FileAccess.file_exists(CONFIG_PATH):
@@ -379,6 +385,7 @@ static func remove_custom_kind(kind_id: String) -> bool:
 	if BUILTIN.has(kind_id) or not _extra.has(kind_id):
 		return false
 	_extra.erase(kind_id)
+	_norm_cache.clear()
 	if FileAccess.file_exists(CONFIG_PATH):
 		var cfg := ConfigFile.new()
 		if cfg.load(CONFIG_PATH) == OK and cfg.has_section(kind_id):
@@ -446,6 +453,15 @@ static func normalize_kind(kind_id: String) -> String:
 	if k.is_empty():
 		return ""
 	_ensure_loaded()
+	var hit: Variant = _norm_cache.get(k)
+	if hit != null:
+		return str(hit)
+	var out := _normalize_uncached(k)
+	_norm_cache[k] = out
+	return out
+
+
+static func _normalize_uncached(k: String) -> String:
 	for canon: String in BUILTIN.keys():
 		var aliases: Array = (BUILTIN[canon] as Dictionary).get("aliases", []) as Array
 		if aliases.has(k):

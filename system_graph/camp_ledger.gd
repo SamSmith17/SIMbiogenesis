@@ -29,11 +29,15 @@ const WASTE_KINDS: Array = ["greywater", "blackwater", "food_waste", "plastic_wa
 ## {kinds: {kind: row}, open: [kind…], scope: scope_id} where
 ## row = {stock, capacity, supply, demand, imports, net, days_to_empty,
 ##        days_to_full, unit, status}.
-static func compute(model, scope_id: String, demand_overrides: Dictionary = {}) -> Dictionary:
+## `scope_items` (optional): the scope's items already walked (a caller doing
+## many scopes builds GraphNesting.scope_index once).
+static func compute(model, scope_id: String, demand_overrides: Dictionary = {},
+		scope_items: Variant = null) -> Dictionary:
 	var rows: Dictionary = {}
 	if model == null:
 		return {"kinds": rows, "open": [], "scope": scope_id}
-	for item_v in GraphNesting.walk_items(model, scope_id):
+	var walk: Array = scope_items as Array if scope_items != null else GraphNesting.walk_items(model, scope_id)
+	for item_v in walk:
 		var item: Dictionary = item_v
 		var ty := str(item.get("type", ""))
 		var specs: Dictionary = item.get("specs", {})
@@ -165,11 +169,14 @@ static func boundary_ports(model, comp_id: String) -> Dictionary:
 
 
 ## The loops a camp has not closed AND has not wired out — the badge text.
-static func open_kinds(model, comp_id: String, demand_overrides: Dictionary = {}) -> Array:
+static func open_kinds(model, comp_id: String, demand_overrides: Dictionary = {},
+		by_scope: Variant = null) -> Array:
 	var item: Dictionary = model.get_item(comp_id) if model != null else {}
 	if item.is_empty():
 		return []
-	var ledger := compute(model, str(item.get("child_scope_id", "")), demand_overrides)
+	var cs := str(item.get("child_scope_id", ""))
+	var ledger := compute(model, cs, demand_overrides,
+		GraphNesting.walk_in_index(by_scope as Dictionary, cs) if by_scope != null else null)
 	var ports := boundary_ports(model, comp_id)
 	var wired_kinds: Dictionary = {}
 	for hid in ports:

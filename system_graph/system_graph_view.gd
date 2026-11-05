@@ -118,6 +118,10 @@ const VIEW_LEGEND := 100
 const VIEW_HISTORY := 101
 const VIEW_HINTS := 102
 const VIEW_PBI_BAR := 103
+## View ▾ → Colour systems by (Phase 3): VIEW_OVERLAY_BASE + index into
+## GraphSystemBoard.OVERLAYS; the full-screen Festival board.
+const VIEW_OVERLAY_BASE := 110
+const VIEW_BOARD_FULL := 120
 
 ## Wire-style control popup ids.
 const WIRE_STYLE_BEZIER := 300
@@ -2774,9 +2778,21 @@ func _build_topbar() -> Control:
 	vp.add_check_item("Show PBI bar (pinned)", VIEW_PBI_BAR)
 	vp.set_item_checked(vp.get_item_index(VIEW_PBI_BAR), _pbi_bar_pinned)
 	vp.add_separator()
+	var ovp := PopupMenu.new()
+	ovp.name = "ColourSystemsBy"
+	for i in GraphSystemBoard.OVERLAYS.size():
+		ovp.add_radio_check_item(str(GraphSystemBoard.OVERLAY_LABELS[GraphSystemBoard.OVERLAYS[i]]),
+			VIEW_OVERLAY_BASE + i)
+	ovp.id_pressed.connect(_on_view_menu_id)
+	vp.add_child(ovp)
+	vp.add_submenu_node_item("Colour systems by", ovp)
+	_overlay_popup = ovp
+	vp.add_item("Festival board (full screen)", VIEW_BOARD_FULL)
+	vp.add_separator()
 	vp.add_item("Hints & shortcuts", VIEW_HINTS)
 	vp.id_pressed.connect(_on_view_menu_id)
 	display_row.add_child(_view_menu)
+	_sync_overlay_menu()
 
 	_show_menu = _make_topbar_menu_btn("Show ▾")
 	var showp := _show_menu.get_popup()
@@ -2881,6 +2897,12 @@ func _topbar_cluster(parent: Control, title: String, tip: String) -> HBoxContain
 
 
 func _on_view_menu_id(id: int) -> void:
+	if id >= VIEW_OVERLAY_BASE and id < VIEW_OVERLAY_BASE + GraphSystemBoard.OVERLAYS.size():
+		set_system_overlay(GraphSystemBoard.OVERLAYS[id - VIEW_OVERLAY_BASE])
+		return
+	if id == VIEW_BOARD_FULL:
+		toggle_board_fullscreen()
+		return
 	match id:
 		VIEW_LEGEND:  _on_legend_toggle()
 		VIEW_HISTORY: _on_history_btn_pressed()
@@ -14737,6 +14759,7 @@ func _process_frame(delta: float) -> void:
 			_end_sim_writes()
 		return
 	_update_lens_strip(delta)
+	_layout_board_overlays()
 	_tick_layout(delta)
 	# Hydro Lab owns its CT/UI — skip canvas/bridge/renewables storms. Ambient
 	# ResourceFlowEngine (above) still runs so test inflow + siphon drain work.
@@ -14798,6 +14821,9 @@ func _process_frame(delta: float) -> void:
 		_refresh_closure_telemetry()
 		_refresh_camp_cards()
 		PerfMonitor.end("gv_closure")
+		PerfSpan.begin("gv_board")
+		_refresh_system_board()
+		PerfSpan.end("gv_board")
 	# end_bulk_sync flushes the coalesced load-state sync, which may itself write
 	# update_item. Run it BEFORE clearing the bulk/history flags so those writes
 	# stay history-suppressed and coalesced into the single flush below — clearing
@@ -14911,6 +14937,11 @@ func _input(event: InputEvent) -> void:
 						_graph_canvas.call("fit_items_to_view", _selected_item_ids)
 					else:
 						_graph_canvas.call("fit_scope_to_view")
+					get_viewport().set_input_as_handled()
+					return
+				# Esc closes the full-screen Festival board before anything else.
+				if visible and ke.keycode == KEY_ESCAPE and board_fullscreen_open():
+					toggle_board_fullscreen()
 					get_viewport().set_input_as_handled()
 					return
 				# Home: back to the site; Alt+Left: up one level.
@@ -20696,17 +20727,18 @@ func _refresh_camp_cards() -> void:
 		return
 	var summaries: Array = []
 	var queueing := 0
+	var by_scope := GraphNesting.scope_index(model)
 	for c in camps:
 		var cid := str(c["id"])
 		var comp: Dictionary = model.get_item(cid)
 		if comp.is_empty():
 			continue
 		var specs: Dictionary = comp.get("specs", {})
-		var open := CampLedger.open_kinds(model, cid)
+		var open := CampLedger.open_kinds(model, cid, {}, by_scope)
 		var morale := -1.0
 		var present := int(specs.get("camp_headcount", 0))
 		if _npc_population != null and npcs_enabled():
-			for it in model.get_items_in_scope(str(c["scope"])):
+			for it in (by_scope.get(str(c["scope"]), []) as Array):
 				var d: Dictionary = it
 				if str((d.get("specs", {}) as Dictionary).get("role", "")) != "habitat":
 					continue
@@ -21043,6 +21075,418 @@ func _refresh_festival_vibe_from(summaries: Array, queueing: int) -> void:
 ## The festival-wide vibe ({} when the map has no festival camps).
 func festival_vibe() -> Dictionary:
 	return _festival_vibe if npcs_enabled() else {}
+
+
+# ---------------------------------------------------------------------------
+# The Festival board, overlays and the alerts rail (plans/
+# GRAPH_SYSTEMS_UX_PLAN.md Phase 3). One row per power system, rebuilt once a
+# second from data already stamped or stepped (GraphSystemBoard.row); the
+# dashboard, the board, the tiles' overlay colours and the alerts rail all
+# READ these rows and never walk the model themselves.
+# ---------------------------------------------------------------------------
+
+var _board_rows: Array = []
+var _board_rev := 0
+var _system_alerts := GraphSystemAlerts.new()
+var _overlay_mode := ""
+var _overlay_hidden: Dictionary = {}
+var _overlay_popup: PopupMenu = null
+var _overlay_legend: PanelContainer = null
+var _overlay_legend_sig := ""
+var _alerts_rail: VBoxContainer = null
+var _alerts_rail_rev := -1
+var _board_full: PanelContainer = null
+var _board_full_widget: GraphFestivalBoard = null
+var _board_solar_ui: Node = null
+const ALERTS_RAIL_MAX := 6
+const ALERTS_RAIL_W := 270.0
+
+
+func _refresh_system_board() -> void:
+	if model == null:
+		return
+	var rows: Array = []
+	var systems := GraphSystems.list(model)
+	if not systems.is_empty():
+		var by_scope := GraphNesting.scope_index(model)
+		var veh_index: Dictionary = {}
+		for e: Dictionary in _vehicle_power_index():
+			veh_index[str(e["cid"])] = e
+		for sys: Dictionary in systems:
+			var id := str(sys["id"])
+			var item := model.get_item(id)
+			var power: Dictionary = {}
+			if str(sys["kind"]) == GraphSystems.KIND_CAMP:
+				power = _camp_power.get(id, {}) as Dictionary
+			else:
+				var e: Dictionary = veh_index.get(id, {})
+				var cap := float((e.get("spec", {}) as Dictionary).get("battery_kwh", 0.0))
+				power = (_veh_power.get(id, {}) as Dictionary).duplicate()
+				if power.is_empty() and cap > 0.0 and str(e.get("bat", "")) != "":
+					var soc0 := float((model.get_item(str(e["bat"])).get("specs", {}) as Dictionary).get("soc", 0.8))
+					power = {"soc_kwh": soc0 * cap, "ac_available": true}
+				if not power.is_empty():
+					power["cap_kwh"] = cap
+			var scope := str(sys["child_scope"])
+			var ledger: Dictionary = CampLedger.compute(model, scope, {},
+				GraphNesting.walk_in_index(by_scope, scope)) if not scope.is_empty() else {}
+			rows.append(GraphSystemBoard.row(item, power, ledger))
+	rows.push_front(GraphSystemBoard.row({}, {}, {}, _site_board_info()))
+	_board_rows = rows
+	_board_rev += 1
+	_system_alerts.update(rows, Time.get_ticks_msec() / 1000.0)
+	_push_system_overlay()
+	_refresh_alerts_rail()
+
+
+## The site's own system for its board row: SolarUI's battery and power.
+func _site_board_info() -> Dictionary:
+	if _board_solar_ui == null or not is_instance_valid(_board_solar_ui):
+		var root := get_tree().root if get_tree() != null else null
+		_board_solar_ui = root.find_child("SolarUI", true, false) if root != null else null
+	var su := _board_solar_ui
+	var info := {"name": "Your system"}
+	if su == null:
+		return info
+	var cap := float(su.call("get_battery_capacity_kwh")) if su.has_method("get_battery_capacity_kwh") else 0.0
+	var kwh := float(su.call("get_battery_kwh_stored")) if su.has_method("get_battery_kwh_stored") else 0.0
+	info["cap_kwh"] = cap
+	info["kwh"] = kwh
+	info["soc"] = clampf(kwh / cap, 0.0, 1.0) if cap > 0.0 else -1.0
+	info["pv_kw"] = float(su.get("current_solar_kw")) if su.get("current_solar_kw") != null else 0.0
+	info["load_kw"] = float(su.get("current_load_kw")) if su.get("current_load_kw") != null else 0.0
+	info["ac"] = bool(su.call("is_ac_output_enabled")) if su.has_method("is_ac_output_enabled") else true
+	return info
+
+
+## Every system's row, the site's own first (empty before the first refresh).
+func system_board_rows() -> Array:
+	return _board_rows
+
+
+func system_board_rev() -> int:
+	return _board_rev
+
+
+func system_board_row(id: String) -> Dictionary:
+	for r: Dictionary in _board_rows:
+		if str(r["id"]) == id:
+			return r
+	return {}
+
+
+## The island the player is inside ("" at the site's own level).
+func active_system_id() -> String:
+	if model == null or _active_scope_id == GraphModel.ROOT_SCOPE_ID:
+		return ""
+	return str(GraphSystems.island_scopes(model).get(_active_scope_id, ""))
+
+
+func system_alerts() -> GraphSystemAlerts:
+	return _system_alerts
+
+
+## A board row or an alert was clicked: fly there (and go in on a double).
+func board_fly_to(id: String, enter: bool = false) -> void:
+	if board_fullscreen_open():
+		toggle_board_fullscreen()
+	if id.is_empty():
+		if _scope_trail.size() > 1:
+			_jump_to_scope_index(0)
+		elif _graph_canvas != null and _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM:
+			_graph_canvas.call("fit_scope_to_view")
+		return
+	focus_graph_item(id, enter)
+
+
+# --- overlays ---------------------------------------------------------------
+
+func system_overlay_mode() -> String:
+	if _overlay_mode.is_empty():
+		var cfg := ConfigFile.new()
+		_overlay_mode = "none"
+		if cfg.load(_UI_PREFS_CFG) == OK:
+			_overlay_mode = str(cfg.get_value("graph_systems", "overlay", "none"))
+		if not _overlay_mode in GraphSystemBoard.OVERLAYS:
+			_overlay_mode = "none"
+	return _overlay_mode
+
+
+func set_system_overlay(mode: String) -> void:
+	if not mode in GraphSystemBoard.OVERLAYS:
+		mode = "none"
+	if mode != system_overlay_mode():
+		_overlay_hidden.clear()
+	_overlay_mode = mode
+	var cfg := ConfigFile.new()
+	cfg.load(_UI_PREFS_CFG)
+	cfg.set_value("graph_systems", "overlay", mode)
+	cfg.save(_UI_PREFS_CFG)
+	_sync_overlay_menu()
+	_push_system_overlay()
+
+
+## Legend click: show or hide the systems in one bin.
+func toggle_overlay_bin(b: int) -> void:
+	if _overlay_hidden.has(b):
+		_overlay_hidden.erase(b)
+	else:
+		_overlay_hidden[b] = true
+	_overlay_legend_sig = ""
+	_push_system_overlay()
+
+
+func overlay_hidden_bins() -> Dictionary:
+	return _overlay_hidden
+
+
+func _sync_overlay_menu() -> void:
+	if _overlay_popup == null:
+		return
+	var mode := system_overlay_mode()
+	for i in GraphSystemBoard.OVERLAYS.size():
+		var idx := _overlay_popup.get_item_index(VIEW_OVERLAY_BASE + i)
+		if idx >= 0:
+			_overlay_popup.set_item_checked(idx, GraphSystemBoard.OVERLAYS[i] == mode)
+
+
+func _push_system_overlay() -> void:
+	if _graph_canvas == null or not ("system_overlay" in _graph_canvas):
+		return
+	var mode := system_overlay_mode()
+	var ov := {"mode": mode, "values": GraphSystemBoard.overlay_values(_board_rows, mode),
+		"hidden": _overlay_hidden.duplicate()}
+	_graph_canvas.set("system_overlay", ov)
+	_graph_canvas.queue_redraw()
+	_refresh_overlay_legend()
+
+
+func _refresh_overlay_legend() -> void:
+	var mode := system_overlay_mode()
+	var want := mode != "none" and not GraphSystems.list(model).is_empty()
+	if not want:
+		if _overlay_legend != null:
+			_overlay_legend.visible = false
+		return
+	if _overlay_legend == null:
+		_overlay_legend = PanelContainer.new()
+		_overlay_legend.name = "SystemOverlayLegend"
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(UITheme.C_BG, 0.86)
+		sb.border_color = Color(UITheme.C_BORDER, 0.9)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 10.0
+		sb.content_margin_right = 10.0
+		sb.content_margin_top = 6.0
+		sb.content_margin_bottom = 7.0
+		_overlay_legend.add_theme_stylebox_override("panel", sb)
+		add_child(_overlay_legend)
+	_overlay_legend.visible = visible
+	var counts := [0, 0, 0, 0]
+	var no_data := 0
+	for r: Dictionary in _board_rows:
+		if str(r["id"]).is_empty():
+			continue
+		var b := GraphSystemBoard.overlay_bin(mode, GraphSystemBoard.overlay_value(r, mode))
+		if b < 0:
+			no_data += 1
+		else:
+			counts[b] += 1
+	var sig := "%s|%s|%s|%d" % [mode, str(counts), str(_overlay_hidden.keys()), no_data]
+	if sig == _overlay_legend_sig:
+		return
+	_overlay_legend_sig = sig
+	for c in _overlay_legend.get_children():
+		_overlay_legend.remove_child(c)
+		c.free()
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 3)
+	_overlay_legend.add_child(col)
+	var head := HBoxContainer.new()
+	col.add_child(head)
+	var t := Label.new()
+	t.text = "Systems by %s" % str(GraphSystemBoard.OVERLAY_LABELS[mode]).to_lower()
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	t.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	t.add_theme_color_override("font_color", UITheme.C_TEXT)
+	head.add_child(t)
+	var x := IconButton.close(func() -> void: set_system_overlay.call_deferred("none"))
+	x.tooltip_text = "Stop colouring systems"
+	head.add_child(x)
+	var legend := GraphSystemBoard.legend(mode)
+	for i in legend.size():
+		var e: Dictionary = legend[i]
+		var b := Button.new()
+		b.name = "LegendBin%d" % i
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var off := _overlay_hidden.has(i)
+		b.text = "  %s  (%d)" % [str(e["label"]), int(counts[i])]
+		b.icon = UiIcons.icon("eye-off" if off else "eye", 14)
+		b.add_theme_color_override("icon_normal_color", e["color"] as Color)
+		b.add_theme_color_override("icon_hover_color", e["color"] as Color)
+		b.add_theme_color_override("font_color", UITheme.C_TEXT_M if off else UITheme.C_TEXT_S)
+		b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		b.tooltip_text = ("Show" if off else "Hide") + " the systems in this band"
+		# Deferred: the rebuild frees this very button.
+		b.pressed.connect(toggle_overlay_bin.bind(i), CONNECT_DEFERRED)
+		col.add_child(b)
+	if no_data > 0:
+		var nd := Label.new()
+		nd.text = "%s with no data shown grey" % UiText.count(no_data, "system")
+		nd.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		nd.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		col.add_child(nd)
+
+
+# --- alerts rail ------------------------------------------------------------
+
+func _refresh_alerts_rail() -> void:
+	if _alerts_rail_rev == _system_alerts.revision:
+		return
+	_alerts_rail_rev = _system_alerts.revision
+	var entries := _system_alerts.entries()
+	if _alerts_rail == null:
+		_alerts_rail = VBoxContainer.new()
+		_alerts_rail.name = "SystemAlertsRail"
+		_alerts_rail.add_theme_constant_override("separation", 4)
+		_alerts_rail.custom_minimum_size = Vector2(ALERTS_RAIL_W, 0)
+		add_child(_alerts_rail)
+	for c in _alerts_rail.get_children():
+		_alerts_rail.remove_child(c)
+		c.free()
+	_alerts_rail.visible = visible and not entries.is_empty()
+	for i in mini(entries.size(), ALERTS_RAIL_MAX):
+		_alerts_rail.add_child(_make_alert_entry(entries[i] as Dictionary))
+	if entries.size() > ALERTS_RAIL_MAX:
+		var more := Button.new()
+		more.name = "AlertsMore"
+		more.text = "+%d more on the board" % (entries.size() - ALERTS_RAIL_MAX)
+		UITheme.style_button(more)
+		more.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		more.pressed.connect(func() -> void: open_board_fullscreen("attention"))
+		_alerts_rail.add_child(more)
+
+
+func _make_alert_entry(e: Dictionary) -> Control:
+	var lvl := str(e["level"])
+	var col: Color = GraphFestivalBoard.LEVEL_COLORS.get(lvl, UITheme.C_WARN)
+	var panel := PanelContainer.new()
+	panel.name = "Alert_" + str(e["id"])
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.07, 0.11, 0.92)
+	sb.border_color = col
+	sb.border_width_left = 3
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left = 8.0
+	sb.content_margin_right = 4.0
+	sb.content_margin_top = 3.0
+	sb.content_margin_bottom = 3.0
+	panel.add_theme_stylebox_override("panel", sb)
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 2)
+	panel.add_child(hb)
+	var go := Button.new()
+	go.name = "Go"
+	go.flat = true
+	go.focus_mode = Control.FOCUS_NONE
+	go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	go.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	go.clip_text = true
+	go.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var icon := "⛺" if str(e["kind"]) == GraphSystems.KIND_CAMP else "🚐"
+	go.text = "%s %s · %s" % [icon, str(e["name"]), str(e["reason"])]
+	go.tooltip_text = "%s needs attention: %s\nClick to fly there." % [str(e["name"]), str(e["reason"])]
+	go.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	go.add_theme_color_override("font_color", UITheme.C_TEXT)
+	go.pressed.connect(board_fly_to.bind(str(e["id"]), false))
+	hb.add_child(go)
+	var x := IconButton.close(func() -> void:
+		_system_alerts.dismiss(str(e["id"]))
+		_refresh_alerts_rail.call_deferred())
+	x.tooltip_text = "Dismiss (it comes back if it gets worse)"
+	hb.add_child(x)
+	return panel
+
+
+# --- the full-screen board ---------------------------------------------------
+
+func board_fullscreen_open() -> bool:
+	return _board_full != null and _board_full.visible
+
+
+func open_board_fullscreen(filter: String = "") -> void:
+	if _board_full == null:
+		_board_full = PanelContainer.new()
+		_board_full.name = "FestivalBoardFull"
+		_board_full.mouse_filter = Control.MOUSE_FILTER_STOP
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(UITheme.C_BG, 0.96)
+		sb.border_color = Color(UITheme.C_BORDER, 0.9)
+		sb.set_border_width_all(1)
+		sb.content_margin_left = 22.0
+		sb.content_margin_right = 22.0
+		sb.content_margin_top = 14.0
+		sb.content_margin_bottom = 14.0
+		_board_full.add_theme_stylebox_override("panel", sb)
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 8)
+		_board_full.add_child(col)
+		var title := Label.new()
+		title.text = "Festival board"
+		title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+		title.add_theme_color_override("font_color", UITheme.C_TEXT)
+		col.add_child(title)
+		_board_full_widget = GraphFestivalBoard.new()
+		_board_full_widget.wide = true
+		_board_full_widget.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_board_full_widget.expand_pressed.connect(toggle_board_fullscreen)
+		col.add_child(_board_full_widget)
+		_board_full_widget.bind(self)
+		add_child(_board_full)
+	if not filter.is_empty():
+		_board_full_widget.set_filter(filter)
+	_board_full.visible = true
+	_layout_board_overlays()
+	_board_full_widget.refresh()
+
+
+func toggle_board_fullscreen() -> void:
+	if board_fullscreen_open():
+		_board_full.visible = false
+	else:
+		open_board_fullscreen()
+
+
+func board_fullscreen_widget() -> GraphFestivalBoard:
+	return _board_full_widget
+
+
+## The canvas overlays follow the canvas (the sidebars open and close).
+func _layout_board_overlays() -> void:
+	if _graph_canvas == null:
+		return
+	var cpos: Vector2 = _graph_canvas.position
+	var csz: Vector2 = _graph_canvas.size
+	if _alerts_rail != null:
+		var show := visible and not _system_alerts.entries().is_empty() and not board_fullscreen_open()
+		_alerts_rail.visible = show
+		if show:
+			_alerts_rail.position = cpos + Vector2(csz.x - ALERTS_RAIL_W - 12.0, 12.0)
+			_alerts_rail.size = Vector2(ALERTS_RAIL_W, 0.0)
+	if _overlay_legend != null:
+		var on := visible and system_overlay_mode() != "none" and not board_fullscreen_open() \
+			and _active_scope_id == GraphModel.ROOT_SCOPE_ID and _board_rows.size() > 1
+		_overlay_legend.visible = on
+		if on:
+			_overlay_legend.reset_size()
+			# Above the people chip that sits in the canvas's bottom-left corner.
+			_overlay_legend.position = cpos + Vector2(12.0, csz.y - _overlay_legend.size.y - 62.0)
+	if board_fullscreen_open():
+		_board_full.position = cpos
+		_board_full.size = csz
 
 
 # ---------------------------------------------------------------------------
