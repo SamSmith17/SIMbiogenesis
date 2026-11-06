@@ -5122,8 +5122,9 @@ figshare bot check and its tiles are an undocumented staging server).
   2.5 MB, 7200×3600 = 0.05°, R = kWh/kWp/day ÷ 7, G = coverage, land 60° S
   to 65° N) built by `python tools/globe/solar_atlas_build.py` from the World
   PVOUT LTAy AAIGrid (a 300 MB zip from api.globalsolaratlas.info/download,
-  30″ cells block-averaged; ~2 min). ⚠ Its `.import` has
-  `detect_3d/compress_to=0`: a VRAM-compressed copy would corrupt the values.
+  30″ cells block-averaged; ~2 min). ⚠ It must import lossless (Godot's
+  default; `.import` files are gitignored here): a VRAM-compressed copy would
+  corrupt the values. Never re-import it as "3D" / VRAM compressed.
   `GlobeSolarAtlas.layer_value` reads it for the hover ("PV x kWh/kWp/day");
   the overlay fades closer than the 1° grid (`overlay_fade_far` uniform,
   0.008). A clicked point asks the atlas's public API (`data/lta?loc=`, the
