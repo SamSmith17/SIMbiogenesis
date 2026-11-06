@@ -4994,8 +4994,9 @@ no 4.7 build, needs a double-precision engine, ion / Google keys); a SEPARATE
 mode beside the unchanged 2D picker; coarse NASA POWER GHI only for now.
 Phases 0 (spikes), 1 (globe core), 2 (the mode), 3 (clouds, rain, the
 satellite of the day) and 4 (GFS wind streamlines, temperature, wind power)
-6 (global ↔ local) and 7 (polish) landed; the plan is done except Phase
-5's detailed atlases, which the user deferred.
+6 (global ↔ local), 7 (polish) and the Solar Atlas half of 5 landed. Wind
+atlas: not done (the user's call, 2026-11-05: GWA's world files sit behind a
+figshare bot check and its tiles are an undocumented staging server).
 - **`GlobeMode`** (scenes/ui/globe/globe_mode.gd, `GlobeMode.open(parent,
   site, time_provider)`): the hub's "Globe" button, or in-game
   `toggle_globe` (Shift+L; main.gd checks it BEFORE the picker's L, which
@@ -5116,6 +5117,20 @@ satellite of the day) and 4 (GFS wind streamlines, temperature, wind power)
   coordinates go through `SitePrivacy` like the card's. Tour stop
   `07a_globe_mode` (burningman: the site, out to the Earth with wind + rain,
   back down).
+- **Solar atlas (Phase 5, Global Solar Atlas 2.0, CC BY 4.0).** Colour by →
+  "Solar atlas (PV output)": `core/globe/data/gsa_pvout.png` (committed,
+  2.5 MB, 7200×3600 = 0.05°, R = kWh/kWp/day ÷ 7, G = coverage, land 60° S
+  to 65° N) built by `python tools/globe/solar_atlas_build.py` from the World
+  PVOUT LTAy AAIGrid (a 300 MB zip from api.globalsolaratlas.info/download,
+  30″ cells block-averaged; ~2 min). ⚠ Its `.import` has
+  `detect_3d/compress_to=0`: a VRAM-compressed copy would corrupt the values.
+  `GlobeSolarAtlas.layer_value` reads it for the hover ("PV x kWh/kWp/day");
+  the overlay fades closer than the 1° grid (`overlay_fade_far` uniform,
+  0.008). A clicked point asks the atlas's public API (`data/lta?loc=`, the
+  one its own map uses; keyless; cached per 0.001° in
+  user://globe_cache/gsa/): "1 kWp makes 3.25 kWh/day (1,187 kWh/yr) · sun
+  · best tilt · best / worst month". The sea and poles have no solar data.
+  The credits line now wraps beside the layer bar (`set_credits_left`).
 
 ## Maps and scene shell
 

@@ -245,6 +245,11 @@ usage; confirm each provider's live attribution string before release.**
   - License: U.S. Government work (public domain) · Attribution: **"Wind, temperature: NOAA GFS (AWS Open Data)"**
   - Status: verified
 
+- **Global Solar Atlas 2.0** (Solargis s.r.o. for the World Bank Group, ESMAP) — the globe's solar atlas layer (PV output) and a clicked point's GHI, DNI, PV output and best tilt.
+  - Source: https://globalsolaratlas.info (World PVOUT LTAy grid, block-averaged to 0.05° in `core/globe/data/gsa_pvout.png` by `tools/globe/solar_atlas_build.py`; point data from api.globalsolaratlas.info/data/lta)
+  - License: `CC-BY-4.0` · Attribution: **"Solar atlas: Global Solar Atlas 2.0 (Solargis, World Bank Group / ESMAP, CC BY 4.0)"**
+  - Status: verified
+
 - **Open-Meteo** — weather archive/forecast **and** no-key elevation (Copernicus DEM).
   - Source: https://open-meteo.com
   - License: data `CC-BY-4.0`; API `Apache-2.0` · Attribution: credit Open-Meteo;

@@ -35,6 +35,7 @@ const COLOUR_NONE := 0
 const COLOUR_ZONES := 1
 const COLOUR_TEMP := 2
 const COLOUR_POWER := 3
+const COLOUR_ATLAS := 4
 ## 2 m air temperature, °C: edges every 12 °C, blue to red.
 const TEMP_COLORS := [Color("#2c3e9e"), Color("#4f9bd9"), Color("#bfe6f2"), Color("#f7e08b"),
 	Color("#f39a4b"), Color("#c8303b")]
@@ -73,6 +74,10 @@ var _zones_mode: OptionButton
 var _lights_toggle: CheckBox
 var _legend: HBoxContainer
 var _weather: GlobeWeather
+var _atlas: GlobeSolarAtlas
+var _card_atlas: Label
+var _atlas_key := ""
+var _atlas_info: Dictionary = {}
 var _clouds_toggle: CheckBox
 var _rain_toggle: CheckBox
 var _sat_toggle: CheckBox
@@ -152,6 +157,10 @@ func _ready() -> void:
 	_weather.clouds_ready.connect(_on_clouds_ready)
 	_weather.rain_ready.connect(_on_rain_ready)
 	_weather.wind_ready.connect(_on_wind_ready)
+	_atlas = GlobeSolarAtlas.new()
+	_atlas.name = "SolarAtlas"
+	add_child(_atlas)
+	_atlas.point_ready.connect(_on_atlas_point)
 	globe.time_provider = func() -> float:
 		return GlobeMath.jd_from_unix(Time.get_unix_time_from_system() + _time_offset_h * 3600.0)
 	_build_top_bar()
@@ -304,6 +313,8 @@ func _build_card() -> void:
 	zrow.add_child(_card_zone_chip)
 	_card_zone = _label(zrow, UITheme.FONT_MD, UITheme.C_TEXT)
 	_card_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_card_atlas = _label(col, UITheme.FONT_SM, UITheme.C_TEXT_S)
+	_card_atlas.name = "AtlasLine"
 	_card_world_note = _label(col, UITheme.FONT_SM, UITheme.C_TEXT_S)
 	col.add_child(HSeparator.new())
 	_name_edit = LineEdit.new()
@@ -347,6 +358,7 @@ func _build_bottom() -> void:
 	bar.offset_bottom = -16
 	bar.offset_top = -16
 	add_child(bar)
+	bar.resized.connect(func() -> void: globe.set_credits_left(bar.position.x + bar.size.x + 16.0))
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)
 	bar.add_child(col)
@@ -363,6 +375,8 @@ func _build_bottom() -> void:
 	_colour_by.add_item("Solar zones", COLOUR_ZONES)
 	_colour_by.add_item("Temperature", COLOUR_TEMP)
 	_colour_by.add_item("Wind power", COLOUR_POWER)
+	if GlobeSolarAtlas.layer() != null:
+		_colour_by.add_item("Solar atlas (PV output)", COLOUR_ATLAS)
 	_colour_by.selected = COLOUR_ZONES
 	_colour_by.tooltip_text = "Solar zones: mean daily sunshine on flat ground (GHI), NASA POWER 2001-2020, the map picker's zones.\nTemperature: air at 2 m, NOAA GFS at the globe's time.\nWind power: the power in the wind at 100 m (from GFS 10 m wind, open land), a snapshot not a climate."
 	_colour_by.item_selected.connect(func(i: int) -> void: _set_colour(_colour_by.get_item_id(i)))
@@ -448,6 +462,8 @@ func _set_colour(mode: int) -> void:
 	_colour = mode
 	_zones_mode.disabled = mode == COLOUR_NONE
 	_build_legend()
+	if _data_lbl != null:
+		_show_data_times()
 	_wx_key = ""
 	_wx_poll = 0.0
 	if mode == COLOUR_NONE:
@@ -489,6 +505,10 @@ func _apply_colour() -> void:
 				globe.set_overlay(_power_tex, POWER_COLORS, POWER_STEPS, 1500.0, m, 0.6, 0.0, 0.0, 250.0)
 			else:
 				globe.clear_overlay()
+		COLOUR_ATLAS:
+			globe.set_overlay(GlobeSolarAtlas.layer(), GlobeSolarAtlas.COLORS, GlobeSolarAtlas.STEPS,
+				GlobeSolarAtlas.MAX_PVOUT, m, 0.6, 0.0, GlobeSolarAtlas.RAMP_LO, GlobeSolarAtlas.RAMP_STEP,
+				GlobeSolarAtlas.FADE_FAR)
 		_:
 			globe.clear_overlay()
 
@@ -520,6 +540,10 @@ func _build_legend() -> void:
 			colors = POWER_COLORS
 			labels = _step_labels(POWER_STEPS)
 			unit = "W/m² at 100 m"
+		COLOUR_ATLAS:
+			colors = GlobeSolarAtlas.COLORS
+			labels = _step_labels(GlobeSolarAtlas.STEPS)
+			unit = "kWh/kWp/day from PV"
 	_legend.visible = not colors.is_empty()
 	for i in colors.size():
 		var chip := PanelContainer.new()
@@ -545,11 +569,18 @@ func _build_legend() -> void:
 
 
 static func _step_labels(steps: Array) -> Array:
-	var out: Array = ["< %d" % int(steps[0])]
+	var out: Array = ["< %s" % _num(steps[0])]
 	for i in steps.size() - 1:
-		out.append("%d–%d" % [int(steps[i]), int(steps[i + 1])])
-	out.append("%d+" % int(steps[-1]))
+		out.append("%s–%s" % [_num(steps[i]), _num(steps[i + 1])])
+	out.append("%s+" % _num(steps[-1]))
 	return out
+
+
+## 12 → "12", 3.25 → "3.25", 2.5 → "2.5".
+static func _num(v: float) -> String:
+	if is_equal_approx(v, roundf(v)):
+		return "%d" % roundi(v)
+	return ("%.2f" % v).rstrip("0")
 
 
 ## [ghi, zone dict] at a point, from the picker's own service.
@@ -670,10 +701,33 @@ func _fill_zone(lat: float, lon: float) -> void:
 	if z.is_empty() or is_nan(float(zr[0])):
 		_card_zone.text = "Solar data unavailable"
 		_card_zone_chip.visible = false
+		_request_atlas(lat, lon)
 		return
 	_card_zone_chip.visible = true
 	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(z.color))
 	_card_zone.text = "%s · %.1f kWh/m²/day of sun" % [str(z.label), float(zr[0])]
+	_request_atlas(lat, lon)
+
+
+## The Global Solar Atlas numbers for the selected point (asked once per
+## point; the reply fills the card's atlas line).
+func _request_atlas(lat: float, lon: float) -> void:
+	_atlas_info = {}
+	_card_atlas.text = "Solar atlas: asking…"
+	_atlas_key = _atlas.request_point(lat, lon)
+
+
+func _on_atlas_point(key: String, info: Dictionary) -> void:
+	if key != _atlas_key or _closing:
+		return
+	_atlas_info = info
+	_card_atlas.text = str(info.error) if info.has("error") else GlobeSolarAtlas.card_text(info)
+	_show_data_times()
+
+
+## What the card's atlas line says now (for checks).
+func atlas_text() -> String:
+	return _card_atlas.text
 
 
 func _nearby_world_note(lat: float, lon: float) -> String:
@@ -707,6 +761,10 @@ func _on_point_hovered(lat: float, lon: float, on_globe: bool) -> void:
 	var ztxt := ""
 	if not is_nan(float(zr[0])) and not (zr[1] as Dictionary).is_empty():
 		ztxt = " · %.1f kWh/m²/day (%s)" % [float(zr[0]), str(zr[1].label)]
+	if _colour == COLOUR_ATLAS:
+		var pv := GlobeSolarAtlas.layer_value(lat, lon)
+		if not is_nan(pv):
+			ztxt += " · PV %.2f kWh/kWp/day" % pv
 	_hover.text = "%s%s%s · altitude %s" % [_fmt_ll(lat, lon), ztxt, wind_text(lat, lon), _alt_text()]
 
 
@@ -1137,4 +1195,6 @@ func _show_data_times() -> void:
 		credits.append(GlobeWeather.RAIN_CREDIT)
 	_data_lbl.text = " · ".join(parts)
 	_data_lbl.visible = not parts.is_empty()
+	if _colour == COLOUR_ATLAS or not _atlas_info.is_empty():
+		credits.append(GlobeSolarAtlas.ATTRIBUTION)
 	globe.set_extra_credits(credits)

@@ -245,6 +245,7 @@ static func _run_mode(h: Node, shots_dir: String) -> int:
 	gm.globe.look_at_point(15.0, 20.0, 2.6)
 	await _settle_and_shoot(h, gm.globe, shots_dir, "09_mode_smooth")
 	fails += await _run_weather(h, gm, shots_dir)
+	fails += await _run_atlas(h, gm, shots_dir)
 	fails += await _run_perf(h, gm)
 	fails += await _run_local(h, gm, shots_dir)
 	var res := UiAudit.run(tree.root.get_viewport())
@@ -316,7 +317,8 @@ static func _run_weather(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 	_select(gm.find_child("ColourBy", true, false) as OptionButton, GlobeMode.COLOUR_NONE)
 	await _click_toggle(vp, gm.find_child("RainToggle", true, false) as CheckBox)
 	await _click_toggle(vp, gm.find_child("SatelliteToggle", true, false) as CheckBox)
-	# The real time: live clouds.
+	# The real time: live clouds (the strip back at "now" first).
+	(gm.find_child("TimeSlider", true, false) as HSlider).value = 0.0
 	gm.globe.time_provider = func() -> float:
 		return GlobeMath.jd_from_unix(Time.get_unix_time_from_system() + gm._time_offset_h * 3600.0)
 	await _click_toggle(vp, gm.find_child("SatelliteToggle", true, false) as CheckBox)
@@ -396,6 +398,10 @@ static func _run_local(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 ## A real click on a check box, retried once when a stray real mouse motion
 ## ate it (the harness click race: the press and release a frame apart).
 static func _click_toggle(vp: Viewport, cb: CheckBox) -> void:
+	# A Colour-by change shows or hides the legend row, and the rows below it
+	# move a frame later: aim only once the layout has settled.
+	for _f in 3:
+		await vp.get_tree().process_frame
 	var before := cb.button_pressed
 	await HarnessInput.click(vp, HarnessInput.center_of(cb))
 	if cb.button_pressed == before:
@@ -454,7 +460,42 @@ static func _run_perf(h: Node, gm: GlobeMode) -> int:
 		var detail := "frame %.1f ms (p95 %.1f), globe GPU %.2f ms, %d tiles, %d textures, VRAM %.0f MB" % [
 			f_med, ft[int(ft.size() * 0.95)], g_med, tiles, tex, vram]
 		fails += _report("perf %s: within budget" % str(v[0]), f_med < PERF_FRAME_MS and g_med < PERF_GPU_MS
-			and tiles <= GlobeQuadtree.DEFAULT_MAX_TILES and tex <= 900 and vram < PERF_VRAM_MB, detail)
+			and tiles <= GlobeQuadtree.DEFAULT_MAX_TILES
+			and tex <= GlobeTileFetcher.MAX_TEXTURES + GlobeTileFetcher.DECODES_PER_FRAME and vram < PERF_VRAM_MB, detail)
 	RenderingServer.viewport_set_measure_render_time(rid, false)
 	gv.cam_tilt = 0.0
+	return fails
+
+
+## The Global Solar Atlas: the PV-output layer and one point's numbers.
+static func _run_atlas(h: Node, gm: GlobeMode, shots_dir: String) -> int:
+	var tree := h.get_tree()
+	var fails := 0
+	var ob := gm.find_child("ColourBy", true, false) as OptionButton
+	fails += _report("atlas: Colour by offers the solar atlas", ob.get_item_index(GlobeMode.COLOUR_ATLAS) >= 0)
+	if ob.get_item_index(GlobeMode.COLOUR_ATLAS) < 0:
+		return fails
+	_select(ob, GlobeMode.COLOUR_ATLAS)
+	gm.globe.cam_tilt = 0.0
+	gm.globe.look_at_point(20.0, 10.0, 2.6)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "17_atlas_world")
+	fails += _report("atlas: the PV layer is drawn", gm.globe.has_overlay())
+	var v := GlobeSolarAtlas.layer_value(23.0, 10.0)
+	fails += _report("atlas: the Sahara makes more than 5 kWh/kWp/day", v > 5.0, "%.2f" % v)
+	var w := GlobeSolarAtlas.layer_value(MV_LAT, MV_LON)
+	fails += _report("atlas: the layer agrees with the API at Mount Vernon (3.25)", absf(w - 3.25) < 0.3, "%.2f" % w)
+	# Midday over California (2026-03-20 20:00 UTC) for the close shot.
+	var tp: Callable = gm.globe.time_provider
+	gm.globe.time_provider = func() -> float: return JD_FIXED + 5.0 / 24.0
+	gm.globe.look_at_point(36.5, -118.0, 0.12)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "18_atlas_california")
+	gm.globe.time_provider = tp
+	gm.select_point(MV_LAT, MV_LON)
+	var waited := 0
+	while gm.atlas_text().begins_with("Solar atlas: asking") and waited < 900:
+		await tree.process_frame
+		waited += 1
+	fails += _report("atlas: the card has the point's numbers", gm.atlas_text().contains("kWh/day")
+		and gm.atlas_text().contains("best tilt"), gm.atlas_text())
+	_select(ob, GlobeMode.COLOUR_NONE)
 	return fails

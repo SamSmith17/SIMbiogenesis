@@ -267,10 +267,12 @@ func _evict() -> void:
 	keys.sort_custom(func(a: String, b: String) -> bool:
 		return int(_textures[a].used) < int(_textures[b].used))
 	var over := _textures.size() - MAX_TEXTURES
-	for i in over:
-		var ks: String = keys[i]
+	for ks: String in keys:
+		if over <= 0:
+			break
 		# Never evict what was asked for this frame or anything at z <= 3.
 		if int(_textures[ks].used) >= _frame or int(ks.split("|")[1]) <= 3:
 			continue
 		_textures.erase(ks)
 		stats.evicted += 1
+		over -= 1

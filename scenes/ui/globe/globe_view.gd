@@ -133,10 +133,15 @@ func _ready() -> void:
 	_attrib.add_theme_font_size_override("font_size", 11)
 	_attrib.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	_attrib.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_attrib.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	_attrib.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	# Bottom edge, right-aligned, wrapping in the width left of `credits_left`
+	# (a panel the owner keeps bottom-left).
+	_attrib.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_attrib.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_attrib.position -= Vector2(8, 6)
+	_attrib.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_attrib.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_attrib.offset_right = -8
+	_attrib.offset_bottom = -6
+	_attrib.offset_left = 8
 	add_child(_attrib)
 	_update_attribution()
 	_update_sun()
@@ -346,7 +351,7 @@ func clear_markers() -> void:
 ## mode 0 = bands with outlines, 1 = a smooth ramp.
 func set_overlay(tex: Texture2D, colors: Array, steps: Array, max_value: float,
 		mode: int = 0, alpha: float = 0.6, offset: float = 0.0, ramp_lo: float = 1.5,
-		ramp_step: float = 1.0) -> void:
+		ramp_step: float = 1.0, fade_far: float = 0.03) -> void:
 	var lin: Array = []
 	for c in colors:
 		var cc: Color = c
@@ -357,7 +362,8 @@ func set_overlay(tex: Texture2D, colors: Array, steps: Array, max_value: float,
 		st.append(float(v))
 	_overlay = {"overlay_tex": tex, "has_overlay": tex != null, "overlay_colors": lin,
 		"overlay_steps": st, "overlay_max": max_value, "overlay_mode": mode, "overlay_alpha": alpha,
-		"overlay_offset": offset, "overlay_ramp_lo": ramp_lo, "overlay_ramp_step": ramp_step}
+		"overlay_offset": offset, "overlay_ramp_lo": ramp_lo, "overlay_ramp_step": ramp_step,
+		"overlay_fade_far": fade_far}
 	_push_overlay()
 
 
@@ -512,6 +518,13 @@ func has_clouds() -> bool:
 
 func has_rain() -> bool:
 	return _has_rain
+
+
+## Keeps the attribution clear of a panel this many pixels wide at the
+## bottom-left.
+func set_credits_left(px: float) -> void:
+	if _attrib != null:
+		_attrib.offset_left = px
 
 
 ## Extra credit lines for the attribution (weather layers in use).

@@ -14,7 +14,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
 
-const EXPECTED_CHECKS := 116
+const EXPECTED_CHECKS := 127
 
 var _fails := 0
 var _checks := 0
@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_gfs_helpers()
 	_test_wind_field()
 	_test_drape()
+	_test_solar_atlas()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -520,3 +521,33 @@ func _test_drape() -> void:
 	_check("drape: the SoI ring is 300 m round", absf(dmin - 0.3) < 0.003 and absf(dmax - 0.3) < 0.003, "%.4f..%.4f km" % [dmin, dmax])
 	var sq := GlobeMode.square_points(48.3252, -122.2469, 15000.0)
 	_check("drape: the map square's side is 30 km", absf(GlobeMath.great_circle_km(sq[0], sq[1], sq[2], sq[3]) - 30.0) < 0.3)
+
+
+func _test_solar_atlas() -> void:
+	var d: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/gsa_lta_mtvernon.json"))
+	var a := GlobeSolarAtlas.parse_lta(d)
+	_check("atlas: Mount Vernon parses", bool(a.ok) and absf(float(a.ghi_year) - 1197.609375) < 1e-6
+		and absf(float(a.pvout_year) - 1186.5770263671875) < 1e-6, str(a))
+	_check("atlas: per day is per year / 365", absf(float(a.pvout_day) - 1186.5770263671875 / 365.0) < 1e-9)
+	_check("atlas: best tilt and temperature", int(a.tilt_deg) == 36 and absf(float(a.temp_c) - 9.1875) < 1e-6)
+	var pm: PackedFloat64Array = a.pvout_monthly
+	var tot := 0.0
+	for v in pm:
+		tot += v
+	_check("atlas: twelve months that sum to the year", pm.size() == 12 and absf(tot - float(a.pvout_year)) < 2.0,
+		"%.1f vs %.1f" % [tot, float(a.pvout_year)])
+	var t := GlobeSolarAtlas.card_text(a)
+	_check("atlas: the card line", t.contains("3.25 kWh/day") and t.contains("1,187 kWh/yr")
+		and t.contains("best tilt 36°") and t.contains("best Jul, worst Dec"), t)
+	var o: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/gsa_lta_ocean.json"))
+	var b := GlobeSolarAtlas.parse_lta(o)
+	_check("atlas: the open sea has no solar data", not bool(b.ok) and GlobeSolarAtlas.card_text(b).contains("no data here"))
+	# An image: lon -180 at the left, north up, R = value / max, G = coverage.
+	var img := Image.create(360, 180, false, Image.FORMAT_RGB8)
+	img.set_pixel(57, 41, Color(5.0 / GlobeSolarAtlas.MAX_PVOUT, 1.0, 0.0))  # 48.3 N, 122.2 W
+	var v := GlobeSolarAtlas.sample(img, 48.3252, -122.2469)
+	_check("atlas: a layer pixel reads back its value", absf(v - 5.0) < 0.03, "%.3f" % v)
+	_check("atlas: no coverage is NAN", is_nan(GlobeSolarAtlas.sample(img, 0.0, 0.0)))
+	_check("atlas: longitude wraps", absf(GlobeSolarAtlas.sample(img, 48.3252, -122.2469 + 360.0) - v) < 1e-6)
+	_check("atlas: cache keys are 0.001 deg", GlobeSolarAtlas.key_of(48.32524, -122.24691) == "48.325,-122.247")
+	_check("atlas: legend numbers", GlobeMode._num(3.25) == "3.25" and GlobeMode._num(2.5) == "2.5" and GlobeMode._num(12.0) == "12")

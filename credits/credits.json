@@ -1497,6 +1497,21 @@
       "share_alike": false,
       "source": "https://noaa-gfs-bdp-pds.s3.amazonaws.com",
       "status": "verified"
+    },
+    {
+      "attribution_required": true,
+      "attribution_string": "Solar atlas: Global Solar Atlas 2.0 (Solargis, World Bank Group / ESMAP, CC BY 4.0)",
+      "author": "Solargis s.r.o. for the World Bank Group (ESMAP)",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "global-solar-atlas",
+      "license": "CC-BY-4.0",
+      "name": "Global Solar Atlas 2.0 (PVOUT world grid + point data API)",
+      "notes": "core/globe/data/gsa_pvout.png is the World PVOUT LTAy AvgDailyTotals grid block-averaged to 0.05 deg by tools/globe/solar_atlas_build.py (a derived, rescaled work). Point numbers come from api.globalsolaratlas.info/data/lta; fixtures core/globe/testdata/gsa_lta_*.json.",
+      "role": "The globe's solar atlas layer (PV output) and a point's GHI / DNI / PV output / best tilt",
+      "share_alike": false,
+      "source": "https://globalsolaratlas.info",
+      "status": "verified"
     }
   ],
   "field_guide": {

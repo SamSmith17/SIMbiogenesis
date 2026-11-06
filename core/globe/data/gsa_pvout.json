@@ -1,0 +1,19 @@
+{
+ "source": "Global Solar Atlas 2.0 (Solargis / World Bank Group, ESMAP), World PVOUT LTAy AvgDailyTotals",
+ "licence": "CC BY 4.0",
+ "url": "https://api.globalsolaratlas.info/download/World/World_PVOUT_GISdata_LTAy_AvgDailyTotals_GlobalSolarAtlas-v2_AAIGRID.zip",
+ "zip": "World_PVOUT_LTAy_AAIGRID.zip",
+ "quantity": "PVOUT",
+ "unit": "kWh/kWp/day",
+ "encoding": "R = value / max * 255, G = 255 where data",
+ "max": 7.0,
+ "cell_deg": 0.04999999999799999,
+ "width": 7200,
+ "height": 3600,
+ "built": "2026-11-05",
+ "stats": {
+  "min": 1.3861944675445557,
+  "max": 6.622250080108643,
+  "mean": 4.196478843688965
+ }
+}

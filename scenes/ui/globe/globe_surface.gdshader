@@ -69,6 +69,9 @@ uniform float overlay_steps[5];
 uniform float overlay_offset = 0.0;
 uniform float overlay_ramp_lo = 1.5;
 uniform float overlay_ramp_step = 1.0;
+// Camera distance (radii) where the layer has faded in fully; it is gone at a
+// tenth of it.
+uniform float overlay_fade_far = 0.03;
 
 varying vec3 w_pos;
 
@@ -132,7 +135,7 @@ void fragment() {
 		// The data is 1° (~110 km): it fades out as the camera comes down to
 		// where the photo says more than the colour (gone below ~20 km away).
 		float cam_d = length(CAMERA_POSITION_WORLD - w_pos);
-		float a = overlay_alpha * smoothstep(0.25, 0.6, ov.g) * smoothstep(0.003, 0.03, cam_d);
+		float a = overlay_alpha * smoothstep(0.25, 0.6, ov.g) * smoothstep(overlay_fade_far * 0.1, overlay_fade_far, cam_d);
 		col = mix(col, oc * mix(0.55, 1.0, lit), a);
 	}
 	vec3 v = normalize(CAMERA_POSITION_WORLD - w_pos);
