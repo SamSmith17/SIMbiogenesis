@@ -100,6 +100,8 @@ const CAPTURES := {
 	"assetpack-import": {"fn": "_run_assetpack_import_capture", "world": "mtvernon", "timeout_s": 1500.0, "kind": "menu"},
 	# Settings from the launch hub (the gear): the Main-free pages audited.
 	"hubsettings":  {"fn": "_run_hub_settings_capture",    "world": "mtvernon", "timeout_s": 300.0, "kind": "menu"},
+	# The 3D globe (Globe mode Phase 1) over the launch hub, real input.
+	"globe":        {"fn": "_run_globe_capture",           "world": "mtvernon", "timeout_s": 600.0, "kind": "menu"},
 	"graphtools":   {"fn": "_run_graph_tools_capture",     "world": "mtvernon", "timeout_s": 600.0},
 	"pvsnap":       {"fn": "_run_pv_snap_capture",         "world": "mtvernon", "timeout_s": 600.0},
 	"conduits":     {"fn": "_run_conduits_capture",        "world": "mtvernon", "timeout_s": 600.0},

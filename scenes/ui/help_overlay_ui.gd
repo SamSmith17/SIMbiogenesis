@@ -51,6 +51,7 @@ const _GROUPS := [
 		["system_graph_toggle", "System graph (wire habitat + power)"],
 		["toggle_library", "Unified library (buildings / graph / veg / structures)"],
 		["toggle_location_picker", "Location / map picker"],
+		["toggle_globe", "Globe: the whole Earth in 3D"],
 		["terrain_edit", "Edit toolbar - terrain tools (keep moving while you edit)"],
 		["vegetation_edit", "Edit toolbar - vegetation tools"],
 		["key:RMB", "...hold to look around while the toolbar is open"],

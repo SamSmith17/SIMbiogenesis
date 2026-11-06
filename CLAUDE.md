@@ -1154,6 +1154,17 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/csplab_designer_
 # What placed concentrators cost (one of each kind; csp_* sections at 1x /
 # 60x / 1440x, GPU shown vs hidden vs plain mirrors; CSPB_QUICK=1 skips GPU):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/csplab_bench.gd -Timeout 900
+# Globe maths + tile selection (offline — GlobeMath frame / picks / Mercator
+# tiles / sub-solar point vs SolarPosition, GlobeQuadtree budget / no
+# ancestor pairs / corners covered; EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
+# The globe on the launch hub with REAL input (network): whole Earth, night
+# side, fly-to, 10 km site view, pick round trip, drag / click / wheel, tilt,
+# pole, frame time:
+tools\harness.ps1 -Capture globe -UserArgs @("--window-size=1280x720")
+# Globe mode in a running world (Shift+L, own site, sun on the sim clock,
+# disable_3d handed back, L still the picker):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/globe_ingame_check.gd -Label globe_ingame
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -4972,6 +4983,139 @@ legacy `pv_array` rack has "Open in Solar designer…", which converts it
   change, MPPT-input split of one prop across two controllers by hand (the
   compounds wire to the nearest controller), moving or swapping a rack part
   by hand (parts are picked and listed, not edited).
+
+## Globe mode (core/globe/ + scenes/ui/globe/, 2026-11-05)
+
+Plan: `~/.claude/plans/i-have-been-playing-abstract-frost.md`; spike notes
+`plans/GLOBE_SPIKES.md`. A native 3D Earth for picking places and global
+context (inspired by Gods Eye View, not a clone). User's choices: native
+first, Cesium only later as an optional photoreal layer (3D Tiles for Godot:
+no 4.7 build, needs a double-precision engine, ion / Google keys); a SEPARATE
+mode beside the unchanged 2D picker; coarse NASA POWER GHI only for now.
+Phases 0 (spikes), 1 (globe core), 2 (the mode), 3 (clouds, rain, the
+satellite of the day) and 4 (GFS wind streamlines, temperature, wind power)
+6 (global ↔ local) and 7 (polish) landed; the plan is done except Phase
+5's detailed atlases, which the user deferred.
+- **`GlobeMode`** (scenes/ui/globe/globe_mode.gd, `GlobeMode.open(parent,
+  site, time_provider)`): the hub's "Globe" button, or in-game
+  `toggle_globe` (Shift+L; main.gd checks it BEFORE the picker's L, which
+  also matches Shift+L) via `Main.open_globe_mode / toggle_globe_mode`
+  (sim clock for the sun, "You are here" pin, root `disable_3d` while up,
+  handed back on close). Search (Nominatim, or "lat, lon" typed), a click
+  card (place via SitePrivacy, zone + kWh from GhiService, "Create world
+  here"), a pin per saved world (Play), layers: solar zones (bands /
+  smooth) and city lights. Esc steps out: results, card, mode.
+- **`WorldLauncher`** (core/worlds/): the ONE place → world path
+  (register_map → WorldStore.create → save the running world →
+  WorldSession.launch); the picker's map registration and save use it too.
+- **GHI layer** (`GlobeGhiOverlay`): 360x180 equirect PNG (R = GHI / 8,
+  G = land) built on a worker, cached `user://globe_cache/ghi_overlay_v4.png`
+  (bump the name when the build changes); drawn by `globe_surface` from the
+  world normal, fading out below ~20 km. ⚠ `TopojsonLoader.is_on_land` marks
+  whole latitude bands as land where a small island ring crosses 180°
+  (Fiji -16.5°, Wrangel 71°): `GlobeGhiOverlay.land_test` unwraps rings
+  wider than 180° but under 10° tall. The 2D picker map still uses the raw
+  test.
+- **Weather layers** (`GlobeWeather`, a GlobeMode child; all at the globe's
+  instant, `GlobeView.current_jd()`: the sim clock in-game, now minus the
+  hub's time strip, up to 72 h back):
+  - Clouds: nowCOAST `global_longwave_imagery_mosaic` (4096x2048 gray +
+    alpha, hourly, ONLY the last ~5 h; frame = nearest within 1.5 h from the
+    capabilities' time list, else refused with the window named). Drawn on
+    a weather shell at r 1.0016 (`globe_clouds.gdshader`; cover =
+    smoothstep(0.30, 0.66, gray) x alpha, fades out below ~20-75 km) with
+    shadows on the sunlit ground (`globe_surface` `has_cloud_shadow`).
+  - Rain: GIBS WMS `IMERG_Precipitation_Rate_30min` (2048x1024, since
+    1998, ~5 h latency: `rain_slot` floors to the half hour and caps at
+    now - 5 h; a fully transparent reply = no data, step back 30 min, 8x).
+    Drawn over the clouds on the same shell.
+  - Satellite of the day: `MODIS_Terra_CorrectedReflectance_TrueColor`
+    3857 Level9 tiles registered as fetcher layer `daily_<date>`
+    (`GlobeTileFetcher.register_layer`, `GlobeView.set_base_layer`; Esri
+    fills in while tiles load); date = the instant's, never after yesterday.
+  - Cache `user://globe_cache/{clouds,rain}/<stamp>.png`, decoded + mipmapped
+    on WorkerThreadPool (waited on exit). Equirect lookups go through
+    `globe_eq.gdshaderinc` (`textureGrad` from a seam-free u, or the mips draw
+    a line down 180°). ⚠ `get_shader_parameter` returns null for a parameter
+    never set: track layer flags in variables, never `bool(get_shader_...)`.
+- **Wind** (Phase 4): `Grib2Decoder` (pure) reads one GRIB2 message:
+  grid 3.0, product 4.0, packing 5.0 / 5.2 / 5.3 (NCEP g2clib's comunpack:
+  group refs / widths / lengths each byte-aligned, spatial-differencing
+  descriptors sign-magnitude), bitmap; ECMWF's 5.42 (CCSDS) is refused.
+  `to_field` makes it north-up from lon0, `sample` is bilinear with wrap.
+  ⚠ GDScript `floor()` / `round()` return Variant: `var x := floor(..)`
+  fails to compile ("Cannot infer the type"); use floorf / roundi.
+  `GlobeWeather.request_wind`: GFS 1° from the AWS bucket (2021 onward),
+  run = newest at or before the time that is out (4.5 h latency), forecast
+  hour = nearest 3 h; a missing run's .idx steps back 6 h (3x). Only
+  UGRD/VGRD 10 m + TMP 2 m by HTTP Range from the .idx, cached
+  `user://globe_cache/gfs/<run>_fFFF_<u|v|t>.grb2`. On a worker:
+  `GlobeWindField.trace` (Fibonacci seeds, RK2 along the direction both
+  ways, 0.45° steps, cell ownership at 1.6° = evenly spaced lines; ~1400
+  lines / 150 ms on the real field), `line_arrays` (PRIMITIVE_LINES at r
+  1.0025, UV.x = distance, UV.y = phase, COLOR.r = speed / 40) and the
+  temperature / wind-power overlay images. `globe_wind.gdshader`: faint
+  lines + comets moving downwind at a speed-proportional rate (TIME),
+  additive, coloured by speed. "Colour by" (Nothing / Solar zones /
+  Temperature / Wind power) shares the one overlay slot (set_overlay's
+  offset / ramp_lo / ramp_step). Wind power = ½ρv³ at 100 m by the log law
+  from 10 m, z0 3 cm (open land; overestimates at sea), a snapshot.
+  Fixtures: `core/globe/testdata/gfs_2026110500_f000_*.grb2`, pinned
+  against Open-Meteo's GFS at the same hour (open sea, Iceland).
+- Pin labels declutter (near side only, priority + no overlap); a world
+  whose name is its address label goes through SitePrivacy.
+- **`GlobeView`** (Control): its own World3D in a SubViewport, so it runs on
+  the launch hub (no Main) and in-game with no camera claim. Earth radius
+  1.0, `GlobeMath` frame (+Y north pole, lon 0 on +Z, 90° E on +X).
+  Coordinates cross APIs as `PackedFloat64Array [lat, lon]`.
+- **Ground = Web Mercator tiles laid straight onto the sphere** (one curved
+  16x16 patch per tile, relative to its centre, with skirts; no
+  reprojection). `GlobeQuadtree.select` (pure) splits the tile most over
+  256 px until the budget (220) or z17; poles above 85.05° are caps tinted
+  from the adjacent row's pixels. A tile still loading draws its nearest
+  loaded ancestor through `day_rect`.
+  ⚠ Tile angular sizes come from CHORDS, never `acos(dot)`: in float32 a z14
+  tile's cos rounds to 1, its radius to 0, and the cone test culled visible
+  edge tiles (a hole in the screen corner at 10 km).
+- **Lighting is the real Sun** at the clock's instant
+  (`GlobeMath.subsolar_point`: Almanac low-precision Sun + Meeus GMST,
+  pinned against SolarPosition); `time_provider` (JD UTC) or the computer's
+  clock. NASA Black Marble lights on the night side, an atmosphere shell
+  (back faces, density at the ray's closest approach), the star map behind
+  (sky shader, same mapping as `StarSkyMath.uv_from_equatorial`).
+- **`GlobeTileFetcher`**: 6 HTTPRequests, nearest-first, unwanted requests
+  dropped each frame, disk cache `user://globe_cache/<layer>/z/x/y`, LRU of
+  900 textures, ESRI "no data" tiles count as failures. Layers: `esri`
+  (z17), `night` (GIBS Black Marble, z8).
+- Input: drag grabs the ground (the point stays under the pointer), wheel
+  zooms toward the pointer, right / middle drag heading + tilt (tilt opens
+  below ~1600 km), double click flies in, WASD / QE / RF / +- / N.
+- Data for the next phases (all keyless, checked): nowCOAST
+  `global_longwave_imagery_mosaic` (hourly clouds, last 5 h), GIBS daily
+  VIIRS true colour (date − 2), GFS 1° GRIB2 on S3 = template 5.3
+  (pure-GDScript decodable); ECMWF open data is 5.42 CCSDS (not yet).
+- **Global ↔ local (Phase 6).** `GlobeDrape` (pure) finds a saved world's
+  cached terrain drapes (`img_v1/v3_<lat>_<lon>_<half>_z<z>[_<src>].png`,
+  Wayback skipped), picks a WIDE one (the sharpest few-km) and a FINE one
+  (the sharpest under 1 km), and turns each into shader params
+  (`d0_` / `d1_`: centre, the Mercator series k, the box) — the same
+  centre-relative series as terrain_detail.gdshader, float32-safe.
+  `GlobeMode._update_drapes` shows them under 120 km from the nearest world
+  within 40 km (PNGs loaded and resized on a worker) and drops them above
+  180 km. "Fly in" (`fly_in(lat, lon, then)`) flies to ~0.8 km with a 58° tilt
+  and then runs the play / create callback. In-game the site gets the SoI
+  ring and the map square as outlines, and the "This world" card compares
+  the sim's weather now with GFS at the site (`site_weather_text`).
+  ⚠ `GlobeWeather` dedupes requests by key; a layer turned off calls
+  `forget(kind)` or turning it back on for the same slot answered nothing.
+- **Polish (Phase 7).** `--capture=globe` adds a perf pass with every layer
+  on (live clouds, rain, wind, zones, lights) at three views: median frame
+  < 33 ms, the globe viewport's measured GPU < 12 ms, ≤ 220 tiles, ≤ 900
+  textures, VRAM < 2 GB (2026-11-05: GPU 2.4–4.4 ms, frame 16.5–22 ms, ~1 GB).
+  It passes at 1080 and 720 with 0 UiAudit errors. The hover readout's
+  coordinates go through `SitePrivacy` like the card's. Tour stop
+  `07a_globe_mode` (burningman: the site, out to the Earth with wind + rain,
+  back down).
 
 ## Maps and scene shell
 

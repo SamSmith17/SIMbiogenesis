@@ -1389,6 +1389,11 @@ func _unhandled_input( e : InputEvent ) -> void :
 			pc.visible = not pc.visible
 			get_viewport().set_input_as_handled()
 			return
+	# Shift+L, checked before the picker's L (an L action also matches Shift+L).
+	if InputMap.has_action( "toggle_globe" ) and e.is_action_pressed( "toggle_globe" ) :
+		toggle_globe_mode()
+		get_viewport().set_input_as_handled()
+		return
 	if InputMap.has_action( "toggle_location_picker" ) and e.is_action_pressed( "toggle_location_picker" ) :
 		_toggle_location_picker()
 		get_viewport().set_input_as_handled()
@@ -4852,6 +4857,59 @@ func open_window_wall_view() -> WindowWallView :
 		add_child( window_wall_view )
 	window_wall_view.open( self )
 	return window_wall_view
+
+
+## Globe mode (scenes/ui/globe/globe_mode.gd): the 3D Earth on this world's
+## site, on the sim clock. The 3D world is not drawn while it is up.
+var _globe_mode : GlobeMode = null
+var _globe_prev_disable_3d := false
+
+func open_globe_mode() -> GlobeMode :
+	if globe_mode_open() :
+		return _globe_mode
+	var tp := func() -> float : return float( clock.get_julian_day_utc() )
+	_globe_mode = GlobeMode.open( self, PackedFloat64Array( [ latitude, longitude ] ), tp, _globe_site_info() )
+	_globe_prev_disable_3d = get_viewport().disable_3d
+	get_viewport().disable_3d = true
+	_globe_mode.closed.connect( func() -> void :
+		get_viewport().disable_3d = _globe_prev_disable_3d
+		_globe_mode = null )
+	return _globe_mode
+
+
+## What the globe draws round this world: the Sphere of Influence (centre +
+## radius, from SoiService / SiteCentre), the map's half extent, and the
+## sim's weather now (WeatherService at the clock's date).
+func _globe_site_info() -> Dictionary :
+	var info := {}
+	var soi := get_node_or_null( "/root/SoiService" )
+	if soi != null and soi.has_method( "radius_m" ) :
+		var c : Vector2 = SiteCentre.xz( self )
+		var mpd : Vector2 = GeoMath.meters_per_deg( latitude )
+		info[ "soi_lat" ] = latitude - float( c.y ) / float( mpd.y )
+		info[ "soi_lon" ] = longitude + float( c.x ) / maxf( float( mpd.x ), 1.0 )
+		info[ "soi_r" ] = float( soi.call( "radius_m" ) )
+	var loader := find_child( "TerrainLoader", true, false )
+	if loader != null and loader.get( "_half_extent" ) != null :
+		info[ "map_half" ] = float( loader.get( "_half_extent" ) )
+	info[ "weather" ] = func() -> Dictionary :
+		var ws := get_node_or_null( "/root/WeatherService" )
+		if ws == null or not ws.call( "has_data" ) :
+			return {}
+		return { "temp_c": float( ws.call( "temperature_c", month, day, day_time ) ),
+			"wind_ms": float( ws.call( "wind_speed_ms", month, day, day_time ) ) }
+	return info
+
+
+func globe_mode_open() -> bool :
+	return _globe_mode != null and is_instance_valid( _globe_mode )
+
+
+func toggle_globe_mode() -> void :
+	if globe_mode_open() :
+		_globe_mode.close()
+	else :
+		open_globe_mode()
 
 
 func close_window_wall_view() -> void :

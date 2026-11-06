@@ -125,6 +125,7 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#location_picker"><img src="docs/tour/location_picker.jpg" width="260" alt="Choose a location"></a><br><b>Choose a location</b><br><sub>L</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe_mode"><img src="docs/tour/globe_mode.jpg" width="260" alt="Globe mode"></a><br><b>Globe mode</b><br><sub>Shift+L</sub></td>
 </tr>
 </table>
 

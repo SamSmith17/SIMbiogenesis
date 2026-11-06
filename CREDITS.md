@@ -210,7 +210,7 @@ usage; confirm each provider's live attribution string before release.**
   - Attribution required: yes · Share-alike: yes · Commercial OK: yes
   - Status: pending-verification
 
-- **Esri World Imagery** — aerial drape / ortho roofs / hyper patch.
+- **Esri World Imagery** — aerial drape / ortho roofs / hyper patch / the 3D globe.
   - Source: Esri World Imagery XYZ tiles
   - License: proprietary-but-usable-with-credit · Attribution: use the string from
     `ImageryService.attribution()` (Esri + its data partners) verbatim on screen.
@@ -218,6 +218,32 @@ usage; confirm each provider's live attribution string before release.**
   - Notes: CLAUDE.md already states `attribution()` "must be credited." Verify the
     exact wording + Esri terms before a public release.
   - Status: pending-verification
+
+- **NASA Black Marble (VIIRS night lights), via NASA GIBS** — city lights on the globe's night side.
+  - Source: https://gibs.earthdata.nasa.gov (WMTS `VIIRS_Black_Marble`)
+  - License: U.S. Government work (public domain) · Attribution: **"Night lights: NASA Earth Observatory Black Marble (GIBS)"** (NASA asks for an acknowledgment)
+  - Attribution required: acknowledgment requested · Commercial OK: yes
+  - Status: verified
+
+- **NOAA nowCOAST global infrared mosaic** — live cloud tops on the globe.
+  - Source: https://nowcoast.noaa.gov/geoserver/satellite/ows (`global_longwave_imagery_mosaic`)
+  - License: U.S. Government work (public domain) · Attribution: **"Clouds: NOAA nowCOAST global infrared mosaic"**
+  - Status: verified
+
+- **NASA GPM IMERG precipitation (30 min), via NASA GIBS** — rain on the globe.
+  - Source: https://gibs.earthdata.nasa.gov (`IMERG_Precipitation_Rate_30min`)
+  - License: U.S. Government work (public domain) · Attribution: **"Rain: NASA GPM IMERG (GIBS)"** (acknowledgment requested)
+  - Status: verified
+
+- **NASA MODIS Terra true colour, via NASA GIBS** — the globe's satellite image of the day.
+  - Source: https://gibs.earthdata.nasa.gov (`MODIS_Terra_CorrectedReflectance_TrueColor`)
+  - License: U.S. Government work (public domain) · Attribution: **"Satellite of the day: NASA MODIS Terra (GIBS)"**
+  - Status: verified
+
+- **NOAA GFS (Global Forecast System), 1°, via NOAA Open Data on AWS** — wind, temperature and wind power on the globe.
+  - Source: https://noaa-gfs-bdp-pds.s3.amazonaws.com (three fields per run by byte range); test fixtures in `core/globe/testdata/`
+  - License: U.S. Government work (public domain) · Attribution: **"Wind, temperature: NOAA GFS (AWS Open Data)"**
+  - Status: verified
 
 - **Open-Meteo** — weather archive/forecast **and** no-key elevation (Copernicus DEM).
   - Source: https://open-meteo.com

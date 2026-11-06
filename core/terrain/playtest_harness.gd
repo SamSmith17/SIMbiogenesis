@@ -8516,6 +8516,13 @@ func _assetpack_idle(m: Node) -> void:
 		await tree.process_frame
 
 
+## --capture=globe (kind "menu"): GlobeCapture (core/globe/globe_capture.gd).
+func _run_globe_capture() -> void:
+	var label := _shots_label if not _shots_label.is_empty() else "globe"
+	await GlobeCapture.run(self, "%s/%s" % [SHOTS_ROOT, label])
+	_maybe_quit()
+
+
 func _shoot_ui(dir: String, name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img := get_viewport().get_texture().get_image()

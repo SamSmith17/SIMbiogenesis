@@ -1256,12 +1256,37 @@
       "image": "arrive_at_camp.jpg",
       "image_run": "2026-11-02T22:00:23",
       "image_commit": "7208a4e"
+    },
+    "globe_mode": {
+      "id": "globe_mode",
+      "title": "Globe mode",
+      "chapter": "World",
+      "summary": "A 3D Earth with live clouds, rain, wind and solar zones — fly out from your site and back down.",
+      "how": [
+        "Press Shift+L in a world, or Globe on the launch hub",
+        "Drag to turn, wheel to zoom, right-drag to tilt",
+        "Click a place for its solar zone; Create world here or Fly in"
+      ],
+      "action": "toggle_globe",
+      "button": "",
+      "key": "Shift+L",
+      "open_hints": [
+        "Press Shift+L"
+      ],
+      "world": "burningman",
+      "blurb": "The globe draws satellite imagery with the real sun and city lights, NOAA's live infrared clouds, NASA's IMERG rain and NOAA GFS wind streamlines, all at the sim clock's time, over the NASA POWER solar zones. Close to a saved world it drapes that world's own photos, with its Sphere of Influence and map square drawn round it.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "globe_mode.jpg",
+      "image_run": "2026-11-05T19:26:23",
+      "image_commit": "938feba"
     }
   },
   "last_run": {
-    "label": "tour_20261102-215805",
-    "generated": "2026-11-02T22:00:23",
-    "git_commit": "7208a4e",
+    "label": "tour_20261105-192441",
+    "generated": "2026-11-05T19:26:23",
+    "git_commit": "938feba",
     "passed": 1,
     "total": 1,
     "video_secs": null

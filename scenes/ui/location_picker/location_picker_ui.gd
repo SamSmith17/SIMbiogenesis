@@ -444,6 +444,12 @@ func _build_ui() -> void:
 		share_btn.text = "Share…"
 		share_btn.tooltip_text = "Export your worlds, models and settings as a zip for a friend, or install one a friend sent you."
 		share_btn.pressed.connect(func() -> void: AssetPackModal.open_export(self))
+		var globe_btn := Button.new()
+		globe_btn.name = "HubGlobeButton"
+		globe_btn.text = "Globe"
+		globe_btn.tooltip_text = "Explore the whole Earth in 3D: search, see the solar zones and city lights, start a world anywhere."
+		globe_btn.pressed.connect(func() -> void: GlobeMode.open(self))
+		header_btns.add_child(globe_btn)
 		header_btns.add_child(share_btn)
 		# Settings with no world running: graphics presets, UI scale, the
 		# player, NPC display, the stars' look, the window wall.
@@ -1025,7 +1031,7 @@ func _create_map(opts: Dictionary = {}) -> void:
 ## by every world on it. Re-creating a site keeps its existing name unless this
 ## selection has a real one, and never resets its extents or OSM offsets.
 func _register_map_definition(map: Dictionary) -> Dictionary:
-	return MapRegistry.ensure_generated({"lat": map["lat"], "lon": map["lon"], "label": map["label"]},
+	return WorldLauncher.register_map(float(map["lat"]), float(map["lon"]), str(map["label"]),
 		not _place_label.is_empty())
 
 
@@ -1639,9 +1645,7 @@ func _launch_world(rec: Dictionary, opts: Dictionary) -> void:
 
 ## In-game (overlay) the running world is saved before switching.
 func _save_running_world() -> void:
-	var main := _find_main_node()
-	if main != null and WorldPaths.has_active_world():
-		WorldSession.save_now(main, true, true)
+	WorldLauncher.save_running_world(get_tree())
 
 
 func _begin_rename(index: int) -> void:
