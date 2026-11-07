@@ -51,6 +51,11 @@ static func default_ports_for_model(model_id: String, dims: Dictionary = {}) -> 
 	var w := maxf(float(dims.get("w_m", 1.0)), 0.2)
 	var d := maxf(float(dims.get("d_m", w)), 0.2)
 	var h := maxf(float(dims.get("h_m", 1.2)), 0.3)
+	if TcBuilder.handles(model_id):
+		var tsp: Dictionary = dims.get("tc_spec", {}) as Dictionary
+		if tsp.is_empty():
+			tsp = TcBuilder.spec_for_model(model_id)
+		return _normalize_ports(TcDesign.connection_ports(TcDesign.solve(tsp)))
 	if model_id == ModelCatalog.GENERIC_TANK_ID:
 		var r := maxf(w, d) * 0.5
 		return _normalize_ports([
@@ -214,6 +219,12 @@ static func resolve_ports_for_prop(main: Node, prop_id: String, model_id: String
 		var inst: Array = rec.get("connection_ports", []) as Array
 		if not inst.is_empty():
 			return _normalize_ports(inst)
+		# A tri-clamp assembly's ports ARE its labelled open ends.
+		if TcBuilder.handles(mid):
+			var tsp: Dictionary = rec.get("tc_spec", {}) as Dictionary if rec.get("tc_spec") is Dictionary else {}
+			if tsp.is_empty():
+				tsp = TcBuilder.spec_for_model(mid)
+			return _normalize_ports(TcDesign.connection_ports(TcDesign.solve(tsp)))
 		if rec.has("pelton_spec"):
 			dims = {"pelton_spec": rec.get("pelton_spec", {})}
 		elif rec.has("windlab_spec"):

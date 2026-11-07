@@ -189,6 +189,11 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return PeltonLabBuilder.build_node(pl_spec, "PeltonTurbine",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
 			"nozzles": bool(extras.get("nozzles", true))})
+	if TcBuilder.handles(model_id):
+		var tc_spec: Dictionary = extras.get("tc_spec", {}) as Dictionary
+		if tc_spec.is_empty():
+			tc_spec = TcBuilder.spec_for_model(model_id)
+		return TcBuilder.build_node(tc_spec, "TriClampAssembly", {"pieces": bool(extras.get("pieces", false))})
 	if model_id == CspLabBuilder.MODEL_ID:
 		var cs_spec: Dictionary = extras.get("csplab_spec", extras) as Dictionary
 		return CspLabBuilder.build_node(cs_spec, "Concentrator", {})
@@ -754,6 +759,20 @@ static func _shipped_models() -> Array[Dictionary]:
 		# designer's lens / mirror / heliostat field with its structure. Its
 		# runtime (CspLabRuntime) turns it to the sun.
 		{"id": "csplab_concentrator", "label": "Solar concentrator (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		# Procedural tri-clamp process assemblies (TcBuilder): the tri-clamp
+		# designer's vessels and sanitary fittings as one prop (record key
+		# tc_spec). One entry per built-in ("tclab_<builtin id>"); a record
+		# with no tc_spec builds its id's built-in.
+		{"id": "tclab_assembly", "label": "Tri-clamp assembly (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		{"id": "tclab_biochar_reactor", "label": "Biochar reactor + TC condenser (tri-clamp)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		{"id": "tclab_pot_still", "label": "Pot still with column (tri-clamp)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		{"id": "tclab_brew_kettle", "label": "Brew kettle 50 L (tri-clamp)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
+		{"id": "tclab_filter_train", "label": "Filter train 1½\" (tri-clamp)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "ali_pelton", "label": "Micro Pelton 8\u2033 (vertical shaft)",
 			"path": "res://Imported Models/Hydro/ali_pelton.glb",

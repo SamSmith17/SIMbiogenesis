@@ -173,6 +173,19 @@ const DYNAMIC_MODELS := {
 	# pvlab_spec). This fallback is the default 12 × 380 W backyard rack.
 	"pvlab_array": {"w_m": 1.9, "d_m": 1.15, "h_m": 0.75,
 		"mass_kg": 300.0, "form": "crate", "source": "estimated"},
+	# Tri-clamp assemblies ship as their vessel + a crate of fittings and a
+	# box of clamps; the real spec is TcDesign.packed_spec (the record's
+	# tc_spec, or the id's built-in). These fallbacks are rough envelopes.
+	"tclab_assembly": {"w_m": 0.8, "d_m": 0.6, "h_m": 0.5, "mass_kg": 25.0,
+		"form": "crate", "source": "estimated"},
+	"tclab_biochar_reactor": {"w_m": 0.9, "d_m": 0.7, "h_m": 0.8, "mass_kg": 60.0,
+		"form": "crate", "source": "estimated"},
+	"tclab_pot_still": {"w_m": 1.2, "d_m": 0.6, "h_m": 0.6, "mass_kg": 45.0,
+		"form": "crate", "source": "estimated"},
+	"tclab_brew_kettle": {"w_m": 0.6, "d_m": 0.6, "h_m": 0.6, "mass_kg": 25.0,
+		"form": "crate", "source": "estimated"},
+	"tclab_filter_train": {"w_m": 0.8, "d_m": 0.4, "h_m": 0.3, "mass_kg": 12.0,
+		"form": "crate", "source": "estimated"},
 	"toroidlab_structure": {"w_m": 2.62, "d_m": 0.72, "h_m": 0.75,
 		"mass_kg": 420.0, "form": "bundle", "source": "estimated"},
 	"domelab_structure": {"w_m": 1.90, "d_m": 0.40, "h_m": 0.40,

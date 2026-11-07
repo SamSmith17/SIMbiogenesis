@@ -315,6 +315,14 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var gl := GantryLabDesign.packed_spec(GantryLabDesign.solve(rec.get("gantry_spec") as Dictionary))
 		if not gl.is_empty():
 			return gl
+	if rec.get("tc_spec") is Dictionary or TcBuilder.handles(str(rec.get("model_id", ""))):
+		var tsp: Dictionary = rec.get("tc_spec", {}) as Dictionary if rec.get("tc_spec") is Dictionary else {}
+		if tsp.is_empty():
+			tsp = TcBuilder.spec_for_model(str(rec.get("model_id", "")))
+		if not tsp.is_empty():
+			var tc := TcDesign.packed_spec(TcDesign.solve(tsp))
+			if not tc.is_empty():
+				return tc
 	if rec.get("rack_spec") is Dictionary:
 		var rk := PalletRackBuilder.packed_spec_for(rec.get("rack_spec") as Dictionary)
 		if not rk.is_empty():
@@ -852,6 +860,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 	# the default dish — whatever type the designer placed or applied.
 	if rec.has("csplab_spec"):
 		extras["csplab_spec"] = rec.get("csplab_spec", {})
+	if rec.has("tc_spec"):
+		extras["tc_spec"] = rec.get("tc_spec", {})
 	if rec.has("vehicle_spec"):
 		extras["vehicle_spec"] = rec.get("vehicle_spec", {})
 	if model_id == GrowBed.MODEL_ID:

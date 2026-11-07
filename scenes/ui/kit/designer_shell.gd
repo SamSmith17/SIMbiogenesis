@@ -341,6 +341,10 @@ func set_crumbs(crumbs: Array) -> void:
 
 func _sync_strip() -> void:
 	strip.visible = _mode_chip.visible or _crumbs.get_child_count() > 0
+	# The chip's label ellipsizes (minimum width 0), so it must expand too, or
+	# an empty breadcrumb row takes the whole strip and the chip is a dot.
+	_mode_chip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_crumbs.size_flags_horizontal = Control.SIZE_EXPAND_FILL if _crumbs.get_child_count() > 0 else Control.SIZE_SHRINK_BEGIN
 
 
 func set_undo_state(can_undo: bool, can_redo: bool) -> void:

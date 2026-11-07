@@ -299,6 +299,11 @@ func _populate() -> void:
 			"detail": "Ugrinsky, Savonius, Lenz2, Darrieus, helical, propeller and farm rotors — incl. one cut from a single 18 × 24 in lawn sign → power curve, start-up, gearing and motor matching, cut/score files, printable STLs.",
 		},
 		{
+			"kind": "tclab",
+			"label": "Tri-clamp designer…",
+			"detail": "Sanitary tri-clamp fittings by the standard sizes (ferrules, caps, spools, elbows, tees, crosses, reducers, NPT and barb adapters) snapped end to end into process runs, with gaskets, clamps, loop checks and a parts list → GLB, STL, BOM.",
+		},
+		{
 			"kind": "csplab",
 			"label": "Solar concentrator designer…",
 			"detail": "Lenses (glass, ball, Fresnel, water) and mirrors (trough, dish, linear Fresnel, heliostat tower) → ray trace, suns, optical + thermal efficiency, tracking structure, a year of heat from the site's direct sunlight.",
@@ -480,7 +485,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "building_designer", "vehiclelab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "tclab", "building_designer", "vehiclelab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -587,6 +592,14 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				main_wl.call("open_windlab", {})
 			else:
 				_status.text = "The wind turbine designer needs a world."
+		"tclab":
+			# Hosted by Main, so it opens on every map (no location needed).
+			var main_tc := get_tree().current_scene if get_tree() != null else null
+			if main_tc != null and main_tc.has_method("open_tclab"):
+				close()
+				main_tc.call("open_tclab", {})
+			else:
+				_status.text = "The tri-clamp designer needs a world."
 		"csplab":
 			# Hosted by Main, so it opens on every map (no location needed).
 			var main_cs := get_tree().current_scene if get_tree() != null else null

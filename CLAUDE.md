@@ -1154,6 +1154,56 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/csplab_designer_
 # What placed concentrators cost (one of each kind; csp_* sections at 1x /
 # 60x / 1440x, GPU shown vs hidden vs plain mirrors; CSPB_QUICK=1 skips GPU):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/csplab_bench.gd -Timeout 900
+# Tri-clamp designer (offline — core/tclab/): the size table against its
+# sources and the reference GLB (1½" 50.5 mm, 2" 64 mm faces), every part
+# type × size built with every triangle on Godot's front face and a clamp
+# face drawn at every clamp port, the 2CMP / 7MP centre-to-face lengths,
+# mates (gasket gap, opposed axes, symmetric, roll), clamp-class matching,
+# the square loop closing only once its Fit-length spool solves, clashes,
+# detach / attach / remove keeping one root per group, one gasket + one
+# clamp per joint, the spec key round trip, picking, the builder's nodes,
+# the GLB read back and the STL's size; the specialty fittings against the
+# reference GLB (1½" sight glass 74 mm collars, 2" butterfly 48 mm face to
+# face, a dephlegmator's two ½" FNPT water bosses, the element's reach, an
+# actuator standing on a valve stem), vessels (a jacketed shell nozzle's
+# face, lid / bottom nozzles, π r² h, the cutaway, a drag onto the shell /
+# lid, removing a nozzle drops its joint, a spool through the shell is a
+# clash) and every built-in clean, the reactor's loop closing, its three
+# symmetric columns; the world (catalog ids, the placed assembly on y = 0
+# and centred, near + far meshes with the far one as collision, cached
+# per design, crew pieces vessel-first, every labelled end a connection
+# port, the Biochar Reactor handle map, the computed kit). EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/tclab/tclab_selftest.gd
+# The designer with REAL input (sandbox; run at 1080 AND 720 for the fold):
+# every built-in, UiAudit, New, a size chip + palette tool, a free part on
+# the floor, a spool snapped onto an open end, Tab joining a tee by its
+# other end, R rolling the selected part, a 2" spool refused on a 1½" face,
+# Delete / Ctrl+Z, dragging a group and pulling a part off its joint and
+# back on, save / forget in the library, the files exported; then a vessel
+# off the palette, a nozzle added from its card and DRAGGED round the shell,
+# a ball valve on that nozzle and a pneumatic actuator snapped to its stem,
+# the Cutaway box, the biochar reactor's loop closing with no clash:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tclab_designer_check.gd -Label tclab
+# The biochar reactor preset against the user's model (WINDOWED, APPDATA at
+# a scratch folder): every nozzle within 10 mm of the GLB's collars (the
+# vapour nozzle raised 21 mm on purpose), Ø396 × 650 jacketed shell, 516 mm
+# lid, the loop closing, no clash, front / back shots side by side:
+Godot.exe.exe --path . --windowed --resolution 1600x1000 --script res://tools/diag/tclab_reactor_parity.gd -- --out=<dir>
+# Tri-clamp assemblies in the world (sandbox): a REAL click on Place in world
+# (the ghost is the reactor), the placed prop, its Biochar Reactor graph
+# node, a 3D pipe from the woodgas output starting ON the fitting, pack →
+# computed kit → unpack, Apply from the bound designer, ten reactors' frame
+# cost, delete removing the nodes:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tclab_world_check.gd -Label tclab_world -Timeout 900
+# Solve / drag / world-build cost and triangles per LOD (headless; the
+# biochar reactor and a generated 200-part manifold):
+Godot.exe.exe --headless --path . --script tools/bench/tclab_bench.gd
+# The crew building the reactor piece by piece (Walton; part of
+# structure_build_check, SB_ONLY=tclab).
+# Every part type side by side (WINDOWED, APPDATA at a scratch folder;
+# --design=<builtin id> shoots a built-in instead):
+Godot.exe.exe --path . --windowed --resolution 1600x1000 --script res://tools/diag/tclab_parts_sheet.gd -- --out=<png> --sizes=1.5,3
 # Globe maths + tile selection (offline — GlobeMath frame / picks / Mercator
 # tiles / sub-solar point vs SolarPosition, GlobeQuadtree budget / no
 # ancestor pairs / corners covered; EXPECTED_CHECKS; --import first):
@@ -4832,6 +4882,153 @@ entry, no CAD export yet.
     - The prop editor shows no angles.
     - An inbound HA link (a real tracker's angle driving the sim) is not
       built.
+
+## Tri-clamp designer (core/tclab/, 2026-11-06)
+
+Library → Structures → "Tri-clamp designer…" (Main hosts it, every map:
+`Main.open_tclab({spec})`, layer `TcLabLayer`). Plan:
+`plans/TRICLAMP_DESIGNER_PLAN.md`; all 8 phases landed (standards, parts,
+assembly, the modal, specialty fittings, vessels, the biochar reactor +
+condenser preset, the world, performance).
+- **`TcStandards`**: ASME BPE inch sizes ½"–8", every number in mm with
+  its source: tube OD / ID / flange OD from a sanitary sizing guide, 2CMP
+  elbow and 7MP tee centre-to-face from catalogue tables (the tee's citing
+  BPE DT-4.1.2). The ferrule profile, 45° elbow, reducer length, clamp
+  ratings and gasket temperatures are flagged estimates (`estimates()`,
+  printed by the selftest). 1" and 1½" share the 1.984" clamp face; ½" and
+  ¾" the mini (`clamp_class`).
+- **`TcGeom`** (mm, pure): lathe (profiles walked with the solid on the
+  left, outward normal = (dz, −dr)), swept tubes, saddle-cut tee branches,
+  boxes / cylinders / hex, the ferrule end (face + gasket groove, rim, 20°
+  taper, hub, bore), gasket, hinged clamp, NPT thread. `tri` fixes the
+  winding from the intended normal, so every emitter is front-face
+  correct. ⚠ The accumulator holds the current material's PackedVector3Arrays
+  in members (`_sel` / `_flush`): appending to one fetched from a Dictionary
+  copies the whole array every triangle.
+- **`TcParts`**: 38 types in 11 categories; the base 15 (spool, 90° / 45° / any-angle bend, tee, reducing
+  tee, cross, 45° lateral, weld ferrule, cap, cap × FNPT, flat reducing cap,
+  concentric reducer, TC × MNPT, TC × barb), `build(type, size, params)` →
+  geo, ports {id, kind tc | weld | npt_m | npt_f | barb, size, pos, z out, x
+  roll ref}, body capsules (picking, clash), mass, bore volume; cached by
+  key. `can_mate` is the one compatibility rule; a clamp joint adds the
+  gasket gap.
+- **`TcAssembly`** (pure): child port frame = parent port frame · T(gap) ·
+  Rx(180°) · Rz(roll) — symmetric, so joints are undirected. One root (`xf`)
+  per connected group; BFS places the rest; a joint met twice CLOSES a loop
+  and reports its error. A spool with `fit` solves its length numerically to
+  close the loops it is in. Edits are pure (`add_part`, `remove_part`,
+  `detach`, `attach`, `set_root_xf`, `set_joint`, `set_part`) and end in
+  `pin_roots` (exactly one root per group, where the last solve had it).
+  `pick` = ray vs capsules, open-port and joint spheres (ports win within
+  25 mm). `clashes` = capsule pairs not mated directly.
+- **`TcDesign.solve`** (LRU on `TcSpec.key_of`) → spec, res, bom, clashes,
+  checks ({level, text, why, ids}), stats. **`TcBuilder`**: a MeshInstance3D
+  per part sharing one ArrayMesh per part key, one per clamp joint
+  (gasket + clamp), overlays for selection / clashes; `flat` merges all
+  (exports). **`TcExport`**: GLB (`GLTFDocument`), binary STL (mm), BOM CSV,
+  JSON → `user://tclab_designs/<name>/`. **`TcPresets`**: 8 built-ins
+  + `user://tclab_library.json`.
+- **Modal** (`scenes/ui/tclab_modal.gd`, DesignerShell + StudioViewport +
+  FormRow): clamp-size chips + palette left; click an open end (or the
+  floor) to place, Tab = which end of the new part joins, R = roll (or yaw on
+  the floor), Shift-click keeps the tool; click selects a part / clamp / open
+  end; dragging a part detaches it and carries what hangs off it, dropping on
+  an open end joins it (a short drag snaps back); cards for part (size,
+  params, roll, detach, remove), joint (roll, gasket, clamp, rating) and open
+  end (label + resource kind for the later graph link). No scale person (a
+  1.75 m capsule dwarfs fittings) and its own `_frame` (the kit's
+  `frame_sphere` adds a metre of air).
+- **Specialty fittings** (`TcSpecialty`, Phase 4): sight glass, column
+  section, bubble plate, dephlegmator (water jacket, two ½" FNPT bosses),
+  butterfly / ball (2- and 3-way) / check / diaphragm / relief valves,
+  pneumatic + electric actuators, dial thermometer, pressure gauge,
+  thermowell, in-line and Y strainers, cartridge housing, strainer basket,
+  funnel, spray ball, TC heating element. Bodies are drawn to the reference
+  GLB's look (flagged estimates). A valve has a `stem` port and an
+  actuator mounts on it (`can_mate`: stem ↔ stem). `manual` false drops
+  the handle. Short-pattern elbows / tees (`short`: half OD + hub + 6 mm,
+  an estimate) are what the reactor's compact condenser needs.
+- **Vessels** (`TcVessel`, type `vessel`, Phase 5): Y up, origin at the
+  shell's bottom seam; heads flat / ellipsoidal 2:1 / torispherical / cone
+  / open, a separate lid (dished, flat) with its clamp ring, jacket (none /
+  full / lower, gap), insulation, legs, internals (retort can, basket, false
+  bottom, coil), PRESETS (jacketed boiler, brew kettle, conical, pot still,
+  storage). Nozzles are params (`ports`: {id, kind tc | npt | weld, size,
+  face shell | top | lid | bottom, angle_deg (0 = +Z, 90 = +X), h_mm /
+  r_mm, tilt, stub_mm}); `nozzle_frame` places each on the outside skin
+  (`r_eff`: jacket / insulation), `surface_hit` turns a ray into a new
+  angle + height (or radius on a head). The modal's vessel card edits it
+  all; a nozzle is selected by clicking its face and DRAGGED round the
+  vessel; `Cutaway` cuts a quarter out (the builder rebuilds the vessel
+  with `cutaway`, never stored). The solid shell counts in `clashes`.
+- **The biochar reactor preset** (`TcPresets`, Phase 6, built-in
+  `biochar_reactor`, plus `tc_condenser`, `pot_still`, `brew_kettle`,
+  `filter_train`): Ø340 × 650 shell, full jacket → Ø396, 516 mm dished lid,
+  retort can, element, butterfly drain, six ½" bungs, and on the back a
+  3-column 2" condenser (standard tee on the vapour nozzle, short elbows,
+  two 18" dephlegmators and a 346 mm gas column, short tees, a centre tee
+  closing the loop, TC × ½" MNPT drains, "Woodgas out" labelled). Parts go
+  on with `_attach`, which picks the roll (15° steps) that points named
+  ports where they must face. `tools/diag/tclab_reactor_parity.gd` holds it
+  to the GLB: every nozzle 1–6 mm from the model's collars except the
+  vapour nozzle, raised 21 mm because the catalogue's tee and elbows are
+  larger than the model's; columns at −140 / 0 / +140 mm (model −124 / −4 /
+  +118).
+- **In the world (Phase 7).** Catalog ids `tclab_assembly` (record key
+  `tc_spec`) and `tclab_<builtin>` (biochar_reactor, pot_still,
+  brew_kettle, filter_train; a record with no tc_spec builds its id's
+  built-in, `TcBuilder.handles` / `spec_for_model`). `tc_spec` is forwarded
+  by `PlacedPropRuntime.model_extras` and the placement ghost (the CSP
+  "always the default" trap). The designer: **Place in world** /
+  **Place a copy**, **Apply to placed assembly** (opened with
+  `{prop_id}` from the prop editor's "Edit tri-clamp assembly…").
+  - The placed node stands on y = 0 with its plan centre on the origin
+    (`TcDesign.world_offset`, shared by the builder, the ports and the
+    crew pieces).
+  - **Graph binding**: `spec.binds` names a processor preset (the
+    designer's "On the graph" row); `PlacedPropService.seed_tclab` (from
+    BOTH `_commit_prepped` and `place_model_at_xz`) stamps the design and
+    makes that node bound to the prop once. `TcDesign.graph_handles` maps
+    each labelled end's "carries" kind to the preset's first unused output
+    of that kind, else input (`res_out_<i>` / `res_in_<i>`). The graph's
+    **Biochar Reactor preset now places `tclab_biochar_reactor`** (the
+    plan's decision 7 once parity passed; the static drum GLB stays as
+    `biochar_reactor`). Its feed → biomass in, woodgas out → woodgas out,
+    the condenser's warm cooling water → hot water; the char has no pipe.
+  - **Connection ports**: every labelled open end
+    (`TcDesign.connection_ports`, read by `ConnectionPortDefs` for a record
+    with tc_spec or a tclab id), so a 3D conduit from a node handle ends on
+    the real fitting.
+  - **Packing**: `TcDesign.packed_spec` = PackKitter over the parts (the
+    vessel and each fitting a piece, long spools sticks, clamps + gaskets
+    loose at `clamp_kg`, an estimate). PackedSpec DYNAMIC fallbacks.
+  - **Crew build**: `pieces` builds one tagged MeshInstance3D per part
+    (vessel "frames" order 0, fittings "parts" by joint depth from it,
+    clamps tagged and riding with them).
+  - Tour stop `18k_tclab`; modal audit entry `tclab`.
+- **Performance (Phase 8).** A placed assembly is two merged meshes, one
+  surface per material: "Mesh" to `FAR_M` 40 m (skip_prop_collision) and
+  "MeshFar" beyond, every part at `FAR_SEG_SCALE` 0.3 of its segments and
+  no clamps — also the collision. Cached per design key
+  (`TcBuilder.world_meshes`, `WORLD_CACHE_MAX` 16), so placed copies share
+  them. `TcGeom.seg_scale` drives the far parts (TcParts caches them
+  apart); rigid `merge` and `geo_to_mesh` transform whole arrays; joint
+  gasket + clamp geometry is cached. The spec resolve builds a port map
+  once and the clash test sweeps and prunes along x. Measured
+  (`tclab_bench`): the reactor 68k triangles near, 19k far, first world
+  build 33 ms; a 200-part manifold solves cold in ~23 ms, a drag solve in
+  ~11 ms (was 45 / 30), its first world build 127 ms (cached after: 7 ms).
+  Ten placed reactors in view: +10 draw calls, ~1.4 ms a frame on Mount
+  Vernon. The studio keeps one MeshInstance3D per part / joint (meshes
+  shared by part key) for selection overlays: a MultiMesh of clamps was
+  not needed once the world merges everything.
+- Capsules for the clash test are shortened by their radius at each end
+  (`TcAssembly.clashes`): with round caps, a spool's end reached into an
+  elbow two joints away and the reactor reported a clash that was not there.
+- Found on the way: `DesignerShell`'s mode chip collapsed to a dot whenever
+  there were no breadcrumbs (an ellipsized label has no minimum width and
+  the empty crumb row expanded); `_sync_strip` now expands the chip.
+  `StructureMaterials.Kind` gained `STAINLESS` and `RUBBER` (appended).
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 

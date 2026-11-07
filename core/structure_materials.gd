@@ -19,7 +19,7 @@ extends Object
 ##     no per-frame work, no custom shaders. Metal kinds get a normal map only
 ##     (uniform colour); wood/ply also get a subtle albedo-variation map.
 
-enum Kind { PAINTED_METAL, HARDWARE_METAL, WOOD, PLYWOOD, PANEL, GALVANISED, ALUMINIUM, PLASTIC, GLAZING, FABRIC, WEATHERING_STEEL }
+enum Kind { PAINTED_METAL, HARDWARE_METAL, WOOD, PLYWOOD, PANEL, GALVANISED, ALUMINIUM, PLASTIC, GLAZING, FABRIC, WEATHERING_STEEL, STAINLESS, RUBBER }
 
 ## NoiseTexture2D cache keyed by a descriptor string — one small texture per unique
 ## (kind, role) reused by every material instance.
@@ -102,6 +102,20 @@ static func make(kind: int, base_color: Color, world_triplanar: bool = false) ->
 			m.metallic = 0.0
 			m.metallic_specular = 0.7
 			m.roughness = 0.1
+		Kind.STAINLESS:
+			# Brushed 304 / 316 sanitary stainless (tri-clamp fittings, kettles):
+			# brighter and smoother than zinc, a faint brushed grain, never a
+			# black mirror in shade.
+			m.metallic = 0.78
+			m.metallic_specular = 0.6
+			m.roughness = 0.3
+			m.uv1_scale = Vector3(3.0, 3.0, 3.0)
+			_apply_normal(m, "paint", 0.025, 1.0)
+		Kind.RUBBER:
+			# Gaskets, hose: a matte dielectric.
+			m.metallic = 0.0
+			m.metallic_specular = 0.3
+			m.roughness = 0.8
 		Kind.WEATHERING_STEEL:
 			# Corten: a matte rust patina, mottled orange-brown, no metal sheen.
 			m.metallic = 0.08

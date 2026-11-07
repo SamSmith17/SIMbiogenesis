@@ -3,7 +3,7 @@ extends RefCounted
 ## (sandbox, Walton):
 ##   tools\harness.ps1 -World walton -RunScript res://tools/checks/structure_build_check.gd -Label structure_build -Timeout 3000
 ## Packed kits of a geodesic dome, a folded-plate helical zome, a toroid, a Linkage Lab frame, a gantry, a
-## flat-pack daybed and a shiftpod (a GLB) on open ground by the festival
+## flat-pack daybed, a shiftpod (a GLB) and a tri-clamp biochar reactor on open ground by the festival
 ## field, each handed to the nearest crew (queue_item). For every one, while
 ## the crew builds: the shared build site draws it (PalletRackBuildSite over
 ## StructureUnits), the model — the ghost — never shows, it starts with
@@ -103,6 +103,8 @@ func _kits() -> Dictionary:
 	var fp: Dictionary = FlatpackPresets.builtin("daybed")
 	out["daybed"] = {"model_id": FlatpackBuilder.MODEL_ID, "extra": {"flatpack_spec": fp.get("spec", fp)}}
 	out["shiftpod"] = {"model_id": "shiftpod", "extra": {}}
+	# The tri-clamp biochar reactor: the vessel first, the fittings outward.
+	out["tclab"] = {"model_id": "tclab_biochar_reactor", "extra": {}}
 	return out
 
 

@@ -395,7 +395,10 @@ const PROCESSORS: Array = [
 				{"kind": "hot_water", "rate": 30.0, "unit": "L/h"},
 				{"kind": "woodgas", "rate": 4.0, "unit": "m³/h"},
 			],
-			"model_id": "biochar_reactor",
+			# The tri-clamp designer's reactor (TcPresets.biochar_reactor):
+			# its feed, woodgas and warm cooling-water ends are this node's
+			# ports in 3D. The static drum GLB stays as "biochar_reactor".
+			"model_id": "tclab_biochar_reactor",
 		},
 	},
 	{

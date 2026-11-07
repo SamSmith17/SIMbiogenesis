@@ -925,6 +925,8 @@ var peltonlab_ui : Control = null
 const PELTONLAB_MODAL_SCRIPT := preload( "res://scenes/ui/peltonlab_modal.gd" )
 var windlab_ui : Control = null
 const WINDLAB_MODAL_SCRIPT := preload( "res://scenes/ui/windlab_modal.gd" )
+var tclab_ui : Control = null
+const TCLAB_MODAL_SCRIPT := preload( "res://scenes/ui/tclab_modal.gd" )
 var csplab_ui : Control = null
 const CSPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/csplab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
@@ -5084,6 +5086,38 @@ func open_windlab( opts: Dictionary = {} ) -> Control :
 		return null
 	windlab_ui.call( "open", opts )
 	return windlab_ui
+
+
+## The tri-clamp (sanitary) process designer (scenes/ui/tclab_modal.gd), on
+## its own CanvasLayer like the other Main-hosted designers.
+func _setup_tclab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "TcLabLayer" )
+	if existing_layer != null :
+		tclab_ui = existing_layer.get_node_or_null( "TcLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "TcLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "TcLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( TCLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	tclab_ui = ui
+
+
+## Open the tri-clamp designer. opts: {spec}.
+func open_tclab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( tclab_ui ) :
+		_setup_tclab_ui()
+	if not is_instance_valid( tclab_ui ) :
+		return null
+	tclab_ui.call( "open", opts )
+	return tclab_ui
 
 
 ## The solar concentrator designer (scenes/ui/csplab_modal.gd), on its own

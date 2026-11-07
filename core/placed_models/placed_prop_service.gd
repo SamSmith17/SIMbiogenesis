@@ -97,6 +97,10 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
+	elif TcBuilder.handles(model_id):
+		# Stamp its design and bind its graph node (deferred: the record and
+		# the node are settled).
+		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -632,6 +636,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
+	elif TcBuilder.handles(model_id):
+		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -1130,6 +1136,43 @@ static func seed_toroid_graph(main: Node, prop_id: String) -> bool:
 	return true
 
 
+## A placed tri-clamp assembly: stamp its design onto the record (a
+## catalog id with no tc_spec builds its built-in) and, when the design binds
+## a graph preset (spec.binds, e.g. "Biochar Reactor"), make that processor
+## bound to the prop — once; a prop placed FROM the graph is already bound.
+static func seed_tclab(main: Node, prop_id: String) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var mid := str(rec.get("model_id", ""))
+	var spec: Dictionary = rec.get("tc_spec", {}) as Dictionary if rec.get("tc_spec") is Dictionary else {}
+	if spec.is_empty():
+		spec = TcBuilder.spec_for_model(mid)
+		if spec.is_empty():
+			return ""
+		update_prop_record(main, prop_id, {"tc_spec": spec}, false)
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if not gid.is_empty() and gmodel != null and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		return gid
+	var preset := TcDesign.bound_preset(spec)
+	if preset.is_empty():
+		return ""
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	specs["model_id"] = mid
+	specs["name"] = str(spec.get("name", specs.get("name", "Assembly")))
+	var node_id := _create_bound_graph_node(main, prop_id, {
+		"node_type": str(preset.get("type", "processor")), "specs": specs,
+		"width": float(preset.get("width", 150.0)), "height": float(preset.get("height", 140.0)),
+		"label": str(preset.get("label", ""))})
+	if not node_id.is_empty():
+		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	return node_id
+
+
 ## Remove the graph array a deleted toroid owned.
 static func remove_toroid_graph(main: Node, prop_id: String) -> void:
 	if main == null or prop_id.is_empty():
@@ -1432,7 +1475,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["csplab_spec", "windlab_spec", "pelton_spec"]:
+	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)
