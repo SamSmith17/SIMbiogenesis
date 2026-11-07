@@ -246,6 +246,7 @@ static func _run_mode(h: Node, shots_dir: String) -> int:
 	await _settle_and_shoot(h, gm.globe, shots_dir, "09_mode_smooth")
 	fails += await _run_weather(h, gm, shots_dir)
 	fails += await _run_atlas(h, gm, shots_dir)
+	fails += await _run_cards_aurora(h, gm, shots_dir)
 	fails += await _run_perf(h, gm)
 	fails += await _run_local(h, gm, shots_dir)
 	var res := UiAudit.run(tree.root.get_viewport())
@@ -498,4 +499,100 @@ static func _run_atlas(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 	fails += _report("atlas: the card has the point's numbers", gm.atlas_text().contains("kWh/day")
 		and gm.atlas_text().contains("best tilt"), gm.atlas_text())
 	_select(ob, GlobeMode.COLOUR_NONE)
+	return fails
+
+
+## Short pin names and the Labels box; the card following the layer; the
+## aurora (a Kp 9 night from the GFZ archive, and OVATION now).
+static func _run_cards_aurora(h: Node, gm: GlobeMode, shots_dir: String) -> int:
+	var tree := h.get_tree()
+	var vp := h.get_viewport()
+	var fails := 0
+	var tp: Callable = gm.globe.time_provider
+	gm.globe.look_at_point(MV_LAT, MV_LON, 0.4)
+	for _f in 30:
+		await tree.process_frame
+	var names := gm.globe.visible_world_labels()
+	var longest := 0
+	for n in names:
+		longest = maxi(longest, n.length())
+	fails += _report("labels: world pin names are short", not names.is_empty() and longest <= GlobeMode.PIN_NAME_MAX,
+		"%d shown, longest %d: %s" % [names.size(), longest, ", ".join(names)])
+	var lt := gm.find_child("LabelsToggle", true, false) as CheckBox
+	await _click_toggle(vp, lt)
+	for _f in 3:
+		await tree.process_frame
+	fails += _report("labels: a real click on Labels hides them", gm.globe.visible_world_labels().is_empty())
+	await _click_toggle(vp, lt)
+	for _f in 3:
+		await tree.process_frame
+	fails += _report("labels: and shows them again", not gm.globe.visible_world_labels().is_empty())
+	# The card follows the layer (GFS of the pinned day + NASA POWER averages).
+	gm.globe.time_provider = func() -> float: return JD_FIXED
+	var ob := gm.find_child("ColourBy", true, false) as OptionButton
+	var wind := gm.find_child("WindToggle", true, false) as CheckBox
+	if not wind.button_pressed:
+		wind.button_pressed = true
+	var waited := 0
+	while gm.wind_line_segments() == 0 and waited < 2400:
+		await tree.process_frame
+		waited += 1
+	_select(ob, GlobeMode.COLOUR_TEMP)
+	gm.select_point(MV_LAT, MV_LON)
+	waited = 0
+	while not gm.layer_text().contains("Average") and waited < 1200:
+		await tree.process_frame
+		waited += 1
+	var t := gm.layer_text()
+	fails += _report("card: Temperature shows now (GFS) and the average (NASA POWER)",
+		t.contains("Temperature now") and t.contains("Average") and t.contains("°C"), t.replace("\n", " | "))
+	_select(ob, GlobeMode.COLOUR_POWER)
+	t = gm.layer_text()
+	fails += _report("card: Wind power shows wind now and the average wind", t.contains("Wind now")
+		and t.contains("Average wind") and t.contains("W/m²"), t.replace("\n", " | "))
+	_select(ob, GlobeMode.COLOUR_ATLAS)
+	fails += _report("card: Solar atlas shows the atlas line, not the zone",
+		gm.atlas_text().contains("kWh") and not gm._zone_row.visible)
+	_select(ob, GlobeMode.COLOUR_ZONES)
+	fails += _report("card: Solar zones shows the zone", gm._zone_row.visible)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "19_card_layers")
+	# The aurora on 11 May 2024, 03:00 UTC (Kp 9, GFZ archive).
+	var aur := gm.find_child("AuroraToggle", true, false) as CheckBox
+	if not aur.button_pressed:
+		aur.button_pressed = true
+	wind.button_pressed = false
+	_select(ob, GlobeMode.COLOUR_NONE)
+	var jd_storm := GlobeMath.jd_from_unix(Time.get_unix_time_from_datetime_string("2024-05-11T03:00:00"))
+	gm.globe.time_provider = func() -> float: return jd_storm
+	waited = 0
+	while (gm._aur.is_empty() or float(gm._aur.kp) < 8.0) and waited < 1800:
+		gm._wx_key = ""
+		await tree.process_frame
+		waited += 1
+	fails += _report("aurora: the Kp of 11 May 2024 comes from the GFZ archive (Kp 8.3)",
+		not gm._aur.is_empty() and str(gm._aur.source) == "archive" and absf(float(gm._aur.kp) - 8.333) < 0.01,
+		str(gm._aur) if not gm._aur.is_empty() else "none")
+	fails += _report("aurora: the layer is on the globe", gm.globe.aurora_on())
+	gm.globe.look_at_point(62.0, -95.0, 2.4)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "20_aurora_kp9_2024-05-11")
+	gm.globe.look_at_point(55.0, -110.0, 0.35)
+	gm.globe.cam_tilt = 60.0
+	gm.globe.look_at_point(55.0, -110.0, 0.35)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "21_aurora_kp9_low")
+	gm.globe.cam_tilt = 0.0
+	gm.select_point(MV_LAT, MV_LON)
+	await tree.process_frame
+	t = gm.layer_text()
+	fails += _report("card: the aurora line says it was overhead", t.contains("Aurora: Kp 8.3") and t.contains("overhead"), t.replace("\n", " | "))
+	# Now: OVATION.
+	gm.globe.time_provider = tp
+	waited = 0
+	while ((gm._aur.get("ovation", {}) as Dictionary).is_empty()) and waited < 1800:
+		gm._wx_key = ""
+		await tree.process_frame
+		waited += 1
+	fails += _report("aurora: near the present the OVATION nowcast is used",
+		not (gm._aur.get("ovation", {}) as Dictionary).is_empty(), str(gm._aur.get("source", "")))
+	gm.globe.look_at_point(70.0, 100.0, 2.4)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "22_aurora_now")
 	return fails

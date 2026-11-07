@@ -1979,6 +1979,15 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	_star_trails = _add_check(v, "Star trails (long exposure)", _on_star_trails)
 	_star_trail_length = _add_slider(v, "Trail length", 0.0, 1.0, 0.05, _on_star_trail_length)
 	_lock_sky = _add_check(v, "Lock camera to sky (astro still)", _on_lock_camera_to_sky)
+	_add_section_lbl(v, "Aurora")
+	var aur_on := _add_check(v, "Aurora in the sky (real space weather)", func(on: bool) -> void:
+		AuroraSky.set_prefs(on, AuroraSky.pref_brightness()))
+	aur_on.set_pressed_no_signal(AuroraSky.pref_on())
+	var aur_b := _add_slider(v, "Brightness", 0.0, 4.0, 0.05, func(b: float) -> void:
+		AuroraSky.set_prefs(AuroraSky.pref_on(), b))
+	aur_b.value = AuroraSky.pref_brightness()
+	var aur_hint := _add_status_label(v, "The northern and southern lights at the sim clock's time, from the real Kp index (NOAA SWPC for the last week and the 3-day forecast, GFZ Potsdam back to 1932) and NOAA's OVATION nowcast near the present. Seen only after dark, behind the clouds; how far from the poles it reaches follows the Kp.")
+	aur_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_add_section_lbl(v, "Star map")
 	_star_quality = _add_option(v, "Texture quality", ["Standard (8k, 32 MB VRAM)", "High (16k, 128 MB VRAM)"], _on_star_quality)
 	var tex_row := HBoxContainer.new()

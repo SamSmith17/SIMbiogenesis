@@ -72,15 +72,23 @@ var _temp_tex: Texture2D
 var _power_tex: Texture2D
 var _zones_mode: OptionButton
 var _lights_toggle: CheckBox
+var _labels_toggle: CheckBox
 var _legend: HBoxContainer
 var _weather: GlobeWeather
 var _atlas: GlobeSolarAtlas
+var _climate: GlobeClimate
+var _clim_key := ""
+var _clim_info: Dictionary = {}
+var _card_layer: Label
+var _zone_row: Control
 var _card_atlas: Label
 var _atlas_key := ""
 var _atlas_info: Dictionary = {}
 var _clouds_toggle: CheckBox
 var _rain_toggle: CheckBox
 var _sat_toggle: CheckBox
+var _aurora_toggle: CheckBox
+var _aur: Dictionary = {}
 var _time_slider: HSlider
 var _time_lbl: Label
 var _data_lbl: Label
@@ -88,7 +96,7 @@ var _in_game := false
 var _time_offset_h := 0.0
 var _wx_key := ""
 var _wx_poll := 0.0
-var _wx_text := {"clouds": "", "rain": "", "sat": "", "wind": ""}
+var _wx_text := {"clouds": "", "rain": "", "sat": "", "wind": "", "aurora": ""}
 
 var _sel := PackedFloat64Array()
 var _sel_label := ""
@@ -161,6 +169,10 @@ func _ready() -> void:
 	_atlas.name = "SolarAtlas"
 	add_child(_atlas)
 	_atlas.point_ready.connect(_on_atlas_point)
+	_climate = GlobeClimate.new()
+	_climate.name = "Climate"
+	add_child(_climate)
+	_climate.point_ready.connect(_on_climate_point)
 	globe.time_provider = func() -> float:
 		return GlobeMath.jd_from_unix(Time.get_unix_time_from_system() + _time_offset_h * 3600.0)
 	_build_top_bar()
@@ -307,12 +319,15 @@ func _build_card() -> void:
 	var zrow := HBoxContainer.new()
 	zrow.add_theme_constant_override("separation", 8)
 	col.add_child(zrow)
+	_zone_row = zrow
 	_card_zone_chip = PanelContainer.new()
 	_card_zone_chip.custom_minimum_size = Vector2(14, 14)
 	_card_zone_chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	zrow.add_child(_card_zone_chip)
 	_card_zone = _label(zrow, UITheme.FONT_MD, UITheme.C_TEXT)
 	_card_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_card_layer = _label(col, UITheme.FONT_SM, UITheme.C_TEXT)
+	_card_layer.name = "LayerLines"
 	_card_atlas = _label(col, UITheme.FONT_SM, UITheme.C_TEXT_S)
 	_card_atlas.name = "AtlasLine"
 	_card_world_note = _label(col, UITheme.FONT_SM, UITheme.C_TEXT_S)
@@ -393,6 +408,16 @@ func _build_bottom() -> void:
 	_lights_toggle.button_pressed = true
 	_lights_toggle.toggled.connect(func(on: bool) -> void: globe.set_night_lights(on))
 	row.add_child(_lights_toggle)
+	_labels_toggle = CheckBox.new()
+	_labels_toggle.name = "LabelsToggle"
+	_labels_toggle.text = "Labels"
+	_labels_toggle.tooltip_text = "Names on your worlds' pins"
+	_labels_toggle.button_pressed = _pref("labels", true)
+	globe.labels_on = _labels_toggle.button_pressed
+	_labels_toggle.toggled.connect(func(on: bool) -> void:
+		globe.labels_on = on
+		_set_pref("labels", on))
+	row.add_child(_labels_toggle)
 	_legend = HBoxContainer.new()
 	_legend.name = "Legend"
 	_legend.add_theme_constant_override("separation", 6)
@@ -408,6 +433,15 @@ func _build_bottom() -> void:
 		"Rain and snow rate from NASA GPM IMERG, every 30 minutes since 1998, about 5 hours behind real time.")
 	_sat_toggle = _layer_check(wrow, "SatelliteToggle", "Satellite of the day", false,
 		"The whole Earth as one satellite saw it that day (NASA MODIS Terra true colour, since 2000), clouds and all.")
+	_aurora_toggle = _layer_check(wrow, "AuroraToggle", "Aurora", _pref("aurora", true),
+		"The northern and southern lights at the globe's time: NOAA's OVATION nowcast near the present, else the oval for that time's Kp (NOAA SWPC, GFZ Potsdam).")
+	_aurora_toggle.toggled.connect(func(on: bool) -> void: _set_pref("aurora", on))
+	var sw := get_node_or_null("/root/SpaceWeather")
+	if sw != null:
+		sw.updated.connect(func() -> void:
+			if not _closing:
+				_wx_key = ""
+				_wx_poll = 0.0)
 	var trow := HBoxContainer.new()
 	trow.add_theme_constant_override("separation", 8)
 	col.add_child(trow)
@@ -441,7 +475,8 @@ func _layer_check(parent: Node, nm: String, text: String, on: bool, tip: String)
 	c.button_pressed = on
 	c.toggled.connect(func(_on: bool) -> void:
 		_wx_key = ""
-		_wx_poll = 0.0)
+		_wx_poll = 0.0
+		_refresh_layer_lines())
 	parent.add_child(c)
 	return c
 
@@ -462,6 +497,7 @@ func _set_colour(mode: int) -> void:
 	_colour = mode
 	_zones_mode.disabled = mode == COLOUR_NONE
 	_build_legend()
+	_refresh_layer_lines()
 	if _data_lbl != null:
 		_show_data_times()
 	_wx_key = ""
@@ -602,7 +638,7 @@ func _load_worlds() -> void:
 		if ll.size() != 2:
 			continue
 		_worlds.append(rec)
-		globe.set_marker("world_%d" % i, ll[0], ll[1], Color(1.0, 0.78, 0.25), world_title(rec))
+		globe.set_marker("world_%d" % i, ll[0], ll[1], Color(1.0, 0.78, 0.25), short_name(world_title(rec)))
 		i += 1
 
 
@@ -615,6 +651,59 @@ static func world_title(rec: Dictionary) -> String:
 	if n == label or n.is_empty():
 		return SitePrivacy.place(n, "A world")
 	return n
+
+
+## What a pin says: a world named after its address gets the place's name
+## ("1234 Fir Road, Mount Vernon, Skagit County, …" → "Mount Vernon"), any
+## name is cut to PIN_NAME_MAX. The card keeps the whole name.
+const PIN_NAME_MAX := 22
+const _ROAD_WORDS := ["road", "rd", "street", "st", "avenue", "ave", "lane", "ln", "drive", "dr",
+	"way", "highway", "hwy", "boulevard", "blvd", "court", "ct", "place", "pl", "trail", "loop",
+	"circle", "parkway", "pkwy", "terrace", "route"]
+
+static func short_name(text: String) -> String:
+	var t := text.strip_edges()
+	if t.contains(","):
+		var keep: Array[String] = []
+		for raw in t.split(","):
+			var p := raw.strip_edges()
+			if p.is_empty() or _has_digit(p):
+				continue
+			keep.append(p)
+		while keep.size() > 1 and _is_road(keep[0]):
+			keep.remove_at(0)
+		if not keep.is_empty():
+			t = keep[0]
+	if t.length() > PIN_NAME_MAX:
+		t = t.left(PIN_NAME_MAX - 1).strip_edges() + "…"
+	return t
+
+
+static func _has_digit(s: String) -> bool:
+	for c in s:
+		if c >= "0" and c <= "9":
+			return true
+	return false
+
+
+static func _is_road(s: String) -> bool:
+	var w := s.to_lower().split(" ", false)
+	return not w.is_empty() and w[w.size() - 1].trim_suffix(".") in _ROAD_WORDS
+
+
+## Globe-mode preferences (ui_prefs.cfg [globe]).
+static func _pref(key: String, def: Variant) -> Variant:
+	var cf := ConfigFile.new()
+	if cf.load("user://ui_prefs.cfg") != OK:
+		return def
+	return cf.get_value("globe", key, def)
+
+
+static func _set_pref(key: String, v: Variant) -> void:
+	var cf := ConfigFile.new()
+	cf.load("user://ui_prefs.cfg")
+	cf.set_value("globe", key, v)
+	cf.save("user://ui_prefs.cfg")
 
 
 func world_count() -> int:
@@ -702,11 +791,89 @@ func _fill_zone(lat: float, lon: float) -> void:
 		_card_zone.text = "Solar data unavailable"
 		_card_zone_chip.visible = false
 		_request_atlas(lat, lon)
+		_request_climate(lat, lon)
 		return
 	_card_zone_chip.visible = true
 	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(z.color))
 	_card_zone.text = "%s · %.1f kWh/m²/day of sun" % [str(z.label), float(zr[0])]
 	_request_atlas(lat, lon)
+	_request_climate(lat, lon)
+
+
+## The long-term averages at the selected point (NASA POWER), for the lines
+## of the layers that are on.
+func _request_climate(lat: float, lon: float) -> void:
+	_clim_info = {}
+	_clim_key = _climate.request_point(lat, lon)
+	_refresh_layer_lines()
+
+
+func _on_climate_point(key: String, info: Dictionary) -> void:
+	if key != _clim_key or _closing:
+		return
+	_clim_info = info
+	_refresh_layer_lines()
+	_show_data_times()
+
+
+## What GFS says at a point at the globe's time: {speed, dir, temp} or {}.
+func gfs_at(lat: float, lon: float) -> Dictionary:
+	if not _wind_info.has("u"):
+		return {}
+	var uu := Grib2Decoder.sample(_wind_info.u, lat, lon)
+	var vv := Grib2Decoder.sample(_wind_info.v, lat, lon)
+	return {"speed": sqrt(uu * uu + vv * vv), "dir": int(round(GlobeWindField.from_dir_deg(uu, vv))) % 360,
+		"temp": Grib2Decoder.sample(_wind_info.t, lat, lon) - 273.15}
+
+
+## The card follows the layers: the solar zone for Solar zones / nothing,
+## the atlas line for the Solar atlas, temperature / wind lines (now from
+## GFS, the average from NASA POWER) for those layers, and a line each for
+## Wind, Rain and Clouds when they are on.
+func _refresh_layer_lines() -> void:
+	if _card_layer == null:
+		return
+	_zone_row.visible = _colour == COLOUR_ZONES or _colour == COLOUR_NONE
+	_card_atlas.visible = _colour == COLOUR_ATLAS or _colour == COLOUR_ZONES
+	if _sel.size() != 2:
+		_card_layer.text = ""
+		return
+	var lat := _sel[0]
+	var lon := _sel[1]
+	var now := gfs_at(lat, lon)
+	var waiting := _clim_info.is_empty()
+	var lines := PackedStringArray()
+	if _colour == COLOUR_TEMP:
+		var s := "Temperature now %d °C (GFS)" % roundi(float(now.temp)) if not now.is_empty() else "Temperature"
+		var a := GlobeClimate.temp_line(_clim_info)
+		lines.append(s + (" · " + a if not a.is_empty() else (" · averages loading…" if waiting else "")))
+	if _colour == COLOUR_POWER or _wind_toggle.button_pressed:
+		var s := ("Wind now %.1f m/s from %d° (GFS)" % [float(now.speed), int(now.dir)]) if not now.is_empty() else "Wind"
+		if _colour == COLOUR_POWER and not now.is_empty():
+			s += ", ~%d W/m² at 100 m" % roundi(GlobeWindField.power_density(float(now.speed)))
+		var a := GlobeClimate.wind_line(_clim_info)
+		lines.append(s + (" · " + a if not a.is_empty() else (" · averages loading…" if waiting else "")))
+	if _rain_toggle.button_pressed:
+		var a := GlobeClimate.rain_line(_clim_info)
+		if not a.is_empty():
+			lines.append(a)
+	if _clouds_toggle.button_pressed:
+		var a := GlobeClimate.cloud_line(_clim_info)
+		if not a.is_empty():
+			lines.append(a)
+	if _aurora_toggle.button_pressed:
+		var a := aurora_text(lat, lon)
+		if not a.is_empty():
+			lines.append(a)
+	if _clim_info.has("error") and lines.is_empty():
+		lines.append(str(_clim_info.error))
+	_card_layer.text = "\n".join(lines)
+	_card_layer.visible = not lines.is_empty()
+
+
+## What the card's layer lines say now (for checks).
+func layer_text() -> String:
+	return _card_layer.text if _card_layer.visible else ""
 
 
 ## The Global Solar Atlas numbers for the selected point (asked once per
@@ -1099,6 +1266,7 @@ func _time_text(u: float) -> String:
 
 
 func _refresh_weather(u: float) -> void:
+	_refresh_aurora(u)
 	if _clouds_toggle.button_pressed:
 		if _weather.request_clouds(u):
 			_wx_text.clouds = "Clouds: loading…"
@@ -1159,6 +1327,7 @@ func _on_wind_ready(info: Dictionary) -> void:
 	_power_tex = ImageTexture.create_from_image(info.power_img)
 	_wx_text.wind = "Wind %s" % str(info.label)
 	_show_wind()
+	_refresh_layer_lines()
 	_show_data_times()
 
 
@@ -1176,9 +1345,52 @@ func wind_line_segments() -> int:
 	return globe.wind_segments()
 
 
+## The aurora at the globe's time `u` (unix): the Kp (observed, forecast,
+## archive or assumed) and, near the present, the OVATION nowcast.
+func _refresh_aurora(u: float) -> void:
+	var sw := get_node_or_null("/root/SpaceWeather") as SpaceWeatherService
+	if sw == null or not _aurora_toggle.button_pressed:
+		_aur = {}
+		globe.set_aurora(false)
+		_wx_text.aurora = ""
+		return
+	var k := sw.kp_at(u)
+	var ov := sw.ovation_for(u)
+	_aur = {"kp": float(k.kp), "source": str(k.source), "ovation": ov}
+	globe.set_aurora(true, float(k.kp), ov.get("texture") as Texture2D)
+	var g := AuroraModel.g_scale(float(k.kp))
+	var src := {"observed": "observed", "forecast": "forecast", "archive": "GFZ archive",
+		"assumed": "quiet, assumed: no data for that time"}
+	_wx_text.aurora = "Aurora: Kp %.1f%s (%s)%s" % [float(k.kp), (" " + g) if not g.is_empty() else "",
+		str(src.get(str(k.source), k.source)),
+		(" · OVATION %s" % _time_text(float(ov.forecast)).get_slice(", ", 1)) if not ov.is_empty() else ""]
+	_refresh_layer_lines()
+
+
+## The aurora at a point, for the card: OVATION's probability there near the
+## present, else where the Kp oval is seen from.
+func aurora_text(lat: float, lon: float) -> String:
+	if _aur.is_empty():
+		return ""
+	var ov: Dictionary = _aur.ovation
+	if not ov.is_empty():
+		var img: Image = ov.image
+		var pc := img.get_pixel(int(wrapf(lon, 0.0, 360.0)) % 360, clampi(90 - roundi(lat), 0, 180)).r * 100.0
+		return "Aurora: %d %% chance overhead now (NOAA OVATION), Kp %.1f" % [roundi(pc), float(_aur.kp)]
+	var seen := AuroraModel.seen_from(lat, lon, float(_aur.kp), globe.sun_direction())
+	if seen.is_empty():
+		return "Aurora: Kp %.1f, too far from the oval to see here" % float(_aur.kp)
+	return "Aurora: Kp %.1f, after dark it would be %s" % [float(_aur.kp), seen]
+
+
 func _show_data_times() -> void:
 	var parts := PackedStringArray()
 	var credits: Array = []
+	if not str(_wx_text.get("aurora", "")).is_empty():
+		parts.append(str(_wx_text.aurora))
+		credits.append(SpaceWeatherService.ATTRIBUTION_KP)
+		if not (_aur.get("ovation", {}) as Dictionary).is_empty():
+			credits.append(SpaceWeatherService.ATTRIBUTION_OVATION)
 	if not str(_wx_text.clouds).is_empty():
 		parts.append(str(_wx_text.clouds))
 	if not str(_wx_text.rain).is_empty():
@@ -1197,4 +1409,6 @@ func _show_data_times() -> void:
 	_data_lbl.visible = not parts.is_empty()
 	if _colour == COLOUR_ATLAS or not _atlas_info.is_empty():
 		credits.append(GlobeSolarAtlas.ATTRIBUTION)
+	if _card_layer != null and _card_layer.visible and _clim_info.get("ok", false):
+		credits.append(GlobeClimate.ATTRIBUTION)
 	globe.set_extra_credits(credits)

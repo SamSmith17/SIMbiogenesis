@@ -14,7 +14,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
 
-const EXPECTED_CHECKS := 127
+const EXPECTED_CHECKS := 162
 
 var _fails := 0
 var _checks := 0
@@ -40,6 +40,8 @@ func _initialize() -> void:
 	_test_wind_field()
 	_test_drape()
 	_test_solar_atlas()
+	_test_labels_and_climate()
+	_test_aurora()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -551,3 +553,103 @@ func _test_solar_atlas() -> void:
 	_check("atlas: longitude wraps", absf(GlobeSolarAtlas.sample(img, 48.3252, -122.2469 + 360.0) - v) < 1e-6)
 	_check("atlas: cache keys are 0.001 deg", GlobeSolarAtlas.key_of(48.32524, -122.24691) == "48.325,-122.247")
 	_check("atlas: legend numbers", GlobeMode._num(3.25) == "3.25" and GlobeMode._num(2.5) == "2.5" and GlobeMode._num(12.0) == "12")
+
+
+func _test_labels_and_climate() -> void:
+	_check("labels: an address becomes its town",
+		GlobeMode.short_name("1234 Fir Road, Mount Vernon, Skagit County, Washington, 98274, United States") == "Mount Vernon")
+	_check("labels: a road with no number is skipped",
+		GlobeMode.short_name("Fir Road, Mount Vernon, Washington, United States") == "Mount Vernon")
+	_check("labels: a plain place name stays", GlobeMode.short_name("Bombay Beach, Imperial County, California") == "Bombay Beach")
+	_check("labels: a short name stays whole", GlobeMode.short_name("My camp") == "My camp")
+	var long := GlobeMode.short_name("The very long name of a world somebody typed")
+	_check("labels: a long name is cut", long.length() == GlobeMode.PIN_NAME_MAX and long.ends_with("…"), long)
+	var d: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/power_clim_mtvernon.json"))
+	var c := GlobeClimate.parse(d)
+	_check("climate: Mount Vernon parses", bool(c.ok) and absf(float(c.ws50.ann) - 3.4) < 1e-9
+		and absf(float(c.t2m.ann) - 9.88) < 1e-9 and (c.rain.monthly as PackedFloat64Array).size() == 12)
+	_check("climate: grid key is 0.5 deg", GlobeClimate.key_of(48.3252, -122.2469) == "48.5,-122.0")
+	# 3.4 m/s at 50 m -> 3.718 at 100 m; 0.5 * 1.225 * (6/pi) * 3.718^3 = 59.7 W/m2
+	_check("climate: mean power at 100 m by hand", absf(GlobeClimate.power_100m(3.4) - 59.7) < 0.5,
+		"%.2f" % GlobeClimate.power_100m(3.4))
+	var wl := GlobeClimate.wind_line(c)
+	_check("climate: the wind line", wl.contains("3.4 m/s at 50 m") and wl.contains("2.1 at 10 m") and wl.contains("W/m² at 100 m"), wl)
+	var tl := GlobeClimate.temp_line(c)
+	_check("climate: the temperature line", tl.contains("Average 9.9 °C") and tl.contains("Dec 4 °C") and tl.contains("Aug 17 °C"), tl)
+	var rl := GlobeClimate.rain_line(c)
+	_check("climate: the rain line", rl.contains("3.6 mm/day") and rl.contains("wettest Nov") and rl.contains("driest Jul"), rl)
+	_check("climate: the cloud line", GlobeClimate.cloud_line(c).contains("68 %") and GlobeClimate.cloud_line(c).contains("clearest Jul"))
+
+
+func _test_aurora() -> void:
+	# The shader include mirrors AuroraModel's constants.
+	var inc := FileAccess.get_file_as_string("res://core/globe/aurora.gdshaderinc")
+	for pair in [["AUR_EQ_MID0", AuroraModel.EQ_MID0], ["AUR_EQ_PER_KP", AuroraModel.EQ_PER_KP],
+			["AUR_EQ_NOON", AuroraModel.EQ_NOON], ["AUR_WIDTH0", AuroraModel.WIDTH0],
+			["AUR_WIDTH_PER_KP", AuroraModel.WIDTH_PER_KP], ["AUR_OVATION_FULL", AuroraModel.OVATION_FULL], ["AUR_OVATION_MIN", AuroraModel.OVATION_MIN]]:
+		var rx := RegEx.create_from_string("const float %s = ([0-9.]+);" % pair[0])
+		var mm := rx.search(inc)
+		_check("aurora: shader %s == model" % pair[0], mm != null and absf(float(mm.get_string(1)) - float(pair[1])) < 1e-9)
+	var pole := AuroraModel.pole_dir()
+	_check("aurora: the geomagnetic pole is at 90 mag lat", absf(AuroraModel.mag_lat(pole) - 90.0) < 0.05)
+	_check("aurora: Mount Vernon is ~54 deg magnetic", absf(AuroraModel.mag_lat(GlobeMath.to_unit(48.3252, -122.2469)) - 54.0) < 1.5,
+		"%.2f" % AuroraModel.mag_lat(GlobeMath.to_unit(48.3252, -122.2469)))
+	_check("aurora: the edge at midnight follows Kp", absf(AuroraModel.edge_lat(3.0, 0.0) - 59.4) < 1e-9
+		and absf(AuroraModel.edge_lat(9.0, 0.0) - 46.2) < 1e-9)
+	_check("aurora: the day side edge is EQ_NOON higher", absf(AuroraModel.edge_lat(3.0, PI) - 68.4) < 1e-9)
+	# A sun over lon 0 at the equinox: a point at the pole's meridian on the
+	# far side is near magnetic midnight, the one under the sun near noon.
+	var sun := GlobeMath.to_unit(0.0, 0.0)
+	var night := GlobeMath.to_unit(60.0, 180.0)
+	var day := GlobeMath.to_unit(60.0, 0.0)
+	_check("aurora: midnight and noon", AuroraModel.from_midnight(night, sun) < 0.6 and AuroraModel.from_midnight(day, sun) > 2.5,
+		"%.2f %.2f" % [AuroraModel.from_midnight(night, sun), AuroraModel.from_midnight(day, sun)])
+	# Peak of the band at midnight: mag lat = edge + width / 2.
+	var best := 0.0
+	var best_lat := 0.0
+	for i in 400:
+		var ml := 40.0 + i * 0.1
+		var q := _point_at_mag_lat(ml, sun)
+		var st := AuroraModel.strength(q, 5.0, sun)
+		if st > best:
+			best = st
+			best_lat = absf(AuroraModel.mag_lat(q))
+	var want := AuroraModel.edge_lat(5.0, 0.0) + 0.5 * AuroraModel.width(5.0, 0.0)
+	_check("aurora: the band peaks mid-oval", absf(best_lat - want) < 1.2, "%.2f vs %.2f" % [best_lat, want])
+	_check("aurora: stronger with Kp", AuroraModel.strength(_point_at_mag_lat(56.0, sun), 7.0, sun)
+		> AuroraModel.strength(_point_at_mag_lat(56.0, sun), 2.0, sun) * 5.0)
+	_check("aurora: the southern oval too", AuroraModel.strength(-_point_at_mag_lat(-best_lat, sun), 5.0, sun) > 0.0)
+	_check("aurora: a 10 deg ray reaches 110 km ~ 500 km away", absf(AuroraModel.ground_km(10.0) - 502.0) < 20.0,
+		"%.0f km" % AuroraModel.ground_km(10.0))
+	_check("aurora: G scale", AuroraModel.g_scale(4.0) == "" and AuroraModel.g_scale(5.0) == "G1"
+		and AuroraModel.g_scale(9.0) == "G5" and AuroraModel.g_scale(7.0) == "G3")
+	# May 10-11, 2024: Kp 9 — the aurora reached Mount Vernon's sky at night.
+	var msun := GlobeMath.sun_dir(GlobeMath.jd_from_unix(Time.get_unix_time_from_datetime_string("2024-05-11T07:00:00")))
+	_check("aurora: Kp 9 is overhead at Mount Vernon at night", AuroraModel.seen_from(48.3252, -122.2469, 9.0, msun) == "overhead")
+	_check("aurora: Kp 1 is not seen there", AuroraModel.seen_from(48.3252, -122.2469, 1.0, msun) == "")
+	# Space weather parsers.
+	var g: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/gfz_kp_2024-05-10.json"))
+	var gs := SpaceWeatherService.parse_gfz(g)
+	var t11 := float(Time.get_unix_time_from_datetime_string("2024-05-11T01:30:00"))
+	_check("aurora: GFZ archive parses (Kp 9 on 11 May 00-03 UTC)", gs.size() == 16 and absf(SpaceWeatherService.lookup(gs, t11) - 9.0) < 1e-6)
+	var f: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/swpc_kp_forecast.json"))
+	var fs := SpaceWeatherService.parse_swpc(f)
+	var has_fc := false
+	for r in fs:
+		if str(r[2]) == "predicted":
+			has_fc = true
+	_check("aurora: SWPC observed + forecast parse", fs.size() > 50 and has_fc, "%d rows" % fs.size())
+	var o: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://core/globe/testdata/ovation_sample.json"))
+	var ov := SpaceWeatherService.parse_ovation(o)
+	var img: Image = ov.image
+	_check("aurora: OVATION grid parses", img.get_width() == 360 and img.get_height() == 181 and float(ov.max) > 0.0
+		and float(ov.forecast) > float(ov.obs))
+	_check("aurora: month keys", SpaceWeatherService.month_key(t11) == "2024-05")
+
+
+## A point at magnetic latitude `ml` on the magnetic midnight meridian.
+func _point_at_mag_lat(ml: float, sun: Vector3) -> Vector3:
+	var pole := AuroraModel.pole_dir()
+	var away := -(sun - pole * sun.dot(pole)).normalized()
+	var a := deg_to_rad(ml)
+	return (pole * sin(a) + away * cos(a)).normalized()

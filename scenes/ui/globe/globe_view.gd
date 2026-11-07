@@ -29,6 +29,9 @@ const ATMO_SHADER := preload("res://scenes/ui/globe/globe_atmosphere.gdshader")
 const SKY_SHADER := preload("res://scenes/ui/globe/globe_sky.gdshader")
 const CLOUD_SHADER := preload("res://scenes/ui/globe/globe_clouds.gdshader")
 const WIND_SHADER := preload("res://scenes/ui/globe/globe_wind.gdshader")
+const AURORA_SHADER := preload("res://scenes/ui/globe/globe_aurora.gdshader")
+## Aurora shells, globe radii: the green line (~110 km) and the red (~230 km).
+const AURORA_R := [1.0173, 1.036]
 ## The weather shell's height: ~10 km, a cloud deck.
 const CLOUD_SHELL_R := 1.0016
 const STARMAP := "res://assets/sky/starmap_equirect_8k.png"
@@ -47,6 +50,8 @@ const CLICK_PX := 5.0
 var max_zoom := 17
 var tile_budget := GlobeQuadtree.DEFAULT_MAX_TILES
 var night_lights := true
+## Pin names on the globe (pins stay; the "You are here" name too).
+var labels_on := true
 ## The ground imagery layer ("esri", or a registered daily layer).
 var base_layer := "esri"
 ## () -> float UTC Julian Day; empty = the computer's clock.
@@ -64,6 +69,9 @@ var _container: SubViewportContainer
 var _cam: Camera3D
 var _globe: Node3D
 var _atmo: MeshInstance3D
+var _aurora: Array[MeshInstance3D] = []
+var _aurora_mats: Array[ShaderMaterial] = []
+var _aurora_on := false
 var _atmo_mat: ShaderMaterial
 var _sky_mat: ShaderMaterial
 var _caps: Array[MeshInstance3D] = []
@@ -211,6 +219,24 @@ func _build_world() -> void:
 	_atmo.material_override = _atmo_mat
 	_atmo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(_atmo)
+	for i in AURORA_R.size():
+		var am := MeshInstance3D.new()
+		var asm := SphereMesh.new()
+		asm.radius = AURORA_R[i]
+		asm.height = AURORA_R[i] * 2.0
+		asm.radial_segments = 192
+		asm.rings = 96
+		am.mesh = asm
+		var mat := ShaderMaterial.new()
+		mat.shader = AURORA_SHADER
+		mat.set_shader_parameter("shell", i)
+		mat.set_shader_parameter("aurora_pole", AuroraModel.pole_dir())
+		am.material_override = mat
+		am.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		am.visible = false
+		_globe.add_child(am)
+		_aurora.append(am)
+		_aurora_mats.append(mat)
 
 
 func _load_starmap() -> void:
@@ -520,6 +546,24 @@ func has_rain() -> bool:
 	return _has_rain
 
 
+## The aurora layer: off, or on with the Kp of the globe's time and, near
+## the present, NOAA's OVATION nowcast (an L8 probability texture).
+func set_aurora(on: bool, kp: float = 2.0, ovation: Texture2D = null) -> void:
+	_aurora_on = on
+	for i in _aurora.size():
+		_aurora[i].visible = on
+		var m := _aurora_mats[i]
+		m.set_shader_parameter("aurora_on", on)
+		m.set_shader_parameter("aurora_kp", kp)
+		m.set_shader_parameter("aurora_use_ovation", ovation != null)
+		if ovation != null:
+			m.set_shader_parameter("aurora_ovation", ovation)
+
+
+func aurora_on() -> bool:
+	return _aurora_on
+
+
 ## Keeps the attribution clear of a panel this many pixels wide at the
 ## bottom-left.
 func set_credits_left(px: float) -> void:
@@ -747,6 +791,9 @@ func _update_sun() -> void:
 	for m: ShaderMaterial in _all_surface_materials():
 		m.set_shader_parameter("sun_dir", _sun)
 	_atmo_mat.set_shader_parameter("sun_dir", _sun)
+	for am in _aurora_mats:
+		am.set_shader_parameter("sun_dir", _sun)
+		am.set_shader_parameter("aurora_sun", _sun)
 	_shell_mat.set_shader_parameter("sun_dir", _sun)
 	_sky_mat.set_shader_parameter("sun_dir", _sun)
 	_sky_mat.set_shader_parameter("gmst_deg", StarSkyMath.gmst_deg(jd))
@@ -1030,7 +1077,7 @@ func _place_markers() -> void:
 		if root.get_child_count() > 1:
 			var l := root.get_child(1) as Label3D
 			l.visible = false
-			if front:
+			if front and (labels_on or not str(id).begins_with("world_")):
 				var sp := latlon_to_local_dir(d)
 				if sp != Vector2.INF:
 					var pri := 0.0 if not str(id).begins_with("world_") else 1.0
@@ -1047,6 +1094,18 @@ func _place_markers() -> void:
 		if ok:
 			placed.append(sp)
 			(c[2] as Label3D).visible = true
+
+
+## The world-pin names showing now (for checks).
+func visible_world_labels() -> PackedStringArray:
+	var out := PackedStringArray()
+	for id in _markers:
+		if not str(id).begins_with("world_"):
+			continue
+		var root: Node3D = _markers[id]
+		if root.visible and root.get_child_count() > 1 and (root.get_child(1) as Label3D).visible:
+			out.append((root.get_child(1) as Label3D).text)
+	return out
 
 
 ## Screen point of a unit direction on the ground, or INF.

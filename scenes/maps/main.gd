@@ -4588,6 +4588,11 @@ func _setup_toast_ui() -> void :
 		var bed : Node = load( "res://core/audio/ambient_bed.gd" ).new()
 		bed.name = "AmbientBed"
 		add_child( bed )
+	# The aurora in the sky, from real space weather at the sim clock's time.
+	if get_node_or_null( "AuroraSky" ) == null :
+		var aur := AuroraSky.new()
+		aur.name = "AuroraSky"
+		add_child( aur )
 	# Where a FUCK YES!!! happened: a beacon over the person each toast names.
 	if get_node_or_null( "PeakBeacon" ) == null :
 		var beacon : Node3D = load( "res://core/population/peak_beacon.gd" ).new()

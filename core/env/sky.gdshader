@@ -1,6 +1,10 @@
 shader_type sky;
 render_mode use_quarter_res_pass;
 
+// The aurora seen from the ground (core/globe/aurora.gdshaderinc, shared with
+// the globe; AuroraSky pushes the uniforms).
+#include "res://core/globe/aurora.gdshaderinc"
+
 // Originaly based on https://godotshaders.com/shader/stylized-sky-shader-with-clouds/ but there's not much left
 
 group_uniforms sky;
@@ -1014,6 +1018,13 @@ void sky()
 			}
 			COLOR += _z_col * zodiac_opacity * _z_fade;
 		}
+	}
+
+	//////////////////// AURORA //////////////////////////////////////////////////////////////////
+	// After dark, under the clouds and cirrus drawn next.
+	if( aurora_on && EYEDIR.y > 0.0 && _night_amount > 0.05 && !AT_CUBEMAP_PASS )
+	{
+		COLOR += aurora_sky( EYEDIR, TIME ) * _night_amount * _night_amount;
 	}
 
 	//////////////////// CIRRUS //////////////////////////////////////////////////////////////////

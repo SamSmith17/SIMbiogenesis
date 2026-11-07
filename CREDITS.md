@@ -250,6 +250,16 @@ usage; confirm each provider's live attribution string before release.**
   - License: `CC-BY-4.0` · Attribution: **"Solar atlas: Global Solar Atlas 2.0 (Solargis, World Bank Group / ESMAP, CC BY 4.0)"**
   - Status: verified
 
+- **NOAA SWPC** (Space Weather Prediction Center) — the planetary Kp index (last week observed + 3-day forecast) and the OVATION aurora nowcast, for the aurora on the globe and in the sky.
+  - Source: https://www.swpc.noaa.gov (services.swpc.noaa.gov JSON products; fixtures in `core/globe/testdata/`)
+  - License: U.S. Government work (public domain) · Attribution: **"Kp: NOAA SWPC · Aurora: NOAA SWPC OVATION"**
+  - Status: verified
+
+- **GFZ Potsdam Kp index** (Matzka et al. 2021, doi:10.5880/Kp.0001) — the Kp archive since 1932, for the aurora at any past time.
+  - Source: https://kp.gfz.de (JSON API, one month per request)
+  - License: `CC-BY-4.0` · Attribution: **"Kp: GFZ Potsdam (CC BY 4.0)"**
+  - Status: verified
+
 - **Open-Meteo** — weather archive/forecast **and** no-key elevation (Copernicus DEM).
   - Source: https://open-meteo.com
   - License: data `CC-BY-4.0`; API `Apache-2.0` · Attribution: credit Open-Meteo;
@@ -292,7 +302,7 @@ usage; confirm each provider's live attribution string before release.**
     others CC-BY) · Attribution: credit OpenTopography + dataset.
   - Attribution required: yes · Status: pending-verification
 
-- **NASA POWER** — GHI solar-resource grid (`scenes/ui/location_picker/data/ghi-grid.json`, GhiService).
+- **NASA POWER** — GHI solar-resource grid (`scenes/ui/location_picker/data/ghi-grid.json`, GhiService), and the globe point card's long-term wind, temperature, rain and cloud averages (climatology API, `GlobeClimate`).
   - Source: https://power.larc.nasa.gov · License: free/open, credit requested.
   - Attribution required: courtesy yes · Status: pending-verification
 

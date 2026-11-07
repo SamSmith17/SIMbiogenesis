@@ -5643,6 +5643,42 @@ figshare bot check and its tiles are an undocumented staging server).
   user://globe_cache/gsa/): "1 kWp makes 3.25 kWh/day (1,187 kWh/yr) · sun
   · best tilt · best / worst month". The sea and poles have no solar data.
   The credits line now wraps beside the layer bar (`set_credits_left`).
+- **Pin names, per-layer card, aurora (2026-11-05).**
+  - Pins say `GlobeMode.short_name`: an address-named world shows its town
+    (parts with a digit and a leading road dropped), every name cut to
+    `PIN_NAME_MAX` 22; the card keeps the whole name. "Labels" (layer bar,
+    ui_prefs.cfg `[globe] labels`) hides world-pin names (`GlobeView.labels_on`).
+  - The point card follows the layers (`_refresh_layer_lines`): the solar
+    zone for Solar zones / Nothing, the atlas line for the Solar atlas, and
+    a line each for Temperature, Wind power or Wind, Rain, Clouds and
+    Aurora when on: the value now (GFS at the globe's time) beside the
+    long-term average from NASA POWER's climatology API (`GlobeClimate`,
+    keyless, 0.5° cells cached in user://globe_cache/power/; mean wind
+    power at 100 m = log law from 50 m + a Rayleigh spread).
+  - **Aurora.** `AuroraModel` (pure) is a Kp-driven oval in a centred-dipole
+    frame (pole 80.8° N 72.6° W, IGRF epoch 2025): equatorward edge at
+    magnetic midnight 66 − 2.2·Kp, 9° higher at noon, wider and brighter
+    toward midnight — fit to the usual Kp rules of thumb, not physics.
+    `core/globe/aurora.gdshaderinc` is its MIRROR (globe_selftest reads its
+    constants) and adds curtains (folds along the oval + fine rays).
+    `SpaceWeatherService` (autoload `SpaceWeather`): Kp from NOAA SWPC (last
+    week + 3-day forecast, 30 min refresh), older from GFZ Potsdam (one
+    month per request, cached in user://globe_cache/kp/), beyond the
+    forecast an assumed quiet Kp 2 (said so); the OVATION nowcast near the
+    present (10 min refresh; below 5 % is not drawn). Globe: two additive
+    shells (green ~110 km, red ~230 km) on the night side, "Aurora" toggle
+    (`[globe] aurora`). Ground: `AuroraSky` (Main child) pushes the sky
+    shader's aurora uniforms twice a second from the sim clock; the sky
+    follows each ray to 105 / 150 / 230 km and reads the oval at the point
+    below, so a distant oval sits low on the poleward horizon and a storm
+    fills the sky; drawn after dark, under cirrus and clouds. Settings →
+    Stars & Planets → Aurora (`[aurora] sky`, `brightness`). ⚠ Emission
+    colours are LINEAR: a little red or blue in the green turns it grey
+    when dim (the first cut read as grey fog).
+  - Checks: `--capture=globe` (61), `tools\harness.ps1 -World mtvernon
+    -RunScript res://tools/checks/aurora_sky_check.gd -Label aurora_sky`
+    (the 10–11 May 2024 storm from the GFZ archive: overhead, shots north,
+    up and south; a quiet night not seen; Settings off).
 
 ## Maps and scene shell
 

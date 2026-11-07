@@ -165,7 +165,7 @@
       "license": "public-domain-credit-requested",
       "name": "NASA POWER",
       "notes": "Free/open; NASA requests acknowledgement. Add their suggested citation.",
-      "role": "GHI solar-resource grid (data/ghi-grid.json, GhiService)",
+      "role": "GHI solar-resource grid (data/ghi-grid.json, GhiService); the globe point card's long-term wind, temperature, rain and cloud averages (GlobeClimate, climatology API)",
       "share_alike": false,
       "source": "https://power.larc.nasa.gov",
       "status": "pending-verification"
@@ -1511,6 +1511,36 @@
       "role": "The globe's solar atlas layer (PV output) and a point's GHI / DNI / PV output / best tilt",
       "share_alike": false,
       "source": "https://globalsolaratlas.info",
+      "status": "verified"
+    },
+    {
+      "attribution_required": true,
+      "attribution_string": "Kp: NOAA SWPC, GFZ Potsdam (CC BY 4.0) · Aurora: NOAA SWPC OVATION",
+      "author": "NOAA Space Weather Prediction Center",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "noaa-swpc",
+      "license": "public-domain-us-gov",
+      "name": "NOAA SWPC planetary Kp (observed + 3-day forecast) and OVATION aurora nowcast",
+      "notes": "services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json and /json/ovation_aurora_latest.json (SpaceWeatherService); fixtures core/globe/testdata/swpc_kp_forecast.json, ovation_sample.json (a thinned copy).",
+      "role": "The aurora on the globe and in the sky near the present",
+      "share_alike": false,
+      "source": "https://www.swpc.noaa.gov",
+      "status": "verified"
+    },
+    {
+      "attribution_required": true,
+      "attribution_string": "Kp: GFZ Potsdam (CC BY 4.0)",
+      "author": "GFZ German Research Centre for Geosciences (Matzka et al. 2021, doi:10.5880/Kp.0001)",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "gfz-kp",
+      "license": "CC-BY-4.0",
+      "name": "Geomagnetic Kp index archive (since 1932)",
+      "notes": "kp.gfz.de/app/json, one month per request, cached in user://globe_cache/kp/ (SpaceWeatherService); fixture core/globe/testdata/gfz_kp_2024-05-10.json.",
+      "role": "The aurora for any past time on the globe and in the sky",
+      "share_alike": false,
+      "source": "https://kp.gfz.de",
       "status": "verified"
     }
   ],
