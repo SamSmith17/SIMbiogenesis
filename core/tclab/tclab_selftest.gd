@@ -11,7 +11,7 @@ extends SceneTree
 ## and one clamp per joint), the spec key round trip, picking, the builder's
 ## nodes, and the files (GLB re-imported, STL size).
 
-const EXPECTED_CHECKS := 561
+const EXPECTED_CHECKS := 605
 
 var _pass := 0
 var _fail := 0
@@ -417,8 +417,8 @@ func _test_presets() -> void:
 			xs.append((res["parts"][id]["xf"] as Transform3D).origin.x)
 	xs.sort()
 	_ok(xs.size() == 3 and absf(float(xs[0]) + float(xs[2])) < 0.5 and absf(float(xs[1])) < 0.5, "three condenser columns, symmetric (%s)" % str(xs))
-	_ok(int(types.get("vessel", 0)) == 1 and int(types.get("heating_element", 0)) == 1 and int(types.get("butterfly", 0)) == 1,
-		"the reactor carries its vessel, element and butterfly drain")
+	_ok(int(types.get("vessel", 0)) == 1 and int(types.get("heating_element", 0)) == 2 and int(types.get("butterfly", 0)) == 1,
+		"the reactor carries its vessel, two bottom elements and butterfly drain")
 	var labels: Dictionary = d2["spec"]["labels"]
 	var gas := false
 	for k in labels:
@@ -426,7 +426,9 @@ func _test_presets() -> void:
 			gas = true
 	_ok(gas, "the woodgas outlet is labelled")
 	var bb: AABB = d2["stats"]["bounds_mm"]
-	_ok(bb.position.y > -3.0, "the reactor stands on the floor (lowest %.1f mm)" % bb.position.y)
+	# On 160 mm legs so the two bottom elements' heads clear the floor:
+	# the feet are the lowest thing.
+	_ok(bb.position.y > -170.0 and bb.position.y < -150.0, "the reactor stands on its legs, elements clear of the floor (lowest %.1f mm)" % bb.position.y)
 
 
 ## Phase 7–8: the placed assembly (catalog, world build, LOD + collision,

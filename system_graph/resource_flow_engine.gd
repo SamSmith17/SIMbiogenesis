@@ -2902,9 +2902,9 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 					if str(inp_dc.get("kind", "")) not in ["electric", "dc_electricity"]:
 						fuel_rate = float(inp_dc.get("rate", 0.0)) * occupants
 						break
-				dc_out_kw = throughput * fuel_rate * float(specs.get("energy_wh_per_unit", 0.0)) / 1000.0
+				dc_out_kw = throughput * fuel_rate * _fuel_wh_per_unit(proc_id, specs) / 1000.0
 			else:
-				dc_out_kw = throughput * float(specs.get("energy_wh_per_unit", 0.0)) / 1000.0
+				dc_out_kw = throughput * _fuel_wh_per_unit(proc_id, specs) / 1000.0
 			break
 	if absf(float(specs.get("current_output_kw", 0.0)) - dc_out_kw) > 0.0005:
 		specs["current_output_kw"] = dc_out_kw
@@ -4165,6 +4165,40 @@ func _tank_at_port(proc_id: String, handle_id: String, want_input: bool) -> Stri
 
 func _connections_from_handle(item_id: String, handle_id: String) -> Array:
 	return _conn_by_source.get(item_id + "|" + handle_id, []) as Array
+
+
+## The producer gas a generator preset's energy_wh_per_unit was set for
+## (MJ/Nm³; air-blown gasifier gas runs 4–6, Reed & Das 1988).
+const WOODGAS_REF_LHV_MJ_NM3 := 5.0
+
+
+## Wh of electricity per unit of fuel: the generator's authored figure,
+## scaled by the heating value of the gas wired into it when the machine that
+## made it stamped one (`gas_lhv_mj_nm3`, a TC Process Lab run's summary):
+## pyrolysis gas at ~10 MJ/Nm³ runs an engine twice as far as producer gas.
+## Looks through one tank between them.
+func _fuel_wh_per_unit(item_id: String, specs: Dictionary) -> float:
+	var base := float(specs.get("energy_wh_per_unit", 0.0))
+	var lhv := _wired_gas_lhv(item_id, 0)
+	if lhv <= 0.0:
+		return base
+	return base * lhv / WOODGAS_REF_LHV_MJ_NM3
+
+
+func _wired_gas_lhv(item_id: String, depth: int) -> float:
+	for conn in _resource_conns_by_target_item.get(item_id, []) as Array:
+		var src := _model.get_item(str((conn as Dictionary).get("source_item_id", "")))
+		if src.is_empty():
+			continue
+		var ss: Dictionary = src.get("specs", {}) as Dictionary
+		var l := float(ss.get("gas_lhv_mj_nm3", 0.0))
+		if l > 0.0:
+			return l
+		if depth == 0 and str(src.get("type", "")) == "resource":
+			var l2 := _wired_gas_lhv(str(src.get("id", "")), 1)
+			if l2 > 0.0:
+				return l2
+	return 0.0
 
 
 func _connections_to_handle(item_id: String, handle_id: String) -> Array:

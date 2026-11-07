@@ -63,6 +63,7 @@ func _initialize() -> void:
 	_test_processor_ready_idle()
 	_test_graph_ac_load_running_draws()
 	_test_dc_electricity_port_topology()
+	_test_dc_generator_gas_lhv()
 	_test_dc_generator_output_telemetry()
 	_test_dc_power_wiring_trace()
 	_test_dc_direct_charge_migration()
@@ -1922,6 +1923,26 @@ func _test_dc_generator_output_telemetry() -> void:
 	_check("dc generator BLOCKED once fuel runs out",
 		str(gen_specs2.get("node_state", "")) == GraphNodeState.BLOCKED,
 		"state=%s" % str(gen_specs2.get("node_state", "")))
+
+
+## A reactor that stamped its gas's heating value (a TC Process Lab run's
+## summary) runs the generator by it: 10 MJ/Nm³ pyrolysis gas against the
+## 5 MJ/Nm³ producer gas the preset's 1000 Wh/m³ was set for → twice the kW,
+## looking through the woodgas tank between them.
+func _test_dc_generator_gas_lhv() -> void:
+	var g := _build_dc_generator_graph(1000.0, true)
+	var model = g["model"]
+	var engine = g["engine"]
+	model.add_item({"id": "reactor", "type": "processor", "x": -400.0, "y": 0.0, "width": 150.0, "height": 140.0,
+		"specs": {"name": "Biochar Reactor", "gas_lhv_mj_nm3": 10.0, "requested_state": "off",
+			"inputs": [], "outputs": [{"kind": "woodgas", "rate": 0.0, "unit": "m³/h"}]}})
+	model.add_connection({"id": "c_gas", "polarity": "resource", "resource_type": "woodgas",
+		"source_item_id": "reactor", "source_handle_id": "res_out_0",
+		"target_item_id": "fuel", "target_handle_id": "input"})
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var kw := float((model.get_item("gen").get("specs", {}) as Dictionary).get("current_output_kw", 0.0))
+	_check("the generator runs by the wired gas's heating value (10 MJ/Nm³ → 5.1 kW)", absf(kw - 5.1) < 0.05, "kw=%.3f" % kw)
 
 
 func _test_dc_power_wiring_trace() -> void:

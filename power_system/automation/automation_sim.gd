@@ -6,8 +6,27 @@ extends RefCounted
 ## instants — so a simulated day or week contains what they switch.
 ##
 ## Pure: no scene, no AutomationEngine. `step(t0, t1, ctx, apply)` decides
-## what fired in (t0, t1] and calls apply(item_id, command) for every action
-## ("turn_on" / "turn_off" / "toggle"); the caller writes its own model.
+## what fired in (t0, t1] and calls apply(item_id, command) for every action;
+## the caller writes its own model.
+##
+## Actions:
+##   {kind: "scene_node", command: turn_on|turn_off|toggle, target?: String}
+##       switch the rule's item, or with `target` one actuator ON it (one
+##       heating element of a two-element reactor);
+##   {kind: "set_value", entity_id, value}
+##       set a number (an element's power, a valve's open fraction, a
+##       cooling-water flow; HA's number. / input_number.set_value);
+##   {kind: "delay", delay_seconds}.
+## Command shapes handed to `apply`:
+##   rich_commands false (the default, every caller written before set_value):
+##       a plain scene_node action -> apply(item_id, "turn_on" ...), exactly
+##       as before; a targeted one -> the same String (the caller has no
+##       notion of targets, so it switches the item); set_value -> NOT applied
+##       and not logged (counted in `skipped`), since such a caller cannot
+##       hold a value.
+##   rich_commands true: always apply(item_id, Dictionary) with
+##       {cmd: "turn_on"|"turn_off"|"toggle", target: String} or
+##       {cmd: "set_value", entity_id: String, value: float}.
 ##
 ## Semantics, chosen so the answer does not depend on the step size:
 ##   time / sun trigger   fires when its clock time is CROSSED in (t0, t1]
@@ -30,9 +49,14 @@ extends RefCounted
 ## sensor.solar_power (W), sensor.load_power (W), tank.<id|name>.level (%).
 
 var rules: Array = []      # [{item_id, alias, id, enabled, triggers, conditions, actions}]
-## [{t, item_id, alias, command}] — every action applied, for the report.
+## [{t, item_id, alias, command, target?, entity_id?, value?}] — every
+## action applied, for the report.
 var log: Array = []
+## set_value actions that came due without rich_commands (nothing applied).
+var skipped := 0
 const LOG_MAX := 2000
+## See the header: Dictionary commands for set_value and targeted actions.
+var rich_commands := false
 
 var _trig: Dictionary = {}     # "ri:ti" -> {last: bool, since: float, state: String}
 var _pending: Array = []       # [{at, ri, ai}] action tails waiting on a delay
@@ -48,18 +72,48 @@ static func from_model(model: Object) -> AutomationSim:
 	for it in model.get("items"):
 		var item: Dictionary = it
 		var specs: Dictionary = item.get("specs", {}) as Dictionary
-		for a in (specs.get("graph_automations", []) as Array):
-			var spec: Dictionary = a
-			if not bool(spec.get("enabled", true)):
-				continue
-			s.rules.append({"item_id": str(item.get("id", "")), "alias": str(spec.get("alias", "Automation")),
-				"id": str(spec.get("id", "")), "triggers": spec.get("triggers", []),
-				"conditions": spec.get("conditions", []), "actions": spec.get("actions", [])})
+		s.add_specs(specs.get("graph_automations", []) as Array, str(item.get("id", "")))
 	return s
+
+
+## A sim over one automation list (the inspector's card specs) that all act
+## on `item_id` — a design's own automations, say, with no graph around them.
+static func from_specs(autos: Array, item_id: String = "") -> AutomationSim:
+	var s := AutomationSim.new()
+	s.add_specs(autos, item_id)
+	return s
+
+
+## Append every enabled automation spec in `autos` as a rule on `item_id`.
+func add_specs(autos: Array, item_id: String) -> void:
+	for a in autos:
+		if not (a is Dictionary):
+			continue
+		var spec: Dictionary = a
+		if not bool(spec.get("enabled", true)):
+			continue
+		rules.append({"item_id": item_id, "alias": str(spec.get("alias", "Automation")),
+			"id": str(spec.get("id", "")), "triggers": spec.get("triggers", []),
+			"conditions": spec.get("conditions", []), "actions": spec.get("actions", [])})
 
 
 func is_empty() -> bool:
 	return rules.is_empty()
+
+
+## The between-steps state (triggers' memory, delayed tails, the log), so a
+## model that keyframes itself can seek back and replay the same switches.
+func snapshot() -> Dictionary:
+	return {"trig": _trig.duplicate(true), "pending": _pending.duplicate(true), "started": _started,
+		"log": log.duplicate(true), "skipped": skipped}
+
+
+func restore(s: Dictionary) -> void:
+	_trig = (s.get("trig", {}) as Dictionary).duplicate(true)
+	_pending = (s.get("pending", []) as Array).duplicate(true)
+	_started = bool(s.get("started", false))
+	log = (s.get("log", []) as Array).duplicate(true)
+	skipped = int(s.get("skipped", 0))
 
 
 ## Evaluate (t0, t1] (absolute hours). Returns how many actions were applied.
@@ -116,12 +170,35 @@ func _run_actions(ri: int, from_ai: int, t: float, apply: Callable) -> int:
 					return n
 			"scene_node":
 				var cmd := str(a.get("command", "turn_on"))
+				var target := str(a.get("target", ""))
 				if apply.is_valid():
-					apply.call(str(r["item_id"]), cmd)
+					if rich_commands:
+						apply.call(str(r["item_id"]), {"cmd": cmd, "target": target})
+					else:
+						apply.call(str(r["item_id"]), cmd)
 				n += 1
-				if log.size() < LOG_MAX:
-					log.append({"t": t, "item_id": r["item_id"], "alias": r["alias"], "command": cmd})
+				var e := {"t": t, "item_id": r["item_id"], "alias": r["alias"], "command": cmd}
+				if not target.is_empty():
+					e["target"] = target
+				_log(e)
+			"set_value":
+				var eid := str(a.get("entity_id", ""))
+				var v := float(a.get("value", 0.0))
+				var e2 := {"t": t, "item_id": r["item_id"], "alias": r["alias"],
+					"command": "set_value", "entity_id": eid, "value": v}
+				if rich_commands and not eid.is_empty():
+					if apply.is_valid():
+						apply.call(str(r["item_id"]), {"cmd": "set_value", "entity_id": eid, "value": v})
+					n += 1
+					_log(e2)
+				else:
+					skipped += 1
 	return n
+
+
+func _log(e: Dictionary) -> void:
+	if log.size() < LOG_MAX:
+		log.append(e)
 
 
 func _trigger_fires(ri: int, ti: int, tr: Dictionary, t0: float, t1: float,

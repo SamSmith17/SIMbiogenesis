@@ -3,6 +3,11 @@ extends AutomationAction
 
 ## Runs turn_on / turn_off / toggle on a scene node by absolute NodePath.
 ## Use for graph-bound loads. Optional ha_entity_id for Home Assistant YAML export.
+## Optional `target`: one actuator ON the node (a heating element of a
+## two-element machine). The node then needs
+## `apply_target_command(target: String, command: String) -> bool`; without
+## it a targeted action does nothing rather than switch the whole node.
+## No target = the original whole-node behaviour.
 
 enum NodeCommand {
 	TURN_ON,
@@ -13,6 +18,7 @@ enum NodeCommand {
 @export var node_path: String = ""
 @export var ha_entity_id: String = ""
 @export var command: NodeCommand = NodeCommand.TURN_ON
+@export var target: String = ""
 
 
 func execute(context: Dictionary) -> bool:
@@ -24,6 +30,11 @@ func execute(context: Dictionary) -> bool:
 	var n: Node = tree.root.get_node_or_null(NodePath(node_path))
 	if n == null or not is_instance_valid(n):
 		push_warning("SceneNodeAction: node not found: %s" % node_path)
+		return false
+	if not target.is_empty():
+		if n.has_method("apply_target_command"):
+			return bool(n.call("apply_target_command", target, _ha_service_name()))
+		push_warning("SceneNodeAction: %s has no actuator targets (wanted '%s')" % [node_path, target])
 		return false
 	match command:
 		NodeCommand.TURN_ON:

@@ -768,6 +768,8 @@ static func _shipped_models() -> Array[Dictionary]:
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "tclab_biochar_reactor", "label": "Biochar reactor + TC condenser (tri-clamp)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
+		{"id": "tclab_biochar_genset", "label": "Biochar reactor → gas holder → genset (tri-clamp)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "tclab_pot_still", "label": "Pot still with column (tri-clamp)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "tclab_brew_kettle", "label": "Brew kettle 50 L (tri-clamp)",

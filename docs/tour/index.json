@@ -1281,12 +1281,39 @@
       "image": "globe_mode.jpg",
       "image_run": "2026-11-05T19:26:23",
       "image_commit": "938feba"
+    },
+    "tc_process": {
+      "id": "tc_process",
+      "title": "TC Process Lab",
+      "chapter": "Build",
+      "summary": "Run what happens inside a tri-clamp assembly: heat a charge, watch it dry, pyrolyse, boil and distil, see the gas and liquids move, and automate it with the same rules as Home Assistant.",
+      "how": [
+        "In the Tri-clamp designer press Process under the 3D view",
+        "Play, or Run the whole batch and drag the chart to scrub through it",
+        "Section / X-ray show what is inside; click a part to see its contents; Molecules shows them up close",
+        "Control: sensors, switches and automations that run in the model; Copy as Home Assistant YAML",
+        "Use this run on the graph fits the batch onto a placed reactor's node"
+      ],
+      "action": "",
+      "button": "Process",
+      "key": "",
+      "open_hints": [
+        "Click Process"
+      ],
+      "world": "burningman",
+      "blurb": "Every part of a tri-clamp design is also a volume of gas and liquid: the lab joins them into a network and steps it — heat from the elements spreading through the charge, water boiling off ahead of a pyrolysis front, wood breaking into char, tar and gas (Miller & Bellan's kinetics), the pressure pushing the vapour into the condensers, water and tar running down to the traps, burnable gas at the outlet. The energy and mass ledgers close to a fraction of a percent. Cut it open to see the fronts in the charge and the gas in the pipes, look at the molecules reacting, and switch the elements with the same rules the rest of the game uses. The same lab distils a wash in the pot still, boils the kettle, cracks plastic pellets into oil and wax in the retort, and runs a genset from a gas holder.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "tc_process.jpg",
+      "image_run": "2026-11-06T23:57:58",
+      "image_commit": "ef51976"
     }
   },
   "last_run": {
-    "label": "tour_20261105-192441",
-    "generated": "2026-11-05T19:26:23",
-    "git_commit": "938feba",
+    "label": "tour_20261106-235555",
+    "generated": "2026-11-06T23:57:58",
+    "git_commit": "ef51976",
     "passed": 1,
     "total": 1,
     "video_secs": null

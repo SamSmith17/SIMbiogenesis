@@ -421,7 +421,7 @@ static func steam_kg_h(d: Dictionary, kw: float) -> float:
 	var op := float((d["spec"]["site"] as Dictionary)["op_temp_c"])
 	if op < 100.0 or kw <= 0.0:
 		return 0.0
-	var kj_per_kg := CspTroughSource.CP_WATER_KJ_PER_KG_K * (100.0 - 20.0) + CspTroughSource.H_FG_KJ_PER_KG
+	var kj_per_kg := WaterSteam.boiloff_kj_per_kg(20.0)
 	return kw * 3600.0 / kj_per_kg
 
 

@@ -29,6 +29,8 @@ static func builtins() -> Array:
 		return _builtins
 	_builtins = [
 		{"id": "biochar_reactor", "name": "Biochar reactor + condenser", "blurb": "The jacketed boiler with its retort can, element, butterfly drain, bungs and the three-column TC condenser on the back.", "spec": biochar_reactor()},
+		{"id": "biochar_genset", "name": "Biochar reactor → genset", "blurb": "The reactor and condenser feeding a 300 L gas holder, a silica-gel dryer and a 2.5 kW 48 V genset that runs when the holder is well up.", "spec": biochar_genset()},
+		{"id": "plastic_retort", "name": "Plastic retort (PP → oil, wax, gas)", "blurb": "The reactor loaded with 8 kg of polypropylene pellets: they melt, crack into light gas, oil and wax, and the condensers drop the oil and wax.", "spec": plastic_retort()},
 		{"id": "tc_condenser", "name": "TC condenser (3 columns, 2\")", "blurb": "The reactor's condenser on its own: two 18\" dephlegmators down, a gas column up, drains at the bottom.", "spec": tc_condenser()},
 		{"id": "pot_still", "name": "Pot still with column", "blurb": "A dished boiler, sight glass, packed column with a window, thermometer tee, dephlegmator and product condenser.", "spec": pot_still()},
 		{"id": "brew_kettle", "name": "Brew kettle 50 L", "blurb": "A lidded kettle with a false bottom and hop basket, element, thermometer, ball-valve drain and a whirlpool port.", "spec": brew_kettle()},
@@ -49,7 +51,7 @@ static func builtin(id: String) -> Dictionary:
 
 ## Add `type` with its end `own` on the open end `target`; `want` =
 ## [[port id, world direction], …] picks the roll (15° steps) that points
-## those ends that way. Returns [spec, new id].
+## those ends that way ("@up" = the part's own +Y). Returns [spec, new id].
 static func _attach(s: Dictionary, type: String, size: String, params: Dictionary, target: String,
 		own: String = "a", want: Array = []) -> Array:
 	var roll := 0.0
@@ -73,7 +75,10 @@ static func _attach(s: Dictionary, type: String, size: String, params: Dictionar
 				var xf := TcAssembly.place_on(txf, ports[own], gap, r)
 				var score := 0.0
 				for w in want:
-					if ports.has(str(w[0])):
+					if str(w[0]) == "@up":
+						# The part's own up (a unit that stands on the floor).
+						score += (xf.basis * Vector3.UP).dot((w[1] as Vector3).normalized())
+					elif ports.has(str(w[0])):
 						score += (xf.basis * (ports[str(w[0])]["z"] as Vector3)).dot((w[1] as Vector3).normalized())
 				if score > best + 1e-6:
 					best = score
@@ -95,7 +100,10 @@ const REACTOR_BUNGS := [[0.0, 603.0], [65.0, 603.0], [45.0, 127.0], [45.0, 49.0]
 static func reactor_vessel() -> Dictionary:
 	var ports: Array = [
 		{"id": "crown", "kind": "tc", "size": "2", "face": "lid", "angle_deg": 0.0, "r_mm": 0.0, "stub_mm": 30.0},
-		{"id": "element", "kind": "tc", "size": "2", "face": "shell", "angle_deg": 90.0, "h_mm": 190.0, "stub_mm": 20.0},
+		# Two elements up through the bottom, the charge loaded round them
+		# (the user's reactor, 2026-11-06; the GLB had one on the shell).
+		{"id": "element", "kind": "tc", "size": "2", "face": "bottom", "angle_deg": 90.0, "r_mm": 80.0, "stub_mm": 20.0},
+		{"id": "element2", "kind": "tc", "size": "2", "face": "bottom", "angle_deg": 270.0, "r_mm": 80.0, "stub_mm": 20.0},
 		{"id": "drain", "kind": "tc", "size": "2", "face": "shell", "angle_deg": 270.0, "h_mm": 98.0, "stub_mm": 20.0},
 		{"id": "back_low", "kind": "tc", "size": "2", "face": "shell", "angle_deg": 180.0, "h_mm": 66.0, "stub_mm": 20.0},
 		{"id": "vapour", "kind": "tc", "size": "2", "face": "shell", "angle_deg": 180.0, "h_mm": 620.0, "stub_mm": 20.0},
@@ -108,7 +116,8 @@ static func reactor_vessel() -> Dictionary:
 	return {"od_mm": 340.0, "height_mm": 650.0, "wall_mm": 2.0, "bottom": "flat", "top": "open",
 		"lid": true, "lid_od_mm": 516.0, "lid_depth_mm": 59.0, "lid_handles": true,
 		"jacket": "full", "jacket_gap_mm": 26.0,
-		"internals": [{"kind": "retort_can", "od_mm": 313.0, "h_mm": 420.0, "z_mm": 120.0}],
+		"legs": "legs", "leg_count": 4, "leg_h_mm": 160.0,
+		"internals": [],
 		"ports": ports}
 
 
@@ -143,7 +152,7 @@ static func _condenser(s: Dictionary, target: String, own_c: bool, back: Vector3
 	for c in cols:
 		r = _attach(s, "tc_npt_m", "2", {"npt": "0.5"}, str(c) + ":b", "a")
 		s = r[0]
-		_label(s, str(r[1]) + ":b", "Condensate out (wood vinegar)", "water")
+		_label(s, str(r[1]) + ":b", "Condensate out (wood vinegar)", "wood_vinegar")
 	r = _attach(s, "dephlegmator", "2", {"length_mm": 346.0, "shell": "2.5"}, mid + ":c", "a", [["w1", back]])
 	s = r[0]
 	var gas: String = r[1]
@@ -165,7 +174,8 @@ static func biochar_reactor() -> Dictionary:
 	s = r[0]
 	var v: String = r[1]
 	_label(s, v + ":crown", "Feed / vent", "biomass")
-	# Element on its port, its loops into the boiler.
+	# The first element on its bottom port, its loops up into the charge
+	# (the second goes on last, so the condenser's part ids stay put).
 	r = _attach(s, "heating_element", "2", {"length_mm": 300.0}, v + ":element", "a")
 	s = r[0]
 	# Drain: a short spool (the model's long ferrule), the butterfly valve
@@ -187,7 +197,94 @@ static func biochar_reactor() -> Dictionary:
 	r = _attach(s, "gauge", "2", {"mount": "npt", "npt": "0.5"}, v + ":bung2", "a")
 	s = r[0]
 	s = _condenser(s, v + ":vapour", true, Vector3(0, 0, -1))
+	r = _attach(s, "heating_element", "2", {"length_mm": 300.0}, v + ":element2", "a")
+	s = r[0]
+	s["process"] = TcProcSpec.biochar_default()
 	return TcSpec.resolve(s)
+
+
+## The reactor as a plastic retort: same vessel and condenser, loaded with
+## PP pellets. No graph node (nothing on the graph makes oil from plastic
+## yet); its drains carry the tar / bio-oil kind.
+static func plastic_retort() -> Dictionary:
+	var s := biochar_reactor()
+	s["name"] = "Plastic retort"
+	s["binds"] = ""
+	var labels: Dictionary = s["labels"]
+	for k in labels.keys():
+		var t := str((labels[k] as Dictionary).get("text", ""))
+		if t.begins_with("Condensate out"):
+			labels[k] = {"text": "Oil and wax out", "kind": "tar"}
+		elif t == "Woodgas out":
+			labels[k] = {"text": "Light gas out", "kind": "woodgas"}
+		elif t == "Feed / vent":
+			labels[k] = {"text": "Feed / vent", "kind": "plastic_waste"}
+	s["process"] = TcProcSpec.plastic_default()
+	return TcSpec.resolve(s)
+
+
+## Where an open end is ({xf, port}); {} when `ref` is not open.
+static func _open_end(s: Dictionary, ref: String) -> Dictionary:
+	var res := TcAssembly.solve(TcSpec.resolve(s))
+	for op in res["open"]:
+		if str(op["ref"]) == ref:
+			return op
+	return {}
+
+
+## The whole chain (Phase 8 of plans/TC_PROCESS_LAB_PLAN.md): the reactor and
+## condenser, the gas line down behind it to a bell gas holder, a silica-gel
+## dryer and a 48 V genset. The genset runs from the holder (on at 60 %, off
+## at 15 %). On the graph the reactor, the holder (a woodgas tank) and the
+## genset (a Woodgas DC Generator) are three nodes, wired in that order.
+static func biochar_genset() -> Dictionary:
+	var s := biochar_reactor()
+	s["name"] = "Biochar reactor → genset"
+	var out_ref := ""
+	for k in (s["labels"] as Dictionary).keys():
+		if str((s["labels"][k] as Dictionary).get("text", "")) == "Woodgas out":
+			out_ref = str(k)
+	(s["labels"] as Dictionary).erase(out_ref)
+	# Down: an elbow turned to the ground, a spool, an elbow back out.
+	var r := _attach(s, "elbow90", "2", {}, out_ref, "a", [["b", Vector3.DOWN]])
+	s = r[0]
+	var down: String = r[1]
+	# The run along the ground sits at GAS_LINE_Y: the holder's tank then
+	# stands on the floor the reactor's legs stand on.
+	var y_top := float((_open_end(s, down + ":b")["xf"] as Transform3D).origin.y)
+	var drop := maxf(y_top - GAS_LINE_Y - TcStandards.elbow90_ctf("2"), 60.0)
+	r = _attach(s, "spool", "2", {"length_mm": drop}, down + ":b", "a")
+	s = r[0]
+	r = _attach(s, "elbow90", "2", {}, str(r[1]) + ":b", "a", [["b", Vector3(0, 0, -1)]])
+	s = r[0]
+	r = _attach(s, "spool", "2", {"length_mm": 250.0}, str(r[1]) + ":b", "a")
+	s = r[0]
+	r = _attach(s, "gas_holder", "2", {"volume_l": 300.0, "hold_kpa": 0.8}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var holder: String = r[1]
+	r = _attach(s, "dryer", "2", {"length_mm": 450.0, "packing": "silica"}, holder + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	r = _attach(s, "genset", "2", {"rated_kw": 2.5, "efficiency": 0.22}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var gen: String = r[1]
+	s["part_binds"] = [[holder, "holder"], [gen, "genset"]]
+	var p := TcProcSpec.biochar_default()
+	p["duration_h"] = 8.0
+	var slug := TcProcControl.slug(str(s["name"]))
+	var lvl := "sensor.%s_%s_level" % [slug, holder]
+	var sw := "switch.%s_%s" % [slug, gen]
+	p["automations"] = [
+		{"id": "genset_on", "alias": "Genset on when the holder is 60 % full", "enabled": true,
+			"triggers": [{"kind": "numeric", "entity_id": lvl, "above": 60.0}],
+			"conditions": [], "actions": [{"kind": "scene_node", "command": "turn_on", "target": sw}]},
+		{"id": "genset_off", "alias": "Genset off when the holder is down to 15 %", "enabled": true,
+			"triggers": [{"kind": "numeric", "entity_id": lvl, "below": 15.0}],
+			"conditions": [], "actions": [{"kind": "scene_node", "command": "turn_off", "target": sw}]}]
+	s["process"] = p
+	return TcSpec.resolve(s)
+
+
+const GAS_LINE_Y := -60.0
 
 
 static func tc_condenser() -> Dictionary:
@@ -253,6 +350,7 @@ static func pot_still() -> Dictionary:
 	r = _attach(s, "tc_barb", "2", {"barb": "0.5"}, cond + ":b", "a")
 	s = r[0]
 	_label(s, str(r[1]) + ":b", "Product out", "")
+	s["process"] = TcProcSpec.pot_still_default()
 	return TcSpec.resolve(s)
 
 
@@ -281,6 +379,7 @@ static func brew_kettle() -> Dictionary:
 	s = r[0]
 	r = _attach(s, "heating_element", "1.5", {"length_mm": 260.0}, v + ":element", "a")
 	s = r[0]
+	s["process"] = TcProcSpec.kettle_default()
 	return TcSpec.resolve(s)
 
 

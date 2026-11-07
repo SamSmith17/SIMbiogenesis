@@ -123,6 +123,17 @@ func run() -> Dictionary:
 		var fn := str(d[1])
 		if main.has_method(fn):
 			entries.append({"id": str(d[0]), "open": func() -> void: main.call(fn)})
+	# The TC Process Lab: the designer in Process mode (its own columns).
+	if main.has_method("open_tclab"):
+		entries.append({"id": "tc_process", "open": func() -> void:
+			var tu: Variant = main.call("open_tclab", {})
+			if tu != null:
+				tu.call("load_builtin", "biochar_reactor")
+				tu.call("set_run_mode", true),
+			"close": func() -> void:
+				var tu2: Variant = main.get("tclab_ui")
+				if tu2 != null and is_instance_valid(tu2):
+					tu2.call("close")})
 	if main.has_method("open_linkage_hardware_editor"):
 		entries.append({"id": "linkage_hardware", "open": func() -> void:
 			main.call("open_linkage_hardware_editor", load("res://core/linkage/linkage_params.gd").new())})

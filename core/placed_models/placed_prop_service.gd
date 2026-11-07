@@ -1157,6 +1157,7 @@ static func seed_tclab(main: Node, prop_id: String) -> String:
 	var sgv := _system_graph_view(main)
 	var gmodel: Variant = sgv.get("model") if sgv != null else null
 	if not gid.is_empty() and gmodel != null and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		_seed_tc_units(main, prop_id, spec, gid)
 		return gid
 	var preset := TcDesign.bound_preset(spec)
 	if preset.is_empty():
@@ -1164,13 +1165,135 @@ static func seed_tclab(main: Node, prop_id: String) -> String:
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	specs["model_id"] = mid
 	specs["name"] = str(spec.get("name", specs.get("name", "Assembly")))
+	_stamp_tc_recipe(specs, spec)
 	var node_id := _create_bound_graph_node(main, prop_id, {
 		"node_type": str(preset.get("type", "processor")), "specs": specs,
 		"width": float(preset.get("width", 150.0)), "height": float(preset.get("height", 140.0)),
 		"label": str(preset.get("label", ""))})
 	if not node_id.is_empty():
 		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+		_seed_tc_units(main, prop_id, spec, node_id)
 	return node_id
+
+
+## Phase 8: a chain's process units each get their own node beside the main
+## one (a gas holder → a woodgas tank, a genset → a generator), all bound to
+## the same prop, wired in flow order by the kind they carry (the reactor's
+## woodgas → the holder → the genset). Idempotent per part
+## (`graph_item_ids` on the record).
+static func _seed_tc_units(main: Node, prop_id: String, spec: Dictionary, main_gid: String) -> void:
+	var pb: Array = spec.get("part_binds", [])
+	if pb.is_empty():
+		return
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if gmodel == null:
+		return
+	var rec := get_prop_record(main, prop_id)
+	var ids: Dictionary = (rec.get("graph_item_ids", {}) as Dictionary).duplicate()
+	var d := TcDesign.solve(spec)
+	var chain: Array = [main_gid]
+	var made := false
+	for e in pb:
+		var pid := str(e[0])
+		var have := str(ids.get(pid, ""))
+		if not have.is_empty() and not (gmodel.call("get_item", have) as Dictionary).is_empty():
+			chain.append(have)
+			continue
+		var node := TcDesign.unit_node(d, pid, str(e[1]))
+		if node.is_empty():
+			continue
+		var nid := _create_bound_graph_node(main, prop_id, node)
+		if nid.is_empty():
+			continue
+		ids[pid] = nid
+		chain.append(nid)
+		made = true
+	if not made:
+		return
+	update_prop_record(main, prop_id, {"graph_item_ids": ids}, false)
+	# Lay them out in a row after the main node and wire neighbours by kind.
+	var m0: Dictionary = gmodel.call("get_item", main_gid)
+	var x := float(m0.get("x", 0.0)) + float(m0.get("width", 150.0)) + 70.0
+	for k in range(1, chain.size()):
+		var it: Dictionary = gmodel.call("get_item", str(chain[k]))
+		gmodel.call("update_item", str(chain[k]), {"x": x, "y": float(m0.get("y", 0.0))})
+		x += float(it.get("width", 120.0)) + 70.0
+	for k2 in range(chain.size() - 1):
+		_wire_by_kind(gmodel, str(chain[k2]), str(chain[k2 + 1]))
+
+
+## The first resource kind node a puts out that node b takes in, wired.
+static func _wire_by_kind(gmodel: Object, a: String, b: String) -> void:
+	var ia: Dictionary = gmodel.call("get_item", a)
+	var ib: Dictionary = gmodel.call("get_item", b)
+	if ia.is_empty() or ib.is_empty():
+		return
+	var outs := _io_handles(ia, false)
+	var ins := _io_handles(ib, true)
+	for o in outs:
+		for i in ins:
+			if ResourceKinds.normalize_kind(str(o[1])) == ResourceKinds.normalize_kind(str(i[1])):
+				gmodel.call("add_connection", {"polarity": "resource", "resource_type": str(o[1]),
+					"source_item_id": a, "source_handle_id": str(o[0]),
+					"target_item_id": b, "target_handle_id": str(i[0])})
+				return
+
+
+## [[handle, kind]] of a node's resource ins or outs (a tank: input / output).
+static func _io_handles(item: Dictionary, inputs: bool) -> Array:
+	var sp: Dictionary = item.get("specs", {})
+	if str(item.get("type", "")) == "resource":
+		return [["input" if inputs else "output", str(sp.get("resource_kind", ""))]]
+	var out: Array = []
+	var arr: Array = sp.get("inputs" if inputs else "outputs", [])
+	for i in arr.size():
+		out.append(["%s_%d" % ["res_in" if inputs else "res_out", i], str((arr[i] as Dictionary).get("kind", ""))])
+	return out
+
+
+## A design's lab-run recipe (TC Process Lab → Use this run on the graph)
+## onto its node's specs, with the rules the world can run as they are.
+## Returns whether there was one.
+static func _stamp_tc_recipe(specs: Dictionary, spec: Dictionary) -> bool:
+	var proc: Dictionary = spec.get("process", {}) as Dictionary if spec.get("process") is Dictionary else {}
+	var recipe: Dictionary = proc.get("recipe", {}) as Dictionary if proc.get("recipe") is Dictionary else {}
+	if recipe.is_empty():
+		return false
+	TcProcSummary.apply_to_specs(specs, recipe)
+	var wa := TcProcSummary.world_automations(proc.get("automations", []) as Array)
+	var keep: Array = []
+	for a in specs.get("graph_automations", []):
+		if not str((a as Dictionary).get("id", "")).begins_with("tc_"):
+			keep.append(a)
+	keep.append_array(wa["world"])
+	specs["graph_automations"] = keep
+	specs["tc_lab_only_rules"] = wa["lab_only"]
+	return true
+
+
+## Re-stamp a placed assembly's node from its design's recipe. Returns the
+## node's name ("" when there is no node or no recipe).
+static func apply_tclab_recipe(main: Node, prop_id: String) -> String:
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var gid := str(rec.get("graph_item_id", ""))
+	if gid.is_empty():
+		gid = seed_tclab(main, prop_id)
+		rec = get_prop_record(main, prop_id)
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if gmodel == null or gid.is_empty():
+		return ""
+	var item: Dictionary = gmodel.call("get_item", gid)
+	if item.is_empty():
+		return ""
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	if not _stamp_tc_recipe(specs, rec.get("tc_spec", {}) as Dictionary):
+		return ""
+	gmodel.call("update_item", gid, {"specs": specs})
+	return str(specs.get("name", "the reactor"))
 
 
 ## Remove the graph array a deleted toroid owned.

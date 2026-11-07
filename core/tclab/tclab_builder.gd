@@ -288,6 +288,7 @@ static func geo_to_mesh(g: TcGeom, override: Material) -> ArrayMesh:
 		arr[Mesh.ARRAY_VERTEX] = v
 		arr[Mesh.ARRAY_NORMAL] = mats[k]["n"]
 		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		am.surface_set_name(am.get_surface_count() - 1, str(k))   # the material key (the process views swap by it)
 		am.surface_set_material(am.get_surface_count() - 1, override if override != null else material_for(str(k)))
 	return am
 
@@ -330,6 +331,10 @@ static func material_for(key: String) -> Material:
 		m = StructureMaterials.make(StructureMaterials.Kind.GALVANISED, Color(0.62, 0.63, 0.62))
 	elif key == "char":
 		m = StructureMaterials.make(StructureMaterials.Kind.WOOD, Color(0.45, 0.31, 0.19))
+	elif key == "desiccant":
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.80, 0.86, 0.95))
+	elif key == "carbon":
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.08, 0.08, 0.09))
 	else:
 		m = StructureMaterials.make(StructureMaterials.Kind.STAINLESS, Color(0.8, 0.8, 0.8))
 	_mat_cache[key] = m

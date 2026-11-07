@@ -1154,6 +1154,38 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/csplab_designer_
 # What placed concentrators cost (one of each kind; csp_* sections at 1x /
 # 60x / 1440x, GPU shown vs hidden vs plain mirrors; CSPB_QUICK=1 skips GPU):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/csplab_bench.gd -Timeout 900
+# TC Process Lab (offline — core/tclab/process/): every part type's flow-path
+# rule (the coverage guard), the biochar reactor's network (vapour out
+# through BOTH columns, cooling water its own circuit, drains at the low
+# points, the closing joint), species / thermo pinned to steam tables
+# (100 °C at 1 atm, 111 °C at 1.5 bar), the LHVs, the ethanol / water
+# azeotrope, Miller & Bellan pyrolysis on a slow ramp in Bridgwater's bands,
+# then the 10 h batch: energy ledger within 1 %, mass within 0.5 %, drying →
+# pyrolysis → burnable gas in order, ~a third char, both traps draining;
+# a 40 L kettle against the hand sum, a capped outlet pressurising and a
+# relief valve holding it, determinism and seek. EXPECTED_CHECKS; --import
+# first:
+Godot.exe.exe --headless --path . --script core/tclab/process/tc_proc_selftest.gd
+# A design's process hour by hour (NOT a selftest; --preset=, --hours=,
+# --feed=, --mass=, --watts=, --every= minutes) and a CV-by-CV step trace:
+Godot.exe.exe --headless --path . --script tools/diag/tc_proc_probe.gd -- --hours=10
+Godot.exe.exe --headless --path . --script tools/diag/tc_proc_trace.gd -- --steps=20
+# Every built-in's network size, step cost and batch pre-run time:
+Godot.exe.exe --headless --path . --script tools/bench/tc_proc_bench.gd
+# The Biochar → genset chain hour by hour (NOT a selftest): holder fill and
+# its gas, dryer spent, genset on / kW, the kWh, the ledgers:
+Godot.exe.exe --headless --path . --script tools/diag/tc_chain_probe.gd -- --hours=8
+# Process mode with REAL input (sandbox): the mode buttons, play / pause on
+# the lab's own clock, the whole batch pre-run, chart scrubs to 1 h / 3 h,
+# a condenser clicked, the temperature tint, an element's watts edited,
+# the section / X-ray / solid views mid-batch (plane, gas tubes, the
+# charge, emitters, materials put back), the Control tab (a preset added
+# from the cards, a pre-run with the rules switching the elements, a switch
+# by hand, a probe, the HA YAML on the clipboard), the molecule lens on the
+# vessel and a condenser (charge units, gas, a reaction played, freed when
+# off), a placed reactor's node taking the fitted batch by a real click on
+# "Use this run on the graph", UiAudit clean (run at 720 too):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_process_check.gd -Label tc_process
 # Tri-clamp designer (offline — core/tclab/): the size table against its
 # sources and the reference GLB (1½" 50.5 mm, 2" 64 mm faces), every part
 # type × size built with every triangle on Godot's front face and a clamp
@@ -5029,6 +5061,288 @@ condenser preset, the world, performance).
   there were no breadcrumbs (an ellipsized label has no minimum width and
   the empty crumb row expanded); `_sync_strip` now expands the chip.
   `StructureMaterials.Kind` gained `STAINLESS` and `RUBBER` (appended).
+
+## TC Process Lab (core/tclab/process/, 2026-11-06)
+
+Plan: `plans/TC_PROCESS_LAB_PLAN.md` (9 phases; the user chose process
+units in TC Lab for the downstream chain, the detailed model in the LAB ONLY
+with a fitted summary on the graph, automations on the design, and a default
+batch of ~10 kg chips at 20 % moisture on two 600 W bottom elements).
+Landed: all 9 phases (the network, the species / thermo / reaction
+library, the stepper, Process mode, seeing inside, control, the molecule
+lens, the summary on the graph, process units, scenarios + tour). An educational process model, not a
+chemistry engine.
+- **`TcFlowPaths`**: per part type, which ports share a fluid volume
+  (`TYPE_RULES`; a type missing there fails the selftest). Roles: VOLUME
+  (pipe, junction, vessel, jacket, condenser, coolant, column, plate, sight,
+  filter), LINK (valve, check, relief), ATTACH (blind, probes, heater,
+  basket, spray, feed). A dephlegmator is two circuits (product a↔b,
+  coolant w1↔w2); every vessel nozzle opens into one volume.
+- **`TcProcNet.build(d)`** (cached by the geometry key): control volumes
+  (consecutive 2-port pipes merge), links (joints; valves / checks /
+  reliefs as links), thermal links (condenser ↔ its coolant, vessel ↔
+  jacket) and boundaries by role: feed, product, drain, coolant_in / out,
+  outlet, atmosphere (an open clamp end), plug (a spare threaded bung on a
+  vessel). Positions stay in the assembly's mm frame.
+- **`TcSpecies` / `TcThermo` / `TcReactions`**: rows with sources
+  (Antoine, NIST cp at 500 K, LHVs, JANAF hot cp for flame T), Miller &
+  Bellan 1997 three-component wood pyrolysis (`wood_step`: exact
+  exponential decay, stable at any dt), Liden tar cracking, a 15 % acid
+  share of primary tar (wood vinegar, estimate), plastics as one global
+  step (estimates), O2-limited combustion, silica gel, filter captures.
+  `WaterSteam` (power_system/sources/) is the shared boil-off budget the CSP
+  sources now use too.
+- **`TcBed`**: the charge, one domain per element (equal volumes; one
+  element on the axis = the whole vessel), NR 8 rings × NZ 6 layers. Heat
+  into the inner ring over the element's reach; conduction is IMPLICIT
+  (backward Euler by Gauss–Seidel, fluxes from the solved T applied
+  pairwise: stable and energy-exact at 30 s); k = 0.12 + 4εσdT³. Columns
+  are walked bottom-up with a PACKET: steam condenses in cells still below
+  the boiling point (the heat pipe that runs the drying front ahead), hot
+  gas trades heat with each cell. Element T = contact + radiation h.
+- **`TcProcSim`**: dt 5 s, the bed every 6th step (its output released
+  evenly between). Pools boil at the bubble point (Raoult, Wilson γ);
+  walls: gas ↔ wall, condenser wall ↔ coolant (the water's own energy
+  balance), wall → room through the jacket gap (`jacket_fill` air |
+  insulation; the reactor default is insulation: an air gap loses two
+  thirds of 1.2 kW at 200 °C) or insulation; condensation / evaporation
+  toward the wall's saturation pressure; tar cracking above 650 K; the
+  pressure network solved EXACTLY each step (dense elimination over the gas
+  CVs — ⚠ Gauss–Seidel never settles a chain of tiny pipe volumes and piled
+  gas up mid-chain at 400 bar), species and enthalpy upwind as mixing cells
+  in falling-pressure order; liquids run to the lowest potential (a drain
+  pulls a level header toward it). Pipework traps drip into a jar by
+  default; a labelled liquid nozzle ON A VESSEL starts shut (a kettle
+  drained itself through its whirlpool return). Elements have a 900 °C
+  high-limit that resets 150 K lower.
+  - Ledgers: `energy_ledger()` (in = stored sensible + latent + loss +
+    coolant + reaction + out; the latent of condensables formed straight
+    from the solid, reaction water included, is booked against the
+    reaction) and `mass_ledger()`. The batch closes to 0.1 % / 0.0000 kg.
+  - `snapshot` / `restore` / `seek(t)` (keyframes every 120 s),
+    `readings()`, `cv_state(i)`, `set_actuator("heater:<pid>" |
+    "valve:<pid>" | "cooling[:<cv>]" | "drain:<ref>", v)`, events,
+    `TcProcSim.prof` (section µs).
+  - The default batch (selftest): dry at 2.6 h, all char at 3.4 h, char
+    35 % of dry wood, ~3.5 kg condensate out of the traps + 1 kg held,
+    woodgas ~7–13 MJ/Nm³, almost no N2. ~0.7 ms a step (10 h ≈ 5 s
+    headless): the bed is packed arrays per domain — local copies written
+    back after the loop (copy-on-write: a write through `d["cel"][i]`
+    lands on a copy).
+- The `biochar_reactor` preset was rebuilt to the user's real reactor: two
+  2" elements up through the bottom (r 80 mm; the second added LAST so the
+  condenser keeps p9–p20), no retort can, 160 mm legs, and a `process`
+  block (`TcProcSpec`, kept by `TcSpec.resolve`, left out of `key_of` so a
+  process edit never re-solves the geometry). `tclab_reactor_parity` lists
+  the moved element as KNOWN.
+- **Process mode** (Phase 3): the designer's studio strip has Design /
+  Process buttons (`tclab_modal.set_run_mode`, `scenes/ui/
+  tclab_process_panel.gd`, a Node child of the modal). Process swaps the
+  side columns (`design_left/right` ↔ `process_left/right`), keeps the
+  studio (orbit + click only) and adds a transport under it. Left: the
+  scenario (load, mass, moisture, each element's watts, cooling water,
+  jacket gap, room, relief, back-pressure, batch length), written through
+  `set_process_block` (undoable, never re-solves the geometry). Right:
+  tiles, the clicked volume's composition, a stacked chart
+  (`tclab_process_chart.gd`, click / drag scrubs), the event log
+  (`run_events`, kept across seeks), where the heat went. The lab clock
+  is its own (`_process`, 6 ms a frame, speeds 1×–600×; the world clock
+  is untouched); "Run the whole batch" steps to the end at 12 ms a frame
+  (16 s in game for 10 h), then scrubs by `seek`. Parts are tinted by
+  their volume's temperature (`material_overlay`). Space plays, F frames.
+  ⚠ Don't name a method `set_process` / `set_process_mode` on a Node.
+  Gate: `tools\harness.ps1 -World mtvernon -RunScript
+  res://tools/checks/tc_process_check.gd -Label tc_process` (30, REAL
+  clicks: mode swap, play / pause, pre-run, chart scrub to 1 h and 3 h, a
+  condenser clicked, the vessel tinted, watts edited, UiAudit 0 errors).
+- **Seeing inside** (Phase 4, `scenes/ui/tclab_process_view.gd`, a sibling
+  of the builder under the studio holder; shaders in
+  `core/tclab/process/shaders/`). The view bar under the transport: Look
+  Solid / Section / X-ray, the cut (Facing me — follows the camera, through
+  the clicked volume — / Left-right / Front-back), an offset slider,
+  Contents.
+  - Section: every part surface gets `tc_section.gdshader` by its MATERIAL
+    KEY (`TcBuilder.geo_to_mesh` now names each surface by its key); the far
+    side of one world plane is discarded and back faces seen through the cut
+    are painted as the cut face (the cap trick). Glass gets the ghost.
+    X-ray: `tc_xray.gdshader` (fresnel ghost, no cut). Solid: overrides
+    cleared, the panel's overlay tint as before. Temperature tint and an
+    element's glow are INSTANCE uniforms (`tint`, `glow`) in section / X-ray.
+  - Contents: a tube along each CV's centre line (gas: `tc_gas.gdshader`,
+    colour from what is not air, drifting the way the CV's outflow links
+    point; liquid: `tc_liquid.gdshader`, the same tube below its level);
+    the vessel's headspace gas and pool; the charge as a cylinder whose
+    back faces take the colour where the view ray crosses the cut plane
+    (`tc_bed.gdshader` reads an NR × NZ·domains texture of the cells:
+    wet, dry, pyrolysing, char, glow above ~420 °C) — the cut face is the
+    bed's real cross-section. Pooled particles: vapour off the charge,
+    bubbles in a boiling pool, the outlet plume, drips in the three volumes
+    condensing most (from the liquid's rise over lab time).
+  - Motion runs on the lab clock (stops when paused, sqrt of the speed).
+  - The modal hides its open-end markers in Process mode.
+- **Control** (Phase 5b, `TcProcControl`, the panel's Readings / Control
+  tabs on the right):
+  - Every design gets Home Assistant-shaped entities, prefixed by its
+    name as a slug (`biochar_reactor_condenser`):
+    - sensors: the charge (max / mean T, water left, char), the vessel
+      gas T and pressure, each element's T, every thermometer / gauge /
+      thermowell part, sight-glass and trap levels, cooling water out, gas
+      out, LHV, condensate, energy in, plus probes the player drops on the
+      selected volume (`process.sensors`);
+    - switches: each element, every element, valves, cooling, drains;
+    - numbers: element watts, cooling flow.
+  - `process.automations` are the inspector's WHEN / IF / THEN cards (the
+    shared `automation_card_editor.gd`, `auto_rebuild`) and run INSIDE the
+    model: `TcProcSim._run_automations` steps an `AutomationSim`
+    (rich_commands) every `AUTO_EVERY_S` 30 lab seconds on the lab clock
+    (absolute hours from `process.start_hour`, so a 9:00 rule fires an
+    hour into an 8:00 batch), reading only the entities the rules name.
+    Its state is in the keyframes (`AutomationSim.snapshot / restore`), so
+    a seek replays the same switches.
+  - A rule's untargeted switch action switches every element. Each action
+    is an event ("auto"); the list folds a run of them into one row.
+  - Switches / numbers by hand apply from now and cut the computed run
+    there. "Copy as Home Assistant YAML" (`TcProcControl.ha_yaml`) also
+    saves `user://tclab_designs/<slug>_automations.yaml`.
+  - Presets (`TcProcControl.templates`): hold the charge near 450 °C (off
+    at once above 450, on after a minute below 400 — a narrow band
+    switched every minute: the hottest point is next to an element), stop
+    when the gas stops, empty a trap at 80 %, more cooling water when it
+    runs hot.
+  - ⚠ `TcDesign.solve` is cached on the GEOMETRY key, which leaves the
+    process block out, so the cached design's own `spec` carried an OLDER
+    process: until 2026-11-06 Process-mode edits (watts, rules) never
+    reached the run. The modal's `_solve` returns a shallow copy carrying
+    the live spec.
+- **Molecule lens** (Phase 6, the view bar's "Molecules"):
+  - `scenes/ui/tclab_molecule_lens.gd` is a picture-in-picture over the
+    studio's top-right corner. It is a top-level PanelContainer on the
+    modal with its own SubViewport (own_world_3d), and is freed while
+    off.
+  - Contents, read off the selected volume:
+    - ~30 gas molecules sampled by mole fraction
+      (`TcMolecules.sample_counts`), flying at `display_speed` ∝ √(T/M),
+      bouncing elastically off the box and each other;
+    - the liquid, as a layer at the bottom;
+    - for the vessel, the charge: glucose units turning to carbon
+      hexagons as it chars, with water in the wood.
+  - The model's `react_rate` (drying, boiling, condensing, pyrolysis /
+    charring, cracking, burning) plays storyboards at a rate following
+    its own (log scale). The reactants' atoms move into the products,
+    matched by element, and the bonds stretch and re-form.
+  - `TcMolecules` (pure) holds layouts in Å, adding what TcSpecies leaves
+    out: levoglucosan's 10 H, the glucose unit, the char hexagon, CH2
+    chains. Every `STORY` balances atom for atom (selftest).
+  - Motion is on the lab clock (frozen while paused). It follows the
+    selected volume.
+- **Into the world** (Phase 7, "Use this run on the graph" under Readings):
+  - `TcProcSummary.fit` turns a finished run into a ProcessRecipe for the
+    flow engine's existing scrub-safe batch path, so the engine needs no
+    new code. The panel runs the whole batch first if needed.
+  - What the recipe carries:
+    - in: the charge, frontloaded;
+    - `watts`: the run's mean draw;
+    - out: biochar at the end, the cooling water through the batch, and
+      woodgas (dry Nm³), wood vinegar (L) and tar (kg), each over the
+      window it really came out;
+    - the phase changes as chore-less steps;
+    - `gas_lhv_mj_nm3` + `gas_composition` (dry).
+  - Outputs keep the bound node's PORT ORDER, so wires stay on their
+    handles. New kinds are appended.
+  - It lives on the design as `process.recipe` (`TcProcSpec`; editing it
+    does not restart the run, see `_same_run`).
+    `PlacedPropService._stamp_tc_recipe` writes it onto the node when a
+    reactor is placed, on Apply, and at once when the designer was
+    opened on a placed reactor (`write_recipe_to_bound` →
+    `apply_tclab_recipe`).
+  - Rules with time / sun triggers that switch the whole machine are
+    copied to `graph_automations` (ids `tc_…`). Rules reading lab
+    sensors stay in the lab and are listed in the note.
+  - New ResourceKinds `wood_vinegar` (L) and `tar` (kg). The Biochar
+    Reactor preset appends both outputs (indices 3, 4), and the reactor's
+    condensate drains carry `wood_vinegar`.
+  - `ResourceFlowEngine._fuel_wh_per_unit`: a generator's
+    `energy_wh_per_unit` scales by the wired gas's
+    `gas_lhv_mj_nm3` ÷ 5 MJ/Nm³ (the producer gas the preset assumed),
+    looking through one tank. The default batch fits 4.0 h at 1.2 kW:
+    2.8 kg char, 0.9 Nm³ at 7.4 MJ/Nm³, 2.2 L vinegar, 2.3 kg tar.
+- **Process units + the whole chain** (Phase 8, `TcUnits`, palette
+  category "Process units"): `gas_holder` (a water-sealed bell, `volume_l`,
+  `hold_kpa`), `dryer` (a column of silica gel or activated carbon),
+  `genset` (48 V DC, `rated_kw`, `efficiency`, one clamp inlet), `flare`.
+  Each part's circuit carries a `unit` dict through TcFlowPaths → the CV.
+  In `TcProcSim` (`_setup_units`, `_unit_step`, `units`):
+  - A bell between empty (`HOLDER_MIN` 4 %) and full has its row PINNED at
+    its weight's pressure in the implicit solve, and its volume follows its
+    gas after it (`_holder_volumes`, before and after the flow step). It
+    starts empty (air at the minimum volume). Full, it is a rigid tank; past
+    `SEAL_BLOW_PA` over its weight it blows off to air through its seal.
+  - A genset is a SINK in the pressure solve, never a post-step removal:
+    its intake is 0.6 L, so emptying it after the solve capped it at a few
+    mmol a step. Demand = rating ÷ efficiency ÷ the LHV of the gas it is
+    FED (the richest CV within `ENGINE_FEED_HOPS` up its line — a fresh
+    intake is full of air until the engine draws it through); it will not
+    fire under `ENGINE_MIN_LHV` (2.5 MJ/Nm³). If the demand would pull the
+    intake below 1 atm − `ENGINE_MIN_PA`, the row is pinned there and it
+    gets what comes. The draw is booked in the mixing sweep (burned_mol,
+    heat + latent to e_out); kW = draw × the mixed gas's LHV × efficiency.
+  - A dryer takes 85 % of the water vapour below 80 °C up to its sorbent's
+    capacity (`SORBENT_CAPACITY`, estimates); the latent stays in the gas.
+  - Engines start off (`proc.engines[pid].on`); `set_actuator("engine:<pid>")`.
+  - TcProcControl adds `<holder>_level` %, `<dryer>_saturation` %,
+    `<genset>_power` kW, `electricity` kWh, the genset switch, and the
+    preset "Run the genset from the gas holder" (on at 60 %, off at 15 %).
+  - Built-in `biochar_genset` ("Biochar reactor → genset", catalog
+    `tclab_biochar_genset`): the reactor's gas line down to `GAS_LINE_Y`,
+    300 L holder, silica dryer, 2.5 kW genset, the two rules (units are
+    stood upright with `_attach`'s `["@up", Vector3.UP]` want — scoring
+    ports alone laid them on their sides). Measured
+    (`tools/diag/tc_chain_probe.gd`): the bell fills to ~40–60 % and the
+    genset runs at ~2.4 kW for a few minutes a cycle, 0.44 kWh over 8 h —
+    the batch's ~0.9 Nm³ of gas × 22 %.
+  - Graph: `spec.part_binds` [[pid, "holder" | "genset" | preset label]]
+    (TcSpec keeps it). `PlacedPropService._seed_tc_units` makes one node
+    per bound part beside the main one (`TcDesign.unit_node`: a woodgas
+    tank of the bell's m³; a Woodgas DC Generator at the reference gas ×
+    efficiency Wh/m³ and its rating), all bound to the same prop, in a row,
+    wired in order by kind (`_wire_by_kind`); `graph_item_ids` on the
+    record. Deleting the prop removes them all. Not a compound (a grouped
+    compound only exposes ports for wires already crossing it).
+- **Scenarios** (Phase 9): each built-in carries its own process block
+  (`TcProcSpec.pot_still_default` / `kettle_default` / `plastic_default`).
+  - Pot still: 20 L of a 10 % wash on 2 kW boils at 92 °C (the Wilson VLE
+    bubble point) and makes ~2 kg of ~29 % ABV spirit in 3 h at the product
+    end; the first condenser runs hot and refluxes.
+  - Brew kettle: 40 L on 3 kW, boils at ~1.4 h and off through the lid vent
+    (a vent labelled with a gas kind counts as product, not vented).
+  - `plastic_retort` (no graph node, `binds` ""): 8 kg of PP pellets on the
+    reactor. Pellets MELT (`TcBed.MELT_K` PE 130 °C / PP 165 °C), then the
+    melt conducts at `K_MELT` and wets the element (`H_MELT`); it cracks into
+    light gas + ~5 kg of oil and wax in 8 h, no char.
+  - The filter train has no vessel: Process mode says so.
+- Stepper fixes that came with them (each a trap):
+  - **A plastic cell that cracks out has no char to hold its heat**: the
+    cracking heat drove it to −10⁶ K and NaN'd the run. Conversion is
+    limited to what the cell can pay above `MIN_REACT_K`, and `_cap` has a
+    `CAP_FLOOR` (5 J/K).
+  - **Condensers only condensed what stood in them between steps**; a 2 kW
+    boil passes through ten times a step and walked straight out.
+    `_condense_stream` condenses the stream in the mixing sweep (role
+    "condenser" CVs): what can stay vapour is set by the inerts,
+    n_s = n_inert · y_s / (1 − Σy), and the transfer coefficient rises as the
+    inert share falls (`K_MASS / x_inert`, ≤ 1 m/s): pure vapour condenses
+    as fast as the wall takes the heat. `H_COOLANT` 600 → 1200 W/m²·K.
+  - An outlet / product boundary lets the LIQUID that reaches it run out
+    (the distillate, counted in `drained_by`) — never from a vessel CV.
+  - Solid-feed kinds (`TcProcNet.FEED_KINDS`: biomass, plastic_waste,
+    plastic_flake) are closed feed ports; a crown labelled plastic_waste was
+    an open vent and the oil and wax left through the lid.
+  - Bed events are feed-aware (melt / cracking / "all the plastic has
+    cracked"); "burnable gas at the outlet" counts C3H6.
+- Tour stop `18l_tc_process` (the reactor pre-run, cut open at 2 h, the
+  molecule lens, the Control tab); modal audit entry `tc_process`; bench
+  `tools/bench/tc_proc_bench.gd` (per built-in: CVs, links, ms/step, the
+  pre-run time, section costs; 1 s steps; snapshot / seek).
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 

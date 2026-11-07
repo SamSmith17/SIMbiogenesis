@@ -27,6 +27,7 @@ const GLB_COLLARS := {
 }
 ## Where the replica departs from the model on purpose.
 const KNOWN := {
+	"element": "moved to the bottom: the user's real reactor has two bottom-entry elements (2026-11-06)",
 	"vapour": "raised 21 mm so the condenser's header clears the floor on standard + short fittings (the model's tee and elbows are more compact than the catalogue's)",
 }
 

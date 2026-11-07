@@ -144,6 +144,45 @@ static func world_offset(d: Dictionary) -> Vector3:
 
 
 ## The graph preset a design binds to ({} = none): ComponentPresets by label.
+## The graph node a bound process unit becomes (Phase 8): {node_type,
+## specs, width, height, label}. "holder" → a woodgas tank the size of the
+## bell; "genset" → the Woodgas DC Generator rated from the part (its Wh per
+## m³ is the 5 MJ/Nm³ reference gas times its efficiency; the engine scales
+## it by the gas it is actually fed).
+static func unit_node(d: Dictionary, pid: String, label: String) -> Dictionary:
+	var pd: Dictionary = ((d.get("res", {}) as Dictionary).get("parts", {}) as Dictionary).get(pid, {})
+	if pd.is_empty():
+		return {}
+	var b: Dictionary = pd["built"]
+	var p: Dictionary = b.get("params", {})
+	match label:
+		"holder":
+			var cap := float(p.get("volume_l", 300.0)) * 0.001
+			return {"node_type": "resource", "width": 90.0, "height": 100.0, "label": str(b.get("label", "Gas holder")),
+				"specs": {"name": str(b.get("label", "Gas holder")), "resource_kind": "woodgas",
+					"capacity_qty": cap, "capacity_unit": "m³", "level": 0.0, "tc_part": pid}}
+		"genset":
+			var preset := ComponentPresets.find_preset_by_label("Woodgas DC Generator")
+			var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+			var kw := float(p.get("rated_kw", 2.5))
+			var wh := 5.0 / 3.6 * 1000.0 * float(p.get("efficiency", 0.22))
+			specs["name"] = str(b.get("label", "Gas genset"))
+			specs["energy_wh_per_unit"] = wh
+			specs["efficiency"] = 1.0
+			specs["inputs"] = [{"kind": "woodgas", "rate": kw * 1000.0 / wh, "unit": "m³/h"}]
+			specs["outputs"] = [{"kind": "dc_electricity", "rate": kw, "unit": "kW"}]
+			specs["tc_part"] = pid
+			return {"node_type": str(preset.get("type", "processor")), "width": float(preset.get("width", 150.0)),
+				"height": float(preset.get("height", 140.0)), "label": str(preset.get("label", "")), "specs": specs}
+	var pr := ComponentPresets.find_preset_by_label(label)
+	if pr.is_empty():
+		return {}
+	var sp: Dictionary = (pr.get("specs", {}) as Dictionary).duplicate(true)
+	sp["tc_part"] = pid
+	return {"node_type": str(pr.get("type", "processor")), "width": float(pr.get("width", 150.0)),
+		"height": float(pr.get("height", 140.0)), "label": str(pr.get("label", "")), "specs": sp}
+
+
 static func bound_preset(spec: Dictionary) -> Dictionary:
 	var lab := str(spec.get("binds", ""))
 	if lab.is_empty():

@@ -47,10 +47,10 @@ extends RefCounted
 ## vaporization (h_fg = 2257 kJ/kg — steam tables at 100 C / 1 atm).
 
 const SOLAR_CONSTANT := 1361.0
-const CP_WATER_KJ_PER_KG_K := 4.186
-const H_FG_KJ_PER_KG := 2257.0
-const BOILING_POINT_C := 100.0
-const WATER_DENSITY_KG_PER_L := 1.0
+const CP_WATER_KJ_PER_KG_K := WaterSteam.CP_WATER_KJ_PER_KG_K
+const H_FG_KJ_PER_KG := WaterSteam.H_FG_KJ_PER_KG
+const BOILING_POINT_C := WaterSteam.BOILING_POINT_C
+const WATER_DENSITY_KG_PER_L := WaterSteam.WATER_DENSITY_KG_PER_L
 
 ## World-space pivot axis of the single-axis tracker: east (with -Z = north,
 ## this makes the trough's long axis run east-west). Shared with
@@ -177,9 +177,7 @@ static func simulate(specs: Dictionary, sun_az_deg: float, sun_el_deg: float,
 	var effective_area := aperture_w * module_len * (1.0 - loss_frac)
 	var thermal_kw := maxf(dni * cos_inc * effective_area * opt_eff * therm_eff / 1000.0, 0.0)
 
-	var energy_per_kg := CP_WATER_KJ_PER_KG_K * (BOILING_POINT_C - feedwater_c) + H_FG_KJ_PER_KG
-	var mass_flow_kg_s := thermal_kw / maxf(energy_per_kg, 1.0)
-	var steam_kg_h := mass_flow_kg_s * 3600.0
+	var steam_kg_h := WaterSteam.steam_kg_h(thermal_kw, feedwater_c)
 	var water_lph := steam_kg_h / WATER_DENSITY_KG_PER_L
 
 	return {

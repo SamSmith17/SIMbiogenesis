@@ -161,6 +161,26 @@ const BUILTIN: Dictionary = {
 		"flow_ref_rate": 6.0,
 		"aliases": ["syngas"],
 	},
+	"wood_vinegar": {
+		# Pyroligneous acid: the watery condensate of wood pyrolysis (water,
+		# acetic acid, methanol, a little tar). The TC Process Lab's summary
+		# of a reactor run (TcProcSummary) makes it.
+		"display": "Wood Vinegar",
+		"color": Color(0.780, 0.560, 0.260, 1.0),
+		"unit": "L",
+		"abbrev": "WV",
+		"flow_ref_rate": 1.0,
+		"aliases": ["pyroligneous_acid", "condensate"],
+	},
+	"tar": {
+		# Pyrolysis tar / bio-oil, the heavy condensate (TcProcSummary).
+		"display": "Tar / Bio-oil",
+		"color": Color(0.240, 0.140, 0.070, 1.0),
+		"unit": "kg",
+		"abbrev": "T",
+		"flow_ref_rate": 0.5,
+		"aliases": ["bio_oil", "pyrolysis_oil"],
+	},
 	"food": {
 		"display": "Food",
 		"color": Color(0.063, 0.722, 0.506, 1.0),

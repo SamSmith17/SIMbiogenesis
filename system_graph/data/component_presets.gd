@@ -394,6 +394,11 @@ const PROCESSORS: Array = [
 				{"kind": "biochar", "rate": 2.5, "unit": "kg/h"},
 				{"kind": "hot_water", "rate": 30.0, "unit": "L/h"},
 				{"kind": "woodgas", "rate": 4.0, "unit": "m³/h"},
+				# The condensers' drains (appended: the first three keep
+				# their handles). A lab run's summary (TC Process Lab: Use
+				# this run on the graph) replaces these rates with a batch.
+				{"kind": "wood_vinegar", "rate": 0.5, "unit": "L/h"},
+				{"kind": "tar", "rate": 0.15, "unit": "kg/h"},
 			],
 			# The tri-clamp designer's reactor (TcPresets.biochar_reactor):
 			# its feed, woodgas and warm cooling-water ends are this node's

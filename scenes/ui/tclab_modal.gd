@@ -21,6 +21,7 @@ const UNDO_LIMIT := 80
 const SNAP_PX := 48.0
 const DRAG_PX := 6.0
 const MM := 0.001
+const ProcessPanel := preload("res://scenes/ui/tclab_process_panel.gd")
 
 var _active := false
 var _spec: Dictionary = {}
@@ -63,6 +64,11 @@ var _place_btn: Button
 var _apply_btn: Button
 var _binds_row: FormRow
 var _world_note: Label
+var _design_left: VBoxContainer
+var _design_right: VBoxContainer
+var _proc: Node = null                # the Process mode (tclab_process_panel.gd)
+var _proc_mode := false
+var _mode_btns := {}
 
 
 func _ready() -> void:
@@ -98,6 +104,8 @@ func open(opts: Dictionary = {}) -> void:
 	_sel = {}
 	_drag = {}
 	_library = TcPresets.load_library()
+	if _proc_mode:
+		set_run_mode(false)
 	_active = true
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -114,6 +122,8 @@ func open(opts: Dictionary = {}) -> void:
 func close() -> void:
 	if not _active:
 		return
+	if _proc_mode:
+		set_run_mode(false)
 	_active = false
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -183,6 +193,52 @@ func part_pos(id: String) -> Vector2:
 	return studio_pos_of((pd["xf"] as Transform3D) * (bb.position + bb.size * 0.5))
 
 
+func builder() -> TcBuilder:
+	return _builder
+
+
+func process_panel() -> Node:
+	return _proc
+
+
+func is_process_mode() -> bool:
+	return _proc_mode
+
+
+## Design mode (build the assembly) or Process mode (run it).
+func set_run_mode(on: bool) -> void:
+	if on == _proc_mode:
+		return
+	_proc_mode = on
+	_disarm()
+	_drag = {}
+	_press = {}
+	_design_left.visible = not on
+	_design_right.visible = not on
+	_markers.visible = not on   # the open-end markers are for building
+	for k in _mode_btns.keys():
+		(_mode_btns[k] as Button).set_pressed_no_signal((str(k) == "process") == on)
+	if on:
+		_sel = {}
+		_rebuild_studio()
+		_proc.call("enter", _design)
+		_shell.set_mode("Process")
+		_shell.set_hint("Play runs the process · click a part to see what is in it · drag the chart to scrub · Space: play / pause")
+	else:
+		_proc.call("exit")
+		_shell.set_mode("")
+		_shell.set_hint("Pick a part, click an open end · Tab: next end · R: roll · drag a part to move it · Del removes")
+		_rebuild_studio()
+	_shell.scroll_top()
+
+
+## A new process block from the Process mode (undoable).
+func set_process_block(p: Dictionary) -> void:
+	var s := _spec.duplicate(true)
+	s["process"] = p
+	_set_spec(s)
+
+
 func load_builtin(id: String) -> void:
 	var s := TcPresets.builtin(id)
 	if s.is_empty():
@@ -217,6 +273,10 @@ func _build_ui() -> void:
 	_build_left()
 	_build_centre()
 	_build_right()
+	_proc = ProcessPanel.new()
+	_proc.name = "Process"
+	add_child(_proc)
+	_proc.call("setup", self, _shell.left, _shell.right, _shell.centre)
 	_shell.add_button("Export files", DesignerShell.SECONDARY, _on_export,
 		"Write a GLB, an STL (mm), the bill of materials (CSV) and the design (JSON)")
 	_apply_btn = _shell.add_button("Apply to placed assembly", DesignerShell.SECONDARY, _on_apply,
@@ -230,7 +290,11 @@ func _build_ui() -> void:
 
 
 func _build_left() -> void:
-	var box := _shell.left
+	_design_left = VBoxContainer.new()
+	_design_left.name = "design_left"
+	_design_left.add_theme_constant_override("separation", 4)
+	_shell.left.add_child(_design_left)
+	var box := _design_left
 	box.add_child(SectionHeader.make("Clamp size", "ruler"))
 	var flow := HFlowContainer.new()
 	flow.add_theme_constant_override("h_separation", 3)
@@ -308,6 +372,17 @@ func _build_centre() -> void:
 	_markers = Node3D.new()
 	_markers.name = "Ports"
 	_studio.holder.add_child(_markers)
+	for m in [["design", "Design", "Build the assembly"], ["process", "Process", "Run it: heat, boil, react, condense — watch what happens inside"]]:
+		var mb := Button.new()
+		mb.name = "mode_%s" % str(m[0])
+		mb.text = str(m[1])
+		mb.toggle_mode = true
+		mb.button_pressed = str(m[0]) == "design"
+		mb.tooltip_text = str(m[2])
+		UITheme.style_button(mb)
+		mb.pressed.connect(func() -> void: set_run_mode(str(m[0]) == "process"))
+		_studio.strip.add_child(mb)
+		_mode_btns[str(m[0])] = mb
 	var cut := CheckBox.new()
 	cut.name = "cutaway"
 	cut.text = "Cutaway"
@@ -332,7 +407,11 @@ func _build_centre() -> void:
 
 
 func _build_right() -> void:
-	var box := _shell.right
+	_design_right = VBoxContainer.new()
+	_design_right.name = "design_right"
+	_design_right.add_theme_constant_override("separation", 4)
+	_shell.right.add_child(_design_right)
+	var box := _design_right
 	_card = VBoxContainer.new()
 	_card.name = "card"
 	_card.add_theme_constant_override("separation", 4)
@@ -381,13 +460,25 @@ func _set_spec(s: Dictionary, push: bool = true) -> void:
 	if push:
 		_push_undo()
 	_spec = TcSpec.resolve(s)
-	_design = TcDesign.solve(_spec)
+	_design = _solve(_spec)
 	if _shell.name_edit != null and _shell.name_edit.text != str(_spec["name"]):
 		_shell.name_edit.text = str(_spec["name"])
 	if not _sel.is_empty() and not _sel_exists():
 		_sel = {}
 	_rebuild_studio()
 	_refresh_right()
+	if _proc_mode and _proc != null:
+		_proc.call("design_changed", _design)
+
+
+## The solved design carrying THIS spec. TcDesign.solve is cached on the
+## geometry key, which leaves the process block out, so the cached design's
+## own spec can carry an older process (a watts edit, a rule) — the Process
+## mode reads the run from design["spec"]. A shallow copy with the live spec.
+func _solve(s: Dictionary) -> Dictionary:
+	var d := TcDesign.solve(s).duplicate()
+	d["spec"] = s
+	return d
 
 
 func _sel_exists() -> bool:
@@ -572,6 +663,8 @@ func _update_mode() -> void:
 # ---------------------------------------------------------------------------
 
 func _studio_input(e: InputEvent) -> bool:
+	if _proc_mode:
+		return false   # orbit and click only while the process runs
 	if e is InputEventMouseMotion:
 		var mm := e as InputEventMouseMotion
 		_hover_pos = mm.position
@@ -674,6 +767,10 @@ func _update_nozzle_drag(pos: Vector2) -> void:
 
 
 func _on_studio_click(pos: Vector2, button: int) -> void:
+	if _proc_mode:
+		if button == MOUSE_BUTTON_LEFT:
+			_proc.call("on_click", _pick(pos))
+		return
 	if button != MOUSE_BUTTON_LEFT:
 		if button == MOUSE_BUTTON_RIGHT and not _tool.is_empty():
 			_disarm()
@@ -1560,6 +1657,17 @@ func _input(e: InputEvent) -> void:
 	if focus is LineEdit or focus is TextEdit or focus is SpinBox:
 		return
 	var handled := true
+	if _proc_mode:
+		match ke.keycode:
+			KEY_SPACE:
+				_proc.call("play", not bool(_proc.get("playing")))
+			KEY_F:
+				_frame()
+			_:
+				handled = false
+		if handled:
+			get_viewport().set_input_as_handled()
+		return
 	match ke.keycode:
 		KEY_Z:
 			if ke.ctrl_pressed and ke.shift_pressed:
@@ -1607,7 +1715,7 @@ func _input(e: InputEvent) -> void:
 			if not _drag.is_empty():
 				_drag = {}
 				_press = {}
-				_design = TcDesign.solve(_spec)
+				_design = _solve(_spec)
 				_rebuild_studio()
 			elif not _tool.is_empty():
 				_disarm()
@@ -1719,7 +1827,19 @@ func _on_apply() -> void:
 	PlacedPropService.update_prop_record(m, _bound_prop_id, {"tc_spec": _spec.duplicate(true),
 		"model_id": TcBuilder.MODEL_ID}, true)
 	PlacedPropService.seed_tclab(m, _bound_prop_id)
+	PlacedPropService.apply_tclab_recipe(m, _bound_prop_id)
 	close()
+
+
+## The design's lab-run recipe onto the placed assembly this designer was
+## opened on (its tc_spec and its graph node), without rebuilding it.
+## Returns the node's name, "" when not bound / no node.
+func write_recipe_to_bound() -> String:
+	var m := _main_node()
+	if m == null or _bound_prop_id.is_empty():
+		return ""
+	PlacedPropService.update_prop_record(m, _bound_prop_id, {"tc_spec": _spec.duplicate(true)}, false)
+	return PlacedPropService.apply_tclab_recipe(m, _bound_prop_id)
 
 
 func _on_export() -> void:

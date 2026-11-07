@@ -14,6 +14,10 @@ signal automation_completed(automation_id: String, success: bool)
 ## Emitted when automations are exported
 signal automations_exported(file_path: String)
 
+## A set_value action ran: `entity_id` now holds `value`. Whatever owns that
+## number (a process lab's actuator, a graph spec) listens and applies it.
+signal value_set(entity_id: String, value: float)
+
 # ==================== CONFIGURATION ====================
 
 ## How often to evaluate automations (in seconds, 0 = every frame)
@@ -35,6 +39,10 @@ var _context : Dictionary = {}
 
 ## Reference to main scene (for time data)
 var _main_node : Node = null
+
+## entity_id -> float, the last value each set_value action wrote. Visible
+## to numeric triggers / conditions under the same entity id.
+var _set_values : Dictionary = {}
 
 ## The sim clock (absolute hours) at the previous evaluation: time and sun
 ## triggers fire when their clock time is CROSSED between two evaluations,
@@ -181,6 +189,11 @@ func _update_context() -> void:
 		for k in (gctx.get("device_states", {}) as Dictionary):
 			device_states[k] = gctx["device_states"][k]
 
+	# Values set by set_value actions (the sim's own, so before HA's).
+	for k in _set_values:
+		if not numeric_values.has(k):
+			numeric_values[k] = float(_set_values[k])
+
 	# Real Home Assistant states of every entity the game follows (Live links
 	# and the other subscribers), keyed by entity id, so a "Custom (HA
 	# entity…)" trigger has something to compare. The simulation's own keys
@@ -196,6 +209,26 @@ func _update_context() -> void:
 				device_states[eid] = raw
 			if raw.is_valid_float() and not numeric_values.has(eid):
 				numeric_values[eid] = raw.to_float()
+
+## A set_value action: remember the value, tell listeners, and for a real
+## number. / input_number. entity ask Home Assistant to set it too
+## (HomeAssistant.call_service is gated by SimMode: only in LIVE play).
+func set_entity_value(entity_id: String, value: float) -> void:
+	if entity_id.is_empty():
+		return
+	_set_values[entity_id] = value
+	value_set.emit(entity_id, value)
+	if entity_id.begins_with("number.") or entity_id.begins_with("input_number."):
+		var tree := get_tree()
+		var ha : Node = tree.root.get_node_or_null("HomeAssistant") if tree != null else null
+		if ha != null and ha.has_method("call_service"):
+			ha.call("call_service", entity_id.get_slice(".", 0), "set_value", entity_id, {"value": value})
+
+
+## The last value a set_value action wrote to `entity_id` (NAN = never).
+func get_entity_value(entity_id: String) -> float:
+	return float(_set_values.get(entity_id, NAN))
+
 
 func _find_main_node() -> Node:
 	var tree := get_tree()

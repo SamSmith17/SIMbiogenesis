@@ -28,6 +28,7 @@ const CATEGORIES := [
 	["columns", "Condensers & columns", "layers"],
 	["filters", "Filters & strainers", "droplet"],
 	["brewing", "Brewing & process", "flame"],
+	["process", "Process units", "zap"],
 ]
 
 ## type → {label, category, short (palette text), sizes ("tc" = the TC
@@ -109,6 +110,14 @@ const TYPES := {
 		"why": "A cleaning spray ball through a top port."},
 	"heating_element": {"label": "Heating element", "category": "brewing", "designation": "Clamp immersion heating element",
 		"why": "An immersion element on a clamp face; its loops reach into the vessel."},
+	"gas_holder":   {"label": "Gas holder", "category": "process", "designation": "Water-sealed bell gas holder",
+		"why": "Stores the gas at a low, steady pressure: the bell rises as gas comes in. Its level tells a genset when to run."},
+	"dryer":        {"label": "Gas dryer", "category": "process", "designation": "Packed desiccant drying column",
+		"why": "Silica gel (or activated carbon) takes the water vapour out of the gas until it is spent."},
+	"genset":       {"label": "Gas genset (48 V DC)", "category": "process", "designation": "Gas engine generator, 48 V DC",
+		"why": "Burns the gas and charges a battery: its power is the gas's heating value times its efficiency."},
+	"flare":        {"label": "Flare", "category": "process", "designation": "Flare stack with flame arrestor",
+		"why": "Burns off gas nobody can use, so it is not vented raw."},
 }
 
 const TYPE_ORDER := ["vessel", "spool", "elbow90", "elbow45", "bend", "tee", "reducing_tee", "cross", "lateral",
@@ -116,7 +125,7 @@ const TYPE_ORDER := ["vessel", "spool", "elbow90", "elbow45", "bend", "tee", "re
 	"butterfly", "ball_valve", "ball_valve_3way", "check_valve", "diaphragm_valve", "relief_valve",
 	"actuator_pneumatic", "actuator_electric", "sight_glass", "thermometer", "gauge", "thermowell",
 	"dephlegmator", "column", "bubble_plate", "inline_strainer", "y_strainer", "cartridge_housing",
-	"strainer_basket", "funnel", "spray_ball", "heating_element"]
+	"strainer_basket", "funnel", "spray_ball", "heating_element", "gas_holder", "dryer", "genset", "flare"]
 
 const MOUNTS := [["tc", "Clamp cap"], ["npt", "Male NPT"]]
 const PACKINGS := [["copper_mesh", "Copper mesh"], ["raschig", "Ceramic rings"], ["none", "None"]]
@@ -169,6 +178,18 @@ static func param_specs(type: String) -> Array:
 			return [_fl("rim_mm", "Rim diameter", 60.0, 1200.0, 5.0), _fl("height_mm", "Height", 30.0, 1000.0, 5.0)]
 		"heating_element":
 			return [_fl("length_mm", "Reach", 60.0, 1000.0, 5.0, "How far the loops reach into the vessel")]
+		"gas_holder":
+			return [{"key": "volume_l", "label": "Capacity", "kind": "float", "unit": "L", "min": 20.0, "max": 20000.0, "step": 10.0},
+				{"key": "hold_kpa", "label": "Holds at", "kind": "float", "unit": "kPa", "min": 0.1, "max": 10.0, "step": 0.1,
+					"tip": "The bell's weight: the gauge pressure it keeps the gas at"}]
+		"dryer":
+			return [_fl("length_mm", "Length", 150.0, 2000.0, 5.0), {"key": "packing", "label": "Packing", "kind": "choice", "options": TcUnits.PACKINGS}]
+		"genset":
+			return [{"key": "rated_kw", "label": "Rating", "kind": "float", "unit": "kW", "min": 0.3, "max": 30.0, "step": 0.1},
+				{"key": "efficiency", "label": "Efficiency", "kind": "float", "unit": "", "min": 0.05, "max": 0.45, "step": 0.01,
+					"tip": "Gas heating value to DC electricity (small gas engines 18–28 %)"}]
+		"flare":
+			return [_fl("height_mm", "Stack height", 300.0, 4000.0, 10.0)]
 		"spool":
 			return [{"key": "length_mm", "label": "Length", "kind": "float", "unit": "mm", "min": 20.0, "max": 3000.0, "step": 1.0,
 					"tip": "Face to face"},
@@ -226,6 +247,14 @@ static func default_params(type: String, size: String) -> Dictionary:
 			return {"rim_mm": 300.0, "height_mm": 200.0}
 		"heating_element":
 			return {"length_mm": 300.0}
+		"gas_holder":
+			return {"volume_l": 300.0, "hold_kpa": 0.8}
+		"dryer":
+			return {"length_mm": 450.0, "packing": "silica"}
+		"genset":
+			return {"rated_kw": 2.5, "efficiency": 0.22}
+		"flare":
+			return {"height_mm": 1500.0}
 		"spool":
 			return {"length_mm": 152.4, "fit": false}
 		"bend":
@@ -297,6 +326,18 @@ static func resolve_params(type: String, size: String, params: Dictionary) -> Di
 			p["length_mm"] = clampf(float(p["length_mm"]), 60.0, 3000.0)
 			if not str(p["packing"]) in ["copper_mesh", "raschig", "none"]:
 				p["packing"] = "none"
+		"gas_holder":
+			p["volume_l"] = clampf(float(p["volume_l"]), 20.0, 20000.0)
+			p["hold_kpa"] = clampf(float(p["hold_kpa"]), 0.1, 10.0)
+		"dryer":
+			p["length_mm"] = clampf(float(p["length_mm"]), 150.0, 2000.0)
+			if not str(p["packing"]) in ["silica", "carbon"]:
+				p["packing"] = "silica"
+		"genset":
+			p["rated_kw"] = clampf(float(p["rated_kw"]), 0.3, 30.0)
+			p["efficiency"] = clampf(float(p["efficiency"]), 0.05, 0.45)
+		"flare":
+			p["height_mm"] = clampf(float(p["height_mm"]), 300.0, 4000.0)
 	for k in p:
 		if p[k] is float and str(k).ends_with("_mm"):
 			p[k] = maxf(float(p[k]), 1.0)
@@ -343,6 +384,12 @@ static func part_name(type: String, size: String, params: Dictionary) -> String:
 			return "%s %s %d mm" % [s, label_of(type).to_lower(), roundi(float(params.get("length_mm", 0.0)))]
 		"actuator_pneumatic", "actuator_electric":
 			return "%s (for %s valves)" % [label_of(type), s]
+		"gas_holder":
+			return "%d L gas holder" % roundi(float(params.get("volume_l", 0.0)))
+		"dryer":
+			return "%s %s dryer %d mm" % [s, "silica gel" if str(params.get("packing", "")) == "silica" else "carbon", roundi(float(params.get("length_mm", 0.0)))]
+		"genset":
+			return "%.1f kW gas genset (48 V DC)" % float(params.get("rated_kw", 0.0))
 	return "%s %s" % [s, label_of(type).to_lower()]
 
 
@@ -487,6 +534,10 @@ static func build(type: String, size: String, params: Dictionary = {}) -> Dictio
 		"funnel": r = TcSpecialty.funnel(g, size, float(p["rim_mm"]), float(p["height_mm"]))
 		"spray_ball": r = TcSpecialty.spray_ball(g, size)
 		"heating_element": r = TcSpecialty.heating_element(g, size, float(p["length_mm"]))
+		"gas_holder": r = TcUnits.gas_holder(g, size, float(p["volume_l"]), float(p["hold_kpa"]))
+		"dryer": r = TcUnits.dryer(g, size, float(p["length_mm"]), str(p["packing"]))
+		"genset": r = TcUnits.genset(g, size, float(p["rated_kw"]), float(p["efficiency"]))
+		"flare": r = TcUnits.flare(g, size, float(p["height_mm"]))
 		_:
 			r = _cap(g, size, "")
 	r["geo"] = g

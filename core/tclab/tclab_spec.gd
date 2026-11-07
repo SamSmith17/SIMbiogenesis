@@ -11,7 +11,9 @@ extends RefCounted
 ##    "joints": [{"a": "p1:b", "b": "p2:a", "roll_deg": 0.0,
 ##                "gasket": "epdm", "clamp": "single_pin"}],
 ##    "labels": {"p3:c": {"text": "Steam in", "kind": "steam"}},
-##    "binds": "Biochar Reactor"}   (a graph preset label, "" = none)
+##    "binds": "Biochar Reactor",   (a graph preset label, "" = none)
+##    "process": {...}}             (TcProcSpec: how the TC Process Lab runs
+##                                   it; optional, never part of key_of)
 ##
 ## Only one part per connected group carries `xf` (its root); the others
 ## hang off joints, so moving a root carries everything attached. Mm
@@ -42,6 +44,13 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	out["design_bar"] = maxf(float(spec.get("design_bar", 0.0)), 0.0)
 	out["design_c"] = float(spec.get("design_c", 0.0))
 	out["binds"] = str(spec.get("binds", ""))
+	# Process units that get their own graph node beside `binds`' (a gas
+	# holder → a woodgas tank, a genset → a generator), in flow order.
+	var pb: Array = []
+	for e in spec.get("part_binds", []):
+		if e is Array and (e as Array).size() >= 2:
+			pb.append([str(e[0]), str(e[1])])
+	out["part_binds"] = pb
 	var ids := {}
 	var parts: Array = []
 	for raw in spec.get("parts", []):
@@ -98,6 +107,8 @@ static func resolve(spec: Dictionary) -> Dictionary:
 			if refs.has(str(k)) and raw_l[k] is Dictionary:
 				labels[str(k)] = {"text": str(raw_l[k].get("text", "")), "kind": str(raw_l[k].get("kind", ""))}
 	out["labels"] = labels
+	if spec.has("process"):
+		out["process"] = TcProcSpec.resolve(spec["process"])
 	return out
 
 
@@ -146,7 +157,13 @@ static func xf_from_array(a: Array) -> Transform3D:
 		Vector3(a[9], a[10], a[11]))
 
 
+## The GEOMETRY key: everything but the process block, so changing a
+## charge or an automation never re-solves the assembly.
 static func key_of(spec: Dictionary) -> String:
+	if spec.has("process"):
+		var g := spec.duplicate()
+		g.erase("process")
+		return JSON.stringify(_round(g))
 	return JSON.stringify(_round(spec))
 
 

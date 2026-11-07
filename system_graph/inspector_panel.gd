@@ -17,6 +17,7 @@ const C_TEXT_M  := UITheme.C_TEXT_M
 const C_AMBER   := UITheme.C_AMBER
 
 const _HA_PUSHER         := preload("res://system_graph/ha_automation_pusher.gd")
+const _AUTO_CARD_EDITOR  := preload("res://scenes/ui/automation_card_editor.gd")
 const _CALIBRATOR_SCRIPT := preload("res://system_graph/load_calibrator.gd")
 const _CAL_GRAPH_SCRIPT  := preload("res://system_graph/calibration_graph.gd")
 const _EDU_CARDS_SCRIPT  := preload("res://system_graph/graph_education_cards.gd")
@@ -1746,19 +1747,65 @@ func _build_load_automation_section(item: Dictionary) -> void:
 	# after inspecting (and after loading a saved game).
 	_sync_engine_from_specs(item, autos)
 
-	if autos.is_empty():
-		_hint_label("No automations yet. Pick a preset below, or build a custom WHEN → THEN rule.")
-	else:
-		for i in range(autos.size()):
-			_build_auto_card(item, i)
-
-	_build_auto_add_footer(item)
+	# The WHEN / IF / THEN cards (scenes/ui/automation_card_editor.gd, shared
+	# with the designers). Edits commit through _commit_autos; a layout change
+	# rebuilds the whole form, which makes a fresh editor from the model.
+	var ed: VBoxContainer = _AUTO_CARD_EDITOR.new()
+	ed.set("expanded", _auto_expanded)
+	ed.set("id_factory", _generate_auto_id)
+	ed.connect("automations_changed", _commit_autos)
+	ed.connect("rebuild_requested", _rebuild_current_item)
+	ed.connect("automation_removed", _on_auto_removed)
+	ed.connect("push_requested", _on_push_auto_pressed)
+	ed.connect("ab_requested", _on_auto_ab_requested)
+	ed.connect("message", _toast)
+	ed.call("setup", _get_autos(), _automation_provider())
+	_form_vbox.add_child(ed)
 
 	# Optional HA export / entity mapping - secondary, not required for gameplay.
 	if _advanced_section("auto_ha", "Advanced · Home Assistant link",
 			"Optional - map this load to an HA entity and push rules for LIVE mode"):
 		_hint_label("Only needed when mirroring this load to a real Home Assistant entity. Simulation automations work without it.")
 		_build_ha_entity_row(item)
+
+
+## What the inspector's automation cards can read and drive: the global
+## sensors, this load's upstream / downstream neighbours, and (set_value) the
+## load's own number entity when its HA link is one.
+func _automation_provider() -> Dictionary:
+	return {
+		"numeric": _numeric_signal_options,
+		"states": _state_entity_options,
+		"state_values": _state_value_options,
+		"settable": _settable_value_options,
+		"action_kinds": ["scene_node", "delay", "set_value"],
+		"action_labels": {"scene_node": "Turn this load on/off/toggle"},
+		"templates": _TEMPLATES,
+	}
+
+
+## set_value targets offered in the THEN menu (the editor adds "Custom").
+func _settable_value_options() -> Array:
+	var opts: Array = []
+	var it := _model.get_item(_item_id) if _model != null else {}
+	var eid := str((it.get("specs", {}) as Dictionary).get("ha_entity_id", "")).strip_edges()
+	if eid.begins_with("number.") or eid.begins_with("input_number."):
+		opts.append({"label": "This load: %s" % eid, "key": eid})
+	return opts
+
+
+func _on_auto_removed(auto_id: String) -> void:
+	var eng := _get_automation_engine()
+	if eng != null and eng.has_method("unregister_automation"):
+		eng.call("unregister_automation", auto_id)
+
+
+## A / B: this world against a fork of it without this automation, over the
+## next week (Main.ab_test_automation → ⧉ Compare, A vs B).
+func _on_auto_ab_requested(auto_id: String) -> void:
+	var main := get_tree().current_scene if get_tree() != null else null
+	if main != null and main.has_method("ab_test_automation"):
+		main.call("ab_test_automation", _item_id, auto_id)
 
 
 ## HA entity_id field (per load). Applied to every scene-node action on export.
@@ -1794,396 +1841,6 @@ func _build_ha_entity_row(item: Dictionary) -> void:
 	row.add_child(ed)
 
 	_form_vbox.add_child(_wrap_margin(row, 12, 4))
-
-
-## One automation "card": header row (enabled toggle, alias summary, trigger
-## summary, expand, delete) plus an expanded editor below. HA push lives in
-## the Advanced submenu so the default card stays sim-focused.
-func _build_auto_card(item: Dictionary, index: int) -> void:
-	var autos: Array = _get_autos()
-	if index < 0 or index >= autos.size():
-		return
-	var aut: Dictionary = autos[index] as Dictionary
-	var auto_id: String = str(aut.get("id", ""))
-
-	var card_pc := PanelContainer.new()
-	var card_sb := StyleBoxFlat.new()
-	card_sb.bg_color = Color(C_PANEL.r * 0.75, C_PANEL.g * 0.75, C_PANEL.b * 0.75, 1.0)
-	card_sb.set_corner_radius_all(3)
-	card_sb.set_border_width_all(1)
-	card_sb.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.6)
-	card_sb.content_margin_left = 6.0
-	card_sb.content_margin_right = 6.0
-	card_sb.content_margin_top = 4.0
-	card_sb.content_margin_bottom = 4.0
-	card_pc.add_theme_stylebox_override("panel", card_sb)
-	card_pc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var card_vbox := VBoxContainer.new()
-	card_vbox.add_theme_constant_override("separation", 2)
-	card_pc.add_child(card_vbox)
-
-	# ---- Header row -----------------------------------------------------
-	var hdr := HBoxContainer.new()
-	hdr.add_theme_constant_override("separation", 4)
-	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card_vbox.add_child(hdr)
-
-	var enabled_cb := CheckBox.new()
-	enabled_cb.button_pressed = bool(aut.get("enabled", true))
-	enabled_cb.focus_mode = Control.FOCUS_NONE
-	enabled_cb.tooltip_text = "Enable / disable this automation"
-	enabled_cb.toggled.connect(func(on: bool) -> void:
-		_auto_patch_field(index, ["enabled"], on)
-	)
-	hdr.add_child(enabled_cb)
-
-	var expanded: bool = bool(_auto_expanded.get(auto_id, false))
-	var expand_btn := Button.new()
-	IconButton.style(expand_btn, "chevron-down" if expanded else "chevron-right",
-			"Collapse" if expanded else "Expand")
-	expand_btn.pressed.connect(func() -> void:
-		_auto_expanded[auto_id] = not expanded
-		_rebuild_current_item()
-	)
-	hdr.add_child(expand_btn)
-
-	var alias_lbl := Label.new()
-	alias_lbl.text = str(aut.get("alias", "Automation"))
-	alias_lbl.clip_text = true
-	alias_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	alias_lbl.add_theme_color_override("font_color", C_TEXT)
-	alias_lbl.add_theme_font_size_override("font_size", 11)
-	alias_lbl.tooltip_text = _summarize_auto(aut)
-	hdr.add_child(alias_lbl)
-
-	# A / B: this world against a fork of it without this automation, over
-	# the next week (Main.ab_test_automation → ⧉ Compare, A vs B).
-	var ab_btn := Button.new()
-	IconButton.style(ab_btn, "chart-column", "A/B this automation — simulate the next week with and without it")
-	ab_btn.pressed.connect(func() -> void:
-		var main := get_tree().current_scene if get_tree() != null else null
-		if main != null and main.has_method("ab_test_automation"):
-			main.call("ab_test_automation", _item_id, auto_id))
-	hdr.add_child(ab_btn)
-
-	var del_btn := Button.new()
-	IconButton.style(del_btn, "trash-2", "Delete automation")
-	del_btn.pressed.connect(_on_auto_delete.bind(index))
-	hdr.add_child(del_btn)
-
-	# ---- One-line summary (when collapsed) ------------------------------
-	if not expanded:
-		var sum_lbl := Label.new()
-		sum_lbl.text = _summarize_auto(aut)
-		sum_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		sum_lbl.add_theme_color_override("font_color", C_TEXT_M)
-		sum_lbl.add_theme_font_size_override("font_size", 10)
-		card_vbox.add_child(sum_lbl)
-	else:
-		# ---- Expanded editor --------------------------------------------
-		var alias_edit := LineEdit.new()
-		alias_edit.placeholder_text = "Name"
-		alias_edit.text = str(aut.get("alias", ""))
-		alias_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_style_edit(alias_edit, false)
-		var alias_commit := func() -> void:
-			_auto_patch_field(index, ["alias"], alias_edit.text)
-		alias_edit.text_submitted.connect(func(_t: String) -> void: alias_commit.call())
-		alias_edit.focus_exited.connect(alias_commit)
-		card_vbox.add_child(alias_edit)
-
-		# WHEN (triggers)
-		_build_auto_subsection(card_vbox, "WHEN  (triggers - any fires)", Color(0.55, 0.95, 0.55),
-			_AUTO_KIND_TRIGGER, index, (aut.get("triggers", []) as Array))
-
-		# IF (conditions)
-		_build_auto_subsection(card_vbox, "IF  (conditions - all must match, optional)", C_AMBER,
-			_AUTO_KIND_CONDITION, index, (aut.get("conditions", []) as Array))
-
-		# THEN (actions)
-		_build_auto_subsection(card_vbox, "THEN  (actions run in order)", C_PRIMARY,
-			_AUTO_KIND_ACTION, index, (aut.get("actions", []) as Array))
-
-		# Optional HA push tucked under the rule editor.
-		var push_row := HBoxContainer.new()
-		push_row.add_theme_constant_override("separation", 6)
-		var push_btn := Button.new()
-		push_btn.text = "Push to Home Assistant..."
-		push_btn.flat = true
-		push_btn.focus_mode = Control.FOCUS_NONE
-		push_btn.tooltip_text = "Export this rule to HA (requires HA entity under Advanced)"
-		push_btn.add_theme_color_override("font_color", C_TEXT_S)
-		push_btn.add_theme_font_size_override("font_size", 10)
-		push_btn.pressed.connect(_on_push_auto_pressed.bind(auto_id))
-		push_row.add_child(push_btn)
-		card_vbox.add_child(push_row)
-
-		var id_lbl := Label.new()
-		id_lbl.text = "ID: %s" % auto_id
-		id_lbl.add_theme_color_override("font_color", C_TEXT_M)
-		id_lbl.add_theme_font_size_override("font_size", 9)
-		card_vbox.add_child(id_lbl)
-
-	_form_vbox.add_child(_wrap_margin(card_pc, 12, 3))
-
-
-const _AUTO_KIND_TRIGGER   := "trigger"
-const _AUTO_KIND_CONDITION := "condition"
-const _AUTO_KIND_ACTION    := "action"
-
-
-## Render a WHEN/IF/THEN subsection with its header, + button, and rows.
-func _build_auto_subsection(parent: VBoxContainer, title: String, accent: Color,
-		kind: String, auto_index: int, items_arr: Array) -> void:
-	var spacer1 := Control.new()
-	spacer1.custom_minimum_size = Vector2(0, 4)
-	parent.add_child(spacer1)
-
-	var hdr := HBoxContainer.new()
-	hdr.add_theme_constant_override("separation", 4)
-	var lbl := Label.new()
-	lbl.text = title
-	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lbl.add_theme_color_override("font_color", accent)
-	lbl.add_theme_font_size_override("font_size", 9)
-	hdr.add_child(lbl)
-	var add_btn := Button.new()
-	add_btn.text = "+"
-	add_btn.flat = true
-	add_btn.focus_mode = Control.FOCUS_NONE
-	add_btn.custom_minimum_size = Vector2(18, 0)
-	add_btn.add_theme_color_override("font_color", accent)
-	add_btn.tooltip_text = "Add %s" % kind
-	add_btn.pressed.connect(_on_auto_add_sub.bind(auto_index, kind))
-	hdr.add_child(add_btn)
-	parent.add_child(hdr)
-
-	if items_arr.is_empty() and kind != _AUTO_KIND_CONDITION:
-		var empty_lbl := Label.new()
-		empty_lbl.text = "(none)"
-		empty_lbl.add_theme_color_override("font_color", C_TEXT_M)
-		empty_lbl.add_theme_font_size_override("font_size", 9)
-		parent.add_child(empty_lbl)
-		return
-
-	for idx in range(items_arr.size()):
-		_build_auto_subitem_row(parent, kind, auto_index, idx, (items_arr[idx] as Dictionary))
-
-
-## Render a single trigger / condition / action row with its type dropdown,
-## kind-specific fields, and a delete button.
-func _build_auto_subitem_row(parent: VBoxContainer, kind: String,
-		auto_index: int, sub_index: int, sub: Dictionary) -> void:
-	var row_pc := PanelContainer.new()
-	var row_sb := StyleBoxFlat.new()
-	row_sb.bg_color = Color(C_BG.r * 1.2, C_BG.g * 1.2, C_BG.b * 1.2, 1.0)
-	row_sb.set_border_width(SIDE_LEFT, 2)
-	match kind:
-		_AUTO_KIND_TRIGGER:
-			row_sb.border_color = Color(0.3, 0.9, 0.3, 0.8)
-		_AUTO_KIND_CONDITION:
-			row_sb.border_color = Color(C_AMBER.r, C_AMBER.g, C_AMBER.b, 0.8)
-		_:
-			row_sb.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.8)
-	row_sb.set_corner_radius_all(2)
-	row_sb.content_margin_left = 5.0
-	row_sb.content_margin_right = 4.0
-	row_sb.content_margin_top = 3.0
-	row_sb.content_margin_bottom = 3.0
-	row_pc.add_theme_stylebox_override("panel", row_sb)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
-	row_pc.add_child(vbox)
-
-	# Kind picker + delete
-	var top := HBoxContainer.new()
-	top.add_theme_constant_override("separation", 4)
-	var kind_opt := OptionButton.new()
-	kind_opt.focus_mode = Control.FOCUS_NONE
-	kind_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	kind_opt.add_theme_font_size_override("font_size", 10)
-	for k_def in _get_kind_options(kind):
-		kind_opt.add_item(k_def.get("label", ""), k_def.get("id", 0))
-		if str(k_def.get("key", "")) == str(sub.get("kind", "")):
-			kind_opt.select(kind_opt.item_count - 1)
-	kind_opt.item_selected.connect(func(sel_idx: int) -> void:
-		var id_sel: int = kind_opt.get_item_id(sel_idx)
-		var new_key := ""
-		for k_def in _get_kind_options(kind):
-			if int(k_def.get("id", -1)) == id_sel:
-				new_key = str(k_def.get("key", ""))
-				break
-		_on_auto_sub_kind_changed(auto_index, kind, sub_index, new_key)
-	)
-	top.add_child(kind_opt)
-
-	var rm := Button.new()
-	IconButton.style(rm, "x", "Remove this row")
-	rm.pressed.connect(_on_auto_sub_remove.bind(auto_index, kind, sub_index))
-	top.add_child(rm)
-	vbox.add_child(top)
-
-	# Kind-specific fields
-	var path_base: Array = [_auto_kind_to_field(kind), sub_index]
-	_build_auto_sub_fields(vbox, kind, auto_index, path_base, sub)
-
-	parent.add_child(row_pc)
-
-
-## Builds the kind-specific editable fields for a trigger / condition / action.
-func _build_auto_sub_fields(parent: VBoxContainer, kind: String, auto_index: int,
-		path_base: Array, sub: Dictionary) -> void:
-	var sub_kind: String = str(sub.get("kind", ""))
-
-	match kind:
-		_AUTO_KIND_TRIGGER:
-			match sub_kind:
-				"time":
-					_add_spin_row(parent, "At hour", float(sub.get("at_hour", 18.0)),
-						0.0, 24.0, 0.25,
-						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["at_hour"], v))
-				"sun":
-					_add_enum_row(parent, "Event", [
-							{"label": "Sunset", "key": "sunset"},
-							{"label": "Sunrise", "key": "sunrise"}
-						], str(sub.get("event", "sunset")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["event"], v))
-					_add_spin_row(parent, "Offset (h)", float(sub.get("offset_hours", 0.0)),
-						-6.0, 6.0, 0.25,
-						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["offset_hours"], v))
-				"numeric":
-					_add_enum_row(parent, "Signal", _numeric_signal_options(),
-						_numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
-						func(v: String) -> void:
-							if v == "__custom__":
-								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
-							else:
-								_auto_patch_field(auto_index, path_base + ["entity_id"], v)
-							_rebuild_current_item())
-					var eid := str(sub.get("entity_id", "sensor.battery_level"))
-					if _numeric_signal_key(eid) == "__custom__":
-						_add_text_row(parent, "Entity id", eid,
-							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
-					_add_optional_spin_row(parent, "Above", sub.get("above", null),
-						0.0, 100.0, 1.0,
-						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["above"], v))
-					_add_optional_spin_row(parent, "Below", sub.get("below", null),
-						0.0, 100.0, 1.0,
-						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["below"], v))
-				"state":
-					_add_enum_row(parent, "Node / device", _state_entity_options(),
-						_state_entity_key(str(sub.get("entity_id", ""))),
-						func(v: String) -> void:
-							var patch_eid := "" if v == "__custom__" else v
-							var patch_to := str(sub.get("to_state", "on"))
-							if v.begins_with("tank."):
-								patch_to = "overflow"
-							elif v.begins_with("node."):
-								patch_to = "on"
-							# One commit so we don't mid-rebuild between entity and to_state.
-							var autos_s: Array = _get_autos()
-							if auto_index >= 0 and auto_index < autos_s.size():
-								var aut_s: Dictionary = (autos_s[auto_index] as Dictionary).duplicate(true)
-								_apply_path(aut_s, path_base + ["entity_id"], patch_eid)
-								_apply_path(aut_s, path_base + ["to_state"], patch_to)
-								autos_s[auto_index] = aut_s
-								_commit_autos(autos_s)
-							_rebuild_current_item())
-					var seid := str(sub.get("entity_id", ""))
-					if _state_entity_key(seid) == "__custom__":
-						_add_text_row(parent, "Device / entity", seid,
-							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
-					_add_enum_row(parent, "To state", _state_value_options(seid),
-						str(sub.get("to_state", "on")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["to_state"], v))
-		_AUTO_KIND_CONDITION:
-			match sub_kind:
-				"time":
-					_add_spin_row(parent, "After hr", float(sub.get("after_hour", 0.0)),
-						0.0, 24.0, 0.25,
-						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["after_hour"], v))
-					_add_spin_row(parent, "Before hr", float(sub.get("before_hour", 24.0)),
-						0.0, 24.0, 0.25,
-						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["before_hour"], v))
-				"numeric":
-					_add_enum_row(parent, "Signal", _numeric_signal_options(),
-						_numeric_signal_key(str(sub.get("entity_id", "sensor.battery_level"))),
-						func(v: String) -> void:
-							if v == "__custom__":
-								_auto_patch_field(auto_index, path_base + ["entity_id"], "sensor.")
-							else:
-								_auto_patch_field(auto_index, path_base + ["entity_id"], v)
-							_rebuild_current_item())
-					var eid2 := str(sub.get("entity_id", "sensor.battery_level"))
-					if _numeric_signal_key(eid2) == "__custom__":
-						_add_text_row(parent, "Entity id", eid2,
-							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
-					_add_optional_spin_row(parent, "Above", sub.get("above", null),
-						0.0, 100.0, 1.0,
-						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["above"], v))
-					_add_optional_spin_row(parent, "Below", sub.get("below", null),
-						0.0, 100.0, 1.0,
-						func(v: Variant) -> void: _auto_patch_field(auto_index, path_base + ["below"], v))
-				"sun":
-					_add_enum_row(parent, "Sun", [
-							{"label": "Above horizon", "key": "above_horizon"},
-							{"label": "Below horizon", "key": "below_horizon"}
-						], str(sub.get("state", "above_horizon")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["state"], v))
-				"state":
-					_add_enum_row(parent, "Node / device", _state_entity_options(),
-						_state_entity_key(str(sub.get("entity_id", ""))),
-						func(v: String) -> void:
-							var patch_eid2 := "" if v == "__custom__" else v
-							var autos_c: Array = _get_autos()
-							if auto_index >= 0 and auto_index < autos_c.size():
-								var aut_c: Dictionary = (autos_c[auto_index] as Dictionary).duplicate(true)
-								_apply_path(aut_c, path_base + ["entity_id"], patch_eid2)
-								if v.begins_with("tank."):
-									_apply_path(aut_c, path_base + ["states"], ["overflow"])
-								elif v.begins_with("node."):
-									_apply_path(aut_c, path_base + ["states"], ["on"])
-								autos_c[auto_index] = aut_c
-								_commit_autos(autos_c)
-							_rebuild_current_item())
-					var seid2 := str(sub.get("entity_id", ""))
-					if _state_entity_key(seid2) == "__custom__":
-						_add_text_row(parent, "Device / entity", seid2,
-							func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["entity_id"], v))
-					var cur_states: Array = sub.get("states", []) as Array
-					var joined := ""
-					for s in cur_states:
-						if joined != "":
-							joined += ","
-						joined += str(s)
-					_add_enum_row(parent, "Match state", _state_value_options(seid2),
-						str(cur_states[0]) if not cur_states.is_empty() else "on",
-						func(v: String) -> void:
-							_auto_patch_field(auto_index, path_base + ["states"], [v])
-							_rebuild_current_item())
-					_add_text_row(parent, "States (csv)", joined if not joined.is_empty() else "",
-						func(v: String) -> void:
-							var arr: Array = []
-							for part in v.split(","):
-								var t := part.strip_edges()
-								if not t.is_empty():
-									arr.append(t)
-							_auto_patch_field(auto_index, path_base + ["states"], arr))
-		_AUTO_KIND_ACTION:
-			match sub_kind:
-				"scene_node":
-					_add_enum_row(parent, "Command", [
-							{"label": "Turn ON", "key": "turn_on"},
-							{"label": "Turn OFF", "key": "turn_off"},
-							{"label": "Toggle", "key": "toggle"}
-						], str(sub.get("command", "turn_on")),
-						func(v: String) -> void: _auto_patch_field(auto_index, path_base + ["command"], v))
-				"delay":
-					_add_spin_row(parent, "Delay (s)", float(sub.get("delay_seconds", 5.0)),
-						0.0, 3600.0, 1.0,
-						func(v: float) -> void: _auto_patch_field(auto_index, path_base + ["delay_seconds"], v))
 
 
 ## Global sensors + upstream/downstream graph neighbors for numeric triggers.
@@ -2285,168 +1942,8 @@ func _iter_graph_neighbors() -> Array:
 	return out
 
 
-## Map a stored entity_id onto the Signal picker key (or __custom__).
-func _numeric_signal_key(entity_id: String) -> String:
-	for o: Dictionary in _numeric_signal_options():
-		if str(o.get("key", "")) == entity_id:
-			return entity_id
-	if entity_id in ["sensor.battery_level", "sensor.solar_power", "sensor.load_power"]:
-		return entity_id
-	return "__custom__"
-
-
-func _state_entity_key(entity_id: String) -> String:
-	if entity_id.is_empty():
-		return "__custom__"
-	for o: Dictionary in _state_entity_options():
-		if str(o.get("key", "")) == entity_id:
-			return entity_id
-	return "__custom__"
-
-
-## Available "kinds" (trigger type, condition type, action type) for the dropdown.
-func _get_kind_options(kind: String) -> Array:
-	match kind:
-		_AUTO_KIND_TRIGGER:
-			return [
-				{"id": 0, "key": "time",    "label": "Time of day"},
-				{"id": 1, "key": "sun",     "label": "Sunrise / sunset"},
-				{"id": 2, "key": "numeric", "label": "Fill level / power signal"},
-				{"id": 3, "key": "state",   "label": "Graph / device state"},
-			]
-		_AUTO_KIND_CONDITION:
-			return [
-				{"id": 0, "key": "time",    "label": "Time window"},
-				{"id": 1, "key": "sun",     "label": "Sun above/below horizon"},
-				{"id": 2, "key": "numeric", "label": "Fill level / power signal"},
-				{"id": 3, "key": "state",   "label": "Graph / device state"},
-			]
-		_:
-			return [
-				{"id": 0, "key": "scene_node", "label": "Turn this load on/off/toggle"},
-				{"id": 1, "key": "delay",      "label": "Delay (seconds)"},
-			]
-
-
-func _auto_kind_to_field(kind: String) -> String:
-	match kind:
-		_AUTO_KIND_TRIGGER:
-			return "triggers"
-		_AUTO_KIND_CONDITION:
-			return "conditions"
-		_:
-			return "actions"
-
-
 # ---------------------------------------------------------------------------
-# Small editable row helpers (used by subitem field builders)
-# ---------------------------------------------------------------------------
-
-func _small_label(txt: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = txt
-	lbl.custom_minimum_size = Vector2(68, 0)
-	lbl.add_theme_color_override("font_color", C_TEXT_S)
-	lbl.add_theme_font_size_override("font_size", 10)
-	return lbl
-
-
-func _add_spin_row(parent: VBoxContainer, label: String, value: float,
-		min_v: float, max_v: float, step: float, commit: Callable) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	row.add_child(_small_label(label))
-	var sb := SpinBox.new()
-	sb.min_value = min_v
-	sb.max_value = max_v
-	sb.step = step
-	sb.value = value
-	sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_edit(sb.get_line_edit(), true)
-	sb.value_changed.connect(func(v: float) -> void: commit.call(v))
-	row.add_child(sb)
-	parent.add_child(row)
-
-
-## Spin row where the value is optional (null = unbounded). Shown as a checkbox
-## next to the spin; checking it enables the bound, unchecking clears it.
-func _add_optional_spin_row(parent: VBoxContainer, label: String, current: Variant,
-		min_v: float, max_v: float, step: float, commit: Callable) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	row.add_child(_small_label(label))
-
-	var active: bool = current != null and not (current is String)
-	var cb := CheckBox.new()
-	cb.button_pressed = active
-	cb.focus_mode = Control.FOCUS_NONE
-	row.add_child(cb)
-
-	var sb := SpinBox.new()
-	sb.min_value = min_v
-	sb.max_value = max_v
-	sb.step = step
-	sb.value = float(current) if active else 50.0
-	sb.editable = active
-	sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_edit(sb.get_line_edit(), true)
-	row.add_child(sb)
-
-	cb.toggled.connect(func(on: bool) -> void:
-		sb.editable = on
-		if on:
-			commit.call(sb.value)
-		else:
-			commit.call(null)
-	)
-	sb.value_changed.connect(func(v: float) -> void:
-		if cb.button_pressed:
-			commit.call(v)
-	)
-	parent.add_child(row)
-
-
-func _add_text_row(parent: VBoxContainer, label: String, value: String, commit: Callable) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	row.add_child(_small_label(label))
-	var ed := LineEdit.new()
-	ed.text = value
-	ed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_edit(ed, false)
-	var do_commit := func() -> void: commit.call(ed.text)
-	ed.text_submitted.connect(func(_t: String) -> void: do_commit.call())
-	ed.focus_exited.connect(do_commit)
-	row.add_child(ed)
-	parent.add_child(row)
-
-
-func _add_enum_row(parent: VBoxContainer, label: String, options: Array,
-		current_key: String, commit: Callable) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	row.add_child(_small_label(label))
-	var opt := OptionButton.new()
-	opt.focus_mode = Control.FOCUS_NONE
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	opt.add_theme_font_size_override("font_size", 10)
-	var keys: Array = []
-	for i in range(options.size()):
-		var o: Dictionary = options[i] as Dictionary
-		opt.add_item(str(o.get("label", "")), i)
-		keys.append(str(o.get("key", "")))
-		if str(o.get("key", "")) == current_key:
-			opt.select(i)
-	opt.item_selected.connect(func(idx: int) -> void:
-		if idx >= 0 and idx < keys.size():
-			commit.call(keys[idx])
-	)
-	row.add_child(opt)
-	parent.add_child(row)
-
-
-# ---------------------------------------------------------------------------
-# Add-automation footer: standard presets + custom
+# Automation presets (the card editor's "+ Preset..." menu)
 # ---------------------------------------------------------------------------
 
 ## Popup menu of pre-defined "standard" automation templates.
@@ -2533,37 +2030,6 @@ const _TEMPLATES := [
 ]
 
 
-func _build_auto_add_footer(item: Dictionary) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-
-	var std_btn := MenuButton.new()
-	std_btn.text = "+ Preset..."
-	std_btn.flat = true
-	std_btn.focus_mode = Control.FOCUS_NONE
-	std_btn.add_theme_color_override("font_color", C_PRIMARY)
-	std_btn.add_theme_font_size_override("font_size", 11)
-	std_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var popup := std_btn.get_popup()
-	popup.clear()
-	for i in range(_TEMPLATES.size()):
-		var tpl: Dictionary = _TEMPLATES[i] as Dictionary
-		popup.add_item(str(tpl.get("label", "Template")), i)
-	popup.id_pressed.connect(_on_template_picked)
-	row.add_child(std_btn)
-
-	var custom_btn := Button.new()
-	custom_btn.text = "+ Custom rule"
-	custom_btn.flat = true
-	custom_btn.focus_mode = Control.FOCUS_NONE
-	custom_btn.add_theme_color_override("font_color", C_PRIMARY)
-	custom_btn.add_theme_font_size_override("font_size", 11)
-	custom_btn.pressed.connect(_on_add_custom_automation)
-	row.add_child(custom_btn)
-
-	_form_vbox.add_child(_wrap_margin(row, 12, 8))
-
-
 func _wrap_margin(ctrl: Control, h: int, v: int) -> MarginContainer:
 	var mc := MarginContainer.new()
 	mc.add_theme_constant_override("margin_left", h)
@@ -2572,111 +2038,6 @@ func _wrap_margin(ctrl: Control, h: int, v: int) -> MarginContainer:
 	mc.add_theme_constant_override("margin_bottom", v)
 	mc.add_child(ctrl)
 	return mc
-
-
-# ---------------------------------------------------------------------------
-# Automation mutation callbacks
-# ---------------------------------------------------------------------------
-
-func _on_template_picked(tpl_idx: int) -> void:
-	if tpl_idx < 0 or tpl_idx >= _TEMPLATES.size():
-		return
-	var tpl: Dictionary = _TEMPLATES[tpl_idx] as Dictionary
-	var autos: Array = _get_autos()
-	for s in (tpl.get("specs", []) as Array):
-		var spec: Dictionary = (s as Dictionary).duplicate(true)
-		spec["id"] = _generate_auto_id()
-		spec["enabled"] = true
-		autos.append(spec)
-		_auto_expanded[spec["id"]] = false
-	_commit_autos(autos)
-	_rebuild_current_item()
-	_toast("Added %s" % UiText.count((tpl.get("specs", []) as Array).size(), "automation"))
-
-
-func _on_add_custom_automation() -> void:
-	var autos: Array = _get_autos()
-	var new_id := _generate_auto_id()
-	var spec := {
-		"id":         new_id,
-		"alias":      "New automation",
-		"enabled":    true,
-		"triggers":   [{"kind": "time", "at_hour": 18.0}],
-		"conditions": [],
-		"actions":    [{"kind": "scene_node", "command": "turn_on"}],
-	}
-	autos.append(spec)
-	_auto_expanded[new_id] = true
-	_commit_autos(autos)
-	_rebuild_current_item()
-
-
-func _on_auto_delete(index: int) -> void:
-	var autos: Array = _get_autos()
-	if index < 0 or index >= autos.size():
-		return
-	var removed: Dictionary = autos[index] as Dictionary
-	autos.remove_at(index)
-	var removed_id := str(removed.get("id", ""))
-	if not removed_id.is_empty():
-		var eng := _get_automation_engine()
-		if eng != null and eng.has_method("unregister_automation"):
-			eng.call("unregister_automation", removed_id)
-		_auto_expanded.erase(removed_id)
-	_commit_autos(autos)
-	_rebuild_current_item()
-
-
-func _on_auto_add_sub(auto_index: int, kind: String) -> void:
-	var autos: Array = _get_autos()
-	if auto_index < 0 or auto_index >= autos.size():
-		return
-	var aut: Dictionary = (autos[auto_index] as Dictionary).duplicate(true)
-	var field := _auto_kind_to_field(kind)
-	var arr: Array = (aut.get(field, []) as Array).duplicate(true)
-	arr.append(_default_sub_spec(kind))
-	aut[field] = arr
-	autos[auto_index] = aut
-	_commit_autos(autos)
-	_rebuild_current_item()
-
-
-func _on_auto_sub_remove(auto_index: int, kind: String, sub_index: int) -> void:
-	var autos: Array = _get_autos()
-	if auto_index < 0 or auto_index >= autos.size():
-		return
-	var aut: Dictionary = (autos[auto_index] as Dictionary).duplicate(true)
-	var field := _auto_kind_to_field(kind)
-	var arr: Array = (aut.get(field, []) as Array).duplicate(true)
-	if sub_index < 0 or sub_index >= arr.size():
-		return
-	arr.remove_at(sub_index)
-	aut[field] = arr
-	autos[auto_index] = aut
-	_commit_autos(autos)
-	_rebuild_current_item()
-
-
-func _on_auto_sub_kind_changed(auto_index: int, kind: String, sub_index: int, new_kind: String) -> void:
-	var autos: Array = _get_autos()
-	if auto_index < 0 or auto_index >= autos.size():
-		return
-	var aut: Dictionary = (autos[auto_index] as Dictionary).duplicate(true)
-	var field := _auto_kind_to_field(kind)
-	var arr: Array = (aut.get(field, []) as Array).duplicate(true)
-	if sub_index < 0 or sub_index >= arr.size():
-		return
-	var fresh := _default_sub_spec(kind)
-	fresh["kind"] = new_kind
-	# Preserve a few common fields where it makes sense
-	var old: Dictionary = arr[sub_index] as Dictionary
-	if old.has("alias"):
-		fresh["alias"] = old["alias"]
-	arr[sub_index] = _reset_sub_for_kind(fresh, new_kind)
-	aut[field] = arr
-	autos[auto_index] = aut
-	_commit_autos(autos)
-	_rebuild_current_item()
 
 
 func _on_push_auto_pressed(auto_id: String) -> void:
@@ -2691,59 +2052,6 @@ func _on_push_auto_pressed(auto_id: String) -> void:
 	var pusher: RefCounted = _HA_PUSHER.new() as RefCounted
 	var res: Dictionary = pusher.call("push", automation, get_tree()) as Dictionary
 	_toast(str(res.get("message", "Done")))
-
-
-## Generic "patch one field" - path is an array like ["alias"] or
-## ["triggers", 0, "at_hour"]. Commits to the model and re-registers the
-## automation so the engine sees the change immediately.
-func _auto_patch_field(auto_index: int, path: Array, value: Variant) -> void:
-	var autos: Array = _get_autos()
-	if auto_index < 0 or auto_index >= autos.size():
-		return
-	var aut: Dictionary = (autos[auto_index] as Dictionary).duplicate(true)
-	_apply_path(aut, path, value)
-	autos[auto_index] = aut
-	_commit_autos(autos)
-
-
-## Walks `target` along `path` (keys or ints) and writes `value` at the leaf.
-## Intermediate arrays/dicts are duplicated as we descend so we don't mutate
-## shared references.
-func _apply_path(target: Variant, path: Array, value: Variant) -> void:
-	if path.is_empty():
-		return
-	var cur: Variant = target
-	for i in range(path.size() - 1):
-		var key: Variant = path[i]
-		if cur is Dictionary:
-			var d := cur as Dictionary
-			var nxt: Variant = d.get(key)
-			if nxt is Dictionary:
-				nxt = (nxt as Dictionary).duplicate(true)
-			elif nxt is Array:
-				nxt = (nxt as Array).duplicate(true)
-			d[key] = nxt
-			cur = nxt
-		elif cur is Array:
-			var a := cur as Array
-			var idx := int(key)
-			if idx < 0 or idx >= a.size():
-				return
-			var nxt2: Variant = a[idx]
-			if nxt2 is Dictionary:
-				nxt2 = (nxt2 as Dictionary).duplicate(true)
-			elif nxt2 is Array:
-				nxt2 = (nxt2 as Array).duplicate(true)
-			a[idx] = nxt2
-			cur = nxt2
-	var leaf: Variant = path[path.size() - 1]
-	if cur is Dictionary:
-		if value == null:
-			(cur as Dictionary).erase(leaf)
-		else:
-			(cur as Dictionary)[leaf] = value
-	elif cur is Array:
-		(cur as Array)[int(leaf)] = value
 
 
 # ---------------------------------------------------------------------------
@@ -2949,6 +2257,7 @@ func _spec_to_action(s: Dictionary, device_path: String, ha_entity_id: String) -
 			var sn := SceneNodeAction.new()
 			sn.node_path = device_path
 			sn.ha_entity_id = ha_entity_id
+			sn.target = str(s.get("target", ""))
 			match str(s.get("command", "turn_on")):
 				"turn_off":
 					sn.command = SceneNodeAction.NodeCommand.TURN_OFF
@@ -2957,6 +2266,11 @@ func _spec_to_action(s: Dictionary, device_path: String, ha_entity_id: String) -
 				_:
 					sn.command = SceneNodeAction.NodeCommand.TURN_ON
 			return sn
+		"set_value":
+			var eid := str(s.get("entity_id", "")).strip_edges()
+			if eid.is_empty():
+				return null
+			return ServiceAction.make_set_value(eid, float(s.get("value", 0.0)))
 		"delay":
 			var d := DelayAction.new()
 			d.delay_seconds = float(s.get("delay_seconds", 5.0))
@@ -3041,135 +2355,16 @@ func _action_to_spec(a: AutomationAction) -> Dictionary:
 				cmd = "turn_off"
 			SceneNodeAction.NodeCommand.TOGGLE:
 				cmd = "toggle"
-		return {"kind": "scene_node", "command": cmd}
+		var out := {"kind": "scene_node", "command": cmd}
+		if not sn.target.is_empty():
+			out["target"] = sn.target
+		return out
+	if a is ServiceAction and (a as ServiceAction).is_set_value():
+		var sv := a as ServiceAction
+		return {"kind": "set_value", "entity_id": str(sv.arguments[0]), "value": float(sv.arguments[1])}
 	if a is DelayAction:
 		return {"kind": "delay", "delay_seconds": (a as DelayAction).delay_seconds}
 	return {"kind": "scene_node", "command": "turn_on"}
-
-
-## Default fresh spec for a new trigger / condition / action subitem.
-func _default_sub_spec(kind: String) -> Dictionary:
-	match kind:
-		_AUTO_KIND_TRIGGER:
-			return {"kind": "time", "at_hour": 18.0}
-		_AUTO_KIND_CONDITION:
-			return {"kind": "time", "after_hour": 0.0, "before_hour": 24.0}
-		_:
-			return {"kind": "scene_node", "command": "turn_on"}
-
-
-## When the user changes a subitem's kind via the dropdown, rebuild its spec
-## with sane defaults for the new kind (but preserve any alias it had).
-func _reset_sub_for_kind(sub: Dictionary, new_kind: String) -> Dictionary:
-	var preserved := {}
-	if sub.has("alias"):
-		preserved["alias"] = sub["alias"]
-	var fresh: Dictionary
-	match new_kind:
-		"time":
-			fresh = {"kind": "time", "at_hour": 18.0, "after_hour": 0.0, "before_hour": 24.0}
-		"sun":
-			fresh = {"kind": "sun", "event": "sunset", "offset_hours": 0.0, "state": "above_horizon"}
-		"numeric":
-			fresh = {"kind": "numeric", "entity_id": "sensor.battery_level"}
-		"state":
-			fresh = {"kind": "state", "entity_id": "", "to_state": "on", "states": []}
-		"scene_node":
-			fresh = {"kind": "scene_node", "command": "turn_on"}
-		"delay":
-			fresh = {"kind": "delay", "delay_seconds": 5.0}
-		_:
-			fresh = {"kind": new_kind}
-	for k: Variant in preserved.keys():
-		fresh[k] = preserved[k]
-	return fresh
-
-
-## Short one-line summary of an automation (used as a row subtitle + tooltip).
-func _summarize_auto(aut: Dictionary) -> String:
-	var trigs: Array = aut.get("triggers", []) as Array
-	var acts:  Array = aut.get("actions",  []) as Array
-	var conds: Array = aut.get("conditions", []) as Array
-	var when_s := ""
-	for t in trigs:
-		var td: Dictionary = t as Dictionary
-		var piece := _summarize_trigger(td)
-		if not piece.is_empty():
-			when_s += ("  or  " if not when_s.is_empty() else "") + piece
-	if when_s.is_empty():
-		when_s = "(no trigger)"
-	var then_s := ""
-	for a in acts:
-		var ad: Dictionary = a as Dictionary
-		var piece := _summarize_action(ad)
-		if not piece.is_empty():
-			then_s += (" → " if not then_s.is_empty() else "") + piece
-	if then_s.is_empty():
-		then_s = "(no action)"
-	var txt := "When %s  →  %s" % [when_s, then_s]
-	if not conds.is_empty():
-		txt += "\nIf: %s" % UiText.count(conds.size(), "condition")
-	return txt
-
-
-func _summarize_trigger(t: Dictionary) -> String:
-	match str(t.get("kind", "")):
-		"time":
-			return "time %s" % _fmt_hour(float(t.get("at_hour", 0.0)))
-		"sun":
-			var event := str(t.get("event", "sunset"))
-			var off := float(t.get("offset_hours", 0.0))
-			if absf(off) < 0.01:
-				return event
-			return "%s %s%.1fh" % [event, ("+" if off > 0 else ""), off]
-		"numeric":
-			var ent := str(t.get("entity_id", ""))
-			var friendly := ent.trim_prefix("sensor.")
-			match ent:
-				"sensor.battery_level":
-					friendly = "battery SOC"
-				"sensor.solar_power":
-					friendly = "solar W"
-				"sensor.load_power":
-					friendly = "load W"
-				_:
-					if ent.begins_with("tank.") and ent.ends_with(".level"):
-						friendly = "fill %s" % ent.trim_prefix("tank.").trim_suffix(".level")
-					elif ent.begins_with("resource.") and ent.ends_with(".level"):
-						friendly = ent.trim_prefix("resource.").trim_suffix(".level") + " fill"
-			var parts: Array = []
-			if t.has("above") and t.get("above") != null:
-				parts.append("> %.0f" % float(t.get("above")))
-			if t.has("below") and t.get("below") != null:
-				parts.append("< %.0f" % float(t.get("below")))
-			return "%s %s" % [friendly, " ".join(PackedStringArray(parts))]
-		"state":
-			return "%s = %s" % [str(t.get("entity_id", "")), str(t.get("to_state", ""))]
-	return ""
-
-
-func _summarize_action(a: Dictionary) -> String:
-	match str(a.get("kind", "")):
-		"scene_node":
-			match str(a.get("command", "turn_on")):
-				"turn_off":
-					return "turn off"
-				"toggle":
-					return "toggle"
-				_:
-					return "turn on"
-		"delay":
-			return "wait %.0fs" % float(a.get("delay_seconds", 0.0))
-	return ""
-
-
-func _fmt_hour(h: float) -> String:
-	var hi := int(h)
-	var mi := int(round((h - hi) * 60.0))
-	if mi >= 60:
-		mi = 0
-		hi += 1
-	return "%02d:%02d" % [hi, mi]
 
 
 ## Resyncs the current processor's dangling/ghost I/O tank containers (name +
