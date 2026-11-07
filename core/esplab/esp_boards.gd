@@ -225,6 +225,53 @@ const POWER_KINDS := {
 }
 
 
+## How each board looks in the wiring diagram (the board's own photo, in
+## shapes): PCB colour, what sits on it (a WROOM-style module with its PCB
+## antenna, a bare chip with a ceramic or PCB antenna, a shield can, an
+## ESP-12 module, a screen, a plastic case), the USB socket and which end it
+## is on, the buttons, the USB-serial chip and whether it has mounting holes.
+const LOOKS := {
+	"esp32_devkit_v1": {"pcb": "2c2e33", "module": "wroom", "module_label": "ESP-WROOM-32", "usb": "micro",
+		"buttons": ["EN", "BOOT"], "bridge": "CP2102", "reg": true, "leds": ["power", "gpio"], "holes": true},
+	"esp32_devkitc_38": {"pcb": "1c1d20", "module": "wroom", "module_label": "ESP32-WROOM-32E", "usb": "micro",
+		"buttons": ["EN", "BOOT"], "bridge": "CP2102N", "reg": true, "leds": ["power"]},
+	"esp32s3_devkitc1": {"pcb": "1c1d20", "module": "wroom", "module_label": "ESP32-S3-WROOM-1", "usb": "c2",
+		"buttons": ["BOOT", "RST"], "bridge": "CP2102N", "reg": true, "leds": ["power", "rgb"]},
+	"esp32c3_supermini": {"pcb": "1d2a4f", "module": "chip", "chip_label": "ESP32-C3", "antenna": "pcb", "usb": "c",
+		"buttons": ["BOOT", "RST"], "leds": ["gpio"]},
+	"xiao_esp32c3": {"pcb": "16213a", "module": "can", "module_label": "XIAO", "usb": "c", "usb_top": true,
+		"buttons": ["B", "R"], "leds": ["power"]},
+	"xiao_esp32s3": {"pcb": "16213a", "module": "can", "module_label": "XIAO", "usb": "c", "usb_top": true,
+		"buttons": ["B", "R"], "leds": ["gpio"]},
+	"xiao_esp32c6": {"pcb": "16213a", "module": "can", "module_label": "XIAO", "usb": "c", "usb_top": true,
+		"buttons": ["B", "R"], "leds": ["gpio"]},
+	"esp32c6_devkitc1": {"pcb": "1c1d20", "module": "wroom", "module_label": "ESP32-C6-WROOM-1", "usb": "c2",
+		"buttons": ["BOOT", "RST"], "bridge": "CH343", "reg": true, "leds": ["power", "rgb"]},
+	"esp32c3_devkitm1": {"pcb": "1c1d20", "module": "mini_module", "module_label": "ESP32-C3-MINI-1", "usb": "micro",
+		"buttons": ["BOOT", "RST"], "bridge": "CP2102N", "reg": true, "leds": ["rgb"]},
+	"wemos_d1_mini": {"pcb": "1f3d7a", "module": "esp12", "module_label": "ESP8266MOD", "usb": "micro",
+		"buttons": ["RST"], "bridge": "CH340", "leds": []},
+	"nodemcu_v2": {"pcb": "1c1d20", "module": "esp12", "module_label": "ESP8266MOD", "usb": "micro",
+		"buttons": ["RST", "FLASH"], "bridge": "CP2102", "reg": true, "leds": ["gpio"], "holes": true},
+	"pico_w": {"pcb": "1b6b3a", "module": "pico", "chip_label": "RP2040", "usb": "micro", "usb_top": true,
+		"buttons": ["BOOTSEL"], "leds": ["gpio"], "castellated": true},
+	"cyd_2432s028r": {"pcb": "c9a227", "module": "screen", "screen": "2.8\" ILI9341", "usb": "micro",
+		"buttons": ["BOOT", "RST"], "leds": ["rgb"], "holes": true},
+	"lolin_s2_mini": {"pcb": "1d2a4f", "module": "chip", "chip_label": "ESP32-S2", "antenna": "pcb", "usb": "c",
+		"buttons": ["0", "RST"], "leds": ["gpio"]},
+	"waveshare_s3_zero": {"pcb": "1c1d20", "module": "chip", "chip_label": "ESP32-S3", "antenna": "ceramic", "usb": "c",
+		"buttons": ["BOOT", "RST"], "leds": ["rgb"]},
+	"t_display_s3": {"pcb": "1c1d20", "module": "screen", "screen": "1.9\" ST7789", "usb": "c",
+		"buttons": ["BOOT", "KEY"], "leds": []},
+	"m5stack_atom_lite": {"pcb": "3b3f46", "module": "atom", "usb": "c", "buttons": [], "leds": ["rgb"]},
+	"esp01_1m": {"pcb": "1c1d20", "module": "esp01", "chip_label": "ESP8266EX", "antenna": "pcb", "usb": "",
+		"buttons": [], "leds": ["power", "gpio"]},
+}
+
+
+static func look(id: String) -> Dictionary:
+	return LOOKS.get(id, {"pcb": "1c1d20", "module": "wroom", "module_label": "ESP32", "usb": "micro", "buttons": []})
+
 static func ids() -> Array:
 	var out: Array = BOARDS.keys()
 	out.sort()

@@ -1208,6 +1208,10 @@ Godot.exe.exe --headless --path . --script core/esplab/esplab_selftest.gd
 # calibrated design). Needs the ESPHome CLI
 # (`pip install esphome`, a venv is fine; --esphome <exe>); skips without it:
 python tools/checks/esphome_validate.py
+# Every board in the wiring diagram, one PNG each (WINDOWED, not a selftest;
+# APPDATA at a scratch folder; --board=<id>, or --preset=<id>|all for the
+# built-in designs). How the board artwork is reviewed:
+Godot.exe.exe --path . --windowed --resolution 1600x1000 --script res://tools/diag/esplab_board_sheet.gd -- --out=<dir>
 # The designer with REAL input (sandbox; run at 1080 AND 720 for the fold):
 # every built-in, UiAudit, Empty board, five parts from the palette, a part
 # pin dragged onto a board pin (wired by hand), a double-click giving it back,
@@ -5422,6 +5426,28 @@ need OpenThread).
   ⚠ A chip's `analog_only` pins (the ESP8266's A0 = GPIO17) take ONLY an
   analog role: it is also input-only, and the input-only bonus used to put
   plain inputs (a PIR, an e-paper's BUSY) on A0, which ESPHome refuses.
+- **The diagram looks like the hardware** (`scenes/ui/esplab_diagram.gd` +
+  `esplab_board_art.gd`, 2026-11-07 polish). A board is drawn at its real
+  size (`size_mm`, one header pitch = 2.54 mm = `PITCH` units) from
+  `EspBoards.LOOKS` (PCB colour; `module` wroom / mini_module / chip / can /
+  esp12 / esp01 / pico / screen / atom; antenna pcb / ceramic; `usb` micro /
+  c / c2 and `usb_top`; buttons, USB-serial chip, regulator, LEDs, mounting
+  holes, castellated): plated holes with rotated silkscreen names, and
+  outside each edge a pinout column like a maker's chart — a GPIO chip
+  coloured by `pin_state` (purple free, yellow caveat, dark input-only, grey
+  taken, rails red / grey, EN green) and a function chip: the net when wired
+  ("SDA", or "Relay IN"), else the board's default I2C / SPI pin, TX0 / RX0,
+  USB, the board's own use (LED, BTN, PSRAM, LCD…), DAC, ADC1 / ADC2; a rail
+  pin shows "GND × 3" only on the pin that carries the wires. A wire's board
+  end (`_pin_pos`, what `board_pin_local` returns) is the column's outer
+  end; the hole is `_hole_pos`; a board pin's hit area is its whole row.
+  Pins stay clear of the USB end (the board grows). Part cards are breakout
+  PCBs (`Art.PART_LOOK`: colour + glyph: metal can, ultrasonic pair, relay
+  cube, screen, probe, PIR dome, terminals…) with gold header holes (the
+  wire ends on the hole) and the twin's readings on a display strip. Wires
+  are jumpers with Dupont housings; a wire whose rail is on the far side
+  goes round the board's nearer end in its own lane (`w["pts"]`, Chaikin
+  rounded), never across it.
 - **Block kinds in `EspYaml`** (`yaml.special`): `hub` (an entity-less
   top-level block with an id: MCP23017, PCF8574, MAX485 → `modbus`
   with `flow_control_pin`, SN65HVD230 → `canbus` / `esp32_can`), `ads1115`

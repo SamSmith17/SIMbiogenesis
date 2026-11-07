@@ -8,7 +8,7 @@ extends SceneTree
 ## wires, RP2040 fixed pin sets, determinism), the electrical checks and the
 ## YAML (a golden file, secrets only by reference).
 
-const EXPECTED_CHECKS := 1590
+const EXPECTED_CHECKS := 1608
 
 var _pass := 0
 var _fail := 0
@@ -815,6 +815,10 @@ func _test_compare() -> void:
 func _test_breadth() -> void:
 	_ok(EspBoards.ids().size() >= 18, "at least 18 boards (%d)" % EspBoards.ids().size())
 	_ok(EspParts.ids().size() >= 60, "at least 60 parts (%d)" % EspParts.ids().size())
+	for id in EspBoards.ids():
+		var lk := EspBoards.look(str(id))
+		_ok(EspBoards.LOOKS.has(id) and str(lk.get("module", "")) in ["wroom", "mini_module", "chip", "can", "esp12", "esp01", "pico", "screen", "atom"],
+			"%s: the diagram knows how it looks" % id)
 	# Every board takes a small I2C weather set with no wiring error.
 	for id in EspBoards.ids():
 		var d := _design(str(id), ["bme280", "bh1750"])
