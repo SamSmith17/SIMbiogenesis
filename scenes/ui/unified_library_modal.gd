@@ -304,6 +304,11 @@ func _populate() -> void:
 			"detail": "Sanitary tri-clamp fittings by the standard sizes (ferrules, caps, spools, elbows, tees, crosses, reducers, NPT and barb adapters) snapped end to end into process runs, with gaskets, clamps, loop checks and a parts list → GLB, STL, BOM.",
 		},
 		{
+			"kind": "esplab",
+			"label": "ESP board designer (ESPHome)…",
+			"detail": "Pick an ESP32 / ESP8266 / Pico W board, add sensors, actuators and breakouts, and it wires them by protocol (I²C, SPI, UART, 1-Wire, analog, GPIO) with the board's pin rules → a wiring diagram and ready-to-flash ESPHome YAML.",
+		},
+		{
 			"kind": "csplab",
 			"label": "Solar concentrator designer…",
 			"detail": "Lenses (glass, ball, Fresnel, water) and mirrors (trough, dish, linear Fresnel, heliostat tower) → ray trace, suns, optical + thermal efficiency, tracking structure, a year of heat from the site's direct sunlight.",
@@ -485,7 +490,7 @@ func _refresh_action_buttons() -> void:
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "tclab", "building_designer", "vehiclelab"]:
+	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "tclab", "esplab", "building_designer", "vehiclelab"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
@@ -600,6 +605,14 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				main_tc.call("open_tclab", {})
 			else:
 				_status.text = "The tri-clamp designer needs a world."
+		"esplab":
+			# Hosted by Main, so it opens on every map (no location needed).
+			var main_esp := get_tree().current_scene if get_tree() != null else null
+			if main_esp != null and main_esp.has_method("open_esplab"):
+				close()
+				main_esp.call("open_esplab", {})
+			else:
+				_status.text = "The ESP board designer needs a world."
 		"csplab":
 			# Hosted by Main, so it opens on every map (no location needed).
 			var main_cs := get_tree().current_scene if get_tree() != null else null

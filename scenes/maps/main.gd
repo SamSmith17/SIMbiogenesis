@@ -927,6 +927,8 @@ var windlab_ui : Control = null
 const WINDLAB_MODAL_SCRIPT := preload( "res://scenes/ui/windlab_modal.gd" )
 var tclab_ui : Control = null
 const TCLAB_MODAL_SCRIPT := preload( "res://scenes/ui/tclab_modal.gd" )
+var esplab_ui : Control = null
+const ESPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/esplab_modal.gd" )
 var csplab_ui : Control = null
 const CSPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/csplab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
@@ -5123,6 +5125,39 @@ func open_tclab( opts: Dictionary = {} ) -> Control :
 		return null
 	tclab_ui.call( "open", opts )
 	return tclab_ui
+
+
+## The ESP board designer (scenes/ui/esplab_modal.gd): ESPHome boards, parts
+## wired by protocol, the YAML. On its own CanvasLayer like the other
+## Main-hosted designers, so it opens on every map.
+func _setup_esplab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "EspLabLayer" )
+	if existing_layer != null :
+		esplab_ui = existing_layer.get_node_or_null( "EspLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "EspLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "EspLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( ESPLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	esplab_ui = ui
+
+
+## Open the ESP board designer. opts: {spec}.
+func open_esplab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( esplab_ui ) :
+		_setup_esplab_ui()
+	if not is_instance_valid( esplab_ui ) :
+		return null
+	esplab_ui.call( "open", opts )
+	return esplab_ui
 
 
 ## The solar concentrator designer (scenes/ui/csplab_modal.gd), on its own

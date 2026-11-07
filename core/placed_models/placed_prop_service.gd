@@ -101,6 +101,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		# Stamp its design and bind its graph node (deferred: the record and
 		# the node are settled).
 		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
+	elif EspBuilder.handles(model_id):
+		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -638,6 +640,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		_auto_tag_dome_space(main, prop_id)
 	elif TcBuilder.handles(model_id):
 		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
+	elif EspBuilder.handles(model_id):
+		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -1140,6 +1144,42 @@ static func seed_toroid_graph(main: Node, prop_id: String) -> bool:
 ## catalog id with no tc_spec builds its built-in) and, when the design binds
 ## a graph preset (spec.binds, e.g. "Biochar Reactor"), make that processor
 ## bound to the prop — once; a prop placed FROM the graph is already bound.
+## A placed ESP board's graph node: an appliance drawing the board's few
+## watts (its 5 V budget), bound to the prop, so a dead battery or a switched-
+## off node takes the board (and its twin's readings) down. Idempotent: an
+## existing node is renamed and re-rated (Apply from the designer).
+static func seed_esplab(main: Node, prop_id: String) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var spec: Dictionary = rec.get("esp_spec", {}) as Dictionary if rec.get("esp_spec") is Dictionary else {}
+	if spec.is_empty():
+		spec = EspPresets.builtin("weather_station")
+		update_prop_record(main, prop_id, {"esp_spec": spec}, false)
+	var name := "ESP · %s" % str(EspSpec.resolve(spec)["name"])
+	var w := EspBuilder.power_w(spec)
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if not gid.is_empty() and gmodel != null and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		var it: Dictionary = gmodel.call("get_item", gid)
+		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate()
+		specs["name"] = name
+		specs["avg_watts"] = w
+		specs["max_watts"] = w * 1.5
+		gmodel.call("update_item", gid, {"specs": specs})
+		return gid
+	var node_id := _create_bound_graph_node(main, prop_id, {
+		"node_type": "appliance", "width": 160.0, "height": 104.0,
+		"specs": {"name": name, "avg_watts": w, "max_watts": w * 1.5, "model_id": EspBuilder.MODEL_ID,
+			"requested_state": "on", "current_state": "on"}})
+	if not node_id.is_empty():
+		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	return node_id
+
+
 static func seed_tclab(main: Node, prop_id: String) -> String:
 	if main == null or prop_id.is_empty():
 		return ""
@@ -1598,7 +1638,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec"]:
+	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)

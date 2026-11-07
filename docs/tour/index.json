@@ -1308,12 +1308,39 @@
       "image": "tc_process.jpg",
       "image_run": "2026-11-06T23:57:58",
       "image_commit": "ef51976"
+    },
+    "esplab": {
+      "id": "esplab",
+      "title": "ESP board designer",
+      "chapter": "Build",
+      "summary": "Pick an ESPHome board, add sensors and actuators, and the tool wires them to the right pins, writes the ESPHome YAML and runs a twin that reports what the real board will.",
+      "how": [
+        "Library → Structures → ESP board designer (ESPHome)…, or Edit board… on a placed one",
+        "Pick a board, click parts to add them: I2C, SPI, UART, 1-Wire and analog pins are chosen for you",
+        "Drag a part's pin onto a board pin to wire it yourself; the checks say what is wrong and why",
+        "ESPHome YAML: copy it or export the files (Wi-Fi and keys stay in secrets.yaml)",
+        "Compare: lay the real board's Home Assistant history over the twin, then calibrate"
+      ],
+      "action": "",
+      "button": "ESP board designer (ESPHome)…",
+      "key": "",
+      "open_hints": [
+        "Click ESP board designer (ESPHome)…"
+      ],
+      "world": "burningman",
+      "blurb": "Eighteen ESPHome boards (ESP32, S2, S3, C3, C6, ESP8266, Pico W and screen boards) and sixty-odd modules, each with its real pinout and its protocol. The tool shares the I2C bus and moves a part to its other address on a clash, gives every SPI device its own chip select, keeps the logger's UART free, puts analog parts on ADC pins that work with Wi-Fi on, and warns about strapping pins and 5 V signals. The YAML it writes passes ESPHome's own validator. A simulated twin names its entities exactly as Home Assistant will and reads the world at its spot with each part's own resolution and accuracy, so the Compare tab can lay the real board's history over it and write a calibration.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "esplab.jpg",
+      "image_run": "2026-11-07T03:19:31",
+      "image_commit": "157b27f"
     }
   },
   "last_run": {
-    "label": "tour_20261106-235555",
-    "generated": "2026-11-06T23:57:58",
-    "git_commit": "ef51976",
+    "label": "tour_20261107-031737",
+    "generated": "2026-11-07T03:19:31",
+    "git_commit": "157b27f",
     "passed": 1,
     "total": 1,
     "video_secs": null

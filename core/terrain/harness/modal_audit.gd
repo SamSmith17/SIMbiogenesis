@@ -117,7 +117,7 @@ func run() -> Dictionary:
 		var shade := _first_prop(loader, ["starshade"])
 		if not shade.is_empty() and loader.has_method("open_starshade_editor"):
 			entries.append({"id": "starshade_edit", "open": func() -> void: loader.call("open_starshade_editor", shade)})
-	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["ha_links", "open_ha_links"],
+	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["esplab", "open_esplab"], ["ha_links", "open_ha_links"],
 			["ha_presets", "open_ha_presets"], ["compare", "open_compare_view"],
 			["linkage_guide", "open_linkage_build_guide"]]:
 		var fn := str(d[1])

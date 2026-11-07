@@ -175,6 +175,24 @@ source's is copied or redistributed. Owed: a thank-you and a pointer back.
     a pipe (string method)" and "…, flat absorber" follow his builds.
   - Status: informational
 
+- **`inspiration-risaldash-boardlab`** — the ESP board designer
+  (`core/esplab/`, `scenes/ui/esplab_modal.gd`): pick an ESPHome board, add
+  sensors and actuators, and see the wiring, the pin caveats and live
+  readouts. BoardLab showed how much a beginner gets from that loop, and its
+  pin-state colours (free / caveat / input only / reserved / power) and its
+  "which pins are safe" advice shaped the designer's diagram and checks.
+  - Author: **ZiyaraGo Technologies** (RisalDash; BoardLab at
+    https://dash.risal.io/boardlab/)
+  - Source: https://github.com/ziyarago/RisalDash
+  - License: MIT (inspiration only — no code, data, artwork or text is used)  ·  Added: 2026-11-07
+  - Attribution required: no (credited as thanks)  ·  Share-alike: no  ·  Commercial OK: yes
+  - Notes: The board pinouts, chip rules and part data were written from the
+    makers' datasheets and ESPHome's component reference, not taken from
+    BoardLab; the auto-wiring, YAML writer, simulated twin and comparison are
+    our own. If BoardLab data is ever imported, its MIT licence text goes in
+    `credits/licenses/` and this entry becomes a code/data entry.
+  - Status: informational
+
 ## Parametric parts — OpenSCAD hardware store
 
 Every `.scad` generator we bundle. Most come from Thingiverse/Printables and

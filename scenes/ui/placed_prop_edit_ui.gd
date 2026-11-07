@@ -889,6 +889,9 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == WindLabBuilder.MODEL_ID or mid == "vawt" or mid == "small_hawt":
 		_button("Design wind turbine…", "The wind turbine designer, bound to this turbine: rotor, gearing, generator, power curve",
 			_model_btns, _on_windlab)
+	if EspBuilder.handles(mid):
+		_button("Edit board…", "The ESP board designer, bound to this board: parts, wiring, what it measures, ESPHome YAML",
+			_model_btns, _on_esplab)
 	if TcBuilder.handles(mid):
 		_button("Edit tri-clamp assembly…", "The tri-clamp designer, bound to this assembly: vessels, fittings, ports",
 			_model_btns, _on_tclab)
@@ -1760,6 +1763,16 @@ func _on_windlab() -> void:
 		gv.call("open_wind_designer", gid)
 	elif main.has_method("open_windlab"):
 		main.call("open_windlab", {"prop_id": pid})
+
+
+func _on_esplab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("open_esplab"):
+		return
+	close()
+	main.call("open_esplab", {"prop_id": pid})
 
 
 func _on_tclab() -> void:

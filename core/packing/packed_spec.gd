@@ -178,6 +178,9 @@ const DYNAMIC_MODELS := {
 	# tc_spec, or the id's built-in). These fallbacks are rough envelopes.
 	"tclab_assembly": {"w_m": 0.8, "d_m": 0.6, "h_m": 0.5, "mass_kg": 25.0,
 		"form": "crate", "source": "estimated"},
+	# An ESP sensor board ships as a parts box and its stake.
+	"esplab_board": {"w_m": 1.2, "d_m": 0.2, "h_m": 0.12, "mass_kg": 1.5,
+		"form": "crate", "source": "estimated"},
 	"tclab_biochar_reactor": {"w_m": 0.9, "d_m": 0.7, "h_m": 0.8, "mass_kg": 60.0,
 		"form": "crate", "source": "estimated"},
 	"tclab_biochar_genset": {"w_m": 1.2, "d_m": 1.0, "h_m": 1.0, "mass_kg": 160.0,

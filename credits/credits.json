@@ -1424,6 +1424,25 @@
       "status": "informational"
     },
     {
+      "id": "inspiration-risaldash-boardlab",
+      "name": "BoardLab (RisalDash) — interactive ESP32 / ESP8266 / Pico pinout and wiring tool",
+      "category": "inspiration",
+      "author": "ZiyaraGo Technologies",
+      "source": "https://github.com/ziyarago/RisalDash",
+      "license": "MIT",
+      "license_file": "",
+      "local_path": "core/esplab/",
+      "role": "inspiration for the ESP board designer: board + parts + wiring diagram + pin caveats + live readouts, and its pin-state colours",
+      "attribution_required": false,
+      "attribution_string": "ESP board designer inspired by BoardLab from RisalDash by ZiyaraGo Technologies (https://dash.risal.io/boardlab/)",
+      "share_alike": false,
+      "commercial_ok": true,
+      "added": "2026-11-07",
+      "modifications": "none of BoardLab's code, data, artwork or text is used; pinouts and part data were written from makers' datasheets and ESPHome's component reference",
+      "notes": "Credited as thanks; nothing redistributed. If BoardLab data is ever imported, add its MIT licence text to credits/licenses/.",
+      "status": "informational"
+    },
+    {
       "attribution_required": true,
       "attribution_string": "Night lights: NASA Earth Observatory Black Marble (GIBS)",
       "author": "NASA Earth Observatory / NASA GIBS",

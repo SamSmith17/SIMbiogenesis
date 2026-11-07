@@ -38,7 +38,11 @@ const HOURLY_VARS := "shortwave_radiation,diffuse_radiation,wind_speed_10m,windg
 ## for `visibility`). Visibility is the model's own fog diagnosis — over CONUS
 ## the forecast feed is HRRR, whose visibility caught the Walton valley fog
 ## (100–500 m) while its T/RH stayed 3–4 °C off saturation.
-const FORECAST_EXTRA_VARS := "wind_direction_80m,wind_direction_180m,wind_speed_80m,wind_speed_180m,visibility"
+## surface_pressure (hPa at the ground) is for the ESP board designer's
+## twin (a BME280 reads station pressure). Forecast only, so the archive
+## caches keep their version; a forecast cached before it reads NAN until the
+## next daily fetch and the twin falls back to the standard atmosphere.
+const FORECAST_EXTRA_VARS := "wind_direction_80m,wind_direction_180m,wind_speed_80m,wind_speed_180m,visibility,surface_pressure"
 const FORECAST_HOURLY_VARS := HOURLY_VARS + "," + FORECAST_EXTRA_VARS
 ## Daily variables fetched for the 1940-present record book (separate request).
 const RECORDS_DAILY_VARS := "temperature_2m_max,temperature_2m_min,precipitation_sum"
@@ -1129,6 +1133,14 @@ func model_visibility_m(month: int, day: int, hour: float) -> float:
 	if _sim_year != _current_calendar_year():
 		return NAN
 	return _sample_forecast_var("visibility", month, day, hour)
+
+
+## Surface (station) pressure, hPa: the forecast window only (the last ~14
+## days and the next 16); NAN outside it or before the forecast carries it.
+func surface_pressure_hpa(month: int, day: int, hour: float) -> float:
+	if _sim_year != _current_calendar_year():
+		return NAN
+	return _sample_forecast_var("surface_pressure", month, day, hour)
 
 
 ## ---------------------------------------------------------------------------

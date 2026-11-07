@@ -160,6 +160,7 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pvlab"><img src="docs/tour/pvlab.jpg" width="260" alt="Solar designer"></a><br><b>Solar designer</b><br><sub>Solar designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#tc_process"><img src="docs/tour/tc_process.jpg" width="260" alt="TC Process Lab"></a><br><b>TC Process Lab</b><br><sub>Process</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#esplab"><img src="docs/tour/esplab.jpg" width="260" alt="ESP board designer"></a><br><b>ESP board designer</b><br><sub>ESP board designer (ESPHome)…</sub></td>
 </tr>
 </table>
 

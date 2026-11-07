@@ -194,6 +194,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		if tc_spec.is_empty():
 			tc_spec = TcBuilder.spec_for_model(model_id)
 		return TcBuilder.build_node(tc_spec, "TriClampAssembly", {"pieces": bool(extras.get("pieces", false))})
+	if EspBuilder.handles(model_id):
+		return EspBuilder.build_node(extras.get("esp_spec", {}) as Dictionary, "EspBoard")
 	if model_id == CspLabBuilder.MODEL_ID:
 		var cs_spec: Dictionary = extras.get("csplab_spec", extras) as Dictionary
 		return CspLabBuilder.build_node(cs_spec, "Concentrator", {})
@@ -758,6 +760,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		# Procedural solar concentrator (CspLabBuilder): the concentrator
 		# designer's lens / mirror / heliostat field with its structure. Its
 		# runtime (CspLabRuntime) turns it to the sun.
+		# Procedural ESP sensor board (EspBuilder): the ESP board designer's
+		# board on a stake with its parts (record key esp_spec); its runtime
+		# (EspLabRuntime) is the board's twin reading the world.
+		{"id": "esplab_board", "label": "ESP sensor board (designed)",
+			"procedural": true, "preserve_scale": true, "category": "tools"},
 		{"id": "csplab_concentrator", "label": "Solar concentrator (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		# Procedural tri-clamp process assemblies (TcBuilder): the tri-clamp

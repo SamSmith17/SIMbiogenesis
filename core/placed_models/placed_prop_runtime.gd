@@ -223,6 +223,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pv_tracker(prop, rec)
 		WindLabRuntime.attach(prop, rec)
 		CspLabRuntime.attach(prop, rec)
+		EspLabRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
@@ -862,6 +863,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["csplab_spec"] = rec.get("csplab_spec", {})
 	if rec.has("tc_spec"):
 		extras["tc_spec"] = rec.get("tc_spec", {})
+	if rec.has("esp_spec"):
+		extras["esp_spec"] = rec.get("esp_spec", {})
 	if rec.has("vehicle_spec"):
 		extras["vehicle_spec"] = rec.get("vehicle_spec", {})
 	if model_id == GrowBed.MODEL_ID:

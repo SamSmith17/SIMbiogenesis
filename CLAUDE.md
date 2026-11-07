@@ -1186,6 +1186,52 @@ Godot.exe.exe --headless --path . --script tools/diag/tc_chain_probe.gd -- --hou
 # off), a placed reactor's node taking the fitted batch by a real click on
 # "Use this run on the graph", UiAudit clean (run at 720 too):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_process_check.gd -Label tc_process
+# ESP board designer (offline — core/esplab/): every board's header GPIOs
+# against its chip's rules, HA's entity-id slug, the auto-wire solver (I2C
+# address clash -> other address -> second bus -> error, shared SPI with a CS
+# each, UARTs off the console, one 1-Wire pin, ADC1 with Wi-Fi on, input-only
+# pins for inputs only, pull-ups, locked wires, RP2040 fixed pin sets,
+# determinism), the checks, a golden YAML, secrets by reference only, the
+# built-in designs, the layout never in the key; the twin (tick hold, scrub
+# purity, per-unit bias inside the spec, 1/16 C steps, the soil probe's
+# volts <-> % both ways, a player's offset moving the twin, pulses / min,
+# lag, change-only history, uptime) and the probe (ISA, bindings, people,
+# estimates said so); the compare maths (matching, history, stats, verdict,
+# calibration, cal filters skipped by the twin) and the breadth pass (every
+# board wires a small I2C set, nothing digital on the ESP8266's A0, ESP32-only
+# parts refused elsewhere, the hub / LD2410 / ADS1115 / CAN / I2S / LCD YAML,
+# no screen prints an id-less reading, every part's twin source answered).
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/esplab/esplab_selftest.gd
+# The YAML through ESPHome's own validator (460 designs: every part on each
+# of seven chip families, every board, every built-in, a hub board, a
+# calibrated design). Needs the ESPHome CLI
+# (`pip install esphome`, a venv is fine; --esphome <exe>); skips without it:
+python tools/checks/esphome_validate.py
+# The designer with REAL input (sandbox; run at 1080 AND 720 for the fold):
+# every built-in, UiAudit, Empty board, five parts from the palette, a part
+# pin dragged onto a board pin (wired by hand), a double-click giving it back,
+# a card drag (layout only), Delete + Ctrl+Z, the twin's live readings (the
+# BME280 within 1.5 C of the site's weather, pressure in hPa, the cards and
+# the entity list showing them), the YAML tab, Copy YAML, Export files, a
+# board switch, Esc:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/esplab_designer_check.gd -Label esplab
+# A placed board on a real world (sandbox): a test tank + pump on the graph,
+# the ultrasonic and float bound to the tank and the relay to the pump; the
+# record, model, runtime and graph node (watts, bound); the water 0.6 m down
+# at 40 %, the unbound ultrasonic's ray to the ground, the BME280 near the
+# site's air; the tank filled (float wet, 25 cm blind zone), the pump off
+# (relay off), the node off (all unavailable, "no power"); the designer
+# opened from the prop, the picker, Apply renaming; delete removes the node;
+# side + close-up shots at noon:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/esplab_world_check.gd -Label esplab_world
+# Compare with the real board (sandbox, HaFakeServer plays the board: its
+# entities under the predicted ids, a day of history = the twin's ideal
+# reading with the temperature 0.8 C warm): REAL clicks on Compare / Find my
+# board / Compare, every entity matched, bias 0.80 r 1.00 "good", humidity 0,
+# Calibrate: offset writes "- offset: -0.8" into the YAML, the corrected
+# history then compares at bias 0; UiAudit clean (run at 720 too):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/esplab_compare_probe.gd -Label esplab_compare -Timeout 900
 # Tri-clamp designer (offline — core/tclab/): the size table against its
 # sources and the reference GLB (1½" 50.5 mm, 2" 64 mm faces), every part
 # type × size built with every triangle on Godot's front face and a clamp
@@ -5343,6 +5389,156 @@ chemistry engine.
   molecule lens, the Control tab); modal audit entry `tc_process`; bench
   `tools/bench/tc_proc_bench.gd` (per built-in: CVs, links, ms/step, the
   pre-run time, section costs; 1 s steps; snapshot / seek).
+
+## ESP board designer (core/esplab/, 2026-11-07)
+
+Library → Structures → "ESP board designer (ESPHome)…" (`Main.open_esplab({spec})`,
+layer `EspLabLayer`). Plan: `~/.claude/plans/take-a-look-at-shimmering-fountain.md`
+(8 phases, inspired by BoardLab, dash.risal.io/boardlab). The user chose: the
+sim / real comparison happens in the game (nothing published to HA),
+ESPHome-supported boards only, a placed twin reads the world at its spot.
+All 8 phases landed (data, solver, YAML, the modal, the twin, boards in the
+world, compare with the real board, breadth + tour stop `18m_esplab`). Not
+built: the timeline `esp_sim` track; the ESP32-H2 (no Wi-Fi: its YAML would
+need OpenThread).
+- **Data is GDScript constants**, not JSON (no `GAME_INCLUDE`, no folder
+  listing in exported builds): `EspChips` (per chip: input-only, strapping,
+  flash / USB / console pins, ADC1 / ADC2, peripheral counts, routing =
+  "matrix" or fixed controller pin lists for the RP2040; seven chips incl.
+  the ESP32-S2), `EspBoards` (18 boards: header rows "LABEL=gpio" top to
+  bottom, onboard use, a screen board's reserved pins, default I2C / SPI
+  pins, regulator mA, optional `flash_size` (written to the YAML: the
+  XIAO C6 / S3-Zero / T-Display use a devkit board id with their own flash)
+  and `pin_note`; `pin_state` = free / caveat / input_only / reserved /
+  rails), `EspParts` (61 parts in 12 categories: iface, addresses, supply,
+  optional `chips` (prefixes it works on: CAN and I2S are ESP32-family only
+  in ESPHome) and `note` (a caveat on its card), pins with roles FROM THE PART'S SIDE
+  (`tx` = the part transmits -> board RX), the ESPHome block, the entities
+  with HA unit / device_class / decimals and the twin's error model).
+- **`EspAutoWire`** (deterministic): locks first, then I2C (clash -> other
+  address -> second bus -> error), SPI, UART, 1-Wire, singles on the
+  cheapest GPIO (`_cost`: strapping, onboard use, console, ADC kept for
+  analog, input-only pins preferred for plain inputs). Checks carry `why`.
+  ⚠ A chip's `analog_only` pins (the ESP8266's A0 = GPIO17) take ONLY an
+  analog role: it is also input-only, and the input-only bonus used to put
+  plain inputs (a PIR, an e-paper's BUSY) on A0, which ESPHome refuses.
+- **Block kinds in `EspYaml`** (`yaml.special`): `hub` (an entity-less
+  top-level block with an id: MCP23017, PCF8574, MAX485 → `modbus`
+  with `flow_control_pin`, SN65HVD230 → `canbus` / `esp32_can`), `ads1115`
+  (hub + a single-ended channel sensor), `ld2410` (hub on its UART +
+  `has_target` binary sensor + `detection_distance`), `i2s_mic`
+  (`i2s_audio` bus + `microphone`), `lcd` (16x2 `lcd_pcf8574`, name +
+  first reading), `ssd1306` / `epaper` (`_emit_screen`: a font and a
+  lambda; the model from `yaml.model`). ⚠ `esphome config` does not compile
+  lambdas: a screen printed the diagnostics' readings as `id().state`
+  (they have no id) and still "passed". Screens skip id-less entities; the
+  selftest greps every screen's YAML for `id()`.
+- **`EspEntityNames` is the one naming contract**: HA's entity_id =
+  domain.slugify(friendly_name + " " + entity name). A part whose one entity
+  IS the part (Relay, Button, LED Strip) takes the instance's own name: a
+  relay called "Fan" is `switch.<node>_fan`.
+- **`EspYaml`**: `!secret` for Wi-Fi and the API key; OTA is
+  `encryption: {}` (inherits the API key). Validated against ESPHome
+  2026.10.2: pmsx003 needs the UART's tx_pin; `rp2:` not `rp2040:`;
+  `channel_colors: GRB` not rgb_order; rp2040_pio_led_strip needs `pio:`.
+  A key starting "#" prints a comment line; "!" strings print raw.
+- **`EspSpec.layout`** (the diagram's card positions) rides the spec but is
+  never in `key_of`, so moving a card never re-solves. The cached design's
+  `spec` may carry an older layout: the modal reads its own `_spec`.
+- **The modal** (`scenes/ui/esplab_modal.gd` on `DesignerShell`) and
+  **`esplab_diagram.gd`** (drawn in screen space from diagram units so text
+  stays crisp; part cards stack on the side most of their GPIOs are on;
+  a card the player moved keeps its spot (`spec.layout`), the rest restack
+  on every layout so a card that grows pushes the ones below it down). Drag a part pin onto a board pin = a lock;
+  double-click a wire = unlock; Delete / Ctrl+Z / F. Export writes
+  `user://esplab_designs/<node>/` (YAML, secrets.yaml only if absent,
+  wiring.png cut from the viewport, design.json).
+- **The twin (`EspSim`) is a pure function of time**: a reading at t is the
+  value at the entity's last update tick (phased per unit by a hash), from
+  `source(src, at_h)`, then response lag (first-order over earlier ticks),
+  a fixed per-unit bias inside the datasheet accuracy (`BIAS_SHARE` 0.5),
+  hashed Gaussian noise per tick, range, resolution; then the part's own
+  default filters are INVERTED to the raw signal (a soil probe's volts, a
+  flow meter's pulses / min) and EVERY YAML filter (the part's, then the
+  player's) is applied in ESPHome's order, rounded to accuracy_decimals.
+  So an `offset` the player adds moves the twin exactly as it moves the
+  board. `series()` = what HA's recorder keeps (a point only on change).
+  Entities carry `part_filters` (how many of `filters` are the part's).
+- **`EspWorldProbe`** = the world at a spot, asked at an instant (cached
+  per (src, t)): WeatherService temperature / humidity / rain / measured
+  GHI, `surface_pressure_hpa` (a FORECAST-ONLY Open-Meteo variable added
+  for this; no archive cache bump; NAN outside the window -> the ISA
+  pressure at the spot's height above sea level, said in a note),
+  AirQualityService PM, and ESTIMATES (flagged per source, `note_of`) for
+  lux (GHI × 115), UV (GHI × 0.0085), CO₂ (420 + 35 per person within
+  4 m), soil (a rain bucket). `bindings` {src: Callable(t) | value} feed
+  power / weight / flow / float / switch; `people_fn` and `distance_fn`
+  come from the world in phase 5. Autoloads are found by path.
+- The modal evaluates every entity once a second at the player's spot and
+  the sim clock (`live_readings()`): cards and the entity list show them.
+- **In the world (phase 5).** Catalog `esplab_board` (tools), record key
+  `esp_spec` (forwarded by `model_extras` AND the placement ghost), seed
+  `PlacedPropService.seed_esplab` from BOTH placement chains: an `appliance`
+  graph node bound to the prop drawing `EspBuilder.power_w` (the 5 V budget)
+  — off, or the site's AC down, makes every entity unavailable (as with no
+  power). `EspBuilder`: a sensor station on a 1.2 m stake (primitive
+  meshes): enclosure + the PCB at its real size, air / light sensors in a
+  radiation shield, distance sensors on arms looking DOWN, soil probes in
+  the ground, relays on the side, a screen, an LED strip; metas
+  `sensor_points`, `distance_points`, `label_y`, `esp_board`. ⚠ PlacedProp
+  renames the model `ModelRoot`: find it with `EspLabRuntime.board_model`.
+  `EspLabRuntime` (gameplay/, beside CspLabRuntime) reads the twin once a
+  second at the prop and the sim clock: people = NPC dots + the player
+  within range; an unbound distance sensor = a ray straight down from its
+  arm (own bodies excluded, terrain fallback); `latest`, a Label3D over the
+  stake. ⚠ The runtime is a plain Node: its Label3D is parented to the
+  PROP or it draws at the world origin.
+- **Bindings (`EspBindings`)**: a part's `measures` can name a graph item
+  instead of the world: `tank.<gid>.distance_m` (height × (1 − level);
+  height = `height_m`, else a cube of its volume — an estimate),
+  `tank.<gid>.high` (≥ 90 %), `tank.<gid>.mass_kg`, `item.<gid>.voltage`,
+  `load.<gid>.power_w / current_a / current_ac / energy_wh / ac_v / ac_hz /
+  pf` (mains 120 V / 60 Hz in the Americas, else 230 / 50), and
+  `item.<gid>.switch` (a relay follows its load). Read LIVE from the graph
+  specs (never cached by the probe); the part card's "<entity> from" /
+  "Follows" picker lists only compatible items. The JSN-SR04T's 25 cm blind
+  zone shows as a full tank reading 0.25 m (its range limit, correct).
+  ⚠ A tank's level is its ResourceTimeline's: writing specs.level alone is
+  undone by the flow engine; set the timeline too (`set_current_level`).
+- The designer: Place in world (`begin_placement` with `record_extra`),
+  Apply to placed board (record + `seed_esplab` re-rates and renames the
+  node), opened bound from the prop editor's "Edit board…" (the live probe
+  then stands at the prop and reads the graph).
+- ⚠ `PackedStringArray` has no `all()`: wrap it in `Array(...)` first.
+- ⚠ A PackedStringArray / PackedFloat32Array fetched from a Dictionary is a
+  COPY: `(d[k] as PackedStringArray).append(x)` appends to nothing. Append
+  to a local and assign it back (the cards showed no readings until this).
+- ⚠ `d.get("k", {}) is Dictionary` is true for a MISSING key: test
+  `has("k")` before indexing.
+- **Compare with the real board (phase 6, the modal's Compare tab,
+  `EspCompare` pure).**
+  - **Find my board** (`EspCompare.match_entities`): the id the naming
+    contract predicts, else the one catalog entity of the domain whose id
+    ends with the entity's slug and whose unit is of the same family (a
+    renamed node); a saved choice wins. The map is `spec.real` {twin id:
+    real id}; each row also has a picker.
+  - **Compare** (`run_compare`): `HomeAssistant.request_history` per entity
+    over 6 h / 24 h / 3 d / 7 d, rows onto the SITE clock
+    (`parse_history` → `SiteTime.unix_to_site_abs`), against the twin's
+    IDEAL series (`EspSim` `ideal`: no per-unit bias or noise, still the
+    part's resolution and the design's filters) at the bound board's spot
+    (else the player's), tank history from the tanks' ResourceTimelines
+    (`EspWorldProbe.tank_level_fn` → `EspBindings.read(..., level_at)`).
+    `stats` holds both on one grid: n, coverage, bias (real − twin), MAE,
+    RMSE, r, the line real = a·twin + b; `verdict` = good / fair / poor
+    against the part's own datasheet accuracy. Chart:
+    `scenes/ui/esplab_compare_chart.gd` (held steps, twin cyan, real amber).
+  - **Calibrate** writes an ESPHome `offset` (−bias) or `calibrate_linear`
+    (the inverse line over the range seen) filter onto that entity
+    (`with_calibration` replaces an earlier one, keeps the player's own).
+    Calibration filters carry `"cal": true`: `EspYaml` strips the marker,
+    the twin SKIPS them (they correct the real sensor toward the twin), so
+    after reflashing the comparison reads bias ≈ 0.
 
 ## Solar designer (core/pvlab/, 2026-10-27)
 
