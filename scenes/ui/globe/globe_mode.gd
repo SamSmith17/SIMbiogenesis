@@ -14,8 +14,12 @@ extends Control
 ## - Layers: solar zones (bands / smooth), city lights, and the weather
 ##   (GlobeWeather): live clouds (the last few hours), rain (IMERG, since
 ##   1998) and the satellite image of the day (MODIS, since 2000), all at the
-##   globe's time. On the hub a strip scrubs that time back up to 3 days;
-##   in-game it is the sim clock.
+##   globe's time. A strip scrubs a year either side of now (the sim clock
+##   in-game, the wall clock on the hub) without moving the world's clock.
+##   Play runs that strip. Sun, moon and planet paths match the first-person
+##   analemma. Earth / Moon swaps which body the view orbits; the Moon stands
+##   at its true distance, so from the Earth it is the small disc it really
+##   is, and from the Moon the Earth hangs over the horizon.
 ## - In-game it opens on the running world's site, marked "You are here".
 ## - Zooming down near a world draws that world's own cached terrain photos
 ##   over the globe's tiles (GlobeDrape), and Play / Create world here "fly
@@ -36,6 +40,11 @@ const COLOUR_ZONES := 1
 const COLOUR_TEMP := 2
 const COLOUR_POWER := 3
 const COLOUR_ATLAS := 4
+const COLOUR_IRRADIANCE := 5
+## The time strip, hours either side of now. A year, plus a day for the leap.
+const TIME_SPAN_H := 366.0 * 24.0
+const _PLAY_SPEEDS := [0.0, 1.0, 24.0, 168.0]
+const _PLAY_LABELS := ["Play", "1 h/s", "1 d/s", "7 d/s"]
 ## 2 m air temperature, °C: edges every 12 °C, blue to red.
 const TEMP_COLORS := [Color("#2c3e9e"), Color("#4f9bd9"), Color("#bfe6f2"), Color("#f7e08b"),
 	Color("#f39a4b"), Color("#c8303b")]
@@ -94,6 +103,21 @@ var _time_lbl: Label
 var _data_lbl: Label
 var _in_game := false
 var _time_offset_h := 0.0
+var _sim_jd: Callable
+var _play_h_per_s := 0.0
+var _play_btn_time: Button
+var _time_dragging := false
+var _body_earth: Button
+var _body_moon: Button
+var _home_btn: Button
+var _now_btn: Button
+var _search_go: Button
+var _time_bar: PanelContainer
+var _sun_lbl: Label
+var _path_sun: CheckBox
+var _path_moon: CheckBox
+var _path_planets: CheckBox
+var _colour_before_moon := COLOUR_ZONES
 var _wx_key := ""
 var _wx_poll := 0.0
 var _wx_text := {"clouds": "", "rain": "", "sat": "", "wind": "", "aurora": ""}
@@ -130,12 +154,10 @@ static func open(parent: Node, site: PackedFloat64Array = PackedFloat64Array(),
 	var gm := GlobeMode.new()
 	gm._here = site
 	gm._site_info = site_info
+	gm._sim_jd = time_provider
+	gm._in_game = time_provider.is_valid()
 	gm.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(gm)
-	if time_provider.is_valid():
-		gm._in_game = true
-		gm.globe.time_provider = time_provider
-		gm._wx_key = ""
 	return gm
 
 
@@ -153,6 +175,9 @@ func _ready() -> void:
 	add_child(globe)
 	globe.point_clicked.connect(_on_point_clicked)
 	globe.point_hovered.connect(_on_point_hovered)
+	globe.companion_clicked.connect(_on_companion_clicked)
+	globe.body_changed.connect(_on_body_changed)
+	globe.time_provider = Callable(self, "_jd_now")
 	_geocode = GeocodeClient.new()
 	_geocode.name = "Geocode"
 	add_child(_geocode)
@@ -173,8 +198,6 @@ func _ready() -> void:
 	_climate.name = "Climate"
 	add_child(_climate)
 	_climate.point_ready.connect(_on_climate_point)
-	globe.time_provider = func() -> float:
-		return GlobeMath.jd_from_unix(Time.get_unix_time_from_system() + _time_offset_h * 3600.0)
 	_build_top_bar()
 	_build_card()
 	_build_bottom()
@@ -236,6 +259,12 @@ func _unhandled_key_input(ev: InputEvent) -> void:
 		else:
 			close()
 		get_viewport().set_input_as_handled()
+	elif k.physical_keycode == KEY_SPACE:
+		_cycle_play()
+		get_viewport().set_input_as_handled()
+	elif k.physical_keycode == KEY_HOME:
+		_go_home()
+		get_viewport().set_input_as_handled()
 
 
 # --- UI ---------------------------------------------------------------------
@@ -268,6 +297,21 @@ func _build_top_bar() -> void:
 	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	title.add_theme_color_override("font_color", UITheme.C_TEXT)
 	row.add_child(title)
+	var bodies := ButtonGroup.new()
+	_body_earth = _body_button("BodyEarth", "Earth", bodies,
+		"Orbit the Earth. The Moon hangs where it really is; click it to go there.")
+	_body_earth.button_pressed = true
+	_body_earth.pressed.connect(func() -> void: globe.set_primary_body("earth"))
+	row.add_child(_body_earth)
+	_body_moon = _body_button("BodyMoon", "Moon", bodies,
+		"Orbit the Moon: an Earthrise over its eastern limb, the sunlight map, the subsolar track.")
+	_body_moon.pressed.connect(func() -> void: globe.set_primary_body("moon"))
+	row.add_child(_body_moon)
+	row.add_child(VSeparator.new())
+	_home_btn = IconButton.make("house", "Back to where you are (Home)", _go_home)
+	_home_btn.name = "HomeButton"
+	_home_btn.visible = _here.size() == 2 or not WorldStore.list().is_empty()
+	row.add_child(_home_btn)
 	_search = LineEdit.new()
 	_search.name = "Search"
 	_search.placeholder_text = "Search a place or address…"
@@ -275,6 +319,7 @@ func _build_top_bar() -> void:
 	_search.text_submitted.connect(func(t: String) -> void: _do_search(t))
 	row.add_child(_search)
 	var go := IconButton.make("search", "Search", func() -> void: _do_search(_search.text))
+	_search_go = go
 	row.add_child(go)
 	_hits = ItemList.new()
 	_hits.name = "SearchHits"
@@ -296,6 +341,41 @@ func _build_top_bar() -> void:
 	close_btn.offset_left = -16
 	close_btn.offset_top = 16
 	add_child(close_btn)
+
+
+## One half of the Earth / Moon switch.
+static func _body_button(nm: String, text: String, group: ButtonGroup, tip: String) -> Button:
+	var b := Button.new()
+	b.name = nm
+	b.text = text
+	b.toggle_mode = true
+	b.button_group = group
+	b.tooltip_text = tip
+	b.custom_minimum_size = Vector2(66, 0)
+	b.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(b)
+	var on := StyleBoxFlat.new()
+	on.bg_color = Color(UITheme.C_PRIMARY, 0.22)
+	on.border_color = Color(UITheme.C_PRIMARY, 0.8)
+	on.set_border_width_all(1)
+	on.set_corner_radius_all(UITheme.CORNER_RADIUS)
+	on.set_content_margin_all(6)
+	on.content_margin_left = 10
+	on.content_margin_right = 10
+	b.add_theme_stylebox_override("pressed", on)
+	b.add_theme_color_override("font_pressed_color", UITheme.C_TEXT)
+	return b
+
+
+## Fly back to the running world (in-game) or the newest world (the hub).
+func _go_home() -> void:
+	if globe.primary_body() != "earth":
+		globe.set_primary_body("earth")
+	if _here.size() == 2:
+		globe.fly_to(_here[0], _here[1], 0.05)
+	elif not _worlds.is_empty():
+		var ll := WorldLauncher.world_latlon(_worlds[0])
+		globe.fly_to(ll[0], ll[1], 0.05)
 
 
 func _build_card() -> void:
@@ -345,7 +425,7 @@ func _build_card() -> void:
 	UITheme.style_button(_fly_btn)
 	_fly_btn.pressed.connect(func() -> void:
 		if _sel.size() == 2:
-			globe.fly_to(_sel[0], _sel[1], 0.004))
+			globe.fly_to(_sel[0], _sel[1], 0.004 if globe.primary_body() == "earth" else 0.08))
 	btns.add_child(_fly_btn)
 	_create_btn = Button.new()
 	_create_btn.name = "CreateWorldButton"
@@ -375,15 +455,12 @@ func _build_bottom() -> void:
 	add_child(bar)
 	bar.resized.connect(func() -> void: globe.set_credits_left(bar.position.x + bar.size.x + 16.0))
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 6)
+	col.add_theme_constant_override("separation", 5)
 	bar.add_child(col)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
+	row.add_theme_constant_override("separation", 8)
 	col.add_child(row)
-	var cl := Label.new()
-	cl.text = "Colour by"
-	cl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	row.add_child(cl)
+	_section_label(row, "Colour by")
 	_colour_by = OptionButton.new()
 	_colour_by.name = "ColourBy"
 	_colour_by.add_item("Nothing", COLOUR_NONE)
@@ -393,7 +470,7 @@ func _build_bottom() -> void:
 	if GlobeSolarAtlas.layer() != null:
 		_colour_by.add_item("Solar atlas (PV output)", COLOUR_ATLAS)
 	_colour_by.selected = COLOUR_ZONES
-	_colour_by.tooltip_text = "Solar zones: mean daily sunshine on flat ground (GHI), NASA POWER 2001-2020, the map picker's zones.\nTemperature: air at 2 m, NOAA GFS at the globe's time.\nWind power: the power in the wind at 100 m (from GFS 10 m wind, open land), a snapshot not a climate."
+	_colour_by.tooltip_text = "Solar zones: mean daily sunshine on flat ground (GHI), NASA POWER 2001-2020, the map picker's zones.\nTemperature: air at 2 m, NOAA GFS at the globe's time.\nWind power: the power in the wind at 100 m (from GFS 10 m wind, open land), a snapshot not a climate.\nOn the Moon: sunlight in W/m² (clear sky, no air).\nA layer fades out as you come down to where the photo says more."
 	_colour_by.item_selected.connect(func(i: int) -> void: _set_colour(_colour_by.get_item_id(i)))
 	row.add_child(_colour_by)
 	_zones_mode = OptionButton.new()
@@ -402,12 +479,39 @@ func _build_bottom() -> void:
 	_zones_mode.add_item("Smooth", 1)
 	_zones_mode.item_selected.connect(func(_i: int) -> void: _restyle_zones())
 	row.add_child(_zones_mode)
-	_lights_toggle = CheckBox.new()
-	_lights_toggle.name = "LightsToggle"
-	_lights_toggle.text = "City lights"
-	_lights_toggle.button_pressed = true
+	_legend = HBoxContainer.new()
+	_legend.name = "Legend"
+	_legend.add_theme_constant_override("separation", 6)
+	col.add_child(_legend)
+	var wrow := HBoxContainer.new()
+	wrow.add_theme_constant_override("separation", 10)
+	col.add_child(wrow)
+	_section_label(wrow, "Weather")
+	_wind_toggle = _layer_check(wrow, "WindToggle", "Wind", true,
+		"Wind at 10 m as moving streamlines (NOAA GFS 1°, runs every 6 h since 2021), coloured by speed.")
+	_clouds_toggle = _layer_check(wrow, "CloudsToggle", "Clouds", true,
+		"Cloud tops from geostationary weather satellites (NOAA nowCOAST infrared mosaic, hourly). Only the last few hours are served.")
+	_rain_toggle = _layer_check(wrow, "RainToggle", "Rain", false,
+		"Rain and snow rate from NASA GPM IMERG, every 30 minutes since 1998, about 5 hours behind real time.")
+	_sat_toggle = _layer_check(wrow, "SatelliteToggle", "Satellite", false,
+		"The whole Earth as one satellite saw it that day (NASA MODIS Terra true colour, since 2000), clouds and all.")
+	_aurora_toggle = _layer_check(wrow, "AuroraToggle", "Aurora", _pref("aurora", true),
+		"The northern and southern lights at the globe's time: curtains along the field lines from 100 to 400 km. NOAA's OVATION nowcast near the present, else the oval for that time's Kp (NOAA SWPC, GFZ Potsdam).")
+	_aurora_toggle.toggled.connect(func(on: bool) -> void: _set_pref("aurora", on))
+	var prow := HBoxContainer.new()
+	prow.name = "PathRow"
+	prow.add_theme_constant_override("separation", 10)
+	col.add_child(prow)
+	_section_label(prow, "Sky")
+	_lights_toggle = _layer_check(prow, "LightsToggle", "City lights", true,
+		"The night side's lights as points (NASA Black Marble): a glow from orbit, towns and roads as you come down.")
 	_lights_toggle.toggled.connect(func(on: bool) -> void: globe.set_night_lights(on))
-	row.add_child(_lights_toggle)
+	_path_sun = _layer_check(prow, "PathSun", "Sun", _pref("path_sun", false),
+		"The Sun's year: its analemma in the sky of the place you are over (at this time of day), today's Sun on it, and the subsolar track on the ground. On the Moon, the subsolar point and its track.")
+	_path_moon = _layer_check(prow, "PathMoon", "Moon", _pref("path_moon", false),
+		"The Moon's path over one month, at its true distance, and where it stands overhead.")
+	_path_planets = _layer_check(prow, "PathPlanets", "Planets", _pref("path_planets", false),
+		"Mercury to Saturn: a year of each among the stars, and where each is today.")
 	_labels_toggle = CheckBox.new()
 	_labels_toggle.name = "LabelsToggle"
 	_labels_toggle.text = "Labels"
@@ -417,54 +521,106 @@ func _build_bottom() -> void:
 	_labels_toggle.toggled.connect(func(on: bool) -> void:
 		globe.labels_on = on
 		_set_pref("labels", on))
-	row.add_child(_labels_toggle)
-	_legend = HBoxContainer.new()
-	_legend.name = "Legend"
-	_legend.add_theme_constant_override("separation", 6)
-	col.add_child(_legend)
-	var wrow := HBoxContainer.new()
-	wrow.add_theme_constant_override("separation", 12)
-	col.add_child(wrow)
-	_wind_toggle = _layer_check(wrow, "WindToggle", "Wind", true,
-		"Wind at 10 m as moving streamlines (NOAA GFS 1°, runs every 6 h since 2021), coloured by speed.")
-	_clouds_toggle = _layer_check(wrow, "CloudsToggle", "Clouds", true,
-		"Cloud tops from geostationary weather satellites (NOAA nowCOAST infrared mosaic, hourly). Only the last few hours are served.")
-	_rain_toggle = _layer_check(wrow, "RainToggle", "Rain", false,
-		"Rain and snow rate from NASA GPM IMERG, every 30 minutes since 1998, about 5 hours behind real time.")
-	_sat_toggle = _layer_check(wrow, "SatelliteToggle", "Satellite of the day", false,
-		"The whole Earth as one satellite saw it that day (NASA MODIS Terra true colour, since 2000), clouds and all.")
-	_aurora_toggle = _layer_check(wrow, "AuroraToggle", "Aurora", _pref("aurora", true),
-		"The northern and southern lights at the globe's time: NOAA's OVATION nowcast near the present, else the oval for that time's Kp (NOAA SWPC, GFZ Potsdam).")
-	_aurora_toggle.toggled.connect(func(on: bool) -> void: _set_pref("aurora", on))
+	prow.add_child(_labels_toggle)
+	_path_sun.toggled.connect(func(on: bool) -> void: _sync_paths(on))
+	_path_moon.toggled.connect(func(on: bool) -> void: _sync_paths(on))
+	_path_planets.toggled.connect(func(on: bool) -> void: _sync_paths(on))
+	globe.set_paths(_path_sun.button_pressed, _path_moon.button_pressed, _path_planets.button_pressed)
 	var sw := get_node_or_null("/root/SpaceWeather")
 	if sw != null:
 		sw.updated.connect(func() -> void:
 			if not _closing:
 				_wx_key = ""
 				_wx_poll = 0.0)
-	var trow := HBoxContainer.new()
-	trow.add_theme_constant_override("separation", 8)
-	col.add_child(trow)
-	_time_slider = HSlider.new()
-	_time_slider.name = "TimeSlider"
-	_time_slider.min_value = -72.0
-	_time_slider.max_value = 0.0
-	_time_slider.step = 0.5
-	_time_slider.value = 0.0
-	_time_slider.custom_minimum_size = Vector2(220, 0)
-	_time_slider.tooltip_text = "Look back in time (up to 3 days): the Sun, the clouds, the rain and the satellite image follow."
-	_time_slider.value_changed.connect(func(v: float) -> void:
-		_time_offset_h = v
-		_wx_poll = 0.0)
-	trow.add_child(_time_slider)
-	_time_lbl = _label(trow, UITheme.FONT_SM, UITheme.C_TEXT)
-	_time_lbl.name = "TimeLabel"
-	_time_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_data_lbl = _label(col, UITheme.FONT_XS, UITheme.C_TEXT_M)
 	_data_lbl.name = "DataTimes"
 	_hover = _label(col, UITheme.FONT_SM, UITheme.C_TEXT_S)
 	_hover.name = "HoverReadout"
-	_hover.text = "Drag to turn · wheel to zoom · right-drag to tilt · click a place"
+	_hover.text = HINT
+	_build_time_bar()
+
+
+const HINT := "Drag to turn · wheel to zoom · right-drag to tilt · click a place · Space plays the year"
+
+## The time strip: bottom right, above the credits. A year either side of
+## now, Play through it, Now to come back.
+func _build_time_bar() -> void:
+	_time_bar = PanelContainer.new()
+	_time_bar.name = "TimeBar"
+	_time_bar.add_theme_stylebox_override("panel", _glass())
+	_time_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	_time_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_time_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_time_bar.offset_right = -16
+	_time_bar.offset_left = -16
+	_time_bar.offset_bottom = -36
+	_time_bar.offset_top = -36
+	add_child(_time_bar)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	_time_bar.add_child(col)
+	var trow := HBoxContainer.new()
+	trow.add_theme_constant_override("separation", 6)
+	col.add_child(trow)
+	_now_btn = Button.new()
+	_now_btn.name = "TimeNow"
+	_now_btn.text = "Now"
+	_now_btn.tooltip_text = "Back to the present (the sim clock in-game)."
+	_now_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(_now_btn)
+	_now_btn.pressed.connect(func() -> void:
+		_set_play(0.0)
+		set_time_offset_h(0.0))
+	trow.add_child(_now_btn)
+	var back := IconButton.make("rewind", "A day back", func() -> void: set_time_offset_h(_time_offset_h - 24.0))
+	trow.add_child(back)
+	_time_slider = HSlider.new()
+	_time_slider.name = "TimeSlider"
+	_time_slider.min_value = -TIME_SPAN_H
+	_time_slider.max_value = TIME_SPAN_H
+	_time_slider.step = 0.5
+	_time_slider.value = 0.0
+	_time_slider.custom_minimum_size = Vector2(300, 0)
+	_time_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_time_slider.focus_mode = Control.FOCUS_NONE
+	_time_slider.tooltip_text = "A year either side of now. The Sun, the Moon, the stars and the paths follow. Clouds, rain and wind only where those records exist."
+	_time_slider.value_changed.connect(func(v: float) -> void:
+		_time_offset_h = v
+		_wx_poll = 0.0
+		globe.refresh_sun()
+		_time_lbl.text = _time_text(globe_unix()))
+	_time_slider.drag_started.connect(func() -> void:
+		_time_dragging = true
+		globe.sun_continuous = true)
+	_time_slider.drag_ended.connect(func(_changed: bool) -> void:
+		_time_dragging = false
+		globe.sun_continuous = _play_h_per_s != 0.0)
+	trow.add_child(_time_slider)
+	var fwd := IconButton.make("fast-forward", "A day on", func() -> void: set_time_offset_h(_time_offset_h + 24.0))
+	trow.add_child(fwd)
+	_play_btn_time = IconButton.make("play", "Play the year: 1 hour, 1 day, then 7 days per second. Click again to pause (Space).", _cycle_play, "Play")
+	_play_btn_time.name = "TimePlay"
+	_play_btn_time.custom_minimum_size = Vector2(84, 0)
+	trow.add_child(_play_btn_time)
+	_time_lbl = _label(col, UITheme.FONT_SM, UITheme.C_TEXT)
+	_time_lbl.name = "TimeLabel"
+	_time_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_time_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_sun_lbl = _label(col, UITheme.FONT_XS, UITheme.C_TEXT_M)
+	_sun_lbl.name = "SunLine"
+	_sun_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_sun_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+
+
+func _section_label(parent: Node, text: String) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	l.custom_minimum_size = Vector2(58, 0)
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	parent.add_child(l)
+	return l
 
 
 func _layer_check(parent: Node, nm: String, text: String, on: bool, tip: String) -> CheckBox:
@@ -496,6 +652,7 @@ func _label(parent: Node, fs: int, c: Color) -> Label:
 func _set_colour(mode: int) -> void:
 	_colour = mode
 	_zones_mode.disabled = mode == COLOUR_NONE
+	_zones_mode.visible = mode != COLOUR_IRRADIANCE
 	_build_legend()
 	_refresh_layer_lines()
 	if _data_lbl != null:
@@ -515,7 +672,7 @@ func _set_colour(mode: int) -> void:
 			if _closing or not is_instance_valid(self):
 				return
 			_overlay_tex = tex
-			_hover.text = "Drag to turn · wheel to zoom · right-drag to tilt · click a place"
+			_hover.text = HINT
 			if _colour == COLOUR_ZONES:
 				_apply_colour())
 		return
@@ -525,6 +682,8 @@ func _set_colour(mode: int) -> void:
 ## Puts the chosen colour layer on the globe (or clears it until its data
 ## is in: temperature and wind power come with the GFS run).
 func _apply_colour() -> void:
+	if _colour != COLOUR_IRRADIANCE:
+		globe.set_moon_irradiance(false)
 	var m := _zones_mode.selected
 	match _colour:
 		COLOUR_ZONES:
@@ -545,8 +704,12 @@ func _apply_colour() -> void:
 			globe.set_overlay(GlobeSolarAtlas.layer(), GlobeSolarAtlas.COLORS, GlobeSolarAtlas.STEPS,
 				GlobeSolarAtlas.MAX_PVOUT, m, 0.6, 0.0, GlobeSolarAtlas.RAMP_LO, GlobeSolarAtlas.RAMP_STEP,
 				GlobeSolarAtlas.FADE_FAR)
+		COLOUR_IRRADIANCE:
+			globe.clear_overlay()
+			globe.set_moon_irradiance(true)
 		_:
 			globe.clear_overlay()
+			globe.set_moon_irradiance(false)
 
 
 func _restyle_zones() -> void:
@@ -580,6 +743,11 @@ func _build_legend() -> void:
 			colors = GlobeSolarAtlas.COLORS
 			labels = _step_labels(GlobeSolarAtlas.STEPS)
 			unit = "kWh/kWp/day from PV"
+		COLOUR_IRRADIANCE:
+			for w in [0.0, 200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0, 1361.0]:
+				colors.append(irradiance_color(w))
+				labels.append("%d" % int(w))
+			unit = "W/m² of sunlight, no air (1361 at the subsolar point)"
 	_legend.visible = not colors.is_empty()
 	for i in colors.size():
 		var chip := PanelContainer.new()
@@ -602,6 +770,15 @@ func _build_legend() -> void:
 	ul.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	ul.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	_legend.add_child(ul)
+
+
+## The Moon shader's irradiance ramp (globe_moon.gdshader irr_color), mirrored.
+static func irradiance_color(w: float) -> Color:
+	var e := clampf(w / 1361.0, 0.0, 1.0)
+	var c := Color(0.03, 0.06, 0.16).lerp(Color(0.30, 0.55, 0.92), smoothstep(0.0, 0.3, e))
+	c = c.lerp(Color(0.96, 0.95, 0.88), smoothstep(0.3, 0.72, e))
+	c = c.lerp(Color(1.0, 0.80, 0.25), smoothstep(0.72, 1.0, e))
+	return c
 
 
 static func _step_labels(steps: Array) -> Array:
@@ -727,7 +904,78 @@ func _world_near(local_pos: Vector2) -> Dictionary:
 
 # --- Selection --------------------------------------------------------------
 
+func _on_companion_clicked() -> void:
+	globe.set_primary_body("moon" if globe.primary_body() == "earth" else "earth")
+
+
+func _on_body_changed(body: String) -> void:
+	var moon := body == "moon"
+	if _body_earth != null:
+		_body_earth.set_pressed_no_signal(not moon)
+		_body_moon.set_pressed_no_signal(moon)
+	_search.visible = not moon
+	if _search_go != null:
+		_search_go.visible = not moon
+	_hits.visible = false
+	_card.visible = false
+	globe.remove_marker("sel")
+	if moon:
+		if _colour != COLOUR_IRRADIANCE:
+			_colour_before_moon = _colour
+		if _colour_by.get_item_index(COLOUR_IRRADIANCE) < 0:
+			_colour_by.add_item("Sunlight on the Moon", COLOUR_IRRADIANCE)
+		_colour_by.select(_colour_by.get_item_index(COLOUR_IRRADIANCE))
+		_set_colour(COLOUR_IRRADIANCE)
+		_hover.text = "The Moon, %s km away · drag to turn · wheel to zoom · click a point" % UiText.thousands(int(globe.moon_distance_km()))
+	else:
+		var idx := _colour_by.get_item_index(COLOUR_IRRADIANCE)
+		if idx >= 0:
+			_colour_by.remove_item(idx)
+		var back := _colour_before_moon
+		if _colour_by.get_item_index(back) < 0:
+			back = COLOUR_ZONES
+		_colour_by.select(_colour_by.get_item_index(back))
+		_set_colour(back)
+		_hover.text = HINT
+	_wx_key = ""
+	_wx_poll = 0.0
+
+
+func _show_moon_point(lat: float, lon: float) -> void:
+	var jd := globe.current_jd()
+	var ph := MoonGlobe.phase(jd)
+	_sel = PackedFloat64Array([lat, lon])
+	_sel_world = {}
+	_here_selected = false
+	_card.visible = true
+	_card_title.text = "On the Moon"
+	_card_place.text = "Selenographic; the prime meridian faces the Earth. %s, %d %% lit, %.1f days old, %s km from Earth." % [
+		str(ph.name), int(round(float(ph.lit) * 100.0)), float(ph.age_days), UiText.thousands(int(MoonGlobe.distance_km(jd)))]
+	_card_coords.text = SitePrivacy.coords(lat, lon)
+	var w := MoonGlobe.irradiance_at(lat, lon, jd)
+	var elev := rad_to_deg(asin(clampf(GlobeMath.to_unit(lat, lon).dot(MoonGlobe.sun_body(jd)), -1.0, 1.0)))
+	_card_zone_chip.visible = true
+	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(irradiance_color(w)))
+	_card_zone.text = "%.0f W/m² of sunlight here · Sun %s" % [w,
+		("%.0f° up" % elev) if elev > 0.0 else "below the horizon (lunar night, about two weeks)"]
+	_zone_row.visible = true
+	_card_layer.text = ""
+	_card_layer.visible = false
+	_name_edit.visible = false
+	_create_btn.visible = false
+	_play_btn.visible = false
+	_fly_btn.visible = true
+	_card_world_note.text = "A lunar day is 29.5 Earth days: the sunlight map turns once a month."
+	if _card_atlas != null:
+		_card_atlas.text = ""
+		_card_atlas.visible = false
+	_status.text = ""
+
+
 func _on_point_clicked(lat: float, lon: float) -> void:
+	if globe.primary_body() == "moon":
+		_show_moon_point(lat, lon)
+		return
 	var pos := globe.get_local_mouse_position()
 	if _here.size() == 2:
 		var hp := globe.latlon_to_local(_here[0], _here[1])
@@ -742,6 +990,8 @@ func _on_point_clicked(lat: float, lon: float) -> void:
 
 
 func select_point(lat: float, lon: float, label: String = "") -> void:
+	_fly_btn.visible = true
+	_card_atlas.visible = _colour == COLOUR_ATLAS or _colour == COLOUR_ZONES
 	_sel = PackedFloat64Array([lat, lon])
 	_sel_world = {}
 	_here_selected = false
@@ -921,6 +1171,14 @@ func _on_reverse_done(lat: float, lng: float, label: String) -> void:
 
 
 func _on_point_hovered(lat: float, lon: float, on_globe: bool) -> void:
+	if globe.hovered_body != "":
+		if globe.hovered_body == "moon":
+			var ph := MoonGlobe.phase(globe.current_jd())
+			_hover.text = "The Moon · %s km · %s, %d %% lit — click to go there" % [
+				UiText.thousands(int(globe.moon_distance_km())), str(ph.name), int(round(float(ph.lit) * 100.0))]
+		else:
+			_hover.text = "The Earth · %s km — click to go back" % UiText.thousands(int(globe.moon_distance_km()))
+		return
 	if not on_globe:
 		_hover.text = "Altitude %s" % _alt_text()
 		return
@@ -932,6 +1190,8 @@ func _on_point_hovered(lat: float, lon: float, on_globe: bool) -> void:
 		var pv := GlobeSolarAtlas.layer_value(lat, lon)
 		if not is_nan(pv):
 			ztxt += " · PV %.2f kWh/kWp/day" % pv
+	if globe.primary_body() == "moon":
+		ztxt = " · %.0f W/m²" % MoonGlobe.irradiance_at(lat, lon, globe.current_jd())
 	_hover.text = "%s%s%s · altitude %s" % [_fmt_ll(lat, lon), ztxt, wind_text(lat, lon), _alt_text()]
 
 
@@ -1232,14 +1492,29 @@ func _process(dt: float) -> void:
 				return
 			if _status.text.begins_with("Flying"):
 				_status.text = ""
+	if _play_h_per_s != 0.0 and not _time_dragging:
+		var nxt := clampf(_time_offset_h + _play_h_per_s * dt, -TIME_SPAN_H, TIME_SPAN_H)
+		if absf(nxt - _time_offset_h) < 1e-5:
+			_set_play(0.0)
+		else:
+			_time_offset_h = nxt
+			_time_slider.set_value_no_signal(nxt)
+	if _time_lbl != null and globe != null:
+		_time_lbl.text = _time_text(globe_unix())
 	_wx_poll -= dt
 	if _wx_poll > 0.0:
 		return
 	_wx_poll = 0.5
-	_update_drapes()
-	_time_slider.visible = not _in_game
+	if _sun_lbl != null:
+		_sun_lbl.text = _sun_line()
+	# The time bar sits above the credits, however many lines they wrap to.
+	var lift := -(globe.credits_height() + 14.0)
+	if _time_bar != null and absf(_time_bar.offset_bottom - lift) > 0.5:
+		_time_bar.offset_bottom = lift
+		_time_bar.offset_top = lift
+	if globe.primary_body() == "earth":
+		_update_drapes()
 	var u := globe_unix()
-	_time_lbl.text = _time_text(u)
 	# Re-ask on a new half hour, a new day for the satellite, or a toggle.
 	var key := "%d|%s|%s|%s|%s|%d" % [int(floor(u / 1800.0)), _clouds_toggle.button_pressed,
 		_rain_toggle.button_pressed, _sat_toggle.button_pressed, _wind_toggle.button_pressed, _colour]
@@ -1254,48 +1529,113 @@ func globe_unix() -> float:
 	return GlobeWeather.unix_from_jd(globe.current_jd())
 
 
+func _jd_now() -> float:
+	var base := GlobeMath.jd_from_unix(Time.get_unix_time_from_system())
+	if _sim_jd.is_valid():
+		base = float(_sim_jd.call())
+	return base + _time_offset_h / 24.0
+
+
+## Hours from now. Does not move the world's clock.
+func set_time_offset_h(hours: float) -> void:
+	_time_offset_h = clampf(hours, -TIME_SPAN_H, TIME_SPAN_H)
+	if _time_slider != null:
+		_time_slider.set_value_no_signal(_time_offset_h)
+	_wx_poll = 0.0
+	if globe != null:
+		globe.refresh_sun()
+		if _time_lbl != null:
+			_time_lbl.text = _time_text(globe_unix())
+
+
+func _cycle_play() -> void:
+	var i := 0
+	for s in _PLAY_SPEEDS.size():
+		if is_equal_approx(_play_h_per_s, _PLAY_SPEEDS[s]):
+			i = s
+			break
+	_set_play(_PLAY_SPEEDS[(i + 1) % _PLAY_SPEEDS.size()])
+
+
+func _set_play(hours_per_s: float) -> void:
+	_play_h_per_s = hours_per_s
+	var label := "Play"
+	for s in _PLAY_SPEEDS.size():
+		if is_equal_approx(hours_per_s, _PLAY_SPEEDS[s]):
+			label = _PLAY_LABELS[s]
+			break
+	if _play_btn_time != null:
+		_play_btn_time.text = label
+		_play_btn_time.icon = UiIcons.icon("pause" if hours_per_s != 0.0 else "play", 16)
+	if globe != null:
+		globe.sun_continuous = hours_per_s != 0.0
+
+
+func _sync_paths(_on: bool = false) -> void:
+	if _path_sun == null:
+		return
+	_set_pref("path_sun", _path_sun.button_pressed)
+	_set_pref("path_moon", _path_moon.button_pressed)
+	_set_pref("path_planets", _path_planets.button_pressed)
+	globe.set_paths(_path_sun.button_pressed, _path_moon.button_pressed, _path_planets.button_pressed)
+
+
 func _time_text(u: float) -> String:
 	var d := Time.get_datetime_dict_from_unix_time(int(u))
 	var months := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 	var t := "%d %s %d, %02d:%02d UTC" % [d.day, months[int(d.month) - 1], d.year, d.hour, d.minute]
-	if _in_game:
+	if _in_game and absf(_time_offset_h) < 0.25:
 		return "Sim clock · " + t
+	return "%s · %s" % [_offset_phrase(), t]
+
+
+func _offset_phrase() -> String:
 	if absf(_time_offset_h) < 0.25:
-		return "Now · " + t
-	return "%s h ago · %s" % [str(snappedf(-_time_offset_h, 0.5)).trim_suffix(".0"), t]
+		return "Now"
+	var mag := absf(_time_offset_h)
+	var n := "%s h" % str(snappedf(mag, 0.5)).trim_suffix(".0")
+	if mag >= 48.0:
+		n = "%s d" % str(snappedf(mag / 24.0, 0.1)).trim_suffix(".0")
+	return ("%s ago" % n) if _time_offset_h < 0.0 else ("%s ahead" % n)
 
 
 func _refresh_weather(u: float) -> void:
 	_refresh_aurora(u)
-	if _clouds_toggle.button_pressed:
+	var now := Time.get_unix_time_from_system()
+	var cloud_gap := GlobeWeather.layer_gap("clouds", u, now)
+	if _clouds_toggle.button_pressed and cloud_gap.is_empty():
 		if _weather.request_clouds(u):
 			_wx_text.clouds = "Clouds: loading…"
 	else:
 		globe.set_clouds(null)
-		_wx_text.clouds = ""
+		_wx_text.clouds = cloud_gap if _clouds_toggle.button_pressed else ""
 		_weather.forget("clouds")
-	if _rain_toggle.button_pressed:
+	var rain_gap := GlobeWeather.layer_gap("rain", u, now)
+	if _rain_toggle.button_pressed and rain_gap.is_empty():
 		if _weather.request_rain(u):
 			_wx_text.rain = "Rain: loading…"
 	else:
 		globe.set_rain(null)
-		_wx_text.rain = ""
+		_wx_text.rain = rain_gap if _rain_toggle.button_pressed else ""
 		_weather.forget("rain")
-	if _wind_toggle.button_pressed or _colour == COLOUR_TEMP or _colour == COLOUR_POWER:
+	var wind_gap := GlobeWeather.layer_gap("wind", u, now)
+	if (_wind_toggle.button_pressed or _colour == COLOUR_TEMP or _colour == COLOUR_POWER) and wind_gap.is_empty():
 		if _weather.request_wind(u):
 			_wx_text.wind = "Wind: loading…"
 		else:
 			_show_wind()
 	else:
 		globe.set_wind_lines({})
-		_wx_text.wind = ""
-	if _sat_toggle.button_pressed:
-		var date := GlobeWeather.daily_date(u, Time.get_unix_time_from_system())
+		_wx_text.wind = wind_gap if (_wind_toggle.button_pressed or _colour == COLOUR_TEMP or _colour == COLOUR_POWER) else ""
+	var sat_gap := GlobeWeather.layer_gap("sat", u, now)
+	if _sat_toggle.button_pressed and sat_gap.is_empty():
+		var date := GlobeWeather.daily_date(u, now)
 		globe.set_base_layer("daily_" + date, GlobeWeather.daily_layer_def(date))
 		_wx_text.sat = "Satellite image %s" % date
 	else:
-		globe.set_base_layer("esri")
-		_wx_text.sat = ""
+		if globe.base_layer != "esri":
+			globe.set_base_layer("esri")
+		_wx_text.sat = sat_gap if _sat_toggle.button_pressed else ""
 	_show_data_times()
 
 
@@ -1412,3 +1752,19 @@ func _show_data_times() -> void:
 	if _card_layer != null and _card_layer.visible and _clim_info.get("ok", false):
 		credits.append(GlobeClimate.ATTRIBUTION)
 	globe.set_extra_credits(credits)
+
+
+func _sun_line() -> String:
+	var jd := globe.current_jd()
+	var here := globe.center_latlon()
+	if globe.primary_body() == "moon":
+		var sub := MoonGlobe.subsolar_latlon(jd)
+		var w := MoonGlobe.irradiance_at(here[0], here[1], jd)
+		var ph := MoonGlobe.phase(jd)
+		return "Sun over %.1f°%s %.0f°%s · here %.0f W/m² · %s %d %%" % [absf(sub[0]), "N" if sub[0] >= 0.0 else "S",
+			absf(sub[1]), "E" if sub[1] >= 0.0 else "W", w, str(ph.name), int(round(float(ph.lit) * 100.0))]
+	var sub_e := GlobeMath.subsolar_point(jd)
+	var elev := GlobeMath.solar_elevation_deg(here[0], here[1], jd)
+	var day := GlobeMath.day_length_hours(here[0], jd)
+	return "Sun overhead %.1f°%s · here elev %.0f° · day %.1f h" % [
+		absf(sub_e[0]), "N" if sub_e[0] >= 0.0 else "S", elev, day]

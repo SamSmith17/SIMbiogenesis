@@ -9,6 +9,9 @@ render_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;
 
 uniform int shell = 0;
 uniform vec3 sun_dir = vec3(1.0, 0.0, 0.0);
+// The shells stay faint, so a quiet oval still reads as a band from far
+// away. The field-line ribbons carry the height.
+uniform float shell_gain = 0.35;
 
 varying vec3 w_pos;
 
@@ -28,5 +31,5 @@ void fragment() {
 	float k = shell == 0 ? 0.14 : 0.03;
 	// Saturating, so a Kp 9 night stays green rather than burning to white.
 	float e = 1.0 - exp(-1.4 * clamp(s, 0.0, 3.0));
-	ALBEDO = col * e * dark * path * k;
+	ALBEDO = col * e * dark * path * k * shell_gain;
 }

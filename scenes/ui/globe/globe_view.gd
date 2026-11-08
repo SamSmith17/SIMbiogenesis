@@ -8,8 +8,11 @@ extends Control
 ## The ground is Web Mercator tiles laid straight onto the sphere (one curved
 ## patch per tile, GlobeQuadtree picks them), so a tile's pixels need no
 ## reprojection; the poles above 85.05° are caps. Lighting is the real Sun at
-## the clock's instant (GlobeMath.subsolar_point), with NASA Black Marble city
-## lights on the night side, an atmosphere shell and the star map behind.
+## the clock's instant (GlobeMath.subsolar_point), with the city lights as
+## points made from NASA's Black Marble tiles (GlobeCityLights), an atmosphere
+## shell and the star map behind. The Moon stands at its true distance; the
+## camera can orbit either body (set_primary_body), the other stays where it
+## is in the sky.
 ##
 ## Navigation: drag = grab the ground and turn the globe, wheel = zoom toward
 ## the pointer, right / middle drag = heading and tilt, double click = fly in,
@@ -23,6 +26,9 @@ signal point_clicked(lat: float, lon: float)
 signal point_double_clicked(lat: float, lon: float)
 signal point_hovered(lat: float, lon: float, on_globe: bool)
 signal view_changed
+## The other body (Moon while the Earth is centred, Earth while the Moon is).
+signal companion_clicked
+signal body_changed(body: String)
 
 const SURFACE_SHADER := preload("res://scenes/ui/globe/globe_surface.gdshader")
 const ATMO_SHADER := preload("res://scenes/ui/globe/globe_atmosphere.gdshader")
@@ -30,7 +36,15 @@ const SKY_SHADER := preload("res://scenes/ui/globe/globe_sky.gdshader")
 const CLOUD_SHADER := preload("res://scenes/ui/globe/globe_clouds.gdshader")
 const WIND_SHADER := preload("res://scenes/ui/globe/globe_wind.gdshader")
 const AURORA_SHADER := preload("res://scenes/ui/globe/globe_aurora.gdshader")
+const CURTAIN_SHADER := preload("res://scenes/ui/globe/globe_aurora_curtain.gdshader")
+const MOON_SHADER := preload("res://scenes/ui/globe/globe_moon.gdshader")
+const PATH_SHADER := preload("res://scenes/ui/globe/globe_path.gdshader")
+## The camera's reach when it orbits the Moon (Moon radii).
+const MOON_MAX_RANGE := 40.0
+## A body smaller than this on screen is still clickable in a disc this wide.
+const BODY_PICK_PX := 14.0
 ## Aurora shells, globe radii: the green line (~110 km) and the red (~230 km).
+## Faint, behind the field-line ribbons (AuroraCurtains).
 const AURORA_R := [1.0173, 1.036]
 ## The weather shell's height: ~10 km, a cloud deck.
 const CLOUD_SHELL_R := 1.0016
@@ -56,6 +70,12 @@ var labels_on := true
 var base_layer := "esri"
 ## () -> float UTC Julian Day; empty = the computer's clock.
 var time_provider: Callable
+## While a time strip is playing or being dragged, the Sun is read every frame.
+var sun_continuous := false
+## "earth" or "moon": which body sits at the origin, under the camera.
+var _body := "earth"
+## "moon" or "earth" when the pointer is on the companion, else "".
+var hovered_body := ""
 
 # Camera state. The orbit point is a direction (unit vector) so the poles and
 # the antimeridian need no special cases; lat/lon are derived.
@@ -101,6 +121,46 @@ var _wind_mi: MeshInstance3D
 var _wind_lines := 0
 var _has_rain := false
 var _caps_tinted := [false, false]
+var _aurora_kp := 2.0
+var _ovation: Texture2D
+var _curtain: MeshInstance3D
+var _curtain_mat: ShaderMaterial
+var _curtain_kp := -1.0
+var _curtain_lon := 99.0
+var _moon_mi: MeshInstance3D
+var _moon_mat: ShaderMaterial
+var _moon_label: Label3D
+var _moon_basis := Basis.IDENTITY
+var _irradiance := false
+var _moon_photo := false
+var _saved_target := Vector3.ZERO
+var _saved_range := 2.8
+var _saved_heading := 0.0
+var _saved_tilt := 0.0
+var _saved_valid := false
+var _polar: GlobePolarFill
+var _polar_date := ""
+var _polar_live := false
+var _moon_http: HTTPRequest
+var _moon_small_tried := false
+var _lights: GlobeCityLights
+var _path_root: Node3D
+var _path_sun: MeshInstance3D          # the analemma in the orbit point's sky
+var _path_dome: MeshInstance3D         # that sky's horizon ring
+var _path_ground: MeshInstance3D       # the subsolar track on the ground
+var _path_moon_orbit: MeshInstance3D   # the Moon's path over a lunation
+var _path_moon_ground: MeshInstance3D  # the sublunar track
+var _path_marker: MeshInstance3D       # the subsolar point on the Earth
+var _moon_sub_marker: MeshInstance3D   # the subsolar point on the Moon
+var _moon_sub_track: MeshInstance3D    # its track over a lunation
+var _sun_now: MeshInstance3D           # today's Sun on the analemma
+var _path_planets: Array = []          # [{line, dot, tag}]
+var _show_sun_path := false
+var _show_moon_path := false
+var _show_planet_paths := false
+var _path_key := ""
+var _path_wait := 0.0
+var _marker_lat := 0.0
 
 # Input state.
 var _press_pos := Vector2.ZERO
@@ -136,6 +196,15 @@ func _ready() -> void:
 	_fetcher.name = "TileFetcher"
 	add_child(_fetcher)
 	_fetcher.tile_ready.connect(func(_l: String, _k: Vector3i) -> void: _cam_dirty = true)
+	_polar = GlobePolarFill.new()
+	_polar.name = "PolarFill"
+	add_child(_polar)
+	_polar.cap_ready.connect(_on_polar_cap)
+	_apply_polar_fallback()
+	_fetch_moon()
+	_lights = GlobeCityLights.new()
+	_lights.name = "CityLights"
+	_globe.add_child(_lights)
 	_attrib = Label.new()
 	_attrib.text = ""
 	_attrib.add_theme_font_size_override("font_size", 11)
@@ -237,6 +306,55 @@ func _build_world() -> void:
 		_globe.add_child(am)
 		_aurora.append(am)
 		_aurora_mats.append(mat)
+	_curtain = MeshInstance3D.new()
+	_curtain.name = "AuroraCurtains"
+	_curtain_mat = ShaderMaterial.new()
+	_curtain_mat.shader = CURTAIN_SHADER
+	_curtain_mat.set_shader_parameter("aurora_pole", AuroraModel.pole_dir())
+	_curtain.material_override = _curtain_mat
+	_curtain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_curtain.visible = false
+	_globe.add_child(_curtain)
+	_moon_mi = MeshInstance3D.new()
+	_moon_mi.name = "Moon"
+	var moon_mesh := SphereMesh.new()
+	moon_mesh.radius = 1.0
+	moon_mesh.height = 2.0
+	moon_mesh.radial_segments = 128
+	moon_mesh.rings = 64
+	_moon_mi.mesh = moon_mesh
+	_moon_mat = ShaderMaterial.new()
+	_moon_mat.shader = MOON_SHADER
+	_moon_mi.material_override = _moon_mat
+	_moon_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_moon_mi.scale = Vector3.ONE * MoonGlobe.RADIUS_RATIO
+	root.add_child(_moon_mi)
+	_moon_label = Label3D.new()
+	_moon_label.name = "MoonLabel"
+	_moon_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_moon_label.fixed_size = true
+	_moon_label.no_depth_test = true
+	_moon_label.pixel_size = 0.0011
+	_moon_label.font_size = 18
+	_moon_label.outline_size = 6
+	_moon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_moon_label.modulate = Color(0.9, 0.93, 1.0, 0.9)
+	_moon_label.outline_modulate = Color(0, 0, 0, 0.8)
+	_moon_label.offset = Vector2(0, -22)
+	_moon_label.render_priority = 2
+	root.add_child(_moon_label)
+	_path_root = Node3D.new()
+	_path_root.name = "Paths"
+	root.add_child(_path_root)
+	_path_sun = _path_line(_path_root, "SunPath", Color(1.0, 0.82, 0.25), 2.4)
+	_path_dome = _path_line(_path_root, "SkyDome", Color(1.0, 1.0, 1.0, 0.28), 1.2)
+	_path_ground = _path_line(_path_root, "SubsolarTrack", Color(1.0, 0.72, 0.2, 0.95), 2.6)
+	_path_moon_orbit = _path_line(_path_root, "MoonOrbit", Color(0.75, 0.84, 1.0, 0.9), 1.8)
+	_path_moon_ground = _path_line(_path_root, "SublunarTrack", Color(0.65, 0.78, 1.0, 0.85), 1.6)
+	_moon_sub_track = _path_line(_moon_mi, "MoonSubsolarTrack", Color(1.0, 0.72, 0.2, 0.9), 2.0)
+	_path_marker = _path_dot(_path_root, "SubsolarMarker", Color(1.0, 0.95, 0.55), 0.012)
+	_moon_sub_marker = _path_dot(_moon_mi, "MoonSubsolarMarker", Color(1.0, 0.95, 0.55), 0.045)
+	_sun_now = _path_dot(_path_root, "SunNow", Color(1.0, 0.9, 0.4), 0.01)
 
 
 func _load_starmap() -> void:
@@ -262,9 +380,106 @@ func center_latlon() -> PackedFloat64Array:
 	return GlobeMath.to_latlon(_target)
 
 
-## Altitude of the camera above the ground, km.
+## Altitude of the camera above the ground, km (the Moon's own radius while
+## it is the body the camera orbits).
 func altitude_km() -> float:
-	return maxf(0.0, _cam_pos().length() - 1.0) * GlobeMath.EARTH_RADIUS_KM
+	return maxf(0.0, (_cam_pos() - _body_centre()).length() / _body_scale() - 1.0) * _body_radius_km()
+
+
+func primary_body() -> String:
+	return _body
+
+
+func _body_radius_km() -> float:
+	return MoonGlobe.RADIUS_KM if _body == "moon" else GlobeMath.EARTH_RADIUS_KM
+
+
+## Where the body the camera orbits is (globe frame).
+func _body_centre() -> Vector3:
+	return _moon_mi.position if _body == "moon" and _moon_mi != null else Vector3.ZERO
+
+
+## Its radius in globe units (Earth radii).
+func _body_scale() -> float:
+	return MoonGlobe.RADIUS_RATIO if _body == "moon" else 1.0
+
+
+## Its body frame (lat/lon directions) in the globe frame.
+func _body_basis() -> Basis:
+	return _moon_basis if _body == "moon" else Basis.IDENTITY
+
+
+func _max_range() -> float:
+	return MOON_MAX_RANGE if _body == "moon" else MAX_RANGE
+
+
+## Centre the Earth or the Moon under the camera. Both stay where they are
+## in space (the Moon at its true distance); the camera moves. The Moon opens
+## on an "Earthrise": low over its eastern limb, the Earth above the horizon.
+func set_primary_body(body: String) -> void:
+	if (body != "earth" and body != "moon") or body == _body:
+		return
+	_fly.clear()
+	_spin_rate = 0.0
+	_range_goal = -1.0
+	if body == "moon":
+		_saved_target = _target
+		_saved_range = cam_range
+		_saved_heading = cam_heading
+		_saved_tilt = cam_tilt
+		_saved_valid = true
+		_body = body
+		_place_moon()
+		# The Earth is on the Moon's prime meridian (+Z of the body frame):
+		# stand over the limb at longitude 88 E, look west across it.
+		_target = GlobeMath.to_unit(0.0, 88.0)
+		cam_range = 2.6
+		cam_heading = 270.0
+		cam_tilt = 74.0
+	else:
+		_body = body
+		_irradiance = false
+		if _moon_mat != null:
+			_moon_mat.set_shader_parameter("irradiance", false)
+		if _saved_valid:
+			_target = _saved_target
+			cam_range = _saved_range
+			cam_heading = _saved_heading
+			cam_tilt = _saved_tilt
+	_apply_aurora_visible()
+	_path_key = ""
+	_cam_dirty = true
+	_apply_camera()
+	_reselect()
+	body_changed.emit(_body)
+
+
+## The other body is always drawn now; kept for the checks.
+func companion_visible() -> bool:
+	return _moon_mi != null and _moon_mi.visible
+
+
+## Where the Moon is drawn, km from the Earth's centre.
+func moon_distance_km() -> float:
+	return _moon_mi.position.length() * GlobeMath.EARTH_RADIUS_KM if _moon_mi != null else 0.0
+
+
+## The clear-sky irradiance map on the Moon. Ignored while the Earth is centred.
+func set_moon_irradiance(on: bool) -> void:
+	_irradiance = on and _body == "moon"
+	if _moon_mat != null:
+		_moon_mat.set_shader_parameter("irradiance", _irradiance)
+
+
+func snapshot() -> Image:
+	if _vp == null or _vp.get_texture() == null:
+		return Image.new()
+	return _vp.get_texture().get_image()
+
+
+## Read the clock now (a playing time strip calls this every frame).
+func refresh_sun() -> void:
+	_update_sun()
 
 
 ## Jump straight to a view.
@@ -274,7 +489,7 @@ func look_at_point(lat: float, lon: float, range_r: float = -1.0) -> void:
 	_range_goal = -1.0
 	_target = GlobeMath.to_unit(lat, lon)
 	if range_r > 0.0:
-		cam_range = clampf(range_r, MIN_RANGE, MAX_RANGE)
+		cam_range = clampf(range_r, MIN_RANGE, _max_range())
 	_cam_dirty = true
 	_apply_camera()
 
@@ -284,7 +499,7 @@ func look_at_point(lat: float, lon: float, range_r: float = -1.0) -> void:
 func fly_to(lat: float, lon: float, range_r: float = -1.0, duration_s: float = -1.0,
 		tilt_end: float = -1.0) -> void:
 	var to := GlobeMath.to_unit(lat, lon)
-	var r1 := clampf(range_r if range_r > 0.0 else cam_range, MIN_RANGE, MAX_RANGE)
+	var r1 := clampf(range_r if range_r > 0.0 else cam_range, MIN_RANGE, _max_range())
 	var ang := acos(clampf(_target.dot(to), -1.0, 1.0))
 	var peak := maxf(maxf(cam_range, r1), ang * 1.3)
 	var dur := duration_s if duration_s > 0.0 else clampf(0.8 + ang * 0.9 + absf(log(r1 / cam_range)) * 0.12, 0.8, 3.2)
@@ -372,12 +587,20 @@ func clear_markers() -> void:
 		remove_marker(id)
 
 
+## Camera distance (Earth radii) at which a data layer is fully shown; it is
+## gone at OVERLAY_FADE_RATIO of that. A 1-degree layer says nothing a photo
+## does not from ~300 km down, so it is faded out well above the ground.
+const OVERLAY_FADE_FAR := 0.26
+const OVERLAY_FADE_RATIO := 0.18
+
 ## A data layer draped over the ground: `tex` equirect (R = value / max_value,
 ## G = coverage), `colors` 6 band colours (sRGB), `steps` the 5 band edges.
-## mode 0 = bands with outlines, 1 = a smooth ramp.
+## mode 0 = bands with outlines, 1 = a smooth ramp. `fade_far` / `fade_near`:
+## camera distances (radii) between which the layer fades out as the camera
+## comes down.
 func set_overlay(tex: Texture2D, colors: Array, steps: Array, max_value: float,
 		mode: int = 0, alpha: float = 0.6, offset: float = 0.0, ramp_lo: float = 1.5,
-		ramp_step: float = 1.0, fade_far: float = 0.03) -> void:
+		ramp_step: float = 1.0, fade_far: float = OVERLAY_FADE_FAR, fade_near: float = -1.0) -> void:
 	var lin: Array = []
 	for c in colors:
 		var cc: Color = c
@@ -389,7 +612,8 @@ func set_overlay(tex: Texture2D, colors: Array, steps: Array, max_value: float,
 	_overlay = {"overlay_tex": tex, "has_overlay": tex != null, "overlay_colors": lin,
 		"overlay_steps": st, "overlay_max": max_value, "overlay_mode": mode, "overlay_alpha": alpha,
 		"overlay_offset": offset, "overlay_ramp_lo": ramp_lo, "overlay_ramp_step": ramp_step,
-		"overlay_fade_far": fade_far}
+		"overlay_fade_far": fade_far,
+		"overlay_fade_near": fade_near if fade_near > 0.0 else fade_far * OVERLAY_FADE_RATIO}
 	_push_overlay()
 
 
@@ -548,20 +772,57 @@ func has_rain() -> bool:
 
 ## The aurora layer: off, or on with the Kp of the globe's time and, near
 ## the present, NOAA's OVATION nowcast (an L8 probability texture).
+## Shells stay faint; the field-line ribbons carry the height.
 func set_aurora(on: bool, kp: float = 2.0, ovation: Texture2D = null) -> void:
 	_aurora_on = on
+	_aurora_kp = kp
+	_ovation = ovation
 	for i in _aurora.size():
-		_aurora[i].visible = on
 		var m := _aurora_mats[i]
 		m.set_shader_parameter("aurora_on", on)
 		m.set_shader_parameter("aurora_kp", kp)
 		m.set_shader_parameter("aurora_use_ovation", ovation != null)
 		if ovation != null:
 			m.set_shader_parameter("aurora_ovation", ovation)
+	_push_curtain()
+	if on:
+		_rebuild_curtain(true)
+	_apply_aurora_visible()
 
 
 func aurora_on() -> bool:
 	return _aurora_on
+
+
+## Min and max radius of the curtain mesh, once it has been built. Zero before.
+func aurora_curtain_span() -> Vector2:
+	if _curtain == null or _curtain.mesh == null or _curtain.mesh.get_surface_count() == 0:
+		return Vector2.ZERO
+	return Vector2(1.0 + AuroraCurtains.H0_KM / AuroraCurtains.R_KM,
+		1.0 + AuroraCurtains.H1_KM / AuroraCurtains.R_KM)
+
+
+func poles_textured() -> bool:
+	for c in _caps:
+		var m := c.material_override as ShaderMaterial
+		if m == null or not bool(m.get_shader_parameter("has_cap")):
+			return false
+	return true
+
+
+## Sun, moon and planet paths. Off until asked. On the Moon, Sun is the
+## subsolar track; the sky paths belong to the Earth.
+func set_paths(sun_on: bool, moon_on: bool, planets_on: bool) -> void:
+	_show_sun_path = sun_on
+	_show_moon_path = moon_on
+	_show_planet_paths = planets_on
+	_path_key = ""
+	_rebuild_paths()
+
+
+## Latitude of the subsolar marker, degrees. 0 when the sun path is off.
+func path_marker_lat() -> float:
+	return _marker_lat
 
 
 ## Keeps the attribution clear of a panel this many pixels wide at the
@@ -569,6 +830,11 @@ func aurora_on() -> bool:
 func set_credits_left(px: float) -> void:
 	if _attrib != null:
 		_attrib.offset_left = px
+
+
+## The attribution's height on screen (an owner keeps its panels above it).
+func credits_height() -> float:
+	return _attrib.size.y if _attrib != null else 0.0
 
 
 ## Extra credit lines for the attribution (weather layers in use).
@@ -588,14 +854,23 @@ func _update_attribution() -> void:
 	var parts := PackedStringArray([_fetcher.attribution_for(ids)])
 	for l in _credits_extra:
 		parts.append(str(l))
+	if _polar_live:
+		parts.append(GlobePolarFill.CREDIT)
+	if _moon_photo:
+		parts.append(MoonGlobe.CREDIT)
 	_attrib.text = " · ".join(parts)
 
 
 func set_night_lights(on: bool) -> void:
 	night_lights = on
 	_update_attribution()
-	for k in _patch_state:
-		_patch_state[k].night = "?"
+	if _lights != null:
+		_lights.set_enabled(on)
+
+
+## The city-light point layer (for checks).
+func city_lights() -> GlobeCityLights:
+	return _lights
 
 
 func _push_overlay() -> void:
@@ -638,10 +913,17 @@ func _process(dt: float) -> void:
 	if not is_visible_in_tree():
 		return
 	_step_motion(dt)
-	_sun_t -= dt
-	if _sun_t <= 0.0:
-		_sun_t = 0.5
+	if sun_continuous:
 		_update_sun()
+	else:
+		_sun_t -= dt
+		if _sun_t <= 0.0:
+			_sun_t = 0.5
+			_update_sun()
+	_path_wait -= dt
+	if _path_wait <= 0.0:
+		_path_wait = 0.25
+		_rebuild_paths()
 	if _cam_dirty:
 		_apply_camera()
 	_reselect_t -= dt
@@ -649,7 +931,9 @@ func _process(dt: float) -> void:
 		_reselect_t = RESELECT_S
 		_cam_dirty = false
 		_reselect()
+	_lights.begin_frame()
 	_request_and_bind()
+	_lights.end_frame()
 	_place_markers()
 	if not (_caps_tinted[0] and _caps_tinted[1]):
 		_tint_caps()
@@ -735,14 +1019,17 @@ func _step_keys(dt: float) -> void:
 	if Input.is_physical_key_pressed(KEY_MINUS) or Input.is_physical_key_pressed(KEY_KP_SUBTRACT):
 		z += 1.0
 	if z != 0.0:
-		cam_range = clampf(cam_range * exp(z * 1.6 * dt), MIN_RANGE, MAX_RANGE)
+		cam_range = clampf(cam_range * exp(z * 1.6 * dt), MIN_RANGE, _max_range())
 		_range_goal = -1.0
 		_clamp_tilt()
 		_cam_dirty = true
 
 
 func _max_tilt() -> float:
-	# Tilt opens up as the camera comes down: none from orbit, full near the ground.
+	# Tilt opens up as the camera comes down: none from orbit, full near the
+	# ground. On the Moon (no tile pyramid to protect) it is always free.
+	if _body == "moon":
+		return MAX_TILT_DEG + 5.0
 	var t := clampf((log(cam_range) - log(0.25)) / (log(0.004) - log(0.25)), 0.0, 1.0)
 	return MAX_TILT_DEG * t
 
@@ -751,6 +1038,8 @@ func _clamp_tilt() -> void:
 	cam_tilt = clampf(cam_tilt, 0.0, _max_tilt())
 
 
+## The camera in the GLOBE frame from the body-frame orbit point: the body's
+## centre, radius and basis carry it (the Earth: origin, 1, identity).
 func _cam_frame() -> Dictionary:
 	var ll := GlobeMath.to_latlon(_target)
 	var n := GlobeMath.north_at(ll[0], ll[1])
@@ -759,7 +1048,11 @@ func _cam_frame() -> Dictionary:
 	var t := deg_to_rad(cam_tilt)
 	var hv := (n * cos(h) + e * sin(h)).normalized()
 	var back := _target * cos(t) - hv * sin(t)
-	return {"pos": _target + back * cam_range, "up": hv * cos(t) + _target * sin(t)}
+	var b := _body_basis()
+	var c := _body_centre()
+	var sc := _body_scale()
+	return {"pos": c + b * (_target + back * cam_range) * sc, "up": b * (hv * cos(t) + _target * sin(t)),
+		"look": c + b * _target * sc}
 
 
 func _cam_pos() -> Vector3:
@@ -771,10 +1064,16 @@ func _apply_camera() -> void:
 		return
 	var f := _cam_frame()
 	var pos: Vector3 = f.pos
-	_cam.global_transform = Transform3D(Basis.looking_at(_target - pos, f.up), pos)
-	var alt := maxf(pos.length() - 1.0, 1e-7)
+	_cam.global_transform = Transform3D(Basis.looking_at((f.look as Vector3) - pos, f.up), pos)
+	var alt := maxf((pos - _body_centre()).length() - _body_scale(), 1e-7)
 	_cam.near = clampf(alt * 0.35, 1e-7, 0.05)
-	_cam.far = cam_range + 4.0
+	# Far enough for the Moon (or the Earth, from the Moon) and the sky paths.
+	var reach := 4.0
+	if _moon_mi != null:
+		reach = maxf(reach, _moon_mi.position.length() + 1.5 + pos.length())
+	reach = maxf(reach, AnalemmaPaths.SKY_R + 2.0 + pos.length())
+	_cam.far = cam_range * _body_scale() + reach
+	_apply_path_visibility()
 	view_changed.emit()
 
 
@@ -797,6 +1096,15 @@ func _update_sun() -> void:
 	_shell_mat.set_shader_parameter("sun_dir", _sun)
 	_sky_mat.set_shader_parameter("sun_dir", _sun)
 	_sky_mat.set_shader_parameter("gmst_deg", StarSkyMath.gmst_deg(jd))
+	_push_curtain()
+	if _aurora_on:
+		_rebuild_curtain(false)
+	if _lights != null:
+		_lights.set_sun(_sun)
+	_place_moon()
+	_update_polar_date(jd)
+	_update_marker(jd)
+	_place_planet_basis(jd)
 
 
 func _all_surface_materials() -> Array:
@@ -886,14 +1194,16 @@ func _bind(k: Vector3i) -> void:
 		if day.has("tex"):
 			m.set_shader_parameter("day_tex", day.tex)
 			m.set_shader_parameter("day_rect", day.rect)
-	var night := _best("night", k, mini(k.x, _fetcher.max_zoom("night"))) \
-		if night_lights else {}
-	if str(night.get("ks", "")) != str(st.night):
-		st.night = str(night.get("ks", ""))
-		m.set_shader_parameter("has_night", night.has("tex"))
-		if night.has("tex"):
-			m.set_shader_parameter("night_tex", night.tex)
-			m.set_shader_parameter("night_rect", night.rect)
+	# City lights: the finest night tile in memory over this patch becomes a
+	# point cloud (GlobeCityLights); the ground shader draws no night texture.
+	if night_lights:
+		var nz := mini(k.x, _fetcher.max_zoom("night"))
+		for z in range(nz, -1, -1):
+			var a := GlobeMath.ancestor(k, z)
+			var img := _fetcher.get_image("night", a)
+			if img != null:
+				_lights.use(a, img)
+				break
 
 
 ## The finest loaded texture for a tile at or above zoom `from_z`.
@@ -1018,20 +1328,25 @@ func _tint_caps() -> void:
 
 
 ## A cap over a pole, from the pole to the last Mercator row.
+## UV is polar stereographic (GlobePolarFill): the pole at the centre.
 func _cap_mesh(north: bool) -> ArrayMesh:
 	var sgn := 1.0 if north else -1.0
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
 	var idx := PackedInt32Array()
 	var rings := 4
 	verts.append(Vector3(0, sgn, 0))
 	norms.append(Vector3(0, sgn, 0))
+	uvs.append(GlobePolarFill.uv_of(90.0 * sgn, 0.0))
 	for r in range(1, rings + 1):
 		var lat := sgn * lerpf(90.0, GlobeMath.MERCATOR_MAX_LAT - 0.02, float(r) / float(rings))
 		for s in CAP_SEGMENTS:
-			var p := GlobeMath.to_unit(lat, float(s) / float(CAP_SEGMENTS) * 360.0 - 180.0)
+			var lon := float(s) / float(CAP_SEGMENTS) * 360.0 - 180.0
+			var p := GlobeMath.to_unit(lat, lon)
 			verts.append(p)
 			norms.append(p)
+			uvs.append(GlobePolarFill.uv_of(lat, lon))
 	for s in CAP_SEGMENTS:
 		var s1 := (s + 1) % CAP_SEGMENTS
 		_tri(verts, norms, idx, 0, 1 + s, 1 + s1)
@@ -1046,6 +1361,7 @@ func _cap_mesh(north: bool) -> ArrayMesh:
 	arr.resize(Mesh.ARRAY_MAX)
 	arr[Mesh.ARRAY_VERTEX] = verts
 	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_TEX_UV] = uvs
 	arr[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
@@ -1060,6 +1376,10 @@ const LABEL_GAP_PX := Vector2(150.0, 28.0)
 
 func _place_markers() -> void:
 	if _markers.is_empty():
+		return
+	if _body != "earth":
+		for id in _markers:
+			(_markers[id] as Node3D).visible = false
 		return
 	var cp := _cam.global_position
 	var cands: Array = []
@@ -1123,20 +1443,25 @@ func _to_vp(local_pos: Vector2) -> Vector2:
 	return local_pos * (Vector2(_vp.size) / size)
 
 
+## The body-frame unit direction under a point of this control (the body the
+## camera orbits), or ZERO off the body.
 func _pick_dir(local_pos: Vector2) -> Vector3:
 	var vpp := _to_vp(local_pos)
 	var o := _cam.project_ray_origin(vpp)
 	var d := _cam.project_ray_normal(vpp)
-	var t := GlobeMath.ray_sphere(o, d)
+	var c := _body_centre()
+	var t := GlobeMath.ray_sphere(o - c, d, _body_scale())
 	if t < 0.0:
 		return Vector3.ZERO
-	return (o + d * t).normalized()
+	return (_body_basis().inverse() * (o + d * t - c)).normalized()
 
 
 func _pan_pixels(px: Vector2) -> void:
 	var k := cam_range * 2.0 * tan(deg_to_rad(FOV_DEG) * 0.5) / maxf(1.0, float(_vp.size.y))
 	k = minf(k, PI / maxf(1.0, float(_vp.size.y)) * 1.5)
-	var b := _cam.global_transform.basis
+	var cb := _cam.global_transform.basis
+	var inv := _body_basis().inverse()
+	var b := Basis(inv * cb.x, inv * cb.y, inv * cb.z)
 	# Screen right / up projected on the tangent plane.
 	var right := (b.x - _target * b.x.dot(_target)).normalized()
 	var up := (b.y - _target * b.y.dot(_target))
@@ -1170,11 +1495,14 @@ func _gui_input(ev: InputEvent) -> void:
 			_drag_button = mb.button_index
 			_grab_dir = _pick_dir(mb.position)
 			if mb.double_click and mb.button_index == MOUSE_BUTTON_LEFT:
-				var dd := _pick_dir(mb.position)
-				if dd != Vector3.ZERO:
-					var ll := GlobeMath.to_latlon(dd)
-					point_double_clicked.emit(ll[0], ll[1])
-					fly_to(ll[0], ll[1], cam_range * 0.3)
+				if _body_hit(mb.position) != "":
+					companion_clicked.emit()
+				else:
+					var dd := _pick_dir(mb.position)
+					if dd != Vector3.ZERO:
+						var ll := GlobeMath.to_latlon(dd)
+						point_double_clicked.emit(ll[0], ll[1])
+						fly_to(ll[0], ll[1], cam_range * 0.3)
 				_dragging = false
 		else:
 			if _dragging and mb.button_index == _drag_button:
@@ -1183,10 +1511,13 @@ func _gui_input(ev: InputEvent) -> void:
 				if mb.button_index == MOUSE_BUTTON_LEFT and moved < CLICK_PX \
 						and Time.get_ticks_msec() - _press_ms < 600:
 					_spin_rate = 0.0
-					var d := _pick_dir(mb.position)
-					if d != Vector3.ZERO:
-						var ll2 := GlobeMath.to_latlon(d)
-						point_clicked.emit(ll2[0], ll2[1])
+					if _body_hit(mb.position) != "":
+						companion_clicked.emit()
+					else:
+						var d := _pick_dir(mb.position)
+						if d != Vector3.ZERO:
+							var ll2 := GlobeMath.to_latlon(d)
+							point_clicked.emit(ll2[0], ll2[1])
 		accept_event()
 	elif ev is InputEventMouseMotion:
 		var mm := ev as InputEventMouseMotion
@@ -1197,12 +1528,16 @@ func _gui_input(ev: InputEvent) -> void:
 			cam_tilt += mm.relative.y * 0.25
 			_clamp_tilt()
 			_cam_dirty = true
-		var hd := _pick_dir(mm.position)
-		if hd != Vector3.ZERO:
-			var hl := GlobeMath.to_latlon(hd)
-			point_hovered.emit(hl[0], hl[1], true)
-		else:
+		hovered_body = _body_hit(mm.position)
+		if hovered_body != "":
 			point_hovered.emit(0.0, 0.0, false)
+		else:
+			var hd := _pick_dir(mm.position)
+			if hd != Vector3.ZERO:
+				var hl := GlobeMath.to_latlon(hd)
+				point_hovered.emit(hl[0], hl[1], true)
+			else:
+				point_hovered.emit(0.0, 0.0, false)
 		accept_event()
 	elif ev is InputEventKey and (ev as InputEventKey).pressed:
 		var kc := (ev as InputEventKey).physical_keycode
@@ -1238,7 +1573,7 @@ func _zoom_step(local_pos: Vector2, zoom_in: bool, factor: float) -> void:
 	_fly.clear()
 	var f := pow(0.8, maxf(factor, 1.0)) if zoom_in else pow(1.0 / 0.8, maxf(factor, 1.0))
 	var base := _range_goal if _range_goal > 0.0 else cam_range
-	_range_goal = clampf(base * f, MIN_RANGE, MAX_RANGE)
+	_range_goal = clampf(base * f, MIN_RANGE, _max_range())
 	if zoom_in:
 		var d := _pick_dir(local_pos)
 		_zoom_toward = d
@@ -1246,3 +1581,366 @@ func _zoom_step(local_pos: Vector2, zoom_in: bool, factor: float) -> void:
 	else:
 		_zoom_toward = Vector3.ZERO
 		_zoom_toward_t = 0.0
+
+
+# --- Aurora curtains, poles, the Moon, paths ---------------------------------
+
+## A constant-pixel-width line (globe_path.gdshader) under `parent`.
+func _path_line(parent: Node, node_name: String, color: Color, width_px: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	var m := ShaderMaterial.new()
+	m.shader = PATH_SHADER
+	m.set_shader_parameter("color", color)
+	m.set_shader_parameter("width_px", width_px)
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visible = false
+	parent.add_child(mi)
+	return mi
+
+
+func _path_dot(parent: Node, node_name: String, color: Color, radius: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	sm.radial_segments = 16
+	sm.rings = 8
+	mi.mesh = sm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = color
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visible = false
+	parent.add_child(mi)
+	return mi
+
+
+static func _set_head(mi: MeshInstance3D, head: float) -> void:
+	(mi.material_override as ShaderMaterial).set_shader_parameter("head", head)
+
+
+func _apply_aurora_visible() -> void:
+	var on := _aurora_on
+	for a in _aurora:
+		a.visible = on
+	if _curtain != null:
+		_curtain.visible = on
+
+
+func _push_curtain() -> void:
+	if _curtain_mat == null:
+		return
+	_curtain_mat.set_shader_parameter("aurora_on", _aurora_on)
+	_curtain_mat.set_shader_parameter("aurora_kp", _aurora_kp)
+	_curtain_mat.set_shader_parameter("aurora_sun", _sun)
+	_curtain_mat.set_shader_parameter("sun_dir", _sun)
+	_curtain_mat.set_shader_parameter("aurora_pole", AuroraModel.pole_dir())
+	_curtain_mat.set_shader_parameter("aurora_use_ovation", _ovation != null)
+	if _ovation != null:
+		_curtain_mat.set_shader_parameter("aurora_ovation", _ovation)
+
+
+func _rebuild_curtain(force: bool) -> void:
+	if _curtain == null or not _aurora_on:
+		return
+	var pole := AuroraModel.pole_dir()
+	var lon := AuroraCurtains.mag_lon(_sun, pole)
+	var dlon := absf(wrapf(lon - _curtain_lon, -PI, PI))
+	if not force and absf(_aurora_kp - _curtain_kp) < 0.25 and dlon < deg_to_rad(8.0) \
+			and _curtain.mesh != null:
+		return
+	_curtain_kp = _aurora_kp
+	_curtain_lon = lon
+	_curtain.mesh = AuroraCurtains.build_mesh(_aurora_kp, _sun, pole)
+
+
+func _apply_polar_fallback() -> void:
+	for i in 2:
+		var m := _caps[i].material_override as ShaderMaterial
+		m.set_shader_parameter("cap_tex", GlobePolarFill.fallback_texture(i == 0))
+		m.set_shader_parameter("has_cap", true)
+
+
+func _on_polar_cap(north: bool, tex: Texture2D, live: bool) -> void:
+	var m := _caps[0 if north else 1].material_override as ShaderMaterial
+	m.set_shader_parameter("cap_tex", tex)
+	m.set_shader_parameter("has_cap", true)
+	if live:
+		_polar_live = true
+		_update_attribution()
+
+
+func _update_polar_date(jd: float) -> void:
+	if _polar == null:
+		return
+	var u := GlobeWeather.unix_from_jd(jd)
+	if u < GlobeWeather.MODIS_EARLIEST:
+		return
+	var date := GlobeWeather.daily_date(u, Time.get_unix_time_from_system())
+	if date == _polar_date:
+		return
+	_polar_date = date
+	_polar.request_date(date)
+
+
+## The LRO colour mosaic: the 4k cut from the cache or the net, the 1k behind it.
+func _fetch_moon() -> void:
+	for path in [MoonGlobe.CACHE, MoonGlobe.CACHE_SMALL]:
+		if FileAccess.file_exists(path):
+			var img := Image.new()
+			if img.load(path) == OK:
+				img.generate_mipmaps()
+				_set_moon_tex(ImageTexture.create_from_image(img))
+				if path == MoonGlobe.CACHE:
+					return
+				break
+	if GlobeTileFetcher.offline_for_test:
+		return
+	_moon_http = HTTPRequest.new()
+	_moon_http.timeout = 40.0
+	_moon_http.use_threads = true
+	_moon_http.name = "MoonFetch"
+	add_child(_moon_http)
+	_moon_http.request_completed.connect(_on_moon_tex)
+	_moon_http.request(MoonGlobe.COLOR_URL)
+
+
+func _on_moon_tex(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	var img := Image.new()
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or img.load_jpg_from_buffer(body) != OK:
+		if not _moon_small_tried:
+			_moon_small_tried = true
+			_moon_http.request(MoonGlobe.COLOR_URL_SMALL)
+		return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://globe_cache"))
+	img.save_jpg(MoonGlobe.CACHE if not _moon_small_tried else MoonGlobe.CACHE_SMALL, 0.9)
+	img.generate_mipmaps()
+	_set_moon_tex(ImageTexture.create_from_image(img))
+
+
+func _set_moon_tex(tex: Texture2D) -> void:
+	if _moon_mat == null:
+		return
+	_moon_mat.set_shader_parameter("albedo_tex", tex)
+	_moon_mat.set_shader_parameter("has_tex", true)
+	_moon_photo = true
+	_update_attribution()
+
+
+## The Moon where it really is: its true distance and direction, near side
+## toward the Earth, lit by the same Sun. The camera follows it when it is
+## the body being orbited.
+func _place_moon() -> void:
+	if _moon_mi == null:
+		return
+	var jd := current_jd()
+	_moon_basis = MoonGlobe.basis(jd)
+	_moon_mi.transform = Transform3D(_moon_basis.scaled(Vector3.ONE * MoonGlobe.RADIUS_RATIO),
+		MoonGlobe.position(jd))
+	_moon_mat.set_shader_parameter("sun_dir", _sun)
+	_moon_mat.set_shader_parameter("irradiance", _irradiance and _body == "moon")
+	if _moon_label != null:
+		_moon_label.position = _moon_mi.position
+		_moon_label.visible = _body == "earth"
+		var ph := MoonGlobe.phase(jd)
+		_moon_label.text = "Moon\n%s km · %s %d %%" % [UiText.thousands(int(roundf(MoonGlobe.distance_km(jd) / 100.0) * 100.0)),
+			str(ph.name).to_lower(), int(round(float(ph.lit) * 100.0))]
+	if _body == "moon":
+		_cam_dirty = true
+
+
+## "moon" or "earth" when the pointer is on the body the camera is NOT
+## orbiting and it is in front of the one it is, else "". A body that is a
+## few pixels across is still caught inside BODY_PICK_PX.
+func _body_hit(local_pos: Vector2) -> String:
+	if _cam == null or _moon_mi == null:
+		return ""
+	var which := "moon" if _body == "earth" else "earth"
+	var centre := _moon_mi.position if which == "moon" else Vector3.ZERO
+	var radius := MoonGlobe.RADIUS_RATIO if which == "moon" else 1.0
+	var vpp := _to_vp(local_pos)
+	var o := _cam.project_ray_origin(vpp)
+	var d := _cam.project_ray_normal(vpp)
+	var dist := (centre - o).length()
+	var per_px := 2.0 * dist * tan(deg_to_rad(FOV_DEG) * 0.5) / maxf(1.0, float(_vp.size.y))
+	var r := maxf(radius, BODY_PICK_PX * 0.5 * per_px)
+	var t_c := GlobeMath.ray_sphere(o - centre, d, r)
+	if t_c < 0.0:
+		return ""
+	var t_g := GlobeMath.ray_sphere(o - _body_centre(), d, _body_scale())
+	if t_g >= 0.0 and t_g < t_c:
+		return ""
+	return which
+
+
+## Today's subsolar points (Earth, Moon) and today's Sun on the analemma.
+func _update_marker(jd: float) -> void:
+	if _path_marker == null:
+		return
+	var sub := GlobeMath.subsolar_point(jd)
+	_marker_lat = sub[0]
+	_path_marker.position = GlobeMath.to_unit(sub[0], sub[1]) * 1.012
+	_path_marker.visible = _show_sun_path and _body == "earth"
+	var ms := MoonGlobe.subsolar_latlon(jd)
+	_moon_sub_marker.position = GlobeMath.to_unit(ms[0], ms[1]) * 1.03
+	_moon_sub_marker.visible = _show_sun_path and _body == "moon"
+	if _body == "moon":
+		_marker_lat = ms[0]
+	# The Sun's place in the orbit point's sky right now.
+	var up := _target
+	var r := _dome_radius()
+	_sun_now.visible = _show_sun_path and _body == "earth" and _sun.dot(up) > 0.0
+	if _sun_now.visible:
+		_sun_now.position = up * (1.0 + 0.002) + _sun * r
+		(_sun_now.mesh as SphereMesh).radius = r * 0.05
+		(_sun_now.mesh as SphereMesh).height = r * 0.1
+
+
+func _place_planet_basis(jd: float) -> void:
+	if _path_planets.is_empty():
+		return
+	var b := AnalemmaPaths.equatorial_to_globe(StarSkyMath.gmst_deg(jd))
+	for pack in _path_planets:
+		var mi: MeshInstance3D = pack.line
+		if is_instance_valid(mi):
+			mi.basis = b
+
+
+func _apply_path_visibility() -> void:
+	var earth := _body == "earth"
+	if _path_sun == null:
+		return
+	_path_sun.visible = _show_sun_path and earth
+	_path_dome.visible = _show_sun_path and earth
+	_path_ground.visible = _show_sun_path and earth
+	_moon_sub_track.visible = _show_sun_path and not earth
+	_path_moon_orbit.visible = _show_moon_path and earth
+	_path_moon_ground.visible = _show_moon_path
+	for pack in _path_planets:
+		if is_instance_valid(pack.line):
+			(pack.line as MeshInstance3D).visible = _show_planet_paths and earth
+
+
+## The sky dome drawn over the orbit point: a share of the camera range, in
+## steps so a wheel notch does not rebuild it.
+func _dome_radius() -> float:
+	var r := clampf(cam_range * AnalemmaPaths.DOME_SHARE, 0.003, 0.22)
+	return exp(round(log(r) / log(1.3)) * log(1.3))
+
+
+## Builds whatever paths are on and stale. Three keys: the orbit point's sky
+## (lat, lon, hour, dome size), the day (ground tracks, the Moon's orbit)
+## and the planets (the day too; they do not depend on the place).
+func _rebuild_paths() -> void:
+	if _path_root == null:
+		return
+	if not (_show_sun_path or _show_moon_path or _show_planet_paths):
+		if _path_key != "off":
+			_path_key = "off"
+			_apply_path_visibility()
+			_path_marker.visible = false
+			_moon_sub_marker.visible = false
+			_sun_now.visible = false
+		return
+	var ll := center_latlon()
+	var jd := current_jd()
+	var hour := AnalemmaPaths.mean_solar_hour(jd, ll[1])
+	var day := floorf(jd + 0.5)
+	var key := "%s|%.0f|%.0f|%.1f|%.4f|%d|%d|%d|%d" % [_body, ll[0], ll[1], hour, _dome_radius(),
+		int(_show_sun_path), int(_show_moon_path), int(_show_planet_paths), int(day)]
+	if key == _path_key:
+		_apply_path_visibility()
+		return
+	var parts := _path_key.split("|")
+	var same_day := parts.size() == 9 and parts[8] == str(int(day)) and parts[0] == _body
+	var same_sky := same_day and parts[1] == "%.0f" % ll[0] and parts[2] == "%.0f" % ll[1] \
+		and parts[3] == "%.1f" % hour and parts[4] == "%.4f" % _dome_radius()
+	_path_key = key
+	var year := AnalemmaPaths.year_of(jd)
+	var doy_frac := float(AnalemmaPaths.doy_of(jd)) / (366.0 if AnalemmaPaths.is_leap(year) else 365.0)
+	if _body == "moon":
+		if _show_sun_path and not same_day:
+			var lifted := PackedVector3Array()
+			for p in MoonGlobe.subsolar_track(jd):
+				lifted.append(p * 1.004)
+			_moon_sub_track.mesh = AnalemmaPaths.line_mesh(lifted, 0.45)
+			_set_head(_moon_sub_track, 0.5)
+		if _show_moon_path and not same_day:
+			_rebuild_sublunar(jd)
+		_apply_path_visibility()
+		_update_marker(jd)
+		return
+	var lat := ll[0]
+	var lon := ll[1]
+	var up := GlobeMath.to_unit(lat, lon)
+	if _show_sun_path:
+		if not same_sky:
+			var r := _dome_radius()
+			var sky := PackedVector3Array()
+			for d in AnalemmaPaths.sun_sky(lat, lon, year, hour):
+				sky.append(up * 1.002 + AnalemmaPaths.horizon_to_globe(lat, lon, d) * r)
+			_path_sun.mesh = AnalemmaPaths.line_mesh(sky, r * 0.5)
+			_set_head(_path_sun, doy_frac)
+			var ring := PackedVector3Array()
+			var north := GlobeMath.north_at(lat, lon)
+			var east := GlobeMath.east_at(lon)
+			for i in 96:
+				var a := TAU * float(i) / 96.0
+				ring.append(up * 1.002 + (north * cos(a) + east * sin(a)) * r)
+			_path_dome.mesh = AnalemmaPaths.line_mesh(ring, r, true)
+		if not same_day:
+			var ground := PackedVector3Array()
+			for p in AnalemmaPaths.subsolar_track(jd):
+				ground.append(p * 1.003)
+			_path_ground.mesh = AnalemmaPaths.line_mesh(ground, 0.5)
+			_set_head(_path_ground, 0.5)
+	if _show_moon_path and not same_day:
+		var orbit := AnalemmaPaths.moon_orbit(jd)
+		_path_moon_orbit.mesh = AnalemmaPaths.line_mesh(orbit, 30.0)
+		_set_head(_path_moon_orbit, 0.5)
+		_rebuild_sublunar(jd)
+	if _show_planet_paths and (not same_day or _path_planets.is_empty()):
+		for pack in _path_planets:
+			if is_instance_valid(pack.line):
+				(pack.line as Node).queue_free()
+		_path_planets.clear()
+		for pname in AnalemmaPaths.PLANETS:
+			var pk := AnalemmaPaths.planet_year(pname, jd)
+			var scaled := PackedVector3Array()
+			for p in pk.points:
+				scaled.append((p as Vector3) * AnalemmaPaths.SKY_R)
+			var col: Color = pk.color
+			var line := _path_line(_path_root, "PlanetPath_%s" % pname, Color(col.r, col.g, col.b, 0.85), 1.6)
+			line.mesh = AnalemmaPaths.line_mesh(scaled, 8.0)
+			_set_head(line, 0.5)
+			var dot := _path_dot(line, "Now", col, 0.42)
+			dot.position = (pk.now as Vector3) * AnalemmaPaths.SKY_R
+			dot.visible = true
+			var tag := Label3D.new()
+			tag.text = str(pk.title)
+			tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			tag.fixed_size = true
+			tag.no_depth_test = true
+			tag.pixel_size = 0.0011
+			tag.font_size = 20
+			tag.outline_size = 7
+			tag.modulate = col
+			tag.outline_modulate = Color(0, 0, 0, 0.8)
+			tag.offset = Vector2(0, 18)
+			dot.add_child(tag)
+			_path_planets.append({"line": line, "dot": dot, "tag": tag})
+		_place_planet_basis(jd)
+	_apply_path_visibility()
+	_update_marker(jd)
+
+
+func _rebuild_sublunar(jd: float) -> void:
+	var mground := PackedVector3Array()
+	for p in AnalemmaPaths.sublunar_track(jd):
+		mground.append(p * 1.003)
+	_path_moon_ground.mesh = AnalemmaPaths.line_mesh(mground, 0.45)
+	_set_head(_path_moon_ground, 0.5)

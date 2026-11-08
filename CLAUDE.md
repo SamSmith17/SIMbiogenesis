@@ -5865,6 +5865,58 @@ figshare bot check and its tiles are an undocumented staging server).
   user://globe_cache/gsa/): "1 kWp makes 3.25 kWh/day (1,187 kWh/yr) · sun
   · best tilt · best / worst month". The sea and poles have no solar data.
   The credits line now wraps beside the layer bar (`set_credits_left`).
+- **Improvement pass (2026-11-07): curtains, the Moon, lights as points,
+  paths, fades, the UI.** Gate: `tools\harness.ps1 -World mtvernon
+  -RunScript res://tools/checks/globe_improvements_check.gd -Label
+  globe_improvements` (20 checks) + `--capture=globe` + the selftest (216).
+  - **Aurora curtains are continuous sheets.** `AuroraCurtains.build_mesh`
+    makes THREE closed strips per oval (`SHEETS`: the peak, one poleward,
+    one equatorward, each drifting toward and away from the peak round the
+    oval), 360 columns × 10 rows from 100 to 400 km along the dipole field
+    lines; `globe_aurora_curtain.gdshader` folds the sheet in the VERTEX
+    stage (`aur_fold`, the band's own wander, more at the top) and lights it
+    from the smooth band at the undisplaced foot (`aurora_band`), with fine
+    rays, a sharp green lower border and a faint red veil above 150 km. The
+    first cut was 72 separate 140 km ribbons with gaps: "segmented".
+  - **The Moon is where it is.** `MoonGlobe.position(jd)` (Meeus distance,
+    56–64 radii; a 14 px disc from the opening view, as in the sky), near
+    side toward the Earth, 4k LRO mosaic (1k behind it), a two-line label
+    (distance, phase, % lit: `MoonGlobe.phase`). The camera orbits a BODY:
+    `set_primary_body("moon")` keeps the Earth at the origin with all its
+    layers and moves the camera to the Moon (`_body_centre / _body_scale /
+    _body_basis` carry the camera frame, picks, altitude, tilt), opening on
+    an Earthrise (target 0 N 88 E, heading 270, tilt 74, range 2.6). The
+    Moon's irradiance map (`irradiance` on the shader) is the cosine law
+    over the real surface with a 200 W/m² contour and the terminator; the
+    legend ramp is mirrored in `GlobeMode.irradiance_color`.
+  - **City lights are points** (`GlobeCityLights`, a `_globe` child): every
+    Black Marble tile a patch binds to (the fetcher keeps the night tiles'
+    pixels, `keep_images` / `get_image`) is turned on a worker into the
+    brightest ≤ 2600 pixels over `MIN_LUMA`, blue-white snow glare dropped,
+    and drawn as one MultiMesh of glow discs (`globe_city_light.gdshader`:
+    the pixel's footprint wide, never under 1.6 px, night side only). Finer
+    tiles bind as the camera comes down, so the glow resolves into towns.
+    The ground shader draws no night texture any more.
+  - **Paths** draw through `globe_path.gdshader` at a constant pixel width
+    (`AnalemmaPaths.line_mesh`: two vertices a point, NORMAL = tangent,
+    UV.x = side; `head` dims the part of the year still to come). Sun = the
+    analemma in the orbit point's sky on a dome sized to the camera range
+    (`DOME_SHARE`, a horizon ring, today's Sun as a dot) + the subsolar
+    track; Moon = its orbit over a lunation at true distance + the sublunar
+    track; Planets = a year of each on a `SKY_R` = 45-radius sphere turned
+    with GMST, a dot and name at today. On the Moon: the subsolar point and
+    its track.
+  - **Fades**: a data layer is fully shown beyond `OVERLAY_FADE_FAR` 0.26 R
+    (~1650 km camera distance) and gone below 0.047 R (~300 km); the atlas
+    0.09 / 0.012. Quieter on the night side (×0.42). The polar cap's night
+    floor is 0.10 (0.32 drew a grey disc at the pole).
+  - **UI**: Earth | Moon is a segmented toggle, a Home button (You are here
+    / the newest world; Home key), the layer bar has Colour by / Weather /
+    Sky rows, the time strip is its own bar bottom-right above the credits
+    (Now, a day back / on, Play cycling 1 h/s · 1 d/s · 7 d/s, Space), the
+    Sun line under the date. The Moon keeps the Earth's layers on.
+  - ⚠ `--script` on a Control script (globe_mode.gd) boots the main scene
+    and never exits: parse-check UI scripts with `ui_compile_selftest`.
 - **Pin names, per-layer card, aurora (2026-11-05).**
   - Pins say `GlobeMode.short_name`: an address-named world shows its town
     (parts with a digit and a leading road dropped), every name cut to

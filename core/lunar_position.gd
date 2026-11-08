@@ -303,6 +303,14 @@ static func ecliptic_to_equatorial(ecl_lon: float, ecl_lat: float, obliquity_deg
 	return {"ra": ra_deg, "dec": rad_to_deg(dec)}
 
 
+## Geocentric equatorial coordinates at a UTC Julian Day: right ascension and
+## declination, degrees. The globe's sublunar point is this plus GMST.
+static func equatorial(jd_utc: float) -> Dictionary:
+	var T: float = (jd_utc - 2451545.0) / 36525.0
+	var geo: Dictionary = geocentric_ecliptic(jd_utc)
+	return ecliptic_to_equatorial(float(geo.longitude), float(geo.latitude), _obliquity_deg(T))
+
+
 ## Geocentric angular semidiameter (degrees) from distance.
 static func angular_radius_deg(jd_utc: float) -> float:
 	var geo: Dictionary = geocentric_ecliptic(jd_utc)

@@ -34,7 +34,8 @@ const RAMP_LO := 2.0
 const RAMP_STEP := 0.75
 ## The camera distance (globe radii) below which the layer starts to fade:
 ## ~5 km cells hold up closer than the 1° zone grid's 0.03.
-const FADE_FAR := 0.008
+const FADE_FAR := 0.09
+const FADE_NEAR := 0.012
 
 static var _layer_tex: Texture2D
 static var _layer_img: Image

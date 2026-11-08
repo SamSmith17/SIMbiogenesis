@@ -253,9 +253,14 @@ usage; confirm each provider's live attribution string before release.**
   - License: U.S. Government work (public domain) · Attribution: **"Rain: NASA GPM IMERG (GIBS)"** (acknowledgment requested)
   - Status: verified
 
-- **NASA MODIS Terra true colour, via NASA GIBS** — the globe's satellite image of the day.
-  - Source: https://gibs.earthdata.nasa.gov (`MODIS_Terra_CorrectedReflectance_TrueColor`)
-  - License: U.S. Government work (public domain) · Attribution: **"Satellite of the day: NASA MODIS Terra (GIBS)"**
+- **NASA MODIS Terra true colour, via NASA GIBS** — the globe's satellite image of the day, and the polar caps (geographic tiles, past the Mercator edge).
+  - Source: https://gibs.earthdata.nasa.gov (`MODIS_Terra_CorrectedReflectance_TrueColor`, EPSG:4326 for the poles)
+  - License: U.S. Government work (public domain) · Attribution: **"Satellite of the day: NASA MODIS Terra (GIBS)"** and **"Poles: NASA MODIS Terra (GIBS)"**
+  - Status: verified
+
+- **NASA LRO wide-angle colour mosaic (SVS 4720)** — the Moon's colour map in the globe view, fetched on first use.
+  - Source: https://svs.gsfc.nasa.gov/4720
+  - License: U.S. Government work (public domain) · Attribution: **"Moon: NASA LRO / SVS"**
   - Status: verified
 
 - **NOAA GFS (Global Forecast System), 1°, via NOAA Open Data on AWS** — wind, temperature and wind power on the globe.

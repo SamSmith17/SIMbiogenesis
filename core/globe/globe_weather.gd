@@ -51,6 +51,9 @@ const CACHE := "user://globe_cache"
 const GFS_BUCKET := "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
 ## 2021-01-01 00:00 UTC: the bucket's runs start about here.
 const GFS_EARLIEST := 1609459200.0
+## IMERG's record starts in 1998; MODIS Terra a little later, in 2000.
+const RAIN_EARLIEST := 883612800.0
+const MODIS_EARLIEST := 949449600.0
 const GFS_LATENCY_H := 4.5
 const GFS_MAX_FHOUR := 384
 const GFS_VARS := {"u": "UGRD:10 m above ground", "v": "VGRD:10 m above ground", "t": "TMP:2 m above ground"}
@@ -162,6 +165,21 @@ static func gfs_choice(t: float, now: float) -> Dictionary:
 	var cycle := minf(latest, floorf(t / six) * six)
 	var fh := clampi(roundi((t - cycle) / 10800.0) * 3, 0, GFS_MAX_FHOUR)
 	return {"cycle": cycle, "fhour": fh}
+
+
+## Why a layer has no picture at `t`, or "" when it might. `now` is the
+## computer's clock (UNIX s). Clouds are only the last few hours; the
+## archives start in 1998 (rain), 2000 (MODIS) and 2021 (GFS).
+static func layer_gap(kind: String, t: float, now: float) -> String:
+	if kind == "clouds" and absf(t - now) > 6.0 * 3600.0:
+		return "Clouds: live clouds cover only the last few hours"
+	if kind == "wind" and t < GFS_EARLIEST:
+		return "Wind: no image before 2021"
+	if kind == "rain" and t < RAIN_EARLIEST:
+		return "Rain: no image before 1998"
+	if kind == "sat" and t < MODIS_EARLIEST:
+		return "Satellite: no image before 2000"
+	return ""
 
 
 static func gfs_url(cycle: float, fhour: int) -> String:

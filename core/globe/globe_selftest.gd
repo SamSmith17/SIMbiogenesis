@@ -14,7 +14,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
 
-const EXPECTED_CHECKS := 162
+const EXPECTED_CHECKS := 216
 
 var _fails := 0
 var _checks := 0
@@ -42,6 +42,7 @@ func _initialize() -> void:
 	_test_solar_atlas()
 	_test_labels_and_climate()
 	_test_aurora()
+	_test_globe_improvements()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -645,6 +646,189 @@ func _test_aurora() -> void:
 	_check("aurora: OVATION grid parses", img.get_width() == 360 and img.get_height() == 181 and float(ov.max) > 0.0
 		and float(ov.forecast) > float(ov.obs))
 	_check("aurora: month keys", SpaceWeatherService.month_key(t11) == "2024-05")
+
+
+func _test_globe_improvements() -> void:
+	# Field-line curtains. A dipole leans equatorward as it rises: colatitude grows.
+	var lo: Dictionary = AuroraCurtains.sample(5.0, 0.0, 1, AuroraCurtains.H0_KM)
+	var hi: Dictionary = AuroraCurtains.sample(5.0, 0.0, 1, AuroraCurtains.H1_KM)
+	_check("curtains: the footpoint sits on the oval",
+		absf(absf(float(lo.mag_lat)) - absf(float(lo.peak))) < 0.2,
+		"%.2f vs %.2f" % [float(lo.mag_lat), float(lo.peak)])
+	_check("curtains: colatitude grows with height (leans equatorward)",
+		float(hi.theta) > float(lo.theta) + 1e-4, "%.5f -> %.5f" % [float(lo.theta), float(hi.theta)])
+	var pole := AuroraModel.pole_dir()
+	_check("curtains: magnetic longitude stays put up the line",
+		absf(wrapf(AuroraCurtains.mag_lon(lo.pos, pole) - AuroraCurtains.mag_lon(hi.pos, pole), -PI, PI)) < 1e-3)
+	var south: Dictionary = AuroraCurtains.sample(5.0, 0.0, -1, AuroraCurtains.H0_KM)
+	_check("curtains: the southern line is the southern oval",
+		float(south.mag_lat) < 0.0 and absf(absf(float(south.mag_lat)) - absf(float(south.peak))) < 0.2,
+		"%.2f" % float(south.mag_lat))
+	var mesh := AuroraCurtains.build_mesh(5.0, GlobeMath.to_unit(0.0, 0.0))
+	_check("curtains: the sheet mesh is built", mesh.get_surface_count() == 1)
+	# Continuous: one closed strip per sheet per hemisphere, every column joined
+	# to the next (the first cut was 72 ribbons with gaps between them).
+	var arr := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var cols_per_sheet := (AuroraCurtains.LON_STEPS + 1) * (AuroraCurtains.H_STEPS + 1)
+	_check("curtains: three sheets per hemisphere, columns shared",
+		verts.size() == 2 * AuroraCurtains.SHEETS.size() * cols_per_sheet, str(verts.size()))
+	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+	_check("curtains: every column is stitched to its neighbour",
+		idx.size() == 2 * AuroraCurtains.SHEETS.size() * AuroraCurtains.LON_STEPS * AuroraCurtains.H_STEPS * 6)
+	var seam_gap := verts[0].distance_to(verts[AuroraCurtains.LON_STEPS * (AuroraCurtains.H_STEPS + 1)])
+	_check("curtains: the strip closes on itself", seam_gap < 1e-5, "%.6f" % seam_gap)
+	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	_check("curtains: the sheet normal is tangent (poleward)", absf(norms[0].dot(verts[0].normalized())) < 0.05)
+	var inc := FileAccess.get_file_as_string("res://core/globe/aurora.gdshaderinc")
+	_check("curtains: the shader include carries the fold and band functions",
+		inc.contains("float aur_fold(") and inc.contains("float aurora_band("))
+	# Polar cap UV.
+	var centre := GlobePolarFill.uv_of(90.0, 40.0)
+	_check("poles: the pole is the centre of the cap texture", centre.distance_to(Vector2(0.5, 0.5)) < 1e-4)
+	var rim := GlobePolarFill.latlon_of(true, 0.5, 0.0)
+	_check("poles: the cap's outer ring is the Mercator limit",
+		absf(float(rim[0]) - GlobeMath.MERCATOR_MAX_LAT) < 1e-4, "%.5f" % float(rim[0]))
+	var back := GlobePolarFill.uv_of(87.0, 40.0)
+	var ll := GlobePolarFill.latlon_of(true, back.x, back.y)
+	_check("poles: cap UV round trip", absf(float(ll[0]) - 87.0) < 1e-3 and absf(float(ll[1]) - 40.0) < 1e-2,
+		"%s" % str(ll))
+	# A year of time, and the numbers on the readout.
+	var eq_jd := GlobeMath.jd_from_unix(1710903960.0)
+	var so_jd := GlobeMath.jd_from_unix(1718916660.0)
+	_check("time: equinox day length at the equator is 12 h",
+		absf(GlobeMath.day_length_hours(0.0, eq_jd) - 12.0) < 0.15,
+		"%.3f" % GlobeMath.day_length_hours(0.0, eq_jd))
+	_check("time: June solstice is a polar day at 80 N", GlobeMath.day_length_hours(80.0, so_jd) == 24.0)
+	_check("time: June solstice is a polar night at 80 S", GlobeMath.day_length_hours(-80.0, so_jd) == 0.0)
+	var sub := GlobeMath.subsolar_point(so_jd)
+	_check("time: the Sun is overhead at the subsolar point",
+		GlobeMath.solar_elevation_deg(sub[0], sub[1], so_jd) > 89.0)
+	_check("time: the strip spans a year both ways", absf(GlobeMode.TIME_SPAN_H - 366.0 * 24.0) < 1e-6)
+	var track := AnalemmaPaths.subsolar_track(so_jd)
+	var worst_lat := 0.0
+	var half := int(track.size() / 2)
+	var ref_lon := GlobeMath.subsolar_point(so_jd)[1]
+	var lon_lo := 0.0
+	var lon_hi := 0.0
+	var mid_err := 0.0
+	for i in track.size():
+		var pll := GlobeMath.to_latlon(track[i])
+		worst_lat = maxf(worst_lat, absf(pll[0]))
+		var dl := wrapf(pll[1] - ref_lon, -180.0, 180.0)
+		lon_lo = minf(lon_lo, dl)
+		lon_hi = maxf(lon_hi, dl)
+		if i == half:
+			mid_err = maxf(absf(pll[0] - sub[0]), absf(wrapf(pll[1] - sub[1], -180.0, 180.0)))
+	_check("paths: the subsolar track stays inside the tropics", worst_lat < 23.5 and worst_lat > 23.0,
+		"%.3f" % worst_lat)
+	_check("paths: the equation of time spreads the track in longitude", lon_hi - lon_lo > 2.0,
+		"%.2f deg" % (lon_hi - lon_lo))
+	_check("paths: the middle of the track is that day", mid_err < 0.05, "%.4f" % mid_err)
+	var sky := AnalemmaPaths.sun_sky(0.0, 0.0, 2024, 12.0)
+	var alt_lo := 90.0
+	var alt_hi := -90.0
+	var unit_ok := true
+	for d in sky:
+		if absf(d.length() - 1.0) > 1e-3:
+			unit_ok = false
+		var alt := rad_to_deg(asin(clampf(d.y, -1.0, 1.0)))
+		alt_lo = minf(alt_lo, alt)
+		alt_hi = maxf(alt_hi, alt)
+	_check("paths: the sky analemma is unit directions with a seasonal swing",
+		unit_ok and sky.size() >= 365 and alt_hi - alt_lo > 20.0, "%.1f..%.1f" % [alt_lo, alt_hi])
+	var g0 := AnalemmaPaths.equatorial_to_globe(0.0) * Vector3(1, 0, 0)
+	_check("paths: GMST 0 puts RA 0 on longitude 0", g0.distance_to(Vector3(0, 0, 1)) < 1e-5)
+	var g90 := AnalemmaPaths.equatorial_to_globe(90.0) * Vector3(1, 0, 0)
+	_check("paths: GMST 90 puts RA 0 on longitude -90", g90.distance_to(Vector3(-1, 0, 0)) < 1e-5)
+	# The line mesh: two vertices per point, the tangent as the normal, sides -1 / +1.
+	var pts := PackedVector3Array([Vector3(0, 0, 1), Vector3(0.1, 0, 1), Vector3(0.2, 0, 1), Vector3(0.3, 0, 1)])
+	var lm := AnalemmaPaths.line_mesh(pts, 0.5)
+	var la := lm.surface_get_arrays(0)
+	var lv: PackedVector3Array = la[Mesh.ARRAY_VERTEX]
+	var ln: PackedVector3Array = la[Mesh.ARRAY_NORMAL]
+	var lu: PackedVector2Array = la[Mesh.ARRAY_TEX_UV]
+	_check("paths: line mesh doubles every point", lv.size() == 8 and lv[0] == lv[1] and lv[6] == pts[3])
+	_check("paths: the normal is the tangent", ln[2].normalized().distance_to(Vector3(1, 0, 0)) < 0.02, str(ln[2]))
+	_check("paths: sides and the fraction along", lu[0].x == -1.0 and lu[1].x == 1.0 and absf(lu[7].y - 1.0) < 1e-6)
+	var broken := AnalemmaPaths.line_mesh(PackedVector3Array([Vector3(0, 0, 1), Vector3(0, 0, -1), Vector3(0.1, 0, -1), Vector3(0.2, 0, -1)]), 0.5)
+	var bi: PackedInt32Array = broken.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+	_check("paths: a jump breaks the strip", bi.size() == 12, str(bi.size()))
+	var orbit := AnalemmaPaths.moon_orbit(so_jd, 27.32, 1.0)
+	var r_lo := INF
+	var r_hi := 0.0
+	for q in orbit:
+		r_lo = minf(r_lo, q.length())
+		r_hi = maxf(r_hi, q.length())
+	_check("paths: the Moon's orbit runs 55-64 Earth radii out", r_lo > 55.0 and r_hi < 64.5 and r_hi - r_lo > 2.0,
+		"%.1f..%.1f" % [r_lo, r_hi])
+	var py := AnalemmaPaths.planet_year("mars", so_jd, 10)
+	_check("paths: a planet's year is unit equatorial vectors with today in the middle",
+		(py.points as PackedVector3Array).size() == 21 and absf(((py.points as PackedVector3Array)[10]).length() - 1.0) < 1e-4
+		and ((py.points as PackedVector3Array)[10]).distance_to(py.now) < 1e-6 and str(py.title) == "Mars")
+	_check("paths: day of year", AnalemmaPaths.doy_of(GlobeMath.jd_from_unix(1704067200.0)) == 0
+		and AnalemmaPaths.doy_of(GlobeMath.jd_from_unix(1735603200.0)) == 365)
+	_check("paths: month ticks", AnalemmaPaths.month_fractions(2024).size() == 12
+		and absf(AnalemmaPaths.month_fractions(2024)[1] - 31.0 / 366.0) < 1e-6)
+	# The Moon.
+	var eqm := LunarPosition.equatorial(so_jd)
+	var sub_m := MoonGlobe.sublunar_point(so_jd)
+	_check("moon: sublunar latitude is the declination", absf(float(sub_m[0]) - float(eqm.dec)) < 1e-4)
+	var face: Vector3 = MoonGlobe.basis(so_jd) * Vector3(0, 0, 1)
+	_check("moon: the prime meridian points at the Earth", face.dot(-MoonGlobe.direction(so_jd)) > 0.999)
+	var sun_b := MoonGlobe.sun_body(so_jd)
+	_check("moon: irradiance at the subsolar point is the solar constant",
+		absf(MoonGlobe.irradiance(sun_b, sun_b) - SolarIrradiance.SOLAR_CONSTANT) < 1e-3)
+	_check("moon: the anti-solar point is dark", MoonGlobe.irradiance(-sun_b, sun_b) == 0.0)
+	var later := MoonGlobe.sun_body(so_jd + 0.5)
+	_check("moon: twelve hours does not spin the lunar day around",
+		sun_b.normalized().dot(later.normalized()) > 0.85, "%.3f" % sun_b.dot(later))
+	# True distance: 356 400 - 406 700 km, the position along the sublunar direction.
+	var dk := MoonGlobe.distance_km(so_jd)
+	_check("moon: the distance is the real one", dk > 356000.0 and dk < 407000.0, "%.0f km" % dk)
+	var mp := MoonGlobe.position(so_jd)
+	_check("moon: it stands 56-64 Earth radii out, under the sublunar point",
+		mp.length() > 55.9 and mp.length() < 63.9 and mp.normalized().distance_to(MoonGlobe.direction(so_jd)) < 1e-6,
+		"%.2f radii" % mp.length())
+	_check("moon: the Earth from the Moon is ~220 Moon radii", absf(MoonGlobe.earth_distance_moon_radii(so_jd) - dk / MoonGlobe.RADIUS_KM) < 1e-6)
+	# Phase: full on 2024-05-23 13:53 UTC, new on 2024-05-08 03:22 UTC (USNO).
+	var full := MoonGlobe.phase(GlobeMath.jd_from_unix(1716472380.0))
+	var new_m := MoonGlobe.phase(GlobeMath.jd_from_unix(1715138520.0))
+	_check("moon: full on 23 May 2024", float(full.lit) > 0.99 and str(full.name) == "Full Moon", "%.3f %s" % [float(full.lit), str(full.name)])
+	_check("moon: new on 8 May 2024", float(new_m.lit) < 0.01 and str(new_m.name) == "New Moon", "%.3f %s" % [float(new_m.lit), str(new_m.name)])
+	var fq := MoonGlobe.phase(GlobeMath.jd_from_unix(1715138520.0 + 7.38 * 86400.0))
+	_check("moon: a week after new it is waxing, near first quarter", bool(fq.waxing) and absf(float(fq.lit) - 0.5) < 0.08
+		and str(fq.name) == "First quarter", "%.3f %s" % [float(fq.lit), str(fq.name)])
+	# City lights: a synthetic tile with two bright pixels.
+	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.02, 0.02, 0.03))
+	img.set_pixel(2, 3, Color(0.9, 0.8, 0.6))
+	img.set_pixel(6, 6, Color(0.3, 0.3, 0.3))
+	var ex := GlobeCityLights.extract(img, Vector3i(2, 1, 1))
+	_check("lights: the bright pixels become points", (ex.pos as PackedVector3Array).size() == 2
+		and (ex.lum as PackedFloat32Array)[0] > 0.7 and (ex.lum as PackedFloat32Array)[1] < 0.35)
+	var p0: Vector3 = (ex.pos as PackedVector3Array)[0]
+	_check("lights: a point sits on its pixel just over the ground",
+		absf(p0.length() - GlobeCityLights.HEIGHT) < 1e-5
+		and p0.normalized().distance_to(GlobeMath.tile_point(2, 1, 1, 2.5 / 8.0, 3.5 / 8.0)) < 1e-5)
+	var ang := TAU / (8.0 * 4.0)
+	_check("lights: the footprint is the pixel's", absf((ex.foot as PackedFloat32Array)[0] - ang * sqrt(1.0 - p0.normalized().y * p0.normalized().y)) < 1e-6)
+	# The overlay fades out a few hundred km up now, not at 20 km.
+	_check("overlay: the zone layer is gone by ~300 km up",
+		GlobeView.OVERLAY_FADE_FAR * GlobeView.OVERLAY_FADE_RATIO * GlobeMath.EARTH_RADIUS_KM > 250.0
+		and GlobeView.OVERLAY_FADE_FAR * GlobeMath.EARTH_RADIUS_KM < 2000.0)
+	_check("overlay: the finer atlas fades closer", GlobeSolarAtlas.FADE_FAR < GlobeView.OVERLAY_FADE_FAR
+		and GlobeSolarAtlas.FADE_NEAR * GlobeMath.EARTH_RADIUS_KM > 50.0)
+	_check("moon: the legend ramp is gold at the subsolar point and dark at night",
+		GlobeMode.irradiance_color(1361.0).r > 0.95 and GlobeMode.irradiance_color(0.0).get_luminance() < 0.1)
+	var now_u := 1.7e9
+	_check("layers: no wind before 2021", GlobeWeather.layer_gap("wind", 1.6e9, now_u).contains("2021"))
+	_check("layers: no rain before 1998", GlobeWeather.layer_gap("rain", 8.0e8, now_u).contains("1998"))
+	_check("layers: no satellite before 2000", GlobeWeather.layer_gap("sat", 9.0e8, now_u).contains("2000"))
+	_check("layers: no clouds a day from now",
+		GlobeWeather.layer_gap("clouds", now_u + 86400.0, now_u).contains("no image"))
+	_check("layers: clouds are offered within the hour",
+		GlobeWeather.layer_gap("clouds", now_u + 1800.0, now_u).is_empty())
 
 
 ## A point at magnetic latitude `ml` on the magnetic midnight meridian.

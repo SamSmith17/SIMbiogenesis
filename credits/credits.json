@@ -1496,10 +1496,25 @@
       "id": "nasa-gibs-modis-truecolor",
       "license": "public-domain-us-gov",
       "name": "NASA MODIS Terra Corrected Reflectance (true colour) via GIBS",
-      "notes": "Daily since 2000, a day behind. NASA asks for an acknowledgment.",
-      "role": "The globe's satellite image of a chosen day",
+      "notes": "Daily since 2000, a day behind, and the globe's polar caps via the EPSG:4326 tiles (Web Mercator stops at ±85°). NASA asks for an acknowledgment.",
+      "role": "The globe's satellite image of a chosen day, and the polar caps",
       "share_alike": false,
       "source": "https://gibs.earthdata.nasa.gov",
+      "status": "verified"
+    },
+    {
+      "attribution_required": true,
+      "attribution_string": "Moon: NASA LRO / SVS",
+      "author": "NASA LRO / Scientific Visualization Studio",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "nasa-lro-moon-color",
+      "license": "public-domain-us-gov",
+      "name": "LRO wide-angle colour mosaic of the Moon (SVS 4720)",
+      "notes": "Fetched on first use into user://globe_cache/moon_color.jpg. A procedural moon stands in until then. NASA asks for an acknowledgment.",
+      "role": "Colour map of the Moon in the globe view",
+      "share_alike": false,
+      "source": "https://svs.gsfc.nasa.gov/4720",
       "status": "verified"
     },
     {

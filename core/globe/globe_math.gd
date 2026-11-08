@@ -176,3 +176,22 @@ static func subsolar_point(jd_utc: float) -> PackedFloat64Array:
 static func sun_dir(jd_utc: float) -> Vector3:
 	var s := subsolar_point(jd_utc)
 	return to_unit(s[0], s[1])
+
+
+## Solar elevation (degrees) of the globe-frame sun at a site. Geometric:
+## no refraction.
+static func solar_elevation_deg(lat_deg: float, lon_deg: float, jd_utc: float) -> float:
+	return rad_to_deg(asin(clampf(to_unit(lat_deg, lon_deg).dot(sun_dir(jd_utc)), -1.0, 1.0)))
+
+
+## Day length in hours at `lat_deg` from the subsolar latitude that day.
+## 24 through the polar day, 0 through the polar night. Geometric horizon.
+static func day_length_hours(lat_deg: float, jd_utc: float) -> float:
+	var dec := deg_to_rad(subsolar_point(jd_utc)[0])
+	var lat := deg_to_rad(clampf(lat_deg, -89.5, 89.5))
+	var cos_ha := -tan(lat) * tan(dec)
+	if cos_ha <= -1.0:
+		return 24.0
+	if cos_ha >= 1.0:
+		return 0.0
+	return rad_to_deg(acos(clampf(cos_ha, -1.0, 1.0))) / 7.5

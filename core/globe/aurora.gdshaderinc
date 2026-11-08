@@ -78,6 +78,27 @@ float aurora_at(vec3 p, float t) {
 	return s * rays * shimmer * aurora_gain;
 }
 
+// The band's fold at a magnetic longitude (degrees of latitude), the same
+// wander aurora_at folds into the model. The curtain mesh moves its geometry
+// by it (vertex stage) and then reads the smooth band at the undisplaced
+// foot, so the sheet ripples without the brightness sliding off it.
+float aur_fold(float mag_lon, float t, float phase) {
+	return 0.8 * sin(mag_lon * 7.0 + t * 0.021 + phase) + 0.45 * sin(mag_lon * 17.0 - t * 0.037 + phase * 1.7)
+		+ 0.22 * sin(mag_lon * 41.0 + t * 0.09 + phase * 2.3);
+}
+
+// The smooth band (no fold) with the fine rays: what a curtain sheet is lit
+// by at its footpoint. `ray_detail` sharpens the rays (1 = the shell's).
+float aurora_band(vec3 p, float t, float ray_detail) {
+	vec2 mg = aur_mag_angles(p);
+	float s = aurora_use_ovation ? aur_ovation(p) : aur_model(p, 0.0);
+	float r1 = aur_noise(vec2(mg.x * 260.0 + t * 0.05, t * 0.02));
+	float r2 = aur_noise(vec2(mg.x * 900.0 - t * 0.11, t * 0.07));
+	float rays = mix(0.3, 1.0, r1 * r1) * mix(1.0 - 0.55 * ray_detail, 1.0, r2);
+	float shimmer = 0.85 + 0.15 * aur_noise(vec2(mg.x * 60.0 - t * 0.4, t * 0.3));
+	return s * rays * shimmer * aurora_gain;
+}
+
 // Emission colours: the 557.7 nm green line low down, the 630 nm red line
 // above ~200 km, a purple-pink fringe (N2) under strong aurora.
 // (Linear colour: a little red or blue here turns grey once it is dim.)

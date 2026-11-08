@@ -40,6 +40,9 @@ const LAYERS := {
 
 ## Tests (and the harness) set this to make every download fail.
 static var offline_for_test := false
+## Layers whose decoded pixels are kept beside the texture (get_image): the
+## night tiles, which GlobeCityLights turns into points.
+var keep_images := {"night": true}
 
 ## This fetcher's layers: LAYERS plus any registered at run time (a daily
 ## satellite layer per date, register_layer).
@@ -128,6 +131,14 @@ func want(layer: String, k: Vector3i, prio: float) -> void:
 		_disk_pending[ks] = job
 	else:
 		_queue[ks] = job
+
+
+## The decoded pixels of a tile of a keep_images layer, or null.
+func get_image(layer: String, k: Vector3i) -> Image:
+	var ks := key_str(layer, k)
+	if _textures.has(ks):
+		return _textures[ks].get("img")
+	return null
 
 
 func get_texture(layer: String, k: Vector3i) -> Texture2D:
@@ -250,6 +261,8 @@ func _accept(layer: String, k: Vector3i, bytes: PackedByteArray) -> bool:
 	img.generate_mipmaps()
 	var ks := key_str(layer, k)
 	_textures[ks] = {"tex": ImageTexture.create_from_image(img), "used": _frame}
+	if keep_images.has(layer):
+		_textures[ks]["img"] = img
 	_failed.erase(ks)
 	tile_ready.emit(layer, k)
 	return true
