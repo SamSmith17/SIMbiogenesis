@@ -1636,6 +1636,11 @@ func _handle_vehicle_interaction() -> void:
 			_grab_extinguisher()
 			return
 	
+	# A vehicle door under the crosshair takes Interact (InteractionFocus
+	# opens it): never also get in and drive.
+	if _interaction_focus != null and _interaction_focus.has_method("has_door_focus") \
+			and bool(_interaction_focus.call("has_door_focus")):
+		return
 	# Check for mount input when near a vehicle (O key)
 	# Automatically stop charging if needed - user shouldn't have to disconnect manually
 	if not is_riding and nearby_vehicle != null:
@@ -2080,6 +2085,11 @@ func _update_nearby_vehicle_prompt() -> void:
 	if _interaction_focus != null and _interaction_focus.has_method("get_focused"):
 		if _interaction_focus.get_focused() != null:
 			return
+	if _interaction_focus != null and _interaction_focus.has_method("has_door_focus") \
+			and bool(_interaction_focus.call("has_door_focus")):
+		if interaction_ui.has_method("hide_prompt"):
+			interaction_ui.hide_prompt()
+		return
 	
 	# Check for nearby fire extinguisher pickup (highest priority)
 	if nearby_extinguisher != null and is_instance_valid(nearby_extinguisher):

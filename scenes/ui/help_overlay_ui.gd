@@ -35,6 +35,7 @@ const _GROUPS := [
 	["Interaction", [
 		["interact", "Interact / pick up / use"],
 		["dismount", "Exit vehicle"],
+		["interact", "Aimed at a van's, bus's or trailer's door: open it and walk inside (anywhere else on it: drive)"],
 		["key:Back up", "Hitch a trailer: back the vehicle's hitch slowly onto its coupler"],
 		["key:Get in", "Refuel: a vehicle tops up from a fuel tank within 12 m when you get in or out"],
 		["fork_raise", "Forklift: raise the forks (lift a load as they rise)"],

@@ -958,6 +958,12 @@ tools\harness.ps1 -World walton -RunScript res://tools/checks/vehicle_housing_pr
 # the cutaway, a shipped GLB laid over the body, place / reopen / Apply.
 # ⚠ From bash pass the array through -Command, or -UserArgs arrives literal:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/vehiclelab_designer_check.gd -Label vehiclelab
+# Walking into a living vehicle (sandbox, REAL input; the flat playa): a
+# shuttle bus, a van and a school bus; a shut door stops a body, the crosshair
+# offers the door, the Interact key opens it without driving off, holding
+# Forward walks up the ramp and in, headroom inside, it still drives and
+# driving shuts the doors; shots outside / doorway / inside:
+tools\harness.ps1 -World burningman -RunScript res://tools/checks/vehicle_walkin_check.gd -Label vehicle_walkin -Timeout 900
 # Dome & zome designer (offline — core/domelab/): the Goldberg–Coxeter
 # construction against the published chord-factor tables (2V A 0.54653 /
 # B 0.61803; 3V 0.34862 / 0.40355 / 0.41241; 4V six values) and strut /
@@ -13874,6 +13880,83 @@ driver's view out of the cab). All eight are done.
     400 W on the roof, 6 × 100 W (`rigid_100`, added) over the curb-side
     windows, a hitch. Its numbers come from the photos (the front tyre as
     scale) — `_test_shuttle_body` holds them.
+- **Looks and walk-in (2026-11-08).** The bodies stopped being painted
+  boxes with windows laid over them, and the player can open the doors and
+  walk inside.
+  - **Real openings.** `_body` skips the loft's flat side walls and underside
+    and draws them through `_cut_panel(outline, holes, notches)`: the outline
+    cut into strips at every hole's edges (so a hole only ever notches a
+    strip: `Geometry2D` clips never return a polygon with a hole), minus
+    windows, doors and wheel arches (`body_arches`: every body, not only
+    skirted ones). The rear face and an integral body's windshield are cut the
+    same way. Inside: a `liner` wall at the house width with the same holes,
+    jambs between skin and liner, a headliner, a bulkhead liner.
+  - **Nodes.** `PARTS` = Chassis / Cab / Shell / Glass / Exterior / Interior;
+    `CUTAWAY_HIDES` = Shell, Glass, Exterior (and Doors). `Glass` holds every
+    see-through pane (kit "pane", alpha, double-sided) and casts NO shadow, so
+    the sun reaches the room. The old opaque "glass" kit stays for cabs that
+    are not lofts (tractor) and the cab-over bunk's window.
+  - **Doors are leaves** (`_door_leaves`, node `Doors/D<span>_<leaf>`): meshes
+    in VEHICLE coordinates (a livery runs across them; shut = identity), meta
+    `open_xf` / `door` (index in `VehicleDesign.door_spans`) / `where` /
+    `kind`. Bus and lift doors are two leaves swinging out, a slider slides
+    back, a hinged door swings forward, barn doors swing round, a roll-up
+    scales to a strip at the header, a lift gate swings up.
+    `VehicleBuilder.set_doors_open(model, door | -1, t)`.
+  - **Cabs.** A van / cutaway nose (`_van_cab`) and a cab-over (`_cabover_cab`)
+    are lofts of `_rr_ring` sections, which now carry a vertex each side at
+    the belt line: the windshield (edges `RR_TOP_R/L` between the cowl and
+    header stations) and the door glass (`RR_WIN_R/L`) are quads of the loft
+    handed to the pane kit, so they are flush and see-through. A full van
+    (`euro`) has a shorter, steeper nose (`nose_hood`), its loft is open at
+    the back into the body, its door glass carries on in the body's wall
+    (`cab_wins`), and the high roof is a cap lofted from the windshield header
+    into the body's roof. A conventional hood (`_hood_loft`: school bus,
+    tractor) tapers to a slatted grille with a fender band over each wheel.
+    `_cab_interior` draws seats, dash and steering wheel behind the glass.
+  - **Wheels** are lathed (`_K.lathe`: profile (axial, radius), outside on the
+    left of its direction): rounded shoulders, tread grooves, a dished rim
+    with hand holes, lug nuts on the "metal" surface.
+  - **Paint** is `_paint` (clear coat, double-sided) for body / roof / door,
+    wraps and liveries too.
+  - **Walk-in collision.** Nothing drawn collides (`skip_prop_collision` on
+    every part, wheel and leaf). `collision_boxes(d)` (pure) → the hidden
+    `CollisionMesh`: floor, walls with the doorways left open
+    (`door_gaps(d)`, at least `WALK_GAP_M` 0.9 wide), a roof never lower than
+    `WALK_HEAD_M` 1.86 over the floor, the cab / hood, and furniture 0.26 m
+    slimmer than drawn (aisles are sized for hips, the capsule is 0.7 m).
+  - **`VehicleWalkIn`** (gameplay/, attached by PlacedPropRuntime beside
+    PlacedVehicle, trailers too; group `vehicle_walk_in`): a StaticBody under
+    the builder root with, per doorway, a BLOCKER (shut) and a RAMP from the
+    ground to the sill (open: the player has no step-up); the leaf animation;
+    `door_at(origin, dir)` = ray vs the leaves where they stand now; dome
+    lights along the ceiling (no shadows, distance-faded: a player's world
+    ambient can be ~0); `set_cargo_open` (CargoDoors delegates to it for
+    living vehicles: an unload opens the real door; `CargoDoors.is_open`).
+    It follows the prop's own collision: driven / towed / on the road in, the
+    doors shut and the body leaves the world.
+  - **Interact.** `InteractionFocus._update_door_focus` runs before the
+    Ctrl-gated prop pick (no modifier): a door under the crosshair shows
+    "[key] Open the sliding door" and Interact toggles it; the player's own
+    proximity mount stands down while `has_door_focus()`. Anywhere else,
+    Interact still drives. ⚠ The other focus clears blank the crosshair
+    prompt: set the door prompt AFTER them.
+  - Gates: `vehiclelab_selftest` `_test_walk_in` (872 checks in all),
+    `tools/checks/vehicle_walkin_check.gd`, tour stop `18ja_walk_in_vehicle`.
+    Look check: `vehicle_preset_grid_diag.gd --views=low,cab,rear`.
+  - Not done: cab doors (the driver's) do not open; a cutaway's cab is
+    closed off from its body; no stepwell inside a bus door (a ramp outside);
+    NPCs do not use the doors.
+  - **Designer (same day).** Pictured "Start from" list (thumbnail, name,
+    "24 ft · sleeps 2"; the type buttons folded under "By vehicle type"),
+    view buttons Front / Side / Rear / Inside / Cutaway / Plan / Open doors /
+    Frame (`set_view(id)`), six headline tiles over "All the numbers", a
+    studio backdrop with key and fill light, a context hint line.
+    ⚠ `rebuild_part` builds its own kit list: a kit added to the Interior or
+    Exterior list in `build_from_design` must be added there too (a missing
+    "metal" kit threw on every interior drag).
+  - `vehicle_cargo_check` fails 4 checks (unload project lookup, records
+    following the truck) on the commit BEFORE this pass as well: not looked into.
 - **Traps found:** Python `open(p, 'w')` on Windows writes CRLF — always
   `newline=''`, and some files here ARE CRLF (unified_library_modal.gd):
   match their endings; a bash heredoc collapses backslashes — write patch

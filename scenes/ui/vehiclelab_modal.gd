@@ -30,6 +30,16 @@ const SHIPPED_ART := [
 const C_GHOST := Color(0.2, 0.75, 1.0, 0.42)
 const FUEL_WORDS := {"gasoline": "Gasoline", "diesel": "Diesel", "electric": "Electric (its pack)", "none": "None (towed)"}
 const C_SELECT := Color(1.0, 0.72, 0.18, 0.45)
+## The view the designer opens on and "frame" returns to: the front three
+## quarters from the curb side (the vehicle's front is -Z, its curb side +X).
+const HOME_YAW := 2.35
+const HOME_PITCH := 0.34
+const THUMB_PX := Vector2i(176, 108)
+const THUMB_SHOWN := Vector2(88, 54)
+const HINT_IDLE := "Drag to orbit · wheel zooms · click an item on the vehicle to select it · pick a piece on the right to add it"
+const HINT_TOOL := "Click the vehicle where it goes · Shift-click keeps placing · Esc stops"
+const HINT_SEL_EXT := "Drag it to move it, onto another face too · Del removes it · Ctrl+Z undoes"
+const HINT_SEL_INT := "Drag it across the floor · R turns it · Del removes it · Ctrl+Z undoes"
 
 var _loader: Node = null
 var _active := false
@@ -66,7 +76,18 @@ var _marks: Node3D = null
 var _shell: DesignerShell
 var _name_edit: LineEdit
 var _type_box: VBoxContainer
-var _design_list: ItemList
+var _design_box: VBoxContainer
+var _design_rows: Array = []
+var _design_sel := -1
+var _forget_btn: Button
+## Thumbnails of the designs, rendered one at a time in a small viewport of
+## their own and kept by design key for the session.
+var _thumb_vp: SubViewport
+var _thumb_holder: Node3D
+var _thumb_cam: Camera3D
+var _thumb_queue: Array = []
+var _thumb_job: Dictionary = {}
+static var _thumb_cache: Dictionary = {}
 var _studio: StudioViewport
 var _cut_btn: Button
 var _hover_lbl: Label
@@ -79,7 +100,11 @@ var _in_sig := ""
 var _plan_btn: Button
 var _wrap_opt: OptionButton
 var _glb_opt: OptionButton
-var _summary: Label
+var _summary: VBoxContainer
+var _tiles: GridContainer
+var _detail_lbl: Label
+var _view_btns := {}
+var _doors_btn: Button
 var _trip_lbl: Label
 var _checks_box: VBoxContainer
 var _apply_btn: Button
@@ -138,6 +163,8 @@ func _activate() -> void:
 		_plan_btn.set_pressed_no_signal(false)
 	if _cut_btn != null:
 		_cut_btn.set_pressed_no_signal(false)
+	if _doors_btn != null:
+		_doors_btn.set_pressed_no_signal(false)
 	_library = VehiclePresets.load_library()
 	_active = true
 	visible = true
@@ -175,6 +202,7 @@ func _process(delta: float) -> void:
 			_rebuild_now()
 	if _drag_timer > 0.0:
 		_drag_timer -= delta
+	_thumb_step()
 
 
 func _input(e: InputEvent) -> void:
@@ -208,7 +236,7 @@ func _input(e: InputEvent) -> void:
 func _build_ui() -> void:
 	_shell = DesignerShell.create("Vehicle designer", "truck", {
 		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
-		"left_label": "Vehicle & designs", "left_w": 240.0, "right_w": 400.0})
+		"left_label": "Designs", "left_w": 268.0, "right_w": 400.0})
 	add_child(_shell)
 	_name_edit = _shell.name_edit
 	_shell.undo_requested.connect(_undo_step)
@@ -218,7 +246,7 @@ func _build_ui() -> void:
 	_build_left()
 	_build_centre()
 	_build_right()
-	_shell.set_hint("Drag to orbit · wheel to zoom · arm an item, then click the roof, a side or (cutaway) the floor · drag an item to move it · R turns an inside item · Del removes · Esc disarms")
+	_shell.set_hint(HINT_IDLE)
 	_shell.add_button("Save design", DesignerShell.SECONDARY, _on_save_design,
 		"Keep this vehicle in your library (every world)")
 	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
@@ -253,48 +281,64 @@ func _file_dialog(title: String, filters: PackedStringArray, cb: Callable) -> Fi
 
 func _build_left() -> void:
 	var box := _shell.left
-	box.add_child(SectionHeader.make("Type", "truck"))
+	box.add_child(SectionHeader.make("Start from", "layout-grid"))
+	_design_box = VBoxContainer.new()
+	_design_box.add_theme_constant_override("separation", 3)
+	box.add_child(_design_box)
+	_forget_btn = Button.new()
+	_forget_btn.text = "Forget this saved design"
+	_forget_btn.tooltip_text = "Remove the selected design of yours from the library (built-ins stay)"
+	UITheme.style_button(_forget_btn)
+	_forget_btn.pressed.connect(_on_forget_design)
+	_forget_btn.visible = false
+	box.add_child(_forget_btn)
+	# The bare types: each loads its built-in, so they sit folded under the
+	# pictured list above.
+	var types := Collapsible.make("By vehicle type", false,
+		"Start over from a type's stock vehicle")
+	box.add_child(types)
 	_type_box = VBoxContainer.new()
 	_type_box.add_theme_constant_override("separation", 2)
-	box.add_child(_type_box)
+	types.body.add_child(_type_box)
 	for t in VehicleCatalog.TYPE_ORDER:
 		var b := Button.new()
 		b.text = str(VehicleCatalog.type_info(t)["label"])
 		b.toggle_mode = true
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.custom_minimum_size = Vector2(0, 28)
+		b.clip_text = true
 		b.name = "type_%s" % t
 		b.set_meta("type", t)
 		b.tooltip_text = "Start over from the built-in %s (Ctrl+Z undoes)" % str(VehicleCatalog.type_info(t)["label"]).to_lower()
 		b.pressed.connect(_on_type_pressed.bind(t))
 		_type_box.add_child(b)
-	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 200)
-	_design_list.auto_height = true
-	_design_list.item_selected.connect(_on_design_selected)
-	box.add_child(_design_list)
-	var lib := HBoxContainer.new()
-	for spec_btn in [["Forget", "Remove the selected saved design (built-ins stay)", _on_forget_design]]:
-		var b2 := Button.new()
-		b2.text = str(spec_btn[0])
-		b2.tooltip_text = str(spec_btn[1])
-		UITheme.style_button(b2)
-		b2.pressed.connect(spec_btn[2])
-		lib.add_child(b2)
-	box.add_child(lib)
+	_build_thumb_studio()
 
 
 func _build_centre() -> void:
 	_studio = StudioViewport.create({"ground": true, "person": true})
 	_studio.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_studio.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_studio.set_home(0.9, 0.3)
+	_studio.set_home(HOME_YAW, HOME_PITCH)
 	_studio.input_hook = _studio_input
 	_studio.clicked.connect(_on_studio_click)
 	_studio.hovered.connect(_on_studio_hover)
 	_shell.centre.add_child(_studio)
+	_dress_studio()
 	var bar := _studio.strip
+	for v in [["front", "Front", "The front three quarters, from the curb side"],
+			["side", "Side", "The curb side, square on"],
+			["rear", "Rear", "The rear three quarters"],
+			["inside", "Inside", "Stand inside at eye height (drag to look round)"]]:
+		var vb := Button.new()
+		vb.text = str(v[1])
+		vb.tooltip_text = str(v[2])
+		vb.name = "view_%s" % str(v[0])
+		UITheme.style_button(vb)
+		vb.pressed.connect(set_view.bind(str(v[0])))
+		bar.add_child(vb)
+		_view_btns[str(v[0])] = vb
+	bar.add_child(VSeparator.new())
 	_cut_btn = Button.new()
 	_cut_btn.text = "Cutaway"
 	_cut_btn.toggle_mode = true
@@ -311,9 +355,16 @@ func _build_centre() -> void:
 	UITheme.style_button(_plan_btn)
 	_plan_btn.toggled.connect(set_plan_view)
 	bar.add_child(_plan_btn)
-	bar.add_child(IconButton.make("scan", "Frame the vehicle", func() -> void:
-		_studio.reset_orbit()
-		_frame_camera()))
+	_doors_btn = Button.new()
+	_doors_btn.text = "Open doors"
+	_doors_btn.name = "vl_doors"
+	_doors_btn.toggle_mode = true
+	_doors_btn.tooltip_text = "Swing every door open to see the way in"
+	UITheme.style_button(_doors_btn)
+	_doors_btn.toggled.connect(func(_on: bool) -> void: _apply_doors())
+	bar.add_child(_doors_btn)
+	bar.add_child(IconButton.make("scan", "Frame the whole vehicle", func() -> void:
+		set_view("front")))
 	_hover_lbl = Label.new()
 	_hover_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hover_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -321,6 +372,133 @@ func _build_centre() -> void:
 	_hover_lbl.clip_text = true
 	_hover_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	bar.add_child(_hover_lbl)
+
+
+## A showroom: a soft grey backdrop that meets a pale floor in haze, a warm
+## key light and a cool fill, so the paint and glass read.
+func _dress_studio() -> void:
+	var env := _studio.environment
+	if env != null:
+		env.background_mode = Environment.BG_SKY
+		var sm: ProceduralSkyMaterial = null
+		if env.sky != null:
+			sm = env.sky.sky_material as ProceduralSkyMaterial
+		if sm != null:
+			sm.sky_top_color = Color(0.30, 0.34, 0.41)
+			sm.sky_horizon_color = Color(0.60, 0.63, 0.67)
+			sm.sky_curve = 0.25
+			sm.ground_horizon_color = Color(0.60, 0.63, 0.67)
+			sm.ground_bottom_color = Color(0.42, 0.44, 0.47)
+		env.fog_enabled = true
+		env.fog_light_color = Color(0.60, 0.63, 0.67)
+		env.fog_density = 0.007
+		env.fog_sky_affect = 0.0
+		env.ambient_light_energy = 1.0
+	if _studio.ground != null:
+		var plane := _studio.ground.mesh as PlaneMesh
+		if plane != null:
+			plane.size = Vector2(900, 900)
+		var gm := _studio.ground.material_override as StandardMaterial3D
+		if gm != null:
+			gm.albedo_color = Color(0.34, 0.35, 0.37)
+			gm.roughness = 0.85
+	if _studio.key_light != null:
+		_studio.key_light.rotation_degrees = Vector3(-46, 150, 0)
+		_studio.key_light.light_energy = 1.6
+	if _studio.fill_light != null:
+		_studio.fill_light.rotation_degrees = Vector3(-18, -60, 0)
+		_studio.fill_light.light_energy = 0.5
+	if _studio.person != null:
+		var pm := _studio.person.material_override as StandardMaterial3D
+		if pm != null:
+			pm.albedo_color = Color(0.20, 0.22, 0.26)
+			pm.roughness = 0.9
+
+
+# --- design thumbnails ----------------------------------------------------------------
+
+func _build_thumb_studio() -> void:
+	_thumb_vp = SubViewport.new()
+	_thumb_vp.name = "ThumbStudio"
+	_thumb_vp.size = THUMB_PX
+	_thumb_vp.own_world_3d = true
+	_thumb_vp.transparent_bg = true
+	_thumb_vp.msaa_3d = Viewport.MSAA_4X
+	_thumb_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(_thumb_vp)
+	var we := WorldEnvironment.new()
+	var e := Environment.new()
+	e.background_mode = Environment.BG_COLOR
+	e.background_color = Color(0, 0, 0, 0)
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.ambient_light_color = Color(0.85, 0.88, 0.95)
+	e.ambient_light_energy = 0.75
+	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	we.environment = e
+	_thumb_vp.add_child(we)
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-42, 150, 0)
+	sun.light_energy = 1.4
+	_thumb_vp.add_child(sun)
+	_thumb_holder = Node3D.new()
+	_thumb_vp.add_child(_thumb_holder)
+	_thumb_cam = Camera3D.new()
+	_thumb_cam.fov = 24.0
+	_thumb_vp.add_child(_thumb_cam)
+
+
+## One thumbnail at a time: build the design, draw one frame, keep the
+## picture, free the model.
+func _thumb_step() -> void:
+	if _thumb_vp == null or DisplayServer.get_name() == "headless":
+		_thumb_queue.clear()
+		return
+	if not _thumb_job.is_empty():
+		_thumb_job["wait"] = int(_thumb_job["wait"]) - 1
+		if int(_thumb_job["wait"]) > 0:
+			return
+		var img := _thumb_vp.get_texture().get_image()
+		var key := str(_thumb_job["key"])
+		if img != null and not img.is_empty():
+			_thumb_cache[key] = ImageTexture.create_from_image(img)
+			_show_thumbs()
+		for c in _thumb_holder.get_children():
+			_thumb_holder.remove_child(c)
+			c.queue_free()
+		_thumb_job = {}
+		return
+	while not _thumb_queue.is_empty():
+		var spec: Dictionary = _thumb_queue.pop_front()
+		var key := VehicleSpec.key_of(spec)
+		if _thumb_cache.has(key):
+			continue
+		var d := VehicleDesign.solve(spec)
+		var node := VehicleBuilder.build_from_design(d)
+		if node == null:
+			continue
+		_thumb_holder.add_child(node)
+		var L := float(d["length_m"])
+		var W := float(d["width_m"])
+		var H := float(d.get("overall_h_m", d["height_m"]))
+		var r := 0.5 * sqrt(L * L + W * W + H * H)
+		var half_v := deg_to_rad(_thumb_cam.fov) * 0.5
+		var half_h := atan(tan(half_v) * float(THUMB_PX.x) / float(THUMB_PX.y))
+		var dist := r / sin(minf(half_v, half_h)) * 0.86
+		var tgt := Vector3(0, H * 0.45, 0)
+		var dir := Vector3(sin(HOME_YAW) * cos(0.22), sin(0.22), cos(HOME_YAW) * cos(0.22))
+		_thumb_cam.look_at_from_position(tgt + dir * dist, tgt, Vector3.UP)
+		_thumb_cam.far = dist * 3.0 + 50.0
+		_thumb_vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_thumb_job = {"key": key, "wait": 3}
+		return
+
+
+func _show_thumbs() -> void:
+	for row0 in _design_rows:
+		var row: Dictionary = row0
+		var tr: TextureRect = row["thumb"]
+		if is_instance_valid(tr) and tr.texture == null and _thumb_cache.has(str(row["key"])):
+			tr.texture = _thumb_cache[str(row["key"])]
 
 
 func _section(title: String, open: bool) -> VBoxContainer:
@@ -333,10 +511,23 @@ func _build_right() -> void:
 	# What it is and what is wrong with it, first: the checks used to sit two
 	# screens down. The header's badge counts them and scrolls here.
 	_shell.right.add_child(SectionHeader.make("This vehicle", "info"))
-	_summary = Label.new()
-	_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_summary.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_summary = VBoxContainer.new()
+	_summary.name = "vl_summary"
+	_summary.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_shell.right.add_child(_summary)
+	_tiles = GridContainer.new()
+	_tiles.columns = 3
+	_tiles.add_theme_constant_override("h_separation", UITheme.SPACE_XS)
+	_tiles.add_theme_constant_override("v_separation", UITheme.SPACE_XS)
+	_summary.add_child(_tiles)
+	var more := Collapsible.make("All the numbers", false, "Size, weights, axle loads, cargo bay, economy")
+	_summary.add_child(more)
+	_detail_lbl = Label.new()
+	_detail_lbl.name = "vl_detail"
+	_detail_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detail_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_detail_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	more.body.add_child(_detail_lbl)
 	_checks_box = VBoxContainer.new()
 	_shell.right.add_child(_checks_box)
 	# Chassis & body.
@@ -697,6 +888,8 @@ func _rebuild_now() -> void:
 	_refresh_items()
 	_refresh_summary()
 	_update_undo_buttons()
+	if _design_box != null:
+		_mark_design_row()
 	_shell.set_subtitle(VehicleSpec.describe(_spec).split(" — ")[1] if " — " in VehicleSpec.describe(_spec) else "")
 
 
@@ -816,7 +1009,11 @@ func _rebuild_studio() -> void:
 		return
 	_vehicle_node = VehicleBuilder.build_from_design(_design, {"cutaway": _cutaway})
 	_studio.show_node(_vehicle_node)
-	_studio.place_person(float(_design["width_m"]) * 0.5 + 0.4, 0.6)
+	if _studio.person != null:
+		# The figure for scale stands off the rear curb-side corner.
+		_studio.person.position = Vector3(float(_design["width_m"]) * 0.5 + 0.8, 0.875,
+			float(_design["length_m"]) * 0.5 + 0.3)
+	_apply_doors()
 	_marks = Node3D.new()
 	_marks.name = "Marks"
 	_vehicle_node.add_child(_marks)
@@ -878,13 +1075,66 @@ func _mark_aabb(el: Dictionary, c: Color) -> void:
 	_mark_xf(Transform3D(Basis(), bx["centre"]), (bx["size"] as Vector3), c)
 
 
-func _frame_camera() -> void:
+## The whole vehicle in the frame from (yaw, pitch): far enough for the
+## narrower of the view's two angles to hold its bounding sphere.
+func _frame_camera(yaw: float = HOME_YAW, pitch: float = HOME_PITCH) -> void:
 	if _design.is_empty():
 		return
 	var L := float(_design["length_m"])
-	var H := float(_design["height_m"])
-	# Far enough to see the whole length from the three-quarter home view.
-	_studio.frame_sphere(Vector3(0, H * 0.45, 0), maxf(L * 0.55, H), 1.6)
+	var W := float(_design["width_m"])
+	var H := float(_design.get("overall_h_m", _design["height_m"]))
+	var r := 0.5 * sqrt(L * L + W * W + H * H)
+	var cs := _studio.container.size if _studio.container != null else Vector2.ZERO
+	var aspect := clampf(cs.x / cs.y, 0.6, 2.4) if cs.y > 8.0 else 1.25
+	var half_v := deg_to_rad(_studio.camera.fov) * 0.5
+	var half_h := atan(tan(half_v) * aspect)
+	_studio.target = Vector3(0, H * 0.42, 0)
+	_studio.set_orbit(yaw, pitch, r / sin(minf(half_v, half_h)) * 0.8)
+	if _studio.person != null:
+		# The figure for scale stands off the rear curb-side corner.
+		_studio.person.position = Vector3(W * 0.5 + 0.8, 0.875, L * 0.5 + 0.3)
+
+
+## A named view: "front" / "side" / "rear" from outside, or "inside" — the
+## camera at standing eye height in the middle of the living space, skin on,
+## to look round the room.
+func set_view(id: String) -> void:
+	if _design.is_empty():
+		return
+	if _plan_btn != null and _plan_btn.button_pressed:
+		_plan_btn.set_pressed_no_signal(false)
+	match id:
+		"inside":
+			if _cutaway:
+				_cut_btn.button_pressed = false
+			var h: Dictionary = _design.get("house", {})
+			var zc := (float(h.get("z0", -1.0)) + float(h.get("z1", 1.0))) * 0.5
+			_studio.target = Vector3(0, float(h.get("floor_y", 0.8)) + 1.5, zc)
+			_studio.set_orbit(PI, 0.02, 0.4)
+		"side":
+			_frame_camera(PI * 0.5, 0.06)
+		"rear":
+			_frame_camera(0.75, 0.3)
+		_:
+			_frame_camera()
+
+
+## The doors as the "Open doors" toggle says (re-applied after each rebuild).
+func _apply_doors() -> void:
+	if _vehicle_node == null or not is_instance_valid(_vehicle_node) or _doors_btn == null:
+		return
+	VehicleBuilder.set_doors_open(_vehicle_node, -1, 1.0 if _doors_btn.button_pressed else 0.0)
+
+
+func _sync_hint() -> void:
+	if _shell == null:
+		return
+	if not _tool.is_empty():
+		_shell.set_hint(HINT_TOOL)
+	elif _sel.is_empty():
+		_shell.set_hint(HINT_IDLE)
+	else:
+		_shell.set_hint(HINT_SEL_INT if _sel_kind == "int" else HINT_SEL_EXT)
 
 
 # --- the preview: tools, picking, dragging -----------------------------------------------
@@ -901,7 +1151,9 @@ func _arm_tool(preset: Dictionary) -> void:
 		(b as Button).set_pressed_no_signal(not _tool.is_empty() and str(b.name) == want)
 	if _tool.is_empty():
 		_shell.set_mode("")
+		_sync_hint()
 	else:
+		_shell.set_hint(HINT_TOOL)
 		var label := str(_tool.get("label", ""))
 		if not _is_interior_tool():
 			label = str(_tool.get("label", VehicleExterior.type_info(str((_tool["element"] as Dictionary)["type"]))["label"]))
@@ -1130,6 +1382,7 @@ func _select(id: String, kind: String = "ext") -> void:
 	_sel_kind = kind if not id.is_empty() else ""
 	_refresh_items()
 	_draw_marks()
+	_sync_hint()
 
 
 ## A click that reached the studio hit nothing (the input hook takes every
@@ -1505,7 +1758,8 @@ func _refresh_summary() -> void:
 			"90 km/h" if UnitsPref.metric() else "55 mph", FUEL_WORDS.get(str(d["fuel"]), str(d["fuel"]))])
 	else:
 		lines.append("Towed: no engine of its own")
-	_summary.text = "\n".join(PackedStringArray(lines))
+	_detail_lbl.text = "\n".join(PackedStringArray(lines))
+	_fill_tiles(d, e)
 	var t: Dictionary = d["trip_estimate"]
 	if float(t["mi"]) <= 0.0:
 		_trip_lbl.text = "Type how far it drives one way to see what getting it there costs."
@@ -1561,18 +1815,178 @@ func _refresh_summary() -> void:
 			_checks_box.add_child(show)
 
 
+## The headline numbers as tiles: what a player compares designs by.
+func _fill_tiles(d: Dictionary, e: Dictionary) -> void:
+	for c in _tiles.get_children():
+		_tiles.remove_child(c)
+		c.queue_free()
+	var metric := UnitsPref.metric()
+	var L := float(d["length_m"])
+	_tile("Length", ("%.1f m" % L) if metric else ("%.0f ft" % (L / 0.3048)),
+		"%.2f m wide · %.2f m tall" % [float(d["width_m"]), float(d.get("overall_h_m", d["height_m"]))])
+	_tile("Sleeps", str(int(d["sleeps"])), "Seats %d on the road" % int(d["seats"]))
+	var pay := float(d["payload_kg"])
+	_tile("Payload left", ("%s kg" % UiText.thousands(int(round(pay)))) if metric
+		else ("%s lb" % UiText.thousands(int(round(pay * 2.20462)))),
+		"Loaded %.1f t of a %.1f t rating (everyone aboard, tanks full, gear)" % [float(d["laden_kg"]) / 1000.0,
+			(float(d["laden_kg"]) + pay) / 1000.0],
+		UITheme.C_ERROR if pay < 0.0 else UITheme.C_TEXT)
+	var t: Dictionary = d["trip_estimate"]
+	if not bool(d.get("drivable", false)):
+		_tile("Range", "Towed", "No engine of its own: its fuel is the tow vehicle's")
+	else:
+		var eco := ""
+		if str(d["fuel"]) == "electric":
+			eco = ("%.2f kWh/km" % float(e["kwh_per_km"])) if metric \
+				else ("%.2f kWh/mi" % (float(e["kwh_per_km"]) * VehicleEnergy.MI_M / 1000.0))
+		elif float(e["mpg"]) > 0.0:
+			eco = UnitsPref.economy_mpg(float(e["mpg"]))
+		_tile("Range", UnitsPref.dist_m(float(t.get("range_km", 0.0)) * 1000.0),
+			"%s at %s" % [eco, "90 km/h" if metric else "55 mph"])
+	var tot: Dictionary = d.get("exterior_totals", {})
+	var sw := float(tot.get("solar_w", 0.0))
+	_tile("Solar", UiText.num(sw, "W") if sw > 0.0 else "None",
+		UiText.count(int(tot.get("modules", 0)), "module") + " on it" if sw > 0.0
+		else "Add panels from Roof & sides", UITheme.C_TEXT if sw > 0.0 else UITheme.C_TEXT_M)
+	var water := 0.0
+	for el in d.get("interior", []):
+		if str((el as Dictionary).get("type", "")) == "water_tank":
+			water += float((el as Dictionary).get("litres", 0.0))
+	_tile("Fresh water", ("%.0f L" % water) if water > 0.0 else "None",
+		"About %.1f days for %d at 50 L a day each" % [water / maxf(50.0 * float(maxi(int(d["sleeps"]), 1)), 1.0),
+			maxi(int(d["sleeps"]), 1)] if water > 0.0 else "Add a water tank from Inside",
+		UITheme.C_TEXT if water > 0.0 else UITheme.C_TEXT_M)
+
+
+func _tile(caption: String, value: String, tip: String, color: Color = UITheme.C_TEXT) -> void:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", UITheme.card_style())
+	p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	p.tooltip_text = tip
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 0)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(v)
+	var c := Label.new()
+	c.text = caption
+	c.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	c.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	c.clip_text = true
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(c)
+	var val := Label.new()
+	val.text = value
+	val.add_theme_font_override("font", UITheme.font("semibold", true))
+	val.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	val.add_theme_color_override("font_color", color)
+	val.clip_text = true
+	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(val)
+	_tiles.add_child(p)
+
+
 # --- library, files, actions ---------------------------------------------------------------
 
 func _refresh_design_list() -> void:
-	_design_list.clear()
+	for c in _design_box.get_children():
+		_design_box.remove_child(c)
+		c.queue_free()
 	_design_entries = []
+	_design_rows = []
+	_design_sel = -1
+	_thumb_queue.clear()
+	var n_builtin := VehiclePresets.builtins().size()
 	for b in VehiclePresets.builtins():
-		var bd: Dictionary = b
-		_design_list.add_item(str((bd["spec"] as Dictionary)["name"]))
-		_design_entries.append(bd["spec"])
+		_design_entries.append((b as Dictionary)["spec"])
 	for s in _library:
-		_design_list.add_item("★ %s" % str((s as Dictionary).get("name", "Design")))
 		_design_entries.append(s)
+	for i in _design_entries.size():
+		if i == n_builtin:
+			var mine := Label.new()
+			mine.text = "Your designs"
+			mine.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+			mine.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+			_design_box.add_child(mine)
+		_design_box.add_child(_design_row(i, i >= n_builtin))
+	_show_thumbs()
+	_mark_design_row()
+
+
+## One design as a pictured row: its thumbnail, its name, and what it is in
+## a line (length, beds).
+func _design_row(i: int, mine: bool) -> Button:
+	var spec := VehicleSpec.resolve(_design_entries[i])
+	var d := VehicleDesign.solve(spec)
+	var b := Button.new()
+	b.name = "design_%d" % i
+	b.toggle_mode = true
+	b.custom_minimum_size = Vector2(0, THUMB_SHOWN.y + 8.0)
+	b.clip_contents = true
+	b.tooltip_text = "%s\n%s" % [str(spec.get("name", "Design")), VehicleSpec.describe(spec)]
+	b.pressed.connect(_on_design_selected.bind(i))
+	var h := HBoxContainer.new()
+	h.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	h.offset_left = 4
+	h.offset_right = -6
+	h.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(h)
+	var tr := TextureRect.new()
+	tr.custom_minimum_size = THUMB_SHOWN
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(tr)
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 0)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(v)
+	var nm := Label.new()
+	nm.text = str(spec.get("name", "Design"))
+	nm.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	nm.max_lines_visible = 2
+	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nm.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	if mine:
+		nm.add_theme_color_override("font_color", UITheme.C_GOLD)
+	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(nm)
+	var L := float(d["length_m"])
+	var size_txt := ("%.1f m" % L) if UnitsPref.metric() else ("%.0f ft" % (L / 0.3048))
+	var sleeps := int(d["sleeps"])
+	var sub := Label.new()
+	sub.text = "%s · %s" % [size_txt, ("sleeps %d" % sleeps) if sleeps > 0 else "no beds"]
+	sub.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	sub.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	sub.clip_text = true
+	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(sub)
+	var key := VehicleSpec.key_of(spec)
+	_design_rows.append({"btn": b, "thumb": tr, "key": key})
+	if not _thumb_cache.has(key):
+		_thumb_queue.append(spec)
+	return b
+
+
+## Light the row the open design came from (by name), and offer Forget for
+## one of the player's own.
+func _mark_design_row() -> void:
+	var nm := str(_spec.get("name", ""))
+	var n_builtin := VehiclePresets.builtins().size()
+	var hit := -1
+	for i in _design_entries.size():
+		if str((_design_entries[i] as Dictionary).get("name", "")) == nm:
+			hit = i
+	_design_sel = hit
+	for i in _design_rows.size():
+		var b: Button = (_design_rows[i] as Dictionary)["btn"]
+		if is_instance_valid(b):
+			b.set_pressed_no_signal(i == hit)
+	if _forget_btn != null:
+		_forget_btn.visible = hit >= n_builtin
 
 
 func _on_design_selected(idx: int) -> void:
@@ -1609,10 +2023,7 @@ func _save_design(_replacing: bool) -> void:
 
 
 func _on_forget_design() -> void:
-	var sel := _design_list.get_selected_items()
-	if sel.is_empty():
-		return
-	var idx := int(sel[0]) - VehiclePresets.builtins().size()
+	var idx := _design_sel - VehiclePresets.builtins().size()
 	if idx < 0 or idx >= _library.size():
 		return
 	var gone := str((_library[idx] as Dictionary).get("name", "design"))

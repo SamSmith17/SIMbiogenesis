@@ -159,12 +159,11 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	for _i in 30:
 		await _wait(tree, 0.5)
 		var prop := PlacedPropRuntime.find_by_prop_id(main, tid)
-		var mr := prop.get_node_or_null("ModelRoot") if prop != null else null
-		if mr != null and mr.get_node_or_null(CargoDoors.NODE_NAME) != null:
+		if CargoDoors.is_open(prop):
 			opened = true
 			break
 	var vprop := PlacedPropRuntime.find_by_prop_id(main, vid)
-	if vprop != null and vprop.get_node_or_null("ModelRoot/" + CargoDoors.NODE_NAME) != null:
+	if CargoDoors.is_open(vprop):
 		shut_other = false
 	_ok(opened, "the box truck's door stands open while its crew unloads it")
 	_ok(shut_other, "the van (nothing to unload) stays shut")

@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot runtime error aborts the enclosing test function while the suite
 ## still prints PASS, so the count is what catches it.
 
-const EXPECTED_CHECKS := 791
+const EXPECTED_CHECKS := 872
 
 var _passed := 0
 var _failed := 0
@@ -41,11 +41,123 @@ func _initialize() -> void:
 	_test_transport_lifecycle()
 	_test_cargo_doors()
 	_test_shuttle_body()
+	_test_walk_in()
 	var total := _passed + _failed
 	_check("check count", total == EXPECTED_CHECKS, "ran %d, expected %d" % [total, EXPECTED_CHECKS])
 	print("vehiclelab_selftest: %d passed, %d failed" % [_passed, _failed])
 	print("PASS" if _failed == 0 else "FAILURE(S)")
 	quit(0 if _failed == 0 else 1)
+
+
+## Doors that open and a room to walk into: every door is its own leaf
+## that swings / slides clear of the doorway; the walls have real openings
+## behind every window and door (no skin triangle covers one); the panes are
+## their own shadowless mesh; the walk-in collision leaves each doorway and
+## the aisle free under standing room, and nothing drawn is a collider.
+func _test_walk_in() -> void:
+	for id in ["van", "cargo_van", "shuttle_bus", "school_bus", "step_van", "rv", "motorhome", "box_truck", "trailer"]:
+		var d := _solve(id)
+		var root := VehicleBuilder.build_node(VehiclePresets.builtin(id))
+		var b: Dictionary = d["body"]
+		var hw := float(b["w"]) * 0.5
+		var spans := VehicleDesign.door_spans(d)
+		var doors := root.get_node_or_null("Doors")
+		var seen := {}
+		var clear := true
+		var moved := true
+		if doors != null:
+			for c in doors.get_children():
+				var leaf := c as MeshInstance3D
+				seen[int(leaf.get_meta("door", -1))] = true
+				var open: Transform3D = leaf.get_meta("open_xf", Transform3D.IDENTITY)
+				if open.is_equal_approx(Transform3D.IDENTITY):
+					moved = false
+				var box := leaf.mesh.get_aabb()
+				var c0 := box.get_center()
+				var c1 := open * c0
+				var sd: Dictionary = spans[int(leaf.get_meta("door", 0))]
+				# Open, the leaf's middle is out of the doorway: beside it,
+				# outside the wall, or (a roll-up) up at the header.
+				var out_of_way := c1.distance_to(c0) > minf(box.size.y, maxf(box.size.x, box.size.z)) * 0.4
+				if str(sd["where"]) == "side" and str(leaf.get_meta("kind", "")) != "sliding_step":
+					out_of_way = out_of_way and c1.x > hw - 0.06
+				clear = clear and out_of_way
+		_check("%s: a leaf for every door (%d)" % [id, spans.size()], doors != null and seen.size() == spans.size(),
+			"%d of %d" % [seen.size(), spans.size()])
+		_check("%s: every leaf opens clear of its doorway" % id, moved and clear)
+		VehicleBuilder.set_doors_open(root, -1, 1.0)
+		var first := doors.get_child(0) as Node3D if doors != null and doors.get_child_count() > 0 else null
+		var was_open := first != null and not first.transform.is_equal_approx(Transform3D.IDENTITY)
+		VehicleBuilder.set_doors_open(root, -1, 0.0)
+		_check("%s: set_doors_open moves the leaves and shuts them again" % id,
+			was_open and first.transform.is_equal_approx(Transform3D.IDENTITY))
+		# No skin triangle on a side wall covers the middle of a window or door.
+		var shell := root.get_node("Shell") as MeshInstance3D
+		var pts: Array = []
+		for w in VehicleDesign.window_spans(d):
+			pts.append(Vector3(float(w["sx"]) * hw, (float(w["y0"]) + float(w["y1"])) * 0.5, (float(w["z0"]) + float(w["z1"])) * 0.5))
+		for sp in spans:
+			if str((sp as Dictionary)["where"]) == "side":
+				pts.append(Vector3(hw, (float(sp["y0"]) + float(sp["y1"])) * 0.5, (float(sp["z0"]) + float(sp["z1"])) * 0.5))
+		var covered := 0
+		for si in shell.mesh.get_surface_count():
+			var v: PackedVector3Array = shell.mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
+			for t in range(0, v.size(), 3):
+				for p in pts:
+					var pp: Vector3 = p
+					if absf(v[t].x - pp.x) > 0.002 or absf(v[t + 1].x - pp.x) > 0.002 or absf(v[t + 2].x - pp.x) > 0.002:
+						continue
+					if Geometry2D.point_is_inside_triangle(Vector2(pp.z, pp.y), Vector2(v[t].z, v[t].y),
+							Vector2(v[t + 1].z, v[t + 1].y), Vector2(v[t + 2].z, v[t + 2].y)):
+						covered += 1
+		_check("%s: the walls are open behind every window and door (%d)" % [id, pts.size()], covered == 0, "%d covered" % covered)
+		var glass := root.get_node_or_null("Glass") as MeshInstance3D
+		_check("%s: see-through panes are their own shadowless mesh" % id,
+			(glass == null and str(b["windows"]) == "none" and str(d["cab"]) == "none")
+			or (glass != null and glass.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF))
+		# Nothing drawn is a collider; the collision mesh is hidden.
+		var bad := 0
+		for mi in root.find_children("*", "MeshInstance3D", true, false):
+			var m := mi as MeshInstance3D
+			if m.name == "CollisionMesh":
+				if m.visible:
+					bad += 1
+			elif not bool(m.get_meta("skip_prop_collision", false)):
+				bad += 1
+		_check("%s: only the hidden collision mesh collides" % id, bad == 0 and root.get_node_or_null("CollisionMesh") != null, str(bad))
+		# The collision leaves every doorway and the room behind it free.
+		var boxes := VehicleBuilder.collision_boxes(d)
+		var gaps := VehicleBuilder.door_gaps(d)
+		var blocked := 0
+		var narrow := 0
+		var fy := float(b["floor_y"])
+		for g0 in gaps:
+			var g: Dictionary = g0
+			var mid := (float(g["a"]) + float(g["b"])) * 0.5
+			if float(g["b"]) - float(g["a"]) < VehicleBuilder.WALK_GAP_M - 0.25:
+				narrow += 1
+			for y in [fy + 0.3, fy + 1.0, fy + 1.7]:
+				var q := Vector3(float(g["plane"]) - 0.05, y, mid) if str(g["where"]) == "side" else Vector3(mid, y, float(g["plane"]) - 0.05)
+				for bx in boxes:
+					if AABB((bx[0] as Vector3) - (bx[1] as Vector3) * 0.5, bx[1]).has_point(q):
+						blocked += 1
+		_check("%s: the collision leaves its %d doorway(s) open and wide enough" % [id, gaps.size()],
+			blocked == 0 and narrow == 0 and gaps.size() == spans.size(), "%d blocked, %d narrow" % [blocked, narrow])
+		var roof_lo := INF
+		var has_floor := false
+		for bx in boxes:
+			var bb := AABB((bx[0] as Vector3) - (bx[1] as Vector3) * 0.5, bx[1])
+			if bb.size.x > hw * 1.5 and bb.size.z > 1.0 and bb.position.y > fy + 1.0:
+				roof_lo = minf(roof_lo, bb.position.y)
+			if bb.size.x > hw * 1.5 and bb.size.z > 1.0 and absf(bb.end.y - fy) < 0.01:
+				has_floor = true
+		_check("%s: a floor to stand on and standing room under the roof" % id,
+			has_floor and roof_lo >= fy + VehicleBuilder.WALK_HEAD_M - 0.001, "roof %.2f over the floor" % (roof_lo - fy))
+		var cut := VehicleBuilder.build_node(VehiclePresets.builtin(id), VehicleBuilder.MODEL_ID, {"cutaway": true})
+		_check("%s: a cutaway leaves the skin, the glass and the doors off" % id,
+			cut.get_node_or_null("Shell") == null and cut.get_node_or_null("Glass") == null and cut.get_node_or_null("Doors") == null)
+		cut.free()
+		root.free()
 
 
 func _check(name: String, ok: bool, detail: String = "") -> void:
@@ -1125,6 +1237,8 @@ func _test_driver_view() -> void:
 		var near_any := INF
 		for mi in root.find_children("*", "MeshInstance3D", true, false):
 			var m := mi as MeshInstance3D
+			if not m.visible:
+				continue   # the walk-in collision mesh is never drawn
 			var xf := Transform3D.IDENTITY
 			var cur: Node = m
 			while cur != null and cur != root:
@@ -1359,11 +1473,12 @@ func _test_geometry() -> void:
 			meshes[((w as Node3D).get_node("Mesh") as MeshInstance3D).mesh.get_instance_id()] = true
 			n += 1
 		_check("%s: %d wheels share %d meshes" % [str(pair[0]), n, int(pair[1])], meshes.size() == int(pair[1]), str(meshes.size()))
-		# The hub face's lugs: 12 triangles a box on the "frame" surface.
+		# The hub's lug nuts: a six-sided nut (24 triangles) each, on the
+		# wheel's "metal" surface (tyre, rim, frame, metal).
 		var d := _solve(str(pair[0]))
 		var w0 := (root.get_node("Wheels").get_child(0) as Node3D).get_node("Mesh") as MeshInstance3D
-		var frame_tris := _surface_tris(w0.mesh as ArrayMesh, 2)
-		_check("%s: the hub shows its lugs" % str(pair[0]), frame_tris == int(d["lug_count"]) * 12,
+		var frame_tris := _surface_tris(w0.mesh as ArrayMesh, 3)
+		_check("%s: the hub shows its lugs" % str(pair[0]), frame_tris == int(d["lug_count"]) * 24,
 			"%d tris" % frame_tris)
 		root.free()
 	# A dually pair sits DUAL_GAP_M apart, pushed inside the body together.
@@ -1428,14 +1543,12 @@ func _test_geometry() -> void:
 	# The windshield of a Class A starts ~0.9 m over the body's bottom edge.
 	var mh := _solve("motorhome")
 	var mroot := VehicleBuilder.build_node(VehiclePresets.builtin("motorhome"))
-	var mshell := mroot.get_node("Shell") as MeshInstance3D
+	# (The panes are their own see-through mesh, "Glass".)
+	var mshell := mroot.get_node("Glass") as MeshInstance3D
 	var glass_lo := INF
 	var glass_hi := -INF
 	var zf := float(mh["body"]["z0"])
 	for si in mshell.mesh.get_surface_count():
-		var m := mshell.mesh.surface_get_material(si) as StandardMaterial3D
-		if m == null or not m.albedo_color.is_equal_approx(VehicleBuilder.C_GLASS):
-			continue
 		var v: PackedVector3Array = mshell.mesh.surface_get_arrays(si)[Mesh.ARRAY_VERTEX]
 		for p in v:
 			if p.z < zf + 0.6:

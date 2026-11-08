@@ -142,8 +142,25 @@ static func _mat(c: Color, unshaded: bool) -> StandardMaterial3D:
 
 ## Show / hide the overlay on a host's built node. Idempotent: a rebuilt
 ## prop gets it back on the next call.
+## Is a host's cargo door standing open (the overlay, or a living vehicle's
+## own door leaves)?
+static func is_open(prop: Node) -> bool:
+	if prop == null:
+		return false
+	var walk := prop.get_node_or_null("VehicleWalkIn")
+	if walk != null and walk.has_method("any_open"):
+		return bool(walk.call("any_open"))
+	return prop.get_node_or_null("ModelRoot/" + NODE_NAME) != null
+
+
 static func set_open(prop: Node, rec: Dictionary, open: bool) -> void:
 	if prop == null:
+		return
+	# A living vehicle's doors are real leaves (VehicleBuilder, VehicleWalkIn):
+	# the crew's door simply opens.
+	var walk := prop.get_node_or_null("VehicleWalkIn")
+	if walk != null and walk.has_method("set_cargo_open"):
+		walk.call("set_cargo_open", open)
 		return
 	var mr := prop.get_node_or_null("ModelRoot") as Node3D
 	if mr == null:

@@ -115,6 +115,19 @@ func _perf_phys_tick(_delta: float) -> void:
 	# Light place mode (J): Ctrl/Alt select is lights-only — never steal focus with
 	# Man Effigy / buildings / solar while aiming a lamp.
 	var light_place := PlacedLightService.is_placement_active()
+	# A vehicle door under the crosshair (no modifier): Interact opens it.
+	if not light_place and _update_door_focus():
+		if _focused != null:
+			_focused.on_focus_exit(_player)
+			_focused = null
+		_clear_solar_focus()
+		_clear_water_focus()
+		_clear_building_focus()
+		_clear_veg_focus()
+		_clear_conduit_focus()
+		# (After the clears: each of them blanks the crosshair's prompt.)
+		_show_door_prompt()
+		return
 	# 3D conduits are thin — hover / hang-edit IK spheres do NOT require Ctrl/Alt.
 	# Prefer a wire under the crosshair before Ctrl-gated prop/OSM picks.
 	if not light_place and _update_conduit_focus():
@@ -497,6 +510,71 @@ func _clear_focus() -> void:
 ## crosshair prompt a conduit or port pick just wrote: the building and veg
 ## clears (and _update_ui with nothing focused) blank the prompt, which hid
 ## both prompts in the frame they were written.
+## --- vehicle doors (VehicleWalkIn) -------------------------------------------------
+
+var _door_focus: Node = null
+var _door_focus_idx := -1
+
+
+## True while a living vehicle's door is under the crosshair: Interact works
+## the door (the player's own proximity "drive" stands down).
+func has_door_focus() -> bool:
+	return _door_focus != null and is_instance_valid(_door_focus) and _door_focus_idx >= 0
+
+
+func _update_door_focus() -> bool:
+	var was := has_door_focus()
+	_door_focus = null
+	_door_focus_idx = -1
+	if _camera == null or not CursorController.should_capture_look():
+		if was:
+			_set_door_prompt("")
+		return false
+	if _player != null and bool(_player.get("is_riding")):
+		if was:
+			_set_door_prompt("")
+		return false
+	var nodes := get_tree().get_nodes_in_group("vehicle_walk_in")
+	if nodes.is_empty():
+		return false
+	var vp := get_viewport()
+	var center := vp.get_visible_rect().size * 0.5
+	var origin := _camera.project_ray_origin(center)
+	var dir := _camera.project_ray_normal(center)
+	for n in nodes:
+		var prop := (n as Node).get_parent() as Node3D
+		if prop == null or prop.global_position.distance_squared_to(origin) > 400.0:
+			continue
+		var idx := int((n as Node).call("door_at", origin, dir))
+		if idx >= 0:
+			_door_focus = n
+			_door_focus_idx = idx
+			break
+	if not has_door_focus():
+		if was:
+			_set_door_prompt("")
+		return false
+	return true
+
+
+func _show_door_prompt() -> void:
+	if not has_door_focus():
+		return
+	var act := "Interact"
+	if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+		act = _prompt_ui.get_action_label("interact")
+	_set_door_prompt("[%s] %s" % [act, str(_door_focus.call("prompt_for", _door_focus_idx))])
+
+
+func _set_door_prompt(text: String) -> void:
+	if _crosshair == null:
+		return
+	if _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(not text.is_empty())
+	if _crosshair.has_method("set_prompt_text"):
+		_crosshair.set_prompt_text(text)
+
+
 func _clear_other_focus_keep_prompt() -> void:
 	var keep := ""
 	if _crosshair != null and _crosshair.has_method("get_prompt_text"):
@@ -1169,6 +1247,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			and event is InputEventMouseButton \
 			and ((event as InputEventMouseButton).ctrl_pressed \
 				or (event as InputEventMouseButton).meta_pressed)
+	# A vehicle door under the crosshair: Interact opens / shuts it.
+	if is_interact and has_door_focus():
+		_door_focus.call("toggle", _door_focus_idx)
+		get_viewport().set_input_as_handled()
+		return
 	# Hang-edit plain LMB: leave unhandled for ConduitRouteController drag.
 	if hang_focus and conduit_plain_click and not is_interact:
 		return
