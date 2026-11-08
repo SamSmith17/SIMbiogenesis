@@ -2372,7 +2372,7 @@ func _draw_power_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : floa
 	var unit := str(TimelineTrackDef.lookup_channel(td.channel).get("unit", ""))
 	if not is_nan(r.x):
 		match td.channel:
-			"soc_pct":
+			"soc_pct", "tank_pct":
 				axis = Vector2(0.0, 100.0)
 			"soc_kwh":
 				axis = Vector2(0.0, maxf(cap, 1.0))

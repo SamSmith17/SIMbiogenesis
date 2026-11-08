@@ -1267,12 +1267,9 @@ func _generate_shrub_texture( force : bool ) -> Texture2D :
 		push_error( "[VegetationScatter] Failed to save shrub texture: %s" % err )
 	return tex
 
-func _generate_shrub_mesh( force : bool ) -> ArrayMesh :
-	if not force and ResourceLoader.exists( SHRUB_MESH_PATH ) :
-		var loaded : Resource = ResourceLoader.load( SHRUB_MESH_PATH )
-		if loaded is ArrayMesh :
-			return loaded as ArrayMesh
-
+func _generate_shrub_mesh( _force : bool ) -> ArrayMesh :
+	# Two crossed cards. The baked three-card mesh overlapped in the first
+	# few metres (about 9 ms of alpha on a dense forest) and is not loaded.
 	var arr_mesh : ArrayMesh = ArrayMesh.new()
 	var arr : Array = []
 	arr.resize( Mesh.ARRAY_MAX )
@@ -1282,15 +1279,14 @@ func _generate_shrub_mesh( force : bool ) -> ArrayMesh :
 	var normals : PackedVector3Array = PackedVector3Array()
 	var indices : PackedInt32Array = PackedInt32Array()
 
-	# Three vertical cards rotated 0 / 60 / 120 degrees around Y. Three is the
-	# sweet spot for low-angle silhouettes - any horizontal viewpoint sees at
-	# least one card close to parallel.
+	# Two vertical cards at 90°. A third card added overdraw without a
+	# silhouette the two crossed planes don't already cover.
 	# UV: (0,0) top-left, (1,1) bottom-right. UV.y=0 -> top of card, used by
 	# foliage.gdshader to drive the wind sway gradient and bottom-AO tint.
 	var eff_cw : float = _effective_card_width()
 	var eff_ch : float = _effective_card_height()
-	for card_i in 3 :
-		var angle : float = float( card_i ) * PI / 3.0
+	for card_i in 2 :
+		var angle : float = float( card_i ) * PI * 0.5
 		var dx : float = cos( angle ) * eff_cw * 0.5
 		var dz : float = sin( angle ) * eff_cw * 0.5
 		var base : int = verts.size()
@@ -1328,29 +1324,25 @@ func _generate_shrub_mesh( force : bool ) -> ArrayMesh :
 	arr[ Mesh.ARRAY_INDEX ] = indices
 
 	arr_mesh.add_surface_from_arrays( Mesh.PRIMITIVE_TRIANGLES, arr )
-	var err : int = ResourceSaver.save( arr_mesh, SHRUB_MESH_PATH )
-	if err != OK :
-		push_error( "[VegetationScatter] Failed to save shrub mesh: %s" % err )
 	return arr_mesh
 
 func _generate_shrub_material( force : bool ) -> ShaderMaterial :
 	if not force and ResourceLoader.exists( SHRUB_MATERIAL_PATH ) :
 		var loaded : Resource = ResourceLoader.load( SHRUB_MATERIAL_PATH )
 		if loaded is ShaderMaterial :
-			return loaded as ShaderMaterial
+			var mat_loaded := loaded as ShaderMaterial
+			mat_loaded.set_shader_parameter("alpha_dither_min", 0.32)
+			return mat_loaded
 
 	var shader : Shader = load( FOLIAGE_SHADER_PATH )
 	var mat : ShaderMaterial = ShaderMaterial.new()
 	mat.shader = shader
 	mat.set_shader_parameter( "albedo_tex", _generate_shrub_texture( false ) )
+	mat.set_shader_parameter("alpha_dither_min", 0.32)
 	var err : int = ResourceSaver.save( mat, SHRUB_MATERIAL_PATH )
 	if err != OK :
 		push_error( "[VegetationScatter] Failed to save shrub material: %s" % err )
 	return mat
 
 func _load_or_make_shrub_mesh() -> ArrayMesh :
-	if ResourceLoader.exists( SHRUB_MESH_PATH ) :
-		var loaded : Resource = ResourceLoader.load( SHRUB_MESH_PATH )
-		if loaded is ArrayMesh :
-			return loaded as ArrayMesh
-	return _generate_shrub_mesh( true )
+	return _generate_shrub_mesh( false )

@@ -2884,6 +2884,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 
 	# RUNNING (switched on + powered + fed): move resources.
 	throughput *= efficiency
+	_stamp_cold_curve(proc_id, specs)
 	_write_node_state(proc_id, specs, GraphNodeState.RUNNING)
 
 	# Live DC output telemetry: Wh generated per fuel unit consumed ×
@@ -3712,6 +3713,59 @@ func _write_output_unconnected(item_id: String, specs: Dictionary, kinds: Array)
 		return
 	specs["output_unconnected_kinds"] = kinds.duplicate()
 	_model.update_item(item_id, {"specs": specs})
+
+
+## Cold-water specific energy: nameplate at 25 °C, dearer as the feed cools.
+## Stamped onto the running processor so the AC draw and the inspector
+## agree. A stopped unit keeps the last stamp; the draw only reads it
+## while the node is RUNNING.
+func _stamp_cold_curve(proc_id: String, specs: Dictionary) -> void:
+	if str(specs.get("energy_curve", "")) != "cold_water":
+		return
+	var nameplate := float(specs.get("energy_wh_per_unit", 0.0))
+	var temp := float(specs.get("feed_temp_c", NAN))
+	if is_nan(temp):
+		temp = _feed_temp_c()
+	var live_wh := ComponentPresets.specific_energy_at_temp(nameplate, temp,
+		float(specs.get("energy_floor_wh_per_unit", 0.0)))
+	var rated := float(specs.get("watts", specs.get("avg_watts", 0.0)))
+	var live_w := rated if nameplate <= 0.0 else rated * live_wh / nameplate
+	if absf(float(specs.get("live_watts", -999.0)) - live_w) < 0.5 \
+			and absf(float(specs.get("live_wh_per_unit", -999.0)) - live_wh) < 0.01:
+		return
+	specs["live_watts"] = live_w
+	specs["live_wh_per_unit"] = live_wh
+	_model.update_item(proc_id, {"specs": specs})
+
+
+func _feed_temp_c() -> float:
+	if _host == null or not _host.has_method("_get_scene_main_node"):
+		return 25.0
+	var main: Node = _host.call("_get_scene_main_node")
+	if main == null:
+		return 25.0
+	var wx: Variant = main.get("_weather_service_node")
+	if wx == null or not (wx as Object).has_method("temperature_c"):
+		return 25.0
+	var t := float((wx as Object).call("temperature_c", int(main.get("month")),
+		int(main.get("day")), float(main.get("day_time"))))
+	return 25.0 if is_nan(t) else t
+
+
+## The first finite water tank's scrub buffer (the timeline's tank lane).
+func first_water_timeline():
+	_ensure_timelines()
+	for item: Dictionary in _model.items_of_type("resource"):
+		var specs: Dictionary = item.get("specs", {})
+		if bool(specs.get("allow_negative", false)):
+			continue
+		var kind := ResourceKinds.normalize_kind(str(specs.get("resource_kind", "water")))
+		if kind != "water":
+			continue
+		var tl: ResourceTimeline = _timelines.get(str(item.get("id", ""))) as ResourceTimeline
+		if tl != null:
+			return tl
+	return null
 
 
 ## Change-detected write of the unified node state (+ reason + blocking kinds).

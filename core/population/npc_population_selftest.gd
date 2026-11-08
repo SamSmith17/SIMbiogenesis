@@ -3063,6 +3063,36 @@ func _test_nav_grid_bake() -> void:
 	g2.bake_now(Callable())
 	_check("missing height_fn still bakes", g2.is_ready() and g2.is_walkable(2, 2))
 	_test_nav_grid_reuse()
+	_test_nav_priority()
+
+
+## The window around the player bakes first. Paths inside it work while the
+## rest of the grid is still sampling; a path that leaves the window waits.
+func _test_nav_priority() -> void:
+	var g := NpcNavGrid.new()
+	g.configure_region(Vector2.ZERO, 40.0)
+	g.set_priority_center(Vector2.ZERO, 8.0)
+	g.begin_bake(Callable(self, "_flat_h"))
+	var guard := 0
+	while not g.priority_ready() and guard < 10000:
+		g.bake_step(64)
+		guard += 1
+	_check("priority window ready before the full grid",
+			g.priority_ready() and not g.is_ready(), "steps=%d" % guard)
+	_check("centre is walkable while the rim is still baking",
+			g.is_walkable_world(Vector2.ZERO))
+	_check("far corner waits for the rest of the bake",
+			not g.is_walkable(g.nx - 2, g.nz - 2))
+	var q := NpcNavQuery.new()
+	q.setup(g)
+	var near := q.find_path(Vector2.ZERO, Vector2(2.0, 1.0))
+	_check("path inside the window while baking", near.size() > 0, "pts=%d" % near.size())
+	var far := q.find_path(Vector2.ZERO, Vector2(30.0, 30.0))
+	_check("path leaving the window waits", far.is_empty())
+	while not g.bake_step(4096) and guard < 20000:
+		guard += 1
+	_check("priority bake still finishes the whole grid", g.is_ready(), "steps=%d" % guard)
+	_check("far cell walkable once the grid is done", g.is_walkable(g.nx - 2, 2))
 
 
 ## A rebake that only changes the OBSTACLES (a prop placed, a camp repainted)

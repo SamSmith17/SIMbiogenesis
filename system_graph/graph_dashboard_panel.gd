@@ -31,6 +31,8 @@ var _status_lbl: Label = null
 var _score_lbl: Label = null
 var _best_lbl: Label = null
 var _need_rows: Dictionary = {}  # kind -> {status, detail}
+var _week_note: Label = null
+var _week_back: Dictionary = {}
 var _stores_vbox: VBoxContainer = null
 ## Content signature of the last-built store rows. Starts at a sentinel, never
 ## "" — an empty board yields an empty signature, and "" would compare equal on
@@ -272,6 +274,27 @@ func _build_ui() -> void:
 		closure_body.add_child(row)
 		_need_rows[kind] = row
 
+	var week_row := HBoxContainer.new()
+	week_row.add_theme_constant_override("separation", 8)
+	closure_body.add_child(week_row)
+	var dry_btn := Button.new()
+	dry_btn.text = "Driest week"
+	dry_btn.focus_mode = Control.FOCUS_NONE
+	dry_btn.tooltip_text = "Jump the clock to the driest week in this site's weather archive. Closure and battery hours are the score."
+	dry_btn.pressed.connect(_on_driest_week)
+	week_row.add_child(dry_btn)
+	var back_btn := Button.new()
+	back_btn.text = "Jump back"
+	back_btn.focus_mode = Control.FOCUS_NONE
+	back_btn.tooltip_text = "Return to the date you left."
+	back_btn.pressed.connect(_on_week_jump_back)
+	week_row.add_child(back_btn)
+	_week_note = Label.new()
+	_week_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_week_note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_week_note.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	closure_body.add_child(_week_note)
+
 	add_child(_card_section("🏕 SETTLEMENT"))
 	var settle_wrap := _card_body()
 	add_child(settle_wrap)
@@ -465,6 +488,52 @@ func _refresh_power() -> void:
 func _sandboxed() -> bool:
 	return _graph_view != null and _graph_view.has_method("is_sandbox_active") \
 		and bool(_graph_view.call("is_sandbox_active"))
+
+
+func _scene_main() -> Node:
+	if _graph_view != null and _graph_view.has_method("_get_scene_main_node"):
+		return _graph_view.call("_get_scene_main_node") as Node
+	return null
+
+
+func _on_driest_week() -> void:
+	var main := _scene_main()
+	if main == null:
+		return
+	var wx: Variant = main.get("_weather_service_node")
+	if wx == null or not (wx as Object).has_method("driest_week"):
+		return
+	var week: Dictionary = (wx as Object).call("driest_week")
+	if week.is_empty():
+		if _graph_view != null and _graph_view.has_method("_show_toast"):
+			_graph_view.call("_show_toast", "No weather archive is loaded for this site yet.")
+		return
+	_week_back = {
+		"year": int(main.get("year")), "month": int(main.get("month")),
+		"day": int(main.get("day")), "day_time": float(main.get("day_time")),
+	}
+	main.set("day", 1)
+	main.set("month", int(week.get("month", 1)))
+	main.set("day", int(week.get("day", 1)))
+	main.set("day_time", float(week.get("hour", 8.0)))
+	if _week_note != null:
+		_week_note.text = "Driest week: %.1f mm of rain. Closure and battery hours are the score. Jump back returns to where you were." % float(week.get("mm", 0.0))
+
+
+func _on_week_jump_back() -> void:
+	if _week_back.is_empty():
+		return
+	var main := _scene_main()
+	if main == null:
+		return
+	main.set("year", int(_week_back.get("year", main.get("year"))))
+	main.set("day", 1)
+	main.set("month", int(_week_back.get("month", main.get("month"))))
+	main.set("day", int(_week_back.get("day", main.get("day"))))
+	main.set("day_time", float(_week_back.get("day_time", main.get("day_time"))))
+	_week_back = {}
+	if _week_note != null:
+		_week_note.text = ""
 
 
 func _refresh_closure() -> void:
@@ -1380,6 +1449,32 @@ func _refresh_system_card(r: Dictionary) -> void:
 	if not kept.is_empty():
 		_system_vbox.add_child(_small("Kept here, not taken away: %s." % ", ".join(kept),
 			UITheme.C_TEXT_M, UITheme.FONT_XS, true))
+	if str(r.get("kind", "")) == GraphSystems.KIND_CAMP and _graph_view != null:
+		var ideas: Array = CampLoopClosure.suggest(_graph_view.get("model"), str(r.get("id", "")))
+		if not ideas.is_empty():
+			var idea: Dictionary = ideas[0]
+			var presets: Array = idea.get("presets", [])
+			if not presets.is_empty():
+				var add_btn := Button.new()
+				add_btn.text = "Add %s" % str(presets[0])
+				add_btn.focus_mode = Control.FOCUS_NONE
+				add_btn.tooltip_text = str(idea.get("text", ""))
+				var cid := str(r.get("id", ""))
+				var label := str(presets[0])
+				add_btn.pressed.connect(func() -> void:
+					if _graph_view == null:
+						return
+					var made := CampLoopClosure.apply(_graph_view.get("model"), cid, label)
+					if str(made).is_empty():
+						return
+					add_btn.disabled = true
+					if _graph_view.has_method("_push_history"):
+						_graph_view.call("_push_history")
+					if _graph_view.has_method("_schedule_graph_autosave"):
+						_graph_view.call("_schedule_graph_autosave")
+					_system_sig = ""
+				)
+				_system_vbox.add_child(add_btn)
 	_system_vbox.add_child(_small("Esc goes back out to the site.", UITheme.C_TEXT_M))
 
 

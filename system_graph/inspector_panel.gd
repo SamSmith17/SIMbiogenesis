@@ -497,6 +497,9 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		"processor":
 			_section("Specs")
 			_text_field("Name",              specs.get("name", ""),         "specs/name")
+			var specific := _specific_energy_line(specs)
+			if not specific.is_empty():
+				_readonly_field("Specific energy", specific)
 			if str(specs.get("role", "")) == "habitat":
 				_num_field("Occupants", specs.get("occupants", 1.0), "specs/occupants", 1, 64, 1.0)
 				var starved: Array = specs.get("starved_kinds", []) as Array
@@ -2838,8 +2841,66 @@ func _build_biodigester_section(specs: Dictionary) -> void:
 	_readonly_field("Cooking Gas", "~%.1f h/day (single burner)" % float(specs.get("cooking_hours_day", 0.0)))
 
 
+## One line for where this turbine's head actually comes from.
+func _hydro_source_sentence(specs: Dictionary) -> String:
+	var feature := str(specs.get("water_feature_name", ""))
+	var head := float(specs.get("live_head_m", NAN))
+	if is_nan(head):
+		head = float(specs.get("gross_head_m", NAN))
+	var head_txt := "" if is_nan(head) else ", %.0f m" % head
+	if feature.is_empty() and _model != null and not _item_id.is_empty():
+		for conn_v in _model.connections_for_item(_item_id):
+			var conn: Dictionary = conn_v
+			var other_id := str(conn.get("source_item_id", ""))
+			if other_id == _item_id:
+				other_id = str(conn.get("target_item_id", ""))
+			var other := _model.get_item(other_id)
+			var name := str((other.get("specs", {}) as Dictionary).get("water_feature_name", ""))
+			if not name.is_empty():
+				feature = name
+				break
+	if not feature.is_empty():
+		return "This intake is using %s's head%s." % [feature, head_txt]
+	if not is_nan(float(specs.get("outlet_invert_m", NAN))):
+		return "Head is the routed pipe's drop%s. Gross head follows it." % head_txt
+	if not is_nan(float(specs.get("gross_head_m", NAN))):
+		return "Head is the Gross head field, not the terrain."
+	return ""
+
+
+## Wh per litre (or kilogram) on a processor, and how far that sits above
+## the physical floor when the preset names one.
+func _specific_energy_line(specs: Dictionary) -> String:
+	var wh := float(specs.get("energy_wh_per_unit", 0.0))
+	if wh <= 0.0:
+		return ""
+	var unit := ""
+	for o_v in specs.get("outputs", []) as Array:
+		var u := str((o_v as Dictionary).get("unit", ""))
+		if u.begins_with("L"):
+			unit = "L"
+			break
+		if u.begins_with("kg"):
+			unit = "kg"
+			break
+	if unit.is_empty():
+		return ""
+	var shown := wh
+	if str(specs.get("node_state", "")) == GraphNodeState.RUNNING \
+			and float(specs.get("live_wh_per_unit", 0.0)) > 0.0:
+		shown = float(specs.get("live_wh_per_unit"))
+	var line := ("%.1f Wh/%s" % [shown, unit]) if shown < 100.0 else ("%.0f Wh/%s" % [shown, unit])
+	var floor := float(specs.get("energy_floor_wh_per_unit", 0.0))
+	if floor > 0.0:
+		line += " · %d%% of the %.0f Wh/%s floor" % [int(round(100.0 * shown / floor)), floor, unit]
+	return line
+
+
 ## Siphon micro-hydro: open Siphon Lab for levels; compact live telemetry here.
 func _build_siphon_hydro_section(specs: Dictionary) -> void:
+	var sentence := _hydro_source_sentence(specs)
+	if not sentence.is_empty():
+		_hint_label(sentence)
 	var lab_btn := Button.new()
 	lab_btn.text = "Open Hydro Lab…"
 	lab_btn.tooltip_text = "Turbine kind, geometry, penstock, live RPM / power"
@@ -4495,6 +4556,26 @@ func _build_compound_section(item: Dictionary) -> void:
 		_readonly_field("Combined draw", "%.0f W" % float(specs.get("avg_watts", 0.0)))
 		_readonly_field("Rated max", "%.0f W" % float(specs.get("max_watts", 0.0)))
 		_readonly_field("Summary", str(specs.get("summary", "")))
+	if specs.has("pv_wp") or specs.has("battery_kwh") or specs.has("camp_lot_id"):
+		_section("Camp power")
+		_readonly_field("Solar", "%.0f W" % float(specs.get("pv_wp", 0.0)))
+		_readonly_field("Battery", "%.1f kWh" % float(specs.get("battery_kwh", 0.0)))
+		_readonly_field("Inverter", "%.0f W" % float(specs.get("inverter_w", 0.0)))
+		_readonly_field("Night load", "%.0f W" % float(specs.get("base_load_w", 0.0)))
+		if bool(specs.get("camp_power_real", false)):
+			_readonly_field("Parts", "Panel, battery, inverter and night load inside this camp")
+		else:
+			var real_btn := Button.new()
+			real_btn.text = "Make it real"
+			real_btn.focus_mode = Control.FOCUS_NONE
+			real_btn.tooltip_text = "Turns these four numbers into a panel, a battery, an inverter and a night load inside the camp. The watts stay the same."
+			var camp_id := str(item.get("id", ""))
+			real_btn.pressed.connect(func() -> void:
+				var gv := ServiceLocator.graph()
+				if gv != null and gv.has_method("make_camp_power_real"):
+					gv.call("make_camp_power_real", camp_id)
+			)
+			_form_vbox.add_child(real_btn)
 	# Promoted ports (the super-node's external interface) with live net flow,
 	# then the full sub-port toggle list (shown even when nothing is promoted
 	# yet — that empty state is exactly when you need the toggles).

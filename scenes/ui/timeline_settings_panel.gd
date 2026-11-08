@@ -74,6 +74,7 @@ var _volumetric_fog: CheckBox
 var _fog_amount: HSlider
 var _tonemap_mode: OptionButton
 var _msaa_mode: OptionButton
+var _msaa_hint: Label
 var _tonemap_exposure: HSlider
 var _tonemap_white: HSlider
 var _sun_size: HSlider
@@ -1936,13 +1937,13 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_tonemap_exposure = _add_slider(v, "Exposure", 0.1, 4.0, 0.05, _on_tonemap_exposure)
 	_tonemap_white = _add_slider(v, "Tonemap white", 0.1, 16.0, 0.1, _on_tonemap_white)
 	_msaa_mode = _add_option(v, "MSAA", ["Off", "2x", "4x", "8x", "Preset's"], _on_msaa_mode)
-	var msaa_hint := Label.new()
-	msaa_hint.text = "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."
-	msaa_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	msaa_hint.custom_minimum_size = Vector2(420, 0)
-	msaa_hint.add_theme_color_override("font_color", C_TEXT_S)
-	msaa_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(msaa_hint)
+	_msaa_hint = Label.new()
+	_msaa_hint.text = "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."
+	_msaa_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_msaa_hint.custom_minimum_size = Vector2(420, 0)
+	_msaa_hint.add_theme_color_override("font_color", C_TEXT_S)
+	_msaa_hint.add_theme_font_size_override("font_size", 10)
+	v.add_child(_msaa_hint)
 	_god_rays = _add_check(v, "God rays (light shafts via volumetric fog)", _on_god_rays)
 	var gr_hint := Label.new()
 	gr_hint.text = "God rays enable a thin volumetric fog so the sun casts crepuscular shafts, strongest at sunrise/sunset. Adds some GPU cost."
@@ -2348,6 +2349,7 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 	if _msaa_mode:
 		_msaa_mode.selected = 4 if bool(snap.get("msaa_follows_preset", false)) \
 			else clampi(int(snap.get("msaa_level", 0)), 0, 3)
+		_refresh_msaa_hint(snap)
 	if _tonemap_exposure:
 		_tonemap_exposure.value = snap.get("tonemap_exposure", 1.0)
 	if _tonemap_white:
@@ -2767,6 +2769,22 @@ func _on_msaa_mode(idx: int) -> void:
 		SimSettingsController.apply_msaa_follows_preset(true)
 	else:
 		SimSettingsController.apply_msaa_level(idx)
+	if is_instance_valid(SimSettingsController):
+		_refresh_msaa_hint(SimSettingsController.get_state_snapshot())
+
+
+func _refresh_msaa_hint(snap: Dictionary) -> void:
+	if _msaa_hint == null:
+		return
+	var base := "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."
+	var follows := bool(snap.get("msaa_follows_preset", true))
+	var level := int(snap.get("msaa_level", 0))
+	var preset := int(RenderProfile.graphics_profile(int(snap.get("graphics_quality", 2))).get("msaa", 0))
+	var fps := Engine.get_frames_per_second()
+	if not follows and level > preset and fps > 0.0 and fps < 45.0:
+		_msaa_hint.text = "Frame time is over 22 ms and MSAA is above this graphics preset. 8× was about 12 ms on a dense forest. Preset's is the cheaper setting."
+	else:
+		_msaa_hint.text = base
 
 func _on_tonemap_exposure(v: float) -> void:
 	if _syncing: return

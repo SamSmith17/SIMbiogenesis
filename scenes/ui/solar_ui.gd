@@ -3276,6 +3276,8 @@ func get_rendered_range_abs() -> PackedFloat64Array:
 ## ladder width, exact min / mean / max of every sample in each). `w` hours
 ## per bin, bins i0 .. i0 + n - 1.
 func get_timeline_bins(source : String, channel : String, w : float, i0 : int, n : int) -> Dictionary:
+	if channel == "tank_pct":
+		return _tank_pct_bins(source, w, i0, n)
 	var t0 := float(i0) * w
 	var t1 := float(i0 + n) * w
 	match source:
@@ -3298,6 +3300,42 @@ func get_timeline_bins(source : String, channel : String, w : float, i0 : int, n
 				return EnergyTimeline.channel_value(sample, channel, BATTERY_CAPACITY_KWH)
 			return TimelineBinning.from_function(f, maxf(w, 0.25), w, i0, n)
 	return TimelineBinning.empty(w, i0, n)
+
+
+## Tank fill, 0–100. Live and simulated share the graph's first water tank
+## (its own scrub buffer). Observed is the CSV tank_level column.
+func _tank_pct_bins(source : String, w : float, i0 : int, n : int) -> Dictionary:
+	var t0 := float(i0) * w
+	var t1 := float(i0 + n) * w
+	if source == "observed":
+		if _observed_series != null and _observed_series.has_method("has_tank") \
+				and bool(_observed_series.call("has_tank")):
+			var o : Dictionary = _observed_series.channel_slice("tank_pct", t0, t1, BATTERY_CAPACITY_KWH)
+			var vals : PackedFloat32Array = o.get("values", PackedFloat32Array())
+			if not vals.is_empty():
+				return TimelineBinning.from_regular(vals, float(o["base_t"]), float(o["step"]), w, i0, n)
+		return TimelineBinning.empty(w, i0, n)
+	var tl : Variant = _first_water_timeline()
+	if tl == null or bool(tl.call("is_empty")):
+		return TimelineBinning.empty(w, i0, n)
+	var s : Dictionary = tl.call("pct_slice", t0, t1)
+	var got : PackedFloat32Array = s.get("values", PackedFloat32Array())
+	if got.is_empty():
+		return TimelineBinning.empty(w, i0, n)
+	return TimelineBinning.from_regular(got, float(s["base_t"]), float(s["step"]), w, i0, n)
+
+
+func _first_water_timeline() -> Variant:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var sgv := tree.root.find_child("SystemGraphView", true, false)
+	if sgv == null:
+		return null
+	var flow : Variant = sgv.get("_resource_flow")
+	if flow == null or not (flow as Object).has_method("first_water_timeline"):
+		return null
+	return (flow as Object).call("first_water_timeline")
 
 
 ## The finest bin width a power track's data supports (one sample per step).

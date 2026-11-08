@@ -958,7 +958,7 @@ func _update_camp_focus(hit_pos: Vector3) -> bool:
 		var act := "Interact"
 		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
 			act = _prompt_ui.get_action_label("interact")
-		_crosshair.set_prompt_text("[%s / Click] Tune %s" % [act, str(pick.get("name", "camp"))])
+		_crosshair.set_prompt_text("[%s / Click] Tune %s  ·  Ctrl+%s Open in graph" % [act, str(pick.get("name", "camp")), act])
 	return true
 
 
@@ -1164,10 +1164,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	var hang_focus := _conduit_focus_hang_edit
 	var conduit_style_click := conduit_ctrl_click \
 			or (conduit_plain_click and not hang_focus)
+	# Ctrl/Meta+Click on a painted camp opens its system. Plain click stays Tune.
+	var camp_graph_click := is_click and not _camp_focus_id.is_empty() \
+			and event is InputEventMouseButton \
+			and ((event as InputEventMouseButton).ctrl_pressed \
+				or (event as InputEventMouseButton).meta_pressed)
 	# Hang-edit plain LMB: leave unhandled for ConduitRouteController drag.
 	if hang_focus and conduit_plain_click and not is_interact:
 		return
 	if not is_interact and not is_veg_edit \
+			and not camp_graph_click \
 			and not (is_click and _is_alt_selection_active()) \
 			and not conduit_style_click:
 		return
@@ -1223,12 +1229,22 @@ func _unhandled_input(event: InputEvent) -> void:
 		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
 			get_viewport().set_input_as_handled()
 		return
-	# Aimed at a painted camp → its Tune-look modal (this camp's own settings).
-	if not _camp_focus_id.is_empty() and _loader != null \
-			and _loader.has_method("open_camp_tune_for_camp"):
-		_loader.call("open_camp_tune_for_camp", _camp_focus_id)
-		get_viewport().set_input_as_handled()
-		return
+	# Aimed at a painted camp. Ctrl/Meta+Interact (or Ctrl+Click) opens its
+	# system, framed. Plain Interact stays the Tune-look modal.
+	if not _camp_focus_id.is_empty() and _loader != null:
+		var open_graph := camp_graph_click
+		if is_interact and (Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)):
+			open_graph = true
+		if open_graph:
+			var gv := _graph_view()
+			if gv != null and gv.has_method("open_camp_in_graph"):
+				gv.call("open_camp_in_graph", _camp_focus_id)
+				get_viewport().set_input_as_handled()
+				return
+		if _loader.has_method("open_camp_tune_for_camp"):
+			_loader.call("open_camp_tune_for_camp", _camp_focus_id)
+			get_viewport().set_input_as_handled()
+			return
 	# Aimed at a still-water body → open the pond settings modal (override volume /
 	# fill level, add-to-graph / remove / delete). Ponds are no longer auto-added.
 	if _water_focus_idx >= 0 and _loader != null \

@@ -48,6 +48,12 @@ static func channel_catalog() -> Array:
 			"mode": "avg",
 			"sources": [SOURCE_LIVE, SOURCE_SIM, SOURCE_OBSERVED],
 		},
+		{
+			"id": "tank_pct", "label": "Tank", "unit": "%",
+			"color": Color(0.32, 0.72, 0.92, 1.0),
+			"mode": "avg",
+			"sources": [SOURCE_LIVE, SOURCE_SIM, SOURCE_OBSERVED],
+		},
 	]
 
 var id : String = ""

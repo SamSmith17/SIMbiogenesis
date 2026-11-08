@@ -35,9 +35,11 @@ const CARD_DIST_M := 3000.0
 const HEIGHT_CELL_M := 2.0
 const HEIGHT_MAX_AXIS := 1024
 const HEIGHT_PAD_M := 80.0
-const HEIGHT_SAMPLES_PER_FRAME := 6000
-## ...but never more than this much time per frame: 6000 terrain queries
-## measured 36 ms on Walton, a visible hitch every frame of the bake.
+## Hard cap as well as the time budget. 6000 queries measured 36 ms on
+## Walton — a cold first batch used to finish that many before the clock
+## check, which only ran every 64 samples. 320 at the measured rate is
+## about 2 ms, and the clock check below stops a cold batch sooner.
+const HEIGHT_SAMPLES_PER_FRAME := 320
 const HEIGHT_BUDGET_US := 2000
 const HEIGHT_REBUILD_M := 60.0
 var _h_img: Image = null
@@ -392,13 +394,16 @@ func _service_height_raster() -> void:
 		or half > _h_region_half + 1.0
 	if need_new:
 		_begin_height_raster(center, half)
+		# Allocation of the image is its own frame. Sampling on top of it
+		# was the cold hitch.
+		return
 	if _h_img == null or _h_ready:
 		return
 	var total := _h_nx * _h_nz
 	var done := 0
 	var t_start := Time.get_ticks_usec()
 	while _h_cursor < total and done < HEIGHT_SAMPLES_PER_FRAME:
-		if (done & 63) == 0 and done > 0 and Time.get_ticks_usec() - t_start > HEIGHT_BUDGET_US:
+		if done > 0 and Time.get_ticks_usec() - t_start >= HEIGHT_BUDGET_US:
 			break
 		var ix := _h_cursor % _h_nx
 		var iz := _h_cursor / _h_nx
@@ -438,6 +443,33 @@ func _begin_height_raster(center: Vector2, half: float) -> void:
 
 func height_raster_ready() -> bool:
 	return _h_ready
+
+
+## Bilinear ground height from the baked raster, or null when the point is
+## outside it or the bake has not landed. The NPC host uses this so a hero
+## does not pay a terrain query per frame.
+func sample_height(xz: Vector2) -> Variant:
+	if not _h_ready or _h_img == null or _h_nx < 1 or _h_nz < 1:
+		return null
+	if _h_size.x <= 0.0 or _h_size.y <= 0.0:
+		return null
+	var u := (xz.x - _h_origin.x) / _h_size.x
+	var v := (xz.y - _h_origin.y) / _h_size.y
+	if u < 0.0 or v < 0.0 or u > 1.0 or v > 1.0:
+		return null
+	var fx := u * float(_h_nx) - 0.5
+	var fz := v * float(_h_nz) - 0.5
+	var x0 := clampi(int(floor(fx)), 0, _h_nx - 1)
+	var z0 := clampi(int(floor(fz)), 0, _h_nz - 1)
+	var x1 := mini(x0 + 1, _h_nx - 1)
+	var z1 := mini(z0 + 1, _h_nz - 1)
+	var tx := clampf(fx - float(x0), 0.0, 1.0)
+	var tz := clampf(fz - float(z0), 0.0, 1.0)
+	var y00 := _h_img.get_pixel(x0, z0).r
+	var y10 := _h_img.get_pixel(x1, z0).r
+	var y01 := _h_img.get_pixel(x0, z1).r
+	var y11 := _h_img.get_pixel(x1, z1).r
+	return lerpf(lerpf(y00, y10, tx), lerpf(y01, y11, tx), tz)
 
 
 ## Ground height at a point, memoised on a 0.5 m grid (segment endpoints

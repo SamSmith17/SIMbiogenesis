@@ -917,6 +917,53 @@ static func hour_index(month: int, day: int, hour: float, leap: bool) -> float:
 	return float(day_of_year0(month, day, leap)) * 24.0 + clampf(hour, 0.0, 23.999)
 
 
+## Inverse of day_of_year0. `doy` is 0 on 1 January.
+static func month_day_from_doy0(doy: int, leap: bool) -> Vector2i:
+	var month := 1
+	var day := doy + 1
+	for m in range(11, 0, -1):
+		var before := _DAYS_BEFORE_MONTH[m]
+		if leap and m >= 2:
+			before += 1
+		if doy >= before:
+			month = m + 1
+			day = doy - before + 1
+			break
+	return Vector2i(month, day)
+
+
+## The 7-day stretch of the loaded archive with the least precipitation.
+## {month, day, hour, mm}, or {} when no precipitation series is loaded.
+func driest_week() -> Dictionary:
+	var arr: PackedFloat32Array = _series.get("precipitation", PackedFloat32Array())
+	var window := 7 * 24
+	if arr.size() < window:
+		return {}
+	var finite := false
+	var run := 0.0
+	for i in window:
+		var v := float(arr[i])
+		if is_finite(v):
+			finite = true
+			run += maxf(v, 0.0)
+	if not finite:
+		return {}
+	var best := run
+	var best_i := 0
+	for i in range(window, arr.size()):
+		var add := float(arr[i])
+		var sub := float(arr[i - window])
+		if is_finite(add):
+			run += maxf(add, 0.0)
+		if is_finite(sub):
+			run -= maxf(sub, 0.0)
+		if run < best:
+			best = run
+			best_i = i - window + 1
+	var md := month_day_from_doy0(int(best_i / 24), is_leap_layout(arr.size()))
+	return {"month": md.x, "day": md.y, "hour": 8, "mm": best}
+
+
 ## A series dict with Feb 29 cut out of every leap-layout array, so it lines
 ## up hour for hour with the common-year layout the weather generators train
 ## on and emit (they index by day of a 365-day year).

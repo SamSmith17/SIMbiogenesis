@@ -445,6 +445,8 @@ static func _item_draw_watts(
 		if item.has("batch_active_watts"):
 			return float(item.get("batch_active_watts", 0.0))
 		if str(specs.get("node_state", "")) == GraphNodeState.RUNNING:
+			if specs.has("live_watts"):
+				return maxf(float(specs.get("live_watts", 0.0)), 0.0)
 			return _rated_watts_from_specs(specs)
 		return 0.0
 

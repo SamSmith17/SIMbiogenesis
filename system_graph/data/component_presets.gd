@@ -480,6 +480,7 @@ const PROCESSORS: Array = [
 			"name": "RO Purifier", "watts": 36.0, "cost": 260.0,
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 1.2,
+			"energy_curve": "cold_water",
 			"io_absolute": true,
 			"daily_note": "Feed 40 L/h + 36 W → 30 L/h potable permeate + 10 L/h concentrate (to greywater). Pumped recovery ~75%.",
 			"inputs": [{"kind": "water", "rate": 40.0, "unit": "L/h"}],
@@ -519,6 +520,7 @@ const PROCESSORS: Array = [
 			"name": "Water Distiller", "watts": 580.0, "cost": 120.0,
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 830.0,
+			"energy_floor_wh_per_unit": 627.0,
 			"io_absolute": true,
 			"daily_note": "Greywater 0.8 L/h + 580 W → 0.7 L/h distilled. Latent heat alone is 627 Wh/L — distillation is the expensive, treat-anything option.",
 			"inputs": [{"kind": "greywater", "rate": 0.8, "unit": "L/h"}],
@@ -2406,6 +2408,16 @@ static func load_user_presets() -> void:
 ## crew-assembly recipes name the graph node their structure binds into by
 ## preset LABEL (RecipeCatalog.graph_preset), the same key the tutorial's
 ## unlock gating uses.
+## Nameplate specific energy at 25 °C. Colder feed costs 3 % per degree,
+## clamped to 0.7–2.2×, and never under a physical floor (Wh per unit).
+static func specific_energy_at_temp(nameplate_wh: float, temp_c: float, floor_wh: float = 0.0) -> float:
+	var factor := clampf(1.0 + 0.03 * (25.0 - temp_c), 0.7, 2.2)
+	var wh := nameplate_wh * factor
+	if floor_wh > 0.0:
+		wh = maxf(wh, floor_wh)
+	return wh
+
+
 static func find_preset_by_label(label: String) -> Dictionary:
 	if label.is_empty():
 		return {}

@@ -250,6 +250,24 @@ func level_at(abs_hours: float) -> float:
 	return float(sample_at(abs_hours).get("level", 0.0))
 
 
+## Fill percent (0–100) over [abs_start, abs_end], the same shape as
+## EnergyTimeline.channel_slice so the timeline can bin it.
+func pct_slice(abs_start: float, abs_end: float) -> Dictionary:
+	var vals := PackedFloat32Array()
+	if is_empty() or abs_end < abs_start:
+		return {"base_t": 0.0, "step": step_hours, "values": vals}
+	var g0 := maxi(_step_of(abs_start), first_step())
+	var g1 := mini(_step_of(abs_end), last_step())
+	if g1 < g0:
+		return {"base_t": 0.0, "step": step_hours, "values": vals}
+	var a := g0 - _base_step
+	var n := g1 - g0 + 1
+	vals.resize(n)
+	for k in n:
+		vals[k] = 100.0 * float(_level[a + k])
+	return {"base_t": time_of_step(g0), "step": step_hours, "values": vals}
+
+
 ## Scrub-safe instantaneous overflow test: tank pinned at full while inflow
 ## exceeds outflow. Derived from the sample buffers, so rewinding clears it.
 func is_overflowing_at(abs_hours: float) -> bool:

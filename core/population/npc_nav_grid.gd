@@ -75,7 +75,7 @@ const F_FIRE := 1 << 7
 ## Anything that stops a person: the static obstacles plus a live fire.
 const BLOCKING := F_BLOCKED | F_FIRE
 
-enum Phase { IDLE, HEIGHT, SLOPE, OBSTACLES, LAYERS, DONE }
+enum Phase { IDLE, HEIGHT, SLOPE, OBSTACLES, LAYERS, DONE, HEIGHT_PRI, SLOPE_PRI }
 
 var origin := Vector2.ZERO    # world XZ of cell (0,0)'s CORNER
 var cell_m := CELL_M
@@ -191,7 +191,7 @@ func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "",
 	_obstacle_i = 0
 	_fingerprint = fp
 	_cursor = 0
-	_phase = Phase.HEIGHT
+	_arm_priority()
 	reused_ground = false
 
 
@@ -217,6 +217,11 @@ func begin_bake_reusing(prev: NpcNavGrid, height_fn: Callable, obstacles: Array 
 		return
 	begin_bake(height_fn, obstacles, fp, surfaces_fn)
 	reused_ground = true
+	# The copied ground is already complete. A priority window would send the
+	# obstacle pass back into a second height walk.
+	_pri_ix1 = -1
+	_path_ix1 = -1
+	_priority_ready = false
 	var cols := nx * nz
 	for i in cols:
 		_height[i] = prev._height[i]
@@ -235,6 +240,98 @@ func begin_bake_reusing(prev: NpcNavGrid, height_fn: Callable, obstacles: Array 
 ## Whether this grid skipped its own height pass (see begin_bake_reusing).
 var reused_ground := false
 
+## First window baked, around the player, so people near camp can path while
+## the rest of a festival-sized grid is still sampling terrain. A 640k-cell
+## height pass used to take ~4.4 minutes of straight-line walking through
+## tents. The window is empty (ix1 < ix0) when it would cover almost the
+## whole grid — then the ordinary row-major bake is the whole job.
+const PRIORITY_HALF_M := 80.0
+var _pri_center := Vector2(INF, INF)
+var _pri_half := PRIORITY_HALF_M
+var _pri_ix0 := 0
+var _pri_iz0 := 0
+var _pri_ix1 := -1
+var _pri_iz1 := -1
+## Pathable inset of the height window: slope needs SLOPE_BASELINE_CELLS of
+## already-sampled neighbours, so the outer ring is height-only.
+var _path_ix0 := 0
+var _path_iz0 := 0
+var _path_ix1 := -1
+var _path_iz1 := -1
+var _pri_cursor := 0
+var _priority_ready := false
+
+
+## Bake this disc first. Call after configure_*, before begin_bake.
+func set_priority_center(world_xz: Vector2, half_m: float = PRIORITY_HALF_M) -> void:
+	_pri_center = world_xz
+	_pri_half = maxf(half_m, cell_m * 4.0)
+
+
+func priority_ready() -> bool:
+	return _priority_ready
+
+
+## Both ends sit in the window that already has heights, slopes and obstacles.
+func priority_covers(a: Vector2, b: Vector2) -> bool:
+	if not _priority_ready:
+		return false
+	var ca := cell_of(a)
+	var cb := cell_of(b)
+	return _in_path_rect(ca.x, ca.y) and _in_path_rect(cb.x, cb.y)
+
+
+func _in_height_rect(ix: int, iz: int) -> bool:
+	return _pri_ix1 >= _pri_ix0 and ix >= _pri_ix0 and ix <= _pri_ix1 \
+			and iz >= _pri_iz0 and iz <= _pri_iz1
+
+
+func _in_path_rect(ix: int, iz: int) -> bool:
+	return _path_ix1 >= _path_ix0 and ix >= _path_ix0 and ix <= _path_ix1 \
+			and iz >= _path_iz0 and iz <= _path_iz1
+
+
+func _arm_priority() -> void:
+	_priority_ready = false
+	_pri_cursor = 0
+	_pri_ix1 = -1
+	_path_ix1 = -1
+	_phase = Phase.HEIGHT
+	if not is_finite(_pri_center.x) or nx < 4:
+		return
+	var margin := SLOPE_BASELINE_CELLS
+	var c := cell_of(_pri_center)
+	var rad := int(ceil(_pri_half / cell_m)) + margin
+	var ix0 := clampi(c.x - rad, 0, nx - 1)
+	var ix1 := clampi(c.x + rad, 0, nx - 1)
+	var iz0 := clampi(c.y - rad, 0, nz - 1)
+	var iz1 := clampi(c.y + rad, 0, nz - 1)
+	var cells := (ix1 - ix0 + 1) * (iz1 - iz0 + 1)
+	# A window that is basically the whole grid gains nothing by going first.
+	if cells <= 0 or cells * 10 >= nx * nz * 9:
+		return
+	var px0 := clampi(ix0 + margin, 0, nx - 1)
+	var pz0 := clampi(iz0 + margin, 0, nz - 1)
+	var px1 := clampi(ix1 - margin, 0, nx - 1)
+	var pz1 := clampi(iz1 - margin, 0, nz - 1)
+	if px1 < px0 or pz1 < pz0:
+		return
+	_pri_ix0 = ix0
+	_pri_iz0 = iz0
+	_pri_ix1 = ix1
+	_pri_iz1 = iz1
+	_path_ix0 = px0
+	_path_iz0 = pz0
+	_path_ix1 = px1
+	_path_iz1 = pz1
+	_phase = Phase.HEIGHT_PRI
+
+
+func _open_priority_then_rest() -> void:
+	_priority_ready = true
+	_cursor = 0
+	_phase = Phase.HEIGHT
+
 
 ## Advance the bake by at most `budget` cells. Returns true once ready.
 ## Callers drive this from a frame/tick callback — never in a hot loop.
@@ -252,6 +349,10 @@ func bake_step(budget: int = CELLS_PER_FRAME) -> bool:
 			_step_obstacles(budget)
 		Phase.LAYERS:
 			_step_layers(budget)
+		Phase.HEIGHT_PRI:
+			_step_priority(budget, false)
+		Phase.SLOPE_PRI:
+			_step_priority(budget, true)
 	return _phase == Phase.DONE
 
 
@@ -278,28 +379,89 @@ func bake_progress() -> float:
 			return 1.0
 		Phase.IDLE:
 			return 0.0
+		Phase.HEIGHT_PRI, Phase.SLOPE_PRI:
+			return 0.2
 		Phase.HEIGHT:
-			return 0.5 * float(_cursor) / maxf(float(nx * nz), 1.0)
+			return 0.2 + 0.4 * float(_cursor) / maxf(float(nx * nz), 1.0)
 		Phase.SLOPE:
-			return 0.5 + 0.35 * float(_cursor) / maxf(float(nx * nz), 1.0)
+			return 0.6 + 0.25 * float(_cursor) / maxf(float(nx * nz), 1.0)
 		Phase.OBSTACLES:
 			return 0.85 + 0.10 * float(_obstacle_i) / maxf(float(_obstacles.size()), 1.0)
 	return 0.95 + 0.05 * float(_cursor) / maxf(float(nx * nz), 1.0)
 
 
+func _write_height(ix: int, iz: int) -> void:
+	var c := center_of(ix, iz)
+	var y: float = _height_fn.call(c.x, c.y)
+	_height[idx(ix, iz)] = y if is_finite(y) else 0.0
+
+
+func _write_slope(ix: int, iz: int) -> void:
+	var b := SLOPE_BASELINE_CELLS
+	var run := 2.0 * float(b) * cell_m
+	# Central difference over the baseline — a terrain GRADE, not a step.
+	var hx0 := _height[idx(maxi(ix - b, 0), iz)]
+	var hx1 := _height[idx(mini(ix + b, nx - 1), iz)]
+	var hz0 := _height[idx(ix, maxi(iz - b, 0))]
+	var hz1 := _height[idx(ix, mini(iz + b, nz - 1))]
+	var gx := (hx1 - hx0) / run
+	var gz := (hz1 - hz0) / run
+	var deg := rad_to_deg(atan(sqrt(gx * gx + gz * gz)))
+	var i := idx(ix, iz)
+	_slope[i] = deg
+	if deg > MAX_SLOPE_DEG:
+		_flags[i] = _flags[i] | F_STEEP | F_BLOCKED
+
+
+## Height, then slope, of the priority window. Terrain samples stay inside
+## the budget; the slope pass is array reads over the same cells.
+func _step_priority(budget: int, slope: bool) -> void:
+	var w := _pri_ix1 - _pri_ix0 + 1
+	var h := _pri_iz1 - _pri_iz0 + 1
+	var total := w * h
+	var end := mini(_pri_cursor + budget, total)
+	while _pri_cursor < end:
+		var ix := _pri_ix0 + (_pri_cursor % w)
+		var iz := _pri_iz0 + int(_pri_cursor / w)
+		if slope:
+			_write_slope(ix, iz)
+		elif _height_fn.is_valid():
+			_write_height(ix, iz)
+		_pri_cursor += 1
+	if _pri_cursor < total:
+		return
+	_pri_cursor = 0
+	if not slope:
+		_phase = Phase.SLOPE_PRI
+		return
+	_obstacle_i = 0
+	if _obstacles.is_empty():
+		_open_priority_then_rest()
+	else:
+		_phase = Phase.OBSTACLES
+
+
 func _step_height(budget: int) -> void:
 	var total := nx * nz
-	var end := mini(_cursor + budget, total)
-	if _height_fn.is_valid():
-		while _cursor < end:
-			var ix := _cursor % nx
-			var iz := _cursor / nx
-			var c := center_of(ix, iz)
-			var y: float = _height_fn.call(c.x, c.y)
-			_height[_cursor] = y if is_finite(y) else 0.0
-			_cursor += 1
+	if not _height_fn.is_valid():
+		_cursor = total   # no height source: flat grid, still walkable
 	else:
-		_cursor = end   # no height source: flat grid, still walkable
+		var sampled := 0
+		var scanned := 0
+		# Skipping an already-sampled priority cell is an index check, not a
+		# terrain query. Cap the scan so a frame cannot walk the whole grid
+		# just to find the next unsampled cell.
+		var scan_cap := budget * LAYER_SCAN_RATIO
+		while _cursor < total and sampled < budget and scanned < scan_cap:
+			scanned += 1
+			var ix := _cursor % nx
+			var iz := int(_cursor / nx)
+			if _in_height_rect(ix, iz):
+				_cursor += 1
+				continue
+			_write_height(ix, iz)
+			sampled += 1
+			_cursor += 1
 	if _cursor >= total:
 		_cursor = 0
 		_phase = Phase.SLOPE
@@ -308,26 +470,19 @@ func _step_height(budget: int) -> void:
 func _step_slope(budget: int) -> void:
 	var total := nx * nz
 	var end := mini(_cursor + budget, total)
-	var b := SLOPE_BASELINE_CELLS
-	var run := 2.0 * float(b) * cell_m
 	while _cursor < end:
 		var ix := _cursor % nx
-		var iz := _cursor / nx
-		# Central difference over the baseline — a terrain GRADE, not a step.
-		var hx0 := _height[idx(maxi(ix - b, 0), iz)]
-		var hx1 := _height[idx(mini(ix + b, nx - 1), iz)]
-		var hz0 := _height[idx(ix, maxi(iz - b, 0))]
-		var hz1 := _height[idx(ix, mini(iz + b, nz - 1))]
-		var gx := (hx1 - hx0) / run
-		var gz := (hz1 - hz0) / run
-		var deg := rad_to_deg(atan(sqrt(gx * gx + gz * gz)))
-		_slope[_cursor] = deg
-		if deg > MAX_SLOPE_DEG:
-			_flags[_cursor] = _flags[_cursor] | F_STEEP | F_BLOCKED
+		var iz := int(_cursor / nx)
+		_write_slope(ix, iz)
 		_cursor += 1
 	if _cursor >= total:
 		_cursor = 0
-		_phase = Phase.OBSTACLES if not _obstacles.is_empty() else Phase.DONE
+		# The priority window already stamped obstacles before the rest of
+		# the heights were sampled. Do not stamp them again.
+		if _priority_ready:
+			_phase = Phase.LAYERS if _surfaces_fn.is_valid() else Phase.DONE
+		else:
+			_phase = Phase.OBSTACLES if not _obstacles.is_empty() else Phase.DONE
 
 
 func _step_obstacles(budget: int) -> void:
@@ -353,7 +508,10 @@ func _step_obstacles(budget: int) -> void:
 		_obstacle_i += 1
 	if _obstacle_i >= _obstacles.size():
 		_cursor = 0
-		_phase = Phase.LAYERS if _surfaces_fn.is_valid() else Phase.DONE
+		if _pri_ix1 >= _pri_ix0 and not _priority_ready:
+			_open_priority_then_rest()
+		else:
+			_phase = Phase.LAYERS if _surfaces_fn.is_valid() else Phase.DONE
 
 
 ## Sample extra walkable surfaces (deck levels, upper floors) — but ONLY in
@@ -520,8 +678,14 @@ func slope_deg_at(ix: int, iz: int) -> float:
 
 
 func is_walkable(ix: int, iz: int, layer: int = 0) -> bool:
-	if not in_bounds(ix, iz) or not is_ready():
+	if not in_bounds(ix, iz):
 		return false
+	# Until the full grid is done, only the priority window is walkable.
+	# Cells outside it still hold the flat default, and a path through them
+	# would be a straight line pretending to be a route.
+	if not is_ready():
+		if not (_priority_ready and _in_path_rect(ix, iz)):
+			return false
 	return (int(_flags[idx(ix, iz, layer)]) & BLOCKING) == 0
 
 

@@ -44,6 +44,10 @@ const FAR_DIST_M := 90.0
 const FAR_POSE_INTERVAL_S := 0.25
 const GROUND_REFRESH_S := 0.5
 const GROUND_MOVE_EPS_M := 0.35
+## Fallback when the crowd height raster is not ready yet: one terrain query
+## per 2 m cell, shared by every hero standing in it, held until they leave
+## the cell. Matches CrowdRenderer.HEIGHT_CELL_M.
+const GROUND_STRIDE_M := 2.0
 
 ## How close the RENDERED body must get to its sim target before it counts as
 ## arrived. The smoothing below is asymptotic, so it never literally lands.
@@ -77,6 +81,7 @@ var _main: Node = null
 var _avatars: Dictionary = {}      # agent_id -> NpcAvatar
 var _last_pos: Dictionary = {}     # agent_id -> Vector2 (sim pos last frame)
 var _ground: Dictionary = {}       # agent_id -> {y: float, at: Vector2, t: float}
+var _cell_ground: Dictionary = {}  # Vector2i cell -> {y, t} shared terrain samples
 var _far_accum: Dictionary = {}    # agent_id -> float (seconds since last far pose)
 var _arrive_wait: Dictionary = {}  # agent_id -> seconds the render has been catching up
 var _moved_at: Dictionary = {}     # agent_id -> time of last sim movement (fallback path)
@@ -492,8 +497,7 @@ func _update_fire_rings() -> void:
 			continue
 		var pos: Vector2 = spots[i]
 		ring.visible = true
-		ring.position = Vector3(pos.x,
-			TerrainSurfaceQuery.ground_height_at(_main, pos.x, pos.y) + 0.10, pos.y)
+		ring.position = Vector3(pos.x, _surface_y(pos) + 0.10, pos.y)
 
 
 func _build_fire_ring() -> Node3D:
@@ -538,7 +542,7 @@ func _update_crew_markers() -> void:
 			continue
 		var mark := marks[i] as Dictionary
 		var pos: Vector2 = mark.get("pos", Vector2.ZERO)
-		var gy := TerrainSurfaceQuery.ground_height_at(_main, pos.x, pos.y)
+		var gy := _surface_y(pos)
 		root.visible = true
 		root.position = Vector3(pos.x, gy + 0.12, pos.y)
 		var quorum := bool(mark.get("quorum", true))
@@ -905,17 +909,49 @@ func _viewer_xz() -> Vector2:
 	return Vector2(p.x, p.z)
 
 
-## Cached terrain height: only re-query when the agent moved meaningfully in
-## XZ or the cache went stale (terrain can be sculpted under them).
+## Ground under a person. The crowd raster is bilinear and free; until it
+## lands, one terrain query is shared by every hero in the same 2 m cell.
+## Inside that stride the height blends from the last sample so a slope
+## does not pop when the cell changes.
 func _ground_y(aid: String, xz: Vector2) -> float:
-	var rec: Dictionary = _ground.get(aid, {})
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer) \
+			and _crowd_renderer.has_method("sample_height"):
+		var h: Variant = _crowd_renderer.call("sample_height", xz)
+		if h != null and is_finite(float(h)):
+			return float(h)
+	var sampled := _cell_ground_y(xz)
 	var now := float(Time.get_ticks_msec()) * 0.001
+	var rec: Dictionary = _ground.get(aid, {})
 	if not rec.is_empty():
 		var at: Vector2 = rec.get("at", Vector2.ZERO)
-		if (at - xz).length() < GROUND_MOVE_EPS_M and now - float(rec.get("t", 0.0)) < GROUND_REFRESH_S:
-			return float(rec.get("y", 0.0))
+		var dist := (at - xz).length()
+		var age := now - float(rec.get("t", 0.0))
+		if dist < GROUND_STRIDE_M and age < GROUND_REFRESH_S:
+			var prev_y := float(rec.get("y", sampled))
+			return lerpf(prev_y, sampled, clampf(dist / GROUND_STRIDE_M, 0.0, 1.0))
+	_ground[aid] = {"y": sampled, "at": xz, "t": now}
+	return sampled
+
+
+func _surface_y(xz: Vector2) -> float:
+	if _crowd_renderer != null and is_instance_valid(_crowd_renderer) \
+			and _crowd_renderer.has_method("sample_height"):
+		var h: Variant = _crowd_renderer.call("sample_height", xz)
+		if h != null and is_finite(float(h)):
+			return float(h)
+	return _cell_ground_y(xz)
+
+
+func _cell_ground_y(xz: Vector2) -> float:
+	var key := Vector2i(int(floor(xz.x / GROUND_STRIDE_M)), int(floor(xz.y / GROUND_STRIDE_M)))
+	var now := float(Time.get_ticks_msec()) * 0.001
+	var rec: Dictionary = _cell_ground.get(key, {})
+	if not rec.is_empty() and now - float(rec.get("t", 0.0)) < GROUND_REFRESH_S:
+		return float(rec.get("y", 0.0))
 	var y := TerrainSurfaceQuery.ground_height_at(_main, xz.x, xz.y)
-	_ground[aid] = {"y": y, "at": xz, "t": now}
+	if _cell_ground.size() > 4096:
+		_cell_ground.clear()
+	_cell_ground[key] = {"y": y, "t": now}
 	return y
 
 

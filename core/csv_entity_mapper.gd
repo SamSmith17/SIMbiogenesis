@@ -7,6 +7,7 @@ const ROLE_NONE := ""
 const ROLES : Array[Dictionary] = [
 	{"id": ROLE_NONE, "label": "(not linked)"},
 	{"id": "battery_soc", "label": "Battery SOC (%)"},
+	{"id": "tank_level", "label": "Tank level (%)"},
 	{"id": "solar", "label": "Solar Input (W)"},
 	{"id": "load", "label": "Total AC Load (W)"},
 	{"id": "daily_solar", "label": "Daily Solar (kWh)"},
@@ -37,6 +38,7 @@ static func autolink(entity_ids: Array) -> Dictionary:
 	var used_entities: Dictionary = {}
 	var rules: Array[Dictionary] = [
 		{"role": "battery_soc", "suffixes": ["battery_soc_inverter", "battery_soc_calculated"]},
+		{"role": "tank_level", "suffixes": ["tank_level", "water_level", "tank_percent"]},
 		{"role": "solar", "suffixes": ["pv_input_power"]},
 		{"role": "load", "suffixes": ["ac_output_power"]},
 		{"role": "daily_solar", "suffixes": ["pv_generation_today"]},

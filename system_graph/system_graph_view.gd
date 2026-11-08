@@ -638,6 +638,9 @@ func _init_resource_flow() -> void:
 	if _resource_flow != null and _resource_flow.has_signal("recipe_chore_waiting") \
 			and not _resource_flow.is_connected("recipe_chore_waiting", _on_recipe_chore_waiting):
 		_resource_flow.connect("recipe_chore_waiting", _on_recipe_chore_waiting)
+	if _resource_flow != null and _resource_flow.has_signal("habitat_starvation_changed") \
+			and not _resource_flow.is_connected("habitat_starvation_changed", _on_habitat_starved):
+		_resource_flow.connect("habitat_starvation_changed", _on_habitat_starved)
 	_sync_chore_ledger_to_flow()
 	if _graph_canvas != null:
 		_graph_canvas.set("resource_flow_engine", _resource_flow)
@@ -654,6 +657,30 @@ func _on_tank_overflow_changed(item_id: String, overflowing: bool) -> void:
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var tank_name := str(specs.get("name", "Tank"))
 	_show_toast("⚠ %s overflowing — capacity exceeded, input is being lost" % tank_name)
+
+
+## A habitat's water or food running out, including while the graph is closed.
+## The settlement log is what the player in the world actually sees.
+func _on_habitat_starved(item_id: String, kinds: Array) -> void:
+	if _npc_population == null or not _npc_population.has_method("settlement_log"):
+		return
+	var log: Object = _npc_population.call("settlement_log")
+	if log == null or not log.has_method("add"):
+		return
+	var item := model.get_item(item_id) if model != null else {}
+	var name := str((item.get("specs", {}) as Dictionary).get("name", "A habitat"))
+	var abs_h := 0.0
+	if _resource_flow != null and _resource_flow.has_method("_get_abs_hours"):
+		abs_h = float(_resource_flow.call("_get_abs_hours"))
+	if kinds.is_empty():
+		log.call("add", "fed", "%s has what it needs again" % name, abs_h, SettlementLog.INFO, item_id)
+		return
+	var parts := PackedStringArray()
+	for k: Variant in kinds:
+		parts.append(ResourceKinds.display_name(str(k)))
+	var what := ", ".join(parts)
+	log.call("add", "starved", "%s is out of %s" % [name, what], abs_h,
+		SettlementLog.ALERT, item_id, {"title": "%s is out" % name, "detail": what})
 
 
 func _on_processor_blocked(item_id: String, missing_kinds: Array) -> void:
@@ -10605,6 +10632,56 @@ func open_camp_in_graph(camp_id: String) -> bool:
 	return false
 
 
+## True when some habitat is already simulating individuals.
+func has_simulated_people() -> bool:
+	if model == null:
+		return false
+	for it in model.items_of_type("processor"):
+		var sp: Dictionary = it.get("specs", {})
+		if str(sp.get("role", "")) == "habitat" and bool(sp.get("pop_driven", false)):
+			return true
+	return false
+
+
+## The first tagged sleep or water space offers this. An existing habitat
+## gets the flag; otherwise a Population node is added at the site root.
+func ensure_simulated_people() -> bool:
+	if model == null or has_simulated_people():
+		return has_simulated_people()
+	for it in model.items_of_type("processor"):
+		var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		if str(sp.get("role", "")) != "habitat":
+			continue
+		sp["pop_driven"] = true
+		model.update_item(str(it.get("id", "")), {"specs": sp})
+		_schedule_graph_autosave()
+		_show_toast("Simulated individuals are on. People appear once each need has a place.")
+		return true
+	var preset := ComponentPresets.find_preset_by_label("Population")
+	if preset.is_empty():
+		return false
+	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+	specs["pop_driven"] = true
+	preset["specs"] = specs
+	var prev := _active_scope_id
+	_active_scope_id = "root"
+	if _graph_canvas != null:
+		_spawn_at_canvas_center(preset)
+	else:
+		var iid := model.generate_item_id()
+		model.add_item({
+			"id": iid, "type": "processor", "scope_id": "root",
+			"x": 40.0, "y": 40.0,
+			"width": float(preset.get("width", 150.0)),
+			"height": float(preset.get("height", 150.0)),
+			"specs": specs,
+		})
+		_schedule_graph_autosave()
+	_active_scope_id = prev
+	_show_toast("Simulated individuals are on. People appear once each need has a place.")
+	return true
+
+
 ## Centre a node in whatever lens is up: the card in freeform, its pin in
 ## Site Plan (the Globe keeps its orbit; the node is selected and lit).
 func _frame_item_in_lens(item_id: String) -> void:
@@ -20419,9 +20496,9 @@ func sync_camps_from_placement(lots: Array) -> Dictionary:
 	return out
 
 
-## Freeform spot for a new system card (a camp or a vehicle): the site
-## position mapped into the canvas below the player's own system, then the
-## nearest free cell on a spiral, so cards never land on each other.
+## Freeform spot for a new system card (a camp or a vehicle). New cards
+## land on the site by default (metres mapped into the canvas). Parts
+## inside a system stay free-placed. A spiral only unstacks a collision.
 const SYSTEM_CARD_ORIGIN := Vector2(0.0, 900.0)
 const SYSTEM_CARD_PX_PER_M := 4.0
 const SYSTEM_CARD_CELL := Vector2(240.0, 170.0)
@@ -21069,6 +21146,8 @@ func _tick_camp_power(abs_h: float) -> void:
 		var specs: Dictionary = comp.get("specs", {})
 		var spec := {"pv_wp": float(specs.get("pv_wp", 0.0)), "battery_kwh": float(specs.get("battery_kwh", 0.0)),
 			"inverter_w": float(specs.get("inverter_w", 0.0)), "base_load_w": float(specs.get("base_load_w", 0.0))}
+		if bool(specs.get("camp_power_real", false)):
+			spec = _camp_power_spec_from_scope(str(c["scope"]), spec)
 		var st: Dictionary = _camp_power.get(cid, {})
 		if st.is_empty():
 			st = CampPowerModel.make_state(spec, float(specs.get("camp_soc", 0.8)))
@@ -21093,6 +21172,8 @@ func _tick_camp_power(abs_h: float) -> void:
 		patched["camp_ac"] = bool(st["ac_available"])
 		patched["camp_hours_left"] = snappedf(minf(float(st["hours_left"]), 999.0), 0.1)
 		model.update_item(cid, {"specs": patched})
+		if bool(specs.get("camp_power_real", false)):
+			_set_vehicle_battery_soc(cid, soc)
 	for cid in _camp_power.keys():
 		if not seen.has(cid):
 			var gone_scope := str((_camp_power[cid] as Dictionary).get("_scope", ""))
@@ -21106,6 +21187,85 @@ func _tick_camp_power(abs_h: float) -> void:
 ## The per-camp power states (the dashboard / harness read them).
 func camp_power_states() -> Dictionary:
 	return _camp_power
+
+
+## The four camp-power numbers, read back off the real parts when the
+## player has turned this camp's summary into a panel, battery, inverter
+## and night load. Missing parts keep the stored number.
+func _camp_power_spec_from_scope(scope: String, fallback: Dictionary) -> Dictionary:
+	if model == null or scope.is_empty():
+		return fallback
+	var pv := 0.0
+	var kwh := 0.0
+	var inv := 0.0
+	var load := 0.0
+	var any := false
+	for ch in model.get_items_in_scope(scope):
+		var d: Dictionary = ch
+		var sp: Dictionary = d.get("specs", {})
+		match str(d.get("type", "")):
+			"panel":
+				pv += float(sp.get("wmp", 0.0))
+				any = true
+			"battery":
+				kwh += float(sp.get("kwh", 0.0))
+				any = true
+			"controller":
+				inv = maxf(inv, float(sp.get("overload_watts", 0.0)))
+				any = true
+			"appliance":
+				load += float(sp.get("avg_watts", sp.get("max_watts", 0.0)))
+				any = true
+	if not any:
+		return fallback
+	return {"pv_wp": pv, "battery_kwh": kwh, "inverter_w": inv, "base_load_w": load}
+
+
+## Turns one camp's four power numbers into parts inside the camp. The
+## same watts keep running; the parts are what the player can edit.
+func make_camp_power_real(cid: String) -> bool:
+	if model == null or cid.is_empty():
+		return false
+	var comp := model.get_item(cid)
+	if comp.is_empty():
+		return false
+	var specs: Dictionary = (comp.get("specs", {}) as Dictionary).duplicate(true)
+	if bool(specs.get("camp_power_real", false)):
+		return false
+	var scope := str(comp.get("child_scope_id", ""))
+	if scope.is_empty():
+		return false
+	var pv := float(specs.get("pv_wp", 0.0))
+	var kwh := float(specs.get("battery_kwh", 0.0))
+	var inv := float(specs.get("inverter_w", 0.0))
+	var load := float(specs.get("base_load_w", 0.0))
+	var soc := float(specs.get("camp_soc", 0.8))
+	var y := 0.0
+	if pv > 0.0:
+		model.add_item({"id": model.generate_item_id(), "type": "panel", "scope_id": scope,
+			"x": 0.0, "y": y, "width": 120.0, "height": 80.0,
+			"specs": {"name": "Camp solar", "wmp": pv}})
+		y += 100.0
+	if kwh > 0.0:
+		model.add_item({"id": model.generate_item_id(), "type": "battery", "scope_id": scope,
+			"x": 0.0, "y": y, "width": 120.0, "height": 80.0,
+			"specs": {"name": "Camp battery", "kwh": kwh, "soc": soc}})
+		y += 100.0
+	if inv > 0.0:
+		model.add_item({"id": model.generate_item_id(), "type": "controller", "scope_id": scope,
+			"x": 0.0, "y": y, "width": 120.0, "height": 80.0,
+			"specs": {"name": "Camp inverter", "overload_watts": inv}})
+		y += 100.0
+	if load > 0.0:
+		model.add_item({"id": model.generate_item_id(), "type": "appliance", "scope_id": scope,
+			"x": 0.0, "y": y, "width": 120.0, "height": 80.0,
+			"specs": {"name": "Camp night load", "avg_watts": load, "max_watts": load,
+				"requested_state": "on"}})
+	specs["camp_power_real"] = true
+	model.update_item(cid, {"specs": specs})
+	_schedule_graph_autosave()
+	_show_toast("This camp's power is real parts now. The watts are the same.")
+	return true
 
 
 # ---------------------------------------------------------------------------

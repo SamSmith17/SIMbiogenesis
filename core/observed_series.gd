@@ -8,7 +8,8 @@ extends RefCounted
 ## grid EnergyTimeline uses, so the observed stream and a batch-rendered
 ## simulated stream line up sample-for-sample for split-screen comparison.
 ##
-## Channels: soc_kwh (battery_soc % → kWh), solar_kw (W/kW), load_kw (W/kW).
+## Channels: soc_kwh (battery_soc % → kWh), solar_kw (W/kW), load_kw (W/kW),
+## tank_pct (tank_level % , the one non-electric compare lane).
 ## Sampling is zero-order-hold (last reading at-or-before the step time), which
 ## matches how a digital twin holds a sensor value until the next report.
 
@@ -22,9 +23,11 @@ var _base_step: int = 0
 var _soc: PackedFloat32Array = PackedFloat32Array()
 var _solar: PackedFloat32Array = PackedFloat32Array()
 var _load: PackedFloat32Array = PackedFloat32Array()
+var _tank: PackedFloat32Array = PackedFloat32Array()
 var _has_soc: bool = false
 var _has_solar: bool = false
 var _has_load: bool = false
+var _has_tank: bool = false
 
 
 func is_empty() -> bool:
@@ -42,6 +45,9 @@ func has_solar() -> bool:
 func has_load() -> bool:
 	return _has_load
 
+func has_tank() -> bool:
+	return _has_tank
+
 
 # ---------------------------------------------------------------------------
 # Build
@@ -56,23 +62,27 @@ func build(role_samples: Dictionary, clock: Object, capacity_kwh: float,
 	_soc = PackedFloat32Array()
 	_solar = PackedFloat32Array()
 	_load = PackedFloat32Array()
+	_tank = PackedFloat32Array()
 	_has_soc = false
 	_has_solar = false
 	_has_load = false
+	_has_tank = false
 
 	var soc_raw := _to_abs(role_samples.get("battery_soc", []) as Array, clock)
 	var solar_raw := _to_abs(role_samples.get("solar", []) as Array, clock)
 	var load_raw := _to_abs(role_samples.get("load", []) as Array, clock)
+	var tank_raw := _to_abs(role_samples.get("tank_level", []) as Array, clock)
 	_has_soc = not soc_raw.is_empty()
 	_has_solar = not solar_raw.is_empty()
 	_has_load = not load_raw.is_empty()
-	if not (_has_soc or _has_solar or _has_load):
+	_has_tank = not tank_raw.is_empty()
+	if not (_has_soc or _has_solar or _has_load or _has_tank):
 		return
 
 	# Union window across all present channels.
 	var lo := INF
 	var hi := -INF
-	for raw: Array in [soc_raw, solar_raw, load_raw]:
+	for raw: Array in [soc_raw, solar_raw, load_raw, tank_raw]:
 		if raw.is_empty():
 			continue
 		lo = minf(lo, float((raw[0] as Dictionary)["a"]))
@@ -90,6 +100,7 @@ func build(role_samples: Dictionary, clock: Object, capacity_kwh: float,
 	_soc.resize(n)
 	_solar.resize(n)
 	_load.resize(n)
+	_tank.resize(n)
 
 	var cap := maxf(capacity_kwh, 0.001)
 	_fill_zoh(_soc, soc_raw, n, func(v: float) -> float:
@@ -98,6 +109,8 @@ func build(role_samples: Dictionary, clock: Object, capacity_kwh: float,
 		return maxf(v / 1000.0 if values_in_watts else v, 0.0))
 	_fill_zoh(_load, load_raw, n, func(v: float) -> float:
 		return maxf(v / 1000.0 if values_in_watts else v, 0.0))
+	_fill_zoh(_tank, tank_raw, n, func(v: float) -> float:
+		return clampf(v, 0.0, 100.0))
 
 
 ## Convert a [{t,v}] unix list to a sorted [{a:abs_hours, v}] list.
@@ -135,8 +148,8 @@ func _fill_zoh(out: PackedFloat32Array, raw: Array, n: int, conv: Callable) -> v
 ## Interpolated read at abs_hours (clamped to the buffer range).
 func sample_at(abs_hours: float) -> Dictionary:
 	if is_empty():
-		return {"soc_kwh": 0.0, "solar_kw": 0.0, "load_kw": 0.0,
-			"has_soc": false, "has_solar": false, "has_load": false}
+		return {"soc_kwh": 0.0, "solar_kw": 0.0, "load_kw": 0.0, "tank_pct": 0.0,
+			"has_soc": false, "has_solar": false, "has_load": false, "has_tank": false}
 	var pos := (abs_hours / step_hours) - float(_base_step)
 	var i := int(floor(pos))
 	var n := _soc.size()
@@ -150,7 +163,9 @@ func sample_at(abs_hours: float) -> Dictionary:
 		"soc_kwh":  lerp(float(_soc[i]),   float(_soc[i + 1]),   frac),
 		"solar_kw": lerp(float(_solar[i]), float(_solar[i + 1]), frac),
 		"load_kw":  lerp(float(_load[i]),  float(_load[i + 1]),  frac),
+		"tank_pct": lerp(float(_tank[i]),  float(_tank[i + 1]),  frac),
 		"has_soc": _has_soc, "has_solar": _has_solar, "has_load": _has_load,
+		"has_tank": _has_tank,
 	}
 
 
@@ -163,7 +178,9 @@ func _index(i: int) -> Dictionary:
 		"soc_kwh":  float(_soc[i]),
 		"solar_kw": float(_solar[i]),
 		"load_kw":  float(_load[i]),
+		"tank_pct": float(_tank[i]) if i < _tank.size() else 0.0,
 		"has_soc": _has_soc, "has_solar": _has_solar, "has_load": _has_load,
+		"has_tank": _has_tank,
 	}
 
 
@@ -218,6 +235,7 @@ func channel_slice(channel: String, abs_start: float, abs_end: float,
 		"load_kw": has = _has_load
 		"soc_kwh", "soc_pct": has = _has_soc
 		"net_kw": has = _has_solar and _has_load
+		"tank_pct": has = _has_tank
 		_: has = false
 	if not has:
 		return empty
@@ -237,6 +255,7 @@ func channel_slice(channel: String, abs_start: float, abs_end: float,
 			"soc_kwh": vals[k] = _soc[i]
 			"soc_pct": vals[k] = 100.0 * _soc[i] / cap
 			"net_kw": vals[k] = _solar[i] - _load[i]
+			"tank_pct": vals[k] = _tank[i] if i < _tank.size() else 0.0
 	return {"base_t": float(g0) * step_hours, "step": step_hours, "values": vals}
 
 
@@ -254,6 +273,8 @@ func channel_value(sample: Dictionary, channel: String, capacity_kwh: float) -> 
 			return 100.0 * float(sample.get("soc_kwh", 0.0)) / maxf(capacity_kwh, 0.001)
 		"net_kw":
 			return float(sample.get("solar_kw", 0.0)) - float(sample.get("load_kw", 0.0))
+		"tank_pct":
+			return float(sample.get("tank_pct", 0.0))
 	return 0.0
 
 

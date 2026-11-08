@@ -1753,6 +1753,21 @@ func _test_graph_ac_load_running_draws() -> void:
 	_check("READY processor draws 0", GraphAcLoad.compute_watts(model, self) < 1.0,
 		"w=%.1f" % GraphAcLoad.compute_watts(model, self))
 
+	sp = (model.get_item("proc").get("specs", {}) as Dictionary).duplicate(true)
+	sp["node_state"] = GraphNodeState.RUNNING
+	sp["watts"] = 36.0
+	sp["live_watts"] = 50.0
+	sp["energy_curve"] = "cold_water"
+	model.update_item("proc", {"specs": sp})
+	var cold_w := GraphAcLoad.compute_watts(model, self)
+	_check("RUNNING live_watts replaces the nameplate", absf(cold_w - 50.0) < 1.0, "w=%.1f" % cold_w)
+	var at_25 := ComponentPresetsScript.specific_energy_at_temp(1.2, 25.0, 0.0)
+	var at_5 := ComponentPresetsScript.specific_energy_at_temp(1.2, 5.0, 0.0)
+	_check("RO nameplate at 25 C", absf(at_25 - 1.2) < 0.001, "wh=%.3f" % at_25)
+	_check("colder feed costs more", at_5 > at_25 + 0.1, "wh=%.3f" % at_5)
+	var floored := ComponentPresetsScript.specific_energy_at_temp(1.0, -40.0, 5.0)
+	_check("the curve respects the floor", absf(floored - 5.0) < 0.001, "wh=%.3f" % floored)
+
 
 func _test_biochar_electric_input_fix() -> void:
 	var model = GraphModelScript.new()

@@ -39,6 +39,7 @@ var _target: Dictionary = {}
 var _line1: HBoxContainer
 var _option: OptionButton
 var _capacity: SpinBox
+var _people_btn: Button
 var _assigned: OptionButton
 ## Venue line.
 var _line2: HBoxContainer
@@ -155,6 +156,14 @@ func _build() -> void:
 	_capacity.value_changed.connect(_on_capacity_changed)
 	_capacity.visible = false
 	_line1.add_child(_capacity)
+
+	_people_btn = Button.new()
+	_people_btn.text = "Add people"
+	_people_btn.visible = false
+	_people_btn.focus_mode = Control.FOCUS_NONE
+	_people_btn.tooltip_text = "Adds a Population node and turns on simulated individuals. People show up once each need has a place."
+	_people_btn.pressed.connect(_on_add_people)
+	_line1.add_child(_people_btn)
 
 	# Sleep spaces only: reserve this spot for one person ("Devi's bed").
 	# The same assignment is editable from the Routines roster row.
@@ -286,6 +295,7 @@ func _sync() -> void:
 		_capacity.set_value_no_signal(
 			float(int(rec.get("capacity", SpaceRegistry.DEFAULT_CAPACITY))))
 	var stype := str(SpaceTypes.TYPES[idx]) if idx >= 0 else ""
+	_refresh_people_offer(stype)
 	var is_sleep := stype == "sleep"
 	_assigned.visible = is_sleep
 	if is_sleep:
@@ -331,6 +341,28 @@ func _on_type_selected(idx: int) -> void:
 	_save()
 	_sync()
 	space_changed.emit(space_type)
+
+
+func _refresh_people_offer(stype: String) -> void:
+	if _people_btn == null:
+		return
+	var offer := stype == "sleep" or stype == "water_point"
+	if not offer:
+		_people_btn.visible = false
+		return
+	var gv := ServiceLocator.graph()
+	var already := gv != null and gv.has_method("has_simulated_people") \
+			and bool(gv.call("has_simulated_people"))
+	_people_btn.visible = not already
+	_people_btn.disabled = false
+
+
+func _on_add_people() -> void:
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("ensure_simulated_people"):
+		return
+	if bool(gv.call("ensure_simulated_people")):
+		_people_btn.visible = false
 
 
 func _on_capacity_changed(v: float) -> void:

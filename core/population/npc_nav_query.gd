@@ -136,6 +136,15 @@ func is_ready() -> bool:
 	return grid != null and grid.is_ready()
 
 
+## Full grid, or both ends inside the window that finished first.
+func usable_for(from_xz: Vector2, to_xz: Vector2) -> bool:
+	if grid == null:
+		return false
+	if grid.is_ready():
+		return true
+	return grid.priority_covers(from_xz, to_xz)
+
+
 func stats() -> Dictionary:
 	return {"hits": _hits, "misses": _misses, "fails": _fails, "cached": _cache.size()}
 
@@ -146,7 +155,7 @@ func stats() -> Dictionary:
 ## Empty when the grid is not ready or nothing is reachable — callers fall
 ## back to straight-line movement rather than freezing.
 func find_path(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
-	if not is_ready():
+	if not usable_for(from_xz, to_xz):
 		return PackedVector2Array()
 	var start := grid.nearest_walkable(from_xz)
 	var goal := grid.nearest_walkable(to_xz)
@@ -173,7 +182,7 @@ func find_path(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
 ## is empty (an agent mid-walk, not standing at a space).
 func path_between_spaces(from_key: String, to_key: String, from_xz: Vector2,
 		to_xz: Vector2, lane_seed: int = 0) -> PackedVector2Array:
-	if not is_ready():
+	if not usable_for(from_xz, to_xz):
 		return PackedVector2Array()
 	if grid.fingerprint() != _cache_fp:
 		invalidate()

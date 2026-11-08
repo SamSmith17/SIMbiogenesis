@@ -1491,6 +1491,18 @@ func _population_region(main: Node, registry: SpaceRegistry) -> Dictionary:
 	}
 
 
+## Where the first nav window sits: the player, when they are on the site,
+## otherwise the region centre (the camp cluster).
+func _nav_priority_center(main: Node, region_center: Vector2) -> Vector2:
+	var player := ServiceLocator.player()
+	if player != null and is_instance_valid(player) and player is Node3D:
+		var p := (player as Node3D).global_position
+		var xz := Vector2(p.x, p.z)
+		if is_finite(xz.x) and is_finite(xz.y):
+			return xz
+	return region_center
+
+
 func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> void:
 	if registry == null or main == null or region.is_empty():
 		return
@@ -1515,6 +1527,9 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 			if not _nav_grid.configure_for_points(anchors):
 				_nav_grid = null
 				return
+			# People near the player path as soon as that window is baked.
+			# The rest of a festival grid keeps filling in behind it.
+			_nav_grid.set_priority_center(_nav_priority_center(main, center))
 			var reuse := prev_grid != null and prev_grid.is_ready() \
 					and terrain_fp == _nav_terrain_fp and _nav_grid.same_lattice(prev_grid)
 			_nav_terrain_fp = terrain_fp
@@ -2120,7 +2135,7 @@ func notify_world_changed() -> void:
 ## exactly the pre-3b behaviour.
 func _plan_path(from_xz: Vector2, to_xz: Vector2, from_key: String,
 		to_key: String, lane_seed: int) -> Variant:
-	if _nav_query == null or not _nav_query.is_ready():
+	if _nav_query == null or not _nav_query.usable_for(from_xz, to_xz):
 		return null
 	var cached := not from_key.is_empty() and not to_key.is_empty()
 	if not cached and _nav_queries_this_tick >= MAX_QUERIES_PER_TICK:
