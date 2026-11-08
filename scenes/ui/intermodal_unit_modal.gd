@@ -1,35 +1,34 @@
 extends CanvasLayer
-## Intermodal unit generator: pick a template (ISO container, pallet, IBC,
+## Intermodal unit designer: pick a template (ISO container, pallet, IBC,
 ## gaylord, drum, rack bay), edit its real dimensions and ratings, see it
-## built, save it to the user library (user://intermodal_units.json) and
-## place it in the world. Every number comes from IntermodalUnits.resolve,
-## the same entry the Packing Lab and the solver read.
+## built in the studio, save it to the user library
+## (user://intermodal_units.json) and place it in the world. Every number
+## comes from IntermodalUnits.resolve, the same entry the Packing Lab and
+## the solver read. On the kit since 2026-11-07: DesignerShell (the 720
+## fold), StudioViewport (the one studio), FormRow rows.
 
 signal closed
 
 const MODAL_NAME := "intermodal_units"
+const WANT := Vector2(1500, 920)
 
-var _list: ItemList
+var _shell: DesignerShell = null
+var _studio: StudioViewport = null
+var _list: ItemList = null
 var _ids: Array = []          # parallel to the list rows ("" = header)
-var _fields_box: VBoxContainer
-var _stats: Label
-var _name_edit: LineEdit
-var _delete_btn: Button
-var _status: Label
-
-var _vp: SubViewport
-var _cam: Camera3D
-var _holder: Node3D
-var _yaw: float = 0.7
-var _pitch: float = -0.45
-var _dist: float = 8.0
-var _target: Vector3 = Vector3.ZERO
-var _dragging: bool = false
+var _fields_box: VBoxContainer = null
+var _summary_box: VBoxContainer = null
+var _notes: Label = null
+var _status: Label = null
+var _delete_btn: Button = null
+var _doors_check: CheckButton = null
+var _doors_open := false
 
 var _template_id: String = ""
 var _unit_id: String = ""     # "" = editing a template, else a user unit
 var _params: Dictionary = {}
-var _building_fields: bool = false
+var _building_fields := false
+var _open := false
 
 
 static func open(tree: SceneTree, preselect_id: String = "") -> Node:
@@ -46,9 +45,12 @@ func _ready() -> void:
 
 
 func open_modal(preselect_id: String = "") -> void:
+	if _open:
+		return
+	_open = true
 	visible = true
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
 	HudLayout.claim_modal(MODAL_NAME)
+	_shell.open()
 	_refresh_list()
 	var pick := preselect_id
 	if pick.is_empty() and _ids.size() > 1:
@@ -57,19 +59,30 @@ func open_modal(preselect_id: String = "") -> void:
 
 
 func close() -> void:
-	if not visible:
+	if not _open:
 		return
+	if _shell.is_open():
+		_shell.close()   # emits closed -> _on_shell_closed
+	else:
+		_on_shell_closed()
+
+
+func _on_shell_closed() -> void:
+	if not _open:
+		return
+	_open = false
 	visible = false
-	CursorController.release_modal(MODAL_NAME)
 	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
 
-func _unhandled_key_input(event: InputEvent) -> void:
-	if visible and event is InputEventKey and event.pressed \
-			and (event as InputEventKey).keycode == KEY_ESCAPE:
-		get_viewport().set_input_as_handled()
-		close()
+func is_open() -> bool:
+	return _open
+
+
+## The spec as the world and the library take it.
+func current_spec() -> Dictionary:
+	return _current_spec()
 
 
 # --- UI -------------------------------------------------------------------
@@ -77,139 +90,90 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _build_ui() -> void:
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
-	var dim := ColorRect.new()
-	dim.color = Color(UITheme.C_BG, 0.88)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_child(dim)
-	var panel := PanelContainer.new()
-	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	panel.offset_left = 28
-	panel.offset_top = 28
-	panel.offset_right = -28
-	panel.offset_bottom = -28
-	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	root.add_child(panel)
-	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	panel.add_child(hb)
+	_shell = DesignerShell.create("Intermodal unit designer", "package", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true,
+		"left_label": "Units", "left_w": 250.0, "right_w": 380.0})
+	root.add_child(_shell)
+	_shell.closed.connect(_on_shell_closed)
+	_shell.name_submitted.connect(func(_t: String) -> void: _refresh_summary())
+	_shell.name_edit.placeholder_text = "Unit name"
+	_build_left()
+	_build_centre()
+	_build_right()
+	_shell.add_button("Reset to template", DesignerShell.SECONDARY, _on_reset,
+		"Every field back to the standard's numbers")
+	_delete_btn = _shell.add_button("Delete", DesignerShell.DESTRUCTIVE, _on_delete,
+		"Remove this unit from your library")
+	_shell.add_button("Save", DesignerShell.SECONDARY, _on_save,
+		"Keep the edits on this unit (a template is saved as a new unit)")
+	_shell.add_button("Save as new", DesignerShell.SECONDARY, _on_save_as,
+		"Keep these numbers as a new unit in your library")
+	var place := _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place,
+		"Put one on the site where you aim")
+	place.name = "place_world"
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
+	_shell.set_hint("Pick a unit on the left · edit its numbers on the right · drag to orbit · wheel to zoom")
 
-	# Left: the templates and saved units.
-	var left := VBoxContainer.new()
-	left.custom_minimum_size = Vector2(260, 0)
-	hb.add_child(left)
-	var lt := Label.new()
-	lt.text = "Units"
-	lt.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	lt.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	left.add_child(lt)
+
+func _build_left() -> void:
+	var box := VBoxContainer.new()
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_shell.left.add_child(box)
+	box.add_child(SectionHeader.make("Templates and your units", "",
+		"Real ISO, GMA, UN and RMI sizes; saved units keep your edits"))
 	_list = ItemList.new()
+	_list.name = "unit_list"
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_list.custom_minimum_size = Vector2(0, 320)
+	_list.focus_mode = Control.FOCUS_NONE
 	_list.item_selected.connect(_on_list_selected)
-	left.add_child(_list)
+	box.add_child(_list)
 
-	# Centre: the studio.
-	var svc := SubViewportContainer.new()
-	svc.stretch = true
-	svc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	svc.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	svc.mouse_filter = Control.MOUSE_FILTER_STOP
-	svc.gui_input.connect(_on_studio_input)
-	hb.add_child(svc)
-	_vp = SubViewport.new()
-	_vp.own_world_3d = true
-	_vp.size = Vector2i(640, 480)
-	svc.add_child(_vp)
-	var we := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.10, 0.13, 0.18)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.8, 0.82, 0.86)
-	env.ambient_light_energy = 0.7
-	we.environment = env
-	_vp.add_child(we)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48, 32, 0)
-	sun.light_energy = 1.1
-	_vp.add_child(sun)
-	var ground := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(40, 40)
-	ground.mesh = pm
-	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.22, 0.24, 0.26)
-	ground.material_override = gmat
-	_vp.add_child(ground)
-	_holder = Node3D.new()
-	_vp.add_child(_holder)
-	_cam = Camera3D.new()
-	_vp.add_child(_cam)
-	_cam.current = true
 
-	# Right: fields, stats, buttons.
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(360, 0)
-	side.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	hb.add_child(side)
-	var head := HBoxContainer.new()
-	side.add_child(head)
-	var title := Label.new()
-	title.text = "Intermodal unit"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	head.add_child(title)
-	head.add_child(IconButton.close(Callable(self, "close")))
+func _build_centre() -> void:
+	_studio = StudioViewport.create({"ground": true, "person": true, "ssao": true})
+	_studio.set_home(0.75, 0.32)
+	_shell.centre.add_child(_studio)
+	_doors_check = CheckButton.new()
+	_doors_check.text = "Doors open"
+	_doors_check.focus_mode = Control.FOCUS_NONE
+	_doors_check.tooltip_text = "Swing a container's doors back along its sides"
+	_doors_check.toggled.connect(func(on: bool) -> void:
+		_doors_open = on
+		_rebuild_preview())
+	_studio.strip.add_child(_doors_check)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_studio.strip.add_child(spacer)
+	var frame := IconButton.make("maximize-2", "Frame the unit", _frame)
+	_studio.strip.add_child(frame)
 
-	var nrow := HBoxContainer.new()
-	side.add_child(nrow)
-	var nl := Label.new()
-	nl.text = "Name"
-	nl.custom_minimum_size = Vector2(90, 0)
-	nrow.add_child(nl)
-	_name_edit = LineEdit.new()
-	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	nrow.add_child(_name_edit)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	side.add_child(scroll)
+func _build_right() -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_shell.right.add_child(box)
+	box.add_child(SectionHeader.make("Dimensions and ratings", ""))
 	_fields_box = VBoxContainer.new()
-	_fields_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_fields_box)
-
-	_stats = Label.new()
-	_stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_stats.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	side.add_child(_stats)
-
-	var row := HBoxContainer.new()
-	side.add_child(row)
-	row.add_child(_btn("Save", _on_save))
-	row.add_child(_btn("Save as new", _on_save_as))
-	_delete_btn = _btn("Delete", _on_delete)
-	row.add_child(_delete_btn)
-	var row2 := HBoxContainer.new()
-	side.add_child(row2)
-	row2.add_child(_btn("Reset to template", _on_reset))
-	row2.add_child(_btn("Place in world", _on_place))
+	_fields_box.add_theme_constant_override("separation", 2)
+	box.add_child(_fields_box)
+	_notes = Label.new()
+	_notes.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_notes.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_notes.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(_notes)
+	box.add_child(SectionHeader.make("What the solver sees", ""))
+	_summary_box = VBoxContainer.new()
+	_summary_box.add_theme_constant_override("separation", 2)
+	box.add_child(_summary_box)
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	side.add_child(_status)
-	_update_camera()
-
-
-func _btn(text: String, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
-	UITheme.style_button(b)
-	b.pressed.connect(cb)
-	return b
+	box.add_child(_status)
 
 
 func _refresh_list() -> void:
@@ -242,6 +206,7 @@ func _select_id(uid: String) -> void:
 	if idx < 0:
 		return
 	_list.select(idx)
+	_list.ensure_current_is_visible()
 	_load_unit(uid)
 
 
@@ -255,7 +220,7 @@ func _load_unit(uid: String) -> void:
 		_template_id = uid
 		_unit_id = ""
 		_params = IntermodalUnits.defaults(uid)
-		_name_edit.text = str(IntermodalUnits.template(uid).get("label", ""))
+		_shell.name_edit.text = str(IntermodalUnits.template(uid).get("label", ""))
 	else:
 		for u in IntermodalUnits.load_library():
 			if str(u.get("id", "")) == uid:
@@ -263,10 +228,14 @@ func _load_unit(uid: String) -> void:
 				_unit_id = uid
 				_params = IntermodalUnits.merged_params(_template_id,
 					u.get("params", {}))
-				_name_edit.text = str(u.get("label", ""))
+				_shell.name_edit.text = str(u.get("label", ""))
 	_delete_btn.disabled = _unit_id.is_empty()
+	var t := IntermodalUnits.template(_template_id)
+	_shell.set_subtitle(str(IntermodalUnits.FAMILY_LABELS.get(str(t.get("family", "")), "")))
+	_doors_check.visible = str(t.get("family", "")) == "container"
 	_build_fields()
 	_rebuild_preview()
+	_frame()
 
 
 func _build_fields() -> void:
@@ -278,76 +247,35 @@ func _build_fields() -> void:
 	for key in t.get("fields", []):
 		var k := str(key)
 		var f: Dictionary = IntermodalUnits.FIELDS.get(k, {})
-		var row := HBoxContainer.new()
-		_fields_box.add_child(row)
-		var l := Label.new()
-		l.text = str(f.get("label", k))
-		l.custom_minimum_size = Vector2(170, 0)
-		l.clip_text = true
-		row.add_child(l)
+		var label := str(f.get("label", k))
 		var kind := str(f.get("kind", "m"))
+		var row: FormRow = null
 		match kind:
 			"bool":
-				var cb := CheckBox.new()
-				cb.button_pressed = bool(_params.get(k, false))
-				cb.focus_mode = Control.FOCUS_NONE
-				cb.toggled.connect(func(on: bool) -> void: _set_param(k, on))
-				row.add_child(cb)
+				row = FormRow.check(label, "", func(on: bool) -> void: _set_param(k, on), "", k)
+				(row.control as CheckBox).button_pressed = bool(_params.get(k, false))
 			"choice":
-				var ob := OptionButton.new()
-				var choices: Array = f.get("choices", [])
-				for i in choices.size():
-					ob.add_item(str(choices[i]), i)
-					if str(choices[i]) == str(_params.get(k, "")):
-						ob.select(i)
-				ob.item_selected.connect(func(i: int) -> void:
-					_set_param(k, str(choices[i])))
-				row.add_child(ob)
+				var items: Array = []
+				for ch in f.get("choices", []):
+					items.append([str(ch), str(ch).capitalize()])
+				row = FormRow.option(label, items, func(v: Variant) -> void: _set_param(k, str(v)), "", k)
+				FormRow.select_meta(row.control as OptionButton, str(_params.get(k, "")))
+			"m":
+				row = FormRow.spin(label, 0.0, 20000.0, 1.0, "mm",
+					func(v: float) -> void: _set_param(k, v / 1000.0), "", k)
+				(row.control as SpinBox).allow_greater = true
+				row.set_value(float(_params.get(k, 0.0)) * 1000.0)
+			"kg", "l":
+				row = FormRow.spin(label, 0.0, 100000.0, 1.0, kind.to_upper() if kind == "l" else "kg",
+					func(v: float) -> void: _set_param(k, v), "", k)
+				(row.control as SpinBox).allow_greater = true
+				row.set_value(float(_params.get(k, 0.0)))
 			_:
-				var sb := SpinBox.new()
-				sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				sb.allow_greater = true
-				match kind:
-					"m":
-						sb.min_value = 0.0
-						sb.max_value = 20000.0
-						sb.step = 1.0
-						sb.suffix = "mm"
-						sb.value = float(_params.get(k, 0.0)) * 1000.0
-						sb.value_changed.connect(func(v: float) -> void:
-							_set_param(k, v / 1000.0))
-					"kg":
-						sb.min_value = 0.0
-						sb.max_value = 100000.0
-						sb.step = 1.0
-						sb.suffix = "kg"
-						sb.value = float(_params.get(k, 0.0))
-						sb.value_changed.connect(func(v: float) -> void:
-							_set_param(k, v))
-					"l":
-						sb.min_value = 0.0
-						sb.max_value = 100000.0
-						sb.step = 1.0
-						sb.suffix = "L"
-						sb.value = float(_params.get(k, 0.0))
-						sb.value_changed.connect(func(v: float) -> void:
-							_set_param(k, v))
-					_:
-						sb.min_value = float(f.get("min", 0))
-						sb.max_value = float(f.get("max", 100))
-						sb.step = 1.0
-						sb.value = float(_params.get(k, 0))
-						sb.value_changed.connect(func(v: float) -> void:
-							_set_param(k, int(v)))
-				row.add_child(sb)
-	var notes := str(t.get("notes", ""))
-	if not notes.is_empty():
-		var nl := Label.new()
-		nl.text = notes
-		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-		nl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		_fields_box.add_child(nl)
+				row = FormRow.spin(label, float(f.get("min", 0)), float(f.get("max", 100)), 1.0, "",
+					func(v: float) -> void: _set_param(k, int(v)), "", k)
+				row.set_value(float(_params.get(k, 0)))
+		_fields_box.add_child(row)
+	_notes.text = str(t.get("notes", ""))
 	_building_fields = false
 
 
@@ -360,52 +288,78 @@ func _set_param(key: String, value: Variant) -> void:
 
 func _current_spec() -> Dictionary:
 	return {"template": _template_id, "params": _params.duplicate(true),
-		"label": _name_edit.text, "unit_id": _unit_id}
+		"label": _shell.name_edit.text, "unit_id": _unit_id}
+
+
+func _preview_spec() -> Dictionary:
+	var s := _current_spec()
+	if _doors_open:
+		s["doors_open_deg"] = CargoContainerBuilder.DOORS_FOLDED_DEG
+	return s
 
 
 func _rebuild_preview() -> void:
-	for c in _holder.get_children():
-		_holder.remove_child(c)
+	if _template_id.is_empty():
+		_studio.clear()
+		return
+	var node := IntermodalUnitBuilder.build_node(_preview_spec(), "Preview")
+	_studio.show_node(node)
+	_refresh_summary()
+
+
+func _frame() -> void:
+	if _template_id.is_empty():
+		return
+	var e := IntermodalUnits.resolve(_template_id, _params, _unit_id, _shell.name_edit.text)
+	var ext: Dictionary = e.get("exterior", {})
+	var l := float(ext.get("l_m", 1.0))
+	var w := float(ext.get("w_m", 1.0))
+	var h := float(ext.get("h_m", 1.0))
+	_studio.reset_orbit()
+	_studio.frame_aabb(AABB(Vector3(-w * 0.5, 0.0, -l * 0.5), Vector3(w, h, l)), 0.45, 1.35)
+	_studio.place_person(maxf(w, l) * 0.5 + 0.3)
+
+
+func _refresh_summary() -> void:
+	for c in _summary_box.get_children():
+		_summary_box.remove_child(c)
 		c.queue_free()
 	if _template_id.is_empty():
 		return
-	var node := IntermodalUnitBuilder.build_node(_current_spec(), "Preview")
-	_holder.add_child(node)
-	var e := IntermodalUnits.resolve(_template_id, _params, _unit_id,
-		_name_edit.text)
-	var ext: Dictionary = e.get("exterior", {})
-	var span := maxf(float(ext.get("l_m", 1.0)), maxf(float(ext.get("w_m", 1.0)),
-		float(ext.get("h_m", 1.0))))
-	_target = Vector3(0, float(ext.get("h_m", 1.0)) * 0.5, 0)
-	_dist = clampf(span * 1.8 + 1.0, 1.5, 60.0)
-	_update_camera()
-	_stats.text = _stats_text(e)
-
-
-func _stats_text(e: Dictionary) -> String:
-	var lines: PackedStringArray = []
+	var e := IntermodalUnits.resolve(_template_id, _params, _unit_id, _shell.name_edit.text)
 	var ext: Dictionary = e.get("exterior", {})
 	var inn: Dictionary = e.get("interior", {})
-	lines.append("Outside %s" % _dims(ext))
+	_add_kv("Outside", _dims(ext), "Length × width × height")
 	if not inn.is_empty():
-		lines.append("Inside / load space %s (%s)" % [_dims(inn),
-			UiText.num(float(inn.get("l_m", 0.0)) * float(inn.get("w_m", 0.0))
-				* float(inn.get("h_m", 0.0)), "m³", 3)])
+		var vol := float(inn.get("l_m", 0.0)) * float(inn.get("w_m", 0.0)) * float(inn.get("h_m", 0.0))
+		_add_kv("Load space", _dims(inn), "What the solver fills")
+		_add_kv("Volume", UiText.num(vol, "m³", 3), "")
 	var door: Variant = e.get("door", null)
 	if door is Dictionary:
-		lines.append("Door %d × %d mm" % [roundi(float(door["w_m"]) * 1000.0),
-			roundi(float(door["h_m"]) * 1000.0)])
-	lines.append("Empty %s · payload %s" % [UiText.num(float(e.get("tare_kg", 0.0)), "kg", 3),
-		UiText.num(float(e.get("payload_kg", 0.0)), "kg", 3)])
+		_add_kv("Door", "%d × %d mm" % [roundi(float(door["w_m"]) * 1000.0),
+			roundi(float(door["h_m"]) * 1000.0)], "Fitting the volume is not fitting through the opening")
+	elif str(e.get("family", "")) == "container":
+		_add_kv("Door", "none (loaded from above)", "")
+	_add_kv("Empty", UiText.num(float(e.get("tare_kg", 0.0)), "kg", 3), "")
+	_add_kv("Payload", UiText.num(float(e.get("payload_kg", 0.0)), "kg", 3), "")
 	if e.has("floor_kg_per_m"):
-		lines.append("Floor %s per running metre" % UiText.num(
-			float(e["floor_kg_per_m"]), "kg", 3))
+		_add_kv("Floor", "%s per running metre" % UiText.num(float(e["floor_kg_per_m"]), "kg", 3), "")
 	if e.has("fork_entry"):
-		lines.append("Fork entry: %s" % str(e["fork_entry"]))
+		_add_kv("Fork entry", str(e["fork_entry"]), "")
 	if e.has("static_kg"):
-		lines.append("Static %s · racked %s" % [UiText.num(float(e["static_kg"]), "kg", 3),
-			UiText.num(float(e.get("rack_kg", 0.0)), "kg", 3)])
-	return "\n".join(lines)
+		_add_kv("Static", UiText.num(float(e["static_kg"]), "kg", 3), "Stacked on the ground")
+		_add_kv("Racked", UiText.num(float(e.get("rack_kg", 0.0)), "kg", 3), "On beams, unsupported underneath")
+	if e.has("volume_l"):
+		_add_kv("Liquid", UiText.num(float(e["volume_l"]), "L", 3), "")
+	if e.has("levels"):
+		_add_kv("Levels", UiText.count(int(e["levels"]), "beam level"), "")
+	var packed := IntermodalUnits.packed_spec_for(e)
+	if not packed.is_empty():
+		_add_kv("Ships as", PackedSpec.format_dims_short(packed), "The empty unit itself, as cargo")
+
+
+func _add_kv(k: String, v: String, tip: String) -> void:
+	_summary_box.add_child(FormRow.value(k, v, tip))
 
 
 func _dims(d: Dictionary) -> String:
@@ -441,7 +395,7 @@ func _on_delete() -> void:
 	if _unit_id.is_empty():
 		return
 	IntermodalUnits.remove_user_unit(_unit_id)
-	_status.text = "Deleted %s." % _name_edit.text
+	_status.text = "Deleted %s." % _shell.name_edit.text
 	var tid := _template_id
 	_refresh_list()
 	_select_id(tid)
@@ -472,33 +426,7 @@ func _on_place() -> void:
 
 
 func _label_or_default() -> String:
-	var l := _name_edit.text.strip_edges()
+	var l := _shell.name_edit.text.strip_edges()
 	if l.is_empty():
 		l = str(IntermodalUnits.template(_template_id).get("label", "Unit"))
 	return l
-
-
-# --- studio camera --------------------------------------------------------
-
-func _on_studio_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_dist = clampf(_dist * 0.9, 1.5, 60.0)
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_dist = clampf(_dist * 1.1, 1.5, 60.0)
-		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			_dragging = mb.pressed
-		_update_camera()
-	elif event is InputEventMouseMotion and _dragging:
-		var mm := event as InputEventMouseMotion
-		_yaw -= mm.relative.x * 0.008
-		_pitch = clampf(_pitch - mm.relative.y * 0.008, -1.35, -0.05)
-		_update_camera()
-
-
-func _update_camera() -> void:
-	if _cam == null:
-		return
-	var rot := Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, _pitch)
-	_cam.transform = Transform3D(rot, _target + rot * Vector3(0, 0, _dist))

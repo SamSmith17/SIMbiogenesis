@@ -8,6 +8,10 @@ extends RefCounted
 
 var st := SurfaceTool.new()
 var _count := 0
+## Every point and normal goes through this before it is emitted (a door
+## leaf swung open about its hinge, a part laid in a yard). Identity by
+## default, so the older builders are untouched.
+var xf := Transform3D.IDENTITY
 
 
 func _init() -> void:
@@ -19,6 +23,11 @@ func tri(a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
 		var t := b
 		b = c
 		c = t
+	if xf != Transform3D.IDENTITY:
+		a = xf * a
+		b = xf * b
+		c = xf * c
+		n = (xf.basis * n).normalized()
 	st.set_normal(n)
 	st.add_vertex(a)
 	st.set_normal(n)
@@ -74,6 +83,15 @@ func cylinder(center: Vector3, r: float, h: float, axis: Vector3 = Vector3.UP,
 		if caps:
 			tri(top, top + d0 * r, top + d1 * r, axis)
 			tri(bot, bot + d1 * r, bot + d0 * r, -axis)
+
+
+## Commits what was emitted as one surface carrying `material` (a
+## StructureMaterials look, say). Nothing emitted = no surface.
+func commit_with(mesh: ArrayMesh, material: Material) -> void:
+	if _count == 0:
+		return
+	st.commit(mesh)
+	mesh.surface_set_material(mesh.get_surface_count() - 1, material)
 
 
 ## Commits what was emitted as one surface with its own material. Nothing

@@ -10330,6 +10330,58 @@ and a stored null reads back as `"<null>"`, so a stale `stowed_in` silently
 blocked an erect-phase deploy until this was fixed. The container mesh is a
 solid box with no cavity, so the stack is invisible in-world — the Packing
 Lab (`--capture=packing`) is its visual surface.
+**Containers, the IBC and the Packing Lab look (2026-11-07).**
+- **`CargoContainerBuilder` draws the real box**: trapezoidal corrugation
+  (209 mm pitch, 36 mm deep) between corner posts on the sides and the front
+  end, eight ISO 1161 castings, top / bottom rails, a transversely
+  corrugated roof, a plywood floor on cross members, forklift pockets through
+  the bottom rails (20' only), and a door end with two corrugated leaves,
+  four lock rods with cams / keepers / handles, four hinges a leaf and
+  gaskets. One `_corrugated` emitter is the whole look. Materials are
+  `StructureMaterials` looks; the paint is `PAINTS` by name
+  (`container_spec.paint`, intermodal params `paint`, default `red` — the
+  reference photo). `opts.cutaway` builds SIX MeshInstance3Ds (`GROUPS`:
+  Floor / WallL / WallR / WallFront / Roof / Doors) instead of one "Mesh";
+  `opts.doors_open_deg` swings the leaves (`DOORS_FOLDED_DEG` 270 lays them
+  flat along the OUTSIDE of the sides). ⚠ The hinge pins stand at the post's
+  OUTER corner (`HINGE_PROUD`): pivoted on the inner edge a folded leaf went
+  through the side wall. The root carries `floor_y` / `interior_z0` metas,
+  which is how the Packing Lab stands its solver frame on the floor.
+  `cargo_doors.gd` reads the opening from the same constants.
+  `IntermodalMeshKit` gained `xf` (a transform every point goes through) and
+  `commit_with(mesh, material)`.
+- **The IBC is the project's own model**: `tools/diag/ibc_extract.gd` pulls
+  the `IBC_DXF` assembly out of the Mars site GLB once (squares it up by the
+  smallest footprint, pallet frame fitted to 1.2 x 1.0 m, 1.16 m tall, the
+  valve at +Z) into `assets/packing/ibc_tote.glb` (committed, ~1 MB, 30k
+  triangles). `IbcBuilder.build(entry)` instantiates it scaled per axis to
+  the entry's outside dims and dresses it (translucent HDPE bottle = the
+  biggest mesh, galvanised cage = every cylinder, dark pallet under 0.17 m,
+  black valve); the procedural tote stays as the fallback (`emit`), so a
+  selftest without the import still passes. `IntermodalUnitBuilder` routes
+  "ibc" to it (a node, not a mesh).
+- **Both modals are on the kit**: `intermodal_unit_modal.gd` (DesignerShell +
+  StudioViewport + FormRow rows, "Doors open" in the strip, a summary of what
+  the solver sees) and `packing_lab_modal.gd` (DesignerShell: the load on
+  the left, a StudioViewport with the REAL container in cutaway pieces —
+  roof off while the camera looks down, the walls between the camera and the
+  load hidden, doors folded back — every item drawn by `PackedFormBuilder`
+  at its placed size and tinted by its label, a hover tag, the load centre
+  as an amber disc on the floor; a load sheet of tiles on the right: fill,
+  load vs payload, load centre, side balance, axles; warnings as rows).
+  Non-container hosts get a plywood deck, a steel edge frame, frosted
+  walls, a cab on a truck and a tongue on a trailer; a pallet host draws
+  the pallet. The harness API is unchanged (`open_with_units`, `autopack`,
+  `_set_container`, `_yaw` + `_update_camera`, `set_load_level`,
+  `pallet_count`, `export_packing_lists`, `placed_rows`, `hidden_pieces`).
+  The custom-item form is a Collapsible in the left column.
+- Look check: `tools/diag/container_look_diag.gd` (WINDOWED, APPDATA at a
+  scratch folder, `--out=`): the 20' closed / open / cutaway, the 40' HC, the
+  IBC and a pallet + drum + gaylord, four views each. The selftest pins a
+  surface per material, every triangle wound to its normal, paint reaching
+  the shell, the six cutaway groups, the folded leaves along the sides and
+  the IBC's box.
+
 **Real shipping logistics (2026-10-30).**
 - **Handling units** (`PackKitter`, pure): designer parts (`parts_for_packing`)
  become what a crew actually moves. `handling_for(kg)`: "hand" ≤ 23 kg

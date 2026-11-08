@@ -31,10 +31,16 @@ static func plan(rec: Dictionary) -> Dictionary:
 		var l := float(ext.get("l_m", 6.058))
 		var w := float(ext.get("w_m", 2.438))
 		var h := float(ext.get("h_m", 2.591))
-		var cast := CargoContainerBuilder.CASTING_M
-		return {"kind": "container", "where": "rear", "z": l * 0.5, "x0": -w * 0.5 + cast * 0.4,
-			"x1": w * 0.5 - cast * 0.4, "y0": cast * 0.8, "y1": h - cast * 0.8,
-			"color": CargoContainerBuilder.DOOR_COLOR}
+		# The opening between the corner posts, from the sill to the header
+		# (CargoContainerBuilder's door end), in the box's own paint.
+		var ow := w - 2.0 * CargoContainerBuilder.POST_X
+		var sill := 0.015 + CargoContainerBuilder.BOTTOM_RAIL_H
+		var paint: Variant = (rec.get("container_spec", {}) as Dictionary).get("paint",
+			(rec.get("intermodal_spec", {}) as Dictionary).get("params", {}).get("paint",
+				CargoContainerBuilder.DEFAULT_PAINT))
+		return {"kind": "container", "where": "rear", "z": l * 0.5, "x0": -ow * 0.5,
+			"x1": ow * 0.5, "y0": sill, "y1": h - CargoContainerBuilder.CAST.y,
+			"color": CargoContainerBuilder.paint_color(paint).darkened(0.1)}
 	if not VehicleBuilder.handles(str(rec.get("model_id", ""))):
 		return {}
 	var d := VehicleDesign.solve(VehicleBuilder.spec_for_record(rec))

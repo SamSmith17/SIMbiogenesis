@@ -1,33 +1,34 @@
 extends CanvasLayer
 ## Packing Lab — interactive 3D packing ("the Tetris") — PACKING_PLAN.md
-## Phase 4 v1. A cutaway container in a SubViewport studio + a manifest
-## sidebar: Auto-pack seeds the layout from PackSolver, then the player
-## improves it by hand — select an item, aim, R to rotate, click to place;
-## click a placed box to take it back out (placement and removal are each
-## other's undo). Camera-facing walls hide themselves so the load is always
-## readable from any orbit angle.
+## Phase 4, rebuilt on the kit 2026-11-07. The real container stands in a
+## StudioViewport with its doors swung back (CargoContainerBuilder's cutaway
+## pieces: the roof and whichever walls sit between the camera and the load
+## hide themselves), every item is drawn in its PACKED form (PackedFormBuilder:
+## crates with battens, strapped bundles, panel stacks, drums), the load
+## centre is marked on the floor, and a load sheet of tiles on the right
+## reads fill, mass against payload, balance and the axle split live.
 ##
+## Auto-pack seeds the layout from PackSolver, then the player improves it
+## by hand — pick an item, aim, R to rotate, click to place; click a placed
+## item to take it back out (placement and removal are each other's undo).
 ## Validity reuses the SOLVER's own primitives (_overlaps_any/_supported),
 ## so a hand placement is legal exactly when an auto placement would be —
 ## the modal can never teach a packing the report would reject.
 ##
 ## Opened by the Site Report packing card ("Open Packing Lab…"), Q, or the
-## --capture=packing harness. Per-site layout persistence and the LIFO unpack
-## order (deliveries stow inside the container and come out top-first, see
-## UnpackScenario.stow_plan) have landed since v1; sub-container drill-in
-## (tote interiors) is still deferred (PACKING_PLAN.md Phase 4 status).
+## --capture=packing harness (which drives open_with_units / autopack /
+## _set_container / _yaw + _update_camera / set_load_level / pallet_count /
+## export_packing_lists / close — keep those names).
 
 signal closed
 
 const MODAL_NAME := "packing_lab"
+const WANT := Vector2(1640, 980)
 
 
 ## Direct entry point (Q / toggle_packing_lab): sweep the site cargo — the
 ## SAME graph + placed-prop manifest the Site Report card uses — and open the
-## Lab preselecting the smallest fitting vehicle. The Site Report path
-## (site_report_panel._open_packing_lab) predates this and stays; before the
-## hotkey the Lab was three levels deep behind K → packing card → button,
-## which is how a whole phase of PACKING_PLAN.md shipped near-undiscoverable.
+## Lab preselecting the smallest fitting vehicle.
 static func open_site_cargo(tree: SceneTree) -> void:
 	if tree == null or tree.root == null:
 		return
@@ -64,7 +65,6 @@ static func open_site_cargo(tree: SceneTree) -> void:
 		preselect)
 	modal.connect("closed", Callable(modal, "queue_free"))
 const GRID_SNAP := 0.05
-const SIDEBAR_W := 360.0
 ## Per-site hand-packed layouts: one JSON, keyed site|container|kit so the
 ## same truck at the same site reopens exactly as you left it.
 const LAYOUTS_PATH := "user://maps/packing_layouts.json"
@@ -73,6 +73,12 @@ const LAYOUTS_PATH := "user://maps/packing_layouts.json"
 const CUSTOM_ITEMS_PATH := "user://maps/packing_custom_items.json"
 ## Manifest exports land here by default (LinkageBom guide precedent).
 const EXPORT_DIR := "user://exports"
+## A wall hides when its outward normal points this far toward the camera.
+const HIDE_DOT := 0.25
+## The roof hides whenever the camera looks down this steeply.
+const ROOF_HIDE_PITCH := 0.12
+## How far an item's own colour pulls a form's wood / canvas toward it.
+const ITEM_TINT := 0.38
 
 var _restoring := false
 
@@ -86,31 +92,37 @@ var _last_solve: Dictionary = {}     # the last auto-pack's PackSolver result
 var _level_combo: OptionButton = null
 var _pallet_combo: OptionButton = null
 var _remaining: Array = []           # indices into _units, not yet placed
-var _placed: Array = []              # {unit_idx, pos, size, mesh}
+var _placed: Array = []              # {unit_idx, pos, size, mesh (the Node3D)}
 var _source_label := ""
 
 var _root: Control = null
-var _vp_container: SubViewportContainer = null
-var _viewport: SubViewport = null
-var _cam: Camera3D = null
-var _world_root: Node3D = null
-var _container_node: Node3D = null
+var _shell: DesignerShell = null
+var _studio: StudioViewport = null
+var _host_root: Node3D = null
 var _items_node: Node3D = null
 var _walls: Array = []               # [{mesh, normal}]
+var _roof: Node3D = null
+var _com_marker: MeshInstance3D = null
+var _hover_label: Label3D = null
+var _hover_idx := -1
+var _cutaway_mode := "auto"          # auto | open | full
 var _container_combo: OptionButton = null
+var _host_facts: Label = null
 var _kit_combo: OptionButton = null
 var _kit_id := ""
 var _deliver_btn: Button = null
 var _clear_dialog: ConfirmationDialog = null
 var _deliver_lbl: Label = null
 var _item_list: ItemList = null
-var _stats: RichTextLabel = null
 var _hint: Label = null
+var _warn_box: VBoxContainer = null
+var _tiles: Dictionary = {}          # id -> {panel, value, sub, bar}
+var _ghost_mat: StandardMaterial3D = null
 
 # Manifest export + custom-item entry (Phase 7).
 var _save_dialog: FileDialog = null
 var _pending_export := ""
-var _custom_popup: PanelContainer = null
+var _custom_popup: Collapsible = null
 var _ci_name: LineEdit = null
 var _ci_w: SpinBox = null
 var _ci_d: SpinBox = null
@@ -120,17 +132,19 @@ var _ci_count: SpinBox = null
 var _ci_stackable: CheckBox = null
 var _ci_tsu: CheckBox = null
 
+## Orbit (the harness sets _yaw and calls _update_camera).
 var _yaw := -0.7
-var _pitch := -0.55
+var _pitch := 0.55
 var _dist := 8.0
-var _orbiting := false
+var _open := false
 
-var _ghost: MeshInstance3D = null
+var _ghost: Node3D = null
 var _ghost_unit := -1
 var _ghost_orients: Array = []
 var _ghost_orient := 0
 var _ghost_pos := Vector3.ZERO
 var _ghost_valid := false
+var _last_mouse := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -150,18 +164,30 @@ func open_with_units(units: Array, source_label: String,
 	_raw_units = units.duplicate()
 	_source_label = source_label
 	_rebuild_units(false)
+	if not _open:
+		_open = true
+		visible = true
+		HudLayout.claim_modal(MODAL_NAME)
+		_shell.open()
+	_shell.set_subtitle(source_label)
 	_set_container(container_id)
 	_update_delivery_ui()
-	visible = true
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	HudLayout.claim_modal(MODAL_NAME)
 
 
 func close() -> void:
-	if not visible:
+	if not _open:
 		return
+	if _shell.is_open():
+		_shell.close()   # emits closed -> _on_shell_closed
+	else:
+		_on_shell_closed()
+
+
+func _on_shell_closed() -> void:
+	if not _open:
+		return
+	_open = false
 	visible = false
-	CursorController.release_modal(MODAL_NAME)
 	HudLayout.release(MODAL_NAME)
 	closed.emit()
 
@@ -208,6 +234,28 @@ func last_solve() -> Dictionary:
 	return _last_solve
 
 
+## What is placed, for checks: [{label, pos, size}].
+func placed_rows() -> Array:
+	var out: Array = []
+	for p in _placed:
+		var d := p as Dictionary
+		out.append({"label": str((_units[int(d["unit_idx"])] as Dictionary).get("label", "?")),
+			"pos": d["pos"], "size": d["size"]})
+	return out
+
+
+## Which cutaway pieces are hidden right now (for checks).
+func hidden_pieces() -> Array:
+	var out: Array = []
+	for w in _walls:
+		var n := (w as Dictionary)["mesh"] as Node3D
+		if n != null and not n.visible:
+			out.append(n.name)
+	if _roof != null and not _roof.visible:
+		out.append(_roof.name)
+	return out
+
+
 ## `_units` from the source manifest at the current load level.
 func _rebuild_units(refresh: bool) -> void:
 	_palletized = {}
@@ -239,7 +287,8 @@ func _sync_level_ui() -> void:
 # ---------------------------------------------------------------------------
 
 func _set_container(container_id: String) -> void:
-	var entry := _vehicle_bay_entry(container_id) if container_id.begins_with("vehicle_bay:") 		else ContainerCatalog.find(container_id)
+	var entry := _vehicle_bay_entry(container_id) if container_id.begins_with("vehicle_bay:") \
+		else ContainerCatalog.find(container_id)
 	if entry.is_empty():
 		entry = ContainerCatalog.find("uhaul_15")
 	_entry = entry
@@ -253,6 +302,8 @@ func _set_container(container_id: String) -> void:
 	_frame_camera()
 	_try_restore_layout()
 	_refresh_lists()
+	_refresh_host_facts()
+	_update_delivery_ui()
 
 
 # ---------------------------------------------------------------------------
@@ -424,8 +475,9 @@ func _try_restore_layout() -> void:
 
 func _clear_placements() -> void:
 	_cancel_ghost()
+	_set_hover(-1)
 	for p in _placed:
-		var m: MeshInstance3D = (p as Dictionary)["mesh"]
+		var m: Node3D = (p as Dictionary)["mesh"]
 		if is_instance_valid(m):
 			m.queue_free()
 	_placed.clear()
@@ -502,14 +554,13 @@ func _on_kit_selected(idx: int) -> void:
 	var flat := PackTree.flatten(PackDefs.realize(kit_id))
 	_raw_units = (flat["items"] as Array).duplicate()
 	_source_label = str(_kit_combo.get_item_text(idx))
+	_shell.set_subtitle(_source_label)
 	_rebuild_units(true)
 
 
 ## Delivery scenario for the current kit selection. Mapped through the
 ## scenario's own pack_kit_id (no kit selected → the starter camp; a kit
-## with NO scenario → "" and Deliver disables). The old fallback silently
-## coerced any unmapped kit to starter_camp — selecting the Solar Starter
-## Kit and pressing Deliver shipped a camp.
+## with NO scenario → "" and Deliver disables).
 func _scenario_id() -> String:
 	if _kit_id.is_empty():
 		return "starter_camp"
@@ -545,7 +596,7 @@ func _update_delivery_ui() -> void:
 	if e4.is_empty():
 		_deliver_lbl.text = ""
 		return
-	_deliver_lbl.text = "%s — unloading over 20 m:\n4 people: %s, about %.0f s · 12 people: %s, about %.0f s" % [
+	_deliver_lbl.text = "%s — unloading over 20 m\n4 people: %s, about %.0f s\n12 people: %s, about %.0f s" % [
 		str(sc.get("label", sid)),
 		str(e4["strategy"]).replace("_", " "), float(e4["eta_s"]),
 		str(e12["strategy"]).replace("_", " "), float(e12["eta_s"])]
@@ -582,11 +633,11 @@ func _on_deliver() -> void:
 		# Load: the crates go into this vehicle's bay. The Lab stays open.
 		var vres: Dictionary = loader.call("deliver_kit_in_vehicle", _scenario_id(), vid)
 		if vres.is_empty():
-			_hint.text = "Could not load it — does this vehicle have a cargo bay?"
+			_set_hint("Could not load it — does this vehicle have a cargo bay?")
 			return
 		var nv := (vres.get("crate_ids", []) as Array).size()
 		_toast("Loaded %s into %s — the crew unloads it when it is parked" % [UiText.count(nv, "crate"), _bay_vehicle_name(vid)])
-		_hint.text = "Loaded %s into %s" % [UiText.count(nv, "crate"), _bay_vehicle_name(vid)]
+		_set_hint("Loaded %s into %s" % [UiText.count(nv, "crate"), _bay_vehicle_name(vid)])
 		return
 	var scene := get_tree().current_scene
 	var player: Node3D = scene.find_child("Player", true, false) as Node3D
@@ -606,14 +657,11 @@ func _on_deliver() -> void:
 	var yaw_deg := rad_to_deg(atan2(-fwd.x, -fwd.z))
 	var res: Dictionary = loader.call("deliver_packed_kit", _scenario_id(), cx, cz, yaw_deg)
 	if res.is_empty():
-		_hint.text = "Delivery failed — is this a generated location map?"
+		_set_hint("Delivery failed — is this a generated location map?")
 		return
-	# Same handoff shape as the crew-build queue: close the modal and put
-	# the player where the action is — here that's the 3D world (the crates
-	# are 14 m in front of them), with the toast noting the crew job.
 	var n_crates := (res.get("crate_ids", []) as Array).size()
 	_toast("%s delivered ahead of you — the crew unloads them; Interact on a crate unpacks it" % UiText.count(n_crates, "crate"))
-	_hint.text = "Delivered %s 14 m ahead of you" % UiText.count(n_crates, "crate")
+	_set_hint("Delivered %s 14 m ahead of you" % UiText.count(n_crates, "crate"))
 
 
 func _toast(text: String) -> void:
@@ -657,18 +705,18 @@ func _valid_at(pos: Vector3, size: Vector3) -> bool:
 
 
 func _place(unit_idx: int, pos: Vector3, size: Vector3) -> void:
-	var mesh := _make_box_mesh(size, _color_for(str(
-		(_units[unit_idx] as Dictionary).get("label", "?"))), false)
-	mesh.position = pos + size * 0.5
-	_items_node.add_child(mesh)
-	_placed.append({"unit_idx": unit_idx, "pos": pos, "size": size, "mesh": mesh})
+	var node := _make_item_node(_units[unit_idx] as Dictionary, size, false)
+	node.position = pos + Vector3(size.x * 0.5, 0.0, size.z * 0.5)
+	_items_node.add_child(node)
+	_placed.append({"unit_idx": unit_idx, "pos": pos, "size": size, "mesh": node})
 	_remaining.erase(unit_idx)
 
 
 func _remove_placed(placed_idx: int) -> void:
+	_set_hover(-1)
 	var d := _placed[placed_idx] as Dictionary
 	if is_instance_valid(d["mesh"]):
-		(d["mesh"] as MeshInstance3D).queue_free()
+		(d["mesh"] as Node3D).queue_free()
 	_remaining.append(int(d["unit_idx"]))
 	_remaining.sort()
 	_placed.remove_at(placed_idx)
@@ -682,12 +730,16 @@ func _remove_placed(placed_idx: int) -> void:
 
 func _begin_ghost(unit_idx: int) -> void:
 	_cancel_ghost()
+	_set_hover(-1)
 	_ghost_unit = unit_idx
 	var unit: Dictionary = _units[unit_idx]
 	_ghost_orients = PackSolver._orientations(unit)
 	_ghost_orient = 0
-	_ghost = _make_box_mesh(_ghost_orients[0] as Vector3, Color(0.3, 1.0, 0.4), true)
+	_ghost = _make_item_node(unit, _ghost_orients[0] as Vector3, true)
 	_items_node.add_child(_ghost)
+	_ghost_valid = false
+	_tint_ghost(false)
+	_shell.set_mode("Placing %s · aim in the box · click to set it down · R turns · right-click cancels" % str(unit.get("label", "?")))
 	_update_hint()
 
 
@@ -696,6 +748,8 @@ func _cancel_ghost() -> void:
 		_ghost.queue_free()
 	_ghost = null
 	_ghost_unit = -1
+	if _shell != null:
+		_shell.set_mode("")
 	_update_hint()
 
 
@@ -709,21 +763,24 @@ func _rotate_ghost() -> void:
 	if _ghost_unit < 0:
 		return
 	_ghost_orient = (_ghost_orient + 1) % _ghost_orients.size()
-	var size := _ghost_size()
-	_ghost.mesh = _box_mesh_res(size)
-	_update_ghost_at_last_mouse()
-
-
-var _last_mouse := Vector2.ZERO
+	var unit: Dictionary = _units[_ghost_unit]
+	if _ghost != null and is_instance_valid(_ghost):
+		_ghost.queue_free()
+	_ghost = _make_item_node(unit, _ghost_size(), true)
+	_items_node.add_child(_ghost)
+	_update_ghost(_last_mouse)
 
 
 func _update_ghost(mouse_pos: Vector2) -> void:
 	_last_mouse = mouse_pos
-	if _ghost_unit < 0 or _cam == null:
+	if _ghost_unit < 0 or _studio == null or _ghost == null:
 		return
 	var size := _ghost_size()
-	var origin := _cam.project_ray_origin(mouse_pos)
-	var dir := _cam.project_ray_normal(mouse_pos)
+	var ray := _studio.pick_ray(mouse_pos)
+	if ray.is_empty():
+		return
+	var origin: Vector3 = ray["origin"]
+	var dir: Vector3 = ray["dir"]
 	# Aim point: ray ∩ floor plane (y=0), clamped into the interior.
 	if absf(dir.y) < 0.0001:
 		return
@@ -746,21 +803,14 @@ func _update_ghost(mouse_pos: Vector2) -> void:
 			py = maxf(py, bp.y + bs.y)
 	_ghost_pos = Vector3(px, py, pz)
 	_ghost_valid = _valid_at(_ghost_pos, size)
-	_ghost.position = _ghost_pos + size * 0.5
+	_ghost.position = _ghost_pos + Vector3(size.x * 0.5, 0.0, size.z * 0.5)
 	_tint_ghost(_ghost_valid)
 
 
-func _update_ghost_at_last_mouse() -> void:
-	_update_ghost(_last_mouse)
-
-
 func _tint_ghost(valid: bool) -> void:
-	if _ghost == null:
-		return
-	var mat := _ghost.material_override as StandardMaterial3D
-	if mat != null:
-		mat.albedo_color = Color(0.3, 1.0, 0.4, 0.45) if valid \
-			else Color(1.0, 0.25, 0.2, 0.45)
+	if _ghost_mat != null:
+		_ghost_mat.albedo_color = Color(0.3, 1.0, 0.45, 0.5) if valid \
+			else Color(1.0, 0.25, 0.2, 0.5)
 
 
 func _commit_ghost() -> void:
@@ -773,46 +823,47 @@ func _commit_ghost() -> void:
 	_place(idx, pos, size)
 	_refresh_lists()
 	_save_layout()
+	# The next of the same kind, so a row of crates goes in click by click.
+	for n in _remaining:
+		if str((_units[int(n)] as Dictionary).get("label", "")) == str((_units[idx] as Dictionary).get("label", "?")):
+			_begin_ghost(int(n))
+			_update_ghost(_last_mouse)
+			break
 
 
 # ---------------------------------------------------------------------------
-# Studio input (orbit / place / remove)
+# Studio input (orbit comes from the kit; place / pick / hover here)
 # ---------------------------------------------------------------------------
 
-func _on_studio_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			_dist = maxf(_dist * 0.9, 1.5)
-			_update_camera()
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_dist = minf(_dist * 1.1, 60.0)
-			_update_camera()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			if mb.pressed and _ghost_unit >= 0:
-				_cancel_ghost()
-				_refresh_lists()
-			else:
-				_orbiting = mb.pressed
-		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
-			_orbiting = mb.pressed
-		elif mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			if _ghost_unit >= 0:
-				_commit_ghost()
-			else:
-				var hit := _pick_placed(mb.position)
-				if hit >= 0:
-					_remove_placed(hit)
-	elif event is InputEventMouseMotion:
-		var mm := event as InputEventMouseMotion
-		if _orbiting:
-			_yaw -= mm.relative.x * 0.008
-			_pitch = clampf(_pitch - mm.relative.y * 0.008, -1.35, -0.05)
-			_update_camera()
-		elif _ghost_unit >= 0:
+## Before the studio's own orbit: the ghost follows every motion event (the
+## kit's `hovered` fires every fourth), a right-click puts a ghost down.
+func _studio_hook(e: InputEvent) -> bool:
+	if e is InputEventMouseMotion:
+		var mm := e as InputEventMouseMotion
+		if _ghost_unit >= 0:
 			_update_ghost(mm.position)
 		else:
 			_hover_placed(mm.position)
+		return false
+	if e is InputEventMouseButton:
+		var mb := e as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed and _ghost_unit >= 0:
+			_cancel_ghost()
+			_refresh_lists()
+			return true
+	return false
+
+
+func _on_studio_clicked(pos: Vector2, button: int) -> void:
+	if button != MOUSE_BUTTON_LEFT:
+		return
+	if _ghost_unit >= 0:
+		_update_ghost(pos)
+		_commit_ghost()
+		return
+	var hit := _pick_placed(pos)
+	if hit >= 0:
+		_remove_placed(hit)
 
 
 ## R rotates the ghost — handled at the modal level (not the studio's
@@ -824,14 +875,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if event is InputEventKey and (event as InputEventKey).pressed \
 			and (event as InputEventKey).physical_keycode == KEY_R:
 		_rotate_ghost()
+		get_viewport().set_input_as_handled()
 
 
 ## Ray-pick the nearest placed box (slab AABB test in container space).
 func _pick_placed(mouse_pos: Vector2) -> int:
-	if _cam == null:
+	var ray := _studio.pick_ray(mouse_pos) if _studio != null else {}
+	if ray.is_empty():
 		return -1
-	var origin := _cam.project_ray_origin(mouse_pos)
-	var dir := _cam.project_ray_normal(mouse_pos)
+	var origin: Vector3 = ray["origin"]
+	var dir: Vector3 = ray["dir"]
 	var best := -1
 	var best_t := INF
 	for i in _placed.size():
@@ -866,74 +919,253 @@ static func _ray_aabb(origin: Vector3, dir: Vector3, aabb: AABB) -> Variant:
 
 
 func _hover_placed(mouse_pos: Vector2) -> void:
-	var hit := _pick_placed(mouse_pos)
-	if hit >= 0:
-		var d := _placed[hit] as Dictionary
+	_set_hover(_pick_placed(mouse_pos))
+
+
+## The hovered item lights up and carries its name; the hint says what a
+## click does.
+func _set_hover(idx: int) -> void:
+	if idx == _hover_idx:
+		return
+	if _hover_idx >= 0 and _hover_idx < _placed.size():
+		_glow(((_placed[_hover_idx] as Dictionary)["mesh"]) as Node3D, false)
+	_hover_idx = idx
+	if idx >= 0 and idx < _placed.size():
+		var d := _placed[idx] as Dictionary
 		var unit: Dictionary = _units[int(d["unit_idx"])]
-		_hint.text = "%s — click to take back out" % str(unit.get("label", "?"))
+		var node := d["mesh"] as Node3D
+		_glow(node, true)
+		if _hover_label != null:
+			var size: Vector3 = d["size"]
+			_hover_label.visible = true
+			_hover_label.position = (d["pos"] as Vector3) + Vector3(size.x * 0.5, size.y + 0.18, size.z * 0.5)
+			var m := float(unit.get("mass_kg", -1.0))
+			_hover_label.text = "%s\n%s%s" % [str(unit.get("label", "?")),
+				PackedSpec.format_dims_short(unit),
+				(" · %s" % UiText.num(m, "kg", 3)) if m > 0.0 else ""]
+		_set_hint("%s — click to take it back out" % str(unit.get("label", "?")))
 	else:
+		if _hover_label != null:
+			_hover_label.visible = false
 		_update_hint()
+
+
+static func _glow(node: Node3D, on: bool) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	for m in node.find_children("*", "MeshInstance3D", true, false):
+		var mi := m as MeshInstance3D
+		var mat := mi.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		mat.emission_enabled = on
+		if on:
+			mat.emission = Color(0.9, 0.95, 1.0)
+			mat.emission_energy_multiplier = 0.22
 
 
 # ---------------------------------------------------------------------------
 # Scene building
 # ---------------------------------------------------------------------------
 
+func _is_iso_container() -> bool:
+	return str(_entry.get("kind", "")) == "container" \
+		or str(_entry.get("id", "")).begins_with("iso_") \
+		or str(_entry.get("family", "")) == "container"
+
+
 func _rebuild_container_visual() -> void:
-	for c in _container_node.get_children():
+	for c in _host_root.get_children():
+		_host_root.remove_child(c)
 		c.queue_free()
 	_walls.clear()
+	_roof = null
 	var dims := _interior_dims()
-	var wall_t := 0.05
-	var wall_col := Color(0.45, 0.52, 0.60, 0.35)
-	# Floor.
-	var floor_mesh := _make_slab(Vector3(dims.x + wall_t * 2.0, wall_t, dims.z + wall_t * 2.0),
-		Color(0.35, 0.40, 0.46, 1.0))
-	floor_mesh.position = Vector3(dims.x * 0.5, -wall_t * 0.5, dims.z * 0.5)
-	_container_node.add_child(floor_mesh)
-	# Four walls, each remembering its outward normal for the cutaway hide.
+	if _is_iso_container() and _entry.has("exterior"):
+		_build_iso_host(dims)
+	else:
+		_build_generic_host(dims)
+	# The load centre, on the floor.
+	_com_marker = MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.14
+	cm.bottom_radius = 0.14
+	cm.height = 0.012
+	cm.radial_segments = 24
+	_com_marker.mesh = cm
+	var cmat := StandardMaterial3D.new()
+	cmat.albedo_color = UITheme.C_AMBER
+	cmat.emission_enabled = true
+	cmat.emission = UITheme.C_AMBER
+	cmat.emission_energy_multiplier = 0.6
+	_com_marker.material_override = cmat
+	_com_marker.visible = false
+	_host_root.add_child(_com_marker)
+	# The hover tag.
+	_hover_label = Label3D.new()
+	_hover_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_hover_label.no_depth_test = true
+	_hover_label.font_size = 40
+	_hover_label.pixel_size = 0.0035
+	_hover_label.outline_size = 10
+	_hover_label.modulate = UITheme.C_TEXT
+	_hover_label.visible = false
+	_host_root.add_child(_hover_label)
+	_apply_cutaway()
+
+
+## The real ISO box, doors folded back, in six cutaway pieces; its load
+## floor on the solver's y = 0, its front inside face on z = 0.
+func _build_iso_host(dims: Vector3) -> void:
+	var paint: Variant = _entry.get("paint", (_entry.get("params", {}) as Dictionary).get("paint",
+		CargoContainerBuilder.DEFAULT_PAINT))
+	var host := CargoContainerBuilder.build_from_entry(_entry, "Host",
+		{"cutaway": true, "doors_open_deg": CargoContainerBuilder.DOORS_FOLDED_DEG, "paint": paint})
+	var ext: Dictionary = _entry.get("exterior", {})
+	var floor_y := float(host.get_meta("floor_y", 0.168))
+	var z0 := float(host.get_meta("interior_z0", -float(ext.get("l_m", 6.058)) * 0.5))
+	host.position = Vector3(dims.x * 0.5, -floor_y, -z0)
+	_host_root.add_child(host)
+	for spec in [["WallL", Vector3.LEFT], ["WallR", Vector3.RIGHT], ["WallFront", Vector3.FORWARD]]:
+		var n := host.get_node_or_null(str(spec[0])) as Node3D
+		if n != null:
+			_walls.append({"mesh": n, "normal": spec[1] as Vector3})
+	_roof = host.get_node_or_null("Roof") as Node3D
+	_hide_studio_ground_under(dims, -floor_y)
+
+
+## Trucks, trailers, pallets and bins: a plywood deck, a steel edge frame,
+## frosted walls that hide toward the camera, an amber door frame where the
+## load comes out; a pallet carries its own deck underneath.
+func _build_generic_host(dims: Vector3) -> void:
+	var wall_t := 0.04
+	var kind := str(_entry.get("kind", ""))
+	var is_pallet := bool(_entry.get("pallet", false)) or str(_entry.get("family", "")) == "pallet"
+	var open_top := _entry.get("door") == null
+	if is_pallet:
+		var unit := IntermodalUnitBuilder.build_node({"template": str(_entry.get("template", "pallet_gma"))}, "Pallet")
+		var deck := float(_entry.get("deck_h_m", 0.144))
+		unit.position = Vector3(dims.x * 0.5, -deck, dims.z * 0.5)
+		_host_root.add_child(unit)
+	else:
+		var floor_mesh := _slab(Vector3(dims.x + wall_t * 2.0, wall_t, dims.z + wall_t * 2.0),
+			StructureMaterials.make(StructureMaterials.Kind.PLYWOOD, Color(0.50, 0.40, 0.27)))
+		floor_mesh.position = Vector3(dims.x * 0.5, -wall_t * 0.5, dims.z * 0.5)
+		_host_root.add_child(floor_mesh)
+	# Walls (none on a pallet; a bin's are its own height).
+	var wall_h := dims.y
+	var wall_mat := StandardMaterial3D.new()
+	wall_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	wall_mat.albedo_color = Color(0.70, 0.76, 0.84, 0.16)
+	wall_mat.roughness = 0.6
+	wall_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var frame_mat := StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.55, 0.58, 0.62))
 	var specs := [
-		[Vector3(dims.x * 0.5, dims.y * 0.5, -wall_t * 0.5),
-			Vector3(dims.x, dims.y, wall_t), Vector3.FORWARD],
-		[Vector3(dims.x * 0.5, dims.y * 0.5, dims.z + wall_t * 0.5),
-			Vector3(dims.x, dims.y, wall_t), Vector3.BACK],
-		[Vector3(-wall_t * 0.5, dims.y * 0.5, dims.z * 0.5),
-			Vector3(wall_t, dims.y, dims.z), Vector3.LEFT],
-		[Vector3(dims.x + wall_t * 0.5, dims.y * 0.5, dims.z * 0.5),
-			Vector3(wall_t, dims.y, dims.z), Vector3.RIGHT],
+		[Vector3(dims.x * 0.5, wall_h * 0.5, -wall_t * 0.5), Vector3(dims.x, wall_h, wall_t), Vector3.FORWARD],
+		[Vector3(dims.x * 0.5, wall_h * 0.5, dims.z + wall_t * 0.5), Vector3(dims.x, wall_h, wall_t), Vector3.BACK],
+		[Vector3(-wall_t * 0.5, wall_h * 0.5, dims.z * 0.5), Vector3(wall_t, wall_h, dims.z), Vector3.LEFT],
+		[Vector3(dims.x + wall_t * 0.5, wall_h * 0.5, dims.z * 0.5), Vector3(wall_t, wall_h, dims.z), Vector3.RIGHT],
 	]
-	for s in specs:
-		var w := _make_slab(s[1] as Vector3, wall_col)
-		w.position = s[0] as Vector3
-		_container_node.add_child(w)
-		_walls.append({"mesh": w, "normal": s[2] as Vector3})
+	if not is_pallet:
+		for s in specs:
+			var w := _slab(s[1] as Vector3, wall_mat)
+			w.position = s[0] as Vector3
+			_host_root.add_child(w)
+			_walls.append({"mesh": w, "normal": s[2] as Vector3})
+	# Edge frame: the four uprights and the top rails (a load-height line on
+	# a pallet), so the volume reads with its walls hidden.
+	var post := 0.05
+	var frame := Node3D.new()
+	frame.name = "Frame"
+	_host_root.add_child(frame)
+	for sx in [0.0, 1.0]:
+		for sz in [0.0, 1.0]:
+			var p := _slab(Vector3(post, wall_h, post), frame_mat)
+			p.position = Vector3(float(sx) * dims.x + (float(sx) * 2.0 - 1.0) * post * 0.5, wall_h * 0.5,
+				float(sz) * dims.z + (float(sz) * 2.0 - 1.0) * post * 0.5)
+			frame.add_child(p)
+	for sz in [0.0, 1.0]:
+		var r := _slab(Vector3(dims.x + post * 2.0, post, post), frame_mat)
+		r.position = Vector3(dims.x * 0.5, wall_h + post * 0.5, float(sz) * dims.z + (float(sz) * 2.0 - 1.0) * post * 0.5)
+		frame.add_child(r)
+	for sx in [0.0, 1.0]:
+		var r2 := _slab(Vector3(post, post, dims.z), frame_mat)
+		r2.position = Vector3(float(sx) * dims.x + (float(sx) * 2.0 - 1.0) * post * 0.5, wall_h + post * 0.5, dims.z * 0.5)
+		frame.add_child(r2)
+	# A truck's cab at the nose, so the load reads front to back.
+	if kind == "vehicle":
+		var cab := _slab(Vector3(dims.x * 0.96, wall_h * 0.72, 1.5),
+			StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.86, 0.86, 0.84)))
+		cab.position = Vector3(dims.x * 0.5, wall_h * 0.36, -0.9 - wall_t)
+		_host_root.add_child(cab)
+		var glass := _slab(Vector3(dims.x * 0.9, wall_h * 0.28, 0.03),
+			StructureMaterials.make(StructureMaterials.Kind.GLAZING, Color(0.2, 0.3, 0.4)))
+		glass.position = Vector3(dims.x * 0.5, wall_h * 0.52, -1.66 - wall_t)
+		_host_root.add_child(glass)
+	elif kind == "trailer":
+		var tongue := _slab(Vector3(0.1, 0.1, 1.4), frame_mat)
+		tongue.position = Vector3(dims.x * 0.5, -0.1, -0.7 - wall_t)
+		_host_root.add_child(tongue)
 	# Door aperture marker at the HIGH-z end: the solver fills from z=0 first,
-	# so z=0 is the nose and the door is where filling ends — auto-packs then
-	# read as loaded nose-first, the way a truck is actually loaded (and the
-	# order LIFO unpack warnings will lean on later).
+	# so z=0 is the nose and the door is where filling ends.
 	var door = _entry.get("door")
-	if door != null:
+	if door != null and not open_top:
 		var dd := door as Dictionary
 		var dw := float(dd.get("w_m", 0.0))
 		var dh := float(dd.get("h_m", 0.0))
-		var frame := _make_slab(Vector3(dw, dh, 0.02), Color(1.0, 0.75, 0.25, 0.30))
-		frame.position = Vector3(dims.x * 0.5, dh * 0.5, dims.z + 0.02)
-		_container_node.add_child(frame)
+		var dmat := StandardMaterial3D.new()
+		dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dmat.albedo_color = Color(UITheme.C_AMBER, 0.22)
+		dmat.emission_enabled = true
+		dmat.emission = UITheme.C_AMBER
+		dmat.emission_energy_multiplier = 0.3
+		var fr := _slab(Vector3(dw, dh, 0.02), dmat)
+		fr.position = Vector3(dims.x * 0.5, dh * 0.5, dims.z + 0.03)
+		_host_root.add_child(fr)
+	_hide_studio_ground_under(dims, -0.05)
+
+
+## The studio's matte ground sits just under the host's floor.
+func _hide_studio_ground_under(_dims: Vector3, floor_y: float) -> void:
+	if _studio != null and _studio.ground != null:
+		_studio.ground.position.y = floor_y - 0.002
+
+
+## Hide the roof and whichever walls stand between the camera and the load.
+func _apply_cutaway() -> void:
+	if _studio == null or _studio.camera == null:
+		return
+	var to_cam := (_studio.camera.global_position - _studio.target).normalized()
+	for w in _walls:
+		var wd := w as Dictionary
+		var n := wd["mesh"] as Node3D
+		if n == null or not is_instance_valid(n):
+			continue
+		match _cutaway_mode:
+			"full":
+				n.visible = true
+			"open":
+				n.visible = true
+			_:
+				n.visible = (wd["normal"] as Vector3).dot(to_cam) < HIDE_DOT
+	if _roof != null and is_instance_valid(_roof):
+		_roof.visible = _cutaway_mode == "full" or (_cutaway_mode == "auto" and _studio.pitch < ROOF_HIDE_PITCH)
 
 
 func _update_camera() -> void:
-	if _cam == null:
+	if _studio == null:
 		return
 	var dims := _interior_dims()
-	var target := Vector3(dims.x * 0.5, dims.y * 0.35, dims.z * 0.5)
-	var rot := Basis(Vector3.UP, _yaw) * Basis(Vector3.RIGHT, _pitch)
-	_cam.position = target + (rot * Vector3(0, 0, _dist))
-	_cam.look_at(target)
-	# Cutaway: hide walls whose outward normal faces the camera.
-	var to_cam := (_cam.position - target).normalized()
-	for w in _walls:
-		var wd := w as Dictionary
-		(wd["mesh"] as MeshInstance3D).visible = (wd["normal"] as Vector3).dot(to_cam) < 0.25
+	_studio.target = Vector3(dims.x * 0.5, dims.y * 0.35, dims.z * 0.5)
+	_studio.set_orbit(_yaw, _pitch, _dist)
+	_apply_cutaway()
+
+
+func _on_view_changed() -> void:
+	_yaw = _studio.yaw
+	_pitch = _studio.pitch
+	_dist = _studio.dist
+	_apply_cutaway()
 
 
 func _frame_camera() -> void:
@@ -942,36 +1174,43 @@ func _frame_camera() -> void:
 	_update_camera()
 
 
-static func _box_mesh_res(size: Vector3) -> BoxMesh:
-	var bm := BoxMesh.new()
-	bm.size = size * 0.985  # slight shrink so adjacent boxes read individually
-	return bm
-
-
-func _make_box_mesh(size: Vector3, col: Color, ghost: bool) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	mi.mesh = _box_mesh_res(size)
-	var mat := StandardMaterial3D.new()
+## An item in its packed form (crate / bundle / panel stack / tank / pallet)
+## at exactly the placed size, tinted toward its own colour so like items
+## read as a set; a ghost is the same shape in one translucent material.
+func _make_item_node(unit: Dictionary, size: Vector3, ghost: bool) -> Node3D:
+	var spec := unit.duplicate()
+	spec["w_m"] = size.x
+	spec["h_m"] = size.y
+	spec["d_m"] = size.z
+	var node := PackedFormBuilder.build_node(spec, "Item")
 	if ghost:
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color = Color(col.r, col.g, col.b, 0.45)
-	else:
-		mat.albedo_color = col
-		mat.roughness = 0.8
-	mi.material_override = mat
-	return mi
+		if _ghost_mat == null:
+			_ghost_mat = StandardMaterial3D.new()
+			_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_ghost_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			_ghost_mat.albedo_color = Color(0.3, 1.0, 0.45, 0.5)
+		for m in node.find_children("*", "MeshInstance3D", true, false):
+			(m as MeshInstance3D).material_override = _ghost_mat
+		return node
+	var tint := _color_for(str(unit.get("label", "?")))
+	for m in node.find_children("*", "MeshInstance3D", true, false):
+		var mi := m as MeshInstance3D
+		var mat := mi.material_override as StandardMaterial3D
+		if mat == null:
+			continue
+		var own := mat.duplicate() as StandardMaterial3D
+		# Straps and battens keep their dark tone; the body takes the tint.
+		if own.albedo_color.v > 0.3:
+			own.albedo_color = own.albedo_color.lerp(tint, ITEM_TINT)
+		mi.material_override = own
+	return node
 
 
-static func _make_slab(size: Vector3, col: Color) -> MeshInstance3D:
+static func _slab(size: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
 	bm.size = size
 	mi.mesh = bm
-	var mat := StandardMaterial3D.new()
-	if col.a < 0.999:
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = col
-	mat.roughness = 0.9
 	mi.material_override = mat
 	return mi
 
@@ -997,26 +1236,55 @@ func _refresh_lists() -> void:
 		_item_list.add_item("Everything is packed")
 		_item_list.set_item_disabled(0, true)
 		_item_list.set_item_selectable(0, false)
+	# Like items grouped: one row per label with its count.
+	var groups: Dictionary = {}
+	var order: Array = []
 	for idx in _remaining:
 		var unit: Dictionary = _units[idx]
-		var txt := "%s  (%s)" % [str(unit.get("label", "?")),
+		var key := str(unit.get("label", "?"))
+		if not groups.has(key):
+			groups[key] = {"first": idx, "n": 0, "unit": unit}
+			order.append(key)
+		(groups[key] as Dictionary)["n"] = int((groups[key] as Dictionary)["n"]) + 1
+	for key in order:
+		var g: Dictionary = groups[key]
+		var unit: Dictionary = g["unit"]
+		var n := int(g["n"])
+		var txt := "%s%s  ·  %s" % [key, ("  ×%d" % n) if n > 1 else "",
 			PackedSpec.format_dims_short(unit)]
+		var m := float(unit.get("mass_kg", -1.0))
+		if m > 0.0:
+			txt += "  ·  %s" % UiText.num(m, "kg", 3)
 		_item_list.add_item(txt)
-		_item_list.set_item_metadata(_item_list.item_count - 1, idx)
+		var row := _item_list.item_count - 1
+		_item_list.set_item_metadata(row, int(g["first"]))
+		_item_list.set_item_icon(row, UiIcons.icon(_icon_for_form(str(unit.get("form", "crate"))), 16))
+		_item_list.set_item_icon_modulate(row, _color_for(key))
 		if not ContainerCatalog.fits_through_door(_entry, unit):
-			_item_list.set_item_custom_fg_color(_item_list.item_count - 1,
-				UITheme.C_ERROR)
-			_item_list.set_item_tooltip(_item_list.item_count - 1,
-				"Won't pass this container's door in any orientation")
+			_item_list.set_item_custom_fg_color(row, UITheme.C_ERROR)
+			_item_list.set_item_tooltip(row, "Won't pass this container's door in any orientation")
 	_refresh_stats()
 	_update_hint()
 
 
+static func _icon_for_form(form: String) -> String:
+	match form:
+		"tank":
+			return "droplet"
+		"bundle", "roll", "folded":
+			return "layers"
+		"panel_stack":
+			return "layout-grid"
+		"pallet":
+			return "box"
+	return "package"
+
+
 func _refresh_stats() -> void:
-	if _stats == null:
+	if _tiles.is_empty():
 		return
 	var dims := _interior_dims()
-	var vol := dims.x * dims.y * dims.z
+	var vol := maxf(dims.x * dims.y * dims.z, 1e-6)
 	var placed_vol := 0.0
 	var mass := 0.0
 	var unknown := 0
@@ -1032,45 +1300,105 @@ func _refresh_stats() -> void:
 		else:
 			unknown += 1
 	var payload := float(_entry.get("payload_kg", 0.0))
-	var lines := "[b]%s[/b] — %s\n" % [str(_entry.get("label", "?")), _source_label]
-	lines += "Placed [b]%d[/b] / %d · [b]%d%%[/b] full\n" % [
-		_placed.size(), _units.size(), roundi(placed_vol / vol * 100.0)]
-	lines += "Load [b]%.0f[/b] kg (%.0f lb)" % [mass, mass * 2.20462]
+	var fill := placed_vol / vol
+	_set_tile("fill", "%d%%" % roundi(fill * 100.0),
+		"%s of %s placed" % [_placed.size(), _units.size()], fill,
+		UITheme.C_PRIMARY if _remaining.is_empty() or _units.is_empty() else UITheme.C_AMBER)
+	var over := payload > 0.0 and mass > payload
+	var load_sub := "%s lb" % UiText.thousands(roundi(mass * 2.20462))
 	if payload > 0.0:
-		var over := mass > payload
-		lines += " / %.0f kg" % payload
-		if over:
-			lines += "  [color=#%s]⚠ OVER PAYLOAD[/color]" % UITheme.C_ERROR.to_html(false)
+		load_sub += " · payload %s" % UiText.num(payload, "kg", 3)
 	if unknown > 0:
-		lines += " · %d unweighed" % unknown
+		load_sub += " · %s unweighed" % UiText.count(unknown, "item")
+	_set_tile("load", UiText.num(mass, "kg", 3), load_sub,
+		clampf(mass / payload, 0.0, 1.0) if payload > 0.0 else 0.0,
+		UITheme.C_ERROR if over else (UITheme.C_AMBER if payload > 0.0 and mass > payload * 0.85 else UITheme.C_GREEN))
+	# Warnings.
+	for c in _warn_box.get_children():
+		_warn_box.remove_child(c)
+		c.queue_free()
+	if over:
+		_add_warning(UITheme.C_ERROR, "Over the payload by %s" % UiText.num(mass - payload, "kg", 3))
 	if mass > 0.0:
 		var com := moment / mass
 		var frac := clampf(com.z / dims.z, 0.0, 1.0)
-		lines += "\nLoad centre [b]%.0f%%[/b] toward the rear" % (frac * 100.0)
-		if str(_entry.get("kind", "")) == "trailer":
-			# ~10-15% tongue weight ⇒ centre slightly ahead of the axle (mid).
-			if frac > 0.55:
-				lines += "  [color=#%s]⚠ tail-heavy — sway risk[/color]" \
-					% UITheme.C_WARN.to_html(false)
 		var side := clampf(com.x / maxf(dims.x, 0.001), 0.0, 1.0)
-		lines += "\nSide balance [b]%.0f%%[/b] toward the right" % (side * 100.0)
+		_set_tile("com", "%d%%" % roundi(frac * 100.0), "toward the door end", frac,
+			UITheme.C_WARN if str(_entry.get("kind", "")) == "trailer" and frac > 0.55 else UITheme.C_PRIMARY)
+		_set_tile("side", "%d%%" % roundi(side * 100.0), "toward the right wall", side,
+			UITheme.C_WARN if absf(side - 0.5) > 0.2 else UITheme.C_PRIMARY)
+		if str(_entry.get("kind", "")) == "trailer" and frac > 0.55:
+			_add_warning(UITheme.C_WARN, "Tail-heavy — a trailer wants 10–15 % of the load on the tongue; move weight forward")
+		if absf(side - 0.5) > 0.2:
+			_add_warning(UITheme.C_WARN, "Lopsided — the heavy side will ride low")
+		if _com_marker != null:
+			_com_marker.visible = true
+			_com_marker.position = Vector3(com.x, 0.008, com.z)
+	else:
+		_set_tile("com", "—", "nothing weighed yet", 0.0, UITheme.C_TEXT_M)
+		_set_tile("side", "—", "nothing weighed yet", 0.0, UITheme.C_TEXT_M)
+		if _com_marker != null:
+			_com_marker.visible = false
 	if _mode == "pallets":
 		var heavy := 0
 		for u: Dictionary in _units:
 			if bool(u.get("pallet", false)) and bool(u.get("overweight", false)):
 				heavy += 1
-		lines += "\n%s, then stuffed" % UiText.count(pallet_count(), "pallet")
+		_set_tile("axle", UiText.count(pallet_count(), "pallet"), "palletized, then stuffed", 0.0, UITheme.C_PRIMARY)
 		if heavy > 0:
-			lines += "  [color=#%s]⚠ %s over the pallet's rating[/color]" % [
-				UITheme.C_WARN.to_html(false), UiText.count(heavy, "pallet")]
-	if not _last_solve.is_empty():
+			_add_warning(UITheme.C_WARN, "%s over the pallet's rating" % UiText.count(heavy, "pallet"))
+	elif not _last_solve.is_empty() and not (_last_solve.get("axle_split", {}) as Dictionary).is_empty():
 		var axle: Dictionary = _last_solve.get("axle_split", {})
-		if not axle.is_empty():
-			lines += "\nAxles: front [b]%.0f%%[/b] · rear [b]%.0f%%[/b]" % [
-				float(axle.get("front", 0.0)) * 100.0, float(axle.get("rear", 0.0)) * 100.0]
+		var f := float(axle.get("front", 0.0))
+		_set_tile("axle", "%d / %d" % [roundi(f * 100.0), roundi(float(axle.get("rear", 0.0)) * 100.0)],
+			"front / rear axle share", f, UITheme.C_PRIMARY)
+	else:
+		_set_tile("axle", "—", "auto-pack to estimate the axle split", 0.0, UITheme.C_TEXT_M)
+	if not _last_solve.is_empty():
 		for w: Dictionary in _last_solve.get("warnings", []):
-			lines += "\n[color=#%s]⚠ %s[/color]" % [UITheme.C_WARN.to_html(false), str(w.get("text", ""))]
-	_stats.text = lines
+			_add_warning(UITheme.C_WARN, str(w.get("text", "")))
+		var left := (_last_solve.get("unplaced", []) as Array).size()
+		if left > 0:
+			_add_warning(UITheme.C_WARN, "%s did not fit" % UiText.count(left, "item"))
+
+
+func _add_warning(col: Color, text: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	var ic := TextureRect.new()
+	ic.texture = UiIcons.icon("triangle-alert", 14)
+	ic.modulate = col
+	ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	row.add_child(ic)
+	var l := Label.new()
+	l.text = text
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.add_theme_color_override("font_color", col)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	row.add_child(l)
+	_warn_box.add_child(row)
+
+
+func _refresh_host_facts() -> void:
+	if _host_facts == null:
+		return
+	var dims := _interior_dims()
+	var lines: PackedStringArray = []
+	lines.append("Inside %.2f × %.2f × %.2f m · %s" % [dims.z, dims.x, dims.y,
+		UiText.num(dims.x * dims.y * dims.z, "m³", 3)])
+	var door = _entry.get("door")
+	if door is Dictionary:
+		lines.append("Door %.2f × %.2f m" % [float(door["w_m"]), float(door["h_m"])])
+	else:
+		lines.append("Open top — loaded from above")
+	var payload := float(_entry.get("payload_kg", 0.0))
+	if payload > 0.0:
+		lines.append("Payload %s" % UiText.num(payload, "kg", 3))
+	var notes := str(_entry.get("notes", ""))
+	if not notes.is_empty():
+		lines.append(notes)
+	_host_facts.text = "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1106,15 +1434,13 @@ func _on_save_path_chosen(path: String) -> void:
 		return
 	f.store_string(text)
 	f.close()
-	if _hint != null:
-		_hint.text = "Manifest saved: %s" % path
+	_set_hint("Manifest saved: %s" % path)
 
 
 func _on_export_lists() -> void:
 	var path := export_packing_lists()
-	if _hint != null:
-		_hint.text = ("Packing lists saved: %s" % ProjectSettings.globalize_path(path)) \
-			if not path.is_empty() else "Packing lists could not be written"
+	_set_hint(("Packing lists saved: %s" % ProjectSettings.globalize_path(path)) \
+		if not path.is_empty() else "Packing lists could not be written")
 
 
 ## Writes packing_list.csv / .json / .html for the current load and returns
@@ -1135,7 +1461,7 @@ func export_packing_lists(dir: String = "") -> String:
 
 func _on_custom_item_pressed() -> void:
 	if _custom_popup != null:
-		_custom_popup.visible = not _custom_popup.visible
+		_custom_popup.set_open(not _custom_popup.is_open())
 
 
 func _on_add_custom() -> void:
@@ -1155,8 +1481,7 @@ func _on_add_custom() -> void:
 		"source": "estimated",
 	})
 	if spec.is_empty():
-		if _hint != null:
-			_hint.text = "Custom item needs non-zero dimensions"
+		_set_hint("Custom item needs non-zero dimensions")
 		return
 	_append_custom_spec(_site_token_for(get_tree().current_scene), label, spec)
 	# Join the live session immediately (append-only — _placed references
@@ -1174,8 +1499,7 @@ func _on_add_custom() -> void:
 		_rebuild_units(true)
 	else:
 		_refresh_lists()
-	if _hint != null:
-		_hint.text = "Added %s — saved for this site" % label
+	_set_hint("Added %s — saved for this site" % label)
 
 
 func _on_clear_custom() -> void:
@@ -1189,22 +1513,27 @@ func _on_clear_custom() -> void:
 			keep.append(idx)
 	_remaining = keep
 	_refresh_lists()
+	_set_hint("Saved custom items cleared for this site")
+
+
+func _set_hint(text: String) -> void:
 	if _hint != null:
-		_hint.text = "Saved custom items cleared for this site"
+		_hint.text = text
 
 
 func _update_hint() -> void:
 	if _hint == null:
 		return
 	if _ghost_unit >= 0:
-		_hint.text = "Aim in the container · LMB place · R rotate · RMB cancel"
+		_hint.text = "Aim in the box · click to set it down · R turns it · right-click cancels"
 	else:
-		_hint.text = "Pick an item to place · click a box to take it out · RMB-drag orbit · wheel zoom"
+		_hint.text = "Pick an item on the left to place it · click a placed item to take it out · drag to orbit · wheel zooms"
 
 
 func _on_item_selected(list_idx: int) -> void:
 	var unit_idx := int(_item_list.get_item_metadata(list_idx))
 	_begin_ghost(unit_idx)
+	_item_list.deselect_all()
 
 
 # ---------------------------------------------------------------------------
@@ -1214,199 +1543,32 @@ func _on_item_selected(list_idx: int) -> void:
 func _build_ui() -> void:
 	_root = Control.new()
 	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_root)
-
-	var dim := ColorRect.new()
-	dim.color = Color(UITheme.C_BG, 0.88)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_root.add_child(dim)
-
-	var frame := PanelContainer.new()
-	frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	frame.offset_left = 28
-	frame.offset_top = 28
-	frame.offset_right = -28
-	frame.offset_bottom = -28
-	frame.add_theme_stylebox_override("panel", UITheme.panel_style())
-	# A modal for the audit (UiAudit tells modals apart by this meta).
-	frame.set_meta("ui_modal", true)
-	_root.add_child(frame)
-
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	frame.add_child(hbox)
-
-	# Studio.
-	_vp_container = SubViewportContainer.new()
-	_vp_container.stretch = true
-	_vp_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_vp_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_vp_container.focus_mode = Control.FOCUS_CLICK
-	_vp_container.mouse_filter = Control.MOUSE_FILTER_STOP
-	_vp_container.gui_input.connect(_on_studio_input)
-	hbox.add_child(_vp_container)
-
-	_viewport = SubViewport.new()
-	_viewport.own_world_3d = true
-	_viewport.transparent_bg = false
-	_vp_container.add_child(_viewport)
-
-	_world_root = Node3D.new()
-	_viewport.add_child(_world_root)
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.10, 0.13, 0.18)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.7, 0.72, 0.75)
-	env.ambient_light_energy = 0.7
-	var we := WorldEnvironment.new()
-	we.environment = env
-	_world_root.add_child(we)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48.0, 32.0, 0.0)
-	sun.light_energy = 1.1
-	_world_root.add_child(sun)
-	_container_node = Node3D.new()
-	_world_root.add_child(_container_node)
-	_items_node = Node3D.new()
-	_world_root.add_child(_items_node)
-	_cam = Camera3D.new()
-	_world_root.add_child(_cam)
-
-	# Sidebar.
-	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(SIDEBAR_W, 0)
-	side.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	hbox.add_child(side)
-
-	var title := Label.new()
-	title.text = "📦 Packing Lab"
-	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-	side.add_child(title)
-
-	side.add_child(_labeled("Container"))
-	_container_combo = OptionButton.new()
-	_container_combo.focus_mode = Control.FOCUS_NONE
-	_refill_container_combo()
-	_container_combo.item_selected.connect(_on_container_selected)
-	side.add_child(_container_combo)
-	var units_btn := Button.new()
-	units_btn.text = "📦 Design units…"
-	units_btn.tooltip_text = "Design shipping containers, pallets, totes and other handling units"
-	units_btn.focus_mode = Control.FOCUS_NONE
-	units_btn.pressed.connect(_on_units_pressed)
-	side.add_child(units_btn)
-
-	side.add_child(_labeled("Load a kit"))
-	_kit_combo = OptionButton.new()
-	_kit_combo.focus_mode = Control.FOCUS_NONE
-	_kit_combo.add_item("— current cargo —")
-	_kit_combo.set_item_metadata(0, "")
-	for def in PackDefs.all_defs():
-		var dd := def as Dictionary
-		_kit_combo.add_item(str(dd.get("label", "?")))
-		_kit_combo.set_item_metadata(_kit_combo.item_count - 1, str(dd.get("id", "")))
-	_kit_combo.item_selected.connect(_on_kit_selected)
-	side.add_child(_kit_combo)
-
-	side.add_child(_labeled("Load level"))
-	_level_combo = OptionButton.new()
-	_level_combo.focus_mode = Control.FOCUS_NONE
-	_level_combo.add_item("Loose items")
-	_level_combo.add_item("Palletize, then stuff")
-	_level_combo.item_selected.connect(func(i: int) -> void:
-		set_load_level("pallets" if i == 1 else "loose", _pallet_id))
-	side.add_child(_level_combo)
-	_pallet_combo = OptionButton.new()
-	_pallet_combo.focus_mode = Control.FOCUS_NONE
-	for pid in ["pallet_gma", "pallet_eur1"]:
-		var pu: Dictionary = IntermodalUnits.resolve(pid)
-		_pallet_combo.add_item(str(pu.get("label", pid)))
-		_pallet_combo.set_item_metadata(_pallet_combo.item_count - 1, pid)
-	_pallet_combo.item_selected.connect(func(i: int) -> void:
-		set_load_level("pallets", str(_pallet_combo.get_item_metadata(i))))
-	side.add_child(_pallet_combo)
-	_sync_level_ui()
-
-	# Delivery: spawn the scenario's container + packed crates in the world
-	# (PACKING_PLAN.md Phase 6) with a crew estimate from NpcHaulModel.
-	_deliver_btn = Button.new()
-	_deliver_btn.text = "Deliver kit to site"
+	_shell = DesignerShell.create("Packing Lab", "package", {
+		"name_id": MODAL_NAME, "want": WANT, "left_label": "Load",
+		"left_w": 300.0, "right_w": 360.0})
+	_root.add_child(_shell)
+	_shell.closed.connect(_on_shell_closed)
+	_build_left()
+	_build_centre()
+	_build_right()
+	for spec2: Array in [
+			["CSV", "_on_export_csv", "Save the load order + totals as a printable spreadsheet"],
+			["JSON", "_on_export_json", "Save the full manifest data (positions, masses, container)"],
+			["Packing lists", "_on_export_lists",
+				"Write packing lists for the container, each pallet and each crate, plus printable labels"]]:
+		_shell.add_button(str(spec2[0]), DesignerShell.SECONDARY, Callable(self, str(spec2[1])), str(spec2[2]))
+	_deliver_btn = _shell.add_button("Deliver kit to site", DesignerShell.PRIMARY, _on_deliver)
 	_deliver_btn.icon = UiIcons.icon("truck", 16)
-	_deliver_btn.focus_mode = Control.FOCUS_NONE
-	_deliver_btn.pressed.connect(_on_deliver)
-	side.add_child(_deliver_btn)
-	_deliver_lbl = Label.new()
-	_deliver_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_deliver_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	_deliver_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	side.add_child(_deliver_lbl)
-
-	var btns := HBoxContainer.new()
-	btns.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	side.add_child(btns)
-	for spec in [["Auto-pack", "_on_autopack", "Let the solver load everything that fits"],
-			["Empty", "_ask_clear", "Take everything out (asks first: it is saved at once)"],
-			["Close", "close", ""]]:
-		var b := Button.new()
-		b.text = str(spec[0])
-		b.tooltip_text = str(spec[2])
-		b.focus_mode = Control.FOCUS_NONE
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.pressed.connect(Callable(self, str(spec[1])))
-		btns.add_child(b)
+	_deliver_btn.name = "deliver"
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 	_clear_dialog = ConfirmationDialog.new()
 	_clear_dialog.title = "Empty the load?"
 	_clear_dialog.dialog_text = "Take every placed item back out? The saved layout for this site is replaced."
 	_clear_dialog.ok_button_text = "Empty it"
 	_clear_dialog.confirmed.connect(_on_clear)
 	_root.add_child(_clear_dialog)
-
-	# Phase 7 row: the printable manifest + player-entered cargo.
-	var btns2 := HBoxContainer.new()
-	btns2.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	side.add_child(btns2)
-	for spec2: Array in [
-			["CSV", "_on_export_csv",
-				"Save the load order + totals as a printable spreadsheet", "download"],
-			["JSON", "_on_export_json",
-				"Save the full manifest data (positions, masses, container)", "save"],
-			["Lists", "_on_export_lists",
-				"Write packing lists for the container, each pallet and each crate, plus printable labels", "list"],
-			["Item", "_on_custom_item_pressed",
-				"Add a custom item the game doesn't model — saved for this site", "plus"]]:
-		var b2 := Button.new()
-		b2.text = str(spec2[0])
-		b2.icon = UiIcons.icon(str(spec2[3]), 16)
-		b2.focus_mode = Control.FOCUS_NONE
-		b2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b2.tooltip_text = str(spec2[2])
-		b2.pressed.connect(Callable(self, str(spec2[1])))
-		btns2.add_child(b2)
-
-	side.add_child(_labeled("Still to pack (click to place)"))
-	_item_list = ItemList.new()
-	_item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_item_list.focus_mode = Control.FOCUS_NONE
-	_item_list.item_selected.connect(_on_item_selected)
-	side.add_child(_item_list)
-
-	_stats = RichTextLabel.new()
-	_stats.bbcode_enabled = true
-	_stats.fit_content = true
-	_stats.scroll_active = false
-	_stats.custom_minimum_size = Vector2(0, 96)
-	_stats.add_theme_color_override("default_color", UITheme.C_TEXT_S)
-	_stats.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
-	side.add_child(_stats)
-
-	_hint = Label.new()
-	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	side.add_child(_hint)
-
 	_save_dialog = FileDialog.new()
 	_save_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	_save_dialog.access = FileDialog.ACCESS_USERDATA
@@ -1414,48 +1576,257 @@ func _build_ui() -> void:
 	_save_dialog.size = Vector2i(760, 520)
 	_save_dialog.file_selected.connect(_on_save_path_chosen)
 	add_child(_save_dialog)
+	_update_hint()
 
-	_build_custom_popup()
+
+func _build_left() -> void:
+	var box := VBoxContainer.new()
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_shell.left.add_child(box)
+
+	box.add_child(SectionHeader.make("Where it goes", "truck", ""))
+	_container_combo = OptionButton.new()
+	_container_combo.name = "container"
+	_container_combo.focus_mode = Control.FOCUS_NONE
+	_container_combo.fit_to_longest_item = false
+	_container_combo.clip_text = true
+	_container_combo.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_refill_container_combo()
+	_container_combo.item_selected.connect(_on_container_selected)
+	box.add_child(_container_combo)
+	_host_facts = Label.new()
+	_host_facts.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_host_facts.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_host_facts.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(_host_facts)
+	var units_btn := Button.new()
+	units_btn.text = "Design units…"
+	units_btn.icon = UiIcons.icon("package", 16)
+	units_btn.tooltip_text = "Design shipping containers, pallets, totes and other handling units"
+	units_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(units_btn)
+	units_btn.pressed.connect(_on_units_pressed)
+	box.add_child(units_btn)
+
+	box.add_child(SectionHeader.make("What goes in", "box", ""))
+	_kit_combo = OptionButton.new()
+	_kit_combo.name = "kit"
+	_kit_combo.focus_mode = Control.FOCUS_NONE
+	_kit_combo.fit_to_longest_item = false
+	_kit_combo.clip_text = true
+	_kit_combo.add_item("— current cargo —")
+	_kit_combo.set_item_metadata(0, "")
+	for def in PackDefs.all_defs():
+		var dd := def as Dictionary
+		_kit_combo.add_item(str(dd.get("label", "?")))
+		_kit_combo.set_item_metadata(_kit_combo.item_count - 1, str(dd.get("id", "")))
+	_kit_combo.item_selected.connect(_on_kit_selected)
+	box.add_child(FormRow.make("Kit", _kit_combo, "A built-in kit instead of the site's own cargo"))
+	_level_combo = OptionButton.new()
+	_level_combo.name = "load_level"
+	_level_combo.focus_mode = Control.FOCUS_NONE
+	_level_combo.add_item("Loose items")
+	_level_combo.add_item("Palletize, then stuff")
+	_level_combo.item_selected.connect(func(i: int) -> void:
+		set_load_level("pallets" if i == 1 else "loose", _pallet_id))
+	box.add_child(FormRow.make("Load as", _level_combo, "Stuff the loose manifest, or build pallets first"))
+	_pallet_combo = OptionButton.new()
+	_pallet_combo.name = "pallet"
+	_pallet_combo.focus_mode = Control.FOCUS_NONE
+	for pid in ["pallet_gma", "pallet_eur1"]:
+		var pu: Dictionary = IntermodalUnits.resolve(pid)
+		_pallet_combo.add_item(str(pu.get("label", pid)))
+		_pallet_combo.set_item_metadata(_pallet_combo.item_count - 1, pid)
+	_pallet_combo.item_selected.connect(func(i: int) -> void:
+		set_load_level("pallets", str(_pallet_combo.get_item_metadata(i))))
+	box.add_child(FormRow.make("Pallet", _pallet_combo, "The pallet the loose items are built onto"))
+	_sync_level_ui()
+	_build_custom_fold(box)
+
+	box.add_child(SectionHeader.make("Still to pack", "list", "Click an item to place it"))
+	_item_list = ItemList.new()
+	_item_list.name = "to_pack"
+	_item_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_item_list.custom_minimum_size = Vector2(0, 160)
+	_item_list.focus_mode = Control.FOCUS_NONE
+	_item_list.item_selected.connect(_on_item_selected)
+	box.add_child(_item_list)
 
 
-## Small centered form over the studio: name, dims (cm), mass, count, flags.
-## Produces an estimated-source PackedSpec; persisted per site so the truck
-## manifest covers gear the game does not model.
-func _build_custom_popup() -> void:
-	_custom_popup = PanelContainer.new()
-	_custom_popup.add_theme_stylebox_override("panel", UITheme.panel_style())
-	_custom_popup.visible = false
-	_custom_popup.set_anchors_preset(Control.PRESET_CENTER)
-	_custom_popup.custom_minimum_size = Vector2(330, 0)
-	_root.add_child(_custom_popup)
+func _build_centre() -> void:
+	_studio = StudioViewport.create({"ground": true, "person": false, "ssao": true, "exposure": 1.0})
+	_studio.pitch_min = 0.06
+	_studio.set_home(_yaw, _pitch)
+	_studio.input_hook = _studio_hook
+	_studio.clicked.connect(_on_studio_clicked)
+	_studio.view_changed.connect(_on_view_changed)
+	_shell.centre.add_child(_studio)
+	_host_root = Node3D.new()
+	_host_root.name = "Host"
+	_studio.holder.add_child(_host_root)
+	_items_node = Node3D.new()
+	_items_node.name = "Items"
+	_studio.holder.add_child(_items_node)
+	# The strip under the view: the two big verbs, the view, the hint.
+	var auto_btn := Button.new()
+	auto_btn.name = "autopack"
+	auto_btn.text = "Auto-pack"
+	auto_btn.icon = UiIcons.icon("sparkles", 16)
+	auto_btn.tooltip_text = "Let the solver load everything that fits (largest first, door last)"
+	auto_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(auto_btn)
+	auto_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	auto_btn.pressed.connect(_on_autopack)
+	_studio.strip.add_child(auto_btn)
+	var empty_btn := Button.new()
+	empty_btn.name = "empty"
+	empty_btn.text = "Empty"
+	empty_btn.icon = UiIcons.icon("trash-2", 16)
+	empty_btn.tooltip_text = "Take everything out (asks first: the layout is saved at once)"
+	empty_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(empty_btn)
+	empty_btn.pressed.connect(_ask_clear)
+	_studio.strip.add_child(empty_btn)
+	var view := OptionButton.new()
+	view.name = "cutaway"
+	view.focus_mode = Control.FOCUS_NONE
+	view.add_item("Cutaway follows the camera")
+	view.set_item_metadata(0, "auto")
+	view.add_item("Roof off")
+	view.set_item_metadata(1, "open")
+	view.add_item("Whole box")
+	view.set_item_metadata(2, "full")
+	view.item_selected.connect(func(i: int) -> void:
+		_cutaway_mode = str(view.get_item_metadata(i))
+		_apply_cutaway())
+	_studio.strip.add_child(view)
+	_studio.strip.add_child(IconButton.make("maximize-2", "Frame the load", _frame_camera))
+	_hint = Label.new()
+	_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hint.clip_text = true
+	_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_studio.strip.add_child(_hint)
 
+
+func _build_right() -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_shell.right.add_child(box)
+	box.add_child(SectionHeader.make("Load sheet", "gauge", ""))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+	grid.add_theme_constant_override("v_separation", UITheme.SPACE_SM)
+	box.add_child(grid)
+	grid.add_child(_make_tile("fill", "Fill", "layout-grid"))
+	grid.add_child(_make_tile("load", "Load", "gauge"))
+	grid.add_child(_make_tile("com", "Load centre", "target"))
+	grid.add_child(_make_tile("side", "Side balance", "move"))
+	var axle := _make_tile("axle", "Axles", "truck")
+	box.add_child(axle)
+	_warn_box = VBoxContainer.new()
+	_warn_box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	box.add_child(_warn_box)
+	box.add_child(SectionHeader.make("Delivery", "truck", "The crew unloads it in the world"))
+	_deliver_lbl = Label.new()
+	_deliver_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_deliver_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_deliver_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(_deliver_lbl)
+	var legend := Label.new()
+	legend.text = "Floor dot: the load centre · amber frame: the door · hidden walls come back as you orbit"
+	legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	legend.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	legend.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	box.add_child(legend)
+
+
+## A stat tile: a title with an icon, the number, one line under it, a bar.
+func _make_tile(id: String, title: String, icon: String) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.name = "tile_" + id
+	panel.add_theme_stylebox_override("panel", UITheme.card_style())
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_custom_popup.add_child(v)
+	v.add_theme_constant_override("separation", 2)
+	panel.add_child(v)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	v.add_child(head)
+	var ic := TextureRect.new()
+	ic.texture = UiIcons.icon(icon, 14)
+	ic.modulate = UITheme.C_TEXT_M
+	ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	head.add_child(ic)
+	var t := Label.new()
+	t.text = title
+	t.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	t.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	head.add_child(t)
+	var val := Label.new()
+	val.text = "—"
+	val.add_theme_font_override("font", UITheme.font("semibold", true))
+	val.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+	val.add_theme_color_override("font_color", UITheme.C_TEXT)
+	v.add_child(val)
+	var sub := Label.new()
+	sub.text = ""
+	sub.clip_text = true
+	sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	sub.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	sub.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	sub.mouse_filter = Control.MOUSE_FILTER_PASS
+	sub.mouse_entered.connect(func() -> void: sub.tooltip_text = sub.text)
+	v.add_child(sub)
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 1.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0, 6)
+	UITheme.style_progress(bar, UITheme.C_PRIMARY)
+	v.add_child(bar)
+	_tiles[id] = {"panel": panel, "value": val, "sub": sub, "bar": bar}
+	return panel
 
-	var title := Label.new()
-	title.text = "➕ Custom item"
-	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-	v.add_child(title)
 
+func _set_tile(id: String, value: String, sub: String, frac: float, col: Color) -> void:
+	var t: Dictionary = _tiles.get(id, {})
+	if t.is_empty():
+		return
+	(t["value"] as Label).text = value
+	(t["value"] as Label).add_theme_color_override("font_color", col if col != UITheme.C_TEXT_M else UITheme.C_TEXT_S)
+	(t["sub"] as Label).text = sub
+	var bar := t["bar"] as ProgressBar
+	bar.value = clampf(frac, 0.0, 1.0)
+	UITheme.style_progress(bar, col)
+
+
+## "Add an item": the gear the game does not model, saved per site.
+func _build_custom_fold(parent: Control) -> void:
+	_custom_popup = Collapsible.make("Add an item", false,
+		"Cover gear the game does not model — saved for this site")
+	parent.add_child(_custom_popup)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_custom_popup.body.add_child(v)
 	_ci_name = LineEdit.new()
 	_ci_name.placeholder_text = "Name (e.g. Cooler, Toolbox)"
 	v.add_child(_ci_name)
-
 	var dims := HBoxContainer.new()
-	dims.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	dims.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	v.add_child(dims)
 	_ci_w = _ci_spin(dims, "W cm", 60.0, 1.0, 1200.0)
 	_ci_d = _ci_spin(dims, "D cm", 40.0, 1.0, 1200.0)
 	_ci_h = _ci_spin(dims, "H cm", 40.0, 1.0, 1200.0)
-
 	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	row2.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	v.add_child(row2)
 	_ci_mass = _ci_spin(row2, "Mass kg (0 = ?)", 10.0, 0.0, 2000.0)
 	_ci_count = _ci_spin(row2, "Count", 1.0, 1.0, 50.0)
-
 	var flags := HBoxContainer.new()
 	flags.add_theme_constant_override("separation", UITheme.SPACE_MD)
 	v.add_child(flags)
@@ -1468,16 +1839,16 @@ func _build_custom_popup() -> void:
 	_ci_tsu.text = "This side up"
 	_ci_tsu.focus_mode = Control.FOCUS_NONE
 	flags.add_child(_ci_tsu)
-
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	actions.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	v.add_child(actions)
-	for spec: Array in [["Add", "_on_add_custom"],
-			["Clear saved", "_on_clear_custom"], ["Close", "_on_custom_item_pressed"]]:
+	for spec: Array in [["Add", "_on_add_custom", "plus"], ["Clear saved", "_on_clear_custom", "trash-2"]]:
 		var b := Button.new()
 		b.text = str(spec[0])
+		b.icon = UiIcons.icon(str(spec[2]), 14)
 		b.focus_mode = Control.FOCUS_NONE
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UITheme.style_button(b)
 		b.pressed.connect(Callable(self, str(spec[1])))
 		actions.add_child(b)
 
@@ -1485,6 +1856,7 @@ func _build_custom_popup() -> void:
 func _ci_spin(parent: Control, label: String, value: float, min_v: float,
 		max_v: float) -> SpinBox:
 	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(box)
 	var lbl := Label.new()
 	lbl.text = label
@@ -1514,11 +1886,3 @@ func _on_clear() -> void:
 	_clear_placements()
 	_refresh_lists()
 	_save_layout()
-
-
-static func _labeled(text: String) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	return l

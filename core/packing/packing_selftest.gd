@@ -779,8 +779,11 @@ func _test_container_builder() -> void:
 	var mi := node.get_node_or_null("Mesh") as MeshInstance3D
 	_check("builder has Mesh child", mi != null and mi.mesh != null)
 	if mi != null and mi.mesh != null:
-		_check("two surfaces (shell + doors)", mi.mesh.get_surface_count() == 2,
+		# One surface per material: paint, castings, galvanised door gear,
+		# the dark underframe, the plywood floor, the gaskets.
+		_check("a surface per material (>= 5)", mi.mesh.get_surface_count() >= 5,
 			str(mi.mesh.get_surface_count()))
+		_check("every triangle wound to its normal", _winding_ok(mi.mesh))
 		var aabb := mi.mesh.get_aabb()
 		_check("AABB matches 20ft exterior",
 			absf(aabb.size.z - 6.058) < 0.2 and absf(aabb.size.x - 2.438) < 0.2
@@ -801,6 +804,119 @@ func _test_container_builder() -> void:
 	node.free()
 	hc.free()
 	bogus.free()
+	# Paint reaches the material; a cutaway build is six named pieces whose
+	# box is the whole container; open doors swing the leaves out past +Z.
+	var red := CargoContainerBuilder.build_node({"container_id": "container_20", "paint": "red"})
+	var blue := CargoContainerBuilder.build_node({"container_id": "container_20", "paint": "blue"})
+	_check("paint reaches the shell",
+		_first_albedo(red) != _first_albedo(blue) and _first_albedo(red).r > _first_albedo(blue).r)
+	red.free()
+	blue.free()
+	var entry := IntermodalUnits.resolve("iso_20")
+	var cut := CargoContainerBuilder.build_from_entry(entry, "Cut",
+		{"cutaway": true, "doors_open_deg": CargoContainerBuilder.DOORS_FOLDED_DEG})
+	var names: Array = []
+	for c in cut.get_children():
+		names.append(c.name)
+	var all_groups := true
+	for g in CargoContainerBuilder.GROUPS:
+		if not names.has(g):
+			all_groups = false
+	_check("cutaway build has every group", all_groups, str(names))
+	var cut_bb := AABB()
+	for c in cut.get_children():
+		if c.name == "Doors" or not (c is MeshInstance3D):
+			continue
+		var a := (c as MeshInstance3D).mesh.get_aabb()
+		cut_bb = a if cut_bb.size == Vector3.ZERO else cut_bb.merge(a)
+	_check("cutaway box (doors aside) is the container",
+		absf(cut_bb.size.x - 2.438) < 0.05 and absf(cut_bb.size.y - 2.591) < 0.05
+			and absf(cut_bb.size.z - 6.058) < 0.05, str(cut_bb.size))
+	var closed := CargoContainerBuilder.build_from_entry(entry, "Closed", {})
+	var closed_bb := _node_aabb(closed)
+	var doors := cut.get_node_or_null("Doors") as MeshInstance3D
+	var doors_bb := doors.mesh.get_aabb() if doors != null else AABB()
+	# Folded 270° the leaves lie along the OUTSIDE of the side walls: wider
+	# than the box, no deeper than its door end.
+	_check("folded leaves lie along the sides",
+		doors_bb.size.x > 2.438 + 0.1 and doors_bb.end.z < closed_bb.end.z + 0.3
+			and absf(closed_bb.size.z - 6.058) < 0.2,
+		"%s vs %s" % [doors_bb, closed_bb])
+	cut.free()
+	closed.free()
+	# The IBC tote: a node whose box is the entry's outside dims, from the
+	# project's own GLB when it is imported, the procedural tote otherwise.
+	var ibc_e := IntermodalUnits.resolve("ibc_1000")
+	var ibc := IbcBuilder.build(ibc_e)
+	var ibc_bb := _node_aabb(ibc)
+	_check("IBC box ~ 1.2 x 1.16 x 1.0 (%s)" % ("glb" if IbcBuilder.has_model() else "procedural"),
+		absf(ibc_bb.size.z - 1.2) < 0.15 and absf(ibc_bb.size.x - 1.0) < 0.12
+			and absf(ibc_bb.size.y - 1.16) < 0.1 and absf(ibc_bb.position.y) < 0.03, str(ibc_bb))
+	_check("IBC has mesh geometry", ibc.find_children("*", "MeshInstance3D", true, false).size() > 0)
+	var unit := IntermodalUnitBuilder.build_node({"template": "ibc_275gal"})
+	_check("intermodal IBC unit builds", unit != null and _node_aabb(unit).size.y > 1.0)
+	ibc.free()
+	unit.free()
+
+
+static func _first_albedo(n: Node3D) -> Color:
+	var mi := n.get_node_or_null("Mesh") as MeshInstance3D
+	if mi == null or mi.mesh == null:
+		return Color.BLACK
+	# The paint is the biggest surface by triangle count.
+	var best := -1
+	var best_n := -1
+	for i in mi.mesh.get_surface_count():
+		var arr := mi.mesh.surface_get_arrays(i)
+		var n_v := (arr[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		if n_v > best_n:
+			best_n = n_v
+			best = i
+	var m := mi.mesh.surface_get_material(best) as StandardMaterial3D
+	return m.albedo_color if m != null else Color.BLACK
+
+
+## Every triangle's geometric normal agrees with the stored one (Godot's
+## front face is clockwise seen from outside: cross · n < 0).
+static func _winding_ok(mesh: ArrayMesh) -> bool:
+	for i in mesh.get_surface_count():
+		var arr := mesh.surface_get_arrays(i)
+		var v := arr[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var nn := arr[Mesh.ARRAY_NORMAL] as PackedVector3Array
+		var idx := PackedInt32Array()
+		if arr[Mesh.ARRAY_INDEX] != null:
+			idx = arr[Mesh.ARRAY_INDEX]
+		var tri_count := idx.size() / 3 if idx.size() > 0 else v.size() / 3
+		for t in tri_count:
+			var a := idx[t * 3] if idx.size() > 0 else t * 3
+			var b := idx[t * 3 + 1] if idx.size() > 0 else t * 3 + 1
+			var c := idx[t * 3 + 2] if idx.size() > 0 else t * 3 + 2
+			var g := (v[b] - v[a]).cross(v[c] - v[a])
+			if g.length_squared() < 1e-14:
+				continue
+			if g.dot(nn[a]) > 1e-6:
+				return false
+	return true
+
+
+static func _node_aabb(n: Node3D) -> AABB:
+	var out := AABB()
+	var first := true
+	for m in n.find_children("*", "MeshInstance3D", true, false):
+		var mi := m as MeshInstance3D
+		var xf := Transform3D.IDENTITY
+		var p: Node = mi
+		while p != null and p != n:
+			if p is Node3D:
+				xf = (p as Node3D).transform * xf
+			p = p.get_parent()
+		var a := xf * mi.get_aabb()
+		if first:
+			out = a
+			first = false
+		else:
+			out = out.merge(a)
+	return out
 
 
 func _box_container(w: float, h: float, l: float, payload := 0.0) -> Dictionary:

@@ -26,8 +26,13 @@ static func entry_for_spec(spec: Dictionary) -> Dictionary:
 static func build_node(spec: Dictionary = {}, node_name: String = "IntermodalUnit") -> Node3D:
 	var entry := entry_for_spec(spec)
 	var root: Node3D
-	if str(entry.get("family", "")) == "container":
-		root = CargoContainerBuilder.build_from_entry(entry, node_name)
+	var fam := str(entry.get("family", ""))
+	if fam == "container":
+		root = CargoContainerBuilder.build_from_entry(entry, node_name,
+			{"doors_open_deg": float(spec.get("doors_open_deg", 0.0))})
+	elif fam == "ibc":
+		# The real tote (assets/packing/ibc_tote.glb), procedural when absent.
+		root = IbcBuilder.build(entry, node_name)
 	else:
 		root = Node3D.new()
 		root.name = node_name
@@ -36,7 +41,7 @@ static func build_node(spec: Dictionary = {}, node_name: String = "IntermodalUni
 			"pallet":
 				PalletBuilder.emit(mesh, entry)
 			"ibc":
-				IbcBuilder.emit(mesh, entry)
+				IbcBuilder.emit(mesh, entry)   # unreachable: handled above
 			"gaylord":
 				GaylordBuilder.emit(mesh, entry)
 			"drum":

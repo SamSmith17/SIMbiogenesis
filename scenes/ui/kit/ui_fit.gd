@@ -156,9 +156,15 @@ static func _claim_owner(panel: Control) -> String:
 	return "ui_fit_%d" % panel.get_instance_id()
 
 
-static func _refit(panel: Control) -> void:
-	if not is_instance_valid(panel):
+## `panel_v` is untyped on purpose: the call is deferred, and a modal freed
+## in the same frame as its last visibility change (a CanvasLayer that
+## queue_frees itself on close) reaches here as a freed object, which a
+## `Control` parameter refuses BEFORE the body's own guard can run
+## ("Cannot convert argument 1 from Object to Object").
+static func _refit(panel_v: Variant) -> void:
+	if not is_instance_valid(panel_v) or not (panel_v is Control):
 		return
+	var panel := panel_v as Control
 	var shown := panel.is_inside_tree() and panel.is_visible_in_tree()
 	if bool(panel.get_meta("ui_fit_claim", true)):
 		var owner := _claim_owner(panel)
